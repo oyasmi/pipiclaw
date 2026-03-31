@@ -4,6 +4,8 @@ Pipiclaw 是一个面向钉钉的 AI coding assistant runtime。它基于 [`@mar
 
 如果你想要的是一个能在钉钉里长期工作的工程助手，而不是一个只能单轮问答的机器人，Pipiclaw 的设计目标就是这个。
 
+npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw)
+
 ## Why Pipiclaw
 
 - 钉钉优先：原生支持 DingTalk Stream Mode，不需要自己再包一层消息桥
