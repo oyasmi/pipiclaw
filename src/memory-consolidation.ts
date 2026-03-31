@@ -13,6 +13,7 @@ import {
 	appendChannelMemoryUpdate,
 	readChannelHistory,
 	readChannelMemory,
+	readChannelSession,
 	rewriteChannelHistory,
 	rewriteChannelMemory,
 	splitMarkdownSections,
@@ -40,6 +41,7 @@ Rules:
 - Each memoryEntries item must be a standalone sentence fragment suitable for a Markdown bullet without the bullet prefix.
 - Do not include raw transcript quotes unless essential.
 - Do not include ephemeral chatter, obvious one-shot acknowledgements, or formatting instructions.
+- Prefer leaving highly volatile step-by-step execution state in SESSION.md rather than promoting it into durable memory.
 - historyBlock: concise Markdown summarizing the conversation chunk for later recovery.
 - Prefer short bullets and short paragraphs.
 - If there is nothing worth storing, return empty values.`;
@@ -53,6 +55,7 @@ Goals:
 - Remove outdated entries, duplicates, and verbose phrasing.
 - Organize the result with stable sections where relevant.
 - Prefer concise bullets over prose.
+- Remove content that is clearly transient session-state and belongs in SESSION.md instead.
 
 Suggested sections:
 - ## Identity / Participants
@@ -248,9 +251,13 @@ async function buildInlineConsolidationResponse(
 ): Promise<ConsolidationResponse> {
 	const transcript = clipTranscript(serializeConversation(messages), INLINE_TRANSCRIPT_MAX_CHARS);
 	const currentMemory = clipTranscript(await readChannelMemory(options.channelDir), 8_000);
+	const currentSession = clipTranscript(await readChannelSession(options.channelDir), 8_000);
 	const currentHistory = clipTranscript(await readChannelHistory(options.channelDir), 8_000);
 
-	const prompt = `Channel memory file:
+	const prompt = `Current SESSION.md:
+${currentSession || "(empty)"}
+
+Channel memory file:
 ${currentMemory || "(empty)"}
 
 Channel history file:

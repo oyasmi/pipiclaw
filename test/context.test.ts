@@ -32,6 +32,20 @@ describe("PipiclawSettingsManager", () => {
 			maxRetries: 3,
 			baseDelayMs: 2000,
 		});
+		expect(manager.getMemoryRecallSettings()).toEqual({
+			enabled: true,
+			maxCandidates: 8,
+			maxInjected: 3,
+			maxChars: 3500,
+			rerankWithModel: false,
+		});
+		expect(manager.getSessionMemorySettings()).toEqual({
+			enabled: true,
+			minTurnsBetweenUpdate: 2,
+			minToolCallsBetweenUpdate: 4,
+			forceRefreshBeforeCompact: true,
+			forceRefreshBeforeNewSession: true,
+		});
 		expect(manager.getDefaultThinkingLevel()).toBe("off");
 		expect(manager.getSteeringMode()).toBe("one-at-a-time");
 		expect(manager.getFollowUpMode()).toBe("one-at-a-time");
@@ -73,6 +87,8 @@ describe("PipiclawSettingsManager", () => {
 		expect(manager.getCompactionEnabled()).toBe(true);
 		expect(manager.getHookPaths()).toEqual([]);
 		expect(manager.getPackages()).toEqual([]);
+		expect(manager.getMemoryRecallSettings().enabled).toBe(true);
+		expect(manager.getSessionMemorySettings().enabled).toBe(true);
 		expect(manager.getTheme()).toBeUndefined();
 		await expect(manager.flush()).resolves.toBeUndefined();
 		expect(manager.drainErrors()).toEqual([]);

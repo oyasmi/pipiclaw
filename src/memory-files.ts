@@ -24,6 +24,43 @@ This file stores summarized older channel history.
 - The runtime may append and fold history blocks here during consolidation.
 `;
 
+const DEFAULT_CHANNEL_SESSION = `# Session Title
+
+<!-- A short title for the current active work in this channel. -->
+
+# Current State
+
+<!-- What is actively being worked on right now. -->
+
+# User Intent
+
+<!-- What the user is currently trying to achieve. -->
+
+# Active Files
+
+<!-- Important files or directories currently in focus. -->
+
+# Decisions
+
+<!-- Recent decisions that matter to the current work. -->
+
+# Constraints
+
+<!-- Current constraints, assumptions, or important guardrails. -->
+
+# Errors & Corrections
+
+<!-- Recent failures, corrections, and things to avoid repeating. -->
+
+# Next Steps
+
+<!-- Likely next actions if work resumes later. -->
+
+# Worklog
+
+<!-- Very terse notes about recent progress. -->
+`;
+
 export interface MemoryUpdateBlock {
 	timestamp: string;
 	entries: string[];
@@ -57,6 +94,10 @@ export function getChannelHistoryPath(channelDir: string): string {
 	return join(channelDir, "HISTORY.md");
 }
 
+export function getChannelSessionPath(channelDir: string): string {
+	return join(channelDir, "SESSION.md");
+}
+
 export async function ensureChannelMemoryFiles(channelDir: string): Promise<void> {
 	ensureChannelMemoryFilesSync(channelDir);
 }
@@ -64,6 +105,7 @@ export async function ensureChannelMemoryFiles(channelDir: string): Promise<void
 export function ensureChannelMemoryFilesSync(channelDir: string): void {
 	const memoryPath = getChannelMemoryPath(channelDir);
 	const historyPath = getChannelHistoryPath(channelDir);
+	const sessionPath = getChannelSessionPath(channelDir);
 
 	mkdirSync(channelDir, { recursive: true });
 
@@ -72,6 +114,9 @@ export function ensureChannelMemoryFilesSync(channelDir: string): void {
 	}
 	if (!existsSync(historyPath)) {
 		writeFileSync(historyPath, DEFAULT_CHANNEL_HISTORY, "utf-8");
+	}
+	if (!existsSync(sessionPath)) {
+		writeFileSync(sessionPath, DEFAULT_CHANNEL_SESSION, "utf-8");
 	}
 }
 
@@ -90,6 +135,10 @@ export async function readChannelHistory(channelDir: string): Promise<string> {
 	return readTextFile(getChannelHistoryPath(channelDir));
 }
 
+export async function readChannelSession(channelDir: string): Promise<string> {
+	return readTextFile(getChannelSessionPath(channelDir));
+}
+
 export async function rewriteChannelMemory(channelDir: string, content: string): Promise<void> {
 	await ensureChannelMemoryFiles(channelDir);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_MEMORY;
@@ -100,6 +149,12 @@ export async function rewriteChannelHistory(channelDir: string, content: string)
 	await ensureChannelMemoryFiles(channelDir);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_HISTORY;
 	await writeAtomically(getChannelHistoryPath(channelDir), nextContent);
+}
+
+export async function rewriteChannelSession(channelDir: string, content: string): Promise<void> {
+	await ensureChannelMemoryFiles(channelDir);
+	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_SESSION;
+	await writeAtomically(getChannelSessionPath(channelDir), nextContent);
 }
 
 export async function appendChannelMemoryUpdate(channelDir: string, block: MemoryUpdateBlock): Promise<void> {

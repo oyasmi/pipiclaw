@@ -13,6 +13,8 @@ describe("prompt-builder", () => {
 		expect(prompt).toContain("## Pipiclaw Runtime");
 		expect(prompt).toContain("You are running directly on the host machine.");
 		expect(prompt).toContain("/workspace/root/dm_123");
+		expect(prompt).toContain("SESSION.md");
+		expect(prompt).toContain("The runtime may inject a small amount of relevant memory context");
 		expect(prompt).toContain("Available predefined sub-agents:\n- reviewer");
 		expect(prompt).toContain("Maximum 5 events can be queued.");
 	});
@@ -23,6 +25,7 @@ describe("prompt-builder", () => {
 		expect(prompt).toContain("You are running inside a Docker container (Alpine Linux).");
 		expect(prompt).toContain("Install tools with: apk add <package>");
 		expect(prompt).toContain("Available predefined sub-agents: none");
+		expect(prompt).toContain("prefer SESSION.md first for current state");
 		expect(prompt).toContain("group_456");
 	});
 });

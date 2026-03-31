@@ -2,7 +2,13 @@
 
 ## Status
 
-Draft
+Superseded in part by [`docs/improve-memory/spec.md`](/Users/oyasmi/projects/pipiclaw/docs/improve-memory/spec.md) and [`docs/improve-memory/design.md`](/Users/oyasmi/projects/pipiclaw/docs/improve-memory/design.md).
+
+This RFC remains useful for the original file-based memory rationale, but it no longer fully describes the current design because the runtime now introduces:
+
+1. `SESSION.md` as a distinct channel working-memory layer
+2. proactive relevant-memory injection
+3. a revised lifecycle between `SESSION.md`, `MEMORY.md`, and `HISTORY.md`
 
 ## Goals
 

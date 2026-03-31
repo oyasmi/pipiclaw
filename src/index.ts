@@ -11,7 +11,12 @@ export {
 	getSoul,
 	loadPipiclawSkills,
 } from "./config-loader.js";
-export { type PipiclawSettings, PipiclawSettingsManager } from "./context.js";
+export {
+	type PipiclawMemoryRecallSettings,
+	type PipiclawSessionMemorySettings,
+	type PipiclawSettings,
+	PipiclawSettingsManager,
+} from "./context.js";
 export { createDingTalkContext } from "./delivery.js";
 export {
 	type BusyMessageMode,
@@ -36,8 +41,25 @@ export {
 	runBackgroundMaintenance,
 	runInlineConsolidation,
 } from "./memory-consolidation.js";
-export { ensureChannelMemoryFiles, ensureChannelMemoryFilesSync } from "./memory-files.js";
+export {
+	ensureChannelMemoryFiles,
+	ensureChannelMemoryFilesSync,
+	getChannelSessionPath,
+	readChannelSession,
+	rewriteChannelSession,
+} from "./memory-files.js";
 export { type ConsolidationReason, MemoryLifecycle, type MemoryLifecycleOptions } from "./memory-lifecycle.js";
+export {
+	buildMemoryCandidates,
+	type BuildMemoryCandidatesOptions,
+	type MemoryCandidate,
+} from "./memory-candidates.js";
+export {
+	type RecallRequest,
+	type RecallResult,
+	type RecalledMemory,
+	recallRelevantMemory,
+} from "./memory-recall.js";
 export {
 	findExactModelReferenceMatch,
 	formatModelList,
@@ -56,6 +78,17 @@ export {
 	WORKSPACE_DIR,
 } from "./paths.js";
 export { type AppendSystemPromptOptions, buildAppendSystemPrompt } from "./prompt-builder.js";
+export {
+	type SessionMemoryState,
+	type SessionMemoryUpdateOptions,
+	renderSessionMemory,
+	updateChannelSessionMemory,
+} from "./session-memory.js";
+export {
+	type SidecarResult,
+	type SidecarTask,
+	runSidecarTask,
+} from "./sidecar-worker.js";
 export {
 	createExecutor,
 	type ExecOptions,

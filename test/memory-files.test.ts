@@ -8,8 +8,10 @@ import {
 	ensureChannelMemoryFilesSync,
 	readChannelHistory,
 	readChannelMemory,
+	readChannelSession,
 	rewriteChannelHistory,
 	rewriteChannelMemory,
+	rewriteChannelSession,
 	splitMarkdownSections,
 } from "../src/memory-files.js";
 
@@ -28,14 +30,16 @@ afterEach(() => {
 });
 
 describe("memory-files", () => {
-	it("creates default memory and history files", async () => {
+	it("creates default memory, session, and history files", async () => {
 		const channelDir = createTempDir();
 		ensureChannelMemoryFilesSync(channelDir);
 
 		const memory = await readChannelMemory(channelDir);
+		const session = await readChannelSession(channelDir);
 		const history = await readChannelHistory(channelDir);
 
 		expect(memory).toContain("# Channel Memory");
+		expect(session).toContain("# Current State");
 		expect(history).toContain("# Channel History");
 	});
 
@@ -43,13 +47,17 @@ describe("memory-files", () => {
 		const channelDir = createTempDir();
 
 		await rewriteChannelMemory(channelDir, "## Notes\n\n- durable fact");
+		await rewriteChannelSession(channelDir, "# Session Title\n\nHot task");
 		await rewriteChannelHistory(channelDir, "## 2026-01-01\n\nSummary");
 		expect(await readChannelMemory(channelDir)).toContain("durable fact");
+		expect(await readChannelSession(channelDir)).toContain("Hot task");
 		expect(await readChannelHistory(channelDir)).toContain("Summary");
 
 		await rewriteChannelMemory(channelDir, "   ");
+		await rewriteChannelSession(channelDir, "");
 		await rewriteChannelHistory(channelDir, "");
 		expect(await readChannelMemory(channelDir)).toContain("# Channel Memory");
+		expect(await readChannelSession(channelDir)).toContain("# Current State");
 		expect(await readChannelHistory(channelDir)).toContain("# Channel History");
 	});
 

@@ -49,6 +49,7 @@ ${workspacePath}/
 ├── skills/                      # Global CLI tools you create
 ├── events/                      # Scheduled events
 └── ${channelId}/                # This channel
+    ├── SESSION.md               # Channel working memory (runtime-managed, read on demand)
     ├── MEMORY.md                # Channel durable memory (read on demand, runtime-managed)
     ├── HISTORY.md               # Channel summarized history (read on demand, runtime-managed)
     ├── log.jsonl                # Raw message archive (cold storage)
@@ -95,12 +96,16 @@ Memory files are not preloaded into session context. Read them explicitly when m
 ### Files
 - Workspace memory: ${workspacePath}/MEMORY.md
   Stable shared background memory. Admin-managed. Read on demand.
+- Channel session memory: ${channelPath}/SESSION.md
+  Current working state for this channel. Runtime-managed. Read on demand. Prefer this when current task state matters.
 - Channel memory: ${channelPath}/MEMORY.md
-  Durable channel memory. Runtime-managed via consolidation. You may update this file manually when necessary.
+  Durable channel memory. Runtime-managed via consolidation. Prefer this for stable facts, decisions, preferences, and medium-horizon open loops.
 - Channel history: ${channelPath}/HISTORY.md
   Summarized older channel history. Runtime-managed. Read on demand. Do not maintain this file manually during normal work.
 
 ### Runtime Behavior
+- The runtime may inject a small amount of relevant memory context from SESSION.md / MEMORY.md / HISTORY.md into a turn when it is clearly useful.
+- SESSION.md is the primary runtime-managed working-state artifact for current active work.
 - The runtime automatically consolidates channel MEMORY.md and HISTORY.md before compaction or session trimming.
 - Workspace MEMORY.md is not updated by normal runtime consolidation.
 
@@ -108,7 +113,7 @@ Memory files are not preloaded into session context. Read them explicitly when m
 - ${channelPath}/log.jsonl is a raw archive. It is not normal memory and is not proactively loaded.
 - ${channelPath}/context.jsonl is a raw session archive. It is not normal memory and is not proactively loaded.
 
-When a task depends on prior decisions, preferences, or long-running work, read channel MEMORY.md and HISTORY.md first.`);
+When a task depends on prior decisions, preferences, or long-running work, prefer SESSION.md first for current state, then MEMORY.md, then HISTORY.md.`);
 
 	sections.push(`## System Configuration Log
 Maintain ${workspacePath}/SYSTEM.md to log all environment modifications:

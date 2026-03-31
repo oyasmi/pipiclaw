@@ -26,12 +26,30 @@ export interface PipiclawRetrySettings {
 	baseDelayMs: number;
 }
 
+export interface PipiclawMemoryRecallSettings {
+	enabled: boolean;
+	maxCandidates: number;
+	maxInjected: number;
+	maxChars: number;
+	rerankWithModel: boolean;
+}
+
+export interface PipiclawSessionMemorySettings {
+	enabled: boolean;
+	minTurnsBetweenUpdate: number;
+	minToolCallsBetweenUpdate: number;
+	forceRefreshBeforeCompact: boolean;
+	forceRefreshBeforeNewSession: boolean;
+}
+
 export interface PipiclawSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high";
 	compaction?: Partial<PipiclawCompactionSettings>;
 	retry?: Partial<PipiclawRetrySettings>;
+	memoryRecall?: Partial<PipiclawMemoryRecallSettings>;
+	sessionMemory?: Partial<PipiclawSessionMemorySettings>;
 }
 
 const DEFAULT_COMPACTION: PipiclawCompactionSettings = {
@@ -44,6 +62,22 @@ const DEFAULT_RETRY: PipiclawRetrySettings = {
 	enabled: true,
 	maxRetries: 3,
 	baseDelayMs: 2000,
+};
+
+const DEFAULT_MEMORY_RECALL: PipiclawMemoryRecallSettings = {
+	enabled: true,
+	maxCandidates: 8,
+	maxInjected: 3,
+	maxChars: 3500,
+	rerankWithModel: false,
+};
+
+const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
+	enabled: true,
+	minTurnsBetweenUpdate: 2,
+	minToolCallsBetweenUpdate: 4,
+	forceRefreshBeforeCompact: true,
+	forceRefreshBeforeNewSession: true,
 };
 
 /**
@@ -108,6 +142,20 @@ export class PipiclawSettingsManager {
 		return {
 			...DEFAULT_RETRY,
 			...this.settings.retry,
+		};
+	}
+
+	getMemoryRecallSettings(): PipiclawMemoryRecallSettings {
+		return {
+			...DEFAULT_MEMORY_RECALL,
+			...this.settings.memoryRecall,
+		};
+	}
+
+	getSessionMemorySettings(): PipiclawSessionMemorySettings {
+		return {
+			...DEFAULT_SESSION_MEMORY,
+			...this.settings.sessionMemory,
 		};
 	}
 

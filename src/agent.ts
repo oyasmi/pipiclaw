@@ -18,6 +18,7 @@ import { PipiclawSettingsManager } from "./context.js";
 import type { DingTalkContext } from "./dingtalk.js";
 import * as log from "./log.js";
 import { MemoryLifecycle } from "./memory-lifecycle.js";
+import { recallRelevantMemory } from "./memory-recall.js";
 import { resolveInitialModel } from "./model-utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "./paths.js";
 import { buildAppendSystemPrompt } from "./prompt-builder.js";
@@ -315,6 +316,7 @@ class ChannelRunner implements AgentRunner {
 			getSessionEntries: () => this.sessionManager.getBranch(),
 			getModel: () => this.session.model ?? this.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
+			getSessionMemorySettings: () => this.settingsManager.getSessionMemorySettings(),
 		});
 
 		const resourceLoader = new DefaultResourceLoader({
@@ -416,13 +418,37 @@ class ChannelRunner implements AgentRunner {
 			await mkdir(this.channelDir, { recursive: true });
 
 			const userMessage = this.formatUserMessage(ctx.message.text, ctx.message.userName);
-			const promptText = this.shouldPreserveRawInput(ctx.message.text) ? ctx.message.text.trim() : userMessage;
+			let promptText = this.shouldPreserveRawInput(ctx.message.text) ? ctx.message.text.trim() : userMessage;
+			let recalledContextText = "";
+
+			if (!this.shouldPreserveRawInput(ctx.message.text)) {
+				const recallSettings = this.settingsManager.getMemoryRecallSettings();
+				if (recallSettings.enabled) {
+					const recall = await recallRelevantMemory({
+						query: ctx.message.text,
+						workspaceDir: this.workspaceDir,
+						channelDir: this.channelDir,
+						maxCandidates: recallSettings.maxCandidates,
+						maxInjected: recallSettings.maxInjected,
+						maxChars: recallSettings.maxChars,
+						rerankWithModel: recallSettings.rerankWithModel,
+						model: this.session.model ?? this.activeModel,
+						resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
+					});
+
+					if (recall.renderedText) {
+						recalledContextText = recall.renderedText;
+						promptText = `${recall.renderedText}\n\n<user_message>\n${promptText}\n</user_message>`;
+					}
+				}
+			}
 
 			// Debug: write context to last_prompt.json (only with PIPICLAW_DEBUG=1)
 			if (process.env.PIPICLAW_DEBUG) {
 				const debugContext = {
 					systemPrompt: this.agent.state.systemPrompt,
 					messages: this.session.messages,
+					recalledContext: recalledContextText || undefined,
 					newUserMessage: promptText,
 				};
 				await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2));
@@ -643,6 +669,7 @@ class ChannelRunner implements AgentRunner {
 					args: agentEvent.args,
 					startTime: Date.now(),
 				});
+				this.memoryLifecycle.noteToolCall();
 
 				log.logToolStart(logCtx, agentEvent.toolName, label, agentEvent.args as Record<string, unknown>);
 				queue.enqueue(() => ctx.respond(formatProgressEntry("tool", label), false), "tool label");
@@ -812,6 +839,7 @@ class ChannelRunner implements AgentRunner {
 
 					if (trimmedFinalText === "[SILENT]" || trimmedFinalText.startsWith("[SILENT]")) {
 						this.runState.finalOutcome = { kind: "silent" };
+						this.memoryLifecycle.noteCompletedAssistantTurn();
 						return;
 					}
 
@@ -823,6 +851,7 @@ class ChannelRunner implements AgentRunner {
 					}
 
 					this.runState.finalOutcome = { kind: "final", text: finalText };
+					this.memoryLifecycle.noteCompletedAssistantTurn();
 					log.logResponse(logCtx, finalText);
 					queue.enqueue(async () => {
 						const delivered = await ctx.respondPlain(finalText);
