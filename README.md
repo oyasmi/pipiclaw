@@ -34,7 +34,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 
 ### 1. Requirements
 
-- Node.js `>= 20`
+- Node.js `>= 22`
 - 一个可用的钉钉企业内部应用
 - 至少一个可用的模型认证方式
   - 环境变量，例如 `ANTHROPIC_API_KEY`

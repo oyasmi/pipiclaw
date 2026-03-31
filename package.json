@@ -1,7 +1,7 @@
 {
 	"name": "@oyasmi/pipiclaw",
 	"version": "0.4.0",
-	"description": "DingTalk AI assistant runtime built on top of the pi coding agent SDK",
+	"description": "An AI assistant runtime for coding and team workflows, with DingTalk AI Cards, sub-agents, memory, and scheduled events.",
 	"type": "module",
 	"bin": {
 		"pipiclaw": "dist/main.js"
@@ -33,9 +33,9 @@
 		"prepublishOnly": "npm run clean && npm run build && npm run check"
 	},
 	"dependencies": {
-		"@mariozechner/pi-agent-core": "^0.55.1",
-		"@mariozechner/pi-ai": "^0.55.1",
-		"@mariozechner/pi-coding-agent": "^0.55.1",
+		"@mariozechner/pi-agent-core": "^0.63.0",
+		"@mariozechner/pi-ai": "^0.63.0",
+		"@mariozechner/pi-coding-agent": "^0.63.0",
 		"@sinclair/typebox": "^0.34.0",
 		"axios": "^1.7.0",
 		"chalk": "^5.6.2",
@@ -57,13 +57,14 @@
 		"ai",
 		"agent",
 		"coding-agent",
-		"pi"
+		"pi",
+		"harness-engineering"
 	],
 	"license": "Apache-2.0",
 	"publishConfig": {
 		"access": "public"
 	},
 	"engines": {
-		"node": ">=20.0.0"
+		"node": ">=22.0.0"
 	}
 }
