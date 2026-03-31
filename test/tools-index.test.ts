@@ -41,10 +41,18 @@ describe("tools index", () => {
 			getAvailableModels: vi.fn(() => []),
 			resolveApiKey: vi.fn(),
 			workspaceDir: "/repo",
+			channelDir: "/repo/dm_42",
 			workspacePath: "/workspace",
 			channelId: "dm_42",
 			sandboxConfig: { type: "docker", container: "pipiclaw" } satisfies SandboxConfig,
 			getSubAgentDiscovery: vi.fn(),
+			getMemoryRecallSettings: vi.fn(() => ({
+				enabled: true,
+				maxCandidates: 8,
+				maxInjected: 3,
+				maxChars: 3500,
+				rerankWithModel: false,
+			})),
 		};
 
 		const tools = createPipiclawTools(options);
@@ -56,7 +64,9 @@ describe("tools index", () => {
 			getAvailableModels: options.getAvailableModels,
 			resolveApiKey: options.resolveApiKey,
 			workspaceDir: "/repo",
+			channelDir: "/repo/dm_42",
 			getSubAgentDiscovery: options.getSubAgentDiscovery,
+			getMemoryRecallSettings: options.getMemoryRecallSettings,
 			runtimeContext: {
 				workspacePath: "/workspace",
 				channelId: "dm_42",

@@ -1,5 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { PipiclawMemoryRecallSettings } from "../context.js";
 import type { Executor, SandboxConfig } from "../sandbox.js";
 import type { SubAgentDiscoveryResult } from "../sub-agents.js";
 import { createBashTool } from "./bash.js";
@@ -14,10 +15,12 @@ export interface CreatePipiclawToolsOptions {
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	workspaceDir: string;
+	channelDir: string;
 	workspacePath: string;
 	channelId: string;
 	sandboxConfig: SandboxConfig;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
+	getMemoryRecallSettings: () => PipiclawMemoryRecallSettings;
 }
 
 export function createPipiclawBaseTools(executor: Executor): AgentTool<any>[] {
@@ -34,7 +37,9 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 			getAvailableModels: options.getAvailableModels,
 			resolveApiKey: options.resolveApiKey,
 			workspaceDir: options.workspaceDir,
+			channelDir: options.channelDir,
 			getSubAgentDiscovery: options.getSubAgentDiscovery,
+			getMemoryRecallSettings: options.getMemoryRecallSettings,
 			runtimeContext: {
 				workspacePath: options.workspacePath,
 				channelId: options.channelId,

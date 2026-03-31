@@ -2,6 +2,7 @@ import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mari
 import type { Api, AssistantMessage, Model, TextContent } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import type { PipiclawMemoryRecallSettings } from "../context.js";
 import { formatModelReference } from "../model-utils.js";
 import type { Executor } from "../sandbox.js";
 import {
@@ -12,6 +13,8 @@ import {
 	type SubAgentDiscoveryResult,
 	validateSubAgentTask,
 } from "../sub-agents.js";
+import { readChannelSession } from "../memory-files.js";
+import { recallRelevantMemory } from "../memory-recall.js";
 import { createBashTool } from "./bash.js";
 import { createEditTool } from "./edit.js";
 import { createReadTool } from "./read.js";
@@ -38,6 +41,21 @@ const subagentSchema = Type.Object({
 	),
 	bashTimeoutSec: Type.Optional(
 		Type.Number({ description: "Optional default timeout in seconds for bash commands inside this sub-agent" }),
+	),
+	contextMode: Type.Optional(
+		Type.String({
+			description: 'Optional context mode. Use "contextual" to inject selected session and memory context.',
+		}),
+	),
+	memory: Type.Optional(
+		Type.String({
+			description: 'Optional memory mode for contextual sub-agents: "none", "session", or "relevant".',
+		}),
+	),
+	paths: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Optional preferred file or directory paths for the sub-agent to focus on.",
+		}),
 	),
 });
 
@@ -76,7 +94,9 @@ export interface SubAgentToolOptions {
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	workspaceDir: string;
+	channelDir: string;
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
+	getMemoryRecallSettings?: () => PipiclawMemoryRecallSettings;
 	runtimeContext: {
 		workspacePath: string;
 		channelId: string;
@@ -96,6 +116,18 @@ interface SubAgentWorker {
 	prompt(input: string): Promise<void>;
 	waitForIdle(): Promise<void>;
 }
+
+const DEFAULT_SUBAGENT_MEMORY_RECALL_SETTINGS: PipiclawMemoryRecallSettings = {
+	enabled: true,
+	maxCandidates: 8,
+	maxInjected: 3,
+	maxChars: 3500,
+	rerankWithModel: false,
+};
+const SESSION_SECTION_ORDER = ["Current State", "User Intent", "Active Files", "Errors & Corrections", "Next Steps"];
+const MAX_SESSION_SECTION_CHARS = 280;
+const MAX_SESSION_CONTEXT_CHARS = 1800;
+const MAX_RECALL_CONTEXT_CHARS = 2200;
 
 function createEmptyUsageTotals(): UsageTotals {
 	return {
@@ -171,18 +203,166 @@ function buildSubAgentTask(
 	task: string,
 	config: ResolvedSubAgentConfig,
 	runtimeContext: SubAgentToolOptions["runtimeContext"],
+	contextBlocks: string[],
 ): string {
 	const taskText = task.trim();
-	return `Runtime context:
-- Workspace root: ${runtimeContext.workspacePath}
-- Channel id: ${runtimeContext.channelId}
-- Channel directory: ${runtimeContext.workspacePath}/${runtimeContext.channelId}
-- Sandbox: ${runtimeContext.sandbox}
-- Filesystem isolation: none (files written here are visible to the parent agent)
-- Your configured role: ${config.name}
+	const lines = [`Runtime context:`,
+		`- Workspace root: ${runtimeContext.workspacePath}`,
+		`- Channel id: ${runtimeContext.channelId}`,
+		`- Channel directory: ${runtimeContext.workspacePath}/${runtimeContext.channelId}`,
+		`- Sandbox: ${runtimeContext.sandbox}`,
+		`- Filesystem isolation: none (files written here are visible to the parent agent)`,
+		`- Your configured role: ${config.name}`,
+	];
 
-Task:
-${taskText}`;
+	for (const block of contextBlocks) {
+		if (!block.trim()) {
+			continue;
+		}
+		lines.push("", block.trim());
+	}
+
+	lines.push("", `Task:`, taskText);
+	return lines.join("\n");
+}
+
+function splitLevelOneSections(content: string): Array<{ heading: string; content: string }> {
+	const normalized = content.replace(/\r/g, "").trim();
+	if (!normalized) {
+		return [];
+	}
+
+	const lines = normalized.split("\n");
+	const sections: Array<{ heading: string; content: string }> = [];
+	let currentHeading = "";
+	let currentLines: string[] = [];
+
+	const flush = () => {
+		if (!currentHeading) {
+			return;
+		}
+		const sectionContent = currentLines.join("\n").trim();
+		if (!sectionContent) {
+			return;
+		}
+		sections.push({ heading: currentHeading, content: sectionContent });
+	};
+
+	for (const line of lines) {
+		if (line.startsWith("# ")) {
+			flush();
+			currentHeading = line.slice(2).trim();
+			currentLines = [];
+			continue;
+		}
+		if (currentHeading) {
+			currentLines.push(line);
+		}
+	}
+
+	flush();
+	return sections;
+}
+
+function clipText(text: string, maxChars: number): string {
+	const normalized = text.replace(/\s+\n/g, "\n").trim();
+	if (normalized.length <= maxChars) {
+		return normalized;
+	}
+	return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function buildSessionContextBlock(sessionMarkdown: string): string {
+	const sections = splitLevelOneSections(sessionMarkdown);
+	if (sections.length === 0) {
+		return "";
+	}
+
+	const selectedSections = SESSION_SECTION_ORDER.flatMap((heading) =>
+		sections.filter((section) => section.heading.toLowerCase() === heading.toLowerCase()),
+	);
+
+	if (selectedSections.length === 0) {
+		return "";
+	}
+
+	const lines = ["Relevant session state:"];
+	let usedChars = lines[0].length;
+	for (const section of selectedSections) {
+		const clipped = clipText(section.content, MAX_SESSION_SECTION_CHARS);
+		const block = `- ${section.heading}: ${clipped}`;
+		if (usedChars + block.length > MAX_SESSION_CONTEXT_CHARS) {
+			break;
+		}
+		lines.push(block);
+		usedChars += block.length + 1;
+	}
+	return lines.length > 1 ? lines.join("\n") : "";
+}
+
+function stripRuntimeContextWrapper(renderedText: string): string {
+	return renderedText
+		.replace(/^<runtime_context>\s*/i, "")
+		.replace(/\s*<\/runtime_context>$/i, "")
+		.trim();
+}
+
+async function buildContextualBlocks(
+	task: string,
+	config: ResolvedSubAgentConfig,
+	options: SubAgentToolOptions,
+	currentModel: Model<Api>,
+): Promise<string[]> {
+	if (config.contextMode !== "contextual") {
+		return [];
+	}
+
+	const blocks: string[] = [];
+	if (config.paths.length > 0) {
+		blocks.push(`Preferred focus paths:\n${config.paths.map((path) => `- ${path}`).join("\n")}`);
+	}
+
+	if (config.memory === "none") {
+		return blocks;
+	}
+
+	const sessionMarkdown = await readChannelSession(options.channelDir);
+	const sessionBlock = buildSessionContextBlock(sessionMarkdown);
+	if (sessionBlock) {
+		blocks.push(sessionBlock);
+	}
+
+	if (config.memory !== "relevant") {
+		return blocks;
+	}
+
+	const recallSettings = {
+		...DEFAULT_SUBAGENT_MEMORY_RECALL_SETTINGS,
+		...options.getMemoryRecallSettings?.(),
+	};
+	if (!recallSettings.enabled) {
+		return blocks;
+	}
+
+	const recallQuery = [task.trim(), config.description.trim(), ...config.paths].filter(Boolean).join("\n");
+	const recalled = await recallRelevantMemory({
+		query: recallQuery,
+		workspaceDir: options.workspaceDir,
+		channelDir: options.channelDir,
+		maxCandidates: recallSettings.maxCandidates,
+		maxInjected: recallSettings.maxInjected,
+		maxChars: Math.min(recallSettings.maxChars, MAX_RECALL_CONTEXT_CHARS),
+		rerankWithModel: recallSettings.rerankWithModel,
+		model: currentModel,
+		resolveApiKey: options.resolveApiKey,
+		allowedSources: ["workspace-memory", "channel-memory", "channel-history"],
+	});
+	const recalledText = stripRuntimeContextWrapper(recalled.renderedText);
+	if (recalledText) {
+		blocks.push(recalledText);
+	}
+
+	return blocks;
 }
 
 function filterToolsByName(allTools: AgentTool<any>[], names: string[]): AgentTool<any>[] {
@@ -362,7 +542,8 @@ export function createSubAgentTool(
 				const abortWorker = () => worker.abort();
 				childController.signal.addEventListener("abort", abortWorker, { once: true });
 				try {
-					await worker.prompt(buildSubAgentTask(params.task, config, options.runtimeContext));
+					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel);
+					await worker.prompt(buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks));
 					await worker.waitForIdle();
 				} finally {
 					childController.signal.removeEventListener("abort", abortWorker);

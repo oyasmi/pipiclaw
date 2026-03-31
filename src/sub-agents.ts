@@ -14,8 +14,12 @@ const DEFAULT_MAX_WALL_TIME_SEC = 300;
 const DEFAULT_BASH_TIMEOUT_SEC = 120;
 const MAX_SUB_AGENT_TASK_CHARS = 12000;
 const MAX_SUB_AGENT_SYSTEM_PROMPT_CHARS = 16000;
+const ALLOWED_CONTEXT_MODES = ["isolated", "contextual"] as const;
+const ALLOWED_MEMORY_MODES = ["none", "session", "relevant"] as const;
 
 export type SubAgentToolName = (typeof ALLOWED_SUB_AGENT_TOOLS)[number];
+export type SubAgentContextMode = (typeof ALLOWED_CONTEXT_MODES)[number];
+export type SubAgentMemoryMode = (typeof ALLOWED_MEMORY_MODES)[number];
 
 export interface SubAgentConfig {
 	name: string;
@@ -28,6 +32,9 @@ export interface SubAgentConfig {
 	maxToolCalls: number;
 	maxWallTimeSec: number;
 	bashTimeoutSec: number;
+	contextMode: SubAgentContextMode;
+	memory: SubAgentMemoryMode;
+	paths: string[];
 	filePath?: string;
 	source: "predefined" | "inline";
 }
@@ -53,6 +60,9 @@ export interface SubAgentInvocationOverrides {
 	maxToolCalls?: number;
 	maxWallTimeSec?: number;
 	bashTimeoutSec?: number;
+	contextMode?: string;
+	memory?: string;
+	paths?: string[];
 }
 
 function validateTextLength(value: string, maxChars: number, label: string): string | undefined {
@@ -110,6 +120,79 @@ function parseToolNames(raw: unknown): { tools: SubAgentToolName[]; error?: stri
 	}
 
 	return { tools: [], error: 'Invalid "tools" frontmatter: expected a string or string[]' };
+}
+
+function parseStringList(raw: unknown, label: string): { values: string[]; error?: string } {
+	if (raw === undefined || raw === null) {
+		return { values: [] };
+	}
+
+	if (typeof raw === "string") {
+		if (!raw.trim()) {
+			return { values: [] };
+		}
+
+		return {
+			values: Array.from(
+				new Set(
+					raw
+						.split(",")
+						.map((value) => value.trim())
+						.filter((value) => value.length > 0),
+				),
+			),
+		};
+	}
+
+	if (Array.isArray(raw)) {
+		const invalidValue = raw.find((value) => typeof value !== "string");
+		if (invalidValue !== undefined) {
+			return { values: [], error: `Invalid "${label}" frontmatter: expected a string or string[]` };
+		}
+
+		return {
+			values: Array.from(
+				new Set(
+					raw
+						.map((value) => value.trim())
+						.filter((value) => value.length > 0),
+				),
+			),
+		};
+	}
+
+	return { values: [], error: `Invalid "${label}" frontmatter: expected a string or string[]` };
+}
+
+function parseContextMode(raw: unknown): { value: SubAgentContextMode; error?: string } {
+	const normalized = readOptionalTrimmedString(raw);
+	if (!normalized) {
+		return { value: "isolated" };
+	}
+	if (ALLOWED_CONTEXT_MODES.includes(normalized as SubAgentContextMode)) {
+		return { value: normalized as SubAgentContextMode };
+	}
+	return {
+		value: "isolated",
+		error: `Unknown contextMode "${normalized}". Allowed values: ${ALLOWED_CONTEXT_MODES.join(", ")}`,
+	};
+}
+
+function parseMemoryMode(
+	raw: unknown,
+	contextMode: SubAgentContextMode,
+): { value: SubAgentMemoryMode; error?: string } {
+	const normalized = readOptionalTrimmedString(raw);
+	if (!normalized) {
+		return { value: contextMode === "contextual" ? "relevant" : "none" };
+	}
+	if (ALLOWED_MEMORY_MODES.includes(normalized as SubAgentMemoryMode)) {
+		return { value: normalized as SubAgentMemoryMode };
+	}
+	return {
+		value: contextMode === "contextual" ? "relevant" : "none",
+		error: `Unknown memory "${normalized}". Allowed values: ${ALLOWED_MEMORY_MODES.join(", ")}`,
+	};
 }
 
 export function validateToolNames(values: string[] | undefined): { tools: SubAgentToolName[]; error?: string } {
@@ -240,6 +323,24 @@ export function discoverSubAgents(workspaceDir: string, availableModels: Model<A
 			continue;
 		}
 
+		const contextMode = parseContextMode(frontmatter.contextMode);
+		if (contextMode.error) {
+			warnings.push(`${entry.name}: ${contextMode.error}`);
+			continue;
+		}
+
+		const memoryMode = parseMemoryMode(frontmatter.memory, contextMode.value);
+		if (memoryMode.error) {
+			warnings.push(`${entry.name}: ${memoryMode.error}`);
+			continue;
+		}
+
+		const parsedPaths = parseStringList(frontmatter.paths, "paths");
+		if (parsedPaths.error) {
+			warnings.push(`${entry.name}: ${parsedPaths.error}`);
+			continue;
+		}
+
 		const maxTurns = parsePositiveInteger(frontmatter.maxTurns, DEFAULT_MAX_TURNS);
 		const maxToolCalls = parsePositiveInteger(frontmatter.maxToolCalls, DEFAULT_MAX_TOOL_CALLS);
 		const maxWallTimeSec = parsePositiveInteger(frontmatter.maxWallTimeSec, DEFAULT_MAX_WALL_TIME_SEC);
@@ -285,6 +386,9 @@ export function discoverSubAgents(workspaceDir: string, availableModels: Model<A
 			maxToolCalls: maxToolCalls.value,
 			maxWallTimeSec: maxWallTimeSec.value,
 			bashTimeoutSec: bashTimeoutSec.value,
+			contextMode: contextMode.value,
+			memory: memoryMode.value,
+			paths: parsedPaths.values,
 			filePath,
 			source: "predefined",
 		});
@@ -340,6 +444,23 @@ export function resolveSubAgentConfig(
 		overrides.bashTimeoutSec,
 		baseConfig?.bashTimeoutSec ?? DEFAULT_BASH_TIMEOUT_SEC,
 	);
+	const contextModeOverride = overrides.contextMode ? parseContextMode(overrides.contextMode) : undefined;
+	if (contextModeOverride?.error) {
+		return { error: contextModeOverride.error };
+	}
+	const contextMode = contextModeOverride?.value ?? baseConfig?.contextMode ?? "isolated";
+
+	const memoryOverride = overrides.memory ? parseMemoryMode(overrides.memory, contextMode) : undefined;
+	if (memoryOverride?.error) {
+		return { error: memoryOverride.error };
+	}
+	const memory = memoryOverride?.value ?? baseConfig?.memory ?? (contextMode === "contextual" ? "relevant" : "none");
+
+	const pathsOverride = overrides.paths ? parseStringList(overrides.paths, "paths") : undefined;
+	if (pathsOverride?.error) {
+		return { error: pathsOverride.error };
+	}
+	const paths = pathsOverride?.values ?? baseConfig?.paths ?? [];
 
 	const systemPrompt = overrides.systemPrompt?.trim() || baseConfig?.systemPrompt || "";
 	if (!systemPrompt) {
@@ -367,6 +488,9 @@ export function resolveSubAgentConfig(
 			maxToolCalls,
 			maxWallTimeSec,
 			bashTimeoutSec,
+			contextMode,
+			memory,
+			paths,
 			filePath: baseConfig?.filePath,
 			source: baseConfig ? "predefined" : "inline",
 		},

@@ -6,6 +6,7 @@ export interface RecallRequest {
 	query: string;
 	workspaceDir: string;
 	channelDir: string;
+	allowedSources?: MemoryCandidate["source"][];
 	maxCandidates: number;
 	maxInjected: number;
 	maxChars: number;
@@ -198,12 +199,15 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 		workspaceDir: request.workspaceDir,
 		channelDir: request.channelDir,
 	});
-	if (candidates.length === 0) {
+	const filteredCandidates = request.allowedSources?.length
+		? candidates.filter((candidate) => request.allowedSources?.includes(candidate.source))
+		: candidates;
+	if (filteredCandidates.length === 0) {
 		return { items: [], renderedText: "" };
 	}
 
 	const queryTokens = tokenize(query);
-	const scored = candidates
+	const scored = filteredCandidates
 		.map((candidate) => ({ candidate, score: scoreCandidate(queryTokens, candidate) }))
 		.filter(({ score }) => score > 0)
 		.sort((a, b) => b.score - a.score || a.candidate.title.localeCompare(b.candidate.title))

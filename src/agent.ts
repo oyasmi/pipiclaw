@@ -291,10 +291,12 @@ class ChannelRunner implements AgentRunner {
 			getAvailableModels: () => this.modelRegistry.getAvailable(),
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			workspaceDir: this.workspaceDir,
+			channelDir: this.channelDir,
 			workspacePath: this.workspacePath,
 			channelId: this.channelId,
 			sandboxConfig: this.sandboxConfig,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,
+			getMemoryRecallSettings: () => this.settingsManager.getMemoryRecallSettings(),
 		});
 
 		// Create agent

@@ -317,6 +317,11 @@ name: reviewer
 description: Review code changes for correctness, regressions, and missing tests
 model: anthropic/claude-sonnet-4-5
 tools: read,bash
+contextMode: contextual
+memory: relevant
+paths:
+  - src/
+  - test/
 maxTurns: 24
 maxToolCalls: 48
 maxWallTimeSec: 300
@@ -336,6 +341,17 @@ Keep findings concise and actionable.
 - sub-agent 隔离的是 LLM 对话上下文，不隔离文件系统
 - 运行摘要会记录到 `<channel>/subagent-runs.jsonl`
 - 如果后续启用 contextual sub-agent，runtime 还会把 relevant memory 和 `SESSION.md` 摘要按角色需要带给子代理，而不是只给它一个裸任务
+
+几个常用 frontmatter：
+
+- `contextMode: contextual`
+  让 runtime 在任务前自动注入受限的上下文块
+- `memory: session`
+  只带 `SESSION.md` 的关键工作态
+- `memory: relevant`
+  带 `SESSION.md` 关键工作态，再加少量从 `MEMORY.md` / `HISTORY.md` / workspace memory 里召回的相关片段
+- `paths`
+  给子代理一个明确的关注范围，既帮助它聚焦，也会参与 recall
 
 ## Scheduled Events
 

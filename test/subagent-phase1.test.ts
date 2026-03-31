@@ -142,6 +142,51 @@ Review files carefully.`,
 			maxToolCalls: 9,
 			maxWallTimeSec: 60,
 			bashTimeoutSec: 30,
+			contextMode: "isolated",
+			memory: "none",
+			paths: [],
+		});
+	});
+
+	it("parses contextual sub-agent frontmatter and inline overrides", () => {
+		const workspaceDir = createTempWorkspace();
+		const subAgentsDir = getSubAgentsDir(workspaceDir);
+		mkdirSync(subAgentsDir, { recursive: true });
+
+		writeFileSync(
+			join(subAgentsDir, "reviewer.md"),
+			`---
+name: reviewer
+description: review code
+contextMode: contextual
+memory: session
+paths:
+  - src/core.ts
+  - test/core.test.ts
+---
+
+Review files carefully.`,
+			"utf-8",
+		);
+
+		const discovery = discoverSubAgents(workspaceDir, [model]);
+		expect(discovery.warnings).toEqual([]);
+		expect(discovery.agents[0]).toMatchObject({
+			contextMode: "contextual",
+			memory: "session",
+			paths: ["src/core.ts", "test/core.test.ts"],
+		});
+
+		const resolved = resolveSubAgentConfig([model], model, discovery.agents, {
+			agent: "reviewer",
+			memory: "relevant",
+			paths: ["src/extra.ts"],
+		});
+		expect(resolved.error).toBeUndefined();
+		expect(resolved.config).toMatchObject({
+			contextMode: "contextual",
+			memory: "relevant",
+			paths: ["src/extra.ts"],
 		});
 	});
 
@@ -149,10 +194,13 @@ Review files carefully.`,
 		const resolved = resolveSubAgentConfig([model], model, [], {
 			name: "inline-reviewer",
 			systemPrompt: "Review files",
+			contextMode: "contextual",
 		});
 		expect(resolved.error).toBeUndefined();
 		expect(resolved.config?.model).toBe(model);
 		expect(resolved.config?.modelRef).toBe("openai/gpt-4o-mini");
+		expect(resolved.config?.contextMode).toBe("contextual");
+		expect(resolved.config?.memory).toBe("relevant");
 
 		const tooLong = resolveSubAgentConfig([model], model, [], {
 			systemPrompt: "x".repeat(16001),
@@ -164,6 +212,8 @@ Review files carefully.`,
 describe("sub-agent tool", () => {
 	it("preserves partial output and injects minimal runtime context", async () => {
 		const workspaceDir = createTempWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(channelDir, { recursive: true });
 		let delegatedTask = "";
 
 		const tool = createSubAgentTool({
@@ -172,6 +222,7 @@ describe("sub-agent tool", () => {
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
+			channelDir,
 			getSubAgentDiscovery: () => ({
 				directory: join(workspaceDir, "sub-agents"),
 				warnings: [],
@@ -187,6 +238,9 @@ describe("sub-agent tool", () => {
 						maxToolCalls: 48,
 						maxWallTimeSec: 300,
 						bashTimeoutSec: 120,
+						contextMode: "isolated",
+						memory: "none",
+						paths: [],
 						source: "predefined",
 					},
 				],
@@ -225,6 +279,129 @@ describe("sub-agent tool", () => {
 		expect(delegatedTask).toContain("Channel id: dm_123");
 		expect(delegatedTask).toContain("Filesystem isolation: none");
 		expect(delegatedTask).toContain("Inspect the current workspace and summarize the main risks.");
+	});
+
+	it("injects contextual session and recalled memory for contextual sub-agents", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(channelDir, { recursive: true });
+		writeFileSync(
+			join(channelDir, "SESSION.md"),
+			`# Session Title
+
+# Current State
+
+Refactoring src/core.ts to stabilize the memory pipeline.
+
+# User Intent
+
+Find regressions before the changes ship.
+
+# Active Files
+
+src/core.ts
+test/core.test.ts
+
+# Errors & Corrections
+
+The last refactor broke fallback handling in src/core.ts.
+
+# Next Steps
+
+Review the new control flow and missing tests.
+`,
+			"utf-8",
+		);
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			`# Channel Memory
+
+## Decisions
+
+- Keep the fallback branch in src/core.ts explicit.
+
+## Constraints
+
+- Do not break the current session memory pipeline.
+`,
+			"utf-8",
+		);
+		writeFileSync(
+			join(channelDir, "HISTORY.md"),
+			`# Channel History
+
+## 2026-03-30T12:00:00.000Z
+
+Earlier review found missing regression coverage around src/core.ts fallback behavior.
+`,
+			"utf-8",
+		);
+
+		let delegatedTask = "";
+		const tool = createSubAgentTool({
+			executor: fakeExecutor,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			channelDir,
+			getMemoryRecallSettings: () => ({
+				enabled: true,
+				maxCandidates: 6,
+				maxInjected: 2,
+				maxChars: 1200,
+				rerankWithModel: false,
+			}),
+			getSubAgentDiscovery: () => ({
+				directory: join(workspaceDir, "sub-agents"),
+				warnings: [],
+				agents: [
+					{
+						name: "reviewer",
+						description: "review code",
+						systemPrompt: "Review the supplied task.",
+						tools: ["read", "bash"],
+						model,
+						modelRef: "openai/gpt-4o-mini",
+						maxTurns: 24,
+						maxToolCalls: 48,
+						maxWallTimeSec: 300,
+						bashTimeoutSec: 120,
+						contextMode: "contextual",
+						memory: "relevant",
+						paths: ["src/core.ts", "test/core.test.ts"],
+						source: "predefined",
+					},
+				],
+			}),
+			runtimeContext: {
+				workspacePath: "/workspace/root",
+				channelId: "dm_123",
+				sandbox: "host",
+			},
+			createWorker: () =>
+				new FakeWorker(async (input, worker) => {
+					delegatedTask = input;
+					const assistantMessage = createAssistantMessage("Looks good.");
+					worker.state.messages = [assistantMessage];
+					worker.emit({ type: "message_end", message: assistantMessage });
+				}),
+		});
+
+		await tool.execute("call-2", {
+			label: "review memory refactor",
+			agent: "reviewer",
+			task: "Review src/core.ts for regressions and missing tests.",
+		});
+
+		expect(delegatedTask).toContain("Preferred focus paths:");
+		expect(delegatedTask).toContain("- src/core.ts");
+		expect(delegatedTask).toContain("Relevant session state:");
+		expect(delegatedTask).toContain("Current State");
+		expect(delegatedTask).toContain("Find regressions before the changes ship.");
+		expect(delegatedTask).toContain("Relevant context for this turn:");
+		expect(delegatedTask).toContain("Keep the fallback branch in src/core.ts explicit.");
+		expect(delegatedTask).toContain("Do not break the current session memory pipeline.");
 	});
 });
 

@@ -103,6 +103,8 @@ export {
 	discoverSubAgents,
 	formatSubAgentList,
 	getSubAgentsDir,
+	type SubAgentContextMode,
+	type SubAgentMemoryMode,
 	type ResolvedSubAgentConfig,
 	resolveSubAgentConfig,
 	type SubAgentConfig,
