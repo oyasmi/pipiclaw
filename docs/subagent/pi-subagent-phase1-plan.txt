@@ -1,0 +1,529 @@
+Pipiclaw Sub-Agent Phase 1 修改方案
+
+目标
+
+  在 pipiclaw 中引入可由主 Agent 自主决定是否调用的 sub-agent 能力，用来把重计算、重文件操作、
+  专项审查之类的子任务卸载到独立 context 中执行。
+
+  Phase 1 的目标不是做完整 multi-agent 编排，而是在现有工具体系里增加一个可靠、可控、可观测的
+  `subagent` tool。
+
+---
+
+一、范围收敛
+
+  Phase 1 只做这些事情：
+
+  1. 提供单个 `subagent` tool
+     - 只支持 single 模式
+     - schema 形态为 `{ label, agent, task }`
+
+  2. sub-agent 的调用时机由主 Agent 自主判断
+     - 不要求用户手工指定“现在用 subagent”
+     - 通过 system prompt 中的规则说明，让主 Agent 在合适时自行调用 `subagent`
+
+  3. 预定义 sub-agent 定义目录为：
+     - `workspaceDir/sub-agents/*.md`
+     - 对 pipiclaw 默认 workspace 来说，就是 `~/.pi/pipiclaw/workspace/sub-agents/*.md`
+
+  4. 主 Agent 在需要时也可以临时内联定义一个 sub-agent
+     - 不必预先写到 `sub-agents/` 目录里
+     - 只要给出足够的 system prompt、工具、模型和预算参数，就可以实例化一个临时 sub-agent
+
+  5. 每个 sub-agent 可以声明工具和模型
+     - 工具只允许从 pipiclaw 现有工具白名单中选
+     - 模型允许不填写；不填写时默认使用主 Agent 当前模型
+     - 若填写，则必须能被当前 `ModelRegistry` 精确解析
+
+  6. 增加运行预算
+     - 允许在 agent 定义中填写
+     - 不填写时使用默认值
+
+  7. sub-agent 的 usage 和阶段性进度要能回传到主流程
+
+  Phase 1 明确不做：
+
+  1. parallel 模式
+  2. chain 模式
+  3. 自动运行时拦截式触发
+     - 例如“修改了 3 个文件后强制自动 review”
+     - Phase 1 不做 runtime 侧硬编码触发器，只通过 prompt 让主 Agent 自主决定
+  4. project/channel 多级 sub-agent 覆盖目录
+  5. 从 `AGENTS.md` 解析 sub-agent 定义
+
+---
+
+二、目录与信任模型
+
+  预定义 sub-agent 的加载目录：
+
+  - `workspaceDir/sub-agents/`
+
+  这样做的原因：
+
+  1. 保持 sub-agent 定义和 workspace 级配置在同一套管理员视角下维护
+  2. 不把 sub-agent 定义放进 channel 运行时目录，避免 channel 内工作产物和能力定义混在一起
+  3. 不复用 `AGENTS.md`
+     - `AGENTS.md` 继续承担“主 Agent 行为规则”职责
+     - sub-agent registry 单独管理，职责清晰
+
+  文档口径：
+
+  - `workspaceDir/sub-agents/` 是管理员维护的预定义 sub-agent 目录
+  - 主 Agent 可以读取并调用其中定义的 sub-agent
+  - 主 Agent 也可以在一次具体任务里临时构造一个内联 sub-agent
+  - `sub-agents/` 不属于 channel runtime 数据
+  - sub-agent 只隔离 LLM 对话上下文，不隔离文件系统和 executor
+  - sub-agent 在 workspace 中写出的文件，主 Agent 后续可以读取到；这是 Phase 1 的有意设计
+
+---
+
+三、Sub-Agent 定义文件格式
+
+  预定义文件位置示例：
+
+  - `workspaceDir/sub-agents/reviewer.md`
+  - `workspaceDir/sub-agents/researcher.md`
+
+  frontmatter 结构：
+
+  ```md
+  ---
+  name: reviewer
+  description: Review code changes for correctness, regressions, and missing tests
+  model: claude-sonnet-4-20250514
+  tools: read,bash
+  maxTurns: 24
+  maxToolCalls: 48
+  maxWallTimeSec: 300
+  bashTimeoutSec: 120
+  ---
+
+  You are a focused code reviewer.
+  Review only the task given to you.
+  Prefer concise findings ordered by severity.
+  ```
+
+  字段说明：
+
+  - `name`: 必填，sub-agent 名称，唯一键
+  - `description`: 必填，供主 Agent 决策时参考
+  - `model`: 选填，sub-agent 使用的模型 ID；为空时回退主 Agent 当前模型
+  - `tools`: 选填，逗号分隔；为空时使用默认工具集
+  - `maxTurns`: 选填，最多 assistant turns
+  - `maxToolCalls`: 选填，本次 sub-agent 最多允许执行的 tool call 总数
+  - `maxWallTimeSec`: 选填，本次 sub-agent 最大总执行时长
+  - `bashTimeoutSec`: 选填，sub-agent 内 bash 默认超时
+  - body: system prompt
+
+  默认值：
+
+  - `tools`: `read,bash`
+  - `maxTurns`: `24`
+  - `maxToolCalls`: `48`
+  - `maxWallTimeSec`: `300`
+  - `bashTimeoutSec`: `120`
+
+  这些默认值的设计目标：
+
+  1. 让 sub-agent 默认偏短任务
+  2. 优先控制 DingTalk 场景下的成本、失控和卡死风险
+  3. 不要求每个定义都显式写预算
+  4. 当任务明显更重时，允许在定义文件或单次调用中显式调大预算
+
+---
+
+四、加载与校验规则
+
+  新增 `src/sub-agents.ts`，负责发现、解析、校验和格式化可用 sub-agent 列表。
+
+  建议类型：
+
+  ```ts
+  interface SubAgentConfig {
+    name: string;
+    description: string;
+    systemPrompt: string;
+    model?: Model<Api>;
+    modelRef?: string;
+    tools: string[];
+    maxTurns: number;
+    maxToolCalls: number;
+    maxWallTimeSec: number;
+    bashTimeoutSec: number;
+    filePath: string;
+  }
+  ```
+
+  加载逻辑：
+
+  1. 读取 `SUB_AGENTS_DIR`
+  2. 遍历 `*.md`
+  3. 用 `parseFrontmatter()` 解析
+  4. 校验必填字段 `name`、`description`
+  5. 解析 `tools`
+  6. 解析预算字段，缺省填默认值
+  7. 若填写 `model`，通过 `ModelRegistry` 精确解析为 `Model<Api>`
+  8. 生成 `SubAgentConfig[]`
+
+  校验策略：
+
+  1. 未知工具名：直接拒绝加载该文件，并记录 warning
+  2. 无法解析的模型：直接拒绝加载该文件，并记录 warning
+  3. 重名 agent：后加载覆盖前加载不再需要，因为 Phase 1 只有一个目录；直接按文件名顺序遇到重名时报 warning 并忽略后者更清晰
+  4. 非法预算值：
+     - 小于等于 0 视为非法
+     - 回退默认值并记录 warning
+
+  允许的工具白名单：
+
+  - `read`
+  - `bash`
+  - `edit`
+  - `write`
+
+---
+
+五、主 Agent 如何使用 Sub-Agent
+
+  Phase 1 中，sub-agent 的调用决策仍然由主 Agent 做出。
+
+  这里要明确两层含义：
+
+  1. 不要求用户手工说“请调用 reviewer sub-agent”
+  2. 也不做 runtime 层硬编码自动触发器
+
+  实际机制是：
+
+  - 主 Agent 在 system prompt 里知道有 `subagent` 工具
+  - 主 Agent 看到复杂任务、上下文过重、需要专项视角时，自主发起 tool call
+
+  所以，Phase 1 的“只支持 single 模式”并不意味着“只能用户显式手工选择”，
+  它只是指工具参数结构先只支持一次调用一个 sub-agent。
+
+---
+
+六、Prompt 设计
+
+  修改 `src/prompt-builder.ts`，新增 `## Sub-Agents` section。
+
+  需要写清楚：
+
+  1. 你有一个 `subagent` tool
+  2. sub-agent 定义来自 `workspace/sub-agents/*.md`
+  3. 何时适合使用：
+     - 当前任务可拆分成独立子问题
+     - 需要新 context 处理重任务
+     - 需要特定专长角色，例如 reviewer / researcher
+     - 主上下文已经变长，想把局部工作卸载出去
+  4. 何时不要使用：
+     - 简单问答
+     - 严重依赖当前对话细节的任务
+     - 需要频繁和用户确认的互动任务
+  5. sub-agent 看不到主对话历史
+     - 主 Agent 必须把足够上下文写进 `task`
+  6. 优先调用最匹配的 sub-agent
+  7. 不要把一个小任务拆成过多 sub-agent
+
+  如果当前存在可用 sub-agent，可在 prompt 中附上简表：
+
+  - `reviewer`: Reviews code changes for regressions and missing tests
+  - `researcher`: Gathers focused information from files and shell output
+
+  另外要明确告诉主 Agent：
+
+  - 如果现有预定义 sub-agent 不适合当前任务，可以临时创建一个内联 sub-agent
+  - 内联 sub-agent 只服务当前这次 tool call，不会持久化到 `sub-agents/`
+  - 只有当任务确实需要时才这样做，避免把简单任务复杂化
+
+  这样主 Agent 才能稳定做选择，同时保留足够灵活性。
+
+---
+
+七、Sub-Agent Tool 设计
+
+  新增 `src/tools/subagent.ts`。
+
+  建议参数：
+
+  ```ts
+  const subagentSchema = Type.Object({
+    label: Type.String(),
+    agent: Type.Optional(Type.String()),
+    name: Type.Optional(Type.String()),
+    task: Type.String(),
+    systemPrompt: Type.Optional(Type.String()),
+    tools: Type.Optional(Type.Array(Type.String())),
+    model: Type.Optional(Type.String()),
+    maxTurns: Type.Optional(Type.Number()),
+    maxToolCalls: Type.Optional(Type.Number()),
+    maxWallTimeSec: Type.Optional(Type.Number()),
+    bashTimeoutSec: Type.Optional(Type.Number()),
+  });
+  ```
+
+  参数语义：
+
+  1. 预定义模式
+     - 提供 `agent`
+     - 运行时从 `workspaceDir/sub-agents/*.md` 加载该定义
+
+  2. 内联模式
+     - 不提供 `agent`
+     - 提供 `systemPrompt`
+     - 允许同时提供 `name/tools/model/预算`
+     - `name` 为空时，runtime 可回退为 `dynamic-subagent`
+
+  约束：
+
+  - `agent` 和 `systemPrompt` 至少要提供一类
+  - 如果同时提供 `agent` 和内联字段：
+    - Phase 1 采取简单规则：以 `agent` 对应的预定义配置为基础
+    - 内联字段作为本次调用的覆盖项
+
+  建议返回 details 结构：
+
+  ```ts
+  interface SubAgentToolDetails {
+    agent: string;
+    model: string;
+    tools: string[];
+    usage: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      total: number;
+      cost: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        total: number;
+      };
+    };
+    turns: number;
+    toolCalls: number;
+    durationMs: number;
+    truncated?: boolean;
+  }
+  ```
+
+  执行流程：
+
+  1. 如果提供 `agent`，先按名称查找预定义 sub-agent
+  2. 若提供内联字段，则在预定义配置基础上或纯内联模式下生成最终执行配置
+  3. 按 `tools` 白名单从基础工具集中筛选子工具集
+  4. 对 bash 工具应用 sub-agent 级默认 timeout
+  5. 创建新的 `Agent`
+  6. 订阅事件，累计：
+     - assistant 文本
+     - usage
+     - turns
+     - toolCalls
+  7. 用父 signal 派生子 `AbortController`
+  8. 超过 `maxWallTimeSec` 时主动 abort
+  9. 触达 `maxTurns` / `maxToolCalls` 时通过 `beforeToolCall` 或事件计数终止执行
+ 10. 返回最终文本和 details
+
+  执行结果原则：
+
+  1. 成功时返回最终文本
+  2. 完全失败时返回 tool error
+  3. 若 sub-agent 已产生可用文本但因预算耗尽或中途停止而未完整完成，则返回部分结果，不丢弃已产出文本
+  4. 返回文本要简洁，不把完整 event dump 暴露给主 Agent
+  5. 细节放到 `details`
+  6. sub-agent 运行摘要应持久化到 channel 目录，便于事后审查
+
+---
+
+八、运行预算实现方式
+
+  预算字段允许不填写，但 runtime 需要严格执行默认值。
+
+  预算控制建议：
+
+  1. `maxWallTimeSec`
+     - 用 `setTimeout` + 子 `AbortController` 实现
+
+  2. `maxToolCalls`
+     - 通过 `tool_execution_start` 计数
+     - 超过上限后调用 `abort()`
+
+  3. `maxTurns`
+     - 通过 `message_end` 中 assistant message 计数
+     - 到达上限后不再继续下一轮
+
+  4. `bashTimeoutSec`
+     - 让 sub-agent 使用一个带默认 timeout 的 `createBashTool` 变体
+     - 调用参数里显式传了 `timeout` 时，以调用参数为准
+
+  运行预算是 Phase 1 的硬约束，不是“先记文档、后面再做”的软约束。
+
+---
+
+九、工具集组装方式
+
+  修改 `src/tools/index.ts`。
+
+  建议结构：
+
+  1. `createPipiclawBaseTools(executor)`
+     - 返回 `read/bash/edit/write`
+
+  2. `filterToolsByName(allTools, names)`
+     - 供 sub-agent 选择工具子集
+
+  3. `createSubAgentTool(options, baseTools)`
+     - 创建 `subagent`
+
+  4. `createPipiclawTools(options)`
+     - 主 Agent 用：`[...baseTools, subagentTool]`
+
+  重要约束：
+
+  - sub-agent 内部不注入 `subagent` 本身
+  - Phase 1 禁止递归 sub-agent
+  - 也就是不允许子 agent 再创建孙 agent
+
+---
+
+十、主流程接线
+
+  修改 `src/agent.ts`。
+
+  需要做的事情：
+
+  1. 创建基础工具集
+  2. 创建 `subagent` tool
+  3. 把 `subagent` 加入主 Agent 的工具列表
+  4. 在 session event 处理中支持 `tool_execution_update`
+  5. 当 `tool_execution_end` 的 toolName 为 `subagent` 时，读取 result.details.usage 并合并到
+     `runState.totalUsage`
+
+  这样可以解决两个问题：
+
+  1. DingTalk 侧有中间进度，不会长时间“假死”
+  2. `/session` 和 usage summary 不会漏掉 sub-agent 成本
+
+---
+
+十一、进度与可观测性
+
+  需要同时做两层进度：
+
+  1. subagent tool 内部用 `onUpdate` 上报阶段信息
+  2. `ChannelRunner` 处理 `tool_execution_update`
+
+  建议 subagent 的 update 文本形式：
+
+  - `Subagent reviewer started`
+  - `Subagent reviewer: reading files`
+  - `Subagent reviewer: running tests`
+  - `Subagent reviewer: preparing final summary`
+
+  update 不需要追求逐 token streaming，Phase 1 只要做到“用户可见仍在推进”即可。
+
+  另外补充：
+
+  - runtime 会把 sub-agent 的执行摘要写入 `<channel>/subagent-runs.jsonl`
+  - 至少包括 agent 名称、预算停止原因、usage、输出摘要
+
+---
+
+十二、README 与初始化
+
+  修改 `src/paths.ts`：
+
+  - 新增 `SUB_AGENTS_DIR_NAME = "sub-agents"`
+
+  修改 `src/main.ts`：
+
+  - 首次启动时创建 `workspace/sub-agents/`
+  - 初始目录留空，不生成示例文件
+
+  修改 `README.md`：
+
+  1. 在首次运行生成目录中加入 `workspace/sub-agents/`
+  2. 在 Workspace Files 中加入 `sub-agents/`
+  3. 说明它的职责是管理员维护的预定义 sub-agent 目录
+  4. 说明主 Agent 也可以临时内联定义 sub-agent
+  5. 补充一个最小 agent 定义示例
+
+---
+
+十三、建议文件变更清单
+
+  新增：
+
+  - `src/sub-agents.ts`
+  - `src/tools/subagent.ts`
+
+  修改：
+
+  - `src/paths.ts`
+  - `src/main.ts`
+  - `src/tools/index.ts`
+  - `src/agent.ts`
+  - `src/prompt-builder.ts`
+  - `README.md`
+
+---
+
+十四、实现顺序
+
+  建议按这个顺序落地：
+
+  1. `paths.ts` + `main.ts`
+     - 先把目录约定固定下来
+
+  2. `sub-agents.ts`
+     - 先完成定义文件加载、解析和校验
+
+  3. `tools/index.ts` 重构
+     - 拆出 base tools 和过滤逻辑
+
+  4. `tools/subagent.ts`
+     - 实现单个 sub-agent 执行
+
+  5. `agent.ts`
+     - 接入工具
+     - 合并 usage
+     - 处理 `tool_execution_update`
+
+  6. `prompt-builder.ts`
+     - 让主 Agent 知道什么时候应调用 sub-agent
+
+  7. `README.md`
+     - 补充目录与格式说明
+
+---
+
+十五、Phase 1 验收标准
+
+  只要满足下面几条，就可以认为 Phase 1 可用：
+
+  1. 在 `workspaceDir/sub-agents/` 放一个 `reviewer.md` 后，主 Agent 能自主调用它
+  2. sub-agent 能使用声明的工具集执行任务
+  3. sub-agent 看不到主对话历史，只依赖主 Agent 传入的 task
+  4. sub-agent 的 usage 能计入本次运行总 usage
+  5. DingTalk 中能看到 sub-agent 的阶段性进度
+  6. 非法模型/非法工具的 agent 文件会被明确拒绝加载
+  7. 不填写预算字段时，默认预算仍生效
+  8. 主 Agent 也可以在单次调用里临时内联定义一个 sub-agent
+  9. sub-agent 不能递归再调用 sub-agent
+
+---
+
+十六、Phase 2 以后再考虑的内容
+
+  以下内容暂不进入 Phase 1：
+
+  1. parallel
+  2. chain
+  3. 更细的 UI 展示
+  4. 多目录覆盖和优先级
+  5. 更复杂的自动委派策略模板
+  6. sub-agent 运行历史持久化
+
+  先把 Phase 1 做成一个稳定、低歧义、低运维成本的工具，再扩展模式。

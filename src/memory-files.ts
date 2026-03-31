@@ -1,0 +1,172 @@
+import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { mkdir, readFile, rename, writeFile } from "fs/promises";
+import { dirname, join } from "path";
+
+const DEFAULT_CHANNEL_MEMORY = `# Channel Memory
+
+This file stores durable channel-specific memory.
+
+- It is not preloaded into session context.
+- Read it on demand when prior decisions, preferences, or long-running work matter.
+- The runtime may append updates here during consolidation.
+
+## Durable Facts
+
+<!-- Stable facts, preferences, and ongoing commitments can accumulate here. -->
+`;
+
+const DEFAULT_CHANNEL_HISTORY = `# Channel History
+
+This file stores summarized older channel history.
+
+- It is not preloaded into session context.
+- Read it on demand when older context matters.
+- The runtime may append and fold history blocks here during consolidation.
+`;
+
+export interface MemoryUpdateBlock {
+	timestamp: string;
+	entries: string[];
+}
+
+export interface HistoryBlock {
+	timestamp: string;
+	content: string;
+}
+
+function normalizeContent(content: string): string {
+	return content.trim().length > 0 ? `${content.trim()}\n` : "";
+}
+
+async function writeAtomically(path: string, content: string): Promise<void> {
+	await mkdir(dirname(path), { recursive: true });
+	const tempPath = `${path}.tmp`;
+	await writeFile(tempPath, content, "utf-8");
+	await rename(tempPath, path);
+}
+
+function ensureTrailingNewlines(content: string): string {
+	return content.trimEnd().length > 0 ? `${content.trimEnd()}\n\n` : "";
+}
+
+export function getChannelMemoryPath(channelDir: string): string {
+	return join(channelDir, "MEMORY.md");
+}
+
+export function getChannelHistoryPath(channelDir: string): string {
+	return join(channelDir, "HISTORY.md");
+}
+
+export async function ensureChannelMemoryFiles(channelDir: string): Promise<void> {
+	ensureChannelMemoryFilesSync(channelDir);
+}
+
+export function ensureChannelMemoryFilesSync(channelDir: string): void {
+	const memoryPath = getChannelMemoryPath(channelDir);
+	const historyPath = getChannelHistoryPath(channelDir);
+
+	mkdirSync(channelDir, { recursive: true });
+
+	if (!existsSync(memoryPath)) {
+		writeFileSync(memoryPath, DEFAULT_CHANNEL_MEMORY, "utf-8");
+	}
+	if (!existsSync(historyPath)) {
+		writeFileSync(historyPath, DEFAULT_CHANNEL_HISTORY, "utf-8");
+	}
+}
+
+async function readTextFile(path: string): Promise<string> {
+	if (!existsSync(path)) {
+		return "";
+	}
+	return readFile(path, "utf-8");
+}
+
+export async function readChannelMemory(channelDir: string): Promise<string> {
+	return readTextFile(getChannelMemoryPath(channelDir));
+}
+
+export async function readChannelHistory(channelDir: string): Promise<string> {
+	return readTextFile(getChannelHistoryPath(channelDir));
+}
+
+export async function rewriteChannelMemory(channelDir: string, content: string): Promise<void> {
+	await ensureChannelMemoryFiles(channelDir);
+	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_MEMORY;
+	await writeAtomically(getChannelMemoryPath(channelDir), nextContent);
+}
+
+export async function rewriteChannelHistory(channelDir: string, content: string): Promise<void> {
+	await ensureChannelMemoryFiles(channelDir);
+	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_HISTORY;
+	await writeAtomically(getChannelHistoryPath(channelDir), nextContent);
+}
+
+export async function appendChannelMemoryUpdate(channelDir: string, block: MemoryUpdateBlock): Promise<void> {
+	if (block.entries.length === 0) {
+		return;
+	}
+
+	await ensureChannelMemoryFiles(channelDir);
+	const path = getChannelMemoryPath(channelDir);
+	const existing = await readTextFile(path);
+	const renderedBlock = [`## Update ${block.timestamp}`, ...block.entries.map((entry) => `- ${entry.trim()}`)].join(
+		"\n",
+	);
+	await writeAtomically(path, `${ensureTrailingNewlines(existing)}${renderedBlock}\n`);
+}
+
+export async function appendChannelHistoryBlock(channelDir: string, block: HistoryBlock): Promise<void> {
+	const trimmedContent = block.content.trim();
+	if (!trimmedContent) {
+		return;
+	}
+
+	await ensureChannelMemoryFiles(channelDir);
+	const path = getChannelHistoryPath(channelDir);
+	const existing = await readTextFile(path);
+	const renderedBlock = [`## ${block.timestamp}`, trimmedContent].join("\n\n");
+	await writeAtomically(path, `${ensureTrailingNewlines(existing)}${renderedBlock}\n`);
+}
+
+export interface MarkdownSection {
+	heading: string;
+	content: string;
+}
+
+export function splitMarkdownSections(content: string): MarkdownSection[] {
+	const normalized = content.replace(/\r/g, "").trim();
+	if (!normalized) {
+		return [];
+	}
+
+	const lines = normalized.split("\n");
+	const sections: MarkdownSection[] = [];
+	let currentHeading = "";
+	let currentLines: string[] = [];
+
+	const flush = (): void => {
+		if (!currentHeading) {
+			return;
+		}
+		sections.push({
+			heading: currentHeading,
+			content: currentLines.join("\n").trim(),
+		});
+	};
+
+	for (const line of lines) {
+		if (line.startsWith("## ")) {
+			flush();
+			currentHeading = line.slice(3).trim();
+			currentLines = [];
+			continue;
+		}
+		if (currentHeading) {
+			currentLines.push(line);
+		}
+	}
+
+	flush();
+	return sections;
+}

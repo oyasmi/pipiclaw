@@ -1,0 +1,266 @@
+Sub-Agent 集成方案
+
+  整体思路
+
+  现有 examples/extensions/subagent/ 是通过 spawn pi CLI 子进程 实现隔离的，但 pipiclaw 是长驻
+  DingTalk bot 进程，没有 CLI 入口。所以核心改造是：用进程内 new Agent() 替代 subprocess
+  spawn，复用同一个 Executor（sandbox）实例。
+
+  现有 subagent (pi-coding-agent CLI):
+    主 Agent → spawn("pi", ["--mode json"]) → 子进程 Agent → stdout NDJSON → 解析
+
+  pipiclaw 方案:
+    主 Agent → tool call "subagent" → new Agent({tools, systemPrompt}) → 事件订阅 → 结果收集
+
+  需要做的事情（共 5 件）
+
+  ---
+  一、新建 src/tools/subagent.ts — Sub-Agent 工具实现
+
+  这是核心，作为一个 AgentTool 注册给主 Agent，LLM 通过 tool call 触发。
+
+  关键设计：
+
+  // src/tools/subagent.ts 骨架
+
+  interface SubAgentToolOptions {
+    executor: Executor;              // 复用父 Agent 的 sandbox
+    getModel: () => Model<Api>;      // 当前活跃模型
+    resolveApiKey: (model: Model<Api>) => Promise<string>;
+    workspaceDir: string;            // Agent 定义文件搜索根
+    channelDir: string;              // 当前频道目录
+  }
+
+  // 工具 schema — 简化版，只支持 single 模式（Phase 1）
+  const subagentSchema = Type.Object({
+    label: Type.String({ description: "Brief description of what this subagent task does" }),
+    agent: Type.String({ description: "Name of the agent to invoke (from .pi/agents/)" }),
+    task: Type.String({ description: "Task description for the subagent" }),
+  });
+
+  执行流程：
+
+  1. 发现 Agent — 从 {workspaceDir}/.pi/agents/ 和 {channelDir}/agents/ 加载 .md 文件，解析
+  frontmatter 得到 AgentConfig
+  2. 构造工具集 — 根据 AgentConfig.tools 字段（如 "bash,read"），从已有的
+  createReadTool/createBashTool/... 中按名过滤
+  3. 创建 Agent 实例 — new Agent({initialState: {systemPrompt, model, tools}, ...})
+  4. 订阅事件收集结果 — 通过 agent.subscribe() 监听 message_end 事件，累积输出
+  5. 等待完成 — await agent.waitForIdle()，提取最终文本输出返回给主 Agent
+  6. 传递 abort 信号 — 父 Agent 被取消时，子 Agent 也跟着取消
+
+    与现有 memory-consolidation 中 runWorkerPrompt 的区别：
+
+  ┌──────────┬────────────────────────────┬─────────────────────────────────┐
+  │   维度   │      runWorkerPrompt       │          subagent tool          │
+  ├──────────┼────────────────────────────┼─────────────────────────────────┤
+  │ tools    │ []（纯文本生成）           │ 按配置注入 bash/read/edit/write │
+  ├──────────┼────────────────────────────┼─────────────────────────────────┤
+  │ 触发方   │ 系统自动（compaction 时）  │ LLM 自主决策（tool call）       │
+  ├──────────┼────────────────────────────┼─────────────────────────────────┤
+  │ 输出     │ 内部消费（更新 MEMORY.md） │ 返回给主 Agent 作为 tool result │
+  ├──────────┼────────────────────────────┼─────────────────────────────────┤
+  │ 生命周期 │ fire-and-forget            │ 可被 abort                      │
+  └──────────┴────────────────────────────┴─────────────────────────────────┘
+
+  ---
+  二、新建 src/agents.ts — Agent 发现与加载
+
+  从 examples/extensions/subagent/agents.ts 提取核心逻辑，适配 pipiclaw 的目录结构：
+
+  搜索路径（优先级从低到高）：
+    ~/.pi/agents/*.md          → 用户全局 Agent 定义
+    {workspaceDir}/.pi/agents/*.md → 项目级 Agent 定义（覆盖同名）
+
+  这个文件基本可以直接复用 examples/extensions/subagent/agents.ts 的 discoverAgents() +
+  loadAgentsFromDir() + frontmatter 解析逻辑，只需要：
+  - 去掉对 getAgentDir() 的依赖（pipiclaw 有自己的目录约定）
+  - 把 findNearestProjectAgentsDir 简化为直接用已知的 workspaceDir
+
+  Agent 定义文件格式（与现有一致）：
+
+  ---
+  name: reviewer
+  description: Reviews code changes for quality and correctness
+  model: claude-sonnet-4-20250514
+  tools: bash,read
+  ---
+
+  You are a code reviewer. Given a task, review the relevant code...
+
+  ---
+  三、修改 src/tools/index.ts — 工具注册集成
+
+  当前 createPipiclawTools() 返回固定的 4 个工具。需要改为：
+
+  // 改造前
+  export function createPipiclawTools(executor: Executor): AgentTool<any>[] {
+    return [createReadTool(executor), createBashTool(executor), createEditTool(executor),
+  createWriteTool(executor)];
+  }
+
+    // 改造后
+  export function createPipiclawTools(executor: Executor): AgentTool<any>[] {
+    return [createReadTool(executor), createBashTool(executor), createEditTool(executor),
+  createWriteTool(executor)];
+  }
+
+  // 新增：按名称过滤工具子集（供 sub-agent 使用）
+  export function filterToolsByName(allTools: AgentTool<any>[], names: string[]): AgentTool<any>[] {
+    const nameSet = new Set(names);
+    return allTools.filter(t => nameSet.has(t.name));
+  }
+
+  // 新增：创建包含 subagent 的完整工具集（供主 Agent 使用）
+  export function createPipiclawToolsWithSubAgent(
+    executor: Executor,
+    subagentOptions: SubAgentToolOptions,
+  ): AgentTool<any>[] {
+    const baseTools = createPipiclawTools(executor);
+    const subagentTool = createSubAgentTool(subagentOptions, baseTools);
+    return [...baseTools, subagentTool];
+  }
+
+  关键设计决策：sub-agent 不能递归调用 subagent 工具。 createSubAgentTool 内部只传入 baseTools（4
+  个基础工具），不包含 subagent 自身，天然防止递归。
+
+  ---
+  四、修改 src/agent.ts (ChannelRunner) — 接入主流程
+
+  在 ChannelRunner 构造器中，将 subagent 工具加入主 Agent 的工具集：
+
+  // agent.ts 中现有的工具创建：
+  // const tools = createPipiclawTools(executor);
+
+  // 改为：
+  const baseTools = createPipiclawTools(executor);
+  const subagentTool = createSubAgentTool({
+    executor,
+    getModel: () => this.activeModel,
+    resolveApiKey: (model) => getApiKeyForModel(this.modelRegistry, model),
+    workspaceDir: this.workspaceDir,
+    channelDir,
+  }, baseTools);
+  const tools = [...baseTools, subagentTool];
+
+  变更范围极小 — 只改工具数组的组装方式，Agent 构造、AgentSession 构造、Extension 注册等全部不变。
+
+    ---
+  五、修改 src/prompt-builder.ts — 告诉 LLM 如何使用 sub-agent
+
+  在 buildAppendSystemPrompt() 中新增一个 section，告知主 Agent sub-agent 的存在和使用策略：
+
+  ## Sub-Agents
+
+  You have a `subagent` tool that delegates tasks to specialized agents.
+  Available agents are discovered from `.pi/agents/*.md` files.
+
+  Use sub-agents when:
+  - The task can be decomposed into independent sub-problems
+  - You need a fresh context window for a heavy computation
+  - A specialized agent (reviewer, researcher) would produce better results
+  - The current context is getting long and you want to offload work
+
+  Do NOT use sub-agents for:
+  - Simple questions or short tasks
+  - Tasks that heavily depend on current conversation context
+  - Interactive tasks requiring user confirmation
+
+  Each sub-agent runs with an isolated context — it cannot see your conversation history.
+  You must provide sufficient context in the `task` parameter.
+
+  同时，如果 workspace 下存在 .pi/agents/ 目录，可以在 prompt 中列出可用 Agent 名称和描述，帮助 LLM
+  决策。
+
+  ---
+  数据流总览
+
+  用户 (DingTalk)
+    │
+    ▼
+  主 Agent (ChannelRunner)
+    │ tools: [read, bash, edit, write, subagent]
+    │
+    │  LLM 决定调用 subagent({agent: "reviewer", task: "Review PR #42"})
+    │
+    ▼
+  subagent tool execute()
+    │
+    ├─ discoverAgents(workspaceDir) → 找到 "reviewer" 配置
+    │
+    ├─ filterToolsByName(baseTools, ["bash", "read"]) → 子工具集
+    │
+    ├─ new Agent({
+    │    systemPrompt: reviewer.systemPrompt,
+    │    model: reviewer.model ?? parentModel,
+    │    tools: filteredTools,
+    │    thinkingLevel: "off",
+    │  })
+    │
+    ├─ agent.subscribe(event => { 收集 message_end 事件 })
+    │
+    ├─ await agent.prompt(task)
+    ├─ await agent.waitForIdle()
+    │
+    ├─ 提取最终文本输出
+    │
+    └─ return { content: [{type: "text", text: output}] }
+        │
+        ▼
+  主 Agent 收到 tool result，继续推理
+
+  ---
+  需要注意的设计要点
+
+  1. 工具实例共享安全性
+
+  sub-agent 和主 Agent 共享同一个 Executor 实例。这是安全的，因为：
+  - Executor.exec() 是无状态的（每次 spawn 新进程）
+  - Docker sandbox 本身提供了文件系统隔离
+  - Host 模式下两者操作相同的工作目录，这是预期行为
+
+  2. API Key 与 Model 解析
+
+  sub-agent 可以指定不同的 model（如主 Agent 用 opus，子 Agent 用 sonnet 降低成本）。API key
+  通过同一个 ModelRegistry 解析，不需要额外配置。
+
+  3. Token 消耗可见性
+
+  sub-agent 的 token 消耗不会自动体现在主 Agent 的 usage 统计中。可以在 tool result 的 details
+  中附带 usage 信息，并在 /session 命令中展示。这个是增强项，不阻塞 Phase 1。
+
+  4. 超时与取消
+
+  - 主 Agent 的 AbortSignal 通过 tool execute 的 signal 参数传入
+  - sub-agent 创建时用同一个 signal，或创建子 AbortController 链接到父 signal
+  - DingTalk 用户发新消息中断时，整条链路都能正确取消
+
+  5. Phase 2 扩展路径
+
+  Phase 1 只做 single 模式。后续扩展：
+  - Parallel 模式：schema 加 tasks 数组，复用 mapWithConcurrencyLimit 模式，并发创建多个 Agent
+  - Chain 模式：schema 加 chain 数组，顺序执行，{previous} 占位符替换
+  - Streaming 更新：通过 onUpdate 回调实时推送子 Agent 进度到 DingTalk 卡片
+
+  ---
+  文件变更清单
+
+
+  ┌───────────────────────┬──────┬────────────────────────────────────────────────┐
+  │         文件          │ 操作 │                      说明                      │
+  ├───────────────────────┼──────┼────────────────────────────────────────────────┤
+  │ src/tools/subagent.ts │ 新建 │ Sub-agent 工具核心实现                         │
+  ├───────────────────────┼──────┼────────────────────────────────────────────────┤
+  │ src/agents.ts         │ 新建 │ Agent 发现与加载（从 examples 提取）           │
+  ├───────────────────────┼──────┼────────────────────────────────────────────────┤
+  │ src/tools/index.ts    │ 修改 │ 新增 filterToolsByName，导出 subagent 相关函数 │
+  ├───────────────────────┼──────┼────────────────────────────────────────────────┤
+  │ src/agent.ts          │ 修改 │ ChannelRunner 中组装工具时加入 subagent        │
+  ├───────────────────────┼──────┼────────────────────────────────────────────────┤
+  │ src/prompt-builder.ts │ 修改 │ 新增 sub-agent 使用指南 section                │
+  └───────────────────────┴──────┴────────────────────────────────────────────────┘
+
+  不需要改动的部分： AgentSession 构造、Extension
+  系统、MemoryLifecycle、DingTalkBot、DeliveryController、Store、Sandbox — 全部保持不变。
+
+  这个方案的核心优势是侵入性极低：本质上就是多注册了一个 tool，其余架构完全不动。
