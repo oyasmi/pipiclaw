@@ -29,6 +29,7 @@
 		"lint": "biome check .",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
 		"test": "vitest --run",
+		"test:coverage": "vitest --run --coverage",
 		"check": "npm run lint && npm run typecheck && npm run test",
 		"prepublishOnly": "npm run clean && npm run build && npm run check"
 	},
@@ -47,6 +48,7 @@
 		"@biomejs/biome": "2.3.5",
 		"@types/diff": "^7.0.2",
 		"@types/node": "^24.3.0",
+		"@vitest/coverage-v8": "^3.2.4",
 		"shx": "^0.4.0",
 		"typescript": "^5.7.3",
 		"vitest": "^3.2.4"
