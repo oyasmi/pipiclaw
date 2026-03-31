@@ -1,75 +1,88 @@
-# pipiclaw
+# Pipiclaw
 
-Pipiclaw 是一个独立的 AI 助手工程，基于 [`@mariozechner/pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent) SDK 把类 claw 的 coding agent 能力带到钉钉对话里，支持过程性 AI 卡片、最终 Markdown 回复、内置 Slash 命令、技能扩展、子代理与定时事件。
+Pipiclaw 是一个面向钉钉的 AI coding assistant runtime。它基于 [`@mariozechner/pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent) SDK，补上了实际团队环境里更关键的几层能力：钉钉渠道、过程性 AI Card、子代理、分层记忆、定时事件和可持续运行的 channel workspace。
 
-## 功能
+如果你想要的是一个能在钉钉里长期工作的工程助手，而不是一个只能单轮问答的机器人，Pipiclaw 的设计目标就是这个。
 
-- 钉钉 Stream 模式接收消息，自动重连
-- 过程性思考和执行信息通过 AI Card 展示，最终答复独立快速返回
-- 内置 Slash 命令：`/help`、`/new`、`/compact`、`/session`、`/model`
-- 忙碌时默认将普通新消息作为 steer 送入当前任务，也支持显式 `/steer`、`/followup`、`/stop`
-- 每个 DM / 群聊独立工作空间
-- 支持 workspace 级 `SOUL.md`、`AGENTS.md`、`MEMORY.md`
-- 支持 workspace 级 `sub-agents/` 预定义子代理目录
-- 支持全局和频道级技能目录
-- 支持 runtime-managed 的频道级 `MEMORY.md` / `HISTORY.md`
-- 支持 immediate / one-shot / periodic 定时事件
-- 支持自定义模型配置和模型切换
+## Why Pipiclaw
 
-## 安装
+- 钉钉优先：原生支持 DingTalk Stream Mode，不需要自己再包一层消息桥
+- 过程可见：思考、工具执行和状态更新可以持续流式展示到 AI Card
+- 任务不中断：忙碌时支持 steer、follow-up 和 stop，而不是简单丢弃新消息
+- 有记忆，但不过载：`MEMORY.md` / `HISTORY.md` 分层管理，避免上下文无限膨胀
+- 支持子代理：主代理可以把 review、research、planning 等任务委派给独立上下文的 sub-agent
+- 适合长期运行：每个私聊和群聊都有稳定的 channel workspace、日志和事件目录
+- 保持可编排：模型、技能、workspace 文件和事件都可以通过普通文件管理
+
+## Highlights
+
+- DingTalk AI Card 流式过程输出，最终答复独立发送
+- 内置 slash commands：`/help`、`/new`、`/compact`、`/session`、`/model`
+- 忙碌时普通消息默认作为 steer 注入当前任务，也支持显式 `/steer`、`/followup`、`/stop`
+- workspace 级 `SOUL.md`、`AGENTS.md`、`MEMORY.md`
+- channel 级 `MEMORY.md`、`HISTORY.md`、`skills/`
+- 预定义 sub-agent 和临时 inline sub-agent
+- immediate / one-shot / periodic 事件调度
+- 自定义 provider / model 配置
+- host / docker 两种工具执行环境
+
+## Quickstart
+
+下面这套流程的目标是：从零开始，让 Pipiclaw 在你的钉钉里成功回复第一条消息。
+
+### 1. Requirements
+
+- Node.js `>= 20`
+- 一个可用的钉钉企业内部应用
+- 至少一个可用的模型认证方式
+  - 环境变量，例如 `ANTHROPIC_API_KEY`
+  - 或 `~/.pi/pipiclaw/auth.json`
+
+### 2. Install
 
 ```bash
 npm install -g @oyasmi/pipiclaw
 ```
 
-## 首次运行
+### 3. First Run
+
+第一次运行会自动初始化配置目录：
 
 ```bash
 pipiclaw
 ```
 
-首次运行时，Pipiclaw 会自动创建 `~/.pi/pipiclaw/`，并生成这些文件和目录：
+程序会创建：
 
-- `channel.json`
-- `auth.json`
-- `models.json`
-- `settings.json`
-- `workspace/`
-- `workspace/events/`
-- `workspace/sub-agents/`
-- `workspace/skills/`
-- `workspace/SOUL.md`
-- `workspace/AGENTS.md`
-- `workspace/MEMORY.md`
+```text
+~/.pi/pipiclaw/
+├── channel.json
+├── auth.json
+├── models.json
+├── settings.json
+└── workspace/
+    ├── SOUL.md
+    ├── AGENTS.md
+    ├── MEMORY.md
+    ├── events/
+    ├── skills/
+    └── sub-agents/
+```
 
-如果 `channel.json` 还是示例占位符，程序会提示你先填写真实配置，然后退出。
+如果 `channel.json` 还是占位模板，程序会提示你先填配置，然后退出。这是预期行为。
 
-## 钉钉应用配置
+### 4. Create A DingTalk App
 
-在 [钉钉开放平台](https://open-dev.dingtalk.com/) 创建企业内部应用：
+在 [钉钉开放平台](https://open-dev.dingtalk.com/) 创建企业内部应用，并完成这些步骤：
 
-1. 创建应用并获取 `Client ID` 和 `Client Secret`
-2. 开启机器人能力并启用 Stream 模式
-3. 如需 AI Card 流式输出，创建 AI 卡片模板并获取 `Card Template ID`
+1. 创建应用，拿到 `Client ID` 和 `Client Secret`
+2. 开启机器人能力
+3. 启用 Stream Mode
+4. 如果你要过程性流式展示，再创建一个 AI Card 模板并拿到 `Card Template ID`
 
-## 配置文件
+### 5. Fill `channel.json`
 
-### channel.json
-
-`~/.pi/pipiclaw/channel.json`
-
-程序会自动生成一个模板文件。你需要至少填写：
-
-- `clientId`
-- `clientSecret`
-
-通常还会填写：
-
-- `robotCode`
-- `cardTemplateId`
-- `allowFrom`
-
-模板示例：
+编辑 `~/.pi/pipiclaw/channel.json`：
 
 ```json
 {
@@ -82,23 +95,29 @@ pipiclaw
 }
 ```
 
-说明：
+最少只需要：
 
-- `robotCode` 留空时默认回退到 `clientId`
-- `cardTemplateId` 留空时不使用 AI Card 流式输出
-- `allowFrom` 设为 `[]` 或删除时允许所有人
+- `clientId`
+- `clientSecret`
 
-### auth.json
+常见可选项：
 
-`~/.pi/pipiclaw/auth.json`
+- `robotCode`
+  留空时会回退到 `clientId`
+- `cardTemplateId`
+  留空时不启用 AI Card 流式输出
+- `allowFrom`
+  设置为 `[]` 或删除时表示允许所有人
 
-首次运行会自动生成空对象：
+### 6. Provide Model Credentials
 
-```json
-{}
+最简单的方式是直接用环境变量：
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-如果你使用环境变量提供模型密钥，可以一直保持为空。也可以手工写成：
+也可以写到 `~/.pi/pipiclaw/auth.json`：
 
 ```json
 {
@@ -106,11 +125,7 @@ pipiclaw
 }
 ```
 
-### models.json
-
-`~/.pi/pipiclaw/models.json`
-
-首次运行会自动生成最小合法空配置。你需要在 `providers` 下面自己添加自定义 provider 和模型定义：
+如果你需要自定义 provider / model，可以编辑 `~/.pi/pipiclaw/models.json`。如果不需要，这个文件可以保持：
 
 ```json
 {
@@ -118,133 +133,84 @@ pipiclaw
 }
 ```
 
-如果你不需要自定义模型，可以一直保持这个空配置。
-
-### settings.json
-
-`~/.pi/pipiclaw/settings.json`
-
-首次运行会自动生成：
-
-```json
-{}
-```
-
-`/model` 等命令写入的默认模型会保存在这里，并在重启后继续生效。
-
-## 运行
-
-填写好 `channel.json` 和模型认证信息后，再次启动：
+### 7. Start Pipiclaw
 
 ```bash
 pipiclaw
 ```
 
-如需 Docker sandbox，可以显式指定：
+如果你希望工具运行在 Docker 容器里：
 
 ```bash
 pipiclaw --sandbox=docker:your-container
 ```
 
-## 内置 Slash 命令
+### 8. Send The First Message
 
-Pipiclaw 暴露两层命令：
+给机器人发一条普通消息，例如：
 
-- transport 层命令：由 DingTalk runtime 直接处理
-- session 层命令：由 `AgentSession` extension command 立即执行，不作为普通 prompt 发给模型
+```text
+请介绍一下你自己，并说明你现在能做什么
+```
 
-### 空闲时可用
+如果一切正常：
+
+- 你会在钉钉里看到 AI Card 的过程更新，或普通文本回退
+- Pipiclaw 会在本地创建对应 channel 目录
+- 后续会话会复用该 channel 的工作空间与记忆文件
+
+## Configuration
+
+### Config Files
+
+Pipiclaw 默认使用下面这些文件：
+
+| File | Purpose |
+|------|---------|
+| `~/.pi/pipiclaw/channel.json` | 钉钉应用配置 |
+| `~/.pi/pipiclaw/auth.json` | 模型认证信息 |
+| `~/.pi/pipiclaw/models.json` | 自定义 provider 和 model |
+| `~/.pi/pipiclaw/settings.json` | 默认模型和运行时设置 |
+
+### Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `PIPICLAW_DEBUG` | 打开调试模式，把上下文写到 `last_prompt.json` |
+| `DINGTALK_FORCE_PROXY` | 设为 `true` 时保留 axios 代理设置 |
+
+## Commands
+
+Pipiclaw 有两层命令。
+
+### Transport Commands
+
+这些命令由 DingTalk runtime 直接处理：
 
 - `/help`
-  显示帮助
-- `/new`
-  开启新会话
-- `/compact [instructions]`
-  手动压缩当前会话上下文
-- `/session`
-  查看当前会话状态、消息统计、token 使用和模型信息
-- `/model [provider/modelId|modelId]`
-  查看当前模型，或用精确匹配切换模型
-
-说明：
-
-- `/model` 无参数时返回当前模型和可用模型列表
-- `/model <ref>` 只支持精确匹配
-
-### 忙碌时可用
-
-- 普通消息
-  默认按 `steer` 处理，在当前工具步骤结束后尽快转向
-- `/help`
-  显示帮助
 - `/stop`
-  停止当前任务
 - `/steer <message>`
-  显式指定一次 steer，改变当前任务方向
 - `/followup <message>`
-  将一条新请求排到当前任务完成之后再执行
 
-说明：
+忙碌时，普通消息默认等价于 `/steer <message>`。
 
-- busy 时普通消息默认等价于 `/steer <message>`
-- `/steer` 更适合纠偏、补充限制条件、修改当前任务方向
-- `/followup` 更适合“等这件事做完，再继续做下一件事”
-- busy 时，其他 slash 输入不会执行；只允许 `/help`、`/stop`、`/steer`、`/followup`
+### Session Commands
 
-## Workspace Files
+这些命令由 `AgentSession` extension command 立即执行，不作为普通 prompt 发给模型：
 
-Pipiclaw 只会自动识别并使用下面这些 workspace 文件或目录：
+- `/new`
+- `/compact [instructions]`
+- `/session`
+- `/model [provider/modelId|modelId]`
 
-- `SOUL.md`
-- `AGENTS.md`
-- `MEMORY.md`
-- `sub-agents/`
-- `skills/`
-- `events/`
+`/model` 只支持精确匹配切换。
 
-`TOOLS.md` 当前不受支持。即使你手工创建了它，也不会被自动加载或生效。
+## Workspace Model
 
-### Global And Channel Scope
+Pipiclaw 的核心不是“一个机器人实例”，而是一组长期存在的 workspace 文件。
 
-Pipiclaw 同时支持：
-
-- 全局 workspace 文件：`~/.pi/pipiclaw/workspace/`
-- 渠道级文件：`~/.pi/pipiclaw/workspace/dm_xxxx/` 或 `group_xxxx/`
-
-它们的关系如下：
-
-| 名称 | 全局位置 | 渠道级位置 | 生效方式 |
-|------|----------|------------|----------|
-| `SOUL.md` | `workspace/SOUL.md` | 不支持 | 仅在 session 开始时加载全局文件。渠道级 `SOUL.md` 不会被读取。 |
-| `AGENTS.md` | `workspace/AGENTS.md` | 不支持 | 仅在 session 开始时加载全局文件。渠道级 `AGENTS.md` 不会被读取。 |
-| `MEMORY.md` | `workspace/MEMORY.md` | `<channel>/MEMORY.md` | 默认都不会直接加载进上下文。workspace 文件稳定且由管理员维护；channel 文件由 runtime consolidation 自动更新，也允许 agent 主动读写。 |
-| `sub-agents/` | `workspace/sub-agents/` | 不支持 | 预定义 sub-agent 目录。主 Agent 可按需调用其中的定义，也可以在单次任务里临时内联定义一个 sub-agent。 |
-| `HISTORY.md` | 不支持 | `<channel>/HISTORY.md` | 默认不会直接加载进上下文。由 runtime consolidation 自动维护，用于按需读取旧摘要。 |
-| `skills/` | `workspace/skills/` | `<channel>/skills/` | 两边的 skill 摘要会在 session 开始时进入上下文；如果同名，渠道级覆盖全局。具体 skill 内容仍由 agent 按需读取。 |
-| `events/` | `workspace/events/` | 不支持 | 仅支持全局事件目录。 |
-| `.channel-meta.json` | 不支持 | `<channel>/.channel-meta.json` | 运行时自动维护，用于主动发送和重启恢复，不建议手工编辑。 |
-| `context.jsonl` | 不支持 | `<channel>/context.jsonl` | 原始 session 存储，冷文件，不主动加载或扫描。 |
-| `log.jsonl` | 不支持 | `<channel>/log.jsonl` | 原始消息存储，冷文件，不主动加载或扫描。 |
-| `subagent-runs.jsonl` | 不支持 | `<channel>/subagent-runs.jsonl` | sub-agent 运行摘要日志。记录其输出摘要、预算停止原因和 usage，便于事后审查。 |
-
-### File Intent
-
-- `SOUL.md`
-  定义 Pipiclaw 的身份、语气、默认语言和回复风格。它会追加到 pi 默认底座 prompt 之后。首次运行生成的只是说明模板，你需要替换成真实内容。
-- `AGENTS.md`
-  定义行为规则、工具使用策略、安全约束和项目工作流。只读取 workspace 级文件。不要把 runtime 内建的记忆系统细节完整复制到这里。
-- `MEMORY.md`
-  定义持久记忆。workspace 级文件适合存稳定共享背景，由管理员维护；channel 级文件适合存 durable facts、ongoing work、decisions、open loops，并由 runtime consolidation 自动维护。
-- `sub-agents/`
-  存放预定义 sub-agent Markdown 文件。适合放 reviewer、researcher、planner 之类可复用的专项角色。主 Agent 在需要时也可以不依赖该目录，直接临时内联定义一个 sub-agent。
-- `HISTORY.md`
-  仅存在于 channel 目录。保存旧上下文的摘要历史，由 runtime consolidation 自动维护。
-- `skills/`
-  存放自定义技能。适合放可复用的 CLI 工具、脚本和 skill 说明。
-- `events/`
-  存放定时事件定义。只支持全局目录，不支持放到单个 channel 目录里。
-
-## 工作空间布局
+### Workspace Layout
 
 ```text
 ~/.pi/pipiclaw/
@@ -256,30 +222,33 @@ Pipiclaw 同时支持：
     ├── SOUL.md
     ├── AGENTS.md
     ├── MEMORY.md
-    ├── sub-agents/
-    ├── skills/
     ├── events/
-    └── dm_{userId}/
-        ├── MEMORY.md
-        ├── HISTORY.md
-        ├── .channel-meta.json
-        ├── context.jsonl
-        ├── log.jsonl
-        └── skills/
+    ├── skills/
+    ├── sub-agents/
+    ├── dm_{userId}/
+    │   ├── MEMORY.md
+    │   ├── HISTORY.md
+    │   ├── .channel-meta.json
+    │   ├── context.jsonl
+    │   ├── log.jsonl
+    │   ├── subagent-runs.jsonl
+    │   └── skills/
+    └── group_{conversationId}/
+        └── ...
 ```
 
-## 记忆模型
+### What Gets Loaded Into Context
 
-Pipiclaw 的默认 session 上下文只直接加载这些内容：
+默认直接进入 session 上下文的内容：
 
-- pi 默认底座 system prompt
+- pi 默认 system prompt
 - workspace 级 `SOUL.md`
 - workspace 级 `AGENTS.md`
-- workspace 级 `sub-agents/` 中可用 sub-agent 的摘要
-- 内置工具说明
-- workspace 和 channel 两层 skills 的摘要
+- workspace 级 sub-agent 摘要
+- 工具说明
+- workspace 和 channel 两层 skills 摘要
 
-这些文件不会默认直接进入上下文：
+默认不会直接注入上下文的内容：
 
 - `workspace/MEMORY.md`
 - `<channel>/MEMORY.md`
@@ -287,44 +256,35 @@ Pipiclaw 的默认 session 上下文只直接加载这些内容：
 - `<channel>/log.jsonl`
 - `<channel>/context.jsonl`
 
-说明：
+这意味着 Pipiclaw 的记忆策略是“按需读取”，而不是把所有历史永远塞进 prompt。
 
-- `workspace/MEMORY.md` 是稳定共享背景，由管理员维护，runtime 不会自动改写。
-- `<channel>/MEMORY.md` 和 `<channel>/HISTORY.md` 由 runtime 在 compaction 或 session trimming 前自动 consolidation。
-- agent 被鼓励在需要时主动读取 channel memory/history。
-- `log.jsonl` 和 `context.jsonl` 是冷存储，只做原始归档，不承担记忆角色。
-- channel 目录首次初始化时会立即创建 `MEMORY.md` 和 `HISTORY.md`，而不是等到首次 consolidation 再懒创建。
+## Memory Model
 
-## 定时事件
+Pipiclaw 把记忆分成三层：
 
-在 `~/.pi/pipiclaw/workspace/events/` 中创建 JSON 文件来触发定时任务：
+- `workspace/MEMORY.md`
+  稳定的全局背景，适合放团队长期约定和共享知识
+- `<channel>/MEMORY.md`
+  channel 级 durable facts、ongoing work、decisions、open loops
+- `<channel>/HISTORY.md`
+  更老上下文的摘要历史
 
-- `immediate`
-- `one-shot`
-- `periodic`
+运行时会在 compaction 或 session trimming 前自动做 consolidation：
 
-示例：
-
-```json
-{
-  "type": "periodic",
-  "channelId": "dm_your-staff-id",
-  "text": "Review your MEMORY.md files. Remove outdated entries, merge duplicates, ensure well-organized.",
-  "schedule": "0 3 * * 0",
-  "timezone": "Asia/Shanghai"
-}
-```
+- 从对话中提取值得保留的 memory entries
+- 把旧对话块折叠进 `HISTORY.md`
+- 在必要时压缩过长的 memory/history 文件
 
 ## Sub-Agents
 
 Pipiclaw 支持两种 sub-agent 用法：
 
-- 预定义 sub-agent：放在 `~/.pi/pipiclaw/workspace/sub-agents/*.md`
-- 临时内联 sub-agent：主 Agent 在一次 `subagent` 工具调用里直接组织参数定义
+- 预定义 sub-agent：放到 `~/.pi/pipiclaw/workspace/sub-agents/*.md`
+- 临时 inline sub-agent：由主代理在一次 `subagent` 工具调用里直接构造
 
-推荐先从预定义 sub-agent 开始，因为更容易复用，也更容易调试。
+推荐先使用预定义 sub-agent，因为更容易复用、审查和调试。
 
-### 定义文件示例
+### Example
 
 文件：`~/.pi/pipiclaw/workspace/sub-agents/reviewer.md`
 
@@ -347,37 +307,73 @@ Prioritize correctness issues, regressions, risky assumptions, and missing tests
 Keep findings concise and actionable.
 ```
 
-说明：
+几个关键规则：
 
-- `model` 可省略；省略时默认使用主 Agent 当前模型
-- `tools` 可省略；省略时默认使用 `read,bash`
-- 各预算字段都可省略；省略时会使用 runtime 默认值
-- 默认预算值的设计目标是优先防止失控和成本失真，而不是追求“一个 sub-agent 包办整件大任务”；如果任务明显更重，应该显式调大预算
-- sub-agent 不会拿到 `subagent` 工具，因此不能再创建孙 agent
-- sub-agent 只隔离 LLM 对话上下文，不隔离文件系统和 executor；它读写的 workspace 文件对主 Agent 后续同样可见
-- runtime 会自动给 sub-agent 注入一小段固定运行上下文，例如 workspace 根目录、channel id 和 sandbox 类型；主 Agent 仍然需要把任务本身所需的业务上下文写进 `task`
-- 如果 sub-agent 已经产出可用结果，但因预算耗尽或中途停止未完整完成，runtime 会保留这部分结果返回给主 Agent，并在 channel 目录的 `subagent-runs.jsonl` 中记录执行摘要
+- sub-agent 没有 `subagent` 工具，所以不能继续创建孙代理
+- sub-agent 隔离的是 LLM 对话上下文，不隔离文件系统
+- 运行摘要会记录到 `<channel>/subagent-runs.jsonl`
 
-### 使用建议
+## Scheduled Events
 
-- `reviewer`：代码审查、回归风险检查、测试缺口检查
-- `researcher`：大范围读文件、查日志、收集事实
-- `planner`：先整理范围、再给主 Agent 输出执行计划
+在 `~/.pi/pipiclaw/workspace/events/` 放置 JSON 文件，可以创建三类事件：
 
-主 Agent 会在 prompt 指导下自行决定何时调用 sub-agent；不需要用户每次手工指定。
+- `immediate`
+- `one-shot`
+- `periodic`
 
-## 环境变量
+示例：
 
-| 变量 | 说明 |
-|------|------|
-| `ANTHROPIC_API_KEY` | Anthropic API 密钥 |
-| `PIPICLAW_DEBUG` | 设为任意值启用调试模式，将完整上下文写入 `last_prompt.json` |
-| `DINGTALK_FORCE_PROXY` | 设为 `true` 保留 axios 代理设置 |
+```json
+{
+  "type": "periodic",
+  "channelId": "dm_your-staff-id",
+  "text": "Review your MEMORY.md files. Remove outdated entries, merge duplicates, ensure well-organized.",
+  "schedule": "0 3 * * 0",
+  "timezone": "Asia/Shanghai"
+}
+```
 
-## 开发
+一个典型用法是让 Pipiclaw 每周回顾自己的记忆文件，或者做固定时间的巡检和提醒。
+
+## Development
 
 ```bash
 npm install
 npm run build
 npm run check
 ```
+
+常用脚本：
+
+- `npm run build`
+- `npm run test`
+- `npm run check`
+
+## Troubleshooting
+
+### First run exits immediately
+
+通常是因为 `channel.json` 还停留在模板占位符状态。把真实的 `clientId` / `clientSecret` 填进去即可。
+
+### Bot receives messages but does not answer
+
+优先检查：
+
+- 模型认证是否可用
+- `allowFrom` 是否把你的账号挡住了
+- 钉钉机器人 Stream Mode 是否已开启
+- `cardTemplateId` 是否有效；如果无效，先留空验证普通文本回退链路
+
+### Need to inspect the exact prompt
+
+设置：
+
+```bash
+export PIPICLAW_DEBUG=1
+```
+
+之后运行时会在 channel 目录下写出 `last_prompt.json`。
+
+## License
+
+Apache License 2.0. See [LICENSE](./LICENSE).
