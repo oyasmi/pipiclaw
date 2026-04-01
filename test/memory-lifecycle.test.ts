@@ -21,6 +21,7 @@ import { MemoryLifecycle } from "../src/memory/lifecycle.js";
 import { updateChannelSessionMemory } from "../src/memory/session.js";
 
 afterEach(() => {
+	vi.useRealTimers();
 	vi.clearAllMocks();
 });
 
@@ -50,8 +51,43 @@ function createFakePi() {
 	};
 }
 
+function createLifecycle(settings?: Partial<ReturnType<typeof createSettings>>) {
+	return new MemoryLifecycle({
+		channelId: "dm_123",
+		channelDir: "/tmp/dm_123",
+		getMessages: () => [{ role: "assistant", content: "live state" }] as never[],
+		getSessionEntries: () => [],
+		getModel: () => ({ provider: "test", id: "noop" }) as never,
+		resolveApiKey: async () => "",
+		getSessionMemorySettings: () => createSettings(settings),
+	});
+}
+
+function createSettings(
+	overrides: Partial<{
+		enabled: boolean;
+		minTurnsBetweenUpdate: number;
+		minToolCallsBetweenUpdate: number;
+		timeoutMs: number;
+		failureBackoffTurns: number;
+		forceRefreshBeforeCompact: boolean;
+		forceRefreshBeforeNewSession: boolean;
+	}> = {},
+) {
+	return {
+		enabled: true,
+		minTurnsBetweenUpdate: 2,
+		minToolCallsBetweenUpdate: 4,
+		timeoutMs: 30000,
+		failureBackoffTurns: 3,
+		forceRefreshBeforeCompact: true,
+		forceRefreshBeforeNewSession: true,
+		...overrides,
+	};
+}
+
 describe("MemoryLifecycle", () => {
-	it("queues session memory refresh for compaction without blocking consolidation", async () => {
+	it("waits for the forced compaction refresh before running inline consolidation", async () => {
 		let resolveUpdate: (() => void) | undefined;
 		vi.mocked(updateChannelSessionMemory).mockImplementation(
 			() =>
@@ -61,32 +97,20 @@ describe("MemoryLifecycle", () => {
 		);
 
 		const compactionMessages = [{ role: "user", content: "summarize this" }] as never[];
-		const lifecycle = new MemoryLifecycle({
-			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
-			getMessages: () => [{ role: "user", content: "live state" }] as never[],
-			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
-			getSessionMemorySettings: () => ({
-				enabled: true,
-				minTurnsBetweenUpdate: 2,
-				minToolCallsBetweenUpdate: 4,
-				timeoutMs: 30000,
-				failureBackoffTurns: 3,
-				forceRefreshBeforeCompact: true,
-				forceRefreshBeforeNewSession: true,
-			}),
-		});
+		const lifecycle = createLifecycle();
 		const fakePi = createFakePi();
 		lifecycle.createExtensionFactory()(fakePi.api as never);
 
-		await fakePi.handlers.get("session_before_compact")?.({
+		const beforeCompact = fakePi.handlers.get("session_before_compact")?.({
 			preparation: { messagesToSummarize: compactionMessages },
 		});
 		await Promise.resolve();
 
 		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+		expect(runInlineConsolidation).not.toHaveBeenCalled();
+
+		resolveUpdate?.();
+		await expect(beforeCompact).resolves.toBeUndefined();
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(updateChannelSessionMemory)).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -94,10 +118,9 @@ describe("MemoryLifecycle", () => {
 				timeoutMs: 30000,
 			}),
 		);
-		resolveUpdate?.();
 	});
 
-	it("queues session memory refresh for new-session without blocking consolidation", async () => {
+	it("waits for the forced new-session refresh before running inline consolidation", async () => {
 		let resolveUpdate: (() => void) | undefined;
 		vi.mocked(updateChannelSessionMemory).mockImplementation(
 			() =>
@@ -114,25 +137,21 @@ describe("MemoryLifecycle", () => {
 			getSessionEntries: () => [],
 			getModel: () => ({ provider: "test", id: "noop" }) as never,
 			resolveApiKey: async () => "",
-			getSessionMemorySettings: () => ({
-				enabled: true,
-				minTurnsBetweenUpdate: 2,
-				minToolCallsBetweenUpdate: 4,
-				timeoutMs: 30000,
-				failureBackoffTurns: 3,
-				forceRefreshBeforeCompact: true,
-				forceRefreshBeforeNewSession: true,
-			}),
+			getSessionMemorySettings: () => createSettings(),
 		});
 		const fakePi = createFakePi();
 		lifecycle.createExtensionFactory()(fakePi.api as never);
 
-		await fakePi.handlers.get("session_before_switch")?.({
+		const beforeSwitch = fakePi.handlers.get("session_before_switch")?.({
 			reason: "new",
 		});
 		await Promise.resolve();
 
 		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+		expect(runInlineConsolidation).not.toHaveBeenCalled();
+
+		resolveUpdate?.();
+		await expect(beforeSwitch).resolves.toBeUndefined();
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(updateChannelSessionMemory)).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -140,48 +159,32 @@ describe("MemoryLifecycle", () => {
 				timeoutMs: 30000,
 			}),
 		);
-		resolveUpdate?.();
 	});
 
 	it("backs off threshold-triggered session updates after a failure", async () => {
 		vi.mocked(updateChannelSessionMemory).mockRejectedValue(new Error("timeout"));
 
-		const lifecycle = new MemoryLifecycle({
-			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
-			getMessages: () => [],
-			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
-			getSessionMemorySettings: () => ({
-				enabled: true,
-				minTurnsBetweenUpdate: 1,
-				minToolCallsBetweenUpdate: 99,
-				timeoutMs: 30000,
-				failureBackoffTurns: 2,
-				forceRefreshBeforeCompact: true,
-				forceRefreshBeforeNewSession: true,
-			}),
+		const lifecycle = createLifecycle({
+			minTurnsBetweenUpdate: 1,
+			minToolCallsBetweenUpdate: 99,
+			failureBackoffTurns: 2,
 		});
 
 		lifecycle.noteCompletedAssistantTurn();
 		await Promise.resolve();
 		await Promise.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
 
 		lifecycle.noteCompletedAssistantTurn();
 		await Promise.resolve();
 		lifecycle.noteCompletedAssistantTurn();
 		await Promise.resolve();
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
-
-		lifecycle.noteCompletedAssistantTurn();
-		await Promise.resolve();
-		await Promise.resolve();
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
 	});
 
-	it("keeps a queued compaction refresh when a threshold refresh is already running", async () => {
+	it("serializes a forced compaction refresh behind an in-flight threshold refresh", async () => {
 		let resolveFirstUpdate: (() => void) | undefined;
 		vi.mocked(updateChannelSessionMemory)
 			.mockImplementationOnce(
@@ -193,22 +196,9 @@ describe("MemoryLifecycle", () => {
 			.mockResolvedValue(undefined as never);
 
 		const compactionMessages = [{ role: "user", content: "pre-compact snapshot" }] as never[];
-		const lifecycle = new MemoryLifecycle({
-			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
-			getMessages: () => [{ role: "assistant", content: "live state" }] as never[],
-			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
-			getSessionMemorySettings: () => ({
-				enabled: true,
-				minTurnsBetweenUpdate: 1,
-				minToolCallsBetweenUpdate: 99,
-				timeoutMs: 30000,
-				failureBackoffTurns: 2,
-				forceRefreshBeforeCompact: true,
-				forceRefreshBeforeNewSession: true,
-			}),
+		const lifecycle = createLifecycle({
+			minTurnsBetweenUpdate: 1,
+			minToolCallsBetweenUpdate: 99,
 		});
 		const fakePi = createFakePi();
 		lifecycle.createExtensionFactory()(fakePi.api as never);
@@ -217,158 +207,58 @@ describe("MemoryLifecycle", () => {
 		await Promise.resolve();
 		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
 
-		await fakePi.handlers.get("session_before_compact")?.({
+		const beforeCompact = fakePi.handlers.get("session_before_compact")?.({
 			preparation: { messagesToSummarize: compactionMessages },
 		});
-		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+		await Promise.resolve();
+		expect(runInlineConsolidation).not.toHaveBeenCalled();
 
 		resolveFirstUpdate?.();
-		await Promise.resolve();
-		await Promise.resolve();
-
+		await expect(beforeCompact).resolves.toBeUndefined();
 		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
 		expect(vi.mocked(updateChannelSessionMemory).mock.calls[1]?.[0]).toMatchObject({
 			messages: compactionMessages,
 			timeoutMs: 30000,
 		});
-	});
-
-	it("does not block compaction when inline consolidation is slow", async () => {
-		let resolveConsolidation: (() => void) | undefined;
-		vi.mocked(runInlineConsolidation).mockImplementationOnce(
-			() =>
-				new Promise((resolve) => {
-					resolveConsolidation = () =>
-						resolve({
-							skipped: false,
-							appendedMemoryEntries: 1,
-							appendedHistoryBlock: true,
-						});
-				}),
-		);
-
-		const lifecycle = new MemoryLifecycle({
-			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
-			getMessages: () => [],
-			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
-			getSessionMemorySettings: () => ({
-				enabled: true,
-				minTurnsBetweenUpdate: 99,
-				minToolCallsBetweenUpdate: 99,
-				timeoutMs: 30000,
-				failureBackoffTurns: 3,
-				forceRefreshBeforeCompact: false,
-				forceRefreshBeforeNewSession: false,
-			}),
-		});
-		const fakePi = createFakePi();
-		lifecycle.createExtensionFactory()(fakePi.api as never);
-
-		const beforeCompact = fakePi.handlers.get("session_before_compact")?.({
-			preparation: { messagesToSummarize: [{ role: "user", content: "snapshot" }] },
-		});
-
-		await expect(beforeCompact).resolves.toBeUndefined();
-		await Promise.resolve();
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-		resolveConsolidation?.();
 	});
 
-	it("does not block new-session switch when inline consolidation is slow", async () => {
-		let resolveConsolidation: (() => void) | undefined;
-		vi.mocked(runInlineConsolidation).mockImplementationOnce(
-			() =>
-				new Promise((resolve) => {
-					resolveConsolidation = () =>
-						resolve({
-							skipped: false,
-							appendedMemoryEntries: 1,
-							appendedHistoryBlock: true,
-						});
-				}),
-		);
-
-		const lifecycle = new MemoryLifecycle({
-			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
-			getMessages: () => [],
-			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
-			getSessionMemorySettings: () => ({
-				enabled: true,
-				minTurnsBetweenUpdate: 99,
-				minToolCallsBetweenUpdate: 99,
-				timeoutMs: 30000,
-				failureBackoffTurns: 3,
-				forceRefreshBeforeCompact: false,
-				forceRefreshBeforeNewSession: false,
-			}),
-		});
-		const fakePi = createFakePi();
-		lifecycle.createExtensionFactory()(fakePi.api as never);
-
-		const beforeSwitch = fakePi.handlers.get("session_before_switch")?.({
-			reason: "new",
+	it("runs idle consolidation after a quiet period and then maintenance", async () => {
+		vi.useFakeTimers();
+		const lifecycle = createLifecycle({
+			minTurnsBetweenUpdate: 99,
+			minToolCallsBetweenUpdate: 99,
+			forceRefreshBeforeCompact: false,
+			forceRefreshBeforeNewSession: false,
 		});
 
-		await expect(beforeSwitch).resolves.toBeUndefined();
+		lifecycle.noteCompletedAssistantTurn();
+
+		await vi.advanceTimersByTimeAsync(59_000);
+		expect(runInlineConsolidation).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(1_000);
 		await Promise.resolve();
+
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-		resolveConsolidation?.();
+		expect(runBackgroundMaintenance).toHaveBeenCalledTimes(1);
 	});
 
-	it("coalesces threshold-driven session updates while one is pending", async () => {
-		let resolveUpdate: (() => void) | null = null;
-		vi.mocked(updateChannelSessionMemory).mockImplementationOnce(
-			() =>
-				new Promise((resolve) => {
-					resolveUpdate = () => resolve(undefined as never);
-				}),
-		);
-
-		const lifecycle = new MemoryLifecycle({
-			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
-			getMessages: () => [],
-			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
-			getSessionMemorySettings: () => ({
-				enabled: true,
-				minTurnsBetweenUpdate: 2,
-				minToolCallsBetweenUpdate: 4,
-				timeoutMs: 30000,
-				failureBackoffTurns: 3,
-				forceRefreshBeforeCompact: false,
-				forceRefreshBeforeNewSession: false,
-			}),
+	it("cancels a pending idle consolidation when a new user turn starts", async () => {
+		vi.useFakeTimers();
+		const lifecycle = createLifecycle({
+			minTurnsBetweenUpdate: 99,
+			minToolCallsBetweenUpdate: 99,
+			forceRefreshBeforeCompact: false,
+			forceRefreshBeforeNewSession: false,
 		});
 
 		lifecycle.noteCompletedAssistantTurn();
-		lifecycle.noteCompletedAssistantTurn();
-		lifecycle.noteCompletedAssistantTurn();
-		lifecycle.noteCompletedAssistantTurn();
+		await vi.advanceTimersByTimeAsync(30_000);
+		lifecycle.noteUserTurnStarted();
+		await vi.advanceTimersByTimeAsync(60_000);
 
-		await Promise.resolve();
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
-
-		expect(resolveUpdate).not.toBeNull();
-		resolveUpdate!();
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
-
-		lifecycle.noteCompletedAssistantTurn();
-		lifecycle.noteCompletedAssistantTurn();
-		await waitForAssertion(() => {
-			expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
-		});
+		expect(runInlineConsolidation).not.toHaveBeenCalled();
 	});
 
 	it("serializes background maintenance and keeps the queue alive after failures", async () => {
@@ -390,22 +280,9 @@ describe("MemoryLifecycle", () => {
 				foldedHistory: true,
 			});
 
-		const lifecycle = new MemoryLifecycle({
-			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
-			getMessages: () => [],
-			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
-			getSessionMemorySettings: () => ({
-				enabled: true,
-				minTurnsBetweenUpdate: 2,
-				minToolCallsBetweenUpdate: 4,
-				timeoutMs: 30000,
-				failureBackoffTurns: 3,
-				forceRefreshBeforeCompact: false,
-				forceRefreshBeforeNewSession: false,
-			}),
+		const lifecycle = createLifecycle({
+			forceRefreshBeforeCompact: false,
+			forceRefreshBeforeNewSession: false,
 		});
 		const fakePi = createFakePi();
 		lifecycle.createExtensionFactory()(fakePi.api as never);

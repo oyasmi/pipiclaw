@@ -22,11 +22,11 @@ import { buildStandardMessages } from "../shared/type-guards.js";
 import { runSidecarTask } from "../sidecar-worker.js";
 
 const INLINE_TRANSCRIPT_MAX_CHARS = 28_000;
-const MEMORY_CLEANUP_LENGTH_THRESHOLD = 8_000;
-const MEMORY_UPDATE_BLOCK_THRESHOLD = 6;
-const HISTORY_LENGTH_THRESHOLD = 16_000;
-const HISTORY_BLOCK_THRESHOLD = 8;
-const HISTORY_RECENT_BLOCKS_TO_KEEP = 4;
+const MEMORY_CLEANUP_LENGTH_THRESHOLD = 5_000;
+const MEMORY_UPDATE_BLOCK_THRESHOLD = 4;
+const HISTORY_LENGTH_THRESHOLD = 8_000;
+const HISTORY_BLOCK_THRESHOLD = 5;
+const HISTORY_RECENT_BLOCKS_TO_KEEP = 3;
 const INLINE_CONSOLIDATION_TIMEOUT_MS = 20_000;
 const MEMORY_CLEANUP_TIMEOUT_MS = 30_000;
 const HISTORY_FOLDING_TIMEOUT_MS = 30_000;
@@ -49,6 +49,7 @@ Rules:
 - Prefer leaving highly volatile step-by-step execution state in SESSION.md rather than promoting it into durable memory.
 - historyBlock: concise Markdown summarizing the conversation chunk for later recovery.
 - Prefer short bullets and short paragraphs.
+- When the conversation contains meaningful work, prefer returning at least one short history bullet instead of an empty historyBlock.
 - If there is nothing worth storing, return empty values.`;
 
 const MEMORY_CLEANUP_SYSTEM_PROMPT = `You are rewriting a Pipiclaw channel MEMORY.md file.

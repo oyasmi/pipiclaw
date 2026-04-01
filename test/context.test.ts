@@ -34,10 +34,10 @@ describe("PipiclawSettingsManager", () => {
 		});
 		expect(manager.getMemoryRecallSettings()).toEqual({
 			enabled: true,
-			maxCandidates: 8,
-			maxInjected: 3,
-			maxChars: 3500,
-			rerankWithModel: false,
+			maxCandidates: 12,
+			maxInjected: 5,
+			maxChars: 5000,
+			rerankWithModel: true,
 		});
 		expect(manager.getSessionMemorySettings()).toEqual({
 			enabled: true,

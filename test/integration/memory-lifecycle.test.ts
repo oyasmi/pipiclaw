@@ -113,6 +113,7 @@ function createSettings(
 }
 
 afterEach(() => {
+	vi.useRealTimers();
 	vi.resetAllMocks();
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
@@ -148,6 +149,36 @@ describe("memory-lifecycle integration", () => {
 			expect(session).toContain("Investigating callback state flow.");
 		});
 		expect(runSidecarTask).toHaveBeenCalledTimes(1);
+	});
+
+	it("persists durable memory after the conversation goes idle", async () => {
+		vi.useFakeTimers();
+		const { channelDir, lifecycle } = createLifecycleHarness({
+			minTurnsBetweenUpdate: 99,
+			minToolCallsBetweenUpdate: 99,
+			forceRefreshBeforeCompact: false,
+			forceRefreshBeforeNewSession: false,
+		});
+		vi.mocked(runSidecarTask).mockImplementation(async (task) => {
+			if (task.name === "memory-inline-consolidation") {
+				return {
+					rawText:
+						'{"memoryEntries":["Callback verification must remain backwards-compatible"],"historyBlock":"- Investigated callback verification flow."}',
+					output:
+						'{"memoryEntries":["Callback verification must remain backwards-compatible"],"historyBlock":"- Investigated callback verification flow."}',
+				};
+			}
+			throw new Error(`Unexpected sidecar task ${task.name}`);
+		});
+
+		lifecycle.noteCompletedAssistantTurn();
+		await vi.advanceTimersByTimeAsync(60_000);
+		vi.useRealTimers();
+
+		await waitForAssertion(async () => {
+			expect(await readChannelMemory(channelDir)).toContain("Callback verification must remain backwards-compatible");
+			expect(await readChannelHistory(channelDir)).toContain("Investigated callback verification flow.");
+		});
 	});
 
 	it("updates SESSION.md after the configured tool-call threshold and resets the counters", async () => {

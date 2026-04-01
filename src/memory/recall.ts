@@ -1,8 +1,9 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { parseJsonObject } from "../llm-json.js";
-import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./candidates.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
 import { runSidecarTask } from "../sidecar-worker.js";
+import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
+import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./candidates.js";
 
 export interface RecallRequest {
 	query: string;
@@ -32,6 +33,20 @@ export interface RecallResult {
 	renderedText: string;
 }
 
+type QueryIntent = "current-state" | "next-steps" | "constraints" | "decisions" | "errors" | "history";
+
+interface TokenMatchStats {
+	matchedCount: number;
+	coverage: number;
+}
+
+interface ScoredCandidate {
+	candidate: MemoryCandidate;
+	score: number;
+	lexicalMatchCount: number;
+	intentBoost: number;
+}
+
 const RERANK_SYSTEM_PROMPT = `You are selecting which memory snippets are most relevant to the current user turn.
 
 Return strict JSON only:
@@ -46,7 +61,70 @@ Rules:
 - Do not rewrite the candidates. Only return candidate ids.`;
 
 const TOKEN_PART_REGEX = /[\p{Script=Han}]+|[\p{L}\p{N}_./-]+/gu;
-const MEMORY_RECALL_RERANK_TIMEOUT_MS = 5_000;
+const ASCII_SPLIT_REGEX = /[._/-]+/g;
+const MEMORY_RECALL_RERANK_TIMEOUT_MS = 8_000;
+const RERANK_CONTENT_CLIP = 800;
+const MAX_HAN_WORD_LENGTH = Array.from(COMMON_CHINESE_WORDS).reduce((max, word) => Math.max(max, word.length), 2);
+const LATIN_STOP_WORDS = new Set([
+	"a",
+	"an",
+	"and",
+	"are",
+	"as",
+	"at",
+	"be",
+	"been",
+	"being",
+	"by",
+	"can",
+	"could",
+	"did",
+	"do",
+	"does",
+	"doing",
+	"for",
+	"from",
+	"had",
+	"has",
+	"have",
+	"here",
+	"how",
+	"i",
+	"in",
+	"is",
+	"it",
+	"its",
+	"me",
+	"my",
+	"of",
+	"on",
+	"or",
+	"our",
+	"please",
+	"should",
+	"that",
+	"the",
+	"their",
+	"them",
+	"there",
+	"these",
+	"they",
+	"this",
+	"to",
+	"was",
+	"we",
+	"were",
+	"what",
+	"when",
+	"where",
+	"which",
+	"who",
+	"why",
+	"with",
+	"would",
+	"you",
+	"your",
+]);
 
 function containsHanText(text: string): boolean {
 	return HAN_REGEX.test(text);
@@ -55,14 +133,47 @@ function containsHanText(text: string): boolean {
 function tokenizeHanPart(part: string): string[] {
 	const chars = Array.from(part);
 	const tokens: string[] = [];
-	for (const size of [2, 3]) {
-		if (chars.length < size) {
+
+	for (let index = 0; index < chars.length; ) {
+		let matched = "";
+		const maxLength = Math.min(MAX_HAN_WORD_LENGTH, chars.length - index);
+		for (let size = maxLength; size >= 2; size--) {
+			const candidate = chars.slice(index, index + size).join("");
+			if (COMMON_CHINESE_WORDS.has(candidate)) {
+				matched = candidate;
+				break;
+			}
+		}
+		if (matched) {
+			tokens.push(matched);
+			index += Array.from(matched).length;
 			continue;
 		}
-		for (let index = 0; index <= chars.length - size; index++) {
-			tokens.push(chars.slice(index, index + size).join(""));
+		index++;
+	}
+
+	for (let index = 0; index <= chars.length - 2; index++) {
+		tokens.push(chars.slice(index, index + 2).join(""));
+	}
+
+	return Array.from(new Set(tokens));
+}
+
+function tokenizeAsciiPart(part: string): string[] {
+	const tokens: string[] = [];
+	const normalized = part.toLowerCase();
+	const segments = normalized.split(ASCII_SPLIT_REGEX).filter(Boolean);
+
+	if (normalized.length >= 2 && !LATIN_STOP_WORDS.has(normalized)) {
+		tokens.push(normalized);
+	}
+
+	for (const segment of segments) {
+		if (segment.length >= 2 && !LATIN_STOP_WORDS.has(segment)) {
+			tokens.push(segment);
 		}
 	}
+
 	return tokens;
 }
 
@@ -74,22 +185,74 @@ function tokenize(text: string): string[] {
 			tokens.push(...tokenizeHanPart(part));
 			continue;
 		}
-		if (part.length >= 2) {
-			tokens.push(part);
-		}
+		tokens.push(...tokenizeAsciiPart(part));
 	}
 	return Array.from(new Set(tokens));
 }
 
-function computeTokenOverlapScore(queryTokens: string[], text: string, weight: number): number {
-	const haystack = new Set(tokenize(text));
-	let score = 0;
+function buildTokenSet(text: string): Set<string> {
+	return new Set(tokenize(text));
+}
+
+function computeTokenMatchStats(queryTokens: string[], text: string): TokenMatchStats {
+	if (queryTokens.length === 0 || !text.trim()) {
+		return { matchedCount: 0, coverage: 0 };
+	}
+
+	const haystack = buildTokenSet(text);
+	let matchedCount = 0;
 	for (const token of queryTokens) {
 		if (haystack.has(token)) {
-			score += weight;
+			matchedCount++;
 		}
 	}
-	return score;
+
+	return {
+		matchedCount,
+		coverage: matchedCount / queryTokens.length,
+	};
+}
+
+function collectMatchingQueryTokens(queryTokens: string[], texts: string[]): Set<string> {
+	const haystack = new Set<string>();
+	for (const text of texts) {
+		for (const token of tokenize(text)) {
+			haystack.add(token);
+		}
+	}
+
+	const matches = new Set<string>();
+	for (const token of queryTokens) {
+		if (haystack.has(token)) {
+			matches.add(token);
+		}
+	}
+	return matches;
+}
+
+function computeExactMatchBoost(query: string, candidate: MemoryCandidate): number {
+	const normalizedQuery = query.trim().toLowerCase();
+	if (!normalizedQuery) {
+		return 0;
+	}
+
+	const minLength = containsHanText(normalizedQuery) ? 2 : 4;
+	if (normalizedQuery.length < minLength) {
+		return 0;
+	}
+
+	let boost = 0;
+	const scoringFields: Array<[string, number]> = [
+		[candidate.title, 12],
+		[candidate.searchText ?? candidate.content, 8],
+		[candidate.path, 4],
+	];
+	for (const [field, value] of scoringFields) {
+		if (field.toLowerCase().includes(normalizedQuery)) {
+			boost += value;
+		}
+	}
+	return boost;
 }
 
 function computeRecencyBoost(timestamp: string | undefined): number {
@@ -99,27 +262,84 @@ function computeRecencyBoost(timestamp: string | undefined): number {
 
 	const ageMs = Date.now() - timestampMs;
 	const dayMs = 24 * 60 * 60 * 1000;
-	if (ageMs <= dayMs) return 8;
-	if (ageMs <= 7 * dayMs) return 5;
+	if (ageMs <= dayMs) return 6;
+	if (ageMs <= 7 * dayMs) return 4;
 	if (ageMs <= 30 * dayMs) return 2;
 	return 0;
 }
 
-function scoreCandidate(queryTokens: string[], candidate: MemoryCandidate): number {
-	let score = candidate.priority;
-	score += computeTokenOverlapScore(queryTokens, candidate.title, 10);
-	score += computeTokenOverlapScore(queryTokens, candidate.content, 3);
-	score += computeTokenOverlapScore(queryTokens, candidate.path, 6);
-	score += computeRecencyBoost(candidate.timestamp);
-	return score;
+function detectQueryIntents(query: string): Set<QueryIntent> {
+	const intents = new Set<QueryIntent>();
+	if (/\b(now|current|currently|status)\b/i.test(query) || /(现在|当前|目前|正在|状态)/u.test(query)) {
+		intents.add("current-state");
+	}
+	if (/\b(next|follow-?up|todo|plan)\b/i.test(query) || /(下一步|接下来|后续|怎么办|怎么做|该查什么)/u.test(query)) {
+		intents.add("next-steps");
+	}
+	if (/\b(constraint|requirement|guardrail|compatible|compatibility)\b/i.test(query) || /(约束|限制|要求|兼容|注意事项)/u.test(query)) {
+		intents.add("constraints");
+	}
+	if (/\b(decision|decided|why)\b/i.test(query) || /(决策|决定|方案|为什么)/u.test(query)) {
+		intents.add("decisions");
+	}
+	if (/\b(error|bug|failure|issue|regression)\b/i.test(query) || /(错误|异常|失败|问题|缺陷|回归)/u.test(query)) {
+		intents.add("errors");
+	}
+	if (/\b(history|previous|before|earlier|past)\b/i.test(query) || /(历史|之前|以前|过去|早先|曾经)/u.test(query)) {
+		intents.add("history");
+	}
+	return intents;
 }
 
-function buildFallbackCandidates(
+function computeSectionIntentBoost(intents: Set<QueryIntent>, candidate: MemoryCandidate): number {
+	const kind = candidate.sectionKind ?? "";
+	let boost = 0;
+
+	if (intents.has("current-state") && kind === "current state") boost += 10;
+	if (intents.has("next-steps") && kind === "next steps") boost += 10;
+	if (intents.has("constraints") && kind.includes("constraint")) boost += 8;
+	if (intents.has("decisions") && kind.includes("decision")) boost += 8;
+	if (intents.has("errors") && kind === "errors & corrections") boost += 8;
+	if (intents.has("history") && candidate.source === "channel-history") boost += 8;
+	return boost;
+}
+
+function scoreCandidate(query: string, queryTokens: string[], intents: Set<QueryIntent>, candidate: MemoryCandidate): ScoredCandidate | null {
+	const searchText = candidate.searchText ?? candidate.content;
+	const titleStats = computeTokenMatchStats(queryTokens, candidate.title);
+	const contentStats = computeTokenMatchStats(queryTokens, searchText);
+	const pathStats = computeTokenMatchStats(queryTokens, candidate.path);
+	const matchedTokens = collectMatchingQueryTokens(queryTokens, [candidate.title, searchText, candidate.path]);
+	const exactBoost = computeExactMatchBoost(query, candidate);
+	const intentBoost = computeSectionIntentBoost(intents, candidate);
+	const overallCoverage = queryTokens.length > 0 ? matchedTokens.size / queryTokens.length : 0;
+	const lexicalScore =
+		overallCoverage * 48 +
+		titleStats.coverage * 18 +
+		contentStats.coverage * 22 +
+		pathStats.coverage * 8 +
+		exactBoost;
+	const structuralScore = candidate.priority + intentBoost + computeRecencyBoost(candidate.timestamp);
+
+	if (matchedTokens.size === 0 && exactBoost === 0 && intentBoost === 0) {
+		return null;
+	}
+
+	return {
+		candidate,
+		score: lexicalScore + structuralScore,
+		lexicalMatchCount: matchedTokens.size,
+		intentBoost,
+	};
+}
+
+function seedIntentCandidates(
 	request: RecallRequest,
 	candidates: MemoryCandidate[],
-	existing: Array<{ candidate: MemoryCandidate; score: number }>,
-): Array<{ candidate: MemoryCandidate; score: number }> {
-	if (!containsHanText(request.query) && existing.length > 0) {
+	existing: ScoredCandidate[],
+	intents: Set<QueryIntent>,
+): ScoredCandidate[] {
+	if (intents.size === 0) {
 		return existing;
 	}
 
@@ -127,13 +347,26 @@ function buildFallbackCandidates(
 	const seeded = [...existing];
 	const limit = Math.max(request.maxCandidates, request.maxInjected);
 
-	for (const candidate of candidates
-		.filter((item) => item.source === "channel-session" || item.source === "channel-memory")
-		.sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title))) {
-		if (seen.has(candidate.id)) {
-			continue;
-		}
-		seeded.push({ candidate, score: candidate.priority });
+	const intentCandidates = candidates
+		.map((candidate) => ({
+			candidate,
+			intentBoost: computeSectionIntentBoost(intents, candidate),
+		}))
+		.filter(({ candidate, intentBoost }) => intentBoost > 0 && !seen.has(candidate.id))
+		.sort(
+			(a, b) =>
+				b.intentBoost - a.intentBoost ||
+				b.candidate.priority - a.candidate.priority ||
+				a.candidate.title.localeCompare(b.candidate.title),
+		);
+
+	for (const { candidate, intentBoost } of intentCandidates) {
+		seeded.push({
+			candidate,
+			score: candidate.priority + intentBoost + computeRecencyBoost(candidate.timestamp),
+			lexicalMatchCount: 0,
+			intentBoost,
+		});
 		seen.add(candidate.id);
 		if (seeded.length >= limit) {
 			break;
@@ -143,24 +376,25 @@ function buildFallbackCandidates(
 	return seeded;
 }
 
-async function rerankCandidates(
-	request: RecallRequest,
-	candidates: Array<{ candidate: MemoryCandidate; score: number }>,
-): Promise<Array<{ candidate: MemoryCandidate; score: number }>> {
+async function rerankCandidates(request: RecallRequest, candidates: ScoredCandidate[]): Promise<ScoredCandidate[]> {
 	if ((!request.rerankWithModel && !request.autoRerank) || candidates.length <= request.maxInjected) {
 		return candidates;
 	}
 
 	const renderedCandidates = candidates
-		.map(({ candidate, score }) => {
+		.map(({ candidate, score, lexicalMatchCount, intentBoost }) => {
 			const clippedContent =
-				candidate.content.length > 300 ? `${candidate.content.slice(0, 300)}...` : candidate.content;
+				candidate.content.length > RERANK_CONTENT_CLIP
+					? `${candidate.content.slice(0, RERANK_CONTENT_CLIP)}...`
+					: candidate.content;
 			return [
 				`id: ${candidate.id}`,
 				`source: ${candidate.source}`,
 				`title: ${candidate.title}`,
 				`path: ${candidate.path}`,
 				`score: ${score}`,
+				`lexicalMatchCount: ${lexicalMatchCount}`,
+				`intentBoost: ${intentBoost}`,
 				`content: ${clippedContent}`,
 			].join("\n");
 		})
@@ -246,15 +480,23 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 	}
 
 	const queryTokens = tokenize(query);
+	const queryIntents = detectQueryIntents(query);
 	const scored = filteredCandidates
-		.map((candidate) => ({ candidate, score: scoreCandidate(queryTokens, candidate) }))
-		.filter(({ score }) => score > 0)
-		.sort((a, b) => b.score - a.score || a.candidate.title.localeCompare(b.candidate.title));
-
-	const shortlist = buildFallbackCandidates(request, filteredCandidates, scored)
+		.map((candidate) => scoreCandidate(query, queryTokens, queryIntents, candidate))
+		.filter((candidate): candidate is ScoredCandidate => candidate !== null)
 		.sort(
 			(a, b) =>
 				b.score - a.score ||
+				b.lexicalMatchCount - a.lexicalMatchCount ||
+				b.candidate.priority - a.candidate.priority ||
+				a.candidate.title.localeCompare(b.candidate.title),
+		);
+
+	const shortlist = seedIntentCandidates(request, filteredCandidates, scored, queryIntents)
+		.sort(
+			(a, b) =>
+				b.score - a.score ||
+				b.lexicalMatchCount - a.lexicalMatchCount ||
 				b.candidate.priority - a.candidate.priority ||
 				a.candidate.title.localeCompare(b.candidate.title),
 		)

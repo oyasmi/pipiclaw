@@ -98,7 +98,7 @@ describe("session-memory", () => {
 		expect(session).toContain("# Worklog");
 	});
 
-	it("merges partial sidecar updates without clearing existing sections", async () => {
+	it("replaces omitted sections so stale session state does not linger", async () => {
 		const channelDir = createTempChannel();
 		writeFileSync(
 			join(channelDir, "SESSION.md"),
@@ -137,7 +137,7 @@ describe("session-memory", () => {
 		const session = await readChannelSession(channelDir);
 		expect(session).toContain("New title");
 		expect(session).toContain("- Fresh state.");
-		expect(session).toContain("- Keep this step.");
+		expect(session).not.toContain("- Keep this step.");
 	});
 
 	it("preserves the current session file and writes a debug artifact on parse failures", async () => {

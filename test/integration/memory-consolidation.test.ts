@@ -203,7 +203,7 @@ describe("memory-consolidation integration", () => {
 		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).toContain("Keep the callback contract stable.");
 
 		const nextHistory = readFileSync(join(channelDir, "HISTORY.md"), "utf-8");
-		expect(nextHistory).toContain("## Folded History Through 2026-04-05T00:00:00.000Z");
+		expect(nextHistory).toContain("## Folded History Through 2026-04-06T00:00:00.000Z");
 		expect(nextHistory).toContain("Folded blocks 1 through 5.");
 		expect(nextHistory).toContain("History block 9");
 		expect(nextHistory).not.toContain("History block 1");

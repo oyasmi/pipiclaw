@@ -98,16 +98,17 @@ function parseStateUpdate(text: string): SessionMemoryStateUpdate {
 		throw new Error("Session memory response was not a JSON object");
 	}
 
-	const next: SessionMemoryStateUpdate = {};
-	if ("title" in parsed) next.title = normalizeTitle(parsed.title);
-	if ("currentState" in parsed) next.currentState = normalizeItems(parsed.currentState);
-	if ("userIntent" in parsed) next.userIntent = normalizeItems(parsed.userIntent);
-	if ("activeFiles" in parsed) next.activeFiles = normalizeItems(parsed.activeFiles);
-	if ("decisions" in parsed) next.decisions = normalizeItems(parsed.decisions);
-	if ("constraints" in parsed) next.constraints = normalizeItems(parsed.constraints);
-	if ("errorsAndCorrections" in parsed) next.errorsAndCorrections = normalizeItems(parsed.errorsAndCorrections);
-	if ("nextSteps" in parsed) next.nextSteps = normalizeItems(parsed.nextSteps);
-	if ("worklog" in parsed) next.worklog = normalizeItems(parsed.worklog);
+	const next: SessionMemoryStateUpdate = {
+		title: normalizeTitle(parsed.title),
+		currentState: normalizeItems(parsed.currentState),
+		userIntent: normalizeItems(parsed.userIntent),
+		activeFiles: normalizeItems(parsed.activeFiles),
+		decisions: normalizeItems(parsed.decisions),
+		constraints: normalizeItems(parsed.constraints),
+		errorsAndCorrections: normalizeItems(parsed.errorsAndCorrections),
+		nextSteps: normalizeItems(parsed.nextSteps),
+		worklog: normalizeItems(parsed.worklog),
+	};
 	return next;
 }
 
@@ -188,19 +189,17 @@ function parseRenderedSessionMemory(markdown: string): SessionMemoryState {
 	return state;
 }
 
-function mergeSessionMemoryState(current: SessionMemoryState, update: SessionMemoryStateUpdate): SessionMemoryState {
+function mergeSessionMemoryState(_current: SessionMemoryState, update: SessionMemoryStateUpdate): SessionMemoryState {
 	return {
-		title: typeof update.title === "string" ? update.title : current.title,
-		currentState: Array.isArray(update.currentState) ? update.currentState : current.currentState,
-		userIntent: Array.isArray(update.userIntent) ? update.userIntent : current.userIntent,
-		activeFiles: Array.isArray(update.activeFiles) ? update.activeFiles : current.activeFiles,
-		decisions: Array.isArray(update.decisions) ? update.decisions : current.decisions,
-		constraints: Array.isArray(update.constraints) ? update.constraints : current.constraints,
-		errorsAndCorrections: Array.isArray(update.errorsAndCorrections)
-			? update.errorsAndCorrections
-			: current.errorsAndCorrections,
-		nextSteps: Array.isArray(update.nextSteps) ? update.nextSteps : current.nextSteps,
-		worklog: Array.isArray(update.worklog) ? update.worklog : current.worklog,
+		title: typeof update.title === "string" ? update.title : "",
+		currentState: Array.isArray(update.currentState) ? update.currentState : [],
+		userIntent: Array.isArray(update.userIntent) ? update.userIntent : [],
+		activeFiles: Array.isArray(update.activeFiles) ? update.activeFiles : [],
+		decisions: Array.isArray(update.decisions) ? update.decisions : [],
+		constraints: Array.isArray(update.constraints) ? update.constraints : [],
+		errorsAndCorrections: Array.isArray(update.errorsAndCorrections) ? update.errorsAndCorrections : [],
+		nextSteps: Array.isArray(update.nextSteps) ? update.nextSteps : [],
+		worklog: Array.isArray(update.worklog) ? update.worklog : [],
 	};
 }
 

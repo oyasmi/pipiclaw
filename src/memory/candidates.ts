@@ -13,6 +13,7 @@ export interface MemoryCandidate {
 	path: string;
 	title: string;
 	content: string;
+	searchText?: string;
 	timestamp?: string;
 	sectionKind?: string;
 	priority: number;
@@ -58,23 +59,28 @@ function slugify(value: string): string {
 function inferPriority(source: MemoryCandidate["source"], title: string): number {
 	const normalizedTitle = title.trim().toLowerCase();
 	if (source === "channel-session") {
-		if (normalizedTitle === "current state") return 120;
-		if (normalizedTitle === "next steps") return 115;
-		if (normalizedTitle === "errors & corrections") return 110;
-		if (normalizedTitle === "constraints") return 108;
-		if (normalizedTitle === "user intent") return 105;
-		return 100;
+		if (normalizedTitle === "current state") return 18;
+		if (normalizedTitle === "next steps") return 17;
+		if (normalizedTitle === "errors & corrections") return 16;
+		if (normalizedTitle === "constraints") return 15;
+		if (normalizedTitle === "user intent") return 15;
+		if (normalizedTitle === "active files") return 14;
+		if (normalizedTitle === "decisions") return 14;
+		if (normalizedTitle === "session title") return 13;
+		return 12;
 	}
 	if (source === "channel-memory") {
-		if (normalizedTitle.includes("constraints")) return 88;
-		if (normalizedTitle.includes("decisions")) return 86;
-		if (normalizedTitle.includes("open loops")) return 84;
-		return 80;
+		if (normalizedTitle.includes("constraints")) return 11;
+		if (normalizedTitle.includes("decisions")) return 10;
+		if (normalizedTitle.includes("open loops")) return 10;
+		if (normalizedTitle.includes("preferences")) return 9;
+		if (normalizedTitle.includes("ongoing work")) return 9;
+		return 8;
 	}
 	if (source === "workspace-memory") {
-		return 60;
+		return 6;
 	}
-	return 40;
+	return 4;
 }
 
 function buildCandidate(
@@ -83,6 +89,7 @@ function buildCandidate(
 	title: string,
 	content: string,
 	timestamp?: string,
+	searchText?: string,
 ): MemoryCandidate {
 	return {
 		id: `${source}:${slugify(title)}:${timestamp ?? ""}`,
@@ -90,6 +97,7 @@ function buildCandidate(
 		path,
 		title,
 		content,
+		searchText,
 		timestamp,
 		sectionKind: title.trim().toLowerCase(),
 		priority: inferPriority(source, title),
@@ -118,9 +126,21 @@ function buildWorkspaceOrChannelMemoryCandidates(
 }
 
 function buildSessionCandidates(path: string, content: string): MemoryCandidate[] {
-	return splitH1Sections(content)
-		.filter((section) => section.content.trim())
-		.map((section) => buildCandidate("channel-session", path, section.heading, section.content));
+	const sections = splitH1Sections(content).filter((section) => section.content.trim());
+	const sessionTitle = sections.find((section) => section.heading.toLowerCase() === "session title")?.content ?? "";
+
+	return sections.map((section) =>
+		buildCandidate(
+			"channel-session",
+			path,
+			section.heading,
+			section.content,
+			undefined,
+			section.heading.toLowerCase() === "session title" || !sessionTitle.trim()
+				? section.content
+				: `${sessionTitle.trim()}\n${section.content}`,
+		),
+	);
 }
 
 function buildHistoryCandidates(path: string, content: string): MemoryCandidate[] {

@@ -401,7 +401,7 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 		expect(delegatedTask).toContain("Find regressions before the changes ship.");
 		expect(delegatedTask).toContain("Relevant context for this turn:");
 		expect(delegatedTask).toContain("Keep the fallback branch in src/core.ts explicit.");
-		expect(delegatedTask).toContain("Do not break the current session memory pipeline.");
+		expect(delegatedTask).toContain("Earlier review found missing regression coverage around src/core.ts fallback behavior.");
 	});
 });
 

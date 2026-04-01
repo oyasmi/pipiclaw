@@ -108,10 +108,10 @@ interface SubAgentWorker {
 
 const DEFAULT_SUBAGENT_MEMORY_RECALL_SETTINGS: PipiclawMemoryRecallSettings = {
 	enabled: true,
-	maxCandidates: 8,
-	maxInjected: 3,
-	maxChars: 3500,
-	rerankWithModel: false,
+	maxCandidates: 12,
+	maxInjected: 5,
+	maxChars: 5000,
+	rerankWithModel: true,
 };
 const SESSION_SECTION_ORDER = ["Current State", "User Intent", "Active Files", "Errors & Corrections", "Next Steps"];
 const MAX_SESSION_SECTION_CHARS = 280;

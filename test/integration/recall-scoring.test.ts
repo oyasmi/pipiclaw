@@ -187,4 +187,84 @@ describe("recall scoring integration", () => {
 		expect(result.items).toHaveLength(1);
 		expect(result.items[0]?.source).toBe("channel-session");
 	});
+
+	it("prefers highly relevant history over unrelated session state", async () => {
+		const { workspaceDir, channelDir } = createWorkspace();
+		setupChannelFiles(channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"Triage metrics dashboard",
+				"",
+				"# Current State",
+				"",
+				"- Reviewing dashboard rendering latency.",
+				"",
+				"# Next Steps",
+				"",
+				"- Compare the latest latency snapshots.",
+			].join("\n"),
+			memory: "# Channel Memory\n\n## Constraints\n\n- Keep dashboard charts stable.\n",
+			history: [
+				"# Channel History",
+				"",
+				"## 2026-04-01T00:00:00.000Z",
+				"",
+				"- Fixed the oauth callback regression by tightening callback verification.",
+			].join("\n"),
+		});
+
+		const result = await recallRelevantMemory({
+			query: "What happened in the earlier oauth callback regression fix?",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 1,
+			maxChars: 2000,
+			rerankWithModel: false,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+
+		expect(result.items).toHaveLength(1);
+		expect(result.items[0]?.source).toBe("channel-history");
+		expect(result.items[0]?.content).toContain("oauth callback regression");
+	});
+
+	it("uses section intent plus session title context for Chinese next-step queries", async () => {
+		const { workspaceDir, channelDir } = createWorkspace();
+		setupChannelFiles(channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"修复登录异常",
+				"",
+				"# Current State",
+				"",
+				"- 正在排查认证回调异常。",
+				"",
+				"# Next Steps",
+				"",
+				"- 先复现问题，再检查回调状态。",
+			].join("\n"),
+			memory: "# Channel Memory\n\n## Constraints\n\n- 不要变更 token 存储。\n",
+			history: "# Channel History\n",
+		});
+
+		const result = await recallRelevantMemory({
+			query: "登录失败了，下一步该查什么？",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 2,
+			maxChars: 2000,
+			rerankWithModel: false,
+			autoRerank: false,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+
+		expect(result.items.some((item) => item.title === "Next Steps")).toBe(true);
+		expect(result.renderedText).toContain("先复现问题");
+	});
 });

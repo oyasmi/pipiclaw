@@ -243,6 +243,8 @@ export class ChannelRunner implements AgentRunner {
 			let promptText = this.shouldPreserveRawInput(ctx.message.text) ? clippedInput : userMessage;
 			let recalledContextText = "";
 
+			this.memoryLifecycle.noteUserTurnStarted();
+
 			if (!this.shouldPreserveRawInput(ctx.message.text)) {
 				const recallSettings = this.settingsManager.getMemoryRecallSettings();
 				if (recallSettings.enabled) {
