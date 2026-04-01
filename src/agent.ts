@@ -7,6 +7,7 @@ import {
 	DefaultResourceLoader,
 	ModelRegistry,
 	SessionManager,
+	type SettingsManager as SDKSettingsManager,
 	type Skill,
 } from "@mariozechner/pi-coding-agent";
 import { mkdir, writeFile } from "fs/promises";
@@ -24,6 +25,9 @@ import { resolveInitialModel } from "./model-utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "./paths.js";
 import { buildAppendSystemPrompt } from "./prompt-builder.js";
 import { createExecutor, type SandboxConfig } from "./sandbox.js";
+import { extractLabelFromArgs, HAN_REGEX, truncate } from "./shared/text-utils.js";
+import { isRecord } from "./shared/type-guards.js";
+import type { UsageTotals } from "./shared/types.js";
 import type { ChannelStore } from "./store.js";
 import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } from "./sub-agents.js";
 import { createPipiclawTools } from "./tools/index.js";
@@ -66,17 +70,7 @@ function createModelRegistry(authStorage: AuthStorage, modelsJsonPath: string): 
 		: new registryClass(authStorage, modelsJsonPath);
 }
 
-// ============================================================================
-// Text helpers
-// ============================================================================
-
-function truncate(text: string, maxLen: number): string {
-	if (text.length <= maxLen) return text;
-	return `${text.substring(0, maxLen - 3)}...`;
-}
-
 const MAX_USER_MESSAGE_CHARS = 12_000;
-const HAN_REGEX = /\p{Script=Han}/u;
 
 function sanitizeProgressText(text: string): string {
 	return text
@@ -165,6 +159,7 @@ function mergeSubAgentUsage(totalUsage: UsageTotals, details: SubAgentToolDetail
 	totalUsage.output += details.usage.output;
 	totalUsage.cacheRead += details.usage.cacheRead;
 	totalUsage.cacheWrite += details.usage.cacheWrite;
+	totalUsage.total += details.usage.total;
 	totalUsage.cost.input += details.usage.cost.input;
 	totalUsage.cost.output += details.usage.cost.output;
 	totalUsage.cost.cacheRead += details.usage.cost.cacheRead;
@@ -198,14 +193,6 @@ interface PendingTool {
 	startTime: number;
 }
 
-interface UsageTotals {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-}
-
 interface RunQueue {
 	enqueue(fn: () => Promise<void>, errorContext: string): void;
 	enqueueMessage(text: string, target: "main" | "thread", errorContext: string, doLog?: boolean): void;
@@ -236,6 +223,7 @@ function createEmptyRunState(): RunState {
 			output: 0,
 			cacheRead: 0,
 			cacheWrite: 0,
+			total: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: "stop",
@@ -250,6 +238,8 @@ interface AssistantUsage {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	total?: number;
+	totalTokens?: number;
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 }
 
@@ -288,10 +278,6 @@ type AutoCompactionStartEvent = Extract<SessionEvent, { type: "auto_compaction_s
 type AutoCompactionEndEvent = Extract<SessionEvent, { type: "auto_compaction_end" }>;
 type AutoRetryStartEvent = Extract<SessionEvent, { type: "auto_retry_start" }>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
 function isMessageWithRole(value: unknown): value is { role: string } {
 	return isRecord(value) && typeof value.role === "string";
 }
@@ -302,19 +288,45 @@ function isAssistantEventMessage(value: unknown): value is AssistantEventMessage
 	);
 }
 
+function isAssistantUsageMessage(value: unknown): value is { role: "assistant"; stopReason?: string; usage: AssistantUsage } {
+	if (!isMessageWithRole(value) || value.role !== "assistant" || !("usage" in value) || !isRecord(value.usage)) {
+		return false;
+	}
+	return (
+		typeof value.usage.input === "number" &&
+		typeof value.usage.output === "number" &&
+		typeof value.usage.cacheRead === "number" &&
+		typeof value.usage.cacheWrite === "number" &&
+		isRecord(value.usage.cost) &&
+		typeof value.usage.cost.input === "number" &&
+		typeof value.usage.cost.output === "number" &&
+		typeof value.usage.cost.cacheRead === "number" &&
+		typeof value.usage.cost.cacheWrite === "number" &&
+		typeof value.usage.cost.total === "number"
+	);
+}
+
+function getLastAssistantUsage(messages: readonly unknown[]): { stopReason?: string; usage: AssistantUsage } | null {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (isAssistantUsageMessage(message) && message.stopReason !== "aborted") {
+			return message;
+		}
+	}
+
+	return null;
+}
+
+function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsManager {
+	return manager as unknown as SDKSettingsManager;
+}
+
 function isThinkingPart(part: AssistantContentPart): part is Extract<AssistantContentPart, { type: "thinking" }> {
 	return part.type === "thinking" && typeof (part as { thinking?: unknown }).thinking === "string";
 }
 
 function isTextPart(part: AssistantContentPart): part is Extract<AssistantContentPart, { type: "text" }> {
 	return part.type === "text" && typeof (part as { text?: unknown }).text === "string";
-}
-
-function extractLabelFromArgs(args: unknown): string | null {
-	if (!isRecord(args)) {
-		return null;
-	}
-	return typeof args.label === "string" && args.label.trim() ? args.label.trim() : null;
 }
 
 function hasEventType(
@@ -469,10 +481,10 @@ class ChannelRunner implements AgentRunner {
 			getSessionMemorySettings: () => this.settingsManager.getSessionMemorySettings(),
 		});
 
-		const resourceLoader = new DefaultResourceLoader({
-			cwd: process.cwd(),
-			agentDir: APP_HOME_DIR,
-			settingsManager: this.settingsManager as any,
+			const resourceLoader = new DefaultResourceLoader({
+				cwd: process.cwd(),
+				agentDir: APP_HOME_DIR,
+				settingsManager: asSdkSettingsManager(this.settingsManager),
 			extensionFactories: [
 				this.memoryLifecycle.createExtensionFactory(),
 				createCommandExtension({
@@ -520,10 +532,10 @@ class ChannelRunner implements AgentRunner {
 		const baseToolsOverride = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
 
 		// Create AgentSession
-		this.session = new AgentSession({
-			agent: this.agent,
-			sessionManager: this.sessionManager,
-			settingsManager: this.settingsManager as any,
+			this.session = new AgentSession({
+				agent: this.agent,
+				sessionManager: this.sessionManager,
+				settingsManager: asSdkSettingsManager(this.settingsManager),
 			cwd: process.cwd(),
 			modelRegistry: this.modelRegistry,
 			resourceLoader,
@@ -654,11 +666,7 @@ class ChannelRunner implements AgentRunner {
 
 			// Log usage summary
 			if (this.runState.totalUsage.cost.total > 0) {
-				const messages = this.session.messages;
-				const lastAssistantMessage = messages
-					.slice()
-					.reverse()
-					.find((m: any) => m.role === "assistant" && m.stopReason !== "aborted") as any;
+				const lastAssistantMessage = getLastAssistantUsage(this.session.messages);
 
 				const contextTokens = lastAssistantMessage
 					? lastAssistantMessage.usage.input +
@@ -935,6 +943,13 @@ class ChannelRunner implements AgentRunner {
 						this.runState.totalUsage.output += assistantMsg.usage.output;
 						this.runState.totalUsage.cacheRead += assistantMsg.usage.cacheRead;
 						this.runState.totalUsage.cacheWrite += assistantMsg.usage.cacheWrite;
+						this.runState.totalUsage.total +=
+							assistantMsg.usage.total ??
+							assistantMsg.usage.totalTokens ??
+							assistantMsg.usage.input +
+								assistantMsg.usage.output +
+								assistantMsg.usage.cacheRead +
+								assistantMsg.usage.cacheWrite;
 						this.runState.totalUsage.cost.input += assistantMsg.usage.cost.input;
 						this.runState.totalUsage.cost.output += assistantMsg.usage.cost.output;
 						this.runState.totalUsage.cost.cacheRead += assistantMsg.usage.cost.cacheRead;

@@ -1,6 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { parseJsonObject } from "./llm-json.js";
 import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./memory-candidates.js";
+import { HAN_REGEX } from "./shared/text-utils.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 
 export interface RecallRequest {
@@ -44,7 +45,6 @@ Rules:
 - If nothing is clearly useful, return an empty array.
 - Do not rewrite the candidates. Only return candidate ids.`;
 
-const HAN_REGEX = /\p{Script=Han}/u;
 const TOKEN_PART_REGEX = /[\p{Script=Han}]+|[\p{L}\p{N}_./-]+/gu;
 const MEMORY_RECALL_RERANK_TIMEOUT_MS = 5_000;
 

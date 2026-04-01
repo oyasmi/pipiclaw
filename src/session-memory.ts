@@ -7,6 +7,8 @@ import { parseJsonObject } from "./llm-json.js";
 import { splitLevelOneSections } from "./markdown-sections.js";
 import { readChannelMemory } from "./memory-files.js";
 import { readChannelSession, rewriteChannelSession } from "./session-memory-files.js";
+import { clipText } from "./shared/text-utils.js";
+import { buildStandardMessages, isRecord } from "./shared/type-guards.js";
 import { runSidecarTask, SidecarParseError } from "./sidecar-worker.js";
 
 const SESSION_TRANSCRIPT_MAX_CHARS = 20_000;
@@ -64,16 +66,6 @@ export interface SessionMemoryUpdateOptions {
 
 type SessionMemoryStateUpdate = Partial<Record<keyof SessionMemoryState, string[] | string>>;
 
-function clipText(text: string, maxChars: number): string {
-	const normalized = text.replace(/\r/g, "").trim();
-	if (normalized.length <= maxChars) {
-		return normalized;
-	}
-	const headChars = Math.floor(maxChars * 0.45);
-	const tailChars = maxChars - headChars;
-	return `${normalized.slice(0, headChars)}\n\n[... omitted middle section ...]\n\n${normalized.slice(-tailChars)}`;
-}
-
 function normalizeItem(value: unknown): string | null {
 	if (typeof value !== "string") {
 		return null;
@@ -99,10 +91,6 @@ function normalizeItems(value: unknown): string[] {
 
 function normalizeTitle(value: unknown): string {
 	return typeof value === "string" ? value.trim().slice(0, 120) : "";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
 }
 
 function parseStateUpdate(text: string): SessionMemoryStateUpdate {
@@ -233,19 +221,6 @@ function renderSection(heading: string, items: string[]): string {
 	return [`# ${heading}`, "", ...items.map((item) => `- ${item}`)].join("\n");
 }
 
-function isStandardAgentMessage(message: AgentMessage): message is Message {
-	return (
-		typeof message === "object" &&
-		message !== null &&
-		"role" in message &&
-		(message.role === "user" || message.role === "assistant" || message.role === "toolResult")
-	);
-}
-
-function buildMessagesForSessionMemory(messages: AgentMessage[]): Message[] {
-	return messages.filter(isStandardAgentMessage);
-}
-
 export function renderSessionMemory(state: SessionMemoryState): string {
 	const sections: string[] = [];
 	if (state.title.trim()) {
@@ -288,7 +263,7 @@ ${transcript || "(empty)"}`;
 export async function updateChannelSessionMemory(options: SessionMemoryUpdateOptions): Promise<SessionMemoryState> {
 	const currentSession = await readChannelSession(options.channelDir);
 	const currentMemory = await readChannelMemory(options.channelDir);
-	const messages = buildMessagesForSessionMemory(options.messages);
+	const messages = buildStandardMessages(options.messages);
 	const currentState = parseRenderedSessionMemory(currentSession);
 
 	let update: SessionMemoryStateUpdate;

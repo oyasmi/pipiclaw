@@ -121,10 +121,18 @@ export function ensureChannelMemoryFilesSync(channelDir: string): void {
 }
 
 async function readTextFile(path: string): Promise<string> {
-	if (!existsSync(path)) {
-		return "";
+	try {
+		return await readFile(path, "utf-8");
+	} catch (error: unknown) {
+		if (isNodeError(error) && error.code === "ENOENT") {
+			return "";
+		}
+		throw error;
 	}
-	return readFile(path, "utf-8");
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error && "code" in error;
 }
 
 export async function readChannelMemory(channelDir: string): Promise<string> {

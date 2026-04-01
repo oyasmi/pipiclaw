@@ -9,6 +9,48 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
+import type { Transport } from "@mariozechner/pi-ai";
+
+type PackageSource =
+	| string
+	| {
+			source: string;
+			extensions?: string[];
+			skills?: string[];
+			prompts?: string[];
+			themes?: string[];
+	  };
+
+type ThinkingBudgetsSettings = {
+	minimal?: number;
+	low?: number;
+	medium?: number;
+	high?: number;
+};
+
+type Settings = {
+	defaultProvider?: string;
+	defaultModel?: string;
+	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	compaction?: {
+		enabled?: boolean;
+		reserveTokens?: number;
+		keepRecentTokens?: number;
+	};
+	retry?: {
+		enabled?: boolean;
+		maxRetries?: number;
+		baseDelayMs?: number;
+		maxDelayMs?: number;
+	};
+};
+
+type SettingsError = {
+	scope: "global" | "project";
+	error: Error;
+};
+
+type TransportSetting = Transport;
 
 // ============================================================================
 // PipiclawSettingsManager - Simple settings for pipiclaw
@@ -47,7 +89,7 @@ export interface PipiclawSessionMemorySettings {
 export interface PipiclawSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
-	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high";
+	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	compaction?: Partial<PipiclawCompactionSettings>;
 	retry?: Partial<PipiclawRetrySettings>;
 	memoryRecall?: Partial<PipiclawMemoryRecallSettings>;
@@ -186,11 +228,11 @@ export class PipiclawSettingsManager {
 		this.save();
 	}
 
-	getDefaultThinkingLevel(): string {
+	getDefaultThinkingLevel(): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
 		return this.settings.defaultThinkingLevel || "off";
 	}
 
-	setDefaultThinkingLevel(level: string): void {
+	setDefaultThinkingLevel(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {
 		this.settings.defaultThinkingLevel = level as PipiclawSettings["defaultThinkingLevel"];
 		this.save();
 	}
@@ -258,6 +300,10 @@ export class PipiclawSettingsManager {
 		return { reserveTokens: 16384 };
 	}
 
+	getBranchSummarySkipPrompt(): boolean {
+		return false;
+	}
+
 	// Thinking
 	getHideThinkingBlock(): boolean {
 		return false;
@@ -267,7 +313,7 @@ export class PipiclawSettingsManager {
 		// No-op
 	}
 
-	getThinkingBudgets(): undefined {
+	getThinkingBudgets(): ThinkingBudgetsSettings | undefined {
 		return undefined;
 	}
 
@@ -305,11 +351,11 @@ export class PipiclawSettingsManager {
 		// No-op
 	}
 
-	getTransport(): string {
-		return "stdio";
+	getTransport(): TransportSetting {
+		return "auto";
 	}
 
-	setTransport(_transport: string): void {
+	setTransport(_transport: TransportSetting): void {
 		// No-op
 	}
 
@@ -321,15 +367,15 @@ export class PipiclawSettingsManager {
 		// No-op
 	}
 
-	getPackages(): unknown[] {
+	getPackages(): PackageSource[] {
 		return [];
 	}
 
-	setPackages(_packages: unknown[]): void {
+	setPackages(_packages: PackageSource[]): void {
 		// No-op
 	}
 
-	setProjectPackages(_packages: unknown[]): void {
+	setProjectPackages(_packages: PackageSource[]): void {
 		// No-op
 	}
 
@@ -401,7 +447,15 @@ export class PipiclawSettingsManager {
 		return "none";
 	}
 
-	setDoubleEscapeAction(_action: string): void {
+	setDoubleEscapeAction(_action: "fork" | "tree" | "none"): void {
+		// No-op
+	}
+
+	getTreeFilterMode(): "default" | "no-tools" | "user-only" | "labeled-only" | "all" {
+		return "default";
+	}
+
+	setTreeFilterMode(_mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all"): void {
 		// No-op
 	}
 
@@ -457,23 +511,56 @@ export class PipiclawSettingsManager {
 		// No-op
 	}
 
-	getGlobalSettings(): object {
-		return {};
+	getSessionDir(): string | undefined {
+		return undefined;
 	}
 
-	getProjectSettings(): object {
-		return {};
+	getNpmCommand(): string[] | undefined {
+		return undefined;
 	}
 
-	applyOverrides(_overrides: Partial<PipiclawSettings>): void {
+	setNpmCommand(_command: string[] | undefined): void {
 		// No-op
+	}
+
+	getGlobalSettings(): Settings {
+		return {};
+	}
+
+	getProjectSettings(): Settings {
+		return {};
+	}
+
+	applyOverrides(overrides: Partial<Settings>): void {
+		if (overrides.defaultProvider !== undefined) this.settings.defaultProvider = overrides.defaultProvider;
+		if (overrides.defaultModel !== undefined) this.settings.defaultModel = overrides.defaultModel;
+		if (overrides.defaultThinkingLevel !== undefined) {
+			this.settings.defaultThinkingLevel = overrides.defaultThinkingLevel;
+		}
+		if (overrides.compaction !== undefined) {
+			this.settings.compaction = {
+				...this.settings.compaction,
+				enabled: overrides.compaction.enabled ?? this.settings.compaction?.enabled,
+				reserveTokens: overrides.compaction.reserveTokens ?? this.settings.compaction?.reserveTokens,
+				keepRecentTokens: overrides.compaction.keepRecentTokens ?? this.settings.compaction?.keepRecentTokens,
+			};
+		}
+		if (overrides.retry !== undefined) {
+			this.settings.retry = {
+				...this.settings.retry,
+				enabled: overrides.retry.enabled ?? this.settings.retry?.enabled,
+				maxRetries: overrides.retry.maxRetries ?? this.settings.retry?.maxRetries,
+				baseDelayMs: overrides.retry.baseDelayMs ?? this.settings.retry?.baseDelayMs,
+			};
+		}
+		this.save();
 	}
 
 	flush(): Promise<void> {
 		return Promise.resolve();
 	}
 
-	drainErrors(): unknown[] {
+	drainErrors(): SettingsError[] {
 		return [];
 	}
 }

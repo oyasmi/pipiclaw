@@ -38,11 +38,11 @@ function createFakePi() {
 	};
 }
 
-async function waitForAssertion(assertion: () => void): Promise<void> {
+async function waitForAssertion(assertion: () => void | Promise<void>): Promise<void> {
 	let lastError: unknown;
 	for (let attempt = 0; attempt < 40; attempt++) {
 		try {
-			assertion();
+			await assertion();
 			return;
 		} catch (error) {
 			lastError = error;
@@ -94,6 +94,8 @@ function createSettings(
 		enabled: boolean;
 		minTurnsBetweenUpdate: number;
 		minToolCallsBetweenUpdate: number;
+		timeoutMs: number;
+		failureBackoffTurns: number;
 		forceRefreshBeforeCompact: boolean;
 		forceRefreshBeforeNewSession: boolean;
 	}> = {},
@@ -102,6 +104,8 @@ function createSettings(
 		enabled: true,
 		minTurnsBetweenUpdate: 2,
 		minToolCallsBetweenUpdate: 2,
+		timeoutMs: 30000,
+		failureBackoffTurns: 3,
 		forceRefreshBeforeCompact: true,
 		forceRefreshBeforeNewSession: true,
 		...overrides,
@@ -109,7 +113,7 @@ function createSettings(
 }
 
 afterEach(() => {
-	vi.clearAllMocks();
+	vi.resetAllMocks();
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -211,12 +215,13 @@ describe("memory-lifecycle integration", () => {
 			},
 		});
 
-		expect(await readChannelSession(channelDir)).toContain("Investigating callback regression.");
-		expect(await readChannelMemory(channelDir)).toContain("Callback verification must stay backwards-compatible");
-		expect(await readChannelHistory(channelDir)).toContain("Compacted recent debugging work.");
-
-		const taskNames = vi.mocked(runSidecarTask).mock.calls.map(([task]) => task.name);
-		expect(taskNames).toEqual(["session-memory-update", "memory-inline-consolidation"]);
+		await waitForAssertion(async () => {
+			expect(await readChannelSession(channelDir)).toContain("Investigating callback regression.");
+			expect(await readChannelMemory(channelDir)).toContain("Callback verification must stay backwards-compatible");
+			expect(await readChannelHistory(channelDir)).toContain("Compacted recent debugging work.");
+			const taskNames = vi.mocked(runSidecarTask).mock.calls.map(([task]) => task.name);
+			expect(taskNames).toEqual(["session-memory-update", "memory-inline-consolidation"]);
+		});
 	});
 
 	it("runs background maintenance after compaction using the real file writers", async () => {
@@ -246,15 +251,21 @@ describe("memory-lifecycle integration", () => {
 				),
 			].join("\n"),
 		});
-		vi.mocked(runSidecarTask)
-			.mockResolvedValueOnce({
-				rawText: "## Decisions\n\n- Keep the callback interface stable.\n",
-				output: "## Decisions\n\n- Keep the callback interface stable.\n",
-			})
-			.mockResolvedValueOnce({
-				rawText: "- Folded early history.",
-				output: "- Folded early history.",
-			});
+		vi.mocked(runSidecarTask).mockImplementation(async (task) => {
+			if (task.name === "memory-cleanup") {
+				return {
+					rawText: "## Decisions\n\n- Keep the callback interface stable.\n",
+					output: "## Decisions\n\n- Keep the callback interface stable.\n",
+				};
+			}
+			if (task.name === "history-folding") {
+				return {
+					rawText: "- Folded early history.",
+					output: "- Folded early history.",
+				};
+			}
+			throw new Error(`Unexpected sidecar task ${task.name}`);
+		});
 
 		fakePi.handlers.get("session_compact")?.({});
 
@@ -290,7 +301,9 @@ describe("memory-lifecycle integration", () => {
 			}),
 		).resolves.toBeUndefined();
 
-		expect(await readChannelMemory(channelDir)).toContain("Callback retry loop masked the root cause");
-		expect(await readChannelSession(channelDir)).toContain("Legacy task");
+		await waitForAssertion(async () => {
+			expect(await readChannelMemory(channelDir)).toContain("Callback retry loop masked the root cause");
+			expect(await readChannelSession(channelDir)).toContain("Legacy task");
+		});
 	});
 });

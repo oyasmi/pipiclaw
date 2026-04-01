@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -41,6 +41,14 @@ describe("memory-files", () => {
 		expect(memory).toContain("# Channel Memory");
 		expect(session).toContain("# Current State");
 		expect(history).toContain("# Channel History");
+	});
+
+	it("returns empty content when a memory file disappears before read", async () => {
+		const channelDir = createTempDir();
+		ensureChannelMemoryFilesSync(channelDir);
+		unlinkSync(join(channelDir, "MEMORY.md"));
+
+		await expect(readChannelMemory(channelDir)).resolves.toBe("");
 	});
 
 	it("rewrites files and falls back to defaults on blank content", async () => {

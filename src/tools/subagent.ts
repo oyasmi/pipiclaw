@@ -1,5 +1,5 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
-import type { Api, AssistantMessage, Model, TextContent } from "@mariozechner/pi-ai";
+import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { PipiclawMemoryRecallSettings } from "../context.js";
@@ -9,6 +9,8 @@ import { readChannelSession } from "../memory-files.js";
 import { recallRelevantMemory } from "../memory-recall.js";
 import { formatModelReference } from "../model-utils.js";
 import type { Executor } from "../sandbox.js";
+import { clipText, extractAssistantText, extractLabelFromArgs, HAN_REGEX } from "../shared/text-utils.js";
+import type { UsageTotals } from "../shared/types.js";
 import {
 	formatSubAgentList,
 	type ResolvedSubAgentConfig,
@@ -60,21 +62,6 @@ const subagentSchema = Type.Object({
 		}),
 	),
 });
-
-interface UsageTotals {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	total: number;
-	cost: {
-		input: number;
-		output: number;
-		cacheRead: number;
-		cacheWrite: number;
-		total: number;
-	};
-}
 
 export interface SubAgentToolDetails {
 	kind: "subagent";
@@ -130,7 +117,6 @@ const SESSION_SECTION_ORDER = ["Current State", "User Intent", "Active Files", "
 const MAX_SESSION_SECTION_CHARS = 280;
 const MAX_SESSION_CONTEXT_CHARS = 1800;
 const MAX_RECALL_CONTEXT_CHARS = 2200;
-const HAN_REGEX = /\p{Script=Han}/u;
 
 function createEmptyUsageTotals(): UsageTotals {
 	return {
@@ -147,14 +133,6 @@ function isAssistantMessage(message: AgentMessage): message is AssistantMessage 
 	return typeof message === "object" && message !== null && "role" in message && message.role === "assistant";
 }
 
-function extractAssistantText(message: AssistantMessage): string {
-	return message.content
-		.filter((part): part is Extract<AssistantMessage["content"][number], TextContent> => part.type === "text")
-		.map((part) => part.text)
-		.join("\n")
-		.trim();
-}
-
 function getLastAssistantMessage(messages: AgentMessage[]): AssistantMessage | null {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
@@ -163,14 +141,6 @@ function getLastAssistantMessage(messages: AgentMessage[]): AssistantMessage | n
 		}
 	}
 	return null;
-}
-
-function extractLabelFromArgs(args: unknown): string | null {
-	if (!args || typeof args !== "object" || !("label" in args)) {
-		return null;
-	}
-	const label = (args as { label?: unknown }).label;
-	return typeof label === "string" && label.trim() ? label.trim() : null;
 }
 
 function formatStatus(agentName: string, text: string): string {
@@ -230,14 +200,6 @@ function buildSubAgentTask(
 	return lines.join("\n");
 }
 
-function clipText(text: string, maxChars: number): string {
-	const normalized = text.replace(/\s+\n/g, "\n").trim();
-	if (normalized.length <= maxChars) {
-		return normalized;
-	}
-	return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
-}
-
 function buildSessionContextBlock(sessionMarkdown: string): string {
 	const sections = splitLevelOneSections(sessionMarkdown);
 	if (sections.length === 0) {
@@ -255,7 +217,7 @@ function buildSessionContextBlock(sessionMarkdown: string): string {
 	const lines = ["Relevant session state:"];
 	let usedChars = lines[0].length;
 	for (const section of selectedSections) {
-		const clipped = clipText(section.content, MAX_SESSION_SECTION_CHARS);
+		const clipped = clipText(section.content, MAX_SESSION_SECTION_CHARS, { headRatio: 1, omitHint: "..." });
 		const block = `- ${section.heading}: ${clipped}`;
 		if (usedChars + block.length > MAX_SESSION_CONTEXT_CHARS) {
 			break;

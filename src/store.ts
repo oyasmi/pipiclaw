@@ -2,6 +2,10 @@ import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statS
 import { appendFile, writeFile } from "fs/promises";
 import { dirname, join } from "path";
 
+const MAX_LOG_SIZE_BYTES = 1_000_000;
+const DEDUPE_TTL_MS = 60_000;
+const DEDUPE_CLEANUP_INTERVAL_MS = 30_000;
+
 export interface LoggedMessage {
 	date: string;
 	ts: string;
@@ -51,8 +55,9 @@ export interface LoggedSubAgentRun {
 
 export class ChannelStore {
 	private workingDir: string;
-	// Track recently logged message timestamps to prevent duplicates
 	private recentlyLogged = new Map<string, number>();
+	private cleanupTimer: NodeJS.Timeout | null = null;
+	private writeChains = new Map<string, Promise<void>>();
 
 	constructor(config: ChannelStoreConfig) {
 		this.workingDir = config.workingDir;
@@ -80,52 +85,55 @@ export class ChannelStore {
 	 * Returns false if message was already logged (duplicate)
 	 */
 	async logMessage(channelId: string, message: LoggedMessage): Promise<boolean> {
-		// Check for duplicate (same channel + timestamp)
 		const dedupeKey = `${channelId}:${message.ts}`;
-		if (this.recentlyLogged.has(dedupeKey)) {
-			return false; // Already logged
+		const now = Date.now();
+		const previousLogTime = this.recentlyLogged.get(dedupeKey);
+		if (previousLogTime !== undefined) {
+			if (now - previousLogTime < DEDUPE_TTL_MS) {
+				return false;
+			}
+			this.recentlyLogged.delete(dedupeKey);
 		}
 
-		// Mark as logged and schedule cleanup after 60 seconds
-		this.recentlyLogged.set(dedupeKey, Date.now());
-		setTimeout(() => this.recentlyLogged.delete(dedupeKey), 60000);
+		this.recentlyLogged.set(dedupeKey, now);
+		this.startCleanupTimer();
 
 		const logPath = join(this.getChannelDir(channelId), "log.jsonl");
 
-		// Rotate if file exceeds size limit
-		this.rotateIfNeeded(logPath);
-
-		// Ensure message has a date field
 		if (!message.date) {
 			message.date = new Date().toISOString();
 		}
 
-		const line = `${JSON.stringify(message)}\n`;
-		await appendFile(logPath, line, "utf-8");
+		await this.enqueueWrite(logPath, async () => {
+			await this.rotateIfNeeded(logPath);
+			const line = `${JSON.stringify(message)}\n`;
+			await appendFile(logPath, line, "utf-8");
+		});
 		return true;
 	}
 
 	async logSubAgentRun(channelId: string, run: LoggedSubAgentRun): Promise<void> {
 		const logPath = join(this.getChannelDir(channelId), "subagent-runs.jsonl");
-		this.rotateIfNeeded(logPath);
-		const line = `${JSON.stringify(run)}\n`;
-		await appendFile(logPath, line, "utf-8");
+		await this.enqueueWrite(logPath, async () => {
+			await this.rotateIfNeeded(logPath);
+			const line = `${JSON.stringify(run)}\n`;
+			await appendFile(logPath, line, "utf-8");
+		});
 	}
 
 	/**
 	 * Rotate log file if it exceeds 1MB.
 	 * Keeps one backup (log.jsonl.1) and resets the sync offset.
 	 */
-	private rotateIfNeeded(logPath: string): void {
+	private async rotateIfNeeded(logPath: string): Promise<void> {
 		try {
 			if (!existsSync(logPath)) return;
 			const stats = statSync(logPath);
-			if (stats.size > 1_000_000) {
+			if (stats.size > MAX_LOG_SIZE_BYTES) {
 				renameSync(logPath, `${logPath}.1`);
-				// Reset sync offset since log.jsonl was replaced
 				const syncOffsetPath = join(dirname(logPath), ".sync-offset");
 				try {
-					writeFile(syncOffsetPath, "0", "utf-8").catch(() => {});
+					await writeFile(syncOffsetPath, "0", "utf-8");
 				} catch {
 					/* ignore */
 				}
@@ -216,6 +224,45 @@ export class ChannelStore {
 			}
 		} catch {
 			return null;
+		}
+	}
+
+	private enqueueWrite<T>(logPath: string, work: () => Promise<T>): Promise<T> {
+		const previous = this.writeChains.get(logPath) ?? Promise.resolve();
+		const result = previous.catch(() => undefined).then(() => work());
+		const completion = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.writeChains.set(logPath, completion);
+		completion.finally(() => {
+			if (this.writeChains.get(logPath) === completion) {
+				this.writeChains.delete(logPath);
+			}
+		});
+		return result;
+	}
+
+	private startCleanupTimer(): void {
+		if (this.cleanupTimer) {
+			return;
+		}
+		this.cleanupTimer = setInterval(() => {
+			this.cleanupExpiredEntries();
+		}, DEDUPE_CLEANUP_INTERVAL_MS);
+		this.cleanupTimer.unref?.();
+	}
+
+	private cleanupExpiredEntries(now = Date.now()): void {
+		const cutoff = now - DEDUPE_TTL_MS;
+		for (const [key, loggedAt] of this.recentlyLogged) {
+			if (loggedAt <= cutoff) {
+				this.recentlyLogged.delete(key);
+			}
+		}
+		if (this.recentlyLogged.size === 0 && this.cleanupTimer) {
+			clearInterval(this.cleanupTimer);
+			this.cleanupTimer = null;
 		}
 	}
 }

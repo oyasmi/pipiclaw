@@ -16,7 +16,11 @@ const { axiosMock, fakeClientState } = vi.hoisted(() => {
 			isAxiosError: (error: unknown) => Boolean((error as { isAxiosError?: boolean })?.isAxiosError),
 		},
 		fakeClientState: {
-			instances: [] as Array<{ connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }>,
+			instances: [] as Array<{
+				connect: ReturnType<typeof vi.fn>;
+				disconnect: ReturnType<typeof vi.fn>;
+				socket: { readyState: number; ping: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> };
+			}>,
 		},
 	};
 });
@@ -416,5 +420,30 @@ describe("dingtalk", () => {
 			data: JSON.stringify({ msgId: "biz-1", text: { content: "hello" } }),
 		});
 		expect(onStreamMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it("coalesces reconnect timers and cancels them on stop", async () => {
+		const { bot } = createBot();
+
+		await bot.start();
+		const client = fakeClientState.instances[0];
+		expect(client.connect).toHaveBeenCalledTimes(1);
+
+		const closeHandler = client.socket.on.mock.calls.find((call) => call[0] === "close")?.[1] as
+			| ((code: number, reason: string) => void)
+			| undefined;
+		expect(closeHandler).toBeDefined();
+
+		closeHandler!(1006, "first");
+		closeHandler!(1006, "second");
+		await vi.advanceTimersByTimeAsync(1000);
+		await flushMicrotasks();
+		expect(client.connect).toHaveBeenCalledTimes(2);
+
+		closeHandler!(1006, "third");
+		await bot.stop();
+		await vi.advanceTimersByTimeAsync(1000);
+		await flushMicrotasks();
+		expect(client.connect).toHaveBeenCalledTimes(2);
 	});
 });

@@ -40,6 +40,7 @@ export class MemoryLifecycle {
 	private turnsSinceSessionUpdate = 0;
 	private toolCallsSinceSessionUpdate = 0;
 	private sessionUpdatePending = false;
+	private activeSessionRefresh: SessionMemoryRefreshRequest | null = null;
 	private queuedSessionRefresh: SessionMemoryRefreshRequest | null = null;
 	private thresholdFailureBackoffTurnsRemaining = 0;
 
@@ -131,27 +132,60 @@ export class MemoryLifecycle {
 
 	private enqueueSessionMemoryUpdate(request: SessionMemoryRefreshRequest): void {
 		if (this.sessionUpdatePending) {
+			if (!this.shouldQueueSessionRefresh(request)) {
+				return;
+			}
 			this.queuedSessionRefresh = this.mergeRefreshRequests(this.queuedSessionRefresh, request);
 			return;
 		}
 
 		this.sessionUpdatePending = true;
-		this.backgroundQueue = this.backgroundQueue
-			.then(async () => {
-				await this.refreshSessionMemory(request);
-			})
-			.catch((error: unknown) => {
-				const message = error instanceof Error ? error.message : String(error);
-				log.logWarning(`[${this.options.channelId}] Session memory queue failed`, message);
-			})
-			.finally(() => {
-				this.sessionUpdatePending = false;
-				const queued = this.queuedSessionRefresh;
-				this.queuedSessionRefresh = null;
-				if (queued) {
-					this.enqueueSessionMemoryUpdate(queued);
-				}
-			});
+		this.activeSessionRefresh = request;
+		void this.processSessionRefreshQueue(request);
+	}
+
+	private async runSessionRefreshQueue(initialRequest: SessionMemoryRefreshRequest): Promise<void> {
+		let request: SessionMemoryRefreshRequest | null = initialRequest;
+		while (request) {
+			this.activeSessionRefresh = request;
+			await this.refreshSessionMemory(request);
+			request = this.queuedSessionRefresh;
+			this.queuedSessionRefresh = null;
+		}
+	}
+
+	private async processSessionRefreshQueue(initialRequest: SessionMemoryRefreshRequest): Promise<void> {
+		try {
+			await this.runSessionRefreshQueue(initialRequest);
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			log.logWarning(`[${this.options.channelId}] Session memory queue failed`, message);
+		} finally {
+			this.sessionUpdatePending = false;
+			this.activeSessionRefresh = null;
+			this.queuedSessionRefresh = null;
+		}
+	}
+
+	private shouldQueueSessionRefresh(request: SessionMemoryRefreshRequest): boolean {
+		const active = this.activeSessionRefresh;
+		if (!active) {
+			return true;
+		}
+
+		// Threshold refreshes are best-effort maintenance. If any refresh is already
+		// running or queued, let it reset the counters instead of stacking duplicates.
+		if (request.reason === "threshold") {
+			return false;
+		}
+
+		// Re-queue forced refreshes only when they carry a more specific snapshot or
+		// when they represent a different high-priority reason.
+		if (active.reason === request.reason && !request.messages) {
+			return false;
+		}
+
+		return true;
 	}
 
 	private mergeRefreshRequests(

@@ -75,6 +75,7 @@ describe("ChannelStore", () => {
 
 		expect(first).toBe(true);
 		expect(duplicate).toBe(false);
+		expect((store as unknown as { cleanupTimer: NodeJS.Timeout | null }).cleanupTimer).not.toBeNull();
 
 		const logPath = join(store.getChannelDir(channelId), "log.jsonl");
 		const lines = readFileSync(logPath, "utf-8").trim().split("\n");
@@ -88,6 +89,7 @@ describe("ChannelStore", () => {
 		});
 
 		await vi.advanceTimersByTimeAsync(60_001);
+		expect((store as unknown as { cleanupTimer: NodeJS.Timeout | null }).cleanupTimer).toBeNull();
 		const afterExpiry = await store.logMessage(channelId, {
 			ts: "100",
 			date: "2026-04-01T08:01:01.000Z",
@@ -114,7 +116,6 @@ describe("ChannelStore", () => {
 			text: "rotated",
 			isBot: false,
 		});
-		await new Promise((resolve) => setTimeout(resolve, 20));
 
 		expect(existsSync(`${logPath}.1`)).toBe(true);
 		expect(readFileSync(syncOffsetPath, "utf-8")).toBe("0");
@@ -122,6 +123,37 @@ describe("ChannelStore", () => {
 
 		await store.logSubAgentRun("dm_rotate", sampleSubAgentRun());
 		expect(readFileSync(join(channelDir, "subagent-runs.jsonl"), "utf-8")).toContain('"toolCallId":"call-1"');
+	});
+
+	it("serializes concurrent writes to the same log file around rotation", async () => {
+		const store = new ChannelStore({ workingDir: createTempDir() });
+		const channelDir = store.getChannelDir("dm_concurrent");
+		const logPath = join(channelDir, "log.jsonl");
+
+		writeFileSync(logPath, "x".repeat(1_000_001), "utf-8");
+
+		const [first, second] = await Promise.all([
+			store.logMessage("dm_concurrent", {
+				date: "2026-04-01T10:00:00.000Z",
+				ts: "201",
+				user: "alice",
+				text: "first",
+				isBot: false,
+			}),
+			store.logMessage("dm_concurrent", {
+				date: "2026-04-01T10:00:01.000Z",
+				ts: "202",
+				user: "alice",
+				text: "second",
+				isBot: false,
+			}),
+		]);
+
+		expect(first).toBe(true);
+		expect(second).toBe(true);
+		expect(existsSync(`${logPath}.1`)).toBe(true);
+		expect(readFileSync(logPath, "utf-8")).toContain('"text":"first"');
+		expect(readFileSync(logPath, "utf-8")).toContain('"text":"second"');
 	});
 
 	it("returns the last logged timestamp and handles invalid or empty logs", async () => {

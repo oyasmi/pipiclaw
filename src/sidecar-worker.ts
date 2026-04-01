@@ -1,6 +1,7 @@
 import { Agent } from "@mariozechner/pi-agent-core";
-import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
+import { extractAssistantText } from "./shared/text-utils.js";
 
 export interface SidecarTask<T> {
 	name: string;
@@ -41,17 +42,6 @@ export class SidecarParseError extends Error {
 		this.rawText = rawText;
 		this.cause = cause;
 	}
-}
-
-function extractAssistantText(message: AssistantMessage): string {
-	return message.content
-		.filter(
-			(part): part is Extract<AssistantMessage["content"][number], { type: "text"; text: string }> =>
-				part.type === "text",
-		)
-		.map((part) => part.text)
-		.join("\n")
-		.trim();
 }
 
 export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarResult<T>> {
