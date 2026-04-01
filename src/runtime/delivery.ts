@@ -1,5 +1,5 @@
 import type { DingTalkBot, DingTalkContext, DingTalkEvent } from "./dingtalk.js";
-import * as log from "./log.js";
+import * as log from "../log.js";
 import type { ChannelStore } from "./store.js";
 
 const MIN_UPDATE_INTERVAL_MS = 800;

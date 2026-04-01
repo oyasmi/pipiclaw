@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } 
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkBot, DingTalkEvent } from "../src/dingtalk.js";
-import { EventsWatcher } from "../src/events.js";
+import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
+import { EventsWatcher } from "../src/runtime/events.js";
 
 const tempDirs: string[] = [];
 

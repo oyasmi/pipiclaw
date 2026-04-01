@@ -5,9 +5,9 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Executor } from "../src/sandbox.js";
-import { ChannelStore } from "../src/store.js";
-import { discoverSubAgents, getSubAgentsDir, resolveSubAgentConfig } from "../src/sub-agents.js";
-import { createSubAgentTool } from "../src/tools/subagent.js";
+import { ChannelStore } from "../src/runtime/store.js";
+import { discoverSubAgents, getSubAgentsDir, resolveSubAgentConfig } from "../src/subagents/discovery.js";
+import { createSubAgentTool } from "../src/subagents/tool.js";
 
 const model = getModel("openai", "gpt-4o-mini")!;
 

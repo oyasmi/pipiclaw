@@ -1,6 +1,6 @@
 import { COMMAND_RESULT_CUSTOM_TYPE } from "../command-extension.js";
 import { isRecord } from "../shared/type-guards.js";
-import type { SubAgentToolDetails } from "../tools/subagent.js";
+import type { SubAgentToolDetails } from "../subagents/tool.js";
 import type {
 	AssistantContentPart,
 	AssistantEventMessage,

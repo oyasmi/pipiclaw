@@ -6,7 +6,7 @@ import {
 	type SessionMessageEntry,
 	serializeConversation,
 } from "@mariozechner/pi-coding-agent";
-import { parseJsonObject } from "./llm-json.js";
+import { parseJsonObject } from "../llm-json.js";
 import {
 	appendChannelHistoryBlock,
 	appendChannelMemoryUpdate,
@@ -15,11 +15,11 @@ import {
 	readChannelSession,
 	rewriteChannelHistory,
 	rewriteChannelMemory,
-	splitMarkdownSections,
-} from "./memory-files.js";
-import { clipText } from "./shared/text-utils.js";
-import { buildStandardMessages } from "./shared/type-guards.js";
-import { runSidecarTask } from "./sidecar-worker.js";
+} from "./files.js";
+import { splitH2Sections } from "../shared/markdown-sections.js";
+import { clipText } from "../shared/text-utils.js";
+import { buildStandardMessages } from "../shared/type-guards.js";
+import { runSidecarTask } from "../sidecar-worker.js";
 
 const INLINE_TRANSCRIPT_MAX_CHARS = 28_000;
 const MEMORY_CLEANUP_LENGTH_THRESHOLD = 8_000;
@@ -166,7 +166,7 @@ function hasMeaningfulMessages(messages: Message[]): boolean {
 }
 
 function countMatchingSectionHeadings(content: string, prefix: string): number {
-	return splitMarkdownSections(content).filter((section) => section.heading.startsWith(prefix)).length;
+	return splitH2Sections(content).filter((section) => section.heading.startsWith(prefix)).length;
 }
 
 async function runWorkerPrompt(
@@ -280,7 +280,7 @@ ${currentMemory}`;
 }
 
 async function foldChannelHistory(options: ConsolidationRunOptions, currentHistory: string): Promise<boolean> {
-	const sections = splitMarkdownSections(currentHistory);
+	const sections = splitH2Sections(currentHistory);
 	if (currentHistory.length < HISTORY_LENGTH_THRESHOLD && sections.length < HISTORY_BLOCK_THRESHOLD) {
 		return false;
 	}

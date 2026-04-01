@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { bootstrap, isBootstrapExitError } from "./bootstrap.js";
+import { bootstrap, isBootstrapExitError } from "./runtime/bootstrap.js";
 
 void bootstrap(process.argv).catch((error: unknown) => {
 	if (isBootstrapExitError(error)) {

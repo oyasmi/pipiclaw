@@ -1,7 +1,7 @@
 import type { BuiltInCommand } from "../commands.js";
-import type { DingTalkContext } from "../dingtalk.js";
+import type { DingTalkContext } from "../runtime/dingtalk.js";
 import type { UsageTotals } from "../shared/types.js";
-import type { ChannelStore } from "../store.js";
+import type { ChannelStore } from "../runtime/store.js";
 
 export interface AgentRunner {
 	run(ctx: DingTalkContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }>;

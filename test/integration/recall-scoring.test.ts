@@ -6,7 +6,7 @@ vi.mock("../../src/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
 }));
 
-import { recallRelevantMemory } from "../../src/memory-recall.js";
+import { recallRelevantMemory } from "../../src/memory/recall.js";
 import { runSidecarTask } from "../../src/sidecar-worker.js";
 import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
 

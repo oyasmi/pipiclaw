@@ -19,8 +19,8 @@ vi.mock("../src/sidecar-worker.js", () => ({
 	},
 }));
 
-import { readChannelSession } from "../src/memory-files.js";
-import { renderSessionMemory, updateChannelSessionMemory } from "../src/session-memory.js";
+import { readChannelSession } from "../src/memory/files.js";
+import { renderSessionMemory, updateChannelSessionMemory } from "../src/memory/session.js";
 import { runSidecarTask, SidecarParseError } from "../src/sidecar-worker.js";
 
 const tempDirs: string[] = [];

@@ -11,9 +11,9 @@ import axios from "axios";
 import { DWClient, type DWClientDownStream, TOPIC_ROBOT } from "dingtalk-stream";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { parseBuiltInCommand, renderBuiltInHelp } from "./commands.js";
-import * as log from "./log.js";
-import { isRecord } from "./shared/type-guards.js";
+import { parseBuiltInCommand, renderBuiltInHelp } from "../commands.js";
+import * as log from "../log.js";
+import { isRecord } from "../shared/type-guards.js";
 
 // ============================================================================
 // Types
@@ -226,7 +226,10 @@ export class DingTalkBot {
 	}
 
 	private isSocketLike(value: unknown): value is DingTalkSocketLike {
-		return isRecord(value) && typeof value.on === "function";
+		if (!isRecord(value)) {
+			return false;
+		}
+		return typeof value.on === "function";
 	}
 
 	private setTrackedTimeout(callback: () => void, delayMs: number): NodeJS.Timeout {

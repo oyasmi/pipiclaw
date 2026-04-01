@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
+import { splitH2Sections } from "../src/shared/markdown-sections.js";
 import {
 	appendChannelHistoryBlock,
 	appendChannelMemoryUpdate,
@@ -12,8 +13,7 @@ import {
 	rewriteChannelHistory,
 	rewriteChannelMemory,
 	rewriteChannelSession,
-	splitMarkdownSections,
-} from "../src/memory-files.js";
+} from "../src/memory/files.js";
 
 const tempDirs: string[] = [];
 
@@ -96,7 +96,7 @@ describe("memory-files", () => {
 
 	it("splits markdown sections by level-two headings", () => {
 		expect(
-			splitMarkdownSections(`# Root
+			splitH2Sections(`# Root
 
 ## First
 
@@ -109,6 +109,6 @@ Beta`),
 			{ heading: "First", content: "Alpha" },
 			{ heading: "Second", content: "Beta" },
 		]);
-		expect(splitMarkdownSections("")).toEqual([]);
+		expect(splitH2Sections("")).toEqual([]);
 	});
 });

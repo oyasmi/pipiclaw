@@ -1,11 +1,11 @@
-import type { DingTalkContext } from "../dingtalk.js";
+import type { DingTalkContext } from "../runtime/dingtalk.js";
 import * as log from "../log.js";
-import { MemoryLifecycle } from "../memory-lifecycle.js";
+import { MemoryLifecycle } from "../memory/lifecycle.js";
 import { extractLabelFromArgs, truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
-import type { ChannelStore } from "../store.js";
-import type { SubAgentToolDetails } from "../tools/subagent.js";
+import type { ChannelStore } from "../runtime/store.js";
+import type { SubAgentToolDetails } from "../subagents/tool.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
 import {
 	extractCustomCommandResultText,

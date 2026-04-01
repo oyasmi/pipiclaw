@@ -1,12 +1,11 @@
 import { readFile } from "fs/promises";
 import { join } from "path";
-import { splitLevelOneSections } from "./markdown-sections.js";
+import { splitH1Sections, splitH2Sections } from "../shared/markdown-sections.js";
 import {
 	getChannelHistoryPath,
 	getChannelMemoryPath,
 	getChannelSessionPath,
-	splitMarkdownSections,
-} from "./memory-files.js";
+} from "./files.js";
 
 export interface MemoryCandidate {
 	id: string;
@@ -106,7 +105,7 @@ function buildWorkspaceOrChannelMemoryCandidates(
 	path: string,
 	content: string,
 ): MemoryCandidate[] {
-	const sections = splitMarkdownSections(content);
+	const sections = splitH2Sections(content);
 	if (sections.length === 0 && content) {
 		return [
 			buildCandidate(source, path, source === "workspace-memory" ? "Workspace Memory" : "Channel Memory", content),
@@ -119,13 +118,13 @@ function buildWorkspaceOrChannelMemoryCandidates(
 }
 
 function buildSessionCandidates(path: string, content: string): MemoryCandidate[] {
-	return splitLevelOneSections(content)
+	return splitH1Sections(content)
 		.filter((section) => section.content.trim())
 		.map((section) => buildCandidate("channel-session", path, section.heading, section.content));
 }
 
 function buildHistoryCandidates(path: string, content: string): MemoryCandidate[] {
-	return splitMarkdownSections(content)
+	return splitH2Sections(content)
 		.filter((section) => section.content.trim())
 		.map((section) => buildCandidate("channel-history", path, section.heading, section.content, section.heading));
 }

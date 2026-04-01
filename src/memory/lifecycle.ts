@@ -8,15 +8,15 @@ import type {
 	SessionEntry,
 	SessionSwitchEvent,
 } from "@mariozechner/pi-coding-agent";
-import type { PipiclawSessionMemorySettings } from "./context.js";
-import * as log from "./log.js";
+import type { PipiclawSessionMemorySettings } from "../context.js";
+import * as log from "../log.js";
 import {
 	type BackgroundMaintenanceResult,
 	type ConsolidationRunOptions,
 	runBackgroundMaintenance,
 	runInlineConsolidation,
-} from "./memory-consolidation.js";
-import { updateChannelSessionMemory } from "./session-memory.js";
+} from "./consolidation.js";
+import { updateChannelSessionMemory } from "./session.js";
 
 export type ConsolidationReason = "compaction" | "new-session";
 

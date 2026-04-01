@@ -1,18 +1,19 @@
-export interface MarkdownLevelOneSection {
+export interface MarkdownSection {
 	heading: string;
 	content: string;
 }
 
-export function splitLevelOneSections(content: string): MarkdownLevelOneSection[] {
+function splitSectionsByHeading(content: string, headingPrefix: "# " | "## "): MarkdownSection[] {
 	const normalized = content.replace(/\r/g, "").trim();
 	if (!normalized) {
 		return [];
 	}
 
 	const lines = normalized.split("\n");
-	const sections: MarkdownLevelOneSection[] = [];
+	const sections: MarkdownSection[] = [];
 	let currentHeading = "";
 	let currentLines: string[] = [];
+	const prefixLength = headingPrefix.length;
 
 	const flush = (): void => {
 		if (!currentHeading) {
@@ -26,9 +27,9 @@ export function splitLevelOneSections(content: string): MarkdownLevelOneSection[
 	};
 
 	for (const line of lines) {
-		if (line.startsWith("# ")) {
+		if (line.startsWith(headingPrefix)) {
 			flush();
-			currentHeading = line.slice(2).trim();
+			currentHeading = line.slice(prefixLength).trim();
 			currentLines = [];
 			continue;
 		}
@@ -39,4 +40,12 @@ export function splitLevelOneSections(content: string): MarkdownLevelOneSection[
 
 	flush();
 	return sections;
+}
+
+export function splitH1Sections(content: string): MarkdownSection[] {
+	return splitSectionsByHeading(content, "# ");
+}
+
+export function splitH2Sections(content: string): MarkdownSection[] {
+	return splitSectionsByHeading(content, "## ");
 }

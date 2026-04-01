@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { type AgentRunner, getOrCreateRunner } from "./agent.js";
-import { parseBuiltInCommand } from "./commands.js";
+import { type AgentRunner, getOrCreateRunner } from "../agent.js";
+import { parseBuiltInCommand } from "../commands.js";
 import { createDingTalkContext } from "./delivery.js";
 import {
 	type BusyMessageMode,
@@ -11,8 +11,8 @@ import {
 	type DingTalkHandler,
 } from "./dingtalk.js";
 import { createEventsWatcher } from "./events.js";
-import * as log from "./log.js";
-import { ensureChannelMemoryFilesSync } from "./memory-files.js";
+import * as log from "../log.js";
+import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import {
 	APP_HOME_DIR,
 	APP_NAME,
@@ -21,8 +21,8 @@ import {
 	MODELS_CONFIG_PATH,
 	SETTINGS_CONFIG_PATH,
 	WORKSPACE_DIR,
-} from "./paths.js";
-import { parseSandboxArg, type SandboxConfig, validateSandbox } from "./sandbox.js";
+} from "../paths.js";
+import { parseSandboxArg, type SandboxConfig, validateSandbox } from "../sandbox.js";
 import { ChannelStore } from "./store.js";
 
 export interface BootstrapPaths {

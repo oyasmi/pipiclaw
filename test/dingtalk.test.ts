@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkEvent, DingTalkHandler } from "../src/dingtalk.js";
+import type { DingTalkEvent, DingTalkHandler } from "../src/runtime/dingtalk.js";
 
 const { axiosMock, fakeClientState } = vi.hoisted(() => {
 	const post = vi.fn();
@@ -48,7 +48,7 @@ vi.mock("dingtalk-stream", () => ({
 	TOPIC_ROBOT: "TOPIC_ROBOT",
 }));
 
-import { DingTalkBot } from "../src/dingtalk.js";
+import { DingTalkBot } from "../src/runtime/dingtalk.js";
 
 const tempDirs: string[] = [];
 

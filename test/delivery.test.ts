@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDingTalkContext } from "../src/delivery.js";
+import { createDingTalkContext } from "../src/runtime/delivery.js";
 import { FakeDingTalkBot } from "./helpers/fake-bot.js";
 import { FakeChannelStore } from "./helpers/fake-store.js";
 import { createFakeEvent } from "./helpers/fixtures.js";

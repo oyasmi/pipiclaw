@@ -1,8 +1,8 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { parseJsonObject } from "./llm-json.js";
-import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./memory-candidates.js";
-import { HAN_REGEX } from "./shared/text-utils.js";
-import { runSidecarTask } from "./sidecar-worker.js";
+import { parseJsonObject } from "../llm-json.js";
+import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./candidates.js";
+import { HAN_REGEX } from "../shared/text-utils.js";
+import { runSidecarTask } from "../sidecar-worker.js";
 
 export interface RecallRequest {
 	query: string;

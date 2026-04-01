@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import type { DingTalkEvent } from "../../src/dingtalk.js";
+import type { DingTalkEvent } from "../../src/runtime/dingtalk.js";
 
 export function createFakeEvent(overrides: Partial<DingTalkEvent> = {}): DingTalkEvent {
 	return {

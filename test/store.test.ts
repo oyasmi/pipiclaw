@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChannelStore, type LoggedSubAgentRun } from "../src/store.js";
+import { ChannelStore, type LoggedSubAgentRun } from "../src/runtime/store.js";
 
 const tempDirs: string[] = [];
 

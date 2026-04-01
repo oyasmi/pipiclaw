@@ -17,7 +17,7 @@ export {
 	type PipiclawSettings,
 	PipiclawSettingsManager,
 } from "./context.js";
-export { createDingTalkContext } from "./delivery.js";
+export { createDingTalkContext } from "./runtime/delivery.js";
 export {
 	type BusyMessageMode,
 	DingTalkBot,
@@ -25,7 +25,7 @@ export {
 	type DingTalkContext,
 	type DingTalkEvent,
 	type DingTalkHandler,
-} from "./dingtalk.js";
+} from "./runtime/dingtalk.js";
 export {
 	createEventsWatcher,
 	EventsWatcher,
@@ -33,33 +33,33 @@ export {
 	type OneShotEvent,
 	type PeriodicEvent,
 	type ScheduledEvent,
-} from "./events.js";
+} from "./runtime/events.js";
 export {
 	type BuildMemoryCandidatesOptions,
 	buildMemoryCandidates,
 	type MemoryCandidate,
-} from "./memory-candidates.js";
+} from "./memory/candidates.js";
 export {
 	type BackgroundMaintenanceResult,
 	type ConsolidationRunOptions,
 	type InlineConsolidationResult,
 	runBackgroundMaintenance,
 	runInlineConsolidation,
-} from "./memory-consolidation.js";
+} from "./memory/consolidation.js";
 export {
 	ensureChannelMemoryFiles,
 	ensureChannelMemoryFilesSync,
 	getChannelSessionPath,
 	readChannelSession,
 	rewriteChannelSession,
-} from "./memory-files.js";
-export { type ConsolidationReason, MemoryLifecycle, type MemoryLifecycleOptions } from "./memory-lifecycle.js";
+} from "./memory/files.js";
+export { type ConsolidationReason, MemoryLifecycle, type MemoryLifecycleOptions } from "./memory/lifecycle.js";
 export {
 	type RecalledMemory,
 	type RecallRequest,
 	type RecallResult,
 	recallRelevantMemory,
-} from "./memory-recall.js";
+} from "./memory/recall.js";
 export {
 	findExactModelReferenceMatch,
 	formatModelList,
@@ -92,13 +92,13 @@ export {
 	type SessionMemoryState,
 	type SessionMemoryUpdateOptions,
 	updateChannelSessionMemory,
-} from "./session-memory.js";
+} from "./memory/session.js";
 export {
 	runSidecarTask,
 	type SidecarResult,
 	type SidecarTask,
 } from "./sidecar-worker.js";
-export { ChannelStore, type LoggedMessage, type LoggedSubAgentRun } from "./store.js";
+export { ChannelStore, type LoggedMessage, type LoggedSubAgentRun } from "./runtime/store.js";
 export {
 	discoverSubAgents,
 	formatSubAgentList,
@@ -111,7 +111,7 @@ export {
 	type SubAgentInvocationOverrides,
 	type SubAgentMemoryMode,
 	type SubAgentToolName,
-} from "./sub-agents.js";
+} from "./subagents/discovery.js";
 export {
 	type CreatePipiclawToolsOptions,
 	createPipiclawBaseTools,
@@ -121,4 +121,4 @@ export {
 	createSubAgentTool,
 	type SubAgentToolDetails,
 	type SubAgentToolOptions,
-} from "./tools/subagent.js";
+} from "./subagents/tool.js";

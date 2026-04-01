@@ -14,7 +14,7 @@ vi.mock("../src/tools/read.js", () => ({ createReadTool: createReadToolMock }));
 vi.mock("../src/tools/bash.js", () => ({ createBashTool: createBashToolMock }));
 vi.mock("../src/tools/edit.js", () => ({ createEditTool: createEditToolMock }));
 vi.mock("../src/tools/write.js", () => ({ createWriteTool: createWriteToolMock }));
-vi.mock("../src/tools/subagent.js", () => ({ createSubAgentTool: createSubAgentToolMock }));
+vi.mock("../src/subagents/tool.js", () => ({ createSubAgentTool: createSubAgentToolMock }));
 
 import { createPipiclawBaseTools, createPipiclawTools } from "../src/tools/index.js";
 

@@ -1,4 +1,4 @@
-import type { DingTalkEvent } from "../../src/dingtalk.js";
+import type { DingTalkEvent } from "../../src/runtime/dingtalk.js";
 
 export class FakeDingTalkBot {
 	calls: Array<{ method: string; args: unknown[] }> = [];

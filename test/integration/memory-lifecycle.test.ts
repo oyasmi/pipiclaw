@@ -18,8 +18,8 @@ vi.mock("../../src/sidecar-worker.js", () => ({
 	},
 }));
 
-import { readChannelHistory, readChannelMemory, readChannelSession } from "../../src/memory-files.js";
-import { MemoryLifecycle } from "../../src/memory-lifecycle.js";
+import { readChannelHistory, readChannelMemory, readChannelSession } from "../../src/memory/files.js";
+import { MemoryLifecycle } from "../../src/memory/lifecycle.js";
 import { runSidecarTask } from "../../src/sidecar-worker.js";
 import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
 

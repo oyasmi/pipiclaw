@@ -10,8 +10,8 @@ import {
 	type BootstrapPaths,
 	loadConfig,
 	parseArgs,
-} from "../src/bootstrap.js";
-import { ChannelStore } from "../src/store.js";
+} from "../src/runtime/bootstrap.js";
+import { ChannelStore } from "../src/runtime/store.js";
 
 const tempDirs: string[] = [];
 

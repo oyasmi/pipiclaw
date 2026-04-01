@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildMemoryCandidates, createMemoryCandidateCache } from "../src/memory-candidates.js";
-import { recallRelevantMemory } from "../src/memory-recall.js";
+import { buildMemoryCandidates, createMemoryCandidateCache } from "../src/memory/candidates.js";
+import { recallRelevantMemory } from "../src/memory/recall.js";
 
 const tempDirs: string[] = [];
 

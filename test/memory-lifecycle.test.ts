@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/session-memory.js", () => ({
+vi.mock("../src/memory/session.js", () => ({
 	updateChannelSessionMemory: vi.fn(),
 }));
 
-vi.mock("../src/memory-consolidation.js", () => ({
+vi.mock("../src/memory/consolidation.js", () => ({
 	runInlineConsolidation: vi.fn().mockResolvedValue({
 		skipped: false,
 		appendedMemoryEntries: 1,
@@ -16,9 +16,9 @@ vi.mock("../src/memory-consolidation.js", () => ({
 	}),
 }));
 
-import { runBackgroundMaintenance, runInlineConsolidation } from "../src/memory-consolidation.js";
-import { MemoryLifecycle } from "../src/memory-lifecycle.js";
-import { updateChannelSessionMemory } from "../src/session-memory.js";
+import { runBackgroundMaintenance, runInlineConsolidation } from "../src/memory/consolidation.js";
+import { MemoryLifecycle } from "../src/memory/lifecycle.js";
+import { updateChannelSessionMemory } from "../src/memory/session.js";
 
 afterEach(() => {
 	vi.clearAllMocks();

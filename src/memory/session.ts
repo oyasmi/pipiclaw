@@ -3,13 +3,12 @@ import type { Api, Message, Model } from "@mariozechner/pi-ai";
 import { serializeConversation } from "@mariozechner/pi-coding-agent";
 import { writeFile } from "fs/promises";
 import { join } from "path";
-import { parseJsonObject } from "./llm-json.js";
-import { splitLevelOneSections } from "./markdown-sections.js";
-import { readChannelMemory } from "./memory-files.js";
-import { readChannelSession, rewriteChannelSession } from "./session-memory-files.js";
-import { clipText } from "./shared/text-utils.js";
-import { buildStandardMessages, isRecord } from "./shared/type-guards.js";
-import { runSidecarTask, SidecarParseError } from "./sidecar-worker.js";
+import { parseJsonObject } from "../llm-json.js";
+import { splitH1Sections } from "../shared/markdown-sections.js";
+import { readChannelMemory, readChannelSession, rewriteChannelSession } from "./files.js";
+import { clipText } from "../shared/text-utils.js";
+import { buildStandardMessages, isRecord } from "../shared/type-guards.js";
+import { runSidecarTask, SidecarParseError } from "../sidecar-worker.js";
 
 const SESSION_TRANSCRIPT_MAX_CHARS = 20_000;
 const SESSION_MEMORY_MAX_CHARS = 4_000;
@@ -155,7 +154,7 @@ function parseSectionItems(content: string): string[] {
 
 function parseRenderedSessionMemory(markdown: string): SessionMemoryState {
 	const state = createEmptySessionMemoryState();
-	for (const section of splitLevelOneSections(markdown)) {
+	for (const section of splitH1Sections(markdown)) {
 		switch (section.heading.toLowerCase()) {
 			case "session title":
 				state.title = stripHtmlComments(section.content).split("\n")[0]?.trim().slice(0, 120) || "";

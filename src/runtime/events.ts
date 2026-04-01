@@ -3,7 +3,7 @@ import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, unlinkSyn
 import { readFile } from "fs/promises";
 import { join } from "path";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
-import * as log from "./log.js";
+import * as log from "../log.js";
 
 // ============================================================================
 // Event Types
