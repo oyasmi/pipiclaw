@@ -1,6 +1,6 @@
 {
 	"name": "@oyasmi/pipiclaw",
-	"version": "0.5.1",
+	"version": "0.5.2",
 	"description": "An AI assistant runtime for coding and team workflows, with DingTalk AI Cards, sub-agents, memory, and scheduled events.",
 	"type": "module",
 	"bin": {
