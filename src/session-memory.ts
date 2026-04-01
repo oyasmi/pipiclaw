@@ -13,7 +13,7 @@ const SESSION_TRANSCRIPT_MAX_CHARS = 20_000;
 const SESSION_MEMORY_MAX_CHARS = 4_000;
 const SESSION_ITEM_LIMIT = 12;
 const SESSION_ITEM_MAX_CHARS = 300;
-const SESSION_MEMORY_TIMEOUT_MS = 10_000;
+const DEFAULT_SESSION_MEMORY_TIMEOUT_MS = 30_000;
 
 const SESSION_MEMORY_SYSTEM_PROMPT = `You maintain a Pipiclaw SESSION.md file.
 
@@ -59,6 +59,7 @@ export interface SessionMemoryUpdateOptions {
 	messages: AgentMessage[];
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	timeoutMs?: number;
 }
 
 type SessionMemoryStateUpdate = Partial<Record<keyof SessionMemoryState, string[] | string>>;
@@ -299,7 +300,7 @@ export async function updateChannelSessionMemory(options: SessionMemoryUpdateOpt
 			systemPrompt: SESSION_MEMORY_SYSTEM_PROMPT,
 			prompt: buildSessionPrompt(currentSession, currentMemory, messages),
 			parse: parseStateUpdate,
-			timeoutMs: SESSION_MEMORY_TIMEOUT_MS,
+			timeoutMs: options.timeoutMs ?? DEFAULT_SESSION_MEMORY_TIMEOUT_MS,
 		});
 		update = result.output;
 	} catch (error) {

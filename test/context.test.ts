@@ -43,6 +43,8 @@ describe("PipiclawSettingsManager", () => {
 			enabled: true,
 			minTurnsBetweenUpdate: 2,
 			minToolCallsBetweenUpdate: 4,
+			timeoutMs: 30000,
+			failureBackoffTurns: 3,
 			forceRefreshBeforeCompact: true,
 			forceRefreshBeforeNewSession: true,
 		});
