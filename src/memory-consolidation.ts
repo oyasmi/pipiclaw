@@ -1,13 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { Agent } from "@mariozechner/pi-agent-core";
 import type { Api, AssistantMessage, Message, Model } from "@mariozechner/pi-ai";
 import {
-	convertToLlm,
 	getLatestCompactionEntry,
 	type SessionEntry,
 	type SessionMessageEntry,
 	serializeConversation,
 } from "@mariozechner/pi-coding-agent";
+import { parseJsonObject } from "./llm-json.js";
 import {
 	appendChannelHistoryBlock,
 	appendChannelMemoryUpdate,
@@ -18,6 +17,7 @@ import {
 	rewriteChannelMemory,
 	splitMarkdownSections,
 } from "./memory-files.js";
+import { runSidecarTask } from "./sidecar-worker.js";
 
 const INLINE_TRANSCRIPT_MAX_CHARS = 28_000;
 const MEMORY_CLEANUP_LENGTH_THRESHOLD = 8_000;
@@ -25,6 +25,9 @@ const MEMORY_UPDATE_BLOCK_THRESHOLD = 6;
 const HISTORY_LENGTH_THRESHOLD = 16_000;
 const HISTORY_BLOCK_THRESHOLD = 8;
 const HISTORY_RECENT_BLOCKS_TO_KEEP = 4;
+const INLINE_CONSOLIDATION_TIMEOUT_MS = 20_000;
+const MEMORY_CLEANUP_TIMEOUT_MS = 30_000;
+const HISTORY_FOLDING_TIMEOUT_MS = 30_000;
 
 const INLINE_CONSOLIDATION_SYSTEM_PROMPT = `You are a runtime memory consolidation worker for Pipiclaw.
 
@@ -116,28 +119,8 @@ function clipTranscript(text: string, maxChars: number): string {
 	return `${normalized.slice(0, headChars)}\n\n[... omitted middle section ...]\n\n${normalized.slice(-tailChars)}`;
 }
 
-function extractJsonObject(text: string): string {
-	const trimmed = text.trim();
-	if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-		return trimmed;
-	}
-
-	const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-	if (fenceMatch?.[1]) {
-		return fenceMatch[1].trim();
-	}
-
-	const firstBrace = trimmed.indexOf("{");
-	const lastBrace = trimmed.lastIndexOf("}");
-	if (firstBrace >= 0 && lastBrace > firstBrace) {
-		return trimmed.slice(firstBrace, lastBrace + 1);
-	}
-
-	return trimmed;
-}
-
 function parseConsolidationResponse(text: string): ConsolidationResponse {
-	const parsed = JSON.parse(extractJsonObject(text)) as Partial<ConsolidationResponse>;
+	const parsed = parseJsonObject(text) as Partial<ConsolidationResponse>;
 	return {
 		memoryEntries: Array.isArray(parsed.memoryEntries)
 			? parsed.memoryEntries
@@ -209,40 +192,23 @@ function countMatchingSectionHeadings(content: string, prefix: string): number {
 }
 
 async function runWorkerPrompt(
+	name: string,
 	model: Model<Api>,
 	resolveApiKey: (model: Model<Api>) => Promise<string>,
 	systemPrompt: string,
 	prompt: string,
+	timeoutMs: number,
 ): Promise<string> {
-	const apiKey = await resolveApiKey(model);
-	const worker = new Agent({
-		initialState: {
-			systemPrompt,
-			model,
-			thinkingLevel: "off",
-			tools: [],
-		},
-		convertToLlm,
-		getApiKey: async () => apiKey,
+	const result = await runSidecarTask({
+		name,
+		model,
+		resolveApiKey,
+		systemPrompt,
+		prompt,
+		timeoutMs,
+		parse: (text) => text.trim(),
 	});
-
-	await worker.prompt(prompt);
-	await worker.waitForIdle();
-
-	const lastMessage = worker.state.messages[worker.state.messages.length - 1];
-	if (!lastMessage || lastMessage.role !== "assistant") {
-		throw new Error("Consolidation worker returned no assistant message");
-	}
-
-	if (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted") {
-		throw new Error(lastMessage.errorMessage || "Consolidation worker failed");
-	}
-
-	return lastMessage.content
-		.filter((part): part is Extract<AssistantMessage["content"][number], { type: "text" }> => part.type === "text")
-		.map((part) => part.text)
-		.join("\n")
-		.trim();
+	return result.output;
 }
 
 async function buildInlineConsolidationResponse(
@@ -267,10 +233,12 @@ Conversation chunk to persist:
 ${transcript || "(empty)"}`;
 
 	const rawResponse = await runWorkerPrompt(
+		"memory-inline-consolidation",
 		options.model,
 		options.resolveApiKey,
 		INLINE_CONSOLIDATION_SYSTEM_PROMPT,
 		prompt,
+		INLINE_CONSOLIDATION_TIMEOUT_MS,
 	);
 	return parseConsolidationResponse(rawResponse);
 }
@@ -321,7 +289,14 @@ async function cleanupChannelMemory(options: ConsolidationRunOptions, currentMem
 
 	const prompt = `Current MEMORY.md:
 ${currentMemory}`;
-	const nextMemory = await runWorkerPrompt(options.model, options.resolveApiKey, MEMORY_CLEANUP_SYSTEM_PROMPT, prompt);
+	const nextMemory = await runWorkerPrompt(
+		"memory-cleanup",
+		options.model,
+		options.resolveApiKey,
+		MEMORY_CLEANUP_SYSTEM_PROMPT,
+		prompt,
+		MEMORY_CLEANUP_TIMEOUT_MS,
+	);
 	await rewriteChannelMemory(options.channelDir, nextMemory);
 	return true;
 }
@@ -341,10 +316,12 @@ async function foldChannelHistory(options: ConsolidationRunOptions, currentHisto
 	const prompt = `Older history blocks to fold:
 ${olderSections.map((section) => `## ${section.heading}\n\n${section.content}`).join("\n\n")}`;
 	const foldedSummary = await runWorkerPrompt(
+		"history-folding",
 		options.model,
 		options.resolveApiKey,
 		HISTORY_FOLDING_SYSTEM_PROMPT,
 		prompt,
+		HISTORY_FOLDING_TIMEOUT_MS,
 	);
 
 	const foldedHeading = `## Folded History Through ${olderSections[olderSections.length - 1]?.heading ?? new Date().toISOString()}`;

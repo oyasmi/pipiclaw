@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildMemoryCandidates } from "../src/memory-candidates.js";
+import { buildMemoryCandidates, createMemoryCandidateCache } from "../src/memory-candidates.js";
 import { recallRelevantMemory } from "../src/memory-recall.js";
 
 const tempDirs: string[] = [];
@@ -34,8 +34,16 @@ describe("memory candidates", () => {
 			"# Session Title\n\nFix login regression\n\n# Current State\n\n- Investigating oauth callback failure.\n",
 			{ encoding: "utf-8", flag: "w" },
 		);
-		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n\n## Constraints\n\n- Production must stay online.\n", "utf-8");
-		writeFileSync(join(channelDir, "HISTORY.md"), "# Channel History\n\n## 2026-04-01T00:00:00.000Z\n\nShipped initial auth flow.\n", "utf-8");
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			"# Channel Memory\n\n## Constraints\n\n- Production must stay online.\n",
+			"utf-8",
+		);
+		writeFileSync(
+			join(channelDir, "HISTORY.md"),
+			"# Channel History\n\n## 2026-04-01T00:00:00.000Z\n\nShipped initial auth flow.\n",
+			"utf-8",
+		);
 
 		const candidates = await buildMemoryCandidates({ workspaceDir, channelDir });
 		expect(candidates.map((candidate) => candidate.source)).toEqual(
@@ -43,12 +51,37 @@ describe("memory candidates", () => {
 		);
 		expect(candidates.some((candidate) => candidate.title === "Current State")).toBe(true);
 	});
+
+	it("reuses cached candidates within the same run context", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		const cache = createMemoryCandidateCache();
+		writeFileSync(
+			join(workspaceDir, "MEMORY.md"),
+			"# Workspace Memory\n\n## Shared Context\n\n- First value.\n",
+			"utf-8",
+		);
+
+		const initial = await buildMemoryCandidates({ workspaceDir, channelDir, cache });
+		writeFileSync(
+			join(workspaceDir, "MEMORY.md"),
+			"# Workspace Memory\n\n## Shared Context\n\n- Second value.\n",
+			"utf-8",
+		);
+		const cached = await buildMemoryCandidates({ workspaceDir, channelDir, cache });
+
+		expect(initial).toEqual(cached);
+		expect(cached.some((candidate) => candidate.content.includes("First value."))).toBe(true);
+	});
 });
 
 describe("memory recall", () => {
 	it("prioritizes current session state for current-work queries", async () => {
 		const { workspaceDir, channelDir } = createTempWorkspace();
-		writeFileSync(join(workspaceDir, "MEMORY.md"), "# Workspace Memory\n\n## Shared Context\n\n- Default package manager is pnpm.\n", "utf-8");
+		writeFileSync(
+			join(workspaceDir, "MEMORY.md"),
+			"# Workspace Memory\n\n## Shared Context\n\n- Default package manager is pnpm.\n",
+			"utf-8",
+		);
 		writeFileSync(
 			join(channelDir, "SESSION.md"),
 			[
@@ -66,8 +99,16 @@ describe("memory recall", () => {
 			].join("\n"),
 			"utf-8",
 		);
-		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n\n## Constraints\n\n- Avoid changing token storage format.\n", "utf-8");
-		writeFileSync(join(channelDir, "HISTORY.md"), "# Channel History\n\n## 2026-03-01T00:00:00.000Z\n\nOld deployment note.\n", "utf-8");
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			"# Channel Memory\n\n## Constraints\n\n- Avoid changing token storage format.\n",
+			"utf-8",
+		);
+		writeFileSync(
+			join(channelDir, "HISTORY.md"),
+			"# Channel History\n\n## 2026-03-01T00:00:00.000Z\n\nOld deployment note.\n",
+			"utf-8",
+		);
 
 		const result = await recallRelevantMemory({
 			query: "What are we doing now on the login bug and what should I do next?",
@@ -86,5 +127,61 @@ describe("memory recall", () => {
 		expect(result.renderedText).toContain("<runtime_context>");
 		expect(result.renderedText).toContain("Current State");
 		expect(result.renderedText).toContain("Next Steps");
+	});
+
+	it("keeps high-priority session context available for Chinese queries", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		writeFileSync(
+			join(workspaceDir, "MEMORY.md"),
+			"# Workspace Memory\n\n## Shared Context\n\n- 使用 pnpm。\n",
+			"utf-8",
+		);
+		writeFileSync(
+			join(channelDir, "SESSION.md"),
+			[
+				"# Session Title",
+				"",
+				"修复登录异常",
+				"",
+				"# Current State",
+				"",
+				"- 正在排查认证回调异常。",
+				"",
+				"# Next Steps",
+				"",
+				"- 先复现问题，再检查回调状态。",
+			].join("\n"),
+			"utf-8",
+		);
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			"# Channel Memory\n\n## Constraints\n\n- 不要变更 token 存储。\n",
+			"utf-8",
+		);
+		writeFileSync(
+			join(channelDir, "HISTORY.md"),
+			"# Channel History\n\n## 2026-03-01T00:00:00.000Z\n\n旧发布记录。\n",
+			"utf-8",
+		);
+
+		const result = await recallRelevantMemory({
+			query: "现在登录失败了，下一步该查什么？",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 2,
+			maxChars: 2000,
+			rerankWithModel: false,
+			autoRerank: false,
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		});
+
+		expect(result.items).toHaveLength(2);
+		expect(result.items.every((item) => item.source === "channel-session" || item.source === "channel-memory")).toBe(
+			true,
+		);
+		expect(result.renderedText).toContain("认证回调异常");
+		expect(result.renderedText).toContain("先复现问题");
 	});
 });

@@ -16,8 +16,8 @@ vi.mock("../src/memory-consolidation.js", () => ({
 	}),
 }));
 
-import { MemoryLifecycle } from "../src/memory-lifecycle.js";
 import { runInlineConsolidation } from "../src/memory-consolidation.js";
+import { MemoryLifecycle } from "../src/memory-lifecycle.js";
 import { updateChannelSessionMemory } from "../src/session-memory.js";
 
 afterEach(() => {
@@ -43,7 +43,7 @@ describe("MemoryLifecycle", () => {
 			channelDir: "/tmp/dm_123",
 			getMessages: () => [],
 			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" } as never),
+			getModel: () => ({ provider: "test", id: "noop" }) as never,
 			resolveApiKey: async () => "",
 			getSessionMemorySettings: () => ({
 				enabled: true,
@@ -73,7 +73,7 @@ describe("MemoryLifecycle", () => {
 			channelDir: "/tmp/dm_123",
 			getMessages: () => [],
 			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" } as never),
+			getModel: () => ({ provider: "test", id: "noop" }) as never,
 			resolveApiKey: async () => "",
 			getSessionMemorySettings: () => ({
 				enabled: true,

@@ -17,6 +17,7 @@ import { getAgentConfig, getApiKeyForModel, getSoul, loadPipiclawSkills } from "
 import { PipiclawSettingsManager } from "./context.js";
 import type { DingTalkContext } from "./dingtalk.js";
 import * as log from "./log.js";
+import { createMemoryCandidateCache } from "./memory-candidates.js";
 import { MemoryLifecycle } from "./memory-lifecycle.js";
 import { recallRelevantMemory } from "./memory-recall.js";
 import { resolveInitialModel } from "./model-utils.js";
@@ -74,11 +75,25 @@ function truncate(text: string, maxLen: number): string {
 	return `${text.substring(0, maxLen - 3)}...`;
 }
 
+const MAX_USER_MESSAGE_CHARS = 12_000;
+const HAN_REGEX = /\p{Script=Han}/u;
+
 function sanitizeProgressText(text: string): string {
 	return text
 		.replace(/\uFFFC/g, "")
 		.replace(/\r/g, "")
 		.trim();
+}
+
+function clipUserInput(text: string, maxChars: number): string {
+	const normalized = text.replace(/\r/g, "").trim();
+	if (normalized.length <= maxChars) {
+		return normalized;
+	}
+
+	const headChars = Math.floor(maxChars * 0.6);
+	const tailChars = maxChars - headChars;
+	return `${normalized.slice(0, headChars)}\n\n[... omitted ${normalized.length - maxChars} chars ...]\n\n${normalized.slice(-tailChars)}`;
 }
 
 function formatProgressEntry(kind: "tool" | "thinking" | "error" | "assistant", text: string): string {
@@ -228,6 +243,139 @@ function createEmptyRunState(): RunState {
 		finalOutcome: { kind: "none" },
 		finalResponseDelivered: false,
 	};
+}
+
+interface AssistantUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+}
+
+type AssistantContentPart =
+	| { type: "thinking"; thinking: string }
+	| { type: "text"; text: string }
+	| { type: "toolCall" }
+	| { type: string; [key: string]: unknown };
+
+interface AssistantEventMessage {
+	role: "assistant";
+	content: AssistantContentPart[];
+	stopReason?: string;
+	errorMessage?: string;
+	usage?: AssistantUsage;
+}
+
+type SessionEvent =
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
+	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }
+	| { type: "message_start"; message: unknown }
+	| { type: "message_end"; message: unknown }
+	| { type: "turn_end"; message: unknown; toolResults: unknown[] }
+	| { type: "auto_compaction_start"; reason: "threshold" | "overflow" }
+	| { type: "auto_compaction_end"; result?: { tokensBefore: number }; aborted?: boolean }
+	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs?: number; errorMessage: string };
+
+type ToolExecutionStartEvent = Extract<SessionEvent, { type: "tool_execution_start" }>;
+type ToolExecutionUpdateEvent = Extract<SessionEvent, { type: "tool_execution_update" }>;
+type ToolExecutionEndEvent = Extract<SessionEvent, { type: "tool_execution_end" }>;
+type MessageStartEvent = Extract<SessionEvent, { type: "message_start" }>;
+type MessageEndEvent = Extract<SessionEvent, { type: "message_end" }>;
+type TurnEndEvent = Extract<SessionEvent, { type: "turn_end" }>;
+type AutoCompactionStartEvent = Extract<SessionEvent, { type: "auto_compaction_start" }>;
+type AutoCompactionEndEvent = Extract<SessionEvent, { type: "auto_compaction_end" }>;
+type AutoRetryStartEvent = Extract<SessionEvent, { type: "auto_retry_start" }>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isMessageWithRole(value: unknown): value is { role: string } {
+	return isRecord(value) && typeof value.role === "string";
+}
+
+function isAssistantEventMessage(value: unknown): value is AssistantEventMessage {
+	return (
+		isMessageWithRole(value) && value.role === "assistant" && Array.isArray((value as { content?: unknown }).content)
+	);
+}
+
+function isThinkingPart(part: AssistantContentPart): part is Extract<AssistantContentPart, { type: "thinking" }> {
+	return part.type === "thinking" && typeof (part as { thinking?: unknown }).thinking === "string";
+}
+
+function isTextPart(part: AssistantContentPart): part is Extract<AssistantContentPart, { type: "text" }> {
+	return part.type === "text" && typeof (part as { text?: unknown }).text === "string";
+}
+
+function extractLabelFromArgs(args: unknown): string | null {
+	if (!isRecord(args)) {
+		return null;
+	}
+	return typeof args.label === "string" && args.label.trim() ? args.label.trim() : null;
+}
+
+function hasEventType(
+	value: unknown,
+	type: SessionEvent["type"],
+): value is { type: SessionEvent["type"] } & Record<string, unknown> {
+	return isRecord(value) && value.type === type;
+}
+
+function isToolExecutionStartEvent(value: unknown): value is ToolExecutionStartEvent {
+	return (
+		hasEventType(value, "tool_execution_start") &&
+		typeof value.toolCallId === "string" &&
+		typeof value.toolName === "string"
+	);
+}
+
+function isToolExecutionUpdateEvent(value: unknown): value is ToolExecutionUpdateEvent {
+	return (
+		hasEventType(value, "tool_execution_update") &&
+		typeof value.toolCallId === "string" &&
+		typeof value.toolName === "string"
+	);
+}
+
+function isToolExecutionEndEvent(value: unknown): value is ToolExecutionEndEvent {
+	return (
+		hasEventType(value, "tool_execution_end") &&
+		typeof value.toolCallId === "string" &&
+		typeof value.toolName === "string" &&
+		typeof value.isError === "boolean"
+	);
+}
+
+function isMessageStartEvent(value: unknown): value is MessageStartEvent {
+	return hasEventType(value, "message_start") && "message" in value;
+}
+
+function isMessageEndEvent(value: unknown): value is MessageEndEvent {
+	return hasEventType(value, "message_end") && "message" in value;
+}
+
+function isTurnEndEvent(value: unknown): value is TurnEndEvent {
+	return hasEventType(value, "turn_end") && "message" in value && Array.isArray(value.toolResults);
+}
+
+function isAutoCompactionStartEvent(value: unknown): value is AutoCompactionStartEvent {
+	return hasEventType(value, "auto_compaction_start") && (value.reason === "threshold" || value.reason === "overflow");
+}
+
+function isAutoCompactionEndEvent(value: unknown): value is AutoCompactionEndEvent {
+	return hasEventType(value, "auto_compaction_end");
+}
+
+function isAutoRetryStartEvent(value: unknown): value is AutoRetryStartEvent {
+	return (
+		hasEventType(value, "auto_retry_start") &&
+		typeof value.attempt === "number" &&
+		typeof value.maxAttempts === "number" &&
+		typeof value.errorMessage === "string"
+	);
 }
 
 // ============================================================================
@@ -419,23 +567,27 @@ class ChannelRunner implements AgentRunner {
 			// Ensure channel directory exists
 			await mkdir(this.channelDir, { recursive: true });
 
-			const userMessage = this.formatUserMessage(ctx.message.text, ctx.message.userName);
-			let promptText = this.shouldPreserveRawInput(ctx.message.text) ? ctx.message.text.trim() : userMessage;
+			const candidateCache = createMemoryCandidateCache();
+			const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS);
+			const userMessage = this.formatUserMessage(clippedInput, ctx.message.userName);
+			let promptText = this.shouldPreserveRawInput(ctx.message.text) ? clippedInput : userMessage;
 			let recalledContextText = "";
 
 			if (!this.shouldPreserveRawInput(ctx.message.text)) {
 				const recallSettings = this.settingsManager.getMemoryRecallSettings();
 				if (recallSettings.enabled) {
 					const recall = await recallRelevantMemory({
-						query: ctx.message.text,
+						query: clippedInput,
 						workspaceDir: this.workspaceDir,
 						channelDir: this.channelDir,
 						maxCandidates: recallSettings.maxCandidates,
 						maxInjected: recallSettings.maxInjected,
 						maxChars: recallSettings.maxChars,
 						rerankWithModel: recallSettings.rerankWithModel,
+						autoRerank: HAN_REGEX.test(clippedInput),
 						model: this.session.model ?? this.activeModel,
 						resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
+						candidateCache,
 					});
 
 					if (recall.renderedText) {
@@ -609,7 +761,12 @@ class ChannelRunner implements AgentRunner {
 			throw new Error("No task is currently running.");
 		}
 
-		await this.session.prompt(this.formatUserMessage(text, userName), {
+		const clippedText = clipUserInput(text, MAX_USER_MESSAGE_CHARS);
+		if (clippedText !== text.trim()) {
+			log.logWarning(`[${this.channelId}] Queued message exceeded ${MAX_USER_MESSAGE_CHARS} chars and was clipped`);
+		}
+
+		await this.session.prompt(this.formatUserMessage(clippedText, userName), {
 			streamingBehavior: delivery,
 		});
 	}
@@ -656,49 +813,44 @@ class ChannelRunner implements AgentRunner {
 	// === Session event subscription ===
 
 	private subscribeToSessionEvents(): void {
-		this.session.subscribe(async (event: any) => {
+		this.session.subscribe(async (event: unknown) => {
 			if (!this.runState.ctx || !this.runState.logCtx || !this.runState.queue) return;
 
 			const { ctx, logCtx, queue, pendingTools, store } = this.runState;
 
-			if (event.type === "tool_execution_start") {
-				const agentEvent = event as any & { type: "tool_execution_start" };
-				const args = agentEvent.args as { label?: string };
-				const label = args.label || agentEvent.toolName;
+			if (isToolExecutionStartEvent(event)) {
+				const label = extractLabelFromArgs(event.args) || event.toolName;
 
-				pendingTools.set(agentEvent.toolCallId, {
-					toolName: agentEvent.toolName,
-					args: agentEvent.args,
+				pendingTools.set(event.toolCallId, {
+					toolName: event.toolName,
+					args: event.args,
 					startTime: Date.now(),
 				});
 				this.memoryLifecycle.noteToolCall();
 
-				log.logToolStart(logCtx, agentEvent.toolName, label, agentEvent.args as Record<string, unknown>);
+				log.logToolStart(logCtx, event.toolName, label, isRecord(event.args) ? event.args : {});
 				queue.enqueue(() => ctx.respond(formatProgressEntry("tool", label), false), "tool label");
-			} else if (event.type === "tool_execution_update") {
-				const agentEvent = event as { type: "tool_execution_update"; toolName: string; partialResult: unknown };
-				if (agentEvent.toolName !== "subagent") {
+			} else if (isToolExecutionUpdateEvent(event)) {
+				if (event.toolName !== "subagent") {
 					return;
 				}
-				const partialText = truncate(extractToolResultText(agentEvent.partialResult), 200);
+				const partialText = truncate(extractToolResultText(event.partialResult), 200);
 				if (!partialText.trim()) {
 					return;
 				}
 				queue.enqueue(() => ctx.respond(formatProgressEntry("tool", partialText), false), "tool update");
-			} else if (event.type === "tool_execution_end") {
-				const agentEvent = event as any & { type: "tool_execution_end" };
-				const resultStr = extractToolResultText(agentEvent.result);
-				const pending = pendingTools.get(agentEvent.toolCallId);
-				pendingTools.delete(agentEvent.toolCallId);
+			} else if (isToolExecutionEndEvent(event)) {
+				const resultStr = extractToolResultText(event.result);
+				const pending = pendingTools.get(event.toolCallId);
+				pendingTools.delete(event.toolCallId);
 
 				const durationMs = pending ? Date.now() - pending.startTime : 0;
 				const subAgentDetails =
-					agentEvent.toolName === "subagent" &&
-					agentEvent.result &&
-					typeof agentEvent.result === "object" &&
-					"details" in agentEvent.result &&
-					isSubAgentToolDetails((agentEvent.result as { details?: unknown }).details)
-						? (agentEvent.result as { details: SubAgentToolDetails }).details
+					event.toolName === "subagent" &&
+					isRecord(event.result) &&
+					"details" in event.result &&
+					isSubAgentToolDetails((event.result as { details?: unknown }).details)
+						? (event.result as { details: SubAgentToolDetails }).details
 						: null;
 
 				if (subAgentDetails) {
@@ -714,7 +866,7 @@ class ChannelRunner implements AgentRunner {
 						() =>
 							store?.logSubAgentRun(logCtx.channelId, {
 								date: new Date().toISOString(),
-								toolCallId: agentEvent.toolCallId,
+								toolCallId: event.toolCallId,
 								label,
 								agent: subAgentDetails.agent,
 								source: subAgentDetails.source,
@@ -736,11 +888,11 @@ class ChannelRunner implements AgentRunner {
 					);
 				}
 
-				const treatAsError = agentEvent.isError || Boolean(subAgentDetails?.failed);
+				const treatAsError = event.isError || Boolean(subAgentDetails?.failed);
 				if (treatAsError) {
-					log.logToolError(logCtx, agentEvent.toolName, durationMs, resultStr);
+					log.logToolError(logCtx, event.toolName, durationMs, resultStr);
 				} else {
-					log.logToolSuccess(logCtx, agentEvent.toolName, durationMs, resultStr);
+					log.logToolSuccess(logCtx, event.toolName, durationMs, resultStr);
 				}
 
 				if (treatAsError) {
@@ -749,14 +901,12 @@ class ChannelRunner implements AgentRunner {
 						"tool error",
 					);
 				}
-			} else if (event.type === "message_start") {
-				const agentEvent = event as any & { type: "message_start" };
-				if (agentEvent.message.role === "assistant") {
+			} else if (isMessageStartEvent(event)) {
+				if (isAssistantEventMessage(event.message)) {
 					log.logResponseStart(logCtx);
 				}
-			} else if (event.type === "message_end") {
-				const agentEvent = event as any & { type: "message_end" };
-				const commandResultText = extractCustomCommandResultText(agentEvent.message);
+			} else if (isMessageEndEvent(event)) {
+				const commandResultText = extractCustomCommandResultText(event.message);
 				if (commandResultText) {
 					this.runState.finalOutcome = { kind: "final", text: commandResultText };
 					log.logResponse(logCtx, commandResultText);
@@ -770,8 +920,8 @@ class ChannelRunner implements AgentRunner {
 					return;
 				}
 
-				if (agentEvent.message.role === "assistant") {
-					const assistantMsg = agentEvent.message as any;
+				if (isAssistantEventMessage(event.message)) {
+					const assistantMsg = event.message;
 
 					if (assistantMsg.stopReason) {
 						this.runState.stopReason = assistantMsg.stopReason;
@@ -792,15 +942,15 @@ class ChannelRunner implements AgentRunner {
 						this.runState.totalUsage.cost.total += assistantMsg.usage.cost.total;
 					}
 
-					const content = agentEvent.message.content;
+					const content = assistantMsg.content;
 					const thinkingParts: string[] = [];
 					const textParts: string[] = [];
 					let hasToolCalls = false;
 					for (const part of content) {
-						if (part.type === "thinking") {
-							thinkingParts.push((part as any).thinking);
-						} else if (part.type === "text") {
-							textParts.push((part as any).text);
+						if (isThinkingPart(part)) {
+							thinkingParts.push(part.thinking);
+						} else if (isTextPart(part)) {
+							textParts.push(part.text);
 						} else if (part.type === "toolCall") {
 							hasToolCalls = true;
 						}
@@ -817,19 +967,13 @@ class ChannelRunner implements AgentRunner {
 						queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", text), false), "assistant progress");
 					}
 				}
-			} else if (event.type === "turn_end") {
-				const turnEvent = event as any & {
-					type: "turn_end";
-					message: { role: string; stopReason?: string; content: Array<{ type: string; text?: string }> };
-					toolResults: unknown[];
-				};
-				if (turnEvent.message.role === "assistant" && turnEvent.toolResults.length === 0) {
-					if (turnEvent.message.stopReason === "error" || turnEvent.message.stopReason === "aborted") {
+			} else if (isTurnEndEvent(event)) {
+				if (isAssistantEventMessage(event.message) && event.toolResults.length === 0) {
+					if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
 						return;
 					}
 
-					const finalContent = turnEvent.message.content as Array<{ type: string; text?: string }>;
-					const finalText = finalContent
+					const finalText = event.message.content
 						.filter((part): part is { type: "text"; text: string } => part.type === "text" && !!part.text)
 						.map((part) => part.text)
 						.join("\n");
@@ -862,26 +1006,24 @@ class ChannelRunner implements AgentRunner {
 						}
 					}, "final response");
 				}
-			} else if (event.type === "auto_compaction_start") {
-				log.logInfo(`Auto-compaction started (reason: ${(event as any).reason})`);
+			} else if (isAutoCompactionStartEvent(event)) {
+				log.logInfo(`Auto-compaction started (reason: ${event.reason})`);
 				queue.enqueue(
 					() => ctx.respond(formatProgressEntry("assistant", "Compacting context..."), false),
 					"compaction start",
 				);
-			} else if (event.type === "auto_compaction_end") {
-				const compEvent = event as any;
-				if (compEvent.result) {
-					log.logInfo(`Auto-compaction complete: ${compEvent.result.tokensBefore} tokens compacted`);
-				} else if (compEvent.aborted) {
+			} else if (isAutoCompactionEndEvent(event)) {
+				if (event.result) {
+					log.logInfo(`Auto-compaction complete: ${event.result.tokensBefore} tokens compacted`);
+				} else if (event.aborted) {
 					log.logInfo("Auto-compaction aborted");
 				}
-			} else if (event.type === "auto_retry_start") {
-				const retryEvent = event as any;
-				log.logWarning(`Retrying (${retryEvent.attempt}/${retryEvent.maxAttempts})`, retryEvent.errorMessage);
+			} else if (isAutoRetryStartEvent(event)) {
+				log.logWarning(`Retrying (${event.attempt}/${event.maxAttempts})`, event.errorMessage);
 				queue.enqueue(
 					() =>
 						ctx.respond(
-							formatProgressEntry("assistant", `Retrying (${retryEvent.attempt}/${retryEvent.maxAttempts})...`),
+							formatProgressEntry("assistant", `Retrying (${event.attempt}/${event.maxAttempts})...`),
 							false,
 						),
 					"retry",

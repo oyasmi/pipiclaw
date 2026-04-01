@@ -151,13 +151,7 @@ function parseStringList(raw: unknown, label: string): { values: string[]; error
 		}
 
 		return {
-			values: Array.from(
-				new Set(
-					raw
-						.map((value) => value.trim())
-						.filter((value) => value.length > 0),
-				),
-			),
+			values: Array.from(new Set(raw.map((value) => value.trim()).filter((value) => value.length > 0))),
 		};
 	}
 

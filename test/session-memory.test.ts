@@ -5,11 +5,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
+	SidecarParseError: class SidecarParseError extends Error {
+		readonly taskName: string;
+		readonly rawText: string;
+
+		constructor(taskName: string, rawText: string, cause: unknown) {
+			super(`Sidecar task "${taskName}" returned invalid output`);
+			this.name = "SidecarParseError";
+			this.taskName = taskName;
+			this.rawText = rawText;
+			this.cause = cause;
+		}
+	},
 }));
 
 import { readChannelSession } from "../src/memory-files.js";
 import { renderSessionMemory, updateChannelSessionMemory } from "../src/session-memory.js";
-import { runSidecarTask } from "../src/sidecar-worker.js";
+import { runSidecarTask, SidecarParseError } from "../src/sidecar-worker.js";
 
 const tempDirs: string[] = [];
 
@@ -51,7 +63,11 @@ describe("session-memory", () => {
 	it("writes rendered session memory from sidecar output", async () => {
 		const channelDir = createTempChannel();
 		writeFileSync(join(channelDir, "SESSION.md"), "# Session Title\n\nOld title\n", "utf-8");
-		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n\n## Constraints\n\n- Avoid schema changes.\n", "utf-8");
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			"# Channel Memory\n\n## Constraints\n\n- Avoid schema changes.\n",
+			"utf-8",
+		);
 
 		vi.mocked(runSidecarTask).mockResolvedValue({
 			rawText: "{}",
@@ -80,5 +96,74 @@ describe("session-memory", () => {
 		expect(session).toContain("# Active Files");
 		expect(session).toContain("src/auth.ts");
 		expect(session).toContain("# Worklog");
+	});
+
+	it("merges partial sidecar updates without clearing existing sections", async () => {
+		const channelDir = createTempChannel();
+		writeFileSync(
+			join(channelDir, "SESSION.md"),
+			[
+				"# Session Title",
+				"",
+				"Old title",
+				"",
+				"# Current State",
+				"",
+				"- Existing state.",
+				"",
+				"# Next Steps",
+				"",
+				"- Keep this step.",
+			].join("\n"),
+			"utf-8",
+		);
+		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n", "utf-8");
+
+		vi.mocked(runSidecarTask).mockResolvedValue({
+			rawText: "{}",
+			output: {
+				title: "New title",
+				currentState: ["Fresh state."],
+			},
+		});
+
+		await updateChannelSessionMemory({
+			channelDir,
+			messages: [],
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		});
+
+		const session = await readChannelSession(channelDir);
+		expect(session).toContain("New title");
+		expect(session).toContain("- Fresh state.");
+		expect(session).toContain("- Keep this step.");
+	});
+
+	it("preserves the current session file and writes a debug artifact on parse failures", async () => {
+		const channelDir = createTempChannel();
+		const sessionPath = join(channelDir, "SESSION.md");
+		writeFileSync(sessionPath, "# Session Title\n\nStable title\n", "utf-8");
+		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n", "utf-8");
+
+		vi.mocked(runSidecarTask).mockRejectedValue(
+			new SidecarParseError("session-memory-update", '{"broken":true}', new Error("schema mismatch")),
+		);
+
+		await expect(
+			updateChannelSessionMemory({
+				channelDir,
+				messages: [],
+				model: { provider: "test", id: "noop" } as never,
+				resolveApiKey: async () => "",
+			}),
+		).rejects.toBeInstanceOf(SidecarParseError);
+
+		expect(await readChannelSession(channelDir)).toBe("# Session Title\n\nStable title\n");
+		expect(
+			await import("fs/promises").then(({ readFile }) =>
+				readFile(join(channelDir, "SESSION.invalid-response.txt"), "utf-8"),
+			),
+		).toContain('{"broken":true}');
 	});
 });

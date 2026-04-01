@@ -3,6 +3,10 @@ import type { Api, AssistantMessage, Model, TextContent } from "@mariozechner/pi
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { PipiclawMemoryRecallSettings } from "../context.js";
+import { splitLevelOneSections } from "../markdown-sections.js";
+import { createMemoryCandidateCache } from "../memory-candidates.js";
+import { readChannelSession } from "../memory-files.js";
+import { recallRelevantMemory } from "../memory-recall.js";
 import { formatModelReference } from "../model-utils.js";
 import type { Executor } from "../sandbox.js";
 import {
@@ -13,8 +17,6 @@ import {
 	type SubAgentDiscoveryResult,
 	validateSubAgentTask,
 } from "../sub-agents.js";
-import { readChannelSession } from "../memory-files.js";
-import { recallRelevantMemory } from "../memory-recall.js";
 import { createBashTool } from "./bash.js";
 import { createEditTool } from "./edit.js";
 import { createReadTool } from "./read.js";
@@ -128,6 +130,7 @@ const SESSION_SECTION_ORDER = ["Current State", "User Intent", "Active Files", "
 const MAX_SESSION_SECTION_CHARS = 280;
 const MAX_SESSION_CONTEXT_CHARS = 1800;
 const MAX_RECALL_CONTEXT_CHARS = 2200;
+const HAN_REGEX = /\p{Script=Han}/u;
 
 function createEmptyUsageTotals(): UsageTotals {
 	return {
@@ -206,7 +209,8 @@ function buildSubAgentTask(
 	contextBlocks: string[],
 ): string {
 	const taskText = task.trim();
-	const lines = [`Runtime context:`,
+	const lines = [
+		`Runtime context:`,
 		`- Workspace root: ${runtimeContext.workspacePath}`,
 		`- Channel id: ${runtimeContext.channelId}`,
 		`- Channel directory: ${runtimeContext.workspacePath}/${runtimeContext.channelId}`,
@@ -224,44 +228,6 @@ function buildSubAgentTask(
 
 	lines.push("", `Task:`, taskText);
 	return lines.join("\n");
-}
-
-function splitLevelOneSections(content: string): Array<{ heading: string; content: string }> {
-	const normalized = content.replace(/\r/g, "").trim();
-	if (!normalized) {
-		return [];
-	}
-
-	const lines = normalized.split("\n");
-	const sections: Array<{ heading: string; content: string }> = [];
-	let currentHeading = "";
-	let currentLines: string[] = [];
-
-	const flush = () => {
-		if (!currentHeading) {
-			return;
-		}
-		const sectionContent = currentLines.join("\n").trim();
-		if (!sectionContent) {
-			return;
-		}
-		sections.push({ heading: currentHeading, content: sectionContent });
-	};
-
-	for (const line of lines) {
-		if (line.startsWith("# ")) {
-			flush();
-			currentHeading = line.slice(2).trim();
-			currentLines = [];
-			continue;
-		}
-		if (currentHeading) {
-			currentLines.push(line);
-		}
-	}
-
-	flush();
-	return sections;
 }
 
 function clipText(text: string, maxChars: number): string {
@@ -312,6 +278,7 @@ async function buildContextualBlocks(
 	config: ResolvedSubAgentConfig,
 	options: SubAgentToolOptions,
 	currentModel: Model<Api>,
+	candidateCache = createMemoryCandidateCache(),
 ): Promise<string[]> {
 	if (config.contextMode !== "contextual") {
 		return [];
@@ -353,9 +320,11 @@ async function buildContextualBlocks(
 		maxInjected: recallSettings.maxInjected,
 		maxChars: Math.min(recallSettings.maxChars, MAX_RECALL_CONTEXT_CHARS),
 		rerankWithModel: recallSettings.rerankWithModel,
+		autoRerank: HAN_REGEX.test(recallQuery),
 		model: currentModel,
 		resolveApiKey: options.resolveApiKey,
 		allowedSources: ["workspace-memory", "channel-memory", "channel-history"],
+		candidateCache,
 	});
 	const recalledText = stripRuntimeContextWrapper(recalled.renderedText);
 	if (recalledText) {

@@ -35,6 +35,11 @@ export {
 	type ScheduledEvent,
 } from "./events.js";
 export {
+	type BuildMemoryCandidatesOptions,
+	buildMemoryCandidates,
+	type MemoryCandidate,
+} from "./memory-candidates.js";
+export {
 	type BackgroundMaintenanceResult,
 	type ConsolidationRunOptions,
 	type InlineConsolidationResult,
@@ -50,14 +55,9 @@ export {
 } from "./memory-files.js";
 export { type ConsolidationReason, MemoryLifecycle, type MemoryLifecycleOptions } from "./memory-lifecycle.js";
 export {
-	buildMemoryCandidates,
-	type BuildMemoryCandidatesOptions,
-	type MemoryCandidate,
-} from "./memory-candidates.js";
-export {
+	type RecalledMemory,
 	type RecallRequest,
 	type RecallResult,
-	type RecalledMemory,
 	recallRelevantMemory,
 } from "./memory-recall.js";
 export {
@@ -79,17 +79,6 @@ export {
 } from "./paths.js";
 export { type AppendSystemPromptOptions, buildAppendSystemPrompt } from "./prompt-builder.js";
 export {
-	type SessionMemoryState,
-	type SessionMemoryUpdateOptions,
-	renderSessionMemory,
-	updateChannelSessionMemory,
-} from "./session-memory.js";
-export {
-	type SidecarResult,
-	type SidecarTask,
-	runSidecarTask,
-} from "./sidecar-worker.js";
-export {
 	createExecutor,
 	type ExecOptions,
 	type ExecResult,
@@ -98,18 +87,29 @@ export {
 	type SandboxConfig,
 	validateSandbox,
 } from "./sandbox.js";
+export {
+	renderSessionMemory,
+	type SessionMemoryState,
+	type SessionMemoryUpdateOptions,
+	updateChannelSessionMemory,
+} from "./session-memory.js";
+export {
+	runSidecarTask,
+	type SidecarResult,
+	type SidecarTask,
+} from "./sidecar-worker.js";
 export { ChannelStore, type LoggedMessage, type LoggedSubAgentRun } from "./store.js";
 export {
 	discoverSubAgents,
 	formatSubAgentList,
 	getSubAgentsDir,
-	type SubAgentContextMode,
-	type SubAgentMemoryMode,
 	type ResolvedSubAgentConfig,
 	resolveSubAgentConfig,
 	type SubAgentConfig,
+	type SubAgentContextMode,
 	type SubAgentDiscoveryResult,
 	type SubAgentInvocationOverrides,
+	type SubAgentMemoryMode,
 	type SubAgentToolName,
 } from "./sub-agents.js";
 export {

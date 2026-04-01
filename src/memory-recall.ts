@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { buildMemoryCandidates, type MemoryCandidate } from "./memory-candidates.js";
+import { parseJsonObject } from "./llm-json.js";
+import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./memory-candidates.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 
 export interface RecallRequest {
@@ -11,8 +12,10 @@ export interface RecallRequest {
 	maxInjected: number;
 	maxChars: number;
 	rerankWithModel: boolean;
+	autoRerank?: boolean;
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
+	candidateCache?: MemoryCandidateCache;
 }
 
 export interface RecalledMemory {
@@ -41,23 +44,48 @@ Rules:
 - If nothing is clearly useful, return an empty array.
 - Do not rewrite the candidates. Only return candidate ids.`;
 
+const HAN_REGEX = /\p{Script=Han}/u;
+const TOKEN_PART_REGEX = /[\p{Script=Han}]+|[\p{L}\p{N}_./-]+/gu;
+const MEMORY_RECALL_RERANK_TIMEOUT_MS = 5_000;
+
+function containsHanText(text: string): boolean {
+	return HAN_REGEX.test(text);
+}
+
+function tokenizeHanPart(part: string): string[] {
+	const chars = Array.from(part);
+	const tokens: string[] = [];
+	for (const size of [2, 3]) {
+		if (chars.length < size) {
+			continue;
+		}
+		for (let index = 0; index <= chars.length - size; index++) {
+			tokens.push(chars.slice(index, index + size).join(""));
+		}
+	}
+	return tokens;
+}
+
 function tokenize(text: string): string[] {
-	return Array.from(
-		new Set(
-			text
-				.toLowerCase()
-				.split(/[^\p{L}\p{N}_./-]+/u)
-				.map((token) => token.trim())
-				.filter((token) => token.length >= 2),
-		),
-	);
+	const parts = text.toLowerCase().match(TOKEN_PART_REGEX) ?? [];
+	const tokens: string[] = [];
+	for (const part of parts) {
+		if (containsHanText(part)) {
+			tokens.push(...tokenizeHanPart(part));
+			continue;
+		}
+		if (part.length >= 2) {
+			tokens.push(part);
+		}
+	}
+	return Array.from(new Set(tokens));
 }
 
 function computeTokenOverlapScore(queryTokens: string[], text: string, weight: number): number {
-	const haystack = text.toLowerCase();
+	const haystack = new Set(tokenize(text));
 	let score = 0;
 	for (const token of queryTokens) {
-		if (haystack.includes(token)) {
+		if (haystack.has(token)) {
 			score += weight;
 		}
 	}
@@ -86,31 +114,40 @@ function scoreCandidate(queryTokens: string[], candidate: MemoryCandidate): numb
 	return score;
 }
 
-function extractJsonObject(text: string): string {
-	const trimmed = text.trim();
-	if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-		return trimmed;
+function buildFallbackCandidates(
+	request: RecallRequest,
+	candidates: MemoryCandidate[],
+	existing: Array<{ candidate: MemoryCandidate; score: number }>,
+): Array<{ candidate: MemoryCandidate; score: number }> {
+	if (!containsHanText(request.query) && existing.length > 0) {
+		return existing;
 	}
 
-	const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-	if (fenceMatch?.[1]) {
-		return fenceMatch[1].trim();
+	const seen = new Set(existing.map(({ candidate }) => candidate.id));
+	const seeded = [...existing];
+	const limit = Math.max(request.maxCandidates, request.maxInjected);
+
+	for (const candidate of candidates
+		.filter((item) => item.source === "channel-session" || item.source === "channel-memory")
+		.sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title))) {
+		if (seen.has(candidate.id)) {
+			continue;
+		}
+		seeded.push({ candidate, score: candidate.priority });
+		seen.add(candidate.id);
+		if (seeded.length >= limit) {
+			break;
+		}
 	}
 
-	const firstBrace = trimmed.indexOf("{");
-	const lastBrace = trimmed.lastIndexOf("}");
-	if (firstBrace >= 0 && lastBrace > firstBrace) {
-		return trimmed.slice(firstBrace, lastBrace + 1);
-	}
-
-	return trimmed;
+	return seeded;
 }
 
 async function rerankCandidates(
 	request: RecallRequest,
 	candidates: Array<{ candidate: MemoryCandidate; score: number }>,
 ): Promise<Array<{ candidate: MemoryCandidate; score: number }>> {
-	if (!request.rerankWithModel || candidates.length <= request.maxInjected) {
+	if ((!request.rerankWithModel && !request.autoRerank) || candidates.length <= request.maxInjected) {
 		return candidates;
 	}
 
@@ -136,8 +173,9 @@ async function rerankCandidates(
 			resolveApiKey: request.resolveApiKey,
 			systemPrompt: RERANK_SYSTEM_PROMPT,
 			prompt: `User turn:\n${request.query.trim()}\n\nCandidates:\n${renderedCandidates}`,
+			timeoutMs: MEMORY_RECALL_RERANK_TIMEOUT_MS,
 			parse: (text) => {
-				const parsed = JSON.parse(extractJsonObject(text)) as { selectedIds?: unknown };
+				const parsed = parseJsonObject(text) as { selectedIds?: unknown };
 				return Array.isArray(parsed.selectedIds)
 					? parsed.selectedIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
 					: [];
@@ -198,6 +236,7 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 	const candidates = await buildMemoryCandidates({
 		workspaceDir: request.workspaceDir,
 		channelDir: request.channelDir,
+		cache: request.candidateCache,
 	});
 	const filteredCandidates = request.allowedSources?.length
 		? candidates.filter((candidate) => request.allowedSources?.includes(candidate.source))
@@ -210,14 +249,22 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 	const scored = filteredCandidates
 		.map((candidate) => ({ candidate, score: scoreCandidate(queryTokens, candidate) }))
 		.filter(({ score }) => score > 0)
-		.sort((a, b) => b.score - a.score || a.candidate.title.localeCompare(b.candidate.title))
+		.sort((a, b) => b.score - a.score || a.candidate.title.localeCompare(b.candidate.title));
+
+	const shortlist = buildFallbackCandidates(request, filteredCandidates, scored)
+		.sort(
+			(a, b) =>
+				b.score - a.score ||
+				b.candidate.priority - a.candidate.priority ||
+				a.candidate.title.localeCompare(b.candidate.title),
+		)
 		.slice(0, Math.max(request.maxCandidates, request.maxInjected));
 
-	if (scored.length === 0) {
+	if (shortlist.length === 0) {
 		return { items: [], renderedText: "" };
 	}
 
-	const reranked = await rerankCandidates(request, scored);
+	const reranked = await rerankCandidates(request, shortlist);
 	const items = reranked.slice(0, request.maxInjected).map(({ candidate, score }) => ({
 		source: candidate.source,
 		path: candidate.path,

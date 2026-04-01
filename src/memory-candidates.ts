@@ -1,5 +1,6 @@
 import { readFile } from "fs/promises";
 import { join } from "path";
+import { splitLevelOneSections } from "./markdown-sections.js";
 import {
 	getChannelHistoryPath,
 	getChannelMemoryPath,
@@ -21,6 +22,17 @@ export interface MemoryCandidate {
 export interface BuildMemoryCandidatesOptions {
 	workspaceDir: string;
 	channelDir: string;
+	cache?: MemoryCandidateCache;
+}
+
+export interface MemoryCandidateCache {
+	entries: Map<string, Promise<MemoryCandidate[]>>;
+}
+
+export function createMemoryCandidateCache(): MemoryCandidateCache {
+	return {
+		entries: new Map(),
+	};
 }
 
 function normalizeContent(content: string): string {
@@ -36,10 +48,12 @@ async function readOptionalFile(path: string): Promise<string> {
 }
 
 function slugify(value: string): string {
-	return value
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "") || "section";
+	return (
+		value
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/^-+|-+$/g, "") || "section"
+	);
 }
 
 function inferPriority(source: MemoryCandidate["source"], title: string): number {
@@ -83,38 +97,8 @@ function buildCandidate(
 	};
 }
 
-function splitLevelOneSections(content: string): Array<{ heading: string; content: string }> {
-	const normalized = normalizeContent(content);
-	if (!normalized) {
-		return [];
-	}
-
-	const lines = normalized.split("\n");
-	const sections: Array<{ heading: string; content: string }> = [];
-	let currentHeading = "";
-	let currentLines: string[] = [];
-
-	const flush = () => {
-		if (!currentHeading) return;
-		const sectionContent = currentLines.join("\n").trim();
-		if (!sectionContent) return;
-		sections.push({ heading: currentHeading, content: sectionContent });
-	};
-
-	for (const line of lines) {
-		if (line.startsWith("# ")) {
-			flush();
-			currentHeading = line.slice(2).trim();
-			currentLines = [];
-			continue;
-		}
-		if (currentHeading) {
-			currentLines.push(line);
-		}
-	}
-
-	flush();
-	return sections;
+function buildCacheKey(options: BuildMemoryCandidatesOptions): string {
+	return `${options.workspaceDir}\u0000${options.channelDir}`;
 }
 
 function buildWorkspaceOrChannelMemoryCandidates(
@@ -124,7 +108,9 @@ function buildWorkspaceOrChannelMemoryCandidates(
 ): MemoryCandidate[] {
 	const sections = splitMarkdownSections(content);
 	if (sections.length === 0 && content) {
-		return [buildCandidate(source, path, source === "workspace-memory" ? "Workspace Memory" : "Channel Memory", content)];
+		return [
+			buildCandidate(source, path, source === "workspace-memory" ? "Workspace Memory" : "Channel Memory", content),
+		];
 	}
 
 	return sections
@@ -144,7 +130,7 @@ function buildHistoryCandidates(path: string, content: string): MemoryCandidate[
 		.map((section) => buildCandidate("channel-history", path, section.heading, section.content, section.heading));
 }
 
-export async function buildMemoryCandidates(options: BuildMemoryCandidatesOptions): Promise<MemoryCandidate[]> {
+async function buildMemoryCandidatesUncached(options: BuildMemoryCandidatesOptions): Promise<MemoryCandidate[]> {
 	const workspaceMemoryPath = join(options.workspaceDir, "MEMORY.md");
 	const channelMemoryPath = getChannelMemoryPath(options.channelDir);
 	const channelSessionPath = getChannelSessionPath(options.channelDir);
@@ -163,4 +149,23 @@ export async function buildMemoryCandidates(options: BuildMemoryCandidatesOption
 		...buildWorkspaceOrChannelMemoryCandidates("workspace-memory", workspaceMemoryPath, workspaceMemory),
 		...buildHistoryCandidates(channelHistoryPath, channelHistory),
 	];
+}
+
+export async function buildMemoryCandidates(options: BuildMemoryCandidatesOptions): Promise<MemoryCandidate[]> {
+	if (!options.cache) {
+		return buildMemoryCandidatesUncached(options);
+	}
+
+	const key = buildCacheKey(options);
+	const cached = options.cache.entries.get(key);
+	if (cached) {
+		return cached;
+	}
+
+	const pending = buildMemoryCandidatesUncached(options).catch((error) => {
+		options.cache?.entries.delete(key);
+		throw error;
+	});
+	options.cache.entries.set(key, pending);
+	return pending;
 }

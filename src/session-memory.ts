@@ -1,14 +1,19 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, AssistantMessage, Message, Model } from "@mariozechner/pi-ai";
+import type { Api, Message, Model } from "@mariozechner/pi-ai";
 import { serializeConversation } from "@mariozechner/pi-coding-agent";
+import { writeFile } from "fs/promises";
+import { join } from "path";
+import { parseJsonObject } from "./llm-json.js";
+import { splitLevelOneSections } from "./markdown-sections.js";
 import { readChannelMemory } from "./memory-files.js";
 import { readChannelSession, rewriteChannelSession } from "./session-memory-files.js";
-import { runSidecarTask } from "./sidecar-worker.js";
+import { runSidecarTask, SidecarParseError } from "./sidecar-worker.js";
 
 const SESSION_TRANSCRIPT_MAX_CHARS = 20_000;
 const SESSION_MEMORY_MAX_CHARS = 4_000;
 const SESSION_ITEM_LIMIT = 12;
 const SESSION_ITEM_MAX_CHARS = 300;
+const SESSION_MEMORY_TIMEOUT_MS = 10_000;
 
 const SESSION_MEMORY_SYSTEM_PROMPT = `You maintain a Pipiclaw SESSION.md file.
 
@@ -56,6 +61,8 @@ export interface SessionMemoryUpdateOptions {
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 }
 
+type SessionMemoryStateUpdate = Partial<Record<keyof SessionMemoryState, string[] | string>>;
+
 function clipText(text: string, maxChars: number): string {
 	const normalized = text.replace(/\r/g, "").trim();
 	if (normalized.length <= maxChars) {
@@ -66,26 +73,6 @@ function clipText(text: string, maxChars: number): string {
 	return `${normalized.slice(0, headChars)}\n\n[... omitted middle section ...]\n\n${normalized.slice(-tailChars)}`;
 }
 
-function extractJsonObject(text: string): string {
-	const trimmed = text.trim();
-	if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-		return trimmed;
-	}
-
-	const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-	if (fenceMatch?.[1]) {
-		return fenceMatch[1].trim();
-	}
-
-	const firstBrace = trimmed.indexOf("{");
-	const lastBrace = trimmed.lastIndexOf("}");
-	if (firstBrace >= 0 && lastBrace > firstBrace) {
-		return trimmed.slice(firstBrace, lastBrace + 1);
-	}
-
-	return trimmed;
-}
-
 function normalizeItem(value: unknown): string | null {
 	if (typeof value !== "string") {
 		return null;
@@ -94,31 +81,151 @@ function normalizeItem(value: unknown): string | null {
 	if (!normalized) {
 		return null;
 	}
-	return normalized.length > SESSION_ITEM_MAX_CHARS ? `${normalized.slice(0, SESSION_ITEM_MAX_CHARS - 3)}...` : normalized;
+	return normalized.length > SESSION_ITEM_MAX_CHARS
+		? `${normalized.slice(0, SESSION_ITEM_MAX_CHARS - 3)}...`
+		: normalized;
 }
 
 function normalizeItems(value: unknown): string[] {
 	if (!Array.isArray(value)) {
 		return [];
 	}
-	return value.map(normalizeItem).filter((item): item is string => !!item).slice(0, SESSION_ITEM_LIMIT);
+	return value
+		.map(normalizeItem)
+		.filter((item): item is string => !!item)
+		.slice(0, SESSION_ITEM_LIMIT);
 }
 
-function parseState(text: string): SessionMemoryState {
-	const parsed = JSON.parse(extractJsonObject(text)) as Partial<Record<keyof SessionMemoryState, unknown>>;
-	const title = typeof parsed.title === "string" ? parsed.title.trim().slice(0, 120) : "";
+function normalizeTitle(value: unknown): string {
+	return typeof value === "string" ? value.trim().slice(0, 120) : "";
+}
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function parseStateUpdate(text: string): SessionMemoryStateUpdate {
+	const parsed = parseJsonObject(text);
+	if (!isRecord(parsed)) {
+		throw new Error("Session memory response was not a JSON object");
+	}
+
+	const next: SessionMemoryStateUpdate = {};
+	if ("title" in parsed) next.title = normalizeTitle(parsed.title);
+	if ("currentState" in parsed) next.currentState = normalizeItems(parsed.currentState);
+	if ("userIntent" in parsed) next.userIntent = normalizeItems(parsed.userIntent);
+	if ("activeFiles" in parsed) next.activeFiles = normalizeItems(parsed.activeFiles);
+	if ("decisions" in parsed) next.decisions = normalizeItems(parsed.decisions);
+	if ("constraints" in parsed) next.constraints = normalizeItems(parsed.constraints);
+	if ("errorsAndCorrections" in parsed) next.errorsAndCorrections = normalizeItems(parsed.errorsAndCorrections);
+	if ("nextSteps" in parsed) next.nextSteps = normalizeItems(parsed.nextSteps);
+	if ("worklog" in parsed) next.worklog = normalizeItems(parsed.worklog);
+	return next;
+}
+
+function createEmptySessionMemoryState(): SessionMemoryState {
 	return {
-		title,
-		currentState: normalizeItems(parsed.currentState),
-		userIntent: normalizeItems(parsed.userIntent),
-		activeFiles: normalizeItems(parsed.activeFiles),
-		decisions: normalizeItems(parsed.decisions),
-		constraints: normalizeItems(parsed.constraints),
-		errorsAndCorrections: normalizeItems(parsed.errorsAndCorrections),
-		nextSteps: normalizeItems(parsed.nextSteps),
-		worklog: normalizeItems(parsed.worklog),
+		title: "",
+		currentState: [],
+		userIntent: [],
+		activeFiles: [],
+		decisions: [],
+		constraints: [],
+		errorsAndCorrections: [],
+		nextSteps: [],
+		worklog: [],
 	};
+}
+
+function stripHtmlComments(text: string): string {
+	return text.replace(/<!--[\s\S]*?-->/g, "").trim();
+}
+
+function parseSectionItems(content: string): string[] {
+	const normalized = stripHtmlComments(content);
+	if (!normalized) {
+		return [];
+	}
+
+	const lines = normalized
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	const bulletItems = lines
+		.filter((line) => line.startsWith("- "))
+		.map((line) => normalizeItem(line.slice(2)))
+		.filter((item): item is string => !!item);
+	if (bulletItems.length > 0) {
+		return bulletItems.slice(0, SESSION_ITEM_LIMIT);
+	}
+	return lines
+		.map(normalizeItem)
+		.filter((item): item is string => !!item)
+		.slice(0, SESSION_ITEM_LIMIT);
+}
+
+function parseRenderedSessionMemory(markdown: string): SessionMemoryState {
+	const state = createEmptySessionMemoryState();
+	for (const section of splitLevelOneSections(markdown)) {
+		switch (section.heading.toLowerCase()) {
+			case "session title":
+				state.title = stripHtmlComments(section.content).split("\n")[0]?.trim().slice(0, 120) || "";
+				break;
+			case "current state":
+				state.currentState = parseSectionItems(section.content);
+				break;
+			case "user intent":
+				state.userIntent = parseSectionItems(section.content);
+				break;
+			case "active files":
+				state.activeFiles = parseSectionItems(section.content);
+				break;
+			case "decisions":
+				state.decisions = parseSectionItems(section.content);
+				break;
+			case "constraints":
+				state.constraints = parseSectionItems(section.content);
+				break;
+			case "errors & corrections":
+				state.errorsAndCorrections = parseSectionItems(section.content);
+				break;
+			case "next steps":
+				state.nextSteps = parseSectionItems(section.content);
+				break;
+			case "worklog":
+				state.worklog = parseSectionItems(section.content);
+				break;
+		}
+	}
+	return state;
+}
+
+function mergeSessionMemoryState(current: SessionMemoryState, update: SessionMemoryStateUpdate): SessionMemoryState {
+	return {
+		title: typeof update.title === "string" ? update.title : current.title,
+		currentState: Array.isArray(update.currentState) ? update.currentState : current.currentState,
+		userIntent: Array.isArray(update.userIntent) ? update.userIntent : current.userIntent,
+		activeFiles: Array.isArray(update.activeFiles) ? update.activeFiles : current.activeFiles,
+		decisions: Array.isArray(update.decisions) ? update.decisions : current.decisions,
+		constraints: Array.isArray(update.constraints) ? update.constraints : current.constraints,
+		errorsAndCorrections: Array.isArray(update.errorsAndCorrections)
+			? update.errorsAndCorrections
+			: current.errorsAndCorrections,
+		nextSteps: Array.isArray(update.nextSteps) ? update.nextSteps : current.nextSteps,
+		worklog: Array.isArray(update.worklog) ? update.worklog : current.worklog,
+	};
+}
+
+async function writeSessionMemoryDebugFile(channelDir: string, error: unknown, rawText: string): Promise<void> {
+	const debugPath = join(channelDir, "SESSION.invalid-response.txt");
+	const header = [
+		`timestamp: ${new Date().toISOString()}`,
+		`error: ${error instanceof Error ? error.message : String(error)}`,
+		"",
+		"raw response:",
+		"",
+	].join("\n");
+	await writeFile(debugPath, `${header}${rawText}\n`, "utf-8");
 }
 
 function renderSection(heading: string, items: string[]): string {
@@ -177,23 +284,32 @@ Recent conversation:
 ${transcript || "(empty)"}`;
 }
 
-export async function updateChannelSessionMemory(
-	options: SessionMemoryUpdateOptions,
-): Promise<SessionMemoryState> {
+export async function updateChannelSessionMemory(options: SessionMemoryUpdateOptions): Promise<SessionMemoryState> {
 	const currentSession = await readChannelSession(options.channelDir);
 	const currentMemory = await readChannelMemory(options.channelDir);
 	const messages = buildMessagesForSessionMemory(options.messages);
+	const currentState = parseRenderedSessionMemory(currentSession);
 
-	const result = await runSidecarTask({
-		name: "session-memory-update",
-		model: options.model,
-		resolveApiKey: options.resolveApiKey,
-		systemPrompt: SESSION_MEMORY_SYSTEM_PROMPT,
-		prompt: buildSessionPrompt(currentSession, currentMemory, messages),
-		parse: parseState,
-	});
+	let update: SessionMemoryStateUpdate;
+	try {
+		const result = await runSidecarTask({
+			name: "session-memory-update",
+			model: options.model,
+			resolveApiKey: options.resolveApiKey,
+			systemPrompt: SESSION_MEMORY_SYSTEM_PROMPT,
+			prompt: buildSessionPrompt(currentSession, currentMemory, messages),
+			parse: parseStateUpdate,
+			timeoutMs: SESSION_MEMORY_TIMEOUT_MS,
+		});
+		update = result.output;
+	} catch (error) {
+		if (error instanceof SidecarParseError) {
+			await writeSessionMemoryDebugFile(options.channelDir, error.cause ?? error, error.rawText);
+		}
+		throw error;
+	}
 
-	const rendered = renderSessionMemory(result.output);
+	const rendered = renderSessionMemory(mergeSessionMemoryState(currentState, update));
 	await rewriteChannelSession(options.channelDir, rendered);
-	return result.output;
+	return parseRenderedSessionMemory(rendered);
 }
