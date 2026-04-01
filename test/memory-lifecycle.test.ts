@@ -51,11 +51,20 @@ function createFakePi() {
 }
 
 describe("MemoryLifecycle", () => {
-	it("refreshes session memory before compaction consolidation", async () => {
+	it("queues session memory refresh for compaction without blocking consolidation", async () => {
+		let resolveUpdate: (() => void) | undefined;
+		vi.mocked(updateChannelSessionMemory).mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveUpdate = () => resolve(undefined as never);
+				}),
+		);
+
+		const compactionMessages = [{ role: "user", content: "summarize this" }] as never[];
 		const lifecycle = new MemoryLifecycle({
 			channelId: "dm_123",
 			channelDir: "/tmp/dm_123",
-			getMessages: () => [],
+			getMessages: () => [{ role: "user", content: "live state" }] as never[],
 			getSessionEntries: () => [],
 			getModel: () => ({ provider: "test", id: "noop" }) as never,
 			resolveApiKey: async () => "",
@@ -63,6 +72,8 @@ describe("MemoryLifecycle", () => {
 				enabled: true,
 				minTurnsBetweenUpdate: 2,
 				minToolCallsBetweenUpdate: 4,
+				timeoutMs: 30000,
+				failureBackoffTurns: 3,
 				forceRefreshBeforeCompact: true,
 				forceRefreshBeforeNewSession: true,
 			}),
@@ -71,21 +82,35 @@ describe("MemoryLifecycle", () => {
 		lifecycle.createExtensionFactory()(fakePi.api as never);
 
 		await fakePi.handlers.get("session_before_compact")?.({
-			preparation: { messagesToSummarize: [] },
+			preparation: { messagesToSummarize: compactionMessages },
 		});
+		await Promise.resolve();
 
 		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-		expect(vi.mocked(updateChannelSessionMemory).mock.invocationCallOrder[0]).toBeLessThan(
-			vi.mocked(runInlineConsolidation).mock.invocationCallOrder[0],
+		expect(vi.mocked(updateChannelSessionMemory)).toHaveBeenCalledWith(
+			expect.objectContaining({
+				messages: compactionMessages,
+				timeoutMs: 30000,
+			}),
 		);
+		resolveUpdate?.();
 	});
 
-	it("refreshes session memory before new-session consolidation", async () => {
+	it("queues session memory refresh for new-session without blocking consolidation", async () => {
+		let resolveUpdate: (() => void) | undefined;
+		vi.mocked(updateChannelSessionMemory).mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveUpdate = () => resolve(undefined as never);
+				}),
+		);
+
+		const liveMessages = [{ role: "assistant", content: "current state" }] as never[];
 		const lifecycle = new MemoryLifecycle({
 			channelId: "dm_123",
 			channelDir: "/tmp/dm_123",
-			getMessages: () => [],
+			getMessages: () => liveMessages,
 			getSessionEntries: () => [],
 			getModel: () => ({ provider: "test", id: "noop" }) as never,
 			resolveApiKey: async () => "",
@@ -93,6 +118,8 @@ describe("MemoryLifecycle", () => {
 				enabled: true,
 				minTurnsBetweenUpdate: 2,
 				minToolCallsBetweenUpdate: 4,
+				timeoutMs: 30000,
+				failureBackoffTurns: 3,
 				forceRefreshBeforeCompact: true,
 				forceRefreshBeforeNewSession: true,
 			}),
@@ -103,9 +130,196 @@ describe("MemoryLifecycle", () => {
 		await fakePi.handlers.get("session_before_switch")?.({
 			reason: "new",
 		});
+		await Promise.resolve();
 
 		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(updateChannelSessionMemory)).toHaveBeenCalledWith(
+			expect.objectContaining({
+				messages: liveMessages,
+				timeoutMs: 30000,
+			}),
+		);
+		resolveUpdate?.();
+	});
+
+	it("backs off threshold-triggered session updates after a failure", async () => {
+		vi.mocked(updateChannelSessionMemory).mockRejectedValue(new Error("timeout"));
+
+		const lifecycle = new MemoryLifecycle({
+			channelId: "dm_123",
+			channelDir: "/tmp/dm_123",
+			getMessages: () => [],
+			getSessionEntries: () => [],
+			getModel: () => ({ provider: "test", id: "noop" }) as never,
+			resolveApiKey: async () => "",
+			getSessionMemorySettings: () => ({
+				enabled: true,
+				minTurnsBetweenUpdate: 1,
+				minToolCallsBetweenUpdate: 99,
+				timeoutMs: 30000,
+				failureBackoffTurns: 2,
+				forceRefreshBeforeCompact: true,
+				forceRefreshBeforeNewSession: true,
+			}),
+		});
+
+		lifecycle.noteCompletedAssistantTurn();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+
+		lifecycle.noteCompletedAssistantTurn();
+		await Promise.resolve();
+		lifecycle.noteCompletedAssistantTurn();
+		await Promise.resolve();
+		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+
+		lifecycle.noteCompletedAssistantTurn();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps a queued compaction refresh when a threshold refresh is already running", async () => {
+		let resolveFirstUpdate: (() => void) | undefined;
+		vi.mocked(updateChannelSessionMemory)
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						resolveFirstUpdate = () => resolve(undefined as never);
+					}),
+			)
+			.mockResolvedValue(undefined as never);
+
+		const compactionMessages = [{ role: "user", content: "pre-compact snapshot" }] as never[];
+		const lifecycle = new MemoryLifecycle({
+			channelId: "dm_123",
+			channelDir: "/tmp/dm_123",
+			getMessages: () => [{ role: "assistant", content: "live state" }] as never[],
+			getSessionEntries: () => [],
+			getModel: () => ({ provider: "test", id: "noop" }) as never,
+			resolveApiKey: async () => "",
+			getSessionMemorySettings: () => ({
+				enabled: true,
+				minTurnsBetweenUpdate: 1,
+				minToolCallsBetweenUpdate: 99,
+				timeoutMs: 30000,
+				failureBackoffTurns: 2,
+				forceRefreshBeforeCompact: true,
+				forceRefreshBeforeNewSession: true,
+			}),
+		});
+		const fakePi = createFakePi();
+		lifecycle.createExtensionFactory()(fakePi.api as never);
+
+		lifecycle.noteCompletedAssistantTurn();
+		await Promise.resolve();
+		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+
+		await fakePi.handlers.get("session_before_compact")?.({
+			preparation: { messagesToSummarize: compactionMessages },
+		});
+		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+
+		resolveFirstUpdate?.();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
+		expect(vi.mocked(updateChannelSessionMemory).mock.calls[1]?.[0]).toMatchObject({
+			messages: compactionMessages,
+			timeoutMs: 30000,
+		});
+	});
+
+	it("does not block compaction when inline consolidation is slow", async () => {
+		let resolveConsolidation: (() => void) | undefined;
+		vi.mocked(runInlineConsolidation).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveConsolidation = () =>
+						resolve({
+							skipped: false,
+							appendedMemoryEntries: 1,
+							appendedHistoryBlock: true,
+						});
+				}),
+		);
+
+		const lifecycle = new MemoryLifecycle({
+			channelId: "dm_123",
+			channelDir: "/tmp/dm_123",
+			getMessages: () => [],
+			getSessionEntries: () => [],
+			getModel: () => ({ provider: "test", id: "noop" }) as never,
+			resolveApiKey: async () => "",
+			getSessionMemorySettings: () => ({
+				enabled: true,
+				minTurnsBetweenUpdate: 99,
+				minToolCallsBetweenUpdate: 99,
+				timeoutMs: 30000,
+				failureBackoffTurns: 3,
+				forceRefreshBeforeCompact: false,
+				forceRefreshBeforeNewSession: false,
+			}),
+		});
+		const fakePi = createFakePi();
+		lifecycle.createExtensionFactory()(fakePi.api as never);
+
+		const beforeCompact = fakePi.handlers.get("session_before_compact")?.({
+			preparation: { messagesToSummarize: [{ role: "user", content: "snapshot" }] },
+		});
+
+		await expect(beforeCompact).resolves.toBeUndefined();
+		await Promise.resolve();
+		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+		resolveConsolidation?.();
+	});
+
+	it("does not block new-session switch when inline consolidation is slow", async () => {
+		let resolveConsolidation: (() => void) | undefined;
+		vi.mocked(runInlineConsolidation).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveConsolidation = () =>
+						resolve({
+							skipped: false,
+							appendedMemoryEntries: 1,
+							appendedHistoryBlock: true,
+						});
+				}),
+		);
+
+		const lifecycle = new MemoryLifecycle({
+			channelId: "dm_123",
+			channelDir: "/tmp/dm_123",
+			getMessages: () => [],
+			getSessionEntries: () => [],
+			getModel: () => ({ provider: "test", id: "noop" }) as never,
+			resolveApiKey: async () => "",
+			getSessionMemorySettings: () => ({
+				enabled: true,
+				minTurnsBetweenUpdate: 99,
+				minToolCallsBetweenUpdate: 99,
+				timeoutMs: 30000,
+				failureBackoffTurns: 3,
+				forceRefreshBeforeCompact: false,
+				forceRefreshBeforeNewSession: false,
+			}),
+		});
+		const fakePi = createFakePi();
+		lifecycle.createExtensionFactory()(fakePi.api as never);
+
+		const beforeSwitch = fakePi.handlers.get("session_before_switch")?.({
+			reason: "new",
+		});
+
+		await expect(beforeSwitch).resolves.toBeUndefined();
+		await Promise.resolve();
+		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+		resolveConsolidation?.();
 	});
 
 	it("coalesces threshold-driven session updates while one is pending", async () => {

@@ -38,6 +38,8 @@ export interface PipiclawSessionMemorySettings {
 	enabled: boolean;
 	minTurnsBetweenUpdate: number;
 	minToolCallsBetweenUpdate: number;
+	timeoutMs: number;
+	failureBackoffTurns: number;
 	forceRefreshBeforeCompact: boolean;
 	forceRefreshBeforeNewSession: boolean;
 }
@@ -76,6 +78,8 @@ const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
 	enabled: true,
 	minTurnsBetweenUpdate: 2,
 	minToolCallsBetweenUpdate: 4,
+	timeoutMs: 30_000,
+	failureBackoffTurns: 3,
 	forceRefreshBeforeCompact: true,
 	forceRefreshBeforeNewSession: true,
 };
