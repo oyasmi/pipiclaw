@@ -62,6 +62,14 @@
 		"pi",
 		"harness-engineering"
 	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/oyasmi/pipiclaw.git"
+	},
+	"homepage": "https://github.com/oyasmi/pipiclaw#readme",
+	"bugs": {
+		"url": "https://github.com/oyasmi/pipiclaw/issues"
+	},
 	"license": "Apache-2.0",
 	"publishConfig": {
 		"access": "public"

@@ -5,6 +5,11 @@
 如果你的目标是先把 Pipiclaw 跑起来，请先看 [README](../README.md) 里的快速开始（Quickstart）。  
 如果你已经能启动，想系统了解有哪些配置、每项配置在哪里写、什么情况下该怎么配，这份文档就是给你查阅的。
 
+补充文档：
+
+- 事件与子代理使用指南：[events-and-sub-agents.md](./events-and-sub-agents.md)
+- 部署与运维指南：[deployment-and-operations.md](./deployment-and-operations.md)
+
 ## 设计原则（Design Principles）
 
 Pipiclaw 的配置分成两层：
@@ -55,14 +60,6 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
 | `~/.pi/pipiclaw/workspace/events/` | 工作区 | 定时事件目录 | 是 |
 | `~/.pi/pipiclaw/workspace/sub-agents/` | 工作区 | 预定义子代理目录 | 是 |
 | `~/.pi/pipiclaw/workspace/skills/` | 工作区 | 工作区级技能目录 | 是 |
-
-### 启动方式（Runtime Entry Options）
-
-| 命令 | 说明 |
-|---------|------|
-| `pipiclaw` | 在主机环境运行 |
-| `pipiclaw --sandbox=host` | 显式指定在主机环境运行工具 |
-| `pipiclaw --sandbox=docker:<container>` | 在指定 Docker 容器中运行工具 |
 
 ### 环境变量（Environment Variables）
 
@@ -126,24 +123,43 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 
 | 字段 | 必填 | 默认值 / 行为 | 说明 |
 |------|------|----------------|------|
-| `clientId` | Yes | - | DingTalk app `Client ID` |
-| `clientSecret` | Yes | - | DingTalk app `Client Secret` |
-| `robotCode` | No | Falls back to `clientId` when empty | Robot code used by DingTalk bot APIs |
-| `cardTemplateId` | No | Empty means disabled | AI Card template ID |
-| `cardTemplateKey` | No | `"content"` | Template field key used to write streamed content |
-| `allowFrom` | No | Empty / omitted means allow all | Allowlist of sender staff IDs |
+| `clientId` | 是 | - | 钉钉应用 `Client ID` |
+| `clientSecret` | 是 | - | 钉钉应用 `Client Secret` |
+| `robotCode` | 否 | 留空时回退到 `clientId` | 钉钉机器人接口使用的 robot code |
+| `cardTemplateId` | 否 | 留空时不启用 AI Card | AI Card 模板 ID，建议配置 |
+| `cardTemplateKey` | 否 | `"content"` | 写入流式内容的模板字段名 |
+| `allowFrom` | 否 | 留空或省略时允许所有人 | 允许访问的发送者 staff ID 列表 |
 
 ### 使用说明（Practical Notes）
 
 - `clientId` 和 `clientSecret` 是唯一硬性必需字段
 - `robotCode` 留空通常就够用
-- `cardTemplateId` 留空时，Pipiclaw 仍可工作，只是不使用 AI Card
+- `cardTemplateId` 建议配置；留空时 Pipiclaw 仍可工作，但不会使用 AI Card
 - `allowFrom` 生效的是发送者 staff ID
 - 当 `allowFrom` 非空时，不在列表中的发送者消息会被直接忽略
 
 ### 推荐配置（Recommended Configurations）
 
-#### 1. 首次接通，优先跑通（First Bring-up, Fastest Success Path）
+#### 1. 推荐方案：启用 AI Card（Recommended: Enable AI Card）
+
+```json
+{
+  "clientId": "your-dingtalk-client-id",
+  "clientSecret": "your-dingtalk-client-secret",
+  "robotCode": "",
+  "cardTemplateId": "your-card-template-id",
+  "cardTemplateKey": "content",
+  "allowFrom": []
+}
+```
+
+适合：
+
+- 日常正式使用
+- 希望在钉钉里看到过程更新
+- 需要更容易排查执行过程
+
+#### 2. 首次接通，先排查链路（First Bring-up, Troubleshooting Path）
 
 ```json
 {
@@ -161,24 +177,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 - 第一次验证接入链路
 - 先确认机器人能收到并回复消息
 - 先不排查 AI Card 模板问题
-
-#### 2. 启用 AI Card 过程展示（Enable AI Card Streaming）
-
-```json
-{
-  "clientId": "your-dingtalk-client-id",
-  "clientSecret": "your-dingtalk-client-secret",
-  "robotCode": "",
-  "cardTemplateId": "your-card-template-id",
-  "cardTemplateKey": "content",
-  "allowFrom": []
-}
-```
-
-适合：
-
-- 已经验证普通消息回复正常
-- 希望展示执行过程、状态和中间进度
+- 确认可用后尽快补上 AI Card
 
 #### 3. 小范围灰度，限制访问（Internal Pilot, Restricted Access）
 
@@ -187,7 +186,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
   "clientId": "your-dingtalk-client-id",
   "clientSecret": "your-dingtalk-client-secret",
   "robotCode": "",
-  "cardTemplateId": "",
+  "cardTemplateId": "your-card-template-id",
   "cardTemplateKey": "content",
   "allowFrom": ["staff_id_1", "staff_id_2"]
 }
@@ -197,6 +196,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 
 - 机器人还在灰度期
 - 只允许少量测试人员使用
+- 希望同时观察执行过程与 AI Card 展示效果
 
 ### 常见错误（Common Mistakes）
 
@@ -707,6 +707,8 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 
 放预定义子代理（sub-agent）。适合把 reviewer、researcher、planner 之类角色固化下来。
 
+详细字段、示例和推荐写法见 [events-and-sub-agents.md](./events-and-sub-agents.md)。
+
 ## 事件目录 `workspace/events/`（`workspace/events/`）
 
 放定时事件 JSON。可用于：
@@ -714,6 +716,8 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 - 周期性检查
 - 提醒
 - 固定时间回顾记忆文件
+
+详细事件类型、字段说明和使用建议见 [events-and-sub-agents.md](./events-and-sub-agents.md)。
 
 ## 技能目录 `workspace/skills/`（`workspace/skills/`）
 
@@ -751,7 +755,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 建议：
 
 1. `channel.json` 只保留最小字段
-2. `cardTemplateId` 留空
+2. 最好一并准备 AI Card；如果只是排查链路，才临时把 `cardTemplateId` 留空
 3. 直接使用 Anthropic 默认模型
 4. 设置 `ANTHROPIC_API_KEY`
 5. 启动后先发送 `/model`
@@ -805,7 +809,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 建议：
 
 1. `allowFrom` 只写测试人员 staff ID
-2. 先不配置 AI Card
+2. 建议同时配置 AI Card，方便灰度期间观察执行过程
 3. 固定一个稳定默认模型
 4. 打开 `PIPICLAW_DEBUG` 排查问题
 
