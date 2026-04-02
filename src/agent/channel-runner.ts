@@ -10,7 +10,7 @@ import {
 	type SettingsManager as SDKSettingsManager,
 	type Skill,
 } from "@mariozechner/pi-coding-agent";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import { createCommandExtension } from "../command-extension.js";
 import { type BuiltInCommand, renderBuiltInHelp } from "../commands.js";
@@ -19,8 +19,10 @@ import { PipiclawSettingsManager } from "../context.js";
 import type { DingTalkContext } from "../runtime/dingtalk.js";
 import * as log from "../log.js";
 import { createMemoryCandidateCache } from "../memory/candidates.js";
+import { buildFirstTurnMemoryBootstrap as renderFirstTurnMemoryBootstrap } from "../memory/bootstrap.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import { recallRelevantMemory } from "../memory/recall.js";
+import { getChannelMemoryPath } from "../memory/files.js";
 import { resolveInitialModel } from "../model-utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
 import { buildAppendSystemPrompt } from "../prompt-builder.js";
@@ -89,6 +91,7 @@ export class ChannelRunner implements AgentRunner {
 	// --- Mutable across runs ---
 	private activeModel: Model<Api>;
 	private currentSkills: Skill[];
+	private firstTurnMemoryBootstrapPending = true;
 
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
@@ -242,6 +245,7 @@ export class ChannelRunner implements AgentRunner {
 			const userMessage = this.formatUserMessage(clippedInput, ctx.message.userName);
 			let promptText = this.shouldPreserveRawInput(ctx.message.text) ? clippedInput : userMessage;
 			let recalledContextText = "";
+			let durableMemoryBootstrapText = "";
 
 			this.memoryLifecycle.noteUserTurnStarted();
 
@@ -267,6 +271,14 @@ export class ChannelRunner implements AgentRunner {
 						promptText = `${recall.renderedText}\n\n<user_message>\n${promptText}\n</user_message>`;
 					}
 				}
+
+				if (this.firstTurnMemoryBootstrapPending) {
+					durableMemoryBootstrapText = await this.buildFirstTurnMemoryBootstrap();
+					if (durableMemoryBootstrapText) {
+						promptText = `${durableMemoryBootstrapText}\n\n${promptText}`;
+					}
+					this.firstTurnMemoryBootstrapPending = false;
+				}
 			}
 
 			// Debug: write context to last_prompt.json (only with PIPICLAW_DEBUG=1)
@@ -274,6 +286,7 @@ export class ChannelRunner implements AgentRunner {
 				const debugContext = {
 					systemPrompt: this.agent.state.systemPrompt,
 					messages: this.session.messages,
+					durableMemoryBootstrap: durableMemoryBootstrapText || undefined,
 					recalledContext: recalledContextText || undefined,
 					newUserMessage: promptText,
 				};
@@ -462,6 +475,7 @@ export class ChannelRunner implements AgentRunner {
 		const skills = loadPipiclawSkills(this.channelDir, this.workspacePath);
 		this.currentSkills = skills;
 		this.subAgentDiscovery = this.refreshSubAgentDiscovery();
+		this.firstTurnMemoryBootstrapPending = true;
 		await this.session.reload();
 	}
 
@@ -482,6 +496,9 @@ export class ChannelRunner implements AgentRunner {
 
 	private subscribeToSessionEvents(): void {
 		this.session.subscribe(async (event: unknown) => {
+			if (isRecord(event) && "reason" in event && event.reason === "new") {
+				this.firstTurnMemoryBootstrapPending = true;
+			}
 			if (!this.runState.ctx || !this.runState.logCtx || !this.runState.queue) return;
 			await handleSessionEvent(event, {
 				ctx: this.runState.ctx,
@@ -492,6 +509,26 @@ export class ChannelRunner implements AgentRunner {
 				runState: this.runState,
 				memoryLifecycle: this.memoryLifecycle,
 			});
+		});
+	}
+
+	private async buildFirstTurnMemoryBootstrap(): Promise<string> {
+		const readOptionalFile = async (path: string): Promise<string> => {
+			try {
+				return await readFile(path, "utf-8");
+			} catch {
+				return "";
+			}
+		};
+
+		const [channelMemory, workspaceMemory] = await Promise.all([
+			readOptionalFile(getChannelMemoryPath(this.channelDir)),
+			readOptionalFile(join(this.workspaceDir, "MEMORY.md")),
+		]);
+
+		return renderFirstTurnMemoryBootstrap({
+			channelMemory,
+			workspaceMemory,
 		});
 	}
 }

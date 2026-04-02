@@ -304,6 +304,15 @@ function computeSectionIntentBoost(intents: Set<QueryIntent>, candidate: MemoryC
 	return boost;
 }
 
+function compareScoredCandidates(a: ScoredCandidate, b: ScoredCandidate): number {
+	return (
+		b.score - a.score ||
+		b.lexicalMatchCount - a.lexicalMatchCount ||
+		b.candidate.priority - a.candidate.priority ||
+		a.candidate.title.localeCompare(b.candidate.title)
+	);
+}
+
 function scoreCandidate(query: string, queryTokens: string[], intents: Set<QueryIntent>, candidate: MemoryCandidate): ScoredCandidate | null {
 	const searchText = candidate.searchText ?? candidate.content;
 	const titleStats = computeTokenMatchStats(queryTokens, candidate.title);
@@ -321,13 +330,13 @@ function scoreCandidate(query: string, queryTokens: string[], intents: Set<Query
 		exactBoost;
 	const structuralScore = candidate.priority + intentBoost + computeRecencyBoost(candidate.timestamp);
 
-	if (matchedTokens.size === 0 && exactBoost === 0 && intentBoost === 0) {
+	if (matchedTokens.size === 0 && exactBoost === 0) {
 		return null;
 	}
 
 	return {
 		candidate,
-		score: lexicalScore + structuralScore,
+		score: lexicalScore * (1 + structuralScore / 100),
 		lexicalMatchCount: matchedTokens.size,
 		intentBoost,
 	};
@@ -338,6 +347,7 @@ function seedIntentCandidates(
 	candidates: MemoryCandidate[],
 	existing: ScoredCandidate[],
 	intents: Set<QueryIntent>,
+	queryTokens: string[],
 ): ScoredCandidate[] {
 	if (intents.size === 0) {
 		return existing;
@@ -361,10 +371,15 @@ function seedIntentCandidates(
 		);
 
 	for (const { candidate, intentBoost } of intentCandidates) {
+		const matchedTokens = collectMatchingQueryTokens(queryTokens, [candidate.title, candidate.searchText ?? candidate.content]);
+		if (matchedTokens.size === 0) {
+			continue;
+		}
+
 		seeded.push({
 			candidate,
-			score: candidate.priority + intentBoost + computeRecencyBoost(candidate.timestamp),
-			lexicalMatchCount: 0,
+			score: (intentBoost + matchedTokens.size * 8) * (1 + (candidate.priority + computeRecencyBoost(candidate.timestamp)) / 100),
+			lexicalMatchCount: matchedTokens.size,
 			intentBoost,
 		});
 		seen.add(candidate.id);
@@ -484,22 +499,10 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 	const scored = filteredCandidates
 		.map((candidate) => scoreCandidate(query, queryTokens, queryIntents, candidate))
 		.filter((candidate): candidate is ScoredCandidate => candidate !== null)
-		.sort(
-			(a, b) =>
-				b.score - a.score ||
-				b.lexicalMatchCount - a.lexicalMatchCount ||
-				b.candidate.priority - a.candidate.priority ||
-				a.candidate.title.localeCompare(b.candidate.title),
-		);
+		.sort(compareScoredCandidates);
 
-	const shortlist = seedIntentCandidates(request, filteredCandidates, scored, queryIntents)
-		.sort(
-			(a, b) =>
-				b.score - a.score ||
-				b.lexicalMatchCount - a.lexicalMatchCount ||
-				b.candidate.priority - a.candidate.priority ||
-				a.candidate.title.localeCompare(b.candidate.title),
-		)
+	const shortlist = seedIntentCandidates(request, filteredCandidates, scored, queryIntents, queryTokens)
+		.sort(compareScoredCandidates)
 		.slice(0, Math.max(request.maxCandidates, request.maxInjected));
 
 	if (shortlist.length === 0) {

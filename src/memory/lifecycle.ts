@@ -108,8 +108,10 @@ export class MemoryLifecycle {
 			}
 			if (
 				canTriggerThresholdRefresh &&
-				this.turnsSinceSessionUpdate >= settings.minTurnsBetweenUpdate ||
-				(canTriggerThresholdRefresh && this.toolCallsSinceSessionUpdate >= settings.minToolCallsBetweenUpdate)
+				(
+					this.turnsSinceSessionUpdate >= settings.minTurnsBetweenUpdate ||
+					this.toolCallsSinceSessionUpdate >= settings.minToolCallsBetweenUpdate
+				)
 			) {
 				this.requestThresholdSessionRefresh();
 			}

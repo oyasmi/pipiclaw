@@ -48,9 +48,15 @@ Rules:
 - Do not include ephemeral chatter, obvious one-shot acknowledgements, or formatting instructions.
 - Prefer leaving highly volatile step-by-step execution state in SESSION.md rather than promoting it into durable memory.
 - historyBlock: concise Markdown summarizing the conversation chunk for later recovery.
+- For any conversation that contains at least one meaningful user request and one meaningful assistant reply, return a non-empty historyBlock with at least one bullet.
 - Prefer short bullets and short paragraphs.
-- When the conversation contains meaningful work, prefer returning at least one short history bullet instead of an empty historyBlock.
-- If there is nothing worth storing, return empty values.`;
+- If there is nothing worth storing, return empty values.
+
+Example output for a short useful exchange:
+{
+  "memoryEntries": ["User prefers dark mode in the dashboard"],
+  "historyBlock": "- User asked how to toggle dashboard theme; confirmed dark mode preference."
+}`;
 
 const MEMORY_CLEANUP_SYSTEM_PROMPT = `You are rewriting a Pipiclaw channel MEMORY.md file.
 

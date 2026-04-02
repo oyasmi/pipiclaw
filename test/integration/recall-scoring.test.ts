@@ -267,4 +267,41 @@ describe("recall scoring integration", () => {
 		expect(result.items.some((item) => item.title === "Next Steps")).toBe(true);
 		expect(result.renderedText).toContain("先复现问题");
 	});
+
+	it("does not seed history candidates from intent alone when there is zero lexical overlap", async () => {
+		const { workspaceDir, channelDir } = createWorkspace();
+		setupChannelFiles(channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"Fix login regression",
+				"",
+				"# Current State",
+				"",
+				"- Investigating oauth callback validation.",
+			].join("\n"),
+			memory: "# Channel Memory\n\n## Constraints\n\n- Keep callback verification backwards-compatible.\n",
+			history: [
+				"# Channel History",
+				"",
+				"## 2026-04-01T00:00:00.000Z",
+				"",
+				"- Patched background job retries in an unrelated worker.",
+			].join("\n"),
+		});
+
+		const result = await recallRelevantMemory({
+			query: "what happened earlier?",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 2,
+			maxChars: 2000,
+			rerankWithModel: false,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+
+		expect(result.items.some((item) => item.source === "channel-history")).toBe(false);
+	});
 });
