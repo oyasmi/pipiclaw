@@ -3,11 +3,11 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-	bootstrap,
-	bootstrapAppHome,
 	BootstrapExitError,
 	type BootstrapIO,
 	type BootstrapPaths,
+	bootstrap,
+	bootstrapAppHome,
 	loadConfig,
 	parseArgs,
 } from "../src/runtime/bootstrap.js";

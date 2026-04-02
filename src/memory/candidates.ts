@@ -1,11 +1,7 @@
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { splitH1Sections, splitH2Sections } from "../shared/markdown-sections.js";
-import {
-	getChannelHistoryPath,
-	getChannelMemoryPath,
-	getChannelSessionPath,
-} from "./files.js";
+import { getChannelHistoryPath, getChannelMemoryPath, getChannelSessionPath } from "./files.js";
 
 export interface MemoryCandidate {
 	id: string;

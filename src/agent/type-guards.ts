@@ -22,7 +22,9 @@ function isMessageWithRole(value: unknown): value is { role: string } {
 }
 
 export function isAssistantEventMessage(value: unknown): value is AssistantEventMessage {
-	return isMessageWithRole(value) && value.role === "assistant" && Array.isArray((value as { content?: unknown }).content);
+	return (
+		isMessageWithRole(value) && value.role === "assistant" && Array.isArray((value as { content?: unknown }).content)
+	);
 }
 
 export function isAssistantUsageMessage(value: unknown): value is AssistantUsageMessage {
@@ -54,7 +56,9 @@ export function getLastAssistantUsage(messages: readonly unknown[]): AssistantUs
 	return null;
 }
 
-export function isThinkingPart(part: AssistantContentPart): part is Extract<AssistantContentPart, { type: "thinking" }> {
+export function isThinkingPart(
+	part: AssistantContentPart,
+): part is Extract<AssistantContentPart, { type: "thinking" }> {
 	return part.type === "thinking" && typeof (part as { thinking?: unknown }).thinking === "string";
 }
 
@@ -70,11 +74,19 @@ function hasEventType(
 }
 
 export function isToolExecutionStartEvent(value: unknown): value is ToolExecutionStartEvent {
-	return hasEventType(value, "tool_execution_start") && typeof value.toolCallId === "string" && typeof value.toolName === "string";
+	return (
+		hasEventType(value, "tool_execution_start") &&
+		typeof value.toolCallId === "string" &&
+		typeof value.toolName === "string"
+	);
 }
 
 export function isToolExecutionUpdateEvent(value: unknown): value is ToolExecutionUpdateEvent {
-	return hasEventType(value, "tool_execution_update") && typeof value.toolCallId === "string" && typeof value.toolName === "string";
+	return (
+		hasEventType(value, "tool_execution_update") &&
+		typeof value.toolCallId === "string" &&
+		typeof value.toolName === "string"
+	);
 }
 
 export function isToolExecutionEndEvent(value: unknown): value is ToolExecutionEndEvent {

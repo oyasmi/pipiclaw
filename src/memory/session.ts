@@ -5,10 +5,10 @@ import { writeFile } from "fs/promises";
 import { join } from "path";
 import { parseJsonObject } from "../llm-json.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
-import { readChannelMemory, readChannelSession, rewriteChannelSession } from "./files.js";
 import { clipText } from "../shared/text-utils.js";
 import { buildStandardMessages, isRecord } from "../shared/type-guards.js";
 import { runSidecarTask, SidecarParseError } from "../sidecar-worker.js";
+import { readChannelMemory, readChannelSession, rewriteChannelSession } from "./files.js";
 
 const SESSION_TRANSCRIPT_MAX_CHARS = 20_000;
 const SESSION_MEMORY_MAX_CHARS = 4_000;

@@ -2,8 +2,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { parseJsonObject } from "../llm-json.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
 import { runSidecarTask } from "../sidecar-worker.js";
-import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
 import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./candidates.js";
+import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
 
 export interface RecallRequest {
 	query: string;
@@ -276,7 +276,10 @@ function detectQueryIntents(query: string): Set<QueryIntent> {
 	if (/\b(next|follow-?up|todo|plan)\b/i.test(query) || /(下一步|接下来|后续|怎么办|怎么做|该查什么)/u.test(query)) {
 		intents.add("next-steps");
 	}
-	if (/\b(constraint|requirement|guardrail|compatible|compatibility)\b/i.test(query) || /(约束|限制|要求|兼容|注意事项)/u.test(query)) {
+	if (
+		/\b(constraint|requirement|guardrail|compatible|compatibility)\b/i.test(query) ||
+		/(约束|限制|要求|兼容|注意事项)/u.test(query)
+	) {
 		intents.add("constraints");
 	}
 	if (/\b(decision|decided|why)\b/i.test(query) || /(决策|决定|方案|为什么)/u.test(query)) {
@@ -313,7 +316,12 @@ function compareScoredCandidates(a: ScoredCandidate, b: ScoredCandidate): number
 	);
 }
 
-function scoreCandidate(query: string, queryTokens: string[], intents: Set<QueryIntent>, candidate: MemoryCandidate): ScoredCandidate | null {
+function scoreCandidate(
+	query: string,
+	queryTokens: string[],
+	intents: Set<QueryIntent>,
+	candidate: MemoryCandidate,
+): ScoredCandidate | null {
 	const searchText = candidate.searchText ?? candidate.content;
 	const titleStats = computeTokenMatchStats(queryTokens, candidate.title);
 	const contentStats = computeTokenMatchStats(queryTokens, searchText);
@@ -371,14 +379,19 @@ function seedIntentCandidates(
 		);
 
 	for (const { candidate, intentBoost } of intentCandidates) {
-		const matchedTokens = collectMatchingQueryTokens(queryTokens, [candidate.title, candidate.searchText ?? candidate.content]);
+		const matchedTokens = collectMatchingQueryTokens(queryTokens, [
+			candidate.title,
+			candidate.searchText ?? candidate.content,
+		]);
 		if (matchedTokens.size === 0) {
 			continue;
 		}
 
 		seeded.push({
 			candidate,
-			score: (intentBoost + matchedTokens.size * 8) * (1 + (candidate.priority + computeRecencyBoost(candidate.timestamp)) / 100),
+			score:
+				(intentBoost + matchedTokens.size * 8) *
+				(1 + (candidate.priority + computeRecencyBoost(candidate.timestamp)) / 100),
 			lexicalMatchCount: matchedTokens.size,
 			intentBoost,
 		});

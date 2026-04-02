@@ -181,7 +181,7 @@ describe("MemoryLifecycle", () => {
 		lifecycle.noteCompletedAssistantTurn();
 		await Promise.resolve();
 		await new Promise((resolve) => setTimeout(resolve, 0));
-			expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
+		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
 	});
 
 	it("serializes a forced compaction refresh behind an in-flight threshold refresh", async () => {

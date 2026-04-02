@@ -108,10 +108,8 @@ export class MemoryLifecycle {
 			}
 			if (
 				canTriggerThresholdRefresh &&
-				(
-					this.turnsSinceSessionUpdate >= settings.minTurnsBetweenUpdate ||
-					this.toolCallsSinceSessionUpdate >= settings.minToolCallsBetweenUpdate
-				)
+				(this.turnsSinceSessionUpdate >= settings.minTurnsBetweenUpdate ||
+					this.toolCallsSinceSessionUpdate >= settings.minToolCallsBetweenUpdate)
 			) {
 				this.requestThresholdSessionRefresh();
 			}
@@ -128,7 +126,10 @@ export class MemoryLifecycle {
 		this.idleConsolidationTimer = null;
 	}
 
-	private shouldForceRefreshFor(reason: Exclude<ConsolidationReason, "idle">, settings: PipiclawSessionMemorySettings): boolean {
+	private shouldForceRefreshFor(
+		reason: Exclude<ConsolidationReason, "idle">,
+		settings: PipiclawSessionMemorySettings,
+	): boolean {
 		if (!settings.enabled) {
 			return false;
 		}
@@ -235,9 +236,7 @@ export class MemoryLifecycle {
 			this.enqueueBackgroundJob(async () => {
 				try {
 					log.logInfo(`[${this.options.channelId}] Memory consolidation starting (idle)`);
-					const result = await runInlineConsolidation(
-						this.buildRunOptions(messageSnapshot, sessionEntrySnapshot),
-					);
+					const result = await runInlineConsolidation(this.buildRunOptions(messageSnapshot, sessionEntrySnapshot));
 					this.markDurableConsolidationCheckpoint(revisionSnapshot);
 					this.logConsolidationResult("idle", result);
 					const maintenance = await runBackgroundMaintenance(

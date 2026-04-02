@@ -17,23 +17,6 @@ export {
 	type PipiclawSettings,
 	PipiclawSettingsManager,
 } from "./context.js";
-export { createDingTalkContext } from "./runtime/delivery.js";
-export {
-	type BusyMessageMode,
-	DingTalkBot,
-	type DingTalkConfig,
-	type DingTalkContext,
-	type DingTalkEvent,
-	type DingTalkHandler,
-} from "./runtime/dingtalk.js";
-export {
-	createEventsWatcher,
-	EventsWatcher,
-	type ImmediateEvent,
-	type OneShotEvent,
-	type PeriodicEvent,
-	type ScheduledEvent,
-} from "./runtime/events.js";
 export {
 	type BuildMemoryCandidatesOptions,
 	buildMemoryCandidates,
@@ -61,6 +44,12 @@ export {
 	recallRelevantMemory,
 } from "./memory/recall.js";
 export {
+	renderSessionMemory,
+	type SessionMemoryState,
+	type SessionMemoryUpdateOptions,
+	updateChannelSessionMemory,
+} from "./memory/session.js";
+export {
 	findExactModelReferenceMatch,
 	formatModelList,
 	formatModelReference,
@@ -78,6 +67,24 @@ export {
 	WORKSPACE_DIR,
 } from "./paths.js";
 export { type AppendSystemPromptOptions, buildAppendSystemPrompt } from "./prompt-builder.js";
+export { createDingTalkContext } from "./runtime/delivery.js";
+export {
+	type BusyMessageMode,
+	DingTalkBot,
+	type DingTalkConfig,
+	type DingTalkContext,
+	type DingTalkEvent,
+	type DingTalkHandler,
+} from "./runtime/dingtalk.js";
+export {
+	createEventsWatcher,
+	EventsWatcher,
+	type ImmediateEvent,
+	type OneShotEvent,
+	type PeriodicEvent,
+	type ScheduledEvent,
+} from "./runtime/events.js";
+export { ChannelStore, type LoggedMessage, type LoggedSubAgentRun } from "./runtime/store.js";
 export {
 	createExecutor,
 	type ExecOptions,
@@ -88,17 +95,10 @@ export {
 	validateSandbox,
 } from "./sandbox.js";
 export {
-	renderSessionMemory,
-	type SessionMemoryState,
-	type SessionMemoryUpdateOptions,
-	updateChannelSessionMemory,
-} from "./memory/session.js";
-export {
 	runSidecarTask,
 	type SidecarResult,
 	type SidecarTask,
 } from "./sidecar-worker.js";
-export { ChannelStore, type LoggedMessage, type LoggedSubAgentRun } from "./runtime/store.js";
 export {
 	discoverSubAgents,
 	formatSubAgentList,
@@ -113,12 +113,12 @@ export {
 	type SubAgentToolName,
 } from "./subagents/discovery.js";
 export {
-	type CreatePipiclawToolsOptions,
-	createPipiclawBaseTools,
-	createPipiclawTools,
-} from "./tools/index.js";
-export {
 	createSubAgentTool,
 	type SubAgentToolDetails,
 	type SubAgentToolOptions,
 } from "./subagents/tool.js";
+export {
+	type CreatePipiclawToolsOptions,
+	createPipiclawBaseTools,
+	createPipiclawTools,
+} from "./tools/index.js";

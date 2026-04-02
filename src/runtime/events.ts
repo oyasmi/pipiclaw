@@ -2,8 +2,8 @@ import { Cron } from "croner";
 import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, unlinkSync, watch } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
-import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 import * as log from "../log.js";
+import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 
 // ============================================================================
 // Event Types

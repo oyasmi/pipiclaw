@@ -7,6 +7,10 @@ import {
 	serializeConversation,
 } from "@mariozechner/pi-coding-agent";
 import { parseJsonObject } from "../llm-json.js";
+import { splitH2Sections } from "../shared/markdown-sections.js";
+import { clipText } from "../shared/text-utils.js";
+import { buildStandardMessages } from "../shared/type-guards.js";
+import { runSidecarTask } from "../sidecar-worker.js";
 import {
 	appendChannelHistoryBlock,
 	appendChannelMemoryUpdate,
@@ -16,10 +20,6 @@ import {
 	rewriteChannelHistory,
 	rewriteChannelMemory,
 } from "./files.js";
-import { splitH2Sections } from "../shared/markdown-sections.js";
-import { clipText } from "../shared/text-utils.js";
-import { buildStandardMessages } from "../shared/type-guards.js";
-import { runSidecarTask } from "../sidecar-worker.js";
 
 const INLINE_TRANSCRIPT_MAX_CHARS = 28_000;
 const MEMORY_CLEANUP_LENGTH_THRESHOLD = 5_000;

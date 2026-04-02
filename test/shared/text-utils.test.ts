@@ -1,6 +1,12 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { clipText, extractAssistantText, extractLabelFromArgs, HAN_REGEX, truncate } from "../../src/shared/text-utils.js";
+import {
+	clipText,
+	extractAssistantText,
+	extractLabelFromArgs,
+	HAN_REGEX,
+	truncate,
+} from "../../src/shared/text-utils.js";
 
 function createAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
 	return {

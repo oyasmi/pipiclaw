@@ -3,14 +3,18 @@ import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { PipiclawMemoryRecallSettings } from "../context.js";
-import { splitH1Sections } from "../shared/markdown-sections.js";
 import { createMemoryCandidateCache } from "../memory/candidates.js";
 import { readChannelSession } from "../memory/files.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import { formatModelReference } from "../model-utils.js";
 import type { Executor } from "../sandbox.js";
+import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText, extractAssistantText, extractLabelFromArgs, HAN_REGEX } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
+import { createBashTool } from "../tools/bash.js";
+import { createEditTool } from "../tools/edit.js";
+import { createReadTool } from "../tools/read.js";
+import { createWriteTool } from "../tools/write.js";
 import {
 	formatSubAgentList,
 	type ResolvedSubAgentConfig,
@@ -19,10 +23,6 @@ import {
 	type SubAgentDiscoveryResult,
 	validateSubAgentTask,
 } from "./discovery.js";
-import { createBashTool } from "../tools/bash.js";
-import { createEditTool } from "../tools/edit.js";
-import { createReadTool } from "../tools/read.js";
-import { createWriteTool } from "../tools/write.js";
 
 const subagentSchema = Type.Object({
 	label: Type.String({ description: "Brief description of what this sub-agent task does (shown to user)" }),

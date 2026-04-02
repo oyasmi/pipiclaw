@@ -6,8 +6,8 @@ import {
 	convertToLlm,
 	DefaultResourceLoader,
 	ModelRegistry,
-	SessionManager,
 	type SettingsManager as SDKSettingsManager,
+	SessionManager,
 	type Skill,
 } from "@mariozechner/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "fs/promises";
@@ -16,21 +16,20 @@ import { createCommandExtension } from "../command-extension.js";
 import { type BuiltInCommand, renderBuiltInHelp } from "../commands.js";
 import { getAgentConfig, getApiKeyForModel, getSoul, loadPipiclawSkills } from "../config-loader.js";
 import { PipiclawSettingsManager } from "../context.js";
-import type { DingTalkContext } from "../runtime/dingtalk.js";
 import * as log from "../log.js";
-import { createMemoryCandidateCache } from "../memory/candidates.js";
 import { buildFirstTurnMemoryBootstrap as renderFirstTurnMemoryBootstrap } from "../memory/bootstrap.js";
+import { createMemoryCandidateCache } from "../memory/candidates.js";
+import { getChannelMemoryPath } from "../memory/files.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import { recallRelevantMemory } from "../memory/recall.js";
-import { getChannelMemoryPath } from "../memory/files.js";
 import { resolveInitialModel } from "../model-utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
 import { buildAppendSystemPrompt } from "../prompt-builder.js";
-import { createExecutor, type SandboxConfig } from "../sandbox.js";
-import { extractLabelFromArgs, HAN_REGEX, truncate } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
-import type { UsageTotals } from "../shared/types.js";
+import type { DingTalkContext } from "../runtime/dingtalk.js";
 import type { ChannelStore } from "../runtime/store.js";
+import { createExecutor, type SandboxConfig } from "../sandbox.js";
+import { HAN_REGEX } from "../shared/text-utils.js";
+import { isRecord } from "../shared/type-guards.js";
 import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { createPipiclawTools } from "../tools/index.js";
 import { clipUserInput } from "./progress-formatter.js";
@@ -38,10 +37,10 @@ import { createRunQueue } from "./run-queue.js";
 import { handleSessionEvent } from "./session-events.js";
 import { getLastAssistantUsage } from "./type-guards.js";
 import {
-	createEmptyRunState,
-	MAX_USER_MESSAGE_CHARS,
 	type AgentRunner,
+	createEmptyRunState,
 	type FinalOutcome,
+	MAX_USER_MESSAGE_CHARS,
 	type RunState,
 } from "./types.js";
 
@@ -160,10 +159,10 @@ export class ChannelRunner implements AgentRunner {
 			getSessionMemorySettings: () => this.settingsManager.getSessionMemorySettings(),
 		});
 
-			const resourceLoader = new DefaultResourceLoader({
-				cwd: process.cwd(),
-				agentDir: APP_HOME_DIR,
-				settingsManager: asSdkSettingsManager(this.settingsManager),
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: process.cwd(),
+			agentDir: APP_HOME_DIR,
+			settingsManager: asSdkSettingsManager(this.settingsManager),
 			extensionFactories: [
 				this.memoryLifecycle.createExtensionFactory(),
 				createCommandExtension({
@@ -211,10 +210,10 @@ export class ChannelRunner implements AgentRunner {
 		const baseToolsOverride = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
 
 		// Create AgentSession
-			this.session = new AgentSession({
-				agent: this.agent,
-				sessionManager: this.sessionManager,
-				settingsManager: asSdkSettingsManager(this.settingsManager),
+		this.session = new AgentSession({
+			agent: this.agent,
+			sessionManager: this.sessionManager,
+			settingsManager: asSdkSettingsManager(this.settingsManager),
 			cwd: process.cwd(),
 			modelRegistry: this.modelRegistry,
 			resourceLoader,

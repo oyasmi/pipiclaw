@@ -2,7 +2,6 @@ import { mkdtempSync, readFileSync, rmSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { splitH2Sections } from "../src/shared/markdown-sections.js";
 import {
 	appendChannelHistoryBlock,
 	appendChannelMemoryUpdate,
@@ -14,6 +13,7 @@ import {
 	rewriteChannelMemory,
 	rewriteChannelSession,
 } from "../src/memory/files.js";
+import { splitH2Sections } from "../src/shared/markdown-sections.js";
 
 const tempDirs: string[] = [];
 

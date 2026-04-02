@@ -3,10 +3,10 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { PipiclawMemoryRecallSettings } from "../context.js";
 import type { Executor, SandboxConfig } from "../sandbox.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { createSubAgentTool } from "../subagents/tool.js";
 import { createBashTool } from "./bash.js";
 import { createEditTool } from "./edit.js";
 import { createReadTool } from "./read.js";
-import { createSubAgentTool } from "../subagents/tool.js";
 import { createWriteTool } from "./write.js";
 
 export interface CreatePipiclawToolsOptions {

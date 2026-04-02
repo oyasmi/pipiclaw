@@ -2,15 +2,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { type AgentRunner, getOrCreateRunner } from "../agent.js";
 import { parseBuiltInCommand } from "../commands.js";
-import { createDingTalkContext } from "./delivery.js";
-import {
-	type BusyMessageMode,
-	DingTalkBot,
-	type DingTalkConfig,
-	type DingTalkEvent,
-	type DingTalkHandler,
-} from "./dingtalk.js";
-import { createEventsWatcher } from "./events.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import {
@@ -23,6 +14,15 @@ import {
 	WORKSPACE_DIR,
 } from "../paths.js";
 import { parseSandboxArg, type SandboxConfig, validateSandbox } from "../sandbox.js";
+import { createDingTalkContext } from "./delivery.js";
+import {
+	type BusyMessageMode,
+	DingTalkBot,
+	type DingTalkConfig,
+	type DingTalkEvent,
+	type DingTalkHandler,
+} from "./dingtalk.js";
+import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
 
 export interface BootstrapPaths {
@@ -281,10 +281,7 @@ export function printBootstrapSummary(
 	io.log("");
 }
 
-export function loadConfig(
-	paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS,
-	io: BootstrapIO = console,
-): DingTalkConfig {
+export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: BootstrapIO = console): DingTalkConfig {
 	let parsed: DingTalkConfig;
 
 	try {

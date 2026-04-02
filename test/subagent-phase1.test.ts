@@ -4,8 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Executor } from "../src/sandbox.js";
 import { ChannelStore } from "../src/runtime/store.js";
+import type { Executor } from "../src/sandbox.js";
 import { discoverSubAgents, getSubAgentsDir, resolveSubAgentConfig } from "../src/subagents/discovery.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
 
@@ -401,7 +401,9 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 		expect(delegatedTask).toContain("Find regressions before the changes ship.");
 		expect(delegatedTask).toContain("Relevant context for this turn:");
 		expect(delegatedTask).toContain("Keep the fallback branch in src/core.ts explicit.");
-		expect(delegatedTask).toContain("Earlier review found missing regression coverage around src/core.ts fallback behavior.");
+		expect(delegatedTask).toContain(
+			"Earlier review found missing regression coverage around src/core.ts fallback behavior.",
+		);
 	});
 });
 

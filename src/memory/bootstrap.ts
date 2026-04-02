@@ -54,7 +54,9 @@ export function buildFirstTurnMemoryBootstrap(options: FirstTurnMemoryBootstrapO
 
 	if (workspaceMemory) {
 		sections.push("", "[Workspace MEMORY.md]");
-		sections.push(workspaceBudget > 0 ? clipText(workspaceMemory, workspaceBudget, { headRatio: 1 }) : workspaceMemory);
+		sections.push(
+			workspaceBudget > 0 ? clipText(workspaceMemory, workspaceBudget, { headRatio: 1 }) : workspaceMemory,
+		);
 	}
 
 	sections.push("</durable_memory_snapshot>");

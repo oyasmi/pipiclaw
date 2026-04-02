@@ -1,5 +1,5 @@
-import type { DingTalkContext } from "../runtime/dingtalk.js";
 import * as log from "../log.js";
+import type { DingTalkContext } from "../runtime/dingtalk.js";
 import type { RunQueue } from "./types.js";
 
 export interface CreatedRunQueue {

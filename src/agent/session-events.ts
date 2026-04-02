@@ -1,10 +1,10 @@
-import type { DingTalkContext } from "../runtime/dingtalk.js";
 import * as log from "../log.js";
-import { MemoryLifecycle } from "../memory/lifecycle.js";
+import type { MemoryLifecycle } from "../memory/lifecycle.js";
+import type { DingTalkContext } from "../runtime/dingtalk.js";
+import type { ChannelStore } from "../runtime/store.js";
 import { extractLabelFromArgs, truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
-import type { ChannelStore } from "../runtime/store.js";
 import type { SubAgentToolDetails } from "../subagents/tool.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
 import {
@@ -48,20 +48,24 @@ function mergeSubAgentUsage(totalUsage: UsageTotals, details: SubAgentToolDetail
 	totalUsage.cost.total += details.usage.cost.total;
 }
 
-function mergeAssistantUsage(runState: RunState, usage: NonNullable<Extract<unknown, unknown>> & {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	total?: number;
-	totalTokens?: number;
-	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-}): void {
+function mergeAssistantUsage(
+	runState: RunState,
+	usage: NonNullable<Extract<unknown, unknown>> & {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total?: number;
+		totalTokens?: number;
+		cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+	},
+): void {
 	runState.totalUsage.input += usage.input;
 	runState.totalUsage.output += usage.output;
 	runState.totalUsage.cacheRead += usage.cacheRead;
 	runState.totalUsage.cacheWrite += usage.cacheWrite;
-	runState.totalUsage.total += usage.total ?? usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+	runState.totalUsage.total +=
+		usage.total ?? usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 	runState.totalUsage.cost.input += usage.cost.input;
 	runState.totalUsage.cost.output += usage.cost.output;
 	runState.totalUsage.cost.cacheRead += usage.cost.cacheRead;
@@ -265,7 +269,10 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 	if (isAutoCompactionStartEvent(event)) {
 		log.logInfo(`Auto-compaction started (reason: ${event.reason})`);
-		queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", "Compacting context..."), false), "compaction start");
+		queue.enqueue(
+			() => ctx.respond(formatProgressEntry("assistant", "Compacting context..."), false),
+			"compaction start",
+		);
 		return;
 	}
 
@@ -281,7 +288,8 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	if (isAutoRetryStartEvent(event)) {
 		log.logWarning(`Retrying (${event.attempt}/${event.maxAttempts})`, event.errorMessage);
 		queue.enqueue(
-			() => ctx.respond(formatProgressEntry("assistant", `Retrying (${event.attempt}/${event.maxAttempts})...`), false),
+			() =>
+				ctx.respond(formatProgressEntry("assistant", `Retrying (${event.attempt}/${event.maxAttempts})...`), false),
 			"retry",
 		);
 	}

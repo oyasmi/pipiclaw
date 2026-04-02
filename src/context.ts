@@ -7,9 +7,9 @@
  * This module currently provides only PipiclawSettingsManager.
  */
 
+import type { Transport } from "@mariozechner/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import type { Transport } from "@mariozechner/pi-ai";
 
 type PackageSource =
 	| string

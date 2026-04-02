@@ -176,7 +176,9 @@ describe("memory-lifecycle integration", () => {
 		vi.useRealTimers();
 
 		await waitForAssertion(async () => {
-			expect(await readChannelMemory(channelDir)).toContain("Callback verification must remain backwards-compatible");
+			expect(await readChannelMemory(channelDir)).toContain(
+				"Callback verification must remain backwards-compatible",
+			);
 			expect(await readChannelHistory(channelDir)).toContain("Investigated callback verification flow.");
 		});
 	});
