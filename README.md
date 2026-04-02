@@ -41,6 +41,81 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 npm install -g @oyasmi/pipiclaw
 ```
 
+### 或者让 AI Agent 帮你安装（Ask an AI Agent to Install It）
+
+如果你更习惯让 AI Agent 直接帮你完成安装和初始化，可以把下面整段文字复制给它：
+
+```text
+请帮我在这台机器上安装并初始化 Pipiclaw，并尽量把它配置到“可以开始使用”的状态。按下面要求执行：
+
+1. 先检查 Node.js 是否可用，版本必须 >= 22。
+   - 如果未安装，或版本低于 22，不要继续安装 Pipiclaw，直接告诉我需要先安装或切换到 Node.js 22+。
+
+2. 安装 Pipiclaw：
+   - 优先执行：npm install -g @oyasmi/pipiclaw
+   - 如果全局安装因为权限失败，不要默认使用 sudo。
+   - 先把报错告诉我，再询问我希望怎么处理。
+
+3. 安装完成后，执行一次 pipiclaw，让它初始化默认目录：
+   - ~/.pi/pipiclaw/
+   - ~/.pi/pipiclaw/workspace/
+
+4. 继续帮我完成基础配置，但先逐项询问我是否愿意现在提供这些信息：
+   - 钉钉应用的 clientId
+   - 钉钉应用的 clientSecret
+   - AI Card 的 cardTemplateId
+   - 模型接入方式：Anthropic，或自定义 provider
+
+5. 关于钉钉配置：
+   - AI Card 是推荐配置，不是可有可无的装饰。正常使用时建议配上。
+   - 如果我愿意提供 clientId、clientSecret、cardTemplateId，就直接帮我写入 ~/.pi/pipiclaw/channel.json
+   - robotCode 可以先留空
+   - allowFrom 可以先设为 []
+   - 如果我暂时不提供 cardTemplateId，也可以先留空，但最后要明确提醒我后续补上
+   - 不要把 any your-* placeholder 保留在最终文件里
+
+6. 关于模型配置：
+   - 先问我使用哪种方式：
+     - Anthropic 默认模型
+     - 自定义 provider
+   - 如果我选择 Anthropic，再询问我是否愿意现在提供 ANTHROPIC_API_KEY
+     - 如果我提供，就按我当前环境和你的能力，帮我配置到可用
+     - 如果我不提供，就不要编造值；保留默认空 models.json，并在最后告诉我需要自己补 ~/.pi/pipiclaw/auth.json 或环境变量
+   - 如果我选择自定义 provider，至少询问这些信息：
+     - provider 名称
+     - baseUrl
+     - api 类型
+     - apiKey
+     - 至少一个 model id
+   - 如果我提供了这些值，就帮我写好 ~/.pi/pipiclaw/models.json
+   - 如果我不提供，就不要编造值；最后明确告诉我需要自己补 ~/.pi/pipiclaw/models.json
+   - 如果服务是 OpenAI-compatible，优先使用 openai-completions，并默认加上 compat：
+     - supportsDeveloperRole: false
+     - supportsReasoningEffort: false
+
+7. 配置完成后，分两种情况处理：
+   - 如果还缺关键配置，就不要假装已经可用：
+     - 明确列出还缺什么
+     - 明确指出应该修改哪个文件
+     - 提醒我补完后再运行 pipiclaw
+   - 如果关键参数已经齐全，不要只告诉我如何启动；先询问我是否需要你现在直接帮我启动 Pipiclaw
+     - 如果我同意，你就直接启动 pipiclaw
+     - 启动后要检查输出，告诉我是启动成功，还是遇到了问题
+     - 如果遇到问题，要把问题类型、关键信息和下一步解决建议说清楚
+     - 如果启动成功，要提醒我去钉钉里先发送 /model 验证模型是否可见，再发送一条普通消息做首次验证
+     - 如果我不同意立即启动，就告诉我后续该如何手动启动
+
+8. 如果我选择“先安装，稍后自己改配置”，你就完成安装和初始化即可，但最后必须明确告诉我下一步至少要改这些文件中的哪些：
+   - ~/.pi/pipiclaw/channel.json
+   - ~/.pi/pipiclaw/auth.json
+   - ~/.pi/pipiclaw/models.json
+   - ~/.pi/pipiclaw/settings.json（如果需要固定默认模型）
+
+9. 整个过程中不要假装已经成功。
+   - 做过的操作和写过的文件要明确告诉我
+   - 如果某一步无法继续，要直接说明卡在哪里
+```
+
 ### 3. 初始化（Initialize）
 
 第一次运行会自动初始化配置目录：
