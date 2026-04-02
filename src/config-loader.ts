@@ -91,6 +91,6 @@ export async function getApiKeyForModel(modelRegistry: ModelRegistry, model: Mod
 	if (envKey) return envKey;
 	throw new Error(
 		`No API key found for provider: ${model.provider}.\n\n` +
-			"Configure API key in ~/.pi/agent/models.json or set ANTHROPIC_API_KEY environment variable.",
+			"Configure credentials in ~/.pi/pipiclaw/auth.json or ~/.pi/pipiclaw/models.json, or set the matching provider environment variable.",
 	);
 }
