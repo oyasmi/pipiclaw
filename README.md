@@ -1,6 +1,6 @@
 # Pipiclaw
 
-Pipiclaw 是一个 AI 助手运行时（AI assistant runtime），基于 [`@mariozechner/pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent) 构建，补齐了将 AI 助手作为工作助手长期使用时最需要的几层能力：钉钉接入、AI Card 过程展示、子代理、分层记忆、定时事件，以及按会话通道持久化的工作区（workspace）。
+Pipiclaw 是一个 AI 助手运行时（AI assistant runtime），以 [`pi-coding-agent`](https://www.npmjs.com/package/@mariozechner/pi-coding-agent) 作为核心，补齐了作为工作助手长期使用时最需要的几层能力：钉钉接入、AI Card 过程展示、子代理、分层记忆、定时事件，以及按会话通道持久化的工作区（workspace）。
 
 如果你希望 AI 助手不只是聊天，而是能在钉钉里持续工作、保留上下文、执行任务，并且实时告知你它正在做什么，那么 Pipiclaw 就是你需要的。
 
