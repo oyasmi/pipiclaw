@@ -9,13 +9,13 @@ export {
 	parseBuiltInCommand,
 	renderBuiltInHelp,
 } from "./agent/commands.js";
+export { type AgentRunner, getOrCreateRunner } from "./agent/index.js";
 export { type AppendSystemPromptOptions, buildAppendSystemPrompt } from "./agent/prompt-builder.js";
 export {
 	getAgentConfig,
 	getSoul,
 	loadPipiclawSkills,
 } from "./agent/workspace-resources.js";
-export { type AgentRunner, getOrCreateRunner } from "./agent/index.js";
 export {
 	type BuildMemoryCandidatesOptions,
 	buildMemoryCandidates,
