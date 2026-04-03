@@ -8,7 +8,7 @@ import type {
 	SessionStats,
 } from "@mariozechner/pi-coding-agent";
 import { basename } from "path";
-import { findExactModelReferenceMatch, formatModelList, formatModelReference } from "./model-utils.js";
+import { findExactModelReferenceMatch, formatModelList, formatModelReference } from "../models/utils.js";
 
 export const COMMAND_RESULT_CUSTOM_TYPE = "pipiclaw.command_result";
 

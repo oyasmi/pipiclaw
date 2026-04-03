@@ -8,8 +8,8 @@ import type {
 	SessionEntry,
 	SessionSwitchEvent,
 } from "@mariozechner/pi-coding-agent";
-import type { PipiclawSessionMemorySettings } from "../context.js";
 import * as log from "../log.js";
+import type { PipiclawSessionMemorySettings } from "../settings.js";
 import {
 	type BackgroundMaintenanceResult,
 	type ConsolidationRunOptions,

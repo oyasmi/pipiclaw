@@ -1,7 +1,7 @@
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
-import { extractAssistantText } from "./shared/text-utils.js";
+import { extractAssistantText } from "../shared/text-utils.js";
 
 export interface SidecarTask<T> {
 	name: string;

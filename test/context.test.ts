@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PipiclawSettingsManager } from "../src/context.js";
+import { PipiclawSettingsManager } from "../src/settings.js";
 
 const tempDirs: string[] = [];
 

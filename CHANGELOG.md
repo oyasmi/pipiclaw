@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-04-03
+
+### Changed
+
+- Reorganized `src/` around the existing domain boundaries, moving agent, memory, model, and settings code into their respective modules
+- Removed the root-level `src/agent.ts` compatibility shim and updated imports to reference `src/agent/` directly
+- Upgraded GitHub Actions workflows to newer `actions/checkout` and `actions/setup-node` releases, and switched release publishing to `gh release create`
+
 ## [0.5.3] - 2026-04-03
 
 ### Added

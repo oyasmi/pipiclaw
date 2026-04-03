@@ -14,7 +14,8 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
 	loadSkillsFromDir: loadSkillsFromDirMock,
 }));
 
-import { getAgentConfig, getApiKeyForModel, getSoul, loadPipiclawSkills } from "../src/config-loader.js";
+import { getAgentConfig, getSoul, loadPipiclawSkills } from "../src/agent/workspace-resources.js";
+import { getApiKeyForModel } from "../src/models/api-keys.js";
 
 const anthropicModel = getModel("anthropic", "claude-sonnet-4-5");
 

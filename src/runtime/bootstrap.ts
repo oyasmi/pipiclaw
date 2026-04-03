@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { type AgentRunner, getOrCreateRunner } from "../agent.js";
-import { parseBuiltInCommand } from "../commands.js";
+import { parseBuiltInCommand } from "../agent/commands.js";
+import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import {

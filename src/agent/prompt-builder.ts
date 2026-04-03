@@ -1,4 +1,4 @@
-import type { SandboxConfig } from "./sandbox.js";
+import type { SandboxConfig } from "../sandbox.js";
 
 export interface AppendSystemPromptOptions {
 	subAgentList?: string;

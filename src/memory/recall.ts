@@ -1,9 +1,9 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
-import { runSidecarTask } from "../sidecar-worker.js";
 import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./candidates.js";
 import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
+import { runSidecarTask } from "./sidecar-worker.js";
 
 export interface RecallRequest {
 	query: string;

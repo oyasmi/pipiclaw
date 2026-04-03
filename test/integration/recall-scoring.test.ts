@@ -2,12 +2,12 @@ import { rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/sidecar-worker.js", () => ({
+vi.mock("../../src/memory/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
 }));
 
 import { recallRelevantMemory } from "../../src/memory/recall.js";
-import { runSidecarTask } from "../../src/sidecar-worker.js";
+import { runSidecarTask } from "../../src/memory/sidecar-worker.js";
 import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
 
 const tempDirs: string[] = [];

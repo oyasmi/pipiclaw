@@ -1,22 +1,21 @@
-export { type AgentRunner, getOrCreateRunner } from "./agent.js";
 export {
 	COMMAND_RESULT_CUSTOM_TYPE,
 	createCommandExtension,
 	type PipiclawCommandExtensionOptions,
-} from "./command-extension.js";
-export { type BuiltInCommand, type BuiltInCommandName, parseBuiltInCommand, renderBuiltInHelp } from "./commands.js";
+} from "./agent/command-extension.js";
+export {
+	type BuiltInCommand,
+	type BuiltInCommandName,
+	parseBuiltInCommand,
+	renderBuiltInHelp,
+} from "./agent/commands.js";
+export { type AppendSystemPromptOptions, buildAppendSystemPrompt } from "./agent/prompt-builder.js";
 export {
 	getAgentConfig,
-	getApiKeyForModel,
 	getSoul,
 	loadPipiclawSkills,
-} from "./config-loader.js";
-export {
-	type PipiclawMemoryRecallSettings,
-	type PipiclawSessionMemorySettings,
-	type PipiclawSettings,
-	PipiclawSettingsManager,
-} from "./context.js";
+} from "./agent/workspace-resources.js";
+export { type AgentRunner, getOrCreateRunner } from "./agent/index.js";
 export {
 	type BuildMemoryCandidatesOptions,
 	buildMemoryCandidates,
@@ -50,11 +49,17 @@ export {
 	updateChannelSessionMemory,
 } from "./memory/session.js";
 export {
+	runSidecarTask,
+	type SidecarResult,
+	type SidecarTask,
+} from "./memory/sidecar-worker.js";
+export { getApiKeyForModel } from "./models/api-keys.js";
+export {
 	findExactModelReferenceMatch,
 	formatModelList,
 	formatModelReference,
 	resolveInitialModel,
-} from "./model-utils.js";
+} from "./models/utils.js";
 export {
 	APP_HOME_DIR,
 	APP_NAME,
@@ -66,7 +71,6 @@ export {
 	SUB_AGENTS_DIR_NAME,
 	WORKSPACE_DIR,
 } from "./paths.js";
-export { type AppendSystemPromptOptions, buildAppendSystemPrompt } from "./prompt-builder.js";
 export { createDingTalkContext } from "./runtime/delivery.js";
 export {
 	type BusyMessageMode,
@@ -95,10 +99,11 @@ export {
 	validateSandbox,
 } from "./sandbox.js";
 export {
-	runSidecarTask,
-	type SidecarResult,
-	type SidecarTask,
-} from "./sidecar-worker.js";
+	type PipiclawMemoryRecallSettings,
+	type PipiclawSessionMemorySettings,
+	type PipiclawSettings,
+	PipiclawSettingsManager,
+} from "./settings.js";
 export {
 	discoverSubAgents,
 	formatSubAgentList,

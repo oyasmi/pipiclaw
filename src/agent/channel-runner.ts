@@ -12,27 +12,27 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
-import { createCommandExtension } from "../command-extension.js";
-import { type BuiltInCommand, renderBuiltInHelp } from "../commands.js";
-import { getAgentConfig, getApiKeyForModel, getSoul, loadPipiclawSkills } from "../config-loader.js";
-import { PipiclawSettingsManager } from "../context.js";
 import * as log from "../log.js";
 import { buildFirstTurnMemoryBootstrap as renderFirstTurnMemoryBootstrap } from "../memory/bootstrap.js";
 import { createMemoryCandidateCache } from "../memory/candidates.js";
 import { getChannelMemoryPath } from "../memory/files.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import { recallRelevantMemory } from "../memory/recall.js";
-import { resolveInitialModel } from "../model-utils.js";
+import { getApiKeyForModel } from "../models/api-keys.js";
+import { resolveInitialModel } from "../models/utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
-import { buildAppendSystemPrompt } from "../prompt-builder.js";
 import type { DingTalkContext } from "../runtime/dingtalk.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { createExecutor, type SandboxConfig } from "../sandbox.js";
+import { PipiclawSettingsManager } from "../settings.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { createPipiclawTools } from "../tools/index.js";
+import { createCommandExtension } from "./command-extension.js";
+import { type BuiltInCommand, renderBuiltInHelp } from "./commands.js";
 import { clipUserInput } from "./progress-formatter.js";
+import { buildAppendSystemPrompt } from "./prompt-builder.js";
 import { createRunQueue } from "./run-queue.js";
 import { handleSessionEvent } from "./session-events.js";
 import { SessionResourceGate } from "./session-resource-gate.js";
@@ -44,6 +44,7 @@ import {
 	MAX_USER_MESSAGE_CHARS,
 	type RunState,
 } from "./types.js";
+import { getAgentConfig, getSoul, loadPipiclawSkills } from "./workspace-resources.js";
 
 type ModelRegistryClass = {
 	create?: (authStorage: AuthStorage, modelsJsonPath?: string) => ModelRegistry;

@@ -2,7 +2,7 @@ import { readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/sidecar-worker.js", () => ({
+vi.mock("../../src/memory/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
 	SidecarParseError: class SidecarParseError extends Error {
 		readonly taskName: string;
@@ -19,7 +19,7 @@ vi.mock("../../src/sidecar-worker.js", () => ({
 }));
 
 import { runBackgroundMaintenance, runInlineConsolidation } from "../../src/memory/consolidation.js";
-import { runSidecarTask } from "../../src/sidecar-worker.js";
+import { runSidecarTask } from "../../src/memory/sidecar-worker.js";
 import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
 
 const tempDirs: string[] = [];

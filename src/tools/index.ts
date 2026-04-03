@@ -1,7 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { PipiclawMemoryRecallSettings } from "../context.js";
 import type { Executor, SandboxConfig } from "../sandbox.js";
+import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { createSubAgentTool } from "../subagents/tool.js";
 import { createBashTool } from "./bash.js";

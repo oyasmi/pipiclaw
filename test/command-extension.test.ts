@@ -1,6 +1,6 @@
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
-import { COMMAND_RESULT_CUSTOM_TYPE, createCommandExtension } from "../src/command-extension.js";
+import { COMMAND_RESULT_CUSTOM_TYPE, createCommandExtension } from "../src/agent/command-extension.js";
 import { FakeExtensionAPI } from "./helpers/fake-extension-api.js";
 
 function createOptions() {

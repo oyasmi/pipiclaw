@@ -1,6 +1,6 @@
 import { type Api, getModel, type Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type { PipiclawSettingsManager } from "./context.js";
+import type { PipiclawSettingsManager } from "../settings.js";
 
 // Default model - will be overridden by ModelRegistry if custom models are configured
 const defaultModel = getModel("anthropic", "claude-sonnet-4-5");

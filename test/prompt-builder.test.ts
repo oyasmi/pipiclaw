@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAppendSystemPrompt } from "../src/prompt-builder.js";
+import { buildAppendSystemPrompt } from "../src/agent/prompt-builder.js";
 
 describe("prompt-builder", () => {
 	it("builds host runtime prompts with workspace and channel context", () => {

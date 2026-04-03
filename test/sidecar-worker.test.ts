@@ -22,7 +22,7 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
 	convertToLlm: vi.fn(),
 }));
 
-import { runSidecarTask, type SidecarParseError, SidecarTimeoutError } from "../src/sidecar-worker.js";
+import { runSidecarTask, type SidecarParseError, SidecarTimeoutError } from "../src/memory/sidecar-worker.js";
 
 afterEach(() => {
 	promptImpl = vi.fn<(input: string) => Promise<void>>(async () => {});

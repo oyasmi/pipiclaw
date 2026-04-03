@@ -1,5 +1,5 @@
 /**
- * Context management for pipiclaw.
+ * Settings management for pipiclaw.
  *
  * `log.jsonl` and `context.jsonl` are treated as raw cold storage.
  * They are not proactively scanned or loaded as part of the memory model.

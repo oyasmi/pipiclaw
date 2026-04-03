@@ -3,7 +3,7 @@ import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
 import type { Dirent } from "fs";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
-import { findExactModelReferenceMatch, formatModelReference } from "../model-utils.js";
+import { findExactModelReferenceMatch, formatModelReference } from "../models/utils.js";
 import { SUB_AGENTS_DIR_NAME } from "../paths.js";
 
 const ALLOWED_SUB_AGENT_TOOLS = ["read", "bash", "edit", "write"] as const;

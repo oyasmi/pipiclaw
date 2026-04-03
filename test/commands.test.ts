@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseBuiltInCommand, renderBuiltInHelp } from "../src/commands.js";
+import { parseBuiltInCommand, renderBuiltInHelp } from "../src/agent/commands.js";
 
 describe("commands", () => {
 	it("parses built-in commands with trimmed arguments", () => {

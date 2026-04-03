@@ -11,7 +11,7 @@ import axios from "axios";
 import { DWClient, type DWClientDownStream, TOPIC_ROBOT } from "dingtalk-stream";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { parseBuiltInCommand, renderBuiltInHelp } from "../commands.js";
+import { parseBuiltInCommand, renderBuiltInHelp } from "../agent/commands.js";
 import * as log from "../log.js";
 import { isRecord } from "../shared/type-guards.js";
 

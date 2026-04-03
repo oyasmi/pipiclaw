@@ -2,12 +2,12 @@ import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mari
 import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import type { PipiclawMemoryRecallSettings } from "../context.js";
 import { createMemoryCandidateCache } from "../memory/candidates.js";
 import { readChannelSession } from "../memory/files.js";
 import { recallRelevantMemory } from "../memory/recall.js";
-import { formatModelReference } from "../model-utils.js";
+import { formatModelReference } from "../models/utils.js";
 import type { Executor } from "../sandbox.js";
+import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText, extractAssistantText, extractLabelFromArgs, HAN_REGEX } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";

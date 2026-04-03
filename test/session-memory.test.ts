@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/sidecar-worker.js", () => ({
+vi.mock("../src/memory/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
 	SidecarParseError: class SidecarParseError extends Error {
 		readonly taskName: string;
@@ -21,7 +21,7 @@ vi.mock("../src/sidecar-worker.js", () => ({
 
 import { readChannelSession } from "../src/memory/files.js";
 import { renderSessionMemory, updateChannelSessionMemory } from "../src/memory/session.js";
-import { runSidecarTask, SidecarParseError } from "../src/sidecar-worker.js";
+import { runSidecarTask, SidecarParseError } from "../src/memory/sidecar-worker.js";
 
 const tempDirs: string[] = [];
 

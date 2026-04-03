@@ -2,13 +2,13 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { getModel } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import type { PipiclawSettingsManager } from "../src/context.js";
 import {
 	findExactModelReferenceMatch,
 	formatModelList,
 	formatModelReference,
 	resolveInitialModel,
-} from "../src/model-utils.js";
+} from "../src/models/utils.js";
+import type { PipiclawSettingsManager } from "../src/settings.js";
 
 const anthropicModel = getModel("anthropic", "claude-sonnet-4-5");
 const openaiModel = getModel("openai", "gpt-4o-mini");
