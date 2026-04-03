@@ -34,8 +34,8 @@ import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } f
 import { createPipiclawTools } from "../tools/index.js";
 import { clipUserInput } from "./progress-formatter.js";
 import { createRunQueue } from "./run-queue.js";
-import { SessionResourceGate } from "./session-resource-gate.js";
 import { handleSessionEvent } from "./session-events.js";
+import { SessionResourceGate } from "./session-resource-gate.js";
 import { getLastAssistantUsage } from "./type-guards.js";
 import {
 	type AgentRunner,

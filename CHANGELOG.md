@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-04-03
+
+### Added
+
+- User-facing configuration guide for DingTalk, models/providers, settings, and workspace files
+- Dedicated guide for scheduled events and predefined sub-agents
+- Dedicated deployment and operations guide covering long-running setup, logs, upgrades, and backups
+- README quickstart path for AI agents, with a copy-paste installation and setup prompt
+
+### Changed
+
+- README restructured around two primary onboarding paths: `For AI Agent` and `For Human`
+- README and configuration docs now recommend configuring AI Card for normal use, while still documenting a fallback path for first-time troubleshooting
+- npm publish contents now exclude `docs/`, `docs/specs/`, `test/`, and `CHANGELOG.md`
+- Publish builds no longer emit `.js.map` and `.d.ts.map` files, significantly reducing package size
+
+### Fixed
+
+- Biome import ordering issue in `src/agent/channel-runner.ts`
+
+## [0.5.2] - 2026-04-02
+
 ### Added
 
 - Initial implementation of pipiclaw package
