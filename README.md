@@ -25,25 +25,11 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 
 ## 快速开始（Quickstart）
 
-从零开始，让 Pipiclaw 在你的钉钉里成功回复第一条消息。
+从零开始，让 Pipiclaw 在你的钉钉里成功回复第一条消息。可以直接让Agent帮你完成。如果你希望自己逐步操作，再看后面的“自己动手安装”。
 
-### 1. 环境要求（Requirements）
+### 给 AI Agent 的安装说明（For AI Agent）
 
-- Node.js `>= 22`
-- 一个可用的钉钉企业内部应用
-- 至少一种可用的模型接入方式
-  - 直接使用 Anthropic 默认模型
-  - 或在 `models.json` 中配置自定义模型提供方（provider）
-
-### 2. 安装（Install）
-
-```bash
-npm install -g @oyasmi/pipiclaw
-```
-
-### 或者让 AI Agent 帮你安装（Ask an AI Agent to Install It）
-
-如果你更习惯让 AI Agent 直接帮你完成安装和初始化，可以把下面整段文字复制给它：
+可以让 AI Agent 直接帮你完成安装、初始化、配置和启动，把下面整段文字复制给你常用的 AI Agent （如 Claude Code、Codex、OpenCode 等）：
 
 ```text
 请帮我在这台机器上安装并初始化 Pipiclaw，并尽量把它配置到“可以开始使用”的状态。按下面要求执行：
@@ -116,7 +102,25 @@ npm install -g @oyasmi/pipiclaw
    - 如果某一步无法继续，要直接说明卡在哪里
 ```
 
-### 3. 初始化（Initialize）
+### 自己动手安装（For Human）
+
+如果你希望自己逐步完成安装和配置，可以按下面步骤操作。
+
+#### 1. 环境要求（Requirements）
+
+- Node.js `>= 22`
+- 一个可用的钉钉企业内部应用
+- 至少一种可用的模型接入方式
+  - 直接使用 Anthropic 默认模型
+  - 或在 `models.json` 中配置自定义模型提供方（provider）
+
+#### 2. 安装（Install）
+
+```bash
+npm install -g @oyasmi/pipiclaw
+```
+
+#### 3. 初始化（Initialize）
 
 第一次运行会自动初始化配置目录：
 
@@ -143,7 +147,7 @@ pipiclaw
 
 如果 `channel.json` 仍然是初始化模板，程序会提示你补全配置后再启动。这是正常行为。
 
-### 4. 创建钉钉应用（Create a DingTalk App）
+#### 4. 创建钉钉应用（Create a DingTalk App）
 
 在 [钉钉开放平台](https://open-dev.dingtalk.com/) 创建企业内部应用，并完成下面几项：
 
@@ -152,7 +156,7 @@ pipiclaw
 3. 启用 Stream Mode
 4. 建议一并创建 AI Card 模板并获取 `Card Template ID`
 
-### 5. 填写 `channel.json`（Fill `channel.json`）
+#### 5. 填写 `channel.json`（Fill `channel.json`）
 
 编辑 `~/.pi/pipiclaw/channel.json`：
 
@@ -185,7 +189,7 @@ pipiclaw
 
 推荐把 AI Card 一起配上，这样在钉钉里能直接看到过程更新。只有在排查接入链路时，才建议临时把 `cardTemplateId` 留空。
 
-### 6. 配置模型（Configure Models）
+#### 6. 配置模型（Configure Models）
 
 Pipiclaw 启动后要想真正生成回复，还需要有可用模型。这里通常有两种接入方式。
 
@@ -270,7 +274,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 同时把 `models.json` 中的 `apiKey` 改成同一个值，或者改成环境变量名。完整配置手册见 [docs/configuration.md](./docs/configuration.md)。
 
-### 7. 可选：设置默认模型（Optional: Set a Default Model）
+#### 7. 可选：设置默认模型（Optional: Set a Default Model）
 
 如果你希望固定默认模型，可以编辑 `~/.pi/pipiclaw/settings.json`：
 
@@ -283,13 +287,13 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 如果不设置，Pipiclaw 会使用当前可用模型列表里的第一个。
 
-### 8. 启动 Pipiclaw（Start Pipiclaw）
+#### 8. 启动 Pipiclaw（Start Pipiclaw）
 
 ```bash
 pipiclaw
 ```
 
-### 9. 在钉钉中验证（Verify in DingTalk）
+#### 9. 在钉钉中验证（Verify in DingTalk）
 
 建议先给机器人发送：
 
