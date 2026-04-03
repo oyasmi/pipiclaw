@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { shellEscape } from "./shell-escape.js";
+import { shellEscape } from "./shared/shell-escape.js";
 
 export type SandboxConfig = { type: "host" } | { type: "docker"; container: string };
 

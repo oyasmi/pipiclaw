@@ -3,7 +3,7 @@ import type { Api, Message, Model } from "@mariozechner/pi-ai";
 import { serializeConversation } from "@mariozechner/pi-coding-agent";
 import { writeFile } from "fs/promises";
 import { join } from "path";
-import { parseJsonObject } from "../llm-json.js";
+import { parseJsonObject } from "../shared/llm-json.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText } from "../shared/text-utils.js";
 import { buildStandardMessages, isRecord } from "../shared/type-guards.js";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractJsonObject, LlmJsonParseError, parseJsonObject } from "../src/llm-json.js";
+import { extractJsonObject, LlmJsonParseError, parseJsonObject } from "../src/shared/llm-json.js";
 
 describe("llm-json", () => {
 	it("extracts the first balanced JSON object even when braces appear inside strings", () => {

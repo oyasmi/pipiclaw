@@ -2,7 +2,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import * as Diff from "diff";
 import type { Executor } from "../sandbox.js";
-import { shellEscape } from "../shell-escape.js";
+import { shellEscape } from "../shared/shell-escape.js";
 import { writeContent } from "./write-content.js";
 
 /**

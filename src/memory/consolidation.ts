@@ -6,7 +6,7 @@ import {
 	type SessionMessageEntry,
 	serializeConversation,
 } from "@mariozechner/pi-coding-agent";
-import { parseJsonObject } from "../llm-json.js";
+import { parseJsonObject } from "../shared/llm-json.js";
 import { splitH2Sections } from "../shared/markdown-sections.js";
 import { clipText } from "../shared/text-utils.js";
 import { buildStandardMessages } from "../shared/type-guards.js";

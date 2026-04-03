@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shellEscape } from "../src/shell-escape.js";
+import { shellEscape } from "../src/shared/shell-escape.js";
 
 describe("shellEscape", () => {
 	it("wraps strings in single quotes and escapes internal quotes", () => {

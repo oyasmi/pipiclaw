@@ -1,5 +1,5 @@
 import type { ExecResult, Executor } from "../sandbox.js";
-import { shellEscape } from "../shell-escape.js";
+import { shellEscape } from "../shared/shell-escape.js";
 
 const INLINE_WRITE_MAX_BYTES = 64 * 1024;
 

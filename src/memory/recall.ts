@@ -1,5 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { parseJsonObject } from "../llm-json.js";
+import { parseJsonObject } from "../shared/llm-json.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
 import { runSidecarTask } from "../sidecar-worker.js";
 import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./candidates.js";
@@ -125,6 +125,57 @@ const LATIN_STOP_WORDS = new Set([
 	"you",
 	"your",
 ]);
+const CHINESE_STOP_CHARS = new Set([
+	"的",
+	"了",
+	"在",
+	"是",
+	"有",
+	"不",
+	"和",
+	"与",
+	"个",
+	"把",
+	"被",
+	"从",
+	"对",
+	"而",
+	"给",
+	"将",
+	"就",
+	"让",
+	"向",
+	"也",
+	"以",
+	"因",
+	"又",
+	"于",
+	"则",
+	"之",
+	"这",
+	"那",
+	"其",
+	"它",
+	"他",
+	"她",
+	"们",
+	"都",
+	"要",
+	"会",
+	"能",
+	"很",
+	"得",
+	"地",
+	"着",
+	"过",
+	"吗",
+	"呢",
+	"吧",
+	"啊",
+	"哦",
+	"嗯",
+	"呀",
+]);
 
 function containsHanText(text: string): boolean {
 	return HAN_REGEX.test(text);
@@ -132,28 +183,42 @@ function containsHanText(text: string): boolean {
 
 function tokenizeHanPart(part: string): string[] {
 	const chars = Array.from(part);
+	const covered = new Uint8Array(chars.length);
 	const tokens: string[] = [];
 
-	for (let index = 0; index < chars.length; ) {
-		let matched = "";
+	for (let index = 0; index < chars.length; index++) {
+		let matchedLength = 0;
 		const maxLength = Math.min(MAX_HAN_WORD_LENGTH, chars.length - index);
 		for (let size = maxLength; size >= 2; size--) {
 			const candidate = chars.slice(index, index + size).join("");
 			if (COMMON_CHINESE_WORDS.has(candidate)) {
-				matched = candidate;
+				tokens.push(candidate);
+				matchedLength = size;
 				break;
 			}
 		}
-		if (matched) {
-			tokens.push(matched);
-			index += Array.from(matched).length;
-			continue;
+		if (matchedLength > 0) {
+			for (let coveredIndex = index; coveredIndex < index + matchedLength; coveredIndex++) {
+				covered[coveredIndex] = 1;
+			}
 		}
-		index++;
 	}
 
 	for (let index = 0; index <= chars.length - 2; index++) {
+		if (covered[index] || covered[index + 1]) {
+			continue;
+		}
 		tokens.push(chars.slice(index, index + 2).join(""));
+	}
+
+	for (let index = 0; index < chars.length; index++) {
+		if (covered[index]) {
+			continue;
+		}
+		const char = chars[index];
+		if (!CHINESE_STOP_CHARS.has(char)) {
+			tokens.push(char);
+		}
 	}
 
 	return Array.from(new Set(tokens));
@@ -188,6 +253,10 @@ function tokenize(text: string): string[] {
 		tokens.push(...tokenizeAsciiPart(part));
 	}
 	return Array.from(new Set(tokens));
+}
+
+export function tokenizeRecallText(text: string): string[] {
+	return tokenize(text);
 }
 
 function buildTokenSet(text: string): Set<string> {

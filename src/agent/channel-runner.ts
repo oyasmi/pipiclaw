@@ -34,6 +34,7 @@ import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } f
 import { createPipiclawTools } from "../tools/index.js";
 import { clipUserInput } from "./progress-formatter.js";
 import { createRunQueue } from "./run-queue.js";
+import { SessionResourceGate } from "./session-resource-gate.js";
 import { handleSessionEvent } from "./session-events.js";
 import { getLastAssistantUsage } from "./type-guards.js";
 import {
@@ -84,6 +85,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly settingsManager: PipiclawSettingsManager;
 	private readonly modelRegistry: ModelRegistry;
 	private readonly memoryLifecycle: MemoryLifecycle;
+	private readonly sessionResourceGate: SessionResourceGate;
 	private readonly sessionReady: Promise<void>;
 	private subAgentDiscovery: SubAgentDiscoveryResult;
 
@@ -219,6 +221,9 @@ export class ChannelRunner implements AgentRunner {
 			resourceLoader,
 			baseToolsOverride,
 		});
+		this.sessionResourceGate = new SessionResourceGate(async () => {
+			await this.reloadSessionResources();
+		});
 
 		// Subscribe to session events
 		this.subscribeToSessionEvents();
@@ -292,7 +297,9 @@ export class ChannelRunner implements AgentRunner {
 				await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2));
 			}
 
-			await this.session.prompt(promptText);
+			await this.sessionResourceGate.runPrompt(async () => {
+				await this.session.prompt(promptText);
+			});
 		} catch (err) {
 			this.runState.stopReason = "error";
 			this.runState.errorMessage = err instanceof Error ? err.message : String(err);
@@ -446,8 +453,10 @@ export class ChannelRunner implements AgentRunner {
 			log.logWarning(`[${this.channelId}] Queued message exceeded ${MAX_USER_MESSAGE_CHARS} chars and was clipped`);
 		}
 
-		await this.session.prompt(this.formatUserMessage(clippedText, userName), {
-			streamingBehavior: delivery,
+		await this.sessionResourceGate.runPrompt(async () => {
+			await this.session.prompt(this.formatUserMessage(clippedText, userName), {
+				streamingBehavior: delivery,
+			});
 		});
 	}
 
@@ -464,13 +473,14 @@ export class ChannelRunner implements AgentRunner {
 
 	private async refreshSessionResources(): Promise<void> {
 		await this.ensureSessionReady();
-		const skills = loadPipiclawSkills(this.channelDir, this.workspacePath);
-		this.currentSkills = skills;
-		this.subAgentDiscovery = this.refreshSubAgentDiscovery();
-		await this.session.reload();
+		await this.sessionResourceGate.requestRefresh();
 	}
 
 	private async initializeSession(): Promise<void> {
+		await this.reloadSessionResources();
+	}
+
+	private async reloadSessionResources(): Promise<void> {
 		const skills = loadPipiclawSkills(this.channelDir, this.workspacePath);
 		this.currentSkills = skills;
 		this.subAgentDiscovery = this.refreshSubAgentDiscovery();

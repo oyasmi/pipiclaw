@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildMemoryCandidates, createMemoryCandidateCache } from "../src/memory/candidates.js";
-import { recallRelevantMemory } from "../src/memory/recall.js";
+import { recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
 
 const tempDirs: string[] = [];
 
@@ -75,6 +75,20 @@ describe("memory candidates", () => {
 });
 
 describe("memory recall", () => {
+	it("captures overlapping Chinese dictionary terms without keeping covered bigram noise", () => {
+		const tokens = tokenizeRecallText("当前状态管理优化方案");
+
+		expect(tokens).toEqual(expect.arrayContaining(["当前状态", "状态管理", "管理", "优化方案"]));
+		expect(tokens).not.toEqual(expect.arrayContaining(["前状", "态管", "理优", "化方"]));
+	});
+
+	it("keeps meaningful uncovered single Chinese characters while filtering stop chars", () => {
+		const tokens = tokenizeRecallText("库表锁了");
+
+		expect(tokens).toEqual(expect.arrayContaining(["库表", "表锁", "库", "表", "锁"]));
+		expect(tokens).not.toContain("了");
+	});
+
 	it("prioritizes current session state for current-work queries", async () => {
 		const { workspaceDir, channelDir } = createTempWorkspace();
 		writeFileSync(
