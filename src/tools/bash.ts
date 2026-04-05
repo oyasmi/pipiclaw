@@ -5,6 +5,10 @@ import { join } from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { Executor } from "../sandbox.js";
+import { guardCommand } from "../security/command-guard.js";
+import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
+import { logSecurityEvent } from "../security/logger.js";
+import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
 /**
@@ -28,9 +32,32 @@ interface BashToolDetails {
 
 export interface BashToolOptions {
 	defaultTimeoutSeconds?: number;
+	securityConfig?: SecurityConfig;
+	securityContext?: SecurityRuntimeContext;
+	channelId?: string;
+}
+
+function formatCommandBlockMessage(command: string, category?: string, reason?: string, matchedText?: string): string {
+	const lines = [`Command blocked${category ? ` [${category}]` : ""}`];
+	if (reason) {
+		lines.push(`Reason: ${reason}`);
+	}
+	if (matchedText) {
+		lines.push(`Matched: ${matchedText}`);
+	} else {
+		lines.push(`Command: ${command}`);
+	}
+	return lines.join("\n");
 }
 
 export function createBashTool(executor: Executor, options: BashToolOptions = {}): AgentTool<typeof bashSchema> {
+	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
+	const securityContext = options.securityContext ?? {
+		workspaceDir: process.cwd(),
+		workspacePath: process.cwd(),
+		cwd: process.cwd(),
+	};
+
 	return {
 		name: "bash",
 		label: "bash",
@@ -41,6 +68,25 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			{ command, timeout }: { label: string; command: string; timeout?: number },
 			signal?: AbortSignal,
 		) => {
+			if (securityConfig.enabled && securityConfig.commandGuard.enabled) {
+				const guardResult = guardCommand(command, securityConfig.commandGuard);
+				if (!guardResult.allowed) {
+					logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+						type: "command",
+						tool: "bash",
+						channelId: options.channelId,
+						command,
+						category: guardResult.category,
+						rule: guardResult.rule,
+						reason: guardResult.reason,
+						matchedText: guardResult.matchedText,
+					});
+					throw new Error(
+						formatCommandBlockMessage(command, guardResult.category, guardResult.reason, guardResult.matchedText),
+					);
+				}
+			}
+
 			// Track output for potential temp file writing
 			let tempFilePath: string | undefined;
 			let tempFileStream: ReturnType<typeof createWriteStream> | undefined;

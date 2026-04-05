@@ -2,6 +2,10 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import * as Diff from "diff";
 import type { Executor } from "../sandbox.js";
+import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
+import { logSecurityEvent } from "../security/logger.js";
+import { guardPath } from "../security/path-guard.js";
+import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { shellEscape } from "../shared/shell-escape.js";
 import { writeContent } from "./write-content.js";
 
@@ -95,7 +99,31 @@ const editSchema = Type.Object({
 	newText: Type.String({ description: "New text to replace the old text with" }),
 });
 
-export function createEditTool(executor: Executor): AgentTool<typeof editSchema> {
+export interface EditToolOptions {
+	securityConfig?: SecurityConfig;
+	securityContext?: SecurityRuntimeContext;
+	channelId?: string;
+}
+
+function formatPathBlockMessage(resolvedPath: string | undefined, category?: string, reason?: string): string {
+	const lines = [`Path blocked${category ? ` [${category}]` : ""}`];
+	if (reason) {
+		lines.push(`Reason: ${reason}`);
+	}
+	if (resolvedPath) {
+		lines.push(`Resolved path: ${resolvedPath}`);
+	}
+	return lines.join("\n");
+}
+
+export function createEditTool(executor: Executor, options: EditToolOptions = {}): AgentTool<typeof editSchema> {
+	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
+	const securityContext = options.securityContext ?? {
+		workspaceDir: process.cwd(),
+		workspacePath: process.cwd(),
+		cwd: process.cwd(),
+	};
+
 	return {
 		name: "edit",
 		label: "edit",
@@ -107,6 +135,23 @@ export function createEditTool(executor: Executor): AgentTool<typeof editSchema>
 			{ path, oldText, newText }: { label: string; path: string; oldText: string; newText: string },
 			signal?: AbortSignal,
 		) => {
+			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
+				const readGuard = guardPath(path, "read", { ...securityContext, config: securityConfig.pathGuard });
+				if (!readGuard.allowed) {
+					logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+						type: "path",
+						tool: "edit",
+						channelId: options.channelId,
+						rawPath: path,
+						operation: "read",
+						resolvedPath: readGuard.resolvedPath,
+						category: readGuard.category,
+						reason: readGuard.reason,
+					});
+					throw new Error(formatPathBlockMessage(readGuard.resolvedPath, readGuard.category, readGuard.reason));
+				}
+			}
+
 			// Read the file
 			const readResult = await executor.exec(`cat ${shellEscape(path)}`, { signal });
 			if (readResult.code !== 0) {
@@ -142,7 +187,12 @@ export function createEditTool(executor: Executor): AgentTool<typeof editSchema>
 			}
 
 			// Write the file back
-			await writeContent(executor, path, newContent, signal);
+			await writeContent(executor, path, newContent, signal, {
+				securityConfig,
+				securityContext,
+				channelId: options.channelId,
+				toolName: "edit",
+			});
 
 			return {
 				content: [

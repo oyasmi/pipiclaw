@@ -7,6 +7,8 @@ import { readChannelSession } from "../memory/files.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import { formatModelReference } from "../models/utils.js";
 import type { Executor } from "../sandbox.js";
+import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
+import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText, extractAssistantText, extractLabelFromArgs, HAN_REGEX } from "../shared/text-utils.js";
@@ -86,6 +88,7 @@ export interface SubAgentToolOptions {
 	channelDir: string;
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	getMemoryRecallSettings?: () => PipiclawMemoryRecallSettings;
+	securityConfig?: SecurityConfig;
 	runtimeContext: {
 		workspacePath: string;
 		channelId: string;
@@ -163,12 +166,35 @@ function buildStoppedText(config: SubAgentConfig, reason: string, finalText: str
 	return `[Sub-agent ${config.name} stopped: ${reason}]\n\n${trimmedFinalText}`;
 }
 
-function createToolSet(executor: Executor, bashTimeoutSec: number): AgentTool<any>[] {
+function createToolSet(executor: Executor, bashTimeoutSec: number, options: SubAgentToolOptions): AgentTool<any>[] {
+	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
+	const securityContext = {
+		workspaceDir: options.workspaceDir,
+		workspacePath: options.runtimeContext.workspacePath,
+		cwd: process.cwd(),
+	};
 	return [
-		createReadTool(executor),
-		createBashTool(executor, { defaultTimeoutSeconds: bashTimeoutSec }),
-		createEditTool(executor),
-		createWriteTool(executor),
+		createReadTool(executor, {
+			securityConfig,
+			securityContext,
+			channelId: options.runtimeContext.channelId,
+		}),
+		createBashTool(executor, {
+			defaultTimeoutSeconds: bashTimeoutSec,
+			securityConfig,
+			securityContext,
+			channelId: options.runtimeContext.channelId,
+		}),
+		createEditTool(executor, {
+			securityConfig,
+			securityContext,
+			channelId: options.runtimeContext.channelId,
+		}),
+		createWriteTool(executor, {
+			securityConfig,
+			securityContext,
+			channelId: options.runtimeContext.channelId,
+		}),
 	];
 }
 
@@ -404,14 +430,17 @@ export function createSubAgentTool(
 				options.createWorker?.({
 					subAgent: config,
 					apiKey,
-					tools: filterToolsByName(createToolSet(options.executor, config.bashTimeoutSec), config.tools),
+					tools: filterToolsByName(createToolSet(options.executor, config.bashTimeoutSec, options), config.tools),
 				}) ??
 				new Agent({
 					initialState: {
 						systemPrompt: config.systemPrompt,
 						model: config.model,
 						thinkingLevel: "off",
-						tools: filterToolsByName(createToolSet(options.executor, config.bashTimeoutSec), config.tools),
+						tools: filterToolsByName(
+							createToolSet(options.executor, config.bashTimeoutSec, options),
+							config.tools,
+						),
 					},
 					convertToLlm,
 					getApiKey: async () => apiKey,

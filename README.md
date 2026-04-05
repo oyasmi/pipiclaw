@@ -11,6 +11,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 - 配置手册：[docs/configuration.md](./docs/configuration.md)
 - 事件与子代理使用指南：[docs/events-and-sub-agents.md](./docs/events-and-sub-agents.md)
 - 部署与运维指南：[docs/deployment-and-operations.md](./docs/deployment-and-operations.md)
+- 安全文档：[docs/security.md](./docs/security.md)
 
 ## 功能特性（Features）
 
@@ -22,6 +23,20 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 - 支持预定义子代理（sub-agent）和临时内联子代理（inline sub-agent）
 - 支持立即、单次、周期三类事件调度
 - 支持自定义模型提供方（provider）和模型（model）配置
+- 内置工具层安全防护：`bash` 命令守卫、文件路径守卫、敏感路径拒绝、阻断审计日志
+
+## 安全说明（Security）
+
+Pipiclaw 当前已经内置一轮工具层安全增强：
+
+- `bash` 会拦截明显高风险命令
+- `read` / `write` / `edit` / `attach` 会做统一路径检查
+- 默认允许访问用户主目录中的普通工作文件，但会拒绝常见凭据、私钥、浏览器资料、系统敏感文件等位置
+- 可通过 `~/.pi/pipiclaw/security.json` 做实例级策略调整
+
+如果你要了解默认策略、已知边界、推荐模板和完整配置示例，请直接看：
+
+- [docs/security.md](./docs/security.md)
 
 ## 快速开始（Quickstart）
 

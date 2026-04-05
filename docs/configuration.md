@@ -9,6 +9,7 @@
 
 - 事件与子代理使用指南：[events-and-sub-agents.md](./events-and-sub-agents.md)
 - 部署与运维指南：[deployment-and-operations.md](./deployment-and-operations.md)
+- 安全文档：[security.md](./security.md)
 
 ## 设计原则（Design Principles）
 

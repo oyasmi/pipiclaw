@@ -3,6 +3,10 @@ import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { extname } from "path";
 import type { Executor } from "../sandbox.js";
+import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
+import { logSecurityEvent } from "../security/logger.js";
+import { guardPath } from "../security/path-guard.js";
+import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { shellEscape } from "../shared/shell-escape.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
@@ -36,7 +40,31 @@ interface ReadToolDetails {
 	truncation?: TruncationResult;
 }
 
-export function createReadTool(executor: Executor): AgentTool<typeof readSchema> {
+export interface ReadToolOptions {
+	securityConfig?: SecurityConfig;
+	securityContext?: SecurityRuntimeContext;
+	channelId?: string;
+}
+
+function formatPathBlockMessage(resolvedPath: string | undefined, category?: string, reason?: string): string {
+	const lines = [`Path blocked${category ? ` [${category}]` : ""}`];
+	if (reason) {
+		lines.push(`Reason: ${reason}`);
+	}
+	if (resolvedPath) {
+		lines.push(`Resolved path: ${resolvedPath}`);
+	}
+	return lines.join("\n");
+}
+
+export function createReadTool(executor: Executor, options: ReadToolOptions = {}): AgentTool<typeof readSchema> {
+	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
+	const securityContext = options.securityContext ?? {
+		workspaceDir: process.cwd(),
+		workspacePath: process.cwd(),
+		cwd: process.cwd(),
+	};
+
 	return {
 		name: "read",
 		label: "read",
@@ -47,6 +75,25 @@ export function createReadTool(executor: Executor): AgentTool<typeof readSchema>
 			{ path, offset, limit }: { label: string; path: string; offset?: number; limit?: number },
 			signal?: AbortSignal,
 		): Promise<{ content: (TextContent | ImageContent)[]; details: ReadToolDetails | undefined }> => {
+			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
+				const guardResult = guardPath(path, "read", { ...securityContext, config: securityConfig.pathGuard });
+				if (!guardResult.allowed) {
+					logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+						type: "path",
+						tool: "read",
+						channelId: options.channelId,
+						rawPath: path,
+						operation: "read",
+						resolvedPath: guardResult.resolvedPath,
+						category: guardResult.category,
+						reason: guardResult.reason,
+					});
+					throw new Error(
+						formatPathBlockMessage(guardResult.resolvedPath, guardResult.category, guardResult.reason),
+					);
+				}
+			}
+
 			const mimeType = isImageFile(path);
 
 			if (mimeType) {

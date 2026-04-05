@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { Executor } from "../sandbox.js";
+import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { writeContent } from "./write-content.js";
 
 const writeSchema = Type.Object({
@@ -9,7 +10,13 @@ const writeSchema = Type.Object({
 	content: Type.String({ description: "Content to write to the file" }),
 });
 
-export function createWriteTool(executor: Executor): AgentTool<typeof writeSchema> {
+export interface WriteToolOptions {
+	securityConfig?: SecurityConfig;
+	securityContext?: SecurityRuntimeContext;
+	channelId?: string;
+}
+
+export function createWriteTool(executor: Executor, options: WriteToolOptions = {}): AgentTool<typeof writeSchema> {
 	return {
 		name: "write",
 		label: "write",
@@ -21,7 +28,13 @@ export function createWriteTool(executor: Executor): AgentTool<typeof writeSchem
 			{ path, content }: { label: string; path: string; content: string },
 			signal?: AbortSignal,
 		) => {
-			await writeContent(executor, path, content, signal, { createParentDir: true });
+			await writeContent(executor, path, content, signal, {
+				createParentDir: true,
+				securityConfig: options.securityConfig,
+				securityContext: options.securityContext,
+				channelId: options.channelId,
+				toolName: "write",
+			});
 			const bytesWritten = Buffer.byteLength(content, "utf-8");
 
 			return {
