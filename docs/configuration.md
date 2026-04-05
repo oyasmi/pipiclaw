@@ -47,6 +47,14 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
     └── sub-agents/
 ```
 
+默认根目录是 `~/.pi/pipiclaw/`。如果你设置了：
+
+```bash
+export PIPICLAW_HOME=/your/custom/pipiclaw-home
+```
+
+那么 Pipiclaw 会改为从这个目录读取和写入所有全局配置与 `workspace/`。
+
 ### 主要文件（Main Files）
 
 | 文件 | 范围 | 用途 | 自动创建 |
@@ -68,6 +76,7 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
 | 变量 | 用途 |
 |----------|------|
 | `ANTHROPIC_API_KEY` | Anthropic 默认模型凭据 |
+| `PIPICLAW_HOME` | 覆盖默认的 `~/.pi/pipiclaw/` 根目录 |
 | `PIPICLAW_DEBUG` | 在会话通道目录中写出 `last_prompt.json` |
 | `DINGTALK_FORCE_PROXY` | 保留 axios 代理环境变量，而不是自动清理 |
 
@@ -77,7 +86,7 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
 
 ### 钉钉配置（DingTalk Config）
 
-Pipiclaw 只读取 `~/.pi/pipiclaw/channel.json`，没有项目级覆盖。
+Pipiclaw 只读取 app home 下的 `channel.json`，没有项目级覆盖。默认是 `~/.pi/pipiclaw/channel.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/channel.json`。
 
 ### 模型凭据解析（Model Credential Resolution）
 
@@ -100,7 +109,7 @@ Pipiclaw 的模型提供方凭据（provider credential）解析主要继承自 
 
 ### 运行时设置（Settings）
 
-Pipiclaw 当前只使用 `~/.pi/pipiclaw/settings.json`。
+Pipiclaw 当前只使用 app home 下的 `settings.json`。默认是 `~/.pi/pipiclaw/settings.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/settings.json`。
 
 pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有采用。不要假设把配置写到项目目录 `.pi/settings.json` 就会生效。
 

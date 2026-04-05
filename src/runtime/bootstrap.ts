@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { parseBuiltInCommand } from "../agent/commands.js";
 import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
+import { resetRunner } from "../agent/runner-factory.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import {
@@ -62,6 +63,12 @@ export interface AppContext {
 	bot: DingTalkBot;
 	store: ChannelStore;
 	shutdown: () => Promise<void>;
+}
+
+export interface RuntimeContext {
+	handler: DingTalkHandler;
+	store: ChannelStore;
+	shutdown: (reason?: NodeJS.Signals | "manual") => Promise<void>;
 }
 
 interface ChannelState {
@@ -403,31 +410,20 @@ function flushInactiveChannelMemory(channelStates: Map<string, ChannelState>): P
 	return flushes;
 }
 
-export async function bootstrap(argv: string[], options: BootstrapOptions = {}): Promise<AppContext> {
-	const env = options.env ?? process.env;
-	const io = options.io ?? console;
-	const paths = options.paths ?? DEFAULT_BOOTSTRAP_PATHS;
-	const registerSignalHandlers = options.registerSignalHandlers ?? true;
+interface RuntimeContextOptions {
+	paths: BootstrapPaths;
+	sandbox: SandboxConfig;
+	dingtalkConfig: DingTalkConfig;
+	createBot?: (handler: DingTalkHandler, config: DingTalkConfig) => DingTalkBot;
+	createEventsWatcher?: (workspaceDir: string, bot: DingTalkBot) => { start(): void; stop(): void };
+	startServices?: boolean;
+	registerSignalHandlers?: boolean;
+}
+
+export function createRuntimeContext(options: RuntimeContextOptions): RuntimeContext & { bot: DingTalkBot } {
 	const startServices = options.startServices ?? true;
-
-	sanitizeProxyEnv(env);
-
-	const parsedArgs = parseArgs(argv, paths, io);
-	const sandbox = parsedArgs.sandbox;
-	const bootstrapResult = bootstrapAppHome(paths);
-	printBootstrapSummary(bootstrapResult, io, paths);
-
-	if (bootstrapResult.channelTemplateCreated) {
-		io.error(`Fill in ${paths.channelConfigPath} and run \`${paths.appName}\` again.`);
-		throw new BootstrapExitError(1);
-	}
-
-	const dingtalkConfig = loadConfig(paths, io);
-	dingtalkConfig.stateDir = paths.workspaceDir;
-
-	await validateSandbox(sandbox);
-
-	const store = new ChannelStore({ workingDir: paths.workspaceDir });
+	const registerSignalHandlers = options.registerSignalHandlers ?? true;
+	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
 	const channelStates = new Map<string, ChannelState>();
 	const activeTasks = new Set<Promise<void>>();
 	let shuttingDown = false;
@@ -436,11 +432,11 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	const getState = (channelId: string): ChannelState => {
 		let state = channelStates.get(channelId);
 		if (!state) {
-			const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
+			const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
 			ensureChannelMemoryFilesSync(channelDir);
 			state = {
 				running: false,
-				runner: getOrCreateRunner(sandbox, channelId, channelDir),
+				runner: getOrCreateRunner(options.sandbox, channelId, channelDir),
 				stopRequested: false,
 			};
 			channelStates.set(channelId, state);
@@ -563,12 +559,14 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 		},
 	};
 
-	log.logStartup(paths.workspaceDir, sandbox.type === "host" ? "host" : `docker:${sandbox.container}`);
+	const bot = options.createBot
+		? options.createBot(handler, options.dingtalkConfig)
+		: new DingTalkBot(handler, options.dingtalkConfig);
+	const eventsWatcher = options.createEventsWatcher
+		? options.createEventsWatcher(options.paths.workspaceDir, bot)
+		: createEventsWatcher(options.paths.workspaceDir, bot);
 
-	const bot = new DingTalkBot(handler, dingtalkConfig);
-	const eventsWatcher = createEventsWatcher(paths.workspaceDir, bot);
-
-	const shutdownWithReason = async (reason: NodeJS.Signals | "manual"): Promise<void> => {
+	const shutdownWithReason = async (reason: NodeJS.Signals | "manual" = "manual"): Promise<void> => {
 		if (shutdownPromise) {
 			return shutdownPromise;
 		}
@@ -621,6 +619,10 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 					log.logWarning(`Shutdown memory flush exceeded ${SHUTDOWN_FLUSH_WAIT_MS}ms`);
 				}
 			}
+
+			for (const channelId of channelStates.keys()) {
+				resetRunner(channelId);
+			}
 		})();
 
 		return shutdownPromise;
@@ -646,10 +648,51 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	}
 
 	return {
-		bot,
+		handler,
 		store,
+		bot,
+		shutdown: shutdownWithReason,
+	};
+}
+
+export async function bootstrap(argv: string[], options: BootstrapOptions = {}): Promise<AppContext> {
+	const env = options.env ?? process.env;
+	const io = options.io ?? console;
+	const paths = options.paths ?? DEFAULT_BOOTSTRAP_PATHS;
+	const registerSignalHandlers = options.registerSignalHandlers ?? true;
+	const startServices = options.startServices ?? true;
+
+	sanitizeProxyEnv(env);
+
+	const parsedArgs = parseArgs(argv, paths, io);
+	const sandbox = parsedArgs.sandbox;
+	const bootstrapResult = bootstrapAppHome(paths);
+	printBootstrapSummary(bootstrapResult, io, paths);
+
+	if (bootstrapResult.channelTemplateCreated) {
+		io.error(`Fill in ${paths.channelConfigPath} and run \`${paths.appName}\` again.`);
+		throw new BootstrapExitError(1);
+	}
+
+	const dingtalkConfig = loadConfig(paths, io);
+	dingtalkConfig.stateDir = paths.workspaceDir;
+
+	await validateSandbox(sandbox);
+
+	log.logStartup(paths.workspaceDir, sandbox.type === "host" ? "host" : `docker:${sandbox.container}`);
+	const runtime = createRuntimeContext({
+		paths,
+		sandbox,
+		dingtalkConfig,
+		registerSignalHandlers,
+		startServices,
+	});
+
+	return {
+		bot: runtime.bot,
+		store: runtime.store,
 		shutdown: async () => {
-			await shutdownWithReason("manual");
+			await runtime.shutdown("manual");
 		},
 	};
 }

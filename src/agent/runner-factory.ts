@@ -12,3 +12,11 @@ export function getOrCreateRunner(sandboxConfig: SandboxConfig, channelId: strin
 	channelRunners.set(channelId, runner);
 	return runner;
 }
+
+export function resetRunner(channelId: string): void {
+	channelRunners.delete(channelId);
+}
+
+export function resetAllRunners(): void {
+	channelRunners.clear();
+}

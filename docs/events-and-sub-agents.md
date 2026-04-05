@@ -5,7 +5,7 @@
 - 定时事件（events）
 - 预定义子代理（sub-agents）
 
-它们都放在 `~/.pi/pipiclaw/workspace/` 下，已经不只是“把配置填完整”这么简单，而是会直接影响你如何日常使用 Pipiclaw。
+它们都放在 app home 下的 `workspace/` 中。默认路径是 `~/.pi/pipiclaw/workspace/`；如果设置了 `PIPICLAW_HOME`，则对应为 `${PIPICLAW_HOME}/workspace/`。这些内容已经不只是“把配置填完整”这么简单，而是会直接影响你如何日常使用 Pipiclaw。
 
 如果你还没有完成钉钉和模型配置，请先看 [README](../README.md) 和 [configuration.md](./configuration.md)。
 

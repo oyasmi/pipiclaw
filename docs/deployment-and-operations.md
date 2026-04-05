@@ -156,7 +156,7 @@ supervisorctl tail -f pipiclaw
 
 ### 工作区运行文件（Workspace Runtime Files）
 
-Pipiclaw 还会在 `~/.pi/pipiclaw/workspace/` 下写入运行数据。
+Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认路径是 `~/.pi/pipiclaw/workspace/`；如果设置了 `PIPICLAW_HOME`，则对应为 `${PIPICLAW_HOME}/workspace/`。
 
 常见文件：
 
@@ -183,7 +183,7 @@ export PIPICLAW_DEBUG=1
 
 建议用下面的顺序升级：
 
-1. 备份 `~/.pi/pipiclaw/`
+1. 备份 app home 目录。默认是 `~/.pi/pipiclaw/`，如果设置了 `PIPICLAW_HOME`，则备份 `${PIPICLAW_HOME}/`
 2. 阅读 [CHANGELOG](../CHANGELOG.md)
 3. 升级 npm 包
 4. 重启 Pipiclaw
@@ -199,7 +199,7 @@ npm install -g @oyasmi/pipiclaw@latest
 
 ## 备份与恢复（Backup and Restore）
 
-最重要的是备份 `~/.pi/pipiclaw/`。至少应包含：
+最重要的是备份 app home 目录。默认是 `~/.pi/pipiclaw/`；如果设置了 `PIPICLAW_HOME`，则使用对应目录。至少应包含：
 
 - `channel.json`
 - `auth.json`

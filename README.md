@@ -146,6 +146,14 @@ pipiclaw
     └── sub-agents/
 ```
 
+默认 app home 是 `~/.pi/pipiclaw/`。如果你希望把 Pipiclaw 的所有配置和运行文件放到别处，可以在启动前设置：
+
+```bash
+export PIPICLAW_HOME=/your/custom/pipiclaw-home
+```
+
+设置后，`channel.json`、`auth.json`、`models.json`、`settings.json` 和整个 `workspace/` 都会改为从这个目录读取和写入。
+
 如果 `channel.json` 仍然是初始化模板，程序会提示你补全配置后再启动。这是正常行为。
 
 #### 4. 创建钉钉应用（Create a DingTalk App）
@@ -327,6 +335,8 @@ pipiclaw
 
 ### 配置文件（Config Files）
 
+默认根目录是 `~/.pi/pipiclaw/`；如果设置了 `PIPICLAW_HOME`，下面这些路径都会切换到该目录下。
+
 | 文件 | 用途 |
 |------|------|
 | `~/.pi/pipiclaw/channel.json` | 钉钉应用配置 |
@@ -339,6 +349,7 @@ pipiclaw
 | 变量 | 用途 |
 |----------|------|
 | `ANTHROPIC_API_KEY` | Anthropic API Key |
+| `PIPICLAW_HOME` | 覆盖默认的 `~/.pi/pipiclaw/` 根目录 |
 | `PIPICLAW_DEBUG` | 调试模式，会把上下文写到 `last_prompt.json` |
 | `DINGTALK_FORCE_PROXY` | 设为 `true` 时保留 axios 代理设置 |
 
@@ -512,7 +523,16 @@ npm run check
 
 - `npm run typecheck`
 - `npm run test`
+- `npm run test:e2e`
 - `npm run check`
+
+端到端测试说明：
+
+- `npm run test:e2e` 会运行“除钉钉渠道外”的完整 E2E
+- 它会使用真实 runtime、真实 `ChannelStore`、真实工具/记忆/Sidecar/LLM
+- 只 mock 钉钉传输层，不连接真实钉钉 Stream
+- 运行前需要可用模型凭据：优先读取 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/auth.json`，否则回退到 `ANTHROPIC_API_KEY`
+- E2E 默认不包含在 `npm run test` 中，避免日常测试被真实 LLM 依赖和调用成本影响
 
 ## 许可证（License）
 
