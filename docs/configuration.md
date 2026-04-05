@@ -78,8 +78,26 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 |----------|------|
 | `ANTHROPIC_API_KEY` | Anthropic 默认模型凭据 |
 | `PIPICLAW_HOME` | 覆盖默认的 `~/.pi/pipiclaw/` 根目录 |
+| `PIPICLAW_SHELL` | Windows host 模式下指定 POSIX shell，可指向 Git Bash 的 `bash.exe` |
 | `PIPICLAW_DEBUG` | 在会话通道目录中写出 `last_prompt.json` |
 | `DINGTALK_FORCE_PROXY` | 保留 axios 代理环境变量，而不是自动清理 |
+
+### Windows Host 模式说明（Windows Host Mode Notes）
+
+Pipiclaw 的工具执行层按 POSIX shell 语义工作。`bash`、`read`、`write`、`edit` 等工具内部都会调用 `sh`/`bash` 风格命令。
+
+这意味着在 Windows 上：
+
+- 如果使用默认的 host 模式，建议安装 Git Bash，并确保 `bash` 可在 PATH 中找到
+- 如果 `bash` 不在 PATH 中，可以设置 `PIPICLAW_SHELL` 指向具体可执行文件，例如 `C:\Program Files\Git\bin\bash.exe`
+- 如果机器上不方便准备 POSIX shell，推荐改用 Docker sandbox
+
+示例：
+
+```powershell
+$env:PIPICLAW_SHELL = "C:\Program Files\Git\bin\bash.exe"
+pipiclaw
+```
 
 ## 配置优先级（Configuration Precedence）
 

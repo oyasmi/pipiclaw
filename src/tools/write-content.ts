@@ -1,12 +1,13 @@
+import { dirname } from "node:path";
 import type { ExecResult, Executor } from "../sandbox.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
-import { shellEscape } from "../shared/shell-escape.js";
+import { shellEscapePath } from "../shared/shell-escape.js";
 
 function getDir(path: string): string {
-	return path.includes("/") ? path.substring(0, path.lastIndexOf("/")) : ".";
+	return dirname(path);
 }
 
 function ensureSuccess(result: ExecResult, path: string): void {
@@ -60,9 +61,9 @@ export async function writeContent(
 		}
 	}
 
-	const dirPrefix = createParentDir ? `mkdir -p ${shellEscape(getDir(path))} && ` : "";
+	const dirPrefix = createParentDir ? `mkdir -p ${shellEscapePath(getDir(path))} && ` : "";
 
-	const result = await executor.exec(`${dirPrefix}cat > ${shellEscape(path)}`, {
+	const result = await executor.exec(`${dirPrefix}cat > ${shellEscapePath(path)}`, {
 		signal,
 		stdin: content,
 	});

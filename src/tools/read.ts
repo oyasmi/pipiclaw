@@ -7,7 +7,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
-import { shellEscape } from "../shared/shell-escape.js";
+import { shellEscapePath, toShellPath } from "../shared/shell-escape.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 /**
@@ -98,7 +98,7 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 
 			if (mimeType) {
 				// Read as image (binary) - use base64
-				const result = await executor.exec(`base64 < ${shellEscape(path)}`, { signal });
+				const result = await executor.exec(`base64 < ${shellEscapePath(path)}`, { signal });
 				if (result.code !== 0) {
 					throw new Error(result.stderr || `Failed to read file: ${path}`);
 				}
@@ -114,7 +114,7 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			}
 
 			// Get total line count first
-			const countResult = await executor.exec(`wc -l < ${shellEscape(path)}`, { signal });
+			const countResult = await executor.exec(`wc -l < ${shellEscapePath(path)}`, { signal });
 			if (countResult.code !== 0) {
 				throw new Error(countResult.stderr || `Failed to read file: ${path}`);
 			}
@@ -132,9 +132,9 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			// Read content with offset
 			let cmd: string;
 			if (startLine === 1) {
-				cmd = `cat ${shellEscape(path)}`;
+				cmd = `cat ${shellEscapePath(path)}`;
 			} else {
-				cmd = `tail -n +${startLine} ${shellEscape(path)}`;
+				cmd = `tail -n +${startLine} ${shellEscapePath(path)}`;
 			}
 
 			const result = await executor.exec(cmd, { signal });
@@ -162,7 +162,7 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			if (truncation.firstLineExceedsLimit) {
 				// First line at offset exceeds 50KB - tell model to use bash
 				const firstLineSize = formatSize(Buffer.byteLength(selectedContent.split("\n")[0], "utf-8"));
-				outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
+				outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${toShellPath(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
 				details = { truncation };
 			} else if (truncation.truncated) {
 				// Truncation occurred - build actionable notice

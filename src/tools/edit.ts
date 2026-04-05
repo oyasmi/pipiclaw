@@ -6,7 +6,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
-import { shellEscape } from "../shared/shell-escape.js";
+import { shellEscapePath } from "../shared/shell-escape.js";
 import { writeContent } from "./write-content.js";
 
 /**
@@ -153,7 +153,7 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 			}
 
 			// Read the file
-			const readResult = await executor.exec(`cat ${shellEscape(path)}`, { signal });
+			const readResult = await executor.exec(`cat ${shellEscapePath(path)}`, { signal });
 			if (readResult.code !== 0) {
 				throw new Error(readResult.stderr || `File not found: ${path}`);
 			}
