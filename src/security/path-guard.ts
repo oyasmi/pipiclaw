@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, normalize, resolve } from "node:path";
 import type { PathGuardContext, PathGuardResult } from "./types.js";
 
@@ -182,7 +182,12 @@ function matchesSensitiveWritePath(path: string, homeDir: string): boolean {
 }
 
 function isWithinTemp(path: string): boolean {
-	return TEMP_PREFIXES.some((prefix) => startsWithPathPrefix(path, normalize(prefix)));
+	const configuredPrefixes = TEMP_PREFIXES.map((prefix) => normalize(prefix));
+	const runtimeTmpDir = normalize(tmpdir());
+	const runtimePrefixes = existsSync(runtimeTmpDir)
+		? [runtimeTmpDir, resolveExistingAncestor(runtimeTmpDir)]
+		: [runtimeTmpDir];
+	return [...configuredPrefixes, ...runtimePrefixes].some((prefix) => startsWithPathPrefix(path, prefix));
 }
 
 function isWithinHome(path: string, homeDir: string): boolean {
@@ -232,10 +237,21 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 	}
 
 	const homeDir = ctx.homeDir ?? homedir();
+	const effectiveCtx: PathGuardContext = {
+		...ctx,
+		workspaceDir: resolveForGuard(ctx.workspaceDir, ctx),
+		homeDir: resolveForGuard(homeDir, ctx),
+	};
 	const resolvedTarget = resolveTargetPath(rawPath, ctx);
 	const guardedPath = resolveForGuard(resolvedTarget, ctx);
 
-	if (matchesConfiguredPath(guardedPath, operation === "read" ? ctx.config.readDeny : ctx.config.writeDeny, ctx)) {
+	if (
+		matchesConfiguredPath(
+			guardedPath,
+			operation === "read" ? effectiveCtx.config.readDeny : effectiveCtx.config.writeDeny,
+			effectiveCtx,
+		)
+	) {
 		return formatBlockedResult(
 			operation,
 			rawPath,
@@ -245,7 +261,7 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		);
 	}
 
-	if (operation === "read" && matchesSensitiveReadPath(guardedPath, homeDir)) {
+	if (operation === "read" && matchesSensitiveReadPath(guardedPath, effectiveCtx.homeDir ?? homeDir)) {
 		return formatBlockedResult(
 			operation,
 			rawPath,
@@ -255,7 +271,7 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		);
 	}
 
-	if (operation === "write" && matchesSensitiveWritePath(guardedPath, homeDir)) {
+	if (operation === "write" && matchesSensitiveWritePath(guardedPath, effectiveCtx.homeDir ?? homeDir)) {
 		return formatBlockedResult(
 			operation,
 			rawPath,
@@ -281,11 +297,17 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		}
 	}
 
-	if (matchesConfiguredPath(guardedPath, operation === "read" ? ctx.config.readAllow : ctx.config.writeAllow, ctx)) {
+	if (
+		matchesConfiguredPath(
+			guardedPath,
+			operation === "read" ? effectiveCtx.config.readAllow : effectiveCtx.config.writeAllow,
+			effectiveCtx,
+		)
+	) {
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };
 	}
 
-	if (pathAllowedByDefaults(guardedPath, ctx)) {
+	if (pathAllowedByDefaults(guardedPath, effectiveCtx)) {
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };
 	}
 
