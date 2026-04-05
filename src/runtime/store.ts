@@ -1,6 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync } from "fs";
 import { appendFile, writeFile } from "fs/promises";
 import { dirname, join } from "path";
+import { ensureChannelDir, getChannelDir } from "./channel-paths.js";
 
 const MAX_LOG_SIZE_BYTES = 1_000_000;
 const DEDUPE_TTL_MS = 60_000;
@@ -72,11 +73,7 @@ export class ChannelStore {
 	 * Get or create the directory for a channel/DM
 	 */
 	getChannelDir(channelId: string): string {
-		const dir = join(this.workingDir, channelId);
-		if (!existsSync(dir)) {
-			mkdirSync(dir, { recursive: true });
-		}
-		return dir;
+		return ensureChannelDir(this.workingDir, channelId);
 	}
 
 	/**
@@ -161,7 +158,7 @@ export class ChannelStore {
 	 * Returns null if no log exists
 	 */
 	getLastTimestamp(channelId: string): string | null {
-		const logPath = join(this.workingDir, channelId, "log.jsonl");
+		const logPath = join(getChannelDir(this.workingDir, channelId), "log.jsonl");
 		if (!existsSync(logPath)) {
 			return null;
 		}

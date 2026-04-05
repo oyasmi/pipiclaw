@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { parseBuiltInCommand, renderBuiltInHelp } from "../agent/commands.js";
 import * as log from "../log.js";
+import { getChannelDir } from "./channel-paths.js";
 import { isRecord } from "../shared/type-guards.js";
 
 // ============================================================================
@@ -971,6 +972,6 @@ export class DingTalkBot {
 
 	private getConversationMetaPath(channelId: string): string | null {
 		if (!this.config.stateDir) return null;
-		return join(this.config.stateDir, channelId, ".channel-meta.json");
+		return join(getChannelDir(this.config.stateDir, channelId), ".channel-meta.json");
 	}
 }

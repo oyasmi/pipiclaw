@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getChannelDirName } from "../src/runtime/channel-paths.js";
 import { ChannelStore, type LoggedSubAgentRun } from "../src/runtime/store.js";
 
 const tempDirs: string[] = [];
@@ -181,5 +182,23 @@ describe("ChannelStore", () => {
 
 		await store.logBotResponse("dm_bot", "hello", "300");
 		expect(store.getLastTimestamp("dm_bot")).toBe("300");
+	});
+
+	it("stores channel logs under a single directory for channel ids with slashes", async () => {
+		const workingDir = createTempDir();
+		const store = new ChannelStore({ workingDir });
+		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+
+		await store.logMessage(channelId, {
+			date: "2026-04-01T10:00:00.000Z",
+			ts: "400",
+			user: "alice",
+			text: "hello group",
+			isBot: false,
+		});
+
+		const channelDir = join(workingDir, getChannelDirName(channelId));
+		expect(readFileSync(join(channelDir, "log.jsonl"), "utf-8")).toContain('"text":"hello group"');
+		expect(store.getLastTimestamp(channelId)).toBe("400");
 	});
 });

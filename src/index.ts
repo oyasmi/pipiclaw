@@ -81,6 +81,11 @@ export {
 	type DingTalkHandler,
 } from "./runtime/dingtalk.js";
 export {
+	ensureChannelDir,
+	getChannelDir,
+	getChannelDirName,
+} from "./runtime/channel-paths.js";
+export {
 	createEventsWatcher,
 	EventsWatcher,
 	type ImmediateEvent,

@@ -24,6 +24,7 @@ import {
 } from "./dingtalk.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
+import { ensureChannelDir } from "./channel-paths.js";
 
 export interface BootstrapPaths {
 	appName: string;
@@ -416,7 +417,7 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	const getState = (channelId: string): ChannelState => {
 		let state = channelStates.get(channelId);
 		if (!state) {
-			const channelDir = join(paths.workspaceDir, channelId);
+			const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
 			ensureChannelMemoryFilesSync(channelDir);
 			state = {
 				running: false,
