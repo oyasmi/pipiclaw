@@ -13,10 +13,13 @@ describe("prompt-builder", () => {
 		expect(prompt).toContain("## Pipiclaw Runtime");
 		expect(prompt).toContain("You are running directly on the host machine.");
 		expect(prompt).toContain("/workspace/root/dm_123");
+		expect(prompt).toContain("ENVIRONMENT.md");
 		expect(prompt).toContain("SESSION.md");
 		expect(prompt).toContain("The runtime may inject a small amount of relevant memory context");
 		expect(prompt).toContain("Available predefined sub-agents:\n- reviewer");
 		expect(prompt).toContain("Maximum 5 events can be queued.");
+		expect(prompt).not.toContain("scratch/");
+		expect(prompt).not.toContain("channel-specific tools");
 	});
 
 	it("builds docker runtime prompts with docker-specific instructions", () => {

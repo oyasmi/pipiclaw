@@ -96,7 +96,7 @@ At session start, runtime loads the following into session context:
 1. Workspace-level `SOUL.md`
 2. Workspace-level `AGENTS.md`
 3. Built-in tool descriptions
-4. Summaries of both workspace-level and channel-level skills
+4. Summaries of workspace-level skills
 
 At session start, runtime does not load the following by default:
 

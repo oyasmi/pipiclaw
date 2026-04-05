@@ -45,6 +45,7 @@ ${workspacePath}/
 ├── SOUL.md                      # Your identity/personality (read-only)
 ├── AGENTS.md                    # Custom behavior instructions (read-only)
 ├── MEMORY.md                    # Stable workspace memory (admin-managed, read on demand)
+├── ENVIRONMENT.md               # Environment facts and notable machine-level changes (read on demand)
 ├── sub-agents/                  # Predefined sub-agent definitions
 ├── skills/                      # Global CLI tools you create
 ├── events/                      # Scheduled events
@@ -53,9 +54,7 @@ ${workspacePath}/
     ├── MEMORY.md                # Channel durable memory (read on demand, runtime-managed)
     ├── HISTORY.md               # Channel summarized history (read on demand, runtime-managed)
     ├── log.jsonl                # Raw message archive (cold storage)
-    ├── context.jsonl            # Raw session archive (cold storage)
-    ├── scratch/                 # Your working directory
-    └── skills/                  # Channel-specific tools`);
+    └── context.jsonl            # Raw session archive (cold storage)`);
 
 	sections.push(`## Events
 You can schedule events that wake you up at specific times or when external things happen. Events are JSON files in \`${workspacePath}/events/\`.
@@ -96,6 +95,8 @@ Memory files are not preloaded into session context. Read them explicitly when m
 ### Files
 - Workspace memory: ${workspacePath}/MEMORY.md
   Stable shared background memory. Admin-managed. Read on demand.
+- Workspace environment: ${workspacePath}/ENVIRONMENT.md
+  Durable environment facts and notable machine-level changes. Read on demand when environment state or prior machine changes matter.
 - Channel session memory: ${channelPath}/SESSION.md
   Current working state for this channel. Runtime-managed. Read on demand. Prefer this when current task state matters.
 - Channel memory: ${channelPath}/MEMORY.md
@@ -108,6 +109,7 @@ Memory files are not preloaded into session context. Read them explicitly when m
 - SESSION.md is the primary runtime-managed working-state artifact for current active work.
 - The runtime automatically consolidates channel MEMORY.md and HISTORY.md before compaction or session trimming.
 - Workspace MEMORY.md is not updated by normal runtime consolidation.
+- ENVIRONMENT.md is not normal conversational memory. Read it only when environment history or machine state matters.
 
 ### Cold Storage
 - ${channelPath}/log.jsonl is a raw archive. It is not normal memory and is not proactively loaded.
@@ -115,14 +117,14 @@ Memory files are not preloaded into session context. Read them explicitly when m
 
 When a task depends on prior decisions, preferences, or long-running work, prefer SESSION.md first for current state, then MEMORY.md, then HISTORY.md.`);
 
-	sections.push(`## System Configuration Log
-Maintain ${workspacePath}/SYSTEM.md to log all environment modifications:
-- Installed packages (apk add, npm install, pip install)
-- Environment variables set
-- Config files modified
-- Skill dependencies installed
+	sections.push(`## Environment Log
+Maintain ${workspacePath}/ENVIRONMENT.md to record durable environment changes when they matter:
+- Installed packages or tools that future work depends on
+- Important environment variables or credential sources
+- Config files modified outside normal project code
+- Runtime prerequisites that affect future sessions
 
-Update this file whenever you modify the environment.`);
+Keep it factual and concise. Do not use it for task progress or conversation summaries.`);
 
 	sections.push(`## Tools
 - read: Read files

@@ -18,8 +18,8 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 
 ## Runtime Model
 
-- Workspace-level files: `SOUL.md`, `AGENTS.md`, `MEMORY.md`, `skills/`, `events/`, `sub-agents/`
-- Channel-level files: `SESSION.md`, `MEMORY.md`, `HISTORY.md`, `log.jsonl`, `context.jsonl`, `scratch/`, `skills/`
+- Workspace-level files: `SOUL.md`, `AGENTS.md`, `MEMORY.md`, `ENVIRONMENT.md`, `skills/`, `events/`, `sub-agents/`
+- Channel-level files: `SESSION.md`, `MEMORY.md`, `HISTORY.md`, `log.jsonl`, `context.jsonl`
 - `SESSION.md` is the current working state
 - `MEMORY.md` is durable channel memory
 - `HISTORY.md` is summarized older history

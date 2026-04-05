@@ -59,6 +59,7 @@ describe("bootstrap", () => {
 		expect(existsSync(join(paths.workspaceDir, "SOUL.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "AGENTS.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "MEMORY.md"))).toBe(true);
+		expect(existsSync(join(paths.workspaceDir, "ENVIRONMENT.md"))).toBe(true);
 
 		const second = bootstrapAppHome(paths);
 		expect(second.channelTemplateCreated).toBe(false);

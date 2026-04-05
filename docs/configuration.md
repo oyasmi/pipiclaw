@@ -41,6 +41,7 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
     ├── SOUL.md
     ├── AGENTS.md
     ├── MEMORY.md
+    ├── ENVIRONMENT.md
     ├── events/
     ├── skills/
     └── sub-agents/
@@ -57,6 +58,7 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
 | `~/.pi/pipiclaw/workspace/SOUL.md` | 工作区 | 助手身份与回复风格 | 是 |
 | `~/.pi/pipiclaw/workspace/AGENTS.md` | 工作区 | 工作规则与行为约束 | 是 |
 | `~/.pi/pipiclaw/workspace/MEMORY.md` | 工作区 | 持久化共享记忆 | 是 |
+| `~/.pi/pipiclaw/workspace/ENVIRONMENT.md` | 工作区 | 环境事实与重要环境变更记录 | 是 |
 | `~/.pi/pipiclaw/workspace/events/` | 工作区 | 定时事件目录 | 是 |
 | `~/.pi/pipiclaw/workspace/sub-agents/` | 工作区 | 预定义子代理目录 | 是 |
 | `~/.pi/pipiclaw/workspace/skills/` | 工作区 | 工作区级技能目录 | 是 |
@@ -721,7 +723,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 
 ## 技能目录 `workspace/skills/`（`workspace/skills/`）
 
-放工作区级技能资源。当前 Pipiclaw 会加载 workspace 和 channel 两层技能摘要。
+放工作区级技能资源。当前 Pipiclaw 只加载 workspace 级技能摘要。
 
 ## 会话通道级运行时文件（Channel-Level Runtime Files）
 
@@ -742,7 +744,6 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 | `context.jsonl` | 会话事件冷存储 |
 | `log.jsonl` | 原始运行日志 |
 | `subagent-runs.jsonl` | 子代理运行摘要 |
-| `skills/` | 会话通道级技能目录 |
 
 ## 按场景推荐的配置路径（Recommended Configuration Paths by Scenario）
 

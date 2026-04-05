@@ -130,6 +130,27 @@ This file stores stable workspace-level memory.
 <!-- Put long-lived project facts here. -->
 `;
 
+const DEFAULT_ENVIRONMENT = `# Environment
+
+This file records durable environment facts and notable machine-level changes.
+
+- Record installed tools, runtime prerequisites, and important config changes here.
+- Keep entries concise and factual.
+- Do not use this file for task progress, conversation summaries, or project-specific decisions.
+
+## Environment Facts
+
+<!-- Put stable machine or runtime facts here. -->
+
+## Installed Tools
+
+<!-- Record durable tools or dependencies that were installed for this workspace. -->
+
+## Config Changes
+
+<!-- Record important config or environment changes that affect future work. -->
+`;
+
 const CHANNEL_CONFIG_TEMPLATE = {
 	clientId: "your-dingtalk-client-id",
 	clientSecret: "your-dingtalk-client-secret",
@@ -215,6 +236,12 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 	writeTextFileIfMissing(join(paths.workspaceDir, "SOUL.md"), DEFAULT_SOUL, "workspace/SOUL.md", created);
 	writeTextFileIfMissing(join(paths.workspaceDir, "AGENTS.md"), DEFAULT_AGENT, "workspace/AGENTS.md", created);
 	writeTextFileIfMissing(join(paths.workspaceDir, "MEMORY.md"), DEFAULT_MEMORY, "workspace/MEMORY.md", created);
+	writeTextFileIfMissing(
+		join(paths.workspaceDir, "ENVIRONMENT.md"),
+		DEFAULT_ENVIRONMENT,
+		"workspace/ENVIRONMENT.md",
+		created,
+	);
 
 	const channelTemplateCreated = writeJsonFileIfMissing(
 		paths.channelConfigPath,

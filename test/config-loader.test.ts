@@ -71,13 +71,11 @@ describe("config-loader", () => {
 		expect(getAgentConfig(channelDir)).toBe("");
 	});
 
-	it("loads workspace and channel skills and lets channel override duplicates", () => {
+	it("loads workspace-level skills only", () => {
 		const workspaceDir = createTempDir();
 		const channelDir = join(workspaceDir, "dm_123");
 		const workspaceSkillsDir = join(workspaceDir, "skills");
-		const channelSkillsDir = join(channelDir, "skills");
 		mkdirSync(workspaceSkillsDir, { recursive: true });
-		mkdirSync(channelSkillsDir, { recursive: true });
 
 		loadSkillsFromDirMock.mockImplementation(({ source }: { source: string }) => {
 			if (source === "workspace") {
@@ -98,29 +96,14 @@ describe("config-loader", () => {
 					],
 				};
 			}
-			return {
-				skills: [
-					makeSkill(
-						"shared",
-						join(channelSkillsDir, "shared", "SKILL.md"),
-						join(channelSkillsDir, "shared"),
-						"channel",
-					),
-					makeSkill(
-						"channel-only",
-						join(channelSkillsDir, "channel-only", "SKILL.md"),
-						join(channelSkillsDir, "channel-only"),
-						"channel",
-					),
-				],
-			};
+			return { skills: [] };
 		});
 
 		const skills = loadPipiclawSkills(channelDir, "/sandbox/workspace");
-		expect(skills.map((skill) => skill.name).sort()).toEqual(["channel-only", "shared", "workspace-only"]);
+		expect(skills.map((skill) => skill.name).sort()).toEqual(["shared", "workspace-only"]);
 
 		const shared = skills.find((skill) => skill.name === "shared");
-		expect(shared?.filePath).toContain("/sandbox/workspace/dm_123/skills/shared/SKILL.md");
+		expect(shared?.filePath).toContain("/sandbox/workspace/skills/shared/SKILL.md");
 		expect(shared?.filePath.startsWith("/sandbox/workspace")).toBe(true);
 		expect(shared?.baseDir.startsWith("/sandbox/workspace")).toBe(true);
 	});

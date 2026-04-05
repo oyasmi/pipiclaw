@@ -1,6 +1,6 @@
 /**
  * Workspace resource loaders for pipiclaw:
- * SOUL.md, AGENTS.md, and workspace/channel skills.
+ * SOUL.md, AGENTS.md, and workspace-level skills.
  */
 
 import { loadSkillsFromDir, type Skill } from "@mariozechner/pi-coding-agent";
@@ -45,11 +45,9 @@ export function getAgentConfig(channelDir: string): string {
 }
 
 /**
- * Load skills from both workspace-level and channel-level skill directories.
- * Channel-level skills override global skills with the same name.
+ * Load skills from the workspace-level skill directory only.
  */
 export function loadPipiclawSkills(channelDir: string, workspacePath: string): Skill[] {
-	const skillMap = new Map<string, Skill>();
 	const hostWorkspacePath = join(channelDir, "..");
 
 	const translatePath = (hostPath: string): string => {
@@ -59,21 +57,12 @@ export function loadPipiclawSkills(channelDir: string, workspacePath: string): S
 		return hostPath;
 	};
 
-	// Load workspace-level skills (global)
 	const workspaceSkillsDir = join(hostWorkspacePath, "skills");
-	for (const skill of loadSkillsFromDir({ dir: workspaceSkillsDir, source: "workspace" }).skills) {
+	const skills = loadSkillsFromDir({ dir: workspaceSkillsDir, source: "workspace" }).skills;
+	for (const skill of skills) {
 		skill.filePath = translatePath(skill.filePath);
 		skill.baseDir = translatePath(skill.baseDir);
-		skillMap.set(skill.name, skill);
 	}
 
-	// Load channel-specific skills
-	const channelSkillsDir = join(channelDir, "skills");
-	for (const skill of loadSkillsFromDir({ dir: channelSkillsDir, source: "channel" }).skills) {
-		skill.filePath = translatePath(skill.filePath);
-		skill.baseDir = translatePath(skill.baseDir);
-		skillMap.set(skill.name, skill);
-	}
-
-	return Array.from(skillMap.values());
+	return skills;
 }

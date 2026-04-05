@@ -46,9 +46,7 @@ Target layout:
 ├── SESSION.md
 ├── HISTORY.md
 ├── log.jsonl
-├── context.jsonl
-├── scratch/
-└── skills/
+└── context.jsonl
 ```
 
 ### Workspace Root
