@@ -37,8 +37,9 @@ describe("edit tool", () => {
 		});
 
 		expect(executor.calls[0].command).toContain("cat 'notes.txt'");
-		expect(executor.calls[1].command).toContain("printf '%s'");
+		expect(executor.calls[1].command).toContain("cat > 'notes.txt'");
 		expect(executor.calls[1].command).toContain("> 'notes.txt'");
+		expect(executor.calls[1].options?.stdin).toBe("alpha\ndelta\ngamma\n");
 		expect(result.content[0]).toMatchObject({
 			type: "text",
 			text: "Successfully replaced text in notes.txt. Changed 4 characters to 5 characters.",

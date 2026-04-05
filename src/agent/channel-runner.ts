@@ -408,6 +408,10 @@ export class ChannelRunner implements AgentRunner {
 		await this.queueBusyMessage("followUp", this.requireQueuedMessage(text, "followup"), userName);
 	}
 
+	async flushMemoryForShutdown(): Promise<void> {
+		await this.memoryLifecycle.flushForShutdown();
+	}
+
 	async abort(): Promise<void> {
 		await this.session.abort();
 	}

@@ -164,6 +164,7 @@ const CHANNEL_CONFIG_TEMPLATE = {
 const MODELS_CONFIG_TEMPLATE = { providers: {} };
 
 const SHUTDOWN_WAIT_MS = 15000;
+const SHUTDOWN_FLUSH_WAIT_MS = 25000;
 const SHUTDOWN_ABORT_WAIT_MS = 5000;
 
 export const DEFAULT_BOOTSTRAP_PATHS: BootstrapPaths = {
@@ -384,6 +385,24 @@ function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolea
 	]);
 }
 
+function flushInactiveChannelMemory(channelStates: Map<string, ChannelState>): Promise<void>[] {
+	const flushes: Promise<void>[] = [];
+	for (const [channelId, state] of channelStates) {
+		if (state.running) {
+			continue;
+		}
+		flushes.push(
+			state.runner.flushMemoryForShutdown().catch((err) => {
+				log.logWarning(
+					`[${channelId}] Failed to flush memory during shutdown`,
+					err instanceof Error ? err.message : String(err),
+				);
+			}),
+		);
+	}
+	return flushes;
+}
+
 export async function bootstrap(argv: string[], options: BootstrapOptions = {}): Promise<AppContext> {
 	const env = options.env ?? process.env;
 	const io = options.io ?? console;
@@ -591,6 +610,15 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 							log.logWarning(`Shutdown forced exit with ${remainingTasks.length} task(s) still active`);
 						}
 					}
+				}
+			}
+
+			const flushes = flushInactiveChannelMemory(channelStates);
+			if (flushes.length > 0) {
+				log.logInfo(`Flushing memory for ${flushes.length} inactive channel(s) before shutdown`);
+				const flushed = await waitForTasks(flushes, SHUTDOWN_FLUSH_WAIT_MS);
+				if (!flushed) {
+					log.logWarning(`Shutdown memory flush exceeded ${SHUTDOWN_FLUSH_WAIT_MS}ms`);
 				}
 			}
 		})();

@@ -22,9 +22,10 @@ export function createWriteTool(executor: Executor): AgentTool<typeof writeSchem
 			signal?: AbortSignal,
 		) => {
 			await writeContent(executor, path, content, signal, { createParentDir: true });
+			const bytesWritten = Buffer.byteLength(content, "utf-8");
 
 			return {
-				content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
+				content: [{ type: "text", text: `Successfully wrote ${bytesWritten} bytes to ${path}` }],
 				details: undefined,
 			};
 		},

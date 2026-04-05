@@ -23,15 +23,15 @@ class ScriptedExecutor implements Executor {
 }
 
 describe("write-content", () => {
-	it("writes small content inline and can create parent directories", async () => {
+	it("streams content over stdin and can create parent directories", async () => {
 		const executor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);
 
 		await writeContent(executor, "nested/file.txt", "hello", undefined, { createParentDir: true });
 
 		expect(executor.calls).toEqual([
 			{
-				command: "mkdir -p 'nested' && printf '%s' 'hello' > 'nested/file.txt'",
-				options: { signal: undefined },
+				command: "mkdir -p 'nested' && cat > 'nested/file.txt'",
+				options: { signal: undefined, stdin: "hello" },
 			},
 		]);
 	});
@@ -50,17 +50,32 @@ describe("write-content", () => {
 		]);
 	});
 
+	it("preserves special characters by sending content through stdin instead of the shell", async () => {
+		const content = "line 1\nit's `dangerous` $(rm -rf /)\nbackslash\\\\done";
+		const executor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);
+
+		await writeContent(executor, "special.txt", content, undefined);
+
+		expect(executor.calls).toEqual([
+			{
+				command: "cat > 'special.txt'",
+				options: { signal: undefined, stdin: content },
+			},
+		]);
+		expect(executor.calls[0]?.command).not.toContain("dangerous");
+	});
+
 	it("throws when writes fail and write tool wraps successful writes", async () => {
 		const failingExecutor = new ScriptedExecutor([{ code: 1, stdout: "", stderr: "disk full" }]);
 		await expect(writeContent(failingExecutor, "broken.txt", "hello", undefined)).rejects.toThrow("disk full");
 
 		const toolExecutor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);
 		const tool = createWriteTool(toolExecutor);
-		const result = await tool.execute("call", { label: "write", path: "dir/out.txt", content: "hello" });
+		const result = await tool.execute("call", { label: "write", path: "dir/out.txt", content: "hello界" });
 
 		expect(toolExecutor.calls[0].command).toContain("mkdir -p 'dir'");
 		expect(result).toEqual({
-			content: [{ type: "text", text: "Successfully wrote 5 bytes to dir/out.txt" }],
+			content: [{ type: "text", text: "Successfully wrote 8 bytes to dir/out.txt" }],
 			details: undefined,
 		});
 	});

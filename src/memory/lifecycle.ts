@@ -21,7 +21,7 @@ import { updateChannelSessionMemory } from "./session.js";
 
 const IDLE_CONSOLIDATION_DELAY_MS = 60_000;
 
-export type ConsolidationReason = "compaction" | "new-session" | "idle";
+export type ConsolidationReason = "compaction" | "new-session" | "idle" | "shutdown";
 
 export interface MemoryLifecycleOptions {
 	channelId: string;
@@ -118,6 +118,22 @@ export class MemoryLifecycle {
 		this.scheduleIdleConsolidation();
 	}
 
+	async flushForShutdown(): Promise<void> {
+		this.clearIdleConsolidationTimer();
+		const run = async (): Promise<void> => {
+			if (!this.hasPendingAssistantSnapshot()) {
+				return;
+			}
+			await this.runPreflightConsolidation("shutdown");
+		};
+		const resultPromise = this.backgroundQueue.then(run, run);
+		this.backgroundQueue = resultPromise.then(
+			() => undefined,
+			() => undefined,
+		);
+		await resultPromise;
+	}
+
 	private clearIdleConsolidationTimer(): void {
 		if (!this.idleConsolidationTimer) {
 			return;
@@ -133,7 +149,13 @@ export class MemoryLifecycle {
 		if (!settings.enabled) {
 			return false;
 		}
-		return reason === "compaction" ? settings.forceRefreshBeforeCompact : settings.forceRefreshBeforeNewSession;
+		if (reason === "compaction") {
+			return settings.forceRefreshBeforeCompact;
+		}
+		if (reason === "new-session") {
+			return settings.forceRefreshBeforeNewSession;
+		}
+		return false;
 	}
 
 	private async refreshSessionMemory(request: SessionMemoryRefreshRequest): Promise<boolean> {

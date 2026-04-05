@@ -261,6 +261,39 @@ describe("MemoryLifecycle", () => {
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
 	});
 
+	it("flushes pending durable memory during shutdown and cancels the idle timer", async () => {
+		vi.useFakeTimers();
+		const lifecycle = createLifecycle({
+			minTurnsBetweenUpdate: 99,
+			minToolCallsBetweenUpdate: 99,
+			forceRefreshBeforeCompact: false,
+			forceRefreshBeforeNewSession: false,
+		});
+
+		lifecycle.noteCompletedAssistantTurn();
+		await vi.advanceTimersByTimeAsync(30_000);
+
+		await lifecycle.flushForShutdown();
+
+		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+	});
+
+	it("skips shutdown flush when there is no pending assistant snapshot", async () => {
+		const lifecycle = createLifecycle({
+			forceRefreshBeforeCompact: false,
+			forceRefreshBeforeNewSession: false,
+		});
+
+		await lifecycle.flushForShutdown();
+
+		expect(runInlineConsolidation).not.toHaveBeenCalled();
+		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
+	});
+
 	it("serializes background maintenance and keeps the queue alive after failures", async () => {
 		let releaseFirstRun: (() => void) | null = null;
 		vi.mocked(runBackgroundMaintenance)

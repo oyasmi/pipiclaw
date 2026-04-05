@@ -8,6 +8,7 @@ export interface AgentRunner {
 	handleBuiltinCommand(ctx: DingTalkContext, command: BuiltInCommand): Promise<void>;
 	queueSteer(text: string, userName?: string): Promise<void>;
 	queueFollowUp(text: string, userName?: string): Promise<void>;
+	flushMemoryForShutdown(): Promise<void>;
 	abort(): Promise<void>;
 }
 
