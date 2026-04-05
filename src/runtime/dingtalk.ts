@@ -13,8 +13,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { parseBuiltInCommand, renderBuiltInHelp } from "../agent/commands.js";
 import * as log from "../log.js";
-import { getChannelDir } from "./channel-paths.js";
 import { isRecord } from "../shared/type-guards.js";
+import { getChannelDir } from "./channel-paths.js";
 
 // ============================================================================
 // Types

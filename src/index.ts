@@ -71,6 +71,11 @@ export {
 	SUB_AGENTS_DIR_NAME,
 	WORKSPACE_DIR,
 } from "./paths.js";
+export {
+	ensureChannelDir,
+	getChannelDir,
+	getChannelDirName,
+} from "./runtime/channel-paths.js";
 export { createDingTalkContext } from "./runtime/delivery.js";
 export {
 	type BusyMessageMode,
@@ -80,11 +85,6 @@ export {
 	type DingTalkEvent,
 	type DingTalkHandler,
 } from "./runtime/dingtalk.js";
-export {
-	ensureChannelDir,
-	getChannelDir,
-	getChannelDirName,
-} from "./runtime/channel-paths.js";
 export {
 	createEventsWatcher,
 	EventsWatcher,

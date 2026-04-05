@@ -14,6 +14,7 @@ import {
 	WORKSPACE_DIR,
 } from "../paths.js";
 import { parseSandboxArg, type SandboxConfig, validateSandbox } from "../sandbox.js";
+import { ensureChannelDir } from "./channel-paths.js";
 import { createDingTalkContext } from "./delivery.js";
 import {
 	type BusyMessageMode,
@@ -24,7 +25,6 @@ import {
 } from "./dingtalk.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
-import { ensureChannelDir } from "./channel-paths.js";
 
 export interface BootstrapPaths {
 	appName: string;
