@@ -769,7 +769,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 2. 最好一并准备 AI Card；如果只是排查链路，才临时把 `cardTemplateId` 留空
 3. 直接使用 Anthropic 默认模型
 4. 设置 `ANTHROPIC_API_KEY`
-5. 启动后先发送 `/model`
+5. 启动后先发送 `/model`，确认当前模型和可见模型列表；切换时可使用精确的 `provider/modelId`、精确的 `modelId`，或能唯一命中的片段字符串
 
 ### 场景 B：已有 OpenAI-Compatible 网关（Scenario B: Existing OpenAI-Compatible Gateway）
 
@@ -783,7 +783,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 2. 优先使用 `openai-completions`
 3. 先加上常见 `compat` 配置
 4. 用 `settings.json` 固定默认模型
-5. 用 `/model` 验证模型列表
+5. 用 `/model` 验证模型列表；如果要切换模型，可以直接尝试唯一片段，例如 `/model qwen` 或 `/model turbo`
 
 ### 场景 C：Anthropic 通过企业代理接入（Scenario C: Anthropic Through Enterprise Proxy）
 

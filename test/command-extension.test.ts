@@ -88,12 +88,14 @@ describe("command-extension", () => {
 		expect(getLastCommandResult(api).content).toContain("claude-sonnet-4-5");
 	});
 
-	it("switches model on exact match and reports ambiguity / missing models", async () => {
+	it("switches model on exact or unique substring match and reports ambiguity / missing models", async () => {
 		const api = new FakeExtensionAPI();
 		const { options } = createOptions();
 		options.getAvailableModels.mockResolvedValue([
-			{ provider: "openai", id: "gpt-5-mini", name: "GPT-5 Mini" } as never,
-			{ provider: "custom", id: "gpt-5-mini", name: "Custom GPT-5 Mini" } as never,
+			{ provider: "bailian", id: "glm-5", name: "GLM 5" } as never,
+			{ provider: "bailian", id: "qwen3-max-2026-01-23", name: "Qwen 3 Max" } as never,
+			{ provider: "bailian", id: "kimi-k2.5", name: "Kimi K2.5" } as never,
+			{ provider: "zpai", id: "glm-5-turbo", name: "GLM 5 Turbo" } as never,
 			{ provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" } as never,
 		]);
 		createCommandExtension(options)(api as never);
@@ -102,7 +104,15 @@ describe("command-extension", () => {
 		expect(options.switchModel).toHaveBeenCalledTimes(1);
 		expect(getLastCommandResult(api).content).toContain("已切换模型");
 
-		await api.registeredCommands.get("model")?.handler("gpt-5-mini", createCommandContext());
+		await api.registeredCommands.get("model")?.handler("turbo", createCommandContext());
+		expect(options.switchModel).toHaveBeenCalledTimes(2);
+		expect(getLastCommandResult(api).content).toContain("zpai/glm-5-turbo");
+
+		await api.registeredCommands.get("model")?.handler("qwen", createCommandContext());
+		expect(options.switchModel).toHaveBeenCalledTimes(3);
+		expect(getLastCommandResult(api).content).toContain("bailian/qwen3-max-2026-01-23");
+
+		await api.registeredCommands.get("model")?.handler("glm", createCommandContext());
 		expect(getLastCommandResult(api).content).toContain("匹配到多个模型");
 
 		await api.registeredCommands.get("model")?.handler("missing-model", createCommandContext());

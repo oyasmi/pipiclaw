@@ -4,6 +4,7 @@ import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
 	findExactModelReferenceMatch,
+	findModelReferenceMatch,
 	formatModelList,
 	formatModelReference,
 	resolveInitialModel,
@@ -50,6 +51,31 @@ describe("model-utils", () => {
 			ambiguous: true,
 		});
 		expect(findExactModelReferenceMatch("missing-model", [anthropicModel, openaiModel])).toEqual({
+			ambiguous: false,
+		});
+	});
+
+	it("supports unique substring matches without fuzzy normalization", () => {
+		const bailianGlm = { provider: "bailian", id: "glm-5", name: "GLM 5" } as Model<Api>;
+		const bailianKimi = { provider: "bailian", id: "kimi-k2.5", name: "Kimi K2.5" } as Model<Api>;
+		const zpaiTurbo = { provider: "zpai", id: "glm-5-turbo", name: "GLM 5 Turbo" } as Model<Api>;
+
+		expect(findModelReferenceMatch("turbo", [bailianGlm, bailianKimi, zpaiTurbo])).toEqual({
+			match: zpaiTurbo,
+			ambiguous: false,
+		});
+		expect(findModelReferenceMatch("zpai", [bailianGlm, bailianKimi, zpaiTurbo])).toEqual({
+			match: zpaiTurbo,
+			ambiguous: false,
+		});
+		expect(findModelReferenceMatch("k2.5", [bailianGlm, bailianKimi, zpaiTurbo])).toEqual({
+			match: bailianKimi,
+			ambiguous: false,
+		});
+		expect(findModelReferenceMatch("glm", [bailianGlm, bailianKimi, zpaiTurbo])).toEqual({
+			ambiguous: true,
+		});
+		expect(findModelReferenceMatch("glm5", [bailianGlm, bailianKimi, zpaiTurbo])).toEqual({
 			ambiguous: false,
 		});
 	});

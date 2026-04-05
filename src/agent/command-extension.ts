@@ -8,7 +8,7 @@ import type {
 	SessionStats,
 } from "@mariozechner/pi-coding-agent";
 import { basename } from "path";
-import { findExactModelReferenceMatch, formatModelList, formatModelReference } from "../models/utils.js";
+import { findModelReferenceMatch, formatModelList, formatModelReference } from "../models/utils.js";
 
 export const COMMAND_RESULT_CUSTOM_TYPE = "pipiclaw.command_result";
 
@@ -77,7 +77,7 @@ export function createCommandExtension(options: PipiclawCommandExtensionOptions)
 		});
 
 		pi.registerCommand("model", {
-			description: "Show the current model or switch models using an exact match",
+			description: "Show the current model or switch models using an exact or uniquely matching substring",
 			handler: async (args) => {
 				const availableModels = await options.getAvailableModels();
 				const currentModel = options.getCurrentModel();
@@ -92,7 +92,7 @@ export function createCommandExtension(options: PipiclawCommandExtensionOptions)
 
 Current model: ${current}
 
-Use \`/model <provider/modelId>\` or \`/model <modelId>\` to switch. Bare model IDs must resolve uniquely.
+Use \`/model <provider/modelId>\`, \`/model <modelId>\`, or any uniquely matching substring to switch.
 
 Available models:
 ${available}`,
@@ -100,7 +100,7 @@ ${available}`,
 					return;
 				}
 
-				const match = findExactModelReferenceMatch(args, availableModels);
+				const match = findModelReferenceMatch(args, availableModels);
 				const available =
 					availableModels.length > 0 ? formatModelList(availableModels, currentModel, 10) : "- (none)";
 
@@ -113,7 +113,7 @@ ${available}`,
 				if (match.ambiguous) {
 					sendCommandResult(
 						pi,
-						`未切换模型：\`${args.trim()}\` 匹配到多个模型。请改用精确的 \`provider/modelId\` 形式。
+						`未切换模型：\`${args.trim()}\` 匹配到多个模型。请提供更精确的 \`provider/modelId\`、\`modelId\` 或更长的片段。
 
 Available models:
 ${available}`,
@@ -123,7 +123,7 @@ ${available}`,
 
 				sendCommandResult(
 					pi,
-					`未找到模型 \`${args.trim()}\`。请使用精确的 \`provider/modelId\` 或唯一的 \`modelId\`。
+					`未找到模型 \`${args.trim()}\`。请使用精确的 \`provider/modelId\`、唯一的 \`modelId\`，或能唯一命中的片段字符串。
 
 Available models:
 ${available}`,

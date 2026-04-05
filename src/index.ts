@@ -56,6 +56,7 @@ export {
 export { getApiKeyForModel } from "./models/api-keys.js";
 export {
 	findExactModelReferenceMatch,
+	findModelReferenceMatch,
 	formatModelList,
 	formatModelReference,
 	resolveInitialModel,

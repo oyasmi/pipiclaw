@@ -57,6 +57,30 @@ export function findExactModelReferenceMatch(
 	return { ambiguous: idMatches.length > 1 };
 }
 
+export function findModelReferenceMatch(
+	modelReference: string,
+	availableModels: Model<Api>[],
+): { match?: Model<Api>; ambiguous: boolean } {
+	const exactMatch = findExactModelReferenceMatch(modelReference, availableModels);
+	if (exactMatch.match || exactMatch.ambiguous) {
+		return exactMatch;
+	}
+
+	const normalizedReference = modelReference.trim().toLowerCase();
+	if (!normalizedReference) {
+		return { ambiguous: false };
+	}
+
+	const substringMatches = availableModels.filter((model) =>
+		formatModelReference(model).toLowerCase().includes(normalizedReference),
+	);
+	if (substringMatches.length === 1) {
+		return { match: substringMatches[0], ambiguous: false };
+	}
+
+	return { ambiguous: substringMatches.length > 1 };
+}
+
 export function formatModelList(
 	models: Model<Api>[],
 	currentModel: Model<Api> | undefined,

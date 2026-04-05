@@ -37,7 +37,7 @@ These are handled inside the Pipiclaw session layer:
   Show current session state, message stats, token usage, and model info
   Example: \`/session\`
 - \`/model [provider/modelId|modelId]\`
-  Show the current model, or switch models using an exact match
+  Show the current model, or switch models using an exact match or a uniquely matching substring
   Example: \`/model\`
   Example: \`/model anthropic/claude-opus-4-6\`
 - \`/new\`
