@@ -190,7 +190,7 @@ class DuckDuckGoSearchProvider implements SearchProvider {
 		}
 
 		const dom = new JSDOM(text);
-		const items = Array.from(dom.window.document.querySelectorAll(".result"));
+		const items = Array.from(dom.window.document.querySelectorAll<HTMLElement>(".result"));
 		const results: WebSearchResultItem[] = [];
 		for (const item of items) {
 			const link = item.querySelector(".result__title a") ?? item.querySelector("a.result__a");

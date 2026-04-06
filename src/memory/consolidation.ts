@@ -19,7 +19,7 @@ import {
 	rewriteChannelHistory,
 	rewriteChannelMemory,
 } from "./files.js";
-import { runSidecarTask } from "./sidecar-worker.js";
+import { runRetriedSidecarTask, runSidecarTask } from "./sidecar-worker.js";
 
 const INLINE_TRANSCRIPT_MAX_CHARS = 28_000;
 const MEMORY_CLEANUP_LENGTH_THRESHOLD = 5_000;
@@ -217,14 +217,16 @@ ${currentHistory || "(empty)"}
 Conversation chunk to persist:
 ${transcript || "(empty)"}`;
 
-	const rawResponse = await runWorkerPrompt(
-		"memory-inline-consolidation",
-		options.model,
-		options.resolveApiKey,
-		INLINE_CONSOLIDATION_SYSTEM_PROMPT,
+	const result = await runRetriedSidecarTask({
+		name: "memory-inline-consolidation",
+		model: options.model,
+		resolveApiKey: options.resolveApiKey,
+		systemPrompt: INLINE_CONSOLIDATION_SYSTEM_PROMPT,
 		prompt,
-		INLINE_CONSOLIDATION_TIMEOUT_MS,
-	);
+		timeoutMs: INLINE_CONSOLIDATION_TIMEOUT_MS,
+		parse: (text) => text.trim(),
+	});
+	const rawResponse = result.output;
 	return parseConsolidationResponse(rawResponse);
 }
 

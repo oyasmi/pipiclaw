@@ -18,7 +18,7 @@ interface DomElement extends DomNode {
 
 function createSilentVirtualConsole(): VirtualConsole {
 	const virtualConsole = new VirtualConsole();
-	virtualConsole.on("jsdomError", (_error) => {
+	virtualConsole.on("jsdomError", (_error: unknown) => {
 		// Ignore parser noise such as malformed inline CSS. These pages are still
 		// often readable enough for Readability / text extraction, and forwarding
 		// jsdom's internal parse warnings pollutes Pipiclaw runtime logs.

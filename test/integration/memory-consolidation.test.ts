@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/memory/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
+	runRetriedSidecarTask: vi.fn(),
 	SidecarParseError: class SidecarParseError extends Error {
 		readonly taskName: string;
 		readonly rawText: string;
@@ -19,7 +20,7 @@ vi.mock("../../src/memory/sidecar-worker.js", () => ({
 }));
 
 import { runBackgroundMaintenance, runInlineConsolidation } from "../../src/memory/consolidation.js";
-import { runSidecarTask } from "../../src/memory/sidecar-worker.js";
+import { runRetriedSidecarTask, runSidecarTask } from "../../src/memory/sidecar-worker.js";
 import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
 
 const tempDirs: string[] = [];
@@ -66,6 +67,7 @@ describe("memory-consolidation integration", () => {
 			appendedHistoryBlock: false,
 		});
 		expect(runSidecarTask).not.toHaveBeenCalled();
+		expect(runRetriedSidecarTask).not.toHaveBeenCalled();
 	});
 
 	it("appends durable memory entries and a history block to the real channel files", async () => {
@@ -75,7 +77,7 @@ describe("memory-consolidation integration", () => {
 			session: "# Session Title\n\nFix login regression\n",
 			history: "# Channel History\n",
 		});
-		vi.mocked(runSidecarTask).mockResolvedValue({
+		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
 			rawText:
 				'{"memoryEntries":["OAuth callback fails in prod"],"historyBlock":"- Investigated callback state handling."}',
 			output:
@@ -108,7 +110,7 @@ describe("memory-consolidation integration", () => {
 		const channelDir = createChannelDir();
 		setupChannelFiles(channelDir);
 
-		vi.mocked(runSidecarTask).mockImplementation(async (task) => {
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
 			if (task.name === "memory-inline-consolidation") {
 				expect(task.prompt).toContain("after boundary");
 				expect(task.prompt).not.toContain("before boundary");
@@ -156,7 +158,7 @@ describe("memory-consolidation integration", () => {
 			] as never,
 		});
 
-		expect(runSidecarTask).toHaveBeenCalledTimes(1);
+		expect(runRetriedSidecarTask).toHaveBeenCalledTimes(1);
 	});
 
 	it("rewrites oversized memory and folds older history blocks during background maintenance", async () => {

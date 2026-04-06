@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/memory/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
+	runRetriedSidecarTask: vi.fn(),
 	SidecarParseError: class SidecarParseError extends Error {
 		readonly taskName: string;
 		readonly rawText: string;
@@ -21,7 +22,7 @@ vi.mock("../src/memory/sidecar-worker.js", () => ({
 
 import { readChannelSession } from "../src/memory/files.js";
 import { renderSessionMemory, updateChannelSessionMemory } from "../src/memory/session.js";
-import { runSidecarTask, SidecarParseError } from "../src/memory/sidecar-worker.js";
+import { runRetriedSidecarTask, SidecarParseError } from "../src/memory/sidecar-worker.js";
 
 const tempDirs: string[] = [];
 
@@ -69,7 +70,7 @@ describe("session-memory", () => {
 			"utf-8",
 		);
 
-		vi.mocked(runSidecarTask).mockResolvedValue({
+		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
 			rawText: "{}",
 			output: {
 				title: "Fix login regression",
@@ -119,7 +120,7 @@ describe("session-memory", () => {
 		);
 		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n", "utf-8");
 
-		vi.mocked(runSidecarTask).mockResolvedValue({
+		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
 			rawText: "{}",
 			output: {
 				title: "New title",
@@ -146,7 +147,7 @@ describe("session-memory", () => {
 		writeFileSync(sessionPath, "# Session Title\n\nStable title\n", "utf-8");
 		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n", "utf-8");
 
-		vi.mocked(runSidecarTask).mockRejectedValue(
+		vi.mocked(runRetriedSidecarTask).mockRejectedValue(
 			new SidecarParseError("session-memory-update", '{"broken":true}', new Error("schema mismatch")),
 		);
 
@@ -172,7 +173,7 @@ describe("session-memory", () => {
 		writeFileSync(join(channelDir, "SESSION.md"), "# Session Title\n\nOld title\n", "utf-8");
 		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n", "utf-8");
 
-		vi.mocked(runSidecarTask).mockResolvedValue({
+		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
 			rawText: "{}",
 			output: {},
 		});
@@ -185,7 +186,7 @@ describe("session-memory", () => {
 			timeoutMs: 45000,
 		});
 
-		expect(vi.mocked(runSidecarTask)).toHaveBeenCalledWith(
+		expect(vi.mocked(runRetriedSidecarTask)).toHaveBeenCalledWith(
 			expect.objectContaining({
 				name: "session-memory-update",
 				timeoutMs: 45000,

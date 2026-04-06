@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/memory/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
+	runRetriedSidecarTask: vi.fn(),
 	SidecarParseError: class SidecarParseError extends Error {
 		readonly taskName: string;
 		readonly rawText: string;
@@ -20,7 +21,7 @@ vi.mock("../../src/memory/sidecar-worker.js", () => ({
 
 import { readChannelHistory, readChannelMemory, readChannelSession } from "../../src/memory/files.js";
 import { MemoryLifecycle } from "../../src/memory/lifecycle.js";
-import { runSidecarTask } from "../../src/memory/sidecar-worker.js";
+import { runRetriedSidecarTask, runSidecarTask } from "../../src/memory/sidecar-worker.js";
 import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
 
 const tempDirs: string[] = [];
@@ -128,7 +129,7 @@ describe("memory-lifecycle integration", () => {
 			forceRefreshBeforeCompact: false,
 			forceRefreshBeforeNewSession: false,
 		});
-		vi.mocked(runSidecarTask).mockImplementation(async (task) => {
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
 			expect(task.name).toBe("session-memory-update");
 			return {
 				rawText: "{}",
@@ -148,7 +149,7 @@ describe("memory-lifecycle integration", () => {
 			expect(session).toContain("Fix login regression");
 			expect(session).toContain("Investigating callback state flow.");
 		});
-		expect(runSidecarTask).toHaveBeenCalledTimes(1);
+		expect(runRetriedSidecarTask).toHaveBeenCalledTimes(1);
 	});
 
 	it("persists durable memory after the conversation goes idle", async () => {
@@ -159,7 +160,7 @@ describe("memory-lifecycle integration", () => {
 			forceRefreshBeforeCompact: false,
 			forceRefreshBeforeNewSession: false,
 		});
-		vi.mocked(runSidecarTask).mockImplementation(async (task) => {
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
 			if (task.name === "memory-inline-consolidation") {
 				return {
 					rawText:
@@ -190,7 +191,7 @@ describe("memory-lifecycle integration", () => {
 			forceRefreshBeforeCompact: false,
 			forceRefreshBeforeNewSession: false,
 		});
-		vi.mocked(runSidecarTask).mockResolvedValue({
+		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
 			rawText: "{}",
 			output: {
 				title: "Fix login regression",
@@ -211,13 +212,13 @@ describe("memory-lifecycle integration", () => {
 		lifecycle.noteCompletedAssistantTurn();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(runSidecarTask).toHaveBeenCalledTimes(1);
+		expect(runRetriedSidecarTask).toHaveBeenCalledTimes(1);
 		expect(await readChannelSession(channelDir)).toContain("Checked callback state serialization.");
 	});
 
 	it("runs the compaction chain in order: session refresh, memory append, history append", async () => {
 		const { channelDir, fakePi } = createLifecycleHarness();
-		vi.mocked(runSidecarTask).mockImplementation(async (task) => {
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
 			if (task.name === "session-memory-update") {
 				return {
 					rawText: "{}",
@@ -252,7 +253,7 @@ describe("memory-lifecycle integration", () => {
 			expect(await readChannelSession(channelDir)).toContain("Investigating callback regression.");
 			expect(await readChannelMemory(channelDir)).toContain("Callback verification must stay backwards-compatible");
 			expect(await readChannelHistory(channelDir)).toContain("Compacted recent debugging work.");
-			const taskNames = vi.mocked(runSidecarTask).mock.calls.map(([task]) => task.name);
+			const taskNames = vi.mocked(runRetriedSidecarTask).mock.calls.map(([task]) => task.name);
 			expect(taskNames).toEqual(["session-memory-update", "memory-inline-consolidation"]);
 		});
 	});
@@ -310,7 +311,7 @@ describe("memory-lifecycle integration", () => {
 
 	it("continues consolidation even when the forced session refresh fails", async () => {
 		const { channelDir, fakePi } = createLifecycleHarness();
-		vi.mocked(runSidecarTask).mockImplementation(async (task) => {
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
 			if (task.name === "session-memory-update") {
 				throw new Error("session update timeout");
 			}

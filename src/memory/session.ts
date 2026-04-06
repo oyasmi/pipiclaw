@@ -8,7 +8,7 @@ import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText } from "../shared/text-utils.js";
 import { buildStandardMessages, isRecord } from "../shared/type-guards.js";
 import { readChannelMemory, readChannelSession, rewriteChannelSession } from "./files.js";
-import { runSidecarTask, SidecarParseError } from "./sidecar-worker.js";
+import { runRetriedSidecarTask, SidecarParseError } from "./sidecar-worker.js";
 
 const SESSION_TRANSCRIPT_MAX_CHARS = 20_000;
 const SESSION_MEMORY_MAX_CHARS = 4_000;
@@ -266,7 +266,7 @@ export async function updateChannelSessionMemory(options: SessionMemoryUpdateOpt
 
 	let update: SessionMemoryStateUpdate;
 	try {
-		const result = await runSidecarTask({
+		const result = await runRetriedSidecarTask({
 			name: "session-memory-update",
 			model: options.model,
 			resolveApiKey: options.resolveApiKey,

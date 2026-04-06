@@ -19,6 +19,9 @@ export interface SidecarResult<T> {
 	rawText: string;
 }
 
+const SIDE_CAR_RETRY_DELAY_MS = 2_000;
+const SIDE_CAR_MAX_ATTEMPTS = 2;
+
 export class SidecarTimeoutError extends Error {
 	readonly taskName: string;
 	readonly timeoutMs: number;
@@ -42,6 +45,48 @@ export class SidecarParseError extends Error {
 		this.rawText = rawText;
 		this.cause = cause;
 	}
+}
+
+function createAbortError(taskName: string, reason: unknown): Error {
+	return reason instanceof Error ? reason : new Error(`Sidecar task "${taskName}" aborted`);
+}
+
+function isExternalAbort(task: SidecarTask<unknown>): boolean {
+	return task.signal?.aborted === true;
+}
+
+function delay(ms: number, task: SidecarTask<unknown>): Promise<void> {
+	if (ms <= 0) {
+		return Promise.resolve();
+	}
+
+	return new Promise<void>((resolve, reject) => {
+		const signal = task.signal;
+		const timer = setTimeout(() => {
+			removeAbortListener();
+			resolve();
+		}, ms);
+
+		const abort = () => {
+			clearTimeout(timer);
+			removeAbortListener();
+			reject(createAbortError(task.name, signal?.reason));
+		};
+
+		const removeAbortListener = () => {
+			signal?.removeEventListener("abort", abort);
+		};
+
+		if (!signal) {
+			return;
+		}
+		if (signal.aborted) {
+			abort();
+			return;
+		}
+
+		signal.addEventListener("abort", abort, { once: true });
+	});
 }
 
 export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarResult<T>> {
@@ -111,9 +156,7 @@ export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarRe
 			new Promise<never>((_, reject) => {
 				const abort = () => {
 					abortWorker();
-					reject(
-						signal.reason instanceof Error ? signal.reason : new Error(`Sidecar task "${task.name}" aborted`),
-					);
+					reject(createAbortError(task.name, signal.reason));
 				};
 
 				if (signal.aborted) {
@@ -135,4 +178,28 @@ export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarRe
 		}
 		removeAbortListener();
 	}
+}
+
+export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarResult<T>> {
+	let lastError: unknown;
+
+	for (let attempt = 1; attempt <= SIDE_CAR_MAX_ATTEMPTS; attempt++) {
+		if (isExternalAbort(task)) {
+			throw createAbortError(task.name, task.signal?.reason);
+		}
+
+		try {
+			return await runSidecarTask(task);
+		} catch (error) {
+			lastError = error;
+
+			if (attempt >= SIDE_CAR_MAX_ATTEMPTS || error instanceof SidecarParseError || isExternalAbort(task)) {
+				throw error;
+			}
+
+			await delay(SIDE_CAR_RETRY_DELAY_MS, task);
+		}
+	}
+
+	throw lastError instanceof Error ? lastError : new Error(`Sidecar task "${task.name}" failed`);
 }
