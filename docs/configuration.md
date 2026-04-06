@@ -38,6 +38,7 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
 ├── auth.json
 ├── models.json
 ├── settings.json
+├── tools.json
 └── workspace/
     ├── SOUL.md
     ├── AGENTS.md
@@ -64,6 +65,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `~/.pi/pipiclaw/auth.json` | 全局 | 模型提供方凭据（provider credentials） | 是 |
 | `~/.pi/pipiclaw/models.json` | 全局 | 自定义模型提供方 / 模型 | 是 |
 | `~/.pi/pipiclaw/settings.json` | 全局 | Pipiclaw 运行时设置 | 是 |
+| `~/.pi/pipiclaw/tools.json` | 全局 | 内建工具配置，例如 `tools.web` | 是 |
 | `~/.pi/pipiclaw/workspace/SOUL.md` | 工作区 | 助手身份与回复风格 | 是 |
 | `~/.pi/pipiclaw/workspace/AGENTS.md` | 工作区 | 工作规则与行为约束 | 是 |
 | `~/.pi/pipiclaw/workspace/MEMORY.md` | 工作区 | 持久化共享记忆 | 是 |
@@ -80,7 +82,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `PIPICLAW_HOME` | 覆盖默认的 `~/.pi/pipiclaw/` 根目录 |
 | `PIPICLAW_SHELL` | Windows host 模式下指定 POSIX shell，可指向 Git Bash 的 `bash.exe` |
 | `PIPICLAW_DEBUG` | 在会话通道目录中写出 `last_prompt.json` |
-| `DINGTALK_FORCE_PROXY` | 保留 axios 代理环境变量，而不是自动清理 |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` | 标准代理环境变量；DingTalk runtime 和 web 工具默认都会尊重 |
 
 ### Windows Host 模式说明（Windows Host Mode Notes）
 
@@ -131,6 +133,17 @@ Pipiclaw 的模型提供方凭据（provider credential）解析主要继承自 
 Pipiclaw 当前只使用 app home 下的 `settings.json`。默认是 `~/.pi/pipiclaw/settings.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/settings.json`。
 
 pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有采用。不要假设把配置写到项目目录 `.pi/settings.json` 就会生效。
+
+### 内建工具设置（Built-in Tool Settings）
+
+Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.json`。默认是 `~/.pi/pipiclaw/tools.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/tools.json`。
+
+当前最主要的是 `tools.web` 配置空间，用于控制：
+
+1. 是否启用 `web_search` / `web_fetch`
+2. 搜索 provider，例如 `duckduckgo`、`brave`、`tavily`、`jina`、`searxng`
+3. web 请求代理
+4. fetch 的默认超时、截断和 Jina fallback 行为
 
 ## 钉钉配置文件 `channel.json`（`channel.json`）
 
@@ -695,6 +708,131 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 适合：
 
 - 当前模型上下文较大
+
+## 内建工具配置文件 `tools.json`（`tools.json`）
+
+`tools.json` 用来配置 Pipiclaw 的内建工具能力。目前最主要的是 `tools.web`，也就是 `web_search` / `web_fetch`。
+
+### 启动后默认生成的模板（Bootstrap Template）
+
+```json
+{
+  "tools": {
+    "web": {
+      "enable": false,
+      "proxy": null,
+      "search": {
+        "provider": "brave",
+        "apiKey": ""
+      }
+    }
+  },
+  "_examples": {
+    "proxy": "http://127.0.0.1:7890",
+    "apiKey": "BSA..."
+  }
+}
+```
+
+这份模板的意图是：
+
+1. 默认不注册 `web_search` / `web_fetch`
+2. 给出一个可直接改造的 Brave 示例
+3. 给出可选代理示例，但默认不强行启用代理
+
+如果你要启用它，通常只需要：
+
+1. 把 `tools.web.enable` 改成 `true`
+2. 把 `tools.web.search.apiKey` 填成真实 Brave key
+3. 如需代理，再把 `_examples.proxy` 复制到 `tools.web.proxy`
+
+### 字段说明（Field Reference）
+
+#### `tools.web`
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `enable` | `false` | 是否启用所有内建 web 工具；设为 `false` 时，`web_search` 和 `web_fetch` 都不会注册 |
+| `proxy` | `null` | web 请求专用代理；设置后优先于环境变量 |
+
+#### `tools.web.search`
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `provider` | `"brave"` | 搜索后端：`duckduckgo`、`brave`、`tavily`、`jina`、`searxng` |
+| `apiKey` | `""` | `brave`、`tavily`、`jina` 的 API key |
+| `baseUrl` | `""` | `searxng` 的 base URL |
+| `maxResults` | `5` | 每次搜索返回结果数，范围 `1-10` |
+| `timeoutMs` | `30000` | 搜索请求超时 |
+
+#### `tools.web.fetch`
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `maxChars` | `50000` | 抓取文本的最大返回字符数 |
+| `timeoutMs` | `30000` | 抓取请求超时 |
+| `maxImageBytes` | `10485760` | 抓取图片的最大字节数 |
+| `preferJina` | `false` | 是否优先使用 Jina Reader |
+| `enableJinaFallback` | `false` | 本地提取失败后是否允许回退到 Jina Reader |
+| `defaultExtractMode` | `"markdown"` | HTML 默认提取格式 |
+
+### 常见示例（Common Examples）
+
+#### 1. 禁用所有内建 web 工具
+
+```json
+{
+  "tools": {
+    "web": {
+      "enable": false
+    }
+  }
+}
+```
+
+#### 2. 使用 Brave
+
+```json
+{
+  "tools": {
+    "web": {
+      "enable": true,
+      "search": {
+        "provider": "brave",
+        "apiKey": "BSA..."
+      }
+    }
+  }
+}
+```
+
+#### 3. 使用 SearXNG
+
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "searxng",
+        "baseUrl": "https://searx.example"
+      }
+    }
+  }
+}
+```
+
+### 代理优先级（Proxy Precedence）
+
+web 工具的代理顺序是：
+
+1. `tools.web.proxy`
+2. `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`
+3. 直连
+
+补充说明：
+
+- DingTalk runtime 也会尊重同一套标准代理环境变量
+- 当前不再支持 `DINGTALK_FORCE_PROXY`
 - 希望在 compaction 前保留更多近期消息
 
 ## 工作区级配置（Workspace-Level Configuration）

@@ -14,6 +14,12 @@ export interface SecurityConfig {
 		writeDeny: string[];
 		resolveSymlinks: boolean;
 	};
+	networkGuard: {
+		enabled: boolean;
+		allowedCidrs: string[];
+		allowedHosts: string[];
+		maxRedirects: number;
+	};
 	audit: {
 		logBlocked: boolean;
 		logFile?: string;
@@ -71,4 +77,14 @@ export interface BlockedCommandLogEvent extends SecurityLogEventBase {
 	matchedText?: string;
 }
 
-export type SecurityLogEvent = BlockedPathLogEvent | BlockedCommandLogEvent;
+export interface BlockedNetworkLogEvent extends SecurityLogEventBase {
+	type: "network";
+	url: string;
+	stage: "request" | "redirect";
+	resolvedHost?: string;
+	resolvedAddress?: string;
+	category?: string;
+	reason?: string;
+}
+
+export type SecurityLogEvent = BlockedPathLogEvent | BlockedCommandLogEvent | BlockedNetworkLogEvent;

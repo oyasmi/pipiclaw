@@ -10,3 +10,4 @@ export const CHANNEL_CONFIG_PATH = join(APP_HOME_DIR, "channel.json");
 export const AUTH_CONFIG_PATH = join(APP_HOME_DIR, "auth.json");
 export const MODELS_CONFIG_PATH = join(APP_HOME_DIR, "models.json");
 export const SETTINGS_CONFIG_PATH = join(APP_HOME_DIR, "settings.json");
+export const TOOLS_CONFIG_PATH = join(APP_HOME_DIR, "tools.json");

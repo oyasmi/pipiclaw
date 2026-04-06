@@ -14,8 +14,11 @@ import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText, extractAssistantText, extractLabelFromArgs, HAN_REGEX } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
 import { createBashTool } from "../tools/bash.js";
+import type { PipiclawWebToolsConfig } from "../tools/config.js";
 import { createEditTool } from "../tools/edit.js";
 import { createReadTool } from "../tools/read.js";
+import { createWebFetchTool } from "../tools/web-fetch.js";
+import { createWebSearchTool } from "../tools/web-search.js";
 import { createWriteTool } from "../tools/write.js";
 import {
 	formatSubAgentList,
@@ -89,6 +92,7 @@ export interface SubAgentToolOptions {
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	getMemoryRecallSettings?: () => PipiclawMemoryRecallSettings;
 	securityConfig?: SecurityConfig;
+	webConfig?: PipiclawWebToolsConfig;
 	runtimeContext: {
 		workspacePath: string;
 		channelId: string;
@@ -196,6 +200,30 @@ function createToolSet(executor: Executor, bashTimeoutSec: number, options: SubA
 			channelId: options.runtimeContext.channelId,
 		}),
 	];
+}
+
+function createNamedToolSet(
+	executor: Executor,
+	bashTimeoutSec: number,
+	options: SubAgentToolOptions,
+): Record<string, AgentTool<any>> {
+	const tools = createToolSet(executor, bashTimeoutSec, options);
+	const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool])) as Record<string, AgentTool<any>>;
+	if (options.webConfig && options.webConfig.enable !== false) {
+		byName.web_search = createWebSearchTool({
+			webConfig: options.webConfig,
+			securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
+			workspaceDir: options.workspaceDir,
+			channelId: options.runtimeContext.channelId,
+		});
+		byName.web_fetch = createWebFetchTool({
+			webConfig: options.webConfig,
+			securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
+			workspaceDir: options.workspaceDir,
+			channelId: options.runtimeContext.channelId,
+		});
+	}
+	return byName;
 }
 
 function buildSubAgentTask(
@@ -426,21 +454,20 @@ export function createSubAgentTool(
 				});
 			};
 
+			const availableTools = Object.values(createNamedToolSet(options.executor, config.bashTimeoutSec, options));
+
 			const worker =
 				options.createWorker?.({
 					subAgent: config,
 					apiKey,
-					tools: filterToolsByName(createToolSet(options.executor, config.bashTimeoutSec, options), config.tools),
+					tools: filterToolsByName(availableTools, config.tools),
 				}) ??
 				new Agent({
 					initialState: {
 						systemPrompt: config.systemPrompt,
 						model: config.model,
 						thinkingLevel: "off",
-						tools: filterToolsByName(
-							createToolSet(options.executor, config.bashTimeoutSec, options),
-							config.tools,
-						),
+						tools: filterToolsByName(availableTools, config.tools),
 					},
 					convertToLlm,
 					getApiKey: async () => apiKey,

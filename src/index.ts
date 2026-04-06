@@ -70,6 +70,7 @@ export {
 	SETTINGS_CONFIG_PATH,
 	SUB_AGENTS_DIR,
 	SUB_AGENTS_DIR_NAME,
+	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
 } from "./paths.js";
 export {
@@ -128,6 +129,15 @@ export {
 	type SubAgentToolDetails,
 	type SubAgentToolOptions,
 } from "./subagents/tool.js";
+export {
+	DEFAULT_TOOLS_CONFIG,
+	getToolsConfigPath,
+	loadToolsConfig,
+	type PipiclawToolsConfig,
+	type PipiclawWebFetchConfig,
+	type PipiclawWebSearchConfig,
+	type PipiclawWebToolsConfig,
+} from "./tools/config.js";
 export {
 	type CreatePipiclawToolsOptions,
 	createPipiclawBaseTools,

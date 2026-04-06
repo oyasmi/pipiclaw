@@ -426,6 +426,7 @@ describe("dingtalk", () => {
 		const { bot } = createBot();
 
 		await bot.start();
+		expect(axiosMock.defaults.proxy).toBe(true);
 		const client = fakeClientState.instances[0];
 		expect(client.connect).toHaveBeenCalledTimes(1);
 

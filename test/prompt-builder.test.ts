@@ -18,6 +18,9 @@ describe("prompt-builder", () => {
 		expect(prompt).toContain("The runtime may inject a small amount of relevant memory context");
 		expect(prompt).toContain("Available predefined sub-agents:\n- reviewer");
 		expect(prompt).toContain("Maximum 5 events can be queued.");
+		expect(prompt).toContain("web_search");
+		expect(prompt).toContain("web_fetch");
+		expect(prompt).toContain("return untrusted external content");
 		expect(prompt).not.toContain("scratch/");
 		expect(prompt).not.toContain("channel-specific tools");
 	});

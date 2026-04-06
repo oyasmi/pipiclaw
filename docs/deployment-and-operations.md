@@ -21,6 +21,7 @@
 | 钉钉应用 | 已开启机器人能力和 Stream Mode |
 | AI Card | 建议配置完成，便于观察执行过程 |
 | 模型 | 已通过 `/model` 验证可见模型和默认模型，必要时可用唯一片段切换模型 |
+| Web 工具 | 如需 `web_search` / `web_fetch`，已检查 `tools.json` 与代理设置 |
 | 灰度范围 | 初期建议先配 `allowFrom` 控制测试人群 |
 | 工作目录 | 确认 `~/.pi/pipiclaw/` 所在磁盘可长期持久化 |
 
@@ -221,6 +222,7 @@ npm install -g @oyasmi/pipiclaw@latest
 - `auth.json`
 - `models.json`
 - `settings.json`
+- `tools.json`
 - `workspace/`
 
 其中 `workspace/` 最关键，因为它包含：

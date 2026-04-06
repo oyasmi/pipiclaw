@@ -12,6 +12,7 @@ import {
 	CHANNEL_CONFIG_PATH,
 	MODELS_CONFIG_PATH,
 	SETTINGS_CONFIG_PATH,
+	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
 } from "../paths.js";
 import { parseSandboxArg, type SandboxConfig, validateSandbox } from "../sandbox.js";
@@ -35,6 +36,7 @@ export interface BootstrapPaths {
 	channelConfigPath: string;
 	modelsConfigPath: string;
 	settingsConfigPath: string;
+	toolsConfigPath: string;
 }
 
 export interface BootstrapIO {
@@ -169,6 +171,27 @@ const CHANNEL_CONFIG_TEMPLATE = {
 } satisfies DingTalkConfig;
 
 const MODELS_CONFIG_TEMPLATE = { providers: {} };
+const TOOLS_CONFIG_TEMPLATE = {
+	tools: {
+		web: {
+			enable: false,
+			proxy: null,
+			search: {
+				provider: "brave",
+				apiKey: "",
+			},
+		},
+	},
+	_examples: {
+		proxy: "http://127.0.0.1:7890",
+		apiKey: "BSA...",
+	},
+	_notes: [
+		"Set tools.web.enable to true to register web_search and web_fetch.",
+		"Replace tools.web.search.apiKey with your Brave API key before enabling web tools.",
+		"If needed, copy _examples.proxy to tools.web.proxy.",
+	],
+};
 
 const SHUTDOWN_WAIT_MS = 15000;
 const SHUTDOWN_FLUSH_WAIT_MS = 25000;
@@ -182,6 +205,7 @@ export const DEFAULT_BOOTSTRAP_PATHS: BootstrapPaths = {
 	channelConfigPath: CHANNEL_CONFIG_PATH,
 	modelsConfigPath: MODELS_CONFIG_PATH,
 	settingsConfigPath: SETTINGS_CONFIG_PATH,
+	toolsConfigPath: TOOLS_CONFIG_PATH,
 };
 
 export class BootstrapExitError extends Error {
@@ -196,17 +220,6 @@ export class BootstrapExitError extends Error {
 
 export function isBootstrapExitError(error: unknown): error is BootstrapExitError {
 	return error instanceof BootstrapExitError;
-}
-
-export function sanitizeProxyEnv(env: NodeJS.ProcessEnv): void {
-	if (env.DINGTALK_FORCE_PROXY !== "true") {
-		delete env.http_proxy;
-		delete env.https_proxy;
-		delete env.all_proxy;
-		delete env.HTTP_PROXY;
-		delete env.HTTPS_PROXY;
-		delete env.ALL_PROXY;
-	}
 }
 
 function writeTextFileIfMissing(path: string, content: string, label: string, created: string[]): boolean {
@@ -261,6 +274,7 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 	writeJsonFileIfMissing(paths.authConfigPath, {}, "auth.json", created);
 	writeJsonFileIfMissing(paths.modelsConfigPath, MODELS_CONFIG_TEMPLATE, "models.json", created);
 	writeJsonFileIfMissing(paths.settingsConfigPath, {}, "settings.json", created);
+	writeJsonFileIfMissing(paths.toolsConfigPath, TOOLS_CONFIG_TEMPLATE, "tools.json", created);
 
 	return { created, channelTemplateCreated };
 }
@@ -656,13 +670,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 }
 
 export async function bootstrap(argv: string[], options: BootstrapOptions = {}): Promise<AppContext> {
-	const env = options.env ?? process.env;
 	const io = options.io ?? console;
 	const paths = options.paths ?? DEFAULT_BOOTSTRAP_PATHS;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const startServices = options.startServices ?? true;
-
-	sanitizeProxyEnv(env);
 
 	const parsedArgs = parseArgs(argv, paths, io);
 	const sandbox = parsedArgs.sandbox;

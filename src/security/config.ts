@@ -20,6 +20,12 @@ export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
 		writeDeny: [],
 		resolveSymlinks: true,
 	},
+	networkGuard: {
+		enabled: true,
+		allowedCidrs: [],
+		allowedHosts: [],
+		maxRedirects: 5,
+	},
 	audit: {
 		logBlocked: true,
 	},
@@ -40,6 +46,7 @@ function mergeSecurityConfig(source: unknown): SecurityConfig {
 
 	const commandGuard = isRecord(source.commandGuard) ? source.commandGuard : {};
 	const pathGuard = isRecord(source.pathGuard) ? source.pathGuard : {};
+	const networkGuard = isRecord(source.networkGuard) ? source.networkGuard : {};
 	const audit = isRecord(source.audit) ? source.audit : {};
 
 	return {
@@ -67,6 +74,20 @@ function mergeSecurityConfig(source: unknown): SecurityConfig {
 				typeof pathGuard.resolveSymlinks === "boolean"
 					? pathGuard.resolveSymlinks
 					: DEFAULT_SECURITY_CONFIG.pathGuard.resolveSymlinks,
+		},
+		networkGuard: {
+			enabled:
+				typeof networkGuard.enabled === "boolean"
+					? networkGuard.enabled
+					: DEFAULT_SECURITY_CONFIG.networkGuard.enabled,
+			allowedCidrs: asStringArray(networkGuard.allowedCidrs),
+			allowedHosts: asStringArray(networkGuard.allowedHosts),
+			maxRedirects:
+				typeof networkGuard.maxRedirects === "number" &&
+				Number.isFinite(networkGuard.maxRedirects) &&
+				networkGuard.maxRedirects > 0
+					? Math.floor(networkGuard.maxRedirects)
+					: DEFAULT_SECURITY_CONFIG.networkGuard.maxRedirects,
 		},
 		audit: {
 			logBlocked:

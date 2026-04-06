@@ -24,6 +24,7 @@ function createBootstrapPaths(): BootstrapPaths {
 		channelConfigPath: join(appHomeDir, "channel.json"),
 		modelsConfigPath: join(appHomeDir, "models.json"),
 		settingsConfigPath: join(appHomeDir, "settings.json"),
+		toolsConfigPath: join(appHomeDir, "tools.json"),
 	};
 }
 

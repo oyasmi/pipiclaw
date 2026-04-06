@@ -32,6 +32,7 @@ function createBootstrapPaths(): BootstrapPaths {
 		channelConfigPath: join(appHomeDir, "channel.json"),
 		modelsConfigPath: join(appHomeDir, "models.json"),
 		settingsConfigPath: join(appHomeDir, "settings.json"),
+		toolsConfigPath: join(appHomeDir, "tools.json"),
 	};
 }
 
@@ -56,10 +57,15 @@ describe("bootstrap", () => {
 		const first = bootstrapAppHome(paths);
 		expect(first.channelTemplateCreated).toBe(true);
 		expect(existsSync(paths.channelConfigPath)).toBe(true);
+		expect(existsSync(paths.toolsConfigPath)).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "SOUL.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "AGENTS.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "MEMORY.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "ENVIRONMENT.md"))).toBe(true);
+		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"enable": false');
+		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"provider": "brave"');
+		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"proxy": "http://127.0.0.1:7890"');
+		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"apiKey": "BSA..."');
 
 		const second = bootstrapAppHome(paths);
 		expect(second.channelTemplateCreated).toBe(false);
@@ -134,5 +140,36 @@ describe("bootstrap", () => {
 		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"clientId": "client-id"');
 
 		await expect(app.shutdown()).resolves.toBeUndefined();
+	});
+
+	it("does not sanitize proxy environment variables during bootstrap", async () => {
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+		writeFileSync(
+			paths.channelConfigPath,
+			JSON.stringify(
+				{
+					clientId: "client-id",
+					clientSecret: "secret",
+					robotCode: "",
+					cardTemplateId: "",
+					cardTemplateKey: "content",
+					allowFrom: [],
+				},
+				null,
+				2,
+			),
+		);
+		const env = { ...process.env, HTTP_PROXY: "http://127.0.0.1:7890" };
+
+		const app = await bootstrap(["node", "main"], {
+			paths,
+			registerSignalHandlers: false,
+			startServices: false,
+			env,
+		});
+
+		expect(env.HTTP_PROXY).toBe("http://127.0.0.1:7890");
+		await app.shutdown();
 	});
 });

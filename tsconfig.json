@@ -18,6 +18,6 @@
 		"useDefineForClassFields": false,
 		"types": ["node", "vitest/globals"]
 	},
-	"include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts", "vitest.config.e2e.ts"],
+	"include": ["src/**/*.ts", "src/**/*.d.ts", "test/**/*.ts", "test/**/*.d.ts", "vitest.config.ts", "vitest.config.e2e.ts"],
 	"exclude": ["node_modules", "dist"]
 }

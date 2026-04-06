@@ -304,9 +304,6 @@ export class DingTalkBot {
 
 		log.logInfo(`DingTalk: initializing stream (clientId=${this.config.clientId.substring(0, 8)}…)`);
 
-		if (process.env.DINGTALK_FORCE_PROXY !== "true") {
-			axios.defaults.proxy = false;
-		}
 		this.clearAllTimers();
 
 		this.client = new DWClient({

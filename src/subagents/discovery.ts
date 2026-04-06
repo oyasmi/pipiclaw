@@ -6,7 +6,7 @@ import { join } from "path";
 import { findExactModelReferenceMatch, formatModelReference } from "../models/utils.js";
 import { SUB_AGENTS_DIR_NAME } from "../paths.js";
 
-const ALLOWED_SUB_AGENT_TOOLS = ["read", "bash", "edit", "write"] as const;
+const ALLOWED_SUB_AGENT_TOOLS = ["read", "bash", "edit", "write", "web_search", "web_fetch"] as const;
 const DEFAULT_SUB_AGENT_TOOLS = ["read", "bash"] as const;
 const DEFAULT_MAX_TURNS = 24;
 const DEFAULT_MAX_TOOL_CALLS = 48;

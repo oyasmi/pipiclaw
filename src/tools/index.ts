@@ -8,8 +8,11 @@ import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { createSubAgentTool } from "../subagents/tool.js";
 import { createBashTool } from "./bash.js";
+import { loadToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
 import { createReadTool } from "./read.js";
+import { createWebFetchTool } from "./web-fetch.js";
+import { createWebSearchTool } from "./web-search.js";
 import { createWriteTool } from "./write.js";
 
 export interface CreatePipiclawToolsOptions {
@@ -54,6 +57,7 @@ export function createPipiclawBaseTools(
 
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {
 	const securityConfig = loadSecurityConfig(APP_HOME_DIR);
+	const toolsConfig = loadToolsConfig(APP_HOME_DIR);
 	const securityContext = {
 		workspaceDir: options.workspaceDir,
 		workspacePath: options.workspacePath,
@@ -64,8 +68,26 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		securityContext,
 		channelId: options.channelId,
 	});
+	const webTools =
+		toolsConfig.tools.web.enable === false
+			? []
+			: [
+					createWebSearchTool({
+						webConfig: toolsConfig.tools.web,
+						securityConfig,
+						workspaceDir: options.workspaceDir,
+						channelId: options.channelId,
+					}),
+					createWebFetchTool({
+						webConfig: toolsConfig.tools.web,
+						securityConfig,
+						workspaceDir: options.workspaceDir,
+						channelId: options.channelId,
+					}),
+				];
 	return [
 		...baseTools,
+		...webTools,
 		createSubAgentTool({
 			executor: options.executor,
 			getCurrentModel: options.getCurrentModel,
@@ -76,6 +98,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 			getSubAgentDiscovery: options.getSubAgentDiscovery,
 			getMemoryRecallSettings: options.getMemoryRecallSettings,
 			securityConfig,
+			webConfig: toolsConfig.tools.web,
 			runtimeContext: {
 				workspacePath: options.workspacePath,
 				channelId: options.channelId,

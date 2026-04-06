@@ -23,6 +23,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 - 支持预定义子代理（sub-agent）和临时内联子代理（inline sub-agent）
 - 支持立即、单次、周期三类事件调度
 - 支持自定义模型提供方（provider）和模型（model）配置
+- 内建 `web_search` / `web_fetch`，支持联网搜索与网页抓取
 - 内置工具层安全防护：`bash` 命令守卫、文件路径守卫、敏感路径拒绝、阻断审计日志
 
 ## 安全说明（Security）
@@ -158,6 +159,7 @@ pipiclaw
 ├── auth.json
 ├── models.json
 ├── settings.json
+├── tools.json
 └── workspace/
     ├── SOUL.md
     ├── AGENTS.md
@@ -174,7 +176,7 @@ pipiclaw
 export PIPICLAW_HOME=/your/custom/pipiclaw-home
 ```
 
-设置后，`channel.json`、`auth.json`、`models.json`、`settings.json` 和整个 `workspace/` 都会改为从这个目录读取和写入。
+设置后，`channel.json`、`auth.json`、`models.json`、`settings.json`、`tools.json` 和整个 `workspace/` 都会改为从这个目录读取和写入。
 
 如果你在 Windows host 模式下运行，并且 `bash` 不在 PATH 中，也可以一并设置：
 
@@ -330,7 +332,40 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pipiclaw
 ```
 
-#### 9. 在钉钉中验证（Verify in DingTalk）
+#### 9. 可选：配置内建 Web 工具（Optional: Configure Built-in Web Tools）
+
+如果你希望助手直接使用 `web_search` / `web_fetch`，可以编辑 `~/.pi/pipiclaw/tools.json`。
+
+第一次启动时，Pipiclaw 会自动生成一份默认关闭的 `tools.json` 模板。它已经带了 Brave 的示例配置，以及可选代理示例，方便你直接改成可用状态：
+
+```json
+{
+  "tools": {
+    "web": {
+      "enable": false,
+      "proxy": null,
+      "search": {
+        "provider": "brave",
+        "apiKey": ""
+      }
+    }
+  },
+  "_examples": {
+    "proxy": "http://127.0.0.1:7890",
+    "apiKey": "BSA..."
+  }
+}
+```
+
+最常见的启用方式是：
+
+1. 把 `tools.web.enable` 改成 `true`
+2. 把 `tools.web.search.apiKey` 改成你自己的 Brave key
+3. 如果需要代理，再把 `_examples.proxy` 的值抄到 `tools.web.proxy`
+
+未设置 `tools.web.proxy` 时，web 工具会回退到标准环境变量：`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`。DingTalk runtime 也会尊重同一套环境变量。
+
+#### 10. 在钉钉中验证（Verify in DingTalk）
 
 建议先给机器人发送：
 
@@ -374,6 +409,7 @@ pipiclaw
 | `~/.pi/pipiclaw/auth.json` | 模型认证信息 |
 | `~/.pi/pipiclaw/models.json` | 自定义模型提供方 / 模型，或覆盖内置模型提供方 |
 | `~/.pi/pipiclaw/settings.json` | 默认模型提供方 / 模型和运行时设置 |
+| `~/.pi/pipiclaw/tools.json` | 内建工具配置，例如 `tools.web` |
 
 ### 环境变量（Environment Variables）
 
@@ -382,7 +418,7 @@ pipiclaw
 | `ANTHROPIC_API_KEY` | Anthropic API Key |
 | `PIPICLAW_HOME` | 覆盖默认的 `~/.pi/pipiclaw/` 根目录 |
 | `PIPICLAW_DEBUG` | 调试模式，会把上下文写到 `last_prompt.json` |
-| `DINGTALK_FORCE_PROXY` | 设为 `true` 时保留 axios 代理设置 |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` | 标准代理环境变量；DingTalk runtime 和 web 工具都会尊重它们 |
 
 ## 命令（Commands）
 

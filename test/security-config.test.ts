@@ -27,6 +27,7 @@ describe("security config", () => {
 			JSON.stringify({
 				commandGuard: { allowPatterns: ["sudo apt install"] },
 				pathGuard: { writeAllow: ["~/notes/"] },
+				networkGuard: { allowedHosts: ["example.com"], maxRedirects: 7 },
 				audit: { logBlocked: false },
 			}),
 			"utf-8",
@@ -41,6 +42,11 @@ describe("security config", () => {
 			pathGuard: {
 				...DEFAULT_SECURITY_CONFIG.pathGuard,
 				writeAllow: ["~/notes/"],
+			},
+			networkGuard: {
+				...DEFAULT_SECURITY_CONFIG.networkGuard,
+				allowedHosts: ["example.com"],
+				maxRedirects: 7,
 			},
 			audit: {
 				...DEFAULT_SECURITY_CONFIG.audit,

@@ -148,6 +148,31 @@ Review files carefully.`,
 		});
 	});
 
+	it("accepts web tools in predefined sub-agent tool lists", () => {
+		const workspaceDir = createTempWorkspace();
+		const subAgentsDir = getSubAgentsDir(workspaceDir);
+		mkdirSync(subAgentsDir, { recursive: true });
+
+		writeFileSync(
+			join(subAgentsDir, "researcher.md"),
+			`---
+name: researcher
+description: search and fetch references
+tools:
+  - read
+  - web_search
+  - web_fetch
+---
+
+Gather references carefully.`,
+			"utf-8",
+		);
+
+		const discovery = discoverSubAgents(workspaceDir, [model]);
+		expect(discovery.warnings).toEqual([]);
+		expect(discovery.agents[0]?.tools).toEqual(["read", "web_search", "web_fetch"]);
+	});
+
 	it("parses contextual sub-agent frontmatter and inline overrides", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
