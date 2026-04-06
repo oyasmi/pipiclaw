@@ -1,5 +1,5 @@
 import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
+import { JSDOM, VirtualConsole } from "jsdom";
 
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
@@ -14,6 +14,24 @@ interface DomElement extends DomNode {
 	tagName: string;
 	getAttribute(name: string): string | null;
 	children?: Iterable<unknown>;
+}
+
+function createSilentVirtualConsole(): VirtualConsole {
+	const virtualConsole = new VirtualConsole();
+	virtualConsole.on("jsdomError", (_error) => {
+		// Ignore parser noise such as malformed inline CSS. These pages are still
+		// often readable enough for Readability / text extraction, and forwarding
+		// jsdom's internal parse warnings pollutes Pipiclaw runtime logs.
+	});
+	return virtualConsole;
+}
+
+function createDom(html: string, url?: string): JSDOM {
+	const options = {
+		virtualConsole: createSilentVirtualConsole(),
+		...(url ? { url } : {}),
+	};
+	return new JSDOM(html, options);
 }
 
 function normalizeWhitespace(value: string): string {
@@ -96,12 +114,12 @@ function renderNode(node: unknown): string {
 }
 
 export function htmlToText(html: string): string {
-	const dom = new JSDOM(html);
+	const dom = createDom(html);
 	return normalizeWhitespace(dom.window.document.body.textContent ?? "");
 }
 
 export function htmlToMarkdown(html: string): string {
-	const dom = new JSDOM(html);
+	const dom = createDom(html);
 	const body = dom.window.document.body;
 	return normalizeWhitespace(Array.from(body.childNodes).map(renderNode).join(""));
 }
@@ -111,7 +129,7 @@ export function extractReadableContent(
 	url: string,
 	extractMode: "markdown" | "text",
 ): { title: string; content: string; extractor: string } {
-	const dom = new JSDOM(html, { url });
+	const dom = createDom(html, url);
 	const article = new Readability(dom.window.document).parse();
 	if (!article) {
 		const fallbackContent = extractMode === "text" ? htmlToText(html) : htmlToMarkdown(html);

@@ -98,4 +98,41 @@ describe("web fetch", () => {
 		expect(result.content[1]).toMatchObject({ type: "image", mimeType: "image/png" });
 		expect(result.details.extractor).toBe("direct-image");
 	});
+
+	it("ignores malformed inline CSS without logging parser noise", async () => {
+		const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		requestMock.mockResolvedValueOnce({
+			status: 200,
+			headers: { "content-type": "text/html" },
+			data: Buffer.from(`<!doctype html>
+<html>
+  <head>
+    <title>Malformed CSS</title>
+    <style>
+      body>pre {
+        margin-bottom: 0 !important;
+        line-height: 0;
+      }
+      .article-section .comments-shares { justify-content: flex-end !important; height: 48px;}}
+    </style>
+  </head>
+  <body>
+    <article><h1>Readable Title</h1><p>Readable body</p></article>
+  </body>
+</html>`),
+		});
+
+		const result = await runWebFetch(baseContext, {
+			url: "https://example.com/malformed-css",
+			extractMode: "text",
+			maxChars: 5000,
+			maxImageBytes: baseContext.webConfig.fetch.maxImageBytes,
+			preferJina: false,
+			enableJinaFallback: false,
+		});
+
+		expect((result.content[0] as { text: string }).text).toContain("Readable body");
+		expect(consoleErrorSpy).not.toHaveBeenCalled();
+		consoleErrorSpy.mockRestore();
+	});
 });

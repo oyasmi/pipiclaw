@@ -179,6 +179,7 @@ const TOOLS_CONFIG_TEMPLATE = {
 			search: {
 				provider: "brave",
 				apiKey: "",
+				maxResults: 5,
 			},
 		},
 	},

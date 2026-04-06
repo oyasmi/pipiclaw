@@ -64,6 +64,7 @@ describe("bootstrap", () => {
 		expect(existsSync(join(paths.workspaceDir, "ENVIRONMENT.md"))).toBe(true);
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"enable": false');
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"provider": "brave"');
+		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"maxResults": 5');
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"proxy": "http://127.0.0.1:7890"');
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"apiKey": "BSA..."');
 
