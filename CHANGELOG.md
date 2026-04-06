@@ -2,6 +2,62 @@
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-04-06
+
+### Changed
+
+- Version bump release to publish the latest web tools and runtime fixes under `0.5.9`
+
+## [0.5.8] - 2026-04-06
+
+### Added
+
+- Built-in `web_search` and `web_fetch` tools with provider-based search, HTML/JSON/text/image fetch handling, and SSRF-aware request validation
+- New `tools.json` configuration entrypoint for built-in tool settings, including `tools.web` provider, proxy, and fetch behavior controls
+- Network guard support in `security.json` for web requests, including host/CIDR allowlists and redirect limits
+- Prompt, main tool registry, and sub-agent integration for the new web tools
+- Dedicated design and implementation specs for the web tools rollout
+
+### Changed
+
+- Windows shell execution now respects a POSIX shell path instead of forcing `cmd`, and hides flashing console windows during tool execution
+- DingTalk runtime and web tools now respect standard proxy environment variables by default; the old `DINGTALK_FORCE_PROXY` behavior was removed
+- Default bootstrap `tools.json` template now starts with web tools disabled and includes Brave plus proxy examples for first-time setup
+
+### Fixed
+
+- `web_fetch` now suppresses noisy `jsdom` stylesheet parse warnings so malformed inline CSS does not pollute runtime logs while content extraction still succeeds
+
+## [0.5.7] - 2026-04-05
+
+### Changed
+
+- `/model` now supports unique substring matching against full `provider/modelId` references, in addition to exact `provider/modelId` and exact bare `modelId`
+- README and docs were updated to document the new `/model` matching behavior and examples such as `/model turbo`
+
+## [0.5.6] - 2026-04-05
+
+### Fixed
+
+- Path guard realpath handling on macOS so workspace, home, and temp path checks behave correctly when the filesystem resolves through `/private/...`
+- Temporary directory detection so macOS runtime temp paths are treated consistently by the file safety layer
+
+## [0.5.5] - 2026-04-05
+
+### Added
+
+- Runtime-level end-to-end test harness that drives the real runtime with a mocked DingTalk transport
+- Tool-level security guards for `bash`, `read`, `write`, `edit`, and related file operations, including audit logging hooks
+
+### Changed
+
+- Shutdown flushing and write piping behavior made more robust during runtime teardown
+- Group chat channel directory naming normalized for safer and more predictable persistence paths
+
+### Fixed
+
+- Import ordering issue that was blocking `npm run check`
+
 ## [0.5.4] - 2026-04-03
 
 ### Changed
