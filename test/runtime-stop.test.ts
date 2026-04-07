@@ -1,14 +1,27 @@
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type BootstrapPaths, bootstrapAppHome, createRuntimeContext } from "../src/runtime/bootstrap.js";
-import type { DingTalkBot, DingTalkConfig, DingTalkHandler } from "../src/runtime/dingtalk.js";
+import type { AgentRunner } from "../src/agent/types.js";
+import type { BootstrapPaths } from "../src/runtime/bootstrap.js";
+import type { DingTalkBot, DingTalkConfig } from "../src/runtime/dingtalk.js";
+
+const { getOrCreateRunnerMock } = vi.hoisted(() => ({
+	getOrCreateRunnerMock: vi.fn(),
+}));
+
+vi.mock("../src/agent/index.js", async () => {
+	const actual = await vi.importActual("../src/agent/index.js");
+	return {
+		...actual,
+		getOrCreateRunner: getOrCreateRunnerMock,
+	};
+});
 
 const tempDirs: string[] = [];
 
 function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-runtime-"));
+	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-runtime-stop-"));
 	tempDirs.push(dir);
 	return dir;
 }
@@ -59,66 +72,38 @@ class FakeTestBot {
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	getOrCreateRunnerMock.mockReset();
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
 
-describe("createRuntimeContext", () => {
-	it("creates a reusable handler with a real store and processes built-in commands", async () => {
-		const paths = createBootstrapPaths();
-		bootstrapAppHome(paths);
-		const bot = new FakeTestBot();
-		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
-
-		const runtime = createRuntimeContext({
-			paths,
-			sandbox: { type: "host" },
-			dingtalkConfig: {
-				clientId: "client-id",
-				clientSecret: "client-secret",
-				robotCode: "client-id",
-				cardTemplateKey: "content",
-				stateDir: paths.workspaceDir,
-			} satisfies DingTalkConfig,
-			registerSignalHandlers: false,
-			startServices: false,
-			createBot: (handler: DingTalkHandler, _config: DingTalkConfig) => {
-				expect(typeof handler.handleEvent).toBe("function");
-				return bot as unknown as DingTalkBot;
-			},
-			createEventsWatcher: () => eventsWatcher,
+describe("runtime stop handling", () => {
+	it("discards the active card when a running task is stopped", async () => {
+		let releaseRun!: () => void;
+		const runAborted = new Promise<void>((resolve) => {
+			releaseRun = resolve;
 		});
+		const runner: AgentRunner = {
+			run: vi.fn(async () => {
+				await runAborted;
+				return { stopReason: "aborted" };
+			}),
+			handleBuiltinCommand: vi.fn(async () => {}),
+			queueSteer: vi.fn(async () => {}),
+			queueFollowUp: vi.fn(async () => {}),
+			flushMemoryForShutdown: vi.fn(async () => {}),
+			abort: vi.fn(async () => {
+				releaseRun();
+			}),
+		};
+		getOrCreateRunnerMock.mockReturnValue(runner);
 
-		await runtime.handler.handleEvent(
-			{
-				type: "dm",
-				channelId: "dm_tester",
-				ts: "1000",
-				user: "tester",
-				userName: "Tester",
-				text: "/help",
-				conversationId: "conv_1",
-				conversationType: "1",
-			},
-			bot as unknown as DingTalkBot,
-		);
-
-		const channelDir = join(paths.workspaceDir, "dm_tester");
-		expect(readFileSync(join(channelDir, "log.jsonl"), "utf-8")).toContain('"text":"/help"');
-		expect(bot.sendPlain).toHaveBeenCalled();
-
-		await runtime.shutdown();
-		expect(bot.stop).toHaveBeenCalled();
-		expect(eventsWatcher.stop).toHaveBeenCalled();
-	});
-
-	it("recovers when archiving an incoming message fails", async () => {
+		const { bootstrapAppHome, createRuntimeContext } = await import("../src/runtime/bootstrap.js");
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
-		const bot = new FakeTestBot();
-		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 
+		const bot = new FakeTestBot();
 		const runtime = createRuntimeContext({
 			paths,
 			sandbox: { type: "host" },
@@ -132,26 +117,31 @@ describe("createRuntimeContext", () => {
 			registerSignalHandlers: false,
 			startServices: false,
 			createBot: () => bot as unknown as DingTalkBot,
-			createEventsWatcher: () => eventsWatcher,
+			createEventsWatcher: () => ({ start() {}, stop() {} }),
 		});
 
-		vi.spyOn(runtime.store, "logMessage").mockRejectedValueOnce(new Error("disk full"));
+		const task = runtime.handler.handleEvent(
+			{
+				type: "dm",
+				channelId: "dm_tester",
+				ts: "1000",
+				user: "tester",
+				userName: "Tester",
+				text: "please keep working",
+				conversationId: "conv_1",
+				conversationType: "1",
+			},
+			bot as unknown as DingTalkBot,
+		);
 
-		const event = {
-			type: "dm" as const,
-			channelId: "dm_tester",
-			ts: "1000",
-			user: "tester",
-			userName: "Tester",
-			text: "/help",
-			conversationId: "conv_1",
-			conversationType: "1",
-		};
+		await Promise.resolve();
+		await runtime.handler.handleStop("dm_tester", bot as unknown as DingTalkBot);
+		await task;
 
-		await runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
-		await runtime.handler.handleEvent({ ...event, ts: "1001" }, bot as unknown as DingTalkBot);
+		expect(runner.abort).toHaveBeenCalledTimes(1);
+		expect(bot.discardCard).toHaveBeenCalledTimes(1);
+		expect(bot.discardCard).toHaveBeenCalledWith("dm_tester");
 
-		expect(bot.sendPlain).toHaveBeenCalledTimes(2);
 		await runtime.shutdown();
 	});
 });

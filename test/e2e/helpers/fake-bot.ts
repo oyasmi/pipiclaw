@@ -1,5 +1,5 @@
 export interface CapturedDelivery {
-	method: "streamToCard" | "finalizeExistingCard" | "finalizeCard" | "discardCard" | "sendPlain";
+	method: "ensureCard" | "streamToCard" | "finalizeExistingCard" | "finalizeCard" | "discardCard" | "sendPlain";
 	channelId: string;
 	text?: string;
 	ts: number;
@@ -19,6 +19,10 @@ export class E2EFakeDingTalkBot {
 	async streamToCard(channelId: string, text: string): Promise<boolean> {
 		this.capture("streamToCard", channelId, text);
 		return true;
+	}
+
+	async ensureCard(channelId: string): Promise<void> {
+		this.capture("ensureCard", channelId);
 	}
 
 	async finalizeExistingCard(channelId: string, text: string): Promise<boolean> {

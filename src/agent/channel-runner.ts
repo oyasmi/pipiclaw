@@ -329,6 +329,14 @@ export class ChannelRunner implements AgentRunner {
 						const errMsg = err instanceof Error ? err.message : String(err);
 						log.logWarning("Failed to delete message for silent response", errMsg);
 					}
+				} else if (this.runState.stopReason === "aborted" && !this.runState.finalResponseDelivered) {
+					try {
+						await ctx.deleteMessage();
+						log.logInfo("Aborted response - discarded active delivery state");
+					} catch (err) {
+						const errMsg = err instanceof Error ? err.message : String(err);
+						log.logWarning("Failed to discard active delivery state after abort", errMsg);
+					}
 				} else if (finalOutcomeText && !this.runState.finalResponseDelivered) {
 					try {
 						await ctx.replaceMessage(finalOutcomeText);

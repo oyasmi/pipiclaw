@@ -513,6 +513,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			const state = channelStates.get(channelId);
 			if (state?.running) {
 				state.stopRequested = true;
+				_bot.discardCard(channelId);
 				void state.runner.abort().catch((err) => {
 					log.logWarning(`[${channelId}] Failed to abort run`, err instanceof Error ? err.message : String(err));
 				});
@@ -605,6 +606,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					}
 
 					log.logInfo(`[${event.channelId}] Starting run: ${event.text.substring(0, 50)}`);
+					if (!_isEvent) {
+						ctx.primeCard(350);
+					}
 					const result = await state.runner.run(ctx, store);
 
 					if (result.stopReason === "aborted" && state.stopRequested) {

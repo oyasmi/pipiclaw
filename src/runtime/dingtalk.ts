@@ -58,6 +58,7 @@ export interface DingTalkContext {
 	setTyping: (isTyping: boolean) => Promise<void>;
 	setWorking: (working: boolean) => Promise<void>;
 	deleteMessage: () => Promise<void>;
+	primeCard: (delayMs: number) => void;
 	flush: () => Promise<void>;
 	close: () => Promise<void>;
 }

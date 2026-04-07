@@ -28,8 +28,32 @@ describe("delivery", () => {
 		expect(typeof ctx.setTyping).toBe("function");
 		expect(typeof ctx.setWorking).toBe("function");
 		expect(typeof ctx.deleteMessage).toBe("function");
+		expect(typeof ctx.primeCard).toBe("function");
 		expect(typeof ctx.flush).toBe("function");
 		expect(typeof ctx.close).toBe("function");
+	});
+
+	it("warms an AI card after 350ms when no progress has been emitted yet", async () => {
+		const bot = new FakeDingTalkBot();
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
+
+		ctx.primeCard(350);
+		await vi.advanceTimersByTimeAsync(349);
+		expect(bot.calls).toEqual([]);
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(bot.calls).toEqual([{ method: "ensureCard", args: ["dm_123"] }]);
+	});
+
+	it("cancels AI card warmup once visible progress starts", async () => {
+		const bot = new FakeDingTalkBot();
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
+
+		ctx.primeCard(350);
+		await ctx.respond("working");
+		await vi.advanceTimersByTimeAsync(350);
+
+		expect(bot.calls).toEqual([]);
 	});
 
 	it("accumulates progress text and flushes one throttled card update", async () => {
@@ -77,6 +101,23 @@ describe("delivery", () => {
 			{ method: "discardCard", args: ["dm_123"] },
 		]);
 		expect(store.logged).toHaveLength(1);
+	});
+
+	it("finalizes a warmed card cleanly when the task finishes before any progress text", async () => {
+		const bot = new FakeDingTalkBot();
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
+
+		ctx.primeCard(350);
+		await vi.advanceTimersByTimeAsync(350);
+
+		await expect(ctx.respondPlain("final")).resolves.toBe(true);
+		await ctx.flush();
+
+		expect(bot.calls).toEqual([
+			{ method: "ensureCard", args: ["dm_123"] },
+			{ method: "sendPlain", args: ["dm_123", "final"] },
+			{ method: "finalizeExistingCard", args: ["dm_123", ""] },
+		]);
 	});
 
 	it("supports finalize-with-fallback and silent modes", async () => {

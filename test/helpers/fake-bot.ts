@@ -17,6 +17,10 @@ export class FakeDingTalkBot {
 		return this.getReturnValue("streamToCard", true);
 	}
 
+	async ensureCard(channelId: string): Promise<void> {
+		this.calls.push({ method: "ensureCard", args: [channelId] });
+	}
+
 	async finalizeCard(channelId: string, content: string): Promise<boolean> {
 		this.calls.push({ method: "finalizeCard", args: [channelId, content] });
 		return this.getReturnValue("finalizeCard", true);
