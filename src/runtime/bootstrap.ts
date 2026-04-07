@@ -11,6 +11,7 @@ import {
 	AUTH_CONFIG_PATH,
 	CHANNEL_CONFIG_PATH,
 	MODELS_CONFIG_PATH,
+	SECURITY_CONFIG_PATH,
 	SETTINGS_CONFIG_PATH,
 	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
@@ -37,6 +38,7 @@ export interface BootstrapPaths {
 	modelsConfigPath: string;
 	settingsConfigPath: string;
 	toolsConfigPath: string;
+	securityConfigPath: string;
 }
 
 export interface BootstrapIO {
@@ -194,6 +196,18 @@ const TOOLS_CONFIG_TEMPLATE = {
 	],
 };
 
+const SECURITY_CONFIG_TEMPLATE = {
+	pathGuard: {
+		enabled: true,
+	},
+	commandGuard: {
+		enabled: true,
+	},
+	networkGuard: {
+		enabled: false,
+	},
+};
+
 const SHUTDOWN_WAIT_MS = 15000;
 const SHUTDOWN_FLUSH_WAIT_MS = 25000;
 const SHUTDOWN_ABORT_WAIT_MS = 5000;
@@ -207,6 +221,7 @@ export const DEFAULT_BOOTSTRAP_PATHS: BootstrapPaths = {
 	modelsConfigPath: MODELS_CONFIG_PATH,
 	settingsConfigPath: SETTINGS_CONFIG_PATH,
 	toolsConfigPath: TOOLS_CONFIG_PATH,
+	securityConfigPath: SECURITY_CONFIG_PATH,
 };
 
 export class BootstrapExitError extends Error {
@@ -276,6 +291,7 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 	writeJsonFileIfMissing(paths.modelsConfigPath, MODELS_CONFIG_TEMPLATE, "models.json", created);
 	writeJsonFileIfMissing(paths.settingsConfigPath, {}, "settings.json", created);
 	writeJsonFileIfMissing(paths.toolsConfigPath, TOOLS_CONFIG_TEMPLATE, "tools.json", created);
+	writeJsonFileIfMissing(paths.securityConfigPath, SECURITY_CONFIG_TEMPLATE, "security.json", created);
 
 	return { created, channelTemplateCreated };
 }

@@ -22,5 +22,6 @@ describe("paths", () => {
 		expect(paths.WORKSPACE_DIR).toBe("/tmp/pipiclaw-test-home/workspace");
 		expect(paths.AUTH_CONFIG_PATH).toBe("/tmp/pipiclaw-test-home/auth.json");
 		expect(paths.TOOLS_CONFIG_PATH).toBe("/tmp/pipiclaw-test-home/tools.json");
+		expect(paths.SECURITY_CONFIG_PATH).toBe("/tmp/pipiclaw-test-home/security.json");
 	});
 });

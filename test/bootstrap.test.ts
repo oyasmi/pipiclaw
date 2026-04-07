@@ -33,6 +33,7 @@ function createBootstrapPaths(): BootstrapPaths {
 		modelsConfigPath: join(appHomeDir, "models.json"),
 		settingsConfigPath: join(appHomeDir, "settings.json"),
 		toolsConfigPath: join(appHomeDir, "tools.json"),
+		securityConfigPath: join(appHomeDir, "security.json"),
 	};
 }
 
@@ -58,6 +59,7 @@ describe("bootstrap", () => {
 		expect(first.channelTemplateCreated).toBe(true);
 		expect(existsSync(paths.channelConfigPath)).toBe(true);
 		expect(existsSync(paths.toolsConfigPath)).toBe(true);
+		expect(existsSync(paths.securityConfigPath)).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "SOUL.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "AGENTS.md"))).toBe(true);
 		expect(existsSync(join(paths.workspaceDir, "MEMORY.md"))).toBe(true);
@@ -67,6 +69,7 @@ describe("bootstrap", () => {
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"maxResults": 5');
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"proxy": "http://127.0.0.1:7890"');
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"apiKey": "BSA..."');
+		expect(readFileSync(paths.securityConfigPath, "utf-8")).toContain('"enabled": false');
 
 		const second = bootstrapAppHome(paths);
 		expect(second.channelTemplateCreated).toBe(false);

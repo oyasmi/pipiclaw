@@ -54,4 +54,34 @@ describe("security config", () => {
 			},
 		});
 	});
+
+	it("loads generated local security config with network guard disabled", () => {
+		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-security-config-"));
+		tempDirs.push(appHomeDir);
+		writeFileSync(
+			join(appHomeDir, "security.json"),
+			JSON.stringify({
+				pathGuard: { enabled: true },
+				commandGuard: { enabled: true },
+				networkGuard: { enabled: false },
+			}),
+			"utf-8",
+		);
+
+		expect(loadSecurityConfig(appHomeDir)).toEqual({
+			...DEFAULT_SECURITY_CONFIG,
+			pathGuard: {
+				...DEFAULT_SECURITY_CONFIG.pathGuard,
+				enabled: true,
+			},
+			commandGuard: {
+				...DEFAULT_SECURITY_CONFIG.commandGuard,
+				enabled: true,
+			},
+			networkGuard: {
+				...DEFAULT_SECURITY_CONFIG.networkGuard,
+				enabled: false,
+			},
+		});
+	});
 });

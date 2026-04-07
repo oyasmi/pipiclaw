@@ -25,6 +25,7 @@ function createBootstrapPaths(): BootstrapPaths {
 		modelsConfigPath: join(appHomeDir, "models.json"),
 		settingsConfigPath: join(appHomeDir, "settings.json"),
 		toolsConfigPath: join(appHomeDir, "tools.json"),
+		securityConfigPath: join(appHomeDir, "security.json"),
 	};
 }
 

@@ -6,6 +6,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { guardPath } from "../src/security/path-guard.js";
 
 const tempDirs: string[] = [];
+const originalPlatform = process.platform;
 
 function createFixture() {
 	const root = mkdtempSync(join(tmpdir(), "pipiclaw-security-"));
@@ -28,6 +29,7 @@ afterEach(() => {
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
 	}
+	Object.defineProperty(process, "platform", { value: originalPlatform });
 });
 
 describe("security path guard", () => {
@@ -92,6 +94,27 @@ describe("security path guard", () => {
 		expect(guardPath(linkPath, "write", ctx)).toMatchObject({
 			allowed: false,
 			category: "symlink-write",
+		});
+	});
+
+	it("fails open on Windows", () => {
+		Object.defineProperty(process, "platform", { value: "win32" });
+		const fixture = createFixture();
+		const ctx = {
+			workspaceDir: fixture.workspaceDir,
+			workspacePath: fixture.workspaceDir,
+			homeDir: fixture.homeDir,
+			cwd: fixture.workspaceDir,
+			config: DEFAULT_SECURITY_CONFIG.pathGuard,
+		};
+
+		expect(guardPath(join(fixture.homeDir, ".ssh", "id_rsa"), "read", ctx)).toMatchObject({
+			allowed: true,
+			operation: "read",
+		});
+		expect(guardPath(join(fixture.homeDir, ".ssh", "authorized_keys"), "write", ctx)).toMatchObject({
+			allowed: true,
+			operation: "write",
 		});
 	});
 });

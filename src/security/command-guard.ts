@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { isWindowsPlatform } from "./platform.js";
 import type { CommandGuardResult, SecurityConfig } from "./types.js";
 
 interface ParsedCommand {
@@ -472,6 +473,9 @@ function matchRule(parsed: ParsedCommand, config: SecurityConfig["commandGuard"]
 
 export function guardCommand(command: string, config: SecurityConfig["commandGuard"]): CommandGuardResult {
 	if (!config.enabled) {
+		return { allowed: true };
+	}
+	if (isWindowsPlatform()) {
 		return { allowed: true };
 	}
 
