@@ -50,6 +50,15 @@ class ChannelDeliveryController {
 		};
 	}
 
+	private archiveBotResponse(text: string): void {
+		void this.store.logBotResponse(this.event.channelId, text, Date.now().toString()).catch((err) => {
+			log.logWarning(
+				`[${this.event.channelId}] Failed to archive bot response`,
+				err instanceof Error ? err.message : String(err),
+			);
+		});
+	}
+
 	private async appendProgress(text: string, shouldLog: boolean): Promise<void> {
 		if (this.closed || this.finalResponseDelivered || !text.trim()) return;
 
@@ -58,7 +67,7 @@ class ChannelDeliveryController {
 			this.progressWindowStartedAt = Date.now();
 		}
 		if (shouldLog) {
-			await this.store.logBotResponse(this.event.channelId, text, Date.now().toString());
+			this.archiveBotResponse(text);
 		}
 
 		this.mode = "progress";
@@ -69,7 +78,7 @@ class ChannelDeliveryController {
 		if (this.closed || this.finalResponseDelivered) return this.finalResponseDelivered;
 
 		if (shouldLog) {
-			await this.store.logBotResponse(this.event.channelId, text, Date.now().toString());
+			this.archiveBotResponse(text);
 		}
 
 		const delivered = await this.bot.sendPlain(this.event.channelId, text);

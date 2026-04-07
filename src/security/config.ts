@@ -1,8 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_HOME_DIR } from "../paths.js";
+import type { ConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { SecurityConfig } from "./types.js";
+
+export interface LoadedSecurityConfig {
+	config: SecurityConfig;
+	diagnostics: ConfigDiagnostic[];
+}
 
 export const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
 	enabled: true,
@@ -39,8 +45,23 @@ function asOptionalString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function mergeSecurityConfig(source: unknown): SecurityConfig {
+function pushInvalidSecurityDiagnostic(
+	diagnostics: ConfigDiagnostic[],
+	configPath: string,
+	field: string,
+	message: string,
+): void {
+	diagnostics.push({
+		source: "security",
+		path: configPath,
+		severity: "warning",
+		message: `${field}: ${message}`,
+	});
+}
+
+function mergeSecurityConfig(source: unknown, configPath: string, diagnostics: ConfigDiagnostic[]): SecurityConfig {
 	if (!isRecord(source)) {
+		pushInvalidSecurityDiagnostic(diagnostics, configPath, "root", "expected a JSON object; using defaults");
 		return DEFAULT_SECURITY_CONFIG;
 	}
 
@@ -48,6 +69,19 @@ function mergeSecurityConfig(source: unknown): SecurityConfig {
 	const pathGuard = isRecord(source.pathGuard) ? source.pathGuard : {};
 	const networkGuard = isRecord(source.networkGuard) ? source.networkGuard : {};
 	const audit = isRecord(source.audit) ? source.audit : {};
+
+	if (networkGuard.maxRedirects !== undefined) {
+		const maxRedirects = networkGuard.maxRedirects;
+		const isValidMaxRedirects = typeof maxRedirects === "number" && Number.isFinite(maxRedirects) && maxRedirects > 0;
+		if (!isValidMaxRedirects) {
+			pushInvalidSecurityDiagnostic(
+				diagnostics,
+				configPath,
+				"networkGuard.maxRedirects",
+				"expected a positive integer; using default",
+			);
+		}
+	}
 
 	return {
 		enabled: typeof source.enabled === "boolean" ? source.enabled : DEFAULT_SECURITY_CONFIG.enabled,
@@ -101,17 +135,34 @@ export function getSecurityConfigPath(appHomeDir = APP_HOME_DIR): string {
 	return join(appHomeDir, "security.json");
 }
 
-export function loadSecurityConfig(appHomeDir = APP_HOME_DIR): SecurityConfig {
+export function loadSecurityConfigWithDiagnostics(appHomeDir = APP_HOME_DIR): LoadedSecurityConfig {
 	const configPath = getSecurityConfigPath(appHomeDir);
 	if (!existsSync(configPath)) {
-		return DEFAULT_SECURITY_CONFIG;
+		return { config: DEFAULT_SECURITY_CONFIG, diagnostics: [] };
 	}
 
 	try {
 		const raw = JSON.parse(readFileSync(configPath, "utf-8"));
-		return mergeSecurityConfig(raw);
+		const diagnostics: ConfigDiagnostic[] = [];
+		return {
+			config: mergeSecurityConfig(raw, configPath, diagnostics),
+			diagnostics,
+		};
 	} catch (error) {
-		console.warn(`Failed to load security config from ${configPath}: ${error}`);
-		return DEFAULT_SECURITY_CONFIG;
+		return {
+			config: DEFAULT_SECURITY_CONFIG,
+			diagnostics: [
+				{
+					source: "security",
+					path: configPath,
+					severity: "error",
+					message: error instanceof Error ? error.message : String(error),
+				},
+			],
+		};
 	}
+}
+
+export function loadSecurityConfig(appHomeDir = APP_HOME_DIR): SecurityConfig {
+	return loadSecurityConfigWithDiagnostics(appHomeDir).config;
 }

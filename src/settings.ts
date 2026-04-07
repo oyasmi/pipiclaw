@@ -10,6 +10,8 @@
 import type { Transport } from "@mariozechner/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
+import * as log from "./log.js";
+import type { ConfigDiagnostic } from "./shared/config-diagnostics.js";
 
 type PackageSource =
 	| string
@@ -133,6 +135,7 @@ const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
 export class PipiclawSettingsManager {
 	private settingsPath: string;
 	private settings: PipiclawSettings;
+	private loadErrors: SettingsError[] = [];
 
 	constructor(baseDir: string) {
 		this.settingsPath = join(baseDir, "settings.json");
@@ -140,14 +143,27 @@ export class PipiclawSettingsManager {
 	}
 
 	private load(): PipiclawSettings {
+		this.loadErrors = [];
 		if (!existsSync(this.settingsPath)) {
 			return {};
 		}
 
 		try {
 			const content = readFileSync(this.settingsPath, "utf-8");
-			return JSON.parse(content);
-		} catch {
+			const parsed = JSON.parse(content) as unknown;
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+				this.loadErrors.push({
+					scope: "global",
+					error: new Error(`Expected a JSON object in ${this.settingsPath}`),
+				});
+				return {};
+			}
+			return parsed as PipiclawSettings;
+		} catch (error) {
+			this.loadErrors.push({
+				scope: "global",
+				error: error instanceof Error ? error : new Error(String(error)),
+			});
 			return {};
 		}
 	}
@@ -160,12 +176,27 @@ export class PipiclawSettingsManager {
 			}
 			writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), "utf-8");
 		} catch (error) {
-			console.error(`Warning: Could not save settings file: ${error}`);
+			log.logWarning(`Could not save settings file`, `${this.settingsPath}\n${String(error)}`);
 		}
 	}
 
 	reload(): void {
 		this.settings = this.load();
+	}
+
+	drainErrors(): SettingsError[] {
+		const errors = this.loadErrors;
+		this.loadErrors = [];
+		return errors;
+	}
+
+	getDiagnostics(): ConfigDiagnostic[] {
+		return this.loadErrors.map(({ error }) => ({
+			source: "settings",
+			path: this.settingsPath,
+			severity: "error",
+			message: error.message,
+		}));
 	}
 
 	getCompactionSettings(): PipiclawCompactionSettings {
@@ -558,9 +589,5 @@ export class PipiclawSettingsManager {
 
 	flush(): Promise<void> {
 		return Promise.resolve();
-	}
-
-	drainErrors(): SettingsError[] {
-		return [];
 	}
 }

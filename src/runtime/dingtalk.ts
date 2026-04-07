@@ -194,6 +194,7 @@ export class DingTalkBot {
 	private isReconnecting = false;
 	private isStopped = false;
 	private reconnectAttempts = 0;
+	private hasReportedReady = false;
 
 	// Deduplication cache (Set for O(1) lookup, order array for FIFO eviction)
 	private processedIds = new Set<string>();
@@ -316,8 +317,10 @@ export class DingTalkBot {
 			return this.handleRawMessage(msg);
 		});
 
-		log.logConnected();
-		await this.doReconnect(true); // Initial connection
+		const connected = await this.doReconnect(true); // Initial connection
+		if (!connected) {
+			log.logWarning("DingTalk: initial stream connection not ready yet; retrying in background");
+		}
 	}
 
 	private handleRawMessage(msg: DWClientDownStream): { status: "SUCCESS"; message: string } {
@@ -353,10 +356,11 @@ export class DingTalkBot {
 		return { status: "SUCCESS", message: "OK" };
 	}
 
-	private async doReconnect(immediate = false) {
-		if (this.isReconnecting || this.isStopped || !this.client) return;
+	private async doReconnect(immediate = false): Promise<boolean> {
+		if (this.isReconnecting || this.isStopped || !this.client) return false;
 		this.isReconnecting = true;
 		let connectionFailed = false;
+		let connected = false;
 
 		if (!immediate && this.reconnectAttempts > 0) {
 			const delay = Math.min(1000 * 2 ** this.reconnectAttempts + Math.random() * 1000, 30000);
@@ -364,7 +368,7 @@ export class DingTalkBot {
 			await this.waitForDelay(delay);
 			if (this.isStopped || !this.client) {
 				this.isReconnecting = false;
-				return;
+				return false;
 			}
 		}
 
@@ -379,6 +383,11 @@ export class DingTalkBot {
 			this.lastSocketAvailableTime = Date.now();
 			this.reconnectAttempts = 0; // Success, reset backoff
 			log.logInfo("DingTalk: connected to stream.");
+			if (!this.hasReportedReady) {
+				log.logConnected();
+				this.hasReportedReady = true;
+			}
+			connected = true;
 
 			// Setup keep alive
 			this.clearKeepAliveTimer();
@@ -438,6 +447,7 @@ export class DingTalkBot {
 		if (connectionFailed && !this.isStopped) {
 			this.scheduleReconnect(0, false);
 		}
+		return connected;
 	}
 
 	async stop(): Promise<void> {

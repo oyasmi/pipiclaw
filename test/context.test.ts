@@ -93,6 +93,13 @@ describe("PipiclawSettingsManager", () => {
 		expect(manager.getSessionMemorySettings().enabled).toBe(true);
 		expect(manager.getTheme()).toBeUndefined();
 		await expect(manager.flush()).resolves.toBeUndefined();
-		expect(manager.drainErrors()).toEqual([]);
+		expect(manager.drainErrors()).toEqual([
+			expect.objectContaining({
+				scope: "global",
+				error: expect.objectContaining({
+					message: expect.stringContaining("Expected property name"),
+				}),
+			}),
+		]);
 	});
 });

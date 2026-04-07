@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, unlinkSync, watch } from "fs";
+import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, unlinkSync, watch, writeFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import * as log from "../log.js";
@@ -182,11 +182,12 @@ export class EventsWatcher {
 
 		if (!event) {
 			log.logWarning(`Failed to parse event file after ${MAX_RETRIES} retries: ${filename}`, lastError?.message);
-			this.deleteFile(filename);
+			this.markInvalid(filename, lastError?.message ?? "Unknown event parse error");
 			return;
 		}
 
 		this.knownFiles.add(filename);
+		this.clearInvalidMarker(filename);
 
 		switch (event.type) {
 			case "immediate":
@@ -262,7 +263,7 @@ export class EventsWatcher {
 
 		if (!Number.isFinite(atTime)) {
 			log.logWarning(`Invalid one-shot time for ${filename}: ${event.at}`);
-			this.deleteFile(filename);
+			this.markInvalid(filename, `Invalid one-shot time: ${event.at}`);
 			return;
 		}
 
@@ -277,7 +278,7 @@ export class EventsWatcher {
 			log.logWarning(
 				`One-shot event exceeds maximum supported delay for ${filename}: ${event.at}. Use a periodic cron event instead.`,
 			);
-			this.deleteFile(filename);
+			this.markInvalid(filename, `One-shot event exceeds maximum supported delay: ${event.at}`);
 			return;
 		}
 
@@ -305,7 +306,7 @@ export class EventsWatcher {
 			log.logInfo(`Scheduled periodic event: ${filename}, next run: ${next?.toISOString() ?? "unknown"}`);
 		} catch (err) {
 			log.logWarning(`Invalid cron schedule for ${filename}: ${event.schedule}`, String(err));
-			this.deleteFile(filename);
+			this.markInvalid(filename, `Invalid cron schedule: ${event.schedule}\n${String(err)}`);
 		}
 	}
 
@@ -358,7 +359,36 @@ export class EventsWatcher {
 				log.logWarning(`Failed to delete event file: ${filename}`, String(err));
 			}
 		}
+		this.clearInvalidMarker(filename);
 		this.knownFiles.delete(filename);
+	}
+
+	private getInvalidMarkerPath(filename: string): string {
+		return join(this.eventsDir, `${filename}.error.txt`);
+	}
+
+	private markInvalid(filename: string, message: string): void {
+		try {
+			writeFileSync(
+				this.getInvalidMarkerPath(filename),
+				[`timestamp: ${new Date().toISOString()}`, `file: ${filename}`, "", message.trim()].join("\n"),
+				"utf-8",
+			);
+		} catch (err) {
+			log.logWarning(`Failed to write event error marker: ${filename}`, String(err));
+		}
+		this.knownFiles.add(filename);
+	}
+
+	private clearInvalidMarker(filename: string): void {
+		const markerPath = this.getInvalidMarkerPath(filename);
+		try {
+			unlinkSync(markerPath);
+		} catch (err) {
+			if (err instanceof Error && "code" in err && err.code !== "ENOENT") {
+				log.logWarning(`Failed to delete event error marker: ${filename}`, String(err));
+			}
+		}
 	}
 
 	private sleep(ms: number): Promise<void> {

@@ -17,6 +17,10 @@ import {
 	WORKSPACE_DIR,
 } from "../paths.js";
 import { parseSandboxArg, type SandboxConfig, validateSandbox } from "../sandbox.js";
+import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
+import { PipiclawSettingsManager } from "../settings.js";
+import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
+import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { ensureChannelDir } from "./channel-paths.js";
 import { createDingTalkContext } from "./delivery.js";
 import {
@@ -460,6 +464,30 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	let shuttingDown = false;
 	let shutdownPromise: Promise<void> | null = null;
 
+	const archiveIncomingMessage = async (
+		channelId: string,
+		message: {
+			date: string;
+			ts: string;
+			user: string;
+			userName?: string;
+			text: string;
+			isBot: boolean;
+			deliveryMode?: "steer" | "followUp";
+			skipContextSync?: boolean;
+		},
+		contextLabel: string,
+	): Promise<void> => {
+		try {
+			await store.logMessage(channelId, message);
+		} catch (err) {
+			log.logWarning(
+				`[${channelId}] Failed to archive ${contextLabel}`,
+				err instanceof Error ? err.message : String(err),
+			);
+		}
+	};
+
 	const getState = (channelId: string): ChannelState => {
 		let state = channelStates.get(channelId);
 		if (!state) {
@@ -505,16 +533,20 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			const state = getState(event.channelId);
 			const trimmedQueueText = queueText.trim();
 
-			await store.logMessage(event.channelId, {
-				date: new Date().toISOString(),
-				ts: event.ts,
-				user: event.user,
-				userName: event.userName,
-				text: event.text,
-				isBot: false,
-				deliveryMode: mode,
-				skipContextSync: true,
-			});
+			await archiveIncomingMessage(
+				event.channelId,
+				{
+					date: new Date().toISOString(),
+					ts: event.ts,
+					user: event.user,
+					userName: event.userName,
+					text: event.text,
+					isBot: false,
+					deliveryMode: mode,
+					skipContextSync: true,
+				},
+				`${mode} message`,
+			);
 
 			try {
 				if (mode === "followUp") {
@@ -549,16 +581,20 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				state.running = true;
 				state.stopRequested = false;
 
-				await store.logMessage(event.channelId, {
-					date: new Date().toISOString(),
-					ts: event.ts,
-					user: event.user,
-					userName: event.userName,
-					text: event.text,
-					isBot: false,
-				});
-
 				try {
+					await archiveIncomingMessage(
+						event.channelId,
+						{
+							date: new Date().toISOString(),
+							ts: event.ts,
+							user: event.user,
+							userName: event.userName,
+							text: event.text,
+							isBot: false,
+						},
+						"user message",
+					);
+
 					const ctx = createDingTalkContext(event, bot, store);
 					const builtInCommand = parseBuiltInCommand(event.text);
 
@@ -704,6 +740,16 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 
 	const dingtalkConfig = loadConfig(paths, io);
 	dingtalkConfig.stateDir = paths.workspaceDir;
+	const settingsManager = new PipiclawSettingsManager(paths.appHomeDir);
+	for (const { scope, error } of settingsManager.drainErrors()) {
+		log.logWarning(`Failed to load ${scope} settings`, `${error.message}\n${paths.settingsConfigPath}`);
+	}
+	for (const diagnostic of loadToolsConfigWithDiagnostics(paths.appHomeDir).diagnostics) {
+		log.logWarning(formatConfigDiagnostic(diagnostic), diagnostic.path);
+	}
+	for (const diagnostic of loadSecurityConfigWithDiagnostics(paths.appHomeDir).diagnostics) {
+		log.logWarning(formatConfigDiagnostic(diagnostic), diagnostic.path);
+	}
 
 	await validateSandbox(sandbox);
 

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_TOOLS_CONFIG, loadToolsConfig } from "../src/tools/config.js";
+import { DEFAULT_TOOLS_CONFIG, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../src/tools/config.js";
 
 const tempDirs: string[] = [];
 
@@ -90,5 +90,40 @@ describe("tools config", () => {
 		);
 
 		expect(loadToolsConfig(appHomeDir)).toEqual(DEFAULT_TOOLS_CONFIG);
+	});
+
+	it("reports diagnostics for invalid json and invalid fields", () => {
+		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
+		tempDirs.push(appHomeDir);
+		writeFileSync(
+			join(appHomeDir, "tools.json"),
+			JSON.stringify({
+				tools: {
+					web: {
+						proxy: 42,
+						search: {
+							provider: "invalid",
+							maxResults: 99,
+						},
+					},
+				},
+			}),
+			"utf-8",
+		);
+
+		const loaded = loadToolsConfigWithDiagnostics(appHomeDir);
+		expect(loaded.config).toEqual(DEFAULT_TOOLS_CONFIG);
+		expect(loaded.diagnostics.map((item) => item.message)).toEqual(
+			expect.arrayContaining([
+				expect.stringContaining("tools.web.proxy: expected a string or null"),
+				expect.stringContaining('tools.web.search.provider: unknown provider "invalid"'),
+				expect.stringContaining("tools.web.search.maxResults: expected an integer between 1 and 10"),
+			]),
+		);
+
+		writeFileSync(join(appHomeDir, "tools.json"), "{", "utf-8");
+		const invalidJson = loadToolsConfigWithDiagnostics(appHomeDir);
+		expect(invalidJson.config).toEqual(DEFAULT_TOOLS_CONFIG);
+		expect(invalidJson.diagnostics[0]?.severity).toBe("error");
 	});
 });

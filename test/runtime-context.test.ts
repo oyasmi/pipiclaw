@@ -109,4 +109,46 @@ describe("createRuntimeContext", () => {
 		expect(bot.stop).toHaveBeenCalled();
 		expect(eventsWatcher.stop).toHaveBeenCalled();
 	});
+
+	it("recovers when archiving an incoming message fails", async () => {
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+		const bot = new FakeTestBot();
+		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
+
+		const runtime = createRuntimeContext({
+			paths,
+			sandbox: { type: "host" },
+			dingtalkConfig: {
+				clientId: "client-id",
+				clientSecret: "client-secret",
+				robotCode: "client-id",
+				cardTemplateKey: "content",
+				stateDir: paths.workspaceDir,
+			} satisfies DingTalkConfig,
+			registerSignalHandlers: false,
+			startServices: false,
+			createBot: () => bot as unknown as DingTalkBot,
+			createEventsWatcher: () => eventsWatcher,
+		});
+
+		vi.spyOn(runtime.store, "logMessage").mockRejectedValueOnce(new Error("disk full"));
+
+		const event = {
+			type: "dm" as const,
+			channelId: "dm_tester",
+			ts: "1000",
+			user: "tester",
+			userName: "Tester",
+			text: "/help",
+			conversationId: "conv_1",
+			conversationType: "1",
+		};
+
+		await runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
+		await runtime.handler.handleEvent({ ...event, ts: "1001" }, bot as unknown as DingTalkBot);
+
+		expect(bot.sendPlain).toHaveBeenCalledTimes(2);
+		await runtime.shutdown();
+	});
 });

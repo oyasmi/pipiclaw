@@ -37,6 +37,7 @@ export interface WebHttpRequestOptions {
 	timeoutMs: number;
 	signal?: AbortSignal;
 	maxRedirects?: number;
+	maxResponseBytes?: number;
 }
 
 const agentCache = new Map<string, HttpAgent | HttpsAgent>();
@@ -151,24 +152,37 @@ export class WebHttpClient {
 			}
 
 			const agent = getProxyAgent(currentUrl, this.context.webConfig.proxy);
-			const response = await axios.request<ArrayBuffer>({
-				method,
-				url: currentUrl,
-				data,
-				headers: {
-					"User-Agent": WEB_USER_AGENT,
-					Accept: "*/*",
-					...options.headers,
-				},
-				responseType: "arraybuffer",
-				validateStatus: () => true,
-				timeout: options.timeoutMs,
-				signal: options.signal,
-				maxRedirects: 0,
-				proxy: false,
-				httpAgent: agent,
-				httpsAgent: agent,
-			});
+			let response: Awaited<ReturnType<typeof axios.request<ArrayBuffer>>>;
+			try {
+				response = await axios.request<ArrayBuffer>({
+					method,
+					url: currentUrl,
+					data,
+					headers: {
+						"User-Agent": WEB_USER_AGENT,
+						Accept: "*/*",
+						...options.headers,
+					},
+					responseType: "arraybuffer",
+					validateStatus: () => true,
+					timeout: options.timeoutMs,
+					signal: options.signal,
+					maxRedirects: 0,
+					maxContentLength: options.maxResponseBytes ?? Number.POSITIVE_INFINITY,
+					proxy: false,
+					httpAgent: agent,
+					httpsAgent: agent,
+				});
+			} catch (error) {
+				if (
+					options.maxResponseBytes &&
+					typeof (error as { message?: unknown })?.message === "string" &&
+					(error as { message: string }).message.includes("maxContentLength")
+				) {
+					throw new Error(`Response exceeds maxResponseBytes (${options.maxResponseBytes} bytes)`);
+				}
+				throw error;
+			}
 			const headers = normalizeHeaders(response.headers);
 			const body = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data);
 

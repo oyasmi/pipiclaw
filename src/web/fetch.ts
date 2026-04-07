@@ -45,6 +45,7 @@ async function tryFetchViaJina(
 	context: WebFetchExecutionContext,
 	url: string,
 	maxChars: number,
+	maxResponseBytes: number,
 	signal?: AbortSignal,
 ): Promise<WebFetchOutput | null> {
 	const client = createWebHttpClient({
@@ -63,6 +64,7 @@ async function tryFetchViaJina(
 		url: `https://r.jina.ai/${url}`,
 		headers,
 		timeoutMs: context.webConfig.fetch.timeoutMs,
+		maxResponseBytes,
 		signal,
 	});
 	if (response.status < 200 || response.status >= 300 || !data.data?.content) {
@@ -93,6 +95,7 @@ async function fetchDirect(
 	extractMode: "markdown" | "text",
 	maxChars: number,
 	maxImageBytes: number,
+	maxResponseBytes: number,
 	signal?: AbortSignal,
 ): Promise<WebFetchOutput> {
 	const client = createWebHttpClient({
@@ -104,6 +107,7 @@ async function fetchDirect(
 	const response = await client.request({
 		url,
 		timeoutMs: context.webConfig.fetch.timeoutMs,
+		maxResponseBytes,
 		signal,
 	});
 	if (response.status < 200 || response.status >= 300) {
@@ -173,13 +177,20 @@ export async function runWebFetch(
 		extractMode: "markdown" | "text";
 		maxChars: number;
 		maxImageBytes: number;
+		maxResponseBytes: number;
 		preferJina: boolean;
 		enableJinaFallback: boolean;
 	},
 	signal?: AbortSignal,
 ): Promise<WebFetchOutput> {
 	if (request.preferJina) {
-		const jinaResult = await tryFetchViaJina(context, request.url, request.maxChars, signal);
+		const jinaResult = await tryFetchViaJina(
+			context,
+			request.url,
+			request.maxChars,
+			request.maxResponseBytes,
+			signal,
+		);
 		if (jinaResult) {
 			return jinaResult;
 		}
@@ -192,13 +203,20 @@ export async function runWebFetch(
 			request.extractMode,
 			request.maxChars,
 			request.maxImageBytes,
+			request.maxResponseBytes,
 			signal,
 		);
 	} catch (error) {
 		if (!request.enableJinaFallback) {
 			throw error;
 		}
-		const jinaResult = await tryFetchViaJina(context, request.url, request.maxChars, signal);
+		const jinaResult = await tryFetchViaJina(
+			context,
+			request.url,
+			request.maxChars,
+			request.maxResponseBytes,
+			signal,
+		);
 		if (jinaResult) {
 			return jinaResult;
 		}

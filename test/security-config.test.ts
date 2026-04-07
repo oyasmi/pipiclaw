@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_SECURITY_CONFIG, loadSecurityConfig } from "../src/security/config.js";
+import {
+	DEFAULT_SECURITY_CONFIG,
+	loadSecurityConfig,
+	loadSecurityConfigWithDiagnostics,
+} from "../src/security/config.js";
 
 const tempDirs: string[] = [];
 
@@ -83,5 +87,28 @@ describe("security config", () => {
 				enabled: false,
 			},
 		});
+	});
+
+	it("reports diagnostics for invalid json and invalid fields", () => {
+		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-security-config-"));
+		tempDirs.push(appHomeDir);
+		writeFileSync(
+			join(appHomeDir, "security.json"),
+			JSON.stringify({
+				networkGuard: { maxRedirects: 0 },
+			}),
+			"utf-8",
+		);
+
+		const loaded = loadSecurityConfigWithDiagnostics(appHomeDir);
+		expect(loaded.config).toEqual(DEFAULT_SECURITY_CONFIG);
+		expect(loaded.diagnostics.map((item) => item.message)).toEqual(
+			expect.arrayContaining([expect.stringContaining("networkGuard.maxRedirects: expected a positive integer")]),
+		);
+
+		writeFileSync(join(appHomeDir, "security.json"), "{", "utf-8");
+		const invalidJson = loadSecurityConfigWithDiagnostics(appHomeDir);
+		expect(invalidJson.config).toEqual(DEFAULT_SECURITY_CONFIG);
+		expect(invalidJson.diagnostics[0]?.severity).toBe("error");
 	});
 });

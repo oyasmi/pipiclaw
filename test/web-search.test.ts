@@ -109,6 +109,33 @@ describe("web search", () => {
 		expect(result.content).toContain("DuckDuckGo fallback");
 	});
 
+	it("does not fall back when the configured provider rejects credentials", async () => {
+		requestMock.mockResolvedValueOnce({
+			status: 401,
+			headers: { "content-type": "application/json" },
+			data: Buffer.from(JSON.stringify({ error: "unauthorized" })),
+		});
+
+		await expect(
+			runWebSearch(
+				{
+					...baseContext,
+					webConfig: {
+						...baseContext.webConfig,
+						search: {
+							...baseContext.webConfig.search,
+							provider: "brave",
+							apiKey: "bad-key",
+						},
+					},
+				},
+				"auth failure",
+				1,
+			),
+		).rejects.toThrow("Brave search failed with HTTP 401");
+		expect(requestMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("uses SearXNG baseUrl from tools config", async () => {
 		requestMock.mockResolvedValueOnce({
 			status: 200,

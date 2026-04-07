@@ -12,6 +12,7 @@ export interface ResolvedWebFetchRequest {
 	maxChars: number;
 	timeoutMs: number;
 	maxImageBytes: number;
+	maxResponseBytes: number;
 	preferJina: boolean;
 	enableJinaFallback: boolean;
 }
@@ -41,6 +42,7 @@ export function resolveWebFetchRequest(
 		maxChars: clamp(maxChars, config.maxChars, 100),
 		timeoutMs: config.timeoutMs,
 		maxImageBytes: config.maxImageBytes,
+		maxResponseBytes: config.maxResponseBytes,
 		preferJina: config.preferJina,
 		enableJinaFallback: config.enableJinaFallback,
 	};

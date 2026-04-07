@@ -1,4 +1,4 @@
-import { Agent } from "@mariozechner/pi-agent-core";
+import { Agent, type AgentTool } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import {
 	AgentSession,
@@ -23,11 +23,14 @@ import { resolveInitialModel } from "../models/utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
 import type { DingTalkContext } from "../runtime/dingtalk.js";
 import type { ChannelStore } from "../runtime/store.js";
-import { createExecutor, type SandboxConfig } from "../sandbox.js";
+import { createExecutor, type Executor, type SandboxConfig } from "../sandbox.js";
+import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
+import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
 import { createCommandExtension } from "./command-extension.js";
 import { type BuiltInCommand, renderBuiltInHelp } from "./commands.js";
@@ -73,8 +76,10 @@ function createModelRegistry(authStorage: AuthStorage, modelsJsonPath: string): 
 function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsManager {
 	return manager as unknown as SDKSettingsManager;
 }
+
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
+	private readonly executor: Executor;
 	private readonly sandboxConfig: SandboxConfig;
 	private readonly channelId: string;
 	private readonly channelDir: string;
@@ -104,6 +109,7 @@ export class ChannelRunner implements AgentRunner {
 		this.channelDir = channelDir;
 
 		const executor = createExecutor(sandboxConfig);
+		this.executor = executor;
 		this.workspaceDir = resolve(dirname(channelDir));
 		this.workspacePath = executor.getWorkspacePath(this.workspaceDir);
 
@@ -115,6 +121,7 @@ export class ChannelRunner implements AgentRunner {
 		const contextFile = join(channelDir, "context.jsonl");
 		this.sessionManager = SessionManager.open(contextFile, channelDir);
 		this.settingsManager = new PipiclawSettingsManager(APP_HOME_DIR);
+		this.reportSettingsDiagnostics();
 
 		// Create AuthStorage and ModelRegistry
 		const authStorage = AuthStorage.create(AUTH_CONFIG_PATH);
@@ -126,19 +133,7 @@ export class ChannelRunner implements AgentRunner {
 		this.subAgentDiscovery = this.refreshSubAgentDiscovery();
 
 		// Create tools
-		const tools = createPipiclawTools({
-			executor,
-			getCurrentModel: () => this.activeModel,
-			getAvailableModels: () => this.modelRegistry.getAvailable(),
-			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
-			workspaceDir: this.workspaceDir,
-			channelDir: this.channelDir,
-			workspacePath: this.workspacePath,
-			channelId: this.channelId,
-			sandboxConfig: this.sandboxConfig,
-			getSubAgentDiscovery: () => this.subAgentDiscovery,
-			getMemoryRecallSettings: () => this.settingsManager.getMemoryRecallSettings(),
-		});
+		const tools = this.buildRuntimeTools();
 
 		// Create agent
 		this.agent = new Agent({
@@ -317,7 +312,11 @@ export class ChannelRunner implements AgentRunner {
 					!this.runState.finalResponseDelivered
 				) {
 					try {
-						await ctx.replaceMessage("_Sorry, something went wrong_");
+						const errorSummary =
+							this.runState.errorMessage.length > 240
+								? `${this.runState.errorMessage.slice(0, 237)}...`
+								: this.runState.errorMessage;
+						await ctx.replaceMessage(`_Sorry, something went wrong._\n\n\`${errorSummary}\``);
 					} catch (err) {
 						const errMsg = err instanceof Error ? err.message : String(err);
 						log.logWarning("Failed to post error message", errMsg);
@@ -486,10 +485,12 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	private async reloadSessionResources(): Promise<void> {
+		this.settingsManager.reload();
+		this.reportSettingsDiagnostics();
 		const skills = loadPipiclawSkills(this.channelDir, this.workspacePath);
 		this.currentSkills = skills;
 		this.subAgentDiscovery = this.refreshSubAgentDiscovery();
-		this.firstTurnMemoryBootstrapPending = true;
+		this.rebuildSessionTools();
 		await this.session.reload();
 	}
 
@@ -504,6 +505,50 @@ export class ChannelRunner implements AgentRunner {
 			log.logWarning(`Sub-agent config warning (${this.channelId})`, warning);
 		}
 		return discovery;
+	}
+
+	private reportSettingsDiagnostics(): void {
+		for (const { scope, error } of this.settingsManager.drainErrors()) {
+			log.logWarning(
+				`[${this.channelId}] Failed to load ${scope} settings`,
+				`${error.message}\n${join(APP_HOME_DIR, "settings.json")}`,
+			);
+		}
+	}
+
+	private reportConfigDiagnostics(diagnostics: ConfigDiagnostic[]): void {
+		for (const diagnostic of diagnostics) {
+			log.logWarning(`[${this.channelId}] ${formatConfigDiagnostic(diagnostic)}`, diagnostic.path);
+		}
+	}
+
+	private buildRuntimeTools(): AgentTool<any>[] {
+		const securityLoad = loadSecurityConfigWithDiagnostics(APP_HOME_DIR);
+		const toolsLoad = loadToolsConfigWithDiagnostics(APP_HOME_DIR);
+		this.reportConfigDiagnostics([...securityLoad.diagnostics, ...toolsLoad.diagnostics]);
+
+		return createPipiclawTools({
+			executor: this.executor,
+			getCurrentModel: () => this.activeModel,
+			getAvailableModels: () => this.modelRegistry.getAvailable(),
+			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
+			workspaceDir: this.workspaceDir,
+			channelDir: this.channelDir,
+			workspacePath: this.workspacePath,
+			channelId: this.channelId,
+			sandboxConfig: this.sandboxConfig,
+			getSubAgentDiscovery: () => this.subAgentDiscovery,
+			getMemoryRecallSettings: () => this.settingsManager.getMemoryRecallSettings(),
+			securityConfig: securityLoad.config,
+			toolsConfig: toolsLoad.config,
+		});
+	}
+
+	private rebuildSessionTools(): void {
+		const tools = this.buildRuntimeTools();
+		this.agent.setTools(tools);
+		(this.session as unknown as { _baseToolsOverride?: Record<string, AgentTool<any>> })._baseToolsOverride =
+			Object.fromEntries(tools.map((tool) => [tool.name, tool]));
 	}
 
 	// === Session event subscription ===

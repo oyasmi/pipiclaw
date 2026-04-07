@@ -149,4 +149,25 @@ describe("delivery", () => {
 
 		expect(throwingBot.discardCard).toBeDefined();
 	});
+
+	it("continues delivering when bot response archiving fails", async () => {
+		const bot = new FakeDingTalkBot();
+		const store = new FakeChannelStore();
+		store.logBotResponse = vi.fn(async () => {
+			throw new Error("disk full");
+		});
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never);
+
+		await ctx.respond("progress");
+		await vi.advanceTimersByTimeAsync(800);
+		await ctx.flush();
+
+		await expect(ctx.respondPlain("final")).resolves.toBe(true);
+
+		expect(bot.calls).toEqual([
+			{ method: "streamToCard", args: ["dm_123", "progress"] },
+			{ method: "sendPlain", args: ["dm_123", "final"] },
+			{ method: "finalizeExistingCard", args: ["dm_123", "progress"] },
+		]);
+	});
 });

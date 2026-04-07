@@ -129,7 +129,8 @@ describe("EventsWatcher", () => {
 		const invalidPath = join(dir, "invalid.json");
 		writeFileSync(invalidPath, "{}");
 		privateApi.handleOneShot("invalid.json", { type: "one-shot", channelId: "dm_1", text: "hello", at: "nope" });
-		expect(existsSync(invalidPath)).toBe(false);
+		expect(existsSync(invalidPath)).toBe(true);
+		expect(existsSync(join(dir, "invalid.json.error.txt"))).toBe(true);
 
 		const pastPath = join(dir, "past.json");
 		writeFileSync(pastPath, "{}");
@@ -174,10 +175,11 @@ describe("EventsWatcher", () => {
 			text: "too far",
 			at: new Date(Date.now() + 2_147_483_648).toISOString(),
 		});
-		expect(existsSync(overflowPath)).toBe(false);
+		expect(existsSync(overflowPath)).toBe(true);
+		expect(existsSync(join(dir, "overflow.json.error.txt"))).toBe(true);
 	});
 
-	it("deletes invalid periodic events and parse failures after retries", async () => {
+	it("preserves invalid periodic events and parse failures after retries", async () => {
 		const dir = createTempDir();
 		const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
@@ -191,14 +193,16 @@ describe("EventsWatcher", () => {
 			schedule: "not a cron",
 			timezone: "Asia/Shanghai",
 		});
-		expect(existsSync(invalidCronPath)).toBe(false);
+		expect(existsSync(invalidCronPath)).toBe(true);
+		expect(existsSync(join(dir, "invalid-cron.json.error.txt"))).toBe(true);
 
 		const brokenPath = join(dir, "broken.json");
 		writeFileSync(brokenPath, "{");
 		vi.spyOn(privateApi, "sleep").mockResolvedValue(undefined);
 		const pending = privateApi.handleFile("broken.json");
 		await pending;
-		expect(existsSync(brokenPath)).toBe(false);
+		expect(existsSync(brokenPath)).toBe(true);
+		expect(existsSync(join(dir, "broken.json.error.txt"))).toBe(true);
 	});
 
 	it("enqueues synthetic events and deletes handled files", () => {

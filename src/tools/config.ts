@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_HOME_DIR, TOOLS_CONFIG_PATH } from "../paths.js";
+import type { ConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { isRecord } from "../shared/type-guards.js";
 
 export type WebSearchProvider = "brave" | "tavily" | "jina" | "searxng" | "duckduckgo";
@@ -17,6 +18,7 @@ export interface PipiclawWebFetchConfig {
 	maxChars: number;
 	timeoutMs: number;
 	maxImageBytes: number;
+	maxResponseBytes: number;
 	preferJina: boolean;
 	enableJinaFallback: boolean;
 	defaultExtractMode: "markdown" | "text";
@@ -33,6 +35,11 @@ export interface PipiclawToolsConfig {
 	tools: {
 		web: PipiclawWebToolsConfig;
 	};
+}
+
+export interface LoadedToolsConfig {
+	config: PipiclawToolsConfig;
+	diagnostics: ConfigDiagnostic[];
 }
 
 const WEB_SEARCH_PROVIDERS: readonly WebSearchProvider[] = ["brave", "tavily", "jina", "searxng", "duckduckgo"];
@@ -53,6 +60,7 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 				maxChars: 50_000,
 				timeoutMs: 30_000,
 				maxImageBytes: 10 * 1024 * 1024,
+				maxResponseBytes: 5 * 1024 * 1024,
 				preferJina: false,
 				enableJinaFallback: false,
 				defaultExtractMode: "markdown",
@@ -90,8 +98,23 @@ function asOptionalProxy(value: unknown): string | null {
 	return trimmed.length > 0 ? trimmed : null;
 }
 
-function mergeToolsConfig(source: unknown): PipiclawToolsConfig {
+function pushInvalidValueDiagnostic(
+	diagnostics: ConfigDiagnostic[],
+	configPath: string,
+	field: string,
+	message: string,
+): void {
+	diagnostics.push({
+		source: "tools",
+		path: configPath,
+		severity: "warning",
+		message: `${field}: ${message}`,
+	});
+}
+
+function mergeToolsConfig(source: unknown, configPath: string, diagnostics: ConfigDiagnostic[]): PipiclawToolsConfig {
 	if (!isRecord(source)) {
+		pushInvalidValueDiagnostic(diagnostics, configPath, "root", "expected a JSON object; using defaults");
 		return DEFAULT_TOOLS_CONFIG;
 	}
 
@@ -103,11 +126,80 @@ function mergeToolsConfig(source: unknown): PipiclawToolsConfig {
 	const providerValue = asTrimmedString(search.provider, DEFAULT_TOOLS_CONFIG.tools.web.search.provider).toLowerCase();
 	const provider = WEB_SEARCH_PROVIDERS.includes(providerValue as WebSearchProvider)
 		? (providerValue as WebSearchProvider)
-		: DEFAULT_TOOLS_CONFIG.tools.web.search.provider;
+		: (() => {
+				if (search.provider !== undefined) {
+					pushInvalidValueDiagnostic(
+						diagnostics,
+						configPath,
+						"tools.web.search.provider",
+						`unknown provider "${String(search.provider)}"; using ${DEFAULT_TOOLS_CONFIG.tools.web.search.provider}`,
+					);
+				}
+				return DEFAULT_TOOLS_CONFIG.tools.web.search.provider;
+			})();
 	const defaultExtractMode = asTrimmedString(
 		fetch.defaultExtractMode,
 		DEFAULT_TOOLS_CONFIG.tools.web.fetch.defaultExtractMode,
 	);
+	if (web.proxy !== undefined && web.proxy !== null && typeof web.proxy !== "string") {
+		pushInvalidValueDiagnostic(diagnostics, configPath, "tools.web.proxy", "expected a string or null; using null");
+	}
+	if (search.maxResults !== undefined && clampInteger(search.maxResults, -1, 1, 10) === -1) {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.search.maxResults",
+			"expected an integer between 1 and 10; using default",
+		);
+	}
+	if (search.timeoutMs !== undefined && clampInteger(search.timeoutMs, -1, 1) === -1) {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.search.timeoutMs",
+			"expected a positive integer; using default",
+		);
+	}
+	if (fetch.maxChars !== undefined && clampInteger(fetch.maxChars, -1, 100) === -1) {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.fetch.maxChars",
+			"expected an integer >= 100; using default",
+		);
+	}
+	if (fetch.timeoutMs !== undefined && clampInteger(fetch.timeoutMs, -1, 1) === -1) {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.fetch.timeoutMs",
+			"expected a positive integer; using default",
+		);
+	}
+	if (fetch.maxImageBytes !== undefined && clampInteger(fetch.maxImageBytes, -1, 1) === -1) {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.fetch.maxImageBytes",
+			"expected a positive integer; using default",
+		);
+	}
+	if (fetch.maxResponseBytes !== undefined && clampInteger(fetch.maxResponseBytes, -1, 1) === -1) {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.fetch.maxResponseBytes",
+			"expected a positive integer; using default",
+		);
+	}
+	if (fetch.defaultExtractMode !== undefined && defaultExtractMode !== "text" && defaultExtractMode !== "markdown") {
+		pushInvalidValueDiagnostic(
+			diagnostics,
+			configPath,
+			"tools.web.fetch.defaultExtractMode",
+			`expected "markdown" or "text"; using ${DEFAULT_TOOLS_CONFIG.tools.web.fetch.defaultExtractMode}`,
+		);
+	}
 
 	return {
 		tools: {
@@ -125,6 +217,11 @@ function mergeToolsConfig(source: unknown): PipiclawToolsConfig {
 					maxChars: clampInteger(fetch.maxChars, DEFAULT_TOOLS_CONFIG.tools.web.fetch.maxChars, 100),
 					timeoutMs: clampInteger(fetch.timeoutMs, DEFAULT_TOOLS_CONFIG.tools.web.fetch.timeoutMs, 1),
 					maxImageBytes: clampInteger(fetch.maxImageBytes, DEFAULT_TOOLS_CONFIG.tools.web.fetch.maxImageBytes, 1),
+					maxResponseBytes: clampInteger(
+						fetch.maxResponseBytes,
+						DEFAULT_TOOLS_CONFIG.tools.web.fetch.maxResponseBytes,
+						1,
+					),
 					preferJina:
 						typeof fetch.preferJina === "boolean"
 							? fetch.preferJina
@@ -147,17 +244,34 @@ export function getToolsConfigPath(appHomeDir = APP_HOME_DIR): string {
 	return appHomeDir === APP_HOME_DIR ? TOOLS_CONFIG_PATH : join(appHomeDir, "tools.json");
 }
 
-export function loadToolsConfig(appHomeDir = APP_HOME_DIR): PipiclawToolsConfig {
+export function loadToolsConfigWithDiagnostics(appHomeDir = APP_HOME_DIR): LoadedToolsConfig {
 	const configPath = getToolsConfigPath(appHomeDir);
 	if (!existsSync(configPath)) {
-		return DEFAULT_TOOLS_CONFIG;
+		return { config: DEFAULT_TOOLS_CONFIG, diagnostics: [] };
 	}
 
 	try {
 		const raw = JSON.parse(readFileSync(configPath, "utf-8"));
-		return mergeToolsConfig(raw);
+		const diagnostics: ConfigDiagnostic[] = [];
+		return {
+			config: mergeToolsConfig(raw, configPath, diagnostics),
+			diagnostics,
+		};
 	} catch (error) {
-		console.warn(`Failed to load tools config from ${configPath}: ${error}`);
-		return DEFAULT_TOOLS_CONFIG;
+		return {
+			config: DEFAULT_TOOLS_CONFIG,
+			diagnostics: [
+				{
+					source: "tools",
+					path: configPath,
+					severity: "error",
+					message: error instanceof Error ? error.message : String(error),
+				},
+			],
+		};
 	}
+}
+
+export function loadToolsConfig(appHomeDir = APP_HOME_DIR): PipiclawToolsConfig {
+	return loadToolsConfigWithDiagnostics(appHomeDir).config;
 }

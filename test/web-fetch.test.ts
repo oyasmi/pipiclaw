@@ -47,6 +47,7 @@ describe("web fetch", () => {
 			extractMode: "markdown",
 			maxChars: 5000,
 			maxImageBytes: baseContext.webConfig.fetch.maxImageBytes,
+			maxResponseBytes: baseContext.webConfig.fetch.maxResponseBytes,
 			preferJina: false,
 			enableJinaFallback: false,
 		});
@@ -70,6 +71,7 @@ describe("web fetch", () => {
 			extractMode: "text",
 			maxChars: 5000,
 			maxImageBytes: baseContext.webConfig.fetch.maxImageBytes,
+			maxResponseBytes: baseContext.webConfig.fetch.maxResponseBytes,
 			preferJina: false,
 			enableJinaFallback: false,
 		});
@@ -90,6 +92,7 @@ describe("web fetch", () => {
 			extractMode: "markdown",
 			maxChars: 5000,
 			maxImageBytes: baseContext.webConfig.fetch.maxImageBytes,
+			maxResponseBytes: baseContext.webConfig.fetch.maxResponseBytes,
 			preferJina: false,
 			enableJinaFallback: false,
 		});
@@ -127,6 +130,7 @@ describe("web fetch", () => {
 			extractMode: "text",
 			maxChars: 5000,
 			maxImageBytes: baseContext.webConfig.fetch.maxImageBytes,
+			maxResponseBytes: baseContext.webConfig.fetch.maxResponseBytes,
 			preferJina: false,
 			enableJinaFallback: false,
 		});
@@ -134,5 +138,24 @@ describe("web fetch", () => {
 		expect((result.content[0] as { text: string }).text).toContain("Readable body");
 		expect(consoleErrorSpy).not.toHaveBeenCalled();
 		consoleErrorSpy.mockRestore();
+	});
+
+	it("rejects oversized non-image responses before extraction", async () => {
+		requestMock.mockRejectedValueOnce({
+			isAxiosError: true,
+			message: "maxContentLength size of 32 exceeded",
+		});
+
+		await expect(
+			runWebFetch(baseContext, {
+				url: "https://example.com/huge",
+				extractMode: "text",
+				maxChars: 5000,
+				maxImageBytes: baseContext.webConfig.fetch.maxImageBytes,
+				maxResponseBytes: 32,
+				preferJina: false,
+				enableJinaFallback: false,
+			}),
+		).rejects.toThrow("Response exceeds maxResponseBytes (32 bytes)");
 	});
 });

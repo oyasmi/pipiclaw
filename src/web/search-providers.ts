@@ -36,6 +36,10 @@ function normalizeResult(item: Partial<WebSearchResultItem>): WebSearchResultIte
 	};
 }
 
+function isProviderConfigStatus(status: number): boolean {
+	return status === 400 || status === 401 || status === 403 || status === 422 || status === 429;
+}
+
 class BraveSearchProvider implements SearchProvider {
 	constructor(private readonly context: SearchProviderContext) {}
 
@@ -56,7 +60,10 @@ class BraveSearchProvider implements SearchProvider {
 			signal,
 		});
 		if (response.status < 200 || response.status >= 300) {
-			throw new WebSearchProviderError("provider", `Brave search failed with HTTP ${response.status}`);
+			throw new WebSearchProviderError(
+				isProviderConfigStatus(response.status) ? "config" : "provider",
+				`Brave search failed with HTTP ${response.status}`,
+			);
 		}
 		return (data.web?.results ?? [])
 			.map((item) =>
@@ -93,7 +100,10 @@ class TavilySearchProvider implements SearchProvider {
 			signal,
 		});
 		if (response.status < 200 || response.status >= 300) {
-			throw new WebSearchProviderError("provider", `Tavily search failed with HTTP ${response.status}`);
+			throw new WebSearchProviderError(
+				isProviderConfigStatus(response.status) ? "config" : "provider",
+				`Tavily search failed with HTTP ${response.status}`,
+			);
 		}
 		return (data.results ?? [])
 			.map((item) =>
@@ -127,7 +137,10 @@ class JinaSearchProvider implements SearchProvider {
 			signal,
 		});
 		if (response.status < 200 || response.status >= 300) {
-			throw new WebSearchProviderError("provider", `Jina search failed with HTTP ${response.status}`);
+			throw new WebSearchProviderError(
+				isProviderConfigStatus(response.status) ? "config" : "provider",
+				`Jina search failed with HTTP ${response.status}`,
+			);
 		}
 		return (data.data ?? [])
 			.map((item) =>

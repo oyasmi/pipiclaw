@@ -8,6 +8,7 @@ import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { createSubAgentTool } from "../subagents/tool.js";
 import { createBashTool } from "./bash.js";
+import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
 import { createReadTool } from "./read.js";
@@ -27,6 +28,8 @@ export interface CreatePipiclawToolsOptions {
 	sandboxConfig: SandboxConfig;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
 	getMemoryRecallSettings: () => PipiclawMemoryRecallSettings;
+	securityConfig?: SecurityConfig;
+	toolsConfig?: PipiclawToolsConfig;
 }
 
 export interface CreatePipiclawBaseToolsOptions {
@@ -56,8 +59,8 @@ export function createPipiclawBaseTools(
 }
 
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {
-	const securityConfig = loadSecurityConfig(APP_HOME_DIR);
-	const toolsConfig = loadToolsConfig(APP_HOME_DIR);
+	const securityConfig = options.securityConfig ?? loadSecurityConfig(APP_HOME_DIR);
+	const toolsConfig = options.toolsConfig ?? loadToolsConfig(APP_HOME_DIR);
 	const securityContext = {
 		workspaceDir: options.workspaceDir,
 		workspacePath: options.workspacePath,
