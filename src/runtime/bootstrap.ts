@@ -635,7 +635,11 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		: new DingTalkBot(handler, options.dingtalkConfig);
 	const eventsWatcher = options.createEventsWatcher
 		? options.createEventsWatcher(options.paths.workspaceDir, bot)
-		: createEventsWatcher(options.paths.workspaceDir, bot);
+		: createEventsWatcher(
+				options.paths.workspaceDir,
+				bot,
+				loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config.commandGuard,
+			);
 
 	const shutdownWithReason = async (reason: NodeJS.Signals | "manual" = "manual"): Promise<void> => {
 		if (shutdownPromise) {

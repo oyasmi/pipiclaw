@@ -3,6 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
+import type { EventAction } from "../src/runtime/events.js";
 import { EventsWatcher } from "../src/runtime/events.js";
 
 const tempDirs: string[] = [];
@@ -15,7 +16,7 @@ function createTempDir(): string {
 
 function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 	parseEvent(content: string, filename: string): unknown;
-	handleImmediate(filename: string, event: { type: "immediate"; channelId: string; text: string }): void;
+	handleImmediate(filename: string, event: { type: "immediate"; channelId: string; text: string }): Promise<void>;
 	handleOneShot(filename: string, event: { type: "one-shot"; channelId: string; text: string; at: string }): void;
 	handlePeriodic(
 		filename: string,
@@ -31,13 +32,15 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 			text: string;
 			at?: string;
 			schedule?: string;
+			preAction?: EventAction;
 		},
 		deleteAfter?: boolean,
-	): void;
+	): Promise<void>;
+	runPreAction(action: EventAction, filename: string): Promise<void>;
 } {
 	return watcher as unknown as {
 		parseEvent(content: string, filename: string): unknown;
-		handleImmediate(filename: string, event: { type: "immediate"; channelId: string; text: string }): void;
+		handleImmediate(filename: string, event: { type: "immediate"; channelId: string; text: string }): Promise<void>;
 		handleOneShot(filename: string, event: { type: "one-shot"; channelId: string; text: string; at: string }): void;
 		handlePeriodic(
 			filename: string,
@@ -53,9 +56,11 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 				text: string;
 				at?: string;
 				schedule?: string;
+				preAction?: EventAction;
 			},
 			deleteAfter?: boolean,
-		): void;
+		): Promise<void>;
+		runPreAction(action: EventAction, filename: string): Promise<void>;
 	};
 }
 
@@ -205,7 +210,7 @@ describe("EventsWatcher", () => {
 		expect(existsSync(join(dir, "broken.json.error.txt"))).toBe(true);
 	});
 
-	it("enqueues synthetic events and deletes handled files", () => {
+	it("enqueues synthetic events and deletes handled files", async () => {
 		const dir = createTempDir();
 		const filename = "periodic.json";
 		const filePath = join(dir, filename);
@@ -214,7 +219,7 @@ describe("EventsWatcher", () => {
 		const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
-		privateApi.execute(
+		await privateApi.execute(
 			filename,
 			{
 				type: "periodic",
@@ -234,7 +239,7 @@ describe("EventsWatcher", () => {
 		expect(existsSync(filePath)).toBe(false);
 	});
 
-	it("keeps periodic event files when they are re-queued without deletion", () => {
+	it("keeps periodic event files when they are re-queued without deletion", async () => {
 		const dir = createTempDir();
 		const filename = "keep.json";
 		const filePath = join(dir, filename);
@@ -243,7 +248,7 @@ describe("EventsWatcher", () => {
 		const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
-		privateApi.execute(
+		await privateApi.execute(
 			filename,
 			{
 				type: "periodic",
@@ -257,5 +262,184 @@ describe("EventsWatcher", () => {
 		expect(bot.events).toHaveLength(1);
 		expect(existsSync(filePath)).toBe(true);
 		expect(statSync(filePath).isFile()).toBe(true);
+	});
+
+	describe("action gate", () => {
+		it("enqueues event when action exits with code 0", async () => {
+			const dir = createTempDir();
+			const filename = "gated.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			await privateApi.execute(
+				filename,
+				{
+					type: "immediate",
+					channelId: "dm_1",
+					text: "should pass",
+					preAction: { type: "bash", command: "true" },
+				},
+				false,
+			);
+
+			expect(bot.events).toHaveLength(1);
+			expect(bot.events[0].text).toContain("should pass");
+		});
+
+		it("blocks event when action exits with non-zero code", async () => {
+			const dir = createTempDir();
+			const filename = "blocked.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			await privateApi.execute(
+				filename,
+				{
+					type: "immediate",
+					channelId: "dm_1",
+					text: "should not pass",
+					preAction: { type: "bash", command: "false" },
+				},
+				false,
+			);
+
+			expect(bot.events).toHaveLength(0);
+		});
+
+		it("blocks event when action times out", async () => {
+			const dir = createTempDir();
+			const filename = "timeout.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			await privateApi.execute(
+				filename,
+				{
+					type: "immediate",
+					channelId: "dm_1",
+					text: "should timeout",
+					preAction: { type: "bash", command: "sleep 30", timeout: 100 },
+				},
+				false,
+			);
+
+			expect(bot.events).toHaveLength(0);
+		});
+
+		it("blocks event when action command does not exist", async () => {
+			const dir = createTempDir();
+			const filename = "noexist.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			await privateApi.execute(
+				filename,
+				{
+					type: "immediate",
+					channelId: "dm_1",
+					text: "bad command",
+					preAction: { type: "bash", command: "/nonexistent/binary/xyz" },
+				},
+				false,
+			);
+
+			expect(bot.events).toHaveLength(0);
+		});
+
+		it("enqueues event normally when no action is specified (regression)", async () => {
+			const dir = createTempDir();
+			const filename = "noaction.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			await privateApi.execute(
+				filename,
+				{
+					type: "immediate",
+					channelId: "dm_1",
+					text: "no action",
+				},
+				false,
+			);
+
+			expect(bot.events).toHaveLength(1);
+			expect(bot.events[0].text).toContain("no action");
+		});
+
+		it("blocks event when guardCommand rejects the command", async () => {
+			const dir = createTempDir();
+			const filename = "guarded.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const guardConfig = {
+				enabled: true,
+				additionalDenyPatterns: [] as string[],
+				allowPatterns: [] as string[],
+				blockObfuscation: true,
+			};
+			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot, guardConfig);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			await privateApi.execute(
+				filename,
+				{
+					type: "immediate",
+					channelId: "dm_1",
+					text: "dangerous",
+					preAction: { type: "bash", command: "rm -rf /" },
+				},
+				false,
+			);
+
+			expect(bot.events).toHaveLength(0);
+		});
+
+		it("rejects action with empty command in parseEvent", () => {
+			const dir = createTempDir();
+			const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			expect(() =>
+				privateApi.parseEvent(
+					JSON.stringify({
+						type: "immediate",
+						channelId: "dm_1",
+						text: "hello",
+						preAction: { type: "bash", command: "" },
+					}),
+					"empty-cmd.json",
+				),
+			).toThrow("Missing or empty 'preAction.command'");
+		});
+
+		it("parses valid action in event payload", () => {
+			const dir = createTempDir();
+			const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			const parsed = privateApi.parseEvent(
+				JSON.stringify({
+					type: "periodic",
+					channelId: "dm_1",
+					text: "hello",
+					schedule: "0 10 * * 1",
+					timezone: "Asia/Shanghai",
+					preAction: { type: "bash", command: "echo hi", timeout: 5000 },
+				}),
+				"valid-action.json",
+			) as { preAction?: { type: string; command: string; timeout?: number } };
+
+			expect(parsed.preAction).toEqual({ type: "bash", command: "echo hi", timeout: 5000 });
+		});
 	});
 });

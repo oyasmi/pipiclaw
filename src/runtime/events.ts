@@ -1,18 +1,28 @@
+import { exec } from "child_process";
 import { Cron } from "croner";
 import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, unlinkSync, watch, writeFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import * as log from "../log.js";
+import { guardCommand } from "../security/command-guard.js";
+import type { SecurityConfig } from "../security/types.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 
 // ============================================================================
 // Event Types
 // ============================================================================
 
+export interface EventAction {
+	type: "bash";
+	command: string;
+	timeout?: number; // ms, default 10000
+}
+
 export interface ImmediateEvent {
 	type: "immediate";
 	channelId: string;
 	text: string;
+	preAction?: EventAction;
 }
 
 export interface OneShotEvent {
@@ -20,6 +30,7 @@ export interface OneShotEvent {
 	channelId: string;
 	text: string;
 	at: string; // ISO 8601 with timezone offset
+	preAction?: EventAction;
 }
 
 export interface PeriodicEvent {
@@ -28,6 +39,7 @@ export interface PeriodicEvent {
 	text: string;
 	schedule: string; // cron syntax
 	timezone: string; // IANA timezone
+	preAction?: EventAction;
 }
 
 export type ScheduledEvent = ImmediateEvent | OneShotEvent | PeriodicEvent;
@@ -52,6 +64,7 @@ export class EventsWatcher {
 	constructor(
 		private eventsDir: string,
 		private bot: DingTalkBot,
+		private commandGuardConfig?: SecurityConfig["commandGuard"],
 	) {
 		this.startTime = Date.now();
 	}
@@ -202,6 +215,29 @@ export class EventsWatcher {
 		}
 	}
 
+	private parsePreAction(data: Record<string, unknown>, filename: string): EventAction | undefined {
+		if (!data.preAction) return undefined;
+		if (typeof data.preAction !== "object" || data.preAction === null) {
+			throw new Error(`Invalid 'preAction' field in ${filename}, expected an object`);
+		}
+
+		const action = data.preAction as Record<string, unknown>;
+		if (action.type !== "bash") {
+			throw new Error(
+				`Unsupported preAction type '${String(action.type)}' in ${filename}, only 'bash' is supported`,
+			);
+		}
+		if (typeof action.command !== "string" || action.command.trim().length === 0) {
+			throw new Error(`Missing or empty 'preAction.command' in ${filename}`);
+		}
+
+		return {
+			type: "bash",
+			command: action.command,
+			...(typeof action.timeout === "number" ? { timeout: action.timeout } : {}),
+		};
+	}
+
 	private parseEvent(content: string, filename: string): ScheduledEvent | null {
 		const data = JSON.parse(content);
 
@@ -209,15 +245,17 @@ export class EventsWatcher {
 			throw new Error(`Missing required fields (type, channelId, text) in ${filename}`);
 		}
 
+		const preAction = this.parsePreAction(data, filename);
+
 		switch (data.type) {
 			case "immediate":
-				return { type: "immediate", channelId: data.channelId, text: data.text };
+				return { type: "immediate", channelId: data.channelId, text: data.text, preAction };
 
 			case "one-shot":
 				if (!data.at) {
 					throw new Error(`Missing 'at' field for one-shot event in ${filename}`);
 				}
-				return { type: "one-shot", channelId: data.channelId, text: data.text, at: data.at };
+				return { type: "one-shot", channelId: data.channelId, text: data.text, at: data.at, preAction };
 
 			case "periodic":
 				if (!data.schedule) {
@@ -232,6 +270,7 @@ export class EventsWatcher {
 					text: data.text,
 					schedule: data.schedule,
 					timezone: data.timezone,
+					preAction,
 				};
 
 			default:
@@ -239,7 +278,7 @@ export class EventsWatcher {
 		}
 	}
 
-	private handleImmediate(filename: string, event: ImmediateEvent): void {
+	private async handleImmediate(filename: string, event: ImmediateEvent): Promise<void> {
 		const filePath = join(this.eventsDir, filename);
 
 		try {
@@ -254,7 +293,7 @@ export class EventsWatcher {
 		}
 
 		log.logInfo(`Executing immediate event: ${filename}`);
-		this.execute(filename, event);
+		await this.execute(filename, event);
 	}
 
 	private handleOneShot(filename: string, event: OneShotEvent): void {
@@ -284,10 +323,14 @@ export class EventsWatcher {
 
 		log.logInfo(`Scheduling one-shot event: ${filename} in ${Math.round(delay / 1000)}s`);
 
-		const timer = setTimeout(() => {
+		const timer = setTimeout(async () => {
 			this.timers.delete(filename);
-			log.logInfo(`Executing one-shot event: ${filename}`);
-			this.execute(filename, event);
+			try {
+				log.logInfo(`Executing one-shot event: ${filename}`);
+				await this.execute(filename, event);
+			} catch (err) {
+				log.logWarning(`One-shot event execution failed: ${filename}`, String(err));
+			}
 		}, delay);
 
 		this.timers.set(filename, timer);
@@ -295,9 +338,13 @@ export class EventsWatcher {
 
 	private handlePeriodic(filename: string, event: PeriodicEvent): void {
 		try {
-			const cron = new Cron(event.schedule, { timezone: event.timezone }, () => {
-				log.logInfo(`Executing periodic event: ${filename}`);
-				this.execute(filename, event, false);
+			const cron = new Cron(event.schedule, { timezone: event.timezone }, async () => {
+				try {
+					log.logInfo(`Executing periodic event: ${filename}`);
+					await this.execute(filename, event, false);
+				} catch (err) {
+					log.logWarning(`Periodic event execution failed: ${filename}`, String(err));
+				}
 			});
 
 			this.crons.set(filename, cron);
@@ -310,7 +357,17 @@ export class EventsWatcher {
 		}
 	}
 
-	private execute(filename: string, event: ScheduledEvent, deleteAfter: boolean = true): void {
+	private async execute(filename: string, event: ScheduledEvent, deleteAfter: boolean = true): Promise<void> {
+		if (event.preAction) {
+			try {
+				await this.runPreAction(event.preAction, filename);
+			} catch (err) {
+				const reason = err instanceof Error ? err.message : String(err);
+				log.logInfo(`Pre-action gate blocked event: ${filename} (${reason})`);
+				return;
+			}
+		}
+
 		let scheduleInfo: string;
 		switch (event.type) {
 			case "immediate":
@@ -348,6 +405,25 @@ export class EventsWatcher {
 				this.deleteFile(filename);
 			}
 		}
+	}
+
+	private runPreAction(action: EventAction, filename: string): Promise<void> {
+		if (this.commandGuardConfig?.enabled) {
+			const guardResult = guardCommand(action.command, this.commandGuardConfig);
+			if (!guardResult.allowed) {
+				log.logWarning(`Pre-action command blocked by guard for ${filename}: ${guardResult.reason}`);
+				return Promise.reject(new Error(`guard: ${guardResult.reason}`));
+			}
+		}
+
+		return new Promise((resolve, reject) => {
+			const child = exec(action.command, { timeout: action.timeout ?? 10_000 });
+			child.on("close", (code) => {
+				if (code === 0) resolve();
+				else reject(new Error(`exit ${code}`));
+			});
+			child.on("error", reject);
+		});
 	}
 
 	private deleteFile(filename: string): void {
@@ -399,7 +475,11 @@ export class EventsWatcher {
 /**
  * Create and start an events watcher.
  */
-export function createEventsWatcher(workspaceDir: string, bot: DingTalkBot): EventsWatcher {
+export function createEventsWatcher(
+	workspaceDir: string,
+	bot: DingTalkBot,
+	commandGuardConfig?: SecurityConfig["commandGuard"],
+): EventsWatcher {
 	const eventsDir = join(workspaceDir, "events");
-	return new EventsWatcher(eventsDir, bot);
+	return new EventsWatcher(eventsDir, bot, commandGuardConfig);
 }

@@ -90,6 +90,7 @@ export {
 } from "./runtime/dingtalk.js";
 export {
 	createEventsWatcher,
+	type EventAction,
 	EventsWatcher,
 	type ImmediateEvent,
 	type OneShotEvent,
