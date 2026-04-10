@@ -317,7 +317,8 @@ export class ChannelRunner implements AgentRunner {
 								? `${this.runState.errorMessage.slice(0, 237)}...`
 								: this.runState.errorMessage;
 						const compactionSummary =
-							this.runState.lastCompactionError && this.runState.lastCompactionError !== this.runState.errorMessage
+							this.runState.lastCompactionError &&
+							this.runState.lastCompactionError !== this.runState.errorMessage
 								? this.runState.lastCompactionError.length > 240
 									? `${this.runState.lastCompactionError.slice(0, 237)}...`
 									: this.runState.lastCompactionError

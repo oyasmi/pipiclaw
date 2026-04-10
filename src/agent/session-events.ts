@@ -270,10 +270,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	if (isAutoCompactionStartEvent(event)) {
 		const label = event.reason === "manual" ? "Compacting context..." : "Compacting context...";
 		log.logInfo(`Compaction started (reason: ${event.reason})`);
-		queue.enqueue(
-			() => ctx.respond(formatProgressEntry("assistant", label), false),
-			"compaction start",
-		);
+		queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", label), false), "compaction start");
 		return;
 	}
 
@@ -287,7 +284,11 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			runState.lastCompactionError = event.errorMessage;
 			log.logWarning("Compaction failed", event.errorMessage);
 			queue.enqueue(
-				() => ctx.respond(formatProgressEntry("error", truncate(event.errorMessage ?? "Compaction failed", 200)), false),
+				() =>
+					ctx.respond(
+						formatProgressEntry("error", truncate(event.errorMessage ?? "Compaction failed", 200)),
+						false,
+					),
 				"compaction error",
 			);
 		}

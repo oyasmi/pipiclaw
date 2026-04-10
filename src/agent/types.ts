@@ -123,10 +123,7 @@ export type ToolExecutionEndEvent = Extract<SessionEvent, { type: "tool_executio
 export type MessageStartEvent = Extract<SessionEvent, { type: "message_start" }>;
 export type MessageEndEvent = Extract<SessionEvent, { type: "message_end" }>;
 export type TurnEndEvent = Extract<SessionEvent, { type: "turn_end" }>;
-export type AutoCompactionStartEvent = Extract<
-	SessionEvent,
-	{ type: "auto_compaction_start" | "compaction_start" }
->;
+export type AutoCompactionStartEvent = Extract<SessionEvent, { type: "auto_compaction_start" | "compaction_start" }>;
 export type AutoCompactionEndEvent = Extract<SessionEvent, { type: "auto_compaction_end" | "compaction_end" }>;
 export type AutoRetryStartEvent = Extract<SessionEvent, { type: "auto_retry_start" }>;
 
