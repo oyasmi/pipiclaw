@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-04-10
+
+### Added
+
+- Event files now support a `preAction` command gate so scheduled jobs can deterministically skip runs before enqueuing an LLM session
+- Preventive context compaction now runs ahead of oversized incoming prompts and queued steer or follow-up messages when projected context usage is too high
+
+### Changed
+
+- Memory recall candidate loading now uses file-aware caching and keeps a tighter history shortlist, improving recall performance on long-lived channels
+- DingTalk AI Card streaming now appends deltas instead of replaying the full transcript on every update, with better warmup and finalization behavior
+- Compaction progress and failure reporting now surface clearer runtime feedback, including explicit recovery details when compaction contributes to a run failure
+
+### Fixed
+
+- `/new` and related session command bindings now stay wired correctly inside the channel runner
+- Background memory maintenance now gets more time to finish, reducing false failures during compaction-heavy runs
+
+## [0.6.0] - 2026-04-07
+
+### Added
+
+- Bootstrap-time diagnostics for invalid `settings.json`, `tools.json`, and `security.json` values, including field-level warnings for malformed tool and security settings
+
+### Changed
+
+- Memory session and consolidation sidecar updates now retry transient failures instead of failing immediately on the first timeout or aborted worker run
+- Runtime recovery and config reload handling was hardened across DingTalk delivery, scheduled events, settings, security, and web tool configuration
+- Invalid scheduled event files now leave `.error.txt` markers with parse or schedule details instead of disappearing without explanation
+- DingTalk AI Card delivery now warms cards earlier for interactive runs and cleans up card state more predictably on stop, abort, and final response paths
+
+### Fixed
+
+- Windows command and path guards now apply platform-specific handling correctly, including bootstrap wiring for security config in runtime and test harnesses
+
 ## [0.5.9] - 2026-04-06
 
 ### Changed
