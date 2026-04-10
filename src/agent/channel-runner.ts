@@ -34,6 +34,7 @@ import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
 import { createCommandExtension } from "./command-extension.js";
 import { type BuiltInCommand, renderBuiltInHelp } from "./commands.js";
+import { getPreventiveCompactionDecision } from "./context-budget.js";
 import { clipUserInput } from "./progress-formatter.js";
 import { buildAppendSystemPrompt } from "./prompt-builder.js";
 import { createRunQueue } from "./run-queue.js";
@@ -236,6 +237,7 @@ export class ChannelRunner implements AgentRunner {
 
 		try {
 			await this.ensureSessionReady();
+			await this.maybeRunPreventiveCompaction();
 
 			// Ensure channel directory exists
 			await mkdir(this.channelDir, { recursive: true });
@@ -543,6 +545,34 @@ export class ChannelRunner implements AgentRunner {
 
 	private async ensureSessionReady(): Promise<void> {
 		await this.sessionReady;
+	}
+
+	private async maybeRunPreventiveCompaction(): Promise<void> {
+		const currentModel = this.session.model ?? this.activeModel;
+		const contextUsage = this.session.getContextUsage();
+		const contextTokens = contextUsage?.tokens;
+		const decision = getPreventiveCompactionDecision(contextTokens, currentModel.contextWindow);
+
+		if (!decision.shouldCompact) {
+			return;
+		}
+
+		const currentTokens = contextTokens ?? 0;
+		const startedAt = Date.now();
+		log.logInfo(
+			`[${this.channelId}] Preventive compaction triggered: ${currentTokens}/${currentModel.contextWindow} tokens (${(
+				(currentTokens / currentModel.contextWindow) *
+				100
+			).toFixed(1)}%), threshold=${decision.thresholdTokens}`,
+		);
+
+		try {
+			await this.session.compact();
+			log.logInfo(`[${this.channelId}] Preventive compaction complete in ${Date.now() - startedAt}ms`);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			log.logWarning(`[${this.channelId}] Preventive compaction failed`, message);
+		}
 	}
 
 	private refreshSubAgentDiscovery(): SubAgentDiscoveryResult {
