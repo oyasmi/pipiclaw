@@ -312,11 +312,21 @@ export class ChannelRunner implements AgentRunner {
 					!this.runState.finalResponseDelivered
 				) {
 					try {
-						const errorSummary =
+						const baseErrorSummary =
 							this.runState.errorMessage.length > 240
 								? `${this.runState.errorMessage.slice(0, 237)}...`
 								: this.runState.errorMessage;
-						await ctx.replaceMessage(`_Sorry, something went wrong._\n\n\`${errorSummary}\``);
+						const compactionSummary =
+							this.runState.lastCompactionError && this.runState.lastCompactionError !== this.runState.errorMessage
+								? this.runState.lastCompactionError.length > 240
+									? `${this.runState.lastCompactionError.slice(0, 237)}...`
+									: this.runState.lastCompactionError
+								: undefined;
+						const detailLines = [`\`${baseErrorSummary}\``];
+						if (compactionSummary) {
+							detailLines.push(`Recovery: \`${compactionSummary}\``);
+						}
+						await ctx.replaceMessage(`_Sorry, something went wrong._\n\n${detailLines.join("\n\n")}`);
 					} catch (err) {
 						const errMsg = err instanceof Error ? err.message : String(err);
 						log.logWarning("Failed to post error message", errMsg);

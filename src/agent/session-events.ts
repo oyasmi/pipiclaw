@@ -268,9 +268,10 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	}
 
 	if (isAutoCompactionStartEvent(event)) {
-		log.logInfo(`Auto-compaction started (reason: ${event.reason})`);
+		const label = event.reason === "manual" ? "Compacting context..." : "Compacting context...";
+		log.logInfo(`Compaction started (reason: ${event.reason})`);
 		queue.enqueue(
-			() => ctx.respond(formatProgressEntry("assistant", "Compacting context..."), false),
+			() => ctx.respond(formatProgressEntry("assistant", label), false),
 			"compaction start",
 		);
 		return;
@@ -278,9 +279,17 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 	if (isAutoCompactionEndEvent(event)) {
 		if (event.result) {
-			log.logInfo(`Auto-compaction complete: ${event.result.tokensBefore} tokens compacted`);
+			runState.lastCompactionError = undefined;
+			log.logInfo(`Compaction complete: ${event.result.tokensBefore} tokens compacted`);
 		} else if (event.aborted) {
-			log.logInfo("Auto-compaction aborted");
+			log.logInfo("Compaction aborted");
+		} else if (event.errorMessage) {
+			runState.lastCompactionError = event.errorMessage;
+			log.logWarning("Compaction failed", event.errorMessage);
+			queue.enqueue(
+				() => ctx.respond(formatProgressEntry("error", truncate(event.errorMessage ?? "Compaction failed", 200)), false),
+				"compaction error",
+			);
 		}
 		return;
 	}

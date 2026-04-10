@@ -40,6 +40,7 @@ export interface RunState {
 	totalUsage: UsageTotals;
 	stopReason: string;
 	errorMessage: string | undefined;
+	lastCompactionError: string | undefined;
 	finalOutcome: FinalOutcome;
 	finalResponseDelivered: boolean;
 }
@@ -61,6 +62,7 @@ export function createEmptyRunState(): RunState {
 		},
 		stopReason: "stop",
 		errorMessage: undefined,
+		lastCompactionError: undefined,
 		finalOutcome: { kind: "none" },
 		finalResponseDelivered: false,
 	};
@@ -104,7 +106,15 @@ export type SessionEvent =
 	| { type: "message_end"; message: unknown }
 	| { type: "turn_end"; message: unknown; toolResults: unknown[] }
 	| { type: "auto_compaction_start"; reason: "threshold" | "overflow" }
-	| { type: "auto_compaction_end"; result?: { tokensBefore: number }; aborted?: boolean }
+	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
+	| {
+			type: "auto_compaction_end" | "compaction_end";
+			reason?: "manual" | "threshold" | "overflow";
+			result?: { tokensBefore: number };
+			aborted?: boolean;
+			errorMessage?: string;
+			willRetry?: boolean;
+	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs?: number; errorMessage: string };
 
 export type ToolExecutionStartEvent = Extract<SessionEvent, { type: "tool_execution_start" }>;
@@ -113,8 +123,11 @@ export type ToolExecutionEndEvent = Extract<SessionEvent, { type: "tool_executio
 export type MessageStartEvent = Extract<SessionEvent, { type: "message_start" }>;
 export type MessageEndEvent = Extract<SessionEvent, { type: "message_end" }>;
 export type TurnEndEvent = Extract<SessionEvent, { type: "turn_end" }>;
-export type AutoCompactionStartEvent = Extract<SessionEvent, { type: "auto_compaction_start" }>;
-export type AutoCompactionEndEvent = Extract<SessionEvent, { type: "auto_compaction_end" }>;
+export type AutoCompactionStartEvent = Extract<
+	SessionEvent,
+	{ type: "auto_compaction_start" | "compaction_start" }
+>;
+export type AutoCompactionEndEvent = Extract<SessionEvent, { type: "auto_compaction_end" | "compaction_end" }>;
 export type AutoRetryStartEvent = Extract<SessionEvent, { type: "auto_retry_start" }>;
 
 export type ProgressEntryKind = "tool" | "thinking" | "error" | "assistant";
