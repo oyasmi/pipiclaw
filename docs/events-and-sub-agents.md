@@ -46,6 +46,47 @@
 | `type` | 是 | `immediate`、`one-shot` 或 `periodic` |
 | `channelId` | 是 | 目标会话通道 ID，例如 `dm_<staffId>` 或 `group_<conversationId>` |
 | `text` | 是 | 事件触发后发送给 Pipiclaw 的文本内容 |
+| `preAction` | 否 | 触发前执行的动作门控，见下方说明 |
+
+### 事件动作门控（Action Gate）
+
+事件支持一个可选的 `preAction` 字段，用于在将事件发给LLM之前执行一段确定性脚本。脚本退出码决定事件是否入队：
+
+- **退出码 0**：条件满足，事件正常入队给LLM处理
+- **非0退出码**：条件不满足，事件被静默跳过
+
+这比让LLM自行判断更可靠（不消耗token），也比依赖 `[SILENT]` 机制更彻底（不会启动LLM会话）。
+
+`preAction` 字段结构：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `preAction.type` | 是 | 目前仅支持 `"bash"` |
+| `preAction.command` | 是 | 要执行的shell命令，不能为空 |
+| `preAction.timeout` | 否 | 超时毫秒数，默认 10000（10秒） |
+
+示例：只在本周最后一个工作日触发周报提醒（考虑到节假日调休，最后一个工作日需要使用代码逻辑来判断，比起使用大模型判断，既保证准确又节省 token）
+
+```json
+{
+  "type": "periodic",
+  "channelId": "dm_your-staff-id",
+  "text": "现在是本周最后一个工作日的下午，请帮我整理本周周报。",
+  "schedule": "0 16 * * 1-5",
+  "timezone": "Asia/Shanghai",
+  "preAction": {
+    "type": "bash",
+    "command": "node ~/.pi/pipiclaw/workspace/skills/check-last-workday.js"
+  }
+}
+```
+
+注意事项：
+
+- 没有 `preAction` 字段的事件行为完全不变
+- 对于 `periodic` 事件，门控拦截仅跳过当次执行，cron调度继续运行，下次触发时重新评估
+- `preAction.command` 会经过安全命令卫士（command guard）检查，危险命令会被拦截
+- 脚本应尽快完成，超时会导致事件被跳过
 
 ### 事件类型 1：立即事件（Immediate Event）
 
@@ -187,6 +228,22 @@
 }
 ```
 
+#### 4. 带条件门控的周报提醒
+
+```json
+{
+  "type": "periodic",
+  "channelId": "dm_your-staff-id",
+  "text": "现在是本周最后一个工作日的下午，请帮我整理本周周报。",
+  "schedule": "0 16 * * 1-5",
+  "timezone": "Asia/Shanghai",
+  "preAction": {
+    "type": "bash",
+    "command": "node ~/.pi/pipiclaw/workspace/skills/check-last-workday.js"
+  }
+}
+```
+
 ### 常见问题（Common Mistakes）
 
 - 文件不是 `.json`
@@ -194,6 +251,9 @@
 - `one-shot` 的 `at` 没带时区偏移
 - `periodic` 的 `schedule` 写成六段或其他不兼容格式
 - 指望 `periodic` 事件自动删除文件
+- `preAction.command` 为空字符串
+- `preAction.type` 写成 `bash` 以外的值
+- `preAction.timeout` 设得太短，脚本来不及执行完
 
 ## 子代理（Sub-Agents）
 
