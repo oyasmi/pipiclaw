@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { mkdir, readFile, rename, writeFile } from "fs/promises";
 import { dirname, join } from "path";
@@ -77,7 +78,7 @@ function normalizeContent(content: string): string {
 
 async function writeAtomically(path: string, content: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
-	const tempPath = `${path}.tmp`;
+	const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
 	await writeFile(tempPath, content, "utf-8");
 	await rename(tempPath, path);
 }

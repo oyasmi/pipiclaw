@@ -104,9 +104,9 @@ describe("MemoryLifecycle", () => {
 		const beforeCompact = fakePi.handlers.get("session_before_compact")?.({
 			preparation: { messagesToSummarize: compactionMessages },
 		});
-		await Promise.resolve();
-
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+		await waitForAssertion(() => {
+			expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+		});
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
 
 		resolveUpdate?.();
@@ -145,9 +145,9 @@ describe("MemoryLifecycle", () => {
 		const beforeSwitch = fakePi.handlers.get("session_before_switch")?.({
 			reason: "new",
 		});
-		await Promise.resolve();
-
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+		await waitForAssertion(() => {
+			expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
+		});
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
 
 		resolveUpdate?.();
@@ -221,6 +221,48 @@ describe("MemoryLifecycle", () => {
 			timeoutMs: 30000,
 		});
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+	});
+
+	it("serializes preflight consolidation behind in-flight background maintenance", async () => {
+		let releaseMaintenance: (() => void) | undefined;
+		vi.mocked(runBackgroundMaintenance).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					releaseMaintenance = () =>
+						resolve({
+							cleanedMemory: true,
+							foldedHistory: false,
+						});
+				}),
+		);
+
+		const compactionMessages = [{ role: "user", content: "persist this before compacting" }] as never[];
+		const lifecycle = createLifecycle({
+			forceRefreshBeforeCompact: false,
+			forceRefreshBeforeNewSession: false,
+		});
+		const fakePi = createFakePi();
+		lifecycle.createExtensionFactory()(fakePi.api as never);
+
+		fakePi.handlers.get("session_compact")?.({});
+		await waitForAssertion(() => {
+			expect(runBackgroundMaintenance).toHaveBeenCalledTimes(1);
+		});
+
+		const beforeCompact = fakePi.handlers.get("session_before_compact")?.({
+			preparation: { messagesToSummarize: compactionMessages },
+		});
+		await Promise.resolve();
+
+		expect(runInlineConsolidation).not.toHaveBeenCalled();
+
+		releaseMaintenance?.();
+		await expect(beforeCompact).resolves.toBeUndefined();
+
+		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(runBackgroundMaintenance).mock.invocationCallOrder[0]).toBeLessThan(
+			vi.mocked(runInlineConsolidation).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+		);
 	});
 
 	it("runs idle consolidation after a quiet period and then maintenance", async () => {

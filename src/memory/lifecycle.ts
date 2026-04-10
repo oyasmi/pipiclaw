@@ -39,7 +39,7 @@ interface SessionMemoryRefreshRequest {
 }
 
 export class MemoryLifecycle {
-	private backgroundQueue: Promise<void> = Promise.resolve();
+	private durableMemoryQueue: Promise<void> = Promise.resolve();
 	private sessionRefreshQueue: Promise<void> = Promise.resolve();
 	private turnsSinceSessionUpdate = 0;
 	private toolCallsSinceSessionUpdate = 0;
@@ -120,18 +120,22 @@ export class MemoryLifecycle {
 
 	async flushForShutdown(): Promise<void> {
 		this.clearIdleConsolidationTimer();
-		const run = async (): Promise<void> => {
+		await this.runDurableMemoryJobSerial(async () => {
 			if (!this.hasPendingAssistantSnapshot()) {
 				return;
 			}
-			await this.runPreflightConsolidation("shutdown");
-		};
-		const resultPromise = this.backgroundQueue.then(run, run);
-		this.backgroundQueue = resultPromise.then(
-			() => undefined,
-			() => undefined,
-		);
-		await resultPromise;
+			const messageSnapshot = [...this.options.getMessages()];
+			const sessionEntrySnapshot = [...this.options.getSessionEntries()];
+			const revisionSnapshot = this.durableRevision;
+			const settings = this.options.getSessionMemorySettings();
+			await this.runPreflightConsolidationNow(
+				"shutdown",
+				messageSnapshot,
+				sessionEntrySnapshot,
+				revisionSnapshot,
+				settings,
+			);
+		});
 	}
 
 	private clearIdleConsolidationTimer(): void {
@@ -212,8 +216,17 @@ export class MemoryLifecycle {
 		});
 	}
 
-	private enqueueBackgroundJob(job: () => Promise<void>, failureMessage: string): void {
-		this.backgroundQueue = this.backgroundQueue.then(job).catch((error: unknown) => {
+	private runDurableMemoryJobSerial<T>(job: () => Promise<T>): Promise<T> {
+		const resultPromise = this.durableMemoryQueue.then(job, job);
+		this.durableMemoryQueue = resultPromise.then(
+			() => undefined,
+			() => undefined,
+		);
+		return resultPromise;
+	}
+
+	private enqueueDurableMemoryJob(job: () => Promise<void>, failureMessage: string): void {
+		void this.runDurableMemoryJobSerial(job).catch((error: unknown) => {
 			const message = error instanceof Error ? error.message : String(error);
 			log.logWarning(failureMessage, message);
 		});
@@ -255,7 +268,7 @@ export class MemoryLifecycle {
 			const messageSnapshot = [...this.options.getMessages()];
 			const sessionEntrySnapshot = [...this.options.getSessionEntries()];
 			const revisionSnapshot = this.durableRevision;
-			this.enqueueBackgroundJob(async () => {
+			this.enqueueDurableMemoryJob(async () => {
 				try {
 					log.logInfo(`[${this.options.channelId}] Memory consolidation starting (idle)`);
 					const result = await runInlineConsolidation(this.buildRunOptions(messageSnapshot, sessionEntrySnapshot));
@@ -286,6 +299,24 @@ export class MemoryLifecycle {
 		const revisionSnapshot = this.durableRevision;
 		const settings = this.options.getSessionMemorySettings();
 
+		await this.runDurableMemoryJobSerial(async () => {
+			await this.runPreflightConsolidationNow(
+				reason,
+				messageSnapshot,
+				sessionEntrySnapshot,
+				revisionSnapshot,
+				settings,
+			);
+		});
+	}
+
+	private async runPreflightConsolidationNow(
+		reason: Exclude<ConsolidationReason, "idle">,
+		messageSnapshot: AgentMessage[],
+		sessionEntrySnapshot?: SessionEntry[],
+		revisionSnapshot: number = this.durableRevision,
+		settings: PipiclawSessionMemorySettings = this.options.getSessionMemorySettings(),
+	): Promise<void> {
 		if (this.shouldForceRefreshFor(reason, settings)) {
 			await this.runSessionRefreshSerial({
 				reason,
@@ -329,7 +360,7 @@ export class MemoryLifecycle {
 	}
 
 	private enqueueBackgroundMaintenance(): void {
-		this.enqueueBackgroundJob(async () => {
+		this.enqueueDurableMemoryJob(async () => {
 			const result = await runBackgroundMaintenance(this.buildRunOptions([], []));
 			this.logBackgroundResult(result);
 		}, `[${this.options.channelId}] Background memory maintenance failed`);
