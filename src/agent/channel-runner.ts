@@ -490,6 +490,7 @@ export class ChannelRunner implements AgentRunner {
 
 	private async initializeSession(): Promise<void> {
 		await this.reloadSessionResources();
+		await this.bindSessionExtensions();
 	}
 
 	private async reloadSessionResources(): Promise<void> {
@@ -500,6 +501,33 @@ export class ChannelRunner implements AgentRunner {
 		this.subAgentDiscovery = this.refreshSubAgentDiscovery();
 		this.rebuildSessionTools();
 		await this.session.reload();
+	}
+
+	private async bindSessionExtensions(): Promise<void> {
+		await this.session.bindExtensions({
+			commandContextActions: {
+				waitForIdle: () => this.session.agent.waitForIdle(),
+				newSession: async (options) => {
+					const success = await this.session.newSession(options);
+					return { cancelled: !success };
+				},
+				fork: async (entryId) => {
+					const result = await this.session.fork(entryId);
+					return { cancelled: result.cancelled };
+				},
+				navigateTree: async (targetId, options) => {
+					const result = await this.session.navigateTree(targetId, options);
+					return { cancelled: result.cancelled };
+				},
+				switchSession: async (sessionPath) => {
+					const success = await this.session.switchSession(sessionPath);
+					return { cancelled: !success };
+				},
+				reload: async () => {
+					await this.refreshSessionResources();
+				},
+			},
+		});
 	}
 
 	private async ensureSessionReady(): Promise<void> {

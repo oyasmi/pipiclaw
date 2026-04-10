@@ -57,6 +57,25 @@ class FakeTestBot {
 	});
 }
 
+function createDmEvent(text: string, ts: string) {
+	return {
+		type: "dm" as const,
+		channelId: "dm_tester",
+		ts,
+		user: "tester",
+		userName: "Tester",
+		text,
+		conversationId: "conv_1",
+		conversationType: "1",
+	};
+}
+
+function extractSessionId(text: string): string {
+	const match = text.match(/Session ID: `([^`]+)`/);
+	expect(match?.[1]).toBeTruthy();
+	return match![1];
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
 	for (const dir of tempDirs.splice(0)) {
@@ -90,19 +109,7 @@ describe("createRuntimeContext", () => {
 			createEventsWatcher: () => eventsWatcher,
 		});
 
-		await runtime.handler.handleEvent(
-			{
-				type: "dm",
-				channelId: "dm_tester",
-				ts: "1000",
-				user: "tester",
-				userName: "Tester",
-				text: "/help",
-				conversationId: "conv_1",
-				conversationType: "1",
-			},
-			bot as unknown as DingTalkBot,
-		);
+		await runtime.handler.handleEvent(createDmEvent("/help", "1000"), bot as unknown as DingTalkBot);
 
 		const channelDir = join(paths.workspaceDir, "dm_tester");
 		expect(readFileSync(join(channelDir, "log.jsonl"), "utf-8")).toContain('"text":"/help"');
@@ -137,16 +144,7 @@ describe("createRuntimeContext", () => {
 
 		vi.spyOn(runtime.store, "logMessage").mockRejectedValueOnce(new Error("disk full"));
 
-		const event = {
-			type: "dm" as const,
-			channelId: "dm_tester",
-			ts: "1000",
-			user: "tester",
-			userName: "Tester",
-			text: "/help",
-			conversationId: "conv_1",
-			conversationType: "1",
-		};
+		const event = createDmEvent("/help", "1000");
 
 		await runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
 		await runtime.handler.handleEvent({ ...event, ts: "1001" }, bot as unknown as DingTalkBot);
@@ -154,4 +152,44 @@ describe("createRuntimeContext", () => {
 		expect(bot.sendPlain).toHaveBeenCalledTimes(2);
 		await runtime.shutdown();
 	});
+
+	it(
+		"creates a distinct session id for each /new command",
+		async () => {
+			const paths = createBootstrapPaths();
+			bootstrapAppHome(paths);
+			const bot = new FakeTestBot();
+			const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
+
+			const runtime = createRuntimeContext({
+				paths,
+				sandbox: { type: "host" },
+				dingtalkConfig: {
+					clientId: "client-id",
+					clientSecret: "client-secret",
+					robotCode: "client-id",
+					cardTemplateKey: "content",
+					stateDir: paths.workspaceDir,
+				} satisfies DingTalkConfig,
+				registerSignalHandlers: false,
+				startServices: false,
+				createBot: () => bot as unknown as DingTalkBot,
+				createEventsWatcher: () => eventsWatcher,
+			});
+
+			await runtime.handler.handleEvent(createDmEvent("/new", "1000"), bot as unknown as DingTalkBot);
+			await runtime.handler.handleEvent(createDmEvent("/new", "1001"), bot as unknown as DingTalkBot);
+
+			const newSessionReplies = bot.deliveries
+				.filter((delivery) => delivery.method === "sendPlain")
+				.map((delivery) => delivery.args[1])
+				.filter((message): message is string => typeof message === "string" && message.includes("Session ID"));
+
+			expect(newSessionReplies).toHaveLength(2);
+			expect(extractSessionId(newSessionReplies[0])).not.toBe(extractSessionId(newSessionReplies[1]));
+
+			await runtime.shutdown();
+		},
+		15_000,
+	);
 });
