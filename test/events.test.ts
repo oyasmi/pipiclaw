@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
 import type { EventAction } from "../src/runtime/events.js";
 import { EventsWatcher } from "../src/runtime/events.js";
+import type { ExecOptions, ExecResult, Executor } from "../src/sandbox.js";
 
 const tempDirs: string[] = [];
 
@@ -75,6 +76,47 @@ class FakeBot {
 	}
 }
 
+function createMockExecutor(execImpl?: (command: string, options?: ExecOptions) => Promise<ExecResult>): Executor {
+	return {
+		exec:
+			execImpl ??
+			(async (command: string, options?: ExecOptions): Promise<ExecResult> => {
+				switch (command) {
+					case "true":
+						return { stdout: "", stderr: "", code: 0 };
+					case "false":
+						return { stdout: "", stderr: "", code: 1 };
+					case "sleep 30":
+						if ((options?.timeout ?? Number.POSITIVE_INFINITY) < 30) {
+							throw new Error(`Command timed out after ${options?.timeout} seconds`);
+						}
+						return { stdout: "", stderr: "", code: 0 };
+					case "/nonexistent/binary/xyz":
+						throw new Error("spawn ENOENT");
+					default:
+						return { stdout: "", stderr: "", code: 0 };
+				}
+			}),
+		getWorkspacePath(hostPath: string): string {
+			return hostPath;
+		},
+	};
+}
+
+function createWatcher(
+	dir: string,
+	bot: FakeBot = new FakeBot(),
+	executor: Executor = createMockExecutor(),
+	guardConfig?: {
+		enabled: boolean;
+		additionalDenyPatterns: string[];
+		allowPatterns: string[];
+		blockObfuscation: boolean;
+	},
+): EventsWatcher {
+	return new EventsWatcher(dir, bot as unknown as DingTalkBot, executor, guardConfig);
+}
+
 beforeEach(() => {
 	vi.useFakeTimers();
 });
@@ -89,7 +131,7 @@ afterEach(() => {
 
 describe("EventsWatcher", () => {
 	it("parses valid event payloads and rejects invalid ones", () => {
-		const watcher = new EventsWatcher(createTempDir(), new FakeBot() as unknown as DingTalkBot);
+		const watcher = createWatcher(createTempDir());
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
 		expect(
@@ -117,7 +159,7 @@ describe("EventsWatcher", () => {
 
 		const beforeConstruct = new Date(Date.now() - 2000);
 		const afterConstruct = new Date(Date.now() - 1000);
-		const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot);
+		const watcher = createWatcher(dir);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 		vi.setSystemTime(new Date());
 		utimesSync(filePath, beforeConstruct, afterConstruct);
@@ -128,7 +170,7 @@ describe("EventsWatcher", () => {
 
 	it("drops invalid and past one-shot events", () => {
 		const dir = createTempDir();
-		const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot);
+		const watcher = createWatcher(dir);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
 		const invalidPath = join(dir, "invalid.json");
@@ -150,13 +192,13 @@ describe("EventsWatcher", () => {
 
 	it("schedules future one-shot events and rejects delays beyond platform limits", async () => {
 		const dir = createTempDir();
-		const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot);
+		const watcher = createWatcher(dir);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
 		const futurePath = join(dir, "future.json");
 		writeFileSync(futurePath, "{}");
 		const bot = new FakeBot(true);
-		const futureWatcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+		const futureWatcher = createWatcher(dir, bot);
 		const futureApi = getEventsWatcherPrivateApi(futureWatcher);
 		const futureAt = new Date(Date.now() + 5_000).toISOString();
 
@@ -186,7 +228,7 @@ describe("EventsWatcher", () => {
 
 	it("preserves invalid periodic events and parse failures after retries", async () => {
 		const dir = createTempDir();
-		const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot);
+		const watcher = createWatcher(dir);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
 		const invalidCronPath = join(dir, "invalid-cron.json");
@@ -216,7 +258,7 @@ describe("EventsWatcher", () => {
 		const filePath = join(dir, filename);
 		writeFileSync(filePath, "{}");
 		const bot = new FakeBot(true);
-		const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+		const watcher = createWatcher(dir, bot);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
 		await privateApi.execute(
@@ -245,7 +287,7 @@ describe("EventsWatcher", () => {
 		const filePath = join(dir, filename);
 		writeFileSync(filePath, "{}");
 		const bot = new FakeBot(true);
-		const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+		const watcher = createWatcher(dir, bot);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
 		await privateApi.execute(
@@ -270,7 +312,7 @@ describe("EventsWatcher", () => {
 			const filename = "gated.json";
 			writeFileSync(join(dir, filename), "{}");
 			const bot = new FakeBot(true);
-			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const watcher = createWatcher(dir, bot);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			await privateApi.execute(
@@ -293,7 +335,7 @@ describe("EventsWatcher", () => {
 			const filename = "blocked.json";
 			writeFileSync(join(dir, filename), "{}");
 			const bot = new FakeBot(true);
-			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const watcher = createWatcher(dir, bot);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			await privateApi.execute(
@@ -315,7 +357,7 @@ describe("EventsWatcher", () => {
 			const filename = "timeout.json";
 			writeFileSync(join(dir, filename), "{}");
 			const bot = new FakeBot(true);
-			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const watcher = createWatcher(dir, bot);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			await privateApi.execute(
@@ -337,7 +379,7 @@ describe("EventsWatcher", () => {
 			const filename = "noexist.json";
 			writeFileSync(join(dir, filename), "{}");
 			const bot = new FakeBot(true);
-			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const watcher = createWatcher(dir, bot);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			await privateApi.execute(
@@ -359,7 +401,7 @@ describe("EventsWatcher", () => {
 			const filename = "noaction.json";
 			writeFileSync(join(dir, filename), "{}");
 			const bot = new FakeBot(true);
-			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot);
+			const watcher = createWatcher(dir, bot);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			await privateApi.execute(
@@ -387,7 +429,7 @@ describe("EventsWatcher", () => {
 				allowPatterns: [] as string[],
 				blockObfuscation: true,
 			};
-			const watcher = new EventsWatcher(dir, bot as unknown as DingTalkBot, guardConfig);
+			const watcher = createWatcher(dir, bot, createMockExecutor(), guardConfig);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			await privateApi.execute(
@@ -404,9 +446,23 @@ describe("EventsWatcher", () => {
 			expect(bot.events).toHaveLength(0);
 		});
 
+		it("converts action timeout from milliseconds to executor seconds", async () => {
+			const execSpy = vi.fn(async (_command: string, _options?: ExecOptions): Promise<ExecResult> => ({
+				stdout: "",
+				stderr: "",
+				code: 0,
+			}));
+			const watcher = createWatcher(createTempDir(), new FakeBot(), createMockExecutor(execSpy));
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			await privateApi.runPreAction({ type: "bash", command: "true", timeout: 100 }, "timeout-ms.json");
+
+			expect(execSpy).toHaveBeenCalledWith("true", { timeout: 1 });
+		});
+
 		it("rejects action with empty command in parseEvent", () => {
 			const dir = createTempDir();
-			const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot);
+			const watcher = createWatcher(dir);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			expect(() =>
@@ -424,7 +480,7 @@ describe("EventsWatcher", () => {
 
 		it("parses valid action in event payload", () => {
 			const dir = createTempDir();
-			const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot);
+			const watcher = createWatcher(dir);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			const parsed = privateApi.parseEvent(

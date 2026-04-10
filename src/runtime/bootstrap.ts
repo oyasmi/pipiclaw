@@ -16,7 +16,7 @@ import {
 	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
 } from "../paths.js";
-import { parseSandboxArg, type SandboxConfig, validateSandbox } from "../sandbox.js";
+import { createExecutor, type Executor, parseSandboxArg, type SandboxConfig, validateSandbox } from "../sandbox.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
@@ -450,7 +450,7 @@ interface RuntimeContextOptions {
 	sandbox: SandboxConfig;
 	dingtalkConfig: DingTalkConfig;
 	createBot?: (handler: DingTalkHandler, config: DingTalkConfig) => DingTalkBot;
-	createEventsWatcher?: (workspaceDir: string, bot: DingTalkBot) => { start(): void; stop(): void };
+	createEventsWatcher?: (workspaceDir: string, bot: DingTalkBot, executor: Executor) => { start(): void; stop(): void };
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
 }
@@ -633,11 +633,13 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	const bot = options.createBot
 		? options.createBot(handler, options.dingtalkConfig)
 		: new DingTalkBot(handler, options.dingtalkConfig);
+	const executor = createExecutor(options.sandbox);
 	const eventsWatcher = options.createEventsWatcher
-		? options.createEventsWatcher(options.paths.workspaceDir, bot)
+		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor)
 		: createEventsWatcher(
 				options.paths.workspaceDir,
 				bot,
+				executor,
 				loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config.commandGuard,
 			);
 

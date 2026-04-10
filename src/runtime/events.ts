@@ -1,9 +1,9 @@
-import { exec } from "child_process";
 import { Cron } from "croner";
 import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, unlinkSync, watch, writeFileSync } from "fs";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import * as log from "../log.js";
+import type { Executor } from "../sandbox.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
@@ -15,7 +15,7 @@ import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 export interface EventAction {
 	type: "bash";
 	command: string;
-	timeout?: number; // ms, default 10000
+	timeout?: number; // event definition uses milliseconds; converted to Executor seconds
 }
 
 export interface ImmediateEvent {
@@ -64,6 +64,7 @@ export class EventsWatcher {
 	constructor(
 		private eventsDir: string,
 		private bot: DingTalkBot,
+		private executor: Executor,
 		private commandGuardConfig?: SecurityConfig["commandGuard"],
 	) {
 		this.startTime = Date.now();
@@ -407,23 +408,21 @@ export class EventsWatcher {
 		}
 	}
 
-	private runPreAction(action: EventAction, filename: string): Promise<void> {
+	private async runPreAction(action: EventAction, filename: string): Promise<void> {
 		if (this.commandGuardConfig?.enabled) {
 			const guardResult = guardCommand(action.command, this.commandGuardConfig);
 			if (!guardResult.allowed) {
 				log.logWarning(`Pre-action command blocked by guard for ${filename}: ${guardResult.reason}`);
-				return Promise.reject(new Error(`guard: ${guardResult.reason}`));
+				throw new Error(`guard: ${guardResult.reason}`);
 			}
 		}
 
-		return new Promise((resolve, reject) => {
-			const child = exec(action.command, { timeout: action.timeout ?? 10_000 });
-			child.on("close", (code) => {
-				if (code === 0) resolve();
-				else reject(new Error(`exit ${code}`));
-			});
-			child.on("error", reject);
-		});
+		const timeoutMs = action.timeout ?? 10_000;
+		const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+		const result = await this.executor.exec(action.command, { timeout: timeoutSeconds });
+		if (result.code !== 0) {
+			throw new Error(`exit ${result.code}`);
+		}
 	}
 
 	private deleteFile(filename: string): void {
@@ -478,8 +477,9 @@ export class EventsWatcher {
 export function createEventsWatcher(
 	workspaceDir: string,
 	bot: DingTalkBot,
+	executor: Executor,
 	commandGuardConfig?: SecurityConfig["commandGuard"],
 ): EventsWatcher {
 	const eventsDir = join(workspaceDir, "events");
-	return new EventsWatcher(eventsDir, bot, commandGuardConfig);
+	return new EventsWatcher(eventsDir, bot, executor, commandGuardConfig);
 }
