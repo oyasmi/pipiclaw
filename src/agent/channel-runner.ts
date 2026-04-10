@@ -34,7 +34,7 @@ import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
 import { createCommandExtension } from "./command-extension.js";
 import { type BuiltInCommand, renderBuiltInHelp } from "./commands.js";
-import { getPreventiveCompactionDecision } from "./context-budget.js";
+import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
 import { clipUserInput } from "./progress-formatter.js";
 import { buildAppendSystemPrompt } from "./prompt-builder.js";
 import { createRunQueue } from "./run-queue.js";
@@ -237,21 +237,21 @@ export class ChannelRunner implements AgentRunner {
 
 		try {
 			await this.ensureSessionReady();
-			await this.maybeRunPreventiveCompaction();
+			this.memoryLifecycle.noteUserTurnStarted();
+			const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS);
+			const userMessage = this.formatUserMessage(clippedInput, ctx.message.userName);
+			const preserveRawInput = this.shouldPreserveRawInput(ctx.message.text);
+			await this.maybeRunPreventiveCompactionForIncomingText(preserveRawInput ? clippedInput : userMessage);
 
 			// Ensure channel directory exists
 			await mkdir(this.channelDir, { recursive: true });
 
 			const candidateCache = createMemoryCandidateCache();
-			const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS);
-			const userMessage = this.formatUserMessage(clippedInput, ctx.message.userName);
-			let promptText = this.shouldPreserveRawInput(ctx.message.text) ? clippedInput : userMessage;
+			let promptText = preserveRawInput ? clippedInput : userMessage;
 			let recalledContextText = "";
 			let durableMemoryBootstrapText = "";
 
-			this.memoryLifecycle.noteUserTurnStarted();
-
-			if (!this.shouldPreserveRawInput(ctx.message.text)) {
+			if (!preserveRawInput) {
 				const recallSettings = this.settingsManager.getMemoryRecallSettings();
 				if (recallSettings.enabled) {
 					const recall = await recallRelevantMemory({
@@ -477,9 +477,11 @@ export class ChannelRunner implements AgentRunner {
 		if (clippedText !== text.trim()) {
 			log.logWarning(`[${this.channelId}] Queued message exceeded ${MAX_USER_MESSAGE_CHARS} chars and was clipped`);
 		}
+		const queuedMessage = this.formatUserMessage(clippedText, userName);
+		await this.maybeRunPreventiveCompactionForIncomingText(queuedMessage);
 
 		await this.sessionResourceGate.runPrompt(async () => {
-			await this.session.prompt(this.formatUserMessage(clippedText, userName), {
+			await this.session.prompt(queuedMessage, {
 				streamingBehavior: delivery,
 			});
 		});
@@ -547,11 +549,12 @@ export class ChannelRunner implements AgentRunner {
 		await this.sessionReady;
 	}
 
-	private async maybeRunPreventiveCompaction(): Promise<void> {
+	private async maybeRunPreventiveCompactionForIncomingText(incomingText: string): Promise<void> {
 		const currentModel = this.session.model ?? this.activeModel;
 		const contextUsage = this.session.getContextUsage();
 		const contextTokens = contextUsage?.tokens;
-		const decision = getPreventiveCompactionDecision(contextTokens, currentModel.contextWindow);
+		const incomingTokens = estimateIncomingMessageTokens(incomingText);
+		const decision = getPreventiveCompactionDecision(contextTokens, incomingTokens, currentModel.contextWindow);
 
 		if (!decision.shouldCompact) {
 			return;
@@ -560,9 +563,7 @@ export class ChannelRunner implements AgentRunner {
 		const currentTokens = contextTokens ?? 0;
 		const startedAt = Date.now();
 		log.logInfo(
-			`[${this.channelId}] Preventive compaction triggered: ${currentTokens}/${currentModel.contextWindow} tokens (${(
-				(currentTokens / currentModel.contextWindow) * 100
-			).toFixed(1)}%), threshold=${decision.thresholdTokens}`,
+			`[${this.channelId}] Preventive compaction triggered: projected ${decision.projectedTokens}/${currentModel.contextWindow} tokens (current=${currentTokens}, incoming≈${incomingTokens}), threshold=${decision.thresholdTokens}`,
 		);
 
 		try {
