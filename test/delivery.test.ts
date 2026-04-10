@@ -69,7 +69,7 @@ describe("delivery", () => {
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 
-		expect(bot.calls).toEqual([{ method: "streamToCard", args: ["dm_123", "A\n\nB"] }]);
+		expect(bot.calls).toEqual([{ method: "appendToCard", args: ["dm_123", "A\n\nB"] }]);
 		expect(store.logged).toHaveLength(2);
 	});
 
@@ -116,7 +116,7 @@ describe("delivery", () => {
 		expect(bot.calls).toEqual([
 			{ method: "ensureCard", args: ["dm_123"] },
 			{ method: "sendPlain", args: ["dm_123", "final"] },
-			{ method: "finalizeExistingCard", args: ["dm_123", ""] },
+			{ method: "replaceCard", args: ["dm_123", "", true] },
 		]);
 	});
 
@@ -138,7 +138,7 @@ describe("delivery", () => {
 	it("waits for in-flight delivery and becomes inert after close", async () => {
 		const bot = new FakeDingTalkBot();
 		bot.configure(
-			"streamToCard",
+			"appendToCard",
 			new Promise<boolean>((resolve) => {
 				setTimeout(() => resolve(true), 50);
 			}),
@@ -157,25 +157,32 @@ describe("delivery", () => {
 		await expect(ctx.respondPlain("also ignored")).resolves.toBe(false);
 		await vi.runAllTimersAsync();
 
-		expect(bot.calls.filter((call) => call.method === "streamToCard")).toHaveLength(1);
+		expect(bot.calls.filter((call) => call.method === "appendToCard")).toHaveLength(1);
 	});
 
-	it("discards the card when streaming fails or throws", async () => {
+	it("replays the full transcript after an append failure", async () => {
 		const failedBot = new FakeDingTalkBot();
-		failedBot.configure("streamToCard", false);
+		failedBot.configure("appendToCard", false);
 		const failedCtx = createDingTalkContext(createFakeEvent(), failedBot as never, new FakeChannelStore() as never);
 
 		await failedCtx.respond("hello");
 		await vi.advanceTimersByTimeAsync(800);
 		await failedCtx.flush();
 
-		expect(failedBot.calls).toEqual([
-			{ method: "streamToCard", args: ["dm_123", "hello"] },
-			{ method: "discardCard", args: ["dm_123"] },
-		]);
+		await failedCtx.respond("world");
+		await vi.advanceTimersByTimeAsync(800);
+		await failedCtx.flush();
 
+		expect(failedBot.calls).toEqual([
+			{ method: "appendToCard", args: ["dm_123", "hello"] },
+			{ method: "discardCard", args: ["dm_123"] },
+			{ method: "replaceCard", args: ["dm_123", "hello\n\nworld", false] },
+		]);
+	});
+
+	it("marks replay required when append throws and retries with a full snapshot", async () => {
 		const throwingBot = new FakeDingTalkBot();
-		throwingBot.streamToCard = vi.fn(async () => {
+		throwingBot.appendToCard = vi.fn(async () => {
 			throw new Error("boom");
 		});
 		const throwingCtx = createDingTalkContext(
@@ -188,7 +195,15 @@ describe("delivery", () => {
 		await vi.advanceTimersByTimeAsync(800);
 		await throwingCtx.flush();
 
+		await throwingCtx.respond("world");
+		await vi.advanceTimersByTimeAsync(800);
+		await throwingCtx.flush();
+
 		expect(throwingBot.discardCard).toBeDefined();
+		expect(throwingBot.calls).toEqual([
+			{ method: "discardCard", args: ["dm_123"] },
+			{ method: "replaceCard", args: ["dm_123", "hello\n\nworld", false] },
+		]);
 	});
 
 	it("continues delivering when bot response archiving fails", async () => {
@@ -206,9 +221,9 @@ describe("delivery", () => {
 		await expect(ctx.respondPlain("final")).resolves.toBe(true);
 
 		expect(bot.calls).toEqual([
-			{ method: "streamToCard", args: ["dm_123", "progress"] },
+			{ method: "appendToCard", args: ["dm_123", "progress"] },
 			{ method: "sendPlain", args: ["dm_123", "final"] },
-			{ method: "finalizeExistingCard", args: ["dm_123", "progress"] },
+			{ method: "replaceCard", args: ["dm_123", "progress", true] },
 		]);
 	});
 });

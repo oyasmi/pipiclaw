@@ -1,4 +1,4 @@
-import { readFile } from "fs/promises";
+import { readFile, stat } from "fs/promises";
 import { join } from "path";
 import { splitH1Sections, splitH2Sections } from "../shared/markdown-sections.js";
 import { getChannelHistoryPath, getChannelMemoryPath, getChannelSessionPath } from "./files.js";
@@ -18,17 +18,18 @@ export interface MemoryCandidate {
 export interface BuildMemoryCandidatesOptions {
 	workspaceDir: string;
 	channelDir: string;
-	cache?: MemoryCandidateCache;
 }
 
-export interface MemoryCandidateCache {
-	entries: Map<string, Promise<MemoryCandidate[]>>;
+interface CandidateFileFingerprint {
+	exists: boolean;
+	mtimeMs: number;
+	ctimeMs: number;
+	size: number;
 }
 
-export function createMemoryCandidateCache(): MemoryCandidateCache {
-	return {
-		entries: new Map(),
-	};
+interface CachedCandidateFile {
+	fingerprint: CandidateFileFingerprint;
+	candidates: MemoryCandidate[];
 }
 
 function normalizeContent(content: string): string {
@@ -50,6 +51,10 @@ function slugify(value: string): string {
 			.replace(/[^a-z0-9]+/g, "-")
 			.replace(/^-+|-+$/g, "") || "section"
 	);
+}
+
+function sameFingerprint(a: CandidateFileFingerprint, b: CandidateFileFingerprint): boolean {
+	return a.exists === b.exists && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.size === b.size;
 }
 
 function inferPriority(source: MemoryCandidate["source"], title: string): number {
@@ -100,10 +105,6 @@ function buildCandidate(
 	};
 }
 
-function buildCacheKey(options: BuildMemoryCandidatesOptions): string {
-	return `${options.workspaceDir}\u0000${options.channelDir}`;
-}
-
 function buildWorkspaceOrChannelMemoryCandidates(
 	source: "workspace-memory" | "channel-memory",
 	path: string,
@@ -140,47 +141,121 @@ function buildSessionCandidates(path: string, content: string): MemoryCandidate[
 }
 
 function buildHistoryCandidates(path: string, content: string): MemoryCandidate[] {
-	return splitH2Sections(content)
-		.filter((section) => section.content.trim())
-		.map((section) => buildCandidate("channel-history", path, section.heading, section.content, section.heading));
-}
-
-async function buildMemoryCandidatesUncached(options: BuildMemoryCandidatesOptions): Promise<MemoryCandidate[]> {
-	const workspaceMemoryPath = join(options.workspaceDir, "MEMORY.md");
-	const channelMemoryPath = getChannelMemoryPath(options.channelDir);
-	const channelSessionPath = getChannelSessionPath(options.channelDir);
-	const channelHistoryPath = getChannelHistoryPath(options.channelDir);
-
-	const [workspaceMemory, channelMemory, channelSession, channelHistory] = await Promise.all([
-		readOptionalFile(workspaceMemoryPath),
-		readOptionalFile(channelMemoryPath),
-		readOptionalFile(channelSessionPath),
-		readOptionalFile(channelHistoryPath),
-	]);
-
-	return [
-		...buildSessionCandidates(channelSessionPath, channelSession),
-		...buildWorkspaceOrChannelMemoryCandidates("channel-memory", channelMemoryPath, channelMemory),
-		...buildWorkspaceOrChannelMemoryCandidates("workspace-memory", workspaceMemoryPath, workspaceMemory),
-		...buildHistoryCandidates(channelHistoryPath, channelHistory),
-	];
-}
-
-export async function buildMemoryCandidates(options: BuildMemoryCandidatesOptions): Promise<MemoryCandidate[]> {
-	if (!options.cache) {
-		return buildMemoryCandidatesUncached(options);
+	const sections = splitH2Sections(content).filter((section) => section.content.trim());
+	if (sections.length === 0) {
+		return [];
 	}
 
-	const key = buildCacheKey(options);
-	const cached = options.cache.entries.get(key);
-	if (cached) {
-		return cached;
+	const foldedSections = sections.filter((section) => section.heading.startsWith("Folded History Through "));
+	const recentSectionLimit = 8;
+	const recentSections = sections.slice(-recentSectionLimit);
+	const selectedSections = Array.from(new Set([...foldedSections, ...recentSections]));
+
+	return selectedSections.map((section) =>
+		buildCandidate("channel-history", path, section.heading, section.content, section.heading),
+	);
+}
+
+async function readFingerprint(path: string): Promise<CandidateFileFingerprint> {
+	try {
+		const stats = await stat(path);
+		return {
+			exists: true,
+			mtimeMs: stats.mtimeMs,
+			ctimeMs: stats.ctimeMs,
+			size: stats.size,
+		};
+	} catch {
+		return {
+			exists: false,
+			mtimeMs: 0,
+			ctimeMs: 0,
+			size: 0,
+		};
+	}
+}
+
+type CandidateBuilder = (path: string, content: string) => MemoryCandidate[];
+
+interface CandidateFileDefinition {
+	path: string;
+	build: CandidateBuilder;
+}
+
+export class MemoryCandidateStore {
+	private files = new Map<string, CachedCandidateFile>();
+	private inflight = new Map<string, Promise<MemoryCandidate[]>>();
+
+	invalidate(path?: string): void {
+		if (!path) {
+			this.files.clear();
+			this.inflight.clear();
+			return;
+		}
+
+		this.files.delete(path);
+		this.inflight.delete(path);
 	}
 
-	const pending = buildMemoryCandidatesUncached(options).catch((error) => {
-		options.cache?.entries.delete(key);
-		throw error;
-	});
-	options.cache.entries.set(key, pending);
-	return pending;
+	async getCandidates(options: BuildMemoryCandidatesOptions): Promise<MemoryCandidate[]> {
+		const definitions: CandidateFileDefinition[] = [
+			{
+				path: getChannelSessionPath(options.channelDir),
+				build: buildSessionCandidates,
+			},
+			{
+				path: getChannelMemoryPath(options.channelDir),
+				build: (path, content) => buildWorkspaceOrChannelMemoryCandidates("channel-memory", path, content),
+			},
+			{
+				path: join(options.workspaceDir, "MEMORY.md"),
+				build: (path, content) => buildWorkspaceOrChannelMemoryCandidates("workspace-memory", path, content),
+			},
+			{
+				path: getChannelHistoryPath(options.channelDir),
+				build: buildHistoryCandidates,
+			},
+		];
+
+		const candidateGroups = await Promise.all(
+			definitions.map(async (definition) => this.loadFileCandidates(definition.path, definition.build)),
+		);
+		return candidateGroups.flat();
+	}
+
+	private async loadFileCandidates(path: string, build: CandidateBuilder): Promise<MemoryCandidate[]> {
+		const pending = this.inflight.get(path);
+		if (pending) {
+			return pending;
+		}
+
+		const work = (async () => {
+			const fingerprint = await readFingerprint(path);
+			const cached = this.files.get(path);
+			if (cached && sameFingerprint(cached.fingerprint, fingerprint)) {
+				return cached.candidates;
+			}
+
+			const content = fingerprint.exists ? await readOptionalFile(path) : "";
+			const candidates = build(path, content);
+			this.files.set(path, { fingerprint, candidates });
+			return candidates;
+		})().finally(() => {
+			this.inflight.delete(path);
+		});
+
+		this.inflight.set(path, work);
+		return work;
+	}
+}
+
+export function createMemoryCandidateStore(): MemoryCandidateStore {
+	return new MemoryCandidateStore();
+}
+
+export async function buildMemoryCandidates(
+	options: BuildMemoryCandidatesOptions,
+	store: MemoryCandidateStore = createMemoryCandidateStore(),
+): Promise<MemoryCandidate[]> {
+	return store.getCandidates(options);
 }

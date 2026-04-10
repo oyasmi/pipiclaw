@@ -50,6 +50,14 @@ class FakeTestBot {
 		this.deliveries.push({ method: "sendPlain", args: [channelId, text] });
 		return true;
 	});
+	appendToCard = vi.fn(async (channelId: string, text: string) => {
+		this.deliveries.push({ method: "appendToCard", args: [channelId, text] });
+		return true;
+	});
+	replaceCard = vi.fn(async (channelId: string, text: string, finalize: boolean = false) => {
+		this.deliveries.push({ method: "replaceCard", args: [channelId, text, finalize] });
+		return true;
+	});
 	streamToCard = vi.fn(async (channelId: string, text: string) => {
 		this.deliveries.push({ method: "streamToCard", args: [channelId, text] });
 		return true;

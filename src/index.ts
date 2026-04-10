@@ -19,7 +19,9 @@ export {
 export {
 	type BuildMemoryCandidatesOptions,
 	buildMemoryCandidates,
+	createMemoryCandidateStore,
 	type MemoryCandidate,
+	type MemoryCandidateStore,
 } from "./memory/candidates.js";
 export {
 	type BackgroundMaintenanceResult,

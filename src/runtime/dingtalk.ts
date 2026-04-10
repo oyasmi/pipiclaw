@@ -87,6 +87,12 @@ interface AICard {
 	finished: boolean;
 }
 
+interface CardStreamOptions {
+	append: boolean;
+	finalize: boolean;
+	failed: boolean;
+}
+
 interface ConversationMeta {
 	conversationId: string;
 	conversationType: string;
@@ -510,25 +516,77 @@ export class DingTalkBot {
 	}
 
 	/**
-	 * Stream content to the active AI Card for a channel.
+	 * Replace the active card content with a full snapshot.
 	 */
-	async streamToCard(channelId: string, content: string, finalize: boolean = false): Promise<boolean> {
+	async replaceCard(
+		channelId: string,
+		content: string,
+		finalize: boolean = false,
+		failed: boolean = false,
+	): Promise<boolean> {
 		let card = this.activeCards.get(channelId);
-		if ((!card || card.finished) && !finalize && this.config.cardTemplateId && content.trim()) {
+		if ((!card || card.finished) && this.config.cardTemplateId && (content.trim() || !finalize || failed)) {
 			await this.ensureCard(channelId);
 			card = this.activeCards.get(channelId);
 		}
 		if (!card || card.finished) {
-			if (finalize) {
+			if (finalize && content.trim()) {
 				return this.sendPlain(channelId, content);
 			}
 			return false;
 		}
-		const streamed = await this.streamCard(card, content, finalize);
-		if (!streamed) {
+		const streamed = await this.streamCard(card, content, {
+			append: false,
+			finalize,
+			failed,
+		});
+		if (!streamed || finalize || failed) {
 			this.activeCards.delete(channelId);
 		}
 		return streamed;
+	}
+
+	/**
+	 * Append a delta to the active card transcript.
+	 */
+	async appendToCard(
+		channelId: string,
+		content: string,
+		finalize: boolean = false,
+		failed: boolean = false,
+	): Promise<boolean> {
+		if (!content && !finalize && !failed) {
+			return true;
+		}
+
+		let card = this.activeCards.get(channelId);
+		if ((!card || card.finished) && !finalize && !failed && this.config.cardTemplateId && content.trim()) {
+			await this.ensureCard(channelId);
+			card = this.activeCards.get(channelId);
+		}
+		if (!card || card.finished) {
+			if (finalize && content.trim()) {
+				return this.sendPlain(channelId, content);
+			}
+			return false;
+		}
+
+		const streamed = await this.streamCard(card, content, {
+			append: true,
+			finalize,
+			failed,
+		});
+		if (!streamed || finalize || failed) {
+			this.activeCards.delete(channelId);
+		}
+		return streamed;
+	}
+
+	/**
+	 * Stream content to the active AI Card for a channel using full replacement semantics.
+	 */
+	async streamToCard(channelId: string, content: string, finalize: boolean = false): Promise<boolean> {
+		return this.replaceCard(channelId, content, finalize, false);
 	}
 
 	/**
@@ -536,25 +594,18 @@ export class DingTalkBot {
 	 * Returns true if a card was finalized, false if no active card existed.
 	 */
 	async finalizeExistingCard(channelId: string, content: string): Promise<boolean> {
-		let card = this.activeCards.get(channelId);
-		if ((!card || card.finished) && this.config.cardTemplateId && content.trim()) {
-			await this.ensureCard(channelId);
-			card = this.activeCards.get(channelId);
-		}
-		if (!card || card.finished) {
+		const finalized = await this.replaceCard(channelId, content, true, false);
+		if (!finalized) {
 			return false;
 		}
-
-		const finalized = await this.streamCard(card, content, true);
-		this.activeCards.delete(channelId);
-		return finalized;
+		return true;
 	}
 
 	/**
 	 * Finalize and remove the active card for a channel.
 	 */
 	async finalizeCard(channelId: string, content: string): Promise<boolean> {
-		const finalized = await this.finalizeExistingCard(channelId, content);
+		const finalized = await this.replaceCard(channelId, content, true, false);
 		if (!finalized) {
 			return this.sendPlain(channelId, content);
 		}
@@ -692,7 +743,7 @@ export class DingTalkBot {
 		return card;
 	}
 
-	private async streamCard(card: AICard, content: string, finalize: boolean = false): Promise<boolean> {
+	private async streamCard(card: AICard, content: string, options: CardStreamOptions): Promise<boolean> {
 		// Refresh token if needed
 		const ageSecs = Date.now() / 1000 - card.createdAt;
 		if (ageSecs > TOKEN_REFRESH_SECS) {
@@ -707,9 +758,12 @@ export class DingTalkBot {
 			guid: `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
 			key: card.templateKey,
 			content,
-			isFull: true,
-			isFinalize: finalize,
-			isError: false,
+			append: options.append,
+			finished: options.finalize,
+			failed: options.failed,
+			isFull: !options.append,
+			isFinalize: options.finalize,
+			isError: options.failed,
 		};
 
 		const start = Date.now();
@@ -727,8 +781,8 @@ export class DingTalkBot {
 			}
 
 			card.lastUpdated = Date.now() / 1000;
-			card.content = content;
-			if (finalize) {
+			card.content = options.append ? `${card.content}${content}` : content;
+			if (options.finalize || options.failed) {
 				card.finished = true;
 			}
 			return true;

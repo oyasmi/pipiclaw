@@ -8,7 +8,9 @@ const NO_CONTENT = "";
 type DeliveryMode = "progress" | "finalize-existing" | "finalize-with-fallback" | "silent";
 
 class ChannelDeliveryController {
-	private progressText = "";
+	private progressSegments: string[] = [];
+	private cachedProgressText = "";
+	private progressTextDirty = false;
 	private mode: DeliveryMode = "progress";
 	private desiredRevision = 0;
 	private appliedRevision = 0;
@@ -22,6 +24,9 @@ class ChannelDeliveryController {
 	private timer: NodeJS.Timeout | null = null;
 	private cardWarmupTimer: NodeJS.Timeout | null = null;
 	private flushWaiters: Array<() => void> = [];
+	private sentProgressChars = 0;
+	private replayRequired = false;
+	private finalReplacementText = "";
 
 	constructor(
 		private event: DingTalkEvent,
@@ -109,7 +114,11 @@ class ChannelDeliveryController {
 		if (this.closed || this.finalResponseDelivered || !text.trim()) return;
 
 		this.clearCardWarmup();
-		this.progressText = this.progressText ? `${this.progressText}\n\n${text}` : text;
+		if (this.progressSegments.length > 0) {
+			this.progressSegments.push("\n\n");
+		}
+		this.progressSegments.push(text);
+		this.progressTextDirty = true;
 		if (this.progressWindowStartedAt === 0) {
 			this.progressWindowStartedAt = Date.now();
 		}
@@ -144,7 +153,7 @@ class ChannelDeliveryController {
 		if (this.closed || this.finalResponseDelivered) return;
 
 		this.clearCardWarmup();
-		this.progressText = text;
+		this.finalReplacementText = text;
 		this.mode = "finalize-with-fallback";
 		this.bumpRevision(true);
 	}
@@ -198,6 +207,7 @@ class ChannelDeliveryController {
 		try {
 			while (this.appliedRevision < this.desiredRevision) {
 				const mode = this.mode;
+				const progressText = this.getProgressText();
 				const throttleBaseAt = this.lastDeliveredAt > 0 ? this.lastDeliveredAt : this.progressWindowStartedAt;
 				if (mode === "progress" && throttleBaseAt > 0) {
 					const remaining = MIN_UPDATE_INTERVAL_MS - (Date.now() - throttleBaseAt);
@@ -211,32 +221,47 @@ class ChannelDeliveryController {
 				}
 
 				const revision = this.desiredRevision;
-				const content = this.progressText.trim();
+				const content = progressText.trim();
+				const replacementText = this.finalReplacementText;
 				let touchedRemote = false;
 
 				try {
 					if (mode === "progress") {
 						if (content) {
-							touchedRemote = await this.bot.streamToCard(this.event.channelId, this.progressText);
+							const nextSentChars = progressText.length;
+							if (this.replayRequired) {
+								touchedRemote = await this.bot.replaceCard(this.event.channelId, progressText);
+							} else {
+								const delta = progressText.slice(this.sentProgressChars);
+								touchedRemote = delta ? await this.bot.appendToCard(this.event.channelId, delta) : true;
+							}
 							if (!touchedRemote) {
 								this.bot.discardCard(this.event.channelId);
+								this.replayRequired = true;
+							} else {
+								this.sentProgressChars = nextSentChars;
+								this.replayRequired = false;
 							}
 						}
 					} else if (mode === "finalize-existing") {
 						if (content || this.cardWarmupTriggered) {
-							touchedRemote = await this.bot.finalizeExistingCard(
+							touchedRemote = await this.bot.replaceCard(
 								this.event.channelId,
-								content ? this.progressText : NO_CONTENT,
+								content ? progressText : NO_CONTENT,
+								true,
 							);
 							if (!touchedRemote) {
 								this.bot.discardCard(this.event.channelId);
+							} else {
+								this.sentProgressChars = progressText.length;
+								this.replayRequired = false;
 							}
 						} else {
 							this.bot.discardCard(this.event.channelId);
 						}
 					} else if (mode === "finalize-with-fallback") {
-						if (content) {
-							touchedRemote = await this.bot.finalizeCard(this.event.channelId, this.progressText);
+						if (replacementText.trim()) {
+							touchedRemote = await this.bot.finalizeCard(this.event.channelId, replacementText);
 							if (!touchedRemote) {
 								this.bot.discardCard(this.event.channelId);
 							}
@@ -245,7 +270,7 @@ class ChannelDeliveryController {
 						}
 					} else if (mode === "silent") {
 						if (this.cardWarmupTriggered) {
-							touchedRemote = await this.bot.finalizeExistingCard(this.event.channelId, NO_CONTENT);
+							touchedRemote = await this.bot.replaceCard(this.event.channelId, NO_CONTENT, true);
 						}
 						if (!touchedRemote) {
 							this.bot.discardCard(this.event.channelId);
@@ -257,6 +282,9 @@ class ChannelDeliveryController {
 						err instanceof Error ? err.message : String(err),
 					);
 					this.bot.discardCard(this.event.channelId);
+					if (mode === "progress") {
+						this.replayRequired = true;
+					}
 				}
 
 				if (touchedRemote) {
@@ -306,6 +334,16 @@ class ChannelDeliveryController {
 		this.closed = true;
 		this.clearCardWarmup();
 		await this.flush();
+	}
+
+	private getProgressText(): string {
+		if (!this.progressTextDirty) {
+			return this.cachedProgressText;
+		}
+
+		this.cachedProgressText = this.progressSegments.join("");
+		this.progressTextDirty = false;
+		return this.cachedProgressText;
 	}
 }
 

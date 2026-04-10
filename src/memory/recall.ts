@@ -1,7 +1,12 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
-import { buildMemoryCandidates, type MemoryCandidate, type MemoryCandidateCache } from "./candidates.js";
+import {
+	buildMemoryCandidates,
+	createMemoryCandidateStore,
+	type MemoryCandidate,
+	type MemoryCandidateStore,
+} from "./candidates.js";
 import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 
@@ -17,7 +22,7 @@ export interface RecallRequest {
 	autoRerank?: boolean;
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
-	candidateCache?: MemoryCandidateCache;
+	candidateStore?: MemoryCandidateStore;
 }
 
 export interface RecalledMemory {
@@ -564,11 +569,13 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 		return { items: [], renderedText: "" };
 	}
 
-	const candidates = await buildMemoryCandidates({
-		workspaceDir: request.workspaceDir,
-		channelDir: request.channelDir,
-		cache: request.candidateCache,
-	});
+	const candidates = await buildMemoryCandidates(
+		{
+			workspaceDir: request.workspaceDir,
+			channelDir: request.channelDir,
+		},
+		request.candidateStore ?? createMemoryCandidateStore(),
+	);
 	const filteredCandidates = request.allowedSources?.length
 		? candidates.filter((candidate) => request.allowedSources?.includes(candidate.source))
 		: candidates;

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildMemoryCandidates, createMemoryCandidateCache } from "../src/memory/candidates.js";
+import { buildMemoryCandidates, createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
 
 const tempDirs: string[] = [];
@@ -52,25 +52,83 @@ describe("memory candidates", () => {
 		expect(candidates.some((candidate) => candidate.title === "Current State")).toBe(true);
 	});
 
-	it("reuses cached candidates within the same run context", async () => {
+	it("reuses unchanged candidates and refreshes files whose fingerprints change", async () => {
 		const { workspaceDir, channelDir } = createTempWorkspace();
-		const cache = createMemoryCandidateCache();
+		const store = createMemoryCandidateStore();
 		writeFileSync(
 			join(workspaceDir, "MEMORY.md"),
 			"# Workspace Memory\n\n## Shared Context\n\n- First value.\n",
 			"utf-8",
 		);
 
-		const initial = await buildMemoryCandidates({ workspaceDir, channelDir, cache });
+		const initial = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
+		const repeated = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
 		writeFileSync(
 			join(workspaceDir, "MEMORY.md"),
 			"# Workspace Memory\n\n## Shared Context\n\n- Second value.\n",
 			"utf-8",
 		);
-		const cached = await buildMemoryCandidates({ workspaceDir, channelDir, cache });
+		const refreshed = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
 
-		expect(initial).toEqual(cached);
-		expect(cached.some((candidate) => candidate.content.includes("First value."))).toBe(true);
+		expect(repeated).toEqual(initial);
+		expect(refreshed.some((candidate) => candidate.content.includes("Second value."))).toBe(true);
+		expect(refreshed.some((candidate) => candidate.content.includes("First value."))).toBe(false);
+	});
+
+	it("refreshes only the files whose fingerprints changed", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		const store = createMemoryCandidateStore();
+		writeFileSync(
+			join(workspaceDir, "MEMORY.md"),
+			"# Workspace Memory\n\n## Shared Context\n\n- Shared install policy.\n",
+			"utf-8",
+		);
+		writeFileSync(
+			join(channelDir, "SESSION.md"),
+			"# Session Title\n\nCurrent task\n\n# Current State\n\n- First state.\n",
+			"utf-8",
+		);
+
+		const initial = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
+		writeFileSync(
+			join(channelDir, "SESSION.md"),
+			"# Session Title\n\nCurrent task\n\n# Current State\n\n- Updated state.\n",
+			"utf-8",
+		);
+
+		const updated = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
+		expect(updated.some((candidate) => candidate.content.includes("Updated state."))).toBe(true);
+		expect(updated.some((candidate) => candidate.content.includes("Shared install policy."))).toBe(true);
+		expect(initial.some((candidate) => candidate.content.includes("First state."))).toBe(true);
+	});
+
+	it("limits large history files to folded blocks plus recent entries", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		const history = [
+			"# Channel History",
+			"",
+			"## Folded History Through 2026-04-05T00:00:00.000Z",
+			"",
+			"- Older auth milestones.",
+			"",
+			...Array.from({ length: 12 }, (_, index) =>
+				[
+					`## 2026-04-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+					"",
+					`History block ${index + 1}`,
+					"",
+				].join("\n"),
+			),
+		].join("\n");
+		writeFileSync(join(channelDir, "HISTORY.md"), history, "utf-8");
+
+		const candidates = await buildMemoryCandidates({ workspaceDir, channelDir }, createMemoryCandidateStore());
+		const historyCandidates = candidates.filter((candidate) => candidate.source === "channel-history");
+
+		expect(historyCandidates.some((candidate) => candidate.title.startsWith("Folded History Through"))).toBe(true);
+		expect(historyCandidates.some((candidate) => candidate.content.includes("History block 12"))).toBe(true);
+		expect(historyCandidates.some((candidate) => candidate.content === "History block 1")).toBe(false);
+		expect(historyCandidates.length).toBeLessThanOrEqual(9);
 	});
 });
 

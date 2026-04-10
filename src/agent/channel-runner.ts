@@ -14,7 +14,7 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import * as log from "../log.js";
 import { buildFirstTurnMemoryBootstrap as renderFirstTurnMemoryBootstrap } from "../memory/bootstrap.js";
-import { createMemoryCandidateCache } from "../memory/candidates.js";
+import { createMemoryCandidateStore, type MemoryCandidateStore } from "../memory/candidates.js";
 import { getChannelMemoryPath } from "../memory/files.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import { recallRelevantMemory } from "../memory/recall.js";
@@ -92,6 +92,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly settingsManager: PipiclawSettingsManager;
 	private readonly modelRegistry: ModelRegistry;
 	private readonly memoryLifecycle: MemoryLifecycle;
+	private readonly memoryCandidateStore: MemoryCandidateStore;
 	private readonly sessionResourceGate: SessionResourceGate;
 	private readonly sessionReady: Promise<void>;
 	private subAgentDiscovery: SubAgentDiscoveryResult;
@@ -123,6 +124,7 @@ export class ChannelRunner implements AgentRunner {
 		this.sessionManager = SessionManager.open(contextFile, channelDir);
 		this.settingsManager = new PipiclawSettingsManager(APP_HOME_DIR);
 		this.reportSettingsDiagnostics();
+		this.memoryCandidateStore = createMemoryCandidateStore();
 
 		// Create AuthStorage and ModelRegistry
 		const authStorage = AuthStorage.create(AUTH_CONFIG_PATH);
@@ -246,7 +248,6 @@ export class ChannelRunner implements AgentRunner {
 			// Ensure channel directory exists
 			await mkdir(this.channelDir, { recursive: true });
 
-			const candidateCache = createMemoryCandidateCache();
 			let promptText = preserveRawInput ? clippedInput : userMessage;
 			let recalledContextText = "";
 			let durableMemoryBootstrapText = "";
@@ -265,7 +266,7 @@ export class ChannelRunner implements AgentRunner {
 						autoRerank: HAN_REGEX.test(clippedInput),
 						model: this.session.model ?? this.activeModel,
 						resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
-						candidateCache,
+						candidateStore: this.memoryCandidateStore,
 					});
 
 					if (recall.renderedText) {
@@ -616,6 +617,7 @@ export class ChannelRunner implements AgentRunner {
 			sandboxConfig: this.sandboxConfig,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,
 			getMemoryRecallSettings: () => this.settingsManager.getMemoryRecallSettings(),
+			memoryCandidateStore: this.memoryCandidateStore,
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
 		});

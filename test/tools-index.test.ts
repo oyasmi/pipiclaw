@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 import type { Executor, SandboxConfig } from "../src/sandbox.js";
 
 const {
@@ -119,6 +120,7 @@ describe("tools index", () => {
 				maxChars: 3500,
 				rerankWithModel: false,
 			})),
+			memoryCandidateStore: createMemoryCandidateStore(),
 		});
 
 		expect(tools.map((tool) => tool.name)).toEqual(["read", "bash", "edit", "write", "subagent"]);
@@ -156,6 +158,7 @@ describe("tools index", () => {
 				maxChars: 3500,
 				rerankWithModel: false,
 			})),
+			memoryCandidateStore: createMemoryCandidateStore(),
 		};
 
 		const tools = createPipiclawTools(options);
@@ -208,6 +211,7 @@ describe("tools index", () => {
 			channelDir: "/repo/dm_42",
 			getSubAgentDiscovery: options.getSubAgentDiscovery,
 			getMemoryRecallSettings: options.getMemoryRecallSettings,
+			memoryCandidateStore: options.memoryCandidateStore,
 			securityConfig,
 			webConfig: toolsConfig.tools.web,
 			runtimeContext: {

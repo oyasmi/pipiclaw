@@ -1,5 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { APP_HOME_DIR } from "../paths.js";
 import type { Executor, SandboxConfig } from "../sandbox.js";
 import { loadSecurityConfig } from "../security/config.js";
@@ -28,6 +29,7 @@ export interface CreatePipiclawToolsOptions {
 	sandboxConfig: SandboxConfig;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
 	getMemoryRecallSettings: () => PipiclawMemoryRecallSettings;
+	memoryCandidateStore: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
 	toolsConfig?: PipiclawToolsConfig;
 }
@@ -100,6 +102,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 			channelDir: options.channelDir,
 			getSubAgentDiscovery: options.getSubAgentDiscovery,
 			getMemoryRecallSettings: options.getMemoryRecallSettings,
+			memoryCandidateStore: options.memoryCandidateStore,
 			securityConfig,
 			webConfig: toolsConfig.tools.web,
 			runtimeContext: {

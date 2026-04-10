@@ -361,6 +361,51 @@ describe("dingtalk", () => {
 		);
 	});
 
+	it("supports append and replace card streaming payloads", async () => {
+		const { bot } = createBot();
+		const privateApi = getPrivateApi(bot);
+		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).accessToken = "cached-token";
+		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).tokenExpiry = Date.now() / 1000 + 3600;
+		axiosMock.post.mockResolvedValue({ data: {} });
+		axiosMock.put.mockResolvedValue({ data: {} });
+
+		privateApi.setConversationMeta("dm_staff_1", {
+			conversationId: "conv_1",
+			conversationType: "1",
+			senderId: "staff_1",
+		});
+
+		await expect(bot.appendToCard("dm_staff_1", "hello")).resolves.toBe(true);
+		expect(axiosMock.put).toHaveBeenLastCalledWith(
+			expect.stringContaining("/card/streaming"),
+			expect.objectContaining({
+				content: "hello",
+				append: true,
+				finished: false,
+				failed: false,
+				isFull: false,
+				isFinalize: false,
+				isError: false,
+			}),
+			expect.any(Object),
+		);
+
+		await expect(bot.replaceCard("dm_staff_1", "hello world", true)).resolves.toBe(true);
+		expect(axiosMock.put).toHaveBeenLastCalledWith(
+			expect.stringContaining("/card/streaming"),
+			expect.objectContaining({
+				content: "hello world",
+				append: false,
+				finished: true,
+				failed: false,
+				isFull: true,
+				isFinalize: true,
+				isError: false,
+			}),
+			expect.any(Object),
+		);
+	});
+
 	it("enforces queue limits and stops cleanly", async () => {
 		let releaseCurrent: (() => void) | null = null;
 		const { bot, handler } = createBot({

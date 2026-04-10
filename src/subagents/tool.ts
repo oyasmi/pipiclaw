@@ -2,7 +2,7 @@ import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mari
 import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { createMemoryCandidateCache } from "../memory/candidates.js";
+import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { readChannelSession } from "../memory/files.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import { formatModelReference } from "../models/utils.js";
@@ -91,6 +91,7 @@ export interface SubAgentToolOptions {
 	channelDir: string;
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	getMemoryRecallSettings?: () => PipiclawMemoryRecallSettings;
+	memoryCandidateStore?: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
 	webConfig?: PipiclawWebToolsConfig;
 	runtimeContext: {
@@ -294,7 +295,6 @@ async function buildContextualBlocks(
 	config: ResolvedSubAgentConfig,
 	options: SubAgentToolOptions,
 	currentModel: Model<Api>,
-	candidateCache = createMemoryCandidateCache(),
 ): Promise<string[]> {
 	if (config.contextMode !== "contextual") {
 		return [];
@@ -340,7 +340,7 @@ async function buildContextualBlocks(
 		model: currentModel,
 		resolveApiKey: options.resolveApiKey,
 		allowedSources: ["workspace-memory", "channel-memory", "channel-history"],
-		candidateCache,
+		candidateStore: options.memoryCandidateStore,
 	});
 	const recalledText = stripRuntimeContextWrapper(recalled.renderedText);
 	if (recalledText) {
