@@ -13,7 +13,9 @@ export function getPreventiveCompactionDecision(
 ): PreventiveCompactionDecision {
 	const normalizedContextWindow = Number.isFinite(contextWindow) ? Math.max(0, Math.floor(contextWindow)) : 0;
 	const normalizedRatio =
-		Number.isFinite(thresholdRatio) && thresholdRatio > 0 ? Math.min(thresholdRatio, 1) : PREVENTIVE_COMPACTION_THRESHOLD_RATIO;
+		Number.isFinite(thresholdRatio) && thresholdRatio > 0
+			? Math.min(thresholdRatio, 1)
+			: PREVENTIVE_COMPACTION_THRESHOLD_RATIO;
 	const thresholdTokens = Math.floor(normalizedContextWindow * normalizedRatio);
 
 	if (contextTokens === null || contextTokens === undefined || !Number.isFinite(contextTokens) || contextTokens < 0) {

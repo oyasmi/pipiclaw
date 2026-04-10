@@ -561,8 +561,7 @@ export class ChannelRunner implements AgentRunner {
 		const startedAt = Date.now();
 		log.logInfo(
 			`[${this.channelId}] Preventive compaction triggered: ${currentTokens}/${currentModel.contextWindow} tokens (${(
-				(currentTokens / currentModel.contextWindow) *
-				100
+				(currentTokens / currentModel.contextWindow) * 100
 			).toFixed(1)}%), threshold=${decision.thresholdTokens}`,
 		);
 

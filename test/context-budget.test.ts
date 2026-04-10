@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	getPreventiveCompactionDecision,
-	PREVENTIVE_COMPACTION_THRESHOLD_RATIO,
-} from "../src/agent/context-budget.js";
+import { getPreventiveCompactionDecision, PREVENTIVE_COMPACTION_THRESHOLD_RATIO } from "../src/agent/context-budget.js";
 
 describe("context budget", () => {
 	it("skips preventive compaction when usage is below threshold", () => {
