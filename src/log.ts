@@ -1,9 +1,13 @@
-import chalk from "chalk";
+import { styleText } from "node:util";
 
 export interface LogContext {
 	channelId: string;
 	userName?: string;
 	channelName?: string;
+}
+
+function color(style: Parameters<typeof styleText>[0], text: string): string {
+	return styleText(style, text);
 }
 
 function timestamp(): string {
@@ -61,25 +65,25 @@ function formatToolArgs(args: Record<string, unknown>): string {
 
 // User messages
 export function logUserMessage(ctx: LogContext, text: string): void {
-	console.log(chalk.green(`${timestamp()} ${formatContext(ctx)} ${text}`));
+	console.log(color("green", `${timestamp()} ${formatContext(ctx)} ${text}`));
 }
 
 // Tool execution
 export function logToolStart(ctx: LogContext, toolName: string, label: string, args: Record<string, unknown>): void {
 	const formattedArgs = formatToolArgs(args);
-	console.log(chalk.yellow(`${timestamp()} ${formatContext(ctx)} ↳ ${toolName}: ${label}`));
+	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ↳ ${toolName}: ${label}`));
 	if (formattedArgs) {
 		const indented = formattedArgs
 			.split("\n")
 			.map((line) => `           ${line}`)
 			.join("\n");
-		console.log(chalk.dim(indented));
+		console.log(color("dim", indented));
 	}
 }
 
 export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: number, result: string): void {
 	const duration = (durationMs / 1000).toFixed(1);
-	console.log(chalk.yellow(`${timestamp()} ${formatContext(ctx)} ✓ ${toolName} (${duration}s)`));
+	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ✓ ${toolName} (${duration}s)`));
 
 	const truncated = truncate(result, 1000);
 	if (truncated) {
@@ -87,77 +91,77 @@ export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: nu
 			.split("\n")
 			.map((line) => `           ${line}`)
 			.join("\n");
-		console.log(chalk.dim(indented));
+		console.log(color("dim", indented));
 	}
 }
 
 export function logToolError(ctx: LogContext, toolName: string, durationMs: number, error: string): void {
 	const duration = (durationMs / 1000).toFixed(1);
-	console.log(chalk.yellow(`${timestamp()} ${formatContext(ctx)} ✗ ${toolName} (${duration}s)`));
+	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ✗ ${toolName} (${duration}s)`));
 
 	const truncated = truncate(error, 1000);
 	const indented = truncated
 		.split("\n")
 		.map((line) => `           ${line}`)
 		.join("\n");
-	console.log(chalk.dim(indented));
+	console.log(color("dim", indented));
 }
 
 // Response streaming
 export function logResponseStart(ctx: LogContext): void {
-	console.log(chalk.yellow(`${timestamp()} ${formatContext(ctx)} → Streaming response...`));
+	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} → Streaming response...`));
 }
 
 export function logThinking(ctx: LogContext, thinking: string): void {
-	console.log(chalk.yellow(`${timestamp()} ${formatContext(ctx)} 💭 Thinking`));
+	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} 💭 Thinking`));
 	const truncated = truncate(thinking, 1000);
 	const indented = truncated
 		.split("\n")
 		.map((line) => `           ${line}`)
 		.join("\n");
-	console.log(chalk.dim(indented));
+	console.log(color("dim", indented));
 }
 
 export function logResponse(ctx: LogContext, text: string): void {
-	console.log(chalk.yellow(`${timestamp()} ${formatContext(ctx)} 💬 Response`));
+	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} 💬 Response`));
 	const truncated = truncate(text, 1000);
 	const indented = truncated
 		.split("\n")
 		.map((line) => `           ${line}`)
 		.join("\n");
-	console.log(chalk.dim(indented));
+	console.log(color("dim", indented));
 }
 
 // Control
 export function logStopRequest(ctx: LogContext): void {
-	console.log(chalk.green(`${timestamp()} ${formatContext(ctx)} stop`));
-	console.log(chalk.yellow(`${timestamp()} ${formatContext(ctx)} ⊗ Stop requested - aborting`));
+	console.log(color("green", `${timestamp()} ${formatContext(ctx)} stop`));
+	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ⊗ Stop requested - aborting`));
 }
 
 // System
 export function logInfo(message: string): void {
-	console.log(chalk.blue(`${timestamp()} [system] ${message}`));
+	console.log(color("blue", `${timestamp()} [system] ${message}`));
 }
 
 export function logWarning(message: string, details?: string): void {
-	console.log(chalk.yellow(`${timestamp()} [system] ⚠ ${message}`));
+	console.log(color("yellow", `${timestamp()} [system] ⚠ ${message}`));
 	if (details) {
 		const indented = details
 			.split("\n")
 			.map((line) => `           ${line}`)
 			.join("\n");
-		console.log(chalk.dim(indented));
+		console.log(color("dim", indented));
 	}
 }
 
 export function logAgentError(ctx: LogContext | "system", error: string): void {
 	const context = ctx === "system" ? "[system]" : formatContext(ctx);
-	console.log(chalk.yellow(`${timestamp()} ${context} ✗ Agent error`));
+	console.log(color("yellow", `${timestamp()} ${context} ✗ Agent error`));
 	const indented = error
 		.split("\n")
 		.map((line) => `           ${line}`)
 		.join("\n");
-	console.log(chalk.dim(indented));
+	console.log(color("dim", indented));
 }
 
 // Usage summary
@@ -201,9 +205,10 @@ export function logUsageSummary(
 	const summary = lines.join("\n");
 
 	// Log to console
-	console.log(chalk.yellow(`${timestamp()} ${formatContext(ctx)} 💰 Usage`));
+	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} 💰 Usage`));
 	console.log(
-		chalk.dim(
+		color(
+			"dim",
 			`           ${usage.input.toLocaleString()} in + ${usage.output.toLocaleString()} out` +
 				(usage.cacheRead > 0 || usage.cacheWrite > 0
 					? ` (${usage.cacheRead.toLocaleString()} cache read, ${usage.cacheWrite.toLocaleString()} cache write)`
