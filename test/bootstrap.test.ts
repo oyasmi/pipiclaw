@@ -88,6 +88,21 @@ describe("bootstrap", () => {
 			expect((error as BootstrapExitError).code).toBe(0);
 		}
 		expect(io.log).toHaveBeenCalledWith("Options:");
+		expect(io.log).toHaveBeenCalledWith("  --version                   Print the current version and exit");
+	});
+
+	it("parses version and exits with code 0", () => {
+		const paths = createBootstrapPaths();
+		const io = createIO();
+
+		expect(() => parseArgs(["node", "main", "--version"], paths, io)).toThrowError(BootstrapExitError);
+		try {
+			parseArgs(["node", "main", "--version"], paths, io);
+		} catch (error) {
+			expect(error).toBeInstanceOf(BootstrapExitError);
+			expect((error as BootstrapExitError).code).toBe(0);
+		}
+		expect(io.log).toHaveBeenCalledWith(expect.stringMatching(/^\d+\.\d+\.\d+$/));
 	});
 
 	it("loads and normalizes a ready DingTalk config", () => {

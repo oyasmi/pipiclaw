@@ -242,6 +242,17 @@ export function isBootstrapExitError(error: unknown): error is BootstrapExitErro
 	return error instanceof BootstrapExitError;
 }
 
+function readCliVersion(): string {
+	try {
+		const raw = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf-8")) as {
+			version?: unknown;
+		};
+		return typeof raw.version === "string" && raw.version.trim() ? raw.version : "0.0.0";
+	} catch {
+		return "0.0.0";
+	}
+}
+
 function writeTextFileIfMissing(path: string, content: string, label: string, created: string[]): boolean {
 	if (existsSync(path)) {
 		return false;
@@ -404,9 +415,13 @@ export function parseArgs(
 			io.log("Options:");
 			io.log("  --sandbox=host              Run tools on host (default)");
 			io.log("  --sandbox=docker:<name>     Run tools in Docker container");
+			io.log("  --version                   Print the current version and exit");
 			io.log("");
 			io.log(`Config:    ${paths.channelConfigPath}`);
 			io.log(`Workspace: ${paths.workspaceDir}`);
+			throw new BootstrapExitError(0);
+		} else if (arg === "--version") {
+			io.log(readCliVersion());
 			throw new BootstrapExitError(0);
 		}
 	}
