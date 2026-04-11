@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-04-11
+
+### Added
+
+- New reference documentation comparing Pipiclaw with Hermes and capturing lessons learned from the Hermes runtime
+- Archived code review bugfix spec documenting the 2026-04-11 review findings, decisions, and applied fixes
+
+### Fixed
+
+- Event `preAction` commands now execute through the configured sandbox executor instead of running directly on the host, so scheduled events follow the same host or Docker isolation rules as normal tool execution
+- `MEMORY.md` and `HISTORY.md` updates are now serialized through a dedicated durable-memory queue, and atomic writes use unique temp files to avoid concurrent write races during consolidation and background maintenance
+- The `read` tool now reports total line counts and line window boundaries correctly for empty files and files with or without trailing newlines
+- SDK compatibility getters for compaction settings now honor user-configured reserve and keep-recent token values instead of falling back to hardcoded defaults
+
 ## [0.6.1] - 2026-04-10
 
 ### Added
