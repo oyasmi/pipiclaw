@@ -447,11 +447,13 @@ describe("EventsWatcher", () => {
 		});
 
 		it("converts action timeout from milliseconds to executor seconds", async () => {
-			const execSpy = vi.fn(async (_command: string, _options?: ExecOptions): Promise<ExecResult> => ({
-				stdout: "",
-				stderr: "",
-				code: 0,
-			}));
+			const execSpy = vi.fn(
+				async (_command: string, _options?: ExecOptions): Promise<ExecResult> => ({
+					stdout: "",
+					stderr: "",
+					code: 0,
+				}),
+			);
 			const watcher = createWatcher(createTempDir(), new FakeBot(), createMockExecutor(execSpy));
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 

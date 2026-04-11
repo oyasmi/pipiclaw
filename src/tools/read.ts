@@ -133,7 +133,10 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			const startLineDisplay = startLine;
 
 			// Check if offset is out of bounds
-			if ((totalFileLines === 0 && offset !== undefined && startLine > 1) || (totalFileLines > 0 && startLine > totalFileLines)) {
+			if (
+				(totalFileLines === 0 && offset !== undefined && startLine > 1) ||
+				(totalFileLines > 0 && startLine > totalFileLines)
+			) {
 				throw new Error(`Offset ${offset} is beyond end of file (${totalFileLines} lines total)`);
 			}
 

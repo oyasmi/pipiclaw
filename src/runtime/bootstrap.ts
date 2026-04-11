@@ -450,7 +450,11 @@ interface RuntimeContextOptions {
 	sandbox: SandboxConfig;
 	dingtalkConfig: DingTalkConfig;
 	createBot?: (handler: DingTalkHandler, config: DingTalkConfig) => DingTalkBot;
-	createEventsWatcher?: (workspaceDir: string, bot: DingTalkBot, executor: Executor) => { start(): void; stop(): void };
+	createEventsWatcher?: (
+		workspaceDir: string,
+		bot: DingTalkBot,
+		executor: Executor,
+	) => { start(): void; stop(): void };
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
 }
