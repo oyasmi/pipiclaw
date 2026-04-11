@@ -320,15 +320,15 @@ export class PipiclawSettingsManager {
 
 	// Compaction details
 	getCompactionReserveTokens(): number {
-		return DEFAULT_COMPACTION.reserveTokens;
+		return this.getCompactionSettings().reserveTokens;
 	}
 
 	getCompactionKeepRecentTokens(): number {
-		return DEFAULT_COMPACTION.keepRecentTokens;
+		return this.getCompactionSettings().keepRecentTokens;
 	}
 
 	getBranchSummarySettings(): { reserveTokens: number } {
-		return { reserveTokens: 16384 };
+		return { reserveTokens: this.getCompactionSettings().reserveTokens };
 	}
 
 	getBranchSummarySkipPrompt(): boolean {

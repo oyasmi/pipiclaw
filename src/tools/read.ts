@@ -46,6 +46,14 @@ export interface ReadToolOptions {
 	channelId?: string;
 }
 
+function countTextLines(content: string): number {
+	if (content.length === 0) {
+		return 0;
+	}
+
+	return content.endsWith("\n") ? content.split("\n").length - 1 : content.split("\n").length;
+}
+
 function formatPathBlockMessage(resolvedPath: string | undefined, category?: string, reason?: string): string {
 	const lines = [`Path blocked${category ? ` [${category}]` : ""}`];
 	if (reason) {
@@ -114,18 +122,18 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			}
 
 			// Get total line count first
-			const countResult = await executor.exec(`wc -l < ${shellEscapePath(path)}`, { signal });
+			const countResult = await executor.exec(`awk 'END { print NR }' ${shellEscapePath(path)}`, { signal });
 			if (countResult.code !== 0) {
 				throw new Error(countResult.stderr || `Failed to read file: ${path}`);
 			}
-			const totalFileLines = Number.parseInt(countResult.stdout.trim(), 10) + 1; // wc -l counts newlines, not lines
+			const totalFileLines = Number.parseInt(countResult.stdout.trim(), 10);
 
 			// Apply offset if specified (1-indexed)
 			const startLine = offset ? Math.max(1, offset) : 1;
 			const startLineDisplay = startLine;
 
 			// Check if offset is out of bounds
-			if (startLine > totalFileLines) {
+			if ((totalFileLines === 0 && offset !== undefined && startLine > 1) || (totalFileLines > 0 && startLine > totalFileLines)) {
 				throw new Error(`Offset ${offset} is beyond end of file (${totalFileLines} lines total)`);
 			}
 
@@ -148,7 +156,7 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			// Apply user limit if specified
 			if (limit !== undefined) {
 				const lines = selectedContent.split("\n");
-				const endLine = Math.min(limit, lines.length);
+				const endLine = Math.min(limit, countTextLines(selectedContent));
 				selectedContent = lines.slice(0, endLine).join("\n");
 				userLimitedLines = endLine;
 			}

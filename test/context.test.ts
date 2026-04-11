@@ -80,6 +80,33 @@ describe("PipiclawSettingsManager", () => {
 		expect(reloaded.getDefaultThinkingLevel()).toBe("medium");
 	});
 
+	it("derives compatibility compaction getters from merged settings", () => {
+		const baseDir = createTempDir();
+		const settingsPath = join(baseDir, "settings.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({
+				compaction: {
+					enabled: false,
+					reserveTokens: 4096,
+					keepRecentTokens: 8192,
+				},
+			}),
+			"utf-8",
+		);
+
+		const manager = new PipiclawSettingsManager(baseDir);
+
+		expect(manager.getCompactionSettings()).toEqual({
+			enabled: false,
+			reserveTokens: 4096,
+			keepRecentTokens: 8192,
+		});
+		expect(manager.getCompactionReserveTokens()).toBe(4096);
+		expect(manager.getCompactionKeepRecentTokens()).toBe(8192);
+		expect(manager.getBranchSummarySettings()).toEqual({ reserveTokens: 4096 });
+	});
+
 	it("tolerates invalid JSON settings files and exposes compatibility stubs", async () => {
 		const baseDir = createTempDir();
 		const settingsPath = join(baseDir, "settings.json");

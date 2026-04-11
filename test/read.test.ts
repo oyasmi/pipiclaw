@@ -40,7 +40,7 @@ describe("read tool", () => {
 
 	it("reads text with offset and limit and reports remaining lines", async () => {
 		const executor = new ScriptedExecutor([
-			{ code: 0, stdout: "4\n", stderr: "" },
+			{ code: 0, stdout: "5\n", stderr: "" },
 			{ code: 0, stdout: "line2\nline3\nline4\nline5\n", stderr: "" },
 		]);
 		const tool = createReadTool(executor);
@@ -48,7 +48,7 @@ describe("read tool", () => {
 		const result = await tool.execute("call", { label: "read text", path: "notes.txt", offset: 2, limit: 2 });
 
 		expect(executor.calls).toHaveLength(2);
-		expect(executor.calls[0].command).toContain("wc -l < 'notes.txt'");
+		expect(executor.calls[0].command).toContain("awk 'END { print NR }' 'notes.txt'");
 		expect(executor.calls[1].command).toContain("tail -n +2 'notes.txt'");
 		expect(result.details).toBeUndefined();
 		expect(result.content).toEqual([
@@ -60,11 +60,42 @@ describe("read tool", () => {
 	});
 
 	it("rejects offsets beyond end of file", async () => {
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "1\n", stderr: "" }]);
+		const executor = new ScriptedExecutor([{ code: 0, stdout: "2\n", stderr: "" }]);
 		const tool = createReadTool(executor);
 
 		await expect(tool.execute("call", { label: "read text", path: "notes.txt", offset: 5 })).rejects.toThrow(
 			"Offset 5 is beyond end of file (2 lines total)",
+		);
+	});
+
+	it("reads empty files without inventing a line", async () => {
+		const executor = new ScriptedExecutor([
+			{ code: 0, stdout: "0\n", stderr: "" },
+			{ code: 0, stdout: "", stderr: "" },
+		]);
+		const tool = createReadTool(executor);
+
+		const result = await tool.execute("call", { label: "read empty", path: "empty.txt" });
+
+		expect(result.details).toBeUndefined();
+		expect(result.content).toEqual([{ type: "text", text: "" }]);
+	});
+
+	it("counts files ending with a newline correctly", async () => {
+		const executor = new ScriptedExecutor([{ code: 0, stdout: "2\n", stderr: "" }]);
+		const tool = createReadTool(executor);
+
+		await expect(tool.execute("call", { label: "read text", path: "newline.txt", offset: 3 })).rejects.toThrow(
+			"Offset 3 is beyond end of file (2 lines total)",
+		);
+	});
+
+	it("counts files without a trailing newline correctly", async () => {
+		const executor = new ScriptedExecutor([{ code: 0, stdout: "2\n", stderr: "" }]);
+		const tool = createReadTool(executor);
+
+		await expect(tool.execute("call", { label: "read text", path: "no-newline.txt", offset: 3 })).rejects.toThrow(
+			"Offset 3 is beyond end of file (2 lines total)",
 		);
 	});
 
@@ -88,7 +119,7 @@ describe("read tool", () => {
 	it("truncates long files and reports the next offset", async () => {
 		const longContent = Array.from({ length: DEFAULT_MAX_LINES + 10 }, (_, index) => `line ${index + 1}`).join("\n");
 		const executor = new ScriptedExecutor([
-			{ code: 0, stdout: `${DEFAULT_MAX_LINES + 9}\n`, stderr: "" },
+			{ code: 0, stdout: `${DEFAULT_MAX_LINES + 10}\n`, stderr: "" },
 			{ code: 0, stdout: longContent, stderr: "" },
 		]);
 		const tool = createReadTool(executor);
