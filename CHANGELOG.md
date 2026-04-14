@@ -1,5 +1,7 @@
 # Changelog
 
+Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
+
 ## [Unreleased]
 
 ## [0.6.3] - 2026-04-14

@@ -203,7 +203,7 @@ export PIPICLAW_DEBUG=1
 建议用下面的顺序升级：
 
 1. 备份 app home 目录。默认是 `~/.pi/pipiclaw/`，如果设置了 `PIPICLAW_HOME`，则备份 `${PIPICLAW_HOME}/`
-2. 阅读 [CHANGELOG](../CHANGELOG.md)
+2. 阅读 [CHANGELOG](../CHANGELOG.md) / [中文更新日志](../CHANGELOG.zh-CN.md)
 3. 升级 npm 包
 4. 重启 Pipiclaw
 5. 在钉钉中发送 `/model` 和一条普通消息做冒烟验证；如需切换模型，可使用精确引用或能唯一命中的片段字符串
@@ -290,7 +290,7 @@ npm install -g @oyasmi/pipiclaw@latest
 - 配置 AI Card，降低观察成本
 - 初期使用 `allowFrom` 做灰度
 - 定期备份 `~/.pi/pipiclaw/`
-- 升级前先看 `CHANGELOG.md`
+- 升级前先看 `CHANGELOG.md` / `CHANGELOG.zh-CN.md`
 - 修改 `events/` 和 `sub-agents/` 时保留版本管理记录
 
 ## 相关文档（Related Docs）
