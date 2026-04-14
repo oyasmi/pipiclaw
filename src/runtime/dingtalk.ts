@@ -118,6 +118,9 @@ interface DingTalkIncomingMessage {
 interface DingTalkSocketLike {
 	readyState?: number;
 	ping?: () => void;
+	close?: () => void;
+	terminate?: () => void;
+	removeAllListeners?: () => void;
 	on(event: "pong", listener: () => void): void;
 	on(event: "close", listener: (code: number, reason: string) => void): void;
 	on(event: "message", listener: (raw: string) => void): void;
@@ -169,6 +172,13 @@ class ChannelQueue {
 
 const DINGTALK_API = "https://api.dingtalk.com";
 const TOKEN_REFRESH_SECS = 90 * 60; // 1.5 hours (tokens expire after 2 hours)
+const CONNECT_ATTEMPT_TIMEOUT_MS = 10_000;
+const SOCKET_CLOSE_GRACE_MS = 1_000;
+const SOCKET_TERMINATE_GRACE_MS = 250;
+const SOCKET_STATE_CONNECTING = 0;
+const SOCKET_STATE_OPEN = 1;
+const SOCKET_STATE_CLOSING = 2;
+const SOCKET_STATE_CLOSED = 3;
 
 // ============================================================================
 // DingTalkBot
@@ -274,6 +284,13 @@ export class DingTalkBot {
 		this.clearReconnectTimer();
 	}
 
+	private async sleep(delayMs: number): Promise<void> {
+		await new Promise<void>((resolve) => {
+			const timer = setTimeout(resolve, delayMs);
+			timer.unref?.();
+		});
+	}
+
 	private async waitForDelay(delayMs: number): Promise<void> {
 		await new Promise<void>((resolve) => {
 			this.reconnectTimer = this.setTrackedTimeout(() => {
@@ -281,6 +298,100 @@ export class DingTalkBot {
 				resolve();
 			}, delayMs);
 		});
+	}
+
+	private async waitForSocketState(
+		socket: DingTalkSocketLike,
+		expectedState: number,
+		timeoutMs: number,
+	): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		while ((socket.readyState ?? SOCKET_STATE_CLOSED) !== expectedState && Date.now() < deadline) {
+			await this.sleep(25);
+		}
+		return (socket.readyState ?? SOCKET_STATE_CLOSED) === expectedState;
+	}
+
+	private markClientDisconnected(): void {
+		if (!this.client) {
+			return;
+		}
+		Reflect.set(this.client as object, "connected", false);
+		Reflect.set(this.client as object, "registered", false);
+		Reflect.set(this.client as object, "reconnecting", false);
+	}
+
+	private clearClientSocketReference(): void {
+		if (!this.client) {
+			return;
+		}
+		Reflect.set(this.client as object, "socket", undefined);
+	}
+
+	private async cleanupSocket(reason: string): Promise<void> {
+		const socket = this.getSocket();
+		this.markClientDisconnected();
+		if (!socket) {
+			this.clearClientSocketReference();
+			return;
+		}
+
+		socket.removeAllListeners?.();
+
+		if ((socket.readyState ?? SOCKET_STATE_CLOSED) !== SOCKET_STATE_CLOSED) {
+			try {
+				socket.close?.();
+			} catch (err) {
+				log.logWarning(
+					`DingTalk: socket close failed during ${reason}`,
+					err instanceof Error ? err.message : String(err),
+				);
+			}
+
+			const closed = await this.waitForSocketState(socket, SOCKET_STATE_CLOSED, SOCKET_CLOSE_GRACE_MS);
+			if (!closed) {
+				log.logWarning(`DingTalk: forcing socket termination during ${reason}`);
+				try {
+					socket.terminate?.();
+				} catch (err) {
+					log.logWarning(
+						`DingTalk: socket terminate failed during ${reason}`,
+						err instanceof Error ? err.message : String(err),
+					);
+				}
+				await this.waitForSocketState(socket, SOCKET_STATE_CLOSED, SOCKET_TERMINATE_GRACE_MS);
+			}
+		}
+
+		this.clearClientSocketReference();
+	}
+
+	private async connectWithTimeout(): Promise<void> {
+		if (!this.client) {
+			throw new Error("DingTalk client is not initialized");
+		}
+
+		const connectPromise = Promise.resolve(this.client.connect());
+		let timeoutHandle: NodeJS.Timeout | null = null;
+		const timeoutPromise = new Promise<never>((_, reject) => {
+			timeoutHandle = setTimeout(() => {
+				reject(new Error(`connect timed out after ${CONNECT_ATTEMPT_TIMEOUT_MS}ms`));
+			}, CONNECT_ATTEMPT_TIMEOUT_MS);
+			timeoutHandle.unref?.();
+		});
+
+		try {
+			await Promise.race([connectPromise, timeoutPromise]);
+		} finally {
+			if (timeoutHandle) {
+				clearTimeout(timeoutHandle);
+			}
+		}
+
+		const socket = this.getSocket();
+		if (!socket || socket.readyState !== SOCKET_STATE_OPEN) {
+			throw new Error("stream socket did not reach open state");
+		}
 	}
 
 	private scheduleReconnect(delayMs: number, immediate: boolean): void {
@@ -314,11 +425,14 @@ export class DingTalkBot {
 
 		this.clearAllTimers();
 
-		this.client = new DWClient({
+		const clientOptions = {
 			clientId: this.config.clientId,
 			clientSecret: this.config.clientSecret,
+			autoReconnect: false,
 			keepAlive: false,
-		});
+		} as ConstructorParameters<typeof DWClient>[0] & { autoReconnect: boolean };
+
+		this.client = new DWClient(clientOptions);
 
 		this.client.registerCallbackListener(TOPIC_ROBOT, (msg: DWClientDownStream) => {
 			return this.handleRawMessage(msg);
@@ -368,6 +482,8 @@ export class DingTalkBot {
 		this.isReconnecting = true;
 		let connectionFailed = false;
 		let connected = false;
+		this.clearReconnectTimer();
+		this.clearKeepAliveTimer();
 
 		if (!immediate && this.reconnectAttempts > 0) {
 			const delay = Math.min(1000 * 2 ** this.reconnectAttempts + Math.random() * 1000, 30000);
@@ -381,11 +497,17 @@ export class DingTalkBot {
 
 		try {
 			const socket = this.getSocket();
-			if (socket?.readyState === 1 || socket?.readyState === 3) {
-				await Promise.resolve(this.client.disconnect());
+			const readyState = socket?.readyState;
+			if (
+				readyState === SOCKET_STATE_CONNECTING ||
+				readyState === SOCKET_STATE_OPEN ||
+				readyState === SOCKET_STATE_CLOSING ||
+				readyState === SOCKET_STATE_CLOSED
+			) {
+				await this.cleanupSocket("reconnect");
 			}
 
-			await this.client.connect();
+			await this.connectWithTimeout();
 
 			this.lastSocketAvailableTime = Date.now();
 			this.reconnectAttempts = 0; // Success, reset backoff
@@ -443,6 +565,7 @@ export class DingTalkBot {
 				}
 			});
 		} catch (err) {
+			await this.cleanupSocket("reconnect failure");
 			this.reconnectAttempts++;
 			connectionFailed = true;
 			log.logWarning("DingTalk: connection failed", err instanceof Error ? err.message : String(err));
@@ -466,7 +589,7 @@ export class DingTalkBot {
 		}
 		if (this.client) {
 			try {
-				await Promise.resolve(this.client.disconnect());
+				await this.cleanupSocket("stop");
 			} catch (err) {
 				log.logWarning("DingTalk: failed to disconnect cleanly", err instanceof Error ? err.message : String(err));
 			} finally {

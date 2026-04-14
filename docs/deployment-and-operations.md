@@ -171,6 +171,8 @@ supervisorctl tail -f pipiclaw
 - 模型调用是否报错
 - 事件文件是否被解析失败
 
+关于钉钉 Stream 连接，当前运行时会自己管理重连，并在重连前主动清理旧 socket；如果正常关闭迟迟不完成，还会记录 forced termination 并强制回收连接后再重试。因此如果你在日志里频繁看到 reconnect 或 forced termination，通常更应该优先排查网络层或代理层，而不是把它当作单纯的业务错误。
+
 ### 工作区运行文件（Workspace Runtime Files）
 
 Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认路径是 `~/.pi/pipiclaw/workspace/`；如果设置了 `PIPICLAW_HOME`，则对应为 `${PIPICLAW_HOME}/workspace/`。

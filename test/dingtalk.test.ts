@@ -16,10 +16,20 @@ const { axiosMock, fakeClientState } = vi.hoisted(() => {
 			isAxiosError: (error: unknown) => Boolean((error as { isAxiosError?: boolean })?.isAxiosError),
 		},
 		fakeClientState: {
+			connectImpl: null as null | ((state: any) => Promise<void>),
+			disconnectImpl: null as null | ((state: any) => Promise<void>),
 			instances: [] as Array<{
+				config: Record<string, unknown>;
 				connect: ReturnType<typeof vi.fn>;
 				disconnect: ReturnType<typeof vi.fn>;
-				socket: { readyState: number; ping: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> };
+				socket: {
+					readyState: number;
+					ping: ReturnType<typeof vi.fn>;
+					on: ReturnType<typeof vi.fn>;
+					close: ReturnType<typeof vi.fn>;
+					terminate: ReturnType<typeof vi.fn>;
+					removeAllListeners: ReturnType<typeof vi.fn>;
+				};
 			}>,
 		},
 	};
@@ -31,17 +41,40 @@ vi.mock("axios", () => ({
 
 vi.mock("dingtalk-stream", () => ({
 	DWClient: class {
-		socket = {
-			readyState: 1,
-			ping: vi.fn(),
-			on: vi.fn(),
-		};
+		socket;
+		config;
 		registerCallbackListener = vi.fn();
 		socketCallBackResponse = vi.fn();
-		connect = vi.fn(async () => {});
-		disconnect = vi.fn(async () => {});
+		connect;
+		disconnect;
 
-		constructor(_config: unknown) {
+		constructor(config: unknown) {
+			this.config = config as Record<string, unknown>;
+			const createSocket = () => ({
+				readyState: 1,
+				ping: vi.fn(),
+				on: vi.fn(),
+				close: vi.fn(() => {
+					this.socket.readyState = 3;
+				}),
+				terminate: vi.fn(() => {
+					this.socket.readyState = 3;
+				}),
+				removeAllListeners: vi.fn(),
+			});
+			this.socket = createSocket();
+			this.connect = vi.fn(() => {
+				if (fakeClientState.connectImpl) {
+					return fakeClientState.connectImpl(this);
+				}
+				if (!this.socket || this.socket.readyState === 3) {
+					this.socket = createSocket();
+				} else {
+					this.socket.readyState = 1;
+				}
+				return Promise.resolve();
+			});
+			this.disconnect = vi.fn(() => fakeClientState.disconnectImpl?.(this) ?? Promise.resolve());
 			fakeClientState.instances.push(this);
 		}
 	},
@@ -115,11 +148,29 @@ async function flushMicrotasks(): Promise<void> {
 	await Promise.resolve();
 }
 
+function createSocketMock(readyState = 1) {
+	const socket = {
+		readyState,
+		ping: vi.fn(),
+		on: vi.fn(),
+		close: vi.fn(() => {
+			socket.readyState = 3;
+		}),
+		terminate: vi.fn(() => {
+			socket.readyState = 3;
+		}),
+		removeAllListeners: vi.fn(),
+	};
+	return socket;
+}
+
 beforeEach(() => {
 	vi.useFakeTimers();
 	axiosMock.post.mockReset();
 	axiosMock.put.mockReset();
 	axiosMock.defaults.proxy = true;
+	fakeClientState.connectImpl = null;
+	fakeClientState.disconnectImpl = null;
 	fakeClientState.instances.length = 0;
 });
 
@@ -432,11 +483,12 @@ describe("dingtalk", () => {
 		expect(results).toEqual([true, true, true, true, true, true, false]);
 		expect(handler.handleEvent).toHaveBeenCalledTimes(1);
 
-		const disconnect = vi.fn(async () => {});
-		(bot as unknown as { client: { disconnect: () => Promise<void> } }).client = { disconnect };
+		const socket = createSocketMock(1);
+		(bot as unknown as { client: { socket: typeof socket } }).client = { socket };
 
 		await bot.stop();
-		expect(disconnect).toHaveBeenCalledTimes(1);
+		expect(socket.removeAllListeners).toHaveBeenCalledTimes(1);
+		expect(socket.close).toHaveBeenCalledTimes(1);
 		expect(bot.enqueueEvent(event(8))).toBe(false);
 
 		expect(releaseCurrent).not.toBeNull();
@@ -473,6 +525,7 @@ describe("dingtalk", () => {
 		await bot.start();
 		expect(axiosMock.defaults.proxy).toBe(true);
 		const client = fakeClientState.instances[0];
+		expect(client.config.autoReconnect).toBe(false);
 		expect(client.connect).toHaveBeenCalledTimes(1);
 
 		const closeHandler = client.socket.on.mock.calls.find((call) => call[0] === "close")?.[1] as
@@ -489,6 +542,62 @@ describe("dingtalk", () => {
 		closeHandler!(1006, "third");
 		await bot.stop();
 		await vi.advanceTimersByTimeAsync(1000);
+		await flushMicrotasks();
+		expect(client.connect).toHaveBeenCalledTimes(2);
+	});
+
+	it("force-cleans stale sockets before reconnecting", async () => {
+		const { bot } = createBot();
+
+		await bot.start();
+		const client = fakeClientState.instances[0];
+		const staleSocket = client.socket;
+		staleSocket.readyState = 0;
+		staleSocket.close.mockImplementation(() => {
+			// Simulate a half-open socket that ignores normal close.
+		});
+
+		const reconnectPromise = (bot as unknown as { doReconnect: (immediate?: boolean) => Promise<boolean> }).doReconnect(
+			true,
+		);
+		await vi.advanceTimersByTimeAsync(1000);
+		await reconnectPromise;
+
+		expect(staleSocket.removeAllListeners).toHaveBeenCalledTimes(1);
+		expect(staleSocket.close).toHaveBeenCalledTimes(1);
+		expect(staleSocket.terminate).toHaveBeenCalledTimes(1);
+		expect(client.connect).toHaveBeenCalledTimes(2);
+	});
+
+	it("times out hanging connect attempts and allows a later retry", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		let hangingSocket: ReturnType<typeof createSocketMock> | null = null;
+		fakeClientState.connectImpl = (client) => {
+			hangingSocket = createSocketMock(0);
+			hangingSocket.close.mockImplementation(() => {
+				// Simulate a socket that ignores graceful close until forced.
+			});
+			client.socket = hangingSocket;
+			return new Promise<void>(() => {});
+		};
+
+		const { bot } = createBot();
+		const startPromise = bot.start();
+		const client = fakeClientState.instances[0];
+		await vi.advanceTimersByTimeAsync(11_250);
+		await startPromise;
+
+		expect(hangingSocket).not.toBeNull();
+		expect(hangingSocket!.close).toHaveBeenCalledTimes(1);
+		expect(hangingSocket!.terminate).toHaveBeenCalledTimes(1);
+		expect(client.connect).toHaveBeenCalledTimes(1);
+
+		fakeClientState.connectImpl = (state) => {
+			state.socket = createSocketMock(1);
+			return Promise.resolve();
+		};
+
+		await vi.advanceTimersByTimeAsync(2_000);
 		await flushMicrotasks();
 		expect(client.connect).toHaveBeenCalledTimes(2);
 	});
