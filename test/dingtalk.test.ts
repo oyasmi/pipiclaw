@@ -557,9 +557,9 @@ describe("dingtalk", () => {
 			// Simulate a half-open socket that ignores normal close.
 		});
 
-		const reconnectPromise = (bot as unknown as { doReconnect: (immediate?: boolean) => Promise<boolean> }).doReconnect(
-			true,
-		);
+		const reconnectPromise = (
+			bot as unknown as { doReconnect: (immediate?: boolean) => Promise<boolean> }
+		).doReconnect(true);
 		await vi.advanceTimersByTimeAsync(1000);
 		await reconnectPromise;
 

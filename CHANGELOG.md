@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-04-14
+
+### Added
+
+- CLI now supports `--version`, printing the current Pipiclaw version and exiting immediately
+- Runtime documentation now includes clearer scaling, concurrency, and DingTalk Stream reconnect guidance for long-lived deployments
+
+### Changed
+
+- Build and runtime dependencies were trimmed by removing redundant packages and replacing `chalk`/`shx` usage with built-in Node.js capabilities, reducing install size and lockfile churn
+
+### Fixed
+
+- DingTalk Stream reconnect handling now uses Pipiclaw as the single reconnect owner, disabling SDK auto-reconnect to avoid competing reconnect loops
+- Stream socket cleanup is now deterministic during reconnect and shutdown, with forced termination for stale sockets that do not close cleanly
+- Hanging DingTalk Stream connect attempts now time out instead of wedging the reconnect loop indefinitely under unstable network conditions
+
 ## [0.6.2] - 2026-04-11
 
 ### Added
