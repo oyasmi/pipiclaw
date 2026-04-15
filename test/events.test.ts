@@ -480,6 +480,24 @@ describe("EventsWatcher", () => {
 			).toThrow("Missing or empty 'preAction.command'");
 		});
 
+		it.each([0, -1])("rejects action with non-positive timeout %s in parseEvent", (timeout) => {
+			const dir = createTempDir();
+			const watcher = createWatcher(dir);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			expect(() =>
+				privateApi.parseEvent(
+					JSON.stringify({
+						type: "immediate",
+						channelId: "dm_1",
+						text: "hello",
+						preAction: { type: "bash", command: "true", timeout },
+					}),
+					"invalid-timeout.json",
+				),
+			).toThrow("Invalid 'preAction.timeout'");
+		});
+
 		it("parses valid action in event payload", () => {
 			const dir = createTempDir();
 			const watcher = createWatcher(dir);

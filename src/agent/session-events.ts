@@ -268,7 +268,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	}
 
 	if (isAutoCompactionStartEvent(event)) {
-		const label = event.reason === "manual" ? "Compacting context..." : "Compacting context...";
+		const label = "Compacting context...";
 		log.logInfo(`Compaction started (reason: ${event.reason})`);
 		queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", label), false), "compaction start");
 		return;

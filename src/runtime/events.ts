@@ -231,6 +231,11 @@ export class EventsWatcher {
 		if (typeof action.command !== "string" || action.command.trim().length === 0) {
 			throw new Error(`Missing or empty 'preAction.command' in ${filename}`);
 		}
+		if (action.timeout !== undefined) {
+			if (typeof action.timeout !== "number" || !Number.isFinite(action.timeout) || action.timeout <= 0) {
+				throw new Error(`Invalid 'preAction.timeout' in ${filename}, expected a positive millisecond value`);
+			}
+		}
 
 		return {
 			type: "bash",

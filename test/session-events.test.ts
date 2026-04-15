@@ -104,4 +104,34 @@ describe("session compaction events", () => {
 
 		expect(runState.lastCompactionError).toBeUndefined();
 	});
+
+	it.each(["manual", "threshold", "overflow"] as const)(
+		"uses the same compaction progress label for %s starts",
+		async (reason) => {
+			const respond = vi.fn(async () => {});
+			const ctx = createContext(respond);
+			const runState = createEmptyRunState();
+
+			await handleSessionEvent(
+				{
+					type: "compaction_start",
+					reason,
+				},
+				{
+					ctx,
+					logCtx: { channelId: "dm_tester", userName: "Tester" },
+					queue: createQueue(),
+					pendingTools: new Map(),
+					store: null,
+					runState,
+					memoryLifecycle: {
+						noteToolCall() {},
+						noteCompletedAssistantTurn() {},
+					} as never,
+				},
+			);
+
+			expect(respond).toHaveBeenCalledWith("Compacting context...", false);
+		},
+	);
 });
