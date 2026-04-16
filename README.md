@@ -133,8 +133,10 @@ Pipiclaw 当前已经内置一轮工具层安全增强：
 Windows 补充说明：
 
 - Pipiclaw 的工具执行层默认按 POSIX shell 语义工作
-- 在 Windows host 模式下，建议安装 Git Bash，并确保 `bash` 可在 PATH 中找到
-- 如果 `bash` 不在 PATH 中，可以设置 `PIPICLAW_SHELL` 指向具体可执行文件，例如 `C:\Program Files\Git\bin\bash.exe`
+- 推荐在 Windows 上使用 WSL2 安装和运行 Pipiclaw
+- 不推荐直接在 Windows host 模式下配合 Git Bash 使用；这种方式在工具调用中更容易遇到兼容性问题，尤其是 skills 依赖的外部工具
+- 仅在无法使用 WSL2 时，再考虑安装 Git Bash，并确保 `bash` 可在 PATH 中找到
+- 如果 Windows host 模式下 `bash` 不在 PATH 中，可以设置 `PIPICLAW_SHELL` 指向具体可执行文件，例如 `C:\Program Files\Git\bin\bash.exe`
 - 如果你不想依赖本机 shell 环境，推荐直接使用 Docker sandbox
 
 #### 2. 安装（Install）
@@ -178,7 +180,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 
 设置后，`channel.json`、`auth.json`、`models.json`、`settings.json`、`tools.json` 和整个 `workspace/` 都会改为从这个目录读取和写入。
 
-如果你在 Windows host 模式下运行，并且 `bash` 不在 PATH 中，也可以一并设置：
+如果你无法使用 WSL2，选择在 Windows host 模式下配合 Git Bash 运行，并且 `bash` 不在 PATH 中，也可以一并设置：
 
 ```powershell
 $env:PIPICLAW_SHELL = "C:\Program Files\Git\bin\bash.exe"
