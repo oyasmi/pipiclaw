@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-04-19
+
 ### 新增
 
 - **记忆成长与召回引擎**：对 Pipiclaw 长期记忆和程序化记忆（Procedural Memory）的全面升级
@@ -25,6 +27,9 @@
 - 记忆召回 rerank 默认改为 `"auto"`，本地排序置信度高时不调用模型，只在候选接近且问题明显依赖历史/偏好/决策时使用模型 rerank
 - `session_search` 的模型摘要默认保持关闭，并且在空 query、无结果或短 preview 时即使开启也会跳过 LLM 摘要
 - 为回合内的多次会话日志搜索添加了 30 秒 TTL 的语料缓存，显著加速同回合检索
+- `memoryGrowth.minSkillAutoWriteConfidence` 现在会尊重更严格的用户配置，同时对 workspace skill 自动写入保留 `0.9` 的安全下限
+- 清理了调度器接管后不再使用的旧 memory lifecycle wiring，并从公共 API 中移除了废弃的 `runBackgroundMaintenance` wrapper
+- `skill_list` 现在改用异步文件系统 API，与其他 workspace skill 工具保持一致
 
 ### 修复
 
@@ -33,6 +38,11 @@
 - 修复了原子写入时的竞争条件，避免因时间戳漂移导致失败回滚时残留临时文件
 - 限制频道会话语料库最大加载量为 5000 条，防止超大耗时频道触发宿主机内存风险
 - 删除了已经失效的旧 idle timer lifecycle 测试，并围绕新的 scheduled-maintenance 模型更新了记忆测试
+- 修复 scheduler 的 channel 选择逻辑，避免活跃 channel 消耗唯一的 per-tick 维护名额而跳过其他可维护 channel
+- 修复 `session_search` 构建语料时重复处理 `context.jsonl` 的问题
+- 修复 review log rotation，使触发轮转的新 entry 保留在 active log 中
+- 统一 memory 与 skill 的原子写入实现，在失败时清理临时文件，并统一 memory 侧串行队列实现
+- 更新 session-memory E2E 测试，使其通过内置 memory scheduler 验证 scheduled `SESSION.md` refresh 路径
 
 ## [0.6.3] - 2026-04-14
 

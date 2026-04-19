@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-04-19
+
 ### Added
 
 - **Memory Growth and Recall Engine**: a comprehensive upgrade to Pipiclaw's long-term and procedural memory
@@ -25,6 +27,9 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Memory recall reranking now defaults to `"auto"`, using local scoring when confidence is high and reserving model rerank for ambiguous memory-sensitive queries
 - `session_search` model summaries remain disabled by default and now skip LLM summarization for empty queries, no-result searches, and short previews
 - Accelerated intra-turn session transcript searches with a 30-second TTL corpus cache
+- `memoryGrowth.minSkillAutoWriteConfidence` now honors stricter user overrides while enforcing a `0.9` safety floor for workspace skill auto-writes
+- Cleaned up obsolete pre-scheduler memory lifecycle wiring and removed the retired `runBackgroundMaintenance` wrapper from the public API
+- `skill_list` now uses async filesystem APIs, matching the other workspace skill tools
 
 ### Fixed
 
@@ -33,6 +38,11 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Resolved a timestamp drift race condition that could leak temporary files during atomic memory and skill writes
 - Constrained channel session corpus loading to a maximum of 5000 turns to safeguard host memory limits
 - Removed obsolete lifecycle tests for the retired idle timer and refreshed memory tests around the new scheduled-maintenance model
+- Fixed scheduler channel selection so active channels no longer consume the only per-tick maintenance slot when other channels are eligible
+- Fixed duplicate `context.jsonl` processing in `session_search` corpus building
+- Fixed review log rotation so the entry that triggers rotation remains in the active log
+- Centralized memory and skill atomic writes with temp-file cleanup on failure, and centralized memory-side serial queues
+- Updated the session-memory E2E test to exercise scheduled `SESSION.md` refresh through the internal memory scheduler
 
 
 ## [0.6.3] - 2026-04-14
