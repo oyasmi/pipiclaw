@@ -49,7 +49,13 @@ class ChannelDeliveryController {
 			respondPlain: async (text: string, shouldLog = true) => this.sendFinal(text, shouldLog),
 			replaceMessage: async (text: string) => this.replaceWithFinal(text),
 			respondInThread: async (text: string) => {
-				log.logInfo(`[thread] ${text.substring(0, 200)}`);
+				if (!text.trim()) {
+					return;
+				}
+				const delivered = await this.bot.sendPlain(this.event.channelId, text);
+				if (!delivered) {
+					log.logWarning(`[${this.event.channelId}] Failed to send light notice`, text.substring(0, 200));
+				}
 			},
 			setTyping: async (_isTyping: boolean) => {},
 			setWorking: async (_working: boolean) => {},

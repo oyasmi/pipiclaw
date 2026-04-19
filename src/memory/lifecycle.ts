@@ -9,7 +9,7 @@ import type {
 	SessionSwitchEvent,
 } from "@mariozechner/pi-coding-agent";
 import * as log from "../log.js";
-import type { PipiclawSessionMemorySettings } from "../settings.js";
+import type { PipiclawMemoryGrowthSettings, PipiclawSessionMemorySettings } from "../settings.js";
 import {
 	type BackgroundMaintenanceResult,
 	type ConsolidationRunOptions,
@@ -17,6 +17,8 @@ import {
 	runBackgroundMaintenance,
 	runInlineConsolidation,
 } from "./consolidation.js";
+import { runPostTurnReview } from "./post-turn-review.js";
+import { appendMemoryReviewLog } from "./review-log.js";
 import { updateChannelSessionMemory } from "./session.js";
 
 const IDLE_CONSOLIDATION_DELAY_MS = 60_000;
@@ -31,6 +33,12 @@ export interface MemoryLifecycleOptions {
 	getModel: () => Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	getSessionMemorySettings: () => PipiclawSessionMemorySettings;
+	getMemoryGrowthSettings?: () => PipiclawMemoryGrowthSettings;
+	getWorkspaceDir?: () => string;
+	getWorkspacePath?: () => string;
+	getLoadedSkills?: () => Array<{ name: string; description?: string }>;
+	emitNotice?: (notice: string) => Promise<void>;
+	refreshWorkspaceResources?: () => Promise<void>;
 }
 
 interface SessionMemoryRefreshRequest {
@@ -52,6 +60,10 @@ export class MemoryLifecycle {
 	private lastDurableConsolidationRevision = 0;
 	private idleConsolidationTimer: ReturnType<typeof setTimeout> | null = null;
 	private idleConsolidationQueued = false;
+	private postTurnReviewQueued = false;
+	private postTurnReviewHadActions = false;
+	private turnsSinceLastReview = 0;
+	private toolCallsSinceLastReview = 0;
 
 	constructor(private options: MemoryLifecycleOptions) {}
 
@@ -90,6 +102,7 @@ export class MemoryLifecycle {
 		this.durableDirty = true;
 		this.durableRevision++;
 		this.toolCallsSinceSessionUpdate++;
+		this.toolCallsSinceLastReview++;
 		this.clearIdleConsolidationTimer();
 	}
 
@@ -97,6 +110,7 @@ export class MemoryLifecycle {
 		this.durableDirty = true;
 		this.durableRevision++;
 		this.lastAssistantTurnRevision = this.durableRevision;
+		this.turnsSinceLastReview++;
 
 		const settings = this.options.getSessionMemorySettings();
 		if (settings.enabled) {
@@ -116,6 +130,7 @@ export class MemoryLifecycle {
 		}
 
 		this.scheduleIdleConsolidation();
+		this.schedulePostTurnReviewIfDue();
 	}
 
 	async flushForShutdown(): Promise<void> {
@@ -252,6 +267,50 @@ export class MemoryLifecycle {
 		);
 	}
 
+	private async appendReviewLog(entry: {
+		reason: ConsolidationReason;
+		actions?: unknown[];
+		skipped?: unknown[];
+		error?: string;
+	}): Promise<void> {
+		try {
+			await appendMemoryReviewLog(this.options.channelDir, {
+				timestamp: new Date().toISOString(),
+				channelId: this.options.channelId,
+				...entry,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			log.logWarning(`[${this.options.channelId}] Failed to write memory review log`, message);
+		}
+	}
+
+	private async recordConsolidationReview(
+		reason: ConsolidationReason,
+		result: InlineConsolidationResult,
+	): Promise<void> {
+		if (result.skipped) {
+			await this.appendReviewLog({
+				reason,
+				skipped: [{ target: "consolidation", reason: "no meaningful snapshot" }],
+			});
+			return;
+		}
+
+		const actions: unknown[] = [];
+		const skipped: unknown[] = [];
+		if (result.appendedMemoryEntries > 0) {
+			actions.push({ target: "MEMORY.md", action: "append", entries: result.appendedMemoryEntries });
+		}
+		if (result.appendedHistoryBlock) {
+			actions.push({ target: "HISTORY.md", action: "append" });
+		} else if (reason === "idle") {
+			skipped.push({ target: "HISTORY.md", reason: "idle does not write HISTORY.md" });
+		}
+
+		await this.appendReviewLog({ reason, actions, skipped });
+	}
+
 	private scheduleIdleConsolidation(): void {
 		this.clearIdleConsolidationTimer();
 		if (!this.hasPendingAssistantSnapshot() || this.idleConsolidationQueued) {
@@ -268,16 +327,34 @@ export class MemoryLifecycle {
 			const messageSnapshot = [...this.options.getMessages()];
 			const sessionEntrySnapshot = [...this.options.getSessionEntries()];
 			const revisionSnapshot = this.durableRevision;
+			const skipMemoryExtraction = this.postTurnReviewHadActions;
 			this.enqueueDurableMemoryJob(async () => {
 				try {
-					log.logInfo(`[${this.options.channelId}] Memory consolidation starting (idle)`);
-					const result = await runInlineConsolidation(this.buildRunOptions(messageSnapshot, sessionEntrySnapshot));
-					this.markDurableConsolidationCheckpoint(revisionSnapshot);
-					this.logConsolidationResult("idle", result);
+					if (skipMemoryExtraction) {
+						log.logInfo(
+							`[${this.options.channelId}] Idle consolidation skipping memory extraction (post-turn review already applied)`,
+						);
+						this.markDurableConsolidationCheckpoint(revisionSnapshot);
+						await this.recordConsolidationReview("idle", {
+							skipped: true,
+							appendedMemoryEntries: 0,
+							appendedHistoryBlock: false,
+						});
+					} else {
+						log.logInfo(`[${this.options.channelId}] Memory consolidation starting (idle)`);
+						const result = await runInlineConsolidation({
+							...this.buildRunOptions(messageSnapshot, sessionEntrySnapshot),
+							mode: "idle",
+						});
+						this.markDurableConsolidationCheckpoint(revisionSnapshot);
+						this.logConsolidationResult("idle", result);
+						await this.recordConsolidationReview("idle", result);
+					}
 					const maintenance = await runBackgroundMaintenance(
 						this.buildRunOptions(messageSnapshot, sessionEntrySnapshot),
 					);
 					this.logBackgroundResult(maintenance);
+					this.postTurnReviewHadActions = false;
 				} finally {
 					this.idleConsolidationQueued = false;
 					if (this.durableDirty) {
@@ -286,6 +363,77 @@ export class MemoryLifecycle {
 				}
 			}, `[${this.options.channelId}] Memory consolidation failed (idle)`);
 		}, IDLE_CONSOLIDATION_DELAY_MS);
+	}
+
+	private canRunPostTurnReview(): boolean {
+		const growthSettings = this.options.getMemoryGrowthSettings?.();
+		return Boolean(
+			growthSettings?.postTurnReviewEnabled &&
+				this.options.getWorkspaceDir &&
+				this.options.getWorkspacePath &&
+				this.options.getLoadedSkills,
+		);
+	}
+
+	private schedulePostTurnReviewIfDue(): void {
+		if (!this.canRunPostTurnReview() || this.postTurnReviewQueued) {
+			return;
+		}
+		const growthSettings = this.options.getMemoryGrowthSettings?.();
+		if (!growthSettings) {
+			return;
+		}
+		if (
+			this.turnsSinceLastReview < growthSettings.minTurnsBetweenReview &&
+			this.toolCallsSinceLastReview < growthSettings.minToolCallsBetweenReview
+		) {
+			return;
+		}
+
+		this.postTurnReviewQueued = true;
+		this.turnsSinceLastReview = 0;
+		this.toolCallsSinceLastReview = 0;
+		const messageSnapshot = [...this.options.getMessages()];
+		this.enqueueDurableMemoryJob(async () => {
+			try {
+				const currentGrowthSettings = this.options.getMemoryGrowthSettings?.();
+				const workspaceDir = this.options.getWorkspaceDir?.();
+				const workspacePath = this.options.getWorkspacePath?.();
+				if (!currentGrowthSettings?.postTurnReviewEnabled || !workspaceDir || !workspacePath) {
+					return;
+				}
+				const result = await runPostTurnReview({
+					channelId: this.options.channelId,
+					channelDir: this.options.channelDir,
+					workspaceDir,
+					workspacePath,
+					messages: messageSnapshot,
+					model: this.options.getModel(),
+					resolveApiKey: this.options.resolveApiKey,
+					timeoutMs: this.options.getSessionMemorySettings().timeoutMs,
+					autoWriteChannelMemory: currentGrowthSettings.autoWriteChannelMemory,
+					autoWriteWorkspaceSkills: currentGrowthSettings.autoWriteWorkspaceSkills,
+					minMemoryAutoWriteConfidence: currentGrowthSettings.minMemoryAutoWriteConfidence,
+					minSkillAutoWriteConfidence: currentGrowthSettings.minSkillAutoWriteConfidence,
+					loadedSkills: this.options.getLoadedSkills?.() ?? [],
+					emitNotice: this.options.emitNotice,
+					refreshWorkspaceResources: this.options.refreshWorkspaceResources,
+				});
+				if (result.actions.length > 0) {
+					this.postTurnReviewHadActions = true;
+				}
+				if (result.actions.length > 0 || result.suggestions.length > 0 || result.skipped.length > 0) {
+					log.logInfo(
+						`[${this.options.channelId}] Post-turn memory review complete: actions=${result.actions.length}, suggestions=${result.suggestions.length}, skipped=${result.skipped.length}`,
+					);
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				log.logWarning(`[${this.options.channelId}] Post-turn memory review failed`, message);
+			} finally {
+				this.postTurnReviewQueued = false;
+			}
+		}, `[${this.options.channelId}] Post-turn memory review failed`);
 	}
 
 	private async runPreflightConsolidation(
@@ -326,12 +474,21 @@ export class MemoryLifecycle {
 
 		try {
 			log.logInfo(`[${this.options.channelId}] Memory consolidation starting (${reason})`);
-			const result = await runInlineConsolidation(this.buildRunOptions(messageSnapshot, sessionEntrySnapshot));
+			const result = await runInlineConsolidation({
+				...this.buildRunOptions(messageSnapshot, sessionEntrySnapshot),
+				mode: "boundary",
+			});
 			this.markDurableConsolidationCheckpoint(revisionSnapshot);
 			this.logConsolidationResult(reason, result);
+			await this.recordConsolidationReview(reason, result);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			log.logWarning(`[${this.options.channelId}] Memory consolidation failed (${reason})`, message);
+			await this.appendReviewLog({
+				reason,
+				error: message,
+				skipped: [{ target: "consolidation", reason: "failed" }],
+			});
 		}
 	}
 

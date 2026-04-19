@@ -106,6 +106,40 @@ describe("memory-consolidation integration", () => {
 		expect(history).toContain("Investigated callback state handling.");
 	});
 
+	it("does not append a history block during idle consolidation", async () => {
+		const channelDir = createChannelDir();
+		setupChannelFiles(channelDir, {
+			memory: "# Channel Memory\n",
+			session: "# Session Title\n\nFix login regression\n",
+			history: "# Channel History\n",
+		});
+		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
+			rawText:
+				'{"memoryEntries":["OAuth callback regression is a durable channel issue"],"historyBlock":"- Should be ignored during idle."}',
+			output:
+				'{"memoryEntries":["OAuth callback regression is a durable channel issue"],"historyBlock":"- Should be ignored during idle."}',
+		});
+
+		const result = await runInlineConsolidation({
+			channelDir,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+			messages: [
+				createUserMessage("Please fix the login callback regression."),
+				createAssistantMessage("I am tracing the callback state flow in src/auth.ts."),
+			],
+			mode: "idle",
+		});
+
+		expect(result.skipped).toBe(false);
+		expect(result.appendedMemoryEntries).toBe(1);
+		expect(result.appendedHistoryBlock).toBe(false);
+		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).toContain(
+			"OAuth callback regression is a durable channel issue",
+		);
+		expect(readFileSync(join(channelDir, "HISTORY.md"), "utf-8")).not.toContain("Should be ignored during idle.");
+	});
+
 	it("uses the latest compaction boundary when session entries are provided", async () => {
 		const channelDir = createChannelDir();
 		setupChannelFiles(channelDir);

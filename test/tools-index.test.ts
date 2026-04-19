@@ -9,6 +9,10 @@ const {
 	createWriteToolMock,
 	createWebSearchToolMock,
 	createWebFetchToolMock,
+	createSessionSearchToolMock,
+	createSkillListToolMock,
+	createSkillViewToolMock,
+	createSkillManageToolMock,
 	createSubAgentToolMock,
 } = vi.hoisted(() => ({
 	createReadToolMock: vi.fn(() => ({ name: "read" })),
@@ -17,6 +21,10 @@ const {
 	createWriteToolMock: vi.fn(() => ({ name: "write" })),
 	createWebSearchToolMock: vi.fn(() => ({ name: "web_search" })),
 	createWebFetchToolMock: vi.fn(() => ({ name: "web_fetch" })),
+	createSessionSearchToolMock: vi.fn(() => ({ name: "session_search" })),
+	createSkillListToolMock: vi.fn(() => ({ name: "skill_list" })),
+	createSkillViewToolMock: vi.fn(() => ({ name: "skill_view" })),
+	createSkillManageToolMock: vi.fn(() => ({ name: "skill_manage" })),
 	createSubAgentToolMock: vi.fn(() => ({ name: "subagent" })),
 }));
 
@@ -68,6 +76,16 @@ const toolsConfig = {
 				defaultExtractMode: "markdown",
 			},
 		},
+		memory: {
+			sessionSearch: {
+				enabled: true,
+			},
+		},
+		skills: {
+			manage: {
+				enabled: true,
+			},
+		},
 	},
 };
 
@@ -77,6 +95,10 @@ vi.mock("../src/tools/edit.js", () => ({ createEditTool: createEditToolMock }));
 vi.mock("../src/tools/write.js", () => ({ createWriteTool: createWriteToolMock }));
 vi.mock("../src/tools/web-search.js", () => ({ createWebSearchTool: createWebSearchToolMock }));
 vi.mock("../src/tools/web-fetch.js", () => ({ createWebFetchTool: createWebFetchToolMock }));
+vi.mock("../src/tools/session-search.js", () => ({ createSessionSearchTool: createSessionSearchToolMock }));
+vi.mock("../src/tools/skill-list.js", () => ({ createSkillListTool: createSkillListToolMock }));
+vi.mock("../src/tools/skill-view.js", () => ({ createSkillViewTool: createSkillViewToolMock }));
+vi.mock("../src/tools/skill-manage.js", () => ({ createSkillManageTool: createSkillManageToolMock }));
 vi.mock("../src/subagents/tool.js", () => ({ createSubAgentTool: createSubAgentToolMock }));
 vi.mock("../src/security/config.js", () => ({ loadSecurityConfig: vi.fn(() => securityConfig) }));
 vi.mock("../src/tools/config.js", () => ({ loadToolsConfig: vi.fn(() => toolsConfig) }));
@@ -97,6 +119,10 @@ describe("tools index", () => {
 		createWriteToolMock.mockClear();
 		createWebSearchToolMock.mockClear();
 		createWebFetchToolMock.mockClear();
+		createSessionSearchToolMock.mockClear();
+		createSkillListToolMock.mockClear();
+		createSkillViewToolMock.mockClear();
+		createSkillManageToolMock.mockClear();
 		createSubAgentToolMock.mockClear();
 	});
 
@@ -120,10 +146,28 @@ describe("tools index", () => {
 				maxChars: 3500,
 				rerankWithModel: false,
 			})),
+			getSessionSearchSettings: vi.fn(() => ({
+				enabled: true,
+				maxFiles: 12,
+				maxChunks: 80,
+				maxCharsPerChunk: 1200,
+				summarizeWithModel: false,
+				timeoutMs: 12000,
+			})),
 			memoryCandidateStore: createMemoryCandidateStore(),
 		});
 
-		expect(tools.map((tool) => tool.name)).toEqual(["read", "bash", "edit", "write", "subagent"]);
+		expect(tools.map((tool) => tool.name)).toEqual([
+			"read",
+			"bash",
+			"edit",
+			"write",
+			"session_search",
+			"skill_list",
+			"skill_view",
+			"skill_manage",
+			"subagent",
+		]);
 		expect(createWebSearchToolMock).not.toHaveBeenCalled();
 		expect(createWebFetchToolMock).not.toHaveBeenCalled();
 		toolsConfig.tools.web.enable = true;
@@ -158,6 +202,14 @@ describe("tools index", () => {
 				maxChars: 3500,
 				rerankWithModel: false,
 			})),
+			getSessionSearchSettings: vi.fn(() => ({
+				enabled: true,
+				maxFiles: 12,
+				maxChunks: 80,
+				maxCharsPerChunk: 1200,
+				summarizeWithModel: false,
+				timeoutMs: 12000,
+			})),
 			memoryCandidateStore: createMemoryCandidateStore(),
 		};
 
@@ -170,6 +222,10 @@ describe("tools index", () => {
 			"write",
 			"web_search",
 			"web_fetch",
+			"session_search",
+			"skill_list",
+			"skill_view",
+			"skill_manage",
 			"subagent",
 		]);
 		expect(createReadToolMock).toHaveBeenCalledWith(executor, {

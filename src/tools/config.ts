@@ -34,6 +34,16 @@ export interface PipiclawWebToolsConfig {
 export interface PipiclawToolsConfig {
 	tools: {
 		web: PipiclawWebToolsConfig;
+		memory: {
+			sessionSearch: {
+				enabled: boolean;
+			};
+		};
+		skills: {
+			manage: {
+				enabled: boolean;
+			};
+		};
 	};
 }
 
@@ -64,6 +74,16 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 				preferJina: false,
 				enableJinaFallback: false,
 				defaultExtractMode: "markdown",
+			},
+		},
+		memory: {
+			sessionSearch: {
+				enabled: true,
+			},
+		},
+		skills: {
+			manage: {
+				enabled: true,
 			},
 		},
 	},
@@ -120,6 +140,10 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 
 	const tools = isRecord(source.tools) ? source.tools : {};
 	const web = isRecord(tools.web) ? tools.web : {};
+	const memory = isRecord(tools.memory) ? tools.memory : {};
+	const sessionSearch = isRecord(memory.sessionSearch) ? memory.sessionSearch : {};
+	const skills = isRecord(tools.skills) ? tools.skills : {};
+	const manage = isRecord(skills.manage) ? skills.manage : {};
 	const search = isRecord(web.search) ? web.search : {};
 	const fetch = isRecord(web.fetch) ? web.fetch : {};
 
@@ -234,6 +258,22 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 						defaultExtractMode === "text" || defaultExtractMode === "markdown"
 							? defaultExtractMode
 							: DEFAULT_TOOLS_CONFIG.tools.web.fetch.defaultExtractMode,
+				},
+			},
+			memory: {
+				sessionSearch: {
+					enabled:
+						typeof sessionSearch.enabled === "boolean"
+							? sessionSearch.enabled
+							: DEFAULT_TOOLS_CONFIG.tools.memory.sessionSearch.enabled,
+				},
+			},
+			skills: {
+				manage: {
+					enabled:
+						typeof manage.enabled === "boolean"
+							? manage.enabled
+							: DEFAULT_TOOLS_CONFIG.tools.skills.manage.enabled,
 				},
 			},
 		},

@@ -88,6 +88,26 @@ export interface PipiclawSessionMemorySettings {
 	forceRefreshBeforeNewSession: boolean;
 }
 
+export interface PipiclawMemoryGrowthSettings {
+	postTurnReviewEnabled: boolean;
+	autoWriteChannelMemory: boolean;
+	autoWriteWorkspaceSkills: boolean;
+	minSkillAutoWriteConfidence: number;
+	minMemoryAutoWriteConfidence: number;
+	idleWritesHistory: boolean;
+	minTurnsBetweenReview: number;
+	minToolCallsBetweenReview: number;
+}
+
+export interface PipiclawSessionSearchSettings {
+	enabled: boolean;
+	maxFiles: number;
+	maxChunks: number;
+	maxCharsPerChunk: number;
+	summarizeWithModel: boolean;
+	timeoutMs: number;
+}
+
 export interface PipiclawSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -96,6 +116,8 @@ export interface PipiclawSettings {
 	retry?: Partial<PipiclawRetrySettings>;
 	memoryRecall?: Partial<PipiclawMemoryRecallSettings>;
 	sessionMemory?: Partial<PipiclawSessionMemorySettings>;
+	memoryGrowth?: Partial<PipiclawMemoryGrowthSettings>;
+	sessionSearch?: Partial<PipiclawSessionSearchSettings>;
 }
 
 const DEFAULT_COMPACTION: PipiclawCompactionSettings = {
@@ -126,6 +148,26 @@ const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
 	failureBackoffTurns: 3,
 	forceRefreshBeforeCompact: true,
 	forceRefreshBeforeNewSession: true,
+};
+
+const DEFAULT_MEMORY_GROWTH: PipiclawMemoryGrowthSettings = {
+	postTurnReviewEnabled: true,
+	autoWriteChannelMemory: true,
+	autoWriteWorkspaceSkills: true,
+	minSkillAutoWriteConfidence: 0.9,
+	minMemoryAutoWriteConfidence: 0.85,
+	idleWritesHistory: false,
+	minTurnsBetweenReview: 12,
+	minToolCallsBetweenReview: 24,
+};
+
+const DEFAULT_SESSION_SEARCH: PipiclawSessionSearchSettings = {
+	enabled: true,
+	maxFiles: 12,
+	maxChunks: 80,
+	maxCharsPerChunk: 1200,
+	summarizeWithModel: false,
+	timeoutMs: 12_000,
 };
 
 /**
@@ -233,6 +275,21 @@ export class PipiclawSettingsManager {
 		return {
 			...DEFAULT_SESSION_MEMORY,
 			...this.settings.sessionMemory,
+		};
+	}
+
+	getMemoryGrowthSettings(): PipiclawMemoryGrowthSettings {
+		return {
+			...DEFAULT_MEMORY_GROWTH,
+			...this.settings.memoryGrowth,
+			minSkillAutoWriteConfidence: 0.9,
+		};
+	}
+
+	getSessionSearchSettings(): PipiclawSessionSearchSettings {
+		return {
+			...DEFAULT_SESSION_SEARCH,
+			...this.settings.sessionSearch,
 		};
 	}
 

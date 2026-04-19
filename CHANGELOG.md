@@ -4,6 +4,29 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Added
+
+- **Memory Growth and Recall Engine**: a comprehensive upgrade to Pipiclaw's long-term and procedural memory
+  - **Session Search**: New `session_search` tool enabling the agent to search through cold-storage channel transcripts (`context.jsonl` and `log.jsonl`) to retrieve historical details
+  - **Post-Turn Review**: A dedicated background pipeline that evaluates turns for durable facts and procedural workflows, separating smart memory extraction from basic session maintenance
+  - **Procedural Memory (Skills)**: Agents can now actively create, patch, and manage workspace skills using new `skill_manage`, `skill_list`, and `skill_view` tools
+  - **Memory Audit Log**: Decisions on memory promotion, suggestion, and discarding are now transparently logged to `memory-review.jsonl` with automatic 1MB rotation
+
+### Changed
+
+- Hardened memory file boundaries: `MEMORY.md` is now strictly for durable facts and decisions, preventing transient task states from polluting long-term memory
+- Idle consolidation no longer indiscriminately writes to `HISTORY.md`, keeping history focused on chronological milestones rather than granular work logs
+- Decoupled idle consolidation and post-turn review to run on separate cadences, significantly reducing API costs while maintaining context quality
+- Accelerated intra-turn session transcript searches with a 30-second TTL corpus cache
+
+### Fixed
+
+- Strengthened skill execution security with expanded patterns to block prompt injection variants, `wget` pipe-to-shell, `dd`, `mkfs`, and credential file scanning
+- Hardened memory extraction JSON parsing to gracefully handle LLM-generated markdown code fences
+- Resolved a timestamp drift race condition that could leak temporary files during atomic memory and skill writes
+- Constrained channel session corpus loading to a maximum of 5000 turns to safeguard host memory limits
+
+
 ## [0.6.3] - 2026-04-14
 
 ### Added

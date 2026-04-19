@@ -31,7 +31,9 @@ const INLINE_CONSOLIDATION_TIMEOUT_MS = 20_000;
 const MEMORY_CLEANUP_TIMEOUT_MS = 120_000;
 const HISTORY_FOLDING_TIMEOUT_MS = 120_000;
 
-const INLINE_CONSOLIDATION_SYSTEM_PROMPT = `You are a runtime memory consolidation worker for Pipiclaw.
+export type ConsolidationMode = "idle" | "boundary";
+
+const BOUNDARY_INLINE_CONSOLIDATION_SYSTEM_PROMPT = `You are a runtime memory consolidation worker for Pipiclaw.
 
 Return strict JSON only. Do not wrap in Markdown fences.
 
@@ -42,11 +44,11 @@ Output schema:
 }
 
 Rules:
-- memoryEntries: concise durable facts, decisions, preferences, constraints, current work state, or open loops that should survive compaction.
+- memoryEntries: concise durable facts, decisions, preferences, constraints, or medium-horizon open loops that should survive compaction.
 - Each memoryEntries item must be a standalone sentence fragment suitable for a Markdown bullet without the bullet prefix.
 - Do not include raw transcript quotes unless essential.
 - Do not include ephemeral chatter, obvious one-shot acknowledgements, or formatting instructions.
-- Prefer leaving highly volatile step-by-step execution state in SESSION.md rather than promoting it into durable memory.
+- Leave active execution state, current step-by-step work, temporary debugging observations, and completed worklog in SESSION.md instead of promoting it into durable memory.
 - historyBlock: concise Markdown summarizing the conversation chunk for later recovery.
 - For any conversation that contains at least one meaningful user request and one meaningful assistant reply, return a non-empty historyBlock with at least one bullet.
 - Prefer short bullets and short paragraphs.
@@ -58,16 +60,40 @@ Example output for a short useful exchange:
   "historyBlock": "- User asked how to toggle dashboard theme; confirmed dark mode preference."
 }`;
 
+const IDLE_INLINE_CONSOLIDATION_SYSTEM_PROMPT = `You are a runtime memory consolidation worker for Pipiclaw.
+
+Return strict JSON only. Do not wrap in Markdown fences.
+
+Output schema:
+{
+  "memoryEntries": ["string"]
+}
+
+Rules:
+- This is an idle maintenance pass after a normal assistant turn.
+- Only return durable channel memory: stable facts, decisions, preferences, constraints, or medium-horizon open loops.
+- Do not summarize the exchange for HISTORY.md. Idle consolidation never writes HISTORY.md.
+- Do not duplicate content that is already present in the current SESSION.md or channel MEMORY.md shown below.
+- Do not include active execution state, temporary debugging observations, completed worklog, raw transcript quotes, acknowledgements, or formatting instructions.
+- Each memoryEntries item must be a standalone sentence fragment suitable for a Markdown bullet without the bullet prefix.
+- If there is nothing durable enough to store, return an empty memoryEntries array.
+
+Example output:
+{
+  "memoryEntries": ["User prefers dark mode in the dashboard"]
+}`;
+
 const MEMORY_CLEANUP_SYSTEM_PROMPT = `You are rewriting a Pipiclaw channel MEMORY.md file.
 
 Return Markdown only. Do not use code fences.
 
 Goals:
 - Keep only durable and useful channel memory.
-- Remove outdated entries, duplicates, and verbose phrasing.
+- Remove outdated entries, duplicates, verbose phrasing, transient working state, temporary debugging observations, and completed worklog.
 - Organize the result with stable sections where relevant.
 - Prefer concise bullets over prose.
 - Remove content that is clearly transient session-state and belongs in SESSION.md instead.
+- Do not preserve minute-level current task progress unless it is a durable decision, constraint, user preference, or medium-horizon open loop.
 
 Suggested sections:
 - ## Identity / Participants
@@ -95,6 +121,7 @@ export interface ConsolidationRunOptions {
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	messages: AgentMessage[];
 	sessionEntries?: SessionEntry[];
+	mode?: ConsolidationMode;
 }
 
 export interface InlineConsolidationResult {
@@ -200,6 +227,7 @@ async function buildInlineConsolidationResponse(
 	options: ConsolidationRunOptions,
 	messages: Message[],
 ): Promise<ConsolidationResponse> {
+	const mode = options.mode ?? "boundary";
 	const transcript = clipText(serializeConversation(messages), INLINE_TRANSCRIPT_MAX_CHARS, { headRatio: 0.35 });
 	const currentMemory = clipText(await readChannelMemory(options.channelDir), 8_000, { headRatio: 0.35 });
 	const currentSession = clipText(await readChannelSession(options.channelDir), 8_000, { headRatio: 0.35 });
@@ -221,7 +249,8 @@ ${transcript || "(empty)"}`;
 		name: "memory-inline-consolidation",
 		model: options.model,
 		resolveApiKey: options.resolveApiKey,
-		systemPrompt: INLINE_CONSOLIDATION_SYSTEM_PROMPT,
+		systemPrompt:
+			mode === "idle" ? IDLE_INLINE_CONSOLIDATION_SYSTEM_PROMPT : BOUNDARY_INLINE_CONSOLIDATION_SYSTEM_PROMPT,
 		prompt,
 		timeoutMs: INLINE_CONSOLIDATION_TIMEOUT_MS,
 		parse: (text) => text.trim(),
@@ -231,6 +260,7 @@ ${transcript || "(empty)"}`;
 }
 
 export async function runInlineConsolidation(options: ConsolidationRunOptions): Promise<InlineConsolidationResult> {
+	const mode = options.mode ?? "boundary";
 	const sourceEntries = options.sessionEntries ?? [];
 	const relevantEntries =
 		sourceEntries.length > 0 ? sourceEntries.slice(getLatestCompactionBoundary(sourceEntries)) : sourceEntries;
@@ -252,7 +282,7 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 		});
 	}
 
-	if (response.historyBlock.trim()) {
+	if (mode === "boundary" && response.historyBlock.trim()) {
 		await appendChannelHistoryBlock(options.channelDir, {
 			timestamp,
 			content: response.historyBlock,
@@ -262,7 +292,7 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 	return {
 		skipped: false,
 		appendedMemoryEntries: response.memoryEntries.length,
-		appendedHistoryBlock: response.historyBlock.trim().length > 0,
+		appendedHistoryBlock: mode === "boundary" && response.historyBlock.trim().length > 0,
 	};
 }
 

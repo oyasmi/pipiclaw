@@ -158,6 +158,23 @@ export class ChannelRunner implements AgentRunner {
 			getModel: () => this.session.model ?? this.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			getSessionMemorySettings: () => this.settingsManager.getSessionMemorySettings(),
+			getMemoryGrowthSettings: () => this.settingsManager.getMemoryGrowthSettings(),
+			getWorkspaceDir: () => this.workspaceDir,
+			getWorkspacePath: () => this.workspacePath,
+			getLoadedSkills: () =>
+				this.currentSkills.map((skill) => ({
+					name: skill.name,
+					description: skill.description,
+				})),
+			emitNotice: async (notice) => {
+				if (!this.runState.ctx) {
+					return;
+				}
+				await this.runState.ctx.respondInThread(notice);
+			},
+			refreshWorkspaceResources: async () => {
+				await this.refreshSessionResources();
+			},
 		});
 
 		const resourceLoader = new DefaultResourceLoader({
@@ -617,6 +634,7 @@ export class ChannelRunner implements AgentRunner {
 			sandboxConfig: this.sandboxConfig,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,
 			getMemoryRecallSettings: () => this.settingsManager.getMemoryRecallSettings(),
+			getSessionSearchSettings: () => this.settingsManager.getSessionSearchSettings(),
 			memoryCandidateStore: this.memoryCandidateStore,
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
@@ -646,6 +664,9 @@ export class ChannelRunner implements AgentRunner {
 				store: this.runState.store,
 				runState: this.runState,
 				memoryLifecycle: this.memoryLifecycle,
+				refreshSessionResources: async () => {
+					await this.refreshSessionResources();
+				},
 			});
 		});
 	}

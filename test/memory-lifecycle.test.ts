@@ -16,8 +16,22 @@ vi.mock("../src/memory/consolidation.js", () => ({
 	}),
 }));
 
+vi.mock("../src/memory/post-turn-review.js", () => ({
+	runPostTurnReview: vi.fn().mockResolvedValue({
+		actions: [],
+		suggestions: [],
+		skipped: [],
+		notices: [],
+	}),
+}));
+
+vi.mock("../src/memory/review-log.js", () => ({
+	appendMemoryReviewLog: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { runBackgroundMaintenance, runInlineConsolidation } from "../src/memory/consolidation.js";
 import { MemoryLifecycle } from "../src/memory/lifecycle.js";
+import { runPostTurnReview } from "../src/memory/post-turn-review.js";
 import { updateChannelSessionMemory } from "../src/memory/session.js";
 
 afterEach(() => {
@@ -112,6 +126,7 @@ describe("MemoryLifecycle", () => {
 		resolveUpdate?.();
 		await expect(beforeCompact).resolves.toBeUndefined();
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+		expect(runInlineConsolidation).toHaveBeenCalledWith(expect.objectContaining({ mode: "boundary" }));
 		expect(vi.mocked(updateChannelSessionMemory)).toHaveBeenCalledWith(
 			expect.objectContaining({
 				messages: compactionMessages,
@@ -280,10 +295,13 @@ describe("MemoryLifecycle", () => {
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
 
 		await vi.advanceTimersByTimeAsync(1_000);
-		await Promise.resolve();
+		vi.useRealTimers();
 
-		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-		expect(runBackgroundMaintenance).toHaveBeenCalledTimes(1);
+		await waitForAssertion(() => {
+			expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+			expect(runInlineConsolidation).toHaveBeenCalledWith(expect.objectContaining({ mode: "idle" }));
+			expect(runBackgroundMaintenance).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	it("cancels a pending idle consolidation when a new user turn starts", async () => {
@@ -380,5 +398,59 @@ describe("MemoryLifecycle", () => {
 		expect(vi.mocked(runBackgroundMaintenance).mock.invocationCallOrder[1]).toBeLessThan(
 			vi.mocked(runBackgroundMaintenance).mock.invocationCallOrder[2],
 		);
+	});
+
+	it("skips idle memory extraction when post-turn review already wrote actions", async () => {
+		vi.useFakeTimers();
+		vi.mocked(runPostTurnReview).mockResolvedValue({
+			actions: [{ target: "MEMORY.md", action: "append", content: "fact", reason: "stable" }],
+			suggestions: [],
+			skipped: [],
+			notices: ["已沉淀：更新 channel memory。"],
+		});
+
+		const lifecycle = new MemoryLifecycle({
+			channelId: "dm_123",
+			channelDir: "/tmp/dm_123",
+			getMessages: () => [{ role: "assistant", content: "live" }] as never[],
+			getSessionEntries: () => [],
+			getModel: () => ({ provider: "test", id: "noop" }) as never,
+			resolveApiKey: async () => "",
+			getSessionMemorySettings: () => createSettings({
+				minTurnsBetweenUpdate: 99,
+				minToolCallsBetweenUpdate: 99,
+				forceRefreshBeforeCompact: false,
+				forceRefreshBeforeNewSession: false,
+			}),
+			getMemoryGrowthSettings: () => ({
+				postTurnReviewEnabled: true,
+				autoWriteChannelMemory: true,
+				autoWriteWorkspaceSkills: false,
+				minSkillAutoWriteConfidence: 0.9,
+				minMemoryAutoWriteConfidence: 0.85,
+				idleWritesHistory: false,
+				minTurnsBetweenReview: 1,
+				minToolCallsBetweenReview: 1,
+			}),
+			getWorkspaceDir: () => "/tmp/workspace",
+			getWorkspacePath: () => "/workspace",
+			getLoadedSkills: () => [],
+		});
+
+		// Trigger a turn that schedules both post-turn review and idle consolidation
+		lifecycle.noteCompletedAssistantTurn();
+
+		// Advance past idle timer (60s) to trigger both review and idle consolidation
+		await vi.advanceTimersByTimeAsync(61_000);
+		vi.useRealTimers();
+
+		await waitForAssertion(() => {
+			expect(runPostTurnReview).toHaveBeenCalledTimes(1);
+			// Maintenance should still run even when memory extraction is skipped
+			expect(runBackgroundMaintenance).toHaveBeenCalledTimes(1);
+		});
+
+		// runInlineConsolidation should NOT have been called (skipped due to review actions)
+		expect(runInlineConsolidation).not.toHaveBeenCalled();
 	});
 });

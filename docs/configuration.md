@@ -608,6 +608,18 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 | `sessionMemory.failureBackoffTurns` | `3` | Yes | 失败后的回退轮数 |
 | `sessionMemory.forceRefreshBeforeCompact` | `true` | Yes | compaction 前强制刷新 |
 | `sessionMemory.forceRefreshBeforeNewSession` | `true` | Yes | `/new` 前强制刷新 |
+| `memoryGrowth.postTurnReviewEnabled` | `true` | Yes | 启用回合后记忆复盘 |
+| `memoryGrowth.autoWriteChannelMemory` | `true` | Yes | 高置信 durable fact 自动写入 channel `MEMORY.md` |
+| `memoryGrowth.autoWriteWorkspaceSkills` | `true` | Yes | 高置信 reusable workflow 自动写入 workspace `skills/` |
+| `memoryGrowth.minSkillAutoWriteConfidence` | `0.9` | Yes | workspace skill 自动写入阈值；当前固定为 `0.9` |
+| `memoryGrowth.minMemoryAutoWriteConfidence` | `0.85` | Yes | channel memory 自动写入阈值 |
+| `memoryGrowth.idleWritesHistory` | `false` | Reserved | idle consolidation 默认不写 `HISTORY.md` |
+| `sessionSearch.enabled` | `true` | Yes | 启用当前 channel transcript 冷路径搜索 |
+| `sessionSearch.maxFiles` | `12` | Yes | `session_search` 最多读取的当前 channel JSONL 文件数 |
+| `sessionSearch.maxChunks` | `80` | Yes | `session_search` 最多评分片段数 |
+| `sessionSearch.maxCharsPerChunk` | `1200` | Yes | 单个搜索片段字符上限 |
+| `sessionSearch.summarizeWithModel` | `false` | Yes | 是否用模型对搜索命中做 focused summary |
+| `sessionSearch.timeoutMs` | `12000` | Yes | 搜索摘要 sidecar 超时 |
 
 ### 在 Pipiclaw 中暂时不要依赖的 pi-mono 字段（Fields From pi-mono That You Should Not Rely On in Pipiclaw）
 
@@ -709,9 +721,37 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 - 当前模型上下文较大
 
+#### 5. 调整 memory growth 与冷路径检索
+
+```json
+{
+  "memoryGrowth": {
+    "postTurnReviewEnabled": true,
+    "autoWriteChannelMemory": true,
+    "autoWriteWorkspaceSkills": true,
+    "minMemoryAutoWriteConfidence": 0.85,
+    "minSkillAutoWriteConfidence": 0.9
+  },
+  "sessionSearch": {
+    "enabled": true,
+    "maxFiles": 12,
+    "maxChunks": 80,
+    "maxCharsPerChunk": 1200,
+    "summarizeWithModel": false,
+    "timeoutMs": 12000
+  }
+}
+```
+
+说明：
+
+- `postTurnReview` 的触发频率复用 `sessionMemory` 的 turn/tool-call 阈值。
+- `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
+- `minSkillAutoWriteConfidence` 当前固定为 `0.9`，用于避免低置信 workflow 污染 workspace skills。
+
 ## 内建工具配置文件 `tools.json`（`tools.json`）
 
-`tools.json` 用来配置 Pipiclaw 的内建工具能力。目前最主要的是 `tools.web`，也就是 `web_search` / `web_fetch`。
+`tools.json` 用来配置 Pipiclaw 的内建工具能力，包括 `web_search` / `web_fetch`、当前 channel 冷路径搜索，以及 workspace skill 管理工具。
 
 ### 启动后默认生成的模板（Bootstrap Template）
 
@@ -725,6 +765,16 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
         "provider": "brave",
         "apiKey": ""
       }
+    },
+    "memory": {
+      "sessionSearch": {
+        "enabled": true
+      }
+    },
+    "skills": {
+      "manage": {
+        "enabled": true
+      }
     }
   },
   "_examples": {
@@ -737,8 +787,10 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 这份模板的意图是：
 
 1. 默认不注册 `web_search` / `web_fetch`
-2. 给出一个可直接改造的 Brave 示例
-3. 给出可选代理示例，但默认不强行启用代理
+2. 默认注册当前 channel 的 `session_search`
+3. 默认注册 workspace skill 管理工具
+4. 给出一个可直接改造的 Brave 示例
+5. 给出可选代理示例，但默认不强行启用代理
 
 如果你要启用它，通常只需要：
 
@@ -775,6 +827,18 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 | `preferJina` | `false` | 是否优先使用 Jina Reader |
 | `enableJinaFallback` | `false` | 本地提取失败后是否允许回退到 Jina Reader |
 | `defaultExtractMode` | `"markdown"` | HTML 默认提取格式 |
+
+#### `tools.memory.sessionSearch`
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | `true` | 是否注册 `session_search` 工具。该工具只搜索当前 channel 的冷存储，不跨 channel |
+
+#### `tools.skills.manage`
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | `true` | 是否注册 `skill_list`、`skill_view`、`skill_manage`。这些工具只管理 workspace 级 skills |
 
 ### 常见示例（Common Examples）
 
@@ -889,7 +953,15 @@ web 工具的代理顺序是：
 
 ## 技能目录 `workspace/skills/`（`workspace/skills/`）
 
-放工作区级技能资源。当前 Pipiclaw 只加载 workspace 级技能摘要。
+放工作区级技能资源。Pipiclaw 只支持 workspace 级技能，不支持 channel 级 skills。
+
+相关工具：
+
+- `skill_list`：列出 workspace skills
+- `skill_view`：查看 `SKILL.md` 或允许的支持文件
+- `skill_manage`：创建、patch 或写入允许的支持文件
+
+`skill_manage` 会限制路径只能落在 `workspace/skills/<name>/` 下，支持文件只能在 `references/`、`templates/`、`scripts/`、`assets/` 内。高置信 post-turn review 也可能直接创建或更新 workspace skill；直接写入后会发送 DingTalk 轻提示，并写入 channel 的 `memory-review.jsonl`。
 
 ## 会话通道级运行时文件（Channel-Level Runtime Files）
 
@@ -909,7 +981,16 @@ web 工具的代理顺序是：
 | `HISTORY.md` | 更早上下文的摘要 |
 | `context.jsonl` | 会话事件冷存储 |
 | `log.jsonl` | 原始运行日志 |
+| `log.jsonl.1` | 原始运行日志的轮转备份，存在时可被 `session_search` 检索 |
+| `memory-review.jsonl` | 自动写回、suggestion、skipped 决策的审计文件 |
 | `subagent-runs.jsonl` | 子代理运行摘要 |
+
+记忆分层：
+
+- `SESSION.md`：当前工作态，由 runtime 维护。
+- `MEMORY.md`：durable channel facts、决策、偏好、约束和中期 open loops。
+- `HISTORY.md`：compaction、`/new`、shutdown 等边界上的旧阶段摘要；idle consolidation 默认不写它。
+- `context.jsonl` / `log.jsonl` / `log.jsonl.1`：冷存储，只通过 `session_search` 显式检索，不进入普通 turn-time recall。
 
 ## 按场景推荐的配置路径（Recommended Configuration Paths by Scenario）
 

@@ -47,6 +47,8 @@ describe("tools config", () => {
 
 		expect(loadToolsConfig(appHomeDir)).toEqual({
 			tools: {
+				memory: DEFAULT_TOOLS_CONFIG.tools.memory,
+				skills: DEFAULT_TOOLS_CONFIG.tools.skills,
 				web: {
 					...DEFAULT_TOOLS_CONFIG.tools.web,
 					enable: false,

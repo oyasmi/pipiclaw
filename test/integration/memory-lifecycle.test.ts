@@ -150,6 +150,7 @@ describe("memory-lifecycle integration", () => {
 			expect(session).toContain("Investigating callback state flow.");
 		});
 		expect(runRetriedSidecarTask).toHaveBeenCalledTimes(1);
+		lifecycle.noteUserTurnStarted();
 	});
 
 	it("persists durable memory after the conversation goes idle", async () => {
@@ -180,7 +181,10 @@ describe("memory-lifecycle integration", () => {
 			expect(await readChannelMemory(channelDir)).toContain(
 				"Callback verification must remain backwards-compatible",
 			);
-			expect(await readChannelHistory(channelDir)).toContain("Investigated callback verification flow.");
+			expect(await readChannelHistory(channelDir)).not.toContain("Investigated callback verification flow.");
+			expect(readFileSync(join(channelDir, "memory-review.jsonl"), "utf-8")).toContain(
+				"idle does not write HISTORY.md",
+			);
 		});
 	});
 
@@ -214,6 +218,7 @@ describe("memory-lifecycle integration", () => {
 
 		expect(runRetriedSidecarTask).toHaveBeenCalledTimes(1);
 		expect(await readChannelSession(channelDir)).toContain("Checked callback state serialization.");
+		lifecycle.noteUserTurnStarted();
 	});
 
 	it("runs the compaction chain in order: session refresh, memory append, history append", async () => {

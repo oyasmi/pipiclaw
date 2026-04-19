@@ -33,6 +33,15 @@ export interface SessionEventHandlerContext {
 	store: ChannelStore | null;
 	runState: RunState;
 	memoryLifecycle: MemoryLifecycle;
+	refreshSessionResources?: () => Promise<void>;
+}
+
+function isSkillManageDetails(value: unknown): value is {
+	kind: "skill_manage";
+	requiresResourceRefresh?: boolean;
+	notice?: string;
+} {
+	return isRecord(value) && value.kind === "skill_manage";
 }
 
 function mergeSubAgentUsage(totalUsage: UsageTotals, details: SubAgentToolDetails): void {
@@ -150,6 +159,16 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 					}) ?? Promise.resolve(),
 				"sub-agent run log",
 			);
+		}
+
+		const details = isRecord(event.result) && "details" in event.result ? event.result.details : null;
+		if (isSkillManageDetails(details)) {
+			if (details.requiresResourceRefresh && context.refreshSessionResources) {
+				queue.enqueue(() => context.refreshSessionResources?.() ?? Promise.resolve(), "refresh skills");
+			}
+			if (details.notice) {
+				queue.enqueue(() => ctx.respondInThread(details.notice ?? ""), "skill notice");
+			}
 		}
 
 		const treatAsError = event.isError || Boolean(subAgentDetails?.failed);

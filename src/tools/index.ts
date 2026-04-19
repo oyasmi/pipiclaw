@@ -5,7 +5,7 @@ import { APP_HOME_DIR } from "../paths.js";
 import type { Executor, SandboxConfig } from "../sandbox.js";
 import { loadSecurityConfig } from "../security/config.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
-import type { PipiclawMemoryRecallSettings } from "../settings.js";
+import type { PipiclawMemoryRecallSettings, PipiclawSessionSearchSettings } from "../settings.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { createSubAgentTool } from "../subagents/tool.js";
 import { createBashTool } from "./bash.js";
@@ -13,6 +13,10 @@ import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
 import { createReadTool } from "./read.js";
+import { createSessionSearchTool } from "./session-search.js";
+import { createSkillListTool } from "./skill-list.js";
+import { createSkillManageTool } from "./skill-manage.js";
+import { createSkillViewTool } from "./skill-view.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWriteTool } from "./write.js";
@@ -29,6 +33,7 @@ export interface CreatePipiclawToolsOptions {
 	sandboxConfig: SandboxConfig;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
 	getMemoryRecallSettings: () => PipiclawMemoryRecallSettings;
+	getSessionSearchSettings: () => PipiclawSessionSearchSettings;
 	memoryCandidateStore: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
 	toolsConfig?: PipiclawToolsConfig;
@@ -90,9 +95,39 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 						channelId: options.channelId,
 					}),
 				];
+	const memoryTools =
+		toolsConfig.tools.memory.sessionSearch.enabled === false
+			? []
+			: [
+					createSessionSearchTool({
+						channelDir: options.channelDir,
+						getCurrentModel: options.getCurrentModel,
+						resolveApiKey: options.resolveApiKey,
+						getSessionSearchSettings: options.getSessionSearchSettings,
+					}),
+				];
+	const skillTools =
+		toolsConfig.tools.skills.manage.enabled === false
+			? []
+			: [
+					createSkillListTool({
+						workspaceDir: options.workspaceDir,
+						workspacePath: options.workspacePath,
+					}),
+					createSkillViewTool({
+						workspaceDir: options.workspaceDir,
+						workspacePath: options.workspacePath,
+					}),
+					createSkillManageTool({
+						workspaceDir: options.workspaceDir,
+						workspacePath: options.workspacePath,
+					}),
+				];
 	return [
 		...baseTools,
 		...webTools,
+		...memoryTools,
+		...skillTools,
 		createSubAgentTool({
 			executor: options.executor,
 			getCurrentModel: options.getCurrentModel,
