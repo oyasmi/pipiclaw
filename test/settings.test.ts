@@ -26,4 +26,23 @@ describe("settings manager", () => {
 		expect(diagnostics[0]?.error.message).toContain("Expected property name");
 		expect(manager.drainErrors()).toEqual([]);
 	});
+
+	it("allows skill auto-write confidence to be raised but not lowered below the safety floor", () => {
+		const lowDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
+		const highDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
+		tempDirs.push(lowDir, highDir);
+		writeFileSync(
+			join(lowDir, "settings.json"),
+			JSON.stringify({ memoryGrowth: { minSkillAutoWriteConfidence: 0.5 } }),
+			"utf-8",
+		);
+		writeFileSync(
+			join(highDir, "settings.json"),
+			JSON.stringify({ memoryGrowth: { minSkillAutoWriteConfidence: 0.95 } }),
+			"utf-8",
+		);
+
+		expect(new PipiclawSettingsManager(lowDir).getMemoryGrowthSettings().minSkillAutoWriteConfidence).toBe(0.9);
+		expect(new PipiclawSettingsManager(highDir).getMemoryGrowthSettings().minSkillAutoWriteConfidence).toBe(0.95);
+	});
 });

@@ -164,23 +164,6 @@ export class ChannelRunner implements AgentRunner {
 			getModel: () => this.session.model ?? this.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			getSessionMemorySettings: () => this.settingsManager.getSessionMemorySettings(),
-			getMemoryGrowthSettings: () => this.settingsManager.getMemoryGrowthSettings(),
-			getWorkspaceDir: () => this.workspaceDir,
-			getWorkspacePath: () => this.workspacePath,
-			getLoadedSkills: () =>
-				this.currentSkills.map((skill) => ({
-					name: skill.name,
-					description: skill.description,
-				})),
-			emitNotice: async (notice) => {
-				if (!this.runState.ctx) {
-					return;
-				}
-				await this.runState.ctx.respondInThread(notice);
-			},
-			refreshWorkspaceResources: async () => {
-				await this.refreshSessionResources();
-			},
 			recordMemoryActivity: (event) => {
 				void this.recordMemoryActivity(event);
 			},

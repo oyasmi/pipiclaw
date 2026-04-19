@@ -6,7 +6,7 @@ export interface MemoryPromotionCandidate {
 	content: string;
 	confidence: number;
 	reason: string;
-	necessity?: "low" | "medium" | "high";
+	necessity: "low" | "medium" | "high";
 }
 
 export interface SkillPromotionCandidate {
@@ -30,8 +30,8 @@ export interface PostTurnReviewResult {
 export const DEFAULT_MEMORY_AUTO_WRITE_CONFIDENCE = 0.85;
 export const DEFAULT_SKILL_AUTO_WRITE_CONFIDENCE = 0.9;
 
-function isHighNecessity(value: string | undefined): boolean {
-	return value === undefined || value === "high";
+function isHighNecessity(value: string): boolean {
+	return value === "high";
 }
 
 export function shouldAutoWriteMemory(

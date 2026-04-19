@@ -10,28 +10,14 @@ vi.mock("../src/memory/consolidation.js", () => ({
 		appendedMemoryEntries: 1,
 		appendedHistoryBlock: true,
 	}),
-	runBackgroundMaintenance: vi.fn().mockResolvedValue({
-		cleanedMemory: false,
-		foldedHistory: false,
-	}),
-}));
-
-vi.mock("../src/memory/post-turn-review.js", () => ({
-	runPostTurnReview: vi.fn().mockResolvedValue({
-		actions: [],
-		suggestions: [],
-		skipped: [],
-		notices: [],
-	}),
 }));
 
 vi.mock("../src/memory/review-log.js", () => ({
 	appendMemoryReviewLog: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { runBackgroundMaintenance, runInlineConsolidation } from "../src/memory/consolidation.js";
+import { runInlineConsolidation } from "../src/memory/consolidation.js";
 import { MemoryLifecycle } from "../src/memory/lifecycle.js";
-import { runPostTurnReview } from "../src/memory/post-turn-review.js";
 import { updateChannelSessionMemory } from "../src/memory/session.js";
 
 afterEach(() => {
@@ -201,7 +187,6 @@ describe("MemoryLifecycle", () => {
 		);
 		expect(updateChannelSessionMemory).not.toHaveBeenCalled();
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
-		expect(runPostTurnReview).not.toHaveBeenCalled();
 	});
 
 	it("does not run delayed memory sidecars after a normal assistant turn", async () => {
@@ -222,7 +207,6 @@ describe("MemoryLifecycle", () => {
 		vi.useRealTimers();
 
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
-		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
 	});
 
 	it("flushes pending durable memory during shutdown", async () => {
@@ -238,7 +222,6 @@ describe("MemoryLifecycle", () => {
 		await lifecycle.flushForShutdown();
 
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
 	});
 
 	it("skips shutdown flush when there is no pending assistant snapshot", async () => {
@@ -250,7 +233,6 @@ describe("MemoryLifecycle", () => {
 		await lifecycle.flushForShutdown();
 
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
-		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
 	});
 
 	it("records boundary events after compaction and new-session switches without running maintenance", async () => {
@@ -270,6 +252,5 @@ describe("MemoryLifecycle", () => {
 
 		expect(recordMemoryActivity).toHaveBeenCalledTimes(2);
 		expect(recordMemoryActivity).toHaveBeenCalledWith(expect.objectContaining({ kind: "boundary" }));
-		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
 	});
 });

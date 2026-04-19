@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { createAtomicTempPath, writeFileAtomically } from "../shared/atomic-file.js";
 import {
 	resolveSkillPath,
 	resolveSkillSupportingFile,
@@ -48,17 +49,6 @@ export interface SkillManageRequest {
 export interface SkillManageToolOptions {
 	workspaceDir: string;
 	workspacePath: string;
-}
-
-function generateTempPath(path: string): string {
-	return `${path}.${process.pid}.${Date.now()}.tmp`;
-}
-
-async function writeAtomically(path: string, content: string, tempPath?: string): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
-	const actualTempPath = tempPath ?? generateTempPath(path);
-	await writeFile(actualTempPath, content, "utf-8");
-	await rename(actualTempPath, path);
 }
 
 function toWorkspacePath(options: SkillManageToolOptions, hostPath: string): string {
@@ -116,7 +106,7 @@ export async function manageWorkspaceSkill(
 		}
 		const content = request.content ?? "";
 		ensureSkillMarkdownSafe(content, request.name);
-		await writeAtomically(skillPath, content);
+		await writeFileAtomically(skillPath, content);
 		return {
 			action: "create",
 			name: request.name,
@@ -138,7 +128,7 @@ export async function manageWorkspaceSkill(
 		const content = request.content ?? "";
 		const targetPath = resolveSkillSupportingFile(skillDir, request.filePath);
 		ensureSupportingFileSafe(content);
-		await writeAtomically(targetPath, content);
+		await writeFileAtomically(targetPath, content);
 		return {
 			action: "write_file",
 			name: request.name,
@@ -158,17 +148,8 @@ export async function manageWorkspaceSkill(
 		ensureSupportingFileSafe(nextContent);
 	}
 
-	const tempPath = generateTempPath(targetPath);
-	try {
-		await writeAtomically(targetPath, nextContent, tempPath);
-	} catch (error) {
-		try {
-			await rm(tempPath, { force: true });
-		} catch {
-			/* ignore */
-		}
-		throw error;
-	}
+	const tempPath = createAtomicTempPath(targetPath);
+	await writeFileAtomically(targetPath, nextContent, tempPath);
 
 	return {
 		action: "patch",

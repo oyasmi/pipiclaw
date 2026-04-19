@@ -48,6 +48,9 @@ describe("review log rotation", () => {
 
 		const sizeAfter = readFileSync(logPath, "utf-8").length;
 		expect(sizeAfter).toBeLessThan(sizeBefore);
+		const activeContent = readFileSync(logPath, "utf-8");
+		expect(activeContent).toContain("2026-04-19T00:00:00.000Z");
+		expect(activeContent.trim().split("\n")).toHaveLength(1);
 
 		// Rotated file should exist
 		const rotatedPath = `${logPath}.1`;

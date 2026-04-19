@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import * as log from "../log.js";
+import { writeFileAtomically } from "../shared/atomic-file.js";
+import { createSerialQueue } from "../shared/serial-queue.js";
 
 export interface MemoryMaintenanceState {
 	channelId: string;
@@ -33,7 +34,7 @@ export interface MemoryActivityEvent {
 	latestSessionEntryId?: string;
 }
 
-const updateChains = new Map<string, Promise<void>>();
+const stateUpdateQueue = createSerialQueue<string>();
 
 export function getMemoryMaintenanceStateDir(appHomeDir: string): string {
 	return join(appHomeDir, "state", "memory");
@@ -96,29 +97,6 @@ function normalizeState(channelId: string, value: unknown): MemoryMaintenanceSta
 	};
 }
 
-async function writeAtomically(path: string, content: string): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
-	const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
-	await writeFile(tempPath, content, "utf-8");
-	await rename(tempPath, path);
-}
-
-function enqueueStateUpdate<T>(path: string, work: () => Promise<T>): Promise<T> {
-	const previous = updateChains.get(path) ?? Promise.resolve();
-	const result = previous.catch(() => undefined).then(() => work());
-	const completion = result.then(
-		() => undefined,
-		() => undefined,
-	);
-	updateChains.set(path, completion);
-	completion.finally(() => {
-		if (updateChains.get(path) === completion) {
-			updateChains.delete(path);
-		}
-	});
-	return result;
-}
-
 export async function readMemoryMaintenanceState(
 	appHomeDir: string,
 	channelId: string,
@@ -139,8 +117,8 @@ export async function readMemoryMaintenanceState(
 
 export async function writeMemoryMaintenanceState(appHomeDir: string, state: MemoryMaintenanceState): Promise<void> {
 	const path = getMemoryMaintenanceStatePath(appHomeDir, state.channelId);
-	await enqueueStateUpdate(path, async () => {
-		await writeAtomically(path, `${JSON.stringify(normalizeState(state.channelId, state), null, 2)}\n`);
+	await stateUpdateQueue.run(path, async () => {
+		await writeFileAtomically(path, `${JSON.stringify(normalizeState(state.channelId, state), null, 2)}\n`);
 	});
 }
 
@@ -150,10 +128,10 @@ export async function updateMemoryMaintenanceState(
 	update: (state: MemoryMaintenanceState) => MemoryMaintenanceState,
 ): Promise<MemoryMaintenanceState> {
 	const path = getMemoryMaintenanceStatePath(appHomeDir, channelId);
-	return enqueueStateUpdate(path, async () => {
+	return stateUpdateQueue.run(path, async () => {
 		const current = await readMemoryMaintenanceState(appHomeDir, channelId);
 		const next = normalizeState(channelId, update(current));
-		await writeAtomically(path, `${JSON.stringify(next, null, 2)}\n`);
+		await writeFileAtomically(path, `${JSON.stringify(next, null, 2)}\n`);
 		return next;
 	});
 }

@@ -130,11 +130,6 @@ export interface InlineConsolidationResult {
 	appendedHistoryBlock: boolean;
 }
 
-export interface BackgroundMaintenanceResult {
-	cleanedMemory: boolean;
-	foldedHistory: boolean;
-}
-
 export interface StructuralMaintenanceStats {
 	memoryCleanupNeeded: boolean;
 	historyFoldingNeeded: boolean;
@@ -381,14 +376,4 @@ ${olderSections.map((section) => `## ${section.heading}\n\n${section.content}`).
 
 	await rewriteChannelHistory(options.channelDir, rebuiltHistory);
 	return true;
-}
-
-export async function runBackgroundMaintenance(options: ConsolidationRunOptions): Promise<BackgroundMaintenanceResult> {
-	const currentMemory = await readChannelMemory(options.channelDir);
-	const currentHistory = await readChannelHistory(options.channelDir);
-
-	const cleanedMemory = await cleanupChannelMemory(options, currentMemory);
-	const foldedHistory = await foldChannelHistory(options, currentHistory);
-
-	return { cleanedMemory, foldedHistory };
 }

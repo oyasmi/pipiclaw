@@ -9,7 +9,7 @@ import type {
 	SessionSwitchEvent,
 } from "@mariozechner/pi-coding-agent";
 import * as log from "../log.js";
-import type { PipiclawMemoryGrowthSettings, PipiclawSessionMemorySettings } from "../settings.js";
+import type { PipiclawSessionMemorySettings } from "../settings.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import {
 	type ConsolidationRunOptions,
@@ -30,12 +30,6 @@ export interface MemoryLifecycleOptions {
 	getModel: () => Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	getSessionMemorySettings: () => PipiclawSessionMemorySettings;
-	getMemoryGrowthSettings?: () => PipiclawMemoryGrowthSettings;
-	getWorkspaceDir?: () => string;
-	getWorkspacePath?: () => string;
-	getLoadedSkills?: () => Array<{ name: string; description?: string }>;
-	emitNotice?: (notice: string) => Promise<void>;
-	refreshWorkspaceResources?: () => Promise<void>;
 	recordMemoryActivity?: (event: MemoryActivityEvent) => Promise<void> | void;
 	channelMemoryQueue?: ChannelMemoryQueue;
 }

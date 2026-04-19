@@ -89,6 +89,28 @@ describe("memory maintenance scheduler", () => {
 		expect(getRuntimeContext).toHaveBeenCalledTimes(1);
 	});
 
+	it("fills tick slots by skipping active channels in the ring", async () => {
+		const root = createTempDir();
+		const getRuntimeContext = vi.fn(async () => null);
+		const scheduler = new MemoryMaintenanceScheduler({
+			appHomeDir: join(root, "app"),
+			workspaceDir: join(root, "workspace"),
+			getKnownChannelIds: () => ["dm_1", "dm_2", "dm_3"],
+			getRuntimeContext,
+			isChannelActive: (channelId) => channelId === "dm_1",
+			getSettings: () => ({
+				memoryMaintenance: {
+					...maintenanceSettings(true),
+					maxConcurrentChannels: 1,
+				},
+			}),
+		});
+
+		await scheduler.runOnce();
+		expect(getRuntimeContext).toHaveBeenCalledTimes(1);
+		expect(getRuntimeContext).toHaveBeenCalledWith("dm_2");
+	});
+
 	it("does not build runtime context for active channels", async () => {
 		const root = createTempDir();
 		const getRuntimeContext = vi.fn(async () => null);
@@ -103,5 +125,37 @@ describe("memory maintenance scheduler", () => {
 
 		await scheduler.runOnce();
 		expect(getRuntimeContext).not.toHaveBeenCalled();
+	});
+
+	it("starts and stops an idempotent interval only when enabled", async () => {
+		vi.useFakeTimers();
+		const root = createTempDir();
+		let enabled = false;
+		const getRuntimeContext = vi.fn(async () => null);
+		const scheduler = new MemoryMaintenanceScheduler({
+			appHomeDir: join(root, "app"),
+			workspaceDir: join(root, "workspace"),
+			getKnownChannelIds: () => ["dm_1"],
+			getRuntimeContext,
+			isChannelActive: () => false,
+			getSettings: () => ({ memoryMaintenance: maintenanceSettings(enabled) }),
+			intervalMs: 1000,
+		});
+		const runOnce = vi.spyOn(scheduler, "runOnce").mockResolvedValue(undefined);
+
+		scheduler.start();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(runOnce).not.toHaveBeenCalled();
+
+		enabled = true;
+		scheduler.start();
+		scheduler.start();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(runOnce).toHaveBeenCalledTimes(1);
+
+		scheduler.stop();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(runOnce).toHaveBeenCalledTimes(1);
+		scheduler.stop();
 	});
 });

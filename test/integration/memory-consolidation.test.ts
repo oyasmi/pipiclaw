@@ -19,7 +19,8 @@ vi.mock("../../src/memory/sidecar-worker.js", () => ({
 	},
 }));
 
-import { runBackgroundMaintenance, runInlineConsolidation } from "../../src/memory/consolidation.js";
+import { cleanupChannelMemory, foldChannelHistory, runInlineConsolidation } from "../../src/memory/consolidation.js";
+import { readChannelHistory, readChannelMemory } from "../../src/memory/files.js";
 import { runRetriedSidecarTask, runSidecarTask } from "../../src/memory/sidecar-worker.js";
 import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
 
@@ -228,14 +229,16 @@ describe("memory-consolidation integration", () => {
 				output: "- Folded blocks 1 through 5.",
 			});
 
-		const result = await runBackgroundMaintenance({
+		const options = {
 			channelDir,
 			model: TEST_MODEL,
 			resolveApiKey: async () => "",
 			messages: [],
-		});
+		};
+		const cleanedMemory = await cleanupChannelMemory(options, await readChannelMemory(channelDir));
+		const foldedHistory = await foldChannelHistory(options, await readChannelHistory(channelDir));
 
-		expect(result).toEqual({ cleanedMemory: true, foldedHistory: true });
+		expect({ cleanedMemory, foldedHistory }).toEqual({ cleanedMemory: true, foldedHistory: true });
 		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).toContain("Keep the callback contract stable.");
 
 		const nextHistory = readFileSync(join(channelDir, "HISTORY.md"), "utf-8");

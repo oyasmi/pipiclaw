@@ -94,4 +94,55 @@ describe("memory maintenance state", () => {
 			eligibleAfter: "2026-04-19T00:10:00.000Z",
 		});
 	});
+
+	it("serializes concurrent updates to the same channel state", async () => {
+		const appHomeDir = createTempDir();
+		await Promise.all(
+			Array.from({ length: 12 }, (_, index) =>
+				updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) =>
+					applyMemoryActivityToState(state, {
+						kind: index % 2 === 0 ? "assistant-turn-completed" : "tool-call",
+						channelId: "dm_1",
+						timestamp: `2026-04-19T00:00:${String(index).padStart(2, "0")}.000Z`,
+					}),
+				),
+			),
+		);
+
+		const state = await readMemoryMaintenanceState(appHomeDir, "dm_1");
+		expect(state).toMatchObject({
+			dirty: true,
+			turnsSinceSessionRefresh: 6,
+			toolCallsSinceSessionRefresh: 6,
+			turnsSinceGrowthReview: 6,
+			toolCallsSinceGrowthReview: 6,
+		});
+	});
+
+	it("does not mark a user-turn-started event as dirty by itself", () => {
+		const next = applyMemoryActivityToState(
+			{
+				channelId: "dm_1",
+				dirty: false,
+				turnsSinceSessionRefresh: 0,
+				toolCallsSinceSessionRefresh: 0,
+				turnsSinceGrowthReview: 0,
+				toolCallsSinceGrowthReview: 0,
+				failureBackoffUntil: null,
+			},
+			{
+				kind: "user-turn-started",
+				channelId: "dm_1",
+				timestamp: "2026-04-19T00:00:00.000Z",
+				eligibleAfter: "2026-04-19T00:10:00.000Z",
+			},
+		);
+
+		expect(next).toMatchObject({
+			dirty: false,
+			eligibleAfter: "2026-04-19T00:10:00.000Z",
+			turnsSinceSessionRefresh: 0,
+			toolCallsSinceSessionRefresh: 0,
+		});
+	});
 });

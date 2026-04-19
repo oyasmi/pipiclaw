@@ -1,7 +1,7 @@
-import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
-import { mkdir, readFile, rename, writeFile } from "fs/promises";
-import { dirname, join } from "path";
+import { readFile } from "fs/promises";
+import { join } from "path";
+import { writeFileAtomically } from "../shared/atomic-file.js";
 
 const DEFAULT_CHANNEL_MEMORY = `# Channel Memory
 
@@ -76,13 +76,6 @@ function normalizeContent(content: string): string {
 	return content.trim().length > 0 ? `${content.trim()}\n` : "";
 }
 
-async function writeAtomically(path: string, content: string): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
-	const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
-	await writeFile(tempPath, content, "utf-8");
-	await rename(tempPath, path);
-}
-
 function ensureTrailingNewlines(content: string): string {
 	return content.trimEnd().length > 0 ? `${content.trimEnd()}\n\n` : "";
 }
@@ -151,19 +144,19 @@ export async function readChannelSession(channelDir: string): Promise<string> {
 export async function rewriteChannelMemory(channelDir: string, content: string): Promise<void> {
 	await ensureChannelMemoryFiles(channelDir);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_MEMORY;
-	await writeAtomically(getChannelMemoryPath(channelDir), nextContent);
+	await writeFileAtomically(getChannelMemoryPath(channelDir), nextContent);
 }
 
 export async function rewriteChannelHistory(channelDir: string, content: string): Promise<void> {
 	await ensureChannelMemoryFiles(channelDir);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_HISTORY;
-	await writeAtomically(getChannelHistoryPath(channelDir), nextContent);
+	await writeFileAtomically(getChannelHistoryPath(channelDir), nextContent);
 }
 
 export async function rewriteChannelSession(channelDir: string, content: string): Promise<void> {
 	await ensureChannelMemoryFiles(channelDir);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_SESSION;
-	await writeAtomically(getChannelSessionPath(channelDir), nextContent);
+	await writeFileAtomically(getChannelSessionPath(channelDir), nextContent);
 }
 
 export async function appendChannelMemoryUpdate(channelDir: string, block: MemoryUpdateBlock): Promise<void> {
@@ -177,7 +170,7 @@ export async function appendChannelMemoryUpdate(channelDir: string, block: Memor
 	const renderedBlock = [`## Update ${block.timestamp}`, ...block.entries.map((entry) => `- ${entry.trim()}`)].join(
 		"\n",
 	);
-	await writeAtomically(path, `${ensureTrailingNewlines(existing)}${renderedBlock}\n`);
+	await writeFileAtomically(path, `${ensureTrailingNewlines(existing)}${renderedBlock}\n`);
 }
 
 export async function appendChannelHistoryBlock(channelDir: string, block: HistoryBlock): Promise<void> {
@@ -190,5 +183,5 @@ export async function appendChannelHistoryBlock(channelDir: string, block: Histo
 	const path = getChannelHistoryPath(channelDir);
 	const existing = await readTextFile(path);
 	const renderedBlock = [`## ${block.timestamp}`, trimmedContent].join("\n\n");
-	await writeAtomically(path, `${ensureTrailingNewlines(existing)}${renderedBlock}\n`);
+	await writeFileAtomically(path, `${ensureTrailingNewlines(existing)}${renderedBlock}\n`);
 }

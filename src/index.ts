@@ -24,10 +24,8 @@ export {
 	type MemoryCandidateStore,
 } from "./memory/candidates.js";
 export {
-	type BackgroundMaintenanceResult,
 	type ConsolidationRunOptions,
 	type InlineConsolidationResult,
-	runBackgroundMaintenance,
 	runInlineConsolidation,
 } from "./memory/consolidation.js";
 export {

@@ -1,9 +1,17 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionCorpus } from "../src/memory/session-corpus.js";
 import { searchChannelSessions } from "../src/memory/session-search.js";
 import { createTempWorkspace } from "./helpers/fixtures.js";
+
+const { runSidecarTaskMock } = vi.hoisted(() => ({
+	runSidecarTaskMock: vi.fn(),
+}));
+
+vi.mock("../src/memory/sidecar-worker.js", () => ({
+	runSidecarTask: runSidecarTaskMock,
+}));
 
 const tempDirs: string[] = [];
 const TEST_MODEL = { provider: "test", id: "noop" } as never;
@@ -22,6 +30,10 @@ afterEach(() => {
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+beforeEach(() => {
+	runSidecarTaskMock.mockReset();
 });
 
 describe("session search", () => {
@@ -66,6 +78,7 @@ describe("session search", () => {
 		expect(docs.map((doc) => doc.text).join("\n")).toContain("rollout");
 		expect(docs.map((doc) => doc.text).join("\n")).toContain("archive");
 		expect(docs.map((doc) => doc.text).join("\n")).not.toContain("sibling secret");
+		expect(docs.filter((doc) => doc.path.endsWith("context.jsonl"))).toHaveLength(1);
 	});
 
 	it("searches Chinese and English terms with role filtering", async () => {
@@ -132,5 +145,30 @@ describe("session search", () => {
 
 		expect(result.results).toHaveLength(1);
 		expect(result.results[0]?.summary).toContain("newer");
+	});
+
+	it("falls back to raw preview when model summarization fails", async () => {
+		const workspaceDir = createWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(channelDir, { recursive: true });
+		const longText = `session_search fallback ${"detail ".repeat(220)}`;
+		writeJsonl(join(channelDir, "log.jsonl"), [{ date: "2026-04-19T00:00:00.000Z", text: longText, isBot: false }]);
+		runSidecarTaskMock.mockRejectedValueOnce(new Error("model unavailable"));
+
+		const result = await searchChannelSessions({
+			channelDir,
+			query: "session_search fallback",
+			limit: 1,
+			maxFiles: 6,
+			maxChunks: 20,
+			maxCharsPerChunk: 1400,
+			summarizeWithModel: true,
+			timeoutMs: 1000,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+
+		expect(runSidecarTaskMock).toHaveBeenCalledTimes(1);
+		expect(result.results[0]?.summary).toContain("session_search fallback");
 	});
 });

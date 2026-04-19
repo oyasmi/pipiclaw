@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
@@ -34,27 +34,47 @@ function extractDescription(content: string): string {
 	return "";
 }
 
-export function listWorkspaceSkills(options: SkillListToolOptions): WorkspaceSkillSummary[] {
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error && "code" in error;
+}
+
+export async function listWorkspaceSkills(options: SkillListToolOptions): Promise<WorkspaceSkillSummary[]> {
 	const skillsDir = join(options.workspaceDir, "skills");
-	if (!existsSync(skillsDir)) {
-		return [];
+	let names: string[];
+	try {
+		names = await readdir(skillsDir);
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") {
+			return [];
+		}
+		throw error;
 	}
 
 	const summaries: WorkspaceSkillSummary[] = [];
-	for (const name of readdirSync(skillsDir).sort()) {
+	for (const name of names.sort()) {
 		const nameValidation = validateSkillName(name);
 		if (!nameValidation.ok) {
 			continue;
 		}
 		const skillDir = join(skillsDir, name);
-		if (!statSync(skillDir).isDirectory()) {
+		const skillStats = await stat(skillDir).catch(() => null);
+		if (!skillStats?.isDirectory()) {
 			continue;
 		}
 		const skillPath = join(skillDir, "SKILL.md");
-		if (!existsSync(skillPath)) {
-			continue;
+		let content: string;
+		try {
+			const skillFileStats = await stat(skillPath);
+			if (!skillFileStats.isFile()) {
+				continue;
+			}
+			content = await readFile(skillPath, "utf-8");
+		} catch (error) {
+			if (isNodeError(error) && error.code === "ENOENT") {
+				continue;
+			}
+			throw error;
 		}
-		const content = readFileSync(skillPath, "utf-8");
 		const validation = validateSkillFrontmatter(content, name);
 		summaries.push({
 			name,
@@ -74,7 +94,7 @@ export function createSkillListTool(options: SkillListToolOptions): AgentTool<ty
 		description: "List workspace-level Pipiclaw skills that can be viewed or managed.",
 		parameters: skillListSchema,
 		execute: async () => {
-			const skills = listWorkspaceSkills(options);
+			const skills = await listWorkspaceSkills(options);
 			return {
 				content: [{ type: "text", text: JSON.stringify({ skills }, null, 2) }],
 				details: { kind: "skill_list", count: skills.length },

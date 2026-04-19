@@ -611,7 +611,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 | `memoryGrowth.postTurnReviewEnabled` | `true` | Yes | 启用后台 growth review job |
 | `memoryGrowth.autoWriteChannelMemory` | `true` | Yes | 高置信 durable fact 自动写入 channel `MEMORY.md` |
 | `memoryGrowth.autoWriteWorkspaceSkills` | `true` | Yes | 高置信 reusable workflow 自动写入 workspace `skills/` |
-| `memoryGrowth.minSkillAutoWriteConfidence` | `0.9` | Yes | workspace skill 自动写入阈值；当前固定为 `0.9` |
+| `memoryGrowth.minSkillAutoWriteConfidence` | `0.9` | Yes | workspace skill 自动写入阈值；可调高，但运行时最低为 `0.9` |
 | `memoryGrowth.minMemoryAutoWriteConfidence` | `0.85` | Yes | channel memory 自动写入阈值 |
 | `memoryGrowth.idleWritesHistory` | `false` | Reserved | idle consolidation 默认不写 `HISTORY.md` |
 | `memoryGrowth.minTurnsBetweenReview` | `12` | Yes | growth review job 的 assistant turn 阈值 |
@@ -770,7 +770,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - 四类后台任务在调用 LLM 前都有本地 gate；无新内容、channel 仍活跃、未到阈值或未到间隔时不会调用 LLM。
 - `postTurnReview` 已迁移为后台 growth review job，触发频率由 `memoryGrowth.minTurnsBetweenReview` / `memoryGrowth.minToolCallsBetweenReview` 和 `memoryMaintenance.growthReviewIntervalMinutes` 共同控制。
 - `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
-- `minSkillAutoWriteConfidence` 当前固定为 `0.9`，用于避免低置信 workflow 污染 workspace skills。
+- `minSkillAutoWriteConfidence` 可以调高以进一步收紧 workspace skill 自动写入，但低于 `0.9` 的配置会按 `0.9` 执行，避免低置信 workflow 污染 workspace skills。
 
 ## 内建工具配置文件 `tools.json`（`tools.json`）
 

@@ -148,10 +148,17 @@ export class MemoryMaintenanceScheduler {
 				return;
 			}
 			const selected: string[] = [];
-			for (let offset = 0; offset < Math.min(maxConcurrent, channelIds.length); offset++) {
-				selected.push(channelIds[(this.nextChannelIndex + offset) % channelIds.length]);
+			let scanned = 0;
+			let index = this.nextChannelIndex % channelIds.length;
+			while (scanned < channelIds.length && selected.length < maxConcurrent) {
+				const channelId = channelIds[index];
+				if (channelId && !this.options.isChannelActive(channelId)) {
+					selected.push(channelId);
+				}
+				index = (index + 1) % channelIds.length;
+				scanned++;
 			}
-			this.nextChannelIndex = (this.nextChannelIndex + selected.length) % channelIds.length;
+			this.nextChannelIndex = index;
 			await Promise.all(selected.map((channelId) => this.runChannelOnce(channelId, now)));
 		} finally {
 			this.running = false;

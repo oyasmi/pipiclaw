@@ -25,7 +25,13 @@ export interface BuildSessionCorpusOptions {
 
 const DEFAULT_MAX_CHARS_PER_DOCUMENT = 4_000;
 const DEFAULT_MAX_DOCUMENTS_TOTAL = 5_000;
-const IGNORED_JSONL_FILES = new Set(["log.jsonl", "log.jsonl.1", "subagent-runs.jsonl", "memory-review.jsonl"]);
+const IGNORED_JSONL_FILES = new Set([
+	"context.jsonl",
+	"log.jsonl",
+	"log.jsonl.1",
+	"subagent-runs.jsonl",
+	"memory-review.jsonl",
+]);
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 	return error instanceof Error && "code" in error;

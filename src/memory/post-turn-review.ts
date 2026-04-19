@@ -196,6 +196,7 @@ async function applyMemoryCandidate(
 	options: PostTurnReviewOptions,
 	candidate: MemoryPromotionCandidate,
 	result: PostTurnReviewApplyResult,
+	timestamp: string,
 ): Promise<void> {
 	if (!options.autoWriteChannelMemory || !shouldAutoWriteMemory(candidate, options.minMemoryAutoWriteConfidence)) {
 		result.suggestions.push({ type: "memory", candidate });
@@ -203,7 +204,7 @@ async function applyMemoryCandidate(
 	}
 
 	await appendChannelMemoryUpdate(options.channelDir, {
-		timestamp: new Date().toISOString(),
+		timestamp,
 		entries: [candidate.content],
 	});
 	const action = { target: "MEMORY.md", action: "append", content: candidate.content, reason: candidate.reason };
@@ -249,6 +250,7 @@ export async function applyPostTurnReviewResult(
 	options: PostTurnReviewOptions,
 	review: PostTurnReviewResult,
 ): Promise<PostTurnReviewApplyResult> {
+	const timestamp = new Date().toISOString();
 	const result: PostTurnReviewApplyResult = {
 		actions: [],
 		suggestions: [],
@@ -257,7 +259,7 @@ export async function applyPostTurnReviewResult(
 	};
 
 	for (const candidate of review.memoryCandidates) {
-		await applyMemoryCandidate(options, candidate, result);
+		await applyMemoryCandidate(options, candidate, result, timestamp);
 	}
 	for (const candidate of review.skillCandidates) {
 		await applySkillCandidate(options, candidate, result);
@@ -268,7 +270,7 @@ export async function applyPostTurnReviewResult(
 	}
 
 	await appendMemoryReviewLog(options.channelDir, {
-		timestamp: new Date().toISOString(),
+		timestamp,
 		channelId: options.channelId,
 		reason: "post-turn",
 		candidates: [...review.memoryCandidates, ...review.skillCandidates],

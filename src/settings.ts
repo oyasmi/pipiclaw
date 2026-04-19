@@ -173,6 +173,8 @@ const DEFAULT_MEMORY_GROWTH: PipiclawMemoryGrowthSettings = {
 	minToolCallsBetweenReview: 24,
 };
 
+const MIN_SKILL_AUTO_WRITE_CONFIDENCE = 0.9;
+
 const DEFAULT_SESSION_SEARCH: PipiclawSessionSearchSettings = {
 	enabled: true,
 	maxFiles: 12,
@@ -302,10 +304,16 @@ export class PipiclawSettingsManager {
 	}
 
 	getMemoryGrowthSettings(): PipiclawMemoryGrowthSettings {
-		return {
+		const settings = {
 			...DEFAULT_MEMORY_GROWTH,
 			...this.settings.memoryGrowth,
-			minSkillAutoWriteConfidence: 0.9,
+		};
+		const configured = settings.minSkillAutoWriteConfidence;
+		return {
+			...settings,
+			minSkillAutoWriteConfidence: Number.isFinite(configured)
+				? Math.min(1, Math.max(MIN_SKILL_AUTO_WRITE_CONFIDENCE, configured))
+				: MIN_SKILL_AUTO_WRITE_CONFIDENCE,
 		};
 	}
 

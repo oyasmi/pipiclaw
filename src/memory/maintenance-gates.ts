@@ -262,12 +262,6 @@ export function shouldRunStructuralMaintenance(
 	const runMemoryCleanup = input.memoryCleanupNeeded;
 	const runHistoryFolding = input.historyFoldingNeeded;
 	if (!runMemoryCleanup && !runHistoryFolding) {
-		if (!input.memoryCleanupNeeded && input.historyFoldingNeeded) {
-			return denyStructural("memory-under-threshold");
-		}
-		if (!input.historyFoldingNeeded && input.memoryCleanupNeeded) {
-			return denyStructural("history-under-threshold");
-		}
 		return denyStructural("nothing-to-maintain");
 	}
 
