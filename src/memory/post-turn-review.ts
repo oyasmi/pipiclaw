@@ -202,7 +202,6 @@ async function applyMemoryCandidate(
 		return;
 	}
 
-
 	await appendChannelMemoryUpdate(options.channelDir, {
 		timestamp: new Date().toISOString(),
 		entries: [candidate.content],

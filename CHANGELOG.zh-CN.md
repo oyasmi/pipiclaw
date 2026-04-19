@@ -11,12 +11,19 @@
   - **回合后审查**：新增专注的发掘流水线（post-turn review），评估对话中是否有值得沉淀的长期事实或工作流，将“智能抽取”与“基础会话维护”解耦
   - **程序化记忆 (Skills)**：Agent 现在可以使用新增的 `skill_manage`、`skill_list` 和 `skill_view` 工具，主动创建、修补和管理 workspace skills
   - **记忆审计日志**：记忆提升、建议和丢弃的决策现在会透明地记录在 `memory-review.jsonl` 中，并支持 1MB 自动文件轮转
+- **记忆维护调度器**：新增内置后台 scheduler，将记忆维护从用户等待的 turn 路径中批量移出
+  - 在 `${PIPICLAW_HOME}/state/memory/` 下新增每个 channel 的隐藏调度状态，用于记录 dirty 标记、上次运行时间、阈值计数和失败 backoff
+  - 新增 session refresh、durable consolidation、growth review、structural cleanup/folding 四类后台维护任务
+  - 四类任务在调用 LLM 前都先经过本地 no-LLM gate；无新内容、channel 活跃、未达阈值或处于 backoff 时会直接跳过，不消耗模型 token
+  - 记忆维护保持为内部机制，不通过 `workspace/events/` 暴露，也不会注入 synthetic DingTalk turn
 
 ### 变更
 
 - 收紧了记忆文件边界：`MEMORY.md` 现在只存放长期有效的事实与决策，防止瞬时任务状态污染长期记忆
-- 空闲整合（idle consolidation）不再无差别地写入 `HISTORY.md`，使历史记录回归阶段性里程碑，而不再是繁杂的流水账
-- 解耦空闲整合与回合后审查逻辑，使其按独立节拍运行（如后审查降低至 6 倍 session 刷新周期），在保证质量的同时大幅降低 API 成本
+- 普通 turn 结束后现在只记录 memory activity 和计数；session refresh、durable consolidation、回合后 growth review、cleanup 和 history folding 都迁移到后台维护任务
+- `HISTORY.md` 继续聚焦 compaction、`/new`、shutdown 等边界摘要；后台 durable consolidation 只写入 durable channel memory
+- 记忆召回 rerank 默认改为 `"auto"`，本地排序置信度高时不调用模型，只在候选接近且问题明显依赖历史/偏好/决策时使用模型 rerank
+- `session_search` 的模型摘要默认保持关闭，并且在空 query、无结果或短 preview 时即使开启也会跳过 LLM 摘要
 - 为回合内的多次会话日志搜索添加了 30 秒 TTL 的语料缓存，显著加速同回合检索
 
 ### 修复
@@ -25,6 +32,8 @@
 - 增强了记忆抽取的 JSON 解析鲁棒性，现在可以优雅处理 LLM 返回的 markdown 代码块包裹
 - 修复了原子写入时的竞争条件，避免因时间戳漂移导致失败回滚时残留临时文件
 - 限制频道会话语料库最大加载量为 5000 条，防止超大耗时频道触发宿主机内存风险
+- 删除了已经失效的旧 idle timer lifecycle 测试，并围绕新的 scheduled-maintenance 模型更新了记忆测试
+
 ## [0.6.3] - 2026-04-14
 
 ### 新增

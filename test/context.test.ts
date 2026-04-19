@@ -37,7 +37,17 @@ describe("PipiclawSettingsManager", () => {
 			maxCandidates: 12,
 			maxInjected: 5,
 			maxChars: 5000,
-			rerankWithModel: true,
+			rerankWithModel: "auto",
+		});
+		expect(manager.getMemoryMaintenanceSettings()).toEqual({
+			enabled: true,
+			minIdleMinutesBeforeLlmWork: 10,
+			sessionRefreshIntervalMinutes: 10,
+			durableConsolidationIntervalMinutes: 20,
+			growthReviewIntervalMinutes: 60,
+			structuralMaintenanceIntervalHours: 6,
+			maxConcurrentChannels: 1,
+			failureBackoffMinutes: 30,
 		});
 		expect(manager.getSessionMemorySettings()).toEqual({
 			enabled: true,

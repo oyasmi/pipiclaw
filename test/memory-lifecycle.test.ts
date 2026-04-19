@@ -65,7 +65,10 @@ function createFakePi() {
 	};
 }
 
-function createLifecycle(settings?: Partial<ReturnType<typeof createSettings>>) {
+function createLifecycle(
+	settings?: Partial<ReturnType<typeof createSettings>>,
+	recordMemoryActivity?: ConstructorParameters<typeof MemoryLifecycle>[0]["recordMemoryActivity"],
+) {
 	return new MemoryLifecycle({
 		channelId: "dm_123",
 		channelDir: "/tmp/dm_123",
@@ -74,6 +77,7 @@ function createLifecycle(settings?: Partial<ReturnType<typeof createSettings>>) 
 		getModel: () => ({ provider: "test", id: "noop" }) as never,
 		resolveApiKey: async () => "",
 		getSessionMemorySettings: () => createSettings(settings),
+		recordMemoryActivity,
 	});
 }
 
@@ -176,111 +180,31 @@ describe("MemoryLifecycle", () => {
 		);
 	});
 
-	it("backs off threshold-triggered session updates after a failure", async () => {
-		vi.mocked(updateChannelSessionMemory).mockRejectedValue(new Error("timeout"));
-
-		const lifecycle = createLifecycle({
-			minTurnsBetweenUpdate: 1,
-			minToolCallsBetweenUpdate: 99,
-			failureBackoffTurns: 2,
-		});
-
-		lifecycle.noteCompletedAssistantTurn();
-		await Promise.resolve();
-		await Promise.resolve();
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
-
-		lifecycle.noteCompletedAssistantTurn();
-		await Promise.resolve();
-		lifecycle.noteCompletedAssistantTurn();
-		await Promise.resolve();
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
-	});
-
-	it("serializes a forced compaction refresh behind an in-flight threshold refresh", async () => {
-		let resolveFirstUpdate: (() => void) | undefined;
-		vi.mocked(updateChannelSessionMemory)
-			.mockImplementationOnce(
-				() =>
-					new Promise((resolve) => {
-						resolveFirstUpdate = () => resolve(undefined as never);
-					}),
-			)
-			.mockResolvedValue(undefined as never);
-
-		const compactionMessages = [{ role: "user", content: "pre-compact snapshot" }] as never[];
-		const lifecycle = createLifecycle({
-			minTurnsBetweenUpdate: 1,
-			minToolCallsBetweenUpdate: 99,
-		});
-		const fakePi = createFakePi();
-		lifecycle.createExtensionFactory()(fakePi.api as never);
-
-		lifecycle.noteCompletedAssistantTurn();
-		await Promise.resolve();
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
-
-		const beforeCompact = fakePi.handlers.get("session_before_compact")?.({
-			preparation: { messagesToSummarize: compactionMessages },
-		});
-		await Promise.resolve();
-		expect(runInlineConsolidation).not.toHaveBeenCalled();
-
-		resolveFirstUpdate?.();
-		await expect(beforeCompact).resolves.toBeUndefined();
-		expect(updateChannelSessionMemory).toHaveBeenCalledTimes(2);
-		expect(vi.mocked(updateChannelSessionMemory).mock.calls[1]?.[0]).toMatchObject({
-			messages: compactionMessages,
-			timeoutMs: 30000,
-		});
-		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-	});
-
-	it("serializes preflight consolidation behind in-flight background maintenance", async () => {
-		let releaseMaintenance: (() => void) | undefined;
-		vi.mocked(runBackgroundMaintenance).mockImplementationOnce(
-			() =>
-				new Promise((resolve) => {
-					releaseMaintenance = () =>
-						resolve({
-							cleanedMemory: true,
-							foldedHistory: false,
-						});
-				}),
+	it("records assistant turns for scheduled maintenance without running threshold sidecars", async () => {
+		const recordMemoryActivity = vi.fn();
+		const lifecycle = createLifecycle(
+			{
+				minTurnsBetweenUpdate: 1,
+				minToolCallsBetweenUpdate: 99,
+				failureBackoffTurns: 2,
+			},
+			recordMemoryActivity,
 		);
 
-		const compactionMessages = [{ role: "user", content: "persist this before compacting" }] as never[];
-		const lifecycle = createLifecycle({
-			forceRefreshBeforeCompact: false,
-			forceRefreshBeforeNewSession: false,
-		});
-		const fakePi = createFakePi();
-		lifecycle.createExtensionFactory()(fakePi.api as never);
+		lifecycle.noteCompletedAssistantTurn();
+		lifecycle.noteCompletedAssistantTurn();
+		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		fakePi.handlers.get("session_compact")?.({});
-		await waitForAssertion(() => {
-			expect(runBackgroundMaintenance).toHaveBeenCalledTimes(1);
-		});
-
-		const beforeCompact = fakePi.handlers.get("session_before_compact")?.({
-			preparation: { messagesToSummarize: compactionMessages },
-		});
-		await Promise.resolve();
-
-		expect(runInlineConsolidation).not.toHaveBeenCalled();
-
-		releaseMaintenance?.();
-		await expect(beforeCompact).resolves.toBeUndefined();
-
-		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-		expect(vi.mocked(runBackgroundMaintenance).mock.invocationCallOrder[0]).toBeLessThan(
-			vi.mocked(runInlineConsolidation).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+		expect(recordMemoryActivity).toHaveBeenCalledTimes(2);
+		expect(recordMemoryActivity).toHaveBeenCalledWith(
+			expect.objectContaining({ kind: "assistant-turn-completed", channelId: "dm_123" }),
 		);
+		expect(updateChannelSessionMemory).not.toHaveBeenCalled();
+		expect(runInlineConsolidation).not.toHaveBeenCalled();
+		expect(runPostTurnReview).not.toHaveBeenCalled();
 	});
 
-	it("runs idle consolidation after a quiet period and then maintenance", async () => {
+	it("does not run delayed memory sidecars after a normal assistant turn", async () => {
 		vi.useFakeTimers();
 		const lifecycle = createLifecycle({
 			minTurnsBetweenUpdate: 99,
@@ -297,32 +221,11 @@ describe("MemoryLifecycle", () => {
 		await vi.advanceTimersByTimeAsync(1_000);
 		vi.useRealTimers();
 
-		await waitForAssertion(() => {
-			expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-			expect(runInlineConsolidation).toHaveBeenCalledWith(expect.objectContaining({ mode: "idle" }));
-			expect(runBackgroundMaintenance).toHaveBeenCalledTimes(1);
-		});
-	});
-
-	it("cancels a pending idle consolidation when a new user turn starts", async () => {
-		vi.useFakeTimers();
-		const lifecycle = createLifecycle({
-			minTurnsBetweenUpdate: 99,
-			minToolCallsBetweenUpdate: 99,
-			forceRefreshBeforeCompact: false,
-			forceRefreshBeforeNewSession: false,
-		});
-
-		lifecycle.noteCompletedAssistantTurn();
-		await vi.advanceTimersByTimeAsync(30_000);
-		lifecycle.noteUserTurnStarted();
-		await vi.advanceTimersByTimeAsync(60_000);
-
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
+		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
 	});
 
-	it("flushes pending durable memory during shutdown and cancels the idle timer", async () => {
-		vi.useFakeTimers();
+	it("flushes pending durable memory during shutdown", async () => {
 		const lifecycle = createLifecycle({
 			minTurnsBetweenUpdate: 99,
 			minToolCallsBetweenUpdate: 99,
@@ -331,15 +234,11 @@ describe("MemoryLifecycle", () => {
 		});
 
 		lifecycle.noteCompletedAssistantTurn();
-		await vi.advanceTimersByTimeAsync(30_000);
 
 		await lifecycle.flushForShutdown();
 
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
 		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
-
-		await vi.advanceTimersByTimeAsync(60_000);
-		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
 	});
 
 	it("skips shutdown flush when there is no pending assistant snapshot", async () => {
@@ -354,103 +253,23 @@ describe("MemoryLifecycle", () => {
 		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
 	});
 
-	it("serializes background maintenance and keeps the queue alive after failures", async () => {
-		let releaseFirstRun: (() => void) | null = null;
-		vi.mocked(runBackgroundMaintenance)
-			.mockImplementationOnce(
-				() =>
-					new Promise((resolve) => {
-						releaseFirstRun = () =>
-							resolve({
-								cleanedMemory: true,
-								foldedHistory: false,
-							});
-					}),
-			)
-			.mockRejectedValueOnce(new Error("cleanup failed"))
-			.mockResolvedValueOnce({
-				cleanedMemory: false,
-				foldedHistory: true,
-			});
-
-		const lifecycle = createLifecycle({
-			forceRefreshBeforeCompact: false,
-			forceRefreshBeforeNewSession: false,
-		});
+	it("records boundary events after compaction and new-session switches without running maintenance", async () => {
+		const recordMemoryActivity = vi.fn();
+		const lifecycle = createLifecycle(
+			{
+				forceRefreshBeforeCompact: false,
+				forceRefreshBeforeNewSession: false,
+			},
+			recordMemoryActivity,
+		);
 		const fakePi = createFakePi();
 		lifecycle.createExtensionFactory()(fakePi.api as never);
 
 		fakePi.handlers.get("session_compact")?.({});
-		fakePi.handlers.get("session_compact")?.({});
 		fakePi.handlers.get("session_switch")?.({ reason: "new" });
-		await waitForAssertion(() => {
-			expect(runBackgroundMaintenance).toHaveBeenCalledTimes(1);
-		});
-		expect(releaseFirstRun).not.toBeNull();
-		releaseFirstRun!();
 
-		await waitForAssertion(() => {
-			expect(runBackgroundMaintenance).toHaveBeenCalledTimes(3);
-		});
-		expect(vi.mocked(runBackgroundMaintenance).mock.invocationCallOrder[0]).toBeLessThan(
-			vi.mocked(runBackgroundMaintenance).mock.invocationCallOrder[1],
-		);
-		expect(vi.mocked(runBackgroundMaintenance).mock.invocationCallOrder[1]).toBeLessThan(
-			vi.mocked(runBackgroundMaintenance).mock.invocationCallOrder[2],
-		);
-	});
-
-	it("skips idle memory extraction when post-turn review already wrote actions", async () => {
-		vi.useFakeTimers();
-		vi.mocked(runPostTurnReview).mockResolvedValue({
-			actions: [{ target: "MEMORY.md", action: "append", content: "fact", reason: "stable" }],
-			suggestions: [],
-			skipped: [],
-			notices: ["已沉淀：更新 channel memory。"],
-		});
-
-		const lifecycle = new MemoryLifecycle({
-			channelId: "dm_123",
-			channelDir: "/tmp/dm_123",
-			getMessages: () => [{ role: "assistant", content: "live" }] as never[],
-			getSessionEntries: () => [],
-			getModel: () => ({ provider: "test", id: "noop" }) as never,
-			resolveApiKey: async () => "",
-			getSessionMemorySettings: () => createSettings({
-				minTurnsBetweenUpdate: 99,
-				minToolCallsBetweenUpdate: 99,
-				forceRefreshBeforeCompact: false,
-				forceRefreshBeforeNewSession: false,
-			}),
-			getMemoryGrowthSettings: () => ({
-				postTurnReviewEnabled: true,
-				autoWriteChannelMemory: true,
-				autoWriteWorkspaceSkills: false,
-				minSkillAutoWriteConfidence: 0.9,
-				minMemoryAutoWriteConfidence: 0.85,
-				idleWritesHistory: false,
-				minTurnsBetweenReview: 1,
-				minToolCallsBetweenReview: 1,
-			}),
-			getWorkspaceDir: () => "/tmp/workspace",
-			getWorkspacePath: () => "/workspace",
-			getLoadedSkills: () => [],
-		});
-
-		// Trigger a turn that schedules both post-turn review and idle consolidation
-		lifecycle.noteCompletedAssistantTurn();
-
-		// Advance past idle timer (60s) to trigger both review and idle consolidation
-		await vi.advanceTimersByTimeAsync(61_000);
-		vi.useRealTimers();
-
-		await waitForAssertion(() => {
-			expect(runPostTurnReview).toHaveBeenCalledTimes(1);
-			// Maintenance should still run even when memory extraction is skipped
-			expect(runBackgroundMaintenance).toHaveBeenCalledTimes(1);
-		});
-
-		// runInlineConsolidation should NOT have been called (skipped due to review actions)
-		expect(runInlineConsolidation).not.toHaveBeenCalled();
+		expect(recordMemoryActivity).toHaveBeenCalledTimes(2);
+		expect(recordMemoryActivity).toHaveBeenCalledWith(expect.objectContaining({ kind: "boundary" }));
+		expect(runBackgroundMaintenance).not.toHaveBeenCalled();
 	});
 });

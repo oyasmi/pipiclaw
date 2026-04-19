@@ -110,6 +110,8 @@ export {
 	validateSandbox,
 } from "./sandbox.js";
 export {
+	type PipiclawMemoryGrowthSettings,
+	type PipiclawMemoryMaintenanceSettings,
 	type PipiclawMemoryRecallSettings,
 	type PipiclawSessionMemorySettings,
 	type PipiclawSettings,

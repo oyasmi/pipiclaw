@@ -18,7 +18,7 @@ export interface RecallRequest {
 	maxCandidates: number;
 	maxInjected: number;
 	maxChars: number;
-	rerankWithModel: boolean;
+	rerankWithModel: boolean | "auto";
 	autoRerank?: boolean;
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
@@ -69,6 +69,8 @@ const TOKEN_PART_REGEX = /[\p{Script=Han}]+|[\p{L}\p{N}_./-]+/gu;
 const ASCII_SPLIT_REGEX = /[._/-]+/g;
 const MEMORY_RECALL_RERANK_TIMEOUT_MS = 8_000;
 const RERANK_CONTENT_CLIP = 800;
+const HIGH_CONFIDENCE_SCORE = 36;
+const CLOSE_SCORE_DELTA = 8;
 const MAX_HAN_WORD_LENGTH = Array.from(COMMON_CHINESE_WORDS).reduce((max, word) => Math.max(max, word.length), 2);
 const LATIN_STOP_WORDS = new Set([
 	"a",
@@ -479,7 +481,7 @@ function seedIntentCandidates(
 }
 
 async function rerankCandidates(request: RecallRequest, candidates: ScoredCandidate[]): Promise<ScoredCandidate[]> {
-	if ((!request.rerankWithModel && !request.autoRerank) || candidates.length <= request.maxInjected) {
+	if (!shouldUseModelRerank(request, candidates)) {
 		return candidates;
 	}
 
@@ -528,6 +530,41 @@ async function rerankCandidates(request: RecallRequest, candidates: ScoredCandid
 	} catch {
 		return candidates;
 	}
+}
+
+function hasMemorySensitiveQueryIntent(query: string): boolean {
+	if (HAN_REGEX.test(query)) {
+		return /(之前|上次|记得|记住|偏好|决定|历史|纠正|不要再|以后|默认)/.test(query);
+	}
+	return /\b(previous|previously|last time|remember|preference|decision|history|correction|again|default)\b/i.test(
+		query,
+	);
+}
+
+function shouldUseModelRerank(request: RecallRequest, candidates: ScoredCandidate[]): boolean {
+	if (candidates.length <= request.maxInjected) {
+		return false;
+	}
+	if (request.rerankWithModel === true) {
+		return true;
+	}
+	if (request.rerankWithModel === false && !request.autoRerank) {
+		return false;
+	}
+
+	const top = candidates[0];
+	const next = candidates[1];
+	if (!top || !next) {
+		return false;
+	}
+	const highLocalConfidence = top.score >= HIGH_CONFIDENCE_SCORE && top.score - next.score >= CLOSE_SCORE_DELTA;
+	if (highLocalConfidence) {
+		return false;
+	}
+	if (!request.autoRerank && !hasMemorySensitiveQueryIntent(request.query)) {
+		return false;
+	}
+	return true;
 }
 
 function renderRecallResult(items: RecalledMemory[], maxChars: number): string {

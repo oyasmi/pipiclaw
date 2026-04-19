@@ -5,6 +5,7 @@ import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
 import { resetRunner } from "../agent/runner-factory.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
+import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import {
 	APP_HOME_DIR,
 	APP_NAME,
@@ -470,6 +471,7 @@ interface RuntimeContextOptions {
 		bot: DingTalkBot,
 		executor: Executor,
 	) => { start(): void; stop(): void };
+	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
 }
@@ -478,6 +480,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	const startServices = options.startServices ?? true;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
+	const runtimeSettingsManager = new PipiclawSettingsManager(options.paths.appHomeDir);
 	const channelStates = new Map<string, ChannelState>();
 	const activeTasks = new Set<Promise<void>>();
 	let shuttingDown = false;
@@ -661,6 +664,24 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				executor,
 				loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config.commandGuard,
 			);
+	const memoryMaintenanceScheduler = options.createMemoryMaintenanceScheduler
+		? options.createMemoryMaintenanceScheduler()
+		: new MemoryMaintenanceScheduler({
+				appHomeDir: options.paths.appHomeDir,
+				workspaceDir: options.paths.workspaceDir,
+				getKnownChannelIds: () => channelStates.keys(),
+				getRuntimeContext: async (channelId) => getState(channelId).runner.getMemoryMaintenanceContext(),
+				isChannelActive: (channelId) => channelStates.get(channelId)?.running ?? false,
+				getSettings: () => {
+					runtimeSettingsManager.reload();
+					return {
+						memoryMaintenance: runtimeSettingsManager.getMemoryMaintenanceSettings(),
+					};
+				},
+				emitNotice: async (channelId, notice) => {
+					await bot.sendPlain(channelId, notice);
+				},
+			});
 
 	const shutdownWithReason = async (reason: NodeJS.Signals | "manual" = "manual"): Promise<void> => {
 		if (shutdownPromise) {
@@ -671,6 +692,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			shuttingDown = true;
 			log.logInfo(`Shutting down (${reason})...`);
 
+			memoryMaintenanceScheduler.stop();
 			eventsWatcher.stop();
 			await bot.stop();
 
@@ -740,6 +762,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 
 	if (startServices) {
 		eventsWatcher.start();
+		memoryMaintenanceScheduler.start();
 		void bot.start();
 	}
 

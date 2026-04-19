@@ -11,12 +11,19 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
   - **Post-Turn Review**: A dedicated background pipeline that evaluates turns for durable facts and procedural workflows, separating smart memory extraction from basic session maintenance
   - **Procedural Memory (Skills)**: Agents can now actively create, patch, and manage workspace skills using new `skill_manage`, `skill_list`, and `skill_view` tools
   - **Memory Audit Log**: Decisions on memory promotion, suggestion, and discarding are now transparently logged to `memory-review.jsonl` with automatic 1MB rotation
+- **Memory Maintenance Scheduler**: an internal scheduler now batches memory upkeep outside the user-facing turn path
+  - Adds hidden per-channel scheduler state under `${PIPICLAW_HOME}/state/memory/` for dirty flags, run timestamps, thresholds, and failure backoff
+  - Adds scheduled jobs for session refresh, durable consolidation, growth review, and structural cleanup/folding
+  - Adds local no-LLM gates for every scheduled job, so clean, active, under-threshold, or backoff channels skip without spending model tokens
+  - Keeps memory maintenance internal instead of exposing it through `workspace/events/` or synthetic DingTalk turns
 
 ### Changed
 
 - Hardened memory file boundaries: `MEMORY.md` is now strictly for durable facts and decisions, preventing transient task states from polluting long-term memory
-- Idle consolidation no longer indiscriminately writes to `HISTORY.md`, keeping history focused on chronological milestones rather than granular work logs
-- Decoupled idle consolidation and post-turn review to run on separate cadences, significantly reducing API costs while maintaining context quality
+- Normal turns now only mark memory activity and counters; session refresh, durable consolidation, post-turn growth review, cleanup, and history folding move to scheduled maintenance
+- `HISTORY.md` remains focused on boundary summaries from compaction, `/new`, and shutdown, while scheduled durable consolidation only writes durable channel memory
+- Memory recall reranking now defaults to `"auto"`, using local scoring when confidence is high and reserving model rerank for ambiguous memory-sensitive queries
+- `session_search` model summaries remain disabled by default and now skip LLM summarization for empty queries, no-result searches, and short previews
 - Accelerated intra-turn session transcript searches with a 30-second TTL corpus cache
 
 ### Fixed
@@ -25,6 +32,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Hardened memory extraction JSON parsing to gracefully handle LLM-generated markdown code fences
 - Resolved a timestamp drift race condition that could leak temporary files during atomic memory and skill writes
 - Constrained channel session corpus loading to a maximum of 5000 turns to safeguard host memory limits
+- Removed obsolete lifecycle tests for the retired idle timer and refreshed memory tests around the new scheduled-maintenance model
 
 
 ## [0.6.3] - 2026-04-14

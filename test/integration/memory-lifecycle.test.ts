@@ -21,6 +21,12 @@ vi.mock("../../src/memory/sidecar-worker.js", () => ({
 
 import { readChannelHistory, readChannelMemory, readChannelSession } from "../../src/memory/files.js";
 import { MemoryLifecycle } from "../../src/memory/lifecycle.js";
+import {
+	runDurableConsolidationJob,
+	runSessionRefreshJob,
+	runStructuralMaintenanceJob,
+} from "../../src/memory/maintenance-jobs.js";
+import { updateMemoryMaintenanceState } from "../../src/memory/maintenance-state.js";
 import { runRetriedSidecarTask, runSidecarTask } from "../../src/memory/sidecar-worker.js";
 import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
 
@@ -55,6 +61,7 @@ async function waitForAssertion(assertion: () => void | Promise<void>): Promise<
 
 function createLifecycleHarness(settings?: Partial<ReturnType<typeof createSettings>>) {
 	const workspaceDir = createTempWorkspace("pipiclaw-memory-lifecycle-");
+	const appHomeDir = join(workspaceDir, ".app");
 	const channelDir = join(workspaceDir, "dm_123");
 	tempDirs.push(workspaceDir);
 	setupChannelFiles(channelDir, {
@@ -67,7 +74,10 @@ function createLifecycleHarness(settings?: Partial<ReturnType<typeof createSetti
 		{ role: "user", content: "Please fix the login callback regression." },
 		{ role: "assistant", content: [{ type: "text", text: "Tracing the callback state flow in src/auth.ts." }] },
 	] as never[];
-	const sessionEntries = [] as never[];
+	const sessionEntries = [
+		{ id: "entry-1", type: "message", message: messages[0] },
+		{ id: "entry-2", type: "message", message: messages[1] },
+	] as never[];
 
 	const lifecycle = new MemoryLifecycle({
 		channelId: "dm_123",
@@ -82,11 +92,38 @@ function createLifecycleHarness(settings?: Partial<ReturnType<typeof createSetti
 	lifecycle.createExtensionFactory()(fakePi.api as never);
 
 	return {
+		appHomeDir,
 		channelDir,
 		fakePi,
 		lifecycle,
 		messages,
 		sessionEntries,
+	};
+}
+
+function createMaintenanceSettings(settings?: Partial<ReturnType<typeof createSettings>>) {
+	return {
+		sessionMemory: createSettings(settings),
+		memoryGrowth: {
+			postTurnReviewEnabled: true,
+			autoWriteChannelMemory: true,
+			autoWriteWorkspaceSkills: false,
+			minSkillAutoWriteConfidence: 0.9,
+			minMemoryAutoWriteConfidence: 0.85,
+			idleWritesHistory: false,
+			minTurnsBetweenReview: 12,
+			minToolCallsBetweenReview: 24,
+		},
+		memoryMaintenance: {
+			enabled: true,
+			minIdleMinutesBeforeLlmWork: 0,
+			sessionRefreshIntervalMinutes: 0,
+			durableConsolidationIntervalMinutes: 0,
+			growthReviewIntervalMinutes: 0,
+			structuralMaintenanceIntervalHours: 0,
+			maxConcurrentChannels: 1,
+			failureBackoffMinutes: 30,
+		},
 	};
 }
 
@@ -122,8 +159,8 @@ afterEach(() => {
 });
 
 describe("memory-lifecycle integration", () => {
-	it("updates SESSION.md after the configured turn threshold", async () => {
-		const { channelDir, lifecycle } = createLifecycleHarness({
+	it("updates SESSION.md from the scheduled session refresh job", async () => {
+		const { appHomeDir, channelDir, messages, sessionEntries } = createLifecycleHarness({
 			minTurnsBetweenUpdate: 2,
 			minToolCallsBetweenUpdate: 99,
 			forceRefreshBeforeCompact: false,
@@ -141,21 +178,34 @@ describe("memory-lifecycle integration", () => {
 			};
 		});
 
-		lifecycle.noteCompletedAssistantTurn();
-		lifecycle.noteCompletedAssistantTurn();
-
-		await waitForAssertion(() => {
-			const session = readFileSync(join(channelDir, "SESSION.md"), "utf-8");
-			expect(session).toContain("Fix login regression");
-			expect(session).toContain("Investigating callback state flow.");
+		await updateMemoryMaintenanceState(appHomeDir, "dm_123", (state) => ({
+			...state,
+			dirty: true,
+			turnsSinceSessionRefresh: 2,
+		}));
+		await runSessionRefreshJob({
+			appHomeDir,
+			channelId: "dm_123",
+			channelDir,
+			channelActive: false,
+			settings: createMaintenanceSettings({
+				minTurnsBetweenUpdate: 2,
+				minToolCallsBetweenUpdate: 99,
+			}),
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+			messages,
+			sessionEntries,
 		});
+
+		const session = readFileSync(join(channelDir, "SESSION.md"), "utf-8");
+		expect(session).toContain("Fix login regression");
+		expect(session).toContain("Investigating callback state flow.");
 		expect(runRetriedSidecarTask).toHaveBeenCalledTimes(1);
-		lifecycle.noteUserTurnStarted();
 	});
 
-	it("persists durable memory after the conversation goes idle", async () => {
-		vi.useFakeTimers();
-		const { channelDir, lifecycle } = createLifecycleHarness({
+	it("persists durable memory from the scheduled durable consolidation job", async () => {
+		const { appHomeDir, channelDir, messages, sessionEntries } = createLifecycleHarness({
 			minTurnsBetweenUpdate: 99,
 			minToolCallsBetweenUpdate: 99,
 			forceRefreshBeforeCompact: false,
@@ -173,23 +223,28 @@ describe("memory-lifecycle integration", () => {
 			throw new Error(`Unexpected sidecar task ${task.name}`);
 		});
 
-		lifecycle.noteCompletedAssistantTurn();
-		await vi.advanceTimersByTimeAsync(60_000);
-		vi.useRealTimers();
-
-		await waitForAssertion(async () => {
-			expect(await readChannelMemory(channelDir)).toContain(
-				"Callback verification must remain backwards-compatible",
-			);
-			expect(await readChannelHistory(channelDir)).not.toContain("Investigated callback verification flow.");
-			expect(readFileSync(join(channelDir, "memory-review.jsonl"), "utf-8")).toContain(
-				"idle does not write HISTORY.md",
-			);
+		await updateMemoryMaintenanceState(appHomeDir, "dm_123", (state) => ({
+			...state,
+			dirty: true,
+		}));
+		await runDurableConsolidationJob({
+			appHomeDir,
+			channelId: "dm_123",
+			channelDir,
+			channelActive: false,
+			settings: createMaintenanceSettings(),
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+			messages,
+			sessionEntries,
 		});
+
+		expect(await readChannelMemory(channelDir)).toContain("Callback verification must remain backwards-compatible");
+		expect(await readChannelHistory(channelDir)).not.toContain("Investigated callback verification flow.");
 	});
 
-	it("updates SESSION.md after the configured tool-call threshold and resets the counters", async () => {
-		const { channelDir, lifecycle } = createLifecycleHarness({
+	it("updates SESSION.md after the scheduled tool-call threshold and resets the counters", async () => {
+		const { appHomeDir, channelDir, messages, sessionEntries } = createLifecycleHarness({
 			minTurnsBetweenUpdate: 99,
 			minToolCallsBetweenUpdate: 2,
 			forceRefreshBeforeCompact: false,
@@ -203,22 +258,28 @@ describe("memory-lifecycle integration", () => {
 			},
 		});
 
-		lifecycle.noteToolCall();
-		lifecycle.noteToolCall();
-		lifecycle.noteCompletedAssistantTurn();
-
-		await waitForAssertion(() => {
-			expect(readFileSync(join(channelDir, "SESSION.md"), "utf-8")).toContain(
-				"Checked callback state serialization.",
-			);
+		await updateMemoryMaintenanceState(appHomeDir, "dm_123", (state) => ({
+			...state,
+			dirty: true,
+			toolCallsSinceSessionRefresh: 2,
+		}));
+		await runSessionRefreshJob({
+			appHomeDir,
+			channelId: "dm_123",
+			channelDir,
+			channelActive: false,
+			settings: createMaintenanceSettings({
+				minTurnsBetweenUpdate: 99,
+				minToolCallsBetweenUpdate: 2,
+			}),
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+			messages,
+			sessionEntries,
 		});
-
-		lifecycle.noteCompletedAssistantTurn();
-		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(runRetriedSidecarTask).toHaveBeenCalledTimes(1);
 		expect(await readChannelSession(channelDir)).toContain("Checked callback state serialization.");
-		lifecycle.noteUserTurnStarted();
 	});
 
 	it("runs the compaction chain in order: session refresh, memory append, history append", async () => {
@@ -263,8 +324,8 @@ describe("memory-lifecycle integration", () => {
 		});
 	});
 
-	it("runs background maintenance after compaction using the real file writers", async () => {
-		const { channelDir, fakePi } = createLifecycleHarness({
+	it("runs structural maintenance using the real file writers", async () => {
+		const { appHomeDir, channelDir, messages, sessionEntries } = createLifecycleHarness({
 			forceRefreshBeforeCompact: false,
 			forceRefreshBeforeNewSession: false,
 		});
@@ -306,12 +367,20 @@ describe("memory-lifecycle integration", () => {
 			throw new Error(`Unexpected sidecar task ${task.name}`);
 		});
 
-		fakePi.handlers.get("session_compact")?.({});
-
-		await waitForAssertion(() => {
-			expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).toContain("Keep the callback interface stable.");
-			expect(readFileSync(join(channelDir, "HISTORY.md"), "utf-8")).toContain("Folded early history.");
+		await runStructuralMaintenanceJob({
+			appHomeDir,
+			channelId: "dm_123",
+			channelDir,
+			channelActive: false,
+			settings: createMaintenanceSettings(),
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+			messages,
+			sessionEntries,
 		});
+
+		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).toContain("Keep the callback interface stable.");
+		expect(readFileSync(join(channelDir, "HISTORY.md"), "utf-8")).toContain("Folded early history.");
 	});
 
 	it("continues consolidation even when the forced session refresh fails", async () => {

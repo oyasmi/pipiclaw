@@ -1,3 +1,4 @@
+import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import type { DingTalkContext } from "../runtime/dingtalk.js";
 import type { ChannelStore } from "../runtime/store.js";
 import type { UsageTotals } from "../shared/types.js";
@@ -9,6 +10,7 @@ export interface AgentRunner {
 	queueSteer(text: string, userName?: string): Promise<void>;
 	queueFollowUp(text: string, userName?: string): Promise<void>;
 	flushMemoryForShutdown(): Promise<void>;
+	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;
 	abort(): Promise<void>;
 }
 

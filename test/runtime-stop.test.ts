@@ -101,6 +101,9 @@ describe("runtime stop handling", () => {
 			queueSteer: vi.fn(async () => {}),
 			queueFollowUp: vi.fn(async () => {}),
 			flushMemoryForShutdown: vi.fn(async () => {}),
+			getMemoryMaintenanceContext: vi.fn(async () => {
+				throw new Error("not used");
+			}),
 			abort: vi.fn(async () => {
 				releaseRun();
 			}),

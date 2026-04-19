@@ -135,6 +135,13 @@ export interface BackgroundMaintenanceResult {
 	foldedHistory: boolean;
 }
 
+export interface StructuralMaintenanceStats {
+	memoryCleanupNeeded: boolean;
+	historyFoldingNeeded: boolean;
+	hasMemoryContent: boolean;
+	hasHistoryContent: boolean;
+}
+
 interface ConsolidationResponse {
 	memoryEntries: string[];
 	historyBlock: string;
@@ -201,6 +208,33 @@ function hasMeaningfulMessages(messages: Message[]): boolean {
 
 function countMatchingSectionHeadings(content: string, prefix: string): number {
 	return splitH2Sections(content).filter((section) => section.heading.startsWith(prefix)).length;
+}
+
+export function shouldCleanupChannelMemory(currentMemory: string): boolean {
+	return (
+		currentMemory.length >= MEMORY_CLEANUP_LENGTH_THRESHOLD ||
+		countMatchingSectionHeadings(currentMemory, "Update ") >= MEMORY_UPDATE_BLOCK_THRESHOLD
+	);
+}
+
+export function shouldFoldChannelHistory(currentHistory: string): boolean {
+	const sections = splitH2Sections(currentHistory);
+	return (
+		(currentHistory.length >= HISTORY_LENGTH_THRESHOLD || sections.length >= HISTORY_BLOCK_THRESHOLD) &&
+		sections.length > HISTORY_RECENT_BLOCKS_TO_KEEP
+	);
+}
+
+export function getStructuralMaintenanceStats(
+	currentMemory: string,
+	currentHistory: string,
+): StructuralMaintenanceStats {
+	return {
+		memoryCleanupNeeded: shouldCleanupChannelMemory(currentMemory),
+		historyFoldingNeeded: shouldFoldChannelHistory(currentHistory),
+		hasMemoryContent: currentMemory.replace(/^# Channel Memory\s*/i, "").trim().length > 0,
+		hasHistoryContent: currentHistory.replace(/^# Channel History\s*/i, "").trim().length > 0,
+	};
 }
 
 async function runWorkerPrompt(
@@ -296,11 +330,8 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 	};
 }
 
-async function cleanupChannelMemory(options: ConsolidationRunOptions, currentMemory: string): Promise<boolean> {
-	if (
-		currentMemory.length < MEMORY_CLEANUP_LENGTH_THRESHOLD &&
-		countMatchingSectionHeadings(currentMemory, "Update ") < MEMORY_UPDATE_BLOCK_THRESHOLD
-	) {
+export async function cleanupChannelMemory(options: ConsolidationRunOptions, currentMemory: string): Promise<boolean> {
+	if (!shouldCleanupChannelMemory(currentMemory)) {
 		return false;
 	}
 
@@ -318,16 +349,12 @@ ${currentMemory}`;
 	return true;
 }
 
-async function foldChannelHistory(options: ConsolidationRunOptions, currentHistory: string): Promise<boolean> {
+export async function foldChannelHistory(options: ConsolidationRunOptions, currentHistory: string): Promise<boolean> {
+	if (!shouldFoldChannelHistory(currentHistory)) {
+		return false;
+	}
+
 	const sections = splitH2Sections(currentHistory);
-	if (currentHistory.length < HISTORY_LENGTH_THRESHOLD && sections.length < HISTORY_BLOCK_THRESHOLD) {
-		return false;
-	}
-
-	if (sections.length <= HISTORY_RECENT_BLOCKS_TO_KEEP) {
-		return false;
-	}
-
 	const olderSections = sections.slice(0, -HISTORY_RECENT_BLOCKS_TO_KEEP);
 	const recentSections = sections.slice(-HISTORY_RECENT_BLOCKS_TO_KEEP);
 	const prompt = `Older history blocks to fold:

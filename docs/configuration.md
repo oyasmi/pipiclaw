@@ -600,20 +600,30 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 | `memoryRecall.maxCandidates` | `12` | Yes | 排序前候选片段数量 |
 | `memoryRecall.maxInjected` | `5` | Yes | 注入当前 prompt 的片段数量 |
 | `memoryRecall.maxChars` | `5000` | Yes | 注入字符上限 |
-| `memoryRecall.rerankWithModel` | `true` | Yes | 用模型对召回结果再次排序 |
+| `memoryRecall.rerankWithModel` | `"auto"` | Yes | 是否用模型对召回结果再次排序；`"auto"` 只在本地排序不确定时触发 |
 | `sessionMemory.enabled` | `true` | Yes | 启用 `SESSION.md` 刷新流程 |
-| `sessionMemory.minTurnsBetweenUpdate` | `2` | Yes | 按 assistant turn 触发阈值 |
-| `sessionMemory.minToolCallsBetweenUpdate` | `4` | Yes | 按工具调用次数触发阈值 |
+| `sessionMemory.minTurnsBetweenUpdate` | `2` | Yes | scheduled session refresh 的 assistant turn 阈值 |
+| `sessionMemory.minToolCallsBetweenUpdate` | `4` | Yes | scheduled session refresh 的工具调用阈值 |
 | `sessionMemory.timeoutMs` | `30000` | Yes | 会话记忆刷新超时 |
-| `sessionMemory.failureBackoffTurns` | `3` | Yes | 失败后的回退轮数 |
+| `sessionMemory.failureBackoffTurns` | `3` | Legacy | 边界外的 scheduled refresh 主要使用 `memoryMaintenance.failureBackoffMinutes` |
 | `sessionMemory.forceRefreshBeforeCompact` | `true` | Yes | compaction 前强制刷新 |
 | `sessionMemory.forceRefreshBeforeNewSession` | `true` | Yes | `/new` 前强制刷新 |
-| `memoryGrowth.postTurnReviewEnabled` | `true` | Yes | 启用回合后记忆复盘 |
+| `memoryGrowth.postTurnReviewEnabled` | `true` | Yes | 启用后台 growth review job |
 | `memoryGrowth.autoWriteChannelMemory` | `true` | Yes | 高置信 durable fact 自动写入 channel `MEMORY.md` |
 | `memoryGrowth.autoWriteWorkspaceSkills` | `true` | Yes | 高置信 reusable workflow 自动写入 workspace `skills/` |
 | `memoryGrowth.minSkillAutoWriteConfidence` | `0.9` | Yes | workspace skill 自动写入阈值；当前固定为 `0.9` |
 | `memoryGrowth.minMemoryAutoWriteConfidence` | `0.85` | Yes | channel memory 自动写入阈值 |
 | `memoryGrowth.idleWritesHistory` | `false` | Reserved | idle consolidation 默认不写 `HISTORY.md` |
+| `memoryGrowth.minTurnsBetweenReview` | `12` | Yes | growth review job 的 assistant turn 阈值 |
+| `memoryGrowth.minToolCallsBetweenReview` | `24` | Yes | growth review job 的工具调用阈值 |
+| `memoryMaintenance.enabled` | `true` | Yes | 启用内置后台 memory maintenance scheduler |
+| `memoryMaintenance.minIdleMinutesBeforeLlmWork` | `10` | Yes | channel 最近活跃后至少等待多久才允许后台 LLM work |
+| `memoryMaintenance.sessionRefreshIntervalMinutes` | `10` | Yes | scheduled session refresh 的最小间隔 |
+| `memoryMaintenance.durableConsolidationIntervalMinutes` | `20` | Yes | durable consolidation job 的最小间隔 |
+| `memoryMaintenance.growthReviewIntervalMinutes` | `60` | Yes | growth review job 的最小间隔 |
+| `memoryMaintenance.structuralMaintenanceIntervalHours` | `6` | Yes | cleanup/folding structural job 的最小间隔 |
+| `memoryMaintenance.maxConcurrentChannels` | `1` | Yes | 每个 tick 最多处理的 channel 数 |
+| `memoryMaintenance.failureBackoffMinutes` | `30` | Yes | 后台任务失败后的回退分钟数 |
 | `sessionSearch.enabled` | `true` | Yes | 启用当前 channel transcript 冷路径搜索 |
 | `sessionSearch.maxFiles` | `12` | Yes | `session_search` 最多读取的当前 channel JSONL 文件数 |
 | `sessionSearch.maxChunks` | `80` | Yes | `session_search` 最多评分片段数 |
@@ -674,7 +684,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
     "maxCandidates": 8,
     "maxInjected": 3,
     "maxChars": 3000,
-    "rerankWithModel": true
+    "rerankWithModel": "auto"
   }
 }
 ```
@@ -721,10 +731,20 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 - 当前模型上下文较大
 
-#### 5. 调整 memory growth 与冷路径检索
+#### 5. 调整后台记忆维护与冷路径检索
 
 ```json
 {
+  "memoryMaintenance": {
+    "enabled": true,
+    "minIdleMinutesBeforeLlmWork": 10,
+    "sessionRefreshIntervalMinutes": 10,
+    "durableConsolidationIntervalMinutes": 20,
+    "growthReviewIntervalMinutes": 60,
+    "structuralMaintenanceIntervalHours": 6,
+    "maxConcurrentChannels": 1,
+    "failureBackoffMinutes": 30
+  },
   "memoryGrowth": {
     "postTurnReviewEnabled": true,
     "autoWriteChannelMemory": true,
@@ -745,7 +765,10 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 说明：
 
-- `postTurnReview` 的触发频率复用 `sessionMemory` 的 turn/tool-call 阈值。
+- 普通用户 turn 结束后只记录 dirty/counter，不直接触发 memory LLM sidecar。
+- `memoryMaintenance` 是内置后台 scheduler，不依赖也不会写入 `workspace/events/`。
+- 四类后台任务在调用 LLM 前都有本地 gate；无新内容、channel 仍活跃、未到阈值或未到间隔时不会调用 LLM。
+- `postTurnReview` 已迁移为后台 growth review job，触发频率由 `memoryGrowth.minTurnsBetweenReview` / `memoryGrowth.minToolCallsBetweenReview` 和 `memoryMaintenance.growthReviewIntervalMinutes` 共同控制。
 - `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
 - `minSkillAutoWriteConfidence` 当前固定为 `0.9`，用于避免低置信 workflow 污染 workspace skills。
 
@@ -987,10 +1010,11 @@ web 工具的代理顺序是：
 
 记忆分层：
 
-- `SESSION.md`：当前工作态，由 runtime 维护。
+- `SESSION.md`：当前工作态，由 runtime 在边界保存和后台 session refresh job 中维护。
 - `MEMORY.md`：durable channel facts、决策、偏好、约束和中期 open loops。
-- `HISTORY.md`：compaction、`/new`、shutdown 等边界上的旧阶段摘要；idle consolidation 默认不写它。
+- `HISTORY.md`：compaction、`/new`、shutdown 等边界上的旧阶段摘要；后台 durable consolidation 默认不写它。
 - `context.jsonl` / `log.jsonl` / `log.jsonl.1`：冷存储，只通过 `session_search` 显式检索，不进入普通 turn-time recall。
+- `${PIPICLAW_HOME}/state/memory/<channelId>.json`：内置 scheduler 的 hidden state，只记录 dirty、阈值计数、上次运行时间和 backoff，不作为 recall 来源。
 
 ## 按场景推荐的配置路径（Recommended Configuration Paths by Scenario）
 

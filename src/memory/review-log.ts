@@ -1,7 +1,16 @@
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-export type MemoryReviewReason = "idle" | "compaction" | "new-session" | "shutdown" | "post-turn";
+export type MemoryReviewReason =
+	| "idle"
+	| "compaction"
+	| "new-session"
+	| "shutdown"
+	| "post-turn"
+	| "session-refresh-job"
+	| "durable-consolidation-job"
+	| "growth-review-job"
+	| "structural-maintenance-job";
 
 export interface MemoryReviewLogEntry {
 	timestamp: string;

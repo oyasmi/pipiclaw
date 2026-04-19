@@ -21,6 +21,8 @@ Pipiclaw 已经完成了第一阶段 memory 升级：
 6. idle 后有自动 consolidation 与 background maintenance
 7. sub-agent 已支持 contextual memory 注入
 
+后续调整：spec 010 已将普通 turn 附近的 post-turn review、idle durable consolidation、cleanup/folding 迁移到内置后台 memory maintenance scheduler。spec 009 中关于能力边界和文件分层的设计仍然有效，但触发时机以 spec 010 为准。
+
 这意味着 spec 009 不应该重复 spec 003 的目标，也不应该引入另一套并行 memory 系统。
 
 本 spec 的目标是把当前“状态维护闭环”升级成更可靠的“长期成长与冷路径回忆闭环”：

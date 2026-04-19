@@ -1,8 +1,6 @@
-import { rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { scanSkillContent, validateSkillMarkdown } from "../src/tools/skill-security.js";
-import { createTempWorkspace } from "./helpers/fixtures.js";
 
 const tempDirs: string[] = [];
 

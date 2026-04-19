@@ -75,7 +75,7 @@ export interface PipiclawMemoryRecallSettings {
 	maxCandidates: number;
 	maxInjected: number;
 	maxChars: number;
-	rerankWithModel: boolean;
+	rerankWithModel: boolean | "auto";
 }
 
 export interface PipiclawSessionMemorySettings {
@@ -99,6 +99,17 @@ export interface PipiclawMemoryGrowthSettings {
 	minToolCallsBetweenReview: number;
 }
 
+export interface PipiclawMemoryMaintenanceSettings {
+	enabled: boolean;
+	minIdleMinutesBeforeLlmWork: number;
+	sessionRefreshIntervalMinutes: number;
+	durableConsolidationIntervalMinutes: number;
+	growthReviewIntervalMinutes: number;
+	structuralMaintenanceIntervalHours: number;
+	maxConcurrentChannels: number;
+	failureBackoffMinutes: number;
+}
+
 export interface PipiclawSessionSearchSettings {
 	enabled: boolean;
 	maxFiles: number;
@@ -117,6 +128,7 @@ export interface PipiclawSettings {
 	memoryRecall?: Partial<PipiclawMemoryRecallSettings>;
 	sessionMemory?: Partial<PipiclawSessionMemorySettings>;
 	memoryGrowth?: Partial<PipiclawMemoryGrowthSettings>;
+	memoryMaintenance?: Partial<PipiclawMemoryMaintenanceSettings>;
 	sessionSearch?: Partial<PipiclawSessionSearchSettings>;
 }
 
@@ -137,7 +149,7 @@ const DEFAULT_MEMORY_RECALL: PipiclawMemoryRecallSettings = {
 	maxCandidates: 12,
 	maxInjected: 5,
 	maxChars: 5000,
-	rerankWithModel: true,
+	rerankWithModel: "auto",
 };
 
 const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
@@ -168,6 +180,17 @@ const DEFAULT_SESSION_SEARCH: PipiclawSessionSearchSettings = {
 	maxCharsPerChunk: 1200,
 	summarizeWithModel: false,
 	timeoutMs: 12_000,
+};
+
+const DEFAULT_MEMORY_MAINTENANCE: PipiclawMemoryMaintenanceSettings = {
+	enabled: true,
+	minIdleMinutesBeforeLlmWork: 10,
+	sessionRefreshIntervalMinutes: 10,
+	durableConsolidationIntervalMinutes: 20,
+	growthReviewIntervalMinutes: 60,
+	structuralMaintenanceIntervalHours: 6,
+	maxConcurrentChannels: 1,
+	failureBackoffMinutes: 30,
 };
 
 /**
@@ -283,6 +306,13 @@ export class PipiclawSettingsManager {
 			...DEFAULT_MEMORY_GROWTH,
 			...this.settings.memoryGrowth,
 			minSkillAutoWriteConfidence: 0.9,
+		};
+	}
+
+	getMemoryMaintenanceSettings(): PipiclawMemoryMaintenanceSettings {
+		return {
+			...DEFAULT_MEMORY_MAINTENANCE,
+			...this.settings.memoryMaintenance,
 		};
 	}
 

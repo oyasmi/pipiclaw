@@ -17,7 +17,13 @@ import { buildFirstTurnMemoryBootstrap as renderFirstTurnMemoryBootstrap } from 
 import { createMemoryCandidateStore, type MemoryCandidateStore } from "../memory/candidates.js";
 import { getChannelMemoryPath } from "../memory/files.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
+import {
+	applyMemoryActivityToState,
+	type MemoryActivityEvent,
+	updateMemoryMaintenanceState,
+} from "../memory/maintenance-state.js";
 import { recallRelevantMemory } from "../memory/recall.js";
+import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { resolveInitialModel } from "../models/utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
@@ -174,6 +180,9 @@ export class ChannelRunner implements AgentRunner {
 			},
 			refreshWorkspaceResources: async () => {
 				await this.refreshSessionResources();
+			},
+			recordMemoryActivity: (event) => {
+				void this.recordMemoryActivity(event);
 			},
 		});
 
@@ -450,6 +459,33 @@ export class ChannelRunner implements AgentRunner {
 		await this.memoryLifecycle.flushForShutdown();
 	}
 
+	async getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext> {
+		await this.ensureSessionReady();
+		this.settingsManager.reload();
+		return {
+			channelId: this.channelId,
+			channelDir: this.channelDir,
+			workspaceDir: this.workspaceDir,
+			workspacePath: this.workspacePath,
+			messages: [...this.session.messages],
+			sessionEntries: [...this.sessionManager.getBranch()],
+			model: this.session.model ?? this.activeModel,
+			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
+			settings: {
+				sessionMemory: this.settingsManager.getSessionMemorySettings(),
+				memoryGrowth: this.settingsManager.getMemoryGrowthSettings(),
+				memoryMaintenance: this.settingsManager.getMemoryMaintenanceSettings(),
+			},
+			loadedSkills: this.currentSkills.map((skill) => ({
+				name: skill.name,
+				description: skill.description,
+			})),
+			refreshWorkspaceResources: async () => {
+				await this.refreshSessionResources();
+			},
+		};
+	}
+
 	async abort(): Promise<void> {
 		await this.session.abort();
 	}
@@ -461,6 +497,25 @@ export class ChannelRunner implements AgentRunner {
 		if (!delivered) {
 			await ctx.replaceMessage(text);
 			await ctx.flush();
+		}
+	}
+
+	private async recordMemoryActivity(event: MemoryActivityEvent): Promise<void> {
+		const maintenanceSettings = this.settingsManager.getMemoryMaintenanceSettings();
+		const eventTime = Date.parse(event.timestamp);
+		const eligibleAfter = Number.isFinite(eventTime)
+			? new Date(eventTime + Math.max(0, maintenanceSettings.minIdleMinutesBeforeLlmWork) * 60_000).toISOString()
+			: undefined;
+		try {
+			await updateMemoryMaintenanceState(APP_HOME_DIR, this.channelId, (state) =>
+				applyMemoryActivityToState(state, {
+					...event,
+					eligibleAfter,
+				}),
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			log.logWarning(`[${this.channelId}] Failed to record memory maintenance state`, message);
 		}
 	}
 
