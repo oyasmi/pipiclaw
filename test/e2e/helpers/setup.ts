@@ -95,6 +95,16 @@ export function createE2ETestHome(overrides?: {
 			forceRefreshBeforeCompact: true,
 			forceRefreshBeforeNewSession: true,
 		},
+		memoryMaintenance: {
+			enabled: true,
+			minIdleMinutesBeforeLlmWork: 0,
+			sessionRefreshIntervalMinutes: 0,
+			durableConsolidationIntervalMinutes: 60,
+			growthReviewIntervalMinutes: 60,
+			structuralMaintenanceIntervalHours: 24,
+			maxConcurrentChannels: 1,
+			failureBackoffMinutes: 1,
+		},
 	});
 
 	writeJson(channelConfigPath, {

@@ -22,6 +22,8 @@ export async function createRuntimeHarness(options?: {
 	channelId?: string;
 	enableDebug?: boolean;
 	home?: E2ETestHome;
+	startServices?: boolean;
+	memoryMaintenanceSchedulerIntervalMs?: number;
 }): Promise<E2ERuntimeHarness> {
 	const home = options?.home ?? createE2ETestHome({ enableDebug: options?.enableDebug });
 	process.env.PIPICLAW_HOME = home.homeDir;
@@ -51,7 +53,8 @@ export async function createRuntimeHarness(options?: {
 			stateDir: home.workspaceDir,
 		},
 		registerSignalHandlers: false,
-		startServices: false,
+		startServices: options?.startServices ?? false,
+		memoryMaintenanceSchedulerIntervalMs: options?.memoryMaintenanceSchedulerIntervalMs,
 		createBot: () => fakeBot as unknown as DingTalkBot,
 		createEventsWatcher: () => ({ start() {}, stop() {} }),
 	});

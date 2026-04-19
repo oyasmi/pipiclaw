@@ -9,7 +9,10 @@ describeE2E("E2E: session memory", () => {
 	let harness: E2ERuntimeHarness;
 
 	beforeAll(async () => {
-		harness = await createRuntimeHarness();
+		harness = await createRuntimeHarness({
+			startServices: true,
+			memoryMaintenanceSchedulerIntervalMs: 2_000,
+		});
 	});
 
 	afterAll(async () => {

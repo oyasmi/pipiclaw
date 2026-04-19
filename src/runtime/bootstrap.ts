@@ -472,6 +472,7 @@ interface RuntimeContextOptions {
 		executor: Executor,
 	) => { start(): void; stop(): void };
 	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
+	memoryMaintenanceSchedulerIntervalMs?: number;
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
 }
@@ -681,6 +682,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				emitNotice: async (channelId, notice) => {
 					await bot.sendPlain(channelId, notice);
 				},
+				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,
 			});
 
 	const shutdownWithReason = async (reason: NodeJS.Signals | "manual" = "manual"): Promise<void> => {
