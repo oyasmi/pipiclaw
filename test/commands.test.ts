@@ -37,6 +37,7 @@ describe("commands", () => {
 		expect(help).toContain("## Transport Commands");
 		expect(help).toContain("## Session Commands");
 		expect(help).toContain("/followup <message>");
+		expect(help).toContain("busyMessageDefault");
 		expect(help).toContain("/model [provider/modelId|modelId]");
 	});
 });

@@ -295,6 +295,20 @@ describe("dingtalk", () => {
 		);
 
 		await privateApi.onStreamMessage({
+			text: { content: "/followup next task" },
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_1",
+			conversationType: "1",
+		});
+		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ channelId: "dm_staff_1" }),
+			bot,
+			"followUp",
+			"next task",
+		);
+
+		await privateApi.onStreamMessage({
 			text: { content: "plain busy text" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -307,6 +321,47 @@ describe("dingtalk", () => {
 			"steer",
 			"plain busy text",
 		);
+	});
+
+	it("routes plain busy messages through the configured follow-up default", async () => {
+		for (const busyMessageDefault of ["followUp", "followup"] as const) {
+			const { bot, handler } = createBot(
+				{
+					isRunning: vi.fn(() => true),
+				},
+				{ busyMessageDefault },
+			);
+			bot.sendPlain = vi.fn(async () => true);
+			const privateApi = getPrivateApi(bot);
+
+			await privateApi.onStreamMessage({
+				text: { content: "plain busy text" },
+				senderStaffId: "staff_1",
+				senderNick: "Alice",
+				conversationId: "conv_1",
+				conversationType: "1",
+			});
+			expect(handler.handleBusyMessage).toHaveBeenCalledWith(
+				expect.objectContaining({ text: "plain busy text" }),
+				bot,
+				"followUp",
+				"plain busy text",
+			);
+
+			await privateApi.onStreamMessage({
+				text: { content: "/steer keep current focus" },
+				senderStaffId: "staff_1",
+				senderNick: "Alice",
+				conversationId: "conv_1",
+				conversationType: "1",
+			});
+			expect(handler.handleBusyMessage).toHaveBeenCalledWith(
+				expect.objectContaining({ text: "/steer keep current focus" }),
+				bot,
+				"steer",
+				"keep current focus",
+			);
+		}
 	});
 
 	it("refreshes, caches, and coalesces access token requests", async () => {

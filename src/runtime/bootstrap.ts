@@ -30,6 +30,8 @@ import {
 	type DingTalkConfig,
 	type DingTalkEvent,
 	type DingTalkHandler,
+	isBusyMessageDefaultConfig,
+	normalizeBusyMessageDefault,
 } from "./dingtalk.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
@@ -175,6 +177,7 @@ const CHANNEL_CONFIG_TEMPLATE = {
 	cardTemplateId: "your-card-template-id",
 	cardTemplateKey: "content",
 	allowFrom: ["your-staff-id"],
+	busyMessageDefault: "steer",
 } satisfies DingTalkConfig;
 
 const MODELS_CONFIG_TEMPLATE = { providers: {} };
@@ -345,6 +348,11 @@ function listChannelConfigIssues(config: Partial<DingTalkConfig>): string[] {
 		issues.push("Replace placeholder values in `allowFrom`, or set it to an empty array to allow all users.");
 	}
 
+	const busyMessageDefault = (config as { busyMessageDefault?: unknown }).busyMessageDefault;
+	if (busyMessageDefault !== undefined && !isBusyMessageDefaultConfig(busyMessageDefault)) {
+		issues.push('Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".');
+	}
+
 	return issues;
 }
 
@@ -388,6 +396,9 @@ export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: 
 
 	parsed.cardTemplateKey = parsed.cardTemplateKey || "content";
 	parsed.robotCode = parsed.robotCode?.trim() ? parsed.robotCode : parsed.clientId;
+	parsed.busyMessageDefault = normalizeBusyMessageDefault(
+		(parsed as { busyMessageDefault?: unknown }).busyMessageDefault,
+	);
 	if (Array.isArray(parsed.allowFrom)) {
 		parsed.allowFrom = parsed.allowFrom.filter((value) => value.trim().length > 0);
 	}
@@ -581,7 +592,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 
 				const confirmation =
 					mode === "followUp"
-						? "Queued as follow-up. I’ll handle it after the current task completes."
+						? event.text.trim().startsWith("/")
+							? "Queued as follow-up. I’ll handle it after the current task completes."
+							: "Queued as follow-up. I’ll handle it after the current task completes. Use `/steer <message>` to apply it after the current tool step finishes."
 						: event.text.trim().startsWith("/")
 							? "Queued as steer. I’ll apply it after the current tool step finishes."
 							: "Queued as steer. I’ll apply this after the current tool step finishes. Use `/followup <message>` to queue it after completion.";

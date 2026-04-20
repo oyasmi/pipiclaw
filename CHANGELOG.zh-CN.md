@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 在 `channel.json` 中新增 `busyMessageDefault`，允许钉钉机器人配置任务运行中收到普通消息时默认走 `steer` 或 `followUp`；配置同时接受小写别名 `followup`，并会在启动阶段拒绝无效的显式配置值。
+
 ## [0.6.4] - 2026-04-19
 
 ### 新增

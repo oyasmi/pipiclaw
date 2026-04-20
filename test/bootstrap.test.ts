@@ -70,6 +70,7 @@ describe("bootstrap", () => {
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"proxy": "http://127.0.0.1:7890"');
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"apiKey": "BSA..."');
 		expect(readFileSync(paths.securityConfigPath, "utf-8")).toContain('"enabled": false');
+		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"busyMessageDefault": "steer"');
 
 		const second = bootstrapAppHome(paths);
 		expect(second.channelTemplateCreated).toBe(false);
@@ -115,6 +116,7 @@ describe("bootstrap", () => {
 					clientSecret: "secret",
 					robotCode: "",
 					allowFrom: ["alice", " ", "bob"],
+					busyMessageDefault: "followup",
 				},
 				null,
 				2,
@@ -127,7 +129,30 @@ describe("bootstrap", () => {
 			robotCode: "client-id",
 			cardTemplateKey: "content",
 			allowFrom: ["alice", "bob"],
+			busyMessageDefault: "followUp",
 		});
+	});
+
+	it("rejects invalid busy message defaults during config loading", () => {
+		const paths = createBootstrapPaths();
+		const io = createIO();
+		writeFileSync(
+			paths.channelConfigPath,
+			JSON.stringify(
+				{
+					clientId: "client-id",
+					clientSecret: "secret",
+					busyMessageDefault: "follow-up",
+				},
+				null,
+				2,
+			),
+		);
+
+		expect(() => loadConfig(paths, io)).toThrowError(BootstrapExitError);
+		expect(io.error).toHaveBeenCalledWith(
+			'  - Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".',
+		);
 	});
 
 	it("bootstraps without starting services when requested", async () => {

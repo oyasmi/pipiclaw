@@ -172,6 +172,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 | `cardTemplateId` | 否 | 留空时不启用 AI Card | AI Card 模板 ID，建议配置 |
 | `cardTemplateKey` | 否 | `"content"` | 写入流式内容的模板字段名 |
 | `allowFrom` | 否 | 留空或省略时允许所有人 | 允许访问的发送者 staff ID 列表 |
+| `busyMessageDefault` | 否 | `"steer"` | Agent 忙碌时普通消息的默认处理模式。`"steer"` 表示插入当前任务，`"followUp"` / `"followup"` 表示排队等当前任务完成后处理 |
 
 ### 使用说明（Practical Notes）
 
@@ -180,6 +181,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - `cardTemplateId` 建议配置；留空时 Pipiclaw 仍可工作，但不会使用 AI Card
 - `allowFrom` 生效的是发送者 staff ID
 - 当 `allowFrom` 非空时，不在列表中的发送者消息会被直接忽略
+- `busyMessageDefault` 写成 `"followUp"` 或 `"followup"` 都会启用 follow-up 默认模式；其他显式值会在启动时报错
 
 ### 推荐配置（Recommended Configurations）
 
@@ -240,6 +242,26 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - 机器人还在灰度期
 - 只允许少量测试人员使用
 - 希望同时观察执行过程与 AI Card 展示效果
+
+#### 4. 答疑机器人，普通消息排队（Q&A Bot, Queue Plain Messages）
+
+```json
+{
+  "clientId": "your-dingtalk-client-id",
+  "clientSecret": "your-dingtalk-client-secret",
+  "robotCode": "",
+  "cardTemplateId": "your-card-template-id",
+  "cardTemplateKey": "content",
+  "allowFrom": [],
+  "busyMessageDefault": "followUp"
+}
+```
+
+适合：
+
+- 多个用户可能在同一群里连续提问
+- 希望每个普通消息按新任务排队处理
+- 仍允许用户通过 `/steer <message>` 主动插入当前任务
 
 ### 常见错误（Common Mistakes）
 

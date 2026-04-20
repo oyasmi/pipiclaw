@@ -20,6 +20,26 @@ import { getChannelDir } from "./channel-paths.js";
 // Types
 // ============================================================================
 
+export type BusyMessageMode = "steer" | "followUp";
+export type BusyMessageDefaultConfig = BusyMessageMode | "followup";
+
+export function isBusyMessageDefaultConfig(value: unknown): value is BusyMessageDefaultConfig {
+	return value === "steer" || value === "followUp" || value === "followup";
+}
+
+export function normalizeBusyMessageDefault(value: unknown): BusyMessageMode {
+	if (value === undefined) {
+		return "steer";
+	}
+	if (value === "steer") {
+		return "steer";
+	}
+	if (value === "followUp" || value === "followup") {
+		return "followUp";
+	}
+	throw new Error('Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".');
+}
+
 export interface DingTalkConfig {
 	clientId: string;
 	clientSecret: string;
@@ -28,6 +48,7 @@ export interface DingTalkConfig {
 	cardTemplateKey?: string;
 	allowFrom?: string[];
 	stateDir?: string;
+	busyMessageDefault?: BusyMessageDefaultConfig;
 }
 
 export interface DingTalkEvent {
@@ -62,8 +83,6 @@ export interface DingTalkContext {
 	flush: () => Promise<void>;
 	close: () => Promise<void>;
 }
-
-export type BusyMessageMode = "steer" | "followUp";
 
 export interface DingTalkHandler {
 	isRunning(channelId: string): boolean;
@@ -219,7 +238,14 @@ export class DingTalkBot {
 
 	constructor(handler: DingTalkHandler, config: DingTalkConfig) {
 		this.handler = handler;
-		this.config = config;
+		this.config = {
+			...config,
+			busyMessageDefault: normalizeBusyMessageDefault(config.busyMessageDefault),
+		};
+	}
+
+	get busyMessageDefault(): BusyMessageMode {
+		return normalizeBusyMessageDefault(this.config.busyMessageDefault);
 	}
 
 	/**
@@ -1069,7 +1095,7 @@ export class DingTalkBot {
 			if (builtInCommand) {
 				await this.sendPlain(
 					channelId,
-					"A task is already running. Use `/stop`, `/steer <message>`, or `/followup <message>`. Plain messages default to steer.",
+					`A task is already running. Use \`/stop\`, \`/steer <message>\`, or \`/followup <message>\`. Plain messages default to ${this.busyMessageDefault}.`,
 				);
 				return;
 			}
@@ -1082,7 +1108,7 @@ export class DingTalkBot {
 				return;
 			}
 
-			await this.handler.handleBusyMessage(event, this, "steer", content);
+			await this.handler.handleBusyMessage(event, this, this.busyMessageDefault, content);
 			return;
 		}
 

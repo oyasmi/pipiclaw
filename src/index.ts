@@ -81,12 +81,15 @@ export {
 } from "./runtime/channel-paths.js";
 export { createDingTalkContext } from "./runtime/delivery.js";
 export {
+	type BusyMessageDefaultConfig,
 	type BusyMessageMode,
 	DingTalkBot,
 	type DingTalkConfig,
 	type DingTalkContext,
 	type DingTalkEvent,
 	type DingTalkHandler,
+	isBusyMessageDefaultConfig,
+	normalizeBusyMessageDefault,
 } from "./runtime/dingtalk.js";
 export {
 	createEventsWatcher,

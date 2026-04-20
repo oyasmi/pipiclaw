@@ -27,7 +27,7 @@ These are handled directly by the DingTalk transport/runtime layer.
   Queue another request to run after the current task completes
   Example: \`/followup After that, draft a short executive summary\`
 
-While a task is running, a plain message is treated as \`steer\` by default.
+While a task is running, plain messages use the configured busy-message default. The default is \`steer\`; set \`busyMessageDefault\` in channel.json to \`followUp\` or \`followup\` to queue plain messages after the current task.
 
 ## Session Commands
 
