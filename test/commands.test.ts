@@ -38,6 +38,7 @@ describe("commands", () => {
 		expect(help).toContain("## Session Commands");
 		expect(help).toContain("/followup <message>");
 		expect(help).toContain("busyMessageDefault");
+		expect(help).toContain("progressDisplay");
 		expect(help).toContain("/model [provider/modelId|modelId]");
 	});
 });

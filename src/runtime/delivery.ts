@@ -3,6 +3,7 @@ import type { DingTalkBot, DingTalkContext, DingTalkEvent } from "./dingtalk.js"
 import type { ChannelStore } from "./store.js";
 
 const MIN_UPDATE_INTERVAL_MS = 800;
+const ROLLING_WINDOW_SIZE = 3;
 const NO_CONTENT = "";
 
 type DeliveryMode = "progress" | "finalize-existing" | "finalize-with-fallback" | "silent";
@@ -19,7 +20,9 @@ class ChannelDeliveryController {
 	private finalResponseDelivered = false;
 	private cardWarmupScheduled = false;
 	private cardWarmupTriggered = false;
+	private progressStartedAt = 0;
 	private progressWindowStartedAt = 0;
+	private toolCallCount = 0;
 	private lastDeliveredAt = 0;
 	private timer: NodeJS.Timeout | null = null;
 	private cardWarmupTimer: NodeJS.Timeout | null = null;
@@ -120,11 +123,20 @@ class ChannelDeliveryController {
 		if (this.closed || this.finalResponseDelivered || !text.trim()) return;
 
 		this.clearCardWarmup();
+		if (this.progressStartedAt === 0) {
+			this.progressStartedAt = Date.now();
+		}
+		if (text.startsWith("Running:")) {
+			this.toolCallCount++;
+		}
 		if (this.progressSegments.length > 0) {
 			this.progressSegments.push("\n\n");
 		}
 		this.progressSegments.push(text);
 		this.progressTextDirty = true;
+		if (this.bot.progressDisplay === "rolling") {
+			this.trimToRecentEntries(ROLLING_WINDOW_SIZE);
+		}
 		if (this.progressWindowStartedAt === 0) {
 			this.progressWindowStartedAt = Date.now();
 		}
@@ -251,15 +263,17 @@ class ChannelDeliveryController {
 						}
 					} else if (mode === "finalize-existing") {
 						if (content || this.cardWarmupTriggered) {
+							const finalProgressText =
+								this.bot.progressDisplay === "rolling" ? this.buildSummaryText("Done") : progressText;
 							touchedRemote = await this.bot.replaceCard(
 								this.event.channelId,
-								content ? progressText : NO_CONTENT,
+								content || this.bot.progressDisplay === "rolling" ? finalProgressText : NO_CONTENT,
 								true,
 							);
 							if (!touchedRemote) {
 								this.bot.discardCard(this.event.channelId);
 							} else {
-								this.sentProgressChars = progressText.length;
+								this.sentProgressChars = finalProgressText.length;
 								this.replayRequired = false;
 							}
 						} else {
@@ -350,6 +364,41 @@ class ChannelDeliveryController {
 		this.cachedProgressText = this.progressSegments.join("");
 		this.progressTextDirty = false;
 		return this.cachedProgressText;
+	}
+
+	private trimToRecentEntries(maxEntries: number): void {
+		let entryCount = 0;
+		for (const segment of this.progressSegments) {
+			if (segment !== "\n\n") {
+				entryCount++;
+			}
+		}
+
+		if (entryCount <= maxEntries) {
+			return;
+		}
+
+		const entriesToRemove = entryCount - maxEntries;
+		let removedEntries = 0;
+		while (removedEntries < entriesToRemove && this.progressSegments.length > 0) {
+			const segment = this.progressSegments.shift();
+			if (segment !== "\n\n") {
+				removedEntries++;
+			}
+		}
+		while (this.progressSegments[0] === "\n\n") {
+			this.progressSegments.shift();
+		}
+
+		this.progressTextDirty = true;
+		this.replayRequired = true;
+		this.sentProgressChars = 0;
+	}
+
+	private buildSummaryText(status: "Done"): string {
+		const elapsedSeconds = this.progressStartedAt > 0 ? Math.round((Date.now() - this.progressStartedAt) / 1000) : 0;
+		const toolLabel = this.toolCallCount === 1 ? "1 tool call" : `${this.toolCallCount} tool calls`;
+		return `${status} · ${toolLabel} · ${elapsedSeconds}s`;
 	}
 }
 

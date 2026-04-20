@@ -173,6 +173,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 | `cardTemplateKey` | 否 | `"content"` | 写入流式内容的模板字段名 |
 | `allowFrom` | 否 | 留空或省略时允许所有人 | 允许访问的发送者 staff ID 列表 |
 | `busyMessageDefault` | 否 | `"steer"` | Agent 忙碌时普通消息的默认处理模式。`"steer"` 表示插入当前任务，`"followUp"` / `"followup"` 表示排队等当前任务完成后处理 |
+| `progressDisplay` | 否 | `"full"` | AI Card 进度展示模式。`"full"` 完整累积；`"rolling"` 执行中只显示最近 3 条进展，完成后收起为一行摘要 |
 
 ### 使用说明（Practical Notes）
 
@@ -182,6 +183,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - `allowFrom` 生效的是发送者 staff ID
 - 当 `allowFrom` 非空时，不在列表中的发送者消息会被直接忽略
 - `busyMessageDefault` 写成 `"followUp"` 或 `"followup"` 都会启用 follow-up 默认模式；其他显式值会在启动时报错
+- `progressDisplay` 写成 `"rolling"` 会启用紧凑进度展示；其他显式值会在启动时报错
 
 ### 推荐配置（Recommended Configurations）
 
@@ -253,7 +255,8 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
   "cardTemplateId": "your-card-template-id",
   "cardTemplateKey": "content",
   "allowFrom": [],
-  "busyMessageDefault": "followUp"
+  "busyMessageDefault": "followUp",
+  "progressDisplay": "rolling"
 }
 ```
 

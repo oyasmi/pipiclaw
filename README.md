@@ -209,7 +209,8 @@ $env:PIPICLAW_SHELL = "C:\Program Files\Git\bin\bash.exe"
   "cardTemplateId": "",
   "cardTemplateKey": "content",
   "allowFrom": [],
-  "busyMessageDefault": "steer"
+  "busyMessageDefault": "steer",
+  "progressDisplay": "full"
 }
 ```
 
@@ -230,6 +231,8 @@ $env:PIPICLAW_SHELL = "C:\Program Files\Git\bin\bash.exe"
   设为 `[]` 或删除时表示允许所有人
 - `busyMessageDefault`
   设为 `"steer"`（默认）或 `"followUp"` / `"followup"`。控制 Agent 忙碌时普通消息的默认处理方式；答疑机器人场景建议设为 `"followUp"`。
+- `progressDisplay`
+  设为 `"full"`（默认）或 `"rolling"`。控制 AI Card 进度展示方式；`"rolling"` 模式下执行中只显示最近 3 条进展，完成后收起为一行摘要。
 
 推荐把 AI Card 一起配上，这样在钉钉里能直接看到过程更新。只有在排查接入链路时，才建议临时把 `cardTemplateId` 留空。
 

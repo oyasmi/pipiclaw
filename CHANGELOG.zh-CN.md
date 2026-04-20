@@ -7,6 +7,7 @@
 ### 新增
 
 - 在 `channel.json` 中新增 `busyMessageDefault`，允许钉钉机器人配置任务运行中收到普通消息时默认走 `steer` 或 `followUp`；配置同时接受小写别名 `followup`，并会在启动阶段拒绝无效的显式配置值。
+- 在 `channel.json` 中新增 `progressDisplay`；`rolling` 模式会在任务运行中只保留最近进展，并在最终回复发送后将进度卡片收起为一行完成摘要。
 
 ## [0.6.4] - 2026-04-19
 

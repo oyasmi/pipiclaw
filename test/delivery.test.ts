@@ -73,6 +73,71 @@ describe("delivery", () => {
 		expect(store.logged).toHaveLength(2);
 	});
 
+	it("keeps only the recent progress window in rolling mode", async () => {
+		const bot = new FakeDingTalkBot();
+		bot.progressDisplay = "rolling";
+		const store = new FakeChannelStore();
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never);
+
+		for (const entry of ["A", "B", "C", "D", "E"]) {
+			await ctx.respond(entry);
+			await vi.advanceTimersByTimeAsync(800);
+			await ctx.flush();
+		}
+
+		expect(bot.calls).toEqual([
+			{ method: "appendToCard", args: ["dm_123", "A"] },
+			{ method: "appendToCard", args: ["dm_123", "\n\nB"] },
+			{ method: "appendToCard", args: ["dm_123", "\n\nC"] },
+			{ method: "replaceCard", args: ["dm_123", "B\n\nC\n\nD", false] },
+			{ method: "replaceCard", args: ["dm_123", "C\n\nD\n\nE", false] },
+		]);
+		expect(store.logged.map((entry) => entry.args[1])).toEqual(["A", "B", "C", "D", "E"]);
+	});
+
+	it("replaces rolling progress with a compact summary after a final plain response", async () => {
+		const bot = new FakeDingTalkBot();
+		bot.progressDisplay = "rolling";
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
+
+		await ctx.respond("Running: read docs");
+		await vi.advanceTimersByTimeAsync(800);
+		await ctx.flush();
+		await vi.advanceTimersByTimeAsync(1200);
+		await ctx.respond("Thinking: checking design");
+		await vi.advanceTimersByTimeAsync(800);
+		await ctx.flush();
+		await vi.advanceTimersByTimeAsync(1200);
+		await ctx.respond("Running: update files");
+		await vi.advanceTimersByTimeAsync(800);
+		await ctx.flush();
+
+		await expect(ctx.respondPlain("final answer")).resolves.toBe(true);
+		await ctx.flush();
+
+		const finalCall = bot.calls.at(-1);
+		expect(bot.calls.at(-2)).toEqual({ method: "sendPlain", args: ["dm_123", "final answer"] });
+		expect(finalCall?.method).toBe("replaceCard");
+		expect(finalCall?.args[0]).toBe("dm_123");
+		expect(finalCall?.args[1]).toMatch(/^Done · 2 tool calls · \d+s$/);
+		expect(finalCall?.args[1]).not.toContain("Running:");
+		expect(finalCall?.args[2]).toBe(true);
+	});
+
+	it("preserves replacement text for rolling finalize fallback", async () => {
+		const bot = new FakeDingTalkBot();
+		bot.progressDisplay = "rolling";
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
+
+		await ctx.respond("Running: collect context");
+		await vi.advanceTimersByTimeAsync(800);
+		await ctx.flush();
+		await ctx.replaceMessage("final fallback text");
+		await ctx.flush();
+
+		expect(bot.calls.at(-1)).toEqual({ method: "finalizeCard", args: ["dm_123", "final fallback text"] });
+	});
+
 	it("ignores blank progress updates", async () => {
 		const bot = new FakeDingTalkBot();
 		const store = new FakeChannelStore();

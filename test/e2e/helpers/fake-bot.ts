@@ -15,6 +15,7 @@ export interface CapturedDelivery {
 
 export class E2EFakeDingTalkBot {
 	deliveries: CapturedDelivery[] = [];
+	progressDisplay: "full" | "rolling" = "full";
 
 	async start(): Promise<void> {}
 

@@ -22,9 +22,14 @@ import { getChannelDir } from "./channel-paths.js";
 
 export type BusyMessageMode = "steer" | "followUp";
 export type BusyMessageDefaultConfig = BusyMessageMode | "followup";
+export type ProgressDisplayMode = "full" | "rolling";
 
 export function isBusyMessageDefaultConfig(value: unknown): value is BusyMessageDefaultConfig {
 	return value === "steer" || value === "followUp" || value === "followup";
+}
+
+export function isProgressDisplayConfig(value: unknown): value is ProgressDisplayMode {
+	return value === "full" || value === "rolling";
 }
 
 export function normalizeBusyMessageDefault(value: unknown): BusyMessageMode {
@@ -40,6 +45,16 @@ export function normalizeBusyMessageDefault(value: unknown): BusyMessageMode {
 	throw new Error('Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".');
 }
 
+export function normalizeProgressDisplay(value: unknown): ProgressDisplayMode {
+	if (value === undefined) {
+		return "full";
+	}
+	if (isProgressDisplayConfig(value)) {
+		return value;
+	}
+	throw new Error('Invalid `progressDisplay`: expected "full" or "rolling".');
+}
+
 export interface DingTalkConfig {
 	clientId: string;
 	clientSecret: string;
@@ -49,6 +64,7 @@ export interface DingTalkConfig {
 	allowFrom?: string[];
 	stateDir?: string;
 	busyMessageDefault?: BusyMessageDefaultConfig;
+	progressDisplay?: ProgressDisplayMode;
 }
 
 export interface DingTalkEvent {
@@ -241,11 +257,16 @@ export class DingTalkBot {
 		this.config = {
 			...config,
 			busyMessageDefault: normalizeBusyMessageDefault(config.busyMessageDefault),
+			progressDisplay: normalizeProgressDisplay(config.progressDisplay),
 		};
 	}
 
 	get busyMessageDefault(): BusyMessageMode {
 		return normalizeBusyMessageDefault(this.config.busyMessageDefault);
+	}
+
+	get progressDisplay(): ProgressDisplayMode {
+		return normalizeProgressDisplay(this.config.progressDisplay);
 	}
 
 	/**

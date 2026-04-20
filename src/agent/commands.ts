@@ -29,6 +29,8 @@ These are handled directly by the DingTalk transport/runtime layer.
 
 While a task is running, plain messages use the configured busy-message default. The default is \`steer\`; set \`busyMessageDefault\` in channel.json to \`followUp\` or \`followup\` to queue plain messages after the current task.
 
+Set \`progressDisplay\` in channel.json to \`rolling\` for compact AI Card progress: recent entries while running, then a short summary after completion.
+
 ## Session Commands
 
 These are handled inside the Pipiclaw session layer:

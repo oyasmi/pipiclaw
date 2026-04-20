@@ -2,6 +2,7 @@ import type { DingTalkEvent } from "../../src/runtime/dingtalk.js";
 
 export class FakeDingTalkBot {
 	calls: Array<{ method: string; args: unknown[] }> = [];
+	progressDisplay: "full" | "rolling" = "full";
 	private readonly returnValues = new Map<string, unknown>();
 
 	configure(method: string, returnValue: unknown): void {

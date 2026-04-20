@@ -31,7 +31,9 @@ import {
 	type DingTalkEvent,
 	type DingTalkHandler,
 	isBusyMessageDefaultConfig,
+	isProgressDisplayConfig,
 	normalizeBusyMessageDefault,
+	normalizeProgressDisplay,
 } from "./dingtalk.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
@@ -178,6 +180,7 @@ const CHANNEL_CONFIG_TEMPLATE = {
 	cardTemplateKey: "content",
 	allowFrom: ["your-staff-id"],
 	busyMessageDefault: "steer",
+	progressDisplay: "full",
 } satisfies DingTalkConfig;
 
 const MODELS_CONFIG_TEMPLATE = { providers: {} };
@@ -353,6 +356,11 @@ function listChannelConfigIssues(config: Partial<DingTalkConfig>): string[] {
 		issues.push('Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".');
 	}
 
+	const progressDisplay = (config as { progressDisplay?: unknown }).progressDisplay;
+	if (progressDisplay !== undefined && !isProgressDisplayConfig(progressDisplay)) {
+		issues.push('Invalid `progressDisplay`: expected "full" or "rolling".');
+	}
+
 	return issues;
 }
 
@@ -399,6 +407,7 @@ export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: 
 	parsed.busyMessageDefault = normalizeBusyMessageDefault(
 		(parsed as { busyMessageDefault?: unknown }).busyMessageDefault,
 	);
+	parsed.progressDisplay = normalizeProgressDisplay((parsed as { progressDisplay?: unknown }).progressDisplay);
 	if (Array.isArray(parsed.allowFrom)) {
 		parsed.allowFrom = parsed.allowFrom.filter((value) => value.trim().length > 0);
 	}

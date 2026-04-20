@@ -71,6 +71,7 @@ describe("bootstrap", () => {
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"apiKey": "BSA..."');
 		expect(readFileSync(paths.securityConfigPath, "utf-8")).toContain('"enabled": false');
 		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"busyMessageDefault": "steer"');
+		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"progressDisplay": "full"');
 
 		const second = bootstrapAppHome(paths);
 		expect(second.channelTemplateCreated).toBe(false);
@@ -117,6 +118,7 @@ describe("bootstrap", () => {
 					robotCode: "",
 					allowFrom: ["alice", " ", "bob"],
 					busyMessageDefault: "followup",
+					progressDisplay: "rolling",
 				},
 				null,
 				2,
@@ -130,6 +132,7 @@ describe("bootstrap", () => {
 			cardTemplateKey: "content",
 			allowFrom: ["alice", "bob"],
 			busyMessageDefault: "followUp",
+			progressDisplay: "rolling",
 		});
 	});
 
@@ -153,6 +156,26 @@ describe("bootstrap", () => {
 		expect(io.error).toHaveBeenCalledWith(
 			'  - Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".',
 		);
+	});
+
+	it("rejects invalid progress display values during config loading", () => {
+		const paths = createBootstrapPaths();
+		const io = createIO();
+		writeFileSync(
+			paths.channelConfigPath,
+			JSON.stringify(
+				{
+					clientId: "client-id",
+					clientSecret: "secret",
+					progressDisplay: "rollng",
+				},
+				null,
+				2,
+			),
+		);
+
+		expect(() => loadConfig(paths, io)).toThrowError(BootstrapExitError);
+		expect(io.error).toHaveBeenCalledWith('  - Invalid `progressDisplay`: expected "full" or "rolling".');
 	});
 
 	it("bootstraps without starting services when requested", async () => {
