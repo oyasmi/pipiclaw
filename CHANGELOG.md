@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-04-20
+
 ### Added
 
 - Added `busyMessageDefault` in `channel.json` so DingTalk bots can choose whether plain messages received during an active task default to `steer` or `followUp`; the config also accepts `followup` as a lowercase alias and rejects invalid explicit values during startup.
