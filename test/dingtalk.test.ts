@@ -96,7 +96,7 @@ function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandle
 		isRunning: vi.fn(() => false),
 		handleEvent: vi.fn(async () => {}),
 		handleStop: vi.fn(async () => {}),
-		handleBusyMessage: vi.fn(async () => {}),
+		handleBusyMessage: vi.fn(async () => true),
 		...overrides,
 	};
 }
@@ -362,6 +362,42 @@ describe("dingtalk", () => {
 				"keep current focus",
 			);
 		}
+	});
+
+	it("requeues a busy plain message as normal work when the busy window has closed", async () => {
+		const { bot, handler } = createBot(
+			{
+				isRunning: vi.fn(() => true),
+				handleBusyMessage: vi.fn(async () => false),
+			},
+			{ busyMessageDefault: "followUp" },
+		);
+		bot.sendPlain = vi.fn(async () => true);
+		const privateApi = getPrivateApi(bot);
+
+		await privateApi.onStreamMessage({
+			text: { content: "second message" },
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_1",
+			conversationType: "1",
+		});
+		await flushMicrotasks();
+
+		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ text: "second message" }),
+			bot,
+			"followUp",
+			"second message",
+		);
+		expect(handler.handleEvent).toHaveBeenCalledWith(
+			expect.objectContaining({ text: "second message" }),
+			bot,
+		);
+		expect(bot.sendPlain).not.toHaveBeenCalledWith(
+			"dm_staff_1",
+			expect.stringContaining("Could not queue this message"),
+		);
 	});
 
 	it("refreshes, caches, and coalesces access token requests", async () => {

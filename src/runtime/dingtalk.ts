@@ -104,7 +104,7 @@ export interface DingTalkHandler {
 	isRunning(channelId: string): boolean;
 	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
 	handleStop(channelId: string, bot: DingTalkBot): Promise<void>;
-	handleBusyMessage(event: DingTalkEvent, bot: DingTalkBot, mode: BusyMessageMode, queueText: string): Promise<void>;
+	handleBusyMessage(event: DingTalkEvent, bot: DingTalkBot, mode: BusyMessageMode, queueText: string): Promise<boolean>;
 }
 
 // ============================================================================
@@ -671,6 +671,18 @@ export class DingTalkBot {
 		return true;
 	}
 
+	private enqueueStreamMessage(event: DingTalkEvent): void {
+		this.getQueue(event.channelId).enqueue(async () => {
+			this.activeMessageProcessing = true;
+			try {
+				await this.handler.handleEvent(event, this);
+			} finally {
+				this.activeMessageProcessing = false;
+				this.lastSocketAvailableTime = Date.now();
+			}
+		});
+	}
+
 	// ==========================================================================
 	// AI Card operations
 	// ==========================================================================
@@ -1104,12 +1116,18 @@ export class DingTalkBot {
 			}
 
 			if (builtInCommand?.name === "steer") {
-				await this.handler.handleBusyMessage(event, this, "steer", builtInCommand.args);
+				const handled = await this.handler.handleBusyMessage(event, this, "steer", builtInCommand.args);
+				if (!handled) {
+					this.enqueueStreamMessage(event);
+				}
 				return;
 			}
 
 			if (builtInCommand?.name === "followup") {
-				await this.handler.handleBusyMessage(event, this, "followUp", builtInCommand.args);
+				const handled = await this.handler.handleBusyMessage(event, this, "followUp", builtInCommand.args);
+				if (!handled) {
+					this.enqueueStreamMessage(event);
+				}
 				return;
 			}
 
@@ -1129,20 +1147,15 @@ export class DingTalkBot {
 				return;
 			}
 
-			await this.handler.handleBusyMessage(event, this, this.busyMessageDefault, content);
+			const handled = await this.handler.handleBusyMessage(event, this, this.busyMessageDefault, content);
+			if (!handled) {
+				this.enqueueStreamMessage(event);
+			}
 			return;
 		}
 
 		// Enqueue for processing
-		this.getQueue(channelId).enqueue(async () => {
-			this.activeMessageProcessing = true;
-			try {
-				await this.handler.handleEvent(event, this);
-			} finally {
-				this.activeMessageProcessing = false;
-				this.lastSocketAvailableTime = Date.now();
-			}
-		});
+		this.enqueueStreamMessage(event);
 	}
 
 	private getQueue(channelId: string): ChannelQueue {

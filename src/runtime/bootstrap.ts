@@ -481,6 +481,10 @@ function flushInactiveChannelMemory(channelStates: Map<string, ChannelState>): P
 	return flushes;
 }
 
+function isNoRunningTaskQueueError(err: unknown): boolean {
+	return err instanceof Error && err.message === "No task is currently running.";
+}
+
 interface RuntimeContextOptions {
 	paths: BootstrapPaths;
 	sandbox: SandboxConfig;
@@ -569,28 +573,13 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			bot: DingTalkBot,
 			mode: BusyMessageMode,
 			queueText: string,
-		): Promise<void> {
+		): Promise<boolean> {
 			if (shuttingDown) {
-				return;
+				return true;
 			}
 
 			const state = getState(event.channelId);
 			const trimmedQueueText = queueText.trim();
-
-			await archiveIncomingMessage(
-				event.channelId,
-				{
-					date: new Date().toISOString(),
-					ts: event.ts,
-					user: event.user,
-					userName: event.userName,
-					text: event.text,
-					isBot: false,
-					deliveryMode: mode,
-					skipContextSync: true,
-				},
-				`${mode} message`,
-			);
 
 			try {
 				if (mode === "followUp") {
@@ -598,6 +587,21 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				} else {
 					await state.runner.queueSteer(trimmedQueueText, event.userName);
 				}
+
+				await archiveIncomingMessage(
+					event.channelId,
+					{
+						date: new Date().toISOString(),
+						ts: event.ts,
+						user: event.user,
+						userName: event.userName,
+						text: event.text,
+						isBot: false,
+						deliveryMode: mode,
+						skipContextSync: true,
+					},
+					`${mode} message`,
+				);
 
 				const confirmation =
 					mode === "followUp"
@@ -609,10 +613,16 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 							: "Queued as steer. I’ll apply this after the current tool step finishes. Use `/followup <message>` to queue it after completion.";
 				await bot.sendPlain(event.channelId, confirmation);
 				log.logInfo(`[${event.channelId}] Queued ${mode}: ${trimmedQueueText.substring(0, 80)}`);
+				return true;
 			} catch (err) {
 				const errMsg = err instanceof Error ? err.message : String(err);
+				if (isNoRunningTaskQueueError(err)) {
+					log.logInfo(`[${event.channelId}] Busy ${mode} window closed; requeueing as a normal message`);
+					return false;
+				}
 				log.logWarning(`[${event.channelId}] Failed to queue ${mode}`, errMsg);
 				await bot.sendPlain(event.channelId, `Could not queue this message: ${errMsg}`);
+				return true;
 			}
 		},
 

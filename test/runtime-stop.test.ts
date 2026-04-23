@@ -155,4 +155,67 @@ describe("runtime stop handling", () => {
 
 		await runtime.shutdown();
 	});
+
+	it("lets the transport retry a busy message as normal work when the runner is no longer accepting it", async () => {
+		const runner: AgentRunner = {
+			run: vi.fn(async () => ({ stopReason: "stop" })),
+			handleBuiltinCommand: vi.fn(async () => {}),
+			queueSteer: vi.fn(async () => {}),
+			queueFollowUp: vi.fn(async () => {
+				throw new Error("No task is currently running.");
+			}),
+			flushMemoryForShutdown: vi.fn(async () => {}),
+			getMemoryMaintenanceContext: vi.fn(async () => {
+				throw new Error("not used");
+			}),
+			abort: vi.fn(async () => {}),
+		};
+		getOrCreateRunnerMock.mockReturnValue(runner);
+
+		const { bootstrapAppHome, createRuntimeContext } = await import("../src/runtime/bootstrap.js");
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+
+		const bot = new FakeTestBot();
+		const runtime = createRuntimeContext({
+			paths,
+			sandbox: { type: "host" },
+			dingtalkConfig: {
+				clientId: "client-id",
+				clientSecret: "client-secret",
+				robotCode: "client-id",
+				cardTemplateKey: "content",
+				stateDir: paths.workspaceDir,
+			} satisfies DingTalkConfig,
+			registerSignalHandlers: false,
+			startServices: false,
+			createBot: () => bot as unknown as DingTalkBot,
+			createEventsWatcher: () => ({ start() {}, stop() {} }),
+		});
+
+		const handled = await runtime.handler.handleBusyMessage(
+			{
+				type: "dm",
+				channelId: "dm_tester",
+				ts: "1001",
+				user: "tester",
+				userName: "Tester",
+				text: "second message",
+				conversationId: "conv_1",
+				conversationType: "1",
+			},
+			bot as unknown as DingTalkBot,
+			"followUp",
+			"second message",
+		);
+
+		expect(handled).toBe(false);
+		expect(runner.queueFollowUp).toHaveBeenCalledWith("second message", "Tester");
+		expect(bot.sendPlain).not.toHaveBeenCalledWith(
+			"dm_tester",
+			expect.stringContaining("Could not queue this message"),
+		);
+
+		await runtime.shutdown();
+	});
 });

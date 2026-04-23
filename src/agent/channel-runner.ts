@@ -107,6 +107,7 @@ export class ChannelRunner implements AgentRunner {
 	private activeModel: Model<Api>;
 	private currentSkills: Skill[];
 	private firstTurnMemoryBootstrapPending = true;
+	private acceptingBusyMessages = false;
 
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
@@ -242,9 +243,11 @@ export class ChannelRunner implements AgentRunner {
 
 	async run(ctx: DingTalkContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }> {
 		this.resetRunState(ctx, store);
+		this.acceptingBusyMessages = true;
 
 		const runQueue = createRunQueue(ctx);
 		this.runState.queue = runQueue.queue;
+		let promptSubmitted = false;
 
 		try {
 			await this.ensureSessionReady();
@@ -307,12 +310,21 @@ export class ChannelRunner implements AgentRunner {
 
 			await this.sessionResourceGate.runPrompt(async () => {
 				await this.session.prompt(promptText);
+				promptSubmitted = true;
 			});
 		} catch (err) {
 			this.runState.stopReason = "error";
 			this.runState.errorMessage = err instanceof Error ? err.message : String(err);
 			log.logWarning(`[${this.channelId}] Runner failed`, this.runState.errorMessage);
 		} finally {
+			this.acceptingBusyMessages = false;
+			if (!promptSubmitted) {
+				const discarded = this.session.clearQueue();
+				const discardedCount = discarded.steering.length + discarded.followUp.length;
+				if (discardedCount > 0) {
+					log.logWarning(`[${this.channelId}] Discarded ${discardedCount} queued busy message(s) after run setup failed`);
+				}
+			}
 			await runQueue.drain();
 			const finalOutcome = this.runState.finalOutcome;
 			const finalOutcomeText = getFinalOutcomeText(finalOutcome);
@@ -525,9 +537,11 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	private async queueBusyMessage(delivery: "steer" | "followUp", text: string, userName?: string): Promise<void> {
-		if (!this.session.isStreaming) {
+		if (!this.acceptingBusyMessages) {
 			throw new Error("No task is currently running.");
 		}
+
+		await this.ensureSessionReady();
 
 		const clippedText = clipUserInput(text, MAX_USER_MESSAGE_CHARS);
 		if (clippedText !== text.trim()) {
@@ -536,11 +550,19 @@ export class ChannelRunner implements AgentRunner {
 		const queuedMessage = this.formatUserMessage(clippedText, userName);
 		await this.maybeRunPreventiveCompactionForIncomingText(queuedMessage);
 
-		await this.sessionResourceGate.runPrompt(async () => {
-			await this.session.prompt(queuedMessage, {
-				streamingBehavior: delivery,
-			});
-		});
+		if (!this.acceptingBusyMessages) {
+			throw new Error("No task is currently running.");
+		}
+
+		const queueMessage = async () => {
+			if (delivery === "followUp") {
+				await this.session.followUp(queuedMessage);
+			} else {
+				await this.session.steer(queuedMessage);
+			}
+		};
+
+		await this.sessionResourceGate.runPrompt(queueMessage);
 	}
 
 	private resetRunState(ctx: DingTalkContext, store: ChannelStore): void {
