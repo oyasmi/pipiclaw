@@ -1,7 +1,7 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@mariozechner/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { convertToLlm } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { readChannelSession } from "../memory/files.js";
 import { recallRelevantMemory } from "../memory/recall.js";

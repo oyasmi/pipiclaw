@@ -26,6 +26,7 @@ import { ensureChannelDir } from "./channel-paths.js";
 import { createDingTalkContext } from "./delivery.js";
 import {
 	type BusyMessageMode,
+	type BusyMessageResult,
 	DingTalkBot,
 	type DingTalkConfig,
 	type DingTalkEvent,
@@ -573,20 +574,27 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			bot: DingTalkBot,
 			mode: BusyMessageMode,
 			queueText: string,
-		): Promise<boolean> {
+		): Promise<BusyMessageResult> {
 			if (shuttingDown) {
-				return true;
+				return { kind: "handled" };
 			}
 
 			const state = getState(event.channelId);
 			const trimmedQueueText = queueText.trim();
 
+			if (!trimmedQueueText) {
+				const commandName = mode === "followUp" ? "followup" : "steer";
+				await bot.sendPlain(event.channelId, `Could not queue this message: /${commandName} requires a message.`);
+				return { kind: "handled" };
+			}
+
+			if (mode === "followUp") {
+				log.logInfo(`[${event.channelId}] Queued followUp as next task: ${trimmedQueueText.substring(0, 80)}`);
+				return { kind: "requeue", text: trimmedQueueText };
+			}
+
 			try {
-				if (mode === "followUp") {
-					await state.runner.queueFollowUp(trimmedQueueText, event.userName);
-				} else {
-					await state.runner.queueSteer(trimmedQueueText, event.userName);
-				}
+				await state.runner.queueSteer(trimmedQueueText, event.userName);
 
 				await archiveIncomingMessage(
 					event.channelId,
@@ -603,26 +611,21 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					`${mode} message`,
 				);
 
-				const confirmation =
-					mode === "followUp"
-						? event.text.trim().startsWith("/")
-							? "Queued as follow-up. I’ll handle it after the current task completes."
-							: "Queued as follow-up. I’ll handle it after the current task completes. Use `/steer <message>` to apply it after the current tool step finishes."
-						: event.text.trim().startsWith("/")
-							? "Queued as steer. I’ll apply it after the current tool step finishes."
-							: "Queued as steer. I’ll apply this after the current tool step finishes. Use `/followup <message>` to queue it after completion.";
+				const confirmation = event.text.trim().startsWith("/")
+					? "Queued as steer. I’ll apply it after the current tool step finishes."
+					: "Queued as steer. I’ll apply this after the current tool step finishes. Use `/followup <message>` to queue it after completion.";
 				await bot.sendPlain(event.channelId, confirmation);
 				log.logInfo(`[${event.channelId}] Queued ${mode}: ${trimmedQueueText.substring(0, 80)}`);
-				return true;
+				return { kind: "handled" };
 			} catch (err) {
 				const errMsg = err instanceof Error ? err.message : String(err);
 				if (isNoRunningTaskQueueError(err)) {
 					log.logInfo(`[${event.channelId}] Busy ${mode} window closed; requeueing as a normal message`);
-					return false;
+					return { kind: "requeue", text: trimmedQueueText };
 				}
 				log.logWarning(`[${event.channelId}] Failed to queue ${mode}`, errMsg);
 				await bot.sendPlain(event.channelId, `Could not queue this message: ${errMsg}`);
-				return true;
+				return { kind: "handled" };
 			}
 		},
 

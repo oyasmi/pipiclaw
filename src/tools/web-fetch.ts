@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { SecurityConfig } from "../security/types.js";
 import { resolveWebFetchRequest } from "../web/config.js";
 import { runWebFetch } from "../web/fetch.js";

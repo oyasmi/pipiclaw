@@ -1,6 +1,6 @@
 {
 	"name": "@oyasmi/pipiclaw",
-	"version": "0.6.6-beta.1",
+	"version": "0.6.6-beta.3",
 	"description": "An AI assistant runtime for coding and team workflows, with DingTalk AI Cards, sub-agents, memory, and scheduled events.",
 	"type": "module",
 	"bin": {
@@ -33,11 +33,10 @@
 		"prepublishOnly": "npm run clean && npm run build && npm run check"
 	},
 	"dependencies": {
-		"@mariozechner/pi-agent-core": "^0.63.0",
-		"@mariozechner/pi-ai": "^0.63.0",
-		"@mariozechner/pi-coding-agent": "^0.63.0",
+		"@mariozechner/pi-agent-core": "^0.70.2",
+		"@mariozechner/pi-ai": "^0.70.2",
+		"@mariozechner/pi-coding-agent": "^0.70.2",
 		"@mozilla/readability": "^0.6.0",
-		"@sinclair/typebox": "^0.34.0",
 		"axios": "^1.7.0",
 		"croner": "^9.1.0",
 		"diff": "^8.0.2",
@@ -46,7 +45,8 @@
 		"https-proxy-agent": "^7.0.6",
 		"jsdom": "^26.1.0",
 		"proxy-from-env": "^1.1.0",
-		"socks-proxy-agent": "^8.0.5"
+		"socks-proxy-agent": "^8.0.5",
+		"typebox": "^1.1.34"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",

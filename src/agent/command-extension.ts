@@ -56,8 +56,15 @@ async function runCompact(
 	});
 }
 
-function sendCommandResult(pi: Pick<ExtensionAPI, "sendMessage">, text: string): void {
-	pi.sendMessage({
+type CommandMessageSender = {
+	sendMessage: (
+		message: Parameters<ExtensionAPI["sendMessage"]>[0],
+		options?: Parameters<ExtensionAPI["sendMessage"]>[1],
+	) => void | Promise<void>;
+};
+
+function sendCommandResult(sender: CommandMessageSender, text: string): void | Promise<void> {
+	return sender.sendMessage({
 		customType: COMMAND_RESULT_CUSTOM_TYPE,
 		content: text,
 		display: true,
@@ -134,16 +141,23 @@ ${available}`,
 		pi.registerCommand("new", {
 			description: "Start a new session",
 			handler: async (_args, ctx) => {
-				const result = await ctx.newSession();
-				if (!result.cancelled) {
+				let sentFromReplacement = false;
+				const result = await ctx.newSession({
+					withSession: async (nextCtx) => {
+						sentFromReplacement = true;
+						await options.refreshSessionResources();
+						await sendCommandResult(
+							nextCtx,
+							`已开启新会话。\n\nSession ID: \`${nextCtx.sessionManager.getSessionId()}\``,
+						);
+					},
+				});
+				if (result.cancelled) {
+					sendCommandResult(pi, "新会话已取消。");
+				} else if (!sentFromReplacement) {
 					await options.refreshSessionResources();
+					sendCommandResult(pi, `已开启新会话。\n\nSession ID: \`${ctx.sessionManager.getSessionId()}\``);
 				}
-				sendCommandResult(
-					pi,
-					result.cancelled
-						? "新会话已取消。"
-						: `已开启新会话。\n\nSession ID: \`${ctx.sessionManager.getSessionId()}\``,
-				);
 			},
 		});
 

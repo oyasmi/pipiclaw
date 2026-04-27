@@ -6,7 +6,7 @@ import type {
 	SessionBeforeSwitchEvent,
 	SessionCompactEvent,
 	SessionEntry,
-	SessionSwitchEvent,
+	SessionStartEvent,
 } from "@mariozechner/pi-coding-agent";
 import * as log from "../log.js";
 import type { PipiclawSessionMemorySettings } from "../settings.js";
@@ -72,8 +72,8 @@ export class MemoryLifecycle {
 			pi.on("session_before_switch", async (event: SessionBeforeSwitchEvent) => {
 				await this.handleSessionBeforeSwitch(event);
 			});
-			pi.on("session_switch", async (event: SessionSwitchEvent) => {
-				this.handleSessionSwitch(event);
+			pi.on("session_start", async (event: SessionStartEvent) => {
+				this.handleSessionStart(event);
 			});
 		};
 	}
@@ -303,7 +303,7 @@ export class MemoryLifecycle {
 		await this.runPreflightConsolidation("new-session");
 	}
 
-	private handleSessionSwitch(event: SessionSwitchEvent): void {
+	private handleSessionStart(event: SessionStartEvent): void {
 		if (event.reason !== "new") {
 			return;
 		}

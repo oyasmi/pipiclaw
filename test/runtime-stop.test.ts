@@ -99,7 +99,6 @@ describe("runtime stop handling", () => {
 			}),
 			handleBuiltinCommand: vi.fn(async () => {}),
 			queueSteer: vi.fn(async () => {}),
-			queueFollowUp: vi.fn(async () => {}),
 			flushMemoryForShutdown: vi.fn(async () => {}),
 			getMemoryMaintenanceContext: vi.fn(async () => {
 				throw new Error("not used");
@@ -156,14 +155,11 @@ describe("runtime stop handling", () => {
 		await runtime.shutdown();
 	});
 
-	it("lets the transport retry a busy message as normal work when the runner is no longer accepting it", async () => {
+	it("returns follow-up busy messages for normal queued processing", async () => {
 		const runner: AgentRunner = {
 			run: vi.fn(async () => ({ stopReason: "stop" })),
 			handleBuiltinCommand: vi.fn(async () => {}),
 			queueSteer: vi.fn(async () => {}),
-			queueFollowUp: vi.fn(async () => {
-				throw new Error("No task is currently running.");
-			}),
 			flushMemoryForShutdown: vi.fn(async () => {}),
 			getMemoryMaintenanceContext: vi.fn(async () => {
 				throw new Error("not used");
@@ -193,7 +189,7 @@ describe("runtime stop handling", () => {
 			createEventsWatcher: () => ({ start() {}, stop() {} }),
 		});
 
-		const handled = await runtime.handler.handleBusyMessage(
+		const result = await runtime.handler.handleBusyMessage(
 			{
 				type: "dm",
 				channelId: "dm_tester",
@@ -209,12 +205,9 @@ describe("runtime stop handling", () => {
 			"second message",
 		);
 
-		expect(handled).toBe(false);
-		expect(runner.queueFollowUp).toHaveBeenCalledWith("second message", "Tester");
-		expect(bot.sendPlain).not.toHaveBeenCalledWith(
-			"dm_tester",
-			expect.stringContaining("Could not queue this message"),
-		);
+		expect(result).toEqual({ kind: "requeue", text: "second message" });
+		expect(runner.queueSteer).not.toHaveBeenCalled();
+		expect(bot.sendPlain).not.toHaveBeenCalled();
 
 		await runtime.shutdown();
 	});

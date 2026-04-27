@@ -96,7 +96,7 @@ function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandle
 		isRunning: vi.fn(() => false),
 		handleEvent: vi.fn(async () => {}),
 		handleStop: vi.fn(async () => {}),
-		handleBusyMessage: vi.fn(async () => true),
+		handleBusyMessage: vi.fn(async () => ({ kind: "handled" as const })),
 		...overrides,
 	};
 }
@@ -368,7 +368,7 @@ describe("dingtalk", () => {
 		const { bot, handler } = createBot(
 			{
 				isRunning: vi.fn(() => true),
-				handleBusyMessage: vi.fn(async () => false),
+				handleBusyMessage: vi.fn(async () => ({ kind: "requeue" as const, text: "second message" })),
 			},
 			{ busyMessageDefault: "followUp" },
 		);
@@ -390,14 +390,38 @@ describe("dingtalk", () => {
 			"followUp",
 			"second message",
 		);
-		expect(handler.handleEvent).toHaveBeenCalledWith(
-			expect.objectContaining({ text: "second message" }),
-			bot,
-		);
+		expect(handler.handleEvent).toHaveBeenCalledWith(expect.objectContaining({ text: "second message" }), bot);
 		expect(bot.sendPlain).not.toHaveBeenCalledWith(
 			"dm_staff_1",
 			expect.stringContaining("Could not queue this message"),
 		);
+	});
+
+	it("requeues explicit follow-up command arguments as normal work", async () => {
+		const { bot, handler } = createBot({
+			isRunning: vi.fn(() => true),
+			handleBusyMessage: vi.fn(async () => ({ kind: "requeue" as const, text: "next task" })),
+		});
+		bot.sendPlain = vi.fn(async () => true);
+		const privateApi = getPrivateApi(bot);
+
+		await privateApi.onStreamMessage({
+			text: { content: "/followup next task" },
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_1",
+			conversationType: "1",
+		});
+		await flushMicrotasks();
+
+		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ text: "/followup next task" }),
+			bot,
+			"followUp",
+			"next task",
+		);
+		expect(handler.handleEvent).toHaveBeenCalledWith(expect.objectContaining({ text: "next task" }), bot);
+		expect(bot.sendPlain).not.toHaveBeenCalledWith("dm_staff_1", expect.stringContaining("Queued as follow-up"));
 	});
 
 	it("refreshes, caches, and coalesces access token requests", async () => {

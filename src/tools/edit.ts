@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import * as Diff from "diff";
 import type { Executor } from "../sandbox.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";

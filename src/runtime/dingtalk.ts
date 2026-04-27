@@ -100,11 +100,18 @@ export interface DingTalkContext {
 	close: () => Promise<void>;
 }
 
+export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: string };
+
 export interface DingTalkHandler {
 	isRunning(channelId: string): boolean;
 	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
 	handleStop(channelId: string, bot: DingTalkBot): Promise<void>;
-	handleBusyMessage(event: DingTalkEvent, bot: DingTalkBot, mode: BusyMessageMode, queueText: string): Promise<boolean>;
+	handleBusyMessage(
+		event: DingTalkEvent,
+		bot: DingTalkBot,
+		mode: BusyMessageMode,
+		queueText: string,
+	): Promise<BusyMessageResult>;
 }
 
 // ============================================================================
@@ -671,11 +678,12 @@ export class DingTalkBot {
 		return true;
 	}
 
-	private enqueueStreamMessage(event: DingTalkEvent): void {
+	private enqueueStreamMessage(event: DingTalkEvent, textOverride?: string): void {
+		const queuedEvent = textOverride === undefined ? event : { ...event, text: textOverride };
 		this.getQueue(event.channelId).enqueue(async () => {
 			this.activeMessageProcessing = true;
 			try {
-				await this.handler.handleEvent(event, this);
+				await this.handler.handleEvent(queuedEvent, this);
 			} finally {
 				this.activeMessageProcessing = false;
 				this.lastSocketAvailableTime = Date.now();
@@ -1116,17 +1124,17 @@ export class DingTalkBot {
 			}
 
 			if (builtInCommand?.name === "steer") {
-				const handled = await this.handler.handleBusyMessage(event, this, "steer", builtInCommand.args);
-				if (!handled) {
-					this.enqueueStreamMessage(event);
+				const result = await this.handler.handleBusyMessage(event, this, "steer", builtInCommand.args);
+				if (result.kind === "requeue") {
+					this.enqueueStreamMessage(event, result.text);
 				}
 				return;
 			}
 
 			if (builtInCommand?.name === "followup") {
-				const handled = await this.handler.handleBusyMessage(event, this, "followUp", builtInCommand.args);
-				if (!handled) {
-					this.enqueueStreamMessage(event);
+				const result = await this.handler.handleBusyMessage(event, this, "followUp", builtInCommand.args);
+				if (result.kind === "requeue") {
+					this.enqueueStreamMessage(event, result.text);
 				}
 				return;
 			}
@@ -1147,9 +1155,9 @@ export class DingTalkBot {
 				return;
 			}
 
-			const handled = await this.handler.handleBusyMessage(event, this, this.busyMessageDefault, content);
-			if (!handled) {
-				this.enqueueStreamMessage(event);
+			const result = await this.handler.handleBusyMessage(event, this, this.busyMessageDefault, content);
+			if (result.kind === "requeue") {
+				this.enqueueStreamMessage(event, result.text);
 			}
 			return;
 		}

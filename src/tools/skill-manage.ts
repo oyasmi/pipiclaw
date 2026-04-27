@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { createAtomicTempPath, writeFileAtomically } from "../shared/atomic-file.js";
 import {
 	resolveSkillPath,

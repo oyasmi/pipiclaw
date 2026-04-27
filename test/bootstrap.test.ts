@@ -104,7 +104,9 @@ describe("bootstrap", () => {
 			expect(error).toBeInstanceOf(BootstrapExitError);
 			expect((error as BootstrapExitError).code).toBe(0);
 		}
-		expect(io.log).toHaveBeenCalledWith(expect.stringMatching(/^\d+\.\d+\.\d+$/));
+		expect(io.log).toHaveBeenCalledWith(
+			expect.stringMatching(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/),
+		);
 	});
 
 	it("loads and normalizes a ready DingTalk config", () => {

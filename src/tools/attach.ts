@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { basename, resolve as resolvePath } from "path";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";

@@ -235,7 +235,7 @@ describe("MemoryLifecycle", () => {
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
 	});
 
-	it("records boundary events after compaction and new-session switches without running maintenance", async () => {
+	it("records boundary events after compaction and new-session starts without running maintenance", async () => {
 		const recordMemoryActivity = vi.fn();
 		const lifecycle = createLifecycle(
 			{
@@ -248,7 +248,7 @@ describe("MemoryLifecycle", () => {
 		lifecycle.createExtensionFactory()(fakePi.api as never);
 
 		fakePi.handlers.get("session_compact")?.({});
-		fakePi.handlers.get("session_switch")?.({ reason: "new" });
+		fakePi.handlers.get("session_start")?.({ reason: "new" });
 
 		expect(recordMemoryActivity).toHaveBeenCalledTimes(2);
 		expect(recordMemoryActivity).toHaveBeenCalledWith(expect.objectContaining({ kind: "boundary" }));

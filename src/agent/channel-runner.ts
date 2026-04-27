@@ -2,12 +2,18 @@ import { Agent, type AgentTool } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import {
 	AgentSession,
+	AgentSessionRuntime,
 	AuthStorage,
 	convertToLlm,
+	createExtensionRuntime,
 	DefaultResourceLoader,
 	ModelRegistry,
+	type AgentSessionServices,
+	type LoadExtensionsResult,
+	type ResourceLoader,
 	type SettingsManager as SDKSettingsManager,
 	SessionManager,
+	type SessionStartEvent,
 	type Skill,
 } from "@mariozechner/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "fs/promises";
@@ -92,15 +98,17 @@ export class ChannelRunner implements AgentRunner {
 	private readonly channelDir: string;
 	private readonly workspacePath: string;
 	private readonly workspaceDir: string;
-	private readonly session: AgentSession;
-	private readonly agent: Agent;
-	private readonly sessionManager: SessionManager;
+	private session: AgentSession;
+	private agent: Agent;
+	private sessionManager: SessionManager;
 	private readonly settingsManager: PipiclawSettingsManager;
 	private readonly modelRegistry: ModelRegistry;
 	private readonly memoryLifecycle: MemoryLifecycle;
 	private readonly memoryCandidateStore: MemoryCandidateStore;
 	private readonly sessionResourceGate: SessionResourceGate;
 	private readonly sessionReady: Promise<void>;
+	private readonly sessionRuntime: AgentSessionRuntime;
+	private sessionUnsubscribe?: () => void;
 	private subAgentDiscovery: SubAgentDiscoveryResult;
 
 	// --- Mutable across runs ---
@@ -108,6 +116,7 @@ export class ChannelRunner implements AgentRunner {
 	private currentSkills: Skill[];
 	private firstTurnMemoryBootstrapPending = true;
 	private acceptingBusyMessages = false;
+	private agentLoopStarted = false;
 
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
@@ -142,16 +151,14 @@ export class ChannelRunner implements AgentRunner {
 		log.logInfo(`Using model: ${this.activeModel.provider}/${this.activeModel.id} (${this.activeModel.name})`);
 		this.subAgentDiscovery = this.refreshSubAgentDiscovery();
 
-		// Create tools
-		const tools = this.buildRuntimeTools();
-
-		// Create agent
+		const initialSessionManager = this.sessionManager;
+		const initialTools = this.buildRuntimeTools();
 		this.agent = new Agent({
 			initialState: {
 				systemPrompt: "",
 				model: this.activeModel,
 				thinkingLevel: "off",
-				tools,
+				tools: initialTools,
 			},
 			convertToLlm,
 			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.activeModel),
@@ -170,65 +177,36 @@ export class ChannelRunner implements AgentRunner {
 			},
 		});
 
-		const resourceLoader = new DefaultResourceLoader({
-			cwd: process.cwd(),
-			agentDir: APP_HOME_DIR,
-			settingsManager: asSdkSettingsManager(this.settingsManager),
-			extensionFactories: [
-				this.memoryLifecycle.createExtensionFactory(),
-				createCommandExtension({
-					getCurrentModel: () => this.session.model ?? this.activeModel,
-					getAvailableModels: async () => {
-						this.modelRegistry.refresh();
-						return await this.modelRegistry.getAvailable();
-					},
-					getSessionStats: () => this.session.getSessionStats(),
-					getThinkingLevel: () => this.session.thinkingLevel,
-					switchModel: async (model) => {
-						await this.session.setModel(model);
-						this.activeModel = model;
-					},
-					refreshSessionResources: async () => {
-						await this.refreshSessionResources();
-					},
-				}),
-			],
-			appendSystemPromptOverride: (base) => {
-				const soul = getSoul(this.workspaceDir);
-				const sections = [...base];
-				if (soul) {
-					sections.unshift(soul);
-				}
-				sections.push(
-					buildAppendSystemPrompt(this.workspacePath, this.channelId, this.sandboxConfig, {
-						subAgentList: formatSubAgentList(this.subAgentDiscovery.agents),
-					}),
-				);
-				return sections;
-			},
-			agentsFilesOverride: () => {
-				const agentConfig = getAgentConfig(this.channelDir);
-				return {
-					agentsFiles: agentConfig ? [{ path: `${this.workspacePath}/AGENTS.md`, content: agentConfig }] : [],
-				};
-			},
-			skillsOverride: (base) => ({
-				skills: [...base.skills, ...this.currentSkills],
-				diagnostics: base.diagnostics,
-			}),
-		});
-
-		const baseToolsOverride = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
-
-		// Create AgentSession
+		const initialResourceLoader = this.createResourceLoader();
+		const baseToolsOverride = Object.fromEntries(initialTools.map((tool) => [tool.name, tool]));
 		this.session = new AgentSession({
 			agent: this.agent,
-			sessionManager: this.sessionManager,
+			sessionManager: initialSessionManager,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			cwd: process.cwd(),
 			modelRegistry: this.modelRegistry,
-			resourceLoader,
+			resourceLoader: initialResourceLoader,
 			baseToolsOverride,
+		});
+		this.sessionRuntime = new AgentSessionRuntime(
+			this.session,
+			this.createAgentSessionServices(initialResourceLoader),
+			async ({ sessionManager, sessionStartEvent }) => {
+				const next = this.createSessionRuntime(sessionManager, sessionStartEvent);
+				return {
+					session: next.session,
+					extensionsResult: this.createEmptyExtensionsResult(),
+					services: this.createAgentSessionServices(next.resourceLoader),
+					diagnostics: [],
+				};
+			},
+		);
+		this.sessionRuntime.setRebindSession(async (session) => {
+			this.session = session;
+			this.agent = session.agent;
+			this.sessionManager = session.sessionManager;
+			await this.bindSessionExtensions();
+			this.subscribeToSessionEvents();
 		});
 		this.sessionResourceGate = new SessionResourceGate(async () => {
 			await this.reloadSessionResources();
@@ -244,6 +222,7 @@ export class ChannelRunner implements AgentRunner {
 	async run(ctx: DingTalkContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }> {
 		this.resetRunState(ctx, store);
 		this.acceptingBusyMessages = true;
+		this.agentLoopStarted = false;
 
 		const runQueue = createRunQueue(ctx);
 		this.runState.queue = runQueue.queue;
@@ -318,11 +297,14 @@ export class ChannelRunner implements AgentRunner {
 			log.logWarning(`[${this.channelId}] Runner failed`, this.runState.errorMessage);
 		} finally {
 			this.acceptingBusyMessages = false;
+			this.agentLoopStarted = false;
 			if (!promptSubmitted) {
 				const discarded = this.session.clearQueue();
 				const discardedCount = discarded.steering.length + discarded.followUp.length;
 				if (discardedCount > 0) {
-					log.logWarning(`[${this.channelId}] Discarded ${discardedCount} queued busy message(s) after run setup failed`);
+					log.logWarning(
+						`[${this.channelId}] Discarded ${discardedCount} queued busy message(s) after run setup failed`,
+					);
 				}
 			}
 			await runQueue.drain();
@@ -443,11 +425,7 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	async queueSteer(text: string, userName?: string): Promise<void> {
-		await this.queueBusyMessage("steer", this.requireQueuedMessage(text, "steer"), userName);
-	}
-
-	async queueFollowUp(text: string, userName?: string): Promise<void> {
-		await this.queueBusyMessage("followUp", this.requireQueuedMessage(text, "followup"), userName);
+		await this.queueBusyMessage(this.requireQueuedMessage(text, "steer"), userName);
 	}
 
 	async flushMemoryForShutdown(): Promise<void> {
@@ -536,8 +514,11 @@ export class ChannelRunner implements AgentRunner {
 		return `[${timestamp}] [${userName || "unknown"}]: ${text}`;
 	}
 
-	private async queueBusyMessage(delivery: "steer" | "followUp", text: string, userName?: string): Promise<void> {
+	private async queueBusyMessage(text: string, userName?: string): Promise<void> {
 		if (!this.acceptingBusyMessages) {
+			throw new Error("No task is currently running.");
+		}
+		if (this.agentLoopStarted && !this.session.isStreaming) {
 			throw new Error("No task is currently running.");
 		}
 
@@ -553,13 +534,15 @@ export class ChannelRunner implements AgentRunner {
 		if (!this.acceptingBusyMessages) {
 			throw new Error("No task is currently running.");
 		}
+		if (this.agentLoopStarted && !this.session.isStreaming) {
+			throw new Error("No task is currently running.");
+		}
 
 		const queueMessage = async () => {
-			if (delivery === "followUp") {
-				await this.session.followUp(queuedMessage);
-			} else {
-				await this.session.steer(queuedMessage);
+			if (this.agentLoopStarted && !this.session.isStreaming) {
+				throw new Error("No task is currently running.");
 			}
+			await this.session.steer(queuedMessage);
 		};
 
 		await this.sessionResourceGate.runPrompt(queueMessage);
@@ -601,20 +584,18 @@ export class ChannelRunner implements AgentRunner {
 			commandContextActions: {
 				waitForIdle: () => this.session.agent.waitForIdle(),
 				newSession: async (options) => {
-					const success = await this.session.newSession(options);
-					return { cancelled: !success };
+					return await this.sessionRuntime.newSession(options);
 				},
-				fork: async (entryId) => {
-					const result = await this.session.fork(entryId);
+				fork: async (entryId, options) => {
+					const result = await this.sessionRuntime.fork(entryId, options);
 					return { cancelled: result.cancelled };
 				},
 				navigateTree: async (targetId, options) => {
 					const result = await this.session.navigateTree(targetId, options);
 					return { cancelled: result.cancelled };
 				},
-				switchSession: async (sessionPath) => {
-					const success = await this.session.switchSession(sessionPath);
-					return { cancelled: !success };
+				switchSession: async (sessionPath, options) => {
+					return await this.sessionRuntime.switchSession(sessionPath, options);
 				},
 				reload: async () => {
 					await this.refreshSessionResources();
@@ -677,6 +658,105 @@ export class ChannelRunner implements AgentRunner {
 		}
 	}
 
+	private createResourceLoader(): ResourceLoader {
+		return new DefaultResourceLoader({
+			cwd: process.cwd(),
+			agentDir: APP_HOME_DIR,
+			settingsManager: asSdkSettingsManager(this.settingsManager),
+			extensionFactories: [
+				this.memoryLifecycle.createExtensionFactory(),
+				createCommandExtension({
+					getCurrentModel: () => this.session.model ?? this.activeModel,
+					getAvailableModels: async () => {
+						this.modelRegistry.refresh();
+						return await this.modelRegistry.getAvailable();
+					},
+					getSessionStats: () => this.session.getSessionStats(),
+					getThinkingLevel: () => this.session.thinkingLevel,
+					switchModel: async (model) => {
+						await this.session.setModel(model);
+						this.activeModel = model;
+					},
+					refreshSessionResources: async () => {
+						await this.refreshSessionResources();
+					},
+				}),
+			],
+			appendSystemPromptOverride: (base) => {
+				const soul = getSoul(this.workspaceDir);
+				const sections = [...base];
+				if (soul) {
+					sections.unshift(soul);
+				}
+				sections.push(
+					buildAppendSystemPrompt(this.workspacePath, this.channelId, this.sandboxConfig, {
+						subAgentList: formatSubAgentList(this.subAgentDiscovery.agents),
+					}),
+				);
+				return sections;
+			},
+			agentsFilesOverride: () => {
+				const agentConfig = getAgentConfig(this.channelDir);
+				return {
+					agentsFiles: agentConfig ? [{ path: `${this.workspacePath}/AGENTS.md`, content: agentConfig }] : [],
+				};
+			},
+			skillsOverride: (base) => ({
+				skills: [...base.skills, ...this.currentSkills],
+				diagnostics: base.diagnostics,
+			}),
+		});
+	}
+
+	private createAgentSessionServices(resourceLoader: ResourceLoader): AgentSessionServices {
+		return {
+			cwd: process.cwd(),
+			agentDir: APP_HOME_DIR,
+			authStorage: AuthStorage.create(AUTH_CONFIG_PATH),
+			settingsManager: asSdkSettingsManager(this.settingsManager),
+			modelRegistry: this.modelRegistry,
+			resourceLoader,
+			diagnostics: [],
+		};
+	}
+
+	private createEmptyExtensionsResult(): LoadExtensionsResult {
+		return {
+			extensions: [],
+			errors: [],
+			runtime: createExtensionRuntime(),
+		};
+	}
+
+	private createSessionRuntime(
+		sessionManager: SessionManager,
+		sessionStartEvent?: SessionStartEvent,
+	): { agent: Agent; session: AgentSession; resourceLoader: ResourceLoader } {
+		const tools = this.buildRuntimeTools();
+		const agent = new Agent({
+			initialState: {
+				systemPrompt: "",
+				model: this.activeModel,
+				thinkingLevel: "off",
+				tools,
+			},
+			convertToLlm,
+			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.activeModel),
+		});
+		const resourceLoader = this.createResourceLoader();
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settingsManager: asSdkSettingsManager(this.settingsManager),
+			cwd: process.cwd(),
+			modelRegistry: this.modelRegistry,
+			resourceLoader,
+			baseToolsOverride: Object.fromEntries(tools.map((tool) => [tool.name, tool])),
+			sessionStartEvent,
+		});
+		return { agent, session, resourceLoader };
+	}
+
 	private buildRuntimeTools(): AgentTool<any>[] {
 		const securityLoad = loadSecurityConfigWithDiagnostics(APP_HOME_DIR);
 		const toolsLoad = loadToolsConfigWithDiagnostics(APP_HOME_DIR);
@@ -703,15 +783,20 @@ export class ChannelRunner implements AgentRunner {
 
 	private rebuildSessionTools(): void {
 		const tools = this.buildRuntimeTools();
-		this.agent.setTools(tools);
 		(this.session as unknown as { _baseToolsOverride?: Record<string, AgentTool<any>> })._baseToolsOverride =
 			Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+		this.agent.state.tools = tools;
+		this.session.setActiveToolsByName(tools.map((tool) => tool.name));
 	}
 
 	// === Session event subscription ===
 
 	private subscribeToSessionEvents(): void {
-		this.session.subscribe(async (event: unknown) => {
+		this.sessionUnsubscribe?.();
+		this.sessionUnsubscribe = this.session.subscribe(async (event: unknown) => {
+			if (isRecord(event) && event.type === "message_start") {
+				this.agentLoopStarted = true;
+			}
 			if (isRecord(event) && "reason" in event && event.reason === "new") {
 				this.firstTurnMemoryBootstrapPending = true;
 			}

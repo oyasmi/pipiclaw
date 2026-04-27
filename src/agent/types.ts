@@ -8,7 +8,6 @@ export interface AgentRunner {
 	run(ctx: DingTalkContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }>;
 	handleBuiltinCommand(ctx: DingTalkContext, command: BuiltInCommand): Promise<void>;
 	queueSteer(text: string, userName?: string): Promise<void>;
-	queueFollowUp(text: string, userName?: string): Promise<void>;
 	flushMemoryForShutdown(): Promise<void>;
 	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;
 	abort(): Promise<void>;

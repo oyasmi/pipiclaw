@@ -3,7 +3,7 @@ import { createWriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { Executor } from "../sandbox.js";
 import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";

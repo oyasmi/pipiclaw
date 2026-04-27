@@ -1,6 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { extname } from "path";
 import type { Executor } from "../sandbox.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
