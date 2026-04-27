@@ -4,6 +4,20 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-04-27
+
+### Changed
+
+- Upgraded the pi-mono dependency set to `0.70.2`, including `@mariozechner/pi-ai`, `@mariozechner/pi-agent-core`, and `@mariozechner/pi-coding-agent`.
+- Migrated custom tool schemas from `@sinclair/typebox` to `typebox` 1.x for compatibility with the updated pi tool validation path.
+- Updated channel session replacement handling to use the new `AgentSessionRuntime` flow for `/new`, fork, and session switch operations.
+
+### Fixed
+
+- Fixed a race where busy-window follow-up messages could be lost or incorrectly queued after the active task had already stopped; late follow-ups are now requeued as normal work.
+- Moved `/new` command follow-up messaging onto the replacement-session context so new-session confirmations keep working after pi invalidates stale pre-replacement extension contexts.
+- Migrated memory boundary tracking from the removed `session_switch` extension event to the current `session_start` event model.
+
 ## [0.6.5] - 2026-04-20
 
 ### Added

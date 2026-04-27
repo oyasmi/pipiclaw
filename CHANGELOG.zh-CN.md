@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-04-27
+
+### 变更
+
+- 将 pi-mono 依赖组升级到 `0.70.2`，包括 `@mariozechner/pi-ai`、`@mariozechner/pi-agent-core` 和 `@mariozechner/pi-coding-agent`。
+- 将自定义工具 schema 从 `@sinclair/typebox` 迁移到 `typebox` 1.x，以兼容新版 pi 的工具参数校验路径。
+- 将频道会话替换逻辑迁移到新的 `AgentSessionRuntime` 流程，用于 `/new`、fork 和 session switch 操作。
+
+### 修复
+
+- 修复任务忙碌窗口中的 follow-up 消息竞态：当当前任务已经结束时，迟到的 follow-up 不再丢失或错误排队，而是重新作为普通任务处理。
+- 将 `/new` 命令的后续确认消息移动到替换后的 session context 中，避免 pi 在 session replacement 后使旧 extension context 失效导致确认消息丢失。
+- 将记忆边界记录从已移除的 `session_switch` extension 事件迁移到当前的 `session_start` 事件模型。
+
 ## [0.6.5] - 2026-04-20
 
 ### 新增
