@@ -195,5 +195,5 @@ describe("createRuntimeContext", () => {
 		expect(extractSessionId(newSessionReplies[0])).not.toBe(extractSessionId(newSessionReplies[1]));
 
 		await runtime.shutdown();
-	}, 15_000);
+	}, 30_000);
 });

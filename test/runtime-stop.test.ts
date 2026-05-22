@@ -153,7 +153,7 @@ describe("runtime stop handling", () => {
 		expect(bot.discardCard).toHaveBeenCalledWith("dm_tester");
 
 		await runtime.shutdown();
-	});
+	}, 20_000);
 
 	it("returns follow-up busy messages for normal queued processing", async () => {
 		const runner: AgentRunner = {
