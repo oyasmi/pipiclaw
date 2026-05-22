@@ -276,6 +276,12 @@ export class DingTalkBot {
 	private activeMessageProcessing = false;
 	private keepAliveTimer: NodeJS.Timeout | null = null;
 	private reconnectTimer: NodeJS.Timeout | null = null;
+	// Dedicated timer for the in-flight backoff sleep inside doReconnect, kept
+	// separate from reconnectTimer so an external scheduleReconnect() (e.g. a
+	// WebSocket close event) can never clear the sleep out from under an active
+	// attempt and leave isReconnecting stuck true forever.
+	private reconnectDelayTimer: NodeJS.Timeout | null = null;
+	private reconnectDelayResolve: (() => void) | null = null;
 	private isReconnecting = false;
 	private isStopped = false;
 	private reconnectAttempts = 0;
@@ -368,9 +374,25 @@ export class DingTalkBot {
 		}
 	}
 
+	// Cancel the backoff sleep and resolve its pending promise so the awaiting
+	// doReconnect unblocks (and then bails on the isStopped/!client re-check)
+	// instead of hanging forever.
+	private clearReconnectDelay(): void {
+		if (this.reconnectDelayTimer) {
+			clearTimeout(this.reconnectDelayTimer);
+			this.reconnectDelayTimer = null;
+		}
+		if (this.reconnectDelayResolve) {
+			const resolve = this.reconnectDelayResolve;
+			this.reconnectDelayResolve = null;
+			resolve();
+		}
+	}
+
 	private clearAllTimers(): void {
 		this.clearKeepAliveTimer();
 		this.clearReconnectTimer();
+		this.clearReconnectDelay();
 	}
 
 	private async sleep(delayMs: number): Promise<void> {
@@ -382,8 +404,10 @@ export class DingTalkBot {
 
 	private async waitForDelay(delayMs: number): Promise<void> {
 		await new Promise<void>((resolve) => {
-			this.reconnectTimer = this.setTrackedTimeout(() => {
-				this.reconnectTimer = null;
+			this.reconnectDelayResolve = resolve;
+			this.reconnectDelayTimer = this.setTrackedTimeout(() => {
+				this.reconnectDelayTimer = null;
+				this.reconnectDelayResolve = null;
 				resolve();
 			}, delayMs);
 		});
@@ -485,6 +509,13 @@ export class DingTalkBot {
 
 	private scheduleReconnect(delayMs: number, immediate: boolean): void {
 		if (this.isStopped) {
+			return;
+		}
+		// An attempt is already in flight; it owns the retry loop and will
+		// reschedule itself on failure. Scheduling here would be redundant and,
+		// worse, tear down a just-established socket if the attempt has already
+		// succeeded by the time this fires.
+		if (this.isReconnecting) {
 			return;
 		}
 		this.clearReconnectTimer();
@@ -614,7 +645,13 @@ export class DingTalkBot {
 
 				const elapsed = Date.now() - this.lastSocketAvailableTime;
 				if (elapsed > 90 * 1000 && !this.activeMessageProcessing) {
-					log.logWarning("DingTalk: connection timeout detected (>90s). Keeping active where possible...");
+					// No pong / activity for >90s: the socket is (half-)dead and may
+					// never emit a close event. Proactively force a reconnect instead
+					// of waiting indefinitely. scheduleReconnect no-ops if an attempt
+					// is already in flight or the bot has stopped.
+					log.logWarning("DingTalk: connection timeout detected (>90s); forcing reconnect.");
+					this.scheduleReconnect(1000, true);
+					return;
 				}
 
 				try {

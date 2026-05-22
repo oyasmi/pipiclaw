@@ -763,4 +763,59 @@ describe("dingtalk", () => {
 		await flushMicrotasks();
 		expect(client.connect).toHaveBeenCalledTimes(2);
 	});
+
+	it("keeps retrying when a close event arrives during the reconnect backoff", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		const { bot } = createBot();
+
+		await bot.start();
+		const client = fakeClientState.instances[0];
+		expect(client.connect).toHaveBeenCalledTimes(1);
+
+		const closeHandler = client.socket.on.mock.calls.find((call) => call[0] === "close")?.[1] as
+			| ((code: number, reason: string) => void)
+			| undefined;
+		expect(closeHandler).toBeDefined();
+
+		// Subsequent attempts fail (socket never reaches OPEN), forcing the
+		// exponential-backoff retry path.
+		fakeClientState.connectImpl = (state) => {
+			state.socket = createSocketMock(3);
+			return Promise.resolve();
+		};
+
+		const reconnecting = () => (bot as unknown as { isReconnecting: boolean }).isReconnecting;
+
+		// Socket drops -> immediate reconnect after 1s, which fails.
+		closeHandler!(1006, "drop");
+		await vi.advanceTimersByTimeAsync(1000);
+		await flushMicrotasks();
+		expect(client.connect).toHaveBeenCalledTimes(2);
+
+		// The failed attempt scheduled a 0ms retry which then enters the ~2s
+		// exponential backoff sleep; let that run so an attempt is genuinely
+		// in-flight (isReconnecting=true) and parked in waitForDelay.
+		await vi.advanceTimersByTimeAsync(10);
+		await flushMicrotasks();
+		expect(reconnecting()).toBe(true);
+
+		// A second close event arrives mid-backoff. The old shared-timer code
+		// cleared the backoff sleep here, wedging isReconnecting=true forever so
+		// the bot never reconnected again.
+		closeHandler!(1006, "drop-again");
+
+		// Connectivity is restored; the in-flight attempt must recover on its own.
+		fakeClientState.connectImpl = (state) => {
+			state.socket = createSocketMock(1);
+			return Promise.resolve();
+		};
+
+		await vi.advanceTimersByTimeAsync(5000);
+		await flushMicrotasks();
+
+		// Pre-fix: stuck at 2 with isReconnecting wedged true. Post-fix: the
+		// backoff resolves, it reconnects, and the flag clears.
+		expect(client.connect.mock.calls.length).toBeGreaterThan(2);
+		expect(reconnecting()).toBe(false);
+	});
 });

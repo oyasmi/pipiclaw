@@ -4,6 +4,12 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.7-beta.3] - 2026-05-22
+
+### Fixed
+
+- Fixed DingTalk reconnection getting permanently stuck after a transient disconnect. The reconnect backoff sleep shared a single timer field with the reconnect scheduler, so a WebSocket `close` event arriving during the backoff would clear the sleep timer and leave `isReconnecting` wedged at `true` forever, blocking all future reconnect attempts. The backoff sleep now uses a dedicated timer, `scheduleReconnect` no longer preempts an in-flight attempt, and the `>90s` connection-timeout watchdog now proactively forces a reconnect instead of only logging.
+
 ## [0.6.7-beta.2] - 2026-05-22
 
 ### Changed
