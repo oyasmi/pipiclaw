@@ -29,7 +29,7 @@ These are handled directly by the DingTalk transport/runtime layer.
 
 While a task is running, plain messages use the configured busy-message default. The default is \`steer\`; set \`busyMessageDefault\` in channel.json to \`followUp\` or \`followup\` to queue plain messages after the current task.
 
-Set \`progressDisplay\` in channel.json to \`rolling\` for compact AI Card progress: recent entries while running, then a short summary after completion.
+Set \`responseMode\` in channel.json to control output shape: \`full_progress_then_plain_final\` (default) streams full progress then sends a plain final message; \`rolling_progress_then_plain_final\` shows only the most recent progress entries, then a short summary; \`final_card_only\` hides progress and delivers the final answer in the AI Card.
 
 ## Session Commands
 

@@ -1,3 +1,11 @@
+import {
+	type FinalDelivery,
+	finalDeliveryOf,
+	type ProgressStyle,
+	progressStyleOf,
+	type ResponseMode,
+} from "../../../src/runtime/dingtalk.js";
+
 export interface CapturedDelivery {
 	method:
 		| "ensureCard"
@@ -15,7 +23,15 @@ export interface CapturedDelivery {
 
 export class E2EFakeDingTalkBot {
 	deliveries: CapturedDelivery[] = [];
-	progressDisplay: "full" | "rolling" = "full";
+	responseMode: ResponseMode = "full_progress_then_plain_final";
+
+	get progressStyle(): ProgressStyle {
+		return progressStyleOf(this.responseMode);
+	}
+
+	get finalDelivery(): FinalDelivery {
+		return finalDeliveryOf(this.responseMode);
+	}
 
 	async start(): Promise<void> {}
 

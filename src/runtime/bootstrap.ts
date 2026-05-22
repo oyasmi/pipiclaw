@@ -32,10 +32,8 @@ import {
 	type DingTalkEvent,
 	type DingTalkHandler,
 	isBusyMessageDefaultConfig,
-	isProgressDisplayConfig,
 	isResponseModeConfig,
 	normalizeBusyMessageDefault,
-	normalizeProgressDisplay,
 	normalizeResponseMode,
 } from "./dingtalk.js";
 import { createEventsWatcher } from "./events.js";
@@ -183,8 +181,7 @@ const CHANNEL_CONFIG_TEMPLATE = {
 	cardTemplateKey: "content",
 	allowFrom: ["your-staff-id"],
 	busyMessageDefault: "steer",
-	progressDisplay: "full",
-	responseMode: "progress_then_plain_final",
+	responseMode: "full_progress_then_plain_final",
 	cardAutoLayout: true,
 } satisfies DingTalkConfig;
 
@@ -361,14 +358,11 @@ function listChannelConfigIssues(config: Partial<DingTalkConfig>): string[] {
 		issues.push('Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".');
 	}
 
-	const progressDisplay = (config as { progressDisplay?: unknown }).progressDisplay;
-	if (progressDisplay !== undefined && !isProgressDisplayConfig(progressDisplay)) {
-		issues.push('Invalid `progressDisplay`: expected "full" or "rolling".');
-	}
-
 	const responseMode = (config as { responseMode?: unknown }).responseMode;
 	if (responseMode !== undefined && !isResponseModeConfig(responseMode)) {
-		issues.push('Invalid `responseMode`: expected "progress_then_plain_final" or "final_card_only".');
+		issues.push(
+			'Invalid `responseMode`: expected "full_progress_then_plain_final", "rolling_progress_then_plain_final", or "final_card_only".',
+		);
 	}
 
 	const cardAutoLayout = (config as { cardAutoLayout?: unknown }).cardAutoLayout;
@@ -422,7 +416,6 @@ export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: 
 	parsed.busyMessageDefault = normalizeBusyMessageDefault(
 		(parsed as { busyMessageDefault?: unknown }).busyMessageDefault,
 	);
-	parsed.progressDisplay = normalizeProgressDisplay((parsed as { progressDisplay?: unknown }).progressDisplay);
 	parsed.responseMode = normalizeResponseMode((parsed as { responseMode?: unknown }).responseMode);
 	parsed.cardAutoLayout = (parsed as { cardAutoLayout?: boolean }).cardAutoLayout ?? true;
 	if (Array.isArray(parsed.allowFrom)) {

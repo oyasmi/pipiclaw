@@ -88,11 +88,15 @@ export {
 	type DingTalkContext,
 	type DingTalkEvent,
 	type DingTalkHandler,
+	type FinalDelivery,
+	finalDeliveryOf,
 	isBusyMessageDefaultConfig,
-	isProgressDisplayConfig,
+	isResponseModeConfig,
 	normalizeBusyMessageDefault,
-	normalizeProgressDisplay,
-	type ProgressDisplayMode,
+	normalizeResponseMode,
+	type ProgressStyle,
+	progressStyleOf,
+	type ResponseMode,
 } from "./runtime/dingtalk.js";
 export {
 	createEventsWatcher,

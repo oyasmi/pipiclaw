@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.6.7-beta.2] - 2026-05-22
+
+### 变更
+
+- 将 `progressDisplay` 合并进 `responseMode`，现在为三态：`full_progress_then_plain_final`（默认）、`rolling_progress_then_plain_final` 和 `final_card_only`。该模式会派生出两个正交特征（进度展示风格与最终投递目标），运行时不再直接判断枚举字符串。
+
+### 移除
+
+- 移除 `progressDisplay` 渠道配置项以及旧值 `responseMode: "progress_then_plain_final"` 别名；两者现在都会在启动时被拒绝。
+
+### 修复
+
+- 修复 `final_card_only` 模式下中间 assistant 文本被当作卡片进度推送的问题；现在过程输出被完全抑制（投递层也加了兜底），只有最终答案会写入卡片。
+
 ## [0.6.7-beta.1] - 2026-05-22
 
 ### 新增

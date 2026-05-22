@@ -173,7 +173,18 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 | `cardTemplateKey` | 否 | `"content"` | 写入流式内容的模板字段名 |
 | `allowFrom` | 否 | 留空或省略时允许所有人 | 允许访问的发送者 staff ID 列表 |
 | `busyMessageDefault` | 否 | `"steer"` | Agent 忙碌时普通消息的默认处理模式。`"steer"` 表示插入当前任务，`"followUp"` / `"followup"` 表示排队等当前任务完成后处理 |
-| `progressDisplay` | 否 | `"full"` | AI Card 进度展示模式。`"full"` 完整累积；`"rolling"` 执行中只显示最近 3 条进展，完成后收起为一行摘要 |
+| `responseMode` | 否 | `"full_progress_then_plain_final"` | 输出形态，统一控制「过程展示」与「最终投递方式」，取值见下方矩阵 |
+| `cardAutoLayout` | 否 | `true` | 透传给钉钉 AI Card 模板的 `autoLayout` 渲染开关 |
+
+#### `responseMode` 行为矩阵
+
+| 取值 | 过程展示 | 最终答案投递 |
+| --- | --- | --- |
+| `full_progress_then_plain_final`（默认） | 完整累积工具/思考/中间文本 | 单独的纯文本消息，卡片收尾为进度全文 |
+| `rolling_progress_then_plain_final` | 仅保留最近 3 条进展 | 单独的纯文本消息，卡片收尾为一行摘要 |
+| `final_card_only` | 不展示任何过程 | 最终答案直接写入 AI Card，不再额外发纯文本 |
+
+> 旧字段 `progressDisplay` 与旧值 `responseMode: "progress_then_plain_final"` 已移除，请改用上表取值。
 
 ### 使用说明（Practical Notes）
 
@@ -183,7 +194,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - `allowFrom` 生效的是发送者 staff ID
 - 当 `allowFrom` 非空时，不在列表中的发送者消息会被直接忽略
 - `busyMessageDefault` 写成 `"followUp"` 或 `"followup"` 都会启用 follow-up 默认模式；其他显式值会在启动时报错
-- `progressDisplay` 写成 `"rolling"` 会启用紧凑进度展示；其他显式值会在启动时报错
+- `responseMode` 只接受矩阵中的三个取值；其他显式值会在启动时报错
 
 ### 推荐配置（Recommended Configurations）
 
@@ -256,7 +267,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
   "cardTemplateKey": "content",
   "allowFrom": [],
   "busyMessageDefault": "followUp",
-  "progressDisplay": "rolling"
+  "responseMode": "rolling_progress_then_plain_final"
 }
 ```
 

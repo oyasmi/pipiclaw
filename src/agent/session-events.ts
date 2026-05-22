@@ -84,7 +84,8 @@ function mergeAssistantUsage(
 
 export async function handleSessionEvent(event: unknown, context: SessionEventHandlerContext): Promise<void> {
 	const { ctx, logCtx, queue, pendingTools, store, runState, memoryLifecycle } = context;
-	const finalCardOnly = ctx.responseMode === "final_card_only";
+	const showProgress = ctx.progressStyle !== "none";
+	const finalToCard = ctx.finalDelivery === "card";
 
 	if (isToolExecutionStartEvent(event)) {
 		const label = extractLabelFromArgs(event.args) || event.toolName;
@@ -97,7 +98,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		memoryLifecycle.noteToolCall();
 
 		log.logToolStart(logCtx, event.toolName, label, isRecord(event.args) ? event.args : {});
-		if (!finalCardOnly) {
+		if (showProgress) {
 			queue.enqueue(() => ctx.respond(formatProgressEntry("tool", label), false), "tool label");
 		}
 		return;
@@ -111,7 +112,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		if (!partialText.trim()) {
 			return;
 		}
-		if (!finalCardOnly) {
+		if (showProgress) {
 			queue.enqueue(() => ctx.respond(formatProgressEntry("tool", partialText), false), "tool update");
 		}
 		return;
@@ -183,7 +184,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			log.logToolSuccess(logCtx, event.toolName, durationMs, resultStr);
 		}
 
-		if (treatAsError && !finalCardOnly) {
+		if (treatAsError && showProgress) {
 			queue.enqueue(() => ctx.respond(formatProgressEntry("error", truncate(resultStr, 200)), false), "tool error");
 		}
 		return;
@@ -202,7 +203,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			runState.finalOutcome = { kind: "final", text: commandResultText };
 			log.logResponse(logCtx, commandResultText);
 			queue.enqueue(async () => {
-				if (finalCardOnly) {
+				if (finalToCard) {
 					await ctx.replaceMessage(commandResultText);
 				} else {
 					const delivered = await ctx.respondPlain(commandResultText);
@@ -244,14 +245,14 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 			const text = textParts.join("\n");
 
-			if (!finalCardOnly) {
+			if (showProgress) {
 				for (const thinking of thinkingParts) {
 					log.logThinking(logCtx, thinking);
 					queue.enqueue(() => ctx.respond(formatProgressEntry("thinking", thinking), false), "thinking");
 				}
 			}
 
-			if (text.trim() && (hasToolCalls || finalCardOnly)) {
+			if (text.trim() && hasToolCalls && showProgress) {
 				queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", text), false), "assistant progress");
 			}
 		}
@@ -288,7 +289,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			memoryLifecycle.noteCompletedAssistantTurn();
 			log.logResponse(logCtx, finalText);
 			queue.enqueue(async () => {
-				if (finalCardOnly) {
+				if (finalToCard) {
 					await ctx.replaceMessage(finalText);
 					runState.finalResponseDelivered = true;
 				} else {
@@ -305,7 +306,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	if (isAutoCompactionStartEvent(event)) {
 		const label = "Compacting context...";
 		log.logInfo(`Compaction started (reason: ${event.reason})`);
-		if (!finalCardOnly) {
+		if (showProgress) {
 			queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", label), false), "compaction start");
 		}
 		return;
@@ -320,7 +321,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		} else if (event.errorMessage) {
 			runState.lastCompactionError = event.errorMessage;
 			log.logWarning("Compaction failed", event.errorMessage);
-			if (!finalCardOnly) {
+			if (showProgress) {
 				queue.enqueue(
 					() =>
 						ctx.respond(
@@ -336,7 +337,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 	if (isAutoRetryStartEvent(event)) {
 		log.logWarning(`Retrying (${event.attempt}/${event.maxAttempts})`, event.errorMessage);
-		if (!finalCardOnly) {
+		if (showProgress) {
 			queue.enqueue(
 				() =>
 					ctx.respond(

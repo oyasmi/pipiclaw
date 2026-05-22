@@ -75,7 +75,7 @@ describe("delivery", () => {
 
 	it("keeps only the recent progress window in rolling mode", async () => {
 		const bot = new FakeDingTalkBot();
-		bot.progressDisplay = "rolling";
+		bot.responseMode = "rolling_progress_then_plain_final";
 		const store = new FakeChannelStore();
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never);
 
@@ -97,7 +97,7 @@ describe("delivery", () => {
 
 	it("replaces rolling progress with a compact summary after a final plain response", async () => {
 		const bot = new FakeDingTalkBot();
-		bot.progressDisplay = "rolling";
+		bot.responseMode = "rolling_progress_then_plain_final";
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
 
 		await ctx.respond("Running: read docs");
@@ -126,7 +126,7 @@ describe("delivery", () => {
 
 	it("preserves replacement text for rolling finalize fallback", async () => {
 		const bot = new FakeDingTalkBot();
-		bot.progressDisplay = "rolling";
+		bot.responseMode = "rolling_progress_then_plain_final";
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
 
 		await ctx.respond("Running: collect context");

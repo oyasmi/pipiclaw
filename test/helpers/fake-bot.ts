@@ -1,10 +1,24 @@
-import type { DingTalkEvent } from "../../src/runtime/dingtalk.js";
+import {
+	type DingTalkEvent,
+	type FinalDelivery,
+	finalDeliveryOf,
+	type ProgressStyle,
+	progressStyleOf,
+	type ResponseMode,
+} from "../../src/runtime/dingtalk.js";
 
 export class FakeDingTalkBot {
 	calls: Array<{ method: string; args: unknown[] }> = [];
-	progressDisplay: "full" | "rolling" = "full";
-	responseMode: "progress_then_plain_final" | "final_card_only" = "progress_then_plain_final";
+	responseMode: ResponseMode = "full_progress_then_plain_final";
 	private readonly returnValues = new Map<string, unknown>();
+
+	get progressStyle(): ProgressStyle {
+		return progressStyleOf(this.responseMode);
+	}
+
+	get finalDelivery(): FinalDelivery {
+		return finalDeliveryOf(this.responseMode);
+	}
 
 	configure(method: string, returnValue: unknown): void {
 		this.returnValues.set(method, returnValue);

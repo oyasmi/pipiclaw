@@ -66,7 +66,8 @@ class ChannelDeliveryController {
 			primeCard: (delayMs: number) => this.primeCard(delayMs),
 			flush: async () => this.flush(),
 			close: async () => this.close(),
-			responseMode: this.bot.responseMode,
+			progressStyle: this.bot.progressStyle,
+			finalDelivery: this.bot.finalDelivery,
 		};
 	}
 
@@ -122,6 +123,9 @@ class ChannelDeliveryController {
 
 	private async appendProgress(text: string, shouldLog: boolean): Promise<void> {
 		if (this.closed || this.finalResponseDelivered || !text.trim()) return;
+		// Final-card-only mode shows no progress; ignore any stray progress writes
+		// so we never create or flicker a card before the final replacement.
+		if (this.bot.progressStyle === "none") return;
 
 		this.clearCardWarmup();
 		if (this.progressStartedAt === 0) {
@@ -135,7 +139,7 @@ class ChannelDeliveryController {
 		}
 		this.progressSegments.push(text);
 		this.progressTextDirty = true;
-		if (this.bot.progressDisplay === "rolling") {
+		if (this.bot.progressStyle === "rolling") {
 			this.trimToRecentEntries(ROLLING_WINDOW_SIZE);
 		}
 		if (this.progressWindowStartedAt === 0) {
@@ -265,10 +269,10 @@ class ChannelDeliveryController {
 					} else if (mode === "finalize-existing") {
 						if (content || this.cardWarmupTriggered) {
 							const finalProgressText =
-								this.bot.progressDisplay === "rolling" ? this.buildSummaryText("Done") : progressText;
+								this.bot.progressStyle === "rolling" ? this.buildSummaryText("Done") : progressText;
 							touchedRemote = await this.bot.replaceCard(
 								this.event.channelId,
-								content || this.bot.progressDisplay === "rolling" ? finalProgressText : NO_CONTENT,
+								content || this.bot.progressStyle === "rolling" ? finalProgressText : NO_CONTENT,
 								true,
 							);
 							if (!touchedRemote) {

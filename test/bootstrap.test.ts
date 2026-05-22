@@ -71,8 +71,9 @@ describe("bootstrap", () => {
 		expect(readFileSync(paths.toolsConfigPath, "utf-8")).toContain('"apiKey": "BSA..."');
 		expect(readFileSync(paths.securityConfigPath, "utf-8")).toContain('"enabled": false');
 		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"busyMessageDefault": "steer"');
-		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"progressDisplay": "full"');
-		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"responseMode": "progress_then_plain_final"');
+		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain(
+			'"responseMode": "full_progress_then_plain_final"',
+		);
 		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"cardAutoLayout": true');
 
 		const second = bootstrapAppHome(paths);
@@ -122,7 +123,7 @@ describe("bootstrap", () => {
 					robotCode: "",
 					allowFrom: ["alice", " ", "bob"],
 					busyMessageDefault: "followup",
-					progressDisplay: "rolling",
+					responseMode: "rolling_progress_then_plain_final",
 				},
 				null,
 				2,
@@ -136,8 +137,7 @@ describe("bootstrap", () => {
 			cardTemplateKey: "content",
 			allowFrom: ["alice", "bob"],
 			busyMessageDefault: "followUp",
-			progressDisplay: "rolling",
-			responseMode: "progress_then_plain_final",
+			responseMode: "rolling_progress_then_plain_final",
 			cardAutoLayout: true,
 		});
 	});
@@ -164,26 +164,6 @@ describe("bootstrap", () => {
 		);
 	});
 
-	it("rejects invalid progress display values during config loading", () => {
-		const paths = createBootstrapPaths();
-		const io = createIO();
-		writeFileSync(
-			paths.channelConfigPath,
-			JSON.stringify(
-				{
-					clientId: "client-id",
-					clientSecret: "secret",
-					progressDisplay: "rollng",
-				},
-				null,
-				2,
-			),
-		);
-
-		expect(() => loadConfig(paths, io)).toThrowError(BootstrapExitError);
-		expect(io.error).toHaveBeenCalledWith('  - Invalid `progressDisplay`: expected "full" or "rolling".');
-	});
-
 	it("rejects invalid response mode during config loading", () => {
 		const paths = createBootstrapPaths();
 		const io = createIO();
@@ -202,7 +182,7 @@ describe("bootstrap", () => {
 
 		expect(() => loadConfig(paths, io)).toThrowError(BootstrapExitError);
 		expect(io.error).toHaveBeenCalledWith(
-			'  - Invalid `responseMode`: expected "progress_then_plain_final" or "final_card_only".',
+			'  - Invalid `responseMode`: expected "full_progress_then_plain_final", "rolling_progress_then_plain_final", or "final_card_only".',
 		);
 	});
 

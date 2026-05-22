@@ -33,7 +33,8 @@ function createContext(respond = vi.fn(async () => {})): DingTalkContext {
 		primeCard: vi.fn(),
 		flush: vi.fn(async () => {}),
 		close: vi.fn(async () => {}),
-		responseMode: "progress_then_plain_final",
+		progressStyle: "full",
+		finalDelivery: "plain",
 	};
 }
 
@@ -139,13 +140,50 @@ describe("session compaction events", () => {
 	it("hides compaction progress in final_card_only mode", async () => {
 		const respond = vi.fn(async () => {});
 		const ctx = createContext(respond);
-		ctx.responseMode = "final_card_only";
+		ctx.progressStyle = "none";
+		ctx.finalDelivery = "card";
 		const runState = createEmptyRunState();
 
 		await handleSessionEvent(
 			{
 				type: "compaction_start",
 				reason: "threshold",
+			},
+			{
+				ctx,
+				logCtx: { channelId: "dm_tester", userName: "Tester" },
+				queue: createQueue(),
+				pendingTools: new Map(),
+				store: null,
+				runState,
+				memoryLifecycle: {
+					noteToolCall() {},
+					noteCompletedAssistantTurn() {},
+				} as never,
+			},
+		);
+
+		expect(respond).not.toHaveBeenCalled();
+	});
+
+	it("does not push intermediate assistant text as progress in final_card_only mode", async () => {
+		const respond = vi.fn(async () => {});
+		const ctx = createContext(respond);
+		ctx.progressStyle = "none";
+		ctx.finalDelivery = "card";
+		const runState = createEmptyRunState();
+
+		await handleSessionEvent(
+			{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					stopReason: "toolUse",
+					content: [
+						{ type: "text", text: "Let me check that for you." },
+						{ type: "toolCall", id: "t1", name: "bash", arguments: {} },
+					],
+				},
 			},
 			{
 				ctx,

@@ -4,6 +4,20 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.7-beta.2] - 2026-05-22
+
+### Changed
+
+- Merged `progressDisplay` into `responseMode`, which now has three values: `full_progress_then_plain_final` (default), `rolling_progress_then_plain_final`, and `final_card_only`. The mode derives two orthogonal traits (progress style and final-delivery target) so the runtime no longer branches on the raw enum string.
+
+### Removed
+
+- Removed the `progressDisplay` channel option and the legacy `responseMode: "progress_then_plain_final"` alias; both are now rejected at startup.
+
+### Fixed
+
+- Fixed `final_card_only` mode leaking intermediate assistant text as card progress; progress writes are now fully suppressed (also guarded at the delivery layer) so only the final answer reaches the card.
+
 ## [0.6.7-beta.1] - 2026-05-22
 
 ### Added

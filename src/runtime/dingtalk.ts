@@ -22,19 +22,35 @@ import { getChannelDir } from "./channel-paths.js";
 
 export type BusyMessageMode = "steer" | "followUp";
 export type BusyMessageDefaultConfig = BusyMessageMode | "followup";
-export type ProgressDisplayMode = "full" | "rolling";
-export type ResponseMode = "progress_then_plain_final" | "final_card_only";
+export type ResponseMode = "full_progress_then_plain_final" | "rolling_progress_then_plain_final" | "final_card_only";
+
+// Orthogonal traits derived from ResponseMode, so callers never branch on the
+// raw enum string and stay decoupled from how the modes are named.
+export type ProgressStyle = "full" | "rolling" | "none";
+export type FinalDelivery = "plain" | "card";
+
+const RESPONSE_MODE_VALUES: ResponseMode[] = [
+	"full_progress_then_plain_final",
+	"rolling_progress_then_plain_final",
+	"final_card_only",
+];
+
+export function progressStyleOf(mode: ResponseMode): ProgressStyle {
+	if (mode === "final_card_only") return "none";
+	if (mode === "rolling_progress_then_plain_final") return "rolling";
+	return "full";
+}
+
+export function finalDeliveryOf(mode: ResponseMode): FinalDelivery {
+	return mode === "final_card_only" ? "card" : "plain";
+}
 
 export function isBusyMessageDefaultConfig(value: unknown): value is BusyMessageDefaultConfig {
 	return value === "steer" || value === "followUp" || value === "followup";
 }
 
-export function isProgressDisplayConfig(value: unknown): value is ProgressDisplayMode {
-	return value === "full" || value === "rolling";
-}
-
 export function isResponseModeConfig(value: unknown): value is ResponseMode {
-	return value === "progress_then_plain_final" || value === "final_card_only";
+	return typeof value === "string" && (RESPONSE_MODE_VALUES as string[]).includes(value);
 }
 
 export function normalizeBusyMessageDefault(value: unknown): BusyMessageMode {
@@ -50,24 +66,16 @@ export function normalizeBusyMessageDefault(value: unknown): BusyMessageMode {
 	throw new Error('Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".');
 }
 
-export function normalizeProgressDisplay(value: unknown): ProgressDisplayMode {
-	if (value === undefined) {
-		return "full";
-	}
-	if (isProgressDisplayConfig(value)) {
-		return value;
-	}
-	throw new Error('Invalid `progressDisplay`: expected "full" or "rolling".');
-}
-
 export function normalizeResponseMode(value: unknown): ResponseMode {
 	if (value === undefined) {
-		return "progress_then_plain_final";
+		return "full_progress_then_plain_final";
 	}
 	if (isResponseModeConfig(value)) {
 		return value;
 	}
-	throw new Error('Invalid `responseMode`: expected "progress_then_plain_final" or "final_card_only".');
+	throw new Error(
+		'Invalid `responseMode`: expected "full_progress_then_plain_final", "rolling_progress_then_plain_final", or "final_card_only".',
+	);
 }
 
 export interface DingTalkConfig {
@@ -79,7 +87,6 @@ export interface DingTalkConfig {
 	allowFrom?: string[];
 	stateDir?: string;
 	busyMessageDefault?: BusyMessageDefaultConfig;
-	progressDisplay?: ProgressDisplayMode;
 	responseMode?: ResponseMode;
 	cardAutoLayout?: boolean;
 }
@@ -115,7 +122,8 @@ export interface DingTalkContext {
 	primeCard: (delayMs: number) => void;
 	flush: () => Promise<void>;
 	close: () => Promise<void>;
-	responseMode: ResponseMode;
+	progressStyle: ProgressStyle;
+	finalDelivery: FinalDelivery;
 }
 
 export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: string };
@@ -282,7 +290,6 @@ export class DingTalkBot {
 		this.config = {
 			...config,
 			busyMessageDefault: normalizeBusyMessageDefault(config.busyMessageDefault),
-			progressDisplay: normalizeProgressDisplay(config.progressDisplay),
 			responseMode: normalizeResponseMode(config.responseMode),
 			cardAutoLayout: config.cardAutoLayout ?? true,
 		};
@@ -292,12 +299,16 @@ export class DingTalkBot {
 		return normalizeBusyMessageDefault(this.config.busyMessageDefault);
 	}
 
-	get progressDisplay(): ProgressDisplayMode {
-		return normalizeProgressDisplay(this.config.progressDisplay);
-	}
-
 	get responseMode(): ResponseMode {
 		return normalizeResponseMode(this.config.responseMode);
+	}
+
+	get progressStyle(): ProgressStyle {
+		return progressStyleOf(this.responseMode);
+	}
+
+	get finalDelivery(): FinalDelivery {
+		return finalDeliveryOf(this.responseMode);
 	}
 
 	/**
