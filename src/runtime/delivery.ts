@@ -66,6 +66,7 @@ class ChannelDeliveryController {
 			primeCard: (delayMs: number) => this.primeCard(delayMs),
 			flush: async () => this.flush(),
 			close: async () => this.close(),
+			responseMode: this.bot.responseMode,
 		};
 	}
 

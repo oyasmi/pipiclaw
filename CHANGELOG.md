@@ -4,6 +4,21 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.7-beta.1] - 2026-05-22
+
+### Added
+
+- Added `responseMode` in `channel.json` with `progress_then_plain_final` (default) and `final_card_only` modes.
+- Added `cardAutoLayout` in `channel.json` (default `true`) as a user-facing wide-card toggle for DingTalk AI Cards.
+
+### Changed
+
+- In `final_card_only` mode, runtime now suppresses intermediate process output (`tool`/`thinking`/compaction/retry/error progress) and renders only the final answer on AI Card in a single-stream flow.
+
+### Fixed
+
+- Fixed DingTalk wide-card parameter delivery by switching AI Card creation payloads to `cardData.cardParamMap.sys_full_json_obj` with `{"config":{"autoLayout":...}}`, matching DingTalk's documented interface behavior.
+
 ## [0.6.6] - 2026-04-27
 
 ### Changed

@@ -33,8 +33,10 @@ import {
 	type DingTalkHandler,
 	isBusyMessageDefaultConfig,
 	isProgressDisplayConfig,
+	isResponseModeConfig,
 	normalizeBusyMessageDefault,
 	normalizeProgressDisplay,
+	normalizeResponseMode,
 } from "./dingtalk.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
@@ -182,6 +184,8 @@ const CHANNEL_CONFIG_TEMPLATE = {
 	allowFrom: ["your-staff-id"],
 	busyMessageDefault: "steer",
 	progressDisplay: "full",
+	responseMode: "progress_then_plain_final",
+	cardAutoLayout: true,
 } satisfies DingTalkConfig;
 
 const MODELS_CONFIG_TEMPLATE = { providers: {} };
@@ -362,6 +366,16 @@ function listChannelConfigIssues(config: Partial<DingTalkConfig>): string[] {
 		issues.push('Invalid `progressDisplay`: expected "full" or "rolling".');
 	}
 
+	const responseMode = (config as { responseMode?: unknown }).responseMode;
+	if (responseMode !== undefined && !isResponseModeConfig(responseMode)) {
+		issues.push('Invalid `responseMode`: expected "progress_then_plain_final" or "final_card_only".');
+	}
+
+	const cardAutoLayout = (config as { cardAutoLayout?: unknown }).cardAutoLayout;
+	if (cardAutoLayout !== undefined && typeof cardAutoLayout !== "boolean") {
+		issues.push("Invalid `cardAutoLayout`: expected boolean.");
+	}
+
 	return issues;
 }
 
@@ -409,6 +423,8 @@ export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: 
 		(parsed as { busyMessageDefault?: unknown }).busyMessageDefault,
 	);
 	parsed.progressDisplay = normalizeProgressDisplay((parsed as { progressDisplay?: unknown }).progressDisplay);
+	parsed.responseMode = normalizeResponseMode((parsed as { responseMode?: unknown }).responseMode);
+	parsed.cardAutoLayout = (parsed as { cardAutoLayout?: boolean }).cardAutoLayout ?? true;
 	if (Array.isArray(parsed.allowFrom)) {
 		parsed.allowFrom = parsed.allowFrom.filter((value) => value.trim().length > 0);
 	}

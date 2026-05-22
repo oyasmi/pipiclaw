@@ -33,6 +33,7 @@ function createContext(respond = vi.fn(async () => {})): DingTalkContext {
 		primeCard: vi.fn(),
 		flush: vi.fn(async () => {}),
 		close: vi.fn(async () => {}),
+		responseMode: "progress_then_plain_final",
 	};
 }
 
@@ -134,4 +135,32 @@ describe("session compaction events", () => {
 			expect(respond).toHaveBeenCalledWith("Compacting context...", false);
 		},
 	);
+
+	it("hides compaction progress in final_card_only mode", async () => {
+		const respond = vi.fn(async () => {});
+		const ctx = createContext(respond);
+		ctx.responseMode = "final_card_only";
+		const runState = createEmptyRunState();
+
+		await handleSessionEvent(
+			{
+				type: "compaction_start",
+				reason: "threshold",
+			},
+			{
+				ctx,
+				logCtx: { channelId: "dm_tester", userName: "Tester" },
+				queue: createQueue(),
+				pendingTools: new Map(),
+				store: null,
+				runState,
+				memoryLifecycle: {
+					noteToolCall() {},
+					noteCompletedAssistantTurn() {},
+				} as never,
+			},
+		);
+
+		expect(respond).not.toHaveBeenCalled();
+	});
 });

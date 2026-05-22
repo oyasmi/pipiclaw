@@ -542,6 +542,21 @@ describe("dingtalk", () => {
 		});
 
 		await expect(bot.appendToCard("dm_staff_1", "hello")).resolves.toBe(true);
+		expect(axiosMock.post).toHaveBeenCalledWith(
+			expect.stringContaining("/card/instances/createAndDeliver"),
+			expect.objectContaining({
+				cardData: {
+					cardParamMap: {
+						sys_full_json_obj: JSON.stringify({
+							config: {
+								autoLayout: true,
+							},
+						}),
+					},
+				},
+			}),
+			expect.any(Object),
+		);
 		expect(axiosMock.put).toHaveBeenLastCalledWith(
 			expect.stringContaining("/card/streaming"),
 			expect.objectContaining({
@@ -567,6 +582,38 @@ describe("dingtalk", () => {
 				isFull: true,
 				isFinalize: true,
 				isError: false,
+			}),
+			expect.any(Object),
+		);
+	});
+
+	it("allows disabling wide card auto layout", async () => {
+		const { bot } = createBot({}, { cardAutoLayout: false });
+		const privateApi = getPrivateApi(bot);
+		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).accessToken = "cached-token";
+		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).tokenExpiry = Date.now() / 1000 + 3600;
+		axiosMock.post.mockResolvedValue({ data: {} });
+		axiosMock.put.mockResolvedValue({ data: {} });
+
+		privateApi.setConversationMeta("dm_staff_1", {
+			conversationId: "conv_1",
+			conversationType: "1",
+			senderId: "staff_1",
+		});
+
+		await expect(bot.appendToCard("dm_staff_1", "hello")).resolves.toBe(true);
+		expect(axiosMock.post).toHaveBeenCalledWith(
+			expect.stringContaining("/card/instances/createAndDeliver"),
+			expect.objectContaining({
+				cardData: {
+					cardParamMap: {
+						sys_full_json_obj: JSON.stringify({
+							config: {
+								autoLayout: false,
+							},
+						}),
+					},
+				},
 			}),
 			expect.any(Object),
 		);

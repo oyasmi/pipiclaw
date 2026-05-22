@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.6.7-beta.1] - 2026-05-22
+
+### 新增
+
+- 在 `channel.json` 中新增 `responseMode`，支持 `progress_then_plain_final`（默认）和 `final_card_only` 两种模式。
+- 在 `channel.json` 中新增 `cardAutoLayout`（默认 `true`），作为用户可读的钉钉 AI 卡片宽屏开关。
+
+### 变更
+
+- 在 `final_card_only` 模式下，运行时会隐藏中间过程输出（`tool`/`thinking`/compaction/retry/error 进度），改为单阶段只在 AI 卡片流式呈现最终答案。
+
+### 修复
+
+- 修复钉钉宽屏卡片参数传递：AI 卡片创建请求改为使用 `cardData.cardParamMap.sys_full_json_obj` 并传入 `{"config":{"autoLayout":...}}`，与钉钉文档要求一致。
+
 ## [0.6.6] - 2026-04-27
 
 ### 变更

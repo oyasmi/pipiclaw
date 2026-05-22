@@ -84,6 +84,7 @@ function mergeAssistantUsage(
 
 export async function handleSessionEvent(event: unknown, context: SessionEventHandlerContext): Promise<void> {
 	const { ctx, logCtx, queue, pendingTools, store, runState, memoryLifecycle } = context;
+	const finalCardOnly = ctx.responseMode === "final_card_only";
 
 	if (isToolExecutionStartEvent(event)) {
 		const label = extractLabelFromArgs(event.args) || event.toolName;
@@ -96,7 +97,9 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		memoryLifecycle.noteToolCall();
 
 		log.logToolStart(logCtx, event.toolName, label, isRecord(event.args) ? event.args : {});
-		queue.enqueue(() => ctx.respond(formatProgressEntry("tool", label), false), "tool label");
+		if (!finalCardOnly) {
+			queue.enqueue(() => ctx.respond(formatProgressEntry("tool", label), false), "tool label");
+		}
 		return;
 	}
 
@@ -108,7 +111,9 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		if (!partialText.trim()) {
 			return;
 		}
-		queue.enqueue(() => ctx.respond(formatProgressEntry("tool", partialText), false), "tool update");
+		if (!finalCardOnly) {
+			queue.enqueue(() => ctx.respond(formatProgressEntry("tool", partialText), false), "tool update");
+		}
 		return;
 	}
 
@@ -178,7 +183,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			log.logToolSuccess(logCtx, event.toolName, durationMs, resultStr);
 		}
 
-		if (treatAsError) {
+		if (treatAsError && !finalCardOnly) {
 			queue.enqueue(() => ctx.respond(formatProgressEntry("error", truncate(resultStr, 200)), false), "tool error");
 		}
 		return;
@@ -197,9 +202,13 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			runState.finalOutcome = { kind: "final", text: commandResultText };
 			log.logResponse(logCtx, commandResultText);
 			queue.enqueue(async () => {
-				const delivered = await ctx.respondPlain(commandResultText);
-				if (!delivered) {
+				if (finalCardOnly) {
 					await ctx.replaceMessage(commandResultText);
+				} else {
+					const delivered = await ctx.respondPlain(commandResultText);
+					if (!delivered) {
+						await ctx.replaceMessage(commandResultText);
+					}
 				}
 				runState.finalResponseDelivered = true;
 			}, "command result");
@@ -235,12 +244,14 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 			const text = textParts.join("\n");
 
-			for (const thinking of thinkingParts) {
-				log.logThinking(logCtx, thinking);
-				queue.enqueue(() => ctx.respond(formatProgressEntry("thinking", thinking), false), "thinking");
+			if (!finalCardOnly) {
+				for (const thinking of thinkingParts) {
+					log.logThinking(logCtx, thinking);
+					queue.enqueue(() => ctx.respond(formatProgressEntry("thinking", thinking), false), "thinking");
+				}
 			}
 
-			if (hasToolCalls && text.trim()) {
+			if (text.trim() && (hasToolCalls || finalCardOnly)) {
 				queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", text), false), "assistant progress");
 			}
 		}
@@ -277,9 +288,14 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			memoryLifecycle.noteCompletedAssistantTurn();
 			log.logResponse(logCtx, finalText);
 			queue.enqueue(async () => {
-				const delivered = await ctx.respondPlain(finalText);
-				if (delivered) {
+				if (finalCardOnly) {
+					await ctx.replaceMessage(finalText);
 					runState.finalResponseDelivered = true;
+				} else {
+					const delivered = await ctx.respondPlain(finalText);
+					if (delivered) {
+						runState.finalResponseDelivered = true;
+					}
 				}
 			}, "final response");
 		}
@@ -289,7 +305,9 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	if (isAutoCompactionStartEvent(event)) {
 		const label = "Compacting context...";
 		log.logInfo(`Compaction started (reason: ${event.reason})`);
-		queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", label), false), "compaction start");
+		if (!finalCardOnly) {
+			queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", label), false), "compaction start");
+		}
 		return;
 	}
 
@@ -302,24 +320,31 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		} else if (event.errorMessage) {
 			runState.lastCompactionError = event.errorMessage;
 			log.logWarning("Compaction failed", event.errorMessage);
-			queue.enqueue(
-				() =>
-					ctx.respond(
-						formatProgressEntry("error", truncate(event.errorMessage ?? "Compaction failed", 200)),
-						false,
-					),
-				"compaction error",
-			);
+			if (!finalCardOnly) {
+				queue.enqueue(
+					() =>
+						ctx.respond(
+							formatProgressEntry("error", truncate(event.errorMessage ?? "Compaction failed", 200)),
+							false,
+						),
+					"compaction error",
+				);
+			}
 		}
 		return;
 	}
 
 	if (isAutoRetryStartEvent(event)) {
 		log.logWarning(`Retrying (${event.attempt}/${event.maxAttempts})`, event.errorMessage);
-		queue.enqueue(
-			() =>
-				ctx.respond(formatProgressEntry("assistant", `Retrying (${event.attempt}/${event.maxAttempts})...`), false),
-			"retry",
-		);
+		if (!finalCardOnly) {
+			queue.enqueue(
+				() =>
+					ctx.respond(
+						formatProgressEntry("assistant", `Retrying (${event.attempt}/${event.maxAttempts})...`),
+						false,
+					),
+				"retry",
+			);
+		}
 	}
 }

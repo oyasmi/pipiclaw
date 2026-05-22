@@ -23,6 +23,7 @@ import { getChannelDir } from "./channel-paths.js";
 export type BusyMessageMode = "steer" | "followUp";
 export type BusyMessageDefaultConfig = BusyMessageMode | "followup";
 export type ProgressDisplayMode = "full" | "rolling";
+export type ResponseMode = "progress_then_plain_final" | "final_card_only";
 
 export function isBusyMessageDefaultConfig(value: unknown): value is BusyMessageDefaultConfig {
 	return value === "steer" || value === "followUp" || value === "followup";
@@ -30,6 +31,10 @@ export function isBusyMessageDefaultConfig(value: unknown): value is BusyMessage
 
 export function isProgressDisplayConfig(value: unknown): value is ProgressDisplayMode {
 	return value === "full" || value === "rolling";
+}
+
+export function isResponseModeConfig(value: unknown): value is ResponseMode {
+	return value === "progress_then_plain_final" || value === "final_card_only";
 }
 
 export function normalizeBusyMessageDefault(value: unknown): BusyMessageMode {
@@ -55,6 +60,16 @@ export function normalizeProgressDisplay(value: unknown): ProgressDisplayMode {
 	throw new Error('Invalid `progressDisplay`: expected "full" or "rolling".');
 }
 
+export function normalizeResponseMode(value: unknown): ResponseMode {
+	if (value === undefined) {
+		return "progress_then_plain_final";
+	}
+	if (isResponseModeConfig(value)) {
+		return value;
+	}
+	throw new Error('Invalid `responseMode`: expected "progress_then_plain_final" or "final_card_only".');
+}
+
 export interface DingTalkConfig {
 	clientId: string;
 	clientSecret: string;
@@ -65,6 +80,8 @@ export interface DingTalkConfig {
 	stateDir?: string;
 	busyMessageDefault?: BusyMessageDefaultConfig;
 	progressDisplay?: ProgressDisplayMode;
+	responseMode?: ResponseMode;
+	cardAutoLayout?: boolean;
 }
 
 export interface DingTalkEvent {
@@ -98,6 +115,7 @@ export interface DingTalkContext {
 	primeCard: (delayMs: number) => void;
 	flush: () => Promise<void>;
 	close: () => Promise<void>;
+	responseMode: ResponseMode;
 }
 
 export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: string };
@@ -265,6 +283,8 @@ export class DingTalkBot {
 			...config,
 			busyMessageDefault: normalizeBusyMessageDefault(config.busyMessageDefault),
 			progressDisplay: normalizeProgressDisplay(config.progressDisplay),
+			responseMode: normalizeResponseMode(config.responseMode),
+			cardAutoLayout: config.cardAutoLayout ?? true,
 		};
 	}
 
@@ -274,6 +294,10 @@ export class DingTalkBot {
 
 	get progressDisplay(): ProgressDisplayMode {
 		return normalizeProgressDisplay(this.config.progressDisplay);
+	}
+
+	get responseMode(): ResponseMode {
+		return normalizeResponseMode(this.config.responseMode);
 	}
 
 	/**
@@ -889,7 +913,15 @@ export class DingTalkBot {
 		const body: Record<string, unknown> = {
 			cardTemplateId: this.config.cardTemplateId,
 			outTrackId: instanceId,
-			cardData: { cardParamMap: {} },
+			cardData: {
+				cardParamMap: {
+					sys_full_json_obj: JSON.stringify({
+						config: {
+							autoLayout: this.config.cardAutoLayout ?? true,
+						},
+					}),
+				},
+			},
 			callbackType: "STREAM",
 			imGroupOpenSpaceModel: { supportForward: true },
 			imRobotOpenSpaceModel: { supportForward: true },
