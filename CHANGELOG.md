@@ -4,17 +4,16 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
-## [0.6.7-beta.3] - 2026-05-22
+## [0.6.7] - 2026-05-26
 
-### Fixed
+### Added
 
-- Fixed DingTalk reconnection getting permanently stuck after a transient disconnect. The reconnect backoff sleep shared a single timer field with the reconnect scheduler, so a WebSocket `close` event arriving during the backoff would clear the sleep timer and leave `isReconnecting` wedged at `true` forever, blocking all future reconnect attempts. The backoff sleep now uses a dedicated timer, `scheduleReconnect` no longer preempts an in-flight attempt, and the `>90s` connection-timeout watchdog now proactively forces a reconnect instead of only logging.
-
-## [0.6.7-beta.2] - 2026-05-22
+- Added `responseMode` in `channel.json` with three values: `full_progress_then_plain_final` (default), `rolling_progress_then_plain_final`, and `final_card_only`. The mode derives two orthogonal traits (progress style and final-delivery target) so the runtime no longer branches on the raw enum string.
+- Added `cardAutoLayout` in `channel.json` (default `true`) as a user-facing wide-card toggle for DingTalk AI Cards.
 
 ### Changed
 
-- Merged `progressDisplay` into `responseMode`, which now has three values: `full_progress_then_plain_final` (default), `rolling_progress_then_plain_final`, and `final_card_only`. The mode derives two orthogonal traits (progress style and final-delivery target) so the runtime no longer branches on the raw enum string.
+- In `final_card_only` mode, runtime now suppresses intermediate process output (`tool`/`thinking`/compaction/retry/error progress) and renders only the final answer on AI Card in a single-stream flow.
 
 ### Removed
 
@@ -22,22 +21,9 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ### Fixed
 
-- Fixed `final_card_only` mode leaking intermediate assistant text as card progress; progress writes are now fully suppressed (also guarded at the delivery layer) so only the final answer reaches the card.
-
-## [0.6.7-beta.1] - 2026-05-22
-
-### Added
-
-- Added `responseMode` in `channel.json` with `progress_then_plain_final` (default) and `final_card_only` modes.
-- Added `cardAutoLayout` in `channel.json` (default `true`) as a user-facing wide-card toggle for DingTalk AI Cards.
-
-### Changed
-
-- In `final_card_only` mode, runtime now suppresses intermediate process output (`tool`/`thinking`/compaction/retry/error progress) and renders only the final answer on AI Card in a single-stream flow.
-
-### Fixed
-
 - Fixed DingTalk wide-card parameter delivery by switching AI Card creation payloads to `cardData.cardParamMap.sys_full_json_obj` with `{"config":{"autoLayout":...}}`, matching DingTalk's documented interface behavior.
+- Fixed `final_card_only` mode leaking intermediate assistant text as card progress; progress writes are now fully suppressed (also guarded at the delivery layer) so only the final answer reaches the card.
+- Fixed DingTalk reconnection getting permanently stuck after a transient disconnect. The reconnect backoff sleep shared a single timer field with the reconnect scheduler, so a WebSocket `close` event arriving during the backoff would clear the sleep timer and leave `isReconnecting` wedged at `true` forever, blocking all future reconnect attempts. The backoff sleep now uses a dedicated timer, `scheduleReconnect` no longer preempts an in-flight attempt, and the `>90s` connection-timeout watchdog now proactively forces a reconnect instead of only logging.
 
 ## [0.6.6] - 2026-04-27
 

@@ -4,17 +4,16 @@
 
 ## [Unreleased]
 
-## [0.6.7-beta.3] - 2026-05-22
+## [0.6.7] - 2026-05-26
 
-### 修复
+### 新增
 
-- 修复钉钉在一次短暂断连后重连永久卡死的问题。重连退避 sleep 与重连调度器共用同一个 timer 字段，导致退避等待期间到达的 WebSocket `close` 事件会清掉退避 timer，使 `isReconnecting` 永久停在 `true`，从而阻塞之后所有重连尝试。现在退避 sleep 使用独立 timer，`scheduleReconnect` 不再抢占进行中的重连尝试，且 `>90s` 连接超时看门狗会主动发起重连，而不再只是打日志。
-
-## [0.6.7-beta.2] - 2026-05-22
+- 在 `channel.json` 中新增 `responseMode`，支持三种模式：`full_progress_then_plain_final`（默认）、`rolling_progress_then_plain_final` 和 `final_card_only`。该模式会派生出两个正交特征（进度展示风格与最终投递目标），运行时不再直接判断枚举字符串。
+- 在 `channel.json` 中新增 `cardAutoLayout`（默认 `true`），作为用户可读的钉钉 AI 卡片宽屏开关。
 
 ### 变更
 
-- 将 `progressDisplay` 合并进 `responseMode`，现在为三态：`full_progress_then_plain_final`（默认）、`rolling_progress_then_plain_final` 和 `final_card_only`。该模式会派生出两个正交特征（进度展示风格与最终投递目标），运行时不再直接判断枚举字符串。
+- 在 `final_card_only` 模式下，运行时会隐藏中间过程输出（`tool`/`thinking`/compaction/retry/error 进度），改为单阶段只在 AI 卡片流式呈现最终答案。
 
 ### 移除
 
@@ -22,22 +21,9 @@
 
 ### 修复
 
-- 修复 `final_card_only` 模式下中间 assistant 文本被当作卡片进度推送的问题；现在过程输出被完全抑制（投递层也加了兜底），只有最终答案会写入卡片。
-
-## [0.6.7-beta.1] - 2026-05-22
-
-### 新增
-
-- 在 `channel.json` 中新增 `responseMode`，支持 `progress_then_plain_final`（默认）和 `final_card_only` 两种模式。
-- 在 `channel.json` 中新增 `cardAutoLayout`（默认 `true`），作为用户可读的钉钉 AI 卡片宽屏开关。
-
-### 变更
-
-- 在 `final_card_only` 模式下，运行时会隐藏中间过程输出（`tool`/`thinking`/compaction/retry/error 进度），改为单阶段只在 AI 卡片流式呈现最终答案。
-
-### 修复
-
 - 修复钉钉宽屏卡片参数传递：AI 卡片创建请求改为使用 `cardData.cardParamMap.sys_full_json_obj` 并传入 `{"config":{"autoLayout":...}}`，与钉钉文档要求一致。
+- 修复 `final_card_only` 模式下中间 assistant 文本被当作卡片进度推送的问题；现在过程输出被完全抑制（投递层也加了兜底），只有最终答案会写入卡片。
+- 修复钉钉在一次短暂断连后重连永久卡死的问题。重连退避 sleep 与重连调度器共用同一个 timer 字段，导致退避等待期间到达的 WebSocket `close` 事件会清掉退避 timer，使 `isReconnecting` 永久停在 `true`，从而阻塞之后所有重连尝试。现在退避 sleep 使用独立 timer，`scheduleReconnect` 不再抢占进行中的重连尝试，且 `>90s` 连接超时看门狗会主动发起重连，而不再只是打日志。
 
 ## [0.6.6] - 2026-04-27
 
