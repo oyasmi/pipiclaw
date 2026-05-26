@@ -31,7 +31,7 @@ import {
 import { recallRelevantMemory } from "../memory/recall.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
-import { resolveInitialModel } from "../models/utils.js";
+import { formatModelReference, resolveInitialModel } from "../models/utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
 import type { DingTalkContext } from "../runtime/dingtalk.js";
 import type { ChannelStore } from "../runtime/store.js";
@@ -382,6 +382,16 @@ export class ChannelRunner implements AgentRunner {
 				const contextWindow = currentRunModel.contextWindow || 200000;
 
 				log.logUsageSummary(this.runState.logCtx!, this.runState.totalUsage, contextTokens, contextWindow);
+				const responseModel = lastAssistantMessage?.responseModel;
+				if (
+					responseModel &&
+					responseModel !== formatModelReference(currentRunModel) &&
+					responseModel !== currentRunModel.id
+				) {
+					log.logInfo(
+						`[${this.channelId}] Actual model: ${responseModel} (configured: ${formatModelReference(currentRunModel)})`,
+					);
+				}
 			}
 
 			// Clear run state
@@ -673,6 +683,7 @@ export class ChannelRunner implements AgentRunner {
 					},
 					getSessionStats: () => this.session.getSessionStats(),
 					getThinkingLevel: () => this.session.thinkingLevel,
+					getLastResponseModel: () => getLastAssistantUsage(this.session.messages)?.responseModel,
 					switchModel: async (model) => {
 						await this.session.setModel(model);
 						this.activeModel = model;

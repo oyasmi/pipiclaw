@@ -201,7 +201,10 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 						text: `Successfully replaced text in ${path}. Changed ${oldText.length} characters to ${newText.length} characters.`,
 					},
 				],
-				details: { diff: generateDiffString(content, newContent) },
+				details: {
+					diff: generateDiffString(content, newContent),
+					patch: Diff.createPatch(path, content, newContent),
+				},
 			};
 		},
 	};

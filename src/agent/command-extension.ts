@@ -17,6 +17,7 @@ export interface PipiclawCommandExtensionOptions {
 	getAvailableModels: () => Promise<Model<Api>[]>;
 	getSessionStats: () => SessionStats;
 	getThinkingLevel: () => ThinkingLevel;
+	getLastResponseModel?: () => string | undefined;
 	switchModel: (model: Model<Api>) => Promise<void>;
 	refreshSessionResources: () => Promise<void>;
 }
@@ -25,14 +26,20 @@ function buildSessionText(
 	stats: SessionStats,
 	currentModel: Model<Api> | undefined,
 	thinkingLevel: ThinkingLevel,
+	lastResponseModel?: string,
 ): string {
-	const modelText = currentModel ? `\`${formatModelReference(currentModel)}\`` : "(none)";
+	const configuredRef = currentModel ? formatModelReference(currentModel) : null;
+	const modelText = configuredRef ? `\`${configuredRef}\`` : "(none)";
+	const actualText =
+		lastResponseModel && configuredRef && lastResponseModel !== configuredRef
+			? ` (actual: \`${lastResponseModel}\`)`
+			: "";
 	const sessionFile = stats.sessionFile ? `\`${basename(stats.sessionFile)}\`` : "(none)";
 	return `# Session
 
 - Session ID: \`${stats.sessionId}\`
 - Session file: ${sessionFile}
-- Model: ${modelText}
+- Model: ${modelText}${actualText}
 - Thinking level: \`${thinkingLevel}\`
 - User messages: \`${stats.userMessages}\`
 - Assistant messages: \`${stats.assistantMessages}\`
@@ -78,7 +85,12 @@ export function createCommandExtension(options: PipiclawCommandExtensionOptions)
 			handler: async () => {
 				sendCommandResult(
 					pi,
-					buildSessionText(options.getSessionStats(), options.getCurrentModel(), options.getThinkingLevel()),
+					buildSessionText(
+						options.getSessionStats(),
+						options.getCurrentModel(),
+						options.getThinkingLevel(),
+						options.getLastResponseModel?.(),
+					),
 				);
 			},
 		});

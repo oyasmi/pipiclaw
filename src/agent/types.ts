@@ -97,6 +97,7 @@ export interface AssistantUsageMessage {
 	role: "assistant";
 	stopReason?: string;
 	usage: AssistantUsage;
+	responseModel?: string;
 }
 
 export type SessionEvent =
