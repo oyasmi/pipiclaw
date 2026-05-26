@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
 	ExtensionFactory,
 	SessionBeforeCompactEvent,
@@ -7,7 +7,7 @@ import type {
 	SessionCompactEvent,
 	SessionEntry,
 	SessionStartEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import * as log from "../log.js";
 import type { PipiclawSessionMemorySettings } from "../settings.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";

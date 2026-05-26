@@ -1,8 +1,8 @@
 import { readdir } from "node:fs/promises";
 import { basename } from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { SessionEntry } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import * as log from "../log.js";
 import type {
 	PipiclawMemoryGrowthSettings,

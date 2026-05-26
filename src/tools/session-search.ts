@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { searchChannelSessions } from "../memory/session-search.js";
 import type { PipiclawSessionSearchSettings } from "../settings.js";

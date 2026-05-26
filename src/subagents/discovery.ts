@@ -1,5 +1,5 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { Dirent } from "fs";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";

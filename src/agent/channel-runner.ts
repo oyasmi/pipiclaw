@@ -1,5 +1,5 @@
-import { Agent, type AgentTool } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
 	AgentSession,
 	AgentSessionRuntime,
@@ -15,7 +15,7 @@ import {
 	SessionManager,
 	type SessionStartEvent,
 	type Skill,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import * as log from "../log.js";

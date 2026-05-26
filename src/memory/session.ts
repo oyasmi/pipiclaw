@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, Message, Model } from "@mariozechner/pi-ai";
-import { serializeConversation } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Message, Model } from "@earendil-works/pi-ai";
+import { serializeConversation } from "@earendil-works/pi-coding-agent";
 import { writeFile } from "fs/promises";
 import { join } from "path";
 import { parseJsonObject } from "../shared/llm-json.js";

@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
 import {

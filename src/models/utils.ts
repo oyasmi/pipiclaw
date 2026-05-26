@@ -1,5 +1,5 @@
-import { type Api, getModel, type Model } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { type Api, getModel, type Model } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { PipiclawSettingsManager } from "../settings.js";
 
 // Default model - will be overridden by ModelRegistry if custom models are configured

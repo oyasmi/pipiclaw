@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
 import { createWebHttpClient } from "./client.js";

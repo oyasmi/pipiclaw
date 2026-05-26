@@ -1,6 +1,6 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import { getModel } from "@mariozechner/pi-ai";
-import type { ModelRegistry, Skill } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { getModel } from "@earendil-works/pi-ai";
+import type { ModelRegistry, Skill } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -10,7 +10,7 @@ const { loadSkillsFromDirMock } = vi.hoisted(() => ({
 	loadSkillsFromDirMock: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
 	loadSkillsFromDir: loadSkillsFromDirMock,
 }));
 

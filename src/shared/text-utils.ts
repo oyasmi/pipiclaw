@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 export function clipText(text: string, maxChars: number, opts: { headRatio?: number; omitHint?: string } = {}): string {
 	const normalized = text.replace(/\s+\n/g, "\n").replace(/\r/g, "").trim();

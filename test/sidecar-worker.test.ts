@@ -5,7 +5,7 @@ let waitForIdleImpl = vi.fn<() => Promise<void>>(async () => {});
 let abortImpl = vi.fn<() => void>();
 let stateMessages: unknown[] = [];
 
-vi.mock("@mariozechner/pi-agent-core", () => ({
+vi.mock("@earendil-works/pi-agent-core", () => ({
 	Agent: vi.fn().mockImplementation(() => ({
 		state: {
 			get messages() {
@@ -18,7 +18,7 @@ vi.mock("@mariozechner/pi-agent-core", () => ({
 	})),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
 	convertToLlm: vi.fn(),
 }));
 

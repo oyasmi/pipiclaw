@@ -3,7 +3,7 @@
  * SOUL.md, AGENTS.md, and workspace-level skills.
  */
 
-import { loadSkillsFromDir, type Skill } from "@mariozechner/pi-coding-agent";
+import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import * as log from "../log.js";

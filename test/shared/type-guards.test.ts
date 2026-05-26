@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { buildStandardMessages, isRecord, isStandardAgentMessage } from "../../src/shared/type-guards.js";
 

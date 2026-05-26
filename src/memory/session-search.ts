@@ -1,5 +1,5 @@
 import { relative } from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { clipText } from "../shared/text-utils.js";
 import { tokenizeRecallText } from "./recall.js";
 import { buildSessionCorpus, type SessionSearchDocument, type SessionSearchRole } from "./session-corpus.js";
