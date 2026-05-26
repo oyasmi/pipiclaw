@@ -224,7 +224,22 @@ describe("MemoryLifecycle", () => {
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
 	});
 
-	it("skips shutdown flush when there is no pending assistant snapshot", async () => {
+	it("flushes a tool-only session on shutdown even without an assistant turn", async () => {
+		const lifecycle = createLifecycle({
+			minTurnsBetweenUpdate: 99,
+			minToolCallsBetweenUpdate: 99,
+			forceRefreshBeforeCompact: false,
+			forceRefreshBeforeNewSession: false,
+		});
+
+		lifecycle.noteToolCall();
+
+		await lifecycle.flushForShutdown();
+
+		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+	});
+
+	it("skips shutdown flush when there is no pending durable activity", async () => {
 		const lifecycle = createLifecycle({
 			forceRefreshBeforeCompact: false,
 			forceRefreshBeforeNewSession: false,

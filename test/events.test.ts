@@ -306,6 +306,41 @@ describe("EventsWatcher", () => {
 		expect(statSync(filePath).isFile()).toBe(true);
 	});
 
+	it("preserves a one-shot event and writes an error marker when the queue is full", async () => {
+		const dir = createTempDir();
+		const filename = "dropped.json";
+		const filePath = join(dir, filename);
+		writeFileSync(filePath, "{}");
+		const bot = new FakeBot(false);
+		const watcher = createWatcher(dir, bot);
+		const privateApi = getEventsWatcherPrivateApi(watcher);
+
+		await privateApi.execute(filename, { type: "immediate", channelId: "dm_1", text: "must not vanish" }, true);
+
+		// File survives and the loss is recorded rather than silently dropped.
+		expect(existsSync(filePath)).toBe(true);
+		expect(existsSync(join(dir, "dropped.json.error.txt"))).toBe(true);
+	});
+
+	it("does not mark periodic events invalid on a transient full queue", async () => {
+		const dir = createTempDir();
+		const filename = "recurring.json";
+		const filePath = join(dir, filename);
+		writeFileSync(filePath, "{}");
+		const bot = new FakeBot(false);
+		const watcher = createWatcher(dir, bot);
+		const privateApi = getEventsWatcherPrivateApi(watcher);
+
+		await privateApi.execute(
+			filename,
+			{ type: "periodic", channelId: "dm_1", text: "tick", schedule: "0 3 * * 0" },
+			false,
+		);
+
+		expect(existsSync(filePath)).toBe(true);
+		expect(existsSync(join(dir, "recurring.json.error.txt"))).toBe(false);
+	});
+
 	describe("action gate", () => {
 		it("enqueues event when action exits with code 0", async () => {
 			const dir = createTempDir();

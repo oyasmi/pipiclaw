@@ -76,6 +76,10 @@ class FakeTestBot {
 	discardCard = vi.fn((channelId: string) => {
 		this.deliveries.push({ method: "discardCard", args: [channelId] });
 	});
+	clearPendingMessages = vi.fn((channelId: string) => {
+		this.deliveries.push({ method: "clearPendingMessages", args: [channelId] });
+		return 0;
+	});
 }
 
 afterEach(() => {
@@ -151,6 +155,7 @@ describe("runtime stop handling", () => {
 		expect(runner.abort).toHaveBeenCalledTimes(1);
 		expect(bot.discardCard).toHaveBeenCalledTimes(1);
 		expect(bot.discardCard).toHaveBeenCalledWith("dm_tester");
+		expect(bot.clearPendingMessages).toHaveBeenCalledWith("dm_tester");
 
 		await runtime.shutdown();
 	}, 20_000);

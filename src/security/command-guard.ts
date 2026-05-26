@@ -273,12 +273,10 @@ function parseShellWords(command: string): string[] {
 	return words;
 }
 
-function parseCommand(command: string): ParsedCommand | null {
-	const words = parseShellWords(command);
+function parsedFromWords(words: string[]): ParsedCommand | null {
 	if (words.length === 0) {
 		return null;
 	}
-
 	const normalizedCommand = basename(words[0]).toLowerCase();
 	const args = words.slice(1);
 	return {
@@ -286,6 +284,105 @@ function parseCommand(command: string): ParsedCommand | null {
 		args,
 		normalized: [normalizedCommand, ...args].join(" ").trim(),
 	};
+}
+
+function parseCommand(command: string): ParsedCommand | null {
+	return parsedFromWords(parseShellWords(command));
+}
+
+// Shells that take a script body as a `-c` argument; the body must be guarded
+// recursively because its dangerous content is hidden inside a single token.
+const SHELL_COMMANDS = new Set(["sh", "bash", "zsh", "dash", "ash", "ksh"]);
+
+// Wrappers that run another command passed as their operands. The inner command
+// must be guarded too, otherwise e.g. `xargs rm -rf` or `timeout 5 shred x`
+// would slip past the direct-command rules.
+const WRAPPER_COMMANDS = new Set([
+	"xargs",
+	"env",
+	"time",
+	"nice",
+	"ionice",
+	"nohup",
+	"timeout",
+	"stdbuf",
+	"setsid",
+	"chrt",
+	"parallel",
+]);
+
+const MAX_GUARD_DEPTH = 6;
+
+// Pull the script bodies out of `sh -c <script>` style invocations. Combined
+// flags such as `-lc` are handled by matching any single-dash cluster ending
+// in `c`. There can be more than one (`bash -c a -c b`), so return all.
+function extractShellScripts(parsed: ParsedCommand): string[] {
+	if (!SHELL_COMMANDS.has(parsed.command)) {
+		return [];
+	}
+	const scripts: string[] = [];
+	for (let i = 0; i < parsed.args.length; i++) {
+		const arg = parsed.args[i];
+		if (/^-[a-z]*c$/.test(arg) && i + 1 < parsed.args.length) {
+			scripts.push(parsed.args[i + 1]);
+			i++;
+		}
+	}
+	return scripts;
+}
+
+// Tokens after `find ... -exec`/`-execdir` up to the `;`/`+` terminator form a
+// command run per match. Return each such inner command as word arrays.
+function extractFindExecCommands(parsed: ParsedCommand): string[][] {
+	if (parsed.command !== "find") {
+		return [];
+	}
+	const inner: string[][] = [];
+	for (let i = 0; i < parsed.args.length; i++) {
+		if (parsed.args[i] === "-exec" || parsed.args[i] === "-execdir") {
+			const words: string[] = [];
+			for (let j = i + 1; j < parsed.args.length; j++) {
+				const token = parsed.args[j];
+				if (token === ";" || token === "+" || token === "\\;") {
+					break;
+				}
+				words.push(token);
+			}
+			if (words.length > 0) {
+				inner.push(words);
+			}
+		}
+	}
+	return inner;
+}
+
+// For a generic wrapper, the inner command can sit anywhere after the wrapper's
+// own options/operands (whose grammar varies per tool). Rather than parse each
+// wrapper's flags precisely, evaluate every suffix position as a candidate
+// command start — this only ever adds detections, never relaxes them.
+function extractWrapperCandidates(parsed: ParsedCommand): string[][] {
+	if (!WRAPPER_COMMANDS.has(parsed.command)) {
+		return [];
+	}
+	const candidates: string[][] = [];
+	for (let i = 0; i < parsed.args.length; i++) {
+		candidates.push(parsed.args.slice(i));
+	}
+	return candidates;
+}
+
+// An allow pattern exempts an atom only when it matches that atom's command
+// line from the start at a word boundary (exact, or a `pattern + space` prefix).
+// This replaces the old whole-command substring test that let an allowed
+// fragment whitelist an entire chain (e.g. "git status" -> "git status; rm -rf /").
+function atomAllowed(atomNormalized: string, allowPatterns: string[]): boolean {
+	return allowPatterns.some((pattern) => {
+		const trimmed = pattern.trim();
+		if (!trimmed) {
+			return false;
+		}
+		return atomNormalized === trimmed || atomNormalized.startsWith(`${trimmed} `);
+	});
 }
 
 function hasAnyArg(args: string[], values: string[]): boolean {
@@ -471,21 +568,52 @@ function matchRule(parsed: ParsedCommand, config: SecurityConfig["commandGuard"]
 	return null;
 }
 
-export function guardCommand(command: string, config: SecurityConfig["commandGuard"]): CommandGuardResult {
-	if (!config.enabled) {
-		return { allowed: true };
-	}
-	if (isWindowsPlatform()) {
-		return { allowed: true };
+// Evaluate a single already-parsed atom: its direct rule, plus any commands it
+// wraps (shell `-c` bodies, find `-exec`, generic wrappers), recursively.
+function inspectParsed(
+	parsed: ParsedCommand,
+	config: SecurityConfig["commandGuard"],
+	depth: number,
+): CommandRuleMatch | null {
+	if (atomAllowed(parsed.normalized, config.allowPatterns)) {
+		return null;
 	}
 
-	const atoms = splitCommandChain(command);
-	const normalizedWhole = stripNullAndNormalize(command);
-	for (const allowPattern of config.allowPatterns) {
-		if (normalizedWhole.includes(allowPattern)) {
-			return { allowed: true };
+	const direct = matchRule(parsed, config);
+	if (direct) {
+		return direct;
+	}
+
+	if (depth >= MAX_GUARD_DEPTH) {
+		return null;
+	}
+
+	for (const script of extractShellScripts(parsed)) {
+		const nested = evaluateCommand(script, config, depth + 1);
+		if (nested) {
+			return nested;
 		}
 	}
+
+	for (const words of [...extractFindExecCommands(parsed), ...extractWrapperCandidates(parsed)]) {
+		const innerParsed = parsedFromWords(words);
+		if (innerParsed) {
+			const nested = inspectParsed(innerParsed, config, depth + 1);
+			if (nested) {
+				return nested;
+			}
+		}
+	}
+
+	return null;
+}
+
+function evaluateCommand(
+	command: string,
+	config: SecurityConfig["commandGuard"],
+	depth: number,
+): CommandRuleMatch | null {
+	const normalizedWhole = stripNullAndNormalize(command);
 
 	if (
 		config.blockObfuscation &&
@@ -495,7 +623,6 @@ export function guardCommand(command: string, config: SecurityConfig["commandGua
 			/\$'/.test(normalizedWhole))
 	) {
 		return {
-			allowed: false,
 			category: "obfuscation",
 			rule: "obfuscation-whole-command",
 			reason: "Obfuscated command execution is not allowed",
@@ -503,21 +630,37 @@ export function guardCommand(command: string, config: SecurityConfig["commandGua
 		};
 	}
 
-	for (const atom of atoms) {
+	for (const atom of splitCommandChain(command)) {
 		const parsed = parseCommand(atom);
 		if (!parsed) {
 			continue;
 		}
-		const match = matchRule(parsed, config);
+		const match = inspectParsed(parsed, config, depth);
 		if (match) {
-			return {
-				allowed: false,
-				category: match.category,
-				rule: match.rule,
-				reason: match.reason,
-				matchedText: match.matchedText,
-			};
+			return match;
 		}
+	}
+
+	return null;
+}
+
+export function guardCommand(command: string, config: SecurityConfig["commandGuard"]): CommandGuardResult {
+	if (!config.enabled) {
+		return { allowed: true };
+	}
+	if (isWindowsPlatform()) {
+		return { allowed: true };
+	}
+
+	const match = evaluateCommand(command, config, 0);
+	if (match) {
+		return {
+			allowed: false,
+			category: match.category,
+			rule: match.rule,
+			reason: match.reason,
+			matchedText: match.matchedText,
+		};
 	}
 
 	return { allowed: true };

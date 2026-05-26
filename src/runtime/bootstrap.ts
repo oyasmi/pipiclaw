@@ -571,6 +571,12 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			if (state?.running) {
 				state.stopRequested = true;
 				_bot.discardCard(channelId);
+				// Drop queued-but-not-started messages so a burst does not keep
+				// running after the user asked to halt; abort the in-flight one.
+				const dropped = _bot.clearPendingMessages(channelId);
+				if (dropped > 0) {
+					log.logInfo(`[${channelId}] Dropped ${dropped} queued message(s) on stop`);
+				}
 				void state.runner.abort().catch((err) => {
 					log.logWarning(`[${channelId}] Failed to abort run`, err instanceof Error ? err.message : String(err));
 				});
@@ -645,10 +651,14 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			}
 
 			const state = getState(event.channelId);
+			// Mark running synchronously, before yielding to the async task body.
+			// The channel queue invokes this handler's synchronous prefix within the
+			// same tick as dispatch, so setting it here closes the window where a
+			// second message arriving in the same tick saw running=false and was
+			// routed as a fresh run instead of a steer/follow-up.
+			state.running = true;
+			state.stopRequested = false;
 			const task = (async () => {
-				state.running = true;
-				state.stopRequested = false;
-
 				try {
 					await archiveIncomingMessage(
 						event.channelId,

@@ -157,13 +157,16 @@ class ChannelDeliveryController {
 		if (this.closed || this.finalResponseDelivered) return this.finalResponseDelivered;
 
 		this.clearCardWarmup();
-		if (shouldLog) {
-			this.archiveBotResponse(text);
-		}
 
 		const delivered = await this.bot.sendPlain(this.event.channelId, text);
 		if (!delivered) {
+			// Do not archive a response we failed to deliver: the conversation log
+			// must not claim we answered when the user never received it.
 			return false;
+		}
+
+		if (shouldLog) {
+			this.archiveBotResponse(text);
 		}
 
 		this.finalResponseDelivered = true;

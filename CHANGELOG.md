@@ -4,6 +4,24 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.9-beta.0] - 2026-05-27
+
+### Security
+
+- Closed three command-guard bypasses that let dangerous commands evade the deny rules:
+  - `allowPatterns` now match per command atom with word-boundary anchoring instead of a whole-command substring test, so an allowed fragment can no longer whitelist a chained dangerous command (e.g. `git status; rm -rf /`).
+  - The guard now recurses into shell script bodies passed via `-c` (`sh`/`bash`/`zsh`/`dash`/`ash`/`ksh`, including combined flags like `-lc`), so content such as `bash -c "rm -rf /"` is inspected.
+  - The guard now unwraps wrapper commands (`xargs`, `env`, `time`, `nice`, `timeout`, `nohup`, `find -exec`/`-execdir`, etc.) and guards the inner command, so `xargs rm -rf /` or `find . -exec shred {} ;` are blocked. Recursion is depth-limited.
+
+### Fixed
+
+- `/stop` now drops queued-but-not-started messages for the channel in addition to aborting the in-flight run, so a burst of messages no longer keeps running after the user asks to halt.
+- The delivery layer now archives a final response only after it is confirmed delivered, so the conversation log no longer claims the bot answered when the send failed.
+- When the event queue is full, one-shot/immediate events are no longer silently dropped: the source file is preserved and a `.error.txt` marker records the loss. Periodic events are unaffected (they fire again on the next tick).
+- DingTalk AI Card creation is now singleflighted per channel, eliminating a race where card warmup and the first progress update could both create a card.
+- The busy-routing race is closed: a channel's running state is now set synchronously at dispatch, so a second message arriving in the same tick is correctly routed as a steer/follow-up instead of starting a fresh run.
+- Shutdown memory consolidation now also persists tool-only sessions that produced durable activity without a final assistant turn (previously skipped).
+
 ## [0.6.8] - 2026-05-26
 
 ### Added

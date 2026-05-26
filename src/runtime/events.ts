@@ -403,13 +403,23 @@ export class EventsWatcher {
 
 		const enqueued = this.bot.enqueueEvent(syntheticEvent);
 
-		if (enqueued && deleteAfter) {
-			this.deleteFile(filename);
-		} else if (!enqueued) {
-			log.logWarning(`Event queue full, discarded: ${filename}`);
+		if (enqueued) {
 			if (deleteAfter) {
 				this.deleteFile(filename);
 			}
+			return;
+		}
+
+		// Queue full: do not silently drop. Periodic events fire again on their
+		// next tick, so just warn. One-shot/immediate events would otherwise be
+		// GC'd as "past" with no trace, so leave a visible error marker (and keep
+		// the source file) making the loss auditable rather than a silent hole.
+		log.logWarning(`Event queue full, could not enqueue: ${filename}`);
+		if (deleteAfter) {
+			this.markInvalid(
+				filename,
+				`Event queue was full at ${new Date().toISOString()}; this occurrence was not delivered.`,
+			);
 		}
 	}
 

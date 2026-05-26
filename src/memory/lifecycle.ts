@@ -43,7 +43,6 @@ export class MemoryLifecycle {
 	private sessionRefreshQueue: Promise<void> = Promise.resolve();
 	private durableDirty = false;
 	private durableRevision = 0;
-	private lastAssistantTurnRevision = 0;
 	private lastDurableConsolidationRevision = 0;
 	private readonly channelMemoryQueue: ChannelMemoryQueue;
 
@@ -91,13 +90,16 @@ export class MemoryLifecycle {
 	noteCompletedAssistantTurn(): void {
 		this.durableDirty = true;
 		this.durableRevision++;
-		this.lastAssistantTurnRevision = this.durableRevision;
 		this.recordActivity("assistant-turn-completed");
 	}
 
 	async flushForShutdown(): Promise<void> {
 		await this.runDurableMemoryJobSerial(async () => {
-			if (!this.hasPendingAssistantSnapshot()) {
+			// Shutdown is the last chance to persist, so use a looser gate than the
+			// idle/compaction path: consolidate any unconsolidated durable activity,
+			// including a session that only produced tool output with no final
+			// assistant turn (which hasPendingAssistantSnapshot would skip).
+			if (!this.hasPendingDurableSnapshot()) {
 				return;
 			}
 			const messageSnapshot = [...this.options.getMessages()];
@@ -168,8 +170,10 @@ export class MemoryLifecycle {
 		return this.channelMemoryQueue.run(this.options.channelId, job);
 	}
 
-	private hasPendingAssistantSnapshot(): boolean {
-		return this.durableDirty && this.lastAssistantTurnRevision > this.lastDurableConsolidationRevision;
+	// Any unconsolidated durable activity since the last checkpoint, regardless of
+	// whether it ended on an assistant turn. Used only for the shutdown flush.
+	private hasPendingDurableSnapshot(): boolean {
+		return this.durableDirty && this.durableRevision > this.lastDurableConsolidationRevision;
 	}
 
 	private markDurableConsolidationCheckpoint(revision: number): void {

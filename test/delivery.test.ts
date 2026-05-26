@@ -271,6 +271,18 @@ describe("delivery", () => {
 		]);
 	});
 
+	it("does not archive a final response that failed to deliver", async () => {
+		const bot = new FakeDingTalkBot();
+		bot.configure("sendPlain", false);
+		const store = new FakeChannelStore();
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never);
+
+		await expect(ctx.respondPlain("undelivered")).resolves.toBe(false);
+
+		expect(bot.calls).toEqual([{ method: "sendPlain", args: ["dm_123", "undelivered"] }]);
+		expect(store.logged).toHaveLength(0);
+	});
+
 	it("continues delivering when bot response archiving fails", async () => {
 		const bot = new FakeDingTalkBot();
 		const store = new FakeChannelStore();

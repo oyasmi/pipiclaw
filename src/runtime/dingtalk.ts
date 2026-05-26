@@ -232,6 +232,15 @@ class ChannelQueue {
 		this.stopped = true;
 		this.queue = [];
 	}
+
+	// Drop not-yet-started work without disabling the queue. Used by /stop so a
+	// burst of queued messages does not keep running after the user asked to halt.
+	// The in-flight item (already shifted) is unaffected; the caller aborts it.
+	clearPending(): number {
+		const dropped = this.queue.length;
+		this.queue = [];
+		return dropped;
+	}
 }
 
 // ============================================================================
@@ -263,6 +272,10 @@ export class DingTalkBot {
 
 	// Active AI cards: channelId → AICard
 	private activeCards = new Map<string, AICard>();
+	// Singleflight for card creation: warmup and the first progress update can
+	// race before activeCards is populated, which would create two cards. Sharing
+	// the in-flight promise per channel guarantees at most one create call.
+	private cardCreationInFlight = new Map<string, Promise<AICard | null>>();
 
 	// Conversation metadata cache: channelId → metadata
 	private convMeta = new Map<string, ConversationMeta>();
@@ -938,6 +951,24 @@ export class DingTalkBot {
 	// ==========================================================================
 
 	private async createCard(channelId: string): Promise<AICard | null> {
+		// Re-check under the singleflight: a concurrent caller may have already
+		// created the card while we awaited, so avoid a duplicate create.
+		const existing = this.activeCards.get(channelId);
+		if (existing && !existing.finished) {
+			return existing;
+		}
+		const inFlight = this.cardCreationInFlight.get(channelId);
+		if (inFlight) {
+			return inFlight;
+		}
+		const creation = this.createCardUncached(channelId).finally(() => {
+			this.cardCreationInFlight.delete(channelId);
+		});
+		this.cardCreationInFlight.set(channelId, creation);
+		return creation;
+	}
+
+	private async createCardUncached(channelId: string): Promise<AICard | null> {
 		const token = await this.getAccessToken();
 		if (!token) return null;
 
@@ -1244,6 +1275,15 @@ export class DingTalkBot {
 
 		// Enqueue for processing
 		this.enqueueStreamMessage(event);
+	}
+
+	/**
+	 * Drop queued-but-not-started messages for a channel (e.g. on /stop) so they
+	 * do not run after the user halts the current task. Returns dropped count.
+	 */
+	clearPendingMessages(channelId: string): number {
+		const queue = this.queues.get(channelId);
+		return queue ? queue.clearPending() : 0;
 	}
 
 	private getQueue(channelId: string): ChannelQueue {
