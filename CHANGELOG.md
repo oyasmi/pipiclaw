@@ -4,6 +4,18 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-05-26
+
+### Added
+
+- `/session` command now shows the actual model that responded when an auto-routing provider (e.g. OpenRouter, Cloudflare AI Gateway) resolves to a different model than the one configured; the runtime also logs the actual model at the end of each run.
+- Edit tool result now includes a standard unified `patch` field alongside the existing custom `diff`, making the output directly usable by diff-rendering consumers.
+
+### Changed
+
+- Upgraded pi dependency scope from `@mariozechner/pi-*` to `@earendil-works/pi-*` and bumped the version from `0.70.2` to `0.75.5` (upstream renamed the package scope at `0.74.0`). All public API symbols used by Pipiclaw are unchanged across the version range.
+- Raised the minimum Node.js engine requirement from `>=22.0.0` to `>=22.19.0` to match the hard minimum introduced in pi `0.75.0`.
+
 ## [0.6.7] - 2026-05-26
 
 ### Added
