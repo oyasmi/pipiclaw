@@ -657,6 +657,14 @@ export class PipiclawSettingsManager {
 		return {};
 	}
 
+	isProjectTrusted(): boolean {
+		return true;
+	}
+
+	setProjectTrusted(_trusted: boolean): void {
+		// Pipiclaw handles workspace authorization at the DingTalk/runtime boundary.
+	}
+
 	applyOverrides(overrides: Partial<Settings>): void {
 		if (overrides.defaultProvider !== undefined) this.settings.defaultProvider = overrides.defaultProvider;
 		if (overrides.defaultModel !== undefined) this.settings.defaultModel = overrides.defaultModel;

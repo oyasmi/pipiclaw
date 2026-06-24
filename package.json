@@ -1,6 +1,6 @@
 {
 	"name": "@oyasmi/pipiclaw",
-	"version": "0.6.9-beta.0",
+	"version": "0.6.9",
 	"description": "An AI assistant runtime for coding and team workflows, with DingTalk AI Cards, sub-agents, memory, and scheduled events.",
 	"type": "module",
 	"bin": {
@@ -33,9 +33,9 @@
 		"prepublishOnly": "npm run clean && npm run build && npm run check"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "^0.75.5",
-		"@earendil-works/pi-ai": "^0.75.5",
-		"@earendil-works/pi-coding-agent": "^0.75.5",
+		"@earendil-works/pi-agent-core": "0.80.2",
+		"@earendil-works/pi-ai": "0.80.2",
+		"@earendil-works/pi-coding-agent": "0.80.2",
 		"@mozilla/readability": "^0.6.0",
 		"axios": "^1.7.0",
 		"croner": "^9.1.0",
@@ -73,7 +73,7 @@
 	"bugs": {
 		"url": "https://github.com/oyasmi/pipiclaw/issues"
 	},
-	"license": "Apache-2.0",
+	"license": "AGPL-3.0-only",
 	"publishConfig": {
 		"access": "public"
 	},

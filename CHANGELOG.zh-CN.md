@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [0.6.9-beta.0] - 2026-05-27
+## [0.6.9] - 2026-06-24
 
 ### 安全
 
@@ -12,6 +12,12 @@
   - `allowPatterns` 现在按命令原子（atom）做词边界锚定匹配，而不再对整条命令做子串包含判断，因此被允许的片段不能再放行链式危险命令（例如 `git status; rm -rf /`）。
   - 守卫现在会递归检查通过 `-c` 传入的 shell 脚本体（`sh`/`bash`/`zsh`/`dash`/`ash`/`ksh`，含 `-lc` 等组合标志），因此 `bash -c "rm -rf /"` 这类内容会被检查到。
   - 守卫现在会展开包装类命令（`xargs`、`env`、`time`、`nice`、`timeout`、`nohup`、`find -exec`/`-execdir` 等）并对内层命令进行守卫，因此 `xargs rm -rf /` 或 `find . -exec shred {} ;` 会被拦截。递归带有深度上限。
+
+### 变更
+
+- 将 pi 依赖组从 `0.75.5` 升级到 `0.80.2`，包括 `@earendil-works/pi-ai`、`@earendil-works/pi-agent-core` 和 `@earendil-works/pi-coding-agent`。
+- 适配 pi `0.80.x` 的 API 拆分：内置模型读取改为使用 `@earendil-works/pi-ai/providers/all`，并为新版资源加载器补充所需的项目信任方法。
+- 项目许可证从 Apache License 2.0 改为 GNU Affero General Public License v3.0。
 
 ### 修复
 

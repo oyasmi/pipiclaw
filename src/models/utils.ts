@@ -1,4 +1,5 @@
-import { type Api, getModel, type Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { PipiclawSettingsManager } from "../settings.js";
 

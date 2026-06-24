@@ -624,4 +624,4 @@ npm run check
 
 ## 许可证（License）
 
-Apache License 2.0. See [LICENSE](./LICENSE).
+GNU Affero General Public License v3.0. See [LICENSE](./LICENSE).

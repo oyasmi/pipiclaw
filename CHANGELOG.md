@@ -4,7 +4,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
-## [0.6.9-beta.0] - 2026-05-27
+## [0.6.9] - 2026-06-24
 
 ### Security
 
@@ -12,6 +12,12 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
   - `allowPatterns` now match per command atom with word-boundary anchoring instead of a whole-command substring test, so an allowed fragment can no longer whitelist a chained dangerous command (e.g. `git status; rm -rf /`).
   - The guard now recurses into shell script bodies passed via `-c` (`sh`/`bash`/`zsh`/`dash`/`ash`/`ksh`, including combined flags like `-lc`), so content such as `bash -c "rm -rf /"` is inspected.
   - The guard now unwraps wrapper commands (`xargs`, `env`, `time`, `nice`, `timeout`, `nohup`, `find -exec`/`-execdir`, etc.) and guards the inner command, so `xargs rm -rf /` or `find . -exec shred {} ;` are blocked. Recursion is depth-limited.
+
+### Changed
+
+- Upgraded the pi dependency set from `0.75.5` to `0.80.2`, including `@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, and `@earendil-works/pi-coding-agent`.
+- Updated Pipiclaw's pi integration for the `0.80.x` API split by reading built-in models from `@earendil-works/pi-ai/providers/all` and adding the project-trust methods expected by the new resource loader.
+- Changed the project license from Apache License 2.0 to GNU Affero General Public License v3.0.
 
 ### Fixed
 

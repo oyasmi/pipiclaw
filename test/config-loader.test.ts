@@ -1,5 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { getModel } from "@earendil-works/pi-ai";
+import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import type { ModelRegistry, Skill } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";

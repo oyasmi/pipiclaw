@@ -1,5 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { getModel } from "@earendil-works/pi-ai";
+import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {

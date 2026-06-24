@@ -1,5 +1,6 @@
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage, getModel } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
