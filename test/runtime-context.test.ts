@@ -26,6 +26,7 @@ function createBootstrapPaths(): BootstrapPaths {
 		settingsConfigPath: join(appHomeDir, "settings.json"),
 		toolsConfigPath: join(appHomeDir, "tools.json"),
 		securityConfigPath: join(appHomeDir, "security.json"),
+		eventHistoryPath: join(appHomeDir, "state", "events", "history.jsonl"),
 	};
 }
 

@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.6.10-beta.0] - 2026-06-25
+
+### 新增
+
+- 新增结构化事件调度历史 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl`，以本地时间 JSONL 记录事件加载、调度、触发、preAction 结果、入队结果、删除、非法文件和取消调度等信息。
+
 ## [0.6.9] - 2026-06-24
 
 ### 安全

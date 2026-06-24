@@ -4,6 +4,12 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.10-beta.0] - 2026-06-25
+
+### Added
+
+- Added structured event scheduling history at `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl`, recording local-time JSONL entries for event loading, scheduling, triggering, pre-action outcomes, queue results, deletion, invalid files, and cancellation.
+
 ## [0.6.9] - 2026-06-24
 
 ### Security

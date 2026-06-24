@@ -11,6 +11,7 @@ import {
 	APP_NAME,
 	AUTH_CONFIG_PATH,
 	CHANNEL_CONFIG_PATH,
+	EVENT_HISTORY_PATH,
 	MODELS_CONFIG_PATH,
 	SECURITY_CONFIG_PATH,
 	SETTINGS_CONFIG_PATH,
@@ -49,6 +50,7 @@ export interface BootstrapPaths {
 	settingsConfigPath: string;
 	toolsConfigPath: string;
 	securityConfigPath: string;
+	eventHistoryPath: string;
 }
 
 export interface BootstrapIO {
@@ -235,6 +237,7 @@ export const DEFAULT_BOOTSTRAP_PATHS: BootstrapPaths = {
 	settingsConfigPath: SETTINGS_CONFIG_PATH,
 	toolsConfigPath: TOOLS_CONFIG_PATH,
 	securityConfigPath: SECURITY_CONFIG_PATH,
+	eventHistoryPath: EVENT_HISTORY_PATH,
 };
 
 export class BootstrapExitError extends Error {
@@ -504,6 +507,7 @@ interface RuntimeContextOptions {
 		workspaceDir: string,
 		bot: DingTalkBot,
 		executor: Executor,
+		eventHistoryPath: string,
 	) => { start(): void; stop(): void };
 	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
 	memoryMaintenanceSchedulerIntervalMs?: number;
@@ -712,12 +716,13 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		: new DingTalkBot(handler, options.dingtalkConfig);
 	const executor = createExecutor(options.sandbox);
 	const eventsWatcher = options.createEventsWatcher
-		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor)
+		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)
 		: createEventsWatcher(
 				options.paths.workspaceDir,
 				bot,
 				executor,
 				loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config.commandGuard,
+				options.paths.eventHistoryPath,
 			);
 	const memoryMaintenanceScheduler = options.createMemoryMaintenanceScheduler
 		? options.createMemoryMaintenanceScheduler()

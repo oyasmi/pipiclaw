@@ -43,6 +43,7 @@ export async function createRuntimeHarness(options?: {
 			settingsConfigPath: join(home.homeDir, "settings.json"),
 			toolsConfigPath: join(home.homeDir, "tools.json"),
 			securityConfigPath: join(home.homeDir, "security.json"),
+			eventHistoryPath: join(home.homeDir, "state", "events", "history.jsonl"),
 		},
 		sandbox: { type: "host" },
 		dingtalkConfig: {

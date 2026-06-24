@@ -1,7 +1,18 @@
 import { Cron } from "croner";
-import { existsSync, type FSWatcher, mkdirSync, readdirSync, statSync, unlinkSync, watch, writeFileSync } from "fs";
+import {
+	appendFileSync,
+	chmodSync,
+	existsSync,
+	type FSWatcher,
+	mkdirSync,
+	readdirSync,
+	statSync,
+	unlinkSync,
+	watch,
+	writeFileSync,
+} from "fs";
 import { readFile } from "fs/promises";
-import { join } from "path";
+import { dirname, join, resolve } from "path";
 import * as log from "../log.js";
 import type { Executor } from "../sandbox.js";
 import { guardCommand } from "../security/command-guard.js";
@@ -44,6 +55,53 @@ export interface PeriodicEvent {
 
 export type ScheduledEvent = ImmediateEvent | OneShotEvent | PeriodicEvent;
 
+export type EventHistoryAction =
+	| "loaded"
+	| "scheduled"
+	| "triggered"
+	| "skipped"
+	| "enqueued"
+	| "queue_full"
+	| "deleted"
+	| "invalid"
+	| "pre_action_started"
+	| "pre_action_passed"
+	| "pre_action_blocked"
+	| "pre_action_failed"
+	| "cancelled";
+
+export type EventHistoryResult = "ok" | "error" | "skipped";
+
+export interface EventHistoryRecord {
+	ts: string;
+	eventName: string;
+	eventPath: string;
+	eventType: ScheduledEvent["type"] | "unknown";
+	channelId?: string;
+	action: EventHistoryAction;
+	result: EventHistoryResult;
+	reason?: string;
+	schedule?: string;
+	timezone?: string;
+	at?: string;
+	nextRunAt?: string;
+	textPreview?: string;
+	preAction?: {
+		type: "bash";
+		command: string;
+		timeoutMs: number;
+		exitCode?: number | null;
+		durationMs?: number;
+	};
+	queue?: {
+		accepted: boolean;
+	};
+}
+
+export interface EventsWatcherOptions {
+	historyPath?: string;
+}
+
 // ============================================================================
 // EventsWatcher
 // ============================================================================
@@ -52,6 +110,50 @@ const DEBOUNCE_MS = 100;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 100;
 const MAX_TIMEOUT_MS = 2_147_483_647;
+const DEFAULT_PRE_ACTION_TIMEOUT_MS = 10_000;
+const TEXT_PREVIEW_MAX_CHARS = 160;
+
+function pad2(value: number): string {
+	return String(value).padStart(2, "0");
+}
+
+function pad3(value: number): string {
+	return String(value).padStart(3, "0");
+}
+
+export function formatLocalTimestamp(date: Date = new Date()): string {
+	const offsetMinutes = -date.getTimezoneOffset();
+	const offsetSign = offsetMinutes >= 0 ? "+" : "-";
+	const absOffsetMinutes = Math.abs(offsetMinutes);
+	const offsetHours = Math.floor(absOffsetMinutes / 60);
+	const offsetRemainderMinutes = absOffsetMinutes % 60;
+	return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}.${pad3(date.getMilliseconds())}${offsetSign}${pad2(offsetHours)}:${pad2(offsetRemainderMinutes)}`;
+}
+
+function eventNameFromFilename(filename: string): string {
+	return filename.endsWith(".json") ? filename.slice(0, -".json".length) : filename;
+}
+
+function truncateTextPreview(text: string): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	return normalized.length > TEXT_PREVIEW_MAX_CHARS
+		? `${normalized.slice(0, TEXT_PREVIEW_MAX_CHARS - 1)}…`
+		: normalized;
+}
+
+class EventPreActionError extends Error {
+	readonly kind: "blocked" | "failed";
+	readonly exitCode?: number;
+	readonly durationMs?: number;
+
+	constructor(kind: "blocked" | "failed", message: string, options: { exitCode?: number; durationMs?: number } = {}) {
+		super(message);
+		this.name = "EventPreActionError";
+		this.kind = kind;
+		this.exitCode = options.exitCode;
+		this.durationMs = options.durationMs;
+	}
+}
 
 export class EventsWatcher {
 	private timers: Map<string, NodeJS.Timeout> = new Map();
@@ -66,6 +168,7 @@ export class EventsWatcher {
 		private bot: DingTalkBot,
 		private executor: Executor,
 		private commandGuardConfig?: SecurityConfig["commandGuard"],
+		private options: EventsWatcherOptions = {},
 	) {
 		this.startTime = Date.now();
 	}
@@ -74,6 +177,7 @@ export class EventsWatcher {
 		if (!existsSync(this.eventsDir)) {
 			mkdirSync(this.eventsDir, { recursive: true });
 		}
+		this.ensureHistoryFile();
 
 		log.logInfo(`Events watcher starting, dir: ${this.eventsDir}`);
 
@@ -110,6 +214,59 @@ export class EventsWatcher {
 
 		this.knownFiles.clear();
 		log.logInfo("Events watcher stopped");
+	}
+
+	private ensureHistoryFile(): void {
+		if (!this.options.historyPath) {
+			return;
+		}
+		try {
+			const historyDir = dirname(this.options.historyPath);
+			mkdirSync(historyDir, { recursive: true, mode: 0o700 });
+			writeFileSync(this.options.historyPath, "", { flag: "a", mode: 0o600 });
+			chmodSync(this.options.historyPath, 0o600);
+		} catch (err) {
+			log.logWarning("Failed to initialize event history file", String(err));
+		}
+	}
+
+	private appendHistory(record: Omit<EventHistoryRecord, "ts" | "eventName" | "eventPath"> & { filename: string }): void {
+		if (!this.options.historyPath) {
+			return;
+		}
+		const { filename, ...rest } = record;
+		const fullRecord: EventHistoryRecord = {
+			ts: formatLocalTimestamp(),
+			eventName: eventNameFromFilename(filename),
+			eventPath: resolve(this.eventsDir, filename),
+			...rest,
+		};
+		try {
+			this.ensureHistoryFile();
+			appendFileSync(this.options.historyPath, `${JSON.stringify(fullRecord)}\n`, "utf-8");
+		} catch (err) {
+			log.logWarning("Failed to write event history", String(err));
+		}
+	}
+
+	private appendEventHistory(
+		filename: string,
+		event: ScheduledEvent,
+		action: EventHistoryAction,
+		result: EventHistoryResult,
+		extra: Partial<Omit<EventHistoryRecord, "ts" | "eventName" | "eventPath" | "eventType" | "channelId" | "action" | "result">> = {},
+	): void {
+		this.appendHistory({
+			filename,
+			eventType: event.type,
+			channelId: event.channelId,
+			action,
+			result,
+			textPreview: truncateTextPreview(event.text),
+			...(event.type === "one-shot" ? { at: event.at } : {}),
+			...(event.type === "periodic" ? { schedule: event.schedule, timezone: event.timezone } : {}),
+			...extra,
+		});
 	}
 
 	private debounce(filename: string, fn: () => void): void {
@@ -159,19 +316,38 @@ export class EventsWatcher {
 		log.logInfo(`Event file deleted: ${filename}`);
 		this.cancelScheduled(filename);
 		this.knownFiles.delete(filename);
+		this.appendHistory({
+			filename,
+			eventType: "unknown",
+			action: "deleted",
+			result: "ok",
+		});
 	}
 
 	private cancelScheduled(filename: string): void {
+		let cancelled = false;
 		const timer = this.timers.get(filename);
 		if (timer) {
 			clearTimeout(timer);
 			this.timers.delete(filename);
+			cancelled = true;
 		}
 
 		const cron = this.crons.get(filename);
 		if (cron) {
 			cron.stop();
 			this.crons.delete(filename);
+			cancelled = true;
+		}
+
+		if (cancelled) {
+			this.appendHistory({
+				filename,
+				eventType: "unknown",
+				action: "cancelled",
+				result: "ok",
+				reason: "event file changed or was removed",
+			});
 		}
 	}
 
@@ -196,12 +372,20 @@ export class EventsWatcher {
 
 		if (!event) {
 			log.logWarning(`Failed to parse event file after ${MAX_RETRIES} retries: ${filename}`, lastError?.message);
+			this.appendHistory({
+				filename,
+				eventType: "unknown",
+				action: "invalid",
+				result: "error",
+				reason: lastError?.message ?? "Unknown event parse error",
+			});
 			this.markInvalid(filename, lastError?.message ?? "Unknown event parse error");
 			return;
 		}
 
 		this.knownFiles.add(filename);
 		this.clearInvalidMarker(filename);
+		this.appendEventHistory(filename, event, "loaded", "ok");
 
 		switch (event.type) {
 			case "immediate":
@@ -291,6 +475,7 @@ export class EventsWatcher {
 			const stat = statSync(filePath);
 			if (stat.mtimeMs < this.startTime) {
 				log.logInfo(`Stale immediate event, deleting: ${filename}`);
+				this.appendEventHistory(filename, event, "skipped", "skipped", { reason: "stale immediate event" });
 				this.deleteFile(filename);
 				return;
 			}
@@ -299,6 +484,7 @@ export class EventsWatcher {
 		}
 
 		log.logInfo(`Executing immediate event: ${filename}`);
+		this.appendEventHistory(filename, event, "triggered", "ok");
 		await this.execute(filename, event);
 	}
 
@@ -308,12 +494,14 @@ export class EventsWatcher {
 
 		if (!Number.isFinite(atTime)) {
 			log.logWarning(`Invalid one-shot time for ${filename}: ${event.at}`);
+			this.appendEventHistory(filename, event, "invalid", "error", { reason: `Invalid one-shot time: ${event.at}` });
 			this.markInvalid(filename, `Invalid one-shot time: ${event.at}`);
 			return;
 		}
 
 		if (atTime <= now) {
 			log.logInfo(`One-shot event in the past, deleting: ${filename}`);
+			this.appendEventHistory(filename, event, "skipped", "skipped", { reason: "one-shot event is in the past" });
 			this.deleteFile(filename);
 			return;
 		}
@@ -323,19 +511,29 @@ export class EventsWatcher {
 			log.logWarning(
 				`One-shot event exceeds maximum supported delay for ${filename}: ${event.at}. Use a periodic cron event instead.`,
 			);
+			this.appendEventHistory(filename, event, "skipped", "skipped", {
+				reason: `One-shot event exceeds maximum supported delay: ${event.at}`,
+			});
 			this.markInvalid(filename, `One-shot event exceeds maximum supported delay: ${event.at}`);
 			return;
 		}
 
 		log.logInfo(`Scheduling one-shot event: ${filename} in ${Math.round(delay / 1000)}s`);
+		this.appendEventHistory(filename, event, "scheduled", "ok", {
+			nextRunAt: formatLocalTimestamp(new Date(atTime)),
+		});
 
 		const timer = setTimeout(async () => {
 			this.timers.delete(filename);
 			try {
 				log.logInfo(`Executing one-shot event: ${filename}`);
+				this.appendEventHistory(filename, event, "triggered", "ok");
 				await this.execute(filename, event);
 			} catch (err) {
 				log.logWarning(`One-shot event execution failed: ${filename}`, String(err));
+				this.appendEventHistory(filename, event, "skipped", "error", {
+					reason: err instanceof Error ? err.message : String(err),
+				});
 			}
 		}, delay);
 
@@ -347,9 +545,13 @@ export class EventsWatcher {
 			const cron = new Cron(event.schedule, { timezone: event.timezone }, async () => {
 				try {
 					log.logInfo(`Executing periodic event: ${filename}`);
+					this.appendEventHistory(filename, event, "triggered", "ok");
 					await this.execute(filename, event, false);
 				} catch (err) {
 					log.logWarning(`Periodic event execution failed: ${filename}`, String(err));
+					this.appendEventHistory(filename, event, "skipped", "error", {
+						reason: err instanceof Error ? err.message : String(err),
+					});
 				}
 			});
 
@@ -357,8 +559,18 @@ export class EventsWatcher {
 
 			const next = cron.nextRun();
 			log.logInfo(`Scheduled periodic event: ${filename}, next run: ${next?.toISOString() ?? "unknown"}`);
+			this.appendEventHistory(
+				filename,
+				event,
+				"scheduled",
+				"ok",
+				next ? { nextRunAt: formatLocalTimestamp(next) } : {},
+			);
 		} catch (err) {
 			log.logWarning(`Invalid cron schedule for ${filename}: ${event.schedule}`, String(err));
+			this.appendEventHistory(filename, event, "invalid", "error", {
+				reason: `Invalid cron schedule: ${event.schedule}\n${String(err)}`,
+			});
 			this.markInvalid(filename, `Invalid cron schedule: ${event.schedule}\n${String(err)}`);
 		}
 	}
@@ -366,10 +578,43 @@ export class EventsWatcher {
 	private async execute(filename: string, event: ScheduledEvent, deleteAfter: boolean = true): Promise<void> {
 		if (event.preAction) {
 			try {
-				await this.runPreAction(event.preAction, filename);
+				this.appendEventHistory(filename, event, "pre_action_started", "ok", {
+					preAction: {
+						type: event.preAction.type,
+						command: event.preAction.command,
+						timeoutMs: event.preAction.timeout ?? DEFAULT_PRE_ACTION_TIMEOUT_MS,
+					},
+				});
+				const result = await this.runPreAction(event.preAction, filename);
+				this.appendEventHistory(filename, event, "pre_action_passed", "ok", {
+					preAction: {
+						type: event.preAction.type,
+						command: event.preAction.command,
+						timeoutMs: event.preAction.timeout ?? DEFAULT_PRE_ACTION_TIMEOUT_MS,
+						exitCode: result.exitCode,
+						durationMs: result.durationMs,
+					},
+				});
 			} catch (err) {
 				const reason = err instanceof Error ? err.message : String(err);
 				log.logInfo(`Pre-action gate blocked event: ${filename} (${reason})`);
+				const actionResult = err instanceof EventPreActionError ? err : undefined;
+				this.appendEventHistory(
+					filename,
+					event,
+					actionResult?.kind === "failed" ? "pre_action_failed" : "pre_action_blocked",
+					actionResult?.kind === "failed" ? "error" : "skipped",
+					{
+						reason,
+						preAction: {
+							type: event.preAction.type,
+							command: event.preAction.command,
+							timeoutMs: event.preAction.timeout ?? DEFAULT_PRE_ACTION_TIMEOUT_MS,
+							...(actionResult?.exitCode !== undefined ? { exitCode: actionResult.exitCode } : {}),
+							...(actionResult?.durationMs !== undefined ? { durationMs: actionResult.durationMs } : {}),
+						},
+					},
+				);
 				return;
 			}
 		}
@@ -404,6 +649,7 @@ export class EventsWatcher {
 		const enqueued = this.bot.enqueueEvent(syntheticEvent);
 
 		if (enqueued) {
+			this.appendEventHistory(filename, event, "enqueued", "ok", { queue: { accepted: true } });
 			if (deleteAfter) {
 				this.deleteFile(filename);
 			}
@@ -415,6 +661,10 @@ export class EventsWatcher {
 		// GC'd as "past" with no trace, so leave a visible error marker (and keep
 		// the source file) making the loss auditable rather than a silent hole.
 		log.logWarning(`Event queue full, could not enqueue: ${filename}`);
+		this.appendEventHistory(filename, event, "queue_full", "error", {
+			reason: "channel queue full",
+			queue: { accepted: false },
+		});
 		if (deleteAfter) {
 			this.markInvalid(
 				filename,
@@ -423,21 +673,35 @@ export class EventsWatcher {
 		}
 	}
 
-	private async runPreAction(action: EventAction, filename: string): Promise<void> {
+	private async runPreAction(action: EventAction, filename: string): Promise<{ exitCode: number; durationMs: number }> {
+		const startedAt = Date.now();
 		if (this.commandGuardConfig?.enabled) {
 			const guardResult = guardCommand(action.command, this.commandGuardConfig);
 			if (!guardResult.allowed) {
 				log.logWarning(`Pre-action command blocked by guard for ${filename}: ${guardResult.reason}`);
-				throw new Error(`guard: ${guardResult.reason}`);
+				throw new EventPreActionError("blocked", `guard: ${guardResult.reason}`, {
+					durationMs: Date.now() - startedAt,
+				});
 			}
 		}
 
-		const timeoutMs = action.timeout ?? 10_000;
+		const timeoutMs = action.timeout ?? DEFAULT_PRE_ACTION_TIMEOUT_MS;
 		const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
-		const result = await this.executor.exec(action.command, { timeout: timeoutSeconds });
-		if (result.code !== 0) {
-			throw new Error(`exit ${result.code}`);
+		let result;
+		try {
+			result = await this.executor.exec(action.command, { timeout: timeoutSeconds });
+		} catch (err) {
+			throw new EventPreActionError("failed", err instanceof Error ? err.message : String(err), {
+				durationMs: Date.now() - startedAt,
+			});
 		}
+		if (result.code !== 0) {
+			throw new EventPreActionError("blocked", `exit ${result.code}`, {
+				exitCode: result.code,
+				durationMs: Date.now() - startedAt,
+			});
+		}
+		return { exitCode: result.code, durationMs: Date.now() - startedAt };
 	}
 
 	private deleteFile(filename: string): void {
@@ -451,6 +715,12 @@ export class EventsWatcher {
 		}
 		this.clearInvalidMarker(filename);
 		this.knownFiles.delete(filename);
+		this.appendHistory({
+			filename,
+			eventType: "unknown",
+			action: "deleted",
+			result: "ok",
+		});
 	}
 
 	private getInvalidMarkerPath(filename: string): string {
@@ -494,7 +764,8 @@ export function createEventsWatcher(
 	bot: DingTalkBot,
 	executor: Executor,
 	commandGuardConfig?: SecurityConfig["commandGuard"],
+	historyPath?: string,
 ): EventsWatcher {
 	const eventsDir = join(workspaceDir, "events");
-	return new EventsWatcher(eventsDir, bot, executor, commandGuardConfig);
+	return new EventsWatcher(eventsDir, bot, executor, commandGuardConfig, { historyPath });
 }

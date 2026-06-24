@@ -1010,6 +1010,8 @@ web 工具的代理顺序是：
 
 详细事件类型、字段说明和使用建议见 [events-and-sub-agents.md](./events-and-sub-agents.md)。
 
+事件调度层的审计记录会写入 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl`。该文件由 Pipiclaw 自动创建，用 JSON Lines 记录事件加载、调度、触发、`preAction` 结果和入队结果；其中 `ts` 使用本地时区时间。
+
 ## 技能目录 `workspace/skills/`（`workspace/skills/`）
 
 放工作区级技能资源。Pipiclaw 只支持 workspace 级技能，不支持 channel 级 skills。

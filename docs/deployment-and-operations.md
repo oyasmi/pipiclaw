@@ -278,6 +278,7 @@ npm install -g @oyasmi/pipiclaw@latest
 - `settings.json`
 - `tools.json`
 - `workspace/`
+- `state/events/history.jsonl`（可选，事件调度审计记录）
 
 其中 `workspace/` 最关键，因为它包含：
 
@@ -329,6 +330,7 @@ workspace `skills/` 是 procedural memory。`skill_manage` 和高置信 post-tur
 - `schedule` 是否合法
 - `timezone` 是否正确
 - 进程日志里是否出现事件解析失败
+- `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl` 中是否有 `invalid`、`skipped`、`pre_action_blocked` 或 `queue_full` 记录
 
 ### 子代理没有被正常使用
 

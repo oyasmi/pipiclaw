@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -113,8 +113,14 @@ function createWatcher(
 		allowPatterns: string[];
 		blockObfuscation: boolean;
 	},
+	historyPath?: string,
 ): EventsWatcher {
-	return new EventsWatcher(dir, bot as unknown as DingTalkBot, executor, guardConfig);
+	return new EventsWatcher(dir, bot as unknown as DingTalkBot, executor, guardConfig, { historyPath });
+}
+
+function readHistory(historyPath: string): Array<Record<string, unknown>> {
+	const content = readFileSync(historyPath, "utf-8").trim();
+	return content ? content.split("\n").map((line) => JSON.parse(line) as Record<string, unknown>) : [];
 }
 
 beforeEach(() => {
@@ -149,6 +155,18 @@ describe("EventsWatcher", () => {
 		expect(() =>
 			privateApi.parseEvent(JSON.stringify({ type: "unknown", channelId: "dm_1", text: "hello" }), "c.json"),
 		).toThrow("Unknown event type");
+	});
+
+	it("initializes an empty event history file on start", () => {
+		const dir = createTempDir();
+		const historyPath = join(createTempDir(), "state", "events", "history.jsonl");
+		const watcher = createWatcher(dir, new FakeBot(), createMockExecutor(), undefined, historyPath);
+
+		watcher.start();
+		watcher.stop();
+
+		expect(existsSync(historyPath)).toBe(true);
+		expect(readFileSync(historyPath, "utf-8")).toBe("");
 	});
 
 	it("deletes stale immediate events", () => {
@@ -254,11 +272,12 @@ describe("EventsWatcher", () => {
 
 	it("enqueues synthetic events and deletes handled files", async () => {
 		const dir = createTempDir();
+		const historyPath = join(createTempDir(), "history.jsonl");
 		const filename = "periodic.json";
 		const filePath = join(dir, filename);
 		writeFileSync(filePath, "{}");
 		const bot = new FakeBot(true);
-		const watcher = createWatcher(dir, bot);
+		const watcher = createWatcher(dir, bot, createMockExecutor(), undefined, historyPath);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
 		await privateApi.execute(
@@ -279,6 +298,33 @@ describe("EventsWatcher", () => {
 			text: "[EVENT:periodic.json:periodic:0 3 * * 0] run maintenance",
 		});
 		expect(existsSync(filePath)).toBe(false);
+
+		const history = readHistory(historyPath);
+		expect(history.some((entry) => entry.action === "enqueued" && entry.result === "ok")).toBe(true);
+		expect(history.some((entry) => entry.action === "deleted" && entry.result === "ok")).toBe(true);
+		expect(history[0]?.ts).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*[+-]\d{2}:\d{2}$/));
+		expect(String(history[0]?.ts)).not.toContain("Z");
+	});
+
+	it("records invalid event parse failures in history", async () => {
+		const dir = createTempDir();
+		const historyPath = join(createTempDir(), "history.jsonl");
+		const watcher = createWatcher(dir, new FakeBot(), createMockExecutor(), undefined, historyPath);
+		const privateApi = getEventsWatcherPrivateApi(watcher);
+		const brokenPath = join(dir, "broken.json");
+		writeFileSync(brokenPath, "{");
+		vi.spyOn(privateApi, "sleep").mockResolvedValue(undefined);
+
+		await privateApi.handleFile("broken.json");
+
+		expect(readHistory(historyPath)).toEqual([
+			expect.objectContaining({
+				eventName: "broken",
+				eventType: "unknown",
+				action: "invalid",
+				result: "error",
+			}),
+		]);
 	});
 
 	it("keeps periodic event files when they are re-queued without deletion", async () => {
@@ -367,10 +413,11 @@ describe("EventsWatcher", () => {
 
 		it("blocks event when action exits with non-zero code", async () => {
 			const dir = createTempDir();
+			const historyPath = join(createTempDir(), "history.jsonl");
 			const filename = "blocked.json";
 			writeFileSync(join(dir, filename), "{}");
 			const bot = new FakeBot(true);
-			const watcher = createWatcher(dir, bot);
+			const watcher = createWatcher(dir, bot, createMockExecutor(), undefined, historyPath);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
 			await privateApi.execute(
@@ -385,6 +432,15 @@ describe("EventsWatcher", () => {
 			);
 
 			expect(bot.events).toHaveLength(0);
+			expect(readHistory(historyPath)).toEqual([
+				expect.objectContaining({ action: "pre_action_started", result: "ok" }),
+				expect.objectContaining({
+					action: "pre_action_blocked",
+					result: "skipped",
+					reason: "exit 1",
+					preAction: expect.objectContaining({ command: "false", exitCode: 1 }),
+				}),
+			]);
 		});
 
 		it("blocks event when action times out", async () => {

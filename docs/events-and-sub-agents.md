@@ -191,6 +191,38 @@
 - 巡检没有异常时不刷屏
 - 定期检查没有新结果时不打扰用户
 
+### 调度历史记录（Event History）
+
+Pipiclaw 会把事件调度层的审计记录写入：
+
+```text
+~/.pi/pipiclaw/state/events/history.jsonl
+```
+
+如果设置了 `PIPICLAW_HOME`，则写入对应 app home 下的 `state/events/history.jsonl`。
+
+该文件是 JSON Lines，每行记录一次调度动作，例如：
+
+- 事件文件加载成功或解析失败
+- `one-shot` / `periodic` 被安排调度
+- 事件到达触发点
+- `preAction` 通过、阻止或执行失败
+- synthetic event 成功入队或遇到队列满
+- 事件文件被删除或调度被取消
+
+示例：
+
+```json
+{"ts":"2026-06-25T10:00:00.123+08:00","eventName":"weekly-review","eventPath":"/Users/me/.pi/pipiclaw/workspace/events/weekly-review.json","eventType":"periodic","channelId":"dm_123","action":"enqueued","result":"ok","schedule":"0 10 * * 1","timezone":"Asia/Shanghai","textPreview":"检查当前 workspace 和 channel 的 MEMORY.md...","queue":{"accepted":true}}
+```
+
+说明：
+
+- `ts` 使用本地时区时间，不使用 UTC `Z` 时间。
+- `history.jsonl` 只记录调度层行为，不记录 agent 最终回复；最终对话结果仍在对应 channel 的 `log.jsonl` / `context.jsonl` 中。
+- 为避免泄露过多业务内容，记录中只保存 `textPreview`，不会保存完整事件文本。
+- 文件会在事件 watcher 启动或首次写入时自动创建。
+
 ### 推荐场景（Recommended Patterns）
 
 #### 1. 每周记忆整理
