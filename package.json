@@ -26,10 +26,11 @@
 		"dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
 		"lint": "biome check .",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"deadcode": "knip",
 		"test": "vitest --run",
 		"test:e2e": "vitest --run --config vitest.config.e2e.ts",
 		"test:coverage": "vitest --run --coverage",
-		"check": "npm run lint && npm run typecheck && npm run test",
+		"check": "npm run lint && npm run typecheck && npm run deadcode && npm run test",
 		"prepublishOnly": "npm run clean && npm run build && npm run check"
 	},
 	"dependencies": {
@@ -53,6 +54,7 @@
 		"@types/jsdom": "^28.0.1",
 		"@types/node": "^24.3.0",
 		"@vitest/coverage-v8": "^3.2.4",
+		"knip": "^6.24.0",
 		"typescript": "^5.7.3",
 		"vitest": "^3.2.4"
 	},
