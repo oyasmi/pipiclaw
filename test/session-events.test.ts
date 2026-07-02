@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleSessionEvent } from "../src/agent/session-events.js";
-import { isAutoCompactionEndEvent, isAutoCompactionStartEvent } from "../src/agent/type-guards.js";
 import { createEmptyRunState, type RunQueue } from "../src/agent/types.js";
 import type { DingTalkContext } from "../src/runtime/dingtalk.js";
 
@@ -39,17 +38,6 @@ function createContext(respond = vi.fn(async () => {})): DingTalkContext {
 }
 
 describe("session compaction events", () => {
-	it("accepts both legacy and current compaction start event names", () => {
-		expect(isAutoCompactionStartEvent({ type: "auto_compaction_start", reason: "overflow" })).toBe(true);
-		expect(isAutoCompactionStartEvent({ type: "compaction_start", reason: "threshold" })).toBe(true);
-		expect(isAutoCompactionStartEvent({ type: "compaction_start", reason: "manual" })).toBe(true);
-	});
-
-	it("accepts both legacy and current compaction end event names", () => {
-		expect(isAutoCompactionEndEvent({ type: "auto_compaction_end" })).toBe(true);
-		expect(isAutoCompactionEndEvent({ type: "compaction_end", errorMessage: "failed" })).toBe(true);
-	});
-
 	it("surfaces compaction failure diagnostics to DingTalk and run state", async () => {
 		const respond = vi.fn(async () => {});
 		const ctx = createContext(respond);

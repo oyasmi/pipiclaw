@@ -58,5 +58,5 @@ export function extractToolResultText(result: unknown): string {
 		}
 	}
 
-	return JSON.stringify(result);
+	return JSON.stringify(result) ?? String(result);
 }

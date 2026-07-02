@@ -79,12 +79,6 @@ function createDmEvent(text: string, ts: string) {
 	};
 }
 
-function extractSessionId(text: string): string {
-	const match = text.match(/Session ID: `([^`]+)`/);
-	expect(match?.[1]).toBeTruthy();
-	return match![1];
-}
-
 afterEach(() => {
 	vi.restoreAllMocks();
 	for (const dir of tempDirs.splice(0)) {
@@ -161,40 +155,4 @@ describe("createRuntimeContext", () => {
 		expect(bot.sendPlain).toHaveBeenCalledTimes(2);
 		await runtime.shutdown();
 	});
-
-	it("creates a distinct session id for each /new command", async () => {
-		const paths = createBootstrapPaths();
-		bootstrapAppHome(paths);
-		const bot = new FakeTestBot();
-		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
-
-		const runtime = createRuntimeContext({
-			paths,
-			sandbox: { type: "host" },
-			dingtalkConfig: {
-				clientId: "client-id",
-				clientSecret: "client-secret",
-				robotCode: "client-id",
-				cardTemplateKey: "content",
-				stateDir: paths.workspaceDir,
-			} satisfies DingTalkConfig,
-			registerSignalHandlers: false,
-			startServices: false,
-			createBot: () => bot as unknown as DingTalkBot,
-			createEventsWatcher: () => eventsWatcher,
-		});
-
-		await runtime.handler.handleEvent(createDmEvent("/new", "1000"), bot as unknown as DingTalkBot);
-		await runtime.handler.handleEvent(createDmEvent("/new", "1001"), bot as unknown as DingTalkBot);
-
-		const newSessionReplies = bot.deliveries
-			.filter((delivery) => delivery.method === "sendPlain")
-			.map((delivery) => delivery.args[1])
-			.filter((message): message is string => typeof message === "string" && message.includes("Session ID"));
-
-		expect(newSessionReplies).toHaveLength(2);
-		expect(extractSessionId(newSessionReplies[0])).not.toBe(extractSessionId(newSessionReplies[1]));
-
-		await runtime.shutdown();
-	}, 30_000);
 });

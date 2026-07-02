@@ -124,10 +124,14 @@ describe("command-extension", () => {
 		const { options } = createOptions();
 		createCommandExtension(options)(api as never);
 		const ctx = createCommandContext();
+		ctx.sessionManager.getSessionId.mockReturnValueOnce("sess_first").mockReturnValueOnce("sess_second");
 
 		await api.registeredCommands.get("new")?.handler("", ctx as never);
-		expect(options.refreshSessionResources).toHaveBeenCalledTimes(1);
-		expect(getLastCommandResult(api).content).toContain("sess_new");
+		expect(getLastCommandResult(api).content).toContain("sess_first");
+
+		await api.registeredCommands.get("new")?.handler("", ctx as never);
+		expect(options.refreshSessionResources).toHaveBeenCalledTimes(2);
+		expect(getLastCommandResult(api).content).toContain("sess_second");
 
 		ctx.newSession.mockResolvedValueOnce({ cancelled: true });
 		await api.registeredCommands.get("new")?.handler("", ctx as never);
