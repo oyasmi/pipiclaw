@@ -141,6 +141,88 @@ function truncateTextPreview(text: string): string {
 		: normalized;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readRequiredString(data: Record<string, unknown>, field: string, filename: string): string {
+	const value = data[field];
+	if (typeof value !== "string" || value.trim().length === 0) {
+		throw new Error(`Missing required fields (type, channelId, text) in ${filename}`);
+	}
+	return value;
+}
+
+function parsePreAction(data: Record<string, unknown>, filename: string): EventAction | undefined {
+	if (!data.preAction) return undefined;
+	if (!isRecord(data.preAction)) {
+		throw new Error(`Invalid 'preAction' field in ${filename}, expected an object`);
+	}
+
+	const action = data.preAction;
+	if (action.type !== "bash") {
+		throw new Error(`Unsupported preAction type '${String(action.type)}' in ${filename}, only 'bash' is supported`);
+	}
+	if (typeof action.command !== "string" || action.command.trim().length === 0) {
+		throw new Error(`Missing or empty 'preAction.command' in ${filename}`);
+	}
+	if (action.timeout !== undefined) {
+		if (typeof action.timeout !== "number" || !Number.isFinite(action.timeout) || action.timeout <= 0) {
+			throw new Error(`Invalid 'preAction.timeout' in ${filename}, expected a positive millisecond value`);
+		}
+	}
+
+	return {
+		type: "bash",
+		command: action.command,
+		...(typeof action.timeout === "number" ? { timeout: action.timeout } : {}),
+	};
+}
+
+export function parseScheduledEventContent(content: string, filename: string): ScheduledEvent {
+	const data = JSON.parse(content);
+	if (!isRecord(data)) {
+		throw new Error(`Missing required fields (type, channelId, text) in ${filename}`);
+	}
+
+	const type = readRequiredString(data, "type", filename);
+	const channelId = readRequiredString(data, "channelId", filename);
+	const text = readRequiredString(data, "text", filename);
+	const preAction = parsePreAction(data, filename);
+
+	switch (type) {
+		case "immediate":
+			return { type, channelId, text, ...(preAction ? { preAction } : {}) };
+
+		case "one-shot": {
+			if (typeof data.at !== "string" || data.at.trim().length === 0) {
+				throw new Error(`Missing 'at' field for one-shot event in ${filename}`);
+			}
+			return { type, channelId, text, at: data.at, ...(preAction ? { preAction } : {}) };
+		}
+
+		case "periodic": {
+			if (typeof data.schedule !== "string" || data.schedule.trim().length === 0) {
+				throw new Error(`Missing 'schedule' field for periodic event in ${filename}`);
+			}
+			if (typeof data.timezone !== "string" || data.timezone.trim().length === 0) {
+				throw new Error(`Missing 'timezone' field for periodic event in ${filename}`);
+			}
+			return {
+				type,
+				channelId,
+				text,
+				schedule: data.schedule,
+				timezone: data.timezone,
+				...(preAction ? { preAction } : {}),
+			};
+		}
+
+		default:
+			throw new Error(`Unknown event type '${type}' in ${filename}`);
+	}
+}
+
 class EventPreActionError extends Error {
 	readonly kind: "blocked" | "failed";
 	readonly exitCode?: number;
@@ -404,72 +486,8 @@ export class EventsWatcher {
 		}
 	}
 
-	private parsePreAction(data: Record<string, unknown>, filename: string): EventAction | undefined {
-		if (!data.preAction) return undefined;
-		if (typeof data.preAction !== "object" || data.preAction === null) {
-			throw new Error(`Invalid 'preAction' field in ${filename}, expected an object`);
-		}
-
-		const action = data.preAction as Record<string, unknown>;
-		if (action.type !== "bash") {
-			throw new Error(
-				`Unsupported preAction type '${String(action.type)}' in ${filename}, only 'bash' is supported`,
-			);
-		}
-		if (typeof action.command !== "string" || action.command.trim().length === 0) {
-			throw new Error(`Missing or empty 'preAction.command' in ${filename}`);
-		}
-		if (action.timeout !== undefined) {
-			if (typeof action.timeout !== "number" || !Number.isFinite(action.timeout) || action.timeout <= 0) {
-				throw new Error(`Invalid 'preAction.timeout' in ${filename}, expected a positive millisecond value`);
-			}
-		}
-
-		return {
-			type: "bash",
-			command: action.command,
-			...(typeof action.timeout === "number" ? { timeout: action.timeout } : {}),
-		};
-	}
-
 	private parseEvent(content: string, filename: string): ScheduledEvent | null {
-		const data = JSON.parse(content);
-
-		if (!data.type || !data.channelId || !data.text) {
-			throw new Error(`Missing required fields (type, channelId, text) in ${filename}`);
-		}
-
-		const preAction = this.parsePreAction(data, filename);
-
-		switch (data.type) {
-			case "immediate":
-				return { type: "immediate", channelId: data.channelId, text: data.text, preAction };
-
-			case "one-shot":
-				if (!data.at) {
-					throw new Error(`Missing 'at' field for one-shot event in ${filename}`);
-				}
-				return { type: "one-shot", channelId: data.channelId, text: data.text, at: data.at, preAction };
-
-			case "periodic":
-				if (!data.schedule) {
-					throw new Error(`Missing 'schedule' field for periodic event in ${filename}`);
-				}
-				if (!data.timezone) {
-					throw new Error(`Missing 'timezone' field for periodic event in ${filename}`);
-				}
-				return {
-					type: "periodic",
-					channelId: data.channelId,
-					text: data.text,
-					schedule: data.schedule,
-					timezone: data.timezone,
-					preAction,
-				};
-
-			default:
-				throw new Error(`Unknown event type '${data.type}' in ${filename}`);
-		}
+		return parseScheduledEventContent(content, filename);
 	}
 
 	private async handleImmediate(filename: string, event: ImmediateEvent): Promise<void> {

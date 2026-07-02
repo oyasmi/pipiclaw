@@ -4,6 +4,35 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-07-03
+
+### Added
+
+- Added `/events` DingTalk transport commands for first-pass scheduled event administration:
+  - `/events list` lists event file names, types, target `channelId`, `schedule` / `at`, and text previews, while marking invalid JSON files without hiding them.
+  - `/events show <name>` displays the full formatted JSON for an event file.
+  - `/events delete <name>` deletes the corresponding `workspace/events/<name>.json` file.
+  - `/events history [name]` shows recent event scheduling history from `state/events/history.jsonl`, optionally filtered by event name.
+- Added a Claude Code guidance document (`CLAUDE.md`) covering development commands, runtime layering, concurrency rules, memory subsystem boundaries, tool/security structure, and documentation entrypoints.
+
+### Changed
+
+- Event file parsing is now shared between `EventsWatcher` and the new `/events` command handler, keeping command output and runtime scheduling validation aligned.
+- `/events` is handled entirely in the runtime layer and remains available while a channel is busy, alongside `/stop`, `/steer`, and `/followup`.
+- `/new` now returns promptly by running outgoing-session durable memory consolidation in the background while still allowing shutdown and tests to await the detached work.
+- Updated README, AGENTS, and event documentation to reflect current package scope, runtime domains, app-level config files, `session_search`, workspace skill management, and the new event administration command.
+- Tightened the test suite by removing a slow duplicate `/new` runtime test and moving the session-id assertion to the lighter command-extension test.
+
+### Fixed
+
+- Fixed `extractToolResultText(undefined)` so progress formatting always returns a string instead of leaking the `undefined` return value from `JSON.stringify`.
+
+### Development
+
+- Added `knip` dead-code checking to the standard `npm run check` gate and enabled TypeScript unused-symbol checks in `tsconfig.json`.
+- Removed unused exports and pre-existing lint issues found by the new dead-code and unused-symbol checks.
+- Added focused `progress-formatter` and `event-commands` tests, plus DingTalk/runtime coverage for `/events` command routing.
+
 ## [0.6.10-beta.0] - 2026-06-25
 
 ### Added

@@ -23,6 +23,11 @@ describe("commands", () => {
 			args: "",
 			rawText: "/stop",
 		});
+		expect(parseBuiltInCommand("/events show weekly-review")).toEqual({
+			name: "events",
+			args: "show weekly-review",
+			rawText: "/events show weekly-review",
+		});
 	});
 
 	it("returns null for non-built-in inputs", () => {
@@ -37,6 +42,7 @@ describe("commands", () => {
 		expect(help).toContain("## Transport Commands");
 		expect(help).toContain("## Session Commands");
 		expect(help).toContain("/followup <message>");
+		expect(help).toContain("/events <list|show|delete|history>");
 		expect(help).toContain("busyMessageDefault");
 		expect(help).toContain("responseMode");
 		expect(help).toContain("/model [provider/modelId|modelId]");

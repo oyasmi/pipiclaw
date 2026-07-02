@@ -37,6 +37,7 @@ import {
 	normalizeBusyMessageDefault,
 	normalizeResponseMode,
 } from "./dingtalk.js";
+import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
 
@@ -588,6 +589,15 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			}
 		},
 
+		async handleEventsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void> {
+			const response = await runEventsCommand({
+				args,
+				workspaceDir: options.paths.workspaceDir,
+				historyPath: options.paths.eventHistoryPath,
+			});
+			await bot.sendPlain(event.channelId, response);
+		},
+
 		async handleBusyMessage(
 			event: DingTalkEvent,
 			bot: DingTalkBot,
@@ -682,6 +692,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 
 					if (builtInCommand) {
 						log.logInfo(`[${event.channelId}] Executing command: ${builtInCommand.rawText}`);
+						if (builtInCommand.name === "events") {
+							await handler.handleEventsCommand(event, bot, builtInCommand.args);
+							return;
+						}
 						await state.runner.handleBuiltinCommand(ctx, builtInCommand);
 						return;
 					}

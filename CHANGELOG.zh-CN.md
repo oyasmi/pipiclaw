@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-07-03
+
+### 新增
+
+- 新增 `/events` 钉钉传输层命令，用于第一版定时事件管理：
+  - `/events list` 列出事件文件名、类型、目标 `channelId`、`schedule` / `at` 和文本预览；非法 JSON 文件也会显示为 invalid，而不是被隐藏。
+  - `/events show <name>` 展示指定事件文件的完整格式化 JSON。
+  - `/events delete <name>` 删除对应的 `workspace/events/<name>.json` 文件。
+  - `/events history [name]` 从 `state/events/history.jsonl` 展示最近的事件调度历史，并可按事件名过滤。
+- 新增 Claude Code 使用说明文档（`CLAUDE.md`），覆盖开发命令、运行时分层、并发规则、记忆子系统边界、工具/安全结构和文档入口。
+
+### 变更
+
+- 事件文件解析现在由 `EventsWatcher` 和新的 `/events` 命令处理器共用，保证命令展示与运行时调度校验规则一致。
+- `/events` 完全由运行时层处理，并且在频道忙碌时仍可执行，与 `/stop`、`/steer`、`/followup` 一样可用。
+- `/new` 现在会把旧会话的 durable memory consolidation 放到后台执行，从而更快返回；关机和测试仍可等待这段后台工作完成。
+- 更新 README、AGENTS 和事件文档，使其反映当前包作用域、运行时模块边界、app 级配置文件、`session_search`、workspace skill 管理和新的事件管理命令。
+- 精简测试套件：删除重复且较慢的 `/new` runtime 测试，并把 session id 断言移动到更轻量的 command-extension 测试中。
+
+### 修复
+
+- 修复 `extractToolResultText(undefined)`，确保进度格式化始终返回字符串，而不会泄漏 `JSON.stringify` 对 `undefined` 的返回值。
+
+### 开发
+
+- 将 `knip` 死代码检查接入标准 `npm run check` 流程，并在 `tsconfig.json` 中启用 TypeScript 未使用符号检查。
+- 清理新死代码检查和未使用符号检查发现的无用导出与既有 lint 问题。
+- 新增聚焦的 `progress-formatter` 和 `event-commands` 测试，并补充 `/events` 命令在 DingTalk/runtime 层的路由覆盖。
+
 ## [0.6.10-beta.0] - 2026-06-25
 
 ### 新增

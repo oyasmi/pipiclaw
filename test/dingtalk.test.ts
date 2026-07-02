@@ -96,6 +96,7 @@ function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandle
 		isRunning: vi.fn(() => false),
 		handleEvent: vi.fn(async () => {}),
 		handleStop: vi.fn(async () => {}),
+		handleEventsCommand: vi.fn(async () => {}),
 		handleBusyMessage: vi.fn(async () => ({ kind: "handled" as const })),
 		...overrides,
 	};
@@ -306,6 +307,19 @@ describe("dingtalk", () => {
 			bot,
 			"followUp",
 			"next task",
+		);
+
+		await privateApi.onStreamMessage({
+			text: { content: "/events list" },
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_1",
+			conversationType: "1",
+		});
+		expect(handler.handleEventsCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ channelId: "dm_staff_1" }),
+			bot,
+			"list",
 		);
 
 		await privateApi.onStreamMessage({

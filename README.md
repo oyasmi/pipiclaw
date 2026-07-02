@@ -18,7 +18,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 - 原生支持钉钉 Stream Mode，不需要消息中转服务，不需要公网IP
 - 支持 AI Card 过程展示，思考、工具执行和状态更新可以持续流式呈现
 - 支持 `/help`、`/new`、`/compact`、`/session`、`/model`
-- 忙碌时可继续接收 `/steer`、`/followup`、`/stop`
+- 忙碌时可继续接收 `/steer`、`/followup`、`/stop`、`/events`
 - 按工作区 / 会话通道（workspace / channel）分层管理 `SOUL.md`、`AGENTS.md`、`SESSION.md`、`MEMORY.md`、`HISTORY.md`
 - 支持预定义子代理（sub-agent）和临时内联子代理（inline sub-agent）
 - 支持立即、单次、周期三类事件调度
@@ -463,6 +463,10 @@ Pipiclaw 有两层命令。
 | `/stop` | 停止当前正在执行的任务 |
 | `/steer <message>` | 在当前任务继续执行时追加新的引导信息 |
 | `/followup <message>` | 把新的请求排队，等当前任务结束后再执行 |
+| `/events list` | 列出 `workspace/events/` 中的事件文件摘要 |
+| `/events show <name>` | 查看指定事件文件的完整 JSON |
+| `/events delete <name>` | 删除指定事件文件 |
+| `/events history [name]` | 查看事件调度历史，可按事件名过滤 |
 
 忙碌时，普通消息默认等价于 `/steer <message>`。
 

@@ -169,6 +169,21 @@
 | `0 3 * * 0` | 每周日 03:00 |
 | `30 10 1 * *` | 每月 1 日 10:30 |
 
+### 通过 Slash Command 管理事件（Event Slash Commands）
+
+钉钉渠道中可以用 `/events` 查看和删除现有事件。第一版只支持管理已有文件，不支持通过命令创建或更新事件；需要新增或修改事件时，仍然直接编辑 `workspace/events/*.json`。
+
+支持的命令：
+
+| 命令 | 说明 |
+|------|------|
+| `/events list` | 列出事件文件名、类型、`channelId`、`schedule` / `at` 和文本预览 |
+| `/events show <name>` | 展示 `workspace/events/<name>.json` 的完整 JSON |
+| `/events delete <name>` | 删除对应事件文件 |
+| `/events history [name]` | 读取最近的事件调度历史；传入 `name` 时只显示该事件 |
+
+事件名只允许普通文件名字符：字母、数字、`.`、`_`、`-`。可以写 `weekly-review` 或 `weekly-review.json`，Pipiclaw 会统一归一化为同一个事件名。命令不会访问 `workspace/events/` 之外的路径。
+
 ### `channelId` 怎么写（How to Find `channelId`）
 
 常见形态：

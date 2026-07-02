@@ -132,6 +132,7 @@ export interface DingTalkHandler {
 	isRunning(channelId: string): boolean;
 	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
 	handleStop(channelId: string, bot: DingTalkBot): Promise<void>;
+	handleEventsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleBusyMessage(
 		event: DingTalkEvent,
 		bot: DingTalkBot,
@@ -1250,10 +1251,15 @@ export class DingTalkBot {
 				return;
 			}
 
+			if (builtInCommand?.name === "events") {
+				await this.handler.handleEventsCommand(event, this, builtInCommand.args);
+				return;
+			}
+
 			if (builtInCommand) {
 				await this.sendPlain(
 					channelId,
-					`A task is already running. Use \`/stop\`, \`/steer <message>\`, or \`/followup <message>\`. Plain messages default to ${this.busyMessageDefault}.`,
+					`A task is already running. Use \`/stop\`, \`/steer <message>\`, \`/followup <message>\`, or \`/events <action>\`. Plain messages default to ${this.busyMessageDefault}.`,
 				);
 				return;
 			}
@@ -1261,7 +1267,7 @@ export class DingTalkBot {
 			if (isSlashCommand) {
 				await this.sendPlain(
 					channelId,
-					"A task is already running. Only `/stop`, `/steer <message>`, and `/followup <message>` are available while streaming.",
+					"A task is already running. Only `/stop`, `/steer <message>`, `/followup <message>`, and `/events <action>` are available while streaming.",
 				);
 				return;
 			}
