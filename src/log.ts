@@ -132,12 +132,6 @@ export function logResponse(ctx: LogContext, text: string): void {
 	console.log(color("dim", indented));
 }
 
-// Control
-export function logStopRequest(ctx: LogContext): void {
-	console.log(color("green", `${timestamp()} ${formatContext(ctx)} stop`));
-	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ⊗ Stop requested - aborting`));
-}
-
 // System
 export function logInfo(message: string): void {
 	console.log(color("blue", `${timestamp()} [system] ${message}`));
@@ -230,8 +224,4 @@ export function logStartup(workingDir: string, sandbox: string): void {
 export function logConnected(): void {
 	console.log("⚡️ pipiclaw connected and listening!");
 	console.log("");
-}
-
-export function logDisconnected(): void {
-	console.log("pipiclaw disconnected.");
 }

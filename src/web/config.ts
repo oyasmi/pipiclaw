@@ -1,4 +1,4 @@
-import type { PipiclawWebFetchConfig, PipiclawWebSearchConfig, PipiclawWebToolsConfig } from "../tools/config.js";
+import type { PipiclawWebFetchConfig, PipiclawWebSearchConfig } from "../tools/config.js";
 
 export interface ResolvedWebSearchRequest {
 	query: string;
@@ -46,10 +46,6 @@ export function resolveWebFetchRequest(
 		preferJina: config.preferJina,
 		enableJinaFallback: config.enableJinaFallback,
 	};
-}
-
-export function isWebToolsEnabled(config: PipiclawWebToolsConfig): boolean {
-	return config.enable !== false;
 }
 
 function clamp(value: number | undefined, fallback: number, minimum: number, maximum?: number): number {

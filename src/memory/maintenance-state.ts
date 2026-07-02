@@ -115,13 +115,6 @@ export async function readMemoryMaintenanceState(
 	}
 }
 
-export async function writeMemoryMaintenanceState(appHomeDir: string, state: MemoryMaintenanceState): Promise<void> {
-	const path = getMemoryMaintenanceStatePath(appHomeDir, state.channelId);
-	await stateUpdateQueue.run(path, async () => {
-		await writeFileAtomically(path, `${JSON.stringify(normalizeState(state.channelId, state), null, 2)}\n`);
-	});
-}
-
 export async function updateMemoryMaintenanceState(
 	appHomeDir: string,
 	channelId: string,

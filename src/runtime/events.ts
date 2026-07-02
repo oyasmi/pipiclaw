@@ -14,7 +14,7 @@ import {
 import { readFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import * as log from "../log.js";
-import type { Executor } from "../sandbox.js";
+import type { ExecResult, Executor } from "../sandbox.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
@@ -230,7 +230,9 @@ export class EventsWatcher {
 		}
 	}
 
-	private appendHistory(record: Omit<EventHistoryRecord, "ts" | "eventName" | "eventPath"> & { filename: string }): void {
+	private appendHistory(
+		record: Omit<EventHistoryRecord, "ts" | "eventName" | "eventPath"> & { filename: string },
+	): void {
 		if (!this.options.historyPath) {
 			return;
 		}
@@ -254,7 +256,9 @@ export class EventsWatcher {
 		event: ScheduledEvent,
 		action: EventHistoryAction,
 		result: EventHistoryResult,
-		extra: Partial<Omit<EventHistoryRecord, "ts" | "eventName" | "eventPath" | "eventType" | "channelId" | "action" | "result">> = {},
+		extra: Partial<
+			Omit<EventHistoryRecord, "ts" | "eventName" | "eventPath" | "eventType" | "channelId" | "action" | "result">
+		> = {},
 	): void {
 		this.appendHistory({
 			filename,
@@ -673,7 +677,10 @@ export class EventsWatcher {
 		}
 	}
 
-	private async runPreAction(action: EventAction, filename: string): Promise<{ exitCode: number; durationMs: number }> {
+	private async runPreAction(
+		action: EventAction,
+		filename: string,
+	): Promise<{ exitCode: number; durationMs: number }> {
 		const startedAt = Date.now();
 		if (this.commandGuardConfig?.enabled) {
 			const guardResult = guardCommand(action.command, this.commandGuardConfig);
@@ -687,7 +694,7 @@ export class EventsWatcher {
 
 		const timeoutMs = action.timeout ?? DEFAULT_PRE_ACTION_TIMEOUT_MS;
 		const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
-		let result;
+		let result: ExecResult;
 		try {
 			result = await this.executor.exec(action.command, { timeout: timeoutSeconds });
 		} catch (err) {
