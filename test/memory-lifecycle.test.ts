@@ -125,7 +125,7 @@ describe("MemoryLifecycle", () => {
 		);
 	});
 
-	it("waits for the forced new-session refresh before running inline consolidation", async () => {
+	it("returns immediately from new-session switch and consolidates in the background", async () => {
 		let resolveUpdate: (() => void) | undefined;
 		vi.mocked(updateChannelSessionMemory).mockImplementation(
 			() =>
@@ -147,16 +147,22 @@ describe("MemoryLifecycle", () => {
 		const fakePi = createFakePi();
 		lifecycle.createExtensionFactory()(fakePi.api as never);
 
+		// The handler must not block on the LLM-backed refresh/consolidation: it
+		// returns synchronously so /new can create the new session immediately.
 		const beforeSwitch = fakePi.handlers.get("session_before_switch")?.({
 			reason: "new",
 		});
+		expect(beforeSwitch).toBeUndefined();
+
+		// The refresh runs in the background against a snapshot of the outgoing
+		// session, before the (still-pending) inline consolidation.
 		await waitForAssertion(() => {
 			expect(updateChannelSessionMemory).toHaveBeenCalledTimes(1);
 		});
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
 
 		resolveUpdate?.();
-		await expect(beforeSwitch).resolves.toBeUndefined();
+		await lifecycle.whenNewSessionConsolidationSettled();
 		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(updateChannelSessionMemory)).toHaveBeenCalledWith(
 			expect.objectContaining({

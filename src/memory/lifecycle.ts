@@ -45,6 +45,8 @@ export class MemoryLifecycle {
 	private durableRevision = 0;
 	private lastDurableConsolidationRevision = 0;
 	private readonly channelMemoryQueue: ChannelMemoryQueue;
+	// Tracks the detached new-session consolidation so shutdown/tests can await it.
+	private backgroundNewSessionConsolidation: Promise<void> = Promise.resolve();
 
 	constructor(private options: MemoryLifecycleOptions) {
 		this.channelMemoryQueue = options.channelMemoryQueue ?? getDefaultChannelMemoryQueue();
@@ -68,8 +70,8 @@ export class MemoryLifecycle {
 			pi.on("session_compact", async (event: SessionCompactEvent) => {
 				this.handleSessionCompact(event);
 			});
-			pi.on("session_before_switch", async (event: SessionBeforeSwitchEvent) => {
-				await this.handleSessionBeforeSwitch(event);
+			pi.on("session_before_switch", (event: SessionBeforeSwitchEvent) => {
+				this.handleSessionBeforeSwitch(event);
 			});
 			pi.on("session_start", async (event: SessionStartEvent) => {
 				this.handleSessionStart(event);
@@ -94,6 +96,9 @@ export class MemoryLifecycle {
 	}
 
 	async flushForShutdown(): Promise<void> {
+		// Let any detached new-session consolidation finish (and update the durable
+		// checkpoint) before deciding whether a final flush is still needed.
+		await this.whenNewSessionConsolidationSettled();
 		await this.runDurableMemoryJobSerial(async () => {
 			// Shutdown is the last chance to persist, so use a looser gate than the
 			// idle/compaction path: consolidate any unconsolidated durable activity,
@@ -299,12 +304,35 @@ export class MemoryLifecycle {
 		this.recordActivity("boundary");
 	}
 
-	private async handleSessionBeforeSwitch(event: SessionBeforeSwitchEvent): Promise<void> {
+	private handleSessionBeforeSwitch(event: SessionBeforeSwitchEvent): void {
 		if (event.reason !== "new") {
 			return;
 		}
 
-		await this.runPreflightConsolidation("new-session");
+		// Snapshot the outgoing session synchronously: the switch has not happened
+		// yet, so getMessages()/getSessionEntries() still reference the session that
+		// is about to be replaced. Once we yield, this.session is rebound to the new
+		// (empty) session and the snapshot would be lost.
+		const messageSnapshot = [...this.options.getMessages()];
+		const sessionEntrySnapshot = [...this.options.getSessionEntries()];
+
+		// Run the LLM-backed consolidation in the background so /new returns
+		// immediately. Failures are tolerated: runPreflightConsolidationNow catches
+		// and logs its own errors, and the serial queue keeps this from racing with
+		// idle/maintenance work on the same channel.
+		this.backgroundNewSessionConsolidation = this.runPreflightConsolidation(
+			"new-session",
+			messageSnapshot,
+			sessionEntrySnapshot,
+		).catch((error) => {
+			const message = error instanceof Error ? error.message : String(error);
+			log.logWarning(`[${this.options.channelId}] Background new-session consolidation rejected`, message);
+		});
+	}
+
+	/** Await any in-flight detached new-session consolidation (shutdown/tests). */
+	async whenNewSessionConsolidationSettled(): Promise<void> {
+		await this.backgroundNewSessionConsolidation;
 	}
 
 	private handleSessionStart(event: SessionStartEvent): void {
