@@ -6,7 +6,6 @@ import type {
 	PipiclawMemoryMaintenanceSettings,
 	PipiclawSessionMemorySettings,
 } from "../settings.js";
-import { buildStandardMessages } from "../shared/type-guards.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import {
 	type ConsolidationRunOptions,
@@ -28,6 +27,7 @@ import { runPostTurnReview } from "./post-turn-review.js";
 import { scanPromotionSignals } from "./promotion-signals.js";
 import { appendMemoryReviewLog, type MemoryReviewReason } from "./review-log.js";
 import { updateChannelSessionMemory } from "./session.js";
+import { sanitizeMessagesForMemory } from "./transcript.js";
 
 export interface MaintenanceJobSettings {
 	sessionMemory: PipiclawSessionMemorySettings;
@@ -99,7 +99,7 @@ function messageToText(message: Message): string {
 }
 
 function hasMeaningfulMessages(messages: AgentMessage[]): boolean {
-	const standardMessages = buildStandardMessages(messages);
+	const standardMessages = sanitizeMessagesForMemory(messages);
 	let userSeen = false;
 	let assistantSeen = false;
 	for (const message of standardMessages) {
@@ -121,7 +121,7 @@ function hasMeaningfulMessages(messages: AgentMessage[]): boolean {
 }
 
 function renderMessagesForSignalScan(messages: AgentMessage[]): string {
-	return buildStandardMessages(messages).map(messageToText).join("\n");
+	return sanitizeMessagesForMemory(messages).map(messageToText).join("\n");
 }
 
 function makeRunOptions(input: BaseMaintenanceJobInput): ConsolidationRunOptions {

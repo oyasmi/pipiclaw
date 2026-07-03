@@ -9,7 +9,6 @@ import {
 import { parseJsonObject } from "../shared/llm-json.js";
 import { splitH2Sections } from "../shared/markdown-sections.js";
 import { clipText } from "../shared/text-utils.js";
-import { buildStandardMessages } from "../shared/type-guards.js";
 import {
 	appendChannelHistoryBlock,
 	appendChannelMemoryUpdate,
@@ -20,6 +19,7 @@ import {
 	rewriteChannelMemory,
 } from "./files.js";
 import { runRetriedSidecarTask, runSidecarTask } from "./sidecar-worker.js";
+import { sanitizeMessagesForMemory } from "./transcript.js";
 
 const INLINE_TRANSCRIPT_MAX_CHARS = 28_000;
 const MEMORY_CLEANUP_LENGTH_THRESHOLD = 5_000;
@@ -293,7 +293,7 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 	const sourceEntries = options.sessionEntries ?? [];
 	const relevantEntries =
 		sourceEntries.length > 0 ? sourceEntries.slice(getLatestCompactionBoundary(sourceEntries)) : sourceEntries;
-	const relevantMessages = buildStandardMessages(
+	const relevantMessages = sanitizeMessagesForMemory(
 		relevantEntries.length > 0 ? extractMessagesFromSessionEntries(relevantEntries) : options.messages,
 	);
 

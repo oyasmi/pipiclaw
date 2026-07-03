@@ -6,9 +6,10 @@ import { join } from "path";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText } from "../shared/text-utils.js";
-import { buildStandardMessages, isRecord } from "../shared/type-guards.js";
+import { isRecord } from "../shared/type-guards.js";
 import { readChannelMemory, readChannelSession, rewriteChannelSession } from "./files.js";
 import { runRetriedSidecarTask, SidecarParseError } from "./sidecar-worker.js";
+import { sanitizeMessagesForMemory } from "./transcript.js";
 
 const SESSION_TRANSCRIPT_MAX_CHARS = 20_000;
 const SESSION_MEMORY_MAX_CHARS = 4_000;
@@ -261,7 +262,7 @@ ${transcript || "(empty)"}`;
 export async function updateChannelSessionMemory(options: SessionMemoryUpdateOptions): Promise<SessionMemoryState> {
 	const currentSession = await readChannelSession(options.channelDir);
 	const currentMemory = await readChannelMemory(options.channelDir);
-	const messages = buildStandardMessages(options.messages);
+	const messages = sanitizeMessagesForMemory(options.messages);
 	const currentState = parseRenderedSessionMemory(currentSession);
 
 	let update: SessionMemoryStateUpdate;

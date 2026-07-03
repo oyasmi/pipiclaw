@@ -3,7 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { serializeConversation } from "@earendil-works/pi-coding-agent";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { clipText } from "../shared/text-utils.js";
-import { buildStandardMessages, isRecord } from "../shared/type-guards.js";
+import { isRecord } from "../shared/type-guards.js";
 import { manageWorkspaceSkill } from "../tools/skill-manage.js";
 import { appendChannelMemoryUpdate, readChannelHistory, readChannelMemory, readChannelSession } from "./files.js";
 import {
@@ -15,6 +15,7 @@ import {
 } from "./promotion.js";
 import { appendMemoryReviewLog } from "./review-log.js";
 import { runRetriedSidecarTask } from "./sidecar-worker.js";
+import { sanitizeMessagesForMemory } from "./transcript.js";
 
 export interface PostTurnReviewOptions {
 	channelId: string;
@@ -159,7 +160,7 @@ async function runPostTurnReviewWorker(options: PostTurnReviewOptions): Promise<
 		readChannelMemory(options.channelDir),
 		readChannelHistory(options.channelDir),
 	]);
-	const transcript = clipText(serializeConversation(buildStandardMessages(options.messages)), 22_000, {
+	const transcript = clipText(serializeConversation(sanitizeMessagesForMemory(options.messages)), 22_000, {
 		headRatio: 0.35,
 	});
 	const skills = options.loadedSkills
