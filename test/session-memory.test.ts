@@ -141,6 +141,56 @@ describe("session-memory", () => {
 		expect(session).not.toContain("- Keep this step.");
 	});
 
+	it("keeps sticky constraints/errors and drops only resolved ones", async () => {
+		const channelDir = createTempChannel();
+		writeFileSync(
+			join(channelDir, "SESSION.md"),
+			[
+				"# Session Title",
+				"",
+				"Task",
+				"",
+				"# Constraints",
+				"",
+				"- Production must stay online.",
+				"- Keep callback verification backwards-compatible.",
+				"",
+				"# Errors & Corrections",
+				"",
+				"- Retry loop masked the real callback error.",
+			].join("\n"),
+			"utf-8",
+		);
+		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n", "utf-8");
+
+		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
+			rawText: "{}",
+			output: {
+				title: "Task",
+				currentState: ["Working."],
+				constraints: ["New rate limit is 100 rps."],
+				errorsAndCorrections: [],
+				resolved: ["Production must stay online."],
+			},
+		});
+
+		await updateChannelSessionMemory({
+			channelDir,
+			messages: [],
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		});
+
+		const session = await readChannelSession(channelDir);
+		// Sticky: prior entries survive the refresh even though the model omitted them.
+		expect(session).toContain("Keep callback verification backwards-compatible.");
+		expect(session).toContain("Retry loop masked the real callback error.");
+		// New sticky entry is merged in.
+		expect(session).toContain("New rate limit is 100 rps.");
+		// Resolved entry is dropped.
+		expect(session).not.toContain("Production must stay online.");
+	});
+
 	it("preserves the current session file and writes a debug artifact on parse failures", async () => {
 		const channelDir = createTempChannel();
 		const sessionPath = join(channelDir, "SESSION.md");

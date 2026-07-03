@@ -31,7 +31,8 @@ Output schema:
   "constraints": ["string"],
   "errorsAndCorrections": ["string"],
   "nextSteps": ["string"],
-  "worklog": ["string"]
+  "worklog": ["string"],
+  "resolved": ["string"]
 }
 
 Rules:
@@ -42,6 +43,8 @@ Rules:
 - "errorsAndCorrections" should record recent failures, fixes, or things to avoid repeating.
 - "nextSteps" should reflect the most likely immediate follow-up actions.
 - "worklog" must stay terse and recent.
+- "constraints", "errorsAndCorrections", and "decisions" are sticky: the runtime keeps prior entries even if you omit them, so only list new or changed ones there.
+- "resolved" lists constraints/errors/decisions that no longer apply (fixed, lifted, or superseded); copy their exact wording so the runtime can drop them from the sticky sections.
 - If a field has nothing useful, return an empty string or empty array.`;
 
 export interface SessionMemoryState {
@@ -64,7 +67,15 @@ export interface SessionMemoryUpdateOptions {
 	timeoutMs?: number;
 }
 
-type SessionMemoryStateUpdate = Partial<Record<keyof SessionMemoryState, string[] | string>>;
+type SessionMemoryStateUpdate = Partial<Record<keyof SessionMemoryState, string[] | string>> & {
+	resolved?: string[];
+};
+
+// Sticky sections survive a refresh even when the model omits them, so a single
+// clipped-transcript pass can't silently wipe the constraints and past mistakes that
+// keep the agent from repeating errors. Other sections describe "now" and are replaced.
+const STICKY_SECTIONS = ["decisions", "constraints", "errorsAndCorrections"] as const;
+type StickySection = (typeof STICKY_SECTIONS)[number];
 
 function normalizeItem(value: unknown): string | null {
 	if (typeof value !== "string") {
@@ -109,6 +120,7 @@ function parseStateUpdate(text: string): SessionMemoryStateUpdate {
 		errorsAndCorrections: normalizeItems(parsed.errorsAndCorrections),
 		nextSteps: normalizeItems(parsed.nextSteps),
 		worklog: normalizeItems(parsed.worklog),
+		resolved: normalizeItems(parsed.resolved),
 	};
 	return next;
 }
@@ -190,17 +202,42 @@ function parseRenderedSessionMemory(markdown: string): SessionMemoryState {
 	return state;
 }
 
-function mergeSessionMemoryState(_current: SessionMemoryState, update: SessionMemoryStateUpdate): SessionMemoryState {
+function stickyKey(item: string): string {
+	return item.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function mergeStickySection(current: string[], update: string[], resolvedKeys: Set<string>): string[] {
+	const merged: string[] = [];
+	const seen = new Set<string>();
+	// current first (older), then update (newer): dedupe keeps the older instance, and
+	// the length cap evicts from the front so the newest survive.
+	for (const item of [...current, ...update]) {
+		const key = stickyKey(item);
+		if (!key || resolvedKeys.has(key) || seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
+		merged.push(item);
+	}
+	return merged.slice(Math.max(0, merged.length - SESSION_ITEM_LIMIT));
+}
+
+function mergeSessionMemoryState(current: SessionMemoryState, update: SessionMemoryStateUpdate): SessionMemoryState {
+	const replace = (value: string[] | string | undefined): string[] => (Array.isArray(value) ? value : []);
+	const resolvedKeys = new Set((update.resolved ?? []).map(stickyKey).filter(Boolean));
+	const sticky = (section: StickySection): string[] =>
+		mergeStickySection(current[section], replace(update[section]), resolvedKeys);
+
 	return {
-		title: typeof update.title === "string" ? update.title : "",
-		currentState: Array.isArray(update.currentState) ? update.currentState : [],
-		userIntent: Array.isArray(update.userIntent) ? update.userIntent : [],
-		activeFiles: Array.isArray(update.activeFiles) ? update.activeFiles : [],
-		decisions: Array.isArray(update.decisions) ? update.decisions : [],
-		constraints: Array.isArray(update.constraints) ? update.constraints : [],
-		errorsAndCorrections: Array.isArray(update.errorsAndCorrections) ? update.errorsAndCorrections : [],
-		nextSteps: Array.isArray(update.nextSteps) ? update.nextSteps : [],
-		worklog: Array.isArray(update.worklog) ? update.worklog : [],
+		title: typeof update.title === "string" && update.title.trim() ? update.title : current.title,
+		currentState: replace(update.currentState),
+		userIntent: replace(update.userIntent),
+		activeFiles: replace(update.activeFiles),
+		decisions: sticky("decisions"),
+		constraints: sticky("constraints"),
+		errorsAndCorrections: sticky("errorsAndCorrections"),
+		nextSteps: replace(update.nextSteps),
+		worklog: replace(update.worklog),
 	};
 }
 
