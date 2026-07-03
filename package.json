@@ -34,14 +34,14 @@
 		"prepublishOnly": "npm run clean && npm run build && npm run check"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "0.80.2",
-		"@earendil-works/pi-ai": "0.80.2",
-		"@earendil-works/pi-coding-agent": "0.80.2",
+		"@earendil-works/pi-agent-core": "0.80.3",
+		"@earendil-works/pi-ai": "0.80.3",
+		"@earendil-works/pi-coding-agent": "0.80.3",
 		"@mozilla/readability": "^0.6.0",
 		"axios": "^1.7.0",
 		"croner": "^9.1.0",
 		"diff": "^8.0.2",
-		"dingtalk-stream": "^2.1.4",
+		"dingtalk-stream": "2.1.5",
 		"http-proxy-agent": "^7.0.2",
 		"https-proxy-agent": "^7.0.6",
 		"jsdom": "^26.1.0",
