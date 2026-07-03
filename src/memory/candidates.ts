@@ -105,6 +105,15 @@ function buildCandidate(
 	};
 }
 
+function parseUpdateBlockTimestamp(heading: string): string | undefined {
+	const match = heading.match(/^Update\s+(.+)$/);
+	if (!match) {
+		return undefined;
+	}
+	const timestamp = match[1].trim();
+	return Number.isFinite(Date.parse(timestamp)) ? timestamp : undefined;
+}
+
 function buildWorkspaceOrChannelMemoryCandidates(
 	source: "workspace-memory" | "channel-memory",
 	path: string,
@@ -119,7 +128,12 @@ function buildWorkspaceOrChannelMemoryCandidates(
 
 	return sections
 		.filter((section) => section.content.trim())
-		.map((section) => buildCandidate(source, path, section.heading, section.content));
+		.map((section) => {
+			// `## Update <ISO>` blocks carry their write time in the heading; surfacing it
+			// lets recall apply a recency boost and keeps appended-block ids distinct.
+			const timestamp = source === "channel-memory" ? parseUpdateBlockTimestamp(section.heading) : undefined;
+			return buildCandidate(source, path, section.heading, section.content, timestamp);
+		});
 }
 
 function buildSessionCandidates(path: string, content: string): MemoryCandidate[] {

@@ -75,6 +75,31 @@ describe("memory candidates", () => {
 		expect(refreshed.some((candidate) => candidate.content.includes("First value."))).toBe(false);
 	});
 
+	it("parses the timestamp from channel-memory Update blocks", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			[
+				"# Channel Memory",
+				"",
+				"## Update 2026-07-01T00:00:00.000Z",
+				"- Older durable note.",
+				"",
+				"## Update 2026-07-03T00:00:00.000Z",
+				"- Newer durable note.",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const candidates = await buildMemoryCandidates({ workspaceDir, channelDir });
+		const updates = candidates.filter((candidate) => candidate.source === "channel-memory");
+		expect(updates).toHaveLength(2);
+		expect(updates.map((candidate) => candidate.timestamp)).toEqual(
+			expect.arrayContaining(["2026-07-01T00:00:00.000Z", "2026-07-03T00:00:00.000Z"]),
+		);
+		expect(new Set(updates.map((candidate) => candidate.id)).size).toBe(2);
+	});
+
 	it("refreshes only the files whose fingerprints changed", async () => {
 		const { workspaceDir, channelDir } = createTempWorkspace();
 		const store = createMemoryCandidateStore();
