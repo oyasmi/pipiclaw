@@ -6,12 +6,16 @@ import {
 	type SessionMessageEntry,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
+import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { splitH2Sections } from "../shared/markdown-sections.js";
 import { clipText } from "../shared/text-utils.js";
 import {
+	appendChannelHistoryArchive,
 	appendChannelHistoryBlock,
-	appendChannelMemoryUpdate,
+	applyChannelMemoryOps,
+	type MemoryOp,
+	parseChannelMemoryEntries,
 	readChannelHistory,
 	readChannelMemory,
 	readChannelSession,
@@ -33,30 +37,36 @@ const HISTORY_FOLDING_TIMEOUT_MS = 120_000;
 
 export type ConsolidationMode = "idle" | "boundary";
 
+const MEMORY_OPS_RULES = `- memoryOps entries operate on the durable channel MEMORY.md:
+  - {"op":"add","content":"..."} for a genuinely new durable fact.
+  - {"op":"supersede","targetId":"m-xxxx","content":"..."} when new information updates or contradicts an existing entry (use its id).
+  - {"op":"invalidate","targetId":"m-xxxx","reason":"..."} when an existing entry is now obsolete or resolved.
+- Only reference targetId values that appear in the current MEMORY.md entries shown below.
+- Durable = stable facts, decisions, preferences, constraints, or medium-horizon open loops.
+- Each content string must be a standalone, keyword-rich sentence fragment suitable for a Markdown bullet (no leading "-"). Write it so future keyword search can find it.
+- Do not add content already present in SESSION.md or MEMORY.md; prefer supersede/invalidate over piling on near-duplicates.
+- Do not promote active execution state, temporary debugging observations, completed worklog, raw transcript quotes, acknowledgements, or formatting instructions.`;
+
 const BOUNDARY_INLINE_CONSOLIDATION_SYSTEM_PROMPT = `You are a runtime memory consolidation worker for Pipiclaw.
 
 Return strict JSON only. Do not wrap in Markdown fences.
 
 Output schema:
 {
-  "memoryEntries": ["string"],
+  "memoryOps": [{"op": "add|supersede|invalidate", "targetId": "m-xxxx", "content": "string", "reason": "string"}],
   "historyBlock": "string"
 }
 
 Rules:
-- memoryEntries: concise durable facts, decisions, preferences, constraints, or medium-horizon open loops that should survive compaction.
-- Each memoryEntries item must be a standalone sentence fragment suitable for a Markdown bullet without the bullet prefix.
-- Do not include raw transcript quotes unless essential.
-- Do not include ephemeral chatter, obvious one-shot acknowledgements, or formatting instructions.
-- Leave active execution state, current step-by-step work, temporary debugging observations, and completed worklog in SESSION.md instead of promoting it into durable memory.
+${MEMORY_OPS_RULES}
 - historyBlock: concise Markdown summarizing the conversation chunk for later recovery.
 - For any conversation that contains at least one meaningful user request and one meaningful assistant reply, return a non-empty historyBlock with at least one bullet.
 - Prefer short bullets and short paragraphs.
-- If there is nothing worth storing, return empty values.
+- If there is nothing worth storing, return an empty memoryOps array and empty historyBlock.
 
 Example output for a short useful exchange:
 {
-  "memoryEntries": ["User prefers dark mode in the dashboard"],
+  "memoryOps": [{"op": "add", "content": "User prefers dark mode in the dashboard"}],
   "historyBlock": "- User asked how to toggle dashboard theme; confirmed dark mode preference."
 }`;
 
@@ -66,21 +76,18 @@ Return strict JSON only. Do not wrap in Markdown fences.
 
 Output schema:
 {
-  "memoryEntries": ["string"]
+  "memoryOps": [{"op": "add|supersede|invalidate", "targetId": "m-xxxx", "content": "string", "reason": "string"}]
 }
 
 Rules:
 - This is an idle maintenance pass after a normal assistant turn.
-- Only return durable channel memory: stable facts, decisions, preferences, constraints, or medium-horizon open loops.
+${MEMORY_OPS_RULES}
 - Do not summarize the exchange for HISTORY.md. Idle consolidation never writes HISTORY.md.
-- Do not duplicate content that is already present in the current SESSION.md or channel MEMORY.md shown below.
-- Do not include active execution state, temporary debugging observations, completed worklog, raw transcript quotes, acknowledgements, or formatting instructions.
-- Each memoryEntries item must be a standalone sentence fragment suitable for a Markdown bullet without the bullet prefix.
-- If there is nothing durable enough to store, return an empty memoryEntries array.
+- If there is nothing durable enough to store, return an empty memoryOps array.
 
 Example output:
 {
-  "memoryEntries": ["User prefers dark mode in the dashboard"]
+  "memoryOps": [{"op": "add", "content": "User prefers dark mode in the dashboard"}]
 }`;
 
 const MEMORY_CLEANUP_SYSTEM_PROMPT = `You are rewriting a Pipiclaw channel MEMORY.md file.
@@ -138,7 +145,7 @@ export interface StructuralMaintenanceStats {
 }
 
 interface ConsolidationResponse {
-	memoryEntries: string[];
+	memoryOps: MemoryOp[];
 	historyBlock: string;
 }
 
@@ -146,14 +153,40 @@ function normalizeText(text: string): string {
 	return text.replace(/\r/g, "").trim();
 }
 
+function normalizeMemoryOp(value: unknown): MemoryOp | null {
+	if (typeof value !== "object" || value === null) {
+		return null;
+	}
+	const record = value as Record<string, unknown>;
+	const content = typeof record.content === "string" ? record.content.trim() : "";
+	const targetId = typeof record.targetId === "string" ? record.targetId.trim() : "";
+	if (record.op === "supersede" && targetId && content) {
+		return { op: "supersede", targetId, content };
+	}
+	if (record.op === "invalidate" && targetId) {
+		return {
+			op: "invalidate",
+			targetId,
+			reason: typeof record.reason === "string" ? record.reason.trim() : undefined,
+		};
+	}
+	// Default to add for "add" or any unrecognized op that still carries content.
+	if (content) {
+		return { op: "add", content };
+	}
+	return null;
+}
+
 function parseConsolidationResponse(text: string): ConsolidationResponse {
-	const parsed = parseJsonObject(text) as Partial<ConsolidationResponse>;
+	const parsed = parseJsonObject(text) as { memoryOps?: unknown; memoryEntries?: unknown; historyBlock?: unknown };
+	const rawOps = Array.isArray(parsed.memoryOps)
+		? parsed.memoryOps
+		: // Back-compat: tolerate the old memoryEntries: string[] shape.
+			Array.isArray(parsed.memoryEntries)
+			? parsed.memoryEntries.map((entry) => ({ op: "add", content: entry }))
+			: [];
 	return {
-		memoryEntries: Array.isArray(parsed.memoryEntries)
-			? parsed.memoryEntries
-					.map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-					.filter((entry) => entry.length > 0)
-			: [],
+		memoryOps: rawOps.map(normalizeMemoryOp).filter((op): op is MemoryOp => op !== null),
 		historyBlock: typeof parsed.historyBlock === "string" ? parsed.historyBlock.trim() : "",
 	};
 }
@@ -252,20 +285,29 @@ async function runWorkerPrompt(
 	return result.output;
 }
 
+function renderMemoryEntriesForPrompt(rawMemory: string): string {
+	const entries = parseChannelMemoryEntries(rawMemory);
+	if (entries.length === 0) {
+		return "";
+	}
+	return entries.map((entry) => `${entry.id} — ${entry.content}`).join("\n");
+}
+
 async function buildInlineConsolidationResponse(
 	options: ConsolidationRunOptions,
 	messages: Message[],
 ): Promise<ConsolidationResponse> {
 	const mode = options.mode ?? "boundary";
 	const transcript = clipText(serializeConversation(messages), INLINE_TRANSCRIPT_MAX_CHARS, { headRatio: 0.35 });
-	const currentMemory = clipText(await readChannelMemory(options.channelDir), 8_000, { headRatio: 0.35 });
+	const rawMemory = await readChannelMemory(options.channelDir);
+	const currentMemory = clipText(renderMemoryEntriesForPrompt(rawMemory), 8_000, { headRatio: 0.35 });
 	const currentSession = clipText(await readChannelSession(options.channelDir), 8_000, { headRatio: 0.35 });
 	const currentHistory = clipText(await readChannelHistory(options.channelDir), 8_000, { headRatio: 0.35 });
 
 	const prompt = `Current SESSION.md:
 ${currentSession || "(empty)"}
 
-Channel memory file:
+Current MEMORY.md entries (id — content; reference ids in supersede/invalidate):
 ${currentMemory || "(empty)"}
 
 Channel history file:
@@ -304,11 +346,10 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 	const response = await buildInlineConsolidationResponse(options, relevantMessages);
 	const timestamp = new Date().toISOString();
 
-	if (response.memoryEntries.length > 0) {
-		await appendChannelMemoryUpdate(options.channelDir, {
-			timestamp,
-			entries: response.memoryEntries,
-		});
+	let appliedMemoryOps = 0;
+	if (response.memoryOps.length > 0) {
+		const applied = await applyChannelMemoryOps(options.channelDir, response.memoryOps, timestamp);
+		appliedMemoryOps = applied.added + applied.superseded + applied.invalidated + applied.downgradedToAdd;
 	}
 
 	if (mode === "boundary" && response.historyBlock.trim()) {
@@ -320,12 +361,45 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 
 	return {
 		skipped: false,
-		appendedMemoryEntries: response.memoryEntries.length,
+		appendedMemoryEntries: appliedMemoryOps,
 		appendedHistoryBlock: mode === "boundary" && response.historyBlock.trim().length > 0,
 	};
 }
 
-export async function cleanupChannelMemory(options: ConsolidationRunOptions, currentMemory: string): Promise<boolean> {
+export type MemoryCleanupShrinkGuard = Pick<
+	PipiclawMemoryMaintenanceSettings,
+	"cleanupShrinkGuardMinRatio" | "cleanupShrinkGuardMinChars"
+>;
+
+export class MemoryCleanupRejectedError extends Error {
+	constructor(reason: string) {
+		super(reason);
+		this.name = "MemoryCleanupRejectedError";
+	}
+}
+
+// Guard against a cleanup pass that catastrophically drops content (e.g. a truncated
+// or malformed LLM response). Backups exist too, but refusing the write avoids
+// clobbering good memory in the first place.
+function isCleanupResultTooSmall(currentMemory: string, nextMemory: string, guard: MemoryCleanupShrinkGuard): boolean {
+	const before = normalizeText(currentMemory);
+	const after = normalizeText(nextMemory);
+	if (before.length < Math.max(0, guard.cleanupShrinkGuardMinChars)) {
+		return false;
+	}
+	if (after.length < before.length * Math.max(0, Math.min(1, guard.cleanupShrinkGuardMinRatio))) {
+		return true;
+	}
+	const beforeEntries = parseChannelMemoryEntries(before).length;
+	const afterEntries = parseChannelMemoryEntries(after).length;
+	return beforeEntries > 0 && afterEntries * 2 < beforeEntries;
+}
+
+export async function cleanupChannelMemory(
+	options: ConsolidationRunOptions,
+	currentMemory: string,
+	guard?: MemoryCleanupShrinkGuard,
+): Promise<boolean> {
 	if (!shouldCleanupChannelMemory(currentMemory)) {
 		return false;
 	}
@@ -340,6 +414,9 @@ ${currentMemory}`;
 		prompt,
 		MEMORY_CLEANUP_TIMEOUT_MS,
 	);
+	if (guard && isCleanupResultTooSmall(currentMemory, nextMemory, guard)) {
+		throw new MemoryCleanupRejectedError("cleanup result shrank below the configured guard threshold");
+	}
 	await rewriteChannelMemory(options.channelDir, nextMemory);
 	return true;
 }
@@ -352,8 +429,17 @@ export async function foldChannelHistory(options: ConsolidationRunOptions, curre
 	const sections = splitH2Sections(currentHistory);
 	const olderSections = sections.slice(0, -HISTORY_RECENT_BLOCKS_TO_KEEP);
 	const recentSections = sections.slice(-HISTORY_RECENT_BLOCKS_TO_KEEP);
+	const renderedOlder = olderSections.map((section) => `## ${section.heading}\n\n${section.content}`).join("\n\n");
+
+	// Preserve the raw blocks before folding turns them lossy, so nothing is
+	// permanently blurred by repeated folds.
+	await appendChannelHistoryArchive(options.channelDir, {
+		timestamp: new Date().toISOString(),
+		content: renderedOlder,
+	});
+
 	const prompt = `Older history blocks to fold:
-${olderSections.map((section) => `## ${section.heading}\n\n${section.content}`).join("\n\n")}`;
+${renderedOlder}`;
 	const foldedSummary = await runWorkerPrompt(
 		"history-folding",
 		options.model,

@@ -660,6 +660,8 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 | `memoryMaintenance.structuralMaintenanceIntervalHours` | `6` | Yes | cleanup/folding structural job 的最小间隔 |
 | `memoryMaintenance.maxConcurrentChannels` | `1` | Yes | 每个 tick 最多处理的 channel 数 |
 | `memoryMaintenance.failureBackoffMinutes` | `30` | Yes | 后台任务失败后的回退分钟数 |
+| `memoryMaintenance.cleanupShrinkGuardMinRatio` | `0.4` | Yes | MEMORY.md cleanup 结果若缩水到原文的此比例以下则拒绝写入（防坏结果覆盖） |
+| `memoryMaintenance.cleanupShrinkGuardMinChars` | `2000` | Yes | 仅当原 MEMORY.md 超过此长度时才启用缩水保护 |
 | `sessionSearch.enabled` | `true` | Yes | 启用当前 channel transcript 冷路径搜索 |
 | `sessionSearch.maxFiles` | `12` | Yes | `session_search` 最多读取的当前 channel JSONL 文件数 |
 | `sessionSearch.maxChunks` | `80` | Yes | `session_search` 最多评分片段数 |

@@ -108,6 +108,10 @@ export interface PipiclawMemoryMaintenanceSettings {
 	structuralMaintenanceIntervalHours: number;
 	maxConcurrentChannels: number;
 	failureBackoffMinutes: number;
+	/** Reject a MEMORY.md cleanup whose result shrinks below this ratio of the original. */
+	cleanupShrinkGuardMinRatio: number;
+	/** Only apply the shrink guard when the original exceeds this length (chars). */
+	cleanupShrinkGuardMinChars: number;
 }
 
 export interface PipiclawSessionSearchSettings {
@@ -193,6 +197,8 @@ const DEFAULT_MEMORY_MAINTENANCE: PipiclawMemoryMaintenanceSettings = {
 	structuralMaintenanceIntervalHours: 6,
 	maxConcurrentChannels: 1,
 	failureBackoffMinutes: 30,
+	cleanupShrinkGuardMinRatio: 0.4,
+	cleanupShrinkGuardMinChars: 2_000,
 };
 
 /**

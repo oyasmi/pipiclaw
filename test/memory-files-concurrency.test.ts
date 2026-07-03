@@ -8,6 +8,9 @@ const fsMocks = vi.hoisted(() => ({
 	readFile: vi.fn<(path: string, encoding: string) => Promise<string>>(async () => "# Channel Memory\n"),
 	writeFile: vi.fn<(path: string, content: string, encoding: string) => Promise<void>>(async () => undefined),
 	rename: vi.fn<(from: string, to: string) => Promise<void>>(async () => undefined),
+	copyFile: vi.fn<(from: string, to: string) => Promise<void>>(async () => undefined),
+	readdir: vi.fn<(path: string) => Promise<string[]>>(async () => []),
+	rm: vi.fn<(path: string, options?: unknown) => Promise<void>>(async () => undefined),
 }));
 
 vi.mock("fs", () => ({
@@ -21,6 +24,9 @@ vi.mock("fs/promises", () => ({
 	readFile: fsMocks.readFile,
 	writeFile: fsMocks.writeFile,
 	rename: fsMocks.rename,
+	copyFile: fsMocks.copyFile,
+	readdir: fsMocks.readdir,
+	rm: fsMocks.rm,
 }));
 
 describe("memory-files concurrency", () => {

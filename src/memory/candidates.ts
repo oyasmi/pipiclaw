@@ -84,6 +84,12 @@ function inferPriority(source: MemoryCandidate["source"], title: string): number
 	return 4;
 }
 
+const ENTRY_ID_COMMENT_GLOBAL = /\s*<!--\s*id:m-[a-z0-9]+\s*-->/gi;
+
+function stripEntryIdComments(text: string): string {
+	return text.replace(ENTRY_ID_COMMENT_GLOBAL, "");
+}
+
 function buildCandidate(
 	source: MemoryCandidate["source"],
 	path: string,
@@ -92,13 +98,14 @@ function buildCandidate(
 	timestamp?: string,
 	searchText?: string,
 ): MemoryCandidate {
+	const cleanContent = stripEntryIdComments(content);
 	return {
 		id: `${source}:${slugify(title)}:${timestamp ?? ""}`,
 		source,
 		path,
 		title,
-		content,
-		searchText,
+		content: cleanContent,
+		searchText: searchText === undefined ? undefined : stripEntryIdComments(searchText),
 		timestamp,
 		sectionKind: title.trim().toLowerCase(),
 		priority: inferPriority(source, title),

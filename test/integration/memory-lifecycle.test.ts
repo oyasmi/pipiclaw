@@ -123,6 +123,8 @@ function createMaintenanceSettings(settings?: Partial<ReturnType<typeof createSe
 			structuralMaintenanceIntervalHours: 0,
 			maxConcurrentChannels: 1,
 			failureBackoffMinutes: 30,
+			cleanupShrinkGuardMinRatio: 0.4,
+			cleanupShrinkGuardMinChars: 2_000,
 		},
 	};
 }

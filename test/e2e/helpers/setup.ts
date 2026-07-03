@@ -104,6 +104,8 @@ export function createE2ETestHome(overrides?: {
 			structuralMaintenanceIntervalHours: 24,
 			maxConcurrentChannels: 1,
 			failureBackoffMinutes: 1,
+			cleanupShrinkGuardMinRatio: 0.4,
+			cleanupShrinkGuardMinChars: 2_000,
 		},
 	});
 

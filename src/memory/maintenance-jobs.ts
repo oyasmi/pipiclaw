@@ -431,7 +431,12 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 
 		try {
 			const options = makeRunOptions(input);
-			const cleanedMemory = decision.runMemoryCleanup ? await cleanupChannelMemory(options, currentMemory) : false;
+			const cleanedMemory = decision.runMemoryCleanup
+				? await cleanupChannelMemory(options, currentMemory, {
+						cleanupShrinkGuardMinRatio: input.settings.memoryMaintenance.cleanupShrinkGuardMinRatio,
+						cleanupShrinkGuardMinChars: input.settings.memoryMaintenance.cleanupShrinkGuardMinChars,
+					})
+				: false;
 			const foldedHistory = decision.runHistoryFolding ? await foldChannelHistory(options, currentHistory) : false;
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
