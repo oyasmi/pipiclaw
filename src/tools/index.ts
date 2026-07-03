@@ -12,6 +12,7 @@ import { createBashTool } from "./bash.js";
 import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
+import { createMemorySaveTool } from "./memory-save.js";
 import { createReadTool } from "./read.js";
 import { createSessionSearchTool } from "./session-search.js";
 import { createSkillListTool } from "./skill-list.js";
@@ -95,8 +96,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 						channelId: options.channelId,
 					}),
 				];
-	const memoryTools =
-		toolsConfig.tools.memory.sessionSearch.enabled === false
+	const memoryTools = [
+		...(toolsConfig.tools.memory.sessionSearch.enabled === false
 			? []
 			: [
 					createSessionSearchTool({
@@ -105,7 +106,17 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 						resolveApiKey: options.resolveApiKey,
 						getSessionSearchSettings: options.getSessionSearchSettings,
 					}),
-				];
+				]),
+		...(toolsConfig.tools.memory.save.enabled === false
+			? []
+			: [
+					createMemorySaveTool({
+						channelId: options.channelId,
+						channelDir: options.channelDir,
+						memoryCandidateStore: options.memoryCandidateStore,
+					}),
+				]),
+	];
 	const skillTools =
 		toolsConfig.tools.skills.manage.enabled === false
 			? []

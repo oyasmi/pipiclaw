@@ -4,7 +4,6 @@ const PROMOTION_SIGNAL_PATTERNS = [
 	/记住/,
 	/偏好/,
 	/决定/,
-	/确认/,
 	/采用/,
 	/不再/,
 	/流程/,

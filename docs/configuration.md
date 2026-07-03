@@ -895,6 +895,12 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 |------|--------|------|
 | `enabled` | `true` | 是否注册 `session_search` 工具。该工具只搜索当前 channel 的冷存储，不跨 channel |
 
+#### `tools.memory.save`
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | `true` | 是否注册 `memory_save` 工具。用户显式要求记住时，Agent 当场把 durable 事实写入 channel MEMORY.md（经共享串行队列，不与后台维护竞争） |
+
 #### `tools.skills.manage`
 
 | 字段 | 默认值 | 说明 |

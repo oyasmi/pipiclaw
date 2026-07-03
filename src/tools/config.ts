@@ -38,6 +38,9 @@ export interface PipiclawToolsConfig {
 			sessionSearch: {
 				enabled: boolean;
 			};
+			save: {
+				enabled: boolean;
+			};
 		};
 		skills: {
 			manage: {
@@ -78,6 +81,9 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 		},
 		memory: {
 			sessionSearch: {
+				enabled: true,
+			},
+			save: {
 				enabled: true,
 			},
 		},
@@ -142,6 +148,7 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 	const web = isRecord(tools.web) ? tools.web : {};
 	const memory = isRecord(tools.memory) ? tools.memory : {};
 	const sessionSearch = isRecord(memory.sessionSearch) ? memory.sessionSearch : {};
+	const memorySave = isRecord(memory.save) ? memory.save : {};
 	const skills = isRecord(tools.skills) ? tools.skills : {};
 	const manage = isRecord(skills.manage) ? skills.manage : {};
 	const search = isRecord(web.search) ? web.search : {};
@@ -266,6 +273,12 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 						typeof sessionSearch.enabled === "boolean"
 							? sessionSearch.enabled
 							: DEFAULT_TOOLS_CONFIG.tools.memory.sessionSearch.enabled,
+				},
+				save: {
+					enabled:
+						typeof memorySave.enabled === "boolean"
+							? memorySave.enabled
+							: DEFAULT_TOOLS_CONFIG.tools.memory.save.enabled,
 				},
 			},
 			skills: {

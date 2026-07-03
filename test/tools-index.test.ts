@@ -10,6 +10,7 @@ const {
 	createWebSearchToolMock,
 	createWebFetchToolMock,
 	createSessionSearchToolMock,
+	createMemorySaveToolMock,
 	createSkillListToolMock,
 	createSkillViewToolMock,
 	createSkillManageToolMock,
@@ -22,6 +23,7 @@ const {
 	createWebSearchToolMock: vi.fn(() => ({ name: "web_search" })),
 	createWebFetchToolMock: vi.fn(() => ({ name: "web_fetch" })),
 	createSessionSearchToolMock: vi.fn(() => ({ name: "session_search" })),
+	createMemorySaveToolMock: vi.fn(() => ({ name: "memory_save" })),
 	createSkillListToolMock: vi.fn(() => ({ name: "skill_list" })),
 	createSkillViewToolMock: vi.fn(() => ({ name: "skill_view" })),
 	createSkillManageToolMock: vi.fn(() => ({ name: "skill_manage" })),
@@ -80,6 +82,9 @@ const toolsConfig = {
 			sessionSearch: {
 				enabled: true,
 			},
+			save: {
+				enabled: true,
+			},
 		},
 		skills: {
 			manage: {
@@ -96,6 +101,7 @@ vi.mock("../src/tools/write.js", () => ({ createWriteTool: createWriteToolMock }
 vi.mock("../src/tools/web-search.js", () => ({ createWebSearchTool: createWebSearchToolMock }));
 vi.mock("../src/tools/web-fetch.js", () => ({ createWebFetchTool: createWebFetchToolMock }));
 vi.mock("../src/tools/session-search.js", () => ({ createSessionSearchTool: createSessionSearchToolMock }));
+vi.mock("../src/tools/memory-save.js", () => ({ createMemorySaveTool: createMemorySaveToolMock }));
 vi.mock("../src/tools/skill-list.js", () => ({ createSkillListTool: createSkillListToolMock }));
 vi.mock("../src/tools/skill-view.js", () => ({ createSkillViewTool: createSkillViewToolMock }));
 vi.mock("../src/tools/skill-manage.js", () => ({ createSkillManageTool: createSkillManageToolMock }));
@@ -114,6 +120,7 @@ describe("tools index", () => {
 	beforeEach(() => {
 		toolsConfig.tools.web.enable = true;
 		toolsConfig.tools.memory.sessionSearch.enabled = true;
+		toolsConfig.tools.memory.save.enabled = true;
 		toolsConfig.tools.skills.manage.enabled = true;
 		createReadToolMock.mockClear();
 		createBashToolMock.mockClear();
@@ -122,6 +129,7 @@ describe("tools index", () => {
 		createWebSearchToolMock.mockClear();
 		createWebFetchToolMock.mockClear();
 		createSessionSearchToolMock.mockClear();
+		createMemorySaveToolMock.mockClear();
 		createSkillListToolMock.mockClear();
 		createSkillViewToolMock.mockClear();
 		createSkillManageToolMock.mockClear();
@@ -165,6 +173,7 @@ describe("tools index", () => {
 			"edit",
 			"write",
 			"session_search",
+			"memory_save",
 			"skill_list",
 			"skill_view",
 			"skill_manage",
@@ -260,6 +269,7 @@ describe("tools index", () => {
 			"web_search",
 			"web_fetch",
 			"session_search",
+			"memory_save",
 			"skill_list",
 			"skill_view",
 			"skill_manage",

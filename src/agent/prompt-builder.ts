@@ -107,7 +107,8 @@ Memory files are not preloaded into session context. Read them explicitly when m
 ### Runtime Behavior
 - The runtime may inject a small amount of relevant memory context from SESSION.md / MEMORY.md / HISTORY.md into a turn when it is clearly useful.
 - SESSION.md is the primary runtime-managed working-state artifact for current active work.
-- The runtime automatically consolidates channel MEMORY.md and HISTORY.md before compaction or session trimming.
+- The runtime automatically consolidates channel MEMORY.md and HISTORY.md before compaction or session trimming, and sweeps durable facts into MEMORY.md in the background.
+- When the user explicitly asks you to remember, prefer, default to, or stop doing something durable, call memory_save right away instead of waiting for background consolidation. Use it only for durable facts/preferences/decisions/constraints, not transient task state.
 - Workspace MEMORY.md is not updated by normal runtime consolidation.
 - ENVIRONMENT.md is not normal conversational memory. Read it only when environment history or machine state matters.
 
