@@ -31,6 +31,35 @@ describe("first-turn memory bootstrap", () => {
 		expect(rendered.indexOf(workspaceLine.trim())).toBeGreaterThan(0);
 	});
 
+	it("keeps the newest Update block and structured sections when channel memory exceeds budget", () => {
+		const filler = "旧的更新内容，需要被裁掉以腾出预算。".repeat(40);
+		const channelMemory = [
+			"# Channel Memory",
+			"",
+			"## Constraints",
+			"",
+			"- Production must stay online.",
+			"",
+			`## Update 2026-07-01T00:00:00.000Z`,
+			"",
+			`- ${filler}`,
+			"",
+			"## Update 2026-07-03T00:00:00.000Z",
+			"",
+			"- Newest decision: switch deploy to blue-green.",
+		].join("\n");
+
+		const rendered = buildFirstTurnMemoryBootstrap({
+			channelMemory,
+			workspaceMemory: "",
+			maxChars: 800,
+		});
+
+		expect(rendered).toContain("Newest decision: switch deploy to blue-green.");
+		expect(rendered).toContain("Production must stay online.");
+		expect(rendered).not.toContain(filler);
+	});
+
 	it("returns an empty string when both memory files are empty", () => {
 		expect(
 			buildFirstTurnMemoryBootstrap({

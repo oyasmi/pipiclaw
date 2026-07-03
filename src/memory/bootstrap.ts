@@ -1,3 +1,4 @@
+import { splitH2Sections } from "../shared/markdown-sections.js";
 import { clipText } from "../shared/text-utils.js";
 
 const FIRST_TURN_MEMORY_SNAPSHOT_MAX_CHARS = 3_000;
@@ -6,6 +7,46 @@ const CHANNEL_MEMORY_WEIGHT = 0.6;
 
 function normalizeContent(content: string): string {
 	return content.replace(/\r/g, "").trim();
+}
+
+function hasVisibleContent(content: string): boolean {
+	return content.replace(/<!--[\s\S]*?-->/g, "").trim().length > 0;
+}
+
+// Channel MEMORY.md is "structured sections up top, `## Update <ts>` blocks appended
+// at the tail". A plain head clip would drop the newest facts, so pick sections by
+// priority (structured first, then newest Update blocks) but render in document order
+// for readability.
+function selectChannelMemoryForBootstrap(content: string, budget: number): string {
+	const sections = splitH2Sections(content).filter((section) => hasVisibleContent(section.content));
+	if (sections.length === 0) {
+		return clipText(content, budget, { headRatio: 1 });
+	}
+
+	const renderSection = (section: { heading: string; content: string }): string =>
+		`## ${section.heading}\n\n${section.content}`;
+	const structured = sections.filter((section) => !section.heading.startsWith("Update "));
+	const updatesNewestFirst = sections.filter((section) => section.heading.startsWith("Update ")).reverse();
+	const byPriority = [...structured, ...updatesNewestFirst];
+
+	const chosen = new Set<(typeof sections)[number]>();
+	let used = 0;
+	for (const section of byPriority) {
+		const cost = (chosen.size > 0 ? 2 : 0) + renderSection(section).length;
+		if (used + cost <= budget) {
+			chosen.add(section);
+			used += cost;
+		}
+	}
+
+	if (chosen.size === 0) {
+		return clipText(renderSection(byPriority[0]), budget, { headRatio: 0.5 });
+	}
+
+	return sections
+		.filter((section) => chosen.has(section))
+		.map(renderSection)
+		.join("\n\n");
 }
 
 function allocateBudgets(channelMemory: string, workspaceMemory: string, maxChars: number): [number, number] {
@@ -49,7 +90,7 @@ export function buildFirstTurnMemoryBootstrap(options: FirstTurnMemoryBootstrapO
 
 	if (channelMemory) {
 		sections.push("", "[Channel MEMORY.md]");
-		sections.push(channelBudget > 0 ? clipText(channelMemory, channelBudget, { headRatio: 1 }) : channelMemory);
+		sections.push(channelBudget > 0 ? selectChannelMemoryForBootstrap(channelMemory, channelBudget) : channelMemory);
 	}
 
 	if (workspaceMemory) {
