@@ -11,11 +11,18 @@ const sessionSearchSchema = Type.Object({
 			description: "Search query for current-channel transcript cold storage. Empty query returns recent entries.",
 		}),
 	),
-	limit: Type.Optional(Type.Number({ description: "Maximum results to return (1-5)" })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5, description: "Maximum results to return (1-5)" })),
 	roleFilter: Type.Optional(
-		Type.Array(Type.String(), {
-			description: 'Optional roles to include: "user", "assistant", "tool", "system", or "unknown".',
-		}),
+		Type.Array(
+			Type.Union([
+				Type.Literal("user"),
+				Type.Literal("assistant"),
+				Type.Literal("tool"),
+				Type.Literal("system"),
+				Type.Literal("unknown"),
+			]),
+			{ description: "Optional roles to include." },
+		),
 	),
 });
 
@@ -64,7 +71,7 @@ export function createSessionSearchTool(options: SessionSearchToolOptions): Agen
 				content: [
 					{
 						type: "text",
-						text: JSON.stringify(response, null, 2),
+						text: JSON.stringify(response),
 					},
 				],
 				details: {

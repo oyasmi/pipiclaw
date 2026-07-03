@@ -96,7 +96,7 @@ export function createSkillListTool(options: SkillListToolOptions): AgentTool<ty
 		execute: async () => {
 			const skills = await listWorkspaceSkills(options);
 			return {
-				content: [{ type: "text", text: JSON.stringify({ skills }, null, 2) }],
+				content: [{ type: "text", text: JSON.stringify({ skills }) }],
 				details: { kind: "skill_list", count: skills.length },
 			};
 		},

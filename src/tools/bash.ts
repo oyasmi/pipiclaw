@@ -1,7 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { Executor } from "../sandbox.js";
@@ -9,25 +6,43 @@ import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { shellEscapePath } from "../shared/shell-escape.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
 /**
- * Generate a unique temp file path for bash output
+ * Default wall-clock timeout for bash commands when the caller supplies neither a
+ * per-call `timeout` nor a tool-level default. Without this, a hung command (a stray
+ * dev server, an interactive prompt) would block the channel's run queue until `/stop`.
+ * Callers that legitimately need longer must pass an explicit `timeout`.
  */
-function getTempFilePath(): string {
+export const DEFAULT_BASH_TIMEOUT_SECONDS = 300;
+
+/**
+ * Generate a unique spill file path for full bash output. This lives inside the
+ * executor's filesystem (the sandbox), not the host, so the path we report back is
+ * reachable by the same `read`/`bash` tools the model uses to open it. `/tmp` exists
+ * and is writable in both the host and Docker (Alpine) sandboxes.
+ */
+function getSpillFilePath(): string {
 	const id = randomBytes(8).toString("hex");
-	return join(tmpdir(), `pipiclaw-bash-${id}.log`);
+	return `/tmp/pipiclaw-bash-${id}.log`;
 }
 
 const bashSchema = Type.Object({
 	label: Type.String({ description: "Brief description of what this command does (shown to user)" }),
 	command: Type.String({ description: "Bash command to execute" }),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	timeout: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			description: `Timeout in seconds. Defaults to ${DEFAULT_BASH_TIMEOUT_SECONDS}s; pass a larger value for long-running commands.`,
+		}),
+	),
 });
 
 interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	exitCode?: number;
 }
 
 export interface BashToolOptions {
@@ -61,7 +76,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+		description: `Execute a bash command in the current working directory. Returns stdout, stderr, and the exit code (a non-zero exit code is reported in the output, not raised as an error). Output is truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, the full output is saved to a temp file whose path is included. Commands time out after ${DEFAULT_BASH_TIMEOUT_SECONDS}s unless you pass a larger \`timeout\`.`,
 		parameters: bashSchema,
 		execute: async (
 			_toolCallId: string,
@@ -87,11 +102,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				}
 			}
 
-			// Track output for potential temp file writing
-			let tempFilePath: string | undefined;
-			let tempFileStream: ReturnType<typeof createWriteStream> | undefined;
-
-			const effectiveTimeout = timeout ?? options.defaultTimeoutSeconds;
+			const effectiveTimeout = timeout ?? options.defaultTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS;
 			const result = await executor.exec(command, { timeout: effectiveTimeout, signal });
 			let output = "";
 			if (result.stdout) output += result.stdout;
@@ -102,12 +113,23 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 
 			const totalBytes = Buffer.byteLength(output, "utf-8");
 
-			// Write to temp file if output exceeds limit
+			// Spill the full output to a temp file (inside the executor's filesystem, so the
+			// reported path is reachable by the model) when it exceeds the inline limit.
+			// Best-effort: if the write fails, we simply omit the path hint from the notice.
+			let tempFilePath: string | undefined;
 			if (totalBytes > DEFAULT_MAX_BYTES) {
-				tempFilePath = getTempFilePath();
-				tempFileStream = createWriteStream(tempFilePath);
-				tempFileStream.write(output);
-				tempFileStream.end();
+				const candidatePath = getSpillFilePath();
+				try {
+					const spillResult = await executor.exec(`cat > ${shellEscapePath(candidatePath)}`, {
+						signal,
+						stdin: output,
+					});
+					if (spillResult.code === 0) {
+						tempFilePath = candidatePath;
+					}
+				} catch {
+					// Ignore spill failures; the truncated output is still returned.
+				}
 			}
 
 			// Apply tail truncation
@@ -126,20 +148,25 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				// Build actionable notice
 				const startLine = truncation.totalLines - truncation.outputLines + 1;
 				const endLine = truncation.totalLines;
+				const fullOutputHint = tempFilePath ? ` Full output: ${tempFilePath}` : "";
 
 				if (truncation.lastLinePartial) {
 					// Edge case: last line alone > 50KB
 					const lastLineSize = formatSize(Buffer.byteLength(output.split("\n").pop() || "", "utf-8"));
-					outputText += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${tempFilePath}]`;
+					outputText += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}).${fullOutputHint}]`;
 				} else if (truncation.truncatedBy === "lines") {
-					outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${tempFilePath}]`;
+					outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}.${fullOutputHint}]`;
 				} else {
-					outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${tempFilePath}]`;
+					outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit).${fullOutputHint}]`;
 				}
 			}
 
+			// A non-zero exit code is a normal result, not a tool failure: commands like
+			// `grep` (no match), `diff` (differences), and `test` use exit codes as data.
+			// Report the code inline so the model can react without treating it as an error.
 			if (result.code !== 0) {
-				throw new Error(`${outputText}\n\nCommand exited with code ${result.code}`.trim());
+				outputText += `\n\nExit code: ${result.code}`;
+				details = { ...details, exitCode: result.code };
 			}
 
 			return { content: [{ type: "text", text: outputText }], details };

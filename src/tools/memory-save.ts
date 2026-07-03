@@ -11,10 +11,16 @@ const memorySaveSchema = Type.Object({
 			"The durable fact to remember, as a single self-contained, keyword-rich sentence. Write it so future keyword search can find it.",
 	}),
 	kind: Type.Optional(
-		Type.String({
-			description:
-				'What kind of durable memory this is: "preference", "fact", "decision", "constraint", or "open-loop".',
-		}),
+		Type.Union(
+			[
+				Type.Literal("preference"),
+				Type.Literal("fact"),
+				Type.Literal("decision"),
+				Type.Literal("constraint"),
+				Type.Literal("open-loop"),
+			],
+			{ description: "What kind of durable memory this is." },
+		),
 	),
 });
 

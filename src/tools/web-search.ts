@@ -8,7 +8,9 @@ import type { PipiclawWebToolsConfig } from "./config.js";
 const webSearchSchema = Type.Object({
 	label: Type.String({ description: "Brief description of what you're searching for and why (shown to user)" }),
 	query: Type.String({ description: "Search query" }),
-	count: Type.Optional(Type.Number({ description: "Maximum number of results to return (1-10)" })),
+	count: Type.Optional(
+		Type.Integer({ minimum: 1, maximum: 10, description: "Maximum number of results to return (1-10)" }),
+	),
 });
 
 export interface WebSearchToolOptions {

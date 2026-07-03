@@ -13,7 +13,9 @@ import {
 
 const skillManageSchema = Type.Object({
 	label: Type.String({ description: "Brief description of the skill management change (shown to user)" }),
-	action: Type.String({ description: 'Supported actions: "create", "patch", or "write_file".' }),
+	action: Type.Union([Type.Literal("create"), Type.Literal("patch"), Type.Literal("write_file")], {
+		description: 'The skill management action to perform: "create", "patch", or "write_file".',
+	}),
 	name: Type.String({ description: "Workspace skill name" }),
 	content: Type.Optional(Type.String({ description: "Full content for create/write_file." })),
 	filePath: Type.Optional(

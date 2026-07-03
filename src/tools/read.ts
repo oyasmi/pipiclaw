@@ -32,8 +32,8 @@ function isImageFile(filePath: string): string | null {
 const readSchema = Type.Object({
 	label: Type.String({ description: "Brief description of what you're reading and why (shown to user)" }),
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
-	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
-	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+	offset: Type.Optional(Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum number of lines to read" })),
 });
 
 interface ReadToolDetails {

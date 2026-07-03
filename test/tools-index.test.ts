@@ -109,7 +109,50 @@ vi.mock("../src/subagents/tool.js", () => ({ createSubAgentTool: createSubAgentT
 vi.mock("../src/security/config.js", () => ({ loadSecurityConfig: vi.fn(() => securityConfig) }));
 vi.mock("../src/tools/config.js", () => ({ loadToolsConfig: vi.fn(() => toolsConfig) }));
 
+import { buildAppendSystemPrompt } from "../src/agent/prompt-builder.js";
 import { createPipiclawBaseTools, createPipiclawTools } from "../src/tools/index.js";
+
+const ALL_TOOL_NAMES = [
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"web_search",
+	"web_fetch",
+	"session_search",
+	"memory_save",
+	"skill_list",
+	"skill_view",
+	"skill_manage",
+	"subagent",
+];
+
+const baseToolOptions = {
+	getCurrentModel: vi.fn(),
+	getAvailableModels: vi.fn(() => []),
+	resolveApiKey: vi.fn(),
+	workspaceDir: "/repo",
+	channelDir: "/repo/dm_42",
+	workspacePath: "/workspace",
+	channelId: "dm_42",
+	sandboxConfig: { type: "host" as const },
+	getSubAgentDiscovery: vi.fn(),
+	getMemoryRecallSettings: vi.fn(() => ({
+		enabled: true,
+		maxCandidates: 8,
+		maxInjected: 3,
+		maxChars: 3500,
+		rerankWithModel: false,
+	})),
+	getSessionSearchSettings: vi.fn(() => ({
+		enabled: true,
+		maxFiles: 12,
+		maxChunks: 80,
+		maxCharsPerChunk: 1200,
+		summarizeWithModel: false,
+		timeoutMs: 12000,
+	})),
+};
 
 const executor: Executor = {
 	exec: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -227,6 +270,40 @@ describe("tools index", () => {
 		expect(createEditToolMock).toHaveBeenCalledWith(executor, undefined);
 		expect(createWriteToolMock).toHaveBeenCalledWith(executor, undefined);
 		expect(tools.map((tool) => tool.name)).toEqual(["read", "bash", "edit", "write"]);
+	});
+
+	it("keeps the system prompt tool list in sync with the registered tools", () => {
+		// Web tools disabled: they must vanish from BOTH the registered set and the prompt.
+		toolsConfig.tools.web.enable = false;
+		const tools = createPipiclawTools({
+			...baseToolOptions,
+			executor,
+			memoryCandidateStore: createMemoryCandidateStore(),
+		});
+		const registered = new Set(tools.map((tool) => tool.name));
+		const prompt = buildAppendSystemPrompt(
+			"/workspace",
+			"dm_42",
+			{ type: "host" },
+			{
+				tools: tools.map((tool) => ({ name: tool.name, description: "" })),
+			},
+		);
+
+		for (const name of ALL_TOOL_NAMES) {
+			const line = `- ${name}:`;
+			if (registered.has(name)) {
+				expect(prompt).toContain(line);
+			} else {
+				expect(prompt).not.toContain(line);
+			}
+		}
+		// Concrete drift assertions for the previously-broken cases.
+		expect(registered.has("web_search")).toBe(false);
+		expect(prompt).not.toContain("return untrusted external content");
+		expect(registered.has("memory_save")).toBe(true);
+		expect(prompt).toContain("- memory_save:");
+		toolsConfig.tools.web.enable = true;
 	});
 
 	it("appends the subagent tool and maps sandbox runtime context", () => {

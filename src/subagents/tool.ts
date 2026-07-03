@@ -52,12 +52,13 @@ const subagentSchema = Type.Object({
 		Type.Number({ description: "Optional default timeout in seconds for bash commands inside this sub-agent" }),
 	),
 	contextMode: Type.Optional(
-		Type.String({
-			description: 'Optional context mode. Use "contextual" to inject selected session and memory context.',
+		Type.Union([Type.Literal("isolated"), Type.Literal("contextual")], {
+			description:
+				'Optional context mode. "isolated" (default) runs with no injected context; "contextual" injects selected session and memory context.',
 		}),
 	),
 	memory: Type.Optional(
-		Type.String({
+		Type.Union([Type.Literal("none"), Type.Literal("session"), Type.Literal("relevant")], {
 			description: 'Optional memory mode for contextual sub-agents: "none", "session", or "relevant".',
 		}),
 	),

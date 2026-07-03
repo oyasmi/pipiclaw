@@ -34,4 +34,71 @@ describe("prompt-builder", () => {
 		expect(prompt).toContain("prefer SESSION.md first for current state");
 		expect(prompt).toContain("group_456");
 	});
+
+	it("renders only the tools actually registered, gating their instructions", () => {
+		// A minimal set with no web tools, no session_search, no subagent.
+		const prompt = buildAppendSystemPrompt(
+			"/workspace/root",
+			"dm_1",
+			{ type: "host" },
+			{
+				tools: [
+					{ name: "read", description: "Read files" },
+					{ name: "bash", description: "Run shell commands" },
+					{ name: "memory_save", description: "Save a durable fact" },
+				],
+			},
+		);
+
+		// Tools section lists exactly the registered tools.
+		expect(prompt).toContain("- read:");
+		expect(prompt).toContain("- bash:");
+		expect(prompt).toContain("- memory_save:");
+		expect(prompt).not.toContain("- web_search:");
+		expect(prompt).not.toContain("- web_fetch:");
+		expect(prompt).not.toContain("- session_search:");
+		expect(prompt).not.toContain("- subagent:");
+
+		// Tool-specific instructions follow the same source of truth.
+		expect(prompt).toContain("call memory_save right away"); // memory_save present
+		expect(prompt).not.toContain("return untrusted external content"); // web-safety gated
+		expect(prompt).not.toContain("Use session_search only when"); // session_search gated
+		expect(prompt).not.toContain("## Sub-Agents"); // subagent gated
+	});
+
+	it("advertises web and subagent instructions when those tools are registered", () => {
+		const prompt = buildAppendSystemPrompt(
+			"/workspace/root",
+			"dm_2",
+			{ type: "host" },
+			{
+				tools: [
+					{ name: "read", description: "Read files" },
+					{ name: "web_search", description: "Search the web" },
+					{ name: "session_search", description: "Search transcripts" },
+					{ name: "subagent", description: "Delegate" },
+				],
+			},
+		);
+
+		expect(prompt).toContain("- web_search:");
+		expect(prompt).toContain("return untrusted external content");
+		expect(prompt).toContain("Use session_search only when");
+		expect(prompt).toContain("## Sub-Agents");
+		// memory_save was not registered, so its instruction must be absent.
+		expect(prompt).not.toContain("call memory_save right away");
+	});
+
+	it("falls back to a tool's own description for unknown tool names", () => {
+		const prompt = buildAppendSystemPrompt(
+			"/workspace/root",
+			"dm_3",
+			{ type: "host" },
+			{
+				tools: [{ name: "custom_tool", description: "Does a custom thing. More detail here." }],
+			},
+		);
+
+		expect(prompt).toContain("- custom_tool: Does a custom thing.");
+	});
 });

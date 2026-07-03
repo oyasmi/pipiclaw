@@ -114,6 +114,7 @@ export class ChannelRunner implements AgentRunner {
 	// --- Mutable across runs ---
 	private activeModel: Model<Api>;
 	private currentSkills: Skill[];
+	private currentTools: AgentTool<any>[] = [];
 	private firstTurnMemoryBootstrapPending = true;
 	private acceptingBusyMessages = false;
 	private agentLoopStarted = false;
@@ -702,6 +703,7 @@ export class ChannelRunner implements AgentRunner {
 				sections.push(
 					buildAppendSystemPrompt(this.workspacePath, this.channelId, this.sandboxConfig, {
 						subAgentList: formatSubAgentList(this.subAgentDiscovery.agents),
+						tools: this.currentTools.map((tool) => ({ name: tool.name, description: tool.description })),
 					}),
 				);
 				return sections;
@@ -773,7 +775,7 @@ export class ChannelRunner implements AgentRunner {
 		const toolsLoad = loadToolsConfigWithDiagnostics(APP_HOME_DIR);
 		this.reportConfigDiagnostics([...securityLoad.diagnostics, ...toolsLoad.diagnostics]);
 
-		return createPipiclawTools({
+		const tools = createPipiclawTools({
 			executor: this.executor,
 			getCurrentModel: () => this.activeModel,
 			getAvailableModels: () => this.modelRegistry.getAvailable(),
@@ -790,14 +792,32 @@ export class ChannelRunner implements AgentRunner {
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
 		});
+		this.currentTools = tools;
+		return tools;
 	}
 
 	private rebuildSessionTools(): void {
 		const tools = this.buildRuntimeTools();
-		(this.session as unknown as { _baseToolsOverride?: Record<string, AgentTool<any>> })._baseToolsOverride =
-			Object.fromEntries(tools.map((tool) => [tool.name, tool]));
+		this.setSessionBaseToolsOverride(tools);
 		this.agent.state.tools = tools;
 		this.session.setActiveToolsByName(tools.map((tool) => tool.name));
+	}
+
+	/**
+	 * Overwrite the SDK session's `baseToolsOverride` map so a resource reload swaps in
+	 * freshly-built tools. The SDK exposes no public setter for this, so we reach into the
+	 * private `_baseToolsOverride` field. This is the single, isolated point of that coupling:
+	 * if a future SDK renames or removes the field, the guard below warns loudly instead of
+	 * silently leaving stale tools in place. Replace with a public setter once upstream adds one.
+	 */
+	private setSessionBaseToolsOverride(tools: AgentTool<any>[]): void {
+		const target = this.session as unknown as { _baseToolsOverride?: Record<string, AgentTool<any>> };
+		if (!("_baseToolsOverride" in target)) {
+			log.logWarning(
+				`[${this.channelId}] AgentSession no longer exposes _baseToolsOverride; tool reloads may use stale tools (SDK change?)`,
+			);
+		}
+		target._baseToolsOverride = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
 	}
 
 	// === Session event subscription ===

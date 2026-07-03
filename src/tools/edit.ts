@@ -97,6 +97,12 @@ const editSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
 	oldText: Type.String({ description: "Exact text to find and replace (must match exactly)" }),
 	newText: Type.String({ description: "New text to replace the old text with" }),
+	replaceAll: Type.Optional(
+		Type.Boolean({
+			description:
+				"Replace every occurrence instead of requiring a unique match. Defaults to false (the match must be unique).",
+		}),
+	),
 });
 
 export interface EditToolOptions {
@@ -132,7 +138,12 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 		parameters: editSchema,
 		execute: async (
 			_toolCallId: string,
-			{ path, oldText, newText }: { label: string; path: string; oldText: string; newText: string },
+			{
+				path,
+				oldText,
+				newText,
+				replaceAll,
+			}: { label: string; path: string; oldText: string; newText: string; replaceAll?: boolean },
 			signal?: AbortSignal,
 		) => {
 			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
@@ -170,15 +181,20 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 			// Count occurrences
 			const occurrences = content.split(oldText).length - 1;
 
-			if (occurrences > 1) {
+			if (occurrences > 1 && !replaceAll) {
 				throw new Error(
-					`Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`,
+					`Found ${occurrences} occurrences of the text in ${path}. The text must be unique, or pass replaceAll: true to replace all of them. Please provide more context to make it unique.`,
 				);
 			}
 
 			// Perform replacement
-			const index = content.indexOf(oldText);
-			const newContent = content.substring(0, index) + newText + content.substring(index + oldText.length);
+			let newContent: string;
+			if (replaceAll) {
+				newContent = content.split(oldText).join(newText);
+			} else {
+				const index = content.indexOf(oldText);
+				newContent = content.substring(0, index) + newText + content.substring(index + oldText.length);
+			}
 
 			if (content === newContent) {
 				throw new Error(
@@ -194,13 +210,12 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 				toolName: "edit",
 			});
 
+			const replacementSummary = replaceAll
+				? `Replaced ${occurrences} occurrence${occurrences === 1 ? "" : "s"} in ${path}.`
+				: `Successfully replaced text in ${path}. Changed ${oldText.length} characters to ${newText.length} characters.`;
+
 			return {
-				content: [
-					{
-						type: "text",
-						text: `Successfully replaced text in ${path}. Changed ${oldText.length} characters to ${newText.length} characters.`,
-					},
-				],
+				content: [{ type: "text", text: replacementSummary }],
 				details: {
 					diff: generateDiffString(content, newContent),
 					patch: Diff.createPatch(path, content, newContent),

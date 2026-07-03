@@ -52,6 +52,35 @@ describe("edit tool", () => {
 		});
 	});
 
+	it("replaces every occurrence when replaceAll is set", async () => {
+		const executor = new ScriptedExecutor([
+			{ code: 0, stdout: "a\nfoo\nfoo\nb\n", stderr: "" },
+			{ code: 0, stdout: "", stderr: "" },
+		]);
+		const tool = createEditTool(executor);
+
+		const result = await tool.execute("call", {
+			label: "edit file",
+			path: "notes.txt",
+			oldText: "foo",
+			newText: "bar",
+			replaceAll: true,
+		});
+
+		expect(executor.calls[1].options?.stdin).toBe("a\nbar\nbar\nb\n");
+		expect(result.content[0]).toMatchObject({
+			type: "text",
+			text: "Replaced 2 occurrences in notes.txt.",
+		});
+	});
+
+	it("rejects duplicate matches unless replaceAll is set", async () => {
+		const tool = createEditTool(new ScriptedExecutor([{ code: 0, stdout: "foo\nfoo\n", stderr: "" }]));
+		await expect(
+			tool.execute("call", { label: "edit file", path: "notes.txt", oldText: "foo", newText: "bar" }),
+		).rejects.toThrow("pass replaceAll: true");
+	});
+
 	it("fails when the file cannot be read", async () => {
 		const executor = new ScriptedExecutor([{ code: 1, stdout: "", stderr: "missing file" }]);
 		const tool = createEditTool(executor);
