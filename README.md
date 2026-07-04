@@ -33,7 +33,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 Pipiclaw 当前已经内置一轮工具层安全增强：
 
 - `bash` 会拦截明显高风险命令
-- `read` / `write` / `edit` / `attach` 会做统一路径检查
+- `read` / `write` / `edit` 会做统一路径检查
 - 默认允许访问用户主目录中的普通工作文件，但会拒绝常见凭据、私钥、浏览器资料、系统敏感文件等位置
 - 可通过 `~/.pi/pipiclaw/security.json` 做实例级策略调整
 

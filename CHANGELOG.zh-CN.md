@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [0.7.0-beta.1] - 2026-07-04
+
+### 新增
+
+- `edit` 工具新增 `replaceAll` 选项，可替换目标文本的全部匹配，而不再要求匹配唯一。
+
+### 变更
+
+- `bash` 现在把非零退出码作为正常结果内联返回（附带退出码），而不再抛出错误，因此 `grep`、`diff`、`test` 等命令的退出码被当作数据而非工具故障。
+- 收紧工具输入 schema：为 `skill_manage.action`、`subagent.contextMode`/`memory`、`memory_save.kind`、`session_search.roleFilter` 增加 enum 约束，为 `read`、`web_search`、`session_search`、`bash` 的数值参数增加整数边界，使非法值在生成阶段就被拒绝，而不是执行时才失败。
+- `skill_view` 现在返回原始文件内容并按共享截断上限封顶，而不再是无上限、被 JSON 转义的文本；`skill_list` 和 `session_search` 改为输出紧凑 JSON。
+- 围绕声明式工具注册表（`src/tools/registry.ts`）重构工具层：主工具集、子代理工具集和系统提示词的工具说明现在都从同一来源派生，而不再是三份手工维护的清单。
+
+### 移除
+
+- 移除未使用的 `attach` 工具；它从未被注册，且在 DingTalk 模式下不受支持。
+
+### 修复
+
+- 系统提示词不再与实际工具集漂移。在默认配置下（web 工具关闭），此前提示词会宣传未注册的 `web_search`/`web_fetch`，同时漏掉已注册的 `memory_save`。现在 `## Tools` 段落及每条工具相关指引都从本次会话实际注册的工具生成。
+- `bash` 截断输出的落盘文件现在经 executor 写入沙箱内部，因此提示中的“full output”路径在 Docker 沙箱下对 `read`/`bash` 可达（此前是模型无法打开的宿主机临时路径）；同时移除了未 await 的写入流。
+- `bash` 现在在未指定超时时应用 300 秒默认超时，因此永不返回的命令不会再把频道的 run queue 堵到用户 `/stop`。
+
+### 开发
+
+- 新增 spec `015-tool-registry`，记录注册表设计及推迟的后续项（工具中间件/遥测管道、`tools.json` schema 化、MCP 客户端、`read` 行号 / Read-before-Edit）。
+- 新增契约测试：跨层校验注册工具集与提示词工具清单保持一致，以及工具注册表测试（名字唯一、hint 覆盖、主集/子集派生、config 门控）。
+
 ## [0.6.10] - 2026-07-03
 
 ### 新增

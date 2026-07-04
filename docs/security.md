@@ -15,7 +15,7 @@ Pipiclaw 的安全控制目前主要分成两层：
    作用于 `bash` 工具，拦截明显高风险的命令
 
 2. 路径防护（path guard）
-   作用于 `read` / `write` / `edit` / `attach` 等显式文件工具，统一判断路径是否允许访问
+   作用于 `read` / `write` / `edit` 等显式文件工具，统一判断路径是否允许访问
 
 这套防护的目标不是把 Pipiclaw 变成强隔离沙箱，而是在保留日常可用性的前提下，把最常见、最危险的误操作和越权访问挡在工具层外面，而不是只靠 prompt 提示。
 
@@ -125,20 +125,6 @@ $PIPICLAW_HOME/security.json
 
 - 私钥扩展名：`.pem`、`.key`、`.p12`、`.pfx`
 - 文件名关键词：`id_rsa`、`id_ed25519`、`private`、`secret`、`credentials`
-
-### 4. `attach` 比普通读取更严格
-
-即使主目录中的某些文件可以被 `read`，`attach` 也不会因此自动允许对外发送。
-
-当前实现里：
-
-- `attach` 先走正常路径守卫
-- 然后再额外要求文件必须位于 workspace 内
-
-这意味着：
-
-- 普通 `read` 可以读主目录中的普通工作文件
-- 但 `attach` 默认只能上传 workspace 内的文件
 
 ## 配置文件示例（Example `~/.pi/pipiclaw/security.json`）
 

@@ -4,6 +4,34 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.7.0-beta.1] - 2026-07-04
+
+### Added
+
+- `edit` gains a `replaceAll` option to replace every occurrence of the target text instead of requiring a unique match.
+
+### Changed
+
+- `bash` now reports a non-zero exit code inline as a normal result instead of raising it as an error, so exit codes from `grep`, `diff`, and `test` are treated as data rather than tool failures.
+- Tightened tool input schemas with enum and integer constraints (`skill_manage.action`, `subagent.contextMode`/`memory`, `memory_save.kind`, `session_search.roleFilter`, and the numeric parameters of `read`, `web_search`, `session_search`, and `bash`), so invalid values are rejected at generation time instead of failing during execution.
+- `skill_view` now returns raw file content capped by the shared truncation limits instead of unbounded, JSON-escaped text; `skill_list` and `session_search` emit compact JSON.
+- Reworked the tool layer around a declarative registry (`src/tools/registry.ts`): the main tool set, the sub-agent tool set, and the system-prompt tool hints are now derived from one source instead of three hand-maintained lists.
+
+### Removed
+
+- Removed the unused `attach` tool; it was never registered and was unsupported in DingTalk mode.
+
+### Fixed
+
+- The system prompt no longer drifts from the actual tool set. With the default config (web tools off) it previously advertised `web_search`/`web_fetch` that were not registered, and it omitted the registered `memory_save`. The `## Tools` section and every tool-specific instruction are now generated from the tools actually registered for the session.
+- `bash` truncated-output spill files are now written inside the sandbox through the executor, so the reported "full output" path is reachable by `read`/`bash` under the Docker sandbox (previously a host temp path the model could not open); the un-awaited write stream was also removed.
+- `bash` now applies a default 300s timeout when none is provided, so a command that never returns can no longer wedge the channel's run queue until `/stop`.
+
+### Development
+
+- Added spec `015-tool-registry` documenting the registry design and deferred follow-ups (tool middleware/telemetry pipeline, `tools.json` schema-ization, MCP client, `read` line numbers / Read-before-Edit).
+- Added contract tests: a cross-layer check keeping the registered tool set and the prompt's tool list in sync, and a tool-registry test covering name uniqueness, hint coverage, main vs sub-agent derivation, and config gating.
+
 ## [0.6.10] - 2026-07-03
 
 ### Added
