@@ -1,9 +1,102 @@
 import { styleText } from "node:util";
+import { RUNTIME_LOG_PATH } from "./paths.js";
+import { createJsonlAppender, type JsonlAppender } from "./shared/jsonl-appender.js";
 
 export interface LogContext {
 	channelId: string;
 	userName?: string;
 	channelName?: string;
+}
+
+// ============================================================================
+// Structured log sink layer
+//
+// The console sink below is the human-readable output and is treated as a
+// frozen asset: its formatting must never change. Each logX helper additionally
+// assembles a structured LogRecord and hands it to an optional file sink. Call
+// sites stay untouched — the structure is built here from existing parameters.
+// ============================================================================
+
+export type LogLevel = "debug" | "info" | "warn" | "error";
+
+export interface LogRecord {
+	ts: string; // ISO 8601 (UTC)
+	level: LogLevel;
+	event: string;
+	channelId?: string;
+	userName?: string;
+	message: string;
+	details?: string;
+	fields?: Record<string, unknown>;
+}
+
+export interface LoggingConfig {
+	level: LogLevel;
+	file: { enabled: boolean; maxSizeBytes: number; maxFiles: number };
+}
+
+const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+function readEnvLevel(): LogLevel | undefined {
+	const raw = process.env.PIPICLAW_LOG_LEVEL?.trim().toLowerCase();
+	if (raw && raw in LEVEL_ORDER) {
+		return raw as LogLevel;
+	}
+	return undefined;
+}
+
+function readEnvFileEnabled(): boolean | undefined {
+	const raw = process.env.PIPICLAW_LOG_FILE?.trim();
+	if (raw === "1" || raw === "true") return true;
+	if (raw === "0" || raw === "false") return false;
+	return undefined;
+}
+
+const envLevel = readEnvLevel();
+const envFileEnabled = readEnvFileEnabled();
+
+let thresholdLevel: LogLevel = envLevel ?? "info";
+let fileSink: JsonlAppender | null =
+	// Honor an explicit env opt-in even before settings are loaded, so the
+	// earliest startup logs are captured. Defaults match DEFAULT_LOGGING.
+	envFileEnabled === true
+		? createJsonlAppender({ path: RUNTIME_LOG_PATH, maxSizeBytes: 5_000_000, maxRotations: 3 })
+		: null;
+
+/**
+ * Configure the file sink from loaded settings. Env vars take precedence and
+ * have already applied at module load; this reconciles the two.
+ */
+export function configureLogging(config: LoggingConfig): void {
+	thresholdLevel = envLevel ?? config.level;
+	const enabled = envFileEnabled ?? config.file.enabled;
+	fileSink = enabled
+		? createJsonlAppender({
+				path: RUNTIME_LOG_PATH,
+				maxSizeBytes: config.file.maxSizeBytes,
+				maxRotations: config.file.maxFiles,
+			})
+		: null;
+}
+
+function emit(
+	level: LogLevel,
+	event: string,
+	message: string,
+	extra?: { ctx?: LogContext; details?: string; fields?: Record<string, unknown> },
+): void {
+	if (!fileSink) return;
+	if (LEVEL_ORDER[level] < LEVEL_ORDER[thresholdLevel]) return;
+	const record: LogRecord = {
+		ts: new Date().toISOString(),
+		level,
+		event,
+		message,
+		...(extra?.ctx ? { channelId: extra.ctx.channelId, userName: extra.ctx.userName } : {}),
+		...(extra?.details ? { details: extra.details } : {}),
+		...(extra?.fields ? { fields: extra.fields } : {}),
+	};
+	void fileSink.append(record);
 }
 
 function color(style: Parameters<typeof styleText>[0], text: string): string {
@@ -66,6 +159,7 @@ function formatToolArgs(args: Record<string, unknown>): string {
 // User messages
 export function logUserMessage(ctx: LogContext, text: string): void {
 	console.log(color("green", `${timestamp()} ${formatContext(ctx)} ${text}`));
+	emit("info", "user_message", text, { ctx });
 }
 
 // Tool execution
@@ -79,6 +173,11 @@ export function logToolStart(ctx: LogContext, toolName: string, label: string, a
 			.join("\n");
 		console.log(color("dim", indented));
 	}
+	emit("debug", "tool_start", `${toolName}: ${label}`, {
+		ctx,
+		details: formattedArgs || undefined,
+		fields: { toolName, label },
+	});
 }
 
 export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: number, result: string): void {
@@ -93,6 +192,11 @@ export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: nu
 			.join("\n");
 		console.log(color("dim", indented));
 	}
+	emit("info", "tool_end", toolName, {
+		ctx,
+		details: truncated || undefined,
+		fields: { toolName, durationMs, isError: false },
+	});
 }
 
 export function logToolError(ctx: LogContext, toolName: string, durationMs: number, error: string): void {
@@ -105,11 +209,17 @@ export function logToolError(ctx: LogContext, toolName: string, durationMs: numb
 		.map((line) => `           ${line}`)
 		.join("\n");
 	console.log(color("dim", indented));
+	emit("error", "tool_end", toolName, {
+		ctx,
+		details: truncated,
+		fields: { toolName, durationMs, isError: true },
+	});
 }
 
 // Response streaming
 export function logResponseStart(ctx: LogContext): void {
 	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} → Streaming response...`));
+	emit("debug", "response_start", "Streaming response...", { ctx });
 }
 
 export function logThinking(ctx: LogContext, thinking: string): void {
@@ -120,6 +230,7 @@ export function logThinking(ctx: LogContext, thinking: string): void {
 		.map((line) => `           ${line}`)
 		.join("\n");
 	console.log(color("dim", indented));
+	emit("debug", "thinking", "Thinking", { ctx, details: truncated });
 }
 
 export function logResponse(ctx: LogContext, text: string): void {
@@ -130,11 +241,13 @@ export function logResponse(ctx: LogContext, text: string): void {
 		.map((line) => `           ${line}`)
 		.join("\n");
 	console.log(color("dim", indented));
+	emit("info", "response", "Response", { ctx, details: truncated });
 }
 
 // System
 export function logInfo(message: string): void {
 	console.log(color("blue", `${timestamp()} [system] ${message}`));
+	emit("info", "system", message);
 }
 
 export function logWarning(message: string, details?: string): void {
@@ -146,6 +259,7 @@ export function logWarning(message: string, details?: string): void {
 			.join("\n");
 		console.log(color("dim", indented));
 	}
+	emit("warn", "system", message, { details });
 }
 
 export function logAgentError(ctx: LogContext | "system", error: string): void {
@@ -156,6 +270,10 @@ export function logAgentError(ctx: LogContext | "system", error: string): void {
 		.map((line) => `           ${line}`)
 		.join("\n");
 	console.log(color("dim", indented));
+	emit("error", "agent_error", "Agent error", {
+		ctx: ctx === "system" ? undefined : ctx,
+		details: error,
+	});
 }
 
 // Usage summary
@@ -194,7 +312,7 @@ export function logUsageSummary(
 				? `, $${usage.cost.cacheRead.toFixed(4)} cache read, $${usage.cost.cacheWrite.toFixed(4)} cache write`
 				: ""),
 	);
-	lines.push(`**Total: $${usage.cost.total.toFixed(4)}**`);
+	lines.push(`**Total: $${usage.cost.total.toFixed(4)}** (incl. sub-agents)`);
 
 	const summary = lines.join("\n");
 
@@ -210,6 +328,18 @@ export function logUsageSummary(
 				` = $${usage.cost.total.toFixed(4)}`,
 		),
 	);
+	emit("info", "usage", `Total $${usage.cost.total.toFixed(4)} (incl. sub-agents)`, {
+		ctx,
+		fields: {
+			usage: {
+				input: usage.input,
+				output: usage.output,
+				cacheRead: usage.cacheRead,
+				cacheWrite: usage.cacheWrite,
+				cost: usage.cost,
+			},
+		},
+	});
 
 	return summary;
 }

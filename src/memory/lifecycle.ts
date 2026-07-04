@@ -54,6 +54,7 @@ export class MemoryLifecycle {
 
 	private buildRunOptions(messages?: AgentMessage[], sessionEntries?: SessionEntry[]): ConsolidationRunOptions {
 		return {
+			channelId: this.options.channelId,
 			channelDir: this.options.channelDir,
 			model: this.options.getModel(),
 			resolveApiKey: this.options.resolveApiKey,
@@ -146,6 +147,7 @@ export class MemoryLifecycle {
 		const { reason } = request;
 		try {
 			await updateChannelSessionMemory({
+				channelId: this.options.channelId,
 				channelDir: this.options.channelDir,
 				messages: request.messages ?? this.options.getMessages(),
 				model: this.options.getModel(),

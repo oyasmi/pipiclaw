@@ -6,6 +6,7 @@ import { extractLabelFromArgs, truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import type { SubAgentToolDetails } from "../subagents/tool.js";
+import type { UsageLedger } from "../usage/ledger.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
 import {
 	extractCustomCommandResultText,
@@ -33,6 +34,7 @@ export interface SessionEventHandlerContext {
 	store: ChannelStore | null;
 	runState: RunState;
 	memoryLifecycle: MemoryLifecycle;
+	ledger: UsageLedger;
 	refreshSessionResources?: () => Promise<void>;
 }
 
@@ -57,6 +59,30 @@ function mergeSubAgentUsage(totalUsage: UsageTotals, details: SubAgentToolDetail
 	totalUsage.cost.total += details.usage.cost.total;
 }
 
+function addUsage(
+	target: UsageTotals,
+	usage: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total?: number;
+		totalTokens?: number;
+		cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+	},
+): void {
+	target.input += usage.input;
+	target.output += usage.output;
+	target.cacheRead += usage.cacheRead;
+	target.cacheWrite += usage.cacheWrite;
+	target.total += usage.total ?? usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+	target.cost.input += usage.cost.input;
+	target.cost.output += usage.cost.output;
+	target.cost.cacheRead += usage.cost.cacheRead;
+	target.cost.cacheWrite += usage.cost.cacheWrite;
+	target.cost.total += usage.cost.total;
+}
+
 function mergeAssistantUsage(
 	runState: RunState,
 	usage: NonNullable<Extract<unknown, unknown>> & {
@@ -69,21 +95,14 @@ function mergeAssistantUsage(
 		cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 	},
 ): void {
-	runState.totalUsage.input += usage.input;
-	runState.totalUsage.output += usage.output;
-	runState.totalUsage.cacheRead += usage.cacheRead;
-	runState.totalUsage.cacheWrite += usage.cacheWrite;
-	runState.totalUsage.total +=
-		usage.total ?? usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-	runState.totalUsage.cost.input += usage.cost.input;
-	runState.totalUsage.cost.output += usage.cost.output;
-	runState.totalUsage.cost.cacheRead += usage.cost.cacheRead;
-	runState.totalUsage.cost.cacheWrite += usage.cost.cacheWrite;
-	runState.totalUsage.cost.total += usage.cost.total;
+	// totalUsage stays the console-summary tally (assistant + sub-agents).
+	// assistantUsage is the ledger's assistant-only "turn" tally.
+	addUsage(runState.totalUsage, usage);
+	addUsage(runState.assistantUsage, usage);
 }
 
 export async function handleSessionEvent(event: unknown, context: SessionEventHandlerContext): Promise<void> {
-	const { ctx, logCtx, queue, pendingTools, store, runState, memoryLifecycle } = context;
+	const { ctx, logCtx, queue, pendingTools, store, runState, memoryLifecycle, ledger } = context;
 	const showProgress = ctx.progressStyle !== "none";
 	const finalToCard = ctx.finalDelivery === "card";
 
@@ -141,6 +160,20 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 				typeof (pending.args as { label?: unknown }).label === "string"
 					? ((pending.args as { label: string }).label ?? "subagent").trim()
 					: "subagent";
+			ledger.record({
+				channelId: logCtx.channelId,
+				kind: "subagent",
+				model: subAgentDetails.model,
+				label,
+				usage: {
+					input: subAgentDetails.usage.input,
+					output: subAgentDetails.usage.output,
+					cacheRead: subAgentDetails.usage.cacheRead,
+					cacheWrite: subAgentDetails.usage.cacheWrite,
+					total: subAgentDetails.usage.total,
+				},
+				cost: { ...subAgentDetails.usage.cost },
+			});
 			queue.enqueue(
 				() =>
 					store?.logSubAgentRun(logCtx.channelId, {

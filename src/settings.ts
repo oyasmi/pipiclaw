@@ -114,6 +114,15 @@ export interface PipiclawMemoryMaintenanceSettings {
 	cleanupShrinkGuardMinChars: number;
 }
 
+export interface PipiclawLoggingSettings {
+	level: "debug" | "info" | "warn" | "error";
+	file: {
+		enabled: boolean;
+		maxSizeBytes: number;
+		maxFiles: number;
+	};
+}
+
 export interface PipiclawSessionSearchSettings {
 	enabled: boolean;
 	maxFiles: number;
@@ -134,6 +143,7 @@ export interface PipiclawSettings {
 	memoryGrowth?: Partial<PipiclawMemoryGrowthSettings>;
 	memoryMaintenance?: Partial<PipiclawMemoryMaintenanceSettings>;
 	sessionSearch?: Partial<PipiclawSessionSearchSettings>;
+	logging?: Partial<Omit<PipiclawLoggingSettings, "file">> & { file?: Partial<PipiclawLoggingSettings["file"]> };
 }
 
 const DEFAULT_COMPACTION: PipiclawCompactionSettings = {
@@ -199,6 +209,17 @@ const DEFAULT_MEMORY_MAINTENANCE: PipiclawMemoryMaintenanceSettings = {
 	failureBackoffMinutes: 30,
 	cleanupShrinkGuardMinRatio: 0.4,
 	cleanupShrinkGuardMinChars: 2_000,
+};
+
+// `file.enabled` defaults to true: for a long-lived daemon, persisting logs is
+// worth more than the surprise of a new file under state/logs/. See docs.
+const DEFAULT_LOGGING: PipiclawLoggingSettings = {
+	level: "info",
+	file: {
+		enabled: true,
+		maxSizeBytes: 5_000_000,
+		maxFiles: 3,
+	},
 };
 
 /**
@@ -334,6 +355,17 @@ export class PipiclawSettingsManager {
 		return {
 			...DEFAULT_SESSION_SEARCH,
 			...this.settings.sessionSearch,
+		};
+	}
+
+	getLoggingSettings(): PipiclawLoggingSettings {
+		return {
+			...DEFAULT_LOGGING,
+			...this.settings.logging,
+			file: {
+				...DEFAULT_LOGGING.file,
+				...this.settings.logging?.file,
+			},
 		};
 	}
 

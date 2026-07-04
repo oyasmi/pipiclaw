@@ -60,6 +60,7 @@ export interface SessionMemoryState {
 }
 
 export interface SessionMemoryUpdateOptions {
+	channelId?: string;
 	channelDir: string;
 	messages: AgentMessage[];
 	model: Model<Api>;
@@ -312,6 +313,7 @@ export async function updateChannelSessionMemory(options: SessionMemoryUpdateOpt
 			prompt: buildSessionPrompt(currentSession, currentMemory, messages),
 			parse: parseStateUpdate,
 			timeoutMs: options.timeoutMs ?? DEFAULT_SESSION_MEMORY_TIMEOUT_MS,
+			usageContext: options.channelId ? { channelId: options.channelId } : undefined,
 		});
 		update = result.output;
 	} catch (error) {

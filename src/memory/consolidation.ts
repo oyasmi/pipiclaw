@@ -123,12 +123,17 @@ Goals:
 - Preserve a chronological narrative at a high level.`;
 
 export interface ConsolidationRunOptions {
+	channelId?: string;
 	channelDir: string;
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	messages: AgentMessage[];
 	sessionEntries?: SessionEntry[];
 	mode?: ConsolidationMode;
+}
+
+function usageContextFor(channelId: string | undefined): { channelId: string } | undefined {
+	return channelId ? { channelId } : undefined;
 }
 
 export interface InlineConsolidationResult {
@@ -272,6 +277,7 @@ async function runWorkerPrompt(
 	systemPrompt: string,
 	prompt: string,
 	timeoutMs: number,
+	usageContext?: { channelId: string },
 ): Promise<string> {
 	const result = await runSidecarTask({
 		name,
@@ -280,6 +286,7 @@ async function runWorkerPrompt(
 		systemPrompt,
 		prompt,
 		timeoutMs,
+		usageContext,
 		parse: (text) => text.trim(),
 	});
 	return result.output;
@@ -324,6 +331,7 @@ ${transcript || "(empty)"}`;
 			mode === "idle" ? IDLE_INLINE_CONSOLIDATION_SYSTEM_PROMPT : BOUNDARY_INLINE_CONSOLIDATION_SYSTEM_PROMPT,
 		prompt,
 		timeoutMs: INLINE_CONSOLIDATION_TIMEOUT_MS,
+		usageContext: usageContextFor(options.channelId),
 		parse: (text) => text.trim(),
 	});
 	const rawResponse = result.output;
@@ -413,6 +421,7 @@ ${currentMemory}`;
 		MEMORY_CLEANUP_SYSTEM_PROMPT,
 		prompt,
 		MEMORY_CLEANUP_TIMEOUT_MS,
+		usageContextFor(options.channelId),
 	);
 	if (guard && isCleanupResultTooSmall(currentMemory, nextMemory, guard)) {
 		throw new MemoryCleanupRejectedError("cleanup result shrank below the configured guard threshold");
@@ -447,6 +456,7 @@ ${renderedOlder}`;
 		HISTORY_FOLDING_SYSTEM_PROMPT,
 		prompt,
 		HISTORY_FOLDING_TIMEOUT_MS,
+		usageContextFor(options.channelId),
 	);
 
 	const foldedHeading = `## Folded History Through ${olderSections[olderSections.length - 1]?.heading ?? new Date().toISOString()}`;

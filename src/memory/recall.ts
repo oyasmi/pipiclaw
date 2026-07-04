@@ -12,6 +12,7 @@ import { runSidecarTask } from "./sidecar-worker.js";
 
 export interface RecallRequest {
 	query: string;
+	channelId?: string;
 	workspaceDir: string;
 	channelDir: string;
 	allowedSources?: MemoryCandidate["source"][];
@@ -512,6 +513,7 @@ async function rerankCandidates(request: RecallRequest, candidates: ScoredCandid
 			systemPrompt: RERANK_SYSTEM_PROMPT,
 			prompt: `User turn:\n${request.query.trim()}\n\nCandidates:\n${renderedCandidates}`,
 			timeoutMs: MEMORY_RECALL_RERANK_TIMEOUT_MS,
+			usageContext: request.channelId ? { channelId: request.channelId } : undefined,
 			parse: (text) => {
 				const parsed = parseJsonObject(text) as { selectedIds?: unknown };
 				return Array.isArray(parsed.selectedIds)

@@ -45,6 +45,7 @@ import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } f
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
 import { TOOL_PROMPT_HINTS } from "../tools/registry.js";
+import { getUsageLedger } from "../usage/ledger.js";
 import { createCommandExtension } from "./command-extension.js";
 import { type BuiltInCommand, renderBuiltInHelp } from "./commands.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
@@ -106,6 +107,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly settingsManager: PipiclawSettingsManager;
 	private readonly modelRegistry: ModelRegistry;
 	private readonly memoryLifecycle: MemoryLifecycle;
+	private readonly ledger = getUsageLedger();
 	private readonly memoryCandidateStore: MemoryCandidateStore;
 	private readonly sessionResourceGate: SessionResourceGate;
 	private readonly sessionReady: Promise<void>;
@@ -257,6 +259,7 @@ export class ChannelRunner implements AgentRunner {
 				if (recallSettings.enabled) {
 					const recall = await recallRelevantMemory({
 						query: clippedInput,
+						channelId: this.channelId,
 						workspaceDir: this.workspaceDir,
 						channelDir: this.channelDir,
 						maxCandidates: recallSettings.maxCandidates,
@@ -392,6 +395,21 @@ export class ChannelRunner implements AgentRunner {
 
 				log.logUsageSummary(this.runState.logCtx!, this.runState.totalUsage, contextTokens, contextWindow);
 				const responseModel = lastAssistantMessage?.responseModel;
+				// Ledger turn entry: assistant-only usage (sub-agents recorded separately),
+				// keeping Σ(entries) == real spend with no double counting.
+				this.ledger.record({
+					channelId: this.channelId,
+					kind: "turn",
+					model: responseModel ?? formatModelReference(currentRunModel),
+					usage: {
+						input: this.runState.assistantUsage.input,
+						output: this.runState.assistantUsage.output,
+						cacheRead: this.runState.assistantUsage.cacheRead,
+						cacheWrite: this.runState.assistantUsage.cacheWrite,
+						total: this.runState.assistantUsage.total,
+					},
+					cost: { ...this.runState.assistantUsage.cost },
+				});
 				if (
 					responseModel &&
 					responseModel !== formatModelReference(currentRunModel) &&
@@ -863,6 +881,7 @@ export class ChannelRunner implements AgentRunner {
 				store: this.runState.store,
 				runState: this.runState,
 				memoryLifecycle: this.memoryLifecycle,
+				ledger: this.ledger,
 				refreshSessionResources: async () => {
 					await this.refreshSessionResources();
 				},

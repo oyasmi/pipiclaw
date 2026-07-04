@@ -134,6 +134,27 @@ Pipiclaw 当前只使用 app home 下的 `settings.json`。默认是 `~/.pi/pipi
 
 pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有采用。不要假设把配置写到项目目录 `.pi/settings.json` 就会生效。
 
+### 可观测性：结构化日志与成本账本（Observability: Structured Logging & Cost Ledger）
+
+作为长期运行的守护进程，Pipiclaw 除了彩色 console 输出外，还会把结构化日志与 LLM 成本落盘到 `STATE_DIR`（默认 `~/.pi/pipiclaw/state`，随 `PIPICLAW_HOME` 变化）。console 输出保持不变；这些文件是额外产物。
+
+- **结构化日志**：`state/logs/runtime.jsonl`，每行一条 JSON 记录（`ts`/`level`/`event`/`channelId`/`message`/`fields` 等），按大小轮转（默认 5MB × 3）。文件权限 `0600`（含用户消息片段，与 `log.jsonl` 同威胁模型）。
+- **成本账本**：`state/usage/usage-YYYY-MM.jsonl`，按月分文件。每条记录一次开销，分三类 `kind`：`turn`（主轮 assistant，不含子代理）、`subagent`（每次子代理运行）、`sidecar`（每次记忆后台任务）。三类金额可直接加总、无重复计数。`cost.total <= 0`（本地无计费模型）不落盘。
+- **查询**：在任意频道发送 `/usage`（今日 + 本月）、`/usage 7d`、`/usage month`，按本频道与全局聚合展示成本、`kind` 分解与 top 模型；busy/idle 均可用，不占用运行队列。
+
+`settings.json` 中的 `logging` 段（均可选，缺省即默认）：
+
+```json
+"logging": {
+  "level": "info",
+  "file": { "enabled": true, "maxSizeBytes": 5000000, "maxFiles": 3 }
+}
+```
+
+- `level`：`debug` | `info` | `warn` | `error`，低于该级别的记录不写文件。
+- `file.enabled`：默认 **true**（守护进程默认落盘的价值大于新文件的意外感）。设为 `false` 则退回纯 console。
+- 环境变量优先于 settings，且在启动最早期即生效：`PIPICLAW_LOG_LEVEL`（同上四级）、`PIPICLAW_LOG_FILE=0|1`（关闭/开启文件落盘）。
+
 ### 内建工具设置（Built-in Tool Settings）
 
 Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.json`。默认是 `~/.pi/pipiclaw/tools.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/tools.json`。

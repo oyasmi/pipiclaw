@@ -27,6 +27,7 @@ const sessionSearchSchema = Type.Object({
 });
 
 export interface SessionSearchToolOptions {
+	channelId?: string;
 	channelDir: string;
 	getCurrentModel: () => Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
@@ -54,6 +55,7 @@ export function createSessionSearchTool(options: SessionSearchToolOptions): Agen
 			const settings = options.getSessionSearchSettings();
 			const model = options.getCurrentModel();
 			const response = await searchChannelSessions({
+				channelId: options.channelId,
 				channelDir: options.channelDir,
 				query: query ?? "",
 				roleFilter,

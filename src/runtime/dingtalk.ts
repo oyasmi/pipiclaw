@@ -134,6 +134,7 @@ export interface DingTalkHandler {
 	handleStop(channelId: string, bot: DingTalkBot): Promise<void>;
 	handleEventsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void>;
+	handleUsageCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleBusyMessage(
 		event: DingTalkEvent,
 		bot: DingTalkBot,
@@ -1266,6 +1267,11 @@ export class DingTalkBot {
 
 			if (builtInCommand?.name === "status") {
 				await this.handler.handleStatusCommand(event, this);
+				return;
+			}
+
+			if (builtInCommand?.name === "usage") {
+				await this.handler.handleUsageCommand(event, this, builtInCommand.args);
 				return;
 			}
 

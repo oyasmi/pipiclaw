@@ -6,6 +6,7 @@ import { buildSessionCorpus, type SessionSearchDocument, type SessionSearchRole 
 import { runSidecarTask } from "./sidecar-worker.js";
 
 export interface SearchChannelSessionsRequest {
+	channelId?: string;
 	channelDir: string;
 	query: string;
 	roleFilter?: string[];
@@ -138,6 +139,7 @@ ${query}
 Transcript hit:
 ${fallback}`,
 			timeoutMs: request.timeoutMs,
+			usageContext: request.channelId ? { channelId: request.channelId } : undefined,
 			parse: (text) => text.trim(),
 		});
 		return result.output || fallback;

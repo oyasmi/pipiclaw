@@ -301,6 +301,7 @@ async function buildContextualBlocks(
 	const recallQuery = [task.trim(), config.description.trim(), ...config.paths].filter(Boolean).join("\n");
 	const recalled = await recallRelevantMemory({
 		query: recallQuery,
+		channelId: options.runtimeContext.channelId,
 		workspaceDir: options.workspaceDir,
 		channelDir: options.channelDir,
 		maxCandidates: recallSettings.maxCandidates,

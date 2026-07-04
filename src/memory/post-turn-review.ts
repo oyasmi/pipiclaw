@@ -188,6 +188,7 @@ ${transcript || "(empty)"}`;
 		systemPrompt: POST_TURN_REVIEW_SYSTEM_PROMPT,
 		prompt,
 		timeoutMs: options.timeoutMs,
+		usageContext: { channelId: options.channelId },
 		parse: (text) => parsePostTurnReviewResult(parseJsonObject(text)),
 	});
 	return result.output;

@@ -47,6 +47,8 @@ export interface RunState {
 	queue: RunQueue | null;
 	pendingTools: Map<string, PendingTool>;
 	totalUsage: UsageTotals;
+	/** Main-loop assistant usage only (excludes sub-agents). Feeds the turn ledger entry. */
+	assistantUsage: UsageTotals;
 	stopReason: string;
 	errorMessage: string | undefined;
 	lastCompactionError: string | undefined;
@@ -62,6 +64,14 @@ export function createEmptyRunState(): RunState {
 		queue: null,
 		pendingTools: new Map(),
 		totalUsage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			total: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		assistantUsage: {
 			input: 0,
 			output: 0,
 			cacheRead: 0,

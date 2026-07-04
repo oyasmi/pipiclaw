@@ -30,6 +30,8 @@ import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
+import { getUsageLedger } from "../usage/ledger.js";
+import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import { ensureChannelDir } from "./channel-paths.js";
 import { createDingTalkContext } from "./delivery.js";
 import {
@@ -656,6 +658,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
 	const runtimeSettingsManager = new PipiclawSettingsManager(options.paths.appHomeDir);
+	log.configureLogging(runtimeSettingsManager.getLoggingSettings());
 	const startedAt = Date.now();
 	const cliVersion = readCliVersion();
 	const channelStates = new Map<string, ChannelState>();
@@ -742,6 +745,11 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				uptimeMs: Date.now() - startedAt,
 				sandbox: options.sandbox,
 			});
+			await bot.sendPlain(event.channelId, response);
+		},
+
+		async handleUsageCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void> {
+			const response = renderUsageReport(getUsageLedger(), event.channelId, parseUsageMode(args), new Date());
 			await bot.sendPlain(event.channelId, response);
 		},
 
@@ -845,6 +853,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						}
 						if (builtInCommand.name === "status") {
 							await handler.handleStatusCommand(event, bot);
+							return;
+						}
+						if (builtInCommand.name === "usage") {
+							await handler.handleUsageCommand(event, bot, builtInCommand.args);
 							return;
 						}
 						await state.runner.handleBuiltinCommand(ctx, builtInCommand);

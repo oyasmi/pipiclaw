@@ -126,6 +126,7 @@ function renderMessagesForSignalScan(messages: AgentMessage[]): string {
 
 function makeRunOptions(input: BaseMaintenanceJobInput): ConsolidationRunOptions {
 	return {
+		channelId: input.channelId,
 		channelDir: input.channelDir,
 		model: input.model,
 		resolveApiKey: input.resolveApiKey,

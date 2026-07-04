@@ -1,7 +1,9 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
+import { formatModelReference } from "../models/utils.js";
 import { extractAssistantText } from "../shared/text-utils.js";
+import { getUsageLedger } from "../usage/ledger.js";
 
 export interface SidecarTask<T> {
 	name: string;
@@ -12,6 +14,8 @@ export interface SidecarTask<T> {
 	parse: (text: string) => T;
 	timeoutMs?: number;
 	signal?: AbortSignal;
+	/** Attributes this task's LLM spend to a channel in the usage ledger. */
+	usageContext?: { channelId: string };
 }
 
 export interface SidecarResult<T> {
@@ -89,6 +93,41 @@ function delay(ms: number, task: SidecarTask<unknown>): Promise<void> {
 	});
 }
 
+interface MaybeUsage {
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	total?: number;
+	cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
+}
+
+/** Attribute a completed sidecar task's LLM spend to the usage ledger. */
+function recordSidecarUsage(task: SidecarTask<unknown>, message: { usage?: MaybeUsage }): void {
+	const usage = message.usage;
+	if (!usage || !usage.cost) return;
+	getUsageLedger().record({
+		channelId: task.usageContext?.channelId ?? "",
+		kind: "sidecar",
+		model: formatModelReference(task.model),
+		label: task.name,
+		usage: {
+			input: usage.input ?? 0,
+			output: usage.output ?? 0,
+			cacheRead: usage.cacheRead ?? 0,
+			cacheWrite: usage.cacheWrite ?? 0,
+			total: usage.total ?? 0,
+		},
+		cost: {
+			input: usage.cost.input ?? 0,
+			output: usage.cost.output ?? 0,
+			cacheRead: usage.cost.cacheRead ?? 0,
+			cacheWrite: usage.cost.cacheWrite ?? 0,
+			total: usage.cost.total ?? 0,
+		},
+	});
+}
+
 export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarResult<T>> {
 	const apiKey = await task.resolveApiKey(task.model);
 	const worker = new Agent({
@@ -125,6 +164,8 @@ export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarRe
 		if (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted") {
 			throw new Error(lastMessage.errorMessage || `Sidecar task "${task.name}" failed`);
 		}
+
+		recordSidecarUsage(task, lastMessage);
 
 		const rawText = extractAssistantText(lastMessage);
 		try {

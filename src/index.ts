@@ -157,3 +157,12 @@ export {
 	createPipiclawBaseTools,
 	createPipiclawTools,
 } from "./tools/index.js";
+export {
+	createUsageLedger,
+	getUsageLedger,
+	type UsageKind,
+	type UsageLedger,
+	type UsageLedgerEntry,
+	type UsageSummary,
+} from "./usage/ledger.js";
+export { parseUsageMode, renderUsageReport, type UsageQueryMode, usageWindows } from "./usage/render.js";

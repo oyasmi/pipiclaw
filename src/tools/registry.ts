@@ -147,6 +147,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.memory.sessionSearch.enabled !== false,
 		create: (ctx) =>
 			createSessionSearchTool({
+				channelId: ctx.channelId,
 				channelDir: ctx.channelDir,
 				getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
 				resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),

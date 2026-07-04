@@ -104,6 +104,7 @@ function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandle
 		handleStop: vi.fn(async () => {}),
 		handleEventsCommand: vi.fn(async () => {}),
 		handleStatusCommand: vi.fn(async () => {}),
+		handleUsageCommand: vi.fn(async () => {}),
 		handleBusyMessage: vi.fn(async () => ({ kind: "handled" as const })),
 		...overrides,
 	};
