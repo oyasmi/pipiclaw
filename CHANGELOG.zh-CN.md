@@ -4,7 +4,7 @@
 
 ## [Unreleased]
 
-## [0.7.0-beta.1] - 2026-07-04
+## [0.7.0] - 2026-07-04
 
 ### 新增
 
@@ -41,6 +41,7 @@
   - `/events show <name>` 展示指定事件文件的完整格式化 JSON。
   - `/events delete <name>` 删除对应的 `workspace/events/<name>.json` 文件。
   - `/events history [name]` 从 `state/events/history.jsonl` 展示最近的事件调度历史，并可按事件名过滤。
+- 新增结构化事件调度历史 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl`，以本地时间 JSONL 记录事件加载、调度、触发、preAction 结果、入队结果、删除、非法文件和取消调度等信息。
 - 新增 Claude Code 使用说明文档（`CLAUDE.md`），覆盖开发命令、运行时分层、并发规则、记忆子系统边界、工具/安全结构和文档入口。
 
 ### 变更
@@ -60,12 +61,6 @@
 - 将 `knip` 死代码检查接入标准 `npm run check` 流程，并在 `tsconfig.json` 中启用 TypeScript 未使用符号检查。
 - 清理新死代码检查和未使用符号检查发现的无用导出与既有 lint 问题。
 - 新增聚焦的 `progress-formatter` 和 `event-commands` 测试，并补充 `/events` 命令在 DingTalk/runtime 层的路由覆盖。
-
-## [0.6.10-beta.0] - 2026-06-25
-
-### 新增
-
-- 新增结构化事件调度历史 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl`，以本地时间 JSONL 记录事件加载、调度、触发、preAction 结果、入队结果、删除、非法文件和取消调度等信息。
 
 ## [0.6.9] - 2026-06-24
 

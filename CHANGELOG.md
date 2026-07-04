@@ -4,7 +4,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
-## [0.7.0-beta.1] - 2026-07-04
+## [0.7.0] - 2026-07-04
 
 ### Added
 
@@ -41,6 +41,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
   - `/events show <name>` displays the full formatted JSON for an event file.
   - `/events delete <name>` deletes the corresponding `workspace/events/<name>.json` file.
   - `/events history [name]` shows recent event scheduling history from `state/events/history.jsonl`, optionally filtered by event name.
+- Added structured event scheduling history at `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl`, recording local-time JSONL entries for event loading, scheduling, triggering, pre-action outcomes, queue results, deletion, invalid files, and cancellation.
 - Added a Claude Code guidance document (`CLAUDE.md`) covering development commands, runtime layering, concurrency rules, memory subsystem boundaries, tool/security structure, and documentation entrypoints.
 
 ### Changed
@@ -60,12 +61,6 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Added `knip` dead-code checking to the standard `npm run check` gate and enabled TypeScript unused-symbol checks in `tsconfig.json`.
 - Removed unused exports and pre-existing lint issues found by the new dead-code and unused-symbol checks.
 - Added focused `progress-formatter` and `event-commands` tests, plus DingTalk/runtime coverage for `/events` command routing.
-
-## [0.6.10-beta.0] - 2026-06-25
-
-### Added
-
-- Added structured event scheduling history at `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl`, recording local-time JSONL entries for event loading, scheduling, triggering, pre-action outcomes, queue results, deletion, invalid files, and cancellation.
 
 ## [0.6.9] - 2026-06-24
 
