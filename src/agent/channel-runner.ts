@@ -31,7 +31,7 @@ import {
 import { recallRelevantMemory } from "../memory/recall.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
-import { formatModelReference, resolveInitialModel } from "../models/utils.js";
+import { findExactModelReferenceMatch, formatModelReference, resolveInitialModel } from "../models/utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
 import type { DingTalkContext } from "../runtime/dingtalk.js";
 import type { ChannelStore } from "../runtime/store.js";
@@ -49,7 +49,13 @@ import { getUsageLedger } from "../usage/ledger.js";
 import { createCommandExtension } from "./command-extension.js";
 import { type BuiltInCommand, renderBuiltInHelp } from "./commands.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
-import { clipUserInput } from "./progress-formatter.js";
+import {
+	type FallbackRunDeps,
+	PRIMARY_COOLDOWN_MS,
+	runPromptWithFallback,
+	shouldRestorePrimary,
+} from "./model-fallback.js";
+import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
 import { buildAppendSystemPrompt } from "./prompt-builder.js";
 import { createRunQueue } from "./run-queue.js";
 import { handleSessionEvent } from "./session-events.js";
@@ -122,6 +128,8 @@ export class ChannelRunner implements AgentRunner {
 	private firstTurnMemoryBootstrapPending = true;
 	private acceptingBusyMessages = false;
 	private agentLoopStarted = false;
+	/** When the primary model last failed and we switched to the backup. null = on primary. */
+	private primaryFailedAt: number | null = null;
 
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
@@ -232,9 +240,12 @@ export class ChannelRunner implements AgentRunner {
 		const runQueue = createRunQueue(ctx);
 		this.runState.queue = runQueue.queue;
 		let promptSubmitted = false;
+		let fallbackAttempted = false;
+		let fallbackTargetRef: string | undefined;
 
 		try {
 			await this.ensureSessionReady();
+			await this.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
 			const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
 			if (normalizedInputLength > MAX_USER_MESSAGE_CHARS) {
@@ -299,10 +310,59 @@ export class ChannelRunner implements AgentRunner {
 				await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2));
 			}
 
-			await this.sessionResourceGate.runPrompt(async () => {
-				await this.session.prompt(promptText);
-				promptSubmitted = true;
-			});
+			const fallbackDeps: FallbackRunDeps = {
+				prompt: async (text) => {
+					try {
+						await this.sessionResourceGate.runPrompt(async () => {
+							await this.session.prompt(text);
+							promptSubmitted = true;
+						});
+					} catch (err) {
+						this.runState.stopReason = "error";
+						this.runState.errorMessage = err instanceof Error ? err.message : String(err);
+						log.logWarning(`[${this.channelId}] Runner failed`, this.runState.errorMessage);
+					}
+				},
+				getRunError: () => ({
+					stopReason: this.runState.stopReason,
+					errorMessage: this.runState.errorMessage,
+				}),
+				resetRunError: () => {
+					this.runState.stopReason = "stop";
+					this.runState.errorMessage = undefined;
+					this.runState.finalOutcome = { kind: "none" };
+					this.runState.lastCompactionError = undefined;
+				},
+				getMessages: () => this.agent.state.messages,
+				setMessages: (messages) => {
+					this.agent.state.messages = messages as typeof this.agent.state.messages;
+				},
+				promptWasSubmitted: () => promptSubmitted,
+				getCurrentModelRef: () => formatModelReference(this.session.model ?? this.activeModel),
+				resolveFallbackModel: () => this.resolveFallbackModel(),
+				setModel: async (model) => {
+					await this.session.setModel(model);
+				},
+				notifySwitch: (from, to, errorSummary) => {
+					fallbackTargetRef = to;
+					if (this.runState.logCtx) {
+						log.logModelFallback(this.runState.logCtx, from, to, errorSummary);
+					}
+					const text = `⚠️ 模型 ${from} 出错（${errorSummary}），切换到 ${to} 重试…`;
+					if (ctx.progressStyle !== "none") {
+						runQueue.queue.enqueue(
+							() => ctx.respond(formatProgressEntry("error", text), false),
+							"fallback switch",
+						);
+					} else {
+						runQueue.queue.enqueue(() => ctx.respondInThread(text), "fallback switch");
+					}
+				},
+				markPrimaryFailed: () => {
+					this.primaryFailedAt = Date.now();
+				},
+			};
+			fallbackAttempted = await runPromptWithFallback(promptText, fallbackDeps);
 		} catch (err) {
 			this.runState.stopReason = "error";
 			this.runState.errorMessage = err instanceof Error ? err.message : String(err);
@@ -344,6 +404,9 @@ export class ChannelRunner implements AgentRunner {
 						const detailLines = [`\`${baseErrorSummary}\``];
 						if (compactionSummary) {
 							detailLines.push(`Recovery: \`${compactionSummary}\``);
+						}
+						if (fallbackAttempted && fallbackTargetRef) {
+							detailLines.push(`已切换备用模型 \`${fallbackTargetRef}\` 重试，仍失败。`);
 						}
 						await ctx.replaceMessage(`_Sorry, something went wrong._\n\n${detailLines.join("\n\n")}`);
 					} catch (err) {
@@ -499,11 +562,18 @@ export class ChannelRunner implements AgentRunner {
 	getStatusSnapshot(): RunnerStatusSnapshot {
 		const model = this.session.model ?? this.activeModel;
 		const contextTokens = this.session.getContextUsage()?.tokens;
+		const fallbackActive = formatModelReference(model) !== formatModelReference(this.activeModel);
 		return {
 			model: formatModelReference(model),
 			contextTokens: typeof contextTokens === "number" ? contextTokens : undefined,
 			contextWindow: model.contextWindow || 200000,
 			thinkingLevel: this.session.thinkingLevel,
+			fallback: fallbackActive
+				? {
+						primary: formatModelReference(this.activeModel),
+						cooldownUntilMs: (this.primaryFailedAt ?? Date.now()) + PRIMARY_COOLDOWN_MS,
+					}
+				: undefined,
 		};
 	}
 
@@ -610,6 +680,59 @@ export class ChannelRunner implements AgentRunner {
 	private async refreshSessionResources(): Promise<void> {
 		await this.ensureSessionReady();
 		await this.sessionResourceGate.requestRefresh();
+	}
+
+	/**
+	 * At turn start, if a fallback is active and the primary's cooldown has elapsed,
+	 * switch back to the preferred model. Silent — no user notice on recovery.
+	 */
+	private async maybeRestorePrimaryModel(): Promise<void> {
+		const current = this.session.model;
+		if (!current || formatModelReference(current) === formatModelReference(this.activeModel)) {
+			this.primaryFailedAt = null;
+			return;
+		}
+		if (!shouldRestorePrimary(this.primaryFailedAt, Date.now())) {
+			return;
+		}
+		try {
+			await this.session.setModel(this.activeModel);
+			this.primaryFailedAt = null;
+			log.logInfo(`[${this.channelId}] Restored primary model ${formatModelReference(this.activeModel)}`);
+		} catch (err) {
+			log.logWarning(
+				`[${this.channelId}] Failed to restore primary model`,
+				err instanceof Error ? err.message : String(err),
+			);
+		}
+	}
+
+	/**
+	 * Resolve the configured backup model reference against available models.
+	 * Returns null when unset, unresolvable/ambiguous, or missing an API key —
+	 * each case logs a warning and disables fallback for this turn.
+	 */
+	private async resolveFallbackModel(): Promise<Model<Api> | null> {
+		const reference = this.settingsManager.getFallbackModelReference();
+		if (!reference) {
+			return null;
+		}
+		this.modelRegistry.refresh();
+		const available = await this.modelRegistry.getAvailable();
+		const { match, ambiguous } = findExactModelReferenceMatch(reference, available);
+		if (!match) {
+			log.logWarning(
+				`[${this.channelId}] fallbackModel "${reference}" ${ambiguous ? "is ambiguous" : "not found"}; skipping fallback`,
+			);
+			return null;
+		}
+		try {
+			await getApiKeyForModel(this.modelRegistry, match);
+		} catch {
+			log.logWarning(`[${this.channelId}] fallbackModel "${reference}" has no API key; skipping fallback`);
+			return null;
+		}
+		return match;
 	}
 
 	private async initializeSession(): Promise<void> {
@@ -725,6 +848,8 @@ export class ChannelRunner implements AgentRunner {
 					switchModel: async (model) => {
 						await this.session.setModel(model);
 						this.activeModel = model;
+						// Manual /model switch redefines the preferred model and clears fallback state.
+						this.primaryFailedAt = null;
 					},
 					refreshSessionResources: async () => {
 						await this.refreshSessionResources();

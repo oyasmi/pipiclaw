@@ -134,6 +134,20 @@ Pipiclaw 当前只使用 app home 下的 `settings.json`。默认是 `~/.pi/pipi
 
 pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有采用。不要假设把配置写到项目目录 `.pi/settings.json` 就会生效。
 
+### 备用模型（Fallback Model）
+
+主模型这一轮失败了（不是用户 `/stop`、也不是上下文超限），就自动换成配置的备用模型把这一轮重跑一次；之后 5 分钟内的新轮次直接用备用模型，5 分钟后自动试回主模型。`settings.json` 里一个键即可开启：
+
+```json
+"fallbackModel": "openai/gpt-4o-mini"
+```
+
+- 不配置（或填空串）＝功能关闭，行为与不带 fallback 时完全一致。
+- 值是 `provider/model` 引用，须能在已有的 `auth.json` / `models.json` 里解析到并具备 API key；解析失败、有歧义或缺 key 时会 warn 并跳过 fallback（不影响主流程）。
+- **429 说明**（实际最常见的失败）：429 / 5xx / overloaded 这类瞬态错误先由 SDK 在**主模型上**退避重试（默认 3 次，约 2+4+8 秒）；仍失败才切备用。短暂限流由重试消化，持续限流才换模型。触发条件是「除上下文超限外的任何错误」——429、配额耗尽、401、甚至 400 都会触发（换取规则可一句话说清）。
+- 冷却时长（5 分钟）是内部常量；fallback **不修改**你用 `/model` 选定的首选模型，进程重启后回到主模型。手动 `/model` 切换会立即清除 fallback 状态。
+- fallback 生效期间 `/status` 会多出一行 `Fallback: active（primary <主模型> 冷却至 HH:MM）`；每次切换都会给用户一条提示，并写入结构化日志的 `model_fallback` 事件，成本账本按实际成交模型归因。
+
 ### 可观测性：结构化日志与成本账本（Observability: Structured Logging & Cost Ledger）
 
 作为长期运行的守护进程，Pipiclaw 除了彩色 console 输出外，还会把结构化日志与 LLM 成本落盘到 `STATE_DIR`（默认 `~/.pi/pipiclaw/state`，随 `PIPICLAW_HOME` 变化）。console 输出保持不变；这些文件是额外产物。

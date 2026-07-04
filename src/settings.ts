@@ -136,6 +136,8 @@ export interface PipiclawSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	/** Single backup model reference (`provider/model`) used when the primary model's turn fails. */
+	fallbackModel?: string | null;
 	compaction?: Partial<PipiclawCompactionSettings>;
 	retry?: Partial<PipiclawRetrySettings>;
 	memoryRecall?: Partial<PipiclawMemoryRecallSettings>;
@@ -376,6 +378,19 @@ export class PipiclawSettingsManager {
 	setRetryEnabled(enabled: boolean): void {
 		this.settings.retry = { ...this.settings.retry, enabled };
 		this.save();
+	}
+
+	/**
+	 * Backup model reference (`provider/model`) for fallback, or null when unset.
+	 * Empty / whitespace-only values are treated as unset (fallback disabled).
+	 */
+	getFallbackModelReference(): string | null {
+		const raw = this.settings.fallbackModel;
+		if (typeof raw !== "string") {
+			return null;
+		}
+		const trimmed = raw.trim();
+		return trimmed.length > 0 ? trimmed : null;
 	}
 
 	getDefaultModel(): string | undefined {

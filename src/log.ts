@@ -276,6 +276,16 @@ export function logAgentError(ctx: LogContext | "system", error: string): void {
 	});
 }
 
+// Model fallback (spec 017)
+export function logModelFallback(ctx: LogContext, from: string, to: string, error: string): void {
+	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ⤳ Fallback ${from} → ${to}`));
+	emit("warn", "model_fallback", `Fallback ${from} → ${to}`, {
+		ctx,
+		details: error,
+		fields: { from, to, error },
+	});
+}
+
 // Usage summary
 export function logUsageSummary(
 	ctx: LogContext,

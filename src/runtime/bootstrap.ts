@@ -614,6 +614,12 @@ function renderStatus(options: {
 		try {
 			const snapshot = state.runner.getStatusSnapshot();
 			lines.push(`- Model: ${snapshot.model}`);
+			if (snapshot.fallback) {
+				const until = new Date(snapshot.fallback.cooldownUntilMs);
+				const hh = String(until.getHours()).padStart(2, "0");
+				const mm = String(until.getMinutes()).padStart(2, "0");
+				lines.push(`- Fallback: active（primary ${snapshot.fallback.primary} 冷却至 ${hh}:${mm}）`);
+			}
 			if (snapshot.thinkingLevel && snapshot.thinkingLevel !== "off") {
 				lines.push(`- Thinking: ${snapshot.thinkingLevel}`);
 			}

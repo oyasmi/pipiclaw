@@ -9,6 +9,8 @@ export interface RunnerStatusSnapshot {
 	contextTokens?: number;
 	contextWindow: number;
 	thinkingLevel: string;
+	/** Present only while running on the backup model (spec 017). */
+	fallback?: { primary: string; cooldownUntilMs: number };
 }
 
 export interface AgentRunner {

@@ -45,4 +45,22 @@ describe("settings manager", () => {
 		expect(new PipiclawSettingsManager(lowDir).getMemoryGrowthSettings().minSkillAutoWriteConfidence).toBe(0.9);
 		expect(new PipiclawSettingsManager(highDir).getMemoryGrowthSettings().minSkillAutoWriteConfidence).toBe(0.95);
 	});
+
+	it("resolves the fallback model reference, treating empty/missing as unset", () => {
+		const setDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
+		const blankDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
+		const missingDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
+		tempDirs.push(setDir, blankDir, missingDir);
+		writeFileSync(
+			join(setDir, "settings.json"),
+			JSON.stringify({ fallbackModel: "  openai/gpt-4o-mini  " }),
+			"utf-8",
+		);
+		writeFileSync(join(blankDir, "settings.json"), JSON.stringify({ fallbackModel: "   " }), "utf-8");
+		writeFileSync(join(missingDir, "settings.json"), JSON.stringify({}), "utf-8");
+
+		expect(new PipiclawSettingsManager(setDir).getFallbackModelReference()).toBe("openai/gpt-4o-mini");
+		expect(new PipiclawSettingsManager(blankDir).getFallbackModelReference()).toBeNull();
+		expect(new PipiclawSettingsManager(missingDir).getFallbackModelReference()).toBeNull();
+	});
 });
