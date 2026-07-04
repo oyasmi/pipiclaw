@@ -1,4 +1,4 @@
-export type BuiltInCommandName = "help" | "steer" | "followup" | "stop" | "events";
+export type BuiltInCommandName = "help" | "steer" | "followup" | "stop" | "events" | "status";
 
 export interface BuiltInCommand {
 	name: BuiltInCommandName;
@@ -32,6 +32,9 @@ These are handled directly by the DingTalk transport/runtime layer.
   Example: \`/events show weekly-review\`
   Example: \`/events delete weekly-review\`
   Example: \`/events history weekly-review\`
+- \`/status\`
+  Show runtime status: run state, current model, context usage, uptime, version
+  Example: \`/status\`
 
 While a task is running, plain messages use the configured busy-message default. The default is \`steer\`; set \`busyMessageDefault\` in channel.json to \`followUp\` or \`followup\` to queue plain messages after the current task.
 
@@ -73,6 +76,7 @@ export function parseBuiltInCommand(text: string): BuiltInCommand | null {
 		case "followup":
 		case "stop":
 		case "events":
+		case "status":
 			return { name: rawName, args, rawText };
 		default:
 			return null;

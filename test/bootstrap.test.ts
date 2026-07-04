@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -80,6 +80,41 @@ describe("bootstrap", () => {
 		const second = bootstrapAppHome(paths);
 		expect(second.channelTemplateCreated).toBe(false);
 		expect(second.created).toEqual([]);
+	});
+
+	it.skipIf(process.platform === "win32")("creates secret config files owner-only and tightens loose ones", () => {
+		const paths = createBootstrapPaths();
+
+		bootstrapAppHome(paths);
+
+		for (const secretPath of [
+			paths.channelConfigPath,
+			paths.authConfigPath,
+			paths.modelsConfigPath,
+			paths.settingsConfigPath,
+			paths.toolsConfigPath,
+			paths.securityConfigPath,
+		]) {
+			expect(statSync(secretPath).mode & 0o777, `mode for ${secretPath}`).toBe(0o600);
+		}
+
+		// A pre-existing loose file is tightened on the next bootstrap.
+		chmodSync(paths.authConfigPath, 0o644);
+		bootstrapAppHome(paths);
+		expect(statSync(paths.authConfigPath).mode & 0o777).toBe(0o600);
+	});
+
+	it("rejects an invalid --sandbox argument with exit code 1", () => {
+		const paths = createBootstrapPaths();
+		const io = createIO();
+
+		expect(() => parseArgs(["node", "main", "--sandbox=weird"], paths, io)).toThrowError(BootstrapExitError);
+		try {
+			parseArgs(["node", "main", "--sandbox=weird"], paths, io);
+		} catch (error) {
+			expect((error as BootstrapExitError).code).toBe(1);
+		}
+		expect(io.error).toHaveBeenCalledWith(expect.stringContaining("Invalid sandbox type"));
 	});
 
 	it("parses help and exits with code 0", () => {

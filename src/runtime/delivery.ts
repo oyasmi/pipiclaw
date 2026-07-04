@@ -5,6 +5,10 @@ import type { ChannelStore } from "./store.js";
 const MIN_UPDATE_INTERVAL_MS = 800;
 const ROLLING_WINDOW_SIZE = 3;
 const NO_CONTENT = "";
+// Last-resort ceiling on how long flush() will block a caller. Outbound HTTP now
+// has its own timeout, so the sync loop is already bounded; this only guards against
+// an unforeseen stall so run()'s finally can never hang the channel forever.
+const FLUSH_DEADLINE_MS = 60_000;
 
 type DeliveryMode = "progress" | "finalize-existing" | "finalize-with-fallback" | "silent";
 
@@ -348,8 +352,23 @@ class ChannelDeliveryController {
 
 	private async flush(): Promise<void> {
 		if (this.isSettled()) return;
+		let deadlineTimer: NodeJS.Timeout | null = null;
 		await new Promise<void>((resolve) => {
 			this.flushWaiters.push(resolve);
+			deadlineTimer = setTimeout(() => {
+				if (this.flushWaiters.includes(resolve)) {
+					log.logWarning(
+						`[${this.event.channelId}] Delivery flush deadline exceeded (${FLUSH_DEADLINE_MS}ms); releasing caller`,
+					);
+					this.flushWaiters = this.flushWaiters.filter((waiter) => waiter !== resolve);
+					resolve();
+				}
+			}, FLUSH_DEADLINE_MS);
+			deadlineTimer.unref?.();
+		}).finally(() => {
+			if (deadlineTimer) {
+				clearTimeout(deadlineTimer);
+			}
 		});
 	}
 

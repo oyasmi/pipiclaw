@@ -1,12 +1,5 @@
-import type { MockInstance } from "vitest";
-import { describe, expect, it, vi } from "vitest";
-import { createExecutor, parseSandboxArg, validateSandbox } from "../src/sandbox.js";
-
-function mockProcessExit(): MockInstance {
-	return vi.spyOn(process, "exit").mockImplementation((() => {
-		throw new Error("process.exit");
-	}) as (code?: string | number | null | undefined) => never);
-}
+import { describe, expect, it } from "vitest";
+import { createExecutor, parseSandboxArg, SandboxConfigError, validateSandbox } from "../src/sandbox.js";
 
 describe("sandbox", () => {
 	it("parses valid sandbox arguments", () => {
@@ -17,17 +10,9 @@ describe("sandbox", () => {
 		});
 	});
 
-	it("rejects invalid sandbox arguments by exiting", () => {
-		const exitSpy = mockProcessExit();
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-		expect(() => parseSandboxArg("docker:")).toThrow("process.exit");
-		expect(() => parseSandboxArg("weird")).toThrow("process.exit");
-		expect(exitSpy).toHaveBeenCalled();
-		expect(errorSpy).toHaveBeenCalled();
-
-		exitSpy.mockRestore();
-		errorSpy.mockRestore();
+	it("rejects invalid sandbox arguments by throwing SandboxConfigError", () => {
+		expect(() => parseSandboxArg("docker:")).toThrow(SandboxConfigError);
+		expect(() => parseSandboxArg("weird")).toThrow(SandboxConfigError);
 	});
 
 	it("returns working executors for host and docker path mapping", async () => {

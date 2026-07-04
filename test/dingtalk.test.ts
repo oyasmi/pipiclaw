@@ -8,12 +8,18 @@ const { axiosMock, fakeClientState } = vi.hoisted(() => {
 	const post = vi.fn();
 	const put = vi.fn();
 	const defaults = { proxy: true };
+	const instance = {
+		post,
+		put,
+		defaults,
+		isAxiosError: (error: unknown) => Boolean((error as { isAxiosError?: boolean })?.isAxiosError),
+	};
 	return {
 		axiosMock: {
-			post,
-			put,
-			defaults,
-			isAxiosError: (error: unknown) => Boolean((error as { isAxiosError?: boolean })?.isAxiosError),
+			...instance,
+			// axios.create() returns a configured instance; route it back to the same
+			// spies so tests assert on a single post/put mock regardless of call site.
+			create: vi.fn(() => instance),
 		},
 		fakeClientState: {
 			connectImpl: null as null | ((state: any) => Promise<void>),
@@ -97,6 +103,7 @@ function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandle
 		handleEvent: vi.fn(async () => {}),
 		handleStop: vi.fn(async () => {}),
 		handleEventsCommand: vi.fn(async () => {}),
+		handleStatusCommand: vi.fn(async () => {}),
 		handleBusyMessage: vi.fn(async () => ({ kind: "handled" as const })),
 		...overrides,
 	};
@@ -320,6 +327,18 @@ describe("dingtalk", () => {
 			expect.objectContaining({ channelId: "dm_staff_1" }),
 			bot,
 			"list",
+		);
+
+		await privateApi.onStreamMessage({
+			text: { content: "/status" },
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_1",
+			conversationType: "1",
+		});
+		expect(handler.handleStatusCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ channelId: "dm_staff_1" }),
+			bot,
 		);
 
 		await privateApi.onStreamMessage({

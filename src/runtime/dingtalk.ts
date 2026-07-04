@@ -133,6 +133,7 @@ export interface DingTalkHandler {
 	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
 	handleStop(channelId: string, bot: DingTalkBot): Promise<void>;
 	handleEventsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
+	handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void>;
 	handleBusyMessage(
 		event: DingTalkEvent,
 		bot: DingTalkBot,
@@ -249,6 +250,13 @@ class ChannelQueue {
 // ============================================================================
 
 const DINGTALK_API = "https://api.dingtalk.com";
+// Bound every outbound DingTalk HTTP call. Without this, axios waits forever on a
+// hung connection, and a stalled card-streaming request would wedge the delivery
+// sync loop (never resolving flush()), leaving the whole channel permanently busy.
+// A timeout turns "hang" into a normal failure that the existing fallback paths
+// (discardCard / replay / sendPlain) already handle.
+const DINGTALK_HTTP_TIMEOUT_MS = 15_000;
+const http = axios.create({ timeout: DINGTALK_HTTP_TIMEOUT_MS });
 const TOKEN_REFRESH_SECS = 90 * 60; // 1.5 hours (tokens expire after 2 hours)
 const CONNECT_ATTEMPT_TIMEOUT_MS = 10_000;
 const SOCKET_CLOSE_GRACE_MS = 1_000;
@@ -930,7 +938,7 @@ export class DingTalkBot {
 		}
 
 		try {
-			await axios.post(url, body, {
+			await http.post(url, body, {
 				headers: {
 					"x-acs-dingtalk-access-token": token,
 					"Content-Type": "application/json",
@@ -1016,7 +1024,7 @@ export class DingTalkBot {
 		}
 
 		try {
-			await axios.post(`${DINGTALK_API}/v1.0/card/instances/createAndDeliver`, body, {
+			await http.post(`${DINGTALK_API}/v1.0/card/instances/createAndDeliver`, body, {
 				headers: {
 					"x-acs-dingtalk-access-token": token,
 					"Content-Type": "application/json",
@@ -1070,7 +1078,7 @@ export class DingTalkBot {
 
 		const start = Date.now();
 		try {
-			await axios.put(`${DINGTALK_API}/v1.0/card/streaming`, body, {
+			await http.put(`${DINGTALK_API}/v1.0/card/streaming`, body, {
 				headers: {
 					"x-acs-dingtalk-access-token": card.accessToken,
 					"Content-Type": "application/json",
@@ -1121,7 +1129,7 @@ export class DingTalkBot {
 
 	private async refreshAccessToken(): Promise<string | null> {
 		try {
-			const resp = await axios.post(
+			const resp = await http.post(
 				`${DINGTALK_API}/v1.0/oauth2/accessToken`,
 				{
 					appKey: this.config.clientId,
@@ -1253,6 +1261,11 @@ export class DingTalkBot {
 
 			if (builtInCommand?.name === "events") {
 				await this.handler.handleEventsCommand(event, this, builtInCommand.args);
+				return;
+			}
+
+			if (builtInCommand?.name === "status") {
+				await this.handler.handleStatusCommand(event, this);
 				return;
 			}
 

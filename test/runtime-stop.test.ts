@@ -108,6 +108,12 @@ describe("runtime stop handling", () => {
 			getMemoryMaintenanceContext: vi.fn(async () => {
 				throw new Error("not used");
 			}),
+			getStatusSnapshot: vi.fn(() => ({
+				model: "test/model",
+				contextTokens: 0,
+				contextWindow: 200000,
+				thinkingLevel: "off",
+			})),
 			abort: vi.fn(async () => {
 				releaseRun();
 			}),
@@ -170,6 +176,12 @@ describe("runtime stop handling", () => {
 			getMemoryMaintenanceContext: vi.fn(async () => {
 				throw new Error("not used");
 			}),
+			getStatusSnapshot: vi.fn(() => ({
+				model: "test/model",
+				contextTokens: 0,
+				contextWindow: 200000,
+				thinkingLevel: "off",
+			})),
 			abort: vi.fn(async () => {}),
 		};
 		getOrCreateRunnerMock.mockReturnValue(runner);

@@ -59,6 +59,7 @@ import {
 	createEmptyRunState,
 	type FinalOutcome,
 	MAX_USER_MESSAGE_CHARS,
+	type RunnerStatusSnapshot,
 	type RunState,
 } from "./types.js";
 import { getAgentConfig, getSoul, loadPipiclawSkills } from "./workspace-resources.js";
@@ -233,6 +234,12 @@ export class ChannelRunner implements AgentRunner {
 		try {
 			await this.ensureSessionReady();
 			this.memoryLifecycle.noteUserTurnStarted();
+			const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
+			if (normalizedInputLength > MAX_USER_MESSAGE_CHARS) {
+				await ctx.respondInThread(
+					`⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理。`,
+				);
+			}
 			const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS);
 			const userMessage = this.formatUserMessage(clippedInput, ctx.message.userName);
 			const preserveRawInput = this.shouldPreserveRawInput(ctx.message.text);
@@ -468,6 +475,17 @@ export class ChannelRunner implements AgentRunner {
 			refreshWorkspaceResources: async () => {
 				await this.refreshSessionResources();
 			},
+		};
+	}
+
+	getStatusSnapshot(): RunnerStatusSnapshot {
+		const model = this.session.model ?? this.activeModel;
+		const contextTokens = this.session.getContextUsage()?.tokens;
+		return {
+			model: formatModelReference(model),
+			contextTokens: typeof contextTokens === "number" ? contextTokens : undefined,
+			contextWindow: model.contextWindow || 200000,
+			thinkingLevel: this.session.thinkingLevel,
 		};
 	}
 

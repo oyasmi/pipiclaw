@@ -3,6 +3,18 @@ import { shellEscape } from "./shared/shell-escape.js";
 
 export type SandboxConfig = { type: "host" } | { type: "docker"; container: string };
 
+/**
+ * Error raised when sandbox configuration is invalid or the target sandbox is not
+ * usable. Thrown instead of calling process.exit so callers (bootstrap) decide how
+ * to surface it and the functions stay testable.
+ */
+export class SandboxConfigError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "SandboxConfigError";
+	}
+}
+
 export function parseSandboxArg(value: string): SandboxConfig {
 	if (value === "host") {
 		return { type: "host" };
@@ -10,13 +22,11 @@ export function parseSandboxArg(value: string): SandboxConfig {
 	if (value.startsWith("docker:")) {
 		const container = value.slice("docker:".length);
 		if (!container) {
-			console.error("Error: docker sandbox requires container name (e.g., docker:pipiclaw-sandbox)");
-			process.exit(1);
+			throw new SandboxConfigError("docker sandbox requires container name (e.g., docker:pipiclaw-sandbox)");
 		}
 		return { type: "docker", container };
 	}
-	console.error(`Error: Invalid sandbox type '${value}'. Use 'host' or 'docker:<container-name>'`);
-	process.exit(1);
+	throw new SandboxConfigError(`Invalid sandbox type '${value}'. Use 'host' or 'docker:<container-name>'`);
 }
 
 export async function validateSandbox(config: SandboxConfig): Promise<void> {
@@ -25,8 +35,7 @@ export async function validateSandbox(config: SandboxConfig): Promise<void> {
 			try {
 				resolveWindowsHostShell();
 			} catch (error) {
-				console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-				process.exit(1);
+				throw new SandboxConfigError(error instanceof Error ? error.message : String(error));
 			}
 		}
 		return;
@@ -36,22 +45,22 @@ export async function validateSandbox(config: SandboxConfig): Promise<void> {
 	try {
 		await execSimple("docker", ["--version"]);
 	} catch {
-		console.error("Error: Docker is not installed or not in PATH");
-		process.exit(1);
+		throw new SandboxConfigError("Docker is not installed or not in PATH");
 	}
 
 	// Check if container exists and is running
+	let running: string;
 	try {
-		const result = await execSimple("docker", ["inspect", "-f", "{{.State.Running}}", config.container]);
-		if (result.trim() !== "true") {
-			console.error(`Error: Container '${config.container}' is not running.`);
-			console.error(`Start it with: docker start ${config.container}`);
-			process.exit(1);
-		}
+		running = await execSimple("docker", ["inspect", "-f", "{{.State.Running}}", config.container]);
 	} catch {
-		console.error(`Error: Container '${config.container}' does not exist.`);
-		console.error("Create it with: ./docker.sh create <data-dir>");
-		process.exit(1);
+		throw new SandboxConfigError(
+			`Container '${config.container}' does not exist.\nCreate it with: ./docker.sh create <data-dir>`,
+		);
+	}
+	if (running.trim() !== "true") {
+		throw new SandboxConfigError(
+			`Container '${config.container}' is not running.\nStart it with: docker start ${config.container}`,
+		);
 	}
 
 	console.log(`  Docker container '${config.container}' is running.`);

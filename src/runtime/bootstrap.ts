@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { parseBuiltInCommand } from "../agent/commands.js";
 import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
@@ -18,7 +18,14 @@ import {
 	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
 } from "../paths.js";
-import { createExecutor, type Executor, parseSandboxArg, type SandboxConfig, validateSandbox } from "../sandbox.js";
+import {
+	createExecutor,
+	type Executor,
+	parseSandboxArg,
+	type SandboxConfig,
+	SandboxConfigError,
+	validateSandbox,
+} from "../sandbox.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
@@ -92,6 +99,7 @@ interface ChannelState {
 	running: boolean;
 	runner: AgentRunner;
 	stopRequested: boolean;
+	currentTaskText?: string;
 }
 
 const DEFAULT_SOUL = `# SOUL.md
@@ -266,17 +274,50 @@ function readCliVersion(): string {
 	}
 }
 
-function writeTextFileIfMissing(path: string, content: string, label: string, created: string[]): boolean {
+function writeTextFileIfMissing(
+	path: string,
+	content: string,
+	label: string,
+	created: string[],
+	mode?: number,
+): boolean {
 	if (existsSync(path)) {
 		return false;
 	}
-	writeFileSync(path, content, "utf-8");
+	writeFileSync(path, content, mode !== undefined ? { encoding: "utf-8", mode } : "utf-8");
 	created.push(label);
 	return true;
 }
 
-function writeJsonFileIfMissing(path: string, value: unknown, label: string, created: string[]): boolean {
-	return writeTextFileIfMissing(path, `${JSON.stringify(value, null, 2)}\n`, label, created);
+function writeJsonFileIfMissing(
+	path: string,
+	value: unknown,
+	label: string,
+	created: string[],
+	mode?: number,
+): boolean {
+	return writeTextFileIfMissing(path, `${JSON.stringify(value, null, 2)}\n`, label, created, mode);
+}
+
+// App-level config files that may hold secrets (DingTalk client secret, provider
+// API keys, Brave key). They are created owner-only, and any pre-existing file with
+// looser bits is tightened on startup. No-op on Windows, where POSIX mode bits do
+// not apply.
+const SECRET_FILE_MODE = 0o600;
+
+function hardenExistingSecretFile(path: string): void {
+	if (process.platform === "win32" || !existsSync(path)) {
+		return;
+	}
+	try {
+		const mode = statSync(path).mode & 0o777;
+		if ((mode & 0o077) !== 0) {
+			chmodSync(path, SECRET_FILE_MODE);
+			log.logInfo(`Tightened permissions on ${path} to 0600`);
+		}
+	} catch (err) {
+		log.logWarning(`Failed to tighten permissions on ${path}`, err instanceof Error ? err.message : String(err));
+	}
 }
 
 export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): BootstrapResult {
@@ -309,17 +350,38 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 		created,
 	);
 
+	const secretConfigPaths = [
+		paths.channelConfigPath,
+		paths.authConfigPath,
+		paths.modelsConfigPath,
+		paths.settingsConfigPath,
+		paths.toolsConfigPath,
+		paths.securityConfigPath,
+	];
+
 	const channelTemplateCreated = writeJsonFileIfMissing(
 		paths.channelConfigPath,
 		CHANNEL_CONFIG_TEMPLATE,
 		"channel.json",
 		created,
+		SECRET_FILE_MODE,
 	);
-	writeJsonFileIfMissing(paths.authConfigPath, {}, "auth.json", created);
-	writeJsonFileIfMissing(paths.modelsConfigPath, MODELS_CONFIG_TEMPLATE, "models.json", created);
-	writeJsonFileIfMissing(paths.settingsConfigPath, {}, "settings.json", created);
-	writeJsonFileIfMissing(paths.toolsConfigPath, TOOLS_CONFIG_TEMPLATE, "tools.json", created);
-	writeJsonFileIfMissing(paths.securityConfigPath, SECURITY_CONFIG_TEMPLATE, "security.json", created);
+	writeJsonFileIfMissing(paths.authConfigPath, {}, "auth.json", created, SECRET_FILE_MODE);
+	writeJsonFileIfMissing(paths.modelsConfigPath, MODELS_CONFIG_TEMPLATE, "models.json", created, SECRET_FILE_MODE);
+	writeJsonFileIfMissing(paths.settingsConfigPath, {}, "settings.json", created, SECRET_FILE_MODE);
+	writeJsonFileIfMissing(paths.toolsConfigPath, TOOLS_CONFIG_TEMPLATE, "tools.json", created, SECRET_FILE_MODE);
+	writeJsonFileIfMissing(
+		paths.securityConfigPath,
+		SECURITY_CONFIG_TEMPLATE,
+		"security.json",
+		created,
+		SECRET_FILE_MODE,
+	);
+
+	// Tighten any pre-existing config that predates owner-only creation.
+	for (const secretPath of secretConfigPaths) {
+		hardenExistingSecretFile(secretPath);
+	}
 
 	return { created, channelTemplateCreated };
 }
@@ -437,12 +499,24 @@ export function parseArgs(
 	const args = argv.slice(2);
 	let sandbox: SandboxConfig = { type: "host" };
 
+	const parseSandboxOrExit = (value: string): SandboxConfig => {
+		try {
+			return parseSandboxArg(value);
+		} catch (err) {
+			if (err instanceof SandboxConfigError) {
+				io.error(`Error: ${err.message}`);
+				throw new BootstrapExitError(1);
+			}
+			throw err;
+		}
+	};
+
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
 		if (arg.startsWith("--sandbox=")) {
-			sandbox = parseSandboxArg(arg.slice("--sandbox=".length));
+			sandbox = parseSandboxOrExit(arg.slice("--sandbox=".length));
 		} else if (arg === "--sandbox") {
-			sandbox = parseSandboxArg(args[index + 1] || "");
+			sandbox = parseSandboxOrExit(args[index + 1] || "");
 			index += 1;
 		} else if (arg === "--help" || arg === "-h") {
 			io.log(`Usage: ${paths.appName} [options]`);
@@ -499,6 +573,67 @@ function isNoRunningTaskQueueError(err: unknown): boolean {
 	return err instanceof Error && err.message === "No task is currently running.";
 }
 
+function formatTokenCount(count: number): string {
+	if (count < 1000) return count.toString();
+	if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+	return `${(count / 1_000_000).toFixed(1)}M`;
+}
+
+function formatUptime(ms: number): string {
+	const totalSeconds = Math.floor(ms / 1000);
+	const days = Math.floor(totalSeconds / 86400);
+	const hours = Math.floor((totalSeconds % 86400) / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const parts: string[] = [];
+	if (days > 0) parts.push(`${days}d`);
+	if (hours > 0) parts.push(`${hours}h`);
+	parts.push(`${minutes}m`);
+	return parts.join(" ");
+}
+
+function renderStatus(options: {
+	state: ChannelState | undefined;
+	version: string;
+	uptimeMs: number;
+	sandbox: SandboxConfig;
+}): string {
+	const { state, version, uptimeMs, sandbox } = options;
+	const lines = ["# Status"];
+
+	if (state?.running) {
+		const task = state.currentTaskText?.trim();
+		const preview = task ? `: ${task.length > 80 ? `${task.slice(0, 79)}…` : task}` : "";
+		lines.push(`- Run state: running${preview}`);
+	} else {
+		lines.push("- Run state: idle");
+	}
+
+	if (state) {
+		try {
+			const snapshot = state.runner.getStatusSnapshot();
+			lines.push(`- Model: ${snapshot.model}`);
+			if (snapshot.thinkingLevel && snapshot.thinkingLevel !== "off") {
+				lines.push(`- Thinking: ${snapshot.thinkingLevel}`);
+			}
+			if (snapshot.contextTokens !== undefined && snapshot.contextWindow > 0) {
+				const percent = ((snapshot.contextTokens / snapshot.contextWindow) * 100).toFixed(1);
+				lines.push(
+					`- Context: ${formatTokenCount(snapshot.contextTokens)} / ${formatTokenCount(snapshot.contextWindow)} (${percent}%)`,
+				);
+			}
+		} catch (err) {
+			lines.push(`- Model: unavailable (${err instanceof Error ? err.message : String(err)})`);
+		}
+	} else {
+		lines.push("- Model: no session started for this channel yet");
+	}
+
+	lines.push(`- Sandbox: ${sandbox.type === "host" ? "host" : `docker:${sandbox.container}`}`);
+	lines.push(`- Uptime: ${formatUptime(uptimeMs)}`);
+	lines.push(`- Version: ${version}`);
+	return lines.join("\n");
+}
+
 interface RuntimeContextOptions {
 	paths: BootstrapPaths;
 	sandbox: SandboxConfig;
@@ -521,6 +656,8 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
 	const runtimeSettingsManager = new PipiclawSettingsManager(options.paths.appHomeDir);
+	const startedAt = Date.now();
+	const cliVersion = readCliVersion();
 	const channelStates = new Map<string, ChannelState>();
 	const activeTasks = new Set<Promise<void>>();
 	let shuttingDown = false;
@@ -594,6 +731,16 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				args,
 				workspaceDir: options.paths.workspaceDir,
 				historyPath: options.paths.eventHistoryPath,
+			});
+			await bot.sendPlain(event.channelId, response);
+		},
+
+		async handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void> {
+			const response = renderStatus({
+				state: channelStates.get(event.channelId),
+				version: cliVersion,
+				uptimeMs: Date.now() - startedAt,
+				sandbox: options.sandbox,
 			});
 			await bot.sendPlain(event.channelId, response);
 		},
@@ -696,11 +843,16 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 							await handler.handleEventsCommand(event, bot, builtInCommand.args);
 							return;
 						}
+						if (builtInCommand.name === "status") {
+							await handler.handleStatusCommand(event, bot);
+							return;
+						}
 						await state.runner.handleBuiltinCommand(ctx, builtInCommand);
 						return;
 					}
 
 					log.logInfo(`[${event.channelId}] Starting run: ${event.text.substring(0, 50)}`);
+					state.currentTaskText = event.text;
 					if (!_isEvent) {
 						ctx.primeCard(350);
 					}
@@ -713,6 +865,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					log.logWarning(`[${event.channelId}] Run error`, err instanceof Error ? err.message : String(err));
 				} finally {
 					state.running = false;
+					state.currentTaskText = undefined;
 				}
 			})();
 
@@ -878,7 +1031,15 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 		log.logWarning(formatConfigDiagnostic(diagnostic), diagnostic.path);
 	}
 
-	await validateSandbox(sandbox);
+	try {
+		await validateSandbox(sandbox);
+	} catch (err) {
+		if (err instanceof SandboxConfigError) {
+			io.error(`Error: ${err.message}`);
+			throw new BootstrapExitError(1);
+		}
+		throw err;
+	}
 
 	log.logStartup(paths.workspaceDir, sandbox.type === "host" ? "host" : `docker:${sandbox.container}`);
 	const runtime = createRuntimeContext({

@@ -4,12 +4,20 @@ import type { ChannelStore } from "../runtime/store.js";
 import type { UsageTotals } from "../shared/types.js";
 import type { BuiltInCommand } from "./commands.js";
 
+export interface RunnerStatusSnapshot {
+	model: string;
+	contextTokens?: number;
+	contextWindow: number;
+	thinkingLevel: string;
+}
+
 export interface AgentRunner {
 	run(ctx: DingTalkContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }>;
 	handleBuiltinCommand(ctx: DingTalkContext, command: BuiltInCommand): Promise<void>;
 	queueSteer(text: string, userName?: string): Promise<void>;
 	flushMemoryForShutdown(): Promise<void>;
 	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;
+	getStatusSnapshot(): RunnerStatusSnapshot;
 	abort(): Promise<void>;
 }
 
