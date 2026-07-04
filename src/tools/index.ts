@@ -12,14 +12,8 @@ import { createBashTool } from "./bash.js";
 import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
-import { createMemorySaveTool } from "./memory-save.js";
 import { createReadTool } from "./read.js";
-import { createSessionSearchTool } from "./session-search.js";
-import { createSkillListTool } from "./skill-list.js";
-import { createSkillManageTool } from "./skill-manage.js";
-import { createSkillViewTool } from "./skill-view.js";
-import { createWebFetchTool } from "./web-fetch.js";
-import { createWebSearchTool } from "./web-search.js";
+import { buildToolSet } from "./registry.js";
 import { createWriteTool } from "./write.js";
 
 export interface CreatePipiclawToolsOptions {
@@ -74,71 +68,28 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		workspacePath: options.workspacePath,
 		cwd: process.cwd(),
 	};
-	const baseTools = createPipiclawBaseTools(options.executor, {
+	// The leaf tools (files, web, memory, skills) come from the single declarative
+	// registry so this set, the sub-agent set, and the prompt hints share one source.
+	// The `subagent` tool is appended separately: it is never available to sub-agents
+	// and keeping it out of the registry avoids a registry ↔ subagents/tool import cycle.
+	const leafTools = buildToolSet({
+		executor: options.executor,
 		securityConfig,
 		securityContext,
 		channelId: options.channelId,
+		channelDir: options.channelDir,
+		workspaceDir: options.workspaceDir,
+		workspacePath: options.workspacePath,
+		webConfig: toolsConfig.tools.web,
+		toolsConfig,
+		getCurrentModel: options.getCurrentModel,
+		getAvailableModels: options.getAvailableModels,
+		resolveApiKey: options.resolveApiKey,
+		getSessionSearchSettings: options.getSessionSearchSettings,
+		memoryCandidateStore: options.memoryCandidateStore,
 	});
-	const webTools =
-		toolsConfig.tools.web.enable === false
-			? []
-			: [
-					createWebSearchTool({
-						webConfig: toolsConfig.tools.web,
-						securityConfig,
-						workspaceDir: options.workspaceDir,
-						channelId: options.channelId,
-					}),
-					createWebFetchTool({
-						webConfig: toolsConfig.tools.web,
-						securityConfig,
-						workspaceDir: options.workspaceDir,
-						channelId: options.channelId,
-					}),
-				];
-	const memoryTools = [
-		...(toolsConfig.tools.memory.sessionSearch.enabled === false
-			? []
-			: [
-					createSessionSearchTool({
-						channelDir: options.channelDir,
-						getCurrentModel: options.getCurrentModel,
-						resolveApiKey: options.resolveApiKey,
-						getSessionSearchSettings: options.getSessionSearchSettings,
-					}),
-				]),
-		...(toolsConfig.tools.memory.save.enabled === false
-			? []
-			: [
-					createMemorySaveTool({
-						channelId: options.channelId,
-						channelDir: options.channelDir,
-						memoryCandidateStore: options.memoryCandidateStore,
-					}),
-				]),
-	];
-	const skillTools =
-		toolsConfig.tools.skills.manage.enabled === false
-			? []
-			: [
-					createSkillListTool({
-						workspaceDir: options.workspaceDir,
-						workspacePath: options.workspacePath,
-					}),
-					createSkillViewTool({
-						workspaceDir: options.workspaceDir,
-						workspacePath: options.workspacePath,
-					}),
-					createSkillManageTool({
-						workspaceDir: options.workspaceDir,
-						workspacePath: options.workspacePath,
-					}),
-				];
 	return [
-		...baseTools,
-		...webTools,
-		...memoryTools,
-		...skillTools,
+		...leafTools,
 		createSubAgentTool({
 			executor: options.executor,
 			getCurrentModel: options.getCurrentModel,

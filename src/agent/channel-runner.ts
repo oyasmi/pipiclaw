@@ -44,6 +44,7 @@ import { isRecord } from "../shared/type-guards.js";
 import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
+import { TOOL_PROMPT_HINTS } from "../tools/registry.js";
 import { createCommandExtension } from "./command-extension.js";
 import { type BuiltInCommand, renderBuiltInHelp } from "./commands.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
@@ -703,7 +704,11 @@ export class ChannelRunner implements AgentRunner {
 				sections.push(
 					buildAppendSystemPrompt(this.workspacePath, this.channelId, this.sandboxConfig, {
 						subAgentList: formatSubAgentList(this.subAgentDiscovery.agents),
-						tools: this.currentTools.map((tool) => ({ name: tool.name, description: tool.description })),
+						tools: this.currentTools.map((tool) => ({
+							name: tool.name,
+							description: tool.description,
+							hint: TOOL_PROMPT_HINTS[tool.name],
+						})),
 					}),
 				);
 				return sections;

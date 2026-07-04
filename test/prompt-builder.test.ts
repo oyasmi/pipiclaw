@@ -7,7 +7,15 @@ describe("prompt-builder", () => {
 			"/workspace/root",
 			"dm_123",
 			{ type: "host" },
-			{ subAgentList: "- reviewer" },
+			{
+				subAgentList: "- reviewer",
+				tools: [
+					{ name: "read", description: "Read files" },
+					{ name: "web_search", description: "Search the web" },
+					{ name: "web_fetch", description: "Fetch a URL" },
+					{ name: "subagent", description: "Delegate" },
+				],
+			},
 		);
 
 		expect(prompt).toContain("## Pipiclaw Runtime");
@@ -26,7 +34,12 @@ describe("prompt-builder", () => {
 	});
 
 	it("builds docker runtime prompts with docker-specific instructions", () => {
-		const prompt = buildAppendSystemPrompt("/workspace/root", "group_456", { type: "docker", container: "sandbox" });
+		const prompt = buildAppendSystemPrompt(
+			"/workspace/root",
+			"group_456",
+			{ type: "docker", container: "sandbox" },
+			{ tools: [{ name: "subagent", description: "Delegate" }] },
+		);
 
 		expect(prompt).toContain("You are running inside a Docker container (Alpine Linux).");
 		expect(prompt).toContain("Install tools with: apk add <package>");

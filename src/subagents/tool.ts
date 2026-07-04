@@ -13,13 +13,8 @@ import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText, extractAssistantText, extractLabelFromArgs, HAN_REGEX } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
-import { createBashTool } from "../tools/bash.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
-import { createEditTool } from "../tools/edit.js";
-import { createReadTool } from "../tools/read.js";
-import { createWebFetchTool } from "../tools/web-fetch.js";
-import { createWebSearchTool } from "../tools/web-search.js";
-import { createWriteTool } from "../tools/write.js";
+import { buildToolSet } from "../tools/registry.js";
 import {
 	formatSubAgentList,
 	type ResolvedSubAgentConfig,
@@ -172,60 +167,35 @@ function buildStoppedText(config: SubAgentConfig, reason: string, finalText: str
 	return `[Sub-agent ${config.name} stopped: ${reason}]\n\n${trimmedFinalText}`;
 }
 
-function createToolSet(executor: Executor, bashTimeoutSec: number, options: SubAgentToolOptions): AgentTool<any>[] {
-	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
-	const securityContext = {
-		workspaceDir: options.workspaceDir,
-		workspacePath: options.runtimeContext.workspacePath,
-		cwd: process.cwd(),
-	};
-	return [
-		createReadTool(executor, {
-			securityConfig,
-			securityContext,
-			channelId: options.runtimeContext.channelId,
-		}),
-		createBashTool(executor, {
-			defaultTimeoutSeconds: bashTimeoutSec,
-			securityConfig,
-			securityContext,
-			channelId: options.runtimeContext.channelId,
-		}),
-		createEditTool(executor, {
-			securityConfig,
-			securityContext,
-			channelId: options.runtimeContext.channelId,
-		}),
-		createWriteTool(executor, {
-			securityConfig,
-			securityContext,
-			channelId: options.runtimeContext.channelId,
-		}),
-	];
-}
-
-function createNamedToolSet(
+/**
+ * Build a sub-agent's tool set from the shared tool registry, filtered to tools flagged
+ * available to sub-agents (files + web). Sub-agents run with their own security context
+ * (rooted at the sub-agent workspace) and their own per-invocation bash timeout.
+ */
+function buildSubagentTools(
 	executor: Executor,
 	bashTimeoutSec: number,
 	options: SubAgentToolOptions,
-): Record<string, AgentTool<any>> {
-	const tools = createToolSet(executor, bashTimeoutSec, options);
-	const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool])) as Record<string, AgentTool<any>>;
-	if (options.webConfig && options.webConfig.enable !== false) {
-		byName.web_search = createWebSearchTool({
-			webConfig: options.webConfig,
-			securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
-			workspaceDir: options.workspaceDir,
+): AgentTool<any>[] {
+	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
+	return buildToolSet(
+		{
+			executor,
+			securityConfig,
+			securityContext: {
+				workspaceDir: options.workspaceDir,
+				workspacePath: options.runtimeContext.workspacePath,
+				cwd: process.cwd(),
+			},
 			channelId: options.runtimeContext.channelId,
-		});
-		byName.web_fetch = createWebFetchTool({
-			webConfig: options.webConfig,
-			securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
+			channelDir: options.channelDir,
 			workspaceDir: options.workspaceDir,
-			channelId: options.runtimeContext.channelId,
-		});
-	}
-	return byName;
+			workspacePath: options.runtimeContext.workspacePath,
+			webConfig: options.webConfig,
+			bashDefaultTimeoutSeconds: bashTimeoutSec,
+		},
+		{ forSubagent: true },
+	);
 }
 
 function buildSubAgentTask(
@@ -455,7 +425,7 @@ export function createSubAgentTool(
 				});
 			};
 
-			const availableTools = Object.values(createNamedToolSet(options.executor, config.bashTimeoutSec, options));
+			const availableTools = buildSubagentTools(options.executor, config.bashTimeoutSec, options);
 
 			const worker =
 				options.createWorker?.({

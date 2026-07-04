@@ -1,53 +1,26 @@
 import type { SandboxConfig } from "../sandbox.js";
 
-/** Minimal shape of a registered tool needed to describe it in the system prompt. */
+/**
+ * Minimal shape of a registered tool needed to describe it in the system prompt.
+ * `hint` is the curated one-liner sourced from the tool registry (the single source of
+ * truth); when absent, the tool's own description is summarized as a fallback.
+ */
 export interface ToolDescriptor {
 	name: string;
 	description: string;
+	hint?: string;
 }
 
 export interface AppendSystemPromptOptions {
 	subAgentList?: string;
 	/**
-	 * The tools actually registered for this session. When provided, the `## Tools`
-	 * section and every tool-specific instruction are rendered from this set — the
-	 * single source of truth — so the prompt can never advertise a tool that is not
-	 * present (or omit one that is). When omitted, the full default set is assumed.
+	 * The tools actually registered for this session. The `## Tools` section and every
+	 * tool-specific instruction are rendered from this set — the single source of truth —
+	 * so the prompt can never advertise a tool that is not present (or omit one that is).
+	 * When omitted, no tools are described (all tool-specific sections are gated off).
 	 */
 	tools?: ToolDescriptor[];
 }
-
-/** Curated one-line hints for known tools, keyed by tool name. */
-const TOOL_HINTS: Record<string, string> = {
-	read: "Read files",
-	edit: "Surgical file edits",
-	write: "Create or overwrite files when needed",
-	bash: "Run shell commands and external programs",
-	web_search: "Search the public web and return titles, URLs, and snippets",
-	web_fetch: "Fetch a public URL and extract readable content",
-	session_search: "Search current-channel cold transcript storage for older conversation details",
-	memory_save: "Save a durable fact to this channel's long-term memory immediately when the user asks",
-	skill_list: "List workspace-level procedural memory in skills/",
-	skill_view: "Inspect a workspace-level skill's contents",
-	skill_manage: "Create or maintain workspace-level procedural memory in skills/",
-	subagent: "Delegate a focused task to a sub-agent with its own isolated context",
-};
-
-/** Default full tool set, used when a caller does not pass the concrete registered tools. */
-const DEFAULT_TOOL_ORDER: ToolDescriptor[] = [
-	"read",
-	"edit",
-	"write",
-	"bash",
-	"web_search",
-	"web_fetch",
-	"session_search",
-	"memory_save",
-	"skill_list",
-	"skill_view",
-	"skill_manage",
-	"subagent",
-].map((name) => ({ name, description: TOOL_HINTS[name] ?? name }));
 
 function firstSentence(text: string): string {
 	const trimmed = text.trim();
@@ -59,8 +32,7 @@ function firstSentence(text: string): string {
 function buildToolsSection(tools: ToolDescriptor[]): string {
 	const lines = ["## Tools"];
 	for (const tool of tools) {
-		const hint = TOOL_HINTS[tool.name] ?? firstSentence(tool.description);
-		lines.push(`- ${tool.name}: ${hint}`);
+		lines.push(`- ${tool.name}: ${tool.hint ?? firstSentence(tool.description)}`);
 	}
 	lines.push("", 'Each tool requires a "label" parameter (shown to user).');
 	return lines.join("\n");
@@ -76,7 +48,7 @@ export function buildAppendSystemPrompt(
 	const subAgentsPath = `${workspacePath}/sub-agents`;
 	const isDocker = sandboxConfig.type === "docker";
 
-	const toolList = options.tools ?? DEFAULT_TOOL_ORDER;
+	const toolList = options.tools ?? [];
 	const toolNames = new Set(toolList.map((tool) => tool.name));
 	const hasTool = (name: string): boolean => toolNames.has(name);
 
