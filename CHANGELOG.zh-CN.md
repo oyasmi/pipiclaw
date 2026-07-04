@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-05
+
+### 新增
+
+- 单一备用模型回退（spec 017）：当主模型的一次任务以错误结束时（不含 `/stop` 与上下文溢出场景），运行时会切换到配置的 `fallbackModel` 并把该回合重跑一次；经过 5 分钟冷却后自动切回主模型重试。通过 `fallbackModel` 设置项配置（不设置即禁用），在 `/status` 的 `Fallback` 行展示，并以结构化 `model_fallback` 日志事件记录。
+
+### 移除
+
+- 移除 Windows 支持及其平台相关的复杂度：删除 `isWindowsPlatform()` 以及命令/路径守卫的 fail-open 分支（此前 Windows 会完全绕过安全守卫）、Git Bash shell 探测、`PIPICLAW_SHELL`、`taskkill` 进程终止、沙箱的 `windowsHide` 选项，将 `toShellPath`/`shellEscapePath` 合并为 `shellEscape`，去掉凭证文件权限加固中的 win32 空操作，并清理相关的 Windows 专属测试与文档章节。
+
 ## [0.7.0] - 2026-07-04
 
 ### 新增

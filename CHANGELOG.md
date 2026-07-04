@@ -4,6 +4,16 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-05
+
+### Added
+
+- Single backup model fallback (spec 017): when the primary model's turn ends in an error (excluding `/stop` and context-overflow cases), the runtime switches to a configured `fallbackModel` and re-runs the turn once; after a 5-minute cooldown it automatically retries the primary. Configured via the `fallbackModel` settings key (unset disables it), surfaced on the `/status` `Fallback` line, and recorded as a structured `model_fallback` log event.
+
+### Removed
+
+- Dropped Windows support and its platform-specific complexity: removed `isWindowsPlatform()` and the command/path guard fail-open branches (Windows previously bypassed the security guards entirely), Git Bash shell detection, `PIPICLAW_SHELL`, `taskkill` process killing, `windowsHide` sandbox options, the `toShellPath`/`shellEscapePath` split (collapsed into `shellEscape`), the win32 no-op in secret-file permission hardening, and the associated Windows-only tests and docs sections.
+
 ## [0.7.0] - 2026-07-04
 
 ### Added
