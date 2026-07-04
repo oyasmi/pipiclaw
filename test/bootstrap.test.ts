@@ -82,7 +82,7 @@ describe("bootstrap", () => {
 		expect(second.created).toEqual([]);
 	});
 
-	it.skipIf(process.platform === "win32")("creates secret config files owner-only and tightens loose ones", () => {
+	it("creates secret config files owner-only and tightens loose ones", () => {
 		const paths = createBootstrapPaths();
 
 		bootstrapAppHome(paths);

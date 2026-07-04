@@ -303,12 +303,11 @@ function writeJsonFileIfMissing(
 
 // App-level config files that may hold secrets (DingTalk client secret, provider
 // API keys, Brave key). They are created owner-only, and any pre-existing file with
-// looser bits is tightened on startup. No-op on Windows, where POSIX mode bits do
-// not apply.
+// looser bits is tightened on startup.
 const SECRET_FILE_MODE = 0o600;
 
 function hardenExistingSecretFile(path: string): void {
-	if (process.platform === "win32" || !existsSync(path)) {
+	if (!existsSync(path)) {
 		return;
 	}
 	try {

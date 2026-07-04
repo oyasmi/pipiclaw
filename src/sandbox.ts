@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 import { shellEscape } from "./shared/shell-escape.js";
 
 export type SandboxConfig = { type: "host" } | { type: "docker"; container: string };
@@ -31,13 +31,6 @@ export function parseSandboxArg(value: string): SandboxConfig {
 
 export async function validateSandbox(config: SandboxConfig): Promise<void> {
 	if (config.type === "host") {
-		if (process.platform === "win32") {
-			try {
-				resolveWindowsHostShell();
-			} catch (error) {
-				throw new SandboxConfigError(error instanceof Error ? error.message : String(error));
-			}
-		}
 		return;
 	}
 
@@ -70,7 +63,6 @@ function execSimple(cmd: string, args: string[]): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(cmd, args, {
 			stdio: ["ignore", "pipe", "pipe"],
-			windowsHide: true,
 		});
 		let stdout = "";
 		let stderr = "";
@@ -85,67 +77,6 @@ function execSimple(cmd: string, args: string[]): Promise<string> {
 			else reject(new Error(stderr || `Exit code ${code}`));
 		});
 	});
-}
-
-interface HostShell {
-	command: string;
-	args: string[];
-}
-
-const WINDOWS_POSIX_SHELL_CANDIDATES = [
-	"bash",
-	"sh",
-	"C:\\Program Files\\Git\\bin\\bash.exe",
-	"C:\\Program Files\\Git\\usr\\bin\\bash.exe",
-	"C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-	"C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe",
-] as const;
-
-let cachedWindowsHostShell: HostShell | undefined;
-
-function looksLikeUnixShellPath(shell: string): boolean {
-	return shell.endsWith("/bash") || shell.endsWith("/sh");
-}
-
-function isUsablePosixShell(command: string): boolean {
-	const result = spawnSync(command, ["-lc", "printf pipiclaw"], {
-		stdio: ["ignore", "pipe", "ignore"],
-		encoding: "utf-8",
-		windowsHide: true,
-	});
-	return !result.error && result.status === 0 && result.stdout === "pipiclaw";
-}
-
-function resolveWindowsHostShell(): HostShell {
-	if (cachedWindowsHostShell) {
-		return cachedWindowsHostShell;
-	}
-
-	const configuredShell = process.env.PIPICLAW_SHELL?.trim();
-	const inheritedShell = process.env.SHELL?.trim();
-	const shellCandidates = [
-		configuredShell,
-		inheritedShell && looksLikeUnixShellPath(inheritedShell) ? inheritedShell.split("/").pop() : undefined,
-		...WINDOWS_POSIX_SHELL_CANDIDATES,
-	].filter((value): value is string => Boolean(value));
-
-	for (const command of shellCandidates) {
-		if (isUsablePosixShell(command)) {
-			cachedWindowsHostShell = { command, args: ["-lc"] };
-			return cachedWindowsHostShell;
-		}
-	}
-
-	throw new Error(
-		"Windows host sandbox requires a POSIX shell. Install Git Bash and ensure `bash` is on PATH, set `PIPICLAW_SHELL`, or use the Docker sandbox.",
-	);
-}
-
-function resolveHostShell(): HostShell {
-	if (process.platform === "win32") {
-		return resolveWindowsHostShell();
-	}
-	return { command: "sh", args: ["-c"] };
 }
 
 /**
@@ -187,13 +118,11 @@ export interface ExecResult {
 class HostExecutor implements Executor {
 	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
 		return new Promise((resolve, reject) => {
-			const shell = resolveHostShell();
 			const child = (() => {
 				try {
-					return spawn(shell.command, [...shell.args, command], {
+					return spawn("sh", ["-c", command], {
 						detached: true,
 						stdio: ["pipe", "pipe", "pipe"],
-						windowsHide: true,
 					});
 				} catch (err) {
 					reject(err instanceof Error ? err : new Error(String(err)));
@@ -320,25 +249,13 @@ class DockerExecutor implements Executor {
 }
 
 function killProcessTree(pid: number): void {
-	if (process.platform === "win32") {
+	try {
+		process.kill(-pid, "SIGKILL");
+	} catch {
 		try {
-			spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
-				stdio: "ignore",
-				detached: true,
-				windowsHide: true,
-			});
+			process.kill(pid, "SIGKILL");
 		} catch {
-			// Ignore errors
-		}
-	} else {
-		try {
-			process.kill(-pid, "SIGKILL");
-		} catch {
-			try {
-				process.kill(pid, "SIGKILL");
-			} catch {
-				// Process already dead
-			}
+			// Process already dead
 		}
 	}
 }

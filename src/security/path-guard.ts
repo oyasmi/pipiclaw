@@ -1,7 +1,6 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, normalize, resolve } from "node:path";
-import { isWindowsPlatform } from "./platform.js";
 import type { PathGuardContext, PathGuardResult } from "./types.js";
 
 const PRIVATE_KEY_EXTENSIONS = new Set([".pem", ".key", ".p12", ".pfx"]);
@@ -234,9 +233,6 @@ function formatBlockedResult(
 
 export function guardPath(rawPath: string, operation: "read" | "write", ctx: PathGuardContext): PathGuardResult {
 	if (!ctx.config.enabled) {
-		return { allowed: true, operation, rawPath };
-	}
-	if (isWindowsPlatform()) {
 		return { allowed: true, operation, rawPath };
 	}
 

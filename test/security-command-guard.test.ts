@@ -1,12 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { guardCommand, internalCommandGuard } from "../src/security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
-
-const originalPlatform = process.platform;
-
-afterEach(() => {
-	Object.defineProperty(process, "platform", { value: originalPlatform });
-});
 
 describe("security command guard", () => {
 	it("allows common safe commands", () => {
@@ -58,11 +52,6 @@ describe("security command guard", () => {
 	it("parses shell words without treating quoted text as executable commands", () => {
 		expect(internalCommandGuard.parseShellWords(`'r''m' -rf /`)).toEqual(["rm", "-rf", "/"]);
 		expect(guardCommand(`echo "rm -rf /"`, DEFAULT_SECURITY_CONFIG.commandGuard)).toEqual({ allowed: true });
-	});
-
-	it("fails open on Windows", () => {
-		Object.defineProperty(process, "platform", { value: "win32" });
-		expect(guardCommand("rm -rf /", DEFAULT_SECURITY_CONFIG.commandGuard)).toEqual({ allowed: true });
 	});
 
 	describe("allowPatterns are anchored per atom", () => {

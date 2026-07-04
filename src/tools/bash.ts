@@ -6,7 +6,7 @@ import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
-import { shellEscapePath } from "../shared/shell-escape.js";
+import { shellEscape } from "../shared/shell-escape.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
 /**
@@ -120,7 +120,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			if (totalBytes > DEFAULT_MAX_BYTES) {
 				const candidatePath = getSpillFilePath();
 				try {
-					const spillResult = await executor.exec(`cat > ${shellEscapePath(candidatePath)}`, {
+					const spillResult = await executor.exec(`cat > ${shellEscape(candidatePath)}`, {
 						signal,
 						stdin: output,
 					});

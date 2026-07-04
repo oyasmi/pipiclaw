@@ -25,13 +25,11 @@ const context = {
 	workspaceDir: "/workspace",
 	channelId: "dm_test",
 };
-const originalPlatform = process.platform;
 
 describe("web fetch security", () => {
 	beforeEach(() => {
 		requestMock.mockReset();
 		lookupMock.mockReset();
-		Object.defineProperty(process, "platform", { value: originalPlatform });
 	});
 
 	it("blocks private resolved addresses", async () => {
@@ -87,22 +85,5 @@ describe("web fetch security", () => {
 				enableJinaFallback: false,
 			}),
 		).rejects.toThrow(/private network address|blocked host/i);
-	});
-
-	it("still blocks localhost on Windows", async () => {
-		Object.defineProperty(process, "platform", { value: "win32" });
-
-		await expect(
-			runWebFetch(context, {
-				url: "http://localhost/admin",
-				extractMode: "text",
-				maxChars: 5000,
-				maxImageBytes: context.webConfig.fetch.maxImageBytes,
-				maxResponseBytes: context.webConfig.fetch.maxResponseBytes,
-				preferJina: false,
-				enableJinaFallback: false,
-			}),
-		).rejects.toThrow(/blocked host/i);
-		expect(requestMock).not.toHaveBeenCalled();
 	});
 });
