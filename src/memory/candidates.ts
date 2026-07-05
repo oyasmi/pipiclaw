@@ -39,9 +39,16 @@ function normalizeContent(content: string): string {
 async function readOptionalFile(path: string): Promise<string> {
 	try {
 		return normalizeContent(await readFile(path, "utf-8"));
-	} catch {
-		return "";
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") {
+			return "";
+		}
+		throw error;
 	}
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error && "code" in error;
 }
 
 function slugify(value: string): string {

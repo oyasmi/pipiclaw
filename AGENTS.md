@@ -50,7 +50,7 @@ Use `npm run typecheck` and `npm run test` as the minimum validation after non-t
 
 ## Practical Notes
 
-- Node.js target is `>= 22`
+- Node.js target is `>= 22.19.0`
 - DingTalk transport commands are handled in the runtime layer; session commands are handled inside the agent session layer
 - Event administration commands (`/events list|show|delete|history`) are runtime-layer commands and must stay path-confined to `workspace/events/` and event history
 - The package version lives in `package.json` and the top-level package entry in `package-lock.json`

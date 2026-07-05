@@ -1253,7 +1253,7 @@ export class DingTalkBot {
 			if (builtInCommand) {
 				await this.sendPlain(
 					channelId,
-					`A task is already running. Use \`/stop\`, \`/steer <message>\`, \`/followup <message>\`, or \`/events <action>\`. Plain messages default to ${this.busyMessageDefault}.`,
+					`A task is already running. Use \`/stop\`, \`/steer <message>\`, \`/followup <message>\`, \`/events <action>\`, \`/status\`, or \`/usage\`. Plain messages default to ${this.busyMessageDefault}.`,
 				);
 				return;
 			}

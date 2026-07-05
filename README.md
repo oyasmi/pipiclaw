@@ -19,7 +19,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 - 支持终端 TUI：`pipiclaw tui` 直接在命令行对话，复用同一套配置、记忆与会话（见[配置手册](docs/configuration.md)的「终端 TUI」）
 - 支持 AI Card 过程展示，思考、工具执行和状态更新可以持续流式呈现
 - 支持 `/help`、`/new`、`/compact`、`/session`、`/model`
-- 忙碌时可继续接收 `/steer`、`/followup`、`/stop`、`/events`
+- 忙碌时可继续接收 `/steer`、`/followup`、`/stop`、`/events`、`/status`、`/usage`
 - 按工作区 / 会话通道（workspace / channel）分层管理 `SOUL.md`、`AGENTS.md`、`SESSION.md`、`MEMORY.md`、`HISTORY.md`
 - 支持预定义子代理（sub-agent）和临时内联子代理（inline sub-agent）
 - 支持立即、单次、周期三类事件调度
@@ -53,8 +53,8 @@ Pipiclaw 当前已经内置一轮工具层安全增强：
 ```text
 请帮我在这台机器上安装并初始化 Pipiclaw，并尽量把它配置到“可以开始使用”的状态。按下面要求执行：
 
-1. 先检查 Node.js 是否可用，版本必须 >= 22。
-   - 如果未安装，或版本低于 22，不要继续安装 Pipiclaw，直接告诉我需要先安装或切换到 Node.js 22+。
+1. 先检查 Node.js 是否可用，版本必须 >= 22.19.0。
+   - 如果未安装，或版本低于 22.19.0，不要继续安装 Pipiclaw，直接告诉我需要先安装或切换到 Node.js 22.19.0+。
 
 2. 安装 Pipiclaw：
    - 优先执行：npm install -g @oyasmi/pipiclaw
@@ -127,20 +127,13 @@ Pipiclaw 当前已经内置一轮工具层安全增强：
 
 #### 1. 环境要求（Requirements）
 
-- Node.js `>= 22`
+- Node.js `>= 22.19.0`
 - 一个可用的钉钉企业内部应用
 - 至少一种可用的模型接入方式
   - 直接使用 Anthropic 默认模型
   - 或在 `models.json` 中配置自定义模型提供方（provider）
 
-Windows 补充说明：
-
-- Pipiclaw 的工具执行层默认按 POSIX shell 语义工作
-- 推荐在 Windows 上使用 WSL2 安装和运行 Pipiclaw
-- 不推荐直接在 Windows host 模式下配合 Git Bash 使用；这种方式在工具调用中更容易遇到兼容性问题，尤其是 skills 依赖的外部工具
-- 仅在无法使用 WSL2 时，再考虑安装 Git Bash，并确保 `bash` 可在 PATH 中找到
-- 如果 Windows host 模式下 `bash` 不在 PATH 中，可以设置 `PIPICLAW_SHELL` 指向具体可执行文件，例如 `C:\Program Files\Git\bin\bash.exe`
-- 如果你不想依赖本机 shell 环境，推荐直接使用 Docker sandbox
+Pipiclaw 面向类 Unix 环境（Linux / macOS），不支持 Windows。工具执行层按 POSIX shell 语义工作；如需在 Windows 上运行，请使用 WSL2。
 
 #### 2. 安装（Install）
 
@@ -183,12 +176,6 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 ```
 
 设置后，`channel.json`、`auth.json`、`models.json`、`settings.json`、`tools.json`、`security.json` 和整个 `workspace/` 都会改为从这个目录读取和写入。
-
-如果你无法使用 WSL2，选择在 Windows host 模式下配合 Git Bash 运行，并且 `bash` 不在 PATH 中，也可以一并设置：
-
-```powershell
-$env:PIPICLAW_SHELL = "C:\Program Files\Git\bin\bash.exe"
-```
 
 如果 `channel.json` 仍然是初始化模板，程序会提示你补全配置后再启动。这是正常行为。
 
@@ -446,7 +433,6 @@ pipiclaw
 |----------|------|
 | `ANTHROPIC_API_KEY` | Anthropic API Key |
 | `PIPICLAW_HOME` | 覆盖默认的 `~/.pi/pipiclaw/` 根目录 |
-| `PIPICLAW_SHELL` | Windows host 模式下指定 POSIX shell，例如 Git Bash 的 `bash.exe` |
 | `PIPICLAW_DEBUG` | 调试模式，会把上下文写到 `last_prompt.json` |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` | 标准代理环境变量；DingTalk runtime 和 web 工具都会尊重它们 |
 
@@ -468,6 +454,8 @@ Pipiclaw 有两层命令。
 | `/events show <name>` | 查看指定事件文件的完整 JSON |
 | `/events delete <name>` | 删除指定事件文件 |
 | `/events history [name]` | 查看事件调度历史，可按事件名过滤 |
+| `/status` | 查看运行时状态：执行状态、当前模型、上下文用量、运行时长、版本 |
+| `/usage [7d\|month]` | 查看本通道与全局的 LLM 成本，按类型和 Top 模型拆分 |
 
 忙碌时，普通消息默认等价于 `/steer <message>`。
 
