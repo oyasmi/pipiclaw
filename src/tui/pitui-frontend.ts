@@ -121,6 +121,11 @@ export class PiTuiFrontend implements Frontend {
 		this.ui.requestRender();
 	}
 
+	showBanner(text: string): void {
+		this.transcript.addChild(new Text(text, 1, 1));
+		this.ui.requestRender();
+	}
+
 	/** Echo the user's submitted message into the transcript. */
 	showUser(text: string): void {
 		this.transcript.addChild(new Text(`${cyan(bold("›"))} ${text}`, 1, 0));

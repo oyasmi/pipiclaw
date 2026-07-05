@@ -12,6 +12,7 @@ import type { AgentRunner } from "../agent/types.js";
 import * as log from "../log.js";
 import type { ChannelStore } from "../runtime/store.js";
 import type { SandboxConfig } from "../sandbox.js";
+import { bold, dim } from "./colors.js";
 import { type DispatchDeps, dispatch } from "./commands.js";
 import type { Frontend } from "./renderer.js";
 import { createTerminalContext, type DeliveryTraits, type TurnInput } from "./terminal-context.js";
@@ -83,6 +84,7 @@ export class TurnController {
 			onInterrupt: () => this.handleInterrupt(),
 			onEof: () => this.requestExit(),
 		});
+		this.deps.frontend.showBanner(this.buildWelcome());
 		this.updateStatus();
 		if (initialPrompt?.trim()) this.submit(initialPrompt);
 		return this.exitPromise;
@@ -245,6 +247,21 @@ export class TurnController {
 		void this.shutdown();
 	}
 
+	private buildWelcome(): string {
+		let model = "";
+		try {
+			model = this.deps.runner.getStatusSnapshot().model;
+		} catch {
+			// Snapshot may be unavailable before the first turn; omit the model.
+		}
+		const meta = model ? `${this.deps.channelId} · ${model}` : this.deps.channelId;
+		return [
+			`${bold("pipiclaw")} ${dim("· terminal chat")}`,
+			dim(meta),
+			dim("Type a message to start. /help for commands."),
+		].join("\n");
+	}
+
 	private updateStatus(): void {
 		try {
 			const snapshot = this.deps.runner.getStatusSnapshot();
@@ -252,7 +269,7 @@ export class TurnController {
 			if (snapshot.contextTokens !== undefined && snapshot.contextWindow > 0) {
 				line += ` · ctx ${((snapshot.contextTokens / snapshot.contextWindow) * 100).toFixed(0)}%`;
 			}
-			line += this.running ? " · running (Ctrl-C to stop)" : " · idle";
+			line += this.running ? " · running" : " · idle";
 			this.deps.frontend.setStatus(`${this.deps.channelId} · ${line}`);
 		} catch {
 			this.deps.frontend.setStatus(`${this.deps.channelId} · ${this.running ? "running" : "ready"}`);

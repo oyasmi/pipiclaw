@@ -65,6 +65,7 @@ class FakeFrontend implements Frontend {
 	setBusy(busy: boolean): void {
 		this.busy = busy;
 	}
+	showBanner(): void {}
 	stop(): void {
 		this.stopped = true;
 	}

@@ -43,6 +43,8 @@ export interface Frontend extends TranscriptRenderer {
 	setStatus(text: string): void;
 	/** Mark a turn in-flight: disable input echo of a new turn and show the spinner. */
 	setBusy(busy: boolean): void;
+	/** Show a one-time welcome banner at startup. */
+	showBanner(text: string): void;
 	/** Tear down: restore the terminal, stop reading input. */
 	stop(): void;
 }

@@ -62,6 +62,11 @@ export class PlainFrontend implements Frontend {
 
 	setBusy(_busy: boolean): void {}
 
+	showBanner(text: string): void {
+		if (this.quiet) return;
+		process.stderr.write(`${text}\n`);
+	}
+
 	stop(): void {
 		this.rl?.close();
 		this.rl = undefined;
