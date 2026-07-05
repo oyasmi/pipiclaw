@@ -64,6 +64,11 @@ function printTuiHelp(io: BootstrapIO): void {
 	io.log("Chat with the pipiclaw agent in the terminal, reusing the same config,");
 	io.log("memory and session as the DingTalk runtime.");
 	io.log("");
+	io.log("Resume: there is no /resume command — a channel resumes itself.");
+	io.log("Re-running with the same --channel restores the previous conversation");
+	io.log("automatically (context is persisted per channel); memory carries longer-");
+	io.log("term facts across sessions. Use --channel to continue any past conversation.");
+	io.log("");
 	io.log("Options:");
 	io.log("  --channel <id>            Channel to attach to (default: tui_local).");
 	io.log("                            Use dm_<staffId> to share a DingTalk conversation's memory.");

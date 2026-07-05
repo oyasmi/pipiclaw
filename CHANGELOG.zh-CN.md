@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-05
+
+### 新增
+
+- 终端 TUI（spec 018）：新增 `pipiclaw tui` 子命令，可直接在终端与 agent 对话，复用与钉钉运行时**同一套**配置、记忆和每 channel 会话，且**无需配置任何钉钉凭据**。TUI 通过 `prepareAppServices` 与守护进程路径共享 app 服务（settings、tools、security、沙箱校验），但跳过钉钉门控，因此无需填写 `channel.json` 也能运行，且从不构造 `DingTalkBot`。
+  - 在 TTY 下渲染全屏 pi-tui 前端（滚动记录、状态行、流式进度、斜杠命令补全）；非 TTY 输入（管道/重定向）与 `--print` 会自动回退到纯文本前端。
+  - 参数：`--channel <id>` 挂接到任意历史对话（例如 `dm_<staffId>` 可共享某个钉钉会话的记忆；默认 `tui_local`）；`--print`/`-p` 执行一次性非交互回合（prompt 取自命令行参数或 stdin）后退出；`--quiet`/`-q` 只打印最终答案；`--plain` 强制纯文本前端；`--sandbox=host`（默认）或 `--sandbox=docker:<name>` 选择工具隔离方式。
+  - 续接是隐式且按 channel 进行的：用相同 `--channel` 重新运行即从 `context.jsonl` 还原上一轮对话——没有 `/resume` 命令，更长期的事实通过记忆层跨会话带回。
+  - 斜杠命令：`/help`、`/new`、`/compact`、`/session`、`/status`、`/model`、`/usage`、`/events`、`/steer`、`/followup`、`/stop` 和 `/exit`；启动欢迎横幅；`Ctrl-C` / `Ctrl-D` / `/exit` 可可靠退出（退出前会先落盘记忆）。
+  - 输出形态由 `settings.json` 中可选的 `tui` 块（`responseMode`）控制，与钉钉的 `channel.json.responseMode` 相互独立。
+
+### 变更
+
+- 重构 `bootstrap.ts`，将与传输无关的 app 初始化（`prepareAppServices`）与钉钉专属的运行时装配分离，使终端 TUI 和钉钉守护进程共享同一套配置、沙箱与日志初始化，而无需重复实现。
+
 ## [0.7.1] - 2026-07-05
 
 ### 新增
