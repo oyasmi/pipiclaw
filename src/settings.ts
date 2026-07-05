@@ -11,6 +11,7 @@ import type { Transport } from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import * as log from "./log.js";
+import type { ResponseMode } from "./runtime/dingtalk.js";
 import type { ConfigDiagnostic } from "./shared/config-diagnostics.js";
 
 type PackageSource =
@@ -146,7 +147,23 @@ export interface PipiclawSettings {
 	memoryMaintenance?: Partial<PipiclawMemoryMaintenanceSettings>;
 	sessionSearch?: Partial<PipiclawSessionSearchSettings>;
 	logging?: Partial<Omit<PipiclawLoggingSettings, "file">> & { file?: Partial<PipiclawLoggingSettings["file"]> };
+	tui?: Partial<PipiclawTuiSettings>;
 }
+
+export interface PipiclawTuiSettings {
+	/**
+	 * Output shape for the terminal TUI, reusing the DingTalk response-mode
+	 * vocabulary: `full_progress_then_plain_final` (default) streams full progress
+	 * then a plain final answer; `rolling_progress_then_plain_final` keeps only
+	 * recent progress; `final_card_only` hides progress. Independent of the
+	 * DingTalk channel's `responseMode` in `channel.json`.
+	 */
+	responseMode: ResponseMode;
+}
+
+const DEFAULT_TUI: PipiclawTuiSettings = {
+	responseMode: "full_progress_then_plain_final",
+};
 
 const DEFAULT_COMPACTION: PipiclawCompactionSettings = {
 	enabled: true,
@@ -369,6 +386,10 @@ export class PipiclawSettingsManager {
 				...this.settings.logging?.file,
 			},
 		};
+	}
+
+	getTuiSettings(): PipiclawTuiSettings {
+		return { ...DEFAULT_TUI, ...this.settings.tui };
 	}
 
 	getRetryEnabled(): boolean {

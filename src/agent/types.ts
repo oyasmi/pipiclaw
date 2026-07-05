@@ -1,5 +1,5 @@
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
-import type { DingTalkContext } from "../runtime/dingtalk.js";
+import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import type { UsageTotals } from "../shared/types.js";
 import type { BuiltInCommand } from "./commands.js";
@@ -14,8 +14,8 @@ export interface RunnerStatusSnapshot {
 }
 
 export interface AgentRunner {
-	run(ctx: DingTalkContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }>;
-	handleBuiltinCommand(ctx: DingTalkContext, command: BuiltInCommand): Promise<void>;
+	run(ctx: ChannelContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }>;
+	handleBuiltinCommand(ctx: ChannelContext, command: BuiltInCommand): Promise<void>;
 	queueSteer(text: string, userName?: string): Promise<void>;
 	flushMemoryForShutdown(): Promise<void>;
 	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;
@@ -43,7 +43,7 @@ export interface RunLogContext {
 }
 
 export interface RunState {
-	ctx: DingTalkContext | null;
+	ctx: ChannelContext | null;
 	logCtx: RunLogContext | null;
 	store: ChannelStore | null;
 	queue: RunQueue | null;

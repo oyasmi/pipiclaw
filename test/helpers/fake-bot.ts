@@ -1,11 +1,5 @@
-import {
-	type DingTalkEvent,
-	type FinalDelivery,
-	finalDeliveryOf,
-	type ProgressStyle,
-	progressStyleOf,
-	type ResponseMode,
-} from "../../src/runtime/dingtalk.js";
+import type { FinalDelivery, ProgressStyle } from "../../src/runtime/channel-context.js";
+import { type DingTalkEvent, finalDeliveryOf, progressStyleOf, type ResponseMode } from "../../src/runtime/dingtalk.js";
 
 export class FakeDingTalkBot {
 	calls: Array<{ method: string; args: unknown[] }> = [];

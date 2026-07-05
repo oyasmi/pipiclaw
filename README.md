@@ -16,6 +16,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 ## 功能特性（Features）
 
 - 原生支持钉钉 Stream Mode，不需要消息中转服务，不需要公网IP
+- 支持终端 TUI：`pipiclaw tui` 直接在命令行对话，复用同一套配置、记忆与会话（见[配置手册](docs/configuration.md)的「终端 TUI」）
 - 支持 AI Card 过程展示，思考、工具执行和状态更新可以持续流式呈现
 - 支持 `/help`、`/new`、`/compact`、`/session`、`/model`
 - 忙碌时可继续接收 `/steer`、`/followup`、`/stop`、`/events`

@@ -32,8 +32,7 @@ import { recallRelevantMemory } from "../memory/recall.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { findExactModelReferenceMatch, formatModelReference, resolveInitialModel } from "../models/utils.js";
-import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
-import type { DingTalkContext } from "../runtime/dingtalk.js";
+import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { createExecutor, type Executor, type SandboxConfig } from "../sandbox.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
@@ -58,6 +57,7 @@ import {
 import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
 import { buildAppendSystemPrompt } from "./prompt-builder.js";
 import { createRunQueue } from "./run-queue.js";
+import type { RunnerFactoryPaths } from "./runner-factory.js";
 import { handleSessionEvent } from "./session-events.js";
 import { SessionResourceGate } from "./session-resource-gate.js";
 import { getLastAssistantUsage } from "./type-guards.js";
@@ -105,6 +105,9 @@ export class ChannelRunner implements AgentRunner {
 	private readonly sandboxConfig: SandboxConfig;
 	private readonly channelId: string;
 	private readonly channelDir: string;
+	private readonly appHomeDir: string;
+	private readonly authConfigPath: string;
+	private readonly modelsConfigPath: string;
 	private readonly workspacePath: string;
 	private readonly workspaceDir: string;
 	private session: AgentSession;
@@ -134,10 +137,13 @@ export class ChannelRunner implements AgentRunner {
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
 
-	constructor(sandboxConfig: SandboxConfig, channelId: string, channelDir: string) {
+	constructor(sandboxConfig: SandboxConfig, channelId: string, channelDir: string, paths: RunnerFactoryPaths) {
 		this.sandboxConfig = sandboxConfig;
 		this.channelId = channelId;
 		this.channelDir = channelDir;
+		this.appHomeDir = paths.appHomeDir;
+		this.authConfigPath = paths.authConfigPath;
+		this.modelsConfigPath = paths.modelsConfigPath;
 
 		const executor = createExecutor(sandboxConfig);
 		this.executor = executor;
@@ -151,13 +157,13 @@ export class ChannelRunner implements AgentRunner {
 		// Create session manager
 		const contextFile = join(channelDir, "context.jsonl");
 		this.sessionManager = SessionManager.open(contextFile, channelDir);
-		this.settingsManager = new PipiclawSettingsManager(APP_HOME_DIR);
+		this.settingsManager = new PipiclawSettingsManager(this.appHomeDir);
 		this.reportSettingsDiagnostics();
 		this.memoryCandidateStore = createMemoryCandidateStore();
 
 		// Create AuthStorage and ModelRegistry
-		const authStorage = AuthStorage.create(AUTH_CONFIG_PATH);
-		this.modelRegistry = createModelRegistry(authStorage, MODELS_CONFIG_PATH);
+		const authStorage = AuthStorage.create(this.authConfigPath);
+		this.modelRegistry = createModelRegistry(authStorage, this.modelsConfigPath);
 
 		// Resolve model: prefer saved global default, fall back to first available model
 		this.activeModel = resolveInitialModel(this.modelRegistry, this.settingsManager);
@@ -232,7 +238,7 @@ export class ChannelRunner implements AgentRunner {
 
 	// === Public API ===
 
-	async run(ctx: DingTalkContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }> {
+	async run(ctx: ChannelContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }> {
 		this.resetRunState(ctx, store);
 		this.acceptingBusyMessages = true;
 		this.agentLoopStarted = false;
@@ -493,7 +499,7 @@ export class ChannelRunner implements AgentRunner {
 		return { stopReason: this.runState.stopReason, errorMessage: this.runState.errorMessage };
 	}
 
-	async handleBuiltinCommand(ctx: DingTalkContext, command: BuiltInCommand): Promise<void> {
+	async handleBuiltinCommand(ctx: ChannelContext, command: BuiltInCommand): Promise<void> {
 		try {
 			switch (command.name) {
 				case "help":
@@ -583,7 +589,7 @@ export class ChannelRunner implements AgentRunner {
 
 	// === Private helpers ===
 
-	private async sendCommandReply(ctx: DingTalkContext, text: string): Promise<void> {
+	private async sendCommandReply(ctx: ChannelContext, text: string): Promise<void> {
 		const delivered = await ctx.respondPlain(text);
 		if (!delivered) {
 			await ctx.replaceMessage(text);
@@ -598,7 +604,7 @@ export class ChannelRunner implements AgentRunner {
 			? new Date(eventTime + Math.max(0, maintenanceSettings.minIdleMinutesBeforeLlmWork) * 60_000).toISOString()
 			: undefined;
 		try {
-			await updateMemoryMaintenanceState(APP_HOME_DIR, this.channelId, (state) =>
+			await updateMemoryMaintenanceState(this.appHomeDir, this.channelId, (state) =>
 				applyMemoryActivityToState(state, {
 					...event,
 					eligibleAfter,
@@ -666,7 +672,7 @@ export class ChannelRunner implements AgentRunner {
 		await this.sessionResourceGate.runPrompt(queueMessage);
 	}
 
-	private resetRunState(ctx: DingTalkContext, store: ChannelStore): void {
+	private resetRunState(ctx: ChannelContext, store: ChannelStore): void {
 		this.runState = createEmptyRunState();
 		this.runState.ctx = ctx;
 		this.runState.logCtx = {
@@ -818,7 +824,7 @@ export class ChannelRunner implements AgentRunner {
 		for (const { scope, error } of this.settingsManager.drainErrors()) {
 			log.logWarning(
 				`[${this.channelId}] Failed to load ${scope} settings`,
-				`${error.message}\n${join(APP_HOME_DIR, "settings.json")}`,
+				`${error.message}\n${join(this.appHomeDir, "settings.json")}`,
 			);
 		}
 	}
@@ -832,7 +838,7 @@ export class ChannelRunner implements AgentRunner {
 	private createResourceLoader(): ResourceLoader {
 		return new DefaultResourceLoader({
 			cwd: process.cwd(),
-			agentDir: APP_HOME_DIR,
+			agentDir: this.appHomeDir,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			extensionFactories: [
 				this.memoryLifecycle.createExtensionFactory(),
@@ -890,8 +896,8 @@ export class ChannelRunner implements AgentRunner {
 	private createAgentSessionServices(resourceLoader: ResourceLoader): AgentSessionServices {
 		return {
 			cwd: process.cwd(),
-			agentDir: APP_HOME_DIR,
-			authStorage: AuthStorage.create(AUTH_CONFIG_PATH),
+			agentDir: this.appHomeDir,
+			authStorage: AuthStorage.create(this.authConfigPath),
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			modelRegistry: this.modelRegistry,
 			resourceLoader,
@@ -937,8 +943,8 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	private buildRuntimeTools(): AgentTool<any>[] {
-		const securityLoad = loadSecurityConfigWithDiagnostics(APP_HOME_DIR);
-		const toolsLoad = loadToolsConfigWithDiagnostics(APP_HOME_DIR);
+		const securityLoad = loadSecurityConfigWithDiagnostics(this.appHomeDir);
+		const toolsLoad = loadToolsConfigWithDiagnostics(this.appHomeDir);
 		this.reportConfigDiagnostics([...securityLoad.diagnostics, ...toolsLoad.diagnostics]);
 
 		const tools = createPipiclawTools({

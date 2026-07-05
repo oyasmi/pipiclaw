@@ -4,6 +4,21 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-05
+
+### Added
+
+- Terminal TUI (spec 018): a new `pipiclaw tui` subcommand for chatting with the agent directly in the terminal, reusing the same config, memory, and per-channel session as the DingTalk runtime — with **no DingTalk credentials required**. The TUI shares app services (settings, tools, security, sandbox validation) with the daemon path via `prepareAppServices`, but skips the DingTalk gate, so it runs without a filled-in `channel.json` and never constructs a `DingTalkBot`.
+  - On a TTY it renders a full-screen pi-tui frontend (scrollback transcript, status line, streaming progress, slash-command completion); non-TTY input (pipe/redirect) and `--print` fall back to a plain frontend automatically.
+  - Flags: `--channel <id>` attaches to any past conversation (e.g. `dm_<staffId>` to share a DingTalk conversation's memory; default `tui_local`); `--print`/`-p` runs a one-shot non-interactive turn (prompt from args or stdin) and exits; `--quiet`/`-q` prints only the final answer; `--plain` forces the plain frontend; `--sandbox=host` (default) or `--sandbox=docker:<name>` selects tool isolation.
+  - Resume is implicit and per-channel: re-running with the same `--channel` restores the previous conversation from `context.jsonl` — there is no `/resume` command, and longer-term facts carry across sessions through the memory layer.
+  - Slash commands: `/help`, `/new`, `/compact`, `/session`, `/status`, `/model`, `/usage`, `/events`, `/steer`, `/followup`, `/stop`, and `/exit`; a startup welcome banner; and reliable exit on `Ctrl-C` / `Ctrl-D` / `/exit` (memory is flushed before quitting).
+  - Output shape is controlled by an optional `tui` block in `settings.json` (`responseMode`), independent of DingTalk's `channel.json.responseMode`.
+
+### Changed
+
+- Refactored `bootstrap.ts` to separate transport-neutral app initialization (`prepareAppServices`) from the DingTalk-specific runtime wiring, so the terminal TUI and the DingTalk daemon share the same config, sandbox, and logging setup without duplicating it.
+
 ## [0.7.1] - 2026-07-05
 
 ### Added

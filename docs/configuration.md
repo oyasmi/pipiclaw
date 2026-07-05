@@ -164,6 +164,65 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 3. web 请求代理
 4. fetch 的默认超时、截断和 Jina fallback 行为
 
+## 终端 TUI（Terminal TUI）
+
+除了钉钉对话，Pipiclaw 还可以直接在终端里对话，复用**同一套配置目录**（`auth.json` / `models.json` / `settings.json` / `tools.json` / `security.json`）、同一套记忆与会话。适合在命令行里快速使用，或接管某个钉钉会话的身份继续对话。
+
+### 启动（Usage）
+
+```bash
+pipiclaw tui                      # 交互式，默认 channel：tui_local
+pipiclaw tui --channel dm_1234    # 复用某个钉钉会话（dm_<staffId>）的记忆
+pipiclaw tui --sandbox=docker:box # 工具在 Docker 容器内执行
+echo "问题" | pipiclaw tui --print  # 一次性：跑一轮、打印答案、退出（可脚本化）
+pipiclaw tui --print "总结今天的进展"  # 一次性，prompt 走命令行位置参数
+```
+
+选项：
+
+| 选项 | 说明 |
+|------|------|
+| `--channel <id>` | 要接入的 channel（默认 `tui_local`）。传 `dm_<staffId>` 可复用该钉钉会话的记忆目录 `workspace/<id>/`。合法字符：字母、数字、`.`、`-`、`_`。 |
+| `--sandbox=host` / `--sandbox=docker:<name>` | 工具执行沙箱，语义同钉钉运行时。 |
+| `--print`, `-p` | 一次性非交互模式：运行位置参数（或管道 stdin）作为唯一 prompt，打印最终答案后退出。 |
+| `--quiet`, `-q` | 纯文本模式下只输出最终答案（进度与提示写入 stderr 的部分被静音）。 |
+| `--plain` | 即使在 TTY 下也强制使用纯文本前端（不进入全屏 UI）。 |
+| `--version` / `--help` | 打印版本 / 帮助。 |
+
+**命令**：交互模式支持 `/help` `/stop` `/steer` `/followup` `/status` `/usage` `/events` 与会话命令 `/model` `/new` `/compact` `/session`，以及 TUI 专属的 `/exit`。运行中直接输入普通消息会作为 `/steer` 注入当前轮次；`Ctrl-C` 在运行中中止本轮，空闲时连按两次退出；`Ctrl-D` 退出。退出时会把本 channel 的记忆落盘。
+
+非 TTY（管道 / 重定向）或 `--print` 会自动使用纯文本前端；真实终端下使用带滚动记录、状态行、斜杠命令补全的富界面。
+
+### 会话续接（Resume）
+
+TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 channel 而不是靠挑选历史会话：
+
+- **退出重进即自动续上次对话。** 每个 channel 的完整上下文持久化在 `workspace/<channel>/context.jsonl`。再次 `pipiclaw tui`（同一 channel）会原样还原上一轮的会话，无需任何命令。`Ctrl-C`/`Ctrl-D`/`/exit` 退出前会先把记忆落盘，所以直接关掉再开就是「继续上次」。
+- **`--channel <id>` = 挂到任意历史对话继续。** 传 `dm_<staffId>` 就接管该钉钉会话的上下文与记忆继续聊；传任意自定义 id 则是另一条独立对话线。想「换一个历史对话」就退出后用不同的 `--channel` 重进（注意上面的并发约束）。
+- **`/new` 开新会话，长期连续性由记忆层承担。** 跨会话要记住的事实 / 决定 / 偏好沉淀在 `SESSION.md` / `MEMORY.md` / `HISTORY.md`（见「记忆分层」），会在续接和 recall 时按需带回——这是 pipiclaw「每 channel 一条长会话 + 记忆层」模型对多会话历史的替代。
+- **暂无同一 channel 内的会话选择器**，即不能在 TUI 里从多个历史会话之间挑一个切过去。要切换到别的对话，退出后用不同 `--channel` 重进即可。
+
+### `tui` 设置（settings.json）
+
+`settings.json` 顶层可选 `tui` 块控制输出形态（与钉钉的 `channel.json.responseMode` 相互独立）：
+
+```json
+{
+  "tui": {
+    "responseMode": "full_progress_then_plain_final"
+  }
+}
+```
+
+`responseMode` 取值与钉钉一致：`full_progress_then_plain_final`（默认，流式进度 + 纯文本最终答复）、`rolling_progress_then_plain_final`（仅保留最近进度）、`final_card_only`（隐藏进度）。缺省即默认值。
+
+### 与钉钉常驻服务的并发约束（Concurrency Caveat）
+
+同一 channel 的记忆文件（`SESSION.md` / `context.jsonl` 等）在单进程内由内部串行队列保护，但**跨进程无锁**。因此：
+
+- 默认 `tui_local` 是 TUI 专属 channel，与任何钉钉会话零重叠——随用随开，无风险。
+- 当你用 `--channel dm_xxx` 接管某个钉钉会话的记忆时，**不要让钉钉常驻服务同时服务该会话**，否则两个进程可能交错写坏该 channel 的记忆。
+
 ## 钉钉配置文件 `channel.json`（`channel.json`）
 
 `channel.json` 用来配置 DingTalk 接入。

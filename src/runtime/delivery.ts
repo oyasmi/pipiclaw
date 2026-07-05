@@ -1,5 +1,6 @@
 import * as log from "../log.js";
-import type { DingTalkBot, DingTalkContext, DingTalkEvent } from "./dingtalk.js";
+import type { ChannelContext } from "./channel-context.js";
+import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 import type { ChannelStore } from "./store.js";
 
 const MIN_UPDATE_INTERVAL_MS = 800;
@@ -41,7 +42,7 @@ class ChannelDeliveryController {
 		private store: ChannelStore,
 	) {}
 
-	buildContext(): DingTalkContext {
+	buildContext(): ChannelContext {
 		return {
 			message: {
 				text: this.event.text,
@@ -429,6 +430,6 @@ class ChannelDeliveryController {
 	}
 }
 
-export function createDingTalkContext(event: DingTalkEvent, bot: DingTalkBot, store: ChannelStore): DingTalkContext {
+export function createDingTalkContext(event: DingTalkEvent, bot: DingTalkBot, store: ChannelStore): ChannelContext {
 	return new ChannelDeliveryController(event, bot, store).buildContext();
 }
