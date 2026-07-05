@@ -1,6 +1,6 @@
 import * as log from "../log.js";
 import type { MemoryLifecycle } from "../memory/lifecycle.js";
-import type { DingTalkContext } from "../runtime/dingtalk.js";
+import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { extractLabelFromArgs, truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
@@ -27,7 +27,7 @@ import {
 import type { PendingTool, RunLogContext, RunQueue, RunState } from "./types.js";
 
 export interface SessionEventHandlerContext {
-	ctx: DingTalkContext;
+	ctx: ChannelContext;
 	logCtx: RunLogContext;
 	queue: RunQueue;
 	pendingTools: Map<string, PendingTool>;

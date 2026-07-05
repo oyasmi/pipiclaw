@@ -74,6 +74,15 @@ export {
 	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
 } from "./paths.js";
+// `ChannelContext` is the transport-neutral delivery contract (formerly
+// `DingTalkContext`). The `DingTalkContext` alias is deprecated — retained for
+// one release for barrel stability; import `ChannelContext` instead.
+export type {
+	ChannelContext,
+	ChannelContext as DingTalkContext,
+	FinalDelivery,
+	ProgressStyle,
+} from "./runtime/channel-context.js";
 export {
 	ensureChannelDir,
 	getChannelDir,
@@ -85,16 +94,13 @@ export {
 	type BusyMessageMode,
 	DingTalkBot,
 	type DingTalkConfig,
-	type DingTalkContext,
 	type DingTalkEvent,
 	type DingTalkHandler,
-	type FinalDelivery,
 	finalDeliveryOf,
 	isBusyMessageDefaultConfig,
 	isResponseModeConfig,
 	normalizeBusyMessageDefault,
 	normalizeResponseMode,
-	type ProgressStyle,
 	progressStyleOf,
 	type ResponseMode,
 } from "./runtime/dingtalk.js";

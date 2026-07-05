@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleSessionEvent, type SessionEventHandlerContext } from "../src/agent/session-events.js";
 import { createEmptyRunState, type RunQueue, type RunState } from "../src/agent/types.js";
-import type { DingTalkContext } from "../src/runtime/dingtalk.js";
+import type { ChannelContext } from "../src/runtime/channel-context.js";
 import type { UsageLedger, UsageLedgerEntry } from "../src/usage/ledger.js";
 
 function createQueue(): RunQueue {
@@ -22,7 +22,7 @@ function createLedger(records: Array<Omit<UsageLedgerEntry, "ts">> = []): UsageL
 	};
 }
 
-function createContext(respond = vi.fn(async () => {})): DingTalkContext {
+function createContext(respond = vi.fn(async () => {})): ChannelContext {
 	return {
 		message: {
 			text: "",
@@ -48,7 +48,7 @@ function createContext(respond = vi.fn(async () => {})): DingTalkContext {
 }
 
 function handlerContext(
-	ctx: DingTalkContext,
+	ctx: ChannelContext,
 	runState: RunState,
 	overrides: Partial<SessionEventHandlerContext> = {},
 ): SessionEventHandlerContext {

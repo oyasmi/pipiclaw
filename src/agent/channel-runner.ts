@@ -33,7 +33,7 @@ import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { findExactModelReferenceMatch, formatModelReference, resolveInitialModel } from "../models/utils.js";
 import { APP_HOME_DIR, AUTH_CONFIG_PATH, MODELS_CONFIG_PATH } from "../paths.js";
-import type { DingTalkContext } from "../runtime/dingtalk.js";
+import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { createExecutor, type Executor, type SandboxConfig } from "../sandbox.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
@@ -232,7 +232,7 @@ export class ChannelRunner implements AgentRunner {
 
 	// === Public API ===
 
-	async run(ctx: DingTalkContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }> {
+	async run(ctx: ChannelContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }> {
 		this.resetRunState(ctx, store);
 		this.acceptingBusyMessages = true;
 		this.agentLoopStarted = false;
@@ -493,7 +493,7 @@ export class ChannelRunner implements AgentRunner {
 		return { stopReason: this.runState.stopReason, errorMessage: this.runState.errorMessage };
 	}
 
-	async handleBuiltinCommand(ctx: DingTalkContext, command: BuiltInCommand): Promise<void> {
+	async handleBuiltinCommand(ctx: ChannelContext, command: BuiltInCommand): Promise<void> {
 		try {
 			switch (command.name) {
 				case "help":
@@ -583,7 +583,7 @@ export class ChannelRunner implements AgentRunner {
 
 	// === Private helpers ===
 
-	private async sendCommandReply(ctx: DingTalkContext, text: string): Promise<void> {
+	private async sendCommandReply(ctx: ChannelContext, text: string): Promise<void> {
 		const delivered = await ctx.respondPlain(text);
 		if (!delivered) {
 			await ctx.replaceMessage(text);
@@ -666,7 +666,7 @@ export class ChannelRunner implements AgentRunner {
 		await this.sessionResourceGate.runPrompt(queueMessage);
 	}
 
-	private resetRunState(ctx: DingTalkContext, store: ChannelStore): void {
+	private resetRunState(ctx: ChannelContext, store: ChannelStore): void {
 		this.runState = createEmptyRunState();
 		this.runState.ctx = ctx;
 		this.runState.logCtx = {

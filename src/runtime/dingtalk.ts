@@ -14,6 +14,10 @@ import { dirname, join } from "path";
 import { parseBuiltInCommand, renderBuiltInHelp } from "../agent/commands.js";
 import * as log from "../log.js";
 import { isRecord } from "../shared/type-guards.js";
+// The delivery contract (`ChannelContext`) and its traits are transport-neutral
+// and live in channel-context.ts. Only the traits are used here, to map the
+// DingTalk-config `ResponseMode` onto them (progressStyleOf/finalDeliveryOf).
+import type { FinalDelivery, ProgressStyle } from "./channel-context.js";
 import { getChannelDir } from "./channel-paths.js";
 
 // ============================================================================
@@ -23,11 +27,6 @@ import { getChannelDir } from "./channel-paths.js";
 export type BusyMessageMode = "steer" | "followUp";
 export type BusyMessageDefaultConfig = BusyMessageMode | "followup";
 export type ResponseMode = "full_progress_then_plain_final" | "rolling_progress_then_plain_final" | "final_card_only";
-
-// Orthogonal traits derived from ResponseMode, so callers never branch on the
-// raw enum string and stay decoupled from how the modes are named.
-export type ProgressStyle = "full" | "rolling" | "none";
-export type FinalDelivery = "plain" | "card";
 
 const RESPONSE_MODE_VALUES: ResponseMode[] = [
 	"full_progress_then_plain_final",
@@ -100,30 +99,6 @@ export interface DingTalkEvent {
 	text: string;
 	conversationId: string;
 	conversationType: string; // "1" = DM, "2" = group
-}
-
-export interface DingTalkContext {
-	message: {
-		text: string;
-		rawText: string;
-		user: string;
-		userName?: string;
-		channel: string;
-		ts: string;
-	};
-	channelName?: string;
-	respond: (text: string, shouldLog?: boolean) => Promise<void>;
-	respondPlain: (text: string, shouldLog?: boolean) => Promise<boolean>;
-	replaceMessage: (text: string) => Promise<void>;
-	respondInThread: (text: string) => Promise<void>;
-	setTyping: (isTyping: boolean) => Promise<void>;
-	setWorking: (working: boolean) => Promise<void>;
-	deleteMessage: () => Promise<void>;
-	primeCard: (delayMs: number) => void;
-	flush: () => Promise<void>;
-	close: () => Promise<void>;
-	progressStyle: ProgressStyle;
-	finalDelivery: FinalDelivery;
 }
 
 export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: string };

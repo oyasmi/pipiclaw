@@ -3,6 +3,7 @@ import { join } from "path";
 import { parseBuiltInCommand } from "../agent/commands.js";
 import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
 import { resetRunner } from "../agent/runner-factory.js";
+import { renderStatus } from "../agent/status-render.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
@@ -265,7 +266,7 @@ export function isBootstrapExitError(error: unknown): error is BootstrapExitErro
 	return error instanceof BootstrapExitError;
 }
 
-function readCliVersion(): string {
+export function readCliVersion(): string {
 	try {
 		const raw = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf-8")) as {
 			version?: unknown;
@@ -572,73 +573,6 @@ function flushInactiveChannelMemory(channelStates: Map<string, ChannelState>): P
 
 function isNoRunningTaskQueueError(err: unknown): boolean {
 	return err instanceof Error && err.message === "No task is currently running.";
-}
-
-function formatTokenCount(count: number): string {
-	if (count < 1000) return count.toString();
-	if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
-	return `${(count / 1_000_000).toFixed(1)}M`;
-}
-
-function formatUptime(ms: number): string {
-	const totalSeconds = Math.floor(ms / 1000);
-	const days = Math.floor(totalSeconds / 86400);
-	const hours = Math.floor((totalSeconds % 86400) / 3600);
-	const minutes = Math.floor((totalSeconds % 3600) / 60);
-	const parts: string[] = [];
-	if (days > 0) parts.push(`${days}d`);
-	if (hours > 0) parts.push(`${hours}h`);
-	parts.push(`${minutes}m`);
-	return parts.join(" ");
-}
-
-function renderStatus(options: {
-	state: ChannelState | undefined;
-	version: string;
-	uptimeMs: number;
-	sandbox: SandboxConfig;
-}): string {
-	const { state, version, uptimeMs, sandbox } = options;
-	const lines = ["# Status"];
-
-	if (state?.running) {
-		const task = state.currentTaskText?.trim();
-		const preview = task ? `: ${task.length > 80 ? `${task.slice(0, 79)}…` : task}` : "";
-		lines.push(`- Run state: running${preview}`);
-	} else {
-		lines.push("- Run state: idle");
-	}
-
-	if (state) {
-		try {
-			const snapshot = state.runner.getStatusSnapshot();
-			lines.push(`- Model: ${snapshot.model}`);
-			if (snapshot.fallback) {
-				const until = new Date(snapshot.fallback.cooldownUntilMs);
-				const hh = String(until.getHours()).padStart(2, "0");
-				const mm = String(until.getMinutes()).padStart(2, "0");
-				lines.push(`- Fallback: active（primary ${snapshot.fallback.primary} 冷却至 ${hh}:${mm}）`);
-			}
-			if (snapshot.thinkingLevel && snapshot.thinkingLevel !== "off") {
-				lines.push(`- Thinking: ${snapshot.thinkingLevel}`);
-			}
-			if (snapshot.contextTokens !== undefined && snapshot.contextWindow > 0) {
-				const percent = ((snapshot.contextTokens / snapshot.contextWindow) * 100).toFixed(1);
-				lines.push(
-					`- Context: ${formatTokenCount(snapshot.contextTokens)} / ${formatTokenCount(snapshot.contextWindow)} (${percent}%)`,
-				);
-			}
-		} catch (err) {
-			lines.push(`- Model: unavailable (${err instanceof Error ? err.message : String(err)})`);
-		}
-	} else {
-		lines.push("- Model: no session started for this channel yet");
-	}
-
-	lines.push(`- Sandbox: ${sandbox.type === "host" ? "host" : `docker:${sandbox.container}`}`);
-	lines.push(`- Uptime: ${formatUptime(uptimeMs)}`);
-	lines.push(`- Version: ${version}`);
-	return lines.join("\n");
 }
 
 interface RuntimeContextOptions {
@@ -1019,24 +953,23 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	};
 }
 
-export async function bootstrap(argv: string[], options: BootstrapOptions = {}): Promise<AppContext> {
-	const io = options.io ?? console;
-	const paths = options.paths ?? DEFAULT_BOOTSTRAP_PATHS;
-	const registerSignalHandlers = options.registerSignalHandlers ?? true;
-	const startServices = options.startServices ?? true;
-
-	const parsedArgs = parseArgs(argv, paths, io);
-	const sandbox = parsedArgs.sandbox;
-	const bootstrapResult = bootstrapAppHome(paths);
-	printBootstrapSummary(bootstrapResult, io, paths);
-
-	if (bootstrapResult.channelTemplateCreated) {
-		io.error(`Fill in ${paths.channelConfigPath} and run \`${paths.appName}\` again.`);
-		throw new BootstrapExitError(1);
-	}
-
-	const dingtalkConfig = loadConfig(paths, io);
-	dingtalkConfig.stateDir = paths.workspaceDir;
+/**
+ * Transport-neutral app services shared by the DingTalk runtime and the terminal
+ * TUI: loads settings (surfacing load errors), reports tool/security config
+ * diagnostics, and validates the sandbox. Does NOT touch DingTalk config, so the
+ * TUI can call it without any DingTalk credentials.
+ *
+ * Extracted verbatim from `bootstrap()`; the DingTalk path calls it in the same
+ * position (after `loadConfig`, before `logStartup`) so its behavior is
+ * unchanged. Logging configuration is intentionally left to each caller
+ * (DingTalk: `createRuntimeContext`; TUI: right after this) to preserve the
+ * existing "diagnostics logged with default logging config" ordering.
+ */
+export async function prepareAppServices(
+	sandbox: SandboxConfig,
+	paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS,
+	io: BootstrapIO = console,
+): Promise<{ settingsManager: PipiclawSettingsManager }> {
 	const settingsManager = new PipiclawSettingsManager(paths.appHomeDir);
 	for (const { scope, error } of settingsManager.drainErrors()) {
 		log.logWarning(`Failed to load ${scope} settings`, `${error.message}\n${paths.settingsConfigPath}`);
@@ -1057,6 +990,29 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 		}
 		throw err;
 	}
+
+	return { settingsManager };
+}
+
+export async function bootstrap(argv: string[], options: BootstrapOptions = {}): Promise<AppContext> {
+	const io = options.io ?? console;
+	const paths = options.paths ?? DEFAULT_BOOTSTRAP_PATHS;
+	const registerSignalHandlers = options.registerSignalHandlers ?? true;
+	const startServices = options.startServices ?? true;
+
+	const parsedArgs = parseArgs(argv, paths, io);
+	const sandbox = parsedArgs.sandbox;
+	const bootstrapResult = bootstrapAppHome(paths);
+	printBootstrapSummary(bootstrapResult, io, paths);
+
+	if (bootstrapResult.channelTemplateCreated) {
+		io.error(`Fill in ${paths.channelConfigPath} and run \`${paths.appName}\` again.`);
+		throw new BootstrapExitError(1);
+	}
+
+	const dingtalkConfig = loadConfig(paths, io);
+	dingtalkConfig.stateDir = paths.workspaceDir;
+	await prepareAppServices(sandbox, paths, io);
 
 	log.logStartup(paths.workspaceDir, sandbox.type === "host" ? "host" : `docker:${sandbox.container}`);
 	const runtime = createRuntimeContext({

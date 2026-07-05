@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe("delivery", () => {
-	it("builds a full DingTalkContext surface", () => {
+	it("builds a full ChannelContext surface", () => {
 		const ctx = createDingTalkContext(
 			createFakeEvent(),
 			new FakeDingTalkBot() as never,

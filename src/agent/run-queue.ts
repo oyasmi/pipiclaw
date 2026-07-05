@@ -1,5 +1,5 @@
 import * as log from "../log.js";
-import type { DingTalkContext } from "../runtime/dingtalk.js";
+import type { ChannelContext } from "../runtime/channel-context.js";
 import type { RunQueue } from "./types.js";
 
 export interface CreatedRunQueue {
@@ -7,7 +7,7 @@ export interface CreatedRunQueue {
 	drain: () => Promise<void>;
 }
 
-export function createRunQueue(ctx: DingTalkContext): CreatedRunQueue {
+export function createRunQueue(ctx: ChannelContext): CreatedRunQueue {
 	let queueChain = Promise.resolve();
 	const queue: RunQueue = {
 		enqueue: (fn: () => Promise<void>, errorContext: string): void => {
