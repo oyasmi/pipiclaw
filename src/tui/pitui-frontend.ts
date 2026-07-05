@@ -18,6 +18,7 @@ import {
 	Loader,
 	Markdown,
 	type MarkdownTheme,
+	matchesKey,
 	ProcessTerminal,
 	type SlashCommand,
 	Text,
@@ -25,9 +26,6 @@ import {
 } from "@earendil-works/pi-tui";
 import { bold, cyan, dim, gray, italic, red, strikethrough, underline, yellow } from "./colors.js";
 import type { Frontend, FrontendCallbacks } from "./renderer.js";
-
-const CTRL_C = "\x03";
-const CTRL_D = "\x04";
 
 const MARKDOWN_THEME: MarkdownTheme = {
 	heading: (t) => bold(cyan(t)),
@@ -105,12 +103,14 @@ export class PiTuiFrontend implements Frontend {
 			this.showUser(text);
 			callbacks.onSubmit(text);
 		};
+		// Use pi-tui's key matcher, not a raw byte compare: with the Kitty keyboard
+		// protocol active, Ctrl-C/Ctrl-D arrive as CSI escape sequences, not \x03/\x04.
 		this.removeInputListener = this.ui.addInputListener((data: string) => {
-			if (data === CTRL_C) {
+			if (matchesKey(data, "ctrl+c")) {
 				callbacks.onInterrupt();
 				return { consume: true };
 			}
-			if (data === CTRL_D && this.editor.getText().length === 0) {
+			if (matchesKey(data, "ctrl+d") && this.editor.getText().length === 0) {
 				callbacks.onEof();
 				return { consume: true };
 			}

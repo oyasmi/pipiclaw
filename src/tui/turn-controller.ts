@@ -17,6 +17,9 @@ import type { Frontend } from "./renderer.js";
 import { createTerminalContext, type DeliveryTraits, type TurnInput } from "./terminal-context.js";
 
 const SHUTDOWN_ABORT_WAIT_MS = 5000;
+// Cap the exit-time memory flush so a slow/stuck LLM consolidation can't trap
+// the user in a non-responsive process. Memory may be partially saved on timeout.
+const SHUTDOWN_FLUSH_WAIT_MS = 20_000;
 
 export interface TurnControllerDeps {
 	runner: AgentRunner;
@@ -259,7 +262,6 @@ export class TurnController {
 	private async shutdown(): Promise<void> {
 		if (this.exiting) return;
 		this.exiting = true;
-		this.deps.frontend.setStatus("Exiting…");
 
 		if (this.running) {
 			await this.deps.runner.abort().catch(() => {});
@@ -269,10 +271,19 @@ export class TurnController {
 			]);
 		}
 
-		await this.deps.runner.flushMemoryForShutdown().catch((err) => {
-			log.logWarning(`[${this.deps.channelId}] Failed to flush memory on exit`, errorMessage(err));
-		});
+		// Tear the UI down first so the terminal is restored immediately — the
+		// memory flush below can take a moment (LLM consolidation), and a frozen
+		// full-screen frame feels like a hang. A short note on stderr explains the
+		// pause without polluting stdout (which carries the answer in --print).
 		this.deps.frontend.stop();
+		process.stderr.write("Saving session memory…\n");
+
+		await Promise.race([
+			this.deps.runner.flushMemoryForShutdown().catch((err) => {
+				log.logWarning(`[${this.deps.channelId}] Failed to flush memory on exit`, errorMessage(err));
+			}),
+			new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_FLUSH_WAIT_MS)),
+		]);
 		this.exitResolve();
 	}
 }
