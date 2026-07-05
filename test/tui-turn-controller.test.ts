@@ -48,6 +48,8 @@ class FakeFrontend implements Frontend {
 	finals: string[] = [];
 	busy: boolean | undefined;
 	stopped = false;
+	/** When set, the first stop() throws to simulate a teardown failure. */
+	stopThrowsOnce = false;
 	callbacks!: FrontendCallbacks;
 	start(callbacks: FrontendCallbacks): void {
 		this.callbacks = callbacks;
@@ -68,6 +70,10 @@ class FakeFrontend implements Frontend {
 	showBanner(): void {}
 	stop(): void {
 		this.stopped = true;
+		if (this.stopThrowsOnce) {
+			this.stopThrowsOnce = false;
+			throw new Error("stop failed");
+		}
 	}
 }
 
@@ -178,6 +184,16 @@ describe("TurnController", () => {
 		expect(runner.flushCount).toBe(1);
 		expect(frontend.stopped).toBe(true);
 		await exit;
+	});
+
+	it("still resolves exit when frontend.stop() throws during shutdown", async () => {
+		const { frontend, exit, cb } = setup();
+		frontend.stopThrowsOnce = true;
+		cb().onInterrupt(); // arm
+		cb().onInterrupt(); // exit → shutdown() with a throwing stop()
+		// A rejected shutdown must not hang or leak: exit still resolves.
+		await expect(exit).resolves.toBeUndefined();
+		expect(frontend.stopped).toBe(true);
 	});
 
 	it("renders info commands to the transcript", async () => {

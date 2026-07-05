@@ -3,7 +3,6 @@
 	"entry": ["src/main.ts", "src/index.ts"],
 	"project": ["src/**/*.ts"],
 	"ignoreExportsUsedInFile": true,
-	"ignoreBinaries": ["taskkill"],
 	"vitest": {
 		"config": ["vitest.config.ts", "vitest.config.e2e.ts"]
 	}

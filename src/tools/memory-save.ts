@@ -5,7 +5,6 @@ import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory
 import { applyChannelMemoryOps, getChannelMemoryPath } from "../memory/files.js";
 
 const memorySaveSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're saving and why (shown to user)" }),
 	content: Type.String({
 		description:
 			"The durable fact to remember, as a single self-contained, keyword-rich sentence. Write it so future keyword search can find it.",
@@ -39,7 +38,7 @@ export function createMemorySaveTool(options: MemorySaveToolOptions): AgentTool<
 		description:
 			"Save a durable fact to this channel's long-term MEMORY.md immediately. Use when the user explicitly asks you to remember something (a preference, decision, constraint, or long-running commitment), so it survives restarts and future sessions. Do not use for transient task state — that is captured automatically.",
 		parameters: memorySaveSchema,
-		execute: async (_toolCallId: string, { content, kind }: { label: string; content: string; kind?: string }) => {
+		execute: async (_toolCallId: string, { content, kind }: { content: string; kind?: string }) => {
 			const trimmed = content.trim();
 			if (!trimmed) {
 				return {

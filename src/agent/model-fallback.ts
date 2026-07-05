@@ -142,22 +142,28 @@ export async function runPromptWithFallback(promptText: string, deps: FallbackRu
 		return false;
 	}
 
-	// Surgery only when the failed turn was actually enqueued. A pre-flight throw
-	// (no API key on the primary) submits nothing, so there is nothing to remove —
-	// switch straight to the backup, which covers a mis-configured primary key.
+	// Pre-compute the truncated transcript, but do not commit it until setModel
+	// succeeds. Surgery only when the failed turn was actually enqueued: a pre-flight
+	// throw (no API key on the primary) submits nothing, so there is nothing to
+	// remove — switch straight to the backup, which covers a mis-configured primary key.
+	let truncated: unknown[] | null = null;
 	if (deps.promptWasSubmitted()) {
-		const truncated = takeFailedTurn(deps.getMessages());
+		truncated = takeFailedTurn(deps.getMessages());
 		if (!truncated) {
 			log.logWarning(
 				"[fallback] transcript tail is not [user, assistant(error)]; skipping fallback to avoid corrupting context",
 			);
 			return false;
 		}
-		deps.setMessages(truncated);
 	}
 
+	// Switch the model first: if setModel throws it propagates with the transcript
+	// still intact, so the failed turn's context is not silently lost.
 	deps.markPrimaryFailed();
 	await deps.setModel(candidate);
+	if (truncated) {
+		deps.setMessages(truncated);
+	}
 	deps.notifySwitch(fromRef, toRef, summarizeFallbackError(firstError.errorMessage));
 	deps.resetRunError();
 

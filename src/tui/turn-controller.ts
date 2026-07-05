@@ -193,7 +193,16 @@ export class TurnController {
 			}
 		})();
 
-		void this.currentTurn.then(() => this.drainFollowups());
+		// The turn is over whether it settled or its finally threw (e.g. a frontend
+		// method failing); drain either way and never leak an unhandled rejection.
+		void this.currentTurn.then(
+			() => this.drainFollowups(),
+			(err) => {
+				log.logWarning(`[${this.deps.channelId}] TUI turn finalizer failed`, errorMessage(err));
+				this.running = false;
+				this.drainFollowups();
+			},
+		);
 	}
 
 	private drainFollowups(): void {
@@ -244,7 +253,13 @@ export class TurnController {
 	}
 
 	private requestExit(): void {
-		void this.shutdown();
+		// shutdown() restores the terminal in a finally, so a rejection here means only
+		// the memory-flush bookkeeping failed — log it rather than leak an unhandled
+		// rejection that could abort the process before exitResolve runs.
+		this.shutdown().catch((err) => {
+			log.logWarning(`[${this.deps.channelId}] TUI shutdown failed`, errorMessage(err));
+			this.exitResolve();
+		});
 	}
 
 	private buildWelcome(): string {
@@ -282,25 +297,32 @@ export class TurnController {
 
 		if (this.running) {
 			await this.deps.runner.abort().catch(() => {});
+			// Never let a rejected turn (e.g. ctx.close() throwing in the turn's finally)
+			// escape the race — that would skip frontend.stop() and strand the terminal in
+			// raw mode. The turn already logs its own failures.
 			await Promise.race([
-				this.currentTurn,
+				this.currentTurn.catch(() => {}),
 				new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_ABORT_WAIT_MS)),
 			]);
 		}
 
-		// Tear the UI down first so the terminal is restored immediately — the
-		// memory flush below can take a moment (LLM consolidation), and a frozen
-		// full-screen frame feels like a hang. A short note on stderr explains the
-		// pause without polluting stdout (which carries the answer in --print).
-		this.deps.frontend.stop();
-		process.stderr.write("Saving session memory…\n");
+		try {
+			// Tear the UI down first so the terminal is restored immediately — the
+			// memory flush below can take a moment (LLM consolidation), and a frozen
+			// full-screen frame feels like a hang. A short note on stderr explains the
+			// pause without polluting stdout (which carries the answer in --print).
+			// Guaranteed via finally: a flush failure must not leave the terminal raw.
+			this.deps.frontend.stop();
+			process.stderr.write("Saving session memory…\n");
 
-		await Promise.race([
-			this.deps.runner.flushMemoryForShutdown().catch((err) => {
-				log.logWarning(`[${this.deps.channelId}] Failed to flush memory on exit`, errorMessage(err));
-			}),
-			new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_FLUSH_WAIT_MS)),
-		]);
-		this.exitResolve();
+			await Promise.race([
+				this.deps.runner.flushMemoryForShutdown().catch((err) => {
+					log.logWarning(`[${this.deps.channelId}] Failed to flush memory on exit`, errorMessage(err));
+				}),
+				new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_FLUSH_WAIT_MS)),
+			]);
+		} finally {
+			this.exitResolve();
+		}
 	}
 }

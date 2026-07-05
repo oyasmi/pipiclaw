@@ -206,6 +206,7 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 
 		try {
 			await updateChannelSessionMemory({
+				channelId: input.channelId,
 				channelDir: input.channelDir,
 				messages: input.messages,
 				model: input.model,

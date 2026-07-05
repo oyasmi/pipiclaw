@@ -23,7 +23,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ### Added
 
-- Single backup model fallback (spec 017): when the primary model's turn ends in an error (excluding `/stop` and context-overflow cases), the runtime switches to a configured `fallbackModel` and re-runs the turn once; after a 5-minute cooldown it automatically retries the primary. Configured via the `fallbackModel` settings key (unset disables it), surfaced on the `/status` `Fallback` line, and recorded as a structured `model_fallback` log event.
+- Single backup model fallback (spec 017): when the primary model's turn fails on its first API call before any tool runs (the common 429 / quota / auth case, excluding `/stop` and context-overflow), the runtime switches to a configured `fallbackModel` and re-runs the turn once; after a 5-minute cooldown it automatically retries the primary. A failure that surfaces mid-turn (after tools have already run) is reported rather than retried, to avoid corrupting the transcript. Configured via the `fallbackModel` settings key (unset disables it), surfaced on the `/status` `Fallback` line, and recorded as a structured `model_fallback` log event.
 
 ### Removed
 

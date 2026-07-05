@@ -32,7 +32,6 @@ describe("memory_save tool", () => {
 		});
 
 		const result = await tool.execute("call-1", {
-			label: "remember preference",
 			content: "User prefers responses in Chinese",
 			kind: "preference",
 		});
@@ -53,7 +52,7 @@ describe("memory_save tool", () => {
 			memoryCandidateStore: createMemoryCandidateStore(),
 		});
 
-		const result = await tool.execute("call-2", { label: "x", content: "   " });
+		const result = await tool.execute("call-2", { content: "   " });
 		expect(result.details).toMatchObject({ saved: false });
 	});
 
@@ -72,7 +71,7 @@ describe("memory_save tool", () => {
 			},
 		});
 
-		await tool.execute("call-3", { label: "x", content: "Durable fact" });
+		await tool.execute("call-3", { content: "Durable fact" });
 		expect(seenChannelIds).toEqual(["dm_9"]);
 	});
 });
