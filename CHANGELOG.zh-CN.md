@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-07-05
+
+### 变更
+
+- 在移除 Windows 支持（0.7.1）以及新增 `/status` / `/usage` 命令之后同步文档：删除 README 中过时的 Windows/WSL host 模式章节和已失效的 `PIPICLAW_SHELL` 环境变量，将 Node 最低版本更正为 `>=22.19.0`（与 `package.json` engines 对齐），在 README 与扩展性文档的忙碌命令表中补上 `/status` 和 `/usage`，并刷新 `CLAUDE.md`（移除已删除的 `attach` 工具与过时的包名说明）和 `configuration.md`（SDK 包名、`security.json`、`PIPICLAW_LOG_LEVEL` / `PIPICLAW_LOG_FILE`）。
+
+### 移除
+
+- 移除 knip 无法发现的死代码（其 `ignoreExportsUsedInFile` 设置会把文件内自引用的导出当作“已使用”）：`createPipiclawBaseTools` 辅助函数（已被工具注册表取代）及其公共 barrel 导出、`ChannelStore.getLastTimestamp`、从未被发射的 `auto_compaction_*` 会话事件分支（联合类型收窄到仍在使用的 `compaction_start` / `compaction_end`），以及会把旧结构静默强转成全 add op 的 `memoryEntries` 巩固回退分支。
+
+### 修复
+
+- 记忆候选文件读取不再吞掉非 ENOENT 错误：权限或 IO 失败现在会正常抛出，而不再被当作“文件不存在”，与其他记忆读取路径保持一致。
+
+### 开发
+
+- 去重内部辅助函数：新增共享的 `readOptionalTextFile` / `isNodeError`（`src/shared/fs-utils.ts`）支撑各记忆文件读取路径，`eventNameFromFilename` 与 `parseUpdateHeadingTimestamp` 改为单一实现，`ChannelStore` 改用共享的 `SerialQueue` 替代手写的写入链。
+
 ## [0.7.2] - 2026-07-05
 
 ### 新增

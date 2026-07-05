@@ -4,6 +4,24 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-07-05
+
+### Changed
+
+- Documentation sync after the Windows removal (0.7.1) and the `/status` / `/usage` commands landed: dropped README's obsolete Windows/WSL host-mode section and the dead `PIPICLAW_SHELL` env var, corrected the Node lower bound to `>=22.19.0` (matching `package.json` engines), added `/status` and `/usage` to the README and scaling-doc busy-command tables, and refreshed `CLAUDE.md` (removed the deleted `attach` tool and the stale package-name note) and `configuration.md` (SDK package name, `security.json`, `PIPICLAW_LOG_LEVEL` / `PIPICLAW_LOG_FILE`).
+
+### Removed
+
+- Removed dead code that knip could not see (its `ignoreExportsUsedInFile` setting treats in-file self-references as used): the `createPipiclawBaseTools` helper (superseded by the tool registry) and its public barrel export, `ChannelStore.getLastTimestamp`, the never-emitted `auto_compaction_*` session-event branches (the union is narrowed to the live `compaction_start` / `compaction_end` names), and the legacy `memoryEntries` consolidation fallback that silently coerced the old shape into all-add ops.
+
+### Fixed
+
+- Memory candidate file reads no longer swallow non-ENOENT errors: a permission or IO failure now propagates instead of being treated as an absent file, matching the other memory readers.
+
+### Development
+
+- Deduplicated internal helpers: a shared `readOptionalTextFile` / `isNodeError` (`src/shared/fs-utils.ts`) now backs the memory file readers, `eventNameFromFilename` and `parseUpdateHeadingTimestamp` are single-sourced, and `ChannelStore` reuses the shared `SerialQueue` instead of a hand-rolled write chain.
+
 ## [0.7.2] - 2026-07-05
 
 ### Added
