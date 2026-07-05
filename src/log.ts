@@ -99,6 +99,21 @@ function emit(
 	void fileSink.append(record);
 }
 
+let consoleEnabled = true;
+
+/**
+ * Toggle the human-readable console sink. The TUI disables it so structured
+ * logging does not corrupt the pi-tui frame (which owns stdout); the file sink
+ * is unaffected, so logs are still captured when file logging is enabled.
+ */
+export function setConsoleLoggingEnabled(enabled: boolean): void {
+	consoleEnabled = enabled;
+}
+
+function con(...args: unknown[]): void {
+	if (consoleEnabled) console.log(...args);
+}
+
 function color(style: Parameters<typeof styleText>[0], text: string): string {
 	return styleText(style, text);
 }
@@ -158,20 +173,20 @@ function formatToolArgs(args: Record<string, unknown>): string {
 
 // User messages
 export function logUserMessage(ctx: LogContext, text: string): void {
-	console.log(color("green", `${timestamp()} ${formatContext(ctx)} ${text}`));
+	con(color("green", `${timestamp()} ${formatContext(ctx)} ${text}`));
 	emit("info", "user_message", text, { ctx });
 }
 
 // Tool execution
 export function logToolStart(ctx: LogContext, toolName: string, label: string, args: Record<string, unknown>): void {
 	const formattedArgs = formatToolArgs(args);
-	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ↳ ${toolName}: ${label}`));
+	con(color("yellow", `${timestamp()} ${formatContext(ctx)} ↳ ${toolName}: ${label}`));
 	if (formattedArgs) {
 		const indented = formattedArgs
 			.split("\n")
 			.map((line) => `           ${line}`)
 			.join("\n");
-		console.log(color("dim", indented));
+		con(color("dim", indented));
 	}
 	emit("debug", "tool_start", `${toolName}: ${label}`, {
 		ctx,
@@ -182,7 +197,7 @@ export function logToolStart(ctx: LogContext, toolName: string, label: string, a
 
 export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: number, result: string): void {
 	const duration = (durationMs / 1000).toFixed(1);
-	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ✓ ${toolName} (${duration}s)`));
+	con(color("yellow", `${timestamp()} ${formatContext(ctx)} ✓ ${toolName} (${duration}s)`));
 
 	const truncated = truncate(result, 1000);
 	if (truncated) {
@@ -190,7 +205,7 @@ export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: nu
 			.split("\n")
 			.map((line) => `           ${line}`)
 			.join("\n");
-		console.log(color("dim", indented));
+		con(color("dim", indented));
 	}
 	emit("info", "tool_end", toolName, {
 		ctx,
@@ -201,14 +216,14 @@ export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: nu
 
 export function logToolError(ctx: LogContext, toolName: string, durationMs: number, error: string): void {
 	const duration = (durationMs / 1000).toFixed(1);
-	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ✗ ${toolName} (${duration}s)`));
+	con(color("yellow", `${timestamp()} ${formatContext(ctx)} ✗ ${toolName} (${duration}s)`));
 
 	const truncated = truncate(error, 1000);
 	const indented = truncated
 		.split("\n")
 		.map((line) => `           ${line}`)
 		.join("\n");
-	console.log(color("dim", indented));
+	con(color("dim", indented));
 	emit("error", "tool_end", toolName, {
 		ctx,
 		details: truncated,
@@ -218,58 +233,58 @@ export function logToolError(ctx: LogContext, toolName: string, durationMs: numb
 
 // Response streaming
 export function logResponseStart(ctx: LogContext): void {
-	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} → Streaming response...`));
+	con(color("yellow", `${timestamp()} ${formatContext(ctx)} → Streaming response...`));
 	emit("debug", "response_start", "Streaming response...", { ctx });
 }
 
 export function logThinking(ctx: LogContext, thinking: string): void {
-	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} 💭 Thinking`));
+	con(color("yellow", `${timestamp()} ${formatContext(ctx)} 💭 Thinking`));
 	const truncated = truncate(thinking, 1000);
 	const indented = truncated
 		.split("\n")
 		.map((line) => `           ${line}`)
 		.join("\n");
-	console.log(color("dim", indented));
+	con(color("dim", indented));
 	emit("debug", "thinking", "Thinking", { ctx, details: truncated });
 }
 
 export function logResponse(ctx: LogContext, text: string): void {
-	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} 💬 Response`));
+	con(color("yellow", `${timestamp()} ${formatContext(ctx)} 💬 Response`));
 	const truncated = truncate(text, 1000);
 	const indented = truncated
 		.split("\n")
 		.map((line) => `           ${line}`)
 		.join("\n");
-	console.log(color("dim", indented));
+	con(color("dim", indented));
 	emit("info", "response", "Response", { ctx, details: truncated });
 }
 
 // System
 export function logInfo(message: string): void {
-	console.log(color("blue", `${timestamp()} [system] ${message}`));
+	con(color("blue", `${timestamp()} [system] ${message}`));
 	emit("info", "system", message);
 }
 
 export function logWarning(message: string, details?: string): void {
-	console.log(color("yellow", `${timestamp()} [system] ⚠ ${message}`));
+	con(color("yellow", `${timestamp()} [system] ⚠ ${message}`));
 	if (details) {
 		const indented = details
 			.split("\n")
 			.map((line) => `           ${line}`)
 			.join("\n");
-		console.log(color("dim", indented));
+		con(color("dim", indented));
 	}
 	emit("warn", "system", message, { details });
 }
 
 export function logAgentError(ctx: LogContext | "system", error: string): void {
 	const context = ctx === "system" ? "[system]" : formatContext(ctx);
-	console.log(color("yellow", `${timestamp()} ${context} ✗ Agent error`));
+	con(color("yellow", `${timestamp()} ${context} ✗ Agent error`));
 	const indented = error
 		.split("\n")
 		.map((line) => `           ${line}`)
 		.join("\n");
-	console.log(color("dim", indented));
+	con(color("dim", indented));
 	emit("error", "agent_error", "Agent error", {
 		ctx: ctx === "system" ? undefined : ctx,
 		details: error,
@@ -278,7 +293,7 @@ export function logAgentError(ctx: LogContext | "system", error: string): void {
 
 // Model fallback (spec 017)
 export function logModelFallback(ctx: LogContext, from: string, to: string, error: string): void {
-	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} ⤳ Fallback ${from} → ${to}`));
+	con(color("yellow", `${timestamp()} ${formatContext(ctx)} ⤳ Fallback ${from} → ${to}`));
 	emit("warn", "model_fallback", `Fallback ${from} → ${to}`, {
 		ctx,
 		details: error,
@@ -327,8 +342,8 @@ export function logUsageSummary(
 	const summary = lines.join("\n");
 
 	// Log to console
-	console.log(color("yellow", `${timestamp()} ${formatContext(ctx)} 💰 Usage`));
-	console.log(
+	con(color("yellow", `${timestamp()} ${formatContext(ctx)} 💰 Usage`));
+	con(
 		color(
 			"dim",
 			`           ${usage.input.toLocaleString()} in + ${usage.output.toLocaleString()} out` +
@@ -356,12 +371,12 @@ export function logUsageSummary(
 
 // Startup
 export function logStartup(workingDir: string, sandbox: string): void {
-	console.log("Starting pipiclaw...");
-	console.log(`  Working directory: ${workingDir}`);
-	console.log(`  Sandbox: ${sandbox}`);
+	con("Starting pipiclaw...");
+	con(`  Working directory: ${workingDir}`);
+	con(`  Sandbox: ${sandbox}`);
 }
 
 export function logConnected(): void {
-	console.log("⚡️ pipiclaw connected and listening!");
-	console.log("");
+	con("⚡️ pipiclaw connected and listening!");
+	con("");
 }

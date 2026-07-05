@@ -75,6 +75,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	const { sandbox } = options;
 	const channelId = resolveChannelId(options.channel, io);
 
+	// The pi-tui frontend owns stdout; the plain frontend prints only the final
+	// answer. Either way the human-readable console log sink would corrupt output,
+	// so route logging to the file sink only. Turn progress and errors are still
+	// surfaced through the transcript.
+	log.setConsoleLoggingEnabled(false);
+
 	// Transport-neutral init. Unlike the DingTalk path, the TUI ignores
 	// channelTemplateCreated (it needs no channel.json) and shares app services
 	// (settings, diagnostics, sandbox check) with bootstrap via prepareAppServices.
@@ -86,7 +92,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
 	ensureChannelMemoryFilesSync(channelDir);
 	const store = new ChannelStore({ workingDir: paths.workspaceDir });
-	const runner: AgentRunner = getOrCreateRunner(sandbox, channelId, channelDir);
+	const runner: AgentRunner = getOrCreateRunner(sandbox, channelId, channelDir, {
+		appHomeDir: paths.appHomeDir,
+		authConfigPath: paths.authConfigPath,
+		modelsConfigPath: paths.modelsConfigPath,
+	});
 
 	const tuiSettings = settingsManager.getTuiSettings();
 	const traits: DeliveryTraits = {

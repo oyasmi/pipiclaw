@@ -99,7 +99,11 @@ export class PiTuiFrontend implements Frontend {
 
 	start(callbacks: FrontendCallbacks): void {
 		this.editor.onSubmit = (text: string) => {
-			if (text.length > 0) callbacks.onSubmit(text);
+			if (text.length === 0) return;
+			// Raw mode gives no terminal echo and the editor clears on submit, so
+			// render the user's message into the transcript ourselves.
+			this.showUser(text);
+			callbacks.onSubmit(text);
 		};
 		this.removeInputListener = this.ui.addInputListener((data: string) => {
 			if (data === CTRL_C) {
@@ -114,6 +118,12 @@ export class PiTuiFrontend implements Frontend {
 		});
 		this.ui.setFocus(this.editor);
 		this.ui.start();
+		this.ui.requestRender();
+	}
+
+	/** Echo the user's submitted message into the transcript. */
+	showUser(text: string): void {
+		this.transcript.addChild(new Text(`${cyan(bold("›"))} ${text}`, 1, 0));
 		this.ui.requestRender();
 	}
 

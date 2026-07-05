@@ -636,7 +636,11 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			ensureChannelMemoryFilesSync(channelDir);
 			state = {
 				running: false,
-				runner: getOrCreateRunner(options.sandbox, channelId, channelDir),
+				runner: getOrCreateRunner(options.sandbox, channelId, channelDir, {
+					appHomeDir: options.paths.appHomeDir,
+					authConfigPath: options.paths.authConfigPath,
+					modelsConfigPath: options.paths.modelsConfigPath,
+				}),
 				stopRequested: false,
 			};
 			channelStates.set(channelId, state);
@@ -918,7 +922,16 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			}
 
 			for (const channelId of channelStates.keys()) {
-				resetRunner(channelId);
+				const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
+				resetRunner(
+					channelId,
+					{
+						appHomeDir: options.paths.appHomeDir,
+						authConfigPath: options.paths.authConfigPath,
+						modelsConfigPath: options.paths.modelsConfigPath,
+					},
+					channelDir,
+				);
 			}
 		})();
 

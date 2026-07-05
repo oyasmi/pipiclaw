@@ -4,15 +4,39 @@ import type { AgentRunner } from "./types.js";
 
 const channelRunners = new Map<string, AgentRunner>();
 
-export function getOrCreateRunner(sandboxConfig: SandboxConfig, channelId: string, channelDir: string): AgentRunner {
-	const existing = channelRunners.get(channelId);
+export interface RunnerFactoryPaths {
+	appHomeDir: string;
+	authConfigPath: string;
+	modelsConfigPath: string;
+}
+
+function runnerKey(paths: RunnerFactoryPaths, channelId: string, channelDir: string): string {
+	return `${paths.appHomeDir}\0${channelDir}\0${channelId}`;
+}
+
+export function getOrCreateRunner(
+	sandboxConfig: SandboxConfig,
+	channelId: string,
+	channelDir: string,
+	paths: RunnerFactoryPaths,
+): AgentRunner {
+	const key = runnerKey(paths, channelId, channelDir);
+	const existing = channelRunners.get(key);
 	if (existing) return existing;
 
-	const runner = new ChannelRunner(sandboxConfig, channelId, channelDir);
-	channelRunners.set(channelId, runner);
+	const runner = new ChannelRunner(sandboxConfig, channelId, channelDir, paths);
+	channelRunners.set(key, runner);
 	return runner;
 }
 
-export function resetRunner(channelId: string): void {
-	channelRunners.delete(channelId);
+export function resetRunner(channelId: string, paths?: RunnerFactoryPaths, channelDir?: string): void {
+	if (paths && channelDir) {
+		channelRunners.delete(runnerKey(paths, channelId, channelDir));
+		return;
+	}
+	for (const key of channelRunners.keys()) {
+		if (key.endsWith(`\0${channelId}`)) {
+			channelRunners.delete(key);
+		}
+	}
 }
