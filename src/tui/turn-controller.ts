@@ -16,7 +16,6 @@ import { type DispatchDeps, dispatch } from "./commands.js";
 import type { Frontend } from "./renderer.js";
 import { createTerminalContext, type DeliveryTraits, type TurnInput } from "./terminal-context.js";
 
-const DOUBLE_INTERRUPT_WINDOW_MS = 500;
 const SHUTDOWN_ABORT_WAIT_MS = 5000;
 
 export interface TurnControllerDeps {
@@ -50,7 +49,7 @@ export class TurnController {
 	private currentTurn: Promise<void> = Promise.resolve();
 	private readonly followups: string[] = [];
 	private submitChain: Promise<void> = Promise.resolve();
-	private lastInterruptAt = Number.NEGATIVE_INFINITY;
+	private exitArmed = false;
 	private exiting = false;
 	private exitResolve!: () => void;
 	private readonly exitPromise = new Promise<void>((resolve) => {
@@ -111,6 +110,8 @@ export class TurnController {
 
 	private async processSubmit(text: string): Promise<void> {
 		if (this.exiting) return;
+		// Any submitted line disarms a pending "press Ctrl-C again to exit".
+		this.exitArmed = false;
 		const outcome = await dispatch(text, this.dispatchDeps);
 		switch (outcome.kind) {
 			case "noop":
@@ -227,12 +228,13 @@ export class TurnController {
 			this.deps.frontend.showNotice("Stopping…");
 			return;
 		}
-		const now = this.now();
-		if (now - this.lastInterruptAt < DOUBLE_INTERRUPT_WINDOW_MS) {
+		// Idle: first Ctrl-C arms the exit prompt, the next one exits (no time
+		// window — armed until the user submits something). Mirrors the Node REPL.
+		if (this.exitArmed) {
 			this.requestExit();
 			return;
 		}
-		this.lastInterruptAt = now;
+		this.exitArmed = true;
 		this.deps.frontend.showNotice("Press Ctrl-C again to exit.");
 	}
 

@@ -145,22 +145,29 @@ describe("TurnController", () => {
 		expect(frontend.stopped).toBe(false);
 	});
 
-	it("two-stage Ctrl-C when idle: hint, then exit within the window", async () => {
-		let clock = 0;
-		const { runner, frontend, exit, cb } = setup(() => clock);
+	it("two-stage Ctrl-C when idle: first arms, second exits", async () => {
+		const { runner, frontend, exit, cb } = setup();
 		cb().onInterrupt();
 		expect(frontend.notices.at(-1)).toBe("Press Ctrl-C again to exit.");
 		expect(frontend.stopped).toBe(false);
 
-		clock = 5000; // well past the window → just another hint
-		cb().onInterrupt();
-		expect(frontend.stopped).toBe(false);
-
-		cb().onInterrupt(); // same instant → within window → exit
+		cb().onInterrupt(); // armed → exit (no time window)
 		await tick();
 		expect(runner.flushCount).toBe(1);
 		expect(frontend.stopped).toBe(true);
 		await exit;
+	});
+
+	it("a submission disarms the exit prompt", async () => {
+		const { runner, frontend, cb } = setup();
+		cb().onInterrupt(); // arm
+		cb().onSubmit("hello");
+		await tick();
+		runner.finishRun();
+		await tick();
+		cb().onInterrupt(); // disarmed by the submission → hint again, not exit
+		expect(frontend.stopped).toBe(false);
+		expect(frontend.notices.at(-1)).toBe("Press Ctrl-C again to exit.");
 	});
 
 	it("/exit flushes memory and stops the frontend", async () => {
