@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 import { readdir, readFile, unlink } from "fs/promises";
 import { join, resolve, sep } from "path";
+import { eventNameFromFilename } from "../shared/text-utils.js";
 import { type EventHistoryRecord, parseScheduledEventContent, type ScheduledEvent } from "./events.js";
 
 const EVENT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -79,10 +80,6 @@ function resolveEventPath(workspaceDir: string, name: string): { eventName: stri
 		throw new Error(`Invalid event name: ${name}`);
 	}
 	return { eventName, eventPath };
-}
-
-function eventNameFromFilename(filename: string): string {
-	return filename.endsWith(".json") ? filename.slice(0, -".json".length) : filename;
 }
 
 function clipText(text: string, maxChars = TEXT_PREVIEW_MAX_CHARS): string {

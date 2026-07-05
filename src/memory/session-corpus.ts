@@ -1,5 +1,6 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { isNodeError, readOptionalTextFile } from "../shared/fs-utils.js";
 import { clipText } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 
@@ -32,21 +33,6 @@ const IGNORED_JSONL_FILES = new Set([
 	"subagent-runs.jsonl",
 	"memory-review.jsonl",
 ]);
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-	return error instanceof Error && "code" in error;
-}
-
-async function readOptionalFile(path: string): Promise<string> {
-	try {
-		return await readFile(path, "utf-8");
-	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") {
-			return "";
-		}
-		throw error;
-	}
-}
 
 function parseJsonLine(line: string): unknown | null {
 	const trimmed = line.trim();
@@ -242,7 +228,7 @@ async function parseJsonlFile(
 	source: SessionSearchSource,
 	maxChars: number,
 ): Promise<SessionSearchDocument[]> {
-	const content = await readOptionalFile(path);
+	const content = await readOptionalTextFile(path);
 	if (!content.trim()) {
 		return [];
 	}

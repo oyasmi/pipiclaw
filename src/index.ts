@@ -160,7 +160,6 @@ export {
 } from "./tools/config.js";
 export {
 	type CreatePipiclawToolsOptions,
-	createPipiclawBaseTools,
 	createPipiclawTools,
 } from "./tools/index.js";
 export {

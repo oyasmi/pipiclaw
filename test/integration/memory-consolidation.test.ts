@@ -80,9 +80,9 @@ describe("memory-consolidation integration", () => {
 		});
 		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
 			rawText:
-				'{"memoryEntries":["OAuth callback fails in prod"],"historyBlock":"- Investigated callback state handling."}',
+				'{"memoryOps":[{"op":"add","content":"OAuth callback fails in prod"}],"historyBlock":"- Investigated callback state handling."}',
 			output:
-				'{"memoryEntries":["OAuth callback fails in prod"],"historyBlock":"- Investigated callback state handling."}',
+				'{"memoryOps":[{"op":"add","content":"OAuth callback fails in prod"}],"historyBlock":"- Investigated callback state handling."}',
 		});
 
 		const result = await runInlineConsolidation({
@@ -116,9 +116,9 @@ describe("memory-consolidation integration", () => {
 		});
 		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
 			rawText:
-				'{"memoryEntries":["OAuth callback regression is a durable channel issue"],"historyBlock":"- Should be ignored during idle."}',
+				'{"memoryOps":[{"op":"add","content":"OAuth callback regression is a durable channel issue"}],"historyBlock":"- Should be ignored during idle."}',
 			output:
-				'{"memoryEntries":["OAuth callback regression is a durable channel issue"],"historyBlock":"- Should be ignored during idle."}',
+				'{"memoryOps":[{"op":"add","content":"OAuth callback regression is a durable channel issue"}],"historyBlock":"- Should be ignored during idle."}',
 		});
 
 		const result = await runInlineConsolidation({
@@ -150,8 +150,8 @@ describe("memory-consolidation integration", () => {
 				expect(task.prompt).toContain("after boundary");
 				expect(task.prompt).not.toContain("before boundary");
 				return {
-					rawText: '{"memoryEntries":["Recovered after compaction"],"historyBlock":""}',
-					output: '{"memoryEntries":["Recovered after compaction"],"historyBlock":""}',
+					rawText: '{"memoryOps":[{"op":"add","content":"Recovered after compaction"}],"historyBlock":""}',
+					output: '{"memoryOps":[{"op":"add","content":"Recovered after compaction"}],"historyBlock":""}',
 				};
 			}
 			throw new Error(`Unexpected sidecar task ${task.name}`);

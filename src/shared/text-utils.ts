@@ -27,6 +27,11 @@ export function truncate(text: string, maxLen: number): string {
 
 export const HAN_REGEX = /\p{Script=Han}/u;
 
+/** Strip a trailing `.json` from an event filename to get its logical name. */
+export function eventNameFromFilename(filename: string): string {
+	return filename.endsWith(".json") ? filename.slice(0, -".json".length) : filename;
+}
+
 export function extractLabelFromArgs(args: unknown): string | null {
 	if (!args || typeof args !== "object" || !("label" in args)) {
 		return null;

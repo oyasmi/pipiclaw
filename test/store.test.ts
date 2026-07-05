@@ -157,33 +157,6 @@ describe("ChannelStore", () => {
 		expect(readFileSync(logPath, "utf-8")).toContain('"text":"second"');
 	});
 
-	it("returns the last logged timestamp and handles invalid or empty logs", async () => {
-		const store = new ChannelStore({ workingDir: createTempDir() });
-		const channelDir = store.getChannelDir("dm_last");
-		const logPath = join(channelDir, "log.jsonl");
-
-		writeFileSync(
-			logPath,
-			[
-				'{"date":"2026-04-01T10:00:00.000Z","ts":"1","user":"alice","text":"a","isBot":false}',
-				'{"date":"2026-04-01T10:01:00.000Z","ts":"2","user":"alice","text":"b","isBot":false}\r',
-				"",
-				"",
-			].join("\n"),
-			"utf-8",
-		);
-		expect(store.getLastTimestamp("dm_last")).toBe("2");
-
-		writeFileSync(join(store.getChannelDir("dm_empty"), "log.jsonl"), "", "utf-8");
-		expect(store.getLastTimestamp("dm_empty")).toBeNull();
-
-		writeFileSync(join(store.getChannelDir("dm_invalid"), "log.jsonl"), "{broken}\n", "utf-8");
-		expect(store.getLastTimestamp("dm_invalid")).toBeNull();
-
-		await store.logBotResponse("dm_bot", "hello", "300");
-		expect(store.getLastTimestamp("dm_bot")).toBe("300");
-	});
-
 	it("stores channel logs under a single directory for channel ids with slashes", async () => {
 		const workingDir = createTempDir();
 		const store = new ChannelStore({ workingDir });
@@ -199,6 +172,5 @@ describe("ChannelStore", () => {
 
 		const channelDir = join(workingDir, getChannelDirName(channelId));
 		expect(readFileSync(join(channelDir, "log.jsonl"), "utf-8")).toContain('"text":"hello group"');
-		expect(store.getLastTimestamp(channelId)).toBe("400");
 	});
 });

@@ -4,17 +4,13 @@ import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { APP_HOME_DIR } from "../paths.js";
 import type { Executor, SandboxConfig } from "../sandbox.js";
 import { loadSecurityConfig } from "../security/config.js";
-import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings, PipiclawSessionSearchSettings } from "../settings.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { createSubAgentTool } from "../subagents/tool.js";
-import { createBashTool } from "./bash.js";
 import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
-import { createEditTool } from "./edit.js";
-import { createReadTool } from "./read.js";
 import { buildToolSet } from "./registry.js";
-import { createWriteTool } from "./write.js";
 
 export interface CreatePipiclawToolsOptions {
 	executor: Executor;
@@ -32,32 +28,6 @@ export interface CreatePipiclawToolsOptions {
 	memoryCandidateStore: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
 	toolsConfig?: PipiclawToolsConfig;
-}
-
-export interface CreatePipiclawBaseToolsOptions {
-	securityConfig?: SecurityConfig;
-	securityContext?: SecurityRuntimeContext;
-	channelId?: string;
-}
-
-export function createPipiclawBaseTools(
-	executor: Executor,
-	options: CreatePipiclawBaseToolsOptions = {},
-): AgentTool<any>[] {
-	const hasSecurityOptions = options.securityConfig || options.securityContext || options.channelId;
-	const toolOptions = hasSecurityOptions
-		? {
-				securityConfig: options.securityConfig,
-				securityContext: options.securityContext,
-				channelId: options.channelId,
-			}
-		: undefined;
-	return [
-		createReadTool(executor, toolOptions),
-		createBashTool(executor, toolOptions),
-		createEditTool(executor, toolOptions),
-		createWriteTool(executor, toolOptions),
-	];
 }
 
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {

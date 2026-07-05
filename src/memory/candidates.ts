@@ -1,7 +1,13 @@
-import { readFile, stat } from "fs/promises";
+import { stat } from "fs/promises";
 import { join } from "path";
+import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { splitH1Sections, splitH2Sections } from "../shared/markdown-sections.js";
-import { getChannelHistoryPath, getChannelMemoryPath, getChannelSessionPath } from "./files.js";
+import {
+	getChannelHistoryPath,
+	getChannelMemoryPath,
+	getChannelSessionPath,
+	parseUpdateHeadingTimestamp,
+} from "./files.js";
 
 export interface MemoryCandidate {
 	id: string;
@@ -37,18 +43,7 @@ function normalizeContent(content: string): string {
 }
 
 async function readOptionalFile(path: string): Promise<string> {
-	try {
-		return normalizeContent(await readFile(path, "utf-8"));
-	} catch (error) {
-		if (isNodeError(error) && error.code === "ENOENT") {
-			return "";
-		}
-		throw error;
-	}
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-	return error instanceof Error && "code" in error;
+	return normalizeContent(await readOptionalTextFile(path));
 }
 
 function slugify(value: string): string {
@@ -119,15 +114,6 @@ function buildCandidate(
 	};
 }
 
-function parseUpdateBlockTimestamp(heading: string): string | undefined {
-	const match = heading.match(/^Update\s+(.+)$/);
-	if (!match) {
-		return undefined;
-	}
-	const timestamp = match[1].trim();
-	return Number.isFinite(Date.parse(timestamp)) ? timestamp : undefined;
-}
-
 function buildWorkspaceOrChannelMemoryCandidates(
 	source: "workspace-memory" | "channel-memory",
 	path: string,
@@ -145,7 +131,7 @@ function buildWorkspaceOrChannelMemoryCandidates(
 		.map((section) => {
 			// `## Update <ISO>` blocks carry their write time in the heading; surfacing it
 			// lets recall apply a recency boost and keeps appended-block ids distinct.
-			const timestamp = source === "channel-memory" ? parseUpdateBlockTimestamp(section.heading) : undefined;
+			const timestamp = source === "channel-memory" ? parseUpdateHeadingTimestamp(section.heading) : undefined;
 			return buildCandidate(source, path, section.heading, section.content, timestamp);
 		});
 }

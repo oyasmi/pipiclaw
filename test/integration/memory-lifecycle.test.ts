@@ -217,9 +217,9 @@ describe("memory-lifecycle integration", () => {
 			if (task.name === "memory-inline-consolidation") {
 				return {
 					rawText:
-						'{"memoryEntries":["Callback verification must remain backwards-compatible"],"historyBlock":"- Investigated callback verification flow."}',
+						'{"memoryOps":[{"op":"add","content":"Callback verification must remain backwards-compatible"}],"historyBlock":"- Investigated callback verification flow."}',
 					output:
-						'{"memoryEntries":["Callback verification must remain backwards-compatible"],"historyBlock":"- Investigated callback verification flow."}',
+						'{"memoryOps":[{"op":"add","content":"Callback verification must remain backwards-compatible"}],"historyBlock":"- Investigated callback verification flow."}',
 				};
 			}
 			throw new Error(`Unexpected sidecar task ${task.name}`);
@@ -300,9 +300,9 @@ describe("memory-lifecycle integration", () => {
 			if (task.name === "memory-inline-consolidation") {
 				return {
 					rawText:
-						'{"memoryEntries":["Callback verification must stay backwards-compatible"],"historyBlock":"- Compacted recent debugging work."}',
+						'{"memoryOps":[{"op":"add","content":"Callback verification must stay backwards-compatible"}],"historyBlock":"- Compacted recent debugging work."}',
 					output:
-						'{"memoryEntries":["Callback verification must stay backwards-compatible"],"historyBlock":"- Compacted recent debugging work."}',
+						'{"memoryOps":[{"op":"add","content":"Callback verification must stay backwards-compatible"}],"historyBlock":"- Compacted recent debugging work."}',
 				};
 			}
 			throw new Error(`Unexpected sidecar task ${task.name}`);
@@ -393,8 +393,10 @@ describe("memory-lifecycle integration", () => {
 			}
 			if (task.name === "memory-inline-consolidation") {
 				return {
-					rawText: '{"memoryEntries":["Callback retry loop masked the root cause"],"historyBlock":""}',
-					output: '{"memoryEntries":["Callback retry loop masked the root cause"],"historyBlock":""}',
+					rawText:
+						'{"memoryOps":[{"op":"add","content":"Callback retry loop masked the root cause"}],"historyBlock":""}',
+					output:
+						'{"memoryOps":[{"op":"add","content":"Callback retry loop masked the root cause"}],"historyBlock":""}',
 				};
 			}
 			throw new Error(`Unexpected sidecar task ${task.name}`);

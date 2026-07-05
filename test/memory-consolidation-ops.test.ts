@@ -66,16 +66,6 @@ describe("runInlineConsolidation with ops", () => {
 		expect(memory).toContain("blue-green");
 		expect(memory).not.toContain("rolling");
 	});
-
-	it("tolerates the legacy memoryEntries shape", async () => {
-		const channelDir = createTempChannel();
-		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
-			output: JSON.stringify({ memoryEntries: ["User prefers dark mode"], historyBlock: "- note" }),
-		} as never);
-
-		await runInlineConsolidation({ channelDir, model: fakeModel, resolveApiKey, messages, mode: "boundary" });
-		expect(await readChannelMemory(channelDir)).toContain("User prefers dark mode");
-	});
 });
 
 describe("cleanupChannelMemory shrink guard", () => {

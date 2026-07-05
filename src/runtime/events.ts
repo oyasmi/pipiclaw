@@ -17,6 +17,7 @@ import * as log from "../log.js";
 import type { ExecResult, Executor } from "../sandbox.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
+import { eventNameFromFilename } from "../shared/text-utils.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 
 // ============================================================================
@@ -128,10 +129,6 @@ export function formatLocalTimestamp(date: Date = new Date()): string {
 	const offsetHours = Math.floor(absOffsetMinutes / 60);
 	const offsetRemainderMinutes = absOffsetMinutes % 60;
 	return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}.${pad3(date.getMilliseconds())}${offsetSign}${pad2(offsetHours)}:${pad2(offsetRemainderMinutes)}`;
-}
-
-function eventNameFromFilename(filename: string): string {
-	return filename.endsWith(".json") ? filename.slice(0, -".json".length) : filename;
 }
 
 function truncateTextPreview(text: string): string {

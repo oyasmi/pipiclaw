@@ -183,13 +183,8 @@ function normalizeMemoryOp(value: unknown): MemoryOp | null {
 }
 
 function parseConsolidationResponse(text: string): ConsolidationResponse {
-	const parsed = parseJsonObject(text) as { memoryOps?: unknown; memoryEntries?: unknown; historyBlock?: unknown };
-	const rawOps = Array.isArray(parsed.memoryOps)
-		? parsed.memoryOps
-		: // Back-compat: tolerate the old memoryEntries: string[] shape.
-			Array.isArray(parsed.memoryEntries)
-			? parsed.memoryEntries.map((entry) => ({ op: "add", content: entry }))
-			: [];
+	const parsed = parseJsonObject(text) as { memoryOps?: unknown; historyBlock?: unknown };
+	const rawOps = Array.isArray(parsed.memoryOps) ? parsed.memoryOps : [];
 	return {
 		memoryOps: rawOps.map(normalizeMemoryOp).filter((op): op is MemoryOp => op !== null),
 		historyBlock: typeof parsed.historyBlock === "string" ? parsed.historyBlock.trim() : "",

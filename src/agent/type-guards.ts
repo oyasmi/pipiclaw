@@ -112,14 +112,13 @@ export function isTurnEndEvent(value: unknown): value is TurnEndEvent {
 
 export function isAutoCompactionStartEvent(value: unknown): value is AutoCompactionStartEvent {
 	return (
-		(hasEventType(value, "auto_compaction_start") && (value.reason === "threshold" || value.reason === "overflow")) ||
-		(hasEventType(value, "compaction_start") &&
-			(value.reason === "threshold" || value.reason === "overflow" || value.reason === "manual"))
+		hasEventType(value, "compaction_start") &&
+		(value.reason === "threshold" || value.reason === "overflow" || value.reason === "manual")
 	);
 }
 
 export function isAutoCompactionEndEvent(value: unknown): value is AutoCompactionEndEvent {
-	return hasEventType(value, "auto_compaction_end") || hasEventType(value, "compaction_end");
+	return hasEventType(value, "compaction_end");
 }
 
 export function isAutoRetryStartEvent(value: unknown): value is AutoRetryStartEvent {

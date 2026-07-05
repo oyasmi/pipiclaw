@@ -17,7 +17,7 @@ Pipiclaw 的配置分成两层：
 
 - Pipiclaw 自己的运行时配置
   - 例如 `channel.json`、工作区（workspace）目录、钉钉接入、记忆文件、事件目录
-- 继承自 `@mariozechner/pi-coding-agent` 的模型与认证配置能力
+- 继承自 `@earendil-works/pi-coding-agent`（`@mariozechner/pi-coding-agent` 的 fork）的模型与认证配置能力
   - 例如 `auth.json`、`models.json`、部分 `settings.json` 语义
 
 这意味着：
@@ -39,6 +39,7 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
 ├── models.json
 ├── settings.json
 ├── tools.json
+├── security.json
 └── workspace/
     ├── SOUL.md
     ├── AGENTS.md
@@ -66,6 +67,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `~/.pi/pipiclaw/models.json` | 全局 | 自定义模型提供方 / 模型 | 是 |
 | `~/.pi/pipiclaw/settings.json` | 全局 | Pipiclaw 运行时设置 | 是 |
 | `~/.pi/pipiclaw/tools.json` | 全局 | 内建工具配置，例如 `tools.web` | 是 |
+| `~/.pi/pipiclaw/security.json` | 全局 | 工具层安全策略（路径/命令守卫） | 是 |
 | `~/.pi/pipiclaw/workspace/SOUL.md` | 工作区 | 助手身份与回复风格 | 是 |
 | `~/.pi/pipiclaw/workspace/AGENTS.md` | 工作区 | 工作规则与行为约束 | 是 |
 | `~/.pi/pipiclaw/workspace/MEMORY.md` | 工作区 | 持久化共享记忆 | 是 |
@@ -81,6 +83,8 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `ANTHROPIC_API_KEY` | Anthropic 默认模型凭据 |
 | `PIPICLAW_HOME` | 覆盖默认的 `~/.pi/pipiclaw/` 根目录 |
 | `PIPICLAW_DEBUG` | 在会话通道目录中写出 `last_prompt.json` |
+| `PIPICLAW_LOG_LEVEL` | 覆盖日志级别（`debug` \| `info` \| `warn` \| `error`），优先于 `settings.json` |
+| `PIPICLAW_LOG_FILE` | `0`/`1` 关闭或开启文件落盘，优先于 `settings.json` |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` | 标准代理环境变量；DingTalk runtime 和 web 工具默认都会尊重 |
 
 > Pipiclaw 的工具执行层按 POSIX shell 语义工作（`bash`、`read`、`write`、`edit` 等工具内部都会调用 `sh` 风格命令），面向 Linux / macOS 运行，不支持 Windows。

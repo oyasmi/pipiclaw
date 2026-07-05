@@ -110,7 +110,7 @@ vi.mock("../src/security/config.js", () => ({ loadSecurityConfig: vi.fn(() => se
 vi.mock("../src/tools/config.js", () => ({ loadToolsConfig: vi.fn(() => toolsConfig) }));
 
 import { buildAppendSystemPrompt } from "../src/agent/prompt-builder.js";
-import { createPipiclawBaseTools, createPipiclawTools } from "../src/tools/index.js";
+import { createPipiclawTools } from "../src/tools/index.js";
 
 const ALL_TOOL_NAMES = [
 	"read",
@@ -260,16 +260,6 @@ describe("tools index", () => {
 
 		expect(tools.map((tool) => tool.name)).not.toContain("session_search");
 		expect(createSessionSearchToolMock).not.toHaveBeenCalled();
-	});
-
-	it("creates the base tool set in the expected order", () => {
-		const tools = createPipiclawBaseTools(executor);
-
-		expect(createReadToolMock).toHaveBeenCalledWith(executor, undefined);
-		expect(createBashToolMock).toHaveBeenCalledWith(executor, undefined);
-		expect(createEditToolMock).toHaveBeenCalledWith(executor, undefined);
-		expect(createWriteToolMock).toHaveBeenCalledWith(executor, undefined);
-		expect(tools.map((tool) => tool.name)).toEqual(["read", "bash", "edit", "write"]);
 	});
 
 	it("keeps the system prompt tool list in sync with the registered tools", () => {

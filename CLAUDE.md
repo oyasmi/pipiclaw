@@ -20,7 +20,7 @@ Node `>= 22.19.0`.
 
 ## Architecture
 
-Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent` SDK (a fork; the README's `@mariozechner/...` name is historical) and drives it from DingTalk. The layers below are traversed on every message.
+Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent` SDK (a fork of `@mariozechner/pi-coding-agent`) and drives it from DingTalk. The layers below are traversed on every message.
 
 **Transport → agent → delivery flow**
 1. `src/runtime/bootstrap.ts` loads config, constructs the `DingTalkBot`, memory scheduler, and events watcher, and wires them together. `src/main.ts` is intentionally a thin entrypoint that just calls `bootstrap`.
@@ -38,7 +38,7 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 - `lifecycle.ts` orchestrates a channel's memory; `recall.ts` retrieves relevant memory for a turn; `consolidation.ts` folds/cleans; `scheduler.ts` + `maintenance-jobs.ts` + `maintenance-gates.ts` + `maintenance-state.ts` form a *gated, scheduled* maintenance pipeline (gates decide whether each job may run given idle/interval/threshold state). Each of these has dedicated tests — keep them as separate, single-responsibility units.
 - `sidecar-worker.ts` runs LLM-backed memory work off the main turn.
 
-**Tools (`src/tools/`)** are the capabilities handed to the coding agent (`bash`, `read`, `write`, `edit`, `attach`, `web_search`/`web_fetch`, skill + config tools). Every filesystem/command/network tool goes through `src/security/` guards: `command-guard.ts`, `path-guard.ts`, `network.ts`, with blocked actions written to the audit logger. `write.ts` is a thin tool wrapper over the shared `write-content.ts` (also used by the sub-agent tool) — that split is deliberate.
+**Tools (`src/tools/`)** are the capabilities handed to the coding agent (`bash`, `read`, `write`, `edit`, `web_search`/`web_fetch`, skill + config tools). Every filesystem/command/network tool goes through `src/security/` guards: `command-guard.ts`, `path-guard.ts`, `network.ts`, with blocked actions written to the audit logger. `write.ts` is a thin tool wrapper over the shared `write-content.ts` (also used by the sub-agent tool) — that split is deliberate.
 
 **Config & state live outside the repo**, under `APP_HOME_DIR` (`~/.pi/pipiclaw`, overridable via `PIPICLAW_HOME`). Paths are centralized in `src/paths.ts` (`channel.json`, `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`, plus `workspace/` and `state/`). `src/index.ts` is the public library barrel; keep its exported names stable when moving code.
 
