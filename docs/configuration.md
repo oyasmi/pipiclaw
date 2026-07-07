@@ -185,6 +185,22 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - 使用 docker sandbox 时，需要把 `rtk` 装进容器镜像，否则会自动降级为不改写。
 - rtk 只重塑语义等价的只读命令，安全校验始终针对**原始命令**执行，改写不会绕过 `command-guard`。
 
+#### 事件自调度工具（`tools.events`）
+
+`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件（one-shot 回访 / periodic 节奏），是[任务台账（tasks）](./tasks.md)自我驱动的底层能力。默认开启。
+
+```jsonc
+{
+  "tools": {
+    "events": { "enabled": true }
+  }
+}
+```
+
+- 只有一个开关 `enabled`（默认 `true`）；关掉后主 agent 无法再自调度事件，但用户侧的 `/events` 命令与手工编辑 `workspace/events/*.json` 不受影响。
+- 该工具只发给主 agent，不进子代理工具集。
+- 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、事件文件总数上限 50）。细节见 [tasks.md](./tasks.md) 与 [events-and-sub-agents.md](./events-and-sub-agents.md)。
+
 ## 终端 TUI（Terminal TUI）
 
 除了钉钉对话，Pipiclaw 还可以直接在终端里对话，复用**同一套配置目录**（`auth.json` / `models.json` / `settings.json` / `tools.json` / `security.json`）、同一套记忆与会话。适合在命令行里快速使用，或接管某个钉钉会话的身份继续对话。

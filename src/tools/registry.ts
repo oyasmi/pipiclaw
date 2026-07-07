@@ -7,6 +7,7 @@ import type { PipiclawSessionSearchSettings } from "../settings.js";
 import { createBashTool } from "./bash.js";
 import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
+import { createEventManageTool } from "./event-manage.js";
 import { createMemorySaveTool } from "./memory-save.js";
 import { createReadTool } from "./read.js";
 import { createSessionSearchTool } from "./session-search.js";
@@ -189,6 +190,20 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.skills.manage.enabled !== false,
 		create: (ctx) => createSkillManageTool({ workspaceDir: ctx.workspaceDir, workspacePath: ctx.workspacePath }),
+	},
+	{
+		name: "event_manage",
+		promptHint:
+			"Schedule your own follow-ups: create/update/delete one-shot check-ins and periodic cadences for this channel (no immediate events; periodic no more often than every 30 min)",
+		availableToSubagents: false,
+		enabledBy: (ctx) => ctx.toolsConfig?.tools.events.enabled !== false,
+		create: (ctx) =>
+			createEventManageTool({
+				workspaceDir: ctx.workspaceDir,
+				workspacePath: ctx.workspacePath,
+				channelId: ctx.channelId,
+				commandGuardConfig: ctx.securityConfig.commandGuard,
+			}),
 	},
 ];
 

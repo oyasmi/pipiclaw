@@ -302,6 +302,71 @@ Pipiclaw 会把事件调度层的审计记录写入：
 - `preAction.type` 写成 `bash` 以外的值
 - `preAction.timeout` 设得太短，脚本来不及执行完
 
+## `event_manage` 工具（Agent 自调度）
+
+前面讲的都是**你**（人）如何管理事件：手工编辑 `workspace/events/*.json`，或用 `/events` 命令查看删除。`event_manage` 则是给**主 agent** 的一等工具，让它能在一轮对话里自己创建、修改、删除事件——这是[任务台账（tasks）](./tasks.md)得以自我驱动的底层能力：派发任务后安排回访、被阻塞时改期催办、任务闭环时清理检查点。
+
+### 与 `/events` 命令的分工
+
+| | 谁用 | 能做什么 |
+|---|------|----------|
+| `/events` 命令 | 人（钉钉侧） | list / show / delete / history —— 只读 + 删除 |
+| `event_manage` 工具 | 主 agent | create / update / delete —— 带写入时校验 |
+| 手工编辑 `*.json` | 人 | 任意增改，不受工具的约束闸门限制 |
+
+三者操作的是**同一个** `workspace/events/` 目录，互不冲突。
+
+### 参数
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `label` | 是 | 一句话说明这次调度改动（展示给用户） |
+| `action` | 是 | `create` / `update` / `delete` |
+| `name` | 是 | 事件名（不含 `.json`）。任务派生事件请用 `task.<channelId>.<taskId>.<用途>`，如 `task.dm_123.weekly-report.checkin` |
+| `definition` | create/update 必填 | 完整事件 JSON（字符串）。`channelId` 可省略，默认填当前 channel |
+
+### 写入时校验（工具的核心价值）
+
+裸用 `write` 工具写事件 JSON 有个隐患：格式错误的文件会被 watcher **静默删除**，agent 以为安排好了回访，实际什么都没留下。`event_manage` 在**落盘前**就把问题拦下并大声报错：
+
+1. **结构校验**：`definition` 必须能通过与 watcher 相同的 `parseScheduledEventContent`——工具写出的文件必然可被装载。
+2. **路径安全**：`name` 经 traversal 拦截（拒绝 `../` 等越界），字符集限定 `[A-Za-z0-9._-]`。
+3. **channel 所有权**：`definition.channelId` 必须等于当前 channel；update/delete 前会读取目标文件校验归属，一个 channel 不能操纵或打扰其他 channel 的事件。
+4. **`preAction` 安全**：命令写入时即过 `command-guard`，被拦截则整个操作失败（触发时的检查仍保留）。
+5. **防自激励闸门**（防止 agent 把自己拖入烧 token 的自唤醒循环）：
+   - 禁止 `immediate` 类型（create 与 update 双侧）——当下能做的事就在当前回合做完；
+   - `one-shot` 的 `at` 必须至少晚于现在 2 分钟；
+   - `periodic` 的 cron 最密每 30 分钟一次（需要更密的探测就用 periodic + `preAction` 门控，而不是裸高频 cron）；
+   - `workspace/events/` 内事件文件数达到 50 时拒绝再 create。
+
+> 用户手工编辑 `*.json` 或用 `/events` 不受这些闸门限制——它们只约束 agent 的自调度。
+> 注意：第 4 条的两道 guard 检查都以 `security.json` 里 `commandGuard.enabled` 为前提；全局关闭 command guard 时，写入时与触发时的检查都不生效（这是既有安全语义）。
+
+### 典型用法
+
+委派任务后安排一次回访：
+
+```json
+{
+  "type": "one-shot",
+  "text": "检查任务 weekly-report：agentmux 编码助手-A 的进展。",
+  "at": "2026-07-08T14:00:00+08:00"
+}
+```
+
+为一个新周期任务安排节奏（periodic）：
+
+```json
+{
+  "type": "periodic",
+  "text": "推进任务 weekly-report。",
+  "schedule": "30 9 * * 1",
+  "timezone": "Asia/Shanghai"
+}
+```
+
+完整的任务生命周期、事件命名约定、以及 agent 该在什么时机调用这个工具，见 [tasks.md](./tasks.md)。
+
 ## 子代理（Sub-Agents）
 
 ### 它是什么（What It Is）

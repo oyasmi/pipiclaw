@@ -63,7 +63,7 @@ function eventsDir(workspaceDir: string): string {
 	return join(workspaceDir, "events");
 }
 
-function normalizeEventName(name: string): string {
+export function normalizeEventName(name: string): string {
 	const trimmed = name.trim();
 	const normalized = trimmed.endsWith(".json") ? trimmed.slice(0, -".json".length) : trimmed;
 	if (!normalized || normalized === "." || normalized === ".." || !EVENT_NAME_PATTERN.test(normalized)) {
@@ -72,7 +72,7 @@ function normalizeEventName(name: string): string {
 	return normalized;
 }
 
-function resolveEventPath(workspaceDir: string, name: string): { eventName: string; eventPath: string } {
+export function resolveEventPath(workspaceDir: string, name: string): { eventName: string; eventPath: string } {
 	const eventName = normalizeEventName(name);
 	const dir = resolve(eventsDir(workspaceDir));
 	const eventPath = resolve(dir, `${eventName}.json`);

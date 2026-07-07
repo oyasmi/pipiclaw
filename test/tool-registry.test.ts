@@ -72,6 +72,7 @@ describe("tool registry", () => {
 			"skill_list",
 			"skill_view",
 			"skill_manage",
+			"event_manage",
 		]);
 	});
 
@@ -92,6 +93,7 @@ describe("tool registry", () => {
 				web: { ...DEFAULT_TOOLS_CONFIG.tools.web, enable: false },
 				memory: { sessionSearch: { enabled: false }, save: { enabled: true } },
 				skills: { manage: { enabled: false } },
+				events: { enabled: false },
 			},
 		};
 		const tools = buildToolSet(makeContext({ toolsConfig, webConfig: toolsConfig.tools.web }));
@@ -99,6 +101,7 @@ describe("tool registry", () => {
 		expect(names).not.toContain("web_search");
 		expect(names).not.toContain("session_search");
 		expect(names).not.toContain("skill_manage");
+		expect(names).not.toContain("event_manage");
 		expect(names).toContain("memory_save");
 	});
 });
