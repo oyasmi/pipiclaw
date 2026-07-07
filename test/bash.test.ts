@@ -43,6 +43,47 @@ describe("bash tool", () => {
 		expect(executor.calls[0].options?.timeout).toBe(DEFAULT_BASH_TIMEOUT_SECONDS);
 	});
 
+	it("does not consult rtk when the optimizer is disabled (default)", async () => {
+		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
+		const tool = createBashTool(executor);
+
+		await tool.execute("call", { label: "run", command: "git status" });
+
+		expect(executor.calls.map((c) => c.command)).toEqual(["git status"]);
+	});
+
+	it("runs the rtk-rewritten command when the optimizer is enabled", async () => {
+		const executor = new RecordingExecutor(async (command) => {
+			if (command === "command -v rtk") return { code: 0, stdout: "/usr/bin/rtk", stderr: "" };
+			// A real rtk rewrite prints the rewrite but exits 3, not 0.
+			if (command === "rtk rewrite 'git status'") return { code: 3, stdout: "rtk git status\n", stderr: "" };
+			return { code: 0, stdout: "clean", stderr: "" };
+		});
+		const tool = createBashTool(executor, { rtkEnabled: true });
+
+		const result = await tool.execute("call", { label: "run", command: "git status" });
+
+		// Probe, rewrite, then execute the rewritten form — not the original.
+		expect(executor.calls.map((c) => c.command)).toEqual([
+			"command -v rtk",
+			"rtk rewrite 'git status'",
+			"rtk git status",
+		]);
+		expect(result.content[0]).toMatchObject({ type: "text", text: "clean" });
+	});
+
+	it("runs the original command when rtk is enabled but unavailable", async () => {
+		const executor = new RecordingExecutor(async (command) => {
+			if (command === "command -v rtk") return { code: 1, stdout: "", stderr: "" };
+			return { code: 0, stdout: "clean", stderr: "" };
+		});
+		const tool = createBashTool(executor, { rtkEnabled: true });
+
+		await tool.execute("call", { label: "run", command: "git status" });
+
+		expect(executor.calls.map((c) => c.command)).toEqual(["command -v rtk", "git status"]);
+	});
+
 	it("reports a non-zero exit code as a normal result instead of throwing", async () => {
 		const executor = new RecordingExecutor(async () => ({ code: 7, stdout: "partial", stderr: "boom" }));
 		const tool = createBashTool(executor);

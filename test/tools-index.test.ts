@@ -91,6 +91,9 @@ const toolsConfig = {
 				enabled: true,
 			},
 		},
+		rtk: {
+			enabled: false,
+		},
 	},
 };
 
@@ -359,6 +362,7 @@ describe("tools index", () => {
 				cwd: process.cwd(),
 			},
 			channelId: "dm_42",
+			rtkEnabled: false,
 		});
 		expect(createWebSearchToolMock).toHaveBeenCalledWith({
 			webConfig: toolsConfig.tools.web,
@@ -384,6 +388,7 @@ describe("tools index", () => {
 			memoryCandidateStore: options.memoryCandidateStore,
 			securityConfig,
 			webConfig: toolsConfig.tools.web,
+			rtkEnabled: false,
 			runtimeContext: {
 				workspacePath: "/workspace",
 				channelId: "dm_42",

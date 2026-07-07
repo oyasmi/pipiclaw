@@ -40,6 +40,8 @@ export interface ToolBuildContext {
 	toolsConfig?: PipiclawToolsConfig;
 	/** Sub-agent set passes its per-invocation bash timeout; the main set relies on the built-in default. */
 	bashDefaultTimeoutSeconds?: number;
+	/** Gates the bash tool's rtk command optimizer (`tools.rtk.enabled`). Threaded to both sets. */
+	rtkEnabled?: boolean;
 	getCurrentModel?: () => Model<Api>;
 	getAvailableModels?: () => Model<Api>[];
 	resolveApiKey?: (model: Model<Api>) => Promise<string>;
@@ -97,6 +99,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		create: (ctx) =>
 			createBashTool(ctx.executor, {
 				...fileToolOptions(ctx),
+				rtkEnabled: ctx.rtkEnabled === true,
 				...(ctx.bashDefaultTimeoutSeconds !== undefined
 					? { defaultTimeoutSeconds: ctx.bashDefaultTimeoutSeconds }
 					: {}),

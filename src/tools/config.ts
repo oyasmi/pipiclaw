@@ -47,6 +47,9 @@ export interface PipiclawToolsConfig {
 				enabled: boolean;
 			};
 		};
+		rtk: {
+			enabled: boolean;
+		};
 	};
 }
 
@@ -91,6 +94,9 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 			manage: {
 				enabled: true,
 			},
+		},
+		rtk: {
+			enabled: false,
 		},
 	},
 };
@@ -151,6 +157,7 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 	const memorySave = isRecord(memory.save) ? memory.save : {};
 	const skills = isRecord(tools.skills) ? tools.skills : {};
 	const manage = isRecord(skills.manage) ? skills.manage : {};
+	const rtk = isRecord(tools.rtk) ? tools.rtk : {};
 	const search = isRecord(web.search) ? web.search : {};
 	const fetch = isRecord(web.fetch) ? web.fetch : {};
 
@@ -288,6 +295,9 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 							? manage.enabled
 							: DEFAULT_TOOLS_CONFIG.tools.skills.manage.enabled,
 				},
+			},
+			rtk: {
+				enabled: typeof rtk.enabled === "boolean" ? rtk.enabled : DEFAULT_TOOLS_CONFIG.tools.rtk.enabled,
 			},
 		},
 	};

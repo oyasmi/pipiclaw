@@ -7,6 +7,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { shellEscape } from "../shared/shell-escape.js";
+import { maybeOptimizeCommand } from "./command-optimizer.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
 /**
@@ -50,6 +51,12 @@ export interface BashToolOptions {
 	securityConfig?: SecurityConfig;
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
+	/**
+	 * When true, route each command through the `rtk` command optimizer before executing
+	 * (best-effort; falls back to the raw command when rtk is unavailable or declines).
+	 * Gated by `tools.rtk.enabled` in tools.json.
+	 */
+	rtkEnabled?: boolean;
 }
 
 function formatCommandBlockMessage(command: string, category?: string, reason?: string, matchedText?: string): string {
@@ -102,8 +109,13 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				}
 			}
 
+			// Optimize *after* the security guard: the guard must inspect the operator's real
+			// intent (`command`), while rtk only reshapes a semantically-equivalent command for
+			// compact output. Optimizing first would hide the true command from the guard.
+			const effectiveCommand = options.rtkEnabled ? await maybeOptimizeCommand(command, executor, signal) : command;
+
 			const effectiveTimeout = timeout ?? options.defaultTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS;
-			const result = await executor.exec(command, { timeout: effectiveTimeout, signal });
+			const result = await executor.exec(effectiveCommand, { timeout: effectiveTimeout, signal });
 			let output = "";
 			if (result.stdout) output += result.stdout;
 			if (result.stderr) {

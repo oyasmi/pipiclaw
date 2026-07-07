@@ -52,6 +52,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		workspacePath: options.workspacePath,
 		webConfig: toolsConfig.tools.web,
 		toolsConfig,
+		rtkEnabled: toolsConfig.tools.rtk.enabled,
 		getCurrentModel: options.getCurrentModel,
 		getAvailableModels: options.getAvailableModels,
 		resolveApiKey: options.resolveApiKey,
@@ -72,6 +73,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 			memoryCandidateStore: options.memoryCandidateStore,
 			securityConfig,
 			webConfig: toolsConfig.tools.web,
+			rtkEnabled: toolsConfig.tools.rtk.enabled,
 			runtimeContext: {
 				workspacePath: options.workspacePath,
 				channelId: options.channelId,

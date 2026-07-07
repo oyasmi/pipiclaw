@@ -49,6 +49,7 @@ describe("tools config", () => {
 			tools: {
 				memory: DEFAULT_TOOLS_CONFIG.tools.memory,
 				skills: DEFAULT_TOOLS_CONFIG.tools.skills,
+				rtk: DEFAULT_TOOLS_CONFIG.tools.rtk,
 				web: {
 					...DEFAULT_TOOLS_CONFIG.tools.web,
 					enable: false,
@@ -67,6 +68,19 @@ describe("tools config", () => {
 				},
 			},
 		});
+	});
+
+	it("defaults tools.rtk.enabled to false and honors an explicit opt-in", () => {
+		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
+		tempDirs.push(appHomeDir);
+
+		expect(loadToolsConfig(appHomeDir).tools.rtk.enabled).toBe(false);
+
+		writeFileSync(join(appHomeDir, "tools.json"), JSON.stringify({ tools: { rtk: { enabled: true } } }), "utf-8");
+		expect(loadToolsConfig(appHomeDir).tools.rtk.enabled).toBe(true);
+
+		writeFileSync(join(appHomeDir, "tools.json"), JSON.stringify({ tools: { rtk: { enabled: "yes" } } }), "utf-8");
+		expect(loadToolsConfig(appHomeDir).tools.rtk.enabled).toBe(false);
 	});
 
 	it("falls back to defaults for invalid values", () => {

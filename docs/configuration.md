@@ -168,6 +168,23 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 3. web 请求代理
 4. fetch 的默认超时、截断和 Jina fallback 行为
 
+#### rtk 命令优化（`tools.rtk`）
+
+[rtk（Rust Token Killer）](https://github.com/rtk-ai/rtk) 是一个把常见只读命令改写成 token 精简形式的 CLI 代理（例如 `git status` → `rtk git status`）。开启后，`bash` 工具在**安全校验之后、实际执行之前**把命令交给 `rtk rewrite` 处理，从而压缩返回给模型的输出。
+
+```jsonc
+{
+  "tools": {
+    "rtk": { "enabled": true }
+  }
+}
+```
+
+- 只有一个开关 `enabled`（默认 `false`）；二进制名、超时等实现细节内建，无需配置。
+- **尽力而为**：pipiclaw 会在命令的实际执行环境（host 的 PATH，或 docker 容器内）探测一次 `rtk` 是否可用。装了就用，没装则静默跳过——开启 rtk 永远不会让 `bash` 命令失败。
+- 使用 docker sandbox 时，需要把 `rtk` 装进容器镜像，否则会自动降级为不改写。
+- rtk 只重塑语义等价的只读命令，安全校验始终针对**原始命令**执行，改写不会绕过 `command-guard`。
+
 ## 终端 TUI（Terminal TUI）
 
 除了钉钉对话，Pipiclaw 还可以直接在终端里对话，复用**同一套配置目录**（`auth.json` / `models.json` / `settings.json` / `tools.json` / `security.json`）、同一套记忆与会话。适合在命令行里快速使用，或接管某个钉钉会话的身份继续对话。

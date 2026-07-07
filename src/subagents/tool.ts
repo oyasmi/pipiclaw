@@ -90,6 +90,7 @@ export interface SubAgentToolOptions {
 	memoryCandidateStore?: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
 	webConfig?: PipiclawWebToolsConfig;
+	rtkEnabled?: boolean;
 	runtimeContext: {
 		workspacePath: string;
 		channelId: string;
@@ -192,6 +193,7 @@ function buildSubagentTools(
 			workspaceDir: options.workspaceDir,
 			workspacePath: options.runtimeContext.workspacePath,
 			webConfig: options.webConfig,
+			rtkEnabled: options.rtkEnabled,
 			bashDefaultTimeoutSeconds: bashTimeoutSec,
 		},
 		{ forSubagent: true },

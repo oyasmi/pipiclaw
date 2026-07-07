@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-07-07
+
+### 新增
+
+- rtk 命令优化器（`tools.rtk`）：为 `bash` 新增可选的 [rtk（Rust Token Killer）](https://github.com/rtk-ai/rtk) 集成，在执行前把已知的只读命令改写成 token 精简的 `rtk` 等价形式（例如 `git status` → `rtk git status`），从而压缩返回给模型的输出。仅通过 `tools.json` 中的单个开关 `tools.rtk.enabled` 启用（默认关闭）；改写规则全部由 rtk 的 `rtk rewrite` 契约提供，pipiclaw 不内联任何规则，也不暴露任何实现细节参数。改写发生在命令守卫**之后**，因此 `command-guard` 始终针对操作者的原始命令做校验；主 agent 与子 agent 的 bash 都生效；可用性探测走命令的**实际执行环境**（host 的 PATH，或 Docker 沙箱内部）并按 executor 缓存结果；且为尽力而为——任何失败（rtk 未安装、超时、无等价命令）都会静默回退到原始命令，因此启用 rtk 永远不会让 bash 命令失败。判定以 `rtk rewrite` 的 stdout 为准而非退出码，因为 rtk 0.43.0 在成功改写时退出码为 3，尽管其 `--help` 声称为 0。
+
 ## [0.7.3] - 2026-07-05
 
 ### 变更

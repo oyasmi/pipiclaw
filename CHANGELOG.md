@@ -4,6 +4,12 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-07-07
+
+### Added
+
+- rtk command optimizer (`tools.rtk`): an opt-in `bash` integration with [rtk (Rust Token Killer)](https://github.com/rtk-ai/rtk) that rewrites known read-only commands to their token-compact `rtk` equivalents (e.g. `git status` → `rtk git status`) before execution, cutting the output the model has to read. Enabled with a single `tools.rtk.enabled` flag in `tools.json` (default off); rtk owns all the rewrite rules via its `rtk rewrite` contract, so pipiclaw hardcodes none and no operational knobs are exposed. The rewrite runs *after* the command guard, so `command-guard` always inspects the operator's real command; it applies to both the main agent and sub-agent bash; it probes rtk availability through the actual execution environment (host PATH or inside the Docker sandbox) and caches the result per executor; and it is best-effort — any failure (rtk absent, timeout, no equivalent) silently falls back to the original command, so enabling rtk can never make a bash command fail. The decision keys off `rtk rewrite`'s stdout rather than its exit code, since rtk 0.43.0 exits 3 on a successful rewrite despite its `--help` documenting exit 0.
+
 ## [0.7.3] - 2026-07-05
 
 ### Changed
