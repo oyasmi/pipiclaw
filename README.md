@@ -24,7 +24,11 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 - 支持预定义子代理（sub-agent）和临时内联子代理（inline sub-agent）
 - 支持立即、单次、周期三类事件调度
 - 支持自定义模型提供方（provider）和模型（model）配置
-- 内建 `web_search` / `web_fetch`，支持联网搜索与网页抓取
+- 内建 `web_search` / `web_fetch`，支持联网搜索与网页抓取；`web_fetch` 支持结果缓存与分页续读，长网页被截断后可直接续读、不重抓
+- 内建 `grep` 结构化搜索工具：按文件分组、分页、token 有界的内容检索，优于裸 `bash grep`
+- 支持后台作业：`bash async` + `job` 工具，长命令后台运行、不阻塞频道，可 poll / cancel
+- 内建 `memory_manage` 记忆管理：按需保存 / 检索 / 忘记稳定记忆，写操作串行化，避免与后台整理竞态
+- `read` 支持读取目录树与 PDF 文档（`pdftotext`）
 - 内建 `session_search`，可按需检索当前会话通道的冷存储历史
 - 内建 workspace skill 管理工具，可查看、创建和维护 `workspace/skills/`
 - 内置工具层安全防护：`bash` 命令守卫、文件路径守卫、敏感路径拒绝、阻断审计日志

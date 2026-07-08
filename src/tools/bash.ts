@@ -89,7 +89,9 @@ const BASH_INTERCEPTOR_RULES: Array<{ test: RegExp; tool: string; why: string }>
 		why: "it truncates safely and tells you how to page through the rest",
 	},
 	{
-		test: /^\s*grep\b[^|&;]*\s-[A-Za-z]*r[A-Za-z]*\b/,
+		// Anchored to end and free of pipe/redirect chars so only a *bare* recursive grep is caught;
+		// a piped/compound form like `grep -rn foo . | wc -l` is a legitimate use and must pass through.
+		test: /^\s*grep\b[^|&;<>]*\s-[A-Za-z]*r[A-Za-z]*\b[^|&;<>]*$/,
 		tool: "grep",
 		why: "it groups, paginates, and bounds output instead of flooding the context",
 	},

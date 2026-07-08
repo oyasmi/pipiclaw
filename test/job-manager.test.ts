@@ -47,6 +47,28 @@ describe("ChannelJobManager", () => {
 		expect(manager.runningCount()).toBe(1);
 	});
 
+	it("reports a running job's duration as elapsed time, not an absolute timestamp", async () => {
+		const executor = new FakeJobExecutor();
+		const manager = new ChannelJobManager("dm_1", executor);
+		const job = await manager.start("sleep 100", "wait", 300);
+		// A running job's durationMs is time-since-start (tiny here), never Date.now() (~1.7e12).
+		expect(job.durationMs).toBeLessThan(60_000);
+		expect(job.durationMs).toBeGreaterThanOrEqual(0);
+	});
+
+	it("sweeps and reaps a finished job even when nobody polls it", async () => {
+		const executor = new FakeJobExecutor();
+		// Tiny sweep interval so the background sweeper fires within the test window.
+		const manager = new ChannelJobManager("dm_1", executor, 5);
+		await manager.start("true", "quick", 300);
+		expect(manager.runningCount()).toBe(1);
+		executor.probeResult = "EXIT:0"; // the job has finished on its own
+
+		// No list/poll/cancel call — rely purely on the internal sweeper to reconcile state.
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		expect(manager.runningCount()).toBe(0);
+	});
+
 	it("caps the number of concurrent running jobs", async () => {
 		const executor = new FakeJobExecutor();
 		const manager = new ChannelJobManager("dm_1", executor);

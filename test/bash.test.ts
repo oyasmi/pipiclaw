@@ -67,10 +67,16 @@ describe("bash tool", () => {
 			/use the edit tool/,
 		);
 
-		// Compound / piped forms are legitimate and must pass through.
+		// Compound / piped forms are legitimate and must pass through — including a piped recursive
+		// grep, which is a common valid use (`grep -rn foo . | wc -l`) and must not be over-blocked.
 		await gated.execute("call", { label: "x", command: "cat notes.txt | jq ." });
 		await gated.execute("call", { label: "x", command: "grep foo file.txt" });
-		expect(executor.calls.map((c) => c.command)).toEqual(["cat notes.txt | jq .", "grep foo file.txt"]);
+		await gated.execute("call", { label: "x", command: "grep -rn foo . | wc -l" });
+		expect(executor.calls.map((c) => c.command)).toEqual([
+			"cat notes.txt | jq .",
+			"grep foo file.txt",
+			"grep -rn foo . | wc -l",
+		]);
 	});
 
 	it("does not intercept when the interceptor is disabled (default)", async () => {

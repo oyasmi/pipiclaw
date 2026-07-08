@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { applyChannelMemoryOps, parseChannelMemoryEntries, readChannelMemory } from "../src/memory/files.js";
+import { getMemoryReviewLogPath } from "../src/memory/review-log.js";
 import { createMemoryManageTool } from "../src/tools/memory-manage.js";
 
 const tempDirs: string[] = [];
@@ -122,6 +123,12 @@ describe("memory_manage tool", () => {
 		expect(seenChannelIds).toEqual(["dm_1"]);
 		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
 		expect(entries).toHaveLength(0);
+
+		// forget must leave an auditable trail in the maintenance log.
+		const log = readFileSync(getMemoryReviewLogPath(channelDir), "utf-8").trim();
+		const entry = JSON.parse(log.split("\n").at(-1) as string);
+		expect(entry).toMatchObject({ channelId: "dm_1", reason: "user-forget" });
+		expect(JSON.stringify(entry.actions)).toContain("5 Main St");
 	});
 
 	it("refuses to forget when the target is ambiguous", async () => {

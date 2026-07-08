@@ -75,6 +75,25 @@ describe("tools config", () => {
 		});
 	});
 
+	it("defaults the jobs and bashInterceptor gates to on (explicit values, not circular self-compare)", () => {
+		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
+		tempDirs.push(appHomeDir);
+
+		const loaded = loadToolsConfig(appHomeDir);
+		expect(loaded.tools.jobs.enabled).toBe(true);
+		expect(loaded.tools.bashInterceptor.enabled).toBe(true);
+
+		// An explicit opt-out is still honored.
+		writeFileSync(
+			join(appHomeDir, "tools.json"),
+			JSON.stringify({ tools: { jobs: { enabled: false }, bashInterceptor: { enabled: false } } }),
+			"utf-8",
+		);
+		const off = loadToolsConfig(appHomeDir);
+		expect(off.tools.jobs.enabled).toBe(false);
+		expect(off.tools.bashInterceptor.enabled).toBe(false);
+	});
+
 	it("defaults tools.rtk.enabled to false and honors an explicit opt-in", () => {
 		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
 		tempDirs.push(appHomeDir);

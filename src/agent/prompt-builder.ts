@@ -147,6 +147,7 @@ The scheduler ignores invalid files and de-duplicates by filename; keep the even
 		runtimeBehaviorLines.push(
 			"- When the user explicitly asks you to remember, prefer, default to, or stop doing something durable, call memory_manage (op: save) right away instead of waiting for background consolidation. Use it only for durable facts/preferences/decisions/constraints, not transient task state.",
 			"- When the user asks you to forget or drop something durable, use memory_manage (op: forget) rather than editing MEMORY.md directly, so the change serializes with background consolidation. To look something up mid-task, use memory_manage (op: search).",
+			"- Do not use edit or write to change channel MEMORY.md or HISTORY.md directly; those files are runtime-managed and must go through memory_manage, which serializes with background consolidation.",
 		);
 	}
 	runtimeBehaviorLines.push(

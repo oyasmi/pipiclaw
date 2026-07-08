@@ -4,6 +4,34 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-07-09
+
+Toolset enhancement (spec 021): four design kernels — token economy, errors-as-navigation, one entry per class of need, and long tasks that don't block the turn — landed without expanding the tool count, keeping pipiclaw a lean long-running assistant.
+
+### Added
+
+- `grep` tool (T2): regex file-content search with a thin executor layer and heavy JS-side shaping — grouped by file, before=1/after=3 context, 512-char line truncation, per-file match cap (20 multi-file / 200 single-file), 20-files-per-page with `Use skip=N` paging, and empty-result widening hints. `pattern`/`path` go through `shellEscape` and `glob` through regex escaping; `path` is path-guarded. Available to sub-agents for research. Gated by `tools.grep.enabled` (default on).
+- Background bash jobs + `job` tool (T3): `bash async:true` launches a command in the executor's world via `nohup` and returns a job id immediately, so a long command (`npm install`, crawls) no longer holds the channel run queue. The `job` tool (op `list`/`poll`/`cancel`) inspects and controls them; `poll` blocks briefly for the first job to finish. Jobs live entirely in shell (host or Docker), state is in-memory and not persisted (prior jobs surface as `lost` after a restart), capped at 5 running per channel with a JS-enforced hard timeout. Main-agent only (sub-agents cannot background). Gated by `tools.jobs.enabled` (default on).
+- `read` directory and PDF support (T5): reading a directory returns a depth-2 tree (12 entries per directory, `[+N more]`, `(empty directory)`); reading a `.pdf` runs `pdftotext -layout` through the normal offset/limit/truncate pipeline, degrading gracefully with a next-step hint when the binary is missing or the file is scanned/image-based.
+- `web_fetch` caching + pagination (T6): fetched readable text is cached per channel (`sha256(mode\nurl)` key, 15-minute TTL, LRU-capped at 20 files) and `offset`/`limit` page through it without refetching; the truncation footer is an actionable "re-call with offset=Y (served from cache, no refetch)" instruction. Each page re-applies the untrusted-content banner.
+- Error-navigation rule in `AGENTS.md` (T1): every tool error or truncation must carry a next-step instruction. Applied to `read` out-of-range/empty offsets, `bash` command-guard blocks, and `session_search` empty results.
+- `edit` no-op loop guard and diff echo (T1): three consecutive byte-identical no-op edits escalate to a hard error that tells the model to re-read the anchor rather than widen `oldText`; successful edits now echo a compact (≤40-line) diff in the result so the model rarely needs a verifying re-read.
+
+### Changed
+
+- `memory_save` evolved into `memory_manage` (T4) with ops `save`/`search`/`forget`, net-zero tool count. `search` is a cheap deterministic point-query over distilled `MEMORY.md`/`HISTORY.md` (recall scoring reused, model rerank off); `forget` removes a uniquely-matched entry and refuses ambiguous targets. All writes serialize through the shared channel-maintenance queue, closing the race that direct `edit` of `MEMORY.md` had with background consolidation. Gate key stays `tools.memory.save.enabled` to avoid resetting existing configs.
+- `skill_list` and `skill_view` merged into `skill_manage` (T7): one op-style tool (`list`/`view`/`create`/`patch`/`write_file`) instead of three, trimming two prompt-hint lines. Gate stays `tools.skills.manage.enabled`.
+- `bash` interceptor (T8): with `tools.bashInterceptor.enabled` (default on), a few unambiguous bare shell forms (`cat <file>`, recursive `grep`/`rg`, `sed -i`/`perl -i`) are steered to their dedicated tool. Runs after the command guard (which always sees the real command) and before rtk; piped/compound commands pass through untouched. Depends on T2.
+- The system prompt now instructs the model not to edit or write channel `MEMORY.md`/`HISTORY.md` directly — those files are runtime-managed and must go through `memory_manage`.
+
+### Fixed
+
+- Background jobs: a running job's reported `durationMs` was an absolute epoch timestamp instead of elapsed time, so the `job` tool rendered astronomical durations for in-flight jobs.
+- Background jobs: a finished or timed-out job was only reaped when the model happened to call `list`/`poll`/`cancel`, so a job that was never polled held its concurrency slot forever and could eventually block all `async` on a channel. A low-frequency internal sweeper now reconciles running jobs (without waking the channel) and frees their slots.
+- `bash` interceptor: the recursive-`grep` rule was not end-anchored, so a legitimate piped recursive grep (`grep -rn foo . | wc -l`) was wrongly blocked. It now excludes pipe/redirect characters and anchors to end of line, matching the `cat`/`rg` rules.
+- `grep`: `details.matchCount` counted every match in a paged file rather than the number actually shown, over-reporting when a file's matches were capped.
+- `memory_manage` `forget` now writes an audit line (`reason: "user-forget"`, with the removed entry) to the channel maintenance log (`memory-review.jsonl`), so forgets are auditable rather than only recoverable from `.memory-backups/`.
+
 ## [0.7.5] - 2026-07-08
 
 ### Added

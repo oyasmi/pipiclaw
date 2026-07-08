@@ -151,7 +151,7 @@ function renderFileGroup(
 	file: string,
 	entries: MatchEntry[],
 	perFileMatchCap: number,
-): { text: string; capped: boolean } {
+): { text: string; capped: boolean; matchesShown: number } {
 	const lines: string[] = [`== ${file} ==`];
 	let matchesShown = 0;
 	let capped = false;
@@ -166,7 +166,7 @@ function renderFileGroup(
 			matchesShown++;
 		}
 	}
-	return { text: lines.join("\n"), capped };
+	return { text: lines.join("\n"), capped, matchesShown };
 }
 
 export function createGrepTool(executor: Executor, options: GrepToolOptions = {}): AgentTool<typeof grepSchema> {
@@ -290,9 +290,9 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			let shownMatchCount = 0;
 			let anyFileCapped = false;
 			for (const [file, entries] of page) {
-				const { text, capped } = renderFileGroup(file, entries, perFileMatchCap);
+				const { text, capped, matchesShown } = renderFileGroup(file, entries, perFileMatchCap);
 				blocks.push(text);
-				shownMatchCount += entries.filter((entry) => entry.isMatch).length;
+				shownMatchCount += matchesShown;
 				anyFileCapped = anyFileCapped || capped;
 			}
 

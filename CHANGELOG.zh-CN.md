@@ -4,6 +4,34 @@
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-07-09
+
+工具集增强（spec 021）：落地四条设计内核——token 经济、错误即导航、一个入口吃一类需求、长任务不阻塞回合——但不扩张工具清单，保持 pipiclaw 精简长程助手的定位。
+
+### 新增
+
+- `grep` 工具（T2）：正则文件内容搜索，执行层薄、JS 侧塑形厚——按文件分组、before=1/after=3 上下文、每行 512 字符截断、单文件匹配上限（多文件 20 / 单文件 200）、20 文件/页 + `Use skip=N` 翻页、空结果放宽建议。`pattern`/`path` 经 `shellEscape`、`glob` 经正则转义，`path` 走 path-guard。子代理可用以支撑研究。由 `tools.grep.enabled` 门控（默认开）。
+- 后台 bash 作业 + `job` 工具（T3）：`bash async:true` 经 `nohup` 在 executor 世界里启动命令并立即返回作业 id，长命令（`npm install`、爬虫）不再占用频道 run queue。`job` 工具（op `list`/`poll`/`cancel`）用于查看与控制，`poll` 短时阻塞等待首个作业完成。作业完全活在 shell（host 或 docker）里，状态进程内、不持久化（重启后旧作业标 `lost`），每频道并发上限 5，硬超时由 JS 侧强制。仅主 agent 可用（子代理不可后台）。由 `tools.jobs.enabled` 门控（默认开）。
+- `read` 目录与 PDF 支持（T5）：读目录返回深度 2 的目录树（每目录 12 项、`[+N more]`、`(empty directory)`）；读 `.pdf` 经 `pdftotext -layout` 走现行 offset/limit/截断管线，缺二进制或扫描件/图片时优雅降级并附下一步指引。
+- `web_fetch` 缓存 + 分页（T6）：抓取后的可读文本按频道缓存（`sha256(mode\nurl)` 键、15 分钟 TTL、LRU 上限 20 个文件），`offset`/`limit` 直接翻缓存不重抓；截断尾注改为可照做的「带 offset=Y 重新调用（走缓存、不重抓）」指令。每页重新附上不可信内容横幅。
+- `AGENTS.md` 错误导航化规约（T1）：任何工具的错误或截断输出必须包含一条可照做的下一步指令。已应用于 `read` 越界/空 offset、`bash` command-guard 拦截、`session_search` 空结果。
+- `edit` no-op 循环防护与 diff 回显（T1）：对同一文件同一 payload 连续 3 次字节级 no-op 升级为硬错误，提示重读锚点而非加宽 `oldText`；成功 edit 现在在结果中回显紧凑（≤40 行）diff，模型极少再需一次验证性重读。
+
+### 变更
+
+- `memory_save` 演进为 `memory_manage`（T4），含 `save`/`search`/`forget` 三个 op，净增工具数 0。`search` 是对提炼后 `MEMORY.md`/`HISTORY.md` 的廉价确定性点查（复用 recall 打分、关闭模型 rerank）；`forget` 删除唯一命中条目、拒绝歧义目标。所有写操作经共享的 channel-maintenance 队列串行，消除了直接 `edit` `MEMORY.md` 与后台 consolidation 的竞态。gate 键沿用 `tools.memory.save.enabled`，避免重置用户已有配置。
+- `skill_list` 与 `skill_view` 合并进 `skill_manage`（T7）：一个 op 风格工具（`list`/`view`/`create`/`patch`/`write_file`）取代三个，省两行 prompt hint。gate 沿用 `tools.skills.manage.enabled`。
+- `bash` 拦截器（T8）：`tools.bashInterceptor.enabled`（默认开）时，把几类最明确的裸 shell 形态（`cat <file>`、递归 `grep`/`rg`、`sed -i`/`perl -i`）导向对应专用工具。运行在 command-guard 之后（guard 始终看到真实命令）、rtk 之前；带管道/复合的命令原样放行。依赖 T2。
+- 系统提示现在明确指示模型不要用 edit/write 直改频道 `MEMORY.md`/`HISTORY.md`——这些文件由运行时管理，须走 `memory_manage`。
+
+### 修复
+
+- 后台作业：运行态作业上报的 `durationMs` 是绝对 epoch 时间戳而非已运行时长，导致 `job` 工具对在跑作业渲染出天文数字时长。
+- 后台作业：完成或超时的作业此前只在模型恰好调用 `list`/`poll`/`cancel` 时才被回收，因此一个从不轮询的作业会永久占用并发槽位，最终可能锁死该频道的全部 `async`。现在由一个低频内部 sweeper reconcile 运行中作业（不唤醒频道）并释放其槽位。
+- `bash` 拦截器：递归 `grep` 规则未做结尾锚定，导致合法的管道递归 grep（`grep -rn foo . | wc -l`）被误拦。现已排除管道/重定向字符并锚定行尾，与 `cat`/`rg` 规则对齐。
+- `grep`：`details.matchCount` 统计的是页内文件的全部匹配数而非实际展示数，在文件匹配被截断时过报。
+- `memory_manage` `forget` 现在向频道维护日志（`memory-review.jsonl`）写一条审计行（`reason: "user-forget"`，含被删条目），使 forget 可审计，而不再只能从 `.memory-backups/` 恢复。
+
 ## [0.7.5] - 2026-07-08
 
 ### 新增

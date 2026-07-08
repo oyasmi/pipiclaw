@@ -5,6 +5,7 @@ import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory/channel-maintenance-queue.js";
 import { applyChannelMemoryOps, getChannelMemoryPath, parseChannelMemoryEntries } from "../memory/files.js";
 import { recallRelevantMemory } from "../memory/recall.js";
+import { appendMemoryReviewLog } from "../memory/review-log.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
 
 const memoryManageSchema = Type.Object({
@@ -162,13 +163,20 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 				`"${trimmed}" matched ${matches.length} entries; be more specific so only one is removed:\n${candidates}`,
 			);
 		}
+		const removed = matches[0];
 		await queue.run(options.channelId, () =>
-			applyChannelMemoryOps(options.channelDir, [
-				{ op: "invalidate", targetId: matches[0].id, reason: "user forget" },
-			]),
+			applyChannelMemoryOps(options.channelDir, [{ op: "invalidate", targetId: removed.id, reason: "user forget" }]),
 		);
 		options.memoryCandidateStore.invalidate(memoryPath);
-		return textResult(`Forgot: ${matches[0].content}`, { kind: "memory_manage", op: "forget", forgotten: true });
+		// Audit trail: record what was forgotten so the maintenance log can answer "who dropped what,
+		// when, and why" — the `.memory-backups/` copy is a recovery aid, not an audit record.
+		await appendMemoryReviewLog(options.channelDir, {
+			timestamp: new Date().toISOString(),
+			channelId: options.channelId,
+			reason: "user-forget",
+			actions: [{ op: "forget", target: removed.content, matchedBy: trimmed }],
+		}).catch(() => {});
+		return textResult(`Forgot: ${removed.content}`, { kind: "memory_manage", op: "forget", forgotten: true });
 	}
 
 	return {

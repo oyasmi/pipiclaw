@@ -39,6 +39,14 @@ export const MAX_RUNNING_JOBS = 5;
 /** Longest a single `poll` call blocks before returning a snapshot; the model can poll again. */
 export const POLL_WAIT_MS = 30_000;
 const POLL_CHECK_INTERVAL_MS = 3_000;
+/**
+ * How often the internal sweeper refreshes running jobs while any are alive. Without it, a job that
+ * finishes (or overruns its timeout) is only reaped when the model happens to call list/poll/cancel —
+ * so a never-polled job would hold a `MAX_RUNNING_JOBS` slot forever, eventually blocking all `async`.
+ * The sweep only reconciles in-memory state (and enforces the hard timeout); it never wakes the
+ * channel, so it stays within the design's "no automatic completion delivery" decision.
+ */
+export const SWEEP_INTERVAL_MS = 10_000;
 
 function jobSpillPath(id: string): string {
 	return `/tmp/pipiclaw-job-${id}.log`;
@@ -65,17 +73,20 @@ function toSnapshot(record: JobRecord): JobSnapshot {
 		command: record.command,
 		status: record.status,
 		startedAt: record.startedAt,
-		durationMs: (record.status === "running" ? Date.now() : record.durationMs) || Date.now() - record.startedAt,
+		durationMs: record.status === "running" ? Date.now() - record.startedAt : record.durationMs,
 		exitCode: record.exitCode,
 	};
 }
 
 export class ChannelJobManager {
 	private readonly jobs = new Map<string, JobRecord>();
+	private sweepTimer?: ReturnType<typeof setInterval>;
+	private sweeping = false;
 
 	constructor(
 		private readonly channelId: string,
 		private readonly executor: Executor,
+		private readonly sweepIntervalMs: number = SWEEP_INTERVAL_MS,
 	) {}
 
 	get channel(): string {
@@ -124,7 +135,49 @@ export class ChannelJobManager {
 			timeoutSeconds,
 		};
 		this.jobs.set(id, record);
+		this.ensureSweeper();
 		return toSnapshot(record);
+	}
+
+	/**
+	 * Start the low-frequency sweeper if it is not already running. It reaps finished/timed-out jobs
+	 * so their slots free up even when the model never polls, and stops itself once nothing is running.
+	 */
+	private ensureSweeper(): void {
+		if (this.sweepTimer || this.runningCount() === 0) {
+			return;
+		}
+		this.sweepTimer = setInterval(() => {
+			void this.sweep();
+		}, this.sweepIntervalMs);
+		// Do not keep the process alive just for the sweeper.
+		this.sweepTimer.unref?.();
+	}
+
+	private stopSweeper(): void {
+		if (this.sweepTimer) {
+			clearInterval(this.sweepTimer);
+			this.sweepTimer = undefined;
+		}
+	}
+
+	private async sweep(): Promise<void> {
+		if (this.sweeping) {
+			return; // A prior sweep is still awaiting the executor; skip this tick.
+		}
+		this.sweeping = true;
+		try {
+			for (const record of this.jobs.values()) {
+				if (record.status === "running") {
+					await this.refresh(record).catch(() => {});
+				}
+			}
+		} finally {
+			this.sweeping = false;
+			if (this.runningCount() === 0) {
+				this.stopSweeper();
+			}
+		}
 	}
 
 	/** Refresh the status of a single running job by consulting its `.exit` file and liveness. */
