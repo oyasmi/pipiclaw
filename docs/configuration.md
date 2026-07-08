@@ -232,7 +232,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 #### 后台作业（`tools.jobs`）
 
-开启后，`bash` 多一个 `async: true` 参数，把长命令丢到后台并立刻返回作业 id，避免占住频道 run-queue；新增的 `job` 工具用来 list/poll/cancel。**默认关闭**（灰度）。
+`bash` 多一个 `async: true` 参数，把长命令丢到后台并立刻返回作业 id，避免占住频道 run-queue；新增的 `job` 工具用来 list/poll/cancel。默认开启。
 
 ```jsonc
 {
@@ -250,7 +250,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 #### bash 拦截器（`tools.bashInterceptor`）
 
-开启后，拦截少数"有更好工具"的裸 shell 形态（整文件 `cat`、递归 `grep`、`sed -i`），报错把模型导向 `read`/`grep`/`edit`。**默认关闭**（灰度）。
+拦截少数"有更好工具"的裸 shell 形态（整文件 `cat`、递归 `grep`、`sed -i`），报错把模型导向 `read`/`grep`/`edit`。默认开启。
 
 ```jsonc
 {

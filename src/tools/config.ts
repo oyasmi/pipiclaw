@@ -120,10 +120,10 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 			enabled: true,
 		},
 		jobs: {
-			enabled: false,
+			enabled: true,
 		},
 		bashInterceptor: {
-			enabled: false,
+			enabled: true,
 		},
 		rtk: {
 			enabled: false,
