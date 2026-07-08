@@ -92,6 +92,7 @@ function setup(now: () => number = () => 0) {
 		renderHelp: () => "HELP",
 		renderUsage: () => "USAGE",
 		runEvents: async () => "EVENTS",
+		runTasks: async () => "TASKS",
 		statusInfo: { version: "1", sandbox: { type: "host" } as SandboxConfig, startedAt: 0 },
 		now,
 	});

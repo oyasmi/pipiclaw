@@ -50,6 +50,7 @@ describe("tools config", () => {
 				memory: DEFAULT_TOOLS_CONFIG.tools.memory,
 				skills: DEFAULT_TOOLS_CONFIG.tools.skills,
 				events: DEFAULT_TOOLS_CONFIG.tools.events,
+				tasks: DEFAULT_TOOLS_CONFIG.tools.tasks,
 				rtk: DEFAULT_TOOLS_CONFIG.tools.rtk,
 				web: {
 					...DEFAULT_TOOLS_CONFIG.tools.web,

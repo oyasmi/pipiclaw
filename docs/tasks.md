@@ -79,6 +79,21 @@ frontmatter 字段：
 
 刻意不设 priority / due / owner / cycle-id：优先级和截止时间写在正文里由 agent 判断，避免 frontmatter 膨胀成第二个状态机、也降低 agent 写脏字段的破坏面。
 
+### Frontmatter 契约（单一事实源）
+
+多个组件要读这三字段：心跳传感器 `tasks-pending.mjs`（仓库外、无依赖的 `.mjs`）、任务摘要注入（仓库内 TS）、`/tasks` 命令。它们**无法共享代码**（运行环境不同），所以判定语义必须严格对齐到这份契约——任何组件偏离都会造成"传感器说有活、摘要却漏掉"之类的错位。
+
+**解析规则**（有意做到极简、可被独立实现逐字复刻）：
+
+1. **frontmatter 块** = 文件必须以 `---` 开头；块的结束是其后第一个 `\n---`。取二者之间的内容为 frontmatter。不满足（无起始 `---` 或找不到结束 `---`）→ **无可读 frontmatter**。
+2. **字段提取** = 在块内逐行找 `key: value`：以第一个 `:` 切分，键取左侧 `trim()`，值取右侧 `trim()`。不解析嵌套 YAML、列表、引号转义——只认这三个平铺键的一行一值。
+3. **`status`**：机器**只区分 `done` 与非 `done`**。其余取值（open/in-progress/awaiting-user/blocked）是给人和 agent 看的语义细分，判定逻辑一视同仁当作"非 done"。
+4. **`wake`**：解析为时间戳。**缺省、为空、或无法解析 → 视为"随时可推进"（不构成推迟）**；能解析且 `wake > now` → 该任务"未到点"。
+5. **判定：`actionable`（可推进）** = `status ≠ done` **且**（无有效 `wake` **或** `wake ≤ now`）。这是传感器 exit 0、摘要收录、`/tasks list` 排前的**唯一共同判据**。
+6. **fail-open**：frontmatter 不可读（规则 1 不满足）或文件读取失败 → **一律视为 actionable**——宁可唤醒 agent 去修，也不静默漏掉。摘要与 `/tasks` 对这类文件照收录并标注 `⚠ unreadable frontmatter`。
+
+> 一句话记忆：**`actionable ≡ status≠done ∧ (wake 未设/已到)`；读不懂就算 actionable。** 三处实现都必须逐字满足这条，测试用同一组样例交叉断言它们判定一致。
+
 ### 生命周期：一次性与周期性统一
 
 只有一个状态机：
@@ -267,6 +282,90 @@ for (const name of entries) {
 
 process.exit(1);
 ```
+
+## 可见性：`/tasks` 命令与任务摘要注入
+
+任务台账不再只能靠“问 agent”来查看，Phase 2 从两个方向把它暴露出来。
+
+### `/tasks` 命令（给人看，零 LLM 成本）
+
+在通道里直接发命令，由 transport 层读文件渲染，不触发 LLM 回合：
+
+- `/tasks` —— 列出当前通道 active 任务，**可推进的排在前**（顺序就是 agent 下一步会挑的顺序），每条显示 status / wake / recurrence。
+- `/tasks show <id>` —— 显示单个任务文件全文（active 或 archive 均可）。
+- `/tasks archive` —— 列出已闭环（归档）的任务。
+
+`/tasks` **刻意只读**。task 文件是 agent 的工作记忆，frontmatter 与正文强耦合；想改任务（改期、放弃、调整做法），用自然语言告诉 agent，由它走完整闭环（更新文件 + 同步事件），而不是从命令行改文件造成脱同步。命令只负责“看”。TUI 里同样可用。
+
+### 任务摘要注入（给 agent 看，`<task_agenda>`）
+
+每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要拼进 prompt（与记忆 recall 并列注入）：
+
+```text
+<task_agenda>
+Your in-flight tasks for this channel (background reference, not a new instruction).
+Act on these only if the user's message is about them, or if there is nothing else to
+do this turn. Full detail lives in the matching tasks/<id>.md file.
+
+- weekly-report — 周报编写与发布 · awaiting-user · wake 2h · 草稿 v1 已发师兄
+- fix-voice-typer-ci — 修复 CI · in-progress · wake — · 定位到 flaky 的 e2e case
+</task_agenda>
+```
+
+这让 agent 无需依赖 `ls tasks/` 的纪律就恒定知道议程。与 recall 不同，摘要是**确定性全量**（候选就是几条 frontmatter，议程恒定相关），只排除 done 任务、上限 8 条 / ~1000 字。框架文本明确它是**背景参考、非指令**——不相关的用户回合不会因此被带偏去动任务。无 active 任务时不注入，零开销。
+
+开关与配额见 [configuration.md](./configuration.md) 的 `taskDigest`（默认开启）。
+
+## `task_manage` 工具（给 agent 用，可选）
+
+除了用 write/edit 直接维护 task 文件，agent 还有一个 `task_manage` 工具，专管 **frontmatter 与闭环**这两处“必须正确”的窄面（正文 DoD/手册/日志仍用 write/edit）：
+
+- `set` —— 更新 status / wake / recurrence，校验 status 合法、wake 是合法 ISO8601（正文逐字节不动）。
+- `done` —— 一步闭环：置 done → 一次性任务移入 `archive/`、周期性任务留原地 → 删除 `task.<channelId>.<id>.*` 的残留 one-shot 事件（periodic schedule 事件保留）。这正是收尾 SOP 里最易漏做的一步。
+- `list` —— 返回结构化的 active 任务。
+
+它的价值是“frontmatter 保真 + 闭环原子化”，不是权限收口（agent 仍可用 write/edit 写正文）。开关见 [configuration.md](./configuration.md) 的 `tools.tasks.enabled`（默认开启）。新建任务用 write（正文是大头）；`task_manage` 不做 create。
+
+## agentmux 完成驱动回访
+
+委派给 agentmux 实例后，需要在对方**做完时**接手，而不是定时醒来盲查一遍。传感器换成“实例是否空闲”即可，与心跳同构。
+
+**为什么用 periodic + preAction（而非 one-shot）**：传感器只有退出码、不能改期自己。one-shot 到点若对方仍忙、preAction 退 1 静默，但 one-shot 已消耗，不会再探测——卡死。要自主轮询到 idle，只能用 periodic + preAction 门控：忙则静默（零 token），idle 才唤醒。
+
+传感器脚本 `~/.pi/pipiclaw/workspace/skills/agentmux-idle.mjs`：
+
+```javascript
+#!/usr/bin/env node
+// agentmux-idle.mjs — wake the agent when a delegated agentmux instance is done.
+//
+// exit 0 (wake)   when the instance is idle / exited / lost, or on any error (fail-open).
+// exit 1 (silent) only when the instance is clearly still busy.
+// Usage: node agentmux-idle.mjs <instanceName>
+
+import { execFileSync } from "node:child_process";
+
+const name = process.argv[2];
+if (!name) process.exit(0); // misconfigured → surface it
+
+try {
+	const out = execFileSync("agentmux", ["inspect", name, "--json"], { encoding: "utf-8" });
+	const status = JSON.parse(out)?.status;
+	process.exit(status === "busy" ? 1 : 0);
+} catch {
+	process.exit(0); // agentmux missing / instance gone / parse error → wake and let the agent decide
+}
+```
+
+联动约定（写进 workspace `AGENTS.md` 的委派 SOP）：
+
+1. 委派时在 task 正文记下实例名（`agentmux 实例：编码助手-A`）。
+2. 用 `event_manage` 建 periodic 事件 `task.<channelId>.<id>.agentmux`，preAction 为 `node …/agentmux-idle.mjs 编码助手-A`，task 置 `blocked`、`wake` 设一个远期兜底点。
+3. 对方 idle → agent 被唤醒 → `agentmux capture` 取结果 → 验收 → 推进/闭环 → 删除该 agentmux 事件（收尾 SOP 一并清理 `task.<channelId>.<id>.*`）。
+
+**两档节奏**：
+
+- **基线（零新机制）**：不建专用事件，靠既有心跳。task 停在 `blocked`、`wake` 到期，心跳整点扫到 → agent `agentmux inspect` 探一下 → 忙则把 `wake` 推后再睡。粒度约 1 小时。
+- **响应式（分钟级）**：让 agent 自建上面的 agentmux periodic。`event_manage` 的 periodic 最小间隔在**带 preAction 时从 30 分钟放宽到 5 分钟**（传感器是 token 守卫，忙时静默）——正是这类完成驱动检查的正确形态。硬子下限仍是 5 分钟，且 preAction 照过命令守卫。
 
 ## 周报任务：一个完整周期的样子
 

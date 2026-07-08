@@ -14,6 +14,7 @@ import { createSessionSearchTool } from "./session-search.js";
 import { createSkillListTool } from "./skill-list.js";
 import { createSkillManageTool } from "./skill-manage.js";
 import { createSkillViewTool } from "./skill-view.js";
+import { createTaskManageTool } from "./task-manage.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWriteTool } from "./write.js";
@@ -194,7 +195,10 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "event_manage",
 		promptHint:
-			"Schedule your own follow-ups: create/update/delete one-shot check-ins and periodic cadences for this channel (no immediate events; periodic no more often than every 30 min)",
+			"Schedule your own follow-ups: create/update/delete one-shot check-ins and periodic cadences for this channel. " +
+			"Name task-owned events `task.<channelId>.<taskId>.<use>` (e.g. .checkin, .schedule) so they clean up together. " +
+			"Keep a task's `wake` and its .checkin one-shot in sync — move both, clear both. " +
+			"No immediate events; periodic no more often than every 30 min (or 5 min when it carries a preAction gate).",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.events.enabled !== false,
 		create: (ctx) =>
@@ -203,6 +207,21 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				workspacePath: ctx.workspacePath,
 				channelId: ctx.channelId,
 				commandGuardConfig: ctx.securityConfig.commandGuard,
+			}),
+	},
+	{
+		name: "task_manage",
+		promptHint:
+			"Update the task ledger: set a task's status/wake/recurrence, close a task out (archives one-shot tasks and " +
+			"cleans up its residual events), or list active tasks. Write the task body with write/edit; this owns the frontmatter.",
+		availableToSubagents: false,
+		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
+		create: (ctx) =>
+			createTaskManageTool({
+				workspaceDir: ctx.workspaceDir,
+				workspacePath: ctx.workspacePath,
+				channelDir: ctx.channelDir,
+				channelId: ctx.channelId,
 			}),
 	},
 ];

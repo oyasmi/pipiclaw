@@ -156,6 +156,53 @@ describe("manageEvent create", () => {
 		).rejects.toThrow(/30 minutes/);
 	});
 
+	it("allows a sub-30-minute periodic cron when it carries a preAction gate", async () => {
+		const result = await manageEvent(opts(), {
+			action: "create",
+			name: "task.dm_1.demo.agentmux",
+			definition: JSON.stringify({
+				type: "periodic",
+				text: "x",
+				schedule: "*/10 * * * *",
+				timezone: "Asia/Shanghai",
+				preAction: { type: "bash", command: "echo hi" },
+			}),
+		});
+		expect(result.eventType).toBe("periodic");
+		expect(await listEventFiles()).toEqual(["task.dm_1.demo.agentmux.json"]);
+	});
+
+	it("still rejects a sub-30-minute periodic cron without a preAction gate", async () => {
+		await expect(
+			manageEvent(opts(), {
+				action: "create",
+				name: "nogate",
+				definition: JSON.stringify({
+					type: "periodic",
+					text: "x",
+					schedule: "*/10 * * * *",
+					timezone: "Asia/Shanghai",
+				}),
+			}),
+		).rejects.toThrow(/30 minutes/);
+	});
+
+	it("rejects a preAction-gated periodic below the 5-minute hard sub-floor", async () => {
+		await expect(
+			manageEvent(opts(), {
+				action: "create",
+				name: "toofast-gated",
+				definition: JSON.stringify({
+					type: "periodic",
+					text: "x",
+					schedule: "*/4 * * * *",
+					timezone: "Asia/Shanghai",
+					preAction: { type: "bash", command: "echo hi" },
+				}),
+			}),
+		).rejects.toThrow(/5 minutes/);
+	});
+
 	it("rejects an invalid cron schedule", async () => {
 		await expect(
 			manageEvent(opts(), {

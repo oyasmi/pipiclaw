@@ -33,7 +33,7 @@ import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
-import { ensureChannelDir } from "./channel-paths.js";
+import { ensureChannelDir, getChannelDir } from "./channel-paths.js";
 import { createDingTalkContext } from "./delivery.js";
 import {
 	type BusyMessageMode,
@@ -50,6 +50,7 @@ import {
 import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
+import { handleTasksCommand as runTasksCommand } from "./task-commands.js";
 
 export interface BootstrapPaths {
 	appName: string;
@@ -681,6 +682,14 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			await bot.sendPlain(event.channelId, response);
 		},
 
+		async handleTasksCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void> {
+			const response = await runTasksCommand({
+				args,
+				channelDir: getChannelDir(options.paths.workspaceDir, event.channelId),
+			});
+			await bot.sendPlain(event.channelId, response);
+		},
+
 		async handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void> {
 			const response = renderStatus({
 				state: channelStates.get(event.channelId),
@@ -792,6 +801,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						log.logInfo(`[${event.channelId}] Executing command: ${builtInCommand.rawText}`);
 						if (builtInCommand.name === "events") {
 							await handler.handleEventsCommand(event, bot, builtInCommand.args);
+							return;
+						}
+						if (builtInCommand.name === "tasks") {
+							await handler.handleTasksCommand(event, bot, builtInCommand.args);
 							return;
 						}
 						if (builtInCommand.name === "status") {

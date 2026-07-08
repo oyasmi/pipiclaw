@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-07-08
+
+### 新增
+
+- 任务台账支持（spec 019/020）：在 `docs/tasks.md` 中记录按 channel 隔离的 `workspace/<channelId>/tasks/*.md` 约定、心跳模式、任务/事件命名方案和操作流程。
+- 新增 `event_manage` 工具，让主 agent 可以创建、更新和删除定时事件文件，并在写入前完成格式校验、channel 所有权检查、immediate/自唤醒防护、cron 频率限制、preAction 命令守卫和原子写入。
+- 在钉钉与 TUI 中新增只读 `/tasks` 命令，支持查看 active 任务列表、archive 列表和单任务详情，并保持按 channel 隔离。
+- 新增确定性的任务议程注入，由 `settings.taskDigest` 控制，把 active 任务的 frontmatter 与标题作为有界背景上下文注入主 agent 回合，无需依赖 LLM 主动扫描任务目录。
+- 新增 `task_manage` 工具，用于结构化更新任务 frontmatter、列出任务，以及在任务完成时执行归档和相关 checkpoint 事件清理。
+
+### 变更
+
+- `event_manage` 现在仅在 periodic 事件带 `preAction` 门控时允许更短调度间隔：无门控 periodic 仍保持 30 分钟下限，带门控 periodic 可降到 5 分钟，用于 agentmux 等委派工作的完成驱动轮询。
+- 补充任务可见性、委派工作回访，以及任务文件、事件 checkpoint、周期性心跳传感器之间关系的文档。
+
 ## [0.7.4] - 2026-07-07
 
 ### 新增

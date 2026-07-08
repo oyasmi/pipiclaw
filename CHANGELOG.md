@@ -4,6 +4,21 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-07-08
+
+### Added
+
+- Task ledger support (spec 019/020): documented the channel-scoped `workspace/<channelId>/tasks/*.md` convention, heartbeat pattern, task/event naming scheme, and operator workflows in `docs/tasks.md`.
+- Added the `event_manage` tool so the main agent can create, update, and delete scheduled event files with upfront validation, channel ownership checks, immediate/self-wakeup guardrails, cron frequency limits, preAction command guarding, and atomic writes.
+- Added `/tasks` as a read-only command in DingTalk and the TUI, including active task lists, archived task lists, and task detail rendering while preserving per-channel isolation.
+- Added deterministic task agenda injection for main-agent turns, controlled by `settings.taskDigest`, so active task frontmatter and titles are available as bounded background context without requiring an LLM-driven task scan.
+- Added the `task_manage` tool for structured task frontmatter updates, task listing, and done/archival cleanup, including deletion of related task checkpoint events.
+
+### Changed
+
+- `event_manage` now allows tighter periodic schedules only when a `preAction` gate is present: ungated periodic events keep the 30-minute minimum interval, while gated periodic events may run every 5 minutes for completion-driven polling such as delegated agentmux work.
+- Documented task visibility, delegated-work follow-up, and the intended relationship between task files, event checkpoints, and periodic heartbeat sensors.
+
 ## [0.7.4] - 2026-07-07
 
 ### Added

@@ -36,6 +36,7 @@ export interface DispatchDeps {
 	renderStatus(): string;
 	renderUsage(args: string): string;
 	runEvents(args: string): Promise<string>;
+	runTasks(args: string): Promise<string>;
 }
 
 export async function dispatch(input: string, deps: DispatchDeps): Promise<DispatchOutcome> {
@@ -60,6 +61,8 @@ export async function dispatch(input: string, deps: DispatchDeps): Promise<Dispa
 			return { kind: "reply", text: deps.renderUsage(command.args) };
 		case "events":
 			return { kind: "reply", text: await deps.runEvents(command.args) };
+		case "tasks":
+			return { kind: "reply", text: await deps.runTasks(command.args) };
 		case "stop":
 			return { kind: "stop" };
 		case "steer":
@@ -82,6 +85,7 @@ export const TUI_SLASH_COMMANDS: Array<{ name: string; description: string; argu
 	{ name: "status", description: "Show model, context and run state" },
 	{ name: "usage", description: "Show LLM cost for this channel", argumentHint: "[7d|month]" },
 	{ name: "events", description: "Manage scheduled events", argumentHint: "<list|show|delete|history>" },
+	{ name: "tasks", description: "View the task ledger (read-only)", argumentHint: "[show <id>|archive]" },
 	{ name: "model", description: "Show or switch the model", argumentHint: "[provider/model]" },
 	{ name: "new", description: "Start a new session" },
 	{ name: "compact", description: "Compact the session context", argumentHint: "[instructions]" },

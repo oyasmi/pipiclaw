@@ -33,6 +33,7 @@ export interface TurnControllerDeps {
 	renderHelp: () => string;
 	renderUsage: (args: string) => string;
 	runEvents: (args: string) => Promise<string>;
+	runTasks: (args: string) => Promise<string>;
 	/** Static bits the status renderer needs alongside the live run state. */
 	statusInfo: { version: string; sandbox: SandboxConfig; startedAt: number };
 	/** Injectable clock for deterministic Ctrl-C timing in tests. */
@@ -67,6 +68,7 @@ export class TurnController {
 			renderHelp: deps.renderHelp,
 			renderUsage: deps.renderUsage,
 			runEvents: deps.runEvents,
+			runTasks: deps.runTasks,
 			renderStatus: () =>
 				renderStatus({
 					state: { running: this.running, currentTaskText: this.currentTaskText, runner: this.deps.runner },

@@ -199,7 +199,39 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 - 只有一个开关 `enabled`（默认 `true`）；关掉后主 agent 无法再自调度事件，但用户侧的 `/events` 命令与手工编辑 `workspace/events/*.json` 不受影响。
 - 该工具只发给主 agent，不进子代理工具集。
-- 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、事件文件总数上限 50）。细节见 [tasks.md](./tasks.md) 与 [events-and-sub-agents.md](./events-and-sub-agents.md)。
+- 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、**带 `preAction` 门控时放宽到 5 分钟**、事件文件总数上限 50）。细节见 [tasks.md](./tasks.md) 与 [events-and-sub-agents.md](./events-and-sub-agents.md)。
+
+#### 任务台账工具（`tools.tasks`）
+
+`task_manage` 工具让主 agent 用受校验的方式维护[任务台账](./tasks.md)的 frontmatter 与生命周期（set 状态/唤醒时间、done 一步闭环并清理残留事件、list active 任务）。默认开启。
+
+```jsonc
+{
+  "tools": {
+    "tasks": { "enabled": true }
+  }
+}
+```
+
+- 只有一个开关 `enabled`（默认 `true`）；关掉后主 agent 仍可用 read/edit/write 直接维护 task 文件，只是少了 frontmatter 保真与闭环原子化这层便利。
+- 该工具只发给主 agent，不进子代理工具集。它只管 frontmatter 与闭环，不写任务正文（正文用 write/edit）。
+
+#### 任务摘要注入（`taskDigest`，settings.json）
+
+每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。默认开启，便宜且高价值。
+
+```jsonc
+{
+  "taskDigest": {
+    "enabled": true,
+    "maxTasks": 8,
+    "maxChars": 1000
+  }
+}
+```
+
+- `enabled`（默认 `true`）：关掉后不再注入任务摘要。
+- `maxTasks`（默认 `8`）/ `maxChars`（默认 `1000`）：摘要的上限，超出会截断并标注剩余数量。摘要只收录 status ≠ done 的任务，无 active 任务时不注入。
 
 ## 终端 TUI（Terminal TUI）
 

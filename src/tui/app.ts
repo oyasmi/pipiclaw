@@ -26,6 +26,7 @@ import { ensureChannelDir } from "../runtime/channel-paths.js";
 import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
 import { handleEventsCommand } from "../runtime/event-commands.js";
 import { ChannelStore } from "../runtime/store.js";
+import { handleTasksCommand } from "../runtime/task-commands.js";
 import type { SandboxConfig } from "../sandbox.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
@@ -124,6 +125,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		renderUsage: (args) => renderUsageReport(getUsageLedger(), channelId, parseUsageMode(args), new Date()),
 		runEvents: (args) =>
 			handleEventsCommand({ args, workspaceDir: paths.workspaceDir, historyPath: paths.eventHistoryPath }),
+		runTasks: (args) => handleTasksCommand({ args, channelDir }),
 		statusInfo: { version: readCliVersion(), sandbox, startedAt: Date.now() },
 	});
 

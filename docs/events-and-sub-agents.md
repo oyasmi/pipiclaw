@@ -336,7 +336,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 5. **防自激励闸门**（防止 agent 把自己拖入烧 token 的自唤醒循环）：
    - 禁止 `immediate` 类型（create 与 update 双侧）——当下能做的事就在当前回合做完；
    - `one-shot` 的 `at` 必须至少晚于现在 2 分钟；
-   - `periodic` 的 cron 最密每 30 分钟一次（需要更密的探测就用 periodic + `preAction` 门控，而不是裸高频 cron）；
+   - `periodic` 的 cron 最密每 **30 分钟**一次；**带 `preAction` 门控时放宽到最密每 5 分钟**——传感器忙时静默、零 token，是完成驱动检查（如轮询 agentmux 实例直到空闲，见 [tasks.md](./tasks.md#agentmux-完成驱动回访)）的正确形态；硬子下限仍是 5 分钟；
    - `workspace/events/` 内事件文件数达到 50 时拒绝再 create。
 
 > 用户手工编辑 `*.json` 或用 `/events` 不受这些闸门限制——它们只约束 agent 的自调度。

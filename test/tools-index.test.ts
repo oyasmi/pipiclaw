@@ -15,6 +15,7 @@ const {
 	createSkillViewToolMock,
 	createSkillManageToolMock,
 	createEventManageToolMock,
+	createTaskManageToolMock,
 	createSubAgentToolMock,
 } = vi.hoisted(() => ({
 	createReadToolMock: vi.fn(() => ({ name: "read" })),
@@ -29,6 +30,7 @@ const {
 	createSkillViewToolMock: vi.fn(() => ({ name: "skill_view" })),
 	createSkillManageToolMock: vi.fn(() => ({ name: "skill_manage" })),
 	createEventManageToolMock: vi.fn(() => ({ name: "event_manage" })),
+	createTaskManageToolMock: vi.fn(() => ({ name: "task_manage" })),
 	createSubAgentToolMock: vi.fn(() => ({ name: "subagent" })),
 }));
 
@@ -96,6 +98,9 @@ const toolsConfig = {
 		events: {
 			enabled: true,
 		},
+		tasks: {
+			enabled: true,
+		},
 		rtk: {
 			enabled: false,
 		},
@@ -114,6 +119,7 @@ vi.mock("../src/tools/skill-list.js", () => ({ createSkillListTool: createSkillL
 vi.mock("../src/tools/skill-view.js", () => ({ createSkillViewTool: createSkillViewToolMock }));
 vi.mock("../src/tools/skill-manage.js", () => ({ createSkillManageTool: createSkillManageToolMock }));
 vi.mock("../src/tools/event-manage.js", () => ({ createEventManageTool: createEventManageToolMock }));
+vi.mock("../src/tools/task-manage.js", () => ({ createTaskManageTool: createTaskManageToolMock }));
 vi.mock("../src/subagents/tool.js", () => ({ createSubAgentTool: createSubAgentToolMock }));
 vi.mock("../src/security/config.js", () => ({ loadSecurityConfig: vi.fn(() => securityConfig) }));
 vi.mock("../src/tools/config.js", () => ({ loadToolsConfig: vi.fn(() => toolsConfig) }));
@@ -134,6 +140,7 @@ const ALL_TOOL_NAMES = [
 	"skill_view",
 	"skill_manage",
 	"event_manage",
+	"task_manage",
 	"subagent",
 ];
 
@@ -231,6 +238,7 @@ describe("tools index", () => {
 			"skill_view",
 			"skill_manage",
 			"event_manage",
+			"task_manage",
 			"subagent",
 		]);
 		expect(createWebSearchToolMock).not.toHaveBeenCalled();
@@ -352,6 +360,7 @@ describe("tools index", () => {
 			"skill_view",
 			"skill_manage",
 			"event_manage",
+			"task_manage",
 			"subagent",
 		]);
 		expect(createReadToolMock).toHaveBeenCalledWith(executor, {

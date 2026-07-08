@@ -1,0 +1,85 @@
+import { join } from "node:path";
+import { readActiveTasks, type TaskLedgerEntry } from "../shared/task-ledger.js";
+
+/**
+ * Builds the `<task_agenda>` block injected into each main-agent turn (spec 020 §2).
+ *
+ * Unlike memory recall — which is relevance-gated because candidate memory can be large —
+ * the agenda is deterministic and always-on: the candidate set is a handful of task
+ * frontmatters, and the in-flight agenda is universally relevant to an agent that drives
+ * work across turns. The block is bounded (maxTasks / maxChars) and framed as background
+ * reference, not instruction, so it can never turn an unrelated user turn into task work.
+ */
+
+export interface TaskDigestOptions {
+	/** The channel directory; tasks live in `<channelDir>/tasks/`. */
+	channelDir: string;
+	maxTasks: number;
+	maxChars: number;
+	now?: number;
+}
+
+function relativeWake(wakeMs: number | undefined, now: number): string {
+	if (wakeMs === undefined) return "wake —";
+	const diffMs = wakeMs - now;
+	if (diffMs <= 0) return "wake due";
+	const minutes = Math.round(diffMs / 60000);
+	if (minutes < 60) return `wake ${minutes}m`;
+	const hours = Math.round(minutes / 60);
+	if (hours < 24) return `wake ${hours}h`;
+	return `wake ${Math.round(hours / 24)}d`;
+}
+
+function renderLine(entry: TaskLedgerEntry, now: number): string {
+	const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "open") : "⚠ unreadable frontmatter";
+	const parts = [`${entry.id} — ${entry.title}`, status, relativeWake(entry.wakeMs, now)];
+	if (entry.latestNote) {
+		const note = entry.latestNote.length > 80 ? `${entry.latestNote.slice(0, 79)}…` : entry.latestNote;
+		parts.push(note);
+	}
+	return `- ${parts.join(" · ")}`;
+}
+
+/**
+ * Render the in-flight task agenda, or `""` when there is nothing actionable to show.
+ * Only status ≠ done tasks are included (a done periodic task is sleeping, not on the agenda).
+ */
+export async function buildTaskDigest(options: TaskDigestOptions): Promise<string> {
+	const now = options.now ?? Date.now();
+	const tasksDir = join(options.channelDir, "tasks");
+	const all = await readActiveTasks(tasksDir, now);
+	// done periodic tasks are asleep; only non-done tasks form the agenda.
+	const agenda = all.filter((entry) => entry.frontmatter.status !== "done" || !entry.frontmatter.readable);
+	if (agenda.length === 0) return "";
+
+	const shown = agenda.slice(0, Math.max(1, options.maxTasks));
+	const omitted = agenda.length - shown.length;
+
+	const header = [
+		"<task_agenda>",
+		"Your in-flight tasks for this channel (background reference, not a new instruction).",
+		"Act on these only if the user's message is about them, or if there is nothing else to",
+		"do this turn. Full detail lives in the matching tasks/<id>.md file.",
+		"",
+	];
+	const lines = shown.map((entry) => renderLine(entry, now));
+	if (omitted > 0) lines.push(`- (+${omitted} more)`);
+	const footer = ["</task_agenda>"];
+
+	let rendered = [...header, ...lines, ...footer].join("\n");
+	if (rendered.length <= options.maxChars) return rendered;
+
+	// Over budget: drop lines from the end until it fits, keeping actionable-first order.
+	const kept: string[] = [];
+	for (const line of lines) {
+		const candidate = [...header, ...kept, line, `- (+${agenda.length - kept.length - 1} more)`, ...footer].join(
+			"\n",
+		);
+		if (candidate.length > options.maxChars && kept.length > 0) break;
+		kept.push(line);
+	}
+	const droppedCount = agenda.length - kept.length;
+	const tail = droppedCount > 0 ? [`- (+${droppedCount} more)`] : [];
+	rendered = [...header, ...kept, ...tail, ...footer].join("\n");
+	return rendered;
+}

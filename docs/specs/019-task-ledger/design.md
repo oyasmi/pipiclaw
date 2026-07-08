@@ -301,4 +301,4 @@ runtime 不解析 task 文件，所以约定必须靠提示词落地。`docs/tas
 ## 分阶段
 
 - **Phase 1（本 spec）**：`event_manage` 工具 + 测试 + 三份文档（含 SOP 模板与传感器脚本全文）。代码改动集中在 `src/tools/`（新工具 + registry + config 三处门控）与 `src/runtime/event-commands.ts`（导出 `normalizeEventName`/`resolveEventPath` 供复用）；`events.ts` **零改动**——`parseScheduledEventContent` 已导出可直接用。
-- **Phase 2（另立 spec）**：`/tasks` slash command、prompt 注入任务摘要、必要时的 `task_manage` 工具、agentmux 状态原生触发器。
+- **Phase 2（[020-task-visibility-and-drivers](../020-task-visibility-and-drivers/design.md)）**：`/tasks` slash command、prompt 注入任务摘要、必要时的 `task_manage` 工具、agentmux 状态原生触发器。

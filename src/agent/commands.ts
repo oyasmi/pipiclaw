@@ -1,4 +1,4 @@
-export type BuiltInCommandName = "help" | "steer" | "followup" | "stop" | "events" | "status" | "usage";
+export type BuiltInCommandName = "help" | "steer" | "followup" | "stop" | "events" | "tasks" | "status" | "usage";
 
 export interface BuiltInCommand {
 	name: BuiltInCommandName;
@@ -32,6 +32,11 @@ These are handled directly by the DingTalk transport/runtime layer.
   Example: \`/events show weekly-review\`
   Example: \`/events delete weekly-review\`
   Example: \`/events history weekly-review\`
+- \`/tasks [show <id>|archive]\`
+  View the channel's task ledger (read-only); to change a task, just tell me in plain language
+  Example: \`/tasks\`
+  Example: \`/tasks show weekly-report\`
+  Example: \`/tasks archive\`
 - \`/status\`
   Show runtime status: run state, current model, context usage, uptime, version
   Example: \`/status\`
@@ -81,6 +86,7 @@ export function parseBuiltInCommand(text: string): BuiltInCommand | null {
 		case "followup":
 		case "stop":
 		case "events":
+		case "tasks":
 		case "status":
 		case "usage":
 			return { name: rawName, args, rawText };

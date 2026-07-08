@@ -79,6 +79,12 @@ export interface PipiclawMemoryRecallSettings {
 	rerankWithModel: boolean | "auto";
 }
 
+export interface PipiclawTaskDigestSettings {
+	enabled: boolean;
+	maxTasks: number;
+	maxChars: number;
+}
+
 export interface PipiclawSessionMemorySettings {
 	enabled: boolean;
 	minTurnsBetweenUpdate: number;
@@ -142,6 +148,7 @@ export interface PipiclawSettings {
 	compaction?: Partial<PipiclawCompactionSettings>;
 	retry?: Partial<PipiclawRetrySettings>;
 	memoryRecall?: Partial<PipiclawMemoryRecallSettings>;
+	taskDigest?: Partial<PipiclawTaskDigestSettings>;
 	sessionMemory?: Partial<PipiclawSessionMemorySettings>;
 	memoryGrowth?: Partial<PipiclawMemoryGrowthSettings>;
 	memoryMaintenance?: Partial<PipiclawMemoryMaintenanceSettings>;
@@ -183,6 +190,14 @@ const DEFAULT_MEMORY_RECALL: PipiclawMemoryRecallSettings = {
 	maxInjected: 5,
 	maxChars: 5000,
 	rerankWithModel: "auto",
+};
+
+// Cheap and high-value: reading a handful of task frontmatters and always surfacing
+// the in-flight agenda is worth more than the tokens it costs, so it defaults on.
+const DEFAULT_TASK_DIGEST: PipiclawTaskDigestSettings = {
+	enabled: true,
+	maxTasks: 8,
+	maxChars: 1000,
 };
 
 const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
@@ -339,6 +354,13 @@ export class PipiclawSettingsManager {
 		return {
 			...DEFAULT_MEMORY_RECALL,
 			...this.settings.memoryRecall,
+		};
+	}
+
+	getTaskDigestSettings(): PipiclawTaskDigestSettings {
+		return {
+			...DEFAULT_TASK_DIGEST,
+			...this.settings.taskDigest,
 		};
 	}
 

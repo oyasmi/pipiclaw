@@ -30,6 +30,7 @@ import {
 } from "../memory/maintenance-state.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
+import { buildTaskDigest } from "../memory/task-digest.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { findExactModelReferenceMatch, formatModelReference, resolveInitialModel } from "../models/utils.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
@@ -269,6 +270,7 @@ export class ChannelRunner implements AgentRunner {
 
 			let promptText = preserveRawInput ? clippedInput : userMessage;
 			let recalledContextText = "";
+			let taskDigestText = "";
 			let durableMemoryBootstrapText = "";
 
 			if (!preserveRawInput) {
@@ -295,6 +297,18 @@ export class ChannelRunner implements AgentRunner {
 					}
 				}
 
+				const taskDigestSettings = this.settingsManager.getTaskDigestSettings();
+				if (taskDigestSettings.enabled) {
+					taskDigestText = await buildTaskDigest({
+						channelDir: this.channelDir,
+						maxTasks: taskDigestSettings.maxTasks,
+						maxChars: taskDigestSettings.maxChars,
+					});
+					if (taskDigestText) {
+						promptText = `${taskDigestText}\n\n${promptText}`;
+					}
+				}
+
 				if (this.firstTurnMemoryBootstrapPending) {
 					durableMemoryBootstrapText = await this.buildFirstTurnMemoryBootstrap();
 					if (durableMemoryBootstrapText) {
@@ -310,6 +324,7 @@ export class ChannelRunner implements AgentRunner {
 					systemPrompt: this.agent.state.systemPrompt,
 					messages: this.session.messages,
 					durableMemoryBootstrap: durableMemoryBootstrapText || undefined,
+					taskDigest: taskDigestText || undefined,
 					recalledContext: recalledContextText || undefined,
 					newUserMessage: promptText,
 				};

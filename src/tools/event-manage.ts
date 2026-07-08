@@ -13,8 +13,16 @@ import { isRecord } from "../shared/type-guards.js";
 
 /** one-shot events must be scheduled at least this far out; anything sooner is effectively self-triggering. */
 const MIN_ONE_SHOT_LEAD_MS = 2 * 60 * 1000;
-/** periodic events may fire no more often than this; tighter cadence should use a preAction-gated heartbeat instead. */
+/** periodic events without a preAction gate may fire no more often than this. */
 const MIN_PERIODIC_INTERVAL_MS = 30 * 60 * 1000;
+/**
+ * periodic events WITH a preAction gate may fire this often: the sensor is the token guard
+ * (it exits non-zero and stays silent when there is nothing to do), so a tighter cadence is
+ * safe and is exactly the design-endorsed posture for completion-driven checks (e.g. polling
+ * an agentmux instance until it goes idle). A hard sub-floor still applies so a bogus
+ * always-pass preAction cannot drive an arbitrarily hot loop.
+ */
+const MIN_PERIODIC_INTERVAL_WITH_PREACTION_MS = 5 * 60 * 1000;
 /** sanity cap on total event files to keep the directory (and the scheduler) from being flooded. */
 const MAX_EVENT_FILES = 50;
 
@@ -104,12 +112,16 @@ function validatePeriodic(event: ScheduledEvent & { type: "periodic" }): void {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(`Invalid cron schedule "${event.schedule}": ${message}`);
 	}
+	// A preAction gate makes a tighter cadence safe (the sensor keeps most fires silent);
+	// without one, hold the 30-minute floor so a bare high-frequency cron can't burn tokens.
+	const floorMs = event.preAction ? MIN_PERIODIC_INTERVAL_WITH_PREACTION_MS : MIN_PERIODIC_INTERVAL_MS;
+	const floorMinutes = Math.round(floorMs / 60000);
 	// Fewer than two upcoming runs means no meaningful cadence to rate-limit (e.g. a one-off cron); allow it.
 	for (let i = 1; i < runs.length; i++) {
-		if (runs[i].getTime() - runs[i - 1].getTime() < MIN_PERIODIC_INTERVAL_MS) {
+		if (runs[i].getTime() - runs[i - 1].getTime() < floorMs) {
 			throw new Error(
-				"periodic events must fire no more often than every 30 minutes; " +
-					"for tighter checks use a periodic event with a preAction gate instead of a high-frequency cron.",
+				`periodic events must fire no more often than every ${floorMinutes} minutes` +
+					`${event.preAction ? " (even with a preAction gate)" : "; for tighter checks add a preAction gate (min 5 minutes) instead of a high-frequency cron"}.`,
 			);
 		}
 	}

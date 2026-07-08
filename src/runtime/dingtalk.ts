@@ -108,6 +108,7 @@ export interface DingTalkHandler {
 	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
 	handleStop(channelId: string, bot: DingTalkBot): Promise<void>;
 	handleEventsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
+	handleTasksCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void>;
 	handleUsageCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleBusyMessage(
@@ -1240,6 +1241,11 @@ export class DingTalkBot {
 				return;
 			}
 
+			if (builtInCommand?.name === "tasks") {
+				await this.handler.handleTasksCommand(event, this, builtInCommand.args);
+				return;
+			}
+
 			if (builtInCommand?.name === "status") {
 				await this.handler.handleStatusCommand(event, this);
 				return;
@@ -1253,7 +1259,7 @@ export class DingTalkBot {
 			if (builtInCommand) {
 				await this.sendPlain(
 					channelId,
-					`A task is already running. Use \`/stop\`, \`/steer <message>\`, \`/followup <message>\`, \`/events <action>\`, \`/status\`, or \`/usage\`. Plain messages default to ${this.busyMessageDefault}.`,
+					`A task is already running. Use \`/stop\`, \`/steer <message>\`, \`/followup <message>\`, \`/events <action>\`, \`/tasks\`, \`/status\`, or \`/usage\`. Plain messages default to ${this.busyMessageDefault}.`,
 				);
 				return;
 			}
@@ -1261,7 +1267,7 @@ export class DingTalkBot {
 			if (isSlashCommand) {
 				await this.sendPlain(
 					channelId,
-					"A task is already running. Only `/stop`, `/steer <message>`, `/followup <message>`, and `/events <action>` are available while streaming.",
+					"A task is already running. Only `/stop`, `/steer <message>`, `/followup <message>`, `/events <action>`, and `/tasks` are available while streaming.",
 				);
 				return;
 			}
