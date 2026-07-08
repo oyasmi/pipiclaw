@@ -47,6 +47,7 @@ Use `npm run typecheck` and `npm run test` as the minimum validation after non-t
 - Prefer explicit types over `as any`
 - Do not treat tests as optional; runtime, memory, and DingTalk behavior should be covered when changed
 - Avoid creating barrel files or re-export shims unless they materially reduce coupling
+- Every tool error or truncation output must carry a next-step instruction the model can act on directly (e.g. "Use offset=N to continue", "use the grep tool instead") — errors steer the model rather than just reporting failure
 
 ## Practical Notes
 

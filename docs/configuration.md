@@ -216,6 +216,64 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - 只有一个开关 `enabled`（默认 `true`）；关掉后主 agent 仍可用 read/edit/write 直接维护 task 文件，只是少了 frontmatter 保真与闭环原子化这层便利。
 - 该工具只发给主 agent，不进子代理工具集。它只管 frontmatter 与闭环，不写任务正文（正文用 write/edit）。
 
+#### 结构化搜索工具（`tools.grep`）
+
+`grep` 工具用扩展正则在文件/目录树里搜内容，输出按文件分组、每文件与每页有上限、并做字节封顶——优先用它而不是 `bash grep -rn`（后者会打爆上下文）。默认开启。
+
+```jsonc
+{
+  "tools": {
+    "grep": { "enabled": true }
+  }
+}
+```
+
+- 只有一个开关 `enabled`（默认 `true`）。执行层复用 Executor（沙箱内 `grep`），主 agent 与子代理都可用。
+
+#### 后台作业（`tools.jobs`）
+
+开启后，`bash` 多一个 `async: true` 参数，把长命令丢到后台并立刻返回作业 id，避免占住频道 run-queue；新增的 `job` 工具用来 list/poll/cancel。**默认关闭**（灰度）。
+
+```jsonc
+{
+  "tools": {
+    "jobs": { "enabled": true }
+  }
+}
+```
+
+- 关闭时：`bash` 的 `async` 会报错说明、`job` 工具不注册，行为与开启前完全一致。
+- 作业进程活在 Executor 的世界（host 或 Docker），通过 shell 命令管理（`nohup` 启动、`kill -0` 探活、退出码写入 `.exit` 文件）；每频道最多 5 个并发运行作业，超时沿用 bash 的 `timeout` 预算。
+- 作业状态进程内、不持久化：重启后旧作业显示为 `lost` 而非被错误"复活"。
+- 只发给主 agent；子代理不能起后台作业。
+- 想在作业**大概完成时**被唤醒接手，用 `event_manage` 排一个 check-in 事件去 `job poll`，而不是长时间阻塞。
+
+#### bash 拦截器（`tools.bashInterceptor`）
+
+开启后，拦截少数"有更好工具"的裸 shell 形态（整文件 `cat`、递归 `grep`、`sed -i`），报错把模型导向 `read`/`grep`/`edit`。**默认关闭**（灰度）。
+
+```jsonc
+{
+  "tools": {
+    "bashInterceptor": { "enabled": true }
+  }
+}
+```
+
+- 只拦最明确的裸形态；带管道/重定向的复合命令（如 `cat x | jq`）一律放行。
+- 运行在 `command-guard` 之后、`rtk` 之前，只影响"用哪个工具"，不放行任何 guard 会拦的东西。依赖 `tools.grep`（否则拦了递归 grep 无处可去）。
+
+#### 记忆管理工具（`memory_manage`，gate 见下）
+
+`memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从 MEMORY.md 移除，不走裸 edit）。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。
+
+- gate 沿用既有键 `tools.memory.save.enabled`（默认 `true`）——工具虽更名，为避免静默重置用户配置而保留原键名。
+- 只发给主 agent。
+
+#### 网页抓取缓存（`web_fetch` offset 分页）
+
+`web_fetch` 会把抓取到的正文按频道缓存（`workspace/<channelId>/web-cache/`，键为 URL+抽取模式的哈希，TTL 15 分钟，LRU 上限 20 个文件）。长页面被截断时尾注会给出下一段的 `offset`；用同一 URL + 该 `offset` 再调一次即从缓存翻页，**不重新抓取**。图片结果原样返回、不缓存。无独立开关，随 `tools.web.enable` 生效。
+
 #### 任务摘要注入（`taskDigest`，settings.json）
 
 每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。默认开启，便宜且高价值。

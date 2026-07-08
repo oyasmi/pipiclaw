@@ -3,7 +3,7 @@
 | 字段 | 值 |
 |------|------|
 | 分支 | `feat/toolset-enhancement`（按 wave 分 PR） |
-| 状态 | DRAFT |
+| 状态 | IMPLEMENTED（全部三个 wave；下列 §实现说明 记录了与本设计的有意偏差） |
 | 日期 | 2026-07-09 |
 | 前置 | [015（tool registry）](../015-tool-registry/design.md)、[006（web tools）](../006-web-tools/design.md)、[013（memory write semantics）](../013-memory-write-semantics/design.md)、[019](../019-task-ledger/design.md)/[020（task ledger）](../020-task-visibility-and-drivers/design.md) |
 | 参考对象 | `~/projects/oh-my-pi`（基于 pi 的重度打磨编码代理，30+ 工具，每工具有独立设计文档 `docs/tools/*.md`） |
@@ -426,6 +426,22 @@ oh-my-pi 用规则拦截"有更好工具"的 shell 模式，报错导向 read/gr
 4. **T4**：用户"忘掉 X"由 memory_manage 闭环，`MEMORY.md` 不再被 edit 直改；维护日志可审计每次 forget/invalidate。
 5. **T5/T6**：用户丢 PDF/长网页链接可直接读、可续读，不触发重抓。
 6. **T7/T8**：prompt 工具区更短；bash 中 `cat 整文件`/递归 grep 的出现率趋零。
+
+## 实现说明（与本设计的有意偏差）
+
+实现时按 KISS / 无技术债原则做了几处有意识的收窄，记录如下，避免本文档误导后来者：
+
+- **T3 未做 auto-background 反转**：不把所有前台 bash 改写成"先后台再等待"。Executor 的 `exec` 是一次性调用，无法把一个已在前台运行的命令中途转后台；为此重写核心前台路径（stdout 捕获、流式、abort/timeout、既有 spill 逻辑）的等价性风险远大于收益。改为显式 `async: true`。长命令的常见场景由模型显式选择 async 覆盖。
+- **T3 未做独立的完成自动投递**：JobManager 不主动"唤醒频道"。pipiclaw 已有频道自唤醒机制（`event_manage` 的 one-shot/periodic 事件经 `bot.enqueueEvent` 注入 run-queue）。把 bot 回调穿过 4 层（bot→bootstrap→runner-factory→ChannelRunner→tool）纯属重复造轮子。范式：启动 async 作业 + 用 `event_manage` 排一个 check-in 事件去 `job poll`。`job poll` 亦支持短时阻塞等待首个完成。
+- **T4 未做 soft-invalidate**：只做 `save`/`search`/`forget`。软作废（保留条目但标记过时）只有在 recall/consolidation 理解该标记时才有用，否则过时事实仍被 recall——这是会引入的耦合。`forget`（经共享串行队列的硬删）已覆盖用户"忘掉 X"的诉求，零耦合。
+- **T4 gate 键名保持 `tools.memory.save.enabled`**：工具已更名 `memory_manage`，但沿用既有 gate 键，避免一次"重命名 + 向后兼容 shim"（shim 本身即债）或静默重置用户配置。
+- **T5 目录树不含大小/mtime**：`find -printf` / `stat` 的格式在 BSD/GNU/busybox 间不一致；只用 `find -maxdepth 2` + `sed` 标注目录（可移植），呈现结构而非元数据。PDF 首批只支持 `.pdf`（`pdftotext`），缺二进制时优雅降级并给出下一步。仓库内无 Dockerfile，故 poppler-utils 由用户镜像提供，错误信息已引导。
+- **T5 未做 archive/SQLite read 选择器**：见 §非目标，需求出现前不做。
+- **T6 未做低成本备选抽取链**（`URL.md` / content negotiation / `llms.txt`）：缓存 + 分页是核心价值；备选抽取是可后续叠加的细化。
+- **grep 保留上下文行**：设计草稿曾担心跨平台上下文解析歧义，实现用"锚定当前匹配文件路径"消歧，安全保留了 before=1/after=3。执行层用 `grep`（非 `rg` 探测），JS 侧承担全部塑形。
+- **bash 拦截器规则硬编码**（未做 `tools.bashInterceptor.rules` 可配）：只保留三条最明确的裸形态规则，gate 用 `enabled` 单开关；可配规则表是可后续叠加的细化，当前会增加配置校验面而收益有限。
+
+各 gate 的默认值：`grep` 默认开；`jobs`、`bashInterceptor` 默认关（灰度），运营验证后再翻默认。
 
 ## 分阶段交付
 
