@@ -137,7 +137,11 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 				(totalFileLines === 0 && offset !== undefined && startLine > 1) ||
 				(totalFileLines > 0 && startLine > totalFileLines)
 			) {
-				throw new Error(`Offset ${offset} is beyond end of file (${totalFileLines} lines total)`);
+				const guidance =
+					totalFileLines > 0
+						? `Use offset=${totalFileLines} to read the last line, or omit offset to read from the start.`
+						: "The file is empty; omit offset.";
+				throw new Error(`Offset ${offset} is beyond end of file (${totalFileLines} lines total). ${guidance}`);
 			}
 
 			// Read content with offset

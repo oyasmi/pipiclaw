@@ -69,11 +69,16 @@ export function createSessionSearchTool(options: SessionSearchToolOptions): Agen
 				resolveApiKey: options.resolveApiKey,
 			});
 
+			const text =
+				response.results.length === 0
+					? `${JSON.stringify(response)}\n\nNo matches in cold transcript storage. Try a broader query, drop roleFilter, or read the distilled memory directly (MEMORY.md / HISTORY.md in this channel).`
+					: JSON.stringify(response);
+
 			return {
 				content: [
 					{
 						type: "text",
-						text: JSON.stringify(response),
+						text,
 					},
 				],
 				details: {

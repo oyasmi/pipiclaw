@@ -6,6 +6,7 @@ const {
 	createReadToolMock,
 	createBashToolMock,
 	createEditToolMock,
+	createGrepToolMock,
 	createWriteToolMock,
 	createWebSearchToolMock,
 	createWebFetchToolMock,
@@ -21,6 +22,7 @@ const {
 	createReadToolMock: vi.fn(() => ({ name: "read" })),
 	createBashToolMock: vi.fn(() => ({ name: "bash" })),
 	createEditToolMock: vi.fn(() => ({ name: "edit" })),
+	createGrepToolMock: vi.fn(() => ({ name: "grep" })),
 	createWriteToolMock: vi.fn(() => ({ name: "write" })),
 	createWebSearchToolMock: vi.fn(() => ({ name: "web_search" })),
 	createWebFetchToolMock: vi.fn(() => ({ name: "web_fetch" })),
@@ -101,6 +103,9 @@ const toolsConfig = {
 		tasks: {
 			enabled: true,
 		},
+		grep: {
+			enabled: true,
+		},
 		rtk: {
 			enabled: false,
 		},
@@ -110,6 +115,7 @@ const toolsConfig = {
 vi.mock("../src/tools/read.js", () => ({ createReadTool: createReadToolMock }));
 vi.mock("../src/tools/bash.js", () => ({ createBashTool: createBashToolMock }));
 vi.mock("../src/tools/edit.js", () => ({ createEditTool: createEditToolMock }));
+vi.mock("../src/tools/grep.js", () => ({ createGrepTool: createGrepToolMock }));
 vi.mock("../src/tools/write.js", () => ({ createWriteTool: createWriteToolMock }));
 vi.mock("../src/tools/web-search.js", () => ({ createWebSearchTool: createWebSearchToolMock }));
 vi.mock("../src/tools/web-fetch.js", () => ({ createWebFetchTool: createWebFetchToolMock }));
@@ -131,6 +137,7 @@ const ALL_TOOL_NAMES = [
 	"read",
 	"bash",
 	"edit",
+	"grep",
 	"write",
 	"web_search",
 	"web_fetch",
@@ -185,6 +192,7 @@ describe("tools index", () => {
 		createReadToolMock.mockClear();
 		createBashToolMock.mockClear();
 		createEditToolMock.mockClear();
+		createGrepToolMock.mockClear();
 		createWriteToolMock.mockClear();
 		createWebSearchToolMock.mockClear();
 		createWebFetchToolMock.mockClear();
@@ -231,6 +239,7 @@ describe("tools index", () => {
 			"read",
 			"bash",
 			"edit",
+			"grep",
 			"write",
 			"session_search",
 			"memory_save",
@@ -351,6 +360,7 @@ describe("tools index", () => {
 			"read",
 			"bash",
 			"edit",
+			"grep",
 			"write",
 			"web_search",
 			"web_fetch",

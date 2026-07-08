@@ -64,6 +64,7 @@ describe("tool registry", () => {
 			"read",
 			"bash",
 			"edit",
+			"grep",
 			"write",
 			"web_search",
 			"web_fetch",
@@ -79,12 +80,20 @@ describe("tool registry", () => {
 
 	it("restricts the sub-agent set to file and web tools", () => {
 		const tools = buildToolSet(makeContext(), { forSubagent: true });
-		expect(tools.map((tool) => tool.name)).toEqual(["read", "bash", "edit", "write", "web_search", "web_fetch"]);
+		expect(tools.map((tool) => tool.name)).toEqual([
+			"read",
+			"bash",
+			"edit",
+			"grep",
+			"write",
+			"web_search",
+			"web_fetch",
+		]);
 	});
 
 	it("omits web tools for sub-agents when no web config is present", () => {
 		const tools = buildToolSet(makeContext({ webConfig: undefined }), { forSubagent: true });
-		expect(tools.map((tool) => tool.name)).toEqual(["read", "bash", "edit", "write"]);
+		expect(tools.map((tool) => tool.name)).toEqual(["read", "bash", "edit", "grep", "write"]);
 	});
 
 	it("honors config gates on the main path", () => {

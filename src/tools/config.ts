@@ -53,6 +53,9 @@ export interface PipiclawToolsConfig {
 		tasks: {
 			enabled: boolean;
 		};
+		grep: {
+			enabled: boolean;
+		};
 		rtk: {
 			enabled: boolean;
 		};
@@ -105,6 +108,9 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 			enabled: true,
 		},
 		tasks: {
+			enabled: true,
+		},
+		grep: {
 			enabled: true,
 		},
 		rtk: {
@@ -171,6 +177,7 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 	const manage = isRecord(skills.manage) ? skills.manage : {};
 	const events = isRecord(tools.events) ? tools.events : {};
 	const tasks = isRecord(tools.tasks) ? tools.tasks : {};
+	const grep = isRecord(tools.grep) ? tools.grep : {};
 	const rtk = isRecord(tools.rtk) ? tools.rtk : {};
 	const search = isRecord(web.search) ? web.search : {};
 	const fetch = isRecord(web.fetch) ? web.fetch : {};
@@ -315,6 +322,9 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 			},
 			tasks: {
 				enabled: typeof tasks.enabled === "boolean" ? tasks.enabled : DEFAULT_TOOLS_CONFIG.tools.tasks.enabled,
+			},
+			grep: {
+				enabled: typeof grep.enabled === "boolean" ? grep.enabled : DEFAULT_TOOLS_CONFIG.tools.grep.enabled,
 			},
 			rtk: {
 				enabled: typeof rtk.enabled === "boolean" ? rtk.enabled : DEFAULT_TOOLS_CONFIG.tools.rtk.enabled,

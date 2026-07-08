@@ -8,6 +8,7 @@ import { createBashTool } from "./bash.js";
 import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
 import { createEventManageTool } from "./event-manage.js";
+import { createGrepTool } from "./grep.js";
 import { createMemorySaveTool } from "./memory-save.js";
 import { createReadTool } from "./read.js";
 import { createSessionSearchTool } from "./session-search.js";
@@ -112,6 +113,13 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		promptHint: "Surgical file edits",
 		availableToSubagents: true,
 		create: (ctx) => createEditTool(ctx.executor, fileToolOptions(ctx)),
+	},
+	{
+		name: "grep",
+		promptHint: "Search file contents with a regex; grouped, paginated, token-bounded — prefer over bash grep",
+		availableToSubagents: true,
+		enabledBy: (ctx) => ctx.toolsConfig?.tools.grep.enabled !== false,
+		create: (ctx) => createGrepTool(ctx.executor, fileToolOptions(ctx)),
 	},
 	{
 		name: "write",

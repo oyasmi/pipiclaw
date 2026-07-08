@@ -40,10 +40,12 @@ describe("edit tool", () => {
 		expect(executor.calls[1].command).toContain("cat > 'notes.txt'");
 		expect(executor.calls[1].command).toContain("> 'notes.txt'");
 		expect(executor.calls[1].options?.stdin).toBe("alpha\ndelta\ngamma\n");
-		expect(result.content[0]).toMatchObject({
-			type: "text",
-			text: "Successfully replaced text in notes.txt. Changed 4 characters to 5 characters.",
-		});
+		expect(result.content[0].type).toBe("text");
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Successfully replaced text in notes.txt. Changed 4 characters to 5 characters.");
+		// The diff is echoed into the model-visible text so it can confirm the change landed.
+		expect(text).toContain("-2 beta");
+		expect(text).toContain("+2 delta");
 		expect(result.details).toMatchObject({
 			diff: expect.stringContaining("-2 beta"),
 		});
@@ -68,10 +70,9 @@ describe("edit tool", () => {
 		});
 
 		expect(executor.calls[1].options?.stdin).toBe("a\nbar\nbar\nb\n");
-		expect(result.content[0]).toMatchObject({
-			type: "text",
-			text: "Replaced 2 occurrences in notes.txt.",
-		});
+		expect(result.content[0].type).toBe("text");
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Replaced 2 occurrences in notes.txt.");
 	});
 
 	it("rejects duplicate matches unless replaceAll is set", async () => {
@@ -125,5 +126,31 @@ describe("edit tool", () => {
 				newText: "beta",
 			}),
 		).rejects.toThrow("No changes made");
+	});
+
+	it("escalates a repeated byte-identical no-op to a hard stop, then resets after a real edit", async () => {
+		// The read (`cat`) returns the same content on every no-op attempt.
+		const reads = Array.from({ length: 4 }, () => ({ code: 0, stdout: "beta\n", stderr: "" }));
+		const tool = createEditTool(new ScriptedExecutor(reads));
+		const noop = { label: "edit", path: "notes.txt", oldText: "beta", newText: "beta" };
+
+		await expect(tool.execute("c1", noop)).rejects.toThrow(/No changes made/);
+		await expect(tool.execute("c2", noop)).rejects.toThrow(/No changes made/);
+		await expect(tool.execute("c3", noop)).rejects.toThrow(/STOP\./);
+
+		// A successful edit clears the streak so a later same-payload no-op starts soft again.
+		const tool2 = new ScriptedExecutor([
+			{ code: 0, stdout: "beta\n", stderr: "" }, // no-op #1
+			{ code: 0, stdout: "beta\n", stderr: "" }, // no-op #2
+			{ code: 0, stdout: "alpha\n", stderr: "" }, // real edit read
+			{ code: 0, stdout: "", stderr: "" }, // real edit write
+			{ code: 0, stdout: "beta\n", stderr: "" }, // no-op after reset
+		]);
+		const edit = createEditTool(tool2);
+		await expect(edit.execute("c1", noop)).rejects.toThrow(/No changes made/);
+		await expect(edit.execute("c2", noop)).rejects.toThrow(/No changes made/);
+		await edit.execute("c3", { label: "edit", path: "notes.txt", oldText: "alpha", newText: "omega" });
+		// Streak was cleared by the successful edit: this is soft again, not the hard stop.
+		await expect(edit.execute("c4", noop)).rejects.toThrow(/No changes made/);
 	});
 });

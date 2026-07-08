@@ -69,6 +69,9 @@ function formatCommandBlockMessage(command: string, category?: string, reason?: 
 	} else {
 		lines.push(`Command: ${command}`);
 	}
+	lines.push(
+		"If this operation is genuinely needed, explain the intent to the user so they can adjust security.json.",
+	);
 	return lines.join("\n");
 }
 
