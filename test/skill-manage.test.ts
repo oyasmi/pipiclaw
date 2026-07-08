@@ -2,7 +2,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { manageWorkspaceSkill } from "../src/tools/skill-manage.js";
+import { createSkillManageTool, listWorkspaceSkills, manageWorkspaceSkill } from "../src/tools/skill-manage.js";
 import { createTempWorkspace } from "./helpers/fixtures.js";
 
 const tempDirs: string[] = [];
@@ -142,5 +142,38 @@ describe("skill manage", () => {
 				},
 			),
 		).rejects.toThrow("pipe-to-shell");
+	});
+
+	it("lists workspace skills via the merged tool", async () => {
+		const workspaceDir = createWorkspace();
+		const skillDir = join(workspaceDir, "skills", "release-checklist");
+		await mkdir(skillDir, { recursive: true });
+		await writeFile(join(skillDir, "SKILL.md"), skillMarkdown("release-checklist"), "utf-8");
+
+		const summaries = await listWorkspaceSkills({ workspaceDir, workspacePath: "/workspace" });
+		expect(summaries.map((s) => s.name)).toEqual(["release-checklist"]);
+
+		const tool = createSkillManageTool({ workspaceDir, workspacePath: "/workspace" });
+		const result = await tool.execute("call", { label: "list", action: "list" });
+		expect(result.details).toMatchObject({ kind: "skill_manage", action: "list", count: 1 });
+	});
+
+	it("views a skill's contents via the merged tool", async () => {
+		const workspaceDir = createWorkspace();
+		const skillDir = join(workspaceDir, "skills", "release-checklist");
+		await mkdir(skillDir, { recursive: true });
+		await writeFile(join(skillDir, "SKILL.md"), skillMarkdown("release-checklist"), "utf-8");
+
+		const tool = createSkillManageTool({ workspaceDir, workspacePath: "/workspace" });
+		const result = await tool.execute("call", { label: "view", action: "view", name: "release-checklist" });
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Skill: release-checklist");
+		expect(text).toContain("Follow the workflow.");
+	});
+
+	it("requires a name for non-list actions", async () => {
+		const workspaceDir = createWorkspace();
+		const tool = createSkillManageTool({ workspaceDir, workspacePath: "/workspace" });
+		await expect(tool.execute("call", { label: "view", action: "view" })).rejects.toThrow(/requires a skill name/);
 	});
 });

@@ -14,9 +14,7 @@ import { createJobTool } from "./job.js";
 import { createMemoryManageTool } from "./memory-manage.js";
 import { createReadTool } from "./read.js";
 import { createSessionSearchTool } from "./session-search.js";
-import { createSkillListTool } from "./skill-list.js";
 import { createSkillManageTool } from "./skill-manage.js";
-import { createSkillViewTool } from "./skill-view.js";
 import { createTaskManageTool } from "./task-manage.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { createWebSearchTool } from "./web-search.js";
@@ -110,6 +108,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 			createBashTool(ctx.executor, {
 				...fileToolOptions(ctx),
 				rtkEnabled: ctx.rtkEnabled === true,
+				interceptorEnabled: ctx.toolsConfig?.tools.bashInterceptor.enabled === true,
 				...(ctx.jobManager ? { jobManager: ctx.jobManager } : {}),
 				...(ctx.bashDefaultTimeoutSeconds !== undefined
 					? { defaultTimeoutSeconds: ctx.bashDefaultTimeoutSeconds }
@@ -191,22 +190,8 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 			}),
 	},
 	{
-		name: "skill_list",
-		promptHint: "List workspace-level procedural memory in skills/",
-		availableToSubagents: false,
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.skills.manage.enabled !== false,
-		create: (ctx) => createSkillListTool({ workspaceDir: ctx.workspaceDir, workspacePath: ctx.workspacePath }),
-	},
-	{
-		name: "skill_view",
-		promptHint: "Inspect a workspace-level skill's contents",
-		availableToSubagents: false,
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.skills.manage.enabled !== false,
-		create: (ctx) => createSkillViewTool({ workspaceDir: ctx.workspaceDir, workspacePath: ctx.workspacePath }),
-	},
-	{
 		name: "skill_manage",
-		promptHint: "Create or maintain workspace-level procedural memory in skills/",
+		promptHint: "List, view, create, or maintain workspace-level procedural memory in skills/",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.skills.manage.enabled !== false,
 		create: (ctx) => createSkillManageTool({ workspaceDir: ctx.workspaceDir, workspacePath: ctx.workspacePath }),

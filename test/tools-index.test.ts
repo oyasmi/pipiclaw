@@ -12,8 +12,6 @@ const {
 	createWebFetchToolMock,
 	createSessionSearchToolMock,
 	createMemoryManageToolMock,
-	createSkillListToolMock,
-	createSkillViewToolMock,
 	createSkillManageToolMock,
 	createEventManageToolMock,
 	createTaskManageToolMock,
@@ -28,8 +26,6 @@ const {
 	createWebFetchToolMock: vi.fn(() => ({ name: "web_fetch" })),
 	createSessionSearchToolMock: vi.fn(() => ({ name: "session_search" })),
 	createMemoryManageToolMock: vi.fn(() => ({ name: "memory_manage" })),
-	createSkillListToolMock: vi.fn(() => ({ name: "skill_list" })),
-	createSkillViewToolMock: vi.fn(() => ({ name: "skill_view" })),
 	createSkillManageToolMock: vi.fn(() => ({ name: "skill_manage" })),
 	createEventManageToolMock: vi.fn(() => ({ name: "event_manage" })),
 	createTaskManageToolMock: vi.fn(() => ({ name: "task_manage" })),
@@ -109,6 +105,9 @@ const toolsConfig = {
 		jobs: {
 			enabled: false,
 		},
+		bashInterceptor: {
+			enabled: false,
+		},
 		rtk: {
 			enabled: false,
 		},
@@ -124,8 +123,6 @@ vi.mock("../src/tools/web-search.js", () => ({ createWebSearchTool: createWebSea
 vi.mock("../src/tools/web-fetch.js", () => ({ createWebFetchTool: createWebFetchToolMock }));
 vi.mock("../src/tools/session-search.js", () => ({ createSessionSearchTool: createSessionSearchToolMock }));
 vi.mock("../src/tools/memory-manage.js", () => ({ createMemoryManageTool: createMemoryManageToolMock }));
-vi.mock("../src/tools/skill-list.js", () => ({ createSkillListTool: createSkillListToolMock }));
-vi.mock("../src/tools/skill-view.js", () => ({ createSkillViewTool: createSkillViewToolMock }));
 vi.mock("../src/tools/skill-manage.js", () => ({ createSkillManageTool: createSkillManageToolMock }));
 vi.mock("../src/tools/event-manage.js", () => ({ createEventManageTool: createEventManageToolMock }));
 vi.mock("../src/tools/task-manage.js", () => ({ createTaskManageTool: createTaskManageToolMock }));
@@ -146,8 +143,6 @@ const ALL_TOOL_NAMES = [
 	"web_fetch",
 	"session_search",
 	"memory_manage",
-	"skill_list",
-	"skill_view",
 	"skill_manage",
 	"event_manage",
 	"task_manage",
@@ -202,8 +197,6 @@ describe("tools index", () => {
 		createWebFetchToolMock.mockClear();
 		createSessionSearchToolMock.mockClear();
 		createMemoryManageToolMock.mockClear();
-		createSkillListToolMock.mockClear();
-		createSkillViewToolMock.mockClear();
 		createSkillManageToolMock.mockClear();
 		createSubAgentToolMock.mockClear();
 	});
@@ -247,8 +240,6 @@ describe("tools index", () => {
 			"write",
 			"session_search",
 			"memory_manage",
-			"skill_list",
-			"skill_view",
 			"skill_manage",
 			"event_manage",
 			"task_manage",
@@ -408,8 +399,6 @@ describe("tools index", () => {
 			"web_fetch",
 			"session_search",
 			"memory_manage",
-			"skill_list",
-			"skill_view",
 			"skill_manage",
 			"event_manage",
 			"task_manage",
@@ -433,6 +422,7 @@ describe("tools index", () => {
 			},
 			channelId: "dm_42",
 			rtkEnabled: false,
+			interceptorEnabled: false,
 		});
 		expect(createWebSearchToolMock).toHaveBeenCalledWith({
 			webConfig: toolsConfig.tools.web,

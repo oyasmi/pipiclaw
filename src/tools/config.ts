@@ -59,6 +59,9 @@ export interface PipiclawToolsConfig {
 		jobs: {
 			enabled: boolean;
 		};
+		bashInterceptor: {
+			enabled: boolean;
+		};
 		rtk: {
 			enabled: boolean;
 		};
@@ -117,6 +120,9 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 			enabled: true,
 		},
 		jobs: {
+			enabled: false,
+		},
+		bashInterceptor: {
 			enabled: false,
 		},
 		rtk: {
@@ -185,6 +191,7 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 	const tasks = isRecord(tools.tasks) ? tools.tasks : {};
 	const grep = isRecord(tools.grep) ? tools.grep : {};
 	const jobs = isRecord(tools.jobs) ? tools.jobs : {};
+	const bashInterceptor = isRecord(tools.bashInterceptor) ? tools.bashInterceptor : {};
 	const rtk = isRecord(tools.rtk) ? tools.rtk : {};
 	const search = isRecord(web.search) ? web.search : {};
 	const fetch = isRecord(web.fetch) ? web.fetch : {};
@@ -335,6 +342,12 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 			},
 			jobs: {
 				enabled: typeof jobs.enabled === "boolean" ? jobs.enabled : DEFAULT_TOOLS_CONFIG.tools.jobs.enabled,
+			},
+			bashInterceptor: {
+				enabled:
+					typeof bashInterceptor.enabled === "boolean"
+						? bashInterceptor.enabled
+						: DEFAULT_TOOLS_CONFIG.tools.bashInterceptor.enabled,
 			},
 			rtk: {
 				enabled: typeof rtk.enabled === "boolean" ? rtk.enabled : DEFAULT_TOOLS_CONFIG.tools.rtk.enabled,

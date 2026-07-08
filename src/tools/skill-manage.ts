@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
@@ -8,30 +8,43 @@ import {
 	resolveSkillPath,
 	resolveSkillSupportingFile,
 	scanSkillContent,
+	validateSkillFrontmatter,
 	validateSkillMarkdown,
+	validateSkillName,
 } from "./skill-security.js";
+import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 const skillManageSchema = Type.Object({
-	label: Type.String({ description: "Brief description of the skill management change (shown to user)" }),
-	action: Type.Union([Type.Literal("create"), Type.Literal("patch"), Type.Literal("write_file")], {
-		description: 'The skill management action to perform: "create", "patch", or "write_file".',
-	}),
-	name: Type.String({ description: "Workspace skill name" }),
+	label: Type.String({ description: "Brief description of the skill action (shown to user)" }),
+	action: Type.Union(
+		[
+			Type.Literal("list"),
+			Type.Literal("view"),
+			Type.Literal("create"),
+			Type.Literal("patch"),
+			Type.Literal("write_file"),
+		],
+		{
+			description:
+				'"list" workspace skills, "view" one skill\'s contents, or "create"/"patch"/"write_file" to author them.',
+		},
+	),
+	name: Type.Optional(Type.String({ description: "Workspace skill name (required for all actions except list)." })),
 	content: Type.Optional(Type.String({ description: "Full content for create/write_file." })),
 	filePath: Type.Optional(
 		Type.String({
 			description:
-				"Optional supporting file path for patch/write_file. Defaults to SKILL.md for patch. Supporting files must be under references/, templates/, scripts/, or assets/.",
+				"Supporting file path inside the skill for view/patch/write_file. Defaults to SKILL.md. Supporting files must be under references/, templates/, scripts/, or assets/.",
 		}),
 	),
 	find: Type.Optional(Type.String({ description: "Exact text to replace when action is patch." })),
 	replace: Type.Optional(Type.String({ description: "Replacement text when action is patch." })),
 });
 
-export type SkillManageAction = "create" | "patch" | "write_file";
+type SkillWriteAction = "create" | "patch" | "write_file";
 
 export interface SkillManageResult {
-	action: SkillManageAction;
+	action: SkillWriteAction;
 	name: string;
 	path: string;
 	bytesWritten: number;
@@ -40,12 +53,19 @@ export interface SkillManageResult {
 }
 
 export interface SkillManageRequest {
-	action: SkillManageAction;
+	action: SkillWriteAction;
 	name: string;
 	content?: string;
 	filePath?: string;
 	find?: string;
 	replace?: string;
+}
+
+export interface WorkspaceSkillSummary {
+	name: string;
+	description: string;
+	path: string;
+	warning?: string;
 }
 
 export interface SkillManageToolOptions {
@@ -60,11 +80,78 @@ function toWorkspacePath(options: SkillManageToolOptions, hostPath: string): str
 	return hostPath;
 }
 
-function parseAction(action: string): SkillManageAction {
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+	return error instanceof Error && "code" in error;
+}
+
+function extractDescription(content: string): string {
+	const match = content.replace(/\r\n/g, "\n").match(/^---\n([\s\S]*?)\n---/);
+	if (!match) {
+		return "";
+	}
+	for (const line of (match[1] ?? "").split("\n")) {
+		const fieldMatch = line.match(/^description:\s*(.*)$/);
+		if (fieldMatch) {
+			return fieldMatch[1]!.replace(/^["']|["']$/g, "").trim();
+		}
+	}
+	return "";
+}
+
+export async function listWorkspaceSkills(options: SkillManageToolOptions): Promise<WorkspaceSkillSummary[]> {
+	const skillsDir = join(options.workspaceDir, "skills");
+	let names: string[];
+	try {
+		names = await readdir(skillsDir);
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") {
+			return [];
+		}
+		throw error;
+	}
+
+	const summaries: WorkspaceSkillSummary[] = [];
+	for (const name of names.sort()) {
+		const nameValidation = validateSkillName(name);
+		if (!nameValidation.ok) {
+			continue;
+		}
+		const skillDir = join(skillsDir, name);
+		const skillStats = await stat(skillDir).catch(() => null);
+		if (!skillStats?.isDirectory()) {
+			continue;
+		}
+		const skillPath = join(skillDir, "SKILL.md");
+		let content: string;
+		try {
+			const skillFileStats = await stat(skillPath);
+			if (!skillFileStats.isFile()) {
+				continue;
+			}
+			content = await readFile(skillPath, "utf-8");
+		} catch (error) {
+			if (isNodeError(error) && error.code === "ENOENT") {
+				continue;
+			}
+			throw error;
+		}
+		const validation = validateSkillFrontmatter(content, name);
+		summaries.push({
+			name,
+			description: extractDescription(content),
+			path: `${options.workspacePath}/skills/${name}/SKILL.md`,
+			warning: validation.ok ? undefined : validation.error,
+		});
+	}
+
+	return summaries;
+}
+
+function parseWriteAction(action: string): SkillWriteAction {
 	if (action === "create" || action === "patch" || action === "write_file") {
 		return action;
 	}
-	throw new Error('Unsupported skill action. Use "create", "patch", or "write_file".');
+	throw new Error('Unsupported skill action. Use "list", "view", "create", "patch", or "write_file".');
 }
 
 function ensureSkillMarkdownSafe(content: string, name: string): void {
@@ -163,27 +250,62 @@ export async function manageWorkspaceSkill(
 	};
 }
 
+async function viewWorkspaceSkill(options: SkillManageToolOptions, name: string, filePath: string | undefined) {
+	const skillDir = resolveSkillPath(options.workspaceDir, name);
+	const targetPath = filePath ? resolveSkillSupportingFile(skillDir, filePath) : join(skillDir, "SKILL.md");
+	const workspacePath = toWorkspacePath(options, targetPath);
+	const content = await readFile(targetPath, "utf-8");
+
+	// Cap with the shared truncation limits so a large supporting file cannot flood context.
+	const truncation = truncateHead(content);
+	let body = truncation.content;
+	if (truncation.truncated) {
+		body += `\n\n[Truncated at ${formatSize(DEFAULT_MAX_BYTES)}. Use the read tool on ${workspacePath} to page through the rest.]`;
+	}
+	return {
+		content: [{ type: "text" as const, text: `Skill: ${name}\nPath: ${workspacePath}\n\n${body}` }],
+		details: { kind: "skill_manage", action: "view", name, path: workspacePath, truncated: truncation.truncated },
+	};
+}
+
 export function createSkillManageTool(options: SkillManageToolOptions): AgentTool<typeof skillManageSchema> {
 	return {
 		name: "skill_manage",
 		label: "skill_manage",
 		description:
-			"Create or update workspace-level Pipiclaw skills as procedural memory. Supports create, patch, and write_file only; no channel-scoped skills.",
+			"Manage workspace-level Pipiclaw skills (procedural memory): list them, view one's contents, or author them " +
+			"with create/patch/write_file. No channel-scoped skills.",
 		parameters: skillManageSchema,
 		execute: async (
 			_toolCallId: string,
 			args: {
 				label: string;
 				action: string;
-				name: string;
+				name?: string;
 				content?: string;
 				filePath?: string;
 				find?: string;
 				replace?: string;
 			},
 		) => {
+			if (args.action === "list") {
+				const skills = await listWorkspaceSkills(options);
+				return {
+					content: [{ type: "text", text: JSON.stringify({ skills }) }],
+					details: { kind: "skill_manage", action: "list", count: skills.length },
+				};
+			}
+
+			if (!args.name) {
+				throw new Error(`Action "${args.action}" requires a skill name.`);
+			}
+
+			if (args.action === "view") {
+				return viewWorkspaceSkill(options, args.name, args.filePath);
+			}
+
 			const result = await manageWorkspaceSkill(options, {
-				action: parseAction(args.action),
+				action: parseWriteAction(args.action),
 				name: args.name,
 				content: args.content,
 				filePath: args.filePath,
@@ -192,10 +314,7 @@ export function createSkillManageTool(options: SkillManageToolOptions): AgentToo
 			});
 			return {
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-				details: {
-					kind: "skill_manage",
-					...result,
-				},
+				details: { kind: "skill_manage", ...result },
 			};
 		},
 	};

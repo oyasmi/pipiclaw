@@ -69,6 +69,45 @@ export interface BashToolOptions {
 	 * background execution. Absent on the sub-agent path, so sub-agents cannot background jobs.
 	 */
 	jobManager?: ChannelJobManager;
+	/**
+	 * When true (`tools.bashInterceptor.enabled`), block a few bare shell patterns that have a
+	 * better dedicated tool and steer the model to it. Off by default; main path only.
+	 */
+	interceptorEnabled?: boolean;
+}
+
+/**
+ * Bare shell patterns that a dedicated tool handles better (with truncation, grouping, or a diff).
+ * Deliberately narrow — only unambiguous bare forms, never piped/compound commands — so a legitimate
+ * `cat x | jq` is untouched. Runs after the security guard (which must see the real command) and
+ * before rtk. Complements rtk: rtk makes output cheaper, this steers to the right tool.
+ */
+const BASH_INTERCEPTOR_RULES: Array<{ test: RegExp; tool: string; why: string }> = [
+	{
+		test: /^\s*cat\s+[^|&;<>`$()]+$/,
+		tool: "read",
+		why: "it truncates safely and tells you how to page through the rest",
+	},
+	{
+		test: /^\s*grep\b[^|&;]*\s-[A-Za-z]*r[A-Za-z]*\b/,
+		tool: "grep",
+		why: "it groups, paginates, and bounds output instead of flooding the context",
+	},
+	{ test: /^\s*rg\b[^|&;]*$/, tool: "grep", why: "it groups, paginates, and bounds output" },
+	{
+		test: /\b(?:sed|perl)\b[^|&;]*\s-i\b/,
+		tool: "edit",
+		why: "it verifies a unique match and echoes a diff of the change",
+	},
+];
+
+function checkBashInterception(command: string): string | null {
+	for (const rule of BASH_INTERCEPTOR_RULES) {
+		if (rule.test.test(command)) {
+			return `Blocked: use the ${rule.tool} tool instead — ${rule.why}. Command: ${command}`;
+		}
+	}
+	return null;
 }
 
 function formatCommandBlockMessage(command: string, category?: string, reason?: string, matchedText?: string): string {
@@ -126,6 +165,15 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 					throw new Error(
 						formatCommandBlockMessage(command, guardResult.category, guardResult.reason, guardResult.matchedText),
 					);
+				}
+			}
+
+			// Steer a few bare shell patterns to their dedicated tool. After the guard (which must see
+			// the real command), before rtk (which would reshape it). Off by default.
+			if (options.interceptorEnabled) {
+				const intercepted = checkBashInterception(command);
+				if (intercepted) {
+					throw new Error(intercepted);
 				}
 			}
 

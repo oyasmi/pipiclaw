@@ -53,6 +53,33 @@ describe("bash tool", () => {
 		expect(executor.calls.map((c) => c.command)).toEqual(["git status"]);
 	});
 
+	it("intercepts bare tool-better commands only when the interceptor is enabled", async () => {
+		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
+		const gated = createBashTool(executor, { interceptorEnabled: true });
+
+		await expect(gated.execute("call", { label: "x", command: "cat notes.txt" })).rejects.toThrow(
+			/use the read tool/,
+		);
+		await expect(gated.execute("call", { label: "x", command: "grep -rn foo ." })).rejects.toThrow(
+			/use the grep tool/,
+		);
+		await expect(gated.execute("call", { label: "x", command: "sed -i 's/a/b/' f" })).rejects.toThrow(
+			/use the edit tool/,
+		);
+
+		// Compound / piped forms are legitimate and must pass through.
+		await gated.execute("call", { label: "x", command: "cat notes.txt | jq ." });
+		await gated.execute("call", { label: "x", command: "grep foo file.txt" });
+		expect(executor.calls.map((c) => c.command)).toEqual(["cat notes.txt | jq .", "grep foo file.txt"]);
+	});
+
+	it("does not intercept when the interceptor is disabled (default)", async () => {
+		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
+		const tool = createBashTool(executor);
+		await tool.execute("call", { label: "x", command: "cat notes.txt" });
+		expect(executor.calls.map((c) => c.command)).toEqual(["cat notes.txt"]);
+	});
+
 	it("rejects async execution when no job manager is available", async () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
 		const tool = createBashTool(executor);

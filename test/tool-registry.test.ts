@@ -70,8 +70,6 @@ describe("tool registry", () => {
 			"web_fetch",
 			"session_search",
 			"memory_manage",
-			"skill_list",
-			"skill_view",
 			"skill_manage",
 			"event_manage",
 			"task_manage",

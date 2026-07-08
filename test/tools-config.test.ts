@@ -53,6 +53,7 @@ describe("tools config", () => {
 				tasks: DEFAULT_TOOLS_CONFIG.tools.tasks,
 				grep: DEFAULT_TOOLS_CONFIG.tools.grep,
 				jobs: DEFAULT_TOOLS_CONFIG.tools.jobs,
+				bashInterceptor: DEFAULT_TOOLS_CONFIG.tools.bashInterceptor,
 				rtk: DEFAULT_TOOLS_CONFIG.tools.rtk,
 				web: {
 					...DEFAULT_TOOLS_CONFIG.tools.web,
