@@ -25,12 +25,29 @@ describe("prompt-builder", () => {
 		expect(prompt).toContain("SESSION.md");
 		expect(prompt).toContain("The runtime may inject a small amount of relevant memory context");
 		expect(prompt).toContain("Available predefined sub-agents:\n- reviewer");
-		expect(prompt).toContain("Maximum 5 events can be queued.");
+		// event_manage is not in this tool set → file-tool guidance, no stale "5 events" cap.
+		expect(prompt).not.toContain("Maximum 5 events");
+		expect(prompt).toContain("de-duplicates by filename");
 		expect(prompt).toContain("web_search");
 		expect(prompt).toContain("web_fetch");
 		expect(prompt).toContain("return untrusted external content");
 		expect(prompt).not.toContain("scratch/");
 		expect(prompt).not.toContain("channel-specific tools");
+	});
+
+	it("advertises the event_manage scheduling path and its guards when the tool is present", () => {
+		const prompt = buildAppendSystemPrompt(
+			"/workspace/root",
+			"dm_123",
+			{ type: "host" },
+			{ tools: [{ name: "event_manage", description: "Schedule events" }] },
+		);
+
+		expect(prompt).toContain("Prefer the event_manage tool");
+		expect(prompt).toContain("no immediate events");
+		expect(prompt).toContain("every 30 minutes (5 minutes when it carries a preAction gate)");
+		expect(prompt).toContain("at most 50 event files");
+		expect(prompt).not.toContain("Maximum 5 events");
 	});
 
 	it("builds docker runtime prompts with docker-specific instructions", () => {

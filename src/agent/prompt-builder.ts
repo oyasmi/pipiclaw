@@ -117,7 +117,17 @@ You can schedule events that wake you up at specific times or when external thin
 ### Cron Format
 \`minute hour day-of-month month day-of-week\`
 
-### Creating Events
+${
+	hasTool("event_manage")
+		? `### Creating Events
+Prefer the event_manage tool to create, update, or delete your own scheduled events: it validates the payload on write (an invalid event would otherwise be silently dropped) and enforces the scheduling guards below. Editing the JSON files directly with the file tools still works but skips that validation.
+
+### Silent Completion
+For periodic events where there's nothing to report, respond with just \`[SILENT]\`. This deletes the status message. Use this to avoid spam when periodic checks find nothing.
+
+### Limits
+event_manage rejects self-triggering loops: no immediate events (do that work in the current turn), one-shot at least 2 minutes out, periodic no more often than every 30 minutes (5 minutes when it carries a preAction gate), and at most 50 event files. Name task-owned events \`task.<channelId>.<taskId>.<use>\` so they clean up together.`
+		: `### Creating Events
 Create a JSON file under \`${workspacePath}/events/\` with the appropriate event payload.
 Prefer the file tools for creating or editing the event file. Use shell commands only when they are the clearest option.
 
@@ -125,7 +135,8 @@ Prefer the file tools for creating or editing the event file. Use shell commands
 For periodic events where there's nothing to report, respond with just \`[SILENT]\`. This deletes the status message. Use this to avoid spam when periodic checks find nothing.
 
 ### Limits
-Maximum 5 events can be queued.`);
+The scheduler ignores invalid files and de-duplicates by filename; keep the events directory tidy.`
+}`);
 
 	const runtimeBehaviorLines = [
 		"- The runtime may inject a small amount of relevant memory context from SESSION.md / MEMORY.md / HISTORY.md into a turn when it is clearly useful.",
