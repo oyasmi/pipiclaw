@@ -106,6 +106,9 @@ const toolsConfig = {
 		grep: {
 			enabled: true,
 		},
+		jobs: {
+			enabled: false,
+		},
 		rtk: {
 			enabled: false,
 		},
@@ -189,6 +192,7 @@ describe("tools index", () => {
 		toolsConfig.tools.memory.sessionSearch.enabled = true;
 		toolsConfig.tools.memory.save.enabled = true;
 		toolsConfig.tools.skills.manage.enabled = true;
+		toolsConfig.tools.jobs.enabled = false;
 		createReadToolMock.mockClear();
 		createBashToolMock.mockClear();
 		createEditToolMock.mockClear();
@@ -253,6 +257,44 @@ describe("tools index", () => {
 		expect(createWebSearchToolMock).not.toHaveBeenCalled();
 		expect(createWebFetchToolMock).not.toHaveBeenCalled();
 		toolsConfig.tools.web.enable = true;
+	});
+
+	it("registers the job tool only when tools.jobs.enabled is on", () => {
+		const baseArgs = {
+			executor,
+			getCurrentModel: vi.fn(),
+			getAvailableModels: vi.fn(() => []),
+			resolveApiKey: vi.fn(),
+			workspaceDir: "/repo",
+			channelDir: "/repo/dm_42",
+			workspacePath: "/workspace",
+			channelId: "dm_42",
+			sandboxConfig: { type: "host" as const },
+			getSubAgentDiscovery: vi.fn(),
+			getMemoryRecallSettings: vi.fn(() => ({
+				enabled: true,
+				maxCandidates: 8,
+				maxInjected: 3,
+				maxChars: 3500,
+				rerankWithModel: false,
+			})),
+			getSessionSearchSettings: vi.fn(() => ({
+				enabled: true,
+				maxFiles: 12,
+				maxChunks: 80,
+				maxCharsPerChunk: 1200,
+				summarizeWithModel: false,
+				timeoutMs: 12000,
+			})),
+			memoryCandidateStore: createMemoryCandidateStore(),
+		};
+
+		expect(createPipiclawTools(baseArgs).map((tool) => tool.name)).not.toContain("job");
+
+		toolsConfig.tools.jobs.enabled = true;
+		expect(
+			createPipiclawTools({ ...baseArgs, memoryCandidateStore: createMemoryCandidateStore() }).map((t) => t.name),
+		).toContain("job");
 	});
 
 	it("skips session_search when disabled in tools config", () => {

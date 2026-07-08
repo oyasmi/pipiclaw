@@ -1,5 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import type { Executor } from "../sandbox.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
@@ -9,6 +10,7 @@ import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
 import { createEventManageTool } from "./event-manage.js";
 import { createGrepTool } from "./grep.js";
+import { createJobTool } from "./job.js";
 import { createMemoryManageTool } from "./memory-manage.js";
 import { createReadTool } from "./read.js";
 import { createSessionSearchTool } from "./session-search.js";
@@ -45,6 +47,11 @@ export interface ToolBuildContext {
 	bashDefaultTimeoutSeconds?: number;
 	/** Gates the bash tool's rtk command optimizer (`tools.rtk.enabled`). Threaded to both sets. */
 	rtkEnabled?: boolean;
+	/**
+	 * Present only on the main path when `tools.jobs.enabled` is on. Enables bash `async` and the
+	 * `job` tool. The sub-agent set never supplies it, so sub-agents get neither.
+	 */
+	jobManager?: ChannelJobManager;
 	getCurrentModel?: () => Model<Api>;
 	getAvailableModels?: () => Model<Api>[];
 	resolveApiKey?: (model: Model<Api>) => Promise<string>;
@@ -103,6 +110,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 			createBashTool(ctx.executor, {
 				...fileToolOptions(ctx),
 				rtkEnabled: ctx.rtkEnabled === true,
+				...(ctx.jobManager ? { jobManager: ctx.jobManager } : {}),
 				...(ctx.bashDefaultTimeoutSeconds !== undefined
 					? { defaultTimeoutSeconds: ctx.bashDefaultTimeoutSeconds }
 					: {}),
@@ -234,6 +242,14 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				channelDir: ctx.channelDir,
 				channelId: ctx.channelId,
 			}),
+	},
+	{
+		name: "job",
+		promptHint: "Inspect/poll/cancel background bash jobs started with bash async:true",
+		availableToSubagents: false,
+		// Present only when a job manager was supplied (tools.jobs.enabled on the main path).
+		enabledBy: (ctx) => ctx.jobManager !== undefined,
+		create: (ctx) => createJobTool({ jobManager: req(ctx.jobManager, "jobManager") }),
 	},
 ];
 

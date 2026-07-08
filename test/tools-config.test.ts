@@ -52,6 +52,7 @@ describe("tools config", () => {
 				events: DEFAULT_TOOLS_CONFIG.tools.events,
 				tasks: DEFAULT_TOOLS_CONFIG.tools.tasks,
 				grep: DEFAULT_TOOLS_CONFIG.tools.grep,
+				jobs: DEFAULT_TOOLS_CONFIG.tools.jobs,
 				rtk: DEFAULT_TOOLS_CONFIG.tools.rtk,
 				web: {
 					...DEFAULT_TOOLS_CONFIG.tools.web,

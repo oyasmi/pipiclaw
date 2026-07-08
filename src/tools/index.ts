@@ -1,5 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { getChannelJobManager } from "../agent/job-manager.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { APP_HOME_DIR } from "../paths.js";
 import type { Executor, SandboxConfig } from "../sandbox.js";
@@ -53,6 +54,10 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		webConfig: toolsConfig.tools.web,
 		toolsConfig,
 		rtkEnabled: toolsConfig.tools.rtk.enabled,
+		// Background jobs are opt-in; when off, bash `async` errors and the job tool is not registered.
+		jobManager: toolsConfig.tools.jobs.enabled
+			? getChannelJobManager(options.channelId, options.executor)
+			: undefined,
 		getCurrentModel: options.getCurrentModel,
 		getAvailableModels: options.getAvailableModels,
 		resolveApiKey: options.resolveApiKey,

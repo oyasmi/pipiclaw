@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
+import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { Executor } from "../sandbox.js";
 import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
@@ -38,6 +39,12 @@ const bashSchema = Type.Object({
 			description: `Timeout in seconds. Defaults to ${DEFAULT_BASH_TIMEOUT_SECONDS}s; pass a larger value for long-running commands.`,
 		}),
 	),
+	async: Type.Optional(
+		Type.Boolean({
+			description:
+				"Run in the background and return immediately with a job id instead of blocking. Use for long commands so the channel stays responsive; check it later with the job tool or a scheduled event_manage check-in.",
+		}),
+	),
 });
 
 interface BashToolDetails {
@@ -57,6 +64,11 @@ export interface BashToolOptions {
 	 * Gated by `tools.rtk.enabled` in tools.json.
 	 */
 	rtkEnabled?: boolean;
+	/**
+	 * Present only on the main path when `tools.jobs.enabled` is on. Enables `async: true`
+	 * background execution. Absent on the sub-agent path, so sub-agents cannot background jobs.
+	 */
+	jobManager?: ChannelJobManager;
 }
 
 function formatCommandBlockMessage(command: string, category?: string, reason?: string, matchedText?: string): string {
@@ -90,7 +102,12 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 		parameters: bashSchema,
 		execute: async (
 			_toolCallId: string,
-			{ command, timeout }: { label: string; command: string; timeout?: number },
+			{
+				label,
+				command,
+				timeout,
+				async: runAsync,
+			}: { label: string; command: string; timeout?: number; async?: boolean },
 			signal?: AbortSignal,
 		) => {
 			if (securityConfig.enabled && securityConfig.commandGuard.enabled) {
@@ -118,6 +135,31 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			const effectiveCommand = options.rtkEnabled ? await maybeOptimizeCommand(command, executor, signal) : command;
 
 			const effectiveTimeout = timeout ?? options.defaultTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS;
+
+			// Background execution: hand off to the channel's job manager and return immediately so
+			// the run queue is not held for the command's duration. Gated by `tools.jobs.enabled`
+			// (the main path supplies a jobManager; the sub-agent path never does).
+			if (runAsync) {
+				if (!options.jobManager) {
+					throw new Error(
+						"Background execution is not available here (enable tools.jobs.enabled, and note it is off for sub-agents). Run the command without async, or shorten it.",
+					);
+				}
+				const job = await options.jobManager.start(effectiveCommand, label, effectiveTimeout, signal);
+				return {
+					content: [
+						{
+							type: "text",
+							text:
+								`Background job ${job.id} started: ${label}\n` +
+								"It runs off-turn; you can end your turn now. Check it with the job tool (op:poll/list), " +
+								"or schedule an event_manage check-in to be woken when it is likely done.",
+						},
+					],
+					details: { kind: "bash", async: { state: "running", jobId: job.id } },
+				};
+			}
+
 			const result = await executor.exec(effectiveCommand, { timeout: effectiveTimeout, signal });
 			let output = "";
 			if (result.stdout) output += result.stdout;

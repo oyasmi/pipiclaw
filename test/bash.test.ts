@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ChannelJobManager } from "../src/agent/job-manager.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/sandbox.js";
 import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
 import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
@@ -50,6 +51,35 @@ describe("bash tool", () => {
 		await tool.execute("call", { label: "run", command: "git status" });
 
 		expect(executor.calls.map((c) => c.command)).toEqual(["git status"]);
+	});
+
+	it("rejects async execution when no job manager is available", async () => {
+		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
+		const tool = createBashTool(executor);
+
+		await expect(tool.execute("call", { label: "long", command: "sleep 100", async: true })).rejects.toThrow(
+			/Background execution is not available/,
+		);
+	});
+
+	it("starts a background job and returns immediately when async with a job manager", async () => {
+		const executor = new RecordingExecutor(async (command) => {
+			// The launch wrapper backgrounds the command and echoes the nohup PID.
+			if (command.includes("nohup")) {
+				return { code: 0, stdout: "4242\n", stderr: "" };
+			}
+			return { code: 0, stdout: "", stderr: "" };
+		});
+		const jobManager = new ChannelJobManager("dm_1", executor);
+		const tool = createBashTool(executor, { jobManager });
+
+		const result = await tool.execute("call", { label: "install deps", command: "npm install", async: true });
+
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Background job");
+		expect(text).toContain("install deps");
+		expect(result.details).toMatchObject({ kind: "bash", async: { state: "running" } });
+		expect(jobManager.runningCount()).toBe(1);
 	});
 
 	it("runs the rtk-rewritten command when the optimizer is enabled", async () => {
