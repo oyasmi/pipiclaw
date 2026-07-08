@@ -11,7 +11,7 @@ const {
 	createWebSearchToolMock,
 	createWebFetchToolMock,
 	createSessionSearchToolMock,
-	createMemorySaveToolMock,
+	createMemoryManageToolMock,
 	createSkillListToolMock,
 	createSkillViewToolMock,
 	createSkillManageToolMock,
@@ -27,7 +27,7 @@ const {
 	createWebSearchToolMock: vi.fn(() => ({ name: "web_search" })),
 	createWebFetchToolMock: vi.fn(() => ({ name: "web_fetch" })),
 	createSessionSearchToolMock: vi.fn(() => ({ name: "session_search" })),
-	createMemorySaveToolMock: vi.fn(() => ({ name: "memory_save" })),
+	createMemoryManageToolMock: vi.fn(() => ({ name: "memory_manage" })),
 	createSkillListToolMock: vi.fn(() => ({ name: "skill_list" })),
 	createSkillViewToolMock: vi.fn(() => ({ name: "skill_view" })),
 	createSkillManageToolMock: vi.fn(() => ({ name: "skill_manage" })),
@@ -120,7 +120,7 @@ vi.mock("../src/tools/write.js", () => ({ createWriteTool: createWriteToolMock }
 vi.mock("../src/tools/web-search.js", () => ({ createWebSearchTool: createWebSearchToolMock }));
 vi.mock("../src/tools/web-fetch.js", () => ({ createWebFetchTool: createWebFetchToolMock }));
 vi.mock("../src/tools/session-search.js", () => ({ createSessionSearchTool: createSessionSearchToolMock }));
-vi.mock("../src/tools/memory-save.js", () => ({ createMemorySaveTool: createMemorySaveToolMock }));
+vi.mock("../src/tools/memory-manage.js", () => ({ createMemoryManageTool: createMemoryManageToolMock }));
 vi.mock("../src/tools/skill-list.js", () => ({ createSkillListTool: createSkillListToolMock }));
 vi.mock("../src/tools/skill-view.js", () => ({ createSkillViewTool: createSkillViewToolMock }));
 vi.mock("../src/tools/skill-manage.js", () => ({ createSkillManageTool: createSkillManageToolMock }));
@@ -142,7 +142,7 @@ const ALL_TOOL_NAMES = [
 	"web_search",
 	"web_fetch",
 	"session_search",
-	"memory_save",
+	"memory_manage",
 	"skill_list",
 	"skill_view",
 	"skill_manage",
@@ -197,7 +197,7 @@ describe("tools index", () => {
 		createWebSearchToolMock.mockClear();
 		createWebFetchToolMock.mockClear();
 		createSessionSearchToolMock.mockClear();
-		createMemorySaveToolMock.mockClear();
+		createMemoryManageToolMock.mockClear();
 		createSkillListToolMock.mockClear();
 		createSkillViewToolMock.mockClear();
 		createSkillManageToolMock.mockClear();
@@ -242,7 +242,7 @@ describe("tools index", () => {
 			"grep",
 			"write",
 			"session_search",
-			"memory_save",
+			"memory_manage",
 			"skill_list",
 			"skill_view",
 			"skill_manage",
@@ -319,8 +319,8 @@ describe("tools index", () => {
 		// Concrete drift assertions for the previously-broken cases.
 		expect(registered.has("web_search")).toBe(false);
 		expect(prompt).not.toContain("return untrusted external content");
-		expect(registered.has("memory_save")).toBe(true);
-		expect(prompt).toContain("- memory_save:");
+		expect(registered.has("memory_manage")).toBe(true);
+		expect(prompt).toContain("- memory_manage:");
 		toolsConfig.tools.web.enable = true;
 	});
 
@@ -365,7 +365,7 @@ describe("tools index", () => {
 			"web_search",
 			"web_fetch",
 			"session_search",
-			"memory_save",
+			"memory_manage",
 			"skill_list",
 			"skill_view",
 			"skill_manage",

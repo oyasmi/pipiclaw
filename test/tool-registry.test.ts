@@ -69,7 +69,7 @@ describe("tool registry", () => {
 			"web_search",
 			"web_fetch",
 			"session_search",
-			"memory_save",
+			"memory_manage",
 			"skill_list",
 			"skill_view",
 			"skill_manage",
@@ -114,6 +114,6 @@ describe("tool registry", () => {
 		expect(names).not.toContain("skill_manage");
 		expect(names).not.toContain("event_manage");
 		expect(names).not.toContain("task_manage");
-		expect(names).toContain("memory_save");
+		expect(names).toContain("memory_manage");
 	});
 });

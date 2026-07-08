@@ -143,9 +143,10 @@ The scheduler ignores invalid files and de-duplicates by filename; keep the even
 		"- SESSION.md is the primary runtime-managed working-state artifact for current active work.",
 		"- The runtime automatically consolidates channel MEMORY.md and HISTORY.md before compaction or session trimming, and sweeps durable facts into MEMORY.md in the background.",
 	];
-	if (hasTool("memory_save")) {
+	if (hasTool("memory_manage")) {
 		runtimeBehaviorLines.push(
-			"- When the user explicitly asks you to remember, prefer, default to, or stop doing something durable, call memory_save right away instead of waiting for background consolidation. Use it only for durable facts/preferences/decisions/constraints, not transient task state.",
+			"- When the user explicitly asks you to remember, prefer, default to, or stop doing something durable, call memory_manage (op: save) right away instead of waiting for background consolidation. Use it only for durable facts/preferences/decisions/constraints, not transient task state.",
+			"- When the user asks you to forget or drop something durable, use memory_manage (op: forget) rather than editing MEMORY.md directly, so the change serializes with background consolidation. To look something up mid-task, use memory_manage (op: search).",
 		);
 	}
 	runtimeBehaviorLines.push(

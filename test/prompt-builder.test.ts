@@ -75,7 +75,7 @@ describe("prompt-builder", () => {
 				tools: [
 					{ name: "read", description: "Read files" },
 					{ name: "bash", description: "Run shell commands" },
-					{ name: "memory_save", description: "Save a durable fact" },
+					{ name: "memory_manage", description: "Save a durable fact" },
 				],
 			},
 		);
@@ -83,14 +83,14 @@ describe("prompt-builder", () => {
 		// Tools section lists exactly the registered tools.
 		expect(prompt).toContain("- read:");
 		expect(prompt).toContain("- bash:");
-		expect(prompt).toContain("- memory_save:");
+		expect(prompt).toContain("- memory_manage:");
 		expect(prompt).not.toContain("- web_search:");
 		expect(prompt).not.toContain("- web_fetch:");
 		expect(prompt).not.toContain("- session_search:");
 		expect(prompt).not.toContain("- subagent:");
 
 		// Tool-specific instructions follow the same source of truth.
-		expect(prompt).toContain("call memory_save right away"); // memory_save present
+		expect(prompt).toContain("call memory_manage (op: save) right away"); // memory_manage present
 		expect(prompt).not.toContain("return untrusted external content"); // web-safety gated
 		expect(prompt).not.toContain("Use session_search only when"); // session_search gated
 		expect(prompt).not.toContain("## Sub-Agents"); // subagent gated
@@ -115,8 +115,8 @@ describe("prompt-builder", () => {
 		expect(prompt).toContain("return untrusted external content");
 		expect(prompt).toContain("Use session_search only when");
 		expect(prompt).toContain("## Sub-Agents");
-		// memory_save was not registered, so its instruction must be absent.
-		expect(prompt).not.toContain("call memory_save right away");
+		// memory_manage was not registered, so its instruction must be absent.
+		expect(prompt).not.toContain("call memory_manage (op: save) right away");
 	});
 
 	it("falls back to a tool's own description for unknown tool names", () => {

@@ -141,4 +141,63 @@ describe("read tool", () => {
 			"permission denied",
 		);
 	});
+
+	it("renders a directory as a shallow tree", async () => {
+		// `find src -maxdepth 2` output: the root plus everything under it, dirs marked with `/`.
+		const executor = new ScriptedExecutor([
+			{ code: 0, stdout: "__DIR__\n", stderr: "" },
+			{ code: 0, stdout: "src/\nsrc/util/\nsrc/README.md\nsrc/a.ts\nsrc/util/b.ts\n", stderr: "" },
+		]);
+		const tool = createReadTool(executor);
+
+		const result = await tool.execute("call", { label: "list", path: "src" });
+		expect(result.details).toBeUndefined();
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		expect(text).toContain("Directory: src");
+		expect(text).toContain("README.md");
+		expect(text).toContain("a.ts");
+		expect(text).toContain("util/");
+		// A depth-1 file is indented under its parent directory.
+		expect(text).toContain("  b.ts");
+	});
+
+	it("reports an empty directory", async () => {
+		const executor = new ScriptedExecutor([
+			{ code: 0, stdout: "__DIR__\n", stderr: "" },
+			{ code: 0, stdout: "empty/\n", stderr: "" },
+		]);
+		const tool = createReadTool(executor);
+		const result = await tool.execute("call", { label: "list", path: "empty" });
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		expect(text).toContain("(empty directory)");
+	});
+
+	it("converts a PDF to text and applies offset/limit", async () => {
+		const executor = new ScriptedExecutor([{ code: 0, stdout: "page one\npage two\npage three\n", stderr: "" }]);
+		const tool = createReadTool(executor);
+
+		const result = await tool.execute("call", { label: "read pdf", path: "doc.pdf", limit: 2 });
+		expect(executor.calls).toHaveLength(1);
+		expect(executor.calls[0].command).toContain("pdftotext -layout 'doc.pdf'");
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		expect(text).toContain("page one");
+		expect(text).toContain("page two");
+		expect(text).toContain("Use offset=3 to continue");
+	});
+
+	it("reports a missing pdftotext with an install hint", async () => {
+		const executor = new ScriptedExecutor([{ code: 127, stdout: "", stderr: "" }]);
+		const tool = createReadTool(executor);
+		await expect(tool.execute("call", { label: "read pdf", path: "doc.pdf" })).rejects.toThrow(
+			/pdftotext is not installed/,
+		);
+	});
+
+	it("degrades gracefully when a PDF yields no text", async () => {
+		const executor = new ScriptedExecutor([{ code: 0, stdout: "   \n", stderr: "" }]);
+		const tool = createReadTool(executor);
+		await expect(tool.execute("call", { label: "read pdf", path: "scan.pdf" })).rejects.toThrow(
+			/scanned\/image-based/,
+		);
+	});
 });

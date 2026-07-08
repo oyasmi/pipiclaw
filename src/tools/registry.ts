@@ -9,7 +9,7 @@ import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
 import { createEventManageTool } from "./event-manage.js";
 import { createGrepTool } from "./grep.js";
-import { createMemorySaveTool } from "./memory-save.js";
+import { createMemoryManageTool } from "./memory-manage.js";
 import { createReadTool } from "./read.js";
 import { createSessionSearchTool } from "./session-search.js";
 import { createSkillListTool } from "./skill-list.js";
@@ -39,7 +39,7 @@ export interface ToolBuildContext {
 	workspacePath: string;
 	/** Main set: `toolsConfig.tools.web`; sub-agent set: the sub-agent's own webConfig. */
 	webConfig?: PipiclawWebToolsConfig;
-	/** Present only on the main path; gates session_search / memory_save / skills. */
+	/** Present only on the main path; gates session_search / memory_manage / skills. */
 	toolsConfig?: PipiclawToolsConfig;
 	/** Sub-agent set passes its per-invocation bash timeout; the main set relies on the built-in default. */
 	bashDefaultTimeoutSeconds?: number;
@@ -168,15 +168,18 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 			}),
 	},
 	{
-		name: "memory_save",
-		promptHint: "Save a durable fact to this channel's long-term memory immediately when the user asks",
+		name: "memory_manage",
+		promptHint: "Save a durable fact, search stored memory on demand, or forget an entry — when the user asks",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.memory.save.enabled !== false,
 		create: (ctx) =>
-			createMemorySaveTool({
+			createMemoryManageTool({
 				channelId: ctx.channelId,
 				channelDir: ctx.channelDir,
+				workspaceDir: ctx.workspaceDir,
 				memoryCandidateStore: req(ctx.memoryCandidateStore, "memoryCandidateStore"),
+				getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
+				resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),
 			}),
 	},
 	{

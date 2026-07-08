@@ -29,6 +29,52 @@ function isImageFile(filePath: string): string | null {
 	return IMAGE_MIME_TYPES[ext] || null;
 }
 
+/** Directory tree caps, mirroring oh-my-pi's read: shallow and per-directory bounded. */
+const DIR_MAX_DEPTH = 2;
+const DIR_PER_DIR_LIMIT = 12;
+
+/**
+ * Render a depth-2 directory tree from a newline-separated list of paths (directories carry a
+ * trailing `/`, produced by the shell). Kept deliberately portable — no sizes or mtimes, since
+ * `find -printf` / `stat` formats differ across BSD, GNU, and busybox; the structure is the value.
+ */
+function renderDirectoryTree(rootPath: string, rawPaths: string): string {
+	const rootPrefix = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
+	const entries = rawPaths
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0 && line !== rootPath && line !== rootPrefix)
+		.map((line) => (line.startsWith(rootPrefix) ? line.slice(rootPrefix.length) : line))
+		.sort((a, b) => a.replace(/\/$/, "").localeCompare(b.replace(/\/$/, "")));
+
+	if (entries.length === 0) {
+		return "(empty directory)";
+	}
+
+	// Group by immediate parent so we can cap children per directory.
+	const perParentCount = new Map<string, number>();
+	const lines: string[] = [];
+	const elided = new Map<string, number>();
+	for (const entry of entries) {
+		const isDir = entry.endsWith("/");
+		const rel = isDir ? entry.slice(0, -1) : entry;
+		const segments = rel.split("/");
+		const depth = segments.length - 1;
+		const parent = depth === 0 ? "" : segments.slice(0, -1).join("/");
+		const count = (perParentCount.get(parent) ?? 0) + 1;
+		perParentCount.set(parent, count);
+		if (count > DIR_PER_DIR_LIMIT) {
+			elided.set(parent, (elided.get(parent) ?? 0) + 1);
+			continue;
+		}
+		lines.push(`${"  ".repeat(depth)}${segments[segments.length - 1]}${isDir ? "/" : ""}`);
+	}
+	for (const [, count] of elided) {
+		lines.push(`  [+${count} more]`);
+	}
+	return lines.join("\n");
+}
+
 const readSchema = Type.Object({
 	label: Type.String({ description: "Brief description of what you're reading and why (shown to user)" }),
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
@@ -121,12 +167,58 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 				};
 			}
 
-			// Get total line count first
-			const countResult = await executor.exec(`awk 'END { print NR }' ${shellEscape(path)}`, { signal });
-			if (countResult.code !== 0) {
-				throw new Error(countResult.stderr || `Failed to read file: ${path}`);
+			// PDF documents are converted to text with pdftotext, then run through the same
+			// offset/limit/truncation pipeline as any text file.
+			const isPdf = extname(path).toLowerCase() === ".pdf";
+			let pdfText = "";
+			if (isPdf) {
+				const converted = await executor.exec(`pdftotext -layout ${shellEscape(path)} - 2>&1`, { signal });
+				if (converted.code === 127) {
+					throw new Error(
+						`Cannot read ${path}: pdftotext is not installed. Install poppler-utils (host) or rebuild the Docker sandbox image, or ask the user to send a text version.`,
+					);
+				}
+				if (converted.code !== 0 || !converted.stdout.trim()) {
+					throw new Error(
+						`Cannot read .pdf file ${path}: ${converted.stdout.trim() || "conversion produced no text"}. ` +
+							`The file may be scanned/image-based — ask the user for a text version or a screenshot.`,
+					);
+				}
+				pdfText = converted.stdout;
 			}
-			const totalFileLines = Number.parseInt(countResult.stdout.trim(), 10);
+
+			// Get total line count. For non-PDF paths this same command also detects a directory
+			// (`cat`/`awk` on a directory would fail), so a directory read is a shallow tree rather
+			// than a confusing error — all in one exec to keep the call sequence unchanged.
+			let totalFileLines: number;
+			if (isPdf) {
+				totalFileLines = countTextLines(pdfText);
+			} else {
+				const countResult = await executor.exec(
+					`if [ -d ${shellEscape(path)} ]; then echo __DIR__; else awk 'END { print NR }' ${shellEscape(path)}; fi`,
+					{ signal },
+				);
+				if (countResult.code !== 0) {
+					throw new Error(countResult.stderr || `Failed to read file: ${path}`);
+				}
+				if (countResult.stdout.trim() === "__DIR__") {
+					const listing = await executor.exec(
+						`{ find ${shellEscape(path)} -maxdepth ${DIR_MAX_DEPTH} -type d | sed 's,$,/,'; ` +
+							`find ${shellEscape(path)} -maxdepth ${DIR_MAX_DEPTH} ! -type d; }`,
+						{ signal },
+					);
+					if (listing.code !== 0) {
+						throw new Error(listing.stderr || `Failed to list directory: ${path}`);
+					}
+					return {
+						content: [
+							{ type: "text", text: `Directory: ${path}\n\n${renderDirectoryTree(path, listing.stdout)}` },
+						],
+						details: undefined,
+					};
+				}
+				totalFileLines = Number.parseInt(countResult.stdout.trim(), 10);
+			}
 
 			// Apply offset if specified (1-indexed)
 			const startLine = offset ? Math.max(1, offset) : 1;
@@ -144,20 +236,24 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 				throw new Error(`Offset ${offset} is beyond end of file (${totalFileLines} lines total). ${guidance}`);
 			}
 
-			// Read content with offset
-			let cmd: string;
-			if (startLine === 1) {
-				cmd = `cat ${shellEscape(path)}`;
+			// Read content from the offset. PDF text is already in memory; files stream from disk.
+			let selectedContent: string;
+			if (isPdf) {
+				selectedContent =
+					startLine === 1
+						? pdfText
+						: pdfText
+								.split("\n")
+								.slice(startLine - 1)
+								.join("\n");
 			} else {
-				cmd = `tail -n +${startLine} ${shellEscape(path)}`;
+				const cmd = startLine === 1 ? `cat ${shellEscape(path)}` : `tail -n +${startLine} ${shellEscape(path)}`;
+				const result = await executor.exec(cmd, { signal });
+				if (result.code !== 0) {
+					throw new Error(result.stderr || `Failed to read file: ${path}`);
+				}
+				selectedContent = result.stdout;
 			}
-
-			const result = await executor.exec(cmd, { signal });
-			if (result.code !== 0) {
-				throw new Error(result.stderr || `Failed to read file: ${path}`);
-			}
-
-			let selectedContent = result.stdout;
 			let userLimitedLines: number | undefined;
 
 			// Apply user limit if specified
