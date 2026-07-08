@@ -435,6 +435,7 @@ describe("tools index", () => {
 			securityConfig,
 			workspaceDir: "/repo",
 			channelId: "dm_42",
+			channelDir: "/repo/dm_42",
 		});
 		expect(createSubAgentToolMock).toHaveBeenCalledWith({
 			executor,

@@ -158,6 +158,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				securityConfig: ctx.securityConfig,
 				workspaceDir: ctx.workspaceDir,
 				channelId: ctx.channelId,
+				channelDir: ctx.channelDir,
 			}),
 	},
 	{
