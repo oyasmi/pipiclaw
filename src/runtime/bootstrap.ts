@@ -686,6 +686,8 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			const response = await runTasksCommand({
 				args,
 				channelDir: getChannelDir(options.paths.workspaceDir, event.channelId),
+				workspaceDir: options.paths.workspaceDir,
+				channelId: event.channelId,
 			});
 			await bot.sendPlain(event.channelId, response);
 		},

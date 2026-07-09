@@ -294,6 +294,7 @@ process.exit(1);
 - `/tasks` —— 列出当前通道 active 任务，**可推进的排在前**（顺序就是 agent 下一步会挑的顺序），每条显示 status / wake / recurrence。
 - `/tasks show <id>` —— 显示单个任务文件全文（active 或 archive 均可）。
 - `/tasks archive` —— 列出已闭环（归档）的任务。
+- `/tasks doctor` —— 只读体检当前通道的 task/event 一致性：坏 frontmatter、done 任务未归档、recurrence 任务缺 schedule、孤儿 `task.*` 事件、归档任务仍有事件、`.checkin` 与 `wake` 不一致等。每条问题都会附一条 `Next step`，便于用户或 agent 直接修复。
 
 `/tasks` **刻意只读**。task 文件是 agent 的工作记忆，frontmatter 与正文强耦合；想改任务（改期、放弃、调整做法），用自然语言告诉 agent，由它走完整闭环（更新文件 + 同步事件），而不是从命令行改文件造成脱同步。命令只负责“看”。TUI 里同样可用。
 
@@ -318,13 +319,14 @@ do this turn. Full detail lives in the matching tasks/<id>.md file.
 
 ## `task_manage` 工具（给 agent 用，可选）
 
-除了用 write/edit 直接维护 task 文件，agent 还有一个 `task_manage` 工具，专管 **frontmatter 与闭环**这两处“必须正确”的窄面（正文 DoD/手册/日志仍用 write/edit）：
+除了用 write/edit 直接维护 task 文件，agent 还有一个 `task_manage` 工具，专管 **创建骨架、frontmatter 与闭环**这几处“必须正确”的窄面（正文 DoD/手册/日志的大幅调整仍用 write/edit）：
 
+- `create` —— 创建标准任务骨架，包含 frontmatter、`Goal`、`DoD`、`Manual`、`Current Cycle`、`History`。它只创建 task 文件，不自动创建 `.schedule` 或 `.checkin` 事件；周期节奏仍由 agent 显式调用 `event_manage` 管理。
 - `set` —— 更新 status / wake / recurrence，校验 status 合法、wake 是合法 ISO8601（正文逐字节不动）。
-- `done` —— 一步闭环：置 done → 一次性任务移入 `archive/`、周期性任务留原地 → 删除 `task.<channelId>.<id>.*` 的残留 one-shot 事件（periodic schedule 事件保留）。这正是收尾 SOP 里最易漏做的一步。
+- `done` —— 一步闭环：要求填写 `summary` 与 `evidence`，把完成说明和验证证据追加到任务正文 → 置 done → 一次性任务移入 `archive/`、周期性任务留原地 → 删除 `task.<channelId>.<id>.*` 的残留检查点/传感器事件，只保留 `task.<channelId>.<id>.schedule` 这个周期任务节奏事件。`.agentmux` 这类 periodic preAction 轮询是临时事件，不会把一次性任务误判为周期任务。
 - `list` —— 返回结构化的 active 任务。
 
-它的价值是“frontmatter 保真 + 闭环原子化”，不是权限收口（agent 仍可用 write/edit 写正文）。开关见 [configuration.md](./configuration.md) 的 `tools.tasks.enabled`（默认开启）。新建任务用 write（正文是大头）；`task_manage` 不做 create。
+它的价值是“骨架一致 + frontmatter 保真 + 闭环原子化”，不是权限收口（agent 仍可用 write/edit 写正文）。开关见 [configuration.md](./configuration.md) 的 `tools.tasks.enabled`（默认开启）。
 
 ## agentmux 完成驱动回访
 

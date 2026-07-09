@@ -85,7 +85,7 @@ export const TUI_SLASH_COMMANDS: Array<{ name: string; description: string; argu
 	{ name: "status", description: "Show model, context and run state" },
 	{ name: "usage", description: "Show LLM cost for this channel", argumentHint: "[7d|month]" },
 	{ name: "events", description: "Manage scheduled events", argumentHint: "<list|show|delete|history>" },
-	{ name: "tasks", description: "View the task ledger (read-only)", argumentHint: "[show <id>|archive]" },
+	{ name: "tasks", description: "View the task ledger (read-only)", argumentHint: "[show <id>|archive|doctor]" },
 	{ name: "model", description: "Show or switch the model", argumentHint: "[provider/model]" },
 	{ name: "new", description: "Start a new session" },
 	{ name: "compact", description: "Compact the session context", argumentHint: "[instructions]" },

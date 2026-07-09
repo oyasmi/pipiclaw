@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	extractTaskTitle,
 	isTaskActionable,
+	missingStandardTaskSections,
 	normalizeTaskId,
 	parseTaskFrontmatter,
 	readActiveTasks,
+	renderStandardTaskBody,
 	taskBody,
 } from "../src/shared/task-ledger.js";
 
@@ -81,6 +83,27 @@ describe("normalizeTaskId", () => {
 	});
 	it.each(["../escape", "a/b", ".", "..", "bad name"])("rejects %s", (id) => {
 		expect(() => normalizeTaskId(id)).toThrow(/Invalid task id/);
+	});
+});
+
+describe("standard task skeleton", () => {
+	it("renders all required standard sections", () => {
+		const body = renderStandardTaskBody({
+			title: "Weekly Report",
+			goal: "Publish the weekly report.",
+			dod: "- [ ] Draft reviewed\n- [ ] Published",
+		});
+		expect(missingStandardTaskSections(body)).toEqual([]);
+		expect(body).toContain("## Goal");
+		expect(body).toContain("## DoD");
+		expect(body).toContain("## Manual");
+		expect(body).toContain("## Current Cycle");
+		expect(body).toContain("## History");
+	});
+
+	it("accepts Chinese section aliases", () => {
+		const body = "# 周报\n\n## 目标\nx\n\n## DoD\nx\n\n## 手册\nx\n\n## 当前周期\nx\n\n## 历史\nx";
+		expect(missingStandardTaskSections(body)).toEqual([]);
 	});
 });
 

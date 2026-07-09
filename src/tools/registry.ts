@@ -217,8 +217,9 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "task_manage",
 		promptHint:
-			"Update the task ledger: set a task's status/wake/recurrence, close a task out (archives one-shot tasks and " +
-			"cleans up its residual events), or list active tasks. Write the task body with write/edit; this owns the frontmatter.",
+			"Manage the task ledger: create standard task skeletons, set status/wake/recurrence, close tasks out " +
+			"(archives one-shot tasks and cleans up residual events; done requires summary and evidence), or list active " +
+			"tasks. Use write/edit for substantial body changes.",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
 		create: (ctx) =>

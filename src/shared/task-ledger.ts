@@ -35,8 +35,26 @@ export interface TaskLedgerEntry {
 	latestNote?: string;
 }
 
+export interface TaskSkeletonInput {
+	title: string;
+	goal: string;
+	dod: string;
+	manual?: string;
+}
+
 const FRONTMATTER_FIELDS = ["status", "wake", "recurrence"] as const;
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+export const DEFAULT_TASK_MANUAL =
+	"- Follow the DoD, keep the current cycle log updated, and schedule check-ins when waiting.";
+
+export const STANDARD_TASK_SECTIONS = [
+	{ label: "Goal", names: ["Goal", "目标"] },
+	{ label: "DoD", names: ["DoD"] },
+	{ label: "Manual", names: ["Manual", "手册"] },
+	{ label: "Current Cycle", names: ["Current Cycle", "当前周期"] },
+	{ label: "History", names: ["History", "历史"] },
+] as const;
 
 /** Validate/normalize a task id (filename without `.md`), rejecting path traversal. */
 export function normalizeTaskId(id: string): string {
@@ -99,6 +117,41 @@ export function extractTaskTitle(content: string, fallbackId: string): string {
 		if (match) return match[1];
 	}
 	return fallbackId;
+}
+
+export function hasTaskHeading(content: string, names: readonly string[]): boolean {
+	return content.split("\n").some((line) => {
+		const match = /^#{1,6}\s+(.+?)\s*$/.exec(line);
+		return match ? names.some((name) => match[1].trim().toLowerCase() === name.toLowerCase()) : false;
+	});
+}
+
+export function missingStandardTaskSections(content: string): string[] {
+	return STANDARD_TASK_SECTIONS.filter((section) => !hasTaskHeading(content, section.names)).map(
+		(section) => section.label,
+	);
+}
+
+export function renderStandardTaskBody(input: TaskSkeletonInput): string {
+	const manual = input.manual?.trim() || DEFAULT_TASK_MANUAL;
+	return [
+		`# ${input.title}`,
+		"",
+		"## Goal",
+		input.goal,
+		"",
+		"## DoD",
+		input.dod,
+		"",
+		"## Manual",
+		manual,
+		"",
+		"## Current Cycle",
+		"- Created; next step: start work and append progress here before ending each turn.",
+		"",
+		"## History",
+		"",
+	].join("\n");
 }
 
 /** First non-empty bullet/line under a "当前周期"/"current cycle" heading. */
