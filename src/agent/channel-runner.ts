@@ -39,7 +39,6 @@ import { createExecutor, type Executor, type SandboxConfig } from "../sandbox.js
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostics.js";
-import { HAN_REGEX } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
@@ -263,7 +262,6 @@ export class ChannelRunner implements AgentRunner {
 			const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS);
 			const userMessage = this.formatUserMessage(clippedInput, ctx.message.userName);
 			const preserveRawInput = this.shouldPreserveRawInput(ctx.message.text);
-			await this.maybeRunPreventiveCompactionForIncomingText(preserveRawInput ? clippedInput : userMessage);
 
 			// Ensure channel directory exists
 			await mkdir(this.channelDir, { recursive: true });
@@ -285,7 +283,9 @@ export class ChannelRunner implements AgentRunner {
 						maxInjected: recallSettings.maxInjected,
 						maxChars: recallSettings.maxChars,
 						rerankWithModel: recallSettings.rerankWithModel,
-						autoRerank: HAN_REGEX.test(clippedInput),
+						// Let shouldUseModelRerank's own memory-intent gate decide (it already handles
+						// Chinese phrasing) — forcing autoRerank for every Han-script message triggered a
+						// model rerank (up to 8s) on nearly every Chinese turn once memory filled up.
 						model: this.session.model ?? this.activeModel,
 						resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 						candidateStore: this.memoryCandidateStore,
@@ -317,6 +317,11 @@ export class ChannelRunner implements AgentRunner {
 					this.firstTurnMemoryBootstrapPending = false;
 				}
 			}
+
+			// Estimated against the fully assembled prompt (recall + task digest + bootstrap all
+			// prepended above), not just the bare user message — those pieces can add thousands of
+			// characters and must count against the projected context usage this guard is checking.
+			await this.maybeRunPreventiveCompactionForIncomingText(promptText);
 
 			// Debug: write context to last_prompt.json (only with PIPICLAW_DEBUG=1)
 			if (process.env.PIPICLAW_DEBUG) {

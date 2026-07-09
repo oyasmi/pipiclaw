@@ -234,6 +234,12 @@ const DINGTALK_API = "https://api.dingtalk.com";
 // (discardCard / replay / sendPlain) already handle.
 const DINGTALK_HTTP_TIMEOUT_MS = 15_000;
 const http = axios.create({ timeout: DINGTALK_HTTP_TIMEOUT_MS });
+// Bounds enqueueStreamMessage (user messages + busy-message requeues), mirroring the
+// existing cap on enqueueEvent. Without a limit, a busy channel getting flooded with
+// messages (or repeated followUp requeues) grows this queue without bound — each item
+// still runs a full serialized turn, so an unbounded queue means unbounded backlog time
+// and unbounded memory, not just a slow channel.
+const USER_MESSAGE_QUEUE_LIMIT = 20;
 const TOKEN_REFRESH_SECS = 90 * 60; // 1.5 hours (tokens expire after 2 hours)
 const CONNECT_ATTEMPT_TIMEOUT_MS = 10_000;
 const SOCKET_CLOSE_GRACE_MS = 1_000;
@@ -751,7 +757,18 @@ export class DingTalkBot {
 
 	private enqueueStreamMessage(event: DingTalkEvent, textOverride?: string): void {
 		const queuedEvent = textOverride === undefined ? event : { ...event, text: textOverride };
-		this.getQueue(event.channelId).enqueue(async () => {
+		const queue = this.getQueue(event.channelId);
+		if (queue.size() >= USER_MESSAGE_QUEUE_LIMIT) {
+			log.logWarning(
+				`Message queue full for ${event.channelId} (limit ${USER_MESSAGE_QUEUE_LIMIT}), discarding: ${queuedEvent.text.substring(0, 50)}`,
+			);
+			this.sendPlain(
+				event.channelId,
+				`⚠️ 消息积压过多（超过 ${USER_MESSAGE_QUEUE_LIMIT} 条待处理），本条消息已丢弃，请稍后重试。`,
+			).catch(() => undefined);
+			return;
+		}
+		queue.enqueue(async () => {
 			this.activeMessageProcessing = true;
 			try {
 				await this.handler.handleEvent(queuedEvent, this);

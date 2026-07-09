@@ -598,6 +598,7 @@ function renderRecallResult(items: RecalledMemory[], maxChars: number): string {
 		"Relevant context for this turn:",
 	];
 	let usedChars = clippedLines.join("\n").length + "</runtime_context>".length + 2;
+	let includedCount = 0;
 	for (const item of items) {
 		const block = ["", `[${item.source}/${item.title}]`, `Path: ${item.path}`, item.content].join("\n");
 		if (usedChars + block.length > maxChars) {
@@ -605,6 +606,14 @@ function renderRecallResult(items: RecalledMemory[], maxChars: number): string {
 		}
 		clippedLines.push("", `[${item.source}/${item.title}]`, `Path: ${item.path}`, item.content);
 		usedChars += block.length;
+		includedCount++;
+	}
+	const omittedCount = items.length - includedCount;
+	if (omittedCount > 0) {
+		clippedLines.push(
+			"",
+			`[- ${omittedCount} more item(s) omitted for length; use memory_manage search or session_search to look them up.]`,
+		);
 	}
 	clippedLines.push("</runtime_context>");
 	return clippedLines.join("\n");

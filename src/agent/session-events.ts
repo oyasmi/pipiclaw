@@ -305,6 +305,11 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 			const trimmedFinalText = finalText.trim();
 			if (!trimmedFinalText) {
+				// No tool calls and no text: leaving finalOutcome at its "none" default means no
+				// delivery branch in channel-runner fires, so the progress card is stuck on
+				// "thinking…" forever. Treat it the same as an explicit [SILENT] turn.
+				runState.finalOutcome = { kind: "silent" };
+				memoryLifecycle.noteCompletedAssistantTurn();
 				return;
 			}
 

@@ -3,7 +3,12 @@ import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
-import { readChannelSession } from "../memory/files.js";
+import {
+	getChannelHistoryPath,
+	getChannelMemoryPath,
+	getChannelSessionPath,
+	readChannelSession,
+} from "../memory/files.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import { formatModelReference } from "../models/utils.js";
 import type { Executor } from "../sandbox.js";
@@ -11,7 +16,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
-import { clipText, extractAssistantText, extractLabelFromArgs, HAN_REGEX } from "../shared/text-utils.js";
+import { clipText, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
 import { buildToolSet } from "../tools/registry.js";
@@ -169,6 +174,30 @@ function buildStoppedText(config: SubAgentConfig, reason: string, finalText: str
 }
 
 /**
+ * Sub-agents share the main agent's `write`/`edit` tools but only receive the runtime
+ * context (task text), never the "don't touch MEMORY.md/HISTORY.md/SESSION.md, use
+ * memory_manage instead" rule the main agent gets in its system prompt (memory_manage
+ * itself is withheld from sub-agents). Denying these paths at the path-guard level closes
+ * that gap structurally instead of relying on a sub-agent to infer an instruction it never
+ * received — a stray write/edit here would race the shared memory serial queue
+ * (channel-maintenance-queue) and silently corrupt durable memory.
+ */
+function withSubagentMemoryWriteDeny(securityConfig: SecurityConfig, channelDir: string): SecurityConfig {
+	const protectedPaths = [
+		getChannelMemoryPath(channelDir),
+		getChannelHistoryPath(channelDir),
+		getChannelSessionPath(channelDir),
+	];
+	return {
+		...securityConfig,
+		pathGuard: {
+			...securityConfig.pathGuard,
+			writeDeny: [...securityConfig.pathGuard.writeDeny, ...protectedPaths],
+		},
+	};
+}
+
+/**
  * Build a sub-agent's tool set from the shared tool registry, filtered to tools flagged
  * available to sub-agents (files + web). Sub-agents run with their own security context
  * (rooted at the sub-agent workspace) and their own per-invocation bash timeout.
@@ -178,7 +207,10 @@ function buildSubagentTools(
 	bashTimeoutSec: number,
 	options: SubAgentToolOptions,
 ): AgentTool<any>[] {
-	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
+	const securityConfig = withSubagentMemoryWriteDeny(
+		options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
+		options.channelDir,
+	);
 	return buildToolSet(
 		{
 			executor,
@@ -310,7 +342,6 @@ async function buildContextualBlocks(
 		maxInjected: recallSettings.maxInjected,
 		maxChars: Math.min(recallSettings.maxChars, MAX_RECALL_CONTEXT_CHARS),
 		rerankWithModel: recallSettings.rerankWithModel,
-		autoRerank: HAN_REGEX.test(recallQuery),
 		model: currentModel,
 		resolveApiKey: options.resolveApiKey,
 		allowedSources: ["workspace-memory", "channel-memory", "channel-history"],

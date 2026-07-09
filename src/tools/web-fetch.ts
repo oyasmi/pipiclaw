@@ -54,6 +54,8 @@ function windowResult(body: string, offset: number, maxChars: number, url: strin
 	if (end < body.length) {
 		const cacheNote = fromCache ? " (served from cache, no refetch)" : "";
 		text += `\n\n[Showing chars ${start}-${end} of ${body.length}. Re-call web_fetch with the same url and offset=${end} to continue${cacheNote}.]`;
+	} else if (offset >= body.length && body.length > 0) {
+		text += `\n\n[Reached end of page (${body.length} chars). No more content.]`;
 	}
 	return {
 		content: [{ type: "text" as const, text }],

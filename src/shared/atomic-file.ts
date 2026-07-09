@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export function createAtomicTempPath(path: string): string {
@@ -11,10 +11,28 @@ export async function writeFileAtomically(
 	content: string,
 	tempPath = createAtomicTempPath(path),
 ): Promise<void> {
-	await mkdir(dirname(path), { recursive: true });
+	const dir = dirname(path);
+	await mkdir(dir, { recursive: true });
 	try {
-		await writeFile(tempPath, content, "utf-8");
+		const handle = await open(tempPath, "w");
+		try {
+			await handle.writeFile(content, "utf-8");
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
 		await rename(tempPath, path);
+		// Best-effort: the rename already succeeded, so a directory-fsync failure
+		// (e.g. unsupported on this platform/filesystem) should not surface as a write failure.
+		await open(dir, "r")
+			.then(async (dirHandle) => {
+				try {
+					await dirHandle.sync();
+				} finally {
+					await dirHandle.close();
+				}
+			})
+			.catch(() => undefined);
 	} catch (error) {
 		await unlink(tempPath).catch(() => undefined);
 		throw error;
