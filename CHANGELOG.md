@@ -4,6 +4,22 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-07-09
+
+Task ledger hardening: tightened the task/event lifecycle so long-running autonomous work has a clearer, more auditable control surface without adding another concept for users to learn.
+
+### Added
+
+- `task_manage create`: creates a standardized task ledger with frontmatter and the expected `Goal`, `DoD`, `Manual`, `Current Cycle`, and `History` sections, giving the model one canonical starting shape for long tasks.
+- `/tasks doctor`: a read-only diagnostics command for DingTalk and the TUI that checks task/event consistency, including malformed frontmatter, archived tasks with live events, orphan task events, missing recurrence schedules, mismatched check-ins, and missing standard ledger sections. Every issue includes an actionable next step.
+- Shared task helpers for task event names and task ledger sections, so runtime commands and tools now enforce the same conventions from one implementation.
+
+### Changed
+
+- `task_manage done` now requires a completion `summary` and `evidence`, appends a `Completion Evidence` section to the task ledger, marks the task done, and then archives it. Optional `residualRisk` can be recorded alongside the evidence.
+- Recurring task cleanup now preserves only the canonical `task.<channel>.<taskId>.schedule.json` periodic schedule. Lifecycle check-ins and delegated-work polling events are removed when the task is completed, avoiding stale wakeups.
+- `/tasks` help, autocomplete, documentation, and task diagnostics now expose the task ledger model more consistently across DingTalk and TUI usage.
+
 ## [0.7.6] - 2026-07-09
 
 Toolset enhancement (spec 021): four design kernels — token economy, errors-as-navigation, one entry per class of need, and long tasks that don't block the turn — landed without expanding the tool count, keeping pipiclaw a lean long-running assistant.

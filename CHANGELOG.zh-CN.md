@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-07-09
+
+任务台账加固：收紧 task/event 生命周期，让长程自主工作拥有更清晰、可审计的控制面，同时不再引入新的用户概念。
+
+### 新增
+
+- `task_manage create`：创建标准化任务台账，包含 frontmatter 以及 `Goal`、`DoD`、`Manual`、`Current Cycle`、`History` 等固定章节，为长任务提供唯一的规范起点。
+- `/tasks doctor`：在钉钉与 TUI 中新增只读诊断命令，用于检查任务/事件一致性，包括 frontmatter 损坏、已归档任务仍有 live event、孤儿 task event、周期任务缺 schedule、check-in 不匹配、缺少标准台账章节等问题。每个问题都带可执行的下一步建议。
+- 抽出共享的 task event 命名与 task ledger 章节辅助函数，使运行时命令和工具由同一份实现强制执行相同约定。
+
+### 变更
+
+- `task_manage done` 现在要求提供完成 `summary` 与 `evidence`，会向任务台账追加 `Completion Evidence` 章节，再标记 done 并归档。可选的 `residualRisk` 会随证据一起记录。
+- 周期任务清理现在只保留规范的 `task.<channel>.<taskId>.schedule.json` 周期 schedule；任务完成时会删除生命周期 check-in 与委派工作轮询事件，避免残留唤醒。
+- `/tasks` 帮助、自动补全、文档和任务诊断现在在钉钉与 TUI 中更一致地呈现任务台账模型。
+
 ## [0.7.6] - 2026-07-09
 
 工具集增强（spec 021）：落地四条设计内核——token 经济、错误即导航、一个入口吃一类需求、长任务不阻塞回合——但不扩张工具清单，保持 pipiclaw 精简长程助手的定位。
