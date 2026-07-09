@@ -1,6 +1,7 @@
 import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parseTaskControl, type TaskControl, type TaskVerificationMode, taskPriorityRank } from "../tasks/control.js";
 
 /**
  * Shared reader for the task ledger (`workspace/<channelId>/tasks/*.md`).
@@ -19,6 +20,9 @@ export interface TaskFrontmatter {
 	status?: string;
 	wake?: string;
 	recurrence?: string;
+	control?: TaskControl;
+	/** false only when a control field exists but cannot be parsed/validated. */
+	controlReadable?: boolean;
 }
 
 export interface TaskLedgerEntry {
@@ -40,9 +44,11 @@ export interface TaskSkeletonInput {
 	goal: string;
 	dod: string;
 	manual?: string;
+	verificationPlan?: string;
+	verificationMode?: TaskVerificationMode;
 }
 
-const FRONTMATTER_FIELDS = ["status", "wake", "recurrence"] as const;
+const FRONTMATTER_FIELDS = ["status", "wake", "recurrence", "control"] as const;
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export const DEFAULT_TASK_MANUAL =
@@ -52,6 +58,7 @@ export const STANDARD_TASK_SECTIONS = [
 	{ label: "Goal", names: ["Goal", "目标"] },
 	{ label: "DoD", names: ["DoD"] },
 	{ label: "Manual", names: ["Manual", "手册"] },
+	{ label: "Verification", names: ["Verification", "验收"] },
 	{ label: "Current Cycle", names: ["Current Cycle", "当前周期"] },
 	{ label: "History", names: ["History", "历史"] },
 ] as const;
@@ -89,7 +96,20 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 		const key = line.slice(0, idx).trim();
 		if ((FRONTMATTER_FIELDS as readonly string[]).includes(key)) {
 			const value = line.slice(idx + 1).trim();
-			frontmatter[key as (typeof FRONTMATTER_FIELDS)[number]] = value || undefined;
+			if (key === "control") {
+				if (!value) {
+					frontmatter.controlReadable = false;
+				} else {
+					try {
+						frontmatter.control = parseTaskControl(value);
+						frontmatter.controlReadable = true;
+					} catch {
+						frontmatter.controlReadable = false;
+					}
+				}
+			} else {
+				frontmatter[key as "status" | "wake" | "recurrence"] = value || undefined;
+			}
 		}
 	}
 	return frontmatter;
@@ -102,7 +122,10 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
  */
 export function isTaskActionable(frontmatter: TaskFrontmatter, now: number): boolean {
 	if (!frontmatter.readable) return true;
-	if (frontmatter.status === "done") return false;
+	if (frontmatter.controlReadable === false) return true;
+	if (frontmatter.status === "done" || frontmatter.status === "cancelled" || frontmatter.status === "escalated") {
+		return false;
+	}
 	if (frontmatter.wake) {
 		const wakeAt = new Date(frontmatter.wake).getTime();
 		if (Number.isFinite(wakeAt) && wakeAt > now) return false;
@@ -119,10 +142,23 @@ export function extractTaskTitle(content: string, fallbackId: string): string {
 	return fallbackId;
 }
 
+function matchesTaskSectionTitle(title: string, names: readonly string[]): boolean {
+	const normalized = title.trim().toLowerCase();
+	return names.some((name) => {
+		const expected = name.toLowerCase();
+		return (
+			normalized === expected ||
+			normalized.startsWith(`${expected} `) ||
+			normalized.startsWith(`${expected}(`) ||
+			normalized.startsWith(`${expected}（`)
+		);
+	});
+}
+
 export function hasTaskHeading(content: string, names: readonly string[]): boolean {
 	return content.split("\n").some((line) => {
 		const match = /^#{1,6}\s+(.+?)\s*$/.exec(line);
-		return match ? names.some((name) => match[1].trim().toLowerCase() === name.toLowerCase()) : false;
+		return match ? matchesTaskSectionTitle(match[1] ?? "", names) : false;
 	});
 }
 
@@ -132,8 +168,39 @@ export function missingStandardTaskSections(content: string): string[] {
 	);
 }
 
+/** Unchecked Markdown acceptance boxes under DoD or Verification sections. */
+export function uncheckedTaskAcceptanceItems(content: string): string[] {
+	const unchecked: string[] = [];
+	let section: "DoD" | "Verification" | undefined;
+	let sectionLevel = 0;
+	for (const line of content.split("\n")) {
+		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+		if (heading) {
+			const level = heading[1]?.length ?? 7;
+			if (matchesTaskSectionTitle(heading[2] ?? "", ["DoD"])) {
+				section = "DoD";
+				sectionLevel = level;
+			} else if (matchesTaskSectionTitle(heading[2] ?? "", ["Verification", "验收"])) {
+				section = "Verification";
+				sectionLevel = level;
+			} else if (section && level <= sectionLevel) {
+				section = undefined;
+			}
+			continue;
+		}
+		if (!section) continue;
+		const item = /^\s*[-*]\s+\[\s\]\s*(.+?)\s*$/.exec(line)?.[1];
+		if (item) unchecked.push(`${section}: ${item}`);
+	}
+	return unchecked;
+}
+
 export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 	const manual = input.manual?.trim() || DEFAULT_TASK_MANUAL;
+	const verificationPlan =
+		input.verificationPlan?.trim() ||
+		"- Check every DoD item against concrete evidence.\n- Run the relevant deterministic checks before declaring PASS.";
+	const verificationMode = input.verificationMode ?? "independent";
 	return [
 		`# ${input.title}`,
 		"",
@@ -146,6 +213,10 @@ export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 		"## Manual",
 		manual,
 		"",
+		"## Verification",
+		`Mode: ${verificationMode}`,
+		verificationPlan,
+		"",
 		"## Current Cycle",
 		"- Created; next step: start work and append progress here before ending each turn.",
 		"",
@@ -154,20 +225,80 @@ export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 	].join("\n");
 }
 
-/** First non-empty bullet/line under a "当前周期"/"current cycle" heading. */
+export interface TaskDocumentFields {
+	status: string;
+	wake?: string;
+	recurrence?: string;
+	control?: TaskControl;
+}
+
+export function renderTaskDocument(fields: TaskDocumentFields, body: string): string {
+	const lines = ["---", `status: ${fields.status}`];
+	if (fields.wake) lines.push(`wake: ${fields.wake}`);
+	if (fields.recurrence) lines.push(`recurrence: ${fields.recurrence}`);
+	if (fields.control) lines.push(`control: ${JSON.stringify(fields.control)}`);
+	lines.push("---");
+	return `${lines.join("\n")}\n${body}`;
+}
+
+/** Append one progress bullet to the standard Current Cycle section. */
+export function appendCurrentCycleNote(content: string, note: string): string {
+	const trimmedNote = note.trim().replace(/\s+/g, " ");
+	if (!trimmedNote) {
+		throw new Error("Current Cycle note must not be empty.");
+	}
+
+	const lines = content.split("\n");
+	let sectionStart = -1;
+	let sectionLevel = 0;
+	for (let index = 0; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (!match || !matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) continue;
+		sectionStart = index;
+		sectionLevel = match[1]?.length ?? 0;
+		break;
+	}
+	if (sectionStart === -1) {
+		throw new Error('Task body has no "Current Cycle" section; normalize the task skeleton first.');
+	}
+
+	let insertAt = lines.length;
+	for (let index = sectionStart + 1; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
+		if (match && (match[1]?.length ?? 7) <= sectionLevel) {
+			insertAt = index;
+			break;
+		}
+	}
+
+	while (insertAt > sectionStart + 1 && (lines[insertAt - 1] ?? "").trim() === "") {
+		insertAt--;
+	}
+	lines.splice(insertAt, 0, `- ${trimmedNote}`);
+	return lines.join("\n");
+}
+
+/** Last non-empty bullet/line under a "当前周期"/"current cycle" heading. */
 function extractLatestNote(content: string): string | undefined {
 	const lines = content.split("\n");
 	let inSection = false;
+	let sectionLevel = 0;
+	let latest: string | undefined;
 	for (const line of lines) {
-		if (/^#{1,6}\s/.test(line)) {
-			inSection = /当前周期|current cycle/i.test(line);
+		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+		if (heading) {
+			if (inSection && (heading[1]?.length ?? 7) <= sectionLevel) break;
+			if (!inSection && matchesTaskSectionTitle(heading[2] ?? "", ["Current Cycle", "当前周期"])) {
+				inSection = true;
+				sectionLevel = heading[1]?.length ?? 0;
+			}
 			continue;
 		}
 		if (!inSection) continue;
 		const trimmed = line.replace(/^\s*[-*]\s+/, "").trim();
-		if (trimmed) return trimmed;
+		if (trimmed) latest = trimmed;
 	}
-	return undefined;
+	return latest;
 }
 
 function wakeMsOf(frontmatter: TaskFrontmatter): number | undefined {
@@ -179,6 +310,18 @@ function wakeMsOf(frontmatter: TaskFrontmatter): number | undefined {
 /** Actionable first; then earliest wake first (unset wake sorts as "ready now"); then id. */
 export function compareTaskEntries(a: TaskLedgerEntry, b: TaskLedgerEntry): number {
 	if (a.actionable !== b.actionable) return a.actionable ? -1 : 1;
+	if (a.actionable && b.actionable) {
+		const ap = taskPriorityRank(a.frontmatter.control?.priority ?? "normal");
+		const bp = taskPriorityRank(b.frontmatter.control?.priority ?? "normal");
+		if (ap !== bp) return ap - bp;
+		const ad = a.frontmatter.control?.deadline
+			? new Date(a.frontmatter.control.deadline).getTime()
+			: Number.POSITIVE_INFINITY;
+		const bd = b.frontmatter.control?.deadline
+			? new Date(b.frontmatter.control.deadline).getTime()
+			: Number.POSITIVE_INFINITY;
+		if (ad !== bd) return ad - bd;
+	}
 	const aw = a.wakeMs ?? Number.NEGATIVE_INFINITY;
 	const bw = b.wakeMs ?? Number.NEGATIVE_INFINITY;
 	if (aw !== bw) return aw - bw;

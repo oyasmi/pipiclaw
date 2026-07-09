@@ -15,6 +15,8 @@ import {
 	readActiveTasks,
 	type TaskLedgerEntry,
 } from "../shared/task-ledger.js";
+import { taskBudgetViolation } from "../tasks/control.js";
+import { readStoredTask, taskBodyHash, writeStoredTask } from "../tasks/store.js";
 import { parseScheduledEventContent, type ScheduledEvent } from "./events.js";
 
 export interface HandleTasksCommandOptions {
@@ -24,9 +26,16 @@ export interface HandleTasksCommandOptions {
 	/** Workspace directory; required for `/tasks doctor` because events are workspace-scoped. */
 	workspaceDir?: string;
 	channelId?: string;
+	/** Direct command issuer; used to create an auditable external-action approval. */
+	approver?: string;
 }
 
-type TasksCommand = { action: "list" } | { action: "show"; id: string } | { action: "archive" } | { action: "doctor" };
+type TasksCommand =
+	| { action: "list" }
+	| { action: "show"; id: string }
+	| { action: "archive" }
+	| { action: "doctor" }
+	| { action: "approve"; id: string };
 
 function usage(): string {
 	return `# Tasks
@@ -36,6 +45,7 @@ Usage:
 - \`/tasks\` — list active tasks in this channel
 - \`/tasks show <id>\` — show a single task file (active or archived)
 - \`/tasks archive\` — list archived (closed) tasks
+- \`/tasks approve <id>\` — explicitly approve this task's external side effects
 - \`/tasks doctor\` — check task/event consistency without changing files`;
 }
 
@@ -59,6 +69,11 @@ function parseTasksCommand(args: string): TasksCommand {
 	if (action === "doctor") {
 		if (parts.length > 1) throw new Error("Usage: /tasks doctor");
 		return { action: "doctor" };
+	}
+	if (action === "approve") {
+		const id = parts[1];
+		if (!id || parts.length > 2) throw new Error("Usage: /tasks approve <id>");
+		return { action: "approve", id };
 	}
 	throw new Error(`Unknown /tasks action: ${action}`);
 }
@@ -152,6 +167,33 @@ function issue(problem: string, nextStep: string): string {
 	return `- ${problem}\n  Next step: ${nextStep}`;
 }
 
+function relationCycles(graph: Map<string, string[]>): string[][] {
+	const visited = new Set<string>();
+	const active = new Set<string>();
+	const stack: string[] = [];
+	const cycles = new Map<string, string[]>();
+	const visit = (id: string): void => {
+		if (active.has(id)) {
+			const start = stack.indexOf(id);
+			const cycle = [...stack.slice(start), id];
+			const key = [...new Set(cycle)].sort().join("\0");
+			cycles.set(key, cycle);
+			return;
+		}
+		if (visited.has(id)) return;
+		visited.add(id);
+		active.add(id);
+		stack.push(id);
+		for (const next of graph.get(id) ?? []) {
+			if (graph.has(next)) visit(next);
+		}
+		stack.pop();
+		active.delete(id);
+	};
+	for (const id of graph.keys()) visit(id);
+	return Array.from(cycles.values());
+}
+
 async function readActiveTaskContent(channelDir: string, id: string): Promise<string | undefined> {
 	try {
 		return await readFile(join(tasksDir(channelDir), `${id}.md`), "utf-8");
@@ -171,10 +213,48 @@ async function listTasks(channelDir: string): Promise<string> {
 	const blocks = entries.map((entry) => {
 		const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "open") : "⚠ unreadable frontmatter";
 		const detail = [`  status: ${status}`, `wake: ${relativeWake(entry.wakeMs, now)}`];
+		const control = entry.frontmatter.control;
+		if (control) {
+			detail.push(`priority: ${control.priority}`);
+			detail.push(`attempts: ${control.usage.attempts}/${control.budget.maxAttempts}`);
+			detail.push(`verify: ${control.verification.mode}/${control.verification.status}`);
+			if (control.isolation !== "shared") detail.push(`isolation: ${control.isolation}`);
+			if (control.sideEffects !== "workspace") {
+				detail.push(`effects: ${control.sideEffects}/${control.externalApproval}`);
+			}
+			if (control.deadline) detail.push(`deadline: ${control.deadline}`);
+			if (control.parent) detail.push(`parent: ${control.parent}`);
+			if (control.dependsOn.length > 0) detail.push(`depends: ${control.dependsOn.join(",")}`);
+			if (control.nextAction) detail.push(`next: ${control.nextAction}`);
+			if (control.worktree?.branch) detail.push(`branch: ${control.worktree.branch}`);
+		}
 		if (entry.frontmatter.recurrence) detail.push(`recurrence: ${entry.frontmatter.recurrence}`);
 		return `- ${entry.id} — ${entry.title}\n${detail.join("   ")}`;
 	});
 	return `# Tasks: ${entries.length} active\n\n${blocks.join("\n")}`;
+}
+
+async function approveTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
+	const id = normalizeTaskId(idInput);
+	const task = await readStoredTask(options.channelDir, id);
+	if (!task) return `Task not found: ${id}`;
+	const control = task.fields.control;
+	if (!control) return `Task ${id} has no governed control metadata. Ask the agent to normalize it before approval.`;
+	if (task.fields.status === "done" || task.fields.status === "cancelled" || task.fields.status === "escalated") {
+		return `Task ${id} is ${task.fields.status} and cannot receive a new external-action approval.`;
+	}
+	if (control.sideEffects !== "external") {
+		return `Task ${id} is not marked for external side effects; no approval is required.`;
+	}
+	if (control.externalApproval === "granted") {
+		return `Task ${id} was already approved by ${control.approvalBy ?? "a user"} at ${control.approvedAt ?? "an unknown time"}.`;
+	}
+	control.externalApproval = "granted";
+	control.approvalBy = options.approver?.trim() || "unknown-user";
+	control.approvedAt = new Date().toISOString();
+	control.approvalBodyHash = taskBodyHash(task.body);
+	await writeStoredTask(task);
+	return `Approved external side effects for task ${id}. Approval is recorded for ${control.approvalBy}.`;
 }
 
 async function showTask(channelDir: string, id: string): Promise<string> {
@@ -237,6 +317,79 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			);
 			continue;
 		}
+		if (entry.frontmatter.controlReadable === false) {
+			issues.push(
+				issue(
+					`tasks/${entry.id}.md has invalid control metadata; governance is fail-open but cannot be enforced.`,
+					`Use task_manage set or repair the one-line control JSON before allowing the task to run.`,
+				),
+			);
+			continue;
+		}
+
+		const control = entry.frontmatter.control;
+		if (control) {
+			const storedTask = await readStoredTask(options.channelDir, entry.id);
+			const violation = taskBudgetViolation(control, now);
+			if (violation) {
+				issues.push(
+					issue(
+						`tasks/${entry.id}.md exceeds its control limit: ${violation}.`,
+						`Review the task, then explicitly raise its budget/deadline or cancel it; the driver will escalate it.`,
+					),
+				);
+			}
+			for (const relatedId of [control.parent, ...control.dependsOn].filter((value): value is string =>
+				Boolean(value),
+			)) {
+				if (!activeIds.has(relatedId) && !archivedIds.has(relatedId)) {
+					issues.push(
+						issue(
+							`tasks/${entry.id}.md points to missing related task ${relatedId}.`,
+							`Create ${relatedId}, or remove it from parent/dependsOn with task_manage set.`,
+						),
+					);
+				}
+			}
+			if (control.sideEffects === "external" && control.externalApproval !== "granted") {
+				issues.push(
+					issue(
+						`tasks/${entry.id}.md requires external side effects but has no user approval.`,
+						`After reviewing the proposed action, a user must run /tasks approve ${entry.id}.`,
+					),
+				);
+			}
+			if (
+				control.externalApproval === "granted" &&
+				storedTask &&
+				control.approvalBodyHash !== taskBodyHash(storedTask.body)
+			) {
+				issues.push(
+					issue(
+						`tasks/${entry.id}.md changed after external-action approval was granted.`,
+						`Review the current action and run /tasks approve ${entry.id} again.`,
+					),
+				);
+			}
+			if (control.worktree && !existsSync(control.worktree.path)) {
+				issues.push(
+					issue(
+						`tasks/${entry.id}.md records a missing worktree path: ${control.worktree.path}.`,
+						`Clear the stale worktree metadata or create/reassign an isolated worktree.`,
+					),
+				);
+			}
+			if (status !== "done" && control.verification.status === "passed" && control.verification.bodyHash) {
+				if (storedTask && taskBodyHash(storedTask.body) !== control.verification.bodyHash) {
+					issues.push(
+						issue(
+							`tasks/${entry.id}.md changed after its recorded independent PASS.`,
+							`Run a fresh purpose=verify sub-agent and import its attestation before completion.`,
+						),
+					);
+				}
+			}
+		}
 
 		if (status === "done" && !isParseableSchedule(events, entry.id)) {
 			issues.push(
@@ -276,8 +429,23 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			);
 		}
 
+		if (entry.frontmatter.wake && validWakeMs(entry) === undefined) {
+			issues.push(
+				issue(
+					`tasks/${entry.id}.md has an invalid wake value (${entry.frontmatter.wake}); the native driver will treat it as due.`,
+					`Use task_manage set or progress to replace wake with ISO8601, or clear it if the task should continue now.`,
+				),
+			);
+		}
+
 		const checkin = eventKey(events, entry.id, "checkin");
 		if (checkin && isTaskCheckinEvent(checkin)) {
+			issues.push(
+				issue(
+					`events/${checkin.filename} is a legacy task checkin; native wake handling makes it redundant.`,
+					`Delete events/${checkin.filename} and keep the task wake value as the single resume condition.`,
+				),
+			);
 			const wakeMs = validWakeMs(entry);
 			const atMs = new Date(checkin.event.at).getTime();
 			if (wakeMs === undefined) {
@@ -295,14 +463,32 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					),
 				);
 			}
-		} else if (status === "awaiting-user" && validWakeMs(entry) !== undefined) {
-			issues.push(
-				issue(
-					`tasks/${entry.id}.md is awaiting-user with wake set but has no parseable .checkin event.`,
-					`Create task.${options.channelId}.${entry.id}.checkin as a one-shot event for the wake time, or clear wake.`,
-				),
-			);
 		}
+	}
+
+	const parentGraph = new Map<string, string[]>();
+	const dependencyGraph = new Map<string, string[]>();
+	for (const entry of entries) {
+		const control = entry.frontmatter.control;
+		if (!control) continue;
+		parentGraph.set(entry.id, control.parent ? [control.parent] : []);
+		dependencyGraph.set(entry.id, control.dependsOn);
+	}
+	for (const cycle of relationCycles(parentGraph)) {
+		issues.push(
+			issue(
+				`Task parent cycle detected: ${cycle.join(" → ")}.`,
+				`Use task_manage set to clear or correct one parent link in this cycle.`,
+			),
+		);
+	}
+	for (const cycle of relationCycles(dependencyGraph)) {
+		issues.push(
+			issue(
+				`Task dependency cycle detected: ${cycle.join(" → ")}.`,
+				`Use task_manage set to remove one dependsOn edge before the driver can continue these tasks.`,
+			),
+		);
 	}
 
 	for (const event of events) {
@@ -382,6 +568,8 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 				return await showTask(options.channelDir, command.id);
 			case "archive":
 				return await listArchive(options.channelDir);
+			case "approve":
+				return await approveTask(options, command.id);
 			case "doctor":
 				return await doctor(options);
 		}

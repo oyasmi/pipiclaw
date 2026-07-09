@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
-import { renderStandardTaskBody } from "../src/shared/task-ledger.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../src/shared/task-ledger.js";
+import { createDefaultTaskControl } from "../src/tasks/control.js";
 
 const FUTURE = "2026-07-08T23:59:00+08:00";
 
@@ -37,7 +38,7 @@ describe("handleTasksCommand", () => {
 	});
 
 	function run(args: string): Promise<string> {
-		return handleTasksCommand({ args, channelDir, workspaceDir, channelId });
+		return handleTasksCommand({ args, channelDir, workspaceDir, channelId, approver: "Alice" });
 	}
 
 	async function writeEvent(name: string, event: object | string): Promise<void> {
@@ -97,6 +98,41 @@ describe("handleTasksCommand", () => {
 		expect(await run("frobnicate")).toContain("Usage:");
 	});
 
+	it("records explicit user approval for external side effects", async () => {
+		const control = createDefaultTaskControl("evidence");
+		control.sideEffects = "external";
+		control.externalApproval = "required";
+		await writeFile(join(tasksDir, "publish.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
+		const out = await run("approve publish");
+		expect(out).toContain("Approved external side effects");
+		const task = await readFile(join(tasksDir, "publish.md"), "utf-8");
+		expect(task).toContain('"externalApproval":"granted"');
+		expect(task).toContain('"approvalBy":"Alice"');
+	});
+
+	it("doctor detects approval made stale by a later task-body change", async () => {
+		const control = createDefaultTaskControl("evidence");
+		control.sideEffects = "external";
+		control.externalApproval = "required";
+		await writeFile(join(tasksDir, "publish.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
+		await run("approve publish");
+		const approved = await readFile(join(tasksDir, "publish.md"), "utf-8");
+		await writeFile(join(tasksDir, "publish.md"), `${approved}\nChanged proposal.\n`);
+		expect(await run("doctor")).toContain("changed after external-action approval");
+	});
+
+	it("doctor reports dependency cycles introduced by manual edits", async () => {
+		const a = createDefaultTaskControl("evidence");
+		const b = createDefaultTaskControl("evidence");
+		a.dependsOn = ["b"];
+		b.dependsOn = ["a"];
+		await writeFile(join(tasksDir, "a.md"), renderTaskDocument({ status: "open", control: a }, STANDARD_BODY));
+		await writeFile(join(tasksDir, "b.md"), renderTaskDocument({ status: "open", control: b }, STANDARD_BODY));
+		const out = await run("doctor");
+		expect(out).toContain("Task dependency cycle detected");
+		expect(out).toContain("remove one dependsOn edge");
+	});
+
 	it("reports no doctor issues for a clean ledger", async () => {
 		await writeFile(join(tasksDir, "active.md"), doc("status: open", STANDARD_BODY));
 		expect(await run("doctor")).toContain("No task ledger issues found");
@@ -107,6 +143,16 @@ describe("handleTasksCommand", () => {
 		const out = await run("doctor");
 		expect(out).toContain("missing standard section");
 		expect(out).toContain("normalize tasks/thin.md");
+	});
+
+	it("doctor accepts wake without a checkin and reports invalid wake values", async () => {
+		await writeFile(join(tasksDir, "waiting.md"), doc(`status: awaiting-user\nwake: ${FUTURE}`, STANDARD_BODY));
+		expect(await run("doctor")).toContain("No task ledger issues found");
+
+		await writeFile(join(tasksDir, "broken-wake.md"), doc("status: blocked\nwake: soon", STANDARD_BODY));
+		const out = await run("doctor");
+		expect(out).toContain("invalid wake value (soon)");
+		expect(out).toContain("native driver will treat it as due");
 	});
 
 	it("doctor reports task/event consistency issues", async () => {
@@ -139,6 +185,7 @@ describe("handleTasksCommand", () => {
 
 		const out = await run("doctor");
 		expect(out).toContain("has recurrence but no parseable");
+		expect(out).toContain("legacy task checkin");
 		expect(out).toContain("wake does not match");
 		expect(out).toContain("points to archived task old");
 		expect(out).toContain("points to missing task ghost");

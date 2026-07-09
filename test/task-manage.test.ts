@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { writeVerificationAttestation } from "../src/tasks/verification.js";
 import { manageTask, type TaskManageToolOptions } from "../src/tools/task-manage.js";
 
 const CHANNEL_ID = "dm_1";
@@ -136,6 +137,21 @@ describe("manageTask", () => {
 			);
 		});
 
+		it("fails closed on invalid control except for an explicit governed repair", async () => {
+			await writeTask("broken-control", "status: open\ncontrol: {bad", "# Broken\n\n## Current Cycle\n- x");
+			await expect(
+				manageTask(options, { action: "progress", id: "broken-control", note: "continue" }),
+			).rejects.toThrow(/invalid control metadata/);
+			await manageTask(options, {
+				action: "set",
+				id: "broken-control",
+				control: { priority: "high", verificationMode: "independent" },
+			});
+			const repaired = await readFile(join(tasksDir, "broken-control.md"), "utf-8");
+			expect(repaired).toContain('"priority":"high"');
+			expect(repaired).toContain('"mode":"independent"');
+		});
+
 		it("rejects a missing task", async () => {
 			await expect(manageTask(options, { action: "set", id: "ghost", status: "open" })).rejects.toThrow(
 				/does not exist/,
@@ -143,7 +159,158 @@ describe("manageTask", () => {
 		});
 	});
 
+	describe("progress", () => {
+		it("atomically appends a cycle note and updates status/wake", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "long-work",
+				title: "Long work",
+				goal: "Finish safely",
+				dod: "- [ ] Tests pass",
+			});
+			const result = await manageTask(options, {
+				action: "progress",
+				id: "long-work",
+				note: "Implemented parser; targeted tests pass; next: integration test.",
+				status: "in-progress",
+				wake: "2026-07-08T14:00:00+08:00",
+			});
+			expect(result.status).toBe("in-progress");
+			const onDisk = await readFile(join(tasksDir, "long-work.md"), "utf-8");
+			expect(onDisk).toContain("wake: 2026-07-08T14:00:00+08:00");
+			expect(onDisk).toContain("- Implemented parser; targeted tests pass; next: integration test.");
+		});
+
+		it("requires a note and a standard Current Cycle section", async () => {
+			await writeTask("thin", "status: open", "# Thin");
+			await expect(manageTask(options, { action: "progress", id: "thin" })).rejects.toThrow(/requires note/);
+			await expect(manageTask(options, { action: "progress", id: "thin", note: "Started." })).rejects.toThrow(
+				/normalize the task skeleton/,
+			);
+		});
+	});
+
 	describe("done", () => {
+		it("requires and consumes an independent verifier attestation for governed tasks", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "verified",
+				title: "Verified task",
+				goal: "Ship a verified result",
+				dod: "- [x] Result exists",
+			});
+			await expect(
+				manageTask(options, {
+					action: "done",
+					id: "verified",
+					summary: "Done",
+					evidence: "Observed result",
+				}),
+			).rejects.toThrow(/independent PASS/);
+
+			await writeVerificationAttestation(channelDir, {
+				runId: "verify-run-1",
+				taskId: "verified",
+				verdict: "pass",
+				agent: "reviewer",
+				model: "test/model",
+				checkedAt: new Date().toISOString(),
+				evidence: "The result and deterministic check both pass.",
+				workspaceChanged: false,
+				output: "VERDICT: PASS",
+			});
+			await manageTask(options, {
+				action: "verify",
+				id: "verified",
+				verifierRunId: "verify-run-1",
+			});
+			const result = await manageTask(options, {
+				action: "done",
+				id: "verified",
+				summary: "Done",
+				evidence: "Independent run verify-run-1 passed.",
+			});
+			expect(result.archived).toBe(true);
+		});
+
+		it("gates completion on unfinished children and rejects parent/dependency cycles", async () => {
+			for (const [id, parent] of [
+				["parent", undefined],
+				["child", "parent"],
+			] as const) {
+				await manageTask(options, {
+					action: "create",
+					id,
+					title: id,
+					goal: `Finish ${id}`,
+					dod: "- [x] complete",
+					control: { verificationMode: "evidence", parent },
+				});
+			}
+			await expect(
+				manageTask(options, {
+					action: "done",
+					id: "parent",
+					summary: "Done",
+					evidence: "Checked",
+				}),
+			).rejects.toThrow(/unfinished child/);
+			await expect(
+				manageTask(options, { action: "set", id: "parent", control: { parent: "child" } }),
+			).rejects.toThrow(/parent cycle/);
+			await expect(
+				manageTask(options, { action: "set", id: "parent", control: { dependsOn: ["child"] } }),
+			).resolves.toMatchObject({ status: "open" });
+
+			for (const id of ["dep-a", "dep-b"]) {
+				await manageTask(options, {
+					action: "create",
+					id,
+					title: id,
+					goal: `Finish ${id}`,
+					dod: "- [x] complete",
+					control: { verificationMode: "evidence" },
+				});
+			}
+			await manageTask(options, { action: "set", id: "dep-a", control: { dependsOn: ["dep-b"] } });
+			await expect(
+				manageTask(options, { action: "set", id: "dep-b", control: { dependsOn: ["dep-a"] } }),
+			).rejects.toThrow(/dependency cycle/);
+		});
+
+		it("does not let the agent self-grant external approval", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "publish",
+				title: "Publish",
+				goal: "Publish externally",
+				dod: "- [ ] published",
+				control: { verificationMode: "evidence", sideEffects: "external" },
+			});
+			await expect(
+				manageTask(options, { action: "set", id: "publish", control: { externalApproval: "granted" } }),
+			).rejects.toThrow(/\/tasks approve/);
+		});
+
+		it("rejects unchecked structured acceptance items", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "unchecked",
+				title: "Unchecked",
+				goal: "Finish all checks",
+				dod: "- [x] implementation exists\n- [ ] integration test passes",
+				control: { verificationMode: "evidence" },
+			});
+			await expect(
+				manageTask(options, {
+					action: "done",
+					id: "unchecked",
+					summary: "Done",
+					evidence: "Implementation checked",
+				}),
+			).rejects.toThrow(/integration test passes/);
+		});
+
 		it("archives a one-shot task and deletes its residual one-shot events", async () => {
 			await writeTask("fix-bug", "status: in-progress", "# Fix bug");
 			await writeEvent("task.dm_1.fix-bug.checkin", {
@@ -235,8 +402,8 @@ describe("manageTask", () => {
 			await writeTask("b", "status: done", "# Task B");
 			const result = await manageTask(options, { action: "list" });
 			expect(result.tasks).toEqual([
-				{ id: "a", title: "Task A", status: "in-progress", wake: undefined, actionable: true },
-				{ id: "b", title: "Task B", status: "done", wake: undefined, actionable: false },
+				{ id: "a", title: "Task A", status: "in-progress", wake: undefined, actionable: true, control: undefined },
+				{ id: "b", title: "Task B", status: "done", wake: undefined, actionable: false, control: undefined },
 			]);
 		});
 	});

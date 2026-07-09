@@ -1,14 +1,18 @@
+import { execFileSync } from "node:child_process";
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChannelStore } from "../src/runtime/store.js";
-import type { Executor } from "../src/sandbox.js";
+import { createExecutor, type Executor } from "../src/sandbox.js";
+import { renderTaskDocument } from "../src/shared/task-ledger.js";
 import { discoverSubAgents, getSubAgentsDir, resolveSubAgentConfig } from "../src/subagents/discovery.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
+import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { readVerificationAttestation } from "../src/tasks/verification.js";
 
 const model = getModel("openai", "gpt-4o-mini")!;
 
@@ -236,6 +240,107 @@ Review files carefully.`,
 });
 
 describe("sub-agent tool", () => {
+	it("creates a durable read-only verifier attestation", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		writeFileSync(join(channelDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
+		let delegatedTask = "";
+		const tool = createSubAgentTool({
+			executor: fakeExecutor,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			channelDir,
+			runtimeContext: { workspacePath: workspaceDir, channelId: "dm_123", sandbox: "host" },
+			createWorker: () =>
+				new FakeWorker((input, worker) => {
+					delegatedTask = input;
+					const message = createAssistantMessage("All DoD checks passed.\nVERDICT: PASS");
+					worker.state.messages = [message];
+					worker.emit({ type: "message_end", message });
+				}),
+		});
+
+		const result = await tool.execute("verify-call-1", {
+			label: "verify ship",
+			name: "independent-verifier",
+			systemPrompt: "Verify evidence independently.",
+			tools: ["read", "bash"],
+			task: "Run the acceptance plan.",
+			purpose: "verify",
+			taskId: "ship",
+		});
+		expect(result.details).toMatchObject({
+			runId: "verify-call-1",
+			purpose: "verify",
+			taskId: "ship",
+			verificationVerdict: "pass",
+		});
+		expect(delegatedTask).toContain(join(channelDir, "tasks", "ship.md"));
+		expect(delegatedTask).toContain("VERDICT: PASS or VERDICT: FAIL");
+		await expect(readVerificationAttestation(channelDir, "verify-call-1")).resolves.toMatchObject({
+			taskId: "ship",
+			verdict: "pass",
+			workspaceChanged: false,
+		});
+	});
+
+	it("runs implementation in a task-owned git worktree", async () => {
+		const workspaceDir = createTempWorkspace();
+		const repoDir = join(workspaceDir, "repo");
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(repoDir, { recursive: true });
+		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		writeFileSync(
+			join(channelDir, "tasks", "ship.md"),
+			renderTaskDocument({ status: "open", control: createDefaultTaskControl() }, "# Ship\n"),
+		);
+		execFileSync("git", ["-C", repoDir, "init", "-q"]);
+		execFileSync("git", ["-C", repoDir, "config", "user.email", "test@example.com"]);
+		execFileSync("git", ["-C", repoDir, "config", "user.name", "Test"]);
+		writeFileSync(join(repoDir, "README.md"), "base\n");
+		execFileSync("git", ["-C", repoDir, "add", "README.md"]);
+		execFileSync("git", ["-C", repoDir, "commit", "-qm", "base"]);
+		let delegatedTask = "";
+		const tool = createSubAgentTool({
+			executor: createExecutor({ type: "host" }),
+			workingDirectory: repoDir,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			channelDir,
+			runtimeContext: { workspacePath: workspaceDir, channelId: "dm_123", sandbox: "host" },
+			createWorker: () =>
+				new FakeWorker((input, worker) => {
+					delegatedTask = input;
+					const message = createAssistantMessage("Implementation complete.");
+					worker.state.messages = [message];
+					worker.emit({ type: "message_end", message });
+				}),
+		});
+
+		const result = await tool.execute("worktree-call-1", {
+			label: "isolated implementation",
+			name: "implementer",
+			systemPrompt: "Implement the requested change.",
+			tools: ["read", "bash", "write", "edit"],
+			task: "Implement in the isolated checkout.",
+			taskId: "ship",
+			isolation: "worktree",
+		});
+		expect(result.details.isolation).toBe("worktree");
+		expect(result.details.worktreeBranch).toMatch(/^pipiclaw-task\/ship\//);
+		expect(result.details.worktreePath && existsSync(result.details.worktreePath)).toBe(true);
+		expect(delegatedTask).toContain("Filesystem isolation: dedicated git worktree");
+		expect(delegatedTask).toContain(result.details.worktreePath);
+		const task = readFileSync(join(channelDir, "tasks", "ship.md"), "utf-8");
+		expect(task).toContain('"isolation":"worktree"');
+		expect(task).toContain(result.details.worktreeBranch);
+	});
+
 	it("preserves partial output and injects minimal runtime context", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_123");
@@ -303,7 +408,7 @@ describe("sub-agent tool", () => {
 		expect(result.details.usage.total).toBe(19);
 		expect(delegatedTask).toContain("Workspace root: /workspace/root");
 		expect(delegatedTask).toContain("Channel id: dm_123");
-		expect(delegatedTask).toContain("Filesystem isolation: none");
+		expect(delegatedTask).toContain("Filesystem isolation: shared with parent");
 		expect(delegatedTask).toContain("Inspect the current workspace and summarize the main risks.");
 	});
 

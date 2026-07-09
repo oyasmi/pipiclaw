@@ -50,6 +50,28 @@ describe("prompt-builder", () => {
 		expect(prompt).not.toContain("Maximum 5 events");
 	});
 
+	it("injects the native task lifecycle only when task_manage is present", () => {
+		const prompt = buildAppendSystemPrompt(
+			"/workspace/root",
+			"dm_123",
+			{ type: "host" },
+			{
+				tools: [
+					{ name: "task_manage", description: "Manage tasks" },
+					{ name: "event_manage", description: "Schedule events" },
+				],
+			},
+		);
+		expect(prompt).toContain("## Persistent Tasks");
+		expect(prompt).toContain("no heartbeat event");
+		expect(prompt).toContain("call task_manage progress once");
+		expect(prompt).toContain("wake alone is authoritative");
+		expect(prompt).toContain("canonical task.<channelId>.<taskId>.schedule");
+
+		const withoutTasks = buildAppendSystemPrompt("/workspace/root", "dm_123", { type: "host" }, { tools: [] });
+		expect(withoutTasks).not.toContain("## Persistent Tasks");
+	});
+
 	it("builds docker runtime prompts with docker-specific instructions", () => {
 		const prompt = buildAppendSystemPrompt(
 			"/workspace/root",

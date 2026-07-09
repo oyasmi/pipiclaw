@@ -63,4 +63,35 @@ describe("settings manager", () => {
 		expect(new PipiclawSettingsManager(blankDir).getFallbackModelReference()).toBeNull();
 		expect(new PipiclawSettingsManager(missingDir).getFallbackModelReference()).toBeNull();
 	});
+
+	it("enables the native task driver by default and clamps unsafe cadence settings", () => {
+		const defaultsDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
+		const configuredDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
+		tempDirs.push(defaultsDir, configuredDir);
+		writeFileSync(join(defaultsDir, "settings.json"), "{}", "utf-8");
+		writeFileSync(
+			join(configuredDir, "settings.json"),
+			JSON.stringify({
+				taskDriver: {
+					continuationDelayMinutes: 0,
+					stalledRetryMinutes: 0,
+					maxDispatchesPerTick: 999,
+				},
+			}),
+			"utf-8",
+		);
+
+		expect(new PipiclawSettingsManager(defaultsDir).getTaskDriverSettings()).toEqual({
+			enabled: true,
+			continuationDelayMinutes: 5,
+			stalledRetryMinutes: 60,
+			maxDispatchesPerTick: 4,
+		});
+		expect(new PipiclawSettingsManager(configuredDir).getTaskDriverSettings()).toEqual({
+			enabled: true,
+			continuationDelayMinutes: 1,
+			stalledRetryMinutes: 1,
+			maxDispatchesPerTick: 20,
+		});
+	});
 });

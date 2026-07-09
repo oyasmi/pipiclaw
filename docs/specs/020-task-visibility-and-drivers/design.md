@@ -1,5 +1,7 @@
 # Task Ledger Phase 2：可见性与驱动力设计方案
 
+> 历史设计：其中基于外部 heartbeat 的恢复路径和 wake/checkin 双写已由 [022 Native Task Driver](../022-native-task-driver/design.md) 取代；摘要、`/tasks`、`task_manage` 与 agentmux 传感器部分仍有效。
+
 | 字段 | 值 |
 |------|------|
 | 分支 | `feat/task-ledger-phase2` |

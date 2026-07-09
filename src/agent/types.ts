@@ -14,7 +14,15 @@ export interface RunnerStatusSnapshot {
 }
 
 export interface AgentRunner {
-	run(ctx: ChannelContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }>;
+	run(
+		ctx: ChannelContext,
+		store: ChannelStore,
+	): Promise<{
+		stopReason: string;
+		errorMessage?: string;
+		usage?: UsageTotals;
+		durationMs?: number;
+	}>;
 	handleBuiltinCommand(ctx: ChannelContext, command: BuiltInCommand): Promise<void>;
 	queueSteer(text: string, userName?: string): Promise<void>;
 	flushMemoryForShutdown(): Promise<void>;

@@ -85,6 +85,17 @@ export interface PipiclawTaskDigestSettings {
 	maxChars: number;
 }
 
+export interface PipiclawTaskDriverSettings {
+	/** Native runtime wake-up for actionable task-ledger entries. */
+	enabled: boolean;
+	/** Earliest continuation after a task changed during its previous run. */
+	continuationDelayMinutes: number;
+	/** Retry delay when a dispatched task made no observable ledger progress. */
+	stalledRetryMinutes: number;
+	/** Global enqueue cap per scan, with round-robin fairness across channels. */
+	maxDispatchesPerTick: number;
+}
+
 export interface PipiclawSessionMemorySettings {
 	enabled: boolean;
 	minTurnsBetweenUpdate: number;
@@ -149,6 +160,7 @@ export interface PipiclawSettings {
 	retry?: Partial<PipiclawRetrySettings>;
 	memoryRecall?: Partial<PipiclawMemoryRecallSettings>;
 	taskDigest?: Partial<PipiclawTaskDigestSettings>;
+	taskDriver?: Partial<PipiclawTaskDriverSettings>;
 	sessionMemory?: Partial<PipiclawSessionMemorySettings>;
 	memoryGrowth?: Partial<PipiclawMemoryGrowthSettings>;
 	memoryMaintenance?: Partial<PipiclawMemoryMaintenanceSettings>;
@@ -198,6 +210,16 @@ const DEFAULT_TASK_DIGEST: PipiclawTaskDigestSettings = {
 	enabled: true,
 	maxTasks: 8,
 	maxChars: 1000,
+};
+
+// The driver makes `wake` an executable task property rather than a convention
+// that requires users to install a heartbeat event and sensor script. A changed
+// task can continue promptly; an unchanged task backs off to avoid token loops.
+const DEFAULT_TASK_DRIVER: PipiclawTaskDriverSettings = {
+	enabled: true,
+	continuationDelayMinutes: 5,
+	stalledRetryMinutes: 60,
+	maxDispatchesPerTick: 4,
 };
 
 const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
@@ -361,6 +383,28 @@ export class PipiclawSettingsManager {
 		return {
 			...DEFAULT_TASK_DIGEST,
 			...this.settings.taskDigest,
+		};
+	}
+
+	getTaskDriverSettings(): PipiclawTaskDriverSettings {
+		const configured = {
+			...DEFAULT_TASK_DRIVER,
+			...this.settings.taskDriver,
+		};
+		const continuationDelayMinutes = Number.isFinite(configured.continuationDelayMinutes)
+			? Math.min(60, Math.max(1, Math.floor(configured.continuationDelayMinutes)))
+			: DEFAULT_TASK_DRIVER.continuationDelayMinutes;
+		const stalledRetryMinutes = Number.isFinite(configured.stalledRetryMinutes)
+			? Math.min(24 * 60, Math.max(continuationDelayMinutes, Math.floor(configured.stalledRetryMinutes)))
+			: DEFAULT_TASK_DRIVER.stalledRetryMinutes;
+		const maxDispatchesPerTick = Number.isFinite(configured.maxDispatchesPerTick)
+			? Math.min(20, Math.max(1, Math.floor(configured.maxDispatchesPerTick)))
+			: DEFAULT_TASK_DRIVER.maxDispatchesPerTick;
+		return {
+			enabled: configured.enabled !== false,
+			continuationDelayMinutes,
+			stalledRetryMinutes,
+			maxDispatchesPerTick,
 		};
 	}
 

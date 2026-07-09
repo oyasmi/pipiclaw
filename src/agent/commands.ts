@@ -32,11 +32,12 @@ These are handled directly by the DingTalk transport/runtime layer.
   Example: \`/events show weekly-review\`
   Example: \`/events delete weekly-review\`
   Example: \`/events history weekly-review\`
-- \`/tasks [show <id>|archive|doctor]\`
-  View the channel's task ledger (read-only); to change a task, just tell me in plain language
+- \`/tasks [show <id>|archive|approve <id>|doctor]\`
+  View and diagnose the channel's task ledger; \`approve\` is the explicit user gate for external side effects
   Example: \`/tasks\`
   Example: \`/tasks show weekly-report\`
   Example: \`/tasks archive\`
+  Example: \`/tasks approve publish-release\`
   Example: \`/tasks doctor\`
 - \`/status\`
   Show runtime status: run state, current model, context usage, uptime, version

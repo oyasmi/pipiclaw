@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 受治理任务 control（P1）：priority/deadline/next-action、累计 attempt/token/cost/wall-time 预算、副作用策略、父子依赖、隔离意图和验收状态都经过校验。原生 driver 不调用 LLM 即可检查硬限制与终止性依赖，回写真实用量，并在超限时升级而不是继续循环。
+- 独立验收：任务骨架新增 Verification；`subagent purpose=verify` 以只读 checker 运行并持久化绑定 task body 的证明，供 `task_manage verify` 导入。缺少/过期/失败的验收、未完成依赖/子任务或未授权外部动作都会阻止 `done`。
+- `/tasks approve <id>` 提供显式外部动作授权；runtime 直接记录授权人/时间，`task_manage` 无法自授予。
+- 长任务分解与隔离（P2）：parent/child 与 `dependsOn` 会门禁执行/收尾，并拒绝缺失、自指和成环关系；`subagent isolation=worktree` 可创建或复用 task-owned host git worktree，并返回 path/branch。
+- 内建 task driver：DingTalk daemon 原生按 `status`/`wake` 确定性扫描并唤醒 actionable task，长程工作不再要求手工安装 heartbeat event、`tasks-pending.mjs` 或配套 `.checkin`。派发会跳过运行中的 channel、跨 channel 轮转、限制单 tick 数量；台账有进展时短冷却续跑，无变化时长退避，避免 token 热循环。
+- `task_manage progress`：在一次原子文件替换中追加 Current Cycle checkpoint 并更新 status/wake/recurrence。工具注册时，系统提示会自动注入完整任务生命周期 SOP。
+- 新增 `settings.taskDriver`，可控制 driver 开关、续跑冷却、停滞重试与单 tick 派发上限；默认值保守且所有数值都有安全范围。
+
+### 变更
+
+- `/tasks`、task agenda 与 `/tasks doctor` 现在展示治理状态；`task_manage` 新增 `verify` / `cancel`，progress 会使旧验收失效。
+- task `wake` 成为普通恢复的单一条件。task-owned one-shot `.checkin` 进入兼容退役：升级期间 driver 会短暂让 live checkin 负责交接，`/tasks doctor` 会建议删除；周期任务仍只用 `.schedule` 开启新周期。
+- 任务摘要现在读取 Current Cycle 的最后一条记录，不再被骨架创建时的第一条默认文本长期遮住，注入议程会反映真正的最新进展。
+
 ## [0.7.7] - 2026-07-09
 
 任务台账加固：收紧 task/event 生命周期，让长程自主工作拥有更清晰、可审计的控制面，同时不再引入新的用户概念。

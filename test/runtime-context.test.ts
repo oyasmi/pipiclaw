@@ -92,6 +92,7 @@ describe("createRuntimeContext", () => {
 		bootstrapAppHome(paths);
 		const bot = new FakeTestBot();
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
+		const taskDriver = { start: vi.fn(), stop: vi.fn() };
 
 		const runtime = createRuntimeContext({
 			paths,
@@ -110,6 +111,7 @@ describe("createRuntimeContext", () => {
 				return bot as unknown as DingTalkBot;
 			},
 			createEventsWatcher: () => eventsWatcher,
+			createTaskDriver: () => taskDriver,
 		});
 
 		await runtime.handler.handleEvent(createDmEvent("/help", "1000"), bot as unknown as DingTalkBot);
@@ -121,6 +123,37 @@ describe("createRuntimeContext", () => {
 		await runtime.shutdown();
 		expect(bot.stop).toHaveBeenCalled();
 		expect(eventsWatcher.stop).toHaveBeenCalled();
+		expect(taskDriver.stop).toHaveBeenCalled();
+	});
+
+	it("starts the native task driver with the other runtime services", async () => {
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+		const bot = new FakeTestBot();
+		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
+		const memoryScheduler = { start: vi.fn(), stop: vi.fn() };
+		const taskDriver = { start: vi.fn(), stop: vi.fn() };
+		const runtime = createRuntimeContext({
+			paths,
+			sandbox: { type: "host" },
+			dingtalkConfig: {
+				clientId: "client-id",
+				clientSecret: "client-secret",
+				stateDir: paths.workspaceDir,
+			},
+			registerSignalHandlers: false,
+			startServices: true,
+			createBot: () => bot as unknown as DingTalkBot,
+			createEventsWatcher: () => eventsWatcher,
+			createMemoryMaintenanceScheduler: () => memoryScheduler,
+			createTaskDriver: () => taskDriver,
+		});
+
+		expect(eventsWatcher.start).toHaveBeenCalledOnce();
+		expect(memoryScheduler.start).toHaveBeenCalledOnce();
+		expect(taskDriver.start).toHaveBeenCalledOnce();
+		await runtime.shutdown();
+		expect(taskDriver.stop).toHaveBeenCalledOnce();
 	});
 
 	it("recovers when archiving an incoming message fails", async () => {

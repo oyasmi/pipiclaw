@@ -40,6 +40,7 @@ import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { isRecord } from "../shared/type-guards.js";
+import type { UsageTotals } from "../shared/types.js";
 import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
@@ -238,7 +239,16 @@ export class ChannelRunner implements AgentRunner {
 
 	// === Public API ===
 
-	async run(ctx: ChannelContext, store: ChannelStore): Promise<{ stopReason: string; errorMessage?: string }> {
+	async run(
+		ctx: ChannelContext,
+		store: ChannelStore,
+	): Promise<{
+		stopReason: string;
+		errorMessage?: string;
+		usage: UsageTotals;
+		durationMs: number;
+	}> {
+		const startedAt = Date.now();
 		this.resetRunState(ctx, store);
 		this.acceptingBusyMessages = true;
 		this.agentLoopStarted = false;
@@ -516,7 +526,12 @@ export class ChannelRunner implements AgentRunner {
 			this.runState.queue = null;
 		}
 
-		return { stopReason: this.runState.stopReason, errorMessage: this.runState.errorMessage };
+		return {
+			stopReason: this.runState.stopReason,
+			errorMessage: this.runState.errorMessage,
+			usage: { ...this.runState.totalUsage, cost: { ...this.runState.totalUsage.cost } },
+			durationMs: Date.now() - startedAt,
+		};
 	}
 
 	async handleBuiltinCommand(ctx: ChannelContext, command: BuiltInCommand): Promise<void> {

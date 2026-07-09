@@ -30,6 +30,7 @@ import {
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
+import { finishTaskAttempt } from "../tasks/store.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
@@ -51,6 +52,7 @@ import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
 import { handleTasksCommand as runTasksCommand } from "./task-commands.js";
+import { TaskDriver } from "./task-driver.js";
 
 export interface BootstrapPaths {
 	appName: string;
@@ -589,6 +591,8 @@ interface RuntimeContextOptions {
 	) => { start(): void; stop(): void };
 	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
 	memoryMaintenanceSchedulerIntervalMs?: number;
+	createTaskDriver?: () => { start(): void; stop(): void };
+	taskDriverIntervalMs?: number;
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
 }
@@ -688,6 +692,8 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				channelDir: getChannelDir(options.paths.workspaceDir, event.channelId),
 				workspaceDir: options.paths.workspaceDir,
 				channelId: event.channelId,
+				approver:
+					event.userName && event.userName !== event.user ? `${event.userName} (${event.user})` : event.user,
 			});
 			await bot.sendPlain(event.channelId, response);
 		},
@@ -827,6 +833,20 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						ctx.primeCard(350);
 					}
 					const result = await state.runner.run(ctx, store);
+					const taskDriverMatch = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text);
+					if (taskDriverMatch?.[1] && result.usage && result.durationMs !== undefined) {
+						await finishTaskAttempt(
+							getChannelDir(options.paths.workspaceDir, event.channelId),
+							taskDriverMatch[1],
+							{
+								tokens: result.usage.total,
+								costUsd: result.usage.cost.total,
+								wallTimeMinutes: result.durationMs / 60_000,
+								failed: result.stopReason === "error" || result.stopReason === "aborted",
+								finishedAt: new Date(),
+							},
+						);
+					}
 
 					if (result.stopReason === "aborted" && state.stopRequested) {
 						log.logInfo(`[${event.channelId}] Stopped`);
@@ -880,6 +900,19 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				},
 				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,
 			});
+	const taskDriver = options.createTaskDriver
+		? options.createTaskDriver()
+		: new TaskDriver({
+				workspaceDir: options.paths.workspaceDir,
+				getKnownChannelIds: () => channelStates.keys(),
+				isChannelActive: (channelId) => channelStates.get(channelId)?.running ?? false,
+				dispatch: (event) => bot.enqueueEvent(event),
+				getSettings: () => {
+					runtimeSettingsManager.reload();
+					return runtimeSettingsManager.getTaskDriverSettings();
+				},
+				intervalMs: options.taskDriverIntervalMs,
+			});
 
 	const shutdownWithReason = async (reason: NodeJS.Signals | "manual" = "manual"): Promise<void> => {
 		if (shutdownPromise) {
@@ -890,6 +923,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			shuttingDown = true;
 			log.logInfo(`Shutting down (${reason})...`);
 
+			taskDriver.stop();
 			memoryMaintenanceScheduler.stop();
 			eventsWatcher.stop();
 			await bot.stop();
@@ -970,6 +1004,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	if (startServices) {
 		eventsWatcher.start();
 		memoryMaintenanceScheduler.start();
+		taskDriver.start();
 		void bot.start();
 	}
 

@@ -187,7 +187,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 #### 事件自调度工具（`tools.events`）
 
-`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件（one-shot 回访 / periodic 节奏），是[任务台账（tasks）](./tasks.md)自我驱动的底层能力。默认开启。
+`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据 `wake` 驱动；event 主要用于周期任务的 cron 节奏、独立提醒和外部传感器。默认开启。
 
 ```jsonc
 {
@@ -203,7 +203,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 #### 任务台账工具（`tools.tasks`）
 
-`task_manage` 工具让主 agent 用受校验的方式维护[任务台账](./tasks.md)的 frontmatter 与生命周期（set 状态/唤醒时间、done 一步闭环并清理残留事件、list active 任务）。默认开启。
+`task_manage` 工具让主 agent 维护[受治理任务台账](./tasks.md)：create 生成标准骨架与 control，progress 原子写进展/调度/预算策略，set 修正 metadata，verify 导入独立验收，done 执行完成门禁，cancel 显式放弃，list 返回 active 任务。默认开启。
 
 ```jsonc
 {
@@ -214,7 +214,8 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 ```
 
 - 只有一个开关 `enabled`（默认 `true`）；关掉后主 agent 仍可用 read/edit/write 直接维护 task 文件，只是少了 frontmatter 保真与闭环原子化这层便利。
-- 该工具只发给主 agent，不进子代理工具集。它只管 frontmatter 与闭环，不写任务正文（正文用 write/edit）。
+- 该工具只发给主 agent，不进子代理工具集。新任务默认 independent verification 和 12 次 attempt 上限；可设置 token/cost/wall-time/deadline、parent/dependsOn、sideEffects 与 isolation。`progress` 只追加 Current Cycle 条目；Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
+- agent 不能把 external approval 设为 granted；用户必须直接发送 `/tasks approve <id>`，runtime 才记录可审计授权。
 
 #### 结构化搜索工具（`tools.grep`）
 
@@ -290,6 +291,26 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 - `enabled`（默认 `true`）：关掉后不再注入任务摘要。
 - `maxTasks`（默认 `8`）/ `maxChars`（默认 `1000`）：摘要的上限，超出会截断并标注剩余数量。摘要只收录 status ≠ done 的任务，无 active 任务时不注入。
+
+#### 内建任务驱动器（`taskDriver`，settings.json）
+
+DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描本身不调用模型；只有存在 actionable task（status ≠ done 且 wake 未设/已到）时才入队唤醒，因此不再需要手工 heartbeat event、`tasks-pending.mjs` 或 task `.checkin` 事件。默认开启。
+
+```jsonc
+{
+  "taskDriver": {
+    "enabled": true,
+    "continuationDelayMinutes": 5,
+    "stalledRetryMinutes": 60,
+    "maxDispatchesPerTick": 4
+  }
+}
+```
+
+- runtime 每分钟廉价扫描一次；`continuationDelayMinutes`（默认 `5`，范围 1–60）表示上一轮确实修改台账后最早何时续跑。
+- `stalledRetryMinutes`（默认 `60`，范围不小于 continuation、最大 1440）表示入队后台账没有任何变化时的退避，防止坏任务形成 token 热循环。
+- `maxDispatchesPerTick`（默认 `4`，范围 1–20）是单次扫描的全局派发上限。driver 按 channel 轮转，避免排序靠后的 channel 饥饿；同一 channel 每 tick 最多唤醒一个任务，运行中的 channel 会跳过。
+- daemon 重启会清空内存退避，使遗留 actionable task 在下一次扫描重新进入恢复路径。`tui_local` 之类纯 TUI channel 会保留台账和摘要，但关闭的 TUI 没有常驻 transport，不能自行唤醒。
 
 ## 终端 TUI（Terminal TUI）
 

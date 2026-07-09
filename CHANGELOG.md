@@ -4,6 +4,22 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Governed task control (P1): validated priority/deadline/next-action, cumulative attempt/token/cost/wall-time budgets, side-effect policy, parent/dependency links, isolation intent, and verification state. The native driver checks hard limits and terminal dependencies without an LLM, records actual run usage, and escalates instead of looping.
+- Independent acceptance: task skeletons include Verification; `subagent purpose=verify` runs a read-only checker and persists a body-bound attestation for `task_manage verify`. `done` rejects missing/stale/failed verification, incomplete dependencies/children, and unapproved external actions.
+- Explicit external-action approval via `/tasks approve <id>`, handled directly by the runtime with issuer/time audit fields; `task_manage` cannot self-grant it.
+- Long-task decomposition and isolation (P2): parent/child and `dependsOn` graphs gate execution/close-out and reject missing/self/cyclic links; `subagent isolation=worktree` creates or reuses task-owned host git worktrees and returns path/branch metadata.
+- Native task driver: the DingTalk daemon now deterministically scans channel task ledgers and wakes actionable tasks from `status`/`wake`, so long-running work resumes without a hand-installed heartbeat event, `tasks-pending.mjs`, or paired `.checkin` file. Dispatches skip active channels, round-robin across channels, cap each tick, continue changed ledgers after a short cooldown, and back off unchanged ledgers to prevent token loops.
+- `task_manage progress`: atomically appends a Current Cycle checkpoint and updates status/wake/recurrence in one file replacement. The built-in system prompt now teaches the complete task lifecycle whenever the tool is registered.
+- `settings.taskDriver` controls the native driver (`enabled`, continuation delay, stalled retry, and per-tick dispatch cap), with conservative defaults and bounded values.
+
+### Changed
+
+- `/tasks`, task agenda injection, and `/tasks doctor` now surface governance state. `task_manage` adds `verify` and `cancel`, while progress invalidates old verification.
+- Task `wake` is now the single normal resume condition. Task-owned one-shot `.checkin` events are legacy: the driver briefly yields to a live checkin during upgrades, `/tasks doctor` recommends removing it, and periodic `.schedule` events remain only for opening recurring cycles.
+- Task agenda extraction now reports the last Current Cycle entry instead of the first, so the injected summary reflects actual recent progress rather than the skeleton's creation note.
+
 ## [0.7.7] - 2026-07-09
 
 Task ledger hardening: tightened the task/event lifecycle so long-running autonomous work has a clearer, more auditable control surface without adding another concept for users to learn.

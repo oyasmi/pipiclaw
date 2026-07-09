@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	appendCurrentCycleNote,
 	extractTaskTitle,
 	isTaskActionable,
 	missingStandardTaskSections,
@@ -11,6 +12,7 @@ import {
 	readActiveTasks,
 	renderStandardTaskBody,
 	taskBody,
+	uncheckedTaskAcceptanceItems,
 } from "../src/shared/task-ledger.js";
 
 const NOW = Date.parse("2026-07-08T12:00:00+08:00");
@@ -102,8 +104,33 @@ describe("standard task skeleton", () => {
 	});
 
 	it("accepts Chinese section aliases", () => {
-		const body = "# 周报\n\n## 目标\nx\n\n## DoD\nx\n\n## 手册\nx\n\n## 当前周期\nx\n\n## 历史\nx";
+		const body =
+			"# 周报\n\n## 目标\nx\n\n## DoD\nx\n\n## 手册\nx\n\n## 验收\nx\n\n## 当前周期（2026-W28）\nx\n\n## 历史\nx";
 		expect(missingStandardTaskSections(body)).toEqual([]);
+	});
+
+	it("finds unchecked acceptance boxes only in DoD and Verification", () => {
+		const body =
+			"# T\n\n## DoD\n- [x] built\n- [ ] tested\n\n## Verification\n- [ ] reviewer passed\n\n## Current Cycle\n- [ ] not acceptance";
+		expect(uncheckedTaskAcceptanceItems(body)).toEqual(["DoD: tested", "Verification: reviewer passed"]);
+	});
+
+	it("appends progress inside Current Cycle without disturbing History", () => {
+		const body = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D" });
+		const updated = appendCurrentCycleNote(body, "Tests pass; next step: review.");
+		expect(updated).toContain(
+			"- Created; next step: start work and append progress here before ending each turn.\n- Tests pass; next step: review.\n\n## History",
+		);
+	});
+
+	it("rejects progress updates when the task has no Current Cycle section", () => {
+		expect(() => appendCurrentCycleNote("# T\n\nbody", "progress")).toThrow(/normalize the task skeleton/);
+	});
+
+	it("normalizes a multiline progress note to one safe bullet", () => {
+		const body = "# T\n\n## Current Cycle (cycle-1)\n- first\n\n## History\n";
+		const updated = appendCurrentCycleNote(body, "second line\nnext step");
+		expect(updated).toContain("- second line next step\n\n## History");
 	});
 });
 
@@ -146,5 +173,14 @@ describe("readActiveTasks", () => {
 		const entry = (await readActiveTasks(dir, NOW))[0];
 		expect(entry.frontmatter.readable).toBe(false);
 		expect(entry.actionable).toBe(true);
+	});
+
+	it("reports the last Current Cycle entry as the latest note", async () => {
+		await writeFile(
+			join(dir, "progress.md"),
+			doc("status: in-progress", "# Progress\n\n## Current Cycle\n- first\n- second\n\n## History\n- old"),
+		);
+		const entry = (await readActiveTasks(dir, NOW))[0];
+		expect(entry.latestNote).toBe("second");
 	});
 });

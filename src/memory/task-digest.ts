@@ -33,6 +33,19 @@ function relativeWake(wakeMs: number | undefined, now: number): string {
 function renderLine(entry: TaskLedgerEntry, now: number): string {
 	const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "open") : "⚠ unreadable frontmatter";
 	const parts = [`${entry.id} — ${entry.title}`, status, relativeWake(entry.wakeMs, now)];
+	const control = entry.frontmatter.control;
+	if (control) {
+		parts.push(`priority ${control.priority}`);
+		parts.push(`attempt ${control.usage.attempts}/${control.budget.maxAttempts}`);
+		parts.push(`verify ${control.verification.mode}/${control.verification.status}`);
+		if (control.isolation !== "shared") parts.push(`isolation ${control.isolation}`);
+		if (control.sideEffects !== "workspace") {
+			parts.push(`effects ${control.sideEffects}/${control.externalApproval}`);
+		}
+		if (control.deadline) parts.push(`deadline ${control.deadline}`);
+		if (control.dependsOn.length > 0) parts.push(`depends ${control.dependsOn.join(",")}`);
+		if (control.nextAction) parts.push(`next ${control.nextAction}`);
+	}
 	if (entry.latestNote) {
 		const note = entry.latestNote.length > 80 ? `${entry.latestNote.slice(0, 79)}…` : entry.latestNote;
 		parts.push(note);

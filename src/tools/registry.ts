@@ -202,7 +202,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		promptHint:
 			"Schedule your own follow-ups: create/update/delete one-shot check-ins and periodic cadences for this channel. " +
 			"Name task-owned events `task.<channelId>.<taskId>.<use>` (e.g. .checkin, .schedule) so they clean up together. " +
-			"Keep a task's `wake` and its .checkin one-shot in sync — move both, clear both. " +
+			"Task wake/resume is handled natively; use task-owned events mainly for canonical recurring .schedule cadences. " +
 			"No immediate events; periodic no more often than every 30 min (or 5 min when it carries a preAction gate).",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.events.enabled !== false,
@@ -217,9 +217,9 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "task_manage",
 		promptHint:
-			"Manage the task ledger: create standard task skeletons, set status/wake/recurrence, close tasks out " +
-			"(archives one-shot tasks and cleans up residual events; done requires summary and evidence), or list active " +
-			"tasks. Use write/edit for substantial body changes.",
+			"Manage governed tasks: structured control/budgets/dependencies, atomic progress, verifier attestations, " +
+			"verified completion, cancellation, and listing. The native driver resumes ready tasks and escalates hard limits; " +
+			"use write/edit only for substantial body changes.",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
 		create: (ctx) =>
@@ -241,7 +241,8 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 ];
 
 /** Prompt hint for the `subagent` tool, which is registered outside TOOL_REGISTRY. */
-export const SUBAGENT_TOOL_HINT = "Delegate a focused task to a sub-agent with its own isolated context";
+export const SUBAGENT_TOOL_HINT =
+	"Delegate focused work or independent verification; optionally isolate implementation in a task-owned git worktree";
 
 /** Single source of truth for prompt hints, keyed by tool name (leaf tools + subagent). */
 export const TOOL_PROMPT_HINTS: Record<string, string> = {
