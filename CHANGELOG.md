@@ -2,7 +2,7 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
-## [0.7.8] - 2026-07-10
+## [0.7.9] - 2026-07-10
 
 ### Added
 
@@ -16,6 +16,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Task-driver cooldown now keys off semantic task state rather than file mtime: usage/cost accounting no longer makes a no-progress governed task retry at the short continuation interval.
 - Added `/tasks pause <id>` and `/tasks resume <id>` for a user-controlled durable stop to autonomous wake-ups.
 - Added `task_manage start-cycle` for completed recurring tasks. It archives visible current-cycle notes into History, opens a named cycle, and resets cycle-scoped usage, approval, verification, and worktree state.
+- Durable synthetic dispatch: scheduled events and task-driver wakes are first written to `state/dispatch/`, then handed to the in-memory channel queue. A lease protects active work; pending or expired dispatches are replayed after restart, providing intentional at-least-once delivery.
+- Past one-shot events now fire once during recovery instead of being silently discarded. Periodic events retain their existing cadence and queue-full behaviour.
 
 ### Changed
 

@@ -208,6 +208,12 @@
 
 ### 调度历史记录（Event History）
 
+### 可靠投递与恢复
+
+event 触发后不会直接依赖内存 queue：runtime 会先把 synthetic event 写入 app home 的 `state/dispatch/`，再尝试入队。handler 开始时取得 lease，正常完成后删除记录；进程在入队后或执行中退出，重启后的 runtime 会重新投递 lease 已过期的记录。因此语义是 **at-least-once**：任务与 event handler 应保持可重试，外部动作应在 task 的显式授权与自身幂等约束下执行。
+
+已错过的 one-shot 会在 watcher 恢复时补执行一次，而不是因时间已过静默删除。周期 event 不补跑全部历史 occurrence，仍按下一次 cron 节奏触发。
+
 Pipiclaw 会把事件调度层的审计记录写入：
 
 ```text

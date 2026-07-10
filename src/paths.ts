@@ -7,6 +7,7 @@ export const WORKSPACE_DIR = join(APP_HOME_DIR, "workspace");
 export const STATE_DIR = join(APP_HOME_DIR, "state");
 export const EVENT_STATE_DIR = join(STATE_DIR, "events");
 export const EVENT_HISTORY_PATH = join(EVENT_STATE_DIR, "history.jsonl");
+export const DISPATCH_STATE_DIR = join(STATE_DIR, "dispatch");
 export const LOG_STATE_DIR = join(STATE_DIR, "logs");
 export const RUNTIME_LOG_PATH = join(LOG_STATE_DIR, "runtime.jsonl");
 export const USAGE_STATE_DIR = join(STATE_DIR, "usage");

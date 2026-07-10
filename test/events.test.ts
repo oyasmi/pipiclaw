@@ -18,7 +18,10 @@ function createTempDir(): string {
 function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 	parseEvent(content: string, filename: string): unknown;
 	handleImmediate(filename: string, event: { type: "immediate"; channelId: string; text: string }): Promise<void>;
-	handleOneShot(filename: string, event: { type: "one-shot"; channelId: string; text: string; at: string }): void;
+	handleOneShot(
+		filename: string,
+		event: { type: "one-shot"; channelId: string; text: string; at: string },
+	): Promise<void>;
 	handlePeriodic(
 		filename: string,
 		event: { type: "periodic"; channelId: string; text: string; schedule: string; timezone: string },
@@ -42,7 +45,10 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 	return watcher as unknown as {
 		parseEvent(content: string, filename: string): unknown;
 		handleImmediate(filename: string, event: { type: "immediate"; channelId: string; text: string }): Promise<void>;
-		handleOneShot(filename: string, event: { type: "one-shot"; channelId: string; text: string; at: string }): void;
+		handleOneShot(
+			filename: string,
+			event: { type: "one-shot"; channelId: string; text: string; at: string },
+		): Promise<void>;
 		handlePeriodic(
 			filename: string,
 			event: { type: "periodic"; channelId: string; text: string; schedule: string; timezone: string },
@@ -186,26 +192,33 @@ describe("EventsWatcher", () => {
 		expect(existsSync(filePath)).toBe(false);
 	});
 
-	it("drops invalid and past one-shot events", () => {
+	it("marks invalid one-shots and recovers past one-shots once", async () => {
 		const dir = createTempDir();
-		const watcher = createWatcher(dir);
+		const bot = new FakeBot();
+		const watcher = createWatcher(dir, bot);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
 		const invalidPath = join(dir, "invalid.json");
 		writeFileSync(invalidPath, "{}");
-		privateApi.handleOneShot("invalid.json", { type: "one-shot", channelId: "dm_1", text: "hello", at: "nope" });
+		await privateApi.handleOneShot("invalid.json", {
+			type: "one-shot",
+			channelId: "dm_1",
+			text: "hello",
+			at: "nope",
+		});
 		expect(existsSync(invalidPath)).toBe(true);
 		expect(existsSync(join(dir, "invalid.json.error.txt"))).toBe(true);
 
 		const pastPath = join(dir, "past.json");
 		writeFileSync(pastPath, "{}");
-		privateApi.handleOneShot("past.json", {
+		await privateApi.handleOneShot("past.json", {
 			type: "one-shot",
 			channelId: "dm_1",
 			text: "hello",
 			at: "2020-01-01T00:00:00.000Z",
 		});
 		expect(existsSync(pastPath)).toBe(false);
+		expect(bot.events).toHaveLength(1);
 	});
 
 	it("schedules future one-shot events and rejects delays beyond platform limits", async () => {

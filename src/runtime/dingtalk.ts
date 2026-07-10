@@ -99,6 +99,8 @@ export interface DingTalkEvent {
 	text: string;
 	conversationId: string;
 	conversationType: string; // "1" = DM, "2" = group
+	/** Runtime-owned durable-dispatch record, absent for normal inbound messages. */
+	dispatchId?: string;
 }
 
 export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: string };

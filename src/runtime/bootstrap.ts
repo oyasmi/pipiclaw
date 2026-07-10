@@ -48,6 +48,7 @@ import {
 	normalizeBusyMessageDefault,
 	normalizeResponseMode,
 } from "./dingtalk.js";
+import { DurableDispatchService } from "./durable-dispatch.js";
 import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
@@ -607,6 +608,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	const cliVersion = readCliVersion();
 	const channelStates = new Map<string, ChannelState>();
 	const activeTasks = new Set<Promise<void>>();
+	let durableDispatch: DurableDispatchService | undefined;
 	let shuttingDown = false;
 	let shutdownPromise: Promise<void> | null = null;
 
@@ -787,6 +789,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			// routed as a fresh run instead of a steer/follow-up.
 			state.running = true;
 			state.stopRequested = false;
+			await durableDispatch?.markStarted(event.dispatchId);
 			const task = (async () => {
 				try {
 					await archiveIncomingMessage(
@@ -854,6 +857,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				} catch (err) {
 					log.logWarning(`[${event.channelId}] Run error`, err instanceof Error ? err.message : String(err));
 				} finally {
+					await durableDispatch?.markCompleted(event.dispatchId);
 					state.running = false;
 					state.currentTaskText = undefined;
 				}
@@ -871,6 +875,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	const bot = options.createBot
 		? options.createBot(handler, options.dingtalkConfig)
 		: new DingTalkBot(handler, options.dingtalkConfig);
+	durableDispatch = new DurableDispatchService({
+		stateDir: join(options.paths.appHomeDir, "state", "dispatch"),
+		bot,
+	});
 	const executor = createExecutor(options.sandbox);
 	const eventsWatcher = options.createEventsWatcher
 		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)
@@ -880,6 +888,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				executor,
 				loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config.commandGuard,
 				options.paths.eventHistoryPath,
+				(event) => durableDispatch?.dispatch(event) ?? false,
 			);
 	const memoryMaintenanceScheduler = options.createMemoryMaintenanceScheduler
 		? options.createMemoryMaintenanceScheduler()
@@ -906,7 +915,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				workspaceDir: options.paths.workspaceDir,
 				getKnownChannelIds: () => channelStates.keys(),
 				isChannelActive: (channelId) => channelStates.get(channelId)?.running ?? false,
-				dispatch: (event) => bot.enqueueEvent(event),
+				dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 				getSettings: () => {
 					runtimeSettingsManager.reload();
 					return runtimeSettingsManager.getTaskDriverSettings();
@@ -924,6 +933,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			log.logInfo(`Shutting down (${reason})...`);
 
 			taskDriver.stop();
+			durableDispatch?.stop();
 			memoryMaintenanceScheduler.stop();
 			eventsWatcher.stop();
 			await bot.stop();
@@ -1005,6 +1015,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		eventsWatcher.start();
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();
+		durableDispatch.start();
 		void bot.start();
 	}
 

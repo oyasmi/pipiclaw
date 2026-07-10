@@ -13,7 +13,7 @@ export interface TaskDriverOptions {
 	workspaceDir: string;
 	getKnownChannelIds?: () => Iterable<string>;
 	isChannelActive: (channelId: string) => boolean;
-	dispatch: (event: DingTalkEvent) => boolean;
+	dispatch: (event: DingTalkEvent) => boolean | Promise<boolean>;
 	getSettings: () => PipiclawTaskDriverSettings;
 	intervalMs?: number;
 }
@@ -225,7 +225,7 @@ export class TaskDriver {
 						taskBudgetViolation(control, now.getTime()) ?? terminalDependencyReason(dependencies.reason);
 					if (!escalationReason) continue;
 					governanceHandled = true;
-					const accepted = this.options.dispatch(
+					const accepted = await this.options.dispatch(
 						taskEscalationEvent(channelId, candidate, escalationReason, now.getTime()),
 					);
 					if (accepted && (await escalateTask(channelDir, candidate.id, escalationReason))) {
@@ -265,7 +265,7 @@ export class TaskDriver {
 				if (claim) {
 					fingerprint = await taskFingerprint(channelDir, entry);
 				}
-				const accepted = this.options.dispatch(taskDriverEvent(channelId, entry, now.getTime()));
+				const accepted = await this.options.dispatch(taskDriverEvent(channelId, entry, now.getTime()));
 				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim, now);
 				this.attempts.set(key, { fingerprint, atMs: now.getTime(), accepted });
 				if (accepted) {

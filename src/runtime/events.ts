@@ -101,6 +101,8 @@ export interface EventHistoryRecord {
 
 export interface EventsWatcherOptions {
 	historyPath?: string;
+	/** Persist synthetic work before it enters the in-memory channel queue. */
+	dispatch?: (event: DingTalkEvent) => boolean | Promise<boolean>;
 }
 
 // ============================================================================
@@ -475,7 +477,7 @@ export class EventsWatcher {
 				this.handleImmediate(filename, event);
 				break;
 			case "one-shot":
-				this.handleOneShot(filename, event);
+				await this.handleOneShot(filename, event);
 				break;
 			case "periodic":
 				this.handlePeriodic(filename, event);
@@ -507,7 +509,7 @@ export class EventsWatcher {
 		await this.execute(filename, event);
 	}
 
-	private handleOneShot(filename: string, event: OneShotEvent): void {
+	private async handleOneShot(filename: string, event: OneShotEvent): Promise<void> {
 		const atTime = new Date(event.at).getTime();
 		const now = Date.now();
 
@@ -519,9 +521,11 @@ export class EventsWatcher {
 		}
 
 		if (atTime <= now) {
-			log.logInfo(`One-shot event in the past, deleting: ${filename}`);
-			this.appendEventHistory(filename, event, "skipped", "skipped", { reason: "one-shot event is in the past" });
-			this.deleteFile(filename);
+			// A persisted dispatch turns a missed one-shot into a safe fire-once-now
+			// recovery instead of silently discarding work after a process restart.
+			log.logInfo(`Recovering past one-shot event now: ${filename}`);
+			this.appendEventHistory(filename, event, "triggered", "ok", { reason: "one-shot recovered after due time" });
+			await this.execute(filename, event);
 			return;
 		}
 
@@ -665,7 +669,9 @@ export class EventsWatcher {
 			conversationType: "1",
 		};
 
-		const enqueued = this.bot.enqueueEvent(syntheticEvent);
+		const enqueued = this.options.dispatch
+			? await this.options.dispatch(syntheticEvent)
+			: this.bot.enqueueEvent(syntheticEvent);
 
 		if (enqueued) {
 			this.appendEventHistory(filename, event, "enqueued", "ok", { queue: { accepted: true } });
@@ -787,7 +793,8 @@ export function createEventsWatcher(
 	executor: Executor,
 	commandGuardConfig?: SecurityConfig["commandGuard"],
 	historyPath?: string,
+	dispatch?: EventsWatcherOptions["dispatch"],
 ): EventsWatcher {
 	const eventsDir = join(workspaceDir, "events");
-	return new EventsWatcher(eventsDir, bot, executor, commandGuardConfig, { historyPath });
+	return new EventsWatcher(eventsDir, bot, executor, commandGuardConfig, { historyPath, dispatch });
 }

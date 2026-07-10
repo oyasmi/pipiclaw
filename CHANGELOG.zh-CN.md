@@ -2,7 +2,7 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
-## [0.7.8] - 2026-07-10
+## [0.7.9] - 2026-07-10
 
 ### 新增
 
@@ -16,6 +16,8 @@
 - task driver 的冷却判断现已基于语义任务状态而非文件 mtime：usage/cost 核算不会再把无进展的受治理任务误判为应短间隔续跑。
 - 新增 `/tasks pause <id>` 与 `/tasks resume <id>`，让用户可持久暂停和恢复自主唤醒。
 - 新增 `task_manage start-cycle`：已完成的周期任务可原子开启具名新周期；上一周期的可见进展进入 History，并清空本周期 usage、approval、verification 与 worktree 状态。
+- 持久 synthetic dispatch：scheduled event 与 task-driver wake 会先写入 `state/dispatch/`，再进入内存 channel queue。lease 保护正在处理的工作；重启后会重放 pending 或过期 dispatch，提供有意识的 at-least-once 投递语义。
+- 已过期 one-shot event 现在会在恢复时执行一次，不再静默删除；periodic event 保持既有 cadence 与 queue-full 语义。
 
 ### 变更
 

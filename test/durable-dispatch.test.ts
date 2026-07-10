@@ -1,0 +1,93 @@
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
+import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
+
+const tempDirs: string[] = [];
+
+function tempDir(): string {
+	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-dispatch-"));
+	tempDirs.push(dir);
+	return dir;
+}
+
+function event(): DingTalkEvent {
+	return {
+		type: "dm",
+		channelId: "dm_1",
+		ts: "123",
+		user: "EVENT",
+		userName: "EVENT",
+		text: "[EVENT:once] do work",
+		conversationId: "",
+		conversationType: "1",
+	};
+}
+
+afterEach(() => {
+	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("DurableDispatchService", () => {
+	it("persists a queue-rejected dispatch and later delivers it", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const received: DingTalkEvent[] = [];
+		let accept = false;
+		const service = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent(next) {
+					if (!accept) return false;
+					received.push(next);
+					return true;
+				},
+			},
+		});
+
+		await expect(service.dispatch(event())).resolves.toBe(true);
+		expect(readdirSync(stateDir)).toHaveLength(1);
+		expect(received).toEqual([]);
+
+		accept = true;
+		await service.drainOnce();
+		expect(received).toHaveLength(1);
+		expect(received[0]?.dispatchId).toBeTruthy();
+	});
+
+	it("replays an expired lease after a restart and removes it only after completion", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const first: DingTalkEvent[] = [];
+		const firstService = new DurableDispatchService({
+			stateDir,
+			leaseMs: 100,
+			bot: {
+				enqueueEvent(next) {
+					first.push(next);
+					return true;
+				},
+			},
+		});
+		await firstService.dispatch(event());
+		const id = first[0]?.dispatchId;
+		expect(id).toBeTruthy();
+
+		const replayed: DingTalkEvent[] = [];
+		const restarted = new DurableDispatchService({
+			stateDir,
+			leaseMs: 100,
+			bot: {
+				enqueueEvent(next) {
+					replayed.push(next);
+					return true;
+				},
+			},
+		});
+		await restarted.drainOnce(Date.now() + 101);
+		expect(replayed).toHaveLength(1);
+		await restarted.markStarted(id);
+		await restarted.markCompleted(id);
+		expect(existsSync(join(stateDir, `${id}.json`))).toBe(false);
+	});
+});

@@ -265,6 +265,7 @@ npm install -g @oyasmi/pipiclaw@latest
 - `tools.json`
 - `workspace/`
 - `state/events/history.jsonl`（可选，事件调度审计记录）
+- `state/dispatch/`（待处理的 synthetic event / task-driver wake；运行完成后删除，崩溃恢复时会重放 lease 已过期的记录）
 
 其中 `workspace/` 最关键，因为它包含：
 
