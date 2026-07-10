@@ -190,6 +190,44 @@ describe("manageTask", () => {
 		});
 	});
 
+	describe("candidate", () => {
+		it("moves a checked task into the independent verification lane", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "candidate",
+				title: "Candidate",
+				goal: "Produce a reviewed result",
+				dod: "- [x] Result is ready",
+			});
+			const result = await manageTask(options, {
+				action: "candidate",
+				id: "candidate",
+				note: "All deterministic checks pass; request independent review.",
+			});
+			expect(result).toMatchObject({ action: "candidate", status: "verifying" });
+			const onDisk = await readFile(join(tasksDir, "candidate.md"), "utf-8");
+			expect(onDisk).toContain("status: verifying");
+			expect(onDisk).toContain('"nextAction":"Run a purpose=verify sub-agent and import its attestation."');
+		});
+
+		it("does not send unchecked work to the verifier", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "unchecked-candidate",
+				title: "Unchecked",
+				goal: "Produce a reviewed result",
+				dod: "- [ ] Result is ready",
+			});
+			await expect(
+				manageTask(options, {
+					action: "candidate",
+					id: "unchecked-candidate",
+					note: "Looks plausible.",
+				}),
+			).rejects.toThrow(/unchecked acceptance/);
+		});
+	});
+
 	describe("done", () => {
 		it("requires and consumes an independent verifier attestation for governed tasks", async () => {
 			await manageTask(options, {
@@ -231,6 +269,31 @@ describe("manageTask", () => {
 				evidence: "Independent run verify-run-1 passed.",
 			});
 			expect(result.archived).toBe(true);
+		});
+
+		it("rejects a verifier subject that no longer matches the checkout", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "artifact-bound",
+				title: "Artifact bound",
+				goal: "Ship a verified result",
+				dod: "- [x] Result exists",
+			});
+			await writeVerificationAttestation(channelDir, {
+				runId: "verify-artifact",
+				taskId: "artifact-bound",
+				verdict: "pass",
+				agent: "reviewer",
+				model: "test/model",
+				checkedAt: new Date().toISOString(),
+				evidence: "Passed.",
+				workspaceChanged: false,
+				subjectHash: "a".repeat(64),
+				output: "VERDICT: PASS",
+			});
+			await expect(
+				manageTask(options, { action: "verify", id: "artifact-bound", verifierRunId: "verify-artifact" }),
+			).rejects.toThrow(/artifacts changed|cannot be read/);
 		});
 
 		it("gates completion on unfinished children and rejects parent/dependency cycles", async () => {

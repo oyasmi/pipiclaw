@@ -17,6 +17,7 @@ import {
 	taskBody,
 	uncheckedTaskAcceptanceItems,
 } from "../shared/task-ledger.js";
+import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
 import {
 	applyTaskControlPatch,
 	createDefaultTaskControl,
@@ -79,11 +80,12 @@ const taskManageSchema = Type.Object({
 			Type.Literal("done"),
 			Type.Literal("cancel"),
 			Type.Literal("start-cycle"),
+			Type.Literal("candidate"),
 			Type.Literal("list"),
 		],
 		{
 			description:
-				'"create" writes a governed task; "progress" atomically checkpoints work; "set" repairs metadata; "verify" imports an independent verifier attestation; "done" closes verified work; "cancel" closes abandoned work; "start-cycle" opens a completed recurring task; "list" returns tasks.',
+				'"create" writes a governed task; "progress" atomically checkpoints work; "candidate" requests independent verification; "set" repairs metadata; "verify" imports an independent verifier attestation; "done" closes verified work; "cancel" closes abandoned work; "start-cycle" opens a completed recurring task; "list" returns tasks.',
 		},
 	),
 	id: Type.Optional(
@@ -133,7 +135,16 @@ const taskManageSchema = Type.Object({
 	),
 });
 
-export type TaskManageAction = "create" | "progress" | "set" | "verify" | "done" | "cancel" | "start-cycle" | "list";
+export type TaskManageAction =
+	| "create"
+	| "progress"
+	| "candidate"
+	| "set"
+	| "verify"
+	| "done"
+	| "cancel"
+	| "start-cycle"
+	| "list";
 
 export interface TaskManageResult {
 	action: TaskManageAction;
@@ -179,6 +190,8 @@ export interface TaskManageToolOptions {
 	workspacePath: string;
 	channelDir: string;
 	channelId: string;
+	/** Project checkout whose artifact state an independent verifier binds to. */
+	workingDirectory?: string;
 }
 
 interface TaskFields {
@@ -192,6 +205,7 @@ function parseAction(action: string): TaskManageAction {
 	if (
 		action === "create" ||
 		action === "progress" ||
+		action === "candidate" ||
 		action === "set" ||
 		action === "verify" ||
 		action === "done" ||
@@ -516,6 +530,45 @@ async function progressTask(options: TaskManageToolOptions, request: TaskManageR
 	};
 }
 
+/**
+ * Move a task into the verification lane. The runtime driver will explicitly
+ * wake a fresh verifier on the next attempt, keeping the maker from grading
+ * its own work in the same reasoning context.
+ */
+async function candidateTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
+	if (!request.id) throw new Error('action "candidate" requires an id.');
+	const id = normalizeTaskId(request.id);
+	const note = requiredField(request.note, "note", "candidate");
+	const taskPath = join(tasksDir(options), `${id}.md`);
+	const { fields, body } = await readTaskDocument(taskPath, id);
+	if (["done", "cancelled", "escalated", "paused"].includes(fields.status)) {
+		throw new Error(`Task "${id}" is ${fields.status} and cannot enter verification.`);
+	}
+	const uncheckedAcceptance = uncheckedTaskAcceptanceItems(body);
+	if (uncheckedAcceptance.length > 0) {
+		throw new Error(
+			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before requesting verification.`,
+		);
+	}
+	const control = fields.control ?? createDefaultTaskControl("independent");
+	control.verification = { mode: "independent", status: "pending" };
+	control.lastOutcome = "progress";
+	control.blockedReason = undefined;
+	control.nextAction = "Run a purpose=verify sub-agent and import its attestation.";
+	const nextBody = appendCurrentCycleNote(body, note);
+	await writeFileAtomically(
+		taskPath,
+		renderTaskFile({ ...fields, status: "verifying", wake: undefined, control }, nextBody),
+	);
+	return {
+		action: "candidate",
+		id,
+		path: toWorkspacePath(options, taskPath),
+		status: "verifying",
+		notice: `任务 \`${id}\` 已进入独立验收队列；driver 将安排 verifier。`,
+	};
+}
+
 async function verifyTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
 	if (!request.id) throw new Error('action "verify" requires an id.');
 	const id = normalizeTaskId(request.id);
@@ -532,6 +585,17 @@ async function verifyTask(options: TaskManageToolOptions, request: TaskManageReq
 	if (attestation.bodyHash !== taskBodyHash(task.body)) {
 		throw new Error(`Task "${id}" changed after verification run "${runId}"; rerun the verifier on current content.`);
 	}
+	if (attestation.subjectHash) {
+		const currentSubject = await workspaceSubjectHash(options.workingDirectory ?? process.cwd());
+		if (!currentSubject) {
+			throw new Error(
+				`Verification run "${runId}" is bound to a Git artifact subject, but the current checkout cannot be read. Rerun verification from the project checkout.`,
+			);
+		}
+		if (currentSubject !== attestation.subjectHash) {
+			throw new Error(`Task "${id}" artifacts changed after verification run "${runId}"; rerun the verifier.`);
+		}
+	}
 	const control = task.fields.control ?? createDefaultTaskControl("independent");
 	control.verification = {
 		mode: "independent",
@@ -539,6 +603,7 @@ async function verifyTask(options: TaskManageToolOptions, request: TaskManageReq
 		runId,
 		evidence: attestation.evidence,
 		bodyHash: attestation.bodyHash,
+		subjectHash: attestation.subjectHash,
 		checkedAt: attestation.checkedAt,
 	};
 	control.lastOutcome = attestation.verdict === "pass" ? "verified" : "failed";
@@ -607,6 +672,14 @@ async function doneTask(options: TaskManageToolOptions, request: TaskManageReque
 		}
 		if (verification.bodyHash !== taskBodyHash(body)) {
 			throw new Error(`Task "${id}" changed after its independent PASS; rerun verification before done.`);
+		}
+		if (verification.subjectHash) {
+			const currentSubject = await workspaceSubjectHash(options.workingDirectory ?? process.cwd());
+			if (currentSubject !== verification.subjectHash) {
+				throw new Error(
+					`Task "${id}" artifacts changed after its independent PASS; rerun verification before done.`,
+				);
+			}
 		}
 	}
 	const bodyWithEvidence = appendCompletionEvidence(body, request);
@@ -736,6 +809,8 @@ export async function manageTask(
 			return createTask(options, request);
 		case "progress":
 			return progressTask(options, request);
+		case "candidate":
+			return candidateTask(options, request);
 		case "set":
 			return setTask(options, request);
 		case "verify":

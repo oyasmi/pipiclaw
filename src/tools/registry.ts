@@ -217,7 +217,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "task_manage",
 		promptHint:
-			"Manage governed tasks: structured control/budgets/dependencies, atomic progress, verifier attestations, " +
+			"Manage governed tasks: structured control/budgets/dependencies, atomic progress, candidate verification, verifier attestations, " +
 			"verified completion, cancellation, and listing. The native driver resumes ready tasks and escalates hard limits; " +
 			"use write/edit only for substantial body changes.",
 		availableToSubagents: false,
@@ -228,6 +228,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				workspacePath: ctx.workspacePath,
 				channelDir: ctx.channelDir,
 				channelId: ctx.channelId,
+				workingDirectory: ctx.securityContext.cwd,
 			}),
 	},
 	{

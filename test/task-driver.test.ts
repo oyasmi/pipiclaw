@@ -290,6 +290,19 @@ describe("TaskDriver", () => {
 		expect(dispatch).not.toHaveBeenCalled();
 	});
 
+	it("wakes a verification candidate with an explicit checker-only instruction", async () => {
+		await writeTask("dm_a", "candidate", governedTask("verifying"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+		await driver.runOnce(NOW);
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("purpose=verify");
+	});
+
 	it("starts and stops an idempotent scan timer", async () => {
 		vi.useFakeTimers();
 		const runOnce = vi.spyOn(TaskDriver.prototype, "runOnce").mockResolvedValue(undefined);

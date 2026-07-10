@@ -104,6 +104,13 @@ async function hasLiveLegacyCheckin(
 }
 
 function taskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): DingTalkEvent {
+	const verification = entry.frontmatter.control?.verification;
+	const verificationInstruction =
+		entry.frontmatter.status === "verifying"
+			? verification?.status === "passed"
+				? " Independent verification already passed for the current artifact; finish the task with task_manage done and specific evidence."
+				: " This task is a verification candidate: call subagent with purpose=verify and taskId, then import its runId with task_manage verify. Do not implement more changes before the verifier reports."
+			: "";
 	const repair = entry.frontmatter.readable
 		? ""
 		: " Its frontmatter is unreadable: repair it before using task_manage, and do not silently skip the task.";
@@ -120,7 +127,7 @@ function taskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: numbe
 			"tool is unavailable). For independent verification, delegate a purpose=verify subagent and register its run " +
 			"with task_manage verify before task_manage done. Never perform external side effects unless approval is granted. " +
 			"If complete, use task_manage done with specific evidence. If no user-visible update " +
-			"is needed, respond with [SILENT].",
+			`is needed, respond with [SILENT].${verificationInstruction}`,
 		ts: String(nowMs),
 		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",

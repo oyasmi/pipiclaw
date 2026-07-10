@@ -18,6 +18,8 @@ export interface VerificationAttestation {
 	evidence: string;
 	outputHash: string;
 	workspaceChanged: boolean;
+	/** Git HEAD + working-tree subject that the verifier actually inspected. */
+	subjectHash?: string;
 }
 
 function attestationFilename(runId: string): string {
@@ -55,6 +57,7 @@ export async function writeVerificationAttestation(
 		evidence: input.evidence,
 		outputHash: createHash("sha256").update(input.output).digest("hex"),
 		workspaceChanged: input.workspaceChanged,
+		subjectHash: input.subjectHash,
 	};
 	await mkdir(verificationDir(channelDir), { recursive: true });
 	await writeFileAtomically(
@@ -87,7 +90,9 @@ export async function readVerificationAttestation(channelDir: string, runId: str
 		!/^[a-f0-9]{64}$/i.test(String((value as { bodyHash?: unknown }).bodyHash)) ||
 		!/^[a-f0-9]{64}$/i.test(String((value as { outputHash?: unknown }).outputHash)) ||
 		typeof (value as { evidence?: unknown }).evidence !== "string" ||
-		typeof (value as { workspaceChanged?: unknown }).workspaceChanged !== "boolean"
+		typeof (value as { workspaceChanged?: unknown }).workspaceChanged !== "boolean" ||
+		((value as { subjectHash?: unknown }).subjectHash !== undefined &&
+			!/^[a-f0-9]{64}$/i.test(String((value as { subjectHash?: unknown }).subjectHash)))
 	) {
 		throw new Error(`Verification run "${runId}" has an invalid attestation. Run the verifier again.`);
 	}

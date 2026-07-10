@@ -2,7 +2,7 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
-## [0.7.9] - 2026-07-10
+## [0.7.10] - 2026-07-10
 
 ### Added
 
@@ -18,6 +18,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Added `task_manage start-cycle` for completed recurring tasks. It archives visible current-cycle notes into History, opens a named cycle, and resets cycle-scoped usage, approval, verification, and worktree state.
 - Durable synthetic dispatch: scheduled events and task-driver wakes are first written to `state/dispatch/`, then handed to the in-memory channel queue. A lease protects active work; pending or expired dispatches are replayed after restart, providing intentional at-least-once delivery.
 - Past one-shot events now fire once during recovery instead of being silently discarded. Periodic events retain their existing cadence and queue-full behaviour.
+- Quality lane: `task_manage candidate` moves checked work into `verifying`; the native driver gives that turn an explicit checker-only instruction instead of another implementation prompt.
+- Independent verifier attestations now bind the task body and, on host Git checkouts, a SHA-256 artifact subject covering HEAD, status, staged, and unstaged diffs. Importing or completing a PASS rejects a changed artifact subject.
 
 ### Changed
 

@@ -21,6 +21,7 @@ import { splitH1Sections } from "../shared/markdown-sections.js";
 import { shellEscape } from "../shared/shell-escape.js";
 import { clipText, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
+import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
 import { applyTaskControlPatch } from "../tasks/control.js";
 import { readStoredTask, updateStoredTask } from "../tasks/store.js";
 import { parseVerificationVerdict, writeVerificationAttestation } from "../tasks/verification.js";
@@ -673,6 +674,10 @@ export function createSubAgentTool(
 			const availableTools = buildSubagentTools(scopedExecutor, config.bashTimeoutSec, options, runContext);
 			const verifierGitStateBefore =
 				runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
+			const verifierSubjectBefore =
+				runContext.purpose === "verify" && options.runtimeContext.sandbox === "host"
+					? await workspaceSubjectHash(runContext.workingDirectory)
+					: undefined;
 
 			const worker =
 				options.createWorker?.({
@@ -781,11 +786,17 @@ export function createSubAgentTool(
 					: undefined);
 			const verifierGitStateAfter =
 				runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
+			const verifierSubjectAfter =
+				runContext.purpose === "verify" && options.runtimeContext.sandbox === "host"
+					? await workspaceSubjectHash(runContext.workingDirectory)
+					: undefined;
 			const workspaceChanged =
 				runContext.purpose === "verify" &&
-				verifierGitStateBefore !== undefined &&
-				verifierGitStateAfter !== undefined &&
-				verifierGitStateBefore !== verifierGitStateAfter;
+				(verifierSubjectBefore !== undefined && verifierSubjectAfter !== undefined
+					? verifierSubjectBefore !== verifierSubjectAfter
+					: verifierGitStateBefore !== undefined &&
+						verifierGitStateAfter !== undefined &&
+						verifierGitStateBefore !== verifierGitStateAfter);
 			const declaredVerdict = runContext.purpose === "verify" ? parseVerificationVerdict(finalText) : undefined;
 			const verificationVerdict =
 				runContext.purpose === "verify"
@@ -808,6 +819,7 @@ export function createSubAgentTool(
 					checkedAt: new Date().toISOString(),
 					evidence,
 					workspaceChanged: Boolean(workspaceChanged),
+					subjectHash: workspaceChanged ? undefined : verifierSubjectAfter,
 					output: finalText,
 				});
 			}

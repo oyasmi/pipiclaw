@@ -227,6 +227,7 @@ do this turn. Full detail lives in the matching tasks/<id>.md file.
 
 - `create` —— 创建 Goal/DoD/Manual/Verification/Current Cycle/History 标准骨架和默认 independent、12 attempts 的 control。
 - `progress` —— 原子追加周期记录并更新 status/wake/control；任何实际进展会让旧 verifier PASS 失效。
+- `candidate` —— 当 DoD/Verification checkbox 均已用证据勾选后，将任务放入 `verifying`。driver 会在下一回合要求独立 checker；不要在该回合继续修改实现。
 - `set` —— 修正 metadata/control，不记进展；校验日期、预算、关系存在且无环。不能用它自授予 external approval。
 - `verify` —— 导入 `purpose=verify` subagent 的 durable attestation；run 必须属于当前 task、没有改 workspace、且 task body hash 未变化。
 - `done` —— 门禁 DoD/Verification 中未勾选的 checkbox、dependencies/children、external approval、independent PASS 与 body hash，再记录 summary/evidence、归档/保留周期任务并清事件。
@@ -234,6 +235,8 @@ do this turn. Full detail lives in the matching tasks/<id>.md file.
 - `list` —— 返回结构化 active task 与完整 control 摘要。
 
 它的价值是“骨架一致 + progress 原子 checkpoint + frontmatter 保真 + 闭环收口”，不是权限收口（agent 仍可用 write/edit 写大段正文）。开关见 [configuration.md](./configuration.md) 的 `tools.tasks.enabled`（默认开启）。
+
+host Git checkout 的 verifier 还会记录 artifact subject（HEAD、working tree 与 staged/unstaged diff）。导入 PASS 和 `done` 都会重新比较 subject；代码或产物改动后必须重跑 verifier。
 
 ## agentmux 完成驱动回访
 

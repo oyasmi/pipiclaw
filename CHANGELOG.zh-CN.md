@@ -2,7 +2,7 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
-## [0.7.9] - 2026-07-10
+## [0.7.10] - 2026-07-10
 
 ### 新增
 
@@ -18,6 +18,8 @@
 - 新增 `task_manage start-cycle`：已完成的周期任务可原子开启具名新周期；上一周期的可见进展进入 History，并清空本周期 usage、approval、verification 与 worktree 状态。
 - 持久 synthetic dispatch：scheduled event 与 task-driver wake 会先写入 `state/dispatch/`，再进入内存 channel queue。lease 保护正在处理的工作；重启后会重放 pending 或过期 dispatch，提供有意识的 at-least-once 投递语义。
 - 已过期 one-shot event 现在会在恢复时执行一次，不再静默删除；periodic event 保持既有 cadence 与 queue-full 语义。
+- 质量闭环入口：`task_manage candidate` 会把所有验收项已勾选的工作转入 `verifying`；native driver 下一回合会给出只做 checker 的明确指令，而非继续实现。
+- 独立 verifier attestation 除 task body 外，在 host Git checkout 中还绑定 HEAD、status、暂存与未暂存 diff 的 SHA-256 artifact subject。导入 PASS 或完成任务时若产物已变化，会拒绝旧验收。
 
 ### 变更
 

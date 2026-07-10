@@ -230,8 +230,10 @@ can finish now.
   bypass an escalated task; repair its control metadata only after reviewing the cause.
 - For sideEffects=external, prepare and review the action first. Do not perform it until the user explicitly runs
   /tasks approve <id>; task_manage cannot grant that approval.
-- For verification.mode=independent, after implementation delegate a fresh subagent with purpose=verify and taskId,
-  then call task_manage verify with the returned runId. The verifier must inspect evidence and must not fix the work.
+- For verification.mode=independent, after implementation and checking every DoD/Verification checkbox, call
+  task_manage candidate with evidence. The driver will wake a checker-only turn; delegate a fresh subagent with
+  purpose=verify and taskId, then call task_manage verify with the returned runId. The verifier must inspect evidence
+  and must not fix the work.
   Any later progress/body change invalidates the PASS. Check completed DoD/Verification checkboxes only when evidence
   supports them. Use task_manage done only after the DoD and verification gate are satisfied, with specific evidence
   and residual risk; do not treat a plausible claim as proof.

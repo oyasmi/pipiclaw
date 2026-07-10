@@ -26,6 +26,7 @@ export interface TaskVerification {
 	evidence?: string;
 	bodyHash?: string;
 	checkedAt?: string;
+	subjectHash?: string;
 }
 
 export interface TaskWorktree {
@@ -239,6 +240,7 @@ export function parseTaskControl(raw: string): TaskControl {
 			evidence: optionalString(verification.evidence),
 			bodyHash: optionalString(verification.bodyHash),
 			checkedAt: optionalString(verification.checkedAt),
+			subjectHash: optionalString(verification.subjectHash),
 		},
 		worktree: optionalString(worktree?.path)
 			? { path: optionalString(worktree?.path)!, branch: optionalString(worktree?.branch) }
