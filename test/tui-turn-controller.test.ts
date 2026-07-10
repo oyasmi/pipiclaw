@@ -204,3 +204,51 @@ describe("TurnController", () => {
 		expect(frontend.finals).toContain("HELP");
 	});
 });
+
+describe("TurnController.runOnce", () => {
+	function setupOnce(now: () => number = () => 0) {
+		const runner = new FakeRunner();
+		const frontend = new FakeFrontend();
+		const controller = new TurnController({
+			runner,
+			frontend,
+			store: fakeStore,
+			traits: { progressStyle: "full", finalDelivery: "plain" },
+			channelId: "tui_local",
+			userName: "tester",
+			renderHelp: () => "HELP",
+			renderUsage: () => "USAGE",
+			runEvents: async () => "EVENTS",
+			runTasks: async () => "TASKS",
+			statusInfo: { version: "1", sandbox: { type: "host" } as SandboxConfig, startedAt: 0 },
+			now,
+		});
+		return { runner, frontend, controller };
+	}
+
+	// Regression for the --print built-in command bypass: runOnce used to call
+	// beginTurn() directly, skipping dispatch() entirely, so `/tasks`, `/events`,
+	// etc. were sent to the model as plain text instead of resolving zero-LLM.
+	it("resolves a built-in slash command without invoking the runner", async () => {
+		const { runner, frontend, controller } = setupOnce();
+		await controller.runOnce("/tasks");
+		expect(runner.runCount).toBe(0);
+		expect(frontend.finals).toContain("TASKS");
+	});
+
+	it("runs a plain prompt through the runner", async () => {
+		const { runner, controller } = setupOnce();
+		const done = controller.runOnce("summarize my day");
+		await tick();
+		expect(runner.runCount).toBe(1);
+		runner.finishRun();
+		await done;
+	});
+
+	it("shuts down cleanly with no prompt", async () => {
+		const { runner, frontend, controller } = setupOnce();
+		await controller.runOnce();
+		expect(runner.runCount).toBe(0);
+		expect(frontend.stopped).toBe(true);
+	});
+});

@@ -76,6 +76,21 @@ describe("manageTask", () => {
 			).rejects.toThrow(/requires dod/);
 		});
 
+		// Regression: DoD written as prose or a numbered list (no "- [ ]" anywhere) used
+		// to be accepted silently, defeating the candidate/done acceptance gate later.
+		it("rejects a DoD with no checkbox items", async () => {
+			await expect(
+				manageTask(options, {
+					action: "create",
+					id: "no-checkboxes",
+					title: "Prose DoD",
+					goal: "Do something",
+					dod: "1. Draft reviewed\n2. Report published",
+				}),
+			).rejects.toThrow(/no checklist items/);
+			expect(existsSync(join(tasksDir, "no-checkboxes.md"))).toBe(false);
+		});
+
 		it("rejects duplicate active task ids", async () => {
 			await manageTask(options, {
 				action: "create",
@@ -225,6 +240,19 @@ describe("manageTask", () => {
 					note: "Looks plausible.",
 				}),
 			).rejects.toThrow(/unchecked acceptance/);
+		});
+
+		// Defense in depth: a task hand-edited (write/edit) after creation to drop its
+		// checkboxes must still be blocked, not just tasks created through this tool.
+		it("still blocks a hand-edited DoD that lost its checkboxes", async () => {
+			await writeTask(
+				"hand-edited",
+				'status: open\ncontrol: {"version":1,"priority":"normal","lastOutcome":"pending","dependsOn":[],"isolation":"shared","sideEffects":"workspace","externalApproval":"not-required","budget":{"maxAttempts":12},"usage":{"attempts":0,"tokens":0,"costUsd":0,"wallTimeMinutes":0},"verification":{"mode":"independent","status":"pending"}}',
+				"# Hand Edited\n\n## Goal\nG\n\n## DoD\n1. Done\n\n## Manual\nM\n\n## Verification\nMode: independent\n\n## Current Cycle\n\n## History\n",
+			);
+			await expect(
+				manageTask(options, { action: "candidate", id: "hand-edited", note: "Looks done." }),
+			).rejects.toThrow(/no checklist items/);
 		});
 	});
 

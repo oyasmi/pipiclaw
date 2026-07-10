@@ -53,7 +53,13 @@ const PRIVATE_IPV4_CIDRS = [
 const PRIVATE_IPV6_CIDRS = ["::1/128", "::/128", "fc00::/7", "fe80::/10"] as const;
 
 function normalizeHost(host: string): string {
-	return host.trim().replace(/\.$/, "").toLowerCase();
+	// WHATWG URL.hostname keeps the brackets on an IPv6 literal (e.g. "[::1]"),
+	// but isIP()/DNS resolution both expect the bare address — without stripping
+	// them, every IPv6 literal URL (public or private) falls through to a DNS
+	// lookup of the literal bracketed string, which fails and rejects the
+	// request regardless of whether the address was actually private.
+	const unbracketed = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+	return unbracketed.trim().replace(/\.$/, "").toLowerCase();
 }
 
 function parseIpv4(ip: string): number | null {

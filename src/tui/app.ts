@@ -125,7 +125,14 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		renderUsage: (args) => renderUsageReport(getUsageLedger(), channelId, parseUsageMode(args), new Date()),
 		runEvents: (args) =>
 			handleEventsCommand({ args, workspaceDir: paths.workspaceDir, historyPath: paths.eventHistoryPath }),
-		runTasks: (args) => handleTasksCommand({ args, channelDir, workspaceDir: paths.workspaceDir, channelId }),
+		runTasks: (args) =>
+			handleTasksCommand({
+				args,
+				channelDir,
+				workspaceDir: paths.workspaceDir,
+				channelId,
+				approver: safeUserName(),
+			}),
 		statusInfo: { version: readCliVersion(), sandbox, startedAt: Date.now() },
 	});
 

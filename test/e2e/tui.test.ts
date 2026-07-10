@@ -66,4 +66,37 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 		// The incoming user message was archived, mirroring the DingTalk path.
 		expect(readFileSync(logPath, "utf-8")).toContain("PONG");
 	});
+
+	// Regression: `runOnce()` (the --print path) used to call beginTurn() directly,
+	// skipping dispatch() entirely, so a built-in slash command like /tasks was sent
+	// to the model as plain text instead of resolving zero-LLM through the same
+	// transport-layer handler the DingTalk runtime and interactive TUI use. Asserting
+	// on the exact deterministic renderer string (not just "looks task-related") is
+	// what actually proves the model was never invoked — a paraphrased model reply
+	// would not reliably reproduce it verbatim.
+	it("resolves a built-in slash command under --print without invoking the model", async () => {
+		const { runTuiApp } = await import("../../src/tui/app.js");
+
+		const chunks: string[] = [];
+		const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+			chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8"));
+			return true;
+		});
+
+		try {
+			await runTuiApp({
+				sandbox: { type: "host" },
+				channel: "tui_e2e_builtin",
+				print: true,
+				plain: true,
+				quiet: true,
+				initialPrompt: "/tasks",
+				io: { log: () => {}, error: () => {} },
+			});
+		} finally {
+			stdoutSpy.mockRestore();
+		}
+
+		expect(chunks.join("").trim(), getE2ESkipReason() ?? undefined).toBe("# Tasks\n\nNo active tasks.");
+	});
 });

@@ -119,6 +119,27 @@ describe("standard task skeleton", () => {
 		expect(uncheckedTaskAcceptanceItems(body)).toEqual(["DoD: tested", "Verification: reviewer passed"]);
 	});
 
+	// Regression: a DoD with no checkbox syntax at all (numbered list, prose) used to
+	// make this return an empty array — indistinguishable from "everything checked" —
+	// letting candidate/done through with nothing ever actually verified.
+	it("flags a DoD with content but no checklist items at all", () => {
+		const body =
+			"# T\n\n## DoD\n1. Draft reviewed\n2. Published\n\n## Verification\nMode: independent\n- Spot check.";
+		expect(uncheckedTaskAcceptanceItems(body)).toEqual([
+			'DoD has no checklist items — rewrite it as "- [ ] ..." acceptance items before requesting verification or done.',
+		]);
+	});
+
+	it("does not flag a Verification section that is prose-only by design", () => {
+		const body = "# T\n\n## DoD\n- [x] built\n\n## Verification\nMode: independent\n- Spot check the artifact.";
+		expect(uncheckedTaskAcceptanceItems(body)).toEqual([]);
+	});
+
+	it("does not flag an empty DoD section", () => {
+		const body = "# T\n\n## DoD\n\n## Verification\nMode: independent";
+		expect(uncheckedTaskAcceptanceItems(body)).toEqual([]);
+	});
+
 	it("appends progress inside Current Cycle without disturbing History", () => {
 		const body = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D" });
 		const updated = appendCurrentCycleNote(body, "Tests pass; next step: review.");

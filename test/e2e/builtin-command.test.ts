@@ -23,4 +23,16 @@ describeE2E("E2E: built-in commands", () => {
 		expect(finalText).toContain("Slash Commands");
 		expect(finalText).toContain("/steer <message>");
 	});
+
+	// Parity check with the TUI --print regression in tui.test.ts: /tasks resolves
+	// zero-LLM on the DingTalk transport too. The exact deterministic renderer
+	// string is the signal that this never reached the model.
+	it("handles /tasks via the runtime layer without invoking the model", async () => {
+		const deliveriesBefore = harness.deliveries.length;
+		await harness.sendUserMessage("/tasks");
+
+		const newDeliveries = harness.deliveries.slice(deliveriesBefore);
+		expect(newDeliveries).toHaveLength(1);
+		expect(newDeliveries[0]).toMatchObject({ method: "sendPlain", text: "# Tasks\n\nNo active tasks." });
+	});
 });

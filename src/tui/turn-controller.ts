@@ -92,11 +92,17 @@ export class TurnController {
 		return this.exitPromise;
 	}
 
-	/** One-shot mode: run a single prompt (if any) then shut down. */
+	/**
+	 * One-shot mode: run a single prompt (if any) then shut down.
+	 *
+	 * Routed through the same `dispatch()` as interactive input so built-in
+	 * slash commands (`/tasks`, `/events`, `/status`, ...) resolve zero-LLM here
+	 * too, instead of falling through to the model as a plain message.
+	 */
 	async runOnce(prompt?: string): Promise<void> {
 		const trimmed = prompt?.trim();
 		if (trimmed) {
-			this.beginTurn(trimmed);
+			await this.processSubmit(trimmed);
 			await this.currentTurn;
 		}
 		await this.shutdown();

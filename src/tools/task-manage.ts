@@ -93,7 +93,12 @@ const taskManageSchema = Type.Object({
 	),
 	title: Type.Optional(Type.String({ description: "Required for create: task title used as the H1 heading." })),
 	goal: Type.Optional(Type.String({ description: "Required for create: concise task goal." })),
-	dod: Type.Optional(Type.String({ description: "Required for create: acceptance criteria / definition of done." })),
+	dod: Type.Optional(
+		Type.String({
+			description:
+				'Required for create: acceptance criteria as Markdown checklist items, one per line, e.g. "- [ ] <criterion>". Plain prose or a numbered list without checkboxes is rejected — candidate/done can only verify items that are checkable.',
+		}),
+	),
 	manual: Type.Optional(Type.String({ description: "Optional for create: initial operating steps or checklist." })),
 	verificationPlan: Type.Optional(
 		Type.String({ description: "Optional for create: deterministic checks the verifier must perform." }),
@@ -425,6 +430,8 @@ async function createTask(options: TaskManageToolOptions, request: TaskManageReq
 		throw new Error(`Archived task "${id}" already exists; choose a new id or restore it manually first.`);
 	}
 	const { fields, body } = renderTaskSkeleton(request);
+	const badDod = uncheckedTaskAcceptanceItems(body).find((item) => item.startsWith("DoD has no checklist items"));
+	if (badDod) throw new Error(badDod);
 	await validateTaskRelations(options, id, fields);
 	await mkdir(dir, { recursive: true });
 	await writeFileAtomically(taskPath, renderTaskFile(fields, body));

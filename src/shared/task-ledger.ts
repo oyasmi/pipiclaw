@@ -173,11 +173,21 @@ export function missingStandardTaskSections(content: string): string[] {
 	);
 }
 
-/** Unchecked Markdown acceptance boxes under DoD or Verification sections. */
+/**
+ * Unchecked Markdown acceptance boxes under the DoD section, plus a synthetic
+ * entry when DoD has content but no checkbox syntax at all.
+ *
+ * Without the "no checklist items" case, a DoD written as prose or a numbered
+ * list (no `- [ ]` anywhere) makes this function return an empty array —
+ * indistinguishable from "everything is checked" — which would silently let
+ * `task_manage candidate`/`done` through with nothing ever actually verified.
+ */
 export function uncheckedTaskAcceptanceItems(content: string): string[] {
 	const unchecked: string[] = [];
 	let section: "DoD" | "Verification" | undefined;
 	let sectionLevel = 0;
+	let dodHasContent = false;
+	let dodHasCheckbox = false;
 	for (const line of content.split("\n")) {
 		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
 		if (heading) {
@@ -194,8 +204,17 @@ export function uncheckedTaskAcceptanceItems(content: string): string[] {
 			continue;
 		}
 		if (!section) continue;
-		const item = /^\s*[-*]\s+\[\s\]\s*(.+?)\s*$/.exec(line)?.[1];
-		if (item) unchecked.push(`${section}: ${item}`);
+		if (section === "DoD" && line.trim()) dodHasContent = true;
+		const checkbox = /^\s*[-*]\s+\[([ xX])\]\s*(.+?)\s*$/.exec(line);
+		if (checkbox) {
+			if (section === "DoD") dodHasCheckbox = true;
+			if (checkbox[1] === " ") unchecked.push(`${section}: ${checkbox[2]}`);
+		}
+	}
+	if (dodHasContent && !dodHasCheckbox) {
+		unchecked.push(
+			'DoD has no checklist items — rewrite it as "- [ ] ..." acceptance items before requesting verification or done.',
+		);
 	}
 	return unchecked;
 }
