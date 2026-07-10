@@ -28,6 +28,8 @@ export interface HandleTasksCommandOptions {
 	channelId?: string;
 	/** Direct command issuer; used to create an auditable external-action approval. */
 	approver?: string;
+	/** Optional immediate task wake, available in the long-lived DingTalk runtime. */
+	dispatchTask?: (id: string) => Promise<boolean>;
 }
 
 type TasksCommand =
@@ -37,7 +39,9 @@ type TasksCommand =
 	| { action: "doctor" }
 	| { action: "approve"; id: string }
 	| { action: "pause"; id: string }
-	| { action: "resume"; id: string };
+	| { action: "resume"; id: string }
+	| { action: "run"; id: string }
+	| { action: "stats"; id?: string };
 
 function usage(): string {
 	return `# Tasks
@@ -50,6 +54,8 @@ Usage:
 - \`/tasks approve <id>\` — explicitly approve this task's external side effects
 - \`/tasks pause <id>\` — stop automatic wake-ups for a task
 - \`/tasks resume <id>\` — make a paused task eligible for the next driver scan
+- \`/tasks run <id>\` — resume and immediately enqueue one task attempt when the runtime is available
+- \`/tasks stats [id]\` — show task-level attempt, token, cost, and verification outcomes
 - \`/tasks doctor\` — check task/event consistency without changing files`;
 }
 
@@ -83,6 +89,16 @@ function parseTasksCommand(args: string): TasksCommand {
 		const id = parts[1];
 		if (!id || parts.length > 2) throw new Error(`Usage: /tasks ${action} <id>`);
 		return { action, id };
+	}
+	if (action === "run") {
+		const id = parts[1];
+		if (!id || parts.length > 2) throw new Error("Usage: /tasks run <id>");
+		return { action: "run", id };
+	}
+	if (action === "stats") {
+		const id = parts[1];
+		if (parts.length > 2) throw new Error("Usage: /tasks stats [id]");
+		return { action: "stats", id };
 	}
 	throw new Error(`Unknown /tasks action: ${action}`);
 }
@@ -266,7 +282,7 @@ async function approveTask(options: HandleTasksCommandOptions, idInput: string):
 	return `Approved external side effects for task ${id}. Approval is recorded for ${control.approvalBy}.`;
 }
 
-async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
+export async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `Task not found: ${id}`;
@@ -284,7 +300,7 @@ async function pauseTask(options: HandleTasksCommandOptions, idInput: string): P
 	return `Paused task ${id}. Use /tasks resume ${id} when it should continue.`;
 }
 
-async function resumeTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
+export async function resumeTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `Task not found: ${id}`;
@@ -297,6 +313,90 @@ async function resumeTask(options: HandleTasksCommandOptions, idInput: string): 
 	}
 	await writeStoredTask(task);
 	return `Resumed task ${id}; the task driver will pick it up on its next scan.`;
+}
+
+async function runTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
+	const id = normalizeTaskId(idInput);
+	const task = await readStoredTask(options.channelDir, id);
+	if (!task) return `Task not found: ${id}`;
+	if (["done", "cancelled", "escalated"].includes(task.fields.status)) {
+		return `Task ${id} is ${task.fields.status} and cannot be run.`;
+	}
+	if (task.fields.status === "paused") task.fields.status = "in-progress";
+	task.fields.wake = undefined;
+	if (task.fields.control) {
+		task.fields.control.lastOutcome = "pending";
+		task.fields.control.blockedReason = undefined;
+	}
+	await writeStoredTask(task);
+	const enqueued = await options.dispatchTask?.(id);
+	return enqueued
+		? `Enqueued task ${id} for an immediate attempt.`
+		: `Task ${id} is ready. Start or use the DingTalk daemon for automatic dispatch, or send a normal prompt in this session to advance it.`;
+}
+
+function renderUsageLine(entry: TaskLedgerEntry): string {
+	const control = entry.frontmatter.control;
+	if (!control) return `- ${entry.id}: legacy task (no governed usage recorded)`;
+	const verification = control.verification;
+	return [
+		`- ${entry.id} — ${entry.title}`,
+		`  attempts: ${control.usage.attempts}/${control.budget.maxAttempts}`,
+		`  tokens: ${control.usage.tokens}`,
+		`  cost: $${control.usage.costUsd.toFixed(4)}`,
+		`  wall time: ${control.usage.wallTimeMinutes.toFixed(1)}m`,
+		`  last outcome: ${control.lastOutcome}`,
+		`  verification: ${verification.mode}/${verification.status}`,
+	].join("\n");
+}
+
+async function taskStats(options: HandleTasksCommandOptions, idInput?: string): Promise<string> {
+	if (idInput) {
+		const id = normalizeTaskId(idInput);
+		const task = await readStoredTask(options.channelDir, id, true, true);
+		if (!task) return `Task not found: ${id}`;
+		const entry: TaskLedgerEntry = {
+			id,
+			title: extractTaskTitle(task.body, id),
+			frontmatter: {
+				readable: true,
+				status: task.fields.status,
+				wake: task.fields.wake,
+				recurrence: task.fields.recurrence,
+				control: task.fields.control,
+			},
+			actionable: false,
+		};
+		return `# Task Stats\n\n${renderUsageLine(entry)}`;
+	}
+	const entries = await readActiveTasks(tasksDir(options.channelDir));
+	const governed = entries.filter((entry) => entry.frontmatter.control);
+	const totals = governed.reduce(
+		(total, entry) => {
+			const usage = entry.frontmatter.control!.usage;
+			total.attempts += usage.attempts;
+			total.tokens += usage.tokens;
+			total.costUsd += usage.costUsd;
+			total.wallTimeMinutes += usage.wallTimeMinutes;
+			return total;
+		},
+		{ attempts: 0, tokens: 0, costUsd: 0, wallTimeMinutes: 0 },
+	);
+	const verified = governed.filter((entry) => entry.frontmatter.control?.verification.status === "passed").length;
+	const stalled = governed.filter((entry) => entry.frontmatter.control?.lastOutcome === "failed").length;
+	return [
+		"# Task Stats",
+		"",
+		`governed tasks: ${governed.length}/${entries.length}`,
+		`attempts: ${totals.attempts}`,
+		`tokens: ${totals.tokens}`,
+		`cost: $${totals.costUsd.toFixed(4)}`,
+		`wall time: ${totals.wallTimeMinutes.toFixed(1)}m`,
+		`verification PASS: ${verified}`,
+		`last-run failures: ${stalled}`,
+		"",
+		...governed.map(renderUsageLine),
+	].join("\n");
 }
 
 async function showTask(channelDir: string, id: string): Promise<string> {
@@ -616,6 +716,10 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 				return await pauseTask(options, command.id);
 			case "resume":
 				return await resumeTask(options, command.id);
+			case "run":
+				return await runTask(options, command.id);
+			case "stats":
+				return await taskStats(options, command.id);
 			case "doctor":
 				return await doctor(options);
 		}

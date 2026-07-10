@@ -118,6 +118,39 @@ describe("handleTasksCommand", () => {
 		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: in-progress");
 	});
 
+	it("runs a ready task through the runtime dispatch callback", async () => {
+		await writeFile(join(tasksDir, "ready.md"), doc("status: paused", STANDARD_BODY));
+		const dispatches: string[] = [];
+		const out = await handleTasksCommand({
+			args: "run ready",
+			channelDir,
+			workspaceDir,
+			channelId,
+			approver: "Alice",
+			dispatchTask: async (id) => {
+				dispatches.push(id);
+				return true;
+			},
+		});
+		expect(out).toContain("Enqueued task ready");
+		expect(dispatches).toEqual(["ready"]);
+		expect(await readFile(join(tasksDir, "ready.md"), "utf-8")).toContain("status: in-progress");
+	});
+
+	it("renders token and verification stats without an LLM turn", async () => {
+		const control = createDefaultTaskControl();
+		control.usage = { attempts: 3, tokens: 1200, costUsd: 0.12, wallTimeMinutes: 4.5 };
+		control.verification.status = "passed";
+		await writeFile(
+			join(tasksDir, "measured.md"),
+			renderTaskDocument({ status: "in-progress", control }, STANDARD_BODY),
+		);
+		const out = await run("stats measured");
+		expect(out).toContain("attempts: 3/12");
+		expect(out).toContain("tokens: 1200");
+		expect(out).toContain("verification: independent/passed");
+	});
+
 	it("doctor detects approval made stale by a later task-body change", async () => {
 		const control = createDefaultTaskControl("evidence");
 		control.sideEffects = "external";

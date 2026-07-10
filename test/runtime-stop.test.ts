@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -163,6 +163,87 @@ describe("runtime stop handling", () => {
 		expect(bot.discardCard).toHaveBeenCalledTimes(1);
 		expect(bot.discardCard).toHaveBeenCalledWith("dm_tester");
 		expect(bot.clearPendingMessages).toHaveBeenCalledWith("dm_tester");
+
+		await runtime.shutdown();
+	}, 20_000);
+
+	it("durably pauses a task-driver task before aborting it", async () => {
+		let releaseRun!: () => void;
+		let signalRunStarted!: () => void;
+		const runAborted = new Promise<void>((resolve) => {
+			releaseRun = resolve;
+		});
+		const runStarted = new Promise<void>((resolve) => {
+			signalRunStarted = resolve;
+		});
+		const runner: AgentRunner = {
+			run: vi.fn(async () => {
+				signalRunStarted();
+				await runAborted;
+				return { stopReason: "aborted" };
+			}),
+			handleBuiltinCommand: vi.fn(async () => {}),
+			queueSteer: vi.fn(async () => {}),
+			flushMemoryForShutdown: vi.fn(async () => {}),
+			getMemoryMaintenanceContext: vi.fn(async () => {
+				throw new Error("not used");
+			}),
+			getStatusSnapshot: vi.fn(() => ({
+				model: "test/model",
+				contextTokens: 0,
+				contextWindow: 200000,
+				thinkingLevel: "off",
+			})),
+			abort: vi.fn(async () => {
+				releaseRun();
+			}),
+		};
+		getOrCreateRunnerMock.mockReturnValue(runner);
+
+		const { bootstrapAppHome, createRuntimeContext } = await import("../src/runtime/bootstrap.js");
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+		const taskPath = join(paths.workspaceDir, "dm_tester", "tasks", "long-run.md");
+		mkdirSync(join(paths.workspaceDir, "dm_tester", "tasks"), { recursive: true });
+		writeFileSync(taskPath, "---\nstatus: in-progress\n---\n\n# Long running task\n", "utf-8");
+
+		const bot = new FakeTestBot();
+		const runtime = createRuntimeContext({
+			paths,
+			sandbox: { type: "host" },
+			dingtalkConfig: {
+				clientId: "client-id",
+				clientSecret: "client-secret",
+				robotCode: "client-id",
+				cardTemplateKey: "content",
+				stateDir: paths.workspaceDir,
+			} satisfies DingTalkConfig,
+			registerSignalHandlers: false,
+			startServices: false,
+			createBot: () => bot as unknown as DingTalkBot,
+			createEventsWatcher: () => ({ start() {}, stop() {} }),
+		});
+
+		const task = runtime.handler.handleEvent(
+			{
+				type: "dm",
+				channelId: "dm_tester",
+				ts: "1000",
+				user: "TASK_DRIVER",
+				userName: "TASK_DRIVER",
+				text: "[TASK_DRIVER:long-run] Resume task long-run.",
+				conversationId: "conv_1",
+				conversationType: "1",
+			},
+			bot as unknown as DingTalkBot,
+		);
+
+		await runStarted;
+		await runtime.handler.handleStop("dm_tester", bot as unknown as DingTalkBot);
+		await task;
+
+		expect(runner.abort).toHaveBeenCalledTimes(1);
+		expect(readFileSync(taskPath, "utf-8")).toContain("status: paused");
 
 		await runtime.shutdown();
 	}, 20_000);

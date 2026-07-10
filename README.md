@@ -24,6 +24,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 - 支持预定义子代理（sub-agent）和临时内联子代理（inline sub-agent）
 - 支持立即、单次、周期三类事件调度
 - 内建长程任务 driver：`wake` 到点自动恢复、任务有进展时有界续跑、停滞时自动退避，无需手工 heartbeat 脚本或 check-in 事件
+- Task Loop v2：持久派发、受预算约束的恢复、独立验收与可操作的 `pause` / `resume` / `run` / `stats` 控制面，让长期工作持续沉淀为可检查的结果
 - 支持自定义模型提供方（provider）和模型（model）配置
 - 内建 `web_search` / `web_fetch`，支持联网搜索与网页抓取；`web_fetch` 支持结果缓存与分页续读，长网页被截断后可直接续读、不重抓
 - 内建 `grep` 结构化搜索工具：按文件分组、分页、token 有界的内容检索，优于裸 `bash grep`
@@ -464,6 +465,8 @@ Pipiclaw 有两层命令。
 | `/tasks archive` | 查看已归档任务 |
 | `/tasks approve <id>` | 显式批准该任务的外部副作用，并记录授权人/时间 |
 | `/tasks pause <id>` / `/tasks resume <id>` | 持久暂停或恢复一个长程任务的自动推进 |
+| `/tasks run <id>` | 立即安排一轮已就绪任务 |
+| `/tasks stats [id]` | 查看任务的 token、成本、attempt 与验收统计 |
 | `/tasks doctor` | 诊断任务台账与 task event 的一致性问题 |
 | `/status` | 查看运行时状态：执行状态、当前模型、上下文用量、运行时长、版本 |
 | `/usage [7d\|month]` | 查看本通道与全局的 LLM 成本，按类型和 Top 模型拆分 |

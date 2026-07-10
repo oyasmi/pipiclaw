@@ -30,6 +30,7 @@ import {
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
+import { readActiveTasks } from "../shared/task-ledger.js";
 import { finishTaskAttempt } from "../tasks/store.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
@@ -52,8 +53,8 @@ import { DurableDispatchService } from "./durable-dispatch.js";
 import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
-import { handleTasksCommand as runTasksCommand } from "./task-commands.js";
-import { TaskDriver } from "./task-driver.js";
+import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
+import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";
 
 export interface BootstrapPaths {
 	appName: string;
@@ -665,6 +666,18 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			const state = channelStates.get(channelId);
 			if (state?.running) {
 				state.stopRequested = true;
+				const taskId = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(state.currentTaskText ?? "")?.[1];
+				if (taskId) {
+					const pauseResult = await pauseTask(
+						{
+							args: "",
+							channelDir: getChannelDir(options.paths.workspaceDir, channelId),
+							approver: "user via /stop",
+						},
+						taskId,
+					);
+					log.logInfo(`[${channelId}] ${pauseResult}`);
+				}
 				_bot.discardCard(channelId);
 				// Drop queued-but-not-started messages so a burst does not keep
 				// running after the user asked to halt; abort the in-flight one.
@@ -696,6 +709,15 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				channelId: event.channelId,
 				approver:
 					event.userName && event.userName !== event.user ? `${event.userName} (${event.user})` : event.user,
+				dispatchTask: async (id) => {
+					const channelDir = getChannelDir(options.paths.workspaceDir, event.channelId);
+					const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
+						(candidate) => candidate.id === id,
+					);
+					return entry
+						? (durableDispatch?.dispatch(createTaskDriverEvent(event.channelId, entry, Date.now())) ?? false)
+						: false;
+				},
 			});
 			await bot.sendPlain(event.channelId, response);
 		},

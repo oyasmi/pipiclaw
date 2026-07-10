@@ -103,7 +103,7 @@ async function hasLiveLegacyCheckin(
 	}
 }
 
-function taskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): DingTalkEvent {
+export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): DingTalkEvent {
 	const verification = entry.frontmatter.control?.verification;
 	const verificationInstruction =
 		entry.frontmatter.status === "verifying"
@@ -114,13 +114,22 @@ function taskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: numbe
 	const repair = entry.frontmatter.readable
 		? ""
 		: " Its frontmatter is unreadable: repair it before using task_manage, and do not silently skip the task.";
+	const control = entry.frontmatter.control;
+	const capsule = [
+		`Task capsule: title=${entry.title}; status=${entry.frontmatter.status ?? "open"};`,
+		entry.latestNote ? `latest=${entry.latestNote};` : "",
+		control?.nextAction ? `next=${control.nextAction};` : "",
+		control ? `budget=${control.usage.attempts}/${control.budget.maxAttempts} attempts;` : "",
+	]
+		.filter(Boolean)
+		.join(" ");
 	return {
 		type: channelId.startsWith("group_") ? "group" : "dm",
 		channelId,
 		user: "TASK_DRIVER",
 		userName: "TASK_DRIVER",
 		text:
-			`[TASK_DRIVER:${entry.id}] Resume task ${entry.id}.${repair} Open tasks/${entry.id}.md, advance the next ` +
+			`[TASK_DRIVER:${entry.id}] Resume task ${entry.id}. ${capsule}${repair} Open tasks/${entry.id}.md, advance the next ` +
 			"concrete step, respect its control metadata (budget, dependencies, isolation, and side-effect approval), and " +
 			"verify the work against its DoD. If it remains open, atomically record what changed, the " +
 			"next step, status, and any future wake with task_manage progress (or carefully update the task file if that " +
@@ -272,7 +281,7 @@ export class TaskDriver {
 				if (claim) {
 					fingerprint = await taskFingerprint(channelDir, entry);
 				}
-				const accepted = await this.options.dispatch(taskDriverEvent(channelId, entry, now.getTime()));
+				const accepted = await this.options.dispatch(createTaskDriverEvent(channelId, entry, now.getTime()));
 				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim, now);
 				this.attempts.set(key, { fingerprint, atMs: now.getTime(), accepted });
 				if (accepted) {

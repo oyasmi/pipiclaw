@@ -71,6 +71,7 @@ describe("TaskDriver", () => {
 		expect(dispatch).toHaveBeenCalledTimes(1);
 		expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ channelId: "dm_a", user: "TASK_DRIVER" });
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:ready]");
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("Task capsule: title=Task; status=in-progress;");
 	});
 
 	it("skips active channels", async () => {

@@ -2,6 +2,19 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [0.8.0] - 2026-07-10
+
+### Added
+
+- Task Loop v2 completes the lightweight autonomous-work loop: every driver turn gets a compact Task Capsule (title, state, latest checkpoint, next action, and remaining attempt budget) while the complete Markdown task remains the human-readable source of truth.
+- Operator control surface: `/tasks run <id>` resumes and immediately durably queues a task when the DingTalk runtime is available; `/tasks stats [id]` reports attempt, token, cost, wall-time, outcome, and verification facts without consuming an LLM turn.
+- `/stop` now durably pauses an in-flight task-driver task before aborting its model turn, preventing an accidental automatic restart after a user halt.
+- Added the Task Loop v2 design specification (`docs/specs/024-task-loop-v2`), documenting the at-least-once, bounded-spend contract, state machine, recovery path, and intentional non-goals.
+
+### Changed
+
+- The final v2 flow is explicit and inspectable: wake/event/user run → durable dispatch → bounded driver attempt → atomic checkpoint → continue, wait, verify, pause, or escalate. It remains file-native and single-process rather than becoming a workflow engine.
+
 ## [0.7.10] - 2026-07-10
 
 ### Added

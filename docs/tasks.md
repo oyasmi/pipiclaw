@@ -6,7 +6,7 @@
 
 > 醒来 → 查看在途工作 → 推进最需要推进的一项 → 记下状态和下次检查点 → 睡去。
 
-设计规格见 [`019 Task Ledger`](./specs/019-task-ledger/design.md)、[`022 Native Task Driver`](./specs/022-native-task-driver/design.md) 与 [`023 Governed Task Loops`](./specs/023-governed-task-loops/design.md)。
+设计规格见 [`019 Task Ledger`](./specs/019-task-ledger/design.md)、[`022 Native Task Driver`](./specs/022-native-task-driver/design.md)、[`023 Governed Task Loops`](./specs/023-governed-task-loops/design.md) 与 [`024 Task Loop v2`](./specs/024-task-loop-v2/design.md)。
 
 ## 三层职责
 
@@ -79,7 +79,7 @@ frontmatter 字段：
 
 | 字段 | 必填 | 取值 | 说明 |
 |------|------|------|------|
-| `status` | 是 | `open` / `in-progress` / `awaiting-user` / `blocked` / `paused` / `done` / `cancelled` / `escalated` | paused/done/cancelled/escalated 都不会被 driver 继续执行 |
+| `status` | 是 | `open` / `in-progress` / `awaiting-user` / `blocked` / `verifying` / `paused` / `done` / `cancelled` / `escalated` | paused/done/cancelled/escalated 都不会被 driver 继续执行；verifying 会进入 checker-only 回合 |
 | `wake` | 否 | 带时区的 ISO 8601 | 最早值得再看一眼的时间。缺省 = 随时可推进 |
 | `recurrence` | 否 | 自由文本（如 `每周一`） | 仅作标注给人读；**节奏的真相在对应的 periodic 事件里** |
 | `control` | 新任务是 | 单行 JSON，`version: 1` | priority/deadline/nextAction、父子依赖、隔离与副作用策略、预算/用量、独立验收状态 |
@@ -198,6 +198,8 @@ task driver 随 DingTalk daemon 启动，默认每分钟做一次廉价扫描。
 - `/tasks archive` —— 列出已闭环（归档）的任务。
 - `/tasks approve <id>` —— 唯一的外部副作用授权入口；由 runtime 直接记录用户和时间，不经 LLM。
 - `/tasks pause <id>` / `/tasks resume <id>` —— 持久暂停或恢复该任务的自动 wake；resume 后由下一次 driver scan 接手。
+- `/tasks run <id>` —— 清除 wake 并立即入队一轮 task attempt（DingTalk runtime）；没有 daemon 的 TUI 会把任务置为 ready，并提示你用普通消息继续推进。
+- `/tasks stats [id]` —— 零 LLM 成本查看 governed task 的 attempts、token、cost、wall time、最近结果和 verifier 状态。
 - `/tasks doctor` —— 只读体检 task/event 与治理一致性：坏 control、超预算/截止、缺失关系、未授权 external action、陈旧 verifier PASS、丢失 worktree，以及原有的 frontmatter/wake/event 问题。每条都附 `Next step`。
 
 除显式的 `approve` 安全闸门外，`/tasks` 命令保持只读。想改期、取消、调预算或调整做法，直接告诉 agent，由它通过 `task_manage` 原子更新台账。TUI 里同样可用。

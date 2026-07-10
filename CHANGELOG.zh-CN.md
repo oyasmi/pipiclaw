@@ -2,6 +2,19 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
+## [0.8.0] - 2026-07-10
+
+### 新增
+
+- Task Loop v2 完成轻量自主工作闭环：每个 driver 回合都会带上紧凑的 Task Capsule（标题、状态、最近 checkpoint、下一动作和剩余 attempt 预算），完整 Markdown task 仍是人可读的唯一事实源。
+- 操作者控制面：`/tasks run <id>` 会恢复任务，并在 DingTalk runtime 可用时立即进行持久入队；`/tasks stats [id]` 不消耗 LLM 回合即可报告 attempt、token、成本、墙钟时间、最近结果与验收状态。
+- 对 task-driver 正在执行的任务发送 `/stop` 时，runtime 会先持久 `pause` 任务，再中断当前模型回合，避免用户暂停后发生意外自动续跑。
+- 新增 Task Loop v2 设计规格（`docs/specs/024-task-loop-v2`），明确 at-least-once、有界 token 开销、状态机、恢复路径和有意保留的非目标。
+
+### 变更
+
+- v2 最终流程变为显式且可检查的：wake/event/user run → durable dispatch → 有界 driver attempt → 原子 checkpoint → continue、wait、verify、pause 或 escalate。它保持 file-native、单进程，而不是演变成工作流引擎。
+
 ## [0.7.10] - 2026-07-10
 
 ### 新增
