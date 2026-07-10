@@ -16,7 +16,13 @@ import {
 	type TaskLedgerEntry,
 } from "../shared/task-ledger.js";
 import { taskBudgetViolation } from "../tasks/control.js";
-import { readStoredTask, taskBodyHash, writeStoredTask } from "../tasks/store.js";
+import {
+	claimTaskAttempt,
+	readStoredTask,
+	releaseTaskAttemptClaim,
+	taskBodyHash,
+	writeStoredTask,
+} from "../tasks/store.js";
 import { parseScheduledEventContent, type ScheduledEvent } from "./events.js";
 
 export interface HandleTasksCommandOptions {
@@ -329,7 +335,10 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 		task.fields.control.blockedReason = undefined;
 	}
 	await writeStoredTask(task);
+	const now = new Date();
+	const claim = task.fields.control ? await claimTaskAttempt(options.channelDir, id, now) : undefined;
 	const enqueued = await options.dispatchTask?.(id);
+	if (!enqueued && claim) await releaseTaskAttemptClaim(options.channelDir, id, claim, now);
 	return enqueued
 		? `Enqueued task ${id} for an immediate attempt.`
 		: `Task ${id} is ready. Start or use the DingTalk daemon for automatic dispatch, or send a normal prompt in this session to advance it.`;

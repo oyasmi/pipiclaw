@@ -685,6 +685,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				if (dropped > 0) {
 					log.logInfo(`[${channelId}] Dropped ${dropped} queued message(s) on stop`);
 				}
+				const canceled = await durableDispatch?.cancelChannel(channelId);
+				if (canceled) {
+					log.logInfo(`[${channelId}] Reset ${canceled} durable-dispatch lease(s) on stop`);
+				}
 				void state.runner.abort().catch((err) => {
 					log.logWarning(`[${channelId}] Failed to abort run`, err instanceof Error ? err.message : String(err));
 				});

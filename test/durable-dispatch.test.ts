@@ -46,7 +46,7 @@ describe("DurableDispatchService", () => {
 			},
 		});
 
-		await expect(service.dispatch(event())).resolves.toBe(true);
+		await expect(service.dispatch(event())).resolves.toBe(false);
 		expect(readdirSync(stateDir)).toHaveLength(1);
 		expect(received).toEqual([]);
 
@@ -89,5 +89,34 @@ describe("DurableDispatchService", () => {
 		await restarted.markStarted(id);
 		await restarted.markCompleted(id);
 		expect(existsSync(join(stateDir, `${id}.json`))).toBe(false);
+	});
+
+	it("cancelChannel clears an in-flight lease so the next drain retries immediately", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			leaseMs: 15 * 60_000,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(event());
+		expect(delivered).toHaveLength(1);
+
+		// Simulate the record still being "in flight" (queued, long lease) when the
+		// user hits /stop for that channel.
+		const canceled = await service.cancelChannel("dm_1");
+		expect(canceled).toBe(1);
+
+		// Without cancelChannel this record would sit until the 15m lease expires;
+		// after cancelling, the very next drain redelivers it.
+		await service.drainOnce();
+		expect(delivered).toHaveLength(2);
+
+		expect(await service.cancelChannel("some-other-channel")).toBe(0);
 	});
 });

@@ -514,6 +514,9 @@ async function progressTask(options: TaskManageToolOptions, request: TaskManageR
 	const note = requiredField(request.note, "note", "progress");
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
+	if (["done", "cancelled", "escalated", "paused"].includes(fields.status)) {
+		throw new Error(`Task "${id}" is ${fields.status} and cannot be progressed.`);
+	}
 	const nextFields = applySet(fields, request);
 	await validateTaskRelations(options, id, nextFields);
 	if (nextFields.control) {

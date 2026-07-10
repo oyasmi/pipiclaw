@@ -107,7 +107,33 @@ export class DurableDispatchService {
 			await this.write(record);
 		});
 		await this.drainOnce();
-		return true;
+		// The record is gone (delivered+completed already) or no longer "pending"
+		// (drainOnce only reverts to "pending" when bot.enqueueEvent rejected it).
+		const after = await this.read(id);
+		return after?.status !== "pending";
+	}
+
+	/** Reset any in-flight records for a channel so a stop/abort can redeliver on the next tick, not after the lease expires. */
+	async cancelChannel(channelId: string): Promise<number> {
+		let filenames: string[];
+		try {
+			filenames = (await readdir(this.options.stateDir)).filter((name) => name.endsWith(".json"));
+		} catch {
+			return 0;
+		}
+		let canceled = 0;
+		for (const filename of filenames) {
+			const id = filename.slice(0, -".json".length);
+			await this.queue.run(id, async () => {
+				const record = await this.read(id);
+				if (!record || record.event.channelId !== channelId) return;
+				if (record.status !== "queued" && record.status !== "running") return;
+				record.leaseExpiresAt = undefined;
+				await this.write(record);
+				canceled++;
+			});
+		}
+		return canceled;
 	}
 
 	async markStarted(id: string | undefined): Promise<void> {
