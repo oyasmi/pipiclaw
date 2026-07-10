@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
@@ -55,21 +55,21 @@ function attemptKey(channelId: string, taskId: string): string {
 	return `${channelId}\0${taskId}`;
 }
 
-async function taskFingerprint(channelDir: string, entry: TaskLedgerEntry): Promise<string> {
-	let fileStamp = "unreadable";
-	try {
-		const info = await stat(join(channelDir, "tasks", `${entry.id}.md`));
-		fileStamp = `${info.mtimeMs}:${info.size}`;
-	} catch {
-		// readActiveTasks already treats this as actionable; keep a stable fallback.
-	}
+async function taskFingerprint(_channelDir: string, entry: TaskLedgerEntry): Promise<string> {
+	// Do not use mtime/size here. Runtime usage accounting deliberately rewrites
+	// task control after every attempt; treating that bookkeeping as progress made
+	// governed tasks retry at the short continuation interval forever.
+	const control = entry.frontmatter.control;
 	return [
-		fileStamp,
 		entry.frontmatter.readable ? "readable" : "unreadable",
 		entry.frontmatter.status ?? "",
 		entry.frontmatter.wake ?? "",
 		entry.frontmatter.recurrence ?? "",
 		entry.latestNote ?? "",
+		control?.nextAction ?? "",
+		control?.blockedReason ?? "",
+		control?.verification.status ?? "",
+		control?.cycleId ?? "",
 	].join("\0");
 }
 
@@ -212,7 +212,14 @@ export class TaskDriver {
 				for (const candidate of entries) {
 					const status = candidate.frontmatter.status;
 					const control = candidate.frontmatter.control;
-					if (!control || status === "done" || status === "cancelled" || status === "escalated") continue;
+					if (
+						!control ||
+						status === "done" ||
+						status === "cancelled" ||
+						status === "escalated" ||
+						status === "paused"
+					)
+						continue;
 					const dependencies = await dependencyState(channelDir, control.dependsOn, candidate.id);
 					const escalationReason =
 						taskBudgetViolation(control, now.getTime()) ?? terminalDependencyReason(dependencies.reason);

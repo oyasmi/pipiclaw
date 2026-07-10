@@ -7,6 +7,7 @@ import { discoverTaskChannels, TaskDriver } from "../src/runtime/task-driver.js"
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
 import { renderTaskDocument } from "../src/shared/task-ledger.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { finishTaskAttempt } from "../src/tasks/store.js";
 
 const NOW = new Date("2026-07-10T12:00:00+08:00");
 const SETTINGS: PipiclawTaskDriverSettings = {
@@ -234,6 +235,29 @@ describe("TaskDriver", () => {
 			getSettings: () => SETTINGS,
 		});
 		await driver.runOnce(NOW);
+		await driver.runOnce(new Date(NOW.getTime() + 60 * 60_000));
+		expect(dispatch).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not mistake governed usage accounting for semantic task progress", async () => {
+		await writeTask("dm_a", "work", governedTask("in-progress"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+		await driver.runOnce(NOW);
+		await finishTaskAttempt(join(workspaceDir, "dm_a"), "work", {
+			tokens: 100,
+			costUsd: 0.1,
+			wallTimeMinutes: 1,
+			failed: false,
+			finishedAt: new Date(NOW.getTime() + 1_000),
+		});
+		await driver.runOnce(new Date(NOW.getTime() + 10 * 60_000));
+		expect(dispatch).toHaveBeenCalledTimes(1);
 		await driver.runOnce(new Date(NOW.getTime() + 60 * 60_000));
 		expect(dispatch).toHaveBeenCalledTimes(2);
 	});

@@ -13,6 +13,7 @@ import {
 	readActiveTasks,
 	renderStandardTaskBody,
 	renderTaskDocument,
+	startTaskCycle,
 	taskBody,
 	uncheckedTaskAcceptanceItems,
 } from "../shared/task-ledger.js";
@@ -21,13 +22,14 @@ import {
 	createDefaultTaskControl,
 	invalidateTaskApproval,
 	invalidateTaskVerification,
+	resetTaskControlForCycle,
 	type TaskControl,
 	type TaskControlPatch,
 } from "../tasks/control.js";
 import { dependencyState, readStoredTask, taskBodyHash } from "../tasks/store.js";
 import { readVerificationAttestation } from "../tasks/verification.js";
 
-const SETTABLE_STATUSES = ["open", "in-progress", "awaiting-user", "blocked"] as const;
+const SETTABLE_STATUSES = ["open", "in-progress", "awaiting-user", "blocked", "paused"] as const;
 
 const taskControlSchema = Type.Object({
 	priority: Type.Optional(
@@ -76,11 +78,12 @@ const taskManageSchema = Type.Object({
 			Type.Literal("verify"),
 			Type.Literal("done"),
 			Type.Literal("cancel"),
+			Type.Literal("start-cycle"),
 			Type.Literal("list"),
 		],
 		{
 			description:
-				'"create" writes a governed task; "progress" atomically checkpoints work; "set" repairs metadata; "verify" imports an independent verifier attestation; "done" closes verified work; "cancel" closes abandoned work; "list" returns tasks.',
+				'"create" writes a governed task; "progress" atomically checkpoints work; "set" repairs metadata; "verify" imports an independent verifier attestation; "done" closes verified work; "cancel" closes abandoned work; "start-cycle" opens a completed recurring task; "list" returns tasks.',
 		},
 	),
 	id: Type.Optional(
@@ -125,9 +128,12 @@ const taskManageSchema = Type.Object({
 	),
 	residualRisk: Type.Optional(Type.String({ description: "Optional for done: remaining risk or follow-up note." })),
 	reason: Type.Optional(Type.String({ description: "Required for cancel: why the task was abandoned." })),
+	cycleId: Type.Optional(
+		Type.String({ description: "Required for start-cycle: stable id for the newly opened recurring cycle." }),
+	),
 });
 
-export type TaskManageAction = "create" | "progress" | "set" | "verify" | "done" | "cancel" | "list";
+export type TaskManageAction = "create" | "progress" | "set" | "verify" | "done" | "cancel" | "start-cycle" | "list";
 
 export interface TaskManageResult {
 	action: TaskManageAction;
@@ -165,6 +171,7 @@ export interface TaskManageRequest {
 	evidence?: string;
 	residualRisk?: string;
 	reason?: string;
+	cycleId?: string;
 }
 
 export interface TaskManageToolOptions {
@@ -189,11 +196,12 @@ function parseAction(action: string): TaskManageAction {
 		action === "verify" ||
 		action === "done" ||
 		action === "cancel" ||
+		action === "start-cycle" ||
 		action === "list"
 	) {
 		return action;
 	}
-	throw new Error("Unsupported task action. Use create, progress, set, verify, done, cancel, or list.");
+	throw new Error("Unsupported task action. Use create, progress, set, verify, done, cancel, start-cycle, or list.");
 }
 
 function toWorkspacePath(options: TaskManageToolOptions, hostPath: string): string {
@@ -672,6 +680,37 @@ async function cancelTask(options: TaskManageToolOptions, request: TaskManageReq
 	};
 }
 
+async function startCycleTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
+	if (!request.id) throw new Error('action "start-cycle" requires an id.');
+	const id = normalizeTaskId(request.id);
+	const cycleId = requiredField(request.cycleId, "cycleId", "start-cycle");
+	const taskPath = join(tasksDir(options), `${id}.md`);
+	const { fields, body } = await readTaskDocument(taskPath, id);
+	if (fields.status !== "done") {
+		throw new Error(
+			`Task "${id}" is ${fields.status}, not done. Finish, cancel, or explicitly resolve the current cycle before starting another.`,
+		);
+	}
+	if (!fields.recurrence) {
+		throw new Error(
+			`Task "${id}" is not marked recurring. Add recurrence and its canonical .schedule event before starting a cycle.`,
+		);
+	}
+	const control = fields.control ? resetTaskControlForCycle(fields.control, cycleId) : undefined;
+	const nextBody = startTaskCycle(body, cycleId);
+	await writeFileAtomically(
+		taskPath,
+		renderTaskFile({ ...fields, status: "in-progress", wake: undefined, control }, nextBody),
+	);
+	return {
+		action: "start-cycle",
+		id,
+		path: toWorkspacePath(options, taskPath),
+		status: "in-progress",
+		notice: `已开启周期任务 \`${id}\` 的新周期 \`${cycleId}\`。`,
+	};
+}
+
 async function listTasks(options: TaskManageToolOptions): Promise<TaskManageResult> {
 	const entries = await readActiveTasks(tasksDir(options));
 	return {
@@ -705,6 +744,8 @@ export async function manageTask(
 			return doneTask(options, request);
 		case "cancel":
 			return cancelTask(options, request);
+		case "start-cycle":
+			return startCycleTask(options, request);
 		case "list":
 			return listTasks(options);
 	}
@@ -740,6 +781,7 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 				evidence?: string;
 				residualRisk?: string;
 				reason?: string;
+				cycleId?: string;
 			},
 		) => {
 			const result = await manageTask(options, {
@@ -760,6 +802,7 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 				evidence: args.evidence,
 				residualRisk: args.residualRisk,
 				reason: args.reason,
+				cycleId: args.cycleId,
 			});
 			return {
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

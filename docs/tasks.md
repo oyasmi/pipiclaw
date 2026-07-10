@@ -79,7 +79,7 @@ frontmatter 字段：
 
 | 字段 | 必填 | 取值 | 说明 |
 |------|------|------|------|
-| `status` | 是 | `open` / `in-progress` / `awaiting-user` / `blocked` / `done` / `cancelled` / `escalated` | done/cancelled/escalated 都不会被 driver 继续执行 |
+| `status` | 是 | `open` / `in-progress` / `awaiting-user` / `blocked` / `paused` / `done` / `cancelled` / `escalated` | paused/done/cancelled/escalated 都不会被 driver 继续执行 |
 | `wake` | 否 | 带时区的 ISO 8601 | 最早值得再看一眼的时间。缺省 = 随时可推进 |
 | `recurrence` | 否 | 自由文本（如 `每周一`） | 仅作标注给人读；**节奏的真相在对应的 periodic 事件里** |
 | `control` | 新任务是 | 单行 JSON，`version: 1` | priority/deadline/nextAction、父子依赖、隔离与副作用策略、预算/用量、独立验收状态 |
@@ -134,6 +134,8 @@ open → in-progress ⇄ awaiting-user / blocked → done
 1. periodic 事件触发（文本："推进任务 weekly-report"）。
 2. agent 打开任务文件。若 `status: done`：把"当前周期"一节折叠进"历史"（历史只保留最近约 5 轮），开一节新的"当前周期"，`status` 置 `in-progress`，开始干活。
 3. 若上一轮还没 done（过期未完成）：先处置旧周期（补完，或明确放弃并记录原因），再开新周期。
+
+实现时应使用 `task_manage start-cycle`，而不是手工编辑状态：它会在一次原子写里开启具名 cycle，并清理上一周期累计的 usage、独立验收、外部授权和 worktree 元数据。周期预算不会跨周期耗尽；长期统计将在后续 runtime 观测中单独保存。
 
 **退役**周期性任务 = 文件移入 `archive/` + 用 `event_manage` 删除它的 periodic 事件。
 
@@ -195,6 +197,7 @@ task driver 随 DingTalk daemon 启动，默认每分钟做一次廉价扫描。
 - `/tasks show <id>` —— 显示单个任务文件全文（active 或 archive 均可）。
 - `/tasks archive` —— 列出已闭环（归档）的任务。
 - `/tasks approve <id>` —— 唯一的外部副作用授权入口；由 runtime 直接记录用户和时间，不经 LLM。
+- `/tasks pause <id>` / `/tasks resume <id>` —— 持久暂停或恢复该任务的自动 wake；resume 后由下一次 driver scan 接手。
 - `/tasks doctor` —— 只读体检 task/event 与治理一致性：坏 control、超预算/截止、缺失关系、未授权 external action、陈旧 verifier PASS、丢失 worktree，以及原有的 frontmatter/wake/event 问题。每条都附 `Next step`。
 
 除显式的 `approve` 安全闸门外，`/tasks` 命令保持只读。想改期、取消、调预算或调整做法，直接告诉 agent，由它通过 `task_manage` 原子更新台账。TUI 里同样可用。

@@ -2,7 +2,7 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
-## [Unreleased]
+## [0.7.8] - 2026-07-10
 
 ### 新增
 
@@ -13,6 +13,9 @@
 - 内建 task driver：DingTalk daemon 原生按 `status`/`wake` 确定性扫描并唤醒 actionable task，长程工作不再要求手工安装 heartbeat event、`tasks-pending.mjs` 或配套 `.checkin`。派发会跳过运行中的 channel、跨 channel 轮转、限制单 tick 数量；台账有进展时短冷却续跑，无变化时长退避，避免 token 热循环。
 - `task_manage progress`：在一次原子文件替换中追加 Current Cycle checkpoint 并更新 status/wake/recurrence。工具注册时，系统提示会自动注入完整任务生命周期 SOP。
 - 新增 `settings.taskDriver`，可控制 driver 开关、续跑冷却、停滞重试与单 tick 派发上限；默认值保守且所有数值都有安全范围。
+- task driver 的冷却判断现已基于语义任务状态而非文件 mtime：usage/cost 核算不会再把无进展的受治理任务误判为应短间隔续跑。
+- 新增 `/tasks pause <id>` 与 `/tasks resume <id>`，让用户可持久暂停和恢复自主唤醒。
+- 新增 `task_manage start-cycle`：已完成的周期任务可原子开启具名新周期；上一周期的可见进展进入 History，并清空本周期 usage、approval、verification 与 worktree 状态。
 
 ### 变更
 

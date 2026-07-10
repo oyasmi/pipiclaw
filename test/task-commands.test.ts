@@ -110,6 +110,14 @@ describe("handleTasksCommand", () => {
 		expect(task).toContain('"approvalBy":"Alice"');
 	});
 
+	it("pauses and resumes a task without invoking the model", async () => {
+		await writeFile(join(tasksDir, "long.md"), doc("status: in-progress", STANDARD_BODY));
+		expect(await run("pause long")).toContain("Paused task long");
+		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: paused");
+		expect(await run("resume long")).toContain("Resumed task long");
+		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: in-progress");
+	});
+
 	it("doctor detects approval made stale by a later task-body change", async () => {
 		const control = createDefaultTaskControl("evidence");
 		control.sideEffects = "external";

@@ -11,6 +11,7 @@ import {
 	parseTaskFrontmatter,
 	readActiveTasks,
 	renderStandardTaskBody,
+	startTaskCycle,
 	taskBody,
 	uncheckedTaskAcceptanceItems,
 } from "../src/shared/task-ledger.js";
@@ -46,6 +47,9 @@ describe("parseTaskFrontmatter", () => {
 describe("isTaskActionable (frontmatter contract)", () => {
 	it("done is never actionable", () => {
 		expect(isTaskActionable({ readable: true, status: "done" }, NOW)).toBe(false);
+	});
+	it("paused is never actionable", () => {
+		expect(isTaskActionable({ readable: true, status: "paused" }, NOW)).toBe(false);
 	});
 	it("non-done with no wake is actionable", () => {
 		expect(isTaskActionable({ readable: true, status: "in-progress" }, NOW)).toBe(true);
@@ -121,6 +125,18 @@ describe("standard task skeleton", () => {
 		expect(updated).toContain(
 			"- Created; next step: start work and append progress here before ending each turn.\n- Tests pass; next step: review.\n\n## History",
 		);
+	});
+
+	it("starts a new cycle without appending future notes to the closed cycle", () => {
+		const body = renderStandardTaskBody({ title: "Weekly", goal: "G", dod: "- [ ] D" }).replace(
+			"- Created; next step: start work and append progress here before ending each turn.",
+			"- Published the previous report.",
+		);
+		const next = startTaskCycle(body, "2026-W29");
+		expect(next).toContain("## Current Cycle (2026-W29)");
+		expect(next).toContain("### Current Cycle — closed");
+		expect(next).toContain("- Published the previous report.");
+		expect(appendCurrentCycleNote(next, "Started collecting inputs.")).toContain("- Started collecting inputs.");
 	});
 
 	it("rejects progress updates when the task has no Current Cycle section", () => {

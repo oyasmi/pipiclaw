@@ -54,6 +54,8 @@ export interface TaskControl {
 	worktree?: TaskWorktree;
 	lastStartedAt?: string;
 	lastFinishedAt?: string;
+	/** Identifier of the currently open recurring-task cycle, when applicable. */
+	cycleId?: string;
 }
 
 export interface TaskControlPatch {
@@ -243,6 +245,29 @@ export function parseTaskControl(raw: string): TaskControl {
 			: undefined,
 		lastStartedAt: optionalString(value.lastStartedAt),
 		lastFinishedAt: optionalString(value.lastFinishedAt),
+		cycleId: optionalString(value.cycleId),
+	};
+}
+
+/** Reset state which is meaningful only within one recurring task cycle. */
+export function resetTaskControlForCycle(control: TaskControl, cycleId: string): TaskControl {
+	const normalizedCycleId = cycleId.trim();
+	if (!normalizedCycleId) throw new Error("cycleId must not be empty.");
+	return {
+		...structuredClone(control),
+		nextAction: undefined,
+		lastOutcome: "pending",
+		blockedReason: undefined,
+		externalApproval: control.sideEffects === "external" ? "required" : "not-required",
+		approvalBy: undefined,
+		approvedAt: undefined,
+		approvalBodyHash: undefined,
+		usage: { attempts: 0, tokens: 0, costUsd: 0, wallTimeMinutes: 0 },
+		verification: { mode: control.verification.mode, status: "pending" },
+		worktree: undefined,
+		lastStartedAt: undefined,
+		lastFinishedAt: undefined,
+		cycleId: normalizedCycleId,
 	};
 }
 

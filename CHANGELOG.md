@@ -2,7 +2,7 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
-## [Unreleased]
+## [0.7.8] - 2026-07-10
 
 ### Added
 
@@ -13,6 +13,9 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Native task driver: the DingTalk daemon now deterministically scans channel task ledgers and wakes actionable tasks from `status`/`wake`, so long-running work resumes without a hand-installed heartbeat event, `tasks-pending.mjs`, or paired `.checkin` file. Dispatches skip active channels, round-robin across channels, cap each tick, continue changed ledgers after a short cooldown, and back off unchanged ledgers to prevent token loops.
 - `task_manage progress`: atomically appends a Current Cycle checkpoint and updates status/wake/recurrence in one file replacement. The built-in system prompt now teaches the complete task lifecycle whenever the tool is registered.
 - `settings.taskDriver` controls the native driver (`enabled`, continuation delay, stalled retry, and per-tick dispatch cap), with conservative defaults and bounded values.
+- Task-driver cooldown now keys off semantic task state rather than file mtime: usage/cost accounting no longer makes a no-progress governed task retry at the short continuation interval.
+- Added `/tasks pause <id>` and `/tasks resume <id>` for a user-controlled durable stop to autonomous wake-ups.
+- Added `task_manage start-cycle` for completed recurring tasks. It archives visible current-cycle notes into History, opens a named cycle, and resets cycle-scoped usage, approval, verification, and worktree state.
 
 ### Changed
 

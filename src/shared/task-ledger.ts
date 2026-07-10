@@ -123,7 +123,12 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 export function isTaskActionable(frontmatter: TaskFrontmatter, now: number): boolean {
 	if (!frontmatter.readable) return true;
 	if (frontmatter.controlReadable === false) return true;
-	if (frontmatter.status === "done" || frontmatter.status === "cancelled" || frontmatter.status === "escalated") {
+	if (
+		frontmatter.status === "done" ||
+		frontmatter.status === "cancelled" ||
+		frontmatter.status === "escalated" ||
+		frontmatter.status === "paused"
+	) {
 		return false;
 	}
 	if (frontmatter.wake) {
@@ -256,7 +261,6 @@ export function appendCurrentCycleNote(content: string, note: string): string {
 		if (!match || !matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) continue;
 		sectionStart = index;
 		sectionLevel = match[1]?.length ?? 0;
-		break;
 	}
 	if (sectionStart === -1) {
 		throw new Error('Task body has no "Current Cycle" section; normalize the task skeleton first.');
@@ -275,6 +279,70 @@ export function appendCurrentCycleNote(content: string, note: string): string {
 		insertAt--;
 	}
 	lines.splice(insertAt, 0, `- ${trimmedNote}`);
+	return lines.join("\n");
+}
+
+/**
+ * Close the visible current-cycle notes into History and open a fresh cycle.
+ * Periodic task cycles deliberately use this small, deterministic transformation
+ * instead of asking the model to hand-edit headings and risk appending future
+ * checkpoints to the previous cycle.
+ */
+export function startTaskCycle(content: string, cycleId: string): string {
+	const normalizedCycleId = cycleId.trim();
+	if (!normalizedCycleId) throw new Error("Cycle id must not be empty.");
+	const lines = content.split("\n");
+	let currentStart = -1;
+	let currentLevel = 0;
+	let historyStart = -1;
+	let historyLevel = 0;
+	for (let index = 0; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (!match) continue;
+		const level = match[1]?.length ?? 0;
+		if (matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) {
+			currentStart = index;
+			currentLevel = level;
+		}
+		if (matchesTaskSectionTitle(match[2] ?? "", ["History", "历史"])) {
+			historyStart = index;
+			historyLevel = level;
+			break;
+		}
+	}
+	if (currentStart === -1 || historyStart === -1 || historyStart <= currentStart) {
+		throw new Error('Task body needs ordered "Current Cycle" and "History" sections before starting a new cycle.');
+	}
+
+	let currentEnd = historyStart;
+	for (let index = currentStart + 1; index < historyStart; index++) {
+		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
+		if (match && (match[1]?.length ?? 7) <= currentLevel) {
+			currentEnd = index;
+			break;
+		}
+	}
+	const previous = lines
+		.slice(currentStart + 1, currentEnd)
+		.join("\n")
+		.trim();
+	const previousHeading = (lines[currentStart] ?? "## Current Cycle").replace(/^#+\s*/, "").trim();
+	const replacement = [
+		`${"#".repeat(currentLevel)} Current Cycle (${normalizedCycleId})`,
+		"- Cycle started; next step: follow the Manual and checkpoint concrete progress.",
+	];
+	lines.splice(currentStart, currentEnd - currentStart, ...replacement);
+
+	const shiftedHistoryStart = historyStart + replacement.length - (currentEnd - currentStart);
+	const historyEntry = [
+		`### ${previousHeading} — closed`,
+		...(previous ? [previous] : ["- No checkpoint was recorded in the previous cycle."]),
+		"",
+	];
+	// A nested history heading would be unusual; inserting directly after the
+	// canonical History heading remains predictable and preserves all older notes.
+	void historyLevel;
+	lines.splice(shiftedHistoryStart + 1, 0, ...historyEntry);
 	return lines.join("\n");
 }
 

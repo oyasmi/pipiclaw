@@ -396,6 +396,50 @@ describe("manageTask", () => {
 		});
 	});
 
+	describe("start-cycle", () => {
+		it("opens a completed recurring task with fresh cycle-scoped control", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "weekly",
+				title: "Weekly",
+				goal: "Publish weekly work",
+				dod: "- [x] published",
+				recurrence: "weekly",
+				control: { verificationMode: "evidence", sideEffects: "external" },
+			});
+			const path = join(tasksDir, "weekly.md");
+			let onDisk = await readFile(path, "utf-8");
+			onDisk = onDisk
+				.replace("status: open", "status: done")
+				.replace('"attempts":0', '"attempts":7')
+				.replace('"status":"pending"', '"status":"passed"');
+			await writeFile(path, onDisk);
+			const result = await manageTask(options, { action: "start-cycle", id: "weekly", cycleId: "2026-W29" });
+			expect(result).toMatchObject({ action: "start-cycle", status: "in-progress" });
+			const started = await readFile(path, "utf-8");
+			expect(started).toContain("status: in-progress");
+			expect(started).toContain('"cycleId":"2026-W29"');
+			expect(started).toContain('"attempts":0');
+			expect(started).toContain('"externalApproval":"required"');
+			expect(started).toContain('"status":"pending"');
+			expect(started).toContain("## Current Cycle (2026-W29)");
+		});
+
+		it("does not start a second cycle while the current one is still open", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "weekly",
+				title: "Weekly",
+				goal: "Publish weekly work",
+				dod: "- [ ] published",
+				recurrence: "weekly",
+			});
+			await expect(
+				manageTask(options, { action: "start-cycle", id: "weekly", cycleId: "2026-W29" }),
+			).rejects.toThrow(/not done/);
+		});
+	});
+
 	describe("list", () => {
 		it("returns structured active tasks", async () => {
 			await writeTask("a", "status: in-progress", "# Task A");

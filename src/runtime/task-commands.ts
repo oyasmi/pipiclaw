@@ -35,7 +35,9 @@ type TasksCommand =
 	| { action: "show"; id: string }
 	| { action: "archive" }
 	| { action: "doctor" }
-	| { action: "approve"; id: string };
+	| { action: "approve"; id: string }
+	| { action: "pause"; id: string }
+	| { action: "resume"; id: string };
 
 function usage(): string {
 	return `# Tasks
@@ -46,6 +48,8 @@ Usage:
 - \`/tasks show <id>\` — show a single task file (active or archived)
 - \`/tasks archive\` — list archived (closed) tasks
 - \`/tasks approve <id>\` — explicitly approve this task's external side effects
+- \`/tasks pause <id>\` — stop automatic wake-ups for a task
+- \`/tasks resume <id>\` — make a paused task eligible for the next driver scan
 - \`/tasks doctor\` — check task/event consistency without changing files`;
 }
 
@@ -74,6 +78,11 @@ function parseTasksCommand(args: string): TasksCommand {
 		const id = parts[1];
 		if (!id || parts.length > 2) throw new Error("Usage: /tasks approve <id>");
 		return { action: "approve", id };
+	}
+	if (action === "pause" || action === "resume") {
+		const id = parts[1];
+		if (!id || parts.length > 2) throw new Error(`Usage: /tasks ${action} <id>`);
+		return { action, id };
 	}
 	throw new Error(`Unknown /tasks action: ${action}`);
 }
@@ -255,6 +264,39 @@ async function approveTask(options: HandleTasksCommandOptions, idInput: string):
 	control.approvalBodyHash = taskBodyHash(task.body);
 	await writeStoredTask(task);
 	return `Approved external side effects for task ${id}. Approval is recorded for ${control.approvalBy}.`;
+}
+
+async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
+	const id = normalizeTaskId(idInput);
+	const task = await readStoredTask(options.channelDir, id);
+	if (!task) return `Task not found: ${id}`;
+	if (["done", "cancelled", "escalated"].includes(task.fields.status)) {
+		return `Task ${id} is ${task.fields.status} and cannot be paused.`;
+	}
+	if (task.fields.status === "paused") return `Task ${id} is already paused.`;
+	task.fields.status = "paused";
+	task.fields.wake = undefined;
+	if (task.fields.control) {
+		task.fields.control.lastOutcome = "blocked";
+		task.fields.control.blockedReason = `Paused by ${options.approver?.trim() || "a user"}.`;
+	}
+	await writeStoredTask(task);
+	return `Paused task ${id}. Use /tasks resume ${id} when it should continue.`;
+}
+
+async function resumeTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
+	const id = normalizeTaskId(idInput);
+	const task = await readStoredTask(options.channelDir, id);
+	if (!task) return `Task not found: ${id}`;
+	if (task.fields.status !== "paused") return `Task ${id} is ${task.fields.status}, not paused.`;
+	task.fields.status = "in-progress";
+	task.fields.wake = undefined;
+	if (task.fields.control) {
+		task.fields.control.lastOutcome = "pending";
+		task.fields.control.blockedReason = undefined;
+	}
+	await writeStoredTask(task);
+	return `Resumed task ${id}; the task driver will pick it up on its next scan.`;
 }
 
 async function showTask(channelDir: string, id: string): Promise<string> {
@@ -570,6 +612,10 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 				return await listArchive(options.channelDir);
 			case "approve":
 				return await approveTask(options, command.id);
+			case "pause":
+				return await pauseTask(options, command.id);
+			case "resume":
+				return await resumeTask(options, command.id);
 			case "doctor":
 				return await doctor(options);
 		}

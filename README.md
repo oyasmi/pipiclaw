@@ -463,6 +463,7 @@ Pipiclaw 有两层命令。
 | `/tasks show <id>` | 查看指定任务台账 |
 | `/tasks archive` | 查看已归档任务 |
 | `/tasks approve <id>` | 显式批准该任务的外部副作用，并记录授权人/时间 |
+| `/tasks pause <id>` / `/tasks resume <id>` | 持久暂停或恢复一个长程任务的自动推进 |
 | `/tasks doctor` | 诊断任务台账与 task event 的一致性问题 |
 | `/status` | 查看运行时状态：执行状态、当前模型、上下文用量、运行时长、版本 |
 | `/usage [7d\|month]` | 查看本通道与全局的 LLM 成本，按类型和 Top 模型拆分 |
