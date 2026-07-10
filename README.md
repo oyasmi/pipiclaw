@@ -653,6 +653,8 @@ npm run check
 - 它会使用真实 runtime、真实 `ChannelStore`、真实工具/记忆/Sidecar/LLM
 - 只 mock 钉钉传输层，不连接真实钉钉 Stream
 - 运行前需要可用模型凭据：优先读取 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/auth.json`，否则回退到 `ANTHROPIC_API_KEY`
+- 默认模型是 `anthropic/claude-sonnet-4-5`；如果本地 `models.json` 配的是其他 provider（例如通过 `auth.json` 为空、只在 `models.json` 里配了自定义网关的场景），需要用 `PIPICLAW_E2E_PROVIDER`/`PIPICLAW_E2E_MODEL` 覆盖，例如：
+  `PIPICLAW_E2E_PROVIDER=zpai PIPICLAW_E2E_MODEL=glm-5-turbo npm run test:e2e`
 - E2E 默认不包含在 `npm run test` 中，避免日常测试被真实 LLM 依赖和调用成本影响
 
 ## 许可证（License）
