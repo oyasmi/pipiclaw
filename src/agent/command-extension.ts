@@ -9,6 +9,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { basename } from "path";
 import { findModelReferenceMatch, formatModelList, formatModelReference } from "../models/utils.js";
+import { sessionCommandDescription } from "./commands.js";
 
 export const COMMAND_RESULT_CUSTOM_TYPE = "pipiclaw.command_result";
 
@@ -81,7 +82,7 @@ function sendCommandResult(sender: CommandMessageSender, text: string): void | P
 export function createCommandExtension(options: PipiclawCommandExtensionOptions): ExtensionFactory {
 	return (pi) => {
 		pi.registerCommand("session", {
-			description: "Show current session state, usage, and model info",
+			description: sessionCommandDescription("session"),
 			handler: async () => {
 				sendCommandResult(
 					pi,
@@ -96,7 +97,7 @@ export function createCommandExtension(options: PipiclawCommandExtensionOptions)
 		});
 
 		pi.registerCommand("model", {
-			description: "Show the current model or switch models using an exact or uniquely matching substring",
+			description: sessionCommandDescription("model"),
 			handler: async (args) => {
 				const availableModels = await options.getAvailableModels();
 				const currentModel = options.getCurrentModel();
@@ -151,7 +152,7 @@ ${available}`,
 		});
 
 		pi.registerCommand("new", {
-			description: "Start a new session",
+			description: sessionCommandDescription("new"),
 			handler: async (_args, ctx) => {
 				let sentFromReplacement = false;
 				const result = await ctx.newSession({
@@ -174,7 +175,7 @@ ${available}`,
 		});
 
 		pi.registerCommand("compact", {
-			description: "Manually compact the current session context",
+			description: sessionCommandDescription("compact"),
 			handler: async (args, ctx) => {
 				const customInstructions = args.trim() || undefined;
 				const result = await runCompact(ctx, customInstructions);

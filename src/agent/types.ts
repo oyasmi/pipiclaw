@@ -2,7 +2,7 @@ import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import type { UsageTotals } from "../shared/types.js";
-import type { BuiltInCommand } from "./commands.js";
+import type { RunnerBuiltInCommand } from "./commands.js";
 
 export interface RunnerStatusSnapshot {
 	model: string;
@@ -23,7 +23,9 @@ export interface AgentRunner {
 		usage?: UsageTotals;
 		durationMs?: number;
 	}>;
-	handleBuiltinCommand(ctx: ChannelContext, command: BuiltInCommand): Promise<void>;
+	handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void>;
+	/** True if `text` is a slash command the runtime or session layer can handle. */
+	isKnownSlashCommand(text: string): boolean;
 	queueSteer(text: string, userName?: string): Promise<void>;
 	flushMemoryForShutdown(): Promise<void>;
 	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;

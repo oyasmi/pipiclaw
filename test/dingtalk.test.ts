@@ -349,6 +349,28 @@ describe("dingtalk", () => {
 		);
 	});
 
+	it("tells the user a session command is idle-only when busy", async () => {
+		const { bot, handler } = createBot({
+			isRunning: vi.fn(() => true),
+		});
+		bot.sendPlain = vi.fn(async () => true);
+		const privateApi = getPrivateApi(bot);
+
+		await privateApi.onStreamMessage({
+			text: { content: "/model anthropic/x" },
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_1",
+			conversationType: "1",
+		});
+
+		expect(handler.handleBusyMessage).not.toHaveBeenCalled();
+		const reply = (bot.sendPlain as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1] as string;
+		expect(reply).toContain("A task is already running");
+		expect(reply).toContain("`/status`");
+		expect(reply).toContain("`/model`");
+	});
+
 	it("requeues a busy plain message as normal work when the busy window has closed", async () => {
 		const { bot, handler } = createBot(
 			{

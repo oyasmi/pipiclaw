@@ -48,7 +48,7 @@ import { createPipiclawTools } from "../tools/index.js";
 import { TOOL_PROMPT_HINTS } from "../tools/registry.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { createCommandExtension } from "./command-extension.js";
-import { type BuiltInCommand, renderBuiltInHelp } from "./commands.js";
+import { isKnownCommandName, type RunnerBuiltInCommand, renderBuiltInHelp, slashCommandName } from "./commands.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
 import {
 	type FallbackRunDeps,
@@ -531,7 +531,7 @@ export class ChannelRunner implements AgentRunner {
 		};
 	}
 
-	async handleBuiltinCommand(ctx: ChannelContext, command: BuiltInCommand): Promise<void> {
+	async handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void> {
 		try {
 			switch (command.name) {
 				case "help":
@@ -554,12 +554,37 @@ export class ChannelRunner implements AgentRunner {
 						"No task is running. Send the message directly now, or use `/followup` while a task is running.",
 					);
 					return;
+				default: {
+					// The four session/query commands (events/tasks/status/usage) are
+					// routed to their own handlers upstream and never reach here; the
+					// narrowed parameter type makes that a compile-time guarantee.
+					const _exhaustive: never = command.name;
+					throw new Error(`Unhandled built-in command: ${String(_exhaustive)}`);
+				}
 			}
 		} catch (err) {
 			const errMsg = errorMessage(err);
 			log.logWarning(`[${this.channelId}] Built-in command failed`, errMsg);
 			await this.sendCommandReply(ctx, `命令执行失败：${errMsg}`);
 		}
+	}
+
+	/**
+	 * True if `text` is a slash command the runtime or session layer can handle:
+	 * a built-in, a session command (`/model` …), a skill (`/skill:name`), or a
+	 * file-based prompt template registered on the live session. Unknown slash
+	 * commands are rejected at dispatch so a typo like `/modle` never becomes a
+	 * full LLM turn.
+	 */
+	isKnownSlashCommand(text: string): boolean {
+		const name = slashCommandName(text);
+		if (!name) {
+			return false;
+		}
+		if (isKnownCommandName(name)) {
+			return true;
+		}
+		return this.session.promptTemplates.some((template) => template.name.toLowerCase() === name);
 	}
 
 	async queueSteer(text: string, userName?: string): Promise<void> {

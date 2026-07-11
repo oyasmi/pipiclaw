@@ -24,6 +24,10 @@ class FakeRunner implements AgentRunner {
 		this.finish = undefined;
 	}
 	async handleBuiltinCommand(): Promise<void> {}
+	knownSlashCommands = new Set<string>();
+	isKnownSlashCommand(text: string): boolean {
+		return this.knownSlashCommands.has(text.trim());
+	}
 	async queueSteer(text: string): Promise<void> {
 		this.steers.push(text);
 	}

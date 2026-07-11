@@ -1,6 +1,11 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
-import { parseBuiltInCommand } from "../agent/commands.js";
+import {
+	formatUnknownCommandMessage,
+	isRunnerBuiltInCommand,
+	parseBuiltInCommand,
+	slashCommandName,
+} from "../agent/commands.js";
 import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
 import { resetRunner } from "../agent/runner-factory.js";
 import { renderStatus } from "../agent/status-render.js";
@@ -497,11 +502,20 @@ export function parseArgs(
 
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
+		if (index === 0 && arg === "run") {
+			// Explicit name for the default daemon mode (`pipiclaw run` == `pipiclaw`).
+			continue;
+		}
 		if (arg === "--help" || arg === "-h") {
-			io.log(`Usage: ${paths.appName} [options]`);
+			io.log(`Usage: ${paths.appName} [command] [options]`);
+			io.log("");
+			io.log("Commands:");
+			io.log("  run                         Run the long-lived DingTalk daemon (default)");
+			io.log("  tui [prompt]                Chat with the agent in the terminal");
 			io.log("");
 			io.log("Options:");
 			io.log("  --version                   Print the current version and exit");
+			io.log("  --help, -h                  Show this help and exit");
 			io.log("");
 			io.log(`Config:    ${paths.channelConfigPath}`);
 			io.log(`Workspace: ${paths.workspaceDir}`);
@@ -509,6 +523,10 @@ export function parseArgs(
 		} else if (arg === "--version") {
 			io.log(readCliVersion());
 			throw new BootstrapExitError(0);
+		} else {
+			io.error(`Unknown option: ${arg}`);
+			io.error(`Run \`${paths.appName} --help\` for usage.`);
+			throw new BootstrapExitError(1);
 		}
 	}
 }
@@ -812,7 +830,18 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 							await handler.handleUsageCommand(event, bot, builtInCommand.args);
 							return;
 						}
-						await state.runner.handleBuiltinCommand(ctx, builtInCommand);
+						if (isRunnerBuiltInCommand(builtInCommand)) {
+							await state.runner.handleBuiltinCommand(ctx, builtInCommand);
+						}
+						return;
+					}
+
+					// Reject an unknown slash command instead of spending a full LLM turn
+					// letting the model guess what `/modle` meant. Session commands,
+					// skills, and prompt templates are recognized by isKnownSlashCommand.
+					if (event.text.trim().startsWith("/") && !state.runner.isKnownSlashCommand(event.text)) {
+						const name = slashCommandName(event.text) ?? "";
+						await bot.sendPlain(event.channelId, formatUnknownCommandMessage(name));
 						return;
 					}
 

@@ -94,6 +94,7 @@ describe("runtime stop handling", () => {
 				return { stopReason: "aborted" };
 			}),
 			handleBuiltinCommand: vi.fn(async () => {}),
+			isKnownSlashCommand: vi.fn(() => false),
 			queueSteer: vi.fn(async () => {}),
 			flushMemoryForShutdown: vi.fn(async () => {}),
 			getMemoryMaintenanceContext: vi.fn(async () => {
@@ -173,6 +174,7 @@ describe("runtime stop handling", () => {
 				return { stopReason: "aborted" };
 			}),
 			handleBuiltinCommand: vi.fn(async () => {}),
+			isKnownSlashCommand: vi.fn(() => false),
 			queueSteer: vi.fn(async () => {}),
 			flushMemoryForShutdown: vi.fn(async () => {}),
 			getMemoryMaintenanceContext: vi.fn(async () => {

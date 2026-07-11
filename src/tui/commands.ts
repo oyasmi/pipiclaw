@@ -13,7 +13,7 @@
  * depend on whether a turn is running, which only the app knows — so those come
  * back as intents rather than being applied here.
  */
-import { parseBuiltInCommand } from "../agent/commands.js";
+import { BUILT_IN_COMMANDS, type CommandSpec, parseBuiltInCommand, SESSION_COMMANDS } from "../agent/commands.js";
 
 export type DispatchOutcome =
 	/** Text to show the user immediately (help/status/usage/events output, or a hint). */
@@ -76,19 +76,16 @@ export async function dispatch(input: string, deps: DispatchDeps): Promise<Dispa
 	}
 }
 
-/** Slash commands offered in editor autocomplete: transport + session + TUI-only. */
+function toAutocompleteEntry(spec: CommandSpec): { name: string; description: string; argumentHint?: string } {
+	return { name: spec.name, description: spec.description, argumentHint: spec.argumentHint };
+}
+
+/**
+ * Slash commands offered in editor autocomplete: transport + session (both
+ * derived from the shared command tables) plus the TUI-only `/exit`.
+ */
 export const TUI_SLASH_COMMANDS: Array<{ name: string; description: string; argumentHint?: string }> = [
-	{ name: "help", description: "Show command help" },
-	{ name: "stop", description: "Stop the current task" },
-	{ name: "steer", description: "Adjust the running task", argumentHint: "<message>" },
-	{ name: "followup", description: "Queue a request after the current task", argumentHint: "<message>" },
-	{ name: "status", description: "Show model, context and run state" },
-	{ name: "usage", description: "Show LLM cost for this channel", argumentHint: "[7d|month]" },
-	{ name: "events", description: "Manage scheduled events", argumentHint: "<list|show|delete|history>" },
-	{ name: "tasks", description: "View the task ledger (read-only)", argumentHint: "[show <id>|archive|doctor]" },
-	{ name: "model", description: "Show or switch the model", argumentHint: "[provider/model]" },
-	{ name: "new", description: "Start a new session" },
-	{ name: "compact", description: "Compact the session context", argumentHint: "[instructions]" },
-	{ name: "session", description: "Show session state" },
+	...BUILT_IN_COMMANDS.map(toAutocompleteEntry),
+	...SESSION_COMMANDS.map(toAutocompleteEntry),
 	{ name: "exit", description: "Leave the TUI" },
 ];

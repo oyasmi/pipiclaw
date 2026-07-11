@@ -7,6 +7,7 @@
  * unit-tested with fakes and a fake clock. `app.ts` builds the real ones.
  */
 
+import { formatUnknownCommandMessage, slashCommandName } from "../agent/commands.js";
 import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
 import * as log from "../log.js";
@@ -143,7 +144,15 @@ export class TurnController {
 				this.applyFollowup(outcome.text);
 				return;
 			case "steer":
+				await this.applyText(outcome.text);
+				return;
 			case "run":
+				// Reject an unknown slash command rather than steering/running its raw
+				// text. Session commands, skills, and prompt templates pass through.
+				if (outcome.text.trim().startsWith("/") && !this.deps.runner.isKnownSlashCommand(outcome.text)) {
+					this.deps.frontend.showFinal(formatUnknownCommandMessage(slashCommandName(outcome.text) ?? ""));
+					return;
+				}
 				await this.applyText(outcome.text);
 				return;
 		}

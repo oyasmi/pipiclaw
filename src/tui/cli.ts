@@ -2,7 +2,7 @@
  * `pipiclaw tui` CLI: argument parsing and entry. Parsing is a pure function
  * (`parseTuiArgs`) so it can be unit-tested; `runTui` wires it to `runTuiApp`.
  */
-import { type BootstrapIO, readCliVersion } from "../runtime/bootstrap.js";
+import { BootstrapExitError, type BootstrapIO, readCliVersion } from "../runtime/bootstrap.js";
 import { runTuiApp } from "./app.js";
 
 export type ParsedTui =
@@ -15,7 +15,8 @@ export type ParsedTui =
 			positional: string[];
 	  }
 	| { kind: "help" }
-	| { kind: "version" };
+	| { kind: "version" }
+	| { kind: "error"; message: string };
 
 /** Parse `pipiclaw tui` arguments (everything after the `tui` subcommand). */
 export function parseTuiArgs(args: string[]): ParsedTui {
@@ -42,6 +43,10 @@ export function parseTuiArgs(args: string[]): ParsedTui {
 			return { kind: "help" };
 		} else if (arg === "--version") {
 			return { kind: "version" };
+		} else if (arg.startsWith("--")) {
+			// An unknown long option is a typo, not part of the prompt — reject it
+			// instead of silently sending `--pritn` to the model as prompt text.
+			return { kind: "error", message: `Unknown option: ${arg}` };
 		} else {
 			positional.push(arg);
 		}
@@ -90,6 +95,11 @@ export async function runTui(argv: string[], io: BootstrapIO = console): Promise
 	if (parsed.kind === "version") {
 		io.log(readCliVersion());
 		return;
+	}
+	if (parsed.kind === "error") {
+		io.error(parsed.message);
+		io.error(`Run \`pipiclaw tui --help\` for usage.`);
+		throw new BootstrapExitError(1);
 	}
 
 	let initialPrompt = parsed.positional.join(" ").trim() || undefined;

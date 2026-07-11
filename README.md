@@ -343,6 +343,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pipiclaw
 ```
 
+等价于 `pipiclaw run`（默认模式，运行钉钉常驻进程）；`pipiclaw tui` 进入终端对话，`pipiclaw --help` 查看全部命令与选项。
+
 #### 9. 可选：配置内建 Web 工具（Optional: Configure Built-in Web Tools）
 
 如果你希望助手直接使用 `web_search` / `web_fetch`，可以编辑 `~/.pi/pipiclaw/tools.json`。

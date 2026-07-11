@@ -8,6 +8,7 @@ import {
 	bootstrap,
 	bootstrapAppHome,
 	loadConfig,
+	parseArgs,
 } from "../src/runtime/bootstrap.js";
 import { ChannelStore } from "../src/runtime/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -40,6 +41,36 @@ function createIO() {
 
 afterEach(() => {
 	vi.restoreAllMocks();
+});
+
+describe("parseArgs", () => {
+	it("accepts a bare invocation and an explicit `run` token", () => {
+		const paths = createBootstrapPaths();
+		expect(() => parseArgs(["node", "pipiclaw"], paths, createIO())).not.toThrow();
+		expect(() => parseArgs(["node", "pipiclaw", "run"], paths, createIO())).not.toThrow();
+	});
+
+	it("rejects an unknown option with a non-zero exit", () => {
+		const paths = createBootstrapPaths();
+		const io = createIO();
+		try {
+			parseArgs(["node", "pipiclaw", "--bogus"], paths, io);
+			throw new Error("expected parseArgs to throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(BootstrapExitError);
+			expect((err as BootstrapExitError).code).toBe(1);
+		}
+		expect(io.error).toHaveBeenCalledWith("Unknown option: --bogus");
+	});
+
+	it("lists both commands in --help", () => {
+		const paths = createBootstrapPaths();
+		const io = createIO();
+		expect(() => parseArgs(["node", "pipiclaw", "--help"], paths, io)).toThrow(BootstrapExitError);
+		const help = io.log.mock.calls.flat().join("\n");
+		expect(help).toContain("run");
+		expect(help).toContain("tui");
+	});
 });
 
 describe("bootstrap", () => {

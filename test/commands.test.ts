@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseBuiltInCommand, renderBuiltInHelp } from "../src/agent/commands.js";
+import {
+	formatBusyCommandList,
+	isKnownCommandName,
+	isRunnerBuiltInCommand,
+	parseBuiltInCommand,
+	renderBuiltInHelp,
+	slashCommandName,
+} from "../src/agent/commands.js";
 
 describe("commands", () => {
 	it("parses built-in commands with trimmed arguments", () => {
@@ -34,6 +41,47 @@ describe("commands", () => {
 		expect(parseBuiltInCommand("hello")).toBeNull();
 		expect(parseBuiltInCommand("/session")).toBeNull();
 		expect(parseBuiltInCommand("/unknown something")).toBeNull();
+	});
+
+	it("splits on any whitespace so a newline after the command still parses", () => {
+		expect(parseBuiltInCommand("/steer\n修复这个")).toEqual({
+			name: "steer",
+			args: "修复这个",
+			rawText: "/steer\n修复这个",
+		});
+		expect(parseBuiltInCommand("/usage\t7d")).toMatchObject({ name: "usage", args: "7d" });
+	});
+
+	it("matches the command name case-insensitively", () => {
+		expect(parseBuiltInCommand("/Help")).toMatchObject({ name: "help" });
+		expect(parseBuiltInCommand("/STATUS")).toMatchObject({ name: "status" });
+	});
+});
+
+describe("command metadata helpers", () => {
+	it("recognizes built-in, session, and skill commands as known", () => {
+		expect(isKnownCommandName("help")).toBe(true);
+		expect(isKnownCommandName("model")).toBe(true);
+		expect(isKnownCommandName("skill:foo")).toBe(true);
+		expect(isKnownCommandName("modle")).toBe(false);
+	});
+
+	it("extracts the lower-cased command name from slash input", () => {
+		expect(slashCommandName("/Model anthropic/x")).toBe("model");
+		expect(slashCommandName("  /skill:foo bar ")).toBe("skill:foo");
+		expect(slashCommandName("hello")).toBeNull();
+	});
+
+	it("narrows only the four runner-handled commands", () => {
+		expect(isRunnerBuiltInCommand({ name: "steer", args: "", rawText: "/steer" })).toBe(true);
+		expect(isRunnerBuiltInCommand({ name: "events", args: "", rawText: "/events" })).toBe(false);
+	});
+
+	it("lists the busy-available commands without session commands", () => {
+		const list = formatBusyCommandList();
+		expect(list).toContain("`/stop`");
+		expect(list).toContain("`/status`");
+		expect(list).not.toContain("/model");
 	});
 
 	it("renders help text that describes transport and session commands", () => {

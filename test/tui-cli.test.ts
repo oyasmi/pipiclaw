@@ -37,6 +37,13 @@ describe("parseTuiArgs", () => {
 		expect(parseTuiArgs(["-h"])).toEqual({ kind: "help" });
 		expect(parseTuiArgs(["--version"])).toEqual({ kind: "version" });
 	});
+
+	it("rejects an unknown long option instead of treating it as a prompt", () => {
+		expect(parseTuiArgs(["--pritn", "hello"])).toEqual({
+			kind: "error",
+			message: "Unknown option: --pritn",
+		});
+	});
 });
 
 describe("runTui", () => {

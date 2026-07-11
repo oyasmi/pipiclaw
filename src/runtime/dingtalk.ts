@@ -11,7 +11,7 @@ import axios from "axios";
 import { DWClient, type DWClientDownStream, TOPIC_ROBOT } from "dingtalk-stream";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { parseBuiltInCommand, renderBuiltInHelp } from "../agent/commands.js";
+import { formatBusyCommandList, parseBuiltInCommand, renderBuiltInHelp } from "../agent/commands.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
@@ -1223,65 +1223,46 @@ export class DingTalkBot {
 
 		// Check if busy
 		if (this.handler.isRunning(channelId)) {
-			if (builtInCommand?.name === "help") {
-				await this.sendPlain(channelId, renderBuiltInHelp());
-				return;
-			}
-
-			if (builtInCommand?.name === "stop") {
-				await this.handler.handleStop(channelId, this);
-				await this.sendPlain(channelId, "Stopping the current task.");
-				return;
-			}
-
-			if (builtInCommand?.name === "steer") {
-				const result = await this.handler.handleBusyMessage(event, this, "steer", builtInCommand.args);
-				if (result.kind === "requeue") {
-					this.enqueueStreamMessage(event, result.text);
-				}
-				return;
-			}
-
-			if (builtInCommand?.name === "followup") {
-				const result = await this.handler.handleBusyMessage(event, this, "followUp", builtInCommand.args);
-				if (result.kind === "requeue") {
-					this.enqueueStreamMessage(event, result.text);
-				}
-				return;
-			}
-
-			if (builtInCommand?.name === "events") {
-				await this.handler.handleEventsCommand(event, this, builtInCommand.args);
-				return;
-			}
-
-			if (builtInCommand?.name === "tasks") {
-				await this.handler.handleTasksCommand(event, this, builtInCommand.args);
-				return;
-			}
-
-			if (builtInCommand?.name === "status") {
-				await this.handler.handleStatusCommand(event, this);
-				return;
-			}
-
-			if (builtInCommand?.name === "usage") {
-				await this.handler.handleUsageCommand(event, this, builtInCommand.args);
-				return;
-			}
-
+			// All built-in transport commands are usable while a task streams.
 			if (builtInCommand) {
-				await this.sendPlain(
-					channelId,
-					`A task is already running. Use \`/stop\`, \`/steer <message>\`, \`/followup <message>\`, \`/events <action>\`, \`/tasks\`, \`/status\`, or \`/usage\`. Plain messages default to ${this.busyMessageDefault}.`,
-				);
-				return;
+				switch (builtInCommand.name) {
+					case "help":
+						await this.sendPlain(channelId, renderBuiltInHelp());
+						return;
+					case "stop":
+						await this.handler.handleStop(channelId, this);
+						await this.sendPlain(channelId, "Stopping the current task.");
+						return;
+					case "steer":
+					case "followup": {
+						const mode = builtInCommand.name === "steer" ? "steer" : "followUp";
+						const result = await this.handler.handleBusyMessage(event, this, mode, builtInCommand.args);
+						if (result.kind === "requeue") {
+							this.enqueueStreamMessage(event, result.text);
+						}
+						return;
+					}
+					case "events":
+						await this.handler.handleEventsCommand(event, this, builtInCommand.args);
+						return;
+					case "tasks":
+						await this.handler.handleTasksCommand(event, this, builtInCommand.args);
+						return;
+					case "status":
+						await this.handler.handleStatusCommand(event, this);
+						return;
+					case "usage":
+						await this.handler.handleUsageCommand(event, this, builtInCommand.args);
+						return;
+				}
 			}
 
+			// Session commands (/model, /new, …) and unknown slash commands cannot
+			// run mid-turn: they would need the idle session layer.
 			if (isSlashCommand) {
 				await this.sendPlain(
 					channelId,
-					"A task is already running. Only `/stop`, `/steer <message>`, `/followup <message>`, `/events <action>`, and `/tasks` are available while streaming.",
+					`A task is already running. While streaming you can use: ${formatBusyCommandList()}. Session commands (\`/model\`, \`/new\`, \`/compact\`, \`/session\`) are available when idle.`,
 				);
 				return;
 			}
