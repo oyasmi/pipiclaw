@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 变更
+
+- 未知斜杠命令（如笔误 `/modle`）现在在派发层直接拒绝并提示 `/help`，钉钉与 TUI 同步生效，不再作为普通消息发给模型。斜杠命令的帮助文本、TUI 补全与忙碌提示改为单一元数据源生成。
+- README 按用户可感知的能力重写，替代按迭代累积的功能公告；浓缩 AI Agent 安装说明，删去与 `docs/` 重复的章节。`docs/scaling-and-concurrency.md` 精简为持久有效的并发模型；`docs/configuration.md` 与 `docs/deployment-and-operations.md` 同步修缮（可观测性入口、备份清单补 `security.json`、task driver 排障）。
+
 ### 新增
 
 - Runtime 知识改为仿 pi 的渐进式组织：九份带触发 metadata 的只读 playbook 随包发布到 `dist/playbooks/`，系统提示只保留所有权/安全不变量、task 恢复纪律和自动生成的小型索引。目录覆盖 runtime 导航、记忆与学习、事件调度，以及任务规划/推进/周期/委派/验收/修复；runtime 事实不再复制到 workspace `AGENTS.md` 或 skill，用户/团队层保持独立。第三方 agent 工具明确解耦：删除内置 agentmux 传感器，工具命令和完成态检测归用户可执行文件与 workspace skill。closeout playbook 同时补齐 independent verification + external approval 的 hash-safe 顺序。

@@ -143,6 +143,19 @@ supervisorctl tail -f pipiclaw
 
 ## 日志与排障入口（Logs and Troubleshooting Entry Points）
 
+### 零 LLM 成本的运行时入口（Zero-Cost Runtime Commands）
+
+排障不必先"问 agent"。下面这些命令由传输层直接读文件渲染，不触发 LLM 回合，忙碌时也可用：
+
+- `/status` —— 执行状态、当前模型、上下文用量、运行时长、版本
+- `/usage [7d|month]` —— 本通道与全局的 LLM 成本，按类型和 Top 模型拆分
+- `/tasks stats [id]` —— 任务的 attempt、token、成本与验收统计
+- `/tasks doctor` —— 任务台账与事件一致性的只读体检，每条问题附下一步建议
+
+### 结构化日志与成本账本（Structured Logs and Cost Ledger）
+
+除 console 输出外，守护进程默认把结构化日志写到 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/logs/runtime.jsonl`（每行一条 JSON，按大小轮转），把 LLM 成本按月写到 `state/usage/usage-YYYY-MM.jsonl`。适合 `grep` 特定 channel 或 event 做事后排查。日志级别与落盘开关见[配置手册](./configuration.md)的 `logging` 一节。
+
 ### 进程日志（Process Logs）
 
 首先看你的进程管理器日志：
@@ -263,9 +276,11 @@ npm install -g @oyasmi/pipiclaw@latest
 - `models.json`
 - `settings.json`
 - `tools.json`
+- `security.json`
 - `workspace/`
 - `state/events/history.jsonl`（可选，事件调度审计记录）
 - `state/dispatch/`（待处理的 synthetic event / task-driver wake；运行完成后删除，崩溃恢复时会重放 lease 已过期的记录）
+- `state/usage/`（可选，LLM 成本账本）与 `state/logs/`（可选，结构化日志）
 
 其中 `workspace/` 最关键，因为它包含：
 
@@ -319,6 +334,15 @@ workspace `skills/` 是 procedural memory。`skill_manage` 和高置信 post-tur
 - 进程日志里是否出现事件解析失败
 - `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl` 中是否有 `invalid`、`skipped`、`pre_action_blocked` 或 `queue_full` 记录
 
+### 任务没有被自动推进
+
+通常先检查：
+
+- `/tasks` 中该任务的 `status` 与 `wake`：`paused` / `done` / `escalated` 不会被 driver 继续；`wake` 未到点属于正常等待
+- `/tasks doctor` 是否报出坏 frontmatter、超预算、缺失依赖等问题
+- 上一轮是否没有留下任何台账变化——driver 会对无变化的任务退避（默认 60 分钟）再重试，重启进程会清空退避、下一次扫描重新接起
+- `settings.json` 的 `taskDriver.enabled` 是否被关闭
+
 ### 子代理没有被正常使用
 
 通常先检查：
@@ -341,3 +365,5 @@ workspace `skills/` 是 procedural memory。`skill_manage` 和高置信 post-tur
 
 - 配置项说明：[configuration.md](./configuration.md)
 - 事件与子代理用法：[events-and-sub-agents.md](./events-and-sub-agents.md)
+- 并发模型与容量边界：[scaling-and-concurrency.md](./scaling-and-concurrency.md)
+- 任务台账与 `/tasks` 命令：[tasks.md](./tasks.md)

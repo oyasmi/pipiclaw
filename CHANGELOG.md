@@ -4,6 +4,11 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- Unknown slash commands (e.g. a typo like `/modle`) are now rejected at dispatch with a `/help` hint, in both DingTalk and the TUI, instead of being sent to the model as a plain prompt. Slash command metadata (help text, TUI autocomplete, busy-command hint) is generated from a single source.
+- Rewrote the README around user-facing capabilities instead of accumulated release notes, condensed the AI-agent install instructions, and trimmed sections duplicating `docs/`. Slimmed `docs/scaling-and-concurrency.md` to the durable concurrency model, and refreshed `docs/configuration.md` / `docs/deployment-and-operations.md` (observability entry points, backup list incl. `security.json`, task-driver troubleshooting).
+
 ### Added
 
 - Runtime knowledge now follows pi-style progressive disclosure: nine metadata-described, read-only playbooks ship in `dist/playbooks/`, while the system prompt retains only ownership/security invariants, task recovery discipline, and an automatically generated trigger index. The catalog covers runtime orientation, memory/learning, event scheduling, and task planning/driving/recurrence/delegation/closeout/repair. Runtime facts no longer need to be copied into workspace `AGENTS.md` or skills; those remain user/team-owned. Third-party agent tools are deliberately decoupled: the bundled agentmux sensor was removed, and external tool commands/status detection belong to user executables and workspace skills. The closeout playbook also defines a hash-safe independent-verification + external-approval sequence.

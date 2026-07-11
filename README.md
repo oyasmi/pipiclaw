@@ -1,156 +1,46 @@
 # Pipiclaw
 
-Pipiclaw 是一个 AI 助手运行时（AI assistant runtime），以 [`pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 为核心，补齐了作为工作助手长期使用时最需要的几层能力：钉钉接入、AI Card 过程展示、子代理、分层记忆、定时事件，以及按会话通道持久化的工作区（workspace）。
+Pipiclaw 是一个个人 AI 助手运行时（AI assistant runtime）。它以 [`pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 为核心，把一个编码代理变成可以长期使用的工作助手：接入钉钉、保留跨会话记忆、按计划自主推进任务，并实时告诉你它正在做什么。
 
-如果你希望 AI 助手不只是聊天，而是能在钉钉里持续工作、保留上下文、执行任务，并且实时告知你它正在做什么，那么 Pipiclaw 就是你需要的。
+如果你希望 AI 助手不只是聊天，而是能在钉钉里持续工作、记住上下文、到点自己干活，那么 Pipiclaw 就是为此设计的。
 
 npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw)
 
-文档入口：
+## 能干什么（What It Does）
 
-- 配置手册：[docs/configuration.md](./docs/configuration.md)
-- Runtime playbooks 与知识分层：[docs/runtime-playbooks.md](./docs/runtime-playbooks.md)
-- 事件与子代理使用指南：[docs/events-and-sub-agents.md](./docs/events-and-sub-agents.md)
-- 长程任务与 runtime playbook 指南：[docs/tasks.md](./docs/tasks.md)
-- 部署与运维指南：[docs/deployment-and-operations.md](./docs/deployment-and-operations.md)
-- 安全文档：[docs/security.md](./docs/security.md)
+**在钉钉里工作。** 原生支持钉钉 Stream Mode，不需要消息中转服务和公网 IP。配合 AI Card，思考、工具执行和状态更新持续流式呈现（`responseMode` 支持完整过程、滚动摘要、只出结果三种形态）。助手忙碌时你随时可以介入：`/steer` 调整方向、`/followup` 排队新请求、`/stop` 中止，普通消息按配置默认插话或排队。
 
-## 功能特性（Features）
+**也在终端里工作。** `pipiclaw tui` 直接在命令行对话，复用同一套配置、记忆与会话；`--channel` 可接管任意钉钉会话的上下文继续聊，`--print` 支持脚本化的一次性问答。
 
-- 原生支持钉钉 Stream Mode，不需要消息中转服务，不需要公网IP
-- 支持终端 TUI：`pipiclaw tui` 直接在命令行对话，复用同一套配置、记忆与会话（见[配置手册](docs/configuration.md)的「终端 TUI」）
-- 支持 AI Card 过程展示，思考、工具执行和状态更新可以持续流式呈现
-- 支持 `/help`、`/new`、`/compact`、`/session`、`/model`
-- 忙碌时可继续接收 `/steer`、`/followup`、`/stop`、`/events`、`/status`、`/usage`
-- 按工作区 / 会话通道（workspace / channel）分层管理 `SOUL.md`、`AGENTS.md`、`SESSION.md`、`MEMORY.md`、`HISTORY.md`
-- 支持预定义子代理（sub-agent）和临时内联子代理（inline sub-agent）
-- 支持立即、单次、周期三类事件调度
-- 内建长程任务 driver：`wake` 到点自动恢复、任务有进展时有界续跑、停滞时自动退避，无需手工 heartbeat 脚本或 check-in 事件
-- Task Loop v2：持久派发、受预算约束的恢复、独立验收与可操作的 `pause` / `resume` / `run` / `stats` 控制面，让长期工作持续沉淀为可检查的结果
-- 内建 runtime playbooks：系统提示只保留小型触发索引，memory/event/task/subagent 的深入机制随包发布并按需加载，与用户 `AGENTS.md` / workspace skills 清晰分层
-- 支持自定义模型提供方（provider）和模型（model）配置
-- 内建 `web_search` / `web_fetch`，支持联网搜索与网页抓取；`web_fetch` 支持结果缓存与分页续读，长网页被截断后可直接续读、不重抓
-- 内建 `grep` 结构化搜索工具：按文件分组、分页、token 有界的内容检索，优于裸 `bash grep`
-- 支持后台作业：`bash async` + `job` 工具，长命令后台运行、不阻塞频道，可 poll / cancel
-- 内建 `memory_manage` 记忆管理：按需保存 / 检索 / 忘记稳定记忆，写操作串行化，避免与后台整理竞态
-- `read` 支持读取目录树与 PDF 文档（`pdftotext`）
-- 内建 `session_search`，可按需检索当前会话通道的冷存储历史
-- 内建 workspace skill 管理工具，可查看、创建和维护 `workspace/skills/`
-- 内置工具层安全防护：`bash` 命令守卫、文件路径守卫、敏感路径拒绝、阻断审计日志
+**记得住事。** 每个会话通道（channel）有自己的分层记忆：`SESSION.md`（当前工作态）、`MEMORY.md`（稳定事实与偏好）、`HISTORY.md`（更早摘要），工作区层还有 `SOUL.md`（身份语气）与 `AGENTS.md`（工作规则）。运行时按当前请求做相关召回（relevant recall），后台维护调度器在本地闸门通过后才做 LLM 整理，不烧无谓的 token。冷存储历史可用 `session_search` 按需检索，`memory_manage` 支持按需保存、检索、忘记。
 
-## 安全说明（Security）
+**自己推进长程工作。** 定时事件支持立即、单次、周期三类，`preAction` 可用脚本做零 token 的触发前门控。语义更高一层的是任务台账（task ledger）：任务以 Markdown 文件持久存在，内建 task driver 到点自动恢复、有进展有界续跑、停滞自动退避；配套受预算约束的恢复、独立验收、外部副作用授权，以及 `/tasks` 系列零 LLM 成本的控制面命令。
 
-Pipiclaw 当前已经内置一轮工具层安全增强：
+**会用工具、能委派。** 内建 `bash`（支持 `async` 后台作业）、`read`（含目录树与 PDF）、`write` / `edit`、结构化 `grep`、`web_search` / `web_fetch`（结果缓存与分页续读）。预定义子代理把 reviewer、researcher 这类角色沉淀成可复用能力，支持 worktree 隔离与独立验收（verify）；workspace skills 沉淀你自己的流程知识。
 
-- `bash` 会拦截明显高风险命令
-- `read` / `write` / `edit` 会做统一路径检查
-- 默认允许访问用户主目录中的普通工作文件，但会拒绝常见凭据、私钥、浏览器资料、系统敏感文件等位置
-- 可通过 `~/.pi/pipiclaw/security.json` 做实例级策略调整
+**有安全护栏。** 所有文件、命令、网络工具都经过安全守卫：`bash` 命令拦截、统一路径检查、常见凭据与敏感位置默认拒绝、阻断写入审计日志；可通过 `security.json` 做实例级策略调整。详见 [docs/security.md](./docs/security.md)。
 
-如果你要了解默认策略、已知边界、推荐模板和完整配置示例，请直接看：
-
-- [docs/security.md](./docs/security.md)
+**知识不随升级漂移。** Runtime 机制知识以 playbooks 随 npm 包发布、按需加载，系统提示只保留小型索引；`AGENTS.md` 与 workspace skills 完全归你和团队所有，升级不会覆盖，也不需要抄录产品文档。详见 [docs/runtime-playbooks.md](./docs/runtime-playbooks.md)。
 
 ## 快速开始（Quickstart）
 
-从零开始，让 Pipiclaw 在你的钉钉里成功回复第一条消息。可以直接让Agent帮你完成。如果你希望自己逐步操作，再看后面的“自己动手安装”。
+目标：从零开始，让 Pipiclaw 在你的钉钉里成功回复第一条消息。你也可以把这件事直接交给 AI Agent——见本节末尾的[安装说明模板](#让-ai-agent-帮你完成安装for-ai-agent)。
 
-### 给 AI Agent 的安装说明（For AI Agent）
-
-可以让 AI Agent 直接帮你完成安装、初始化、配置和启动，把下面整段文字复制给你常用的 AI Agent （如 Claude Code、Codex、OpenCode 等）：
-
-```text
-请帮我在这台机器上安装并初始化 Pipiclaw，并尽量把它配置到“可以开始使用”的状态。按下面要求执行：
-
-1. 先检查 Node.js 是否可用，版本必须 >= 22.19.0。
-   - 如果未安装，或版本低于 22.19.0，不要继续安装 Pipiclaw，直接告诉我需要先安装或切换到 Node.js 22.19.0+。
-
-2. 安装 Pipiclaw：
-   - 优先执行：npm install -g @oyasmi/pipiclaw
-   - 如果全局安装因为权限失败，不要默认使用 sudo。
-   - 先把报错告诉我，再询问我希望怎么处理。
-
-3. 安装完成后，执行一次 pipiclaw，让它初始化默认目录：
-   - ~/.pi/pipiclaw/
-   - ~/.pi/pipiclaw/workspace/
-
-4. 继续帮我完成基础配置，但先逐项询问我是否愿意现在提供这些信息：
-   - 钉钉应用的 clientId
-   - 钉钉应用的 clientSecret
-   - AI Card 的 cardTemplateId
-   - 模型接入方式：Anthropic，或自定义 provider
-
-5. 关于钉钉配置：
-   - AI Card 是推荐配置，不是可有可无的装饰。正常使用时建议配上。
-   - 如果我愿意提供 clientId、clientSecret、cardTemplateId，就直接帮我写入 ~/.pi/pipiclaw/channel.json
-   - robotCode 可以先留空
-   - allowFrom 可以先设为 []
-   - 如果我暂时不提供 cardTemplateId，也可以先留空，但最后要明确提醒我后续补上
-   - 不要把 any your-* placeholder 保留在最终文件里
-
-6. 关于模型配置：
-   - 先问我使用哪种方式：
-     - Anthropic 默认模型
-     - 自定义 provider
-   - 如果我选择 Anthropic，再询问我是否愿意现在提供 ANTHROPIC_API_KEY
-     - 如果我提供，就按我当前环境和你的能力，帮我配置到可用
-     - 如果我不提供，就不要编造值；保留默认空 models.json，并在最后告诉我需要自己补 ~/.pi/pipiclaw/auth.json 或环境变量
-   - 如果我选择自定义 provider，至少询问这些信息：
-     - provider 名称
-     - baseUrl
-     - api 类型
-     - apiKey
-     - 至少一个 model id
-   - 如果我提供了这些值，就帮我写好 ~/.pi/pipiclaw/models.json
-   - 如果我不提供，就不要编造值；最后明确告诉我需要自己补 ~/.pi/pipiclaw/models.json
-   - 如果服务是 OpenAI-compatible，优先使用 openai-completions，并默认加上 compat：
-     - supportsDeveloperRole: false
-     - supportsReasoningEffort: false
-
-7. 配置完成后，分两种情况处理：
-   - 如果还缺关键配置，就不要假装已经可用：
-     - 明确列出还缺什么
-     - 明确指出应该修改哪个文件
-     - 提醒我补完后再运行 pipiclaw
-   - 如果关键参数已经齐全，不要只告诉我如何启动；先询问我是否需要你现在直接帮我启动 Pipiclaw
-     - 如果我同意，你就直接启动 pipiclaw
-     - 启动后要检查输出，告诉我是启动成功，还是遇到了问题
-     - 如果遇到问题，要把问题类型、关键信息和下一步解决建议说清楚
-     - 如果启动成功，要提醒我去钉钉里先发送 /model 验证模型是否可见，再发送一条普通消息做首次验证
-     - 如果我不同意立即启动，就告诉我后续该如何手动启动
-
-8. 如果我选择“先安装，稍后自己改配置”，你就完成安装和初始化即可，但最后必须明确告诉我下一步至少要改这些文件中的哪些：
-   - ~/.pi/pipiclaw/channel.json
-   - ~/.pi/pipiclaw/auth.json
-   - ~/.pi/pipiclaw/models.json
-   - ~/.pi/pipiclaw/settings.json（如果需要固定默认模型）
-
-9. 整个过程中不要假装已经成功。
-   - 做过的操作和写过的文件要明确告诉我
-   - 如果某一步无法继续，要直接说明卡在哪里
-```
-
-### 自己动手安装（For Human）
-
-如果你希望自己逐步完成安装和配置，可以按下面步骤操作。
-
-#### 1. 环境要求（Requirements）
+### 1. 环境要求（Requirements）
 
 - Node.js `>= 22.19.0`
 - 一个可用的钉钉企业内部应用
-- 至少一种可用的模型接入方式
-  - 直接使用 Anthropic 默认模型
-  - 或在 `models.json` 中配置自定义模型提供方（provider）
+- 至少一种可用的模型接入方式：Anthropic 默认模型，或 `models.json` 中的自定义提供方（provider）
 
-Pipiclaw 面向类 Unix 环境（Linux / macOS），不支持 Windows。工具执行层按 POSIX shell 语义工作；如需在 Windows 上运行，请使用 WSL2。
+Pipiclaw 面向类 Unix 环境（Linux / macOS），工具执行层按 POSIX shell 语义工作，不支持 Windows；如需在 Windows 上运行，请使用 WSL2。
 
-#### 2. 安装（Install）
+### 2. 安装（Install）
 
 ```bash
 npm install -g @oyasmi/pipiclaw
 ```
 
-#### 3. 初始化（Initialize）
+### 3. 初始化（Initialize）
 
 第一次运行会自动初始化配置目录：
 
@@ -162,42 +52,28 @@ pipiclaw
 
 ```text
 ~/.pi/pipiclaw/
-├── channel.json
-├── auth.json
-├── models.json
-├── settings.json
-├── tools.json
-├── security.json
-└── workspace/
-    ├── SOUL.md
-    ├── AGENTS.md
-    ├── MEMORY.md
-    ├── ENVIRONMENT.md
-    ├── events/
-    ├── skills/
-    └── sub-agents/
+├── channel.json      # 钉钉应用配置
+├── auth.json         # 模型凭据
+├── models.json       # 自定义模型提供方
+├── settings.json     # 默认模型与运行时设置
+├── tools.json        # 内建工具配置
+├── security.json     # 工具层安全策略
+└── workspace/        # 长期工作区：SOUL.md、AGENTS.md、MEMORY.md、
+                      # events/、skills/、sub-agents/ 及各会话通道目录
 ```
 
-默认 app home 是 `~/.pi/pipiclaw/`。如果你希望把 Pipiclaw 的所有配置和运行文件放到别处，可以在启动前设置：
+默认 app home 是 `~/.pi/pipiclaw/`；设置 `PIPICLAW_HOME=/your/path` 可整体迁移。如果 `channel.json` 仍是初始化模板，程序会提示补全配置后再启动，这是正常行为。
 
-```bash
-export PIPICLAW_HOME=/your/custom/pipiclaw-home
-```
+### 4. 创建钉钉应用（Create a DingTalk App）
 
-设置后，`channel.json`、`auth.json`、`models.json`、`settings.json`、`tools.json`、`security.json` 和整个 `workspace/` 都会改为从这个目录读取和写入。
-
-如果 `channel.json` 仍然是初始化模板，程序会提示你补全配置后再启动。这是正常行为。
-
-#### 4. 创建钉钉应用（Create a DingTalk App）
-
-在 [钉钉开放平台](https://open-dev.dingtalk.com/) 创建企业内部应用，并完成下面几项：
+在[钉钉开放平台](https://open-dev.dingtalk.com/)创建企业内部应用：
 
 1. 创建应用，获取 `Client ID` 和 `Client Secret`
 2. 开启机器人能力
 3. 启用 Stream Mode
 4. 建议一并创建 AI Card 模板并获取 `Card Template ID`
 
-#### 5. 填写 `channel.json`（Fill `channel.json`）
+### 5. 填写 `channel.json`（Fill `channel.json`）
 
 编辑 `~/.pi/pipiclaw/channel.json`：
 
@@ -208,73 +84,33 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
   "robotCode": "",
   "cardTemplateId": "",
   "cardTemplateKey": "content",
-  "allowFrom": [],
-  "busyMessageDefault": "steer",
-  "responseMode": "full_progress_then_plain_final",
-  "cardAutoLayout": true
+  "allowFrom": []
 }
 ```
 
-为了让第一轮接入更稳，上面的示例先把 `cardTemplateId` 留空；如果你已经准备好 AI Card 模板，推荐直接填入真实值。
+- 硬性必填只有 `clientId` 和 `clientSecret`。
+- `robotCode` 留空时回退到 `clientId`。
+- `cardTemplateId` 建议配置（正常使用推荐启用 AI Card）；示例先留空是为了让第一轮接入更稳，排查链路时也建议临时留空。
+- `allowFrom` 为 `[]` 或省略时允许所有人；灰度期可填测试人员的 staff ID。
+- 更多字段（`busyMessageDefault`、`responseMode`、`cardAutoLayout`）见[配置手册](./docs/configuration.md)。
 
-最少只需要：
+### 6. 配置模型（Configure Models）
 
-- `clientId`
-- `clientSecret`
-
-常见可选项：
-
-- `robotCode`
-  留空时会回退到 `clientId`
-- `cardTemplateId`
-  建议配置；留空时表示暂不启用 AI Card
-- `allowFrom`
-  设为 `[]` 或删除时表示允许所有人
-- `busyMessageDefault`
-  设为 `"steer"`（默认）或 `"followUp"` / `"followup"`。控制 Agent 忙碌时普通消息的默认处理方式；答疑机器人场景建议设为 `"followUp"`。
-- `responseMode`
-  设为 `"full_progress_then_plain_final"`（默认）、`"rolling_progress_then_plain_final"` 或 `"final_card_only"`。统一控制过程展示与最终投递：`rolling` 执行中只显示最近 3 条进展并在完成后收起为一行摘要；`final_card_only` 不展示过程，最终答案直接写入 AI Card。
-- `cardAutoLayout`
-  默认为 `true`，透传给钉钉 AI Card 模板的 `autoLayout` 渲染开关。
-
-推荐把 AI Card 一起配上，这样在钉钉里能直接看到过程更新。只有在排查接入链路时，才建议临时把 `cardTemplateId` 留空。
-
-#### 6. 配置模型（Configure Models）
-
-Pipiclaw 启动后要想真正生成回复，还需要有可用模型。这里通常有两种接入方式。
-
-#### 方案 A：使用内置 Anthropic 默认模型（Option A: Use the Built-in Anthropic Default）
-
-如果你直接使用 Anthropic，`models.json` 可以保持默认内容：
-
-```json
-{
-  "providers": {}
-}
-```
-
-然后提供 Anthropic 凭据即可。最简单的是环境变量：
+**方案 A：Anthropic 默认模型。** `models.json` 保持默认的 `{ "providers": {} }`，提供凭据即可：
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-也可以写到 `~/.pi/pipiclaw/auth.json`：
+或写入 `~/.pi/pipiclaw/auth.json`：
 
 ```json
 {
-  "anthropic": {
-    "type": "api_key",
-    "key": "sk-ant-..."
-  }
+  "anthropic": { "type": "api_key", "key": "sk-ant-..." }
 }
 ```
 
-#### 方案 B：添加自定义模型提供方（Option B: Add a Custom Provider）
-
-如果你使用的是 OpenAI-compatible 网关、代理、自建服务或聚合平台，可以在 `~/.pi/pipiclaw/models.json` 里添加一个自定义模型提供方（provider）。
-
-一个可以直接改名替换后使用的最小示例：
+**方案 B：自定义模型提供方。** 适用于 OpenAI-compatible 网关、代理、自建或聚合服务，编辑 `~/.pi/pipiclaw/models.json`：
 
 ```json
 {
@@ -287,46 +123,19 @@ export ANTHROPIC_API_KEY=sk-ant-...
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false
       },
-      "models": [
-        {
-          "id": "gpt-4.1"
-        }
-      ]
+      "models": [{ "id": "gpt-4.1" }]
     }
   }
 }
 ```
 
-这个例子里最关键的四项是：
+- `apiKey` 可以写真实 key、环境变量名，或 `!command`；不想把凭据写进 `models.json`，可在 `auth.json` 写同名 provider 的凭据。
+- 很多 OpenAI-compatible 服务不支持 `developer` role / `reasoning_effort`，遇到兼容问题先保留上面的 `compat`。
+- 完整字段与更多场景（Ollama、企业代理等）见[配置手册](./docs/configuration.md)。
 
-- `baseUrl`
-- `api`
-- `apiKey`
-- `models`
+### 7. 可选：设置默认模型（Optional: Set a Default Model）
 
-说明：
-
-- `apiKey` 可以直接写真实 key
-- 也可以写环境变量名，或 `!command`
-- 很多 OpenAI-compatible 服务不支持 `developer` role / `reasoning_effort`
-  如果遇到请求兼容性问题，先保留上面的 `compat`
-
-如果你不想把凭据直接写进 `models.json`，也可以改成同名模型提供方（provider）的 `auth.json` 配置，例如：
-
-```json
-{
-  "my-gateway": {
-    "type": "api_key",
-    "key": "your-api-key"
-  }
-}
-```
-
-同时把 `models.json` 中的 `apiKey` 改成同一个值，或者改成环境变量名。完整配置手册见 [docs/configuration.md](./docs/configuration.md)。
-
-#### 7. 可选：设置默认模型（Optional: Set a Default Model）
-
-如果你希望固定默认模型，可以编辑 `~/.pi/pipiclaw/settings.json`：
+编辑 `~/.pi/pipiclaw/settings.json`：
 
 ```json
 {
@@ -335,341 +144,121 @@ export ANTHROPIC_API_KEY=sk-ant-...
 }
 ```
 
-如果不设置，Pipiclaw 会使用当前可用模型列表里的第一个。
+不设置时使用当前可用模型列表里的第一个。
 
-#### 8. 启动 Pipiclaw（Start Pipiclaw）
+### 8. 启动（Start）
 
 ```bash
 pipiclaw
 ```
 
-等价于 `pipiclaw run`（默认模式，运行钉钉常驻进程）；`pipiclaw tui` 进入终端对话，`pipiclaw --help` 查看全部命令与选项。
+等价于 `pipiclaw run`（运行钉钉常驻进程）；`pipiclaw tui` 进入终端对话，`pipiclaw --help` 查看全部命令与选项。
 
-#### 9. 可选：配置内建 Web 工具（Optional: Configure Built-in Web Tools）
+### 9. 可选：启用内建 Web 工具（Optional: Enable Web Tools）
 
-如果你希望助手直接使用 `web_search` / `web_fetch`，可以编辑 `~/.pi/pipiclaw/tools.json`。
-
-第一次启动时，Pipiclaw 会自动生成一份默认关闭 web 工具、默认启用 `session_search` 和 workspace skill 管理工具的 `tools.json` 模板。它已经带了 Brave 的示例配置，以及可选代理示例，方便你直接改成可用状态：
-
-```json
-{
-  "tools": {
-    "web": {
-      "enable": false,
-      "proxy": null,
-      "search": {
-        "provider": "brave",
-        "apiKey": "",
-        "maxResults": 5
-      }
-    },
-    "memory": {
-      "sessionSearch": {
-        "enabled": true
-      }
-    },
-    "skills": {
-      "manage": {
-        "enabled": true
-      }
-    }
-  },
-  "_examples": {
-    "proxy": "http://127.0.0.1:7890",
-    "apiKey": "BSA..."
-  }
-}
-```
-
-最常见的启用方式是：
+`web_search` / `web_fetch` 默认关闭。首次启动生成的 `~/.pi/pipiclaw/tools.json` 已带可直接改用的模板，通常只需三步：
 
 1. 把 `tools.web.enable` 改成 `true`
-2. 把 `tools.web.search.apiKey` 改成你自己的 Brave key
-3. 如果需要代理，再把 `_examples.proxy` 的值抄到 `tools.web.proxy`
+2. 填入搜索 provider 的 `apiKey`（默认示例为 Brave）
+3. 如需代理，设置 `tools.web.proxy`（未设置时回退到标准的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`）
 
-未设置 `tools.web.proxy` 时，web 工具会回退到标准环境变量：`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`。DingTalk runtime 也会尊重同一套环境变量。
+搜索后端支持 `duckduckgo`、`brave`、`tavily`、`jina`、`searxng`，完整字段见[配置手册](./docs/configuration.md)。
 
-`session_search` 只检索当前会话通道的 `context.jsonl`、session JSONL、`log.jsonl` 和轮转日志；它不会跨 channel 搜索。workspace skill 管理工具只作用于 `workspace/skills/`，可通过 `tools.skills.manage.enabled: false` 关闭。
+### 10. 在钉钉中验证（Verify in DingTalk）
 
-#### 10. 在钉钉中验证（Verify in DingTalk）
-
-建议先给机器人发送：
-
-```text
-/model
-```
-
-确认当前可见模型和默认模型都符合预期后，再发送一条普通消息，例如：
-
-- `/model` 会列出当前模型和可用模型
-- 切换时支持精确的 `provider/modelId`、精确的 `modelId`，以及能唯一命中的片段字符串，例如 `/model turbo`
+先给机器人发送 `/model`，确认当前可见模型和默认模型符合预期，再发送一条普通消息：
 
 ```text
 请介绍一下你自己，并说明你现在能做什么
 ```
 
-如果一切正常：
+如果一切正常，配置了 AI Card 时你会看到过程更新，否则机器人直接发普通消息回复；Pipiclaw 会在本地创建对应的会话通道目录，后续会话复用该通道的工作区与记忆。
 
-- 如果已经配置 AI Card，你会在钉钉里看到过程更新；这也是推荐的使用方式
-- 如果暂时没有配置 AI Card，机器人会直接发送普通消息
-- Pipiclaw 会在本地创建对应的会话通道目录
-- 后续会话会复用该会话通道的工作区（workspace）与记忆文件
+**第一次没跑通？** 最常见的三类原因：`channel.json` 残留 `your-*` 占位值（进程启动即退出）；模型凭据或 `models.json` 配置不可用（能收消息但首次调用失败）；`allowFrom` 挡住了你的账号或 Stream Mode 未开启（收到消息但不回复）。系统化排查见[部署与运维指南](./docs/deployment-and-operations.md)；设置 `PIPICLAW_DEBUG=1` 可在会话通道目录写出 `last_prompt.json` 检查精确提示词。
 
-## 配置（Configuration）
+### 让 AI Agent 帮你完成安装（For AI Agent）
 
-配置与使用相关的文档建议按下面顺序阅读：
+把下面整段文字复制给你常用的 AI Agent（如 Claude Code、Codex、OpenCode 等），让它替你完成安装、初始化、配置和启动：
 
-| 文档 | 适合什么场景 |
-|------|--------------|
-| [docs/configuration.md](./docs/configuration.md) | 查配置项、字段含义、模型与钉钉配置 |
-| [docs/events-and-sub-agents.md](./docs/events-and-sub-agents.md) | 配置并使用定时事件、预定义子代理 |
-| [docs/deployment-and-operations.md](./docs/deployment-and-operations.md) | 长期运行、升级、日志、备份与排障 |
+```text
+请帮我在这台机器上安装并初始化 Pipiclaw，尽量配置到"可以开始使用"的状态。要求：
 
-### 配置文件（Config Files）
-
-默认根目录是 `~/.pi/pipiclaw/`；如果设置了 `PIPICLAW_HOME`，下面这些路径都会切换到该目录下。
-
-| 文件 | 用途 |
-|------|------|
-| `~/.pi/pipiclaw/channel.json` | 钉钉应用配置 |
-| `~/.pi/pipiclaw/auth.json` | 模型认证信息 |
-| `~/.pi/pipiclaw/models.json` | 自定义模型提供方 / 模型，或覆盖内置模型提供方 |
-| `~/.pi/pipiclaw/settings.json` | 默认模型提供方 / 模型和运行时设置 |
-| `~/.pi/pipiclaw/tools.json` | 内建工具配置，例如 `tools.web` |
-| `~/.pi/pipiclaw/security.json` | 工具层安全策略配置 |
-
-### 环境变量（Environment Variables）
-
-| 变量 | 用途 |
-|----------|------|
-| `ANTHROPIC_API_KEY` | Anthropic API Key |
-| `PIPICLAW_HOME` | 覆盖默认的 `~/.pi/pipiclaw/` 根目录 |
-| `PIPICLAW_DEBUG` | 调试模式，会把上下文写到 `last_prompt.json` |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` | 标准代理环境变量；DingTalk runtime 和 web 工具都会尊重它们 |
+1. 先检查 Node.js 版本，必须 >= 22.19.0；不满足就停下来告诉我，不要继续安装。
+2. 执行 npm install -g @oyasmi/pipiclaw。权限失败时不要自行 sudo，把报错给我并询问怎么处理。
+3. 运行一次 pipiclaw，让它初始化 ~/.pi/pipiclaw/ 和 workspace/。
+4. 逐项询问我是否现在提供：钉钉应用的 clientId 和 clientSecret、AI Card 的
+   cardTemplateId、模型接入方式（Anthropic 或自定义 provider）。
+5. 钉钉配置写入 ~/.pi/pipiclaw/channel.json：robotCode 可留空，allowFrom 先设 []。
+   AI Card 是推荐配置；我暂不提供 cardTemplateId 时可先留空，但最后要提醒我补上。
+   最终文件里不要保留任何 your-* 占位值。
+6. 模型配置：
+   - 我选 Anthropic：询问我是否提供 ANTHROPIC_API_KEY；提供就配置到可用，
+     不提供就保留默认空 models.json，并告诉我之后要补 auth.json 或环境变量。
+   - 我选自定义 provider：至少收集 provider 名称、baseUrl、api 类型、apiKey、
+     一个 model id，写入 ~/.pi/pipiclaw/models.json；OpenAI-compatible 服务优先用
+     openai-completions，并默认加 compat：supportsDeveloperRole: false、
+     supportsReasoningEffort: false。
+   - 我不提供的值不要编造。收尾时明确列出还缺什么、该改哪个文件。
+7. 关键配置齐全时，先询问我是否现在启动 pipiclaw。同意则启动并检查输出，把成功
+   或问题如实告诉我；成功后提醒我在钉钉里先发 /model 验证模型，再发一条普通消息。
+   不同意则告诉我之后如何手动启动。
+8. 全程不要假装成功：做过的操作、写过的文件、卡住的步骤都要明确说明。
+```
 
 ## 命令（Commands）
-
-Pipiclaw 有两层命令。
-
-### 传输层命令（Transport Commands）
-
-这些命令由钉钉运行时（DingTalk runtime）直接处理：
 
 | 命令 | 说明 |
 |------|------|
 | `/help` | 查看内置命令帮助 |
 | `/stop` | 停止当前正在执行的任务 |
-| `/steer <message>` | 在当前任务继续执行时追加新的引导信息 |
-| `/followup <message>` | 把新的请求排队，等当前任务结束后再执行 |
-| `/events list` | 列出 `workspace/events/` 中的事件文件摘要 |
-| `/events show <name>` | 查看指定事件文件的完整 JSON |
-| `/events delete <name>` | 删除指定事件文件 |
-| `/events history [name]` | 查看事件调度历史，可按事件名过滤 |
-| `/tasks` | 查看当前通道的 active 任务台账与治理状态 |
-| `/tasks show <id>` | 查看指定任务台账 |
-| `/tasks archive` | 查看已归档任务 |
-| `/tasks approve <id>` | 显式批准该任务的外部副作用，并记录授权人/时间 |
-| `/tasks pause <id>` / `/tasks resume <id>` | 持久暂停或恢复一个长程任务的自动推进 |
-| `/tasks run <id>` | 立即安排一轮已就绪任务 |
-| `/tasks stats [id]` | 查看任务的 token、成本、attempt 与验收统计 |
-| `/tasks doctor` | 诊断任务台账与 task event 的一致性问题 |
-| `/status` | 查看运行时状态：执行状态、当前模型、上下文用量、运行时长、版本 |
-| `/usage [7d\|month]` | 查看本通道与全局的 LLM 成本，按类型和 Top 模型拆分 |
+| `/steer <message>` | 当前任务继续执行时追加引导信息 |
+| `/followup <message>` | 排队新请求，等当前任务结束后执行 |
+| `/events list\|show\|delete\|history` | 查看与管理 `workspace/events/` 中的定时事件 |
+| `/tasks [show\|archive\|approve\|pause\|resume\|run\|stats\|doctor]` | 查看与治理任务台账，`approve` 是外部副作用的唯一授权入口 |
+| `/status` | 运行时状态：执行状态、当前模型、上下文用量、运行时长、版本 |
+| `/usage [7d\|month]` | 本通道与全局的 LLM 成本，按类型和 Top 模型拆分 |
+| `/new` | 开启新会话 |
+| `/compact [instructions]` | 手动压缩当前会话上下文 |
+| `/session` | 当前会话状态、消息统计、token 使用量 |
+| `/model [引用]` | 查看或切换模型 |
 
-忙碌时，普通消息默认等价于 `/steer <message>`。
+说明：
 
-### 会话层命令（Session Commands）
+- 前八条由传输层直接处理，**忙碌时也可用**；后四条是会话命令，仅空闲时可用（忙碌时会收到提示）。
+- 忙碌时的普通消息默认等价于 `/steer`，可通过 `channel.json` 的 `busyMessageDefault` 改为排队（`followUp`）。
+- 未知的斜杠命令会被直接拒绝并提示 `/help`，不会作为普通消息发给模型（避免 `/modle` 这类笔误变成一整轮 LLM 调用）。workspace skill 也可作为命令调用（`/skill:<名称>`）。
+- `/model` 依次尝试精确 `provider/modelId`、精确 `modelId`、对完整引用的子串匹配，只有唯一命中时才切换，例如 `/model turbo`。
 
-这些命令由 `AgentSession` 扩展命令（extension command）立即执行，不会作为普通 prompt 发给模型：
+事件与任务的详细用法见 [docs/events-and-sub-agents.md](./docs/events-and-sub-agents.md) 与 [docs/tasks.md](./docs/tasks.md)。
 
-| 命令 | 说明 |
+## 文档地图（Documentation）
+
+| 文档 | 内容 |
 |------|------|
-| `/new` | 开启一个新的会话 |
-| `/compact [instructions]` | 手动压缩当前会话上下文，可附带额外说明 |
-| `/session` | 查看当前会话状态、消息统计、token 使用量和当前模型 |
-| `/model [provider/modelId|modelId|substring]` | 查看当前模型，或切换到指定模型 |
-
-`/model` 的匹配顺序是：
-
-1. 精确匹配 `provider/modelId`
-2. 精确匹配 `modelId`
-3. 对完整的 `provider/modelId` 做子字符串匹配
-
-只有当片段字符串能唯一命中一个可用模型时才会切换。例如：
-
-- `/model qwen`
-- `/model k2.5`
-- `/model turbo`
-- `/model zpai`
-
-像 `/model glm5` 这种不构成子字符串的输入不会命中。
-
-## 工作区结构（Workspace Layout）
-
-Pipiclaw 的核心不是一个临时机器人实例，而是一组长期存在的工作区（workspace）文件。
-
-```text
-~/.pi/pipiclaw/
-├── channel.json
-├── auth.json
-├── models.json
-├── settings.json
-├── tools.json
-├── security.json
-└── workspace/
-    ├── SOUL.md
-    ├── AGENTS.md
-    ├── MEMORY.md
-    ├── ENVIRONMENT.md
-    ├── events/
-    ├── skills/
-    ├── sub-agents/
-    ├── dm_{userId}/
-    │   ├── SESSION.md
-    │   ├── MEMORY.md
-    │   ├── HISTORY.md
-    │   ├── tasks/
-    │   ├── .channel-meta.json
-    │   ├── context.jsonl
-    │   ├── log.jsonl
-    │   └── subagent-runs.jsonl
-    └── group_{conversationId}/
-        └── ...
-```
-
-其中：
-
-- `SOUL.md`
-  定义助手身份、语气和回复风格
-- `AGENTS.md`
-  定义工作规则和行为约束
-- `SESSION.md`
-  当前工作态
-- `MEMORY.md`
-  稳定事实、决策和偏好
-- `HISTORY.md`
-  更早上下文的摘要
-- `<channel>/tasks/`
-  当前通道的长程任务台账；active 任务位于目录根部，完成后的任务归档到 `tasks/archive/`。DingTalk daemon 内建 task driver，会根据 status/wake 自动恢复 actionable task
-
-## Runtime Playbooks 与用户知识
-
-Pipiclaw 把知识分成两类，避免 `AGENTS.md` 随版本漂移：
-
-- runtime playbooks 随 npm 包发布，记录当前版本的文件语义、memory/event/task/subagent 机制和故障恢复；系统提示只常驻简短 metadata 索引，agent 在匹配场景按需 read
-- workspace `AGENTS.md` / `skills/` 归用户与团队，记录偏好、安全策略、环境专属流程和长期积累的程序性知识
-
-内置 playbook 不复制进 workspace；workspace skill 也不会被 runtime 覆盖。当前目录包括 runtime 导航、记忆与学习、事件调度，以及任务规划、推进、周期、委派、验收和修复九个主题。详见 [docs/tasks.md](./docs/tasks.md#runtime-知识与内置-playbooks)。
-
-## 记忆模型（Memory Model）
-
-Pipiclaw 不会把所有历史对话无上限地塞进 prompt，而是按层管理：
-
-- `workspace/MEMORY.md`
-  工作区级稳定背景
-- `<channel>/SESSION.md`
-  当前任务和短期上下文
-- `<channel>/MEMORY.md`
-  会话通道级 durable facts、decisions、preferences
-- `<channel>/HISTORY.md`
-  更早会话的摘要历史
-
-运行时主要做两件事：
-
-- relevant recall
-  按当前请求从 `SESSION.md` / `MEMORY.md` / `HISTORY.md` 里挑少量相关片段注入当前 prompt
-- consolidation
-  在 compaction 或 session trimming 前刷新 `SESSION.md`，并把值得保留的信息沉淀到 `MEMORY.md` / `HISTORY.md`
-
-## 事件与子代理（Events and Sub-Agents）
-
-`workspace/events/` 和 `workspace/sub-agents/` 是 Pipiclaw 非常重要的两类长期能力：
-
-- 定时事件适合做提醒、巡检、定期回顾和固定流程触发
-- 预定义子代理适合把 reviewer、researcher、planner 这类角色沉淀为可复用能力
-
-这两部分更接近“日常使用”而不是基础配置，单独整理在 [docs/events-and-sub-agents.md](./docs/events-and-sub-agents.md)。
-
-## 故障排查（Troubleshooting）
-
-### `pipiclaw` 首次启动即退出（`pipiclaw` Exits on First Run）
-
-通常是因为 `channel.json` 仍然保留了初始化占位值。
-
-优先检查这些字段：
-
-- `clientId`
-- `clientSecret`
-- `robotCode`
-- `cardTemplateId`
-- `allowFrom`
-
-第一次接通时，最省事的做法是：
-
-- 把 `robotCode` 设为空字符串
-- 把 `cardTemplateId` 设为空字符串
-- 把 `allowFrom` 设为 `[]`
-
-确认链路正常后，建议尽快把 AI Card 配上。
-
-### 机器人已启动，但第一次模型调用失败（The Bot Starts but the First Model Call Fails）
-
-优先检查：
-
-- 如果 `models.json` 为空，是否已经提供可用的 Anthropic 凭据
-- 如果使用自定义模型提供方，`models.json` 是否包含 `baseUrl`、`api`、`apiKey`、`models`
-- `auth.json` 是否使用了对象格式，而不是直接写成字符串
-- 如果是 OpenAI-compatible 服务，是否需要：
-  - `"supportsDeveloperRole": false`
-  - `"supportsReasoningEffort": false`
-- 给机器人发送 `/model`，确认当前可见模型和默认模型是否正确；如需切换，也可以用唯一命中的片段，例如 `/model turbo`
-
-### 机器人能收到消息，但没有回复（The Bot Receives Messages but Does Not Reply）
-
-优先检查：
-
-- 模型认证是否可用
-- `models.json` 是否声明了你要使用的模型提供方 / 模型
-- `allowFrom` 是否把你的账号挡住了
-- 钉钉机器人 Stream Mode 是否已开启
-- 如果配置了 `cardTemplateId`，该模板是否有效
-
-如果只是想先验证链路，可以临时把 `cardTemplateId` 留空；正常使用时仍然建议启用 AI Card。
-
-### 需要查看精确提示词（Need to Inspect the Exact Prompt）
-
-设置：
-
-```bash
-export PIPICLAW_DEBUG=1
-```
-
-之后运行时会在对应的会话通道目录下写出 `last_prompt.json`。
+| [docs/configuration.md](./docs/configuration.md) | 全部配置项：钉钉、模型、settings、tools、TUI、记忆与工作区文件 |
+| [docs/events-and-sub-agents.md](./docs/events-and-sub-agents.md) | 定时事件（含 `preAction` 门控、`event_manage`）与预定义子代理 |
+| [docs/tasks.md](./docs/tasks.md) | 任务台账、内建 task driver、`/tasks` 控制面与 `task_manage` 工具 |
+| [docs/runtime-playbooks.md](./docs/runtime-playbooks.md) | Runtime playbooks 与知识分层模型 |
+| [docs/deployment-and-operations.md](./docs/deployment-and-operations.md) | 长期运行、日志、可观测性、升级、备份与排障 |
+| [docs/scaling-and-concurrency.md](./docs/scaling-and-concurrency.md) | 并发模型与容量边界 |
+| [docs/security.md](./docs/security.md) | 默认安全策略、`security.json` 配置与已知边界 |
 
 ## 开发（Development）
 
 ```bash
 npm install
 npm run build
-npm run check
+npm run check    # lint + typecheck + deadcode + test
 ```
 
-常用脚本：
-
-- `npm run typecheck`
-- `npm run test`
-- `npm run test:e2e`
-- `npm run check`
+常用脚本：`npm run typecheck`、`npm run test`、`npm run test:e2e`。
 
 端到端测试说明：
 
-- `npm run test:e2e` 会运行“除钉钉渠道外”的完整 E2E
-- 它会使用真实 runtime、真实 `ChannelStore`、真实工具/记忆/Sidecar/LLM
-- 只 mock 钉钉传输层，不连接真实钉钉 Stream
-- 运行前需要可用模型凭据：优先读取 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/auth.json`，否则回退到 `ANTHROPIC_API_KEY`
-- 默认模型是 `anthropic/claude-sonnet-4-5`；如果本地 `models.json` 配的是其他 provider（例如通过 `auth.json` 为空、只在 `models.json` 里配了自定义网关的场景），需要用 `PIPICLAW_E2E_PROVIDER`/`PIPICLAW_E2E_MODEL` 覆盖，例如：
-  `PIPICLAW_E2E_PROVIDER=zpai PIPICLAW_E2E_MODEL=glm-5-turbo npm run test:e2e`
-- E2E 默认不包含在 `npm run test` 中，避免日常测试被真实 LLM 依赖和调用成本影响
+- `npm run test:e2e` 运行"除钉钉渠道外"的完整 E2E：真实 runtime、真实工具/记忆/Sidecar/LLM，只 mock 钉钉传输层。
+- 需要可用模型凭据：优先读取 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/auth.json`，否则回退到 `ANTHROPIC_API_KEY`。
+- 默认模型是 `anthropic/claude-sonnet-4-5`；使用其他 provider 时用 `PIPICLAW_E2E_PROVIDER` / `PIPICLAW_E2E_MODEL` 覆盖，例如 `PIPICLAW_E2E_PROVIDER=zpai PIPICLAW_E2E_MODEL=glm-5-turbo npm run test:e2e`。
+- E2E 不包含在 `npm run test` 中，避免日常测试被真实 LLM 依赖和调用成本影响。
 
 ## 许可证（License）
 

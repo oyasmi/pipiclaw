@@ -122,7 +122,7 @@ Pipiclaw 当前只使用 app home 下的 `settings.json`。默认是 `~/.pi/pipi
 
 pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有采用。不要假设把配置写到项目目录 `.pi/settings.json` 就会生效。
 
-### 备用模型（Fallback Model）
+## 备用模型（Fallback Model，`settings.json`）
 
 主模型这一轮失败了（不是用户 `/stop`、也不是上下文超限），就自动换成配置的备用模型把这一轮重跑一次；之后 5 分钟内的新轮次直接用备用模型，5 分钟后自动试回主模型。`settings.json` 里一个键即可开启：
 
@@ -136,7 +136,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 - 冷却时长（5 分钟）是内部常量；fallback **不修改**你用 `/model` 选定的首选模型，进程重启后回到主模型。手动 `/model` 切换会立即清除 fallback 状态。
 - fallback 生效期间 `/status` 会多出一行 `Fallback: active（primary <主模型> 冷却至 HH:MM）`；每次切换都会给用户一条提示，并写入结构化日志的 `model_fallback` 事件，成本账本按实际成交模型归因。
 
-### 可观测性：结构化日志与成本账本（Observability: Structured Logging & Cost Ledger）
+## 可观测性：结构化日志与成本账本（Observability: Structured Logging & Cost Ledger）
 
 作为长期运行的守护进程，Pipiclaw 除了彩色 console 输出外，还会把结构化日志与 LLM 成本落盘到 `STATE_DIR`（默认 `~/.pi/pipiclaw/state`，随 `PIPICLAW_HOME` 变化）。console 输出保持不变；这些文件是额外产物。
 
@@ -157,7 +157,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 - `file.enabled`：默认 **true**（守护进程默认落盘的价值大于新文件的意外感）。设为 `false` 则退回纯 console。
 - 环境变量优先于 settings，且在启动最早期即生效：`PIPICLAW_LOG_LEVEL`（同上四级）、`PIPICLAW_LOG_FILE=0|1`（关闭/开启文件落盘）。
 
-### 内建工具设置（Built-in Tool Settings）
+## 内建工具与任务开关（Built-in Tool and Task Settings）
 
 Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.json`。默认是 `~/.pi/pipiclaw/tools.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/tools.json`。
 
@@ -168,7 +168,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 3. web 请求代理
 4. fetch 的默认超时、截断和 Jina fallback 行为
 
-#### rtk 命令优化（`tools.rtk`）
+### rtk 命令优化（`tools.rtk`）
 
 [rtk（Rust Token Killer）](https://github.com/rtk-ai/rtk) 是一个把常见只读命令改写成 token 精简形式的 CLI 代理（例如 `git status` → `rtk git status`）。开启后，`bash` 工具在**安全校验之后、实际执行之前**把命令交给 `rtk rewrite` 处理，从而压缩返回给模型的输出。
 
@@ -184,7 +184,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - **尽力而为**：pipiclaw 会在 host 的 PATH 上探测一次 `rtk` 是否可用。装了就用，没装则静默跳过——开启 rtk 永远不会让 `bash` 命令失败。
 - rtk 只重塑语义等价的只读命令，安全校验始终针对**原始命令**执行，改写不会绕过 `command-guard`。
 
-#### 事件自调度工具（`tools.events`）
+### 事件自调度工具（`tools.events`）
 
 `event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据 `wake` 驱动；event 主要用于周期任务的 cron 节奏、独立提醒和外部传感器。默认开启。
 
@@ -200,7 +200,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - 该工具只发给主 agent，不进子代理工具集。
 - 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、**带 `preAction` 门控时放宽到 5 分钟**、事件文件总数上限 50）。细节见 [tasks.md](./tasks.md) 与 [events-and-sub-agents.md](./events-and-sub-agents.md)。
 
-#### 任务台账工具（`tools.tasks`）
+### 任务台账工具（`tools.tasks`）
 
 `task_manage` 工具让主 agent 维护[受治理任务台账](./tasks.md)：create 生成标准骨架与 control，progress 原子写进展/调度/预算策略，set 修正 metadata，verify 导入独立验收，done 执行完成门禁，cancel 显式放弃，list 返回 active 任务。默认开启。
 
@@ -216,7 +216,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - 该工具只发给主 agent，不进子代理工具集。新任务默认 independent verification 和 12 次 attempt 上限；可设置 token/cost/wall-time/deadline、parent/dependsOn、sideEffects 与 isolation。`progress` 只追加 Current Cycle 条目；Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
 - agent 不能把 external approval 设为 granted；用户必须直接发送 `/tasks approve <id>`，runtime 才记录可审计授权。
 
-#### 结构化搜索工具（`tools.grep`）
+### 结构化搜索工具（`tools.grep`）
 
 `grep` 工具用扩展正则在文件/目录树里搜内容，输出按文件分组、每文件与每页有上限、并做字节封顶——优先用它而不是 `bash grep -rn`（后者会打爆上下文）。默认开启。
 
@@ -230,7 +230,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 - 只有一个开关 `enabled`（默认 `true`）。执行层复用 Executor（沙箱内 `grep`），主 agent 与子代理都可用。
 
-#### 后台作业（`tools.jobs`）
+### 后台作业（`tools.jobs`）
 
 `bash` 多一个 `async: true` 参数，把长命令丢到后台并立刻返回作业 id，避免占住频道 run-queue；新增的 `job` 工具用来 list/poll/cancel。默认开启。
 
@@ -248,7 +248,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - 只发给主 agent；子代理不能起后台作业。
 - 想在作业**大概完成时**被唤醒接手，用 `event_manage` 排一个 check-in 事件去 `job poll`，而不是长时间阻塞。
 
-#### bash 拦截器（`tools.bashInterceptor`）
+### bash 拦截器（`tools.bashInterceptor`）
 
 拦截少数"有更好工具"的裸 shell 形态（整文件 `cat`、递归 `grep`、`sed -i`），报错把模型导向 `read`/`grep`/`edit`。默认开启。
 
@@ -263,18 +263,18 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - 只拦最明确的裸形态；带管道/重定向的复合命令（如 `cat x | jq`）一律放行。
 - 运行在 `command-guard` 之后、`rtk` 之前，只影响"用哪个工具"，不放行任何 guard 会拦的东西。依赖 `tools.grep`（否则拦了递归 grep 无处可去）。
 
-#### 记忆管理工具（`memory_manage`，gate 见下）
+### 记忆管理工具（`memory_manage`，gate 见下）
 
 `memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从 MEMORY.md 移除，不走裸 edit）。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。
 
 - gate 沿用既有键 `tools.memory.save.enabled`（默认 `true`）——工具虽更名，为避免静默重置用户配置而保留原键名。
 - 只发给主 agent。
 
-#### 网页抓取缓存（`web_fetch` offset 分页）
+### 网页抓取缓存（`web_fetch` offset 分页）
 
 `web_fetch` 会把抓取到的正文按频道缓存（`workspace/<channelId>/web-cache/`，键为 URL+抽取模式的哈希，TTL 15 分钟，LRU 上限 20 个文件）。长页面被截断时尾注会给出下一段的 `offset`；用同一 URL + 该 `offset` 再调一次即从缓存翻页，**不重新抓取**。图片结果原样返回、不缓存。无独立开关，随 `tools.web.enable` 生效。
 
-#### 任务摘要注入（`taskDigest`，settings.json）
+### 任务摘要注入（`taskDigest`，`settings.json`）
 
 每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。默认开启，便宜且高价值。
 
@@ -291,7 +291,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - `enabled`（默认 `true`）：关掉后不再注入任务摘要。
 - `maxTasks`（默认 `8`）/ `maxChars`（默认 `1000`）：摘要的上限，超出会截断并标注剩余数量。摘要只收录 status ≠ done 的任务，无 active 任务时不注入。
 
-#### 内建任务驱动器（`taskDriver`，settings.json）
+### 内建任务驱动器（`taskDriver`，`settings.json`）
 
 DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描本身不调用模型；只有存在 actionable task（status ≠ done 且 wake 未设/已到）时才入队唤醒，因此不再需要手工 heartbeat event、`tasks-pending.mjs` 或 task `.checkin` 事件。默认开启。
 
@@ -991,6 +991,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 适合：
 
 - 当前模型上下文较大
+- 希望在 compaction 前保留更多近期消息
 
 #### 5. 调整后台记忆维护与冷路径检索
 
@@ -1122,7 +1123,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `enabled` | `true` | 是否注册 `memory_save` 工具。用户显式要求记住时，Agent 当场把 durable 事实写入 channel MEMORY.md（经共享串行队列，不与后台维护竞争） |
+| `enabled` | `true` | 是否注册 `memory_manage` 工具（save / search / forget）。写操作经共享串行队列，不与后台维护竞争。配置键沿用工具更名前的 `memory.save`，避免静默重置既有配置 |
 
 #### `tools.skills.manage`
 
@@ -1187,7 +1188,6 @@ web 工具的代理顺序是：
 
 - DingTalk runtime 也会尊重同一套标准代理环境变量
 - 当前不再支持 `DINGTALK_FORCE_PROXY`
-- 希望在 compaction 前保留更多近期消息
 
 ## 工作区级配置（Workspace-Level Configuration）
 
