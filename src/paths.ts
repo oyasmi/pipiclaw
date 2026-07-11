@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { homedir } from "os";
 import { join } from "path";
 import { fileURLToPath } from "url";
@@ -8,7 +9,10 @@ export const APP_NAME = "pipiclaw";
  * in a checkout, dist/playbooks when built). Read-only runtime self-docs: the
  * system prompt carries a small index and the agent reads them on demand.
  */
-export const PLAYBOOKS_DIR = fileURLToPath(new URL("./playbooks", import.meta.url));
+const bundledPlaybooksDir = fileURLToPath(new URL("./playbooks", import.meta.url));
+const checkoutPlaybooksDir = fileURLToPath(new URL("../src/playbooks", import.meta.url));
+/** Prefer live source docs in a checkout; installed packages fall back to dist/playbooks. */
+export const PLAYBOOKS_DIR = existsSync(checkoutPlaybooksDir) ? checkoutPlaybooksDir : bundledPlaybooksDir;
 export const APP_HOME_DIR = process.env.PIPICLAW_HOME ?? join(homedir(), ".pi", APP_NAME);
 export const WORKSPACE_DIR = join(APP_HOME_DIR, "workspace");
 export const STATE_DIR = join(APP_HOME_DIR, "state");

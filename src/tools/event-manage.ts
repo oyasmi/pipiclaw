@@ -19,8 +19,8 @@ const MIN_PERIODIC_INTERVAL_MS = 30 * 60 * 1000;
 /**
  * periodic events WITH a preAction gate may fire this often: the sensor is the token guard
  * (it exits non-zero and stays silent when there is nothing to do), so a tighter cadence is
- * safe and is exactly the design-endorsed posture for completion-driven checks (e.g. polling
- * an agentmux instance until it goes idle). A hard sub-floor still applies so a bogus
+ * safe and is exactly the design-endorsed posture for completion-driven checks. A hard
+ * sub-floor still applies so a bogus
  * always-pass preAction cannot drive an arbitrarily hot loop.
  */
 const MIN_PERIODIC_INTERVAL_WITH_PREACTION_MS = 5 * 60 * 1000;

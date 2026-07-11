@@ -198,11 +198,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "event_manage",
-		promptHint:
-			"Schedule your own follow-ups: create/update/delete one-shot check-ins and periodic cadences for this channel. " +
-			"Name task-owned events `task.<channelId>.<taskId>.<use>` (e.g. .checkin, .schedule) so they clean up together. " +
-			"Task wake/resume is handled natively; use task-owned events mainly for canonical recurring .schedule cadences. " +
-			"No immediate events; periodic no more often than every 30 min (or 5 min when it carries a preAction gate).",
+		promptHint: "Create/update/delete validated one-shot reminders, periodic cadences, and preAction-gated sensors",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.events.enabled !== false,
 		create: (ctx) =>
@@ -214,10 +210,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "task_manage",
-		promptHint:
-			"Manage governed tasks: structured control/budgets/dependencies, atomic progress, candidate verification, verifier attestations, " +
-			"verified completion, cancellation, and listing. The native driver resumes ready tasks and escalates hard limits; " +
-			"use write/edit only for substantial body changes.",
+		promptHint: "Create, checkpoint, govern, verify, complete, cancel, or list persistent tasks",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
 		create: (ctx) =>

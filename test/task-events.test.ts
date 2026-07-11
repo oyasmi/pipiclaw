@@ -27,7 +27,7 @@ describe("task event naming helpers", () => {
 
 	it("classifies schedule and checkin events by use and type", () => {
 		expect(isTaskScheduleEvent({ use: "schedule", event: { type: "periodic" } })).toBe(true);
-		expect(isTaskScheduleEvent({ use: "agentmux", event: { type: "periodic" } })).toBe(false);
+		expect(isTaskScheduleEvent({ use: "sensor", event: { type: "periodic" } })).toBe(false);
 		expect(isTaskCheckinEvent({ use: "checkin", event: { type: "one-shot" } })).toBe(true);
 		expect(isTaskCheckinEvent({ use: "checkin", event: { type: "periodic" } })).toBe(false);
 	});

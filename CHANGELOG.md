@@ -6,7 +6,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ### Added
 
-- Bundled task playbooks teach the agent its own task/events machinery in depth, following pi's self-documentation pattern: four manuals ship read-only inside the package (`dist/playbooks/`), the system prompt carries only a small index (injected when `task_manage` is registered), and the agent reads the matching manual on demand — zero workspace footprint, versioned with the package. Playbooks: `task-recurring.md` (recurring task + `.schedule` pairing, `start-cycle`, retirement), `task-delegation.md` (decomposition, worktree isolation, agentmux completion-driven check-ins with a bundled `agentmux-idle.mjs` sensor), `task-closeout.md` (candidate → independent verification → done/cancel, external-approval ordering), `task-repair.md` (escalation recovery, orphan events, broken frontmatter, stale verification). The path guard gains a scoped read-only allowance for the bundled playbooks directory; `workspace/skills/` remains entirely user/agent-owned.
+- Runtime knowledge now follows pi-style progressive disclosure: nine metadata-described, read-only playbooks ship in `dist/playbooks/`, while the system prompt retains only ownership/security invariants, task recovery discipline, and an automatically generated trigger index. The catalog covers runtime orientation, memory/learning, event scheduling, and task planning/driving/recurrence/delegation/closeout/repair. Runtime facts no longer need to be copied into workspace `AGENTS.md` or skills; those remain user/team-owned. Third-party agent tools are deliberately decoupled: the bundled agentmux sensor was removed, and external tool commands/status detection belong to user executables and workspace skills. The closeout playbook also defines a hash-safe independent-verification + external-approval sequence.
 
 ## [0.8.0] - 2026-07-10
 
@@ -102,7 +102,7 @@ Toolset enhancement (spec 021): four design kernels — token economy, errors-as
 
 ### Changed
 
-- `event_manage` now allows tighter periodic schedules only when a `preAction` gate is present: ungated periodic events keep the 30-minute minimum interval, while gated periodic events may run every 5 minutes for completion-driven polling such as delegated agentmux work.
+- `event_manage` now allows tighter periodic schedules only when a `preAction` gate is present: ungated periodic events keep the 30-minute minimum interval, while gated periodic events may run every 5 minutes for user-supplied completion sensors.
 - Documented task visibility, delegated-work follow-up, and the intended relationship between task files, event checkpoints, and periodic heartbeat sensors.
 
 ## [0.7.4] - 2026-07-07

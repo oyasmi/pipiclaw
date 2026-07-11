@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
+import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
 import { taskEventName } from "../shared/task-events.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../shared/task-ledger.js";
@@ -109,12 +110,12 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 	const verificationInstruction =
 		entry.frontmatter.status === "verifying"
 			? verification?.status === "passed"
-				? " Independent verification already passed for the current artifact; finish the task with task_manage done and specific evidence."
-				: " This task is a verification candidate: call subagent with purpose=verify and taskId, then import its runId with task_manage verify. Do not implement more changes before the verifier reports."
+				? " Independent verification already passed; preserve its body/artifact hashes and follow the closeout playbook."
+				: " This is a checker-only turn: read the closeout playbook and do not continue implementation."
 			: "";
 	const repair = entry.frontmatter.readable
 		? ""
-		: " Its frontmatter is unreadable: repair it before using task_manage, and do not silently skip the task.";
+		: ` Its frontmatter is unreadable: also read ${join(PLAYBOOKS_DIR, "task-repair.md")}.`;
 	const control = entry.frontmatter.control;
 	const capsule = [
 		`Task capsule: title=${entry.title}; status=${entry.frontmatter.status ?? "open"};`,
@@ -130,14 +131,10 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 		user: "TASK_DRIVER",
 		userName: "TASK_DRIVER",
 		text:
-			`[TASK_DRIVER:${entry.id}] Resume task ${entry.id}. ${capsule}${repair} Open tasks/${entry.id}.md, advance the next ` +
-			"concrete step, respect its control metadata (budget, dependencies, isolation, and side-effect approval), and " +
-			"verify the work against its DoD. If it remains open, atomically record what changed, the " +
-			"next step, status, and any future wake with task_manage progress (or carefully update the task file if that " +
-			"tool is unavailable). For independent verification, delegate a purpose=verify subagent and register its run " +
-			"with task_manage verify before task_manage done. Never perform external side effects unless approval is granted. " +
-			"If complete, use task_manage done with specific evidence. If no user-visible update " +
-			`is needed, respond with [SILENT].${verificationInstruction}`,
+			`[TASK_DRIVER:${entry.id}] Resume task ${entry.id}. ${capsule}${repair} ` +
+			`Open tasks/${entry.id}.md and read ${join(PLAYBOOKS_DIR, "task-driving.md")} before acting. ` +
+			"Advance the next concrete step under the task's current control, acceptance, approval, and verification state. " +
+			`If complete or waiting, use the matching task_manage lifecycle/checkpoint action from the playbook.${verificationInstruction}`,
 		ts: String(nowMs),
 		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
@@ -152,8 +149,8 @@ function taskEscalationEvent(channelId: string, entry: TaskLedgerEntry, reason: 
 		userName: "TASK_DRIVER",
 		text:
 			`[TASK_ESCALATION:${entry.id}] Task ${entry.id} (${entry.title}) was stopped by the deterministic task ` +
-			`governor: ${reason}. Inform the user concisely, explain the actionable recovery (adjust the task control ` +
-			"metadata, resolve the dependency, or explicitly cancel/reopen it), and do not continue the task in this run.",
+			`governor: ${reason}. Read ${join(PLAYBOOKS_DIR, "task-repair.md")}, diagnose before changing control, ` +
+			"inform the user of the cause and recovery, and do not continue implementation in this run.",
 		ts: String(nowMs),
 		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",

@@ -6,7 +6,7 @@
 
 ### 新增
 
-- 内置任务 playbooks，仿照 pi 的自我文档模式让 agent 深入掌握自己的 task/events 机制：四份手册以只读形式随包发布（`dist/playbooks/`），系统提示只常驻一个极小的索引（仅在 `task_manage` 注册时注入），agent 在对应场景按需 read——零 workspace 足迹，版本随包更新。手册包括：`task-recurring.md`（周期任务与 `.schedule` 成对、`start-cycle`、退役）、`task-delegation.md`（分解、worktree 隔离、agentmux 完成驱动回访并附带 `agentmux-idle.mjs` 传感器）、`task-closeout.md`（candidate → 独立验收 → done/cancel、外部授权次序）、`task-repair.md`（escalated 恢复、孤儿事件、坏 frontmatter、失效验收）。path-guard 为该目录增加限定范围的只读放行；`workspace/skills/` 完全归用户与 agent 所有。
+- Runtime 知识改为仿 pi 的渐进式组织：九份带触发 metadata 的只读 playbook 随包发布到 `dist/playbooks/`，系统提示只保留所有权/安全不变量、task 恢复纪律和自动生成的小型索引。目录覆盖 runtime 导航、记忆与学习、事件调度，以及任务规划/推进/周期/委派/验收/修复；runtime 事实不再复制到 workspace `AGENTS.md` 或 skill，用户/团队层保持独立。第三方 agent 工具明确解耦：删除内置 agentmux 传感器，工具命令和完成态检测归用户可执行文件与 workspace skill。closeout playbook 同时补齐 independent verification + external approval 的 hash-safe 顺序。
 
 ## [0.8.0] - 2026-07-10
 
@@ -102,7 +102,7 @@
 
 ### 变更
 
-- `event_manage` 现在仅在 periodic 事件带 `preAction` 门控时允许更短调度间隔：无门控 periodic 仍保持 30 分钟下限，带门控 periodic 可降到 5 分钟，用于 agentmux 等委派工作的完成驱动轮询。
+- `event_manage` 现在仅在 periodic 事件带 `preAction` 门控时允许更短调度间隔：无门控 periodic 仍保持 30 分钟下限，带门控 periodic 可降到 5 分钟，用于用户提供的完成态传感器。
 - 补充任务可见性、委派工作回访，以及任务文件、事件 checkpoint、周期性心跳传感器之间关系的文档。
 
 ## [0.7.4] - 2026-07-07

@@ -1,6 +1,6 @@
 # Task Ledger Phase 2：可见性与驱动力设计方案
 
-> 历史设计：其中基于外部 heartbeat 的恢复路径和 wake/checkin 双写已由 [022 Native Task Driver](../022-native-task-driver/design.md) 取代；摘要、`/tasks`、`task_manage` 与 agentmux 传感器部分仍有效。
+> 历史设计：其中基于外部 heartbeat 的恢复路径和 wake/checkin 双写已由 [022 Native Task Driver](../022-native-task-driver/design.md) 取代；agentmux 专用传感器也已被 runtime playbook 分层取代。当前 Pipiclaw 不捆绑第三方 agent 工具脚本或状态协议，以 `src/playbooks/task-delegation.md` 和 `event-scheduling.md` 为准。
 
 | 字段 | 值 |
 |------|------|

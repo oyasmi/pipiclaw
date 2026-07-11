@@ -18,7 +18,7 @@
 
 核心不变式：**task 是在途工作的真相；`wake` 本身就是可执行的恢复条件。** 普通任务的继续、等待和异常恢复不再依赖配套 `.checkin` 事件；周期任务只额外保留一个 canonical `.schedule` 事件来开启新周期。
 
-任务生命周期 SOP 已内建进主 agent 的系统提示，driver 也默认开启。升级或新安装后无需复制 heartbeat JSON、传感器脚本，也无需把模板粘进 workspace `AGENTS.md`；后者只保留团队自己的策略和安全边界。
+task driver 默认开启。主 agent 的系统提示只常驻恢复与安全不变量，以及 runtime playbook 的小型索引；任务规划、推进、验收和修复流程由随包 playbook 按需加载。升级或新安装后无需复制 heartbeat JSON、传感器脚本，也无需把 runtime 模板粘进 workspace `AGENTS.md`；后者只保留用户/团队策略和安全偏好。
 
 ## 任务模型
 
@@ -55,7 +55,7 @@ control: {"version":1,"priority":"high","lastOutcome":"progress","dependsOn":[],
 ## DoD
 - [ ] 内容覆盖上周全部工作（素材：git log、上周 archive/ 的任务、MEMORY.md）
 - [ ] 数据准确（先核对 X 数据源）
-- [ ] 师兄确认后发布，并验证发布成功
+- [ ] 待发布内容、目标渠道与发布参数已准备并核对
 
 ## 手册
 1. 收集素材，起草
@@ -65,7 +65,7 @@ control: {"version":1,"priority":"high","lastOutcome":"progress","dependsOn":[],
 ## 验收
 Mode: independent
 - 逐项核对 DoD
-- 验证发布后的页面可访问且内容一致
+- 核对待发布内容与动作参数；实际发布结果在用户批准后写入 done evidence
 
 ## 当前周期（2026-W28）
 - 07-08 09:32 草稿 v1 已发师兄，等待反馈
@@ -92,8 +92,10 @@ frontmatter 字段：
 - **预算**：`maxAttempts` 必有；可追加累计 `maxTokens`、`maxCostUsd`、`maxWallTimeMinutes`。driver 每次原生唤醒先 claim attempt，回合结束把主代理与子代理的实际 usage 计回 task。达到任一上限就转为 `escalated`，不再继续烧 token。
 - **关系**：`parent` 表示父任务，`dependsOn` 中的任务必须 done 才能运行/收尾；创建和 set 会拒绝缺失关系、自依赖和环。父任务也不能在仍有未完成 child 时 done。
 - **隔离**：`isolation: worktree` 表示写密集型子任务应交给 `subagent` 的同名隔离模式；runtime 自动把 path/branch 记录到 control，父代理负责 review、merge 与 cleanup。
-- **副作用**：`sideEffects: external` 自动进入 required；agent 不能自授予。用户审阅拟执行动作后，直接发送 `/tasks approve <id>`，runtime 记录 approver/时间与 task body hash 才变为 granted；后续 progress、control 修改或正文变化都会要求重新授权。
-- **验收**：新任务默认 `verification.mode: independent`。实现者完成后调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId；task 文件一旦继续 progress，PASS 立即失效。
+- **副作用**：`sideEffects: external` 自动进入 required；agent 不能自授予。用户审阅拟执行动作后，直接发送 `/tasks approve <id>`，runtime 记录 approver/时间与 task body hash 才变为 granted；后续 progress 或正文变化会要求重新授权。
+- **验收**：新任务默认 `verification.mode: independent`。实现者先 `candidate`，checker-only 回合调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId；task 文件一旦继续 progress，PASS 立即失效。
+
+当 independent 与 external 同时存在时，先验收待执行动作得到 PASS，再用 `task_manage set status=awaiting-user wake=...` 等待 `/tasks approve`；`set` 不改正文，可保留 PASS。获批后执行并直接 done。不要在 PASS 后 progress，也不要把“已经发布”写成 candidate 前必须勾选的 DoD；外部执行结果由 approval audit 和 done evidence 收口。
 
 ### Frontmatter 契约（单一事实源）
 
@@ -152,7 +154,7 @@ open → in-progress ⇄ awaiting-user / blocked → done
 ```text
 task.<channelId>.<任务id>.<用途>.json
 # 例：task.dm_123.weekly-report.schedule.json（periodic 节奏）
-#     task.dm_123.weekly-report.agentmux.json（临时外部完成传感器）
+#     task.dm_123.weekly-report.sensor.json（临时外部完成传感器）
 ```
 
 任务收尾时用 `task.<channelId>.<id>.*` 前缀一把清理，不留孤儿。
@@ -172,31 +174,25 @@ task driver 随 DingTalk daemon 启动，默认每分钟做一次廉价扫描。
 
 这些默认值可在 [`settings.json`](./configuration.md) 的 `taskDriver` 中调整或关闭。进程重启后内存中的退避状态会清空，因此遗留 actionable task 会在下一次扫描被重新接起——这是有意的 fail-open 恢复语义。
 
-### 内建 Agent SOP
+### Runtime 知识与内置 playbooks
 
-有 `task_manage` 工具时，runtime 自动注入以下规则，无需写进 workspace `AGENTS.md`：
+系统提示只保留每回合不能忘的所有权、安全和 task 恢复纪律。完整 runtime 知识以只读 playbook 随包发布（构建后为 `dist/playbooks/`），**不占用 workspace**。每份文件用 `name` / `description` metadata 描述触发场景，系统提示自动生成小型目录；agent 只在匹配时用 read 加载正文。path-guard 对该目录有专门的只读放行，升级即更新。
 
-1. 只有明确需要跨回合继续、等待、委派或周期运行的工作才建 task；当前回合能完成的简单请求不建。
-2. driver/event 指名 task 时先读完整文件，再按 Manual 推进并对照 DoD 验证。
-3. 每个仍在途的任务回合结束前调用一次 `task_manage progress`，在**同一次原子写**里追加 Current Cycle 记录并更新 status/wake。记录必须包含做了什么、观察到的证据和下一步；本轮直接 `done` 时不再额外 progress。
-4. 等用户用 `awaiting-user`，等外部条件用 `blocked`，同时设置合理的未来 `wake`。`wake` 足以恢复，不再创建重复 `.checkin`。
-5. 可以继续推进时清空 wake；driver 会在有界冷却后续跑。超预算/截止或 terminal dependency 时停止并升级，不自行绕过。
-6. independent 模式由新的只读 verifier subagent 验收并 `task_manage verify`；通过后正文/进展再变化会失效。DoD 与门禁满足后才 `done`。
-7. 外部副作用必须等用户 `/tasks approve <id>`；父子依赖和 worktree 子任务必须先汇合验收。
-8. 周期任务仍用唯一的 `task.<channelId>.<id>.schedule` periodic event 开新周期；driver 只负责周期内的继续与恢复。
-
-### 内置 playbooks（场景化操作手册，随包发布、按需读取）
-
-系统提示里的 SOP 是每回合的紧凑纪律；四份随包发布的 playbook 补充场景化的完整操作手册。它们在安装目录内（构建后为 `dist/playbooks/`），**不占用 workspace**：系统提示常驻一个极小的索引（`### Task Playbooks`，仅在 `task_manage` 注册时注入），agent 在对应场景用 read 工具按需读取；path-guard 对该目录有专门的只读放行。版本随包走，升级即更新。
+完整的四层知识模型、编写原则和 workspace 迁移边界见 [Runtime Playbooks 与知识分层](./runtime-playbooks.md)。
 
 | playbook | 场景 |
 |---|---|
+| `runtime-orientation.md` | runtime、workspace、channel 与 task 四层知识边界和文件导航 |
+| `memory-and-learning.md` | SESSION/MEMORY/HISTORY/ENVIRONMENT/task/skill 的写入选择和程序性学习 |
+| `event-scheduling.md` | reminder、one-shot、periodic、preAction、后台 job 回访和静默输出 |
+| `task-planning.md` | 是否建 task、Goal/DoD/Manual/Verification、control 与预算选择 |
+| `task-driving.md` | driver 唤醒恢复、幂等检查、progress/wake/status checkpoint |
 | `task-recurring.md` | 周期任务的创建（task + `.schedule` 成对）、`start-cycle` 开新周期、调节奏、退役 |
-| `task-delegation.md` | 父子分解与依赖、worktree 隔离、agentmux 完成驱动回访（附带 `scripts/agentmux-idle.mjs` 传感器） |
-| `task-closeout.md` | candidate → 独立验收 → done/cancel 全流程、外部副作用授权的正确次序 |
+| `task-delegation.md` | 父子分解、内建 subagent、worktree，以及对用户层外部 agent 工具的通用恢复纪律 |
+| `task-closeout.md` | candidate → 独立验收 → done/cancel、external approval，以及两种门禁组合时的无失效顺序 |
 | `task-repair.md` | escalated 恢复、孤儿事件、坏 frontmatter/control、stale PASS、driver 行为排查 |
 
-playbook 描述的是 runtime 硬约束与标准做法；个人偏好和团队策略写进 workspace `AGENTS.md`，或由 agent 沉淀成 workspace skill——`workspace/skills/` 完全归用户与 agent 所有，runtime 不会写入。
+playbook 描述当前版本的 runtime 硬约束与标准做法；个人偏好和团队策略写进 workspace `AGENTS.md`，可复用的用户流程沉淀成 workspace skill。不要把 playbook 抄进 workspace；也不要把某个第三方工具的协议和脚本捆进 Pipiclaw。`workspace/skills/` 完全归用户与 agent 所有。
 
 ## 可见性：`/tasks` 命令与任务摘要注入
 
@@ -253,34 +249,21 @@ do this turn. Full detail lives in the matching tasks/<id>.md file.
 
 host Git checkout 的 verifier 还会记录 artifact subject（HEAD、working tree 与 staged/unstaged diff）。导入 PASS 和 `done` 都会重新比较 subject；代码或产物改动后必须重跑 verifier。
 
-## agentmux 完成驱动回访
+## 外部 Agent 工具的回访边界
 
-委派给 agentmux 实例后，基线方案是把 task 设为 blocked，并把 `wake` 放到合理的下一次检查时间；内建 driver 到点接手。对分钟级响应要求更高时，再加“实例是否空闲”的 preAction 传感器。
+Pipiclaw 不内置 agentmux 或其他第三方 agent 工具的命令、状态协议和检测脚本。这些能力属于用户安装的可执行文件与 workspace skill。
 
-**为什么用 periodic + preAction（而非 one-shot）**：传感器只有退出码、不能改期自己。one-shot 到点若对方仍忙、preAction 退 1 静默，但 one-shot 已消耗，不会再探测——卡死。要自主轮询到 idle，只能用 periodic + preAction 门控：忙则静默（零 token），idle 才唤醒。
-
-传感器脚本随包发布在 playbooks 目录的 `scripts/agentmux-idle.mjs`：实例还忙时 exit 1（静默、零 token）；idle / exited / 任何异常时 exit 0（唤醒，fail-open）。首次使用时 agent 会把它拷贝到 `workspace/skills/agentmux-idle.mjs` 再在事件 preAction 中引用——事件需要一个不随版本/Node 环境变动的稳定路径，而 preAction 失败是静默的。
-
-响应式联动约定：
-
-1. 委派时在 task 正文记下实例名（`agentmux 实例：编码助手-A`）。
-2. 用 `event_manage` 建 periodic 事件 `task.<channelId>.<id>.agentmux`，preAction 为 `node …/agentmux-idle.mjs 编码助手-A`，task 置 `blocked`、`wake` 设一个远期兜底点。
-3. 对方 idle → agent 被唤醒 → `agentmux capture` 取结果 → 验收 → 推进/闭环 → 删除该 agentmux 事件（收尾 SOP 一并清理 `task.<channelId>.<id>.*`）。
-
-**两档节奏**：
-
-- **基线（推荐、零 event）**：task 停在 `blocked`、`wake` 到期，内建 driver 在下一次分钟级扫描中接手 → agent `agentmux inspect`；忙则用 `task_manage progress` 把 wake 推后，闲则验收结果。
-- **响应式（分钟级）**：让 agent 自建上面的 agentmux periodic。`event_manage` 的 periodic 最小间隔在**带 preAction 时从 30 分钟放宽到 5 分钟**（传感器是 token 守卫，忙时静默）——正是这类完成驱动检查的正确形态。硬子下限仍是 5 分钟，且 preAction 照过命令守卫。
+runtime 只提供通用恢复机制：委派时把工具/实例/目录/预期产物写进 task，置 blocked 并设 wake；到点后按用户 skill 检查、取回和验收。如果用户工具提供稳定的完成态检测命令，可以自行用 periodic + preAction 做条件唤醒，但必须保留 wake 兜底，并在闭环时删除临时事件。
 
 ## 周报任务：一个完整周期的样子
 
 以"每周一完成上周周报"为例，看任务台账下的运转（对比：现在只能配一个每周一触发的 periodic 事件，触发一次就归零）：
 
 1. **创建（一次）**：你说"以后每周一帮我写上周周报"。agent 建 `tasks/weekly-report.md`（目标 / DoD / 手册），并用 `event_manage` 建 periodic 事件 `task.dm_x.weekly-report.schedule`（周一 09:30）。
-2. **周一 09:30 触发**：agent 打开任务，收集素材（含上周 `archive/` 里已完结的任务）、起草，自查 DoD 前两条满足，第三条"师兄确认后发布"是外部动作，需确认。
-3. **阻塞不傻等**：把草稿发你 → 一次 `task_manage progress` 记录进展、置 `status: awaiting-user`、`wake` 设到当天 14:00 → 回合结束，期间零 token。
-4. **回访**：14:00 后 driver 扫描到 wake 已到并触发；若你还没回，轻声提醒并原子改期；若你已确认，agent 发布、**验证发布结果**、DoD 三条打钩。
-5. **闭环**：折叠"当前周期"进"历史"（记一行复盘），`task_manage done` 记录证据并收尾。
+2. **周一 09:30 触发**：agent 打开任务，收集素材（含上周 `archive/` 里已完结的任务）、起草并完成发布前能验证的 DoD。
+3. **独立验收**：全部 acceptance checkbox 有证据后 candidate；checker-only 回合得到 PASS。因为发布还需 external approval，此后不再 progress 或改正文。
+4. **请求授权**：用 `task_manage set status=awaiting-user wake=当天14:00` 保留 PASS，发草稿并请你 `/tasks approve <id>`。
+5. **回访与闭环**：driver 到点核对 PASS 与授权仍新鲜；获批则发布、验证发布结果并直接 `task_manage done`，未获批则继续用 set 调整等待 metadata，不改正文。
 6. **下周期更聪明**：下周一事件照常触发，但任务文件里已经积累了你的格式偏好、上次返工原因、新增的预检步骤——**event 无记忆，task 会积累手艺**。
 
 **异常兜底**：若周期事件触发后的 agent 回合中途失败，任务仍停在 `in-progress`/`awaiting-user`；driver 根据未到/已到的 wake 和退避状态把它接回来。daemon 重启会清空内存退避，遗留 actionable task 在下一次扫描恢复。

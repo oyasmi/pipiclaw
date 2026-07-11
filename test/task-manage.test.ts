@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { handleTasksCommand } from "../src/runtime/task-commands.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
 import { manageTask, type TaskManageToolOptions } from "../src/tools/task-manage.js";
 
@@ -257,6 +258,65 @@ describe("manageTask", () => {
 	});
 
 	describe("done", () => {
+		it("preserves an independent PASS while waiting for external approval via set", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "verified-publish",
+				title: "Verified publish",
+				goal: "Publish an independently checked result",
+				dod: "- [x] Draft is ready\n- [x] Publish action is prepared",
+				control: { sideEffects: "external" },
+			});
+			await manageTask(options, {
+				action: "candidate",
+				id: "verified-publish",
+				note: "Draft and publish plan are ready for independent review.",
+			});
+			await writeVerificationAttestation(channelDir, {
+				runId: "verify-publish",
+				taskId: "verified-publish",
+				verdict: "pass",
+				agent: "reviewer",
+				model: "test/model",
+				checkedAt: new Date().toISOString(),
+				evidence: "Draft and prepared action are correct.",
+				workspaceChanged: false,
+				output: "VERDICT: PASS",
+			});
+			await manageTask(options, {
+				action: "verify",
+				id: "verified-publish",
+				verifierRunId: "verify-publish",
+			});
+
+			// `set` changes only frontmatter, so it can schedule approval waiting without
+			// invalidating the body-bound PASS. A progress note here would invalidate it.
+			await manageTask(options, {
+				action: "set",
+				id: "verified-publish",
+				status: "awaiting-user",
+				wake: "2026-07-12T14:00:00+08:00",
+			});
+			expect(
+				await handleTasksCommand({
+					args: "approve verified-publish",
+					channelDir,
+					workspaceDir,
+					channelId: CHANNEL_ID,
+					approver: "Alice",
+				}),
+			).toContain("Approved external side effects");
+
+			await expect(
+				manageTask(options, {
+					action: "done",
+					id: "verified-publish",
+					summary: "Published the checked result.",
+					evidence: "verify-publish passed and Alice approved the external action.",
+				}),
+			).resolves.toMatchObject({ archived: true, status: "done" });
+		});
+
 		it("requires and consumes an independent verifier attestation for governed tasks", async () => {
 			await manageTask(options, {
 				action: "create",
@@ -410,13 +470,13 @@ describe("manageTask", () => {
 				text: "推进任务 fix-bug",
 				at: "2026-07-09T10:00:00+08:00",
 			});
-			await writeEvent("task.dm_1.fix-bug.agentmux", {
+			await writeEvent("task.dm_1.fix-bug.sensor", {
 				type: "periodic",
 				channelId: CHANNEL_ID,
-				text: "推进任务 fix-bug（agentmux 已就绪）",
+				text: "推进任务 fix-bug（外部工作已就绪）",
 				schedule: "*/10 * * * *",
 				timezone: "Asia/Shanghai",
-				preAction: { type: "bash", command: "agentmux inspect helper" },
+				preAction: { type: "bash", command: "external-agent status helper" },
 			});
 			const result = await manageTask(options, {
 				action: "done",
@@ -425,11 +485,11 @@ describe("manageTask", () => {
 				evidence: "npm test -- login passed.",
 			});
 			expect(result.archived).toBe(true);
-			expect(result.deletedEvents).toEqual(["task.dm_1.fix-bug.agentmux", "task.dm_1.fix-bug.checkin"]);
+			expect(result.deletedEvents).toEqual(["task.dm_1.fix-bug.checkin", "task.dm_1.fix-bug.sensor"]);
 			expect(existsSync(join(tasksDir, "fix-bug.md"))).toBe(false);
 			expect(existsSync(join(tasksDir, "archive", "fix-bug.md"))).toBe(true);
 			expect(existsSync(join(eventsDir, "task.dm_1.fix-bug.checkin.json"))).toBe(false);
-			expect(existsSync(join(eventsDir, "task.dm_1.fix-bug.agentmux.json"))).toBe(false);
+			expect(existsSync(join(eventsDir, "task.dm_1.fix-bug.sensor.json"))).toBe(false);
 			const archived = await readFile(join(tasksDir, "archive", "fix-bug.md"), "utf-8");
 			expect(archived).toContain("## Completion Evidence");
 			expect(archived).toContain("- Summary: Fixed the login crash.");
@@ -451,13 +511,13 @@ describe("manageTask", () => {
 				text: "回访",
 				at: "2026-07-09T10:00:00+08:00",
 			});
-			await writeEvent("task.dm_1.weekly.agentmux", {
+			await writeEvent("task.dm_1.weekly.sensor", {
 				type: "periodic",
 				channelId: CHANNEL_ID,
 				text: "回访委派",
 				schedule: "*/10 * * * *",
 				timezone: "Asia/Shanghai",
-				preAction: { type: "bash", command: "agentmux inspect helper" },
+				preAction: { type: "bash", command: "external-agent status helper" },
 			});
 			const result = await manageTask(options, {
 				action: "done",
@@ -471,7 +531,7 @@ describe("manageTask", () => {
 			// schedule survives; lifecycle check-ins (one-shot or periodic sensors) are cleaned up.
 			expect(existsSync(join(eventsDir, "task.dm_1.weekly.schedule.json"))).toBe(true);
 			expect(existsSync(join(eventsDir, "task.dm_1.weekly.checkin.json"))).toBe(false);
-			expect(existsSync(join(eventsDir, "task.dm_1.weekly.agentmux.json"))).toBe(false);
+			expect(existsSync(join(eventsDir, "task.dm_1.weekly.sensor.json"))).toBe(false);
 			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
 			expect(onDisk).toContain("status: done");
 			expect(onDisk).toContain("- Summary: Published this week's report.");

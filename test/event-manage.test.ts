@@ -158,7 +158,7 @@ describe("manageEvent create", () => {
 	it("allows a sub-30-minute periodic cron when it carries a preAction gate", async () => {
 		const result = await manageEvent(opts(), {
 			action: "create",
-			name: "task.dm_1.demo.agentmux",
+			name: "task.dm_1.demo.sensor",
 			definition: JSON.stringify({
 				type: "periodic",
 				text: "x",
@@ -168,7 +168,7 @@ describe("manageEvent create", () => {
 			}),
 		});
 		expect(result.eventType).toBe("periodic");
-		expect(await listEventFiles()).toEqual(["task.dm_1.demo.agentmux.json"]);
+		expect(await listEventFiles()).toEqual(["task.dm_1.demo.sensor.json"]);
 	});
 
 	it("still rejects a sub-30-minute periodic cron without a preAction gate", async () => {

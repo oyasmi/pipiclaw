@@ -440,7 +440,7 @@ async function createTask(options: TaskManageToolOptions, request: TaskManageReq
  * On close-out, keep only the task's recurring cadence event
  * (`task.<channelId>.<id>.schedule`) and delete every other task-owned event.
  *
- * A task may also own temporary periodic events (for example an agentmux idle sensor).
+ * A task may also own temporary periodic sensor/check-in events.
  * Those are lifecycle check-ins, not proof that the task itself is recurring, so they
  * must not prevent a one-shot task from being archived.
  */

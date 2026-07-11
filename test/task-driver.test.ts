@@ -301,7 +301,8 @@ describe("TaskDriver", () => {
 			getSettings: () => SETTINGS,
 		});
 		await driver.runOnce(NOW);
-		expect(dispatch.mock.calls[0]?.[0].text).toContain("purpose=verify");
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("checker-only turn");
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("task-driving.md");
 	});
 
 	it("starts and stops an idempotent scan timer", async () => {

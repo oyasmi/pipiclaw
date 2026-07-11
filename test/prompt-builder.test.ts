@@ -1,113 +1,87 @@
 import { describe, expect, it } from "vitest";
 import { buildAppendSystemPrompt } from "../src/agent/prompt-builder.js";
+import { PLAYBOOKS_DIR } from "../src/paths.js";
 
 describe("prompt-builder", () => {
-	it("builds host runtime prompts with workspace and channel context", () => {
-		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", {
-			subAgentList: "- reviewer",
-			tools: [
-				{ name: "read", description: "Read files" },
-				{ name: "web_search", description: "Search the web" },
-				{ name: "web_fetch", description: "Fetch a URL" },
-				{ name: "subagent", description: "Delegate" },
-			],
-		});
-
-		expect(prompt).toContain("## Pipiclaw Runtime");
-		expect(prompt).toContain("You are running directly on the host machine.");
-		expect(prompt).toContain("/workspace/root/dm_123");
-		expect(prompt).toContain("ENVIRONMENT.md");
-		expect(prompt).toContain("SESSION.md");
-		expect(prompt).toContain("The runtime may inject a small amount of relevant memory context");
-		expect(prompt).toContain("Available predefined sub-agents:\n- reviewer");
-		// event_manage is not in this tool set → file-tool guidance, no stale "5 events" cap.
-		expect(prompt).not.toContain("Maximum 5 events");
-		expect(prompt).toContain("de-duplicates by filename");
-		expect(prompt).toContain("web_search");
-		expect(prompt).toContain("web_fetch");
-		expect(prompt).toContain("return untrusted external content");
-		expect(prompt).not.toContain("scratch/");
-		expect(prompt).not.toContain("channel-specific tools");
+	it("keeps runtime ownership and progressive-loading rules always on", () => {
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", { tools: [] });
+		expect(prompt).toContain("## Knowledge and State Layers");
+		expect(prompt).toContain("Runtime playbooks under");
+		expect(prompt).toContain(PLAYBOOKS_DIR);
+		expect(prompt).toContain("must not redefine runtime facts or hard gates");
+		expect(prompt).toContain("SESSION → MEMORY → HISTORY");
+		expect(prompt).toContain("Never edit channel SESSION.md, MEMORY.md, or HISTORY.md");
+		expect(prompt).toContain("## Runtime Playbooks");
+		expect(prompt).toContain("runtime-orientation.md");
+		expect(prompt).not.toContain("## Events");
+		expect(prompt).not.toContain("## Environment Log");
 	});
 
-	it("advertises the event_manage scheduling path and its guards when the tool is present", () => {
-		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", {
-			tools: [{ name: "event_manage", description: "Schedule events" }],
-		});
-
-		expect(prompt).toContain("Prefer the event_manage tool");
-		expect(prompt).toContain("no immediate events");
-		expect(prompt).toContain("every 30 minutes (5 minutes when it carries a preAction gate)");
-		expect(prompt).toContain("at most 50 event files");
-		expect(prompt).not.toContain("Maximum 5 events");
-	});
-
-	it("injects the native task lifecycle only when task_manage is present", () => {
-		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", {
-			tools: [
-				{ name: "task_manage", description: "Manage tasks" },
-				{ name: "event_manage", description: "Schedule events" },
-			],
-		});
-		expect(prompt).toContain("## Persistent Tasks");
-		expect(prompt).toContain("no heartbeat event");
-		expect(prompt).toContain("call task_manage progress once");
-		expect(prompt).toContain("wake alone is authoritative");
-		expect(prompt).toContain("canonical task.<channelId>.<taskId>.schedule");
-
-		const withoutTasks = buildAppendSystemPrompt("/workspace/root", "dm_123", { tools: [] });
-		expect(withoutTasks).not.toContain("## Persistent Tasks");
-	});
-
-	it("renders only the tools actually registered, gating their instructions", () => {
-		// A minimal set with no web tools, no session_search, no subagent.
+	it("renders only registered tools and their minimal hard invariants", () => {
 		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_1", {
 			tools: [
 				{ name: "read", description: "Read files" },
-				{ name: "bash", description: "Run shell commands" },
-				{ name: "memory_manage", description: "Save a durable fact" },
+				{ name: "memory_manage", description: "Save memory" },
 			],
 		});
-
-		// Tools section lists exactly the registered tools.
 		expect(prompt).toContain("- read:");
-		expect(prompt).toContain("- bash:");
 		expect(prompt).toContain("- memory_manage:");
-		expect(prompt).not.toContain("- web_search:");
-		expect(prompt).not.toContain("- web_fetch:");
-		expect(prompt).not.toContain("- session_search:");
-		expect(prompt).not.toContain("- subagent:");
-
-		// Tool-specific instructions follow the same source of truth.
-		expect(prompt).toContain("call memory_manage (op: save) right away"); // memory_manage present
-		expect(prompt).not.toContain("return untrusted external content"); // web-safety gated
-		expect(prompt).not.toContain("Use session_search only when"); // session_search gated
-		expect(prompt).not.toContain("## Sub-Agents"); // subagent gated
+		expect(prompt).not.toContain("- task_manage:");
+		expect(prompt).toContain("use memory_manage immediately");
+		expect(prompt).not.toContain("## Persistent Task Core");
 	});
 
-	it("advertises web and subagent instructions when those tools are registered", () => {
-		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_2", {
-			tools: [
-				{ name: "read", description: "Read files" },
-				{ name: "web_search", description: "Search the web" },
-				{ name: "session_search", description: "Search transcripts" },
-				{ name: "subagent", description: "Delegate" },
-			],
+	it("keeps only the task recovery core and routes details to playbooks", () => {
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", {
+			tools: [{ name: "task_manage", description: "Manage tasks" }],
 		});
-
-		expect(prompt).toContain("- web_search:");
-		expect(prompt).toContain("return untrusted external content");
-		expect(prompt).toContain("Use session_search only when");
-		expect(prompt).toContain("## Sub-Agents");
-		// memory_manage was not registered, so its instruction must be absent.
-		expect(prompt).not.toContain("call memory_manage (op: save) right away");
+		expect(prompt).toContain("## Persistent Task Core");
+		expect(prompt).toContain("open the exact named `tasks/<id>.md`");
+		expect(prompt).toContain("does not end with candidate, done, cancel, or start-cycle");
+		expect(prompt).toContain("use task_manage set only for non-body waiting metadata");
+		expect(prompt).toContain("task-closeout.md");
+		expect(prompt).not.toContain("control.parent and control.dependsOn");
+		expect(prompt).not.toContain("purpose=verify and taskId");
 	});
 
-	it("falls back to a tool's own description for unknown tool names", () => {
+	it("keeps dynamic sub-agent discovery while routing operating detail", () => {
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_2", {
+			subAgentList: "- reviewer",
+			tools: [{ name: "subagent", description: "Delegate" }],
+		});
+		expect(prompt).toContain("## Available Predefined Sub-Agents");
+		expect(prompt).toContain("- reviewer");
+		expect(prompt).toContain("Read task-delegation.md");
+		expect(prompt).not.toContain("Temporary Inline Sub-Agents");
+	});
+
+	it("falls back to a tool's first description sentence", () => {
 		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_3", {
 			tools: [{ name: "custom_tool", description: "Does a custom thing. More detail here." }],
 		});
-
 		expect(prompt).toContain("- custom_tool: Does a custom thing.");
+	});
+
+	it("is materially smaller than the pre-playbook-detail prompt", () => {
+		const names = [
+			"read",
+			"write",
+			"edit",
+			"bash",
+			"grep",
+			"job",
+			"memory_manage",
+			"session_search",
+			"skill_manage",
+			"event_manage",
+			"task_manage",
+			"subagent",
+			"web_search",
+			"web_fetch",
+		];
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", {
+			tools: names.map((name) => ({ name, description: name })),
+		});
+		expect(prompt.length).toBeLessThan(9_000);
 	});
 });
