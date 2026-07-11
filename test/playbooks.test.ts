@@ -1,12 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildAppendSystemPrompt } from "../src/agent/prompt-builder.js";
 import { PLAYBOOKS_DIR } from "../src/paths.js";
 import { loadRuntimePlaybookCatalog, renderRuntimePlaybookIndex } from "../src/playbooks/catalog.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { guardPath } from "../src/security/path-guard.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 const EXPECTED_PLAYBOOKS = [
 	"event-scheduling.md",
@@ -20,10 +20,7 @@ const EXPECTED_PLAYBOOKS = [
 	"task-repair.md",
 ];
 
-const tempDirs: string[] = [];
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+const makeTempDir = useTempDirs("pipiclaw-playbooks-");
 
 describe("runtime playbook catalog", () => {
 	it("loads every playbook from its name/description metadata", () => {
@@ -37,8 +34,7 @@ describe("runtime playbook catalog", () => {
 	});
 
 	it("rejects missing or mismatched trigger metadata", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pipiclaw-playbook-catalog-"));
-		tempDirs.push(dir);
+		const dir = makeTempDir();
 		writeFileSync(join(dir, "broken.md"), "# no metadata\n");
 		expect(() => loadRuntimePlaybookCatalog(dir)).toThrow("has no YAML frontmatter");
 
@@ -72,8 +68,7 @@ describe("runtime playbook catalog", () => {
 
 describe("path guard access to bundled playbooks", () => {
 	function createCtx() {
-		const root = mkdtempSync(join(tmpdir(), "pipiclaw-playbooks-guard-"));
-		tempDirs.push(root);
+		const root = makeTempDir();
 		const homeDir = join(root, "home");
 		const workspaceDir = join(homeDir, "workspace");
 		mkdirSync(workspaceDir, { recursive: true });

@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const runWebFetchMock = vi.hoisted(() => vi.fn());
@@ -9,14 +6,9 @@ vi.mock("../src/web/fetch.js", () => ({ runWebFetch: runWebFetchMock }));
 import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { createWebFetchTool } from "../src/tools/web-fetch.js";
 import { UNTRUSTED_WEB_CONTENT_BANNER } from "../src/web/format.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createChannel(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-web-fetch-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createChannel = useTempDirs("pipiclaw-web-fetch-");
 
 function makeTool(channelDir: string) {
 	return createWebFetchTool({
@@ -37,9 +29,6 @@ function mockFullBody(body: string) {
 
 afterEach(() => {
 	runWebFetchMock.mockReset();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("web_fetch tool caching + pagination", () => {

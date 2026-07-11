@@ -1,16 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverMemoryMaintenanceChannels, MemoryMaintenanceScheduler } from "../src/memory/scheduler.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-maintenance-scheduler-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempDir = useTempDirs("pipiclaw-maintenance-scheduler-");
 
 function maintenanceSettings(enabled = true) {
 	return {
@@ -29,9 +23,6 @@ function maintenanceSettings(enabled = true) {
 
 afterEach(() => {
 	vi.useRealTimers();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("memory maintenance scheduler", () => {

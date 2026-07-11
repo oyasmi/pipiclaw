@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "fs";
+import { readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -28,9 +28,9 @@ import {
 } from "../../src/memory/maintenance-jobs.js";
 import { updateMemoryMaintenanceState } from "../../src/memory/maintenance-state.js";
 import { runRetriedSidecarTask, runSidecarTask } from "../../src/memory/sidecar-worker.js";
-import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
+import { setupChannelFiles, useTempDirs } from "../helpers/fixtures.js";
 
-const tempDirs: string[] = [];
+const makeWorkspace = useTempDirs("pipiclaw-memory-lifecycle-");
 const TEST_MODEL = { provider: "test", id: "noop" } as never;
 
 function createFakePi() {
@@ -60,10 +60,9 @@ async function waitForAssertion(assertion: () => void | Promise<void>): Promise<
 }
 
 function createLifecycleHarness(settings?: Partial<ReturnType<typeof createSettings>>) {
-	const workspaceDir = createTempWorkspace("pipiclaw-memory-lifecycle-");
+	const workspaceDir = makeWorkspace();
 	const appHomeDir = join(workspaceDir, ".app");
 	const channelDir = join(workspaceDir, "dm_123");
-	tempDirs.push(workspaceDir);
 	setupChannelFiles(channelDir, {
 		session: "# Session Title\n\nLegacy task\n",
 		memory: "# Channel Memory\n\n## Constraints\n\n- Keep schema stable.\n",
@@ -155,9 +154,6 @@ function createSettings(
 afterEach(() => {
 	vi.useRealTimers();
 	vi.resetAllMocks();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("memory-lifecycle integration", () => {

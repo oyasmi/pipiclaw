@@ -1,4 +1,4 @@
-import { rmSync, writeFileSync } from "fs";
+import { writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -8,23 +8,19 @@ vi.mock("../../src/memory/sidecar-worker.js", () => ({
 
 import { recallRelevantMemory } from "../../src/memory/recall.js";
 import { runSidecarTask } from "../../src/memory/sidecar-worker.js";
-import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
+import { setupChannelFiles, useTempDirs } from "../helpers/fixtures.js";
 
-const tempDirs: string[] = [];
+const makeWorkspace = useTempDirs("pipiclaw-recall-scoring-");
 const TEST_MODEL = { provider: "test", id: "noop" } as never;
 
 function createWorkspace() {
-	const workspaceDir = createTempWorkspace("pipiclaw-recall-scoring-");
+	const workspaceDir = makeWorkspace();
 	const channelDir = join(workspaceDir, "dm_123");
-	tempDirs.push(workspaceDir);
 	return { workspaceDir, channelDir };
 }
 
 afterEach(() => {
 	vi.clearAllMocks();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("recall scoring integration", () => {

@@ -1,25 +1,18 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildMemoryCandidates, createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
+const makeWorkspace = useTempDirs("pipiclaw-recall-");
 
 function createTempWorkspace(): { workspaceDir: string; channelDir: string } {
-	const workspaceDir = mkdtempSync(join(tmpdir(), "pipiclaw-recall-"));
+	const workspaceDir = makeWorkspace();
 	const channelDir = join(workspaceDir, "dm_123");
 	mkdirSync(channelDir, { recursive: true });
-	tempDirs.push(workspaceDir);
 	return { workspaceDir, channelDir };
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
 describe("memory candidates", () => {
 	it("builds candidates from workspace, session, memory, and history files", async () => {

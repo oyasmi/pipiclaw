@@ -1,22 +1,10 @@
-import { mkdtempSync, readdirSync, rmSync, utimesSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readWebCache, WEB_CACHE_TTL_MS, webCacheKey, writeWebCache } from "../src/tools/web-cache.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createChannel(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-web-cache-"));
-	tempDirs.push(dir);
-	return dir;
-}
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+const createChannel = useTempDirs("pipiclaw-web-cache-");
 
 describe("web cache", () => {
 	it("round-trips a cached body", async () => {

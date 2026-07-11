@@ -1,19 +1,13 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
 import type { EventAction } from "../src/runtime/events.js";
 import { EventsWatcher } from "../src/runtime/events.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-events-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempDir = useTempDirs("pipiclaw-events-");
 
 function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 	parseEvent(content: string, filename: string): unknown;
@@ -133,9 +127,6 @@ beforeEach(() => {
 afterEach(() => {
 	vi.useRealTimers();
 	vi.restoreAllMocks();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("EventsWatcher", () => {

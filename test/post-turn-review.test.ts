@@ -1,16 +1,15 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { applyPostTurnReviewResult, parsePostTurnReviewResult } from "../src/memory/post-turn-review.js";
-import { createTempWorkspace, setupChannelFiles } from "./helpers/fixtures.js";
+import { setupChannelFiles, useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
+const makeWorkspace = useTempDirs("pipiclaw-post-turn-review-");
 const TEST_MODEL = { provider: "test", id: "noop" } as never;
 
 function createWorkspace(): { workspaceDir: string; channelDir: string } {
-	const workspaceDir = createTempWorkspace("pipiclaw-post-turn-review-");
+	const workspaceDir = makeWorkspace();
 	const channelDir = join(workspaceDir, "dm_123");
-	tempDirs.push(workspaceDir);
 	setupChannelFiles(channelDir, {
 		memory: "# Channel Memory\n",
 		session: "# Session Title\n\nActive task\n",
@@ -35,12 +34,6 @@ function baseOptions(workspaceDir: string, channelDir: string) {
 		loadedSkills: [],
 	};
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
 describe("post-turn review", () => {
 	it("normalizes parsed review JSON", () => {

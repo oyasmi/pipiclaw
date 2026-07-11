@@ -1,31 +1,23 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	DEFAULT_SECURITY_CONFIG,
 	loadSecurityConfig,
 	loadSecurityConfigWithDiagnostics,
 } from "../src/security/config.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+const makeTempDir = useTempDirs("pipiclaw-security-config-");
 
 describe("security config", () => {
 	it("returns defaults when no app-home config exists", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-security-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 		expect(loadSecurityConfig(appHomeDir)).toEqual(DEFAULT_SECURITY_CONFIG);
 	});
 
 	it("merges app-home overrides with defaults", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-security-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 		writeFileSync(
 			join(appHomeDir, "security.json"),
 			JSON.stringify({
@@ -60,8 +52,7 @@ describe("security config", () => {
 	});
 
 	it("loads generated local security config with network guard disabled", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-security-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 		writeFileSync(
 			join(appHomeDir, "security.json"),
 			JSON.stringify({
@@ -90,8 +81,7 @@ describe("security config", () => {
 	});
 
 	it("reports diagnostics for invalid json and invalid fields", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-security-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 		writeFileSync(
 			join(appHomeDir, "security.json"),
 			JSON.stringify({

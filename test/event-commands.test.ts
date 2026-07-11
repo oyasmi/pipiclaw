@@ -1,16 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { handleEventsCommand } from "../src/runtime/event-commands.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-event-commands-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempDir = useTempDirs("pipiclaw-event-commands-");
 
 function createWorkspace(): { workspaceDir: string; eventsDir: string; historyPath: string } {
 	const appHome = createTempDir();
@@ -25,12 +19,6 @@ function createWorkspace(): { workspaceDir: string; eventsDir: string; historyPa
 async function runCommand(workspaceDir: string, historyPath: string, args: string): Promise<string> {
 	return await handleEventsCommand({ args, workspaceDir, historyPath });
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
 describe("event commands", () => {
 	it("lists event summaries and marks invalid event files", async () => {

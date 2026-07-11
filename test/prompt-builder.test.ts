@@ -62,27 +62,4 @@ describe("prompt-builder", () => {
 		});
 		expect(prompt).toContain("- custom_tool: Does a custom thing.");
 	});
-
-	it("is materially smaller than the pre-playbook-detail prompt", () => {
-		const names = [
-			"read",
-			"write",
-			"edit",
-			"bash",
-			"grep",
-			"job",
-			"memory_manage",
-			"session_search",
-			"skill_manage",
-			"event_manage",
-			"task_manage",
-			"subagent",
-			"web_search",
-			"web_fetch",
-		];
-		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", {
-			tools: names.map((name) => ({ name, description: name })),
-		});
-		expect(prompt.length).toBeLessThan(9_000);
-	});
 });

@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -23,21 +22,12 @@ vi.mock("../src/memory/sidecar-worker.js", () => ({
 import { readChannelSession } from "../src/memory/files.js";
 import { renderSessionMemory, updateChannelSessionMemory } from "../src/memory/session.js";
 import { runRetriedSidecarTask, SidecarParseError } from "../src/memory/sidecar-worker.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempChannel(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-session-memory-"));
-	mkdirSync(dir, { recursive: true });
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempChannel = useTempDirs("pipiclaw-session-memory-");
 
 afterEach(() => {
 	vi.clearAllMocks();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("session-memory", () => {

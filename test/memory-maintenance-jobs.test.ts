@@ -1,5 +1,3 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -38,8 +36,9 @@ import { updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js
 import { runPostTurnReview } from "../src/memory/post-turn-review.js";
 import { updateChannelSessionMemory } from "../src/memory/session.js";
 import { runSidecarTask } from "../src/memory/sidecar-worker.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
+const makeTempDir = useTempDirs("pipiclaw-maintenance-jobs-");
 const TEST_MODEL = { provider: "test", id: "noop" } as never;
 const messages = [
 	{ role: "user", content: "Please remember the deployment decision." },
@@ -87,8 +86,7 @@ function settings() {
 }
 
 async function harness() {
-	const workspaceDir = mkdtempSync(join(tmpdir(), "pipiclaw-maintenance-jobs-"));
-	tempDirs.push(workspaceDir);
+	const workspaceDir = makeTempDir();
 	const appHomeDir = join(workspaceDir, ".app");
 	const channelDir = join(workspaceDir, "dm_1");
 	await ensureChannelMemoryFiles(channelDir);
@@ -97,9 +95,6 @@ async function harness() {
 
 afterEach(() => {
 	vi.clearAllMocks();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("memory maintenance jobs", () => {

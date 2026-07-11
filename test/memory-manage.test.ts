@@ -1,19 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import { readFileSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { applyChannelMemoryOps, parseChannelMemoryEntries, readChannelMemory } from "../src/memory/files.js";
 import { getMemoryReviewLogPath } from "../src/memory/review-log.js";
 import { createMemoryManageTool } from "../src/tools/memory-manage.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempChannel(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-memory-manage-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempChannel = useTempDirs("pipiclaw-memory-manage-");
 
 function makeTool(channelDir: string, overrides: Record<string, unknown> = {}) {
 	return createMemoryManageTool({
@@ -34,12 +28,6 @@ async function runText(
 	const result = await tool.execute("call", { label: "memory", ...args } as never);
 	return result.content[0].type === "text" ? result.content[0].text : "";
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
 describe("memory_manage tool", () => {
 	it("saves a durable entry and invalidates the candidate cache", async () => {

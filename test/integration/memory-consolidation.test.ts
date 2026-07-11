@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "fs";
+import { readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -22,16 +22,15 @@ vi.mock("../../src/memory/sidecar-worker.js", () => ({
 import { cleanupChannelMemory, foldChannelHistory, runInlineConsolidation } from "../../src/memory/consolidation.js";
 import { readChannelHistory, readChannelMemory } from "../../src/memory/files.js";
 import { runRetriedSidecarTask, runSidecarTask } from "../../src/memory/sidecar-worker.js";
-import { createTempWorkspace, setupChannelFiles } from "../helpers/fixtures.js";
+import { setupChannelFiles, useTempDirs } from "../helpers/fixtures.js";
 
-const tempDirs: string[] = [];
+const makeWorkspace = useTempDirs("pipiclaw-memory-consolidation-");
 
 const TEST_MODEL = { provider: "test", id: "noop" } as never;
 
 function createChannelDir(): string {
-	const workspaceDir = createTempWorkspace("pipiclaw-memory-consolidation-");
+	const workspaceDir = makeWorkspace();
 	const channelDir = join(workspaceDir, "dm_123");
-	tempDirs.push(workspaceDir);
 	return channelDir;
 }
 
@@ -45,9 +44,6 @@ function createAssistantMessage(text: string) {
 
 afterEach(() => {
 	vi.clearAllMocks();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("memory-consolidation integration", () => {

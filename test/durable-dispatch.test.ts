@@ -1,17 +1,11 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function tempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-dispatch-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const tempDir = useTempDirs("pipiclaw-dispatch-");
 
 function event(): DingTalkEvent {
 	return {
@@ -25,10 +19,6 @@ function event(): DingTalkEvent {
 		conversationType: "1",
 	};
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 describe("DurableDispatchService", () => {
 	it("persists a queue-rejected dispatch and later delivers it", async () => {

@@ -1,14 +1,13 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildSessionCorpus } from "../src/memory/session-corpus.js";
-import { createTempWorkspace } from "./helpers/fixtures.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
+const makeWorkspace = useTempDirs("pipiclaw-corpus-limit-");
 
 function createChannelDir(): string {
-	const workspaceDir = createTempWorkspace("pipiclaw-corpus-limit-");
-	tempDirs.push(workspaceDir);
+	const workspaceDir = makeWorkspace();
 	const channelDir = join(workspaceDir, "dm_123");
 	mkdirSync(channelDir, { recursive: true });
 	return channelDir;
@@ -17,12 +16,6 @@ function createChannelDir(): string {
 function writeJsonl(path: string, entries: unknown[]): void {
 	writeFileSync(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf-8");
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
 describe("session corpus limits", () => {
 	it("caps documents at maxDocumentsTotal and keeps newest", async () => {

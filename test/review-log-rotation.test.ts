@@ -1,23 +1,15 @@
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { appendMemoryReviewLog, getMemoryReviewLogPath } from "../src/memory/review-log.js";
-import { createTempWorkspace } from "./helpers/fixtures.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
+const createTempDir = useTempDirs("pipiclaw-review-rotation-");
 
 function createChannelDir(): string {
-	const workspaceDir = createTempWorkspace("pipiclaw-review-rotation-");
-	tempDirs.push(workspaceDir);
-	return join(workspaceDir, "dm_123");
+	return join(createTempDir(), "dm_123");
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
 describe("review log rotation", () => {
 	it("rotates when file exceeds 1MB", async () => {

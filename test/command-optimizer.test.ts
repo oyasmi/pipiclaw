@@ -1,19 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
+import type { ExecResult } from "../src/executor.js";
 import { maybeOptimizeCommand } from "../src/tools/command-optimizer.js";
-
-class RecordingExecutor implements Executor {
-	public readonly calls: Array<{ command: string; options?: ExecOptions }> = [];
-
-	constructor(
-		private readonly handler: (command: string, options?: ExecOptions) => Promise<ExecResult> | ExecResult,
-	) {}
-
-	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
-		this.calls.push({ command, options });
-		return this.handler(command, options);
-	}
-}
+import { RecordingExecutor } from "./helpers/recording-executor.js";
 
 const OK = (stdout: string): ExecResult => ({ code: 0, stdout, stderr: "" });
 

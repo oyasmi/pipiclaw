@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent, DingTalkHandler } from "../src/runtime/dingtalk.js";
@@ -88,14 +87,9 @@ vi.mock("dingtalk-stream", () => ({
 }));
 
 import { DingTalkBot } from "../src/runtime/dingtalk.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-dingtalk-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempDir = useTempDirs("pipiclaw-dingtalk-");
 
 function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandler {
 	return {
@@ -187,9 +181,6 @@ beforeEach(() => {
 afterEach(() => {
 	vi.useRealTimers();
 	vi.restoreAllMocks();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("dingtalk", () => {

@@ -1,8 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import type { ModelRegistry, Skill } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -16,6 +15,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 
 import { getAgentConfig, getSoul, loadPipiclawSkills } from "../src/agent/workspace-resources.js";
 import { getApiKeyForModel } from "../src/models/api-keys.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 const anthropicModel = getModel("anthropic", "claude-sonnet-4-5");
 
@@ -23,13 +23,7 @@ if (!anthropicModel) {
 	throw new Error("Expected anthropic test model");
 }
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-config-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempDir = useTempDirs("pipiclaw-config-");
 
 function makeSkill(name: string, filePath: string, baseDir: string, source: string): Skill {
 	return {
@@ -45,9 +39,6 @@ function makeSkill(name: string, filePath: string, baseDir: string, source: stri
 afterEach(() => {
 	loadSkillsFromDirMock.mockReset();
 	delete process.env.ANTHROPIC_API_KEY;
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("config-loader", () => {

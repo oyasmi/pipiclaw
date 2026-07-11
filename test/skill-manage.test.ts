@@ -1,17 +1,11 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createSkillManageTool, listWorkspaceSkills, manageWorkspaceSkill } from "../src/tools/skill-manage.js";
-import { createTempWorkspace } from "./helpers/fixtures.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createWorkspace(): string {
-	const workspaceDir = createTempWorkspace("pipiclaw-skill-manage-");
-	tempDirs.push(workspaceDir);
-	return workspaceDir;
-}
+const createWorkspace = useTempDirs("pipiclaw-skill-manage-");
 
 function skillMarkdown(name: string): string {
 	return `---
@@ -24,12 +18,6 @@ description: Test workflow
 Follow the workflow.
 `;
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
 describe("skill manage", () => {
 	it("creates a valid workspace skill", async () => {

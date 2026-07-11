@@ -1,21 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PipiclawSettingsManager } from "../src/settings.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+const makeTempDir = useTempDirs("pipiclaw-settings-");
 
 describe("settings manager", () => {
 	it("reports parse errors and falls back to defaults", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 		writeFileSync(join(appHomeDir, "settings.json"), "{", "utf-8");
 
 		const manager = new PipiclawSettingsManager(appHomeDir);
@@ -28,9 +21,8 @@ describe("settings manager", () => {
 	});
 
 	it("allows skill auto-write confidence to be raised but not lowered below the safety floor", () => {
-		const lowDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
-		const highDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
-		tempDirs.push(lowDir, highDir);
+		const lowDir = makeTempDir();
+		const highDir = makeTempDir();
 		writeFileSync(
 			join(lowDir, "settings.json"),
 			JSON.stringify({ memoryGrowth: { minSkillAutoWriteConfidence: 0.5 } }),
@@ -47,10 +39,9 @@ describe("settings manager", () => {
 	});
 
 	it("resolves the fallback model reference, treating empty/missing as unset", () => {
-		const setDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
-		const blankDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
-		const missingDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
-		tempDirs.push(setDir, blankDir, missingDir);
+		const setDir = makeTempDir();
+		const blankDir = makeTempDir();
+		const missingDir = makeTempDir();
 		writeFileSync(
 			join(setDir, "settings.json"),
 			JSON.stringify({ fallbackModel: "  openai/gpt-4o-mini  " }),
@@ -65,9 +56,8 @@ describe("settings manager", () => {
 	});
 
 	it("enables the native task driver by default and clamps unsafe cadence settings", () => {
-		const defaultsDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
-		const configuredDir = mkdtempSync(join(tmpdir(), "pipiclaw-settings-"));
-		tempDirs.push(defaultsDir, configuredDir);
+		const defaultsDir = makeTempDir();
+		const configuredDir = makeTempDir();
 		writeFileSync(join(defaultsDir, "settings.json"), "{}", "utf-8");
 		writeFileSync(
 			join(configuredDir, "settings.json"),

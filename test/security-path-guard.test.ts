@@ -1,15 +1,14 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { guardPath } from "../src/security/path-guard.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
+const makeTempDir = useTempDirs("pipiclaw-security-");
 
 function createFixture() {
-	const root = mkdtempSync(join(tmpdir(), "pipiclaw-security-"));
-	tempDirs.push(root);
+	const root = makeTempDir();
 	const homeDir = join(root, "home");
 	const workspaceDir = join(homeDir, "workspace");
 	mkdirSync(workspaceDir, { recursive: true });
@@ -23,12 +22,6 @@ function createFixture() {
 	writeFileSync(tempFile, "temp", "utf-8");
 	return { root, homeDir, workspaceDir, tempFile };
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
 describe("security path guard", () => {
 	it("allows workspace, home, and temp paths", () => {

@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/memory/sidecar-worker.js", () => ({
@@ -16,20 +13,12 @@ import {
 } from "../src/memory/consolidation.js";
 import { applyChannelMemoryOps, parseChannelMemoryEntries, readChannelMemory } from "../src/memory/files.js";
 import { runRetriedSidecarTask, runSidecarTask } from "../src/memory/sidecar-worker.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempChannel(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-consol-ops-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempChannel = useTempDirs("pipiclaw-consol-ops-");
 
 afterEach(() => {
 	vi.clearAllMocks();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 const fakeModel = { id: "test" } as never;

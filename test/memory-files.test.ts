@@ -1,7 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, unlinkSync } from "fs";
-import { tmpdir } from "os";
+import { readFileSync, unlinkSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	appendChannelHistoryBlock,
 	appendChannelMemoryUpdate,
@@ -14,20 +13,9 @@ import {
 	rewriteChannelSession,
 } from "../src/memory/files.js";
 import { splitH2Sections } from "../src/shared/markdown-sections.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-memory-"));
-	tempDirs.push(dir);
-	return dir;
-}
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+const createTempDir = useTempDirs("pipiclaw-memory-");
 
 describe("memory-files", () => {
 	it("creates default memory, session, and history files", async () => {

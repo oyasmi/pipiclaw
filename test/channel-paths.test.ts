@@ -1,22 +1,10 @@
-import { existsSync, mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
+import { existsSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ensureChannelDir, getChannelDir, getChannelDirName } from "../src/runtime/channel-paths.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-channel-paths-"));
-	tempDirs.push(dir);
-	return dir;
-}
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+const createTempDir = useTempDirs("pipiclaw-channel-paths-");
 
 describe("channel-paths", () => {
 	it("maps slashes in channel ids to double underscores", () => {

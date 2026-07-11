@@ -1,21 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ChannelJobManager } from "../src/agent/job-manager.js";
-import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
 import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
-
-class RecordingExecutor implements Executor {
-	public readonly calls: Array<{ command: string; options?: ExecOptions }> = [];
-
-	constructor(
-		private readonly handler: (command: string, options?: ExecOptions) => Promise<ExecResult> | ExecResult,
-	) {}
-
-	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
-		this.calls.push({ command, options });
-		return this.handler(command, options);
-	}
-}
+import { RecordingExecutor } from "./helpers/recording-executor.js";
 
 describe("bash tool", () => {
 	it("uses the caller-provided default timeout and returns empty output markers", async () => {

@@ -1,17 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getChannelDirName } from "../src/runtime/channel-paths.js";
 import { ChannelStore, type LoggedSubAgentRun } from "../src/runtime/store.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-store-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempDir = useTempDirs("pipiclaw-store-");
 
 function sampleSubAgentRun(): LoggedSubAgentRun {
 	return {
@@ -47,9 +41,6 @@ function sampleSubAgentRun(): LoggedSubAgentRun {
 
 afterEach(() => {
 	vi.useRealTimers();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("ChannelStore", () => {

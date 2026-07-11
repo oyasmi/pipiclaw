@@ -1,5 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,14 +11,9 @@ import {
 	parseArgs,
 } from "../src/runtime/bootstrap.js";
 import { ChannelStore } from "../src/runtime/store.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-bootstrap-"));
-	tempDirs.push(dir);
-	return dir;
-}
+const createTempDir = useTempDirs("pipiclaw-bootstrap-");
 
 function createBootstrapPaths(): BootstrapPaths {
 	const appHomeDir = createTempDir();
@@ -47,9 +41,6 @@ function createIO() {
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
 });
 
 describe("bootstrap", () => {

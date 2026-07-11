@@ -1,8 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createChannelMemoryQueue } from "../src/memory/channel-maintenance-queue.js";
 import {
 	applyMemoryActivityToState,
@@ -10,20 +8,9 @@ import {
 	readMemoryMaintenanceState,
 	updateMemoryMaintenanceState,
 } from "../src/memory/maintenance-state.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-maintenance-state-"));
-	tempDirs.push(dir);
-	return dir;
-}
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+const createTempDir = useTempDirs("pipiclaw-maintenance-state-");
 
 describe("channel maintenance queue", () => {
 	it("serializes same-channel jobs and continues after failures", async () => {

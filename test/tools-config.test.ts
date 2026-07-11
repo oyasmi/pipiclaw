@@ -1,28 +1,20 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_TOOLS_CONFIG, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../src/tools/config.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+const makeTempDir = useTempDirs("pipiclaw-tools-config-");
 
 describe("tools config", () => {
 	it("returns defaults when tools.json is missing", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 
 		expect(loadToolsConfig(appHomeDir)).toEqual(DEFAULT_TOOLS_CONFIG);
 	});
 
 	it("merges tools.web overrides", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 		writeFileSync(
 			join(appHomeDir, "tools.json"),
 			JSON.stringify({
@@ -76,8 +68,7 @@ describe("tools config", () => {
 	});
 
 	it("defaults the jobs and bashInterceptor gates to on (explicit values, not circular self-compare)", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 
 		const loaded = loadToolsConfig(appHomeDir);
 		expect(loaded.tools.jobs.enabled).toBe(true);
@@ -95,8 +86,7 @@ describe("tools config", () => {
 	});
 
 	it("defaults tools.rtk.enabled to false and honors an explicit opt-in", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 
 		expect(loadToolsConfig(appHomeDir).tools.rtk.enabled).toBe(false);
 
@@ -108,8 +98,7 @@ describe("tools config", () => {
 	});
 
 	it("falls back to defaults for invalid values", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 		writeFileSync(
 			join(appHomeDir, "tools.json"),
 			JSON.stringify({
@@ -133,8 +122,7 @@ describe("tools config", () => {
 	});
 
 	it("reports diagnostics for invalid json and invalid fields", () => {
-		const appHomeDir = mkdtempSync(join(tmpdir(), "pipiclaw-tools-config-"));
-		tempDirs.push(appHomeDir);
+		const appHomeDir = makeTempDir();
 		writeFileSync(
 			join(appHomeDir, "tools.json"),
 			JSON.stringify({

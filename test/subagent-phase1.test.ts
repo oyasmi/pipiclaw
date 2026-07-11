@@ -2,10 +2,9 @@ import { execFileSync } from "node:child_process";
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createExecutor, type Executor } from "../src/executor.js";
 import { ChannelStore } from "../src/runtime/store.js";
 import { renderTaskDocument } from "../src/shared/task-ledger.js";
@@ -13,6 +12,7 @@ import { discoverSubAgents, getSubAgentsDir, resolveSubAgentConfig } from "../sr
 import { createSubAgentTool } from "../src/subagents/tool.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { readVerificationAttestation } from "../src/tasks/verification.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 const model = getModel("openai", "gpt-4o-mini")!;
 
@@ -74,19 +74,7 @@ function createAssistantMessage(
 	};
 }
 
-const tempDirs: string[] = [];
-
-function createTempWorkspace(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-subagent-"));
-	tempDirs.push(dir);
-	return dir;
-}
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+const createTempWorkspace = useTempDirs("pipiclaw-subagent-");
 
 describe("sub-agent discovery", () => {
 	it("ignores predefined prompts that exceed the length limit", () => {

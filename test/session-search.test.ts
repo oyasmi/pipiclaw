@@ -1,9 +1,9 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionCorpus } from "../src/memory/session-corpus.js";
 import { searchChannelSessions } from "../src/memory/session-search.js";
-import { createTempWorkspace } from "./helpers/fixtures.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 const { runSidecarTaskMock } = vi.hoisted(() => ({
 	runSidecarTaskMock: vi.fn(),
@@ -13,24 +13,17 @@ vi.mock("../src/memory/sidecar-worker.js", () => ({
 	runSidecarTask: runSidecarTaskMock,
 }));
 
-const tempDirs: string[] = [];
+const makeWorkspace = useTempDirs("pipiclaw-session-search-");
 const TEST_MODEL = { provider: "test", id: "noop" } as never;
 
 function createWorkspace(): string {
-	const workspaceDir = createTempWorkspace("pipiclaw-session-search-");
-	tempDirs.push(workspaceDir);
+	const workspaceDir = makeWorkspace();
 	return workspaceDir;
 }
 
 function writeJsonl(path: string, entries: unknown[]): void {
 	writeFileSync(path, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf-8");
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
 
 beforeEach(() => {
 	runSidecarTaskMock.mockReset();
