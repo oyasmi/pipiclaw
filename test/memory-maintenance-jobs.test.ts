@@ -168,7 +168,6 @@ describe("memory maintenance jobs", () => {
 			] as never[],
 			sessionEntries,
 			workspaceDir,
-			workspacePath: workspaceDir,
 			loadedSkills: [],
 		});
 

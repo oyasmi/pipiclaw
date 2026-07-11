@@ -56,7 +56,6 @@ export interface DurableConsolidationJobInput extends BaseMaintenanceJobInput {}
 
 export interface GrowthReviewJobInput extends BaseMaintenanceJobInput {
 	workspaceDir: string;
-	workspacePath: string;
 	loadedSkills: Array<{ name: string; description?: string }>;
 	emitNotice?: (notice: string) => Promise<void>;
 	refreshWorkspaceResources?: () => Promise<void>;
@@ -349,7 +348,6 @@ export async function runGrowthReviewJob(input: GrowthReviewJobInput): Promise<M
 				channelId: input.channelId,
 				channelDir: input.channelDir,
 				workspaceDir: input.workspaceDir,
-				workspacePath: input.workspacePath,
 				messages: input.messages,
 				model: input.model,
 				resolveApiKey: input.resolveApiKey,

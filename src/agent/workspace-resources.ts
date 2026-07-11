@@ -47,22 +47,7 @@ export function getAgentConfig(channelDir: string): string {
 /**
  * Load skills from the workspace-level skill directory only.
  */
-export function loadPipiclawSkills(channelDir: string, workspacePath: string): Skill[] {
-	const hostWorkspacePath = join(channelDir, "..");
-
-	const translatePath = (hostPath: string): string => {
-		if (hostPath.startsWith(hostWorkspacePath)) {
-			return workspacePath + hostPath.slice(hostWorkspacePath.length);
-		}
-		return hostPath;
-	};
-
-	const workspaceSkillsDir = join(hostWorkspacePath, "skills");
-	const skills = loadSkillsFromDir({ dir: workspaceSkillsDir, source: "workspace" }).skills;
-	for (const skill of skills) {
-		skill.filePath = translatePath(skill.filePath);
-		skill.baseDir = translatePath(skill.baseDir);
-	}
-
-	return skills;
+export function loadPipiclawSkills(channelDir: string): Skill[] {
+	const workspaceSkillsDir = join(channelDir, "..", "skills");
+	return loadSkillsFromDir({ dir: workspaceSkillsDir, source: "workspace" }).skills;
 }

@@ -104,19 +104,6 @@ describe("bootstrap", () => {
 		expect(statSync(paths.authConfigPath).mode & 0o777).toBe(0o600);
 	});
 
-	it("rejects an invalid --sandbox argument with exit code 1", () => {
-		const paths = createBootstrapPaths();
-		const io = createIO();
-
-		expect(() => parseArgs(["node", "main", "--sandbox=weird"], paths, io)).toThrowError(BootstrapExitError);
-		try {
-			parseArgs(["node", "main", "--sandbox=weird"], paths, io);
-		} catch (error) {
-			expect((error as BootstrapExitError).code).toBe(1);
-		}
-		expect(io.error).toHaveBeenCalledWith(expect.stringContaining("Invalid sandbox type"));
-	});
-
 	it("parses help and exits with code 0", () => {
 		const paths = createBootstrapPaths();
 		const io = createIO();

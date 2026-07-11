@@ -31,11 +31,10 @@ afterEach(() => {
 });
 
 describe("security path guard", () => {
-	it("allows workspace, home, temp, and docker workspace paths", () => {
+	it("allows workspace, home, and temp paths", () => {
 		const fixture = createFixture();
 		const ctx = {
 			workspaceDir: fixture.workspaceDir,
-			workspacePath: "/workspace",
 			homeDir: fixture.homeDir,
 			cwd: fixture.workspaceDir,
 			config: DEFAULT_SECURITY_CONFIG.pathGuard,
@@ -44,7 +43,7 @@ describe("security path guard", () => {
 		expect(guardPath("file.txt", "read", ctx)).toMatchObject({ allowed: true });
 		expect(guardPath(join(fixture.homeDir, "notes", "todo.md"), "write", ctx)).toMatchObject({ allowed: true });
 		expect(guardPath(fixture.tempFile, "read", ctx)).toMatchObject({ allowed: true });
-		expect(guardPath("/workspace/subdir/out.txt", "write", ctx)).toMatchObject({ allowed: true });
+		expect(guardPath(join(fixture.workspaceDir, "subdir", "out.txt"), "write", ctx)).toMatchObject({ allowed: true });
 	});
 
 	it("blocks sensitive reads and symlink traversal", () => {
@@ -53,7 +52,6 @@ describe("security path guard", () => {
 		symlinkSync(join(fixture.homeDir, ".ssh", "id_rsa"), linkPath);
 		const ctx = {
 			workspaceDir: fixture.workspaceDir,
-			workspacePath: fixture.workspaceDir,
 			homeDir: fixture.homeDir,
 			cwd: fixture.workspaceDir,
 			config: DEFAULT_SECURITY_CONFIG.pathGuard,
@@ -75,7 +73,6 @@ describe("security path guard", () => {
 		symlinkSync("/etc/passwd", linkPath);
 		const ctx = {
 			workspaceDir: fixture.workspaceDir,
-			workspacePath: fixture.workspaceDir,
 			homeDir: fixture.homeDir,
 			cwd: fixture.workspaceDir,
 			config: DEFAULT_SECURITY_CONFIG.pathGuard,

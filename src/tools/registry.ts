@@ -1,8 +1,8 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ChannelJobManager } from "../agent/job-manager.js";
+import type { Executor } from "../executor.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
-import type { Executor } from "../sandbox.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { PipiclawSessionSearchSettings } from "../settings.js";
 import { createBashTool } from "./bash.js";
@@ -36,7 +36,6 @@ export interface ToolBuildContext {
 	channelId: string;
 	channelDir: string;
 	workspaceDir: string;
-	workspacePath: string;
 	/** Main set: `toolsConfig.tools.web`; sub-agent set: the sub-agent's own webConfig. */
 	webConfig?: PipiclawWebToolsConfig;
 	/** Present only on the main path; gates session_search / memory_manage / skills. */
@@ -195,7 +194,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		promptHint: "List, view, create, or maintain workspace-level procedural memory in skills/",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.skills.manage.enabled !== false,
-		create: (ctx) => createSkillManageTool({ workspaceDir: ctx.workspaceDir, workspacePath: ctx.workspacePath }),
+		create: (ctx) => createSkillManageTool({ workspaceDir: ctx.workspaceDir }),
 	},
 	{
 		name: "event_manage",
@@ -209,7 +208,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		create: (ctx) =>
 			createEventManageTool({
 				workspaceDir: ctx.workspaceDir,
-				workspacePath: ctx.workspacePath,
 				channelId: ctx.channelId,
 				commandGuardConfig: ctx.securityConfig.commandGuard,
 			}),
@@ -225,7 +223,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		create: (ctx) =>
 			createTaskManageTool({
 				workspaceDir: ctx.workspaceDir,
-				workspacePath: ctx.workspacePath,
 				channelDir: ctx.channelDir,
 				channelId: ctx.channelId,
 				workingDirectory: ctx.securityContext.cwd,

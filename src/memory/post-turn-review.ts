@@ -21,7 +21,6 @@ export interface PostTurnReviewOptions {
 	channelId: string;
 	channelDir: string;
 	workspaceDir: string;
-	workspacePath: string;
 	messages: AgentMessage[];
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
@@ -226,7 +225,7 @@ async function applySkillCandidate(
 
 	try {
 		const managed = await manageWorkspaceSkill(
-			{ workspaceDir: options.workspaceDir, workspacePath: options.workspacePath },
+			{ workspaceDir: options.workspaceDir },
 			{
 				action: candidate.action,
 				name: candidate.name,

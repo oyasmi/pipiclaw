@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ExecOptions, ExecResult, Executor } from "../src/sandbox.js";
+import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createReadTool } from "../src/tools/read.js";
 import { writeContent } from "../src/tools/write-content.js";
@@ -15,10 +15,6 @@ class RecordingExecutor implements Executor {
 	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
 		this.calls.push({ command, options });
 		return this.result;
-	}
-
-	getWorkspacePath(hostPath: string): string {
-		return hostPath;
 	}
 }
 
@@ -45,7 +41,6 @@ describe("read/write tool security", () => {
 			securityConfig: DEFAULT_SECURITY_CONFIG,
 			securityContext: {
 				workspaceDir,
-				workspacePath: workspaceDir,
 				homeDir,
 				cwd: workspaceDir,
 			},
@@ -72,7 +67,6 @@ describe("read/write tool security", () => {
 				securityConfig: DEFAULT_SECURITY_CONFIG,
 				securityContext: {
 					workspaceDir,
-					workspacePath: workspaceDir,
 					homeDir,
 					cwd: workspaceDir,
 				},

@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
+import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
 import { buildFirstTurnMemoryBootstrap as renderFirstTurnMemoryBootstrap } from "../memory/bootstrap.js";
 import { createMemoryCandidateStore, type MemoryCandidateStore } from "../memory/candidates.js";
@@ -35,7 +36,6 @@ import { getApiKeyForModel } from "../models/api-keys.js";
 import { findExactModelReferenceMatch, formatModelReference, resolveInitialModel } from "../models/utils.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
-import { createExecutor, type Executor, type SandboxConfig } from "../sandbox.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostics.js";
@@ -104,13 +104,11 @@ function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsMana
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
 	private readonly executor: Executor;
-	private readonly sandboxConfig: SandboxConfig;
 	private readonly channelId: string;
 	private readonly channelDir: string;
 	private readonly appHomeDir: string;
 	private readonly authConfigPath: string;
 	private readonly modelsConfigPath: string;
-	private readonly workspacePath: string;
 	private readonly workspaceDir: string;
 	private session: AgentSession;
 	private agent: Agent;
@@ -139,21 +137,19 @@ export class ChannelRunner implements AgentRunner {
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
 
-	constructor(sandboxConfig: SandboxConfig, channelId: string, channelDir: string, paths: RunnerFactoryPaths) {
-		this.sandboxConfig = sandboxConfig;
+	constructor(channelId: string, channelDir: string, paths: RunnerFactoryPaths) {
 		this.channelId = channelId;
 		this.channelDir = channelDir;
 		this.appHomeDir = paths.appHomeDir;
 		this.authConfigPath = paths.authConfigPath;
 		this.modelsConfigPath = paths.modelsConfigPath;
 
-		const executor = createExecutor(sandboxConfig);
+		const executor = createExecutor();
 		this.executor = executor;
 		this.workspaceDir = resolve(dirname(channelDir));
-		this.workspacePath = executor.getWorkspacePath(this.workspaceDir);
 
 		// Initial skill summaries
-		const initialSkills = loadPipiclawSkills(channelDir, this.workspacePath);
+		const initialSkills = loadPipiclawSkills(channelDir);
 		this.currentSkills = initialSkills;
 
 		// Create session manager
@@ -581,7 +577,6 @@ export class ChannelRunner implements AgentRunner {
 			channelId: this.channelId,
 			channelDir: this.channelDir,
 			workspaceDir: this.workspaceDir,
-			workspacePath: this.workspacePath,
 			messages: [...this.session.messages],
 			sessionEntries: [...this.sessionManager.getBranch()],
 			model: this.session.model ?? this.activeModel,
@@ -782,7 +777,7 @@ export class ChannelRunner implements AgentRunner {
 	private async reloadSessionResources(): Promise<void> {
 		this.settingsManager.reload();
 		this.reportSettingsDiagnostics();
-		const skills = loadPipiclawSkills(this.channelDir, this.workspacePath);
+		const skills = loadPipiclawSkills(this.channelDir);
 		this.currentSkills = skills;
 		this.subAgentDiscovery = this.refreshSubAgentDiscovery();
 		this.rebuildSessionTools();
@@ -902,7 +897,7 @@ export class ChannelRunner implements AgentRunner {
 					sections.unshift(soul);
 				}
 				sections.push(
-					buildAppendSystemPrompt(this.workspacePath, this.channelId, this.sandboxConfig, {
+					buildAppendSystemPrompt(this.workspaceDir, this.channelId, {
 						subAgentList: formatSubAgentList(this.subAgentDiscovery.agents),
 						tools: this.currentTools.map((tool) => ({
 							name: tool.name,
@@ -916,7 +911,7 @@ export class ChannelRunner implements AgentRunner {
 			agentsFilesOverride: () => {
 				const agentConfig = getAgentConfig(this.channelDir);
 				return {
-					agentsFiles: agentConfig ? [{ path: `${this.workspacePath}/AGENTS.md`, content: agentConfig }] : [],
+					agentsFiles: agentConfig ? [{ path: `${this.workspaceDir}/AGENTS.md`, content: agentConfig }] : [],
 				};
 			},
 			skillsOverride: (base) => ({
@@ -987,9 +982,7 @@ export class ChannelRunner implements AgentRunner {
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			workspaceDir: this.workspaceDir,
 			channelDir: this.channelDir,
-			workspacePath: this.workspacePath,
 			channelId: this.channelId,
-			sandboxConfig: this.sandboxConfig,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,
 			getMemoryRecallSettings: () => this.settingsManager.getMemoryRecallSettings(),
 			getSessionSearchSettings: () => this.settingsManager.getSessionSearchSettings(),

@@ -6,8 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createExecutor, type Executor } from "../src/executor.js";
 import { ChannelStore } from "../src/runtime/store.js";
-import { createExecutor, type Executor } from "../src/sandbox.js";
 import { renderTaskDocument } from "../src/shared/task-ledger.js";
 import { discoverSubAgents, getSubAgentsDir, resolveSubAgentConfig } from "../src/subagents/discovery.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
@@ -19,9 +19,6 @@ const model = getModel("openai", "gpt-4o-mini")!;
 const fakeExecutor: Executor = {
 	async exec() {
 		return { stdout: "", stderr: "", code: 0 };
-	},
-	getWorkspacePath(hostPath: string) {
-		return hostPath;
 	},
 };
 
@@ -253,7 +250,7 @@ describe("sub-agent tool", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			channelDir,
-			runtimeContext: { workspacePath: workspaceDir, channelId: "dm_123", sandbox: "host" },
+			runtimeContext: { workspaceDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((input, worker) => {
 					delegatedTask = input;
@@ -305,14 +302,14 @@ describe("sub-agent tool", () => {
 		execFileSync("git", ["-C", repoDir, "commit", "-qm", "base"]);
 		let delegatedTask = "";
 		const tool = createSubAgentTool({
-			executor: createExecutor({ type: "host" }),
+			executor: createExecutor(),
 			workingDirectory: repoDir,
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			channelDir,
-			runtimeContext: { workspacePath: workspaceDir, channelId: "dm_123", sandbox: "host" },
+			runtimeContext: { workspaceDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((input, worker) => {
 					delegatedTask = input;
@@ -377,9 +374,8 @@ describe("sub-agent tool", () => {
 				],
 			}),
 			runtimeContext: {
-				workspacePath: "/workspace/root",
+				workspaceDir: "/workspace/root",
 				channelId: "dm_123",
-				sandbox: "host",
 			},
 			createWorker: () =>
 				new FakeWorker(async (input, worker) => {
@@ -506,9 +502,8 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 				],
 			}),
 			runtimeContext: {
-				workspacePath: "/workspace/root",
+				workspaceDir: "/workspace/root",
 				channelId: "dm_123",
-				sandbox: "host",
 			},
 			createWorker: () =>
 				new FakeWorker(async (input, worker) => {

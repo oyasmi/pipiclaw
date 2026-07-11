@@ -21,7 +21,6 @@ let eventsDir: string;
 function opts(overrides: Partial<EventManageToolOptions> = {}): EventManageToolOptions {
 	return {
 		workspaceDir,
-		workspacePath: "/workspace",
 		channelId: "dm_1",
 		commandGuardConfig: guard(),
 		...overrides,

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager } from "../agent/job-manager.js";
-import type { Executor } from "../sandbox.js";
+import type { Executor } from "../executor.js";
 import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
@@ -20,10 +20,9 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
 export const DEFAULT_BASH_TIMEOUT_SECONDS = 300;
 
 /**
- * Generate a unique spill file path for full bash output. This lives inside the
- * executor's filesystem (the sandbox), not the host, so the path we report back is
- * reachable by the same `read`/`bash` tools the model uses to open it. `/tmp` exists
- * and is writable in both the host and Docker (Alpine) sandboxes.
+ * Generate a unique spill file path for full bash output. It lives under `/tmp` so the
+ * path we report back is reachable by the same `read`/`bash` tools the model uses to
+ * open it.
  */
 function getSpillFilePath(): string {
 	const id = randomBytes(8).toString("hex");
@@ -132,7 +131,6 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		workspaceDir: process.cwd(),
-		workspacePath: process.cwd(),
 		cwd: process.cwd(),
 	};
 

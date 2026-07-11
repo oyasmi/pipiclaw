@@ -2,10 +2,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, wr
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
 import type { EventAction } from "../src/runtime/events.js";
 import { EventsWatcher } from "../src/runtime/events.js";
-import type { ExecOptions, ExecResult, Executor } from "../src/sandbox.js";
 
 const tempDirs: string[] = [];
 
@@ -103,9 +103,6 @@ function createMockExecutor(execImpl?: (command: string, options?: ExecOptions) 
 						return { stdout: "", stderr: "", code: 0 };
 				}
 			}),
-		getWorkspacePath(hostPath: string): string {
-			return hostPath;
-		},
 	};
 }
 

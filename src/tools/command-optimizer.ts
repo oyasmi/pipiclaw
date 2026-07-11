@@ -1,4 +1,4 @@
-import type { Executor } from "../sandbox.js";
+import type { Executor } from "../executor.js";
 import { shellEscape } from "../shared/shell-escape.js";
 
 /**
@@ -25,12 +25,10 @@ import { shellEscape } from "../shared/shell-escape.js";
 const RTK_TIMEOUT_SECONDS = 2;
 
 /**
- * rtk must exist in the *execution environment* — the host PATH for a host executor, or
- * inside the container for a docker executor — not merely on the pipiclaw host. We probe
- * through the executor so the check reflects where the command will actually run, and
- * memoize the probe promise per executor instance so concurrent turns share one probe and
- * we do not re-shell on every command. The instance is stable for a channel's lifetime,
- * so this is effectively "probe once".
+ * rtk must exist on the host PATH. We probe through the executor so the check reflects
+ * where the command will actually run, and memoize the probe promise per executor instance
+ * so concurrent turns share one probe and we do not re-shell on every command. The instance
+ * is stable for a channel's lifetime, so this is effectively "probe once".
  */
 const availabilityByExecutor = new WeakMap<Executor, Promise<boolean>>();
 

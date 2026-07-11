@@ -96,7 +96,6 @@ describe("createRuntimeContext", () => {
 
 		const runtime = createRuntimeContext({
 			paths,
-			sandbox: { type: "host" },
 			dingtalkConfig: {
 				clientId: "client-id",
 				clientSecret: "client-secret",
@@ -135,7 +134,6 @@ describe("createRuntimeContext", () => {
 		const taskDriver = { start: vi.fn(), stop: vi.fn() };
 		const runtime = createRuntimeContext({
 			paths,
-			sandbox: { type: "host" },
 			dingtalkConfig: {
 				clientId: "client-id",
 				clientSecret: "client-secret",
@@ -164,7 +162,6 @@ describe("createRuntimeContext", () => {
 
 		const runtime = createRuntimeContext({
 			paths,
-			sandbox: { type: "host" },
 			dingtalkConfig: {
 				clientId: "client-id",
 				clientSecret: "client-secret",
@@ -209,7 +206,6 @@ describe("createRuntimeContext", () => {
 
 		const runtime = createRuntimeContext({
 			paths,
-			sandbox: { type: "host" },
 			dingtalkConfig: {
 				clientId: "client-id",
 				clientSecret: "client-secret",

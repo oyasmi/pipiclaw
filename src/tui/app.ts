@@ -27,7 +27,6 @@ import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
 import { handleEventsCommand } from "../runtime/event-commands.js";
 import { ChannelStore } from "../runtime/store.js";
 import { handleTasksCommand } from "../runtime/task-commands.js";
-import type { SandboxConfig } from "../sandbox.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import { TUI_SLASH_COMMANDS } from "./commands.js";
@@ -39,7 +38,6 @@ const DEFAULT_CHANNEL_ID = "tui_local";
 const CHANNEL_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export interface TuiAppOptions {
-	sandbox: SandboxConfig;
 	channel?: string;
 	/** One-shot, non-interactive run: process a single prompt then exit. */
 	print?: boolean;
@@ -73,7 +71,6 @@ function safeUserName(): string {
 export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	const io = options.io ?? console;
 	const paths = options.paths ?? DEFAULT_BOOTSTRAP_PATHS;
-	const { sandbox } = options;
 	const channelId = resolveChannelId(options.channel, io);
 
 	// The pi-tui frontend owns stdout; the plain frontend prints only the final
@@ -84,16 +81,16 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 
 	// Transport-neutral init. Unlike the DingTalk path, the TUI ignores
 	// channelTemplateCreated (it needs no channel.json) and shares app services
-	// (settings, diagnostics, sandbox check) with bootstrap via prepareAppServices.
+	// (settings, diagnostics) with bootstrap via prepareAppServices.
 	printBootstrapSummary(bootstrapAppHome(paths), io, paths);
-	const { settingsManager } = await prepareAppServices(sandbox, paths, io);
+	const { settingsManager } = prepareAppServices(paths);
 	log.configureLogging(settingsManager.getLoggingSettings());
-	log.logStartup(paths.workspaceDir, sandbox.type === "host" ? "host" : `docker:${sandbox.container}`);
+	log.logStartup(paths.workspaceDir);
 
 	const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
 	ensureChannelMemoryFilesSync(channelDir);
 	const store = new ChannelStore({ workingDir: paths.workspaceDir });
-	const runner: AgentRunner = getOrCreateRunner(sandbox, channelId, channelDir, {
+	const runner: AgentRunner = getOrCreateRunner(channelId, channelDir, {
 		appHomeDir: paths.appHomeDir,
 		authConfigPath: paths.authConfigPath,
 		modelsConfigPath: paths.modelsConfigPath,
@@ -133,7 +130,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 				channelId,
 				approver: safeUserName(),
 			}),
-		statusInfo: { version: readCliVersion(), sandbox, startedAt: Date.now() },
+		statusInfo: { version: readCliVersion(), startedAt: Date.now() },
 	});
 
 	try {

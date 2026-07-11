@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ExecOptions, ExecResult, Executor } from "../src/sandbox.js";
+import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import { createWriteTool } from "../src/tools/write.js";
 import { writeContent } from "../src/tools/write-content.js";
 
@@ -15,10 +15,6 @@ class ScriptedExecutor implements Executor {
 			throw new Error(`Unexpected command: ${command}`);
 		}
 		return result;
-	}
-
-	getWorkspacePath(hostPath: string): string {
-		return hostPath;
 	}
 }
 

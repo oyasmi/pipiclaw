@@ -3,7 +3,6 @@
  * the DingTalk runtime and the terminal TUI can render the same status block
  * from an `AgentRunner` status snapshot. Pure functions, no side effects.
  */
-import type { SandboxConfig } from "../sandbox.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { AgentRunner } from "./types.js";
 
@@ -18,7 +17,6 @@ export interface RenderStatusOptions {
 	state: StatusRenderState | undefined;
 	version: string;
 	uptimeMs: number;
-	sandbox: SandboxConfig;
 }
 
 export function formatTokenCount(count: number): string {
@@ -40,7 +38,7 @@ export function formatUptime(ms: number): string {
 }
 
 export function renderStatus(options: RenderStatusOptions): string {
-	const { state, version, uptimeMs, sandbox } = options;
+	const { state, version, uptimeMs } = options;
 	const lines = ["# Status"];
 
 	if (state?.running) {
@@ -77,7 +75,6 @@ export function renderStatus(options: RenderStatusOptions): string {
 		lines.push("- Model: no session started for this channel yet");
 	}
 
-	lines.push(`- Sandbox: ${sandbox.type === "host" ? "host" : `docker:${sandbox.container}`}`);
 	lines.push(`- Uptime: ${formatUptime(uptimeMs)}`);
 	lines.push(`- Version: ${version}`);
 	return lines.join("\n");

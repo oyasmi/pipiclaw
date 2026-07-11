@@ -99,13 +99,12 @@ describe("config-loader", () => {
 			return { skills: [] };
 		});
 
-		const skills = loadPipiclawSkills(channelDir, "/sandbox/workspace");
+		const skills = loadPipiclawSkills(channelDir);
 		expect(skills.map((skill) => skill.name).sort()).toEqual(["shared", "workspace-only"]);
 
 		const shared = skills.find((skill) => skill.name === "shared");
-		expect(shared?.filePath).toContain("/sandbox/workspace/skills/shared/SKILL.md");
-		expect(shared?.filePath.startsWith("/sandbox/workspace")).toBe(true);
-		expect(shared?.baseDir.startsWith("/sandbox/workspace")).toBe(true);
+		expect(shared?.filePath).toBe(join(workspaceSkillsDir, "shared", "SKILL.md"));
+		expect(shared?.baseDir).toBe(join(workspaceSkillsDir, "shared"));
 	});
 
 	it("resolves API keys from the registry first and falls back to ANTHROPIC_API_KEY", async () => {

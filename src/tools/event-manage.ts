@@ -65,7 +65,6 @@ export interface EventManageRequest {
 
 export interface EventManageToolOptions {
 	workspaceDir: string;
-	workspacePath: string;
 	channelId: string;
 	commandGuardConfig: SecurityConfig["commandGuard"];
 }
@@ -75,13 +74,6 @@ function parseAction(action: string): EventManageAction {
 		return action;
 	}
 	throw new Error('Unsupported event action. Use "create", "update", or "delete".');
-}
-
-function toWorkspacePath(options: EventManageToolOptions, hostPath: string): string {
-	if (hostPath.startsWith(options.workspaceDir)) {
-		return `${options.workspacePath}${hostPath.slice(options.workspaceDir.length)}`;
-	}
-	return hostPath;
 }
 
 function validateTimezone(timezone: string): void {
@@ -217,7 +209,7 @@ export async function manageEvent(
 			return {
 				action: "delete",
 				name: eventName,
-				path: toWorkspacePath(options, eventPath),
+				path: eventPath,
 				deleted: false,
 				notice: `事件 \`${eventName}\` 不存在，无需删除。`,
 			};
@@ -227,7 +219,7 @@ export async function manageEvent(
 		return {
 			action: "delete",
 			name: eventName,
-			path: toWorkspacePath(options, eventPath),
+			path: eventPath,
 			deleted: true,
 			notice: `已删除事件 \`${eventName}\`。`,
 		};
@@ -263,7 +255,7 @@ export async function manageEvent(
 	return {
 		action: request.action,
 		name: eventName,
-		path: toWorkspacePath(options, eventPath),
+		path: eventPath,
 		eventType: event.type,
 		channelId: event.channelId,
 		bytesWritten: Buffer.byteLength(content, "utf-8"),

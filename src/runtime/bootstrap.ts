@@ -4,6 +4,7 @@ import { parseBuiltInCommand } from "../agent/commands.js";
 import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
 import { resetRunner } from "../agent/runner-factory.js";
 import { renderStatus } from "../agent/status-render.js";
+import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
@@ -19,14 +20,6 @@ import {
 	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
 } from "../paths.js";
-import {
-	createExecutor,
-	type Executor,
-	parseSandboxArg,
-	type SandboxConfig,
-	SandboxConfigError,
-	validateSandbox,
-} from "../sandbox.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
@@ -81,10 +74,6 @@ export interface BootstrapOptions {
 	paths?: BootstrapPaths;
 	registerSignalHandlers?: boolean;
 	startServices?: boolean;
-}
-
-export interface ParsedArgs {
-	sandbox: SandboxConfig;
 }
 
 export interface BootstrapResult {
@@ -503,35 +492,15 @@ export function parseArgs(
 	argv: string[],
 	paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS,
 	io: BootstrapIO = console,
-): ParsedArgs {
+): void {
 	const args = argv.slice(2);
-	let sandbox: SandboxConfig = { type: "host" };
-
-	const parseSandboxOrExit = (value: string): SandboxConfig => {
-		try {
-			return parseSandboxArg(value);
-		} catch (err) {
-			if (err instanceof SandboxConfigError) {
-				io.error(`Error: ${err.message}`);
-				throw new BootstrapExitError(1);
-			}
-			throw err;
-		}
-	};
 
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
-		if (arg.startsWith("--sandbox=")) {
-			sandbox = parseSandboxOrExit(arg.slice("--sandbox=".length));
-		} else if (arg === "--sandbox") {
-			sandbox = parseSandboxOrExit(args[index + 1] || "");
-			index += 1;
-		} else if (arg === "--help" || arg === "-h") {
+		if (arg === "--help" || arg === "-h") {
 			io.log(`Usage: ${paths.appName} [options]`);
 			io.log("");
 			io.log("Options:");
-			io.log("  --sandbox=host              Run tools on host (default)");
-			io.log("  --sandbox=docker:<name>     Run tools in Docker container");
 			io.log("  --version                   Print the current version and exit");
 			io.log("");
 			io.log(`Config:    ${paths.channelConfigPath}`);
@@ -542,8 +511,6 @@ export function parseArgs(
 			throw new BootstrapExitError(0);
 		}
 	}
-
-	return { sandbox };
 }
 
 function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolean> {
@@ -580,7 +547,6 @@ function isNoRunningTaskQueueError(err: unknown): boolean {
 
 interface RuntimeContextOptions {
 	paths: BootstrapPaths;
-	sandbox: SandboxConfig;
 	dingtalkConfig: DingTalkConfig;
 	createBot?: (handler: DingTalkHandler, config: DingTalkConfig) => DingTalkBot;
 	createEventsWatcher?: (
@@ -639,7 +605,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			ensureChannelMemoryFilesSync(channelDir);
 			state = {
 				running: false,
-				runner: getOrCreateRunner(options.sandbox, channelId, channelDir, {
+				runner: getOrCreateRunner(channelId, channelDir, {
 					appHomeDir: options.paths.appHomeDir,
 					authConfigPath: options.paths.authConfigPath,
 					modelsConfigPath: options.paths.modelsConfigPath,
@@ -726,7 +692,6 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				state: channelStates.get(event.channelId),
 				version: cliVersion,
 				uptimeMs: Date.now() - startedAt,
-				sandbox: options.sandbox,
 			});
 			await bot.sendPlain(event.channelId, response);
 		},
@@ -900,7 +865,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		stateDir: join(options.paths.appHomeDir, "state", "dispatch"),
 		bot,
 	});
-	const executor = createExecutor(options.sandbox);
+	const executor = createExecutor();
 	const eventsWatcher = options.createEventsWatcher
 		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)
 		: createEventsWatcher(
@@ -1047,9 +1012,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 
 /**
  * Transport-neutral app services shared by the DingTalk runtime and the terminal
- * TUI: loads settings (surfacing load errors), reports tool/security config
- * diagnostics, and validates the sandbox. Does NOT touch DingTalk config, so the
- * TUI can call it without any DingTalk credentials.
+ * TUI: loads settings (surfacing load errors) and reports tool/security config
+ * diagnostics. Does NOT touch DingTalk config, so the TUI can call it without any
+ * DingTalk credentials.
  *
  * Extracted verbatim from `bootstrap()`; the DingTalk path calls it in the same
  * position (after `loadConfig`, before `logStartup`) so its behavior is
@@ -1057,11 +1022,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
  * (DingTalk: `createRuntimeContext`; TUI: right after this) to preserve the
  * existing "diagnostics logged with default logging config" ordering.
  */
-export async function prepareAppServices(
-	sandbox: SandboxConfig,
-	paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS,
-	io: BootstrapIO = console,
-): Promise<{ settingsManager: PipiclawSettingsManager }> {
+export function prepareAppServices(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): {
+	settingsManager: PipiclawSettingsManager;
+} {
 	const settingsManager = new PipiclawSettingsManager(paths.appHomeDir);
 	for (const { scope, error } of settingsManager.drainErrors()) {
 		log.logWarning(`Failed to load ${scope} settings`, `${error.message}\n${paths.settingsConfigPath}`);
@@ -1073,16 +1036,6 @@ export async function prepareAppServices(
 		log.logWarning(formatConfigDiagnostic(diagnostic), diagnostic.path);
 	}
 
-	try {
-		await validateSandbox(sandbox);
-	} catch (err) {
-		if (err instanceof SandboxConfigError) {
-			io.error(`Error: ${err.message}`);
-			throw new BootstrapExitError(1);
-		}
-		throw err;
-	}
-
 	return { settingsManager };
 }
 
@@ -1092,8 +1045,7 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const startServices = options.startServices ?? true;
 
-	const parsedArgs = parseArgs(argv, paths, io);
-	const sandbox = parsedArgs.sandbox;
+	parseArgs(argv, paths, io);
 	const bootstrapResult = bootstrapAppHome(paths);
 	printBootstrapSummary(bootstrapResult, io, paths);
 
@@ -1104,12 +1056,11 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 
 	const dingtalkConfig = loadConfig(paths, io);
 	dingtalkConfig.stateDir = paths.workspaceDir;
-	await prepareAppServices(sandbox, paths, io);
+	prepareAppServices(paths);
 
-	log.logStartup(paths.workspaceDir, sandbox.type === "host" ? "host" : `docker:${sandbox.container}`);
+	log.logStartup(paths.workspaceDir);
 	const runtime = createRuntimeContext({
 		paths,
-		sandbox,
 		dingtalkConfig,
 		registerSignalHandlers,
 		startServices,

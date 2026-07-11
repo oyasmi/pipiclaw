@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { Executor } from "../sandbox.js";
+import type { Executor } from "../executor.js";
 import { shellEscape } from "../shared/shell-escape.js";
 
 /**
@@ -9,10 +9,10 @@ import { shellEscape } from "../shared/shell-escape.js";
  * queue) and check back later — typically by scheduling a check-in with `event_manage`, or by
  * calling the `job` tool to poll.
  *
- * Jobs live entirely in the executor's world (host or Docker), managed through shell commands
- * (`nohup` to launch, `kill -0` to probe, `kill` to cancel), so this works identically in both
- * sandboxes with no in-process child handles. Manager state is in-memory and not persisted: after a
- * process restart, prior jobs surface as `lost` rather than being falsely resurrected.
+ * Jobs live entirely on the host, managed through shell commands (`nohup` to launch, `kill -0` to
+ * probe, `kill` to cancel) with no in-process child handles. Manager state is in-memory and not
+ * persisted: after a process restart, prior jobs surface as `lost` rather than being falsely
+ * resurrected.
  */
 
 export type JobStatus = "running" | "completed" | "failed" | "cancelled" | "lost";

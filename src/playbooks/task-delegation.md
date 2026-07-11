@@ -23,8 +23,6 @@
 3. 复用已有 worktree 传 `worktreePath`（必须在 `tasks/worktrees/` 下）；
 4. 子代理结束后 worktree **不会自动删除**（防丢成果）。父代理负责 review → merge → 清理 worktree 与分支。
 
-限制：仅 host sandbox 支持；Docker 模式会明确报错（届时改用 `isolation: shared` 或换宿主环境，不做表面隔离）。
-
 ## 委派 subagent（进程内）
 
 `subagent` 工具：`task` 写完整任务描述，配合 `agent`（预定义子代理）或内联 `systemPrompt`；可用 `maxTurns` / `maxToolCalls` / `maxWallTimeSec` 限幅。子代理同回合内同步返回，所以**不需要回访事件**——拿到结果就验收并 `task_manage progress` 记录。子代理不该驱动台账（task_manage/event_manage 不进子代理工具集），验收与记账永远在主回合做。

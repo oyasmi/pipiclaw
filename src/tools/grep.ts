@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import type { Executor } from "../sandbox.js";
+import type { Executor } from "../executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
@@ -9,11 +9,10 @@ import { shellEscape } from "../shared/shell-escape.js";
 import { DEFAULT_MAX_BYTES, truncateHead } from "./truncate.js";
 
 /**
- * Structured content search over the sandbox filesystem. The execution layer is deliberately thin
- * — one `grep -rnH -B1 -A3` invocation through the shared Executor, so it works identically on the
- * host and inside the Docker (busybox) sandbox with no native dependency. The value lives in the
- * JS-side output shaping: per-file grouping, per-file and per-page caps, and a final byte bound, so
- * a broad search can never flood the model's context the way raw `bash grep -rn` would.
+ * Structured content search over the filesystem. The execution layer is deliberately thin — one
+ * `grep -rnH -B1 -A3` invocation through the shared Executor, with no native dependency. The value
+ * lives in the JS-side output shaping: per-file grouping, per-file and per-page caps, and a final
+ * byte bound, so a broad search can never flood the model's context the way raw `bash grep -rn` would.
  */
 
 const CONTEXT_BEFORE = 1;
@@ -173,7 +172,6 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		workspaceDir: process.cwd(),
-		workspacePath: process.cwd(),
 		cwd: process.cwd(),
 	};
 

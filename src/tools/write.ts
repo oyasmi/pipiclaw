@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import type { Executor } from "../sandbox.js";
+import type { Executor } from "../executor.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { writeContent } from "./write-content.js";
 

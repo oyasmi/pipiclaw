@@ -41,7 +41,6 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 
 		try {
 			await runTuiApp({
-				sandbox: { type: "host" },
 				channel: "tui_e2e",
 				print: true,
 				plain: true,
@@ -85,7 +84,6 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 
 		try {
 			await runTuiApp({
-				sandbox: { type: "host" },
 				channel: "tui_e2e_builtin",
 				print: true,
 				plain: true,

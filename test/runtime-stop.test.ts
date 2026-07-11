@@ -127,7 +127,6 @@ describe("runtime stop handling", () => {
 		const bot = new FakeTestBot();
 		const runtime = createRuntimeContext({
 			paths,
-			sandbox: { type: "host" },
 			dingtalkConfig: {
 				clientId: "client-id",
 				clientSecret: "client-secret",
@@ -210,7 +209,6 @@ describe("runtime stop handling", () => {
 		const bot = new FakeTestBot();
 		const runtime = createRuntimeContext({
 			paths,
-			sandbox: { type: "host" },
 			dingtalkConfig: {
 				clientId: "client-id",
 				clientSecret: "client-secret",
@@ -274,7 +272,6 @@ describe("runtime stop handling", () => {
 		const bot = new FakeTestBot();
 		const runtime = createRuntimeContext({
 			paths,
-			sandbox: { type: "host" },
 			dingtalkConfig: {
 				clientId: "client-id",
 				clientSecret: "client-secret",

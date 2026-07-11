@@ -1,9 +1,9 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getChannelJobManager } from "../agent/job-manager.js";
+import type { Executor } from "../executor.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { APP_HOME_DIR } from "../paths.js";
-import type { Executor, SandboxConfig } from "../sandbox.js";
 import { loadSecurityConfig } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings, PipiclawSessionSearchSettings } from "../settings.js";
@@ -20,9 +20,7 @@ export interface CreatePipiclawToolsOptions {
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	workspaceDir: string;
 	channelDir: string;
-	workspacePath: string;
 	channelId: string;
-	sandboxConfig: SandboxConfig;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
 	getMemoryRecallSettings: () => PipiclawMemoryRecallSettings;
 	getSessionSearchSettings: () => PipiclawSessionSearchSettings;
@@ -36,7 +34,6 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	const toolsConfig = options.toolsConfig ?? loadToolsConfig(APP_HOME_DIR);
 	const securityContext = {
 		workspaceDir: options.workspaceDir,
-		workspacePath: options.workspacePath,
 		cwd: process.cwd(),
 	};
 	// The leaf tools (files, web, memory, skills) come from the single declarative
@@ -50,7 +47,6 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		channelId: options.channelId,
 		channelDir: options.channelDir,
 		workspaceDir: options.workspaceDir,
-		workspacePath: options.workspacePath,
 		webConfig: toolsConfig.tools.web,
 		toolsConfig,
 		rtkEnabled: toolsConfig.tools.rtk.enabled,
@@ -80,9 +76,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 			webConfig: toolsConfig.tools.web,
 			rtkEnabled: toolsConfig.tools.rtk.enabled,
 			runtimeContext: {
-				workspacePath: options.workspacePath,
+				workspaceDir: options.workspaceDir,
 				channelId: options.channelId,
-				sandbox: options.sandboxConfig.type === "host" ? "host" : `docker:${options.sandboxConfig.container}`,
 			},
 		}),
 	];

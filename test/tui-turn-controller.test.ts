@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRunner, RunnerStatusSnapshot } from "../src/agent/types.js";
 import type { ChannelStore } from "../src/runtime/store.js";
-import type { SandboxConfig } from "../src/sandbox.js";
 import type { Frontend, FrontendCallbacks } from "../src/tui/renderer.js";
 import { TurnController } from "../src/tui/turn-controller.js";
 
@@ -93,7 +92,7 @@ function setup(now: () => number = () => 0) {
 		renderUsage: () => "USAGE",
 		runEvents: async () => "EVENTS",
 		runTasks: async () => "TASKS",
-		statusInfo: { version: "1", sandbox: { type: "host" } as SandboxConfig, startedAt: 0 },
+		statusInfo: { version: "1", startedAt: 0 },
 		now,
 	});
 	const exit = controller.startInteractive();
@@ -220,7 +219,7 @@ describe("TurnController.runOnce", () => {
 			renderUsage: () => "USAGE",
 			runEvents: async () => "EVENTS",
 			runTasks: async () => "TASKS",
-			statusInfo: { version: "1", sandbox: { type: "host" } as SandboxConfig, startedAt: 0 },
+			statusInfo: { version: "1", startedAt: 0 },
 			now,
 		});
 		return { runner, frontend, controller };

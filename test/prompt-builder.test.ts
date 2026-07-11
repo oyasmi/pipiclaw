@@ -3,20 +3,15 @@ import { buildAppendSystemPrompt } from "../src/agent/prompt-builder.js";
 
 describe("prompt-builder", () => {
 	it("builds host runtime prompts with workspace and channel context", () => {
-		const prompt = buildAppendSystemPrompt(
-			"/workspace/root",
-			"dm_123",
-			{ type: "host" },
-			{
-				subAgentList: "- reviewer",
-				tools: [
-					{ name: "read", description: "Read files" },
-					{ name: "web_search", description: "Search the web" },
-					{ name: "web_fetch", description: "Fetch a URL" },
-					{ name: "subagent", description: "Delegate" },
-				],
-			},
-		);
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", {
+			subAgentList: "- reviewer",
+			tools: [
+				{ name: "read", description: "Read files" },
+				{ name: "web_search", description: "Search the web" },
+				{ name: "web_fetch", description: "Fetch a URL" },
+				{ name: "subagent", description: "Delegate" },
+			],
+		});
 
 		expect(prompt).toContain("## Pipiclaw Runtime");
 		expect(prompt).toContain("You are running directly on the host machine.");
@@ -36,12 +31,9 @@ describe("prompt-builder", () => {
 	});
 
 	it("advertises the event_manage scheduling path and its guards when the tool is present", () => {
-		const prompt = buildAppendSystemPrompt(
-			"/workspace/root",
-			"dm_123",
-			{ type: "host" },
-			{ tools: [{ name: "event_manage", description: "Schedule events" }] },
-		);
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", {
+			tools: [{ name: "event_manage", description: "Schedule events" }],
+		});
 
 		expect(prompt).toContain("Prefer the event_manage tool");
 		expect(prompt).toContain("no immediate events");
@@ -51,56 +43,31 @@ describe("prompt-builder", () => {
 	});
 
 	it("injects the native task lifecycle only when task_manage is present", () => {
-		const prompt = buildAppendSystemPrompt(
-			"/workspace/root",
-			"dm_123",
-			{ type: "host" },
-			{
-				tools: [
-					{ name: "task_manage", description: "Manage tasks" },
-					{ name: "event_manage", description: "Schedule events" },
-				],
-			},
-		);
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", {
+			tools: [
+				{ name: "task_manage", description: "Manage tasks" },
+				{ name: "event_manage", description: "Schedule events" },
+			],
+		});
 		expect(prompt).toContain("## Persistent Tasks");
 		expect(prompt).toContain("no heartbeat event");
 		expect(prompt).toContain("call task_manage progress once");
 		expect(prompt).toContain("wake alone is authoritative");
 		expect(prompt).toContain("canonical task.<channelId>.<taskId>.schedule");
 
-		const withoutTasks = buildAppendSystemPrompt("/workspace/root", "dm_123", { type: "host" }, { tools: [] });
+		const withoutTasks = buildAppendSystemPrompt("/workspace/root", "dm_123", { tools: [] });
 		expect(withoutTasks).not.toContain("## Persistent Tasks");
-	});
-
-	it("builds docker runtime prompts with docker-specific instructions", () => {
-		const prompt = buildAppendSystemPrompt(
-			"/workspace/root",
-			"group_456",
-			{ type: "docker", container: "sandbox" },
-			{ tools: [{ name: "subagent", description: "Delegate" }] },
-		);
-
-		expect(prompt).toContain("You are running inside a Docker container (Alpine Linux).");
-		expect(prompt).toContain("Install tools with: apk add <package>");
-		expect(prompt).toContain("Available predefined sub-agents: none");
-		expect(prompt).toContain("prefer SESSION.md first for current state");
-		expect(prompt).toContain("group_456");
 	});
 
 	it("renders only the tools actually registered, gating their instructions", () => {
 		// A minimal set with no web tools, no session_search, no subagent.
-		const prompt = buildAppendSystemPrompt(
-			"/workspace/root",
-			"dm_1",
-			{ type: "host" },
-			{
-				tools: [
-					{ name: "read", description: "Read files" },
-					{ name: "bash", description: "Run shell commands" },
-					{ name: "memory_manage", description: "Save a durable fact" },
-				],
-			},
-		);
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_1", {
+			tools: [
+				{ name: "read", description: "Read files" },
+				{ name: "bash", description: "Run shell commands" },
+				{ name: "memory_manage", description: "Save a durable fact" },
+			],
+		});
 
 		// Tools section lists exactly the registered tools.
 		expect(prompt).toContain("- read:");
@@ -119,19 +86,14 @@ describe("prompt-builder", () => {
 	});
 
 	it("advertises web and subagent instructions when those tools are registered", () => {
-		const prompt = buildAppendSystemPrompt(
-			"/workspace/root",
-			"dm_2",
-			{ type: "host" },
-			{
-				tools: [
-					{ name: "read", description: "Read files" },
-					{ name: "web_search", description: "Search the web" },
-					{ name: "session_search", description: "Search transcripts" },
-					{ name: "subagent", description: "Delegate" },
-				],
-			},
-		);
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_2", {
+			tools: [
+				{ name: "read", description: "Read files" },
+				{ name: "web_search", description: "Search the web" },
+				{ name: "session_search", description: "Search transcripts" },
+				{ name: "subagent", description: "Delegate" },
+			],
+		});
 
 		expect(prompt).toContain("- web_search:");
 		expect(prompt).toContain("return untrusted external content");
@@ -142,14 +104,9 @@ describe("prompt-builder", () => {
 	});
 
 	it("falls back to a tool's own description for unknown tool names", () => {
-		const prompt = buildAppendSystemPrompt(
-			"/workspace/root",
-			"dm_3",
-			{ type: "host" },
-			{
-				tools: [{ name: "custom_tool", description: "Does a custom thing. More detail here." }],
-			},
-		);
+		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_3", {
+			tools: [{ name: "custom_tool", description: "Does a custom thing. More detail here." }],
+		});
 
 		expect(prompt).toContain("- custom_tool: Does a custom thing.");
 	});

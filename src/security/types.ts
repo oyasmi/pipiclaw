@@ -28,7 +28,6 @@ export interface SecurityConfig {
 
 export interface SecurityRuntimeContext {
 	workspaceDir: string;
-	workspacePath: string;
 	cwd?: string;
 	homeDir?: string;
 }

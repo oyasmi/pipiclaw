@@ -2,7 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { extname } from "path";
 import { Type } from "typebox";
-import type { Executor } from "../sandbox.js";
+import type { Executor } from "../executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
@@ -115,7 +115,6 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		workspaceDir: process.cwd(),
-		workspacePath: process.cwd(),
 		cwd: process.cwd(),
 	};
 
@@ -175,7 +174,7 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 				const converted = await executor.exec(`pdftotext -layout ${shellEscape(path)} - 2>&1`, { signal });
 				if (converted.code === 127) {
 					throw new Error(
-						`Cannot read ${path}: pdftotext is not installed. Install poppler-utils (host) or rebuild the Docker sandbox image, or ask the user to send a text version.`,
+						`Cannot read ${path}: pdftotext is not installed. Install poppler-utils, or ask the user to send a text version.`,
 					);
 				}
 				if (converted.code !== 0 || !converted.stdout.trim()) {

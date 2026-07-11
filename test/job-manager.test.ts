@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ChannelJobManager, MAX_RUNNING_JOBS } from "../src/agent/job-manager.js";
-import type { ExecOptions, ExecResult, Executor } from "../src/sandbox.js";
+import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 
 /**
  * A command-aware fake executor. Real jobs are managed by shelling out; this fake recognizes the
@@ -29,10 +29,6 @@ class FakeJobExecutor implements Executor {
 			return { code: 0, stdout: this.output, stderr: "" };
 		}
 		return { code: 0, stdout: "", stderr: "" };
-	}
-
-	getWorkspacePath(hostPath: string): string {
-		return hostPath;
 	}
 }
 

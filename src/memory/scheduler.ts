@@ -22,7 +22,6 @@ export interface MemoryMaintenanceRuntimeContext {
 	channelId: string;
 	channelDir: string;
 	workspaceDir: string;
-	workspacePath: string;
 	messages: AgentMessage[];
 	sessionEntries: SessionEntry[];
 	model: Model<Api>;
@@ -195,7 +194,6 @@ export class MemoryMaintenanceScheduler {
 		const growth = await runGrowthReviewJob({
 			...common,
 			workspaceDir: context.workspaceDir,
-			workspacePath: context.workspacePath,
 			loadedSkills: context.loadedSkills,
 			emitNotice: this.options.emitNotice
 				? async (notice) => this.options.emitNotice?.(channelId, notice)

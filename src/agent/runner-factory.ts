@@ -1,4 +1,3 @@
-import type { SandboxConfig } from "../sandbox.js";
 import { ChannelRunner } from "./channel-runner.js";
 import type { AgentRunner } from "./types.js";
 
@@ -14,17 +13,12 @@ function runnerKey(paths: RunnerFactoryPaths, channelId: string, channelDir: str
 	return `${paths.appHomeDir}\0${channelDir}\0${channelId}`;
 }
 
-export function getOrCreateRunner(
-	sandboxConfig: SandboxConfig,
-	channelId: string,
-	channelDir: string,
-	paths: RunnerFactoryPaths,
-): AgentRunner {
+export function getOrCreateRunner(channelId: string, channelDir: string, paths: RunnerFactoryPaths): AgentRunner {
 	const key = runnerKey(paths, channelId, channelDir);
 	const existing = channelRunners.get(key);
 	if (existing) return existing;
 
-	const runner = new ChannelRunner(sandboxConfig, channelId, channelDir, paths);
+	const runner = new ChannelRunner(channelId, channelDir, paths);
 	channelRunners.set(key, runner);
 	return runner;
 }

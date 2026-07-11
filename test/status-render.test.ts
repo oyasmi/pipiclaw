@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatTokenCount, formatUptime, renderStatus, type StatusRenderState } from "../src/agent/status-render.js";
 import type { RunnerStatusSnapshot } from "../src/agent/types.js";
-import type { SandboxConfig } from "../src/sandbox.js";
-
-const HOST: SandboxConfig = { type: "host" };
 
 function stateWith(
 	snapshot: RunnerStatusSnapshot | (() => never),
@@ -39,10 +36,9 @@ describe("formatUptime", () => {
 
 describe("renderStatus", () => {
 	it("shows idle + no-session when there is no state", () => {
-		const out = renderStatus({ state: undefined, version: "1.2.3", uptimeMs: 0, sandbox: HOST });
+		const out = renderStatus({ state: undefined, version: "1.2.3", uptimeMs: 0 });
 		expect(out).toContain("- Run state: idle");
 		expect(out).toContain("- Model: no session started for this channel yet");
-		expect(out).toContain("- Sandbox: host");
 		expect(out).toContain("- Version: 1.2.3");
 	});
 
@@ -57,7 +53,6 @@ describe("renderStatus", () => {
 			state: stateWith(snapshot, { running: true, currentTaskText: "do the thing" }),
 			version: "1.0.0",
 			uptimeMs: 0,
-			sandbox: HOST,
 		});
 		expect(out).toContain("- Run state: running: do the thing");
 		expect(out).toContain("- Model: anthropic/claude-opus-4-8");
@@ -72,18 +67,8 @@ describe("renderStatus", () => {
 			thinkingLevel: "off",
 			fallback: { primary: "primary/model", cooldownUntilMs: new Date(2026, 0, 1, 9, 5).getTime() },
 		};
-		const out = renderStatus({ state: stateWith(snapshot), version: "1", uptimeMs: 0, sandbox: HOST });
+		const out = renderStatus({ state: stateWith(snapshot), version: "1", uptimeMs: 0 });
 		expect(out).toContain("- Fallback: active（primary primary/model 冷却至 09:05）");
-	});
-
-	it("reports the sandbox container for docker mode", () => {
-		const out = renderStatus({
-			state: undefined,
-			version: "1",
-			uptimeMs: 0,
-			sandbox: { type: "docker", container: "box" },
-		});
-		expect(out).toContain("- Sandbox: docker:box");
 	});
 
 	it("degrades gracefully when the snapshot throws", () => {
@@ -93,7 +78,6 @@ describe("renderStatus", () => {
 			}),
 			version: "1",
 			uptimeMs: 0,
-			sandbox: HOST,
 		});
 		expect(out).toContain("- Model: unavailable (no session)");
 	});

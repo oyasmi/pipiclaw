@@ -24,7 +24,6 @@ function baseOptions(workspaceDir: string, channelDir: string) {
 		channelId: "dm_123",
 		channelDir,
 		workspaceDir,
-		workspacePath: "/workspace",
 		messages: [],
 		model: TEST_MODEL,
 		resolveApiKey: async () => "",

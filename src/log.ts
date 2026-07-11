@@ -370,10 +370,9 @@ export function logUsageSummary(
 }
 
 // Startup
-export function logStartup(workingDir: string, sandbox: string): void {
+export function logStartup(workingDir: string): void {
 	con("Starting pipiclaw...");
 	con(`  Working directory: ${workingDir}`);
-	con(`  Sandbox: ${sandbox}`);
 }
 
 export function logConnected(): void {

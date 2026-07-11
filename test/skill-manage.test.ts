@@ -36,7 +36,7 @@ describe("skill manage", () => {
 		const workspaceDir = createWorkspace();
 
 		const result = await manageWorkspaceSkill(
-			{ workspaceDir, workspacePath: "/workspace" },
+			{ workspaceDir },
 			{ action: "create", name: "release-checklist", content: skillMarkdown("release-checklist") },
 		);
 
@@ -50,20 +50,20 @@ describe("skill manage", () => {
 	it("rejects duplicate create and invalid skill content", async () => {
 		const workspaceDir = createWorkspace();
 		await manageWorkspaceSkill(
-			{ workspaceDir, workspacePath: "/workspace" },
+			{ workspaceDir },
 			{ action: "create", name: "release-checklist", content: skillMarkdown("release-checklist") },
 		);
 
 		await expect(
 			manageWorkspaceSkill(
-				{ workspaceDir, workspacePath: "/workspace" },
+				{ workspaceDir },
 				{ action: "create", name: "release-checklist", content: skillMarkdown("release-checklist") },
 			),
 		).rejects.toThrow("already exists");
 
 		await expect(
 			manageWorkspaceSkill(
-				{ workspaceDir, workspacePath: "/workspace" },
+				{ workspaceDir },
 				{ action: "create", name: "BadName", content: skillMarkdown("BadName") },
 			),
 		).rejects.toThrow("Skill name");
@@ -72,12 +72,12 @@ describe("skill manage", () => {
 	it("patches a unique match and rejects ambiguous patches", async () => {
 		const workspaceDir = createWorkspace();
 		await manageWorkspaceSkill(
-			{ workspaceDir, workspacePath: "/workspace" },
+			{ workspaceDir },
 			{ action: "create", name: "release-checklist", content: skillMarkdown("release-checklist") },
 		);
 
 		await manageWorkspaceSkill(
-			{ workspaceDir, workspacePath: "/workspace" },
+			{ workspaceDir },
 			{
 				action: "patch",
 				name: "release-checklist",
@@ -92,7 +92,7 @@ describe("skill manage", () => {
 
 		await expect(
 			manageWorkspaceSkill(
-				{ workspaceDir, workspacePath: "/workspace" },
+				{ workspaceDir },
 				{
 					action: "patch",
 					name: "release-checklist",
@@ -110,7 +110,7 @@ describe("skill manage", () => {
 		await writeFile(join(skillDir, "SKILL.md"), skillMarkdown("release-checklist"), "utf-8");
 
 		await manageWorkspaceSkill(
-			{ workspaceDir, workspacePath: "/workspace" },
+			{ workspaceDir },
 			{
 				action: "write_file",
 				name: "release-checklist",
@@ -122,7 +122,7 @@ describe("skill manage", () => {
 		expect(existsSync(join(skillDir, "references", "checks.md"))).toBe(true);
 		await expect(
 			manageWorkspaceSkill(
-				{ workspaceDir, workspacePath: "/workspace" },
+				{ workspaceDir },
 				{
 					action: "write_file",
 					name: "release-checklist",
@@ -133,7 +133,7 @@ describe("skill manage", () => {
 		).rejects.toThrow("Supporting file path");
 		await expect(
 			manageWorkspaceSkill(
-				{ workspaceDir, workspacePath: "/workspace" },
+				{ workspaceDir },
 				{
 					action: "write_file",
 					name: "release-checklist",
@@ -150,10 +150,10 @@ describe("skill manage", () => {
 		await mkdir(skillDir, { recursive: true });
 		await writeFile(join(skillDir, "SKILL.md"), skillMarkdown("release-checklist"), "utf-8");
 
-		const summaries = await listWorkspaceSkills({ workspaceDir, workspacePath: "/workspace" });
+		const summaries = await listWorkspaceSkills({ workspaceDir });
 		expect(summaries.map((s) => s.name)).toEqual(["release-checklist"]);
 
-		const tool = createSkillManageTool({ workspaceDir, workspacePath: "/workspace" });
+		const tool = createSkillManageTool({ workspaceDir });
 		const result = await tool.execute("call", { label: "list", action: "list" });
 		expect(result.details).toMatchObject({ kind: "skill_manage", action: "list", count: 1 });
 	});
@@ -164,7 +164,7 @@ describe("skill manage", () => {
 		await mkdir(skillDir, { recursive: true });
 		await writeFile(join(skillDir, "SKILL.md"), skillMarkdown("release-checklist"), "utf-8");
 
-		const tool = createSkillManageTool({ workspaceDir, workspacePath: "/workspace" });
+		const tool = createSkillManageTool({ workspaceDir });
 		const result = await tool.execute("call", { label: "view", action: "view", name: "release-checklist" });
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
 		expect(text).toContain("Skill: release-checklist");
@@ -173,7 +173,7 @@ describe("skill manage", () => {
 
 	it("requires a name for non-list actions", async () => {
 		const workspaceDir = createWorkspace();
-		const tool = createSkillManageTool({ workspaceDir, workspacePath: "/workspace" });
+		const tool = createSkillManageTool({ workspaceDir });
 		await expect(tool.execute("call", { label: "view", action: "view" })).rejects.toThrow(/requires a skill name/);
 	});
 });

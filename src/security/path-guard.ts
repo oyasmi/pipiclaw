@@ -77,31 +77,14 @@ function resolveHomeConfiguredPath(rawPath: string, homeDir: string): string {
 	return normalize(maybeExpandHome(stripNullAndNormalize(rawPath), homeDir));
 }
 
-function translateRuntimeWorkspacePath(path: string, ctx: PathGuardContext): string {
-	if (!isAbsolute(path)) {
-		return path;
-	}
-	if (!ctx.workspacePath || ctx.workspacePath === ctx.workspaceDir) {
-		return path;
-	}
-	if (path === ctx.workspacePath) {
-		return ctx.workspaceDir;
-	}
-	if (path.startsWith(withTrailingSlash(ctx.workspacePath))) {
-		return resolve(ctx.workspaceDir, path.slice(ctx.workspacePath.length + 1));
-	}
-	return path;
-}
-
 function resolveConfiguredPath(rawPath: string, ctx: PathGuardContext): string {
 	const homeDir = ctx.homeDir ?? homedir();
 	const normalized = stripNullAndNormalize(rawPath);
 	const expanded = maybeExpandHome(normalized, homeDir);
-	const translated = translateRuntimeWorkspacePath(expanded, ctx);
-	if (isAbsolute(translated)) {
-		return normalize(translated);
+	if (isAbsolute(expanded)) {
+		return normalize(expanded);
 	}
-	return resolve(ctx.workspaceDir, translated);
+	return resolve(ctx.workspaceDir, expanded);
 }
 
 function resolveTargetPath(rawPath: string, ctx: PathGuardContext): string {
@@ -109,11 +92,10 @@ function resolveTargetPath(rawPath: string, ctx: PathGuardContext): string {
 	const cwd = ctx.cwd ?? process.cwd();
 	const normalized = stripNullAndNormalize(rawPath);
 	const expanded = maybeExpandHome(normalized, homeDir);
-	const translated = translateRuntimeWorkspacePath(expanded, ctx);
-	if (isAbsolute(translated)) {
-		return normalize(translated);
+	if (isAbsolute(expanded)) {
+		return normalize(expanded);
 	}
-	return resolve(cwd, translated);
+	return resolve(cwd, expanded);
 }
 
 function resolveExistingAncestor(path: string): string {

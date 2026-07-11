@@ -1,5 +1,4 @@
 import { PLAYBOOKS_DIR } from "../paths.js";
-import type { SandboxConfig } from "../sandbox.js";
 
 /**
  * Minimal shape of a registered tool needed to describe it in the system prompt.
@@ -40,25 +39,18 @@ function buildToolsSection(tools: ToolDescriptor[]): string {
 }
 
 export function buildAppendSystemPrompt(
-	workspacePath: string,
+	workspaceDir: string,
 	channelId: string,
-	sandboxConfig: SandboxConfig,
 	options: AppendSystemPromptOptions = {},
 ): string {
-	const channelPath = `${workspacePath}/${channelId}`;
-	const subAgentsPath = `${workspacePath}/sub-agents`;
-	const isDocker = sandboxConfig.type === "docker";
+	const channelPath = `${workspaceDir}/${channelId}`;
+	const subAgentsPath = `${workspaceDir}/sub-agents`;
 
 	const toolList = options.tools ?? [];
 	const toolNames = new Set(toolList.map((tool) => tool.name));
 	const hasTool = (name: string): boolean => toolNames.has(name);
 
-	const envDescription = isDocker
-		? `You are running inside a Docker container (Alpine Linux).
-- Bash working directory: / (use cd or absolute paths)
-- Install tools with: apk add <package>
-- Your changes persist across sessions`
-		: `You are running directly on the host machine.
+	const envDescription = `You are running directly on the host machine.
 - Bash working directory: ${process.cwd()}
 - Be careful with system modifications`;
 
@@ -80,7 +72,7 @@ Bold: **text**, Italic: *text*, Code: \`code\`, Block: \`\`\`code\`\`\`, Links: 
 ${envDescription}
 
 ## Workspace Layout
-${workspacePath}/
+${workspaceDir}/
 ├── SOUL.md                      # Your identity/personality (read-only)
 ├── AGENTS.md                    # Custom behavior instructions (read-only)
 ├── MEMORY.md                    # Stable workspace memory (admin-managed, read on demand)
@@ -97,7 +89,7 @@ ${workspacePath}/
     └── context.jsonl            # Raw session archive (cold storage)`);
 
 	sections.push(`## Events
-You can schedule events that wake you up at specific times or when external things happen. Events are JSON files in \`${workspacePath}/events/\`.
+You can schedule events that wake you up at specific times or when external things happen. Events are JSON files in \`${workspaceDir}/events/\`.
 
 ### Event Types
 
@@ -130,7 +122,7 @@ For periodic events where there's nothing to report, respond with just \`[SILENT
 ### Limits
 event_manage rejects self-triggering loops: no immediate events (do that work in the current turn), one-shot at least 2 minutes out, periodic no more often than every 30 minutes (5 minutes when it carries a preAction gate), and at most 50 event files. Name task-owned events \`task.<channelId>.<taskId>.<use>\` so they clean up together.`
 		: `### Creating Events
-Create a JSON file under \`${workspacePath}/events/\` with the appropriate event payload.
+Create a JSON file under \`${workspaceDir}/events/\` with the appropriate event payload.
 Prefer the file tools for creating or editing the event file. Use shell commands only when they are the clearest option.
 
 ### Silent Completion
@@ -172,9 +164,9 @@ The scheduler ignores invalid files and de-duplicates by filename; keep the even
 Memory files are not preloaded into session context. Read them explicitly when memory or history matters.
 
 ### Files
-- Workspace memory: ${workspacePath}/MEMORY.md
+- Workspace memory: ${workspaceDir}/MEMORY.md
   Stable shared background memory. Admin-managed. Read on demand.
-- Workspace environment: ${workspacePath}/ENVIRONMENT.md
+- Workspace environment: ${workspaceDir}/ENVIRONMENT.md
   Durable environment facts and notable machine-level changes. Read on demand when environment state or prior machine changes matter.
 - Channel session memory: ${channelPath}/SESSION.md
   Current working state for this channel. Runtime-managed. Read on demand. Prefer this when current task state matters.
@@ -192,7 +184,7 @@ ${coldStorageLines.join("\n")}
 When a task depends on prior decisions, preferences, or long-running work, prefer SESSION.md first for current state, then MEMORY.md, then HISTORY.md.`);
 
 	sections.push(`## Environment Log
-Maintain ${workspacePath}/ENVIRONMENT.md to record durable environment changes when they matter:
+Maintain ${workspaceDir}/ENVIRONMENT.md to record durable environment changes when they matter:
 - Installed packages or tools that future work depends on
 - Important environment variables or credential sources
 - Config files modified outside normal project code
@@ -284,7 +276,7 @@ Do not use sub-agents when:
 
 Important rules:
 - Sub-agents cannot see your conversation history unless you include the needed context in \`task\`
-- The runtime injects a small fixed execution context (workspace path, channel id, sandbox), but you must still include task-specific context yourself
+- The runtime injects a small fixed execution context (workspace path, channel id), but you must still include task-specific context yourself
 - Sub-agents do not receive the \`subagent\` tool, so they cannot create nested agents
 - For independent task acceptance, set purpose=verify and taskId. Verification runs are read-only, return a durable
   attestation keyed by runId, and must end with VERDICT: PASS or VERDICT: FAIL.

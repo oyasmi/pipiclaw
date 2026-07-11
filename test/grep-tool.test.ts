@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Executor } from "../src/sandbox.js";
+import type { Executor } from "../src/executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createGrepTool } from "../src/tools/grep.js";
 
@@ -10,7 +10,6 @@ function fakeExecutor(stdout: string, code = 0, stderr = ""): { executor: Execut
 			commands.push(command);
 			return { stdout, stderr, code };
 		},
-		getWorkspacePath: (hostPath) => hostPath,
 	};
 	return { executor, commands };
 }

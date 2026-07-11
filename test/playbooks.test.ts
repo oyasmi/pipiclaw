@@ -35,24 +35,18 @@ describe("bundled playbooks payload", () => {
 
 describe("playbook index in the system prompt", () => {
 	it("routes to the playbooks only when task_manage is present", () => {
-		const withTasks = buildAppendSystemPrompt(
-			"/workspace/root",
-			"dm_123",
-			{ type: "host" },
-			{ tools: [{ name: "task_manage", description: "Manage tasks" }] },
-		);
+		const withTasks = buildAppendSystemPrompt("/workspace/root", "dm_123", {
+			tools: [{ name: "task_manage", description: "Manage tasks" }],
+		});
 		expect(withTasks).toContain("### Task Playbooks");
 		expect(withTasks).toContain(PLAYBOOKS_DIR);
 		for (const name of EXPECTED_PLAYBOOKS) {
 			expect(withTasks).toContain(name);
 		}
 
-		const withoutTasks = buildAppendSystemPrompt(
-			"/workspace/root",
-			"dm_123",
-			{ type: "host" },
-			{ tools: [{ name: "read", description: "Read files" }] },
-		);
+		const withoutTasks = buildAppendSystemPrompt("/workspace/root", "dm_123", {
+			tools: [{ name: "read", description: "Read files" }],
+		});
 		expect(withoutTasks).not.toContain("### Task Playbooks");
 	});
 });
@@ -66,7 +60,6 @@ describe("path guard access to bundled playbooks", () => {
 		mkdirSync(workspaceDir, { recursive: true });
 		return {
 			workspaceDir,
-			workspacePath: "/workspace",
 			homeDir,
 			cwd: workspaceDir,
 			config: DEFAULT_SECURITY_CONFIG.pathGuard,

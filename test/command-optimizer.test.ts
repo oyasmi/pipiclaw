@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ExecOptions, ExecResult, Executor } from "../src/sandbox.js";
+import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import { maybeOptimizeCommand } from "../src/tools/command-optimizer.js";
 
 class RecordingExecutor implements Executor {
@@ -12,10 +12,6 @@ class RecordingExecutor implements Executor {
 	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
 		this.calls.push({ command, options });
 		return this.handler(command, options);
-	}
-
-	getWorkspacePath(hostPath: string): string {
-		return hostPath;
 	}
 }
 

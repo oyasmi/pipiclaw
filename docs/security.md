@@ -447,9 +447,9 @@ $PIPICLAW_HOME/security.json
 
 Pipiclaw 的安全层是工具层硬约束，不是内核级隔离。
 
-更强的隔离仍然依赖：
+更强的隔离仍然依赖（都是把整个 Pipiclaw 进程放进受限环境，而不是 Pipiclaw 自带的能力）：
 
-- Docker 模式
+- 在容器中运行整个 Pipiclaw 进程
 - 独立运行账号
 - 主机级权限管理
 
@@ -481,7 +481,7 @@ Pipiclaw 的安全层是工具层硬约束，不是内核级隔离。
 1. 先直接使用默认配置运行一段时间
 2. 根据真实工作流，再补 `readDeny` / `writeDeny`
 3. 只对必要命令增加 `allowPatterns`
-4. 长期运行环境尽量配合 Docker 或独立账号
+4. 长期运行环境尽量把整个进程放进容器或独立账号里跑
 5. 保持 `logBlocked: true`，便于排查策略是否误伤
 
 ## 排障建议（Troubleshooting）

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ExecOptions, ExecResult, Executor } from "../src/sandbox.js";
+import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createBashTool } from "../src/tools/bash.js";
 
@@ -14,10 +14,6 @@ class RecordingExecutor implements Executor {
 	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
 		this.calls.push({ command, options });
 		return this.result;
-	}
-
-	getWorkspacePath(hostPath: string): string {
-		return hostPath;
 	}
 }
 
@@ -39,7 +35,6 @@ describe("bash tool security", () => {
 			securityConfig: DEFAULT_SECURITY_CONFIG,
 			securityContext: {
 				workspaceDir,
-				workspacePath: workspaceDir,
 				homeDir: workspaceDir,
 				cwd: workspaceDir,
 			},

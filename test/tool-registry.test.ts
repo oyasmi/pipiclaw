@@ -1,24 +1,22 @@
 import { describe, expect, it } from "vitest";
+import type { Executor } from "../src/executor.js";
 import { createMemoryCandidateStore } from "../src/memory/candidates.js";
-import type { Executor } from "../src/sandbox.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { buildToolSet, TOOL_PROMPT_HINTS, TOOL_REGISTRY, type ToolBuildContext } from "../src/tools/registry.js";
 
 const executor: Executor = {
 	exec: async () => ({ stdout: "", stderr: "", code: 0 }),
-	getWorkspacePath: (hostPath) => hostPath,
 };
 
 function makeContext(overrides: Partial<ToolBuildContext> = {}): ToolBuildContext {
 	return {
 		executor,
 		securityConfig: DEFAULT_SECURITY_CONFIG,
-		securityContext: { workspaceDir: "/repo", workspacePath: "/workspace", cwd: "/repo" },
+		securityContext: { workspaceDir: "/repo", cwd: "/repo" },
 		channelId: "dm_1",
 		channelDir: "/repo/dm_1",
 		workspaceDir: "/repo",
-		workspacePath: "/workspace",
 		webConfig: { ...DEFAULT_TOOLS_CONFIG.tools.web, enable: true },
 		toolsConfig: DEFAULT_TOOLS_CONFIG,
 		getCurrentModel: () => ({}) as never,

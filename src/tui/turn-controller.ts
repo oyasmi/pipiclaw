@@ -11,7 +11,6 @@ import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
 import * as log from "../log.js";
 import type { ChannelStore } from "../runtime/store.js";
-import type { SandboxConfig } from "../sandbox.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { bold, dim } from "./colors.js";
 import { type DispatchDeps, dispatch } from "./commands.js";
@@ -36,7 +35,7 @@ export interface TurnControllerDeps {
 	runEvents: (args: string) => Promise<string>;
 	runTasks: (args: string) => Promise<string>;
 	/** Static bits the status renderer needs alongside the live run state. */
-	statusInfo: { version: string; sandbox: SandboxConfig; startedAt: number };
+	statusInfo: { version: string; startedAt: number };
 	/** Injectable clock for deterministic Ctrl-C timing in tests. */
 	now?: () => number;
 }
@@ -71,7 +70,6 @@ export class TurnController {
 					state: { running: this.running, currentTaskText: this.currentTaskText, runner: this.deps.runner },
 					version: deps.statusInfo.version,
 					uptimeMs: this.now() - deps.statusInfo.startedAt,
-					sandbox: deps.statusInfo.sandbox,
 				}),
 		};
 	}

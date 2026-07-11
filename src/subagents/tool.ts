@@ -4,6 +4,7 @@ import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@eare
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import type { ExecOptions, ExecResult, Executor } from "../executor.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import {
 	getChannelHistoryPath,
@@ -13,7 +14,6 @@ import {
 } from "../memory/files.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import { formatModelReference } from "../models/utils.js";
-import type { ExecOptions, ExecResult, Executor } from "../sandbox.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings } from "../settings.js";
@@ -82,7 +82,7 @@ const subagentSchema = Type.Object({
 	taskId: Type.Optional(Type.String({ description: "Persistent task id, required when purpose=verify." })),
 	isolation: Type.Optional(
 		Type.Union([Type.Literal("shared"), Type.Literal("worktree")], {
-			description: '"worktree" runs in a dedicated git worktree (host sandbox only).',
+			description: '"worktree" runs in a dedicated git worktree.',
 		}),
 	),
 	worktreePath: Type.Optional(
@@ -127,9 +127,8 @@ export interface SubAgentToolOptions {
 	webConfig?: PipiclawWebToolsConfig;
 	rtkEnabled?: boolean;
 	runtimeContext: {
-		workspacePath: string;
+		workspaceDir: string;
 		channelId: string;
-		sandbox: string;
 	};
 	createWorker?: (config: {
 		subAgent: ResolvedSubAgentConfig;
@@ -178,10 +177,6 @@ class DirectoryExecutor implements Executor {
 	exec(command: string, options?: ExecOptions): Promise<ExecResult> {
 		return this.base.exec(`cd ${shellEscape(this.directory)} && ${command}`, options);
 	}
-
-	getWorkspacePath(hostPath: string): string {
-		return this.base.getWorkspacePath(hostPath);
-	}
 }
 
 function safeRunSegment(value: string): string {
@@ -213,16 +208,8 @@ async function prepareRunContext(
 	const isolation = params.isolation ?? "shared";
 	if (isolation === "shared") {
 		if (params.worktreePath) throw new Error("worktreePath requires isolation=worktree.");
-		const workingDirectory =
-			options.runtimeContext.sandbox === "host"
-				? resolve(options.workingDirectory ?? process.cwd())
-				: options.runtimeContext.workspacePath;
+		const workingDirectory = resolve(options.workingDirectory ?? process.cwd());
 		return { runId, purpose, taskId, isolation, workingDirectory };
-	}
-	if (options.runtimeContext.sandbox !== "host") {
-		throw new Error(
-			"Git worktree isolation currently requires the host sandbox. Use isolation=shared, or run this task in host mode.",
-		);
 	}
 	if (!taskId) throw new Error("isolation=worktree requires taskId so the worktree has a durable owner.");
 	if (!ownedTask?.fields.control) {
@@ -404,13 +391,11 @@ function buildSubagentTools(
 			securityConfig,
 			securityContext: {
 				workspaceDir: options.workspaceDir,
-				workspacePath: options.runtimeContext.workspacePath,
 				cwd: runContext.workingDirectory,
 			},
 			channelId: options.runtimeContext.channelId,
 			channelDir: options.channelDir,
 			workspaceDir: options.workspaceDir,
-			workspacePath: options.runtimeContext.workspacePath,
 			webConfig: options.webConfig,
 			rtkEnabled: options.rtkEnabled,
 			bashDefaultTimeoutSeconds: bashTimeoutSec,
@@ -429,10 +414,9 @@ function buildSubAgentTask(
 	const taskText = task.trim();
 	const lines = [
 		`Runtime context:`,
-		`- Workspace root: ${runtimeContext.workspacePath}`,
+		`- Workspace root: ${runtimeContext.workspaceDir}`,
 		`- Channel id: ${runtimeContext.channelId}`,
-		`- Channel directory: ${runtimeContext.workspacePath}/${runtimeContext.channelId}`,
-		`- Sandbox: ${runtimeContext.sandbox}`,
+		`- Channel directory: ${runtimeContext.workspaceDir}/${runtimeContext.channelId}`,
 		`- Working directory: ${runContext.workingDirectory}`,
 		`- Filesystem isolation: ${runContext.isolation === "worktree" ? "dedicated git worktree" : "shared with parent"}`,
 		`- Your configured role: ${config.name}`,
@@ -447,7 +431,7 @@ function buildSubAgentTask(
 
 	lines.push("", `Task:`, taskText);
 	if (runContext.purpose === "verify") {
-		const taskPath = join(runtimeContext.workspacePath, runtimeContext.channelId, "tasks", `${runContext.taskId}.md`);
+		const taskPath = join(runtimeContext.workspaceDir, runtimeContext.channelId, "tasks", `${runContext.taskId}.md`);
 		lines.push(
 			"",
 			"Verification protocol:",
@@ -675,9 +659,7 @@ export function createSubAgentTool(
 			const verifierGitStateBefore =
 				runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
 			const verifierSubjectBefore =
-				runContext.purpose === "verify" && options.runtimeContext.sandbox === "host"
-					? await workspaceSubjectHash(runContext.workingDirectory)
-					: undefined;
+				runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
 
 			const worker =
 				options.createWorker?.({
@@ -787,9 +769,7 @@ export function createSubAgentTool(
 			const verifierGitStateAfter =
 				runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
 			const verifierSubjectAfter =
-				runContext.purpose === "verify" && options.runtimeContext.sandbox === "host"
-					? await workspaceSubjectHash(runContext.workingDirectory)
-					: undefined;
+				runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
 			const workspaceChanged =
 				runContext.purpose === "verify" &&
 				(verifierSubjectBefore !== undefined && verifierSubjectAfter !== undefined

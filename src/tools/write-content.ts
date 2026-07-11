@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import type { ExecResult, Executor } from "../sandbox.js";
+import type { ExecResult, Executor } from "../executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
@@ -33,7 +33,6 @@ export async function writeContent(
 	const securityConfig = options?.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options?.securityContext ?? {
 		workspaceDir: process.cwd(),
-		workspacePath: process.cwd(),
 		cwd: process.cwd(),
 	};
 

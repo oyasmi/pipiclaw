@@ -13,8 +13,8 @@ import {
 } from "fs";
 import { readFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
+import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
-import type { ExecResult, Executor } from "../sandbox.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";

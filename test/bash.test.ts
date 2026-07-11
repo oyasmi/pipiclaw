@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ChannelJobManager } from "../src/agent/job-manager.js";
-import type { ExecOptions, ExecResult, Executor } from "../src/sandbox.js";
+import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
 import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
 
@@ -14,10 +14,6 @@ class RecordingExecutor implements Executor {
 	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
 		this.calls.push({ command, options });
 		return this.handler(command, options);
-	}
-
-	getWorkspacePath(hostPath: string): string {
-		return hostPath;
 	}
 }
 
@@ -186,7 +182,7 @@ describe("bash tool", () => {
 		if (!details.fullOutputPath) {
 			throw new Error("Expected full output path");
 		}
-		// The spill goes through the executor so the path is reachable inside the sandbox.
+		// The spill goes through the executor so the path is reachable by the read/bash tools.
 		expect(spilled.get(details.fullOutputPath)).toBe(output);
 	});
 

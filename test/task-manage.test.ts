@@ -26,7 +26,7 @@ describe("manageTask", () => {
 		eventsDir = join(workspaceDir, "events");
 		await mkdir(tasksDir, { recursive: true });
 		await mkdir(eventsDir, { recursive: true });
-		options = { workspaceDir, workspacePath: "/ws", channelDir, channelId: CHANNEL_ID };
+		options = { workspaceDir, channelDir, channelId: CHANNEL_ID };
 	});
 	afterEach(async () => {
 		await rm(workspaceDir, { recursive: true, force: true });

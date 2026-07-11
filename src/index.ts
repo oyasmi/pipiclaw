@@ -16,6 +16,7 @@ export {
 	getSoul,
 	loadPipiclawSkills,
 } from "./agent/workspace-resources.js";
+export { createExecutor, type ExecOptions, type ExecResult, type Executor } from "./executor.js";
 export {
 	type BuildMemoryCandidatesOptions,
 	buildMemoryCandidates,
@@ -114,15 +115,6 @@ export {
 	type ScheduledEvent,
 } from "./runtime/events.js";
 export { ChannelStore, type LoggedMessage, type LoggedSubAgentRun } from "./runtime/store.js";
-export {
-	createExecutor,
-	type ExecOptions,
-	type ExecResult,
-	type Executor,
-	parseSandboxArg,
-	type SandboxConfig,
-	validateSandbox,
-} from "./sandbox.js";
 export {
 	type PipiclawMemoryGrowthSettings,
 	type PipiclawMemoryMaintenanceSettings,

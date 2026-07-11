@@ -70,14 +70,6 @@ export interface WorkspaceSkillSummary {
 
 export interface SkillManageToolOptions {
 	workspaceDir: string;
-	workspacePath: string;
-}
-
-function toWorkspacePath(options: SkillManageToolOptions, hostPath: string): string {
-	if (hostPath.startsWith(options.workspaceDir)) {
-		return `${options.workspacePath}${hostPath.slice(options.workspaceDir.length)}`;
-	}
-	return hostPath;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
@@ -139,7 +131,7 @@ export async function listWorkspaceSkills(options: SkillManageToolOptions): Prom
 		summaries.push({
 			name,
 			description: extractDescription(content),
-			path: `${options.workspacePath}/skills/${name}/SKILL.md`,
+			path: `${options.workspaceDir}/skills/${name}/SKILL.md`,
 			warning: validation.ok ? undefined : validation.error,
 		});
 	}
@@ -199,7 +191,7 @@ export async function manageWorkspaceSkill(
 		return {
 			action: "create",
 			name: request.name,
-			path: toWorkspacePath(options, skillPath),
+			path: skillPath,
 			bytesWritten: Buffer.byteLength(content, "utf-8"),
 			requiresResourceRefresh: true,
 			notice: `已沉淀：创建 workspace skill \`${request.name}\`。`,
@@ -221,7 +213,7 @@ export async function manageWorkspaceSkill(
 		return {
 			action: "write_file",
 			name: request.name,
-			path: toWorkspacePath(options, targetPath),
+			path: targetPath,
 			bytesWritten: Buffer.byteLength(content, "utf-8"),
 			requiresResourceRefresh: true,
 			notice: `已沉淀：更新 workspace skill \`${request.name}\` 的支持文件。`,
@@ -243,7 +235,7 @@ export async function manageWorkspaceSkill(
 	return {
 		action: "patch",
 		name: request.name,
-		path: toWorkspacePath(options, targetPath),
+		path: targetPath,
 		bytesWritten: Buffer.byteLength(nextContent, "utf-8"),
 		requiresResourceRefresh: true,
 		notice: `已沉淀：更新 workspace skill \`${request.name}\`。`,
@@ -253,18 +245,17 @@ export async function manageWorkspaceSkill(
 async function viewWorkspaceSkill(options: SkillManageToolOptions, name: string, filePath: string | undefined) {
 	const skillDir = resolveSkillPath(options.workspaceDir, name);
 	const targetPath = filePath ? resolveSkillSupportingFile(skillDir, filePath) : join(skillDir, "SKILL.md");
-	const workspacePath = toWorkspacePath(options, targetPath);
 	const content = await readFile(targetPath, "utf-8");
 
 	// Cap with the shared truncation limits so a large supporting file cannot flood context.
 	const truncation = truncateHead(content);
 	let body = truncation.content;
 	if (truncation.truncated) {
-		body += `\n\n[Truncated at ${formatSize(DEFAULT_MAX_BYTES)}. Use the read tool on ${workspacePath} to page through the rest.]`;
+		body += `\n\n[Truncated at ${formatSize(DEFAULT_MAX_BYTES)}. Use the read tool on ${targetPath} to page through the rest.]`;
 	}
 	return {
-		content: [{ type: "text" as const, text: `Skill: ${name}\nPath: ${workspacePath}\n\n${body}` }],
-		details: { kind: "skill_manage", action: "view", name, path: workspacePath, truncated: truncation.truncated },
+		content: [{ type: "text" as const, text: `Skill: ${name}\nPath: ${targetPath}\n\n${body}` }],
+		details: { kind: "skill_manage", action: "view", name, path: targetPath, truncated: truncation.truncated },
 	};
 }
 

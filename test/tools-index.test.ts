@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Executor } from "../src/executor.js";
 import { createMemoryCandidateStore } from "../src/memory/candidates.js";
-import type { Executor, SandboxConfig } from "../src/sandbox.js";
 
 const {
 	createReadToolMock,
@@ -155,9 +155,7 @@ const baseToolOptions = {
 	resolveApiKey: vi.fn(),
 	workspaceDir: "/repo",
 	channelDir: "/repo/dm_42",
-	workspacePath: "/workspace",
 	channelId: "dm_42",
-	sandboxConfig: { type: "host" as const },
 	getSubAgentDiscovery: vi.fn(),
 	getMemoryRecallSettings: vi.fn(() => ({
 		enabled: true,
@@ -178,7 +176,6 @@ const baseToolOptions = {
 
 const executor: Executor = {
 	exec: async () => ({ stdout: "", stderr: "", code: 0 }),
-	getWorkspacePath: (hostPath) => hostPath,
 };
 
 describe("tools index", () => {
@@ -210,9 +207,7 @@ describe("tools index", () => {
 			resolveApiKey: vi.fn(),
 			workspaceDir: "/repo",
 			channelDir: "/repo/dm_42",
-			workspacePath: "/workspace",
 			channelId: "dm_42",
-			sandboxConfig: { type: "host" },
 			getSubAgentDiscovery: vi.fn(),
 			getMemoryRecallSettings: vi.fn(() => ({
 				enabled: true,
@@ -258,9 +253,7 @@ describe("tools index", () => {
 			resolveApiKey: vi.fn(),
 			workspaceDir: "/repo",
 			channelDir: "/repo/dm_42",
-			workspacePath: "/workspace",
 			channelId: "dm_42",
-			sandboxConfig: { type: "host" as const },
 			getSubAgentDiscovery: vi.fn(),
 			getMemoryRecallSettings: vi.fn(() => ({
 				enabled: true,
@@ -297,9 +290,7 @@ describe("tools index", () => {
 			resolveApiKey: vi.fn(),
 			workspaceDir: "/repo",
 			channelDir: "/repo/dm_42",
-			workspacePath: "/workspace",
 			channelId: "dm_42",
-			sandboxConfig: { type: "host" },
 			getSubAgentDiscovery: vi.fn(),
 			getMemoryRecallSettings: vi.fn(() => ({
 				enabled: true,
@@ -332,14 +323,9 @@ describe("tools index", () => {
 			memoryCandidateStore: createMemoryCandidateStore(),
 		});
 		const registered = new Set(tools.map((tool) => tool.name));
-		const prompt = buildAppendSystemPrompt(
-			"/workspace",
-			"dm_42",
-			{ type: "host" },
-			{
-				tools: tools.map((tool) => ({ name: tool.name, description: "" })),
-			},
-		);
+		const prompt = buildAppendSystemPrompt("/workspace", "dm_42", {
+			tools: tools.map((tool) => ({ name: tool.name, description: "" })),
+		});
 
 		for (const name of ALL_TOOL_NAMES) {
 			const line = `- ${name}:`;
@@ -357,7 +343,7 @@ describe("tools index", () => {
 		toolsConfig.tools.web.enable = true;
 	});
 
-	it("appends the subagent tool and maps sandbox runtime context", () => {
+	it("appends the subagent tool and passes runtime context", () => {
 		const options = {
 			executor,
 			getCurrentModel: vi.fn(),
@@ -365,9 +351,7 @@ describe("tools index", () => {
 			resolveApiKey: vi.fn(),
 			workspaceDir: "/repo",
 			channelDir: "/repo/dm_42",
-			workspacePath: "/workspace",
 			channelId: "dm_42",
-			sandboxConfig: { type: "docker", container: "pipiclaw" } satisfies SandboxConfig,
 			getSubAgentDiscovery: vi.fn(),
 			getMemoryRecallSettings: vi.fn(() => ({
 				enabled: true,
@@ -408,7 +392,6 @@ describe("tools index", () => {
 			securityConfig,
 			securityContext: {
 				workspaceDir: "/repo",
-				workspacePath: "/workspace",
 				cwd: process.cwd(),
 			},
 			channelId: "dm_42",
@@ -417,7 +400,6 @@ describe("tools index", () => {
 			securityConfig,
 			securityContext: {
 				workspaceDir: "/repo",
-				workspacePath: "/workspace",
 				cwd: process.cwd(),
 			},
 			channelId: "dm_42",
@@ -451,9 +433,8 @@ describe("tools index", () => {
 			webConfig: toolsConfig.tools.web,
 			rtkEnabled: false,
 			runtimeContext: {
-				workspacePath: "/workspace",
+				workspaceDir: "/repo",
 				channelId: "dm_42",
-				sandbox: "docker:pipiclaw",
 			},
 		});
 	});

@@ -192,7 +192,6 @@ export interface TaskManageRequest {
 
 export interface TaskManageToolOptions {
 	workspaceDir: string;
-	workspacePath: string;
 	channelDir: string;
 	channelId: string;
 	/** Project checkout whose artifact state an independent verifier binds to. */
@@ -221,13 +220,6 @@ function parseAction(action: string): TaskManageAction {
 		return action;
 	}
 	throw new Error("Unsupported task action. Use create, progress, set, verify, done, cancel, start-cycle, or list.");
-}
-
-function toWorkspacePath(options: TaskManageToolOptions, hostPath: string): string {
-	if (hostPath.startsWith(options.workspaceDir)) {
-		return `${options.workspacePath}${hostPath.slice(options.workspaceDir.length)}`;
-	}
-	return hostPath;
 }
 
 function tasksDir(options: TaskManageToolOptions): string {
@@ -438,7 +430,7 @@ async function createTask(options: TaskManageToolOptions, request: TaskManageReq
 	return {
 		action: "create",
 		id,
-		path: toWorkspacePath(options, taskPath),
+		path: taskPath,
 		status: fields.status,
 		notice: `已创建任务 \`${id}\`（status: ${fields.status}）。`,
 	};
@@ -502,7 +494,7 @@ async function setTask(options: TaskManageToolOptions, request: TaskManageReques
 	return {
 		action: "set",
 		id,
-		path: toWorkspacePath(options, taskPath),
+		path: taskPath,
 		status: nextFields.status,
 		notice: `已更新任务 \`${id}\`（status: ${nextFields.status}${nextFields.wake ? `, wake: ${nextFields.wake}` : ""}）。`,
 	};
@@ -534,7 +526,7 @@ async function progressTask(options: TaskManageToolOptions, request: TaskManageR
 	return {
 		action: "progress",
 		id,
-		path: toWorkspacePath(options, taskPath),
+		path: taskPath,
 		status: nextFields.status,
 		notice: `已记录任务 \`${id}\` 的进展（status: ${nextFields.status}${nextFields.wake ? `, wake: ${nextFields.wake}` : ""}）。`,
 	};
@@ -573,7 +565,7 @@ async function candidateTask(options: TaskManageToolOptions, request: TaskManage
 	return {
 		action: "candidate",
 		id,
-		path: toWorkspacePath(options, taskPath),
+		path: taskPath,
 		status: "verifying",
 		notice: `任务 \`${id}\` 已进入独立验收队列；driver 将安排 verifier。`,
 	};
@@ -623,7 +615,7 @@ async function verifyTask(options: TaskManageToolOptions, request: TaskManageReq
 	return {
 		action: "verify",
 		id,
-		path: toWorkspacePath(options, task.path),
+		path: task.path,
 		status: task.fields.status,
 		notice: `任务 \`${id}\` 独立验收结果：${attestation.verdict.toUpperCase()}（run: ${runId}）。`,
 	};
@@ -717,7 +709,7 @@ async function doneTask(options: TaskManageToolOptions, request: TaskManageReque
 	return {
 		action: "done",
 		id,
-		path: toWorkspacePath(options, finalPath),
+		path: finalPath,
 		status: "done",
 		archived,
 		deletedEvents: deleted,
@@ -755,7 +747,7 @@ async function cancelTask(options: TaskManageToolOptions, request: TaskManageReq
 	return {
 		action: "cancel",
 		id,
-		path: toWorkspacePath(options, finalPath),
+		path: finalPath,
 		status: "cancelled",
 		archived: true,
 		deletedEvents: deleted,
@@ -788,7 +780,7 @@ async function startCycleTask(options: TaskManageToolOptions, request: TaskManag
 	return {
 		action: "start-cycle",
 		id,
-		path: toWorkspacePath(options, taskPath),
+		path: taskPath,
 		status: "in-progress",
 		notice: `已开启周期任务 \`${id}\` 的新周期 \`${cycleId}\`。`,
 	};
