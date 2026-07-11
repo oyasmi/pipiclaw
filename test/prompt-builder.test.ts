@@ -5,10 +5,11 @@ import { PLAYBOOKS_DIR } from "../src/paths.js";
 describe("prompt-builder", () => {
 	it("keeps runtime ownership and progressive-loading rules always on", () => {
 		const prompt = buildAppendSystemPrompt("/workspace/root", "dm_123", { tools: [] });
-		expect(prompt).toContain("## Knowledge and State Layers");
+		expect(prompt).toContain("## Knowledge Layers (always-on boundary)");
 		expect(prompt).toContain("Runtime playbooks under");
 		expect(prompt).toContain(PLAYBOOKS_DIR);
 		expect(prompt).toContain("must not redefine runtime facts or hard gates");
+		expect(prompt).toContain("read runtime-orientation.md");
 		expect(prompt).toContain("SESSION → MEMORY → HISTORY");
 		expect(prompt).toContain("Never edit channel SESSION.md, MEMORY.md, or HISTORY.md");
 		expect(prompt).toContain("## Runtime Playbooks");

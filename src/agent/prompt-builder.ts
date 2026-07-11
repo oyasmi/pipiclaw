@@ -46,14 +46,10 @@ You are running inside Pipiclaw, a DingTalk-oriented runtime built on pi, direct
 - Be careful with system modifications
 - Use basic Markdown suitable for DingTalk AI Cards`);
 
-	sections.push(`## Knowledge and State Layers
-Keep these ownership boundaries clear:
-- This system prompt contains only always-on runtime invariants.
-- Runtime playbooks under ${PLAYBOOKS_DIR}/ are versioned, read-only Pipiclaw operating knowledge. Read the matching playbook before non-trivial use of a runtime mechanism.
-- ${workspaceDir}/AGENTS.md and ${workspaceDir}/skills/ contain user/team behavior and procedures. They may choose how to use Pipiclaw, but must not redefine runtime facts or hard gates.
-- ${channelPath}/tasks/ contains per-task goals, acceptance criteria, procedures, evidence, and current control state.
-
-Do not copy runtime playbooks into workspace instructions or skills; those copies drift across upgrades.`);
+	sections.push(`## Knowledge Layers (always-on boundary)
+- Runtime playbooks under ${PLAYBOOKS_DIR}/ are versioned, read-only Pipiclaw mechanism knowledge: read the matching one before non-trivial use of a runtime mechanism, and never copy them into the workspace (copies drift across upgrades).
+- ${workspaceDir}/AGENTS.md and ${workspaceDir}/skills/ hold user/team behavior; they may choose how to use Pipiclaw but must not redefine runtime facts or hard gates.
+- For how these layers fit together and where each file lives, read runtime-orientation.md.`);
 
 	sections.push(`## Resource Map
 - Workspace: SOUL.md (identity), AGENTS.md (user/team instructions), MEMORY.md (admin-managed shared background), ENVIRONMENT.md (machine facts), skills/ (user procedural knowledge), sub-agents/ (predefined agents), events/ (schedules).

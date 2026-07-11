@@ -110,8 +110,8 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 	const verificationInstruction =
 		entry.frontmatter.status === "verifying"
 			? verification?.status === "passed"
-				? " Independent verification already passed; preserve its body/artifact hashes and follow the closeout playbook."
-				: " This is a checker-only turn: read the closeout playbook and do not continue implementation."
+				? ` Independent verification already passed; preserve its body/artifact hashes and follow ${join(PLAYBOOKS_DIR, "task-closeout.md")}.`
+				: ` This is a checker-only turn: read ${join(PLAYBOOKS_DIR, "task-closeout.md")} and do not continue implementation.`
 			: "";
 	const repair = entry.frontmatter.readable
 		? ""
