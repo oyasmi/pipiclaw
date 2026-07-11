@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-07-11
+
 ### Changed
 
 - Unknown slash commands (e.g. a typo like `/modle`) are now rejected at dispatch with a `/help` hint, in both DingTalk and the TUI, instead of being sent to the model as a plain prompt. Slash command metadata (help text, TUI autocomplete, busy-command hint) is generated from a single source.
