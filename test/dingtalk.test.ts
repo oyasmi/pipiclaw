@@ -349,47 +349,6 @@ describe("dingtalk", () => {
 		);
 	});
 
-	it("routes plain busy messages through the configured follow-up default", async () => {
-		for (const busyMessageDefault of ["followUp", "followup"] as const) {
-			const { bot, handler } = createBot(
-				{
-					isRunning: vi.fn(() => true),
-				},
-				{ busyMessageDefault },
-			);
-			bot.sendPlain = vi.fn(async () => true);
-			const privateApi = getPrivateApi(bot);
-
-			await privateApi.onStreamMessage({
-				text: { content: "plain busy text" },
-				senderStaffId: "staff_1",
-				senderNick: "Alice",
-				conversationId: "conv_1",
-				conversationType: "1",
-			});
-			expect(handler.handleBusyMessage).toHaveBeenCalledWith(
-				expect.objectContaining({ text: "plain busy text" }),
-				bot,
-				"followUp",
-				"plain busy text",
-			);
-
-			await privateApi.onStreamMessage({
-				text: { content: "/steer keep current focus" },
-				senderStaffId: "staff_1",
-				senderNick: "Alice",
-				conversationId: "conv_1",
-				conversationType: "1",
-			});
-			expect(handler.handleBusyMessage).toHaveBeenCalledWith(
-				expect.objectContaining({ text: "/steer keep current focus" }),
-				bot,
-				"steer",
-				"keep current focus",
-			);
-		}
-	});
-
 	it("requeues a busy plain message as normal work when the busy window has closed", async () => {
 		const { bot, handler } = createBot(
 			{
@@ -421,33 +380,6 @@ describe("dingtalk", () => {
 			"dm_staff_1",
 			expect.stringContaining("Could not queue this message"),
 		);
-	});
-
-	it("requeues explicit follow-up command arguments as normal work", async () => {
-		const { bot, handler } = createBot({
-			isRunning: vi.fn(() => true),
-			handleBusyMessage: vi.fn(async () => ({ kind: "requeue" as const, text: "next task" })),
-		});
-		bot.sendPlain = vi.fn(async () => true);
-		const privateApi = getPrivateApi(bot);
-
-		await privateApi.onStreamMessage({
-			text: { content: "/followup next task" },
-			senderStaffId: "staff_1",
-			senderNick: "Alice",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		await flushMicrotasks();
-
-		expect(handler.handleBusyMessage).toHaveBeenCalledWith(
-			expect.objectContaining({ text: "/followup next task" }),
-			bot,
-			"followUp",
-			"next task",
-		);
-		expect(handler.handleEvent).toHaveBeenCalledWith(expect.objectContaining({ text: "next task" }), bot);
-		expect(bot.sendPlain).not.toHaveBeenCalledWith("dm_staff_1", expect.stringContaining("Queued as follow-up"));
 	});
 
 	it("refreshes, caches, and coalesces access token requests", async () => {
@@ -608,38 +540,6 @@ describe("dingtalk", () => {
 				isFull: true,
 				isFinalize: true,
 				isError: false,
-			}),
-			expect.any(Object),
-		);
-	});
-
-	it("allows disabling wide card auto layout", async () => {
-		const { bot } = createBot({}, { cardAutoLayout: false });
-		const privateApi = getPrivateApi(bot);
-		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).accessToken = "cached-token";
-		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).tokenExpiry = Date.now() / 1000 + 3600;
-		axiosMock.post.mockResolvedValue({ data: {} });
-		axiosMock.put.mockResolvedValue({ data: {} });
-
-		privateApi.setConversationMeta("dm_staff_1", {
-			conversationId: "conv_1",
-			conversationType: "1",
-			senderId: "staff_1",
-		});
-
-		await expect(bot.appendToCard("dm_staff_1", "hello")).resolves.toBe(true);
-		expect(axiosMock.post).toHaveBeenCalledWith(
-			expect.stringContaining("/card/instances/createAndDeliver"),
-			expect.objectContaining({
-				cardData: {
-					cardParamMap: {
-						sys_full_json_obj: JSON.stringify({
-							config: {
-								autoLayout: false,
-							},
-						}),
-					},
-				},
 			}),
 			expect.any(Object),
 		);

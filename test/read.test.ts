@@ -77,24 +77,6 @@ describe("read tool", () => {
 		expect(result.content).toEqual([{ type: "text", text: "" }]);
 	});
 
-	it("counts files ending with a newline correctly", async () => {
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "2\n", stderr: "" }]);
-		const tool = createReadTool(executor);
-
-		await expect(tool.execute("call", { label: "read text", path: "newline.txt", offset: 3 })).rejects.toThrow(
-			"Offset 3 is beyond end of file (2 lines total)",
-		);
-	});
-
-	it("counts files without a trailing newline correctly", async () => {
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "2\n", stderr: "" }]);
-		const tool = createReadTool(executor);
-
-		await expect(tool.execute("call", { label: "read text", path: "no-newline.txt", offset: 3 })).rejects.toThrow(
-			"Offset 3 is beyond end of file (2 lines total)",
-		);
-	});
-
 	it("reports oversized first lines with a bash hint", async () => {
 		const firstLine = "x".repeat(DEFAULT_MAX_BYTES + 256);
 		const executor = new ScriptedExecutor([

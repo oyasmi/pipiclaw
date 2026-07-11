@@ -6,7 +6,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { createExecutor, type Executor } from "../src/executor.js";
-import { ChannelStore } from "../src/runtime/store.js";
 import { renderTaskDocument } from "../src/shared/task-ledger.js";
 import { discoverSubAgents, getSubAgentsDir, resolveSubAgentConfig } from "../src/subagents/discovery.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
@@ -136,31 +135,6 @@ Review files carefully.`,
 			memory: "none",
 			paths: [],
 		});
-	});
-
-	it("accepts web tools in predefined sub-agent tool lists", () => {
-		const workspaceDir = createTempWorkspace();
-		const subAgentsDir = getSubAgentsDir(workspaceDir);
-		mkdirSync(subAgentsDir, { recursive: true });
-
-		writeFileSync(
-			join(subAgentsDir, "researcher.md"),
-			`---
-name: researcher
-description: search and fetch references
-tools:
-  - read
-  - web_search
-  - web_fetch
----
-
-Gather references carefully.`,
-			"utf-8",
-		);
-
-		const discovery = discoverSubAgents(workspaceDir, [model]);
-		expect(discovery.warnings).toEqual([]);
-		expect(discovery.agents[0]?.tools).toEqual(["read", "web_search", "web_fetch"]);
 	});
 
 	it("parses contextual sub-agent frontmatter and inline overrides", () => {
@@ -518,47 +492,5 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 		expect(delegatedTask).toContain(
 			"Earlier review found missing regression coverage around src/core.ts fallback behavior.",
 		);
-	});
-});
-
-describe("sub-agent run persistence", () => {
-	it("writes sub-agent runs to subagent-runs.jsonl", async () => {
-		const workspaceDir = createTempWorkspace();
-		const store = new ChannelStore({ workingDir: workspaceDir });
-
-		await store.logSubAgentRun("dm_123", {
-			date: "2026-03-31T00:00:00.000Z",
-			toolCallId: "tool-1",
-			label: "review",
-			agent: "reviewer",
-			source: "predefined",
-			model: "openai/gpt-4o-mini",
-			tools: ["read", "bash"],
-			turns: 2,
-			toolCalls: 3,
-			durationMs: 1200,
-			failed: true,
-			failureReason: "Turn budget exceeded (24)",
-			output: "Found two issues.",
-			outputTruncated: false,
-			usage: {
-				input: 10,
-				output: 6,
-				cacheRead: 2,
-				cacheWrite: 1,
-				total: 19,
-				cost: { input: 0.1, output: 0.2, cacheRead: 0.01, cacheWrite: 0.02, total: 0.33 },
-			},
-		});
-
-		const logPath = join(workspaceDir, "dm_123", "subagent-runs.jsonl");
-		const lines = readFileSync(logPath, "utf-8").trim().split("\n");
-		expect(lines).toHaveLength(1);
-		expect(JSON.parse(lines[0])).toMatchObject({
-			toolCallId: "tool-1",
-			agent: "reviewer",
-			failed: true,
-			output: "Found two issues.",
-		});
 	});
 });

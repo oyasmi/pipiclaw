@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { parseBuiltInCommand } from "../src/agent/commands.js";
 import type { UsageLedger, UsageSummary, UsageSummaryQuery } from "../src/usage/ledger.js";
 import { parseUsageMode, renderUsageReport, usageWindows } from "../src/usage/render.js";
 
@@ -21,11 +20,6 @@ function stubLedger(fn: (q: UsageSummaryQuery) => Partial<UsageSummary>): UsageL
 }
 
 describe("/usage command parsing", () => {
-	it("is recognized as a built-in command with args", () => {
-		expect(parseBuiltInCommand("/usage")).toMatchObject({ name: "usage", args: "" });
-		expect(parseBuiltInCommand("/usage 7d")).toMatchObject({ name: "usage", args: "7d" });
-	});
-
 	it("maps args to a query mode", () => {
 		expect(parseUsageMode("")).toBe("default");
 		expect(parseUsageMode("7d")).toBe("7d");

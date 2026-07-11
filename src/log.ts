@@ -171,12 +171,6 @@ function formatToolArgs(args: Record<string, unknown>): string {
 	return lines.join("\n");
 }
 
-// User messages
-export function logUserMessage(ctx: LogContext, text: string): void {
-	con(color("green", `${timestamp()} ${formatContext(ctx)} ${text}`));
-	emit("info", "user_message", text, { ctx });
-}
-
 // Tool execution
 export function logToolStart(ctx: LogContext, toolName: string, label: string, args: Record<string, unknown>): void {
 	const formattedArgs = formatToolArgs(args);
@@ -275,20 +269,6 @@ export function logWarning(message: string, details?: string): void {
 		con(color("dim", indented));
 	}
 	emit("warn", "system", message, { details });
-}
-
-export function logAgentError(ctx: LogContext | "system", error: string): void {
-	const context = ctx === "system" ? "[system]" : formatContext(ctx);
-	con(color("yellow", `${timestamp()} ${context} ✗ Agent error`));
-	const indented = error
-		.split("\n")
-		.map((line) => `           ${line}`)
-		.join("\n");
-	con(color("dim", indented));
-	emit("error", "agent_error", "Agent error", {
-		ctx: ctx === "system" ? undefined : ctx,
-		details: error,
-	});
 }
 
 // Model fallback (spec 017)

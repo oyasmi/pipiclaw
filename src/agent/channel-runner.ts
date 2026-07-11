@@ -250,7 +250,7 @@ export class ChannelRunner implements AgentRunner {
 		this.acceptingBusyMessages = true;
 		this.agentLoopStarted = false;
 
-		const runQueue = createRunQueue(ctx);
+		const runQueue = createRunQueue();
 		this.runState.queue = runQueue.queue;
 		let promptSubmitted = false;
 		let fallbackAttempted = false;

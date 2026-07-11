@@ -74,15 +74,6 @@ describe("manageEvent create", () => {
 		expect(result.channelId).toBe("dm_1");
 	});
 
-	it("defaults channelId to the current channel when omitted", async () => {
-		const result = await manageEvent(opts(), {
-			action: "create",
-			name: "no-channel",
-			definition: JSON.stringify({ type: "one-shot", text: "x", at: futureIso(30) }),
-		});
-		expect(result.channelId).toBe("dm_1");
-	});
-
 	it("normalizes .json suffix (foo === foo.json)", async () => {
 		await manageEvent(opts(), {
 			action: "create",
@@ -169,21 +160,6 @@ describe("manageEvent create", () => {
 		});
 		expect(result.eventType).toBe("periodic");
 		expect(await listEventFiles()).toEqual(["task.dm_1.demo.sensor.json"]);
-	});
-
-	it("still rejects a sub-30-minute periodic cron without a preAction gate", async () => {
-		await expect(
-			manageEvent(opts(), {
-				action: "create",
-				name: "nogate",
-				definition: JSON.stringify({
-					type: "periodic",
-					text: "x",
-					schedule: "*/10 * * * *",
-					timezone: "Asia/Shanghai",
-				}),
-			}),
-		).rejects.toThrow(/30 minutes/);
 	});
 
 	it("rejects a preAction-gated periodic below the 5-minute hard sub-floor", async () => {

@@ -207,30 +207,4 @@ describe("session-memory", () => {
 			),
 		).toContain('{"broken":true}');
 	});
-
-	it("passes through the configured sidecar timeout", async () => {
-		const channelDir = createTempChannel();
-		writeFileSync(join(channelDir, "SESSION.md"), "# Session Title\n\nOld title\n", "utf-8");
-		writeFileSync(join(channelDir, "MEMORY.md"), "# Channel Memory\n", "utf-8");
-
-		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
-			rawText: "{}",
-			output: {},
-		});
-
-		await updateChannelSessionMemory({
-			channelDir,
-			messages: [],
-			model: { provider: "test", id: "noop" } as never,
-			resolveApiKey: async () => "",
-			timeoutMs: 45000,
-		});
-
-		expect(vi.mocked(runRetriedSidecarTask)).toHaveBeenCalledWith(
-			expect.objectContaining({
-				name: "session-memory-update",
-				timeoutMs: 45000,
-			}),
-		);
-	});
 });

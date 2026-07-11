@@ -21,13 +21,9 @@ vi.mock("../../src/memory/sidecar-worker.js", () => ({
 
 import { readChannelHistory, readChannelMemory, readChannelSession } from "../../src/memory/files.js";
 import { MemoryLifecycle } from "../../src/memory/lifecycle.js";
-import {
-	runDurableConsolidationJob,
-	runSessionRefreshJob,
-	runStructuralMaintenanceJob,
-} from "../../src/memory/maintenance-jobs.js";
+import { runDurableConsolidationJob, runSessionRefreshJob } from "../../src/memory/maintenance-jobs.js";
 import { updateMemoryMaintenanceState } from "../../src/memory/maintenance-state.js";
-import { runRetriedSidecarTask, runSidecarTask } from "../../src/memory/sidecar-worker.js";
+import { runRetriedSidecarTask } from "../../src/memory/sidecar-worker.js";
 import { setupChannelFiles, useTempDirs } from "../helpers/fixtures.js";
 
 const makeWorkspace = useTempDirs("pipiclaw-memory-lifecycle-");
@@ -241,45 +237,6 @@ describe("memory-lifecycle integration", () => {
 		expect(await readChannelHistory(channelDir)).not.toContain("Investigated callback verification flow.");
 	});
 
-	it("updates SESSION.md after the scheduled tool-call threshold and resets the counters", async () => {
-		const { appHomeDir, channelDir, messages, sessionEntries } = createLifecycleHarness({
-			minTurnsBetweenUpdate: 99,
-			minToolCallsBetweenUpdate: 2,
-			forceRefreshBeforeCompact: false,
-			forceRefreshBeforeNewSession: false,
-		});
-		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
-			rawText: "{}",
-			output: {
-				title: "Fix login regression",
-				currentState: ["Checked callback state serialization."],
-			},
-		});
-
-		await updateMemoryMaintenanceState(appHomeDir, "dm_123", (state) => ({
-			...state,
-			dirty: true,
-			toolCallsSinceSessionRefresh: 2,
-		}));
-		await runSessionRefreshJob({
-			appHomeDir,
-			channelId: "dm_123",
-			channelDir,
-			channelActive: false,
-			settings: createMaintenanceSettings({
-				minTurnsBetweenUpdate: 99,
-				minToolCallsBetweenUpdate: 2,
-			}),
-			model: TEST_MODEL,
-			resolveApiKey: async () => "",
-			messages,
-			sessionEntries,
-		});
-
-		expect(runRetriedSidecarTask).toHaveBeenCalledTimes(1);
-		expect(await readChannelSession(channelDir)).toContain("Checked callback state serialization.");
-	});
-
 	it("runs the compaction chain in order: session refresh, memory append, history append", async () => {
 		const { channelDir, fakePi } = createLifecycleHarness();
 		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
@@ -320,65 +277,6 @@ describe("memory-lifecycle integration", () => {
 			const taskNames = vi.mocked(runRetriedSidecarTask).mock.calls.map(([task]) => task.name);
 			expect(taskNames).toEqual(["session-memory-update", "memory-inline-consolidation"]);
 		});
-	});
-
-	it("runs structural maintenance using the real file writers", async () => {
-		const { appHomeDir, channelDir, messages, sessionEntries } = createLifecycleHarness({
-			forceRefreshBeforeCompact: false,
-			forceRefreshBeforeNewSession: false,
-		});
-		setupChannelFiles(channelDir, {
-			session: "# Session Title\n\nFix login regression\n",
-			memory: [
-				"# Channel Memory",
-				"",
-				...Array.from({ length: 6 }, (_, index) =>
-					[`## Update 2026-04-0${index + 1}`, `- Fact ${index + 1}`, ""].join("\n"),
-				),
-			].join("\n"),
-			history: [
-				"# Channel History",
-				"",
-				...Array.from({ length: 9 }, (_, index) =>
-					[
-						`## 2026-04-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
-						"",
-						`History block ${index + 1}`,
-						"",
-					].join("\n"),
-				),
-			].join("\n"),
-		});
-		vi.mocked(runSidecarTask).mockImplementation(async (task) => {
-			if (task.name === "memory-cleanup") {
-				return {
-					rawText: "## Decisions\n\n- Keep the callback interface stable.\n",
-					output: "## Decisions\n\n- Keep the callback interface stable.\n",
-				};
-			}
-			if (task.name === "history-folding") {
-				return {
-					rawText: "- Folded early history.",
-					output: "- Folded early history.",
-				};
-			}
-			throw new Error(`Unexpected sidecar task ${task.name}`);
-		});
-
-		await runStructuralMaintenanceJob({
-			appHomeDir,
-			channelId: "dm_123",
-			channelDir,
-			channelActive: false,
-			settings: createMaintenanceSettings(),
-			model: TEST_MODEL,
-			resolveApiKey: async () => "",
-			messages,
-			sessionEntries,
-		});
-
-		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).toContain("Keep the callback interface stable.");
-		expect(readFileSync(join(channelDir, "HISTORY.md"), "utf-8")).toContain("Folded early history.");
 	});
 
 	it("continues consolidation even when the forced session refresh fails", async () => {

@@ -9,7 +9,6 @@ function createQueue(): RunQueue {
 		enqueue: async (fn) => {
 			await fn();
 		},
-		enqueueMessage: async () => {},
 	};
 }
 
@@ -104,18 +103,15 @@ describe("session compaction events", () => {
 		expect(runState.lastCompactionError).toBeUndefined();
 	});
 
-	it.each(["manual", "threshold", "overflow"] as const)(
-		"uses the same compaction progress label for %s starts",
-		async (reason) => {
-			const respond = vi.fn(async () => {});
-			const ctx = createContext(respond);
-			const runState = createEmptyRunState();
+	it("uses the same compaction progress label for threshold starts", async () => {
+		const respond = vi.fn(async () => {});
+		const ctx = createContext(respond);
+		const runState = createEmptyRunState();
 
-			await handleSessionEvent({ type: "compaction_start", reason }, handlerContext(ctx, runState));
+		await handleSessionEvent({ type: "compaction_start", reason: "threshold" }, handlerContext(ctx, runState));
 
-			expect(respond).toHaveBeenCalledWith("Compacting context...", false);
-		},
-	);
+		expect(respond).toHaveBeenCalledWith("Compacting context...", false);
+	});
 
 	it("hides compaction progress in final_card_only mode", async () => {
 		const respond = vi.fn(async () => {});

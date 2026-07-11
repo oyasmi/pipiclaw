@@ -78,7 +78,7 @@ class FakeFrontend implements Frontend {
 
 const fakeStore = { logMessage: async () => true } as unknown as ChannelStore;
 
-function setup(now: () => number = () => 0) {
+function setup({ start = false, now = () => 0 }: { start?: boolean; now?: () => number } = {}) {
 	const runner = new FakeRunner();
 	const frontend = new FakeFrontend();
 	const controller = new TurnController({
@@ -95,13 +95,13 @@ function setup(now: () => number = () => 0) {
 		statusInfo: { version: "1", startedAt: 0 },
 		now,
 	});
-	const exit = controller.startInteractive();
+	const exit = start ? controller.startInteractive() : undefined;
 	return { runner, frontend, controller, exit, cb: () => frontend.callbacks };
 }
 
 describe("TurnController", () => {
 	it("runs an idle submit and toggles busy", async () => {
-		const { runner, frontend, cb } = setup();
+		const { runner, frontend, cb } = setup({ start: true });
 		cb().onSubmit("hello");
 		await tick();
 		expect(runner.runCount).toBe(1);
@@ -112,7 +112,7 @@ describe("TurnController", () => {
 	});
 
 	it("steers the in-flight turn instead of starting another", async () => {
-		const { runner, cb } = setup();
+		const { runner, cb } = setup({ start: true });
 		cb().onSubmit("first");
 		await tick();
 		cb().onSubmit("adjust course");
@@ -122,7 +122,7 @@ describe("TurnController", () => {
 	});
 
 	it("queues a follow-up to run after the current turn", async () => {
-		const { runner, cb } = setup();
+		const { runner, cb } = setup({ start: true });
 		cb().onSubmit("first");
 		await tick();
 		cb().onSubmit("/followup second");
@@ -134,7 +134,7 @@ describe("TurnController", () => {
 	});
 
 	it("/stop aborts the running turn", async () => {
-		const { runner, cb } = setup();
+		const { runner, cb } = setup({ start: true });
 		cb().onSubmit("work");
 		await tick();
 		cb().onSubmit("/stop");
@@ -143,7 +143,7 @@ describe("TurnController", () => {
 	});
 
 	it("Ctrl-C while running aborts but does not exit", async () => {
-		const { runner, frontend, cb } = setup();
+		const { runner, frontend, cb } = setup({ start: true });
 		cb().onSubmit("work");
 		await tick();
 		cb().onInterrupt();
@@ -153,7 +153,7 @@ describe("TurnController", () => {
 	});
 
 	it("two-stage Ctrl-C when idle: first arms, second exits", async () => {
-		const { runner, frontend, exit, cb } = setup();
+		const { runner, frontend, exit, cb } = setup({ start: true });
 		cb().onInterrupt();
 		expect(frontend.notices.at(-1)).toBe("Press Ctrl-C again to exit.");
 		expect(frontend.stopped).toBe(false);
@@ -166,7 +166,7 @@ describe("TurnController", () => {
 	});
 
 	it("a submission disarms the exit prompt", async () => {
-		const { runner, frontend, cb } = setup();
+		const { runner, frontend, cb } = setup({ start: true });
 		cb().onInterrupt(); // arm
 		cb().onSubmit("hello");
 		await tick();
@@ -178,7 +178,7 @@ describe("TurnController", () => {
 	});
 
 	it("/exit flushes memory and stops the frontend", async () => {
-		const { runner, frontend, exit, cb } = setup();
+		const { runner, frontend, exit, cb } = setup({ start: true });
 		cb().onSubmit("/exit");
 		await tick();
 		expect(runner.flushCount).toBe(1);
@@ -187,7 +187,7 @@ describe("TurnController", () => {
 	});
 
 	it("still resolves exit when frontend.stop() throws during shutdown", async () => {
-		const { frontend, exit, cb } = setup();
+		const { frontend, exit, cb } = setup({ start: true });
 		frontend.stopThrowsOnce = true;
 		cb().onInterrupt(); // arm
 		cb().onInterrupt(); // exit → shutdown() with a throwing stop()
@@ -195,48 +195,21 @@ describe("TurnController", () => {
 		await expect(exit).resolves.toBeUndefined();
 		expect(frontend.stopped).toBe(true);
 	});
-
-	it("renders info commands to the transcript", async () => {
-		const { frontend, cb } = setup();
-		cb().onSubmit("/help");
-		await tick();
-		expect(frontend.finals).toContain("HELP");
-	});
 });
 
 describe("TurnController.runOnce", () => {
-	function setupOnce(now: () => number = () => 0) {
-		const runner = new FakeRunner();
-		const frontend = new FakeFrontend();
-		const controller = new TurnController({
-			runner,
-			frontend,
-			store: fakeStore,
-			traits: { progressStyle: "full", finalDelivery: "plain" },
-			channelId: "tui_local",
-			userName: "tester",
-			renderHelp: () => "HELP",
-			renderUsage: () => "USAGE",
-			runEvents: async () => "EVENTS",
-			runTasks: async () => "TASKS",
-			statusInfo: { version: "1", startedAt: 0 },
-			now,
-		});
-		return { runner, frontend, controller };
-	}
-
 	// Regression for the --print built-in command bypass: runOnce used to call
 	// beginTurn() directly, skipping dispatch() entirely, so `/tasks`, `/events`,
 	// etc. were sent to the model as plain text instead of resolving zero-LLM.
 	it("resolves a built-in slash command without invoking the runner", async () => {
-		const { runner, frontend, controller } = setupOnce();
+		const { runner, frontend, controller } = setup();
 		await controller.runOnce("/tasks");
 		expect(runner.runCount).toBe(0);
 		expect(frontend.finals).toContain("TASKS");
 	});
 
 	it("runs a plain prompt through the runner", async () => {
-		const { runner, controller } = setupOnce();
+		const { runner, controller } = setup();
 		const done = controller.runOnce("summarize my day");
 		await tick();
 		expect(runner.runCount).toBe(1);
@@ -245,7 +218,7 @@ describe("TurnController.runOnce", () => {
 	});
 
 	it("shuts down cleanly with no prompt", async () => {
-		const { runner, frontend, controller } = setupOnce();
+		const { runner, frontend, controller } = setup();
 		await controller.runOnce();
 		expect(runner.runCount).toBe(0);
 		expect(frontend.stopped).toBe(true);

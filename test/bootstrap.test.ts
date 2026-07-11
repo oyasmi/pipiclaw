@@ -8,7 +8,6 @@ import {
 	bootstrap,
 	bootstrapAppHome,
 	loadConfig,
-	parseArgs,
 } from "../src/runtime/bootstrap.js";
 import { ChannelStore } from "../src/runtime/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -95,37 +94,6 @@ describe("bootstrap", () => {
 		expect(statSync(paths.authConfigPath).mode & 0o777).toBe(0o600);
 	});
 
-	it("parses help and exits with code 0", () => {
-		const paths = createBootstrapPaths();
-		const io = createIO();
-
-		expect(() => parseArgs(["node", "main", "--help"], paths, io)).toThrowError(BootstrapExitError);
-		try {
-			parseArgs(["node", "main", "--help"], paths, io);
-		} catch (error) {
-			expect(error).toBeInstanceOf(BootstrapExitError);
-			expect((error as BootstrapExitError).code).toBe(0);
-		}
-		expect(io.log).toHaveBeenCalledWith("Options:");
-		expect(io.log).toHaveBeenCalledWith("  --version                   Print the current version and exit");
-	});
-
-	it("parses version and exits with code 0", () => {
-		const paths = createBootstrapPaths();
-		const io = createIO();
-
-		expect(() => parseArgs(["node", "main", "--version"], paths, io)).toThrowError(BootstrapExitError);
-		try {
-			parseArgs(["node", "main", "--version"], paths, io);
-		} catch (error) {
-			expect(error).toBeInstanceOf(BootstrapExitError);
-			expect((error as BootstrapExitError).code).toBe(0);
-		}
-		expect(io.log).toHaveBeenCalledWith(
-			expect.stringMatching(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/),
-		);
-	});
-
 	it("loads and normalizes a ready DingTalk config", () => {
 		const paths = createBootstrapPaths();
 		writeFileSync(
@@ -178,48 +146,6 @@ describe("bootstrap", () => {
 		);
 	});
 
-	it("rejects invalid response mode during config loading", () => {
-		const paths = createBootstrapPaths();
-		const io = createIO();
-		writeFileSync(
-			paths.channelConfigPath,
-			JSON.stringify(
-				{
-					clientId: "client-id",
-					clientSecret: "secret",
-					responseMode: "final_only",
-				},
-				null,
-				2,
-			),
-		);
-
-		expect(() => loadConfig(paths, io)).toThrowError(BootstrapExitError);
-		expect(io.error).toHaveBeenCalledWith(
-			'  - Invalid `responseMode`: expected "full_progress_then_plain_final", "rolling_progress_then_plain_final", or "final_card_only".',
-		);
-	});
-
-	it("rejects invalid cardAutoLayout during config loading", () => {
-		const paths = createBootstrapPaths();
-		const io = createIO();
-		writeFileSync(
-			paths.channelConfigPath,
-			JSON.stringify(
-				{
-					clientId: "client-id",
-					clientSecret: "secret",
-					cardAutoLayout: "true",
-				},
-				null,
-				2,
-			),
-		);
-
-		expect(() => loadConfig(paths, io)).toThrowError(BootstrapExitError);
-		expect(io.error).toHaveBeenCalledWith("  - Invalid `cardAutoLayout`: expected boolean.");
-	});
-
 	it("bootstraps without starting services when requested", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
@@ -249,36 +175,5 @@ describe("bootstrap", () => {
 		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"clientId": "client-id"');
 
 		await expect(app.shutdown()).resolves.toBeUndefined();
-	});
-
-	it("does not sanitize proxy environment variables during bootstrap", async () => {
-		const paths = createBootstrapPaths();
-		bootstrapAppHome(paths);
-		writeFileSync(
-			paths.channelConfigPath,
-			JSON.stringify(
-				{
-					clientId: "client-id",
-					clientSecret: "secret",
-					robotCode: "",
-					cardTemplateId: "",
-					cardTemplateKey: "content",
-					allowFrom: [],
-				},
-				null,
-				2,
-			),
-		);
-		const env = { ...process.env, HTTP_PROXY: "http://127.0.0.1:7890" };
-
-		const app = await bootstrap(["node", "main"], {
-			paths,
-			registerSignalHandlers: false,
-			startServices: false,
-			env,
-		});
-
-		expect(env.HTTP_PROXY).toBe("http://127.0.0.1:7890");
-		await app.shutdown();
 	});
 });

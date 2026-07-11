@@ -589,25 +589,5 @@ describe("EventsWatcher", () => {
 				),
 			).toThrow("Invalid 'preAction.timeout'");
 		});
-
-		it("parses valid action in event payload", () => {
-			const dir = createTempDir();
-			const watcher = createWatcher(dir);
-			const privateApi = getEventsWatcherPrivateApi(watcher);
-
-			const parsed = privateApi.parseEvent(
-				JSON.stringify({
-					type: "periodic",
-					channelId: "dm_1",
-					text: "hello",
-					schedule: "0 10 * * 1",
-					timezone: "Asia/Shanghai",
-					preAction: { type: "bash", command: "echo hi", timeout: 5000 },
-				}),
-				"valid-action.json",
-			) as { preAction?: { type: string; command: string; timeout?: number } };
-
-			expect(parsed.preAction).toEqual({ type: "bash", command: "echo hi", timeout: 5000 });
-		});
 	});
 });

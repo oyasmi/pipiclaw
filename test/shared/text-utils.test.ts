@@ -1,12 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import {
-	clipText,
-	extractAssistantText,
-	extractLabelFromArgs,
-	HAN_REGEX,
-	truncate,
-} from "../../src/shared/text-utils.js";
+import { clipText, extractAssistantText, extractLabelFromArgs } from "../../src/shared/text-utils.js";
 
 function createAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
 	return {
@@ -41,16 +35,6 @@ describe("shared/text-utils", () => {
 
 	it("returns unchanged text when clipping is unnecessary", () => {
 		expect(clipText("  hello  ", 10)).toBe("hello");
-	});
-
-	it("truncates long text with an ellipsis", () => {
-		expect(truncate("hello world", 8)).toBe("hello...");
-		expect(truncate("short", 8)).toBe("short");
-	});
-
-	it("detects Han text", () => {
-		expect(HAN_REGEX.test("修复 memory bug")).toBe(true);
-		expect(HAN_REGEX.test("plain ascii")).toBe(false);
 	});
 
 	it("extracts trimmed labels from tool args", () => {

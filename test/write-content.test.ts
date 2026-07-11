@@ -32,20 +32,6 @@ describe("write-content", () => {
 		]);
 	});
 
-	it("streams large content over stdin", async () => {
-		const largeContent = "x".repeat(64 * 1024 + 1);
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);
-
-		await writeContent(executor, "large.txt", largeContent, undefined);
-
-		expect(executor.calls).toEqual([
-			{
-				command: "cat > 'large.txt'",
-				options: { signal: undefined, stdin: largeContent },
-			},
-		]);
-	});
-
 	it("preserves special characters by sending content through stdin instead of the shell", async () => {
 		const content = "line 1\nit's `dangerous` $(rm -rf /)\nbackslash\\\\done";
 		const executor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);

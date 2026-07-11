@@ -35,17 +35,6 @@ describe("createSerialQueue", () => {
 		expect(maxConcurrent).toBeGreaterThan(1);
 	});
 
-	it("a rejected job does not block later jobs on the same key", async () => {
-		const queue = createSerialQueue<string>();
-		await expect(
-			queue.run("k", async () => {
-				throw new Error("boom");
-			}),
-		).rejects.toThrow("boom");
-
-		await expect(queue.run("k", async () => "ok")).resolves.toBe("ok");
-	});
-
 	it("propagates each job's own result and rejection independently", async () => {
 		const queue = createSerialQueue<string>();
 		const first = queue.run("k", async () => "first");

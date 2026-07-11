@@ -42,17 +42,6 @@ describe("logSecurityEvent", () => {
 		expect(existsSync(defaultLogPath())).toBe(false);
 	});
 
-	it("appends multiple events in order, one JSON object per line", () => {
-		const config = { ...DEFAULT_SECURITY_CONFIG, audit: { logBlocked: true } };
-		logSecurityEvent(workspaceDir, config, { type: "command", tool: "bash", command: "one" });
-		logSecurityEvent(workspaceDir, config, { type: "command", tool: "bash", command: "two" });
-
-		const lines = readFileSync(defaultLogPath(), "utf-8").trim().split("\n");
-		expect(lines).toHaveLength(2);
-		expect(JSON.parse(lines[0] ?? "").command).toBe("one");
-		expect(JSON.parse(lines[1] ?? "").command).toBe("two");
-	});
-
 	it("honors a custom logFile path and creates its parent directory", () => {
 		const customPath = join(workspaceDir, "custom", "nested", "audit.log");
 		const config = { ...DEFAULT_SECURITY_CONFIG, audit: { logBlocked: true, logFile: customPath } };

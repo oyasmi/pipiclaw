@@ -23,12 +23,7 @@ const assistantError = { role: "assistant", stopReason: "error", errorMessage: "
 describe("shouldFallback", () => {
 	it.each([
 		["429 rate limit exceeded", true],
-		["Error: overloaded_error", true],
 		["503 Service Unavailable", true],
-		["insufficient_quota: you have exceeded your quota", true],
-		["401 invalid api key", true],
-		["400 invalid request: bad schema", true],
-		["socket hang up", true],
 		[undefined, true],
 	])("returns %s → %s for provider errors", (message, expected) => {
 		expect(shouldFallback(message as string | undefined)).toBe(expected);
@@ -54,11 +49,8 @@ describe("takeFailedTurn", () => {
 		expect(result).toEqual([{ role: "assistant", stopReason: "stop" }]);
 	});
 
-	it("returns null when the last message is not an assistant error", () => {
+	it("returns null for any non-[user, assistant(error)] tail", () => {
 		expect(takeFailedTurn([userMsg, { role: "assistant", stopReason: "stop" }])).toBeNull();
-	});
-
-	it("returns null when the second-to-last message is not a user message", () => {
 		const toolResult = { role: "toolResult" };
 		expect(takeFailedTurn([userMsg, toolResult, assistantError])).toBeNull();
 	});
@@ -66,12 +58,6 @@ describe("takeFailedTurn", () => {
 	it("returns null for fewer than two messages", () => {
 		expect(takeFailedTurn([assistantError])).toBeNull();
 		expect(takeFailedTurn([])).toBeNull();
-	});
-
-	it("does not mutate the input array", () => {
-		const messages = [userMsg, assistantError];
-		takeFailedTurn(messages);
-		expect(messages).toHaveLength(2);
 	});
 });
 

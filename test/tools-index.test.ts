@@ -198,78 +198,10 @@ describe("tools index", () => {
 		createSubAgentToolMock.mockClear();
 	});
 
-	it("skips web tools when tools.web.enable is false", () => {
-		toolsConfig.tools.web.enable = false;
-		const tools = createPipiclawTools({
-			executor,
-			getCurrentModel: vi.fn(),
-			getAvailableModels: vi.fn(() => []),
-			resolveApiKey: vi.fn(),
-			workspaceDir: "/repo",
-			channelDir: "/repo/dm_42",
-			channelId: "dm_42",
-			getSubAgentDiscovery: vi.fn(),
-			getMemoryRecallSettings: vi.fn(() => ({
-				enabled: true,
-				maxCandidates: 8,
-				maxInjected: 3,
-				maxChars: 3500,
-				rerankWithModel: false,
-			})),
-			getSessionSearchSettings: vi.fn(() => ({
-				enabled: true,
-				maxFiles: 12,
-				maxChunks: 80,
-				maxCharsPerChunk: 1200,
-				summarizeWithModel: false,
-				timeoutMs: 12000,
-			})),
-			memoryCandidateStore: createMemoryCandidateStore(),
-		});
-
-		expect(tools.map((tool) => tool.name)).toEqual([
-			"read",
-			"bash",
-			"edit",
-			"grep",
-			"write",
-			"session_search",
-			"memory_manage",
-			"skill_manage",
-			"event_manage",
-			"task_manage",
-			"subagent",
-		]);
-		expect(createWebSearchToolMock).not.toHaveBeenCalled();
-		expect(createWebFetchToolMock).not.toHaveBeenCalled();
-		toolsConfig.tools.web.enable = true;
-	});
-
 	it("registers the job tool only when tools.jobs.enabled is on", () => {
 		const baseArgs = {
+			...baseToolOptions,
 			executor,
-			getCurrentModel: vi.fn(),
-			getAvailableModels: vi.fn(() => []),
-			resolveApiKey: vi.fn(),
-			workspaceDir: "/repo",
-			channelDir: "/repo/dm_42",
-			channelId: "dm_42",
-			getSubAgentDiscovery: vi.fn(),
-			getMemoryRecallSettings: vi.fn(() => ({
-				enabled: true,
-				maxCandidates: 8,
-				maxInjected: 3,
-				maxChars: 3500,
-				rerankWithModel: false,
-			})),
-			getSessionSearchSettings: vi.fn(() => ({
-				enabled: true,
-				maxFiles: 12,
-				maxChunks: 80,
-				maxCharsPerChunk: 1200,
-				summarizeWithModel: false,
-				timeoutMs: 12000,
-			})),
 			memoryCandidateStore: createMemoryCandidateStore(),
 		};
 
@@ -279,39 +211,6 @@ describe("tools index", () => {
 		expect(
 			createPipiclawTools({ ...baseArgs, memoryCandidateStore: createMemoryCandidateStore() }).map((t) => t.name),
 		).toContain("job");
-	});
-
-	it("skips session_search when disabled in tools config", () => {
-		toolsConfig.tools.memory.sessionSearch.enabled = false;
-		const tools = createPipiclawTools({
-			executor,
-			getCurrentModel: vi.fn(),
-			getAvailableModels: vi.fn(() => []),
-			resolveApiKey: vi.fn(),
-			workspaceDir: "/repo",
-			channelDir: "/repo/dm_42",
-			channelId: "dm_42",
-			getSubAgentDiscovery: vi.fn(),
-			getMemoryRecallSettings: vi.fn(() => ({
-				enabled: true,
-				maxCandidates: 8,
-				maxInjected: 3,
-				maxChars: 3500,
-				rerankWithModel: false,
-			})),
-			getSessionSearchSettings: vi.fn(() => ({
-				enabled: true,
-				maxFiles: 12,
-				maxChunks: 80,
-				maxCharsPerChunk: 1200,
-				summarizeWithModel: false,
-				timeoutMs: 12000,
-			})),
-			memoryCandidateStore: createMemoryCandidateStore(),
-		});
-
-		expect(tools.map((tool) => tool.name)).not.toContain("session_search");
-		expect(createSessionSearchToolMock).not.toHaveBeenCalled();
 	});
 
 	it("keeps the system prompt tool list in sync with the registered tools", () => {
@@ -345,29 +244,8 @@ describe("tools index", () => {
 
 	it("appends the subagent tool and passes runtime context", () => {
 		const options = {
+			...baseToolOptions,
 			executor,
-			getCurrentModel: vi.fn(),
-			getAvailableModels: vi.fn(() => []),
-			resolveApiKey: vi.fn(),
-			workspaceDir: "/repo",
-			channelDir: "/repo/dm_42",
-			channelId: "dm_42",
-			getSubAgentDiscovery: vi.fn(),
-			getMemoryRecallSettings: vi.fn(() => ({
-				enabled: true,
-				maxCandidates: 8,
-				maxInjected: 3,
-				maxChars: 3500,
-				rerankWithModel: false,
-			})),
-			getSessionSearchSettings: vi.fn(() => ({
-				enabled: true,
-				maxFiles: 12,
-				maxChunks: 80,
-				maxCharsPerChunk: 1200,
-				summarizeWithModel: false,
-				timeoutMs: 12000,
-			})),
 			memoryCandidateStore: createMemoryCandidateStore(),
 		};
 

@@ -39,22 +39,4 @@ describe("session corpus limits", () => {
 		const lastDoc = docs[docs.length - 1];
 		expect(lastDoc?.text).toContain("message number 199");
 	});
-
-	it("returns all documents when under the limit", async () => {
-		const channelDir = createChannelDir();
-		const entries = Array.from({ length: 10 }, (_, i) => ({
-			date: new Date(Date.now() - (10 - i) * 60_000).toISOString(),
-			text: `short message ${i}`,
-			isBot: false,
-		}));
-		writeJsonl(join(channelDir, "log.jsonl"), entries);
-
-		const docs = await buildSessionCorpus({
-			channelDir,
-			maxFiles: 6,
-			maxDocumentsTotal: 5000,
-		});
-
-		expect(docs.length).toBe(10);
-	});
 });

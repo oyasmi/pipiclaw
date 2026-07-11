@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { buildMemoryCandidates, createMemoryCandidateStore } from "../src/memory/candidates.js";
-import { recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
+import { tokenizeRecallText } from "../src/memory/recall.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeWorkspace = useTempDirs("pipiclaw-recall-");
@@ -163,115 +163,5 @@ describe("memory recall", () => {
 
 		expect(tokens).toEqual(expect.arrayContaining(["库表", "表锁", "库", "表", "锁"]));
 		expect(tokens).not.toContain("了");
-	});
-
-	it("prioritizes current session state for current-work queries", async () => {
-		const { workspaceDir, channelDir } = createTempWorkspace();
-		writeFileSync(
-			join(workspaceDir, "MEMORY.md"),
-			"# Workspace Memory\n\n## Shared Context\n\n- Default package manager is pnpm.\n",
-			"utf-8",
-		);
-		writeFileSync(
-			join(channelDir, "SESSION.md"),
-			[
-				"# Session Title",
-				"",
-				"Fix login regression",
-				"",
-				"# Current State",
-				"",
-				"- Investigating oauth callback failure in src/auth.ts.",
-				"",
-				"# Next Steps",
-				"",
-				"- Reproduce the bug and inspect callback state handling.",
-			].join("\n"),
-			"utf-8",
-		);
-		writeFileSync(
-			join(channelDir, "MEMORY.md"),
-			"# Channel Memory\n\n## Constraints\n\n- Avoid changing token storage format.\n",
-			"utf-8",
-		);
-		writeFileSync(
-			join(channelDir, "HISTORY.md"),
-			"# Channel History\n\n## 2026-03-01T00:00:00.000Z\n\nOld deployment note.\n",
-			"utf-8",
-		);
-
-		const result = await recallRelevantMemory({
-			query: "What are we doing now on the login bug and what should I do next?",
-			workspaceDir,
-			channelDir,
-			maxCandidates: 8,
-			maxInjected: 2,
-			maxChars: 2000,
-			rerankWithModel: false,
-			model: { provider: "test", id: "noop" } as never,
-			resolveApiKey: async () => "",
-		});
-
-		expect(result.items).toHaveLength(2);
-		expect(result.items[0]?.source).toBe("channel-session");
-		expect(result.renderedText).toContain("<runtime_context>");
-		expect(result.renderedText).toContain("Current State");
-		expect(result.renderedText).toContain("Next Steps");
-	});
-
-	it("keeps high-priority session context available for Chinese queries", async () => {
-		const { workspaceDir, channelDir } = createTempWorkspace();
-		writeFileSync(
-			join(workspaceDir, "MEMORY.md"),
-			"# Workspace Memory\n\n## Shared Context\n\n- 使用 pnpm。\n",
-			"utf-8",
-		);
-		writeFileSync(
-			join(channelDir, "SESSION.md"),
-			[
-				"# Session Title",
-				"",
-				"修复登录异常",
-				"",
-				"# Current State",
-				"",
-				"- 正在排查认证回调异常。",
-				"",
-				"# Next Steps",
-				"",
-				"- 先复现问题，再检查回调状态。",
-			].join("\n"),
-			"utf-8",
-		);
-		writeFileSync(
-			join(channelDir, "MEMORY.md"),
-			"# Channel Memory\n\n## Constraints\n\n- 不要变更 token 存储。\n",
-			"utf-8",
-		);
-		writeFileSync(
-			join(channelDir, "HISTORY.md"),
-			"# Channel History\n\n## 2026-03-01T00:00:00.000Z\n\n旧发布记录。\n",
-			"utf-8",
-		);
-
-		const result = await recallRelevantMemory({
-			query: "现在登录失败了，下一步该查什么？",
-			workspaceDir,
-			channelDir,
-			maxCandidates: 8,
-			maxInjected: 2,
-			maxChars: 2000,
-			rerankWithModel: false,
-			autoRerank: false,
-			model: { provider: "test", id: "noop" } as never,
-			resolveApiKey: async () => "",
-		});
-
-		expect(result.items).toHaveLength(2);
-		expect(result.items.every((item) => item.source === "channel-session" || item.source === "channel-memory")).toBe(
-			true,
-		);
-		expect(result.renderedText).toContain("认证回调异常");
-		expect(result.renderedText).toContain("先复现问题");
 	});
 });

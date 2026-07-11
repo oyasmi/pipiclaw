@@ -41,7 +41,6 @@ export interface PendingTool {
 
 export interface RunQueue {
 	enqueue(fn: () => Promise<void>, errorContext: string): void;
-	enqueueMessage(text: string, target: "main" | "thread", errorContext: string, doLog?: boolean): void;
 }
 
 export interface RunLogContext {

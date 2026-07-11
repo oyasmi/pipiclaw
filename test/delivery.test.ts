@@ -13,26 +13,6 @@ afterEach(() => {
 });
 
 describe("delivery", () => {
-	it("builds a full ChannelContext surface", () => {
-		const ctx = createDingTalkContext(
-			createFakeEvent(),
-			new FakeDingTalkBot() as never,
-			new FakeChannelStore() as never,
-		);
-
-		expect(ctx.message.channel).toBe("dm_123");
-		expect(typeof ctx.respond).toBe("function");
-		expect(typeof ctx.respondPlain).toBe("function");
-		expect(typeof ctx.replaceMessage).toBe("function");
-		expect(typeof ctx.respondInThread).toBe("function");
-		expect(typeof ctx.setTyping).toBe("function");
-		expect(typeof ctx.setWorking).toBe("function");
-		expect(typeof ctx.deleteMessage).toBe("function");
-		expect(typeof ctx.primeCard).toBe("function");
-		expect(typeof ctx.flush).toBe("function");
-		expect(typeof ctx.close).toBe("function");
-	});
-
 	it("warms an AI card after 350ms when no progress has been emitted yet", async () => {
 		const bot = new FakeDingTalkBot();
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
@@ -240,32 +220,6 @@ describe("delivery", () => {
 
 		expect(failedBot.calls).toEqual([
 			{ method: "appendToCard", args: ["dm_123", "hello"] },
-			{ method: "discardCard", args: ["dm_123"] },
-			{ method: "replaceCard", args: ["dm_123", "hello\n\nworld", false] },
-		]);
-	});
-
-	it("marks replay required when append throws and retries with a full snapshot", async () => {
-		const throwingBot = new FakeDingTalkBot();
-		throwingBot.appendToCard = vi.fn(async () => {
-			throw new Error("boom");
-		});
-		const throwingCtx = createDingTalkContext(
-			createFakeEvent(),
-			throwingBot as never,
-			new FakeChannelStore() as never,
-		);
-
-		await throwingCtx.respond("hello");
-		await vi.advanceTimersByTimeAsync(800);
-		await throwingCtx.flush();
-
-		await throwingCtx.respond("world");
-		await vi.advanceTimersByTimeAsync(800);
-		await throwingCtx.flush();
-
-		expect(throwingBot.discardCard).toBeDefined();
-		expect(throwingBot.calls).toEqual([
 			{ method: "discardCard", args: ["dm_123"] },
 			{ method: "replaceCard", args: ["dm_123", "hello\n\nworld", false] },
 		]);

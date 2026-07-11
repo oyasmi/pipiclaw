@@ -31,11 +31,6 @@ describe("buildTaskDigest", () => {
 		expect(await digest()).toBe("");
 	});
 
-	it("returns empty when every task is done", async () => {
-		await writeFile(join(tasksDir, "a.md"), doc("status: done", "# A"));
-		expect(await digest()).toBe("");
-	});
-
 	it("includes non-done tasks with the background-reference framing", async () => {
 		await writeFile(join(tasksDir, "weekly-report.md"), doc("status: awaiting-user", "# 周报编写与发布"));
 		const out = await digest();

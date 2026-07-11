@@ -1,5 +1,4 @@
 import * as log from "../log.js";
-import type { ChannelContext } from "../runtime/channel-context.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { RunQueue } from "./types.js";
 
@@ -8,7 +7,7 @@ export interface CreatedRunQueue {
 	drain: () => Promise<void>;
 }
 
-export function createRunQueue(ctx: ChannelContext): CreatedRunQueue {
+export function createRunQueue(): CreatedRunQueue {
 	let queueChain = Promise.resolve();
 	const queue: RunQueue = {
 		enqueue: (fn: () => Promise<void>, errorContext: string): void => {
@@ -20,9 +19,6 @@ export function createRunQueue(ctx: ChannelContext): CreatedRunQueue {
 					log.logWarning(`DingTalk API error (${errorContext})`, errMsg);
 				}
 			});
-		},
-		enqueueMessage: function (text: string, target: "main" | "thread", errorContext: string, doLog = true): void {
-			this.enqueue(() => (target === "main" ? ctx.respond(text, doLog) : ctx.respondInThread(text)), errorContext);
 		},
 	};
 

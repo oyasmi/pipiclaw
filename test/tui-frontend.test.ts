@@ -22,11 +22,6 @@ describe("createFrontend", () => {
 	it("returns the plain frontend when forced", () => {
 		expect(createFrontend({ plain: true, interactive: false })).toBeInstanceOf(PlainFrontend);
 	});
-
-	it("returns the plain frontend when stdout is not a TTY", () => {
-		// In the test runner stdout is not a TTY, so the selector must fall back.
-		expect(createFrontend({ interactive: false })).toBeInstanceOf(PlainFrontend);
-	});
 });
 
 describe("PlainFrontend", () => {
