@@ -1,4 +1,5 @@
 import * as log from "../log.js";
+import { errorMessage } from "../shared/text-utils.js";
 import type { ChannelContext } from "./channel-context.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 import type { ChannelStore } from "./store.js";
@@ -101,10 +102,7 @@ class ChannelDeliveryController {
 		try {
 			await this.bot.ensureCard(this.event.channelId);
 		} catch (err) {
-			log.logWarning(
-				`[${this.event.channelId}] Failed to warm AI card`,
-				err instanceof Error ? err.message : String(err),
-			);
+			log.logWarning(`[${this.event.channelId}] Failed to warm AI card`, errorMessage(err));
 			this.bot.discardCard(this.event.channelId);
 		}
 	}
@@ -119,10 +117,7 @@ class ChannelDeliveryController {
 
 	private archiveBotResponse(text: string): void {
 		void this.store.logBotResponse(this.event.channelId, text, Date.now().toString()).catch((err) => {
-			log.logWarning(
-				`[${this.event.channelId}] Failed to archive bot response`,
-				err instanceof Error ? err.message : String(err),
-			);
+			log.logWarning(`[${this.event.channelId}] Failed to archive bot response`, errorMessage(err));
 		});
 	}
 
@@ -310,10 +305,7 @@ class ChannelDeliveryController {
 						}
 					}
 				} catch (err) {
-					log.logWarning(
-						`[${this.event.channelId}] Delivery sync failed`,
-						err instanceof Error ? err.message : String(err),
-					);
+					log.logWarning(`[${this.event.channelId}] Delivery sync failed`, errorMessage(err));
 					this.bot.discardCard(this.event.channelId);
 					if (mode === "progress") {
 						this.replayRequired = true;

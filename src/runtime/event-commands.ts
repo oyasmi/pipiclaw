@@ -1,7 +1,7 @@
 import { existsSync } from "fs";
 import { readdir, readFile, unlink } from "fs/promises";
 import { join, resolve, sep } from "path";
-import { eventNameFromFilename } from "../shared/text-utils.js";
+import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { type EventHistoryRecord, parseScheduledEventContent, type ScheduledEvent } from "./events.js";
 
 const EVENT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -118,7 +118,7 @@ async function listEvents(workspaceDir: string): Promise<string> {
 			const event = parseScheduledEventContent(await readFile(eventPath, "utf-8"), filename);
 			blocks.push(formatEventSummary(name, event));
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = errorMessage(error);
 			blocks.push(`- ${name}\n  invalid: ${message}`);
 		}
 	}
@@ -208,7 +208,7 @@ export async function handleEventsCommand(options: HandleEventsCommandOptions): 
 	try {
 		command = parseEventsCommand(options.args);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		return `${message}\n\n${usage()}`;
 	}
 
@@ -224,7 +224,7 @@ export async function handleEventsCommand(options: HandleEventsCommandOptions): 
 				return await showHistory(options.historyPath, command.name);
 		}
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		return `Could not ${command.action} events: ${message}`;
 	}
 }

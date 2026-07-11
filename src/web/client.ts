@@ -9,6 +9,7 @@ import { SocksProxyAgent } from "socks-proxy-agent";
 import { logSecurityEvent } from "../security/logger.js";
 import { NetworkGuardError, validateNetworkTarget, validateRedirectTarget } from "../security/network.js";
 import type { SecurityConfig } from "../security/types.js";
+import { errorMessage } from "../shared/text-utils.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
 
 export const WEB_USER_AGENT =
@@ -227,11 +228,7 @@ export class WebHttpClient {
 				data: JSON.parse(text) as T,
 			};
 		} catch (error) {
-			throw new Error(
-				`Expected JSON response from ${options.url}, got invalid JSON: ${
-					error instanceof Error ? error.message : String(error)
-				}`,
-			);
+			throw new Error(`Expected JSON response from ${options.url}, got invalid JSON: ${errorMessage(error)}`);
 		}
 	}
 

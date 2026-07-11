@@ -1,3 +1,4 @@
+import { errorMessage } from "../shared/text-utils.js";
 export type TaskPriority = "low" | "normal" | "high" | "critical";
 export type TaskIsolation = "shared" | "worktree";
 export type TaskSideEffects = "read-only" | "workspace" | "external";
@@ -161,7 +162,7 @@ export function parseTaskControl(raw: string): TaskControl {
 	try {
 		value = JSON.parse(raw);
 	} catch (error) {
-		throw new Error(`control is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+		throw new Error(`control is not valid JSON: ${errorMessage(error)}`);
 	}
 	if (!isRecord(value) || value.version !== 1) {
 		throw new Error("control must be a version 1 JSON object");

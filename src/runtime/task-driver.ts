@@ -4,6 +4,7 @@ import * as log from "../log.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
 import { taskEventName } from "../shared/task-events.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../shared/task-ledger.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
 import { claimTaskAttempt, dependencyState, escalateTask, releaseTaskAttemptClaim } from "../tasks/store.js";
 import type { DingTalkEvent } from "./dingtalk.js";
@@ -188,7 +189,7 @@ export class TaskDriver {
 		if (this.timer) return;
 		this.timer = setInterval(() => {
 			void this.runOnce().catch((error) => {
-				log.logWarning("Task driver tick failed", error instanceof Error ? error.message : String(error));
+				log.logWarning("Task driver tick failed", errorMessage(error));
 			});
 		}, this.options.intervalMs ?? DEFAULT_SCAN_INTERVAL_MS);
 		this.timer.unref?.();

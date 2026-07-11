@@ -4,6 +4,7 @@
  * from an `AgentRunner` status snapshot. Pure functions, no side effects.
  */
 import type { SandboxConfig } from "../sandbox.js";
+import { errorMessage } from "../shared/text-utils.js";
 import type { AgentRunner } from "./types.js";
 
 /** Minimal per-channel run state the status renderer needs. */
@@ -70,7 +71,7 @@ export function renderStatus(options: RenderStatusOptions): string {
 				);
 			}
 		} catch (err) {
-			lines.push(`- Model: unavailable (${err instanceof Error ? err.message : String(err)})`);
+			lines.push(`- Model: unavailable (${errorMessage(err)})`);
 		}
 	} else {
 		lines.push("- Model: no session started for this channel yet");

@@ -9,6 +9,7 @@ import { parseScheduledEventContent, type ScheduledEvent } from "../runtime/even
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 
 /** one-shot events must be scheduled at least this far out; anything sooner is effectively self-triggering. */
@@ -109,7 +110,7 @@ function validatePeriodic(event: ScheduledEvent & { type: "periodic" }): void {
 		runs = cron.nextRuns(3);
 		cron.stop();
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		throw new Error(`Invalid cron schedule "${event.schedule}": ${message}`);
 	}
 	// A preAction gate makes a tighter cadence safe (the sensor keeps most fires silent);
@@ -146,7 +147,7 @@ function validateDefinition(rawDefinition: string, name: string, options: EventM
 	try {
 		data = JSON.parse(rawDefinition);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		throw new Error(`definition is not valid JSON: ${message}`);
 	}
 	if (!isRecord(data)) {
@@ -189,7 +190,7 @@ async function readOwnedEvent(
 	try {
 		existing = parseScheduledEventContent(await readFile(eventPath, "utf-8"), `${name}.json`);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		throw new Error(`Existing event "${name}" could not be parsed (${message}); use /events to manage it directly.`);
 	}
 	if (existing.channelId !== options.channelId) {

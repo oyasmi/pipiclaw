@@ -31,6 +31,7 @@ import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { readActiveTasks } from "../shared/task-ledger.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { finishTaskAttempt } from "../tasks/store.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
@@ -323,7 +324,7 @@ function hardenExistingSecretFile(path: string): void {
 			log.logInfo(`Tightened permissions on ${path} to 0600`);
 		}
 	} catch (err) {
-		log.logWarning(`Failed to tighten permissions on ${path}`, err instanceof Error ? err.message : String(err));
+		log.logWarning(`Failed to tighten permissions on ${path}`, errorMessage(err));
 	}
 }
 
@@ -469,7 +470,7 @@ export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: 
 		parsed = JSON.parse(readFileSync(paths.channelConfigPath, "utf-8")) as DingTalkConfig;
 	} catch (err) {
 		io.error(`Failed to parse configuration: ${paths.channelConfigPath}`);
-		io.error(err instanceof Error ? err.message : String(err));
+		io.error(errorMessage(err));
 		throw new BootstrapExitError(1);
 	}
 
@@ -566,10 +567,7 @@ function flushInactiveChannelMemory(channelStates: Map<string, ChannelState>): P
 		}
 		flushes.push(
 			state.runner.flushMemoryForShutdown().catch((err) => {
-				log.logWarning(
-					`[${channelId}] Failed to flush memory during shutdown`,
-					err instanceof Error ? err.message : String(err),
-				);
+				log.logWarning(`[${channelId}] Failed to flush memory during shutdown`, errorMessage(err));
 			}),
 		);
 	}
@@ -630,10 +628,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		try {
 			await store.logMessage(channelId, message);
 		} catch (err) {
-			log.logWarning(
-				`[${channelId}] Failed to archive ${contextLabel}`,
-				err instanceof Error ? err.message : String(err),
-			);
+			log.logWarning(`[${channelId}] Failed to archive ${contextLabel}`, errorMessage(err));
 		}
 	};
 
@@ -690,7 +685,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					log.logInfo(`[${channelId}] Reset ${canceled} durable-dispatch lease(s) on stop`);
 				}
 				void state.runner.abort().catch((err) => {
-					log.logWarning(`[${channelId}] Failed to abort run`, err instanceof Error ? err.message : String(err));
+					log.logWarning(`[${channelId}] Failed to abort run`, errorMessage(err));
 				});
 				log.logInfo(`[${channelId}] Stop requested`);
 			}
@@ -790,7 +785,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				log.logInfo(`[${event.channelId}] Queued ${mode}: ${trimmedQueueText.substring(0, 80)}`);
 				return { kind: "handled" };
 			} catch (err) {
-				const errMsg = err instanceof Error ? err.message : String(err);
+				const errMsg = errorMessage(err);
 				if (isNoRunningTaskQueueError(err)) {
 					log.logInfo(`[${event.channelId}] Busy ${mode} window closed; requeueing as a normal message`);
 					return { kind: "requeue", text: trimmedQueueText };
@@ -881,7 +876,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						log.logInfo(`[${event.channelId}] Stopped`);
 					}
 				} catch (err) {
-					log.logWarning(`[${event.channelId}] Run error`, err instanceof Error ? err.message : String(err));
+					log.logWarning(`[${event.channelId}] Run error`, errorMessage(err));
 				} finally {
 					await durableDispatch?.markCompleted(event.dispatchId);
 					state.running = false;
@@ -978,10 +973,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						log.logInfo(`[${channelId}] Aborting active run for shutdown`);
 						aborts.push(
 							state.runner.abort().catch((err) => {
-								log.logWarning(
-									`[${channelId}] Failed to abort run during shutdown`,
-									err instanceof Error ? err.message : String(err),
-								);
+								log.logWarning(`[${channelId}] Failed to abort run during shutdown`, errorMessage(err));
 							}),
 						);
 					}

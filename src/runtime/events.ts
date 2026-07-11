@@ -17,7 +17,7 @@ import * as log from "../log.js";
 import type { ExecResult, Executor } from "../sandbox.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
-import { eventNameFromFilename } from "../shared/text-utils.js";
+import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 
 // ============================================================================
@@ -555,7 +555,7 @@ export class EventsWatcher {
 			} catch (err) {
 				log.logWarning(`One-shot event execution failed: ${filename}`, String(err));
 				this.appendEventHistory(filename, event, "skipped", "error", {
-					reason: err instanceof Error ? err.message : String(err),
+					reason: errorMessage(err),
 				});
 			}
 		}, delay);
@@ -573,7 +573,7 @@ export class EventsWatcher {
 				} catch (err) {
 					log.logWarning(`Periodic event execution failed: ${filename}`, String(err));
 					this.appendEventHistory(filename, event, "skipped", "error", {
-						reason: err instanceof Error ? err.message : String(err),
+						reason: errorMessage(err),
 					});
 				}
 			});
@@ -619,7 +619,7 @@ export class EventsWatcher {
 					},
 				});
 			} catch (err) {
-				const reason = err instanceof Error ? err.message : String(err);
+				const reason = errorMessage(err);
 				log.logInfo(`Pre-action gate blocked event: ${filename} (${reason})`);
 				const actionResult = err instanceof EventPreActionError ? err : undefined;
 				this.appendEventHistory(
@@ -719,7 +719,7 @@ export class EventsWatcher {
 		try {
 			result = await this.executor.exec(action.command, { timeout: timeoutSeconds });
 		} catch (err) {
-			throw new EventPreActionError("failed", err instanceof Error ? err.message : String(err), {
+			throw new EventPreActionError("failed", errorMessage(err), {
 				durationMs: Date.now() - startedAt,
 			});
 		}

@@ -1,5 +1,6 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { errorMessage } from "../shared/text-utils.js";
 import type { SecurityConfig } from "./types.js";
 
 type ValidationStage = "request" | "redirect";
@@ -262,7 +263,7 @@ async function validateUrlTarget(
 			url: rawUrl,
 			stage,
 			category: "dns-failure",
-			message: `Failed to resolve host ${hostname}: ${error instanceof Error ? error.message : String(error)}`,
+			message: `Failed to resolve host ${hostname}: ${errorMessage(error)}`,
 			resolvedHost: hostname,
 		});
 	}

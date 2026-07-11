@@ -2,7 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { serializeConversation } from "@earendil-works/pi-coding-agent";
 import { parseJsonObject } from "../shared/llm-json.js";
-import { clipText } from "../shared/text-utils.js";
+import { clipText, errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { manageWorkspaceSkill } from "../tools/skill-manage.js";
 import { appendChannelMemoryUpdate, readChannelHistory, readChannelMemory, readChannelSession } from "./files.js";
@@ -242,7 +242,7 @@ async function applySkillCandidate(
 			await options.refreshWorkspaceResources();
 		}
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		result.skipped.push({ type: "skill", candidate, reason: message });
 		result.suggestions.push({ type: "skill", candidate, blockedReason: message });
 	}
@@ -297,7 +297,7 @@ export async function runPostTurnReview(options: PostTurnReviewOptions): Promise
 		const review = await runPostTurnReviewWorker(options);
 		return await applyPostTurnReviewResult(options, review);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		await appendMemoryReviewLog(options.channelDir, {
 			timestamp: new Date().toISOString(),
 			channelId: options.channelId,

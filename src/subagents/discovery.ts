@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { findExactModelReferenceMatch, formatModelReference } from "../models/utils.js";
 import { SUB_AGENTS_DIR_NAME } from "../paths.js";
+import { errorMessage } from "../shared/text-utils.js";
 
 const ALLOWED_SUB_AGENT_TOOLS = ["read", "bash", "edit", "write", "web_search", "web_fetch"] as const;
 const DEFAULT_SUB_AGENT_TOOLS = ["read", "bash"] as const;
@@ -281,7 +282,7 @@ export function discoverSubAgents(workspaceDir: string, availableModels: Model<A
 		return {
 			directory,
 			agents: [],
-			warnings: [`Failed to read sub-agents directory (${error instanceof Error ? error.message : String(error)})`],
+			warnings: [`Failed to read sub-agents directory (${errorMessage(error)})`],
 		};
 	}
 
@@ -291,9 +292,7 @@ export function discoverSubAgents(workspaceDir: string, availableModels: Model<A
 		try {
 			content = readFileSync(filePath, "utf-8");
 		} catch (error) {
-			warnings.push(
-				`${entry.name}: failed to read file (${error instanceof Error ? error.message : String(error)})`,
-			);
+			warnings.push(`${entry.name}: failed to read file (${errorMessage(error)})`);
 			continue;
 		}
 

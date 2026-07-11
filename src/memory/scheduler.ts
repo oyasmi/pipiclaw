@@ -9,6 +9,7 @@ import type {
 	PipiclawMemoryMaintenanceSettings,
 	PipiclawSessionMemorySettings,
 } from "../settings.js";
+import { errorMessage } from "../shared/text-utils.js";
 import {
 	runDurableConsolidationJob,
 	runGrowthReviewJob,
@@ -113,10 +114,7 @@ export class MemoryMaintenanceScheduler {
 		}
 		this.timer = setInterval(() => {
 			void this.runOnce().catch((error) => {
-				log.logWarning(
-					"Memory maintenance scheduler tick failed",
-					error instanceof Error ? error.message : String(error),
-				);
+				log.logWarning("Memory maintenance scheduler tick failed", errorMessage(error));
 			});
 		}, this.options.intervalMs ?? DEFAULT_TICK_INTERVAL_MS);
 		this.timer.unref?.();

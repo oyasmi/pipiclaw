@@ -40,6 +40,10 @@ export function extractLabelFromArgs(args: unknown): string | null {
 	return typeof label === "string" && label.trim() ? label.trim() : null;
 }
 
+export function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
 export function extractAssistantText(message: AssistantMessage): string {
 	return message.content
 		.filter(

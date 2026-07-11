@@ -39,6 +39,7 @@ import { createExecutor, type Executor, type SandboxConfig } from "../sandbox.js
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostics.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
@@ -355,7 +356,7 @@ export class ChannelRunner implements AgentRunner {
 						});
 					} catch (err) {
 						this.runState.stopReason = "error";
-						this.runState.errorMessage = err instanceof Error ? err.message : String(err);
+						this.runState.errorMessage = errorMessage(err);
 						log.logWarning(`[${this.channelId}] Runner failed`, this.runState.errorMessage);
 					}
 				},
@@ -401,7 +402,7 @@ export class ChannelRunner implements AgentRunner {
 			fallbackAttempted = await runPromptWithFallback(promptText, fallbackDeps);
 		} catch (err) {
 			this.runState.stopReason = "error";
-			this.runState.errorMessage = err instanceof Error ? err.message : String(err);
+			this.runState.errorMessage = errorMessage(err);
 			log.logWarning(`[${this.channelId}] Runner failed`, this.runState.errorMessage);
 		} finally {
 			this.acceptingBusyMessages = false;
@@ -446,7 +447,7 @@ export class ChannelRunner implements AgentRunner {
 						}
 						await ctx.replaceMessage(`_Sorry, something went wrong._\n\n${detailLines.join("\n\n")}`);
 					} catch (err) {
-						const errMsg = err instanceof Error ? err.message : String(err);
+						const errMsg = errorMessage(err);
 						log.logWarning("Failed to post error message", errMsg);
 					}
 				} else if (isSilentOutcome(finalOutcome)) {
@@ -454,7 +455,7 @@ export class ChannelRunner implements AgentRunner {
 						await ctx.deleteMessage();
 						log.logInfo("Silent response - deleted message");
 					} catch (err) {
-						const errMsg = err instanceof Error ? err.message : String(err);
+						const errMsg = errorMessage(err);
 						log.logWarning("Failed to delete message for silent response", errMsg);
 					}
 				} else if (this.runState.stopReason === "aborted" && !this.runState.finalResponseDelivered) {
@@ -462,14 +463,14 @@ export class ChannelRunner implements AgentRunner {
 						await ctx.deleteMessage();
 						log.logInfo("Aborted response - discarded active delivery state");
 					} catch (err) {
-						const errMsg = err instanceof Error ? err.message : String(err);
+						const errMsg = errorMessage(err);
 						log.logWarning("Failed to discard active delivery state after abort", errMsg);
 					}
 				} else if (finalOutcomeText && !this.runState.finalResponseDelivered) {
 					try {
 						await ctx.replaceMessage(finalOutcomeText);
 					} catch (err) {
-						const errMsg = err instanceof Error ? err.message : String(err);
+						const errMsg = errorMessage(err);
 						log.logWarning("Failed to replace message with final text", errMsg);
 					}
 				}
@@ -559,7 +560,7 @@ export class ChannelRunner implements AgentRunner {
 					return;
 			}
 		} catch (err) {
-			const errMsg = err instanceof Error ? err.message : String(err);
+			const errMsg = errorMessage(err);
 			log.logWarning(`[${this.channelId}] Built-in command failed`, errMsg);
 			await this.sendCommandReply(ctx, `命令执行失败：${errMsg}`);
 		}
@@ -646,7 +647,7 @@ export class ChannelRunner implements AgentRunner {
 				}),
 			);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = errorMessage(error);
 			log.logWarning(`[${this.channelId}] Failed to record memory maintenance state`, message);
 		}
 	}
@@ -741,10 +742,7 @@ export class ChannelRunner implements AgentRunner {
 			this.primaryFailedAt = null;
 			log.logInfo(`[${this.channelId}] Restored primary model ${formatModelReference(this.activeModel)}`);
 		} catch (err) {
-			log.logWarning(
-				`[${this.channelId}] Failed to restore primary model`,
-				err instanceof Error ? err.message : String(err),
-			);
+			log.logWarning(`[${this.channelId}] Failed to restore primary model`, errorMessage(err));
 		}
 	}
 
@@ -841,7 +839,7 @@ export class ChannelRunner implements AgentRunner {
 			await this.session.compact();
 			log.logInfo(`[${this.channelId}] Preventive compaction complete in ${Date.now() - startedAt}ms`);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = errorMessage(error);
 			log.logWarning(`[${this.channelId}] Preventive compaction failed`, message);
 		}
 	}

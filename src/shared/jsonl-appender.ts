@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createSerialQueue } from "./serial-queue.js";
+import { errorMessage } from "./text-utils.js";
 
 export interface JsonlAppenderOptions {
 	/** Fixed target file. Mutually exclusive with `pathFor`. */
@@ -98,9 +99,7 @@ export function createJsonlAppender(options: JsonlAppenderOptions): JsonlAppende
 			} catch (error) {
 				if (!warned) {
 					warned = true;
-					console.warn(
-						`[jsonl-appender] Failed to append to ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
-					);
+					console.warn(`[jsonl-appender] Failed to append to ${filePath}: ${errorMessage(error)}`);
 				}
 			}
 		},

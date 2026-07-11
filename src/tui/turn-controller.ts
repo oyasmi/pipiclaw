@@ -12,6 +12,7 @@ import type { AgentRunner } from "../agent/types.js";
 import * as log from "../log.js";
 import type { ChannelStore } from "../runtime/store.js";
 import type { SandboxConfig } from "../sandbox.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { bold, dim } from "./colors.js";
 import { type DispatchDeps, dispatch } from "./commands.js";
 import type { Frontend } from "./renderer.js";
@@ -38,10 +39,6 @@ export interface TurnControllerDeps {
 	statusInfo: { version: string; sandbox: SandboxConfig; startedAt: number };
 	/** Injectable clock for deterministic Ctrl-C timing in tests. */
 	now?: () => number;
-}
-
-function errorMessage(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
 }
 
 export class TurnController {

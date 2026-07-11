@@ -10,6 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as log from "../log.js";
 import type { PipiclawSessionMemorySettings } from "../settings.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import {
 	type ConsolidationRunOptions,
@@ -157,7 +158,7 @@ export class MemoryLifecycle {
 			log.logInfo(`[${this.options.channelId}] Session memory updated (${reason})`);
 			return true;
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = errorMessage(error);
 			log.logWarning(`[${this.options.channelId}] Session memory update failed (${reason})`, message);
 			return false;
 		}
@@ -212,7 +213,7 @@ export class MemoryLifecycle {
 				...entry,
 			});
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = errorMessage(error);
 			log.logWarning(`[${this.options.channelId}] Failed to write memory review log`, message);
 		}
 	}
@@ -288,7 +289,7 @@ export class MemoryLifecycle {
 			this.logConsolidationResult(reason, result);
 			await this.recordConsolidationReview(reason, result);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = errorMessage(error);
 			log.logWarning(`[${this.options.channelId}] Memory consolidation failed (${reason})`, message);
 			await this.appendReviewLog({
 				reason,
@@ -327,7 +328,7 @@ export class MemoryLifecycle {
 			messageSnapshot,
 			sessionEntrySnapshot,
 		).catch((error) => {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = errorMessage(error);
 			log.logWarning(`[${this.options.channelId}] Background new-session consolidation rejected`, message);
 		});
 	}
@@ -357,7 +358,7 @@ export class MemoryLifecycle {
 		try {
 			void this.options.recordMemoryActivity?.(event);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
+			const message = errorMessage(error);
 			log.logWarning(`[${this.options.channelId}] Failed to record memory activity`, message);
 		}
 	}

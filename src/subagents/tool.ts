@@ -19,7 +19,7 @@ import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { shellEscape } from "../shared/shell-escape.js";
-import { clipText, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
+import { clipText, errorMessage, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
 import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
 import { applyTaskControlPatch } from "../tasks/control.js";
@@ -292,7 +292,7 @@ async function prepareRunContext(
 		await options.executor.exec(`git -C ${shellEscape(repoRoot)} worktree remove --force ${shellEscape(path)}`);
 		await options.executor.exec(`git -C ${shellEscape(repoRoot)} branch -D ${shellEscape(branch)}`);
 		throw new Error(
-			`Created the worktree but could not record its ownership on task ${taskId}; the temporary worktree was removed. ${error instanceof Error ? error.message : String(error)}`,
+			`Created the worktree but could not record its ownership on task ${taskId}; the temporary worktree was removed. ${errorMessage(error)}`,
 		);
 	}
 	return context;

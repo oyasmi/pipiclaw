@@ -6,6 +6,7 @@ import type {
 	PipiclawMemoryMaintenanceSettings,
 	PipiclawSessionMemorySettings,
 } from "../settings.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import {
 	type ConsolidationRunOptions,
@@ -171,7 +172,7 @@ function failed(jobKind: MaintenanceJobKind, error: unknown): MaintenanceJobResu
 		jobKind,
 		ran: false,
 		skipped: false,
-		error: error instanceof Error ? error.message : String(error),
+		error: errorMessage(error),
 	};
 }
 

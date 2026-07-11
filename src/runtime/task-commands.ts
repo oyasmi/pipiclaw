@@ -15,6 +15,7 @@ import {
 	readActiveTasks,
 	type TaskLedgerEntry,
 } from "../shared/task-ledger.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
 import {
 	claimTaskAttempt,
@@ -171,7 +172,7 @@ async function readTaskEvents(workspaceDir: string, channelId: string): Promise<
 		try {
 			info.event = parseScheduledEventContent(await readFile(join(dir, filename), "utf-8"), filename);
 		} catch (error) {
-			info.error = error instanceof Error ? error.message : String(error);
+			info.error = errorMessage(error);
 		}
 		events.push(info);
 	}
@@ -707,7 +708,7 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 	try {
 		command = parseTasksCommand(options.args);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		return `${message}\n\n${usage()}`;
 	}
 
@@ -733,7 +734,7 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 				return await doctor(options);
 		}
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		return `Could not ${command.action} tasks: ${message}`;
 	}
 }

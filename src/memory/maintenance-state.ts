@@ -3,6 +3,7 @@ import { join } from "node:path";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
+import { errorMessage } from "../shared/text-utils.js";
 
 export interface MemoryMaintenanceState {
 	channelId: string;
@@ -109,7 +110,7 @@ export async function readMemoryMaintenanceState(
 		if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
 			return createDefaultState(channelId);
 		}
-		const message = error instanceof Error ? error.message : String(error);
+		const message = errorMessage(error);
 		log.logWarning(`[${channelId}] Failed to read memory maintenance state; rebuilding defaults`, message);
 		return createDefaultState(channelId);
 	}

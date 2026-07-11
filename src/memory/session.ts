@@ -5,7 +5,7 @@ import { writeFile } from "fs/promises";
 import { join } from "path";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
-import { clipText } from "../shared/text-utils.js";
+import { clipText, errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { readChannelMemory, readChannelSession, rewriteChannelSession } from "./files.js";
 import { runRetriedSidecarTask, SidecarParseError } from "./sidecar-worker.js";
@@ -246,7 +246,7 @@ async function writeSessionMemoryDebugFile(channelDir: string, error: unknown, r
 	const debugPath = join(channelDir, "SESSION.invalid-response.txt");
 	const header = [
 		`timestamp: ${new Date().toISOString()}`,
-		`error: ${error instanceof Error ? error.message : String(error)}`,
+		`error: ${errorMessage(error)}`,
 		"",
 		"raw response:",
 		"",

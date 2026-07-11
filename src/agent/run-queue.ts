@@ -1,5 +1,6 @@
 import * as log from "../log.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
+import { errorMessage } from "../shared/text-utils.js";
 import type { RunQueue } from "./types.js";
 
 export interface CreatedRunQueue {
@@ -15,7 +16,7 @@ export function createRunQueue(ctx: ChannelContext): CreatedRunQueue {
 				try {
 					await fn();
 				} catch (err) {
-					const errMsg = err instanceof Error ? err.message : String(err);
+					const errMsg = errorMessage(err);
 					log.logWarning(`DingTalk API error (${errorContext})`, errMsg);
 				}
 			});

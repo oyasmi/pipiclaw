@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { parseBuiltInCommand, renderBuiltInHelp } from "../agent/commands.js";
 import * as log from "../log.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 // The delivery contract (`ChannelContext`) and its traits are transport-neutral
 // and live in channel-context.ts. Only the traits are used here, to map the
@@ -203,7 +204,7 @@ class ChannelQueue {
 		try {
 			await work();
 		} catch (err) {
-			log.logWarning("Queue error", err instanceof Error ? err.message : String(err));
+			log.logWarning("Queue error", errorMessage(err));
 		}
 		this.processing = false;
 		this.processNext();
@@ -462,10 +463,7 @@ export class DingTalkBot {
 			try {
 				socket.close?.();
 			} catch (err) {
-				log.logWarning(
-					`DingTalk: socket close failed during ${reason}`,
-					err instanceof Error ? err.message : String(err),
-				);
+				log.logWarning(`DingTalk: socket close failed during ${reason}`, errorMessage(err));
 			}
 
 			const closed = await this.waitForSocketState(socket, SOCKET_STATE_CLOSED, SOCKET_CLOSE_GRACE_MS);
@@ -474,10 +472,7 @@ export class DingTalkBot {
 				try {
 					socket.terminate?.();
 				} catch (err) {
-					log.logWarning(
-						`DingTalk: socket terminate failed during ${reason}`,
-						err instanceof Error ? err.message : String(err),
-					);
+					log.logWarning(`DingTalk: socket terminate failed during ${reason}`, errorMessage(err));
 				}
 				await this.waitForSocketState(socket, SOCKET_STATE_CLOSED, SOCKET_TERMINATE_GRACE_MS);
 			}
@@ -529,7 +524,7 @@ export class DingTalkBot {
 		this.reconnectTimer = this.setTrackedTimeout(() => {
 			this.reconnectTimer = null;
 			this.doReconnect(immediate).catch((err) => {
-				log.logWarning("DingTalk: reconnect failed", err instanceof Error ? err.message : String(err));
+				log.logWarning("DingTalk: reconnect failed", errorMessage(err));
 			});
 		}, delayMs);
 	}
@@ -595,10 +590,10 @@ export class DingTalkBot {
 
 			// Fire-and-forget processing
 			this.onStreamMessage(data).catch((err: unknown) => {
-				log.logWarning("DingTalk handler error", err instanceof Error ? err.message : String(err));
+				log.logWarning("DingTalk handler error", errorMessage(err));
 			});
 		} catch (err) {
-			log.logWarning("DingTalk: failed to parse message", err instanceof Error ? err.message : String(err));
+			log.logWarning("DingTalk: failed to parse message", errorMessage(err));
 		}
 
 		return { status: "SUCCESS", message: "OK" };
@@ -701,7 +696,7 @@ export class DingTalkBot {
 			await this.cleanupSocket("reconnect failure");
 			this.reconnectAttempts++;
 			connectionFailed = true;
-			log.logWarning("DingTalk: connection failed", err instanceof Error ? err.message : String(err));
+			log.logWarning("DingTalk: connection failed", errorMessage(err));
 		} finally {
 			this.isReconnecting = false;
 		}
@@ -724,7 +719,7 @@ export class DingTalkBot {
 			try {
 				await this.cleanupSocket("stop");
 			} catch (err) {
-				log.logWarning("DingTalk: failed to disconnect cleanly", err instanceof Error ? err.message : String(err));
+				log.logWarning("DingTalk: failed to disconnect cleanly", errorMessage(err));
 			} finally {
 				this.client = null;
 			}
@@ -945,7 +940,7 @@ export class DingTalkBot {
 			if (axios.isAxiosError(err) && err.response) {
 				log.logWarning(`DingTalk plain send failed (${err.response.status})`, JSON.stringify(err.response.data));
 			} else {
-				log.logWarning("DingTalk plain send error", err instanceof Error ? err.message : String(err));
+				log.logWarning("DingTalk plain send error", errorMessage(err));
 			}
 			return false;
 		}
@@ -1030,7 +1025,7 @@ export class DingTalkBot {
 			if (axios.isAxiosError(err) && err.response) {
 				log.logWarning(`DingTalk Card: create failed (${err.response.status})`, JSON.stringify(err.response.data));
 			} else {
-				log.logWarning("DingTalk Card: create failed", err instanceof Error ? err.message : String(err));
+				log.logWarning("DingTalk Card: create failed", errorMessage(err));
 			}
 			return null;
 		}
@@ -1099,7 +1094,7 @@ export class DingTalkBot {
 					JSON.stringify(err.response.data),
 				);
 			} else {
-				log.logWarning("DingTalk Card: streaming failed", err instanceof Error ? err.message : String(err));
+				log.logWarning("DingTalk Card: streaming failed", errorMessage(err));
 			}
 			return false;
 		}
@@ -1147,7 +1142,7 @@ export class DingTalkBot {
 					JSON.stringify(err.response.data),
 				);
 			} else {
-				log.logWarning("DingTalk: failed to get access token", err instanceof Error ? err.message : String(err));
+				log.logWarning("DingTalk: failed to get access token", errorMessage(err));
 			}
 			return null;
 		}
@@ -1343,10 +1338,7 @@ export class DingTalkBot {
 			this.convMeta.set(channelId, meta);
 			return meta;
 		} catch (err) {
-			log.logWarning(
-				`Failed to load conversation metadata for ${channelId}`,
-				err instanceof Error ? err.message : String(err),
-			);
+			log.logWarning(`Failed to load conversation metadata for ${channelId}`, errorMessage(err));
 			return null;
 		}
 	}
@@ -1361,10 +1353,7 @@ export class DingTalkBot {
 			mkdirSync(dirname(metaPath), { recursive: true });
 			writeFileSync(metaPath, JSON.stringify(meta, null, 2), "utf-8");
 		} catch (err) {
-			log.logWarning(
-				`Failed to persist conversation metadata for ${channelId}`,
-				err instanceof Error ? err.message : String(err),
-			);
+			log.logWarning(`Failed to persist conversation metadata for ${channelId}`, errorMessage(err));
 		}
 	}
 

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { readStoredTask, taskBodyHash } from "./store.js";
 
 export type VerificationVerdict = "pass" | "fail";
@@ -73,7 +74,7 @@ export async function readVerificationAttestation(channelDir: string, runId: str
 		value = JSON.parse(await readFile(verificationAttestationPath(channelDir, runId), "utf-8"));
 	} catch (error) {
 		throw new Error(
-			`Verification run "${runId}" was not found or is unreadable. Run a subagent with purpose=verify and taskId first. ${error instanceof Error ? error.message : String(error)}`,
+			`Verification run "${runId}" was not found or is unreadable. Run a subagent with purpose=verify and taskId first. ${errorMessage(error)}`,
 		);
 	}
 	if (

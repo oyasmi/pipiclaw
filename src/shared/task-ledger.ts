@@ -131,10 +131,8 @@ export function isTaskActionable(frontmatter: TaskFrontmatter, now: number): boo
 	) {
 		return false;
 	}
-	if (frontmatter.wake) {
-		const wakeAt = new Date(frontmatter.wake).getTime();
-		if (Number.isFinite(wakeAt) && wakeAt > now) return false;
-	}
+	const wakeAt = parseWakeMs(frontmatter);
+	if (wakeAt !== undefined && wakeAt > now) return false;
 	return true;
 }
 
@@ -314,7 +312,6 @@ export function startTaskCycle(content: string, cycleId: string): string {
 	let currentStart = -1;
 	let currentLevel = 0;
 	let historyStart = -1;
-	let historyLevel = 0;
 	for (let index = 0; index < lines.length; index++) {
 		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
 		if (!match) continue;
@@ -325,7 +322,6 @@ export function startTaskCycle(content: string, cycleId: string): string {
 		}
 		if (matchesTaskSectionTitle(match[2] ?? "", ["History", "历史"])) {
 			historyStart = index;
-			historyLevel = level;
 			break;
 		}
 	}
@@ -360,7 +356,6 @@ export function startTaskCycle(content: string, cycleId: string): string {
 	];
 	// A nested history heading would be unusual; inserting directly after the
 	// canonical History heading remains predictable and preserves all older notes.
-	void historyLevel;
 	lines.splice(shiftedHistoryStart + 1, 0, ...historyEntry);
 	return lines.join("\n");
 }
@@ -388,7 +383,7 @@ function extractLatestNote(content: string): string | undefined {
 	return latest;
 }
 
-function wakeMsOf(frontmatter: TaskFrontmatter): number | undefined {
+function parseWakeMs(frontmatter: TaskFrontmatter): number | undefined {
 	if (!frontmatter.wake) return undefined;
 	const at = new Date(frontmatter.wake).getTime();
 	return Number.isFinite(at) ? at : undefined;
@@ -422,7 +417,7 @@ function toEntry(id: string, content: string, now: number): TaskLedgerEntry {
 		title: extractTaskTitle(content, id),
 		frontmatter,
 		actionable: isTaskActionable(frontmatter, now),
-		wakeMs: wakeMsOf(frontmatter),
+		wakeMs: parseWakeMs(frontmatter),
 		latestNote: extractLatestNote(content),
 	};
 }
