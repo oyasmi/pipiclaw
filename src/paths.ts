@@ -1,7 +1,14 @@
 import { homedir } from "os";
 import { join } from "path";
+import { fileURLToPath } from "url";
 
 export const APP_NAME = "pipiclaw";
+/**
+ * Agent-facing playbooks bundled inside the installed package (src/playbooks
+ * in a checkout, dist/playbooks when built). Read-only runtime self-docs: the
+ * system prompt carries a small index and the agent reads them on demand.
+ */
+export const PLAYBOOKS_DIR = fileURLToPath(new URL("./playbooks", import.meta.url));
 export const APP_HOME_DIR = process.env.PIPICLAW_HOME ?? join(homedir(), ".pi", APP_NAME);
 export const WORKSPACE_DIR = join(APP_HOME_DIR, "workspace");
 export const STATE_DIR = join(APP_HOME_DIR, "state");

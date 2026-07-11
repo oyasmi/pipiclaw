@@ -1,3 +1,4 @@
+import { PLAYBOOKS_DIR } from "../paths.js";
 import type { SandboxConfig } from "../sandbox.js";
 
 /**
@@ -241,7 +242,15 @@ ${
 	hasTool("event_manage")
 		? "- For a recurring task, use event_manage only for its canonical task.<channelId>.<taskId>.schedule periodic cadence. The task driver handles in-cycle continuation and recovery."
 		: "- Recurring cadences require an administrator-managed periodic event because event_manage is unavailable."
-}`);
+}
+
+### Task Playbooks
+Detailed operating manuals ship with the runtime under ${PLAYBOOKS_DIR}/ (read-only; not workspace files).
+Read the matching one with the read tool before acting, and follow it over improvisation:
+- task-recurring.md — setting up, rescheduling, cycling (start-cycle), or retiring recurring tasks
+- task-delegation.md — decomposing into parent/child tasks, worktree isolation, delegating to subagents or agentmux with completion-driven check-ins
+- task-closeout.md — DoD discipline, candidate → independent verification → done/cancel, external-approval ordering
+- task-repair.md — escalated recovery, orphan events, broken frontmatter/control, stale verification, driver behavior triage`);
 	}
 
 	if (hasTool("web_search") || hasTool("web_fetch")) {

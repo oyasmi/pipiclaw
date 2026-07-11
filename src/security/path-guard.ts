@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, normalize, resolve } from "node:path";
+import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PathGuardContext, PathGuardResult } from "./types.js";
 
 const PRIVATE_KEY_EXTENSIONS = new Set([".pem", ".key", ".p12", ".pfx"]);
@@ -214,6 +215,11 @@ function pathAllowedByDefaults(path: string, ctx: PathGuardContext): boolean {
 	return isWithinWorkspace(path, ctx.workspaceDir) || isWithinTemp(path) || isWithinHome(path, homeDir);
 }
 
+/** The runtime's own bundled playbooks are readable regardless of where the package is installed. */
+function isBundledPlaybookRead(path: string, operation: "read" | "write"): boolean {
+	return operation === "read" && startsWithPathPrefix(path, normalize(PLAYBOOKS_DIR));
+}
+
 function formatBlockedResult(
 	operation: "read" | "write",
 	rawPath: string,
@@ -307,7 +313,7 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };
 	}
 
-	if (pathAllowedByDefaults(guardedPath, effectiveCtx)) {
+	if (pathAllowedByDefaults(guardedPath, effectiveCtx) || isBundledPlaybookRead(guardedPath, operation)) {
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };
 	}
 

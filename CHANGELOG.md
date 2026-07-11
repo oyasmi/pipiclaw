@@ -2,6 +2,12 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [Unreleased]
+
+### Added
+
+- Bundled task playbooks teach the agent its own task/events machinery in depth, following pi's self-documentation pattern: four manuals ship read-only inside the package (`dist/playbooks/`), the system prompt carries only a small index (injected when `task_manage` is registered), and the agent reads the matching manual on demand — zero workspace footprint, versioned with the package. Playbooks: `task-recurring.md` (recurring task + `.schedule` pairing, `start-cycle`, retirement), `task-delegation.md` (decomposition, worktree isolation, agentmux completion-driven check-ins with a bundled `agentmux-idle.mjs` sensor), `task-closeout.md` (candidate → independent verification → done/cancel, external-approval ordering), `task-repair.md` (escalation recovery, orphan events, broken frontmatter, stale verification). The path guard gains a scoped read-only allowance for the bundled playbooks directory; `workspace/skills/` remains entirely user/agent-owned.
+
 ## [0.8.0] - 2026-07-10
 
 ### Added

@@ -185,6 +185,19 @@ task driver 随 DingTalk daemon 启动，默认每分钟做一次廉价扫描。
 7. 外部副作用必须等用户 `/tasks approve <id>`；父子依赖和 worktree 子任务必须先汇合验收。
 8. 周期任务仍用唯一的 `task.<channelId>.<id>.schedule` periodic event 开新周期；driver 只负责周期内的继续与恢复。
 
+### 内置 playbooks（场景化操作手册，随包发布、按需读取）
+
+系统提示里的 SOP 是每回合的紧凑纪律；四份随包发布的 playbook 补充场景化的完整操作手册。它们在安装目录内（构建后为 `dist/playbooks/`），**不占用 workspace**：系统提示常驻一个极小的索引（`### Task Playbooks`，仅在 `task_manage` 注册时注入），agent 在对应场景用 read 工具按需读取；path-guard 对该目录有专门的只读放行。版本随包走，升级即更新。
+
+| playbook | 场景 |
+|---|---|
+| `task-recurring.md` | 周期任务的创建（task + `.schedule` 成对）、`start-cycle` 开新周期、调节奏、退役 |
+| `task-delegation.md` | 父子分解与依赖、worktree 隔离、agentmux 完成驱动回访（附带 `scripts/agentmux-idle.mjs` 传感器） |
+| `task-closeout.md` | candidate → 独立验收 → done/cancel 全流程、外部副作用授权的正确次序 |
+| `task-repair.md` | escalated 恢复、孤儿事件、坏 frontmatter/control、stale PASS、driver 行为排查 |
+
+playbook 描述的是 runtime 硬约束与标准做法；个人偏好和团队策略写进 workspace `AGENTS.md`，或由 agent 沉淀成 workspace skill——`workspace/skills/` 完全归用户与 agent 所有，runtime 不会写入。
+
 ## 可见性：`/tasks` 命令与任务摘要注入
 
 任务台账不再只能靠“问 agent”来查看，Phase 2 从两个方向把它暴露出来。
@@ -246,29 +259,7 @@ host Git checkout 的 verifier 还会记录 artifact subject（HEAD、working tr
 
 **为什么用 periodic + preAction（而非 one-shot）**：传感器只有退出码、不能改期自己。one-shot 到点若对方仍忙、preAction 退 1 静默，但 one-shot 已消耗，不会再探测——卡死。要自主轮询到 idle，只能用 periodic + preAction 门控：忙则静默（零 token），idle 才唤醒。
 
-传感器脚本 `~/.pi/pipiclaw/workspace/skills/agentmux-idle.mjs`：
-
-```javascript
-#!/usr/bin/env node
-// agentmux-idle.mjs — wake the agent when a delegated agentmux instance is done.
-//
-// exit 0 (wake)   when the instance is idle / exited / lost, or on any error (fail-open).
-// exit 1 (silent) only when the instance is clearly still busy.
-// Usage: node agentmux-idle.mjs <instanceName>
-
-import { execFileSync } from "node:child_process";
-
-const name = process.argv[2];
-if (!name) process.exit(0); // misconfigured → surface it
-
-try {
-	const out = execFileSync("agentmux", ["inspect", name, "--json"], { encoding: "utf-8" });
-	const status = JSON.parse(out)?.status;
-	process.exit(status === "busy" ? 1 : 0);
-} catch {
-	process.exit(0); // agentmux missing / instance gone / parse error → wake and let the agent decide
-}
-```
+传感器脚本随包发布在 playbooks 目录的 `scripts/agentmux-idle.mjs`：实例还忙时 exit 1（静默、零 token）；idle / exited / 任何异常时 exit 0（唤醒，fail-open）。首次使用时 agent 会把它拷贝到 `workspace/skills/agentmux-idle.mjs` 再在事件 preAction 中引用——事件需要一个不随版本/Node 环境变动的稳定路径，而 preAction 失败是静默的。
 
 响应式联动约定：
 

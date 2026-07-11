@@ -2,6 +2,12 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
+## [Unreleased]
+
+### 新增
+
+- 内置任务 playbooks，仿照 pi 的自我文档模式让 agent 深入掌握自己的 task/events 机制：四份手册以只读形式随包发布（`dist/playbooks/`），系统提示只常驻一个极小的索引（仅在 `task_manage` 注册时注入），agent 在对应场景按需 read——零 workspace 足迹，版本随包更新。手册包括：`task-recurring.md`（周期任务与 `.schedule` 成对、`start-cycle`、退役）、`task-delegation.md`（分解、worktree 隔离、agentmux 完成驱动回访并附带 `agentmux-idle.mjs` 传感器）、`task-closeout.md`（candidate → 独立验收 → done/cancel、外部授权次序）、`task-repair.md`（escalated 恢复、孤儿事件、坏 frontmatter、失效验收）。path-guard 为该目录增加限定范围的只读放行；`workspace/skills/` 完全归用户与 agent 所有。
+
 ## [0.8.0] - 2026-07-10
 
 ### 新增
