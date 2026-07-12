@@ -100,6 +100,7 @@ function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandle
 		handleTasksCommand: vi.fn(async () => {}),
 		handleStatusCommand: vi.fn(async () => {}),
 		handleUsageCommand: vi.fn(async () => {}),
+		handleContextCommand: vi.fn(async () => {}),
 		handleBusyMessage: vi.fn(async () => ({ kind: "handled" as const })),
 		...overrides,
 	};
@@ -346,6 +347,29 @@ describe("dingtalk", () => {
 			bot,
 			"steer",
 			"plain busy text",
+		);
+	});
+
+	it("answers /context while a turn is streaming", async () => {
+		const { bot, handler } = createBot({
+			isRunning: vi.fn(() => true),
+		});
+		bot.sendPlain = vi.fn(async () => true);
+		const privateApi = getPrivateApi(bot);
+
+		await privateApi.onStreamMessage({
+			text: { content: "/context detail" },
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_1",
+			conversationType: "1",
+		});
+
+		// Read-only accounting: no reason to make the user wait for the turn to finish.
+		expect(handler.handleContextCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ text: "/context detail" }),
+			bot,
+			"detail",
 		);
 	});
 

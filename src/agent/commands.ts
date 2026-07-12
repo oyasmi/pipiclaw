@@ -116,6 +116,9 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		argumentHint: "[detail]",
 		description: "Show what the model is being sent: system prompt sections, tool schemas, and last-turn context",
 		examples: ["/context", "/context detail"],
+		// Read-only accounting of state the runner already holds: no LLM call, no session
+		// access, so it answers mid-turn like /status and /usage do.
+		availableWhileBusy: true,
 	},
 ];
 

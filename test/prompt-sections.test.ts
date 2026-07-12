@@ -183,6 +183,25 @@ describe("workspace resources in the prompt", () => {
 		expect(build.text.match(/<\/workspace_identity>/g)).toHaveLength(1);
 	});
 
+	it("warns about an oversized skills catalog it cannot trim", () => {
+		const skills = Array.from({ length: 30 }, (_, index) => ({
+			name: `skill-${index}`,
+			description: "d".repeat(200),
+		}));
+		const build = buildPipiclawSystemPrompt(context({ skills }));
+
+		// pi renders skills after our sections and owns the same list that backs `/skill:name`,
+		// so the only honest move is a diagnostic that names the next step.
+		expect(build.diagnostics).toContainEqual(
+			expect.objectContaining({
+				level: "warning",
+				sectionId: "skills",
+				message: expect.stringContaining("shorten or remove workspace skill descriptions"),
+			}),
+		);
+		expect(buildPipiclawSystemPrompt(context({ skills: skills.slice(0, 2) })).diagnostics).toEqual([]);
+	});
+
 	it("never lets user content push the prompt past the hard cap", () => {
 		const build = buildPipiclawSystemPrompt(
 			context({

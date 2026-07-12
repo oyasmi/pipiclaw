@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRuntimeHarness, type E2ERuntimeHarness, getChannelFile } from "./helpers/runtime-harness.js";
@@ -39,6 +40,10 @@ describeE2E("E2E: system prompt ownership", () => {
 		// No channel id or channel directory in the system prompt: those ride the turn.
 		expect(dump.systemPrompt).not.toContain(harness.channelId);
 		expect(dump.promptManifest?.diagnostics).toEqual([]);
-		expect(dump.promptManifest?.finalPromptSha256).toBeTruthy();
+		// The manifest hash must be the hash of that same prompt: it is what makes the
+		// manifest evidence of what the provider received rather than of what we built.
+		expect(dump.promptManifest?.finalPromptSha256).toBe(
+			createHash("sha256").update(dump.systemPrompt, "utf8").digest("hex"),
+		);
 	});
 });

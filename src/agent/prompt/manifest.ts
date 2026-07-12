@@ -6,7 +6,7 @@
  * prompt because they are billed the same way and are often the larger half.
  */
 
-import { estimateTokens, sha256 } from "./builder.js";
+import { estimateSkillsPromptChars, estimateTokens, sha256 } from "./builder.js";
 import type { PromptBuildResult, ResolvedPromptSection } from "./types.js";
 
 export interface PromptTurnContextStats {
@@ -81,11 +81,15 @@ export function renderContextReport(input: PromptContextReportInput): string {
 		`System prompt (Pipiclaw-owned): ${formatNumber(build.totalChars)} chars, ~${formatNumber(build.estimatedTokens)} tokens`,
 	);
 	if (finalPrompt) {
+		// The string the provider actually caches: our sections + pi's skills/date/cwd tail +
+		// the boundary footer. It is the fingerprint that matters for cache hits — the build
+		// fingerprint below only covers the part Pipiclaw owns, and stays stable across a
+		// date rollover that does invalidate the provider's cached prefix.
 		lines.push(
-			`Sent to the model (incl. skills, date, cwd): ${formatNumber(finalPrompt.length)} chars, ~${formatNumber(estimateTokens(finalPrompt))} tokens`,
+			`Sent to the model (incl. skills, date, cwd): ${formatNumber(finalPrompt.length)} chars, ~${formatNumber(estimateTokens(finalPrompt))} tokens, sha256:${sha256(finalPrompt).slice(0, 16)}`,
 		);
 	}
-	lines.push(`Fingerprint: sha256:${build.fingerprint.slice(0, 16)}`);
+	lines.push(`Fingerprint (Pipiclaw sections): sha256:${build.fingerprint.slice(0, 16)}`);
 	lines.push("");
 
 	const width = Math.max(...build.sections.map((section) => section.id.length), 12) + 2;
@@ -101,7 +105,9 @@ export function renderContextReport(input: PromptContextReportInput): string {
 	lines.push(
 		`Tools: ${input.toolNames.length} registered; JSON schemas ≈ ${formatNumber(input.toolSchemaChars)} chars (billed on top of the system prompt)`,
 	);
-	lines.push(`Skills: ${input.skills.length} visible (rendered by pi after the sections above)`);
+	lines.push(
+		`Skills: ${input.skills.length} visible, ≈${formatNumber(estimateSkillsPromptChars(input.skills))} chars (rendered by pi after the sections above, outside the section budgets)`,
+	);
 
 	if (input.lastTurn) {
 		const turn = input.lastTurn;

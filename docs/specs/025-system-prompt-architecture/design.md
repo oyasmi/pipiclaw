@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | IMPLEMENTED（Phase 1–3）；Phase 4 未启动 |
+| 状态 | Phase 1–3 代码完成；Phase 0 行为 eval 与 DoD 11/12 待补；Phase 4 未启动 |
 | 日期 | 2026-07-12 |
 | 入口 | `src/agent/prompt/`（builder / sections / resources / manifest / extension） |
 | 主要依赖 | `@earendil-works/pi-coding-agent@0.80.3` |
@@ -21,11 +21,14 @@ Phase 1–3 已落地，代码入口 `src/agent/prompt/`：
 - Final boundary 通过 `before_agent_start` extension 追加在 pi tail（skills/date/cwd）之后；`last_prompt.json` 记录实际发出的 prompt 与 manifest。
 - skills 仍由 pi 渲染（`/skill:name` 不受影响）；workspace skill diagnostics 现在会上报，同名 skill 由 workspace 覆盖并给出 collision 诊断。
 
-与本文的偏差（有意）：
+与本文的偏差（有意，这些是尚未闭合的口子，不要当成已完成）：
 
-- skills 的硬预算仍未启用（§6.10）：需要 pi 提供 formatter seam，Phase 1 只做统计与诊断。
-- Phase 0 的行为 eval 与 A/B baseline 未在本次实施内建立；DoD 第 11、12 条（eval 不退化、cached-token/latency 上线前后对比）需要真实流量验证，`/context` + fingerprint 日志 + 用量账本的 cacheRead/cacheWrite 是其观测入口。
+- **总预算不含 skills。** `SOFT/HARD_TOTAL_BUDGET_CHARS` 与 `SHRINK_ORDER` 只覆盖 Pipiclaw 自有 section；`<available_skills>` 由 pi 渲染在其后，且 pi 用同一份 `Skill[]` 支撑 `/skill:name`，裁剪 prompt 就会删掉命令（§6.10）。实现按 §8.1 只给 warning：skills 估算超过 6,000 字符时 builder 产出 `skills` 诊断并在 `/context` 显示估算体量。**实际发出的 prompt 可以超过 32k 硬上限**，超出量等于 skills 目录大小。真正的硬预算等 pi 提供 formatter seam。
+- **Phase 0 行为 eval 与 A/B baseline 未建立。** DoD 第 11、12 条未达成；`/context` + fingerprint 日志 + 用量账本的 cacheRead/cacheWrite 是其观测入口。因此“去 pi base”与“内容重组”两个变量目前无法归因——在补 eval 之前不要再做大的文案删改。
+- **跨日 cache 会整块 miss。** pi 把 date/cwd 追加在 system prompt 内部，而 provider（Anthropic 适配器）把整个 system prompt 作为一个 text block 打一个 `cache_control`。日期一变，整块（Pipiclaw sections + skills）都要重算。影响有限（cache TTL 远小于一天，只有跨零点的活跃会话多付一次 cache write），彻底修复需要把 date 移进 turn envelope，也就是要拿到完整 renderer seam。`build.fingerprint` 只覆盖 Pipiclaw 自有部分，**不是** provider 缓存的那个串；`/context` 与 `last_prompt.json` 的 `finalPromptSha256` 才是。
+- §6 的文案目标未完全兑现：实测 identity 701 / tasks 923 / playbooks 1,782 字符，均在硬 `maxChars` 内但高于 §6.2/§6.6/§6.8 的目标区间。全套工具下 Pipiclaw 自有文本约 7.1k 字符 / ~1.8k tokens。再压缩属于内容改动，等 Phase 0 eval。
 - playbook description 上限 180 字符由渲染时裁剪（并已把三条超长 description 改短），不在 frontmatter 解析时报错。
+- 命名：section 的 `requiresAllTools` 是 all-of，playbook 的 `requiresAnyTool` 是 any-of。两者语义相反，故不共用名字。
 
 ---
 
@@ -710,11 +713,14 @@ runtime authored core
 
 ### 7.4 Fingerprint 与版本
 
-`PromptBuildResult.fingerprint`：
+两个指纹，不要混用：
 
 ```text
-sha256(final system prompt UTF-8 bytes)
+PromptBuildResult.fingerprint = sha256("v<runtimePromptVersion>\n" + Pipiclaw sections + footer)
+PromptManifest.finalPromptSha256 = sha256(实际发出的 system prompt，含 pi 的 skills/date/cwd tail)
 ```
+
+前者用于“我们自己的文本变了没有”（日志只在它变化时打一行）；后者才是 provider 缓存与计费的对象，`/context` 与 `last_prompt.json` 都记录它。
 
 另记录：
 
@@ -758,8 +764,10 @@ sha256(final system prompt UTF-8 bytes)
 | Skills catalog | Phase 1 仅 warning；Phase 2 目标 6,000 chars | formatter seam 就绪后 `truncate-items` + `skill_manage list` |
 | Sub-agent catalog | 2,400 chars | `truncate-items`；需先提供可发现入口 |
 | Final boundary | 700 chars | `error` |
-| **完整 system prompt 软目标** | **≤ 20,000 chars** | warning |
-| **完整 system prompt 硬上限** | **32,000 chars** | 用户资源按优先级收缩，runtime core 不截断 |
+| **Pipiclaw 自有 section 软目标** | **≤ 20,000 chars** | warning |
+| **Pipiclaw 自有 section 硬上限** | **32,000 chars** | 用户资源按优先级收缩，runtime core 不截断 |
+
+两个总预算只覆盖 Pipiclaw 自有 section。pi 追加的 skills/date/cwd 不在其内，skills 只能告警不能裁剪（§6.10），所以实际发出的 prompt 可能超过硬上限。
 
 字符数不能精确代表所有模型 token，尤其中文。manifest 同时记录 pi 的 token estimate；后续若引入多模型 tokenizer，再按实际 model 计算。第一版以字符 hard cap 保证确定性和零额外依赖。
 
@@ -1199,7 +1207,7 @@ D: C + 场景化 task/event guidance
 1. provider 实际收到的主 system prompt 中不再包含 pi 默认身份、pi 文档索引和 `(none)` 工具段。
 2. 最终 prompt 由结构化 section builder 生成，并可输出 section manifest、预算和 fingerprint。
 3. 同 workspace、同资源、同工具集的不同 channel system prompt 字节一致。
-4. SOUL、AGENTS、skills、playbooks、subagents 均有来源、预算、确定性顺序和 actionable overflow 提示。
+4. SOUL、AGENTS、playbooks、subagents 均有来源、预算、确定性顺序和 actionable overflow 提示；skills 有来源、确定性顺序和超限 warning，硬预算待 pi formatter seam（§6.10）。
 5. skills 仍可自动发现、显示、按需读取和通过 slash command 使用。
 6. task/event/memory/subagent 工具关闭时，不注入对应无关机制目录。
 7. runtime hard invariants 不因用户内容或总预算被截断。

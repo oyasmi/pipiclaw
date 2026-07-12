@@ -128,7 +128,7 @@ export const TASK_CORE_SECTION: PromptSectionDefinition = {
 	source: "runtime/tasks",
 	authority: "runtime-hard",
 	cacheClass: "runtime-stable",
-	requiresTools: ["task_manage"],
+	requiresAllTools: ["task_manage"],
 	maxChars: 1_200,
 	overflow: "error",
 	render: () =>
@@ -191,7 +191,7 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 	source: "workspace/sub-agents",
 	authority: "catalog",
 	cacheClass: "workspace-versioned",
-	requiresTools: ["subagent"],
+	requiresAllTools: ["subagent"],
 	maxChars: 2_400,
 	overflow: "truncate-items",
 	render: (context) => {

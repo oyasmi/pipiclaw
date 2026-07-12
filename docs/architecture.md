@@ -307,9 +307,9 @@ runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(
 
 - **section 化**：每段声明 `order`/`authority`/`cacheClass`/`requiresTools`/预算/溢出策略（`prompt/types.ts`、`prompt/sections.ts`），builder 负责过滤、排序、预算和 fingerprint（`prompt/builder.ts`）。runtime 段超预算会产出 error 诊断（测试直接失败）；SOUL/AGENTS 超预算按 head/tail 截断并给出下一步。
 - **缓存稳定**：system prompt 里没有 channelId、channel 路径、时间戳。同一 workspace 下不同频道、连续多轮的 prompt 字节一致，provider 前缀缓存才能命中。频道事实改由每回合的 `<runtime_turn_context>` 胶囊携带（`channel-runner.ts`）。
-- **工具门控**：关闭 `task_manage` 时，任务段、任务 playbook 一并消失；关闭 `subagent` 时子代理目录消失。playbook 的 `requires-tools` frontmatter 是 any-of 语义（`playbooks/catalog.ts`）。
-- **skills 仍由 pi 渲染**：`skillsOverride` 保留 ResourceLoader 中的 skills，`<available_skills>` 索引与 `/skill:name` 命令同源；Pipiclaw 只负责合并策略与诊断（workspace 覆盖同名 skill）。
-- **可观测**：`/context`（及 `/context detail`）零 LLM 成本地列出各 section 体量、fingerprint、工具 schema 开销和上一轮动态上下文；`PIPICLAW_DEBUG=1` 时 `last_prompt.json` 记录**实际发出的** system prompt 与 manifest。prompt 重建只在 fingerprint 变化时打一条日志。缓存效果结合用量账本里的 cacheRead/cacheWrite 观察。
+- **工具门控**：关闭 `task_manage` 时，任务段、任务 playbook 一并消失；关闭 `subagent` 时子代理目录消失。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
+- **skills 仍由 pi 渲染**：`skillsOverride` 保留 ResourceLoader 中的 skills，`<available_skills>` 索引与 `/skill:name` 命令同源；Pipiclaw 只负责合并策略与诊断（workspace 覆盖同名 skill）。代价是 skills 在所有预算之外：超过 6,000 字符只会产出诊断，不会被裁剪（裁剪会连带删掉 `/skill:name`），因此**实际 prompt 可以超过 32k 硬上限**。
+- **可观测**：`/context`（及 `/context detail`，忙碌时也可用）零 LLM 成本地列出各 section 体量、两个指纹、工具 schema 开销和上一轮动态上下文；`PIPICLAW_DEBUG=1` 时 `last_prompt.json` 记录**实际发出的** system prompt 与 manifest。注意 `fingerprint` 只覆盖 Pipiclaw 自有 section（日志据此去重），provider 真正缓存的是含 pi tail 的整串，即 `finalPromptSha256`——date 每日一变会让整块 system prompt 重算。缓存效果结合用量账本里的 cacheRead/cacheWrite 观察。
 
 playbook 正文不进提示词，agent 触发时用 `read` 按需加载。
 

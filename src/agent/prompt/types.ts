@@ -76,8 +76,12 @@ export interface PromptSectionDefinition {
 	cacheClass: PromptCacheClass;
 	/** Modes this section applies to. Omitted = all modes. */
 	modes?: PromptMode[];
-	/** Section is dropped unless every listed tool is registered. */
-	requiresTools?: string[];
+	/**
+	 * Section is dropped unless *every* listed tool is registered — all-of. A section
+	 * describes one mechanism, so a missing tool means the mechanism is unreachable.
+	 * (Playbooks gate the other way: see `requiresAnyTool` in playbooks/catalog.ts.)
+	 */
+	requiresAllTools?: string[];
 	maxChars: number;
 	overflow: PromptOverflowPolicy;
 	render(context: PromptBuildContext): string | undefined;

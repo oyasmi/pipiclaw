@@ -117,6 +117,7 @@ export interface DingTalkHandler {
 	handleTasksCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void>;
 	handleUsageCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
+	handleContextCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleBusyMessage(
 		event: DingTalkEvent,
 		bot: DingTalkBot,
@@ -1209,9 +1210,8 @@ export class DingTalkBot {
 						await this.handler.handleUsageCommand(event, this, builtInCommand.args);
 						return;
 					case "context":
-						// Not marked availableWhileBusy: the report describes the idle session's
-						// prompt, so it falls through to the "task is already running" reply below.
-						break;
+						await this.handler.handleContextCommand(event, this, builtInCommand.args);
+						return;
 				}
 			}
 

@@ -22,8 +22,17 @@ export const RUNTIME_PROMPT_VERSION = 2;
 
 /** Above this the prompt still works but is worth a warning. */
 export const SOFT_TOTAL_BUDGET_CHARS = 20_000;
-/** Above this we shrink user-owned catalogs and files; runtime core is never cut. */
+/**
+ * Above this we shrink user-owned catalogs and files; runtime core is never cut.
+ *
+ * Both totals cover the Pipiclaw-owned sections only. pi renders `<available_skills>`
+ * after them and Pipiclaw cannot trim that list without also destroying `/skill:name`
+ * (spec 025 §6.10), so skills are *warned about* here, not shrunk: the prompt actually
+ * sent can exceed this cap by the size of the skills catalog.
+ */
 export const HARD_TOTAL_BUDGET_CHARS = 32_000;
+/** Skills are pi's to render; over this we can only tell the operator (spec 025 §8.1). */
+export const SKILLS_BUDGET_CHARS = 6_000;
 
 /**
  * Least-important first: the order in which sections give up characters when the
@@ -137,7 +146,7 @@ function resolve(
 	if (definition.modes && !definition.modes.includes(context.mode)) {
 		return undefined;
 	}
-	if (definition.requiresTools?.some((name) => !context.tools.some((tool) => tool.name === name))) {
+	if (definition.requiresAllTools?.some((name) => !context.tools.some((tool) => tool.name === name))) {
 		return undefined;
 	}
 
@@ -212,6 +221,20 @@ function enforceTotalBudget(sections: ResolvedPromptSection[], diagnostics: Prom
 	}
 }
 
+/**
+ * What pi's `<available_skills>` block will cost, close enough to budget against:
+ * name, description and location inside a five-line XML wrapper, plus the preamble.
+ */
+export function estimateSkillsPromptChars(skills: PromptBuildContext["skills"]): number {
+	if (!skills || skills.length === 0) return 0;
+	const SKILL_WRAPPER_CHARS = 90;
+	const PREAMBLE_CHARS = 290;
+	return (
+		PREAMBLE_CHARS +
+		skills.reduce((sum, skill) => sum + skill.name.length + skill.description.length + SKILL_WRAPPER_CHARS, 0)
+	);
+}
+
 export function buildPipiclawSystemPrompt(
 	context: PromptBuildContext,
 	definitions: PromptSectionDefinition[] = MAIN_PROMPT_SECTIONS,
@@ -245,6 +268,17 @@ export function buildPipiclawSystemPrompt(
 			level: "warning",
 			sectionId: "prompt",
 			message: `system prompt is ${totalChars} chars, over the ${SOFT_TOTAL_BUDGET_CHARS} char soft target. Run /context detail.`,
+		});
+	}
+
+	// Skills sit outside every budget above: pi renders them and owns the same list that
+	// backs `/skill:name`, so trimming here would delete commands. Report instead of cut.
+	const skillsChars = estimateSkillsPromptChars(context.skills);
+	if (skillsChars > SKILLS_BUDGET_CHARS) {
+		diagnostics.push({
+			level: "warning",
+			sectionId: "skills",
+			message: `skills catalog is ≈${skillsChars} chars, over the ${SKILLS_BUDGET_CHARS} char budget, and is appended after the sections above (Pipiclaw cannot trim it without dropping /skill:name). Run /context detail, then shorten or remove workspace skill descriptions.`,
 		});
 	}
 

@@ -225,7 +225,7 @@ pipiclaw
 
 说明：
 
-- 前八条由传输层直接处理，**忙碌时也可用**；`/context` 与后四条会话命令仅空闲时可用（忙碌时会收到提示）。
+- 前九条由传输层直接处理，**忙碌时也可用**（`/context` 是只读统计，零 LLM 成本）；后四条会话命令仅空闲时可用（忙碌时会收到提示）。
 - 忙碌时的普通消息默认等价于 `/steer`，可通过 `channel.json` 的 `busyMessageDefault` 改为排队（`followUp`）。
 - 未知的斜杠命令会被直接拒绝并提示 `/help`，不会作为普通消息发给模型（避免 `/modle` 这类笔误变成一整轮 LLM 调用）。workspace skill 也可作为命令调用（`/skill:<名称>`）。
 - `/model` 依次尝试精确 `provider/modelId`、精确 `modelId`、对完整引用的子串匹配，只有唯一命中时才切换，例如 `/model turbo`。

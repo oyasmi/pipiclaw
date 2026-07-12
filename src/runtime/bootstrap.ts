@@ -674,6 +674,12 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			await bot.sendPlain(event.channelId, response);
 		},
 
+		// Read-only prompt accounting; safe mid-turn, so it is answered here rather than by
+		// the runner's idle command path.
+		async handleContextCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void> {
+			await bot.sendPlain(event.channelId, getRunner(event.channelId).renderContextReport(args));
+		},
+
 		async handleBusyMessage(
 			event: DingTalkEvent,
 			bot: DingTalkBot,

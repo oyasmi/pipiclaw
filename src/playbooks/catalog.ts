@@ -18,9 +18,10 @@ export interface RuntimePlaybookMetadata {
 	path: string;
 	/**
 	 * Listed only when at least one of these tools is registered — any-of, not all-of:
-	 * task-delegation matters to a runtime with tasks *or* with sub-agents. Empty = always listed.
+	 * task-delegation matters to a runtime with tasks *or* with sub-agents. Empty = always
+	 * listed. (Prompt sections gate the other way: see `requiresAllTools` in agent/prompt/types.ts.)
 	 */
-	requiresTools: string[];
+	requiresAnyTool: string[];
 	/** Modes this playbook is offered in. Empty = all modes. */
 	modes: PlaybookMode[];
 	/** Ascending; ties break on filename. */
@@ -62,8 +63,8 @@ function parseFrontmatter(content: string, filename: string): Omit<RuntimePlaybo
 
 	// Authored metadata is validated, never silently ignored: a typo in a tool name would
 	// otherwise drop the playbook from the catalog with no signal anywhere.
-	const requiresTools = parseList(fields.get("requires-tools"));
-	for (const tool of requiresTools) {
+	const requiresAnyTool = parseList(fields.get("requires-tools"));
+	for (const tool of requiresAnyTool) {
 		if (!(tool in TOOL_PROMPT_HINTS)) {
 			throw new Error(`Runtime playbook ${filename} requires unknown tool "${tool}".`);
 		}
@@ -82,7 +83,7 @@ function parseFrontmatter(content: string, filename: string): Omit<RuntimePlaybo
 		throw new Error(`Runtime playbook ${filename} has a non-numeric priority "${priorityField}".`);
 	}
 
-	return { name, description, requiresTools, modes: modes as PlaybookMode[], priority };
+	return { name, description, requiresAnyTool, modes: modes as PlaybookMode[], priority };
 }
 
 /** Load the small always-on catalog; playbook bodies remain on disk until the agent reads one. */
@@ -109,8 +110,8 @@ export function selectRuntimePlaybooks(
 	const tools = new Set(toolNames);
 	return catalog.filter((playbook) => {
 		if (playbook.modes.length > 0 && !playbook.modes.includes(mode)) return false;
-		if (playbook.requiresTools.length === 0) return true;
-		return playbook.requiresTools.some((tool) => tools.has(tool));
+		if (playbook.requiresAnyTool.length === 0) return true;
+		return playbook.requiresAnyTool.some((tool) => tools.has(tool));
 	});
 }
 
