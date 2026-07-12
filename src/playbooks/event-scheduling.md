@@ -1,6 +1,8 @@
 ---
 name: event-scheduling
 description: Read before creating, updating, diagnosing, or retiring reminders, one-shot wakeups, periodic schedules, preAction gates, or background-job check-ins.
+requires-tools: event_manage
+priority: 30
 ---
 
 # 事件与调度

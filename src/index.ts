@@ -10,11 +10,30 @@ export {
 	renderBuiltInHelp,
 } from "./agent/commands.js";
 export { type AgentRunner, getOrCreateRunner } from "./agent/index.js";
-export { type AppendSystemPromptOptions, buildAppendSystemPrompt } from "./agent/prompt-builder.js";
 export {
-	getAgentConfig,
-	getSoul,
+	buildPipiclawSystemPrompt,
+	HARD_TOTAL_BUDGET_CHARS,
+	RUNTIME_PROMPT_VERSION,
+	SOFT_TOTAL_BUDGET_CHARS,
+} from "./agent/prompt/builder.js";
+export { createPromptBoundaryExtension } from "./agent/prompt/extension.js";
+export { buildPromptManifest, type PromptManifest, renderContextReport } from "./agent/prompt/manifest.js";
+export { loadWorkspacePromptResources, type WorkspacePromptResources } from "./agent/prompt/resources.js";
+export { MAIN_PROMPT_SECTIONS } from "./agent/prompt/sections.js";
+export type {
+	PromptAuthority,
+	PromptBuildContext,
+	PromptBuildResult,
+	PromptCacheClass,
+	PromptMode,
+	PromptSectionDefinition,
+	ResolvedPromptSection,
+	ToolDescriptor,
+} from "./agent/prompt/types.js";
+export {
 	loadPipiclawSkills,
+	type PipiclawSkillsResult,
+	resolvePipiclawSkills,
 } from "./agent/workspace-resources.js";
 export { createExecutor, type ExecOptions, type ExecResult, type Executor } from "./executor.js";
 export {

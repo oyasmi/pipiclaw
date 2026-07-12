@@ -1,6 +1,8 @@
 ---
 name: task-delegation
-description: Read before splitting parent/child tasks, using predefined or inline subagents, creating task-owned worktrees, or delegating to any external agent tool that must be revisited later.
+description: Read before splitting parent/child tasks, using predefined or inline subagents, creating task-owned worktrees, or delegating work you must revisit later.
+requires-tools: task_manage, subagent
+priority: 45
 ---
 
 # 任务分解与委派

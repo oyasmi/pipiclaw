@@ -1,6 +1,8 @@
 ---
 name: memory-and-learning
 description: Read when remembering or forgetting facts, choosing SESSION/MEMORY/HISTORY/ENVIRONMENT/tasks/skills, or turning repeated experience into a workspace skill.
+requires-tools: memory_manage, skill_manage
+priority: 20
 ---
 
 # 记忆、状态与程序性学习

@@ -1,6 +1,8 @@
 ---
 name: task-recurring
 description: Read before creating, starting, rescheduling, pausing, completing a cycle of, or retiring a recurring task and its canonical schedule event.
+requires-tools: task_manage
+priority: 43
 ---
 
 # 周期性任务

@@ -1,6 +1,8 @@
 ---
 name: task-driving
 description: Read whenever TASK_DRIVER or a task-owned event resumes work, and when checkpointing progress, waiting with wake, handling idempotent recovery, or deciding the next task action.
+requires-tools: task_manage
+priority: 41
 ---
 
 # Task driver 推进与断点恢复

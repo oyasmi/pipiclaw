@@ -55,6 +55,7 @@ import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
 import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";
+import { DEFAULT_AGENTS, DEFAULT_SOUL } from "./workspace-templates.js";
 
 export interface BootstrapPaths {
 	appName: string;
@@ -98,45 +99,6 @@ export interface RuntimeContext {
 	store: ChannelStore;
 	shutdown: (reason?: NodeJS.Signals | "manual") => Promise<void>;
 }
-
-const DEFAULT_SOUL = `# SOUL.md
-
-Configure Pipiclaw's identity, voice, and communication style here.
-
-Suggested sections:
-
-- Who the assistant is
-- Default language
-- Tone and personality
-- Reply style
-- Formatting preferences
-
-Example topics you may want to define:
-
-- "Answer in Chinese by default."
-- "Be concise and direct."
-- "Prefer Markdown."
-- "Act as an engineering assistant for our team."
-
-Replace this template with your actual identity prompt.
-`;
-
-const DEFAULT_AGENT = `# AGENTS.md
-
-Configure Pipiclaw's operating rules here.
-
-This file should define behavior and workflow. Identity, tone, and personality belong in \`SOUL.md\`.
-
-Suggested sections:
-
-- Tool usage policy
-- Security constraints
-- Scheduling/reminder policy
-- Project-specific workflows
-- Things the assistant must always or never do
-
-Replace this template with your actual operating instructions.
-`;
 
 const DEFAULT_MEMORY = `# Workspace Memory
 
@@ -341,7 +303,7 @@ export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS
 	}
 
 	writeTextFileIfMissing(join(paths.workspaceDir, "SOUL.md"), DEFAULT_SOUL, "workspace/SOUL.md", created);
-	writeTextFileIfMissing(join(paths.workspaceDir, "AGENTS.md"), DEFAULT_AGENT, "workspace/AGENTS.md", created);
+	writeTextFileIfMissing(join(paths.workspaceDir, "AGENTS.md"), DEFAULT_AGENTS, "workspace/AGENTS.md", created);
 	writeTextFileIfMissing(join(paths.workspaceDir, "MEMORY.md"), DEFAULT_MEMORY, "workspace/MEMORY.md", created);
 	writeTextFileIfMissing(
 		join(paths.workspaceDir, "ENVIRONMENT.md"),

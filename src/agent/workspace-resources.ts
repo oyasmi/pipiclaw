@@ -1,53 +1,50 @@
 /**
- * Workspace resource loaders for pipiclaw:
- * SOUL.md, AGENTS.md, and workspace-level skills.
+ * Workspace skills.
+ *
+ * SOUL.md and AGENTS.md are loaded by the prompt pipeline itself
+ * (`agent/prompt/resources.ts`), which owns their budgets and framing.
  */
 
-import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
-import { existsSync, readFileSync } from "fs";
+import { loadSkillsFromDir, type ResourceDiagnostic, type Skill } from "@earendil-works/pi-coding-agent";
 import { join } from "path";
-import * as log from "../log.js";
 
-/**
- * Load SOUL.md — defines the agent's identity, personality, and communication style.
- * Only loaded from workspace root (global).
- */
-export function getSoul(workspaceDir: string): string {
-	const soulPath = join(workspaceDir, "SOUL.md");
-	if (existsSync(soulPath)) {
-		try {
-			const content = readFileSync(soulPath, "utf-8").trim();
-			if (content) return content;
-		} catch (error) {
-			log.logWarning("Failed to read SOUL.md", `${soulPath}: ${error}`);
-		}
-	}
-	return "";
+export interface PipiclawSkillsResult {
+	skills: Skill[];
+	diagnostics: ResourceDiagnostic[];
 }
 
 /**
- * Load AGENTS.md — defines the agent's behavior instructions, capabilities, and constraints.
- * Only loaded from workspace root (global).
+ * Load skills from the workspace-level skill directory.
+ *
+ * Diagnostics (an unreadable SKILL.md, bad frontmatter, a duplicate name) were
+ * previously dropped on the floor, so a broken workspace skill silently vanished
+ * from the prompt. They are returned now and surfaced by the runner.
  */
-export function getAgentConfig(channelDir: string): string {
-	const workspaceAgentPath = join(channelDir, "..", "AGENTS.md");
-	if (existsSync(workspaceAgentPath)) {
-		try {
-			const content = readFileSync(workspaceAgentPath, "utf-8").trim();
-			if (content) {
-				return content;
-			}
-		} catch (error) {
-			log.logWarning("Failed to read workspace AGENTS.md", `${workspaceAgentPath}: ${error}`);
-		}
-	}
-	return "";
-}
-
-/**
- * Load skills from the workspace-level skill directory only.
- */
-export function loadPipiclawSkills(channelDir: string): Skill[] {
+export function loadPipiclawSkills(channelDir: string): PipiclawSkillsResult {
 	const workspaceSkillsDir = join(channelDir, "..", "skills");
-	return loadSkillsFromDir({ dir: workspaceSkillsDir, source: "workspace" }).skills;
+	const loaded = loadSkillsFromDir({ dir: workspaceSkillsDir, source: "workspace" });
+	return { skills: loaded.skills, diagnostics: loaded.diagnostics };
+}
+
+/**
+ * Merge pi's auto-discovered skills with the workspace ones. Workspace wins on a
+ * name collision (it is the layer the user actually edits), and the collision is
+ * reported rather than resolved in silence.
+ */
+export function resolvePipiclawSkills(
+	base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] },
+	workspace: PipiclawSkillsResult,
+): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
+	const workspaceNames = new Set(workspace.skills.map((skill) => skill.name));
+	const collisions = base.skills.filter((skill) => workspaceNames.has(skill.name));
+	const diagnostics: ResourceDiagnostic[] = [...base.diagnostics, ...workspace.diagnostics];
+	for (const skill of collisions) {
+		diagnostics.push({
+			type: "collision",
+			message: `Skill "${skill.name}" is shadowed by the workspace skill of the same name.`,
+			path: skill.filePath,
+		});
+	}
+	const kept = base.skills.filter((skill) => !workspaceNames.has(skill.name));
+	return { skills: [...kept, ...workspace.skills], diagnostics };
 }

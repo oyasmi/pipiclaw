@@ -1,6 +1,8 @@
 ---
 name: task-planning
 description: Read before creating or restructuring a persistent task, choosing task versus event, writing Goal/DoD/Manual/Verification, or setting control metadata and budgets.
+requires-tools: task_manage
+priority: 40
 ---
 
 # 长程任务规划与建档

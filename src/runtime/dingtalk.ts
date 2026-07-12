@@ -1208,6 +1208,10 @@ export class DingTalkBot {
 					case "usage":
 						await this.handler.handleUsageCommand(event, this, builtInCommand.args);
 						return;
+					case "context":
+						// Not marked availableWhileBusy: the report describes the idle session's
+						// prompt, so it falls through to the "task is already running" reply below.
+						break;
 				}
 			}
 

@@ -14,7 +14,6 @@ import {
 	type SettingsManager as SDKSettingsManager,
 	SessionManager,
 	type SessionStartEvent,
-	type Skill,
 } from "@earendil-works/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
@@ -39,6 +38,7 @@ import {
 	formatModelReference,
 	resolveInitialModel,
 } from "../models/utils.js";
+import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks/catalog.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
@@ -47,7 +47,7 @@ import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
-import { discoverSubAgents, formatSubAgentList, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
 import { TOOL_PROMPT_HINTS } from "../tools/registry.js";
@@ -62,7 +62,11 @@ import {
 	shouldRestorePrimary,
 } from "./model-fallback.js";
 import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
-import { buildAppendSystemPrompt } from "./prompt-builder.js";
+import { buildPipiclawSystemPrompt } from "./prompt/builder.js";
+import { createPromptBoundaryExtension } from "./prompt/extension.js";
+import { buildPromptManifest, type PromptTurnContextStats, renderContextReport } from "./prompt/manifest.js";
+import { loadWorkspacePromptResources } from "./prompt/resources.js";
+import type { PromptBuildResult } from "./prompt/types.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunnerFactoryPaths } from "./runner-factory.js";
 import { handleSessionEvent } from "./session-events.js";
@@ -78,7 +82,7 @@ import {
 	type TurnPhase,
 	type TurnStatus,
 } from "./types.js";
-import { getAgentConfig, getSoul, loadPipiclawSkills } from "./workspace-resources.js";
+import { loadPipiclawSkills, type PipiclawSkillsResult, resolvePipiclawSkills } from "./workspace-resources.js";
 
 function isSilentOutcome(outcome: FinalOutcome): outcome is { kind: "silent" } {
 	return outcome.kind === "silent";
@@ -121,7 +125,12 @@ export class ChannelRunner implements AgentRunner {
 
 	// --- Mutable across runs ---
 	private activeModel: Model<Api>;
-	private currentSkills: Skill[];
+	private currentSkills: PipiclawSkillsResult;
+	/** Last built system prompt (spec 025): feeds the boundary footer, /context and the debug manifest. */
+	private lastPromptBuild?: PromptBuildResult;
+	/** The exact system prompt the provider last received (our prompt + pi's tail + footer). */
+	private lastFinalPrompt?: string;
+	private lastTurnContextStats?: PromptTurnContextStats;
 	private currentTools: AgentTool<any>[] = [];
 	private firstTurnMemoryBootstrapPending = true;
 	/** Mirror of `tools.tasks.enabled` from the last tools-config load (see buildRuntimeTools). */
@@ -285,6 +294,11 @@ export class ChannelRunner implements AgentRunner {
 		let promptSubmitted = false;
 		let fallbackAttempted = false;
 		let fallbackTargetRef: string | undefined;
+		// Hoisted so the debug dump in `finally` can report the turn as it was actually sent.
+		let promptText = "";
+		let recalledContextText = "";
+		let taskDigestText = "";
+		let durableMemoryBootstrapText = "";
 
 		try {
 			await this.ensureSessionReady();
@@ -303,12 +317,13 @@ export class ChannelRunner implements AgentRunner {
 			// Ensure channel directory exists
 			await mkdir(this.channelDir, { recursive: true });
 
-			let promptText = preserveRawInput ? clippedInput : userMessage;
-			let recalledContextText = "";
-			let taskDigestText = "";
-			let durableMemoryBootstrapText = "";
+			promptText = preserveRawInput ? clippedInput : userMessage;
 
 			if (!preserveRawInput) {
+				// Channel facts are turn-dynamic by design (spec 025 §7.3): keeping them out of the
+				// system prompt is what lets every channel in a workspace share one cached prefix.
+				promptText = `${this.renderChannelTurnContext()}\n\n<user_message>\n${promptText}\n</user_message>`;
+
 				const recallSettings = this.settingsManager.getMemoryRecallSettings();
 				if (recallSettings.enabled) {
 					const recall = await recallRelevantMemory({
@@ -330,7 +345,7 @@ export class ChannelRunner implements AgentRunner {
 
 					if (recall.renderedText) {
 						recalledContextText = recall.renderedText;
-						promptText = `${recall.renderedText}\n\n<user_message>\n${promptText}\n</user_message>`;
+						promptText = `${recall.renderedText}\n\n${promptText}`;
 					}
 				}
 
@@ -361,18 +376,12 @@ export class ChannelRunner implements AgentRunner {
 			// characters and must count against the projected context usage this guard is checking.
 			await this.maybeRunPreventiveCompactionForIncomingText(promptText);
 
-			// Debug: write context to last_prompt.json (only with PIPICLAW_DEBUG=1)
-			if (process.env.PIPICLAW_DEBUG) {
-				const debugContext = {
-					systemPrompt: this.agent.state.systemPrompt,
-					messages: this.session.messages,
-					durableMemoryBootstrap: durableMemoryBootstrapText || undefined,
-					taskDigest: taskDigestText || undefined,
-					recalledContext: recalledContextText || undefined,
-					newUserMessage: promptText,
-				};
-				await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2));
-			}
+			this.lastTurnContextStats = {
+				durableMemoryChars: durableMemoryBootstrapText.length,
+				taskDigestChars: taskDigestText.length,
+				recalledMemoryChars: recalledContextText.length,
+				userMessageChars: clippedInput.length,
+			};
 
 			const fallbackDeps: FallbackRunDeps = {
 				prompt: async (text) => {
@@ -433,6 +442,26 @@ export class ChannelRunner implements AgentRunner {
 			log.logWarning(`[${this.channelId}] Runner failed`, this.runState.errorMessage);
 		} finally {
 			this.turn.phase = "finishing";
+			// Debug dump (PIPICLAW_DEBUG=1). Written after the run so `systemPrompt` is the
+			// string the provider actually received — base sections, pi's tail, and the boundary
+			// footer the prompt extension appends at before_agent_start.
+			if (process.env.PIPICLAW_DEBUG) {
+				const debugContext = {
+					systemPrompt: this.lastFinalPrompt ?? this.agent.state.systemPrompt,
+					promptManifest: this.lastPromptBuild
+						? buildPromptManifest(this.lastPromptBuild, this.lastFinalPrompt)
+						: undefined,
+					messages: this.session.messages,
+					durableMemoryBootstrap: durableMemoryBootstrapText || undefined,
+					taskDigest: taskDigestText || undefined,
+					recalledContext: recalledContextText || undefined,
+					newUserMessage: promptText,
+				};
+				await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
+					(error: unknown) =>
+						log.logWarning(`[${this.channelId}] Failed to write last_prompt.json`, errorMessage(error)),
+				);
+			}
 			if (!promptSubmitted) {
 				const discarded = this.session.clearQueue();
 				const discardedCount = discarded.steering.length + discarded.followUp.length;
@@ -570,6 +599,9 @@ export class ChannelRunner implements AgentRunner {
 				case "help":
 					await this.sendCommandReply(ctx, renderBuiltInHelp());
 					return;
+				case "context":
+					await this.sendCommandReply(ctx, this.renderContextReport(command.args));
+					return;
 				case "stop":
 					await this.sendCommandReply(ctx, "No task is running. Use `/stop` only while a task is running.");
 					return;
@@ -644,7 +676,7 @@ export class ChannelRunner implements AgentRunner {
 				memoryGrowth: this.settingsManager.getMemoryGrowthSettings(),
 				memoryMaintenance: this.settingsManager.getMemoryMaintenanceSettings(),
 			},
-			loadedSkills: this.currentSkills.map((skill) => ({
+			loadedSkills: this.currentSkills.skills.map((skill) => ({
 				name: skill.name,
 				description: skill.description,
 			})),
@@ -676,7 +708,43 @@ export class ChannelRunner implements AgentRunner {
 		await this.session.abort();
 	}
 
+	/**
+	 * `/context` — read-only prompt accounting, no LLM cost. Reports the section
+	 * breakdown of the system prompt, the tool schemas (billed on top of it, and
+	 * often the larger half), and the last turn's dynamic context.
+	 */
+	renderContextReport(args = ""): string {
+		const build = this.lastPromptBuild ?? this.buildSystemPrompt();
+		return renderContextReport({
+			build,
+			finalPrompt: this.lastFinalPrompt,
+			skills: this.currentSkills.skills.map((skill) => ({ name: skill.name, description: skill.description })),
+			toolNames: this.currentTools.map((tool) => tool.name),
+			toolSchemaChars: this.currentTools.reduce(
+				(sum, tool) =>
+					sum + tool.name.length + tool.description.length + JSON.stringify(tool.parameters ?? {}).length,
+				0,
+			),
+			lastTurn: this.lastTurnContextStats,
+			detail: args.trim().toLowerCase() === "detail",
+		});
+	}
+
 	// === Private helpers ===
+
+	/**
+	 * The per-turn channel capsule. It replaces the channel paths that used to sit in
+	 * the system prompt: memory/task/event tools are already bound to this channel, so
+	 * the model only needs the directory when it wants to read a file directly.
+	 */
+	private renderChannelTurnContext(): string {
+		return [
+			"<runtime_turn_context>",
+			`Channel directory: ${this.channelDir}`,
+			"SESSION.md, MEMORY.md, HISTORY.md and tasks/ live there and are runtime-maintained. Prefer the context supplied with this turn and the channel-bound tools; read those files directly only when you need detail they did not provide.",
+			"</runtime_turn_context>",
+		].join("\n");
+	}
 
 	private async sendCommandReply(ctx: ChannelContext, text: string): Promise<void> {
 		const delivered = await ctx.respondPlain(text);
@@ -925,6 +993,52 @@ export class ChannelRunner implements AgentRunner {
 		}
 	}
 
+	/**
+	 * Build the Pipiclaw-owned system prompt (spec 025). This replaces pi's default
+	 * base prompt entirely: identity, execution contract, hard invariants, the tool
+	 * catalog and the workspace files are ours. pi still appends its tail (skills,
+	 * date, cwd), and the boundary footer is appended after that by the prompt
+	 * extension.
+	 *
+	 * Nothing channel-specific enters this text — that is what lets two channels in
+	 * one workspace share a cached prompt prefix. Channel facts ride the turn.
+	 */
+	private buildSystemPrompt(): PromptBuildResult {
+		const toolNames = this.currentTools.map((tool) => tool.name);
+		const resources = loadWorkspacePromptResources(this.workspaceDir);
+		const build = buildPipiclawSystemPrompt({
+			mode: "normal",
+			cwd: process.cwd(),
+			workspaceDir: this.workspaceDir,
+			tools: this.currentTools.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				hint: TOOL_PROMPT_HINTS[tool.name],
+			})),
+			soul: resources.soul,
+			agents: resources.agents,
+			playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(), toolNames),
+			subAgents: this.subAgentDiscovery.agents.map((agent) => ({
+				name: agent.name,
+				description: agent.description,
+			})),
+			skills: this.currentSkills.skills.map((skill) => ({ name: skill.name, description: skill.description })),
+		});
+
+		for (const diagnostic of [...resources.diagnostics, ...build.diagnostics]) {
+			if (diagnostic.level === "info") continue;
+			log.logWarning(`[${this.channelId}] Prompt ${diagnostic.level} (${diagnostic.sectionId})`, diagnostic.message);
+		}
+		// Only a real change is worth a line: a reload that produced the same bytes is noise.
+		if (this.lastPromptBuild?.fingerprint !== build.fingerprint) {
+			log.logInfo(
+				`[${this.channelId}] System prompt rebuilt: ${build.totalChars} chars, ~${build.estimatedTokens} tokens, sha256:${build.fingerprint.slice(0, 12)} (was ${this.lastPromptBuild ? `sha256:${this.lastPromptBuild.fingerprint.slice(0, 12)}` : "none"})`,
+			);
+		}
+		this.lastPromptBuild = build;
+		return build;
+	}
+
 	private createResourceLoader(): ResourceLoader {
 		return new DefaultResourceLoader({
 			cwd: process.cwd(),
@@ -932,6 +1046,12 @@ export class ChannelRunner implements AgentRunner {
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			extensionFactories: [
 				this.memoryLifecycle.createExtensionFactory(),
+				createPromptBoundaryExtension({
+					getFooter: () => this.lastPromptBuild?.footer ?? "",
+					onFinalPrompt: (systemPrompt) => {
+						this.lastFinalPrompt = systemPrompt;
+					},
+				}),
 				createCommandExtension({
 					getCurrentModel: () => this.session.model ?? this.activeModel,
 					getAvailableModels: async () => {
@@ -952,34 +1072,25 @@ export class ChannelRunner implements AgentRunner {
 					},
 				}),
 			],
-			appendSystemPromptOverride: (base) => {
-				const soul = getSoul(this.workspaceDir);
-				const sections = [...base];
-				if (soul) {
-					sections.unshift(soul);
+			// Pipiclaw owns the base prompt: with a custom prompt present, pi emits no
+			// default identity, no pi docs index and no `Available tools: (none)` block.
+			systemPromptOverride: () => this.buildSystemPrompt().text,
+			// Nothing may slip in behind the section pipeline — not pi's app-level
+			// APPEND_SYSTEM.md, not a base append. SOUL/AGENTS are rendered as sections.
+			appendSystemPromptOverride: () => [],
+			agentsFilesOverride: () => ({ agentsFiles: [] }),
+			// Skills stay in the ResourceLoader: they drive `/skill:name` and pi's
+			// `<available_skills>` index together. Only the merge policy is ours.
+			skillsOverride: (base) => {
+				const merged = resolvePipiclawSkills(base, this.currentSkills);
+				for (const diagnostic of merged.diagnostics) {
+					log.logWarning(
+						`[${this.channelId}] Skill ${diagnostic.type}`,
+						`${diagnostic.message}${diagnostic.path ? ` (${diagnostic.path})` : ""}`,
+					);
 				}
-				sections.push(
-					buildAppendSystemPrompt(this.workspaceDir, this.channelId, {
-						subAgentList: formatSubAgentList(this.subAgentDiscovery.agents),
-						tools: this.currentTools.map((tool) => ({
-							name: tool.name,
-							description: tool.description,
-							hint: TOOL_PROMPT_HINTS[tool.name],
-						})),
-					}),
-				);
-				return sections;
+				return merged;
 			},
-			agentsFilesOverride: () => {
-				const agentConfig = getAgentConfig(this.channelDir);
-				return {
-					agentsFiles: agentConfig ? [{ path: `${this.workspaceDir}/AGENTS.md`, content: agentConfig }] : [],
-				};
-			},
-			skillsOverride: (base) => ({
-				skills: [...base.skills, ...this.currentSkills],
-				diagnostics: base.diagnostics,
-			}),
 		});
 	}
 

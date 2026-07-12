@@ -1,6 +1,8 @@
 ---
 name: task-closeout
-description: Read before candidate verification, importing a verifier verdict, requesting external approval, completing or cancelling a task, or handling combined verification-and-approval gates.
+description: Read before candidate verification, importing a verifier verdict, requesting external approval, or completing/cancelling a task.
+requires-tools: task_manage
+priority: 42
 ---
 
 # 验收、外部审批与闭环

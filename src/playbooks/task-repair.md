@@ -1,6 +1,8 @@
 ---
 name: task-repair
-description: Read when a task is escalated, repeatedly stalled, not waking, has broken frontmatter/control, stale approval or verification, terminal dependencies, orphan events, or restart recovery issues.
+description: Read when a task is escalated, stalled, not waking, or has broken control metadata, stale approval/verification, terminal dependencies, or orphan events.
+requires-tools: task_manage
+priority: 44
 ---
 
 # 任务诊断与修复

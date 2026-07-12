@@ -108,8 +108,10 @@ vi.mock("../src/subagents/tool.js", () => ({ createSubAgentTool: createSubAgentT
 vi.mock("../src/security/config.js", () => ({ loadSecurityConfig: vi.fn(() => securityConfig) }));
 vi.mock("../src/tools/config.js", () => ({ loadToolsConfig: vi.fn(() => toolsConfig) }));
 
-import { buildAppendSystemPrompt } from "../src/agent/prompt-builder.js";
+import { buildPipiclawSystemPrompt } from "../src/agent/prompt/builder.js";
+import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { createPipiclawTools } from "../src/tools/index.js";
+import { TOOL_PROMPT_HINTS } from "../src/tools/registry.js";
 
 const ALL_TOOL_NAMES = [
 	"read",
@@ -198,12 +200,18 @@ describe("tools index", () => {
 			memoryCandidateStore: createMemoryCandidateStore(),
 		});
 		const registered = new Set(tools.map((tool) => tool.name));
-		const prompt = buildAppendSystemPrompt("/workspace", "dm_42", {
-			tools: tools.map((tool) => ({ name: tool.name, description: "" })),
+		const toolNames = tools.map((tool) => tool.name);
+		const { text: prompt } = buildPipiclawSystemPrompt({
+			mode: "normal",
+			cwd: "/work",
+			workspaceDir: "/workspace",
+			tools: tools.map((tool) => ({ name: tool.name, description: "", hint: TOOL_PROMPT_HINTS[tool.name] })),
+			playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(), toolNames),
+			subAgents: [],
 		});
 
 		for (const name of ALL_TOOL_NAMES) {
-			const line = `- ${name}:`;
+			const line = `- ${name} —`;
 			if (registered.has(name)) {
 				expect(prompt).toContain(line);
 			} else {
@@ -214,7 +222,7 @@ describe("tools index", () => {
 		expect(registered.has("web_search")).toBe(false);
 		expect(prompt).not.toContain("return untrusted external content");
 		expect(registered.has("memory_manage")).toBe(true);
-		expect(prompt).toContain("- memory_manage:");
+		expect(prompt).toContain("- memory_manage —");
 		toolsConfig.tools.web.enable = true;
 	});
 

@@ -13,7 +13,8 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 	loadSkillsFromDir: loadSkillsFromDirMock,
 }));
 
-import { getAgentConfig, getSoul, loadPipiclawSkills } from "../src/agent/workspace-resources.js";
+import { loadWorkspacePromptResources } from "../src/agent/prompt/resources.js";
+import { loadPipiclawSkills, resolvePipiclawSkills } from "../src/agent/workspace-resources.js";
 import { getApiKeyForModel } from "../src/models/api-keys.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -44,22 +45,21 @@ afterEach(() => {
 describe("config-loader", () => {
 	it("loads workspace-level SOUL.md and AGENTS.md when present", () => {
 		const workspaceDir = createTempDir();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
 		writeFileSync(join(workspaceDir, "SOUL.md"), "  be concise  ");
 		writeFileSync(join(workspaceDir, "AGENTS.md"), "  use tests  ");
 
-		expect(getSoul(workspaceDir)).toBe("be concise");
-		expect(getAgentConfig(channelDir)).toBe("use tests");
+		const resources = loadWorkspacePromptResources(workspaceDir);
+		expect(resources.soul?.content).toBe("be concise");
+		expect(resources.soul?.isDefaultTemplate).toBe(false);
+		expect(resources.agents?.content).toBe("use tests");
 	});
 
-	it("returns empty strings when workspace config files are missing", () => {
+	it("reports no resources when the workspace config files are missing", () => {
 		const workspaceDir = createTempDir();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
 
-		expect(getSoul(workspaceDir)).toBe("");
-		expect(getAgentConfig(channelDir)).toBe("");
+		const resources = loadWorkspacePromptResources(workspaceDir);
+		expect(resources.soul).toBeUndefined();
+		expect(resources.agents).toBeUndefined();
 	});
 
 	it("loads workspace-level skills only", () => {
@@ -71,6 +71,7 @@ describe("config-loader", () => {
 		loadSkillsFromDirMock.mockImplementation(({ source }: { source: string }) => {
 			if (source === "workspace") {
 				return {
+					diagnostics: [],
 					skills: [
 						makeSkill(
 							"shared",
@@ -87,15 +88,34 @@ describe("config-loader", () => {
 					],
 				};
 			}
-			return { skills: [] };
+			return { skills: [], diagnostics: [] };
 		});
 
-		const skills = loadPipiclawSkills(channelDir);
-		expect(skills.map((skill) => skill.name).sort()).toEqual(["shared", "workspace-only"]);
+		const loaded = loadPipiclawSkills(channelDir);
+		expect(loaded.skills.map((skill) => skill.name).sort()).toEqual(["shared", "workspace-only"]);
+		expect(loaded.diagnostics).toEqual([]);
 
-		const shared = skills.find((skill) => skill.name === "shared");
+		const shared = loaded.skills.find((skill) => skill.name === "shared");
 		expect(shared?.filePath).toBe(join(workspaceSkillsDir, "shared", "SKILL.md"));
 		expect(shared?.baseDir).toBe(join(workspaceSkillsDir, "shared"));
+	});
+
+	it("lets a workspace skill shadow a discovered one of the same name, and says so", () => {
+		const workspaceDir = createTempDir();
+		const workspaceSkillsDir = join(workspaceDir, "skills");
+		const base = {
+			skills: [makeSkill("shared", "/global/shared/SKILL.md", "/global/shared", "user")],
+			diagnostics: [],
+		};
+		const workspace = {
+			skills: [makeSkill("shared", join(workspaceSkillsDir, "shared", "SKILL.md"), workspaceSkillsDir, "workspace")],
+			diagnostics: [],
+		};
+
+		const merged = resolvePipiclawSkills(base, workspace);
+		expect(merged.skills).toHaveLength(1);
+		expect(merged.skills[0]?.filePath).toBe(join(workspaceSkillsDir, "shared", "SKILL.md"));
+		expect(merged.diagnostics).toMatchObject([{ type: "collision", path: "/global/shared/SKILL.md" }]);
 	});
 
 	it("resolves API keys from the registry first and falls back to ANTHROPIC_API_KEY", async () => {

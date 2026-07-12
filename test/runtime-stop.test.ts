@@ -90,6 +90,7 @@ describe("runtime stop handling", () => {
 			releaseRun = resolve;
 		});
 		const runner: AgentRunner = {
+			renderContextReport: () => "CONTEXT",
 			run: vi.fn(async () => {
 				await runAborted;
 				return { stopReason: "aborted" };
@@ -170,6 +171,7 @@ describe("runtime stop handling", () => {
 			signalRunStarted = resolve;
 		});
 		const runner: AgentRunner = {
+			renderContextReport: () => "CONTEXT",
 			run: vi.fn(async () => {
 				signalRunStarted();
 				await runAborted;

@@ -1,7 +1,16 @@
-export type BuiltInCommandName = "help" | "steer" | "followup" | "stop" | "events" | "tasks" | "status" | "usage";
+export type BuiltInCommandName =
+	| "help"
+	| "steer"
+	| "followup"
+	| "stop"
+	| "events"
+	| "tasks"
+	| "status"
+	| "usage"
+	| "context";
 
 /** The four transport commands handled by `ChannelRunner.handleBuiltinCommand`. */
-export type RunnerBuiltInCommandName = "help" | "stop" | "steer" | "followup";
+export type RunnerBuiltInCommandName = "help" | "stop" | "steer" | "followup" | "context";
 
 export interface BuiltInCommand {
 	name: BuiltInCommandName;
@@ -102,6 +111,12 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		examples: ["/usage", "/usage 7d", "/usage month"],
 		availableWhileBusy: true,
 	},
+	{
+		name: "context",
+		argumentHint: "[detail]",
+		description: "Show what the model is being sent: system prompt sections, tool schemas, and last-turn context",
+		examples: ["/context", "/context detail"],
+	},
 ];
 
 /**
@@ -150,7 +165,7 @@ export function isBuiltInCommandName(name: string): name is BuiltInCommandName {
 	return BUILT_IN_NAMES.has(name);
 }
 
-const RUNNER_BUILT_IN_NAMES = new Set<string>(["help", "stop", "steer", "followup"]);
+const RUNNER_BUILT_IN_NAMES = new Set<string>(["help", "stop", "steer", "followup", "context"]);
 
 /** Narrow a parsed built-in to one `ChannelRunner.handleBuiltinCommand` accepts. */
 export function isRunnerBuiltInCommand(command: BuiltInCommand): command is RunnerBuiltInCommand {

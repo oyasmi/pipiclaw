@@ -64,6 +64,7 @@ export class TurnController {
 			renderUsage: deps.renderUsage,
 			runEvents: deps.runEvents,
 			runTasks: deps.runTasks,
+			renderContext: (args) => this.deps.runner.renderContextReport(args),
 			renderStatus: () =>
 				renderStatus({
 					runner: this.deps.runner,

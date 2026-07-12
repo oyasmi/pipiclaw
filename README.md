@@ -217,6 +217,7 @@ pipiclaw
 | `/tasks [show\|archive\|approve\|pause\|resume\|run\|stats\|doctor]` | 查看与治理任务台账，`approve` 是外部副作用的唯一授权入口 |
 | `/status` | 运行时状态：执行状态、当前模型、上下文用量、运行时长、版本 |
 | `/usage [7d\|month]` | 本通道与全局的 LLM 成本，按类型和 Top 模型拆分 |
+| `/context [detail]` | 当前发给模型的上下文构成：system prompt 各 section 体量与 fingerprint、工具 schema 开销、上一轮动态上下文 |
 | `/new` | 开启新会话 |
 | `/compact [instructions]` | 手动压缩当前会话上下文 |
 | `/session` | 当前会话状态、消息统计、token 使用量 |
@@ -224,7 +225,7 @@ pipiclaw
 
 说明：
 
-- 前八条由传输层直接处理，**忙碌时也可用**；后四条是会话命令，仅空闲时可用（忙碌时会收到提示）。
+- 前八条由传输层直接处理，**忙碌时也可用**；`/context` 与后四条会话命令仅空闲时可用（忙碌时会收到提示）。
 - 忙碌时的普通消息默认等价于 `/steer`，可通过 `channel.json` 的 `busyMessageDefault` 改为排队（`followUp`）。
 - 未知的斜杠命令会被直接拒绝并提示 `/help`，不会作为普通消息发给模型（避免 `/modle` 这类笔误变成一整轮 LLM 调用）。workspace skill 也可作为命令调用（`/skill:<名称>`）。
 - `/model` 依次尝试精确 `provider/modelId`、精确 `modelId`、对完整引用的子串匹配，只有唯一命中时才切换，例如 `/model turbo`。

@@ -50,6 +50,8 @@ export interface AgentRunner {
 	flushMemoryForShutdown(): Promise<void>;
 	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;
 	getStatusSnapshot(): RunnerStatusSnapshot;
+	/** `/context`: prompt/tool-schema accounting for the live session (spec 025 §9). */
+	renderContextReport(args?: string): string;
 	abort(): Promise<void>;
 	/**
 	 * Synchronously reserve the turn for a message. Transports MUST call this in

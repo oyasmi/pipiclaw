@@ -34,6 +34,7 @@ export type DispatchOutcome =
 export interface DispatchDeps {
 	renderHelp(): string;
 	renderStatus(): string;
+	renderContext(args: string): string;
 	renderUsage(args: string): string;
 	runEvents(args: string): Promise<string>;
 	runTasks(args: string): Promise<string>;
@@ -57,6 +58,8 @@ export async function dispatch(input: string, deps: DispatchDeps): Promise<Dispa
 			return { kind: "reply", text: deps.renderHelp() };
 		case "status":
 			return { kind: "reply", text: deps.renderStatus() };
+		case "context":
+			return { kind: "reply", text: deps.renderContext(command.args) };
 		case "usage":
 			return { kind: "reply", text: deps.renderUsage(command.args) };
 		case "events":

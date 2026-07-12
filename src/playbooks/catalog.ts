@@ -1,15 +1,41 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
+import { TOOL_PROMPT_HINTS } from "../tools/registry.js";
+
+/** Prompt modes a playbook may be scoped to. Mirrors PromptMode in agent/prompt/types.ts. */
+const PLAYBOOK_MODES = ["normal", "task-driver", "event", "subagent", "maintenance"] as const;
+export type PlaybookMode = (typeof PLAYBOOK_MODES)[number];
+
+const DEFAULT_PRIORITY = 100;
+/** A catalog entry is a trigger, not a summary; longer descriptions are clipped in the prompt. */
+export const MAX_PLAYBOOK_DESCRIPTION_CHARS = 180;
 
 export interface RuntimePlaybookMetadata {
 	name: string;
 	description: string;
 	filename: string;
 	path: string;
+	/**
+	 * Listed only when at least one of these tools is registered — any-of, not all-of:
+	 * task-delegation matters to a runtime with tasks *or* with sub-agents. Empty = always listed.
+	 */
+	requiresTools: string[];
+	/** Modes this playbook is offered in. Empty = all modes. */
+	modes: PlaybookMode[];
+	/** Ascending; ties break on filename. */
+	priority: number;
 }
 
-function parseFrontmatter(content: string, filename: string): Pick<RuntimePlaybookMetadata, "name" | "description"> {
+function parseList(value: string | undefined): string[] {
+	if (!value) return [];
+	return value
+		.split(",")
+		.map((item) => item.trim())
+		.filter(Boolean);
+}
+
+function parseFrontmatter(content: string, filename: string): Omit<RuntimePlaybookMetadata, "filename" | "path"> {
 	const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
 	if (!match) throw new Error(`Runtime playbook ${filename} has no YAML frontmatter.`);
 
@@ -33,7 +59,30 @@ function parseFrontmatter(content: string, filename: string): Pick<RuntimePlaybo
 	if (`${name}.md` !== filename) {
 		throw new Error(`Runtime playbook ${filename} metadata name must be "${basename(filename, ".md")}".`);
 	}
-	return { name, description };
+
+	// Authored metadata is validated, never silently ignored: a typo in a tool name would
+	// otherwise drop the playbook from the catalog with no signal anywhere.
+	const requiresTools = parseList(fields.get("requires-tools"));
+	for (const tool of requiresTools) {
+		if (!(tool in TOOL_PROMPT_HINTS)) {
+			throw new Error(`Runtime playbook ${filename} requires unknown tool "${tool}".`);
+		}
+	}
+
+	const modes = parseList(fields.get("modes"));
+	for (const mode of modes) {
+		if (!(PLAYBOOK_MODES as readonly string[]).includes(mode)) {
+			throw new Error(`Runtime playbook ${filename} declares unknown mode "${mode}".`);
+		}
+	}
+
+	const priorityField = fields.get("priority");
+	const priority = priorityField ? Number(priorityField) : DEFAULT_PRIORITY;
+	if (!Number.isFinite(priority)) {
+		throw new Error(`Runtime playbook ${filename} has a non-numeric priority "${priorityField}".`);
+	}
+
+	return { name, description, requiresTools, modes: modes as PlaybookMode[], priority };
 }
 
 /** Load the small always-on catalog; playbook bodies remain on disk until the agent reads one. */
@@ -44,11 +93,35 @@ export function loadRuntimePlaybookCatalog(directory = PLAYBOOKS_DIR): RuntimePl
 		.map((filename) => {
 			const path = join(directory, filename);
 			return { ...parseFrontmatter(readFileSync(path, "utf-8"), filename), filename, path };
-		});
+		})
+		.sort((a, b) => a.priority - b.priority || a.filename.localeCompare(b.filename));
 }
 
-export function renderRuntimePlaybookIndex(directory = PLAYBOOKS_DIR): string {
-	return loadRuntimePlaybookCatalog(directory)
-		.map((playbook) => `- ${playbook.filename} — ${playbook.description}`)
+/**
+ * Drop playbooks whose mechanism is unreachable with the current tool set: the task
+ * playbooks are pure noise for a runtime with `task_manage` switched off.
+ */
+export function selectRuntimePlaybooks(
+	catalog: RuntimePlaybookMetadata[],
+	toolNames: readonly string[],
+	mode: PlaybookMode = "normal",
+): RuntimePlaybookMetadata[] {
+	const tools = new Set(toolNames);
+	return catalog.filter((playbook) => {
+		if (playbook.modes.length > 0 && !playbook.modes.includes(mode)) return false;
+		if (playbook.requiresTools.length === 0) return true;
+		return playbook.requiresTools.some((tool) => tools.has(tool));
+	});
+}
+
+export function renderPlaybookCatalog(playbooks: RuntimePlaybookMetadata[]): string {
+	return playbooks
+		.map((playbook) => {
+			const description =
+				playbook.description.length > MAX_PLAYBOOK_DESCRIPTION_CHARS
+					? `${playbook.description.slice(0, MAX_PLAYBOOK_DESCRIPTION_CHARS - 1)}…`
+					: playbook.description;
+			return `- ${playbook.filename} — ${description}`;
+		})
 		.join("\n");
 }

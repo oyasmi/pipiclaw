@@ -2,12 +2,14 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { buildStandardMessages } from "../shared/type-guards.js";
 
-// The channel runner prepends recalled memory and the durable bootstrap to the raw
-// user input, then wraps the input itself in <user_message>. If that combined text
-// flows back into consolidation / session refresh / signal scans, previously recalled
-// memory gets re-summarized into MEMORY.md — a self-reinforcing echo. Strip the
-// injected wrappers before any memory job reads the transcript.
-const INJECTED_CONTEXT_BLOCK = /<(runtime_context|durable_memory_snapshot)>[\s\S]*?<\/\1>\s*/gi;
+// The channel runner prepends the channel capsule, recalled memory, the task agenda
+// and the durable bootstrap to the raw user input, then wraps the input itself in
+// <user_message>. If that combined text flows back into consolidation / session
+// refresh / signal scans, previously recalled memory gets re-summarized into
+// MEMORY.md — a self-reinforcing echo. Strip the injected wrappers before any memory
+// job reads the transcript.
+const INJECTED_CONTEXT_BLOCK =
+	/<(runtime_context|runtime_turn_context|durable_memory_snapshot|task_agenda)>[\s\S]*?<\/\1>\s*/gi;
 const USER_MESSAGE_WRAPPER = /^<user_message>\s*([\s\S]*?)\s*<\/user_message>$/i;
 
 export function stripInjectedMemoryContext(text: string): string {

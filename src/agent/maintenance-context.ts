@@ -89,7 +89,7 @@ export async function loadDetachedMaintenanceContext(
 			memoryGrowth: options.settingsManager.getMemoryGrowthSettings(),
 			memoryMaintenance: options.settingsManager.getMemoryMaintenanceSettings(),
 		},
-		loadedSkills: loadPipiclawSkills(options.channelDir).map((skill) => ({
+		loadedSkills: loadPipiclawSkills(options.channelDir).skills.map((skill) => ({
 			name: skill.name,
 			description: skill.description,
 		})),

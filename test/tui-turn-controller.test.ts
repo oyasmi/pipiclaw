@@ -14,6 +14,9 @@ class FakeRunner implements AgentRunner {
 	private finish: (() => void) | undefined;
 	private turnStatus: TurnStatus = { phase: "idle", stopRequested: false };
 
+	renderContextReport(): string {
+		return "CONTEXT";
+	}
 	beginTurn(taskText: string): void {
 		this.turnStatus = { phase: "dispatching", stopRequested: false, taskText };
 	}

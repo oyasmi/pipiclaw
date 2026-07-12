@@ -1,6 +1,7 @@
 ---
 name: runtime-orientation
 description: Read when locating Pipiclaw state, deciding whether knowledge belongs to runtime playbooks or workspace instructions, or interpreting channel and workspace files.
+priority: 10
 ---
 
 # Pipiclaw 运行时导航
