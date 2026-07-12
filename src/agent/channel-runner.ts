@@ -9,7 +9,7 @@ import {
 	createExtensionRuntime,
 	DefaultResourceLoader,
 	type LoadExtensionsResult,
-	ModelRegistry,
+	type ModelRegistry,
 	type ResourceLoader,
 	type SettingsManager as SDKSettingsManager,
 	SessionManager,
@@ -33,7 +33,12 @@ import { recallRelevantMemory } from "../memory/recall.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { buildTaskDigest } from "../memory/task-digest.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
-import { findExactModelReferenceMatch, formatModelReference, resolveInitialModel } from "../models/utils.js";
+import {
+	createModelRegistry,
+	findExactModelReferenceMatch,
+	formatModelReference,
+	resolveInitialModel,
+} from "../models/utils.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
@@ -70,13 +75,10 @@ import {
 	MAX_USER_MESSAGE_CHARS,
 	type RunnerStatusSnapshot,
 	type RunState,
+	type TurnPhase,
+	type TurnStatus,
 } from "./types.js";
 import { getAgentConfig, getSoul, loadPipiclawSkills } from "./workspace-resources.js";
-
-type ModelRegistryClass = {
-	create?: (authStorage: AuthStorage, modelsJsonPath?: string) => ModelRegistry;
-	new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
-};
 
 function isSilentOutcome(outcome: FinalOutcome): outcome is { kind: "silent" } {
 	return outcome.kind === "silent";
@@ -88,13 +90,6 @@ function isFinalOutcome(outcome: FinalOutcome): outcome is { kind: "final"; text
 
 function getFinalOutcomeText(outcome: FinalOutcome): string | null {
 	return isFinalOutcome(outcome) ? outcome.text : null;
-}
-
-function createModelRegistry(authStorage: AuthStorage, modelsJsonPath: string): ModelRegistry {
-	const registryClass = ModelRegistry as unknown as ModelRegistryClass;
-	return typeof registryClass.create === "function"
-		? registryClass.create(authStorage, modelsJsonPath)
-		: new registryClass(authStorage, modelsJsonPath);
 }
 
 function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsManager {
@@ -129,8 +124,13 @@ export class ChannelRunner implements AgentRunner {
 	private currentSkills: Skill[];
 	private currentTools: AgentTool<any>[] = [];
 	private firstTurnMemoryBootstrapPending = true;
-	private acceptingBusyMessages = false;
-	private agentLoopStarted = false;
+	/** Mirror of `tools.tasks.enabled` from the last tools-config load (see buildRuntimeTools). */
+	private tasksEnabled = true;
+	/** Single owner of turn state; see TurnPhase in types.ts. */
+	private turn: { phase: TurnPhase; stopRequested: boolean; taskText?: string } = {
+		phase: "idle",
+		stopRequested: false,
+	};
 	/** When the primary model last failed and we switched to the backup. null = on primary. */
 	private primaryFailedAt: number | null = null;
 
@@ -236,6 +236,31 @@ export class ChannelRunner implements AgentRunner {
 
 	// === Public API ===
 
+	beginTurn(taskText: string): void {
+		if (this.turn.phase !== "idle") {
+			log.logWarning(`[${this.channelId}] beginTurn while phase=${this.turn.phase}; turns must be serialized`);
+		}
+		this.turn = { phase: "dispatching", stopRequested: false, taskText };
+	}
+
+	endTurn(): void {
+		this.turn = { phase: "idle", stopRequested: false };
+	}
+
+	isBusy(): boolean {
+		return this.turn.phase !== "idle";
+	}
+
+	requestStop(): void {
+		if (this.turn.phase !== "idle") {
+			this.turn.stopRequested = true;
+		}
+	}
+
+	getTurnStatus(): TurnStatus {
+		return { ...this.turn };
+	}
+
 	async run(
 		ctx: ChannelContext,
 		store: ChannelStore,
@@ -247,8 +272,13 @@ export class ChannelRunner implements AgentRunner {
 	}> {
 		const startedAt = Date.now();
 		this.resetRunState(ctx, store);
-		this.acceptingBusyMessages = true;
-		this.agentLoopStarted = false;
+		// Direct callers (tests) may skip the transport's beginTurn/endTurn wrapper;
+		// then run() owns the whole turn itself.
+		const implicitTurn = this.turn.phase === "idle";
+		if (implicitTurn) {
+			this.beginTurn(ctx.message.text);
+		}
+		this.turn.phase = "preparing";
 
 		const runQueue = createRunQueue();
 		this.runState.queue = runQueue.queue;
@@ -304,8 +334,9 @@ export class ChannelRunner implements AgentRunner {
 					}
 				}
 
-				const taskDigestSettings = this.settingsManager.getTaskDigestSettings();
-				if (taskDigestSettings.enabled) {
+				// Gated by the same master autonomy switch as task_manage and the TaskDriver.
+				if (this.tasksEnabled) {
+					const taskDigestSettings = this.settingsManager.getTaskDigestSettings();
 					taskDigestText = await buildTaskDigest({
 						channelDir: this.channelDir,
 						maxTasks: taskDigestSettings.maxTasks,
@@ -401,8 +432,7 @@ export class ChannelRunner implements AgentRunner {
 			this.runState.errorMessage = errorMessage(err);
 			log.logWarning(`[${this.channelId}] Runner failed`, this.runState.errorMessage);
 		} finally {
-			this.acceptingBusyMessages = false;
-			this.agentLoopStarted = false;
+			this.turn.phase = "finishing";
 			if (!promptSubmitted) {
 				const discarded = this.session.clearQueue();
 				const discardedCount = discarded.steering.length + discarded.followUp.length;
@@ -521,6 +551,9 @@ export class ChannelRunner implements AgentRunner {
 			this.runState.ctx = null;
 			this.runState.logCtx = null;
 			this.runState.queue = null;
+			if (implicitTurn) {
+				this.endTurn();
+			}
 		}
 
 		return {
@@ -694,13 +727,24 @@ export class ChannelRunner implements AgentRunner {
 		return `[${timestamp}] [${userName || "unknown"}]: ${text}`;
 	}
 
+	/**
+	 * Single source of truth for the busy-message window: steer is accepted while
+	 * the prompt is being assembled ("preparing") or while the agent loop is
+	 * actually streaming. Re-asserted after every await because the turn can end
+	 * while this call was suspended.
+	 */
+	private assertBusyWindowOpen(): void {
+		if (this.turn.phase === "preparing") {
+			return;
+		}
+		if (this.turn.phase === "streaming" && this.session.isStreaming) {
+			return;
+		}
+		throw new Error("No task is currently running.");
+	}
+
 	private async queueBusyMessage(text: string, userName?: string): Promise<void> {
-		if (!this.acceptingBusyMessages) {
-			throw new Error("No task is currently running.");
-		}
-		if (this.agentLoopStarted && !this.session.isStreaming) {
-			throw new Error("No task is currently running.");
-		}
+		this.assertBusyWindowOpen();
 
 		await this.ensureSessionReady();
 
@@ -711,17 +755,10 @@ export class ChannelRunner implements AgentRunner {
 		const queuedMessage = this.formatUserMessage(clippedText, userName);
 		await this.maybeRunPreventiveCompactionForIncomingText(queuedMessage);
 
-		if (!this.acceptingBusyMessages) {
-			throw new Error("No task is currently running.");
-		}
-		if (this.agentLoopStarted && !this.session.isStreaming) {
-			throw new Error("No task is currently running.");
-		}
+		this.assertBusyWindowOpen();
 
 		const queueMessage = async () => {
-			if (this.agentLoopStarted && !this.session.isStreaming) {
-				throw new Error("No task is currently running.");
-			}
+			this.assertBusyWindowOpen();
 			await this.session.steer(queuedMessage);
 		};
 
@@ -999,6 +1036,7 @@ export class ChannelRunner implements AgentRunner {
 		const securityLoad = loadSecurityConfigWithDiagnostics(this.appHomeDir);
 		const toolsLoad = loadToolsConfigWithDiagnostics(this.appHomeDir);
 		this.reportConfigDiagnostics([...securityLoad.diagnostics, ...toolsLoad.diagnostics]);
+		this.tasksEnabled = toolsLoad.config.tools.tasks.enabled;
 
 		const tools = createPipiclawTools({
 			executor: this.executor,
@@ -1048,8 +1086,8 @@ export class ChannelRunner implements AgentRunner {
 	private subscribeToSessionEvents(): void {
 		this.sessionUnsubscribe?.();
 		this.sessionUnsubscribe = this.session.subscribe(async (event: unknown) => {
-			if (isRecord(event) && event.type === "message_start") {
-				this.agentLoopStarted = true;
+			if (isRecord(event) && event.type === "message_start" && this.turn.phase === "preparing") {
+				this.turn.phase = "streaming";
 			}
 			if (isRecord(event) && "reason" in event && event.reason === "new") {
 				this.firstTurnMemoryBootstrapPending = true;

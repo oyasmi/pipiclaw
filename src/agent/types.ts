@@ -13,6 +13,26 @@ export interface RunnerStatusSnapshot {
 	fallback?: { primary: string; cooldownUntilMs: number };
 }
 
+/**
+ * Phases of a single turn. The runner is the single owner of this state; every
+ * other "is this channel busy?" question (transport busy-routing, scheduler
+ * idle checks, /status) derives from it instead of keeping a parallel flag.
+ *
+ * idle → dispatching (beginTurn: transport accepted a message; archive/command
+ * routing may still be ahead) → preparing (run() is assembling the prompt;
+ * steer is queued into the session) → streaming (agent loop started; steer
+ * allowed while the session streams) → finishing (run() epilogue: delivery
+ * flush, ledger) → idle (endTurn).
+ */
+export type TurnPhase = "idle" | "dispatching" | "preparing" | "streaming" | "finishing";
+
+export interface TurnStatus {
+	phase: TurnPhase;
+	stopRequested: boolean;
+	/** The message text this turn is processing (set by beginTurn). */
+	taskText?: string;
+}
+
 export interface AgentRunner {
 	run(
 		ctx: ChannelContext,
@@ -31,6 +51,19 @@ export interface AgentRunner {
 	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;
 	getStatusSnapshot(): RunnerStatusSnapshot;
 	abort(): Promise<void>;
+	/**
+	 * Synchronously reserve the turn for a message. Transports MUST call this in
+	 * the same tick they dequeue the message, before any await, so a concurrent
+	 * arrival never observes a stale idle state.
+	 */
+	beginTurn(taskText: string): void;
+	/** Release the turn (idempotent). Transports call this after all per-message work. */
+	endTurn(): void;
+	/** True from beginTurn until endTurn. */
+	isBusy(): boolean;
+	/** Mark the current turn as user-stopped (no-op when idle). */
+	requestStop(): void;
+	getTurnStatus(): TurnStatus;
 }
 
 export type FinalOutcome = { kind: "none" } | { kind: "silent" } | { kind: "final"; text: string };

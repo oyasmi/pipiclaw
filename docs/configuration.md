@@ -184,25 +184,16 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - **尽力而为**：pipiclaw 会在 host 的 PATH 上探测一次 `rtk` 是否可用。装了就用，没装则静默跳过——开启 rtk 永远不会让 `bash` 命令失败。
 - rtk 只重塑语义等价的只读命令，安全校验始终针对**原始命令**执行，改写不会绕过 `command-guard`。
 
-### 事件自调度工具（`tools.events`）
+### 事件自调度工具（`event_manage`，恒开）
 
-`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据 `wake` 驱动；event 主要用于周期任务的 cron 节奏、独立提醒和外部传感器。默认开启。
+`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据 `wake` 驱动；event 主要用于周期任务的 cron 节奏、独立提醒和外部传感器。核心能力，无开关、始终注册。
 
-```jsonc
-{
-  "tools": {
-    "events": { "enabled": true }
-  }
-}
-```
-
-- 只有一个开关 `enabled`（默认 `true`）；关掉后主 agent 无法再自调度事件，但用户侧的 `/events` 命令与手工编辑 `workspace/events/*.json` 不受影响。
 - 该工具只发给主 agent，不进子代理工具集。
 - 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、**带 `preAction` 门控时放宽到 5 分钟**、事件文件总数上限 50）。细节见 [tasks.md](./tasks.md) 与 [events-and-sub-agents.md](./events-and-sub-agents.md)。
 
-### 任务台账工具（`tools.tasks`）
+### 自主长程任务总开关（`tools.tasks`）
 
-`task_manage` 工具让主 agent 维护[受治理任务台账](./tasks.md)：create 生成标准骨架与 control，progress 原子写进展/调度/预算策略，set 修正 metadata，verify 导入独立验收，done 执行完成门禁，cancel 显式放弃，list 返回 active 任务。默认开启。
+`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：`task_manage` 工具（agent 维护[受治理任务台账](./tasks.md)：create/progress/set/verify/done/cancel/list）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
 
 ```jsonc
 {
@@ -212,37 +203,20 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 }
 ```
 
-- 只有一个开关 `enabled`（默认 `true`）；关掉后主 agent 仍可用 read/edit/write 直接维护 task 文件，只是少了 frontmatter 保真与闭环原子化这层便利。
+- 关掉后主 agent 仍可用 read/edit/write 直接维护 task 文件，只是没有工具保真、不会被后台唤醒、也不注入摘要。
 - 该工具只发给主 agent，不进子代理工具集。新任务默认 independent verification 和 12 次 attempt 上限；可设置 token/cost/wall-time/deadline、parent/dependsOn、sideEffects 与 isolation。`progress` 只追加 Current Cycle 条目；Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
 - agent 不能把 external approval 设为 granted；用户必须直接发送 `/tasks approve <id>`，runtime 才记录可审计授权。
 
-### 结构化搜索工具（`tools.grep`）
+### 结构化搜索工具（`grep`，恒开）
 
-`grep` 工具用扩展正则在文件/目录树里搜内容，输出按文件分组、每文件与每页有上限、并做字节封顶——优先用它而不是 `bash grep -rn`（后者会打爆上下文）。默认开启。
+`grep` 工具用扩展正则在文件/目录树里搜内容，输出按文件分组、每文件与每页有上限、并做字节封顶——优先用它而不是 `bash grep -rn`（后者会打爆上下文）。核心能力，无开关、始终注册。
 
-```jsonc
-{
-  "tools": {
-    "grep": { "enabled": true }
-  }
-}
-```
+- 执行层复用 Executor（沙箱内 `grep`），主 agent 与子代理都可用。
 
-- 只有一个开关 `enabled`（默认 `true`）。执行层复用 Executor（沙箱内 `grep`），主 agent 与子代理都可用。
+### 后台作业（`bash async` + `job`，恒开）
 
-### 后台作业（`tools.jobs`）
+`bash` 多一个 `async: true` 参数，把长命令丢到后台并立刻返回作业 id，避免占住频道轮次；`job` 工具用来 list/poll/cancel。核心能力，无开关、始终注册。
 
-`bash` 多一个 `async: true` 参数，把长命令丢到后台并立刻返回作业 id，避免占住频道 run-queue；新增的 `job` 工具用来 list/poll/cancel。默认开启。
-
-```jsonc
-{
-  "tools": {
-    "jobs": { "enabled": true }
-  }
-}
-```
-
-- 关闭时：`bash` 的 `async` 会报错说明、`job` 工具不注册，行为与开启前完全一致。
 - 作业进程活在 host 上，通过 shell 命令管理（`nohup` 启动、`kill -0` 探活、退出码写入 `.exit` 文件）；每频道最多 5 个并发运行作业，超时沿用 bash 的 `timeout` 预算。
 - 作业状态进程内、不持久化：重启后旧作业显示为 `lost` 而非被错误"复活"。
 - 只发给主 agent；子代理不能起后台作业。
@@ -261,14 +235,11 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 ```
 
 - 只拦最明确的裸形态；带管道/重定向的复合命令（如 `cat x | jq`）一律放行。
-- 运行在 `command-guard` 之后、`rtk` 之前，只影响"用哪个工具"，不放行任何 guard 会拦的东西。依赖 `tools.grep`（否则拦了递归 grep 无处可去）。
+- 运行在 `command-guard` 之后、`rtk` 之前，只影响"用哪个工具"，不放行任何 guard 会拦的东西（递归 grep 被拦后由恒开的 `grep` 工具承接）。
 
-### 记忆管理工具（`memory_manage`，gate 见下）
+### 记忆管理工具（`memory_manage`，恒开）
 
-`memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从 MEMORY.md 移除，不走裸 edit）。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。
-
-- gate 沿用既有键 `tools.memory.save.enabled`（默认 `true`）——工具虽更名，为避免静默重置用户配置而保留原键名。
-- 只发给主 agent。
+`memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从 MEMORY.md 移除，不走裸 edit）。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。核心能力，无开关、始终注册，只发给主 agent。`session_search`（冷存储检索）与 `skill_manage`（workspace skills 维护）同理恒开。
 
 ### 网页抓取缓存（`web_fetch` offset 分页）
 
@@ -276,29 +247,26 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 任务摘要注入（`taskDigest`，`settings.json`）
 
-每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。默认开启，便宜且高价值。
+每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。是否注入由总开关 `tools.tasks.enabled`（tools.json）决定；这里只调尺寸。
 
 ```jsonc
 {
   "taskDigest": {
-    "enabled": true,
     "maxTasks": 8,
     "maxChars": 1000
   }
 }
 ```
 
-- `enabled`（默认 `true`）：关掉后不再注入任务摘要。
 - `maxTasks`（默认 `8`）/ `maxChars`（默认 `1000`）：摘要的上限，超出会截断并标注剩余数量。摘要只收录 status ≠ done 的任务，无 active 任务时不注入。
 
 ### 内建任务驱动器（`taskDriver`，`settings.json`）
 
-DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描本身不调用模型；只有存在 actionable task（status ≠ done 且 wake 未设/已到）时才入队唤醒，因此不再需要手工 heartbeat event、`tasks-pending.mjs` 或 task `.checkin` 事件。默认开启。
+DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描本身不调用模型；只有存在 actionable task（status ≠ done 且 wake 未设/已到）时才入队唤醒，因此不再需要手工 heartbeat event、`tasks-pending.mjs` 或 task `.checkin` 事件。是否运行由总开关 `tools.tasks.enabled`（tools.json）决定；这里只调节奏。
 
 ```jsonc
 {
   "taskDriver": {
-    "enabled": true,
     "continuationDelayMinutes": 5,
     "stalledRetryMinutes": 60,
     "maxDispatchesPerTick": 4
@@ -1113,23 +1081,13 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | `enableJinaFallback` | `false` | 本地提取失败后是否允许回退到 Jina Reader |
 | `defaultExtractMode` | `"markdown"` | HTML 默认提取格式 |
 
-#### `tools.memory.sessionSearch`
+#### `tools.tasks`
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `enabled` | `true` | 是否注册 `session_search` 工具。该工具只搜索当前 channel 的冷存储，不跨 channel |
+| `enabled` | `true` | 自主长程任务总开关：同时门控 `task_manage` 工具、内建 TaskDriver 与每回合任务摘要注入 |
 
-#### `tools.memory.save`
-
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `enabled` | `true` | 是否注册 `memory_manage` 工具（save / search / forget）。写操作经共享串行队列，不与后台维护竞争。配置键沿用工具更名前的 `memory.save`，避免静默重置既有配置 |
-
-#### `tools.skills.manage`
-
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `enabled` | `true` | 是否注册 `skill_list`、`skill_view`、`skill_manage`。这些工具只管理 workspace 级 skills |
+> 记忆/技能/事件/搜索/后台作业工具（`memory_manage`、`session_search`、`skill_manage`、`event_manage`、`grep`、`job`）为核心能力，恒开、无配置项。
 
 ### 常见示例（Common Examples）
 

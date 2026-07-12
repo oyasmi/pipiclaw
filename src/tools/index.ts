@@ -50,10 +50,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		webConfig: toolsConfig.tools.web,
 		toolsConfig,
 		rtkEnabled: toolsConfig.tools.rtk.enabled,
-		// Background jobs are opt-in; when off, bash `async` errors and the job tool is not registered.
-		jobManager: toolsConfig.tools.jobs.enabled
-			? getChannelJobManager(options.channelId, options.executor)
-			: undefined,
+		jobManager: getChannelJobManager(options.channelId, options.executor),
 		getCurrentModel: options.getCurrentModel,
 		getAvailableModels: options.getAvailableModels,
 		resolveApiKey: options.resolveApiKey,

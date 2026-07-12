@@ -55,7 +55,7 @@ describe("settings manager", () => {
 		expect(new PipiclawSettingsManager(missingDir).getFallbackModelReference()).toBeNull();
 	});
 
-	it("enables the native task driver by default and clamps unsafe cadence settings", () => {
+	it("clamps unsafe task driver cadence settings", () => {
 		const defaultsDir = makeTempDir();
 		const configuredDir = makeTempDir();
 		writeFileSync(join(defaultsDir, "settings.json"), "{}", "utf-8");
@@ -72,13 +72,11 @@ describe("settings manager", () => {
 		);
 
 		expect(new PipiclawSettingsManager(defaultsDir).getTaskDriverSettings()).toEqual({
-			enabled: true,
 			continuationDelayMinutes: 5,
 			stalledRetryMinutes: 60,
 			maxDispatchesPerTick: 4,
 		});
 		expect(new PipiclawSettingsManager(configuredDir).getTaskDriverSettings()).toEqual({
-			enabled: true,
 			continuationDelayMinutes: 1,
 			stalledRetryMinutes: 1,
 			maxDispatchesPerTick: 20,

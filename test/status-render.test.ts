@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { formatTokenCount, formatUptime, renderStatus, type StatusRenderState } from "../src/agent/status-render.js";
-import type { RunnerStatusSnapshot } from "../src/agent/types.js";
+import { formatTokenCount, formatUptime, renderStatus, type StatusRenderRunner } from "../src/agent/status-render.js";
+import type { RunnerStatusSnapshot, TurnStatus } from "../src/agent/types.js";
 
-function stateWith(
+function runnerWith(
 	snapshot: RunnerStatusSnapshot | (() => never),
-	overrides: Partial<StatusRenderState> = {},
-): StatusRenderState {
+	turn: Partial<TurnStatus> = {},
+): StatusRenderRunner {
+	const status: TurnStatus = { phase: "idle", stopRequested: false, ...turn };
 	return {
-		running: false,
-		runner: { getStatusSnapshot: typeof snapshot === "function" ? snapshot : () => snapshot },
-		...overrides,
+		getStatusSnapshot: typeof snapshot === "function" ? snapshot : () => snapshot,
+		isBusy: () => status.phase !== "idle",
+		getTurnStatus: () => status,
 	};
 }
 
@@ -35,8 +36,8 @@ describe("formatUptime", () => {
 });
 
 describe("renderStatus", () => {
-	it("shows idle + no-session when there is no state", () => {
-		const out = renderStatus({ state: undefined, version: "1.2.3", uptimeMs: 0 });
+	it("shows idle + no-session when there is no runner", () => {
+		const out = renderStatus({ runner: undefined, version: "1.2.3", uptimeMs: 0 });
 		expect(out).toContain("- Run state: idle");
 		expect(out).toContain("- Model: no session started for this channel yet");
 		expect(out).toContain("- Version: 1.2.3");
@@ -50,7 +51,7 @@ describe("renderStatus", () => {
 			thinkingLevel: "high",
 		};
 		const out = renderStatus({
-			state: stateWith(snapshot, { running: true, currentTaskText: "do the thing" }),
+			runner: runnerWith(snapshot, { phase: "streaming", taskText: "do the thing" }),
 			version: "1.0.0",
 			uptimeMs: 0,
 		});
@@ -67,13 +68,13 @@ describe("renderStatus", () => {
 			thinkingLevel: "off",
 			fallback: { primary: "primary/model", cooldownUntilMs: new Date(2026, 0, 1, 9, 5).getTime() },
 		};
-		const out = renderStatus({ state: stateWith(snapshot), version: "1", uptimeMs: 0 });
+		const out = renderStatus({ runner: runnerWith(snapshot), version: "1", uptimeMs: 0 });
 		expect(out).toContain("- Fallback: active（primary primary/model 冷却至 09:05）");
 	});
 
 	it("degrades gracefully when the snapshot throws", () => {
 		const out = renderStatus({
-			state: stateWith(() => {
+			runner: runnerWith(() => {
 				throw new Error("no session");
 			}),
 			version: "1",

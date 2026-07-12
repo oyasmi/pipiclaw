@@ -6,15 +6,11 @@
 import { errorMessage } from "../shared/text-utils.js";
 import type { AgentRunner } from "./types.js";
 
-/** Minimal per-channel run state the status renderer needs. */
-export interface StatusRenderState {
-	running: boolean;
-	currentTaskText?: string;
-	runner: Pick<AgentRunner, "getStatusSnapshot">;
-}
+/** Run state and snapshot both come from the runner's own turn state machine. */
+export type StatusRenderRunner = Pick<AgentRunner, "getStatusSnapshot" | "isBusy" | "getTurnStatus">;
 
 export interface RenderStatusOptions {
-	state: StatusRenderState | undefined;
+	runner: StatusRenderRunner | undefined;
 	version: string;
 	uptimeMs: number;
 }
@@ -38,20 +34,20 @@ export function formatUptime(ms: number): string {
 }
 
 export function renderStatus(options: RenderStatusOptions): string {
-	const { state, version, uptimeMs } = options;
+	const { runner, version, uptimeMs } = options;
 	const lines = ["# Status"];
 
-	if (state?.running) {
-		const task = state.currentTaskText?.trim();
+	if (runner?.isBusy()) {
+		const task = runner.getTurnStatus().taskText?.trim();
 		const preview = task ? `: ${task.length > 80 ? `${task.slice(0, 79)}…` : task}` : "";
 		lines.push(`- Run state: running${preview}`);
 	} else {
 		lines.push("- Run state: idle");
 	}
 
-	if (state) {
+	if (runner) {
 		try {
-			const snapshot = state.runner.getStatusSnapshot();
+			const snapshot = runner.getStatusSnapshot();
 			lines.push(`- Model: ${snapshot.model}`);
 			if (snapshot.fallback) {
 				const until = new Date(snapshot.fallback.cooldownUntilMs);

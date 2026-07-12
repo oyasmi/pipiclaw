@@ -20,6 +20,9 @@ import { isRecord } from "../shared/type-guards.js";
 // DingTalk-config `ResponseMode` onto them (progressStyleOf/finalDeliveryOf).
 import type { FinalDelivery, ProgressStyle } from "./channel-context.js";
 import { getChannelDir } from "./channel-paths.js";
+// Turn serialization is runtime policy; the queue lives in its own module and
+// this transport only consumes it.
+import { ChannelQueue } from "./channel-queue.js";
 
 // ============================================================================
 // Types
@@ -174,55 +177,6 @@ interface DingTalkSocketLike {
 	on(event: "pong", listener: () => void): void;
 	on(event: "close", listener: (code: number, reason: string) => void): void;
 	on(event: "message", listener: (raw: string) => void): void;
-}
-
-// ============================================================================
-// Per-channel queue for sequential processing
-// ============================================================================
-
-type QueuedWork = () => Promise<void>;
-
-class ChannelQueue {
-	private queue: QueuedWork[] = [];
-	private processing = false;
-	private stopped = false;
-
-	enqueue(work: QueuedWork): void {
-		if (this.stopped) return;
-		this.queue.push(work);
-		this.processNext();
-	}
-
-	size(): number {
-		return this.queue.length;
-	}
-
-	private async processNext(): Promise<void> {
-		if (this.processing || this.stopped || this.queue.length === 0) return;
-		this.processing = true;
-		const work = this.queue.shift()!;
-		try {
-			await work();
-		} catch (err) {
-			log.logWarning("Queue error", errorMessage(err));
-		}
-		this.processing = false;
-		this.processNext();
-	}
-
-	stop(): void {
-		this.stopped = true;
-		this.queue = [];
-	}
-
-	// Drop not-yet-started work without disabling the queue. Used by /stop so a
-	// burst of queued messages does not keep running after the user asked to halt.
-	// The in-flight item (already shifted) is unaffected; the caller aborts it.
-	clearPending(): number {
-		const dropped = this.queue.length;
-		this.queue = [];
-		return dropped;
-	}
 }
 
 // ============================================================================

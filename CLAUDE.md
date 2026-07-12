@@ -24,12 +24,12 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 
 **Transport → agent → delivery flow**
 1. `src/runtime/bootstrap.ts` loads config, constructs the `DingTalkBot`, memory scheduler, and events watcher, and wires them together. `src/main.ts` is intentionally a thin entrypoint that just calls `bootstrap`.
-2. `src/runtime/dingtalk.ts` receives Stream-mode events and produces a `DingTalkContext` (the delivery surface: `respond`, `respondInThread`, AI Card streaming).
+2. `src/runtime/dingtalk.ts` receives Stream-mode events; `src/runtime/delivery.ts` builds the `ChannelContext` (the transport-neutral delivery contract in `src/runtime/channel-context.ts`: `respond`, `respondInThread`, AI Card streaming). The terminal TUI (`src/tui/`) is a second implementation of the same contract.
 3. Each channel gets one `ChannelRunner` (`src/agent/channel-runner.ts`), cached by `src/agent/runner-factory.ts`. This is the orchestrator: it assembles the SDK `Agent`/`AgentSession`, the tool set, memory, sub-agents, and prompt, then runs a turn and streams progress back through the `DingTalkContext`.
 4. `src/agent/session-events.ts` translates SDK session events into progress/AI-Card updates.
 
 **Concurrency model (important, spans several files)**
-- Per channel, turns are serialized by a **run queue** (`src/agent/run-queue.ts`): a promise chain so a channel processes one turn at a time while still accepting `/steer`, `/followup`, `/stop`.
+- Per channel, turns are serialized by the **`ChannelQueue`** (`src/runtime/channel-queue.ts`, consumed by the DingTalk transport): a channel processes one message at a time while still accepting `/steer`, `/followup`, `/stop` mid-turn. Busy state itself has a single owner: the runner's turn state machine (`TurnPhase` in `src/agent/types.ts`; transports call `beginTurn`/`endTurn`, everything else derives from `isBusy()`/`getTurnStatus()`). `src/agent/run-queue.ts` is a different, per-run queue that serializes *outbound delivery calls* (progress updates to the DingTalk API) within a single turn.
 - Memory writes are serialized by **per-channel serial queues** built on `src/shared/serial-queue.ts`. `src/memory/channel-maintenance-queue.ts` exposes a *shared singleton* queue so `lifecycle` and `maintenance-jobs` never race on the same channel's files — do not inline it.
 - Config/state files are written via `src/shared/atomic-file.ts` (write-temp-then-rename).
 
@@ -44,4 +44,4 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 
 ## Docs
 
-`docs/` holds the configuration/deployment/security guides and `docs/specs/NNN-*` design specs (one per feature, e.g. `010-memory-maintenance-scheduler`) — the spec for a subsystem is the best context before changing it.
+`docs/` holds the configuration/deployment/security guides and `docs/specs/NNN-*` design specs (one per feature, e.g. `010-memory-maintenance-scheduler`) — the spec for a subsystem is the best context before changing it. `docs/architecture.md` describes the as-implemented architecture (runtime topology, message lifecycle, the full concurrency table).

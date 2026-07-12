@@ -79,15 +79,15 @@ export interface PipiclawMemoryRecallSettings {
 	rerankWithModel: boolean | "auto";
 }
 
+// Whether the autonomous task mechanism runs at all is governed by the single
+// `tools.tasks.enabled` switch in tools.json (task_manage tool + TaskDriver +
+// task digest together); these settings only tune cadence and size.
 export interface PipiclawTaskDigestSettings {
-	enabled: boolean;
 	maxTasks: number;
 	maxChars: number;
 }
 
 export interface PipiclawTaskDriverSettings {
-	/** Native runtime wake-up for actionable task-ledger entries. */
-	enabled: boolean;
 	/** Earliest continuation after a task changed during its previous run. */
 	continuationDelayMinutes: number;
 	/** Retry delay when a dispatched task made no observable ledger progress. */
@@ -207,7 +207,6 @@ const DEFAULT_MEMORY_RECALL: PipiclawMemoryRecallSettings = {
 // Cheap and high-value: reading a handful of task frontmatters and always surfacing
 // the in-flight agenda is worth more than the tokens it costs, so it defaults on.
 const DEFAULT_TASK_DIGEST: PipiclawTaskDigestSettings = {
-	enabled: true,
 	maxTasks: 8,
 	maxChars: 1000,
 };
@@ -216,7 +215,6 @@ const DEFAULT_TASK_DIGEST: PipiclawTaskDigestSettings = {
 // that requires users to install a heartbeat event and sensor script. A changed
 // task can continue promptly; an unchanged task backs off to avoid token loops.
 const DEFAULT_TASK_DRIVER: PipiclawTaskDriverSettings = {
-	enabled: true,
 	continuationDelayMinutes: 5,
 	stalledRetryMinutes: 60,
 	maxDispatchesPerTick: 4,
@@ -401,7 +399,6 @@ export class PipiclawSettingsManager {
 			? Math.min(20, Math.max(1, Math.floor(configured.maxDispatchesPerTick)))
 			: DEFAULT_TASK_DRIVER.maxDispatchesPerTick;
 		return {
-			enabled: configured.enabled !== false,
 			continuationDelayMinutes,
 			stalledRetryMinutes,
 			maxDispatchesPerTick,

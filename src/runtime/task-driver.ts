@@ -1,15 +1,13 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
-import { taskEventName } from "../shared/task-events.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../shared/task-ledger.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
 import { claimTaskAttempt, dependencyState, escalateTask, releaseTaskAttemptClaim } from "../tasks/store.js";
 import type { DingTalkEvent } from "./dingtalk.js";
-import { parseScheduledEventContent } from "./events.js";
 
 export interface TaskDriverOptions {
 	workspaceDir: string;
@@ -17,6 +15,8 @@ export interface TaskDriverOptions {
 	isChannelActive: (channelId: string) => boolean;
 	dispatch: (event: DingTalkEvent) => boolean | Promise<boolean>;
 	getSettings: () => PipiclawTaskDriverSettings;
+	/** Master autonomy switch (`tools.tasks.enabled`); re-read every tick. Defaults to on. */
+	isEnabled?: () => boolean;
 	intervalMs?: number;
 }
 
@@ -27,7 +27,6 @@ interface DispatchAttempt {
 }
 
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;
-const LEGACY_CHECKIN_HANDOFF_GRACE_MS = 2 * 60_000;
 const CHANNEL_ID_PATTERN = /^(dm|group)_[A-Za-z0-9._:-]+$/;
 
 function isChannelId(value: string): boolean {
@@ -85,24 +84,6 @@ function isEligible(
 	const changed = attempt.fingerprint !== fingerprint;
 	const delayMinutes = changed || !attempt.accepted ? settings.continuationDelayMinutes : settings.stalledRetryMinutes;
 	return nowMs - attempt.atMs >= delayMinutes * 60_000;
-}
-
-async function hasLiveLegacyCheckin(
-	workspaceDir: string,
-	channelId: string,
-	taskId: string,
-	nowMs: number,
-): Promise<boolean> {
-	const name = taskEventName(channelId, taskId, "checkin");
-	const path = join(workspaceDir, "events", `${name}.json`);
-	try {
-		const event = parseScheduledEventContent(await readFile(path, "utf-8"), `${name}.json`);
-		if (event.type !== "one-shot") return false;
-		const atMs = new Date(event.at).getTime();
-		return Number.isFinite(atMs) && atMs >= nowMs - LEGACY_CHECKIN_HANDOFF_GRACE_MS;
-	} catch {
-		return false;
-	}
 }
 
 export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): DingTalkEvent {
@@ -199,8 +180,8 @@ export class TaskDriver {
 	}
 
 	async runOnce(now = new Date()): Promise<void> {
+		if (this.options.isEnabled?.() === false || this.running) return;
 		const settings = this.options.getSettings();
-		if (!settings.enabled || this.running) return;
 
 		this.running = true;
 		try {
@@ -265,12 +246,6 @@ export class TaskDriver {
 					break;
 				}
 				if (!entry || dispatched >= settings.maxDispatchesPerTick) continue;
-				// Upgrade compatibility: while a legacy task-owned one-shot is still
-				// about to deliver this same wake, let it own the handoff. Once it is
-				// consumed (or stale for >2m), the native driver becomes the recovery path.
-				if (await hasLiveLegacyCheckin(this.options.workspaceDir, channelId, entry.id, now.getTime())) {
-					continue;
-				}
 				const key = attemptKey(channelId, entry.id);
 				let fingerprint = await taskFingerprint(channelDir, entry);
 				if (!isEligible(this.attempts.get(key), fingerprint, now.getTime(), settings)) continue;

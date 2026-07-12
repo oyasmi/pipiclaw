@@ -97,19 +97,17 @@ describe("tool registry", () => {
 			tools: {
 				...DEFAULT_TOOLS_CONFIG.tools,
 				web: { ...DEFAULT_TOOLS_CONFIG.tools.web, enable: false },
-				memory: { sessionSearch: { enabled: false }, save: { enabled: true } },
-				skills: { manage: { enabled: false } },
-				events: { enabled: false },
 				tasks: { enabled: false },
 			},
 		};
 		const tools = buildToolSet(makeContext({ toolsConfig, webConfig: toolsConfig.tools.web }));
 		const names = tools.map((tool) => tool.name);
 		expect(names).not.toContain("web_search");
-		expect(names).not.toContain("session_search");
-		expect(names).not.toContain("skill_manage");
-		expect(names).not.toContain("event_manage");
 		expect(names).not.toContain("task_manage");
+		// Core capabilities have no switches: always registered.
+		expect(names).toContain("session_search");
+		expect(names).toContain("skill_manage");
+		expect(names).toContain("event_manage");
 		expect(names).toContain("memory_manage");
 	});
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AgentRunner, RunnerStatusSnapshot } from "../src/agent/types.js";
+import type { AgentRunner, RunnerStatusSnapshot, TurnStatus } from "../src/agent/types.js";
 import type { ChannelStore } from "../src/runtime/store.js";
 import type { Frontend, FrontendCallbacks } from "../src/tui/renderer.js";
 import { TurnController } from "../src/tui/turn-controller.js";
@@ -12,6 +12,25 @@ class FakeRunner implements AgentRunner {
 	flushCount = 0;
 	steers: string[] = [];
 	private finish: (() => void) | undefined;
+	private turnStatus: TurnStatus = { phase: "idle", stopRequested: false };
+
+	beginTurn(taskText: string): void {
+		this.turnStatus = { phase: "dispatching", stopRequested: false, taskText };
+	}
+	endTurn(): void {
+		this.turnStatus = { phase: "idle", stopRequested: false };
+	}
+	isBusy(): boolean {
+		return this.turnStatus.phase !== "idle";
+	}
+	requestStop(): void {
+		if (this.turnStatus.phase !== "idle") {
+			this.turnStatus = { ...this.turnStatus, stopRequested: true };
+		}
+	}
+	getTurnStatus(): TurnStatus {
+		return { ...this.turnStatus };
+	}
 
 	run(): Promise<{ stopReason: string }> {
 		this.runCount++;

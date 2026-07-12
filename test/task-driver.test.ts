@@ -11,7 +11,6 @@ import { finishTaskAttempt } from "../src/tasks/store.js";
 
 const NOW = new Date("2026-07-10T12:00:00+08:00");
 const SETTINGS: PipiclawTaskDriverSettings = {
-	enabled: true,
 	continuationDelayMinutes: 5,
 	stalledRetryMinutes: 60,
 	maxDispatchesPerTick: 4,
@@ -183,31 +182,6 @@ describe("TaskDriver", () => {
 		expect(a).toContain('"attempts":0');
 	});
 
-	it("lets a live legacy checkin own the handoff, then recovers it when stale", async () => {
-		await writeTask("dm_a", "ready", task("awaiting-user", "2026-07-10T11:59:00+08:00"));
-		await mkdir(join(workspaceDir, "events"), { recursive: true });
-		await writeFile(
-			join(workspaceDir, "events", "task.dm_a.ready.checkin.json"),
-			JSON.stringify({
-				type: "one-shot",
-				channelId: "dm_a",
-				text: "legacy",
-				at: "2026-07-10T11:59:00+08:00",
-			}),
-		);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		const driver = new TaskDriver({
-			workspaceDir,
-			isChannelActive: () => false,
-			dispatch,
-			getSettings: () => SETTINGS,
-		});
-		await driver.runOnce(NOW);
-		expect(dispatch).not.toHaveBeenCalled();
-		await driver.runOnce(new Date(NOW.getTime() + 2 * 60_000 + 1));
-		expect(dispatch).toHaveBeenCalledOnce();
-	});
-
 	it("backs off unchanged tasks but promptly continues after ledger progress", async () => {
 		await writeTask("dm_a", "work", task("in-progress", undefined, "first"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
@@ -278,14 +252,15 @@ describe("TaskDriver", () => {
 		expect(dispatch.mock.calls.map(([event]) => event.channelId)).toEqual(["dm_a", "dm_b"]);
 	});
 
-	it("does not dispatch when disabled", async () => {
+	it("does not dispatch when the tools.tasks master switch is off", async () => {
 		await writeTask("dm_a", "ready", task("in-progress"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		const driver = new TaskDriver({
 			workspaceDir,
 			isChannelActive: () => false,
 			dispatch,
-			getSettings: () => ({ ...SETTINGS, enabled: false }),
+			getSettings: () => SETTINGS,
+			isEnabled: () => false,
 		});
 		await driver.runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();

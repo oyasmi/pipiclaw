@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunner } from "../src/agent/types.js";
 import type { BootstrapPaths } from "../src/runtime/bootstrap.js";
 import type { DingTalkBot, DingTalkConfig } from "../src/runtime/dingtalk.js";
+import { createFakeTurnState } from "./helpers/fake-turn-state.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const { getOrCreateRunnerMock } = vi.hoisted(() => ({
@@ -109,6 +110,7 @@ describe("runtime stop handling", () => {
 			abort: vi.fn(async () => {
 				releaseRun();
 			}),
+			...createFakeTurnState(),
 		};
 		getOrCreateRunnerMock.mockReturnValue(runner);
 
@@ -189,6 +191,7 @@ describe("runtime stop handling", () => {
 			abort: vi.fn(async () => {
 				releaseRun();
 			}),
+			...createFakeTurnState(),
 		};
 		getOrCreateRunnerMock.mockReturnValue(runner);
 

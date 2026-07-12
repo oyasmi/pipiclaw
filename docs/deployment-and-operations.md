@@ -341,7 +341,7 @@ workspace `skills/` 是 procedural memory。`skill_manage` 和高置信 post-tur
 - `/tasks` 中该任务的 `status` 与 `wake`：`paused` / `done` / `escalated` 不会被 driver 继续；`wake` 未到点属于正常等待
 - `/tasks doctor` 是否报出坏 frontmatter、超预算、缺失依赖等问题
 - 上一轮是否没有留下任何台账变化——driver 会对无变化的任务退避（默认 60 分钟）再重试，重启进程会清空退避、下一次扫描重新接起
-- `settings.json` 的 `taskDriver.enabled` 是否被关闭
+- `tools.json` 的 `tools.tasks.enabled`（自主长程任务总开关）是否被关闭
 
 ### 子代理没有被正常使用
 

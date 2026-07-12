@@ -80,30 +80,8 @@ const toolsConfig = {
 				defaultExtractMode: "markdown",
 			},
 		},
-		memory: {
-			sessionSearch: {
-				enabled: true,
-			},
-			save: {
-				enabled: true,
-			},
-		},
-		skills: {
-			manage: {
-				enabled: true,
-			},
-		},
-		events: {
-			enabled: true,
-		},
 		tasks: {
 			enabled: true,
-		},
-		grep: {
-			enabled: true,
-		},
-		jobs: {
-			enabled: false,
 		},
 		bashInterceptor: {
 			enabled: false,
@@ -146,6 +124,7 @@ const ALL_TOOL_NAMES = [
 	"skill_manage",
 	"event_manage",
 	"task_manage",
+	"job",
 	"subagent",
 ];
 
@@ -181,10 +160,7 @@ const executor: Executor = {
 describe("tools index", () => {
 	beforeEach(() => {
 		toolsConfig.tools.web.enable = true;
-		toolsConfig.tools.memory.sessionSearch.enabled = true;
-		toolsConfig.tools.memory.save.enabled = true;
-		toolsConfig.tools.skills.manage.enabled = true;
-		toolsConfig.tools.jobs.enabled = false;
+		toolsConfig.tools.tasks.enabled = true;
 		createReadToolMock.mockClear();
 		createBashToolMock.mockClear();
 		createEditToolMock.mockClear();
@@ -198,19 +174,19 @@ describe("tools index", () => {
 		createSubAgentToolMock.mockClear();
 	});
 
-	it("registers the job tool only when tools.jobs.enabled is on", () => {
+	it("always registers the job tool on the main path and honors the tasks master switch", () => {
 		const baseArgs = {
 			...baseToolOptions,
 			executor,
 			memoryCandidateStore: createMemoryCandidateStore(),
 		};
 
-		expect(createPipiclawTools(baseArgs).map((tool) => tool.name)).not.toContain("job");
+		expect(createPipiclawTools(baseArgs).map((tool) => tool.name)).toContain("job");
 
-		toolsConfig.tools.jobs.enabled = true;
+		toolsConfig.tools.tasks.enabled = false;
 		expect(
 			createPipiclawTools({ ...baseArgs, memoryCandidateStore: createMemoryCandidateStore() }).map((t) => t.name),
-		).toContain("job");
+		).not.toContain("task_manage");
 	});
 
 	it("keeps the system prompt tool list in sync with the registered tools", () => {
@@ -264,6 +240,7 @@ describe("tools index", () => {
 			"skill_manage",
 			"event_manage",
 			"task_manage",
+			"job",
 			"subagent",
 		]);
 		expect(createReadToolMock).toHaveBeenCalledWith(executor, {
@@ -283,6 +260,7 @@ describe("tools index", () => {
 			channelId: "dm_42",
 			rtkEnabled: false,
 			interceptorEnabled: false,
+			jobManager: expect.anything(),
 		});
 		expect(createWebSearchToolMock).toHaveBeenCalledWith({
 			webConfig: toolsConfig.tools.web,

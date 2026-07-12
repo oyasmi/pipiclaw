@@ -46,8 +46,6 @@ export class TurnController {
 	private readonly now: () => number;
 	private readonly dispatchDeps: DispatchDeps;
 
-	private running = false;
-	private currentTaskText: string | undefined;
 	private currentTurn: Promise<void> = Promise.resolve();
 	private readonly followups: string[] = [];
 	private submitChain: Promise<void> = Promise.resolve();
@@ -68,7 +66,7 @@ export class TurnController {
 			runTasks: deps.runTasks,
 			renderStatus: () =>
 				renderStatus({
-					state: { running: this.running, currentTaskText: this.currentTaskText, runner: this.deps.runner },
+					runner: this.deps.runner,
 					version: deps.statusInfo.version,
 					uptimeMs: this.now() - deps.statusInfo.startedAt,
 				}),
@@ -104,9 +102,9 @@ export class TurnController {
 		await this.shutdown();
 	}
 
-	/** Test/observability hook. */
+	/** Test/observability hook. Turn state is owned by the runner. */
 	isRunning(): boolean {
-		return this.running;
+		return this.deps.runner.isBusy();
 	}
 
 	submit(text: string): void {
@@ -133,7 +131,7 @@ export class TurnController {
 				this.requestExit();
 				return;
 			case "stop":
-				if (this.running) {
+				if (this.deps.runner.isBusy()) {
 					void this.deps.runner.abort();
 					this.deps.frontend.showNotice("Stopping…");
 				} else {
@@ -160,7 +158,7 @@ export class TurnController {
 
 	/** A plain message or /steer: steer the in-flight turn, else start a fresh one. */
 	private async applyText(text: string): Promise<void> {
-		if (this.running) {
+		if (this.deps.runner.isBusy()) {
 			try {
 				await this.deps.runner.queueSteer(text, this.deps.userName);
 				this.deps.frontend.showNotice("Queued as steer.");
@@ -173,7 +171,7 @@ export class TurnController {
 	}
 
 	private applyFollowup(text: string): void {
-		if (this.running) {
+		if (this.deps.runner.isBusy()) {
 			this.followups.push(text);
 			this.deps.frontend.showNotice("Queued as follow-up.");
 			return;
@@ -182,9 +180,9 @@ export class TurnController {
 	}
 
 	private beginTurn(text: string): void {
-		if (this.running || this.exiting) return;
-		this.running = true;
-		this.currentTaskText = text;
+		if (this.deps.runner.isBusy() || this.exiting) return;
+		// Reserve the turn synchronously; the runner is the single owner of busy state.
+		this.deps.runner.beginTurn(text);
 		this.deps.frontend.setBusy(true);
 		this.updateStatus();
 
@@ -198,8 +196,7 @@ export class TurnController {
 				this.deps.frontend.showNotice(`Run failed: ${errorMessage(err)}`);
 			} finally {
 				await ctx.close();
-				this.running = false;
-				this.currentTaskText = undefined;
+				this.deps.runner.endTurn();
 				this.deps.frontend.setBusy(false);
 				this.updateStatus();
 			}
@@ -211,14 +208,14 @@ export class TurnController {
 			() => this.drainFollowups(),
 			(err) => {
 				log.logWarning(`[${this.deps.channelId}] TUI turn finalizer failed`, errorMessage(err));
-				this.running = false;
+				this.deps.runner.endTurn();
 				this.drainFollowups();
 			},
 		);
 	}
 
 	private drainFollowups(): void {
-		if (this.exiting || this.running) return;
+		if (this.exiting || this.deps.runner.isBusy()) return;
 		const next = this.followups.shift();
 		if (next !== undefined) this.beginTurn(next);
 	}
@@ -249,7 +246,7 @@ export class TurnController {
 	}
 
 	private handleInterrupt(): void {
-		if (this.running) {
+		if (this.deps.runner.isBusy()) {
 			void this.deps.runner.abort();
 			this.deps.frontend.showNotice("Stopping…");
 			return;
@@ -296,10 +293,10 @@ export class TurnController {
 			if (snapshot.contextTokens !== undefined && snapshot.contextWindow > 0) {
 				line += ` · ctx ${((snapshot.contextTokens / snapshot.contextWindow) * 100).toFixed(0)}%`;
 			}
-			line += this.running ? " · running" : " · idle";
+			line += this.deps.runner.isBusy() ? " · running" : " · idle";
 			this.deps.frontend.setStatus(`${this.deps.channelId} · ${line}`);
 		} catch {
-			this.deps.frontend.setStatus(`${this.deps.channelId} · ${this.running ? "running" : "ready"}`);
+			this.deps.frontend.setStatus(`${this.deps.channelId} · ${this.deps.runner.isBusy() ? "running" : "ready"}`);
 		}
 	}
 
@@ -307,7 +304,7 @@ export class TurnController {
 		if (this.exiting) return;
 		this.exiting = true;
 
-		if (this.running) {
+		if (this.deps.runner.isBusy()) {
 			await this.deps.runner.abort().catch(() => {});
 			// Never let a rejected turn (e.g. ctx.close() throwing in the turn's finally)
 			// escape the race — that would skip frontend.stop() and strand the terminal in

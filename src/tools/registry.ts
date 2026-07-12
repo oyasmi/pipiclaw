@@ -38,15 +38,15 @@ export interface ToolBuildContext {
 	workspaceDir: string;
 	/** Main set: `toolsConfig.tools.web`; sub-agent set: the sub-agent's own webConfig. */
 	webConfig?: PipiclawWebToolsConfig;
-	/** Present only on the main path; gates session_search / memory_manage / skills. */
+	/** Present only on the main path; gates task_manage and the bash interceptor. */
 	toolsConfig?: PipiclawToolsConfig;
 	/** Sub-agent set passes its per-invocation bash timeout; the main set relies on the built-in default. */
 	bashDefaultTimeoutSeconds?: number;
 	/** Gates the bash tool's rtk command optimizer (`tools.rtk.enabled`). Threaded to both sets. */
 	rtkEnabled?: boolean;
 	/**
-	 * Present only on the main path when `tools.jobs.enabled` is on. Enables bash `async` and the
-	 * `job` tool. The sub-agent set never supplies it, so sub-agents get neither.
+	 * Present only on the main path. Enables bash `async` and the `job` tool.
+	 * The sub-agent set never supplies it, so sub-agents get neither.
 	 */
 	jobManager?: ChannelJobManager;
 	getCurrentModel?: () => Model<Api>;
@@ -124,7 +124,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "grep",
 		promptHint: "Search file contents with a regex; grouped, paginated, token-bounded — prefer over bash grep",
 		availableToSubagents: true,
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.grep.enabled !== false,
 		create: (ctx) => createGrepTool(ctx.executor, fileToolOptions(ctx)),
 	},
 	{
@@ -164,7 +163,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "session_search",
 		promptHint: "Search current-channel cold transcript storage for older conversation details",
 		availableToSubagents: false,
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.memory.sessionSearch.enabled !== false,
 		create: (ctx) =>
 			createSessionSearchTool({
 				channelId: ctx.channelId,
@@ -178,7 +176,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "memory_manage",
 		promptHint: "Save a durable fact, search stored memory on demand, or forget an entry — when the user asks",
 		availableToSubagents: false,
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.memory.save.enabled !== false,
 		create: (ctx) =>
 			createMemoryManageTool({
 				channelId: ctx.channelId,
@@ -193,14 +190,12 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "skill_manage",
 		promptHint: "List, view, create, or maintain workspace-level procedural memory in skills/",
 		availableToSubagents: false,
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.skills.manage.enabled !== false,
 		create: (ctx) => createSkillManageTool({ workspaceDir: ctx.workspaceDir }),
 	},
 	{
 		name: "event_manage",
 		promptHint: "Create/update/delete validated one-shot reminders, periodic cadences, and preAction-gated sensors",
 		availableToSubagents: false,
-		enabledBy: (ctx) => ctx.toolsConfig?.tools.events.enabled !== false,
 		create: (ctx) =>
 			createEventManageTool({
 				workspaceDir: ctx.workspaceDir,
@@ -212,6 +207,8 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "task_manage",
 		promptHint: "Create, checkpoint, govern, verify, complete, cancel, or list persistent tasks",
 		availableToSubagents: false,
+		// tools.tasks is the master switch for the whole autonomous long-running task
+		// mechanism; the TaskDriver and per-turn task digest honor the same flag.
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
 		create: (ctx) =>
 			createTaskManageTool({
@@ -225,7 +222,8 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		name: "job",
 		promptHint: "Inspect/poll/cancel background bash jobs started with bash async:true",
 		availableToSubagents: false,
-		// Present only when a job manager was supplied (tools.jobs.enabled on the main path).
+		// Present only when a job manager was supplied (always on the main path,
+		// never for sub-agents).
 		enabledBy: (ctx) => ctx.jobManager !== undefined,
 		create: (ctx) => createJobTool({ jobManager: req(ctx.jobManager, "jobManager") }),
 	},

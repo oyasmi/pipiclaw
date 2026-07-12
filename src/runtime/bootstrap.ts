@@ -7,6 +7,7 @@ import {
 	slashCommandName,
 } from "../agent/commands.js";
 import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
+import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { resetRunner } from "../agent/runner-factory.js";
 import { renderStatus } from "../agent/status-render.js";
 import { createExecutor, type Executor } from "../executor.js";
@@ -31,7 +32,7 @@ import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { readActiveTasks } from "../shared/task-ledger.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { finishTaskAttempt } from "../tasks/store.js";
-import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
+import { loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import { ensureChannelDir, getChannelDir } from "./channel-paths.js";
@@ -96,13 +97,6 @@ export interface RuntimeContext {
 	handler: DingTalkHandler;
 	store: ChannelStore;
 	shutdown: (reason?: NodeJS.Signals | "manual") => Promise<void>;
-}
-
-interface ChannelState {
-	running: boolean;
-	runner: AgentRunner;
-	stopRequested: boolean;
-	currentTaskText?: string;
 }
 
 const DEFAULT_SOUL = `# SOUL.md
@@ -211,6 +205,9 @@ const TOOLS_CONFIG_TEMPLATE = {
 				maxResults: 5,
 			},
 		},
+		tasks: {
+			enabled: true,
+		},
 	},
 	_examples: {
 		proxy: "http://127.0.0.1:7890",
@@ -220,6 +217,7 @@ const TOOLS_CONFIG_TEMPLATE = {
 		"Set tools.web.enable to true to register web_search and web_fetch.",
 		"Replace tools.web.search.apiKey with your Brave API key before enabling web tools.",
 		"If needed, copy _examples.proxy to tools.web.proxy.",
+		"tools.tasks.enabled is the master switch for autonomous long-running tasks (task_manage tool + task driver + task digest).",
 	],
 };
 
@@ -544,14 +542,14 @@ function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolea
 	]);
 }
 
-function flushInactiveChannelMemory(channelStates: Map<string, ChannelState>): Promise<void>[] {
+function flushInactiveChannelMemory(channelRunners: Map<string, AgentRunner>): Promise<void>[] {
 	const flushes: Promise<void>[] = [];
-	for (const [channelId, state] of channelStates) {
-		if (state.running) {
+	for (const [channelId, runner] of channelRunners) {
+		if (runner.isBusy()) {
 			continue;
 		}
 		flushes.push(
-			state.runner.flushMemoryForShutdown().catch((err) => {
+			runner.flushMemoryForShutdown().catch((err) => {
 				log.logWarning(`[${channelId}] Failed to flush memory during shutdown`, errorMessage(err));
 			}),
 		);
@@ -589,7 +587,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	log.configureLogging(runtimeSettingsManager.getLoggingSettings());
 	const startedAt = Date.now();
 	const cliVersion = readCliVersion();
-	const channelStates = new Map<string, ChannelState>();
+	const channelRunners = new Map<string, AgentRunner>();
 	const activeTasks = new Set<Promise<void>>();
 	let durableDispatch: DurableDispatchService | undefined;
 	let shuttingDown = false;
@@ -616,36 +614,31 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		}
 	};
 
-	const getState = (channelId: string): ChannelState => {
-		let state = channelStates.get(channelId);
-		if (!state) {
+	const getRunner = (channelId: string): AgentRunner => {
+		let runner = channelRunners.get(channelId);
+		if (!runner) {
 			const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
 			ensureChannelMemoryFilesSync(channelDir);
-			state = {
-				running: false,
-				runner: getOrCreateRunner(channelId, channelDir, {
-					appHomeDir: options.paths.appHomeDir,
-					authConfigPath: options.paths.authConfigPath,
-					modelsConfigPath: options.paths.modelsConfigPath,
-				}),
-				stopRequested: false,
-			};
-			channelStates.set(channelId, state);
+			runner = getOrCreateRunner(channelId, channelDir, {
+				appHomeDir: options.paths.appHomeDir,
+				authConfigPath: options.paths.authConfigPath,
+				modelsConfigPath: options.paths.modelsConfigPath,
+			});
+			channelRunners.set(channelId, runner);
 		}
-		return state;
+		return runner;
 	};
 
 	const handler: DingTalkHandler = {
 		isRunning(channelId: string): boolean {
-			const state = channelStates.get(channelId);
-			return state?.running ?? false;
+			return channelRunners.get(channelId)?.isBusy() ?? false;
 		},
 
 		async handleStop(channelId: string, _bot: DingTalkBot): Promise<void> {
-			const state = channelStates.get(channelId);
-			if (state?.running) {
-				state.stopRequested = true;
-				const taskId = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(state.currentTaskText ?? "")?.[1];
+			const runner = channelRunners.get(channelId);
+			if (runner?.isBusy()) {
+				runner.requestStop();
+				const taskId = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(runner.getTurnStatus().taskText ?? "")?.[1];
 				if (taskId) {
 					const pauseResult = await pauseTask(
 						{
@@ -668,7 +661,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				if (canceled) {
 					log.logInfo(`[${channelId}] Reset ${canceled} durable-dispatch lease(s) on stop`);
 				}
-				void state.runner.abort().catch((err) => {
+				void runner.abort().catch((err) => {
 					log.logWarning(`[${channelId}] Failed to abort run`, errorMessage(err));
 				});
 				log.logInfo(`[${channelId}] Stop requested`);
@@ -707,7 +700,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 
 		async handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void> {
 			const response = renderStatus({
-				state: channelStates.get(event.channelId),
+				runner: channelRunners.get(event.channelId),
 				version: cliVersion,
 				uptimeMs: Date.now() - startedAt,
 			});
@@ -729,7 +722,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				return { kind: "handled" };
 			}
 
-			const state = getState(event.channelId);
+			const runner = getRunner(event.channelId);
 			const trimmedQueueText = queueText.trim();
 
 			if (!trimmedQueueText) {
@@ -744,7 +737,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			}
 
 			try {
-				await state.runner.queueSteer(trimmedQueueText, event.userName);
+				await runner.queueSteer(trimmedQueueText, event.userName);
 
 				await archiveIncomingMessage(
 					event.channelId,
@@ -785,14 +778,13 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				return;
 			}
 
-			const state = getState(event.channelId);
-			// Mark running synchronously, before yielding to the async task body.
+			const runner = getRunner(event.channelId);
+			// Reserve the turn synchronously, before yielding to the async task body.
 			// The channel queue invokes this handler's synchronous prefix within the
-			// same tick as dispatch, so setting it here closes the window where a
-			// second message arriving in the same tick saw running=false and was
-			// routed as a fresh run instead of a steer/follow-up.
-			state.running = true;
-			state.stopRequested = false;
+			// same tick as dispatch, so beginning the turn here closes the window
+			// where a second message arriving in the same tick saw an idle runner and
+			// was routed as a fresh run instead of a steer/follow-up.
+			runner.beginTurn(event.text);
 			await durableDispatch?.markStarted(event.dispatchId);
 			const task = (async () => {
 				try {
@@ -831,7 +823,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 							return;
 						}
 						if (isRunnerBuiltInCommand(builtInCommand)) {
-							await state.runner.handleBuiltinCommand(ctx, builtInCommand);
+							await runner.handleBuiltinCommand(ctx, builtInCommand);
 						}
 						return;
 					}
@@ -839,18 +831,17 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					// Reject an unknown slash command instead of spending a full LLM turn
 					// letting the model guess what `/modle` meant. Session commands,
 					// skills, and prompt templates are recognized by isKnownSlashCommand.
-					if (event.text.trim().startsWith("/") && !state.runner.isKnownSlashCommand(event.text)) {
+					if (event.text.trim().startsWith("/") && !runner.isKnownSlashCommand(event.text)) {
 						const name = slashCommandName(event.text) ?? "";
 						await bot.sendPlain(event.channelId, formatUnknownCommandMessage(name));
 						return;
 					}
 
 					log.logInfo(`[${event.channelId}] Starting run: ${event.text.substring(0, 50)}`);
-					state.currentTaskText = event.text;
 					if (!_isEvent) {
 						ctx.primeCard(350);
 					}
-					const result = await state.runner.run(ctx, store);
+					const result = await runner.run(ctx, store);
 					const taskDriverMatch = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text);
 					if (taskDriverMatch?.[1] && result.usage && result.durationMs !== undefined) {
 						await finishTaskAttempt(
@@ -866,15 +857,14 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						);
 					}
 
-					if (result.stopReason === "aborted" && state.stopRequested) {
+					if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {
 						log.logInfo(`[${event.channelId}] Stopped`);
 					}
 				} catch (err) {
 					log.logWarning(`[${event.channelId}] Run error`, errorMessage(err));
 				} finally {
 					await durableDispatch?.markCompleted(event.dispatchId);
-					state.running = false;
-					state.currentTaskText = undefined;
+					runner.endTurn();
 				}
 			})();
 
@@ -910,9 +900,26 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		: new MemoryMaintenanceScheduler({
 				appHomeDir: options.paths.appHomeDir,
 				workspaceDir: options.paths.workspaceDir,
-				getKnownChannelIds: () => channelStates.keys(),
-				getRuntimeContext: async (channelId) => getState(channelId).runner.getMemoryMaintenanceContext(),
-				isChannelActive: (channelId) => channelStates.get(channelId)?.running ?? false,
+				getKnownChannelIds: () => channelRunners.keys(),
+				// Channels active this boot reuse their runner's in-memory context; every
+				// other discovered channel gets a lightweight disk-backed context instead
+				// of resurrecting a full ChannelRunner (session, tools, sub-agents) that
+				// would then sit in the runner cache forever.
+				getRuntimeContext: async (channelId) => {
+					const runner = channelRunners.get(channelId);
+					if (runner) {
+						return runner.getMemoryMaintenanceContext();
+					}
+					return loadDetachedMaintenanceContext({
+						channelId,
+						channelDir: getChannelDir(options.paths.workspaceDir, channelId),
+						workspaceDir: options.paths.workspaceDir,
+						authConfigPath: options.paths.authConfigPath,
+						modelsConfigPath: options.paths.modelsConfigPath,
+						settingsManager: runtimeSettingsManager,
+					});
+				},
+				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				getSettings: () => {
 					runtimeSettingsManager.reload();
 					return {
@@ -928,13 +935,14 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		? options.createTaskDriver()
 		: new TaskDriver({
 				workspaceDir: options.paths.workspaceDir,
-				getKnownChannelIds: () => channelStates.keys(),
-				isChannelActive: (channelId) => channelStates.get(channelId)?.running ?? false,
+				getKnownChannelIds: () => channelRunners.keys(),
+				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 				getSettings: () => {
 					runtimeSettingsManager.reload();
 					return runtimeSettingsManager.getTaskDriverSettings();
 				},
+				isEnabled: () => loadToolsConfig(options.paths.appHomeDir).tools.tasks.enabled,
 				intervalMs: options.taskDriverIntervalMs,
 			});
 
@@ -961,12 +969,12 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				if (!completed) {
 					log.logWarning(`Shutdown grace period exceeded ${SHUTDOWN_WAIT_MS}ms, aborting active runs`);
 					const aborts: Promise<void>[] = [];
-					for (const [channelId, state] of channelStates) {
-						if (!state.running) continue;
-						state.stopRequested = true;
+					for (const [channelId, runner] of channelRunners) {
+						if (!runner.isBusy()) continue;
+						runner.requestStop();
 						log.logInfo(`[${channelId}] Aborting active run for shutdown`);
 						aborts.push(
-							state.runner.abort().catch((err) => {
+							runner.abort().catch((err) => {
 								log.logWarning(`[${channelId}] Failed to abort run during shutdown`, errorMessage(err));
 							}),
 						);
@@ -983,7 +991,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				}
 			}
 
-			const flushes = flushInactiveChannelMemory(channelStates);
+			const flushes = flushInactiveChannelMemory(channelRunners);
 			if (flushes.length > 0) {
 				log.logInfo(`Flushing memory for ${flushes.length} inactive channel(s) before shutdown`);
 				const flushed = await waitForTasks(flushes, SHUTDOWN_FLUSH_WAIT_MS);
@@ -992,7 +1000,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				}
 			}
 
-			for (const channelId of channelStates.keys()) {
+			for (const channelId of channelRunners.keys()) {
 				const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
 				resetRunner(
 					channelId,

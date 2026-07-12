@@ -35,29 +35,13 @@ export interface PipiclawWebToolsConfig {
 export interface PipiclawToolsConfig {
 	tools: {
 		web: PipiclawWebToolsConfig;
-		memory: {
-			sessionSearch: {
-				enabled: boolean;
-			};
-			save: {
-				enabled: boolean;
-			};
-		};
-		skills: {
-			manage: {
-				enabled: boolean;
-			};
-		};
-		events: {
-			enabled: boolean;
-		};
+		/**
+		 * Master switch for the autonomous long-running task mechanism: gates the
+		 * `task_manage` tool, the native TaskDriver, and the per-turn task digest
+		 * together. Core capabilities (read/bash/edit/write/grep, memory, skills,
+		 * events, background jobs) are always on and have no switches.
+		 */
 		tasks: {
-			enabled: boolean;
-		};
-		grep: {
-			enabled: boolean;
-		};
-		jobs: {
 			enabled: boolean;
 		};
 		bashInterceptor: {
@@ -98,29 +82,7 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 				defaultExtractMode: "markdown",
 			},
 		},
-		memory: {
-			sessionSearch: {
-				enabled: true,
-			},
-			save: {
-				enabled: true,
-			},
-		},
-		skills: {
-			manage: {
-				enabled: true,
-			},
-		},
-		events: {
-			enabled: true,
-		},
 		tasks: {
-			enabled: true,
-		},
-		grep: {
-			enabled: true,
-		},
-		jobs: {
 			enabled: true,
 		},
 		bashInterceptor: {
@@ -183,15 +145,7 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 
 	const tools = isRecord(source.tools) ? source.tools : {};
 	const web = isRecord(tools.web) ? tools.web : {};
-	const memory = isRecord(tools.memory) ? tools.memory : {};
-	const sessionSearch = isRecord(memory.sessionSearch) ? memory.sessionSearch : {};
-	const memorySave = isRecord(memory.save) ? memory.save : {};
-	const skills = isRecord(tools.skills) ? tools.skills : {};
-	const manage = isRecord(skills.manage) ? skills.manage : {};
-	const events = isRecord(tools.events) ? tools.events : {};
 	const tasks = isRecord(tools.tasks) ? tools.tasks : {};
-	const grep = isRecord(tools.grep) ? tools.grep : {};
-	const jobs = isRecord(tools.jobs) ? tools.jobs : {};
 	const bashInterceptor = isRecord(tools.bashInterceptor) ? tools.bashInterceptor : {};
 	const rtk = isRecord(tools.rtk) ? tools.rtk : {};
 	const search = isRecord(web.search) ? web.search : {};
@@ -310,39 +264,8 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 							: DEFAULT_TOOLS_CONFIG.tools.web.fetch.defaultExtractMode,
 				},
 			},
-			memory: {
-				sessionSearch: {
-					enabled:
-						typeof sessionSearch.enabled === "boolean"
-							? sessionSearch.enabled
-							: DEFAULT_TOOLS_CONFIG.tools.memory.sessionSearch.enabled,
-				},
-				save: {
-					enabled:
-						typeof memorySave.enabled === "boolean"
-							? memorySave.enabled
-							: DEFAULT_TOOLS_CONFIG.tools.memory.save.enabled,
-				},
-			},
-			skills: {
-				manage: {
-					enabled:
-						typeof manage.enabled === "boolean"
-							? manage.enabled
-							: DEFAULT_TOOLS_CONFIG.tools.skills.manage.enabled,
-				},
-			},
-			events: {
-				enabled: typeof events.enabled === "boolean" ? events.enabled : DEFAULT_TOOLS_CONFIG.tools.events.enabled,
-			},
 			tasks: {
 				enabled: typeof tasks.enabled === "boolean" ? tasks.enabled : DEFAULT_TOOLS_CONFIG.tools.tasks.enabled,
-			},
-			grep: {
-				enabled: typeof grep.enabled === "boolean" ? grep.enabled : DEFAULT_TOOLS_CONFIG.tools.grep.enabled,
-			},
-			jobs: {
-				enabled: typeof jobs.enabled === "boolean" ? jobs.enabled : DEFAULT_TOOLS_CONFIG.tools.jobs.enabled,
 			},
 			bashInterceptor: {
 				enabled:

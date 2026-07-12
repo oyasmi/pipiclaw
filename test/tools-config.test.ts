@@ -39,12 +39,7 @@ describe("tools config", () => {
 
 		expect(loadToolsConfig(appHomeDir)).toEqual({
 			tools: {
-				memory: DEFAULT_TOOLS_CONFIG.tools.memory,
-				skills: DEFAULT_TOOLS_CONFIG.tools.skills,
-				events: DEFAULT_TOOLS_CONFIG.tools.events,
 				tasks: DEFAULT_TOOLS_CONFIG.tools.tasks,
-				grep: DEFAULT_TOOLS_CONFIG.tools.grep,
-				jobs: DEFAULT_TOOLS_CONFIG.tools.jobs,
 				bashInterceptor: DEFAULT_TOOLS_CONFIG.tools.bashInterceptor,
 				rtk: DEFAULT_TOOLS_CONFIG.tools.rtk,
 				web: {
@@ -67,21 +62,21 @@ describe("tools config", () => {
 		});
 	});
 
-	it("defaults the jobs and bashInterceptor gates to on (explicit values, not circular self-compare)", () => {
+	it("defaults the tasks and bashInterceptor gates to on (explicit values, not circular self-compare)", () => {
 		const appHomeDir = makeTempDir();
 
 		const loaded = loadToolsConfig(appHomeDir);
-		expect(loaded.tools.jobs.enabled).toBe(true);
+		expect(loaded.tools.tasks.enabled).toBe(true);
 		expect(loaded.tools.bashInterceptor.enabled).toBe(true);
 
 		// An explicit opt-out is still honored.
 		writeFileSync(
 			join(appHomeDir, "tools.json"),
-			JSON.stringify({ tools: { jobs: { enabled: false }, bashInterceptor: { enabled: false } } }),
+			JSON.stringify({ tools: { tasks: { enabled: false }, bashInterceptor: { enabled: false } } }),
 			"utf-8",
 		);
 		const off = loadToolsConfig(appHomeDir);
-		expect(off.tools.jobs.enabled).toBe(false);
+		expect(off.tools.tasks.enabled).toBe(false);
 		expect(off.tools.bashInterceptor.enabled).toBe(false);
 	});
 
