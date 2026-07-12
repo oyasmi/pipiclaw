@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-07-12
+
+### 新增
+
+- Pipiclaw 现在通过可预算、有序的 section pipeline 自主构建系统提示词：替换 pi 默认基础提示词，同时保留 pi skill 命令；workspace identity 和 instructions 会安全包裹，频道专属信息移入动态轮次上下文。
+- `/context` 与 `/context detail` 现在展示 section 体量、缓存类别、诊断信息，以及分离的 Pipiclaw 内容指纹和最终 provider prompt 指纹；调试提示词 dump 同时附带 manifest。
+
+### 修复
+
+- 明确 section 的 all-of 工具依赖与 playbook 的 any-of 工具依赖，新增过大 skill 索引的可执行告警，并允许在活跃轮次中使用 `/context`。
+- 提示词 dump 的端到端测试现在校验实际发送给 provider 的完整 prompt 哈希。文档同步记录了延后的 skills 硬预算、provider 缓存日期行为和待完成的行为评估工作。
+
 ## [0.8.4] - 2026-07-12
 
 ### 变更

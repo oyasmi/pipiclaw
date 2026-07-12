@@ -4,6 +4,18 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-07-12
+
+### Added
+
+- Pipiclaw now owns the system prompt through a budgeted, ordered section pipeline. The pi default base prompt is replaced while pi skill commands remain intact; workspace identity and instructions are safely wrapped, and per-channel data moves to dynamic turn context.
+- `/context` and `/context detail` now expose section sizes, cache classes, diagnostics, and separate Pipiclaw-content and final-provider-prompt fingerprints. Debug prompt dumps include a manifest.
+
+### Fixed
+
+- Clarified all-of section tool requirements versus any-of playbook requirements, added actionable warnings for oversized skill indexes, and made `/context` available during active turns.
+- Prompt dump end-to-end tests now verify the hash of the full prompt sent to the provider. Documentation records deferred skills hard budgeting, provider cache-date behavior, and the remaining behavior-evaluation work.
+
 ## [0.8.4] - 2026-07-12
 
 ### Changed
