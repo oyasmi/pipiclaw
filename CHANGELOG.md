@@ -4,6 +4,14 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-07-12
+
+### Changed
+
+- Centralized channel turn lifecycle ownership in `ChannelRunner`. DingTalk dispatch, the TUI, task scheduling, and status rendering now derive busy and stop state from one explicit turn-state contract, with a shared runtime channel queue.
+- Inactive channels now use a lightweight disk-backed maintenance context instead of creating and retaining full agent runners. Task tools, task digests, and the task driver share the `tools.tasks.enabled` master switch.
+- Refreshed configuration and operations guidance, and added an as-implemented architecture guide covering the runtime topology, message lifecycle, concurrency boundaries, memory layers, and operational invariants.
+
 ## [0.8.2] - 2026-07-11
 
 ### Changed
