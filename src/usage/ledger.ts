@@ -68,6 +68,8 @@ function monthKeysBetween(since: Date, until: Date): string[] {
 export interface UsageLedger {
 	record(entry: Omit<UsageLedgerEntry, "ts">): void;
 	summarize(query: UsageSummaryQuery): UsageSummary;
+	flush?(): Promise<void>;
+	close?(): Promise<void>;
 }
 
 export interface CreateUsageLedgerOptions {
@@ -91,8 +93,11 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 				...entry,
 				channelId: entry.channelId || UNTRACKED_CHANNEL_ID,
 			};
-			void appender.append(full);
+			appender.tryAppend(full);
 		},
+
+		flush: () => appender.flush(),
+		close: () => appender.close(),
 
 		summarize(query: UsageSummaryQuery): UsageSummary {
 			const until = query.until ?? new Date();

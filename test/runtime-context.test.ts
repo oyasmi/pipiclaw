@@ -105,6 +105,7 @@ describe("createRuntimeContext", () => {
 		});
 
 		await runtime.handler.handleEvent(createDmEvent("/help", "1000"), bot as unknown as DingTalkBot);
+		await runtime.store.flush();
 
 		const channelDir = join(paths.workspaceDir, "dm_tester");
 		expect(readFileSync(join(channelDir, "log.jsonl"), "utf-8")).toContain('"text":"/help"');

@@ -183,15 +183,23 @@ function emit(level: LogLevel, event: string, message: string, options: LogOptio
 	if (!fileSink || !isEnabled(level)) return;
 	const fields = sanitizeFields(options.fields);
 	const details = options.details ? summarizeString(options.details) : undefined;
-	void fileSink.append({
-		ts: new Date().toISOString(),
-		level,
-		event,
-		message: summarizeString(message),
-		...(options.ctx ? { channelId: options.ctx.channelId, userName: options.ctx.userName } : {}),
-		...(details ? { details } : {}),
-		...(fields ? { fields } : {}),
-	});
+	fileSink.tryAppend(
+		{
+			ts: new Date().toISOString(),
+			level,
+			event,
+			message: summarizeString(message),
+			...(options.ctx ? { channelId: options.ctx.channelId, userName: options.ctx.userName } : {}),
+			...(details ? { details } : {}),
+			...(fields ? { fields } : {}),
+		},
+		level === "warn" || level === "error" ? "critical" : "normal",
+	);
+}
+
+/** Wait for structured logs accepted so far to reach disk. */
+export async function flushLogging(): Promise<void> {
+	await fileSink?.flush();
 }
 
 /** Emit one consistently formatted runtime event to stdout and the JSONL sink. */

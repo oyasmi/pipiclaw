@@ -131,7 +131,7 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
 				const guardResult = guardPath(path, "read", { ...securityContext, config: securityConfig.pathGuard });
 				if (!guardResult.allowed) {
-					logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+					await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
 						type: "path",
 						tool: "read",
 						channelId: options.channelId,

@@ -1,6 +1,5 @@
 import { Cron } from "croner";
 import {
-	appendFileSync,
 	chmodSync,
 	existsSync,
 	type FSWatcher,
@@ -17,6 +16,7 @@ import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
+import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 
@@ -243,6 +243,7 @@ export class EventsWatcher {
 	private startTime: number;
 	private watcher: FSWatcher | null = null;
 	private knownFiles: Set<string> = new Set();
+	private readonly historyAppender?: JsonlAppender;
 
 	constructor(
 		private eventsDir: string,
@@ -252,6 +253,13 @@ export class EventsWatcher {
 		private options: EventsWatcherOptions = {},
 	) {
 		this.startTime = Date.now();
+		this.historyAppender = options.historyPath
+			? createJsonlAppender({
+					path: options.historyPath,
+					maxPendingRecords: 4_000,
+					maxPendingBytes: 8 * 1024 * 1024,
+				})
+			: undefined;
 	}
 
 	start(): void {
@@ -297,6 +305,10 @@ export class EventsWatcher {
 		log.logInfo("Events watcher stopped");
 	}
 
+	async flush(): Promise<void> {
+		await this.historyAppender?.flush();
+	}
+
 	private ensureHistoryFile(): void {
 		if (!this.options.historyPath) {
 			return;
@@ -324,11 +336,8 @@ export class EventsWatcher {
 			eventPath: resolve(this.eventsDir, filename),
 			...rest,
 		};
-		try {
-			this.ensureHistoryFile();
-			appendFileSync(this.options.historyPath, `${JSON.stringify(fullRecord)}\n`, "utf-8");
-		} catch (err) {
-			log.logWarning("Failed to write event history", String(err));
+		if (!this.historyAppender?.tryAppend(fullRecord, "critical")) {
+			log.logWarning("Failed to queue event history", "Retry after pending event history writes drain");
 		}
 	}
 

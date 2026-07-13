@@ -7,7 +7,7 @@ import { createUsageLedger, type UsageLedger, type UsageLedgerEntry } from "../s
 const cost = (total: number) => ({ input: total, output: 0, cacheRead: 0, cacheWrite: 0, total });
 const tokens = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 };
 
-/** Record with a frozen wall clock (controls the ts / monthly file), then let real I/O drain. */
+/** Record with a frozen wall clock (controls the ts / monthly file). */
 function recordAt(ledger: UsageLedger, iso: string, entry: Omit<UsageLedgerEntry, "ts">): void {
 	vi.useFakeTimers();
 	vi.setSystemTime(new Date(iso));
@@ -15,8 +15,8 @@ function recordAt(ledger: UsageLedger, iso: string, entry: Omit<UsageLedgerEntry
 	vi.useRealTimers();
 }
 
-async function flush(): Promise<void> {
-	await new Promise((r) => setTimeout(r, 20));
+async function flush(ledger: UsageLedger): Promise<void> {
+	await ledger.flush?.();
 }
 
 describe("usage ledger", () => {
@@ -67,7 +67,7 @@ describe("usage ledger", () => {
 			usage: tokens,
 			cost: cost(0.05),
 		});
-		await flush();
+		await flush(ledger);
 
 		const entries = readMonth("2026-07");
 		expect(entries.map((e) => e.kind).sort()).toEqual(["sidecar", "subagent", "turn"]);
@@ -87,7 +87,7 @@ describe("usage ledger", () => {
 			usage: tokens,
 			cost: cost(0),
 		});
-		await flush();
+		await flush(ledger);
 		expect(readMonth("2026-07")).toEqual([]);
 	});
 
@@ -101,7 +101,7 @@ describe("usage ledger", () => {
 			usage: tokens,
 			cost: cost(0.01),
 		});
-		await flush();
+		await flush(ledger);
 
 		const entries = readMonth("2026-07");
 		expect(entries[0]?.channelId).toBe("(untracked)");
@@ -131,7 +131,7 @@ describe("usage ledger", () => {
 			usage: tokens,
 			cost: cost(0.4),
 		});
-		await flush();
+		await flush(ledger);
 
 		const window = { since: new Date("2026-07-01T00:00:00Z"), until: new Date("2026-07-31T00:00:00Z") };
 		const all = ledger.summarize(window);
@@ -155,7 +155,7 @@ describe("usage ledger", () => {
 			usage: tokens,
 			cost: cost(0.1),
 		});
-		await flush();
+		await flush(ledger);
 		recordAt(ledger, "2026-07-01T12:00:00Z", {
 			channelId: "c1",
 			kind: "turn",
@@ -163,7 +163,7 @@ describe("usage ledger", () => {
 			usage: tokens,
 			cost: cost(0.3),
 		});
-		await flush();
+		await flush(ledger);
 
 		const summary = ledger.summarize({
 			since: new Date("2026-06-29T00:00:00Z"),

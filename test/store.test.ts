@@ -70,6 +70,7 @@ describe("ChannelStore", () => {
 		expect((store as unknown as { cleanupTimer: NodeJS.Timeout | null }).cleanupTimer).not.toBeNull();
 
 		const logPath = join(store.getChannelDir(channelId), "log.jsonl");
+		await store.flush();
 		const lines = readFileSync(logPath, "utf-8").trim().split("\n");
 		expect(lines).toHaveLength(1);
 		expect(JSON.parse(lines[0])).toMatchObject({
@@ -108,12 +109,14 @@ describe("ChannelStore", () => {
 			text: "rotated",
 			isBot: false,
 		});
+		await store.flush();
 
 		expect(existsSync(`${logPath}.1`)).toBe(true);
 		expect(readFileSync(syncOffsetPath, "utf-8")).toBe("0");
 		expect(readFileSync(logPath, "utf-8")).toContain('"text":"rotated"');
 
 		await store.logSubAgentRun("dm_rotate", sampleSubAgentRun());
+		await store.flush();
 		expect(readFileSync(join(channelDir, "subagent-runs.jsonl"), "utf-8")).toContain('"toolCallId":"call-1"');
 	});
 
@@ -140,6 +143,7 @@ describe("ChannelStore", () => {
 				isBot: false,
 			}),
 		]);
+		await store.flush();
 
 		expect(first).toBe(true);
 		expect(second).toBe(true);
@@ -160,6 +164,7 @@ describe("ChannelStore", () => {
 			text: "hello group",
 			isBot: false,
 		});
+		await store.flush();
 
 		const channelDir = join(workingDir, getChannelDirName(channelId));
 		expect(readFileSync(join(channelDir, "log.jsonl"), "utf-8")).toContain('"text":"hello group"');

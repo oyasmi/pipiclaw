@@ -168,7 +168,7 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
 				const readGuard = guardPath(path, "read", { ...securityContext, config: securityConfig.pathGuard });
 				if (!readGuard.allowed) {
-					logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+					await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
 						type: "path",
 						tool: "edit",
 						channelId: options.channelId,

@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, renameSync, statSync } from "fs";
-import { appendFile, writeFile } from "fs/promises";
-import { dirname, join } from "path";
-import { createSerialQueue, type SerialQueue } from "../shared/serial-queue.js";
+import { existsSync, mkdirSync } from "fs";
+import { writeFile } from "fs/promises";
+import { basename, dirname, join } from "path";
+import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { ensureChannelDir } from "./channel-paths.js";
 
 const MAX_LOG_SIZE_BYTES = 1_000_000;
@@ -22,6 +22,11 @@ export interface LoggedMessage {
 
 export interface ChannelStoreConfig {
 	workingDir: string;
+}
+
+interface ArchiveEnvelope {
+	filePath: string;
+	value: unknown;
 }
 
 export interface LoggedSubAgentRun {
@@ -59,10 +64,25 @@ export class ChannelStore {
 	private workingDir: string;
 	private recentlyLogged = new Map<string, number>();
 	private cleanupTimer: NodeJS.Timeout | null = null;
-	private writeQueue: SerialQueue<string> = createSerialQueue<string>();
+	private archiveAppender: JsonlAppender;
+	private closed = false;
 
 	constructor(config: ChannelStoreConfig) {
 		this.workingDir = config.workingDir;
+		this.archiveAppender = createJsonlAppender({
+			pathFor: (_now, record) => (record as ArchiveEnvelope).filePath,
+			recordForWrite: (record) => (record as ArchiveEnvelope).value,
+			maxSizeBytes: MAX_LOG_SIZE_BYTES,
+			maxRotations: 1,
+			onRotate: async (filePath) => {
+				if (basename(filePath) !== "log.jsonl") return;
+				try {
+					await writeFile(join(dirname(filePath), ".sync-offset"), "0", "utf-8");
+				} catch {
+					// A stale sync offset only causes the cold-storage importer to rescan.
+				}
+			},
+		});
 
 		// Ensure working directory exists
 		if (!existsSync(this.workingDir)) {
@@ -83,6 +103,9 @@ export class ChannelStore {
 	 * Returns false if message was already logged (duplicate)
 	 */
 	async logMessage(channelId: string, message: LoggedMessage): Promise<boolean> {
+		if (this.closed) {
+			throw new Error("Channel archive is closed. Retry after the runtime has restarted.");
+		}
 		const dedupeKey = `${channelId}:${message.ts}`;
 		const now = Date.now();
 		const previousLogTime = this.recentlyLogged.get(dedupeKey);
@@ -93,51 +116,25 @@ export class ChannelStore {
 			this.recentlyLogged.delete(dedupeKey);
 		}
 
-		this.recentlyLogged.set(dedupeKey, now);
-		this.startCleanupTimer();
-
 		const logPath = join(this.getChannelDir(channelId), "log.jsonl");
 
 		if (!message.date) {
 			message.date = new Date().toISOString();
 		}
 
-		await this.writeQueue.run(logPath, async () => {
-			await this.rotateIfNeeded(logPath);
-			const line = `${JSON.stringify(message)}\n`;
-			await appendFile(logPath, line, "utf-8");
-		});
+		if (!this.archiveAppender.tryAppend({ filePath: logPath, value: message }, "critical")) {
+			throw new Error("Channel archive queue is full. Retry this message after pending log writes drain.");
+		}
+		this.recentlyLogged.set(dedupeKey, now);
+		this.startCleanupTimer();
 		return true;
 	}
 
 	async logSubAgentRun(channelId: string, run: LoggedSubAgentRun): Promise<void> {
+		if (this.closed) return;
 		const logPath = join(this.getChannelDir(channelId), "subagent-runs.jsonl");
-		await this.writeQueue.run(logPath, async () => {
-			await this.rotateIfNeeded(logPath);
-			const line = `${JSON.stringify(run)}\n`;
-			await appendFile(logPath, line, "utf-8");
-		});
-	}
-
-	/**
-	 * Rotate log file if it exceeds 1MB.
-	 * Keeps one backup (log.jsonl.1) and resets the sync offset.
-	 */
-	private async rotateIfNeeded(logPath: string): Promise<void> {
-		try {
-			if (!existsSync(logPath)) return;
-			const stats = statSync(logPath);
-			if (stats.size > MAX_LOG_SIZE_BYTES) {
-				renameSync(logPath, `${logPath}.1`);
-				const syncOffsetPath = join(dirname(logPath), ".sync-offset");
-				try {
-					await writeFile(syncOffsetPath, "0", "utf-8");
-				} catch {
-					/* ignore */
-				}
-			}
-		} catch {
-			// Ignore rotation errors
+		if (!this.archiveAppender.tryAppend({ filePath: logPath, value: run })) {
+			throw new Error("Sub-agent archive queue is full. Retry after pending log writes drain.");
 		}
 	}
 
@@ -152,6 +149,19 @@ export class ChannelStore {
 			text,
 			isBot: true,
 		});
+	}
+
+	async flush(): Promise<void> {
+		await this.archiveAppender.flush();
+	}
+
+	async close(): Promise<void> {
+		this.closed = true;
+		if (this.cleanupTimer) {
+			clearInterval(this.cleanupTimer);
+			this.cleanupTimer = null;
+		}
+		await this.archiveAppender.close();
 	}
 
 	private startCleanupTimer(): void {

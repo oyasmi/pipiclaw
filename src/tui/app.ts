@@ -27,6 +27,7 @@ import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
 import { handleEventsCommand } from "../runtime/event-commands.js";
 import { ChannelStore } from "../runtime/store.js";
 import { handleTasksCommand } from "../runtime/task-commands.js";
+import { flushSecurityLogs } from "../security/logger.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import { TUI_SLASH_COMMANDS } from "./commands.js";
@@ -36,6 +37,24 @@ import { TurnController } from "./turn-controller.js";
 
 const DEFAULT_CHANNEL_ID = "tui_local";
 const CHANNEL_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+const STORAGE_FLUSH_TIMEOUT_MS = 10_000;
+
+async function waitForStorageFlush(task: Promise<unknown>): Promise<void> {
+	await new Promise<void>((resolve) => {
+		const timer = setTimeout(resolve, STORAGE_FLUSH_TIMEOUT_MS);
+		timer.unref?.();
+		void task.then(
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+		);
+	});
+}
 
 export interface TuiAppOptions {
 	channel?: string;
@@ -141,5 +160,9 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		}
 	} finally {
 		resetRunner(channelId);
+		await waitForStorageFlush(
+			Promise.allSettled([store.close(), getUsageLedger().flush?.() ?? Promise.resolve(), flushSecurityLogs()]),
+		);
+		await waitForStorageFlush(log.flushLogging());
 	}
 }

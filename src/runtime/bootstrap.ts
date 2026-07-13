@@ -27,6 +27,7 @@ import {
 	WORKSPACE_DIR,
 } from "../paths.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
+import { flushSecurityLogs } from "../security/logger.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { readActiveTasks } from "../shared/task-ledger.js";
@@ -198,6 +199,7 @@ const SECURITY_CONFIG_TEMPLATE = {
 const SHUTDOWN_WAIT_MS = 15000;
 const SHUTDOWN_FLUSH_WAIT_MS = 45000;
 const SHUTDOWN_ABORT_WAIT_MS = 5000;
+const SHUTDOWN_LOG_FLUSH_WAIT_MS = 10_000;
 
 export const DEFAULT_BOOTSTRAP_PATHS: BootstrapPaths = {
 	appName: APP_NAME,
@@ -496,12 +498,14 @@ function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolea
 		return Promise.resolve(true);
 	}
 
-	return Promise.race([
-		Promise.allSettled(tasks).then(() => true),
-		new Promise<boolean>((resolve) => {
-			setTimeout(() => resolve(false), timeoutMs);
-		}),
-	]);
+	return new Promise<boolean>((resolve) => {
+		const timer = setTimeout(() => resolve(false), timeoutMs);
+		timer.unref?.();
+		void Promise.allSettled(tasks).then(() => {
+			clearTimeout(timer);
+			resolve(true);
+		});
+	});
 }
 
 function flushInactiveChannelMemory(channelRunners: Map<string, AgentRunner>): Promise<void>[] {
@@ -532,7 +536,7 @@ interface RuntimeContextOptions {
 		bot: DingTalkBot,
 		executor: Executor,
 		eventHistoryPath: string,
-	) => { start(): void; stop(): void };
+	) => { start(): void; stop(): void; flush?(): Promise<void> };
 	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
 	memoryMaintenanceSchedulerIntervalMs?: number;
 	createTaskDriver?: () => { start(): void; stop(): void };
@@ -996,6 +1000,18 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					channelDir,
 				);
 			}
+
+			const storageFlushes = [
+				store.close(),
+				getUsageLedger().flush?.() ?? Promise.resolve(),
+				flushSecurityLogs(),
+				...(eventsWatcher.flush ? [eventsWatcher.flush()] : []),
+			];
+			const storageFlushed = await waitForTasks(storageFlushes, SHUTDOWN_LOG_FLUSH_WAIT_MS);
+			if (!storageFlushed) {
+				log.logWarning(`Shutdown log flush exceeded ${SHUTDOWN_LOG_FLUSH_WAIT_MS}ms`);
+			}
+			await waitForTasks([log.flushLogging()], SHUTDOWN_LOG_FLUSH_WAIT_MS);
 		})();
 
 		return shutdownPromise;
