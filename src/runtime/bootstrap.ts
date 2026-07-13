@@ -700,7 +700,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			}
 
 			if (mode === "followUp") {
-				log.logInfo(`[${event.channelId}] Queued followUp as next task: ${trimmedQueueText.substring(0, 80)}`);
+				log.logEvent("info", "agent.turn.followup_queued", "Follow-up queued", {
+					ctx: { channelId: event.channelId, userName: event.userName },
+					fields: { messageLength: trimmedQueueText.length },
+				});
 				return { kind: "requeue", text: trimmedQueueText };
 			}
 
@@ -726,7 +729,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					? "Queued as steer. I’ll apply it after the current tool step finishes."
 					: "Queued as steer. I’ll apply this after the current tool step finishes. Use `/followup <message>` to queue it after completion.";
 				await bot.sendPlain(event.channelId, confirmation);
-				log.logInfo(`[${event.channelId}] Queued ${mode}: ${trimmedQueueText.substring(0, 80)}`);
+				log.logEvent("info", "agent.turn.steer_queued", "Steer queued", {
+					ctx: { channelId: event.channelId, userName: event.userName },
+					fields: { messageLength: trimmedQueueText.length },
+				});
 				return { kind: "handled" };
 			} catch (err) {
 				const errMsg = errorMessage(err);
@@ -773,7 +779,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					const builtInCommand = parseBuiltInCommand(event.text);
 
 					if (builtInCommand) {
-						log.logInfo(`[${event.channelId}] Executing command: ${builtInCommand.rawText}`);
+						log.logEvent("info", "runtime.command.started", "Executing command", {
+							ctx: { channelId: event.channelId, userName: event.userName },
+							fields: { command: builtInCommand.name },
+						});
 						if (builtInCommand.name === "events") {
 							await handler.handleEventsCommand(event, bot, builtInCommand.args);
 							return;
@@ -805,7 +814,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						return;
 					}
 
-					log.logInfo(`[${event.channelId}] Starting run: ${event.text.substring(0, 50)}`);
+					log.logEvent("info", "agent.turn.started", "Starting turn", {
+						ctx: { channelId: event.channelId, userName: event.userName },
+						fields: { messageLength: event.text.length, source: _isEvent ? "event" : "message" },
+					});
 					if (!_isEvent) {
 						ctx.primeCard(350);
 					}
@@ -830,7 +842,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						log.logInfo(`[${event.channelId}] Stopped`);
 					}
 				} catch (err) {
-					log.logWarning(`[${event.channelId}] Run error`, errorMessage(err));
+					log.logEvent("error", "agent.turn.failed", "Turn failed", {
+						ctx: { channelId: event.channelId, userName: event.userName },
+						fields: { error: errorMessage(err) },
+					});
 				} finally {
 					await durableDispatch?.markCompleted(event.dispatchId);
 					runner.endTurn();

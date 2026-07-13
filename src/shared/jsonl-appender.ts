@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createSerialQueue } from "./serial-queue.js";
-import { errorMessage } from "./text-utils.js";
 
 export interface JsonlAppenderOptions {
 	/** Fixed target file. Mutually exclusive with `pathFor`. */
@@ -96,10 +95,15 @@ export function createJsonlAppender(options: JsonlAppenderOptions): JsonlAppende
 			try {
 				await queue.run(filePath, () => write(filePath, line));
 				warned = false;
-			} catch (error) {
+			} catch {
 				if (!warned) {
 					warned = true;
-					console.warn(`[jsonl-appender] Failed to append to ${filePath}: ${errorMessage(error)}`);
+					// This path cannot use log.ts (it is log.ts' file sink), so keep the
+					// fallback short, safe, and on stdout without exposing filesystem paths
+					// or an arbitrary I/O error payload.
+					process.stdout.write(
+						`${new Date().toISOString()} WARN  runtime.log_sink.failed Failed to append structured log; continuing without file sink\n`,
+					);
 				}
 			}
 		},

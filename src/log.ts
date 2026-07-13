@@ -8,19 +8,10 @@ export interface LogContext {
 	channelName?: string;
 }
 
-// ============================================================================
-// Structured log sink layer
-//
-// The console sink below is the human-readable output and is treated as a
-// frozen asset: its formatting must never change. Each logX helper additionally
-// assembles a structured LogRecord and hands it to an optional file sink. Call
-// sites stay untouched — the structure is built here from existing parameters.
-// ============================================================================
-
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export interface LogRecord {
-	ts: string; // ISO 8601 (UTC)
+	ts: string;
 	level: LogLevel;
 	event: string;
 	channelId?: string;
@@ -35,14 +26,23 @@ export interface LoggingConfig {
 	file: { enabled: boolean; maxSizeBytes: number; maxFiles: number };
 }
 
+export interface LogOptions {
+	ctx?: LogContext;
+	details?: string;
+	fields?: Record<string, unknown>;
+}
+
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+const MAX_VALUE_LENGTH = 240;
+const MAX_COLLECTION_ITEMS = 10;
+const SENSITIVE_KEY =
+	/(?:api[_-]?key|authorization|cookie|credential|password|secret|private[_-]?key|(?:^|[_-])token(?:$|[_-])|token$|^env(?:ironment)?$)/i;
+const SENSITIVE_TEXT =
+	/\b(?:authorization|cookie|token|api[_-]?key|secret|password)\s*[:=]\s*[^\s,;]+|\bbearer\s+[^\s,;]+/gi;
 
 function readEnvLevel(): LogLevel | undefined {
 	const raw = process.env.PIPICLAW_LOG_LEVEL?.trim().toLowerCase();
-	if (raw && raw in LEVEL_ORDER) {
-		return raw as LogLevel;
-	}
-	return undefined;
+	return raw && raw in LEVEL_ORDER ? (raw as LogLevel) : undefined;
 }
 
 function readEnvFileEnabled(): boolean | undefined {
@@ -54,19 +54,14 @@ function readEnvFileEnabled(): boolean | undefined {
 
 const envLevel = readEnvLevel();
 const envFileEnabled = readEnvFileEnabled();
-
 let thresholdLevel: LogLevel = envLevel ?? "info";
 let fileSink: JsonlAppender | null =
-	// Honor an explicit env opt-in even before settings are loaded, so the
-	// earliest startup logs are captured. Defaults match DEFAULT_LOGGING.
 	envFileEnabled === true
 		? createJsonlAppender({ path: RUNTIME_LOG_PATH, maxSizeBytes: 5_000_000, maxRotations: 3 })
 		: null;
+let consoleEnabled = true;
 
-/**
- * Configure the file sink from loaded settings. Env vars take precedence and
- * have already applied at module load; this reconciles the two.
- */
+/** Configure both console filtering and the optional structured file sink. */
 export function configureLogging(config: LoggingConfig): void {
 	thresholdLevel = envLevel ?? config.level;
 	const enabled = envFileEnabled ?? config.file.enabled;
@@ -79,209 +74,210 @@ export function configureLogging(config: LoggingConfig): void {
 		: null;
 }
 
-function emit(
-	level: LogLevel,
-	event: string,
-	message: string,
-	extra?: { ctx?: LogContext; details?: string; fields?: Record<string, unknown> },
-): void {
-	if (!fileSink) return;
-	if (LEVEL_ORDER[level] < LEVEL_ORDER[thresholdLevel]) return;
-	const record: LogRecord = {
-		ts: new Date().toISOString(),
-		level,
-		event,
-		message,
-		...(extra?.ctx ? { channelId: extra.ctx.channelId, userName: extra.ctx.userName } : {}),
-		...(extra?.details ? { details: extra.details } : {}),
-		...(extra?.fields ? { fields: extra.fields } : {}),
-	};
-	void fileSink.append(record);
-}
-
-let consoleEnabled = true;
-
-/**
- * Toggle the human-readable console sink. The TUI disables it so structured
- * logging does not corrupt the pi-tui frame (which owns stdout); the file sink
- * is unaffected, so logs are still captured when file logging is enabled.
- */
+/** The TUI owns stdout, so its runtime logs are file-only. */
 export function setConsoleLoggingEnabled(enabled: boolean): void {
 	consoleEnabled = enabled;
 }
 
-function con(...args: unknown[]): void {
-	if (consoleEnabled) console.log(...args);
+function isEnabled(level: LogLevel): boolean {
+	return LEVEL_ORDER[level] >= LEVEL_ORDER[thresholdLevel];
 }
 
-function color(style: Parameters<typeof styleText>[0], text: string): string {
-	return styleText(style, text);
+function summarizeString(value: string): string {
+	const redacted = value.replace(SENSITIVE_TEXT, (match) => {
+		const separator = match.includes(":") ? ":" : match.includes("=") ? "=" : " ";
+		return `${match.split(separator, 1)[0]}${separator}[REDACTED]`;
+	});
+	const normalized = redacted.replace(/\s+/g, " ").trim();
+	return normalized.length > MAX_VALUE_LENGTH
+		? `${normalized.slice(0, MAX_VALUE_LENGTH)}… (length=${normalized.length})`
+		: normalized;
 }
 
-function timestamp(): string {
-	const now = new Date();
-	const hh = String(now.getHours()).padStart(2, "0");
-	const mm = String(now.getMinutes()).padStart(2, "0");
-	const ss = String(now.getSeconds()).padStart(2, "0");
-	return `[${hh}:${mm}:${ss}]`;
-}
-
-function formatContext(ctx: LogContext): string {
-	// DMs: [DM:username]
-	// Groups: [group:channelId:username]
-	if (ctx.channelId.startsWith("dm_")) {
-		return `[DM:${ctx.userName || ctx.channelId}]`;
+/**
+ * Keep logging safe and cheap: redact values by conventional sensitive keys,
+ * flatten multiline strings, and bound nested diagnostic values.
+ */
+function sanitizeValue(value: unknown, key?: string, depth = 0): unknown {
+	if (key && SENSITIVE_KEY.test(key)) return "[REDACTED]";
+	if (typeof value === "string") return summarizeString(value);
+	if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+	if (value === undefined) return undefined;
+	if (value instanceof Error) return summarizeString(value.message);
+	if (depth >= 2) return "[summary omitted]";
+	if (Array.isArray(value)) {
+		return value.slice(0, MAX_COLLECTION_ITEMS).map((item) => sanitizeValue(item, undefined, depth + 1));
 	}
-	const channel = ctx.channelName || ctx.channelId;
-	const user = ctx.userName || "unknown";
-	return `[${channel}:${user}]`;
-}
-
-function truncate(text: string, maxLen: number): string {
-	if (text.length <= maxLen) return text;
-	return `${text.substring(0, maxLen)}\n(truncated at ${maxLen} chars)`;
-}
-
-function formatToolArgs(args: Record<string, unknown>): string {
-	const lines: string[] = [];
-
-	for (const [key, value] of Object.entries(args)) {
-		if (key === "label") continue;
-
-		if (key === "path" && typeof value === "string") {
-			const offset = args.offset as number | undefined;
-			const limit = args.limit as number | undefined;
-			if (offset !== undefined && limit !== undefined) {
-				lines.push(`${value}:${offset}-${offset + limit}`);
-			} else {
-				lines.push(value);
-			}
-			continue;
+	if (typeof value === "object") {
+		const result: Record<string, unknown> = {};
+		for (const [childKey, childValue] of Object.entries(value).slice(0, MAX_COLLECTION_ITEMS)) {
+			const sanitized = sanitizeValue(childValue, childKey, depth + 1);
+			if (sanitized !== undefined) result[childKey] = sanitized;
 		}
-
-		if (key === "offset" || key === "limit") continue;
-
-		if (typeof value === "string") {
-			lines.push(value);
-		} else {
-			lines.push(JSON.stringify(value));
-		}
+		return result;
 	}
-
-	return lines.join("\n");
+	return summarizeString(String(value));
 }
 
-// Tool execution
-export function logToolStart(ctx: LogContext, toolName: string, label: string, args: Record<string, unknown>): void {
-	const formattedArgs = formatToolArgs(args);
-	con(color("yellow", `${timestamp()} ${formatContext(ctx)} ↳ ${toolName}: ${label}`));
-	if (formattedArgs) {
-		const indented = formattedArgs
-			.split("\n")
-			.map((line) => `           ${line}`)
-			.join("\n");
-		con(color("dim", indented));
+function sanitizeFields(fields: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+	if (!fields) return undefined;
+	const result: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(fields)) {
+		const sanitized = sanitizeValue(value, key);
+		if (sanitized !== undefined) result[key] = sanitized;
 	}
-	emit("debug", "tool_start", `${toolName}: ${label}`, {
-		ctx,
-		details: formattedArgs || undefined,
-		fields: { toolName, label },
+	return result;
+}
+
+function formatTimestamp(date = new Date()): string {
+	const offsetMinutes = -date.getTimezoneOffset();
+	const sign = offsetMinutes >= 0 ? "+" : "-";
+	const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(2, "0");
+	const offsetRemainder = String(Math.abs(offsetMinutes) % 60).padStart(2, "0");
+	const year = date.getFullYear();
+	const month = String(date.getMonth() + 1).padStart(2, "0");
+	const day = String(date.getDate()).padStart(2, "0");
+	const hours = String(date.getHours()).padStart(2, "0");
+	const minutes = String(date.getMinutes()).padStart(2, "0");
+	const seconds = String(date.getSeconds()).padStart(2, "0");
+	const milliseconds = String(date.getMilliseconds()).padStart(3, "0");
+	return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${sign}${offsetHours}:${offsetRemainder}`;
+}
+
+function renderField(value: unknown): string {
+	if (typeof value === "string") return JSON.stringify(value);
+	try {
+		return JSON.stringify(value);
+	} catch {
+		return JSON.stringify("[unserializable]");
+	}
+}
+
+function formatConsoleLine(level: LogLevel, event: string, message: string, options: LogOptions): string {
+	const fields: Record<string, unknown> = {
+		...(options.ctx
+			? { channel: options.ctx.channelId, ...(options.ctx.userName ? { user: options.ctx.userName } : {}) }
+			: {}),
+		...sanitizeFields(options.fields),
+	};
+	const suffix = Object.entries(fields)
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([key, value]) => `${key}=${renderField(value)}`)
+		.join(" ");
+	return `${formatTimestamp()} ${level.toUpperCase().padEnd(5)} ${event} ${summarizeString(message)}${suffix ? ` ${suffix}` : ""}`;
+}
+
+function colorFor(level: LogLevel): Parameters<typeof styleText>[0] {
+	if (level === "debug") return "dim";
+	if (level === "warn") return "yellow";
+	if (level === "error") return "red";
+	return "blue";
+}
+
+function writeConsole(level: LogLevel, event: string, message: string, options: LogOptions): void {
+	if (!consoleEnabled || !isEnabled(level)) return;
+	console.log(styleText(colorFor(level), formatConsoleLine(level, event, message, options)));
+}
+
+function emit(level: LogLevel, event: string, message: string, options: LogOptions): void {
+	if (!fileSink || !isEnabled(level)) return;
+	const fields = sanitizeFields(options.fields);
+	const details = options.details ? summarizeString(options.details) : undefined;
+	void fileSink.append({
+		ts: new Date().toISOString(),
+		level,
+		event,
+		message: summarizeString(message),
+		...(options.ctx ? { channelId: options.ctx.channelId, userName: options.ctx.userName } : {}),
+		...(details ? { details } : {}),
+		...(fields ? { fields } : {}),
 	});
 }
 
-export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: number, result: string): void {
-	const duration = (durationMs / 1000).toFixed(1);
-	con(color("yellow", `${timestamp()} ${formatContext(ctx)} ✓ ${toolName} (${duration}s)`));
+/** Emit one consistently formatted runtime event to stdout and the JSONL sink. */
+export function logEvent(level: LogLevel, event: string, message: string, options: LogOptions = {}): void {
+	writeConsole(level, event, message, options);
+	emit(level, event, message, options);
+}
 
-	const truncated = truncate(result, 1000);
-	if (truncated) {
-		const indented = truncated
-			.split("\n")
-			.map((line) => `           ${line}`)
-			.join("\n");
-		con(color("dim", indented));
-	}
-	emit("info", "tool_end", toolName, {
+function formatToolArgs(args: Record<string, unknown>): Record<string, unknown> {
+	const { label: _label, ...rest } = args;
+	return rest;
+}
+
+// Tool execution is diagnostic by default. Failures remain visible because they
+// are useful even when an agent can recover in the same turn.
+export function logToolStart(ctx: LogContext, toolName: string, label: string, args: Record<string, unknown>): void {
+	logEvent("debug", "agent.tool.started", label, { ctx, fields: { tool: toolName, args: formatToolArgs(args) } });
+}
+
+export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: number, result: string): void {
+	logEvent("debug", "agent.tool.finished", "Tool completed", {
 		ctx,
-		details: truncated || undefined,
-		fields: { toolName, durationMs, isError: false },
+		details: result,
+		fields: { tool: toolName, durationMs, resultLength: result.length },
 	});
 }
 
 export function logToolError(ctx: LogContext, toolName: string, durationMs: number, error: string): void {
-	const duration = (durationMs / 1000).toFixed(1);
-	con(color("yellow", `${timestamp()} ${formatContext(ctx)} ✗ ${toolName} (${duration}s)`));
-
-	const truncated = truncate(error, 1000);
-	const indented = truncated
-		.split("\n")
-		.map((line) => `           ${line}`)
-		.join("\n");
-	con(color("dim", indented));
-	emit("error", "tool_end", toolName, {
+	logEvent("warn", "agent.tool.failed", "Tool failed", {
 		ctx,
-		details: truncated,
-		fields: { toolName, durationMs, isError: true },
+		details: error,
+		fields: { tool: toolName, durationMs, error },
 	});
 }
 
-// Response streaming
 export function logResponseStart(ctx: LogContext): void {
-	con(color("yellow", `${timestamp()} ${formatContext(ctx)} → Streaming response...`));
-	emit("debug", "response_start", "Streaming response...", { ctx });
+	logEvent("debug", "agent.response.started", "Streaming response", { ctx });
 }
 
 export function logThinking(ctx: LogContext, thinking: string): void {
-	con(color("yellow", `${timestamp()} ${formatContext(ctx)} 💭 Thinking`));
-	const truncated = truncate(thinking, 1000);
-	const indented = truncated
-		.split("\n")
-		.map((line) => `           ${line}`)
-		.join("\n");
-	con(color("dim", indented));
-	emit("debug", "thinking", "Thinking", { ctx, details: truncated });
+	logEvent("debug", "agent.thinking", "Thinking", { ctx, details: thinking, fields: { length: thinking.length } });
 }
 
 export function logResponse(ctx: LogContext, text: string): void {
-	con(color("yellow", `${timestamp()} ${formatContext(ctx)} 💬 Response`));
-	const truncated = truncate(text, 1000);
-	const indented = truncated
-		.split("\n")
-		.map((line) => `           ${line}`)
-		.join("\n");
-	con(color("dim", indented));
-	emit("info", "response", "Response", { ctx, details: truncated });
-}
-
-// System
-export function logInfo(message: string): void {
-	con(color("blue", `${timestamp()} [system] ${message}`));
-	emit("info", "system", message);
-}
-
-export function logWarning(message: string, details?: string): void {
-	con(color("yellow", `${timestamp()} [system] ⚠ ${message}`));
-	if (details) {
-		const indented = details
-			.split("\n")
-			.map((line) => `           ${line}`)
-			.join("\n");
-		con(color("dim", indented));
-	}
-	emit("warn", "system", message, { details });
-}
-
-// Model fallback (spec 017)
-export function logModelFallback(ctx: LogContext, from: string, to: string, error: string): void {
-	con(color("yellow", `${timestamp()} ${formatContext(ctx)} ⤳ Fallback ${from} → ${to}`));
-	emit("warn", "model_fallback", `Fallback ${from} → ${to}`, {
+	logEvent("debug", "agent.response.finished", "Response ready", {
 		ctx,
-		details: error,
-		fields: { from, to, error },
+		details: text,
+		fields: { length: text.length },
 	});
 }
 
-// Usage summary
+// Compatibility helpers keep lower-risk call sites centralized while they use
+// the same output contract as structured events.
+function legacyContext(message: string): { message: string; ctx?: LogContext } {
+	const match = /^\[([A-Za-z0-9._-]+)\]\s*/.exec(message);
+	return match ? { message: message.slice(match[0].length), ctx: { channelId: match[1] } } : { message };
+}
+
+export function logInfo(message: string, details?: string): void {
+	const legacy = legacyContext(message);
+	logEvent("info", "system.info", legacy.message, {
+		ctx: legacy.ctx,
+		...(details ? { details, fields: { reason: details } } : {}),
+	});
+}
+
+export function logWarning(message: string, details?: string): void {
+	const legacy = legacyContext(message);
+	logEvent("warn", "system.warning", legacy.message, {
+		ctx: legacy.ctx,
+		...(details ? { details, fields: { reason: details } } : {}),
+	});
+}
+
+export function logError(message: string, details?: string): void {
+	const legacy = legacyContext(message);
+	logEvent("error", "system.error", legacy.message, {
+		ctx: legacy.ctx,
+		...(details ? { details, fields: { reason: details } } : {}),
+	});
+}
+
+export function logModelFallback(ctx: LogContext, from: string, to: string, error: string): void {
+	logEvent("warn", "agent.model.fallback", "Using fallback model", { ctx, fields: { from, to, error } });
+}
+
 export function logUsageSummary(
 	ctx: LogContext,
 	usage: {
@@ -301,61 +297,40 @@ export function logUsageSummary(
 		return `${(count / 1000000).toFixed(1)}M`;
 	};
 
-	const lines: string[] = [];
-	lines.push("**Usage Summary**");
-	lines.push(`Tokens: ${usage.input.toLocaleString()} in, ${usage.output.toLocaleString()} out`);
-	if (usage.cacheRead > 0 || usage.cacheWrite > 0) {
-		lines.push(`Cache: ${usage.cacheRead.toLocaleString()} read, ${usage.cacheWrite.toLocaleString()} write`);
-	}
-	if (contextTokens && contextWindow) {
-		const contextPercent = ((contextTokens / contextWindow) * 100).toFixed(1);
-		lines.push(`Context: ${formatTokens(contextTokens)} / ${formatTokens(contextWindow)} (${contextPercent}%)`);
-	}
-	lines.push(
+	const lines = [
+		"**Usage Summary**",
+		`Tokens: ${usage.input.toLocaleString()} in, ${usage.output.toLocaleString()} out`,
+		...(usage.cacheRead > 0 || usage.cacheWrite > 0
+			? [`Cache: ${usage.cacheRead.toLocaleString()} read, ${usage.cacheWrite.toLocaleString()} write`]
+			: []),
+		...(contextTokens && contextWindow
+			? [
+					`Context: ${formatTokens(contextTokens)} / ${formatTokens(contextWindow)} (${((contextTokens / contextWindow) * 100).toFixed(1)}%)`,
+				]
+			: []),
 		`Cost: $${usage.cost.input.toFixed(4)} in, $${usage.cost.output.toFixed(4)} out` +
 			(usage.cacheRead > 0 || usage.cacheWrite > 0
 				? `, $${usage.cost.cacheRead.toFixed(4)} cache read, $${usage.cost.cacheWrite.toFixed(4)} cache write`
 				: ""),
-	);
-	lines.push(`**Total: $${usage.cost.total.toFixed(4)}** (incl. sub-agents)`);
-
-	const summary = lines.join("\n");
-
-	// Log to console
-	con(color("yellow", `${timestamp()} ${formatContext(ctx)} 💰 Usage`));
-	con(
-		color(
-			"dim",
-			`           ${usage.input.toLocaleString()} in + ${usage.output.toLocaleString()} out` +
-				(usage.cacheRead > 0 || usage.cacheWrite > 0
-					? ` (${usage.cacheRead.toLocaleString()} cache read, ${usage.cacheWrite.toLocaleString()} cache write)`
-					: "") +
-				` = $${usage.cost.total.toFixed(4)}`,
-		),
-	);
-	emit("info", "usage", `Total $${usage.cost.total.toFixed(4)} (incl. sub-agents)`, {
+		`**Total: $${usage.cost.total.toFixed(4)}** (incl. sub-agents)`,
+	];
+	logEvent("info", "agent.usage", "Usage recorded", {
 		ctx,
 		fields: {
-			usage: {
-				input: usage.input,
-				output: usage.output,
-				cacheRead: usage.cacheRead,
-				cacheWrite: usage.cacheWrite,
-				cost: usage.cost,
-			},
+			input: usage.input,
+			output: usage.output,
+			cacheRead: usage.cacheRead,
+			cacheWrite: usage.cacheWrite,
+			cost: usage.cost,
 		},
 	});
-
-	return summary;
+	return lines.join("\n");
 }
 
-// Startup
 export function logStartup(workingDir: string): void {
-	con("Starting pipiclaw...");
-	con(`  Working directory: ${workingDir}`);
+	logEvent("info", "runtime.started", "Starting pipiclaw", { fields: { workingDir } });
 }
 
 export function logConnected(): void {
-	con("⚡️ pipiclaw connected and listening!");
-	con("");
+	logEvent("info", "runtime.dingtalk.connected", "Connected and listening");
 }

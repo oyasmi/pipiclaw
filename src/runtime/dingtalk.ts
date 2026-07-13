@@ -498,7 +498,9 @@ export class DingTalkBot {
 			log.logWarning("DingTalk: cardTemplateId not configured — AI Card streaming will not work");
 		}
 
-		log.logInfo(`DingTalk: initializing stream (clientId=${this.config.clientId.substring(0, 8)}…)`);
+		log.logEvent("info", "runtime.dingtalk.connecting", "Initializing stream client", {
+			fields: { clientIdPrefix: this.config.clientId.substring(0, 8) },
+		});
 
 		this.clearAllTimers();
 
@@ -564,7 +566,9 @@ export class DingTalkBot {
 
 		if (!immediate && this.reconnectAttempts > 0) {
 			const delay = Math.min(1000 * 2 ** this.reconnectAttempts + Math.random() * 1000, 30000);
-			log.logInfo(`DingTalk: waiting ${Math.round(delay / 1000)}s before reconnecting...`);
+			log.logEvent("info", "runtime.dingtalk.reconnect_scheduled", "Reconnect scheduled", {
+				fields: { delayMs: delay },
+			});
 			await this.waitForDelay(delay);
 			if (this.isStopped || !this.client) {
 				this.isReconnecting = false;
@@ -588,7 +592,7 @@ export class DingTalkBot {
 
 			this.lastSocketAvailableTime = Date.now();
 			this.reconnectAttempts = 0; // Success, reset backoff
-			log.logInfo("DingTalk: connected to stream.");
+			log.logEvent("info", "runtime.dingtalk.stream_connected", "Connected to stream");
 			if (!this.hasReportedReady) {
 				log.logConnected();
 				this.hasReportedReady = true;
@@ -691,10 +695,16 @@ export class DingTalkBot {
 		}
 		const queue = this.getQueue(event.channelId);
 		if (queue.size() >= 5) {
-			log.logWarning(`Event queue full for ${event.channelId}, discarding: ${event.text.substring(0, 50)}`);
+			log.logEvent("warn", "runtime.channel_queue.full", "Discarding incoming event", {
+				ctx: { channelId: event.channelId, userName: event.userName },
+				fields: { messageLength: event.text.length },
+			});
 			return false;
 		}
-		log.logInfo(`Enqueueing event for ${event.channelId}: ${event.text.substring(0, 50)}`);
+		log.logEvent("debug", "runtime.channel_queue.enqueued", "Incoming event queued", {
+			ctx: { channelId: event.channelId, userName: event.userName },
+			fields: { messageLength: event.text.length },
+		});
 		queue.enqueue(async () => {
 			this.activeMessageProcessing = true;
 			try {
@@ -1152,7 +1162,10 @@ export class DingTalkBot {
 		// Determine channel ID
 		const channelId = conversationType === "2" ? `group_${conversationId}` : `dm_${senderId}`;
 
-		log.logInfo(`DingTalk ← ${senderName} (${senderId}) [${channelId}]: ${content.substring(0, 80)}`);
+		log.logEvent("info", "runtime.dingtalk.message_received", "Accepted incoming message", {
+			ctx: { channelId, userName: senderName },
+			fields: { messageType: conversationType === "2" ? "group" : "dm", messageLength: content.length },
+		});
 
 		// Cache conversation metadata for card creation
 		this.setConversationMeta(channelId, {

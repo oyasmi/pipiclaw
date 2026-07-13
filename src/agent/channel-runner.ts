@@ -403,7 +403,10 @@ export class ChannelRunner implements AgentRunner {
 					} catch (err) {
 						this.runState.stopReason = "error";
 						this.runState.errorMessage = errorMessage(err);
-						log.logWarning(`[${this.channelId}] Runner failed`, this.runState.errorMessage);
+						log.logEvent("error", "agent.turn.failed", "Runner failed", {
+							ctx: this.runState.logCtx ?? { channelId: this.channelId },
+							fields: { error: this.runState.errorMessage },
+						});
 					}
 				},
 				getRunError: () => ({
@@ -449,7 +452,10 @@ export class ChannelRunner implements AgentRunner {
 		} catch (err) {
 			this.runState.stopReason = "error";
 			this.runState.errorMessage = errorMessage(err);
-			log.logWarning(`[${this.channelId}] Runner failed`, this.runState.errorMessage);
+			log.logEvent("error", "agent.turn.failed", "Runner failed", {
+				ctx: this.runState.logCtx ?? { channelId: this.channelId },
+				fields: { error: this.runState.errorMessage },
+			});
 		} finally {
 			this.turn.phase = "finishing";
 			// Debug dump (PIPICLAW_DEBUG=1). Written after the run so `systemPrompt` is the

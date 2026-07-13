@@ -206,7 +206,10 @@ export class MemoryLifecycle {
 
 	private logConsolidationResult(reason: ConsolidationReason, result: InlineConsolidationResult): void {
 		if (result.skipped) {
-			log.logInfo(`[${this.options.channelId}] Memory consolidation skipped (${reason}): no meaningful snapshot`);
+			log.logEvent("debug", "memory.consolidation.skipped", "No meaningful snapshot", {
+				ctx: { channelId: this.options.channelId },
+				fields: { reason },
+			});
 			return;
 		}
 
