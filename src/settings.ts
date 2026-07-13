@@ -233,7 +233,7 @@ const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
 const DEFAULT_MEMORY_GROWTH: PipiclawMemoryGrowthSettings = {
 	postTurnReviewEnabled: true,
 	autoWriteChannelMemory: true,
-	autoWriteWorkspaceSkills: true,
+	autoWriteWorkspaceSkills: false,
 	minSkillAutoWriteConfidence: 0.9,
 	minMemoryAutoWriteConfidence: 0.85,
 	idleWritesHistory: false,

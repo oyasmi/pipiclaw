@@ -32,7 +32,7 @@ import {
 	runSessionRefreshJob,
 	runStructuralMaintenanceJob,
 } from "../src/memory/maintenance-jobs.js";
-import { updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
+import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
 import { runPostTurnReview } from "../src/memory/post-turn-review.js";
 import { updateChannelSessionMemory } from "../src/memory/session.js";
 import { runSidecarTask } from "../src/memory/sidecar-worker.js";
@@ -161,7 +161,14 @@ describe("memory maintenance jobs", () => {
 				{ role: "user", content: "Please inspect this file." },
 				{ role: "assistant", content: [{ type: "text", text: "Inspected it." }] },
 			] as never[],
-			sessionEntries,
+			sessionEntries: [
+				{ id: "entry-1", type: "message", message: { role: "user", content: "Please inspect this file." } },
+				{
+					id: "entry-2",
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: "Inspected it." }] },
+				},
+			] as never[],
 			workspaceDir,
 			loadedSkills: [],
 		});
@@ -186,5 +193,77 @@ describe("memory maintenance jobs", () => {
 
 		expect(result).toMatchObject({ skipped: true, skipReason: "nothing-to-maintain" });
 		expect(runSidecarTask).not.toHaveBeenCalled();
+	});
+
+	it("passes only entries after the durable cursor to consolidation", async () => {
+		const { appHomeDir, channelDir } = await harness();
+		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
+			...state,
+			dirty: true,
+			eligibleAfter: "2026-01-01T00:00:00.000Z",
+			lastConsolidatedEntryId: "entry-2",
+		}));
+		vi.mocked(runInlineConsolidation).mockResolvedValue({
+			skipped: false,
+			appendedMemoryEntries: 0,
+			appendedHistoryBlock: false,
+		});
+		const allEntries = [
+			...sessionEntries,
+			{ id: "entry-3", type: "message", message: { role: "user", content: "new request" } },
+			{
+				id: "entry-4",
+				type: "message",
+				message: { role: "assistant", content: [{ type: "text", text: "new reply" }] },
+			},
+		] as never[];
+		await runDurableConsolidationJob({
+			appHomeDir,
+			channelId: "dm_1",
+			channelDir,
+			channelActive: false,
+			settings: settings(),
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+			messages,
+			sessionEntries: allEntries,
+		});
+		expect(runInlineConsolidation).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sourceWindow: expect.objectContaining({
+					entries: expect.arrayContaining([expect.objectContaining({ id: "entry-3" })]),
+					fromEntryId: "entry-2",
+					throughEntryId: "entry-4",
+				}),
+			}),
+		);
+	});
+
+	it("keeps the growth cursor when review fails", async () => {
+		const { appHomeDir, channelDir, workspaceDir } = await harness();
+		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
+			...state,
+			dirty: true,
+			turnsSinceGrowthReview: 12,
+			eligibleAfter: "2026-01-01T00:00:00.000Z",
+		}));
+		vi.mocked(runPostTurnReview).mockResolvedValue({ status: "failed", error: "model timeout" });
+		const result = await runGrowthReviewJob({
+			appHomeDir,
+			channelId: "dm_1",
+			channelDir,
+			channelActive: false,
+			settings: settings(),
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+			messages,
+			sessionEntries,
+			workspaceDir,
+			loadedSkills: [],
+		});
+		expect(result.error).toContain("model timeout");
+		const state = await readMemoryMaintenanceState(appHomeDir, "dm_1");
+		expect(state.lastReviewedEntryId).toBeUndefined();
+		expect(state.failureBackoffUntil).toBeTruthy();
 	});
 });

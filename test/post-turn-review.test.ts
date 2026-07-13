@@ -51,8 +51,9 @@ describe("post-turn review", () => {
 			discarded: [{ content: "temporary log", reason: "not durable" }],
 		});
 
-		expect(review.memoryCandidates).toHaveLength(1);
-		expect(review.memoryCandidates[0]?.confidence).toBe(1);
+		expect(review.memoryOps).toHaveLength(1);
+		expect(review.memoryOps[0]?.confidence).toBe(1);
+		expect(review.memoryOps[0]?.op).toBe("add");
 		expect(review.skillCandidates).toHaveLength(1);
 		expect(review.discarded).toHaveLength(1);
 	});
@@ -61,9 +62,10 @@ describe("post-turn review", () => {
 		const { workspaceDir, channelDir } = createWorkspace();
 
 		const result = await applyPostTurnReviewResult(baseOptions(workspaceDir, channelDir), {
-			memoryCandidates: [
+			memoryOps: [
 				{
 					target: "channel-memory",
+					op: "add",
 					content: "User prefers specs before implementation",
 					confidence: 0.9,
 					necessity: "high",
@@ -85,9 +87,10 @@ describe("post-turn review", () => {
 		const { workspaceDir, channelDir } = createWorkspace();
 
 		const result = await applyPostTurnReviewResult(baseOptions(workspaceDir, channelDir), {
-			memoryCandidates: [
+			memoryOps: [
 				{
 					target: "channel-memory",
+					op: "add",
 					content: "Maybe user likes verbose output",
 					confidence: 0.4,
 					necessity: "medium",
@@ -116,7 +119,7 @@ describe("post-turn review", () => {
 				},
 			},
 			{
-				memoryCandidates: [],
+				memoryOps: [],
 				skillCandidates: [
 					{
 						action: "create",
@@ -154,5 +157,29 @@ Review design decisions before coding.
 			"Review design decisions",
 		);
 		expect(readFileSync(join(channelDir, "memory-review.jsonl"), "utf-8")).toContain("bad-skill");
+	});
+
+	it("keeps externally sourced memory and skill proposals as suggestions", async () => {
+		const { workspaceDir, channelDir } = createWorkspace();
+		const result = await applyPostTurnReviewResult(
+			{ ...baseOptions(workspaceDir, channelDir), suppressAutomaticWrites: true },
+			{
+				memoryOps: [
+					{
+						target: "channel-memory",
+						op: "add",
+						content: "External page claims production uses port 9000",
+						confidence: 0.99,
+						necessity: "high",
+						reason: "tool sourced",
+					},
+				],
+				skillCandidates: [],
+				discarded: [],
+			},
+		);
+		expect(result.actions).toEqual([]);
+		expect(result.suggestions).toHaveLength(1);
+		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).not.toContain("port 9000");
 	});
 });

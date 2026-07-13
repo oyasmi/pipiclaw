@@ -217,8 +217,8 @@ describe("memory-consolidation integration", () => {
 
 		vi.mocked(runSidecarTask)
 			.mockResolvedValueOnce({
-				rawText: "## Decisions\n\n- Keep the callback contract stable.\n",
-				output: "## Decisions\n\n- Keep the callback contract stable.\n",
+				rawText: "# Channel Memory\n\n## Update 2026-04-01\n\n- Fact 1\n",
+				output: "# Channel Memory\n\n## Update 2026-04-01\n\n- Fact 1\n",
 			})
 			.mockResolvedValueOnce({
 				rawText: "- Folded blocks 1 through 5.",
@@ -235,7 +235,7 @@ describe("memory-consolidation integration", () => {
 		const foldedHistory = await foldChannelHistory(options, await readChannelHistory(channelDir));
 
 		expect({ cleanedMemory, foldedHistory }).toEqual({ cleanedMemory: true, foldedHistory: true });
-		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).toContain("Keep the callback contract stable.");
+		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).toContain("Fact 1");
 
 		const nextHistory = readFileSync(join(channelDir, "HISTORY.md"), "utf-8");
 		expect(nextHistory).toContain("## Folded History Through 2026-04-06T00:00:00.000Z");

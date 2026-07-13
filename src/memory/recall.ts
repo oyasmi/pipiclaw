@@ -72,6 +72,8 @@ const MEMORY_RECALL_RERANK_TIMEOUT_MS = 8_000;
 const RERANK_CONTENT_CLIP = 800;
 const HIGH_CONFIDENCE_SCORE = 36;
 const CLOSE_SCORE_DELTA = 8;
+const MIN_LOCAL_SCORE = 12;
+const MIN_QUERY_COVERAGE = 0.25;
 const MAX_HAN_WORD_LENGTH = Array.from(COMMON_CHINESE_WORDS).reduce((max, word) => Math.max(max, word.length), 2);
 const LATIN_STOP_WORDS = new Set([
 	"a",
@@ -404,6 +406,7 @@ function scoreCandidate(
 	const contentStats = computeTokenMatchStats(queryTokens, searchText);
 	const pathStats = computeTokenMatchStats(queryTokens, candidate.path);
 	const matchedTokens = collectMatchingQueryTokens(queryTokens, [candidate.title, searchText, candidate.path]);
+	const semanticFieldMatches = collectMatchingQueryTokens(queryTokens, [candidate.title, searchText]);
 	const exactBoost = computeExactMatchBoost(query, candidate);
 	const intentBoost = computeSectionIntentBoost(intents, candidate);
 	const overallCoverage = queryTokens.length > 0 ? matchedTokens.size / queryTokens.length : 0;
@@ -415,7 +418,7 @@ function scoreCandidate(
 		exactBoost;
 	const structuralScore = candidate.priority + intentBoost + computeRecencyBoost(candidate.timestamp);
 
-	if (matchedTokens.size === 0 && exactBoost === 0) {
+	if (semanticFieldMatches.size === 0 || (overallCoverage < MIN_QUERY_COVERAGE && exactBoost === 0)) {
 		return null;
 	}
 
@@ -524,7 +527,7 @@ async function rerankCandidates(request: RecallRequest, candidates: ScoredCandid
 
 		const selectedIds = new Set(result.output);
 		if (selectedIds.size === 0) {
-			return candidates;
+			return [];
 		}
 
 		const selected = candidates.filter(({ candidate }) => selectedIds.has(candidate.id));
@@ -644,6 +647,7 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 	const scored = filteredCandidates
 		.map((candidate) => scoreCandidate(query, queryTokens, queryIntents, candidate))
 		.filter((candidate): candidate is ScoredCandidate => candidate !== null)
+		.filter((candidate) => candidate.score >= MIN_LOCAL_SCORE)
 		.sort(compareScoredCandidates);
 
 	const shortlist = seedIntentCandidates(request, filteredCandidates, scored, queryIntents, queryTokens)

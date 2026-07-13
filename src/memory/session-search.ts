@@ -169,6 +169,7 @@ function toResult(
 interface CorpusCacheEntry {
 	channelDir: string;
 	maxFiles: number;
+	maxCharsPerChunk: number;
 	documents: SessionSearchDocument[];
 	timestamp: number;
 }
@@ -185,6 +186,7 @@ async function getCachedCorpus(
 		corpusCache &&
 		corpusCache.channelDir === channelDir &&
 		corpusCache.maxFiles === maxFiles &&
+		corpusCache.maxCharsPerChunk === maxCharsPerChunk &&
 		Date.now() - corpusCache.timestamp < CORPUS_CACHE_TTL_MS
 	) {
 		return corpusCache.documents;
@@ -195,7 +197,7 @@ async function getCachedCorpus(
 		maxFiles,
 		maxCharsPerDocument: maxCharsPerChunk,
 	});
-	corpusCache = { channelDir, maxFiles, documents, timestamp: Date.now() };
+	corpusCache = { channelDir, maxFiles, maxCharsPerChunk, documents, timestamp: Date.now() };
 	return documents;
 }
 
@@ -204,19 +206,20 @@ export async function searchChannelSessions(request: SearchChannelSessionsReques
 	const maxChunks = clampInteger(request.maxChunks, 1, 500);
 	const query = request.query.trim();
 	const roleFilter = normalizeRoleFilter(request.roleFilter);
-	const documents = (await getCachedCorpus(request.channelDir, request.maxFiles, request.maxCharsPerChunk)).filter(
-		(document) => roleFilter.size === 0 || roleFilter.has(document.role),
-	);
+	const documents = (await getCachedCorpus(request.channelDir, request.maxFiles, request.maxCharsPerChunk))
+		.filter((document) => roleFilter.size === 0 || roleFilter.has(document.role))
+		.sort(sortRecentDocuments)
+		.slice(0, maxChunks);
 
 	const selected = query
 		? documents
 				.map((document) => scoreDocument(document, query, tokenizeRecallText(query)))
 				.filter((entry) => entry.score > 0)
 				.sort((a, b) => b.score - a.score)
-				.slice(0, Math.min(limit, maxChunks))
+				.slice(0, limit)
 		: documents
 				.sort(sortRecentDocuments)
-				.slice(0, Math.min(limit, maxChunks))
+				.slice(0, limit)
 				.map((document) => ({ document, score: computeRecencyBoost(document.timestamp), matches: [] }));
 
 	const results: SessionSearchResult[] = [];

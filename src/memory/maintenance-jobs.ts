@@ -28,6 +28,7 @@ import { runPostTurnReview } from "./post-turn-review.js";
 import { scanPromotionSignals } from "./promotion-signals.js";
 import { appendMemoryReviewLog, type MemoryReviewReason } from "./review-log.js";
 import { updateChannelSessionMemory } from "./session.js";
+import { buildIncrementalMemorySourceWindow } from "./source-window.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
 
 export interface MaintenanceJobSettings {
@@ -73,14 +74,6 @@ export interface MaintenanceJobResult {
 
 function latestEntryId(entries: SessionEntry[]): string | undefined {
 	return entries.at(-1)?.id;
-}
-
-function entriesSince(entries: SessionEntry[], lastEntryId: string | undefined): SessionEntry[] {
-	if (!lastEntryId) {
-		return entries;
-	}
-	const index = entries.findIndex((entry) => entry.id === lastEntryId);
-	return index >= 0 ? entries.slice(index + 1) : entries;
 }
 
 function messageToText(message: Message): string {
@@ -252,7 +245,13 @@ export async function runDurableConsolidationJob(input: DurableConsolidationJobI
 	return runQueued(input, async () => {
 		const now = input.now ?? new Date();
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
-		const newEntries = entriesSince(input.sessionEntries, state.lastConsolidatedEntryId);
+		const sourceWindow = buildIncrementalMemorySourceWindow({
+			entries: input.sessionEntries,
+			lastEntryId: state.lastConsolidatedEntryId,
+			sourceKind: "idle",
+			fallbackMessages: input.messages,
+		});
+		const newEntries = sourceWindow.entries;
 		const latestId = latestEntryId(input.sessionEntries);
 		const decision = shouldRunDurableConsolidation({
 			now,
@@ -260,7 +259,7 @@ export async function runDurableConsolidationJob(input: DurableConsolidationJobI
 			maintenance: input.settings.memoryMaintenance,
 			channelActive: input.channelActive,
 			hasNewEntry: newEntries.length > 0,
-			hasMeaningfulExchange: hasMeaningfulMessages(input.messages),
+			hasMeaningfulExchange: hasMeaningfulMessages(sourceWindow.messages),
 			batchSize: newEntries.length,
 			coveredByGrowthReview: Boolean(latestId && state.lastReviewedEntryId === latestId),
 		});
@@ -278,12 +277,13 @@ export async function runDurableConsolidationJob(input: DurableConsolidationJobI
 		try {
 			const result = await runInlineConsolidation({
 				...makeRunOptions(input),
+				sourceWindow,
 				mode: "idle",
 			});
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
 				lastDurableConsolidationAt: now.toISOString(),
-				lastConsolidatedEntryId: latestId ?? current.lastConsolidatedEntryId,
+				lastConsolidatedEntryId: sourceWindow.throughEntryId ?? current.lastConsolidatedEntryId,
 				failureBackoffUntil: null,
 			}));
 			await appendJobReviewLog(
@@ -318,9 +318,14 @@ export async function runGrowthReviewJob(input: GrowthReviewJobInput): Promise<M
 	return runQueued(input, async () => {
 		const now = input.now ?? new Date();
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
-		const newEntries = entriesSince(input.sessionEntries, state.lastReviewedEntryId);
-		const latestId = latestEntryId(input.sessionEntries);
-		const signalScan = scanPromotionSignals(renderMessagesForSignalScan(input.messages));
+		const sourceWindow = buildIncrementalMemorySourceWindow({
+			entries: input.sessionEntries,
+			lastEntryId: state.lastReviewedEntryId,
+			sourceKind: "growth-review",
+			fallbackMessages: input.messages,
+		});
+		const newEntries = sourceWindow.entries;
+		const signalScan = scanPromotionSignals(renderMessagesForSignalScan(sourceWindow.messages));
 		const decision = shouldRunGrowthReview({
 			now,
 			state,
@@ -328,7 +333,7 @@ export async function runGrowthReviewJob(input: GrowthReviewJobInput): Promise<M
 			maintenance: input.settings.memoryMaintenance,
 			channelActive: input.channelActive,
 			hasNewEntry: newEntries.length > 0,
-			hasMeaningfulMaterial: hasMeaningfulMessages(input.messages),
+			hasMeaningfulMaterial: hasMeaningfulMessages(sourceWindow.messages),
 			hasPromotionSignal: signalScan.hasSignal,
 		});
 		if (!decision.allowed) {
@@ -348,7 +353,9 @@ export async function runGrowthReviewJob(input: GrowthReviewJobInput): Promise<M
 				channelId: input.channelId,
 				channelDir: input.channelDir,
 				workspaceDir: input.workspaceDir,
-				messages: input.messages,
+				messages: sourceWindow.messages,
+				sourceEntryIds: sourceWindow.entries.map((entry) => entry.id),
+				suppressAutomaticWrites: sourceWindow.hasExternalToolContent,
 				model: input.model,
 				resolveApiKey: input.resolveApiKey,
 				timeoutMs: input.settings.sessionMemory.timeoutMs,
@@ -362,12 +369,16 @@ export async function runGrowthReviewJob(input: GrowthReviewJobInput): Promise<M
 				},
 				refreshWorkspaceResources: input.refreshWorkspaceResources,
 			});
+			if (result.status === "failed") {
+				throw new Error(`Growth review failed: ${result.error}. Retry this memory window after backoff.`);
+			}
+			const appliedResult = result.result;
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
 				lastGrowthReviewAt: now.toISOString(),
 				turnsSinceGrowthReview: 0,
 				toolCallsSinceGrowthReview: 0,
-				lastReviewedEntryId: latestId ?? current.lastReviewedEntryId,
+				lastReviewedEntryId: sourceWindow.throughEntryId ?? current.lastReviewedEntryId,
 				failureBackoffUntil: null,
 			}));
 			if (notices.length > 0) {
@@ -379,8 +390,8 @@ export async function runGrowthReviewJob(input: GrowthReviewJobInput): Promise<M
 				input.channelId,
 				"growth-review-job",
 				{
-					actions: result.actions,
-					skipped: result.skipped,
+					actions: appliedResult.actions,
+					skipped: appliedResult.skipped,
 				},
 				now,
 			);

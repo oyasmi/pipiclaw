@@ -4,8 +4,10 @@ import { Type } from "typebox";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory/channel-maintenance-queue.js";
 import { applyChannelMemoryOps, getChannelMemoryPath, parseChannelMemoryEntries } from "../memory/files.js";
+import { containsSecret } from "../memory/policy.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
+import { hashMemoryContent } from "../memory/tombstones.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
 
 const memoryManageSchema = Type.Object({
@@ -75,6 +77,12 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 				op: "save",
 				saved: false,
 			});
+		}
+		if (containsSecret(trimmed)) {
+			return textResult(
+				"This content looks like a credential or secret, so it was not saved. Store the secret in an approved secret manager and remember only its location.",
+				{ kind: "memory_manage", op: "save", saved: false, blockedReason: "secret" },
+			);
 		}
 		// Serialize through the shared channel memory queue so this never races with background
 		// consolidation/maintenance on the same channel's files.
@@ -165,18 +173,21 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		}
 		const removed = matches[0];
 		await queue.run(options.channelId, () =>
-			applyChannelMemoryOps(options.channelDir, [{ op: "invalidate", targetId: removed.id, reason: "user forget" }]),
+			applyChannelMemoryOps(options.channelDir, [{ op: "forget", targetId: removed.id, reason: "user forget" }]),
 		);
 		options.memoryCandidateStore.invalidate(memoryPath);
-		// Audit trail: record what was forgotten so the maintenance log can answer "who dropped what,
-		// when, and why" — the `.memory-backups/` copy is a recovery aid, not an audit record.
+		// Audit by id/hash only. Copying the forgotten text into the review log would
+		// create a second active disclosure surface for the very content being removed.
 		await appendMemoryReviewLog(options.channelDir, {
 			timestamp: new Date().toISOString(),
 			channelId: options.channelId,
 			reason: "user-forget",
-			actions: [{ op: "forget", target: removed.content, matchedBy: trimmed }],
+			actions: [{ op: "forget", entryId: removed.id, contentHash: hashMemoryContent(removed.content) }],
 		}).catch(() => {});
-		return textResult(`Forgot: ${removed.content}`, { kind: "memory_manage", op: "forget", forgotten: true });
+		return textResult(
+			"Removed the entry from active channel memory and recorded a tombstone so automatic maintenance will not restore it. Original session history and retention backups are unchanged.",
+			{ kind: "memory_manage", op: "forget", forgotten: true, entryId: removed.id },
+		);
 	}
 
 	return {

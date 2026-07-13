@@ -23,6 +23,7 @@ import {
 	rewriteChannelMemory,
 } from "./files.js";
 import { runRetriedSidecarTask, runSidecarTask } from "./sidecar-worker.js";
+import type { MemorySourceWindow } from "./source-window.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
 
 const INLINE_TRANSCRIPT_MAX_CHARS = 28_000;
@@ -101,6 +102,9 @@ Goals:
 - Prefer concise bullets over prose.
 - Remove content that is clearly transient session-state and belongs in SESSION.md instead.
 - Do not preserve minute-level current task progress unless it is a durable decision, constraint, user preference, or medium-horizon open loop.
+- Preserve the top-level "# Channel Memory" heading.
+- Every retained bullet must preserve its original <!--id:m-*--> comment exactly.
+- Do not invent ids, duplicate ids, prose instructions, or content outside H2 sections.
 
 Suggested sections:
 - ## Identity / Participants
@@ -129,6 +133,7 @@ export interface ConsolidationRunOptions {
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	messages: AgentMessage[];
 	sessionEntries?: SessionEntry[];
+	sourceWindow?: MemorySourceWindow;
 	mode?: ConsolidationMode;
 }
 
@@ -191,18 +196,15 @@ function parseConsolidationResponse(text: string): ConsolidationResponse {
 	};
 }
 
-function getLatestCompactionBoundary(entries: SessionEntry[]): number {
-	const latestCompaction = getLatestCompactionEntry(entries);
-	if (!latestCompaction) {
-		return 0;
-	}
-
-	const boundaryIndex = entries.findIndex((entry) => entry.id === latestCompaction.firstKeptEntryId);
-	return boundaryIndex >= 0 ? boundaryIndex : 0;
-}
-
 function isMessage(entry: SessionEntry): entry is SessionMessageEntry {
 	return entry.type === "message";
+}
+
+function entriesAfterLatestCompactionBoundary(entries: SessionEntry[]): SessionEntry[] {
+	const latestCompaction = getLatestCompactionEntry(entries);
+	if (!latestCompaction) return entries;
+	const boundaryIndex = entries.findIndex((entry) => entry.id === latestCompaction.firstKeptEntryId);
+	return boundaryIndex >= 0 ? entries.slice(boundaryIndex) : entries;
 }
 
 function extractMessagesFromSessionEntries(entries: SessionEntry[]): AgentMessage[] {
@@ -335,11 +337,11 @@ ${transcript || "(empty)"}`;
 
 export async function runInlineConsolidation(options: ConsolidationRunOptions): Promise<InlineConsolidationResult> {
 	const mode = options.mode ?? "boundary";
-	const sourceEntries = options.sessionEntries ?? [];
-	const relevantEntries =
-		sourceEntries.length > 0 ? sourceEntries.slice(getLatestCompactionBoundary(sourceEntries)) : sourceEntries;
+	const sourceEntries =
+		options.sourceWindow?.entries ?? entriesAfterLatestCompactionBoundary(options.sessionEntries ?? []);
 	const relevantMessages = sanitizeMessagesForMemory(
-		relevantEntries.length > 0 ? extractMessagesFromSessionEntries(relevantEntries) : options.messages,
+		options.sourceWindow?.messages ??
+			(sourceEntries.length > 0 ? extractMessagesFromSessionEntries(sourceEntries) : options.messages),
 	);
 
 	if (!hasMeaningfulMessages(relevantMessages)) {
@@ -350,8 +352,12 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 	const timestamp = new Date().toISOString();
 
 	let appliedMemoryOps = 0;
-	if (response.memoryOps.length > 0) {
-		const applied = await applyChannelMemoryOps(options.channelDir, response.memoryOps, timestamp);
+	if (response.memoryOps.length > 0 && !options.sourceWindow?.hasExternalToolContent) {
+		const sourceEntryIds = options.sourceWindow?.entries.map((entry) => entry.id) ?? [];
+		const ops = response.memoryOps.map(
+			(op): MemoryOp => (op.op === "add" || op.op === "supersede" ? { ...op, sourceEntryIds } : op),
+		);
+		const applied = await applyChannelMemoryOps(options.channelDir, ops, timestamp);
 		appliedMemoryOps = applied.added + applied.superseded + applied.invalidated + applied.downgradedToAdd;
 	}
 
@@ -387,15 +393,29 @@ export class MemoryCleanupRejectedError extends Error {
 function isCleanupResultTooSmall(currentMemory: string, nextMemory: string, guard: MemoryCleanupShrinkGuard): boolean {
 	const before = normalizeText(currentMemory);
 	const after = normalizeText(nextMemory);
-	if (before.length < Math.max(0, guard.cleanupShrinkGuardMinChars)) {
-		return false;
-	}
+	const beforeEntries = parseChannelMemoryEntries(before).length;
+	const afterEntries = parseChannelMemoryEntries(after).length;
+	if (beforeEntries > 0 && afterEntries === 0) return true;
+	if (before.length < Math.max(0, guard.cleanupShrinkGuardMinChars)) return false;
 	if (after.length < before.length * Math.max(0, Math.min(1, guard.cleanupShrinkGuardMinRatio))) {
 		return true;
 	}
-	const beforeEntries = parseChannelMemoryEntries(before).length;
-	const afterEntries = parseChannelMemoryEntries(after).length;
 	return beforeEntries > 0 && afterEntries * 2 < beforeEntries;
+}
+
+function validateCleanupSchema(currentMemory: string, nextMemory: string): string | null {
+	if (!/^# Channel Memory(?:\s|$)/.test(nextMemory.trimStart())) {
+		return 'cleanup output must start with "# Channel Memory"';
+	}
+	const originalIds = new Set(parseChannelMemoryEntries(currentMemory).map((entry) => entry.id));
+	const entries = parseChannelMemoryEntries(nextMemory);
+	const ids = new Set<string>();
+	for (const entry of entries) {
+		if (!originalIds.has(entry.id)) return `cleanup output invented unknown entry id ${entry.id}`;
+		if (ids.has(entry.id)) return `cleanup output duplicated entry id ${entry.id}`;
+		ids.add(entry.id);
+	}
+	return null;
 }
 
 export async function cleanupChannelMemory(
@@ -418,6 +438,12 @@ ${currentMemory}`;
 		MEMORY_CLEANUP_TIMEOUT_MS,
 		usageContextFor(options.channelId),
 	);
+	const schemaError = validateCleanupSchema(currentMemory, nextMemory);
+	if (schemaError) {
+		throw new MemoryCleanupRejectedError(
+			`${schemaError}. Retry cleanup while preserving the MEMORY.md schema and ids.`,
+		);
+	}
 	if (guard && isCleanupResultTooSmall(currentMemory, nextMemory, guard)) {
 		throw new MemoryCleanupRejectedError("cleanup result shrank below the configured guard threshold");
 	}

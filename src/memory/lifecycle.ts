@@ -17,15 +17,25 @@ import {
 	type InlineConsolidationResult,
 	runInlineConsolidation,
 } from "./consolidation.js";
-import type { MemoryActivityEvent } from "./maintenance-state.js";
+import {
+	type MemoryActivityEvent,
+	readMemoryMaintenanceState,
+	updateMemoryMaintenanceState,
+} from "./maintenance-state.js";
 import { appendMemoryReviewLog } from "./review-log.js";
 import { updateChannelSessionMemory } from "./session.js";
+import {
+	buildCompactionMemorySourceWindow,
+	buildIncrementalMemorySourceWindow,
+	type MemorySourceWindow,
+} from "./source-window.js";
 
 export type ConsolidationReason = "compaction" | "new-session" | "idle" | "shutdown";
 
 export interface MemoryLifecycleOptions {
 	channelId: string;
 	channelDir: string;
+	appHomeDir?: string;
 	getMessages: () => AgentMessage[];
 	getSessionEntries: () => SessionEntry[];
 	getModel: () => Model<Api>;
@@ -53,7 +63,11 @@ export class MemoryLifecycle {
 		this.channelMemoryQueue = options.channelMemoryQueue ?? getDefaultChannelMemoryQueue();
 	}
 
-	private buildRunOptions(messages?: AgentMessage[], sessionEntries?: SessionEntry[]): ConsolidationRunOptions {
+	private buildRunOptions(
+		messages?: AgentMessage[],
+		sessionEntries?: SessionEntry[],
+		sourceWindow?: MemorySourceWindow,
+	): ConsolidationRunOptions {
 		return {
 			channelId: this.options.channelId,
 			channelDir: this.options.channelDir,
@@ -61,6 +75,7 @@ export class MemoryLifecycle {
 			resolveApiKey: this.options.resolveApiKey,
 			messages: messages ?? this.options.getMessages(),
 			sessionEntries: sessionEntries ?? this.options.getSessionEntries(),
+			sourceWindow,
 		};
 	}
 
@@ -248,6 +263,7 @@ export class MemoryLifecycle {
 		reason: Exclude<ConsolidationReason, "idle">,
 		messages?: AgentMessage[],
 		sessionEntries?: SessionEntry[],
+		firstKeptEntryId?: string,
 	): Promise<void> {
 		const messageSnapshot = [...(messages ?? this.options.getMessages())];
 		const sessionEntrySnapshot = sessionEntries ? [...sessionEntries] : [...this.options.getSessionEntries()];
@@ -261,6 +277,7 @@ export class MemoryLifecycle {
 				sessionEntrySnapshot,
 				revisionSnapshot,
 				settings,
+				firstKeptEntryId,
 			);
 		});
 	}
@@ -271,6 +288,7 @@ export class MemoryLifecycle {
 		sessionEntrySnapshot?: SessionEntry[],
 		revisionSnapshot: number = this.durableRevision,
 		settings: PipiclawSessionMemorySettings = this.options.getSessionMemorySettings(),
+		firstKeptEntryId?: string,
 	): Promise<void> {
 		if (this.shouldForceRefreshFor(reason, settings)) {
 			await this.runSessionRefreshSerial({
@@ -280,11 +298,37 @@ export class MemoryLifecycle {
 		}
 
 		try {
+			const maintenanceState = this.options.appHomeDir
+				? await readMemoryMaintenanceState(this.options.appHomeDir, this.options.channelId)
+				: undefined;
+			const lastEntryId = maintenanceState?.lastConsolidatedEntryId;
+			const sourceWindow =
+				reason === "compaction"
+					? buildCompactionMemorySourceWindow({
+							entries: sessionEntrySnapshot ?? [],
+							messagesToSummarize: messageSnapshot,
+							firstKeptEntryId,
+							lastEntryId,
+						})
+					: buildIncrementalMemorySourceWindow({
+							entries: sessionEntrySnapshot ?? [],
+							lastEntryId,
+							sourceKind: reason,
+							fallbackMessages: messageSnapshot,
+						});
 			log.logInfo(`[${this.options.channelId}] Memory consolidation starting (${reason})`);
 			const result = await runInlineConsolidation({
-				...this.buildRunOptions(messageSnapshot, sessionEntrySnapshot),
+				...this.buildRunOptions(messageSnapshot, sessionEntrySnapshot, sourceWindow),
 				mode: "boundary",
 			});
+			if (this.options.appHomeDir && sourceWindow.throughEntryId) {
+				await updateMemoryMaintenanceState(this.options.appHomeDir, this.options.channelId, (current) => ({
+					...current,
+					lastConsolidatedEntryId: sourceWindow.throughEntryId,
+					lastDurableConsolidationAt: new Date().toISOString(),
+					failureBackoffUntil: null,
+				}));
+			}
 			this.markDurableConsolidationCheckpoint(revisionSnapshot);
 			this.logConsolidationResult(reason, result);
 			await this.recordConsolidationReview(reason, result);
@@ -300,7 +344,12 @@ export class MemoryLifecycle {
 	}
 
 	private async handleSessionBeforeCompact(event: SessionBeforeCompactEvent): Promise<void> {
-		await this.runPreflightConsolidation("compaction", event.preparation.messagesToSummarize);
+		await this.runPreflightConsolidation(
+			"compaction",
+			event.preparation.messagesToSummarize,
+			this.options.getSessionEntries(),
+			event.preparation.firstKeptEntryId,
+		);
 	}
 
 	private handleSessionCompact(_event: SessionCompactEvent): void {

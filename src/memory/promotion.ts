@@ -3,7 +3,9 @@ export type SkillPromotionAction = "create" | "patch" | "write_file";
 
 export interface MemoryPromotionCandidate {
 	target: MemoryPromotionTarget;
-	content: string;
+	op: "add" | "supersede" | "invalidate";
+	targetId?: string;
+	content?: string;
 	confidence: number;
 	reason: string;
 	necessity: "low" | "medium" | "high";
@@ -22,7 +24,7 @@ export interface SkillPromotionCandidate {
 }
 
 export interface PostTurnReviewResult {
-	memoryCandidates: MemoryPromotionCandidate[];
+	memoryOps: MemoryPromotionCandidate[];
 	skillCandidates: SkillPromotionCandidate[];
 	discarded: Array<{ content: string; reason: string }>;
 }
@@ -39,7 +41,9 @@ export function shouldAutoWriteMemory(
 	threshold = DEFAULT_MEMORY_AUTO_WRITE_CONFIDENCE,
 ): boolean {
 	return (
-		candidate.confidence >= threshold && isHighNecessity(candidate.necessity) && candidate.content.trim().length > 0
+		candidate.confidence >= threshold &&
+		isHighNecessity(candidate.necessity) &&
+		(candidate.op === "invalidate" ? Boolean(candidate.targetId) : Boolean(candidate.content?.trim()))
 	);
 }
 

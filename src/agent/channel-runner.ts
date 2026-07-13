@@ -193,6 +193,7 @@ export class ChannelRunner implements AgentRunner {
 		this.memoryLifecycle = new MemoryLifecycle({
 			channelId: this.channelId,
 			channelDir: this.channelDir,
+			appHomeDir: this.appHomeDir,
 			getMessages: () => this.session.messages,
 			getSessionEntries: () => this.sessionManager.getBranch(),
 			getModel: () => this.session.model ?? this.activeModel,

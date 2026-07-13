@@ -116,7 +116,8 @@ describe("memory_manage tool", () => {
 		const log = readFileSync(getMemoryReviewLogPath(channelDir), "utf-8").trim();
 		const entry = JSON.parse(log.split("\n").at(-1) as string);
 		expect(entry).toMatchObject({ channelId: "dm_1", reason: "user-forget" });
-		expect(JSON.stringify(entry.actions)).toContain("5 Main St");
+		expect(JSON.stringify(entry.actions)).not.toContain("5 Main St");
+		expect(JSON.stringify(entry.actions)).toContain("contentHash");
 	});
 
 	it("refuses to forget when the target is ambiguous", async () => {

@@ -305,8 +305,15 @@ export async function buildSessionCorpus(options: BuildSessionCorpusOptions): Pr
 		}
 	}
 
-	if (docs.length > maxDocuments) {
-		return docs.slice(-maxDocuments);
+	const deduplicated: SessionSearchDocument[] = [];
+	const seen = new Set<string>();
+	for (const document of docs) {
+		const identity = document.timestamp
+			? `${document.timestamp}\0${document.role}\0${document.text}`
+			: `${document.source}\0${document.id}`;
+		if (seen.has(identity)) continue;
+		seen.add(identity);
+		deduplicated.push(document);
 	}
-	return docs;
+	return deduplicated.length > maxDocuments ? deduplicated.slice(-maxDocuments) : deduplicated;
 }

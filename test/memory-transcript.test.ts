@@ -74,4 +74,18 @@ describe("sanitizeMessagesForMemory", () => {
 			expect(content[1]).toMatchObject({ type: "image" });
 		}
 	});
+
+	it("drops tool results and redacts secrets before memory workers see them", () => {
+		const messages = [
+			{ role: "user", content: "remember api_key=supersecretvalue" },
+			{ role: "toolResult", content: [{ type: "text", text: "sk-live-abcdefghijklmnop" }] },
+			{ role: "assistant", content: [{ type: "text", text: "Bearer abcdefghijklmnop" }] },
+		] as unknown as AgentMessage[];
+		const serialized = JSON.stringify(sanitizeMessagesForMemory(messages));
+		expect(serialized).not.toContain("supersecretvalue");
+		expect(serialized).not.toContain("sk-live");
+		expect(serialized).not.toContain("abcdefghijklmnop");
+		expect(serialized).toContain("REDACTED_SECRET");
+		expect(sanitizeMessagesForMemory(messages).some((message) => message.role === "toolResult")).toBe(false);
+	});
 });

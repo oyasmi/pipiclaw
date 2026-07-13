@@ -184,6 +184,29 @@ describe("recall scoring integration", () => {
 		expect(result.items[0]?.source).toBe("channel-session");
 	});
 
+	it("honors an empty rerank selection as abstention", async () => {
+		const { workspaceDir, channelDir } = createWorkspace();
+		setupChannelFiles(channelDir, {
+			session: "# Current State\n\n- Investigating oauth callback validation.",
+			memory: "# Channel Memory\n\n## Constraints\n\n- Callback verification stays compatible.",
+		});
+		vi.mocked(runSidecarTask).mockResolvedValue({ rawText: '{"selectedIds":[]}', output: [] });
+		const result = await recallRelevantMemory({
+			query: "callback verification",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 1,
+			maxChars: 2000,
+			rerankWithModel: true,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(runSidecarTask).toHaveBeenCalledTimes(1);
+		expect(result.items).toEqual([]);
+		expect(result.renderedText).toBe("");
+	});
+
 	it("prefers highly relevant history over unrelated session state", async () => {
 		const { workspaceDir, channelDir } = createWorkspace();
 		setupChannelFiles(channelDir, {

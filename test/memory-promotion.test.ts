@@ -15,6 +15,7 @@ import {
 function memoryCandidate(overrides: Partial<MemoryPromotionCandidate> = {}): MemoryPromotionCandidate {
 	return {
 		target: "channel-memory",
+		op: "add",
 		content: "User prefers concise replies.",
 		confidence: 0.95,
 		reason: "Stated explicitly twice.",

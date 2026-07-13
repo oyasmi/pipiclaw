@@ -164,4 +164,38 @@ describe("session search", () => {
 		expect(runSidecarTaskMock).toHaveBeenCalledTimes(1);
 		expect(result.results[0]?.summary).toContain("session_search fallback");
 	});
+
+	it("deduplicates mirrored transcript documents and limits the scored corpus", async () => {
+		const workspaceDir = createWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(channelDir, { recursive: true });
+		const duplicate = {
+			type: "message",
+			timestamp: "2026-04-19T00:00:00.000Z",
+			message: { role: "user", content: "duplicate oauth note" },
+		};
+		writeJsonl(join(channelDir, "context.jsonl"), [duplicate]);
+		writeJsonl(join(channelDir, "session-1.jsonl"), [duplicate]);
+		writeJsonl(join(channelDir, "log.jsonl"), [
+			{ date: "2026-04-19T00:01:00.000Z", text: "newest unrelated note", isBot: false },
+		]);
+
+		const docs = await buildSessionCorpus({ channelDir, maxFiles: 6 });
+		expect(docs.filter((doc) => doc.text === "duplicate oauth note")).toHaveLength(1);
+
+		const result = await searchChannelSessions({
+			channelDir,
+			query: "oauth",
+			limit: 5,
+			maxFiles: 6,
+			maxChunks: 1,
+			maxCharsPerChunk: 800,
+			summarizeWithModel: false,
+			timeoutMs: 1000,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(result.searchedDocuments).toBe(1);
+		expect(result.results).toEqual([]);
+	});
 });

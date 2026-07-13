@@ -4,6 +4,8 @@ import { copyFile, readdir, rm } from "fs/promises";
 import { basename, join } from "path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
+import { containsSecret, REDACTED_SECRET } from "./policy.js";
+import { appendMemoryTombstone, hashMemoryContent, readMemoryTombstones } from "./tombstones.js";
 
 const DEFAULT_CHANNEL_MEMORY = `# Channel Memory
 
@@ -142,9 +144,10 @@ export function parseChannelMemoryEntries(content: string): ParsedMemoryEntry[] 
 }
 
 export type MemoryOp =
-	| { op: "add"; content: string }
-	| { op: "supersede"; targetId: string; content: string }
-	| { op: "invalidate"; targetId: string; reason?: string };
+	| { op: "add"; content: string; sourceEntryIds?: string[] }
+	| { op: "supersede"; targetId: string; content: string; sourceEntryIds?: string[] }
+	| { op: "invalidate"; targetId: string; reason?: string }
+	| { op: "forget"; targetId: string; reason?: string; sourceEntryIds?: string[] };
 
 export interface ApplyMemoryOpsResult {
 	added: number;
@@ -152,6 +155,9 @@ export interface ApplyMemoryOpsResult {
 	invalidated: number;
 	downgradedToAdd: number;
 	missingTarget: number;
+	forgotten: number;
+	blockedByPolicy: number;
+	blockedByTombstone: number;
 }
 
 /**
@@ -170,6 +176,9 @@ export async function applyChannelMemoryOps(
 		invalidated: 0,
 		downgradedToAdd: 0,
 		missingTarget: 0,
+		forgotten: 0,
+		blockedByPolicy: 0,
+		blockedByTombstone: 0,
 	};
 	if (ops.length === 0) {
 		return result;
@@ -180,12 +189,29 @@ export async function applyChannelMemoryOps(
 	const existing = await readOptionalTextFile(path);
 	const lines = existing.replace(/\r/g, "").split("\n");
 	const byId = new Map(parseChannelMemoryEntries(existing).map((entry) => [entry.id, entry]));
+	const tombstones = await readMemoryTombstones(channelDir);
+	const tombstoneHashes = new Set(tombstones.map((tombstone) => tombstone.contentHash));
+	const tombstoneSourceIds = new Set(tombstones.flatMap((tombstone) => tombstone.sourceEntryIds ?? []));
 
 	const removals = new Set<number>();
 	const replacements = new Map<number, string>();
 	const additions: string[] = [];
 
 	for (const op of ops) {
+		if (op.op === "add" || op.op === "supersede") {
+			if (containsSecret(op.content) || op.content.includes(REDACTED_SECRET)) {
+				result.blockedByPolicy++;
+				continue;
+			}
+			if (
+				tombstoneHashes.has(hashMemoryContent(op.content)) ||
+				op.sourceEntryIds?.some((entryId) => tombstoneSourceIds.has(entryId))
+			) {
+				result.blockedByTombstone++;
+				continue;
+			}
+		}
+
 		if (op.op === "add") {
 			if (op.content.trim()) {
 				additions.push(op.content.trim());
@@ -195,10 +221,22 @@ export async function applyChannelMemoryOps(
 		}
 
 		const target = byId.get(op.targetId);
-		if (op.op === "invalidate") {
+		if (op.op === "invalidate" || op.op === "forget") {
 			if (target) {
 				removals.add(target.lineIndex);
-				result.invalidated++;
+				if (op.op === "forget") {
+					await appendMemoryTombstone(channelDir, {
+						entryId: target.id,
+						contentHash: hashMemoryContent(target.content),
+						deletedAt: timestamp,
+						scope: "channel",
+						reason: op.reason?.trim() || "user forget",
+						sourceEntryIds: op.sourceEntryIds,
+					});
+					result.forgotten++;
+				} else {
+					result.invalidated++;
+				}
 			} else {
 				result.missingTarget++;
 			}

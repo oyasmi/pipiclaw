@@ -239,7 +239,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 记忆管理工具（`memory_manage`，恒开）
 
-`memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从 MEMORY.md 移除，不走裸 edit）。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。核心能力，无开关、始终注册，只发给主 agent。`session_search`（冷存储检索）与 `skill_manage`（workspace skills 维护）同理恒开。
+`memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从活动 MEMORY.md 移除，并写入不含原文的 tombstone 防止后台复活，不走裸 edit）。`forget` 不清理原始 session/log、retention backup 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。核心能力，无开关、始终注册，只发给主 agent。`session_search`（冷存储检索）与 `skill_manage`（workspace skills 维护）同理恒开。
 
 ### 网页抓取缓存（`web_fetch` offset 分页）
 
@@ -837,7 +837,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | `sessionMemory.forceRefreshBeforeNewSession` | `true` | Yes | `/new` 前强制刷新 |
 | `memoryGrowth.postTurnReviewEnabled` | `true` | Yes | 启用后台 growth review job |
 | `memoryGrowth.autoWriteChannelMemory` | `true` | Yes | 高置信 durable fact 自动写入 channel `MEMORY.md` |
-| `memoryGrowth.autoWriteWorkspaceSkills` | `true` | Yes | 高置信 reusable workflow 自动写入 workspace `skills/` |
+| `memoryGrowth.autoWriteWorkspaceSkills` | `false` | Yes | 高置信 reusable workflow 默认只保留 suggestion；显式开启后才自动写入 workspace `skills/` |
 | `memoryGrowth.minSkillAutoWriteConfidence` | `0.9` | Yes | workspace skill 自动写入阈值；可调高，但运行时最低为 `0.9` |
 | `memoryGrowth.minMemoryAutoWriteConfidence` | `0.85` | Yes | channel memory 自动写入阈值 |
 | `memoryGrowth.idleWritesHistory` | `false` | Reserved | idle consolidation 默认不写 `HISTORY.md` |
@@ -978,7 +978,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
   "memoryGrowth": {
     "postTurnReviewEnabled": true,
     "autoWriteChannelMemory": true,
-    "autoWriteWorkspaceSkills": true,
+    "autoWriteWorkspaceSkills": false,
     "minMemoryAutoWriteConfidence": 0.85,
     "minSkillAutoWriteConfidence": 0.9
   },

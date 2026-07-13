@@ -135,4 +135,18 @@ describe("channel memory write ops", () => {
 		expect(archive).toContain("Original detailed block");
 		expect(archive).toContain("Archived 2026-07-01T00:00:00.000Z");
 	});
+
+	it("records a forget tombstone and blocks automatic resurrection", async () => {
+		const channelDir = createTempDir();
+		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "User prefers cobalt blue" }]);
+		const [entry] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+		const forgotten = await applyChannelMemoryOps(channelDir, [
+			{ op: "forget", targetId: entry.id, reason: "user request" },
+		]);
+		expect(forgotten.forgotten).toBe(1);
+
+		const resurrected = await applyChannelMemoryOps(channelDir, [{ op: "add", content: "User prefers cobalt blue" }]);
+		expect(resurrected.blockedByTombstone).toBe(1);
+		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(0);
+	});
 });

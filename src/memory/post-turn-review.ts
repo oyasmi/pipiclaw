@@ -5,7 +5,14 @@ import { parseJsonObject } from "../shared/llm-json.js";
 import { clipText, errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { manageWorkspaceSkill } from "../tools/skill-manage.js";
-import { appendChannelMemoryUpdate, readChannelHistory, readChannelMemory, readChannelSession } from "./files.js";
+import {
+	applyChannelMemoryOps,
+	type MemoryOp,
+	readChannelHistory,
+	readChannelMemory,
+	readChannelSession,
+} from "./files.js";
+import { containsSecret } from "./policy.js";
 import {
 	type MemoryPromotionCandidate,
 	type PostTurnReviewResult,
@@ -32,6 +39,8 @@ export interface PostTurnReviewOptions {
 	loadedSkills: Array<{ name: string; description?: string }>;
 	emitNotice?: (notice: string) => Promise<void>;
 	refreshWorkspaceResources?: () => Promise<void>;
+	sourceEntryIds?: string[];
+	suppressAutomaticWrites?: boolean;
 }
 
 export interface PostTurnReviewApplyResult {
@@ -41,13 +50,19 @@ export interface PostTurnReviewApplyResult {
 	notices: string[];
 }
 
+export type PostTurnReviewRunResult =
+	| { status: "applied" | "empty"; result: PostTurnReviewApplyResult }
+	| { status: "failed"; error: string };
+
 const POST_TURN_REVIEW_SYSTEM_PROMPT = `You are Pipiclaw's post-turn memory reviewer.
 
 Return strict JSON only:
 {
-  "memoryCandidates": [
+  "memoryOps": [
     {
       "target": "channel-memory",
+	  "op": "add|supersede|invalidate",
+	  "targetId": "required for supersede/invalidate",
       "content": "standalone durable memory bullet without '-'",
       "confidence": 0.0,
       "necessity": "low|medium|high",
@@ -95,12 +110,16 @@ function normalizeMemoryCandidate(value: unknown): MemoryPromotionCandidate | nu
 		return null;
 	}
 	const target = "channel-memory" as const;
-	const content = typeof value.content === "string" ? value.content.trim() : "";
-	if (!content) {
+	const op = value.op === "supersede" || value.op === "invalidate" ? value.op : "add";
+	const targetId = typeof value.targetId === "string" ? value.targetId.trim() : undefined;
+	const content = typeof value.content === "string" ? value.content.trim() : undefined;
+	if ((op === "invalidate" && !targetId) || (op !== "invalidate" && !content)) {
 		return null;
 	}
 	return {
 		target,
+		op,
+		targetId,
 		content,
 		confidence: normalizeConfidence(value.confidence),
 		necessity: normalizeNecessity(value.necessity),
@@ -135,9 +154,15 @@ function normalizeSkillCandidate(value: unknown): SkillPromotionCandidate | null
 
 export function parsePostTurnReviewResult(value: unknown): PostTurnReviewResult {
 	const record = isRecord(value) ? value : {};
-	const memoryCandidates = Array.isArray(record.memoryCandidates)
-		? record.memoryCandidates.map(normalizeMemoryCandidate).filter((item): item is MemoryPromotionCandidate => !!item)
-		: [];
+	const rawMemoryOps = Array.isArray(record.memoryOps)
+		? record.memoryOps
+		: Array.isArray(record.memoryCandidates)
+			? record.memoryCandidates
+			: [];
+	const memoryOps =
+		rawMemoryOps.length > 0
+			? rawMemoryOps.map(normalizeMemoryCandidate).filter((item): item is MemoryPromotionCandidate => !!item)
+			: [];
 	const skillCandidates = Array.isArray(record.skillCandidates)
 		? record.skillCandidates.map(normalizeSkillCandidate).filter((item): item is SkillPromotionCandidate => !!item)
 		: [];
@@ -150,7 +175,7 @@ export function parsePostTurnReviewResult(value: unknown): PostTurnReviewResult 
 				}))
 				.filter((item) => item.content.trim() || item.reason.trim())
 		: [];
-	return { memoryCandidates, skillCandidates, discarded };
+	return { memoryOps, skillCandidates, discarded };
 }
 
 async function runPostTurnReviewWorker(options: PostTurnReviewOptions): Promise<PostTurnReviewResult> {
@@ -199,16 +224,36 @@ async function applyMemoryCandidate(
 	result: PostTurnReviewApplyResult,
 	timestamp: string,
 ): Promise<void> {
-	if (!options.autoWriteChannelMemory || !shouldAutoWriteMemory(candidate, options.minMemoryAutoWriteConfidence)) {
+	if (
+		options.suppressAutomaticWrites ||
+		!options.autoWriteChannelMemory ||
+		!shouldAutoWriteMemory(candidate, options.minMemoryAutoWriteConfidence)
+	) {
 		result.suggestions.push({ type: "memory", candidate });
 		return;
 	}
+	if (candidate.content && containsSecret(candidate.content)) {
+		result.skipped.push({ type: "memory", candidate: { ...candidate, content: "[REDACTED]" }, reason: "secret" });
+		return;
+	}
 
-	await appendChannelMemoryUpdate(options.channelDir, {
-		timestamp,
-		entries: [candidate.content],
-	});
-	const action = { target: "MEMORY.md", action: "append", content: candidate.content, reason: candidate.reason };
+	const op: MemoryOp =
+		candidate.op === "invalidate"
+			? { op: "invalidate", targetId: candidate.targetId ?? "", reason: candidate.reason }
+			: candidate.op === "supersede"
+				? {
+						op: "supersede",
+						targetId: candidate.targetId ?? "",
+						content: candidate.content ?? "",
+						sourceEntryIds: options.sourceEntryIds,
+					}
+				: { op: "add", content: candidate.content ?? "", sourceEntryIds: options.sourceEntryIds };
+	const applied = await applyChannelMemoryOps(options.channelDir, [op], timestamp);
+	if (applied.blockedByPolicy > 0 || applied.blockedByTombstone > 0) {
+		result.skipped.push({ type: "memory", entry: candidate.targetId, reason: "blocked by memory policy" });
+		return;
+	}
+	const action = { target: "MEMORY.md", action: candidate.op, entry: candidate.targetId, reason: candidate.reason };
 	result.actions.push(action);
 	result.notices.push("已沉淀：更新 channel memory。");
 }
@@ -218,7 +263,11 @@ async function applySkillCandidate(
 	candidate: SkillPromotionCandidate,
 	result: PostTurnReviewApplyResult,
 ): Promise<void> {
-	if (!options.autoWriteWorkspaceSkills || !shouldAutoWriteSkill(candidate, options.minSkillAutoWriteConfidence)) {
+	if (
+		options.suppressAutomaticWrites ||
+		!options.autoWriteWorkspaceSkills ||
+		!shouldAutoWriteSkill(candidate, options.minSkillAutoWriteConfidence)
+	) {
 		result.suggestions.push({ type: "skill", candidate });
 		return;
 	}
@@ -259,7 +308,7 @@ export async function applyPostTurnReviewResult(
 		notices: [],
 	};
 
-	for (const candidate of review.memoryCandidates) {
+	for (const candidate of review.memoryOps) {
 		await applyMemoryCandidate(options, candidate, result, timestamp);
 	}
 	for (const candidate of review.skillCandidates) {
@@ -274,7 +323,7 @@ export async function applyPostTurnReviewResult(
 		timestamp,
 		channelId: options.channelId,
 		reason: "post-turn",
-		candidates: [...review.memoryCandidates, ...review.skillCandidates],
+		candidates: [...review.memoryOps, ...review.skillCandidates],
 		actions: result.actions,
 		suggestions: result.suggestions,
 		skipped: result.skipped,
@@ -291,10 +340,11 @@ export async function applyPostTurnReviewResult(
 	return result;
 }
 
-export async function runPostTurnReview(options: PostTurnReviewOptions): Promise<PostTurnReviewApplyResult> {
+export async function runPostTurnReview(options: PostTurnReviewOptions): Promise<PostTurnReviewRunResult> {
 	try {
 		const review = await runPostTurnReviewWorker(options);
-		return await applyPostTurnReviewResult(options, review);
+		const result = await applyPostTurnReviewResult(options, review);
+		return { status: result.actions.length > 0 ? "applied" : "empty", result };
 	} catch (error) {
 		const message = errorMessage(error);
 		await appendMemoryReviewLog(options.channelDir, {
@@ -304,6 +354,6 @@ export async function runPostTurnReview(options: PostTurnReviewOptions): Promise
 			error: message,
 			skipped: [{ target: "post-turn-review", reason: "failed" }],
 		});
-		return { actions: [], suggestions: [], skipped: [{ reason: message }], notices: [] };
+		return { status: "failed", error: message };
 	}
 }

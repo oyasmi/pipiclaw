@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { buildStandardMessages } from "../shared/type-guards.js";
+import { redactSecrets } from "./policy.js";
 
 // The channel runner prepends the channel capsule, recalled memory, the task agenda
 // and the durable bootstrap to the raw user input, then wraps the input itself in
@@ -20,13 +21,28 @@ export function stripInjectedMemoryContext(text: string): string {
 
 function sanitizeUserMessage(message: Message & { role: "user" }): Message {
 	if (typeof message.content === "string") {
-		return { ...message, content: stripInjectedMemoryContext(message.content) };
+		return { ...message, content: redactSecrets(stripInjectedMemoryContext(message.content)) };
 	}
 	return {
 		...message,
 		content: message.content.map((part) =>
-			part.type === "text" ? { ...part, text: stripInjectedMemoryContext(part.text) } : part,
+			part.type === "text" ? { ...part, text: redactSecrets(stripInjectedMemoryContext(part.text)) } : part,
 		),
+	};
+}
+
+function sanitizeAssistantMessage(message: Message & { role: "assistant" }): Message {
+	return {
+		...message,
+		content: message.content.map((part) => {
+			if (part.type === "text") {
+				return { ...part, text: redactSecrets(part.text) };
+			}
+			if (part.type === "thinking") {
+				return { ...part, thinking: redactSecrets(part.thinking) };
+			}
+			return part;
+		}),
 	};
 }
 
@@ -36,7 +52,11 @@ function sanitizeUserMessage(message: Message & { role: "user" }): Message {
  * transcript, so recalled memory is never folded back into durable memory.
  */
 export function sanitizeMessagesForMemory(messages: AgentMessage[]): Message[] {
-	return buildStandardMessages(messages).map((message) =>
-		message.role === "user" ? sanitizeUserMessage(message) : message,
-	);
+	return buildStandardMessages(messages)
+		.filter((message) => message.role !== "toolResult")
+		.map((message) => {
+			if (message.role === "user") return sanitizeUserMessage(message);
+			if (message.role === "assistant") return sanitizeAssistantMessage(message);
+			return message;
+		});
 }
