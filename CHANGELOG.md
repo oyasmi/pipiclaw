@@ -6,9 +6,18 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [0.8.6] - 2026-07-14
 
+### Added
+
+- Memory management now maintains structured per-entry metadata for type, source, trust, sensitivity, lifecycle status, and recall usage. New `/memory` commands expose memory status, entry IDs and details, pending suggestions, and tombstone counts without an LLM turn.
+- Memory consolidation and review now operate on one incremental source window, and durable forgetting records tombstones to prevent removed memories from being automatically restored.
+
 ### Changed
 
-- Release metadata updated to version 0.8.6.
+- Automatic memory capture applies source and sensitivity policy, recall records per-entry usage, and maintenance activity is more visible in review logs and usage accounting.
+
+### Fixed
+
+- Task approval exemptions are preserved through task updates and control commands instead of being lost during state changes.
 
 ## [0.8.5] - 2026-07-12
 
