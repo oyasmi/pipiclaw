@@ -4,6 +4,12 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-07-14
+
+### Changed
+
+- Release metadata updated to version 0.8.6.
+
 ## [0.8.5] - 2026-07-12
 
 ### Added
