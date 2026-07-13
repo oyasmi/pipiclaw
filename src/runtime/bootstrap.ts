@@ -27,6 +27,7 @@ import {
 	WORKSPACE_DIR,
 } from "../paths.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
+import { flushSecurityLogs } from "../security/logger.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
 import { readActiveTasks } from "../shared/task-ledger.js";
@@ -198,6 +199,7 @@ const SECURITY_CONFIG_TEMPLATE = {
 const SHUTDOWN_WAIT_MS = 15000;
 const SHUTDOWN_FLUSH_WAIT_MS = 45000;
 const SHUTDOWN_ABORT_WAIT_MS = 5000;
+const SHUTDOWN_LOG_FLUSH_WAIT_MS = 10_000;
 
 export const DEFAULT_BOOTSTRAP_PATHS: BootstrapPaths = {
 	appName: APP_NAME,
@@ -496,12 +498,14 @@ function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolea
 		return Promise.resolve(true);
 	}
 
-	return Promise.race([
-		Promise.allSettled(tasks).then(() => true),
-		new Promise<boolean>((resolve) => {
-			setTimeout(() => resolve(false), timeoutMs);
-		}),
-	]);
+	return new Promise<boolean>((resolve) => {
+		const timer = setTimeout(() => resolve(false), timeoutMs);
+		timer.unref?.();
+		void Promise.allSettled(tasks).then(() => {
+			clearTimeout(timer);
+			resolve(true);
+		});
+	});
 }
 
 function flushInactiveChannelMemory(channelRunners: Map<string, AgentRunner>): Promise<void>[] {
@@ -532,7 +536,7 @@ interface RuntimeContextOptions {
 		bot: DingTalkBot,
 		executor: Executor,
 		eventHistoryPath: string,
-	) => { start(): void; stop(): void };
+	) => { start(): void; stop(): void; flush?(): Promise<void> };
 	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
 	memoryMaintenanceSchedulerIntervalMs?: number;
 	createTaskDriver?: () => { start(): void; stop(): void };
@@ -700,7 +704,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			}
 
 			if (mode === "followUp") {
-				log.logInfo(`[${event.channelId}] Queued followUp as next task: ${trimmedQueueText.substring(0, 80)}`);
+				log.logEvent("info", "agent.turn.followup_queued", "Follow-up queued", {
+					ctx: { channelId: event.channelId, userName: event.userName },
+					fields: { messageLength: trimmedQueueText.length },
+				});
 				return { kind: "requeue", text: trimmedQueueText };
 			}
 
@@ -726,7 +733,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					? "Queued as steer. I’ll apply it after the current tool step finishes."
 					: "Queued as steer. I’ll apply this after the current tool step finishes. Use `/followup <message>` to queue it after completion.";
 				await bot.sendPlain(event.channelId, confirmation);
-				log.logInfo(`[${event.channelId}] Queued ${mode}: ${trimmedQueueText.substring(0, 80)}`);
+				log.logEvent("info", "agent.turn.steer_queued", "Steer queued", {
+					ctx: { channelId: event.channelId, userName: event.userName },
+					fields: { messageLength: trimmedQueueText.length },
+				});
 				return { kind: "handled" };
 			} catch (err) {
 				const errMsg = errorMessage(err);
@@ -773,7 +783,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					const builtInCommand = parseBuiltInCommand(event.text);
 
 					if (builtInCommand) {
-						log.logInfo(`[${event.channelId}] Executing command: ${builtInCommand.rawText}`);
+						log.logEvent("info", "runtime.command.started", "Executing command", {
+							ctx: { channelId: event.channelId, userName: event.userName },
+							fields: { command: builtInCommand.name },
+						});
 						if (builtInCommand.name === "events") {
 							await handler.handleEventsCommand(event, bot, builtInCommand.args);
 							return;
@@ -805,7 +818,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						return;
 					}
 
-					log.logInfo(`[${event.channelId}] Starting run: ${event.text.substring(0, 50)}`);
+					log.logEvent("info", "agent.turn.started", "Starting turn", {
+						ctx: { channelId: event.channelId, userName: event.userName },
+						fields: { messageLength: event.text.length, source: _isEvent ? "event" : "message" },
+					});
 					if (!_isEvent) {
 						ctx.primeCard(350);
 					}
@@ -830,7 +846,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						log.logInfo(`[${event.channelId}] Stopped`);
 					}
 				} catch (err) {
-					log.logWarning(`[${event.channelId}] Run error`, errorMessage(err));
+					log.logEvent("error", "agent.turn.failed", "Turn failed", {
+						ctx: { channelId: event.channelId, userName: event.userName },
+						fields: { error: errorMessage(err) },
+					});
 				} finally {
 					await durableDispatch?.markCompleted(event.dispatchId);
 					runner.endTurn();
@@ -981,6 +1000,18 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					channelDir,
 				);
 			}
+
+			const storageFlushes = [
+				store.close(),
+				getUsageLedger().flush?.() ?? Promise.resolve(),
+				flushSecurityLogs(),
+				...(eventsWatcher.flush ? [eventsWatcher.flush()] : []),
+			];
+			const storageFlushed = await waitForTasks(storageFlushes, SHUTDOWN_LOG_FLUSH_WAIT_MS);
+			if (!storageFlushed) {
+				log.logWarning(`Shutdown log flush exceeded ${SHUTDOWN_LOG_FLUSH_WAIT_MS}ms`);
+			}
+			await waitForTasks([log.flushLogging()], SHUTDOWN_LOG_FLUSH_WAIT_MS);
 		})();
 
 		return shutdownPromise;

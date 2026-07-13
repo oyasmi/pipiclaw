@@ -76,8 +76,8 @@ describe("jsonl-appender", () => {
 		expect(readLines(join(dir, "usage-2026-2.jsonl"))).toEqual([{ month: "feb" }]);
 	});
 
-	it("never throws on write failure and warns only once", async () => {
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+	it("never throws on write failure and logs one safe fallback warning", async () => {
+		const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// Point at a path whose parent is a file, so mkdir/append fails.
 		const filePath = join(dir, "blocker");
 		const appender = createJsonlAppender({ path: filePath });
@@ -87,6 +87,7 @@ describe("jsonl-appender", () => {
 		await expect(bad.append({ x: 1 })).resolves.toBeUndefined();
 		await expect(bad.append({ x: 2 })).resolves.toBeUndefined();
 
-		expect(warnSpy).toHaveBeenCalledTimes(1);
+		expect(writeSpy).toHaveBeenCalledTimes(1);
+		expect(String(writeSpy.mock.calls[0]?.[0])).toContain("runtime.log_sink.failed");
 	});
 });

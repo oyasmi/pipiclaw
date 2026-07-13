@@ -291,6 +291,7 @@ describe("EventsWatcher", () => {
 			},
 			true,
 		);
+		await watcher.flush();
 
 		expect(bot.events).toHaveLength(1);
 		expect(bot.events[0]).toMatchObject({
@@ -317,6 +318,7 @@ describe("EventsWatcher", () => {
 		vi.spyOn(privateApi, "sleep").mockResolvedValue(undefined);
 
 		await privateApi.handleFile("broken.json");
+		await watcher.flush();
 
 		expect(readHistory(historyPath)).toEqual([
 			expect.objectContaining({
@@ -431,6 +433,7 @@ describe("EventsWatcher", () => {
 				},
 				false,
 			);
+			await watcher.flush();
 
 			expect(bot.events).toHaveLength(0);
 			expect(readHistory(historyPath)).toEqual([

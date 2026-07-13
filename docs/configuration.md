@@ -153,9 +153,10 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 }
 ```
 
-- `level`：`debug` | `info` | `warn` | `error`，低于该级别的记录不写文件。
+- `level`：`debug` | `info` | `warn` | `error`，同时控制 console 与文件日志；低于该级别的记录不会输出。默认 `info` 只保留运行生命周期、请求处理、投递、降级和失败等关键事件；工具参数/结果、模型 thinking 和完整回复仅在 `debug` 输出。
 - `file.enabled`：默认 **true**（守护进程默认落盘的价值大于新文件的意外感）。设为 `false` 则退回纯 console。
 - 环境变量优先于 settings，且在启动最早期即生效：`PIPICLAW_LOG_LEVEL`（同上四级）、`PIPICLAW_LOG_FILE=0|1`（关闭/开启文件落盘）。
+- 控制台每条日志使用统一的 `时间 级别 事件名 消息 key=value` 格式。用户正文、模型回复和常见敏感字段（如 token、cookie、authorization、secret、环境变量值）不会原样输出；长诊断字符串会被截断。
 
 ## 内建工具与任务开关（Built-in Tool and Task Settings）
 

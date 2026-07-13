@@ -152,7 +152,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			if (securityConfig.enabled && securityConfig.commandGuard.enabled) {
 				const guardResult = guardCommand(command, securityConfig.commandGuard);
 				if (!guardResult.allowed) {
-					logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+					await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
 						type: "command",
 						tool: "bash",
 						channelId: options.channelId,

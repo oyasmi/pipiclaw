@@ -202,7 +202,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
 				const guardResult = guardPath(searchPath, "read", { ...securityContext, config: securityConfig.pathGuard });
 				if (!guardResult.allowed) {
-					logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+					await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
 						type: "path",
 						tool: "grep",
 						channelId: options.channelId,

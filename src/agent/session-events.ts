@@ -343,7 +343,10 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 	if (isAutoCompactionStartEvent(event)) {
 		const label = "Compacting context...";
-		log.logInfo(`Compaction started (reason: ${event.reason})`);
+		log.logEvent("info", "agent.compaction.started", "Compaction started", {
+			ctx: logCtx,
+			fields: { reason: event.reason },
+		});
 		if (showProgress) {
 			queue.enqueue(() => ctx.respond(formatProgressEntry("assistant", label), false), "compaction start");
 		}
@@ -353,12 +356,18 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	if (isAutoCompactionEndEvent(event)) {
 		if (event.result) {
 			runState.lastCompactionError = undefined;
-			log.logInfo(`Compaction complete: ${event.result.tokensBefore} tokens compacted`);
+			log.logEvent("info", "agent.compaction.finished", "Compaction completed", {
+				ctx: logCtx,
+				fields: { tokensBefore: event.result.tokensBefore },
+			});
 		} else if (event.aborted) {
-			log.logInfo("Compaction aborted");
+			log.logEvent("info", "agent.compaction.aborted", "Compaction aborted", { ctx: logCtx });
 		} else if (event.errorMessage) {
 			runState.lastCompactionError = event.errorMessage;
-			log.logWarning("Compaction failed", event.errorMessage);
+			log.logEvent("warn", "agent.compaction.failed", "Compaction failed", {
+				ctx: logCtx,
+				fields: { error: event.errorMessage },
+			});
 			if (showProgress) {
 				queue.enqueue(
 					() =>
@@ -374,7 +383,10 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	}
 
 	if (isAutoRetryStartEvent(event)) {
-		log.logWarning(`Retrying (${event.attempt}/${event.maxAttempts})`, event.errorMessage);
+		log.logEvent("warn", "agent.retrying", "Retrying model request", {
+			ctx: logCtx,
+			fields: { attempt: event.attempt, maxAttempts: event.maxAttempts, error: event.errorMessage },
+		});
 		if (showProgress) {
 			queue.enqueue(
 				() =>

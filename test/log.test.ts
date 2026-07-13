@@ -42,8 +42,11 @@ describe("log helpers", () => {
 		expect(summary).toContain("**Total: $0.1831**");
 
 		const calls = consoleSpy.mock.calls.map(([value]) => stripAnsi(String(value)));
-		expect(calls[0]).toContain("[ops:alice] 💰 Usage");
-		expect(calls[1]).toContain("12,345 in + 678 out");
-		expect(calls[1]).toContain("= $0.1831");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toContain("INFO  agent.usage Usage recorded");
+		expect(calls[0]).toContain('channel="team-1"');
+		expect(calls[0]).toContain('user="alice"');
+		expect(calls[0]).toContain("input=12345");
+		expect(calls[0]).toContain("output=678");
 	});
 });

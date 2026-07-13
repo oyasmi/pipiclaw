@@ -39,7 +39,7 @@ export async function writeContent(
 	if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
 		const guardResult = guardPath(path, "write", { ...securityContext, config: securityConfig.pathGuard });
 		if (!guardResult.allowed) {
-			logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+			await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
 				type: "path",
 				tool: options?.toolName ?? "write",
 				channelId: options?.channelId,

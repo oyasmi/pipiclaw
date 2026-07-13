@@ -60,24 +60,24 @@ describe("log file sink", () => {
 
 	it("persists structured records after configureLogging", async () => {
 		const { log, runtimeLogPath } = await loadLog();
-		log.configureLogging({ level: "info", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
+		log.configureLogging({ level: "debug", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
 
 		log.logToolSuccess({ channelId: "team-1", userName: "alice" }, "bash", 1500, "output body");
 		log.logInfo("boot complete");
 		await flush();
 
 		const records = readRecords(runtimeLogPath);
-		const tool = records.find((r) => r.event === "tool_end");
+		const tool = records.find((r) => r.event === "agent.tool.finished");
 		expect(tool).toMatchObject({
-			level: "info",
-			event: "tool_end",
+			level: "debug",
+			event: "agent.tool.finished",
 			channelId: "team-1",
 			userName: "alice",
-			message: "bash",
-			fields: { toolName: "bash", durationMs: 1500, isError: false },
+			message: "Tool completed",
+			fields: { tool: "bash", durationMs: 1500, resultLength: 11 },
 		});
 		expect(typeof tool?.ts).toBe("string");
-		expect(records.find((r) => r.event === "system")).toMatchObject({ message: "boot complete", level: "info" });
+		expect(records.find((r) => r.event === "system.info")).toMatchObject({ message: "boot complete", level: "info" });
 	});
 
 	it("filters records below the configured level", async () => {
@@ -111,6 +111,46 @@ describe("log file sink", () => {
 		await flush();
 
 		const records = readRecords(runtimeLogPath);
-		expect(records.find((r) => r.event === "thinking")).toBeTruthy();
+		expect(records.find((r) => r.event === "agent.thinking")).toBeTruthy();
+	});
+
+	it("uses one stdout format, honors the level, and redacts fields", async () => {
+		const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const { log } = await loadLog();
+		log.configureLogging({ level: "warn", file: { enabled: false, maxSizeBytes: 5_000_000, maxFiles: 3 } });
+		log.logEvent("info", "agent.turn.started", "not visible");
+		log.logEvent("warn", "runtime.request.failed", "Request failed", {
+			ctx: { channelId: "dm_1", userName: "alice" },
+			fields: { authorization: "Bearer top-secret", nested: { token: "hidden", safe: "ok" } },
+		});
+
+		expect(consoleSpy).toHaveBeenCalledTimes(1);
+		const line = String(consoleSpy.mock.calls[0]?.[0]);
+		expect(line).toMatch(/^\d{4}-\d{2}-\d{2}T.* WARN {2}runtime\.request\.failed Request failed /);
+		expect(line).toContain('authorization="[REDACTED]"');
+		expect(line).toContain("[REDACTED]");
+		expect(line).not.toContain("hidden");
+	});
+
+	it("redacts sensitive values and bounds details in structured records", async () => {
+		const { log, runtimeLogPath } = await loadLog();
+		log.configureLogging({ level: "info", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
+
+		log.logEvent("info", "runtime.request.failed", "Authorization: Bearer top-secret", {
+			fields: {
+				token: "hidden",
+				nested: { cookie: "session=hidden", safe: "ok" },
+				long: "x".repeat(300),
+			},
+		});
+		await flush();
+
+		const record = readRecords(runtimeLogPath)[0];
+		expect(record.message).toContain("[REDACTED]");
+		expect(record.fields).toMatchObject({
+			token: "[REDACTED]",
+			nested: { cookie: "[REDACTED]", safe: "ok" },
+		});
+		expect(((record.fields as Record<string, unknown>).long as string).length).toBeLessThan(300);
 	});
 });

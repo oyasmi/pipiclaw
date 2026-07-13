@@ -103,8 +103,8 @@ function getProxyAgent(requestUrl: string, explicitProxy: string | null): HttpAg
 	return agent;
 }
 
-function logBlockedRequest(context: WebRuntimeContext, error: NetworkGuardError): void {
-	logSecurityEvent(context.workspaceDir, context.securityConfig, {
+async function logBlockedRequest(context: WebRuntimeContext, error: NetworkGuardError): Promise<void> {
+	await logSecurityEvent(context.workspaceDir, context.securityConfig, {
 		type: "network",
 		tool: "web",
 		channelId: context.channelId,
@@ -147,7 +147,7 @@ export class WebHttpClient {
 				}
 			} catch (error) {
 				if (error instanceof NetworkGuardError) {
-					logBlockedRequest(this.context, error);
+					await logBlockedRequest(this.context, error);
 				}
 				throw error;
 			}

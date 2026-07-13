@@ -25,9 +25,14 @@ describe("logSecurityEvent", () => {
 		return join(workspaceDir, ".pipiclaw", "security.log");
 	}
 
-	it("appends a JSON line to the default log path when logBlocked is enabled", () => {
+	it("appends a JSON line to the default log path when logBlocked is enabled", async () => {
 		const config = { ...DEFAULT_SECURITY_CONFIG, audit: { logBlocked: true } };
-		logSecurityEvent(workspaceDir, config, { type: "path", tool: "read", rawPath: "/etc/passwd", operation: "read" });
+		await logSecurityEvent(workspaceDir, config, {
+			type: "path",
+			tool: "read",
+			rawPath: "/etc/passwd",
+			operation: "read",
+		});
 
 		expect(existsSync(defaultLogPath())).toBe(true);
 		const line = readFileSync(defaultLogPath(), "utf-8").trim();
@@ -36,16 +41,16 @@ describe("logSecurityEvent", () => {
 		expect(typeof parsed.date).toBe("string");
 	});
 
-	it("does nothing when logBlocked is disabled", () => {
+	it("does nothing when logBlocked is disabled", async () => {
 		const config = { ...DEFAULT_SECURITY_CONFIG, audit: { logBlocked: false } };
-		logSecurityEvent(workspaceDir, config, { type: "command", tool: "bash", command: "rm -rf /" });
+		await logSecurityEvent(workspaceDir, config, { type: "command", tool: "bash", command: "rm -rf /" });
 		expect(existsSync(defaultLogPath())).toBe(false);
 	});
 
-	it("honors a custom logFile path and creates its parent directory", () => {
+	it("honors a custom logFile path and creates its parent directory", async () => {
 		const customPath = join(workspaceDir, "custom", "nested", "audit.log");
 		const config = { ...DEFAULT_SECURITY_CONFIG, audit: { logBlocked: true, logFile: customPath } };
-		logSecurityEvent(workspaceDir, config, {
+		await logSecurityEvent(workspaceDir, config, {
 			type: "network",
 			tool: "web_fetch",
 			url: "http://169.254.169.254/",
@@ -56,14 +61,14 @@ describe("logSecurityEvent", () => {
 		expect(existsSync(defaultLogPath())).toBe(false);
 	});
 
-	it("never throws even when the log path cannot be written", () => {
+	it("never throws even when the log path cannot be written", async () => {
 		// A file component in the middle of the path makes mkdirSync fail.
 		const blockedPath = join(workspaceDir, "not-a-dir", "audit.log");
 		writeFileSync(join(workspaceDir, "not-a-dir"), "i am a file, not a directory");
 		const config = { ...DEFAULT_SECURITY_CONFIG, audit: { logBlocked: true, logFile: blockedPath } };
 
-		expect(() =>
+		await expect(
 			logSecurityEvent(workspaceDir, config, { type: "command", tool: "bash", command: "whoami" }),
-		).not.toThrow();
+		).resolves.toBeUndefined();
 	});
 });
