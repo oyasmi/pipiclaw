@@ -656,10 +656,10 @@ async function doneTask(options: TaskManageToolOptions, request: TaskManageReque
 		);
 	}
 	if (fields.control?.sideEffects === "external") {
-		if (fields.control.externalApproval !== "granted") {
+		if (fields.control.externalApproval === "required") {
 			throw new Error(`Task "${id}" requires explicit external-action approval before it can be completed.`);
 		}
-		if (fields.control.approvalBodyHash !== taskBodyHash(body)) {
+		if (fields.control.externalApproval === "granted" && fields.control.approvalBodyHash !== taskBodyHash(body)) {
 			throw new Error(
 				`Task "${id}" changed after external-action approval; ask the user to run /tasks approve ${id} again.`,
 			);

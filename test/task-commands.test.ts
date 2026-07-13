@@ -162,6 +162,14 @@ describe("handleTasksCommand", () => {
 		expect(await run("doctor")).toContain("changed after external-action approval");
 	});
 
+	it("doctor does not require approval for an explicit external exemption", async () => {
+		const control = createDefaultTaskControl("evidence");
+		control.sideEffects = "external";
+		control.externalApproval = "not-required";
+		await writeFile(join(tasksDir, "automated.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
+		expect(await run("doctor")).not.toContain("requires external side effects but has no user approval");
+	});
+
 	it("doctor reports dependency cycles introduced by manual edits", async () => {
 		const a = createDefaultTaskControl("evidence");
 		const b = createDefaultTaskControl("evidence");

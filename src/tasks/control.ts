@@ -261,7 +261,12 @@ export function resetTaskControlForCycle(control: TaskControl, cycleId: string):
 		nextAction: undefined,
 		lastOutcome: "pending",
 		blockedReason: undefined,
-		externalApproval: control.sideEffects === "external" ? "required" : "not-required",
+		// A cycle invalidates a one-time grant, but preserves an explicit policy
+		// exemption for recurring automation.
+		externalApproval:
+			control.sideEffects === "external" && control.externalApproval !== "not-required"
+				? "required"
+				: "not-required",
 		approvalBy: undefined,
 		approvedAt: undefined,
 		approvalBodyHash: undefined,
@@ -288,6 +293,7 @@ function patchPositive(current: number | undefined, value: number | undefined, f
 export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPatch): TaskControl {
 	const next: TaskControl = structuredClone(control);
 	const invalidatesApproval = control.externalApproval === "granted" && Object.keys(patch).length > 0;
+	const explicitlySetsExternalApproval = patch.externalApproval !== undefined;
 	if (patch.priority !== undefined) next.priority = patch.priority;
 	if (patch.deadline?.trim() && !Number.isFinite(new Date(patch.deadline).getTime())) {
 		throw new Error(`deadline "${patch.deadline}" is not a valid ISO8601 date.`);
@@ -332,10 +338,12 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 		next.approvedAt = undefined;
 		next.approvalBodyHash = undefined;
 	}
-	if (next.sideEffects === "external" && next.externalApproval === "not-required") {
+	if (control.sideEffects !== "external" && next.sideEffects === "external" && !explicitlySetsExternalApproval) {
 		next.externalApproval = "required";
 	}
-	if (invalidatesApproval && next.sideEffects === "external") next.externalApproval = "required";
+	if (invalidatesApproval && next.sideEffects === "external" && !explicitlySetsExternalApproval) {
+		next.externalApproval = "required";
+	}
 	if (next.externalApproval !== "granted") {
 		next.approvalBy = undefined;
 		next.approvedAt = undefined;

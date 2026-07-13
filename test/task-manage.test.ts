@@ -258,6 +258,37 @@ describe("manageTask", () => {
 	});
 
 	describe("done", () => {
+		it("allows an externally scoped task explicitly marked not-required to close", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "automated-report",
+				title: "Automated report",
+				goal: "Publish a scheduled report without a per-run approval.",
+				dod: "- [x] Report published",
+				control: {
+					verificationMode: "evidence",
+					sideEffects: "external",
+					externalApproval: "not-required",
+				},
+			});
+			await manageTask(options, {
+				action: "set",
+				id: "automated-report",
+				wake: "2026-07-14T09:00:00+08:00",
+			});
+			expect(await readFile(join(tasksDir, "automated-report.md"), "utf-8")).toContain(
+				'"externalApproval":"not-required"',
+			);
+			await expect(
+				manageTask(options, {
+					action: "done",
+					id: "automated-report",
+					summary: "The report was published.",
+					evidence: "Scheduled publishing log confirms completion.",
+				}),
+			).resolves.toMatchObject({ status: "done", archived: true });
+		});
+
 		it("preserves an independent PASS while waiting for external approval via set", async () => {
 			await manageTask(options, {
 				action: "create",
@@ -574,6 +605,22 @@ describe("manageTask", () => {
 			expect(started).toContain('"externalApproval":"required"');
 			expect(started).toContain('"status":"pending"');
 			expect(started).toContain("## Current Cycle (2026-W29)");
+		});
+
+		it("retains an explicit external approval exemption for the next cycle", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "automated-weekly",
+				title: "Automated weekly",
+				goal: "Publish weekly work automatically",
+				dod: "- [x] published",
+				recurrence: "weekly",
+				control: { verificationMode: "evidence", sideEffects: "external", externalApproval: "not-required" },
+			});
+			const path = join(tasksDir, "automated-weekly.md");
+			await writeFile(path, (await readFile(path, "utf-8")).replace("status: open", "status: done"));
+			await manageTask(options, { action: "start-cycle", id: "automated-weekly", cycleId: "2026-W29" });
+			expect(await readFile(path, "utf-8")).toContain('"externalApproval":"not-required"');
 		});
 
 		it("does not start a second cycle while the current one is still open", async () => {

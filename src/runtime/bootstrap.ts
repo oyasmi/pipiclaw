@@ -820,6 +820,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 								costUsd: result.usage.cost.total,
 								wallTimeMinutes: result.durationMs / 60_000,
 								failed: result.stopReason === "error" || result.stopReason === "aborted",
+								silent: result.silent,
 								finishedAt: new Date(),
 							},
 						);

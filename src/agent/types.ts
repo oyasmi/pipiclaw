@@ -42,6 +42,7 @@ export interface AgentRunner {
 		errorMessage?: string;
 		usage?: UsageTotals;
 		durationMs?: number;
+		silent?: boolean;
 	}>;
 	handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void>;
 	/** True if `text` is a slash command the runtime or session layer can handle. */

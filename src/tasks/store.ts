@@ -122,7 +122,14 @@ export async function releaseTaskAttemptClaim(
 export async function finishTaskAttempt(
 	channelDir: string,
 	id: string,
-	result: { tokens: number; costUsd: number; wallTimeMinutes: number; failed: boolean; finishedAt: Date },
+	result: {
+		tokens: number;
+		costUsd: number;
+		wallTimeMinutes: number;
+		failed: boolean;
+		silent?: boolean;
+		finishedAt: Date;
+	},
 ): Promise<void> {
 	await updateStoredTask(
 		channelDir,
@@ -134,7 +141,16 @@ export async function finishTaskAttempt(
 			control.usage.costUsd += Math.max(0, result.costUsd);
 			control.usage.wallTimeMinutes += Math.max(0, result.wallTimeMinutes);
 			control.lastFinishedAt = result.finishedAt.toISOString();
-			if (result.failed) {
+			if (result.silent) {
+				// The driver claimed before dispatch to prevent concurrent work. A silent
+				// turn performed no task advancement, so retain its cost audit but not its
+				// attempt charge.
+				control.usage.attempts = Math.max(0, control.usage.attempts - 1);
+				if (control.lastOutcome === "running") {
+					control.lastOutcome = "pending";
+					control.blockedReason = undefined;
+				}
+			} else if (result.failed) {
 				control.lastOutcome = "failed";
 				control.blockedReason = "The previous agent run failed; inspect the runtime error before retrying.";
 			} else if (control.lastOutcome === "running") {

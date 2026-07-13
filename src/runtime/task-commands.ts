@@ -503,7 +503,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					);
 				}
 			}
-			if (control.sideEffects === "external" && control.externalApproval !== "granted") {
+			if (control.sideEffects === "external" && control.externalApproval === "required") {
 				issues.push(
 					issue(
 						`tasks/${entry.id}.md requires external side effects but has no user approval.`,

@@ -278,6 +278,7 @@ export class ChannelRunner implements AgentRunner {
 		errorMessage?: string;
 		usage: UsageTotals;
 		durationMs: number;
+		silent: boolean;
 	}> {
 		const startedAt = Date.now();
 		this.resetRunState(ctx, store);
@@ -590,6 +591,7 @@ export class ChannelRunner implements AgentRunner {
 			errorMessage: this.runState.errorMessage,
 			usage: { ...this.runState.totalUsage, cost: { ...this.runState.totalUsage.cost } },
 			durationMs: Date.now() - startedAt,
+			silent: this.runState.finalOutcome.kind === "silent",
 		};
 	}
 
