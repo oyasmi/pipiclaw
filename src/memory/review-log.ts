@@ -19,6 +19,8 @@ export interface MemoryReviewLogEntry {
 	timestamp: string;
 	channelId: string;
 	reason: MemoryReviewReason;
+	/** Joins this outcome to the corresponding sidecar usage-ledger entry. */
+	correlationId?: string;
 	candidates?: unknown[];
 	actions?: unknown[];
 	suggestions?: unknown[];
@@ -29,6 +31,7 @@ export interface MemoryReviewLogEntry {
 const REVIEW_LOG_MAX_BYTES = 1_024 * 1_024; // 1 MB
 
 const writeQueue = createSerialQueue<string>();
+const lastGateSkipByPath = new Map<string, string>();
 
 export function getMemoryReviewLogPath(channelDir: string): string {
 	return join(channelDir, "memory-review.jsonl");
@@ -56,6 +59,19 @@ async function rotateIfNeeded(path: string, incomingBytes: number): Promise<void
 
 export async function appendMemoryReviewLog(channelDir: string, entry: MemoryReviewLogEntry): Promise<void> {
 	const path = getMemoryReviewLogPath(channelDir);
+	const gateSkipOnly =
+		(entry.skipped?.length ?? 0) > 0 &&
+		(entry.actions?.length ?? 0) === 0 &&
+		(entry.candidates?.length ?? 0) === 0 &&
+		(entry.suggestions?.length ?? 0) === 0 &&
+		!entry.error;
+	if (gateSkipOnly) {
+		const fingerprint = JSON.stringify({ reason: entry.reason, skipped: entry.skipped });
+		if (lastGateSkipByPath.get(path) === fingerprint) return;
+		lastGateSkipByPath.set(path, fingerprint);
+	} else {
+		lastGateSkipByPath.delete(path);
+	}
 	const line = `${JSON.stringify(entry)}\n`;
 	await writeQueue.run(path, async () => {
 		await mkdir(dirname(path), { recursive: true });

@@ -19,8 +19,9 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
-import { buildFirstTurnMemoryBootstrap as renderFirstTurnMemoryBootstrap } from "../memory/bootstrap.js";
+import { buildFirstTurnMemoryBootstrapResult, type FirstTurnMemoryBootstrapResult } from "../memory/bootstrap.js";
 import { createMemoryCandidateStore, type MemoryCandidateStore } from "../memory/candidates.js";
+import { handleMemoryCommand } from "../memory/commands.js";
 import { getChannelMemoryPath } from "../memory/files.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import {
@@ -301,6 +302,8 @@ export class ChannelRunner implements AgentRunner {
 		let recalledContextText = "";
 		let taskDigestText = "";
 		let durableMemoryBootstrapText = "";
+		let bootstrapCandidateIds: string[] = [];
+		let bootstrapPrepared = false;
 
 		try {
 			await this.ensureSessionReady();
@@ -326,6 +329,13 @@ export class ChannelRunner implements AgentRunner {
 				// system prompt is what lets every channel in a workspace share one cached prefix.
 				promptText = `${this.renderChannelTurnContext()}\n\n<user_message>\n${promptText}\n</user_message>`;
 
+				if (this.firstTurnMemoryBootstrapPending) {
+					const bootstrap = await this.buildFirstTurnMemoryBootstrap();
+					durableMemoryBootstrapText = bootstrap.renderedText;
+					bootstrapCandidateIds = bootstrap.includedCandidateIds;
+					bootstrapPrepared = true;
+				}
+
 				const recallSettings = this.settingsManager.getMemoryRecallSettings();
 				if (recallSettings.enabled) {
 					const recall = await recallRelevantMemory({
@@ -337,6 +347,7 @@ export class ChannelRunner implements AgentRunner {
 						maxInjected: recallSettings.maxInjected,
 						maxChars: recallSettings.maxChars,
 						rerankWithModel: recallSettings.rerankWithModel,
+						excludedCandidateIds: bootstrapCandidateIds,
 						// Let shouldUseModelRerank's own memory-intent gate decide (it already handles
 						// Chinese phrasing) — forcing autoRerank for every Han-script message triggered a
 						// model rerank (up to 8s) on nearly every Chinese turn once memory filled up.
@@ -364,12 +375,8 @@ export class ChannelRunner implements AgentRunner {
 					}
 				}
 
-				if (this.firstTurnMemoryBootstrapPending) {
-					durableMemoryBootstrapText = await this.buildFirstTurnMemoryBootstrap();
-					if (durableMemoryBootstrapText) {
-						promptText = `${durableMemoryBootstrapText}\n\n${promptText}`;
-					}
-					this.firstTurnMemoryBootstrapPending = false;
+				if (durableMemoryBootstrapText) {
+					promptText = `${durableMemoryBootstrapText}\n\n${promptText}`;
 				}
 			}
 
@@ -391,6 +398,7 @@ export class ChannelRunner implements AgentRunner {
 						await this.sessionResourceGate.runPrompt(async () => {
 							await this.session.prompt(text);
 							promptSubmitted = true;
+							if (bootstrapPrepared) this.firstTurnMemoryBootstrapPending = false;
 						});
 					} catch (err) {
 						this.runState.stopReason = "error";
@@ -1073,6 +1081,7 @@ export class ChannelRunner implements AgentRunner {
 					refreshSessionResources: async () => {
 						await this.refreshSessionResources();
 					},
+					runMemoryCommand: async (args) => handleMemoryCommand({ channelDir: this.channelDir, args }),
 				}),
 			],
 			// Pipiclaw owns the base prompt: with a custom prompt present, pi emits no
@@ -1223,7 +1232,7 @@ export class ChannelRunner implements AgentRunner {
 		});
 	}
 
-	private async buildFirstTurnMemoryBootstrap(): Promise<string> {
+	private async buildFirstTurnMemoryBootstrap(): Promise<FirstTurnMemoryBootstrapResult> {
 		const readOptionalFile = async (path: string): Promise<string> => {
 			try {
 				return await readFile(path, "utf-8");
@@ -1237,7 +1246,7 @@ export class ChannelRunner implements AgentRunner {
 			readOptionalFile(join(this.workspaceDir, "MEMORY.md")),
 		]);
 
-		return renderFirstTurnMemoryBootstrap({
+		return buildFirstTurnMemoryBootstrapResult({
 			channelMemory,
 			workspaceMemory,
 		});

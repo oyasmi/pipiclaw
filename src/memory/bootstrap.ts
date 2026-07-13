@@ -1,5 +1,7 @@
 import { splitH2Sections } from "../shared/markdown-sections.js";
 import { clipText } from "../shared/text-utils.js";
+import { buildMemoryCandidateId } from "./candidates.js";
+import { parseChannelMemoryEntries } from "./files.js";
 
 const FIRST_TURN_MEMORY_SNAPSHOT_MAX_CHARS = 3_000;
 const MIN_SECTION_BUDGET = 600;
@@ -72,13 +74,24 @@ export interface FirstTurnMemoryBootstrapOptions {
 	maxChars?: number;
 }
 
+export interface FirstTurnMemoryBootstrapResult {
+	renderedText: string;
+	includedCandidateIds: string[];
+}
+
 export function buildFirstTurnMemoryBootstrap(options: FirstTurnMemoryBootstrapOptions): string {
+	return buildFirstTurnMemoryBootstrapResult(options).renderedText;
+}
+
+export function buildFirstTurnMemoryBootstrapResult(
+	options: FirstTurnMemoryBootstrapOptions,
+): FirstTurnMemoryBootstrapResult {
 	const maxChars = options.maxChars ?? FIRST_TURN_MEMORY_SNAPSHOT_MAX_CHARS;
 	const channelMemory = normalizeContent(options.channelMemory);
 	const workspaceMemory = normalizeContent(options.workspaceMemory);
 
 	if (!channelMemory && !workspaceMemory) {
-		return "";
+		return { renderedText: "", includedCandidateIds: [] };
 	}
 
 	const [channelBudget, workspaceBudget] = allocateBudgets(channelMemory, workspaceMemory, maxChars);
@@ -87,19 +100,28 @@ export function buildFirstTurnMemoryBootstrap(options: FirstTurnMemoryBootstrapO
 		"Durable memory bootstrap for the first user turn in this session.",
 		"Use it as background context together with any turn-specific recalled snippets.",
 	];
+	const includedCandidateIds: string[] = [];
 
 	if (channelMemory) {
+		const selectedChannelMemory =
+			channelBudget > 0 ? selectChannelMemoryForBootstrap(channelMemory, channelBudget) : channelMemory;
 		sections.push("", "[Channel MEMORY.md]");
-		sections.push(channelBudget > 0 ? selectChannelMemoryForBootstrap(channelMemory, channelBudget) : channelMemory);
+		sections.push(selectedChannelMemory);
+		includedCandidateIds.push(...parseChannelMemoryEntries(selectedChannelMemory).map((entry) => entry.id));
 	}
 
 	if (workspaceMemory) {
+		const selectedWorkspaceMemory =
+			workspaceBudget > 0 ? clipText(workspaceMemory, workspaceBudget, { headRatio: 1 }) : workspaceMemory;
 		sections.push("", "[Workspace MEMORY.md]");
-		sections.push(
-			workspaceBudget > 0 ? clipText(workspaceMemory, workspaceBudget, { headRatio: 1 }) : workspaceMemory,
+		sections.push(selectedWorkspaceMemory);
+		includedCandidateIds.push(
+			...splitH2Sections(selectedWorkspaceMemory).map((section) =>
+				buildMemoryCandidateId("workspace-memory", section.heading),
+			),
 		);
 	}
 
 	sections.push("</durable_memory_snapshot>");
-	return sections.join("\n");
+	return { renderedText: sections.join("\n"), includedCandidateIds };
 }

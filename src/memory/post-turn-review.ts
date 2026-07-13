@@ -41,6 +41,7 @@ export interface PostTurnReviewOptions {
 	refreshWorkspaceResources?: () => Promise<void>;
 	sourceEntryIds?: string[];
 	suppressAutomaticWrites?: boolean;
+	correlationId?: string;
 }
 
 export interface PostTurnReviewApplyResult {
@@ -61,9 +62,10 @@ Return strict JSON only:
   "memoryOps": [
     {
       "target": "channel-memory",
-	  "op": "add|supersede|invalidate",
-	  "targetId": "required for supersede/invalidate",
+      "op": "add|supersede|invalidate",
+      "targetId": "required for supersede/invalidate",
       "content": "standalone durable memory bullet without '-'",
+      "kind": "fact|preference|decision|constraint|open-loop|lesson",
       "confidence": 0.0,
       "necessity": "low|medium|high",
       "reason": "why it should or should not be stored"
@@ -113,6 +115,14 @@ function normalizeMemoryCandidate(value: unknown): MemoryPromotionCandidate | nu
 	const op = value.op === "supersede" || value.op === "invalidate" ? value.op : "add";
 	const targetId = typeof value.targetId === "string" ? value.targetId.trim() : undefined;
 	const content = typeof value.content === "string" ? value.content.trim() : undefined;
+	const kind =
+		value.kind === "preference" ||
+		value.kind === "decision" ||
+		value.kind === "constraint" ||
+		value.kind === "open-loop" ||
+		value.kind === "lesson"
+			? value.kind
+			: "fact";
 	if ((op === "invalidate" && !targetId) || (op !== "invalidate" && !content)) {
 		return null;
 	}
@@ -121,6 +131,7 @@ function normalizeMemoryCandidate(value: unknown): MemoryPromotionCandidate | nu
 		op,
 		targetId,
 		content,
+		kind,
 		confidence: normalizeConfidence(value.confidence),
 		necessity: normalizeNecessity(value.necessity),
 		reason: typeof value.reason === "string" ? value.reason.trim() : "",
@@ -212,7 +223,7 @@ ${transcript || "(empty)"}`;
 		systemPrompt: POST_TURN_REVIEW_SYSTEM_PROMPT,
 		prompt,
 		timeoutMs: options.timeoutMs,
-		usageContext: { channelId: options.channelId },
+		usageContext: { channelId: options.channelId, correlationId: options.correlationId },
 		parse: (text) => parsePostTurnReviewResult(parseJsonObject(text)),
 	});
 	return result.output;
@@ -246,8 +257,24 @@ async function applyMemoryCandidate(
 						targetId: candidate.targetId ?? "",
 						content: candidate.content ?? "",
 						sourceEntryIds: options.sourceEntryIds,
+						metadata: {
+							kind: candidate.kind,
+							sourceType: "agent",
+							trust: "inferred",
+							sourceCorrelationId: options.correlationId,
+						},
 					}
-				: { op: "add", content: candidate.content ?? "", sourceEntryIds: options.sourceEntryIds };
+				: {
+						op: "add",
+						content: candidate.content ?? "",
+						sourceEntryIds: options.sourceEntryIds,
+						metadata: {
+							kind: candidate.kind,
+							sourceType: "agent",
+							trust: "inferred",
+							sourceCorrelationId: options.correlationId,
+						},
+					};
 	const applied = await applyChannelMemoryOps(options.channelDir, [op], timestamp);
 	if (applied.blockedByPolicy > 0 || applied.blockedByTombstone > 0) {
 		result.skipped.push({ type: "memory", entry: candidate.targetId, reason: "blocked by memory policy" });
@@ -323,6 +350,7 @@ export async function applyPostTurnReviewResult(
 		timestamp,
 		channelId: options.channelId,
 		reason: "post-turn",
+		correlationId: options.correlationId,
 		candidates: [...review.memoryOps, ...review.skillCandidates],
 		actions: result.actions,
 		suggestions: result.suggestions,
@@ -351,6 +379,7 @@ export async function runPostTurnReview(options: PostTurnReviewOptions): Promise
 			timestamp: new Date().toISOString(),
 			channelId: options.channelId,
 			reason: "post-turn",
+			correlationId: options.correlationId,
 			error: message,
 			skipped: [{ target: "post-turn-review", reason: "failed" }],
 		});

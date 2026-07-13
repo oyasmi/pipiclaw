@@ -117,7 +117,7 @@ function renderMessagesForSignalScan(messages: AgentMessage[]): string {
 	return sanitizeMessagesForMemory(messages).map(messageToText).join("\n");
 }
 
-function makeRunOptions(input: BaseMaintenanceJobInput): ConsolidationRunOptions {
+function makeRunOptions(input: BaseMaintenanceJobInput, usageCorrelationId?: string): ConsolidationRunOptions {
 	return {
 		channelId: input.channelId,
 		channelDir: input.channelDir,
@@ -125,6 +125,7 @@ function makeRunOptions(input: BaseMaintenanceJobInput): ConsolidationRunOptions
 		resolveApiKey: input.resolveApiKey,
 		messages: input.messages,
 		sessionEntries: input.sessionEntries,
+		usageCorrelationId,
 	};
 }
 
@@ -140,6 +141,7 @@ async function appendJobReviewLog(
 		skipped?: unknown[];
 		actions?: unknown[];
 		error?: string;
+		correlationId?: string;
 	},
 	now: Date,
 ): Promise<void> {
@@ -198,6 +200,7 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 		}
 
 		try {
+			const correlationId = `session-refresh:${latestId ?? now.toISOString()}`;
 			await updateChannelSessionMemory({
 				channelId: input.channelId,
 				channelDir: input.channelDir,
@@ -205,6 +208,7 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 				model: input.model,
 				resolveApiKey: input.resolveApiKey,
 				timeoutMs: input.settings.sessionMemory.timeoutMs,
+				usageCorrelationId: correlationId,
 			});
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
@@ -219,7 +223,7 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 				input.channelDir,
 				input.channelId,
 				"session-refresh-job",
-				{ actions: [{ target: "SESSION.md", action: "rewrite" }] },
+				{ actions: [{ target: "SESSION.md", action: "rewrite" }], correlationId },
 				now,
 			);
 			return ran("session-refresh");
@@ -291,8 +295,14 @@ export async function runDurableConsolidationJob(input: DurableConsolidationJobI
 				input.channelId,
 				"durable-consolidation-job",
 				result.skipped
-					? { skipped: [{ target: "consolidation", reason: "no meaningful snapshot" }] }
-					: { actions: [{ target: "MEMORY.md", action: "append", entries: result.appendedMemoryEntries }] },
+					? {
+							skipped: [{ target: "consolidation", reason: "no meaningful snapshot" }],
+							correlationId: sourceWindow.windowId,
+						}
+					: {
+							actions: [{ target: "MEMORY.md", action: "append", entries: result.appendedMemoryEntries }],
+							correlationId: sourceWindow.windowId,
+						},
 				now,
 			);
 			return ran("durable-consolidation");
@@ -364,6 +374,7 @@ export async function runGrowthReviewJob(input: GrowthReviewJobInput): Promise<M
 				minMemoryAutoWriteConfidence: input.settings.memoryGrowth.minMemoryAutoWriteConfidence,
 				minSkillAutoWriteConfidence: input.settings.memoryGrowth.minSkillAutoWriteConfidence,
 				loadedSkills: input.loadedSkills,
+				correlationId: sourceWindow.windowId,
 				emitNotice: async (notice) => {
 					notices.push(notice);
 				},
@@ -392,6 +403,7 @@ export async function runGrowthReviewJob(input: GrowthReviewJobInput): Promise<M
 				{
 					actions: appliedResult.actions,
 					skipped: appliedResult.skipped,
+					correlationId: sourceWindow.windowId,
 				},
 				now,
 			);
@@ -442,7 +454,8 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 		}
 
 		try {
-			const options = makeRunOptions(input);
+			const correlationId = `structural-maintenance:${now.toISOString()}`;
+			const options = makeRunOptions(input, correlationId);
 			const cleanedMemory = decision.runMemoryCleanup
 				? await cleanupChannelMemory(options, currentMemory, {
 						cleanupShrinkGuardMinRatio: input.settings.memoryMaintenance.cleanupShrinkGuardMinRatio,
@@ -460,6 +473,7 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 				input.channelId,
 				"structural-maintenance-job",
 				{
+					correlationId,
 					actions: [
 						...(cleanedMemory ? [{ target: "MEMORY.md", action: "rewrite" }] : []),
 						...(foldedHistory ? [{ target: "HISTORY.md", action: "rewrite" }] : []),

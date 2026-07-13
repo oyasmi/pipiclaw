@@ -16,6 +16,7 @@ function memoryCandidate(overrides: Partial<MemoryPromotionCandidate> = {}): Mem
 	return {
 		target: "channel-memory",
 		op: "add",
+		kind: "preference",
 		content: "User prefers concise replies.",
 		confidence: 0.95,
 		reason: "Stated explicitly twice.",

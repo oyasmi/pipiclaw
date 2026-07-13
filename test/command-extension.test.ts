@@ -28,6 +28,7 @@ function createOptions() {
 			getThinkingLevel: vi.fn(() => "off" as ThinkingLevel),
 			switchModel: vi.fn(async () => {}),
 			refreshSessionResources: vi.fn(async () => {}),
+			runMemoryCommand: vi.fn(async () => "# Memory Status"),
 		},
 	};
 }
@@ -53,11 +54,20 @@ function getLastCommandResult(api: FakeExtensionAPI): { customType: string; cont
 }
 
 describe("command-extension", () => {
-	it("registers session/model/new/compact commands", () => {
+	it("registers memory/session/model/new/compact commands", () => {
 		const api = new FakeExtensionAPI();
 		createCommandExtension(createOptions().options)(api as never);
 
-		expect([...api.registeredCommands.keys()]).toEqual(["session", "model", "new", "compact"]);
+		expect([...api.registeredCommands.keys()]).toEqual(["memory", "session", "model", "new", "compact"]);
+	});
+
+	it("renders /memory through the domain command handler", async () => {
+		const api = new FakeExtensionAPI();
+		const { options } = createOptions();
+		createCommandExtension(options)(api as never);
+		await api.registeredCommands.get("memory")?.handler("status", createCommandContext());
+		expect(options.runMemoryCommand).toHaveBeenCalledWith("status");
+		expect(getLastCommandResult(api).content).toContain("Memory Status");
 	});
 
 	it("renders /session output with session stats and command custom type", async () => {

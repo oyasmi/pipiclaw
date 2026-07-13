@@ -4,6 +4,7 @@ import { copyFile, readdir, rm } from "fs/promises";
 import { basename, join } from "path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
+import { type MemoryMetadataUpdate, type MemoryWriteMetadataInput, syncMemoryMetadata } from "./metadata.js";
 import { containsSecret, REDACTED_SECRET } from "./policy.js";
 import { appendMemoryTombstone, hashMemoryContent, readMemoryTombstones } from "./tombstones.js";
 
@@ -144,8 +145,14 @@ export function parseChannelMemoryEntries(content: string): ParsedMemoryEntry[] 
 }
 
 export type MemoryOp =
-	| { op: "add"; content: string; sourceEntryIds?: string[] }
-	| { op: "supersede"; targetId: string; content: string; sourceEntryIds?: string[] }
+	| { op: "add"; content: string; sourceEntryIds?: string[]; metadata?: MemoryWriteMetadataInput }
+	| {
+			op: "supersede";
+			targetId: string;
+			content: string;
+			sourceEntryIds?: string[];
+			metadata?: MemoryWriteMetadataInput;
+	  }
 	| { op: "invalidate"; targetId: string; reason?: string }
 	| { op: "forget"; targetId: string; reason?: string; sourceEntryIds?: string[] };
 
@@ -188,14 +195,19 @@ export async function applyChannelMemoryOps(
 	const path = getChannelMemoryPath(channelDir);
 	const existing = await readOptionalTextFile(path);
 	const lines = existing.replace(/\r/g, "").split("\n");
-	const byId = new Map(parseChannelMemoryEntries(existing).map((entry) => [entry.id, entry]));
+	const existingEntries = parseChannelMemoryEntries(existing);
+	const byId = new Map(existingEntries.map((entry) => [entry.id, entry]));
+	// Reconcile legacy entries before applying removals so terminal status retains
+	// the entry's provenance even when no sidecar record existed yet.
+	await syncMemoryMetadata(channelDir, existingEntries, [], timestamp);
 	const tombstones = await readMemoryTombstones(channelDir);
 	const tombstoneHashes = new Set(tombstones.map((tombstone) => tombstone.contentHash));
 	const tombstoneSourceIds = new Set(tombstones.flatMap((tombstone) => tombstone.sourceEntryIds ?? []));
 
 	const removals = new Set<number>();
 	const replacements = new Map<number, string>();
-	const additions: string[] = [];
+	const additions: Array<{ content: string; id: string }> = [];
+	const metadataUpdates: MemoryMetadataUpdate[] = [];
 
 	for (const op of ops) {
 		if (op.op === "add" || op.op === "supersede") {
@@ -214,7 +226,9 @@ export async function applyChannelMemoryOps(
 
 		if (op.op === "add") {
 			if (op.content.trim()) {
-				additions.push(op.content.trim());
+				const id = generateMemoryEntryId();
+				additions.push({ content: op.content.trim(), id });
+				metadataUpdates.push({ id, status: "active", metadata: op.metadata, sourceEntryIds: op.sourceEntryIds });
 				result.added++;
 			}
 			continue;
@@ -234,8 +248,10 @@ export async function applyChannelMemoryOps(
 						sourceEntryIds: op.sourceEntryIds,
 					});
 					result.forgotten++;
+					metadataUpdates.push({ id: target.id, status: "forgotten", sourceEntryIds: op.sourceEntryIds });
 				} else {
 					result.invalidated++;
+					metadataUpdates.push({ id: target.id, status: "invalidated" });
 				}
 			} else {
 				result.missingTarget++;
@@ -248,13 +264,20 @@ export async function applyChannelMemoryOps(
 			continue;
 		}
 		if (target) {
-			replacements.set(
-				target.lineIndex,
-				renderMemoryEntryLine(op.content, target.hasExplicitId ? target.id : generateMemoryEntryId()),
-			);
+			const replacementId = target.hasExplicitId ? target.id : generateMemoryEntryId();
+			replacements.set(target.lineIndex, renderMemoryEntryLine(op.content, replacementId));
+			if (replacementId !== target.id) metadataUpdates.push({ id: target.id, status: "superseded" });
+			metadataUpdates.push({
+				id: replacementId,
+				status: "active",
+				metadata: op.metadata,
+				sourceEntryIds: op.sourceEntryIds,
+			});
 			result.superseded++;
 		} else {
-			additions.push(op.content.trim());
+			const id = generateMemoryEntryId();
+			additions.push({ content: op.content.trim(), id });
+			metadataUpdates.push({ id, status: "active", metadata: op.metadata, sourceEntryIds: op.sourceEntryIds });
 			result.downgradedToAdd++;
 			result.missingTarget++;
 		}
@@ -268,7 +291,7 @@ export async function applyChannelMemoryOps(
 	if (additions.length > 0) {
 		const block = [
 			`## Update ${timestamp}`,
-			...additions.map((content) => renderMemoryEntryLine(content, generateMemoryEntryId())),
+			...additions.map(({ content, id }) => renderMemoryEntryLine(content, id)),
 		].join("\n");
 		nextContent = `${ensureTrailingNewlines(nextContent)}${block}\n`;
 	} else {
@@ -279,6 +302,7 @@ export async function applyChannelMemoryOps(
 		await backupBeforeRewrite(channelDir, path);
 	}
 	await writeFileAtomically(path, nextContent);
+	await syncMemoryMetadata(channelDir, parseChannelMemoryEntries(nextContent), metadataUpdates, timestamp);
 	return result;
 }
 
@@ -374,6 +398,7 @@ export async function rewriteChannelMemory(channelDir: string, content: string):
 	await backupBeforeRewrite(channelDir, path);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_MEMORY;
 	await writeFileAtomically(path, nextContent);
+	await syncMemoryMetadata(channelDir, parseChannelMemoryEntries(nextContent));
 }
 
 export async function rewriteChannelHistory(channelDir: string, content: string): Promise<void> {
@@ -402,7 +427,9 @@ export async function appendChannelMemoryUpdate(channelDir: string, block: Memor
 		`## Update ${block.timestamp}`,
 		...block.entries.map((entry) => renderMemoryEntryLine(entry, generateMemoryEntryId())),
 	].join("\n");
-	await writeFileAtomically(path, `${ensureTrailingNewlines(existing)}${renderedBlock}\n`);
+	const nextContent = `${ensureTrailingNewlines(existing)}${renderedBlock}\n`;
+	await writeFileAtomically(path, nextContent);
+	await syncMemoryMetadata(channelDir, parseChannelMemoryEntries(nextContent), [], block.timestamp);
 }
 
 export function getChannelHistoryArchivePath(channelDir: string): string {

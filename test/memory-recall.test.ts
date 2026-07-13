@@ -2,7 +2,8 @@ import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { buildMemoryCandidates, createMemoryCandidateStore } from "../src/memory/candidates.js";
-import { tokenizeRecallText } from "../src/memory/recall.js";
+import { readMemoryMetadata } from "../src/memory/metadata.js";
+import { recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeWorkspace = useTempDirs("pipiclaw-recall-");
@@ -93,6 +94,34 @@ describe("memory candidates", () => {
 		expect(new Set(updates.map((candidate) => candidate.id)).size).toBe(2);
 	});
 
+	it("builds one traceable candidate per channel memory entry", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			[
+				"# Channel Memory",
+				"",
+				"## Preferences",
+				"",
+				"- Prefer compact diffs. <!--id:m-compact01-->",
+				"- Use Chinese for handoff notes. <!--id:m-chinese01-->",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const candidates = (await buildMemoryCandidates({ workspaceDir, channelDir })).filter(
+			(candidate) => candidate.source === "channel-memory",
+		);
+
+		expect(candidates).toHaveLength(2);
+		expect(candidates.map((candidate) => candidate.id)).toEqual(["m-compact01", "m-chinese01"]);
+		expect(candidates.map((candidate) => candidate.content)).toEqual([
+			"Prefer compact diffs.",
+			"Use Chinese for handoff notes.",
+		]);
+		expect(candidates.every((candidate) => candidate.entryId === candidate.id)).toBe(true);
+	});
+
 	it("refreshes only the files whose fingerprints changed", async () => {
 		const { workspaceDir, channelDir } = createTempWorkspace();
 		const store = createMemoryCandidateStore();
@@ -151,6 +180,35 @@ describe("memory candidates", () => {
 });
 
 describe("memory recall", () => {
+	it("injects only the matching bullet from a large section and records its recall", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		const entries = Array.from({ length: 100 }, (_, index) =>
+			index === 73
+				? "- Release codename is moonstone. <!--id:m-moonstone-->"
+				: `- Unrelated durable item number ${index}. <!--id:m-item${index}-->`,
+		);
+		writeFileSync(join(channelDir, "MEMORY.md"), ["# Channel Memory", "", "## Facts", "", ...entries].join("\n"));
+
+		const result = await recallRelevantMemory({
+			query: "release codename moonstone",
+			channelId: "dm_123",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 3,
+			maxChars: 2_000,
+			rerankWithModel: false,
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		});
+
+		expect(result.items).toHaveLength(1);
+		expect(result.items[0]).toMatchObject({ id: "m-moonstone", entryId: "m-moonstone" });
+		expect(result.renderedText).toContain("Release codename is moonstone.");
+		expect(result.renderedText).not.toContain("Unrelated durable item");
+		expect((await readMemoryMetadata(channelDir)).entries["m-moonstone"]?.recallCount).toBe(1);
+	});
+
 	it("captures overlapping Chinese dictionary terms without keeping covered bigram noise", () => {
 		const tokens = tokenizeRecallText("当前状态管理优化方案");
 

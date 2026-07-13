@@ -59,15 +59,19 @@ describe("memory-files concurrency", () => {
 			rewriteChannelMemory("/tmp/channel", "# second"),
 		]);
 
-		const tempPaths = fsMocks.open.mock.calls
+		const allTempPaths = fsMocks.open.mock.calls
 			.map((call) => call[0] as string)
 			.filter((path) => path.endsWith(".tmp"));
+		const tempPaths = allTempPaths.filter((path) => path.includes("/MEMORY.md."));
 		expect(tempPaths).toHaveLength(2);
 		expect(new Set(tempPaths).size).toBe(2);
 		for (const tempPath of tempPaths) {
 			expect(tempPath).toMatch(/^\/tmp\/channel\/MEMORY\.md\.\d+\..+\.tmp$/);
 		}
 
-		expect(fsMocks.rename.mock.calls.map((call) => call[0])).toEqual(tempPaths);
+		const metadataTempPaths = allTempPaths.filter((path) => path.includes("/.memory/entries.json."));
+		expect(metadataTempPaths).toHaveLength(2);
+		expect(new Set(allTempPaths).size).toBe(4);
+		expect(fsMocks.rename.mock.calls.map((call) => call[0])).toEqual(allTempPaths);
 	});
 });

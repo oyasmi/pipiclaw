@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFirstTurnMemoryBootstrap } from "../src/memory/bootstrap.js";
+import { buildFirstTurnMemoryBootstrap, buildFirstTurnMemoryBootstrapResult } from "../src/memory/bootstrap.js";
 
 describe("first-turn memory bootstrap", () => {
 	it("renders channel and workspace durable memory together", () => {
@@ -67,5 +67,16 @@ describe("first-turn memory bootstrap", () => {
 				workspaceMemory: "\n",
 			}),
 		).toBe("");
+	});
+
+	it("reports entry ids included in the first-turn snapshot for recall deduplication", () => {
+		const result = buildFirstTurnMemoryBootstrapResult({
+			channelMemory: "# Channel Memory\n\n## Constraints\n\n- Keep production online. <!--id:m-online01-->\n",
+			workspaceMemory: "# Workspace Memory\n\n## Shared Context\n\n- Use pnpm.\n",
+		});
+
+		expect(result.includedCandidateIds).toEqual(
+			expect.arrayContaining(["m-online01", "workspace-memory:shared-context:"]),
+		);
 	});
 });

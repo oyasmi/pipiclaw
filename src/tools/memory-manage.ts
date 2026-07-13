@@ -37,6 +37,7 @@ const memoryManageSchema = Type.Object({
 				Type.Literal("decision"),
 				Type.Literal("constraint"),
 				Type.Literal("open-loop"),
+				Type.Literal("lesson"),
 			],
 			{ description: "For save: what kind of durable memory this is." },
 		),
@@ -60,6 +61,16 @@ interface MemoryManageArgs {
 	query?: string;
 	target?: string;
 	kind?: string;
+}
+
+function normalizeMemoryKind(kind: string | undefined) {
+	return kind === "preference" ||
+		kind === "decision" ||
+		kind === "constraint" ||
+		kind === "open-loop" ||
+		kind === "lesson"
+		? kind
+		: "fact";
 }
 
 function textResult(text: string, details: Record<string, unknown>) {
@@ -87,7 +98,13 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		// Serialize through the shared channel memory queue so this never races with background
 		// consolidation/maintenance on the same channel's files.
 		const result = await queue.run(options.channelId, () =>
-			applyChannelMemoryOps(options.channelDir, [{ op: "add", content: trimmed }]),
+			applyChannelMemoryOps(options.channelDir, [
+				{
+					op: "add",
+					content: trimmed,
+					metadata: { kind: normalizeMemoryKind(kind), sourceType: "user", trust: "explicit" },
+				},
+			]),
 		);
 		options.memoryCandidateStore.invalidate(getChannelMemoryPath(options.channelDir));
 		return textResult(`Saved to channel memory${kind ? ` (${kind})` : ""}.`, {

@@ -66,6 +66,7 @@ describe("post-turn review", () => {
 				{
 					target: "channel-memory",
 					op: "add",
+					kind: "preference",
 					content: "User prefers specs before implementation",
 					confidence: 0.9,
 					necessity: "high",
@@ -91,6 +92,7 @@ describe("post-turn review", () => {
 				{
 					target: "channel-memory",
 					op: "add",
+					kind: "preference",
 					content: "Maybe user likes verbose output",
 					confidence: 0.4,
 					necessity: "medium",
@@ -168,6 +170,7 @@ Review design decisions before coding.
 					{
 						target: "channel-memory",
 						op: "add",
+						kind: "fact",
 						content: "External page claims production uses port 9000",
 						confidence: 0.99,
 						necessity: "high",

@@ -63,6 +63,7 @@ describe("usage ledger", () => {
 			kind: "sidecar",
 			model: "m/c",
 			label: "session-memory-update",
+			correlationId: "memory-window-1",
 			usage: tokens,
 			cost: cost(0.05),
 		});
@@ -71,7 +72,9 @@ describe("usage ledger", () => {
 		const entries = readMonth("2026-07");
 		expect(entries.map((e) => e.kind).sort()).toEqual(["sidecar", "subagent", "turn"]);
 		const sub = entries.find((e) => e.kind === "subagent");
+		const sidecar = entries.find((e) => e.kind === "sidecar");
 		expect(sub).toMatchObject({ model: "m/b", label: "researcher", cost: { total: 0.2 } });
+		expect(sidecar?.correlationId).toBe("memory-window-1");
 		expect(typeof sub?.ts).toBe("string");
 	});
 

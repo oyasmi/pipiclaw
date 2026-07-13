@@ -15,7 +15,7 @@ export interface SidecarTask<T> {
 	timeoutMs?: number;
 	signal?: AbortSignal;
 	/** Attributes this task's LLM spend to a channel in the usage ledger. */
-	usageContext?: { channelId: string };
+	usageContext?: { channelId: string; correlationId?: string };
 }
 
 export interface SidecarResult<T> {
@@ -111,6 +111,7 @@ function recordSidecarUsage(task: SidecarTask<unknown>, message: { usage?: Maybe
 		kind: "sidecar",
 		model: formatModelReference(task.model),
 		label: task.name,
+		correlationId: task.usageContext?.correlationId,
 		usage: {
 			input: usage.input ?? 0,
 			output: usage.output ?? 0,

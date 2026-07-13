@@ -22,6 +22,7 @@ import {
 	rewriteChannelHistory,
 	rewriteChannelMemory,
 } from "./files.js";
+import type { MemoryEntryKind, MemoryWriteMetadataInput } from "./metadata.js";
 import { runRetriedSidecarTask, runSidecarTask } from "./sidecar-worker.js";
 import type { MemorySourceWindow } from "./source-window.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
@@ -39,8 +40,8 @@ const HISTORY_FOLDING_TIMEOUT_MS = 120_000;
 export type ConsolidationMode = "idle" | "boundary";
 
 const MEMORY_OPS_RULES = `- memoryOps entries operate on the durable channel MEMORY.md:
-  - {"op":"add","content":"..."} for a genuinely new durable fact.
-  - {"op":"supersede","targetId":"m-xxxx","content":"..."} when new information updates or contradicts an existing entry (use its id).
+  - {"op":"add","content":"...","kind":"fact|preference|decision|constraint|open-loop|lesson"} for a genuinely new durable fact.
+  - {"op":"supersede","targetId":"m-xxxx","content":"...","kind":"..."} when new information updates or contradicts an existing entry (use its id).
   - {"op":"invalidate","targetId":"m-xxxx","reason":"..."} when an existing entry is now obsolete or resolved.
 - Only reference targetId values that appear in the current MEMORY.md entries shown below.
 - Durable = stable facts, decisions, preferences, constraints, or medium-horizon open loops.
@@ -135,10 +136,14 @@ export interface ConsolidationRunOptions {
 	sessionEntries?: SessionEntry[];
 	sourceWindow?: MemorySourceWindow;
 	mode?: ConsolidationMode;
+	usageCorrelationId?: string;
 }
 
-function usageContextFor(channelId: string | undefined): { channelId: string } | undefined {
-	return channelId ? { channelId } : undefined;
+function usageContextFor(
+	channelId: string | undefined,
+	correlationId?: string,
+): { channelId: string; correlationId?: string } | undefined {
+	return channelId ? { channelId, correlationId } : undefined;
 }
 
 export interface InlineConsolidationResult {
@@ -170,8 +175,17 @@ function normalizeMemoryOp(value: unknown): MemoryOp | null {
 	const record = value as Record<string, unknown>;
 	const content = typeof record.content === "string" ? record.content.trim() : "";
 	const targetId = typeof record.targetId === "string" ? record.targetId.trim() : "";
+	const kind: MemoryEntryKind =
+		record.kind === "preference" ||
+		record.kind === "decision" ||
+		record.kind === "constraint" ||
+		record.kind === "open-loop" ||
+		record.kind === "lesson"
+			? record.kind
+			: "fact";
+	const metadata: MemoryWriteMetadataInput = { kind, sourceType: "agent", trust: "inferred" };
 	if (record.op === "supersede" && targetId && content) {
-		return { op: "supersede", targetId, content };
+		return { op: "supersede", targetId, content, metadata };
 	}
 	if (record.op === "invalidate" && targetId) {
 		return {
@@ -182,7 +196,7 @@ function normalizeMemoryOp(value: unknown): MemoryOp | null {
 	}
 	// Default to add for "add" or any unrecognized op that still carries content.
 	if (content) {
-		return { op: "add", content };
+		return { op: "add", content, metadata };
 	}
 	return null;
 }
@@ -274,7 +288,7 @@ async function runWorkerPrompt(
 	systemPrompt: string,
 	prompt: string,
 	timeoutMs: number,
-	usageContext?: { channelId: string },
+	usageContext?: { channelId: string; correlationId?: string },
 ): Promise<string> {
 	const result = await runSidecarTask({
 		name,
@@ -328,7 +342,7 @@ ${transcript || "(empty)"}`;
 			mode === "idle" ? IDLE_INLINE_CONSOLIDATION_SYSTEM_PROMPT : BOUNDARY_INLINE_CONSOLIDATION_SYSTEM_PROMPT,
 		prompt,
 		timeoutMs: INLINE_CONSOLIDATION_TIMEOUT_MS,
-		usageContext: usageContextFor(options.channelId),
+		usageContext: usageContextFor(options.channelId, options.sourceWindow?.windowId ?? options.usageCorrelationId),
 		parse: (text) => text.trim(),
 	});
 	const rawResponse = result.output;
@@ -355,7 +369,17 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 	if (response.memoryOps.length > 0 && !options.sourceWindow?.hasExternalToolContent) {
 		const sourceEntryIds = options.sourceWindow?.entries.map((entry) => entry.id) ?? [];
 		const ops = response.memoryOps.map(
-			(op): MemoryOp => (op.op === "add" || op.op === "supersede" ? { ...op, sourceEntryIds } : op),
+			(op): MemoryOp =>
+				op.op === "add" || op.op === "supersede"
+					? {
+							...op,
+							sourceEntryIds,
+							metadata: {
+								...op.metadata,
+								sourceCorrelationId: options.sourceWindow?.windowId ?? options.usageCorrelationId,
+							},
+						}
+					: op,
 		);
 		const applied = await applyChannelMemoryOps(options.channelDir, ops, timestamp);
 		appliedMemoryOps = applied.added + applied.superseded + applied.invalidated + applied.downgradedToAdd;
@@ -436,7 +460,7 @@ ${currentMemory}`;
 		MEMORY_CLEANUP_SYSTEM_PROMPT,
 		prompt,
 		MEMORY_CLEANUP_TIMEOUT_MS,
-		usageContextFor(options.channelId),
+		usageContextFor(options.channelId, options.usageCorrelationId),
 	);
 	const schemaError = validateCleanupSchema(currentMemory, nextMemory);
 	if (schemaError) {
@@ -477,7 +501,7 @@ ${renderedOlder}`;
 		HISTORY_FOLDING_SYSTEM_PROMPT,
 		prompt,
 		HISTORY_FOLDING_TIMEOUT_MS,
-		usageContextFor(options.channelId),
+		usageContextFor(options.channelId, options.usageCorrelationId),
 	);
 
 	const foldedHeading = `## Folded History Through ${olderSections[olderSections.length - 1]?.heading ?? new Date().toISOString()}`;

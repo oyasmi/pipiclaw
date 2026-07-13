@@ -6,6 +6,7 @@ export interface MemoryPromotionCandidate {
 	op: "add" | "supersede" | "invalidate";
 	targetId?: string;
 	content?: string;
+	kind: "fact" | "preference" | "decision" | "constraint" | "open-loop" | "lesson";
 	confidence: number;
 	reason: string;
 	necessity: "low" | "medium" | "high";

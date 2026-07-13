@@ -53,4 +53,17 @@ describe("memory review log", () => {
 			expect(() => JSON.parse(line)).not.toThrow();
 		}
 	});
+
+	it("deduplicates consecutive identical gate skips", async () => {
+		const channelDir = createChannelDir();
+		const base = {
+			channelId: "dm_123",
+			reason: "growth-review-job" as const,
+			skipped: [{ target: "post-turn-review", reason: "clean" }],
+		};
+		await appendMemoryReviewLog(channelDir, { ...base, timestamp: "2026-04-19T00:00:00.000Z" });
+		await appendMemoryReviewLog(channelDir, { ...base, timestamp: "2026-04-19T00:01:00.000Z" });
+		const lines = readFileSync(join(channelDir, "memory-review.jsonl"), "utf-8").trim().split("\n");
+		expect(lines).toHaveLength(1);
+	});
 });

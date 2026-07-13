@@ -4,6 +4,7 @@ let promptImpl = vi.fn<(input: string) => Promise<void>>(async () => {});
 let waitForIdleImpl = vi.fn<() => Promise<void>>(async () => {});
 let abortImpl = vi.fn<() => void>();
 let stateMessages: unknown[] = [];
+const recordUsage = vi.fn();
 
 vi.mock("@earendil-works/pi-agent-core", () => ({
 	Agent: vi.fn().mockImplementation(() => ({
@@ -20,6 +21,10 @@ vi.mock("@earendil-works/pi-agent-core", () => ({
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({
 	convertToLlm: vi.fn(),
+}));
+
+vi.mock("../src/usage/ledger.js", () => ({
+	getUsageLedger: () => ({ record: recordUsage }),
 }));
 
 import {
@@ -80,6 +85,42 @@ describe("sidecar-worker", () => {
 			name: "SidecarParseError",
 			rawText: '{"ok":true}',
 		} satisfies Partial<SidecarParseError>);
+	});
+
+	it("records the memory correlation id with sidecar cost", async () => {
+		stateMessages = [
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "ok" }],
+				stopReason: "stop",
+				usage: {
+					input: 10,
+					output: 2,
+					total: 12,
+					cost: { input: 0.01, output: 0.02, total: 0.03 },
+				},
+			},
+		];
+
+		await runSidecarTask({
+			name: "memory-inline-consolidation",
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+			systemPrompt: "System",
+			prompt: "Prompt",
+			parse: (text) => text,
+			usageContext: { channelId: "dm_1", correlationId: "window-123" },
+		});
+
+		expect(recordUsage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				channelId: "dm_1",
+				kind: "sidecar",
+				label: "memory-inline-consolidation",
+				correlationId: "window-123",
+				cost: expect.objectContaining({ total: 0.03 }),
+			}),
+		);
 	});
 
 	it("retries once after a transient sidecar failure", async () => {

@@ -129,6 +129,12 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
  */
 export const SESSION_COMMANDS: readonly CommandSpec[] = [
 	{
+		name: "memory",
+		argumentHint: "[status|list|show <id>|pending]",
+		description: "Inspect active memory, metadata, recall statistics, tombstones, and pending suggestions",
+		examples: ["/memory status", "/memory list", "/memory show m-1234abcd", "/memory pending"],
+	},
+	{
 		name: "session",
 		description: "Show current session state, message stats, token usage, and model info",
 		examples: ["/session"],

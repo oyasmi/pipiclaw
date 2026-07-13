@@ -28,6 +28,8 @@ export interface UsageLedgerEntry {
 	kind: UsageKind;
 	model: string;
 	label?: string;
+	/** Joins sidecar cost to the memory source window and review-log outcome. */
+	correlationId?: string;
 	usage: UsageTokens;
 	cost: UsageCost;
 }

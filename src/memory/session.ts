@@ -66,6 +66,7 @@ export interface SessionMemoryUpdateOptions {
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	timeoutMs?: number;
+	usageCorrelationId?: string;
 }
 
 type SessionMemoryStateUpdate = Partial<Record<keyof SessionMemoryState, string[] | string>> & {
@@ -313,7 +314,9 @@ export async function updateChannelSessionMemory(options: SessionMemoryUpdateOpt
 			prompt: buildSessionPrompt(currentSession, currentMemory, messages),
 			parse: parseStateUpdate,
 			timeoutMs: options.timeoutMs ?? DEFAULT_SESSION_MEMORY_TIMEOUT_MS,
-			usageContext: options.channelId ? { channelId: options.channelId } : undefined,
+			usageContext: options.channelId
+				? { channelId: options.channelId, correlationId: options.usageCorrelationId }
+				: undefined,
 		});
 		update = result.output;
 	} catch (error) {

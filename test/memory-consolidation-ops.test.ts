@@ -12,6 +12,7 @@ import {
 	runInlineConsolidation,
 } from "../src/memory/consolidation.js";
 import { applyChannelMemoryOps, parseChannelMemoryEntries, readChannelMemory } from "../src/memory/files.js";
+import { readMemoryMetadata } from "../src/memory/metadata.js";
 import { runRetriedSidecarTask, runSidecarTask } from "../src/memory/sidecar-worker.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -47,6 +48,13 @@ describe("runInlineConsolidation with ops", () => {
 			model: fakeModel,
 			resolveApiKey,
 			messages,
+			sourceWindow: {
+				sourceKind: "idle",
+				entries: [{ id: "session-42" }] as never[],
+				messages,
+				windowId: "window-deploy-42",
+				hasExternalToolContent: false,
+			},
 			mode: "boundary",
 		});
 
@@ -54,6 +62,10 @@ describe("runInlineConsolidation with ops", () => {
 		const memory = await readChannelMemory(channelDir);
 		expect(memory).toContain("blue-green");
 		expect(memory).not.toContain("rolling");
+		expect((await readMemoryMetadata(channelDir)).entries[entry.id]).toMatchObject({
+			sourceEntryIds: ["session-42"],
+			sourceCorrelationIds: ["window-deploy-42"],
+		});
 	});
 });
 

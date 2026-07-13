@@ -175,6 +175,8 @@ sequenceDiagram
 | `MEMORY.md` | 持久事实、决策、偏好（条目带 `<!--id:m-xxxx-->`） | 固化流程追加；首轮引导注入 | 首轮引导注入一次 |
 | `HISTORY.md` | 折叠后的较旧历史摘要块 | 固化流程追加/折叠 | 否 |
 | `log.jsonl` / `context.jsonl` | 冷存储：完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 工具检索 |
+| `.memory/entries.json` | MEMORY 条目 metadata、来源 entry ids、状态与召回统计 | files/recall | 否，可从 `MEMORY.md` 重建 |
+| `.memory/tombstones.jsonl` | 已遗忘条目的 id/hash（不含原文），防止自动复活 | memory_manage/files | 否 |
 | `.memory-backups/` | 记忆文件最近 5 份备份 | files.ts | — |
 
 工作区级还有管理员维护的 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。系统提示词明确禁止 agent 用文件工具直接编辑频道 SESSION/MEMORY/HISTORY——只能走运行时串行化的维护路径或 `memory_manage` 工具。
@@ -201,8 +203,8 @@ flowchart LR
 
     SIDE["sidecar-worker.ts<br/>独立 LLM 调用：超时+重试+记账"]
 
-    BOOT --> PROMPT[本轮 prompt]
-    RECALL --> PROMPT
+    BOOT -->|首轮 entry ids| DEDUPE[按候选/条目 id 去重]
+    RECALL --> DEDUPE --> PROMPT[本轮 prompt]
     LC -->|compact 前 / new session 前 / shutdown| CONS
     GATES --> JOBS --> CONS
     JOBS --> SIDE
@@ -210,10 +212,10 @@ flowchart LR
     LC -->|活动事件| STATE --> GATES
 ```
 
-- **入口（读）**：每轮把召回结果包在 `<memory>` 类前缀里注入 prompt；召回默认走轻量词法打分（内置中文常用词切词），只有命中"记忆意图"启发式才触发模型重排。
+- **入口（读）**：channel `MEMORY.md` 按 bullet/entry id 构造候选；每轮把召回结果包在 `<memory>` 类前缀里注入 prompt。首轮 bootstrap 先声明已注入的 entry ids，recall 排除这些候选，避免重复上下文；bootstrap pending 只在 prompt 确认提交后清除。召回默认走轻量词法打分（内置中文常用词切词），只有命中"记忆意图"启发式才触发模型重排。
 - **出口（写）**：固化只发生在明确边界——压缩前、`/new` 前（后台异步、快照先行）、关机 flush、以及后台维护 job。每次固化写 `review-log`（可审计）。
 - **调度器**（`scheduler.ts`）每 tick 轮转选取不活跃频道（`maxConcurrentChannels` 上限），四个 job 按优先级依次尝试，**先跑成一个就停**；每个 job 先过各自的确定性 gate（空闲时长、距上次运行间隔、素材是否有意义、夜间窗口等），gate 不放行则零 LLM 成本。频道上下文的取法：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的**磁盘冷上下文**（SessionManager 直读 context.jsonl + mtime/size 缓存），不会为历史频道复活完整 Runner。
-- **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、2 次重试、JSON 解析校验、用量记入账本（kind=`sidecar`）。
+- **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、2 次重试、JSON 解析校验、用量记入账本（kind=`sidecar`）。记忆 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次维护结果；重复的纯 gate-skip 审计会合并降噪。
 
 ## 7. 持久任务与定时事件
 

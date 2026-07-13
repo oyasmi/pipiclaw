@@ -8,6 +8,7 @@ import {
 	type MemoryCandidateStore,
 } from "./candidates.js";
 import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
+import { recordMemoryRecall, syncMemoryMetadata } from "./metadata.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 
 export interface RecallRequest {
@@ -16,6 +17,7 @@ export interface RecallRequest {
 	workspaceDir: string;
 	channelDir: string;
 	allowedSources?: MemoryCandidate["source"][];
+	excludedCandidateIds?: string[];
 	maxCandidates: number;
 	maxInjected: number;
 	maxChars: number;
@@ -27,6 +29,8 @@ export interface RecallRequest {
 }
 
 export interface RecalledMemory {
+	id: string;
+	entryId?: string;
 	source: MemoryCandidate["source"];
 	path: string;
 	title: string;
@@ -638,19 +642,21 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 	const filteredCandidates = request.allowedSources?.length
 		? candidates.filter((candidate) => request.allowedSources?.includes(candidate.source))
 		: candidates;
-	if (filteredCandidates.length === 0) {
+	const excludedIds = new Set(request.excludedCandidateIds ?? []);
+	const eligibleCandidates = filteredCandidates.filter((candidate) => !excludedIds.has(candidate.id));
+	if (eligibleCandidates.length === 0) {
 		return { items: [], renderedText: "" };
 	}
 
 	const queryTokens = tokenize(query);
 	const queryIntents = detectQueryIntents(query);
-	const scored = filteredCandidates
+	const scored = eligibleCandidates
 		.map((candidate) => scoreCandidate(query, queryTokens, queryIntents, candidate))
 		.filter((candidate): candidate is ScoredCandidate => candidate !== null)
 		.filter((candidate) => candidate.score >= MIN_LOCAL_SCORE)
 		.sort(compareScoredCandidates);
 
-	const shortlist = seedIntentCandidates(request, filteredCandidates, scored, queryIntents, queryTokens)
+	const shortlist = seedIntentCandidates(request, eligibleCandidates, scored, queryIntents, queryTokens)
 		.sort(compareScoredCandidates)
 		.slice(0, Math.max(request.maxCandidates, request.maxInjected));
 
@@ -660,12 +666,27 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 
 	const reranked = await rerankCandidates(request, shortlist);
 	const items = reranked.slice(0, request.maxInjected).map(({ candidate, score }) => ({
+		id: candidate.id,
+		entryId: candidate.entryId,
 		source: candidate.source,
 		path: candidate.path,
 		title: candidate.title,
 		content: candidate.content,
 		score,
 	}));
+	const recalledEntryIds = items.flatMap((item) => (item.entryId ? [item.entryId] : []));
+	if (recalledEntryIds.length > 0) {
+		const metadataEntries = candidates
+			.filter((candidate) => candidate.source === "channel-memory" && candidate.entryId)
+			.map((candidate) => ({
+				id: candidate.entryId as string,
+				content: candidate.content,
+				sectionHeading: candidate.title,
+				timestamp: candidate.timestamp,
+			}));
+		await syncMemoryMetadata(request.channelDir, metadataEntries);
+		await recordMemoryRecall(request.channelDir, recalledEntryIds, query);
+	}
 
 	return {
 		items,

@@ -62,6 +62,7 @@ describe("command metadata helpers", () => {
 	it("recognizes built-in, session, and skill commands as known", () => {
 		expect(isKnownCommandName("help")).toBe(true);
 		expect(isKnownCommandName("model")).toBe(true);
+		expect(isKnownCommandName("memory")).toBe(true);
 		expect(isKnownCommandName("skill:foo")).toBe(true);
 		expect(isKnownCommandName("modle")).toBe(false);
 	});
@@ -94,5 +95,6 @@ describe("command metadata helpers", () => {
 		expect(help).toContain("busyMessageDefault");
 		expect(help).toContain("responseMode");
 		expect(help).toContain("/model [provider/modelId|modelId]");
+		expect(help).toContain("/memory [status|list|show <id>|pending]");
 	});
 });

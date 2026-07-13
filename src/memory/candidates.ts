@@ -6,6 +6,7 @@ import {
 	getChannelHistoryPath,
 	getChannelMemoryPath,
 	getChannelSessionPath,
+	parseChannelMemoryEntries,
 	parseUpdateHeadingTimestamp,
 } from "./files.js";
 
@@ -19,6 +20,7 @@ export interface MemoryCandidate {
 	timestamp?: string;
 	sectionKind?: string;
 	priority: number;
+	entryId?: string;
 }
 
 export interface BuildMemoryCandidatesOptions {
@@ -92,6 +94,10 @@ function stripEntryIdComments(text: string): string {
 	return text.replace(ENTRY_ID_COMMENT_GLOBAL, "");
 }
 
+export function buildMemoryCandidateId(source: MemoryCandidate["source"], title: string, timestamp?: string): string {
+	return `${source}:${slugify(title)}:${timestamp ?? ""}`;
+}
+
 function buildCandidate(
 	source: MemoryCandidate["source"],
 	path: string,
@@ -99,10 +105,12 @@ function buildCandidate(
 	content: string,
 	timestamp?: string,
 	searchText?: string,
+	id?: string,
+	entryId?: string,
 ): MemoryCandidate {
 	const cleanContent = stripEntryIdComments(content);
 	return {
-		id: `${source}:${slugify(title)}:${timestamp ?? ""}`,
+		id: id ?? buildMemoryCandidateId(source, title, timestamp),
 		source,
 		path,
 		title,
@@ -111,6 +119,7 @@ function buildCandidate(
 		timestamp,
 		sectionKind: title.trim().toLowerCase(),
 		priority: inferPriority(source, title),
+		entryId,
 	};
 }
 
@@ -119,6 +128,23 @@ function buildWorkspaceOrChannelMemoryCandidates(
 	path: string,
 	content: string,
 ): MemoryCandidate[] {
+	if (source === "channel-memory") {
+		const entries = parseChannelMemoryEntries(content);
+		if (entries.length > 0) {
+			return entries.map((entry) =>
+				buildCandidate(
+					source,
+					path,
+					entry.sectionHeading,
+					entry.content,
+					entry.timestamp,
+					entry.content,
+					entry.id,
+					entry.id,
+				),
+			);
+		}
+	}
 	const sections = splitH2Sections(content);
 	if (sections.length === 0 && content) {
 		return [

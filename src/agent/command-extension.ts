@@ -21,6 +21,7 @@ export interface PipiclawCommandExtensionOptions {
 	getLastResponseModel?: () => string | undefined;
 	switchModel: (model: Model<Api>) => Promise<void>;
 	refreshSessionResources: () => Promise<void>;
+	runMemoryCommand: (args: string) => Promise<string>;
 }
 
 function buildSessionText(
@@ -81,6 +82,13 @@ function sendCommandResult(sender: CommandMessageSender, text: string): void | P
 
 export function createCommandExtension(options: PipiclawCommandExtensionOptions): ExtensionFactory {
 	return (pi) => {
+		pi.registerCommand("memory", {
+			description: sessionCommandDescription("memory"),
+			handler: async (args) => {
+				sendCommandResult(pi, await options.runMemoryCommand(args));
+			},
+		});
+
 		pi.registerCommand("session", {
 			description: sessionCommandDescription("session"),
 			handler: async () => {

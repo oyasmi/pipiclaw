@@ -122,11 +122,12 @@ describe("recall scoring integration", () => {
 				"",
 				"- Patch callback verification.",
 			].join("\n"),
-			memory: "# Channel Memory\n\n## Constraints\n\n- Callback verification must stay backwards-compatible.\n",
+			memory:
+				"# Channel Memory\n\n## Constraints\n\n- Callback verification must stay backwards-compatible. <!--id:m-callback01-->\n",
 		});
 		vi.mocked(runSidecarTask).mockResolvedValue({
-			rawText: '{"selectedIds":["channel-memory:constraints:"]}',
-			output: ["channel-memory:constraints:"],
+			rawText: '{"selectedIds":["m-callback01"]}',
+			output: ["m-callback01"],
 		});
 
 		const result = await recallRelevantMemory({
