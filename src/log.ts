@@ -10,17 +10,6 @@ export interface LogContext {
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
-export interface LogRecord {
-	ts: string;
-	level: LogLevel;
-	event: string;
-	channelId?: string;
-	userName?: string;
-	message: string;
-	details?: string;
-	fields?: Record<string, unknown>;
-}
-
 export interface LoggingConfig {
 	level: LogLevel;
 	file: { enabled: boolean; maxSizeBytes: number; maxFiles: number };
@@ -269,14 +258,6 @@ export function logInfo(message: string, details?: string): void {
 export function logWarning(message: string, details?: string): void {
 	const legacy = legacyContext(message);
 	logEvent("warn", "system.warning", legacy.message, {
-		ctx: legacy.ctx,
-		...(details ? { details, fields: { reason: details } } : {}),
-	});
-}
-
-export function logError(message: string, details?: string): void {
-	const legacy = legacyContext(message);
-	logEvent("error", "system.error", legacy.message, {
 		ctx: legacy.ctx,
 		...(details ? { details, fields: { reason: details } } : {}),
 	});
