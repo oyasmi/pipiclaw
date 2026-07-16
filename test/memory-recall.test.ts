@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { buildMemoryCandidates, createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { readMemoryMetadata } from "../src/memory/metadata.js";
 import { recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
+import { countPromptUnits } from "../src/shared/prompt-units.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeWorkspace = useTempDirs("pipiclaw-recall-");
@@ -207,6 +208,38 @@ describe("memory recall", () => {
 		expect(result.renderedText).toContain("Release codename is moonstone.");
 		expect(result.renderedText).not.toContain("Unrelated durable item");
 		expect((await readMemoryMetadata(channelDir)).entries["m-moonstone"]?.recallCount).toBe(1);
+	});
+
+	it("clips recalled memory to the unit budget and points at the search tools", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		const entries = Array.from(
+			{ length: 8 },
+			(_, index) => `- Deploy runbook step ${index} for the moonstone release. <!--id:m-run${index}-->`,
+		);
+		writeFileSync(join(channelDir, "MEMORY.md"), ["# Channel Memory", "", "## Runbook", "", ...entries].join("\n"));
+
+		const base = {
+			query: "moonstone release runbook",
+			channelId: "dm_u",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 12,
+			maxInjected: 8,
+			maxChars: 100_000,
+			rerankWithModel: false as const,
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		};
+
+		const generous = await recallRelevantMemory({ ...base, maxUnits: 100_000 });
+		const tight = await recallRelevantMemory({ ...base, maxUnits: 60 });
+
+		const bodyCount = (text: string): number => (text.match(/Deploy runbook step/g) ?? []).length;
+		expect(bodyCount(generous.renderedText)).toBeGreaterThan(1);
+		expect(bodyCount(tight.renderedText)).toBeLessThan(bodyCount(generous.renderedText));
+		expect(tight.renderedText).toContain("memory_manage search");
+		// The tight render is a small fraction of the generous one, in units.
+		expect(countPromptUnits(tight.renderedText)).toBeLessThan(countPromptUnits(generous.renderedText));
 	});
 
 	it("captures overlapping Chinese dictionary terms without keeping covered bigram noise", () => {

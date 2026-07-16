@@ -1,5 +1,9 @@
 import { join } from "node:path";
+import { countPromptUnits } from "../shared/prompt-units.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../shared/task-ledger.js";
+
+/** Automatic-context share for the in-flight task agenda (spec 026 §5.3). */
+export const TASK_AGENDA_MAX_UNITS = 600;
 
 /**
  * Builds the `<task_agenda>` block injected into each main-agent turn (spec 020 §2).
@@ -16,6 +20,8 @@ export interface TaskDigestOptions {
 	channelDir: string;
 	maxTasks: number;
 	maxChars: number;
+	/** Runtime hard cap in prompt units (spec 026 §5.3); whichever of chars/units is hit first clips. */
+	maxUnits?: number;
 	now?: number;
 }
 
@@ -79,16 +85,20 @@ export async function buildTaskDigest(options: TaskDigestOptions): Promise<strin
 	if (omitted > 0) lines.push(`- (+${omitted} more)`);
 	const footer = ["</task_agenda>"];
 
-	let rendered = [...header, ...lines, ...footer].join("\n");
-	if (rendered.length <= options.maxChars) return rendered;
+	const maxUnits = options.maxUnits ?? Number.POSITIVE_INFINITY;
+	const fits = (text: string): boolean => text.length <= options.maxChars && countPromptUnits(text) <= maxUnits;
 
-	// Over budget: drop lines from the end until it fits, keeping actionable-first order.
+	let rendered = [...header, ...lines, ...footer].join("\n");
+	if (fits(rendered)) return rendered;
+
+	// Over one of the budgets: drop whole lines from the end until it fits, keeping
+	// actionable-first order. Chars and units are checked together (spec 026 §10.7).
 	const kept: string[] = [];
 	for (const line of lines) {
 		const candidate = [...header, ...kept, line, `- (+${agenda.length - kept.length - 1} more)`, ...footer].join(
 			"\n",
 		);
-		if (candidate.length > options.maxChars && kept.length > 0) break;
+		if (!fits(candidate) && kept.length > 0) break;
 		kept.push(line);
 	}
 	const droppedCount = agenda.length - kept.length;

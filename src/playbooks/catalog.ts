@@ -8,8 +8,8 @@ const PLAYBOOK_MODES = ["normal", "task-driver", "event", "subagent", "maintenan
 export type PlaybookMode = (typeof PLAYBOOK_MODES)[number];
 
 const DEFAULT_PRIORITY = 100;
-/** A catalog entry is a trigger, not a summary; longer descriptions are clipped in the prompt. */
-export const MAX_PLAYBOOK_DESCRIPTION_CHARS = 180;
+/** A catalog entry is a single trigger, not a summary; longer descriptions are clipped in the prompt (spec 026 §10.5). */
+export const MAX_PLAYBOOK_DESCRIPTION_CHARS = 100;
 
 export interface RuntimePlaybookMetadata {
 	name: string;
@@ -115,14 +115,20 @@ export function selectRuntimePlaybooks(
 	});
 }
 
+/**
+ * The always-loaded catalog. It shows the real absolute PLAYBOOKS_DIR once at the
+ * top so the model can `read` a guide without guessing the install path (spec 026
+ * §3.3, §7.1); each entry is filename + one short trigger, never the body.
+ */
 export function renderPlaybookCatalog(playbooks: RuntimePlaybookMetadata[]): string {
-	return playbooks
-		.map((playbook) => {
-			const description =
-				playbook.description.length > MAX_PLAYBOOK_DESCRIPTION_CHARS
-					? `${playbook.description.slice(0, MAX_PLAYBOOK_DESCRIPTION_CHARS - 1)}…`
-					: playbook.description;
-			return `- ${playbook.filename} — ${description}`;
-		})
-		.join("\n");
+	const entries = playbooks.map((playbook) => {
+		const description =
+			playbook.description.length > MAX_PLAYBOOK_DESCRIPTION_CHARS
+				? `${playbook.description.slice(0, MAX_PLAYBOOK_DESCRIPTION_CHARS - 1)}…`
+				: playbook.description;
+		return `- ${playbook.filename} — ${description}`;
+	});
+	return ["For Pipiclaw mechanisms, read the matching file with `read` under:", PLAYBOOKS_DIR, "", ...entries].join(
+		"\n",
+	);
 }

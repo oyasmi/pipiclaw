@@ -19,7 +19,11 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
-import { buildFirstTurnMemoryBootstrapResult, type FirstTurnMemoryBootstrapResult } from "../memory/bootstrap.js";
+import {
+	buildFirstTurnMemoryBootstrapResult,
+	FIRST_TURN_BOOTSTRAP_MAX_UNITS,
+	type FirstTurnMemoryBootstrapResult,
+} from "../memory/bootstrap.js";
 import { createMemoryCandidateStore, type MemoryCandidateStore } from "../memory/candidates.js";
 import { handleMemoryCommand } from "../memory/commands.js";
 import { getChannelMemoryPath } from "../memory/files.js";
@@ -29,9 +33,9 @@ import {
 	type MemoryActivityEvent,
 	updateMemoryMaintenanceState,
 } from "../memory/maintenance-state.js";
-import { recallRelevantMemory } from "../memory/recall.js";
+import { MEMORY_RECALL_MAX_UNITS, recallRelevantMemory } from "../memory/recall.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
-import { buildTaskDigest } from "../memory/task-digest.js";
+import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "../memory/task-digest.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import {
 	createModelRegistry,
@@ -45,6 +49,7 @@ import type { ChannelStore } from "../runtime/store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostics.js";
+import { countPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
@@ -66,7 +71,7 @@ import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
 import { buildPipiclawSystemPrompt } from "./prompt/builder.js";
 import { createPromptBoundaryExtension } from "./prompt/extension.js";
 import { buildPromptManifest, type PromptTurnContextStats, renderContextReport } from "./prompt/manifest.js";
-import { loadWorkspacePromptResources } from "./prompt/resources.js";
+import { loadWorkspacePromptResources, type WorkspacePromptResources } from "./prompt/resources.js";
 import type { PromptBuildResult } from "./prompt/types.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunnerFactoryPaths } from "./runner-factory.js";
@@ -129,6 +134,8 @@ export class ChannelRunner implements AgentRunner {
 	private currentSkills: PipiclawSkillsResult;
 	/** Last built system prompt (spec 025): feeds the boundary footer, /context and the debug manifest. */
 	private lastPromptBuild?: PromptBuildResult;
+	/** SOUL/AGENTS as resolved for the last build, for the `/context` independent-budget lines. */
+	private lastWorkspaceResources?: WorkspacePromptResources;
 	/** The exact system prompt the provider last received (our prompt + pi's tail + footer). */
 	private lastFinalPrompt?: string;
 	private lastTurnContextStats?: PromptTurnContextStats;
@@ -302,6 +309,7 @@ export class ChannelRunner implements AgentRunner {
 		let recalledContextText = "";
 		let taskDigestText = "";
 		let durableMemoryBootstrapText = "";
+		let channelCapsuleText = "";
 		let bootstrapCandidateIds: string[] = [];
 		let bootstrapPrepared = false;
 
@@ -327,7 +335,8 @@ export class ChannelRunner implements AgentRunner {
 			if (!preserveRawInput) {
 				// Channel facts are turn-dynamic by design (spec 025 §7.3): keeping them out of the
 				// system prompt is what lets every channel in a workspace share one cached prefix.
-				promptText = `${this.renderChannelTurnContext()}\n\n<user_message>\n${promptText}\n</user_message>`;
+				channelCapsuleText = this.renderChannelTurnContext();
+				promptText = `${channelCapsuleText}\n\n<user_message>\n${promptText}\n</user_message>`;
 
 				if (this.firstTurnMemoryBootstrapPending) {
 					const bootstrap = await this.buildFirstTurnMemoryBootstrap();
@@ -346,6 +355,8 @@ export class ChannelRunner implements AgentRunner {
 						maxCandidates: recallSettings.maxCandidates,
 						maxInjected: recallSettings.maxInjected,
 						maxChars: recallSettings.maxChars,
+						// The configured char cap and the runtime unit cap both apply; first to bind clips.
+						maxUnits: MEMORY_RECALL_MAX_UNITS,
 						rerankWithModel: recallSettings.rerankWithModel,
 						excludedCandidateIds: bootstrapCandidateIds,
 						// Let shouldUseModelRerank's own memory-intent gate decide (it already handles
@@ -369,6 +380,7 @@ export class ChannelRunner implements AgentRunner {
 						channelDir: this.channelDir,
 						maxTasks: taskDigestSettings.maxTasks,
 						maxChars: taskDigestSettings.maxChars,
+						maxUnits: TASK_AGENDA_MAX_UNITS,
 					});
 					if (taskDigestText) {
 						promptText = `${taskDigestText}\n\n${promptText}`;
@@ -387,8 +399,12 @@ export class ChannelRunner implements AgentRunner {
 
 			this.lastTurnContextStats = {
 				durableMemoryChars: durableMemoryBootstrapText.length,
+				durableMemoryUnits: countPromptUnits(durableMemoryBootstrapText),
 				taskDigestChars: taskDigestText.length,
+				taskDigestUnits: countPromptUnits(taskDigestText),
 				recalledMemoryChars: recalledContextText.length,
+				recalledMemoryUnits: countPromptUnits(recalledContextText),
+				channelCapsuleUnits: countPromptUnits(channelCapsuleText),
 				userMessageChars: clippedInput.length,
 			};
 
@@ -742,6 +758,8 @@ export class ChannelRunner implements AgentRunner {
 					sum + tool.name.length + tool.description.length + JSON.stringify(tool.parameters ?? {}).length,
 				0,
 			),
+			soul: this.lastWorkspaceResources?.soul,
+			agents: this.lastWorkspaceResources?.agents,
 			lastTurn: this.lastTurnContextStats,
 			detail: args.trim().toLowerCase() === "detail",
 		});
@@ -1023,6 +1041,7 @@ export class ChannelRunner implements AgentRunner {
 	private buildSystemPrompt(): PromptBuildResult {
 		const toolNames = this.currentTools.map((tool) => tool.name);
 		const resources = loadWorkspacePromptResources(this.workspaceDir);
+		this.lastWorkspaceResources = resources;
 		const build = buildPipiclawSystemPrompt({
 			mode: "normal",
 			cwd: process.cwd(),
@@ -1255,6 +1274,7 @@ export class ChannelRunner implements AgentRunner {
 		return buildFirstTurnMemoryBootstrapResult({
 			channelMemory,
 			workspaceMemory,
+			maxUnits: FIRST_TURN_BOOTSTRAP_MAX_UNITS,
 		});
 	}
 }

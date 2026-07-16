@@ -30,13 +30,13 @@ describeE2E("E2E: system prompt ownership", () => {
 			promptManifest?: { fingerprint: string; finalPromptSha256?: string; diagnostics: unknown[] };
 		};
 
-		expect(dump.systemPrompt).toContain("## Pipiclaw Runtime");
+		expect(dump.systemPrompt).toContain("## Pipiclaw");
 		expect(dump.systemPrompt).not.toContain("operating inside pi, a coding agent harness");
 		expect(dump.systemPrompt).not.toContain("Pi documentation");
 		expect(dump.systemPrompt).not.toContain("(none)");
 		// pi's tail is still there, and the runtime boundary is the last thing the model reads.
 		expect(dump.systemPrompt).toContain("Current working directory:");
-		expect(dump.systemPrompt.trimEnd().endsWith("do not route around it.")).toBe(true);
+		expect(dump.systemPrompt.trimEnd().endsWith("explicit user authority.")).toBe(true);
 		// No channel id or channel directory in the system prompt: those ride the turn.
 		expect(dump.systemPrompt).not.toContain(harness.channelId);
 		expect(dump.promptManifest?.diagnostics).toEqual([]);

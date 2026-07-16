@@ -191,8 +191,9 @@ describe("tools index", () => {
 		).not.toContain("task_manage");
 	});
 
-	it("keeps the system prompt tool list in sync with the registered tools", () => {
-		// Web tools disabled: they must vanish from BOTH the registered set and the prompt.
+	it("no longer lists tools in the prompt, but the tool set still gates mechanism sections", () => {
+		// Spec 026 §3.2: the tool catalog is gone from the prompt; registration is unaffected,
+		// and pi's tool schemas remain the source of truth for what is available.
 		toolsConfig.tools.web.enable = false;
 		const tools = createPipiclawTools({
 			...baseToolOptions,
@@ -210,19 +211,16 @@ describe("tools index", () => {
 			subAgents: [],
 		});
 
+		// No per-tool prose lines survive, for any tool.
+		expect(prompt).not.toContain("## Available Tools");
 		for (const name of ALL_TOOL_NAMES) {
-			const line = `- ${name} —`;
-			if (registered.has(name)) {
-				expect(prompt).toContain(line);
-			} else {
-				expect(prompt).not.toContain(line);
-			}
+			expect(prompt).not.toContain(`- ${name} —`);
 		}
-		// Concrete drift assertions for the previously-broken cases.
+		// Registration itself is untouched by the prompt change.
 		expect(registered.has("web_search")).toBe(false);
-		expect(prompt).not.toContain("return untrusted external content");
 		expect(registered.has("memory_manage")).toBe(true);
-		expect(prompt).toContain("- memory_manage —");
+		// And the tool set still decides which mechanism sections render.
+		expect(prompt).toContain("`memory_manage` in the same turn");
 		toolsConfig.tools.web.enable = true;
 	});
 

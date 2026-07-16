@@ -60,6 +60,32 @@ describe("first-turn memory bootstrap", () => {
 		expect(rendered).not.toContain(filler);
 	});
 
+	it("drops whole channel sections to respect the unit budget", () => {
+		const bigSection = "这是一段很长的历史记录，需要被裁掉。".repeat(30);
+		const channelMemory = [
+			"# Channel Memory",
+			"",
+			"## Constraints",
+			"",
+			"- 生产环境必须保持在线。",
+			"",
+			"## Update 2026-07-01T00:00:00.000Z",
+			"",
+			`- ${bigSection}`,
+		].join("\n");
+
+		const rendered = buildFirstTurnMemoryBootstrap({
+			channelMemory,
+			workspaceMemory: "",
+			// Generous char budget so only the unit cap can bind.
+			maxChars: 100_000,
+			maxUnits: 80,
+		});
+
+		expect(rendered).toContain("生产环境必须保持在线。");
+		expect(rendered).not.toContain(bigSection);
+	});
+
 	it("returns an empty string when both memory files are empty", () => {
 		expect(
 			buildFirstTurnMemoryBootstrap({

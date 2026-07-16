@@ -1,6 +1,6 @@
 ---
 name: memory-and-learning
-description: Read when remembering or forgetting facts, choosing SESSION/MEMORY/HISTORY/ENVIRONMENT/tasks/skills, or turning repeated experience into a workspace skill.
+description: Remembering or forgetting facts, choosing between memory files, or promoting experience to a skill.
 requires-tools: memory_manage, skill_manage
 priority: 20
 ---

@@ -664,7 +664,13 @@ export class EventsWatcher {
 				break;
 		}
 
-		const message = `[EVENT:${filename}:${event.type}:${scheduleInfo}] ${event.text}`;
+		// The [SILENT] protocol only makes sense for periodic wakes, so it rides the
+		// periodic trigger rather than the always-on system prompt (spec 026 §7.3).
+		const periodicContract =
+			event.type === "periodic"
+				? " This is a periodic runtime wake. If it produces no user-visible change or result, reply with exactly [SILENT]."
+				: "";
+		const message = `[EVENT:${filename}:${event.type}:${scheduleInfo}] ${event.text}${periodicContract}`;
 
 		// Create synthetic DingTalkEvent
 		const syntheticEvent: DingTalkEvent = {

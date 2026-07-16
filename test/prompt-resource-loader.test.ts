@@ -72,7 +72,7 @@ describe("pi resource-loader seam", () => {
 		expect(loader.getSystemPrompt()).toBe(build.text);
 		// A non-empty custom prompt is what makes pi skip its default identity, its docs
 		// index and the `Available tools: (none)` block entirely.
-		expect(loader.getSystemPrompt()).toContain("## Pipiclaw Runtime");
+		expect(loader.getSystemPrompt()).toContain("## Pipiclaw");
 		expect(loader.getAppendSystemPrompt()).toEqual([]);
 		expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
 		// AGENTS.md is injected exactly once — by us, as a section, not by pi's context path.

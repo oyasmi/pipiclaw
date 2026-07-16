@@ -50,6 +50,14 @@ export interface LoadedPromptResource {
 	content: string;
 	/** True when the file still holds the bootstrap template: it carries no user intent, so it is not injected. */
 	isDefaultTemplate: boolean;
+	/** Prompt units in the original file body (before any clipping). */
+	rawUnits: number;
+	/** Prompt units in the injected body (equals rawUnits unless the file overflowed its budget). */
+	injectedUnits: number;
+	/** The unit budget this body was measured against — reported by `/context`. */
+	budgetUnits: number;
+	/** True when the body exceeded its independent unit/char budget and was head/tail clipped. */
+	truncated: boolean;
 }
 
 export interface PromptBuildContext {
@@ -96,6 +104,8 @@ export interface ResolvedPromptSection {
 	content: string;
 	rawChars: number;
 	injectedChars: number;
+	rawUnits: number;
+	injectedUnits: number;
 	truncated: boolean;
 	sha256: string;
 }
@@ -116,6 +126,10 @@ export interface PromptBuildResult {
 	sections: ResolvedPromptSection[];
 	diagnostics: PromptDiagnostic[];
 	totalChars: number;
+	/** Prompt units across every section Pipiclaw assembles (runtime + workspace catalogs + SOUL/AGENTS). */
+	totalUnits: number;
+	/** Prompt units in the sections Pipiclaw authors and must keep tight; excludes SOUL/AGENTS, sub-agents and skills. */
+	runtimeAuthoredUnits: number;
 	estimatedTokens: number;
 	fingerprint: string;
 }

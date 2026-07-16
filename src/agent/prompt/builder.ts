@@ -1,13 +1,19 @@
 /**
- * Prompt pipeline: filter → sort → render → budget → fingerprint (spec 025).
+ * Prompt pipeline: filter → sort → render → budget → fingerprint (spec 025, 026).
  *
  * The output is deterministic: same build context in, same bytes and same
  * fingerprint out. Nothing here may read the clock, the filesystem iteration
  * order, a channel id, or anything else that would make two channels in one
  * workspace disagree — that is what makes the provider-side prompt cache hold.
+ *
+ * Budget model (spec 026 §5, §10.3): there is no single global char cap that lets
+ * runtime text, SOUL, AGENTS and skills compete. The only budget enforced here is
+ * on the sections Pipiclaw *authors* — measured in prompt units. SOUL/AGENTS are
+ * budgeted independently in resources.ts, and skills are pi's to render.
  */
 
 import { createHash } from "node:crypto";
+import { countPromptUnits } from "../../shared/prompt-units.js";
 import { FINAL_BOUNDARY_SECTION, MAIN_PROMPT_SECTIONS } from "./sections.js";
 import type {
 	PromptBuildContext,
@@ -18,30 +24,27 @@ import type {
 } from "./types.js";
 
 /** Bumped whenever the runtime-authored prompt text changes in a way worth attributing in telemetry. */
-export const RUNTIME_PROMPT_VERSION = 2;
-
-/** Above this the prompt still works but is worth a warning. */
-export const SOFT_TOTAL_BUDGET_CHARS = 20_000;
-/**
- * Above this we shrink user-owned catalogs and files; runtime core is never cut.
- *
- * Both totals cover the Pipiclaw-owned sections only. pi renders `<available_skills>`
- * after them and Pipiclaw cannot trim that list without also destroying `/skill:name`
- * (spec 025 §6.10), so skills are *warned about* here, not shrunk: the prompt actually
- * sent can exceed this cap by the size of the skills catalog.
- */
-export const HARD_TOTAL_BUDGET_CHARS = 32_000;
-/** Skills are pi's to render; over this we can only tell the operator (spec 025 §8.1). */
-export const SKILLS_BUDGET_CHARS = 6_000;
+export const RUNTIME_PROMPT_VERSION = 3;
 
 /**
- * Least-important first: the order in which sections give up characters when the
- * whole prompt exceeds the hard cap (spec 025 §8.2). Runtime-authored sections
- * are absent by design — they are never shrunk.
+ * The sections Pipiclaw authors and must keep tight (spec 026 §10.3): identity,
+ * execution, invariants, persistent-task rules, the runtime-guide catalog and the
+ * final boundary. SOUL/AGENTS, the sub-agent catalog (its descriptions are user
+ * text) and pi's skills are deliberately excluded.
  */
-const SHRINK_ORDER = ["subagents", "playbooks", "workspace.agents", "workspace.soul"];
-/** A shrunk workspace file still keeps this much of itself; below it, the file says nothing useful. */
-const MIN_SHRUNK_SECTION_CHARS = 800;
+const RUNTIME_AUTHORED_SECTION_IDS = new Set([
+	"runtime.identity",
+	"runtime.execution",
+	"runtime.invariants",
+	"runtime.tasks",
+	"playbooks",
+	"runtime.boundary",
+]);
+
+/** Over this, the runtime-authored prompt still works but is worth a warning (spec 026 §5.2). */
+export const RUNTIME_PROMPT_TARGET_UNITS = 700;
+/** Over this it is a development error: runtime text has drifted well past its budget. */
+export const RUNTIME_PROMPT_HARD_UNITS = 1_200;
 
 export function sha256(text: string): string {
 	return createHash("sha256").update(text, "utf8").digest("hex");
@@ -169,70 +172,11 @@ function resolve(
 		content,
 		rawChars: raw.length,
 		injectedChars: content.length,
+		rawUnits: countPromptUnits(raw),
+		injectedUnits: countPromptUnits(content),
 		truncated,
 		sha256: sha256(content),
 	};
-}
-
-/** Re-shrink user-owned sections until the whole prompt fits the hard cap. */
-function enforceTotalBudget(sections: ResolvedPromptSection[], diagnostics: PromptDiagnostic[]): void {
-	const total = () => sections.reduce((sum, section) => sum + section.injectedChars, 0) + 2 * (sections.length - 1);
-
-	for (const id of SHRINK_ORDER) {
-		if (total() <= HARD_TOTAL_BUDGET_CHARS) {
-			return;
-		}
-		const index = sections.findIndex((section) => section.id === id);
-		if (index < 0) continue;
-
-		const section = sections[index];
-		const overBy = total() - HARD_TOTAL_BUDGET_CHARS;
-		const target = section.injectedChars - overBy;
-		if (target < MIN_SHRUNK_SECTION_CHARS) {
-			sections.splice(index, 1);
-			diagnostics.push({
-				level: "warning",
-				sectionId: id,
-				message: `dropped to keep the prompt under the ${HARD_TOTAL_BUDGET_CHARS} char hard cap. Run /context detail to see what is competing for space.`,
-			});
-			continue;
-		}
-		const content = truncateHeadTail(section.content, target, "shrunk to fit the total prompt budget");
-		sections[index] = {
-			...section,
-			content,
-			injectedChars: content.length,
-			truncated: true,
-			sha256: sha256(content),
-		};
-		diagnostics.push({
-			level: "warning",
-			sectionId: id,
-			message: `shrunk to fit the ${HARD_TOTAL_BUDGET_CHARS} char hard cap. Run /context detail.`,
-		});
-	}
-
-	if (total() > HARD_TOTAL_BUDGET_CHARS) {
-		diagnostics.push({
-			level: "error",
-			sectionId: "prompt",
-			message: `system prompt is ${total()} chars, over the ${HARD_TOTAL_BUDGET_CHARS} char hard cap even after shrinking every user-owned section.`,
-		});
-	}
-}
-
-/**
- * What pi's `<available_skills>` block will cost, close enough to budget against:
- * name, description and location inside a five-line XML wrapper, plus the preamble.
- */
-export function estimateSkillsPromptChars(skills: PromptBuildContext["skills"]): number {
-	if (!skills || skills.length === 0) return 0;
-	const SKILL_WRAPPER_CHARS = 90;
-	const PREAMBLE_CHARS = 290;
-	return (
-		PREAMBLE_CHARS +
-		skills.reduce((sum, skill) => sum + skill.name.length + skill.description.length + SKILL_WRAPPER_CHARS, 0)
-	);
 }
 
 export function buildPipiclawSystemPrompt(
@@ -255,30 +199,30 @@ export function buildPipiclawSystemPrompt(
 		.map((definition) => resolve(definition, context, diagnostics))
 		.filter((section): section is ResolvedPromptSection => section !== undefined);
 
-	enforceTotalBudget(sections, diagnostics);
-
 	const footerSection = resolve(FINAL_BOUNDARY_SECTION, context, diagnostics);
 	const text = sections.map((section) => section.content).join("\n\n");
 	const footer = footerSection?.content ?? "";
 	const allSections = footerSection ? [...sections, footerSection] : sections;
 	const totalChars = text.length + footer.length;
 
-	if (totalChars > SOFT_TOTAL_BUDGET_CHARS) {
+	// The only budget enforced at build time: the sections Pipiclaw authors (spec 026 §10.3).
+	// SOUL/AGENTS are budgeted independently in resources.ts; skills are rendered by pi.
+	const runtimeAuthoredUnits = allSections
+		.filter((section) => RUNTIME_AUTHORED_SECTION_IDS.has(section.id))
+		.reduce((sum, section) => sum + section.injectedUnits, 0);
+	const totalUnits = allSections.reduce((sum, section) => sum + section.injectedUnits, 0);
+
+	if (runtimeAuthoredUnits > RUNTIME_PROMPT_HARD_UNITS) {
+		diagnostics.push({
+			level: "error",
+			sectionId: "prompt",
+			message: `runtime-authored prompt is ${runtimeAuthoredUnits} units, over the ${RUNTIME_PROMPT_HARD_UNITS} unit hard cap. Shorten the runtime sections in src/agent/prompt/sections.ts.`,
+		});
+	} else if (runtimeAuthoredUnits > RUNTIME_PROMPT_TARGET_UNITS) {
 		diagnostics.push({
 			level: "warning",
 			sectionId: "prompt",
-			message: `system prompt is ${totalChars} chars, over the ${SOFT_TOTAL_BUDGET_CHARS} char soft target. Run /context detail.`,
-		});
-	}
-
-	// Skills sit outside every budget above: pi renders them and owns the same list that
-	// backs `/skill:name`, so trimming here would delete commands. Report instead of cut.
-	const skillsChars = estimateSkillsPromptChars(context.skills);
-	if (skillsChars > SKILLS_BUDGET_CHARS) {
-		diagnostics.push({
-			level: "warning",
-			sectionId: "skills",
-			message: `skills catalog is ≈${skillsChars} chars, over the ${SKILLS_BUDGET_CHARS} char budget, and is appended after the sections above (Pipiclaw cannot trim it without dropping /skill:name). Run /context detail, then shorten or remove workspace skill descriptions.`,
+			message: `runtime-authored prompt is ${runtimeAuthoredUnits} units, over the ${RUNTIME_PROMPT_TARGET_UNITS} unit target. Run /context detail and trim the runtime sections.`,
 		});
 	}
 
@@ -288,6 +232,8 @@ export function buildPipiclawSystemPrompt(
 		sections: allSections,
 		diagnostics,
 		totalChars,
+		totalUnits,
+		runtimeAuthoredUnits,
 		estimatedTokens: estimateTokens(text) + estimateTokens(footer),
 		fingerprint: sha256(`v${RUNTIME_PROMPT_VERSION}\n${text}\n${footer}`),
 	};

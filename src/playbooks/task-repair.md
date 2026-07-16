@@ -1,6 +1,6 @@
 ---
 name: task-repair
-description: Read when a task is escalated, stalled, not waking, or has broken control metadata, stale approval/verification, terminal dependencies, or orphan events.
+description: When a task is escalated, stalled, not waking, or has broken control metadata.
 requires-tools: task_manage
 priority: 44
 ---

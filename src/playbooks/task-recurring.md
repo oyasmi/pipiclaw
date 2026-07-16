@@ -1,6 +1,6 @@
 ---
 name: task-recurring
-description: Read before creating, starting, rescheduling, pausing, completing a cycle of, or retiring a recurring task and its canonical schedule event.
+description: Before creating, rescheduling, pausing, or retiring a recurring task and its schedule event.
 requires-tools: task_manage
 priority: 43
 ---

@@ -297,7 +297,8 @@ describe("EventsWatcher", () => {
 		expect(bot.events[0]).toMatchObject({
 			channelId: "dm_42",
 			user: "EVENT",
-			text: "[EVENT:periodic.json:periodic:0 3 * * 0] run maintenance",
+			// Periodic wakes carry the [SILENT] contract in their trigger, not the system prompt (spec 026 §7.3).
+			text: "[EVENT:periodic.json:periodic:0 3 * * 0] run maintenance This is a periodic runtime wake. If it produces no user-visible change or result, reply with exactly [SILENT].",
 		});
 		expect(existsSync(filePath)).toBe(false);
 
@@ -306,6 +307,25 @@ describe("EventsWatcher", () => {
 		expect(history.some((entry) => entry.action === "deleted" && entry.result === "ok")).toBe(true);
 		expect(history[0]?.ts).toEqual(expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*[+-]\d{2}:\d{2}$/));
 		expect(String(history[0]?.ts)).not.toContain("Z");
+	});
+
+	it("does not append the periodic silence contract to one-shot events", async () => {
+		const dir = createTempDir();
+		const filename = "reminder.json";
+		writeFileSync(join(dir, filename), "{}");
+		const bot = new FakeBot(true);
+		const watcher = createWatcher(dir, bot, createMockExecutor());
+		const privateApi = getEventsWatcherPrivateApi(watcher);
+
+		await privateApi.execute(
+			filename,
+			{ type: "one-shot", channelId: "dm_9", text: "ping the user", at: "2026-07-20T09:00:00+08:00" },
+			true,
+		);
+
+		expect(bot.events).toHaveLength(1);
+		expect(bot.events[0]?.text).toBe("[EVENT:reminder.json:one-shot:2026-07-20T09:00:00+08:00] ping the user");
+		expect(bot.events[0]?.text).not.toContain("[SILENT]");
 	});
 
 	it("records invalid event parse failures in history", async () => {

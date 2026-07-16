@@ -12,9 +12,9 @@ export {
 export { type AgentRunner, getOrCreateRunner } from "./agent/index.js";
 export {
 	buildPipiclawSystemPrompt,
-	HARD_TOTAL_BUDGET_CHARS,
+	RUNTIME_PROMPT_HARD_UNITS,
+	RUNTIME_PROMPT_TARGET_UNITS,
 	RUNTIME_PROMPT_VERSION,
-	SOFT_TOTAL_BUDGET_CHARS,
 } from "./agent/prompt/builder.js";
 export { createPromptBoundaryExtension } from "./agent/prompt/extension.js";
 export { buildPromptManifest, type PromptManifest, renderContextReport } from "./agent/prompt/manifest.js";

@@ -77,6 +77,17 @@ describe("buildTaskDigest", () => {
 		expect(out).toMatch(/\(\+\d+ more\)/);
 	});
 
+	it("drops whole task lines to respect the unit budget", async () => {
+		for (let i = 0; i < 6; i++) {
+			await writeFile(join(tasksDir, `t${i}.md`), doc("status: open", `# 任务编号 ${i} 需要跟进`));
+		}
+		const out = await buildTaskDigest({ channelDir, maxTasks: 8, maxChars: 100_000, maxUnits: 60, now: NOW });
+		const shown = out.split("\n").filter((line) => line.startsWith("- t"));
+		expect(shown.length).toBeGreaterThanOrEqual(1);
+		expect(shown.length).toBeLessThan(6);
+		expect(out).toMatch(/\(\+\d+ more\)/);
+	});
+
 	it("surfaces a task whose frontmatter cannot be read", async () => {
 		await writeFile(join(tasksDir, "broken.md"), "no frontmatter here");
 		const out = await digest();
