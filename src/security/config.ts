@@ -46,6 +46,31 @@ function asOptionalString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+// Deny patterns are compiled as case-insensitive regexes in command-guard. Validate them at
+// load time so an operator who fat-fingers a pattern gets a diagnostic instead of silently
+// losing that protection (the guard itself swallows the compile error at match time).
+function asDenyPatternArray(
+	value: unknown,
+	diagnostics: ConfigDiagnostic[],
+	configPath: string,
+	field: string,
+): string[] {
+	return asStringArray(value).filter((pattern) => {
+		try {
+			new RegExp(pattern, "i");
+			return true;
+		} catch (error) {
+			pushInvalidSecurityDiagnostic(
+				diagnostics,
+				configPath,
+				field,
+				`invalid regex ${JSON.stringify(pattern)} ignored: ${errorMessage(error)}`,
+			);
+			return false;
+		}
+	});
+}
+
 function pushInvalidSecurityDiagnostic(
 	diagnostics: ConfigDiagnostic[],
 	configPath: string,
@@ -91,7 +116,12 @@ function mergeSecurityConfig(source: unknown, configPath: string, diagnostics: C
 				typeof commandGuard.enabled === "boolean"
 					? commandGuard.enabled
 					: DEFAULT_SECURITY_CONFIG.commandGuard.enabled,
-			additionalDenyPatterns: asStringArray(commandGuard.additionalDenyPatterns),
+			additionalDenyPatterns: asDenyPatternArray(
+				commandGuard.additionalDenyPatterns,
+				diagnostics,
+				configPath,
+				"commandGuard.additionalDenyPatterns",
+			),
 			allowPatterns: asStringArray(commandGuard.allowPatterns),
 			blockObfuscation:
 				typeof commandGuard.blockObfuscation === "boolean"

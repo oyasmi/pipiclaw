@@ -1233,7 +1233,7 @@ export class ChannelRunner implements AgentRunner {
 
 	private subscribeToSessionEvents(): void {
 		this.sessionUnsubscribe?.();
-		this.sessionUnsubscribe = this.session.subscribe(async (event: unknown) => {
+		this.sessionUnsubscribe = this.session.subscribe((event: unknown) => {
 			if (isRecord(event) && event.type === "message_start" && this.turn.phase === "preparing") {
 				this.turn.phase = "streaming";
 			}
@@ -1241,7 +1241,10 @@ export class ChannelRunner implements AgentRunner {
 				this.firstTurnMemoryBootstrapPending = true;
 			}
 			if (!this.runState.ctx || !this.runState.logCtx || !this.runState.queue) return;
-			await handleSessionEvent(event, {
+			// The SDK listener signature is `(event) => void`, so the promise below is fire-and-forget.
+			// Without this catch, a rejection inside handleSessionEvent becomes an unhandled rejection
+			// that terminates the daemon under Node's default policy.
+			handleSessionEvent(event, {
 				ctx: this.runState.ctx,
 				logCtx: this.runState.logCtx,
 				queue: this.runState.queue,
@@ -1253,6 +1256,8 @@ export class ChannelRunner implements AgentRunner {
 				refreshSessionResources: async () => {
 					await this.refreshSessionResources();
 				},
+			}).catch((err) => {
+				log.logWarning(`[${this.channelId}] session event handler failed`, errorMessage(err));
 			});
 		});
 	}

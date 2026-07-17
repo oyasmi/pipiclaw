@@ -1,6 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import * as log from "../log.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory/channel-maintenance-queue.js";
 import { applyChannelMemoryOps, getChannelMemoryPath, parseChannelMemoryEntries } from "../memory/files.js";
@@ -9,6 +10,7 @@ import { recallRelevantMemory } from "../memory/recall.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
 import { hashMemoryContent } from "../memory/tombstones.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
+import { errorMessage } from "../shared/text-utils.js";
 
 const memoryManageSchema = Type.Object({
 	label: Type.String({ description: "Brief description of the memory change (shown to user)" }),
@@ -200,7 +202,9 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 			channelId: options.channelId,
 			reason: "user-forget",
 			actions: [{ op: "forget", entryId: removed.id, contentHash: hashMemoryContent(removed.content) }],
-		}).catch(() => {});
+		}).catch((error) => {
+			log.logWarning(`Failed to append memory review log for channel ${options.channelId}`, errorMessage(error));
+		});
 		return textResult(
 			"Removed the entry from active channel memory and recorded a tombstone so automatic maintenance will not restore it. Original session history and retention backups are unchanged.",
 			{ kind: "memory_manage", op: "forget", forgotten: true, entryId: removed.id },

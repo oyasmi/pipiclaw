@@ -3,6 +3,7 @@ import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
+import { isRecord } from "../shared/type-guards.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 
 type DispatchStatus = "pending" | "queued" | "running";
@@ -35,10 +36,6 @@ function dispatchId(event: DingTalkEvent): string {
 	return createHash("sha256")
 		.update(JSON.stringify([event.channelId, event.user, event.ts, event.text, event.conversationId]))
 		.digest("hex");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
 }
 
 function parseRecord(raw: string): DurableDispatchRecord | undefined {

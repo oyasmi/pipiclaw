@@ -1,7 +1,8 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
+import * as log from "../log.js";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { countPromptUnits } from "../shared/prompt-units.js";
-import { HAN_REGEX } from "../shared/text-utils.js";
+import { errorMessage, HAN_REGEX } from "../shared/text-utils.js";
 import {
 	buildMemoryCandidates,
 	createMemoryCandidateStore,
@@ -545,7 +546,8 @@ async function rerankCandidates(request: RecallRequest, candidates: ScoredCandid
 
 		const selected = candidates.filter(({ candidate }) => selectedIds.has(candidate.id));
 		return selected.length > 0 ? selected : candidates;
-	} catch {
+	} catch (error) {
+		log.logWarning("Memory recall LLM selection failed; falling back to all candidates", errorMessage(error));
 		return candidates;
 	}
 }

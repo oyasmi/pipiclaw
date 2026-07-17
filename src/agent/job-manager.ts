@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import type { Executor } from "../executor.js";
+import * as log from "../log.js";
 import { shellEscape } from "../shared/shell-escape.js";
+import { errorMessage } from "../shared/text-utils.js";
 
 /**
  * Per-channel manager for background bash jobs. A long command that ran synchronously would hold
@@ -169,7 +171,9 @@ export class ChannelJobManager {
 		try {
 			for (const record of this.jobs.values()) {
 				if (record.status === "running") {
-					await this.refresh(record).catch(() => {});
+					await this.refresh(record).catch((error) => {
+						log.logWarning(`Background job sweep failed to refresh job ${record.id}`, errorMessage(error));
+					});
 				}
 			}
 		} finally {

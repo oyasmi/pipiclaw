@@ -219,7 +219,9 @@ function parseAction(action: string): TaskManageAction {
 	) {
 		return action;
 	}
-	throw new Error("Unsupported task action. Use create, progress, set, verify, done, cancel, start-cycle, or list.");
+	throw new Error(
+		"Unsupported task action. Use create, progress, candidate, set, verify, done, cancel, start-cycle, or list.",
+	);
 }
 
 function tasksDir(options: TaskManageToolOptions): string {

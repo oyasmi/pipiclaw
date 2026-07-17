@@ -823,25 +823,6 @@ export class DingTalkBot {
 	}
 
 	/**
-	 * Stream content to the active AI Card for a channel using full replacement semantics.
-	 */
-	async streamToCard(channelId: string, content: string, finalize: boolean = false): Promise<boolean> {
-		return this.replaceCard(channelId, content, finalize, false);
-	}
-
-	/**
-	 * Finalize the active card for a channel without falling back to a plain message.
-	 * Returns true if a card was finalized, false if no active card existed.
-	 */
-	async finalizeExistingCard(channelId: string, content: string): Promise<boolean> {
-		const finalized = await this.replaceCard(channelId, content, true, false);
-		if (!finalized) {
-			return false;
-		}
-		return true;
-	}
-
-	/**
 	 * Finalize and remove the active card for a channel.
 	 */
 	async finalizeCard(channelId: string, content: string): Promise<boolean> {

@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
-import type { Agent as HttpAgent } from "node:http";
-import type { Agent as HttpsAgent } from "node:https";
+import { Agent as HttpAgent } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
+import { isIP, type LookupFunction } from "node:net";
 import axios from "axios";
 import { HttpProxyAgent } from "http-proxy-agent";
 import { HttpsProxyAgent } from "https-proxy-agent";
@@ -77,6 +78,27 @@ function buildUrlWithParams(
 	return resolved.toString();
 }
 
+// Pin the exact IP that the network guard validated so the actual socket connects there,
+// closing the DNS-rebinding TOCTOU where axios would otherwise re-resolve the hostname and
+// could reach a private address the guard already vetted against. The hostname is still used
+// for the Host header and TLS SNI/cert validation — only address resolution is overridden.
+function pinnedLookup(address: string): LookupFunction {
+	const family = isIP(address);
+	return ((_hostname, options, callback) => {
+		const cb = (typeof options === "function" ? options : callback) as (
+			err: NodeJS.ErrnoException | null,
+			address: string | { address: string; family: number }[],
+			family?: number,
+		) => void;
+		const wantsAll = typeof options === "object" && options?.all === true;
+		if (wantsAll) {
+			cb(null, [{ address, family }]);
+		} else {
+			cb(null, address, family);
+		}
+	}) as LookupFunction;
+}
+
 function getProxyAgent(requestUrl: string, explicitProxy: string | null): HttpAgent | HttpsAgent | undefined {
 	const proxyUrl = explicitProxy?.trim() || getProxyForUrl(requestUrl);
 	if (!proxyUrl) {
@@ -139,12 +161,13 @@ export class WebHttpClient {
 		let data = options.data;
 
 		for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
+			let validatedAddress: string | undefined;
 			try {
-				if (redirectCount === 0) {
-					await validateNetworkTarget(currentUrl, { config: this.context.securityConfig });
-				} else {
-					await validateRedirectTarget(currentUrl, { config: this.context.securityConfig });
-				}
+				const validated =
+					redirectCount === 0
+						? await validateNetworkTarget(currentUrl, { config: this.context.securityConfig })
+						: await validateRedirectTarget(currentUrl, { config: this.context.securityConfig });
+				validatedAddress = validated.resolvedAddress;
 			} catch (error) {
 				if (error instanceof NetworkGuardError) {
 					await logBlockedRequest(this.context, error);
@@ -152,7 +175,22 @@ export class WebHttpClient {
 				throw error;
 			}
 
-			const agent = getProxyAgent(currentUrl, this.context.webConfig.proxy);
+			const proxyAgent = getProxyAgent(currentUrl, this.context.webConfig.proxy);
+			// Without a proxy, pin the socket to the guard-validated IP. With a proxy, the proxy
+			// resolves DNS itself, so client-side pinning does not apply.
+			const isHttps = new URL(currentUrl).protocol === "https:";
+			let httpAgent = proxyAgent;
+			let httpsAgent = proxyAgent;
+			if (!proxyAgent && validatedAddress) {
+				const pinned = isHttps
+					? new HttpsAgent({ lookup: pinnedLookup(validatedAddress) })
+					: new HttpAgent({ lookup: pinnedLookup(validatedAddress) });
+				if (isHttps) {
+					httpsAgent = pinned;
+				} else {
+					httpAgent = pinned;
+				}
+			}
 			let response: Awaited<ReturnType<typeof axios.request<ArrayBuffer>>>;
 			try {
 				response = await axios.request<ArrayBuffer>({
@@ -171,8 +209,8 @@ export class WebHttpClient {
 					maxRedirects: 0,
 					maxContentLength: options.maxResponseBytes ?? Number.POSITIVE_INFINITY,
 					proxy: false,
-					httpAgent: agent,
-					httpsAgent: agent,
+					httpAgent,
+					httpsAgent,
 				});
 			} catch (error) {
 				if (
