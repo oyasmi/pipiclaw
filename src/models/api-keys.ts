@@ -24,6 +24,6 @@ export async function getApiKeyForModel(modelRegistry: ModelRegistry, model: Mod
 
 	throw new Error(
 		`No API key found for provider: ${model.provider}.\n\n` +
-			"Configure credentials in ~/.pi/pipiclaw/auth.json or ~/.pi/pipiclaw/models.json, or set the matching provider environment variable.",
+			"Configure credentials in ~/.pipiclaw/auth.json or ~/.pipiclaw/models.json, or set the matching provider environment variable.",
 	);
 }

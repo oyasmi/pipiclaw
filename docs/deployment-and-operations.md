@@ -23,7 +23,7 @@
 | 模型 | 已通过 `/model` 验证可见模型和默认模型，必要时可用唯一片段切换模型 |
 | Web 工具 | 如需 `web_search` / `web_fetch`，已检查 `tools.json` 与代理设置 |
 | 灰度范围 | 初期建议先配 `allowFrom` 控制测试人群 |
-| 工作目录 | 确认 `~/.pi/pipiclaw/` 所在磁盘可长期持久化 |
+| 工作目录 | 确认 `~/.pipiclaw/` 所在磁盘可长期持久化 |
 
 ## 推荐部署方式（Recommended Deployment Patterns）
 
@@ -154,7 +154,7 @@ supervisorctl tail -f pipiclaw
 
 ### 结构化日志与成本账本（Structured Logs and Cost Ledger）
 
-除 console 输出外，守护进程默认把结构化日志写到 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/logs/runtime.jsonl`（每行一条 JSON，按大小轮转），把 LLM 成本按月写到 `state/usage/usage-YYYY-MM.jsonl`。适合 `grep` 特定 channel 或 event 做事后排查。日志级别与落盘开关见[配置手册](./configuration.md)的 `logging` 一节。
+除 console 输出外，守护进程默认把结构化日志写到 `${PIPICLAW_HOME:-~/.pipiclaw}/state/logs/runtime.jsonl`（每行一条 JSON，按大小轮转），把 LLM 成本按月写到 `state/usage/usage-YYYY-MM.jsonl`。适合 `grep` 特定 channel 或 event 做事后排查。日志级别与落盘开关见[配置手册](./configuration.md)的 `logging` 一节。
 
 ### 进程日志（Process Logs）
 
@@ -174,7 +174,7 @@ supervisorctl tail -f pipiclaw
 
 ### 工作区运行文件（Workspace Runtime Files）
 
-Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认路径是 `~/.pi/pipiclaw/workspace/`；如果设置了 `PIPICLAW_HOME`，则对应为 `${PIPICLAW_HOME}/workspace/`。
+Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认路径是 `~/.pipiclaw/workspace/`；如果设置了 `PIPICLAW_HOME`，则对应为 `${PIPICLAW_HOME}/workspace/`。
 
 常见文件：
 
@@ -217,7 +217,7 @@ Pipiclaw 会启动一个内置 memory maintenance scheduler。它不使用 `work
 内部状态文件位于：
 
 ```text
-${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/memory/<channelId>.json
+${PIPICLAW_HOME:-~/.pipiclaw}/state/memory/<channelId>.json
 ```
 
 这些文件只用于调度，记录 dirty、阈值计数、最近运行时间和失败 backoff。它们不是记忆来源，不会进入普通 recall，也不需要用户编辑。
@@ -256,7 +256,7 @@ export PIPICLAW_DEBUG=1
 
 建议用下面的顺序升级：
 
-1. 备份 app home 目录。默认是 `~/.pi/pipiclaw/`，如果设置了 `PIPICLAW_HOME`，则备份 `${PIPICLAW_HOME}/`
+1. 备份 app home 目录。默认是 `~/.pipiclaw/`，如果设置了 `PIPICLAW_HOME`，则备份 `${PIPICLAW_HOME}/`
 2. 阅读 [CHANGELOG](../CHANGELOG.md) / [中文更新日志](../CHANGELOG.zh-CN.md)
 3. 升级 npm 包
 4. 重启 Pipiclaw
@@ -272,7 +272,7 @@ npm install -g @oyasmi/pipiclaw@latest
 
 ## 备份与恢复（Backup and Restore）
 
-最重要的是备份 app home 目录。默认是 `~/.pi/pipiclaw/`；如果设置了 `PIPICLAW_HOME`，则使用对应目录。至少应包含：
+最重要的是备份 app home 目录。默认是 `~/.pipiclaw/`；如果设置了 `PIPICLAW_HOME`，则使用对应目录。至少应包含：
 
 - `channel.json`
 - `auth.json`
@@ -335,7 +335,7 @@ workspace `skills/` 是 procedural memory。`skill_manage` 和高置信 post-tur
 - `schedule` 是否合法
 - `timezone` 是否正确
 - 进程日志里是否出现事件解析失败
-- `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl` 中是否有 `invalid`、`skipped`、`pre_action_blocked` 或 `queue_full` 记录
+- `${PIPICLAW_HOME:-~/.pipiclaw}/state/events/history.jsonl` 中是否有 `invalid`、`skipped`、`pre_action_blocked` 或 `queue_full` 记录
 
 ### 任务没有被自动推进
 
@@ -360,7 +360,7 @@ workspace `skills/` 是 procedural memory。`skill_manage` 和高置信 post-tur
 - 为 Pipiclaw 单独准备运行账号
 - 配置 AI Card，降低观察成本
 - 初期使用 `allowFrom` 做灰度
-- 定期备份 `~/.pi/pipiclaw/`
+- 定期备份 `~/.pipiclaw/`
 - 升级前先看 `CHANGELOG.md` / `CHANGELOG.zh-CN.md`
 - 修改 `events/` 和 `sub-agents/` 时保留版本管理记录
 

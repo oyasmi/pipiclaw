@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import {
 	formatUnknownCommandMessage,
@@ -19,7 +19,9 @@ import {
 	APP_NAME,
 	AUTH_CONFIG_PATH,
 	CHANNEL_CONFIG_PATH,
+	DEFAULT_APP_HOME_DIR,
 	EVENT_HISTORY_PATH,
+	LEGACY_APP_HOME_DIR,
 	MODELS_CONFIG_PATH,
 	SECURITY_CONFIG_PATH,
 	SETTINGS_CONFIG_PATH,
@@ -284,8 +286,37 @@ function hardenExistingSecretFile(path: string): void {
 	}
 }
 
-export function bootstrapAppHome(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): BootstrapResult {
+// FIXME(0.9.0): remove this legacy-home migration (and LEGACY_APP_HOME_DIR).
+// The default app home moved from `~/.pi/pipiclaw` to `~/.pipiclaw`. When the
+// new default location is not yet present but a legacy install is, move the old
+// directory over so existing users keep their config/workspace/state with no
+// manual step. Exported for direct testing; the env-gating (only for the real
+// default home, never a custom PIPICLAW_HOME) lives at the call site.
+export function migrateLegacyAppHome(targetDir: string, legacyDir: string, io: BootstrapIO): boolean {
+	if (existsSync(targetDir) || !existsSync(legacyDir)) {
+		return false;
+	}
+	try {
+		renameSync(legacyDir, targetDir);
+		io.log(`Migrated existing data from ${legacyDir} to ${targetDir}.`);
+		return true;
+	} catch (err) {
+		io.error(`Failed to migrate ${legacyDir} to ${targetDir}: ${errorMessage(err)}`);
+		io.error(`Move it manually, or set PIPICLAW_HOME=${legacyDir} to keep using the old location.`);
+		throw new BootstrapExitError(1);
+	}
+}
+
+export function bootstrapAppHome(
+	paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS,
+	io: BootstrapIO = console,
+): BootstrapResult {
 	const created: string[] = [];
+
+	// FIXME(0.9.0): remove alongside migrateLegacyAppHome.
+	if (paths.appHomeDir === DEFAULT_APP_HOME_DIR) {
+		migrateLegacyAppHome(paths.appHomeDir, LEGACY_APP_HOME_DIR, io);
+	}
 
 	if (!existsSync(paths.appHomeDir)) {
 		mkdirSync(paths.appHomeDir, { recursive: true });
@@ -1083,7 +1114,7 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	const startServices = options.startServices ?? true;
 
 	parseArgs(argv, paths, io);
-	const bootstrapResult = bootstrapAppHome(paths);
+	const bootstrapResult = bootstrapAppHome(paths, io);
 	printBootstrapSummary(bootstrapResult, io, paths);
 
 	if (bootstrapResult.channelTemplateCreated) {

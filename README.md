@@ -51,7 +51,7 @@ pipiclaw
 程序会创建：
 
 ```text
-~/.pi/pipiclaw/
+~/.pipiclaw/
 ├── channel.json      # 钉钉应用配置
 ├── auth.json         # 模型凭据
 ├── models.json       # 自定义模型提供方
@@ -62,7 +62,7 @@ pipiclaw
                       # events/、skills/、sub-agents/ 及各会话通道目录
 ```
 
-默认 app home 是 `~/.pi/pipiclaw/`；设置 `PIPICLAW_HOME=/your/path` 可整体迁移。如果 `channel.json` 仍是初始化模板，程序会提示补全配置后再启动，这是正常行为。
+默认 app home 是 `~/.pipiclaw/`；设置 `PIPICLAW_HOME=/your/path` 可整体迁移。如果 `channel.json` 仍是初始化模板，程序会提示补全配置后再启动，这是正常行为。
 
 ### 4. 创建钉钉应用（Create a DingTalk App）
 
@@ -75,7 +75,7 @@ pipiclaw
 
 ### 5. 填写 `channel.json`（Fill `channel.json`）
 
-编辑 `~/.pi/pipiclaw/channel.json`：
+编辑 `~/.pipiclaw/channel.json`：
 
 ```json
 {
@@ -102,7 +102,7 @@ pipiclaw
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-或写入 `~/.pi/pipiclaw/auth.json`：
+或写入 `~/.pipiclaw/auth.json`：
 
 ```json
 {
@@ -110,7 +110,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 }
 ```
 
-**方案 B：自定义模型提供方。** 适用于 OpenAI-compatible 网关、代理、自建或聚合服务，编辑 `~/.pi/pipiclaw/models.json`：
+**方案 B：自定义模型提供方。** 适用于 OpenAI-compatible 网关、代理、自建或聚合服务，编辑 `~/.pipiclaw/models.json`：
 
 ```json
 {
@@ -135,7 +135,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ### 7. 可选：设置默认模型（Optional: Set a Default Model）
 
-编辑 `~/.pi/pipiclaw/settings.json`：
+编辑 `~/.pipiclaw/settings.json`：
 
 ```json
 {
@@ -156,7 +156,7 @@ pipiclaw
 
 ### 9. 可选：启用内建 Web 工具（Optional: Enable Web Tools）
 
-`web_search` / `web_fetch` 默认关闭。首次启动生成的 `~/.pi/pipiclaw/tools.json` 已带可直接改用的模板，通常只需三步：
+`web_search` / `web_fetch` 默认关闭。首次启动生成的 `~/.pipiclaw/tools.json` 已带可直接改用的模板，通常只需三步：
 
 1. 把 `tools.web.enable` 改成 `true`
 2. 填入搜索 provider 的 `apiKey`（默认示例为 Brave）
@@ -185,17 +185,17 @@ pipiclaw
 
 1. 先检查 Node.js 版本，必须 >= 22.19.0；不满足就停下来告诉我，不要继续安装。
 2. 执行 npm install -g @oyasmi/pipiclaw。权限失败时不要自行 sudo，把报错给我并询问怎么处理。
-3. 运行一次 pipiclaw，让它初始化 ~/.pi/pipiclaw/ 和 workspace/。
+3. 运行一次 pipiclaw，让它初始化 ~/.pipiclaw/ 和 workspace/。
 4. 逐项询问我是否现在提供：钉钉应用的 clientId 和 clientSecret、AI Card 的
    cardTemplateId、模型接入方式（Anthropic 或自定义 provider）。
-5. 钉钉配置写入 ~/.pi/pipiclaw/channel.json：robotCode 可留空，allowFrom 先设 []。
+5. 钉钉配置写入 ~/.pipiclaw/channel.json：robotCode 可留空，allowFrom 先设 []。
    AI Card 是推荐配置；我暂不提供 cardTemplateId 时可先留空，但最后要提醒我补上。
    最终文件里不要保留任何 your-* 占位值。
 6. 模型配置：
    - 我选 Anthropic：询问我是否提供 ANTHROPIC_API_KEY；提供就配置到可用，
      不提供就保留默认空 models.json，并告诉我之后要补 auth.json 或环境变量。
    - 我选自定义 provider：至少收集 provider 名称、baseUrl、api 类型、apiKey、
-     一个 model id，写入 ~/.pi/pipiclaw/models.json；OpenAI-compatible 服务优先用
+     一个 model id，写入 ~/.pipiclaw/models.json；OpenAI-compatible 服务优先用
      openai-completions，并默认加 compat：supportsDeveloperRole: false、
      supportsReasoningEffort: false。
    - 我不提供的值不要编造。收尾时明确列出还缺什么、该改哪个文件。
@@ -257,7 +257,7 @@ npm run check    # lint + typecheck + deadcode + test
 端到端测试说明：
 
 - `npm run test:e2e` 运行"除钉钉渠道外"的完整 E2E：真实 runtime、真实工具/记忆/Sidecar/LLM，只 mock 钉钉传输层。
-- 需要可用模型凭据：优先读取 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/auth.json`，否则回退到 `ANTHROPIC_API_KEY`。
+- 需要可用模型凭据：优先读取 `${PIPICLAW_HOME:-~/.pipiclaw}/auth.json`，否则回退到 `ANTHROPIC_API_KEY`。
 - 默认模型是 `anthropic/claude-sonnet-4-5`；使用其他 provider 时用 `PIPICLAW_E2E_PROVIDER` / `PIPICLAW_E2E_MODEL` 覆盖，例如 `PIPICLAW_E2E_PROVIDER=zpai PIPICLAW_E2E_MODEL=glm-5-turbo npm run test:e2e`。
 - E2E 不包含在 `npm run test` 中，避免日常测试被真实 LLM 依赖和调用成本影响。
 

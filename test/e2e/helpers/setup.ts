@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 
-const REAL_PIPICLAW_HOME = join(homedir(), ".pi", "pipiclaw");
+const REAL_PIPICLAW_HOME = join(homedir(), ".pipiclaw");
 
 export interface E2ETestHome {
 	homeDir: string;
@@ -18,7 +18,7 @@ export function getE2ESkipReason(): string | null {
 	if (canRunE2E()) {
 		return null;
 	}
-	return "E2E credentials unavailable: add ~/.pi/pipiclaw/auth.json or set ANTHROPIC_API_KEY.";
+	return "E2E credentials unavailable: add ~/.pipiclaw/auth.json or set ANTHROPIC_API_KEY.";
 }
 
 function writeJson(path: string, value: unknown): void {

@@ -1,6 +1,6 @@
 # Pipiclaw 安全文档（Security Guide）
 
-这份文档讲清楚 Pipiclaw 当前这轮安全增强做了什么、默认策略是什么、哪些地方仍然有边界，以及如何通过 `~/.pi/pipiclaw/security.json` 调整策略。
+这份文档讲清楚 Pipiclaw 当前这轮安全增强做了什么、默认策略是什么、哪些地方仍然有边界，以及如何通过 `~/.pipiclaw/security.json` 调整策略。
 
 如果你还没有看过整体配置说明，建议同时参考：
 
@@ -26,7 +26,7 @@ Pipiclaw 的安全控制目前主要分成两层：
 默认路径：
 
 ```text
-~/.pi/pipiclaw/security.json
+~/.pipiclaw/security.json
 ```
 
 如果设置了：
@@ -126,7 +126,7 @@ $PIPICLAW_HOME/security.json
 - 私钥扩展名：`.pem`、`.key`、`.p12`、`.pfx`
 - 文件名关键词：`id_rsa`、`id_ed25519`、`private`、`secret`、`credentials`
 
-## 配置文件示例（Example `~/.pi/pipiclaw/security.json`）
+## 配置文件示例（Example `~/.pipiclaw/security.json`）
 
 下面给出一个完整示例：
 
@@ -167,7 +167,7 @@ $PIPICLAW_HOME/security.json
   },
   "audit": {
     "logBlocked": true,
-    "logFile": "~/.pi/pipiclaw/workspace/.pipiclaw/security.log"
+    "logFile": "~/.pipiclaw/workspace/.pipiclaw/security.log"
   }
 }
 ```
@@ -233,7 +233,7 @@ $PIPICLAW_HOME/security.json
 默认日志路径目前是：
 
 ```text
-~/.pi/pipiclaw/workspace/.pipiclaw/security.log
+~/.pipiclaw/workspace/.pipiclaw/security.log
 ```
 
 如果你不设置 `logFile`，就会写到这个位置。
@@ -428,7 +428,7 @@ $PIPICLAW_HOME/security.json
   },
   "audit": {
     "logBlocked": true,
-    "logFile": "~/.pi/pipiclaw/workspace/.pipiclaw/security.log"
+    "logFile": "~/.pipiclaw/workspace/.pipiclaw/security.log"
   }
 }
 ```
@@ -517,7 +517,7 @@ Pipiclaw 的安全层是工具层硬约束，不是内核级隔离。
 默认去看：
 
 ```text
-~/.pi/pipiclaw/workspace/.pipiclaw/security.log
+~/.pipiclaw/workspace/.pipiclaw/security.log
 ```
 
 如果你在 `audit.logFile` 里改过路径，则看你自定义的位置。

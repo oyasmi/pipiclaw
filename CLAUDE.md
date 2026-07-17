@@ -40,7 +40,7 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 
 **Tools (`src/tools/`)** are the capabilities handed to the coding agent (`bash`, `read`, `write`, `edit`, `web_search`/`web_fetch`, skill + config tools). Every filesystem/command/network tool goes through `src/security/` guards: `command-guard.ts`, `path-guard.ts`, `network.ts`, with blocked actions written to the audit logger. `write.ts` is a thin tool wrapper over the shared `write-content.ts` (also used by the sub-agent tool) — that split is deliberate.
 
-**Config & state live outside the repo**, under `APP_HOME_DIR` (`~/.pi/pipiclaw`, overridable via `PIPICLAW_HOME`). Paths are centralized in `src/paths.ts` (`channel.json`, `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`, plus `workspace/` and `state/`). `src/index.ts` is the public library barrel; keep its exported names stable when moving code.
+**Config & state live outside the repo**, under `APP_HOME_DIR` (`~/.pipiclaw`, overridable via `PIPICLAW_HOME`). Paths are centralized in `src/paths.ts` (`channel.json`, `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`, plus `workspace/` and `state/`). `src/index.ts` is the public library barrel; keep its exported names stable when moving code.
 
 ## Docs
 

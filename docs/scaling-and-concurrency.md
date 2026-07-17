@@ -57,4 +57,4 @@ Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的
 | API 报错 | 进程日志、`state/logs/runtime.jsonl` | rate limit / timeout 频繁出现 |
 | LLM 成本 | `/usage`、`state/usage/usage-YYYY-MM.jsonl` | 后台维护与任务驱动的额外消耗 |
 | WebSocket 重连 | 日志中的 reconnect / forced termination | 频繁出现时排查网络、代理、防火墙 |
-| 磁盘 | `du -sh ~/.pi/pipiclaw/workspace/` | 长期运行后清理旧通道目录 |
+| 磁盘 | `du -sh ~/.pipiclaw/workspace/` | 长期运行后清理旧通道目录 |

@@ -101,7 +101,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	// Transport-neutral init. Unlike the DingTalk path, the TUI ignores
 	// channelTemplateCreated (it needs no channel.json) and shares app services
 	// (settings, diagnostics) with bootstrap via prepareAppServices.
-	printBootstrapSummary(bootstrapAppHome(paths), io, paths);
+	printBootstrapSummary(bootstrapAppHome(paths, io), io, paths);
 	const { settingsManager } = prepareAppServices(paths);
 	log.configureLogging(settingsManager.getLoggingSettings());
 	log.logStartup(paths.workspaceDir);

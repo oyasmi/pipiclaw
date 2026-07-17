@@ -5,7 +5,7 @@
 - 定时事件（events）
 - 预定义子代理（sub-agents）
 
-它们都放在 app home 下的 `workspace/` 中。默认路径是 `~/.pi/pipiclaw/workspace/`；如果设置了 `PIPICLAW_HOME`，则对应为 `${PIPICLAW_HOME}/workspace/`。这些内容已经不只是“把配置填完整”这么简单，而是会直接影响你如何日常使用 Pipiclaw。
+它们都放在 app home 下的 `workspace/` 中。默认路径是 `~/.pipiclaw/workspace/`；如果设置了 `PIPICLAW_HOME`，则对应为 `${PIPICLAW_HOME}/workspace/`。这些内容已经不只是“把配置填完整”这么简单，而是会直接影响你如何日常使用 Pipiclaw。
 
 如果你还没有完成钉钉和模型配置，请先看 [README](../README.md) 和 [configuration.md](./configuration.md)。
 
@@ -20,7 +20,7 @@
 
 ### 它是什么（What It Is）
 
-在 `~/.pi/pipiclaw/workspace/events/` 中放入一个 `.json` 文件，运行中的 Pipiclaw 就会读取它，并把它转成一条发给指定会话通道（channel）的事件消息。
+在 `~/.pipiclaw/workspace/events/` 中放入一个 `.json` 文件，运行中的 Pipiclaw 就会读取它，并把它转成一条发给指定会话通道（channel）的事件消息。
 
 适合的场景：
 
@@ -76,7 +76,7 @@
   "timezone": "Asia/Shanghai",
   "preAction": {
     "type": "bash",
-    "command": "node ~/.pi/pipiclaw/workspace/skills/check-last-workday.js"
+    "command": "node ~/.pipiclaw/workspace/skills/check-last-workday.js"
   }
 }
 ```
@@ -217,7 +217,7 @@ event 触发后不会直接依赖内存 queue：runtime 会先把 synthetic even
 Pipiclaw 会把事件调度层的审计记录写入：
 
 ```text
-~/.pi/pipiclaw/state/events/history.jsonl
+~/.pipiclaw/state/events/history.jsonl
 ```
 
 如果设置了 `PIPICLAW_HOME`，则写入对应 app home 下的 `state/events/history.jsonl`。
@@ -234,7 +234,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 示例：
 
 ```json
-{"ts":"2026-06-25T10:00:00.123+08:00","eventName":"weekly-review","eventPath":"/Users/me/.pi/pipiclaw/workspace/events/weekly-review.json","eventType":"periodic","channelId":"dm_123","action":"enqueued","result":"ok","schedule":"0 10 * * 1","timezone":"Asia/Shanghai","textPreview":"检查当前 workspace 和 channel 的 MEMORY.md...","queue":{"accepted":true}}
+{"ts":"2026-06-25T10:00:00.123+08:00","eventName":"weekly-review","eventPath":"/Users/me/.pipiclaw/workspace/events/weekly-review.json","eventType":"periodic","channelId":"dm_123","action":"enqueued","result":"ok","schedule":"0 10 * * 1","timezone":"Asia/Shanghai","textPreview":"检查当前 workspace 和 channel 的 MEMORY.md...","queue":{"accepted":true}}
 ```
 
 说明：
@@ -292,7 +292,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
   "timezone": "Asia/Shanghai",
   "preAction": {
     "type": "bash",
-    "command": "node ~/.pi/pipiclaw/workspace/skills/check-last-workday.js"
+    "command": "node ~/.pipiclaw/workspace/skills/check-last-workday.js"
   }
 }
 ```
@@ -379,7 +379,7 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
 
 ### 它是什么（What It Is）
 
-预定义子代理是放在 `~/.pi/pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
+预定义子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
 
 适合的场景：
 
@@ -395,7 +395,7 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
 
 ### 最小示例（Minimal Example）
 
-文件：`~/.pi/pipiclaw/workspace/sub-agents/reviewer.md`
+文件：`~/.pipiclaw/workspace/sub-agents/reviewer.md`
 
 ```md
 ---

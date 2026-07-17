@@ -33,7 +33,7 @@ Pipiclaw 的配置分成两层：
 Pipiclaw 默认在下面这个目录初始化所有配置：
 
 ```text
-~/.pi/pipiclaw/
+~/.pipiclaw/
 ├── channel.json
 ├── auth.json
 ├── models.json
@@ -50,7 +50,7 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
     └── sub-agents/
 ```
 
-默认根目录是 `~/.pi/pipiclaw/`。如果你设置了：
+默认根目录是 `~/.pipiclaw/`。如果你设置了：
 
 ```bash
 export PIPICLAW_HOME=/your/custom/pipiclaw-home
@@ -58,30 +58,32 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 
 那么 Pipiclaw 会改为从这个目录读取和写入所有全局配置与 `workspace/`。
 
+> **从旧版本升级：** 默认根目录已从 `~/.pi/pipiclaw/` 迁移到 `~/.pipiclaw/`。若你使用默认路径（未设置 `PIPICLAW_HOME`）且新目录尚不存在、旧目录仍在，启动时会自动把旧目录整体移动到新位置，无需手动操作。设置了自定义 `PIPICLAW_HOME` 的用户不受影响。该自动迁移是临时兼容，将在 0.9.0 移除。
+
 ### 主要文件（Main Files）
 
 | 文件 | 范围 | 用途 | 自动创建 |
 |------|------|------|----------|
-| `~/.pi/pipiclaw/channel.json` | 全局 | 钉钉应用配置 | 是 |
-| `~/.pi/pipiclaw/auth.json` | 全局 | 模型提供方凭据（provider credentials） | 是 |
-| `~/.pi/pipiclaw/models.json` | 全局 | 自定义模型提供方 / 模型 | 是 |
-| `~/.pi/pipiclaw/settings.json` | 全局 | Pipiclaw 运行时设置 | 是 |
-| `~/.pi/pipiclaw/tools.json` | 全局 | 内建工具配置，例如 `tools.web` | 是 |
-| `~/.pi/pipiclaw/security.json` | 全局 | 工具层安全策略（路径/命令守卫） | 是 |
-| `~/.pi/pipiclaw/workspace/SOUL.md` | 工作区 | 助手身份与回复风格 | 是 |
-| `~/.pi/pipiclaw/workspace/AGENTS.md` | 工作区 | 工作规则与行为约束 | 是 |
-| `~/.pi/pipiclaw/workspace/MEMORY.md` | 工作区 | 持久化共享记忆 | 是 |
-| `~/.pi/pipiclaw/workspace/ENVIRONMENT.md` | 工作区 | 环境事实与重要环境变更记录 | 是 |
-| `~/.pi/pipiclaw/workspace/events/` | 工作区 | 定时事件目录 | 是 |
-| `~/.pi/pipiclaw/workspace/sub-agents/` | 工作区 | 预定义子代理目录 | 是 |
-| `~/.pi/pipiclaw/workspace/skills/` | 工作区 | 工作区级技能目录 | 是 |
+| `~/.pipiclaw/channel.json` | 全局 | 钉钉应用配置 | 是 |
+| `~/.pipiclaw/auth.json` | 全局 | 模型提供方凭据（provider credentials） | 是 |
+| `~/.pipiclaw/models.json` | 全局 | 自定义模型提供方 / 模型 | 是 |
+| `~/.pipiclaw/settings.json` | 全局 | Pipiclaw 运行时设置 | 是 |
+| `~/.pipiclaw/tools.json` | 全局 | 内建工具配置，例如 `tools.web` | 是 |
+| `~/.pipiclaw/security.json` | 全局 | 工具层安全策略（路径/命令守卫） | 是 |
+| `~/.pipiclaw/workspace/SOUL.md` | 工作区 | 助手身份与回复风格 | 是 |
+| `~/.pipiclaw/workspace/AGENTS.md` | 工作区 | 工作规则与行为约束 | 是 |
+| `~/.pipiclaw/workspace/MEMORY.md` | 工作区 | 持久化共享记忆 | 是 |
+| `~/.pipiclaw/workspace/ENVIRONMENT.md` | 工作区 | 环境事实与重要环境变更记录 | 是 |
+| `~/.pipiclaw/workspace/events/` | 工作区 | 定时事件目录 | 是 |
+| `~/.pipiclaw/workspace/sub-agents/` | 工作区 | 预定义子代理目录 | 是 |
+| `~/.pipiclaw/workspace/skills/` | 工作区 | 工作区级技能目录 | 是 |
 
 ### 环境变量（Environment Variables）
 
 | 变量 | 用途 |
 |----------|------|
 | `ANTHROPIC_API_KEY` | Anthropic 默认模型凭据 |
-| `PIPICLAW_HOME` | 覆盖默认的 `~/.pi/pipiclaw/` 根目录 |
+| `PIPICLAW_HOME` | 覆盖默认的 `~/.pipiclaw/` 根目录 |
 | `PIPICLAW_DEBUG` | 在会话通道目录中写出 `last_prompt.json` |
 | `PIPICLAW_LOG_LEVEL` | 覆盖日志级别（`debug` \| `info` \| `warn` \| `error`），优先于 `settings.json` |
 | `PIPICLAW_LOG_FILE` | `0`/`1` 关闭或开启文件落盘，优先于 `settings.json` |
@@ -95,7 +97,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 
 ### 钉钉配置（DingTalk Config）
 
-Pipiclaw 只读取 app home 下的 `channel.json`，没有项目级覆盖。默认是 `~/.pi/pipiclaw/channel.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/channel.json`。
+Pipiclaw 只读取 app home 下的 `channel.json`，没有项目级覆盖。默认是 `~/.pipiclaw/channel.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/channel.json`。
 
 ### 模型凭据解析（Model Credential Resolution）
 
@@ -118,7 +120,7 @@ Pipiclaw 的模型提供方凭据（provider credential）解析主要继承自 
 
 ### 运行时设置（Settings）
 
-Pipiclaw 当前只使用 app home 下的 `settings.json`。默认是 `~/.pi/pipiclaw/settings.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/settings.json`。
+Pipiclaw 当前只使用 app home 下的 `settings.json`。默认是 `~/.pipiclaw/settings.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/settings.json`。
 
 pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有采用。不要假设把配置写到项目目录 `.pi/settings.json` 就会生效。
 
@@ -138,7 +140,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 
 ## 可观测性：结构化日志与成本账本（Observability: Structured Logging & Cost Ledger）
 
-作为长期运行的守护进程，Pipiclaw 除了彩色 console 输出外，还会把结构化日志与 LLM 成本落盘到 `STATE_DIR`（默认 `~/.pi/pipiclaw/state`，随 `PIPICLAW_HOME` 变化）。console 输出保持不变；这些文件是额外产物。
+作为长期运行的守护进程，Pipiclaw 除了彩色 console 输出外，还会把结构化日志与 LLM 成本落盘到 `STATE_DIR`（默认 `~/.pipiclaw/state`，随 `PIPICLAW_HOME` 变化）。console 输出保持不变；这些文件是额外产物。
 
 - **结构化日志**：`state/logs/runtime.jsonl`，每行一条 JSON 记录（`ts`/`level`/`event`/`channelId`/`message`/`fields` 等），按大小轮转（默认 5MB × 3）。文件权限 `0600`（含用户消息片段，与 `log.jsonl` 同威胁模型）。
 - **成本账本**：`state/usage/usage-YYYY-MM.jsonl`，按月分文件。每条记录一次开销，分三类 `kind`：`turn`（主轮 assistant，不含子代理）、`subagent`（每次子代理运行）、`sidecar`（每次记忆后台任务）。三类金额可直接加总、无重复计数。`cost.total <= 0`（本地无计费模型）不落盘。
@@ -160,7 +162,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 
 ## 内建工具与任务开关（Built-in Tool and Task Settings）
 
-Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.json`。默认是 `~/.pi/pipiclaw/tools.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/tools.json`。
+Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.json`。默认是 `~/.pipiclaw/tools.json`；如果设置了 `PIPICLAW_HOME`，则会改为 `${PIPICLAW_HOME}/tools.json`。
 
 当前最主要的是 `tools.web` 配置空间，用于控制：
 
@@ -1202,7 +1204,7 @@ web 工具的代理顺序是：
 
 详细事件类型、字段说明和使用建议见 [events-and-sub-agents.md](./events-and-sub-agents.md)。
 
-事件调度层的审计记录会写入 `${PIPICLAW_HOME:-~/.pi/pipiclaw}/state/events/history.jsonl`。该文件由 Pipiclaw 自动创建，用 JSON Lines 记录事件加载、调度、触发、`preAction` 结果和入队结果；其中 `ts` 使用本地时区时间。
+事件调度层的审计记录会写入 `${PIPICLAW_HOME:-~/.pipiclaw}/state/events/history.jsonl`。该文件由 Pipiclaw 自动创建，用 JSON Lines 记录事件加载、调度、触发、`preAction` 结果和入队结果；其中 `ts` 使用本地时区时间。
 
 ## 技能目录 `workspace/skills/`（`workspace/skills/`）
 
@@ -1221,8 +1223,8 @@ web 工具的代理顺序是：
 运行后，Pipiclaw 会按私聊或群聊创建会话通道目录，例如：
 
 ```text
-~/.pi/pipiclaw/workspace/dm_<staffId>/
-~/.pi/pipiclaw/workspace/group_<conversationId>/
+~/.pipiclaw/workspace/dm_<staffId>/
+~/.pipiclaw/workspace/group_<conversationId>/
 ```
 
 常见文件：
@@ -1351,7 +1353,7 @@ web 工具的代理顺序是：
 
 ### 可以使用 pi-mono 的 `.pi/settings.json` 项目级覆盖吗？（Can I Use pi-mono's `.pi/settings.json` Project Overrides?）
 
-当前不要依赖。Pipiclaw 目前只使用 `~/.pi/pipiclaw/settings.json`。
+当前不要依赖。Pipiclaw 目前只使用 `~/.pipiclaw/settings.json`。
 
 ### pi-mono 的 `settings.md` 能完整套用到这里吗？（Is `settings.md` From pi-mono Fully Applicable Here?）
 
