@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.8-beta.1] - 2026-07-17
+
 ### Changed
 
 - The default app home moved from `~/.pi/pipiclaw/` to `~/.pipiclaw/`. Users on the default location (no `PIPICLAW_HOME` set) are migrated automatically: on startup, if the new directory does not exist yet and a legacy `~/.pi/pipiclaw/` install is present, the old directory is moved to the new location — no manual step. Custom `PIPICLAW_HOME` values are untouched. This automatic migration is a temporary shim and will be removed in 0.9.0.
