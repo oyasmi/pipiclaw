@@ -17,6 +17,7 @@ import {
 	taskBody,
 	uncheckedTaskAcceptanceItems,
 } from "../shared/task-ledger.js";
+import { nextTaskWake, validateTaskSchedule } from "../shared/task-schedule.js";
 import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
 import {
 	applyTaskControlPatch,
@@ -122,7 +123,16 @@ const taskManageSchema = Type.Object({
 				"ISO8601 earliest-recheck time for create/progress/set; empty string clears it. The native task driver resumes it; no .checkin event is needed.",
 		}),
 	),
-	recurrence: Type.Optional(Type.String({ description: "Annotation only (e.g. 每周一); empty string clears it." })),
+	schedule: Type.Optional(
+		Type.String({
+			description:
+				"Five-field cron cadence (host timezone) that makes this a recurring task; empty string clears it. " +
+				"On done, the driver sleeps the task until the next occurrence and re-opens it with start-cycle. Min every 30 minutes.",
+		}),
+	),
+	recurrence: Type.Optional(
+		Type.String({ description: "Human annotation only (e.g. 每周一); empty string clears it." }),
+	),
 	note: Type.Optional(
 		Type.String({
 			description:
@@ -184,6 +194,7 @@ export interface TaskManageRequest {
 	manual?: string;
 	status?: string;
 	wake?: string;
+	schedule?: string;
 	recurrence?: string;
 	note?: string;
 	verificationPlan?: string;
@@ -207,6 +218,7 @@ export interface TaskManageToolOptions {
 interface TaskFields {
 	status: string;
 	wake?: string;
+	schedule?: string;
 	recurrence?: string;
 	control?: TaskControl;
 }
@@ -334,6 +346,7 @@ async function readTaskDocument(
 		fields: {
 			status: frontmatter.status ?? "open",
 			wake: frontmatter.wake,
+			schedule: frontmatter.schedule,
 			recurrence: frontmatter.recurrence,
 			control: frontmatter.control,
 		},
@@ -365,12 +378,27 @@ function applySet(fields: TaskFields, request: TaskManageRequest): TaskFields {
 			next.wake = trimmed;
 		}
 	}
+	if (request.schedule !== undefined) {
+		const trimmed = request.schedule.trim();
+		if (trimmed === "") {
+			next.schedule = undefined;
+		} else {
+			validateTaskSchedule(trimmed);
+			next.schedule = trimmed;
+		}
+	}
 	if (request.recurrence !== undefined) {
 		const trimmed = request.recurrence.trim();
 		next.recurrence = trimmed === "" ? undefined : trimmed;
 	}
 	if (request.control !== undefined) {
 		next.control = applyTaskControlPatch(next.control ?? createDefaultTaskControl("evidence"), request.control);
+	}
+	// A done recurring task sleeps until its next occurrence; changing the cadence of a
+	// task that is currently done recomputes that wake in the same atomic write.
+	if (next.status === "done" && next.schedule) {
+		const nextWake = nextTaskWake(next.schedule);
+		next.wake = nextWake ? nextWake.toISOString() : undefined;
 	}
 	return next;
 }
@@ -490,6 +518,25 @@ async function cleanupTaskEvents(
 		deleted.push(filename.slice(0, -".json".length));
 	}
 	return { deleted, hasSchedule };
+}
+
+/**
+ * Migration compat: a task may still carry a legacy canonical `.schedule` periodic event
+ * as its cadence truth (pre-027). `start-cycle` accepts such a task even without `schedule`
+ * frontmatter so an in-flight migration is not blocked mid-cycle.
+ */
+async function hasLegacyScheduleEvent(options: TaskManageToolOptions, id: string): Promise<boolean> {
+	const eventPath = join(eventsDir(options), taskScheduleEventFilename(options.channelId, id));
+	if (!existsSync(eventPath)) return false;
+	try {
+		const type = parseScheduledEventContent(
+			await readFile(eventPath, "utf-8"),
+			taskScheduleEventFilename(options.channelId, id),
+		).type;
+		return isTaskScheduleEvent({ use: "schedule", event: { type } });
+	} catch {
+		return false;
+	}
 }
 
 async function setTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
@@ -733,13 +780,20 @@ async function doneTask(options: TaskManageToolOptions, request: TaskManageReque
 		fields.control.blockedReason = undefined;
 	}
 
-	await writeFileAtomically(taskPath, renderTaskFile({ ...fields, status: "done" }, bodyWithEvidence));
+	// A recurring task (schedule frontmatter) sleeps in place until its next occurrence;
+	// the wake is computed here so "done + wake" fully describes "asleep until next cycle".
+	const doneFields: TaskFields = fields.schedule
+		? { ...fields, status: "done", wake: nextTaskWake(fields.schedule)?.toISOString() }
+		: { ...fields, status: "done" };
+	await writeFileAtomically(taskPath, renderTaskFile(doneFields, bodyWithEvidence));
 	const { deleted, hasSchedule } = await cleanupTaskEvents(options, id);
 
-	// Periodic task → sleeps in place until its schedule fires next; one-shot → archive.
+	// Recurring (schedule frontmatter, or a legacy .schedule event during migration) →
+	// sleeps in place; one-shot → archive.
+	const recurring = Boolean(fields.schedule) || hasSchedule;
 	let archived = false;
 	let finalPath = taskPath;
-	if (!hasSchedule) {
+	if (!recurring) {
 		const archiveDir = join(dir, "archive");
 		await mkdir(archiveDir, { recursive: true });
 		finalPath = join(archiveDir, `${id}.md`);
@@ -809,9 +863,9 @@ async function startCycleTask(options: TaskManageToolOptions, request: TaskManag
 			`Task "${id}" is ${fields.status}, not done. Finish, cancel, or explicitly resolve the current cycle before starting another.`,
 		);
 	}
-	if (!fields.recurrence) {
+	if (!fields.schedule && !(await hasLegacyScheduleEvent(options, id))) {
 		throw new Error(
-			`Task "${id}" is not marked recurring. Add recurrence and its canonical .schedule event before starting a cycle.`,
+			`Task "${id}" is not recurring. Add a schedule cron with task_manage set before starting a cycle.`,
 		);
 	}
 	const control = fields.control ? resetTaskControlForCycle(fields.control, cycleId) : undefined;
@@ -894,6 +948,7 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 				control?: TaskControlPatch;
 				status?: string;
 				wake?: string;
+				schedule?: string;
 				recurrence?: string;
 				note?: string;
 				verifierRunId?: string;
@@ -915,6 +970,7 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 				control: args.control,
 				status: args.status,
 				wake: args.wake,
+				schedule: args.schedule,
 				recurrence: args.recurrence,
 				note: args.note,
 				verifierRunId: args.verifierRunId,

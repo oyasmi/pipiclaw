@@ -249,11 +249,35 @@ describe("handleTasksCommand", () => {
 		});
 
 		const out = await run("doctor");
-		expect(out).toContain("has recurrence but no parseable");
 		expect(out).toContain("legacy task checkin");
 		expect(out).toContain("wake does not match");
 		expect(out).toContain("points to archived task old");
 		expect(out).toContain("points to missing task ghost");
 		expect(out).toContain("Next step:");
+	});
+
+	it("doctor flags a legacy .schedule event as a migration item to fold into frontmatter", async () => {
+		await writeFile(
+			join(tasksDir, "weekly.md"),
+			doc(`status: done\nwake: ${FUTURE}\nschedule: 0 9 * * 1`, STANDARD_BODY),
+		);
+		await writeEvent("task.dm_1.weekly.schedule", {
+			type: "periodic",
+			channelId,
+			text: "推进任务 weekly",
+			schedule: "0 9 * * 1",
+		});
+		const out = await run("doctor");
+		expect(out).toContain("legacy task .schedule event");
+		expect(out).toContain("Fold its cron");
+	});
+
+	it("doctor accepts a native recurring task with no schedule event and no recurrence pairing issue", async () => {
+		await writeFile(
+			join(tasksDir, "weekly.md"),
+			doc(`status: done\nwake: ${FUTURE}\nschedule: 0 9 * * 1\nrecurrence: 每周一`, STANDARD_BODY),
+		);
+		const out = await run("doctor");
+		expect(out).toContain("No task ledger issues found");
 	});
 });

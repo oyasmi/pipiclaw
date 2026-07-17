@@ -8,12 +8,14 @@ import type { PipiclawTaskDriverSettings } from "../src/settings.js";
 import { renderTaskDocument } from "../src/shared/task-ledger.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { finishTaskAttempt } from "../src/tasks/store.js";
+import { manageTask } from "../src/tools/task-manage.js";
 
 const NOW = new Date("2026-07-10T12:00:00+08:00");
 const SETTINGS: PipiclawTaskDriverSettings = {
 	continuationDelayMinutes: 5,
 	stalledRetryMinutes: 60,
 	maxDispatchesPerTick: 4,
+	maxSleepMinutes: 15,
 };
 
 function task(status: string, wake?: string, note = "created"): string {
@@ -38,6 +40,7 @@ describe("TaskDriver", () => {
 		workspaceDir = await mkdtemp(join(tmpdir(), "task-driver-"));
 	});
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		vi.useRealTimers();
 		await rm(workspaceDir, { recursive: true, force: true });
 	});
@@ -308,7 +311,7 @@ describe("TaskDriver", () => {
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("task-driving.md");
 	});
 
-	it("starts and stops an idempotent scan timer", async () => {
+	it("scans on start, sleeps to the cap, and stops idempotently", async () => {
 		vi.useFakeTimers();
 		const runOnce = vi.spyOn(TaskDriver.prototype, "runOnce").mockResolvedValue(undefined);
 		const driver = new TaskDriver({
@@ -320,10 +323,172 @@ describe("TaskDriver", () => {
 		});
 		driver.start();
 		driver.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(runOnce).toHaveBeenCalledTimes(1); // scan on start
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(runOnce).toHaveBeenCalledTimes(1);
+		expect(runOnce).toHaveBeenCalledTimes(2); // one capped sleep later
 		driver.stop();
-		await vi.advanceTimersByTimeAsync(1000);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(runOnce).toHaveBeenCalledTimes(2);
+	});
+
+	it("nudge cancels the pending sleep and rescans promptly", async () => {
+		vi.useFakeTimers();
+		const runOnce = vi.spyOn(TaskDriver.prototype, "runOnce").mockResolvedValue(undefined);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch: () => true,
+			getSettings: () => SETTINGS,
+			intervalMs: 60_000,
+		});
+		driver.start();
+		await vi.advanceTimersByTimeAsync(0);
 		expect(runOnce).toHaveBeenCalledTimes(1);
+		driver.nudge();
+		driver.nudge(); // debounced: still one extra scan
+		await vi.advanceTimersByTimeAsync(50);
+		expect(runOnce).toHaveBeenCalledTimes(2);
+		driver.stop();
+	});
+
+	it("opens a new cycle for a due recurring task without claiming an attempt", async () => {
+		await writeTask(
+			"dm_a",
+			"weekly",
+			governedTask("done", (control) => {
+				control.usage.attempts = 3;
+			}).replace("status: done", "status: done\nschedule: 30 9 * * 1\nwake: 2026-07-10T09:00:00+08:00"),
+		);
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+		await driver.runOnce(NOW);
+		expect(dispatch).toHaveBeenCalledOnce();
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_CYCLE:weekly]");
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("start-cycle");
+		// No attempt was claimed: usage on disk is unchanged.
+		const onDisk = await readFile(join(workspaceDir, "dm_a", "tasks", "weekly.md"), "utf-8");
+		expect(onDisk).toContain('"attempts":3');
+	});
+
+	it("does not open a cycle for a done recurring task whose wake is still in the future", async () => {
+		await writeTask(
+			"dm_a",
+			"weekly",
+			task("done").replace("status: done", "status: done\nschedule: 30 9 * * 1\nwake: 2026-07-20T09:30:00+08:00"),
+		);
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+		await driver.runOnce(NOW);
+		expect(dispatch).not.toHaveBeenCalled();
+	});
+
+	it("self-heals a missing wake for a done recurring task instead of waking the model", async () => {
+		await writeTask("dm_a", "weekly", task("done").replace("status: done", "status: done\nschedule: 30 9 * * 1"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+		await driver.runOnce(NOW);
+		expect(dispatch).not.toHaveBeenCalled();
+		const onDisk = await readFile(join(workspaceDir, "dm_a", "tasks", "weekly.md"), "utf-8");
+		expect(onDisk).toMatch(/wake: 2026-07-\d\dT/);
+	});
+
+	it("runs the full native recurring loop: done → sleep → cycle-start → start-cycle → done", async () => {
+		const channelDir = join(workspaceDir, "dm_a");
+		const opts = { workspaceDir, channelDir, channelId: "dm_a" };
+		await mkdir(join(channelDir, "tasks"), { recursive: true });
+		await manageTask(opts, {
+			action: "create",
+			id: "weekly",
+			title: "Weekly report",
+			goal: "Publish weekly",
+			dod: "- [x] published",
+			schedule: "30 9 * * 1",
+		});
+		await manageTask(opts, { action: "done", id: "weekly", summary: "Done", evidence: "Checked" });
+		// Recurring task stays in place, asleep until its next occurrence (computed off the schedule).
+		const doneContent = await readFile(join(channelDir, "tasks", "weekly.md"), "utf-8");
+		expect(doneContent).toContain("status: done");
+		const wakeMs = new Date(/wake: (\S+)/.exec(doneContent)![1]).getTime();
+
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+
+		// Before the cadence fires: no wake.
+		await driver.runOnce(new Date(wakeMs - 60_000));
+		expect(dispatch).not.toHaveBeenCalled();
+
+		// Just past the occurrence: driver opens a new cycle.
+		await driver.runOnce(new Date(wakeMs + 60_000));
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_CYCLE:weekly]");
+
+		// The agent turn opens the cycle and finishes it again.
+		await manageTask(opts, { action: "start-cycle", id: "weekly", cycleId: "2026-W29" });
+		const started = await readFile(join(channelDir, "tasks", "weekly.md"), "utf-8");
+		expect(started).toContain("status: in-progress");
+		expect(started).toContain('"cycleId":"2026-W29"');
+		// Re-check the DoD and close cycle two.
+		await manageTask(opts, {
+			action: "progress",
+			id: "weekly",
+			note: "cycle two published",
+			control: {},
+		});
+		const withDod = (await readFile(join(channelDir, "tasks", "weekly.md"), "utf-8")).replace(
+			"- [ ] published",
+			"- [x] published",
+		);
+		await writeFile(join(channelDir, "tasks", "weekly.md"), withDod);
+		const done2 = await manageTask(opts, {
+			action: "done",
+			id: "weekly",
+			summary: "Done again",
+			evidence: "Checked",
+		});
+		expect(done2.archived).toBe(false);
+		expect(await readFile(join(channelDir, "tasks", "weekly.md"), "utf-8")).toMatch(/wake: 2026-07-\d\dT/);
+	});
+
+	it("defers cycle-start to a live legacy .schedule event", async () => {
+		await writeTask(
+			"dm_a",
+			"weekly",
+			task("done").replace("status: done", "status: done\nschedule: 30 9 * * 1\nwake: 2026-07-10T09:00:00+08:00"),
+		);
+		const eventsDir = join(workspaceDir, "events");
+		await mkdir(eventsDir, { recursive: true });
+		await writeFile(
+			join(eventsDir, "task.dm_a.weekly.schedule.json"),
+			JSON.stringify({ type: "periodic", channelId: "dm_a", text: "推进任务 weekly", schedule: "30 9 * * 1" }),
+		);
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+		await driver.runOnce(NOW);
+		expect(dispatch).not.toHaveBeenCalled();
 	});
 });

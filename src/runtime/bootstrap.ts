@@ -570,8 +570,7 @@ interface RuntimeContextOptions {
 	) => { start(): void; stop(): void; flush?(): Promise<void> };
 	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
 	memoryMaintenanceSchedulerIntervalMs?: number;
-	createTaskDriver?: () => { start(): void; stop(): void };
-	taskDriverIntervalMs?: number;
+	createTaskDriver?: () => { start(): void; stop(): void; nudge?(): void };
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
 }
@@ -635,7 +634,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			const runner = channelRunners.get(channelId);
 			if (runner?.isBusy()) {
 				runner.requestStop();
-				const taskId = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(runner.getTurnStatus().taskText ?? "")?.[1];
+				const taskId = /^\[TASK_(?:DRIVER|CYCLE):([A-Za-z0-9._-]+)\]/.exec(
+					runner.getTurnStatus().taskText ?? "",
+				)?.[1];
 				if (taskId) {
 					const pauseResult = await pauseTask(
 						{
@@ -884,6 +885,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				} finally {
 					await durableDispatch?.markCompleted(event.dispatchId);
 					runner.endTurn();
+					// A finished turn may have written task files (progress/done/start-cycle); rescan
+					// now so a continuing task chain advances immediately instead of after a full sleep.
+					taskDriver.nudge?.();
 				}
 			})();
 
@@ -962,7 +966,6 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					return runtimeSettingsManager.getTaskDriverSettings();
 				},
 				isEnabled: () => loadToolsConfig(options.paths.appHomeDir).tools.tasks.enabled,
-				intervalMs: options.taskDriverIntervalMs,
 			});
 
 	const shutdownWithReason = async (reason: NodeJS.Signals | "manual" = "manual"): Promise<void> => {

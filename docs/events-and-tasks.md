@@ -5,9 +5,9 @@
 - **定时事件（events）** 回答**"什么时候唤醒 agent"**——一个无状态的时间原语。
 - **任务台账（tasks）** 回答**"有哪些在途工作、进展到哪、验收标准是什么"**——事件缺失的那块持久记忆。
 
-两者由**内建 task driver** 绑在一起：driver 依据任务的 `wake` 时间恢复工作，而事件为周期任务提供 cron 节奏、也承载与任务无关的独立提醒和外部传感器。
+两者由**内建 task driver** 绑在一起：driver 依据任务的 `wake` 时间恢复工作、并按任务的 `schedule` cron 开启新周期；事件则承载与任务无关的独立提醒和外部传感器。
 
-> 一句话记忆：**event 无记忆，只管定时；task 会积累手艺，记住做法；driver 按 wake 把两者接起来。**
+> 一句话记忆：**event 无记忆，只管定时；task 会积累手艺、自带节奏；driver 按 wake / schedule 驱动任务。**
 
 如果你还没完成钉钉和模型配置，请先看 [README](../README.md) 和 [configuration.md](./configuration.md)。子代理（sub-agents）是另一条正交的**委派**能力，见 [sub-agents.md](./sub-agents.md)。
 
@@ -15,9 +15,9 @@
 
 | 层 | 载体 | 持有什么 | 谁维护 |
 |----|------|----------|--------|
-| **tasks** | `workspace/<channelId>/tasks/*.md` | 意图、DoD、手册、状态、周期日志、下一次 `wake` | 主 agent 经 `task_manage` 维护 |
-| **task driver** | runtime 确定性扫描 | 找出已到点 / 可继续的任务并唤醒对应 channel | Pipiclaw runtime，扫描本身零 token |
-| **events** | `workspace/events/*.json` | 周期任务的 cron 节奏、非 task 的独立提醒、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`）维护 |
+| **tasks** | `workspace/<channelId>/tasks/*.md` | 意图、DoD、手册、状态、周期日志、下一次 `wake`、周期 `schedule` | 主 agent 经 `task_manage` 维护 |
+| **task driver** | runtime 确定性扫描 | 找出已到点 / 可继续 / 该开新周期的任务并唤醒对应 channel | Pipiclaw runtime，扫描本身零 token |
+| **events** | `workspace/events/*.json` | 非 task 的独立提醒、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`）维护 |
 
 三层文件都放在 app home 下的 `workspace/` 中。默认路径 `~/.pipiclaw/workspace/`；若设置了 `PIPICLAW_HOME`，则为 `${PIPICLAW_HOME}/workspace/`。
 
@@ -61,7 +61,7 @@
 | `text` | 是 | 事件触发后发送给 Pipiclaw 的文本内容 |
 | `preAction` | 否 | 触发前执行的动作门控，见下方说明 |
 
-各类型的专属字段（`at`、`schedule`、`timezone`）在下面对应小节列出。
+各类型的专属字段（`at`、`schedule`）在下面对应小节列出。cron 一律按主机时区解释，没有 `timezone` 字段。
 
 ## 事件动作门控（Action Gate）
 
@@ -88,7 +88,6 @@
   "channelId": "dm_your-staff-id",
   "text": "现在是本周最后一个工作日的下午，请帮我整理本周周报。",
   "schedule": "0 16 * * 1-5",
-  "timezone": "Asia/Shanghai",
   "preAction": {
     "type": "bash",
     "command": "node ~/.pipiclaw/workspace/skills/check-last-workday.js"
@@ -142,21 +141,21 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
 
 ### 周期事件（Periodic）
 
-最适合固定频率的例行任务。额外字段 `schedule`（cron 表达式，必填）和 `timezone`（IANA 时区，必填）：
+最适合固定频率的例行任务。额外字段 `schedule`（cron 表达式，必填）。cron 按**主机时区**解释，没有 `timezone` 字段：
 
 ```json
 {
   "type": "periodic",
   "channelId": "dm_your-staff-id",
   "text": "回顾本周的 MEMORY.md，清理过时项并补充缺失的稳定事实。",
-  "schedule": "0 9 * * 1",
-  "timezone": "Asia/Shanghai"
+  "schedule": "0 9 * * 1"
 }
 ```
 
 - 周期事件不会自动删除；要停用时，直接删除对应 `.json` 文件。
 - 修改文件内容后，运行中的 Pipiclaw 会重新装载这条事件。
 - 如果 cron 表达式不合法，文件会被删除。
+- 旧文件里残留的 `timezone` 字段会被忽略（不视为解析错误、不删文件）；若它与主机时区不一致，会在 `history.jsonl` 记一条 warning 提示触发时刻可能偏移。
 
 **常见 cron 示例**——建议统一使用五段 cron（分钟 小时 日 月 星期）。底层解析器对部分六段格式也能处理，但为降低歧义，不建议在团队里混用。
 
@@ -198,7 +197,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 示例：
 
 ```json
-{"ts":"2026-06-25T10:00:00.123+08:00","eventName":"weekly-review","eventPath":"/Users/me/.pipiclaw/workspace/events/weekly-review.json","eventType":"periodic","channelId":"dm_123","action":"enqueued","result":"ok","schedule":"0 10 * * 1","timezone":"Asia/Shanghai","textPreview":"检查当前 workspace 和 channel 的 MEMORY.md...","queue":{"accepted":true}}
+{"ts":"2026-06-25T10:00:00.123+08:00","eventName":"weekly-review","eventPath":"/Users/me/.pipiclaw/workspace/events/weekly-review.json","eventType":"periodic","channelId":"dm_123","action":"enqueued","result":"ok","schedule":"0 10 * * 1","textPreview":"检查当前 workspace 和 channel 的 MEMORY.md...","queue":{"accepted":true}}
 ```
 
 说明：
@@ -233,7 +232,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 | 命令 | 说明 |
 |------|------|
-| `/events list` | 列出事件文件名、类型、`channelId`、`schedule` / `at` 和文本预览 |
+| `/events list` | 列出事件文件名、类型、`channelId`、`schedule` / `at`（无 timezone 列）和文本预览 |
 | `/events show <name>` | 展示 `workspace/events/<name>.json` 的完整 JSON |
 | `/events delete <name>` | 删除对应事件文件 |
 | `/events history [name]` | 读取最近的事件调度历史；传入 `name` 时只显示该事件 |
@@ -278,18 +277,17 @@ Pipiclaw 会把事件调度层的审计记录写入：
 }
 ```
 
-为一个周期任务安排节奏（periodic）：
+安排一个非 task 的独立周期提醒（periodic）：
 
 ```json
 {
   "type": "periodic",
-  "text": "推进任务 weekly-report。",
-  "schedule": "30 9 * * 1",
-  "timezone": "Asia/Shanghai"
+  "text": "每周一早上列出本周待办。",
+  "schedule": "0 9 * * 1"
 }
 ```
 
-任务派生事件的命名约定、以及 agent 何时该调用这个工具，见下方[任务台账](#第二部分任务台账tasks)部分。注意：普通任务的继续、等待和异常恢复已由内建 task driver 根据 `wake` 驱动，**不再需要**为每个等待点创建 one-shot check-in；只有周期任务才额外保留一个 canonical `.schedule` 事件来开启新周期。
+任务派生事件的命名约定、以及 agent 何时该调用这个工具，见下方[任务台账](#第二部分任务台账tasks)部分。注意：任务的继续、等待、异常恢复**以及周期节奏**都已由内建 task driver 根据任务文件驱动（`wake` + `schedule` frontmatter），**不再需要**为任务创建任何配套事件——`.schedule` 命名约定已退役。event 层只剩非 task 提醒与外部传感器两种场景。
 
 ## 推荐场景（Recommended Patterns）
 
@@ -300,8 +298,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
   "type": "periodic",
   "channelId": "dm_your-staff-id",
   "text": "检查当前 workspace 和 channel 的 MEMORY.md，删除过时项、合并重复项，并补充长期有效的事实。",
-  "schedule": "0 10 * * 1",
-  "timezone": "Asia/Shanghai"
+  "schedule": "0 10 * * 1"
 }
 ```
 
@@ -323,8 +320,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
   "type": "periodic",
   "channelId": "dm_your-staff-id",
   "text": "列出今天最需要跟进的待办、未完成事项和风险点。",
-  "schedule": "0 9 * * 1-5",
-  "timezone": "Asia/Shanghai"
+  "schedule": "0 9 * * 1-5"
 }
 ```
 
@@ -346,7 +342,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 设计规格见 [`019 Task Ledger`](./specs/019-task-ledger/design.md)、[`022 Native Task Driver`](./specs/022-native-task-driver/design.md)、[`023 Governed Task Loops`](./specs/023-governed-task-loops/design.md) 与 [`024 Task Loop v2`](./specs/024-task-loop-v2/design.md)。
 
-**核心不变式：task 是在途工作的真相；`wake` 本身就是可执行的恢复条件。** 普通任务的继续、等待和异常恢复不依赖配套 `.checkin` 事件；周期任务只额外保留一个 canonical `.schedule` 事件来开启新周期。
+**核心不变式：task 是在途工作的真相；`wake` 本身就是可执行的恢复条件，`schedule` 是周期节奏的唯一真相。** 任务的继续、等待、异常恢复和周期开新一轮都不依赖任何配套事件——一个周期任务就是一个文件。
 
 task driver 默认开启。主 agent 的系统提示只常驻恢复与安全不变量，以及 runtime playbook 的小型索引；任务规划、推进、验收和修复流程由随包 playbook 按需加载（见 [runtime-playbooks.md](./runtime-playbooks.md)）。升级或新安装后无需复制 heartbeat JSON、传感器脚本，也无需把 runtime 模板粘进 workspace `AGENTS.md`。
 
@@ -373,6 +369,7 @@ workspace/<channelId>/tasks/
 ---
 status: in-progress
 wake: 2026-07-08T14:00:00+08:00
+schedule: 0 9 * * 1
 recurrence: 每周一
 control: {"version":1,"priority":"high","lastOutcome":"progress","dependsOn":[],"isolation":"shared","sideEffects":"external","externalApproval":"required","budget":{"maxAttempts":12,"maxTokens":120000},"usage":{"attempts":2,"tokens":18420,"costUsd":0.42,"wallTimeMinutes":16.3},"verification":{"mode":"independent","status":"pending"},"nextAction":"等待确认后发布"}
 ---
@@ -409,9 +406,10 @@ frontmatter 字段：
 
 | 字段 | 必填 | 取值 | 说明 |
 |------|------|------|------|
-| `status` | 是 | `open` / `in-progress` / `awaiting-user` / `blocked` / `verifying` / `paused` / `done` / `cancelled` / `escalated` | paused/done/cancelled/escalated 都不会被 driver 继续执行；verifying 会进入 checker-only 回合 |
-| `wake` | 否 | 带时区的 ISO 8601 | 最早值得再看一眼的时间。缺省 = 随时可推进 |
-| `recurrence` | 否 | 自由文本（如 `每周一`） | 仅作标注给人读；**节奏的真相在对应的 periodic 事件里** |
+| `status` | 是 | `open` / `in-progress` / `awaiting-user` / `blocked` / `verifying` / `paused` / `done` / `cancelled` / `escalated` | paused/cancelled/escalated 不会被 driver 继续；done 一般睡眠，唯有有 `schedule` 的周期任务到点被 driver 开新周期；verifying 进入 checker-only 回合 |
+| `wake` | 否 | 带时区的 ISO 8601 | 最早值得再看一眼的时间。缺省 = 随时可推进。周期任务 done 后由 driver 写成下一次 occurrence |
+| `schedule` | 否 | 五段 cron | 周期节奏的**唯一真相**，按主机时区解释。存在 = 周期任务。最密每 30 分钟 |
+| `recurrence` | 否 | 自由文本（如 `每周一`） | 仅作标注给人读，无机器语义 |
 | `control` | 新任务是 | 单行 JSON，`version: 1` | priority/deadline/nextAction、父子依赖、隔离与副作用策略、预算/用量、独立验收状态 |
 
 旧任务没有 `control` 仍可运行，按 evidence-only 的兼容路径收尾；新任务由 `task_manage create` 自动生成受校验的 control。不要手写或多行格式化这段 JSON，日常修改交给 `task_manage set/progress`。
@@ -434,7 +432,7 @@ frontmatter 字段：
 **解析规则**（有意做到极简、可被独立实现逐字复刻）：
 
 1. **frontmatter 块** = 文件必须以 `---` 开头；块的结束是其后第一个 `\n---`。取二者之间的内容为 frontmatter。不满足（无起始 `---` 或找不到结束 `---`）→ **无可读 frontmatter**。
-2. **字段提取** = 在块内逐行找 `key: value`：以第一个 `:` 切分，键取左侧 `trim()`，值取右侧 `trim()`。不解析嵌套 YAML；只认 status/wake/recurrence/control 四个平铺键。control 的值是单行 JSON。
+2. **字段提取** = 在块内逐行找 `key: value`：以第一个 `:` 切分，键取左侧 `trim()`，值取右侧 `trim()`。不解析嵌套 YAML；只认 status/wake/schedule/recurrence/control 五个平铺键。control 的值是单行 JSON。
 3. **`status`**：`done` / `cancelled` / `escalated` 不 actionable；其余状态按 wake 判定。
 4. **`wake`**：解析为时间戳。**缺省、为空、或无法解析 → 视为"随时可推进"（不构成推迟）**；能解析且 `wake > now` → 该任务"未到点"。
 5. **判定：`actionable`（可推进）** = `status` 未关闭 **且**（无有效 `wake` **或** `wake ≤ now`）。driver 在此之前还会对睡眠任务执行零 token 的 deadline/budget/terminal-dependency 检查。
@@ -455,37 +453,38 @@ open → in-progress ⇄ awaiting-user / blocked → done
 | | done 之后 | 不变式 |
 |---|---|---|
 | 一次性任务 | 移入 `archive/`（收尾 SOP 的最后一步） | `tasks/` 根目录下不存在 done 的一次性任务 |
-| 周期性任务 | 文件留在原地，done = 睡眠 | done 的周期性任务 = 等下一次 periodic 事件唤醒 |
+| 周期性任务 | 文件留在原地，done = 睡眠 | done 的周期性任务 = 睡到 `wake`（下一次 occurrence）由 driver 开新周期 |
 
 于是"文件存在 = 未完成"这个直觉被推广为一条统一不变式：
 
-> **`tasks/` 根目录下任何 status ≠ done 的文件，都代表有活要干。**
+> **`tasks/` 根目录下任何 status ≠ done 的文件，都代表有活要干；有 `schedule` 的 done 文件是睡到下一轮的周期任务。**
 
-周期性任务的新一轮**只由它的 periodic 事件开启**（driver 不会唤醒 status: done，只推进已开启的工作，避免两个入口竞争）：
+周期性任务是**单个文件**：`done` 时 driver 用 croner 算出下一次 occurrence 写入 `wake`；到点后 driver 派发一条 cycle-start 唤醒（这是 driver 唯一会唤醒 `status: done` 的场景）：
 
-1. periodic 事件触发（文本："推进任务 weekly-report"）。
-2. agent 打开任务文件。若 `status: done`：把"当前周期"一节折叠进"历史"（历史只保留最近约 5 轮），开一节新的"当前周期"，`status` 置 `in-progress`，开始干活。
+1. `task_manage done` 记录本轮收尾，算出下一次 `wake`，状态保持 `done`。
+2. `wake` 到点，driver 派发 cycle-start。agent 打开任务，用 `task_manage start-cycle` 把"当前周期"折进"历史"（历史约保留最近 5 轮），开新一节"当前周期"，状态置 `in-progress`，开始干活。
 3. 若上一轮还没 done（过期未完成）：先处置旧周期（补完，或明确放弃并记录原因），再开新周期。
 
-实现时应使用 `task_manage start-cycle`，而不是手工编辑状态：它会在一次原子写里开启具名 cycle，并清理上一周期累计的 usage、独立验收、外部授权和 worktree 元数据。周期预算不会跨周期耗尽。
+`start-cycle` 在一次原子写里开启具名 cycle，并清理上一周期累计的 usage、独立验收、外部授权和 worktree 元数据。周期预算不会跨周期耗尽。cycle-start 回合不计 attempt（start-cycle 随即清空用量）。
 
-**退役**周期性任务 = 文件移入 `archive/` + 用 `event_manage` 删除它的 periodic 事件。
+**改节奏** = `task_manage set schedule="<新 cron>"`（done 任务会同时重算 `wake`）。**退役** = `task_manage cancel`，归档并清理全部 task-owned events，不再有"记得删事件"这一步。
 
 ## 事件命名约定
 
-这里是**事件层与任务层的接缝**。`workspace/events/` 是**全局单目录**（不按 channel 分），所以任务派生的事件名必须编入 channelId，否则两个 channel 的同名任务会互相覆盖对方的事件：
+`workspace/events/` 是**全局单目录**（不按 channel 分），所以任务派生的事件名必须编入 channelId，否则两个 channel 的同名任务会互相覆盖对方的事件：
 
 ```text
 task.<channelId>.<任务id>.<用途>.json
-# 例：task.dm_123.weekly-report.schedule.json（periodic 节奏）
-#     task.dm_123.weekly-report.sensor.json（临时外部完成传感器）
+# 例：task.dm_123.weekly-report.sensor.json（临时外部完成传感器）
 ```
 
-职责分离：**task 文件积累手艺（DoD、手册、返工教训），periodic 事件只管节奏。** 改节奏改事件，改做法改文件，互不牵连。普通任务与 event 不再是一对一——driver 直接依据 `wake` 恢复；只有周期任务需要 canonical `.schedule`，外部完成探测等响应式场景才临时使用带 `preAction` 的传感器事件。任务收尾时用 `task.<channelId>.<id>.*` 前缀一把清理，不留孤儿。
+周期节奏不再走事件——它是任务文件里的 `schedule` frontmatter（`.schedule` 命名约定已退役）。task 派生事件如今只剩一种真正响应式的场景：外部完成探测等临时**传感器**（带 `preAction` 的 periodic）。任务收尾时用 `task.<channelId>.<id>.*` 前缀一把清理，不留孤儿。
 
 ## 内建 task driver
 
-task driver 随 DingTalk daemon 启动，默认每分钟做一次廉价扫描。扫描和所有治理门禁都不调用模型：先拦截超 deadline/budget 或 terminal dependency 的任务并升级，再从 dependency-ready 的 actionable task 中按 priority/deadline 排序，向对应 channel 入队一条唤醒消息。
+task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token）：先拦截超 deadline/budget 或 terminal dependency 的任务并升级，再从 dependency-ready 的 actionable task 中按 priority/deadline 排序、并为到点的周期任务派发 cycle-start，向对应 channel 入队一条唤醒消息。
+
+**唤醒机制是单个自适应 timer + nudge**，不再固定每分钟轮询：每次扫描顺手收集"下一个感兴趣时刻"（最近的未到点 `wake`、退避到期、deadline），睡到那一刻或封顶 `maxSleepMinutes`（默认 15 分钟）为止；回合结束会 nudge 立即重扫，让连续推进的任务链即时衔接。绕过 runtime 的手工编辑最坏等一个封顶周期才被接起，`/tasks run <id>` 兜底。
 
 为避免错误台账或忘记更新状态造成 token 热循环，driver 有多层节流：
 
@@ -509,7 +508,7 @@ task driver 随 DingTalk daemon 启动，默认每分钟做一次廉价扫描。
 | `event-scheduling.md` | reminder、one-shot、periodic、preAction、后台 job 回访和静默输出 |
 | `task-planning.md` | 是否建 task、Goal/DoD/Manual/Verification、control 与预算选择 |
 | `task-driving.md` | driver 唤醒恢复、幂等检查、progress/wake/status checkpoint |
-| `task-recurring.md` | 周期任务的创建（task + `.schedule` 成对）、`start-cycle` 开新周期、调节奏、退役 |
+| `task-recurring.md` | 周期任务的创建（单文件 + `schedule` frontmatter）、`start-cycle` 开新周期、调节奏、退役 |
 | `task-delegation.md` | 父子分解、内建 subagent、worktree，以及对用户层外部 agent 工具的通用恢复纪律 |
 | `task-closeout.md` | candidate → 独立验收 → done/cancel、external approval，以及两种门禁组合时的无失效顺序 |
 | `task-repair.md` | escalated 恢复、孤儿事件、坏 frontmatter/control、stale PASS、driver 行为排查 |
@@ -584,22 +583,22 @@ runtime 只提供通用恢复机制：委派时把工具/实例/目录/预期产
 
 前两部分分别讲了时间原语（事件）和状态层（任务）。这一部分用**一个完整周期**演示两者如何咬合——这也是把它们放进同一份文档的原因。
 
-## 一个周期性任务 = 一个 task 文件 + 一个 periodic 事件
+## 一个周期性任务 = 一个 task 文件
 
 以"每周一完成上周周报"为例（对比：只用事件时，每周一触发一次就归零，不积累任何记忆）：
 
-1. **创建（一次）**：你说"以后每周一帮我写上周周报"。agent 建 `tasks/weekly-report.md`（目标 / DoD / 手册），并用 `event_manage` 建 periodic 事件 `task.dm_x.weekly-report.schedule`（周一 09:30）。
-2. **周一 09:30 触发**：periodic 事件唤醒该 channel，文本"推进任务 weekly-report"。agent 打开任务，收集素材（含上周 `archive/` 里已完结的任务）、起草并完成发布前能验证的 DoD。
+1. **创建（一次）**：你说"以后每周一帮我写上周周报"。agent 建 `tasks/weekly-report.md`（目标 / DoD / 手册），并在 frontmatter 写 `schedule: 30 9 * * 1`（周一 09:30）。一次写文件，无配套事件。
+2. **周一 09:30 到点**：driver 派发 cycle-start，agent 用 `start-cycle` 开新周期，收集素材（含上周 `archive/` 里已完结的任务）、起草并完成发布前能验证的 DoD。
 3. **独立验收**：全部 acceptance checkbox 有证据后 `candidate`；checker-only 回合调 `subagent purpose=verify` 得到 PASS。因为发布还需 external approval，此后不再 progress 或改正文。
 4. **请求授权**：用 `task_manage set status=awaiting-user wake=当天14:00` 保留 PASS，发草稿并请你 `/tasks approve <id>`。
-5. **回访与闭环**：driver 到点核对 PASS 与授权仍新鲜；获批则发布、验证发布结果并直接 `task_manage done`，未获批则继续用 set 调整等待 metadata，不改正文。
-6. **下周期更聪明**：下周一事件照常触发，但任务文件里已经积累了你的格式偏好、上次返工原因、新增的预检步骤——**event 无记忆，task 会积累手艺**。
+5. **回访与闭环**：driver 到点核对 PASS 与授权仍新鲜；获批则发布、验证发布结果并 `task_manage done`——done 顺手把 `wake` 算到下周一。未获批则继续用 set 调整等待 metadata，不改正文。
+6. **下周期更聪明**：下周一 driver 照常开新周期，但任务文件里已经积累了你的格式偏好、上次返工原因、新增的预检步骤——**event 无记忆，task 会积累手艺、自带节奏**。
 
-**各层各司其职：** 步骤 2 的定时来自**事件**；步骤 3–5 的状态、验收、授权记忆来自**任务**；步骤 2/5 的自动唤醒来自 **driver**（按 wake 恢复），完全不需要为每个等待点手建 one-shot check-in。
+**各层各司其职：** 步骤 2/6 的定时与开新周期、步骤 5 的回访都来自 **driver**（按 `wake` / `schedule` 驱动）；步骤 3–5 的状态、验收、授权记忆来自**任务**，全程不需要任何配套事件。
 
 ## 异常兜底
 
-若周期事件触发后的 agent 回合中途失败，任务仍停在 `in-progress` / `awaiting-user`；driver 根据未到 / 已到的 wake 和退避状态把它接回来。daemon 重启会清空内存退避，遗留 actionable task 在下一次扫描恢复。因为投递语义是 at-least-once，事件 handler 与任务推进都应保持幂等、可重试。
+若 cycle-start 或推进回合中途失败，任务停在 `done`（未开新周期）或 `in-progress` / `awaiting-user`；driver 根据未到 / 已到的 `wake` 和退避状态把它接回来。`status: done` + 有 `schedule` 但 `wake` 缺失/损坏时，driver 确定性重算 `wake`（零 token 自愈），不误开一轮意外周期。daemon 重启会清空内存退避，遗留 actionable task 在下一次扫描恢复。投递语义是 at-least-once，任务推进应保持幂等、可重试。
 
 ---
 

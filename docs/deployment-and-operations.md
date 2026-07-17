@@ -332,8 +332,7 @@ workspace `skills/` 是 procedural memory。`skill_manage` 和高置信 post-tur
 
 - 事件文件是否放在 `workspace/events/`
 - 文件名是否为 `.json`
-- `schedule` 是否合法
-- `timezone` 是否正确
+- `schedule` 是否合法（cron 按主机时区解释；确认主机时区正确）
 - 进程日志里是否出现事件解析失败
 - `${PIPICLAW_HOME:-~/.pipiclaw}/state/events/history.jsonl` 中是否有 `invalid`、`skipped`、`pre_action_blocked` 或 `queue_full` 记录
 

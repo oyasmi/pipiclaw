@@ -49,8 +49,13 @@ export interface PeriodicEvent {
 	type: "periodic";
 	channelId: string;
 	text: string;
-	schedule: string; // cron syntax
-	timezone: string; // IANA timezone
+	schedule: string; // cron syntax, always interpreted in the host timezone
+	/**
+	 * Legacy field only. Pre-027 events carried an IANA `timezone`; it is no longer part of
+	 * the contract (cron follows the host timezone) but is preserved here on load so the
+	 * watcher can warn when it disagrees with the host, without rejecting or rewriting the file.
+	 */
+	legacyTimezone?: string;
 	preAction?: EventAction;
 }
 
@@ -83,7 +88,6 @@ export interface EventHistoryRecord {
 	result: EventHistoryResult;
 	reason?: string;
 	schedule?: string;
-	timezone?: string;
 	at?: string;
 	nextRunAt?: string;
 	textPreview?: string;
@@ -204,15 +208,16 @@ export function parseScheduledEventContent(content: string, filename: string): S
 			if (typeof data.schedule !== "string" || data.schedule.trim().length === 0) {
 				throw new Error(`Missing 'schedule' field for periodic event in ${filename}`);
 			}
-			if (typeof data.timezone !== "string" || data.timezone.trim().length === 0) {
-				throw new Error(`Missing 'timezone' field for periodic event in ${filename}`);
-			}
+			// A legacy `timezone` is tolerated (never a parse error) and carried through only for
+			// the host-mismatch warning; the cron itself is always host-timezone.
+			const legacyTimezone =
+				typeof data.timezone === "string" && data.timezone.trim().length > 0 ? data.timezone : undefined;
 			return {
 				type,
 				channelId,
 				text,
 				schedule: data.schedule,
-				timezone: data.timezone,
+				...(legacyTimezone ? { legacyTimezone } : {}),
 				...(preAction ? { preAction } : {}),
 			};
 		}
@@ -358,7 +363,7 @@ export class EventsWatcher {
 			result,
 			textPreview: truncateTextPreview(event.text),
 			...(event.type === "one-shot" ? { at: event.at } : {}),
-			...(event.type === "periodic" ? { schedule: event.schedule, timezone: event.timezone } : {}),
+			...(event.type === "periodic" ? { schedule: event.schedule } : {}),
 			...extra,
 		});
 	}
@@ -573,8 +578,20 @@ export class EventsWatcher {
 	}
 
 	private handlePeriodic(filename: string, event: PeriodicEvent): void {
+		if (event.legacyTimezone) {
+			const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+			if (event.legacyTimezone !== hostTimezone) {
+				log.logWarning(
+					`Event ${filename} carries a legacy timezone ${event.legacyTimezone} that differs from the host ${hostTimezone}`,
+					"The cron is now interpreted in the host timezone; trigger times may shift.",
+				);
+				this.appendEventHistory(filename, event, "loaded", "ok", {
+					reason: `legacy timezone ${event.legacyTimezone} ignored; using host ${hostTimezone}`,
+				});
+			}
+		}
 		try {
-			const cron = new Cron(event.schedule, { timezone: event.timezone }, async () => {
+			const cron = new Cron(event.schedule, async () => {
 				try {
 					log.logInfo(`Executing periodic event: ${filename}`);
 					this.appendEventHistory(filename, event, "triggered", "ok");

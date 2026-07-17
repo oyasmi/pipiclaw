@@ -66,6 +66,40 @@ describe("manageTask", () => {
 			expect(onDisk).toContain("## History");
 		});
 
+		it("persists a valid schedule and rejects an unparseable or too-frequent one", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "cadenced",
+				title: "Cadenced",
+				goal: "Do it weekly",
+				dod: "- [ ] done",
+				schedule: "30 9 * * 1",
+			});
+			expect(await readFile(join(tasksDir, "cadenced.md"), "utf-8")).toContain("schedule: 30 9 * * 1");
+
+			await expect(
+				manageTask(options, {
+					action: "create",
+					id: "bad-cron",
+					title: "Bad",
+					goal: "x",
+					dod: "- [ ] done",
+					schedule: "not a cron",
+				}),
+			).rejects.toThrow(/schedule/);
+
+			await expect(
+				manageTask(options, {
+					action: "create",
+					id: "too-fast",
+					title: "Fast",
+					goal: "x",
+					dod: "- [ ] done",
+					schedule: "*/5 * * * *",
+				}),
+			).rejects.toThrow(/30 minutes/);
+		});
+
 		// Independent verification costs an extra dispatch round plus a verifier sub-agent run,
 		// which only pays off when there is a checkable artifact. Defaulting every new task to
 		// it taxes research/writing/reminder-style tasks that are the common case for a personal
@@ -627,6 +661,27 @@ describe("manageTask", () => {
 				/requires evidence/,
 			);
 		});
+
+		it("keeps a native recurring task in place and computes its next wake on done", async () => {
+			await writeTask(
+				"weekly",
+				"status: in-progress\nschedule: 30 9 * * 1",
+				"# Weekly\n\n## DoD\n- [x] published\n",
+			);
+			const result = await manageTask(options, {
+				action: "done",
+				id: "weekly",
+				summary: "Published this week.",
+				evidence: "User confirmed.",
+			});
+			expect(result.archived).toBe(false);
+			expect(existsSync(join(tasksDir, "weekly.md"))).toBe(true);
+			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
+			expect(onDisk).toContain("status: done");
+			expect(onDisk).toContain("schedule: 30 9 * * 1");
+			// wake is the next Monday 09:30 occurrence (host timezone).
+			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
+		});
 	});
 
 	describe("start-cycle", () => {
@@ -637,6 +692,7 @@ describe("manageTask", () => {
 				title: "Weekly",
 				goal: "Publish weekly work",
 				dod: "- [x] published",
+				schedule: "0 9 * * 1",
 				recurrence: "weekly",
 				control: { verificationMode: "evidence", sideEffects: "external" },
 			});
@@ -665,7 +721,7 @@ describe("manageTask", () => {
 				title: "Automated weekly",
 				goal: "Publish weekly work automatically",
 				dod: "- [x] published",
-				recurrence: "weekly",
+				schedule: "0 9 * * 1",
 				control: { verificationMode: "evidence", sideEffects: "external", externalApproval: "not-required" },
 			});
 			const path = join(tasksDir, "automated-weekly.md");
@@ -686,6 +742,23 @@ describe("manageTask", () => {
 			await expect(
 				manageTask(options, { action: "start-cycle", id: "weekly", cycleId: "2026-W29" }),
 			).rejects.toThrow(/not done/);
+		});
+
+		it("rejects start-cycle for a done task that has no schedule", async () => {
+			await writeTask("oneshot", "status: done", "# One shot");
+			await expect(
+				manageTask(options, { action: "start-cycle", id: "oneshot", cycleId: "2026-W29" }),
+			).rejects.toThrow(/not recurring/);
+		});
+
+		it("recomputes wake when set changes the schedule of a done task", async () => {
+			await writeTask("weekly", "status: done\nschedule: 30 9 * * 1\nwake: 2026-07-13T09:30:00+08:00", "# Weekly");
+			await manageTask(options, { action: "set", id: "weekly", schedule: "0 18 * * 5" });
+			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
+			expect(onDisk).toContain("schedule: 0 18 * * 5");
+			// wake was recomputed off the new cadence, no longer the old Monday value.
+			expect(onDisk).not.toContain("wake: 2026-07-13T09:30:00+08:00");
+			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
 		});
 	});
 

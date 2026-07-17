@@ -46,7 +46,6 @@ const validPeriodic = JSON.stringify({
 	channelId: "dm_1",
 	text: "推进任务 weekly-report",
 	schedule: "0 10 * * 1",
-	timezone: "Asia/Shanghai",
 });
 
 describe("manageEvent create", () => {
@@ -59,6 +58,7 @@ describe("manageEvent create", () => {
 		expect(result.eventType).toBe("periodic");
 		expect(await listEventFiles()).toEqual(["task.dm_1.weekly-report.schedule.json"]);
 		const onDisk = await readFile(join(eventsDir, "task.dm_1.weekly-report.schedule.json"), "utf-8");
+		expect(onDisk).not.toContain("timezone"); // cron is host-timezone; no timezone field is written
 		const parsed = parseScheduledEventContent(onDisk, "x.json");
 		expect(parsed.type).toBe("periodic");
 		expect(parsed.channelId).toBe("dm_1");
@@ -193,19 +193,20 @@ describe("manageEvent create", () => {
 		).rejects.toThrow(/cron/i);
 	});
 
-	it("rejects an invalid timezone", async () => {
-		await expect(
-			manageEvent(opts(), {
-				action: "create",
-				name: "badtz",
-				definition: JSON.stringify({
-					type: "periodic",
-					text: "x",
-					schedule: "0 10 * * 1",
-					timezone: "Not/AZone",
-				}),
+	it("tolerates a legacy timezone field and drops it from the persisted event", async () => {
+		const result = await manageEvent(opts(), {
+			action: "create",
+			name: "legacytz",
+			definition: JSON.stringify({
+				type: "periodic",
+				text: "x",
+				schedule: "0 10 * * 1",
+				timezone: "Not/AZone",
 			}),
-		).rejects.toThrow(/timezone/i);
+		});
+		expect(result.eventType).toBe("periodic");
+		const written = await readFile(join(eventsDir, "legacytz.json"), "utf-8");
+		expect(written).not.toContain("timezone");
 	});
 
 	it("rejects when a preAction command is blocked by the guard", async () => {

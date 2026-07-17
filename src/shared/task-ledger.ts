@@ -19,6 +19,8 @@ export interface TaskFrontmatter {
 	readable: boolean;
 	status?: string;
 	wake?: string;
+	/** Five-field cron cadence (host timezone). Present ⇒ this is a recurring task. */
+	schedule?: string;
 	recurrence?: string;
 	control?: TaskControl;
 	/** false only when a control field exists but cannot be parsed/validated. */
@@ -48,7 +50,7 @@ export interface TaskSkeletonInput {
 	verificationMode?: TaskVerificationMode;
 }
 
-const FRONTMATTER_FIELDS = ["status", "wake", "recurrence", "control"] as const;
+const FRONTMATTER_FIELDS = ["status", "wake", "schedule", "recurrence", "control"] as const;
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export const DEFAULT_TASK_MANUAL =
@@ -108,7 +110,7 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 					}
 				}
 			} else {
-				frontmatter[key as "status" | "wake" | "recurrence"] = value || undefined;
+				frontmatter[key as "status" | "wake" | "schedule" | "recurrence"] = value || undefined;
 			}
 		}
 	}
@@ -250,6 +252,7 @@ export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 export interface TaskDocumentFields {
 	status: string;
 	wake?: string;
+	schedule?: string;
 	recurrence?: string;
 	control?: TaskControl;
 }
@@ -257,6 +260,7 @@ export interface TaskDocumentFields {
 export function renderTaskDocument(fields: TaskDocumentFields, body: string): string {
 	const lines = ["---", `status: ${fields.status}`];
 	if (fields.wake) lines.push(`wake: ${fields.wake}`);
+	if (fields.schedule) lines.push(`schedule: ${fields.schedule}`);
 	if (fields.recurrence) lines.push(`recurrence: ${fields.recurrence}`);
 	if (fields.control) lines.push(`control: ${JSON.stringify(fields.control)}`);
 	lines.push("---");

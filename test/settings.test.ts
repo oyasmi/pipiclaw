@@ -66,6 +66,7 @@ describe("settings manager", () => {
 					continuationDelayMinutes: 0,
 					stalledRetryMinutes: 0,
 					maxDispatchesPerTick: 999,
+					maxSleepMinutes: 999,
 				},
 			}),
 			"utf-8",
@@ -75,11 +76,13 @@ describe("settings manager", () => {
 			continuationDelayMinutes: 5,
 			stalledRetryMinutes: 60,
 			maxDispatchesPerTick: 4,
+			maxSleepMinutes: 15,
 		});
 		expect(new PipiclawSettingsManager(configuredDir).getTaskDriverSettings()).toEqual({
 			continuationDelayMinutes: 1,
 			stalledRetryMinutes: 1,
 			maxDispatchesPerTick: 20,
+			maxSleepMinutes: 60,
 		});
 	});
 });

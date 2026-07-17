@@ -40,6 +40,6 @@ PASS 和 external approval 都绑定 task body；PASS 还可能绑定 Git artifa
 
 ## 事件与重启
 
-done/cancel 会清理 `task.<channelId>.<id>.*`；孤儿事件用 event_manage 删除。recurring task 没有 canonical `.schedule` 则补建。旧 `.checkin` 是 legacy，删除并以 wake 为单一恢复条件。
+done/cancel 会清理 `task.<channelId>.<id>.*`；孤儿事件用 event_manage 删除。周期任务的节奏在 frontmatter 的 `schedule`；旧 `.checkin` / `.schedule` 是 legacy，把 cron 折进 frontmatter 后删除事件，以 wake 为单一恢复条件（`/tasks doctor` 会给出迁移提示）。
 
 task 文件是恢复真相。daemon 重启会清空内存 cooldown，可推进任务可能很快重放；durable dispatch 租约也提供至少一次派发。每次先核对已完成产物，避免重复外部动作。

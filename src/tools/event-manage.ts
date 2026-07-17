@@ -76,14 +76,6 @@ function parseAction(action: string): EventManageAction {
 	throw new Error('Unsupported event action. Use "create", "update", or "delete".');
 }
 
-function validateTimezone(timezone: string): void {
-	try {
-		new Intl.DateTimeFormat(undefined, { timeZone: timezone });
-	} catch {
-		throw new Error(`Invalid timezone: ${timezone}`);
-	}
-}
-
 function validateOneShot(event: ScheduledEvent & { type: "one-shot" }): void {
 	const atTime = new Date(event.at).getTime();
 	if (!Number.isFinite(atTime)) {
@@ -95,10 +87,9 @@ function validateOneShot(event: ScheduledEvent & { type: "one-shot" }): void {
 }
 
 function validatePeriodic(event: ScheduledEvent & { type: "periodic" }): void {
-	validateTimezone(event.timezone);
 	let runs: Date[];
 	try {
-		const cron = new Cron(event.schedule, { timezone: event.timezone });
+		const cron = new Cron(event.schedule);
 		runs = cron.nextRuns(3);
 		cron.stop();
 	} catch (error) {
@@ -249,6 +240,11 @@ export async function manageEvent(
 	}
 
 	const event = validateDefinition(request.definition, eventName, options);
+	// Persist the canonical form: a tolerated legacy `timezone` is dropped so freshly written
+	// events never carry the deprecated field (cron is always host-timezone now).
+	if (event.type === "periodic" && event.legacyTimezone !== undefined) {
+		delete event.legacyTimezone;
+	}
 	const content = `${JSON.stringify(event, null, 2)}\n`;
 	await writeFileAtomically(eventPath, content);
 

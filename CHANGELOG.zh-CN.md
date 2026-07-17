@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 原生周期任务现在把五段 cron 节奏写入 task frontmatter，作为唯一机器真相。`task_manage` 会校验 schedule，周期任务 `done` 时计算下一次 `wake`，`start-cycle` 开启新周期不再依赖配对的 canonical `.schedule` 事件。
+- task driver 现在支持周期起始唤醒；`wake` 缺失或损坏时会在不消耗模型回合的情况下自愈，并通过单一自适应 timer 与进程内 `nudge` 在任务进展后及时继续工作。
+- 新增 legacy task `.schedule` 事件迁移诊断，兼容窗口内可将旧节奏折入 task frontmatter，并检测时区变化。
+
+### 变更
+
+- 删除事件的全系统 timezone 配置。Cron 统一按主机时区解释；加载旧事件时忽略 legacy timezone 字段，若其与主机时区不同则写入事件历史告警。
+- 周期任务节奏现在由 `schedule` 定义；`recurrence` 仅保留为可选的人读标注。paused、cancelled、escalated 任务不会被自动恢复；迁移期间若仍存在旧 schedule 事件则让位，避免重复触发。
+- 同步更新单文件周期任务模型、自适应 task driver 定时、事件调度、修复与任务收尾相关的运行时文档和 playbook。
+
 ## [0.8.8-beta.1] - 2026-07-17
 
 ### 变更

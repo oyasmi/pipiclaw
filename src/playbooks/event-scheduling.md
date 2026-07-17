@@ -13,8 +13,8 @@ priority: 30
 
 - 当前回合立即能做：直接做，不建 immediate。`event_manage` 会拒绝 immediate，防止自触发循环。
 - 将来某时只提醒一次：one-shot，至少提前 2 分钟。
-- 固定节奏重复提醒/检查：periodic，五段 cron + timezone。
-- 周期性产出任务：task + canonical `.schedule`，见 `task-recurring.md`。
+- 固定节奏重复提醒/检查：periodic，五段 cron（按主机时区解释，无 timezone 字段）。
+- 周期性产出任务：单个 task 文件，节奏写在 frontmatter 的 `schedule`，见 `task-recurring.md`。
 
 优先使用 `event_manage`，它会验证 JSON、channel、时间间隔、preAction command guard 和总量。工具不可用时才直接维护 `events/*.json`；无效文件可能被 scheduler 忽略。
 
@@ -25,7 +25,7 @@ priority: 30
 ```
 
 ```json
-{"type":"periodic","channelId":"<当前channel>","text":"执行工作日巡检","schedule":"0 9 * * 1-5","timezone":"Asia/Shanghai"}
+{"type":"periodic","channelId":"<当前channel>","text":"执行工作日巡检","schedule":"0 9 * * 1-5"}
 ```
 
 普通 periodic 最小间隔 30 分钟；带 preAction gate 时最小 5 分钟；事件总数上限 50。任务拥有的事件使用 `task.<channelId>.<taskId>.<use>`，便于闭环清理。

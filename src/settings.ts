@@ -94,6 +94,8 @@ export interface PipiclawTaskDriverSettings {
 	stalledRetryMinutes: number;
 	/** Global enqueue cap per scan, with round-robin fairness across channels. */
 	maxDispatchesPerTick: number;
+	/** Cap on idle sleep between scans; also the upper bound on how late a manual edit is noticed. */
+	maxSleepMinutes: number;
 }
 
 export interface PipiclawSessionMemorySettings {
@@ -218,6 +220,7 @@ const DEFAULT_TASK_DRIVER: PipiclawTaskDriverSettings = {
 	continuationDelayMinutes: 5,
 	stalledRetryMinutes: 60,
 	maxDispatchesPerTick: 4,
+	maxSleepMinutes: 15,
 };
 
 const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
@@ -398,10 +401,14 @@ export class PipiclawSettingsManager {
 		const maxDispatchesPerTick = Number.isFinite(configured.maxDispatchesPerTick)
 			? Math.min(20, Math.max(1, Math.floor(configured.maxDispatchesPerTick)))
 			: DEFAULT_TASK_DRIVER.maxDispatchesPerTick;
+		const maxSleepMinutes = Number.isFinite(configured.maxSleepMinutes)
+			? Math.min(60, Math.max(1, Math.floor(configured.maxSleepMinutes)))
+			: DEFAULT_TASK_DRIVER.maxSleepMinutes;
 		return {
 			continuationDelayMinutes,
 			stalledRetryMinutes,
 			maxDispatchesPerTick,
+			maxSleepMinutes,
 		};
 	}
 

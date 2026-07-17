@@ -50,6 +50,7 @@ export async function readStoredTask(
 		fields: {
 			status: frontmatter.status ?? "open",
 			wake: frontmatter.wake,
+			schedule: frontmatter.schedule,
 			recurrence: frontmatter.recurrence,
 			control: frontmatter.control,
 		},

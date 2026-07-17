@@ -1,13 +1,23 @@
-import { readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
+import { isTaskScheduleEvent, taskScheduleEventFilename } from "../shared/task-events.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../shared/task-ledger.js";
+import { nextTaskWake } from "../shared/task-schedule.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
-import { claimTaskAttempt, dependencyState, escalateTask, releaseTaskAttemptClaim } from "../tasks/store.js";
+import {
+	claimTaskAttempt,
+	dependencyState,
+	escalateTask,
+	releaseTaskAttemptClaim,
+	updateStoredTask,
+} from "../tasks/store.js";
 import type { DingTalkEvent } from "./dingtalk.js";
+import { parseScheduledEventContent } from "./events.js";
 
 export interface TaskDriverOptions {
 	workspaceDir: string;
@@ -17,6 +27,7 @@ export interface TaskDriverOptions {
 	getSettings: () => PipiclawTaskDriverSettings;
 	/** Master autonomy switch (`tools.tasks.enabled`); re-read every tick. Defaults to on. */
 	isEnabled?: () => boolean;
+	/** Test-only override for the idle-sleep cap; production uses `settings.maxSleepMinutes`. */
 	intervalMs?: number;
 }
 
@@ -26,8 +37,12 @@ interface DispatchAttempt {
 	accepted: boolean;
 }
 
-const DEFAULT_SCAN_INTERVAL_MS = 60_000;
+/** Short debounce so a burst of nudges collapses into a single rescan. */
+const NUDGE_DEBOUNCE_MS = 50;
+/** Never schedule a scan closer than this, so near-now horizons cannot spin the loop. */
+const MIN_SLEEP_MS = 250;
 const CHANNEL_ID_PATTERN = /^(dm|group)_[A-Za-z0-9._:-]+$/;
+const TERMINAL_STATUSES = new Set(["done", "cancelled", "escalated", "paused"]);
 
 function isChannelId(value: string): boolean {
 	return CHANNEL_ID_PATTERN.test(value);
@@ -65,6 +80,7 @@ async function taskFingerprint(_channelDir: string, entry: TaskLedgerEntry): Pro
 		entry.frontmatter.readable ? "readable" : "unreadable",
 		entry.frontmatter.status ?? "",
 		entry.frontmatter.wake ?? "",
+		entry.frontmatter.schedule ?? "",
 		entry.frontmatter.recurrence ?? "",
 		entry.latestNote ?? "",
 		control?.nextAction ?? "",
@@ -122,6 +138,43 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 	};
 }
 
+/**
+ * A done recurring task whose schedule has come due. This is the one place the driver
+ * wakes a `done` task: to open its next cycle. It uses a `[TASK_CYCLE:...]` tag (not
+ * `[TASK_DRIVER:...]`) so the turn is not charged an attempt — start-cycle resets usage
+ * anyway, matching the retired periodic-event flow.
+ */
+export function createCycleStartEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): DingTalkEvent {
+	return {
+		type: channelId.startsWith("group_") ? "group" : "dm",
+		channelId,
+		user: "TASK_DRIVER",
+		userName: "TASK_DRIVER",
+		text:
+			`[TASK_CYCLE:${entry.id}] Start a new cycle for task ${entry.id} (${entry.title}). ` +
+			`Open tasks/${entry.id}.md and read ${join(PLAYBOOKS_DIR, "task-recurring.md")}, then use ` +
+			"task_manage start-cycle with a stable cycleId to fold the previous cycle and begin work.",
+		ts: String(nowMs),
+		conversationId: "",
+		conversationType: channelId.startsWith("group_") ? "2" : "1",
+	};
+}
+
+/** status done + a schedule cadence + a valid wake that is due. */
+function isCycleStartReady(entry: TaskLedgerEntry, nowMs: number): boolean {
+	return (
+		entry.frontmatter.status === "done" &&
+		Boolean(entry.frontmatter.schedule) &&
+		entry.wakeMs !== undefined &&
+		entry.wakeMs <= nowMs
+	);
+}
+
+/** done + schedule but no parseable wake → self-heal target (recompute wake, zero token). */
+function needsWakeHeal(entry: TaskLedgerEntry): boolean {
+	return entry.frontmatter.status === "done" && Boolean(entry.frontmatter.schedule) && entry.wakeMs === undefined;
+}
+
 function taskEscalationEvent(channelId: string, entry: TaskLedgerEntry, reason: string, nowMs: number): DingTalkEvent {
 	return {
 		type: channelId.startsWith("group_") ? "group" : "dm",
@@ -156,9 +209,13 @@ function terminalDependencyReason(reason: string | undefined): string | undefine
  * to resume a task; users do not need to install a heartbeat event or sensor script.
  */
 export class TaskDriver {
-	private timer: ReturnType<typeof setInterval> | null = null;
+	private timer: ReturnType<typeof setTimeout> | null = null;
+	private nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+	private loopActive = false;
 	private running = false;
 	private nextChannelIndex = 0;
+	/** Absolute ms of the next moment worth waking for (min wake/deadline/backoff), recomputed each scan. */
+	private nextWakeMs: number | undefined;
 	private readonly attempts = new Map<string, DispatchAttempt>();
 	/**
 	 * Last task id dispatched per channel. Cross-channel fairness is handled by
@@ -173,26 +230,98 @@ export class TaskDriver {
 	constructor(private readonly options: TaskDriverOptions) {}
 
 	start(): void {
-		if (this.timer) return;
-		this.timer = setInterval(() => {
-			void this.runOnce().catch((error) => {
-				log.logWarning("Task driver tick failed", errorMessage(error));
-			});
-		}, this.options.intervalMs ?? DEFAULT_SCAN_INTERVAL_MS);
-		this.timer.unref?.();
+		if (this.loopActive) return;
+		this.loopActive = true;
+		void this.tick();
 	}
 
 	stop(): void {
-		if (!this.timer) return;
-		clearInterval(this.timer);
-		this.timer = null;
+		this.loopActive = false;
+		if (this.timer) {
+			clearTimeout(this.timer);
+			this.timer = null;
+		}
+		if (this.nudgeTimer) {
+			clearTimeout(this.nudgeTimer);
+			this.nudgeTimer = null;
+		}
+	}
+
+	/**
+	 * In-process wake: after a turn ends or a task file is written, re-scan promptly instead
+	 * of waiting out the current sleep. The timer is a hint; the scan re-reads every file, so
+	 * a stale or missed nudge only costs one capped sleep of latency, never correctness.
+	 */
+	nudge(): void {
+		if (!this.loopActive || this.nudgeTimer) return;
+		if (this.timer) {
+			clearTimeout(this.timer);
+			this.timer = null;
+		}
+		this.nudgeTimer = setTimeout(() => {
+			this.nudgeTimer = null;
+			void this.tick();
+		}, NUDGE_DEBOUNCE_MS);
+		this.nudgeTimer.unref?.();
+	}
+
+	private async tick(): Promise<void> {
+		try {
+			await this.runOnce();
+		} catch (error) {
+			log.logWarning("Task driver tick failed", errorMessage(error));
+		}
+		this.scheduleNext();
+	}
+
+	private scheduleNext(): void {
+		if (!this.loopActive || this.timer || this.nudgeTimer) return;
+		const settings = this.options.getSettings();
+		const capMs = this.options.intervalMs ?? settings.maxSleepMinutes * 60_000;
+		const untilNext = this.nextWakeMs !== undefined ? this.nextWakeMs - Date.now() : Number.POSITIVE_INFINITY;
+		const sleepMs = Math.max(MIN_SLEEP_MS, Math.min(capMs, untilNext));
+		this.timer = setTimeout(() => {
+			this.timer = null;
+			void this.tick();
+		}, sleepMs);
+		this.timer.unref?.();
+	}
+
+	/** Fold `candidate` into the earliest interesting wake moment. */
+	private noteHorizon(candidate: number | undefined, nowMs: number): void {
+		if (candidate === undefined || !Number.isFinite(candidate) || candidate <= nowMs) return;
+		if (this.nextWakeMs === undefined || candidate < this.nextWakeMs) this.nextWakeMs = candidate;
+	}
+
+	private collectHorizons(entries: TaskLedgerEntry[], nowMs: number): void {
+		for (const entry of entries) {
+			this.noteHorizon(entry.wakeMs, nowMs);
+			const control = entry.frontmatter.control;
+			if (control?.deadline && !TERMINAL_STATUSES.has(entry.frontmatter.status ?? "")) {
+				this.noteHorizon(new Date(control.deadline).getTime(), nowMs);
+			}
+		}
+	}
+
+	private async hasLiveScheduleEvent(channelId: string, id: string): Promise<boolean> {
+		const filename = taskScheduleEventFilename(channelId, id);
+		const eventPath = join(this.options.workspaceDir, "events", filename);
+		if (!existsSync(eventPath)) return false;
+		try {
+			const type = parseScheduledEventContent(await readFile(eventPath, "utf-8"), filename).type;
+			return isTaskScheduleEvent({ use: "schedule", event: { type } });
+		} catch {
+			return false;
+		}
 	}
 
 	async runOnce(now = new Date()): Promise<void> {
 		if (this.options.isEnabled?.() === false || this.running) return;
 		const settings = this.options.getSettings();
+		const nowMs = now.getTime();
 
 		this.running = true;
+		this.nextWakeMs = undefined;
 		try {
 			const channels = await discoverTaskChannels(this.options.workspaceDir, this.options.getKnownChannelIds?.());
 			if (channels.length === 0) {
@@ -208,29 +337,44 @@ export class TaskDriver {
 				const channelId = channels[(start + offset) % channels.length];
 				if (!channelId) continue;
 				const channelDir = join(this.options.workspaceDir, channelId);
-				const entries = await readActiveTasks(join(channelDir, "tasks"), now.getTime());
+				const entries = await readActiveTasks(join(channelDir, "tasks"), nowMs);
 				for (const entry of entries) seen.add(attemptKey(channelId, entry.id));
+				this.collectHorizons(entries, nowMs);
 
 				if (dispatched >= settings.maxDispatchesPerTick || this.options.isChannelActive(channelId)) continue;
+
+				// Zero-token self-heal: a done recurring task with a missing/unparseable wake gets
+				// its next occurrence recomputed deterministically rather than fail-open into an
+				// accidental cycle.
+				for (const entry of entries) {
+					if (!needsWakeHeal(entry)) continue;
+					const next = nextTaskWake(entry.frontmatter.schedule!, now);
+					if (!next) {
+						log.logWarning(
+							`[${channelId}] Task ${entry.id} has an unparseable schedule`,
+							entry.frontmatter.schedule,
+						);
+						continue;
+					}
+					await updateStoredTask(channelDir, entry.id, (task) => {
+						task.fields.wake = next.toISOString();
+					});
+					this.noteHorizon(next.getTime(), nowMs);
+					log.logInfo(`[${channelId}] Task driver healed wake for ${entry.id}`, next.toISOString());
+				}
+
 				let governanceHandled = false;
 				for (const candidate of entries) {
 					const status = candidate.frontmatter.status;
 					const control = candidate.frontmatter.control;
-					if (
-						!control ||
-						status === "done" ||
-						status === "cancelled" ||
-						status === "escalated" ||
-						status === "paused"
-					)
-						continue;
+					if (!control || TERMINAL_STATUSES.has(status ?? "")) continue;
 					const dependencies = await dependencyState(channelDir, control.dependsOn, candidate.id);
 					const escalationReason =
-						taskBudgetViolation(control, now.getTime()) ?? terminalDependencyReason(dependencies.reason);
+						taskBudgetViolation(control, nowMs) ?? terminalDependencyReason(dependencies.reason);
 					if (!escalationReason) continue;
 					governanceHandled = true;
 					const accepted = await this.options.dispatch(
-						taskEscalationEvent(channelId, candidate, escalationReason, now.getTime()),
+						taskEscalationEvent(channelId, candidate, escalationReason, nowMs),
 					);
 					if (accepted && (await escalateTask(channelDir, candidate.id, escalationReason))) {
 						dispatched++;
@@ -240,7 +384,12 @@ export class TaskDriver {
 					break;
 				}
 				if (governanceHandled) continue;
-				const candidates = entries.filter((candidate) => candidate.actionable);
+
+				// Actionable tasks and cycle-start-ready recurring tasks share one per-channel slot
+				// and the same round-robin fairness; only the dispatch text and attempt accounting differ.
+				const candidates = entries.filter(
+					(candidate) => candidate.actionable || isCycleStartReady(candidate, nowMs),
+				);
 				if (candidates.length === 0) continue;
 				const lastId = this.lastDispatchedTaskId.get(channelId);
 				const lastIndex = lastId ? candidates.findIndex((candidate) => candidate.id === lastId) : -1;
@@ -249,34 +398,50 @@ export class TaskDriver {
 						? [...candidates.slice(lastIndex + 1), ...candidates.slice(0, lastIndex + 1)]
 						: candidates;
 				let entry: TaskLedgerEntry | undefined;
+				let isCycleStart = false;
 				for (const candidate of rotatedCandidates) {
-					const control = candidate.frontmatter.control;
-					if (!control) {
+					if (candidate.actionable) {
+						const control = candidate.frontmatter.control;
+						if (control) {
+							const dependencies = await dependencyState(channelDir, control.dependsOn, candidate.id);
+							if (!dependencies.ready) continue;
+						}
 						entry = candidate;
+						isCycleStart = false;
 						break;
 					}
-					const dependencies = await dependencyState(channelDir, control.dependsOn, candidate.id);
-					if (!dependencies.ready) continue;
+					// Migration compat: while a parseable legacy `.schedule` event still owns the
+					// cadence, defer to it so the cycle is not opened twice.
+					if (await this.hasLiveScheduleEvent(channelId, candidate.id)) continue;
 					entry = candidate;
+					isCycleStart = true;
 					break;
 				}
 				if (!entry || dispatched >= settings.maxDispatchesPerTick) continue;
 				const key = attemptKey(channelId, entry.id);
 				let fingerprint = await taskFingerprint(channelDir, entry);
-				if (!isEligible(this.attempts.get(key), fingerprint, now.getTime(), settings)) continue;
+				if (!isEligible(this.attempts.get(key), fingerprint, nowMs, settings)) continue;
 
-				const claim = entry.frontmatter.control ? await claimTaskAttempt(channelDir, entry.id, now) : undefined;
+				// Cycle-start does not claim an attempt: start-cycle clears the previous cycle's usage,
+				// so a claim would be immediately erased. Normal driving claims as before.
+				const claim =
+					!isCycleStart && entry.frontmatter.control
+						? await claimTaskAttempt(channelDir, entry.id, now)
+						: undefined;
 				if (claim) {
 					fingerprint = await taskFingerprint(channelDir, entry);
 				}
-				const accepted = await this.options.dispatch(createTaskDriverEvent(channelId, entry, now.getTime()));
+				const event = isCycleStart
+					? createCycleStartEvent(channelId, entry, nowMs)
+					: createTaskDriverEvent(channelId, entry, nowMs);
+				const accepted = await this.options.dispatch(event);
 				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim, now);
-				this.attempts.set(key, { fingerprint, atMs: now.getTime(), accepted });
+				this.attempts.set(key, { fingerprint, atMs: nowMs, accepted });
 				this.lastDispatchedTaskId.set(channelId, entry.id);
 				if (accepted) {
 					dispatched++;
 					lastDispatchOffset = offset;
-					log.logInfo(`[${channelId}] Task driver enqueued ${entry.id}`);
+					log.logInfo(`[${channelId}] Task driver enqueued ${entry.id}${isCycleStart ? " (cycle-start)" : ""}`);
 				} else {
 					log.logWarning(`[${channelId}] Task driver could not enqueue ${entry.id}`, "channel queue unavailable");
 				}
@@ -284,6 +449,12 @@ export class TaskDriver {
 
 			for (const key of this.attempts.keys()) {
 				if (!seen.has(key)) this.attempts.delete(key);
+			}
+			// A backed-off task becomes eligible again at attempt time + its retry delay; wake then
+			// so an unchanged ledger is still retried without polling. Changed ledgers arrive via nudge.
+			for (const attempt of this.attempts.values()) {
+				const delayMinutes = attempt.accepted ? settings.stalledRetryMinutes : settings.continuationDelayMinutes;
+				this.noteHorizon(attempt.atMs + delayMinutes * 60_000, nowMs);
 			}
 			const channelSet = new Set(channels);
 			for (const channelId of this.lastDispatchedTaskId.keys()) {

@@ -93,7 +93,7 @@ function formatEventSummary(name: string, event: ScheduledEvent): string {
 		lines.push(`  at: ${event.at}`);
 	}
 	if (event.type === "periodic") {
-		lines.push(`  schedule: ${event.schedule}`, `  timezone: ${event.timezone}`);
+		lines.push(`  schedule: ${event.schedule}`);
 	}
 	lines.push(`  text: ${clipText(event.text)}`);
 	return lines.join("\n");
@@ -167,7 +167,6 @@ function formatHistoryRecord(record: EventHistoryRecord): string {
 	const details: string[] = [];
 	if (record.channelId) details.push(`  channelId: ${record.channelId}`);
 	if (record.schedule) details.push(`  schedule: ${record.schedule}`);
-	if (record.timezone) details.push(`  timezone: ${record.timezone}`);
 	if (record.at) details.push(`  at: ${record.at}`);
 	if (record.nextRunAt) details.push(`  nextRunAt: ${record.nextRunAt}`);
 	if (record.reason) details.push(`  reason: ${record.reason}`);

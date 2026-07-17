@@ -1,13 +1,7 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import {
-	isTaskCheckinEvent,
-	isTaskScheduleEvent,
-	parseTaskEventName,
-	taskEventPrefix,
-	taskScheduleEventName,
-} from "../shared/task-events.js";
+import { isTaskCheckinEvent, isTaskScheduleEvent, parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
 import {
 	extractTaskTitle,
 	missingStandardTaskSections,
@@ -453,6 +447,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	}
 
 	const now = Date.now();
+	const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 	const entries = await readActiveTasks(tasksDir(options.channelDir), now);
 	const activeIds = new Set(entries.map((entry) => entry.id));
 	const archivedIds = await readArchivedTaskIds(options.channelDir);
@@ -558,13 +553,34 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			}
 		}
 
-		if (status === "done" && !isParseableSchedule(events, entry.id)) {
+		const legacySchedule = eventKey(events, entry.id, "schedule");
+		const recurring = Boolean(entry.frontmatter.schedule) || isParseableSchedule(events, entry.id);
+		if (status === "done" && !recurring) {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md is done but still in the active directory.`,
-					`Ask the agent to archive one-shot task ${entry.id}, or add a parseable .schedule event if it is recurring.`,
+					`Archive one-shot task ${entry.id}, or add a schedule cron with task_manage set if it is recurring.`,
 				),
 			);
+		}
+
+		// Migration (027): recurrence cadence now lives in the task's `schedule` frontmatter.
+		// A remaining canonical .schedule event should be folded in and deleted.
+		if (legacySchedule && isTaskScheduleEvent(legacySchedule)) {
+			issues.push(
+				issue(
+					`events/${legacySchedule.filename} is a legacy task .schedule event; cadence is now native to tasks/${entry.id}.md.`,
+					`Fold its cron "${legacySchedule.event.schedule}" into the task's schedule frontmatter with task_manage set, then delete events/${legacySchedule.filename}.`,
+				),
+			);
+			if (legacySchedule.event.legacyTimezone && legacySchedule.event.legacyTimezone !== hostTimezone) {
+				issues.push(
+					issue(
+						`events/${legacySchedule.filename} declares timezone ${legacySchedule.event.legacyTimezone}, which differs from the host ${hostTimezone}.`,
+						`Confirm the intended cadence after folding into frontmatter; the cron will run in the host timezone.`,
+					),
+				);
+			}
 		}
 
 		const content = await readActiveTaskContent(options.channelDir, entry.id);
@@ -585,15 +601,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					),
 				);
 			}
-		}
-
-		if (entry.frontmatter.recurrence && !isParseableSchedule(events, entry.id)) {
-			issues.push(
-				issue(
-					`tasks/${entry.id}.md has recurrence but no parseable ${taskScheduleEventName(options.channelId, entry.id)} event.`,
-					`Create or repair events/${taskScheduleEventName(options.channelId, entry.id)}.json as a periodic event.`,
-				),
-			);
 		}
 
 		if (entry.frontmatter.wake && validWakeMs(entry) === undefined) {
