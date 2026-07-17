@@ -24,6 +24,7 @@ import {
 	taskBodyHash,
 	writeStoredTask,
 } from "../tasks/store.js";
+import { readVerificationAttestation } from "../tasks/verification.js";
 import { parseScheduledEventContent, type ScheduledEvent } from "./events.js";
 
 export interface HandleTasksCommandOptions {
@@ -539,6 +540,20 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 							`Run a fresh purpose=verify sub-agent and import its attestation before completion.`,
 						),
 					);
+				} else if (control.verification.mode === "independent") {
+					const attestationOk = control.verification.runId
+						? await readVerificationAttestation(options.channelDir, control.verification.runId)
+								.then((attestation) => attestation.taskId === entry.id && attestation.verdict === "pass")
+								.catch(() => false)
+						: false;
+					if (!attestationOk) {
+						issues.push(
+							issue(
+								`tasks/${entry.id}.md records an independent PASS with no matching verifier attestation on disk.`,
+								`Run a fresh purpose=verify sub-agent and import its attestation with task_manage verify before completion.`,
+							),
+						);
+					}
 				}
 			}
 		}

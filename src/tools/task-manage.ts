@@ -26,6 +26,7 @@ import {
 	resetTaskControlForCycle,
 	type TaskControl,
 	type TaskControlPatch,
+	type TaskVerification,
 } from "../tasks/control.js";
 import { dependencyState, readStoredTask, taskBodyHash } from "../tasks/store.js";
 import { readVerificationAttestation } from "../tasks/verification.js";
@@ -64,7 +65,12 @@ const taskControlSchema = Type.Object({
 	maxTokens: Type.Optional(Type.Number({ minimum: 0, description: "0 clears this budget." })),
 	maxCostUsd: Type.Optional(Type.Number({ minimum: 0, description: "0 clears this budget." })),
 	maxWallTimeMinutes: Type.Optional(Type.Number({ minimum: 0, description: "0 clears this budget." })),
-	verificationMode: Type.Optional(Type.Union([Type.Literal("evidence"), Type.Literal("independent")])),
+	verificationMode: Type.Optional(
+		Type.Union([Type.Literal("evidence"), Type.Literal("independent")], {
+			description:
+				'On create, defaults to "evidence" (maker self-checks the DoD against concrete evidence). Set "independent" only when the task produces a checkable artifact (code, config, a runnable command) that a separate read-only verifier sub-agent can inspect — for research/writing/reminder-style tasks, "evidence" is cheaper and just as trustworthy.',
+		}),
+	),
 	worktreePath: Type.Optional(Type.String({ description: "Owned worktree path; empty clears it." })),
 	worktreeBranch: Type.Optional(Type.String()),
 });
@@ -283,7 +289,11 @@ function renderTaskSkeleton(request: TaskManageRequest): { fields: TaskFields; b
 	const title = requiredField(request.title, "title", "create");
 	const goal = requiredField(request.goal, "goal", "create");
 	const dod = requiredField(request.dod, "dod", "create");
-	const mode = request.control?.verificationMode ?? "independent";
+	// Independent verification is a real tax (an extra dispatch round plus a verifier
+	// sub-agent run) that only pays off when there is something a read-only verifier can
+	// actually check. Default to evidence (maker self-checks the DoD); the tool schema asks
+	// the model to opt into independent explicitly for tasks with a checkable artifact.
+	const mode = request.control?.verificationMode ?? "evidence";
 	const control = applyTaskControlPatch(createDefaultTaskControl(mode), request.control ?? {});
 	const fields = applySet({ status: normalizeCreateStatus(request.status), control }, request);
 	const body = renderStandardTaskBody({
@@ -623,6 +633,36 @@ async function verifyTask(options: TaskManageToolOptions, request: TaskManageReq
 	};
 }
 
+/**
+ * `verify` writes control.verification from a real attestation file, but the task Markdown
+ * itself is writable by the agent's own write/edit tools — nothing stops it from hand-crafting
+ * a "passed" verification block that was never backed by a real verifier run. Re-check the
+ * attestation file on the consuming side (done/doctor) too, not just at import time.
+ */
+async function assertVerificationAttestationMatches(
+	channelDir: string,
+	id: string,
+	verification: TaskVerification,
+): Promise<void> {
+	if (!verification.runId) {
+		throw new Error(`Task "${id}" has no verification run id; rerun task_manage verify before done.`);
+	}
+	const attestation = await readVerificationAttestation(channelDir, verification.runId);
+	if (attestation.taskId !== id) {
+		throw new Error(
+			`Verification run "${verification.runId}" belongs to task "${attestation.taskId}", not "${id}"; rerun verification.`,
+		);
+	}
+	if (attestation.verdict !== "pass") {
+		throw new Error(`Verification run "${verification.runId}" recorded a FAIL, not a PASS; rerun verification.`);
+	}
+	if (attestation.bodyHash !== verification.bodyHash) {
+		throw new Error(
+			`Task "${id}" control.verification.bodyHash does not match the attestation for run "${verification.runId}"; rerun task_manage verify.`,
+		);
+	}
+}
+
 async function unfinishedChildren(options: TaskManageToolOptions, parentId: string): Promise<string[]> {
 	const entries = await readActiveTasks(tasksDir(options));
 	return entries
@@ -669,7 +709,7 @@ async function doneTask(options: TaskManageToolOptions, request: TaskManageReque
 	}
 	if (fields.control?.verification.mode === "independent") {
 		const verification = fields.control.verification;
-		if (verification.status !== "passed" || !verification.bodyHash) {
+		if (verification.status !== "passed" || !verification.bodyHash || !verification.runId) {
 			throw new Error(
 				`Task "${id}" requires an independent PASS. Run a purpose=verify sub-agent, then task_manage verify with its run id.`,
 			);
@@ -685,6 +725,7 @@ async function doneTask(options: TaskManageToolOptions, request: TaskManageReque
 				);
 			}
 		}
+		await assertVerificationAttestationMatches(options.channelDir, id, verification);
 	}
 	const bodyWithEvidence = appendCompletionEvidence(body, request);
 	if (fields.control) {

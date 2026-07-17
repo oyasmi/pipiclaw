@@ -160,6 +160,24 @@ describe("standard task skeleton", () => {
 		expect(appendCurrentCycleNote(next, "Started collecting inputs.")).toContain("- Started collecting inputs.");
 	});
 
+	// Regression: startTaskCycle archived the closed cycle's log but left the DoD/Verification
+	// checkboxes as-is. A periodic task that finished cycle 1 fully checked would open cycle 2
+	// with uncheckedTaskAcceptanceItems() reporting zero unchecked items — the acceptance gate
+	// silently passing on stale evidence from a cycle that no longer exists.
+	it("unchecks DoD/Verification boxes left over from the closed cycle", () => {
+		const body = renderStandardTaskBody({
+			title: "Weekly",
+			goal: "G",
+			dod: "- [x] cycle 1 done",
+			verificationPlan: "- [x] cycle 1 spot check",
+		});
+		const next = startTaskCycle(body, "2026-W29");
+		expect(next).toContain("- [ ] cycle 1 done");
+		expect(next).toContain("- [ ] cycle 1 spot check");
+		expect(next).not.toContain("[x]");
+		expect(uncheckedTaskAcceptanceItems(next)).toEqual(["DoD: cycle 1 done", "Verification: cycle 1 spot check"]);
+	});
+
 	it("rejects progress updates when the task has no Current Cycle section", () => {
 		expect(() => appendCurrentCycleNote("# T\n\nbody", "progress")).toThrow(/normalize the task skeleton/);
 	});

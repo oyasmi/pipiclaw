@@ -252,6 +252,34 @@ describe("TaskDriver", () => {
 		expect(dispatch.mock.calls.map(([event]) => event.channelId)).toEqual(["dm_a", "dm_b"]);
 	});
 
+	// Regression: within one channel, an actively-progressing task (fresh fingerprint every
+	// tick, so it clears the short continuation delay every time) used to keep winning the
+	// channel's single per-tick slot forever, starving every other ready task in that channel.
+	it("round-robins between ready tasks within the same channel instead of letting one win every tick", async () => {
+		await writeTask("dm_a", "x", task("in-progress", undefined, "note-1"));
+		await writeTask("dm_a", "y", task("in-progress", undefined, "note-1"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+
+		await driver.runOnce(NOW);
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:x]");
+
+		// "x" keeps producing new progress every tick, so it would clear the 5-minute
+		// continuation delay and remain eligible on every subsequent scan.
+		await writeTask("dm_a", "x", task("in-progress", undefined, "note-2"));
+		await driver.runOnce(new Date(NOW.getTime() + 5 * 60_000));
+		expect(dispatch.mock.calls[1]?.[0].text).toContain("[TASK_DRIVER:y]");
+
+		await writeTask("dm_a", "x", task("in-progress", undefined, "note-3"));
+		await driver.runOnce(new Date(NOW.getTime() + 10 * 60_000));
+		expect(dispatch.mock.calls[2]?.[0].text).toContain("[TASK_DRIVER:x]");
+	});
+
 	it("does not dispatch when the tools.tasks master switch is off", async () => {
 		await writeTask("dm_a", "ready", task("in-progress"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);

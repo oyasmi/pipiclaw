@@ -357,6 +357,41 @@ export function startTaskCycle(content: string, cycleId: string): string {
 	// A nested history heading would be unusual; inserting directly after the
 	// canonical History heading remains predictable and preserves all older notes.
 	lines.splice(shiftedHistoryStart + 1, 0, ...historyEntry);
+	return resetTaskAcceptanceCheckboxes(lines.join("\n"));
+}
+
+/**
+ * Uncheck every "- [x]" under DoD/Verification.
+ *
+ * `startTaskCycle` archives the previous cycle's log but never touched these boxes, so a
+ * periodic task that finished cycle 1 with a fully checked DoD would open cycle 2 with
+ * `uncheckedTaskAcceptanceItems` reporting zero unchecked items — the acceptance gate would
+ * silently pass on stale evidence from a cycle that no longer exists.
+ */
+function resetTaskAcceptanceCheckboxes(content: string): string {
+	const lines = content.split("\n");
+	let section: "DoD" | "Verification" | undefined;
+	let sectionLevel = 0;
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index] ?? "";
+		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+		if (heading) {
+			const level = heading[1]?.length ?? 7;
+			if (matchesTaskSectionTitle(heading[2] ?? "", ["DoD"])) {
+				section = "DoD";
+				sectionLevel = level;
+			} else if (matchesTaskSectionTitle(heading[2] ?? "", ["Verification", "验收"])) {
+				section = "Verification";
+				sectionLevel = level;
+			} else if (section && level <= sectionLevel) {
+				section = undefined;
+			}
+			continue;
+		}
+		if (!section) continue;
+		const checkbox = /^(\s*[-*]\s+)\[[xX]\](\s*.*)$/.exec(line);
+		if (checkbox) lines[index] = `${checkbox[1]}[ ]${checkbox[2]}`;
+	}
 	return lines.join("\n");
 }
 

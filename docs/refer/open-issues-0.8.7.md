@@ -6,39 +6,7 @@
 
 ## 建议保留处理的问题（按优先级）
 
-### 1. 独立验收可被伪造证据绕过（严重，安全/信任链）
-
-`task_manage done`/`candidate`（`src/tools/task-manage.ts:670-688`）和 `/tasks doctor`（`src/runtime/task-commands.ts:534-543`）只核对任务文件里 `control.verification` 的 JSON 字段是否自洽，从不反查 `.verifications/<hash>.json` attestation 文件是否真实存在。agent 自己持有 `write`/`edit` 权限，可以手写一段"已通过验证"的 JSON 直接闯关，doctor 事后巡检也查不出来。
-
-建议：`done`/`candidate`/`doctor` 复用 `verify` 路径里现成的 `readVerificationAttestation`，成本很低。
-
-来源：autonomy-blindspots-0.8.0-round2 发现1。
-
-### 2. 周期任务开新周期后验收门形同虚设
-
-`startTaskCycle`（`src/shared/task-ledger.ts:308`）清空 control 但不重置 DoD/Verification 里上一轮留下的 `- [x]`。新周期一开局，"未勾选拦截"这道最基础的门看到的就是 0 个未完成项，`candidate` 直接放行——哪怕这一轮什么都没做。
-
-建议：`startTaskCycle` 顺手把新 Current Cycle 里的勾选框机械转回 `- [ ]`。
-
-来源：autonomy-blindspots-0.8.0-round2 发现2。
-
-### 3. 单 channel 内任务调度无轮转，活跃任务可饿死其它任务
-
-`TaskDriver.runOnce()`（`src/runtime/task-driver.ts:182-276`）只有跨 channel 的 round-robin，同一 channel 内部永远取排序靠前的第一个 ready 任务。一个"每轮都有新进展"的任务会一直重新赢得该 channel 唯一名额，同 channel 其它任务（包括已解锁的下游依赖）可能长期排不上号。
-
-建议：加一个"上次唤醒的 taskId"记忆，下次跳过它优先找排序在它之后的 ready 任务。
-
-来源：autonomy-blindspots-0.8.0-round2 发现3。
-
-### 4. independent 验收作为所有任务的默认档，对调研/文书类任务是纯税负
-
-`createDefaultTaskControl`（`src/tasks/control.ts:145`）默认 `mode: "independent"`，且未按任务是否产出可执行工件区分。一个"调研 X 并总结"的任务也要走完整的 candidate→子代理验证→verify→done 流程，多花至少一轮子代理调用和数分钟。
-
-建议：产出代码/可执行工件时用 independent，其余默认 evidence（maker 自查 DoD），可在 create 时按 Verification 节内容判断或提示模型选择。
-
-来源：autonomy-review-0.8.0 发现3。
-
-### 5. 周期任务"一个文件 + 一个 canonical schedule 事件"双载体仍未合并
+### 1. 周期任务"一个文件 + 一个 canonical schedule 事件"双载体仍未合并
 
 `recurrence` 字段目前只是给人看的字符串（`task-driver.ts:68`），没有真正的 cron 解析或 driver 原生周期触发。忘建/忘删配套事件、事件文本写错任务 id，仍是一类需要靠纪律和 doctor 才能压住的漂移故障源。
 
@@ -46,7 +14,7 @@
 
 来源：autonomy-review-0.8.0 发现2。
 
-### 6. control JSON 损坏没有修复出口
+### 2. control JSON 损坏没有修复出口
 
 `task-manage.ts` 里没有任何 `repair`/`reset` 类 action（已 grep 确认），control 一旦损坏，agent 只能手工重写这段人不可读的 20+ 字段 JSON，危险且易错。
 
@@ -54,7 +22,7 @@
 
 来源：autonomy-review-0.8.0 发现4。
 
-### 7. 记忆召回粒度仍是 section 级，不是 entry/bullet 级
+### 3. 记忆召回粒度仍是 section 级，不是 entry/bullet 级
 
 `candidates.ts` 仍用 `splitH2Sections`/`splitH1Sections` 构造候选。一个关键词命中就把整个 section 拉进上下文；单条内容超预算时甚至整段都不注入，只提示"有 N 条被省略"。
 
@@ -71,6 +39,10 @@
 - `forget` 已有 tombstone 机制（`src/memory/tombstones.ts`），不再是"从当前文件隐藏、原文仍可复活"。（memory-management-review-0.8.5 P0-2）
 - growth review 失败不再被误记为成功 checkpoint——`PostTurnReviewRunResult` 判别联合类型已实现，`failed` 不推进 cursor。（memory-management-review-0.8.5 P0-5）
 - `--print` 模式下内建斜杠命令静默喂给模型、DoD 无 checkbox 时验收闸门可绕过、TUI 下 approve 审批人恒为 unknown-user、IPv6 括号字面量绕过网络防护快速路径——4 项均已在 0.8.0 修复并有回归测试。（autonomy-test-report-0.8.0 发现 A/B/C/D，见 autonomy-fixes-and-test-overhaul-0.8.0）
+- **（本轮新修）** 独立验收可被伪造证据绕过——`task_manage done`/`doctor` 现在复用 `readVerificationAttestation` 反查 attestation 文件是否真实存在，不再只信任 control JSON 自身。（autonomy-blindspots-0.8.0-round2 发现1）
+- **（本轮新修）** 周期任务开新周期后验收门形同虚设——`startTaskCycle` 现在把 DoD/Verification 里遗留的 `- [x]` 机械转回 `- [ ]`。（autonomy-blindspots-0.8.0-round2 发现2）
+- **（本轮新修）** 单 channel 内任务调度无轮转——`TaskDriver` 现在记住每个 channel 上次唤醒的 taskId，下一轮优先从其后的 ready 候选开始找，跨 channel 的 round-robin 之外补上了 channel 内的公平性。（autonomy-blindspots-0.8.0-round2 发现3）
+- **（本轮新修）** independent 验收作为所有任务默认档过重——`task_manage create` 默认改为 `evidence`（maker 自查 DoD），仅在显式要求或任务确有可验证工件时才用 `independent`；工具 schema 描述已更新引导模型选择。（autonomy-review-0.8.0 发现3）
 
 ## 判断为设计取舍/维护税，不建议列入修复清单
 

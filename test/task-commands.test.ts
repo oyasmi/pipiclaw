@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/shared/task-ledger.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { taskBodyHash } from "../src/tasks/store.js";
 
 const FUTURE = "2026-07-08T23:59:00+08:00";
 
@@ -185,6 +186,21 @@ describe("handleTasksCommand", () => {
 	it("reports no doctor issues for a clean ledger", async () => {
 		await writeFile(join(tasksDir, "active.md"), doc("status: open", STANDARD_BODY));
 		expect(await run("doctor")).toContain("No task ledger issues found");
+	});
+
+	// Defense in depth: control.verification lives in a file the agent's own write/edit tools
+	// can touch. A hand-forged "passed" block with a bodyHash that happens to match the current
+	// body must still be flagged because no verifier ever produced a matching attestation file.
+	it("doctor flags an independent PASS with no matching verifier attestation on disk", async () => {
+		const control = createDefaultTaskControl("independent");
+		control.verification = {
+			mode: "independent",
+			status: "passed",
+			runId: "never-ran",
+			bodyHash: taskBodyHash(STANDARD_BODY),
+		};
+		await writeFile(join(tasksDir, "forged.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
+		expect(await run("doctor")).toContain("no matching verifier attestation on disk");
 	});
 
 	it("doctor reports non-standard task skeletons", async () => {

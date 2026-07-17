@@ -160,6 +160,15 @@ export class TaskDriver {
 	private running = false;
 	private nextChannelIndex = 0;
 	private readonly attempts = new Map<string, DispatchAttempt>();
+	/**
+	 * Last task id dispatched per channel. Cross-channel fairness is handled by
+	 * `nextChannelIndex`, but within one channel every tick used to pick the first ready
+	 * candidate in sort order — an actively-progressing task keeps winning that slot forever,
+	 * starving every other ready task (including its own unlocked dependents) in the same
+	 * channel. Remembering the last pick and starting the search just after it gives ready
+	 * candidates in a channel the same round-robin fairness across ticks.
+	 */
+	private readonly lastDispatchedTaskId = new Map<string, string>();
 
 	constructor(private readonly options: TaskDriverOptions) {}
 
@@ -233,8 +242,14 @@ export class TaskDriver {
 				if (governanceHandled) continue;
 				const candidates = entries.filter((candidate) => candidate.actionable);
 				if (candidates.length === 0) continue;
+				const lastId = this.lastDispatchedTaskId.get(channelId);
+				const lastIndex = lastId ? candidates.findIndex((candidate) => candidate.id === lastId) : -1;
+				const rotatedCandidates =
+					lastIndex >= 0
+						? [...candidates.slice(lastIndex + 1), ...candidates.slice(0, lastIndex + 1)]
+						: candidates;
 				let entry: TaskLedgerEntry | undefined;
-				for (const candidate of candidates) {
+				for (const candidate of rotatedCandidates) {
 					const control = candidate.frontmatter.control;
 					if (!control) {
 						entry = candidate;
@@ -257,6 +272,7 @@ export class TaskDriver {
 				const accepted = await this.options.dispatch(createTaskDriverEvent(channelId, entry, now.getTime()));
 				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim, now);
 				this.attempts.set(key, { fingerprint, atMs: now.getTime(), accepted });
+				this.lastDispatchedTaskId.set(channelId, entry.id);
 				if (accepted) {
 					dispatched++;
 					lastDispatchOffset = offset;
@@ -268,6 +284,10 @@ export class TaskDriver {
 
 			for (const key of this.attempts.keys()) {
 				if (!seen.has(key)) this.attempts.delete(key);
+			}
+			const channelSet = new Set(channels);
+			for (const channelId of this.lastDispatchedTaskId.keys()) {
+				if (!channelSet.has(channelId)) this.lastDispatchedTaskId.delete(channelId);
 			}
 			this.nextChannelIndex = (start + (lastDispatchOffset >= 0 ? lastDispatchOffset + 1 : 1)) % channels.length;
 		} finally {
