@@ -84,4 +84,22 @@ describe("clipTextByPromptUnits", () => {
 		expect(result.text).toBe(Array.from(result.text).join(""));
 		expect(result.text).not.toContain("�");
 	});
+
+	it("still honors maxUnits when the marker alone would exceed it", () => {
+		// The contract is injectedUnits ≤ maxUnits; a marker bigger than the budget must
+		// not leak through. Keep nothing rather than break the ceiling.
+		const result = clipTextByPromptUnits("hello world here are many words", 3, {
+			marker: "one two three four five", // 5 units > maxUnits 3
+		});
+		expect(result.truncated).toBe(true);
+		expect(result.injectedUnits).toBeLessThanOrEqual(3);
+		expect(result.text).toBe("");
+	});
+
+	it("still honors maxChars when the marker alone would exceed it", () => {
+		const result = clipTextByPromptUnits("hello world", 100, { marker: "M".repeat(10), maxChars: 5 });
+		expect(result.truncated).toBe(true);
+		expect(result.text.length).toBeLessThanOrEqual(5);
+		expect(result.text).toBe("");
+	});
 });

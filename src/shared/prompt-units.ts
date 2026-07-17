@@ -26,7 +26,14 @@ function isWord(codePoint: string): boolean {
 	return WORD_REGEX.test(codePoint);
 }
 
-/** Count prompt units in `text` in a single Unicode-aware pass. */
+/**
+ * Count prompt units in `text` in a single Unicode-aware pass.
+ *
+ * Known limitation: a single very long run of letters/numbers with no separators
+ * (base64, minified JS, a delimiter-free URL) counts as one unit. Such input is
+ * bounded by the character ceiling in `clipTextByPromptUnits` (`maxChars`), which
+ * is why every prompt and turn-context budget enforces both units and chars.
+ */
 export function countPromptUnits(text: string): number {
 	let units = 0;
 	let inWord = false;
@@ -118,6 +125,12 @@ export function clipTextByPromptUnits(
 
 	const markerUnits = countPromptUnits(marker);
 	const markerChars = marker.length;
+	// The marker is paid for out of the budget. If it alone would exceed either ceiling,
+	// keep nothing so the documented "injectedUnits ≤ maxUnits" / text ≤ maxChars contract
+	// still holds — the caller has sized the budget smaller than its own truncation marker.
+	if (markerUnits >= maxUnits || (maxChars !== undefined && markerChars >= maxChars)) {
+		return { text: "", rawUnits, injectedUnits: 0, truncated: true };
+	}
 	const availableUnits = Math.max(0, maxUnits - markerUnits);
 	const availableChars = maxChars === undefined ? Number.POSITIVE_INFINITY : Math.max(0, maxChars - markerChars);
 	const headUnitBudget = Math.floor(availableUnits * headRatio);

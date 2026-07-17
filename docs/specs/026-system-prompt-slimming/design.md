@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | IMPLEMENTED |
+| 状态 | IMPLEMENTED（behavior eval harness 待建，见 §11.3 与 DoD #11） |
 | 日期 | 2026-07-17 |
 | 前置 | [025 System Prompt Architecture](../025-system-prompt-architecture/design.md) |
 | 目标 | 在不限制 pi skills、不轻易丢弃用户 SOUL/AGENTS 的前提下，继续压缩 Pipiclaw 固定提示词，并把场景性知识留到获得本轮意图后加载 |
@@ -673,7 +673,7 @@ D = C + turn-context unit caps
 8. 普通 prompt 不含 periodic silence 规则；periodic trigger 明确携带规则。
 9. 自动 turn context 的四类 block 合计设计上不超过 3,000 prompt units。
 10. `/context` 能区分 runtime、SOUL、AGENTS、skills 和 turn context 的 chars/units/归属。
-11. 关键 behavior eval 无显著退化，hard-invariant violation 为零。
+11. 关键 behavior eval 无显著退化，hard-invariant violation 为零。（behavior eval harness 待建，当前以 unit/integration 测试与 §11.3 计划为准；待补后回填本条。）
 12. `npm run typecheck`、`npm run test` 通过，相关 E2E 通过。
 
 本 spec 的最终目标不是得到最短 prompt，而是建立清楚的内容责任：**Pipiclaw 对自己的每句话严格克制，对用户写下的指令尽量完整，对 skills 尊重 pi 的原生机制，对低频知识坚持按需加载。**
