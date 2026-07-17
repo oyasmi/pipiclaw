@@ -4,7 +4,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
-## [0.8.7-beta.2] - 2026-07-17
+## [0.8.7] - 2026-07-17
 
 ### Changed
 
@@ -12,6 +12,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Slimmed the Pipiclaw-authored system prompt (spec 026): the redundant tool catalog is gone (tool schemas are the source of truth), identity/contract/boundary text is compressed, and the runtime-guide catalog now prints its absolute directory once with a one-line trigger per guide. Runtime-authored content dropped from ~1,047 to ~390 prompt units.
 - Prompt budgeting now measures "prompt units" (CJK-aware, tokenizer-free) instead of a single global character pool. SOUL.md and AGENTS.md get independent, generous budgets (SOUL 3,000 units / 24,000 chars; AGENTS 6,000 units / 48,000 chars) and no longer compete with each other, the runtime catalog, or skills for space. Skills remain entirely pi-managed and unbudgeted.
 - The periodic `[SILENT]` protocol now rides the periodic event trigger instead of the always-on system prompt, and automatic per-turn context (recall, task agenda, first-turn bootstrap) gained independent unit ceilings that drop whole items with a pointer to the search tools. `/context` reports units, runtime-authored totals, and SOUL/AGENTS/skills attribution.
+- Upgraded the Pi dependencies from 0.80.3 to 0.80.10, including the async `ModelRuntime` API migration for authentication and model resolution.
 
 ### Removed
 
@@ -20,6 +21,7 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 ### Fixed
 
 - `clipTextByPromptUnits` now guards a clip marker that exceeds the remaining budget, so recall / task-agenda / first-turn-bootstrap injection always honors its `injectedUnits ≤ maxUnits` contract instead of overshooting when a single boundary overflows.
+- Fixed several reliability and security gaps: rejected invalid command-guard regexes with diagnostics, pinned direct web requests to the IP validated by the network guard to prevent DNS-rebinding TOCTOU, guarded asynchronous session-event failures, surfaced previously swallowed background-job and memory-recall failures, and corrected the `task_manage` error to list `candidate`.
 
 ## [0.8.6] - 2026-07-14
 
