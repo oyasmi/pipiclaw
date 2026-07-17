@@ -1,22 +1,32 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
-import { type AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { PipiclawSettingsManager } from "../settings.js";
 
 // Default model - will be overridden by ModelRegistry if custom models are configured
-const defaultModel = getModel("anthropic", "claude-sonnet-4-5");
+export const defaultModel = getModel("anthropic", "claude-sonnet-4-5");
 
-type ModelRegistryClass = {
-	create?: (authStorage: AuthStorage, modelsJsonPath?: string) => ModelRegistry;
-	new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
-};
+/**
+ * Construct the canonical async model/auth runtime (replaces the old
+ * `AuthStorage.create` + `ModelRegistry` pairing). pi 0.80.8+ folded auth and
+ * model resolution into a single async `ModelRuntime`.
+ */
+export async function createModelRuntime(options: {
+	authConfigPath: string;
+	modelsConfigPath: string;
+}): Promise<ModelRuntime> {
+	return ModelRuntime.create({
+		authPath: options.authConfigPath,
+		modelsPath: options.modelsConfigPath,
+	});
+}
 
-/** SDK-version-tolerant construction: newer SDKs expose a static create(), older ones a constructor. */
-export function createModelRegistry(authStorage: AuthStorage, modelsJsonPath: string): ModelRegistry {
-	const registryClass = ModelRegistry as unknown as ModelRegistryClass;
-	return typeof registryClass.create === "function"
-		? registryClass.create(authStorage, modelsJsonPath)
-		: new registryClass(authStorage, modelsJsonPath);
+/**
+ * Wrap a ModelRuntime in the synchronous extension-facing ModelRegistry shell so
+ * existing `getAvailable`/`find`/`getApiKeyForProvider` call sites stay unchanged.
+ */
+export function wrapModelRegistry(modelRuntime: ModelRuntime): ModelRegistry {
+	return new ModelRegistry(modelRuntime);
 }
 
 export function formatModelReference(model: Model<Api>): string {

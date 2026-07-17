@@ -1,10 +1,10 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { AuthStorage, type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
+import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
-import { createModelRegistry, resolveInitialModel } from "../models/utils.js";
+import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/utils.js";
 import type { PipiclawSettingsManager } from "../settings.js";
 import { loadPipiclawSkills } from "./workspace-resources.js";
 
@@ -71,8 +71,11 @@ export async function loadDetachedMaintenanceContext(
 		transcriptCache.set(options.channelDir, cached);
 	}
 
-	const authStorage = AuthStorage.create(options.authConfigPath);
-	const modelRegistry = createModelRegistry(authStorage, options.modelsConfigPath);
+	const modelRuntime = await createModelRuntime({
+		authConfigPath: options.authConfigPath,
+		modelsConfigPath: options.modelsConfigPath,
+	});
+	const modelRegistry = wrapModelRegistry(modelRuntime);
 	const model = resolveInitialModel(modelRegistry, options.settingsManager);
 
 	options.settingsManager.reload();

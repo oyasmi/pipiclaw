@@ -4,12 +4,12 @@ import {
 	AgentSession,
 	AgentSessionRuntime,
 	type AgentSessionServices,
-	AuthStorage,
 	convertToLlm,
 	createExtensionRuntime,
 	DefaultResourceLoader,
 	type LoadExtensionsResult,
 	type ModelRegistry,
+	type ModelRuntime,
 	type ResourceLoader,
 	type SettingsManager as SDKSettingsManager,
 	SessionManager,
@@ -38,10 +38,12 @@ import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "../memory/task-digest.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import {
-	createModelRegistry,
+	createModelRuntime,
+	defaultModel,
 	findExactModelReferenceMatch,
 	formatModelReference,
 	resolveInitialModel,
+	wrapModelRegistry,
 } from "../models/utils.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks/catalog.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
@@ -115,19 +117,23 @@ export class ChannelRunner implements AgentRunner {
 	private readonly authConfigPath: string;
 	private readonly modelsConfigPath: string;
 	private readonly workspaceDir: string;
-	private session: AgentSession;
+	private session!: AgentSession;
 	private agent: Agent;
 	private sessionManager: SessionManager;
 	private readonly settingsManager: PipiclawSettingsManager;
-	private readonly modelRegistry: ModelRegistry;
+	// modelRuntime is the canonical async model/auth facade (pi 0.80.8+); modelRegistry
+	// is the synchronous read shell wrapped over it. Both are assigned in initializeSession
+	// because ModelRuntime.create is async, so a placeholder model is used until then.
+	private modelRuntime!: ModelRuntime;
+	private modelRegistry!: ModelRegistry;
 	private readonly memoryLifecycle: MemoryLifecycle;
 	private readonly ledger = getUsageLedger();
 	private readonly memoryCandidateStore: MemoryCandidateStore;
 	private readonly sessionResourceGate: SessionResourceGate;
 	private readonly sessionReady: Promise<void>;
-	private readonly sessionRuntime: AgentSessionRuntime;
+	private sessionRuntime!: AgentSessionRuntime;
 	private sessionUnsubscribe?: () => void;
-	private subAgentDiscovery: SubAgentDiscoveryResult;
+	private subAgentDiscovery!: SubAgentDiscoveryResult;
 
 	// --- Mutable across runs ---
 	private activeModel: Model<Api>;
@@ -176,16 +182,10 @@ export class ChannelRunner implements AgentRunner {
 		this.reportSettingsDiagnostics();
 		this.memoryCandidateStore = createMemoryCandidateStore();
 
-		// Create AuthStorage and ModelRegistry
-		const authStorage = AuthStorage.create(this.authConfigPath);
-		this.modelRegistry = createModelRegistry(authStorage, this.modelsConfigPath);
-
-		// Resolve model: prefer saved global default, fall back to first available model
-		this.activeModel = resolveInitialModel(this.modelRegistry, this.settingsManager);
-		log.logInfo(`Using model: ${this.activeModel.provider}/${this.activeModel.id} (${this.activeModel.name})`);
-		this.subAgentDiscovery = this.refreshSubAgentDiscovery();
-
-		const initialSessionManager = this.sessionManager;
+		// The real model/auth runtime is built asynchronously in initializeSession
+		// (ModelRuntime.create is async). Until then the agent runs on a placeholder
+		// model; initializeSession corrects it before any turn (via sessionReady).
+		this.activeModel = defaultModel;
 		const initialTools = this.buildRuntimeTools();
 		this.agent = new Agent({
 			initialState: {
@@ -212,43 +212,10 @@ export class ChannelRunner implements AgentRunner {
 			},
 		});
 
-		const initialResourceLoader = this.createResourceLoader();
-		const baseToolsOverride = Object.fromEntries(initialTools.map((tool) => [tool.name, tool]));
-		this.session = new AgentSession({
-			agent: this.agent,
-			sessionManager: initialSessionManager,
-			settingsManager: asSdkSettingsManager(this.settingsManager),
-			cwd: process.cwd(),
-			modelRegistry: this.modelRegistry,
-			resourceLoader: initialResourceLoader,
-			baseToolsOverride,
-		});
-		this.sessionRuntime = new AgentSessionRuntime(
-			this.session,
-			this.createAgentSessionServices(initialResourceLoader),
-			async ({ sessionManager, sessionStartEvent }) => {
-				const next = this.createSessionRuntime(sessionManager, sessionStartEvent);
-				return {
-					session: next.session,
-					extensionsResult: this.createEmptyExtensionsResult(),
-					services: this.createAgentSessionServices(next.resourceLoader),
-					diagnostics: [],
-				};
-			},
-		);
-		this.sessionRuntime.setRebindSession(async (session) => {
-			this.session = session;
-			this.agent = session.agent;
-			this.sessionManager = session.sessionManager;
-			await this.bindSessionExtensions();
-			this.subscribeToSessionEvents();
-		});
 		this.sessionResourceGate = new SessionResourceGate(async () => {
 			await this.reloadSessionResources();
 		});
 
-		// Subscribe to session events
-		this.subscribeToSessionEvents();
 		this.sessionReady = this.initializeSession();
 	}
 
@@ -916,8 +883,8 @@ export class ChannelRunner implements AgentRunner {
 		if (!reference) {
 			return null;
 		}
-		this.modelRegistry.refresh();
-		const available = await this.modelRegistry.getAvailable();
+		await this.modelRegistry.refresh();
+		const available = this.modelRegistry.getAvailable();
 		const { match, ambiguous } = findExactModelReferenceMatch(reference, available);
 		if (!match) {
 			log.logWarning(
@@ -935,6 +902,54 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	private async initializeSession(): Promise<void> {
+		// Build the canonical async model/auth runtime and its synchronous read shell.
+		this.modelRuntime = await createModelRuntime({
+			authConfigPath: this.authConfigPath,
+			modelsConfigPath: this.modelsConfigPath,
+		});
+		this.modelRegistry = wrapModelRegistry(this.modelRuntime);
+
+		// Resolve model: prefer saved global default, fall back to first available model.
+		this.activeModel = resolveInitialModel(this.modelRegistry, this.settingsManager);
+		this.agent.state.model = this.activeModel; // correct the placeholder default
+		log.logInfo(`Using model: ${this.activeModel.provider}/${this.activeModel.id} (${this.activeModel.name})`);
+		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
+
+		const initialResourceLoader = this.createResourceLoader();
+		const baseToolsOverride = Object.fromEntries(this.currentTools.map((tool) => [tool.name, tool]));
+		this.session = new AgentSession({
+			agent: this.agent,
+			sessionManager: this.sessionManager,
+			settingsManager: asSdkSettingsManager(this.settingsManager),
+			cwd: process.cwd(),
+			modelRuntime: this.modelRuntime,
+			resourceLoader: initialResourceLoader,
+			baseToolsOverride,
+		});
+		this.sessionRuntime = new AgentSessionRuntime(
+			this.session,
+			this.createAgentSessionServices(initialResourceLoader),
+			async ({ sessionManager, sessionStartEvent }) => {
+				const next = this.createSessionRuntime(sessionManager, sessionStartEvent);
+				return {
+					session: next.session,
+					extensionsResult: this.createEmptyExtensionsResult(),
+					services: this.createAgentSessionServices(next.resourceLoader),
+					diagnostics: [],
+				};
+			},
+		);
+		this.sessionRuntime.setRebindSession(async (session) => {
+			this.session = session;
+			this.agent = session.agent;
+			this.sessionManager = session.sessionManager;
+			await this.bindSessionExtensions();
+			this.subscribeToSessionEvents();
+		});
+
+		// Subscribe to session events
+		this.subscribeToSessionEvents();
+
 		await this.reloadSessionResources();
 		await this.bindSessionExtensions();
 	}
@@ -944,7 +959,7 @@ export class ChannelRunner implements AgentRunner {
 		this.reportSettingsDiagnostics();
 		const skills = loadPipiclawSkills(this.channelDir);
 		this.currentSkills = skills;
-		this.subAgentDiscovery = this.refreshSubAgentDiscovery();
+		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
 		this.rebuildSessionTools();
 		await this.session.reload();
 	}
@@ -1004,8 +1019,8 @@ export class ChannelRunner implements AgentRunner {
 		}
 	}
 
-	private refreshSubAgentDiscovery(): SubAgentDiscoveryResult {
-		this.modelRegistry.refresh();
+	private async refreshSubAgentDiscovery(): Promise<SubAgentDiscoveryResult> {
+		await this.modelRegistry.refresh();
 		const discovery = discoverSubAgents(this.workspaceDir, this.modelRegistry.getAvailable());
 		for (const warning of discovery.warnings) {
 			log.logWarning(`Sub-agent config warning (${this.channelId})`, warning);
@@ -1091,8 +1106,8 @@ export class ChannelRunner implements AgentRunner {
 				createCommandExtension({
 					getCurrentModel: () => this.session.model ?? this.activeModel,
 					getAvailableModels: async () => {
-						this.modelRegistry.refresh();
-						return await this.modelRegistry.getAvailable();
+						await this.modelRegistry.refresh();
+						return this.modelRegistry.getAvailable();
 					},
 					getSessionStats: () => this.session.getSessionStats(),
 					getThinkingLevel: () => this.session.thinkingLevel,
@@ -1135,9 +1150,8 @@ export class ChannelRunner implements AgentRunner {
 		return {
 			cwd: process.cwd(),
 			agentDir: this.appHomeDir,
-			authStorage: AuthStorage.create(this.authConfigPath),
 			settingsManager: asSdkSettingsManager(this.settingsManager),
-			modelRegistry: this.modelRegistry,
+			modelRuntime: this.modelRuntime,
 			resourceLoader,
 			diagnostics: [],
 		};
@@ -1172,7 +1186,7 @@ export class ChannelRunner implements AgentRunner {
 			sessionManager,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			cwd: process.cwd(),
-			modelRegistry: this.modelRegistry,
+			modelRuntime: this.modelRuntime,
 			resourceLoader,
 			baseToolsOverride: Object.fromEntries(tools.map((tool) => [tool.name, tool])),
 			sessionStartEvent,
