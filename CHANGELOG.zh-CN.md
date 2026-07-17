@@ -4,8 +4,11 @@
 
 ## [Unreleased]
 
+## [0.8.7-beta.2] - 2026-07-17
+
 ### 变更
 
+- 统一并约束运行时日志：单一 `level` 同时控制 console 与文件输出，console 采用统一的「时间 级别 事件名 消息 key=value」格式，并对敏感字段（token、cookie、`authorization`、secret、环境变量值）脱敏，长诊断字符串会被截断。默认 `info` 只保留运行生命周期、请求处理、投递、降级和失败等关键事件；工具参数/结果、模型 thinking 和完整回复仅在 `debug` 输出。文件落盘改为非阻塞且有界，日志洪峰不再会拖慢运行时。
 - 精简 Pipiclaw 自有 system prompt（spec 026）：删除与 tool schema 重复的工具目录（schema 才是权威），压缩 identity/contract/boundary 文案，runtime guide 目录改为「头部打印一次绝对目录 + 每条一句 trigger」。runtime-authored 内容从约 1,047 降到约 390 prompt units。
 - 预算改用「prompt units」（CJK 感知、无需 tokenizer）度量，取代原来的单一全局字符池。SOUL.md 与 AGENTS.md 各有独立且宽松的预算（SOUL 3,000 units / 24,000 chars，AGENTS 6,000 units / 48,000 chars），彼此以及与 runtime 目录、skills 都不再相互挤压。skills 仍完全交由 pi 管理、不计入预算。
 - periodic 的 `[SILENT]` 协议改为随 periodic 事件 trigger 下发，不再常驻 system prompt；自动的每回合上下文（recall、任务议程、首轮 bootstrap）新增独立 unit 上限，超限时按完整 item 丢弃并给出检索工具的下一步。`/context` 现按 units 报告 runtime-authored 合计与 SOUL/AGENTS/skills 归属。
@@ -13,6 +16,10 @@
 ### 移除
 
 - **破坏性（beta API）**：包不再导出 `HARD_TOTAL_BUDGET_CHARS` / `SOFT_TOTAL_BUDGET_CHARS`。它们支撑的 32k 全局收缩机制已删除；runtime-authored 预算改用 `RUNTIME_PROMPT_TARGET_UNITS` / `RUNTIME_PROMPT_HARD_UNITS`。
+
+### 修复
+
+- `clipTextByPromptUnits` 现在会在裁剪 marker 超出剩余预算时兜底，使 recall / 任务议程 / 首轮 bootstrap 的注入始终满足 `injectedUnits ≤ maxUnits` 契约，不再因单个裁剪边界溢出而超量注入。
 
 ## [0.8.6] - 2026-07-14
 
