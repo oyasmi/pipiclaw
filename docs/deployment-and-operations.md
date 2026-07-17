@@ -367,6 +367,5 @@ workspace `skills/` 是 procedural memory。`skill_manage` 和高置信 post-tur
 ## 相关文档（Related Docs）
 
 - 配置项说明：[configuration.md](./configuration.md)
-- 事件与子代理用法：[events-and-sub-agents.md](./events-and-sub-agents.md)
+- 事件、任务台账与 `/tasks` 命令：[events-and-tasks.md](./events-and-tasks.md)
 - 并发模型与容量边界：[scaling-and-concurrency.md](./scaling-and-concurrency.md)
-- 任务台账与 `/tasks` 命令：[tasks.md](./tasks.md)

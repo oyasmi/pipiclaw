@@ -7,7 +7,8 @@
 
 补充文档：
 
-- 事件与子代理使用指南：[events-and-sub-agents.md](./events-and-sub-agents.md)
+- 事件与任务使用指南：[events-and-tasks.md](./events-and-tasks.md)
+- 子代理使用指南：[sub-agents.md](./sub-agents.md)
 - 部署与运维指南：[deployment-and-operations.md](./deployment-and-operations.md)
 - 安全文档：[security.md](./security.md)
 
@@ -192,11 +193,11 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 `event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据 `wake` 驱动；event 主要用于周期任务的 cron 节奏、独立提醒和外部传感器。核心能力，无开关、始终注册。
 
 - 该工具只发给主 agent，不进子代理工具集。
-- 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、**带 `preAction` 门控时放宽到 5 分钟**、事件文件总数上限 50）。细节见 [tasks.md](./tasks.md) 与 [events-and-sub-agents.md](./events-and-sub-agents.md)。
+- 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、**带 `preAction` 门控时放宽到 5 分钟**、事件文件总数上限 50）。细节见 [events-and-tasks.md](./events-and-tasks.md)。
 
 ### 自主长程任务总开关（`tools.tasks`）
 
-`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：`task_manage` 工具（agent 维护[受治理任务台账](./tasks.md)：create/progress/set/verify/done/cancel/list）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
+`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：`task_manage` 工具（agent 维护[受治理任务台账](./events-and-tasks.md)：create/progress/set/verify/done/cancel/list）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
 
 ```jsonc
 {
@@ -1192,7 +1193,7 @@ web 工具的代理顺序是：
 
 放预定义子代理（sub-agent）。适合把 reviewer、researcher、planner 之类角色固化下来。
 
-详细字段、示例和推荐写法见 [events-and-sub-agents.md](./events-and-sub-agents.md)。
+详细字段、示例和推荐写法见 [sub-agents.md](./sub-agents.md)。
 
 ## 事件目录 `workspace/events/`（`workspace/events/`）
 
@@ -1202,7 +1203,7 @@ web 工具的代理顺序是：
 - 提醒
 - 固定时间回顾记忆文件
 
-详细事件类型、字段说明和使用建议见 [events-and-sub-agents.md](./events-and-sub-agents.md)。
+详细事件类型、字段说明和使用建议见 [events-and-tasks.md](./events-and-tasks.md)。
 
 事件调度层的审计记录会写入 `${PIPICLAW_HOME:-~/.pipiclaw}/state/events/history.jsonl`。该文件由 Pipiclaw 自动创建，用 JSON Lines 记录事件加载、调度、触发、`preAction` 结果和入队结果；其中 `ts` 使用本地时区时间。
 

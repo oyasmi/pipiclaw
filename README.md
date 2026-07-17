@@ -230,15 +230,15 @@ pipiclaw
 - 未知的斜杠命令会被直接拒绝并提示 `/help`，不会作为普通消息发给模型（避免 `/modle` 这类笔误变成一整轮 LLM 调用）。workspace skill 也可作为命令调用（`/skill:<名称>`）。
 - `/model` 依次尝试精确 `provider/modelId`、精确 `modelId`、对完整引用的子串匹配，只有唯一命中时才切换，例如 `/model turbo`。
 
-事件与任务的详细用法见 [docs/events-and-sub-agents.md](./docs/events-and-sub-agents.md) 与 [docs/tasks.md](./docs/tasks.md)。
+事件与任务的详细用法见 [docs/events-and-tasks.md](./docs/events-and-tasks.md)；子代理见 [docs/sub-agents.md](./docs/sub-agents.md)。
 
 ## 文档地图（Documentation）
 
 | 文档 | 内容 |
 |------|------|
 | [docs/configuration.md](./docs/configuration.md) | 全部配置项：钉钉、模型、settings、tools、TUI、记忆与工作区文件 |
-| [docs/events-and-sub-agents.md](./docs/events-and-sub-agents.md) | 定时事件（含 `preAction` 门控、`event_manage`）与预定义子代理 |
-| [docs/tasks.md](./docs/tasks.md) | 任务台账、内建 task driver、`/tasks` 控制面与 `task_manage` 工具 |
+| [docs/events-and-tasks.md](./docs/events-and-tasks.md) | 定时事件（含 `preAction` 门控、`event_manage`）、任务台账、内建 task driver、`/tasks` 控制面与 `task_manage` 工具 |
+| [docs/sub-agents.md](./docs/sub-agents.md) | 预定义子代理：委派、隔离 worktree 与独立验收 |
 | [docs/runtime-playbooks.md](./docs/runtime-playbooks.md) | Runtime playbooks 与知识分层模型 |
 | [docs/deployment-and-operations.md](./docs/deployment-and-operations.md) | 长期运行、日志、可观测性、升级、备份与排障 |
 | [docs/scaling-and-concurrency.md](./docs/scaling-and-concurrency.md) | 并发模型与容量边界 |
