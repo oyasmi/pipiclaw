@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.8-beta.2] - 2026-07-18
+
 ### Added
 
 - Native recurring tasks now keep their five-field cron schedule in the task frontmatter as the single source of truth. `task_manage` validates schedules, recurring `done` tasks calculate their next `wake`, and `start-cycle` opens the next cycle without a paired canonical `.schedule` event.
@@ -15,10 +17,6 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Removed system-wide timezone configuration from scheduled events. Cron expressions now use the host timezone; legacy event timezone fields are ignored on load and reported in event history when they differ from the host timezone.
 - Recurring-task cadence is now defined by `schedule`; `recurrence` remains only as an optional human-readable annotation. Paused, cancelled, and escalated tasks are never automatically resumed, and legacy schedule events yield to prevent double triggering during migration.
 - Updated runtime documentation and playbooks for the single-file recurring-task model, adaptive task-driver timing, event scheduling, repair, and task closeout.
-
-## [0.8.8-beta.1] - 2026-07-17
-
-### Changed
 
 - The default app home moved from `~/.pi/pipiclaw/` to `~/.pipiclaw/`. Users on the default location (no `PIPICLAW_HOME` set) are migrated automatically: on startup, if the new directory does not exist yet and a legacy `~/.pi/pipiclaw/` install is present, the old directory is moved to the new location — no manual step. Custom `PIPICLAW_HOME` values are untouched. This automatic migration is a temporary shim and will be removed in 0.9.0.
 
