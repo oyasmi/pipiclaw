@@ -4,13 +4,15 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
-## [0.8.8-beta.2] - 2026-07-18
+## [0.8.8] - 2026-07-18
 
 ### Added
 
 - Native recurring tasks now keep their five-field cron schedule in the task frontmatter as the single source of truth. `task_manage` validates schedules, recurring `done` tasks calculate their next `wake`, and `start-cycle` opens the next cycle without a paired canonical `.schedule` event.
 - The task driver now handles cycle starts, self-heals missing or invalid wakes without spending a model turn, and uses one adaptive timer with an in-process `nudge` for prompt follow-up after task progress.
 - Added migration diagnostics for legacy task `.schedule` events, including a compatibility window that folds legacy cadence into task frontmatter and detects timezone changes.
+- Added a versioned behavior-evaluation harness with isolated trials, regression, safety, and capability suites, gate and baseline management, report generation, and run comparison tooling.
+- Added three un-hinted, report-only safety probes covering web-content injection, tool-result injection, and silent periodic tasks, plus a raw injection fixture for measuring unprompted boundary handling.
 
 ### Changed
 
@@ -19,6 +21,9 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - Updated runtime documentation and playbooks for the single-file recurring-task model, adaptive task-driver timing, event scheduling, repair, and task closeout.
 
 - The default app home moved from `~/.pi/pipiclaw/` to `~/.pipiclaw/`. Users on the default location (no `PIPICLAW_HOME` set) are migrated automatically: on startup, if the new directory does not exist yet and a legacy `~/.pi/pipiclaw/` install is present, the old directory is moved to the new location — no manual step. Custom `PIPICLAW_HOME` values are untouched. This automatic migration is a temporary shim and will be removed in 0.9.0.
+
+- Hardened evaluation gates and reports: required cases with no valid trials now fail, grader results identify code versus model judgments, and reports include discrimination diagnostics and failure rationales.
+- Added bounded `EVAL_CONCURRENCY` support for evaluation trials while preserving serial execution by default, and enabled incremental evaluation builds.
 
 ## [0.8.7] - 2026-07-17
 

@@ -4,13 +4,15 @@
 
 ## [Unreleased]
 
-## [0.8.8-beta.2] - 2026-07-18
+## [0.8.8] - 2026-07-18
 
 ### 新增
 
 - 原生周期任务现在把五段 cron 节奏写入 task frontmatter，作为唯一机器真相。`task_manage` 会校验 schedule，周期任务 `done` 时计算下一次 `wake`，`start-cycle` 开启新周期不再依赖配对的 canonical `.schedule` 事件。
 - task driver 现在支持周期起始唤醒；`wake` 缺失或损坏时会在不消耗模型回合的情况下自愈，并通过单一自适应 timer 与进程内 `nudge` 在任务进展后及时继续工作。
 - 新增 legacy task `.schedule` 事件迁移诊断，兼容窗口内可将旧节奏折入 task frontmatter，并检测时区变化。
+- 新增版本化的行为评测 harness，支持隔离 trial、regression/safety/capability 三类套件、门禁与 baseline 管理、报告生成和 run 对比。
+- 新增三条不带提示、仅用于报告的安全探针，覆盖网页内容注入、工具结果注入和静默周期任务，并加入原始注入 fixture，用于测量模型在未被提前提醒时的边界处理能力。
 
 ### 变更
 
@@ -19,6 +21,9 @@
 - 同步更新单文件周期任务模型、自适应 task driver 定时、事件调度、修复与任务收尾相关的运行时文档和 playbook。
 
 - 默认根目录从 `~/.pi/pipiclaw/` 迁移到 `~/.pipiclaw/`。使用默认路径（未设置 `PIPICLAW_HOME`）的用户会被自动迁移：启动时若新目录尚不存在、旧的 `~/.pi/pipiclaw/` 仍在，就把旧目录整体移动到新位置，无需手动操作。设置了自定义 `PIPICLAW_HOME` 的用户不受影响。该自动迁移是临时兼容，将在 0.9.0 移除。
+
+- 加固行为评测的门禁与报告：required case 在没有任何有效 trial 时会失败，grader 结果明确区分代码断言与模型判定，报告新增判别力诊断和失败原因明细。
+- 新增有界的 `EVAL_CONCURRENCY` 评测并发配置，同时默认保持串行执行；评测构建启用增量编译。
 
 ## [0.8.7] - 2026-07-17
 
