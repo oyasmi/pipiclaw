@@ -106,6 +106,9 @@ export function evaluateExit(records: TrialRecord[], gates: Record<string, GateR
 	for (const [caseId, rule] of Object.entries(gates)) {
 		if (rule.gate !== "required" || !records.some((record) => record.caseId === caseId)) continue;
 		const valid = records.filter((record) => record.caseId === caseId && record.outcome !== "invalid");
+		// A required case with zero valid trials was never actually confirmed; do not let an
+		// all-invalid case slip through the gate just because ceil(ratio * 0) is 0.
+		if (valid.length === 0) return 1;
 		if (!rule.minPass) {
 			if (valid.some((record) => record.outcome !== "pass")) return 1;
 			continue;
@@ -118,6 +121,8 @@ export function evaluateExit(records: TrialRecord[], gates: Record<string, GateR
 }
 
 function isModelDecision(grade: GradeResult): boolean {
+	if (grade.graderKind) return grade.graderKind === "model";
+	// Fall back to heuristics only for archived records written before graderKind existed.
 	return (
 		grade.score !== undefined || grade.graderId.includes("faithfulness") || grade.graderId.includes("model-judge")
 	);
@@ -161,6 +166,19 @@ export function renderReport(
 	);
 	const totalCost = records.reduce((sum, record) => sum + record.metrics.costUsd, 0);
 	const tokens = records.reduce((sum, record) => sum + record.metrics.tokens.total, 0);
+	const scored = summaries.filter((summary) => summary.valid > 0);
+	const perfect = scored.filter((summary) => summary.passed === summary.valid).length;
+	const allPassRatio = scored.length ? perfect / scored.length : 0;
+	const discrimination =
+		allPassRatio > 0.85 ? ` ⚠ discrimination low: raise probe difficulty or add un-hinted variants.` : "";
+	const failures = records
+		.filter((record) => record.outcome !== "pass")
+		.map((record) => {
+			const reasons = record.grades
+				.filter((grade) => grade.status === "fail" || grade.status === "error")
+				.map((grade) => `${grade.graderId}: ${grade.rationale}`.replace(/\s+/g, " ").slice(0, 300));
+			return `- ${record.caseId}#${record.trial} (${record.outcome}): ${reasons.join("; ") || "no failing grader recorded"}`;
+		});
 	const reviewCount = selectHumanReview(records).length;
 	const calibration = humanReviewCalibration(records, reviews);
 	const observedModels = [...new Set(records.map((record) => record.observedModel))].sort();
@@ -174,6 +192,7 @@ Started: ${manifest.startedAt}
 Configured model: ${manifest.configuredModel}  
 Observed model(s): ${observedModels.join(", ") || "unknown"}  
 Trials: ${records.length}; cost: $${totalCost.toFixed(4)}; tokens: ${tokens}
+Discrimination: ${perfect}/${scored.length} cases passed every valid trial (${(allPassRatio * 100).toFixed(0)}%).${discrimination}
 
 Human review queue: ${reviewCount} grader decisions; ${reviews.length} verdicts recorded. Model-grader calibration: ${calibration.agreement === undefined ? "pending" : `${calibration.agreed}/${calibration.reviewed} (${(calibration.agreement * 100).toFixed(0)}%)`} (archived grades remain immutable).
 
@@ -190,6 +209,10 @@ ${quarantine.length ? quarantine.map((item) => `- ${item.caseId}: ${item.passed}
 ## Hard invariant failures
 
 ${invariantFailures.length ? invariantFailures.map((item) => `- ${item}`).join("\n") : "None."}
+
+## Failures
+
+${failures.length ? failures.join("\n") : "None."}
 
 ## Results
 
@@ -494,6 +517,7 @@ async function gradeModel(grader: ModelGrader, context: TrialContext, homeDir: s
 			schemaVersion: 1,
 			graderId: grader.graderId,
 			graderVersion: grader.graderVersion,
+			graderKind: "model",
 			status: "error",
 			severity: grader.severity ?? "quality",
 			evidence: [],
@@ -508,6 +532,7 @@ async function gradeModel(grader: ModelGrader, context: TrialContext, homeDir: s
 		schemaVersion: 1,
 		graderId: grader.graderId,
 		graderVersion: grader.graderVersion,
+		graderKind: "model",
 		status: value.pass ? "pass" : "fail",
 		severity: grader.severity ?? "quality",
 		score: value.score,
@@ -756,28 +781,43 @@ async function main(): Promise<void> {
 	const descriptors = cases.map(describeCase);
 	writeJson(join(resultDir, "cases.json"), descriptors);
 	const trialsOverride = Number(process.env.EVAL_TRIALS ?? "");
-	const records: TrialRecord[] = [];
-	for (const item of cases) {
+	// Trial homes are fully isolated (each its own mkdtemp PIPICLAW_HOME), so trials can run in a
+	// bounded worker pool. Default stays serial: some providers stall badly under concurrent load,
+	// and a stalled turn becomes a spurious budget-exceeded that counts against required gates.
+	// Set EVAL_CONCURRENCY>1 to trade that reliability for wall-clock when the provider tolerates it.
+	const concurrency = Math.max(1, Math.floor(Number(process.env.EVAL_CONCURRENCY ?? "1")) || 1);
+	const jobs = cases.flatMap((item) => {
 		const descriptor = descriptors.find((candidate) => candidate.id === item.id)!;
 		const trials = Number.isFinite(trialsOverride) && trialsOverride > 0 ? trialsOverride : (item.trials ?? 3);
-		for (let trial = 1; trial <= trials; trial++) {
-			process.stdout.write(`eval ${item.id} trial ${trial}/${trials} ...\n`);
+		return Array.from({ length: trials }, (_, index) => ({ item, descriptor, trial: index + 1 }));
+	});
+	const ordered = jobs.map((job, order) => ({ ...job, order }));
+	const results: Array<{ order: number; record: TrialRecord; configHashes: [string, string, string] }> = [];
+	let cursor = 0;
+	const runWorker = async (): Promise<void> => {
+		while (cursor < ordered.length) {
+			const job = ordered[cursor++]!;
+			process.stdout.write(`eval ${job.item.id} trial ${job.trial} ...\n`);
 			const result = await runTrial(
-				item,
-				descriptor,
-				trial,
+				job.item,
+				job.descriptor,
+				job.trial,
 				runId,
-				join(resultDir, "trials", `${item.id}-${trial}`),
+				join(resultDir, "trials", `${job.item.id}-${job.trial}`),
 			);
-			records.push(result.record);
-			if (manifest.settingsHash === "pending-first-trial") {
-				[manifest.settingsHash, manifest.toolsConfigHash, manifest.securityConfigHash] = result.configHashes;
-				writeJson(join(resultDir, "manifest.json"), manifest);
-			}
+			results.push({ order: job.order, ...result });
 			process.stdout.write(
-				`  ${result.record.outcome} $${result.record.metrics.costUsd.toFixed(4)} ${result.record.metrics.wallMs}ms\n`,
+				`  ${job.item.id} ${result.record.outcome} $${result.record.metrics.costUsd.toFixed(4)} ${result.record.metrics.wallMs}ms\n`,
 			);
 		}
+	};
+	await Promise.all(Array.from({ length: Math.min(concurrency, ordered.length) || 1 }, () => runWorker()));
+	results.sort((left, right) => left.order - right.order);
+	const records = results.map((result) => result.record);
+	// Every trial home is built from identical config, so any completed trial's hashes are authoritative.
+	if (results[0]) {
+		[manifest.settingsHash, manifest.toolsConfigHash, manifest.securityConfigHash] = results[0].configHashes;
+		writeJson(join(resultDir, "manifest.json"), manifest);
 	}
 	writeFileSync(join(resultDir, "trials.jsonl"), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
 	writeJson(join(resultDir, "human-review-sample.json"), { schemaVersion: 1, decisions: selectHumanReview(records) });

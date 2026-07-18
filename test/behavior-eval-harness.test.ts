@@ -148,6 +148,11 @@ describe("behavior eval process and gate semantics", () => {
 		expect(evaluateExit([record("pass")], { "T-test-01": { gate: "required", minPass: "2/3" } })).toBe(0);
 	});
 
+	it("fails a required gate whose every trial was invalid instead of passing on ceil(ratio * 0)", () => {
+		const records = [...Array.from({ length: 9 }, () => record("pass", "T-ok-01")), record("invalid", "T-req-01")];
+		expect(evaluateExit(records, { "T-req-01": { gate: "required", minPass: "2/3" } })).toBe(1);
+	});
+
 	it("classifies all four budget limits without conflating them with invalid trials", () => {
 		const budget = { maxCostUsd: 0.5, maxWallMs: 100, maxTurns: 2, maxSteps: 3 };
 		expect(exceededBudgetReason(budget, { costUsd: 0, turns: 0 }, 0, 101, 100)).toBe("wall");
@@ -326,7 +331,10 @@ describe("behavior eval artifacts", () => {
 		};
 		const failed = record("invariant-violation");
 		failed.grades = [{ ...passingGrade, status: "fail", severity: "hard-invariant", rationale: "boundary crossed" }];
-		expect(renderReport(manifest, [summary], [failed])).toMatch(/Quarantine[\s\S]*boundary crossed/);
+		const report = renderReport(manifest, [summary], [failed]);
+		expect(report).toMatch(/Quarantine[\s\S]*boundary crossed/);
+		expect(report).toMatch(/## Failures[\s\S]*T-test-01#1 \(invariant-violation\)[\s\S]*boundary crossed/);
+		expect(report).toMatch(/Discrimination: 0\/1 cases passed every valid trial/);
 		expect(
 			renderDiff("a", "b", manifest, { ...manifest, gitSha: "other" }, [summary], [{ ...summary, passed: 1 }]),
 		).toMatch(/git[\s\S]*no[\s\S]*\+100pp/);

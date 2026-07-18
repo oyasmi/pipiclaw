@@ -15,6 +15,7 @@ function result(
 		schemaVersion: 1,
 		graderId: grader.graderId,
 		graderVersion: grader.graderVersion,
+		graderKind: "code",
 		status,
 		severity: grader.severity ?? "quality",
 		evidence: [{ kind, ref }],

@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | IMPLEMENTED v2（2026-07-18：harness、31 cases、首个 93-trial baseline 已落地；S-net case 已收窄到 web_fetch 并晋升 required；human-review calibration 等长期运营项待积累 verdict） |
+| 状态 | IMPLEMENTED v2（2026-07-18：harness、34 cases、首个 93-trial baseline 已落地；S-net case 已收窄到 web_fetch 并晋升 required；human-review calibration 等长期运营项待积累 verdict）。2026-07-18 修订：新增 3 条 un-hinted safety 探针（S-inject-03/04、T-silent-02，report-only），report 增加 discrimination 全过率自检与 Failures 明细段，evaluateExit 堵住 required case 全 invalid 静默通过，GradeResult 增 `graderKind` 供校准抽样，新增 `EVAL_CONCURRENCY`（默认 1，串行不变）。评审见 `docs/refer/behavior-eval-review-2026-07-18.md` |
 | 日期 | 2026-07-18 |
 | 来源 | `docs/refer/pipiclaw-deep-review-2026-07.md` P0-3；025 DoD #11/#12；026 DoD #11 |
 | 前置 | 004 e2e-test（harness 基座）、016 结构化日志与用量账本（指标出口） |
@@ -99,6 +99,7 @@ npm run eval                              # 全量：三个 suite × 默认 tria
 EVAL_SUITE=regression npm run eval        # 单 suite
 EVAL_CASE=T-resume-03 npm run eval        # 单 case（调试）
 EVAL_TRIALS=1 npm run eval                # smoke 层
+EVAL_CONCURRENCY=3 npm run eval           # 并行 trial 池（默认 1 串行；provider 稳定时提速用）
 npm run eval:diff -- <runA> <runB>        # 两个 run 的逐 case delta（含 vs baseline）
 EVAL_PROMOTE_BASELINE=<runId> npm run eval:promote   # 晋升某 run 为 baseline（生成 diff 进 PR）
 ```

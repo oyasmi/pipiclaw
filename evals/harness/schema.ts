@@ -75,6 +75,8 @@ export interface GradeResult {
 	schemaVersion: 1;
 	graderId: string;
 	graderVersion: string;
+	/** Whether the verdict came from a code assertion or a model judge; drives calibration sampling. */
+	graderKind?: "code" | "model";
 	status: "pass" | "fail" | "error" | "skipped";
 	severity: Severity;
 	score?: number;

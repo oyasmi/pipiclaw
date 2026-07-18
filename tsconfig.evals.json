@@ -7,6 +7,8 @@
 		"declarationMap": false,
 		"sourceMap": false,
 		"inlineSources": false,
+		"incremental": true,
+		"tsBuildInfoFile": "./dist-evals/.tsbuildinfo",
 		"types": ["node"]
 	},
 	"include": ["src/**/*.ts", "test/support/**/*.ts", "evals/**/*.ts"],
