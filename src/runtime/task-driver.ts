@@ -24,6 +24,8 @@ export interface TaskDriverOptions {
 	getKnownChannelIds?: () => Iterable<string>;
 	isChannelActive: (channelId: string) => boolean;
 	dispatch: (event: DingTalkEvent) => boolean | Promise<boolean>;
+	/** Optional observability hook. It runs after every production dispatch attempt. */
+	onDispatch?: (event: DingTalkEvent, accepted: boolean) => void;
 	getSettings: () => PipiclawTaskDriverSettings;
 	/** Master autonomy switch (`tools.tasks.enabled`); re-read every tick. Defaults to on. */
 	isEnabled?: () => boolean;
@@ -229,6 +231,14 @@ export class TaskDriver {
 
 	constructor(private readonly options: TaskDriverOptions) {}
 
+	private observeDispatch(event: DingTalkEvent, accepted: boolean): void {
+		try {
+			this.options.onDispatch?.(event, accepted);
+		} catch (error) {
+			log.logWarning("Task driver dispatch observer failed", errorMessage(error));
+		}
+	}
+
 	start(): void {
 		if (this.loopActive) return;
 		this.loopActive = true;
@@ -373,9 +383,9 @@ export class TaskDriver {
 						taskBudgetViolation(control, nowMs) ?? terminalDependencyReason(dependencies.reason);
 					if (!escalationReason) continue;
 					governanceHandled = true;
-					const accepted = await this.options.dispatch(
-						taskEscalationEvent(channelId, candidate, escalationReason, nowMs),
-					);
+					const escalationEvent = taskEscalationEvent(channelId, candidate, escalationReason, nowMs);
+					const accepted = await this.options.dispatch(escalationEvent);
+					this.observeDispatch(escalationEvent, accepted);
 					if (accepted && (await escalateTask(channelDir, candidate.id, escalationReason))) {
 						dispatched++;
 						lastDispatchOffset = offset;
@@ -435,6 +445,7 @@ export class TaskDriver {
 					? createCycleStartEvent(channelId, entry, nowMs)
 					: createTaskDriverEvent(channelId, entry, nowMs);
 				const accepted = await this.options.dispatch(event);
+				this.observeDispatch(event, accepted);
 				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim, now);
 				this.attempts.set(key, { fingerprint, atMs: nowMs, accepted });
 				this.lastDispatchedTaskId.set(channelId, entry.id);

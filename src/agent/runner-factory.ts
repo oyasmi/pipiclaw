@@ -7,6 +7,8 @@ export interface RunnerFactoryPaths {
 	appHomeDir: string;
 	authConfigPath: string;
 	modelsConfigPath: string;
+	/** Optional, side-effect-free observer used by the behavior-eval harness. */
+	onSessionEvent?: (event: unknown, channelId: string) => void;
 }
 
 function runnerKey(paths: RunnerFactoryPaths, channelId: string, channelDir: string): string {

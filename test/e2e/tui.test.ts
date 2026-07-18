@@ -7,7 +7,7 @@ import {
 	createE2ETestHome,
 	type E2ETestHome,
 	getE2ESkipReason,
-} from "./helpers/setup.js";
+} from "../support/setup.js";
 
 const describeE2E = canRunE2E() ? describe : describe.skip;
 

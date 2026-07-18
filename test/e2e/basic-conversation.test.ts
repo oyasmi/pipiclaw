@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRuntimeHarness, type E2ERuntimeHarness, getChannelFile } from "./helpers/runtime-harness.js";
-import { canRunE2E, getE2ESkipReason } from "./helpers/setup.js";
+import { createRuntimeHarness, type E2ERuntimeHarness, getChannelFile } from "../support/runtime-harness.js";
+import { canRunE2E, getE2ESkipReason } from "../support/setup.js";
 
 const describeE2E = canRunE2E() ? describe : describe.skip;
 

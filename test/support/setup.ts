@@ -72,8 +72,11 @@ export function createE2ETestHome(overrides?: {
 	defaultProvider?: string;
 	defaultModel?: string;
 	enableDebug?: boolean;
+	/** Reuse a parent-owned directory for multi-process behavior-eval segments. */
+	homeDir?: string;
 }): E2ETestHome {
-	const homeDir = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-"));
+	const homeDir = overrides?.homeDir ?? mkdtempSync(join(tmpdir(), "pipiclaw-e2e-"));
+	mkdirSync(homeDir, { recursive: true });
 	const workspaceDir = join(homeDir, "workspace");
 	const channelConfigPath = join(homeDir, "channel.json");
 	writeDefaultWorkspace(workspaceDir);

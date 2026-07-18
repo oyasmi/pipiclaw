@@ -29,6 +29,10 @@
 		"deadcode": "knip",
 		"test": "vitest --run",
 		"test:e2e": "vitest --run --config vitest.config.e2e.ts",
+		"eval:build": "tsc -p tsconfig.evals.json && node -e \"const fs=require('node:fs'); fs.cpSync('src/playbooks','dist-evals/src/playbooks',{recursive:true})\"",
+		"eval": "npm run eval:build && node dist-evals/evals/harness/run.js",
+		"eval:diff": "npm run eval:build && node dist-evals/evals/harness/diff.js",
+		"eval:promote": "npm run eval:build && node dist-evals/evals/harness/promote.js",
 		"test:coverage": "vitest --run --coverage",
 		"check": "npm run lint && npm run typecheck && npm run deadcode && npm run test",
 		"prepublishOnly": "npm run clean && npm run build && npm run check"

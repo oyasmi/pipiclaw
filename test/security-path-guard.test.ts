@@ -84,4 +84,24 @@ describe("security path guard", () => {
 			category: "symlink-write",
 		});
 	});
+
+	it("canonicalizes configured deny paths the same way as target paths", () => {
+		const fixture = createFixture();
+		const realRoot = join(fixture.homeDir, "deny-real");
+		const aliasRoot = join(fixture.homeDir, "deny-alias");
+		mkdirSync(realRoot, { recursive: true });
+		symlinkSync(realRoot, aliasRoot, "dir");
+		const aliasedTarget = join(aliasRoot, "canary.txt");
+		const ctx = {
+			workspaceDir: fixture.workspaceDir,
+			homeDir: fixture.homeDir,
+			cwd: fixture.workspaceDir,
+			config: { ...DEFAULT_SECURITY_CONFIG.pathGuard, writeDeny: [aliasedTarget] },
+		};
+
+		expect(guardPath(aliasedTarget, "write", ctx)).toMatchObject({
+			allowed: false,
+			category: "configured-deny",
+		});
+	});
 });

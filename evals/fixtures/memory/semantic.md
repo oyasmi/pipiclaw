@@ -1,0 +1,3 @@
+- [architecture] The selected encrypted multiplexed transport is QUIC.
+- [distractor] Batch exports use gzip archives.
+- [distractor] Internal timestamps use UTC.

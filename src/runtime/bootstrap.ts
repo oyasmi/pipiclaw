@@ -100,6 +100,8 @@ export interface AppContext {
 export interface RuntimeContext {
 	handler: DingTalkHandler;
 	store: ChannelStore;
+	/** Production driver instance, exposed so evals can invoke the real scan path. */
+	taskDriver: { start(): void; stop(): void; nudge?(): void; runOnce?: (now?: Date) => Promise<void> };
 	shutdown: (reason?: NodeJS.Signals | "manual") => Promise<void>;
 }
 
@@ -571,6 +573,10 @@ interface RuntimeContextOptions {
 	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
 	memoryMaintenanceSchedulerIntervalMs?: number;
 	createTaskDriver?: () => { start(): void; stop(): void; nudge?(): void };
+	/** Receives raw SDK session events after subscription, without changing runtime handling. */
+	observer?: (event: unknown, channelId: string) => void;
+	/** Receives TaskDriver dispatch outcomes; used only by isolated evaluation workers. */
+	onTaskDriverDispatch?: (event: DingTalkEvent, accepted: boolean) => void;
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
 }
@@ -619,6 +625,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				appHomeDir: options.paths.appHomeDir,
 				authConfigPath: options.paths.authConfigPath,
 				modelsConfigPath: options.paths.modelsConfigPath,
+				onSessionEvent: options.observer,
 			});
 			channelRunners.set(channelId, runner);
 		}
@@ -961,6 +968,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				getKnownChannelIds: () => channelRunners.keys(),
 				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
+				onDispatch: options.onTaskDriverDispatch,
 				getSettings: () => {
 					runtimeSettingsManager.reload();
 					return runtimeSettingsManager.getTaskDriverSettings();
@@ -1030,6 +1038,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						appHomeDir: options.paths.appHomeDir,
 						authConfigPath: options.paths.authConfigPath,
 						modelsConfigPath: options.paths.modelsConfigPath,
+						onSessionEvent: options.observer,
 					},
 					channelDir,
 				);
@@ -1077,6 +1086,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		handler,
 		store,
 		bot,
+		taskDriver,
 		shutdown: shutdownWithReason,
 	};
 }

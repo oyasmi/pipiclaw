@@ -189,7 +189,9 @@ function isDeniedSystemPath(path: string): boolean {
 }
 
 function matchesConfiguredPath(path: string, entries: string[], ctx: PathGuardContext): boolean {
-	return entries.map((entry) => resolveConfiguredPath(entry, ctx)).some((entry) => startsWithPathPrefix(path, entry));
+	return entries
+		.map((entry) => resolveForGuard(resolveConfiguredPath(entry, ctx), ctx))
+		.some((entry) => startsWithPathPrefix(path, entry));
 }
 
 function pathAllowedByDefaults(path: string, ctx: PathGuardContext): boolean {

@@ -116,6 +116,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly appHomeDir: string;
 	private readonly authConfigPath: string;
 	private readonly modelsConfigPath: string;
+	private readonly onSessionEvent?: (event: unknown, channelId: string) => void;
 	private readonly workspaceDir: string;
 	private session!: AgentSession;
 	private agent: Agent;
@@ -166,6 +167,7 @@ export class ChannelRunner implements AgentRunner {
 		this.appHomeDir = paths.appHomeDir;
 		this.authConfigPath = paths.authConfigPath;
 		this.modelsConfigPath = paths.modelsConfigPath;
+		this.onSessionEvent = paths.onSessionEvent;
 
 		const executor = createExecutor();
 		this.executor = executor;
@@ -1248,6 +1250,12 @@ export class ChannelRunner implements AgentRunner {
 	private subscribeToSessionEvents(): void {
 		this.sessionUnsubscribe?.();
 		this.sessionUnsubscribe = this.session.subscribe((event: unknown) => {
+			// Observation is deliberately before our consumer and must never alter a turn.
+			try {
+				this.onSessionEvent?.(event, this.channelId);
+			} catch (err) {
+				log.logWarning(`[${this.channelId}] session observer failed`, errorMessage(err));
+			}
 			if (isRecord(event) && event.type === "message_start" && this.turn.phase === "preparing") {
 				this.turn.phase = "streaming";
 			}

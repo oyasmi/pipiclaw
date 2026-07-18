@@ -3,9 +3,11 @@ node_modules/
 
 # build output
 dist/
+dist-evals/
 coverage/
 .nyc_output/
 *.tsbuildinfo
+evals/results/
 
 # package manager / publish artifacts
 *.tgz

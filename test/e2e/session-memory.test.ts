@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRuntimeHarness, type E2ERuntimeHarness, getChannelFile } from "./helpers/runtime-harness.js";
-import { canRunE2E } from "./helpers/setup.js";
+import { createRuntimeHarness, type E2ERuntimeHarness, getChannelFile } from "../support/runtime-harness.js";
+import { canRunE2E } from "../support/setup.js";
 import { waitForFileContent } from "./helpers/wait.js";
 
 const describeE2E = canRunE2E() ? describe : describe.skip;

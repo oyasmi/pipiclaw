@@ -76,6 +76,23 @@ describe("TaskDriver", () => {
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("Task capsule: title=Task; status=in-progress;");
 	});
 
+	it("keeps dispatch behavior unchanged when the optional observer throws", async () => {
+		await writeTask("dm_a", "ready", task("in-progress"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			onDispatch: () => {
+				throw new Error("observer-only failure");
+			},
+			getSettings: () => SETTINGS,
+		});
+
+		await expect(driver.runOnce(NOW)).resolves.toBeUndefined();
+		expect(dispatch).toHaveBeenCalledOnce();
+	});
+
 	it("skips active channels", async () => {
 		await writeTask("dm_a", "ready", task("in-progress"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);

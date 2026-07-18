@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import type { DingTalkBot, DingTalkEvent } from "../../../src/runtime/dingtalk.js";
+import type { DingTalkBot, DingTalkEvent } from "../../src/runtime/dingtalk.js";
 import { type CapturedDelivery, E2EFakeDingTalkBot } from "./fake-bot.js";
 import { cleanupE2ETestHome, createE2ETestHome, type E2ETestHome } from "./setup.js";
 
@@ -28,7 +28,7 @@ export async function createRuntimeHarness(options?: {
 	const home = options?.home ?? createE2ETestHome({ enableDebug: options?.enableDebug });
 	process.env.PIPICLAW_HOME = home.homeDir;
 
-	const { createRuntimeContext } = await import("../../../src/runtime/bootstrap.js");
+	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
 	const channelId = options?.channelId ?? "dm_e2e_user";
 	const channelDir = join(home.workspaceDir, getChannelDirName(channelId));
 	const fakeBot = new E2EFakeDingTalkBot();

@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseTaskFrontmatter } from "../../src/shared/task-ledger.js";
-import { createRuntimeHarness, type E2ERuntimeHarness } from "./helpers/runtime-harness.js";
-import { canRunE2E, getE2ESkipReason } from "./helpers/setup.js";
+import { createRuntimeHarness, type E2ERuntimeHarness } from "../support/runtime-harness.js";
+import { canRunE2E, getE2ESkipReason } from "../support/setup.js";
 
 const describeE2E = canRunE2E() ? describe : describe.skip;
 
