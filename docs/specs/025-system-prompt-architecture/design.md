@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | Phase 1–3 代码完成；Phase 0 行为 eval 与 DoD 11/12 待补；Phase 4 未启动 |
+| 状态 | Phase 1–3 代码完成；Phase 0 behavior-eval harness 与首个 baseline 已建立；DoD 11 的 prompt A/B 尚待候选变更，Phase 4 未启动 |
 | 日期 | 2026-07-12 |
 | 入口 | `src/agent/prompt/`（builder / sections / resources / manifest / extension） |
 | 主要依赖 | `@earendil-works/pi-coding-agent@0.80.3` |
@@ -24,7 +24,7 @@ Phase 1–3 已落地，代码入口 `src/agent/prompt/`：
 与本文的偏差（有意，这些是尚未闭合的口子，不要当成已完成）：
 
 - **总预算不含 skills。** `SOFT/HARD_TOTAL_BUDGET_CHARS` 与 `SHRINK_ORDER` 只覆盖 Pipiclaw 自有 section；`<available_skills>` 由 pi 渲染在其后，且 pi 用同一份 `Skill[]` 支撑 `/skill:name`，裁剪 prompt 就会删掉命令（§6.10）。实现按 §8.1 只给 warning：skills 估算超过 6,000 字符时 builder 产出 `skills` 诊断并在 `/context` 显示估算体量。**实际发出的 prompt 可以超过 32k 硬上限**，超出量等于 skills 目录大小。真正的硬预算等 pi 提供 formatter seam。
-- **Phase 0 行为 eval 与 A/B baseline 未建立。** DoD 第 11、12 条未达成；`/context` + fingerprint 日志 + 用量账本的 cacheRead/cacheWrite 是其观测入口。因此“去 pi base”与“内容重组”两个变量目前无法归因——在补 eval 之前不要再做大的文案删改。
+- **Phase 0 behavior eval 已建立，但 prompt A/B 尚未运行。** 首个 93-trial baseline 记录了 fingerprint、observed model、cache/token 与 latency；DoD 第 11 条仍需候选 prompt run 才能比较，“去 pi base”与“内容重组”两个变量目前仍不可归因。
 - **跨日 cache 会整块 miss。** pi 把 date/cwd 追加在 system prompt 内部，而 provider（Anthropic 适配器）把整个 system prompt 作为一个 text block 打一个 `cache_control`。日期一变，整块（Pipiclaw sections + skills）都要重算。影响有限（cache TTL 远小于一天，只有跨零点的活跃会话多付一次 cache write），彻底修复需要把 date 移进 turn envelope，也就是要拿到完整 renderer seam。`build.fingerprint` 只覆盖 Pipiclaw 自有部分，**不是** provider 缓存的那个串；`/context` 与 `last_prompt.json` 的 `finalPromptSha256` 才是。
 - §6 的文案目标未完全兑现：实测 identity 701 / tasks 923 / playbooks 1,782 字符，均在硬 `maxChars` 内但高于 §6.2/§6.6/§6.8 的目标区间。全套工具下 Pipiclaw 自有文本约 7.1k 字符 / ~1.8k tokens。再压缩属于内容改动，等 Phase 0 eval。
 - playbook description 上限 180 字符由渲染时裁剪（并已把三条超长 description 改短），不在 frontmatter 解析时报错。

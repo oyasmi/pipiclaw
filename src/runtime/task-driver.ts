@@ -133,7 +133,8 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 			`[TASK_DRIVER:${entry.id}] Resume task ${entry.id}. ${capsule}${repair} ` +
 			`Open tasks/${entry.id}.md and read ${join(PLAYBOOKS_DIR, "task-driving.md")} before acting. ` +
 			"Advance the next concrete step under the task's current control, acceptance, approval, and verification state. " +
-			`If complete or waiting, use the matching task_manage lifecycle/checkpoint action from the playbook.${verificationInstruction}`,
+			`If complete or waiting, use the matching task_manage lifecycle/checkpoint action from the playbook.${verificationInstruction} ` +
+			"If the task explicitly says there is no change and no tool action is needed, do not call task_manage; respond with exactly [SILENT]. Otherwise, if this wake produces no user-visible change or result, respond with exactly [SILENT].",
 		ts: String(nowMs),
 		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",

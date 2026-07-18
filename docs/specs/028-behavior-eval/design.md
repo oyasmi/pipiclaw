@@ -2,11 +2,11 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | DRAFT v2（2026-07-18 修订：吸收外部评审五项 P1——门禁正交化、trial 子进程隔离、五类持久化契约、gates/baseline 分离、真实 driver 路径） |
+| 状态 | IMPLEMENTED v2（2026-07-18：harness、31 cases、首个 93-trial baseline 已落地；S-net case 已收窄到 web_fetch 并晋升 required；human-review calibration 等长期运营项待积累 verdict） |
 | 日期 | 2026-07-18 |
 | 来源 | `docs/refer/pipiclaw-deep-review-2026-07.md` P0-3；025 DoD #11/#12；026 DoD #11 |
 | 前置 | 004 e2e-test（harness 基座）、016 结构化日志与用量账本（指标出口） |
-| 关联实现 | `evals/`（新增）、`test/e2e/helpers/`、`src/runtime/bootstrap.ts`、`src/runtime/task-driver.ts`、`src/usage/ledger.ts`、`src/security/logger.ts` |
+| 关联实现 | `evals/`（新增）、`test/support/`、`src/runtime/bootstrap.ts`、`src/runtime/task-driver.ts`、`src/usage/ledger.ts`、`src/security/logger.ts` |
 
 ## 问题
 
@@ -410,13 +410,13 @@ capability suite 随后续 spec（P0-1、P1-3 等）按需增补，不单独立 
 对齐评审 P0-3 完成标准，逐条可验：
 
 1. RunManifest / CaseDescriptor / TraceEvent / OutcomeSnapshot / GradeResult 五类契约全部版本化落盘；case 源码或 fixture 变化必然反映为 caseHash 变化（有测试）；
-2. 代码 grader、模型 grader、人工抽查（human-review.jsonl + 校准一致率）三者齐备且各有至少一条 case 在用；grader 执行错误产出 `invalid` 而非污染 passRate，invalid 超阈 → exit 2；
+2. 代码 grader、模型 grader、人工抽查 artifact（human-review.jsonl + 校准报告）三者机制齐备且各有至少一条 case 在用；首个 baseline 已生成抽查队列，校准 verdict 待人工录入；grader 执行错误产出 `invalid` 而非污染 passRate，invalid 超阈 → exit 2；
 3. 跨 trial 无进程状态泄漏：连续两个 trial 各自 home 的 usage 账本互不串写（有专项 case）；硬超时能可靠终止失控 trial；
 4. `EVAL_SUITE=regression EVAL_TRIALS=1 npm run eval` 可在 CI 或周期任务运行，凭据缺失干净 skip，退出码语义固定（0/1/2）；
 5. gates 与 baseline 分离可用：改一处 prompt 跑 smoke，`eval:diff` 输出逐 case delta 与运行条件对照；晋升 baseline 的流程不可能改动 gates.json（有测试）；
 6. 标 ⚙ 的 case 在 trace 中可见真实 TaskDriver dispatch 证据，缺失则 case 记 `invalid`；
 7. S-approval-01 以 quarantine 状态存在并在报告首屏呈现，full run 出口不因它变红——体系能承载"已知缺陷的量化"而非只报喜；
-8. 一份真实 full run 的 report 入 `docs/refer/` 并晋升为首个 baseline，release note 从此可引用能力 delta；results 归档经凭据扫描；
+8. 一份真实 full run 的 report 已入 `docs/refer/behavior-eval-baseline-2026-07-18.md` 并晋升为首个 baseline，release note 可引用能力 delta；results 归档经凭据扫描；
 9. 025 DoD #11/#12 与 026 DoD #11 的挂起项可以开始回填。
 
 ## harness 自身的测试重点

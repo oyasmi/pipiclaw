@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "runId": "2026-07-18T10-06-46-544Z-cpkhq5",
+  "startedAt": "2026-07-18T10:06:46.545Z",
+  "gitSha": "8843d0c2bb55fb8a57eef591d6bb4f822edff69c",
+  "gitDirtyDiffHash": "f2aecf60975333c02c883928205d86f33b9fea692526b6e9f5f79350a9ae5a09",
+  "packageVersion": "0.8.8-beta.2",
+  "lockfileHash": "ce55b06f3a1fdd584bd0512f4b4c551f67c0420b435adc16c0e7f8c09f68ee0b",
+  "harnessSchemaVersions": {
+    "RunManifest": 1,
+    "CaseDescriptor": 1,
+    "TraceEvent": 1,
+    "OutcomeSnapshot": 1,
+    "GradeResult": 1,
+    "TrialRecord": 2
+  },
+  "configuredModel": "claude-sonnet-4-5",
+  "settingsHash": "9c620c839bcbd5ea14da27686b17e007f80657fd73d924322eda076f08554ae9",
+  "toolsConfigHash": "3886eec147c96edd92fe2f63b564330e5b2bcacae45e2746aca1845121becb31",
+  "securityConfigHash": "4c11f9cff39cb0ca73f6d6483dc64dce931196f6878fb8879e0a75455c12ccbc",
+  "judgeModel": "claude-sonnet-4-5"
+}

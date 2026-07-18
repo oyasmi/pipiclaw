@@ -173,6 +173,7 @@ if (process.env.PROBE_HANG === "1") {
   setInterval(() => {}, 1000);
 } else {
   process.stdout.write(JSON.stringify({ protocol: 1, type: "complete", observedModel: "probe" }) + "\\n");
+  if (process.env.PROBE_COMPLETE_CHILD === "1") spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "inherit" });
 }
 `,
 		);
@@ -199,6 +200,19 @@ if (process.env.PROBE_HANG === "1") {
 		).resolves.toMatchObject({ kind: "complete", observedModel: "probe" });
 		expect(readFileSync(join(firstHome, "state/usage/probe"), "utf8")).toBe(firstHome);
 		expect(readFileSync(join(secondHome, "state/usage/probe"), "utf8")).toBe(secondHome);
+
+		const previousCompleteChild = process.env.PROBE_COMPLETE_CHILD;
+		process.env.PROBE_COMPLETE_CHILD = "1";
+		const completedWithChildAt = Date.now();
+		try {
+			await expect(
+				runWorkerSegment({ ...common, homeDir: firstHome, deadlineMs: Date.now() + 10_000 }),
+			).resolves.toMatchObject({ kind: "complete", observedModel: "probe" });
+		} finally {
+			if (previousCompleteChild === undefined) delete process.env.PROBE_COMPLETE_CHILD;
+			else process.env.PROBE_COMPLETE_CHILD = previousCompleteChild;
+		}
+		expect(Date.now() - completedWithChildAt).toBeLessThan(3_500);
 
 		const previous = process.env.PROBE_HANG;
 		process.env.PROBE_HANG = "1";

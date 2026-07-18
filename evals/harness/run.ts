@@ -416,7 +416,21 @@ export async function runWorkerSegment(options: {
 					expectedKill = true;
 					setTimeout(() => killWorkerTree("SIGKILL"), options.segment.delayMs).unref();
 				}
-			} else if (message.type === "complete") complete = message;
+			} else if (message.type === "complete") {
+				complete = message;
+				if (budgetKill || expectedKill) return;
+				// A worker can leave descendants holding the inherited stdout/stderr pipes
+				// open after it has emitted the protocol completion message. The result is
+				// already complete at this point, so resolve immediately and reap the
+				// detached process group instead of waiting forever for pipe close.
+				finish({
+					kind: "complete",
+					observedModel: complete.observedModel,
+					promptFingerprint: complete.promptFingerprint,
+				});
+				killWorkerTree("SIGTERM");
+				setTimeout(() => killWorkerTree("SIGKILL"), KILL_GRACE_MS).unref();
+			}
 		};
 		child.stdout.setEncoding("utf8");
 		child.stdout.on("data", (chunk: string) => {
