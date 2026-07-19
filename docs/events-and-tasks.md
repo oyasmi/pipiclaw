@@ -421,9 +421,9 @@ frontmatter 字段：
 - **关系**：`parent` 表示父任务，`dependsOn` 中的任务必须 done 才能运行/收尾；创建和 set 会拒绝缺失关系、自依赖和环。父任务也不能在仍有未完成 child 时 done。
 - **隔离**：`isolation: worktree` 表示写密集型子任务应交给 `subagent` 的同名隔离模式；runtime 自动把 path/branch 记录到 control，父代理负责 review、merge 与 cleanup（见 [sub-agents.md](./sub-agents.md)）。
 - **副作用**：`sideEffects: external` 自动进入 required；agent 不能自授予。用户审阅拟执行动作后，直接发送 `/tasks approve <id>`，runtime 记录 approver/时间与 task body hash 才变为 granted；后续 progress 或正文变化会要求重新授权。
-- **验收**：新任务默认 `verification.mode: independent`。实现者先 `candidate`，checker-only 回合调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId；task 文件一旦继续 progress，PASS 立即失效。
+- **验收**：新任务默认 `verification.mode: independent`。实现者先 `candidate`，checker-only 回合调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId。PASS 绑定 task 的**契约段**（Goal/DoD/Manual/Verification 及勾选状态，不含 Current Cycle/History）：记日志不失效，改契约才失效。
 
-当 independent 与 external 同时存在时，先验收待执行动作得到 PASS，再用 `task_manage set wake=...`（停留在 `verifying` 车道，仅改 wake）等待 `/tasks approve`；停留在 verifying 时 `set` 不改正文也不换状态，可保留 PASS——**离开 verifying 的 `set` 会作废验收**。获批后执行并直接 done。不要在 PASS 后 progress，也不要把"已经发布"写成 candidate 前必须勾选的 DoD；外部执行结果由 approval audit 和 done evidence 收口。
+当 independent 与 external 同时存在时，先验收待执行动作得到 PASS，再用 `task_manage set wake=...`（停留在 `verifying` 车道，仅改 wake）等待 `/tasks approve`；只改 wake、不换状态可保留 PASS——**离开 verifying 的 `set` 会作废验收**。获批后执行并直接 done。契约段与 approval 都绑定同一份契约 hash，日志不会误伤；不要把"已经发布"写成 candidate 前必须勾选的 DoD；外部执行结果由 approval audit 和 done evidence 收口。
 
 ### Frontmatter 契约（单一事实源）
 
@@ -493,6 +493,7 @@ task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token
 - channel 正在运行时不重复入队；
 - 上一轮修改了 task 文件，最早 5 分钟后继续下一轮；
 - 上一轮没有留下任何台账变化，退避 60 分钟再重试；
+- **连续 3 次唤醒都没有可见进展**（fingerprint 未变，含 silent），治理器暂停任务（`paused` + `pausedBy: "governor"`）并通知用户——任何唤醒循环要么推进文件，要么在 3 × 退避间隔内被叫停上报，不会无限烧钱。台账一变即清零；计数在内存，重启后重新累计；
 - 每个 tick 全局最多派发 4 个 channel，并轮转起点防止饥饿。
 
 每次受治理唤醒会累计 attempt；回合完成后 runtime 把 token、cost、wall time 回写。等待中的依赖不会触发 agent，也不会消耗 attempt。缺失、cancelled 或被治理器暂停（`paused` + `pausedBy: "governor"`）的依赖属于 terminal failure，依赖方会一起被治理器暂停并给出恢复说明。

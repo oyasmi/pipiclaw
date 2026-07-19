@@ -58,6 +58,7 @@ import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
 import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";
+import { migrateLegacyTaskScheduleEvents } from "./task-migration.js";
 import { DEFAULT_AGENTS, DEFAULT_SOUL } from "./workspace-templates.js";
 
 export interface BootstrapPaths {
@@ -1075,6 +1076,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	}
 
 	if (startServices) {
+		// One-time close of the 027 migration window: fold any residual legacy `.schedule`
+		// events into task frontmatter before the driver relies on frontmatter as the only cadence.
+		void migrateLegacyTaskScheduleEvents(options.paths.workspaceDir);
 		eventsWatcher.start();
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();

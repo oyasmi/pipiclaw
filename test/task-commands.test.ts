@@ -168,7 +168,9 @@ describe("handleTasksCommand", () => {
 		await writeFile(join(tasksDir, "publish.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
 		await run("approve publish");
 		const approved = await readFile(join(tasksDir, "publish.md"), "utf-8");
-		await writeFile(join(tasksDir, "publish.md"), `${approved}\nChanged proposal.\n`);
+		// D4: approval binds to the contract segment, so a change to the Goal (not a Current Cycle
+		// log line) is what invalidates it.
+		await writeFile(join(tasksDir, "publish.md"), approved.replace("Do the work.", "Do something else."));
 		expect(await run("doctor")).toContain("changed after external-action approval");
 	});
 
@@ -257,28 +259,12 @@ describe("handleTasksCommand", () => {
 			at: "2026-07-08T20:00:00+08:00",
 		});
 
+		// D6: the legacy `.checkin` migration prompt is gone; a checkin event on an active task is
+		// no longer flagged, but the general orphan/archived-task event checks still fire.
 		const out = await run("doctor");
-		expect(out).toContain("legacy task checkin");
-		expect(out).toContain("wake does not match");
 		expect(out).toContain("points to archived task old");
 		expect(out).toContain("points to missing task ghost");
 		expect(out).toContain("Next step:");
-	});
-
-	it("doctor flags a legacy .schedule event as a migration item to fold into frontmatter", async () => {
-		await writeFile(
-			join(tasksDir, "weekly.md"),
-			doc(`status: done\nwake: ${FUTURE}\nschedule: 0 9 * * 1`, STANDARD_BODY),
-		);
-		await writeEvent("task.dm_1.weekly.schedule", {
-			type: "periodic",
-			channelId,
-			text: "推进任务 weekly",
-			schedule: "0 9 * * 1",
-		});
-		const out = await run("doctor");
-		expect(out).toContain("legacy task .schedule event");
-		expect(out).toContain("Fold its cron");
 	});
 
 	it("doctor accepts a native recurring task with no schedule event and no recurrence pairing issue", async () => {

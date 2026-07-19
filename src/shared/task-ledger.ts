@@ -86,6 +86,26 @@ export function taskBody(content: string): string {
 	return after === -1 ? "" : content.slice(after + 1);
 }
 
+/**
+ * The task's *contract* segment: the body up to (excluding) the "Current Cycle" heading —
+ * i.e. the H1 title, Goal, DoD (with its checkbox state), Manual and Verification (spec 029, D4).
+ *
+ * Verification PASS and external approval bind to this segment, not the whole body, so routine
+ * `progress` notes (Current Cycle) and appended History/Completion Evidence never invalidate a
+ * PASS or approval — only a change to what the task promises to do and how it is checked does.
+ * A body without a Current Cycle heading (non-standard) falls back to the whole body.
+ */
+export function taskContractSegment(body: string): string {
+	const lines = body.split("\n");
+	for (let index = 0; index < lines.length; index++) {
+		const match = /^#{1,6}\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (match && matchesTaskSectionTitle(match[1] ?? "", ["Current Cycle", "当前周期"])) {
+			return lines.slice(0, index).join("\n").replace(/\s+$/, "");
+		}
+	}
+	return body;
+}
+
 /** Parse the leading `---` frontmatter block into the three known fields. */
 export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 	if (!content.startsWith("---")) return { readable: false };

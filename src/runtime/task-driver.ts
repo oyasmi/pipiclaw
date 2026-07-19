@@ -35,12 +35,16 @@ interface DispatchAttempt {
 	fingerprint: string;
 	atMs: number;
 	accepted: boolean;
+	/** Consecutive accepted wakes that ended with the ledger fingerprint unchanged (spec 029, D5). */
+	futileCount: number;
 }
 
 /** Short debounce so a burst of nudges collapses into a single rescan. */
 const NUDGE_DEBOUNCE_MS = 50;
 /** Never schedule a scan closer than this, so near-now horizons cannot spin the loop. */
 const MIN_SLEEP_MS = 250;
+/** Consecutive no-progress wakes before the governor pauses a task (spec 029, D5). */
+const FUTILE_WAKE_LIMIT = 3;
 const CHANNEL_ID_PATTERN = /^(dm|group)_[A-Za-z0-9._:-]+$/;
 const TERMINAL_STATUSES = TERMINAL_TASK_STATUSES;
 
@@ -421,7 +425,29 @@ export class TaskDriver {
 
 				const key = attemptKey(channelId, entry.id);
 				let fingerprint = await taskFingerprint(channelDir, entry);
-				if (!isEligible(this.attempts.get(key), fingerprint, nowMs, settings)) continue;
+				const previous = this.attempts.get(key);
+				if (!isEligible(previous, fingerprint, nowMs, settings)) continue;
+
+				// D5: a wake that was accepted and left the ledger fingerprint unchanged made no
+				// visible progress. Count consecutive such wakes (a changed fingerprint — including
+				// a progress note or a failure — resets the count); after the limit the governor
+				// pauses the task and notifies the user, so no silent loop burns tokens forever.
+				const futileCount =
+					previous?.accepted && previous.fingerprint === fingerprint ? previous.futileCount + 1 : 0;
+				if (futileCount >= FUTILE_WAKE_LIMIT) {
+					const reason = `task made no visible progress in ${FUTILE_WAKE_LIMIT} consecutive wakes`;
+					const escalationEvent = taskEscalationEvent(channelId, entry, reason, nowMs);
+					const accepted = await this.options.dispatch(escalationEvent);
+					this.observeDispatch(escalationEvent, accepted);
+					if (accepted && (await escalateTask(channelDir, entry.id, reason))) {
+						this.attempts.delete(key);
+						this.lastDispatchedTaskId.set(channelId, entry.id);
+						dispatched++;
+						lastDispatchOffset = offset;
+						log.logWarning(`[${channelId}] Task driver paused ${entry.id} (governor)`, reason);
+					}
+					continue;
+				}
 
 				const claim = entry.frontmatter.control ? await claimTaskAttempt(channelDir, entry.id, now) : undefined;
 				if (claim) {
@@ -431,7 +457,7 @@ export class TaskDriver {
 				const accepted = await this.options.dispatch(event);
 				this.observeDispatch(event, accepted);
 				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim, now);
-				this.attempts.set(key, { fingerprint, atMs: nowMs, accepted });
+				this.attempts.set(key, { fingerprint, atMs: nowMs, accepted, futileCount });
 				this.lastDispatchedTaskId.set(channelId, entry.id);
 				if (accepted) {
 					dispatched++;

@@ -11,7 +11,7 @@ priority: 44
 
 ## 被治理器暂停（paused + pausedBy=governor）
 
-治理器在 deadline、累计预算耗尽或 terminal dependency 时暂停任务（旧称 escalated，现在是 `paused` + `pausedBy=governor`）。先读 Current Cycle 和 stats，判断空转、范围错误、预算过小还是依赖终止。
+治理器在 deadline、累计预算耗尽、terminal dependency，或**连续 3 次唤醒都没有可见进展**（fingerprint 未变，含 silent）时暂停任务（旧称 escalated，现在是 `paused` + `pausedBy=governor`）。先读 Current Cycle 和 stats，判断空转、范围错误、预算过小还是依赖终止。
 
 - 方向错：修 Manual/nextAction、重新拆解或 cancel。
 - 预算确实不足：向用户说明后用 `task_manage set` 调整 budget/deadline，并把 status 设回 active。
@@ -36,7 +36,7 @@ frontmatter 只认开头 `---` 块中的 status/wake/recurrence/control；contro
 
 ## stale gate
 
-PASS 和 external approval 都绑定 task body；PASS 还可能绑定 Git artifact subject。progress、正文编辑或产物变化后 done 会拒绝：重跑 verifier或请用户重新 approve，不绕过。组合流程见 `task-closeout.md`。
+PASS 和 external approval 都绑定 task 的**契约段**（Goal/DoD/Manual/Verification 及勾选状态，不含 Current Cycle/History）；PASS 还可能绑定 Git artifact subject。改契约或产物变化后 done 会拒绝：重跑 verifier 或请用户重新 approve，不绕过。（记 Current Cycle 日志不影响 PASS。）组合流程见 `task-closeout.md`。
 
 ## 事件与重启
 

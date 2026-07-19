@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { isTaskCheckinEvent, isTaskScheduleEvent, parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
+import { parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
 import {
 	extractTaskTitle,
 	missingStandardTaskSections,
@@ -173,15 +173,6 @@ async function readTaskEvents(workspaceDir: string, channelId: string): Promise<
 		events.push(info);
 	}
 	return events;
-}
-
-function eventKey(events: TaskEventInfo[], id: string, use: string): TaskEventInfo | undefined {
-	return events.find((event) => event.id === id && event.use === use);
-}
-
-function isParseableSchedule(events: TaskEventInfo[], id: string): boolean {
-	const schedule = eventKey(events, id, "schedule");
-	return schedule ? isTaskScheduleEvent(schedule) : false;
 }
 
 function validWakeMs(entry: TaskLedgerEntry): number | undefined {
@@ -459,7 +450,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	}
 
 	const now = Date.now();
-	const hostTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 	const entries = await readActiveTasks(tasksDir(options.channelDir), now);
 	const activeIds = new Set(entries.map((entry) => entry.id));
 	const archivedIds = await readArchivedTaskIds(options.channelDir);
@@ -565,8 +555,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			}
 		}
 
-		const legacySchedule = eventKey(events, entry.id, "schedule");
-		const recurring = Boolean(entry.frontmatter.schedule) || isParseableSchedule(events, entry.id);
+		const recurring = Boolean(entry.frontmatter.schedule);
 		if (status === "done" && !recurring) {
 			issues.push(
 				issue(
@@ -574,25 +563,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					`Archive one-shot task ${entry.id}, or add a schedule cron with task_manage set if it is recurring.`,
 				),
 			);
-		}
-
-		// Migration (027): recurrence cadence now lives in the task's `schedule` frontmatter.
-		// A remaining canonical .schedule event should be folded in and deleted.
-		if (legacySchedule && isTaskScheduleEvent(legacySchedule)) {
-			issues.push(
-				issue(
-					`events/${legacySchedule.filename} is a legacy task .schedule event; cadence is now native to tasks/${entry.id}.md.`,
-					`Fold its cron "${legacySchedule.event.schedule}" into the task's schedule frontmatter with task_manage set, then delete events/${legacySchedule.filename}.`,
-				),
-			);
-			if (legacySchedule.event.legacyTimezone && legacySchedule.event.legacyTimezone !== hostTimezone) {
-				issues.push(
-					issue(
-						`events/${legacySchedule.filename} declares timezone ${legacySchedule.event.legacyTimezone}, which differs from the host ${hostTimezone}.`,
-						`Confirm the intended cadence after folding into frontmatter; the cron will run in the host timezone.`,
-					),
-				);
-			}
 		}
 
 		const content = await readActiveTaskContent(options.channelDir, entry.id);
@@ -622,33 +592,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					`Use task_manage set or progress to replace wake with ISO8601, or clear it if the task should continue now.`,
 				),
 			);
-		}
-
-		const checkin = eventKey(events, entry.id, "checkin");
-		if (checkin && isTaskCheckinEvent(checkin)) {
-			issues.push(
-				issue(
-					`events/${checkin.filename} is a legacy task checkin; native wake handling makes it redundant.`,
-					`Delete events/${checkin.filename} and keep the task wake value as the single resume condition.`,
-				),
-			);
-			const wakeMs = validWakeMs(entry);
-			const atMs = new Date(checkin.event.at).getTime();
-			if (wakeMs === undefined) {
-				issues.push(
-					issue(
-						`tasks/${entry.id}.md has a .checkin event but no valid wake value.`,
-						`Set tasks/${entry.id}.md wake to ${checkin.event.at}, or delete the stale .checkin event.`,
-					),
-				);
-			} else if (Number.isFinite(atMs) && Math.abs(atMs - wakeMs) > 60_000) {
-				issues.push(
-					issue(
-						`tasks/${entry.id}.md wake does not match its .checkin event time.`,
-						`Sync tasks/${entry.id}.md wake with events/${checkin.filename} at ${checkin.event.at}.`,
-					),
-				);
-			}
 		}
 	}
 
@@ -710,22 +653,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				issue(
 					`events/${event.filename} points to archived task ${event.id}; closed tasks should have no live events.`,
 					`Delete events/${event.filename}; archived tasks should not wake the agent.`,
-				),
-			);
-		}
-		if (event.use === "schedule" && !isTaskScheduleEvent(event)) {
-			issues.push(
-				issue(
-					`events/${event.filename} is a schedule event but is not periodic.`,
-					`Change events/${event.filename} to type periodic, or rename it away from .schedule.`,
-				),
-			);
-		}
-		if (event.use === "checkin" && !isTaskCheckinEvent(event)) {
-			issues.push(
-				issue(
-					`events/${event.filename} is a checkin event but is not one-shot.`,
-					`Change events/${event.filename} to type one-shot, or rename it away from .checkin.`,
 				),
 			);
 		}

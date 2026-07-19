@@ -27,7 +27,7 @@ priority: 41
 
 以下生命周期动作本身就是原子 checkpoint，不要再追加 progress：`candidate`、`done`、`cancel`。
 
-`verify` 只更新 control、不改正文。若 PASS 后还要等待 external approval，使用 `task_manage set status=waiting wake=<合理时间>`，并向用户请求 `/tasks approve <id>`；不要 progress，因为正文变化会使 PASS 失效。除此之外不要用 set 代替正常进度日志。
+`verify` 只更新 control、不改正文。若 PASS 后还要等待 external approval，使用 `task_manage set wake=<合理时间>` 停留在 `verifying` 车道（只改 wake、不换状态；离开 verifying 会作废 PASS），并向用户请求 `/tasks approve <id>`。PASS 绑定契约段而非日志——记 Current Cycle 日志不会使 PASS 失效，只有改契约（Goal/DoD/Manual/Verification/勾选）才会。除此之外不要用 set 代替正常进度日志。
 
 ## 等待与继续
 

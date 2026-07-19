@@ -10,6 +10,7 @@ import {
 	startTaskCycle,
 	type TaskDocumentFields,
 	taskBody,
+	taskContractSegment,
 } from "../shared/task-ledger.js";
 import { resetTaskControlForCycle, type TaskControl, type TaskOutcome } from "./control.js";
 
@@ -20,8 +21,15 @@ export interface StoredTaskDocument {
 	body: string;
 }
 
+/**
+ * Hash the task's *contract* segment (Goal/DoD/Manual/Verification), not the whole body, so
+ * verification PASS and external approval survive routine Current Cycle / History logging and
+ * only break when the contract itself changes (spec 029, D4). Old attestations that hashed the
+ * whole body naturally fail this check after upgrade and are re-verified — verification should
+ * always reflect current content, so there is no compatibility burden.
+ */
 export function taskBodyHash(body: string): string {
-	return createHash("sha256").update(body).digest("hex");
+	return createHash("sha256").update(taskContractSegment(body)).digest("hex");
 }
 
 export async function readStoredTask(

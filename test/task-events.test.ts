@@ -1,18 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-	isTaskCheckinEvent,
-	isTaskScheduleEvent,
-	parseTaskEventName,
-	taskEventPrefix,
-	taskScheduleEventFilename,
-	taskScheduleEventName,
-} from "../src/shared/task-events.js";
+import { parseTaskEventName, taskEventPrefix } from "../src/shared/task-events.js";
 
 describe("task event naming helpers", () => {
-	it("builds task-owned event names", () => {
+	it("builds task-owned event prefixes", () => {
+		expect(taskEventPrefix("dm_1")).toBe("task.dm_1.");
 		expect(taskEventPrefix("dm_1", "weekly")).toBe("task.dm_1.weekly.");
-		expect(taskScheduleEventName("dm_1", "weekly")).toBe("task.dm_1.weekly.schedule");
-		expect(taskScheduleEventFilename("dm_1", "weekly")).toBe("task.dm_1.weekly.schedule.json");
 	});
 
 	it("parses task-owned event names for the current channel only", () => {
@@ -23,12 +15,5 @@ describe("task event naming helpers", () => {
 		});
 		expect(parseTaskEventName("task.dm_2.weekly.checkin", "dm_1")).toBeUndefined();
 		expect(parseTaskEventName("task.dm_1.bad", "dm_1")).toBeUndefined();
-	});
-
-	it("classifies schedule and checkin events by use and type", () => {
-		expect(isTaskScheduleEvent({ use: "schedule", event: { type: "periodic" } })).toBe(true);
-		expect(isTaskScheduleEvent({ use: "sensor", event: { type: "periodic" } })).toBe(false);
-		expect(isTaskCheckinEvent({ use: "checkin", event: { type: "one-shot" } })).toBe(true);
-		expect(isTaskCheckinEvent({ use: "checkin", event: { type: "periodic" } })).toBe(false);
 	});
 });

@@ -13,28 +13,29 @@ priority: 42
 2. 全部勾完，调用 `task_manage candidate`；该动作追加候选 note、置 verifying、清 wake，本身就是本回合 checkpoint。
 3. checker-only 回合委派全新 subagent：`purpose: verify`、`taskId: <id>`，明确逐项检查方法。
 4. verifier 没有 write/edit；bash 只运行明确的非变更检查。Git checkout 上 runtime 会比较前后状态，变化会使 attestation 无效；非 Git 目录没有完整变更检测，不能把 bash 当成结构性只读沙箱。结尾必须是 `VERDICT: PASS` 或 `VERDICT: FAIL`。
-5. 主回合以 runId 调 `task_manage verify`。attestation 绑定 task body hash；Git checkout 上还绑定 HEAD/staged/unstaged/untracked artifact subject。
+5. 主回合以 runId 调 `task_manage verify`。attestation 绑定 task 的**契约段** hash（Goal/DoD/Manual/Verification，含勾选状态，不含 Current Cycle/History）；Git checkout 上还绑定 HEAD/staged/unstaged/untracked artifact subject。
 
 FAIL 后用 progress 记录失败证据、status 回 active，修复后重新 candidate。不要让 verifier 顺手修实现。
 
+**PASS 绑定契约、不绑日志**：PASS 之后照常 `progress` 记 Current Cycle 日志不会使 PASS 失效；只有改动契约段（Goal/DoD/Manual/Verification 或勾选状态）才会失效。改了契约就诚实重跑验收。
+
 ## 外部副作用
 
-`sideEffects: external` 要求用户通过 `/tasks approve <id>` 授权；agent 不能自授予。授权绑定 task body hash，批准后不要再 progress 或编辑正文。
+`sideEffects: external` 要求用户通过 `/tasks approve <id>` 授权；agent 不能自授予。授权同样绑定契约段 hash：批准后照常记日志无妨，但改动契约正文会要求重新授权。
 
 只做 external、无需 independent verification 时：准备动作 → progress 置 waiting 并请求审批 → 用户 approve → 执行动作 → 直接 done。
 
-## independent + external 的正确组合
+## independent + external 同时存在
 
-这两个门都存在时，严格按以下顺序，避免 hash 相互失效：
+契约-绑定的 hash 让两个门不再相互误伤，日常顺序很简单：
 
 1. 完成实现、预演外部动作、勾选 acceptance items。
 2. candidate → verifier → `task_manage verify` 得到 PASS。
-3. 不改正文；用 `task_manage set status=waiting wake=<合理时间>` 等待，并请求用户 `/tasks approve <id>`。这里不能 progress。
-4. 用户批准后，driver 在 wake 到期接续；再次确认 PASS、approvalBodyHash 和当前产物仍新鲜。
+3. 等待审批：用 `task_manage set wake=<合理时间>` 保留在 `verifying` 车道（**只改 wake，不换状态**——离开 verifying 的 set 会作废 PASS），并请求用户 `/tasks approve <id>`。此时记日志无妨。
+4. 用户批准后，driver 在 wake 到期接续；确认 PASS、approvalBodyHash 与当前产物仍新鲜。
 5. 执行已批准的外部动作，然后直接 done；结果写入 done 的 summary/evidence。
 
-不要在 candidate 前审批（candidate 会改正文），也不要 PASS 后 progress（会使 PASS 失效）。批准范围或实现改变时，诚实重走相应门禁。
-如果 wake 到期但用户尚未批准，只用 set 调整 waiting/wake 并提醒，不写 progress note。
+改动契约段或批准范围时，诚实重走相应门禁。
 
 建档时 acceptance items 应描述外部动作的**准备质量**（内容、目标、参数、预演、回滚方案），而不是要求在 candidate 前已经发布/发送。最终外部结果由审批记录和 done evidence 证明；否则“先执行才能勾选”会与“先验收、审批才能执行”形成循环。
 

@@ -430,8 +430,9 @@ describe("manageTask", () => {
 			});
 
 			// `set` that stays in the verifying lane changes only frontmatter, so it can schedule
-			// approval waiting without invalidating the body-bound PASS. A progress note — or a set
-			// that leaves `verifying` — would invalidate it (D3).
+			// approval waiting without invalidating the PASS. A set that *leaves* `verifying` would
+			// invalidate it (D3); the PASS binds to the contract segment, so Current Cycle logging
+			// no longer breaks it (D4).
 			await manageTask(options, {
 				action: "set",
 				id: "verified-publish",
@@ -662,8 +663,10 @@ describe("manageTask", () => {
 			expect(archived).toContain("- Evidence: npm test -- login passed.");
 		});
 
-		it("keeps a periodic task in place and preserves its schedule event", async () => {
-			await writeTask("weekly", "status: in-progress\nrecurrence: 每周一", "# Weekly");
+		// D6: recurrence lives only in `schedule` frontmatter; close-out deletes every task-owned
+		// event (including a stray `.schedule`), since the driver reopens cycles from frontmatter.
+		it("keeps a frontmatter-recurring task in place and deletes all its task-owned events", async () => {
+			await writeTask("weekly", "status: in-progress\nschedule: 0 9 * * 1\nrecurrence: 每周一", "# Weekly");
 			await writeEvent("task.dm_1.weekly.schedule", {
 				type: "periodic",
 				channelId: CHANNEL_ID,
@@ -694,12 +697,13 @@ describe("manageTask", () => {
 			});
 			expect(result.archived).toBe(false);
 			expect(existsSync(join(tasksDir, "weekly.md"))).toBe(true);
-			// schedule survives; lifecycle check-ins (one-shot or periodic sensors) are cleaned up.
-			expect(existsSync(join(eventsDir, "task.dm_1.weekly.schedule.json"))).toBe(true);
+			// Every task-owned event is cleaned up; the cadence lives on in frontmatter only.
+			expect(existsSync(join(eventsDir, "task.dm_1.weekly.schedule.json"))).toBe(false);
 			expect(existsSync(join(eventsDir, "task.dm_1.weekly.checkin.json"))).toBe(false);
 			expect(existsSync(join(eventsDir, "task.dm_1.weekly.sensor.json"))).toBe(false);
 			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
 			expect(onDisk).toContain("status: done");
+			expect(onDisk).toContain("schedule: 0 9 * * 1");
 			expect(onDisk).toContain("- Summary: Published this week's report.");
 			expect(onDisk).toContain("- Evidence: User confirmed the report was posted.");
 			expect(onDisk).toContain("- Residual risk: Next week still needs data source X checked.");
@@ -731,6 +735,50 @@ describe("manageTask", () => {
 			expect(onDisk).toContain("schedule: 30 9 * * 1");
 			// wake is the next Monday 09:30 occurrence (host timezone).
 			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
+		});
+	});
+
+	describe("contract-bound hash (D4)", () => {
+		async function passIndependent(id: string): Promise<void> {
+			await manageTask(options, {
+				action: "create",
+				id,
+				title: id,
+				goal: "Ship a checked result",
+				dod: "- [x] Result exists",
+				control: { verificationMode: "independent" },
+			});
+			await writeVerificationAttestation(channelDir, {
+				runId: `${id}-run`,
+				taskId: id,
+				verdict: "pass",
+				agent: "reviewer",
+				model: "test/model",
+				checkedAt: new Date().toISOString(),
+				evidence: "Deterministic check passed.",
+				workspaceChanged: false,
+				output: "VERDICT: PASS",
+			});
+			await manageTask(options, { action: "verify", id, verifierRunId: `${id}-run` });
+		}
+
+		it("keeps an independent PASS alive across a Current Cycle progress note", async () => {
+			await passIndependent("logged");
+			await manageTask(options, { action: "progress", id: "logged", note: "Recorded a routine checkpoint." });
+			await expect(
+				manageTask(options, { action: "done", id: "logged", summary: "Done", evidence: "Run logged-run passed." }),
+			).resolves.toMatchObject({ status: "done" });
+		});
+
+		it("invalidates the PASS when the contract (a DoD checkbox) changes", async () => {
+			await passIndependent("edited");
+			const path = join(tasksDir, "edited.md");
+			// A contract edit via write/edit: uncheck the DoD item. done must now reject the stale PASS.
+			const mutated = (await readFile(path, "utf-8")).replace("- [x] Result exists", "- [ ] Result exists");
+			await writeFile(path, mutated);
+			await expect(
+				manageTask(options, { action: "done", id: "edited", summary: "Done", evidence: "x" }),
+			).rejects.toThrow(/unchecked acceptance items|changed after its independent PASS/);
 		});
 	});
 

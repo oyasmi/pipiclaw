@@ -235,6 +235,51 @@ describe("TaskDriver", () => {
 		expect(dispatch).toHaveBeenCalledTimes(2);
 	});
 
+	// D5: any wake loop must either advance the ledger or be stopped and reported.
+	it("pauses a task via the governor after three consecutive no-progress wakes", async () => {
+		await writeTask("dm_a", "stuck", governedTask("active"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+		// Three accepted wakes, each a full stalled interval apart, with the ledger never changing.
+		for (let i = 0; i < 3; i++) {
+			await driver.runOnce(new Date(NOW.getTime() + i * 61 * 60_000));
+		}
+		expect(dispatch).toHaveBeenCalledTimes(3);
+		// The fourth eligible scan escalates instead of dispatching another futile wake.
+		await driver.runOnce(new Date(NOW.getTime() + 3 * 61 * 60_000));
+		const last = dispatch.mock.calls.at(-1)?.[0].text ?? "";
+		expect(last).toContain("[TASK_ESCALATION:stuck]");
+		expect(last).toContain("no visible progress in 3 consecutive wakes");
+		const onDisk = await readFile(join(workspaceDir, "dm_a", "tasks", "stuck.md"), "utf-8");
+		expect(onDisk).toContain("status: paused");
+		expect(onDisk).toContain('"pausedBy":"governor"');
+	});
+
+	it("resets the no-progress count when the ledger changes between wakes", async () => {
+		await writeTask("dm_a", "work", task("active", undefined, "note-a"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+		// Two futile wakes, then a ledger change, then two more futile wakes: never reaches three in a row.
+		await driver.runOnce(new Date(NOW.getTime() + 0 * 61 * 60_000));
+		await driver.runOnce(new Date(NOW.getTime() + 1 * 61 * 60_000));
+		await writeTask("dm_a", "work", task("active", undefined, "note-b"));
+		await driver.runOnce(new Date(NOW.getTime() + 2 * 61 * 60_000));
+		await driver.runOnce(new Date(NOW.getTime() + 3 * 61 * 60_000));
+		expect(dispatch.mock.calls.every((call) => call[0].text.includes("[TASK_DRIVER:work]"))).toBe(true);
+		const onDisk = await readFile(join(workspaceDir, "dm_a", "tasks", "work.md"), "utf-8");
+		expect(onDisk).toContain("status: active");
+	});
+
 	it("does not mistake governed usage accounting for semantic task progress", async () => {
 		await writeTask("dm_a", "work", governedTask("in-progress"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
