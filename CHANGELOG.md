@@ -4,6 +4,22 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.9-beta.1] - 2026-07-19
+
+### Added
+
+- Added the spec 029 task-lifecycle model with six canonical task statuses, a shared transition table, runtime-owned recurring cycle starts, and focused `task_manage` modules for creation, lifecycle, verification, and shared task operations.
+- Added a task-governor safeguard that pauses a task after three consecutive accepted wakes with no visible ledger progress, records the escalation, and notifies the user instead of allowing a silent token loop.
+
+### Changed
+
+- Task verification and external approval now bind to one canonical contract hash covering the task's Goal, DoD, Manual, Verification, and completion state. Progress notes no longer invalidate a PASS; changes to the contract still require fresh verification and approval.
+- Recurring-task cadence is now fully native to task frontmatter: cycle starts dispatch an ordinary task-driver wake, legacy schedule/check-in dual-read behavior is removed after migration, and canonical files are rewritten from legacy statuses on read.
+
+### Fixed
+
+- Fixed recurring tasks created with a schedule but no explicit wake being dispatched immediately. Their first cycle is now scheduled at the next cron occurrence, matching subsequent cycles.
+
 ## [0.8.8] - 2026-07-18
 
 ### Added
