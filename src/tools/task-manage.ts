@@ -308,6 +308,17 @@ function renderTaskSkeleton(request: TaskManageRequest): { fields: TaskFields; b
 	const mode = request.control?.verificationMode ?? "evidence";
 	const control = applyTaskControlPatch(createDefaultTaskControl(mode), request.control ?? {});
 	const fields = applySet({ status: normalizeCreateStatus(request.status), control }, request);
+	// First-cycle scheduling. A recurring task created without an explicit wake follows cron
+	// semantics: its first run is deferred to the next scheduled occurrence, not fired now.
+	// Without this the task is `open` + no `wake` → immediately actionable, so the driver resumes
+	// it the instant it is created (ignoring the schedule) and re-dispatches it every backoff
+	// interval; an agent expecting a scheduled wake then idles through those dispatches. Seeding
+	// the first wake here mirrors what `done` does for every subsequent cycle. Only a freshly
+	// opened task with no caller-supplied wake is seeded — an explicit wake (including a past one
+	// for "start now") or a non-open initial status is always honoured verbatim.
+	if (fields.schedule && fields.status === "open" && request.wake === undefined) {
+		fields.wake = nextTaskWake(fields.schedule)?.toISOString();
+	}
 	const body = renderStandardTaskBody({
 		title,
 		goal,
@@ -472,7 +483,7 @@ async function createTask(options: TaskManageToolOptions, request: TaskManageReq
 		id,
 		path: taskPath,
 		status: fields.status,
-		notice: `已创建任务 \`${id}\`（status: ${fields.status}）。`,
+		notice: `已创建任务 \`${id}\`（status: ${fields.status}${fields.wake ? `, 首次唤醒: ${fields.wake}` : ""}）。`,
 	};
 }
 

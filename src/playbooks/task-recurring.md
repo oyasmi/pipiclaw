@@ -21,6 +21,8 @@ task_manage create id=weekly-report title=... goal=... dod=... schedule="30 9 * 
 
 cron 最密每 30 分钟一次，落盘前校验。纯提醒（无产出、无验收）不建 task，用普通 periodic event。
 
+**首次执行遵循 cron 语义**：不显式传 `wake` 时，create 会用 croner 把 `wake` 预约到下一次 occurrence，任务 `open` + 未来 `wake`，到点才由 driver 派发**普通驱动唤醒**（不是 cycle-start，首轮无上一周期可折叠）——像 crontab 一样，创建不等于立刻跑。不要为了"等到点"而空转等待一个 cycle-start：首轮本就不会有。需要立刻开跑就显式传一个当下/过去的 `wake`。
+
 ## 周期运行
 
 done 的周期任务留在原地睡眠：`task_manage done` 会用 croner 算出下一次 occurrence 写入 `wake`，状态是 `done` + 未来的 `wake`。到点时 driver 自动派发一条 cycle-start 唤醒。

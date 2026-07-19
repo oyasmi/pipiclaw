@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
+import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
 import { manageTask, type TaskManageToolOptions } from "../src/tools/task-manage.js";
 
@@ -98,6 +99,44 @@ describe("manageTask", () => {
 					schedule: "*/5 * * * *",
 				}),
 			).rejects.toThrow(/30 minutes/);
+		});
+
+		// A recurring task created without an explicit wake must follow cron semantics: the first
+		// run is deferred to the next occurrence. Otherwise it is `open` + no wake → immediately
+		// actionable, so the driver resumes it at creation time instead of at the scheduled time.
+		it("seeds a recurring task's first wake with the next occurrence when no wake is given", async () => {
+			const result = await manageTask(options, {
+				action: "create",
+				id: "daily-review",
+				title: "Daily Review",
+				goal: "Review every morning.",
+				dod: "- [ ] reviewed",
+				schedule: "41 2 * * *",
+			});
+			const onDisk = await readFile(join(tasksDir, "daily-review.md"), "utf-8");
+			const wake = /wake: (.+)/.exec(onDisk)?.[1];
+			expect(wake).toBeDefined();
+			const expected = nextTaskWake("41 2 * * *");
+			expect(new Date(wake!).getTime()).toBe(expected?.getTime());
+			// Not actionable until the seeded wake, so the driver defers the first run.
+			expect(new Date(wake!).getTime()).toBeGreaterThan(Date.now());
+			expect(result.notice).toContain("首次唤醒");
+		});
+
+		// An explicit wake (including a past one for "start now") is honoured verbatim: the caller,
+		// not cron, decides the first run when they say so.
+		it("honours an explicit wake on a recurring task instead of seeding the next occurrence", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "start-now",
+				title: "Start Now",
+				goal: "Begin immediately, then recur.",
+				dod: "- [ ] done",
+				schedule: "41 2 * * *",
+				wake: "2000-01-01T00:00:00.000Z",
+			});
+			const onDisk = await readFile(join(tasksDir, "start-now.md"), "utf-8");
+			expect(onDisk).toContain("wake: 2000-01-01T00:00:00.000Z");
 		});
 
 		// Independent verification costs an extra dispatch round plus a verifier sub-agent run,
