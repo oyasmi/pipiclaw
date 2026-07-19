@@ -367,7 +367,7 @@ workspace/<channelId>/tasks/
 
 ```markdown
 ---
-status: in-progress
+status: active
 wake: 2026-07-08T14:00:00+08:00
 schedule: 0 9 * * 1
 recurrence: 每周一
@@ -406,7 +406,7 @@ frontmatter 字段：
 
 | 字段 | 必填 | 取值 | 说明 |
 |------|------|------|------|
-| `status` | 是 | `open` / `in-progress` / `awaiting-user` / `blocked` / `verifying` / `paused` / `done` / `cancelled` / `escalated` | paused/cancelled/escalated 不会被 driver 继续；done 一般睡眠，唯有有 `schedule` 的周期任务到点被 driver 开新周期；verifying 进入 checker-only 回合 |
+| `status` | 是 | `active` / `waiting` / `verifying` / `paused` / `done` / `cancelled`（六态，每态唯一 driver 行为） | paused/cancelled 不会被 driver 继续（治理器停止的任务是 `paused` + `control.pausedBy: "governor"`，用户暂停是 `pausedBy: "user"`）；done 一般睡眠，唯有有 `schedule` 的周期任务到点被 driver 开新周期；verifying 进入 checker-only 回合。旧值 `open`/`in-progress`→`active`、`awaiting-user`/`blocked`→`waiting`、`escalated`→`paused(governor)` 在读取层无损映射，写盘即新名 |
 | `wake` | 否 | 带时区的 ISO 8601 | 最早值得再看一眼的时间。缺省 = 随时可推进。周期任务 done 后由 driver 写成下一次 occurrence |
 | `schedule` | 否 | 五段 cron | 周期节奏的**唯一真相**，按主机时区解释。存在 = 周期任务。最密每 30 分钟 |
 | `recurrence` | 否 | 自由文本（如 `每周一`） | 仅作标注给人读，无机器语义 |
@@ -417,13 +417,13 @@ frontmatter 字段：
 ### 受治理 control
 
 - **调度**：`priority` 决定 ready task 顺序，`deadline` 是硬截止，`nextAction` 是下一步可执行动作。
-- **预算**：`maxAttempts` 必有；可追加累计 `maxTokens`、`maxCostUsd`、`maxWallTimeMinutes`。driver 每次原生唤醒先 claim attempt，回合结束把主代理与子代理的实际 usage 计回 task。达到任一上限就转为 `escalated`，不再继续烧 token。
+- **预算**：`maxAttempts` 必有；可追加累计 `maxTokens`、`maxCostUsd`、`maxWallTimeMinutes`。driver 每次原生唤醒先 claim attempt，回合结束把主代理与子代理的实际 usage 计回 task。达到任一上限就被治理器暂停（`paused` + `pausedBy: "governor"`），不再继续烧 token。
 - **关系**：`parent` 表示父任务，`dependsOn` 中的任务必须 done 才能运行/收尾；创建和 set 会拒绝缺失关系、自依赖和环。父任务也不能在仍有未完成 child 时 done。
 - **隔离**：`isolation: worktree` 表示写密集型子任务应交给 `subagent` 的同名隔离模式；runtime 自动把 path/branch 记录到 control，父代理负责 review、merge 与 cleanup（见 [sub-agents.md](./sub-agents.md)）。
 - **副作用**：`sideEffects: external` 自动进入 required；agent 不能自授予。用户审阅拟执行动作后，直接发送 `/tasks approve <id>`，runtime 记录 approver/时间与 task body hash 才变为 granted；后续 progress 或正文变化会要求重新授权。
 - **验收**：新任务默认 `verification.mode: independent`。实现者先 `candidate`，checker-only 回合调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId；task 文件一旦继续 progress，PASS 立即失效。
 
-当 independent 与 external 同时存在时，先验收待执行动作得到 PASS，再用 `task_manage set status=awaiting-user wake=...` 等待 `/tasks approve`；`set` 不改正文，可保留 PASS。获批后执行并直接 done。不要在 PASS 后 progress，也不要把"已经发布"写成 candidate 前必须勾选的 DoD；外部执行结果由 approval audit 和 done evidence 收口。
+当 independent 与 external 同时存在时，先验收待执行动作得到 PASS，再用 `task_manage set wake=...`（停留在 `verifying` 车道，仅改 wake）等待 `/tasks approve`；停留在 verifying 时 `set` 不改正文也不换状态，可保留 PASS——**离开 verifying 的 `set` 会作废验收**。获批后执行并直接 done。不要在 PASS 后 progress，也不要把"已经发布"写成 candidate 前必须勾选的 DoD；外部执行结果由 approval audit 和 done evidence 收口。
 
 ### Frontmatter 契约（单一事实源）
 
@@ -433,7 +433,7 @@ frontmatter 字段：
 
 1. **frontmatter 块** = 文件必须以 `---` 开头；块的结束是其后第一个 `\n---`。取二者之间的内容为 frontmatter。不满足（无起始 `---` 或找不到结束 `---`）→ **无可读 frontmatter**。
 2. **字段提取** = 在块内逐行找 `key: value`：以第一个 `:` 切分，键取左侧 `trim()`，值取右侧 `trim()`。不解析嵌套 YAML；只认 status/wake/schedule/recurrence/control 五个平铺键。control 的值是单行 JSON。
-3. **`status`**：`done` / `cancelled` / `escalated` 不 actionable；其余状态按 wake 判定。
+3. **`status`**：`done` / `cancelled` / `paused` 不 actionable；其余状态按 wake 判定。
 4. **`wake`**：解析为时间戳。**缺省、为空、或无法解析 → 视为"随时可推进"（不构成推迟）**；能解析且 `wake > now` → 该任务"未到点"。
 5. **判定：`actionable`（可推进）** = `status` 未关闭 **且**（无有效 `wake` **或** `wake ≤ now`）。driver 在此之前还会对睡眠任务执行零 token 的 deadline/budget/terminal-dependency 检查。
 6. **fail-open**：frontmatter、control 或文件不可读 → 视为 actionable，让 agent/doctor 暴露并修复，而不是静默漏掉。
@@ -445,8 +445,10 @@ frontmatter 字段：
 只有一个状态机：
 
 ```text
-open → in-progress ⇄ awaiting-user / blocked → done
+active ⇄ waiting → (candidate) verifying → done
 ```
+
+六个状态各自映射唯一 driver 行为，非法转移由一张 `action × fromStatus → toStatus` 转移表统一挡下（`src/tasks/transitions.ts`）。`paused` 永不派发（用户暂停或治理器停止）。
 
 一次性和周期性任务的唯一差别，是 **done 之后文件去哪**：
 
@@ -459,15 +461,15 @@ open → in-progress ⇄ awaiting-user / blocked → done
 
 > **`tasks/` 根目录下任何 status ≠ done 的文件，都代表有活要干；有 `schedule` 的 done 文件是睡到下一轮的周期任务。**
 
-周期性任务是**单个文件**：`done` 时 driver 用 croner 算出下一次 occurrence 写入 `wake`；到点后 driver 派发一条 cycle-start 唤醒（这是 driver 唯一会唤醒 `status: done` 的场景）：
+周期性任务是**单个文件**：`done` 时"唯一时间规则"用 croner 算出下一次 occurrence 写入 `wake`；到点后 **runtime 直接开新周期**（这是 driver 唯一会唤醒 `status: done` 的场景，没有 `start-cycle` 动作，也不再派发单独的 cycle-start 事件请模型开周期）：
 
-1. `task_manage done` 记录本轮收尾，算出下一次 `wake`，状态保持 `done`。
-2. `wake` 到点，driver 派发 cycle-start。agent 打开任务，用 `task_manage start-cycle` 把"当前周期"折进"历史"（历史约保留最近 5 轮），开新一节"当前周期"，状态置 `in-progress`，开始干活。
+1. `task_manage done` 记录本轮收尾；写盘时唯一时间规则算出下一次 `wake`，状态保持 `done`。
+2. `wake` 到点，runtime 在一次原子写里把"当前周期"折进"历史"、清空本周期累计的 usage/独立验收/外部授权/worktree 元数据、生成具名 cycleId（`cycle-YYYY-MM-DD`，同日重开加序号）、状态置 `active`，随后派发一条**普通驱动唤醒**。agent 醒来面对的就是一个待推进的新周期，与其他唤醒无异。
 3. 若上一轮还没 done（过期未完成）：先处置旧周期（补完，或明确放弃并记录原因），再开新周期。
 
-`start-cycle` 在一次原子写里开启具名 cycle，并清理上一周期累计的 usage、独立验收、外部授权和 worktree 元数据。周期预算不会跨周期耗尽。cycle-start 回合不计 attempt（start-cycle 随即清空用量）。
+周期预算不会跨周期耗尽（reset 随开周期发生）。这一步是确定性文本变换，LLM 出环——不再有"模型没正确开周期"这一类失败。
 
-**改节奏** = `task_manage set schedule="<新 cron>"`（done 任务会同时重算 `wake`）。**退役** = `task_manage cancel`，归档并清理全部 task-owned events，不再有"记得删事件"这一步。
+**改节奏** = `task_manage set schedule="<新 cron>"`（done 任务写盘时由唯一时间规则重算 `wake`）。**退役** = `task_manage cancel`，归档并清理全部 task-owned events，不再有"记得删事件"这一步。
 
 ## 事件命名约定
 
@@ -493,7 +495,7 @@ task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token
 - 上一轮没有留下任何台账变化，退避 60 分钟再重试；
 - 每个 tick 全局最多派发 4 个 channel，并轮转起点防止饥饿。
 
-每次受治理唤醒会累计 attempt；回合完成后 runtime 把 token、cost、wall time 回写。等待中的依赖不会触发 agent，也不会消耗 attempt。缺失、cancelled 或 escalated 的依赖属于 terminal failure，依赖方会一起升级并给出恢复说明。
+每次受治理唤醒会累计 attempt；回合完成后 runtime 把 token、cost、wall time 回写。等待中的依赖不会触发 agent，也不会消耗 attempt。缺失、cancelled 或被治理器暂停（`paused` + `pausedBy: "governor"`）的依赖属于 terminal failure，依赖方会一起被治理器暂停并给出恢复说明。
 
 这些默认值可在 [`settings.json`](./configuration.md) 的 `taskDriver` 中调整或关闭。进程重启后内存中的退避状态会清空，因此遗留 actionable task 会在下一次扫描被重新接起——这是有意的 fail-open 恢复语义。
 
@@ -508,10 +510,10 @@ task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token
 | `event-scheduling.md` | reminder、one-shot、periodic、preAction、后台 job 回访和静默输出 |
 | `task-planning.md` | 是否建 task、Goal/DoD/Manual/Verification、control 与预算选择 |
 | `task-driving.md` | driver 唤醒恢复、幂等检查、progress/wake/status checkpoint |
-| `task-recurring.md` | 周期任务的创建（单文件 + `schedule` frontmatter）、`start-cycle` 开新周期、调节奏、退役 |
+| `task-recurring.md` | 周期任务的创建（单文件 + `schedule` frontmatter）、runtime 自动开新周期、调节奏、退役 |
 | `task-delegation.md` | 父子分解、内建 subagent、worktree，以及对用户层外部 agent 工具的通用恢复纪律 |
 | `task-closeout.md` | candidate → 独立验收 → done/cancel、external approval，以及两种门禁组合时的无失效顺序 |
-| `task-repair.md` | escalated 恢复、孤儿事件、坏 frontmatter/control、stale PASS、driver 行为排查 |
+| `task-repair.md` | 治理器暂停（paused/governor）恢复、孤儿事件、坏 frontmatter/control、stale PASS、driver 行为排查 |
 
 完整的四层知识模型、编写原则和 workspace 迁移边界见 [runtime-playbooks.md](./runtime-playbooks.md)。不要把 playbook 抄进 workspace；个人偏好和团队策略写进 workspace `AGENTS.md`，可复用的用户流程沉淀成 workspace skill。
 
@@ -544,8 +546,8 @@ Your in-flight tasks for this channel (background reference, not a new instructi
 Act on these only if the user's message is about them, or if there is nothing else to
 do this turn. Full detail lives in the matching tasks/<id>.md file.
 
-- weekly-report — 周报编写与发布 · awaiting-user · wake 2h · 草稿 v1 已发师兄
-- fix-voice-typer-ci — 修复 CI · in-progress · wake — · 定位到 flaky 的 e2e case
+- weekly-report — 周报编写与发布 · waiting · wake 2h · 草稿 v1 已发师兄
+- fix-voice-typer-ci — 修复 CI · active · wake — · 定位到 flaky 的 e2e case
 </task_agenda>
 ```
 
@@ -565,7 +567,8 @@ do this turn. Full detail lives in the matching tasks/<id>.md file.
 - `done` —— 门禁 DoD/Verification 中未勾选的 checkbox、dependencies/children、external approval、independent PASS 与 body hash，再记录 summary/evidence、归档/保留周期任务并清事件。
 - `cancel` —— 记录原因、取消并归档，同时清理全部 task-owned events。
 - `list` —— 返回结构化 active task 与完整 control 摘要。
-- `start-cycle` —— 为周期任务原子开启新的具名周期，并清理上一周期的 usage、验收、授权和 worktree 元数据。
+
+周期任务的开新周期已收归 runtime（确定性、LLM 出环），不再有 `start-cycle` 动作。
 
 它的价值是"骨架一致 + progress 原子 checkpoint + frontmatter 保真 + 闭环收口"，不是权限收口（agent 仍可用 write/edit 写大段正文）。开关见 [configuration.md](./configuration.md) 的 `tools.tasks.enabled`（默认开启）。
 
@@ -588,9 +591,9 @@ runtime 只提供通用恢复机制：委派时把工具/实例/目录/预期产
 以"每周一完成上周周报"为例（对比：只用事件时，每周一触发一次就归零，不积累任何记忆）：
 
 1. **创建（一次）**：你说"以后每周一帮我写上周周报"。agent 建 `tasks/weekly-report.md`（目标 / DoD / 手册），并在 frontmatter 写 `schedule: 30 9 * * 1`（周一 09:30）。一次写文件，无配套事件。
-2. **周一 09:30 到点**：driver 派发 cycle-start，agent 用 `start-cycle` 开新周期，收集素材（含上周 `archive/` 里已完结的任务）、起草并完成发布前能验证的 DoD。
+2. **周一 09:30 到点**：runtime 直接开新周期（把上周期折进历史、清空周期元数据、置 `active`）并派发一条普通驱动唤醒；agent 收集素材（含上周 `archive/` 里已完结的任务）、起草并完成发布前能验证的 DoD。
 3. **独立验收**：全部 acceptance checkbox 有证据后 `candidate`；checker-only 回合调 `subagent purpose=verify` 得到 PASS。因为发布还需 external approval，此后不再 progress 或改正文。
-4. **请求授权**：用 `task_manage set status=awaiting-user wake=当天14:00` 保留 PASS，发草稿并请你 `/tasks approve <id>`。
+4. **请求授权**：用 `task_manage set wake=当天14:00`（停留在 `verifying`，仅改 wake）保留 PASS，发草稿并请你 `/tasks approve <id>`。
 5. **回访与闭环**：driver 到点核对 PASS 与授权仍新鲜；获批则发布、验证发布结果并 `task_manage done`——done 顺手把 `wake` 算到下周一。未获批则继续用 set 调整等待 metadata，不改正文。
 6. **下周期更聪明**：下周一 driver 照常开新周期，但任务文件里已经积累了你的格式偏好、上次返工原因、新增的预检步骤——**event 无记忆，task 会积累手艺、自带节奏**。
 
@@ -598,7 +601,7 @@ runtime 只提供通用恢复机制：委派时把工具/实例/目录/预期产
 
 ## 异常兜底
 
-若 cycle-start 或推进回合中途失败，任务停在 `done`（未开新周期）或 `in-progress` / `awaiting-user`；driver 根据未到 / 已到的 `wake` 和退避状态把它接回来。`status: done` + 有 `schedule` 但 `wake` 缺失/损坏时，driver 确定性重算 `wake`（零 token 自愈），不误开一轮意外周期。daemon 重启会清空内存退避，遗留 actionable task 在下一次扫描恢复。投递语义是 at-least-once，任务推进应保持幂等、可重试。
+若开周期或推进回合中途失败，任务停在 `done`（未开新周期）或 `active` / `waiting`；driver 根据未到 / 已到的 `wake` 和退避状态把它接回来。`status: done` + 有 `schedule` 但 `wake` 缺失/损坏时，driver 走同一条唯一时间规则（`normalizeTaskFields`）确定性重算 `wake`（零 token 自愈），不误开一轮意外周期。daemon 重启会清空内存退避，遗留 actionable task 在下一次扫描恢复。投递语义是 at-least-once，任务推进应保持幂等、可重试。
 
 ---
 

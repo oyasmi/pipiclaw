@@ -7,10 +7,11 @@ import {
 	normalizeTaskId,
 	parseTaskFrontmatter,
 	renderTaskDocument,
+	startTaskCycle,
 	type TaskDocumentFields,
 	taskBody,
 } from "../shared/task-ledger.js";
-import type { TaskControl, TaskOutcome } from "./control.js";
+import { resetTaskControlForCycle, type TaskControl, type TaskOutcome } from "./control.js";
 
 export interface StoredTaskDocument {
 	id: string;
@@ -48,7 +49,7 @@ export async function readStoredTask(
 		id,
 		path,
 		fields: {
-			status: frontmatter.status ?? "open",
+			status: frontmatter.status ?? "active",
 			wake: frontmatter.wake,
 			schedule: frontmatter.schedule,
 			recurrence: frontmatter.recurrence,
@@ -163,16 +164,61 @@ export async function finishTaskAttempt(
 	);
 }
 
+/**
+ * A governor stop: the deterministic task governor pauses the task (spec 029, D3 — this is
+ * the former `escalated` status, now `paused` + `pausedBy: "governor"`), records the reason,
+ * and clears the wake so no automatic dispatch resumes it until a human intervenes.
+ */
 export async function escalateTask(channelDir: string, id: string, reason: string): Promise<boolean> {
 	const document = await updateStoredTask(channelDir, id, (task) => {
-		task.fields.status = "escalated";
+		task.fields.status = "paused";
 		task.fields.wake = undefined;
 		if (task.fields.control) {
+			task.fields.control.pausedBy = "governor";
 			task.fields.control.lastOutcome = "blocked";
 			task.fields.control.blockedReason = reason;
 		}
 	});
 	return document !== undefined;
+}
+
+/**
+ * A stable cycle id for a runtime-opened recurring cycle: `cycle-YYYY-MM-DD`, disambiguated
+ * with a `-N` suffix when the same task is reopened more than once on the same local day.
+ */
+export function nextCycleId(previousCycleId: string | undefined, now: Date): string {
+	const y = now.getFullYear();
+	const m = String(now.getMonth() + 1).padStart(2, "0");
+	const d = String(now.getDate()).padStart(2, "0");
+	const base = `cycle-${y}-${m}-${d}`;
+	if (!previousCycleId || (previousCycleId !== base && !previousCycleId.startsWith(`${base}-`))) return base;
+	const suffix = previousCycleId.slice(base.length + 1);
+	const previousCount = suffix ? Number.parseInt(suffix, 10) : 1;
+	const nextCount = Number.isFinite(previousCount) && previousCount >= 1 ? previousCount + 1 : 2;
+	return `${base}-${nextCount}`;
+}
+
+/**
+ * Open the next cycle of a done recurring task entirely in the runtime (spec 029, D2):
+ * fold the previous cycle's log into History, reset per-cycle control, clear the wake, and
+ * mark it `active`. This is the deterministic replacement for the retired
+ * `task_manage start-cycle` action — no LLM turn is spent just to reopen a cycle.
+ */
+export async function openRecurringTaskCycle(
+	channelDir: string,
+	id: string,
+	now: Date,
+): Promise<{ document: StoredTaskDocument; cycleId: string } | undefined> {
+	let cycleId: string | undefined;
+	const document = await updateStoredTask(channelDir, id, (task) => {
+		cycleId = nextCycleId(task.fields.control?.cycleId, now);
+		task.body = startTaskCycle(task.body, cycleId);
+		task.fields.status = "active";
+		task.fields.wake = undefined;
+		if (task.fields.control) task.fields.control = resetTaskControlForCycle(task.fields.control, cycleId);
+	});
+	if (!document || !cycleId) return undefined;
+	return { document, cycleId };
 }
 
 export async function dependencyState(
@@ -198,8 +244,15 @@ export async function dependencyState(
 	for (const dependencyId of dependencyIds) {
 		const dependency = await readStoredTask(channelDir, dependencyId, true, true);
 		if (!dependency) return { ready: false, reason: `dependency ${dependencyId} is missing` };
-		if (dependency.fields.status === "cancelled" || dependency.fields.status === "escalated") {
-			return { ready: false, reason: `dependency ${dependencyId} is ${dependency.fields.status}` };
+		if (dependency.fields.status === "cancelled") {
+			return { ready: false, reason: `dependency ${dependencyId} is cancelled` };
+		}
+		// A governor-paused dependency will not self-recover, so it blocks the dependent
+		// terminally (matches the retired `escalated` semantics); a user pause is a soft wait.
+		if (dependency.fields.status === "paused") {
+			return dependency.fields.control?.pausedBy === "governor"
+				? { ready: false, reason: `dependency ${dependencyId} is paused by the governor` }
+				: { ready: false, reason: `waiting for dependency ${dependencyId} (paused)` };
 		}
 		if (dependency.fields.status !== "done")
 			return { ready: false, reason: `waiting for dependency ${dependencyId}` };

@@ -892,7 +892,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				} finally {
 					await durableDispatch?.markCompleted(event.dispatchId);
 					runner.endTurn();
-					// A finished turn may have written task files (progress/done/start-cycle); rescan
+					// A finished turn may have written task files (progress/done/set); rescan
 					// now so a continuing task chain advances immediately instead of after a full sleep.
 					taskDriver.nudge?.();
 				}

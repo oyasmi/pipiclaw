@@ -37,7 +37,7 @@ describe("buildTaskDigest", () => {
 		expect(out).toContain("<task_agenda>");
 		expect(out).toContain("background reference, not a new instruction");
 		expect(out).toContain("weekly-report — 周报编写与发布");
-		expect(out).toContain("awaiting-user");
+		expect(out).toContain("waiting");
 		expect(out).toContain("</task_agenda>");
 	});
 

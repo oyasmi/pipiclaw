@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
+import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
 import { manageTask, type TaskManageToolOptions } from "../src/tools/task-manage.js";
 
@@ -50,13 +51,13 @@ describe("manageTask", () => {
 				goal: "Publish the weekly report after user confirmation.",
 				dod: "- [ ] Draft reviewed\n- [ ] Report published",
 				manual: "Collect inputs, draft, ask for confirmation, publish.",
-				status: "in-progress",
+				status: "active",
 				wake: "2026-07-08T14:00:00+08:00",
 				recurrence: "每周一",
 			});
-			expect(result.status).toBe("in-progress");
+			expect(result.status).toBe("active");
 			const onDisk = await readFile(join(tasksDir, "weekly-report.md"), "utf-8");
-			expect(onDisk).toContain("status: in-progress");
+			expect(onDisk).toContain("status: active");
 			expect(onDisk).toContain("wake: 2026-07-08T14:00:00+08:00");
 			expect(onDisk).toContain("recurrence: 每周一");
 			expect(onDisk).toContain("# Weekly Report");
@@ -217,14 +218,12 @@ describe("manageTask", () => {
 			const result = await manageTask(options, {
 				action: "set",
 				id: "weekly",
-				status: "awaiting-user",
+				status: "waiting",
 				wake: "2026-07-08T14:00:00+08:00",
 			});
-			expect(result.status).toBe("awaiting-user");
+			expect(result.status).toBe("waiting");
 			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
-			expect(onDisk).toBe(
-				taskDoc("status: awaiting-user\nwake: 2026-07-08T14:00:00+08:00\nrecurrence: 每周一", body),
-			);
+			expect(onDisk).toBe(taskDoc("status: waiting\nwake: 2026-07-08T14:00:00+08:00\nrecurrence: 每周一", body));
 		});
 
 		it("clears wake when given an empty string", async () => {
@@ -242,6 +241,18 @@ describe("manageTask", () => {
 		it("rejects setting status to done (use action done)", async () => {
 			await writeTask("t", "status: open", "# T");
 			await expect(manageTask(options, { action: "set", id: "t", status: "done" })).rejects.toThrow(/done/);
+		});
+
+		it("invalidates a recorded verification when set leaves the verifying lane", async () => {
+			const control = createDefaultTaskControl("independent");
+			control.verification = { mode: "independent", status: "passed", runId: "r1", bodyHash: "abc" };
+			control.lastOutcome = "verified";
+			await writeTask("v", `status: verifying\ncontrol: ${JSON.stringify(control)}`, "# V\n\n## Current Cycle\n- x");
+			const result = await manageTask(options, { action: "set", id: "v", status: "active" });
+			expect(result.status).toBe("active");
+			const onDisk = await readFile(join(tasksDir, "v.md"), "utf-8");
+			expect(onDisk).toContain('"status":"pending"');
+			expect(onDisk).not.toContain('"status":"passed"');
 		});
 
 		it("fails closed on unreadable frontmatter", async () => {
@@ -286,10 +297,10 @@ describe("manageTask", () => {
 				action: "progress",
 				id: "long-work",
 				note: "Implemented parser; targeted tests pass; next: integration test.",
-				status: "in-progress",
+				status: "active",
 				wake: "2026-07-08T14:00:00+08:00",
 			});
-			expect(result.status).toBe("in-progress");
+			expect(result.status).toBe("active");
 			const onDisk = await readFile(join(tasksDir, "long-work.md"), "utf-8");
 			expect(onDisk).toContain("wake: 2026-07-08T14:00:00+08:00");
 			expect(onDisk).toContain("- Implemented parser; targeted tests pass; next: integration test.");
@@ -418,12 +429,12 @@ describe("manageTask", () => {
 				verifierRunId: "verify-publish",
 			});
 
-			// `set` changes only frontmatter, so it can schedule approval waiting without
-			// invalidating the body-bound PASS. A progress note here would invalidate it.
+			// `set` that stays in the verifying lane changes only frontmatter, so it can schedule
+			// approval waiting without invalidating the body-bound PASS. A progress note — or a set
+			// that leaves `verifying` — would invalidate it (D3).
 			await manageTask(options, {
 				action: "set",
 				id: "verified-publish",
-				status: "awaiting-user",
 				wake: "2026-07-12T14:00:00+08:00",
 			});
 			expect(
@@ -566,7 +577,7 @@ describe("manageTask", () => {
 			).rejects.toThrow(/parent cycle/);
 			await expect(
 				manageTask(options, { action: "set", id: "parent", control: { dependsOn: ["child"] } }),
-			).resolves.toMatchObject({ status: "open" });
+			).resolves.toMatchObject({ status: "active" });
 
 			for (const id of ["dep-a", "dep-b"]) {
 				await manageTask(options, {
@@ -723,73 +734,10 @@ describe("manageTask", () => {
 		});
 	});
 
-	describe("start-cycle", () => {
-		it("opens a completed recurring task with fresh cycle-scoped control", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "weekly",
-				title: "Weekly",
-				goal: "Publish weekly work",
-				dod: "- [x] published",
-				schedule: "0 9 * * 1",
-				recurrence: "weekly",
-				control: { verificationMode: "evidence", sideEffects: "external" },
-			});
-			const path = join(tasksDir, "weekly.md");
-			let onDisk = await readFile(path, "utf-8");
-			onDisk = onDisk
-				.replace("status: open", "status: done")
-				.replace('"attempts":0', '"attempts":7')
-				.replace('"status":"pending"', '"status":"passed"');
-			await writeFile(path, onDisk);
-			const result = await manageTask(options, { action: "start-cycle", id: "weekly", cycleId: "2026-W29" });
-			expect(result).toMatchObject({ action: "start-cycle", status: "in-progress" });
-			const started = await readFile(path, "utf-8");
-			expect(started).toContain("status: in-progress");
-			expect(started).toContain('"cycleId":"2026-W29"');
-			expect(started).toContain('"attempts":0');
-			expect(started).toContain('"externalApproval":"required"');
-			expect(started).toContain('"status":"pending"');
-			expect(started).toContain("## Current Cycle (2026-W29)");
-		});
-
-		it("retains an explicit external approval exemption for the next cycle", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "automated-weekly",
-				title: "Automated weekly",
-				goal: "Publish weekly work automatically",
-				dod: "- [x] published",
-				schedule: "0 9 * * 1",
-				control: { verificationMode: "evidence", sideEffects: "external", externalApproval: "not-required" },
-			});
-			const path = join(tasksDir, "automated-weekly.md");
-			await writeFile(path, (await readFile(path, "utf-8")).replace("status: open", "status: done"));
-			await manageTask(options, { action: "start-cycle", id: "automated-weekly", cycleId: "2026-W29" });
-			expect(await readFile(path, "utf-8")).toContain('"externalApproval":"not-required"');
-		});
-
-		it("does not start a second cycle while the current one is still open", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "weekly",
-				title: "Weekly",
-				goal: "Publish weekly work",
-				dod: "- [ ] published",
-				recurrence: "weekly",
-			});
-			await expect(
-				manageTask(options, { action: "start-cycle", id: "weekly", cycleId: "2026-W29" }),
-			).rejects.toThrow(/not done/);
-		});
-
-		it("rejects start-cycle for a done task that has no schedule", async () => {
-			await writeTask("oneshot", "status: done", "# One shot");
-			await expect(
-				manageTask(options, { action: "start-cycle", id: "oneshot", cycleId: "2026-W29" }),
-			).rejects.toThrow(/not recurring/);
-		});
-
+	describe("recurring wake (single time rule)", () => {
+		// Cycle reopening is now a deterministic runtime step (D2, openRecurringTaskCycle); the
+		// `start-cycle` action no longer exists. The write-path invariant that a done recurring
+		// task always carries the next-occurrence wake is exercised here.
 		it("recomputes wake when set changes the schedule of a done task", async () => {
 			await writeTask("weekly", "status: done\nschedule: 30 9 * * 1\nwake: 2026-07-13T09:30:00+08:00", "# Weekly");
 			await manageTask(options, { action: "set", id: "weekly", schedule: "0 18 * * 5" });
@@ -807,7 +755,7 @@ describe("manageTask", () => {
 			await writeTask("b", "status: done", "# Task B");
 			const result = await manageTask(options, { action: "list" });
 			expect(result.tasks).toEqual([
-				{ id: "a", title: "Task A", status: "in-progress", wake: undefined, actionable: true, control: undefined },
+				{ id: "a", title: "Task A", status: "active", wake: undefined, actionable: true, control: undefined },
 				{ id: "b", title: "Task B", status: "done", wake: undefined, actionable: false, control: undefined },
 			]);
 		});

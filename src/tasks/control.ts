@@ -5,6 +5,8 @@ export type TaskSideEffects = "read-only" | "workspace" | "external";
 export type TaskVerificationMode = "evidence" | "independent";
 export type TaskVerificationStatus = "pending" | "passed" | "failed";
 export type TaskOutcome = "pending" | "running" | "progress" | "blocked" | "failed" | "verified";
+/** Who paused a task: a user via /tasks pause, or the deterministic governor (ex-`escalated`). */
+export type TaskPausedBy = "user" | "governor";
 
 export interface TaskBudget {
 	maxAttempts: number;
@@ -58,6 +60,8 @@ export interface TaskControl {
 	lastFinishedAt?: string;
 	/** Identifier of the currently open recurring-task cycle, when applicable. */
 	cycleId?: string;
+	/** Present only while status is `paused`; distinguishes a user pause from a governor pause. */
+	pausedBy?: TaskPausedBy;
 }
 
 export interface TaskControlPatch {
@@ -86,6 +90,7 @@ const SIDE_EFFECTS: readonly TaskSideEffects[] = ["read-only", "workspace", "ext
 const VERIFICATION_MODES: readonly TaskVerificationMode[] = ["evidence", "independent"];
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
 const OUTCOMES: readonly TaskOutcome[] = ["pending", "running", "progress", "blocked", "failed", "verified"];
+const PAUSED_BY: readonly TaskPausedBy[] = ["user", "governor"];
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -249,6 +254,7 @@ export function parseTaskControl(raw: string): TaskControl {
 		lastStartedAt: optionalString(value.lastStartedAt),
 		lastFinishedAt: optionalString(value.lastFinishedAt),
 		cycleId: optionalString(value.cycleId),
+		pausedBy: value.pausedBy === undefined ? undefined : enumValue(value.pausedBy, PAUSED_BY, "user"),
 	};
 }
 
@@ -276,6 +282,7 @@ export function resetTaskControlForCycle(control: TaskControl, cycleId: string):
 		lastStartedAt: undefined,
 		lastFinishedAt: undefined,
 		cycleId: normalizedCycleId,
+		pausedBy: undefined,
 	};
 }
 

@@ -14,7 +14,7 @@ priority: 45
 - child 的 `control.parent` 指向父任务。
 - `dependsOn` 表示执行前置；依赖 done 前 driver 不运行 dependent。
 - 父任务可 dependsOn child，等待全部子成果汇合后集成。
-- 依赖缺失、cancelled 或 escalated 会令 dependent escalated。
+- 依赖缺失、cancelled 或被治理器暂停会令 dependent 被治理器暂停。
 - 父任务有未闭环 child 时不能 done。
 
 ## 内建 subagent

@@ -37,12 +37,14 @@ priority: 40
 
 ## 状态与时间
 
-- `open` / `in-progress`：可推进。
-- `awaiting-user`：需要用户输入或批准。
-- `blocked`：等待外部条件或委派结果。
-- `paused`：明确暂停，driver 不运行。
+六个状态，每个只对应一种 driver 行为：
+
+- `active`：可推进（受 wake 门控）。
+- `waiting`：等用户/外部条件/委派结果；等谁、等什么写进 `control.blockedReason`。
 - `verifying`：只做独立验收，不继续实现。
-- `escalated`：治理器停止任务，先诊断再修 control。
+- `paused`：明确暂停，driver 不运行。用户暂停 `pausedBy=user`；治理器停止（预算耗尽等）记 `pausedBy=governor`，先诊断再修 control。
+- `done`：完成；有 schedule 则原地睡到下次 occurrence，否则归档。
+- `cancelled`：放弃并归档。
 
 `wake` 是最早重新检查时间，不代表截止时间。等待时设置现实的 wake；可继续时清空 wake，让 driver 按 cooldown 接续。
 

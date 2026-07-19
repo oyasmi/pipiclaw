@@ -18,6 +18,7 @@ import {
 	taskBodyHash,
 	writeStoredTask,
 } from "../tasks/store.js";
+import { normalizeStoredStatus, resolveTaskTransition } from "../tasks/transitions.js";
 import { readVerificationAttestation } from "../tasks/verification.js";
 import { parseScheduledEventContent, type ScheduledEvent } from "./events.js";
 
@@ -238,7 +239,7 @@ async function listTasks(channelDir: string): Promise<string> {
 	}
 
 	const blocks = entries.map((entry) => {
-		const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "open") : "⚠ unreadable frontmatter";
+		const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "active") : "⚠ unreadable frontmatter";
 		const detail = [`  status: ${status}`, `wake: ${relativeWake(entry.wakeMs, now)}`];
 		const control = entry.frontmatter.control;
 		if (control) {
@@ -267,7 +268,7 @@ async function approveTask(options: HandleTasksCommandOptions, idInput: string):
 	if (!task) return `Task not found: ${id}`;
 	const control = task.fields.control;
 	if (!control) return `Task ${id} has no governed control metadata. Ask the agent to normalize it before approval.`;
-	if (task.fields.status === "done" || task.fields.status === "cancelled" || task.fields.status === "escalated") {
+	if (task.fields.status === "done" || task.fields.status === "cancelled") {
 		return `Task ${id} is ${task.fields.status} and cannot receive a new external-action approval.`;
 	}
 	if (control.sideEffects !== "external") {
@@ -288,13 +289,17 @@ export async function pauseTask(options: HandleTasksCommandOptions, idInput: str
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `Task not found: ${id}`;
-	if (["done", "cancelled", "escalated"].includes(task.fields.status)) {
-		return `Task ${id} is ${task.fields.status} and cannot be paused.`;
+	const from = normalizeStoredStatus(task.fields.status);
+	if (from === "paused") return `Task ${id} is already paused.`;
+	try {
+		resolveTaskTransition("pause", id, from);
+	} catch (error) {
+		return errorMessage(error);
 	}
-	if (task.fields.status === "paused") return `Task ${id} is already paused.`;
 	task.fields.status = "paused";
 	task.fields.wake = undefined;
 	if (task.fields.control) {
+		task.fields.control.pausedBy = "user";
 		task.fields.control.lastOutcome = "blocked";
 		task.fields.control.blockedReason = `Paused by ${options.approver?.trim() || "a user"}.`;
 	}
@@ -306,10 +311,13 @@ export async function resumeTask(options: HandleTasksCommandOptions, idInput: st
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `Task not found: ${id}`;
-	if (task.fields.status !== "paused") return `Task ${id} is ${task.fields.status}, not paused.`;
-	task.fields.status = "in-progress";
+	const from = normalizeStoredStatus(task.fields.status);
+	if (from !== "paused") return `Task ${id} is ${from}, not paused.`;
+	resolveTaskTransition("resume", id, from);
+	task.fields.status = "active";
 	task.fields.wake = undefined;
 	if (task.fields.control) {
+		task.fields.control.pausedBy = undefined;
 		task.fields.control.lastOutcome = "pending";
 		task.fields.control.blockedReason = undefined;
 	}
@@ -321,12 +329,16 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `Task not found: ${id}`;
-	if (["done", "cancelled", "escalated"].includes(task.fields.status)) {
-		return `Task ${id} is ${task.fields.status} and cannot be run.`;
+	const from = normalizeStoredStatus(task.fields.status);
+	try {
+		resolveTaskTransition("run", id, from);
+	} catch (error) {
+		return errorMessage(error);
 	}
-	if (task.fields.status === "paused") task.fields.status = "in-progress";
+	task.fields.status = "active";
 	task.fields.wake = undefined;
 	if (task.fields.control) {
+		task.fields.control.pausedBy = undefined;
 		task.fields.control.lastOutcome = "pending";
 		task.fields.control.blockedReason = undefined;
 	}
@@ -455,7 +467,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	const issues: string[] = [];
 
 	for (const entry of entries) {
-		const status = entry.frontmatter.status ?? "open";
+		const status = entry.frontmatter.status ?? "active";
 		if (!entry.frontmatter.readable) {
 			issues.push(
 				issue(

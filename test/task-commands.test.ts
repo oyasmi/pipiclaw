@@ -116,7 +116,16 @@ describe("handleTasksCommand", () => {
 		expect(await run("pause long")).toContain("Paused task long");
 		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: paused");
 		expect(await run("resume long")).toContain("Resumed task long");
-		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: in-progress");
+		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: active");
+	});
+
+	it("stamps pausedBy=user on pause and clears it on resume for a governed task", async () => {
+		const control = createDefaultTaskControl();
+		await writeFile(join(tasksDir, "gov.md"), renderTaskDocument({ status: "active", control }, STANDARD_BODY));
+		await run("pause gov");
+		expect(await readFile(join(tasksDir, "gov.md"), "utf-8")).toContain('"pausedBy":"user"');
+		await run("resume gov");
+		expect(await readFile(join(tasksDir, "gov.md"), "utf-8")).not.toContain('"pausedBy"');
 	});
 
 	it("runs a ready task through the runtime dispatch callback", async () => {
@@ -135,7 +144,7 @@ describe("handleTasksCommand", () => {
 		});
 		expect(out).toContain("Enqueued task ready");
 		expect(dispatches).toEqual(["ready"]);
-		expect(await readFile(join(tasksDir, "ready.md"), "utf-8")).toContain("status: in-progress");
+		expect(await readFile(join(tasksDir, "ready.md"), "utf-8")).toContain("status: active");
 	});
 
 	it("renders token and verification stats without an LLM turn", async () => {

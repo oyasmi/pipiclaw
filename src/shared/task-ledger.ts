@@ -2,6 +2,8 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseTaskControl, type TaskControl, type TaskVerificationMode, taskPriorityRank } from "../tasks/control.js";
+import { normalizeStoredStatus, TERMINAL_TASK_STATUSES, wasLegacyEscalated } from "../tasks/transitions.js";
+import { nextTaskWake } from "./task-schedule.js";
 
 /**
  * Shared reader for the task ledger (`workspace/<channelId>/tasks/*.md`).
@@ -114,6 +116,16 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 			}
 		}
 	}
+	// Canonicalise the (possibly legacy) status on read. A legacy `escalated` file is read as
+	// `paused` by the deterministic governor; the nuance is preserved in control.pausedBy so
+	// nothing downstream has to know the old name.
+	const rawStatus = frontmatter.status;
+	if (frontmatter.readable) {
+		frontmatter.status = normalizeStoredStatus(rawStatus);
+		if (wasLegacyEscalated(rawStatus) && frontmatter.control && frontmatter.control.pausedBy === undefined) {
+			frontmatter.control.pausedBy = "governor";
+		}
+	}
 	return frontmatter;
 }
 
@@ -125,14 +137,8 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 export function isTaskActionable(frontmatter: TaskFrontmatter, now: number): boolean {
 	if (!frontmatter.readable) return true;
 	if (frontmatter.controlReadable === false) return true;
-	if (
-		frontmatter.status === "done" ||
-		frontmatter.status === "cancelled" ||
-		frontmatter.status === "escalated" ||
-		frontmatter.status === "paused"
-	) {
-		return false;
-	}
+	// status is already canonicalised by parseTaskFrontmatter.
+	if (TERMINAL_TASK_STATUSES.has(frontmatter.status ?? "")) return false;
 	const wakeAt = parseWakeMs(frontmatter);
 	if (wakeAt !== undefined && wakeAt > now) return false;
 	return true;
@@ -257,14 +263,34 @@ export interface TaskDocumentFields {
 	control?: TaskControl;
 }
 
-export function renderTaskDocument(fields: TaskDocumentFields, body: string): string {
-	const lines = ["---", `status: ${fields.status}`];
-	if (fields.wake) lines.push(`wake: ${fields.wake}`);
-	if (fields.schedule) lines.push(`schedule: ${fields.schedule}`);
-	if (fields.recurrence) lines.push(`recurrence: ${fields.recurrence}`);
-	if (fields.control) lines.push(`control: ${JSON.stringify(fields.control)}`);
+/**
+ * The single time rule, enforced on the write path (spec 029, D1).
+ *
+ * The rule "a done recurring task's next wake is its cron next occurrence" becomes a
+ * construction-time invariant: every `done + schedule` document has its `wake` set to the
+ * next occurrence on the write path, regardless of any prior/stale/unparseable value. Once
+ * the cycle comes due the runtime reopens it (status leaves `done`, so this no longer fires).
+ * Every other field combination is left verbatim — `create`'s first-cycle seed (status
+ * `active`) and an explicit `wake` on a non-recurring task are honoured. When the cron cannot
+ * be parsed the existing value is kept so the corruption surfaces rather than being erased.
+ */
+export function normalizeTaskFields(fields: TaskDocumentFields): TaskDocumentFields {
+	if (fields.status !== "done" || !fields.schedule) return fields;
+	const next = nextTaskWake(fields.schedule);
+	if (!next) return fields;
+	const wake = next.toISOString();
+	return wake === fields.wake ? fields : { ...fields, wake };
+}
+
+export function renderTaskDocument(fields: TaskDocumentFields, rawBody: string): string {
+	const document = normalizeTaskFields(fields);
+	const lines = ["---", `status: ${document.status}`];
+	if (document.wake) lines.push(`wake: ${document.wake}`);
+	if (document.schedule) lines.push(`schedule: ${document.schedule}`);
+	if (document.recurrence) lines.push(`recurrence: ${document.recurrence}`);
+	if (document.control) lines.push(`control: ${JSON.stringify(document.control)}`);
 	lines.push("---");
-	return `${lines.join("\n")}\n${body}`;
+	return `${lines.join("\n")}\n${rawBody}`;
 }
 
 /** Append one progress bullet to the standard Current Cycle section. */

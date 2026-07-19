@@ -73,7 +73,7 @@ describe("TaskDriver", () => {
 		expect(dispatch).toHaveBeenCalledTimes(1);
 		expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ channelId: "dm_a", user: "TASK_DRIVER" });
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:ready]");
-		expect(dispatch.mock.calls[0]?.[0].text).toContain("Task capsule: title=Task; status=in-progress;");
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("Task capsule: title=Task; status=active;");
 	});
 
 	it("keeps dispatch behavior unchanged when the optional observer throws", async () => {
@@ -154,7 +154,8 @@ describe("TaskDriver", () => {
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_ESCALATION:spent]");
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("attempt budget exhausted");
 		const onDisk = await readFile(join(workspaceDir, "dm_a", "tasks", "spent.md"), "utf-8");
-		expect(onDisk).toContain("status: escalated");
+		expect(onDisk).toContain("status: paused");
+		expect(onDisk).toContain('"pausedBy":"governor"');
 	});
 
 	it("enforces a deadline even when wake would otherwise keep the task asleep", async () => {
@@ -198,7 +199,7 @@ describe("TaskDriver", () => {
 		await driver.runOnce(NOW);
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("dependency cycle detected");
 		const a = await readFile(join(workspaceDir, "dm_a", "tasks", "a.md"), "utf-8");
-		expect(a).toContain("status: escalated");
+		expect(a).toContain("status: paused");
 		expect(a).toContain('"attempts":0');
 	});
 
@@ -369,13 +370,15 @@ describe("TaskDriver", () => {
 		driver.stop();
 	});
 
-	it("opens a new cycle for a due recurring task without claiming an attempt", async () => {
+	it("opens a new cycle for a due recurring task in-process, then dispatches a normal wake", async () => {
 		await writeTask(
 			"dm_a",
 			"weekly",
 			governedTask("done", (control) => {
 				control.usage.attempts = 3;
-			}).replace("status: done", "status: done\nschedule: 30 9 * * 1\nwake: 2026-07-10T09:00:00+08:00"),
+			})
+				.replace("status: done", "status: done\nschedule: 30 9 * * 1\nwake: 2026-07-10T09:00:00+08:00")
+				.replace("## Verification\n- check\n", "## Verification\n- check\n\n## History\n"),
 		);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		const driver = new TaskDriver({
@@ -386,11 +389,15 @@ describe("TaskDriver", () => {
 		});
 		await driver.runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledOnce();
-		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_CYCLE:weekly]");
-		expect(dispatch.mock.calls[0]?.[0].text).toContain("start-cycle");
-		// No attempt was claimed: usage on disk is unchanged.
+		// The runtime reopened the cycle deterministically; the model gets an ordinary driver wake.
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:weekly]");
+		expect(dispatch.mock.calls[0]?.[0].text).not.toContain("[TASK_CYCLE");
 		const onDisk = await readFile(join(workspaceDir, "dm_a", "tasks", "weekly.md"), "utf-8");
-		expect(onDisk).toContain('"attempts":3');
+		expect(onDisk).toContain("status: active");
+		expect(onDisk).toContain('"cycleId":"cycle-2026-07-10"');
+		// Cycle reset zeroed usage; the ordinary wake then claimed exactly one attempt.
+		expect(onDisk).toContain('"attempts":1');
+		expect(onDisk).toContain("## Current Cycle (cycle-2026-07-10)");
 	});
 
 	it("does not open a cycle for a done recurring task whose wake is still in the future", async () => {
@@ -425,7 +432,7 @@ describe("TaskDriver", () => {
 		expect(onDisk).toMatch(/wake: 2026-07-\d\dT/);
 	});
 
-	it("runs the full native recurring loop: done → sleep → cycle-start → start-cycle → done", async () => {
+	it("runs the full native recurring loop: done → sleep → runtime reopens cycle → done", async () => {
 		const channelDir = join(workspaceDir, "dm_a");
 		const opts = { workspaceDir, channelDir, channelId: "dm_a" };
 		await mkdir(join(channelDir, "tasks"), { recursive: true });
@@ -455,16 +462,16 @@ describe("TaskDriver", () => {
 		await driver.runOnce(new Date(wakeMs - 60_000));
 		expect(dispatch).not.toHaveBeenCalled();
 
-		// Just past the occurrence: driver opens a new cycle.
+		// Just past the occurrence: the runtime reopens the cycle in-process and dispatches a
+		// normal driver wake — no start-cycle action, no [TASK_CYCLE] event.
 		await driver.runOnce(new Date(wakeMs + 60_000));
-		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_CYCLE:weekly]");
-
-		// The agent turn opens the cycle and finishes it again.
-		await manageTask(opts, { action: "start-cycle", id: "weekly", cycleId: "2026-W29" });
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:weekly]");
 		const started = await readFile(join(channelDir, "tasks", "weekly.md"), "utf-8");
-		expect(started).toContain("status: in-progress");
-		expect(started).toContain('"cycleId":"2026-W29"');
-		// Re-check the DoD and close cycle two.
+		expect(started).toContain("status: active");
+		expect(started).toMatch(/"cycleId":"cycle-\d{4}-\d\d-\d\d"/);
+		expect(started).toMatch(/## Current Cycle \(cycle-\d{4}-\d\d-\d\d\)/);
+
+		// The agent turn re-checks the DoD and closes cycle two.
 		await manageTask(opts, {
 			action: "progress",
 			id: "weekly",
@@ -484,28 +491,5 @@ describe("TaskDriver", () => {
 		});
 		expect(done2.archived).toBe(false);
 		expect(await readFile(join(channelDir, "tasks", "weekly.md"), "utf-8")).toMatch(/wake: 2026-07-\d\dT/);
-	});
-
-	it("defers cycle-start to a live legacy .schedule event", async () => {
-		await writeTask(
-			"dm_a",
-			"weekly",
-			task("done").replace("status: done", "status: done\nschedule: 30 9 * * 1\nwake: 2026-07-10T09:00:00+08:00"),
-		);
-		const eventsDir = join(workspaceDir, "events");
-		await mkdir(eventsDir, { recursive: true });
-		await writeFile(
-			join(eventsDir, "task.dm_a.weekly.schedule.json"),
-			JSON.stringify({ type: "periodic", channelId: "dm_a", text: "推进任务 weekly", schedule: "30 9 * * 1" }),
-		);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		const driver = new TaskDriver({
-			workspaceDir,
-			isChannelActive: () => false,
-			dispatch,
-			getSettings: () => SETTINGS,
-		});
-		await driver.runOnce(NOW);
-		expect(dispatch).not.toHaveBeenCalled();
 	});
 });

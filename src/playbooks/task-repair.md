@@ -1,6 +1,6 @@
 ---
 name: task-repair
-description: When a task is escalated, stalled, not waking, or has broken control metadata.
+description: When a task is paused by the governor, stalled, not waking, or has broken control metadata.
 requires-tools: task_manage
 priority: 44
 ---
@@ -9,19 +9,19 @@ priority: 44
 
 先用 `task_manage list` 看结构化状态；让用户用 `/tasks doctor` 看带 Next step 的一致性检查，用 `/tasks stats <id>` 看 attempts/token/cost/wall time、最近结果和 verifier 状态。
 
-## escalated
+## 被治理器暂停（paused + pausedBy=governor）
 
-driver 在 deadline、累计预算耗尽或 terminal dependency 时停止任务。先读 Current Cycle 和 stats，判断空转、范围错误、预算过小还是依赖终止。
+治理器在 deadline、累计预算耗尽或 terminal dependency 时暂停任务（旧称 escalated，现在是 `paused` + `pausedBy=governor`）。先读 Current Cycle 和 stats，判断空转、范围错误、预算过小还是依赖终止。
 
 - 方向错：修 Manual/nextAction、重新拆解或 cancel。
-- 预算确实不足：向用户说明后用 `task_manage set` 调整 budget/deadline，并把 status 设回 in-progress。
+- 预算确实不足：向用户说明后用 `task_manage set` 调整 budget/deadline，并把 status 设回 active。
 - 依赖终止：恢复/重建依赖，或 set 更新 dependsOn。
 
-escalated 不能 progress/candidate；set 是审查原因后的修复入口，不要反射性加预算。
+被暂停的任务不能 progress/candidate；`set`（或 `/tasks resume`）是审查原因后的修复入口，不要反射性加预算。
 
 ## 不唤醒或频繁唤醒
 
-可推进 = 非 done/cancelled/escalated/paused，且 wake 缺失、无效或已到期。
+可推进 = 非 done/cancelled/paused，且 wake 缺失、无效或已到期。
 
 - paused：用户 `/tasks resume <id>`。
 - wake 太远：纠正 wake；急催用 `/tasks run <id>`。

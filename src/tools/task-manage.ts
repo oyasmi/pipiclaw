@@ -13,7 +13,6 @@ import {
 	readActiveTasks,
 	renderStandardTaskBody,
 	renderTaskDocument,
-	startTaskCycle,
 	taskBody,
 	uncheckedTaskAcceptanceItems,
 } from "../shared/task-ledger.js";
@@ -24,15 +23,20 @@ import {
 	createDefaultTaskControl,
 	invalidateTaskApproval,
 	invalidateTaskVerification,
-	resetTaskControlForCycle,
 	type TaskControl,
 	type TaskControlPatch,
 	type TaskVerification,
 } from "../tasks/control.js";
 import { dependencyState, readStoredTask, taskBodyHash } from "../tasks/store.js";
+import {
+	isSettableTaskStatus,
+	normalizeStoredStatus,
+	resolveTaskTransition,
+	SETTABLE_TASK_STATUSES,
+} from "../tasks/transitions.js";
 import { readVerificationAttestation } from "../tasks/verification.js";
 
-const SETTABLE_STATUSES = ["open", "in-progress", "awaiting-user", "blocked", "paused"] as const;
+const SETTABLE_STATUSES = SETTABLE_TASK_STATUSES;
 
 const taskControlSchema = Type.Object({
 	priority: Type.Optional(
@@ -86,13 +90,12 @@ const taskManageSchema = Type.Object({
 			Type.Literal("verify"),
 			Type.Literal("done"),
 			Type.Literal("cancel"),
-			Type.Literal("start-cycle"),
 			Type.Literal("candidate"),
 			Type.Literal("list"),
 		],
 		{
 			description:
-				'"create" writes a governed task; "progress" atomically checkpoints work; "candidate" requests independent verification; "set" repairs metadata; "verify" imports an independent verifier attestation; "done" closes verified work; "cancel" closes abandoned work; "start-cycle" opens a completed recurring task; "list" returns tasks.',
+				'"create" writes a governed task; "progress" atomically checkpoints work; "candidate" requests independent verification; "set" repairs metadata; "verify" imports an independent verifier attestation; "done" closes verified work; "cancel" closes abandoned work; "list" returns tasks. Recurring cycles are reopened automatically by the runtime.',
 		},
 	),
 	id: Type.Optional(
@@ -127,7 +130,7 @@ const taskManageSchema = Type.Object({
 		Type.String({
 			description:
 				"Five-field cron cadence (host timezone) that makes this a recurring task; empty string clears it. " +
-				"On done, the driver sleeps the task until the next occurrence and re-opens it with start-cycle. Min every 30 minutes.",
+				"On done, the driver sleeps the task until the next occurrence and reopens the next cycle automatically. Min every 30 minutes.",
 		}),
 	),
 	recurrence: Type.Optional(
@@ -151,21 +154,9 @@ const taskManageSchema = Type.Object({
 	),
 	residualRisk: Type.Optional(Type.String({ description: "Optional for done: remaining risk or follow-up note." })),
 	reason: Type.Optional(Type.String({ description: "Required for cancel: why the task was abandoned." })),
-	cycleId: Type.Optional(
-		Type.String({ description: "Required for start-cycle: stable id for the newly opened recurring cycle." }),
-	),
 });
 
-export type TaskManageAction =
-	| "create"
-	| "progress"
-	| "candidate"
-	| "set"
-	| "verify"
-	| "done"
-	| "cancel"
-	| "start-cycle"
-	| "list";
+export type TaskManageAction = "create" | "progress" | "candidate" | "set" | "verify" | "done" | "cancel" | "list";
 
 export interface TaskManageResult {
 	action: TaskManageAction;
@@ -204,7 +195,6 @@ export interface TaskManageRequest {
 	evidence?: string;
 	residualRisk?: string;
 	reason?: string;
-	cycleId?: string;
 }
 
 export interface TaskManageToolOptions {
@@ -232,14 +222,11 @@ function parseAction(action: string): TaskManageAction {
 		action === "verify" ||
 		action === "done" ||
 		action === "cancel" ||
-		action === "start-cycle" ||
 		action === "list"
 	) {
 		return action;
 	}
-	throw new Error(
-		"Unsupported task action. Use create, progress, candidate, set, verify, done, cancel, start-cycle, or list.",
-	);
+	throw new Error("Unsupported task action. Use create, progress, candidate, set, verify, done, cancel, or list.");
 }
 
 function tasksDir(options: TaskManageToolOptions): string {
@@ -290,10 +277,8 @@ function appendCompletionEvidence(body: string, request: TaskManageRequest): str
 }
 
 function normalizeCreateStatus(status: string | undefined): (typeof SETTABLE_STATUSES)[number] {
-	if (status === undefined) return "open";
-	if ((SETTABLE_STATUSES as readonly string[]).includes(status)) {
-		return status as (typeof SETTABLE_STATUSES)[number];
-	}
+	if (status === undefined) return "active";
+	if (isSettableTaskStatus(status)) return status;
 	throw new Error(`Invalid status "${status}". Use one of ${SETTABLE_STATUSES.join(", ")}.`);
 }
 
@@ -316,7 +301,7 @@ function renderTaskSkeleton(request: TaskManageRequest): { fields: TaskFields; b
 	// the first wake here mirrors what `done` does for every subsequent cycle. Only a freshly
 	// opened task with no caller-supplied wake is seeded — an explicit wake (including a past one
 	// for "start now") or a non-open initial status is always honoured verbatim.
-	if (fields.schedule && fields.status === "open" && request.wake === undefined) {
+	if (fields.schedule && fields.status === "active" && request.wake === undefined) {
 		fields.wake = nextTaskWake(fields.schedule)?.toISOString();
 	}
 	const body = renderStandardTaskBody({
@@ -355,7 +340,7 @@ async function readTaskDocument(
 	}
 	return {
 		fields: {
-			status: frontmatter.status ?? "open",
+			status: frontmatter.status ?? "active",
 			wake: frontmatter.wake,
 			schedule: frontmatter.schedule,
 			recurrence: frontmatter.recurrence,
@@ -372,7 +357,7 @@ function applySet(fields: TaskFields, request: TaskManageRequest): TaskFields {
 		throw new Error('Only a user can grant external-action approval with "/tasks approve <id>".');
 	}
 	if (request.status !== undefined) {
-		if (!(SETTABLE_STATUSES as readonly string[]).includes(request.status)) {
+		if (!isSettableTaskStatus(request.status)) {
 			throw new Error(
 				`Invalid status "${request.status}". Use one of ${SETTABLE_STATUSES.join(", ")}, or action "done".`,
 			);
@@ -405,12 +390,8 @@ function applySet(fields: TaskFields, request: TaskManageRequest): TaskFields {
 	if (request.control !== undefined) {
 		next.control = applyTaskControlPatch(next.control ?? createDefaultTaskControl("evidence"), request.control);
 	}
-	// A done recurring task sleeps until its next occurrence; changing the cadence of a
-	// task that is currently done recomputes that wake in the same atomic write.
-	if (next.status === "done" && next.schedule) {
-		const nextWake = nextTaskWake(next.schedule);
-		next.wake = nextWake ? nextWake.toISOString() : undefined;
-	}
+	// A done recurring task's wake is the single time rule's job: `normalizeTaskFields` fills the
+	// next occurrence on the write path, so no per-action recompute lives here anymore (D1).
 	return next;
 }
 
@@ -531,25 +512,6 @@ async function cleanupTaskEvents(
 	return { deleted, hasSchedule };
 }
 
-/**
- * Migration compat: a task may still carry a legacy canonical `.schedule` periodic event
- * as its cadence truth (pre-027). `start-cycle` accepts such a task even without `schedule`
- * frontmatter so an in-flight migration is not blocked mid-cycle.
- */
-async function hasLegacyScheduleEvent(options: TaskManageToolOptions, id: string): Promise<boolean> {
-	const eventPath = join(eventsDir(options), taskScheduleEventFilename(options.channelId, id));
-	if (!existsSync(eventPath)) return false;
-	try {
-		const type = parseScheduledEventContent(
-			await readFile(eventPath, "utf-8"),
-			taskScheduleEventFilename(options.channelId, id),
-		).type;
-		return isTaskScheduleEvent({ use: "schedule", event: { type } });
-	} catch {
-		return false;
-	}
-}
-
 async function setTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
 	if (!request.id) throw new Error('action "set" requires an id.');
 	const id = normalizeTaskId(request.id);
@@ -558,7 +520,14 @@ async function setTask(options: TaskManageToolOptions, request: TaskManageReques
 	if (request.control !== undefined && fields.control === undefined) {
 		fields.control = createDefaultTaskControl("independent");
 	}
+	const fromStatus = normalizeStoredStatus(fields.status);
+	resolveTaskTransition("set", id, fromStatus, request.status);
 	const nextFields = applySet(fields, request);
+	// Leaving the verification lane by hand invalidates any recorded verdict — a passed/failed
+	// attestation only describes the task while it stayed in `verifying` (D3).
+	if (fromStatus === "verifying" && nextFields.status !== "verifying" && nextFields.control) {
+		nextFields.control = invalidateTaskVerification(nextFields.control);
+	}
 	await validateTaskRelations(options, id, nextFields);
 	await writeFileAtomically(taskPath, renderTaskFile(nextFields, body));
 	return {
@@ -576,15 +545,13 @@ async function progressTask(options: TaskManageToolOptions, request: TaskManageR
 	const note = requiredField(request.note, "note", "progress");
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	if (["done", "cancelled", "escalated", "paused"].includes(fields.status)) {
-		throw new Error(`Task "${id}" is ${fields.status} and cannot be progressed.`);
-	}
+	resolveTaskTransition("progress", id, normalizeStoredStatus(fields.status), request.status);
 	const nextFields = applySet(fields, request);
 	await validateTaskRelations(options, id, nextFields);
 	if (nextFields.control) {
 		nextFields.control = invalidateTaskVerification(nextFields.control);
 		nextFields.control = invalidateTaskApproval(nextFields.control);
-		if (request.status === "blocked" || request.status === "awaiting-user") {
+		if (request.status === "waiting") {
 			nextFields.control.lastOutcome = "blocked";
 		} else if (request.control?.lastOutcome === undefined) {
 			nextFields.control.lastOutcome = "progress";
@@ -613,9 +580,7 @@ async function candidateTask(options: TaskManageToolOptions, request: TaskManage
 	const note = requiredField(request.note, "note", "candidate");
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	if (["done", "cancelled", "escalated", "paused"].includes(fields.status)) {
-		throw new Error(`Task "${id}" is ${fields.status} and cannot enter verification.`);
-	}
+	resolveTaskTransition("candidate", id, normalizeStoredStatus(fields.status));
 	const uncheckedAcceptance = uncheckedTaskAcceptanceItems(body);
 	if (uncheckedAcceptance.length > 0) {
 		throw new Error(
@@ -739,6 +704,7 @@ async function doneTask(options: TaskManageToolOptions, request: TaskManageReque
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
+	resolveTaskTransition("done", id, normalizeStoredStatus(fields.status));
 	const uncheckedAcceptance = uncheckedTaskAcceptanceItems(body);
 	if (uncheckedAcceptance.length > 0) {
 		throw new Error(
@@ -791,11 +757,11 @@ async function doneTask(options: TaskManageToolOptions, request: TaskManageReque
 		fields.control.blockedReason = undefined;
 	}
 
-	// A recurring task (schedule frontmatter) sleeps in place until its next occurrence;
-	// the wake is computed here so "done + wake" fully describes "asleep until next cycle".
-	const doneFields: TaskFields = fields.schedule
-		? { ...fields, status: "done", wake: nextTaskWake(fields.schedule)?.toISOString() }
-		: { ...fields, status: "done" };
+	// A recurring task (schedule frontmatter) sleeps in place until its next occurrence. The
+	// wake is cleared here and refilled to the next cron occurrence by the single time rule
+	// (`normalizeTaskFields`) on the write path, so "done + wake" always describes "asleep
+	// until next cycle" without a per-action recompute (D1).
+	const doneFields: TaskFields = { ...fields, status: "done", wake: undefined };
 	await writeFileAtomically(taskPath, renderTaskFile(doneFields, bodyWithEvidence));
 	const { deleted, hasSchedule } = await cleanupTaskEvents(options, id);
 
@@ -832,6 +798,7 @@ async function cancelTask(options: TaskManageToolOptions, request: TaskManageReq
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
+	resolveTaskTransition("cancel", id, normalizeStoredStatus(fields.status));
 	const children = await unfinishedChildren(options, id);
 	if (children.length > 0) {
 		throw new Error(
@@ -863,37 +830,6 @@ async function cancelTask(options: TaskManageToolOptions, request: TaskManageReq
 	};
 }
 
-async function startCycleTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
-	if (!request.id) throw new Error('action "start-cycle" requires an id.');
-	const id = normalizeTaskId(request.id);
-	const cycleId = requiredField(request.cycleId, "cycleId", "start-cycle");
-	const taskPath = join(tasksDir(options), `${id}.md`);
-	const { fields, body } = await readTaskDocument(taskPath, id);
-	if (fields.status !== "done") {
-		throw new Error(
-			`Task "${id}" is ${fields.status}, not done. Finish, cancel, or explicitly resolve the current cycle before starting another.`,
-		);
-	}
-	if (!fields.schedule && !(await hasLegacyScheduleEvent(options, id))) {
-		throw new Error(
-			`Task "${id}" is not recurring. Add a schedule cron with task_manage set before starting a cycle.`,
-		);
-	}
-	const control = fields.control ? resetTaskControlForCycle(fields.control, cycleId) : undefined;
-	const nextBody = startTaskCycle(body, cycleId);
-	await writeFileAtomically(
-		taskPath,
-		renderTaskFile({ ...fields, status: "in-progress", wake: undefined, control }, nextBody),
-	);
-	return {
-		action: "start-cycle",
-		id,
-		path: taskPath,
-		status: "in-progress",
-		notice: `已开启周期任务 \`${id}\` 的新周期 \`${cycleId}\`。`,
-	};
-}
-
 async function listTasks(options: TaskManageToolOptions): Promise<TaskManageResult> {
 	const entries = await readActiveTasks(tasksDir(options));
 	return {
@@ -901,7 +837,7 @@ async function listTasks(options: TaskManageToolOptions): Promise<TaskManageResu
 		tasks: entries.map((entry) => ({
 			id: entry.id,
 			title: entry.title,
-			status: entry.frontmatter.readable ? (entry.frontmatter.status ?? "open") : "unreadable",
+			status: entry.frontmatter.readable ? (entry.frontmatter.status ?? "active") : "unreadable",
 			wake: entry.frontmatter.wake,
 			actionable: entry.actionable,
 			control: entry.frontmatter.control,
@@ -929,8 +865,6 @@ export async function manageTask(
 			return doneTask(options, request);
 		case "cancel":
 			return cancelTask(options, request);
-		case "start-cycle":
-			return startCycleTask(options, request);
 		case "list":
 			return listTasks(options);
 	}
@@ -967,7 +901,6 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 				evidence?: string;
 				residualRisk?: string;
 				reason?: string;
-				cycleId?: string;
 			},
 		) => {
 			const result = await manageTask(options, {
@@ -989,7 +922,6 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 				evidence: args.evidence,
 				residualRisk: args.residualRisk,
 				reason: args.reason,
-				cycleId: args.cycleId,
 			});
 			return {
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

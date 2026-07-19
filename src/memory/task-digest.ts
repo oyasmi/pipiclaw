@@ -37,7 +37,7 @@ function relativeWake(wakeMs: number | undefined, now: number): string {
 }
 
 function renderLine(entry: TaskLedgerEntry, now: number): string {
-	const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "open") : "⚠ unreadable frontmatter";
+	const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "active") : "⚠ unreadable frontmatter";
 	const parts = [`${entry.id} — ${entry.title}`, status, relativeWake(entry.wakeMs, now)];
 	const control = entry.frontmatter.control;
 	if (control) {

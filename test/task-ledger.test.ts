@@ -25,14 +25,24 @@ function doc(front: string, body = "# Title\n\nbody"): string {
 }
 
 describe("parseTaskFrontmatter", () => {
-	it("reads the three known flat fields", () => {
+	it("reads the three known flat fields and canonicalises the status", () => {
 		const fm = parseTaskFrontmatter(doc("status: in-progress\nwake: 2026-07-08T14:00:00+08:00\nrecurrence: 每周一"));
 		expect(fm).toEqual({
 			readable: true,
-			status: "in-progress",
+			status: "active",
 			wake: "2026-07-08T14:00:00+08:00",
 			recurrence: "每周一",
 		});
+	});
+
+	it("maps a legacy escalated status to paused by the governor", () => {
+		const fm = parseTaskFrontmatter(
+			doc(
+				`status: escalated\ncontrol: ${JSON.stringify({ version: 1, priority: "normal", lastOutcome: "blocked", dependsOn: [], isolation: "shared", sideEffects: "workspace", externalApproval: "not-required", budget: { maxAttempts: 12 }, usage: { attempts: 0, tokens: 0, costUsd: 0, wallTimeMinutes: 0 }, verification: { mode: "evidence", status: "pending" } })}`,
+			),
+		);
+		expect(fm.status).toBe("paused");
+		expect(fm.control?.pausedBy).toBe("governor");
 	});
 
 	it("marks content without a leading --- as unreadable", () => {
