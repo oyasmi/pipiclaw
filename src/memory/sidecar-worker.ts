@@ -16,6 +16,13 @@ export interface SidecarTask<T> {
 	signal?: AbortSignal;
 	/** Attributes this task's LLM spend to a channel in the usage ledger. */
 	usageContext?: { channelId: string; correlationId?: string };
+	/**
+	 * Optional one-shot repair hint. When `parse` fails on the first attempt, the
+	 * task is retried once with this text appended to the prompt, so a model that
+	 * emitted malformed-but-recoverable output (e.g. a misspelled JSON key) gets a
+	 * targeted correction nudge. Omit to keep parse failures fatal.
+	 */
+	repair?: (error: SidecarParseError) => string;
 }
 
 export interface SidecarResult<T> {
@@ -222,19 +229,40 @@ export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarRe
 	}
 }
 
-export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarResult<T>> {
-	let lastError: unknown;
+/** Appends a non-empty repair hint to the original prompt, or returns it unchanged. */
+function withRepairSuffix(prompt: string, suffix: string): string {
+	const trimmed = suffix.trim();
+	return trimmed ? `${prompt}\n\n${trimmed}` : prompt;
+}
 
-	for (let attempt = 1; attempt <= SIDE_CAR_MAX_ATTEMPTS; attempt++) {
+export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarResult<T>> {
+	// Set when a one-shot repair hint has been applied; the next attempt runs with
+	// this prompt instead of the original.
+	let repairedPrompt: string | undefined;
+	let attempt = 0;
+
+	for (;;) {
+		attempt += 1;
 		if (isExternalAbort(task)) {
 			throw createAbortError(task.name, task.signal?.reason);
 		}
 
-		try {
-			return await runSidecarTask(task);
-		} catch (error) {
-			lastError = error;
+		const current: SidecarTask<T> = repairedPrompt === undefined ? task : { ...task, prompt: repairedPrompt };
 
+		try {
+			return await runSidecarTask(current);
+		} catch (error) {
+			// A parse failure is recoverable exactly once when the caller supplies a
+			// repair hint: retry with the nudge appended so a malformed-but-fixable
+			// output (e.g. a misspelled JSON key) gets one targeted correction pass.
+			if (error instanceof SidecarParseError && repairedPrompt === undefined && typeof task.repair === "function") {
+				repairedPrompt = withRepairSuffix(task.prompt, task.repair(error));
+				await delay(SIDE_CAR_RETRY_DELAY_MS, task);
+				continue;
+			}
+
+			// Parse failures are otherwise fatal — a blind retry would reproduce the
+			// same bad output. Transient failures get the standard retry budget.
 			if (attempt >= SIDE_CAR_MAX_ATTEMPTS || error instanceof SidecarParseError || isExternalAbort(task)) {
 				throw error;
 			}
@@ -242,6 +270,4 @@ export async function runRetriedSidecarTask<T>(task: SidecarTask<T>): Promise<Si
 			await delay(SIDE_CAR_RETRY_DELAY_MS, task);
 		}
 	}
-
-	throw lastError instanceof Error ? lastError : new Error(`Sidecar task "${task.name}" failed`);
 }

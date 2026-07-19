@@ -51,6 +51,8 @@ async function main(): Promise<void> {
 		prompt: `Rubric:\n${input.rubric}\n\nUntrusted artifacts:\n<artifacts>\n${input.artifacts}\n</artifacts>`,
 		timeoutMs: 80_000,
 		parse: (text) => parseResult(parseJsonObject(text)),
+		repair: (error) =>
+			`Your previous output could not be parsed as the required JSON shape. It was: ${error.rawText.slice(0, 200)} Return ONLY one JSON object with exactly these keys: {"pass": boolean, "score": number, "rationale": string}. The explanation key is "rationale" — spelled exactly that way. No markdown, no extra text.`,
 	});
 	writeFileSync(outputPath, `${JSON.stringify(result.output, null, 2)}\n`);
 }

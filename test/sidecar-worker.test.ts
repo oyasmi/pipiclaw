@@ -203,4 +203,80 @@ describe("sidecar-worker", () => {
 		expect(promptImpl).toHaveBeenCalledTimes(1);
 		vi.useRealTimers();
 	});
+
+	it("repairs a parse failure once when a repair hint is supplied", async () => {
+		vi.useFakeTimers();
+		const seenPrompts: string[] = [];
+		promptImpl = vi.fn<(input: string) => Promise<void>>(async (input) => {
+			seenPrompts.push(input);
+		});
+		stateMessages = [
+			{
+				role: "assistant",
+				content: [{ type: "text", text: '{"rationation":"oops"}' }],
+				stopReason: "stop",
+			},
+		];
+		let parseCalls = 0;
+
+		const taskPromise = runRetriedSidecarTask({
+			name: "repair-task",
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+			systemPrompt: "System",
+			prompt: "Prompt",
+			parse: (text) => {
+				parseCalls += 1;
+				if (parseCalls === 1) {
+					// The model fixes its output on the correction pass.
+					stateMessages = [
+						{ role: "assistant", content: [{ type: "text", text: '{"ok":true}' }], stopReason: "stop" },
+					];
+					throw new Error("missing rationale key");
+				}
+				return text;
+			},
+			repair: () => "Return a JSON object with a 'rationale' key.",
+		});
+
+		await vi.advanceTimersByTimeAsync(2_000);
+		await expect(taskPromise).resolves.toMatchObject({ output: '{"ok":true}' });
+		expect(parseCalls).toBe(2);
+		expect(seenPrompts).toHaveLength(2);
+		expect(seenPrompts[0]).toBe("Prompt");
+		expect(seenPrompts[1]).toBe("Prompt\n\nReturn a JSON object with a 'rationale' key.");
+		vi.useRealTimers();
+	});
+
+	it("does not apply a repair hint more than once", async () => {
+		vi.useFakeTimers();
+		stateMessages = [{ role: "assistant", content: [{ type: "text", text: "bad" }], stopReason: "stop" }];
+		let parseCalls = 0;
+
+		const taskPromise = runRetriedSidecarTask({
+			name: "repair-once-task",
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+			systemPrompt: "System",
+			prompt: "Prompt",
+			parse: () => {
+				parseCalls += 1;
+				throw new Error("always bad");
+			},
+			repair: () => "fix it",
+		});
+		// Attach a handler synchronously: the second attempt rejects during the
+		// fake-timer flush, before `expect().rejects` would otherwise attach one.
+		const outcome = taskPromise.then(
+			(result) => ({ ok: true as const, result }),
+			(error: unknown) => ({ ok: false as const, error }),
+		);
+
+		await vi.advanceTimersByTimeAsync(2_000);
+		const result = await outcome;
+		if (result.ok) throw new Error("expected the task to fail after a single repair attempt");
+		expect(result.error).toBeInstanceOf(Error);
+		expect(parseCalls).toBe(2);
+		vi.useRealTimers();
+	});
 });
