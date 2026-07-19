@@ -744,6 +744,12 @@ async function main(): Promise<void> {
 	const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${Math.random().toString(36).slice(2, 8)}`;
 	const resultDir = join(process.cwd(), "evals/results", runId);
 	mkdirSync(resultDir, { recursive: true });
+	// Capture whether each model field was set explicitly so the finalization step
+	// can tell a stale default (which the serving gateway may silently remap) apart
+	// from an operator's deliberate choice, whose drift from the observed model
+	// should stay visible in the record.
+	const configuredModelEnv = process.env.PIPICLAW_E2E_MODEL;
+	const judgeModelEnv = process.env.EVAL_JUDGE_MODEL ?? process.env.PIPICLAW_E2E_MODEL;
 	const manifest: RunManifest = {
 		schemaVersion: 1,
 		runId,
@@ -762,13 +768,13 @@ async function main(): Promise<void> {
 			GradeResult: 1,
 			TrialRecord: 2,
 		},
-		configuredModel: process.env.PIPICLAW_E2E_MODEL ?? "claude-sonnet-4-5",
+		configuredModel: configuredModelEnv ?? "claude-sonnet-4-5",
 		thinkingLevel: process.env.PIPICLAW_E2E_THINKING,
 		providerEndpoint: process.env.PIPICLAW_E2E_ENDPOINT,
 		settingsHash: "pending-first-trial",
 		toolsConfigHash: "pending-first-trial",
 		securityConfigHash: "pending-first-trial",
-		judgeModel: process.env.EVAL_JUDGE_MODEL ?? process.env.PIPICLAW_E2E_MODEL ?? "claude-sonnet-4-5",
+		judgeModel: judgeModelEnv ?? "claude-sonnet-4-5",
 	};
 	writeJson(join(resultDir, "manifest.json"), manifest);
 	writeFileSync(join(resultDir, "human-review.jsonl"), "");
@@ -814,6 +820,18 @@ async function main(): Promise<void> {
 	await Promise.all(Array.from({ length: Math.min(concurrency, ordered.length) || 1 }, () => runWorker()));
 	results.sort((left, right) => left.order - right.order);
 	const records = results.map((result) => result.record);
+	// When no model was configured explicitly, record what the serving gateway
+	// actually ran (observedModel) instead of leaving a stale default label that
+	// misrepresents the run. An explicitly configured model is left untouched so a
+	// real mismatch with the observed model stays visible as drift.
+	const observedModels = [
+		...new Set(records.map((record) => record.observedModel).filter((model) => model && model !== "unknown")),
+	];
+	if (observedModels.length === 1) {
+		const actualModel = observedModels[0];
+		if (!configuredModelEnv) manifest.configuredModel = actualModel;
+		if (!judgeModelEnv) manifest.judgeModel = actualModel;
+	}
 	// Every trial home is built from identical config, so any completed trial's hashes are authoritative.
 	if (results[0]) {
 		[manifest.settingsHash, manifest.toolsConfigHash, manifest.securityConfigHash] = results[0].configHashes;
