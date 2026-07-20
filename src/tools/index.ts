@@ -25,6 +25,7 @@ export interface CreatePipiclawToolsOptions {
 	channelId: string;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
 	getMemoryRecallSettings: () => PipiclawMemoryRecallSettings;
+	getSubAgentModelReference?: () => string | null;
 	getSessionSearchSettings: () => PipiclawSessionSearchSettings;
 	memoryCandidateStore: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
@@ -76,6 +77,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 				channelDir: options.channelDir,
 				getSubAgentDiscovery: options.getSubAgentDiscovery,
 				getMemoryRecallSettings: options.getMemoryRecallSettings,
+				getSubAgentModelReference: options.getSubAgentModelReference,
 				memoryCandidateStore: options.memoryCandidateStore,
 				securityConfig,
 				webConfig: toolsConfig.tools.web,

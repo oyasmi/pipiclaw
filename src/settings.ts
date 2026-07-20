@@ -158,6 +158,12 @@ export interface PipiclawSettings {
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	/** Single backup model reference (`provider/model`) used when the primary model's turn fails. */
 	fallbackModel?: string | null;
+	/**
+	 * Default model reference (`provider/model`) for sub-agents that don't otherwise name one
+	 * (spec 032 D5). Lower priority than an invocation's `model` or a predefined agent's
+	 * frontmatter `model`; falls back to the parent's current model when unset.
+	 */
+	subagentModel?: string | null;
 	compaction?: Partial<PipiclawCompactionSettings>;
 	retry?: Partial<PipiclawRetrySettings>;
 	memoryRecall?: Partial<PipiclawMemoryRecallSettings>;
@@ -477,6 +483,19 @@ export class PipiclawSettingsManager {
 	 */
 	getFallbackModelReference(): string | null {
 		const raw = this.settings.fallbackModel;
+		if (typeof raw !== "string") {
+			return null;
+		}
+		const trimmed = raw.trim();
+		return trimmed.length > 0 ? trimmed : null;
+	}
+
+	/**
+	 * Default model reference (`provider/model`) for sub-agents, or null when unset.
+	 * Empty / whitespace-only values are treated as unset (spec 032 D5).
+	 */
+	getSubAgentModelReference(): string | null {
+		const raw = this.settings.subagentModel;
 		if (typeof raw !== "string") {
 			return null;
 		}

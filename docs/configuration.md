@@ -140,6 +140,18 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 - 冷却时长（5 分钟）是内部常量；fallback **不修改**你用 `/model` 选定的首选模型，进程重启后回到主模型。手动 `/model` 切换会立即清除 fallback 状态。
 - fallback 生效期间 `/status` 会多出一行 `Fallback: active（primary <主模型> 冷却至 HH:MM）`；每次切换都会给用户一条提示，并写入结构化日志的 `model_fallback` 事件，成本账本按实际成交模型归因。
 
+## 子代理默认模型（Sub-Agent Model，`settings.json`）
+
+给没有指定模型的子代理委派一个默认模型,避免默认继承父当前模型(往往是最贵的那个)去跑一个本可以用便宜模型完成的窄任务:
+
+```json
+"subagentModel": "openai/gpt-4o-mini"
+```
+
+- 不配置(或填空串)＝功能关闭,行为与不带该设置时逐字节一致。
+- 值是 `provider/model` 引用,须能在已有的 `auth.json` / `models.json` 里解析到；解析失败会返回明确错误,不会静默回退到父模型。
+- 优先级(高到低):`subagent` 工具调用的 `model` 参数 > 预定义子代理 frontmatter 的 `model` > 这里的 `subagentModel` > 父代理当前模型。
+
 ## 可观测性：结构化日志与成本账本（Observability: Structured Logging & Cost Ledger）
 
 作为长期运行的守护进程，Pipiclaw 除了彩色 console 输出外，还会把结构化日志与 LLM 成本落盘到 `STATE_DIR`（默认 `~/.pipiclaw/state`，随 `PIPICLAW_HOME` 变化）。console 输出保持不变；这些文件是额外产物。

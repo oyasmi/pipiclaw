@@ -14,6 +14,17 @@ const checkoutPlaybooksDir = fileURLToPath(new URL("../src/playbooks", import.me
 /** Prefer live source docs in a checkout; installed packages fall back to dist/playbooks. */
 export const PLAYBOOKS_DIR = existsSync(checkoutPlaybooksDir) ? checkoutPlaybooksDir : bundledPlaybooksDir;
 /**
+ * Built-in sub-agent definitions bundled inside the installed package (spec 032 D2),
+ * same checkout/dist split as PLAYBOOKS_DIR. `discoverSubAgents` scans this directory
+ * before the workspace `sub-agents/` directory; a workspace file with the same `name`
+ * overrides the built-in one.
+ */
+const bundledBuiltinSubAgentsDir = fileURLToPath(new URL("./subagents/builtin", import.meta.url));
+const checkoutBuiltinSubAgentsDir = fileURLToPath(new URL("../src/subagents/builtin", import.meta.url));
+export const BUILTIN_SUB_AGENTS_DIR = existsSync(checkoutBuiltinSubAgentsDir)
+	? checkoutBuiltinSubAgentsDir
+	: bundledBuiltinSubAgentsDir;
+/**
  * Legacy default app home used before the `~/.pipiclaw` default (introduced in
  * 0.8.x). Kept only so bootstrap can migrate an existing install to the new
  * default. FIXME(0.9.0): drop this together with the migration in bootstrap.ts.

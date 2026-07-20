@@ -4,7 +4,7 @@ import type { Dirent } from "fs";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { findExactModelReferenceMatch, formatModelReference } from "../models/utils.js";
-import { SUB_AGENTS_DIR_NAME } from "../paths.js";
+import { BUILTIN_SUB_AGENTS_DIR, SUB_AGENTS_DIR_NAME } from "../paths.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 const ALLOWED_SUB_AGENT_TOOLS = ["read", "bash", "edit", "write", "web_search", "web_fetch"] as const;
@@ -17,10 +17,12 @@ const MAX_SUB_AGENT_TASK_CHARS = 12000;
 const MAX_SUB_AGENT_SYSTEM_PROMPT_CHARS = 16000;
 const ALLOWED_CONTEXT_MODES = ["isolated", "contextual"] as const;
 const ALLOWED_MEMORY_MODES = ["none", "session", "relevant"] as const;
+const ALLOWED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 export type SubAgentToolName = (typeof ALLOWED_SUB_AGENT_TOOLS)[number];
 export type SubAgentContextMode = (typeof ALLOWED_CONTEXT_MODES)[number];
 export type SubAgentMemoryMode = (typeof ALLOWED_MEMORY_MODES)[number];
+export type SubAgentThinkingLevel = (typeof ALLOWED_THINKING_LEVELS)[number];
 
 export interface SubAgentConfig {
 	name: string;
@@ -36,13 +38,16 @@ export interface SubAgentConfig {
 	contextMode: SubAgentContextMode;
 	memory: SubAgentMemoryMode;
 	paths: string[];
+	/** Unset means "apply the purpose-based default at resolution time" (spec 032 D3). */
+	thinkingLevel?: SubAgentThinkingLevel;
 	filePath?: string;
-	source: "predefined" | "inline";
+	source: "predefined" | "inline" | "builtin";
 }
 
-export interface ResolvedSubAgentConfig extends Omit<SubAgentConfig, "model" | "modelRef"> {
+export interface ResolvedSubAgentConfig extends Omit<SubAgentConfig, "model" | "modelRef" | "thinkingLevel"> {
 	model: Model<Api>;
 	modelRef: string;
+	thinkingLevel: SubAgentThinkingLevel;
 }
 
 export interface SubAgentDiscoveryResult {
@@ -64,7 +69,14 @@ export interface SubAgentInvocationOverrides {
 	contextMode?: string;
 	memory?: string;
 	paths?: string[];
+	thinkingLevel?: string;
+	/** Drives the thinkingLevel default: "verify" defaults on, everything else stays off. */
+	purpose?: string;
 }
+
+/** verify is the last unattended gate before an attestation is trusted; give it real reasoning by default. */
+const DEFAULT_VERIFY_THINKING_LEVEL: SubAgentThinkingLevel = "medium";
+const DEFAULT_WORK_THINKING_LEVEL: SubAgentThinkingLevel = "off";
 
 function validateTextLength(value: string, maxChars: number, label: string): string | undefined {
 	if (value.length <= maxChars) {
@@ -173,6 +185,19 @@ function parseContextMode(raw: unknown): { value: SubAgentContextMode; error?: s
 	};
 }
 
+function parseThinkingLevel(raw: unknown): { value?: SubAgentThinkingLevel; error?: string } {
+	const normalized = readOptionalTrimmedString(raw);
+	if (!normalized) {
+		return {};
+	}
+	if (ALLOWED_THINKING_LEVELS.includes(normalized as SubAgentThinkingLevel)) {
+		return { value: normalized as SubAgentThinkingLevel };
+	}
+	return {
+		error: `Unknown thinkingLevel "${normalized}". Allowed values: ${ALLOWED_THINKING_LEVELS.join(", ")}`,
+	};
+}
+
 function parseMemoryMode(
 	raw: unknown,
 	contextMode: SubAgentContextMode,
@@ -250,6 +275,17 @@ function resolvePositiveOverride(value: number | undefined, fallback: number): n
 	return Math.floor(value);
 }
 
+/** `enabled` defaults to true; only an explicit false (bool or the string "false") turns an agent off. */
+function parseEnabled(raw: unknown): boolean {
+	if (typeof raw === "boolean") {
+		return raw;
+	}
+	if (typeof raw === "string") {
+		return raw.trim().toLowerCase() !== "false";
+	}
+	return true;
+}
+
 function resolveModelReference(
 	modelRef: string,
 	availableModels: Model<Api>[],
@@ -264,26 +300,33 @@ function resolveModelReference(
 	return { error: `Model reference "${modelRef}" was not found among available models.` };
 }
 
-export function discoverSubAgents(workspaceDir: string, availableModels: Model<Api>[]): SubAgentDiscoveryResult {
-	const directory = getSubAgentsDir(workspaceDir);
+interface DirScanResult {
+	agents: SubAgentConfig[];
+	warnings: string[];
+	/** Every valid `name` seen in this directory, including disabled ones — used for override/enable checks. */
+	knownNames: Set<string>;
+}
+
+/** Parses every `*.md` sub-agent definition in `directory`. Shared by the built-in and workspace scans. */
+function loadAgentsFromDir(
+	directory: string,
+	availableModels: Model<Api>[],
+	source: "predefined" | "builtin",
+): DirScanResult {
 	if (!existsSync(directory)) {
-		return { directory, agents: [], warnings: [] };
+		return { agents: [], warnings: [], knownNames: new Set() };
 	}
 
 	const warnings: string[] = [];
 	const agents: SubAgentConfig[] = [];
-	const seenNames = new Set<string>();
+	const knownNames = new Set<string>();
 	let entries: Dirent<string>[];
 	try {
 		entries = readdirSync(directory, { withFileTypes: true })
 			.filter((entry) => entry.name.endsWith(".md") && (entry.isFile() || entry.isSymbolicLink()))
 			.sort((a, b) => a.name.localeCompare(b.name));
 	} catch (error) {
-		return {
-			directory,
-			agents: [],
-			warnings: [`Failed to read sub-agents directory (${errorMessage(error)})`],
-		};
+		return { agents: [], warnings: [`Failed to read sub-agents directory (${errorMessage(error)})`], knownNames };
 	}
 
 	for (const entry of entries) {
@@ -305,8 +348,17 @@ export function discoverSubAgents(workspaceDir: string, availableModels: Model<A
 			continue;
 		}
 
-		if (seenNames.has(name)) {
+		if (knownNames.has(name)) {
 			warnings.push(`${entry.name}: duplicate sub-agent name "${name}" ignored`);
+			continue;
+		}
+		// Claim the name before the enabled/empty-body checks below, so a workspace file that only
+		// disables a built-in agent (or fails later validation) still blocks that built-in default.
+		knownNames.add(name);
+
+		// `enabled: false` must win before the empty-body check: an empty-body file that only sets
+		// `enabled: false` is a valid "turn off this built-in agent" marker, not a malformed agent.
+		if (!parseEnabled(frontmatter.enabled)) {
 			continue;
 		}
 
@@ -331,6 +383,12 @@ export function discoverSubAgents(workspaceDir: string, availableModels: Model<A
 		const parsedPaths = parseStringList(frontmatter.paths, "paths");
 		if (parsedPaths.error) {
 			warnings.push(`${entry.name}: ${parsedPaths.error}`);
+			continue;
+		}
+
+		const thinkingLevel = parseThinkingLevel(frontmatter.thinkingLevel);
+		if (thinkingLevel.error) {
+			warnings.push(`${entry.name}: ${thinkingLevel.error}`);
 			continue;
 		}
 
@@ -367,7 +425,6 @@ export function discoverSubAgents(workspaceDir: string, availableModels: Model<A
 			continue;
 		}
 
-		seenNames.add(name);
 		agents.push({
 			name,
 			description,
@@ -382,12 +439,31 @@ export function discoverSubAgents(workspaceDir: string, availableModels: Model<A
 			contextMode: contextMode.value,
 			memory: memoryMode.value,
 			paths: parsedPaths.values,
+			thinkingLevel: thinkingLevel.value,
 			filePath,
-			source: "predefined",
+			source,
 		});
 	}
 
-	return { directory, agents, warnings };
+	return { agents, warnings, knownNames };
+}
+
+export function discoverSubAgents(workspaceDir: string, availableModels: Model<Api>[]): SubAgentDiscoveryResult {
+	const directory = getSubAgentsDir(workspaceDir);
+	const workspaceResult = loadAgentsFromDir(directory, availableModels, "predefined");
+	const builtinResult = loadAgentsFromDir(BUILTIN_SUB_AGENTS_DIR, availableModels, "builtin");
+
+	const warnings = [...workspaceResult.warnings, ...builtinResult.warnings];
+	const builtinAgents: SubAgentConfig[] = [];
+	for (const agent of builtinResult.agents) {
+		if (workspaceResult.knownNames.has(agent.name)) {
+			warnings.push(`${agent.name}: workspace sub-agent overrides the built-in default`);
+			continue;
+		}
+		builtinAgents.push(agent);
+	}
+
+	return { directory, agents: [...workspaceResult.agents, ...builtinAgents], warnings };
 }
 
 export function resolveSubAgentConfig(
@@ -395,6 +471,12 @@ export function resolveSubAgentConfig(
 	currentModel: Model<Api>,
 	predefinedAgents: SubAgentConfig[],
 	overrides: SubAgentInvocationOverrides,
+	/**
+	 * `settings.subagentModel` (spec 032 D5): used only when neither the invocation nor the
+	 * predefined agent's frontmatter names a model. Unset/blank is "not configured" — the
+	 * caller (tool.ts) already normalizes that, this function just treats undefined as absent.
+	 */
+	subagentDefaultModelRef?: string,
 ): { config?: ResolvedSubAgentConfig; error?: string } {
 	const baseConfig = overrides.agent ? predefinedAgents.find((agent) => agent.name === overrides.agent) : undefined;
 	if (overrides.agent && !baseConfig) {
@@ -417,6 +499,13 @@ export function resolveSubAgentConfig(
 	let modelRef = baseConfig?.modelRef;
 	if (overrides.model?.trim()) {
 		const resolved = resolveModelReference(overrides.model.trim(), availableModels);
+		if (!resolved.model) {
+			return { error: resolved.error };
+		}
+		model = resolved.model;
+		modelRef = formatModelReference(resolved.model);
+	} else if (!model && subagentDefaultModelRef) {
+		const resolved = resolveModelReference(subagentDefaultModelRef, availableModels);
 		if (!resolved.model) {
 			return { error: resolved.error };
 		}
@@ -455,6 +544,16 @@ export function resolveSubAgentConfig(
 	}
 	const paths = pathsOverride?.values ?? baseConfig?.paths ?? [];
 
+	const thinkingLevelOverride = overrides.thinkingLevel ? parseThinkingLevel(overrides.thinkingLevel) : undefined;
+	if (thinkingLevelOverride?.error) {
+		return { error: thinkingLevelOverride.error };
+	}
+	const purpose = overrides.purpose === "verify" ? "verify" : "work";
+	const thinkingLevel =
+		thinkingLevelOverride?.value ??
+		baseConfig?.thinkingLevel ??
+		(purpose === "verify" ? DEFAULT_VERIFY_THINKING_LEVEL : DEFAULT_WORK_THINKING_LEVEL);
+
 	const systemPrompt = overrides.systemPrompt?.trim() || baseConfig?.systemPrompt || "";
 	if (!systemPrompt) {
 		return { error: "Sub-agent system prompt cannot be empty." };
@@ -484,6 +583,7 @@ export function resolveSubAgentConfig(
 			contextMode,
 			memory,
 			paths,
+			thinkingLevel,
 			filePath: baseConfig?.filePath,
 			source: baseConfig ? "predefined" : "inline",
 		},

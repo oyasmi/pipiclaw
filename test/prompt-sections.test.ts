@@ -180,10 +180,13 @@ describe("runtime guide catalog", () => {
 });
 
 describe("predefined sub-agents section", () => {
-	it("disappears entirely when no sub-agent is defined", () => {
+	it("renders inline-usage guidance instead of disappearing when no sub-agent is defined", () => {
 		const build = buildPipiclawSystemPrompt(context({ subAgents: [] }));
 		expect(build.text).not.toContain("## Predefined Sub-Agents");
-		expect(build.sections.find((section) => section.id === "subagents")).toBeUndefined();
+		expect(build.text).toContain("## Sub-Agents");
+		expect(build.text).toContain("inline `systemPrompt`");
+		const section = build.sections.find((section) => section.id === "subagents");
+		expect(section).toBeDefined();
 	});
 
 	it("appears when at least one sub-agent is defined and the tool is on", () => {

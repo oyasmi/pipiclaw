@@ -34,7 +34,7 @@ export interface LoggedSubAgentRun {
 	toolCallId: string;
 	label: string;
 	agent: string;
-	source: "predefined" | "inline";
+	source: "predefined" | "inline" | "builtin";
 	model: string;
 	tools: string[];
 	turns: number;

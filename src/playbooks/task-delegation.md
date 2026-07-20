@@ -19,11 +19,17 @@ priority: 45
 
 ## 内建 subagent
 
-选择明确适合的预定义 agent；没有时才用聚焦的 inline `systemPrompt`。task 描述必须包含目标、范围、相关路径、约束、验收方法和返回格式，因为子代理看不到主对话。
+不需要预先配置：不传 `agent` 时给 `systemPrompt` 即可发起委派，`workspaceDir/sub-agents/` 为空不影响这条路径。随包自带三个默认 agent（`explorer` 只读定位/摘要、`verifier` 独立验收、`researcher` 外部信息收集），同名 workspace 文件覆盖内置版本。选择明确适合的预定义 agent；没有时才用聚焦的 inline `systemPrompt`。task 描述必须包含目标、范围、相关路径、约束、验收方法和返回格式,因为子代理看不到主对话。
 
-用 `maxTurns`、`maxToolCalls`、`maxWallTimeSec` 限幅。进程内 subagent 同回合同步返回，不需要回访事件；主 agent 负责验收结果和更新台账，子代理不驱动 task/event 台账。
+用 `maxTurns`、`maxToolCalls`、`maxWallTimeSec` 限幅。进程内 subagent 同回合同步返回,不需要回访事件；主 agent 负责验收结果和更新台账,子代理不驱动 task/event 台账。触顶时子代理会收敛输出已完成的结论而不是整段丢弃,但预算仍然是真实上限,不要依赖它兜底过大的任务。
 
-独立验收必须 `purpose: verify` + `taskId`，见 `task-closeout.md`。
+独立验收必须 `purpose: verify` + `taskId`,见 `task-closeout.md`。
+
+## 产物契约与回传预算
+
+每次委派都会在 `channelDir/subagent-artifacts/<runId>/` 下建产物目录,子代理的完整输出总会落盘到该目录的 `output.md`,与 `returns` 无关。回传给父代理的文本超过大小预算时会被截断,附上 `output.md` 的绝对路径——父代理判断值得保留的内容,按需 `read` 全文,再决定是否经 `memory_manage` 提炼为记忆。产物目录不自动清理,和 worktree 一样由父代理负责闭环:任务收尾时决定保留还是删除。
+
+需要子代理把主产出写成文件而不是回传整段文本时传 `returns: "artifact"`,子代理需以 `ARTIFACT: <filename>` 结尾；忘记该标记时会自动降级为纯文本模式。
 
 ## worktree 隔离
 

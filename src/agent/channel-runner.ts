@@ -1212,6 +1212,7 @@ export class ChannelRunner implements AgentRunner {
 			channelId: this.channelId,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,
 			getMemoryRecallSettings: () => this.settingsManager.getMemoryRecallSettings(),
+			getSubAgentModelReference: () => this.settingsManager.getSubAgentModelReference(),
 			getSessionSearchSettings: () => this.settingsManager.getSessionSearchSettings(),
 			memoryCandidateStore: this.memoryCandidateStore,
 			securityConfig: securityLoad.config,

@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
@@ -18,6 +18,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
+import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { shellEscape } from "../shared/shell-escape.js";
 import { clipText, errorMessage, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
@@ -88,12 +89,34 @@ const subagentSchema = Type.Object({
 	worktreePath: Type.Optional(
 		Type.String({ description: "Reuse an existing task-owned worktree; must be under channel tasks/worktrees/." }),
 	),
+	returns: Type.Optional(
+		Type.Union([Type.Literal("text"), Type.Literal("artifact")], {
+			description:
+				'How the sub-agent should hand back its result. "text" (default) returns the response directly. "artifact" instructs it to write its primary output to a file and end with an ARTIFACT: <filename> marker. Either way the full output is always saved under the artifact directory, and a reply over the size budget is truncated with a pointer to that file.',
+		}),
+	),
+	thinkingLevel: Type.Optional(
+		Type.Union(
+			[
+				Type.Literal("off"),
+				Type.Literal("minimal"),
+				Type.Literal("low"),
+				Type.Literal("medium"),
+				Type.Literal("high"),
+				Type.Literal("xhigh"),
+			],
+			{
+				description:
+					'Optional reasoning effort for the sub-agent. Defaults to "medium" for purpose=verify, "off" otherwise.',
+			},
+		),
+	),
 });
 
 export interface SubAgentToolDetails {
 	kind: "subagent";
 	agent: string;
-	source: "predefined" | "inline";
+	source: "predefined" | "inline" | "builtin";
 	model: string;
 	tools: string[];
 	turns: number;
@@ -109,6 +132,12 @@ export interface SubAgentToolDetails {
 	worktreePath?: string;
 	worktreeBranch?: string;
 	verificationVerdict?: "pass" | "fail";
+	/** Always populated (spec 032 D4): the full output is saved to `${artifactDir}/output.md` regardless of `returns`. */
+	artifactDir: string;
+	/** Set only when `returns: "artifact"` and the sub-agent emitted a valid ARTIFACT: marker. */
+	artifactPath?: string;
+	/** True when the reply text was truncated against MAX_SUBAGENT_RESULT_UNITS; the full text is still on disk. */
+	resultTruncated: boolean;
 }
 
 export interface SubAgentToolOptions {
@@ -122,6 +151,8 @@ export interface SubAgentToolOptions {
 	channelDir: string;
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	getMemoryRecallSettings?: () => PipiclawMemoryRecallSettings;
+	/** `settings.subagentModel` (spec 032 D5); null/undefined means unset. */
+	getSubAgentModelReference?: () => string | null;
 	memoryCandidateStore?: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
 	webConfig?: PipiclawWebToolsConfig;
@@ -135,10 +166,12 @@ export interface SubAgentToolOptions {
 		apiKey: string;
 		tools: AgentTool<any>[];
 	}) => SubAgentWorker;
+	/** Test-only override for the D6 convergence-turn wall clock; defaults to CONVERGENCE_WALL_CLOCK_MS. */
+	convergenceWallClockMs?: number;
 }
 
 interface SubAgentWorker {
-	state: { messages: AgentMessage[] };
+	state: { messages: AgentMessage[]; tools: AgentTool<any>[] };
 	subscribe(listener: (event: AgentEvent) => void): () => void;
 	abort(): void;
 	prompt(input: string): Promise<void>;
@@ -157,6 +190,22 @@ const MAX_SESSION_SECTION_CHARS = 280;
 const MAX_SESSION_CONTEXT_CHARS = 1800;
 const MAX_RECALL_CONTEXT_CHARS = 2200;
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+/**
+ * Reply budget for what a sub-agent hands back to its parent (spec 032 D4), measured in the
+ * same prompt-unit currency as the system prompt budget (shared/prompt-units.ts). The full
+ * output always lands on disk under the artifact directory regardless of this budget — this
+ * only caps what gets echoed into the parent's context.
+ */
+export const MAX_SUBAGENT_RESULT_UNITS = 1_200;
+const ARTIFACT_TRUNCATION_HEAD_RATIO = 1;
+/**
+ * Spec 032 D6: when a turn/tool/wall-time budget is hit, the sub-agent gets one more,
+ * tool-free turn to summarize what it already found instead of having its work discarded.
+ * This is a hard stop on that convergence turn itself, independent of maxWallTimeSec.
+ */
+const CONVERGENCE_WALL_CLOCK_MS = 60_000;
+const CONVERGENCE_PROMPT =
+	"Your turn/tool-call/wall-time budget for this task is exhausted. Based only on the work you have already completed, respond now with your conclusions: confirmed facts, what remains unfinished, and suggested next steps. Do not call any more tools.";
 
 interface SubAgentRunContext {
 	runId: string;
@@ -166,6 +215,7 @@ interface SubAgentRunContext {
 	workingDirectory: string;
 	worktreePath?: string;
 	worktreeBranch?: string;
+	artifactDir: string;
 }
 
 class DirectoryExecutor implements Executor {
@@ -192,6 +242,17 @@ function safeGitBranchSegment(value: string): string {
 	);
 }
 
+function getSubAgentArtifactsRoot(channelDir: string): string {
+	return join(channelDir, "subagent-artifacts");
+}
+
+/** Every run gets its own artifact directory (spec 032 D4), independent of `returns` mode. */
+async function prepareArtifactDir(channelDir: string, runId: string): Promise<string> {
+	const artifactDir = join(getSubAgentArtifactsRoot(channelDir), safeRunSegment(runId));
+	await mkdir(artifactDir, { recursive: true });
+	return artifactDir;
+}
+
 async function prepareRunContext(
 	runId: string,
 	params: { purpose?: "work" | "verify"; taskId?: string; isolation?: "shared" | "worktree"; worktreePath?: string },
@@ -205,11 +266,12 @@ async function prepareRunContext(
 	if (taskId && !ownedTask) {
 		throw new Error(`Task ${taskId} does not exist. Create it with task_manage before delegating task-owned work.`);
 	}
+	const artifactDir = await prepareArtifactDir(options.channelDir, runId);
 	const isolation = params.isolation ?? "shared";
 	if (isolation === "shared") {
 		if (params.worktreePath) throw new Error("worktreePath requires isolation=worktree.");
 		const workingDirectory = resolve(options.workingDirectory ?? process.cwd());
-		return { runId, purpose, taskId, isolation, workingDirectory };
+		return { runId, purpose, taskId, isolation, workingDirectory, artifactDir };
 	}
 	if (!taskId) throw new Error("isolation=worktree requires taskId so the worktree has a durable owner.");
 	if (!ownedTask?.fields.control) {
@@ -237,6 +299,7 @@ async function prepareRunContext(
 			workingDirectory: existing,
 			worktreePath: existing,
 			worktreeBranch: branchResult.code === 0 ? branchResult.stdout.trim() || undefined : undefined,
+			artifactDir,
 		};
 		await recordTaskWorktree(options.channelDir, taskId, context);
 		return context;
@@ -272,6 +335,7 @@ async function prepareRunContext(
 		workingDirectory: path,
 		worktreePath: path,
 		worktreeBranch: branch,
+		artifactDir,
 	};
 	try {
 		await recordTaskWorktree(options.channelDir, taskId, context);
@@ -346,6 +410,58 @@ function buildStoppedText(config: SubAgentConfig, reason: string, finalText: str
 	return `[Sub-agent ${config.name} stopped: ${reason}]\n\n${trimmedFinalText}`;
 }
 
+const ARTIFACT_MARKER_PATTERN = /(?:^|\n)ARTIFACT:\s*(\S+)\s*$/i;
+
+function parseArtifactMarker(output: string): string | undefined {
+	return ARTIFACT_MARKER_PATTERN.exec(output.trim())?.[1];
+}
+
+interface FinalizedSubAgentOutput {
+	artifactPath?: string;
+	replyText: string;
+	truncated: boolean;
+}
+
+/**
+ * Spec 032 D4: the full text always lands on disk, independent of `returns` mode and of
+ * whether it fits the reply budget. What comes back to the parent is capped at
+ * MAX_SUBAGENT_RESULT_UNITS; a reply over budget is truncated with a pointer to the file
+ * a chatty sub-agent can no longer blow out the parent's context.
+ */
+async function finalizeSubAgentOutput(
+	runContext: SubAgentRunContext,
+	finalText: string,
+	returns: "text" | "artifact",
+): Promise<FinalizedSubAgentOutput> {
+	const trimmed = finalText.trim();
+	const outputPath = join(runContext.artifactDir, "output.md");
+	if (trimmed) {
+		await writeFile(outputPath, finalText, "utf-8");
+	}
+
+	let artifactPath: string | undefined;
+	if (returns === "artifact" && trimmed) {
+		const filename = parseArtifactMarker(trimmed);
+		if (filename) {
+			const candidate = resolve(runContext.artifactDir, filename);
+			const rel = relative(runContext.artifactDir, candidate);
+			if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
+				artifactPath = candidate;
+			}
+		}
+	}
+
+	if (countPromptUnits(finalText) <= MAX_SUBAGENT_RESULT_UNITS) {
+		return { artifactPath, replyText: finalText, truncated: false };
+	}
+
+	const clipped = clipTextByPromptUnits(finalText, MAX_SUBAGENT_RESULT_UNITS, {
+		headRatio: ARTIFACT_TRUNCATION_HEAD_RATIO,
+		marker: `\n\n[... truncated; full output saved at ${outputPath} ...]\n\n`,
+	});
+	return { artifactPath, replyText: clipped.text, truncated: true };
+}
+
 /**
  * Sub-agents share the main agent's `write`/`edit` tools but only receive the runtime
  * context (task text), never the "don't touch MEMORY.md/HISTORY.md/SESSION.md, use
@@ -410,6 +526,7 @@ function buildSubAgentTask(
 	runtimeContext: SubAgentToolOptions["runtimeContext"],
 	contextBlocks: string[],
 	runContext: SubAgentRunContext,
+	returns: "text" | "artifact",
 ): string {
 	const taskText = task.trim();
 	const lines = [
@@ -419,6 +536,7 @@ function buildSubAgentTask(
 		`- Channel directory: ${runtimeContext.workspaceDir}/${runtimeContext.channelId}`,
 		`- Working directory: ${runContext.workingDirectory}`,
 		`- Filesystem isolation: ${runContext.isolation === "worktree" ? "dedicated git worktree" : "shared with parent"}`,
+		`- Artifact directory: ${runContext.artifactDir}`,
 		`- Your configured role: ${config.name}`,
 	];
 
@@ -439,6 +557,13 @@ function buildSubAgentTask(
 			"- You are the checker, not the maker. Do not edit files or fix failures; report them.",
 			"- Run deterministic checks when available and distinguish observed evidence from assumptions.",
 			"- End the response with exactly one final line: VERDICT: PASS or VERDICT: FAIL.",
+		);
+	} else if (returns === "artifact") {
+		lines.push(
+			"",
+			"Output protocol:",
+			`- Write your primary output as a file under the artifact directory above.`,
+			"- End the response with exactly one final line: ARTIFACT: <filename>",
 		);
 	}
 	return lines.join("\n");
@@ -554,6 +679,7 @@ function createDetails(
 	failed: boolean,
 	failureReason?: string,
 	verificationVerdict?: "pass" | "fail",
+	extras?: { artifactPath?: string; resultTruncated?: boolean },
 ): SubAgentToolDetails {
 	return {
 		kind: "subagent",
@@ -577,6 +703,9 @@ function createDetails(
 		worktreePath: runContext.worktreePath,
 		worktreeBranch: runContext.worktreeBranch,
 		verificationVerdict,
+		artifactDir: runContext.artifactDir,
+		artifactPath: extras?.artifactPath,
+		resultTruncated: extras?.resultTruncated ?? false,
 	};
 }
 
@@ -602,7 +731,7 @@ export function createSubAgentTool(
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate a task to a sub-agent with an isolated context. You may use a predefined sub-agent from workspaceDir/sub-agents/ or define a temporary inline sub-agent by providing systemPrompt/tools/model parameters. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
+			"Delegate a task to a sub-agent with an isolated context. Default path: pass an inline systemPrompt (plus optional tools/model) to define a temporary sub-agent — no predefined agent is required. You may instead name a predefined sub-agent via `agent`; workspaceDir/sub-agents/ may be empty on a given install, which does not block inline delegation. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
 		parameters: subagentSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			const availableModels = options.getAvailableModels();
@@ -616,7 +745,13 @@ export function createSubAgentTool(
 			if (taskLengthError) {
 				throw new Error(taskLengthError);
 			}
-			const invocation = resolveSubAgentConfig(availableModels, currentModel, discovery.agents, params);
+			const invocation = resolveSubAgentConfig(
+				availableModels,
+				currentModel,
+				discovery.agents,
+				params,
+				options.getSubAgentModelReference?.() ?? undefined,
+			);
 			if (!invocation.config) {
 				throw new Error(
 					`${invocation.error}\n\nAvailable predefined sub-agents:\n${formatSubAgentList(discovery.agents)}`,
@@ -624,6 +759,7 @@ export function createSubAgentTool(
 			}
 
 			const config = invocation.config;
+			const returns = params.returns ?? "text";
 			const runContext = await prepareRunContext(_toolCallId, params, options);
 			const scopedExecutor = new DirectoryExecutor(options.executor, runContext.workingDirectory);
 			const apiKey = await options.resolveApiKey(config.model);
@@ -632,6 +768,8 @@ export function createSubAgentTool(
 			let assistantTurns = 0;
 			let toolCalls = 0;
 			let failureReason: string | undefined;
+			/** Set alongside failureReason only for the three self-inflicted budget aborts, never for a parent-driven stop. */
+			let budgetExceeded = false;
 			let lastUpdateText = "";
 
 			const emitUpdate = (text: string) => {
@@ -671,7 +809,7 @@ export function createSubAgentTool(
 					initialState: {
 						systemPrompt: config.systemPrompt,
 						model: config.model,
-						thinkingLevel: "off",
+						thinkingLevel: config.thinkingLevel,
 						tools: filterToolsByName(availableTools, config.tools),
 					},
 					convertToLlm,
@@ -682,6 +820,7 @@ export function createSubAgentTool(
 			const unlinkAbortSignals = linkAbortSignals(signal, childController);
 			const wallClockTimer = setTimeout(() => {
 				failureReason = `Wall time budget exceeded (${config.maxWallTimeSec}s)`;
+				budgetExceeded = true;
 				worker.abort();
 			}, config.maxWallTimeSec * 1000);
 
@@ -707,6 +846,7 @@ export function createSubAgentTool(
 					emitUpdate(formatStatus(config.name, label));
 					if (toolCalls > config.maxToolCalls) {
 						failureReason = `Tool call budget exceeded (${config.maxToolCalls})`;
+						budgetExceeded = true;
 						emitUpdate(formatStatus(config.name, "tool budget reached"));
 						worker.abort();
 					}
@@ -719,6 +859,7 @@ export function createSubAgentTool(
 					assistantTurns >= config.maxTurns
 				) {
 					failureReason = `Turn budget exceeded (${config.maxTurns})`;
+					budgetExceeded = true;
 					emitUpdate(formatStatus(config.name, "turn budget reached"));
 					worker.abort();
 				}
@@ -736,11 +877,41 @@ export function createSubAgentTool(
 				try {
 					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel);
 					await worker.prompt(
-						buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks, runContext),
+						buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks, runContext, returns),
 					);
 					await worker.waitForIdle();
 				} finally {
 					childController.signal.removeEventListener("abort", abortWorker);
+				}
+
+				// D6: a self-inflicted budget abort gets one tool-free turn to converge on a
+				// conclusion instead of discarding the work outright. A parent-driven /stop
+				// (childController already aborted) skips this — the user asked to stop now.
+				if (budgetExceeded && !childController.signal.aborted) {
+					clearTimeout(wallClockTimer);
+					emitUpdate(formatStatus(config.name, "converging on budget exhaustion"));
+					const preConvergenceMessageCount = worker.state.messages.length;
+					worker.state.tools = [];
+					let convergenceTimedOut = false;
+					const convergenceTimer = setTimeout(() => {
+						convergenceTimedOut = true;
+						worker.abort();
+					}, options.convergenceWallClockMs ?? CONVERGENCE_WALL_CLOCK_MS);
+					childController.signal.addEventListener("abort", abortWorker, { once: true });
+					try {
+						await worker.prompt(CONVERGENCE_PROMPT);
+						await worker.waitForIdle();
+					} catch {
+						// Best effort: fall through to whatever worker.state.messages holds.
+					} finally {
+						childController.signal.removeEventListener("abort", abortWorker);
+						clearTimeout(convergenceTimer);
+					}
+					if (convergenceTimedOut) {
+						// Revert to the pre-D6 behavior: drop the (aborted, possibly partial)
+						// convergence turn and fall back to whatever came before it.
+						worker.state.messages = worker.state.messages.slice(0, preConvergenceMessageCount);
+					}
 				}
 			} finally {
 				unsubscribe();
@@ -810,8 +981,9 @@ export function createSubAgentTool(
 					throw new Error(buildFailureText(config, effectiveFailureReason, finalText));
 				}
 				emitUpdate(formatStatus(config.name, "stopped"));
+				const finalized = await finalizeSubAgentOutput(runContext, finalText, returns);
 				return {
-					content: [{ type: "text", text: buildStoppedText(config, effectiveFailureReason, finalText) }],
+					content: [{ type: "text", text: buildStoppedText(config, effectiveFailureReason, finalized.replyText) }],
 					details: createDetails(
 						config,
 						runContext,
@@ -822,12 +994,19 @@ export function createSubAgentTool(
 						true,
 						effectiveFailureReason,
 						verificationVerdict,
+						{ artifactPath: finalized.artifactPath, resultTruncated: finalized.truncated },
 					),
 				};
 			}
 
+			const finalized = await finalizeSubAgentOutput(runContext, finalText, returns);
 			return {
-				content: [{ type: "text", text: finalText || `(Sub-agent ${config.name} completed with no text output)` }],
+				content: [
+					{
+						type: "text",
+						text: finalized.replyText || `(Sub-agent ${config.name} completed with no text output)`,
+					},
+				],
 				details: createDetails(
 					config,
 					runContext,
@@ -838,6 +1017,7 @@ export function createSubAgentTool(
 					false,
 					undefined,
 					verificationVerdict,
+					{ artifactPath: finalized.artifactPath, resultTruncated: finalized.truncated },
 				),
 			};
 		},
