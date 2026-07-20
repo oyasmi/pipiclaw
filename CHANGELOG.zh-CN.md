@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.8.9-beta.2] - 2026-07-20
+
+### 新增
+
+- 新增 `send_media` 工具（spec 030），让 agent 可把本地文件作为原生附件推送到当前频道，而非内联文本：钉钉会以图片/文件消息上传并发送，终端 TUI 则写入磁盘并打印路径。该工具绑定到 `ChannelContext` 上一个传输无关的 `MediaSender` 端口（工具代码不依赖具体传输实现），并仅对主路径开放——子代理不可用。
+- 让委派（delegation）开箱即用，并补齐其成本回报（spec 032）。inline-delegation 指引在预定义目录为空时也会渲染；内置三个子代理（explorer、verifier、researcher），随包发布在 `src/subagents/builtin/`，先于 workspace 目录发现（同名 workspace 文件可覆盖，`enabled:false` 可关闭）。`thinkingLevel` 可通过 frontmatter/调用参数配置（`purpose=verify` 默认 `medium`，其余默认关闭）。每次子代理运行都会在 `subagent-artifacts/<runId>/` 下生成完整输出 `output.md`；超过预算的回复会被截断并附指向，新增 `returns:"artifact"` 模式采用 `ARTIFACT:` 标记协议（缺失时优雅降级）。预算触发的中止（turn/tool-call/wall-time）现在会获得一个无工具的收敛回合来汇报结论，而不再丢弃全部工作，该回合受独立的 60s 时钟约束。新增 `settings.subagentModel`，使委派可在与父级不同的模型上运行，优先级为 invocation > frontmatter > settings > 父级模型。
+- Sidecar 任务新增可选的 `repair(error)` 回调：当首次 `parse` 抛错时，任务会带上返回的提示追加后再重试一次，让格式损坏但仍可恢复的 sidecar 输出（例如拼错的 JSON key）获得针对性纠正，而非直接失败。其余情况解析失败仍为致命——盲重试只会复现同样的错误输出；瞬时失败仍走标准重试预算。
+
+### 变更
+
+- 统一工具结果的 `details` 契约与可恢复拒绝。模型可自行解决的拒绝（缺字段、未知 id、非法状态转换）现在抛出 `RecoverableToolError`，工具边界将其转换为带 `details.recoverable: true` 的正常结果——以 debug 级别记录且不进入用户聊天；而普通错误（守卫拒绝、审批门禁、状态损坏、真实故障）仍对用户可见。`kind` 不再由各工具手写：`buildToolSet` 直接按注册名打标，使每个结果都按构造方式一致。同时删除每工具的 `## Available Tools` 提示段（每回合约 180 prompt units，与每个工具自身的 `description` 重复），移除不再使用的 `hint` 管道。
+- 围绕质量重做记忆召回与持久记忆抽取。召回打分改为基于证据而非覆盖率：候选按加权 specificity 质量对照绝对阈值入选，因此用户给出的上下文越多，召回反而越不会坍塌；中文改为发射重叠三元组，使被字典切碎的复合词（如「包管理器」）仍能精确匹配。模型 rerank 收窄到 3s 预算，仅在候选短表溢出且无明确本地胜出者时触发，否则开放回退到本地排序。boundary consolidation、idle consolidation 与 growth review 现在共用同一份抽取 prompt、JSON schema 和置信度门禁（`extraction.ts`）——此前三者中有两者根本没有置信度门槛——被拒候选会以 skipped 写入 `memory-review.jsonl`，而其源材料仍保留在 `HISTORY.md` 和冷存储中。
+- 修正文档漂移，并按主题（而非任务）重构 runtime playbook。修正 `architecture.md` 中的任务生命周期枚举与 governor 结果；移除运维排障清单中对不存在的「escalated」状态的引用；把两处 `escalateTask()` 调用统一到同一条日志（`paused (governor)`），避免运维检索漏掉预算/依赖场景。任务专属 playbook 从 7/9 降到 4/9（task-recurring 并入 task-planning，task-repair 并入 task-driving），新增 `background-jobs.md` 与 `outbound-media.md`，契约 hash 语义去重后集中在 `task-closeout.md`。新增 `docs/tools.md`（全部 14 个工具的能力/开关/子代理可见性矩阵）、`docs/memory.md`（记忆分层的用户视角）和 `docs/README.md`（按 user/operator/developer 分组的索引）；playbook 目录清单改为在 `runtime-playbooks.md` 中单一维护，并由测试保证二者同步。同时删除不可达的 `modes` 过滤机制，以及指向已退役 `tasks-pending.mjs` 传感器的过时注释。
+
+### 修复
+
+- 加固定时事件与后台作业的投递可靠性（spec 031）。`dispatchId` 现在按来源推导（one-shot 的 `at`、periodic 的 cron 触发时刻、`job:<channelId>:<jobId>:done`），而非墙钟时间，使文件恢复路径与 outbox 重试路径落在同一 id 上，满载的频道队列不再重复投递。lease 的含义改为「持有者仍存活」——持有期间续约，`cancelChannel` 时同步清空，使被 `/stop` 的记录可被重新投递，而不会被永久续约；第 N 次投递仅在被投递文本上加 `[REDELIVERY:n]` 前缀。事件准入规则移到共享的 `event-validation.ts`，由 `event_manage` 与 watcher（现为最终仲裁者）共用；`immediate` 从类型系统中移除；最小提前时间约束仅作用于当前进程写入的文件。任务专属事件会查找所属任务，当 owner 已消失或终态时跳过派发（并自删）。后台作业现在持久化到 `state/jobs/<channelId>/<jobId>.json`，重启时被回收（运行中的按并发上限回收，已完成的给一次补醒），并在完成时通过 durable dispatch 唤醒频道——正式退役 job-manager 的「sweep 不唤醒」约束。futile-wake 检测从 `taskFingerprint` 改为基于每频道 effect 计数器（对改变世界的工具调用和可见投递计数），因此写一条 progress note 不再清零计数——只有真正做事才会。
+- 评测运行清单（manifest）现在会在没有显式配置模型时，记录所有 trial 实际观察到的模型，而不再写入陈旧默认值（`claude-sonnet-4-5`）从而误报 serving gateway 实际运行的模型。显式配置的模型保持不变，因此与观察模型的真实不匹配仍会作为漂移暴露出来。
+
 ## [0.8.9-beta.1] - 2026-07-19
 
 ### 新增
