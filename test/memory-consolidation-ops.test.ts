@@ -36,12 +36,25 @@ describe("runInlineConsolidation with ops", () => {
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Deploy strategy is rolling" }]);
 		const [entry] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
 
-		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
-			output: JSON.stringify({
-				memoryOps: [{ op: "supersede", targetId: entry.id, content: "Deploy strategy is blue-green" }],
+		// The real sidecar runs the task's own `parse`; mirror that so the mock exercises the
+		// shared extraction parser and its confidence gate.
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
+			const json = JSON.stringify({
+				memoryOps: [
+					{
+						op: "supersede",
+						targetId: entry.id,
+						content: "Deploy strategy is blue-green",
+						kind: "decision",
+						confidence: 0.95,
+						necessity: "high",
+						reason: "deploy strategy changed",
+					},
+				],
 				historyBlock: "- Switched deploy strategy to blue-green.",
-			}),
-		} as never);
+			});
+			return { rawText: json, output: task.parse(json) } as never;
+		});
 
 		const result = await runInlineConsolidation({
 			channelDir,
@@ -66,6 +79,51 @@ describe("runInlineConsolidation with ops", () => {
 			sourceEntryIds: ["session-42"],
 			sourceCorrelationIds: ["window-deploy-42"],
 		});
+	});
+
+	it("holds consolidation to the same auto-write bar as the growth review", async () => {
+		const channelDir = createTempChannel();
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
+			const json = JSON.stringify({
+				memoryOps: [
+					{
+						op: "add",
+						content: "Durable deploy constraint",
+						kind: "constraint",
+						confidence: 0.95,
+						necessity: "high",
+					},
+					{ op: "add", content: "Transient debugging note", kind: "fact", confidence: 0.4, necessity: "low" },
+					{
+						op: "add",
+						content: "Plausible but not load-bearing",
+						kind: "fact",
+						confidence: 0.95,
+						necessity: "medium",
+					},
+				],
+				historyBlock: "- Discussed deploys.",
+			});
+			return { rawText: json, output: task.parse(json) } as never;
+		});
+
+		const result = await runInlineConsolidation({
+			channelDir,
+			model: fakeModel,
+			resolveApiKey,
+			messages,
+			mode: "idle",
+		});
+
+		const memory = await readChannelMemory(channelDir);
+		expect(memory).toContain("Durable deploy constraint");
+		expect(memory).not.toContain("Transient debugging note");
+		expect(memory).not.toContain("Plausible but not load-bearing");
+		// Rejected candidates stay visible to the review log rather than vanishing.
+		expect(result.rejectedMemoryOps.map((candidate) => candidate.content)).toEqual([
+			"Transient debugging note",
+			"Plausible but not load-bearing",
+		]);
 	});
 });
 

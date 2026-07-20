@@ -846,7 +846,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | `memoryRecall.maxCandidates` | `12` | Yes | 排序前候选片段数量 |
 | `memoryRecall.maxInjected` | `5` | Yes | 注入当前 prompt 的片段数量 |
 | `memoryRecall.maxChars` | `5000` | Yes | 注入字符上限 |
-| `memoryRecall.rerankWithModel` | `"auto"` | Yes | 是否用模型对召回结果再次排序；`"auto"` 只在本地排序不确定时触发 |
+| `memoryRecall.rerankWithModel` | `"auto"` | Yes | 是否用模型对召回结果再次排序；`"auto"` 只在入围数超过 `maxInjected` 且本地排序没有明显赢家时触发（3s 超时，失败则回退本地排序） |
 | `sessionMemory.enabled` | `true` | Yes | 启用 `SESSION.md` 刷新流程 |
 | `sessionMemory.minTurnsBetweenUpdate` | `2` | Yes | scheduled session refresh 的 assistant turn 阈值 |
 | `sessionMemory.minToolCallsBetweenUpdate` | `4` | Yes | scheduled session refresh 的工具调用阈值 |
@@ -1020,6 +1020,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 - `postTurnReview` 已迁移为后台 growth review job，触发频率由 `memoryGrowth.minTurnsBetweenReview` / `memoryGrowth.minToolCallsBetweenReview` 和 `memoryMaintenance.growthReviewIntervalMinutes` 共同控制。
 - `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
 - `minSkillAutoWriteConfidence` 可以调高以进一步收紧 workspace skill 自动写入，但低于 `0.9` 的配置会按 `0.9` 执行，避免低置信 workflow 污染 workspace skills。
+- `minMemoryAutoWriteConfidence` 现在同时约束 **growth review 与前后台的 durable 固化**——两者共用一条提炼路径和同一道闸门。调低它会让边界固化也一起变松。被闸门拒绝的候选会记进 `memory-review.jsonl` 的 `skipped`，素材本身仍保留在 `HISTORY.md` 和冷存储里。
 
 ## 内建工具配置文件 `tools.json`（`tools.json`）
 

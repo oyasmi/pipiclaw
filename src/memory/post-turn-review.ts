@@ -1,17 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { serializeConversation } from "@earendil-works/pi-coding-agent";
-import { parseJsonObject } from "../shared/llm-json.js";
-import { clipText, errorMessage } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { manageWorkspaceSkill } from "../tools/skill-manage.js";
-import {
-	applyChannelMemoryOps,
-	type MemoryOp,
-	readChannelHistory,
-	readChannelMemory,
-	readChannelSession,
-} from "./files.js";
+import { parseMemoryExtractionResult, runMemoryExtraction, toMemoryOp } from "./extraction.js";
+import { applyChannelMemoryOps } from "./files.js";
 import { containsSecret } from "./policy.js";
 import {
 	type MemoryPromotionCandidate,
@@ -21,8 +13,6 @@ import {
 	shouldAutoWriteSkill,
 } from "./promotion.js";
 import { appendMemoryReviewLog } from "./review-log.js";
-import { runRetriedSidecarTask } from "./sidecar-worker.js";
-import { sanitizeMessagesForMemory } from "./transcript.js";
 
 export interface PostTurnReviewOptions {
 	channelId: string;
@@ -55,178 +45,28 @@ export type PostTurnReviewRunResult =
 	| { status: "applied" | "empty"; result: PostTurnReviewApplyResult }
 	| { status: "failed"; error: string };
 
-const POST_TURN_REVIEW_SYSTEM_PROMPT = `You are Pipiclaw's post-turn memory reviewer.
+const POST_TURN_TRANSCRIPT_MAX_CHARS = 22_000;
 
-Return strict JSON only:
-{
-  "memoryOps": [
-    {
-      "target": "channel-memory",
-      "op": "add|supersede|invalidate",
-      "targetId": "required for supersede/invalidate",
-      "content": "standalone durable memory bullet without '-'",
-      "kind": "fact|preference|decision|constraint|open-loop|lesson",
-      "confidence": 0.0,
-      "necessity": "low|medium|high",
-      "reason": "why it should or should not be stored"
-    }
-  ],
-  "skillCandidates": [
-    {
-      "action": "create|patch|write_file",
-      "name": "skill-name",
-      "content": "full SKILL.md or supporting file content",
-      "filePath": "optional supporting file path",
-      "find": "exact patch find text",
-      "replace": "exact patch replacement text",
-      "confidence": 0.0,
-      "necessity": "low|medium|high",
-      "reason": "why this procedural memory matters"
-    }
-  ],
-  "discarded": [{"content": "string", "reason": "string"}]
-}
-
-Rules:
-- Channel MEMORY.md is only for durable facts, durable decisions, user/team preferences, stable constraints, and medium-horizon open loops.
-- Do not promote current step-by-step execution state, short-lived debugging observations, completed worklog, or acknowledgement chatter.
-- Workspace skills are procedural memory: reusable workflows, checklists, playbooks, templates, or scripts.
-- Propose skill writes only when the workflow is clearly reusable across future tasks.
-- Use action=create only for new self-contained skills with YAML frontmatter and a non-empty body.
-- Skill names must be lowercase kebab-case.
-- Be conservative. Empty arrays are correct when nothing should be stored.`;
-
-function normalizeConfidence(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
-}
-
-function normalizeNecessity(value: unknown): "low" | "medium" | "high" {
-	return value === "high" || value === "medium" || value === "low" ? value : "low";
-}
-
-function normalizeMemoryCandidate(value: unknown): MemoryPromotionCandidate | null {
-	if (!isRecord(value)) {
-		return null;
-	}
-	if (value.target !== "channel-memory") {
-		return null;
-	}
-	const target = "channel-memory" as const;
-	const op = value.op === "supersede" || value.op === "invalidate" ? value.op : "add";
-	const targetId = typeof value.targetId === "string" ? value.targetId.trim() : undefined;
-	const content = typeof value.content === "string" ? value.content.trim() : undefined;
-	const kind =
-		value.kind === "preference" ||
-		value.kind === "decision" ||
-		value.kind === "constraint" ||
-		value.kind === "open-loop" ||
-		value.kind === "lesson"
-			? value.kind
-			: "fact";
-	if ((op === "invalidate" && !targetId) || (op !== "invalidate" && !content)) {
-		return null;
-	}
-	return {
-		target,
-		op,
-		targetId,
-		content,
-		kind,
-		confidence: normalizeConfidence(value.confidence),
-		necessity: normalizeNecessity(value.necessity),
-		reason: typeof value.reason === "string" ? value.reason.trim() : "",
-	};
-}
-
-function normalizeSkillCandidate(value: unknown): SkillPromotionCandidate | null {
-	if (!isRecord(value)) {
-		return null;
-	}
-	const action = value.action;
-	if (action !== "create" && action !== "patch" && action !== "write_file") {
-		return null;
-	}
-	const name = typeof value.name === "string" ? value.name.trim() : "";
-	if (!name) {
-		return null;
-	}
-	return {
-		action,
-		name,
-		content: typeof value.content === "string" ? value.content : undefined,
-		filePath: typeof value.filePath === "string" ? value.filePath : undefined,
-		find: typeof value.find === "string" ? value.find : undefined,
-		replace: typeof value.replace === "string" ? value.replace : undefined,
-		confidence: normalizeConfidence(value.confidence),
-		necessity: normalizeNecessity(value.necessity),
-		reason: typeof value.reason === "string" ? value.reason.trim() : "",
-	};
-}
-
-export function parsePostTurnReviewResult(value: unknown): PostTurnReviewResult {
-	const record = isRecord(value) ? value : {};
-	const rawMemoryOps = Array.isArray(record.memoryOps)
-		? record.memoryOps
-		: Array.isArray(record.memoryCandidates)
-			? record.memoryCandidates
-			: [];
-	const memoryOps =
-		rawMemoryOps.length > 0
-			? rawMemoryOps.map(normalizeMemoryCandidate).filter((item): item is MemoryPromotionCandidate => !!item)
-			: [];
-	const skillCandidates = Array.isArray(record.skillCandidates)
-		? record.skillCandidates.map(normalizeSkillCandidate).filter((item): item is SkillPromotionCandidate => !!item)
-		: [];
-	const discarded = Array.isArray(record.discarded)
-		? record.discarded
-				.filter(isRecord)
-				.map((item) => ({
-					content: typeof item.content === "string" ? item.content : "",
-					reason: typeof item.reason === "string" ? item.reason : "",
-				}))
-				.filter((item) => item.content.trim() || item.reason.trim())
-		: [];
-	return { memoryOps, skillCandidates, discarded };
-}
+/** Re-exported so existing callers and tests keep one parser for the shared schema. */
+export const parsePostTurnReviewResult = parseMemoryExtractionResult;
 
 async function runPostTurnReviewWorker(options: PostTurnReviewOptions): Promise<PostTurnReviewResult> {
-	const [currentSession, currentMemory, currentHistory] = await Promise.all([
-		readChannelSession(options.channelDir),
-		readChannelMemory(options.channelDir),
-		readChannelHistory(options.channelDir),
-	]);
-	const transcript = clipText(serializeConversation(sanitizeMessagesForMemory(options.messages)), 22_000, {
-		headRatio: 0.35,
-	});
-	const skills = options.loadedSkills
-		.map((skill) => `- ${skill.name}${skill.description ? `: ${skill.description}` : ""}`)
-		.join("\n");
-	const prompt = `Current SESSION.md:
-${clipText(currentSession, 6_000, { headRatio: 0.5 }) || "(empty)"}
-
-Current channel MEMORY.md:
-${clipText(currentMemory, 6_000, { headRatio: 0.5 }) || "(empty)"}
-
-Current channel HISTORY.md:
-${clipText(currentHistory, 2_000, { headRatio: 0.3 }) || "(empty)"}
-
-Loaded workspace skills:
-${skills || "(none)"}
-
-Recent transcript:
-${transcript || "(empty)"}`;
-
-	const result = await runRetriedSidecarTask({
+	return runMemoryExtraction({
 		name: "memory-post-turn-review",
+		channelId: options.channelId,
+		channelDir: options.channelDir,
+		messages: options.messages,
 		model: options.model,
 		resolveApiKey: options.resolveApiKey,
-		systemPrompt: POST_TURN_REVIEW_SYSTEM_PROMPT,
-		prompt,
 		timeoutMs: options.timeoutMs,
+		transcriptMaxChars: POST_TURN_TRANSCRIPT_MAX_CHARS,
+		// The growth review is the only path that proposes procedural memory, and the only one
+		// that does not summarize into HISTORY.md.
+		includeHistoryBlock: false,
+		includeSkills: true,
+		loadedSkills: options.loadedSkills,
 		usageContext: { channelId: options.channelId, correlationId: options.correlationId },
-		parse: (text) => parsePostTurnReviewResult(parseJsonObject(text)),
 	});
-	return result.output;
 }
 
 async function applyMemoryCandidate(
@@ -248,33 +88,10 @@ async function applyMemoryCandidate(
 		return;
 	}
 
-	const op: MemoryOp =
-		candidate.op === "invalidate"
-			? { op: "invalidate", targetId: candidate.targetId ?? "", reason: candidate.reason }
-			: candidate.op === "supersede"
-				? {
-						op: "supersede",
-						targetId: candidate.targetId ?? "",
-						content: candidate.content ?? "",
-						sourceEntryIds: options.sourceEntryIds,
-						metadata: {
-							kind: candidate.kind,
-							sourceType: "agent",
-							trust: "inferred",
-							sourceCorrelationId: options.correlationId,
-						},
-					}
-				: {
-						op: "add",
-						content: candidate.content ?? "",
-						sourceEntryIds: options.sourceEntryIds,
-						metadata: {
-							kind: candidate.kind,
-							sourceType: "agent",
-							trust: "inferred",
-							sourceCorrelationId: options.correlationId,
-						},
-					};
+	const op = toMemoryOp(candidate, {
+		sourceEntryIds: options.sourceEntryIds,
+		correlationId: options.correlationId,
+	});
 	const applied = await applyChannelMemoryOps(options.channelDir, [op], timestamp);
 	if (applied.blockedByPolicy > 0 || applied.blockedByTombstone > 0) {
 		result.skipped.push({ type: "memory", entry: candidate.targetId, reason: "blocked by memory policy" });

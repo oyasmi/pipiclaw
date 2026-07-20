@@ -29,6 +29,19 @@ import { setupChannelFiles, useTempDirs } from "../helpers/fixtures.js";
 const makeWorkspace = useTempDirs("pipiclaw-memory-lifecycle-");
 const TEST_MODEL = { provider: "test", id: "noop" } as never;
 
+/**
+ * Mirror what the real sidecar returns: it runs the task's own `parse` over the model text,
+ * so the mock exercises the shared extraction parser instead of hand-rolling its output.
+ */
+function sidecarResultFor(task: { parse: (text: string) => unknown }, json: string) {
+	return { rawText: json, output: task.parse(json) } as never;
+}
+
+/** memoryOps only reach MEMORY.md when they clear the shared auto-write bar. */
+function durableOp(content: string) {
+	return { op: "add", content, kind: "fact", confidence: 0.95, necessity: "high", reason: "test" };
+}
+
 function createFakePi() {
 	const handlers = new Map<string, (event: unknown) => Promise<void> | void>();
 	return {
@@ -207,12 +220,13 @@ describe("memory-lifecycle integration", () => {
 		});
 		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
 			if (task.name === "memory-inline-consolidation") {
-				return {
-					rawText:
-						'{"memoryOps":[{"op":"add","content":"Callback verification must remain backwards-compatible"}],"historyBlock":"- Investigated callback verification flow."}',
-					output:
-						'{"memoryOps":[{"op":"add","content":"Callback verification must remain backwards-compatible"}],"historyBlock":"- Investigated callback verification flow."}',
-				};
+				return sidecarResultFor(
+					task,
+					JSON.stringify({
+						memoryOps: [durableOp("Callback verification must remain backwards-compatible")],
+						historyBlock: "- Investigated callback verification flow.",
+					}),
+				);
 			}
 			throw new Error(`Unexpected sidecar task ${task.name}`);
 		});
@@ -251,12 +265,13 @@ describe("memory-lifecycle integration", () => {
 				};
 			}
 			if (task.name === "memory-inline-consolidation") {
-				return {
-					rawText:
-						'{"memoryOps":[{"op":"add","content":"Callback verification must stay backwards-compatible"}],"historyBlock":"- Compacted recent debugging work."}',
-					output:
-						'{"memoryOps":[{"op":"add","content":"Callback verification must stay backwards-compatible"}],"historyBlock":"- Compacted recent debugging work."}',
-				};
+				return sidecarResultFor(
+					task,
+					JSON.stringify({
+						memoryOps: [durableOp("Callback verification must stay backwards-compatible")],
+						historyBlock: "- Compacted recent debugging work.",
+					}),
+				);
 			}
 			throw new Error(`Unexpected sidecar task ${task.name}`);
 		});
@@ -286,12 +301,13 @@ describe("memory-lifecycle integration", () => {
 				throw new Error("session update timeout");
 			}
 			if (task.name === "memory-inline-consolidation") {
-				return {
-					rawText:
-						'{"memoryOps":[{"op":"add","content":"Callback retry loop masked the root cause"}],"historyBlock":""}',
-					output:
-						'{"memoryOps":[{"op":"add","content":"Callback retry loop masked the root cause"}],"historyBlock":""}',
-				};
+				return sidecarResultFor(
+					task,
+					JSON.stringify({
+						memoryOps: [durableOp("Callback retry loop masked the root cause")],
+						historyBlock: "",
+					}),
+				);
 			}
 			throw new Error(`Unexpected sidecar task ${task.name}`);
 		});

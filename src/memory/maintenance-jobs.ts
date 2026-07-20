@@ -126,6 +126,8 @@ function makeRunOptions(input: BaseMaintenanceJobInput, usageCorrelationId?: str
 		messages: input.messages,
 		sessionEntries: input.sessionEntries,
 		usageCorrelationId,
+		// One durable-write bar across consolidation and the growth review.
+		minAutoWriteConfidence: input.settings.memoryGrowth.minMemoryAutoWriteConfidence,
 	};
 }
 
@@ -301,6 +303,11 @@ export async function runDurableConsolidationJob(input: DurableConsolidationJobI
 						}
 					: {
 							actions: [{ target: "MEMORY.md", action: "append", entries: result.appendedMemoryEntries }],
+							skipped: (result.rejectedMemoryOps ?? []).map((candidate) => ({
+								target: "MEMORY.md",
+								candidate,
+								reason: "below auto-write confidence",
+							})),
 							correlationId: sourceWindow.windowId,
 						},
 				now,

@@ -30,7 +30,6 @@ export interface RecallRequest {
 	 */
 	maxUnits?: number;
 	rerankWithModel: boolean | "auto";
-	autoRerank?: boolean;
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	candidateStore?: MemoryCandidateStore;
@@ -53,9 +52,10 @@ export interface RecallResult {
 
 type QueryIntent = "current-state" | "next-steps" | "constraints" | "decisions" | "errors" | "history";
 
-interface TokenMatchStats {
+interface MatchEvidence {
+	/** Weighted specificity mass of the matched query tokens. */
+	mass: number;
 	matchedCount: number;
-	coverage: number;
 }
 
 interface ScoredCandidate {
@@ -82,12 +82,23 @@ const TOKEN_PART_REGEX = /[\p{Script=Han}]+|[\p{L}\p{N}_./-]+/gu;
 const ASCII_SPLIT_REGEX = /[._/-]+/g;
 /** Automatic-context share for relevant memory recall (spec 026 §5.3). */
 export const MEMORY_RECALL_MAX_UNITS = 1_800;
-const MEMORY_RECALL_RERANK_TIMEOUT_MS = 8_000;
+// Rerank sits on the turn's critical path and can only ever narrow the shortlist, so it
+// gets a short leash and fails open to the local ranking.
+const MEMORY_RECALL_RERANK_TIMEOUT_MS = 3_000;
 const RERANK_CONTENT_CLIP = 800;
-const HIGH_CONFIDENCE_SCORE = 36;
-const CLOSE_SCORE_DELTA = 8;
-const MIN_LOCAL_SCORE = 12;
-const MIN_QUERY_COVERAGE = 0.25;
+const HIGH_CONFIDENCE_SCORE = 8;
+const CLOSE_SCORE_DELTA = 3;
+/**
+ * Minimum weighted evidence a candidate must show to enter the shortlist, measured in
+ * specificity mass (see `tokenSpecificity`) rather than as a fraction of the query.
+ * Normalizing by query length made recall collapse on detailed messages: a 60-token
+ * question could not clear a 25% coverage bar even when it named the exact subject of a
+ * stored entry, so the more context a user gave the less memory surfaced. Evidence is
+ * absolute instead — one rare token match counts the same however long the message is.
+ */
+const MIN_MATCH_EVIDENCE = 2.5;
+/** Field the strongest match for a token was found in; a token scores once, at its best field. */
+const FIELD_WEIGHTS = { title: 1.4, content: 1, path: 0.7 } as const;
 const MAX_HAN_WORD_LENGTH = Array.from(COMMON_CHINESE_WORDS).reduce((max, word) => Math.max(max, word.length), 2);
 const LATIN_STOP_WORDS = new Set([
 	"a",
@@ -245,6 +256,15 @@ function tokenizeHanPart(part: string): string[] {
 		}
 	}
 
+	// Trigrams are emitted across the whole run, including positions the dictionary already
+	// covered. Greedy dictionary matching shreds compounds — "包管理器" becomes 管理 + 包 + 器,
+	// three tokens so generic they carry almost no evidence — while the trigrams 包管理/管理器
+	// survive on both the query and the memory side and match verbatim. This is what lets a
+	// domain term be recognized without shipping a domain dictionary.
+	for (let index = 0; index + 3 <= chars.length; index++) {
+		tokens.push(chars.slice(index, index + 3).join(""));
+	}
+
 	return Array.from(new Set(tokens));
 }
 
@@ -287,40 +307,106 @@ function buildTokenSet(text: string): Set<string> {
 	return new Set(tokenize(text));
 }
 
-function computeTokenMatchStats(queryTokens: string[], text: string): TokenMatchStats {
-	if (queryTokens.length === 0 || !text.trim()) {
-		return { matchedCount: 0, coverage: 0 };
+/**
+ * How much evidence a single token match is worth, from the token's own shape. Length and
+ * script are decent proxies for rarity and they cost nothing to compute: a bare "器" says
+ * almost nothing, "包管理" says a lot, and an identifier like "pnpm" says more still.
+ */
+function hanTokenSpecificity(token: string): number {
+	const chars = Array.from(token);
+	const informative = chars.filter((char) => !CHINESE_STOP_CHARS.has(char)).length;
+	if (chars.length >= 3) {
+		// Function-word trigrams ("不要用") match everywhere and mean nothing.
+		return informative >= 2 ? 2.5 : 0.8;
 	}
-
-	const haystack = buildTokenSet(text);
-	let matchedCount = 0;
-	for (const token of queryTokens) {
-		if (haystack.has(token)) {
-			matchedCount++;
-		}
+	if (chars.length === 2) {
+		if (informative === 0) return 0.2;
+		// A bigram the dictionary does not know is more likely to be a domain term.
+		return COMMON_CHINESE_WORDS.has(token) ? 1 : 1.5;
 	}
-
-	return {
-		matchedCount,
-		coverage: matchedCount / queryTokens.length,
-	};
+	return CHINESE_STOP_CHARS.has(token) ? 0.1 : 0.25;
 }
 
-function collectMatchingQueryTokens(queryTokens: string[], texts: string[]): Set<string> {
-	const haystack = new Set<string>();
-	for (const text of texts) {
-		for (const token of tokenize(text)) {
-			haystack.add(token);
-		}
-	}
+function tokenSpecificity(token: string): number {
+	if (containsHanText(token)) return hanTokenSpecificity(token);
+	if (/\d/.test(token)) return 3;
+	if (token.length >= 4) return 3;
+	if (token.length === 3) return 2;
+	return 0.8;
+}
 
-	const matches = new Set<string>();
-	for (const token of queryTokens) {
-		if (haystack.has(token)) {
-			matches.add(token);
+interface CandidateTokenIndex {
+	title: Set<string>;
+	content: Set<string>;
+	path: Set<string>;
+	all: Set<string>;
+}
+
+// Candidates are cached objects reused across turns by the MemoryCandidateStore, so keying
+// off the object identity keeps tokenization off the hot path for unchanged memory files.
+const candidateTokenCache = new WeakMap<MemoryCandidate, CandidateTokenIndex>();
+
+function getCandidateTokens(candidate: MemoryCandidate): CandidateTokenIndex {
+	const cached = candidateTokenCache.get(candidate);
+	if (cached) {
+		return cached;
+	}
+	const title = buildTokenSet(candidate.title);
+	const content = buildTokenSet(candidate.searchText ?? candidate.content);
+	const path = buildTokenSet(candidate.path);
+	const index: CandidateTokenIndex = { title, content, path, all: new Set([...title, ...content, ...path]) };
+	candidateTokenCache.set(candidate, index);
+	return index;
+}
+
+function buildDocumentFrequency(candidates: MemoryCandidate[]): Map<string, number> {
+	const frequencies = new Map<string, number>();
+	for (const candidate of candidates) {
+		for (const token of getCandidateTokens(candidate).all) {
+			frequencies.set(token, (frequencies.get(token) ?? 0) + 1);
 		}
 	}
-	return matches;
+	return frequencies;
+}
+
+/**
+ * Damp tokens that appear in most of the corpus (section headings, house vocabulary). Kept
+ * deliberately gentle — memory corpora are tens of entries, so a token appearing in every
+ * one of them is weak evidence, not zero evidence.
+ */
+function documentFrequencyDamping(documentFrequency: number, totalCandidates: number): number {
+	if (totalCandidates <= 1) return 1;
+	return 1 / (1 + (documentFrequency - 1) / totalCandidates);
+}
+
+function computeMatchEvidence(
+	queryTokens: string[],
+	candidate: MemoryCandidate,
+	documentFrequencies: Map<string, number>,
+	totalCandidates: number,
+	includePath = true,
+): MatchEvidence {
+	const tokens = getCandidateTokens(candidate);
+	let mass = 0;
+	let matchedCount = 0;
+	for (const token of queryTokens) {
+		const fieldWeight = tokens.title.has(token)
+			? FIELD_WEIGHTS.title
+			: tokens.content.has(token)
+				? FIELD_WEIGHTS.content
+				: includePath && tokens.path.has(token)
+					? FIELD_WEIGHTS.path
+					: 0;
+		if (fieldWeight === 0) {
+			continue;
+		}
+		matchedCount++;
+		mass +=
+			tokenSpecificity(token) *
+			fieldWeight *
+			documentFrequencyDamping(documentFrequencies.get(token) ?? 1, totalCandidates);
+	}
+	return { mass, matchedCount };
 }
 
 function computeExactMatchBoost(query: string, candidate: MemoryCandidate): number {
@@ -336,9 +422,9 @@ function computeExactMatchBoost(query: string, candidate: MemoryCandidate): numb
 
 	let boost = 0;
 	const scoringFields: Array<[string, number]> = [
-		[candidate.title, 12],
-		[candidate.searchText ?? candidate.content, 8],
-		[candidate.path, 4],
+		[candidate.title, 4],
+		[candidate.searchText ?? candidate.content, 3],
+		[candidate.path, 1.5],
 	];
 	for (const [field, value] of scoringFields) {
 		if (field.toLowerCase().includes(normalizedQuery)) {
@@ -414,32 +500,21 @@ function scoreCandidate(
 	queryTokens: string[],
 	intents: Set<QueryIntent>,
 	candidate: MemoryCandidate,
+	documentFrequencies: Map<string, number>,
+	totalCandidates: number,
 ): ScoredCandidate | null {
-	const searchText = candidate.searchText ?? candidate.content;
-	const titleStats = computeTokenMatchStats(queryTokens, candidate.title);
-	const contentStats = computeTokenMatchStats(queryTokens, searchText);
-	const pathStats = computeTokenMatchStats(queryTokens, candidate.path);
-	const matchedTokens = collectMatchingQueryTokens(queryTokens, [candidate.title, searchText, candidate.path]);
-	const semanticFieldMatches = collectMatchingQueryTokens(queryTokens, [candidate.title, searchText]);
-	const exactBoost = computeExactMatchBoost(query, candidate);
-	const intentBoost = computeSectionIntentBoost(intents, candidate);
-	const overallCoverage = queryTokens.length > 0 ? matchedTokens.size / queryTokens.length : 0;
-	const lexicalScore =
-		overallCoverage * 48 +
-		titleStats.coverage * 18 +
-		contentStats.coverage * 22 +
-		pathStats.coverage * 8 +
-		exactBoost;
-	const structuralScore = candidate.priority + intentBoost + computeRecencyBoost(candidate.timestamp);
-
-	if (semanticFieldMatches.size === 0 || (overallCoverage < MIN_QUERY_COVERAGE && exactBoost === 0)) {
+	const evidence = computeMatchEvidence(queryTokens, candidate, documentFrequencies, totalCandidates);
+	const totalEvidence = evidence.mass + computeExactMatchBoost(query, candidate);
+	if (totalEvidence < MIN_MATCH_EVIDENCE) {
 		return null;
 	}
 
+	const intentBoost = computeSectionIntentBoost(intents, candidate);
+	const structuralScore = candidate.priority + intentBoost + computeRecencyBoost(candidate.timestamp);
 	return {
 		candidate,
-		score: lexicalScore * (1 + structuralScore / 100),
-		lexicalMatchCount: matchedTokens.size,
+		score: totalEvidence * (1 + structuralScore / 100),
+		lexicalMatchCount: evidence.matchedCount,
 		intentBoost,
 	};
 }
@@ -450,6 +525,8 @@ function seedIntentCandidates(
 	existing: ScoredCandidate[],
 	intents: Set<QueryIntent>,
 	queryTokens: string[],
+	documentFrequencies: Map<string, number>,
+	totalCandidates: number,
 ): ScoredCandidate[] {
 	if (intents.size === 0) {
 		return existing;
@@ -473,20 +550,19 @@ function seedIntentCandidates(
 		);
 
 	for (const { candidate, intentBoost } of intentCandidates) {
-		const matchedTokens = collectMatchingQueryTokens(queryTokens, [
-			candidate.title,
-			candidate.searchText ?? candidate.content,
-		]);
-		if (matchedTokens.size === 0) {
+		// Path matches are excluded here: an intent seed has to earn its place on what the
+		// entry says, not on where it is stored.
+		const evidence = computeMatchEvidence(queryTokens, candidate, documentFrequencies, totalCandidates, false);
+		if (evidence.matchedCount === 0) {
 			continue;
 		}
 
 		seeded.push({
 			candidate,
 			score:
-				(intentBoost + matchedTokens.size * 8) *
+				(intentBoost / 4 + evidence.mass) *
 				(1 + (candidate.priority + computeRecencyBoost(candidate.timestamp)) / 100),
-			lexicalMatchCount: matchedTokens.size,
+			lexicalMatchCount: evidence.matchedCount,
 			intentBoost,
 		});
 		seen.add(candidate.id);
@@ -552,23 +628,15 @@ async function rerankCandidates(request: RecallRequest, candidates: ScoredCandid
 	}
 }
 
-function hasMemorySensitiveQueryIntent(query: string): boolean {
-	if (HAN_REGEX.test(query)) {
-		return /(之前|上次|记得|记住|偏好|决定|历史|纠正|不要再|以后|默认)/.test(query);
-	}
-	return /\b(previous|previously|last time|remember|preference|decision|history|correction|again|default)\b/i.test(
-		query,
-	);
-}
-
 function shouldUseModelRerank(request: RecallRequest, candidates: ScoredCandidate[]): boolean {
+	// Nothing to prune: everything on the shortlist is going to be injected anyway.
 	if (candidates.length <= request.maxInjected) {
 		return false;
 	}
 	if (request.rerankWithModel === true) {
 		return true;
 	}
-	if (request.rerankWithModel === false && !request.autoRerank) {
+	if (request.rerankWithModel === false) {
 		return false;
 	}
 
@@ -577,14 +645,12 @@ function shouldUseModelRerank(request: RecallRequest, candidates: ScoredCandidat
 	if (!top || !next) {
 		return false;
 	}
-	const highLocalConfidence = top.score >= HIGH_CONFIDENCE_SCORE && top.score - next.score >= CLOSE_SCORE_DELTA;
-	if (highLocalConfidence) {
-		return false;
-	}
-	if (!request.autoRerank && !hasMemorySensitiveQueryIntent(request.query)) {
-		return false;
-	}
-	return true;
+	// Auto mode reranks whenever the local ranking is ambiguous. It used to additionally
+	// require memory-sensitive phrasing in the query, which meant an over-full shortlist on
+	// an ordinary turn was injected unranked. Now that the lexical gate admits candidates on
+	// absolute evidence, the shortlist is wider and picking from it is exactly the job the
+	// reranker exists for — so the only reason to skip is a clear local winner.
+	return !(top.score >= HIGH_CONFIDENCE_SCORE && top.score - next.score >= CLOSE_SCORE_DELTA);
 }
 
 function renderRecallResult(items: RecalledMemory[], maxChars: number, maxUnits: number): string {
@@ -664,13 +730,24 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 
 	const queryTokens = tokenize(query);
 	const queryIntents = detectQueryIntents(query);
+	const documentFrequencies = buildDocumentFrequency(eligibleCandidates);
+	const totalCandidates = eligibleCandidates.length;
 	const scored = eligibleCandidates
-		.map((candidate) => scoreCandidate(query, queryTokens, queryIntents, candidate))
+		.map((candidate) =>
+			scoreCandidate(query, queryTokens, queryIntents, candidate, documentFrequencies, totalCandidates),
+		)
 		.filter((candidate): candidate is ScoredCandidate => candidate !== null)
-		.filter((candidate) => candidate.score >= MIN_LOCAL_SCORE)
 		.sort(compareScoredCandidates);
 
-	const shortlist = seedIntentCandidates(request, eligibleCandidates, scored, queryIntents, queryTokens)
+	const shortlist = seedIntentCandidates(
+		request,
+		eligibleCandidates,
+		scored,
+		queryIntents,
+		queryTokens,
+		documentFrequencies,
+		totalCandidates,
+	)
 		.sort(compareScoredCandidates)
 		.slice(0, Math.max(request.maxCandidates, request.maxInjected));
 

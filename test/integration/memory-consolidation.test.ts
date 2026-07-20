@@ -42,6 +42,19 @@ function createAssistantMessage(text: string) {
 	return { role: "assistant", content: [{ type: "text", text }] } as never;
 }
 
+/**
+ * Mirror what the real sidecar returns: it runs the task's own `parse` over the model text,
+ * so the mock exercises the shared extraction parser instead of hand-rolling its output.
+ */
+function sidecarResultFor(task: { parse: (text: string) => unknown }, json: string) {
+	return { rawText: json, output: task.parse(json) } as never;
+}
+
+/** memoryOps only reach MEMORY.md when they clear the shared auto-write bar. */
+function durableOp(content: string, extra: Record<string, unknown> = {}) {
+	return { op: "add", content, kind: "fact", confidence: 0.95, necessity: "high", reason: "test", ...extra };
+}
+
 afterEach(() => {
 	vi.clearAllMocks();
 });
@@ -62,6 +75,7 @@ describe("memory-consolidation integration", () => {
 			skipped: true,
 			appendedMemoryEntries: 0,
 			appendedHistoryBlock: false,
+			rejectedMemoryOps: [],
 		});
 		expect(runSidecarTask).not.toHaveBeenCalled();
 		expect(runRetriedSidecarTask).not.toHaveBeenCalled();
@@ -74,12 +88,15 @@ describe("memory-consolidation integration", () => {
 			session: "# Session Title\n\nFix login regression\n",
 			history: "# Channel History\n",
 		});
-		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
-			rawText:
-				'{"memoryOps":[{"op":"add","content":"OAuth callback fails in prod"}],"historyBlock":"- Investigated callback state handling."}',
-			output:
-				'{"memoryOps":[{"op":"add","content":"OAuth callback fails in prod"}],"historyBlock":"- Investigated callback state handling."}',
-		});
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) =>
+			sidecarResultFor(
+				task,
+				JSON.stringify({
+					memoryOps: [durableOp("OAuth callback fails in prod")],
+					historyBlock: "- Investigated callback state handling.",
+				}),
+			),
+		);
 
 		const result = await runInlineConsolidation({
 			channelDir,
@@ -110,12 +127,15 @@ describe("memory-consolidation integration", () => {
 			session: "# Session Title\n\nFix login regression\n",
 			history: "# Channel History\n",
 		});
-		vi.mocked(runRetriedSidecarTask).mockResolvedValue({
-			rawText:
-				'{"memoryOps":[{"op":"add","content":"OAuth callback regression is a durable channel issue"}],"historyBlock":"- Should be ignored during idle."}',
-			output:
-				'{"memoryOps":[{"op":"add","content":"OAuth callback regression is a durable channel issue"}],"historyBlock":"- Should be ignored during idle."}',
-		});
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) =>
+			sidecarResultFor(
+				task,
+				JSON.stringify({
+					memoryOps: [durableOp("OAuth callback regression is a durable channel issue")],
+					historyBlock: "- Should be ignored during idle.",
+				}),
+			),
+		);
 
 		const result = await runInlineConsolidation({
 			channelDir,
@@ -145,10 +165,10 @@ describe("memory-consolidation integration", () => {
 			if (task.name === "memory-inline-consolidation") {
 				expect(task.prompt).toContain("after boundary");
 				expect(task.prompt).not.toContain("before boundary");
-				return {
-					rawText: '{"memoryOps":[{"op":"add","content":"Recovered after compaction"}],"historyBlock":""}',
-					output: '{"memoryOps":[{"op":"add","content":"Recovered after compaction"}],"historyBlock":""}',
-				};
+				return sidecarResultFor(
+					task,
+					JSON.stringify({ memoryOps: [durableOp("Recovered after compaction")], historyBlock: "" }),
+				);
 			}
 			throw new Error(`Unexpected sidecar task ${task.name}`);
 		});

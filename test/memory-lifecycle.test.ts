@@ -9,6 +9,7 @@ vi.mock("../src/memory/consolidation.js", () => ({
 		skipped: false,
 		appendedMemoryEntries: 1,
 		appendedHistoryBlock: true,
+		rejectedMemoryOps: [],
 	}),
 }));
 

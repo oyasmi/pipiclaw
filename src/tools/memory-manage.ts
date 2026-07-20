@@ -139,7 +139,6 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 			maxInjected: 8,
 			maxChars: 4000,
 			rerankWithModel: false,
-			autoRerank: false,
 			model,
 			resolveApiKey: options.resolveApiKey,
 			candidateStore: options.memoryCandidateStore,

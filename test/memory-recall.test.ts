@@ -242,6 +242,84 @@ describe("memory recall", () => {
 		expect(countPromptUnits(tight.renderedText)).toBeLessThan(countPromptUnits(generous.renderedText));
 	});
 
+	it("recalls a durable entry from a long detailed message as readily as a terse one", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			[
+				"# Channel Memory",
+				"",
+				"## Preferences",
+				"",
+				"- 用户偏好使用 pnpm 作为包管理器，不要用 npm <!--id:m-pnpm01-->",
+				"- 回复不要自动添加 emoji <!--id:m-emoji01-->",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const recall = async (query: string) =>
+			recallRelevantMemory({
+				query,
+				workspaceDir,
+				channelDir,
+				maxCandidates: 8,
+				maxInjected: 3,
+				maxChars: 2_000,
+				rerankWithModel: false,
+				model: { provider: "test", id: "noop" } as never,
+				resolveApiKey: async () => "",
+			});
+
+		const terse = await recall("包管理器");
+		// Scoring must not normalize by query length: this message names the same subject but
+		// buries it in 100+ tokens of context, which used to drive coverage under the gate and
+		// silently recall nothing at all.
+		const verbose = await recall(
+			"我现在想把项目的依赖重新安装一遍，因为 lockfile 有冲突，你先确认一下我们这边用的是哪个包管理器再动手，别装错了",
+		);
+
+		expect(terse.items.map((item) => item.id)).toContain("m-pnpm01");
+		expect(verbose.items.map((item) => item.id)).toContain("m-pnpm01");
+		// The unrelated preference stays out of both: wider recall must not mean recall-everything.
+		expect(verbose.items.map((item) => item.id)).not.toContain("m-emoji01");
+	});
+
+	it("matches Chinese compounds that dictionary segmentation splits apart", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			[
+				"# Channel Memory",
+				"",
+				"## Constraints",
+				"",
+				"- 灰度发布必须先过预发环境 <!--id:m-gray01-->",
+				"- 数据库迁移脚本需要评审 <!--id:m-db01-->",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const result = await recallRelevantMemory({
+			query: "这次改动想直接上线，灰度发布的流程还需要走吗？",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 2,
+			maxChars: 2_000,
+			rerankWithModel: false,
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		});
+
+		expect(result.items.map((item) => item.id)).toEqual(["m-gray01"]);
+	});
+
+	it("emits Chinese trigrams so compounds survive greedy dictionary segmentation", () => {
+		const tokens = tokenizeRecallText("包管理器");
+
+		expect(tokens).toEqual(expect.arrayContaining(["包管理", "管理器"]));
+	});
+
 	it("captures overlapping Chinese dictionary terms without keeping covered bigram noise", () => {
 		const tokens = tokenizeRecallText("当前状态管理优化方案");
 

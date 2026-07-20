@@ -1,29 +1,23 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
-import {
-	getLatestCompactionEntry,
-	type SessionEntry,
-	type SessionMessageEntry,
-	serializeConversation,
-} from "@earendil-works/pi-coding-agent";
+import { getLatestCompactionEntry, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
-import { parseJsonObject } from "../shared/llm-json.js";
 import { splitH2Sections } from "../shared/markdown-sections.js";
-import { clipText } from "../shared/text-utils.js";
+import { runMemoryExtraction, toMemoryOp } from "./extraction.js";
 import {
 	appendChannelHistoryArchive,
 	appendChannelHistoryBlock,
 	applyChannelMemoryOps,
-	type MemoryOp,
 	parseChannelMemoryEntries,
-	readChannelHistory,
-	readChannelMemory,
-	readChannelSession,
 	rewriteChannelHistory,
 	rewriteChannelMemory,
 } from "./files.js";
-import type { MemoryEntryKind, MemoryWriteMetadataInput } from "./metadata.js";
-import { runRetriedSidecarTask, runSidecarTask } from "./sidecar-worker.js";
+import {
+	DEFAULT_MEMORY_AUTO_WRITE_CONFIDENCE,
+	type MemoryPromotionCandidate,
+	shouldAutoWriteMemory,
+} from "./promotion.js";
+import { runSidecarTask } from "./sidecar-worker.js";
 import type { MemorySourceWindow } from "./source-window.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
 
@@ -38,59 +32,6 @@ const MEMORY_CLEANUP_TIMEOUT_MS = 120_000;
 const HISTORY_FOLDING_TIMEOUT_MS = 120_000;
 
 export type ConsolidationMode = "idle" | "boundary";
-
-const MEMORY_OPS_RULES = `- memoryOps entries operate on the durable channel MEMORY.md:
-  - {"op":"add","content":"...","kind":"fact|preference|decision|constraint|open-loop|lesson"} for a genuinely new durable fact.
-  - {"op":"supersede","targetId":"m-xxxx","content":"...","kind":"..."} when new information updates or contradicts an existing entry (use its id).
-  - {"op":"invalidate","targetId":"m-xxxx","reason":"..."} when an existing entry is now obsolete or resolved.
-- Only reference targetId values that appear in the current MEMORY.md entries shown below.
-- Durable = stable facts, decisions, preferences, constraints, or medium-horizon open loops.
-- Each content string must be a standalone, keyword-rich sentence fragment suitable for a Markdown bullet (no leading "-"). Write it so future keyword search can find it.
-- Do not add content already present in SESSION.md or MEMORY.md; prefer supersede/invalidate over piling on near-duplicates.
-- Do not promote active execution state, temporary debugging observations, completed worklog, raw transcript quotes, acknowledgements, or formatting instructions.`;
-
-const BOUNDARY_INLINE_CONSOLIDATION_SYSTEM_PROMPT = `You are a runtime memory consolidation worker for Pipiclaw.
-
-Return strict JSON only. Do not wrap in Markdown fences.
-
-Output schema:
-{
-  "memoryOps": [{"op": "add|supersede|invalidate", "targetId": "m-xxxx", "content": "string", "reason": "string"}],
-  "historyBlock": "string"
-}
-
-Rules:
-${MEMORY_OPS_RULES}
-- historyBlock: concise Markdown summarizing the conversation chunk for later recovery.
-- For any conversation that contains at least one meaningful user request and one meaningful assistant reply, return a non-empty historyBlock with at least one bullet.
-- Prefer short bullets and short paragraphs.
-- If there is nothing worth storing, return an empty memoryOps array and empty historyBlock.
-
-Example output for a short useful exchange:
-{
-  "memoryOps": [{"op": "add", "content": "User prefers dark mode in the dashboard"}],
-  "historyBlock": "- User asked how to toggle dashboard theme; confirmed dark mode preference."
-}`;
-
-const IDLE_INLINE_CONSOLIDATION_SYSTEM_PROMPT = `You are a runtime memory consolidation worker for Pipiclaw.
-
-Return strict JSON only. Do not wrap in Markdown fences.
-
-Output schema:
-{
-  "memoryOps": [{"op": "add|supersede|invalidate", "targetId": "m-xxxx", "content": "string", "reason": "string"}]
-}
-
-Rules:
-- This is an idle maintenance pass after a normal assistant turn.
-${MEMORY_OPS_RULES}
-- Do not summarize the exchange for HISTORY.md. Idle consolidation never writes HISTORY.md.
-- If there is nothing durable enough to store, return an empty memoryOps array.
-
-Example output:
-{
-  "memoryOps": [{"op": "add", "content": "User prefers dark mode in the dashboard"}]
-}`;
 
 const MEMORY_CLEANUP_SYSTEM_PROMPT = `You are rewriting a Pipiclaw channel MEMORY.md file.
 
@@ -137,6 +78,8 @@ export interface ConsolidationRunOptions {
 	sourceWindow?: MemorySourceWindow;
 	mode?: ConsolidationMode;
 	usageCorrelationId?: string;
+	/** Durable-write bar; defaults to the same threshold the growth review uses. */
+	minAutoWriteConfidence?: number;
 }
 
 function usageContextFor(
@@ -150,6 +93,8 @@ export interface InlineConsolidationResult {
 	skipped: boolean;
 	appendedMemoryEntries: number;
 	appendedHistoryBlock: boolean;
+	/** Candidates the confidence gate turned down, surfaced for the review log. */
+	rejectedMemoryOps: MemoryPromotionCandidate[];
 }
 
 export interface StructuralMaintenanceStats {
@@ -159,55 +104,8 @@ export interface StructuralMaintenanceStats {
 	hasHistoryContent: boolean;
 }
 
-interface ConsolidationResponse {
-	memoryOps: MemoryOp[];
-	historyBlock: string;
-}
-
 function normalizeText(text: string): string {
 	return text.replace(/\r/g, "").trim();
-}
-
-function normalizeMemoryOp(value: unknown): MemoryOp | null {
-	if (typeof value !== "object" || value === null) {
-		return null;
-	}
-	const record = value as Record<string, unknown>;
-	const content = typeof record.content === "string" ? record.content.trim() : "";
-	const targetId = typeof record.targetId === "string" ? record.targetId.trim() : "";
-	const kind: MemoryEntryKind =
-		record.kind === "preference" ||
-		record.kind === "decision" ||
-		record.kind === "constraint" ||
-		record.kind === "open-loop" ||
-		record.kind === "lesson"
-			? record.kind
-			: "fact";
-	const metadata: MemoryWriteMetadataInput = { kind, sourceType: "agent", trust: "inferred" };
-	if (record.op === "supersede" && targetId && content) {
-		return { op: "supersede", targetId, content, metadata };
-	}
-	if (record.op === "invalidate" && targetId) {
-		return {
-			op: "invalidate",
-			targetId,
-			reason: typeof record.reason === "string" ? record.reason.trim() : undefined,
-		};
-	}
-	// Default to add for "add" or any unrecognized op that still carries content.
-	if (content) {
-		return { op: "add", content, metadata };
-	}
-	return null;
-}
-
-function parseConsolidationResponse(text: string): ConsolidationResponse {
-	const parsed = parseJsonObject(text) as { memoryOps?: unknown; historyBlock?: unknown };
-	const rawOps = Array.isArray(parsed.memoryOps) ? parsed.memoryOps : [];
-	return {
-		memoryOps: rawOps.map(normalizeMemoryOp).filter((op): op is MemoryOp => op !== null),
-		historyBlock: typeof parsed.historyBlock === "string" ? parsed.historyBlock.trim() : "",
-	};
 }
 
 function isMessage(entry: SessionEntry): entry is SessionMessageEntry {
@@ -303,85 +201,54 @@ async function runWorkerPrompt(
 	return result.output;
 }
 
-function renderMemoryEntriesForPrompt(rawMemory: string): string {
-	const entries = parseChannelMemoryEntries(rawMemory);
-	if (entries.length === 0) {
-		return "";
-	}
-	return entries.map((entry) => `${entry.id} — ${entry.content}`).join("\n");
-}
-
-async function buildInlineConsolidationResponse(
-	options: ConsolidationRunOptions,
-	messages: Message[],
-): Promise<ConsolidationResponse> {
-	const mode = options.mode ?? "boundary";
-	const transcript = clipText(serializeConversation(messages), INLINE_TRANSCRIPT_MAX_CHARS, { headRatio: 0.35 });
-	const rawMemory = await readChannelMemory(options.channelDir);
-	const currentMemory = clipText(renderMemoryEntriesForPrompt(rawMemory), 8_000, { headRatio: 0.35 });
-	const currentSession = clipText(await readChannelSession(options.channelDir), 8_000, { headRatio: 0.35 });
-	const currentHistory = clipText(await readChannelHistory(options.channelDir), 8_000, { headRatio: 0.35 });
-
-	const prompt = `Current SESSION.md:
-${currentSession || "(empty)"}
-
-Current MEMORY.md entries (id — content; reference ids in supersede/invalidate):
-${currentMemory || "(empty)"}
-
-Channel history file:
-${currentHistory || "(empty)"}
-
-Conversation chunk to persist:
-${transcript || "(empty)"}`;
-
-	const result = await runRetriedSidecarTask({
-		name: "memory-inline-consolidation",
-		model: options.model,
-		resolveApiKey: options.resolveApiKey,
-		systemPrompt:
-			mode === "idle" ? IDLE_INLINE_CONSOLIDATION_SYSTEM_PROMPT : BOUNDARY_INLINE_CONSOLIDATION_SYSTEM_PROMPT,
-		prompt,
-		timeoutMs: INLINE_CONSOLIDATION_TIMEOUT_MS,
-		usageContext: usageContextFor(options.channelId, options.sourceWindow?.windowId ?? options.usageCorrelationId),
-		parse: (text) => text.trim(),
-	});
-	const rawResponse = result.output;
-	return parseConsolidationResponse(rawResponse);
-}
-
 export async function runInlineConsolidation(options: ConsolidationRunOptions): Promise<InlineConsolidationResult> {
 	const mode = options.mode ?? "boundary";
 	const sourceEntries =
 		options.sourceWindow?.entries ?? entriesAfterLatestCompactionBoundary(options.sessionEntries ?? []);
-	const relevantMessages = sanitizeMessagesForMemory(
+	const relevantMessages =
 		options.sourceWindow?.messages ??
-			(sourceEntries.length > 0 ? extractMessagesFromSessionEntries(sourceEntries) : options.messages),
-	);
+		(sourceEntries.length > 0 ? extractMessagesFromSessionEntries(sourceEntries) : options.messages);
 
-	if (!hasMeaningfulMessages(relevantMessages)) {
-		return { skipped: true, appendedMemoryEntries: 0, appendedHistoryBlock: false };
+	if (!hasMeaningfulMessages(sanitizeMessagesForMemory(relevantMessages))) {
+		return { skipped: true, appendedMemoryEntries: 0, appendedHistoryBlock: false, rejectedMemoryOps: [] };
 	}
 
-	const response = await buildInlineConsolidationResponse(options, relevantMessages);
+	const correlationId = options.sourceWindow?.windowId ?? options.usageCorrelationId;
+	const response = await runMemoryExtraction({
+		name: "memory-inline-consolidation",
+		channelId: options.channelId,
+		channelDir: options.channelDir,
+		messages: relevantMessages,
+		model: options.model,
+		resolveApiKey: options.resolveApiKey,
+		timeoutMs: INLINE_CONSOLIDATION_TIMEOUT_MS,
+		transcriptMaxChars: INLINE_TRANSCRIPT_MAX_CHARS,
+		// Idle passes never write HISTORY.md; only real boundaries summarize the chunk.
+		includeHistoryBlock: mode === "boundary",
+		includeSkills: false,
+		usageContext: usageContextFor(options.channelId, correlationId),
+	});
 	const timestamp = new Date().toISOString();
 
+	// The same bar the growth review applies. Consolidation used to write whatever the model
+	// returned, which is how transient state reached durable memory: the strictest reviewer
+	// was gated behind a keyword scan while the ungated paths wrote freely. Rejected material
+	// is not lost — historyBlock and cold storage still carry it.
+	const threshold = options.minAutoWriteConfidence ?? DEFAULT_MEMORY_AUTO_WRITE_CONFIDENCE;
+	const accepted: MemoryPromotionCandidate[] = [];
+	const rejectedMemoryOps: MemoryPromotionCandidate[] = [];
+	for (const candidate of response.memoryOps) {
+		(shouldAutoWriteMemory(candidate, threshold) ? accepted : rejectedMemoryOps).push(candidate);
+	}
+
 	let appliedMemoryOps = 0;
-	if (response.memoryOps.length > 0 && !options.sourceWindow?.hasExternalToolContent) {
+	if (accepted.length > 0 && !options.sourceWindow?.hasExternalToolContent) {
 		const sourceEntryIds = options.sourceWindow?.entries.map((entry) => entry.id) ?? [];
-		const ops = response.memoryOps.map(
-			(op): MemoryOp =>
-				op.op === "add" || op.op === "supersede"
-					? {
-							...op,
-							sourceEntryIds,
-							metadata: {
-								...op.metadata,
-								sourceCorrelationId: options.sourceWindow?.windowId ?? options.usageCorrelationId,
-							},
-						}
-					: op,
+		const applied = await applyChannelMemoryOps(
+			options.channelDir,
+			accepted.map((candidate) => toMemoryOp(candidate, { sourceEntryIds, correlationId })),
+			timestamp,
 		);
-		const applied = await applyChannelMemoryOps(options.channelDir, ops, timestamp);
 		appliedMemoryOps = applied.added + applied.superseded + applied.invalidated + applied.downgradedToAdd;
 	}
 
@@ -396,6 +263,7 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 		skipped: false,
 		appendedMemoryEntries: appliedMemoryOps,
 		appendedHistoryBlock: mode === "boundary" && response.historyBlock.trim().length > 0,
+		rejectedMemoryOps,
 	};
 }
 

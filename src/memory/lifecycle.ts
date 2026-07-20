@@ -258,6 +258,11 @@ export class MemoryLifecycle {
 		} else if (reason === "idle") {
 			skipped.push({ target: "HISTORY.md", reason: "idle does not write HISTORY.md" });
 		}
+		// Defensive: review-log bookkeeping runs after the consolidation has already been
+		// applied and checkpointed, so a shape surprise here must not report success as failure.
+		for (const candidate of result.rejectedMemoryOps ?? []) {
+			skipped.push({ target: "MEMORY.md", candidate, reason: "below auto-write confidence" });
+		}
 
 		await this.appendReviewLog({ reason, actions, skipped });
 	}

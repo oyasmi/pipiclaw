@@ -207,6 +207,7 @@ describe("memory maintenance jobs", () => {
 			skipped: false,
 			appendedMemoryEntries: 0,
 			appendedHistoryBlock: false,
+			rejectedMemoryOps: [],
 		});
 		const allEntries = [
 			...sessionEntries,

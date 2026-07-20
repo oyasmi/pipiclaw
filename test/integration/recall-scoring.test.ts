@@ -188,7 +188,9 @@ describe("recall scoring integration", () => {
 	it("honors an empty rerank selection as abstention", async () => {
 		const { workspaceDir, channelDir } = createWorkspace();
 		setupChannelFiles(channelDir, {
-			session: "# Current State\n\n- Investigating oauth callback validation.",
+			// Both candidates have to clear the evidence bar, otherwise the shortlist fits
+			// inside maxInjected and there is nothing for the reranker to abstain from.
+			session: "# Current State\n\n- Investigating oauth callback verification failures.",
 			memory: "# Channel Memory\n\n## Constraints\n\n- Callback verification stays compatible.",
 		});
 		vi.mocked(runSidecarTask).mockResolvedValue({ rawText: '{"selectedIds":[]}', output: [] });
@@ -279,7 +281,6 @@ describe("recall scoring integration", () => {
 			maxInjected: 2,
 			maxChars: 2000,
 			rerankWithModel: false,
-			autoRerank: false,
 			model: TEST_MODEL,
 			resolveApiKey: async () => "",
 		});

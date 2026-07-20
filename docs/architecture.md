@@ -31,7 +31,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 |---|---|---|
 | `src/runtime/` | 传输与运行时编排：钉钉连接、消息分发、投递、后台服务装配 | `bootstrap.ts`（装配根）、`dingtalk.ts`（传输）、`delivery.ts`（投递控制器）、`events.ts`、`task-driver.ts`、`durable-dispatch.ts` |
 | `src/agent/` | 单频道 agent 编排：组装 SDK 会话、跑一轮、流式回传 | `channel-runner.ts`（核心编排器）、`session-events.ts`、`prompt/`（system prompt 流水线）、`model-fallback.ts` |
-| `src/memory/` | 分层记忆子系统：召回、固化、门控维护流水线 | `lifecycle.ts`、`recall.ts`、`consolidation.ts`、`scheduler.ts`、`maintenance-{jobs,gates,state}.ts`、`sidecar-worker.ts` |
+| `src/memory/` | 分层记忆子系统：召回、固化、门控维护流水线 | `lifecycle.ts`、`recall.ts`、`extraction.ts`、`consolidation.ts`、`scheduler.ts`、`maintenance-{jobs,gates,state}.ts`、`sidecar-worker.ts` |
 | `src/tools/` | 交给 agent 的工具集，单一声明式注册表 | `registry.ts`（唯一事实源）、各 `create*Tool` |
 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
 | `src/subagents/` | 子代理发现与 `subagent` 工具 | `discovery.ts`、`tool.ts` |
@@ -190,13 +190,13 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     subgraph turn [每轮同步路径]
-        RECALL["recall.ts<br/>词法打分(中英文分词)<br/>+ 可选 LLM 重排(8s 超时)"]
+        RECALL["recall.ts<br/>证据加权词法打分(中英文分词+中文三元组)<br/>+ 歧义时 LLM 重排(3s 超时,失败放行)"]
         BOOT["bootstrap.ts<br/>首轮注入频道+工作区 MEMORY.md"]
     end
 
     subgraph boundary [会话边界（inline 固化）]
         LC["lifecycle.ts<br/>SDK 扩展钩子"]
-        CONS["consolidation.ts<br/>LLM 提炼 → MEMORY.md 追加<br/>+ HISTORY.md 摘要块"]
+        CONS["consolidation.ts<br/>extraction.ts 统一提炼 → MEMORY.md 追加<br/>+ HISTORY.md 摘要块"]
     end
 
     subgraph sched [后台维护（60s tick，逐频道轮转）]
@@ -216,8 +216,11 @@ flowchart LR
     LC -->|活动事件| STATE --> GATES
 ```
 
-- **入口（读）**：channel `MEMORY.md` 按 bullet/entry id 构造候选；每轮把召回结果包在 `<memory>` 类前缀里注入 prompt。首轮 bootstrap 先声明已注入的 entry ids，recall 排除这些候选，避免重复上下文；bootstrap pending 只在 prompt 确认提交后清除。召回默认走轻量词法打分（内置中文常用词切词），只有命中"记忆意图"启发式才触发模型重排。
+- **入口（读）**：channel `MEMORY.md` 按 bullet/entry id 构造候选；每轮把召回结果包在 `<memory>` 类前缀里注入 prompt。首轮 bootstrap 先声明已注入的 entry ids，recall 排除这些候选，避免重复上下文；bootstrap pending 只在 prompt 确认提交后清除。
+- **召回打分是"证据制"而非"覆盖率制"**：候选按匹配到的 query token 的**特异性质量**累加计分（token 越长、越罕见、越非停用词，权重越高；再按候选集内的文档频率轻度衰减），达到绝对阈值即入围。刻意**不按 query 长度归一**——早期实现用"命中 token 数 / query token 数"做门槛，导致用户消息越详细召回越少（一条 60 token 的提问即使点名了记忆主题也过不了 25% 覆盖率门槛）。中文额外发射三元组，让"包管理器"这类被贪心分词打散的复合词仍能整体匹配。
+- **召回宽、重排窄**：词法层负责不漏（宽入围），LLM 重排只负责裁剪。重排仅在入围数超过 `maxInjected` **且**本地排序不存在明显赢家时触发，3s 超时且失败即放行到本地排序——它在每轮的关键路径上，只能减少上下文，不能补救漏召回。
 - **出口（写）**：固化只发生在明确边界——压缩前、`/new` 前（后台异步、快照先行）、关机 flush、以及后台维护 job。每次固化写 `review-log`（可审计）。
+- **只有一条提炼路径**（`extraction.ts`）：边界固化、空闲固化、growth-review 共用同一个 prompt、同一份 JSON schema、同一道置信度闸门（`shouldAutoWriteMemory`）。此前三条路径各写各的 prompt，其中两条完全不设置信度门槛，于是 `MEMORY.md` 的质量由最不严谨的那条决定。调用方仍各自负责副作用：只有边界写 `HISTORY.md`，只有 growth-review 提技能候选。被闸门拒绝的候选不会静默消失——写进 `memory-review.jsonl` 的 `skipped`，且素材本身仍留在 `HISTORY.md` 与冷存储中。
 - **调度器**（`scheduler.ts`）每 tick 轮转选取不活跃频道（`maxConcurrentChannels` 上限），四个 job 按优先级依次尝试，**先跑成一个就停**；每个 job 先过各自的确定性 gate（空闲时长、距上次运行间隔、素材是否有意义、夜间窗口等），gate 不放行则零 LLM 成本。频道上下文的取法：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的**磁盘冷上下文**（SessionManager 直读 context.jsonl + mtime/size 缓存），不会为历史频道复活完整 Runner。
 - **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、2 次重试、JSON 解析校验、用量记入账本（kind=`sidecar`）。记忆 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次维护结果；重复的纯 gate-skip 审计会合并降噪。
 
