@@ -3,10 +3,6 @@ import { basename, join } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import { TOOL_PROMPT_HINTS } from "../tools/registry.js";
 
-/** Prompt modes a playbook may be scoped to. Mirrors PromptMode in agent/prompt/types.ts. */
-const PLAYBOOK_MODES = ["normal", "task-driver", "event", "subagent", "maintenance"] as const;
-export type PlaybookMode = (typeof PLAYBOOK_MODES)[number];
-
 const DEFAULT_PRIORITY = 100;
 /** A catalog entry is a single trigger, not a summary; longer descriptions are clipped in the prompt (spec 026 §10.5). */
 export const MAX_PLAYBOOK_DESCRIPTION_CHARS = 100;
@@ -22,8 +18,6 @@ export interface RuntimePlaybookMetadata {
 	 * listed. (Prompt sections gate the other way: see `requiresAllTools` in agent/prompt/types.ts.)
 	 */
 	requiresAnyTool: string[];
-	/** Modes this playbook is offered in. Empty = all modes. */
-	modes: PlaybookMode[];
 	/** Ascending; ties break on filename. */
 	priority: number;
 }
@@ -70,20 +64,13 @@ function parseFrontmatter(content: string, filename: string): Omit<RuntimePlaybo
 		}
 	}
 
-	const modes = parseList(fields.get("modes"));
-	for (const mode of modes) {
-		if (!(PLAYBOOK_MODES as readonly string[]).includes(mode)) {
-			throw new Error(`Runtime playbook ${filename} declares unknown mode "${mode}".`);
-		}
-	}
-
 	const priorityField = fields.get("priority");
 	const priority = priorityField ? Number(priorityField) : DEFAULT_PRIORITY;
 	if (!Number.isFinite(priority)) {
 		throw new Error(`Runtime playbook ${filename} has a non-numeric priority "${priorityField}".`);
 	}
 
-	return { name, description, requiresAnyTool, modes: modes as PlaybookMode[], priority };
+	return { name, description, requiresAnyTool, priority };
 }
 
 /** Load the small always-on catalog; playbook bodies remain on disk until the agent reads one. */
@@ -105,11 +92,9 @@ export function loadRuntimePlaybookCatalog(directory = PLAYBOOKS_DIR): RuntimePl
 export function selectRuntimePlaybooks(
 	catalog: RuntimePlaybookMetadata[],
 	toolNames: readonly string[],
-	mode: PlaybookMode = "normal",
 ): RuntimePlaybookMetadata[] {
 	const tools = new Set(toolNames);
 	return catalog.filter((playbook) => {
-		if (playbook.modes.length > 0 && !playbook.modes.includes(mode)) return false;
 		if (playbook.requiresAnyTool.length === 0) return true;
 		return playbook.requiresAnyTool.some((tool) => tools.has(tool));
 	});

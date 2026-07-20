@@ -1,6 +1,6 @@
 ---
 name: memory-and-learning
-description: Remembering or forgetting facts, choosing between memory files, or promoting experience to a skill.
+description: 记住或忘记事实（memory）、在记忆文件之间取舍，或把经验沉淀成技能（skill）。
 requires-tools: memory_manage, skill_manage
 priority: 20
 ---

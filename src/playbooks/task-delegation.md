@@ -1,6 +1,6 @@
 ---
 name: task-delegation
-description: Before splitting parent/child tasks, delegating to a sub-agent, or creating a task-owned worktree.
+description: 拆分父子任务（task）、委派子代理（subagent），或创建任务隔离的 worktree 前。
 requires-tools: task_manage, subagent
 priority: 45
 ---

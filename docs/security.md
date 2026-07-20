@@ -1,11 +1,10 @@
 # Pipiclaw 安全文档（Security Guide）
 
-这份文档讲清楚 Pipiclaw 当前这轮安全增强做了什么、默认策略是什么、哪些地方仍然有边界，以及如何通过 `~/.pipiclaw/security.json` 调整策略。
+> **读者**：要决定这个实例能碰哪些文件、能跑哪些命令的管理员。
+> **前置**：已完成 [README](../README.md) 的安装；配置全貌见 [configuration.md](./configuration.md)。
+> **读完你能**：说出默认拦截了什么、如何按需放行或收紧、以及这套守卫的边界在哪。
 
-如果你还没有看过整体配置说明，建议同时参考：
-
-- [configuration.md](./configuration.md)
-- [deployment-and-operations.md](./deployment-and-operations.md)
+这份文档讲清楚默认策略是什么、哪些地方仍然有边界，以及如何通过 `~/.pipiclaw/security.json` 调整策略。长期部署的运维配套见 [deployment-and-operations.md](./deployment-and-operations.md)。
 
 ## 总览（Overview）
 

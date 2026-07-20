@@ -8,12 +8,14 @@ import { nextTaskWake } from "./task-schedule.js";
 /**
  * Shared reader for the task ledger (`workspace/<channelId>/tasks/*.md`).
  *
- * This is the in-repo half of the frontmatter contract documented in `docs/tasks.md`
- * ("Frontmatter 契约（单一事实源）"). The heartbeat sensor `tasks-pending.mjs` is the
- * out-of-repo half (a dependency-free script in workspace/skills). Both MUST agree on
- * `actionable`, so the parsing here is a deliberate, literal mirror of that script:
- * three flat `key: value` fields, done-vs-not-done, wake gating, fail-open on unreadable
- * frontmatter. `/tasks`, the task digest, and `task_manage list` all read through here.
+ * This is the sole implementation of the frontmatter contract documented in
+ * `docs/events-and-tasks.md` ("Frontmatter 契约（单一事实源）"). It used to be one of two
+ * halves — a dependency-free `tasks-pending.mjs` sensor under workspace/skills was the
+ * other — but the native TaskDriver (spec 022) replaced that sensor, so `actionable` now
+ * has a single owner. The parsing stays deliberately literal (flat `key: value` fields,
+ * done-vs-not-done, wake gating, fail-open on unreadable frontmatter) because task files
+ * are hand-editable and must degrade toward "wake me up so I can be fixed".
+ * `/tasks`, the task digest, and `task_manage list` all read through here.
  */
 
 export interface TaskFrontmatter {
@@ -152,7 +154,7 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 /**
  * The single shared judgement: is there work to do on this task right now?
  * Unreadable frontmatter is fail-open (actionable) so a corrupt ledger surfaces
- * rather than being silently skipped — identical to the sensor's behaviour.
+ * rather than being silently skipped.
  */
 export function isTaskActionable(frontmatter: TaskFrontmatter, now: number): boolean {
 	if (!frontmatter.readable) return true;

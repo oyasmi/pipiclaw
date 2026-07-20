@@ -1,8 +1,10 @@
 # 并发与容量参考（Scaling and Concurrency Reference）
 
-这份文档说明 Pipiclaw 的并发模型和容量边界。Pipiclaw 是单进程 Node.js 应用，定位是个人与小团队助手；这里的目标不是教你横向扩容，而是让你理解它如何隔离会话、哪里串行哪里并行、真正的瓶颈在哪。
+> **读者**：想知道"这个实例能扛多少人、什么时候该拆"的维护者。
+> **前置**：已经在运行 Pipiclaw（[deployment-and-operations.md](./deployment-and-operations.md)）。
+> **读完你能**：说出哪里串行、哪里并行、真正的瓶颈是什么，以及何时该拆成多个实例。
 
-相关文档：[deployment-and-operations.md](./deployment-and-operations.md)、[configuration.md](./configuration.md)。
+Pipiclaw 是单进程 Node.js 应用，定位是个人与小团队助手；这里的目标不是教你横向扩容，而是让你理解它的隔离与并发模型。可调参数见 [configuration.md](./configuration.md)。
 
 ## 会话隔离模型（Session Isolation Model）
 

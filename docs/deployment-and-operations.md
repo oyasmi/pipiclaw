@@ -1,11 +1,8 @@
 # 部署与运维指南（Deployment and Operations Guide）
 
-这份文档面向准备长期运行 Pipiclaw 的使用者和维护者。
-
-如果你还没有完成首次接入，请先看：
-
-- [README](../README.md)
-- [configuration.md](./configuration.md)
+> **读者**：准备把 Pipiclaw 作为常驻服务长期运行的维护者。
+> **前置**：已完成首次接入（[README](../README.md)）与基本配置（[configuration.md](./configuration.md)）。
+> **读完你能**：用 systemd/pm2/supervisor 常驻运行它，并在出问题时知道先看哪份日志。
 
 ## 适用范围（Scope）
 
@@ -340,7 +337,7 @@ workspace `skills/` 是 procedural memory。`skill_manage` 和高置信 post-tur
 
 通常先检查：
 
-- `/tasks` 中该任务的 `status` 与 `wake`：`paused` / `done` / `escalated` 不会被 driver 继续；`wake` 未到点属于正常等待
+- `/tasks` 中该任务的 `status` 与 `wake`：`paused` / `done` / `cancelled` 不会被 driver 继续；`wake` 未到点属于正常等待。被治理器停止的任务显示为 `paused` + `control.pausedBy: "governor"`（旧版本称 `escalated`）
 - `/tasks doctor` 是否报出坏 frontmatter、超预算、缺失依赖等问题
 - 上一轮是否没有留下任何台账变化——driver 会对无变化的任务退避（默认 60 分钟）再重试，重启进程会清空退避、下一次扫描重新接起
 - `tools.json` 的 `tools.tasks.enabled`（自主长程任务总开关）是否被关闭

@@ -1,6 +1,10 @@
 # Pipiclaw 架构
 
-> 本文基于 v0.8.x 的实际实现整理，描述"代码现在是什么样"，而非设计愿景。各子系统的设计动机见 `docs/specs/NNN-*`；配置细节见 `docs/configuration.md`。
+> **读者**：要改这份代码的人。
+> **前置**：能跑起来项目；域边界与工程规则见 [../AGENTS.md](../AGENTS.md)。
+> **读完你能**：定位任一子系统的代码位置，并说清一条消息从收到到回复经过了什么。
+>
+> 本文基于 v0.8.x 的实际实现整理，描述"代码现在是什么样"，而非设计愿景。各子系统的设计动机见 `docs/specs/NNN-*`；配置细节见 [configuration.md](./configuration.md)。
 
 ## 1. 定位与总体形态
 
@@ -224,10 +228,10 @@ flowchart LR
 | | 定时事件 Events | 持久任务 Tasks |
 |---|---|---|
 | 事实源 | `workspace/events/<name>.json` | `workspace/<channelId>/tasks/<id>.md`（frontmatter 契约） |
-| 类型 | `immediate` / `one-shot`（ISO 时刻） / `periodic`（cron + 时区，croner 库） | `open / verifying / done / cancelled / paused / escalated` 生命周期 |
+| 类型 | `immediate` / `one-shot`（ISO 时刻） / `periodic`（cron + 时区，croner 库） | `active / waiting / verifying / paused / done / cancelled` 六态生命周期 |
 | 驱动者 | `EventsWatcher`：fs.watch + 防抖，cron 到点触发 | `TaskDriver`：60s 扫描台账，每频道每 tick 至多唤醒 1 个可行动任务 |
 | 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | `wake` 时刻、依赖就绪（`dependsOn`）、fingerprint 未变化时按 stalled 间隔退避 |
-| 治理 | 事件历史 `state/events/history.jsonl` | 确定性预算 governor：尝试次数/token/时长超预算或依赖终态 → 派发 `[TASK_ESCALATION]` 并置 escalated |
+| 治理 | 事件历史 `state/events/history.jsonl` | 确定性预算 governor：尝试次数/token/时长超预算、依赖终态或连续无进展 → 派发 `[TASK_ESCALATION]` 并置 `paused` + `control.pausedBy: "governor"` |
 | Agent 侧工具 | `event_manage` | `task_manage`（创建/checkpoint/验证/关闭），配合 playbooks（task-driving/closeout/repair 等） |
 | 用户命令 | `/events` | `/tasks`（含 `approve`——外部副作用需显式批准，与验证 PASS 一样对任务体做 hash 绑定） |
 

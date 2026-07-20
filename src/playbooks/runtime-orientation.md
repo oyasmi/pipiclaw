@@ -1,6 +1,6 @@
 ---
 name: runtime-orientation
-description: Locating runtime state and choosing the right knowledge layer for a question.
+description: 定位运行时状态文件（workspace / channel / task），或判断某条知识该归哪一层。
 priority: 10
 ---
 

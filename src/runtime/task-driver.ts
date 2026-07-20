@@ -116,7 +116,7 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 			: "";
 	const repair = entry.frontmatter.readable
 		? ""
-		: ` Its frontmatter is unreadable: also read ${join(PLAYBOOKS_DIR, "task-repair.md")}.`;
+		: ` Its frontmatter is unreadable: also read ${join(PLAYBOOKS_DIR, "task-driving.md")}.`;
 	const control = entry.frontmatter.control;
 	const capsule = [
 		`Task capsule: title=${entry.title}; status=${entry.frontmatter.status ?? "active"};`,
@@ -166,7 +166,7 @@ function taskEscalationEvent(channelId: string, entry: TaskLedgerEntry, reason: 
 		userName: "TASK_DRIVER",
 		text:
 			`[TASK_ESCALATION:${entry.id}] Task ${entry.id} (${entry.title}) was stopped by the deterministic task ` +
-			`governor: ${reason}. Read ${join(PLAYBOOKS_DIR, "task-repair.md")}, diagnose before changing control, ` +
+			`governor: ${reason}. Read ${join(PLAYBOOKS_DIR, "task-driving.md")}, diagnose before changing control, ` +
 			"inform the user of the cause and recovery, and do not continue implementation in this run.",
 		ts: String(nowMs),
 		conversationId: "",
@@ -359,7 +359,7 @@ export class TaskDriver {
 					if (accepted && (await escalateTask(channelDir, candidate.id, escalationReason))) {
 						dispatched++;
 						lastDispatchOffset = offset;
-						log.logWarning(`[${channelId}] Task driver escalated ${candidate.id}`, escalationReason);
+						log.logWarning(`[${channelId}] Task driver paused ${candidate.id} (governor)`, escalationReason);
 					}
 					break;
 				}

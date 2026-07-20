@@ -1,5 +1,9 @@
 # 预定义子代理（Sub-Agents）
 
+> **读者**：想把 reviewer / researcher 这类角色沉淀成可复用能力的使用者。
+> **前置**：已完成 [README](../README.md) 的安装与配置。
+> **读完你能**：写出一个预定义子代理文件，并知道何时该用它、何时不该。
+
 子代理是 Pipiclaw 的**委派**能力：把某类任务从主代理手里交给一个更聚焦、工具更窄的角色去做。它和[事件与任务](./events-and-tasks.md)是正交的两条能力——事件与任务解决"何时唤醒、在途状态如何"，子代理解决"这一步该不该换一个专门的角色来做"。
 
 在写密集型子任务、独立验收（verifier）等场景里，子代理会和任务台账咬合（`isolation: worktree`、`purpose: verify`）；这些接缝会在下面点明，并链接回 [events-and-tasks.md](./events-and-tasks.md)。

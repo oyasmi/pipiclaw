@@ -16,7 +16,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 
 **自己推进长程工作。** 定时事件支持立即、单次、周期三类，`preAction` 可用脚本做零 token 的触发前门控。语义更高一层的是任务台账（task ledger）：任务以 Markdown 文件持久存在，内建 task driver 到点自动恢复、有进展有界续跑、停滞自动退避；配套受预算约束的恢复、独立验收、外部副作用授权，以及 `/tasks` 系列零 LLM 成本的控制面命令。
 
-**会用工具、能委派。** 内建 `bash`（支持 `async` 后台作业）、`read`（含目录树与 PDF）、`write` / `edit`、结构化 `grep`、`web_search` / `web_fetch`（结果缓存与分页续读）。预定义子代理把 reviewer、researcher 这类角色沉淀成可复用能力，支持 worktree 隔离与独立验收（verify）；workspace skills 沉淀你自己的流程知识。
+**会用工具、能委派。** 内建 `bash`（支持 `async` 后台作业）、`read`（含目录树与 PDF）、`write` / `edit`、结构化 `grep`、`web_search` / `web_fetch`（结果缓存与分页续读），以及 `send_media`——生成好的报表、截图、导出文件可以作为原生附件直接发回钉钉，而不是丢给你一个打不开的主机路径。预定义子代理把 reviewer、researcher 这类角色沉淀成可复用能力，支持 worktree 隔离与独立验收（verify）；workspace skills 沉淀你自己的流程知识。完整清单见 [docs/tools.md](./docs/tools.md)。
 
 **有安全护栏。** 所有文件、命令、网络工具都经过安全守卫：`bash` 命令拦截、统一路径检查、常见凭据与敏感位置默认拒绝、阻断写入审计日志；可通过 `security.json` 做实例级策略调整。详见 [docs/security.md](./docs/security.md)。
 
@@ -234,15 +234,20 @@ pipiclaw
 
 ## 文档地图（Documentation）
 
+完整索引见 **[docs/README.md](./docs/README.md)**（按使用者 / 管理员 / 开发者分组）。常用入口：
+
 | 文档 | 内容 |
 |------|------|
+| [docs/tools.md](./docs/tools.md) | 工具总览：每个能力做什么、开关在哪、子代理是否可用 |
+| [docs/memory.md](./docs/memory.md) | 记忆分层：它记得什么、怎么让它记住或忘掉 |
 | [docs/configuration.md](./docs/configuration.md) | 全部配置项：钉钉、模型、settings、tools、TUI、记忆与工作区文件 |
 | [docs/events-and-tasks.md](./docs/events-and-tasks.md) | 定时事件（含 `preAction` 门控、`event_manage`）、任务台账、内建 task driver、`/tasks` 控制面与 `task_manage` 工具 |
 | [docs/sub-agents.md](./docs/sub-agents.md) | 预定义子代理：委派、隔离 worktree 与独立验收 |
-| [docs/runtime-playbooks.md](./docs/runtime-playbooks.md) | Runtime playbooks 与知识分层模型 |
+| [docs/security.md](./docs/security.md) | 默认安全策略、`security.json` 配置与已知边界 |
 | [docs/deployment-and-operations.md](./docs/deployment-and-operations.md) | 长期运行、日志、可观测性、升级、备份与排障 |
 | [docs/scaling-and-concurrency.md](./docs/scaling-and-concurrency.md) | 并发模型与容量边界 |
-| [docs/security.md](./docs/security.md) | 默认安全策略、`security.json` 配置与已知边界 |
+| [docs/architecture.md](./docs/architecture.md) | as-implemented 架构：运行时拓扑、消息生命周期、并发表、磁盘布局 |
+| [docs/runtime-playbooks.md](./docs/runtime-playbooks.md) | Runtime playbooks 与知识分层模型 |
 
 ## 开发（Development）
 

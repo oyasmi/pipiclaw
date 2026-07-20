@@ -1,6 +1,6 @@
 ---
 name: task-closeout
-description: Before verification, importing a verdict, external approval, or completing/cancelling a task.
+description: 独立验收（verify）、导入判定、外部审批（approval），或完成/取消任务（task）前。
 requires-tools: task_manage
 priority: 42
 ---

@@ -21,6 +21,7 @@ const FULL_TOOL_NAMES = [
 	"write",
 	"web_search",
 	"web_fetch",
+	"send_media",
 	"session_search",
 	"memory_manage",
 	"skill_manage",

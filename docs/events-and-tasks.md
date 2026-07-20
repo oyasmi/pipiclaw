@@ -11,6 +11,20 @@
 
 如果你还没完成钉钉和模型配置，请先看 [README](../README.md) 和 [configuration.md](./configuration.md)。子代理（sub-agents）是另一条正交的**委派**能力，见 [sub-agents.md](./sub-agents.md)。
 
+## 怎么读这份文档（Reading Guide）
+
+本文覆盖三类读者，按需跳读，不必从头到尾：
+
+| 你想做什么 | 从哪读起 |
+|---|---|
+| 用 `/events`、`/tasks` 查看和管理已有的事件与任务 | [`/events` 命令](#events-命令人用只读--删除)、[`/tasks` 命令](#tasks-命令给人看零-llm-成本) |
+| 手写一个事件 JSON，或看懂 agent 建的那个 | [支持的事件类型](#支持的事件类型supported-event-types)、[通用字段](#通用字段common-fields) |
+| 看懂任务文件的格式与 frontmatter 契约 | [任务模型](#任务模型)、[Frontmatter 契约](#frontmatter-契约单一事实源) |
+| 排查"没有按时触发 / 任务没被推进" | [调度历史记录](#调度历史记录event-history)、[异常兜底](#异常兜底)、[deployment-and-operations.md](./deployment-and-operations.md#常见运维问题common-operational-issues) |
+| 理解 driver 的调度与治理机制 | [内建 task driver](#内建-task-driver)、[受治理 control](#受治理-control) |
+
+agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook 里，见 [runtime-playbooks.md](./runtime-playbooks.md)。
+
 ## 心智模型（Mental Model）
 
 | 层 | 载体 | 持有什么 | 谁维护 |
@@ -504,19 +518,9 @@ task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token
 
 系统提示只保留每回合不能忘的所有权、安全和 task 恢复纪律。完整 runtime 知识以只读 playbook 随包发布（构建后为 `dist/playbooks/`），**不占用 workspace**。每份文件用 `name` / `description` metadata 描述触发场景，系统提示自动生成小型目录；agent 只在匹配时用 read 加载正文。
 
-| playbook | 场景 |
-|---|---|
-| `runtime-orientation.md` | runtime、workspace、channel 与 task 四层知识边界和文件导航 |
-| `memory-and-learning.md` | SESSION/MEMORY/HISTORY/ENVIRONMENT/task/skill 的写入选择和程序性学习 |
-| `event-scheduling.md` | reminder、one-shot、periodic、preAction、后台 job 回访和静默输出 |
-| `task-planning.md` | 是否建 task、Goal/DoD/Manual/Verification、control 与预算选择 |
-| `task-driving.md` | driver 唤醒恢复、幂等检查、progress/wake/status checkpoint |
-| `task-recurring.md` | 周期任务的创建（单文件 + `schedule` frontmatter）、runtime 自动开新周期、调节奏、退役 |
-| `task-delegation.md` | 父子分解、内建 subagent、worktree，以及对用户层外部 agent 工具的通用恢复纪律 |
-| `task-closeout.md` | candidate → 独立验收 → done/cancel、external approval，以及两种门禁组合时的无失效顺序 |
-| `task-repair.md` | 治理器暂停（paused/governor）恢复、孤儿事件、坏 frontmatter/control、stale PASS、driver 行为排查 |
+与任务生命周期直接相关的有四份——`task-planning.md`（建档与周期 `schedule`）、`task-driving.md`（推进、恢复与修复）、`task-closeout.md`（验收、审批与闭环）、`task-delegation.md`（分解与委派）；事件侧是 `event-scheduling.md`。
 
-完整的四层知识模型、编写原则和 workspace 迁移边界见 [runtime-playbooks.md](./runtime-playbooks.md)。不要把 playbook 抄进 workspace；个人偏好和团队策略写进 workspace `AGENTS.md`，可复用的用户流程沉淀成 workspace skill。
+**完整目录、门控工具与编写原则见 [runtime-playbooks.md](./runtime-playbooks.md)**，那里是这份清单的唯一出处，本文不再重复。不要把 playbook 抄进 workspace；个人偏好和团队策略写进 workspace `AGENTS.md`，可复用的用户流程沉淀成 workspace skill。
 
 ## 可见性：`/tasks` 命令与任务摘要注入
 
