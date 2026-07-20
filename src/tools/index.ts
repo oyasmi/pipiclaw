@@ -13,6 +13,7 @@ import { createSubAgentTool } from "../subagents/tool.js";
 import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
 import { buildToolSet } from "./registry.js";
+import { withToolDetails } from "./tool-details.js";
 
 export interface CreatePipiclawToolsOptions {
 	executor: Executor;
@@ -63,23 +64,28 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	});
 	return [
 		...leafTools,
-		createSubAgentTool({
-			executor: options.executor,
-			getCurrentModel: options.getCurrentModel,
-			getAvailableModels: options.getAvailableModels,
-			resolveApiKey: options.resolveApiKey,
-			workspaceDir: options.workspaceDir,
-			channelDir: options.channelDir,
-			getSubAgentDiscovery: options.getSubAgentDiscovery,
-			getMemoryRecallSettings: options.getMemoryRecallSettings,
-			memoryCandidateStore: options.memoryCandidateStore,
-			securityConfig,
-			webConfig: toolsConfig.tools.web,
-			rtkEnabled: toolsConfig.tools.rtk.enabled,
-			runtimeContext: {
+		// Bound to the same `details` contract as the registry's tools; it is registered here
+		// rather than in TOOL_REGISTRY only to avoid a registry ↔ subagents/tool import cycle.
+		withToolDetails(
+			createSubAgentTool({
+				executor: options.executor,
+				getCurrentModel: options.getCurrentModel,
+				getAvailableModels: options.getAvailableModels,
+				resolveApiKey: options.resolveApiKey,
 				workspaceDir: options.workspaceDir,
-				channelId: options.channelId,
-			},
-		}),
+				channelDir: options.channelDir,
+				getSubAgentDiscovery: options.getSubAgentDiscovery,
+				getMemoryRecallSettings: options.getMemoryRecallSettings,
+				memoryCandidateStore: options.memoryCandidateStore,
+				securityConfig,
+				webConfig: toolsConfig.tools.web,
+				rtkEnabled: toolsConfig.tools.rtk.enabled,
+				runtimeContext: {
+					workspaceDir: options.workspaceDir,
+					channelId: options.channelId,
+				},
+			}),
+			"subagent",
+		),
 	];
 }

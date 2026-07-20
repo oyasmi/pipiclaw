@@ -9,6 +9,7 @@ import { parseScheduledEventContent, type ScheduledEvent } from "../runtime/even
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 
@@ -73,16 +74,16 @@ function parseAction(action: string): EventManageAction {
 	if (action === "create" || action === "update" || action === "delete") {
 		return action;
 	}
-	throw new Error('Unsupported event action. Use "create", "update", or "delete".');
+	throw new RecoverableToolError('Unsupported event action. Use "create", "update", or "delete".');
 }
 
 function validateOneShot(event: ScheduledEvent & { type: "one-shot" }): void {
 	const atTime = new Date(event.at).getTime();
 	if (!Number.isFinite(atTime)) {
-		throw new Error(`one-shot 'at' is not a valid date: ${event.at}`);
+		throw new RecoverableToolError(`one-shot 'at' is not a valid date: ${event.at}`);
 	}
 	if (atTime < Date.now() + MIN_ONE_SHOT_LEAD_MS) {
-		throw new Error("one-shot 'at' must be at least 2 minutes in the future (self-triggering guard).");
+		throw new RecoverableToolError("one-shot 'at' must be at least 2 minutes in the future (self-triggering guard).");
 	}
 }
 
@@ -94,7 +95,7 @@ function validatePeriodic(event: ScheduledEvent & { type: "periodic" }): void {
 		cron.stop();
 	} catch (error) {
 		const message = errorMessage(error);
-		throw new Error(`Invalid cron schedule "${event.schedule}": ${message}`);
+		throw new RecoverableToolError(`Invalid cron schedule "${event.schedule}": ${message}`);
 	}
 	// A preAction gate makes a tighter cadence safe (the sensor keeps most fires silent);
 	// without one, hold the 30-minute floor so a bare high-frequency cron can't burn tokens.
@@ -103,7 +104,7 @@ function validatePeriodic(event: ScheduledEvent & { type: "periodic" }): void {
 	// Fewer than two upcoming runs means no meaningful cadence to rate-limit (e.g. a one-off cron); allow it.
 	for (let i = 1; i < runs.length; i++) {
 		if (runs[i].getTime() - runs[i - 1].getTime() < floorMs) {
-			throw new Error(
+			throw new RecoverableToolError(
 				`periodic events must fire no more often than every ${floorMinutes} minutes` +
 					`${event.preAction ? " (even with a preAction gate)" : "; for tighter checks add a preAction gate (min 5 minutes) instead of a high-frequency cron"}.`,
 			);
@@ -131,17 +132,17 @@ function validateDefinition(rawDefinition: string, name: string, options: EventM
 		data = JSON.parse(rawDefinition);
 	} catch (error) {
 		const message = errorMessage(error);
-		throw new Error(`definition is not valid JSON: ${message}`);
+		throw new RecoverableToolError(`definition is not valid JSON: ${message}`);
 	}
 	if (!isRecord(data)) {
-		throw new Error("definition must be a JSON object.");
+		throw new RecoverableToolError("definition must be a JSON object.");
 	}
 
 	const providedChannelId = data.channelId;
 	if (providedChannelId === undefined || providedChannelId === null || providedChannelId === "") {
 		data.channelId = options.channelId;
 	} else if (providedChannelId !== options.channelId) {
-		throw new Error(
+		throw new RecoverableToolError(
 			`definition channelId "${String(providedChannelId)}" does not match the current channel "${options.channelId}".`,
 		);
 	}
@@ -149,7 +150,7 @@ function validateDefinition(rawDefinition: string, name: string, options: EventM
 	const event = parseScheduledEventContent(JSON.stringify(data), `${name}.json`);
 
 	if (event.type === "immediate") {
-		throw new Error(
+		throw new RecoverableToolError(
 			"event_manage cannot create or update immediate events (self-triggering loop guard); " +
 				"do the work in the current turn instead.",
 		);
@@ -177,7 +178,7 @@ async function readOwnedEvent(
 		throw new Error(`Existing event "${name}" could not be parsed (${message}); use /events to manage it directly.`);
 	}
 	if (existing.channelId !== options.channelId) {
-		throw new Error(`Event "${name}" belongs to another channel and cannot be modified from here.`);
+		throw new RecoverableToolError(`Event "${name}" belongs to another channel and cannot be modified from here.`);
 	}
 	return existing;
 }
@@ -217,25 +218,27 @@ export async function manageEvent(
 	}
 
 	if (!request.definition || request.definition.trim().length === 0) {
-		throw new Error(`${request.action} requires a non-empty definition.`);
+		throw new RecoverableToolError(`${request.action} requires a non-empty definition.`);
 	}
 
 	if (request.action === "create") {
 		if (existsSync(eventPath)) {
-			throw new Error(`Event "${eventName}" already exists; use action "update" to replace it.`);
+			throw new RecoverableToolError(`Event "${eventName}" already exists; use action "update" to replace it.`);
 		}
 		if ((await countEventFiles(eventsDir)) >= MAX_EVENT_FILES) {
-			throw new Error(
+			throw new RecoverableToolError(
 				`Too many event files (>= ${MAX_EVENT_FILES}) in workspace/events; clean up stale events before creating more.`,
 			);
 		}
 	} else {
 		if (!existsSync(eventPath)) {
-			throw new Error(`Event "${eventName}" does not exist; use action "create" to add it.`);
+			throw new RecoverableToolError(`Event "${eventName}" does not exist; use action "create" to add it.`);
 		}
 		const existing = await readOwnedEvent(eventPath, eventName, options);
 		if (existing.type === "immediate") {
-			throw new Error(`Event "${eventName}" is an immediate event and cannot be updated via event_manage.`);
+			throw new RecoverableToolError(
+				`Event "${eventName}" is an immediate event and cannot be updated via event_manage.`,
+			);
 		}
 	}
 

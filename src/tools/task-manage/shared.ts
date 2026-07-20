@@ -14,6 +14,7 @@ import { nextTaskWake, validateTaskSchedule } from "../../shared/task-schedule.j
 import { applyTaskControlPatch, createDefaultTaskControl } from "../../tasks/control.js";
 import { readStoredTask } from "../../tasks/store.js";
 import { isSettableTaskStatus } from "../../tasks/transitions.js";
+import { RecoverableToolError } from "../tool-details.js";
 import { SETTABLE_STATUSES } from "./schema.js";
 import type { TaskFields, TaskManageRequest, TaskManageToolOptions } from "./types.js";
 
@@ -32,7 +33,7 @@ export function renderTaskFile(fields: TaskFields, body: string): string {
 export function requiredField(value: string | undefined, field: string, action: string): string {
 	const trimmed = value?.trim();
 	if (!trimmed) {
-		throw new Error(`action "${action}" requires ${field}.`);
+		throw new RecoverableToolError(`action "${action}" requires ${field}.`);
 	}
 	return trimmed;
 }
@@ -67,7 +68,7 @@ export function appendCompletionEvidence(body: string, request: TaskManageReques
 function normalizeCreateStatus(status: string | undefined): (typeof SETTABLE_STATUSES)[number] {
 	if (status === undefined) return "active";
 	if (isSettableTaskStatus(status)) return status;
-	throw new Error(`Invalid status "${status}". Use one of ${SETTABLE_STATUSES.join(", ")}.`);
+	throw new RecoverableToolError(`Invalid status "${status}". Use one of ${SETTABLE_STATUSES.join(", ")}.`);
 }
 
 export function renderTaskSkeleton(request: TaskManageRequest): { fields: TaskFields; body: string } {
@@ -114,15 +115,17 @@ export async function readTaskDocument(
 	allowControlRepair = false,
 ): Promise<{ fields: TaskFields; body: string }> {
 	if (!existsSync(taskPath)) {
-		throw new Error(`Task "${id}" does not exist; create it with task_manage action "create" first.`);
+		throw new RecoverableToolError(`Task "${id}" does not exist; create it with task_manage action "create" first.`);
 	}
 	const content = await readFile(taskPath, "utf-8");
 	const frontmatter = parseTaskFrontmatter(content);
 	if (!frontmatter.readable) {
-		throw new Error(`Task "${id}" has no readable frontmatter; fix it with edit before using task_manage.`);
+		throw new RecoverableToolError(
+			`Task "${id}" has no readable frontmatter; fix it with edit before using task_manage.`,
+		);
 	}
 	if (frontmatter.controlReadable === false && !allowControlRepair) {
-		throw new Error(
+		throw new RecoverableToolError(
 			`Task "${id}" has invalid control metadata; repair it with task_manage action "set" and an explicit control patch first.`,
 		);
 	}
@@ -146,7 +149,7 @@ export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFi
 	}
 	if (request.status !== undefined) {
 		if (!isSettableTaskStatus(request.status)) {
-			throw new Error(
+			throw new RecoverableToolError(
 				`Invalid status "${request.status}". Use one of ${SETTABLE_STATUSES.join(", ")}, or action "done".`,
 			);
 		}
@@ -157,7 +160,7 @@ export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFi
 		if (trimmed === "") {
 			next.wake = undefined;
 		} else if (!Number.isFinite(new Date(trimmed).getTime())) {
-			throw new Error(`wake "${request.wake}" is not a valid ISO8601 date.`);
+			throw new RecoverableToolError(`wake "${request.wake}" is not a valid ISO8601 date.`);
 		} else {
 			next.wake = trimmed;
 		}
@@ -191,13 +194,15 @@ export async function validateTaskRelations(
 	const control = fields.control;
 	if (!control) return;
 	if (control.parent === id || control.dependsOn.includes(id)) {
-		throw new Error(`Task "${id}" cannot be its own parent or dependency.`);
+		throw new RecoverableToolError(`Task "${id}" cannot be its own parent or dependency.`);
 	}
 	for (const relatedId of [control.parent, ...control.dependsOn].filter((value): value is string => Boolean(value))) {
 		const active = join(tasksDir(options), `${relatedId}.md`);
 		const archived = join(tasksDir(options), "archive", `${relatedId}.md`);
 		if (!existsSync(active) && !existsSync(archived)) {
-			throw new Error(`Related task "${relatedId}" does not exist; create it before linking task "${id}".`);
+			throw new RecoverableToolError(
+				`Related task "${relatedId}" does not exist; create it before linking task "${id}".`,
+			);
 		}
 	}
 
@@ -206,10 +211,10 @@ export async function validateTaskRelations(
 		let current: string | undefined = control.parent;
 		while (current) {
 			if (visited.has(current)) {
-				throw new Error(`Existing parent chain for "${control.parent}" already contains a cycle.`);
+				throw new RecoverableToolError(`Existing parent chain for "${control.parent}" already contains a cycle.`);
 			}
 			if (current === id) {
-				throw new Error(`Task parent cycle detected while linking "${id}" to "${control.parent}".`);
+				throw new RecoverableToolError(`Task parent cycle detected while linking "${id}" to "${control.parent}".`);
 			}
 			visited.add(current);
 			const task = await readStoredTask(options.channelDir, current, true);
@@ -224,7 +229,9 @@ export async function validateTaskRelations(
 			const current = stack.pop();
 			if (!current || visited.has(current)) continue;
 			if (current === id) {
-				throw new Error(`Task dependency cycle detected while linking "${id}" to "${dependencyId}".`);
+				throw new RecoverableToolError(
+					`Task dependency cycle detected while linking "${id}" to "${dependencyId}".`,
+				);
 			}
 			visited.add(current);
 			const task = await readStoredTask(options.channelDir, current, true);

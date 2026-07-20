@@ -33,10 +33,16 @@ export type PromptCacheClass = "runtime-stable" | "workspace-versioned" | "sessi
  */
 export type PromptOverflowPolicy = "error" | "truncate-head-tail" | "truncate-items" | "omit";
 
+/**
+ * A registered tool, as the prompt builder sees it. There is no per-tool prose here and no
+ * section renders this list: spec 026 §3.2 removed `## Available Tools` because the model
+ * already receives each tool's name, description and schema with every request. The list is
+ * kept because the builder still needs it to decide whether a mechanism is reachable —
+ * gating sections (`requiresAllTools`), filtering playbooks, and reporting via `/context`.
+ */
 export interface ToolDescriptor {
 	name: string;
 	description: string;
-	hint?: string;
 }
 
 export interface SubAgentSummary {

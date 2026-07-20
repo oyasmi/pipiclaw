@@ -1,3 +1,4 @@
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 /**
  * The task status model and its single transition table (spec 029, D3).
  *
@@ -102,12 +103,16 @@ export function resolveTaskTransition(
 ): TaskStatus {
 	const rule = TRANSITIONS[action];
 	if (!rule.from.includes(from)) {
-		throw new Error(`Task ${id} is ${from}; action ${action} allows only from: ${rule.from.join(", ") || "(none)"}.`);
+		throw new RecoverableToolError(
+			`Task ${id} is ${from}; action ${action} allows only from: ${rule.from.join(", ") || "(none)"}.`,
+		);
 	}
 	if (rule.to !== "caller") return rule.to;
 	if (requestedStatus === undefined) return from;
 	if (!isSettableTaskStatus(requestedStatus)) {
-		throw new Error(`Invalid status "${requestedStatus}". Use one of ${SETTABLE_TASK_STATUSES.join(", ")}.`);
+		throw new RecoverableToolError(
+			`Invalid status "${requestedStatus}". Use one of ${SETTABLE_TASK_STATUSES.join(", ")}.`,
+		);
 	}
 	return requestedStatus;
 }

@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
-import { TOOL_PROMPT_HINTS } from "../tools/registry.js";
+import { TOOL_NAMES } from "../tools/registry.js";
 
 const DEFAULT_PRIORITY = 100;
 /** A catalog entry is a single trigger, not a summary; longer descriptions are clipped in the prompt (spec 026 §10.5). */
@@ -59,7 +59,7 @@ function parseFrontmatter(content: string, filename: string): Omit<RuntimePlaybo
 	// otherwise drop the playbook from the catalog with no signal anywhere.
 	const requiresAnyTool = parseList(fields.get("requires-tools"));
 	for (const tool of requiresAnyTool) {
-		if (!(tool in TOOL_PROMPT_HINTS)) {
+		if (!TOOL_NAMES.has(tool)) {
 			throw new Error(`Runtime playbook ${filename} requires unknown tool "${tool}".`);
 		}
 	}

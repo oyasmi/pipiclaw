@@ -216,6 +216,19 @@ export function logToolSuccess(ctx: LogContext, toolName: string, durationMs: nu
 	});
 }
 
+/**
+ * A tool call the model can fix itself (bad arguments, unmet precondition). Logged at debug,
+ * not warn: it is an expected step in a self-correcting turn, not an operator problem. Kept
+ * distinct from success so a model looping on the same rejection is still visible in the log.
+ */
+export function logToolRejected(ctx: LogContext, toolName: string, durationMs: number, reason: string): void {
+	logEvent("debug", "agent.tool.rejected", "Tool rejected the call", {
+		ctx,
+		details: reason,
+		fields: { tool: toolName, durationMs, reason },
+	});
+}
+
 export function logToolError(ctx: LogContext, toolName: string, durationMs: number, error: string): void {
 	logEvent("warn", "agent.tool.failed", "Tool failed", {
 		ctx,

@@ -6,6 +6,7 @@ import { extractLabelFromArgs, truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import type { SubAgentToolDetails } from "../subagents/tool.js";
+import { type ToolDetails, toolResultDetails } from "../tools/tool-details.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
 import {
@@ -38,7 +39,7 @@ export interface SessionEventHandlerContext {
 	refreshSessionResources?: () => Promise<void>;
 }
 
-function isSkillManageDetails(value: unknown): value is {
+function isSkillManageDetails(value: unknown): value is ToolDetails & {
 	kind: "skill_manage";
 	requiresResourceRefresh?: boolean;
 	notice?: string;
@@ -200,7 +201,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			);
 		}
 
-		const details = isRecord(event.result) && "details" in event.result ? event.result.details : null;
+		const details = toolResultDetails(event.result);
 		if (isSkillManageDetails(details)) {
 			if (details.requiresResourceRefresh && context.refreshSessionResources) {
 				queue.enqueue(() => context.refreshSessionResources?.() ?? Promise.resolve(), "refresh skills");
@@ -210,9 +211,17 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			}
 		}
 
+		// A recoverable rejection (bad arguments, unmet precondition the model can fix) is not a
+		// fault: the model normally corrects it on the next call. It is logged so the retry is
+		// still diagnosable, but never rendered to the user — a red bubble would report a failure
+		// that never happened and make the assistant look broken mid-turn. Rejections the *user*
+		// must resolve (an approval gate, a guard refusal) stay plain errors and remain visible.
+		const rejected = details?.recoverable === true;
 		const treatAsError = event.isError || Boolean(subAgentDetails?.failed);
 		if (treatAsError) {
 			log.logToolError(logCtx, event.toolName, durationMs, resultStr);
+		} else if (rejected) {
+			log.logToolRejected(logCtx, event.toolName, durationMs, resultStr);
 		} else {
 			log.logToolSuccess(logCtx, event.toolName, durationMs, resultStr);
 		}

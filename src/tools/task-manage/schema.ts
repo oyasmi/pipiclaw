@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { SETTABLE_TASK_STATUSES } from "../../tasks/transitions.js";
+import { RecoverableToolError } from "../tool-details.js";
 import type { TaskManageAction } from "./types.js";
 
 export const SETTABLE_STATUSES = SETTABLE_TASK_STATUSES;
@@ -135,5 +136,7 @@ export function parseAction(action: string): TaskManageAction {
 	) {
 		return action;
 	}
-	throw new Error("Unsupported task action. Use create, progress, candidate, set, verify, done, cancel, or list.");
+	throw new RecoverableToolError(
+		"Unsupported task action. Use create, progress, candidate, set, verify, done, cancel, or list.",
+	);
 }

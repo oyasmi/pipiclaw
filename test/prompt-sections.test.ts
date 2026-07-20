@@ -8,7 +8,6 @@ import type { LoadedPromptResource, PromptBuildContext, ToolDescriptor } from ".
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { DEFAULT_AGENTS, DEFAULT_SOUL } from "../src/runtime/workspace-templates.js";
 import { countPromptUnits } from "../src/shared/prompt-units.js";
-import { TOOL_PROMPT_HINTS } from "../src/tools/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-prompt-");
@@ -32,7 +31,7 @@ const FULL_TOOL_NAMES = [
 ];
 
 function tools(names: string[]): ToolDescriptor[] {
-	return names.map((name) => ({ name, description: `${name} description`, hint: TOOL_PROMPT_HINTS[name] }));
+	return names.map((name) => ({ name, description: `${name} description` }));
 }
 
 function resource(path: string, content: string): LoadedPromptResource {

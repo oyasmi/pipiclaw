@@ -3,7 +3,7 @@ import type { Executor } from "../src/executor.js";
 import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
-import { buildToolSet, TOOL_PROMPT_HINTS, TOOL_REGISTRY, type ToolBuildContext } from "../src/tools/registry.js";
+import { buildToolSet, TOOL_NAMES, TOOL_REGISTRY, type ToolBuildContext } from "../src/tools/registry.js";
 
 const executor: Executor = {
 	exec: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -37,23 +37,20 @@ function makeContext(overrides: Partial<ToolBuildContext> = {}): ToolBuildContex
 }
 
 describe("tool registry", () => {
-	it("has unique names and a non-empty prompt hint for every tool", () => {
+	it("has unique names", () => {
 		const names = TOOL_REGISTRY.map((registration) => registration.name);
 		expect(new Set(names).size).toBe(names.length);
-		for (const registration of TOOL_REGISTRY) {
-			expect(registration.promptHint.trim().length).toBeGreaterThan(0);
-		}
 	});
 
 	it("does not register the subagent tool (it is appended separately)", () => {
 		expect(TOOL_REGISTRY.map((registration) => registration.name)).not.toContain("subagent");
 	});
 
-	it("exposes a prompt hint for every registered tool plus subagent", () => {
+	it("names every registered tool plus subagent, for validating authored tool references", () => {
 		for (const registration of TOOL_REGISTRY) {
-			expect(TOOL_PROMPT_HINTS[registration.name]).toBeTruthy();
+			expect(TOOL_NAMES.has(registration.name)).toBe(true);
 		}
-		expect(TOOL_PROMPT_HINTS.subagent).toBeTruthy();
+		expect(TOOL_NAMES.has("subagent")).toBe(true);
 	});
 
 	it("builds the full leaf set on the main path in registry order", () => {

@@ -11,6 +11,7 @@ import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import { invalidateTaskVerification } from "../../tasks/control.js";
 import { dependencyState, taskBodyHash } from "../../tasks/store.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../../tasks/transitions.js";
+import { RecoverableToolError } from "../tool-details.js";
 import {
 	appendCompletionEvidence,
 	applySet,
@@ -27,7 +28,7 @@ import type { TaskFields, TaskManageRequest, TaskManageResult, TaskManageToolOpt
 import { assertVerificationAttestationMatches } from "./verification.js";
 
 export async function setTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
-	if (!request.id) throw new Error('action "set" requires an id.');
+	if (!request.id) throw new RecoverableToolError('action "set" requires an id.');
 	const id = normalizeTaskId(request.id);
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id, request.control !== undefined);
@@ -54,7 +55,7 @@ export async function progressTask(
 	options: TaskManageToolOptions,
 	request: TaskManageRequest,
 ): Promise<TaskManageResult> {
-	if (!request.id) throw new Error('action "progress" requires an id.');
+	if (!request.id) throw new RecoverableToolError('action "progress" requires an id.');
 	const id = normalizeTaskId(request.id);
 	const note = requiredField(request.note, "note", "progress");
 	const taskPath = join(tasksDir(options), `${id}.md`);
@@ -86,7 +87,7 @@ export async function progressTask(
 }
 
 export async function doneTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
-	if (!request.id) throw new Error('action "done" requires an id.');
+	if (!request.id) throw new RecoverableToolError('action "done" requires an id.');
 	const id = normalizeTaskId(request.id);
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
@@ -94,17 +95,19 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 	resolveTaskTransition("done", id, normalizeStoredStatus(fields.status));
 	const uncheckedAcceptance = uncheckedTaskAcceptanceItems(body);
 	if (uncheckedAcceptance.length > 0) {
-		throw new Error(
+		throw new RecoverableToolError(
 			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before done.`,
 		);
 	}
 	const dependencies = await dependencyState(options.channelDir, fields.control?.dependsOn ?? [], id);
 	if (!dependencies.ready) {
-		throw new Error(`Task "${id}" cannot be completed: ${dependencies.reason}. Complete its dependencies first.`);
+		throw new RecoverableToolError(
+			`Task "${id}" cannot be completed: ${dependencies.reason}. Complete its dependencies first.`,
+		);
 	}
 	const children = await unfinishedChildren(options, id);
 	if (children.length > 0) {
-		throw new Error(
+		throw new RecoverableToolError(
 			`Task "${id}" still has unfinished child tasks: ${children.join(", ")}. Finish or cancel them first.`,
 		);
 	}
@@ -121,17 +124,19 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 	if (fields.control?.verification.mode === "independent") {
 		const verification = fields.control.verification;
 		if (verification.status !== "passed" || !verification.bodyHash || !verification.runId) {
-			throw new Error(
+			throw new RecoverableToolError(
 				`Task "${id}" requires an independent PASS. Run a purpose=verify sub-agent, then task_manage verify with its run id.`,
 			);
 		}
 		if (verification.bodyHash !== taskBodyHash(body)) {
-			throw new Error(`Task "${id}" changed after its independent PASS; rerun verification before done.`);
+			throw new RecoverableToolError(
+				`Task "${id}" changed after its independent PASS; rerun verification before done.`,
+			);
 		}
 		if (verification.subjectHash) {
 			const currentSubject = await workspaceSubjectHash(options.workingDirectory ?? process.cwd());
 			if (currentSubject !== verification.subjectHash) {
-				throw new Error(
+				throw new RecoverableToolError(
 					`Task "${id}" artifacts changed after its independent PASS; rerun verification before done.`,
 				);
 			}
@@ -181,7 +186,7 @@ export async function cancelTask(
 	options: TaskManageToolOptions,
 	request: TaskManageRequest,
 ): Promise<TaskManageResult> {
-	if (!request.id) throw new Error('action "cancel" requires an id.');
+	if (!request.id) throw new RecoverableToolError('action "cancel" requires an id.');
 	const id = normalizeTaskId(request.id);
 	const reason = requiredField(request.reason, "reason", "cancel");
 	const dir = tasksDir(options);
@@ -190,7 +195,7 @@ export async function cancelTask(
 	resolveTaskTransition("cancel", id, normalizeStoredStatus(fields.status));
 	const children = await unfinishedChildren(options, id);
 	if (children.length > 0) {
-		throw new Error(
+		throw new RecoverableToolError(
 			`Task "${id}" still has unfinished child tasks: ${children.join(", ")}. Cancel or re-parent them first.`,
 		);
 	}

@@ -111,7 +111,6 @@ vi.mock("../src/tools/config.js", () => ({ loadToolsConfig: vi.fn(() => toolsCon
 import { buildPipiclawSystemPrompt } from "../src/agent/prompt/builder.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { createPipiclawTools } from "../src/tools/index.js";
-import { TOOL_PROMPT_HINTS } from "../src/tools/registry.js";
 
 const ALL_TOOL_NAMES = [
 	"read",
@@ -206,7 +205,7 @@ describe("tools index", () => {
 			mode: "normal",
 			cwd: "/work",
 			workspaceDir: "/workspace",
-			tools: tools.map((tool) => ({ name: tool.name, description: "", hint: TOOL_PROMPT_HINTS[tool.name] })),
+			tools: tools.map((tool) => ({ name: tool.name, description: "" })),
 			playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(), toolNames),
 			subAgents: [],
 		});

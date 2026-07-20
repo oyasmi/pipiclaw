@@ -58,7 +58,6 @@ import type { UsageTotals } from "../shared/types.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
-import { TOOL_PROMPT_HINTS } from "../tools/registry.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { createCommandExtension } from "./command-extension.js";
 import { isKnownCommandName, type RunnerBuiltInCommand, renderBuiltInHelp, slashCommandName } from "./commands.js";
@@ -1068,7 +1067,6 @@ export class ChannelRunner implements AgentRunner {
 			tools: this.currentTools.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
-				hint: TOOL_PROMPT_HINTS[tool.name],
 			})),
 			soul: resources.soul,
 			agents: resources.agents,

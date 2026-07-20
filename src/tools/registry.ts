@@ -18,6 +18,7 @@ import { createSendMediaTool } from "./send-media.js";
 import { createSessionSearchTool } from "./session-search.js";
 import { createSkillManageTool } from "./skill-manage.js";
 import { createTaskManageTool } from "./task-manage.js";
+import { type ToolDetailsKind, withToolDetails } from "./tool-details.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { createWebSearchTool } from "./web-search.js";
 import { createWriteTool } from "./write.js";
@@ -64,9 +65,8 @@ export interface ToolBuildContext {
 }
 
 export interface ToolRegistration {
-	name: string;
-	/** One-line hint rendered in the system prompt's `## Tools` section. */
-	promptHint: string;
+	/** Also the tool's `details.kind`: the name is the authoritative discriminator. */
+	name: ToolDetailsKind;
 	/** Whether this tool is included in a sub-agent's tool set. */
 	availableToSubagents: boolean;
 	/** Config gate; when omitted the tool is always enabled. */
@@ -102,13 +102,11 @@ function webEnabled(ctx: ToolBuildContext): boolean {
 export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "read",
-		promptHint: "Read files",
 		availableToSubagents: true,
 		create: (ctx) => createReadTool(ctx.executor, fileToolOptions(ctx)),
 	},
 	{
 		name: "bash",
-		promptHint: "Run shell commands and external programs",
 		availableToSubagents: true,
 		create: (ctx) =>
 			createBashTool(ctx.executor, {
@@ -123,25 +121,21 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "edit",
-		promptHint: "Surgical file edits",
 		availableToSubagents: true,
 		create: (ctx) => createEditTool(ctx.executor, fileToolOptions(ctx)),
 	},
 	{
 		name: "grep",
-		promptHint: "Search file contents with a regex; grouped, paginated, token-bounded — prefer over bash grep",
 		availableToSubagents: true,
 		create: (ctx) => createGrepTool(ctx.executor, fileToolOptions(ctx)),
 	},
 	{
 		name: "write",
-		promptHint: "Create or overwrite files when needed",
 		availableToSubagents: true,
 		create: (ctx) => createWriteTool(ctx.executor, fileToolOptions(ctx)),
 	},
 	{
 		name: "web_search",
-		promptHint: "Search the public web and return titles, URLs, and snippets",
 		availableToSubagents: true,
 		enabledBy: webEnabled,
 		create: (ctx) =>
@@ -154,7 +148,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "web_fetch",
-		promptHint: "Fetch a public URL and extract readable content",
 		availableToSubagents: true,
 		enabledBy: webEnabled,
 		create: (ctx) =>
@@ -168,7 +161,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "send_media",
-		promptHint: "Send a local file (image inline, else downloadable) to the user in the current channel",
 		availableToSubagents: false,
 		// Enabled only when the driving transport supplied a media sender (the DingTalk
 		// bot, or the terminal). Absent it, the tool is not built or advertised.
@@ -183,7 +175,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "session_search",
-		promptHint: "Search current-channel cold transcript storage for older conversation details",
 		availableToSubagents: false,
 		create: (ctx) =>
 			createSessionSearchTool({
@@ -196,7 +187,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "memory_manage",
-		promptHint: "Save a durable fact, search stored memory on demand, or forget an entry — when the user asks",
 		availableToSubagents: false,
 		create: (ctx) =>
 			createMemoryManageTool({
@@ -210,13 +200,11 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "skill_manage",
-		promptHint: "List, view, create, or maintain workspace-level procedural memory in skills/",
 		availableToSubagents: false,
 		create: (ctx) => createSkillManageTool({ workspaceDir: ctx.workspaceDir }),
 	},
 	{
 		name: "event_manage",
-		promptHint: "Create/update/delete validated one-shot reminders, periodic cadences, and preAction-gated sensors",
 		availableToSubagents: false,
 		create: (ctx) =>
 			createEventManageTool({
@@ -227,7 +215,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "task_manage",
-		promptHint: "Create, checkpoint, govern, verify, complete, cancel, or list persistent tasks",
 		availableToSubagents: false,
 		// tools.tasks is the master switch for the whole autonomous long-running task
 		// mechanism; the TaskDriver and per-turn task digest honor the same flag.
@@ -242,7 +229,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "job",
-		promptHint: "Inspect/poll/cancel background bash jobs started with bash async:true",
 		availableToSubagents: false,
 		// Present only when a job manager was supplied (always on the main path,
 		// never for sub-agents).
@@ -251,22 +237,35 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 ];
 
-/** Prompt hint for the `subagent` tool, which is registered outside TOOL_REGISTRY. */
-export const SUBAGENT_TOOL_HINT =
-	"Delegate focused work or independent verification; optionally isolate implementation in a task-owned git worktree";
-
-/** Single source of truth for prompt hints, keyed by tool name (leaf tools + subagent). */
-export const TOOL_PROMPT_HINTS: Record<string, string> = {
-	...Object.fromEntries(TOOL_REGISTRY.map((registration) => [registration.name, registration.promptHint])),
-	subagent: SUBAGENT_TOOL_HINT,
-};
+/**
+ * Every tool name a tool set can contain: the registry plus `subagent`, which is registered
+ * outside it. Used to validate authored references to tools (playbook `requires-tools`), so a
+ * typo fails loudly instead of silently dropping the playbook from the catalog.
+ *
+ * This deliberately carries no per-tool prose. Tool name, description and parameter schema
+ * already reach the model with every request; spec 026 §3.2 removed the `## Available Tools`
+ * prompt section because repeating a hint for each tool cost ~180 prompt units per turn and
+ * added no capability. Guidance on *when* to prefer a tool belongs in that tool's own
+ * `description` (see `grep`, which tells the model to prefer it over `bash grep -rn`).
+ */
+export const TOOL_NAMES: ReadonlySet<string> = new Set<string>([
+	...TOOL_REGISTRY.map((registration) => registration.name),
+	"subagent",
+]);
 
 export interface BuildToolSetOptions {
 	/** When true, include only tools flagged `availableToSubagents`. */
 	forSubagent?: boolean;
 }
 
-/** Build a tool set from the registry, honoring sub-agent availability and config gates. */
+/**
+ * Build a tool set from the registry, honoring sub-agent availability and config gates.
+ *
+ * Every tool is bound to the `details` contract here rather than in its own factory: the
+ * registration name is stamped as `details.kind`, and a `RecoverableToolError` becomes a
+ * normal result the model can act on. Doing it at this single seam means a new tool conforms
+ * without its author having to remember, and `kind` can never disagree with the name.
+ */
 export function buildToolSet(ctx: ToolBuildContext, options: BuildToolSetOptions = {}): AgentTool<any>[] {
 	const result: AgentTool<any>[] = [];
 	for (const registration of TOOL_REGISTRY) {
@@ -276,7 +275,7 @@ export function buildToolSet(ctx: ToolBuildContext, options: BuildToolSetOptions
 		if (registration.enabledBy && !registration.enabledBy(ctx)) {
 			continue;
 		}
-		result.push(registration.create(ctx));
+		result.push(withToolDetails(registration.create(ctx), registration.name));
 	}
 	return result;
 }

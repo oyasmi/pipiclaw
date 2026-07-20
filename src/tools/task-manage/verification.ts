@@ -6,6 +6,7 @@ import { createDefaultTaskControl, type TaskVerification } from "../../tasks/con
 import { readStoredTask, taskBodyHash } from "../../tasks/store.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../../tasks/transitions.js";
 import { readVerificationAttestation } from "../../tasks/verification.js";
+import { RecoverableToolError } from "../tool-details.js";
 import { readTaskDocument, renderTaskFile, requiredField, tasksDir } from "./shared.js";
 import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 
@@ -18,7 +19,7 @@ export async function candidateTask(
 	options: TaskManageToolOptions,
 	request: TaskManageRequest,
 ): Promise<TaskManageResult> {
-	if (!request.id) throw new Error('action "candidate" requires an id.');
+	if (!request.id) throw new RecoverableToolError('action "candidate" requires an id.');
 	const id = normalizeTaskId(request.id);
 	const note = requiredField(request.note, "note", "candidate");
 	const taskPath = join(tasksDir(options), `${id}.md`);
@@ -26,7 +27,7 @@ export async function candidateTask(
 	resolveTaskTransition("candidate", id, normalizeStoredStatus(fields.status));
 	const uncheckedAcceptance = uncheckedTaskAcceptanceItems(body);
 	if (uncheckedAcceptance.length > 0) {
-		throw new Error(
+		throw new RecoverableToolError(
 			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before requesting verification.`,
 		);
 	}
@@ -53,30 +54,36 @@ export async function verifyTask(
 	options: TaskManageToolOptions,
 	request: TaskManageRequest,
 ): Promise<TaskManageResult> {
-	if (!request.id) throw new Error('action "verify" requires an id.');
+	if (!request.id) throw new RecoverableToolError('action "verify" requires an id.');
 	const id = normalizeTaskId(request.id);
 	const runId = requiredField(request.verifierRunId, "verifierRunId", "verify");
 	const task = await readStoredTask(options.channelDir, id);
-	if (!task) throw new Error(`Task "${id}" does not exist; create it before verification.`);
+	if (!task) throw new RecoverableToolError(`Task "${id}" does not exist; create it before verification.`);
 	const attestation = await readVerificationAttestation(options.channelDir, runId);
 	if (attestation.taskId !== id) {
-		throw new Error(`Verification run "${runId}" belongs to task "${attestation.taskId}", not "${id}".`);
+		throw new RecoverableToolError(
+			`Verification run "${runId}" belongs to task "${attestation.taskId}", not "${id}".`,
+		);
 	}
 	if (attestation.workspaceChanged) {
-		throw new Error(`Verification run "${runId}" changed the workspace; rerun a read-only verifier.`);
+		throw new RecoverableToolError(`Verification run "${runId}" changed the workspace; rerun a read-only verifier.`);
 	}
 	if (attestation.bodyHash !== taskBodyHash(task.body)) {
-		throw new Error(`Task "${id}" changed after verification run "${runId}"; rerun the verifier on current content.`);
+		throw new RecoverableToolError(
+			`Task "${id}" changed after verification run "${runId}"; rerun the verifier on current content.`,
+		);
 	}
 	if (attestation.subjectHash) {
 		const currentSubject = await workspaceSubjectHash(options.workingDirectory ?? process.cwd());
 		if (!currentSubject) {
-			throw new Error(
+			throw new RecoverableToolError(
 				`Verification run "${runId}" is bound to a Git artifact subject, but the current checkout cannot be read. Rerun verification from the project checkout.`,
 			);
 		}
 		if (currentSubject !== attestation.subjectHash) {
-			throw new Error(`Task "${id}" artifacts changed after verification run "${runId}"; rerun the verifier.`);
+			throw new RecoverableToolError(
+				`Task "${id}" artifacts changed after verification run "${runId}"; rerun the verifier.`,
+			);
 		}
 	}
 	const control = task.fields.control ?? createDefaultTaskControl("independent");
@@ -114,19 +121,21 @@ export async function assertVerificationAttestationMatches(
 	verification: TaskVerification,
 ): Promise<void> {
 	if (!verification.runId) {
-		throw new Error(`Task "${id}" has no verification run id; rerun task_manage verify before done.`);
+		throw new RecoverableToolError(`Task "${id}" has no verification run id; rerun task_manage verify before done.`);
 	}
 	const attestation = await readVerificationAttestation(channelDir, verification.runId);
 	if (attestation.taskId !== id) {
-		throw new Error(
+		throw new RecoverableToolError(
 			`Verification run "${verification.runId}" belongs to task "${attestation.taskId}", not "${id}"; rerun verification.`,
 		);
 	}
 	if (attestation.verdict !== "pass") {
-		throw new Error(`Verification run "${verification.runId}" recorded a FAIL, not a PASS; rerun verification.`);
+		throw new RecoverableToolError(
+			`Verification run "${verification.runId}" recorded a FAIL, not a PASS; rerun verification.`,
+		);
 	}
 	if (attestation.bodyHash !== verification.bodyHash) {
-		throw new Error(
+		throw new RecoverableToolError(
 			`Task "${id}" control.verification.bodyHash does not match the attestation for run "${verification.runId}"; rerun task_manage verify.`,
 		);
 	}
