@@ -8,6 +8,7 @@ import type { UsageTotals } from "../shared/types.js";
 import type { SubAgentToolDetails } from "../subagents/tool.js";
 import { type ToolDetails, toolResultDetails } from "../tools/tool-details.js";
 import type { UsageLedger } from "../usage/ledger.js";
+import { isEffectfulTool, noteChannelEffect } from "./effect-ledger.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
 import {
 	extractCustomCommandResultText,
@@ -226,6 +227,12 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			log.logToolSuccess(logCtx, event.toolName, durationMs, resultStr);
 		}
 
+		// A tool that actually changed something outside the task ledger is the evidence the task
+		// governor judges progress by (spec 031, D7).
+		if (!treatAsError && !rejected && isEffectfulTool(event.toolName, details)) {
+			noteChannelEffect(logCtx.channelId);
+		}
+
 		if (treatAsError && showProgress) {
 			queue.enqueue(() => ctx.respond(formatProgressEntry("error", truncate(resultStr, 200)), false), "tool error");
 		}
@@ -332,6 +339,9 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 				return;
 			}
 
+			// A real answer to the user is a visible result even when no file changed (D7);
+			// a [SILENT] turn above deliberately does not reach here.
+			noteChannelEffect(logCtx.channelId);
 			runState.finalOutcome = { kind: "final", text: finalText };
 			memoryLifecycle.noteCompletedAssistantTurn();
 			log.logResponse(logCtx, finalText);

@@ -17,8 +17,12 @@ import * as log from "../log.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
+import { taskEventPrefix } from "../shared/task-events.js";
+import { parseTaskFrontmatter } from "../shared/task-ledger.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
+import { TERMINAL_TASK_STATUSES } from "../tasks/transitions.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
+import { MAX_EVENT_FILES, validateScheduledEvent } from "./event-validation.js";
 
 // ============================================================================
 // Event Types
@@ -28,13 +32,6 @@ export interface EventAction {
 	type: "bash";
 	command: string;
 	timeout?: number; // event definition uses milliseconds; converted to Executor seconds
-}
-
-export interface ImmediateEvent {
-	type: "immediate";
-	channelId: string;
-	text: string;
-	preAction?: EventAction;
 }
 
 export interface OneShotEvent {
@@ -59,7 +56,7 @@ export interface PeriodicEvent {
 	preAction?: EventAction;
 }
 
-export type ScheduledEvent = ImmediateEvent | OneShotEvent | PeriodicEvent;
+export type ScheduledEvent = OneShotEvent | PeriodicEvent;
 
 export type EventHistoryAction =
 	| "loaded"
@@ -194,8 +191,15 @@ export function parseScheduledEventContent(content: string, filename: string): S
 	const preAction = parsePreAction(data, filename);
 
 	switch (type) {
+		// Removed in spec 031 (D4): an event that fires the moment it is written is a
+		// self-triggering loop with no gate in front of it, and nothing in the runtime produced
+		// one. Rejecting it here — rather than only in `event_manage` — is what makes the guard
+		// enforced, since the events directory is agent-writable.
 		case "immediate":
-			return { type, channelId, text, ...(preAction ? { preAction } : {}) };
+			throw new Error(
+				`Immediate events are no longer supported (${filename}); do the work in the current turn, ` +
+					"or schedule a one-shot at least 2 minutes out via event_manage.",
+			);
 
 		case "one-shot": {
 			if (typeof data.at !== "string" || data.at.trim().length === 0) {
@@ -225,6 +229,21 @@ export function parseScheduledEventContent(content: string, filename: string): S
 		default:
 			throw new Error(`Unknown event type '${type}' in ${filename}`);
 	}
+}
+
+/**
+ * Stable, provenance-derived dispatch id (spec 031, D1).
+ *
+ * The identity of a wake is its *occurrence*, never the moment it happened to be executed.
+ * A one-shot keyed on its own `at` therefore lands on the same durable record whether it
+ * arrives via the outbox retry or via the post-restart file recovery path, so the two
+ * independent retry systems can no longer deliver the same occurrence twice. A periodic is
+ * keyed on the cron trigger time, so retries of one occurrence collapse while the next
+ * occurrence is a genuinely new record.
+ */
+function eventDispatchId(filename: string, event: ScheduledEvent, occurrence: Date): string {
+	const name = eventNameFromFilename(filename);
+	return event.type === "one-shot" ? `event:${name}:${event.at}` : `event:${name}:${occurrence.toISOString()}`;
 }
 
 class EventPreActionError extends Error {
@@ -482,14 +501,19 @@ export class EventsWatcher {
 			return;
 		}
 
+		const rejection = this.admissionFailure(filename, event);
+		if (rejection) {
+			log.logWarning(`Rejected event file: ${filename}`, rejection);
+			this.appendEventHistory(filename, event, "invalid", "error", { reason: rejection });
+			this.markInvalid(filename, rejection);
+			return;
+		}
+
 		this.knownFiles.add(filename);
 		this.clearInvalidMarker(filename);
 		this.appendEventHistory(filename, event, "loaded", "ok");
 
 		switch (event.type) {
-			case "immediate":
-				this.handleImmediate(filename, event);
-				break;
 			case "one-shot":
 				await this.handleOneShot(filename, event);
 				break;
@@ -503,24 +527,35 @@ export class EventsWatcher {
 		return parseScheduledEventContent(content, filename);
 	}
 
-	private async handleImmediate(filename: string, event: ImmediateEvent): Promise<void> {
-		const filePath = join(this.eventsDir, filename);
-
-		try {
-			const stat = statSync(filePath);
-			if (stat.mtimeMs < this.startTime) {
-				log.logInfo(`Stale immediate event, deleting: ${filename}`);
-				this.appendEventHistory(filename, event, "skipped", "skipped", { reason: "stale immediate event" });
-				this.deleteFile(filename);
-				return;
-			}
-		} catch {
-			return;
+	/**
+	 * The admission gate (spec 031, D4). `event_manage` applies the same rules first, but the
+	 * events directory is agent-writable, so a file that arrived any other way is only ever
+	 * stopped here. Returns the rejection reason, or undefined when the event may be scheduled.
+	 */
+	private admissionFailure(filename: string, event: ScheduledEvent): string | undefined {
+		if (!this.knownFiles.has(filename) && this.timers.size + this.crons.size >= MAX_EVENT_FILES) {
+			return `Too many scheduled events (>= ${MAX_EVENT_FILES}); delete stale events before adding more.`;
 		}
+		try {
+			validateScheduledEvent(event, {
+				commandGuardConfig: this.commandGuardConfig,
+				// A one-shot whose `at` has already passed is a legitimate post-restart recovery,
+				// not a self-trigger, so the lead time only binds files written while this process
+				// was running — which is exactly the case the guard exists for.
+				enforceOneShotLead: this.wasWrittenAfterStart(filename),
+			});
+		} catch (error) {
+			return errorMessage(error);
+		}
+		return undefined;
+	}
 
-		log.logInfo(`Executing immediate event: ${filename}`);
-		this.appendEventHistory(filename, event, "triggered", "ok");
-		await this.execute(filename, event);
+	private wasWrittenAfterStart(filename: string): boolean {
+		try {
+			return statSync(join(this.eventsDir, filename)).mtimeMs >= this.startTime;
+		} catch {
+			return false;
+		}
 	}
 
 	private async handleOneShot(filename: string, event: OneShotEvent): Promise<void> {
@@ -595,7 +630,8 @@ export class EventsWatcher {
 				try {
 					log.logInfo(`Executing periodic event: ${filename}`);
 					this.appendEventHistory(filename, event, "triggered", "ok");
-					await this.execute(filename, event, false);
+					// The cron trigger time — not "now" — is this occurrence's identity (D1).
+					await this.execute(filename, event, false, cron.currentRun() ?? new Date());
 				} catch (err) {
 					log.logWarning(`Periodic event execution failed: ${filename}`, String(err));
 					this.appendEventHistory(filename, event, "skipped", "error", {
@@ -624,7 +660,47 @@ export class EventsWatcher {
 		}
 	}
 
-	private async execute(filename: string, event: ScheduledEvent, deleteAfter: boolean = true): Promise<void> {
+	/**
+	 * A task-owned event outlives its task whenever close-out fails or the task file is deleted
+	 * by hand, and then wakes the channel forever about work that no longer exists. Checking the
+	 * owner at trigger time turns that permanent noise into self-healing (spec 031, D5).
+	 *
+	 * The name alone is ambiguous (a channelId may contain dots), so the owning channel is taken
+	 * from the event definition and only the task id is parsed out of the remainder.
+	 */
+	private async orphanedOwnerReason(filename: string, event: ScheduledEvent): Promise<string | undefined> {
+		const prefix = taskEventPrefix(event.channelId);
+		const name = eventNameFromFilename(filename);
+		if (!name.startsWith(prefix)) return undefined;
+		const taskId = name.slice(prefix.length).split(".")[0];
+		if (!taskId) return undefined;
+
+		const taskPath = join(dirname(this.eventsDir), event.channelId, "tasks", `${taskId}.md`);
+		let content: string;
+		try {
+			content = await readFile(taskPath, "utf-8");
+		} catch {
+			return `owning task ${taskId} no longer exists`;
+		}
+		const status = parseTaskFrontmatter(content).status ?? "";
+		return TERMINAL_TASK_STATUSES.has(status) ? `owning task ${taskId} is ${status}` : undefined;
+	}
+
+	private async execute(
+		filename: string,
+		event: ScheduledEvent,
+		deleteAfter: boolean = true,
+		occurrence: Date = new Date(),
+	): Promise<void> {
+		const orphaned = await this.orphanedOwnerReason(filename, event);
+		if (orphaned) {
+			log.logInfo(`Retiring orphaned task event: ${filename} (${orphaned})`);
+			this.appendEventHistory(filename, event, "skipped", "skipped", { reason: orphaned });
+			this.cancelScheduled(filename);
+			this.deleteFile(filename);
+			return;
+		}
+
 		if (event.preAction) {
 			try {
 				this.appendEventHistory(filename, event, "pre_action_started", "ok", {
@@ -670,9 +746,6 @@ export class EventsWatcher {
 
 		let scheduleInfo: string;
 		switch (event.type) {
-			case "immediate":
-				scheduleInfo = "immediate";
-				break;
 			case "one-shot":
 				scheduleInfo = event.at;
 				break;
@@ -699,6 +772,7 @@ export class EventsWatcher {
 			ts: Date.now().toString(),
 			conversationId: "",
 			conversationType: "1",
+			dispatchId: eventDispatchId(filename, event, occurrence),
 		};
 
 		const enqueued = this.options.dispatch

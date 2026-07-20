@@ -76,6 +76,25 @@ describe("TaskDriver", () => {
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("Task capsule: title=Task; status=active;");
 	});
 
+	it("keys a wake on the task's occurrence and an escalation on its cause (spec 031, D1)", async () => {
+		await writeTask("dm_a", "scheduled", task("active", "2026-07-10T09:00:00+08:00"));
+		await writeTask("dm_b", "unscheduled", task("active"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+
+		await driver.runOnce(NOW);
+
+		// A `wake` is a real occurrence, so retries of it collapse onto one record.
+		expect(dispatch.mock.calls[0]?.[0].dispatchId).toBe("task:dm_a:scheduled:2026-07-10T09:00:00+08:00");
+		// Without a wake there is no occurrence identity; separate wakes must stay separate.
+		expect(dispatch.mock.calls[1]?.[0].dispatchId).toBe(`task:dm_b:unscheduled:t${NOW.getTime()}`);
+	});
+
 	it("keeps dispatch behavior unchanged when the optional observer throws", async () => {
 		await writeTask("dm_a", "ready", task("in-progress"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
@@ -203,20 +222,23 @@ describe("TaskDriver", () => {
 		expect(a).toContain('"attempts":0');
 	});
 
-	it("backs off unchanged tasks but promptly continues after ledger progress", async () => {
+	it("backs off unchanged tasks but promptly continues after real progress", async () => {
 		await writeTask("dm_a", "work", task("in-progress", undefined, "first"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		let effects = 0;
 		const driver = new TaskDriver({
 			workspaceDir,
 			isChannelActive: () => false,
 			dispatch,
 			getSettings: () => SETTINGS,
+			getEffectCount: () => effects,
 		});
 		await driver.runOnce(NOW);
 		await driver.runOnce(new Date(NOW.getTime() + 10 * 60_000));
 		expect(dispatch).toHaveBeenCalledTimes(1);
 
-		await writeTask("dm_a", "work", task("in-progress", undefined, "second"));
+		// The turn changed something in the world, so the task is eligible again promptly.
+		effects++;
 		await driver.runOnce(new Date(NOW.getTime() + 11 * 60_000));
 		expect(dispatch).toHaveBeenCalledTimes(2);
 	});
@@ -260,24 +282,55 @@ describe("TaskDriver", () => {
 		expect(onDisk).toContain('"pausedBy":"governor"');
 	});
 
-	it("resets the no-progress count when the ledger changes between wakes", async () => {
+	it("resets the no-progress count when the turn produced a real effect", async () => {
 		await writeTask("dm_a", "work", task("active", undefined, "note-a"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		let effects = 0;
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+			getEffectCount: () => effects,
+		});
+		// Two futile wakes, then a wake that changed something, then two more: never three in a row.
+		await driver.runOnce(new Date(NOW.getTime() + 0 * 61 * 60_000));
+		await driver.runOnce(new Date(NOW.getTime() + 1 * 61 * 60_000));
+		effects++;
+		await driver.runOnce(new Date(NOW.getTime() + 2 * 61 * 60_000));
+		await driver.runOnce(new Date(NOW.getTime() + 3 * 61 * 60_000));
+		expect(dispatch.mock.calls.every((call) => call[0].text.includes("[TASK_DRIVER:work]"))).toBe(true);
+		const onDisk = await readFile(join(workspaceDir, "dm_a", "tasks", "work.md"), "utf-8");
+		expect(onDisk).toContain("status: active");
+	});
+
+	// D7: the whole point of dropping `latestNote` from the fingerprint. Writing a progress note
+	// is the model's own account of its work, and following the playbook's "record progress"
+	// advice used to be enough to look busy forever.
+	it("does not let a progress note alone reset the no-progress count", async () => {
+		await writeTask("dm_a", "stuck", governedTask("active"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		const driver = new TaskDriver({
 			workspaceDir,
 			isChannelActive: () => false,
 			dispatch,
 			getSettings: () => SETTINGS,
+			getEffectCount: () => 0,
 		});
-		// Two futile wakes, then a ledger change, then two more futile wakes: never reaches three in a row.
-		await driver.runOnce(new Date(NOW.getTime() + 0 * 61 * 60_000));
-		await driver.runOnce(new Date(NOW.getTime() + 1 * 61 * 60_000));
-		await writeTask("dm_a", "work", task("active", undefined, "note-b"));
-		await driver.runOnce(new Date(NOW.getTime() + 2 * 61 * 60_000));
+
+		for (let i = 0; i < 3; i++) {
+			await driver.runOnce(new Date(NOW.getTime() + i * 61 * 60_000));
+			// Each wake dutifully appends a fresh note and changes nothing else.
+			await manageTask(
+				{ channelDir: join(workspaceDir, "dm_a"), workspaceDir, channelId: "dm_a" },
+				{ action: "progress", id: "stuck", note: `still working, pass ${i}` },
+			);
+		}
 		await driver.runOnce(new Date(NOW.getTime() + 3 * 61 * 60_000));
-		expect(dispatch.mock.calls.every((call) => call[0].text.includes("[TASK_DRIVER:work]"))).toBe(true);
-		const onDisk = await readFile(join(workspaceDir, "dm_a", "tasks", "work.md"), "utf-8");
-		expect(onDisk).toContain("status: active");
+
+		const last = dispatch.mock.calls.at(-1)?.[0].text ?? "";
+		expect(last).toContain("[TASK_ESCALATION:stuck]");
+		expect(last).toContain("no visible progress in 3 consecutive wakes");
 	});
 
 	it("does not mistake governed usage accounting for semantic task progress", async () => {
@@ -325,23 +378,25 @@ describe("TaskDriver", () => {
 		await writeTask("dm_a", "x", task("in-progress", undefined, "note-1"));
 		await writeTask("dm_a", "y", task("in-progress", undefined, "note-1"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		let effects = 0;
 		const driver = new TaskDriver({
 			workspaceDir,
 			isChannelActive: () => false,
 			dispatch,
 			getSettings: () => SETTINGS,
+			getEffectCount: () => effects,
 		});
 
 		await driver.runOnce(NOW);
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:x]");
 
-		// "x" keeps producing new progress every tick, so it would clear the 5-minute
-		// continuation delay and remain eligible on every subsequent scan.
-		await writeTask("dm_a", "x", task("in-progress", undefined, "note-2"));
+		// Every turn produces real progress, so the tasks clear the 5-minute continuation delay
+		// and stay eligible on each scan — without rotation, "x" would win the slot forever.
+		effects++;
 		await driver.runOnce(new Date(NOW.getTime() + 5 * 60_000));
 		expect(dispatch.mock.calls[1]?.[0].text).toContain("[TASK_DRIVER:y]");
 
-		await writeTask("dm_a", "x", task("in-progress", undefined, "note-3"));
+		effects++;
 		await driver.runOnce(new Date(NOW.getTime() + 10 * 60_000));
 		expect(dispatch.mock.calls[2]?.[0].text).toContain("[TASK_DRIVER:x]");
 	});

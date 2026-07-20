@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
@@ -81,6 +81,90 @@ describe("DurableDispatchService", () => {
 		expect(existsSync(join(stateDir, `${id}.json`))).toBe(false);
 	});
 
+	it("marks a redelivered wake without changing its identity or stored text (spec 031, D3)", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			leaseMs: 100,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(event());
+		expect(delivered[0]?.text).toBe("[EVENT:once] do work");
+		expect(delivered[0]?.text).not.toContain("REDELIVERY");
+
+		await service.drainOnce(Date.now() + 101);
+		expect(delivered).toHaveLength(2);
+		expect(delivered[1]?.text).toContain("[REDELIVERY:2]");
+		expect(delivered[1]?.text).toContain("[EVENT:once] do work");
+		// Identity and the persisted record must be untouched by the notice.
+		expect(delivered[1]?.dispatchId).toBe(delivered[0]?.dispatchId);
+		const stored = JSON.parse(readFileSync(join(stateDir, `${delivered[0]?.dispatchId}.json`), "utf-8"));
+		expect(stored.event.text).toBe("[EVENT:once] do work");
+	});
+
+	it("renews the lease of a turn this process is still running (spec 031, D2)", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			leaseMs: 100,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(event());
+		const id = delivered[0]?.dispatchId;
+		await service.markStarted(id);
+
+		// A turn far longer than the lease must not redeliver its own wake underneath itself.
+		await service.drainOnce(Date.now() + 10_000);
+		await service.drainOnce(Date.now() + 20_000);
+		expect(delivered).toHaveLength(1);
+
+		await service.markCompleted(id);
+		expect(existsSync(join(stateDir, `${id}.json`))).toBe(false);
+	});
+
+	it("redelivers a running record once the process no longer holds it (spec 031, D2)", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			leaseMs: 100,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(event());
+		await service.markStarted(delivered[0]?.dispatchId);
+
+		// A restarted process holds no liveness claim, so the dead turn's record is replayed.
+		const restarted = new DurableDispatchService({
+			stateDir,
+			leaseMs: 100,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await restarted.drainOnce(Date.now() + 101);
+		expect(delivered).toHaveLength(2);
+	});
+
 	it("cancelChannel clears an in-flight lease so the next drain retries immediately", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const delivered: DingTalkEvent[] = [];
@@ -108,5 +192,29 @@ describe("DurableDispatchService", () => {
 		expect(delivered).toHaveLength(2);
 
 		expect(await service.cancelChannel("some-other-channel")).toBe(0);
+	});
+
+	it("cancelChannel drops the liveness claim of a running turn (spec 031, D2)", async () => {
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			leaseMs: 15 * 60_000,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(event());
+		await service.markStarted(delivered[0]?.dispatchId);
+
+		expect(await service.cancelChannel("dm_1")).toBe(1);
+
+		// Without dropping the claim, the renew branch would keep this record alive forever
+		// and the stopped turn would never be redelivered.
+		await service.drainOnce();
+		expect(delivered).toHaveLength(2);
 	});
 });

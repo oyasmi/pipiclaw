@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
@@ -25,6 +26,11 @@ export interface TaskDriverOptions {
 	/** Optional observability hook. It runs after every production dispatch attempt. */
 	onDispatch?: (event: DingTalkEvent, accepted: boolean) => void;
 	getSettings: () => PipiclawTaskDriverSettings;
+	/**
+	 * Externally visible effects recorded for a channel so far (spec 031, D7). Defaults to a
+	 * constant, which simply makes the fingerprint depend on ledger fields alone.
+	 */
+	getEffectCount?: (channelId: string) => number;
 	/** Master autonomy switch (`tools.tasks.enabled`); re-read every tick. Defaults to on. */
 	isEnabled?: () => boolean;
 	/** Test-only override for the idle-sleep cap; production uses `settings.maxSleepMinutes`. */
@@ -75,10 +81,19 @@ function attemptKey(channelId: string, taskId: string): string {
 	return `${channelId}\0${taskId}`;
 }
 
-async function taskFingerprint(_channelDir: string, entry: TaskLedgerEntry): Promise<string> {
-	// Do not use mtime/size here. Runtime usage accounting deliberately rewrites
-	// task control after every attempt; treating that bookkeeping as progress made
-	// governed tasks retry at the short continuation interval forever.
+/**
+ * What "this task moved" means to the driver.
+ *
+ * Do not use mtime/size here. Runtime usage accounting deliberately rewrites task control after
+ * every attempt; treating that bookkeeping as progress made governed tasks retry at the short
+ * continuation interval forever.
+ *
+ * `latestNote` is deliberately absent (spec 031, D7): it is the model's own account of its work,
+ * so including it let a wake that did nothing but append a note reset the futile counter forever,
+ * and let a wake that changed real files count as stalled. The channel's effect tally stands in
+ * for the work itself instead.
+ */
+function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
 	const control = entry.frontmatter.control;
 	return [
 		entry.frontmatter.readable ? "readable" : "unreadable",
@@ -86,11 +101,11 @@ async function taskFingerprint(_channelDir: string, entry: TaskLedgerEntry): Pro
 		entry.frontmatter.wake ?? "",
 		entry.frontmatter.schedule ?? "",
 		entry.frontmatter.recurrence ?? "",
-		entry.latestNote ?? "",
 		control?.nextAction ?? "",
 		control?.blockedReason ?? "",
 		control?.verification.status ?? "",
 		control?.cycleId ?? "",
+		`effects:${effects}`,
 	].join("\0");
 }
 
@@ -104,6 +119,19 @@ function isEligible(
 	const changed = attempt.fingerprint !== fingerprint;
 	const delayMinutes = changed || !attempt.accepted ? settings.continuationDelayMinutes : settings.stalledRetryMinutes;
 	return nowMs - attempt.atMs >= delayMinutes * 60_000;
+}
+
+/**
+ * Stable, provenance-derived dispatch id for a task wake (spec 031, D1).
+ *
+ * A scheduled task has a real occurrence — its `wake` — so retries of that occurrence collapse
+ * onto one durable record. A task that is simply actionable has no occurrence identity, so the
+ * dispatch time is used: two separate wakes of the same task are genuinely separate work, and
+ * collapsing them would silently drop the later one.
+ */
+function taskDispatchId(channelId: string, entry: TaskLedgerEntry, nowMs: number): string {
+	const occurrence = entry.frontmatter.wake ?? `t${nowMs}`;
+	return `task:${channelId}:${entry.id}:${occurrence}`;
 }
 
 export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): DingTalkEvent {
@@ -140,6 +168,7 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 		ts: String(nowMs),
 		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
+		dispatchId: taskDispatchId(channelId, entry, nowMs),
 	};
 }
 
@@ -171,6 +200,9 @@ function taskEscalationEvent(channelId: string, entry: TaskLedgerEntry, reason: 
 		ts: String(nowMs),
 		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
+		// Keyed on the cause, not the moment: re-detecting the same violation before the user has
+		// acted must not queue a second identical escalation, while a different cause still does.
+		dispatchId: `task:${channelId}:${entry.id}:escalation:${createHash("sha256").update(reason).digest("hex").slice(0, 12)}`,
 	};
 }
 
@@ -424,7 +456,8 @@ export class TaskDriver {
 				}
 
 				const key = attemptKey(channelId, entry.id);
-				let fingerprint = await taskFingerprint(channelDir, entry);
+				const effects = this.options.getEffectCount?.(channelId) ?? 0;
+				const fingerprint = taskFingerprint(entry, effects);
 				const previous = this.attempts.get(key);
 				if (!isEligible(previous, fingerprint, nowMs, settings)) continue;
 
@@ -449,10 +482,9 @@ export class TaskDriver {
 					continue;
 				}
 
+				// Claiming an attempt only touches usage bookkeeping, which the fingerprint
+				// deliberately excludes, so there is nothing to recompute here.
 				const claim = entry.frontmatter.control ? await claimTaskAttempt(channelDir, entry.id, now) : undefined;
-				if (claim) {
-					fingerprint = await taskFingerprint(channelDir, entry);
-				}
 				const event = createTaskDriverEvent(channelId, entry, nowMs);
 				const accepted = await this.options.dispatch(event);
 				this.observeDispatch(event, accepted);

@@ -1,8 +1,9 @@
-import { existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "fs";
-import { join } from "path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
+import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import type { EventAction } from "../src/runtime/events.js";
 import { EventsWatcher } from "../src/runtime/events.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -11,7 +12,6 @@ const createTempDir = useTempDirs("pipiclaw-events-");
 
 function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 	parseEvent(content: string, filename: string): unknown;
-	handleImmediate(filename: string, event: { type: "immediate"; channelId: string; text: string }): Promise<void>;
 	handleOneShot(
 		filename: string,
 		event: { type: "one-shot"; channelId: string; text: string; at: string },
@@ -25,7 +25,7 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 	execute(
 		filename: string,
 		event: {
-			type: "immediate" | "one-shot" | "periodic";
+			type: "one-shot" | "periodic";
 			channelId: string;
 			text: string;
 			at?: string;
@@ -33,12 +33,12 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 			preAction?: EventAction;
 		},
 		deleteAfter?: boolean,
+		occurrence?: Date,
 	): Promise<void>;
 	runPreAction(action: EventAction, filename: string): Promise<void>;
 } {
 	return watcher as unknown as {
 		parseEvent(content: string, filename: string): unknown;
-		handleImmediate(filename: string, event: { type: "immediate"; channelId: string; text: string }): Promise<void>;
 		handleOneShot(
 			filename: string,
 			event: { type: "one-shot"; channelId: string; text: string; at: string },
@@ -52,7 +52,7 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 		execute(
 			filename: string,
 			event: {
-				type: "immediate" | "one-shot" | "periodic";
+				type: "one-shot" | "periodic";
 				channelId: string;
 				text: string;
 				at?: string;
@@ -134,13 +134,11 @@ describe("EventsWatcher", () => {
 		const watcher = createWatcher(createTempDir());
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
-		expect(
+		// Immediate events are rejected at the parse boundary itself (spec 031, D4), so no
+		// hand-written file can re-introduce a self-triggering wake.
+		expect(() =>
 			privateApi.parseEvent(JSON.stringify({ type: "immediate", channelId: "dm_1", text: "hello" }), "a.json"),
-		).toEqual({
-			type: "immediate",
-			channelId: "dm_1",
-			text: "hello",
-		});
+		).toThrow("Immediate events are no longer supported");
 
 		expect(() =>
 			privateApi.parseEvent(JSON.stringify({ type: "periodic", channelId: "dm_1", text: "hello" }), "b.json"),
@@ -163,21 +161,26 @@ describe("EventsWatcher", () => {
 		expect(readFileSync(historyPath, "utf-8")).toBe("");
 	});
 
-	it("deletes stale immediate events", () => {
+	it("refuses to schedule a hand-written immediate event (spec 031, D4)", async () => {
 		const dir = createTempDir();
-		const filename = "stale.json";
-		const filePath = join(dir, filename);
-		writeFileSync(filePath, JSON.stringify({ type: "immediate", channelId: "dm_1", text: "hello" }));
-
-		const beforeConstruct = new Date(Date.now() - 2000);
-		const afterConstruct = new Date(Date.now() - 1000);
-		const watcher = createWatcher(dir);
+		const historyPath = join(createTempDir(), "history.jsonl");
+		const filename = "loop.json";
+		writeFileSync(join(dir, filename), JSON.stringify({ type: "immediate", channelId: "dm_1", text: "again" }));
+		const bot = new FakeBot(true);
+		const watcher = createWatcher(dir, bot, createMockExecutor(), undefined, historyPath);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
-		vi.setSystemTime(new Date());
-		utimesSync(filePath, beforeConstruct, afterConstruct);
+		vi.spyOn(privateApi, "sleep").mockResolvedValue(undefined);
 
-		privateApi.handleImmediate(filename, { type: "immediate", channelId: "dm_1", text: "hello" });
-		expect(existsSync(filePath)).toBe(false);
+		await privateApi.handleFile(filename);
+		await watcher.flush();
+
+		expect(bot.events).toHaveLength(0);
+		expect(readFileSync(join(dir, `${filename}.error.txt`), "utf-8")).toContain(
+			"Immediate events are no longer supported",
+		);
+		expect(readHistory(historyPath)).toEqual([
+			expect.objectContaining({ eventName: "loop", action: "invalid", result: "error" }),
+		]);
 	});
 
 	it("marks invalid one-shots and recovers past one-shots once", async () => {
@@ -328,6 +331,242 @@ describe("EventsWatcher", () => {
 		expect(bot.events[0]?.text).not.toContain("[SILENT]");
 	});
 
+	describe("admission gate (spec 031, D4)", () => {
+		it("rejects a hand-written near-term one-shot that the tool would have refused", async () => {
+			const dir = createTempDir();
+			const filename = "self-trigger.json";
+			const filePath = join(dir, filename);
+			const bot = new FakeBot(true);
+			const watcher = createWatcher(dir, bot, createMockExecutor());
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+			writeFileSync(
+				filePath,
+				JSON.stringify({
+					type: "one-shot",
+					channelId: "dm_1",
+					text: "wake me right now",
+					at: new Date(Date.now() + 5_000).toISOString(),
+				}),
+			);
+			// Written while this process was running → held to the lead time.
+			const afterStart = new Date(Date.now() + 60_000);
+			utimesSync(filePath, afterStart, afterStart);
+			vi.spyOn(privateApi, "sleep").mockResolvedValue(undefined);
+
+			await privateApi.handleFile(filename);
+
+			expect(bot.events).toHaveLength(0);
+			expect(readFileSync(`${filePath}.error.txt`, "utf-8")).toContain("at least 2 minutes in the future");
+		});
+
+		it("still recovers a past one-shot that predates this process", async () => {
+			const dir = createTempDir();
+			const filename = "missed.json";
+			const filePath = join(dir, filename);
+			const bot = new FakeBot(true);
+			const watcher = createWatcher(dir, bot, createMockExecutor());
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+			writeFileSync(
+				filePath,
+				JSON.stringify({
+					type: "one-shot",
+					channelId: "dm_1",
+					text: "missed while down",
+					at: new Date(Date.now() - 60_000).toISOString(),
+				}),
+			);
+			// Predates startup → a legitimate recovery, not a self-trigger, so the lead time
+			// must not apply or a restart would silently discard missed work.
+			const beforeStart = new Date(Date.now() - 60_000);
+			utimesSync(filePath, beforeStart, beforeStart);
+			vi.spyOn(privateApi, "sleep").mockResolvedValue(undefined);
+
+			await privateApi.handleFile(filename);
+
+			expect(bot.events).toHaveLength(1);
+			expect(existsSync(`${filePath}.error.txt`)).toBe(false);
+		});
+
+		it("rejects a hand-written high-frequency periodic", async () => {
+			const dir = createTempDir();
+			const filename = "hot.json";
+			const filePath = join(dir, filename);
+			const bot = new FakeBot(true);
+			const watcher = createWatcher(dir, bot, createMockExecutor());
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+			writeFileSync(
+				filePath,
+				JSON.stringify({ type: "periodic", channelId: "dm_1", text: "burn tokens", schedule: "* * * * *" }),
+			);
+			vi.spyOn(privateApi, "sleep").mockResolvedValue(undefined);
+
+			await privateApi.handleFile(filename);
+
+			expect(bot.events).toHaveLength(0);
+			expect(readFileSync(`${filePath}.error.txt`, "utf-8")).toContain("no more often than every 30 minutes");
+		});
+	});
+
+	describe("orphaned task-owned events (spec 031, D5)", () => {
+		/** The watcher resolves `<workspace>/<channelId>/tasks/<id>.md` relative to its events dir. */
+		function writeOwningTask(eventsDir: string, channelId: string, taskId: string, status: string): void {
+			const tasksDir = join(dirname(eventsDir), channelId, "tasks");
+			mkdirSync(tasksDir, { recursive: true });
+			writeFileSync(join(tasksDir, `${taskId}.md`), `---\nstatus: ${status}\n---\n# Task\n`);
+		}
+
+		function taskEventFixture(channelId: string) {
+			return { type: "periodic" as const, channelId, text: "check the task", schedule: "0 * * * *" };
+		}
+
+		it("fires while the owning task is still live", async () => {
+			const dir = join(createTempDir(), "events");
+			mkdirSync(dir, { recursive: true });
+			writeOwningTask(dir, "dm_1", "report", "active");
+			const filename = "task.dm_1.report.checkin.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
+
+			await privateApi.execute(filename, taskEventFixture("dm_1"), false);
+
+			expect(bot.events).toHaveLength(1);
+			expect(existsSync(join(dir, filename))).toBe(true);
+		});
+
+		it("retires itself when the owning task is gone", async () => {
+			const dir = join(createTempDir(), "events");
+			mkdirSync(dir, { recursive: true });
+			const filename = "task.dm_1.report.checkin.json";
+			writeFileSync(join(dir, filename), "{}");
+			const historyPath = join(createTempDir(), "history.jsonl");
+			const bot = new FakeBot(true);
+			const watcher = createWatcher(dir, bot, createMockExecutor(), undefined, historyPath);
+
+			await getEventsWatcherPrivateApi(watcher).execute(filename, taskEventFixture("dm_1"), false);
+			await watcher.flush();
+
+			expect(bot.events).toHaveLength(0);
+			expect(existsSync(join(dir, filename))).toBe(false);
+			expect(readHistory(historyPath)).toContainEqual(
+				expect.objectContaining({ action: "skipped", reason: "owning task report no longer exists" }),
+			);
+		});
+
+		it("retires itself when the owning task reached a terminal status", async () => {
+			const dir = join(createTempDir(), "events");
+			mkdirSync(dir, { recursive: true });
+			writeOwningTask(dir, "dm_1", "report", "cancelled");
+			const filename = "task.dm_1.report.checkin.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
+
+			await privateApi.execute(filename, taskEventFixture("dm_1"), false);
+
+			expect(bot.events).toHaveLength(0);
+			expect(existsSync(join(dir, filename))).toBe(false);
+		});
+
+		it("parses the task id correctly when the channel id contains dots", async () => {
+			const dir = join(createTempDir(), "events");
+			mkdirSync(dir, { recursive: true });
+			writeOwningTask(dir, "dm_a.b.c", "report", "active");
+			const filename = "task.dm_a.b.c.report.checkin.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
+
+			await privateApi.execute(filename, taskEventFixture("dm_a.b.c"), false);
+
+			expect(bot.events).toHaveLength(1);
+		});
+	});
+
+	describe("stable dispatch ids (spec 031, D1)", () => {
+		it("keys a one-shot on its own `at`, so re-execution reuses the same identity", async () => {
+			const dir = createTempDir();
+			const filename = "reminder.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
+			const definition = {
+				type: "one-shot" as const,
+				channelId: "dm_9",
+				text: "ping",
+				at: "2026-07-20T09:00:00+08:00",
+			};
+
+			await privateApi.execute(filename, definition, false);
+			await privateApi.execute(filename, definition, false);
+
+			expect(bot.events[0]?.dispatchId).toBe("event:reminder:2026-07-20T09:00:00+08:00");
+			expect(bot.events[1]?.dispatchId).toBe(bot.events[0]?.dispatchId);
+		});
+
+		it("keys a periodic on the occurrence, so occurrences stay distinct", async () => {
+			const dir = createTempDir();
+			const filename = "sweep.json";
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
+			const definition = { type: "periodic" as const, channelId: "dm_9", text: "sweep", schedule: "0 * * * *" };
+
+			await privateApi.execute(filename, definition, false, new Date("2026-07-20T09:00:00Z"));
+			await privateApi.execute(filename, definition, false, new Date("2026-07-20T10:00:00Z"));
+
+			expect(bot.events[0]?.dispatchId).toBe("event:sweep:2026-07-20T09:00:00.000Z");
+			expect(bot.events[1]?.dispatchId).toBe("event:sweep:2026-07-20T10:00:00.000Z");
+		});
+
+		it("delivers one occurrence once across both the outbox retry and restart recovery paths", async () => {
+			const dir = createTempDir();
+			const stateDir = join(createTempDir(), "dispatch");
+			const delivered: DingTalkEvent[] = [];
+			let accept = false;
+			const service = new DurableDispatchService({
+				stateDir,
+				bot: {
+					enqueueEvent(next) {
+						if (!accept) return false;
+						delivered.push(next);
+						return true;
+					},
+				},
+			});
+			const filename = "reminder.json";
+			writeFileSync(join(dir, filename), "{}");
+			const watcher = new EventsWatcher(
+				dir,
+				new FakeBot() as unknown as DingTalkBot,
+				createMockExecutor(),
+				undefined,
+				{ dispatch: (event) => service.dispatch(event) },
+			);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+			const definition = {
+				type: "one-shot" as const,
+				channelId: "dm_1",
+				text: "check",
+				at: "2026-07-20T10:00:00+08:00",
+			};
+
+			// Channel queue full: the occurrence is persisted rather than delivered.
+			await privateApi.execute(filename, definition, true);
+			expect(delivered).toHaveLength(0);
+			expect(readdirSync(stateDir)).toHaveLength(1);
+
+			// A restart re-executes the surviving file; the same occurrence must not become a
+			// second record, or the file-recovery and outbox paths would each deliver it.
+			await privateApi.execute(filename, definition, true);
+			expect(readdirSync(stateDir)).toHaveLength(1);
+
+			accept = true;
+			await service.drainOnce();
+			expect(delivered).toHaveLength(1);
+		});
+	});
+
 	it("records invalid event parse failures in history", async () => {
 		const dir = createTempDir();
 		const historyPath = join(createTempDir(), "history.jsonl");
@@ -384,7 +623,11 @@ describe("EventsWatcher", () => {
 		const watcher = createWatcher(dir, bot);
 		const privateApi = getEventsWatcherPrivateApi(watcher);
 
-		await privateApi.execute(filename, { type: "immediate", channelId: "dm_1", text: "must not vanish" }, true);
+		await privateApi.execute(
+			filename,
+			{ type: "one-shot", channelId: "dm_1", text: "must not vanish", at: "2030-01-01T00:00:00.000Z" },
+			true,
+		);
 
 		// File survives and the loss is recorded rather than silently dropped.
 		expect(existsSync(filePath)).toBe(true);
@@ -422,7 +665,8 @@ describe("EventsWatcher", () => {
 			await privateApi.execute(
 				filename,
 				{
-					type: "immediate",
+					type: "one-shot",
+					at: "2030-01-01T00:00:00.000Z",
 					channelId: "dm_1",
 					text: "should pass",
 					preAction: { type: "bash", command: "true" },
@@ -446,7 +690,8 @@ describe("EventsWatcher", () => {
 			await privateApi.execute(
 				filename,
 				{
-					type: "immediate",
+					type: "one-shot",
+					at: "2030-01-01T00:00:00.000Z",
 					channelId: "dm_1",
 					text: "should not pass",
 					preAction: { type: "bash", command: "false" },
@@ -478,7 +723,8 @@ describe("EventsWatcher", () => {
 			await privateApi.execute(
 				filename,
 				{
-					type: "immediate",
+					type: "one-shot",
+					at: "2030-01-01T00:00:00.000Z",
 					channelId: "dm_1",
 					text: "should timeout",
 					preAction: { type: "bash", command: "sleep 30", timeout: 100 },
@@ -500,7 +746,8 @@ describe("EventsWatcher", () => {
 			await privateApi.execute(
 				filename,
 				{
-					type: "immediate",
+					type: "one-shot",
+					at: "2030-01-01T00:00:00.000Z",
 					channelId: "dm_1",
 					text: "bad command",
 					preAction: { type: "bash", command: "/nonexistent/binary/xyz" },
@@ -522,7 +769,8 @@ describe("EventsWatcher", () => {
 			await privateApi.execute(
 				filename,
 				{
-					type: "immediate",
+					type: "one-shot",
+					at: "2030-01-01T00:00:00.000Z",
 					channelId: "dm_1",
 					text: "no action",
 				},
@@ -550,7 +798,8 @@ describe("EventsWatcher", () => {
 			await privateApi.execute(
 				filename,
 				{
-					type: "immediate",
+					type: "one-shot",
+					at: "2030-01-01T00:00:00.000Z",
 					channelId: "dm_1",
 					text: "dangerous",
 					preAction: { type: "bash", command: "rm -rf /" },
@@ -585,7 +834,8 @@ describe("EventsWatcher", () => {
 			expect(() =>
 				privateApi.parseEvent(
 					JSON.stringify({
-						type: "immediate",
+						type: "one-shot",
+						at: "2030-01-01T00:00:00.000Z",
 						channelId: "dm_1",
 						text: "hello",
 						preAction: { type: "bash", command: "" },
@@ -603,7 +853,8 @@ describe("EventsWatcher", () => {
 			expect(() =>
 				privateApi.parseEvent(
 					JSON.stringify({
-						type: "immediate",
+						type: "one-shot",
+						at: "2030-01-01T00:00:00.000Z",
 						channelId: "dm_1",
 						text: "hello",
 						preAction: { type: "bash", command: "true", timeout },

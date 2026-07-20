@@ -32,6 +32,26 @@ function recordPath(stateDir: string, id: string): string {
 	return join(stateDir, `${id}.json`);
 }
 
+/**
+ * Prefix a redelivered wake with what the runtime already knows (spec 031, D3).
+ *
+ * At-least-once delivery means a wake can arrive after a previous attempt already ran part of
+ * it. The runtime knows this; the model did not. Surfacing the delivery count is the whole
+ * mechanism — no new protocol, no reply marker, just enough for the model to check for its own
+ * prior side effects before repeating them. The stored record keeps the original text, so the
+ * dispatch id is unaffected.
+ */
+function withRedeliveryNotice(event: DingTalkEvent, deliveries: number): DingTalkEvent {
+	if (deliveries <= 1) return event;
+	return {
+		...event,
+		text:
+			`[REDELIVERY:${deliveries}] This wake is delivery #${deliveries}; a previous delivery may have partially run. ` +
+			"Before acting, check whether its side effects (files, messages, external calls) already exist, and do not repeat them.\n" +
+			event.text,
+	};
+}
+
 function dispatchId(event: DingTalkEvent): string {
 	return createHash("sha256")
 		.update(JSON.stringify([event.channelId, event.user, event.ts, event.text, event.conversationId]))
@@ -70,6 +90,16 @@ export class DurableDispatchService {
 	private readonly queue = createSerialQueue<string>();
 	private readonly leaseMs: number;
 	private timer: ReturnType<typeof setInterval> | null = null;
+	/**
+	 * Dispatch ids whose turn this process is still running (spec 031, D2).
+	 *
+	 * The lease expresses "the holder is alive", not "a turn takes at most N minutes". A fixed
+	 * lease is a guess about turn duration, and any turn that outran it redelivered its own wake.
+	 * Membership here is renewed on every drain instead, so a long turn is safe; the set is empty
+	 * after a restart, so a turn that died with the process is correctly redelivered once its
+	 * lease lapses.
+	 */
+	private readonly running = new Set<string>();
 
 	constructor(private readonly options: DurableDispatchOptions) {
 		this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
@@ -125,6 +155,9 @@ export class DurableDispatchService {
 				const record = await this.read(id);
 				if (!record || record.event.channelId !== channelId) return;
 				if (record.status !== "queued" && record.status !== "running") return;
+				// Drop the liveness claim too, or the renew branch above would keep this record
+				// alive forever and the cancelled turn would never be redelivered.
+				this.running.delete(id);
 				record.leaseExpiresAt = undefined;
 				await this.write(record);
 				canceled++;
@@ -135,6 +168,7 @@ export class DurableDispatchService {
 
 	async markStarted(id: string | undefined): Promise<void> {
 		if (!id) return;
+		this.running.add(id);
 		await this.queue.run(id, async () => {
 			const record = await this.read(id);
 			if (!record) return;
@@ -146,6 +180,7 @@ export class DurableDispatchService {
 
 	async markCompleted(id: string | undefined): Promise<void> {
 		if (!id) return;
+		this.running.delete(id);
 		await this.queue.run(id, async () => {
 			await unlink(recordPath(this.options.stateDir, id)).catch(() => undefined);
 		});
@@ -163,13 +198,22 @@ export class DurableDispatchService {
 			await this.queue.run(id, async () => {
 				const record = await this.read(id);
 				if (!record) return;
+				// The turn is still running in this process: renew its lease rather than treating a
+				// long turn as a lost one and redelivering the wake underneath it (D2).
+				if (record.status === "running" && this.running.has(id)) {
+					record.leaseExpiresAt = new Date(now + this.leaseMs).toISOString();
+					await this.write(record);
+					return;
+				}
 				const leaseMs = record.leaseExpiresAt ? new Date(record.leaseExpiresAt).getTime() : undefined;
 				if ((record.status === "queued" || record.status === "running") && leaseMs && leaseMs > now) return;
 				record.status = "queued";
 				record.deliveries++;
 				record.leaseExpiresAt = new Date(now + this.leaseMs).toISOString();
 				await this.write(record);
-				const accepted = this.options.bot.enqueueEvent({ ...record.event, dispatchId: record.id });
+				const accepted = this.options.bot.enqueueEvent(
+					withRedeliveryNotice({ ...record.event, dispatchId: record.id }, record.deliveries),
+				);
 				if (accepted) return;
 				record.status = "pending";
 				record.leaseExpiresAt = undefined;

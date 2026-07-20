@@ -128,7 +128,6 @@ export {
 	createEventsWatcher,
 	type EventAction,
 	EventsWatcher,
-	type ImmediateEvent,
 	type OneShotEvent,
 	type PeriodicEvent,
 	type ScheduledEvent,

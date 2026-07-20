@@ -291,7 +291,9 @@ describe("manageEvent update", () => {
 				name: "imm",
 				definition: JSON.stringify({ type: "one-shot", text: "x", at: futureIso(30) }),
 			}),
-		).rejects.toThrow(/immediate/);
+			// A legacy immediate file no longer parses at all, so it is reported as unparseable
+			// rather than re-armed through the tool (spec 031, D4).
+		).rejects.toThrow(/could not be parsed/);
 	});
 
 	it("rejects updating an event owned by another channel", async () => {

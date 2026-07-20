@@ -6,7 +6,9 @@ import {
 	parseBuiltInCommand,
 	slashCommandName,
 } from "../agent/commands.js";
+import { channelEffectCount } from "../agent/effect-ledger.js";
 import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
+import { configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { resetRunner } from "../agent/runner-factory.js";
 import { renderStatus } from "../agent/status-render.js";
@@ -700,9 +702,17 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
 						(candidate) => candidate.id === id,
 					);
-					return entry
-						? (durableDispatch?.dispatch(createTaskDriverEvent(event.channelId, entry, Date.now())) ?? false)
-						: false;
+					if (!entry) return false;
+					// A human asking to run a task twice means twice, so this key is deliberately
+					// unique per invocation rather than sharing the driver's occurrence key (D1).
+					const now = Date.now();
+					const driverEvent = createTaskDriverEvent(event.channelId, entry, now);
+					return (
+						(await durableDispatch?.dispatch({
+							...driverEvent,
+							dispatchId: `task:${event.channelId}:${entry.id}:manual:${new Date(now).toISOString()}`,
+						})) ?? false
+					);
 				},
 			});
 			await bot.sendPlain(event.channelId, response);
@@ -920,6 +930,13 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		bot,
 	});
 	const executor = createExecutor();
+	// Background jobs get their persistence root and their way to wake a channel before any turn
+	// can start one, then re-adopt whatever survived the last shutdown (spec 031, D6).
+	configureJobRuntime({
+		jobsStateDir: join(options.paths.appHomeDir, "state", "jobs"),
+		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
+	});
+	void restoreChannelJobs(executor);
 	const eventsWatcher = options.createEventsWatcher
 		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)
 		: createEventsWatcher(
@@ -974,6 +991,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 				onDispatch: options.onTaskDriverDispatch,
+				getEffectCount: channelEffectCount,
 				getSettings: () => {
 					runtimeSettingsManager.reload();
 					return runtimeSettingsManager.getTaskDriverSettings();

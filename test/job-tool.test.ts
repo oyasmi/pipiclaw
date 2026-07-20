@@ -54,7 +54,9 @@ describe("job tool", () => {
 		expect(text).toContain("build succeeded");
 		expect(text).toContain("Full output: /tmp/pipiclaw-job-done1.log");
 		expect(text).toContain("Still running (1)");
-		expect(text).toContain("event_manage");
+		// Waiting for a job is a runtime guarantee now, not a check-in the model has to arrange.
+		expect(text).toContain("you are woken when the job finishes");
+		expect(text).not.toContain("event_manage");
 	});
 
 	it("reports cancel outcomes", async () => {

@@ -29,9 +29,10 @@ function readRecords(path: string): Array<Record<string, unknown>> {
 		.map((l) => JSON.parse(l));
 }
 
-async function flush(): Promise<void> {
-	// The file sink appends asynchronously off the serial queue.
-	await new Promise((r) => setTimeout(r, 20));
+async function flush(log: { flushLogging(): Promise<void> }): Promise<void> {
+	// The file sink appends asynchronously off the serial queue; wait for it to drain rather
+	// than guessing a duration, which turns flaky whenever the suite is under load.
+	await log.flushLogging();
 }
 
 describe("log file sink", () => {
@@ -54,7 +55,7 @@ describe("log file sink", () => {
 	it("writes nothing to disk before configureLogging (console-only default)", async () => {
 		const { log, runtimeLogPath } = await loadLog();
 		log.logInfo("early startup");
-		await flush();
+		await flush(log);
 		expect(existsSync(runtimeLogPath)).toBe(false);
 	});
 
@@ -64,7 +65,7 @@ describe("log file sink", () => {
 
 		log.logToolSuccess({ channelId: "team-1", userName: "alice" }, "bash", 1500, "output body");
 		log.logInfo("boot complete");
-		await flush();
+		await flush(log);
 
 		const records = readRecords(runtimeLogPath);
 		const tool = records.find((r) => r.event === "agent.tool.finished");
@@ -86,7 +87,7 @@ describe("log file sink", () => {
 
 		log.logInfo("info line"); // info < warn → dropped
 		log.logWarning("warn line"); // kept
-		await flush();
+		await flush(log);
 
 		const records = readRecords(runtimeLogPath);
 		expect(records.map((r) => r.message)).toEqual(["warn line"]);
@@ -98,7 +99,7 @@ describe("log file sink", () => {
 		log.configureLogging({ level: "info", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
 
 		log.logInfo("should not persist");
-		await flush();
+		await flush(log);
 		expect(existsSync(runtimeLogPath)).toBe(false);
 	});
 
@@ -108,7 +109,7 @@ describe("log file sink", () => {
 		log.configureLogging({ level: "warn", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
 
 		log.logThinking({ channelId: "dm_1", userName: "a" }, "hmm"); // debug event
-		await flush();
+		await flush(log);
 
 		const records = readRecords(runtimeLogPath);
 		expect(records.find((r) => r.event === "agent.thinking")).toBeTruthy();
@@ -143,7 +144,7 @@ describe("log file sink", () => {
 				long: "x".repeat(300),
 			},
 		});
-		await flush();
+		await flush(log);
 
 		const record = readRecords(runtimeLogPath)[0];
 		expect(record.message).toContain("[REDACTED]");

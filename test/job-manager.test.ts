@@ -1,6 +1,10 @@
+import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ChannelJobManager, MAX_RUNNING_JOBS } from "../src/agent/job-manager.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
+import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
  * A command-aware fake executor. Real jobs are managed by shelling out; this fake recognizes the
@@ -163,5 +167,122 @@ describe("ChannelJobManager", () => {
 
 		const output = await manager.readOutput(job.id);
 		expect(output?.text).toContain("hello from job");
+	});
+});
+
+describe("ChannelJobManager persistence and completion wakes (spec 031, D6)", () => {
+	const tempDir = useTempDirs("pipiclaw-jobs-");
+
+	function collectingDispatch(): { events: DingTalkEvent[]; dispatch: (event: DingTalkEvent) => boolean } {
+		const events: DingTalkEvent[] = [];
+		return {
+			events,
+			dispatch: (event: DingTalkEvent) => {
+				events.push(event);
+				return true;
+			},
+		};
+	}
+
+	it("creates the spill file with a restrictive umask", async () => {
+		const executor = new FakeJobExecutor();
+		const manager = new ChannelJobManager("dm_1", executor, { stateDir: tempDir() });
+
+		await manager.start("echo secret", "leaky", 300);
+
+		// The spill file lands in a shared /tmp and routinely contains credentials.
+		expect(executor.commands[0]).toMatch(/^umask 077;/);
+	});
+
+	it("persists a record on start and reloads it into a fresh manager", async () => {
+		const stateDir = tempDir();
+		const executor = new FakeJobExecutor();
+		const job = await new ChannelJobManager("dm_1", executor, { stateDir }).start("sleep 100", "long build", 300);
+
+		expect(readdirSync(stateDir)).toEqual([`${job.id}.json`]);
+		expect(statSync(join(stateDir, `${job.id}.json`)).mode & 0o777).toBe(0o600);
+
+		// A restarted daemon re-adopts the still-running process, so it counts against the
+		// concurrency cap again instead of leaking a slot to an orphan.
+		const restarted = new ChannelJobManager("dm_1", executor, { stateDir });
+		executor.probeResult = "ALIVE";
+		expect(await restarted.restore()).toBe(1);
+		expect(restarted.runningCount()).toBe(1);
+	});
+
+	it("wakes the channel once when a job finishes, carrying its exit code and output", async () => {
+		const { events, dispatch } = collectingDispatch();
+		const executor = new FakeJobExecutor();
+		executor.output = "build succeeded";
+		const manager = new ChannelJobManager("dm_1", executor, { stateDir: tempDir(), dispatch });
+		const job = await manager.start("make", "build", 300, { taskId: "release" });
+
+		executor.probeResult = "EXIT:0";
+		await manager.list();
+		await manager.list(); // a second reconcile must not announce again
+
+		expect(events).toHaveLength(1);
+		expect(events[0]?.text).toContain(`[JOB:${job.id}]`);
+		expect(events[0]?.text).toContain("completed");
+		expect(events[0]?.text).toContain("exit 0");
+		expect(events[0]?.text).toContain("build succeeded");
+		expect(events[0]?.text).toContain("It belongs to task release.");
+		expect(events[0]?.dispatchId).toBe(`job:dm_1:${job.id}:done`);
+	});
+
+	it("announces a job that finished while the daemon was down", async () => {
+		const stateDir = tempDir();
+		const executor = new FakeJobExecutor();
+		await new ChannelJobManager("dm_1", executor, { stateDir }).start("make", "build", 300);
+
+		const { events, dispatch } = collectingDispatch();
+		const restarted = new ChannelJobManager("dm_1", executor, { stateDir, dispatch });
+		executor.probeResult = "EXIT:1";
+		await restarted.restore();
+
+		expect(events).toHaveLength(1);
+		expect(events[0]?.text).toContain("failed");
+		expect(events[0]?.text).toContain("exit 1");
+	});
+
+	it("honors notify:false and never wakes for an explicit cancel", async () => {
+		const { events, dispatch } = collectingDispatch();
+		const executor = new FakeJobExecutor();
+		const manager = new ChannelJobManager("dm_1", executor, { stateDir: tempDir(), dispatch });
+
+		const quiet = await manager.start("sleep 100", "quiet", 300, { notify: false });
+		executor.probeResult = "EXIT:0";
+		await manager.list();
+		expect(events).toHaveLength(0);
+
+		const cancelled = await manager.start("sleep 100", "doomed", 300);
+		executor.probeResult = "ALIVE";
+		await manager.cancel([cancelled.id]);
+		expect(events).toHaveLength(0);
+		expect(quiet.id).not.toBe(cancelled.id);
+	});
+
+	it("does not wake the channel for a result poll already handed back inline", async () => {
+		const { events, dispatch } = collectingDispatch();
+		const executor = new FakeJobExecutor();
+		const manager = new ChannelJobManager("dm_1", executor, { stateDir: tempDir(), dispatch });
+		await manager.start("make", "build", 300);
+
+		executor.probeResult = "EXIT:0";
+		await manager.poll(undefined);
+		expect(events).toHaveLength(0);
+
+		// A later reconcile must not resurrect the suppressed wake either.
+		await manager.list();
+		expect(events).toHaveLength(0);
+	});
+
+	it("discards an unreadable record instead of failing the whole restore", async () => {
+		const stateDir = tempDir();
+		writeFileSync(join(stateDir, "broken.json"), "{not json");
+		const restored = await new ChannelJobManager("dm_1", new FakeJobExecutor(), { stateDir }).restore();
+
+		expect(restored).toBe(0);
+		expect(existsSync(join(stateDir, "broken.json"))).toBe(false);
 	});
 });

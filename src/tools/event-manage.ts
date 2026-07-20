@@ -2,31 +2,15 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Cron } from "croner";
 import { Type } from "typebox";
 import { resolveEventPath } from "../runtime/event-commands.js";
+import { EventValidationError, MAX_EVENT_FILES, validateScheduledEvent } from "../runtime/event-validation.js";
 import { parseScheduledEventContent, type ScheduledEvent } from "../runtime/events.js";
-import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-
-/** one-shot events must be scheduled at least this far out; anything sooner is effectively self-triggering. */
-const MIN_ONE_SHOT_LEAD_MS = 2 * 60 * 1000;
-/** periodic events without a preAction gate may fire no more often than this. */
-const MIN_PERIODIC_INTERVAL_MS = 30 * 60 * 1000;
-/**
- * periodic events WITH a preAction gate may fire this often: the sensor is the token guard
- * (it exits non-zero and stays silent when there is nothing to do), so a tighter cadence is
- * safe and is exactly the design-endorsed posture for completion-driven checks. A hard
- * sub-floor still applies so a bogus
- * always-pass preAction cannot drive an arbitrarily hot loop.
- */
-const MIN_PERIODIC_INTERVAL_WITH_PREACTION_MS = 5 * 60 * 1000;
-/** sanity cap on total event files to keep the directory (and the scheduler) from being flooded. */
-const MAX_EVENT_FILES = 50;
 
 const eventManageSchema = Type.Object({
 	label: Type.String({ description: "Brief description of the scheduling change (shown to the user)" }),
@@ -77,54 +61,15 @@ function parseAction(action: string): EventManageAction {
 	throw new RecoverableToolError('Unsupported event action. Use "create", "update", or "delete".');
 }
 
-function validateOneShot(event: ScheduledEvent & { type: "one-shot" }): void {
-	const atTime = new Date(event.at).getTime();
-	if (!Number.isFinite(atTime)) {
-		throw new RecoverableToolError(`one-shot 'at' is not a valid date: ${event.at}`);
-	}
-	if (atTime < Date.now() + MIN_ONE_SHOT_LEAD_MS) {
-		throw new RecoverableToolError("one-shot 'at' must be at least 2 minutes in the future (self-triggering guard).");
-	}
-}
-
-function validatePeriodic(event: ScheduledEvent & { type: "periodic" }): void {
-	let runs: Date[];
-	try {
-		const cron = new Cron(event.schedule);
-		runs = cron.nextRuns(3);
-		cron.stop();
-	} catch (error) {
-		const message = errorMessage(error);
-		throw new RecoverableToolError(`Invalid cron schedule "${event.schedule}": ${message}`);
-	}
-	// A preAction gate makes a tighter cadence safe (the sensor keeps most fires silent);
-	// without one, hold the 30-minute floor so a bare high-frequency cron can't burn tokens.
-	const floorMs = event.preAction ? MIN_PERIODIC_INTERVAL_WITH_PREACTION_MS : MIN_PERIODIC_INTERVAL_MS;
-	const floorMinutes = Math.round(floorMs / 60000);
-	// Fewer than two upcoming runs means no meaningful cadence to rate-limit (e.g. a one-off cron); allow it.
-	for (let i = 1; i < runs.length; i++) {
-		if (runs[i].getTime() - runs[i - 1].getTime() < floorMs) {
-			throw new RecoverableToolError(
-				`periodic events must fire no more often than every ${floorMinutes} minutes` +
-					`${event.preAction ? " (even with a preAction gate)" : "; for tighter checks add a preAction gate (min 5 minutes) instead of a high-frequency cron"}.`,
-			);
-		}
-	}
-}
-
-function validatePreAction(event: ScheduledEvent, commandGuardConfig: SecurityConfig["commandGuard"]): void {
-	if (!event.preAction) return;
-	const result = guardCommand(event.preAction.command, commandGuardConfig);
-	if (!result.allowed) {
-		throw new Error(`preAction command blocked by guard: ${result.reason ?? "not allowed"}`);
-	}
-}
-
 /**
  * Validate an agent-supplied event definition and return the normalized, typed event.
  * Rejects immediate events, near-term one-shots, high-frequency periodics, guard-blocked
  * preActions, and cross-channel channelIds. The returned event is what gets persisted, so
  * the file on disk is exactly what was validated.
+ *
+ * The scheduling rules themselves live in `runtime/event-validation.ts` and are re-applied by
+ * the watcher (spec 031, D4); this layer only adds tool-specific framing (channel ownership,
+ * and turning validation failures into recoverable tool errors the model can retry).
  */
 function validateDefinition(rawDefinition: string, name: string, options: EventManageToolOptions): ScheduledEvent {
 	let data: unknown;
@@ -147,21 +92,22 @@ function validateDefinition(rawDefinition: string, name: string, options: EventM
 		);
 	}
 
-	const event = parseScheduledEventContent(JSON.stringify(data), `${name}.json`);
-
-	if (event.type === "immediate") {
+	if (data.type === "immediate") {
 		throw new RecoverableToolError(
 			"event_manage cannot create or update immediate events (self-triggering loop guard); " +
 				"do the work in the current turn instead.",
 		);
 	}
-	if (event.type === "one-shot") {
-		validateOneShot(event);
+
+	const event = parseScheduledEventContent(JSON.stringify(data), `${name}.json`);
+	try {
+		validateScheduledEvent(event, { commandGuardConfig: options.commandGuardConfig });
+	} catch (error) {
+		if (error instanceof EventValidationError && error.recoverable) {
+			throw new RecoverableToolError(error.message);
+		}
+		throw error;
 	}
-	if (event.type === "periodic") {
-		validatePeriodic(event);
-	}
-	validatePreAction(event, options.commandGuardConfig);
 	return event;
 }
 
@@ -234,12 +180,9 @@ export async function manageEvent(
 		if (!existsSync(eventPath)) {
 			throw new RecoverableToolError(`Event "${eventName}" does not exist; use action "create" to add it.`);
 		}
-		const existing = await readOwnedEvent(eventPath, eventName, options);
-		if (existing.type === "immediate") {
-			throw new RecoverableToolError(
-				`Event "${eventName}" is an immediate event and cannot be updated via event_manage.`,
-			);
-		}
+		// Ownership check only: an existing file that no longer parses (e.g. a legacy immediate
+		// event) is reported by readOwnedEvent and pointed at /events.
+		await readOwnedEvent(eventPath, eventName, options);
 	}
 
 	const event = validateDefinition(request.definition, eventName, options);

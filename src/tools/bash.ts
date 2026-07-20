@@ -41,7 +41,18 @@ const bashSchema = Type.Object({
 	async: Type.Optional(
 		Type.Boolean({
 			description:
-				"Run in the background and return immediately with a job id instead of blocking. Use for long commands so the channel stays responsive; check it later with the job tool or a scheduled event_manage check-in.",
+				"Run in the background and return immediately with a job id instead of blocking. Use for long commands so the channel stays responsive; you are woken automatically when the job finishes.",
+		}),
+	),
+	notify: Type.Optional(
+		Type.Boolean({
+			description:
+				"For async jobs: wake this channel when the job finishes (default true). Set false only for fire-and-forget work whose result you will never need.",
+		}),
+	),
+	taskId: Type.Optional(
+		Type.String({
+			description: "For async jobs: the task this job advances, so the completion wake lands in that context.",
 		}),
 	),
 });
@@ -146,7 +157,9 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				command,
 				timeout,
 				async: runAsync,
-			}: { label: string; command: string; timeout?: number; async?: boolean },
+				notify,
+				taskId,
+			}: { label: string; command: string; timeout?: number; async?: boolean; notify?: boolean; taskId?: string },
 			signal?: AbortSignal,
 		) => {
 			if (securityConfig.enabled && securityConfig.commandGuard.enabled) {
@@ -193,15 +206,22 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 						"Background execution is not available here (enable tools.jobs.enabled, and note it is off for sub-agents). Run the command without async, or shorten it.",
 					);
 				}
-				const job = await options.jobManager.start(effectiveCommand, label, effectiveTimeout, signal);
+				const willNotify = notify ?? true;
+				const job = await options.jobManager.start(effectiveCommand, label, effectiveTimeout, {
+					signal,
+					notify: willNotify,
+					...(taskId ? { taskId } : {}),
+				});
 				return {
 					content: [
 						{
 							type: "text",
 							text:
 								`Background job ${job.id} started: ${label}\n` +
-								"It runs off-turn; you can end your turn now. Check it with the job tool (op:poll/list), " +
-								"or schedule an event_manage check-in to be woken when it is likely done.",
+								(willNotify
+									? "It runs off-turn; end your turn now. You will be woken automatically when it finishes, " +
+										"with its exit code and output — do not schedule a check-in for it."
+									: "It runs off-turn and will NOT wake you when it finishes; check it with the job tool (op:poll/list)."),
 						},
 					],
 					details: { kind: "bash", async: { state: "running", jobId: job.id } },
