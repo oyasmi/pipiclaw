@@ -1,3 +1,4 @@
+import type { MediaSender } from "../runtime/channel-context.js";
 import { ChannelRunner } from "./channel-runner.js";
 import type { AgentRunner } from "./types.js";
 
@@ -9,6 +10,12 @@ export interface RunnerFactoryPaths {
 	modelsConfigPath: string;
 	/** Optional, side-effect-free observer used by the behavior-eval harness. */
 	onSessionEvent?: (event: unknown, channelId: string) => void;
+	/**
+	 * Transport that can deliver file attachments (the DingTalk bot, or the terminal).
+	 * Present enables the `send_media` tool; absent, the tool is not built. Not part
+	 * of the runner cache key — it is a stable per-process transport handle.
+	 */
+	mediaSender?: MediaSender;
 }
 
 function runnerKey(paths: RunnerFactoryPaths, channelId: string, channelDir: string): string {

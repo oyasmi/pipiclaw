@@ -627,6 +627,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				authConfigPath: options.paths.authConfigPath,
 				modelsConfigPath: options.paths.modelsConfigPath,
 				onSessionEvent: options.observer,
+				// The DingTalk bot is the media sender for this transport; enables `send_media`.
+				// `bot` is defined below in this same scope and initialized before any message
+				// (and thus any getRunner call) can arrive.
+				mediaSender: bot,
 			});
 			channelRunners.set(channelId, runner);
 		}

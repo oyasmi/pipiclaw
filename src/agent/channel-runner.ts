@@ -46,7 +46,7 @@ import {
 	wrapModelRegistry,
 } from "../models/utils.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks/catalog.js";
-import type { ChannelContext } from "../runtime/channel-context.js";
+import type { ChannelContext, MediaSender } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
@@ -117,6 +117,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly authConfigPath: string;
 	private readonly modelsConfigPath: string;
 	private readonly onSessionEvent?: (event: unknown, channelId: string) => void;
+	private readonly mediaSender?: MediaSender;
 	private readonly workspaceDir: string;
 	private session!: AgentSession;
 	private agent: Agent;
@@ -168,6 +169,7 @@ export class ChannelRunner implements AgentRunner {
 		this.authConfigPath = paths.authConfigPath;
 		this.modelsConfigPath = paths.modelsConfigPath;
 		this.onSessionEvent = paths.onSessionEvent;
+		this.mediaSender = paths.mediaSender;
 
 		const executor = createExecutor();
 		this.executor = executor;
@@ -1216,6 +1218,7 @@ export class ChannelRunner implements AgentRunner {
 			memoryCandidateStore: this.memoryCandidateStore,
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
+			mediaSender: this.mediaSender,
 		});
 		this.currentTools = tools;
 		return tools;

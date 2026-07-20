@@ -18,7 +18,7 @@ import { isRecord } from "../shared/type-guards.js";
 // The delivery contract (`ChannelContext`) and its traits are transport-neutral
 // and live in channel-context.ts. Only the traits are used here, to map the
 // DingTalk-config `ResponseMode` onto them (progressStyleOf/finalDeliveryOf).
-import type { FinalDelivery, ProgressStyle } from "./channel-context.js";
+import type { FinalDelivery, MediaSender, MediaSendResult, OutboundMedia, ProgressStyle } from "./channel-context.js";
 import { getChannelDir } from "./channel-paths.js";
 // Turn serialization is runtime policy; the queue lives in its own module and
 // this transport only consumes it.
@@ -79,6 +79,13 @@ export function normalizeResponseMode(value: unknown): ResponseMode {
 	throw new Error(
 		'Invalid `responseMode`: expected "full_progress_then_plain_final", "rolling_progress_then_plain_final", or "final_card_only".',
 	);
+}
+
+/** Lowercased extension without the dot ("Report.PDF" → "pdf"); "" when none. */
+function extractFileExtension(fileName: string): string {
+	const dot = fileName.lastIndexOf(".");
+	if (dot < 0 || dot === fileName.length - 1) return "";
+	return fileName.slice(dot + 1).toLowerCase();
 }
 
 export interface DingTalkConfig {
@@ -185,6 +192,20 @@ interface DingTalkSocketLike {
 // ============================================================================
 
 const DINGTALK_API = "https://api.dingtalk.com";
+// Media upload lives on the legacy oapi host, not the v1.0 api host. It returns a
+// reusable `media_id` that the v1.0 robot send endpoints reference (photoURL /
+// mediaId). The `access_token` query param is the same app access token minted by
+// `/v1.0/oauth2/accessToken` — DingTalk unified the internal-app token across both
+// hosts — so `getAccessToken()` is reused rather than fetching a second token.
+const DINGTALK_OAPI = "https://oapi.dingtalk.com";
+// DingTalk caps robot image messages at 1MB and file messages at 20MB. We reject
+// oversized files before spending an upload round-trip on a request the API rejects.
+const MAX_IMAGE_BYTES = 1024 * 1024;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+// Uploads can move up to 20MB; the 15s default HTTP timeout is too tight for that.
+const MEDIA_UPLOAD_TIMEOUT_MS = 60_000;
+// File extensions the `sampleFile` message type accepts (per DingTalk docs).
+const SUPPORTED_FILE_TYPES = new Set(["xlsx", "pdf", "zip", "rar", "doc", "docx", "ppt", "pptx", "csv", "txt"]);
 // Bound every outbound DingTalk HTTP call. Without this, axios waits forever on a
 // hung connection, and a stalled card-streaming request would wedge the delivery
 // sync loop (never resolving flush()), leaving the whole channel permanently busy.
@@ -211,7 +232,7 @@ const SOCKET_STATE_CLOSED = 3;
 // DingTalkBot
 // ============================================================================
 
-export class DingTalkBot {
+export class DingTalkBot implements MediaSender {
 	private handler: DingTalkHandler;
 	private config: DingTalkConfig;
 
@@ -887,6 +908,139 @@ export class DingTalkBot {
 				log.logWarning(`DingTalk plain send failed (${err.response.status})`, JSON.stringify(err.response.data));
 			} else {
 				log.logWarning("DingTalk plain send error", errorMessage(err));
+			}
+			return false;
+		}
+	}
+
+	// ==========================================================================
+	// Media (image / file) delivery — MediaSender contract
+	// ==========================================================================
+
+	/**
+	 * Deliver a local file to a channel as a native attachment. Uploads the bytes
+	 * to get a `media_id`, then sends a `sampleImageMsg` (inline image) or
+	 * `sampleFile` (downloadable file) robot message. `channelId` is supplied by
+	 * the runtime (the tool is bound to its channel at build time), never by the
+	 * model, so an agent cannot target a channel other than its own.
+	 */
+	async sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult> {
+		const isImage = media.kind === "image";
+		const limit = isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+		if (media.data.length > limit) {
+			return {
+				ok: false,
+				error: `File is ${(media.data.length / 1024 / 1024).toFixed(1)}MB, exceeds the ${limit / 1024 / 1024}MB DingTalk limit for ${media.kind} messages.`,
+			};
+		}
+
+		const fileType = extractFileExtension(media.fileName);
+		if (!isImage && !SUPPORTED_FILE_TYPES.has(fileType)) {
+			return {
+				ok: false,
+				error: `DingTalk file messages do not support the "${fileType || "(none)"}" type. Supported: ${[...SUPPORTED_FILE_TYPES].join(", ")}.`,
+			};
+		}
+
+		const meta = this.getConversationMeta(channelId);
+		if (!meta) {
+			return { ok: false, error: "No conversation is known for this channel yet; cannot deliver a file." };
+		}
+
+		const mediaId = await this.uploadMedia(isImage ? "image" : "file", media.data, media.fileName);
+		if (!mediaId) {
+			return { ok: false, error: "Failed to upload the file to DingTalk (see server logs)." };
+		}
+
+		const { msgKey, msgParam } = isImage
+			? { msgKey: "sampleImageMsg", msgParam: JSON.stringify({ photoURL: mediaId }) }
+			: {
+					msgKey: "sampleFile",
+					msgParam: JSON.stringify({ mediaId, fileName: media.fileName, fileType }),
+				};
+
+		const sent = await this.sendRobotMessage(meta, msgKey, msgParam);
+		return sent ? { ok: true } : { ok: false, error: "DingTalk rejected the file message (see server logs)." };
+	}
+
+	/**
+	 * Upload raw bytes to DingTalk and return the reusable `media_id`, or null on
+	 * failure. The upload endpoint lives on the legacy oapi host and answers 200
+	 * with a non-zero `errcode` on failure, so the body is inspected explicitly.
+	 */
+	private async uploadMedia(type: "image" | "file", data: Buffer, fileName: string): Promise<string | null> {
+		const token = await this.getAccessToken();
+		if (!token) return null;
+
+		const form = new FormData();
+		form.append("media", new Blob([new Uint8Array(data)]), fileName);
+
+		try {
+			const resp = await http.post(
+				`${DINGTALK_OAPI}/media/upload?access_token=${encodeURIComponent(token)}&type=${type}`,
+				form,
+				// Override the 15s default: a multi-MB upload over a slow link can take
+				// longer, and unlike card streaming this call is not on the delivery loop.
+				{ timeout: MEDIA_UPLOAD_TIMEOUT_MS },
+			);
+			const body = isRecord(resp.data) ? resp.data : {};
+			if (body.errcode && body.errcode !== 0) {
+				log.logWarning(`DingTalk media upload failed (errcode=${body.errcode})`, String(body.errmsg ?? ""));
+				return null;
+			}
+			const mediaId = typeof body.media_id === "string" ? body.media_id : null;
+			if (!mediaId) {
+				log.logWarning("DingTalk media upload returned no media_id", JSON.stringify(body));
+			}
+			return mediaId;
+		} catch (err) {
+			if (axios.isAxiosError(err) && err.response) {
+				log.logWarning(`DingTalk media upload error (${err.response.status})`, JSON.stringify(err.response.data));
+			} else {
+				log.logWarning("DingTalk media upload error", errorMessage(err));
+			}
+			return null;
+		}
+	}
+
+	/**
+	 * POST a robot message with an arbitrary msgKey/msgParam, routing DM vs group
+	 * to the correct endpoint. Shared by the media path; `sendPlain` predates this
+	 * and keeps its own inlined copy to avoid a regression-prone refactor.
+	 */
+	private async sendRobotMessage(meta: ConversationMeta, msgKey: string, msgParam: string): Promise<boolean> {
+		const token = await this.getAccessToken();
+		if (!token) return false;
+
+		const robotCode = this.config.robotCode || this.config.clientId;
+		const isGroup = meta.conversationType === "2";
+		const url = isGroup
+			? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
+			: `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
+
+		const body: Record<string, unknown> = { robotCode, msgKey, msgParam };
+		if (isGroup) {
+			body.openConversationId = meta.conversationId;
+		} else {
+			body.userIds = [meta.senderId];
+		}
+
+		try {
+			await http.post(url, body, {
+				headers: {
+					"x-acs-dingtalk-access-token": token,
+					"Content-Type": "application/json",
+				},
+			});
+			return true;
+		} catch (err) {
+			if (axios.isAxiosError(err) && err.response) {
+				log.logWarning(
+					`DingTalk ${msgKey} send failed (${err.response.status})`,
+					JSON.stringify(err.response.data),
+				);
+			} else {
+				log.logWarning(`DingTalk ${msgKey} send error`, errorMessage(err));
 			}
 			return false;
 		}

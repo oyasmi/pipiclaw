@@ -33,6 +33,7 @@ import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import { TUI_SLASH_COMMANDS } from "./commands.js";
 import { createFrontend } from "./renderer.js";
 import type { DeliveryTraits } from "./terminal-context.js";
+import { createTerminalMediaSender } from "./terminal-media-sender.js";
 import { TurnController } from "./turn-controller.js";
 
 const DEFAULT_CHANNEL_ID = "tui_local";
@@ -113,6 +114,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		appHomeDir: paths.appHomeDir,
 		authConfigPath: paths.authConfigPath,
 		modelsConfigPath: paths.modelsConfigPath,
+		mediaSender: createTerminalMediaSender(io),
 	});
 
 	const tuiSettings = settingsManager.getTuiSettings();

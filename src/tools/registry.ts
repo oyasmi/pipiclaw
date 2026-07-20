@@ -3,6 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { Executor } from "../executor.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
+import type { MediaSender } from "../runtime/channel-context.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { PipiclawSessionSearchSettings } from "../settings.js";
 import { createBashTool } from "./bash.js";
@@ -13,6 +14,7 @@ import { createGrepTool } from "./grep.js";
 import { createJobTool } from "./job.js";
 import { createMemoryManageTool } from "./memory-manage.js";
 import { createReadTool } from "./read.js";
+import { createSendMediaTool } from "./send-media.js";
 import { createSessionSearchTool } from "./session-search.js";
 import { createSkillManageTool } from "./skill-manage.js";
 import { createTaskManageTool } from "./task-manage.js";
@@ -54,6 +56,11 @@ export interface ToolBuildContext {
 	resolveApiKey?: (model: Model<Api>) => Promise<string>;
 	getSessionSearchSettings?: () => PipiclawSessionSearchSettings;
 	memoryCandidateStore?: MemoryCandidateStore;
+	/**
+	 * Present only on the main path, and only when the driving transport can deliver
+	 * files. Gates the `send_media` tool; sub-agents never receive it.
+	 */
+	mediaSender?: MediaSender;
 }
 
 export interface ToolRegistration {
@@ -157,6 +164,21 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				workspaceDir: ctx.workspaceDir,
 				channelId: ctx.channelId,
 				channelDir: ctx.channelDir,
+			}),
+	},
+	{
+		name: "send_media",
+		promptHint: "Send a local file (image inline, else downloadable) to the user in the current channel",
+		availableToSubagents: false,
+		// Enabled only when the driving transport supplied a media sender (the DingTalk
+		// bot, or the terminal). Absent it, the tool is not built or advertised.
+		enabledBy: (ctx) => ctx.mediaSender != null,
+		create: (ctx) =>
+			createSendMediaTool(ctx.executor, {
+				mediaSender: req(ctx.mediaSender, "mediaSender"),
+				channelId: ctx.channelId,
+				securityConfig: ctx.securityConfig,
+				securityContext: ctx.securityContext,
 			}),
 	},
 	{

@@ -4,6 +4,7 @@ import { getChannelJobManager } from "../agent/job-manager.js";
 import type { Executor } from "../executor.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { APP_HOME_DIR } from "../paths.js";
+import type { MediaSender } from "../runtime/channel-context.js";
 import { loadSecurityConfig } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings, PipiclawSessionSearchSettings } from "../settings.js";
@@ -27,6 +28,8 @@ export interface CreatePipiclawToolsOptions {
 	memoryCandidateStore: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
 	toolsConfig?: PipiclawToolsConfig;
+	/** Transport-provided attachment port; when present, enables the `send_media` tool. */
+	mediaSender?: MediaSender;
 }
 
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {
@@ -56,6 +59,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		resolveApiKey: options.resolveApiKey,
 		getSessionSearchSettings: options.getSessionSearchSettings,
 		memoryCandidateStore: options.memoryCandidateStore,
+		mediaSender: options.mediaSender,
 	});
 	return [
 		...leafTools,
