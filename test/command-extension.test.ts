@@ -26,6 +26,9 @@ function createOptions() {
 				cost: 1.2345,
 			})),
 			getThinkingLevel: vi.fn(() => "off" as ThinkingLevel),
+			getAvailableThinkingLevels: vi.fn(() => ["off", "minimal", "low", "medium", "high"] as ThinkingLevel[]),
+			setThinkingLevel: vi.fn(),
+			cycleThinkingLevel: vi.fn(() => "medium" as ThinkingLevel),
 			switchModel: vi.fn(async () => {}),
 			refreshSessionResources: vi.fn(async () => {}),
 			runMemoryCommand: vi.fn(async () => "# Memory Status"),
@@ -54,11 +57,11 @@ function getLastCommandResult(api: FakeExtensionAPI): { customType: string; cont
 }
 
 describe("command-extension", () => {
-	it("registers memory/session/model/new/compact commands", () => {
+	it("registers memory/session/thinking/model/new/compact commands", () => {
 		const api = new FakeExtensionAPI();
 		createCommandExtension(createOptions().options)(api as never);
 
-		expect([...api.registeredCommands.keys()]).toEqual(["memory", "session", "model", "new", "compact"]);
+		expect([...api.registeredCommands.keys()]).toEqual(["memory", "session", "thinking", "model", "new", "compact"]);
 	});
 
 	it("renders /memory through the domain command handler", async () => {
@@ -96,6 +99,26 @@ describe("command-extension", () => {
 		expect(getLastCommandResult(api).content).toContain("Current model");
 		expect(getLastCommandResult(api).content).toContain("Available models");
 		expect(getLastCommandResult(api).content).toContain("claude-sonnet-4-5");
+	});
+
+	it("shows, sets, cycles, and validates thinking levels", async () => {
+		const api = new FakeExtensionAPI();
+		const { options } = createOptions();
+		createCommandExtension(options)(api as never);
+
+		await api.registeredCommands.get("thinking")?.handler("", createCommandContext());
+		expect(getLastCommandResult(api).content).toContain("Current level: `off`");
+
+		await api.registeredCommands.get("thinking")?.handler("high", createCommandContext());
+		expect(options.setThinkingLevel).toHaveBeenCalledWith("high");
+		expect(getLastCommandResult(api).content).toContain("`high`");
+
+		await api.registeredCommands.get("thinking")?.handler("cycle", createCommandContext());
+		expect(options.cycleThinkingLevel).toHaveBeenCalledTimes(1);
+
+		await api.registeredCommands.get("thinking")?.handler("max", createCommandContext());
+		expect(options.setThinkingLevel).toHaveBeenCalledTimes(1);
+		expect(getLastCommandResult(api).content).toContain("当前模型可用值");
 	});
 
 	it("switches model on exact or unique substring match and reports ambiguity / missing models", async () => {

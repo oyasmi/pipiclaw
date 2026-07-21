@@ -48,7 +48,7 @@ describe("PipiclawSettingsManager", () => {
 			forceRefreshBeforeCompact: true,
 			forceRefreshBeforeNewSession: true,
 		});
-		expect(manager.getDefaultThinkingLevel()).toBe("off");
+		expect(manager.getDefaultThinkingLevel()).toBeUndefined();
 		expect(manager.getSteeringMode()).toBe("one-at-a-time");
 		expect(manager.getFollowUpMode()).toBe("one-at-a-time");
 	});

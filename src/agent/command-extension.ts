@@ -18,6 +18,9 @@ export interface PipiclawCommandExtensionOptions {
 	getAvailableModels: () => Promise<Model<Api>[]>;
 	getSessionStats: () => SessionStats;
 	getThinkingLevel: () => ThinkingLevel;
+	getAvailableThinkingLevels: () => ThinkingLevel[];
+	setThinkingLevel: (level: ThinkingLevel) => void;
+	cycleThinkingLevel: () => ThinkingLevel | undefined;
 	getLastResponseModel?: () => string | undefined;
 	switchModel: (model: Model<Api>) => Promise<void>;
 	refreshSessionResources: () => Promise<void>;
@@ -80,6 +83,15 @@ function sendCommandResult(sender: CommandMessageSender, text: string): void | P
 	});
 }
 
+function buildThinkingText(current: ThinkingLevel, available: ThinkingLevel[]): string {
+	return `# Thinking
+
+Current level: \`${current}\`
+Available levels: ${available.map((level) => `\`${level}\``).join(", ")}
+
+Use \`/thinking <level>\` to set a level, or \`/thinking cycle\` to select the next supported level.`;
+}
+
 export function createCommandExtension(options: PipiclawCommandExtensionOptions): ExtensionFactory {
 	return (pi) => {
 		pi.registerCommand("memory", {
@@ -101,6 +113,43 @@ export function createCommandExtension(options: PipiclawCommandExtensionOptions)
 						options.getLastResponseModel?.(),
 					),
 				);
+			},
+		});
+
+		pi.registerCommand("thinking", {
+			description: sessionCommandDescription("thinking"),
+			handler: async (args) => {
+				const available = options.getAvailableThinkingLevels();
+				const normalized = args.trim().toLowerCase();
+
+				if (!normalized) {
+					sendCommandResult(pi, buildThinkingText(options.getThinkingLevel(), available));
+					return;
+				}
+
+				if (normalized === "cycle") {
+					const next = options.cycleThinkingLevel();
+					if (!next) {
+						sendCommandResult(pi, "当前模型不支持 thinking/reasoning。");
+						return;
+					}
+					sendCommandResult(pi, `Thinking level 已切换为 \`${next}\`。`);
+					return;
+				}
+
+				if (!available.includes(normalized as ThinkingLevel)) {
+					sendCommandResult(
+						pi,
+						`不支持 thinking level \`${args.trim()}\`。当前模型可用值：${available
+							.map((level) => `\`${level}\``)
+							.join(", ")}`,
+					);
+					return;
+				}
+
+				const level = normalized as ThinkingLevel;
+				options.setThinkingLevel(level);
+				sendCommandResult(pi, `Thinking level 已设置为 \`${level}\`。`);
 			},
 		});
 

@@ -140,6 +140,12 @@ export const SESSION_COMMANDS: readonly CommandSpec[] = [
 		examples: ["/session"],
 	},
 	{
+		name: "thinking",
+		argumentHint: "[off|minimal|low|medium|high|xhigh|max|cycle]",
+		description: "Show or change the thinking level for the current model",
+		examples: ["/thinking", "/thinking medium", "/thinking cycle"],
+	},
+	{
 		name: "model",
 		argumentHint: "[provider/modelId|modelId]",
 		description: "Show the current model, or switch models using an exact or uniquely matching substring",

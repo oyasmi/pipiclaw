@@ -7,6 +7,7 @@
  * This module currently provides only PipiclawSettingsManager.
  */
 
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Transport } from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -34,7 +35,7 @@ type ThinkingBudgetsSettings = {
 type Settings = {
 	defaultProvider?: string;
 	defaultModel?: string;
-	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	defaultThinkingLevel?: ThinkingLevel;
 	compaction?: {
 		enabled?: boolean;
 		reserveTokens?: number;
@@ -155,7 +156,7 @@ export interface PipiclawSessionSearchSettings {
 export interface PipiclawSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
-	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	defaultThinkingLevel?: ThinkingLevel;
 	/** Single backup model reference (`provider/model`) used when the primary model's turn fails. */
 	fallbackModel?: string | null;
 	/**
@@ -517,12 +518,12 @@ export class PipiclawSettingsManager {
 		this.save();
 	}
 
-	getDefaultThinkingLevel(): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
-		return this.settings.defaultThinkingLevel || "off";
+	getDefaultThinkingLevel(): ThinkingLevel | undefined {
+		return this.settings.defaultThinkingLevel;
 	}
 
-	setDefaultThinkingLevel(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {
-		this.settings.defaultThinkingLevel = level as PipiclawSettings["defaultThinkingLevel"];
+	setDefaultThinkingLevel(level: ThinkingLevel): void {
+		this.settings.defaultThinkingLevel = level;
 		this.save();
 	}
 

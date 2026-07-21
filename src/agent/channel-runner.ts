@@ -1,5 +1,6 @@
-import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import {
 	AgentSession,
 	AgentSessionRuntime,
@@ -107,6 +108,8 @@ function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsMana
 	return manager as unknown as SDKSettingsManager;
 }
 
+const DEFAULT_MAIN_THINKING_LEVEL: ThinkingLevel = "medium";
+
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
 	private readonly executor: Executor;
@@ -194,7 +197,7 @@ export class ChannelRunner implements AgentRunner {
 			initialState: {
 				systemPrompt: "",
 				model: this.activeModel,
-				thinkingLevel: "off",
+				thinkingLevel: DEFAULT_MAIN_THINKING_LEVEL,
 				tools: initialTools,
 			},
 			convertToLlm,
@@ -915,6 +918,7 @@ export class ChannelRunner implements AgentRunner {
 		// Resolve model: prefer saved global default, fall back to first available model.
 		this.activeModel = resolveInitialModel(this.modelRegistry, this.settingsManager);
 		this.agent.state.model = this.activeModel; // correct the placeholder default
+		this.initializeThinkingLevel(this.agent, this.activeModel, this.sessionManager);
 		log.logInfo(`Using model: ${this.activeModel.provider}/${this.activeModel.id} (${this.activeModel.name})`);
 		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
 
@@ -1113,6 +1117,9 @@ export class ChannelRunner implements AgentRunner {
 					},
 					getSessionStats: () => this.session.getSessionStats(),
 					getThinkingLevel: () => this.session.thinkingLevel,
+					getAvailableThinkingLevels: () => this.session.getAvailableThinkingLevels(),
+					setThinkingLevel: (level) => this.session.setThinkingLevel(level),
+					cycleThinkingLevel: () => this.session.cycleThinkingLevel(),
 					getLastResponseModel: () => getLastAssistantUsage(this.session.messages)?.responseModel,
 					switchModel: async (model) => {
 						await this.session.setModel(model);
@@ -1167,6 +1174,26 @@ export class ChannelRunner implements AgentRunner {
 		};
 	}
 
+	/**
+	 * Resolve the initial thinking level using the same precedence as pi's SDK:
+	 * session history, configured default, then medium. The effective value is
+	 * clamped to the selected model before the session starts.
+	 */
+	private initializeThinkingLevel(agent: Agent, model: Model<Api>, sessionManager: SessionManager): void {
+		const branch = sessionManager.getBranch();
+		const hasThinkingEntry = branch.some((entry) => entry.type === "thinking_level_change");
+		const sessionThinkingLevel = sessionManager.buildSessionContext().thinkingLevel as ThinkingLevel;
+		const requestedLevel = hasThinkingEntry
+			? sessionThinkingLevel
+			: (this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_MAIN_THINKING_LEVEL);
+		const effectiveLevel = clampThinkingLevel(model, requestedLevel);
+
+		agent.state.thinkingLevel = effectiveLevel;
+		if (!hasThinkingEntry) {
+			sessionManager.appendThinkingLevelChange(effectiveLevel);
+		}
+	}
+
 	private createSessionRuntime(
 		sessionManager: SessionManager,
 		sessionStartEvent?: SessionStartEvent,
@@ -1176,12 +1203,13 @@ export class ChannelRunner implements AgentRunner {
 			initialState: {
 				systemPrompt: "",
 				model: this.activeModel,
-				thinkingLevel: "off",
+				thinkingLevel: DEFAULT_MAIN_THINKING_LEVEL,
 				tools,
 			},
 			convertToLlm,
 			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.activeModel),
 		});
+		this.initializeThinkingLevel(agent, this.activeModel, sessionManager);
 		const resourceLoader = this.createResourceLoader();
 		const session = new AgentSession({
 			agent,

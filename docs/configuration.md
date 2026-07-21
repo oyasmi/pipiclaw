@@ -847,7 +847,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 |------|--------|----------------------|------|
 | `defaultProvider` | unset | Yes | 默认模型提供方 |
 | `defaultModel` | unset | Yes | 默认模型 |
-| `defaultThinkingLevel` | `"off"` | Partially | 通过 settings manager 暴露的默认 thinking level |
+| `defaultThinkingLevel` | `"medium"` | Yes | 主 agent 的默认 thinking level；会按当前模型能力自动 clamp |
 | `compaction.enabled` | `true` | Yes | 启用自动上下文压缩 |
 | `compaction.reserveTokens` | `16384` | Yes | 为压缩流程预留的 token 数 |
 | `compaction.keepRecentTokens` | `20000` | Yes | 压缩前保留的近期 token 数 |
@@ -954,7 +954,18 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 - 提示词预算紧张
 - 希望 recall 更克制
 
-#### 3. 更积极地刷新会话记忆（More Aggressive Session Memory Refresh）
+#### 3. 设置主 agent 的默认 thinking level（Set the Main Agent Thinking Level）
+
+```json
+{
+  "defaultThinkingLevel": "medium"
+}
+```
+
+支持 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。当前模型不支持的 level 会自动降级到该模型支持的值。
+运行中也可以使用 `/thinking` 查看可用值，或使用 `/thinking <level>`、`/thinking cycle` 调整当前 session。
+
+#### 4. 更积极地刷新会话记忆（More Aggressive Session Memory Refresh）
 
 ```json
 {
@@ -975,7 +986,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 - 长任务、多工具调用
 - 希望 `SESSION.md` 更新更频繁
 
-#### 4. 更保守的上下文压缩（More Conservative Compaction）
+#### 5. 更保守的上下文压缩（More Conservative Compaction）
 
 ```json
 {

@@ -140,7 +140,8 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ```json
 {
   "defaultProvider": "my-gateway",
-  "defaultModel": "gpt-4.1"
+  "defaultModel": "gpt-4.1",
+  "defaultThinkingLevel": "medium"
 }
 ```
 

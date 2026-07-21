@@ -12,7 +12,7 @@ describe("settings manager", () => {
 		writeFileSync(join(appHomeDir, "settings.json"), "{", "utf-8");
 
 		const manager = new PipiclawSettingsManager(appHomeDir);
-		expect(manager.getDefaultThinkingLevel()).toBe("off");
+		expect(manager.getDefaultThinkingLevel()).toBeUndefined();
 
 		const diagnostics = manager.drainErrors();
 		expect(diagnostics).toHaveLength(1);
