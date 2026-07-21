@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **破坏性变更（beta）：** sub-agent 不再随包内置或从默认目录发现。运行时现在只加载实际存在于 `workspace/sub-agents/` 下的 Markdown 配置；原 explorer、researcher、verifier 定义改为放在 `examples/sub-agents/` 中供用户复制修改。inline 委派和 `purpose: verify` runtime 验收协议不受影响，不要求配置命名为 `verifier` 的文件。
+
 ## [0.8.9-beta.2] - 2026-07-20
 
 ### 新增

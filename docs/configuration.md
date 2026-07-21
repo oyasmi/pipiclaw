@@ -77,7 +77,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `~/.pipiclaw/workspace/MEMORY.md` | 工作区 | 持久化共享记忆 | 是 |
 | `~/.pipiclaw/workspace/ENVIRONMENT.md` | 工作区 | 环境事实与重要环境变更记录 | 是 |
 | `~/.pipiclaw/workspace/events/` | 工作区 | 定时事件目录 | 是 |
-| `~/.pipiclaw/workspace/sub-agents/` | 工作区 | 预定义子代理目录 | 是 |
+| `~/.pipiclaw/workspace/sub-agents/` | 工作区 | 工作区配置子代理目录 | 是 |
 | `~/.pipiclaw/workspace/skills/` | 工作区 | 工作区级技能目录 | 是 |
 
 ### 环境变量（Environment Variables）
@@ -150,7 +150,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 
 - 不配置(或填空串)＝功能关闭,行为与不带该设置时逐字节一致。
 - 值是 `provider/model` 引用,须能在已有的 `auth.json` / `models.json` 里解析到；解析失败会返回明确错误,不会静默回退到父模型。
-- 优先级(高到低):`subagent` 工具调用的 `model` 参数 > 预定义子代理 frontmatter 的 `model` > 这里的 `subagentModel` > 父代理当前模型。
+- 优先级(高到低):`subagent` 工具调用的 `model` 参数 > 工作区子代理 frontmatter 的 `model` > 这里的 `subagentModel` > 父代理当前模型。
 
 ## 可观测性：结构化日志与成本账本（Observability: Structured Logging & Cost Ledger）
 
@@ -1228,7 +1228,7 @@ web 工具的代理顺序是：
 
 ## 子代理目录 `workspace/sub-agents/`（`workspace/sub-agents/`）
 
-放预定义子代理（sub-agent）。适合把 reviewer、researcher、planner 之类角色固化下来。
+放工作区配置子代理（sub-agent）。适合把 reviewer、researcher、planner 之类角色固化下来。运行时只加载这个目录中实际存在的配置；Pipiclaw 不内置默认 sub-agent。仓库中的 [`examples/sub-agents/`](../examples/sub-agents/) 提供可复制的 explorer、researcher、verifier 模板。
 
 详细字段、示例和推荐写法见 [sub-agents.md](./sub-agents.md)。
 

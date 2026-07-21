@@ -26,7 +26,7 @@ Workspace 根目录：
 - `MEMORY.md`：管理员维护的共享背景，按需读取。
 - `ENVIRONMENT.md`：机器环境事实和重要变更，按需读取、可维护。
 - `skills/`：workspace 级程序性知识；通过 `skill_manage` 管理。
-- `sub-agents/`：预定义子代理。
+- `sub-agents/`：工作区配置的子代理；只加载实际存在的 Markdown 文件。
 - `events/`：全 workspace 的调度事件。
 
 当前 channel 目录：

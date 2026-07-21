@@ -136,7 +136,7 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 	maxChars: 2_400,
 	overflow: "truncate-items",
 	render: (context) => {
-		// Two-state (spec 032 D1): an empty predefined catalog must not delete the runtime
+		// Two-state (spec 032 D1): an empty configured catalog must not delete the runtime
 		// guidance that lives in this section — only the catalog itself is optional. This
 		// inline-usage text is runtime-authored, not user content; keep it under 40 units
 		// (it does not count toward the 700/1200 unit budget — see builder.ts's
@@ -144,13 +144,13 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 		if (context.subAgents.length === 0) {
 			return [
 				"## Sub-Agents",
-				"Delegate with `subagent`: pass an inline `systemPrompt` (no predefined agent is required).",
+				"Delegate with `subagent`: pass an inline `systemPrompt` (no configured agent is required).",
 				"A sub-agent starts blank — state goal, scope, paths, constraints, acceptance criteria in `task`.",
 				"Read task-delegation.md before non-trivial delegation.",
 			].join("\n");
 		}
 		return [
-			"## Predefined Sub-Agents",
+			"## Configured Sub-Agents",
 			"A sub-agent starts blank: state the goal, scope, paths, constraints and acceptance criteria in the task you hand it.",
 			...context.subAgents.map((agent) => `- ${agent.name} — ${agent.description}`),
 			"",

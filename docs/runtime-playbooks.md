@@ -85,7 +85,7 @@ Pipiclaw 可以通过 bash、subagent、event preAction 与用户安装的工具
 
 ## 面向 workspace 的迁移
 
-已有 `AGENTS.md` 如果包含 Pipiclaw 文件语义、task/event SOP、driver cooldown、审批命令或 verifier 细节，应删除这些镜像内容，改为引用对应 playbook。保留的应是：
+已有 `AGENTS.md` 如果包含 Pipiclaw 文件语义、task/event SOP、driver cooldown、审批命令或 verifier 细节，应删除这些镜像内容，改为引用对应 playbook。workspace `sub-agents/` 中的角色定义则属于用户可修改配置，不是 Pipiclaw 随包注入的默认内容。保留的应是：
 
 - 称呼、沟通风格和默认工作环；
 - 团队安全政策和外部影响边界；

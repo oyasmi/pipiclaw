@@ -1,8 +1,8 @@
-# 预定义子代理（Sub-Agents）
+# 工作区配置子代理（Sub-Agents）
 
 > **读者**：想把 reviewer / researcher 这类角色沉淀成可复用能力的使用者。
 > **前置**：已完成 [README](../README.md) 的安装与配置。
-> **读完你能**：写出一个预定义子代理文件，并知道何时该用它、何时不该。
+> **读完你能**：写出一个工作区子代理文件，并知道何时该用它、何时不该。
 
 子代理是 Pipiclaw 的**委派**能力：把某类任务从主代理手里交给一个更聚焦、工具更窄的角色去做。它和[事件与任务](./events-and-tasks.md)是正交的两条能力——事件与任务解决"何时唤醒、在途状态如何"，子代理解决"这一步该不该换一个专门的角色来做"。
 
@@ -10,7 +10,15 @@
 
 ## 它是什么（What It Is）
 
-预定义子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
+工作区配置子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。Pipiclaw 只加载这个目录中实际存在且有效的文件；不会自动注入任何默认角色。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
+
+仓库提供了三个可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)。例如：
+
+```bash
+cp examples/sub-agents/{explorer,researcher,verifier}.md ~/.pipiclaw/workspace/sub-agents/
+```
+
+不复制模板也完全可以使用 inline `systemPrompt` 委派。`purpose: verify` 的验收约束由 runtime 执行，不要求一定配置名为 `verifier` 的文件。
 
 适合的场景：
 

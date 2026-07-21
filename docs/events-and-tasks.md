@@ -612,7 +612,7 @@ runtime 只提供通用恢复机制：委派时把工具/实例/目录/预期产
 
 ## 该看哪份文档
 
-- 预定义子代理（委派、worktree、独立验收）：[sub-agents.md](./sub-agents.md)
+- 工作区配置子代理（委派、worktree、独立验收）：[sub-agents.md](./sub-agents.md)
 - `tools.events.enabled` / `tools.tasks.enabled` / `taskDriver` / `taskDigest` 等门控开关：[configuration.md](./configuration.md)
 - Runtime playbooks 与知识分层：[runtime-playbooks.md](./runtime-playbooks.md)
 - 长期运行、日志、升级、排障：[deployment-and-operations.md](./deployment-and-operations.md)

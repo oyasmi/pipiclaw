@@ -4,7 +4,7 @@ import type { Dirent } from "fs";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { findExactModelReferenceMatch, formatModelReference } from "../models/utils.js";
-import { BUILTIN_SUB_AGENTS_DIR, SUB_AGENTS_DIR_NAME } from "../paths.js";
+import { SUB_AGENTS_DIR_NAME } from "../paths.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 const ALLOWED_SUB_AGENT_TOOLS = ["read", "bash", "edit", "write", "web_search", "web_fetch"] as const;
@@ -41,7 +41,7 @@ export interface SubAgentConfig {
 	/** Unset means "apply the purpose-based default at resolution time" (spec 032 D3). */
 	thinkingLevel?: SubAgentThinkingLevel;
 	filePath?: string;
-	source: "predefined" | "inline" | "builtin";
+	source: "predefined" | "inline";
 }
 
 export interface ResolvedSubAgentConfig extends Omit<SubAgentConfig, "model" | "modelRef" | "thinkingLevel"> {
@@ -275,17 +275,6 @@ function resolvePositiveOverride(value: number | undefined, fallback: number): n
 	return Math.floor(value);
 }
 
-/** `enabled` defaults to true; only an explicit false (bool or the string "false") turns an agent off. */
-function parseEnabled(raw: unknown): boolean {
-	if (typeof raw === "boolean") {
-		return raw;
-	}
-	if (typeof raw === "string") {
-		return raw.trim().toLowerCase() !== "false";
-	}
-	return true;
-}
-
 function resolveModelReference(
 	modelRef: string,
 	availableModels: Model<Api>[],
@@ -303,18 +292,12 @@ function resolveModelReference(
 interface DirScanResult {
 	agents: SubAgentConfig[];
 	warnings: string[];
-	/** Every valid `name` seen in this directory, including disabled ones — used for override/enable checks. */
-	knownNames: Set<string>;
 }
 
-/** Parses every `*.md` sub-agent definition in `directory`. Shared by the built-in and workspace scans. */
-function loadAgentsFromDir(
-	directory: string,
-	availableModels: Model<Api>[],
-	source: "predefined" | "builtin",
-): DirScanResult {
+/** Parses every `*.md` sub-agent definition in the user's workspace directory. */
+function loadAgentsFromDir(directory: string, availableModels: Model<Api>[]): DirScanResult {
 	if (!existsSync(directory)) {
-		return { agents: [], warnings: [], knownNames: new Set() };
+		return { agents: [], warnings: [] };
 	}
 
 	const warnings: string[] = [];
@@ -326,7 +309,7 @@ function loadAgentsFromDir(
 			.filter((entry) => entry.name.endsWith(".md") && (entry.isFile() || entry.isSymbolicLink()))
 			.sort((a, b) => a.name.localeCompare(b.name));
 	} catch (error) {
-		return { agents: [], warnings: [`Failed to read sub-agents directory (${errorMessage(error)})`], knownNames };
+		return { agents: [], warnings: [`Failed to read sub-agents directory (${errorMessage(error)})`] };
 	}
 
 	for (const entry of entries) {
@@ -352,15 +335,8 @@ function loadAgentsFromDir(
 			warnings.push(`${entry.name}: duplicate sub-agent name "${name}" ignored`);
 			continue;
 		}
-		// Claim the name before the enabled/empty-body checks below, so a workspace file that only
-		// disables a built-in agent (or fails later validation) still blocks that built-in default.
+		// Claim the name before later validation so a malformed duplicate cannot shadow a valid one.
 		knownNames.add(name);
-
-		// `enabled: false` must win before the empty-body check: an empty-body file that only sets
-		// `enabled: false` is a valid "turn off this built-in agent" marker, not a malformed agent.
-		if (!parseEnabled(frontmatter.enabled)) {
-			continue;
-		}
 
 		const toolParse = parseToolNames(frontmatter.tools);
 		if (toolParse.error) {
@@ -441,29 +417,17 @@ function loadAgentsFromDir(
 			paths: parsedPaths.values,
 			thinkingLevel: thinkingLevel.value,
 			filePath,
-			source,
+			source: "predefined",
 		});
 	}
 
-	return { agents, warnings, knownNames };
+	return { agents, warnings };
 }
 
 export function discoverSubAgents(workspaceDir: string, availableModels: Model<Api>[]): SubAgentDiscoveryResult {
 	const directory = getSubAgentsDir(workspaceDir);
-	const workspaceResult = loadAgentsFromDir(directory, availableModels, "predefined");
-	const builtinResult = loadAgentsFromDir(BUILTIN_SUB_AGENTS_DIR, availableModels, "builtin");
-
-	const warnings = [...workspaceResult.warnings, ...builtinResult.warnings];
-	const builtinAgents: SubAgentConfig[] = [];
-	for (const agent of builtinResult.agents) {
-		if (workspaceResult.knownNames.has(agent.name)) {
-			warnings.push(`${agent.name}: workspace sub-agent overrides the built-in default`);
-			continue;
-		}
-		builtinAgents.push(agent);
-	}
-
-	return { directory, agents: [...workspaceResult.agents, ...builtinAgents], warnings };
+	const result = loadAgentsFromDir(directory, availableModels);
+	return { directory, agents: result.agents, warnings: result.warnings };
 }
 
 export function resolveSubAgentConfig(

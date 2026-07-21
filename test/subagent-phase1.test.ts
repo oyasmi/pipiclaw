@@ -314,17 +314,14 @@ Review files carefully.`,
 		expect(resolvedFromFrontmatter.config?.thinkingLevel).toBe("low");
 	});
 
-	it("discovers the built-in agents alongside an empty workspace directory", () => {
+	it("returns no named agents when the workspace directory is empty", () => {
 		const workspaceDir = createTempWorkspace();
 		const discovery = discoverSubAgents(workspaceDir, [model]);
-		const names = discovery.agents.map((agent) => agent.name).sort();
-		expect(names).toEqual(["explorer", "researcher", "verifier"]);
-		expect(discovery.agents.every((agent) => agent.source === "builtin")).toBe(true);
-		const verifier = discovery.agents.find((agent) => agent.name === "verifier");
-		expect(verifier?.thinkingLevel).toBe("medium");
+		expect(discovery.agents).toEqual([]);
+		expect(discovery.warnings).toEqual([]);
 	});
 
-	it("lets a workspace file override a built-in agent by name and records a warning", () => {
+	it("discovers only the workspace file and keeps its configured source", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
@@ -338,24 +335,7 @@ Review files carefully.`,
 		const explorers = discovery.agents.filter((agent) => agent.name === "explorer");
 		expect(explorers).toHaveLength(1);
 		expect(explorers[0]).toMatchObject({ source: "predefined", description: "custom explorer" });
-		expect(discovery.warnings.some((warning) => warning.includes("workspace sub-agent overrides"))).toBe(true);
-	});
-
-	it("disables a built-in agent via enabled: false, even before the empty-body check", () => {
-		const workspaceDir = createTempWorkspace();
-		const subAgentsDir = getSubAgentsDir(workspaceDir);
-		mkdirSync(subAgentsDir, { recursive: true });
-		writeFileSync(
-			join(subAgentsDir, "explorer.md"),
-			`---\nname: explorer\ndescription: disabled\nenabled: false\n---\n`,
-			"utf-8",
-		);
-
-		const discovery = discoverSubAgents(workspaceDir, [model]);
-		expect(discovery.agents.some((agent) => agent.name === "explorer")).toBe(false);
-		expect(discovery.warnings.some((warning) => warning.includes("empty system prompt body"))).toBe(false);
-		const names = discovery.agents.map((agent) => agent.name).sort();
-		expect(names).toEqual(["researcher", "verifier"]);
+		expect(discovery.warnings).toEqual([]);
 	});
 });
 

@@ -125,7 +125,7 @@ describe("system prompt structure", () => {
 		const build = buildPipiclawSystemPrompt(context({ tools: tools(["read", "bash", "grep"]) }));
 
 		expect(build.text).not.toContain("## Persistent Work");
-		expect(build.text).not.toContain("## Predefined Sub-Agents");
+		expect(build.text).not.toContain("## Configured Sub-Agents");
 		expect(build.text).not.toContain("task-driving.md");
 		expect(build.text).not.toContain("memory-and-learning.md");
 		expect(build.text).toContain("runtime-orientation.md");
@@ -179,10 +179,10 @@ describe("runtime guide catalog", () => {
 	});
 });
 
-describe("predefined sub-agents section", () => {
+describe("configured sub-agents section", () => {
 	it("renders inline-usage guidance instead of disappearing when no sub-agent is defined", () => {
 		const build = buildPipiclawSystemPrompt(context({ subAgents: [] }));
-		expect(build.text).not.toContain("## Predefined Sub-Agents");
+		expect(build.text).not.toContain("## Configured Sub-Agents");
 		expect(build.text).toContain("## Sub-Agents");
 		expect(build.text).toContain("inline `systemPrompt`");
 		const section = build.sections.find((section) => section.id === "subagents");
@@ -193,7 +193,7 @@ describe("predefined sub-agents section", () => {
 		const build = buildPipiclawSystemPrompt(
 			context({ subAgents: [{ name: "reviewer", description: "Reviews a diff" }] }),
 		);
-		expect(build.text).toContain("## Predefined Sub-Agents");
+		expect(build.text).toContain("## Configured Sub-Agents");
 		expect(build.text).toContain("- reviewer — Reviews a diff");
 	});
 });

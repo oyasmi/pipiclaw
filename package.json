@@ -17,6 +17,7 @@
 	},
 	"files": [
 		"dist",
+		"examples/sub-agents",
 		"README.md",
 		"LICENSE"
 	],

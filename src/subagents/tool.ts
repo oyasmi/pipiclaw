@@ -39,12 +39,12 @@ import {
 
 const subagentSchema = Type.Object({
 	label: Type.String({ description: "Brief description of what this sub-agent task does (shown to user)" }),
-	agent: Type.Optional(Type.String({ description: "Name of a predefined sub-agent from workspaceDir/sub-agents/" })),
+	agent: Type.Optional(Type.String({ description: "Name of a configured sub-agent from workspaceDir/sub-agents/" })),
 	name: Type.Optional(Type.String({ description: "Optional display name for an inline sub-agent" })),
 	task: Type.String({ description: "Complete task description for the sub-agent" }),
 	systemPrompt: Type.Optional(
 		Type.String({
-			description: "Optional inline system prompt for a temporary sub-agent. Use when no predefined agent fits.",
+			description: "Optional inline system prompt for a temporary sub-agent. Use when no configured agent fits.",
 		}),
 	),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tool whitelist for the sub-agent" })),
@@ -116,7 +116,7 @@ const subagentSchema = Type.Object({
 export interface SubAgentToolDetails {
 	kind: "subagent";
 	agent: string;
-	source: "predefined" | "inline" | "builtin";
+	source: "predefined" | "inline";
 	model: string;
 	tools: string[];
 	turns: number;
@@ -731,7 +731,7 @@ export function createSubAgentTool(
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate a task to a sub-agent with an isolated context. Default path: pass an inline systemPrompt (plus optional tools/model) to define a temporary sub-agent — no predefined agent is required. You may instead name a predefined sub-agent via `agent`; workspaceDir/sub-agents/ may be empty on a given install, which does not block inline delegation. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
+			"Delegate a task to a sub-agent with an isolated context. Default path: pass an inline systemPrompt (plus optional tools/model) to define a temporary sub-agent — no configured agent is required. You may instead name a configured sub-agent via `agent`; workspaceDir/sub-agents/ may be empty on a given install, which does not block inline delegation. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
 		parameters: subagentSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			const availableModels = options.getAvailableModels();
@@ -754,7 +754,7 @@ export function createSubAgentTool(
 			);
 			if (!invocation.config) {
 				throw new Error(
-					`${invocation.error}\n\nAvailable predefined sub-agents:\n${formatSubAgentList(discovery.agents)}`,
+					`${invocation.error}\n\nAvailable configured sub-agents:\n${formatSubAgentList(discovery.agents)}`,
 				);
 			}
 

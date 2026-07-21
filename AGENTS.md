@@ -10,7 +10,7 @@ It adds the runtime pieces needed for long-lived team usage: DingTalk transport,
 - `src/runtime/`: DingTalk transport and runtime wiring (`bootstrap`, `dingtalk`, `delivery`, `events`, `store`)
 - `src/agent/`: main agent orchestration and session event handling
 - `src/memory/`: channel memory lifecycle, consolidation, recall, session memory, and file helpers
-- `src/subagents/`: predefined sub-agent discovery and the sub-agent tool
+- `src/subagents/`: workspace-configured sub-agent discovery and the sub-agent tool
 - `src/tools/`: tool implementations exposed to the coding agent
 - `src/security/`: command, path, and network guard configuration and enforcement helpers
 - `src/web/`: web search/fetch client, extraction, formatting, and provider implementations

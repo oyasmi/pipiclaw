@@ -4,6 +4,10 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (beta):** sub-agents are no longer bundled or discovered from package defaults. Runtime discovery now loads only Markdown files actually present in `workspace/sub-agents/`; the former explorer, researcher, and verifier definitions are available as copyable templates under `examples/sub-agents/`. Inline delegation and the `purpose: verify` runtime protocol remain available without named configuration.
+
 ## [0.8.9-beta.2] - 2026-07-20
 
 ### Added
