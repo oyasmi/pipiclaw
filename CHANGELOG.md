@@ -4,6 +4,12 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.9-beta.3] - 2026-07-22
+
+### Added
+
+- The main agent now supports configurable thinking levels. A new `defaultThinkingLevel` setting drives the base level (default changed from `off` to `medium`, and automatically clamped to whatever the current model actually supports), and a new `/thinking` command lets you inspect available values and adjust the active session at runtime (`/thinking <level>` to set one, `/thinking cycle` to step through them).
+
 ### Changed
 
 - **Breaking (beta):** sub-agents are no longer bundled or discovered from package defaults. Runtime discovery now loads only Markdown files actually present in `workspace/sub-agents/`; the former explorer, researcher, and verifier definitions are available as copyable templates under `examples/sub-agents/`. Inline delegation and the `purpose: verify` runtime protocol remain available without named configuration.
