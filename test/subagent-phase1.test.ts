@@ -91,14 +91,14 @@ describe("sub-agent discovery", () => {
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
 
-		for (const name of ["explorer", "researcher", "verifier", "git-committer"]) {
+		for (const name of ["explorer", "researcher", "reviewer", "verifier", "git-committer"]) {
 			const example = readFileSync(join(process.cwd(), "examples", "sub-agents", `${name}.md`), "utf-8");
 			writeFileSync(join(subAgentsDir, `${name}.md`), example, "utf-8");
 		}
 
 		const discovery = discoverSubAgents(workspaceDir, [model]);
 		expect(discovery.warnings).toEqual([]);
-		expect(discovery.agents).toHaveLength(4);
+		expect(discovery.agents).toHaveLength(5);
 		expect(
 			Object.fromEntries(
 				discovery.agents.map((agent) => [
@@ -133,6 +133,15 @@ describe("sub-agent discovery", () => {
 				maxWallTimeSec: 240,
 				bashTimeoutSec: 120,
 			},
+			reviewer: {
+				thinkingLevel: "medium",
+				contextMode: "contextual",
+				memory: "relevant",
+				maxTurns: 20,
+				maxToolCalls: 40,
+				maxWallTimeSec: 300,
+				bashTimeoutSec: 120,
+			},
 			verifier: {
 				thinkingLevel: "medium",
 				contextMode: "isolated",
@@ -159,6 +168,9 @@ describe("sub-agent discovery", () => {
 		}
 		expect(discovery.agents.find((agent) => agent.name === "verifier")?.description).toContain(
 			"purpose=verify 与 taskId",
+		);
+		expect(discovery.agents.find((agent) => agent.name === "reviewer")?.description).toContain(
+			"不要用于实现修复或按 DoD 做最终验收",
 		);
 		expect(discovery.agents.find((agent) => agent.name === "git-committer")?.description).toContain("默认不 push");
 	});

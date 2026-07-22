@@ -19,7 +19,7 @@ priority: 45
 
 ## 配置 subagent
 
-不需要预先配置：不传 `agent` 时给 `systemPrompt` 即可发起委派，`workspaceDir/sub-agents/` 为空不影响这条路径。若需要可复用角色，把 Markdown 配置放入该目录；runtime 只加载实际存在的配置。仓库提供 explorer、researcher、verifier、git-committer 四份可复制模板，见 `examples/sub-agents/`。选择明确适合的配置 agent；没有时使用聚焦的 inline `systemPrompt`。task 描述必须包含目标、范围、相关路径、约束、验收方法和返回格式，因为子代理看不到主对话。
+不需要预先配置：不传 `agent` 时给 `systemPrompt` 即可发起委派，`workspaceDir/sub-agents/` 为空不影响这条路径。若需要可复用角色，把 Markdown 配置放入该目录；runtime 只加载实际存在的配置。仓库提供 explorer、researcher、reviewer、verifier、git-committer 五份可复制模板，见 `examples/sub-agents/`。选择明确适合的配置 agent；没有时使用聚焦的 inline `systemPrompt`。task 描述必须包含目标、范围、相关路径、约束、验收方法和返回格式，因为子代理看不到主对话。
 
 用 `maxTurns`、`maxToolCalls`、`maxWallTimeSec` 限幅。进程内 subagent 同回合同步返回,不需要回访事件；主 agent 负责验收结果和更新台账,子代理不驱动 task/event 台账。触顶时子代理会收敛输出已完成的结论而不是整段丢弃,但预算仍然是真实上限,不要依赖它兜底过大的任务。
 
