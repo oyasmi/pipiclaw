@@ -12,10 +12,10 @@
 
 工作区配置子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。Pipiclaw 只加载这个目录中实际存在且有效的文件；不会自动注入任何默认角色。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
 
-仓库提供了三个可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)。例如：
+仓库提供了四个可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)。例如：
 
 ```bash
-cp examples/sub-agents/{explorer,researcher,verifier}.md ~/.pipiclaw/workspace/sub-agents/
+cp examples/sub-agents/{explorer,researcher,verifier,git-committer}.md ~/.pipiclaw/workspace/sub-agents/
 ```
 
 不复制模板也完全可以使用 inline `systemPrompt` 委派。`purpose: verify` 的验收约束由 runtime 执行，不要求一定配置名为 `verifier` 的文件。
@@ -26,6 +26,7 @@ cp examples/sub-agents/{explorer,researcher,verifier}.md ~/.pipiclaw/workspace/s
 - 信息收集
 - 风险检查
 - 某类固定格式的总结
+- 把工作区改动整理成提交（读 diff、写提交消息是上下文密集的，适合隔离给 git-committer）
 
 不适合的场景：
 
