@@ -86,6 +86,83 @@ function createAssistantMessage(
 const createTempWorkspace = useTempDirs("pipiclaw-subagent-");
 
 describe("sub-agent discovery", () => {
+	it("loads every production example with the expected routing and resource settings", () => {
+		const workspaceDir = createTempWorkspace();
+		const subAgentsDir = getSubAgentsDir(workspaceDir);
+		mkdirSync(subAgentsDir, { recursive: true });
+
+		for (const name of ["explorer", "researcher", "verifier", "git-committer"]) {
+			const example = readFileSync(join(process.cwd(), "examples", "sub-agents", `${name}.md`), "utf-8");
+			writeFileSync(join(subAgentsDir, `${name}.md`), example, "utf-8");
+		}
+
+		const discovery = discoverSubAgents(workspaceDir, [model]);
+		expect(discovery.warnings).toEqual([]);
+		expect(discovery.agents).toHaveLength(4);
+		expect(
+			Object.fromEntries(
+				discovery.agents.map((agent) => [
+					agent.name,
+					{
+						thinkingLevel: agent.thinkingLevel,
+						contextMode: agent.contextMode,
+						memory: agent.memory,
+						maxTurns: agent.maxTurns,
+						maxToolCalls: agent.maxToolCalls,
+						maxWallTimeSec: agent.maxWallTimeSec,
+						bashTimeoutSec: agent.bashTimeoutSec,
+					},
+				]),
+			),
+		).toEqual({
+			explorer: {
+				thinkingLevel: "low",
+				contextMode: "isolated",
+				memory: "none",
+				maxTurns: 12,
+				maxToolCalls: 30,
+				maxWallTimeSec: 180,
+				bashTimeoutSec: 60,
+			},
+			researcher: {
+				thinkingLevel: "medium",
+				contextMode: "isolated",
+				memory: "none",
+				maxTurns: 16,
+				maxToolCalls: 32,
+				maxWallTimeSec: 240,
+				bashTimeoutSec: 120,
+			},
+			verifier: {
+				thinkingLevel: "medium",
+				contextMode: "isolated",
+				memory: "none",
+				maxTurns: 24,
+				maxToolCalls: 48,
+				maxWallTimeSec: 300,
+				bashTimeoutSec: 120,
+			},
+			"git-committer": {
+				thinkingLevel: "medium",
+				contextMode: "isolated",
+				memory: "none",
+				maxTurns: 18,
+				maxToolCalls: 40,
+				maxWallTimeSec: 240,
+				bashTimeoutSec: 120,
+			},
+		});
+
+		for (const agent of discovery.agents) {
+			expect(agent.description).toContain("使用");
+			expect(agent.systemPrompt).toMatch(/[\u3400-\u9fff]/u);
+		}
+		expect(discovery.agents.find((agent) => agent.name === "verifier")?.description).toContain(
+			"purpose=verify 与 taskId",
+		);
+		expect(discovery.agents.find((agent) => agent.name === "git-committer")?.description).toContain("默认不 push");
+	});
+
 	it("ignores predefined prompts that exceed the length limit", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
