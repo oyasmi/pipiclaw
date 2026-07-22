@@ -4,50 +4,31 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
-## [0.8.9-beta.3] - 2026-07-22
+## [0.8.9] - 2026-07-22
 
 ### Added
 
 - The main agent now supports configurable thinking levels. A new `defaultThinkingLevel` setting drives the base level (default changed from `off` to `medium`, and automatically clamped to whatever the current model actually supports), and a new `/thinking` command lets you inspect available values and adjust the active session at runtime (`/thinking <level>` to set one, `/thinking cycle` to step through them).
-
-### Changed
-
-- **Breaking (beta):** sub-agents are no longer bundled or discovered from package defaults. Runtime discovery now loads only Markdown files actually present in `workspace/sub-agents/`; the former explorer, researcher, and verifier definitions are available as copyable templates under `examples/sub-agents/`. Inline delegation and the `purpose: verify` runtime protocol remain available without named configuration.
-
-## [0.8.9-beta.2] - 2026-07-20
-
-### Added
-
 - Added a `send_media` tool (spec 030) so the agent can push a local file to the current channel as a native attachment instead of inline text: DingTalk uploads and sends it as an image/file message, and the terminal TUI writes it to disk and prints the path. The tool binds to a transport-neutral `MediaSender` port on `ChannelContext` (no tool code depends on a concrete transport) and is gated to the main path only — never available to sub-agents.
-- Made delegation work out of the box and pay back its cost (spec 032). Inline-delegation guidance now renders even when the predefined catalog is empty; three built-in sub-agents (explorer, verifier, researcher) ship in `src/subagents/builtin/` and are discovered before the workspace dir (same-name workspace files override, `enabled:false` turns one off). `thinkingLevel` is configurable via frontmatter/invocation (defaults to `medium` for `purpose=verify`, off otherwise). Every subagent run gets a `subagent-artifacts/<runId>/` directory with the full output in `output.md`; replies over the unit budget are truncated with a pointer, and a new `returns:"artifact"` mode uses an `ARTIFACT:` marker protocol (downgrading gracefully if missing). Budget-triggered aborts (turn/tool-call/wall-time) now get one tool-free convergence turn to report conclusions instead of discarding all work, bounded by an independent 60s clock. A new `settings.subagentModel` lets delegations run on a different model than the parent, with priority invocation > frontmatter > settings > parent.
+- Made delegation work out of the box and pay back its cost (spec 032). Inline-delegation guidance now renders even when the predefined catalog is empty. `thinkingLevel` is configurable via frontmatter/invocation (defaults to `medium` for `purpose=verify`, off otherwise). Every subagent run gets a `subagent-artifacts/<runId>/` directory with the full output in `output.md`; replies over the unit budget are truncated with a pointer, and a new `returns:"artifact"` mode uses an `ARTIFACT:` marker protocol (downgrading gracefully if missing). Budget-triggered aborts (turn/tool-call/wall-time) now get one tool-free convergence turn to report conclusions instead of discarding all work, bounded by an independent 60s clock. A new `settings.subagentModel` lets delegations run on a different model than the parent, with priority invocation > frontmatter > settings > parent.
+- Five productionized, copyable sub-agent templates now ship under `examples/sub-agents/` — explorer, researcher, reviewer, verifier, and git-committer — localized for Chinese workflows with explicit routing and reasoning budgets. Pipiclaw still discovers sub-agents only from `workspace/sub-agents/` (copy just the roles you need); inline delegation and the `purpose: verify` runtime protocol remain available without any named configuration.
+- Added the spec 029 task-lifecycle model with six canonical task statuses, a shared transition table, runtime-owned recurring cycle starts, and focused `task_manage` modules for creation, lifecycle, verification, and shared task operations.
+- Added a task-governor safeguard that pauses a task after three consecutive accepted wakes with no visible ledger progress, records the escalation, and notifies the user instead of allowing a silent token loop.
 - Sidecar tasks gained an optional `repair(error)` callback: when `parse` throws on the first attempt, the task retries exactly once with the returned hint appended to the prompt, so a malformed-but-recoverable sidecar output (e.g. a misspelled JSON key) gets a targeted correction instead of failing outright. Parse failures remain fatal otherwise — a blind retry would reproduce the same bad output — and transient failures keep the standard retry budget.
 
 ### Changed
 
+- Task verification and external approval now bind to one canonical contract hash covering the task's Goal, DoD, Manual, Verification, and completion state. Progress notes no longer invalidate a PASS; changes to the contract still require fresh verification and approval.
+- Recurring-task cadence is now fully native to task frontmatter: cycle starts dispatch an ordinary task-driver wake, legacy schedule/check-in dual-read behavior is removed after migration, and canonical files are rewritten from legacy statuses on read.
 - Unified the tool-result `details` contract and recoverable rejections. Model-resolvable rejections (missing field, unknown id, illegal transition) now raise a `RecoverableToolError` that the tool boundary converts into a normal result carrying `details.recoverable: true` — logged at debug and kept out of the user's chat — while plain errors (guard refusals, approval gates, corrupt state, real faults) stay visible. `kind` is no longer hand-written per tool: `buildToolSet` stamps it from the registration name so every result conforms by construction. The per-tool `## Available Tools` prompt section was dropped (~180 prompt units/turn, redundant with each tool's own `description`), removing the now-unused `hint` plumbing.
 - Reworked memory recall and durable-memory extraction for quality. Recall scoring is now evidence-based rather than coverage-based: candidates are admitted on weighted specificity mass against an absolute threshold, so a detailed message no longer collapses recall the more context the user gives, and Chinese now emits overlapping trigrams so dictionary-shredded compounds (e.g. 包管理器) still match verbatim; model rerank narrows to a 3s budget and only fires when the shortlist overflows with no clear local winner, failing open to local ranking. Boundary consolidation, idle consolidation, and the growth review now share one extraction prompt, JSON schema, and confidence gate (`extraction.ts`) — previously two of the three applied no confidence bar at all — and rejected candidates land in `memory-review.jsonl` as skipped while their source material stays in `HISTORY.md` and cold storage.
 - Reconciled documentation drift and restructured the runtime playbooks around subject rather than task. Fixed the task-lifecycle enum and governor outcome in `architecture.md`, removed references to a nonexistent "escalated" state in the ops troubleshooting checklist, and unified the two `escalateTask()` call sites on one log message (`paused (governor)`) so ops search does not miss the budget/dependency case. Task-specific playbooks drop from 7/9 to 4/9 (task-recurring merges into task-planning, task-repair into task-driving), with new `background-jobs.md` and `outbound-media.md` playbooks and the contract-hash semantics de-duplicated into `task-closeout.md`. Added `docs/tools.md` (a capability/toggle/subagent-visibility matrix for all 14 tools), `docs/memory.md` (a user-facing view of the memory layers), and `docs/README.md` (an index grouped by user/operator/developer); the playbook directory listing is now single-sourced in `runtime-playbooks.md` with a test asserting the two stay in sync. Also deleted the dead, unreachable `modes` filtering mechanism and dropped the stale comment pointing at the retired `tasks-pending.mjs` sensor.
 
 ### Fixed
 
+- Fixed recurring tasks created with a schedule but no explicit wake being dispatched immediately. Their first cycle is now scheduled at the next cron occurrence, matching subsequent cycles.
 - Hardened scheduled-event and background-job delivery reliability (spec 031). `dispatchId` is now derived from provenance (one-shot `at`, periodic cron occurrence, `job:<channelId>:<jobId>:done`) rather than wall-clock, so the file-recovery and outbox-retry paths collide on the same id and a full channel queue no longer double-delivers. A lease now means "the owner is alive" — it is renewed while held and cleared synchronously on `cancelChannel`, so a `/stop`'d record can be redelivered instead of being renewed forever; deliveries beyond the first get a `[REDELIVERY:n]` prefix on the delivered text only. Event admission rules moved to a shared `event-validation.ts` used by both `event_manage` and the watcher (now the final arbiter), `immediate` is removed from the type system, and the minimum-lead-time guard applies only to files written during the current process. Task-owned events look up their owning task and skip dispatch (self-deleting) when the owner is gone or terminal. Background jobs now persist to `state/jobs/<channelId>/<jobId>.json`, are reaped on restart (running ones reclaimed against the concurrency cap, finished ones given a catch-up wake), and wake the channel via durable dispatch on completion — formally retiring job-manager's "sweep never wakes" constraint. Futile-wake detection moved off `taskFingerprint` onto a per-channel effect counter incremented on world-changing tool calls and visible deliveries, so writing a progress note no longer resets the count — only real work does.
 - The evaluation run manifest now records the model actually observed across all trials when no model was configured explicitly, instead of stamping a stale default (`claude-sonnet-4-5`) that misrepresented what the serving gateway ran. Explicitly configured models are left untouched, so a real mismatch with the observed model still surfaces as drift.
-
-## [0.8.9-beta.1] - 2026-07-19
-
-### Added
-
-- Added the spec 029 task-lifecycle model with six canonical task statuses, a shared transition table, runtime-owned recurring cycle starts, and focused `task_manage` modules for creation, lifecycle, verification, and shared task operations.
-- Added a task-governor safeguard that pauses a task after three consecutive accepted wakes with no visible ledger progress, records the escalation, and notifies the user instead of allowing a silent token loop.
-
-### Changed
-
-- Task verification and external approval now bind to one canonical contract hash covering the task's Goal, DoD, Manual, Verification, and completion state. Progress notes no longer invalidate a PASS; changes to the contract still require fresh verification and approval.
-- Recurring-task cadence is now fully native to task frontmatter: cycle starts dispatch an ordinary task-driver wake, legacy schedule/check-in dual-read behavior is removed after migration, and canonical files are rewritten from legacy statuses on read.
-
-### Fixed
-
-- Fixed recurring tasks created with a schedule but no explicit wake being dispatched immediately. Their first cycle is now scheduled at the next cron occurrence, matching subsequent cycles.
 
 ## [0.8.8] - 2026-07-18
 
