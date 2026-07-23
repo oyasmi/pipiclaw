@@ -32,6 +32,7 @@ export type TaskLifecycleAction =
 	| "candidate"
 	| "verify"
 	| "done"
+	| "skip"
 	| "cancel"
 	| "set"
 	| "pause"
@@ -51,6 +52,7 @@ const TRANSITIONS: Record<TaskLifecycleAction, TransitionRule> = {
 	candidate: { from: ["active", "waiting"], to: "verifying" },
 	verify: { from: ["verifying"], to: "verifying" },
 	done: { from: ["active", "waiting", "verifying"], to: "done" },
+	skip: { from: ["active", "waiting", "verifying"], to: "done" },
 	cancel: { from: ["active", "waiting", "verifying", "paused"], to: "cancelled" },
 	set: { from: ["active", "waiting", "verifying", "paused", "done"], to: "caller" },
 	pause: { from: ["active", "waiting", "verifying"], to: "paused" },

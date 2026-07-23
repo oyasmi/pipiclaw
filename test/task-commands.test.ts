@@ -149,16 +149,36 @@ describe("handleTasksCommand", () => {
 
 	it("renders token and verification stats without an LLM turn", async () => {
 		const control = createDefaultTaskControl();
-		control.usage = { attempts: 3, tokens: 1200, costUsd: 0.12, wallTimeMinutes: 4.5 };
+		control.usage = { attempts: 3, tokens: 1200, costUsd: 0.12, costKnown: true, wallTimeMinutes: 4.5 };
+		control.lifetimeUsage = {
+			attempts: 8,
+			tokens: 4200,
+			costUsd: 0.42,
+			costKnown: true,
+			wallTimeMinutes: 14.5,
+		};
 		control.verification.status = "passed";
 		await writeFile(
 			join(tasksDir, "measured.md"),
 			renderTaskDocument({ status: "in-progress", control }, STANDARD_BODY),
 		);
 		const out = await run("stats measured");
-		expect(out).toContain("attempts: 3/12");
-		expect(out).toContain("tokens: 1200");
+		expect(out).toContain("this cycle: 3/12 attempts, 1200 tokens");
+		expect(out).toContain("recorded lifetime: 8 attempts, 4200 tokens");
 		expect(out).toContain("verification: independent/passed");
+	});
+
+	it("renders unknown model cost as unavailable rather than zero", async () => {
+		const control = createDefaultTaskControl("evidence");
+		control.usage = { attempts: 1, tokens: 1200, costUsd: 0, costKnown: false, wallTimeMinutes: 1 };
+		control.lifetimeUsage = { ...control.usage };
+		await writeFile(
+			join(tasksDir, "unpriced.md"),
+			renderTaskDocument({ status: "in-progress", control }, STANDARD_BODY),
+		);
+		const out = await run("stats unpriced");
+		expect(out).toContain("1200 tokens, unavailable");
+		expect(out).not.toContain("$0.0000");
 	});
 
 	it("doctor detects approval made stale by a later task-body change", async () => {

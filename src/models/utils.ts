@@ -33,6 +33,16 @@ export function formatModelReference(model: Model<Api>): string {
 	return `${model.provider}/${model.id}`;
 }
 
+/**
+ * Pi fills omitted custom-model pricing with zero rates. An all-zero table therefore
+ * means "price unavailable", not reliably "free".
+ */
+export function hasKnownModelPricing(model: Model<Api> | undefined): boolean {
+	if (!model?.cost) return false;
+	const rates = [model.cost, ...(model.cost.tiers ?? [])];
+	return rates.some((rate) => rate.input > 0 || rate.output > 0 || rate.cacheRead > 0 || rate.cacheWrite > 0);
+}
+
 export function findExactModelReferenceMatch(
 	modelReference: string,
 	availableModels: Model<Api>[],

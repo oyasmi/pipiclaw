@@ -20,7 +20,7 @@ priority: 41
 
 仍开放且正文或进展发生变化时，用 `task_manage progress` 一次性记录：发生了什么、看到了什么证据、下一步是什么、status 与 `wake`。
 
-以下生命周期动作本身就是原子 checkpoint，不要再追加 progress：`candidate`、`done`、`cancel`。
+以下生命周期动作本身就是原子 checkpoint，不要再追加 progress：`candidate`、`done`、`skip`、`cancel`。
 
 `verify` 只更新 control、不改正文。PASS 后若还要等外部审批（approval），用 `task_manage set wake=<合理时间>` 停留在 `verifying` 车道——**只改 wake、不换状态**，离开 verifying 会作废 PASS——并请用户 `/tasks approve <id>`。门禁的绑定规则见 `task-closeout.md`。除此之外不要用 `set` 代替正常进度日志。
 
@@ -36,13 +36,13 @@ priority: 41
 
 ## 汇报与静默
 
-有用户需要知道的结果、风险、审批请求时正常汇报。纯内部周期检查且没有新结果时返回 `[SILENT]`，避免发空状态卡。完成时走 `task-closeout.md`。
+有用户需要知道的结果、风险、审批请求时正常汇报。周期 occurrence 因去重或产物已存在而明确不执行时，调用 `task_manage skip` 写入简短原因、让任务重新休眠，然后返回 `[SILENT]`；不能只静默而把周期留在 active。除此之外，确实不需要改变任务状态且没有新结果时直接返回 `[SILENT]`。完成时走 `task-closeout.md`。
 
 ---
 
 # 诊断与修复
 
-先用 `task_manage list` 看结构化状态；让用户用 `/tasks doctor` 看带 Next step 的一致性检查，用 `/tasks stats <id>` 看 attempts/token/cost/wall time、最近结果和 verifier 状态。
+先用 `task_manage list` 看结构化状态；让用户用 `/tasks doctor` 看带 Next step 的一致性检查，用 `/tasks stats <id>` 看本周期与累计 attempts/token/cost/wall time、最近结果和 verifier 状态。`cost: unavailable` 表示参与运行的模型缺少价格元数据，不表示免费。
 
 ## 被治理器暂停（paused + pausedBy=governor）
 

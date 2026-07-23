@@ -3,6 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { Executor } from "../executor.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
+import { hasKnownModelPricing } from "../models/utils.js";
 import type { MediaSender } from "../runtime/channel-context.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { PipiclawSessionSearchSettings } from "../settings.js";
@@ -225,6 +226,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				channelDir: ctx.channelDir,
 				channelId: ctx.channelId,
 				workingDirectory: ctx.securityContext.cwd,
+				costTrackingAvailable: hasKnownModelPricing(req(ctx.getCurrentModel, "getCurrentModel")()),
 			}),
 	},
 	{

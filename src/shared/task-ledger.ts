@@ -69,6 +69,15 @@ export const STANDARD_TASK_SECTIONS = [
 	{ label: "History", names: ["History", "历史"] },
 ] as const;
 
+/** Recurring task files are working context, not an unbounded audit log. */
+export const MAX_INLINE_TASK_HISTORY_ENTRIES = 8;
+export const MAX_INLINE_TASK_HISTORY_CHARS = 24 * 1024;
+const MAX_INLINE_TASK_HISTORY_ENTRY_CHARS = 4 * 1024;
+const HISTORY_OMISSION_NOTE =
+	"- Older cycle details omitted from working context; use session_search with the task id or cycle id to inspect cold history.";
+const HISTORY_TRUNCATION_NOTE =
+	"- Entry truncated in working context; use session_search with the task id or cycle id to inspect the complete cold history.";
+
 /** Validate/normalize a task id (filename without `.md`), rejecting path traversal. */
 export function normalizeTaskId(id: string): string {
 	const trimmed = id.trim();
@@ -330,6 +339,7 @@ export function appendCurrentCycleNote(content: string, note: string): string {
 		if (!match || !matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) continue;
 		sectionStart = index;
 		sectionLevel = match[1]?.length ?? 0;
+		break;
 	}
 	if (sectionStart === -1) {
 		throw new Error('Task body has no "Current Cycle" section; normalize the task skeleton first.');
@@ -352,6 +362,177 @@ export function appendCurrentCycleNote(content: string, note: string): string {
 }
 
 /**
+ * Upsert the completion evidence subsection inside Current Cycle.
+ *
+ * Evidence is part of the cycle log, not a new top-level section. This makes the next
+ * `startTaskCycle` fold it into the matching History entry and prevents repeated `done`
+ * attempts from appending duplicate evidence blocks.
+ */
+export function upsertCurrentCycleCompletionEvidence(content: string, evidenceLines: readonly string[]): string {
+	const lines = content.split("\n");
+	let currentStart = -1;
+	let currentLevel = 0;
+	for (let index = 0; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (!match || !matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) continue;
+		currentStart = index;
+		currentLevel = match[1]?.length ?? 0;
+		break;
+	}
+	if (currentStart === -1 || currentLevel >= 6) {
+		// Legacy/non-standard one-shot tasks were historically completable without the
+		// canonical skeleton. Keep that compatibility, but upsert one bounded top-level
+		// block instead of returning to the old append-only behavior.
+		const stripped = stripLegacyCompletionEvidence(content).content.replace(/\n+$/, "");
+		return `${stripped}\n\n## Completion Evidence\n\n${evidenceLines.join("\n")}\n`;
+	}
+
+	let currentEnd = lines.length;
+	for (let index = currentStart + 1; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
+		if (match && (match[1]?.length ?? 7) <= currentLevel) {
+			currentEnd = index;
+			break;
+		}
+	}
+
+	const evidenceLevel = currentLevel + 1;
+	let evidenceStart = -1;
+	let evidenceEnd = -1;
+	for (let index = currentStart + 1; index < currentEnd; index++) {
+		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (!match) continue;
+		const level = match[1]?.length ?? 7;
+		if (level === evidenceLevel && matchesTaskSectionTitle(match[2] ?? "", ["Completion Evidence"])) {
+			evidenceStart = index;
+			evidenceEnd = currentEnd;
+			for (let nested = index + 1; nested < currentEnd; nested++) {
+				const nestedHeading = /^(#{1,6})\s+/.exec(lines[nested] ?? "");
+				if (nestedHeading && (nestedHeading[1]?.length ?? 7) <= evidenceLevel) {
+					evidenceEnd = nested;
+					break;
+				}
+			}
+			break;
+		}
+	}
+	if (evidenceStart !== -1) {
+		lines.splice(evidenceStart, evidenceEnd - evidenceStart);
+		currentEnd -= evidenceEnd - evidenceStart;
+	}
+
+	while (currentEnd > currentStart + 1 && (lines[currentEnd - 1] ?? "").trim() === "") currentEnd--;
+	const block = [`${"#".repeat(evidenceLevel)} Completion Evidence`, "", ...evidenceLines, ""];
+	lines.splice(currentEnd, 0, ...block);
+	return lines.join("\n");
+}
+
+function stripLegacyCompletionEvidence(content: string): {
+	content: string;
+	blocks: string[];
+} {
+	const lines = content.split("\n");
+	const blocks: string[] = [];
+	for (let index = 0; index < lines.length; ) {
+		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (
+			!heading ||
+			(heading[1]?.length ?? 0) !== 2 ||
+			!matchesTaskSectionTitle(heading[2] ?? "", ["Completion Evidence"])
+		) {
+			index++;
+			continue;
+		}
+		let end = lines.length;
+		for (let nested = index + 1; nested < lines.length; nested++) {
+			const nextHeading = /^(#{1,6})\s+/.exec(lines[nested] ?? "");
+			if (nextHeading && (nextHeading[1]?.length ?? 7) <= 2) {
+				end = nested;
+				break;
+			}
+		}
+		blocks.push(lines.slice(index, end).join("\n").trim());
+		lines.splice(index, end - index);
+		while (
+			index > 0 &&
+			index < lines.length &&
+			(lines[index - 1] ?? "").trim() === "" &&
+			(lines[index] ?? "").trim() === ""
+		) {
+			lines.splice(index, 1);
+		}
+	}
+	return { content: lines.join("\n"), blocks };
+}
+
+function clipHistoryEntry(entry: string): string {
+	if (entry.length <= MAX_INLINE_TASK_HISTORY_ENTRY_CHARS) return entry.trim();
+	const suffix = `\n${HISTORY_TRUNCATION_NOTE}`;
+	const limit = Math.max(0, MAX_INLINE_TASK_HISTORY_ENTRY_CHARS - suffix.length);
+	let clipped = entry.slice(0, limit);
+	const lastNewline = clipped.lastIndexOf("\n");
+	if (lastNewline > 0) clipped = clipped.slice(0, lastNewline);
+	return `${clipped.trimEnd()}${suffix}`;
+}
+
+function compactTaskHistory(content: string, alreadyOmitted = false): string {
+	const lines = content.split("\n");
+	let historyStart = -1;
+	let historyLevel = 0;
+	for (let index = 0; index < lines.length; index++) {
+		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (heading && matchesTaskSectionTitle(heading[2] ?? "", ["History", "历史"])) {
+			historyStart = index;
+			historyLevel = heading[1]?.length ?? 0;
+			break;
+		}
+	}
+	if (historyStart === -1 || historyLevel >= 6) return content;
+
+	let historyEnd = lines.length;
+	for (let index = historyStart + 1; index < lines.length; index++) {
+		const heading = /^(#{1,6})\s+/.exec(lines[index] ?? "");
+		if (heading && (heading[1]?.length ?? 7) <= historyLevel) {
+			historyEnd = index;
+			break;
+		}
+	}
+
+	const entryStarts: number[] = [];
+	for (let index = historyStart + 1; index < historyEnd; index++) {
+		const heading = /^(#{1,6})\s+/.exec(lines[index] ?? "");
+		if ((heading?.[1]?.length ?? 0) === historyLevel + 1) entryStarts.push(index);
+	}
+	if (entryStarts.length === 0) return content;
+
+	const entries = entryStarts.map((start, index) =>
+		clipHistoryEntry(
+			lines
+				.slice(start, entryStarts[index + 1] ?? historyEnd)
+				.join("\n")
+				.trim(),
+		),
+	);
+	const kept: string[] = [];
+	let chars = 0;
+	for (const entry of entries) {
+		const nextChars = chars + entry.length + (kept.length > 0 ? 2 : 0);
+		if (kept.length >= MAX_INLINE_TASK_HISTORY_ENTRIES || nextChars > MAX_INLINE_TASK_HISTORY_CHARS) break;
+		kept.push(entry);
+		chars = nextChars;
+	}
+	const omitted = alreadyOmitted || kept.length < entries.length;
+	const replacement = [
+		"",
+		...kept.flatMap((entry, index) => (index === kept.length - 1 ? [entry] : [entry, ""])),
+		...(omitted ? ["", HISTORY_OMISSION_NOTE] : []),
+		"",
+	];
+	lines.splice(historyStart + 1, historyEnd - historyStart - 1, ...replacement);
+	return lines.join("\n");
+}
+
+/**
  * Close the visible current-cycle notes into History and open a fresh cycle.
  * Periodic task cycles deliberately use this small, deterministic transformation
  * instead of asking the model to hand-edit headings and risk appending future
@@ -360,7 +541,8 @@ export function appendCurrentCycleNote(content: string, note: string): string {
 export function startTaskCycle(content: string, cycleId: string): string {
 	const normalizedCycleId = cycleId.trim();
 	if (!normalizedCycleId) throw new Error("Cycle id must not be empty.");
-	const lines = content.split("\n");
+	const legacy = stripLegacyCompletionEvidence(content);
+	const lines = legacy.content.split("\n");
 	let currentStart = -1;
 	let currentLevel = 0;
 	let historyStart = -1;
@@ -389,10 +571,24 @@ export function startTaskCycle(content: string, cycleId: string): string {
 			break;
 		}
 	}
-	const previous = lines
+	let previous = lines
 		.slice(currentStart + 1, currentEnd)
 		.join("\n")
 		.trim();
+	const latestLegacyEvidence = legacy.blocks.at(-1);
+	if (latestLegacyEvidence && !/^(#{1,6})\s+Completion Evidence\b/im.test(previous)) {
+		previous = `${previous}\n\n${latestLegacyEvidence.replace(/^##\s+/, "### ")}`.trim();
+	}
+	// The archived cycle gets its own H3 entry under History. Demote subsections that
+	// were nested under the H2 Current Cycle so they remain children of that entry.
+	previous = previous
+		.split("\n")
+		.map((line) => {
+			const heading = /^(#{1,6})(\s+.*)$/.exec(line);
+			const level = heading?.[1]?.length ?? 0;
+			return heading && level > currentLevel && level < 6 ? `#${line}` : line;
+		})
+		.join("\n");
 	const previousHeading = (lines[currentStart] ?? "## Current Cycle").replace(/^#+\s*/, "").trim();
 	const replacement = [
 		`${"#".repeat(currentLevel)} Current Cycle (${normalizedCycleId})`,
@@ -409,7 +605,8 @@ export function startTaskCycle(content: string, cycleId: string): string {
 	// A nested history heading would be unusual; inserting directly after the
 	// canonical History heading remains predictable and preserves all older notes.
 	lines.splice(shiftedHistoryStart + 1, 0, ...historyEntry);
-	return resetTaskAcceptanceCheckboxes(lines.join("\n"));
+	const compacted = compactTaskHistory(lines.join("\n"), legacy.blocks.length > 1);
+	return resetTaskAcceptanceCheckboxes(compacted);
 }
 
 /**

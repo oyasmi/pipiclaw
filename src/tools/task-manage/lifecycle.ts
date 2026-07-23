@@ -15,6 +15,7 @@ import { RecoverableToolError } from "../tool-details.js";
 import {
 	appendCompletionEvidence,
 	applySet,
+	assertCostBudgetAvailable,
 	cleanupTaskEvents,
 	markdownValue,
 	readTaskDocument,
@@ -29,6 +30,7 @@ import { assertVerificationAttestationMatches } from "./verification.js";
 
 export async function setTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
 	if (!request.id) throw new RecoverableToolError('action "set" requires an id.');
+	assertCostBudgetAvailable(options, request);
 	const id = normalizeTaskId(request.id);
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id, request.control !== undefined);
@@ -147,6 +149,15 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 	if (fields.control) {
 		fields.control.lastOutcome = "verified";
 		fields.control.blockedReason = undefined;
+		if (fields.control.verification.mode === "evidence") {
+			fields.control.verification = {
+				mode: "evidence",
+				status: "passed",
+				evidence: requiredField(request.evidence, "evidence", "done"),
+				bodyHash: taskBodyHash(bodyWithEvidence),
+				checkedAt: new Date().toISOString(),
+			};
+		}
 	}
 
 	// A recurring task (schedule frontmatter) sleeps in place until its next occurrence. The
@@ -179,6 +190,49 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 		archived,
 		deletedEvents: deleted,
 		notice: `任务 \`${id}\` 已完成（${disposition}${cleanup}）。`,
+	};
+}
+
+/**
+ * Close one recurring occurrence without pretending its DoD was completed.
+ *
+ * This is the stateful counterpart of a silent/deduplicated wake: merely returning
+ * `[SILENT]` would leave the runtime-opened cycle active with no wake and cause retries.
+ */
+export async function skipTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
+	if (!request.id) throw new RecoverableToolError('action "skip" requires an id.');
+	const id = normalizeTaskId(request.id);
+	const reason = requiredField(request.reason, "reason", "skip");
+	const taskPath = join(tasksDir(options), `${id}.md`);
+	const { fields, body } = await readTaskDocument(taskPath, id);
+	resolveTaskTransition("skip", id, normalizeStoredStatus(fields.status));
+	if (!fields.schedule) {
+		throw new RecoverableToolError(
+			`Task "${id}" is not recurring; use action "cancel" to abandon it or "done" after satisfying its DoD.`,
+		);
+	}
+	const children = await unfinishedChildren(options, id);
+	if (children.length > 0) {
+		throw new RecoverableToolError(
+			`Task "${id}" still has unfinished child tasks: ${children.join(", ")}. Finish, cancel, or re-parent them before skipping this occurrence.`,
+		);
+	}
+	const skippedBody = appendCurrentCycleNote(body, `Skipped: ${reason}`);
+	if (fields.control) {
+		fields.control.lastOutcome = "skipped";
+		fields.control.blockedReason = undefined;
+		fields.control.verification = { mode: fields.control.verification.mode, status: "pending" };
+	}
+	await writeFileAtomically(taskPath, renderTaskFile({ ...fields, status: "done", wake: undefined }, skippedBody));
+	const { deleted } = await cleanupTaskEvents(options, id);
+	return {
+		action: "skip",
+		id,
+		path: taskPath,
+		status: "done",
+		archived: false,
+		deletedEvents: deleted,
+		notice: `任务 \`${id}\` 本周期已跳过并休眠至下一次计划唤醒；若无需通知用户，请回复 [SILENT]。`,
 	};
 }
 

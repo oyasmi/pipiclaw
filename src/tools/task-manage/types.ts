@@ -1,6 +1,15 @@
 import type { TaskControl, TaskControlPatch } from "../../tasks/control.js";
 
-export type TaskManageAction = "create" | "progress" | "candidate" | "set" | "verify" | "done" | "cancel" | "list";
+export type TaskManageAction =
+	| "create"
+	| "progress"
+	| "candidate"
+	| "set"
+	| "verify"
+	| "done"
+	| "skip"
+	| "cancel"
+	| "list";
 
 export interface TaskManageResult {
 	action: TaskManageAction;
@@ -47,6 +56,8 @@ export interface TaskManageToolOptions {
 	channelId: string;
 	/** Project checkout whose artifact state an independent verifier binds to. */
 	workingDirectory?: string;
+	/** Whether the current main model has usable price metadata for maxCostUsd. */
+	costTrackingAvailable?: boolean;
 }
 
 export interface TaskFields {

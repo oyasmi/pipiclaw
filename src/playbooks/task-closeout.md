@@ -43,6 +43,8 @@ FAIL 后用 progress 记录失败证据、status 回 active，修复后重新 ca
 
 `task_manage done` 需要 summary 和可查证 evidence，可附 residualRisk。它检查 checkbox、依赖、child、外部授权、独立 PASS，再记录收尾、清理临时 task events；一次性任务归档，有 `schedule` frontmatter 的周期任务算出下一次 `wake` 并原地睡眠。
 
+周期 occurrence 因去重、同一产物已由更早触发完成等原因无需执行时，用 `task_manage skip` + reason。skip 只关闭本次 occurrence，不要求虚勾 DoD、不写 completion evidence，也不会取消后续 schedule。
+
 放弃用 `cancel` + reason，不伪装 done。cancel 要求先处理 child，随后归档并删除全部 task-owned events。
 
 完成结论必须来自证据：具体命令、测试结果、review、外部确认或明确的未运行理由。“看起来可以”不是 evidence。

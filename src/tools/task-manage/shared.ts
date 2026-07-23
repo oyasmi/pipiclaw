@@ -9,6 +9,7 @@ import {
 	renderStandardTaskBody,
 	renderTaskDocument,
 	taskBody,
+	upsertCurrentCycleCompletionEvidence,
 } from "../../shared/task-ledger.js";
 import { nextTaskWake, validateTaskSchedule } from "../../shared/task-schedule.js";
 import { applyTaskControlPatch, createDefaultTaskControl } from "../../tasks/control.js";
@@ -20,6 +21,18 @@ import type { TaskFields, TaskManageRequest, TaskManageToolOptions } from "./typ
 
 export function tasksDir(options: TaskManageToolOptions): string {
 	return join(options.channelDir, "tasks");
+}
+
+export function assertCostBudgetAvailable(options: TaskManageToolOptions, request: TaskManageRequest): void {
+	if (
+		request.control?.maxCostUsd !== undefined &&
+		request.control.maxCostUsd > 0 &&
+		options.costTrackingAvailable === false
+	) {
+		throw new RecoverableToolError(
+			"maxCostUsd requires model pricing, but the current model has no price metadata. Configure model pricing or use maxTokens instead.",
+		);
+	}
 }
 
 export function eventsDir(options: TaskManageToolOptions): string {
@@ -51,18 +64,12 @@ export function markdownValue(value: string): string {
 export function appendCompletionEvidence(body: string, request: TaskManageRequest): string {
 	const summary = requireNonEmpty(request.summary, "summary");
 	const evidence = requireNonEmpty(request.evidence, "evidence");
-	const lines = [
-		"## Completion Evidence",
-		"",
-		`- Summary: ${markdownValue(summary)}`,
-		`- Evidence: ${markdownValue(evidence)}`,
-	];
+	const lines = [`- Summary: ${markdownValue(summary)}`, `- Evidence: ${markdownValue(evidence)}`];
 	const residualRisk = request.residualRisk?.trim();
 	if (residualRisk) {
 		lines.push(`- Residual risk: ${markdownValue(residualRisk)}`);
 	}
-	const normalizedBody = body.endsWith("\n") ? body.replace(/\n+$/, "\n") : `${body}\n`;
-	return `${normalizedBody}\n${lines.join("\n")}\n`;
+	return upsertCurrentCycleCompletionEvidence(body, lines);
 }
 
 function normalizeCreateStatus(status: string | undefined): (typeof SETTABLE_STATUSES)[number] {

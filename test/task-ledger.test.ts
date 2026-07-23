@@ -6,6 +6,7 @@ import {
 	appendCurrentCycleNote,
 	extractTaskTitle,
 	isTaskActionable,
+	MAX_INLINE_TASK_HISTORY_ENTRIES,
 	missingStandardTaskSections,
 	normalizeTaskId,
 	parseTaskFrontmatter,
@@ -14,6 +15,7 @@ import {
 	startTaskCycle,
 	taskBody,
 	uncheckedTaskAcceptanceItems,
+	upsertCurrentCycleCompletionEvidence,
 } from "../src/shared/task-ledger.js";
 
 const NOW = Date.parse("2026-07-08T12:00:00+08:00");
@@ -168,6 +170,55 @@ describe("standard task skeleton", () => {
 		expect(next).toContain("### Current Cycle — closed");
 		expect(next).toContain("- Published the previous report.");
 		expect(appendCurrentCycleNote(next, "Started collecting inputs.")).toContain("- Started collecting inputs.");
+	});
+
+	it("upserts completion evidence inside Current Cycle instead of appending top-level blocks", () => {
+		const body = renderStandardTaskBody({ title: "Weekly", goal: "G", dod: "- [x] D" });
+		const first = upsertCurrentCycleCompletionEvidence(body, ["- Summary: first", "- Evidence: old"]);
+		const second = upsertCurrentCycleCompletionEvidence(first, ["- Summary: second", "- Evidence: new"]);
+		expect(second.match(/^### Completion Evidence$/gm)).toHaveLength(1);
+		expect(second).not.toContain("Summary: first");
+		expect(second).toContain("Summary: second");
+		expect(second).not.toMatch(/^## Completion Evidence$/m);
+		expect(second.indexOf("### Completion Evidence")).toBeLessThan(second.indexOf("## History"));
+	});
+
+	it("keeps recurring working history bounded and gives a cold-history next step", () => {
+		let body = renderStandardTaskBody({ title: "Daily", goal: "G", dod: "- [x] D" });
+		for (let cycle = 1; cycle <= 12; cycle++) {
+			body = upsertCurrentCycleCompletionEvidence(body, [
+				`- Summary: cycle ${cycle}`,
+				`- Evidence: ${"e".repeat(5000)}`,
+			]);
+			body = startTaskCycle(body, `cycle-${cycle}`);
+			body = appendCurrentCycleNote(body, `working on cycle ${cycle + 1}`);
+		}
+		expect(body.match(/^### Current Cycle.*— closed$/gm)?.length ?? 0).toBeLessThanOrEqual(
+			MAX_INLINE_TASK_HISTORY_ENTRIES,
+		);
+		expect(body).toContain("use session_search with the task id or cycle id");
+		expect(body).toContain("Entry truncated in working context");
+		expect(body).not.toMatch(/^## Completion Evidence$/m);
+	});
+
+	it("migrates legacy top-level evidence into the closing cycle and drops older duplicates", () => {
+		const body = `${renderStandardTaskBody({ title: "Daily", goal: "G", dod: "- [x] D" })}
+## Completion Evidence
+
+- Summary: older
+- Evidence: old
+
+## Completion Evidence
+
+- Summary: latest
+- Evidence: new
+`;
+		const next = startTaskCycle(body, "cycle-2");
+		expect(next).not.toMatch(/^## Completion Evidence$/m);
+		expect(next).toContain("Completion Evidence");
+		expect(next).toContain("Summary: latest");
+		expect(next).not.toContain("Summary: older");
+		expect(next).toContain("use session_search with the task id or cycle id");
 	});
 
 	// Regression: startTaskCycle archived the closed cycle's log but left the DoD/Verification

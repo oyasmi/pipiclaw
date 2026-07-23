@@ -346,6 +346,7 @@ describe("TaskDriver", () => {
 		await finishTaskAttempt(join(workspaceDir, "dm_a"), "work", {
 			tokens: 100,
 			costUsd: 0.1,
+			costKnown: true,
 			wallTimeMinutes: 1,
 			failed: false,
 			finishedAt: new Date(NOW.getTime() + 1_000),

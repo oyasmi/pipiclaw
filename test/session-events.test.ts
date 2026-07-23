@@ -178,6 +178,47 @@ describe("usage accounting", () => {
 		expect(runState.assistantUsage.input).toBe(100);
 	});
 
+	it("distinguishes known model pricing from an all-zero unknown cost", async () => {
+		const unknownUsage = {
+			...assistantUsage,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const unknownState = createEmptyRunState();
+		await handleSessionEvent(
+			{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					provider: "custom",
+					model: "unpriced",
+					stopReason: "endTurn",
+					content: [],
+					usage: unknownUsage,
+				},
+			},
+			handlerContext(createContext(), unknownState, { isModelCostKnown: () => false }),
+		);
+		expect(unknownState.usageSources).toBe(1);
+		expect(unknownState.costKnown).toBe(false);
+
+		const knownState = createEmptyRunState();
+		await handleSessionEvent(
+			{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					provider: "priced",
+					model: "model",
+					stopReason: "endTurn",
+					content: [],
+					usage: unknownUsage,
+				},
+			},
+			handlerContext(createContext(), knownState, { isModelCostKnown: () => true }),
+		);
+		expect(knownState.costKnown).toBe(true);
+	});
+
 	it("records sub-agent usage separately and excludes it from assistantUsage (no double counting)", async () => {
 		const ctx = createContext();
 		const runState = createEmptyRunState();

@@ -231,7 +231,7 @@ async function listTasks(channelDir: string): Promise<string> {
 
 	const blocks = entries.map((entry) => {
 		const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "active") : "⚠ unreadable frontmatter";
-		const detail = [`  status: ${status}`, `wake: ${relativeWake(entry.wakeMs, now)}`];
+		const detail = [`  status: ${status}`, `next wake: ${relativeWake(entry.wakeMs, now)}`];
 		const control = entry.frontmatter.control;
 		if (control) {
 			detail.push(`priority: ${control.priority}`);
@@ -246,8 +246,14 @@ async function listTasks(channelDir: string): Promise<string> {
 			if (control.dependsOn.length > 0) detail.push(`depends: ${control.dependsOn.join(",")}`);
 			if (control.nextAction) detail.push(`next: ${control.nextAction}`);
 			if (control.worktree?.branch) detail.push(`branch: ${control.worktree.branch}`);
+			if (control.cycleId) {
+				detail.push(`${status === "done" ? "last" : "current"} cycle: ${control.cycleId}`);
+			}
 		}
 		if (entry.frontmatter.recurrence) detail.push(`recurrence: ${entry.frontmatter.recurrence}`);
+		if (entry.frontmatter.schedule) {
+			detail.push(`schedule timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone} (host)`);
+		}
 		return `- ${entry.id} — ${entry.title}\n${detail.join("   ")}`;
 	});
 	return `# Tasks: ${entries.length} active\n\n${blocks.join("\n")}`;
@@ -347,12 +353,14 @@ function renderUsageLine(entry: TaskLedgerEntry): string {
 	const control = entry.frontmatter.control;
 	if (!control) return `- ${entry.id}: legacy task (no governed usage recorded)`;
 	const verification = control.verification;
+	const cycleCost = control.usage.costKnown ? `$${control.usage.costUsd.toFixed(4)}` : "unavailable";
+	const lifetimeCost = control.lifetimeUsage.costKnown
+		? `$${control.lifetimeUsage.costUsd.toFixed(4)}`
+		: "unavailable";
 	return [
 		`- ${entry.id} — ${entry.title}`,
-		`  attempts: ${control.usage.attempts}/${control.budget.maxAttempts}`,
-		`  tokens: ${control.usage.tokens}`,
-		`  cost: $${control.usage.costUsd.toFixed(4)}`,
-		`  wall time: ${control.usage.wallTimeMinutes.toFixed(1)}m`,
+		`  this cycle: ${control.usage.attempts}/${control.budget.maxAttempts} attempts, ${control.usage.tokens} tokens, ${cycleCost}, ${control.usage.wallTimeMinutes.toFixed(1)}m`,
+		`  recorded lifetime: ${control.lifetimeUsage.attempts} attempts, ${control.lifetimeUsage.tokens} tokens, ${lifetimeCost}, ${control.lifetimeUsage.wallTimeMinutes.toFixed(1)}m`,
 		`  last outcome: ${control.lastOutcome}`,
 		`  verification: ${verification.mode}/${verification.status}`,
 	].join("\n");
@@ -382,13 +390,31 @@ async function taskStats(options: HandleTasksCommandOptions, idInput?: string): 
 	const totals = governed.reduce(
 		(total, entry) => {
 			const usage = entry.frontmatter.control!.usage;
+			const lifetime = entry.frontmatter.control!.lifetimeUsage;
 			total.attempts += usage.attempts;
 			total.tokens += usage.tokens;
 			total.costUsd += usage.costUsd;
+			total.costKnown &&= usage.costKnown;
 			total.wallTimeMinutes += usage.wallTimeMinutes;
+			total.lifetimeAttempts += lifetime.attempts;
+			total.lifetimeTokens += lifetime.tokens;
+			total.lifetimeCostUsd += lifetime.costUsd;
+			total.lifetimeCostKnown &&= lifetime.costKnown;
+			total.lifetimeWallTimeMinutes += lifetime.wallTimeMinutes;
 			return total;
 		},
-		{ attempts: 0, tokens: 0, costUsd: 0, wallTimeMinutes: 0 },
+		{
+			attempts: 0,
+			tokens: 0,
+			costUsd: 0,
+			costKnown: true,
+			wallTimeMinutes: 0,
+			lifetimeAttempts: 0,
+			lifetimeTokens: 0,
+			lifetimeCostUsd: 0,
+			lifetimeCostKnown: true,
+			lifetimeWallTimeMinutes: 0,
+		},
 	);
 	const verified = governed.filter((entry) => entry.frontmatter.control?.verification.status === "passed").length;
 	const stalled = governed.filter((entry) => entry.frontmatter.control?.lastOutcome === "failed").length;
@@ -396,10 +422,8 @@ async function taskStats(options: HandleTasksCommandOptions, idInput?: string): 
 		"# Task Stats",
 		"",
 		`governed tasks: ${governed.length}/${entries.length}`,
-		`attempts: ${totals.attempts}`,
-		`tokens: ${totals.tokens}`,
-		`cost: $${totals.costUsd.toFixed(4)}`,
-		`wall time: ${totals.wallTimeMinutes.toFixed(1)}m`,
+		`this cycle: ${totals.attempts} attempts, ${totals.tokens} tokens, ${totals.costKnown ? `$${totals.costUsd.toFixed(4)}` : "cost unavailable"}, ${totals.wallTimeMinutes.toFixed(1)}m`,
+		`recorded lifetime: ${totals.lifetimeAttempts} attempts, ${totals.lifetimeTokens} tokens, ${totals.lifetimeCostKnown ? `$${totals.lifetimeCostUsd.toFixed(4)}` : "cost unavailable"}, ${totals.lifetimeWallTimeMinutes.toFixed(1)}m`,
 		`verification PASS: ${verified}`,
 		`last-run failures: ${stalled}`,
 		"",

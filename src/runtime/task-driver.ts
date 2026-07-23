@@ -164,7 +164,8 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 			`Open tasks/${entry.id}.md and read ${join(PLAYBOOKS_DIR, "task-driving.md")} before acting. ` +
 			"Advance the next concrete step under the task's current control, acceptance, approval, and verification state. " +
 			`If complete or waiting, use the matching task_manage lifecycle/checkpoint action from the playbook.${verificationInstruction} ` +
-			"If the task explicitly says there is no change and no tool action is needed, do not call task_manage; respond with exactly [SILENT]. Otherwise, if this wake produces no user-visible change or result, respond with exactly [SILENT].",
+			"For a recurring occurrence intentionally not run because it is duplicate or already satisfied, call task_manage skip with the reason, then respond with exactly [SILENT]. " +
+			"If no task state or tool action is needed and this wake produces no user-visible result, respond with exactly [SILENT].",
 		ts: String(nowMs),
 		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
@@ -255,6 +256,10 @@ export class TaskDriver {
 	start(): void {
 		if (this.loopActive) return;
 		this.loopActive = true;
+		log.logInfo(
+			"Task driver started",
+			`schedule timezone=${Intl.DateTimeFormat().resolvedOptions().timeZone} (host)`,
+		);
 		void this.tick();
 	}
 

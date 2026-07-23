@@ -41,6 +41,8 @@ export interface AgentRunner {
 		stopReason: string;
 		errorMessage?: string;
 		usage?: UsageTotals;
+		/** False when any model used by the turn omitted pricing metadata. */
+		costKnown?: boolean;
 		durationMs?: number;
 		silent?: boolean;
 	}>;
@@ -96,6 +98,9 @@ export interface RunState {
 	totalUsage: UsageTotals;
 	/** Main-loop assistant usage only (excludes sub-agents). Feeds the turn ledger entry. */
 	assistantUsage: UsageTotals;
+	/** True only while every observed assistant/sub-agent usage source has known model pricing. */
+	costKnown: boolean;
+	usageSources: number;
 	stopReason: string;
 	errorMessage: string | undefined;
 	lastCompactionError: string | undefined;
@@ -126,6 +131,8 @@ export function createEmptyRunState(): RunState {
 			total: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
+		costKnown: true,
+		usageSources: 0,
 		stopReason: "stop",
 		errorMessage: undefined,
 		lastCompactionError: undefined,
@@ -153,6 +160,8 @@ export type AssistantContentPart =
 export interface AssistantEventMessage {
 	role: "assistant";
 	content: AssistantContentPart[];
+	provider?: string;
+	model?: string;
 	stopReason?: string;
 	errorMessage?: string;
 	usage?: AssistantUsage;

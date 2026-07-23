@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
+import { parseTaskFrontmatter } from "../src/shared/task-ledger.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
@@ -163,6 +164,22 @@ describe("manageTask", () => {
 					evidence: "Summary text checked against the DoD.",
 				}),
 			).resolves.toMatchObject({ status: "done" });
+		});
+
+		it("rejects maxCostUsd when the current model has no pricing metadata", async () => {
+			await expect(
+				manageTask(
+					{ ...options, costTrackingAvailable: false },
+					{
+						action: "create",
+						id: "unknown-cost",
+						title: "Unknown cost",
+						goal: "Stay within budget",
+						dod: "- [ ] done",
+						control: { maxCostUsd: 1 },
+					},
+				),
+			).rejects.toThrow(/Configure model pricing or use maxTokens/);
 		});
 
 		it("rejects create without required body fields", async () => {
@@ -735,6 +752,74 @@ describe("manageTask", () => {
 			expect(onDisk).toContain("schedule: 30 9 * * 1");
 			// wake is the next Monday 09:30 occurrence (host timezone).
 			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
+		});
+
+		it("records evidence-mode completion as a self-check PASS inside Current Cycle", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "evidence-pass",
+				title: "Evidence pass",
+				goal: "Produce a checked result",
+				dod: "- [x] result checked",
+				schedule: "30 9 * * 1",
+				control: { verificationMode: "evidence" },
+			});
+			await manageTask(options, {
+				action: "done",
+				id: "evidence-pass",
+				summary: "Result produced.",
+				evidence: "Deterministic check passed.",
+			});
+			const onDisk = await readFile(join(tasksDir, "evidence-pass.md"), "utf-8");
+			const control = parseTaskFrontmatter(onDisk).control;
+			expect(control?.lastOutcome).toBe("verified");
+			expect(control?.verification).toMatchObject({
+				mode: "evidence",
+				status: "passed",
+				evidence: "Deterministic check passed.",
+			});
+			expect(control?.verification.checkedAt).toBeTruthy();
+			expect(control?.verification.bodyHash).toMatch(/^[a-f0-9]{64}$/);
+			expect(onDisk.match(/^### Completion Evidence$/gm)).toHaveLength(1);
+			expect(onDisk).not.toMatch(/^## Completion Evidence$/m);
+		});
+	});
+
+	describe("skip", () => {
+		it("closes one recurring occurrence without checking DoD or writing completion evidence", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "dedup",
+				title: "Deduplicated run",
+				goal: "Produce one report per day",
+				dod: "- [ ] report produced",
+				schedule: "30 9 * * *",
+			});
+			const result = await manageTask(options, {
+				action: "skip",
+				id: "dedup",
+				reason: "The manual run already produced today's report.",
+			});
+			expect(result).toMatchObject({ action: "skip", status: "done", archived: false });
+			const onDisk = await readFile(join(tasksDir, "dedup.md"), "utf-8");
+			expect(onDisk).toContain("status: done");
+			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
+			expect(onDisk).toContain("Skipped: The manual run already produced today's report.");
+			expect(onDisk).not.toContain("Completion Evidence");
+			expect(parseTaskFrontmatter(onDisk).control?.lastOutcome).toBe("skipped");
+		});
+
+		it("rejects skip for a one-shot task with an actionable next step", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "one-shot",
+				title: "One shot",
+				goal: "Finish once",
+				dod: "- [ ] done",
+			});
+			await expect(manageTask(options, { action: "skip", id: "one-shot", reason: "not today" })).rejects.toThrow(
+				/use action "cancel".*"done"/,
+			);
 		});
 	});
 

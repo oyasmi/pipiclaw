@@ -1,7 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TaskControlPatch } from "../tasks/control.js";
 import { createTask } from "./task-manage/create.js";
-import { cancelTask, doneTask, listTasks, progressTask, setTask } from "./task-manage/lifecycle.js";
+import { cancelTask, doneTask, listTasks, progressTask, setTask, skipTask } from "./task-manage/lifecycle.js";
 import { parseAction, taskManageSchema } from "./task-manage/schema.js";
 import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./task-manage/types.js";
 import { candidateTask, verifyTask } from "./task-manage/verification.js";
@@ -36,6 +36,8 @@ export async function manageTask(
 			return verifyTask(options, request);
 		case "done":
 			return doneTask(options, request);
+		case "skip":
+			return skipTask(options, request);
 		case "cancel":
 			return cancelTask(options, request);
 		case "list":
@@ -49,7 +51,7 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 		label: "task_manage",
 		description:
 			"Manage governed persistent tasks: create, atomically checkpoint progress/control state, import an independent " +
-			"verifier attestation, complete verified work, cancel abandoned work, or list tasks. Use progress for routine " +
+			"verifier attestation, complete verified work, skip one recurring occurrence, cancel abandoned work, or list tasks. Use progress for routine " +
 			"end-of-turn checkpoints; use write/edit only for substantial Goal/DoD/Manual/Verification changes.",
 		parameters: taskManageSchema,
 		execute: async (

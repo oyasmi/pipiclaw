@@ -37,6 +37,14 @@ describe("task control", () => {
 		expect(taskBudgetViolation(control, 0)).toContain("token budget exhausted");
 	});
 
+	it("marks a configured cost budget unavailable when recorded usage has unknown pricing", () => {
+		const control = createDefaultTaskControl();
+		control.budget.maxCostUsd = 1;
+		control.usage.tokens = 100;
+		control.usage.costKnown = false;
+		expect(taskBudgetViolation(control, 0)).toContain("configure model pricing or replace maxCostUsd with maxTokens");
+	});
+
 	it("rejects malformed governance instead of silently applying defaults", () => {
 		const control = createDefaultTaskControl();
 		expect(() => parseTaskControl(JSON.stringify({ ...control, deadline: "someday" }))).toThrow(/deadline/);
@@ -70,6 +78,15 @@ describe("task control", () => {
 		expect(resetTaskControlForCycle(control, "2026-W29").externalApproval).toBe("not-required");
 	});
 
+	it("resets cycle usage while preserving recorded lifetime usage", () => {
+		const control = createDefaultTaskControl();
+		control.usage = { attempts: 2, tokens: 100, costUsd: 0, costKnown: false, wallTimeMinutes: 3 };
+		control.lifetimeUsage = { attempts: 5, tokens: 500, costUsd: 2, costKnown: true, wallTimeMinutes: 9 };
+		const reset = resetTaskControlForCycle(control, "cycle-2");
+		expect(reset.usage).toEqual({ attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 });
+		expect(reset.lifetimeUsage).toEqual(control.lifetimeUsage);
+	});
+
 	it("uses the verifier's final explicit marker", () => {
 		expect(parseVerificationVerdict("VERDICT: FAIL\nnotes\nVERDICT: PASS")).toBe("pass");
 		expect(parseVerificationVerdict("looks good")).toBeUndefined();
@@ -98,12 +115,20 @@ describe("task attempt accounting", () => {
 		await finishTaskAttempt(channelDir, "work", {
 			tokens: 123.9,
 			costUsd: 0.45,
+			costKnown: true,
 			wallTimeMinutes: 2.5,
 			failed: false,
 			finishedAt: new Date("2026-07-10T00:03:00.000Z"),
 		});
 		const stored = await readStoredTask(channelDir, "work", true);
-		expect(stored?.fields.control?.usage).toEqual({ attempts: 1, tokens: 123, costUsd: 0.45, wallTimeMinutes: 2.5 });
+		expect(stored?.fields.control?.usage).toEqual({
+			attempts: 1,
+			tokens: 123,
+			costUsd: 0.45,
+			costKnown: true,
+			wallTimeMinutes: 2.5,
+		});
+		expect(stored?.fields.control?.lifetimeUsage).toEqual(stored?.fields.control?.usage);
 		expect(await readFile(stored!.path, "utf-8")).toContain('"lastFinishedAt":"2026-07-10T00:03:00.000Z"');
 	});
 
@@ -114,6 +139,7 @@ describe("task attempt accounting", () => {
 		await finishTaskAttempt(channelDir, "quiet", {
 			tokens: 42,
 			costUsd: 0.01,
+			costKnown: true,
 			wallTimeMinutes: 0.5,
 			failed: false,
 			silent: true,
@@ -122,7 +148,8 @@ describe("task attempt accounting", () => {
 		const stored = await readStoredTask(channelDir, "quiet");
 		expect(stored?.fields.control).toMatchObject({
 			lastOutcome: "pending",
-			usage: { attempts: 0, tokens: 42, costUsd: 0.01, wallTimeMinutes: 0.5 },
+			usage: { attempts: 0, tokens: 42, costUsd: 0.01, costKnown: true, wallTimeMinutes: 0.5 },
+			lifetimeUsage: { attempts: 0, tokens: 42, costUsd: 0.01, costKnown: true, wallTimeMinutes: 0.5 },
 		});
 	});
 });

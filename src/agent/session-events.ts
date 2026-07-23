@@ -37,6 +37,7 @@ export interface SessionEventHandlerContext {
 	runState: RunState;
 	memoryLifecycle: MemoryLifecycle;
 	ledger: UsageLedger;
+	isModelCostKnown?: (modelReference: string) => boolean;
 	refreshSessionResources?: () => Promise<void>;
 }
 
@@ -155,6 +156,9 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 		if (subAgentDetails) {
 			mergeSubAgentUsage(runState.totalUsage, subAgentDetails);
+			runState.usageSources++;
+			runState.costKnown &&=
+				subAgentDetails.usage.cost.total > 0 || (context.isModelCostKnown?.(subAgentDetails.model) ?? false);
 			const label =
 				pending?.args &&
 				typeof pending.args === "object" &&
@@ -277,6 +281,14 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 
 			if (assistantMsg.usage) {
 				mergeAssistantUsage(runState, assistantMsg.usage);
+				runState.usageSources++;
+				const modelReference =
+					assistantMsg.provider && assistantMsg.model
+						? `${assistantMsg.provider}/${assistantMsg.model}`
+						: assistantMsg.model;
+				runState.costKnown &&=
+					assistantMsg.usage.cost.total > 0 ||
+					(modelReference ? (context.isModelCostKnown?.(modelReference) ?? false) : false);
 			}
 
 			const thinkingParts: string[] = [];

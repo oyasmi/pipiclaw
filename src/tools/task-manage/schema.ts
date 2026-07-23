@@ -19,6 +19,7 @@ const taskControlSchema = Type.Object({
 			Type.Literal("blocked"),
 			Type.Literal("failed"),
 			Type.Literal("verified"),
+			Type.Literal("skipped"),
 		]),
 	),
 	blockedReason: Type.Optional(Type.String({ description: "Why work cannot currently proceed; empty clears it." })),
@@ -34,9 +35,16 @@ const taskControlSchema = Type.Object({
 		}),
 	),
 	maxAttempts: Type.Optional(Type.Integer({ minimum: 1 })),
-	maxTokens: Type.Optional(Type.Number({ minimum: 0, description: "0 clears this budget." })),
-	maxCostUsd: Type.Optional(Type.Number({ minimum: 0, description: "0 clears this budget." })),
-	maxWallTimeMinutes: Type.Optional(Type.Number({ minimum: 0, description: "0 clears this budget." })),
+	maxTokens: Type.Optional(Type.Number({ minimum: 0, description: "Per-cycle boundary budget; 0 clears it." })),
+	maxCostUsd: Type.Optional(
+		Type.Number({
+			minimum: 0,
+			description: "Per-cycle boundary budget; requires current-model pricing metadata; 0 clears it.",
+		}),
+	),
+	maxWallTimeMinutes: Type.Optional(
+		Type.Number({ minimum: 0, description: "Per-cycle boundary budget; 0 clears it." }),
+	),
 	verificationMode: Type.Optional(
 		Type.Union([Type.Literal("evidence"), Type.Literal("independent")], {
 			description:
@@ -56,13 +64,14 @@ export const taskManageSchema = Type.Object({
 			Type.Literal("set"),
 			Type.Literal("verify"),
 			Type.Literal("done"),
+			Type.Literal("skip"),
 			Type.Literal("cancel"),
 			Type.Literal("candidate"),
 			Type.Literal("list"),
 		],
 		{
 			description:
-				'"create" writes a governed task; "progress" atomically checkpoints work; "candidate" requests independent verification; "set" repairs metadata; "verify" imports an independent verifier attestation; "done" closes verified work; "cancel" closes abandoned work; "list" returns tasks. Recurring cycles are reopened automatically by the runtime.',
+				'"create" writes a governed task; "progress" atomically checkpoints work; "candidate" requests independent verification; "set" repairs metadata; "verify" imports an independent verifier attestation; "done" closes verified work; "skip" closes one recurring occurrence without claiming completion; "cancel" closes abandoned work; "list" returns tasks. Recurring cycles are reopened automatically by the runtime.',
 		},
 	),
 	id: Type.Optional(
@@ -120,7 +129,9 @@ export const taskManageSchema = Type.Object({
 		}),
 	),
 	residualRisk: Type.Optional(Type.String({ description: "Optional for done: remaining risk or follow-up note." })),
-	reason: Type.Optional(Type.String({ description: "Required for cancel: why the task was abandoned." })),
+	reason: Type.Optional(
+		Type.String({ description: "Required for skip/cancel: why this occurrence was skipped or the task abandoned." }),
+	),
 });
 
 export function parseAction(action: string): TaskManageAction {
@@ -131,12 +142,13 @@ export function parseAction(action: string): TaskManageAction {
 		action === "set" ||
 		action === "verify" ||
 		action === "done" ||
+		action === "skip" ||
 		action === "cancel" ||
 		action === "list"
 	) {
 		return action;
 	}
 	throw new RecoverableToolError(
-		"Unsupported task action. Use create, progress, candidate, set, verify, done, cancel, or list.",
+		"Unsupported task action. Use create, progress, candidate, set, verify, done, skip, cancel, or list.",
 	);
 }

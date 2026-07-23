@@ -888,6 +888,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 							{
 								tokens: result.usage.total,
 								costUsd: result.usage.cost.total,
+								costKnown: result.costKnown === true,
 								wallTimeMinutes: result.durationMs / 60_000,
 								failed: result.stopReason === "error" || result.stopReason === "aborted",
 								silent: result.silent,

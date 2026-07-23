@@ -4,7 +4,7 @@ export type TaskIsolation = "shared" | "worktree";
 export type TaskSideEffects = "read-only" | "workspace" | "external";
 export type TaskVerificationMode = "evidence" | "independent";
 export type TaskVerificationStatus = "pending" | "passed" | "failed";
-export type TaskOutcome = "pending" | "running" | "progress" | "blocked" | "failed" | "verified";
+export type TaskOutcome = "pending" | "running" | "progress" | "blocked" | "failed" | "verified" | "skipped";
 /** Who paused a task: a user via /tasks pause, or the deterministic governor (ex-`escalated`). */
 export type TaskPausedBy = "user" | "governor";
 
@@ -19,6 +19,8 @@ export interface TaskUsage {
 	attempts: number;
 	tokens: number;
 	costUsd: number;
+	/** False when at least one contributing model omitted pricing metadata. */
+	costKnown: boolean;
 	wallTimeMinutes: number;
 }
 
@@ -53,7 +55,10 @@ export interface TaskControl {
 	approvedAt?: string;
 	approvalBodyHash?: string;
 	budget: TaskBudget;
+	/** Usage in the current recurring cycle (or the full one-shot task). */
 	usage: TaskUsage;
+	/** Non-resetting audit total; legacy controls seed it from their first parsed cycle usage. */
+	lifetimeUsage: TaskUsage;
 	verification: TaskVerification;
 	worktree?: TaskWorktree;
 	lastStartedAt?: string;
@@ -89,7 +94,7 @@ const ISOLATIONS: readonly TaskIsolation[] = ["shared", "worktree"];
 const SIDE_EFFECTS: readonly TaskSideEffects[] = ["read-only", "workspace", "external"];
 const VERIFICATION_MODES: readonly TaskVerificationMode[] = ["evidence", "independent"];
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
-const OUTCOMES: readonly TaskOutcome[] = ["pending", "running", "progress", "blocked", "failed", "verified"];
+const OUTCOMES: readonly TaskOutcome[] = ["pending", "running", "progress", "blocked", "failed", "verified", "skipped"];
 const PAUSED_BY: readonly TaskPausedBy[] = ["user", "governor"];
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
@@ -109,6 +114,16 @@ function finiteNonNegative(value: unknown, fallback = 0): number {
 		throw new Error("control usage values must be finite non-negative numbers");
 	}
 	return value;
+}
+
+function parseTaskUsage(value: Record<string, unknown>): TaskUsage {
+	const attempts = Math.floor(finiteNonNegative(value.attempts));
+	const tokens = Math.floor(finiteNonNegative(value.tokens));
+	const costUsd = finiteNonNegative(value.costUsd);
+	const wallTimeMinutes = finiteNonNegative(value.wallTimeMinutes);
+	const costKnown =
+		typeof value.costKnown === "boolean" ? value.costKnown : costUsd > 0 || (tokens === 0 && wallTimeMinutes === 0);
+	return { attempts, tokens, costUsd, costKnown, wallTimeMinutes };
 }
 
 function optionalPositive(value: unknown): number | undefined {
@@ -157,7 +172,8 @@ export function createDefaultTaskControl(mode: TaskVerificationMode = "independe
 		sideEffects: "workspace",
 		externalApproval: "not-required",
 		budget: { maxAttempts: 12 },
-		usage: { attempts: 0, tokens: 0, costUsd: 0, wallTimeMinutes: 0 },
+		usage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
+		lifetimeUsage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
 		verification: { mode, status: "pending" },
 	};
 }
@@ -174,6 +190,8 @@ export function parseTaskControl(raw: string): TaskControl {
 	}
 	const budget = isRecord(value.budget) ? value.budget : {};
 	const usage = isRecord(value.usage) ? value.usage : {};
+	const parsedUsage = parseTaskUsage(usage);
+	const lifetimeUsage = isRecord(value.lifetimeUsage) ? parseTaskUsage(value.lifetimeUsage) : { ...parsedUsage };
 	const verification = isRecord(value.verification) ? value.verification : {};
 	const worktree = isRecord(value.worktree) ? value.worktree : undefined;
 	const maxAttempts = optionalPositive(budget.maxAttempts);
@@ -233,12 +251,8 @@ export function parseTaskControl(raw: string): TaskControl {
 			maxCostUsd: optionalPositive(budget.maxCostUsd),
 			maxWallTimeMinutes: optionalPositive(budget.maxWallTimeMinutes),
 		},
-		usage: {
-			attempts: Math.floor(finiteNonNegative(usage.attempts)),
-			tokens: Math.floor(finiteNonNegative(usage.tokens)),
-			costUsd: finiteNonNegative(usage.costUsd),
-			wallTimeMinutes: finiteNonNegative(usage.wallTimeMinutes),
-		},
+		usage: parsedUsage,
+		lifetimeUsage,
 		verification: {
 			mode: enumValue(verification.mode, VERIFICATION_MODES, "independent"),
 			status: enumValue(verification.status, VERIFICATION_STATUSES, "pending"),
@@ -276,7 +290,7 @@ export function resetTaskControlForCycle(control: TaskControl, cycleId: string):
 		approvalBy: undefined,
 		approvedAt: undefined,
 		approvalBodyHash: undefined,
-		usage: { attempts: 0, tokens: 0, costUsd: 0, wallTimeMinutes: 0 },
+		usage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
 		verification: { mode: control.verification.mode, status: "pending" },
 		worktree: undefined,
 		lastStartedAt: undefined,
@@ -376,6 +390,9 @@ export function taskBudgetViolation(control: TaskControl, nowMs: number): string
 	}
 	if (control.budget.maxCostUsd !== undefined && control.usage.costUsd >= control.budget.maxCostUsd) {
 		return `cost budget exhausted ($${control.usage.costUsd.toFixed(4)}/$${control.budget.maxCostUsd.toFixed(4)})`;
+	}
+	if (control.budget.maxCostUsd !== undefined && !control.usage.costKnown) {
+		return "cost budget unavailable because at least one run model has no pricing; configure model pricing or replace maxCostUsd with maxTokens";
 	}
 	if (
 		control.budget.maxWallTimeMinutes !== undefined &&

@@ -43,6 +43,7 @@ import {
 	defaultModel,
 	findExactModelReferenceMatch,
 	formatModelReference,
+	hasKnownModelPricing,
 	resolveInitialModel,
 	wrapModelRegistry,
 } from "../models/utils.js";
@@ -259,6 +260,7 @@ export class ChannelRunner implements AgentRunner {
 		stopReason: string;
 		errorMessage?: string;
 		usage: UsageTotals;
+		costKnown: boolean;
 		durationMs: number;
 		silent: boolean;
 	}> {
@@ -594,6 +596,7 @@ export class ChannelRunner implements AgentRunner {
 			stopReason: this.runState.stopReason,
 			errorMessage: this.runState.errorMessage,
 			usage: { ...this.runState.totalUsage, cost: { ...this.runState.totalUsage.cost } },
+			costKnown: this.runState.usageSources > 0 && this.runState.costKnown,
 			durationMs: Date.now() - startedAt,
 			silent: this.runState.finalOutcome.kind === "silent",
 		};
@@ -1305,6 +1308,10 @@ export class ChannelRunner implements AgentRunner {
 				runState: this.runState,
 				memoryLifecycle: this.memoryLifecycle,
 				ledger: this.ledger,
+				isModelCostKnown: (reference) => {
+					const model = findExactModelReferenceMatch(reference, this.modelRegistry.getAvailable()).match;
+					return model ? hasKnownModelPricing(model) : false;
+				},
 				refreshSessionResources: async () => {
 					await this.refreshSessionResources();
 				},
