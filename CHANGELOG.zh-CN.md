@@ -2,10 +2,19 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
-## [Unreleased]
+## [0.8.10-beta.1] - 2026-07-24
+
+### 新增
+
+- 任务用量现在被诚实记账，并区分生命周期维度。新增不重置的 `lifetimeUsage`，在 `start-cycle` 会重置的每周期用量之外累计 attempt/token/cost/wall-time（磁盘上的 `control` 仍为 version 1，读取时自动回填）。`costKnown` 区分「真的免费」与「模型定价缺失」，因此缺价档会显示为 `unavailable` 而非误导性的 `$0.0000`；超出 `maxCostUsd` 变为带下一步的可恢复拒绝。`/tasks` 现在展示当前/上一周期、下一次 wake 与主机时区，driver 在启动时记录实际时区。
+- 新增仅周期任务可用的 `task_manage skip`：去重周期跳过 DoD/evidence 检查并直接回到 dormant，但未完成的子任务仍会阻止 skip。
+- evidence 模式下的 `done` 现在会写入完整的验收记录（`verification.status=passed`、evidence、时间戳与契约 hash），使通过 evidence 完成的任务满足与显式 verify 相同的验收契约。
 
 ### 变更
 
+- 将记忆维护流水线从四类任务收敛为三类：把 durable consolidation 与 growth review 合并为单一 `runMemoryCheckpointJob`，走原 consolidation 语义（一个游标、一个间隔、一道 gate）。调度器现在只跑 session refresh → memory checkpoint → structural maintenance；边界事件（compact/`/new`/shutdown）继续走 `runInlineConsolidation`，与 checkpoint 共享同一游标与提炼通道。此举同时退役了 skill 自动提升：删除 post-turn review 与 promotion-signal 路径，`extraction.ts` 去掉 skill 分支与 schema，skill 只能通过 `skill_manage` 显式创建（工具保留）。状态与设置相应收敛——四个时间戳/游标字段并为 `lastCheckpointAt`/`lastCheckpointEntryId`，growth 计数器删除，`normalizeState` 迁移旧字段，`memoryGrowth` 设置块整体删除，改为单一 `checkpointIntervalMinutes`（默认 20 分钟）；旧设置键静默忽略并按新默认运行。净删约 950 行（36 文件）。Beta API 变更：`memoryGrowth` 设置块与 `runGrowthReviewJob`/skill 自动写入内部实现已移除。
+- 三处任务控制简化，去掉并行的状态机而不改变行为（磁盘格式向后兼容——未知键读取时忽略，退役枚举值在下次写入时规范化）。删除 `control.isolation`：没有任何代码读取它做决策，且 `recordTaskWorktree` 已把同一事实镜像到 `control.worktree`，隔离意图现在在委派点声明一次，`control.worktree` 是否存在*即*隔离事实。`lastOutcome` 改为 runtime 专属：移除 lifecycle、verification 与 `/tasks pause|resume|run` 中全部 10 处手写赋值，并从工具 schema 与 `TaskControlPatch` 中删除，使模型无法再设置它——只有 attempt claim/finish 与 governor 升级会写入，枚举从 7 收敛到 5（verified/skipped 已无写入方），含义收敛为「上一次 agent 回合如何结束」（`/tasks stats` 标签改为「last run:」）。`sideEffects` 改为二元：`read-only` 与 `workspace` 在各处等价（仅检查 `=== "external"`），故合并，并在 schema 注明 `external` 触发审批门禁，使枚举的机器语义自文档化。
+- 为周期任务正文加上边界，并让 legacy 台账自愈。Evidence 现在在 `Current Cycle` 内 upsert；`History` 上限为 8 条 / 24 KiB（每条 4 KiB），截断时附 `session_search` 指引。legacy 格式台账在下次开启周期时自动迁移：丢弃重复的顶层 `Evidence`，保留最新一条，其余折入 `History`。当历史中存在多个 `Current Cycle` 标题时，始终选中正文内的当前周期，修复了进展被写入陈旧周期的问题。
 - 将 `subagent` 的调用参数从 20 个收缩到 15 个（spec 034），让委派回归"描述任务"，而不是"配置一套 runtime"。四个数值预算（`maxTurns`、`maxToolCalls`、`maxWallTimeSec`、`bashTimeoutSec`）合并为 `effort` 预设三档 `quick`/`standard`/`deep`，其中 `standard` 与原默认值完全一致；`contextMode` + `memory` 合并为单个 `context`（`none`/`session`/`relevant`）；`worktreePath` 移除。子代理 frontmatter 完全不变，仍支持全部精确数值，既有 `workspace/sub-agents/*.md` 行为一字不改。Beta API 变更：从 barrel 导出的 `SubAgentInvocationOverrides` 新增 `effort`/`context`，移除上述七个字段。
 - `isolation: worktree` 改为复用任务台账里已记录的 worktree，不再要求调用方传路径。这同时修掉一个真实缺陷：此前对同一 `taskId` 发起第二次 worktree 委派会新建一个并列的 worktree 并覆盖 `control.worktree`，把第一个变成孤儿。台账记录的路径若已从磁盘消失则重新创建；若指向频道 `tasks/worktrees/` 之外则直接报错，并提示用 `task_manage` 清理。
 
