@@ -200,13 +200,15 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 
 Pipiclaw 会启动一个内置 memory maintenance scheduler。它不使用 `workspace/events/`，也不会创建用户可见的 event 文件；删除或清空 `workspace/events/` 不会影响记忆维护。
 
-默认后台任务包括：
+后台任务与其内置间隔（常量，不可配）：
 
-| 任务 | 默认最小间隔 | LLM 调用前的本地 gate |
-|------|--------------|------------------------|
+| 任务 | 最小间隔 | LLM 调用前的本地 gate |
+|------|----------|------------------------|
 | Session refresh | 10 分钟 | channel dirty、已空闲、turn/tool 阈值满足、有新 session entry、有 meaningful material |
 | Memory checkpoint | 20 分钟 | channel dirty、已空闲、有新 entry、有 meaningful exchange、达到批量阈值 |
 | Structural maintenance | 6 小时 | `MEMORY.md` 或 `HISTORY.md` 超过 cleanup/folding 阈值 |
+
+另有两条固定约束：channel 静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个 channel。
 
 如果 gate 不通过，任务会跳过，并且不会调用 LLM。相关 skipped/action/failure 会写到对应 channel 的 `memory-review.jsonl`，便于排查 token 消耗和自动写回行为。
 
@@ -218,24 +220,17 @@ ${PIPICLAW_HOME:-~/.pipiclaw}/state/memory/<channelId>.json
 
 这些文件只用于调度，记录 dirty、阈值计数、最近运行时间和失败 backoff。它们不是记忆来源，不会进入普通 recall，也不需要用户编辑。
 
-降低 token 消耗的常用配置：
+维护节奏是内置常量，不再通过 `settings.json` 调节（spec 035）。降低 token 消耗可用的选项只有三个：
 
 ```json
 {
-  "memoryMaintenance": {
-    "minIdleMinutesBeforeLlmWork": 20,
-    "checkpointIntervalMinutes": 60,
-    "structuralMaintenanceIntervalHours": 12,
-    "maxConcurrentChannels": 1
-  },
-  "memoryRecall": {
-    "rerankWithModel": "auto"
-  },
-  "sessionSearch": {
-    "summarizeWithModel": false
-  }
+  "memoryRecall": { "rerankWithModel": false },
+  "sessionSearch": { "summarizeWithModel": false },
+  "memoryMaintenance": { "enabled": false }
 }
 ```
+
+前两项各砍掉一次可选的 LLM 调用，影响有限。第三项是关掉整个后台维护——`SESSION.md` 将只在边界事件（compaction、`/new`、shutdown）刷新，`MEMORY.md` 不再自动固化，长期使用会明显丢失连续性。**优先只关前两项**；确认后台维护是成本大头之后再考虑第三项。
 
 ### 精确提示词排查（Prompt Inspection）
 

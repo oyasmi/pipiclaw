@@ -12,6 +12,11 @@ import type { Transport } from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import * as log from "./log.js";
+import {
+	getMemoryMaintenanceTuning,
+	getSessionRefreshCadence,
+	type MemoryMaintenanceTuning,
+} from "./memory/maintenance-tuning.js";
 import type { ResponseMode } from "./runtime/dingtalk.js";
 import type { ConfigDiagnostic } from "./shared/config-diagnostics.js";
 
@@ -59,6 +64,19 @@ type TransportSetting = Transport;
 // ============================================================================
 // PipiclawSettingsManager - Simple settings for pipiclaw
 // ============================================================================
+//
+// Two layers, deliberately different shapes (spec 035 D2):
+//
+// - The `Pipiclaw*Settings` interfaces below are the *runtime* contract. They
+//   carry every value the consuming module needs and are passed around whole
+//   (`maintenance-gates.ts`, `scheduler.ts`, `recall.ts`, `session-search.ts`
+//   all destructure them), so they are the channel through which the constants
+//   reach their consumers.
+// - `PipiclawSettings` is the *user input* contract — what may appear in
+//   `settings.json`. It is much narrower: booleans and enums only. Numeric
+//   thresholds are algorithm parameters and live in code.
+//
+// The two therefore do not mirror each other, and that is the point.
 
 export interface PipiclawCompactionSettings {
 	enabled: boolean;
@@ -82,7 +100,7 @@ export interface PipiclawMemoryRecallSettings {
 
 // Whether the autonomous task mechanism runs at all is governed by the single
 // `tools.tasks.enabled` switch in tools.json (task_manage tool + TaskDriver +
-// task digest together); these settings only tune cadence and size.
+// task digest together). Cadence and size are fixed constants.
 export interface PipiclawTaskDigestSettings {
 	maxTasks: number;
 	maxChars: number;
@@ -104,27 +122,13 @@ export interface PipiclawSessionMemorySettings {
 	minTurnsBetweenUpdate: number;
 	minToolCallsBetweenUpdate: number;
 	timeoutMs: number;
-	failureBackoffTurns: number;
 	forceRefreshBeforeCompact: boolean;
 	forceRefreshBeforeNewSession: boolean;
 }
 
-export interface PipiclawMemoryMaintenanceSettings {
+export type PipiclawMemoryMaintenanceSettings = MemoryMaintenanceTuning & {
 	enabled: boolean;
-	minIdleMinutesBeforeLlmWork: number;
-	sessionRefreshIntervalMinutes: number;
-	/** Idle cadence of the merged memory checkpoint (durable extraction) job. */
-	checkpointIntervalMinutes: number;
-	/** Confidence bar a candidate must clear before it is written to MEMORY.md. */
-	minMemoryAutoWriteConfidence: number;
-	structuralMaintenanceIntervalHours: number;
-	maxConcurrentChannels: number;
-	failureBackoffMinutes: number;
-	/** Reject a MEMORY.md cleanup whose result shrinks below this ratio of the original. */
-	cleanupShrinkGuardMinRatio: number;
-	/** Only apply the shrink guard when the original exceeds this length (chars). */
-	cleanupShrinkGuardMinChars: number;
-}
+};
 
 export interface PipiclawLoggingSettings {
 	level: "debug" | "info" | "warn" | "error";
@@ -136,7 +140,6 @@ export interface PipiclawLoggingSettings {
 }
 
 export interface PipiclawSessionSearchSettings {
-	enabled: boolean;
 	maxFiles: number;
 	maxChunks: number;
 	maxCharsPerChunk: number;
@@ -144,6 +147,15 @@ export interface PipiclawSessionSearchSettings {
 	timeoutMs: number;
 }
 
+/**
+ * Everything `settings.json` may contain (spec 035 D1).
+ *
+ * The rule: a key earns a place here only if it expresses product intent —
+ * which model to use, whether a subsystem runs, whether an optional LLM call is
+ * worth its tokens, what the output looks like. Every numeric threshold is an
+ * algorithm parameter and lives in code. Keys retired by that rule are listed
+ * in `RETIRED_SETTINGS_KEYS` and reported as warnings on load.
+ */
 export interface PipiclawSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -156,15 +168,20 @@ export interface PipiclawSettings {
 	 * frontmatter `model`; falls back to the parent's current model when unset.
 	 */
 	subagentModel?: string | null;
-	compaction?: Partial<PipiclawCompactionSettings>;
-	retry?: Partial<PipiclawRetrySettings>;
-	memoryRecall?: Partial<PipiclawMemoryRecallSettings>;
-	taskDigest?: Partial<PipiclawTaskDigestSettings>;
-	taskDriver?: Partial<PipiclawTaskDriverSettings>;
-	sessionMemory?: Partial<PipiclawSessionMemorySettings>;
-	memoryMaintenance?: Partial<PipiclawMemoryMaintenanceSettings>;
-	sessionSearch?: Partial<PipiclawSessionSearchSettings>;
-	logging?: Partial<Omit<PipiclawLoggingSettings, "file">> & { file?: Partial<PipiclawLoggingSettings["file"]> };
+	compaction?: { enabled?: boolean };
+	retry?: { enabled?: boolean };
+	memoryRecall?: {
+		enabled?: boolean;
+		/** Costs an extra LLM call, so it stays a user decision rather than a constant. */
+		rerankWithModel?: boolean | "auto";
+	};
+	sessionMemory?: { enabled?: boolean };
+	memoryMaintenance?: { enabled?: boolean };
+	sessionSearch?: {
+		/** Costs an extra LLM call per search hit; same reasoning as `rerankWithModel`. */
+		summarizeWithModel?: boolean;
+	};
+	logging?: { level?: PipiclawLoggingSettings["level"]; file?: { enabled?: boolean } };
 	tui?: Partial<PipiclawTuiSettings>;
 }
 
@@ -225,13 +242,11 @@ const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
 	minTurnsBetweenUpdate: 2,
 	minToolCallsBetweenUpdate: 4,
 	timeoutMs: 30_000,
-	failureBackoffTurns: 3,
 	forceRefreshBeforeCompact: true,
 	forceRefreshBeforeNewSession: true,
 };
 
 const DEFAULT_SESSION_SEARCH: PipiclawSessionSearchSettings = {
-	enabled: true,
 	maxFiles: 12,
 	maxChunks: 80,
 	maxCharsPerChunk: 1200,
@@ -239,18 +254,7 @@ const DEFAULT_SESSION_SEARCH: PipiclawSessionSearchSettings = {
 	timeoutMs: 12_000,
 };
 
-const DEFAULT_MEMORY_MAINTENANCE: PipiclawMemoryMaintenanceSettings = {
-	enabled: true,
-	minIdleMinutesBeforeLlmWork: 10,
-	sessionRefreshIntervalMinutes: 10,
-	checkpointIntervalMinutes: 20,
-	minMemoryAutoWriteConfidence: 0.85,
-	structuralMaintenanceIntervalHours: 6,
-	maxConcurrentChannels: 1,
-	failureBackoffMinutes: 30,
-	cleanupShrinkGuardMinRatio: 0.4,
-	cleanupShrinkGuardMinChars: 2_000,
-};
+const DEFAULT_MEMORY_MAINTENANCE_ENABLED = true;
 
 // `file.enabled` defaults to true: for a long-lived daemon, persisting logs is
 // worth more than the surprise of a new file under state/logs/. See docs.
@@ -264,6 +268,66 @@ const DEFAULT_LOGGING: PipiclawLoggingSettings = {
 };
 
 /**
+ * Keys that used to be configurable and are now constants (spec 035 D3).
+ *
+ * Leaving them in `settings.json` is harmless — the runtime uses the constant —
+ * but silently ignoring a value someone deliberately tuned is worse than saying
+ * so once at startup. Matched exactly; no general unknown-key sweep, because
+ * `settings.json` also carries upstream pi-mono fields that we must not flag.
+ */
+const RETIRED_SETTINGS_KEYS: readonly string[] = [
+	"compaction.reserveTokens",
+	"compaction.keepRecentTokens",
+	"retry.maxRetries",
+	"retry.baseDelayMs",
+	"memoryRecall.maxCandidates",
+	"memoryRecall.maxInjected",
+	"memoryRecall.maxChars",
+	"sessionMemory.minTurnsBetweenUpdate",
+	"sessionMemory.minToolCallsBetweenUpdate",
+	"sessionMemory.timeoutMs",
+	"sessionMemory.failureBackoffTurns",
+	"sessionMemory.forceRefreshBeforeCompact",
+	"sessionMemory.forceRefreshBeforeNewSession",
+	"memoryMaintenance.minIdleMinutesBeforeLlmWork",
+	"memoryMaintenance.sessionRefreshIntervalMinutes",
+	"memoryMaintenance.checkpointIntervalMinutes",
+	"memoryMaintenance.minMemoryAutoWriteConfidence",
+	"memoryMaintenance.structuralMaintenanceIntervalHours",
+	"memoryMaintenance.maxConcurrentChannels",
+	"memoryMaintenance.failureBackoffMinutes",
+	"memoryMaintenance.cleanupShrinkGuardMinRatio",
+	"memoryMaintenance.cleanupShrinkGuardMinChars",
+	"sessionSearch.enabled",
+	"sessionSearch.maxFiles",
+	"sessionSearch.maxChunks",
+	"sessionSearch.maxCharsPerChunk",
+	"sessionSearch.timeoutMs",
+	"logging.file.maxSizeBytes",
+	"logging.file.maxFiles",
+	"taskDigest.maxTasks",
+	"taskDigest.maxChars",
+	"taskDriver.continuationDelayMinutes",
+	"taskDriver.stalledRetryMinutes",
+	"taskDriver.maxDispatchesPerTick",
+	"taskDriver.maxSleepMinutes",
+];
+
+function hasNestedKey(root: unknown, dottedPath: string): boolean {
+	let node = root;
+	for (const segment of dottedPath.split(".")) {
+		if (!node || typeof node !== "object" || Array.isArray(node)) return false;
+		if (!Object.hasOwn(node, segment)) return false;
+		node = (node as Record<string, unknown>)[segment];
+	}
+	return true;
+}
+
+function findRetiredSettingsKeys(parsed: unknown): string[] {
+	return RETIRED_SETTINGS_KEYS.filter((key) => hasNestedKey(parsed, key));
+}
+
+/**
  * Settings manager for pipiclaw.
  * Stores global settings in the pipiclaw root directory.
  */
@@ -271,6 +335,7 @@ export class PipiclawSettingsManager {
 	private settingsPath: string;
 	private settings: PipiclawSettings;
 	private loadErrors: SettingsError[] = [];
+	private retiredKeys: string[] = [];
 
 	constructor(baseDir: string) {
 		this.settingsPath = join(baseDir, "settings.json");
@@ -279,6 +344,7 @@ export class PipiclawSettingsManager {
 
 	private load(): PipiclawSettings {
 		this.loadErrors = [];
+		this.retiredKeys = [];
 		if (!existsSync(this.settingsPath)) {
 			return {};
 		}
@@ -293,6 +359,7 @@ export class PipiclawSettingsManager {
 				});
 				return {};
 			}
+			this.retiredKeys = findRetiredSettingsKeys(parsed);
 			return parsed as PipiclawSettings;
 		} catch (error) {
 			this.loadErrors.push({
@@ -326,18 +393,27 @@ export class PipiclawSettingsManager {
 	}
 
 	getDiagnostics(): ConfigDiagnostic[] {
-		return this.loadErrors.map(({ error }) => ({
+		const diagnostics: ConfigDiagnostic[] = this.loadErrors.map(({ error }) => ({
 			source: "settings",
 			path: this.settingsPath,
 			severity: "error",
 			message: error.message,
 		}));
+		if (this.retiredKeys.length > 0) {
+			diagnostics.push({
+				source: "settings",
+				path: this.settingsPath,
+				severity: "warning",
+				message: `${this.retiredKeys.join(", ")}: no longer configurable; these are now built-in constants and the values here are ignored. Remove them from settings.json.`,
+			});
+		}
+		return diagnostics;
 	}
 
 	getCompactionSettings(): PipiclawCompactionSettings {
 		return {
 			...DEFAULT_COMPACTION,
-			...this.settings.compaction,
+			enabled: this.settings.compaction?.enabled ?? DEFAULT_COMPACTION.enabled,
 		};
 	}
 
@@ -353,77 +429,56 @@ export class PipiclawSettingsManager {
 	getRetrySettings(): PipiclawRetrySettings {
 		return {
 			...DEFAULT_RETRY,
-			...this.settings.retry,
+			enabled: this.settings.retry?.enabled ?? DEFAULT_RETRY.enabled,
 		};
 	}
 
 	getMemoryRecallSettings(): PipiclawMemoryRecallSettings {
 		return {
 			...DEFAULT_MEMORY_RECALL,
-			...this.settings.memoryRecall,
+			enabled: this.settings.memoryRecall?.enabled ?? DEFAULT_MEMORY_RECALL.enabled,
+			rerankWithModel: this.settings.memoryRecall?.rerankWithModel ?? DEFAULT_MEMORY_RECALL.rerankWithModel,
 		};
 	}
 
 	getTaskDigestSettings(): PipiclawTaskDigestSettings {
-		return {
-			...DEFAULT_TASK_DIGEST,
-			...this.settings.taskDigest,
-		};
+		return { ...DEFAULT_TASK_DIGEST };
 	}
 
 	getTaskDriverSettings(): PipiclawTaskDriverSettings {
-		const configured = {
-			...DEFAULT_TASK_DRIVER,
-			...this.settings.taskDriver,
-		};
-		const continuationDelayMinutes = Number.isFinite(configured.continuationDelayMinutes)
-			? Math.min(60, Math.max(1, Math.floor(configured.continuationDelayMinutes)))
-			: DEFAULT_TASK_DRIVER.continuationDelayMinutes;
-		const stalledRetryMinutes = Number.isFinite(configured.stalledRetryMinutes)
-			? Math.min(24 * 60, Math.max(continuationDelayMinutes, Math.floor(configured.stalledRetryMinutes)))
-			: DEFAULT_TASK_DRIVER.stalledRetryMinutes;
-		const maxDispatchesPerTick = Number.isFinite(configured.maxDispatchesPerTick)
-			? Math.min(20, Math.max(1, Math.floor(configured.maxDispatchesPerTick)))
-			: DEFAULT_TASK_DRIVER.maxDispatchesPerTick;
-		const maxSleepMinutes = Number.isFinite(configured.maxSleepMinutes)
-			? Math.min(60, Math.max(1, Math.floor(configured.maxSleepMinutes)))
-			: DEFAULT_TASK_DRIVER.maxSleepMinutes;
-		return {
-			continuationDelayMinutes,
-			stalledRetryMinutes,
-			maxDispatchesPerTick,
-			maxSleepMinutes,
-		};
+		return { ...DEFAULT_TASK_DRIVER };
 	}
 
 	getSessionMemorySettings(): PipiclawSessionMemorySettings {
 		return {
 			...DEFAULT_SESSION_MEMORY,
-			...this.settings.sessionMemory,
+			...getSessionRefreshCadence(),
+			enabled: this.settings.sessionMemory?.enabled ?? DEFAULT_SESSION_MEMORY.enabled,
 		};
 	}
 
 	getMemoryMaintenanceSettings(): PipiclawMemoryMaintenanceSettings {
 		return {
-			...DEFAULT_MEMORY_MAINTENANCE,
-			...this.settings.memoryMaintenance,
+			...getMemoryMaintenanceTuning(),
+			enabled: this.settings.memoryMaintenance?.enabled ?? DEFAULT_MEMORY_MAINTENANCE_ENABLED,
 		};
 	}
 
 	getSessionSearchSettings(): PipiclawSessionSearchSettings {
 		return {
 			...DEFAULT_SESSION_SEARCH,
-			...this.settings.sessionSearch,
+			summarizeWithModel:
+				this.settings.sessionSearch?.summarizeWithModel ?? DEFAULT_SESSION_SEARCH.summarizeWithModel,
 		};
 	}
 
 	getLoggingSettings(): PipiclawLoggingSettings {
 		return {
 			...DEFAULT_LOGGING,
-			...this.settings.logging,
+			level: this.settings.logging?.level ?? DEFAULT_LOGGING.level,
 			file: {
 				...DEFAULT_LOGGING.file,
-				...this.settings.logging?.file,
+				enabled: this.settings.logging?.file?.enabled ?? DEFAULT_LOGGING.file.enabled,
 			},
 		};
 	}
@@ -538,15 +593,6 @@ export class PipiclawSettingsManager {
 
 	setShowImages(_show: boolean): void {
 		// No-op
-	}
-
-	// Compaction details
-	getCompactionReserveTokens(): number {
-		return this.getCompactionSettings().reserveTokens;
-	}
-
-	getCompactionKeepRecentTokens(): number {
-		return this.getCompactionSettings().keepRecentTokens;
 	}
 
 	getBranchSummarySettings(): { reserveTokens: number } {
@@ -790,31 +836,6 @@ export class PipiclawSettingsManager {
 
 	setProjectTrusted(_trusted: boolean): void {
 		// Pipiclaw handles workspace authorization at the DingTalk/runtime boundary.
-	}
-
-	applyOverrides(overrides: Partial<Settings>): void {
-		if (overrides.defaultProvider !== undefined) this.settings.defaultProvider = overrides.defaultProvider;
-		if (overrides.defaultModel !== undefined) this.settings.defaultModel = overrides.defaultModel;
-		if (overrides.defaultThinkingLevel !== undefined) {
-			this.settings.defaultThinkingLevel = overrides.defaultThinkingLevel;
-		}
-		if (overrides.compaction !== undefined) {
-			this.settings.compaction = {
-				...this.settings.compaction,
-				enabled: overrides.compaction.enabled ?? this.settings.compaction?.enabled,
-				reserveTokens: overrides.compaction.reserveTokens ?? this.settings.compaction?.reserveTokens,
-				keepRecentTokens: overrides.compaction.keepRecentTokens ?? this.settings.compaction?.keepRecentTokens,
-			};
-		}
-		if (overrides.retry !== undefined) {
-			this.settings.retry = {
-				...this.settings.retry,
-				enabled: overrides.retry.enabled ?? this.settings.retry?.enabled,
-				maxRetries: overrides.retry.maxRetries ?? this.settings.retry?.maxRetries,
-				baseDelayMs: overrides.retry.baseDelayMs ?? this.settings.retry?.baseDelayMs,
-			};
-		}
-		this.save();
 	}
 
 	flush(): Promise<void> {

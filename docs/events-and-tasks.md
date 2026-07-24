@@ -500,7 +500,7 @@ task.<channelId>.<任务id>.<用途>.json
 
 task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token）：先拦截超 deadline/budget 或 terminal dependency 的任务并升级，再从 dependency-ready 的 actionable task 中按 priority/deadline 排序、并为到点的周期任务派发 cycle-start，向对应 channel 入队一条唤醒消息。
 
-**唤醒机制是单个自适应 timer + nudge**，不再固定每分钟轮询：每次扫描顺手收集"下一个感兴趣时刻"（最近的未到点 `wake`、退避到期、deadline），睡到那一刻或封顶 `maxSleepMinutes`（默认 15 分钟）为止；回合结束会 nudge 立即重扫，让连续推进的任务链即时衔接。绕过 runtime 的手工编辑最坏等一个封顶周期才被接起，`/tasks run <id>` 兜底。
+**唤醒机制是单个自适应 timer + nudge**，不再固定每分钟轮询：每次扫描顺手收集"下一个感兴趣时刻"（最近的未到点 `wake`、退避到期、deadline），睡到那一刻或封顶 15 分钟为止；回合结束会 nudge 立即重扫，让连续推进的任务链即时衔接。绕过 runtime 的手工编辑最坏等一个封顶周期才被接起，`/tasks run <id>` 兜底。
 
 为避免错误台账或忘记更新状态造成 token 热循环，driver 有多层节流：
 
@@ -512,7 +512,7 @@ task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token
 
 每次受治理唤醒会累计 attempt；回合完成后 runtime 把 token、cost、wall time 回写。等待中的依赖不会触发 agent，也不会消耗 attempt。缺失、cancelled 或被治理器暂停（`paused` + `pausedBy: "governor"`）的依赖属于 terminal failure，依赖方会一起被治理器暂停并给出恢复说明。
 
-这些默认值可在 [`settings.json`](./configuration.md) 的 `taskDriver` 中调整或关闭。进程重启后内存中的退避状态会清空，因此遗留 actionable task 会在下一次扫描被重新接起——这是有意的 fail-open 恢复语义。
+这些节奏是内置常量，整套机制的开关是 `tools.tasks.enabled`（见 [configuration.md](./configuration.md)）。进程重启后内存中的退避状态会清空，因此遗留 actionable task 会在下一次扫描被重新接起——这是有意的 fail-open 恢复语义。
 
 ### Runtime 知识与内置 playbooks
 
@@ -558,7 +558,7 @@ do this turn. Full detail lives in the matching tasks/<id>.md file.
 
 这让 agent 无需依赖 `ls tasks/` 的纪律就恒定知道议程。与 recall 不同，摘要是**确定性全量**（候选就是几条 frontmatter，议程恒定相关），只排除 done 任务、上限 8 条 / ~1000 字。框架文本明确它是**背景参考、非指令**——不相关的用户回合不会因此被带偏去动任务。无 active 任务时不注入，零开销。
 
-开关与配额见 [configuration.md](./configuration.md) 的 `taskDigest`（默认开启）。
+摘要随 `tools.tasks.enabled` 开关一起启用，上限是内置常量，见 [configuration.md](./configuration.md)。
 
 ## `task_manage` 工具（给 agent 用，可选）
 
@@ -613,7 +613,7 @@ runtime 只提供通用恢复机制：委派时把工具/实例/目录/预期产
 ## 该看哪份文档
 
 - 工作区配置子代理（委派、worktree、独立验收）：[sub-agents.md](./sub-agents.md)
-- `tools.events.enabled` / `tools.tasks.enabled` / `taskDriver` / `taskDigest` 等门控开关：[configuration.md](./configuration.md)
+- `tools.events.enabled` / `tools.tasks.enabled` 等门控开关：[configuration.md](./configuration.md)
 - Runtime playbooks 与知识分层：[runtime-playbooks.md](./runtime-playbooks.md)
 - 长期运行、日志、升级、排障：[deployment-and-operations.md](./deployment-and-operations.md)
 - 设计规格与取舍：[specs/019-task-ledger/design.md](./specs/019-task-ledger/design.md)

@@ -55,7 +55,7 @@ pipiclaw
 ├── channel.json      # 钉钉应用配置
 ├── auth.json         # 模型凭据
 ├── models.json       # 自定义模型提供方
-├── settings.json     # 默认模型与运行时设置
+├── settings.json     # 默认模型与模块开关
 ├── tools.json        # 内建工具配置
 ├── security.json     # 工具层安全策略
 └── workspace/        # 长期工作区：SOUL.md、AGENTS.md、MEMORY.md、

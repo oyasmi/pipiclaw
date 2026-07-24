@@ -1133,6 +1133,12 @@ export function prepareAppServices(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PAT
 	for (const { scope, error } of settingsManager.drainErrors()) {
 		log.logWarning(`Failed to load ${scope} settings`, `${error.message}\n${paths.settingsConfigPath}`);
 	}
+	// Errors already went out above with a richer message; this pass exists for the
+	// warnings, chiefly retired settings keys (spec 035 D3).
+	for (const diagnostic of settingsManager.getDiagnostics()) {
+		if (diagnostic.severity === "error") continue;
+		log.logWarning(formatConfigDiagnostic(diagnostic), diagnostic.path);
+	}
 	for (const diagnostic of loadToolsConfigWithDiagnostics(paths.appHomeDir).diagnostics) {
 		log.logWarning(formatConfigDiagnostic(diagnostic), diagnostic.path);
 	}

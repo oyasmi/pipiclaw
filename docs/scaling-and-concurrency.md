@@ -33,8 +33,8 @@ Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的
 
 **后台负载也在同一进程里。** 除用户回合外，还有几类受控的后台工作会消耗 LLM API：
 
-- 记忆维护调度器：本地闸门通过后才做 LLM 整理，默认每 tick 最多处理 1 个通道（`memoryMaintenance.maxConcurrentChannels`）；
-- 内建 task driver：扫描本身零 token，只对到点的任务入队唤醒，默认每 tick 最多派发 4 个通道，有进展续跑冷却与停滞退避两层节流；
+- 记忆维护调度器：本地闸门通过后才做 LLM 整理，每 tick 最多处理 1 个通道（内置常量；整体可用 `memoryMaintenance.enabled` 关闭）；
+- 内建 task driver：扫描本身零 token，只对到点的任务入队唤醒，每 tick 最多派发 4 个通道，有进展续跑冷却与停滞退避两层节流（均为内置常量；整体由 `tools.tasks.enabled` 控制）；
 - 后台作业（`bash async`）：每通道最多 5 个并发子进程，不占运行队列。
 
 ## 资源占用与已知瓶颈（Footprint and Known Bottlenecks）

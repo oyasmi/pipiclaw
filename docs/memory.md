@@ -56,14 +56,14 @@ Pipiclaw 的记忆不是"一个大文件"，而是**按用途分层**的几份�
 
 **"我不想让它记住这次对话。"** 结束时说明不必记录；也可以用 `/new` 开新会话前告知无需固化。已经写入的用遗忘删掉。
 
-**"后台记忆维护花了多少钱？"** `/usage` 会把 `sidecar`（记忆相关的 LLM 调用）单列。想压低就调大维护间隔，见 [configuration.md](./configuration.md) 的 `memoryMaintenance`。
+**"后台记忆维护花了多少钱？"** `/usage` 会把 `sidecar`（记忆相关的 LLM 调用）单列。维护间隔是内置常量，不可调；想压低只能关掉可选的模型调用（`memoryRecall.rerankWithModel`、`sessionSearch.summarizeWithModel`），或用 `memoryMaintenance.enabled: false` 整体关闭后台维护——代价见 [configuration.md](./configuration.md)。
 
 **"想看它到底自动写了什么。"** 每个频道目录下的 `memory-review.jsonl` 记录了每次维护的动作、跳过原因和失败，是排查自动写回行为的第一现场。
 
 ## 相关文档
 
 - 实现结构与数据流：[architecture.md §6](./architecture.md#6-记忆子系统srcmemory)
-- 召回、维护间隔、sidecar 的全部可调字段：[configuration.md](./configuration.md)
+- 记忆相关的可配开关与已退役字段：[configuration.md](./configuration.md)
 - 后台维护任务与运维排障：[deployment-and-operations.md](./deployment-and-operations.md#内置记忆维护任务memory-maintenance-scheduler)
 - 记忆相关工具：[tools.md](./tools.md#记忆与知识类)
 - agent 侧"该写到哪一层"的纪律：[runtime-playbooks.md](./runtime-playbooks.md)

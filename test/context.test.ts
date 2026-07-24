@@ -44,7 +44,6 @@ describe("PipiclawSettingsManager", () => {
 			minTurnsBetweenUpdate: 2,
 			minToolCallsBetweenUpdate: 4,
 			timeoutMs: 30000,
-			failureBackoffTurns: 3,
 			forceRefreshBeforeCompact: true,
 			forceRefreshBeforeNewSession: true,
 		});
@@ -80,17 +79,20 @@ describe("PipiclawSettingsManager", () => {
 		expect(reloaded.getDefaultThinkingLevel()).toBe("medium");
 	});
 
-	it("derives compatibility compaction getters from merged settings", () => {
+	// Spec 035 D1: numeric thresholds are constants. A user who tuned them before
+	// keeps the file working, but the values no longer take effect.
+	it("keeps the enabled switch configurable while ignoring retired numeric keys", () => {
 		const baseDir = createTempDir();
-		const settingsPath = join(baseDir, "settings.json");
 		writeFileSync(
-			settingsPath,
+			join(baseDir, "settings.json"),
 			JSON.stringify({
-				compaction: {
-					enabled: false,
-					reserveTokens: 4096,
-					keepRecentTokens: 8192,
-				},
+				compaction: { enabled: false, reserveTokens: 4096, keepRecentTokens: 8192 },
+				retry: { enabled: false, maxRetries: 99 },
+				memoryRecall: { rerankWithModel: false, maxInjected: 99 },
+				sessionMemory: { minTurnsBetweenUpdate: 99 },
+				memoryMaintenance: { enabled: false, checkpointIntervalMinutes: 45 },
+				sessionSearch: { summarizeWithModel: true, maxFiles: 99 },
+				logging: { level: "debug", file: { enabled: false, maxFiles: 99 } },
 			}),
 			"utf-8",
 		);
@@ -99,12 +101,53 @@ describe("PipiclawSettingsManager", () => {
 
 		expect(manager.getCompactionSettings()).toEqual({
 			enabled: false,
-			reserveTokens: 4096,
-			keepRecentTokens: 8192,
+			reserveTokens: 16384,
+			keepRecentTokens: 20000,
 		});
-		expect(manager.getCompactionReserveTokens()).toBe(4096);
-		expect(manager.getCompactionKeepRecentTokens()).toBe(8192);
-		expect(manager.getBranchSummarySettings()).toEqual({ reserveTokens: 4096 });
+		expect(manager.getBranchSummarySettings()).toEqual({ reserveTokens: 16384 });
+		expect(manager.getRetrySettings()).toEqual({ enabled: false, maxRetries: 3, baseDelayMs: 2000 });
+		expect(manager.getMemoryRecallSettings()).toMatchObject({ rerankWithModel: false, maxInjected: 5 });
+		expect(manager.getSessionMemorySettings().minTurnsBetweenUpdate).toBe(2);
+		expect(manager.getMemoryMaintenanceSettings()).toMatchObject({
+			enabled: false,
+			checkpointIntervalMinutes: 20,
+		});
+		expect(manager.getSessionSearchSettings()).toMatchObject({ summarizeWithModel: true, maxFiles: 12 });
+		expect(manager.getLoggingSettings()).toEqual({
+			level: "debug",
+			file: { enabled: false, maxSizeBytes: 5_000_000, maxFiles: 3 },
+		});
+	});
+
+	it("warns once about retired settings keys without failing the load", () => {
+		const baseDir = createTempDir();
+		writeFileSync(
+			join(baseDir, "settings.json"),
+			JSON.stringify({
+				defaultModel: "claude-sonnet-4-5",
+				memoryMaintenance: { enabled: true, checkpointIntervalMinutes: 45 },
+				taskDriver: { maxDispatchesPerTick: 9 },
+			}),
+			"utf-8",
+		);
+
+		const diagnostics = new PipiclawSettingsManager(baseDir).getDiagnostics();
+
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0]).toMatchObject({ source: "settings", severity: "warning" });
+		expect(diagnostics[0]?.message).toContain("memoryMaintenance.checkpointIntervalMinutes");
+		expect(diagnostics[0]?.message).toContain("taskDriver.maxDispatchesPerTick");
+	});
+
+	it("reports no diagnostics for a settings file using only supported keys", () => {
+		const baseDir = createTempDir();
+		writeFileSync(
+			join(baseDir, "settings.json"),
+			JSON.stringify({ defaultModel: "claude-sonnet-4-5", memoryMaintenance: { enabled: false } }),
+			"utf-8",
+		);
+
+		expect(new PipiclawSettingsManager(baseDir).getDiagnostics()).toEqual([]);
 	});
 
 	it("tolerates invalid JSON settings files and exposes compatibility stubs", async () => {

@@ -82,6 +82,11 @@ export function createE2ETestHome(overrides?: {
 	writeDefaultWorkspace(workspaceDir);
 	writeAuthAndModels(homeDir);
 
+	// Maintenance cadence is no longer configurable (spec 035 D1). E2E asserts
+	// SESSION.md refreshes within tens of seconds, which the production idle and
+	// interval gates forbid, so tests opt into the fast tuning instead.
+	process.env.PIPICLAW_TEST_FAST_MAINTENANCE = "1";
+
 	writeJson(join(homeDir, "settings.json"), {
 		defaultProvider: overrides?.defaultProvider ?? process.env.PIPICLAW_E2E_PROVIDER ?? "anthropic",
 		defaultModel: overrides?.defaultModel ?? process.env.PIPICLAW_E2E_MODEL ?? "claude-sonnet-4-5",
@@ -89,26 +94,8 @@ export function createE2ETestHome(overrides?: {
 			enabled: true,
 			rerankWithModel: true,
 		},
-		sessionMemory: {
-			enabled: true,
-			minTurnsBetweenUpdate: 1,
-			minToolCallsBetweenUpdate: 1,
-			timeoutMs: 30_000,
-			failureBackoffTurns: 1,
-			forceRefreshBeforeCompact: true,
-			forceRefreshBeforeNewSession: true,
-		},
-		memoryMaintenance: {
-			enabled: true,
-			minIdleMinutesBeforeLlmWork: 0,
-			sessionRefreshIntervalMinutes: 0,
-			checkpointIntervalMinutes: 60,
-			structuralMaintenanceIntervalHours: 24,
-			maxConcurrentChannels: 1,
-			failureBackoffMinutes: 1,
-			cleanupShrinkGuardMinRatio: 0.4,
-			cleanupShrinkGuardMinChars: 2_000,
-		},
+		sessionMemory: { enabled: true },
+		memoryMaintenance: { enabled: true },
 	});
 
 	writeJson(channelConfigPath, {

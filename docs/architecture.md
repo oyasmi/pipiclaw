@@ -282,7 +282,7 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 ~/.pipiclaw/                       # APP_HOME_DIR（PIPICLAW_HOME 可覆盖）
 ├── channel.json                   # 钉钉凭据 + busyMessageDefault/responseMode（0600）
 ├── auth.json / models.json        # 模型密钥 / 模型定义（0600）
-├── settings.json                  # 运行时设置：记忆、召回、任务驱动、fallback、日志…（0600）
+├── settings.json                  # 运行时设置：模型、fallback、模块开关、日志级别（0600）
 ├── tools.json / security.json     # 工具开关 / 守卫开关（0600）
 ├── workspace/
 │   ├── SOUL.md                    # 身份与语气（注入系统提示词最前）
@@ -339,6 +339,12 @@ flowchart LR
 ```
 
 关机 flush 用比平时更宽松的 gate：只要有未固化的持久活动（哪怕没有完整 assistant 轮）就做最后一次固化——这是最后的持久化机会。
+
+## 12.1 公共 API 面（`src/index.ts`，spec 035）
+
+Pipiclaw 的产品是 CLI/runtime，不是 SDK。`src/index.ts` 因此只支持**一种**用法——把 daemon 嵌进别的进程——并且只为这一种承诺稳定：`bootstrap` 及其选项/结果类型、`DingTalkBot` 与其配置类型、`ChannelContext` 投递契约、`paths.ts` 的路径常量、`PipiclawSettings` 类型。
+
+其余全部是内部实现，从各自模块导入并且随时可能移动。这条界线有具体的工程理由：`src/index.ts` 是 `knip.json` 的 entry point，**每个从这里导出的名字都是一处死代码检测盲区**。0.8.11 之前 barrel 有约 90 个名字，`npm run deadcode` 对其中大部分形同虚设。同理，`prompt` 预算常量的公共导出此前也已移除（beta API 变更）。
 
 ## 13. 测试与质量门
 

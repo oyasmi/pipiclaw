@@ -2,6 +2,17 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [Unreleased]
+
+### Changed
+
+- `settings.json` now only accepts product intent, and the public API surface only covers embedding the daemon (spec 035). The rule for settings is mechanical: booleans, enums, and model references stay configurable; every numeric threshold becomes a code constant. Fifteen keys remain — the five model references, the per-module `enabled` switches, the two knobs that decide whether an optional LLM call is worth its tokens (`memoryRecall.rerankWithModel`, `sessionSearch.summarizeWithModel`), `logging.level`, `logging.file.enabled`, and `tui.responseMode`. Maintenance intervals, the durable-write confidence bar, failure backoffs, concurrency caps, task-driver cadence, task-digest size, compaction token budgets, retry delays, recall sizes, and log rotation are no longer configurable: nobody has a basis for choosing whether a checkpoint interval should be 20 or 25 minutes, and every documented number was a compatibility promise. Existing files keep working — retired keys are ignored, and a single startup warning names them so a value someone deliberately tuned does not disappear silently. `docs/configuration.md` loses its 40-row settings table and its three tuning examples in favor of a short supported-keys table, a retired-keys list, and one honest "minimize token spend" recipe.
+- **Breaking (beta API):** the package barrel shrank from roughly 90 exported names across 20 modules to 21, covering the one use case it actually supports — embedding the daemon: `bootstrap` with its option/result types, `DingTalkBot` and its config types, the `ChannelContext` delivery contract, the `paths.ts` constants, and the `PipiclawSettings` type. Prompt internals, memory sidecar/candidates/consolidation/recall/session helpers, sub-agent discovery and tooling, the usage ledger, tool config, the executor, and the command extension are no longer exported; import them from their modules and expect them to move. The deprecated `DingTalkContext` alias is gone — use `ChannelContext`. Nothing in the repo imported the barrel, and the README never documented SDK usage, so this affects only external embedders. The concrete win is dead-code detection: `src/index.ts` is a knip entry point, so every name exported there was a blind spot for `npm run deadcode`.
+
+### Fixed
+
+- Three settings that the documentation promised but no code read are gone. `sessionSearch.enabled` was documented as toggling cold-path transcript search, but `session_search` has always been registered unconditionally — it is now documented as always-on, like `grep` and `memory_manage`. `sessionMemory.failureBackoffTurns` (already marked "Legacy") had no reader either. `getCompactionReserveTokens()`, `getCompactionKeepRecentTokens()`, and `applyOverrides()` had no callers anywhere, including inside the pi SDK, and were removed; the getters the SDK does reflectively call are untouched.
+
 ## [0.8.10-beta.1] - 2026-07-24
 
 ### Added

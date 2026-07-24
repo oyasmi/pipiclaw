@@ -1,86 +1,15 @@
-export {
-	COMMAND_RESULT_CUSTOM_TYPE,
-	createCommandExtension,
-	type PipiclawCommandExtensionOptions,
-} from "./agent/command-extension.js";
-export {
-	type BuiltInCommand,
-	type BuiltInCommandName,
-	parseBuiltInCommand,
-	renderBuiltInHelp,
-} from "./agent/commands.js";
-export { type AgentRunner, getOrCreateRunner } from "./agent/index.js";
-export {
-	buildPipiclawSystemPrompt,
-	RUNTIME_PROMPT_HARD_UNITS,
-	RUNTIME_PROMPT_TARGET_UNITS,
-	RUNTIME_PROMPT_VERSION,
-} from "./agent/prompt/builder.js";
-export { createPromptBoundaryExtension } from "./agent/prompt/extension.js";
-export { buildPromptManifest, type PromptManifest, renderContextReport } from "./agent/prompt/manifest.js";
-export { loadWorkspacePromptResources, type WorkspacePromptResources } from "./agent/prompt/resources.js";
-export { MAIN_PROMPT_SECTIONS } from "./agent/prompt/sections.js";
-export type {
-	PromptAuthority,
-	PromptBuildContext,
-	PromptBuildResult,
-	PromptCacheClass,
-	PromptMode,
-	PromptSectionDefinition,
-	ResolvedPromptSection,
-	ToolDescriptor,
-} from "./agent/prompt/types.js";
-export {
-	loadPipiclawSkills,
-	type PipiclawSkillsResult,
-	resolvePipiclawSkills,
-} from "./agent/workspace-resources.js";
-export { createExecutor, type ExecOptions, type ExecResult, type Executor } from "./executor.js";
-export {
-	type BuildMemoryCandidatesOptions,
-	buildMemoryCandidates,
-	createMemoryCandidateStore,
-	type MemoryCandidate,
-	type MemoryCandidateStore,
-} from "./memory/candidates.js";
-export {
-	type ConsolidationRunOptions,
-	type InlineConsolidationResult,
-	runInlineConsolidation,
-} from "./memory/consolidation.js";
-export {
-	ensureChannelMemoryFiles,
-	ensureChannelMemoryFilesSync,
-	getChannelSessionPath,
-	readChannelSession,
-	rewriteChannelSession,
-} from "./memory/files.js";
-export { type ConsolidationReason, MemoryLifecycle, type MemoryLifecycleOptions } from "./memory/lifecycle.js";
-export {
-	type RecalledMemory,
-	type RecallRequest,
-	type RecallResult,
-	recallRelevantMemory,
-} from "./memory/recall.js";
-export {
-	renderSessionMemory,
-	type SessionMemoryState,
-	type SessionMemoryUpdateOptions,
-	updateChannelSessionMemory,
-} from "./memory/session.js";
-export {
-	runSidecarTask,
-	type SidecarResult,
-	type SidecarTask,
-} from "./memory/sidecar-worker.js";
-export { getApiKeyForModel } from "./models/api-keys.js";
-export {
-	findExactModelReferenceMatch,
-	findModelReferenceMatch,
-	formatModelList,
-	formatModelReference,
-	resolveInitialModel,
-} from "./models/utils.js";
+/**
+ * Public API surface (spec 035 D4).
+ *
+ * Pipiclaw's product is the CLI/runtime, not an SDK. This barrel therefore
+ * supports exactly one use case — embedding the daemon in another process — and
+ * nothing else is a compatibility promise. Everything else is internal: import
+ * it from its module and expect it to move.
+ *
+ * Keep this list small. Every name added here also becomes a knip blind spot,
+ * because `src/index.ts` is a knip entry point.
+ */
+
 export {
 	APP_HOME_DIR,
 	APP_NAME,
@@ -89,94 +18,23 @@ export {
 	MODELS_CONFIG_PATH,
 	SECURITY_CONFIG_PATH,
 	SETTINGS_CONFIG_PATH,
-	SUB_AGENTS_DIR,
-	SUB_AGENTS_DIR_NAME,
 	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
 } from "./paths.js";
-// `ChannelContext` is the transport-neutral delivery contract (formerly
-// `DingTalkContext`). The `DingTalkContext` alias is deprecated — retained for
-// one release for barrel stability; import `ChannelContext` instead.
-export type {
-	ChannelContext,
-	ChannelContext as DingTalkContext,
-	FinalDelivery,
-	ProgressStyle,
-} from "./runtime/channel-context.js";
 export {
-	ensureChannelDir,
-	getChannelDir,
-	getChannelDirName,
-} from "./runtime/channel-paths.js";
-export { createDingTalkContext } from "./runtime/delivery.js";
+	type AppContext,
+	type BootstrapOptions,
+	type BootstrapPaths,
+	type BootstrapResult,
+	bootstrap,
+	isBootstrapExitError,
+} from "./runtime/bootstrap.js";
+export type { ChannelContext, FinalDelivery, ProgressStyle } from "./runtime/channel-context.js";
 export {
-	type BusyMessageDefaultConfig,
-	type BusyMessageMode,
 	DingTalkBot,
 	type DingTalkConfig,
 	type DingTalkEvent,
 	type DingTalkHandler,
-	finalDeliveryOf,
-	isBusyMessageDefaultConfig,
-	isResponseModeConfig,
-	normalizeBusyMessageDefault,
-	normalizeResponseMode,
-	progressStyleOf,
 	type ResponseMode,
 } from "./runtime/dingtalk.js";
-export {
-	createEventsWatcher,
-	type EventAction,
-	EventsWatcher,
-	type OneShotEvent,
-	type PeriodicEvent,
-	type ScheduledEvent,
-} from "./runtime/events.js";
-export { ChannelStore, type LoggedMessage, type LoggedSubAgentRun } from "./runtime/store.js";
-export {
-	type PipiclawMemoryMaintenanceSettings,
-	type PipiclawMemoryRecallSettings,
-	type PipiclawSessionMemorySettings,
-	type PipiclawSettings,
-	PipiclawSettingsManager,
-} from "./settings.js";
-export {
-	discoverSubAgents,
-	formatSubAgentList,
-	getSubAgentsDir,
-	type ResolvedSubAgentConfig,
-	resolveSubAgentConfig,
-	type SubAgentConfig,
-	type SubAgentContextMode,
-	type SubAgentDiscoveryResult,
-	type SubAgentInvocationOverrides,
-	type SubAgentMemoryMode,
-	type SubAgentToolName,
-} from "./subagents/discovery.js";
-export {
-	createSubAgentTool,
-	type SubAgentToolDetails,
-	type SubAgentToolOptions,
-} from "./subagents/tool.js";
-export {
-	DEFAULT_TOOLS_CONFIG,
-	getToolsConfigPath,
-	loadToolsConfig,
-	type PipiclawToolsConfig,
-	type PipiclawWebFetchConfig,
-	type PipiclawWebSearchConfig,
-	type PipiclawWebToolsConfig,
-} from "./tools/config.js";
-export {
-	type CreatePipiclawToolsOptions,
-	createPipiclawTools,
-} from "./tools/index.js";
-export {
-	createUsageLedger,
-	getUsageLedger,
-	type UsageKind,
-	type UsageLedger,
-	type UsageLedgerEntry,
-	type UsageSummary,
-} from "./usage/ledger.js";
-export { parseUsageMode, renderUsageReport, type UsageQueryMode, usageWindows } from "./usage/render.js";
+export type { PipiclawSettings } from "./settings.js";

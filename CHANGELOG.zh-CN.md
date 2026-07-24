@@ -2,6 +2,17 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
+## [未发布]
+
+### 变更
+
+- `settings.json` 现在只接受产品意图，公共 API 也只覆盖「嵌入 daemon」这一种用法（spec 035）。设置的分界线是机械的：布尔、枚举和模型引用保持可配，所有数值阈值下沉为代码常量。保留 15 个键——五个模型引用、各模块的 `enabled` 开关、两个决定「一次可选 LLM 调用值不值这些 token」的选项（`memoryRecall.rerankWithModel`、`sessionSearch.summarizeWithModel`）、`logging.level`、`logging.file.enabled` 和 `tui.responseMode`。维护间隔、durable 写入置信度、失败退避、并发上限、任务驱动节奏、任务摘要尺寸、压缩 token 预算、重试延迟、召回尺寸和日志轮转全部不再可配：没有人能凭手头信息判断 checkpoint 间隔该是 20 分钟还是 25 分钟，而每个被文档化的数字都是一份兼容性承诺。既有配置文件照常工作——退役键被忽略，启动时打印一条 warning 逐一点名，避免有人特意调过的值悄无声息地失效。`docs/configuration.md` 去掉了 40 行的设置表和三个调参示例，换成一张简短的支持字段表、一份退役字段清单，以及一个诚实的「压到最省 token」配方。
+- **破坏性变更（beta API）**：包的 barrel 从覆盖 20 个模块的约 90 个导出名收缩到 21 个，只覆盖它真正支持的用法——嵌入 daemon：`bootstrap` 及其选项/结果类型、`DingTalkBot` 与其配置类型、`ChannelContext` 投递契约、`paths.ts` 常量和 `PipiclawSettings` 类型。prompt 内部、memory 的 sidecar/candidates/consolidation/recall/session 辅助、子代理发现与工具、用量账本、工具配置、executor、命令扩展不再导出；请从各自模块导入，并预期它们会移动。已废弃的 `DingTalkContext` 别名一并移除——改用 `ChannelContext`。仓库内没有任何代码导入过 barrel，README 也从未记载 SDK 用法，因此只影响外部嵌入方。实打实的收益在死代码检测：`src/index.ts` 是 knip 的 entry point，从这里导出的每个名字都是 `npm run deadcode` 的盲区。
+
+### 修复
+
+- 三处「文档承诺了但代码不读」的死配置已清除。`sessionSearch.enabled` 被文档标注为控制冷路径 transcript 检索，但 `session_search` 一直是无条件注册的——现在文档改为与 `grep`、`memory_manage` 一致的恒开。`sessionMemory.failureBackoffTurns`（此前已标注 "Legacy"）同样无人读取。`getCompactionReserveTokens()`、`getCompactionKeepRecentTokens()` 和 `applyOverrides()` 在包括 pi SDK 在内的全仓库都没有调用者，已删除；SDK 确实会反射调用的那些 getter 一个未动。
+
 ## [0.8.10-beta.1] - 2026-07-24
 
 ### 新增

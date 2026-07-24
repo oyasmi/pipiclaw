@@ -133,7 +133,6 @@ function createSettings(
 		minTurnsBetweenUpdate: number;
 		minToolCallsBetweenUpdate: number;
 		timeoutMs: number;
-		failureBackoffTurns: number;
 		forceRefreshBeforeCompact: boolean;
 		forceRefreshBeforeNewSession: boolean;
 	}> = {},
@@ -143,7 +142,6 @@ function createSettings(
 		minTurnsBetweenUpdate: 2,
 		minToolCallsBetweenUpdate: 2,
 		timeoutMs: 30000,
-		failureBackoffTurns: 3,
 		forceRefreshBeforeCompact: true,
 		forceRefreshBeforeNewSession: true,
 		...overrides,

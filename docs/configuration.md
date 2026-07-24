@@ -165,12 +165,13 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 ```json
 "logging": {
   "level": "info",
-  "file": { "enabled": true, "maxSizeBytes": 5000000, "maxFiles": 3 }
+  "file": { "enabled": true }
 }
 ```
 
 - `level`：`debug` | `info` | `warn` | `error`，同时控制 console 与文件日志；低于该级别的记录不会输出。默认 `info` 只保留运行生命周期、请求处理、投递、降级和失败等关键事件；工具参数/结果、模型 thinking 和完整回复仅在 `debug` 输出。
 - `file.enabled`：默认 **true**（守护进程默认落盘的价值大于新文件的意外感）。设为 `false` 则退回纯 console。
+- 轮转参数固定为 5MB × 3，不可配。
 - 环境变量优先于 settings，且在启动最早期即生效：`PIPICLAW_LOG_LEVEL`（同上四级）、`PIPICLAW_LOG_FILE=0|1`（关闭/开启文件落盘）。
 - 控制台每条日志使用统一的 `时间 级别 事件名 消息 key=value` 格式。用户正文、模型回复和常见敏感字段（如 token、cookie、authorization、secret、环境变量值）不会原样输出；长诊断字符串会被截断。
 
@@ -275,39 +276,21 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 `web_fetch` 会把抓取到的正文按频道缓存（`workspace/<channelId>/web-cache/`，键为 URL+抽取模式的哈希，TTL 15 分钟，LRU 上限 20 个文件）。长页面被截断时尾注会给出下一段的 `offset`；用同一 URL + 该 `offset` 再调一次即从缓存翻页，**不重新抓取**。图片结果原样返回、不缓存。无独立开关，随 `tools.web.enable` 生效。
 
-### 任务摘要注入（`taskDigest`，`settings.json`）
+### 任务摘要注入（Task Digest，恒随任务开关）
 
-每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。是否注入由总开关 `tools.tasks.enabled`（tools.json）决定；这里只调尺寸。
+每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。是否注入完全由总开关 `tools.tasks.enabled`（tools.json）决定，没有单独的配置项。
 
-```jsonc
-{
-  "taskDigest": {
-    "maxTasks": 8,
-    "maxChars": 1000
-  }
-}
-```
+摘要上限固定为 8 条任务 / 约 1000 字符，超出会截断并标注剩余数量。摘要只收录 status ≠ done 的任务，无 active 任务时不注入。
 
-- `maxTasks`（默认 `8`）/ `maxChars`（默认 `1000`）：摘要的上限，超出会截断并标注剩余数量。摘要只收录 status ≠ done 的任务，无 active 任务时不注入。
+### 内建任务驱动器（Task Driver，恒随任务开关）
 
-### 内建任务驱动器（`taskDriver`，`settings.json`）
+DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描本身不调用模型；只有存在 actionable task（status ≠ done 且 wake 未设/已到）时才入队唤醒，因此不再需要手工 heartbeat event、`tasks-pending.mjs` 或 task `.checkin` 事件。是否运行完全由总开关 `tools.tasks.enabled`（tools.json）决定；节奏是内置常量，不可配。
 
-DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描本身不调用模型；只有存在 actionable task（status ≠ done 且 wake 未设/已到）时才入队唤醒，因此不再需要手工 heartbeat event、`tasks-pending.mjs` 或 task `.checkin` 事件。是否运行由总开关 `tools.tasks.enabled`（tools.json）决定；这里只调节奏。
+行为（供理解，非配置项）：
 
-```jsonc
-{
-  "taskDriver": {
-    "continuationDelayMinutes": 5,
-    "stalledRetryMinutes": 60,
-    "maxDispatchesPerTick": 4,
-    "maxSleepMinutes": 15
-  }
-}
-```
-
-- driver 不再固定每分钟轮询：它睡到下一个已知的感兴趣时刻（最近的 `wake`、退避到期、deadline），封顶 `maxSleepMinutes`（默认 `15`，范围 1–60）。`continuationDelayMinutes`（默认 `5`，范围 1–60）表示上一轮确实修改台账后最早何时续跑。
-- `stalledRetryMinutes`（默认 `60`，范围不小于 continuation、最大 1440）表示入队后台账没有任何变化时的退避，防止坏任务形成 token 热循环。
-- `maxDispatchesPerTick`（默认 `4`，范围 1–20）是单次扫描的全局派发上限。driver 按 channel 轮转，避免排序靠后的 channel 饥饿；同一 channel 每 tick 最多唤醒一个任务，运行中的 channel 会跳过。回合结束会立即 nudge 重扫，`maxSleepMinutes` 也是绕过 runtime 的手工编辑被接起的延迟上界。
+- driver 不固定每分钟轮询：它睡到下一个已知的感兴趣时刻（最近的 `wake`、退避到期、deadline），封顶 15 分钟。上一轮确实修改台账后，最早 5 分钟后续跑。
+- 入队后台账没有任何变化时退避 60 分钟，防止坏任务形成 token 热循环。
+- 单次扫描全局最多派发 4 个。driver 按 channel 轮转，避免排序靠后的 channel 饥饿；同一 channel 每 tick 最多唤醒一个任务，运行中的 channel 会跳过。回合结束会立即 nudge 重扫，15 分钟的睡眠上限也是绕过 runtime 的手工编辑被接起的延迟上界。
 - daemon 重启会清空内存退避，使遗留 actionable task 在下一次扫描重新进入恢复路径。`tui_local` 之类纯 TUI channel 会保留台账和摘要，但关闭的 TUI 没有常驻 transport，不能自行唤醒。
 
 ## 终端 TUI（Terminal TUI）
@@ -829,6 +812,14 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 `settings.json` 用来控制 Pipiclaw 的默认模型和部分运行时行为。
 
+### 设计边界：只表达产品意图（What Belongs Here）
+
+`settings.json` 只接受**你有依据做判断**的选项：用哪个模型、某个子系统跑不跑、某次可选的 LLM 调用值不值这些 token、输出长什么样。
+
+维护周期、并发数、置信阈值、退避时长、token 预算这类**算法参数一律是代码常量**，不在这里出现。原因很简单：没有人能凭手头信息判断 checkpoint 间隔应该是 20 分钟还是 25 分钟，把这种决定摆进配置文件只是把调参责任转嫁给不掌握依据的人，同时让每个数字都变成一份兼容性承诺。
+
+因此下表很短，而且**每一行都是布尔、枚举或模型引用**。
+
 ### 兼容性说明（Important Compatibility Note）
 
 虽然 `settings.json` 这个概念来自 pi-mono，但 Pipiclaw 目前并没有完整支持上游 `settings.md` 里的所有字段。
@@ -843,45 +834,44 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 ### Pipiclaw 当前支持的字段（Supported Fields in Pipiclaw）
 
-| 字段 | 默认值 | 在 Pipiclaw 中生效 | 说明 |
-|------|--------|----------------------|------|
-| `defaultProvider` | unset | Yes | 默认模型提供方 |
-| `defaultModel` | unset | Yes | 默认模型 |
-| `defaultThinkingLevel` | `"medium"` | Yes | 主 agent 的默认 thinking level；会按当前模型能力自动 clamp |
-| `compaction.enabled` | `true` | Yes | 启用自动上下文压缩 |
-| `compaction.reserveTokens` | `16384` | Yes | 为压缩流程预留的 token 数 |
-| `compaction.keepRecentTokens` | `20000` | Yes | 压缩前保留的近期 token 数 |
-| `retry.enabled` | `true` | Yes | 启用自动重试 |
-| `retry.maxRetries` | `3` | Yes | 最大重试次数 |
-| `retry.baseDelayMs` | `2000` | Yes | 基础退避延迟 |
-| `memoryRecall.enabled` | `true` | Yes | 启用相关记忆召回 |
-| `memoryRecall.maxCandidates` | `12` | Yes | 排序前候选片段数量 |
-| `memoryRecall.maxInjected` | `5` | Yes | 注入当前 prompt 的片段数量 |
-| `memoryRecall.maxChars` | `5000` | Yes | 注入字符上限 |
-| `memoryRecall.rerankWithModel` | `"auto"` | Yes | 是否用模型对召回结果再次排序；`"auto"` 只在入围数超过 `maxInjected` 且本地排序没有明显赢家时触发（3s 超时，失败则回退本地排序） |
-| `sessionMemory.enabled` | `true` | Yes | 启用 `SESSION.md` 刷新流程 |
-| `sessionMemory.minTurnsBetweenUpdate` | `2` | Yes | scheduled session refresh 的 assistant turn 阈值 |
-| `sessionMemory.minToolCallsBetweenUpdate` | `4` | Yes | scheduled session refresh 的工具调用阈值 |
-| `sessionMemory.timeoutMs` | `30000` | Yes | 会话记忆刷新超时 |
-| `sessionMemory.failureBackoffTurns` | `3` | Legacy | 边界外的 scheduled refresh 主要使用 `memoryMaintenance.failureBackoffMinutes` |
-| `sessionMemory.forceRefreshBeforeCompact` | `true` | Yes | compaction 前强制刷新 |
-| `sessionMemory.forceRefreshBeforeNewSession` | `true` | Yes | `/new` 前强制刷新 |
-| `memoryMaintenance.enabled` | `true` | Yes | 启用内置后台 memory maintenance scheduler |
-| `memoryMaintenance.minIdleMinutesBeforeLlmWork` | `10` | Yes | channel 最近活跃后至少等待多久才允许后台 LLM work |
-| `memoryMaintenance.sessionRefreshIntervalMinutes` | `10` | Yes | scheduled session refresh 的最小间隔 |
-| `memoryMaintenance.checkpointIntervalMinutes` | `20` | Yes | 后台 memory checkpoint（durable 固化）job 的最小间隔 |
-| `memoryMaintenance.minMemoryAutoWriteConfidence` | `0.85` | Yes | channel memory 自动写入阈值（边界固化与后台 checkpoint 共用） |
-| `memoryMaintenance.structuralMaintenanceIntervalHours` | `6` | Yes | cleanup/folding structural job 的最小间隔 |
-| `memoryMaintenance.maxConcurrentChannels` | `1` | Yes | 每个 tick 最多处理的 channel 数 |
-| `memoryMaintenance.failureBackoffMinutes` | `30` | Yes | 后台任务失败后的回退分钟数 |
-| `memoryMaintenance.cleanupShrinkGuardMinRatio` | `0.4` | Yes | MEMORY.md cleanup 结果若缩水到原文的此比例以下则拒绝写入（防坏结果覆盖） |
-| `memoryMaintenance.cleanupShrinkGuardMinChars` | `2000` | Yes | 仅当原 MEMORY.md 超过此长度时才启用缩水保护 |
-| `sessionSearch.enabled` | `true` | Yes | 启用当前 channel transcript 冷路径搜索 |
-| `sessionSearch.maxFiles` | `12` | Yes | `session_search` 最多读取的当前 channel JSONL 文件数 |
-| `sessionSearch.maxChunks` | `80` | Yes | `session_search` 最多评分片段数 |
-| `sessionSearch.maxCharsPerChunk` | `1200` | Yes | 单个搜索片段字符上限 |
-| `sessionSearch.summarizeWithModel` | `false` | Yes | 是否用模型对搜索命中做 focused summary |
-| `sessionSearch.timeoutMs` | `12000` | Yes | 搜索摘要 sidecar 超时 |
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `defaultProvider` | unset | 默认模型提供方 |
+| `defaultModel` | unset | 默认模型 |
+| `defaultThinkingLevel` | `"medium"` | 主 agent 的默认 thinking level；会按当前模型能力自动 clamp |
+| `fallbackModel` | unset | 主模型回合失败时的备用模型引用，详见上文 |
+| `subagentModel` | unset | 子代理的默认模型引用，详见上文 |
+| `compaction.enabled` | `true` | 启用自动上下文压缩 |
+| `retry.enabled` | `true` | 启用自动重试 |
+| `memoryRecall.enabled` | `true` | 启用相关记忆召回 |
+| `memoryRecall.rerankWithModel` | `"auto"` | 是否用模型对召回结果再次排序。`true`/`false`/`"auto"`；`"auto"` 只在入围数超过注入上限且本地排序没有明显赢家时触发（3s 超时，失败则回退本地排序）。**会额外发起一次 LLM 调用**，所以它是你的成本决定而不是常量 |
+| `sessionMemory.enabled` | `true` | 启用 `SESSION.md` 刷新流程 |
+| `memoryMaintenance.enabled` | `true` | 启用内置后台 memory maintenance scheduler（session refresh / memory checkpoint / structural maintenance 三个 job） |
+| `sessionSearch.summarizeWithModel` | `false` | 是否用模型对 `session_search` 命中做 focused summary。同样**会额外发起 LLM 调用** |
+| `logging.level` | `"info"` | `debug` \| `info` \| `warn` \| `error`，详见上文可观测性一节 |
+| `logging.file.enabled` | `true` | 结构化日志是否落盘 |
+| `tui.responseMode` | `"full_progress_then_plain_final"` | 终端 TUI 的输出形态，详见上文 TUI 一节 |
+
+`session_search` 工具本身恒开，与 `grep`、`memory_manage`、`event_manage` 一致，没有开关。
+
+### 已退役的字段（Retired Fields）
+
+0.8.11 起，下列字段不再可配，其值已成为代码常量。**把它们留在 `settings.json` 里不会导致启动失败**——运行时按常量执行，并在启动时打印一条 warning 提示你删掉它们：
+
+```
+settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispatchesPerTick: no longer configurable; ...
+```
+
+- `compaction.reserveTokens`、`compaction.keepRecentTokens`
+- `retry.maxRetries`、`retry.baseDelayMs`
+- `memoryRecall.maxCandidates`、`memoryRecall.maxInjected`、`memoryRecall.maxChars`
+- `sessionMemory` 的 `minTurnsBetweenUpdate`、`minToolCallsBetweenUpdate`、`timeoutMs`、`failureBackoffTurns`、`forceRefreshBeforeCompact`、`forceRefreshBeforeNewSession`
+- `memoryMaintenance` 除 `enabled` 外的全部字段（各类间隔、`minMemoryAutoWriteConfidence`、`maxConcurrentChannels`、`failureBackoffMinutes`、两个 `cleanupShrinkGuard*`）
+- `sessionSearch` 除 `summarizeWithModel` 外的全部字段（含此前从未生效的 `enabled`）
+- `logging.file.maxSizeBytes`、`logging.file.maxFiles`
+- `taskDigest` 与 `taskDriver` 两段整体
+
+行为上的关键常量仍然写在对应章节里（后台维护间隔见 `docs/memory.md`，任务驱动节奏见本文"内建任务驱动器"一节），只是不再作为可调项。
 
 ### 在 Pipiclaw 中暂时不要依赖的 pi-mono 字段（Fields From pi-mono That You Should Not Rely On in Pipiclaw）
 
@@ -927,26 +917,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 }
 ```
 
-#### 2. 降低记忆召回噪声（Reduce Recall Noise）
-
-```json
-{
-  "memoryRecall": {
-    "enabled": true,
-    "maxCandidates": 8,
-    "maxInjected": 3,
-    "maxChars": 3000,
-    "rerankWithModel": "auto"
-  }
-}
-```
-
-适合：
-
-- 提示词预算紧张
-- 希望 recall 更克制
-
-#### 3. 设置主 agent 的默认 thinking level（Set the Main Agent Thinking Level）
+#### 2. 设置主 agent 的默认 thinking level（Set the Main Agent Thinking Level）
 
 ```json
 {
@@ -957,76 +928,41 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 支持 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`。当前模型不支持的 level 会自动降级到该模型支持的值。
 运行中也可以使用 `/thinking` 查看可用值，或使用 `/thinking <level>`、`/thinking cycle` 调整当前 session。
 
-#### 4. 更积极地刷新会话记忆（More Aggressive Session Memory Refresh）
+#### 3. 压到最省 token（Minimize Token Spend）
 
 ```json
 {
-  "sessionMemory": {
-    "enabled": true,
-    "minTurnsBetweenUpdate": 1,
-    "minToolCallsBetweenUpdate": 2,
-    "timeoutMs": 30000,
-    "failureBackoffTurns": 2,
-    "forceRefreshBeforeCompact": true,
-    "forceRefreshBeforeNewSession": true
+  "memoryRecall": { "rerankWithModel": false },
+  "sessionSearch": { "summarizeWithModel": false },
+  "memoryMaintenance": { "enabled": false }
+}
+```
+
+这三项是 `settings.json` 里仅有的与 LLM 调用量直接相关的选项：前两项各砍掉一次可选的模型调用，第三项关掉全部后台记忆维护。
+
+代价要清楚：关掉 `memoryMaintenance` 后 `SESSION.md` 只在边界事件（compaction、`/new`、关闭）刷新，`MEMORY.md` 不再自动固化，长期使用会明显丢失连续性。想省钱但保留记忆，优先只关前两项。
+
+#### 4. 关掉日志落盘（Console-Only Logging）
+
+```json
+{
+  "logging": {
+    "level": "warn",
+    "file": { "enabled": false }
   }
 }
 ```
 
-适合：
+适合：容器内已有统一日志采集，不需要 `state/logs/runtime.jsonl`。
 
-- 长任务、多工具调用
-- 希望 `SESSION.md` 更新更频繁
-
-#### 5. 更保守的上下文压缩（More Conservative Compaction）
-
-```json
-{
-  "compaction": {
-    "enabled": true,
-    "reserveTokens": 16384,
-    "keepRecentTokens": 30000
-  }
-}
-```
-
-适合：
-
-- 当前模型上下文较大
-- 希望在 compaction 前保留更多近期消息
-
-#### 5. 调整后台记忆维护与冷路径检索
-
-```json
-{
-  "memoryMaintenance": {
-    "enabled": true,
-    "minIdleMinutesBeforeLlmWork": 10,
-    "sessionRefreshIntervalMinutes": 10,
-    "checkpointIntervalMinutes": 20,
-    "minMemoryAutoWriteConfidence": 0.85,
-    "structuralMaintenanceIntervalHours": 6,
-    "maxConcurrentChannels": 1,
-    "failureBackoffMinutes": 30
-  },
-  "sessionSearch": {
-    "enabled": true,
-    "maxFiles": 12,
-    "maxChunks": 80,
-    "maxCharsPerChunk": 1200,
-    "summarizeWithModel": false,
-    "timeoutMs": 12000
-  }
-}
-```
-
-说明：
+#### 后台记忆维护的行为（不可配，供理解）
 
 - 普通用户 turn 结束后只记录 dirty/counter，不直接触发 memory LLM sidecar。
 - `memoryMaintenance` 是内置后台 scheduler，不依赖也不会写入 `workspace/events/`。
-- 三类后台任务（session refresh / memory checkpoint / structural maintenance）在调用 LLM 前都有本地 gate；无新内容、channel 仍活跃、未到阈值或未到间隔时不会调用 LLM。
+- 三类后台任务（session refresh / memory checkpoint / structural maintenance）在调用 LLM 前都有本地 gate；无新内容、channel 仍活跃、未到阈值或未到间隔时不会调用 LLM。内置间隔为 session refresh 10 分钟、memory checkpoint 20 分钟、structural maintenance 6 小时，channel 静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个 channel。
+- durable 写入有一道固定的置信度闸门（`0.85`），**前台边界固化与后台 checkpoint 共用**同一条提炼路径和同一道闸门。被拒绝的候选会记进 `memory-review.jsonl` 的 `skipped`，素材本身仍保留在 `HISTORY.md` 和冷存储里。
+- `MEMORY.md` cleanup 有缩水保护：原文超过 2000 字符时，结果若缩到原文 40% 以下则拒绝写入，防止一次坏结果覆盖掉整份记忆。
 - `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
-- `minMemoryAutoWriteConfidence` 同时约束**前台边界固化与后台 checkpoint**——两者共用一条提炼路径和同一道闸门。调低它会让所有 durable 写入一起变松。被闸门拒绝的候选会记进 `memory-review.jsonl` 的 `skipped`，素材本身仍保留在 `HISTORY.md` 和冷存储里。
 - workspace skill 只能通过显式的 `skill_manage` 工具创建/更新，后台记忆管线不会自动写 skill。
 
 ## 内建工具配置文件 `tools.json`（`tools.json`）
