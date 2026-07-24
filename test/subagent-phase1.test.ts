@@ -11,10 +11,11 @@ import {
 	discoverSubAgents,
 	getSubAgentsDir,
 	resolveSubAgentConfig,
+	SUB_AGENT_EFFORT_PRESETS,
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
-import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { applyTaskControlPatch, createDefaultTaskControl } from "../src/tasks/control.js";
 import { readVerificationAttestation } from "../src/tasks/verification.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -84,6 +85,89 @@ function createAssistantMessage(
 }
 
 const createTempWorkspace = useTempDirs("pipiclaw-subagent-");
+
+/** A predefined agent carrying the stock defaults; override only what a test is about. */
+function makeSubAgentConfig(overrides: Partial<SubAgentConfig> = {}): SubAgentConfig {
+	return {
+		name: "reviewer",
+		description: "review code",
+		systemPrompt: "Review the supplied task.",
+		tools: ["read", "bash"],
+		model,
+		modelRef: "openai/gpt-4o-mini",
+		maxTurns: 24,
+		maxToolCalls: 48,
+		maxWallTimeSec: 300,
+		bashTimeoutSec: 120,
+		contextMode: "isolated",
+		memory: "none",
+		paths: [],
+		source: "predefined",
+		...overrides,
+	};
+}
+
+function makeDiscovery(workspaceDir: string, agents: SubAgentConfig[]) {
+	return () => ({ directory: join(workspaceDir, "sub-agents"), warnings: [], agents });
+}
+
+/** A committed git repo plus a governed `ship` task, the minimum for worktree isolation. */
+function createWorktreeFixture(): { workspaceDir: string; repoDir: string; channelDir: string } {
+	const workspaceDir = createTempWorkspace();
+	const repoDir = join(workspaceDir, "repo");
+	const channelDir = join(workspaceDir, "dm_123");
+	mkdirSync(repoDir, { recursive: true });
+	mkdirSync(join(channelDir, "tasks"), { recursive: true });
+	writeFileSync(
+		join(channelDir, "tasks", "ship.md"),
+		renderTaskDocument({ status: "open", control: createDefaultTaskControl() }, "# Ship\n"),
+	);
+	execFileSync("git", ["-C", repoDir, "init", "-q"]);
+	execFileSync("git", ["-C", repoDir, "config", "user.email", "test@example.com"]);
+	execFileSync("git", ["-C", repoDir, "config", "user.name", "Test"]);
+	writeFileSync(join(repoDir, "README.md"), "base\n");
+	execFileSync("git", ["-C", repoDir, "add", "README.md"]);
+	execFileSync("git", ["-C", repoDir, "commit", "-qm", "base"]);
+	return { workspaceDir, repoDir, channelDir };
+}
+
+function recordWorktreeOnTask(channelDir: string, worktreePath: string): void {
+	writeFileSync(
+		join(channelDir, "tasks", "ship.md"),
+		renderTaskDocument(
+			{ status: "open", control: applyTaskControlPatch(createDefaultTaskControl(), { worktreePath }) },
+			"# Ship\n",
+		),
+	);
+}
+
+function createWorktreeTool(workspaceDir: string, repoDir: string, channelDir: string) {
+	return createSubAgentTool({
+		executor: createExecutor(),
+		workingDirectory: repoDir,
+		getCurrentModel: () => model,
+		getAvailableModels: () => [model],
+		resolveApiKey: async () => "test-key",
+		workspaceDir,
+		channelDir,
+		runtimeContext: { workspaceDir, channelId: "dm_123" },
+		createWorker: () =>
+			new FakeWorker((_input, worker) => {
+				const message = createAssistantMessage("Implementation complete.");
+				worker.state.messages = [message];
+				worker.emit({ type: "message_end", message });
+			}),
+	});
+}
+
+const worktreeParams = {
+	label: "isolated implementation",
+	name: "implementer",
+	systemPrompt: "Implement the requested change.",
+	task: "Implement in the isolated checkout.",
+	taskId: "ship",
+	isolation: "worktree" as const,
+};
 
 describe("sub-agent discovery", () => {
 	it("loads every production example with the expected routing and resource settings", () => {
@@ -268,7 +352,7 @@ Review files carefully.`,
 
 		const resolved = resolveSubAgentConfig([model], model, discovery.agents, {
 			agent: "reviewer",
-			memory: "relevant",
+			context: "relevant",
 			paths: ["src/extra.ts"],
 		});
 		expect(resolved.error).toBeUndefined();
@@ -279,11 +363,76 @@ Review files carefully.`,
 		});
 	});
 
+	it("maps each context choice onto the frontmatter contextMode/memory pair", () => {
+		const cases = [
+			{ context: "none", contextMode: "isolated", memory: "none" },
+			{ context: "session", contextMode: "contextual", memory: "session" },
+			{ context: "relevant", contextMode: "contextual", memory: "relevant" },
+		] as const;
+		for (const { context, contextMode, memory } of cases) {
+			const resolved = resolveSubAgentConfig([model], model, [], {
+				systemPrompt: "Work",
+				context,
+			});
+			expect(resolved.config).toMatchObject({ contextMode, memory });
+		}
+
+		// An unset context leaves a predefined agent's frontmatter pair untouched.
+		const inherited = resolveSubAgentConfig(
+			[model],
+			model,
+			[makeSubAgentConfig({ contextMode: "contextual", memory: "session" })],
+			{ agent: "reviewer" },
+		);
+		expect(inherited.config).toMatchObject({ contextMode: "contextual", memory: "session" });
+
+		expect(
+			resolveSubAgentConfig([model], model, [], { systemPrompt: "Work", context: "everything" }).error,
+		).toContain('Unknown context "everything"');
+	});
+
+	it("applies effort presets as whole tuples, overriding frontmatter budgets", () => {
+		const budgeted = makeSubAgentConfig({ maxTurns: 5, maxToolCalls: 6, maxWallTimeSec: 7, bashTimeoutSec: 8 });
+
+		// No effort: the frontmatter numbers survive untouched.
+		expect(resolveSubAgentConfig([model], model, [budgeted], { agent: "reviewer" }).config).toMatchObject({
+			maxTurns: 5,
+			maxToolCalls: 6,
+			maxWallTimeSec: 7,
+			bashTimeoutSec: 8,
+		});
+
+		// An explicit effort replaces every budget field, not just the ones it happens to differ on.
+		expect(
+			resolveSubAgentConfig([model], model, [budgeted], { agent: "reviewer", effort: "quick" }).config,
+		).toMatchObject(SUB_AGENT_EFFORT_PRESETS.quick);
+		expect(
+			resolveSubAgentConfig([model], model, [budgeted], { agent: "reviewer", effort: "deep" }).config,
+		).toMatchObject(SUB_AGENT_EFFORT_PRESETS.deep);
+
+		// standard is byte-identical to the built-in defaults an unconfigured inline agent gets.
+		const inlineDefault = resolveSubAgentConfig([model], model, [], { systemPrompt: "Work" }).config;
+		expect(inlineDefault).toMatchObject(SUB_AGENT_EFFORT_PRESETS.standard);
+
+		expect(resolveSubAgentConfig([model], model, [], { systemPrompt: "Work", effort: "extreme" }).error).toContain(
+			'Unknown effort "extreme"',
+		);
+	});
+
+	it("lets a sub-agent request grep, which the tool registry already exposes to sub-agents", () => {
+		const resolved = resolveSubAgentConfig([model], model, [], {
+			systemPrompt: "Search the repo",
+			tools: ["read", "grep"],
+		});
+		expect(resolved.error).toBeUndefined();
+		expect(resolved.config?.tools).toEqual(["read", "grep"]);
+	});
+
 	it("resolves current model by default and rejects overly long inline prompts", () => {
 		const resolved = resolveSubAgentConfig([model], model, [], {
 			name: "inline-reviewer",
 			systemPrompt: "Review files",
-			contextMode: "contextual",
+			context: "relevant",
 		});
 		expect(resolved.error).toBeUndefined();
 		expect(resolved.config?.model).toBe(model);
@@ -318,22 +467,7 @@ Review files carefully.`,
 		expect(settingsDefault.config?.model).toBe(altModel);
 
 		// A predefined agent's frontmatter model wins over the settings default.
-		const withFrontmatterModel: SubAgentConfig = {
-			name: "reviewer",
-			description: "review code",
-			systemPrompt: "Review the supplied task.",
-			tools: ["read", "bash"],
-			model,
-			modelRef: "openai/gpt-4o-mini",
-			maxTurns: 24,
-			maxToolCalls: 48,
-			maxWallTimeSec: 300,
-			bashTimeoutSec: 120,
-			contextMode: "isolated",
-			memory: "none",
-			paths: [],
-			source: "predefined",
-		};
+		const withFrontmatterModel = makeSubAgentConfig();
 		const frontmatterWins = resolveSubAgentConfig(
 			availableModels,
 			altModel,
@@ -530,6 +664,40 @@ describe("sub-agent tool", () => {
 		expect(task).toContain(result.details.worktreeBranch);
 	});
 
+	it("reuses the worktree recorded on the task instead of creating a rival one", async () => {
+		const { workspaceDir, repoDir, channelDir } = createWorktreeFixture();
+		const tool = createWorktreeTool(workspaceDir, repoDir, channelDir);
+
+		const first = await tool.execute("worktree-reuse-1", worktreeParams);
+		const second = await tool.execute("worktree-reuse-2", worktreeParams);
+
+		expect(second.details.worktreePath).toBe(first.details.worktreePath);
+		expect(second.details.worktreeBranch).toBe(first.details.worktreeBranch);
+		const listed = execFileSync("git", ["-C", repoDir, "worktree", "list"], { encoding: "utf-8" });
+		expect(listed.split("\n").filter((line) => line.includes("pipiclaw-task/ship"))).toHaveLength(1);
+	});
+
+	it("creates a fresh worktree when the recorded path no longer exists on disk", async () => {
+		const { workspaceDir, repoDir, channelDir } = createWorktreeFixture();
+		recordWorktreeOnTask(channelDir, join(channelDir, "tasks", "worktrees", "ship", "gone"));
+		const tool = createWorktreeTool(workspaceDir, repoDir, channelDir);
+
+		const result = await tool.execute("worktree-stale-1", worktreeParams);
+
+		expect(result.details.worktreePath).not.toContain("gone");
+		expect(result.details.worktreePath && existsSync(result.details.worktreePath)).toBe(true);
+	});
+
+	it("refuses to delegate when the task records a worktree outside the channel worktrees dir", async () => {
+		const { workspaceDir, repoDir, channelDir } = createWorktreeFixture();
+		recordWorktreeOnTask(channelDir, repoDir);
+		const tool = createWorktreeTool(workspaceDir, repoDir, channelDir);
+
+		await expect(tool.execute("worktree-escape-1", worktreeParams)).rejects.toThrow(
+			/records a worktree outside .*Clear it with task_manage/s,
+		);
+	});
+
 	it("preserves partial output and injects minimal runtime context", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_123");
@@ -543,28 +711,7 @@ describe("sub-agent tool", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			channelDir,
-			getSubAgentDiscovery: () => ({
-				directory: join(workspaceDir, "sub-agents"),
-				warnings: [],
-				agents: [
-					{
-						name: "reviewer",
-						description: "review code",
-						systemPrompt: "Review the supplied task.",
-						tools: ["read", "bash"],
-						model,
-						modelRef: "openai/gpt-4o-mini",
-						maxTurns: 24,
-						maxToolCalls: 48,
-						maxWallTimeSec: 300,
-						bashTimeoutSec: 120,
-						contextMode: "isolated",
-						memory: "none",
-						paths: [],
-						source: "predefined",
-					},
-				],
-			}),
+			getSubAgentDiscovery: makeDiscovery(workspaceDir, [makeSubAgentConfig()]),
 			runtimeContext: {
 				workspaceDir: "/workspace/root",
 				channelId: "dm_123",
@@ -671,28 +818,13 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 				maxChars: 1200,
 				rerankWithModel: false,
 			}),
-			getSubAgentDiscovery: () => ({
-				directory: join(workspaceDir, "sub-agents"),
-				warnings: [],
-				agents: [
-					{
-						name: "reviewer",
-						description: "review code",
-						systemPrompt: "Review the supplied task.",
-						tools: ["read", "bash"],
-						model,
-						modelRef: "openai/gpt-4o-mini",
-						maxTurns: 24,
-						maxToolCalls: 48,
-						maxWallTimeSec: 300,
-						bashTimeoutSec: 120,
-						contextMode: "contextual",
-						memory: "relevant",
-						paths: ["src/core.ts", "test/core.test.ts"],
-						source: "predefined",
-					},
-				],
-			}),
+			getSubAgentDiscovery: makeDiscovery(workspaceDir, [
+				makeSubAgentConfig({
+					contextMode: "contextual",
+					memory: "relevant",
+					paths: ["src/core.ts", "test/core.test.ts"],
+				}),
+			]),
 			runtimeContext: {
 				workspaceDir: "/workspace/root",
 				channelId: "dm_123",
@@ -878,6 +1010,15 @@ describe("sub-agent artifact contract (D4)", () => {
 });
 
 describe("sub-agent convergence turn (D6)", () => {
+	// Budgets are no longer settable per invocation, so the tight budget these tests need
+	// comes from frontmatter — which also keeps them covering "exact numbers still work".
+	const tightBudgetExplorer = makeSubAgentConfig({
+		name: "explorer",
+		description: "explore the repo",
+		systemPrompt: "Explore the codebase.",
+		maxToolCalls: 2,
+	});
+
 	it("gives a tool-budget abort one tool-free turn to report its conclusions", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_123");
@@ -891,6 +1032,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			channelDir,
+			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
 			runtimeContext: { workspaceDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((input, worker) => {
@@ -915,10 +1057,8 @@ describe("sub-agent convergence turn (D6)", () => {
 
 		const result = await tool.execute("converge-call-1", {
 			label: "explore",
-			name: "explorer",
-			systemPrompt: "Explore the codebase.",
+			agent: "explorer",
 			task: "Map the whole repo.",
-			maxToolCalls: 2,
 		});
 
 		expect(callCount).toBe(2);
@@ -941,6 +1081,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			channelDir,
+			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
 			runtimeContext: { workspaceDir, channelId: "dm_123" },
 			// Real, tiny wall clock: exercises the actual setTimeout/clearTimeout path without
 			// the flakiness of mixing fake timers with the real fs I/O prepareRunContext does.
@@ -966,10 +1107,8 @@ describe("sub-agent convergence turn (D6)", () => {
 
 		const result = await tool.execute("converge-call-2", {
 			label: "explore",
-			name: "explorer",
-			systemPrompt: "Explore the codebase.",
+			agent: "explorer",
 			task: "Map the whole repo.",
-			maxToolCalls: 2,
 		});
 
 		expect(callCount).toBe(2);
@@ -992,6 +1131,7 @@ describe("sub-agent convergence turn (D6)", () => {
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			channelDir,
+			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
 			runtimeContext: { workspaceDir, channelId: "dm_123" },
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
@@ -1012,10 +1152,8 @@ describe("sub-agent convergence turn (D6)", () => {
 				"converge-call-3",
 				{
 					label: "explore",
-					name: "explorer",
-					systemPrompt: "Explore the codebase.",
+					agent: "explorer",
 					task: "Map the whole repo.",
-					maxToolCalls: 2,
 				},
 				controller.signal,
 			),

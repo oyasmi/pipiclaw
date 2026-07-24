@@ -21,7 +21,7 @@ priority: 45
 
 不需要预先配置：不传 `agent` 时给 `systemPrompt` 即可发起委派，`workspaceDir/sub-agents/` 为空不影响这条路径。若需要可复用角色，把 Markdown 配置放入该目录；runtime 只加载实际存在的配置。仓库提供 explorer、researcher、reviewer、verifier、git-committer 五份可复制模板，见 `examples/sub-agents/`。选择明确适合的配置 agent；没有时使用聚焦的 inline `systemPrompt`。task 描述必须包含目标、范围、相关路径、约束、验收方法和返回格式，因为子代理看不到主对话。
 
-用 `maxTurns`、`maxToolCalls`、`maxWallTimeSec` 限幅。进程内 subagent 同回合同步返回,不需要回访事件；主 agent 负责验收结果和更新台账,子代理不驱动 task/event 台账。触顶时子代理会收敛输出已完成的结论而不是整段丢弃,但预算仍然是真实上限,不要依赖它兜底过大的任务。
+执行预算用 `effort` 三档:`quick`(窄查找)、`standard`(默认)、`deep`(长程分析);精确的轮数/调用数/墙钟数值只在 workspace 配置的 frontmatter 里调,调用时不必给。上下文注入用 `context`:`none`(默认,完全隔离)、`session`、`relevant`。进程内 subagent 同回合同步返回,不需要回访事件；主 agent 负责验收结果和更新台账,子代理不驱动 task/event 台账。触顶时子代理会收敛输出已完成的结论而不是整段丢弃,但预算仍然是真实上限,不要依赖它兜底过大的任务。
 
 独立验收必须 `purpose: verify` + `taskId`,见 `task-closeout.md`。
 
@@ -35,7 +35,7 @@ priority: 45
 
 写密集 child 设置 `control.isolation: worktree`，委派时传 `isolation: worktree` 和 taskId。runtime 从 committed HEAD 创建 `pipiclaw-task/<task>/<run>` 分支，把路径/分支记录进 task control。
 
-已有 worktree 可传 `worktreePath`，但必须位于该 channel 的 `tasks/worktrees/` 下。worktree 不自动删除；父代理必须 review、merge、验证，然后清理 worktree 与分支。创建前处理好主 checkout 的未提交前置改动。
+同一 taskId 的后续委派自动复用台账里记录的 worktree，不需要也无法手工指定路径；台账记录的路径若已不在磁盘上则新建，若指向 `tasks/worktrees/` 之外则报错，需先用 `task_manage` 清理该元数据。worktree 不自动删除；父代理必须 review、merge、验证，然后清理 worktree 与分支。创建前处理好主 checkout 的未提交前置改动。
 
 ## 外部 agent 工具
 

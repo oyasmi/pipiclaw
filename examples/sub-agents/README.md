@@ -19,7 +19,7 @@ cp examples/sub-agents/{explorer,researcher,reviewer,verifier,git-committer}.md 
 - `description` 会进入主代理的子代理目录，必须写清楚“何时使用、何时不用、调用前提和是否修改状态”。
 - 正文是子代理的 system prompt，应明确职责、禁止事项、证据标准、停止条件和输出契约。
 - 子代理默认看不到主会话。委派时的 `task` 仍须包含目标、范围、相关路径、约束、验收方法和期望返回格式，不能只写“按上文处理”。
-- `thinkingLevel`、上下文模式和执行预算在这些模板中显式配置，方便审查和按成本调整；不要依赖隐藏默认值。
+- `thinkingLevel`、上下文模式和执行预算在这些模板中显式配置，方便审查和按成本调整；不要依赖隐藏默认值。这四个数值预算只在 frontmatter 里精确设置——调用时主代理只能选 `effort` 的 quick/standard/deep 三档，传了就整组替换这里的数值。
 - `tools` 只是工具白名单，不等同于只读沙箱。拥有 `bash` 的角色仍须遵守正文和应用级 `security.json` 的限制。
 - `git-committer` 只有在任务明确转述用户要求 push 时才能推送；创建了 commit 不代表自动获得 push 授权。
 

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
@@ -51,23 +52,16 @@ const subagentSchema = Type.Object({
 	model: Type.Optional(
 		Type.String({ description: "Optional exact model reference. Defaults to the parent's current model." }),
 	),
-	maxTurns: Type.Optional(Type.Number({ description: "Optional maximum assistant turns for this sub-agent" })),
-	maxToolCalls: Type.Optional(Type.Number({ description: "Optional maximum tool calls for this sub-agent" })),
-	maxWallTimeSec: Type.Optional(
-		Type.Number({ description: "Optional wall time budget in seconds for this sub-agent" }),
-	),
-	bashTimeoutSec: Type.Optional(
-		Type.Number({ description: "Optional default timeout in seconds for bash commands inside this sub-agent" }),
-	),
-	contextMode: Type.Optional(
-		Type.Union([Type.Literal("isolated"), Type.Literal("contextual")], {
+	effort: Type.Optional(
+		Type.Union([Type.Literal("quick"), Type.Literal("standard"), Type.Literal("deep")], {
 			description:
-				'Optional context mode. "isolated" (default) runs with no injected context; "contextual" injects selected session and memory context.',
+				'Execution budget preset (turns, tool calls, wall time). "standard" is the default; "quick" for narrow lookups, "deep" for long analyses.',
 		}),
 	),
-	memory: Type.Optional(
+	context: Type.Optional(
 		Type.Union([Type.Literal("none"), Type.Literal("session"), Type.Literal("relevant")], {
-			description: 'Optional memory mode for contextual sub-agents: "none", "session", or "relevant".',
+			description:
+				'What context to inject. "none" (default) runs fully isolated; "session" adds current session state; "relevant" adds session state plus recalled memory.',
 		}),
 	),
 	paths: Type.Optional(
@@ -83,16 +77,14 @@ const subagentSchema = Type.Object({
 	taskId: Type.Optional(Type.String({ description: "Persistent task id, required when purpose=verify." })),
 	isolation: Type.Optional(
 		Type.Union([Type.Literal("shared"), Type.Literal("worktree")], {
-			description: '"worktree" runs in a dedicated git worktree.',
+			description:
+				'"worktree" runs in the task\'s own git worktree, reusing the one recorded on the task or creating it on first use. Requires taskId.',
 		}),
-	),
-	worktreePath: Type.Optional(
-		Type.String({ description: "Reuse an existing task-owned worktree; must be under channel tasks/worktrees/." }),
 	),
 	returns: Type.Optional(
 		Type.Union([Type.Literal("text"), Type.Literal("artifact")], {
 			description:
-				'How the sub-agent should hand back its result. "text" (default) returns the response directly. "artifact" instructs it to write its primary output to a file and end with an ARTIFACT: <filename> marker. Either way the full output is always saved under the artifact directory, and a reply over the size budget is truncated with a pointer to that file.',
+				'"text" (default) returns the response directly; "artifact" makes the sub-agent write its primary output to a file and end with an ARTIFACT: <filename> marker. The full output is saved to disk either way.',
 		}),
 	),
 	thinkingLevel: Type.Optional(
@@ -255,7 +247,7 @@ async function prepareArtifactDir(channelDir: string, runId: string): Promise<st
 
 async function prepareRunContext(
 	runId: string,
-	params: { purpose?: "work" | "verify"; taskId?: string; isolation?: "shared" | "worktree"; worktreePath?: string },
+	params: { purpose?: "work" | "verify"; taskId?: string; isolation?: "shared" | "worktree" },
 	options: SubAgentToolOptions,
 ): Promise<SubAgentRunContext> {
 	const purpose = params.purpose ?? "work";
@@ -269,7 +261,6 @@ async function prepareRunContext(
 	const artifactDir = await prepareArtifactDir(options.channelDir, runId);
 	const isolation = params.isolation ?? "shared";
 	if (isolation === "shared") {
-		if (params.worktreePath) throw new Error("worktreePath requires isolation=worktree.");
 		const workingDirectory = resolve(options.workingDirectory ?? process.cwd());
 		return { runId, purpose, taskId, isolation, workingDirectory, artifactDir };
 	}
@@ -280,15 +271,23 @@ async function prepareRunContext(
 
 	const baseDir = resolve(options.channelDir, "tasks", "worktrees");
 	await mkdir(baseDir, { recursive: true });
-	if (params.worktreePath) {
-		const existing = resolve(params.worktreePath);
+	// The task ledger — not the caller — owns the worktree identity. Reusing what
+	// `control.worktree` already records is what keeps a second delegation on the same task
+	// from creating a rival worktree and orphaning the first one.
+	const recordedPath = ownedTask.fields.control.worktree?.path;
+	if (recordedPath && existsSync(recordedPath)) {
+		const existing = resolve(recordedPath);
 		const rel = relative(baseDir, existing);
 		if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
-			throw new Error(`worktreePath must be inside ${baseDir}.`);
+			throw new Error(
+				`Task ${taskId} records a worktree outside ${baseDir}: ${existing}. Clear it with task_manage before delegating.`,
+			);
 		}
 		const check = await options.executor.exec(`git -C ${shellEscape(existing)} rev-parse --is-inside-work-tree`);
 		if (check.code !== 0 || check.stdout.trim() !== "true") {
-			throw new Error(`worktreePath is not a usable git worktree: ${existing}`);
+			throw new Error(
+				`Task ${taskId} records a path that is not a usable git worktree: ${existing}. Clear it with task_manage before delegating.`,
+			);
 		}
 		const branchResult = await options.executor.exec(`git -C ${shellEscape(existing)} branch --show-current`);
 		const context: SubAgentRunContext = {
@@ -731,7 +730,7 @@ export function createSubAgentTool(
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate a task to a sub-agent with an isolated context. Default path: pass an inline systemPrompt (plus optional tools/model) to define a temporary sub-agent — no configured agent is required. You may instead name a configured sub-agent via `agent`; workspaceDir/sub-agents/ may be empty on a given install, which does not block inline delegation. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
+			"Delegate a task to a sub-agent with an isolated context. Default path: pass an inline systemPrompt (plus optional tools/model) to define a temporary sub-agent — no configured agent is required. You may instead name a configured sub-agent via `agent`; workspaceDir/sub-agents/ may be empty on a given install, which does not block inline delegation. Execution budgets come from `effort` presets and context injection from `context`; both have safe defaults, so state the task well and leave them alone unless you have a reason. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
 		parameters: subagentSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			const availableModels = options.getAvailableModels();

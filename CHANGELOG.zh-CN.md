@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 变更
+
+- 将 `subagent` 的调用参数从 20 个收缩到 15 个（spec 034），让委派回归"描述任务"，而不是"配置一套 runtime"。四个数值预算（`maxTurns`、`maxToolCalls`、`maxWallTimeSec`、`bashTimeoutSec`）合并为 `effort` 预设三档 `quick`/`standard`/`deep`，其中 `standard` 与原默认值完全一致；`contextMode` + `memory` 合并为单个 `context`（`none`/`session`/`relevant`）；`worktreePath` 移除。子代理 frontmatter 完全不变，仍支持全部精确数值，既有 `workspace/sub-agents/*.md` 行为一字不改。Beta API 变更：从 barrel 导出的 `SubAgentInvocationOverrides` 新增 `effort`/`context`，移除上述七个字段。
+- `isolation: worktree` 改为复用任务台账里已记录的 worktree，不再要求调用方传路径。这同时修掉一个真实缺陷：此前对同一 `taskId` 发起第二次 worktree 委派会新建一个并列的 worktree 并覆盖 `control.worktree`，把第一个变成孤儿。台账记录的路径若已从磁盘消失则重新创建；若指向频道 `tasks/worktrees/` 之外则直接报错，并提示用 `task_manage` 清理。
+
+### 修复
+
+- 子代理现在真的可以被授予 `grep`。工具注册表一直把它标记为 `availableToSubagents`，但子代理工具白名单里没有它，导致请求该工具直接失败，只读检索类角色只能改用 `bash`。默认工具集仍为 `read` + `bash`。
+
 ## [0.8.9] - 2026-07-22
 
 ### 新增

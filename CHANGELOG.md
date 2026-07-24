@@ -4,6 +4,15 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- Narrowed the `subagent` invocation surface from 20 parameters to 15 (spec 034), so delegating means describing a task rather than configuring a runtime. The four numeric budgets (`maxTurns`, `maxToolCalls`, `maxWallTimeSec`, `bashTimeoutSec`) collapse into one `effort` preset — `quick`, `standard`, or `deep` — where `standard` is byte-identical to the previous defaults; `contextMode` + `memory` collapse into a single `context` (`none`/`session`/`relevant`); and `worktreePath` is gone. Sub-agent frontmatter is unchanged and still accepts every precise value, so existing `workspace/sub-agents/*.md` files behave exactly as before. Beta API note: `SubAgentInvocationOverrides` (exported from the barrel) gained `effort`/`context` and lost the seven removed fields.
+- `isolation: worktree` now reuses the worktree already recorded on the task instead of asking the caller for a path. This fixes a real defect: a second worktree delegation against the same `taskId` previously created a rival worktree and overwrote `control.worktree`, orphaning the first. A recorded path that has vanished from disk is recreated; one pointing outside the channel's `tasks/worktrees/` is now rejected with instructions to clear it via `task_manage`.
+
+### Fixed
+
+- Sub-agents can now actually be granted `grep`. The tool registry has always flagged it `availableToSubagents`, but it was missing from the sub-agent tool whitelist, so requesting it failed and read-only research roles had to shell out to `bash` instead. The default tool set is still `read` + `bash`.
+
 ## [0.8.9] - 2026-07-22
 
 ### Added

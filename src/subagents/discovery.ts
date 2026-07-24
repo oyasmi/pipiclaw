@@ -7,7 +7,7 @@ import { findExactModelReferenceMatch, formatModelReference } from "../models/ut
 import { SUB_AGENTS_DIR_NAME } from "../paths.js";
 import { errorMessage } from "../shared/text-utils.js";
 
-const ALLOWED_SUB_AGENT_TOOLS = ["read", "bash", "edit", "write", "web_search", "web_fetch"] as const;
+const ALLOWED_SUB_AGENT_TOOLS = ["read", "grep", "bash", "edit", "write", "web_search", "web_fetch"] as const;
 const DEFAULT_SUB_AGENT_TOOLS = ["read", "bash"] as const;
 const DEFAULT_MAX_TURNS = 24;
 const DEFAULT_MAX_TOOL_CALLS = 48;
@@ -23,6 +23,38 @@ export type SubAgentToolName = (typeof ALLOWED_SUB_AGENT_TOOLS)[number];
 export type SubAgentContextMode = (typeof ALLOWED_CONTEXT_MODES)[number];
 export type SubAgentMemoryMode = (typeof ALLOWED_MEMORY_MODES)[number];
 export type SubAgentThinkingLevel = (typeof ALLOWED_THINKING_LEVELS)[number];
+
+/**
+ * Execution budgets as a single named tuple. Frontmatter keeps the four numeric knobs
+ * (a human editing a config file has grounds to pick numbers); the invocation surface
+ * only offers these presets, because a model choosing `maxToolCalls` per delegation is
+ * guessing. `standard` is byte-identical to the DEFAULT_* values, so omitting `effort`
+ * leaves behavior unchanged.
+ */
+export const SUB_AGENT_EFFORT_PRESETS = {
+	quick: { maxTurns: 8, maxToolCalls: 16, maxWallTimeSec: 120, bashTimeoutSec: 60 },
+	standard: {
+		maxTurns: DEFAULT_MAX_TURNS,
+		maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
+		maxWallTimeSec: DEFAULT_MAX_WALL_TIME_SEC,
+		bashTimeoutSec: DEFAULT_BASH_TIMEOUT_SEC,
+	},
+	deep: { maxTurns: 48, maxToolCalls: 96, maxWallTimeSec: 900, bashTimeoutSec: 180 },
+} as const;
+
+export type SubAgentEffort = keyof typeof SUB_AGENT_EFFORT_PRESETS;
+
+const ALLOWED_EFFORTS = Object.keys(SUB_AGENT_EFFORT_PRESETS) as SubAgentEffort[];
+
+/**
+ * The invocation-side spelling of `contextMode` + `memory`. Those two frontmatter knobs
+ * encode only four meaningful states (`isolated` implies `memory: none`), so the calling
+ * surface collapses them into one enum. The dropped state — contextual with `memory: none`,
+ * i.e. paths-only injection — remains expressible in frontmatter.
+ */
+const ALLOWED_CONTEXT_CHOICES = ["none", "session", "relevant"] as const;
+
+export type SubAgentContextChoice = (typeof ALLOWED_CONTEXT_CHOICES)[number];
 
 export interface SubAgentConfig {
 	name: string;
@@ -62,12 +94,10 @@ export interface SubAgentInvocationOverrides {
 	systemPrompt?: string;
 	tools?: string[];
 	model?: string;
-	maxTurns?: number;
-	maxToolCalls?: number;
-	maxWallTimeSec?: number;
-	bashTimeoutSec?: number;
-	contextMode?: string;
-	memory?: string;
+	/** Named budget preset; wins over frontmatter numbers as a whole tuple, never field by field. */
+	effort?: string;
+	/** Collapsed `contextMode` + `memory`; see SubAgentContextChoice. */
+	context?: string;
 	paths?: string[];
 	thinkingLevel?: string;
 	/** Drives the thinkingLevel default: "verify" defaults on, everything else stays off. */
@@ -198,6 +228,36 @@ function parseThinkingLevel(raw: unknown): { value?: SubAgentThinkingLevel; erro
 	};
 }
 
+function parseEffort(raw: unknown): { value?: SubAgentEffort; error?: string } {
+	const normalized = readOptionalTrimmedString(raw);
+	if (!normalized) {
+		return {};
+	}
+	if (ALLOWED_EFFORTS.includes(normalized as SubAgentEffort)) {
+		return { value: normalized as SubAgentEffort };
+	}
+	return { error: `Unknown effort "${normalized}". Allowed values: ${ALLOWED_EFFORTS.join(", ")}` };
+}
+
+function parseContextChoice(raw: unknown): {
+	value?: { contextMode: SubAgentContextMode; memory: SubAgentMemoryMode };
+	error?: string;
+} {
+	const normalized = readOptionalTrimmedString(raw);
+	if (!normalized) {
+		return {};
+	}
+	if (!ALLOWED_CONTEXT_CHOICES.includes(normalized as SubAgentContextChoice)) {
+		return {
+			error: `Unknown context "${normalized}". Allowed values: ${ALLOWED_CONTEXT_CHOICES.join(", ")}`,
+		};
+	}
+	if (normalized === "none") {
+		return { value: { contextMode: "isolated", memory: "none" } };
+	}
+	return { value: { contextMode: "contextual", memory: normalized as SubAgentMemoryMode } };
+}
+
 function parseMemoryMode(
 	raw: unknown,
 	contextMode: SubAgentContextMode,
@@ -266,13 +326,6 @@ function parsePositiveInteger(raw: unknown, fallback: number): { value: number; 
 	}
 
 	return { value: parsed };
-}
-
-function resolvePositiveOverride(value: number | undefined, fallback: number): number {
-	if (!Number.isFinite(value) || value === undefined || value <= 0) {
-		return fallback;
-	}
-	return Math.floor(value);
 }
 
 function resolveModelReference(
@@ -477,30 +530,28 @@ export function resolveSubAgentConfig(
 		modelRef = formatModelReference(resolved.model);
 	}
 
-	const maxTurns = resolvePositiveOverride(overrides.maxTurns, baseConfig?.maxTurns ?? DEFAULT_MAX_TURNS);
-	const maxToolCalls = resolvePositiveOverride(
-		overrides.maxToolCalls,
-		baseConfig?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS,
-	);
-	const maxWallTimeSec = resolvePositiveOverride(
-		overrides.maxWallTimeSec,
-		baseConfig?.maxWallTimeSec ?? DEFAULT_MAX_WALL_TIME_SEC,
-	);
-	const bashTimeoutSec = resolvePositiveOverride(
-		overrides.bashTimeoutSec,
-		baseConfig?.bashTimeoutSec ?? DEFAULT_BASH_TIMEOUT_SEC,
-	);
-	const contextModeOverride = overrides.contextMode ? parseContextMode(overrides.contextMode) : undefined;
-	if (contextModeOverride?.error) {
-		return { error: contextModeOverride.error };
+	const effortOverride = parseEffort(overrides.effort);
+	if (effortOverride.error) {
+		return { error: effortOverride.error };
 	}
-	const contextMode = contextModeOverride?.value ?? baseConfig?.contextMode ?? "isolated";
+	// An explicit `effort` replaces the whole budget tuple rather than merging field by
+	// field, so a preset never produces a combination no preset describes.
+	const budget = effortOverride.value
+		? SUB_AGENT_EFFORT_PRESETS[effortOverride.value]
+		: {
+				maxTurns: baseConfig?.maxTurns ?? DEFAULT_MAX_TURNS,
+				maxToolCalls: baseConfig?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS,
+				maxWallTimeSec: baseConfig?.maxWallTimeSec ?? DEFAULT_MAX_WALL_TIME_SEC,
+				bashTimeoutSec: baseConfig?.bashTimeoutSec ?? DEFAULT_BASH_TIMEOUT_SEC,
+			};
 
-	const memoryOverride = overrides.memory ? parseMemoryMode(overrides.memory, contextMode) : undefined;
-	if (memoryOverride?.error) {
-		return { error: memoryOverride.error };
+	const contextOverride = parseContextChoice(overrides.context);
+	if (contextOverride.error) {
+		return { error: contextOverride.error };
 	}
-	const memory = memoryOverride?.value ?? baseConfig?.memory ?? (contextMode === "contextual" ? "relevant" : "none");
+	const contextMode = contextOverride.value?.contextMode ?? baseConfig?.contextMode ?? "isolated";
+	const memory =
+		contextOverride.value?.memory ?? baseConfig?.memory ?? (contextMode === "contextual" ? "relevant" : "none");
 
 	const pathsOverride = overrides.paths ? parseStringList(overrides.paths, "paths") : undefined;
 	if (pathsOverride?.error) {
@@ -540,10 +591,10 @@ export function resolveSubAgentConfig(
 			tools: tools.tools,
 			model: model ?? currentModel,
 			modelRef: modelRef ?? formatModelReference(model ?? currentModel),
-			maxTurns,
-			maxToolCalls,
-			maxWallTimeSec,
-			bashTimeoutSec,
+			maxTurns: budget.maxTurns,
+			maxToolCalls: budget.maxToolCalls,
+			maxWallTimeSec: budget.maxWallTimeSec,
+			bashTimeoutSec: budget.bashTimeoutSec,
 			contextMode,
 			memory,
 			paths,
