@@ -33,7 +33,6 @@ export async function candidateTask(
 	}
 	const control = fields.control ?? createDefaultTaskControl("independent");
 	control.verification = { mode: "independent", status: "pending" };
-	control.lastOutcome = "progress";
 	control.blockedReason = undefined;
 	control.nextAction = "Run a purpose=verify sub-agent and import its attestation.";
 	const nextBody = appendCurrentCycleNote(body, note);
@@ -96,7 +95,7 @@ export async function verifyTask(
 		subjectHash: attestation.subjectHash,
 		checkedAt: attestation.checkedAt,
 	};
-	control.lastOutcome = attestation.verdict === "pass" ? "verified" : "failed";
+	// The verdict lives in `control.verification`; `lastOutcome` stays runtime-owned telemetry.
 	control.blockedReason = attestation.verdict === "fail" ? attestation.evidence : undefined;
 	task.fields.control = control;
 	await writeFileAtomically(task.path, renderTaskFile(task.fields, task.body));

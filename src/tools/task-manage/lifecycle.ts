@@ -69,13 +69,11 @@ export async function progressTask(
 	// that PASS/approval bind to, so it no longer invalidates verification or approval. A real
 	// contract change (Goal/DoD/Manual/Verification) goes through write/edit and is caught by the
 	// contract-hash checks in verify/done/approve.
-	if (nextFields.control) {
-		if (request.status === "waiting") {
-			nextFields.control.lastOutcome = "blocked";
-		} else if (request.control?.lastOutcome === undefined) {
-			nextFields.control.lastOutcome = "progress";
-			if (request.control?.blockedReason === undefined) nextFields.control.blockedReason = undefined;
-		}
+	// Recording progress clears a stale "why it cannot proceed" note unless this call is parking
+	// the task (`waiting`) or states a new reason itself. `lastOutcome` is deliberately untouched:
+	// the runtime owns it (attempt claim/finish), so an action never has to keep it in sync.
+	if (nextFields.control && request.status !== "waiting" && request.control?.blockedReason === undefined) {
+		nextFields.control.blockedReason = undefined;
 	}
 	const nextBody = appendCurrentCycleNote(body, note);
 	await writeFileAtomically(taskPath, renderTaskFile(nextFields, nextBody));
@@ -147,7 +145,6 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 	}
 	const bodyWithEvidence = appendCompletionEvidence(body, request);
 	if (fields.control) {
-		fields.control.lastOutcome = "verified";
 		fields.control.blockedReason = undefined;
 		if (fields.control.verification.mode === "evidence") {
 			fields.control.verification = {
@@ -219,7 +216,6 @@ export async function skipTask(options: TaskManageToolOptions, request: TaskMana
 	}
 	const skippedBody = appendCurrentCycleNote(body, `Skipped: ${reason}`);
 	if (fields.control) {
-		fields.control.lastOutcome = "skipped";
 		fields.control.blockedReason = undefined;
 		fields.control.verification = { mode: fields.control.verification.mode, status: "pending" };
 	}
@@ -253,10 +249,7 @@ export async function cancelTask(
 			`Task "${id}" still has unfinished child tasks: ${children.join(", ")}. Cancel or re-parent them first.`,
 		);
 	}
-	if (fields.control) {
-		fields.control.lastOutcome = "blocked";
-		fields.control.blockedReason = `Cancelled: ${reason}`;
-	}
+	if (fields.control) fields.control.blockedReason = `Cancelled: ${reason}`;
 	const cancelledBody = `${body.replace(/\n+$/, "\n")}\n## Cancellation\n\n- Reason: ${markdownValue(reason)}\n`;
 	await writeFileAtomically(
 		taskPath,

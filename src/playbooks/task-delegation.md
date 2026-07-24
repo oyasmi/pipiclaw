@@ -33,7 +33,7 @@ priority: 45
 
 ## worktree 隔离
 
-写密集 child 设置 `control.isolation: worktree`，委派时传 `isolation: worktree` 和 taskId。runtime 从 committed HEAD 创建 `pipiclaw-task/<task>/<run>` 分支，把路径/分支记录进 task control。
+写密集 child 委派时传 `isolation: worktree` 和 taskId——隔离在委派点声明一次即可，任务本身不需要预先标注。runtime 从 committed HEAD 创建 `pipiclaw-task/<task>/<run>` 分支，把路径/分支记录进 task control。
 
 同一 taskId 的后续委派自动复用台账里记录的 worktree，不需要也无法手工指定路径；台账记录的路径若已不在磁盘上则新建，若指向 `tasks/worktrees/` 之外则报错，需先用 `task_manage` 清理该元数据。worktree 不自动删除；父代理必须 review、merge、验证，然后清理 worktree 与分支。创建前处理好主 checkout 的未提交前置改动。
 

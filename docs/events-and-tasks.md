@@ -385,7 +385,7 @@ status: active
 wake: 2026-07-08T14:00:00+08:00
 schedule: 0 9 * * 1
 recurrence: 每周一
-control: {"version":1,"priority":"high","lastOutcome":"progress","dependsOn":[],"isolation":"shared","sideEffects":"external","externalApproval":"required","budget":{"maxAttempts":12,"maxTokens":120000},"usage":{"attempts":2,"tokens":18420,"costUsd":0.42,"costKnown":true,"wallTimeMinutes":16.3},"lifetimeUsage":{"attempts":8,"tokens":72000,"costUsd":1.84,"costKnown":true,"wallTimeMinutes":61.5},"verification":{"mode":"independent","status":"pending"},"nextAction":"等待确认后发布"}
+control: {"version":1,"priority":"high","lastOutcome":"progress","dependsOn":[],"sideEffects":"external","externalApproval":"required","budget":{"maxAttempts":12,"maxTokens":120000},"usage":{"attempts":2,"tokens":18420,"costUsd":0.42,"costKnown":true,"wallTimeMinutes":16.3},"lifetimeUsage":{"attempts":8,"tokens":72000,"costUsd":1.84,"costKnown":true,"wallTimeMinutes":61.5},"verification":{"mode":"independent","status":"pending"},"nextAction":"等待确认后发布"}
 ---
 
 # 周报编写与发布
@@ -433,7 +433,7 @@ frontmatter 字段：
 - **调度**：`priority` 决定 ready task 顺序，`deadline` 是硬截止，`nextAction` 是下一步可执行动作。
 - **预算**：`maxAttempts` 必有；可追加本周期累计的 `maxTokens`、`maxCostUsd`、`maxWallTimeMinutes`。driver 每次原生唤醒先 claim attempt，回合结束把主代理与子代理的实际 usage 计回 task；预算在回合边界检查，不能中断一个正在运行的回合。模型缺少价格元数据时 cost 显示 unavailable，不能配置有效的 `maxCostUsd`，应使用 `maxTokens`。达到任一可用上限就被治理器暂停（`paused` + `pausedBy: "governor"`）。`lifetimeUsage` 另存不随周期清零的审计累计，不参与本周期 governor。
 - **关系**：`parent` 表示父任务，`dependsOn` 中的任务必须 done 才能运行/收尾；创建和 set 会拒绝缺失关系、自依赖和环。父任务也不能在仍有未完成 child 时 done。
-- **隔离**：`isolation: worktree` 表示写密集型子任务应交给 `subagent` 的同名隔离模式；runtime 自动把 path/branch 记录到 control，父代理负责 review、merge 与 cleanup（见 [sub-agents.md](./sub-agents.md)）。
+- **隔离**：写密集型子任务在委派时传 `subagent` 的 `isolation: worktree`；runtime 自动把 path/branch 记录到 control，父代理负责 review、merge 与 cleanup（见 [sub-agents.md](./sub-agents.md)）。
 - **副作用**：`sideEffects: external` 自动进入 required；agent 不能自授予。用户审阅拟执行动作后，直接发送 `/tasks approve <id>`，runtime 记录 approver/时间与 task body hash 才变为 granted；后续 progress 或正文变化会要求重新授权。
 - **验收**：新任务默认 `verification.mode: evidence`，`done` 时把 maker self-check 记为 PASS；有独立可检查产物时显式选择 `independent`，实现者先 `candidate`，checker-only 回合调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId。PASS 绑定 task 的**契约段**（Goal/DoD/Manual/Verification 及勾选状态，不含 Current Cycle/History）：记日志不失效，改契约才失效。
 

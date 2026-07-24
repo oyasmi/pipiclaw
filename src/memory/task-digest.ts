@@ -44,7 +44,6 @@ function renderLine(entry: TaskLedgerEntry, now: number): string {
 		parts.push(`priority ${control.priority}`);
 		parts.push(`attempt ${control.usage.attempts}/${control.budget.maxAttempts}`);
 		parts.push(`verify ${control.verification.mode}/${control.verification.status}`);
-		if (control.isolation !== "shared") parts.push(`isolation ${control.isolation}`);
 		if (control.sideEffects !== "workspace") {
 			parts.push(`effects ${control.sideEffects}/${control.externalApproval}`);
 		}

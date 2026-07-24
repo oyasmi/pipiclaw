@@ -237,7 +237,6 @@ async function listTasks(channelDir: string): Promise<string> {
 			detail.push(`priority: ${control.priority}`);
 			detail.push(`attempts: ${control.usage.attempts}/${control.budget.maxAttempts}`);
 			detail.push(`verify: ${control.verification.mode}/${control.verification.status}`);
-			if (control.isolation !== "shared") detail.push(`isolation: ${control.isolation}`);
 			if (control.sideEffects !== "workspace") {
 				detail.push(`effects: ${control.sideEffects}/${control.externalApproval}`);
 			}
@@ -297,7 +296,6 @@ export async function pauseTask(options: HandleTasksCommandOptions, idInput: str
 	task.fields.wake = undefined;
 	if (task.fields.control) {
 		task.fields.control.pausedBy = "user";
-		task.fields.control.lastOutcome = "blocked";
 		task.fields.control.blockedReason = `Paused by ${options.approver?.trim() || "a user"}.`;
 	}
 	await writeStoredTask(task);
@@ -315,7 +313,6 @@ export async function resumeTask(options: HandleTasksCommandOptions, idInput: st
 	task.fields.wake = undefined;
 	if (task.fields.control) {
 		task.fields.control.pausedBy = undefined;
-		task.fields.control.lastOutcome = "pending";
 		task.fields.control.blockedReason = undefined;
 	}
 	await writeStoredTask(task);
@@ -336,7 +333,6 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 	task.fields.wake = undefined;
 	if (task.fields.control) {
 		task.fields.control.pausedBy = undefined;
-		task.fields.control.lastOutcome = "pending";
 		task.fields.control.blockedReason = undefined;
 	}
 	await writeStoredTask(task);
@@ -361,7 +357,7 @@ function renderUsageLine(entry: TaskLedgerEntry): string {
 		`- ${entry.id} — ${entry.title}`,
 		`  this cycle: ${control.usage.attempts}/${control.budget.maxAttempts} attempts, ${control.usage.tokens} tokens, ${cycleCost}, ${control.usage.wallTimeMinutes.toFixed(1)}m`,
 		`  recorded lifetime: ${control.lifetimeUsage.attempts} attempts, ${control.lifetimeUsage.tokens} tokens, ${lifetimeCost}, ${control.lifetimeUsage.wallTimeMinutes.toFixed(1)}m`,
-		`  last outcome: ${control.lastOutcome}`,
+		`  last run: ${control.lastOutcome}`,
 		`  verification: ${verification.mode}/${verification.status}`,
 	].join("\n");
 }

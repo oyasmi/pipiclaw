@@ -27,6 +27,22 @@ describe("task control", () => {
 		expect(parseTaskControl(JSON.stringify(control))).toEqual(control);
 	});
 
+	it("reads retired enum values back as their canonical replacement", () => {
+		const control = parseTaskControl(
+			JSON.stringify({
+				...createDefaultTaskControl(),
+				// Written by an older build: `isolation` enforced nothing, the read-only/workspace
+				// split gated nothing, and actions used to stamp their own outcomes.
+				isolation: "worktree",
+				sideEffects: "read-only",
+				lastOutcome: "verified",
+			}),
+		);
+		expect(control.sideEffects).toBe("workspace");
+		expect(control.lastOutcome).toBe("progress");
+		expect(control).not.toHaveProperty("isolation");
+	});
+
 	it("reports the first deterministic deadline or cumulative budget violation", () => {
 		const control = createDefaultTaskControl();
 		control.deadline = "2026-07-10T00:00:00.000Z";

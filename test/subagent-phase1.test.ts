@@ -660,7 +660,7 @@ describe("sub-agent tool", () => {
 		expect(delegatedTask).toContain("Filesystem isolation: dedicated git worktree");
 		expect(delegatedTask).toContain(result.details.worktreePath);
 		const task = readFileSync(join(channelDir, "tasks", "ship.md"), "utf-8");
-		expect(task).toContain('"isolation":"worktree"');
+		expect(task).toContain(`"worktree":{"path":"${result.details.worktreePath}"`);
 		expect(task).toContain(result.details.worktreeBranch);
 	});
 

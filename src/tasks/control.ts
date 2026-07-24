@@ -1,10 +1,19 @@
 import { errorMessage } from "../shared/text-utils.js";
 export type TaskPriority = "low" | "normal" | "high" | "critical";
-export type TaskIsolation = "shared" | "worktree";
-export type TaskSideEffects = "read-only" | "workspace" | "external";
+/**
+ * Whether the task may touch systems outside the workspace. Only `external` carries machine
+ * semantics (it gates the approval chain); the former `read-only`/`workspace` split had no
+ * enforcement anywhere and is read back as `workspace`.
+ */
+export type TaskSideEffects = "workspace" | "external";
 export type TaskVerificationMode = "evidence" | "independent";
 export type TaskVerificationStatus = "pending" | "passed" | "failed";
-export type TaskOutcome = "pending" | "running" | "progress" | "blocked" | "failed" | "verified" | "skipped";
+/**
+ * How the last agent run on this task ended. Pure telemetry, written only by the runtime
+ * (attempt claim/finish and governor escalation) — never by a `task_manage` action or a
+ * `/tasks` command, so it cannot drift into a second state machine alongside `status`.
+ */
+export type TaskOutcome = "pending" | "running" | "progress" | "blocked" | "failed";
 /** Who paused a task: a user via /tasks pause, or the deterministic governor (ex-`escalated`). */
 export type TaskPausedBy = "user" | "governor";
 
@@ -48,7 +57,6 @@ export interface TaskControl {
 	blockedReason?: string;
 	parent?: string;
 	dependsOn: string[];
-	isolation: TaskIsolation;
 	sideEffects: TaskSideEffects;
 	externalApproval: "not-required" | "required" | "granted";
 	approvalBy?: string;
@@ -73,11 +81,9 @@ export interface TaskControlPatch {
 	priority?: TaskPriority;
 	deadline?: string;
 	nextAction?: string;
-	lastOutcome?: TaskOutcome;
 	blockedReason?: string;
 	parent?: string;
 	dependsOn?: string[];
-	isolation?: TaskIsolation;
 	sideEffects?: TaskSideEffects;
 	externalApproval?: "not-required" | "required" | "granted";
 	maxAttempts?: number;
@@ -90,11 +96,10 @@ export interface TaskControlPatch {
 }
 
 const PRIORITIES: readonly TaskPriority[] = ["low", "normal", "high", "critical"];
-const ISOLATIONS: readonly TaskIsolation[] = ["shared", "worktree"];
-const SIDE_EFFECTS: readonly TaskSideEffects[] = ["read-only", "workspace", "external"];
+const SIDE_EFFECTS: readonly TaskSideEffects[] = ["workspace", "external"];
 const VERIFICATION_MODES: readonly TaskVerificationMode[] = ["evidence", "independent"];
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
-const OUTCOMES: readonly TaskOutcome[] = ["pending", "running", "progress", "blocked", "failed", "verified", "skipped"];
+const OUTCOMES: readonly TaskOutcome[] = ["pending", "running", "progress", "blocked", "failed"];
 const PAUSED_BY: readonly TaskPausedBy[] = ["user", "governor"];
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
@@ -142,6 +147,27 @@ function enumValue<T extends string>(value: unknown, values: readonly T[], fallb
 	return value as T;
 }
 
+/**
+ * Values retired from an enum are read back as their canonical replacement rather than failing
+ * the parse, so task files written by an older build stay readable; the next write normalizes
+ * them on disk and no migration script is needed. `control.isolation` was dropped outright —
+ * unknown keys are simply ignored here.
+ */
+function canonicalEnumValue(value: unknown): unknown {
+	switch (value) {
+		// The read-only/workspace split never gated anything; only `external` has semantics.
+		case "read-only":
+			return "workspace";
+		// Outcomes once written by `task_manage` actions; the runtime now owns this field and
+		// records only how the last run ended.
+		case "verified":
+		case "skipped":
+			return "progress";
+		default:
+			return value;
+	}
+}
+
 function taskIds(value: unknown): string[] {
 	if (value === undefined) return [];
 	if (!Array.isArray(value)) throw new Error("control.dependsOn must be an array of task ids");
@@ -168,7 +194,6 @@ export function createDefaultTaskControl(mode: TaskVerificationMode = "independe
 		priority: "normal",
 		lastOutcome: "pending",
 		dependsOn: [],
-		isolation: "shared",
 		sideEffects: "workspace",
 		externalApproval: "not-required",
 		budget: { maxAttempts: 12 },
@@ -204,7 +229,7 @@ export function parseTaskControl(raw: string): TaskControl {
 	}
 	const parent = optionalString(value.parent);
 	validateTaskId(parent, "control.parent");
-	const sideEffects = enumValue(value.sideEffects, SIDE_EFFECTS, "workspace");
+	const sideEffects = enumValue(canonicalEnumValue(value.sideEffects), SIDE_EFFECTS, "workspace");
 	const externalApproval = enumValue(
 		value.externalApproval,
 		["not-required", "required", "granted"] as const,
@@ -235,11 +260,10 @@ export function parseTaskControl(raw: string): TaskControl {
 		priority: enumValue(value.priority, PRIORITIES, "normal"),
 		deadline,
 		nextAction: optionalString(value.nextAction),
-		lastOutcome: enumValue(value.lastOutcome, OUTCOMES, "pending"),
+		lastOutcome: enumValue(canonicalEnumValue(value.lastOutcome), OUTCOMES, "pending"),
 		blockedReason: optionalString(value.blockedReason),
 		parent,
 		dependsOn: taskIds(value.dependsOn),
-		isolation: enumValue(value.isolation, ISOLATIONS, "shared"),
 		sideEffects,
 		externalApproval,
 		approvalBy,
@@ -321,7 +345,6 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 	}
 	next.deadline = patchOptionalString(next.deadline, patch.deadline);
 	next.nextAction = patchOptionalString(next.nextAction, patch.nextAction);
-	if (patch.lastOutcome !== undefined) next.lastOutcome = patch.lastOutcome;
 	next.blockedReason = patchOptionalString(next.blockedReason, patch.blockedReason);
 	next.parent = patchOptionalString(next.parent, patch.parent);
 	validateTaskId(next.parent, "parent");
@@ -329,7 +352,6 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 		for (const dependency of patch.dependsOn) validateTaskId(dependency.trim(), "dependsOn");
 		next.dependsOn = taskIds(patch.dependsOn);
 	}
-	if (patch.isolation !== undefined) next.isolation = patch.isolation;
 	if (patch.sideEffects !== undefined) next.sideEffects = patch.sideEffects;
 	if (patch.externalApproval !== undefined) next.externalApproval = patch.externalApproval;
 	if (patch.maxAttempts !== undefined) {

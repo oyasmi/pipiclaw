@@ -29,8 +29,7 @@ priority: 40
 - `priority` / `deadline`：表达调度重要性和硬期限，不用 `wake` 冒充 deadline。
 - `nextAction`：下一条可执行动作，避免写抽象愿望。
 - `maxAttempts` / `maxTokens` / `maxCostUsd` / `maxWallTimeMinutes`：按风险和规模收紧；这些是**本周期、回合边界检查**的停止条件，不会中断正在运行的单个回合。模型没有价格元数据时不能使用 `maxCostUsd`，改用 `maxTokens`。
-- `sideEffects`：`read-only`、`workspace` 或 `external`。发送、发布、部署、修改外部系统必须选 `external`。
-- `isolation: worktree`：写密集型子任务需要隔离共享 checkout 时使用，见 `task-delegation.md`。
+- `sideEffects`：`workspace` 或 `external`。发送、发布、部署、修改外部系统必须选 `external`，它会要求用户 `/tasks approve` 后才能 done。
 - `parent` / `dependsOn`：只用于真实分解；`parent` 表归属，`dependsOn` 表执行前置。
 
 创建和 `set` 会拒绝不存在的关联、自指、parent 环和 dependency 环。父任务可以 `dependsOn` 自己的 child 表达 join；父任务有未闭环 child 时不能 done。

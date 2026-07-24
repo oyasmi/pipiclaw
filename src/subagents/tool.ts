@@ -351,8 +351,8 @@ async function prepareRunContext(
 async function recordTaskWorktree(channelDir: string, taskId: string, context: SubAgentRunContext): Promise<void> {
 	await updateStoredTask(channelDir, taskId, (task) => {
 		if (!task.fields.control || !context.worktreePath) return;
+		// The recorded worktree *is* the isolation fact; there is no separate flag to keep in sync.
 		task.fields.control = applyTaskControlPatch(task.fields.control, {
-			isolation: "worktree",
 			worktreePath: context.worktreePath,
 			worktreeBranch: context.worktreeBranch,
 		});

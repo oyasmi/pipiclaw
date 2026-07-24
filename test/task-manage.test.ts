@@ -263,7 +263,6 @@ describe("manageTask", () => {
 		it("invalidates a recorded verification when set leaves the verifying lane", async () => {
 			const control = createDefaultTaskControl("independent");
 			control.verification = { mode: "independent", status: "passed", runId: "r1", bodyHash: "abc" };
-			control.lastOutcome = "verified";
 			await writeTask("v", `status: verifying\ncontrol: ${JSON.stringify(control)}`, "# V\n\n## Current Cycle\n- x");
 			const result = await manageTask(options, { action: "set", id: "v", status: "active" });
 			expect(result.status).toBe("active");
@@ -772,7 +771,9 @@ describe("manageTask", () => {
 			});
 			const onDisk = await readFile(join(tasksDir, "evidence-pass.md"), "utf-8");
 			const control = parseTaskFrontmatter(onDisk).control;
-			expect(control?.lastOutcome).toBe("verified");
+			// The verdict is recorded in `control.verification`; `lastOutcome` is runtime-owned
+			// telemetry about the last agent run and is not touched by a task_manage action.
+			expect(control?.lastOutcome).toBe("pending");
 			expect(control?.verification).toMatchObject({
 				mode: "evidence",
 				status: "passed",
@@ -806,7 +807,7 @@ describe("manageTask", () => {
 			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
 			expect(onDisk).toContain("Skipped: The manual run already produced today's report.");
 			expect(onDisk).not.toContain("Completion Evidence");
-			expect(parseTaskFrontmatter(onDisk).control?.lastOutcome).toBe("skipped");
+			expect(parseTaskFrontmatter(onDisk).control?.lastOutcome).toBe("pending");
 		});
 
 		it("rejects skip for a one-shot task with an actionable next step", async () => {

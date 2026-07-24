@@ -11,23 +11,14 @@ const taskControlSchema = Type.Object({
 	),
 	deadline: Type.Optional(Type.String({ description: "ISO8601 deadline; empty string clears it." })),
 	nextAction: Type.Optional(Type.String({ description: "Concrete next executable step; empty string clears it." })),
-	lastOutcome: Type.Optional(
-		Type.Union([
-			Type.Literal("pending"),
-			Type.Literal("running"),
-			Type.Literal("progress"),
-			Type.Literal("blocked"),
-			Type.Literal("failed"),
-			Type.Literal("verified"),
-			Type.Literal("skipped"),
-		]),
-	),
 	blockedReason: Type.Optional(Type.String({ description: "Why work cannot currently proceed; empty clears it." })),
 	parent: Type.Optional(Type.String({ description: "Parent task id; empty clears it." })),
 	dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Task ids that must be done first." })),
-	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")])),
 	sideEffects: Type.Optional(
-		Type.Union([Type.Literal("read-only"), Type.Literal("workspace"), Type.Literal("external")]),
+		Type.Union([Type.Literal("workspace"), Type.Literal("external")], {
+			description:
+				'"external" (sending, publishing, deploying, changing an outside system) requires user approval via "/tasks approve" before done.',
+		}),
 	),
 	externalApproval: Type.Optional(
 		Type.Union([Type.Literal("not-required"), Type.Literal("required")], {

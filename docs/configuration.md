@@ -221,7 +221,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 ```
 
 - 关掉后主 agent 仍可用 read/edit/write 直接维护 task 文件，只是没有工具保真、不会被后台唤醒、也不注入摘要。
-- 该工具只发给主 agent，不进子代理工具集。新任务默认 independent verification 和 12 次 attempt 上限；可设置 token/cost/wall-time/deadline、parent/dependsOn、sideEffects 与 isolation。`progress` 只追加 Current Cycle 条目；Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
+- 该工具只发给主 agent，不进子代理工具集。新任务默认 independent verification 和 12 次 attempt 上限；可设置 token/cost/wall-time/deadline、parent/dependsOn 与 sideEffects。`progress` 只追加 Current Cycle 条目；Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
 - agent 不能把 external approval 设为 granted；用户必须直接发送 `/tasks approve <id>`，runtime 才记录可审计授权。
 
 ### 结构化搜索工具（`grep`，恒开）
