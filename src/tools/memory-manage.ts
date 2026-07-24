@@ -10,6 +10,7 @@ import { recallRelevantMemory } from "../memory/recall.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
 import { hashMemoryContent } from "../memory/tombstones.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 const memoryManageSchema = Type.Object({
@@ -21,7 +22,7 @@ const memoryManageSchema = Type.Object({
 	content: Type.Optional(
 		Type.String({
 			description:
-				"For save: the durable fact as a single self-contained, keyword-rich sentence, written so future keyword search can find it.",
+				"Required for save: the durable fact as a single self-contained, keyword-rich sentence on one line, written so future keyword search can find it. A save without it is rejected and stores nothing.",
 		}),
 	),
 	query: Type.Optional(Type.String({ description: "For search: what to look for in stored memory." })),
@@ -79,17 +80,54 @@ function textResult(text: string, details: Record<string, unknown>) {
 	return { content: [{ type: "text" as const, text }], details };
 }
 
+/**
+ * Reject a call whose op-specific payload never arrived.
+ *
+ * These arguments are `Type.Optional` because each one belongs to exactly one op, so the
+ * schema cannot express "required for save, absent for search" — which means the SDK
+ * validator lets a payload-less call straight through. Two failure modes reach here and both
+ * used to end in a calm `textResult` that read like a completed no-op:
+ *
+ *   1. The model genuinely omitted the argument.
+ *   2. The argument was *lost in transit*. Streamed tool-call arguments are accumulated as
+ *      text and parsed leniently (`parseStreamingJson`): if the provider truncates or
+ *      malforms the tail of the JSON — the common shape with OpenAI-compatible Chinese
+ *      providers on long non-ASCII values — the trailing key is silently dropped and the
+ *      call still executes. The assistant message is then persisted with the *parsed*
+ *      arguments, so on the next turn the model reads back its own call with `content`
+ *      already missing, copies it, and loops forever.
+ *
+ * A soft result makes (2) unrecoverable, so reject loudly instead: a `RecoverableToolError`
+ * surfaces to the model as an error it must fix rather than a saved memory, names the keys
+ * that actually arrived so a dropped argument is visible rather than inferred, and tells the
+ * model not to replay the previous call. The warning log is the operator-side evidence —
+ * `agent.tool.started` carries the raw args but only at debug level.
+ */
+function rejectMissingArgument(op: string, parameter: string, args: MemoryManageArgs): never {
+	const received = Object.entries(args)
+		.filter(([, value]) => value !== undefined && value !== "")
+		.map(([key]) => key);
+	log.logWarning(
+		`memory_manage ${op} called without "${parameter}"`,
+		`received arguments: ${received.join(", ") || "(none)"}`,
+	);
+	throw new RecoverableToolError(
+		`memory_manage op="${op}" requires a non-empty "${parameter}", but the call arrived with only: ${
+			received.join(", ") || "(no arguments)"
+		}. Nothing was ${op === "forget" ? "removed" : op === "save" ? "saved" : "searched"}. Do not repeat the previous ` +
+			`call as written — if an earlier call in this conversation is also missing "${parameter}", it was dropped in ` +
+			`transit, so re-issue it with "${parameter}" set explicitly and keep the value short and on one line.`,
+	);
+}
+
 export function createMemoryManageTool(options: MemoryManageToolOptions): AgentTool<typeof memoryManageSchema> {
 	const queue = options.channelMemoryQueue ?? getDefaultChannelMemoryQueue();
 
-	async function save(content: string | undefined, kind: string | undefined) {
+	async function save(args: MemoryManageArgs) {
+		const { content, kind } = args;
 		const trimmed = (content ?? "").trim();
 		if (!trimmed) {
-			return textResult("No content provided; nothing was saved.", {
-				kind: "memory_manage",
-				op: "save",
-				saved: false,
-			});
+			rejectMissingArgument("save", "content", args);
 		}
 		if (containsSecret(trimmed)) {
 			return textResult(
@@ -116,14 +154,10 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		});
 	}
 
-	async function search(query: string | undefined) {
-		const trimmed = (query ?? "").trim();
+	async function search(args: MemoryManageArgs) {
+		const trimmed = (args.query ?? "").trim();
 		if (!trimmed) {
-			return textResult("Provide a query to search stored memory.", {
-				kind: "memory_manage",
-				op: "search",
-				resultCount: 0,
-			});
+			rejectMissingArgument("search", "query", args);
 		}
 		// Reuse the recall scoring pipeline (single source of scoring truth) but scoped to the
 		// distilled durable files and with model rerank off, so this stays a cheap deterministic
@@ -159,14 +193,10 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		});
 	}
 
-	async function forget(target: string | undefined) {
-		const trimmed = (target ?? "").trim();
+	async function forget(args: MemoryManageArgs) {
+		const trimmed = (args.target ?? "").trim();
 		if (!trimmed) {
-			return textResult("Provide the text of the entry to forget.", {
-				kind: "memory_manage",
-				op: "forget",
-				forgotten: false,
-			});
+			rejectMissingArgument("forget", "target", args);
 		}
 		const memoryPath = getChannelMemoryPath(options.channelDir);
 		const existing = await readOptionalTextFile(memoryPath);
@@ -221,11 +251,11 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		execute: async (_toolCallId: string, args: MemoryManageArgs) => {
 			switch (args.op) {
 				case "save":
-					return save(args.content, args.kind);
+					return save(args);
 				case "search":
-					return search(args.query);
+					return search(args);
 				case "forget":
-					return forget(args.target);
+					return forget(args);
 				default:
 					throw new Error('Unsupported memory op. Use "save", "search", or "forget".');
 			}

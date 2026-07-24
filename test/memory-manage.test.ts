@@ -50,10 +50,32 @@ describe("memory_manage tool", () => {
 		expect(entries[0].content).toBe("User prefers responses in Chinese");
 	});
 
-	it("no-ops save on empty content", async () => {
+	it("rejects save on empty content instead of reporting a quiet no-op", async () => {
 		const channelDir = createTempChannel();
-		const result = await makeTool(channelDir).execute("call", { label: "x", op: "save", content: "   " });
-		expect(result.details).toMatchObject({ op: "save", saved: false });
+		await expect(makeTool(channelDir).execute("call", { label: "x", op: "save", content: "   " })).rejects.toThrow(
+			/requires a non-empty "content"/,
+		);
+		expect(await readChannelMemory(channelDir)).not.toContain("x");
+	});
+
+	// The signature of an argument dropped in transit: everything but the payload arrives.
+	// The rejection must name the keys that did arrive, otherwise the model reads its own
+	// content-less call back from history and replays it forever.
+	it("names the arguments that did arrive when content is missing entirely", async () => {
+		const channelDir = createTempChannel();
+		await expect(
+			makeTool(channelDir).execute("call", { label: "remember", op: "save", kind: "fact" }),
+		).rejects.toThrow(/label, op, kind/);
+	});
+
+	it("rejects search without a query and forget without a target", async () => {
+		const channelDir = createTempChannel();
+		await expect(makeTool(channelDir).execute("call", { label: "x", op: "search" })).rejects.toThrow(
+			/requires a non-empty "query"/,
+		);
+		await expect(makeTool(channelDir).execute("call", { label: "x", op: "forget" })).rejects.toThrow(
+			/requires a non-empty "target"/,
+		);
 	});
 
 	it("serializes writes through the provided channel memory queue", async () => {
