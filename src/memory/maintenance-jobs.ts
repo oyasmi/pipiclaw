@@ -1,11 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type {
-	PipiclawMemoryGrowthSettings,
-	PipiclawMemoryMaintenanceSettings,
-	PipiclawSessionMemorySettings,
-} from "../settings.js";
+import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import {
@@ -18,14 +14,11 @@ import {
 import { readChannelHistory, readChannelMemory } from "./files.js";
 import {
 	type MaintenanceJobKind,
-	shouldRunDurableConsolidation,
-	shouldRunGrowthReview,
+	shouldRunMemoryCheckpoint,
 	shouldRunSessionRefresh,
 	shouldRunStructuralMaintenance,
 } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "./maintenance-state.js";
-import { runPostTurnReview } from "./post-turn-review.js";
-import { scanPromotionSignals } from "./promotion-signals.js";
 import { appendMemoryReviewLog, type MemoryReviewReason } from "./review-log.js";
 import { updateChannelSessionMemory } from "./session.js";
 import { buildIncrementalMemorySourceWindow } from "./source-window.js";
@@ -33,7 +26,6 @@ import { sanitizeMessagesForMemory } from "./transcript.js";
 
 export interface MaintenanceJobSettings {
 	sessionMemory: PipiclawSessionMemorySettings;
-	memoryGrowth: PipiclawMemoryGrowthSettings;
 	memoryMaintenance: PipiclawMemoryMaintenanceSettings;
 }
 
@@ -53,14 +45,7 @@ interface BaseMaintenanceJobInput {
 
 export interface SessionRefreshJobInput extends BaseMaintenanceJobInput {}
 
-export interface DurableConsolidationJobInput extends BaseMaintenanceJobInput {}
-
-export interface GrowthReviewJobInput extends BaseMaintenanceJobInput {
-	workspaceDir: string;
-	loadedSkills: Array<{ name: string; description?: string }>;
-	emitNotice?: (notice: string) => Promise<void>;
-	refreshWorkspaceResources?: () => Promise<void>;
-}
+export interface MemoryCheckpointJobInput extends BaseMaintenanceJobInput {}
 
 export interface StructuralMaintenanceJobInput extends BaseMaintenanceJobInput {}
 
@@ -113,10 +98,6 @@ function hasMeaningfulMessages(messages: AgentMessage[]): boolean {
 	return false;
 }
 
-function renderMessagesForSignalScan(messages: AgentMessage[]): string {
-	return sanitizeMessagesForMemory(messages).map(messageToText).join("\n");
-}
-
 function makeRunOptions(input: BaseMaintenanceJobInput, usageCorrelationId?: string): ConsolidationRunOptions {
 	return {
 		channelId: input.channelId,
@@ -126,8 +107,7 @@ function makeRunOptions(input: BaseMaintenanceJobInput, usageCorrelationId?: str
 		messages: input.messages,
 		sessionEntries: input.sessionEntries,
 		usageCorrelationId,
-		// One durable-write bar across consolidation and the growth review.
-		minAutoWriteConfidence: input.settings.memoryGrowth.minMemoryAutoWriteConfidence,
+		minAutoWriteConfidence: input.settings.memoryMaintenance.minMemoryAutoWriteConfidence,
 	};
 }
 
@@ -247,19 +227,18 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 	});
 }
 
-export async function runDurableConsolidationJob(input: DurableConsolidationJobInput): Promise<MaintenanceJobResult> {
+export async function runMemoryCheckpointJob(input: MemoryCheckpointJobInput): Promise<MaintenanceJobResult> {
 	return runQueued(input, async () => {
 		const now = input.now ?? new Date();
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
 		const sourceWindow = buildIncrementalMemorySourceWindow({
 			entries: input.sessionEntries,
-			lastEntryId: state.lastConsolidatedEntryId,
+			lastEntryId: state.lastCheckpointEntryId,
 			sourceKind: "idle",
 			fallbackMessages: input.messages,
 		});
 		const newEntries = sourceWindow.entries;
-		const latestId = latestEntryId(input.sessionEntries);
-		const decision = shouldRunDurableConsolidation({
+		const decision = shouldRunMemoryCheckpoint({
 			now,
 			state,
 			maintenance: input.settings.memoryMaintenance,
@@ -267,13 +246,12 @@ export async function runDurableConsolidationJob(input: DurableConsolidationJobI
 			hasNewEntry: newEntries.length > 0,
 			hasMeaningfulExchange: hasMeaningfulMessages(sourceWindow.messages),
 			batchSize: newEntries.length,
-			coveredByGrowthReview: Boolean(latestId && state.lastReviewedEntryId === latestId),
 		});
 		if (!decision.allowed) {
 			await appendJobReviewLog(
 				input.channelDir,
 				input.channelId,
-				"durable-consolidation-job",
+				"memory-checkpoint-job",
 				{ skipped: [{ target: "consolidation", reason: decision.skipReason }] },
 				now,
 			);
@@ -288,14 +266,14 @@ export async function runDurableConsolidationJob(input: DurableConsolidationJobI
 			});
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
-				lastDurableConsolidationAt: now.toISOString(),
-				lastConsolidatedEntryId: sourceWindow.throughEntryId ?? current.lastConsolidatedEntryId,
+				lastCheckpointAt: now.toISOString(),
+				lastCheckpointEntryId: sourceWindow.throughEntryId ?? current.lastCheckpointEntryId,
 				failureBackoffUntil: null,
 			}));
 			await appendJobReviewLog(
 				input.channelDir,
 				input.channelId,
-				"durable-consolidation-job",
+				"memory-checkpoint-job",
 				result.skipped
 					? {
 							skipped: [{ target: "consolidation", reason: "no meaningful snapshot" }],
@@ -312,120 +290,18 @@ export async function runDurableConsolidationJob(input: DurableConsolidationJobI
 						},
 				now,
 			);
-			return ran("durable-consolidation");
+			return ran("memory-checkpoint");
 		} catch (error) {
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
 				failureBackoffUntil: backoffUntil(now, input.settings.memoryMaintenance),
 			}));
-			const result = failed("durable-consolidation", error);
+			const result = failed("memory-checkpoint", error);
 			await appendJobReviewLog(
 				input.channelDir,
 				input.channelId,
-				"durable-consolidation-job",
+				"memory-checkpoint-job",
 				{ error: result.error, skipped: [{ target: "consolidation", reason: "failed" }] },
-				now,
-			);
-			return result;
-		}
-	});
-}
-
-export async function runGrowthReviewJob(input: GrowthReviewJobInput): Promise<MaintenanceJobResult> {
-	return runQueued(input, async () => {
-		const now = input.now ?? new Date();
-		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
-		const sourceWindow = buildIncrementalMemorySourceWindow({
-			entries: input.sessionEntries,
-			lastEntryId: state.lastReviewedEntryId,
-			sourceKind: "growth-review",
-			fallbackMessages: input.messages,
-		});
-		const newEntries = sourceWindow.entries;
-		const signalScan = scanPromotionSignals(renderMessagesForSignalScan(sourceWindow.messages));
-		const decision = shouldRunGrowthReview({
-			now,
-			state,
-			memoryGrowth: input.settings.memoryGrowth,
-			maintenance: input.settings.memoryMaintenance,
-			channelActive: input.channelActive,
-			hasNewEntry: newEntries.length > 0,
-			hasMeaningfulMaterial: hasMeaningfulMessages(sourceWindow.messages),
-			hasPromotionSignal: signalScan.hasSignal,
-		});
-		if (!decision.allowed) {
-			await appendJobReviewLog(
-				input.channelDir,
-				input.channelId,
-				"growth-review-job",
-				{ skipped: [{ target: "post-turn-review", reason: decision.skipReason }] },
-				now,
-			);
-			return skipped(decision.jobKind, decision.skipReason ?? "skipped");
-		}
-
-		try {
-			const notices: string[] = [];
-			const result = await runPostTurnReview({
-				channelId: input.channelId,
-				channelDir: input.channelDir,
-				workspaceDir: input.workspaceDir,
-				messages: sourceWindow.messages,
-				sourceEntryIds: sourceWindow.entries.map((entry) => entry.id),
-				suppressAutomaticWrites: sourceWindow.hasExternalToolContent,
-				model: input.model,
-				resolveApiKey: input.resolveApiKey,
-				timeoutMs: input.settings.sessionMemory.timeoutMs,
-				autoWriteChannelMemory: input.settings.memoryGrowth.autoWriteChannelMemory,
-				autoWriteWorkspaceSkills: input.settings.memoryGrowth.autoWriteWorkspaceSkills,
-				minMemoryAutoWriteConfidence: input.settings.memoryGrowth.minMemoryAutoWriteConfidence,
-				minSkillAutoWriteConfidence: input.settings.memoryGrowth.minSkillAutoWriteConfidence,
-				loadedSkills: input.loadedSkills,
-				correlationId: sourceWindow.windowId,
-				emitNotice: async (notice) => {
-					notices.push(notice);
-				},
-				refreshWorkspaceResources: input.refreshWorkspaceResources,
-			});
-			if (result.status === "failed") {
-				throw new Error(`Growth review failed: ${result.error}. Retry this memory window after backoff.`);
-			}
-			const appliedResult = result.result;
-			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
-				...current,
-				lastGrowthReviewAt: now.toISOString(),
-				turnsSinceGrowthReview: 0,
-				toolCallsSinceGrowthReview: 0,
-				lastReviewedEntryId: sourceWindow.throughEntryId ?? current.lastReviewedEntryId,
-				failureBackoffUntil: null,
-			}));
-			if (notices.length > 0) {
-				const uniqueNotices = Array.from(new Set(notices));
-				await input.emitNotice?.(uniqueNotices.join("\n"));
-			}
-			await appendJobReviewLog(
-				input.channelDir,
-				input.channelId,
-				"growth-review-job",
-				{
-					actions: appliedResult.actions,
-					skipped: appliedResult.skipped,
-					correlationId: sourceWindow.windowId,
-				},
-				now,
-			);
-			return ran("growth-review");
-		} catch (error) {
-			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
-				...current,
-				failureBackoffUntil: backoffUntil(now, input.settings.memoryMaintenance),
-			}));
-			const result = failed("growth-review", error);
-			await appendJobReviewLog(
-				input.channelDir,
-				input.channelId,
-				"growth-review-job",
-				{ error: result.error, skipped: [{ target: "post-turn-review", reason: "failed" }] },
 				now,
 			);
 			return result;

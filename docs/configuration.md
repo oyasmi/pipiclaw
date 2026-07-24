@@ -866,19 +866,11 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | `sessionMemory.failureBackoffTurns` | `3` | Legacy | 边界外的 scheduled refresh 主要使用 `memoryMaintenance.failureBackoffMinutes` |
 | `sessionMemory.forceRefreshBeforeCompact` | `true` | Yes | compaction 前强制刷新 |
 | `sessionMemory.forceRefreshBeforeNewSession` | `true` | Yes | `/new` 前强制刷新 |
-| `memoryGrowth.postTurnReviewEnabled` | `true` | Yes | 启用后台 growth review job |
-| `memoryGrowth.autoWriteChannelMemory` | `true` | Yes | 高置信 durable fact 自动写入 channel `MEMORY.md` |
-| `memoryGrowth.autoWriteWorkspaceSkills` | `false` | Yes | 高置信 reusable workflow 默认只保留 suggestion；显式开启后才自动写入 workspace `skills/` |
-| `memoryGrowth.minSkillAutoWriteConfidence` | `0.9` | Yes | workspace skill 自动写入阈值；可调高，但运行时最低为 `0.9` |
-| `memoryGrowth.minMemoryAutoWriteConfidence` | `0.85` | Yes | channel memory 自动写入阈值 |
-| `memoryGrowth.idleWritesHistory` | `false` | Reserved | idle consolidation 默认不写 `HISTORY.md` |
-| `memoryGrowth.minTurnsBetweenReview` | `12` | Yes | growth review job 的 assistant turn 阈值 |
-| `memoryGrowth.minToolCallsBetweenReview` | `24` | Yes | growth review job 的工具调用阈值 |
 | `memoryMaintenance.enabled` | `true` | Yes | 启用内置后台 memory maintenance scheduler |
 | `memoryMaintenance.minIdleMinutesBeforeLlmWork` | `10` | Yes | channel 最近活跃后至少等待多久才允许后台 LLM work |
 | `memoryMaintenance.sessionRefreshIntervalMinutes` | `10` | Yes | scheduled session refresh 的最小间隔 |
-| `memoryMaintenance.durableConsolidationIntervalMinutes` | `20` | Yes | durable consolidation job 的最小间隔 |
-| `memoryMaintenance.growthReviewIntervalMinutes` | `60` | Yes | growth review job 的最小间隔 |
+| `memoryMaintenance.checkpointIntervalMinutes` | `20` | Yes | 后台 memory checkpoint（durable 固化）job 的最小间隔 |
+| `memoryMaintenance.minMemoryAutoWriteConfidence` | `0.85` | Yes | channel memory 自动写入阈值（边界固化与后台 checkpoint 共用） |
 | `memoryMaintenance.structuralMaintenanceIntervalHours` | `6` | Yes | cleanup/folding structural job 的最小间隔 |
 | `memoryMaintenance.maxConcurrentChannels` | `1` | Yes | 每个 tick 最多处理的 channel 数 |
 | `memoryMaintenance.failureBackoffMinutes` | `30` | Yes | 后台任务失败后的回退分钟数 |
@@ -1011,18 +1003,11 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
     "enabled": true,
     "minIdleMinutesBeforeLlmWork": 10,
     "sessionRefreshIntervalMinutes": 10,
-    "durableConsolidationIntervalMinutes": 20,
-    "growthReviewIntervalMinutes": 60,
+    "checkpointIntervalMinutes": 20,
+    "minMemoryAutoWriteConfidence": 0.85,
     "structuralMaintenanceIntervalHours": 6,
     "maxConcurrentChannels": 1,
     "failureBackoffMinutes": 30
-  },
-  "memoryGrowth": {
-    "postTurnReviewEnabled": true,
-    "autoWriteChannelMemory": true,
-    "autoWriteWorkspaceSkills": false,
-    "minMemoryAutoWriteConfidence": 0.85,
-    "minSkillAutoWriteConfidence": 0.9
   },
   "sessionSearch": {
     "enabled": true,
@@ -1039,11 +1024,10 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 - 普通用户 turn 结束后只记录 dirty/counter，不直接触发 memory LLM sidecar。
 - `memoryMaintenance` 是内置后台 scheduler，不依赖也不会写入 `workspace/events/`。
-- 四类后台任务在调用 LLM 前都有本地 gate；无新内容、channel 仍活跃、未到阈值或未到间隔时不会调用 LLM。
-- `postTurnReview` 已迁移为后台 growth review job，触发频率由 `memoryGrowth.minTurnsBetweenReview` / `memoryGrowth.minToolCallsBetweenReview` 和 `memoryMaintenance.growthReviewIntervalMinutes` 共同控制。
+- 三类后台任务（session refresh / memory checkpoint / structural maintenance）在调用 LLM 前都有本地 gate；无新内容、channel 仍活跃、未到阈值或未到间隔时不会调用 LLM。
 - `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
-- `minSkillAutoWriteConfidence` 可以调高以进一步收紧 workspace skill 自动写入，但低于 `0.9` 的配置会按 `0.9` 执行，避免低置信 workflow 污染 workspace skills。
-- `minMemoryAutoWriteConfidence` 现在同时约束 **growth review 与前后台的 durable 固化**——两者共用一条提炼路径和同一道闸门。调低它会让边界固化也一起变松。被闸门拒绝的候选会记进 `memory-review.jsonl` 的 `skipped`，素材本身仍保留在 `HISTORY.md` 和冷存储里。
+- `minMemoryAutoWriteConfidence` 同时约束**前台边界固化与后台 checkpoint**——两者共用一条提炼路径和同一道闸门。调低它会让所有 durable 写入一起变松。被闸门拒绝的候选会记进 `memory-review.jsonl` 的 `skipped`，素材本身仍保留在 `HISTORY.md` 和冷存储里。
+- workspace skill 只能通过显式的 `skill_manage` 工具创建/更新，后台记忆管线不会自动写 skill。
 
 ## 内建工具配置文件 `tools.json`（`tools.json`）
 
@@ -1254,7 +1238,7 @@ web 工具的代理顺序是：
 - `skill_view`：查看 `SKILL.md` 或允许的支持文件
 - `skill_manage`：创建、patch 或写入允许的支持文件
 
-`skill_manage` 会限制路径只能落在 `workspace/skills/<name>/` 下，支持文件只能在 `references/`、`templates/`、`scripts/`、`assets/` 内。高置信 post-turn review 也可能直接创建或更新 workspace skill；直接写入后会发送 DingTalk 轻提示，并写入 channel 的 `memory-review.jsonl`。
+`skill_manage` 会限制路径只能落在 `workspace/skills/<name>/` 下，支持文件只能在 `references/`、`templates/`、`scripts/`、`assets/` 内。workspace skill 只会由显式的 `skill_manage` 调用创建或更新，后台记忆管线不会自动写 skill。
 
 ## 会话通道级运行时文件（Channel-Level Runtime Files）
 

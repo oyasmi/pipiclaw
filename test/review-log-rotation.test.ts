@@ -34,7 +34,7 @@ describe("review log rotation", () => {
 		await appendMemoryReviewLog(channelDir, {
 			timestamp: "2026-04-19T00:00:00.000Z",
 			channelId: "dm_123",
-			reason: "post-turn",
+			reason: "memory-checkpoint-job",
 			actions: [{ target: "MEMORY.md" }],
 		});
 

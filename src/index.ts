@@ -134,7 +134,6 @@ export {
 } from "./runtime/events.js";
 export { ChannelStore, type LoggedMessage, type LoggedSubAgentRun } from "./runtime/store.js";
 export {
-	type PipiclawMemoryGrowthSettings,
 	type PipiclawMemoryMaintenanceSettings,
 	type PipiclawMemoryRecallSettings,
 	type PipiclawSessionMemorySettings,

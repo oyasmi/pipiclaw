@@ -43,7 +43,7 @@ describe("memory source windows", () => {
 				{ id: "e1", type: "message", message: { role: "user", content: "inspect" } },
 				{ id: "e2", type: "message", message: { role: "toolResult", content: [{ type: "text", text: "data" }] } },
 			] as never[],
-			sourceKind: "growth-review",
+			sourceKind: "idle",
 		});
 		expect(window.hasExternalToolContent).toBe(true);
 	});

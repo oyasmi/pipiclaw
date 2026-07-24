@@ -6,12 +6,10 @@ import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/utils.js";
 import type { PipiclawSettingsManager } from "../settings.js";
-import { loadPipiclawSkills } from "./workspace-resources.js";
 
 export interface DetachedMaintenanceContextOptions {
 	channelId: string;
 	channelDir: string;
-	workspaceDir: string;
 	authConfigPath: string;
 	modelsConfigPath: string;
 	settingsManager: PipiclawSettingsManager;
@@ -82,19 +80,13 @@ export async function loadDetachedMaintenanceContext(
 	return {
 		channelId: options.channelId,
 		channelDir: options.channelDir,
-		workspaceDir: options.workspaceDir,
 		messages: [...cached.messages],
 		sessionEntries: [...cached.sessionEntries],
 		model,
 		resolveApiKey: async (candidate) => getApiKeyForModel(modelRegistry, candidate),
 		settings: {
 			sessionMemory: options.settingsManager.getSessionMemorySettings(),
-			memoryGrowth: options.settingsManager.getMemoryGrowthSettings(),
 			memoryMaintenance: options.settingsManager.getMemoryMaintenanceSettings(),
 		},
-		loadedSkills: loadPipiclawSkills(options.channelDir).skills.map((skill) => ({
-			name: skill.name,
-			description: skill.description,
-		})),
 	};
 }

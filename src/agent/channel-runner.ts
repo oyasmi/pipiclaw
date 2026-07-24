@@ -675,22 +675,13 @@ export class ChannelRunner implements AgentRunner {
 		return {
 			channelId: this.channelId,
 			channelDir: this.channelDir,
-			workspaceDir: this.workspaceDir,
 			messages: [...this.session.messages],
 			sessionEntries: [...this.sessionManager.getBranch()],
 			model: this.session.model ?? this.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			settings: {
 				sessionMemory: this.settingsManager.getSessionMemorySettings(),
-				memoryGrowth: this.settingsManager.getMemoryGrowthSettings(),
 				memoryMaintenance: this.settingsManager.getMemoryMaintenanceSettings(),
-			},
-			loadedSkills: this.currentSkills.skills.map((skill) => ({
-				name: skill.name,
-				description: skill.description,
-			})),
-			refreshWorkspaceResources: async () => {
-				await this.refreshSessionResources();
 			},
 		};
 	}

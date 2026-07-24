@@ -309,7 +309,7 @@ export class MemoryLifecycle {
 			const maintenanceState = this.options.appHomeDir
 				? await readMemoryMaintenanceState(this.options.appHomeDir, this.options.channelId)
 				: undefined;
-			const lastEntryId = maintenanceState?.lastConsolidatedEntryId;
+			const lastEntryId = maintenanceState?.lastCheckpointEntryId;
 			const sourceWindow =
 				reason === "compaction"
 					? buildCompactionMemorySourceWindow({
@@ -332,8 +332,8 @@ export class MemoryLifecycle {
 			if (this.options.appHomeDir && sourceWindow.throughEntryId) {
 				await updateMemoryMaintenanceState(this.options.appHomeDir, this.options.channelId, (current) => ({
 					...current,
-					lastConsolidatedEntryId: sourceWindow.throughEntryId,
-					lastDurableConsolidationAt: new Date().toISOString(),
+					lastCheckpointEntryId: sourceWindow.throughEntryId,
+					lastCheckpointAt: new Date().toISOString(),
 					failureBackoffUntil: null,
 				}));
 			}

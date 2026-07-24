@@ -109,23 +109,14 @@ export interface PipiclawSessionMemorySettings {
 	forceRefreshBeforeNewSession: boolean;
 }
 
-export interface PipiclawMemoryGrowthSettings {
-	postTurnReviewEnabled: boolean;
-	autoWriteChannelMemory: boolean;
-	autoWriteWorkspaceSkills: boolean;
-	minSkillAutoWriteConfidence: number;
-	minMemoryAutoWriteConfidence: number;
-	idleWritesHistory: boolean;
-	minTurnsBetweenReview: number;
-	minToolCallsBetweenReview: number;
-}
-
 export interface PipiclawMemoryMaintenanceSettings {
 	enabled: boolean;
 	minIdleMinutesBeforeLlmWork: number;
 	sessionRefreshIntervalMinutes: number;
-	durableConsolidationIntervalMinutes: number;
-	growthReviewIntervalMinutes: number;
+	/** Idle cadence of the merged memory checkpoint (durable extraction) job. */
+	checkpointIntervalMinutes: number;
+	/** Confidence bar a candidate must clear before it is written to MEMORY.md. */
+	minMemoryAutoWriteConfidence: number;
 	structuralMaintenanceIntervalHours: number;
 	maxConcurrentChannels: number;
 	failureBackoffMinutes: number;
@@ -171,7 +162,6 @@ export interface PipiclawSettings {
 	taskDigest?: Partial<PipiclawTaskDigestSettings>;
 	taskDriver?: Partial<PipiclawTaskDriverSettings>;
 	sessionMemory?: Partial<PipiclawSessionMemorySettings>;
-	memoryGrowth?: Partial<PipiclawMemoryGrowthSettings>;
 	memoryMaintenance?: Partial<PipiclawMemoryMaintenanceSettings>;
 	sessionSearch?: Partial<PipiclawSessionSearchSettings>;
 	logging?: Partial<Omit<PipiclawLoggingSettings, "file">> & { file?: Partial<PipiclawLoggingSettings["file"]> };
@@ -240,19 +230,6 @@ const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
 	forceRefreshBeforeNewSession: true,
 };
 
-const DEFAULT_MEMORY_GROWTH: PipiclawMemoryGrowthSettings = {
-	postTurnReviewEnabled: true,
-	autoWriteChannelMemory: true,
-	autoWriteWorkspaceSkills: false,
-	minSkillAutoWriteConfidence: 0.9,
-	minMemoryAutoWriteConfidence: 0.85,
-	idleWritesHistory: false,
-	minTurnsBetweenReview: 12,
-	minToolCallsBetweenReview: 24,
-};
-
-const MIN_SKILL_AUTO_WRITE_CONFIDENCE = 0.9;
-
 const DEFAULT_SESSION_SEARCH: PipiclawSessionSearchSettings = {
 	enabled: true,
 	maxFiles: 12,
@@ -266,8 +243,8 @@ const DEFAULT_MEMORY_MAINTENANCE: PipiclawMemoryMaintenanceSettings = {
 	enabled: true,
 	minIdleMinutesBeforeLlmWork: 10,
 	sessionRefreshIntervalMinutes: 10,
-	durableConsolidationIntervalMinutes: 20,
-	growthReviewIntervalMinutes: 60,
+	checkpointIntervalMinutes: 20,
+	minMemoryAutoWriteConfidence: 0.85,
 	structuralMaintenanceIntervalHours: 6,
 	maxConcurrentChannels: 1,
 	failureBackoffMinutes: 30,
@@ -423,20 +400,6 @@ export class PipiclawSettingsManager {
 		return {
 			...DEFAULT_SESSION_MEMORY,
 			...this.settings.sessionMemory,
-		};
-	}
-
-	getMemoryGrowthSettings(): PipiclawMemoryGrowthSettings {
-		const settings = {
-			...DEFAULT_MEMORY_GROWTH,
-			...this.settings.memoryGrowth,
-		};
-		const configured = settings.minSkillAutoWriteConfidence;
-		return {
-			...settings,
-			minSkillAutoWriteConfidence: Number.isFinite(configured)
-				? Math.min(1, Math.max(MIN_SKILL_AUTO_WRITE_CONFIDENCE, configured))
-				: MIN_SKILL_AUTO_WRITE_CONFIDENCE,
 		};
 	}
 

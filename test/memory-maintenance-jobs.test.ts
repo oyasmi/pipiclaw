@@ -15,10 +15,6 @@ vi.mock("../src/memory/consolidation.js", async () => {
 	};
 });
 
-vi.mock("../src/memory/post-turn-review.js", () => ({
-	runPostTurnReview: vi.fn(),
-}));
-
 vi.mock("../src/memory/sidecar-worker.js", () => ({
 	runSidecarTask: vi.fn(),
 	runRetriedSidecarTask: vi.fn(),
@@ -27,13 +23,11 @@ vi.mock("../src/memory/sidecar-worker.js", () => ({
 import { runInlineConsolidation } from "../src/memory/consolidation.js";
 import { ensureChannelMemoryFiles } from "../src/memory/files.js";
 import {
-	runDurableConsolidationJob,
-	runGrowthReviewJob,
+	runMemoryCheckpointJob,
 	runSessionRefreshJob,
 	runStructuralMaintenanceJob,
 } from "../src/memory/maintenance-jobs.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
-import { runPostTurnReview } from "../src/memory/post-turn-review.js";
 import { updateChannelSessionMemory } from "../src/memory/session.js";
 import { runSidecarTask } from "../src/memory/sidecar-worker.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -60,22 +54,12 @@ function settings() {
 			forceRefreshBeforeCompact: true,
 			forceRefreshBeforeNewSession: true,
 		},
-		memoryGrowth: {
-			postTurnReviewEnabled: true,
-			autoWriteChannelMemory: true,
-			autoWriteWorkspaceSkills: false,
-			minSkillAutoWriteConfidence: 0.9,
-			minMemoryAutoWriteConfidence: 0.85,
-			idleWritesHistory: false,
-			minTurnsBetweenReview: 12,
-			minToolCallsBetweenReview: 24,
-		},
 		memoryMaintenance: {
 			enabled: true,
 			minIdleMinutesBeforeLlmWork: 10,
 			sessionRefreshIntervalMinutes: 10,
-			durableConsolidationIntervalMinutes: 20,
-			growthReviewIntervalMinutes: 60,
+			checkpointIntervalMinutes: 20,
+			minMemoryAutoWriteConfidence: 0.85,
 			structuralMaintenanceIntervalHours: 6,
 			maxConcurrentChannels: 1,
 			failureBackoffMinutes: 30,
@@ -116,7 +100,7 @@ describe("memory maintenance jobs", () => {
 		expect(updateChannelSessionMemory).not.toHaveBeenCalled();
 	});
 
-	it("does not call durable consolidation sidecar when the gate denies", async () => {
+	it("does not call the checkpoint sidecar when the gate denies", async () => {
 		const { appHomeDir, channelDir } = await harness();
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
 			...state,
@@ -124,7 +108,7 @@ describe("memory maintenance jobs", () => {
 			eligibleAfter: "2999-01-01T00:00:00.000Z",
 		}));
 
-		const result = await runDurableConsolidationJob({
+		const result = await runMemoryCheckpointJob({
 			appHomeDir,
 			channelId: "dm_1",
 			channelDir,
@@ -138,43 +122,6 @@ describe("memory maintenance jobs", () => {
 
 		expect(result).toMatchObject({ skipped: true, skipReason: "not-idle-yet" });
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
-	});
-
-	it("does not call growth review sidecar without local promotion signals", async () => {
-		const { appHomeDir, channelDir, workspaceDir } = await harness();
-		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
-			...state,
-			dirty: true,
-			turnsSinceGrowthReview: 12,
-			eligibleAfter: "2026-04-19T00:00:00.000Z",
-		}));
-
-		const result = await runGrowthReviewJob({
-			appHomeDir,
-			channelId: "dm_1",
-			channelDir,
-			channelActive: false,
-			settings: settings(),
-			model: TEST_MODEL,
-			resolveApiKey: async () => "",
-			messages: [
-				{ role: "user", content: "Please inspect this file." },
-				{ role: "assistant", content: [{ type: "text", text: "Inspected it." }] },
-			] as never[],
-			sessionEntries: [
-				{ id: "entry-1", type: "message", message: { role: "user", content: "Please inspect this file." } },
-				{
-					id: "entry-2",
-					type: "message",
-					message: { role: "assistant", content: [{ type: "text", text: "Inspected it." }] },
-				},
-			] as never[],
-			workspaceDir,
-			loadedSkills: [],
-		});
-
-		expect(result).toMatchObject({ skipped: true, skipReason: "no-promotion-signal" });
-		expect(runPostTurnReview).not.toHaveBeenCalled();
 	});
 
 	it("does not call structural sidecars when files are under threshold", async () => {
@@ -195,13 +142,13 @@ describe("memory maintenance jobs", () => {
 		expect(runSidecarTask).not.toHaveBeenCalled();
 	});
 
-	it("passes only entries after the durable cursor to consolidation", async () => {
+	it("passes only entries after the checkpoint cursor to consolidation", async () => {
 		const { appHomeDir, channelDir } = await harness();
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
 			...state,
 			dirty: true,
 			eligibleAfter: "2026-01-01T00:00:00.000Z",
-			lastConsolidatedEntryId: "entry-2",
+			lastCheckpointEntryId: "entry-2",
 		}));
 		vi.mocked(runInlineConsolidation).mockResolvedValue({
 			skipped: false,
@@ -218,7 +165,7 @@ describe("memory maintenance jobs", () => {
 				message: { role: "assistant", content: [{ type: "text", text: "new reply" }] },
 			},
 		] as never[];
-		await runDurableConsolidationJob({
+		await runMemoryCheckpointJob({
 			appHomeDir,
 			channelId: "dm_1",
 			channelDir,
@@ -240,16 +187,15 @@ describe("memory maintenance jobs", () => {
 		);
 	});
 
-	it("keeps the growth cursor when review fails", async () => {
-		const { appHomeDir, channelDir, workspaceDir } = await harness();
+	it("keeps the checkpoint cursor and sets backoff when consolidation fails", async () => {
+		const { appHomeDir, channelDir } = await harness();
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
 			...state,
 			dirty: true,
-			turnsSinceGrowthReview: 12,
 			eligibleAfter: "2026-01-01T00:00:00.000Z",
 		}));
-		vi.mocked(runPostTurnReview).mockResolvedValue({ status: "failed", error: "model timeout" });
-		const result = await runGrowthReviewJob({
+		vi.mocked(runInlineConsolidation).mockRejectedValue(new Error("model timeout"));
+		const result = await runMemoryCheckpointJob({
 			appHomeDir,
 			channelId: "dm_1",
 			channelDir,
@@ -259,12 +205,10 @@ describe("memory maintenance jobs", () => {
 			resolveApiKey: async () => "",
 			messages,
 			sessionEntries,
-			workspaceDir,
-			loadedSkills: [],
 		});
 		expect(result.error).toContain("model timeout");
 		const state = await readMemoryMaintenanceState(appHomeDir, "dm_1");
-		expect(state.lastReviewedEntryId).toBeUndefined();
+		expect(state.lastCheckpointEntryId).toBeUndefined();
 		expect(state.failureBackoffUntil).toBeTruthy();
 	});
 });

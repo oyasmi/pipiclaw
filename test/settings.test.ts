@@ -20,22 +20,17 @@ describe("settings manager", () => {
 		expect(manager.drainErrors()).toEqual([]);
 	});
 
-	it("allows skill auto-write confidence to be raised but not lowered below the safety floor", () => {
-		const lowDir = makeTempDir();
-		const highDir = makeTempDir();
+	it("merges configured memory maintenance settings over defaults", () => {
+		const dir = makeTempDir();
 		writeFileSync(
-			join(lowDir, "settings.json"),
-			JSON.stringify({ memoryGrowth: { minSkillAutoWriteConfidence: 0.5 } }),
-			"utf-8",
-		);
-		writeFileSync(
-			join(highDir, "settings.json"),
-			JSON.stringify({ memoryGrowth: { minSkillAutoWriteConfidence: 0.95 } }),
+			join(dir, "settings.json"),
+			JSON.stringify({ memoryMaintenance: { checkpointIntervalMinutes: 45 } }),
 			"utf-8",
 		);
 
-		expect(new PipiclawSettingsManager(lowDir).getMemoryGrowthSettings().minSkillAutoWriteConfidence).toBe(0.9);
-		expect(new PipiclawSettingsManager(highDir).getMemoryGrowthSettings().minSkillAutoWriteConfidence).toBe(0.95);
+		const maintenance = new PipiclawSettingsManager(dir).getMemoryMaintenanceSettings();
+		expect(maintenance.checkpointIntervalMinutes).toBe(45);
+		expect(maintenance.minMemoryAutoWriteConfidence).toBe(0.85);
 	});
 
 	it("resolves the fallback model reference, treating empty/missing as unset", () => {

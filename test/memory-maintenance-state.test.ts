@@ -76,7 +76,6 @@ describe("memory maintenance state", () => {
 		expect(raw).toMatchObject({
 			dirty: true,
 			turnsSinceSessionRefresh: 1,
-			turnsSinceGrowthReview: 1,
 			lastSessionEntryId: "entry-2",
 			eligibleAfter: "2026-04-19T00:10:00.000Z",
 		});
@@ -101,8 +100,29 @@ describe("memory maintenance state", () => {
 			dirty: true,
 			turnsSinceSessionRefresh: 6,
 			toolCallsSinceSessionRefresh: 6,
-			turnsSinceGrowthReview: 6,
-			toolCallsSinceGrowthReview: 6,
+		});
+	});
+
+	it("folds legacy consolidation/growth-review fields into the checkpoint", async () => {
+		const appHomeDir = createTempDir();
+		const path = getMemoryMaintenanceStatePath(appHomeDir, "dm_1");
+		await mkdir(join(appHomeDir, "state", "memory"), { recursive: true });
+		await writeFile(
+			path,
+			JSON.stringify({
+				channelId: "dm_1",
+				dirty: true,
+				lastDurableConsolidationAt: "2026-04-19T00:20:00.000Z",
+				lastGrowthReviewAt: "2026-04-19T00:40:00.000Z",
+				lastConsolidatedEntryId: "entry-7",
+				lastReviewedEntryId: "entry-5",
+			}),
+			"utf-8",
+		);
+
+		await expect(readMemoryMaintenanceState(appHomeDir, "dm_1")).resolves.toMatchObject({
+			lastCheckpointAt: "2026-04-19T00:40:00.000Z",
+			lastCheckpointEntryId: "entry-7",
 		});
 	});
 
@@ -113,8 +133,6 @@ describe("memory maintenance state", () => {
 				dirty: false,
 				turnsSinceSessionRefresh: 0,
 				toolCallsSinceSessionRefresh: 0,
-				turnsSinceGrowthReview: 0,
-				toolCallsSinceGrowthReview: 0,
 				failureBackoffUntil: null,
 			},
 			{

@@ -8,10 +8,8 @@ export type MemoryReviewReason =
 	| "compaction"
 	| "new-session"
 	| "shutdown"
-	| "post-turn"
 	| "session-refresh-job"
-	| "durable-consolidation-job"
-	| "growth-review-job"
+	| "memory-checkpoint-job"
 	| "structural-maintenance-job"
 	| "user-forget";
 

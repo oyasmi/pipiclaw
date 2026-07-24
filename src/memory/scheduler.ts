@@ -4,35 +4,22 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import * as log from "../log.js";
-import type {
-	PipiclawMemoryGrowthSettings,
-	PipiclawMemoryMaintenanceSettings,
-	PipiclawSessionMemorySettings,
-} from "../settings.js";
+import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
-import {
-	runDurableConsolidationJob,
-	runGrowthReviewJob,
-	runSessionRefreshJob,
-	runStructuralMaintenanceJob,
-} from "./maintenance-jobs.js";
+import { runMemoryCheckpointJob, runSessionRefreshJob, runStructuralMaintenanceJob } from "./maintenance-jobs.js";
 import { getMemoryMaintenanceStateDir } from "./maintenance-state.js";
 
 export interface MemoryMaintenanceRuntimeContext {
 	channelId: string;
 	channelDir: string;
-	workspaceDir: string;
 	messages: AgentMessage[];
 	sessionEntries: SessionEntry[];
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	settings: {
 		sessionMemory: PipiclawSessionMemorySettings;
-		memoryGrowth: PipiclawMemoryGrowthSettings;
 		memoryMaintenance: PipiclawMemoryMaintenanceSettings;
 	};
-	loadedSkills: Array<{ name: string; description?: string }>;
-	refreshWorkspaceResources?: () => Promise<void>;
 }
 
 export interface MemoryMaintenanceSchedulerOptions {
@@ -44,7 +31,6 @@ export interface MemoryMaintenanceSchedulerOptions {
 	getSettings: () => {
 		memoryMaintenance: PipiclawMemoryMaintenanceSettings;
 	};
-	emitNotice?: (channelId: string, notice: string) => Promise<void>;
 	intervalMs?: number;
 }
 
@@ -187,20 +173,8 @@ export class MemoryMaintenanceScheduler {
 		if (session.ran) {
 			return;
 		}
-		const durable = await runDurableConsolidationJob(common);
-		if (durable.ran) {
-			return;
-		}
-		const growth = await runGrowthReviewJob({
-			...common,
-			workspaceDir: context.workspaceDir,
-			loadedSkills: context.loadedSkills,
-			emitNotice: this.options.emitNotice
-				? async (notice) => this.options.emitNotice?.(channelId, notice)
-				: undefined,
-			refreshWorkspaceResources: context.refreshWorkspaceResources,
-		});
-		if (growth.ran) {
+		const checkpoint = await runMemoryCheckpointJob(common);
+		if (checkpoint.ran) {
 			return;
 		}
 		await runStructuralMaintenanceJob(common);

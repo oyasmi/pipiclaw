@@ -11,17 +11,13 @@ export interface MemoryMaintenanceState {
 	lastActivityAt?: string;
 	eligibleAfter?: string;
 	lastSessionRefreshAt?: string;
-	lastDurableConsolidationAt?: string;
-	lastGrowthReviewAt?: string;
+	lastCheckpointAt?: string;
 	lastStructuralMaintenanceAt?: string;
 	turnsSinceSessionRefresh: number;
 	toolCallsSinceSessionRefresh: number;
-	turnsSinceGrowthReview: number;
-	toolCallsSinceGrowthReview: number;
 	lastSessionEntryId?: string;
 	lastSessionRefreshedEntryId?: string;
-	lastConsolidatedEntryId?: string;
-	lastReviewedEntryId?: string;
+	lastCheckpointEntryId?: string;
 	failureBackoffUntil?: string | null;
 }
 
@@ -51,8 +47,6 @@ function createDefaultState(channelId: string): MemoryMaintenanceState {
 		dirty: false,
 		turnsSinceSessionRefresh: 0,
 		toolCallsSinceSessionRefresh: 0,
-		turnsSinceGrowthReview: 0,
-		toolCallsSinceGrowthReview: 0,
 		failureBackoffUntil: null,
 	};
 }
@@ -72,6 +66,12 @@ function normalizeCounter(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
+function laterTimestamp(a: string | undefined, b: string | undefined): string | undefined {
+	if (!a) return b;
+	if (!b) return a;
+	return Date.parse(a) >= Date.parse(b) ? a : b;
+}
+
 function normalizeState(channelId: string, value: unknown): MemoryMaintenanceState {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		return createDefaultState(channelId);
@@ -83,17 +83,23 @@ function normalizeState(channelId: string, value: unknown): MemoryMaintenanceSta
 		lastActivityAt: normalizeOptionalString(record.lastActivityAt),
 		eligibleAfter: normalizeOptionalString(record.eligibleAfter),
 		lastSessionRefreshAt: normalizeOptionalString(record.lastSessionRefreshAt),
-		lastDurableConsolidationAt: normalizeOptionalString(record.lastDurableConsolidationAt),
-		lastGrowthReviewAt: normalizeOptionalString(record.lastGrowthReviewAt),
+		// Legacy states carried separate consolidation/growth-review fields; fold them
+		// into the merged checkpoint so cadence and cursor survive the migration.
+		lastCheckpointAt:
+			normalizeOptionalString(record.lastCheckpointAt) ??
+			laterTimestamp(
+				normalizeOptionalString(record.lastDurableConsolidationAt),
+				normalizeOptionalString(record.lastGrowthReviewAt),
+			),
 		lastStructuralMaintenanceAt: normalizeOptionalString(record.lastStructuralMaintenanceAt),
 		turnsSinceSessionRefresh: normalizeCounter(record.turnsSinceSessionRefresh),
 		toolCallsSinceSessionRefresh: normalizeCounter(record.toolCallsSinceSessionRefresh),
-		turnsSinceGrowthReview: normalizeCounter(record.turnsSinceGrowthReview),
-		toolCallsSinceGrowthReview: normalizeCounter(record.toolCallsSinceGrowthReview),
 		lastSessionEntryId: normalizeOptionalString(record.lastSessionEntryId),
 		lastSessionRefreshedEntryId: normalizeOptionalString(record.lastSessionRefreshedEntryId),
-		lastConsolidatedEntryId: normalizeOptionalString(record.lastConsolidatedEntryId),
-		lastReviewedEntryId: normalizeOptionalString(record.lastReviewedEntryId),
+		lastCheckpointEntryId:
+			normalizeOptionalString(record.lastCheckpointEntryId) ??
+			normalizeOptionalString(record.lastConsolidatedEntryId) ??
+			normalizeOptionalString(record.lastReviewedEntryId),
 		failureBackoffUntil: normalizeOptionalNullableString(record.failureBackoffUntil) ?? null,
 	};
 }
@@ -145,12 +151,10 @@ export function applyMemoryActivityToState(
 	if (event.kind === "tool-call") {
 		next.dirty = true;
 		next.toolCallsSinceSessionRefresh += 1;
-		next.toolCallsSinceGrowthReview += 1;
 	}
 	if (event.kind === "assistant-turn-completed") {
 		next.dirty = true;
 		next.turnsSinceSessionRefresh += 1;
-		next.turnsSinceGrowthReview += 1;
 	}
 	if (event.kind === "boundary") {
 		next.dirty = true;

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	shouldRunDurableConsolidation,
-	shouldRunGrowthReview,
+	shouldRunMemoryCheckpoint,
 	shouldRunSessionRefresh,
 	shouldRunStructuralMaintenance,
 } from "../src/memory/maintenance-gates.js";
@@ -15,8 +14,6 @@ const state: MemoryMaintenanceState = {
 	eligibleAfter: "2026-04-19T00:00:00.000Z",
 	turnsSinceSessionRefresh: 12,
 	toolCallsSinceSessionRefresh: 0,
-	turnsSinceGrowthReview: 12,
-	toolCallsSinceGrowthReview: 0,
 	failureBackoffUntil: null,
 };
 
@@ -30,23 +27,12 @@ const sessionMemory = {
 	forceRefreshBeforeNewSession: true,
 };
 
-const memoryGrowth = {
-	postTurnReviewEnabled: true,
-	autoWriteChannelMemory: true,
-	autoWriteWorkspaceSkills: false,
-	minSkillAutoWriteConfidence: 0.9,
-	minMemoryAutoWriteConfidence: 0.85,
-	idleWritesHistory: false,
-	minTurnsBetweenReview: 12,
-	minToolCallsBetweenReview: 24,
-};
-
 const maintenance = {
 	enabled: true,
 	minIdleMinutesBeforeLlmWork: 10,
 	sessionRefreshIntervalMinutes: 10,
-	durableConsolidationIntervalMinutes: 20,
-	growthReviewIntervalMinutes: 60,
+	checkpointIntervalMinutes: 20,
+	minMemoryAutoWriteConfidence: 0.85,
 	structuralMaintenanceIntervalHours: 6,
 	maxConcurrentChannels: 1,
 	failureBackoffMinutes: 30,
@@ -91,9 +77,9 @@ describe("memory maintenance gates", () => {
 		).toMatchObject({ allowed: false, skipReason: "no-new-session-entry" });
 	});
 
-	it("allows durable and growth jobs only when local gates pass", () => {
+	it("allows the memory checkpoint only when local gates pass", () => {
 		expect(
-			shouldRunDurableConsolidation({
+			shouldRunMemoryCheckpoint({
 				now,
 				state,
 				maintenance,
@@ -104,17 +90,27 @@ describe("memory maintenance gates", () => {
 			}),
 		).toMatchObject({ allowed: true });
 		expect(
-			shouldRunGrowthReview({
+			shouldRunMemoryCheckpoint({
 				now,
 				state,
-				memoryGrowth,
 				maintenance,
 				channelActive: false,
 				hasNewEntry: true,
-				hasMeaningfulMaterial: true,
-				hasPromotionSignal: false,
+				hasMeaningfulExchange: true,
+				batchSize: 1,
 			}),
-		).toMatchObject({ allowed: false, skipReason: "no-promotion-signal" });
+		).toMatchObject({ allowed: false, skipReason: "batch-threshold-not-met" });
+		expect(
+			shouldRunMemoryCheckpoint({
+				now,
+				state: { ...state, lastCheckpointAt: "2026-04-19T00:55:00.000Z" },
+				maintenance,
+				channelActive: false,
+				hasNewEntry: true,
+				hasMeaningfulExchange: true,
+				batchSize: 2,
+			}),
+		).toMatchObject({ allowed: false, skipReason: "interval-not-elapsed" });
 	});
 
 	it("splits structural cleanup and folding decisions", () => {

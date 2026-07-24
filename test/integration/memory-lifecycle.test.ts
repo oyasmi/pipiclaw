@@ -21,7 +21,7 @@ vi.mock("../../src/memory/sidecar-worker.js", () => ({
 
 import { readChannelHistory, readChannelMemory, readChannelSession } from "../../src/memory/files.js";
 import { MemoryLifecycle } from "../../src/memory/lifecycle.js";
-import { runDurableConsolidationJob, runSessionRefreshJob } from "../../src/memory/maintenance-jobs.js";
+import { runMemoryCheckpointJob, runSessionRefreshJob } from "../../src/memory/maintenance-jobs.js";
 import { updateMemoryMaintenanceState } from "../../src/memory/maintenance-state.js";
 import { runRetriedSidecarTask } from "../../src/memory/sidecar-worker.js";
 import { setupChannelFiles, useTempDirs } from "../helpers/fixtures.js";
@@ -112,22 +112,12 @@ function createLifecycleHarness(settings?: Partial<ReturnType<typeof createSetti
 function createMaintenanceSettings(settings?: Partial<ReturnType<typeof createSettings>>) {
 	return {
 		sessionMemory: createSettings(settings),
-		memoryGrowth: {
-			postTurnReviewEnabled: true,
-			autoWriteChannelMemory: true,
-			autoWriteWorkspaceSkills: false,
-			minSkillAutoWriteConfidence: 0.9,
-			minMemoryAutoWriteConfidence: 0.85,
-			idleWritesHistory: false,
-			minTurnsBetweenReview: 12,
-			minToolCallsBetweenReview: 24,
-		},
 		memoryMaintenance: {
 			enabled: true,
 			minIdleMinutesBeforeLlmWork: 0,
 			sessionRefreshIntervalMinutes: 0,
-			durableConsolidationIntervalMinutes: 0,
-			growthReviewIntervalMinutes: 0,
+			checkpointIntervalMinutes: 0,
+			minMemoryAutoWriteConfidence: 0.85,
 			structuralMaintenanceIntervalHours: 0,
 			maxConcurrentChannels: 1,
 			failureBackoffMinutes: 30,
@@ -211,7 +201,7 @@ describe("memory-lifecycle integration", () => {
 		expect(runRetriedSidecarTask).toHaveBeenCalledTimes(1);
 	});
 
-	it("persists durable memory from the scheduled durable consolidation job", async () => {
+	it("persists durable memory from the scheduled memory checkpoint job", async () => {
 		const { appHomeDir, channelDir, messages, sessionEntries } = createLifecycleHarness({
 			minTurnsBetweenUpdate: 99,
 			minToolCallsBetweenUpdate: 99,
@@ -235,7 +225,7 @@ describe("memory-lifecycle integration", () => {
 			...state,
 			dirty: true,
 		}));
-		await runDurableConsolidationJob({
+		await runMemoryCheckpointJob({
 			appHomeDir,
 			channelId: "dm_123",
 			channelDir,

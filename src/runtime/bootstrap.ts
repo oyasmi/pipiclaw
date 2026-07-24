@@ -966,7 +966,6 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					return loadDetachedMaintenanceContext({
 						channelId,
 						channelDir: getChannelDir(options.paths.workspaceDir, channelId),
-						workspaceDir: options.paths.workspaceDir,
 						authConfigPath: options.paths.authConfigPath,
 						modelsConfigPath: options.paths.modelsConfigPath,
 						settingsManager: runtimeSettingsManager,
@@ -978,9 +977,6 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					return {
 						memoryMaintenance: runtimeSettingsManager.getMemoryMaintenanceSettings(),
 					};
-				},
-				emitNotice: async (channelId, notice) => {
-					await bot.sendPlain(channelId, notice);
 				},
 				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,
 			});

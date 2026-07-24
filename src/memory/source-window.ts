@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 
-export type MemorySourceKind = "idle" | "compaction" | "new-session" | "shutdown" | "growth-review";
+export type MemorySourceKind = "idle" | "compaction" | "new-session" | "shutdown";
 
 export interface MemorySourceWindow {
 	sourceKind: MemorySourceKind;
@@ -56,7 +56,7 @@ export function entriesSince(entries: SessionEntry[], lastEntryId: string | unde
 export function buildIncrementalMemorySourceWindow(options: {
 	entries: SessionEntry[];
 	lastEntryId?: string;
-	sourceKind: Extract<MemorySourceKind, "idle" | "new-session" | "shutdown" | "growth-review">;
+	sourceKind: Extract<MemorySourceKind, "idle" | "new-session" | "shutdown">;
 	fallbackMessages?: AgentMessage[];
 }): MemorySourceWindow {
 	const entries = entriesSince(options.entries, options.lastEntryId);

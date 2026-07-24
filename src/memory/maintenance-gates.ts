@@ -1,15 +1,7 @@
-import type {
-	PipiclawMemoryGrowthSettings,
-	PipiclawMemoryMaintenanceSettings,
-	PipiclawSessionMemorySettings,
-} from "../settings.js";
+import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
 import type { MemoryMaintenanceState } from "./maintenance-state.js";
 
-export type MaintenanceJobKind =
-	| "session-refresh"
-	| "durable-consolidation"
-	| "growth-review"
-	| "structural-maintenance";
+export type MaintenanceJobKind = "session-refresh" | "memory-checkpoint" | "structural-maintenance";
 
 export interface MaintenanceGateDecision {
 	allowed: boolean;
@@ -27,7 +19,7 @@ export interface SessionRefreshGateInput {
 	hasMeaningfulMaterial: boolean;
 }
 
-export interface DurableConsolidationGateInput {
+export interface MemoryCheckpointGateInput {
 	now: Date;
 	state: MemoryMaintenanceState;
 	maintenance: PipiclawMemoryMaintenanceSettings;
@@ -36,18 +28,6 @@ export interface DurableConsolidationGateInput {
 	hasMeaningfulExchange: boolean;
 	batchSize: number;
 	minBatchSize?: number;
-	coveredByGrowthReview?: boolean;
-}
-
-export interface GrowthReviewGateInput {
-	now: Date;
-	state: MemoryMaintenanceState;
-	memoryGrowth: PipiclawMemoryGrowthSettings;
-	maintenance: PipiclawMemoryMaintenanceSettings;
-	channelActive: boolean;
-	hasNewEntry: boolean;
-	hasMeaningfulMaterial: boolean;
-	hasPromotionSignal: boolean;
 }
 
 export interface StructuralMaintenanceGateInput {
@@ -107,13 +87,6 @@ function sessionRefreshThresholdMet(state: MemoryMaintenanceState, settings: Pip
 	);
 }
 
-function growthReviewThresholdMet(state: MemoryMaintenanceState, settings: PipiclawMemoryGrowthSettings): boolean {
-	return (
-		state.turnsSinceGrowthReview >= settings.minTurnsBetweenReview ||
-		state.toolCallsSinceGrowthReview >= settings.minToolCallsBetweenReview
-	);
-}
-
 export function shouldRunSessionRefresh(input: SessionRefreshGateInput): MaintenanceGateDecision {
 	if (!input.sessionMemory.enabled) {
 		return deny("session-refresh", "disabled");
@@ -151,81 +124,38 @@ export function shouldRunSessionRefresh(input: SessionRefreshGateInput): Mainten
 	return allow("session-refresh");
 }
 
-export function shouldRunDurableConsolidation(input: DurableConsolidationGateInput): MaintenanceGateDecision {
+export function shouldRunMemoryCheckpoint(input: MemoryCheckpointGateInput): MaintenanceGateDecision {
 	if (!input.state.dirty) {
-		return deny("durable-consolidation", "clean");
+		return deny("memory-checkpoint", "clean");
 	}
 	if (isBeforeOptional(input.now, input.state.eligibleAfter)) {
-		return deny("durable-consolidation", "not-idle-yet");
+		return deny("memory-checkpoint", "not-idle-yet");
 	}
 	if (input.channelActive) {
-		return deny("durable-consolidation", "channel-active");
+		return deny("memory-checkpoint", "channel-active");
 	}
 	if (
 		!hasIntervalElapsed(
 			input.now,
-			input.state.lastDurableConsolidationAt,
-			minutesToMs(input.maintenance.durableConsolidationIntervalMinutes),
+			input.state.lastCheckpointAt,
+			minutesToMs(input.maintenance.checkpointIntervalMinutes),
 		)
 	) {
-		return deny("durable-consolidation", "interval-not-elapsed");
+		return deny("memory-checkpoint", "interval-not-elapsed");
 	}
 	if (isBeforeOptional(input.now, input.state.failureBackoffUntil)) {
-		return deny("durable-consolidation", "backoff-active");
+		return deny("memory-checkpoint", "backoff-active");
 	}
 	if (!input.hasNewEntry) {
-		return deny("durable-consolidation", "no-new-entry");
+		return deny("memory-checkpoint", "no-new-entry");
 	}
 	if (!input.hasMeaningfulExchange) {
-		return deny("durable-consolidation", "no-meaningful-exchange");
-	}
-	if (input.coveredByGrowthReview) {
-		return deny("durable-consolidation", "covered-by-growth-review");
+		return deny("memory-checkpoint", "no-meaningful-exchange");
 	}
 	if (input.batchSize < (input.minBatchSize ?? 2)) {
-		return deny("durable-consolidation", "batch-threshold-not-met");
+		return deny("memory-checkpoint", "batch-threshold-not-met");
 	}
-	return allow("durable-consolidation");
-}
-
-export function shouldRunGrowthReview(input: GrowthReviewGateInput): MaintenanceGateDecision {
-	if (!input.memoryGrowth.postTurnReviewEnabled) {
-		return deny("growth-review", "disabled");
-	}
-	if (!input.state.dirty) {
-		return deny("growth-review", "clean");
-	}
-	if (isBeforeOptional(input.now, input.state.eligibleAfter)) {
-		return deny("growth-review", "not-idle-yet");
-	}
-	if (input.channelActive) {
-		return deny("growth-review", "channel-active");
-	}
-	if (
-		!hasIntervalElapsed(
-			input.now,
-			input.state.lastGrowthReviewAt,
-			minutesToMs(input.maintenance.growthReviewIntervalMinutes),
-		)
-	) {
-		return deny("growth-review", "interval-not-elapsed");
-	}
-	if (isBeforeOptional(input.now, input.state.failureBackoffUntil)) {
-		return deny("growth-review", "backoff-active");
-	}
-	if (!growthReviewThresholdMet(input.state, input.memoryGrowth)) {
-		return deny("growth-review", "threshold-not-met");
-	}
-	if (!input.hasNewEntry) {
-		return deny("growth-review", "no-new-entry");
-	}
-	if (!input.hasMeaningfulMaterial) {
-		return deny("growth-review", "no-meaningful-material");
-	}
-	if (!input.hasPromotionSignal) {
-		return deny("growth-review", "no-promotion-signal");
-	}
-	return allow("growth-review");
+	return allow("memory-checkpoint");
 }
 
 export function shouldRunStructuralMaintenance(

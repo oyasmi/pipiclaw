@@ -37,7 +37,6 @@ describe("loadDetachedMaintenanceContext", () => {
 		return {
 			channelId: "dm_cold",
 			channelDir,
-			workspaceDir: join(appHomeDir, "workspace"),
 			authConfigPath: join(appHomeDir, "auth.json"),
 			modelsConfigPath: join(appHomeDir, "models.json"),
 			settingsManager: new PipiclawSettingsManager(appHomeDir),
@@ -64,7 +63,6 @@ describe("loadDetachedMaintenanceContext", () => {
 		expect(context?.sessionEntries.length).toBeGreaterThanOrEqual(2);
 		expect(context?.model.id).toBeTruthy();
 		expect(context?.settings.memoryMaintenance).toBeDefined();
-		expect(context?.refreshWorkspaceResources).toBeUndefined();
 	});
 
 	it("reuses the cached transcript while context.jsonl is unchanged", async () => {

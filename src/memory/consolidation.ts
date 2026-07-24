@@ -225,7 +225,6 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 		transcriptMaxChars: INLINE_TRANSCRIPT_MAX_CHARS,
 		// Idle passes never write HISTORY.md; only real boundaries summarize the chunk.
 		includeHistoryBlock: mode === "boundary",
-		includeSkills: false,
 		usageContext: usageContextFor(options.channelId, correlationId),
 	});
 	const timestamp = new Date().toISOString();

@@ -201,7 +201,7 @@ flowchart LR
 
     subgraph sched [后台维护（60s tick，逐频道轮转）]
         GATES["maintenance-gates.ts<br/>纯函数门控：空闲/间隔/阈值/活跃"]
-        JOBS["maintenance-jobs.ts<br/>① session-refresh<br/>② durable-consolidation<br/>③ growth-review(候选晋升/技能建议)<br/>④ structural-maintenance(清理/折叠)"]
+        JOBS["maintenance-jobs.ts<br/>① session-refresh<br/>② memory-checkpoint(durable 固化)<br/>③ structural-maintenance(清理/折叠)"]
         STATE["maintenance-state.ts<br/>state/memory/&lt;channel&gt;.json 打点"]
     end
 
@@ -220,8 +220,8 @@ flowchart LR
 - **召回打分是"证据制"而非"覆盖率制"**：候选按匹配到的 query token 的**特异性质量**累加计分（token 越长、越罕见、越非停用词，权重越高；再按候选集内的文档频率轻度衰减），达到绝对阈值即入围。刻意**不按 query 长度归一**——早期实现用"命中 token 数 / query token 数"做门槛，导致用户消息越详细召回越少（一条 60 token 的提问即使点名了记忆主题也过不了 25% 覆盖率门槛）。中文额外发射三元组，让"包管理器"这类被贪心分词打散的复合词仍能整体匹配。
 - **召回宽、重排窄**：词法层负责不漏（宽入围），LLM 重排只负责裁剪。重排仅在入围数超过 `maxInjected` **且**本地排序不存在明显赢家时触发，3s 超时且失败即放行到本地排序——它在每轮的关键路径上，只能减少上下文，不能补救漏召回。
 - **出口（写）**：固化只发生在明确边界——压缩前、`/new` 前（后台异步、快照先行）、关机 flush、以及后台维护 job。每次固化写 `review-log`（可审计）。
-- **只有一条提炼路径**（`extraction.ts`）：边界固化、空闲固化、growth-review 共用同一个 prompt、同一份 JSON schema、同一道置信度闸门（`shouldAutoWriteMemory`）。此前三条路径各写各的 prompt，其中两条完全不设置信度门槛，于是 `MEMORY.md` 的质量由最不严谨的那条决定。调用方仍各自负责副作用：只有边界写 `HISTORY.md`，只有 growth-review 提技能候选。被闸门拒绝的候选不会静默消失——写进 `memory-review.jsonl` 的 `skipped`，且素材本身仍留在 `HISTORY.md` 与冷存储中。
-- **调度器**（`scheduler.ts`）每 tick 轮转选取不活跃频道（`maxConcurrentChannels` 上限），四个 job 按优先级依次尝试，**先跑成一个就停**；每个 job 先过各自的确定性 gate（空闲时长、距上次运行间隔、素材是否有意义、夜间窗口等），gate 不放行则零 LLM 成本。频道上下文的取法：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的**磁盘冷上下文**（SessionManager 直读 context.jsonl + mtime/size 缓存），不会为历史频道复活完整 Runner。
+- **只有一条提炼路径**（`extraction.ts`）：边界固化与空闲 checkpoint 共用同一个 prompt、同一份 JSON schema、同一道置信度闸门（`shouldAutoWriteMemory`）。此前多条路径各写各的 prompt，其中有的完全不设置信度门槛，于是 `MEMORY.md` 的质量由最不严谨的那条决定。调用方仍各自负责副作用：只有边界写 `HISTORY.md`。被闸门拒绝的候选不会静默消失——写进 `memory-review.jsonl` 的 `skipped`，且素材本身仍留在 `HISTORY.md` 与冷存储中。
+- **调度器**（`scheduler.ts`）每 tick 轮转选取不活跃频道（`maxConcurrentChannels` 上限），三个 job 按优先级依次尝试，**先跑成一个就停**；每个 job 先过各自的确定性 gate（空闲时长、距上次运行间隔、素材是否有意义、夜间窗口等），gate 不放行则零 LLM 成本。频道上下文的取法：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的**磁盘冷上下文**（SessionManager 直读 context.jsonl + mtime/size 缓存），不会为历史频道复活完整 Runner。
 - **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、2 次重试、JSON 解析校验、用量记入账本（kind=`sidecar`）。记忆 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次维护结果；重复的纯 gate-skip 审计会合并降噪。
 
 ## 7. 持久任务与定时事件

@@ -29,7 +29,7 @@ describe("memory commands", () => {
 		await appendMemoryReviewLog(channelDir, {
 			timestamp: "2026-07-01T00:00:00.000Z",
 			channelId: "dm_123",
-			reason: "post-turn",
+			reason: "memory-checkpoint-job",
 			suggestions: [{ target: "channel-memory", content: "Maybe prefer weekly summaries." }],
 		});
 

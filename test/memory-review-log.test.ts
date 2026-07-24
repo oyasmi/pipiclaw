@@ -23,7 +23,7 @@ describe("memory review log", () => {
 		await appendMemoryReviewLog(channelDir, {
 			timestamp: "2026-04-19T00:01:00.000Z",
 			channelId: "dm_123",
-			reason: "post-turn",
+			reason: "memory-checkpoint-job",
 			actions: [{ target: "MEMORY.md" }],
 		});
 
@@ -41,7 +41,7 @@ describe("memory review log", () => {
 				appendMemoryReviewLog(channelDir, {
 					timestamp: `2026-04-19T00:00:0${index}.000Z`,
 					channelId: "dm_123",
-					reason: "post-turn",
+					reason: "memory-checkpoint-job",
 					actions: [{ index }],
 				}),
 			),
@@ -58,8 +58,8 @@ describe("memory review log", () => {
 		const channelDir = createChannelDir();
 		const base = {
 			channelId: "dm_123",
-			reason: "growth-review-job" as const,
-			skipped: [{ target: "post-turn-review", reason: "clean" }],
+			reason: "memory-checkpoint-job" as const,
+			skipped: [{ target: "consolidation", reason: "clean" }],
 		};
 		await appendMemoryReviewLog(channelDir, { ...base, timestamp: "2026-04-19T00:00:00.000Z" });
 		await appendMemoryReviewLog(channelDir, { ...base, timestamp: "2026-04-19T00:01:00.000Z" });
