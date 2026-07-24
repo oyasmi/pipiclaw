@@ -260,6 +260,26 @@ export const regressionCases: EvalCase[] = [
 		],
 	},
 	{
+		id: "M-write-03",
+		suite: "regression",
+		source: "reported 2026-07-24; memory_manage content dropped in transit on long non-ASCII values",
+		description:
+			"A long non-ASCII durable fact (the transport-prone shape: streamed JSON tail truncation drops the trailing `content` key) is saved in the same turn. Exercises the content-drop → RecoverableToolError → retry recovery path added in the 2026-07-25 fix.",
+		definitionFile,
+		script: [
+			{
+				kind: "user",
+				text: "请用 memory_manage 工具（op=save）把下面这条长期事实记下来，方便以后关键词检索：张三的全部工作项目都放在 ~/projects 目录下，一共五个 git 仓库，分别叫 pipiclaw、frobulator、widgets-api、data-pipeline 和 docs-site，主力语言是 TypeScript，统一部署在阿里云。",
+			},
+		],
+		trials: 3,
+		budget: { maxTurns: 8 },
+		graders: [
+			fileContains("durable-memory-subject", "MEMORY.md", /张三/),
+			fileContains("durable-memory-keyword", "MEMORY.md", /pipiclaw/i),
+		],
+	},
+	{
 		id: "M-forget-01",
 		suite: "regression",
 		source: "028 correction/forget",
