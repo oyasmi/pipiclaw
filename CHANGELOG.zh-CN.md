@@ -4,8 +4,11 @@
 
 ## [未发布]
 
+## [0.8.10-beta.2] - 2026-07-25
+
 ### 变更
 
+- 对任务治理域做瘦身（spec 036），删掉四类「付了完整代码成本却换不到跨重启保证」的复杂度——治理的守护状态本就是内存态，重启即失效。per-task 的 token/成本/墙钟三维预算收敛为单一 `maxAttempts`（唯一保留的 per-task 止损；成本仍可观测，体现在 `usage` 与 `/tasks stats`，只是不再按任务强制），非重置的 `lifetimeUsage` 双账本删除——对一次性任务而言当前用量本就等于 lifetime，周期任务的跨周期历史留在 body 的 `History` 段落里。`parent`/`dependsOn` 关系图整体删除，连带退役四套环检测实现；任务先后关系改用人类可读的方式表达（写在 body 的 Manual/Goal 里，或用 `wake` 排开），`done`/`skip`/`cancel` 不再对子任务做闸门。任务持有的 worktree 与 `subagent isolation` 参数移除（子代理调用面 15 → 14）；需要独立检出时，请在宿主侧自建 worktree 并把路径作为普通工作目录传入。验收从两种形态收敛为一种：`mode: "evidence"|"independent"` 改为 `required: boolean`，删除 `done` 中的自证写入分支（maker 自己写 `status: "passed"`）使证据不再能伪装成一次「验收通过」，原本 4 处互相矛盾的默认值归一为一处——并有一处行为增强：`sideEffects: "external"` 的任务默认要求独立验收。attestation 文件保留防伪核心（runId/taskId/verdict/bodyHash/subjectHash 及 `done` 时的重校验，正是阻止手写 "passed" 的那道门），删掉 `outputHash`/`agent`/`model` 三个只写不读字段，`subjectHash` 的失败语义两端统一为 fail-closed。既有任务文件照常可读——未知键读取时忽略，下次写入自然落成新格式；`/tasks doctor` 会逐任务报告仍带退役键的情况，并明确提示 `parent`/`dependsOn` 表达的顺序意图已不再生效。`src/` 净删 395 行。Beta API 变更：`SubAgentInvocationOverrides` 移除 `isolation`/`worktreePath`/`worktreeBranch`。
 - `settings.json` 现在只接受产品意图，公共 API 也只覆盖「嵌入 daemon」这一种用法（spec 035）。设置的分界线是机械的：布尔、枚举和模型引用保持可配，所有数值阈值下沉为代码常量。保留 15 个键——五个模型引用、各模块的 `enabled` 开关、两个决定「一次可选 LLM 调用值不值这些 token」的选项（`memoryRecall.rerankWithModel`、`sessionSearch.summarizeWithModel`）、`logging.level`、`logging.file.enabled` 和 `tui.responseMode`。维护间隔、durable 写入置信度、失败退避、并发上限、任务驱动节奏、任务摘要尺寸、压缩 token 预算、重试延迟、召回尺寸和日志轮转全部不再可配：没有人能凭手头信息判断 checkpoint 间隔该是 20 分钟还是 25 分钟，而每个被文档化的数字都是一份兼容性承诺。既有配置文件照常工作——退役键被忽略，启动时打印一条 warning 逐一点名，避免有人特意调过的值悄无声息地失效。`docs/configuration.md` 去掉了 40 行的设置表和三个调参示例，换成一张简短的支持字段表、一份退役字段清单，以及一个诚实的「压到最省 token」配方。
 - **破坏性变更（beta API）**：包的 barrel 从覆盖 20 个模块的约 90 个导出名收缩到 21 个，只覆盖它真正支持的用法——嵌入 daemon：`bootstrap` 及其选项/结果类型、`DingTalkBot` 与其配置类型、`ChannelContext` 投递契约、`paths.ts` 常量和 `PipiclawSettings` 类型。prompt 内部、memory 的 sidecar/candidates/consolidation/recall/session 辅助、子代理发现与工具、用量账本、工具配置、executor、命令扩展不再导出；请从各自模块导入，并预期它们会移动。已废弃的 `DingTalkContext` 别名一并移除——改用 `ChannelContext`。仓库内没有任何代码导入过 barrel，README 也从未记载 SDK 用法，因此只影响外部嵌入方。实打实的收益在死代码检测：`src/index.ts` 是 knip 的 entry point，从这里导出的每个名字都是 `npm run deadcode` 的盲区。
 
