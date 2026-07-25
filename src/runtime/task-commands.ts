@@ -10,7 +10,8 @@ import {
 	type TaskLedgerEntry,
 } from "../shared/task-ledger.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { taskBudgetViolation } from "../tasks/control.js";
+import { isRecord } from "../shared/type-guards.js";
+import { retiredTaskControlKeys, taskBudgetViolation } from "../tasks/control.js";
 import {
 	claimTaskAttempt,
 	readStoredTask,
@@ -186,31 +187,22 @@ function issue(problem: string, nextStep: string): string {
 	return `- ${problem}\n  Next step: ${nextStep}`;
 }
 
-function relationCycles(graph: Map<string, string[]>): string[][] {
-	const visited = new Set<string>();
-	const active = new Set<string>();
-	const stack: string[] = [];
-	const cycles = new Map<string, string[]>();
-	const visit = (id: string): void => {
-		if (active.has(id)) {
-			const start = stack.indexOf(id);
-			const cycle = [...stack.slice(start), id];
-			const key = [...new Set(cycle)].sort().join("\0");
-			cycles.set(key, cycle);
-			return;
+/**
+ * Render the ordering edges a stored task still declares, e.g. `child → parent, a → b`.
+ * Empty when the task carries no retired relation keys (spec 036, D8).
+ */
+function describeDroppedTaskRelations(id: string, rawControl: unknown): string {
+	if (!isRecord(rawControl)) return "";
+	const edges: string[] = [];
+	const parent = rawControl.parent;
+	if (typeof parent === "string" && parent.trim()) edges.push(`${id} → ${parent.trim()}`);
+	const dependsOn = rawControl.dependsOn;
+	if (Array.isArray(dependsOn)) {
+		for (const dependency of dependsOn) {
+			if (typeof dependency === "string" && dependency.trim()) edges.push(`${id} → ${dependency.trim()}`);
 		}
-		if (visited.has(id)) return;
-		visited.add(id);
-		active.add(id);
-		stack.push(id);
-		for (const next of graph.get(id) ?? []) {
-			if (graph.has(next)) visit(next);
-		}
-		stack.pop();
-		active.delete(id);
-	};
-	for (const id of graph.keys()) visit(id);
-	return Array.from(cycles.values());
+	}
+	return edges.join(", ");
 }
 
 async function readActiveTaskContent(channelDir: string, id: string): Promise<string | undefined> {
@@ -241,8 +233,6 @@ async function listTasks(channelDir: string): Promise<string> {
 				detail.push(`effects: ${control.sideEffects}/${control.externalApproval}`);
 			}
 			if (control.deadline) detail.push(`deadline: ${control.deadline}`);
-			if (control.parent) detail.push(`parent: ${control.parent}`);
-			if (control.dependsOn.length > 0) detail.push(`depends: ${control.dependsOn.join(",")}`);
 			if (control.nextAction) detail.push(`next: ${control.nextAction}`);
 			if (control.cycleId) {
 				detail.push(`${status === "done" ? "last" : "current"} cycle: ${control.cycleId}`);
@@ -486,18 +476,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					),
 				);
 			}
-			for (const relatedId of [control.parent, ...control.dependsOn].filter((value): value is string =>
-				Boolean(value),
-			)) {
-				if (!activeIds.has(relatedId) && !archivedIds.has(relatedId)) {
-					issues.push(
-						issue(
-							`tasks/${entry.id}.md points to missing related task ${relatedId}.`,
-							`Create ${relatedId}, or remove it from parent/dependsOn with task_manage set.`,
-						),
-					);
-				}
-			}
 			if (control.sideEffects === "external" && control.externalApproval === "required") {
 				issues.push(
 					issue(
@@ -584,27 +562,19 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		}
 	}
 
-	const parentGraph = new Map<string, string[]>();
-	const dependencyGraph = new Map<string, string[]>();
+	// Spec 036 D8: retired control keys are ignored on read, which keeps stored tasks readable
+	// but silently discards whatever `parent`/`dependsOn` once expressed. Report the loss —
+	// naming the dropped edges, not just the key — so the user can restate any real ordering.
 	for (const entry of entries) {
-		const control = entry.frontmatter.control;
-		if (!control) continue;
-		parentGraph.set(entry.id, control.parent ? [control.parent] : []);
-		dependencyGraph.set(entry.id, control.dependsOn);
-	}
-	for (const cycle of relationCycles(parentGraph)) {
+		const retired = retiredTaskControlKeys(entry.frontmatter.rawControl);
+		if (retired.length === 0) continue;
+		const edges = describeDroppedTaskRelations(entry.id, entry.frontmatter.rawControl);
 		issues.push(
 			issue(
-				`Task parent cycle detected: ${cycle.join(" → ")}.`,
-				`Use task_manage set to clear or correct one parent link in this cycle.`,
-			),
-		);
-	}
-	for (const cycle of relationCycles(dependencyGraph)) {
-		issues.push(
-			issue(
-				`Task dependency cycle detected: ${cycle.join(" → ")}.`,
-				`Use task_manage set to remove one dependsOn edge before the driver can continue these tasks.`,
+				`tasks/${entry.id}.md still carries retired control keys: ${retired.join(", ")}.${edges ? ` Dropped ordering: ${edges}.` : ""}`,
+				edges
+					? `These no longer constrain execution. Restate any real ordering in the task body or with wake, then remove the keys (any task_manage write drops them).`
+					: `They are ignored; any task_manage write drops them.`,
 			),
 		);
 	}

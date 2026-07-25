@@ -81,7 +81,6 @@ describe("task control", () => {
 	it("rejects malformed governance instead of silently applying defaults", () => {
 		const control = createDefaultTaskControl();
 		expect(() => parseTaskControl(JSON.stringify({ ...control, deadline: "someday" }))).toThrow(/deadline/);
-		expect(() => parseTaskControl(JSON.stringify({ ...control, dependsOn: ["../escape"] }))).toThrow(/task id/);
 		expect(() => parseTaskControl(JSON.stringify({ ...control, priority: "urgent" }))).toThrow(/enum value/);
 	});
 

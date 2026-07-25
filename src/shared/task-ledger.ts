@@ -29,6 +29,12 @@ export interface TaskFrontmatter {
 	control?: TaskControl;
 	/** false only when a control field exists but cannot be parsed/validated. */
 	controlReadable?: boolean;
+	/**
+	 * The control block exactly as stored, before `parseTaskControl` drops retired keys.
+	 * `/tasks doctor` needs this to report what an older build wrote (spec 036, D8) — the
+	 * parsed `control` above cannot show a key whose whole point is that it is now ignored.
+	 */
+	rawControl?: unknown;
 }
 
 export interface TaskLedgerEntry {
@@ -135,6 +141,11 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 				if (!value) {
 					frontmatter.controlReadable = false;
 				} else {
+					try {
+						frontmatter.rawControl = JSON.parse(value);
+					} catch {
+						// Leave rawControl unset; the parse below reports the real problem.
+					}
 					try {
 						frontmatter.control = parseTaskControl(value);
 						frontmatter.controlReadable = true;

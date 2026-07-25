@@ -195,16 +195,26 @@ describe("handleTasksCommand", () => {
 		expect(await run("doctor")).not.toContain("requires external side effects but has no user approval");
 	});
 
-	it("doctor reports dependency cycles introduced by manual edits", async () => {
-		const a = createDefaultTaskControl("evidence");
-		const b = createDefaultTaskControl("evidence");
-		a.dependsOn = ["b"];
-		b.dependsOn = ["a"];
-		await writeFile(join(tasksDir, "a.md"), renderTaskDocument({ status: "open", control: a }, STANDARD_BODY));
-		await writeFile(join(tasksDir, "b.md"), renderTaskDocument({ status: "open", control: b }, STANDARD_BODY));
+	// Spec 036 D8: retired keys are ignored on read, so the task survives but the ordering it
+	// declared does not. Doctor must name the dropped edges — silence would hide a real loss.
+	it("doctor reports retired control keys and the ordering they silently dropped", async () => {
+		const control = { ...createDefaultTaskControl("evidence"), parent: "roll-up", dependsOn: ["b", "c"] };
+		await writeFile(
+			join(tasksDir, "a.md"),
+			renderTaskDocument({ status: "open", control: control as never }, STANDARD_BODY),
+		);
 		const out = await run("doctor");
-		expect(out).toContain("Task dependency cycle detected");
-		expect(out).toContain("remove one dependsOn edge");
+		expect(out).toContain("retired control keys: parent, dependsOn");
+		expect(out).toContain("a → roll-up");
+		expect(out).toContain("a → b");
+		expect(out).toContain("a → c");
+		expect(out).toContain("no longer constrain execution");
+	});
+
+	it("doctor stays quiet about retired keys a task does not carry", async () => {
+		const control = createDefaultTaskControl("evidence");
+		await writeFile(join(tasksDir, "clean.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
+		expect(await run("doctor")).not.toContain("retired control keys");
 	});
 
 	it("reports no doctor issues for a clean ledger", async () => {

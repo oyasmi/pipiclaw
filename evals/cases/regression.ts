@@ -40,12 +40,12 @@ export const regressionCases: EvalCase[] = [
 		id: "T-create-02",
 		suite: "regression",
 		source: "028 first-wave matrix",
-		description: "A broad release goal becomes concrete dependent task records, not a prose-only plan.",
+		description: "A broad release goal becomes concrete ordered task records, not a prose-only plan.",
 		definitionFile,
 		script: [
 			{
 				kind: "user",
-				text: "Create two persistent tasks for a release: release-build produces the package, then release-publish depends on release-build. Do not execute them. Use task_manage and real checkbox DoDs.",
+				text: "Create two persistent tasks for a release: release-build produces the package, then release-publish runs after release-build. Do not execute them. Use task_manage and real checkbox DoDs.",
 			},
 		],
 		graders: [
@@ -54,10 +54,13 @@ export const regressionCases: EvalCase[] = [
 				"release-build",
 				(frontmatter, content) => Boolean(frontmatter.control) && /-\s+\[ \]/.test(content),
 			),
+			// Spec 036 D4 retired the `dependsOn` graph: ordering is now expressed in the task
+			// body (Goal/Manual), so that is where the constraint has to show up.
 			taskFrontmatter(
-				"publish-dependency",
+				"publish-ordering",
 				"release-publish",
-				(frontmatter) => frontmatter.control?.dependsOn.includes("release-build") === true,
+				(frontmatter, content) =>
+					Boolean(frontmatter.control) && /-\s+\[ \]/.test(content) && /release-build/.test(content),
 			),
 		],
 	},

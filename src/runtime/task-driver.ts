@@ -9,7 +9,6 @@ import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
 import {
 	claimTaskAttempt,
-	dependencyState,
 	escalateTask,
 	openRecurringTaskCycle,
 	releaseTaskAttemptClaim,
@@ -207,15 +206,6 @@ function taskEscalationEvent(channelId: string, entry: TaskLedgerEntry, reason: 
 	};
 }
 
-function terminalDependencyReason(reason: string | undefined): string | undefined {
-	return reason?.includes(" is missing") ||
-		reason?.includes(" is cancelled") ||
-		reason?.includes(" is paused by the governor") ||
-		reason?.includes("dependency cycle")
-		? reason
-		: undefined;
-}
-
 /**
  * Native, token-gated driver for the persistent task ledger.
  *
@@ -385,9 +375,7 @@ export class TaskDriver {
 					const status = candidate.frontmatter.status;
 					const control = candidate.frontmatter.control;
 					if (!control || TERMINAL_STATUSES.has(status ?? "")) continue;
-					const dependencies = await dependencyState(channelDir, control.dependsOn, candidate.id);
-					const escalationReason =
-						taskBudgetViolation(control, nowMs) ?? terminalDependencyReason(dependencies.reason);
+					const escalationReason = taskBudgetViolation(control, nowMs);
 					if (!escalationReason) continue;
 					governanceHandled = true;
 					const escalationEvent = taskEscalationEvent(channelId, candidate, escalationReason, nowMs);
@@ -415,16 +403,7 @@ export class TaskDriver {
 					lastIndex >= 0
 						? [...candidates.slice(lastIndex + 1), ...candidates.slice(0, lastIndex + 1)]
 						: candidates;
-				let entry: TaskLedgerEntry | undefined;
-				for (const candidate of rotatedCandidates) {
-					const control = candidate.frontmatter.control;
-					if (control) {
-						const dependencies = await dependencyState(channelDir, control.dependsOn, candidate.id);
-						if (!dependencies.ready) continue;
-					}
-					entry = candidate;
-					break;
-				}
+				let entry: TaskLedgerEntry | undefined = rotatedCandidates[0];
 				if (!entry || dispatched >= settings.maxDispatchesPerTick) continue;
 
 				// A cycle-start-ready recurring task is reopened in-process before dispatch: fold the

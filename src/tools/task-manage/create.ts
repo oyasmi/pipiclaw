@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { writeFileAtomically } from "../../shared/atomic-file.js";
 import { normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../shared/task-ledger.js";
 import { RecoverableToolError } from "../tool-details.js";
-import { renderTaskFile, renderTaskSkeleton, tasksDir, validateTaskRelations } from "./shared.js";
+import { renderTaskFile, renderTaskSkeleton, tasksDir } from "./shared.js";
 import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 
 export async function createTask(
@@ -27,7 +27,6 @@ export async function createTask(
 	const { fields, body } = renderTaskSkeleton(request);
 	const badDod = uncheckedTaskAcceptanceItems(body).find((item) => item.startsWith("DoD has no checklist items"));
 	if (badDod) throw new RecoverableToolError(badDod);
-	await validateTaskRelations(options, id, fields);
 	await mkdir(dir, { recursive: true });
 	await writeFileAtomically(taskPath, renderTaskFile(fields, body));
 	return {

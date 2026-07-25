@@ -55,8 +55,6 @@ export interface TaskControl {
 	nextAction?: string;
 	lastOutcome: TaskOutcome;
 	blockedReason?: string;
-	parent?: string;
-	dependsOn: string[];
 	sideEffects: TaskSideEffects;
 	externalApproval: "not-required" | "required" | "granted";
 	approvalBy?: string;
@@ -79,8 +77,6 @@ export interface TaskControlPatch {
 	deadline?: string;
 	nextAction?: string;
 	blockedReason?: string;
-	parent?: string;
-	dependsOn?: string[];
 	sideEffects?: TaskSideEffects;
 	externalApproval?: "not-required" | "required" | "granted";
 	maxAttempts?: number;
@@ -93,7 +89,6 @@ const VERIFICATION_MODES: readonly TaskVerificationMode[] = ["evidence", "indepe
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
 const OUTCOMES: readonly TaskOutcome[] = ["pending", "running", "progress", "blocked", "failed"];
 const PAUSED_BY: readonly TaskPausedBy[] = ["user", "governor"];
-const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -142,8 +137,12 @@ function enumValue<T extends string>(value: unknown, values: readonly T[], fallb
 /**
  * Values retired from an enum are read back as their canonical replacement rather than failing
  * the parse, so task files written by an older build stay readable; the next write normalizes
- * them on disk and no migration script is needed. `control.isolation` was dropped outright —
- * unknown keys are simply ignored here.
+ * them on disk and no migration script is needed. Keys retired outright are simply ignored:
+ * `control.isolation`, and — per spec 036 — `parent`, `dependsOn`, `worktree`, `lifetimeUsage`
+ * and the `budget.max{Tokens,CostUsd,WallTimeMinutes}` trio. They are listed in
+ * `RETIRED_TASK_CONTROL_KEYS` so `/tasks doctor` can report what a stored task still carries;
+ * dropping `parent`/`dependsOn` silently discards an ordering intent the user once expressed,
+ * which is exactly why it must be reported rather than only ignored (D8).
  */
 function canonicalEnumValue(value: unknown): unknown {
 	switch (value) {
@@ -160,24 +159,34 @@ function canonicalEnumValue(value: unknown): unknown {
 	}
 }
 
-function taskIds(value: unknown): string[] {
-	if (value === undefined) return [];
-	if (!Array.isArray(value)) throw new Error("control.dependsOn must be an array of task ids");
-	if (value.some((item) => typeof item !== "string" || !TASK_ID_PATTERN.test(item.trim()))) {
-		throw new Error("control.dependsOn contains an invalid task id");
-	}
-	return Array.from(
-		new Set(
-			value
-				.filter((item): item is string => typeof item === "string")
-				.map((item) => item.trim())
-				.filter((item) => TASK_ID_PATTERN.test(item)),
-		),
-	);
-}
+/**
+ * Control keys that older builds wrote and this one ignores (spec 036, D8).
+ *
+ * Ignoring them keeps stored tasks readable with no migration script, but silence would be
+ * wrong for `parent`/`dependsOn`: the task survives, the ordering constraint it expressed does
+ * not. `/tasks doctor` reports whatever a stored control block still carries so the loss is
+ * visible rather than silent.
+ */
+export const RETIRED_TASK_CONTROL_KEYS: readonly string[] = [
+	"parent",
+	"dependsOn",
+	"worktree",
+	"lifetimeUsage",
+	"isolation",
+	"budget.maxTokens",
+	"budget.maxCostUsd",
+	"budget.maxWallTimeMinutes",
+];
 
-function validateTaskId(value: string | undefined, field: string): void {
-	if (value && !TASK_ID_PATTERN.test(value)) throw new Error(`${field} contains an invalid task id: ${value}`);
+/** Retired keys actually present in a raw stored control block, in `RETIRED_TASK_CONTROL_KEYS` order. */
+export function retiredTaskControlKeys(raw: unknown): string[] {
+	if (!isRecord(raw)) return [];
+	return RETIRED_TASK_CONTROL_KEYS.filter((key) => {
+		const [head, nested] = key.split(".");
+		if (!nested) return Object.hasOwn(raw, head);
+		const parent = raw[head];
+		return isRecord(parent) && Object.hasOwn(parent, nested);
+	});
 }
 
 export function createDefaultTaskControl(mode: TaskVerificationMode = "independent"): TaskControl {
@@ -185,7 +194,6 @@ export function createDefaultTaskControl(mode: TaskVerificationMode = "independe
 		version: 1,
 		priority: "normal",
 		lastOutcome: "pending",
-		dependsOn: [],
 		sideEffects: "workspace",
 		externalApproval: "not-required",
 		budget: { maxAttempts: 12 },
@@ -216,8 +224,6 @@ export function parseTaskControl(raw: string): TaskControl {
 	if (deadline && !Number.isFinite(new Date(deadline).getTime())) {
 		throw new Error("control.deadline must be a valid ISO8601 date");
 	}
-	const parent = optionalString(value.parent);
-	validateTaskId(parent, "control.parent");
 	const sideEffects = enumValue(canonicalEnumValue(value.sideEffects), SIDE_EFFECTS, "workspace");
 	const externalApproval = enumValue(
 		value.externalApproval,
@@ -248,8 +254,6 @@ export function parseTaskControl(raw: string): TaskControl {
 		nextAction: optionalString(value.nextAction),
 		lastOutcome: enumValue(canonicalEnumValue(value.lastOutcome), OUTCOMES, "pending"),
 		blockedReason: optionalString(value.blockedReason),
-		parent,
-		dependsOn: taskIds(value.dependsOn),
 		sideEffects,
 		externalApproval,
 		approvalBy,
@@ -316,12 +320,6 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 	next.deadline = patchOptionalString(next.deadline, patch.deadline);
 	next.nextAction = patchOptionalString(next.nextAction, patch.nextAction);
 	next.blockedReason = patchOptionalString(next.blockedReason, patch.blockedReason);
-	next.parent = patchOptionalString(next.parent, patch.parent);
-	validateTaskId(next.parent, "parent");
-	if (patch.dependsOn !== undefined) {
-		for (const dependency of patch.dependsOn) validateTaskId(dependency.trim(), "dependsOn");
-		next.dependsOn = taskIds(patch.dependsOn);
-	}
 	if (patch.sideEffects !== undefined) next.sideEffects = patch.sideEffects;
 	if (patch.externalApproval !== undefined) next.externalApproval = patch.externalApproval;
 	if (patch.maxAttempts !== undefined) {

@@ -125,14 +125,15 @@ describe("TaskDriver", () => {
 		expect(dispatch).not.toHaveBeenCalled();
 	});
 
-	it("waits for dependencies without dispatching, then claims an attempt when ready", async () => {
+	// Spec 036 D4: with the dependency graph gone the driver dispatches the highest-priority
+	// actionable task directly — no per-candidate readiness walk over other task files.
+	it("dispatches the highest-priority actionable task without consulting other tasks", async () => {
 		await writeTask("dm_a", "base", governedTask("in-progress"));
 		await writeTask(
 			"dm_a",
-			"dependent",
+			"urgent",
 			governedTask("in-progress", (control) => {
 				control.priority = "critical";
-				control.dependsOn = ["base"];
 			}),
 		);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
@@ -143,13 +144,9 @@ describe("TaskDriver", () => {
 			getSettings: () => SETTINGS,
 		});
 		await driver.runOnce(NOW);
-		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:base]");
-
-		await writeTask("dm_a", "base", governedTask("done"));
-		await driver.runOnce(new Date(NOW.getTime() + 5 * 60_000));
-		expect(dispatch.mock.calls[1]?.[0].text).toContain("[TASK_DRIVER:dependent]");
-		const dependent = await readFile(join(workspaceDir, "dm_a", "tasks", "dependent.md"), "utf-8");
-		expect(dependent).toContain('"attempts":1');
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:urgent]");
+		const urgent = await readFile(join(workspaceDir, "dm_a", "tasks", "urgent.md"), "utf-8");
+		expect(urgent).toContain('"attempts":1');
 	});
 
 	it("escalates exhausted tasks instead of running them", async () => {
@@ -191,35 +188,6 @@ describe("TaskDriver", () => {
 		});
 		await driver.runOnce(NOW);
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_ESCALATION:late]");
-	});
-
-	it("escalates a manually corrupted dependency cycle without spending a work attempt", async () => {
-		await writeTask(
-			"dm_a",
-			"a",
-			governedTask("open", (control) => {
-				control.dependsOn = ["b"];
-			}),
-		);
-		await writeTask(
-			"dm_a",
-			"b",
-			governedTask("open", (control) => {
-				control.dependsOn = ["a"];
-			}),
-		);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		const driver = new TaskDriver({
-			workspaceDir,
-			isChannelActive: () => false,
-			dispatch,
-			getSettings: () => SETTINGS,
-		});
-		await driver.runOnce(NOW);
-		expect(dispatch.mock.calls[0]?.[0].text).toContain("dependency cycle detected");
-		const a = await readFile(join(workspaceDir, "dm_a", "tasks", "a.md"), "utf-8");
-		expect(a).toContain("status: paused");
-		expect(a).toContain('"attempts":0');
 	});
 
 	it("backs off unchanged tasks but promptly continues after real progress", async () => {

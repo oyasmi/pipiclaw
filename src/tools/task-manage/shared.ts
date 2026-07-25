@@ -5,7 +5,6 @@ import { parseScheduledEventContent } from "../../runtime/events.js";
 import { taskEventPrefix } from "../../shared/task-events.js";
 import {
 	parseTaskFrontmatter,
-	readActiveTasks,
 	renderStandardTaskBody,
 	renderTaskDocument,
 	taskBody,
@@ -13,7 +12,6 @@ import {
 } from "../../shared/task-ledger.js";
 import { nextTaskWake, validateTaskSchedule } from "../../shared/task-schedule.js";
 import { applyTaskControlPatch, createDefaultTaskControl } from "../../tasks/control.js";
-import { readStoredTask } from "../../tasks/store.js";
 import { isSettableTaskStatus } from "../../tasks/transitions.js";
 import { RecoverableToolError } from "../tool-details.js";
 import { SETTABLE_STATUSES } from "./schema.js";
@@ -181,60 +179,6 @@ export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFi
 	return next;
 }
 
-export async function validateTaskRelations(
-	options: TaskManageToolOptions,
-	id: string,
-	fields: TaskFields,
-): Promise<void> {
-	const control = fields.control;
-	if (!control) return;
-	if (control.parent === id || control.dependsOn.includes(id)) {
-		throw new RecoverableToolError(`Task "${id}" cannot be its own parent or dependency.`);
-	}
-	for (const relatedId of [control.parent, ...control.dependsOn].filter((value): value is string => Boolean(value))) {
-		const active = join(tasksDir(options), `${relatedId}.md`);
-		const archived = join(tasksDir(options), "archive", `${relatedId}.md`);
-		if (!existsSync(active) && !existsSync(archived)) {
-			throw new RecoverableToolError(
-				`Related task "${relatedId}" does not exist; create it before linking task "${id}".`,
-			);
-		}
-	}
-
-	if (control.parent) {
-		const visited = new Set<string>();
-		let current: string | undefined = control.parent;
-		while (current) {
-			if (visited.has(current)) {
-				throw new RecoverableToolError(`Existing parent chain for "${control.parent}" already contains a cycle.`);
-			}
-			if (current === id) {
-				throw new RecoverableToolError(`Task parent cycle detected while linking "${id}" to "${control.parent}".`);
-			}
-			visited.add(current);
-			const task = await readStoredTask(options.channelDir, current, true);
-			current = task?.fields.control?.parent;
-		}
-	}
-
-	for (const dependencyId of control.dependsOn) {
-		const visited = new Set<string>();
-		const stack = [dependencyId];
-		while (stack.length > 0) {
-			const current = stack.pop();
-			if (!current || visited.has(current)) continue;
-			if (current === id) {
-				throw new RecoverableToolError(
-					`Task dependency cycle detected while linking "${id}" to "${dependencyId}".`,
-				);
-			}
-			visited.add(current);
-			const task = await readStoredTask(options.channelDir, current, true);
-			stack.push(...(task?.fields.control?.dependsOn ?? []));
-		}
-	}
-}
-
 /**
  * On close-out (done or cancel), delete every task-owned event.
  *
@@ -262,16 +206,4 @@ export async function cleanupTaskEvents(options: TaskManageToolOptions, id: stri
 		deleted.push(filename.slice(0, -".json".length));
 	}
 	return { deleted };
-}
-
-export async function unfinishedChildren(options: TaskManageToolOptions, parentId: string): Promise<string[]> {
-	const entries = await readActiveTasks(tasksDir(options));
-	return entries
-		.filter(
-			(entry) =>
-				entry.frontmatter.control?.parent === parentId &&
-				entry.frontmatter.status !== "done" &&
-				entry.frontmatter.status !== "cancelled",
-		)
-		.map((entry) => entry.id);
 }

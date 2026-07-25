@@ -551,36 +551,11 @@ describe("manageTask", () => {
 			).rejects.toThrow(/artifacts changed|cannot be read/);
 		});
 
-		it("gates completion on unfinished children and rejects parent/dependency cycles", async () => {
-			for (const [id, parent] of [
-				["parent", undefined],
-				["child", "parent"],
-			] as const) {
-				await manageTask(options, {
-					action: "create",
-					id,
-					title: id,
-					goal: `Finish ${id}`,
-					dod: "- [x] complete",
-					control: { verificationMode: "evidence", parent },
-				});
-			}
-			await expect(
-				manageTask(options, {
-					action: "done",
-					id: "parent",
-					summary: "Done",
-					evidence: "Checked",
-				}),
-			).rejects.toThrow(/unfinished child/);
-			await expect(
-				manageTask(options, { action: "set", id: "parent", control: { parent: "child" } }),
-			).rejects.toThrow(/parent cycle/);
-			await expect(
-				manageTask(options, { action: "set", id: "parent", control: { dependsOn: ["child"] } }),
-			).resolves.toMatchObject({ status: "active" });
-
-			for (const id of ["dep-a", "dep-b"]) {
+		// Spec 036 D4: the parent/dependsOn graph is gone, and with it the four cycle detectors
+		// and the child gate on done. Ordering now lives in the task body, so a task closes on
+		// its own DoD alone.
+		it("closes a task on its own DoD without consulting other tasks", async () => {
+			for (const id of ["alpha", "beta"]) {
 				await manageTask(options, {
 					action: "create",
 					id,
@@ -590,10 +565,9 @@ describe("manageTask", () => {
 					control: { verificationMode: "evidence" },
 				});
 			}
-			await manageTask(options, { action: "set", id: "dep-a", control: { dependsOn: ["dep-b"] } });
 			await expect(
-				manageTask(options, { action: "set", id: "dep-b", control: { dependsOn: ["dep-a"] } }),
-			).rejects.toThrow(/dependency cycle/);
+				manageTask(options, { action: "done", id: "alpha", summary: "Done", evidence: "Checked" }),
+			).resolves.toMatchObject({ status: "done" });
 		});
 
 		it("does not let the agent self-grant external approval", async () => {

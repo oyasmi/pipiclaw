@@ -9,7 +9,7 @@ import {
 } from "../../shared/task-ledger.js";
 import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import { invalidateTaskVerification } from "../../tasks/control.js";
-import { dependencyState, taskBodyHash } from "../../tasks/store.js";
+import { taskBodyHash } from "../../tasks/store.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../../tasks/transitions.js";
 import { RecoverableToolError } from "../tool-details.js";
 import {
@@ -21,8 +21,6 @@ import {
 	renderTaskFile,
 	requiredField,
 	tasksDir,
-	unfinishedChildren,
-	validateTaskRelations,
 } from "./shared.js";
 import type { TaskFields, TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 import { assertVerificationAttestationMatches } from "./verification.js";
@@ -40,7 +38,6 @@ export async function setTask(options: TaskManageToolOptions, request: TaskManag
 	if (fromStatus === "verifying" && nextFields.status !== "verifying" && nextFields.control) {
 		nextFields.control = invalidateTaskVerification(nextFields.control);
 	}
-	await validateTaskRelations(options, id, nextFields);
 	await writeFileAtomically(taskPath, renderTaskFile(nextFields, body));
 	return {
 		action: "set",
@@ -62,7 +59,6 @@ export async function progressTask(
 	const { fields, body } = await readTaskDocument(taskPath, id);
 	resolveTaskTransition("progress", id, normalizeStoredStatus(fields.status), request.status);
 	const nextFields = applySet(fields, request);
-	await validateTaskRelations(options, id, nextFields);
 	// D4: a progress note only appends to Current Cycle — it never touches the contract segment
 	// that PASS/approval bind to, so it no longer invalidates verification or approval. A real
 	// contract change (Goal/DoD/Manual/Verification) goes through write/edit and is caught by the
@@ -95,18 +91,6 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 	if (uncheckedAcceptance.length > 0) {
 		throw new RecoverableToolError(
 			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before done.`,
-		);
-	}
-	const dependencies = await dependencyState(options.channelDir, fields.control?.dependsOn ?? [], id);
-	if (!dependencies.ready) {
-		throw new RecoverableToolError(
-			`Task "${id}" cannot be completed: ${dependencies.reason}. Complete its dependencies first.`,
-		);
-	}
-	const children = await unfinishedChildren(options, id);
-	if (children.length > 0) {
-		throw new RecoverableToolError(
-			`Task "${id}" still has unfinished child tasks: ${children.join(", ")}. Finish or cancel them first.`,
 		);
 	}
 	if (fields.control?.sideEffects === "external") {
@@ -206,12 +190,6 @@ export async function skipTask(options: TaskManageToolOptions, request: TaskMana
 			`Task "${id}" is not recurring; use action "cancel" to abandon it or "done" after satisfying its DoD.`,
 		);
 	}
-	const children = await unfinishedChildren(options, id);
-	if (children.length > 0) {
-		throw new RecoverableToolError(
-			`Task "${id}" still has unfinished child tasks: ${children.join(", ")}. Finish, cancel, or re-parent them before skipping this occurrence.`,
-		);
-	}
 	const skippedBody = appendCurrentCycleNote(body, `Skipped: ${reason}`);
 	if (fields.control) {
 		fields.control.blockedReason = undefined;
@@ -241,12 +219,6 @@ export async function cancelTask(
 	const taskPath = join(dir, `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
 	resolveTaskTransition("cancel", id, normalizeStoredStatus(fields.status));
-	const children = await unfinishedChildren(options, id);
-	if (children.length > 0) {
-		throw new RecoverableToolError(
-			`Task "${id}" still has unfinished child tasks: ${children.join(", ")}. Cancel or re-parent them first.`,
-		);
-	}
 	if (fields.control) fields.control.blockedReason = `Cancelled: ${reason}`;
 	const cancelledBody = `${body.replace(/\n+$/, "\n")}\n## Cancellation\n\n- Reason: ${markdownValue(reason)}\n`;
 	await writeFileAtomically(

@@ -48,7 +48,6 @@ function renderLine(entry: TaskLedgerEntry, now: number): string {
 			parts.push(`effects ${control.sideEffects}/${control.externalApproval}`);
 		}
 		if (control.deadline) parts.push(`deadline ${control.deadline}`);
-		if (control.dependsOn.length > 0) parts.push(`depends ${control.dependsOn.join(",")}`);
 		if (control.nextAction) parts.push(`next ${control.nextAction}`);
 	}
 	if (entry.latestNote) {
