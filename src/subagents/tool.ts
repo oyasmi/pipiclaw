@@ -840,13 +840,10 @@ export function createSubAgentTool(
 					runId: runContext.runId,
 					taskId: runContext.taskId,
 					verdict: verificationVerdict,
-					agent: config.name,
-					model: formatModelReference(config.model),
 					checkedAt: new Date().toISOString(),
 					evidence,
 					workspaceChanged: Boolean(workspaceChanged),
 					subjectHash: workspaceChanged ? undefined : verifierSubjectAfter,
-					output: finalText,
 				});
 			}
 

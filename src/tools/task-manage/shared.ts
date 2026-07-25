@@ -70,10 +70,12 @@ export function renderTaskSkeleton(request: TaskManageRequest): { fields: TaskFi
 	const dod = requiredField(request.dod, "dod", "create");
 	// Independent verification is a real tax (an extra dispatch round plus a verifier
 	// sub-agent run) that only pays off when there is something a read-only verifier can
-	// actually check. Default to evidence (maker self-checks the DoD); the tool schema asks
-	// the model to opt into independent explicitly for tasks with a checkable artifact.
-	const mode = request.control?.verificationMode ?? "evidence";
-	const control = applyTaskControlPatch(createDefaultTaskControl(mode), request.control ?? {});
+	// actually check, so it is opt-in. `applyTaskControlPatch` still turns it on by default
+	// for external side effects (spec 036, D5).
+	const control = applyTaskControlPatch(
+		createDefaultTaskControl(request.control?.verificationRequired ?? false),
+		request.control ?? {},
+	);
 	const fields = applySet({ status: normalizeCreateStatus(request.status), control }, request);
 	// First-cycle scheduling. A recurring task created without an explicit wake follows cron
 	// semantics: its first run is deferred to the next scheduled occurrence, not fired now.
@@ -92,7 +94,7 @@ export function renderTaskSkeleton(request: TaskManageRequest): { fields: TaskFi
 		dod,
 		manual: request.manual,
 		verificationPlan: request.verificationPlan,
-		verificationMode: control.verification.mode,
+		verificationRequired: control.verification.required,
 	});
 	return { fields, body };
 }
@@ -172,7 +174,7 @@ export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFi
 		next.recurrence = trimmed === "" ? undefined : trimmed;
 	}
 	if (request.control !== undefined) {
-		next.control = applyTaskControlPatch(next.control ?? createDefaultTaskControl("evidence"), request.control);
+		next.control = applyTaskControlPatch(next.control ?? createDefaultTaskControl(), request.control);
 	}
 	// A done recurring task's wake is the single time rule's job: `normalizeTaskFields` fills the
 	// next occurrence on the write path, so no per-action recompute lives here anymore (D1).

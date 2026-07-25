@@ -144,8 +144,8 @@ describe("manageTask", () => {
 		// Independent verification costs an extra dispatch round plus a verifier sub-agent run,
 		// which only pays off when there is a checkable artifact. Defaulting every new task to
 		// it taxes research/writing/reminder-style tasks that are the common case for a personal
-		// assistant; the model must opt into "independent" explicitly.
-		it("defaults new tasks to evidence-based self-verification, not independent", async () => {
+		// assistant; the model must opt in explicitly (spec 036, D5).
+		it("does not require independent verification by default", async () => {
 			await manageTask(options, {
 				action: "create",
 				id: "research",
@@ -154,8 +154,9 @@ describe("manageTask", () => {
 				dod: "- [x] Summary written",
 			});
 			const onDisk = await readFile(join(tasksDir, "research.md"), "utf-8");
-			expect(onDisk).toContain('"mode":"evidence"');
-			// evidence mode closes on maker self-check alone; no verifier attestation needed.
+			expect(onDisk).toContain('"required":false');
+			expect(onDisk).not.toContain("Independent verification: required");
+			// Closes on its own DoD; no verifier attestation needed.
 			await expect(
 				manageTask(options, {
 					action: "done",
@@ -245,8 +246,8 @@ describe("manageTask", () => {
 		});
 
 		it("invalidates a recorded verification when set leaves the verifying lane", async () => {
-			const control = createDefaultTaskControl("independent");
-			control.verification = { mode: "independent", status: "passed", runId: "r1", bodyHash: "abc" };
+			const control = createDefaultTaskControl(true);
+			control.verification = { required: true, status: "passed", runId: "r1", bodyHash: "abc" };
 			await writeTask("v", `status: verifying\ncontrol: ${JSON.stringify(control)}`, "# V\n\n## Current Cycle\n- x");
 			const result = await manageTask(options, { action: "set", id: "v", status: "active" });
 			expect(result.status).toBe("active");
@@ -270,11 +271,11 @@ describe("manageTask", () => {
 			await manageTask(options, {
 				action: "set",
 				id: "broken-control",
-				control: { priority: "high", verificationMode: "independent" },
+				control: { priority: "high", verificationRequired: true },
 			});
 			const repaired = await readFile(join(tasksDir, "broken-control.md"), "utf-8");
 			expect(repaired).toContain('"priority":"high"');
-			expect(repaired).toContain('"mode":"independent"');
+			expect(repaired).toContain('"required":true');
 		});
 
 		it("rejects a missing task", async () => {
@@ -375,7 +376,7 @@ describe("manageTask", () => {
 				goal: "Publish a scheduled report without a per-run approval.",
 				dod: "- [x] Report published",
 				control: {
-					verificationMode: "evidence",
+					verificationRequired: false,
 					sideEffects: "external",
 					externalApproval: "not-required",
 				},
@@ -416,12 +417,9 @@ describe("manageTask", () => {
 				runId: "verify-publish",
 				taskId: "verified-publish",
 				verdict: "pass",
-				agent: "reviewer",
-				model: "test/model",
 				checkedAt: new Date().toISOString(),
 				evidence: "Draft and prepared action are correct.",
 				workspaceChanged: false,
-				output: "VERDICT: PASS",
 			});
 			await manageTask(options, {
 				action: "verify",
@@ -465,7 +463,7 @@ describe("manageTask", () => {
 				title: "Verified task",
 				goal: "Ship a verified result",
 				dod: "- [x] Result exists",
-				control: { verificationMode: "independent" },
+				control: { verificationRequired: true },
 			});
 			await expect(
 				manageTask(options, {
@@ -480,12 +478,9 @@ describe("manageTask", () => {
 				runId: "verify-run-1",
 				taskId: "verified",
 				verdict: "pass",
-				agent: "reviewer",
-				model: "test/model",
 				checkedAt: new Date().toISOString(),
 				evidence: "The result and deterministic check both pass.",
 				workspaceChanged: false,
-				output: "VERDICT: PASS",
 			});
 			await manageTask(options, {
 				action: "verify",
@@ -538,13 +533,10 @@ describe("manageTask", () => {
 				runId: "verify-artifact",
 				taskId: "artifact-bound",
 				verdict: "pass",
-				agent: "reviewer",
-				model: "test/model",
 				checkedAt: new Date().toISOString(),
 				evidence: "Passed.",
 				workspaceChanged: false,
 				subjectHash: "a".repeat(64),
-				output: "VERDICT: PASS",
 			});
 			await expect(
 				manageTask(options, { action: "verify", id: "artifact-bound", verifierRunId: "verify-artifact" }),
@@ -562,7 +554,7 @@ describe("manageTask", () => {
 					title: id,
 					goal: `Finish ${id}`,
 					dod: "- [x] complete",
-					control: { verificationMode: "evidence" },
+					control: { verificationRequired: false },
 				});
 			}
 			await expect(
@@ -577,7 +569,7 @@ describe("manageTask", () => {
 				title: "Publish",
 				goal: "Publish externally",
 				dod: "- [ ] published",
-				control: { verificationMode: "evidence", sideEffects: "external" },
+				control: { verificationRequired: false, sideEffects: "external" },
 			});
 			await expect(
 				manageTask(options, { action: "set", id: "publish", control: { externalApproval: "granted" } }),
@@ -591,7 +583,7 @@ describe("manageTask", () => {
 				title: "Unchecked",
 				goal: "Finish all checks",
 				dod: "- [x] implementation exists\n- [ ] integration test passes",
-				control: { verificationMode: "evidence" },
+				control: { verificationRequired: false },
 			});
 			await expect(
 				manageTask(options, {
@@ -711,7 +703,10 @@ describe("manageTask", () => {
 			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
 		});
 
-		it("records evidence-mode completion as a self-check PASS inside Current Cycle", async () => {
+		// Spec 036 D5: `done` records Summary/Evidence in the body but no longer stamps
+		// `verification.status = "passed"` for an unverified task. That stamp was the maker
+		// grading its own work, and it made a self-report indistinguishable from a verdict.
+		it("records completion evidence in Current Cycle without self-certifying a PASS", async () => {
 			await manageTask(options, {
 				action: "create",
 				id: "evidence-pass",
@@ -719,7 +714,7 @@ describe("manageTask", () => {
 				goal: "Produce a checked result",
 				dod: "- [x] result checked",
 				schedule: "30 9 * * 1",
-				control: { verificationMode: "evidence" },
+				control: { verificationRequired: false },
 			});
 			await manageTask(options, {
 				action: "done",
@@ -732,13 +727,9 @@ describe("manageTask", () => {
 			// The verdict is recorded in `control.verification`; `lastOutcome` is runtime-owned
 			// telemetry about the last agent run and is not touched by a task_manage action.
 			expect(control?.lastOutcome).toBe("pending");
-			expect(control?.verification).toMatchObject({
-				mode: "evidence",
-				status: "passed",
-				evidence: "Deterministic check passed.",
-			});
-			expect(control?.verification.checkedAt).toBeTruthy();
-			expect(control?.verification.bodyHash).toMatch(/^[a-f0-9]{64}$/);
+			// The evidence lives in the body, and verification stays untouched at pending.
+			expect(control?.verification).toMatchObject({ required: false, status: "pending" });
+			expect(onDisk).toContain("Deterministic check passed.");
 			expect(onDisk.match(/^### Completion Evidence$/gm)).toHaveLength(1);
 			expect(onDisk).not.toMatch(/^## Completion Evidence$/m);
 		});
@@ -790,18 +781,15 @@ describe("manageTask", () => {
 				title: id,
 				goal: "Ship a checked result",
 				dod: "- [x] Result exists",
-				control: { verificationMode: "independent" },
+				control: { verificationRequired: true },
 			});
 			await writeVerificationAttestation(channelDir, {
 				runId: `${id}-run`,
 				taskId: id,
 				verdict: "pass",
-				agent: "reviewer",
-				model: "test/model",
 				checkedAt: new Date().toISOString(),
 				evidence: "Deterministic check passed.",
 				workspaceChanged: false,
-				output: "VERDICT: PASS",
 			});
 			await manageTask(options, { action: "verify", id, verifierRunId: `${id}-run` });
 		}

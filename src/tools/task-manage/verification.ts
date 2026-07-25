@@ -31,8 +31,8 @@ export async function candidateTask(
 			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before requesting verification.`,
 		);
 	}
-	const control = fields.control ?? createDefaultTaskControl("independent");
-	control.verification = { mode: "independent", status: "pending" };
+	const control = fields.control ?? createDefaultTaskControl(true);
+	control.verification = { required: true, status: "pending" };
 	control.blockedReason = undefined;
 	control.nextAction = "Run a purpose=verify sub-agent and import its attestation.";
 	const nextBody = appendCurrentCycleNote(body, note);
@@ -85,9 +85,9 @@ export async function verifyTask(
 			);
 		}
 	}
-	const control = task.fields.control ?? createDefaultTaskControl("independent");
+	const control = task.fields.control ?? createDefaultTaskControl(true);
 	control.verification = {
-		mode: "independent",
+		required: true,
 		status: attestation.verdict === "pass" ? "passed" : "failed",
 		runId,
 		evidence: attestation.evidence,

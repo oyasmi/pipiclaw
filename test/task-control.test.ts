@@ -58,6 +58,34 @@ describe("task control", () => {
 		expect(control).not.toHaveProperty("worktree");
 	});
 
+	// Spec 036 D5/D8: the retired `mode` enum maps losslessly onto the boolean — `independent`
+	// was the only form that gated `done`, `evidence` was maker self-certification.
+	it("maps the retired verification mode onto the required boolean", () => {
+		const base = createDefaultTaskControl();
+		const independent = parseTaskControl(
+			JSON.stringify({ ...base, verification: { mode: "independent", status: "passed" } }),
+		);
+		const evidence = parseTaskControl(
+			JSON.stringify({ ...base, verification: { mode: "evidence", status: "passed" } }),
+		);
+		expect(independent.verification.required).toBe(true);
+		expect(evidence.verification.required).toBe(false);
+		expect(independent.verification).not.toHaveProperty("mode");
+	});
+
+	// Spec 036 D5: under unattended operation the tasks that touch outside systems are exactly
+	// the ones nobody reviews, so they demand independent acceptance unless explicitly waived.
+	it("requires independent verification once a task gains external side effects", () => {
+		const control = applyTaskControlPatch(createDefaultTaskControl(), { sideEffects: "external" });
+		expect(control.verification.required).toBe(true);
+
+		const waived = applyTaskControlPatch(createDefaultTaskControl(), {
+			sideEffects: "external",
+			verificationRequired: false,
+		});
+		expect(waived.verification.required).toBe(false);
+	});
+
 	it("reports the first deterministic deadline or attempt violation", () => {
 		const control = createDefaultTaskControl();
 		control.deadline = "2026-07-10T00:00:00.000Z";

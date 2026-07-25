@@ -100,7 +100,7 @@ describe("handleTasksCommand", () => {
 	});
 
 	it("records explicit user approval for external side effects", async () => {
-		const control = createDefaultTaskControl("evidence");
+		const control = createDefaultTaskControl();
 		control.sideEffects = "external";
 		control.externalApproval = "required";
 		await writeFile(join(tasksDir, "publish.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
@@ -148,7 +148,7 @@ describe("handleTasksCommand", () => {
 	});
 
 	it("renders token and verification stats without an LLM turn", async () => {
-		const control = createDefaultTaskControl();
+		const control = createDefaultTaskControl(true);
 		control.usage = { attempts: 3, tokens: 1200, costUsd: 0.12, costKnown: true, wallTimeMinutes: 4.5 };
 		control.verification.status = "passed";
 		await writeFile(
@@ -157,13 +157,13 @@ describe("handleTasksCommand", () => {
 		);
 		const out = await run("stats measured");
 		expect(out).toContain("this cycle: 3/12 attempts, 1200 tokens");
-		expect(out).toContain("verification: independent/passed");
+		expect(out).toContain("verification: required/passed");
 		// Spec 036 D2: the lifetime ledger is gone; only the current cycle is reported.
 		expect(out).not.toContain("recorded lifetime");
 	});
 
 	it("renders unknown model cost as unavailable rather than zero", async () => {
-		const control = createDefaultTaskControl("evidence");
+		const control = createDefaultTaskControl();
 		control.usage = { attempts: 1, tokens: 1200, costUsd: 0, costKnown: false, wallTimeMinutes: 1 };
 		await writeFile(
 			join(tasksDir, "unpriced.md"),
@@ -175,7 +175,7 @@ describe("handleTasksCommand", () => {
 	});
 
 	it("doctor detects approval made stale by a later task-body change", async () => {
-		const control = createDefaultTaskControl("evidence");
+		const control = createDefaultTaskControl();
 		control.sideEffects = "external";
 		control.externalApproval = "required";
 		await writeFile(join(tasksDir, "publish.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
@@ -188,7 +188,7 @@ describe("handleTasksCommand", () => {
 	});
 
 	it("doctor does not require approval for an explicit external exemption", async () => {
-		const control = createDefaultTaskControl("evidence");
+		const control = createDefaultTaskControl();
 		control.sideEffects = "external";
 		control.externalApproval = "not-required";
 		await writeFile(join(tasksDir, "automated.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
@@ -198,7 +198,7 @@ describe("handleTasksCommand", () => {
 	// Spec 036 D8: retired keys are ignored on read, so the task survives but the ordering it
 	// declared does not. Doctor must name the dropped edges — silence would hide a real loss.
 	it("doctor reports retired control keys and the ordering they silently dropped", async () => {
-		const control = { ...createDefaultTaskControl("evidence"), parent: "roll-up", dependsOn: ["b", "c"] };
+		const control = { ...createDefaultTaskControl(), parent: "roll-up", dependsOn: ["b", "c"] };
 		await writeFile(
 			join(tasksDir, "a.md"),
 			renderTaskDocument({ status: "open", control: control as never }, STANDARD_BODY),
@@ -212,7 +212,7 @@ describe("handleTasksCommand", () => {
 	});
 
 	it("doctor stays quiet about retired keys a task does not carry", async () => {
-		const control = createDefaultTaskControl("evidence");
+		const control = createDefaultTaskControl();
 		await writeFile(join(tasksDir, "clean.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
 		expect(await run("doctor")).not.toContain("retired control keys");
 	});
@@ -226,9 +226,9 @@ describe("handleTasksCommand", () => {
 	// can touch. A hand-forged "passed" block with a bodyHash that happens to match the current
 	// body must still be flagged because no verifier ever produced a matching attestation file.
 	it("doctor flags an independent PASS with no matching verifier attestation on disk", async () => {
-		const control = createDefaultTaskControl("independent");
+		const control = createDefaultTaskControl(true);
 		control.verification = {
-			mode: "independent",
+			required: true,
 			status: "passed",
 			runId: "never-ran",
 			bodyHash: taskBodyHash(STANDARD_BODY),

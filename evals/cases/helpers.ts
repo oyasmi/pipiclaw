@@ -19,10 +19,10 @@ export async function writeTask(
 		};
 	} = { body: "# Goal\nEvaluate behavior.\n\n## DoD\n- [ ] Evidence recorded\n" },
 ): Promise<void> {
-	const control = { ...createDefaultTaskControl("evidence"), ...options.control } as TaskControl;
-	control.budget = { ...createDefaultTaskControl("evidence").budget, ...options.control?.budget };
-	control.usage = { ...createDefaultTaskControl("evidence").usage, ...options.control?.usage };
-	control.verification = { ...createDefaultTaskControl("evidence").verification, ...options.control?.verification };
+	const control = { ...createDefaultTaskControl(), ...options.control } as TaskControl;
+	control.budget = { ...createDefaultTaskControl().budget, ...options.control?.budget };
+	control.usage = { ...createDefaultTaskControl().usage, ...options.control?.usage };
+	control.verification = { ...createDefaultTaskControl().verification, ...options.control?.verification };
 	const tasksDir = join(ctx.channelDir, "tasks");
 	await mkdir(tasksDir, { recursive: true });
 	await writeFile(

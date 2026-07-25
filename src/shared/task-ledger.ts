@@ -1,7 +1,7 @@
 import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseTaskControl, type TaskControl, type TaskVerificationMode, taskPriorityRank } from "../tasks/control.js";
+import { parseTaskControl, type TaskControl, taskPriorityRank } from "../tasks/control.js";
 import { normalizeStoredStatus, TERMINAL_TASK_STATUSES, wasLegacyEscalated } from "../tasks/transitions.js";
 import { nextTaskWake } from "./task-schedule.js";
 
@@ -57,7 +57,7 @@ export interface TaskSkeletonInput {
 	dod: string;
 	manual?: string;
 	verificationPlan?: string;
-	verificationMode?: TaskVerificationMode;
+	verificationRequired?: boolean;
 }
 
 const FRONTMATTER_FIELDS = ["status", "wake", "schedule", "recurrence", "control"] as const;
@@ -272,7 +272,6 @@ export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 	const verificationPlan =
 		input.verificationPlan?.trim() ||
 		"- Check every DoD item against concrete evidence.\n- Run the relevant deterministic checks before declaring PASS.";
-	const verificationMode = input.verificationMode ?? "independent";
 	return [
 		`# ${input.title}`,
 		"",
@@ -286,7 +285,9 @@ export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 		manual,
 		"",
 		"## Verification",
-		`Mode: ${verificationMode}`,
+		// Only stated when it constrains closing the task; an unverified task says nothing
+		// rather than advertising a second, weaker mode (spec 036, D5).
+		...(input.verificationRequired ? ["Independent verification: required"] : []),
 		verificationPlan,
 		"",
 		"## Current Cycle",

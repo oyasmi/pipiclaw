@@ -43,7 +43,7 @@ function renderLine(entry: TaskLedgerEntry, now: number): string {
 	if (control) {
 		parts.push(`priority ${control.priority}`);
 		parts.push(`attempt ${control.usage.attempts}/${control.budget.maxAttempts}`);
-		parts.push(`verify ${control.verification.mode}/${control.verification.status}`);
+		if (control.verification.required) parts.push(`verify required/${control.verification.status}`);
 		if (control.sideEffects !== "workspace") {
 			parts.push(`effects ${control.sideEffects}/${control.externalApproval}`);
 		}

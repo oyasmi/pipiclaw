@@ -49,7 +49,7 @@ describeE2E("E2E: task lifecycle", () => {
 		const frontmatter = parseTaskFrontmatter(readFileSync(activeTaskPath(), "utf-8"));
 		expect(frontmatter.readable).toBe(true);
 		expect(frontmatter.status).not.toBe("done");
-		expect(frontmatter.control?.verification.mode).toBe("evidence");
+		expect(frontmatter.control?.verification.required).toBe(false);
 		// DoD must be real checklist items, not prose/numbered text — see the
 		// `uncheckedTaskAcceptanceItems` regression coverage in task-ledger.test.ts
 		// for the parser contract this depends on.

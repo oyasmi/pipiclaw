@@ -228,7 +228,7 @@ async function listTasks(channelDir: string): Promise<string> {
 		if (control) {
 			detail.push(`priority: ${control.priority}`);
 			detail.push(`attempts: ${control.usage.attempts}/${control.budget.maxAttempts}`);
-			detail.push(`verify: ${control.verification.mode}/${control.verification.status}`);
+			if (control.verification.required) detail.push(`verify: required/${control.verification.status}`);
 			if (control.sideEffects !== "workspace") {
 				detail.push(`effects: ${control.sideEffects}/${control.externalApproval}`);
 			}
@@ -343,7 +343,7 @@ function renderUsageLine(entry: TaskLedgerEntry): string {
 		`- ${entry.id} — ${entry.title}`,
 		`  this cycle: ${control.usage.attempts}/${control.budget.maxAttempts} attempts, ${control.usage.tokens} tokens, ${cycleCost}, ${control.usage.wallTimeMinutes.toFixed(1)}m`,
 		`  last run: ${control.lastOutcome}`,
-		`  verification: ${verification.mode}/${verification.status}`,
+		`  verification: ${verification.required ? "required" : "not required"}/${verification.status}`,
 	].join("\n");
 }
 
@@ -504,7 +504,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 							`Run a fresh purpose=verify sub-agent and import its attestation before completion.`,
 						),
 					);
-				} else if (control.verification.mode === "independent") {
+				} else if (control.verification.required) {
 					const attestationOk = control.verification.runId
 						? await readVerificationAttestation(options.channelDir, control.verification.runId)
 								.then((attestation) => attestation.taskId === entry.id && attestation.verdict === "pass")

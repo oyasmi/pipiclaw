@@ -6,7 +6,6 @@ export type TaskPriority = "low" | "normal" | "high" | "critical";
  * enforcement anywhere and is read back as `workspace`.
  */
 export type TaskSideEffects = "workspace" | "external";
-export type TaskVerificationMode = "evidence" | "independent";
 export type TaskVerificationStatus = "pending" | "passed" | "failed";
 /**
  * How the last agent run on this task ended. Pure telemetry, written only by the runtime
@@ -38,13 +37,32 @@ export interface TaskUsage {
 	wallTimeMinutes: number;
 }
 
+/**
+ * Independent acceptance state (spec 036, D5).
+ *
+ * There used to be two shapes here, `mode: "evidence" | "independent"`. The `evidence` half was
+ * the maker writing `status: "passed"` about its own work at `done` time, duplicating the
+ * Summary/Evidence already appended to the task body — a record, not a check. Only the
+ * independent form ever verified anything, so `mode` collapsed to a single boolean: does closing
+ * this task require a separate verifier's attestation?
+ *
+ * Dropping the second shape also removed five contradictory defaults for it (create said
+ * evidence, body rendering and the disk parser said independent).
+ */
 export interface TaskVerification {
-	mode: TaskVerificationMode;
+	/** True ⇒ `done` requires a matching attestation on disk from a `purpose=verify` sub-agent. */
+	required: boolean;
 	status: TaskVerificationStatus;
 	runId?: string;
 	evidence?: string;
+	/**
+	 * Hash of the task's *contract* segment, not the whole body (see `taskBodyHash`). The key
+	 * keeps its historical name: renaming it would make every stored task's recorded PASS
+	 * unreadable and force a re-verify, which is not worth a naming fix.
+	 */
 	bodyHash?: string;
 	checkedAt?: string;
+	/** Git view of the artifacts the verifier inspected; guards against edits between verify and done. */
 	subjectHash?: string;
 }
 
@@ -80,12 +98,12 @@ export interface TaskControlPatch {
 	sideEffects?: TaskSideEffects;
 	externalApproval?: "not-required" | "required" | "granted";
 	maxAttempts?: number;
-	verificationMode?: TaskVerificationMode;
+	/** Whether closing this task requires an independent verifier attestation (spec 036, D5). */
+	verificationRequired?: boolean;
 }
 
 const PRIORITIES: readonly TaskPriority[] = ["low", "normal", "high", "critical"];
 const SIDE_EFFECTS: readonly TaskSideEffects[] = ["workspace", "external"];
-const VERIFICATION_MODES: readonly TaskVerificationMode[] = ["evidence", "independent"];
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
 const OUTCOMES: readonly TaskOutcome[] = ["pending", "running", "progress", "blocked", "failed"];
 const PAUSED_BY: readonly TaskPausedBy[] = ["user", "governor"];
@@ -124,6 +142,16 @@ function optionalPositive(value: unknown): number | undefined {
 		throw new Error("control budget values must be finite positive numbers");
 	}
 	return value;
+}
+
+/**
+ * Read `verification.required`, mapping the retired `mode` enum losslessly (spec 036, D5/D8):
+ * `"independent"` was the only form that gated `done`, so it becomes `true`; `"evidence"` was
+ * maker self-certification and becomes `false`.
+ */
+function parseVerificationRequired(verification: Record<string, unknown>): boolean {
+	if (typeof verification.required === "boolean") return verification.required;
+	return verification.mode === "independent";
 }
 
 function enumValue<T extends string>(value: unknown, values: readonly T[], fallback: T): T {
@@ -189,7 +217,7 @@ export function retiredTaskControlKeys(raw: unknown): string[] {
 	});
 }
 
-export function createDefaultTaskControl(mode: TaskVerificationMode = "independent"): TaskControl {
+export function createDefaultTaskControl(requiresVerification = false): TaskControl {
 	return {
 		version: 1,
 		priority: "normal",
@@ -198,7 +226,7 @@ export function createDefaultTaskControl(mode: TaskVerificationMode = "independe
 		externalApproval: "not-required",
 		budget: { maxAttempts: 12 },
 		usage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
-		verification: { mode, status: "pending" },
+		verification: { required: requiresVerification, status: "pending" },
 	};
 }
 
@@ -262,7 +290,7 @@ export function parseTaskControl(raw: string): TaskControl {
 		budget: { maxAttempts: Math.max(1, Math.floor(maxAttempts)) },
 		usage: parsedUsage,
 		verification: {
-			mode: enumValue(verification.mode, VERIFICATION_MODES, "independent"),
+			required: parseVerificationRequired(verification),
 			status: enumValue(verification.status, VERIFICATION_STATUSES, "pending"),
 			runId: optionalString(verification.runId),
 			evidence: optionalString(verification.evidence),
@@ -296,7 +324,7 @@ export function resetTaskControlForCycle(control: TaskControl, cycleId: string):
 		approvedAt: undefined,
 		approvalBodyHash: undefined,
 		usage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
-		verification: { mode: control.verification.mode, status: "pending" },
+		verification: { required: control.verification.required, status: "pending" },
 		lastStartedAt: undefined,
 		lastFinishedAt: undefined,
 		cycleId: normalizedCycleId,
@@ -328,8 +356,8 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 		}
 		next.budget.maxAttempts = patch.maxAttempts;
 	}
-	if (patch.verificationMode !== undefined && patch.verificationMode !== next.verification.mode) {
-		next.verification = { mode: patch.verificationMode, status: "pending" };
+	if (patch.verificationRequired !== undefined && patch.verificationRequired !== next.verification.required) {
+		next.verification = { required: patch.verificationRequired, status: "pending" };
 	}
 	if (next.sideEffects !== "external") {
 		next.externalApproval = "not-required";
@@ -339,6 +367,17 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 	}
 	if (control.sideEffects !== "external" && next.sideEffects === "external" && !explicitlySetsExternalApproval) {
 		next.externalApproval = "required";
+	}
+	// Spec 036 D5: a task that changes an outside system is exactly the one nobody is watching
+	// under unattended operation, so it defaults to requiring independent acceptance. An explicit
+	// `verificationRequired: false` still wins.
+	if (
+		control.sideEffects !== "external" &&
+		next.sideEffects === "external" &&
+		patch.verificationRequired === undefined &&
+		!next.verification.required
+	) {
+		next.verification = { required: true, status: "pending" };
 	}
 	if (invalidatesApproval && next.sideEffects === "external" && !explicitlySetsExternalApproval) {
 		next.externalApproval = "required";
@@ -368,7 +407,7 @@ export function taskBudgetViolation(control: TaskControl, nowMs: number): string
 
 export function invalidateTaskVerification(control: TaskControl): TaskControl {
 	if (control.verification.status === "pending") return control;
-	return { ...control, verification: { mode: control.verification.mode, status: "pending" } };
+	return { ...control, verification: { required: control.verification.required, status: "pending" } };
 }
 
 export function invalidateTaskApproval(control: TaskControl): TaskControl {

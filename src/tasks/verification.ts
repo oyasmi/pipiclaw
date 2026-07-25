@@ -7,17 +7,23 @@ import { readStoredTask, taskBodyHash } from "./store.js";
 
 export type VerificationVerdict = "pass" | "fail";
 
+/**
+ * A verifier's verdict, recorded on disk beside the task (spec 036, D6).
+ *
+ * This file is the anti-self-certification core: the task Markdown is writable by the agent's
+ * own write/edit tools, so a hand-written `status: "passed"` proves nothing. Every field here
+ * is re-checked at `done`, which is why the set is exactly the fields something reads —
+ * `agent`, `model` and `outputHash` were stored and strictly validated but never once
+ * consulted, so they are gone.
+ */
 export interface VerificationAttestation {
 	version: 1;
 	runId: string;
 	taskId: string;
 	verdict: VerificationVerdict;
-	agent: string;
-	model: string;
 	checkedAt: string;
 	bodyHash: string;
 	evidence: string;
-	outputHash: string;
 	workspaceChanged: boolean;
 	/** Git HEAD + working-tree subject that the verifier actually inspected. */
 	subjectHash?: string;
@@ -42,7 +48,7 @@ export function parseVerificationVerdict(output: string): VerificationVerdict | 
 
 export async function writeVerificationAttestation(
 	channelDir: string,
-	input: Omit<VerificationAttestation, "version" | "bodyHash" | "outputHash"> & { output: string },
+	input: Omit<VerificationAttestation, "version" | "bodyHash">,
 ): Promise<VerificationAttestation> {
 	const task = await readStoredTask(channelDir, input.taskId);
 	if (!task) throw new Error(`Cannot attest verification: task "${input.taskId}" does not exist.`);
@@ -51,12 +57,9 @@ export async function writeVerificationAttestation(
 		runId: input.runId,
 		taskId: input.taskId,
 		verdict: input.verdict,
-		agent: input.agent,
-		model: input.model,
 		checkedAt: input.checkedAt,
 		bodyHash: taskBodyHash(task.body),
 		evidence: input.evidence,
-		outputHash: createHash("sha256").update(input.output).digest("hex"),
 		workspaceChanged: input.workspaceChanged,
 		subjectHash: input.subjectHash,
 	};
@@ -84,12 +87,9 @@ export async function readVerificationAttestation(channelDir: string, runId: str
 		(value as { runId?: unknown }).runId !== runId ||
 		typeof (value as { taskId?: unknown }).taskId !== "string" ||
 		((value as { verdict?: unknown }).verdict !== "pass" && (value as { verdict?: unknown }).verdict !== "fail") ||
-		typeof (value as { agent?: unknown }).agent !== "string" ||
-		typeof (value as { model?: unknown }).model !== "string" ||
 		typeof (value as { checkedAt?: unknown }).checkedAt !== "string" ||
 		!Number.isFinite(new Date((value as { checkedAt: string }).checkedAt).getTime()) ||
 		!/^[a-f0-9]{64}$/i.test(String((value as { bodyHash?: unknown }).bodyHash)) ||
-		!/^[a-f0-9]{64}$/i.test(String((value as { outputHash?: unknown }).outputHash)) ||
 		typeof (value as { evidence?: unknown }).evidence !== "string" ||
 		typeof (value as { workspaceChanged?: unknown }).workspaceChanged !== "boolean" ||
 		((value as { subjectHash?: unknown }).subjectHash !== undefined &&

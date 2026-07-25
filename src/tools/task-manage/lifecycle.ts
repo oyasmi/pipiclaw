@@ -103,7 +103,7 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 			);
 		}
 	}
-	if (fields.control?.verification.mode === "independent") {
+	if (fields.control?.verification.required) {
 		const verification = fields.control.verification;
 		if (verification.status !== "passed" || !verification.bodyHash || !verification.runId) {
 			throw new RecoverableToolError(
@@ -116,7 +116,14 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 			);
 		}
 		if (verification.subjectHash) {
+			// Fail closed (spec 036, D7): an attestation bound to a Git subject that cannot be
+			// recomputed is unverifiable, not implicitly fine.
 			const currentSubject = await workspaceSubjectHash(options.workingDirectory ?? process.cwd());
+			if (!currentSubject) {
+				throw new RecoverableToolError(
+					`Task "${id}" has an independent PASS bound to a Git artifact subject, but the current checkout cannot be read. Run done from the project checkout, or rerun verification.`,
+				);
+			}
 			if (currentSubject !== verification.subjectHash) {
 				throw new RecoverableToolError(
 					`Task "${id}" artifacts changed after its independent PASS; rerun verification before done.`,
@@ -125,19 +132,11 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 		}
 		await assertVerificationAttestationMatches(options.channelDir, id, verification);
 	}
+	// Spec 036 D5: `done` always records Summary/Evidence in the body. It no longer also stamps
+	// `verification.status = "passed"` for unverified tasks — that was the maker grading itself,
+	// and it made a self-report indistinguishable from a verifier's verdict.
 	const bodyWithEvidence = appendCompletionEvidence(body, request);
-	if (fields.control) {
-		fields.control.blockedReason = undefined;
-		if (fields.control.verification.mode === "evidence") {
-			fields.control.verification = {
-				mode: "evidence",
-				status: "passed",
-				evidence: requiredField(request.evidence, "evidence", "done"),
-				bodyHash: taskBodyHash(bodyWithEvidence),
-				checkedAt: new Date().toISOString(),
-			};
-		}
-	}
+	if (fields.control) fields.control.blockedReason = undefined;
 
 	// A recurring task (schedule frontmatter) sleeps in place until its next occurrence. The
 	// wake is cleared here and refilled to the next cron occurrence by the single time rule
@@ -193,7 +192,7 @@ export async function skipTask(options: TaskManageToolOptions, request: TaskMana
 	const skippedBody = appendCurrentCycleNote(body, `Skipped: ${reason}`);
 	if (fields.control) {
 		fields.control.blockedReason = undefined;
-		fields.control.verification = { mode: fields.control.verification.mode, status: "pending" };
+		fields.control.verification = { required: fields.control.verification.required, status: "pending" };
 	}
 	await writeFileAtomically(taskPath, renderTaskFile({ ...fields, status: "done", wake: undefined }, skippedBody));
 	const { deleted } = await cleanupTaskEvents(options, id);
