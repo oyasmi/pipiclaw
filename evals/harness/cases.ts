@@ -49,6 +49,15 @@ export function selectedCases(): EvalCase[] {
 	return cases;
 }
 
+/**
+ * Reproducibility hash of one case definition.
+ *
+ * Deliberately built from the case's *own* projection (steps, grader implementations, setup,
+ * budget, declared fixtures) rather than the containing module's file hash. Hashing the whole
+ * `definitionFile` meant that editing any one case re-hashed every sibling case in that file,
+ * so "this case's definition changed" — the signal `eval:diff` relies on to say a comparison is
+ * unsound — fired constantly and told you nothing.
+ */
 export function caseHash(item: EvalCase, root = process.cwd()): string {
 	const sourcePath = join(root, item.definitionFile);
 	if (!existsSync(sourcePath)) throw new Error(`${item.id} definitionFile does not exist: ${item.definitionFile}`);
@@ -72,7 +81,6 @@ export function caseHash(item: EvalCase, root = process.cwd()): string {
 	});
 	return hash(
 		[
-			hashFile(sourcePath),
 			hash(serialized),
 			...(item.fixtures ?? []).map((fixture) => hashFile(join(root, "evals", "fixtures", fixture))),
 		].join("\0"),

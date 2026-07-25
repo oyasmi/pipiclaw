@@ -1,5 +1,15 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,10 +31,19 @@ import type {
 	TrialRecord,
 	WorkerMessage,
 } from "./schema.js";
-import { containsCredential, hash, hashFile, median, parseRatio, tree } from "./util.js";
+import {
+	containsCredential,
+	FALLBACK_TOKEN_RATES_USD_PER_MTOK,
+	hash,
+	hashFile,
+	median,
+	parseRatio,
+	tree,
+} from "./util.js";
 
 const ZERO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 const INVALID_THRESHOLD = 0.1;
+const BUDGET_STOP_THRESHOLD = 0.25;
 const KILL_GRACE_MS = 2_000;
 
 function readJson<T>(path: string, fallback: T): T {
@@ -82,17 +101,27 @@ export function describeCase(item: EvalCase): CaseDescriptor {
 	};
 }
 
+/**
+ * Trials that say nothing about the agent: harness faults (`invalid`) and trial-budget stops
+ * (`budget-exceeded`, i.e. provider latency or an over-tight cap). Both are reported and both
+ * feed the inconclusive threshold, but neither belongs in a pass-rate denominator.
+ */
+function isScorable(record: TrialRecord): boolean {
+	return record.outcome !== "invalid" && record.outcome !== "budget-exceeded";
+}
+
 export function summarize(records: TrialRecord[], cases: EvalCase[], gates: Record<string, GateRule>): CaseSummary[] {
 	return cases.map((item) => {
 		const entries = records.filter((record) => record.caseId === item.id);
-		const valid = entries.filter((record) => record.outcome !== "invalid");
+		const valid = entries.filter(isScorable);
 		return {
 			caseId: item.id,
 			suite: item.suite,
 			gate: gates[item.id]?.gate ?? "report-only",
 			passed: valid.filter((record) => record.outcome === "pass").length,
 			valid: valid.length,
-			invalid: entries.length - valid.length,
+			invalid: entries.filter((record) => record.outcome === "invalid").length,
+			budgetExceeded: entries.filter((record) => record.outcome === "budget-exceeded").length,
 			medianCostUsd: median(valid.map((record) => record.metrics.costUsd)),
 			medianWallMs: median(valid.map((record) => record.metrics.wallMs)),
 			medianToolCalls: median(valid.map((record) => record.metrics.toolCalls)),
@@ -102,10 +131,16 @@ export function summarize(records: TrialRecord[], cases: EvalCase[], gates: Reco
 
 export function evaluateExit(records: TrialRecord[], gates: Record<string, GateRule>): 0 | 1 | 2 {
 	if (!records.length) return 0;
-	if (records.filter((record) => record.outcome === "invalid").length / records.length > INVALID_THRESHOLD) return 2;
+	const share = (outcome: Outcome): number =>
+		records.filter((record) => record.outcome === outcome).length / records.length;
+	// Harness faults invalidate a run quickly; budget stops get a looser bar because a stalled
+	// turn or two is ordinary provider weather, while a quarter of the run timing out means the
+	// run measured latency rather than behavior. A required case with no scorable trial at all
+	// still exits 1 below, so a case that only ever times out can never pass silently.
+	if (share("invalid") > INVALID_THRESHOLD || share("budget-exceeded") > BUDGET_STOP_THRESHOLD) return 2;
 	for (const [caseId, rule] of Object.entries(gates)) {
 		if (rule.gate !== "required" || !records.some((record) => record.caseId === caseId)) continue;
-		const valid = records.filter((record) => record.caseId === caseId && record.outcome !== "invalid");
+		const valid = records.filter((record) => record.caseId === caseId && isScorable(record));
 		// A required case with zero valid trials was never actually confirmed; do not let an
 		// all-invalid case slip through the gate just because ceil(ratio * 0) is 0.
 		if (valid.length === 0) return 1;
@@ -162,7 +197,7 @@ export function renderReport(
 	);
 	const rows = summaries.map(
 		(summary) =>
-			`| ${summary.caseId} | ${summary.suite} | ${summary.passed}/${summary.valid} | ${summary.invalid} | ${summary.gate} | $${summary.medianCostUsd.toFixed(4)} | ${(summary.medianWallMs / 1_000).toFixed(1)}s | ${summary.medianToolCalls} |`,
+			`| ${summary.caseId} | ${summary.suite} | ${summary.passed}/${summary.valid} | ${summary.invalid} | ${summary.budgetExceeded} | ${summary.gate} | $${summary.medianCostUsd.toFixed(4)} | ${(summary.medianWallMs / 1_000).toFixed(1)}s | ${summary.medianToolCalls} |`,
 	);
 	const totalCost = records.reduce((sum, record) => sum + record.metrics.costUsd, 0);
 	const tokens = records.reduce((sum, record) => sum + record.metrics.tokens.total, 0);
@@ -184,22 +219,27 @@ export function renderReport(
 	const observedModels = [...new Set(records.map((record) => record.observedModel))].sort();
 	const suites = [...new Set(summaries.map((summary) => summary.suite))].map((suite) => {
 		const items = summaries.filter((summary) => summary.suite === suite);
-		return `| ${suite} | ${items.reduce((sum, item) => sum + item.passed, 0)}/${items.reduce((sum, item) => sum + item.valid, 0)} | ${items.reduce((sum, item) => sum + item.invalid, 0)} |`;
+		return `| ${suite} | ${items.reduce((sum, item) => sum + item.passed, 0)}/${items.reduce((sum, item) => sum + item.valid, 0)} | ${items.reduce((sum, item) => sum + item.invalid, 0)} | ${items.reduce((sum, item) => sum + item.budgetExceeded, 0)} |`;
 	});
+	const rates = FALLBACK_TOKEN_RATES_USD_PER_MTOK;
+	const costNote =
+		manifest.costBasis === "provider"
+			? "provider-reported"
+			: `${manifest.costBasis ?? "unknown"} — figures priced at the harness rate card ($${rates.input}/$${rates.output} per Mtok in/out); comparable across runs, not an invoice`;
 	return `# Behavior evaluation ${manifest.runId}
 
 Started: ${manifest.startedAt}  
 Configured model: ${manifest.configuredModel}  
 Observed model(s): ${observedModels.join(", ") || "unknown"}  
-Trials: ${records.length}; cost: $${totalCost.toFixed(4)}; tokens: ${tokens}
+Trials: ${records.length}; cost: $${totalCost.toFixed(4)} (${costNote}); tokens: ${tokens}
 Discrimination: ${perfect}/${scored.length} cases passed every valid trial (${(allPassRatio * 100).toFixed(0)}%).${discrimination}
 
 Human review queue: ${reviewCount} grader decisions; ${reviews.length} verdicts recorded. Model-grader calibration: ${calibration.agreement === undefined ? "pending" : `${calibration.agreed}/${calibration.reviewed} (${(calibration.agreement * 100).toFixed(0)}%)`} (archived grades remain immutable).
 
 ## Suites
 
-| Suite | Pass | Invalid |
-| --- | ---: | ---: |
+| Suite | Pass | Invalid | Budget-stopped |
+| --- | ---: | ---: | ---: |
 ${suites.join("\n")}
 
 ## Quarantine
@@ -216,11 +256,11 @@ ${failures.length ? failures.join("\n") : "None."}
 
 ## Results
 
-| Case | Suite | Pass | Invalid | Gate | Median cost | Median wall | Median tools |
-| --- | --- | ---: | ---: | --- | ---: | ---: | ---: |
+| Case | Suite | Pass | Invalid | Budget | Gate | Median cost | Median wall | Median tools |
+| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |
 ${rows.join("\n")}
 
-Invalid trials are excluded from pass-rate denominators. More than ${INVALID_THRESHOLD * 100}% invalid makes the run inconclusive (exit 2); a required gate miss exits 1.
+Invalid and budget-stopped trials are excluded from pass-rate denominators. More than ${INVALID_THRESHOLD * 100}% invalid, or more than ${BUDGET_STOP_THRESHOLD * 100}% budget-stopped, makes the run inconclusive (exit 2); a required gate miss exits 1, as does a required case with no scorable trial at all.
 `;
 }
 
@@ -494,6 +534,43 @@ export async function runWorkerSegment(options: {
 	});
 }
 
+/** Text artifacts small enough to archive whole; anything else stays a hash in the file tree. */
+const EVIDENCE_MAX_BYTES = 64_000;
+const EVIDENCE_EXTENSIONS = new Set([".md", ".txt", ".json"]);
+
+/**
+ * Copy a trial's readable channel artifacts into the run archive before its home is deleted.
+ *
+ * The human-review queue asks a person to re-judge a specific trial, but the trial's `MEMORY.md`
+ * and task files used to be removed with the temporary home the moment grading finished, leaving
+ * only content hashes in `outcome.json`. A reviewer cannot re-judge a hash.
+ */
+export function archiveEvidence(sourceDir: string, targetDir: string): number {
+	if (!existsSync(sourceDir)) return 0;
+	let copied = 0;
+	const visit = (dir: string, relative: string): void => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const source = join(dir, entry.name);
+			const rel = relative ? join(relative, entry.name) : entry.name;
+			if (entry.isSymbolicLink()) continue;
+			if (entry.isDirectory()) {
+				visit(source, rel);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+			const dot = entry.name.lastIndexOf(".");
+			if (dot < 0 || !EVIDENCE_EXTENSIONS.has(entry.name.slice(dot))) continue;
+			if (statSync(source).size > EVIDENCE_MAX_BYTES) continue;
+			const destination = join(targetDir, rel);
+			mkdirSync(join(destination, ".."), { recursive: true });
+			copyFileSync(source, destination);
+			copied++;
+		}
+	};
+	visit(sourceDir, "");
+	return copied;
+}
+
 async function gradeModel(grader: ModelGrader, context: TrialContext, homeDir: string): Promise<GradeResult> {
 	const inputPath = join(homeDir, `judge-${grader.graderId}.json`);
 	const outputPath = join(homeDir, `judge-${grader.graderId}-result.json`);
@@ -681,6 +758,9 @@ async function runTrial(
 	const outcome: Outcome =
 		outcomeOverride ?? (invalid ? "invalid" : invariant ? "invariant-violation" : failed ? "fail" : "pass");
 	const usageEvents = trace.filter((event) => event.kind === "usage");
+	const bases = new Set(usageEvents.map((event) => event.fields?.costBasis ?? "fallback"));
+	const costBasis: TrialRecord["metrics"]["costBasis"] =
+		bases.size > 1 ? "mixed" : bases.has("provider") ? "provider" : "fallback";
 	const number = (event: TraceEvent, field: string): number => Number(event.fields?.[field] ?? 0);
 	const tokens = usageEvents.reduce(
 		(total, event) => ({
@@ -698,7 +778,7 @@ async function runTrial(
 		effects.set(key, (effects.get(key) ?? 0) + 1);
 	}
 	const record: TrialRecord = {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		runId,
 		caseId: item.id,
 		caseHash: descriptor.caseHash,
@@ -709,6 +789,7 @@ async function runTrial(
 		grades,
 		metrics: {
 			costUsd: usageEvents.reduce((sum, event) => sum + number(event, "costUsd"), 0),
+			costBasis,
 			tokens,
 			wallMs: Date.now() - Date.parse(startedAt),
 			turns: trace.filter((event) => event.kind === "turn-start").length,
@@ -722,6 +803,7 @@ async function runTrial(
 		startedAt,
 	};
 	mkdirSync(trialDir, { recursive: true });
+	archiveEvidence(channelDir, join(trialDir, "files"));
 	writeFileSync(join(trialDir, "trace.jsonl"), `${trace.map((event) => JSON.stringify(event)).join("\n")}\n`);
 	writeJson(join(trialDir, "outcome.json"), snapshot);
 	writeJson(join(trialDir, "grades.json"), { schemaVersion: 1, grades });
@@ -766,7 +848,7 @@ async function main(): Promise<void> {
 			TraceEvent: 1,
 			OutcomeSnapshot: 1,
 			GradeResult: 1,
-			TrialRecord: 2,
+			TrialRecord: 3,
 		},
 		configuredModel: configuredModelEnv ?? "claude-sonnet-4-5",
 		thinkingLevel: process.env.PIPICLAW_E2E_THINKING,
@@ -832,11 +914,13 @@ async function main(): Promise<void> {
 		if (!configuredModelEnv) manifest.configuredModel = actualModel;
 		if (!judgeModelEnv) manifest.judgeModel = actualModel;
 	}
+	const observedBases = new Set(records.map((record) => record.metrics.costBasis));
+	manifest.costBasis = observedBases.size === 1 ? [...observedBases][0] : observedBases.size ? "mixed" : undefined;
 	// Every trial home is built from identical config, so any completed trial's hashes are authoritative.
 	if (results[0]) {
 		[manifest.settingsHash, manifest.toolsConfigHash, manifest.securityConfigHash] = results[0].configHashes;
-		writeJson(join(resultDir, "manifest.json"), manifest);
 	}
+	writeJson(join(resultDir, "manifest.json"), manifest);
 	writeFileSync(join(resultDir, "trials.jsonl"), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
 	writeJson(join(resultDir, "human-review-sample.json"), { schemaVersion: 1, decisions: selectHumanReview(records) });
 	const gates = readJson<Record<string, GateRule>>(join(process.cwd(), "evals/gates.json"), {});

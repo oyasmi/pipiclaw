@@ -105,6 +105,16 @@ export interface RuntimeContext {
 	store: ChannelStore;
 	/** Production driver instance, exposed so evals can invoke the real scan path. */
 	taskDriver: { start(): void; stop(): void; nudge?(): void; runOnce?: (now?: Date) => Promise<void> };
+	/**
+	 * Production maintenance scheduler, exposed for the same reason as `taskDriver`.
+	 *
+	 * Evaluation workers run with `startServices: false`, so the background timer never fires and
+	 * no trial could otherwise reach `SESSION.md` refresh, the memory checkpoint, or consolidation
+	 * — the whole layered memory pipeline was structurally untestable from a behavior eval.
+	 * Exposing the instance lets a case drive one real pass at a chosen time instead of faking a
+	 * clock or re-implementing the job order.
+	 */
+	memoryMaintenance: { start(): void; stop(): void; runOnce?: (now?: Date) => Promise<void> };
 	shutdown: (reason?: NodeJS.Signals | "manual") => Promise<void>;
 }
 
@@ -1110,6 +1120,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		store,
 		bot,
 		taskDriver,
+		memoryMaintenance: memoryMaintenanceScheduler,
 		shutdown: shutdownWithReason,
 	};
 }

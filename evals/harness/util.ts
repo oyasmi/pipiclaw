@@ -30,6 +30,44 @@ export function tree(
 	return output.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+/**
+ * Unit of account for providers that omit pricing metadata.
+ *
+ * Most self-hosted and Chinese-gateway models return usage without a price (the product side
+ * already models this: `hasKnownModelPricing` in `src/models/utils.ts`, `usage.costKnown` in
+ * `src/tasks/control.ts`). The harness used to copy that missing price through as `0`, so every
+ * report printed `$0.0000` — which reads as "free" rather than "unknown", left `maxCostUsd`
+ * unenforceable, and made the cost column of `eval:diff` a constant zero.
+ *
+ * These Sonnet-class list rates (USD per million tokens) are therefore a **stable ruler for
+ * comparing runs**, not a claim about the operator's invoice. Every trial priced this way is
+ * marked `costBasis: "fallback"` so no report can silently pass it off as a real amount.
+ */
+export const FALLBACK_TOKEN_RATES_USD_PER_MTOK = {
+	input: 3,
+	output: 15,
+	cacheRead: 0.3,
+	cacheWrite: 3.75,
+} as const;
+
+export type CostBasis = "provider" | "fallback";
+
+export function fallbackCostUsd(tokens: {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}): number {
+	const rates = FALLBACK_TOKEN_RATES_USD_PER_MTOK;
+	return (
+		(tokens.input * rates.input +
+			tokens.output * rates.output +
+			tokens.cacheRead * rates.cacheRead +
+			tokens.cacheWrite * rates.cacheWrite) /
+		1_000_000
+	);
+}
+
 export function parseRatio(value: string): { passed: number; total: number } {
 	const match = /^(\d+)\/(\d+)$/.exec(value);
 	if (!match) throw new Error(`Invalid minPass '${value}'; use N/N.`);

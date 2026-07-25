@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { caseHash, validateCases } from "../evals/harness/cases.js";
 import { renderDiff } from "../evals/harness/diff.js";
 import { promoteRun } from "../evals/harness/promote.js";
+import { rerenderReport } from "../evals/harness/report.js";
 import {
+	archiveEvidence,
 	evaluateExit,
 	exceededBudgetReason,
 	gitDirtyFingerprint,
@@ -14,6 +16,7 @@ import {
 	renderReport,
 	runWorkerSegment,
 	segmentScript,
+	summarize,
 } from "../evals/harness/run.js";
 import type {
 	CaseSummary,
@@ -23,7 +26,7 @@ import type {
 	RunManifest,
 	TrialRecord,
 } from "../evals/harness/schema.js";
-import { containsCredential, credentialMatches } from "../evals/harness/util.js";
+import { containsCredential, credentialMatches, fallbackCostUsd } from "../evals/harness/util.js";
 
 const temporary: string[] = [];
 afterEach(() => {
@@ -61,7 +64,7 @@ function evalCase(overrides: Partial<EvalCase> = {}): EvalCase {
 
 function record(outcome: TrialRecord["outcome"], caseId = "T-test-01"): TrialRecord {
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		runId: "run",
 		caseId,
 		caseHash: "hash",
@@ -71,6 +74,7 @@ function record(outcome: TrialRecord["outcome"], caseId = "T-test-01"): TrialRec
 		grades: [],
 		metrics: {
 			costUsd: 0.01,
+			costBasis: "provider",
 			tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
 			wallMs: 100,
 			turns: 1,
@@ -105,7 +109,7 @@ describe("behavior eval registry and reproducibility", () => {
 		).toThrow(/midTurn crash/);
 	});
 
-	it("changes caseHash when source or a declared fixture changes", () => {
+	it("tracks a case's own definition and fixtures, not edits to unrelated siblings", () => {
 		const root = temp();
 		mkdirSync(join(root, "evals/cases"), { recursive: true });
 		mkdirSync(join(root, "evals/fixtures"), { recursive: true });
@@ -113,11 +117,30 @@ describe("behavior eval registry and reproducibility", () => {
 		writeFileSync(join(root, "evals/fixtures/data.txt"), "fixture-a");
 		const item = evalCase({ fixtures: ["data.txt"] });
 		const first = caseHash(item, root);
+
+		// A declared fixture is part of the definition.
 		writeFileSync(join(root, "evals/fixtures/data.txt"), "fixture-b");
 		const fixtureChanged = caseHash(item, root);
-		writeFileSync(join(root, "evals/cases/test.ts"), "source-b");
 		expect(fixtureChanged).not.toBe(first);
-		expect(caseHash(item, root)).not.toBe(fixtureChanged);
+
+		// Editing a sibling case in the same module must not re-hash this one, or every
+		// cross-run comparison reports "the case definition changed" and the signal is useless.
+		writeFileSync(join(root, "evals/cases/test.ts"), "source-b-with-an-unrelated-sibling-case");
+		expect(caseHash(item, root)).toBe(fixtureChanged);
+
+		// This case's own steps and grader implementation are.
+		expect(caseHash(evalCase({ fixtures: ["data.txt"], script: [{ kind: "user", text: "other" }] }), root)).not.toBe(
+			fixtureChanged,
+		);
+		expect(
+			caseHash(
+				evalCase({
+					fixtures: ["data.txt"],
+					graders: [{ graderId: "g", graderVersion: "1", grade: () => ({ ...passingGrade, status: "fail" }) }],
+				}),
+				root,
+			),
+		).not.toBe(fixtureChanged);
 	});
 });
 
@@ -146,6 +169,34 @@ describe("behavior eval process and gate semantics", () => {
 		expect(evaluateExit([record("fail")], { "T-test-01": { gate: "quarantine" } })).toBe(0);
 		expect(evaluateExit([record("fail")], { "T-test-01": { gate: "required", minPass: "2/3" } })).toBe(1);
 		expect(evaluateExit([record("pass")], { "T-test-01": { gate: "required", minPass: "2/3" } })).toBe(0);
+	});
+
+	it("keeps budget-stopped trials out of the pass-rate denominator but still visible", () => {
+		const gate = { "T-test-01": { gate: "required" as const, minPass: "2/3" } };
+		// A provider stall is not an agent failure. Two passes and one wall-clock stop leave the
+		// 2/3 gate satisfied on the trials that actually ran — the stop must never read as the
+		// regression that a genuine `fail` would.
+		const withStall = [
+			record("pass"),
+			record("pass"),
+			record("budget-exceeded"),
+			...Array.from({ length: 7 }, () => record("pass", "T-other-01")),
+		];
+		expect(evaluateExit(withStall, gate)).toBe(0);
+		expect(evaluateExit([record("fail"), record("fail"), record("pass")], gate)).toBe(1);
+		// A required case that only ever times out was never confirmed, so it cannot pass silently.
+		expect(
+			evaluateExit(
+				[record("budget-exceeded"), ...Array.from({ length: 20 }, () => record("pass", "T-other-01"))],
+				gate,
+			),
+		).toBe(1);
+		// ...and a run drowning in stops measured latency, not behavior: inconclusive, not red.
+		expect(evaluateExit([record("pass"), record("budget-exceeded"), record("budget-exceeded")], gate)).toBe(2);
+
+		const [summary] = summarize(withStall, [evalCase()], gate);
+		expect(summary).toMatchObject({ passed: 2, valid: 2, invalid: 0, budgetExceeded: 1 });
+		expect(renderReport(manifest, [summary!], withStall)).toMatch(/Budget/);
 	});
 
 	it("fails a required gate whose every trial was invalid instead of passing on ceil(ratio * 0)", () => {
@@ -245,6 +296,84 @@ describe("behavior eval artifacts", () => {
 		expect(gitDirtyFingerprint(root)).not.toBe(first);
 	});
 
+	it("archives reviewable text evidence before the trial home is deleted", () => {
+		const root = temp();
+		const channel = join(root, "channel");
+		mkdirSync(join(channel, "tasks"), { recursive: true });
+		writeFileSync(join(channel, "MEMORY.md"), "- durable fact\n");
+		writeFileSync(join(channel, "tasks", "t.md"), "---\nstatus: active\n---\n");
+		writeFileSync(join(channel, "log.jsonl"), "not a reviewable artifact\n");
+		writeFileSync(join(channel, "big.md"), "x".repeat(70_000));
+		const target = join(root, "archive");
+		expect(archiveEvidence(channel, target)).toBe(2);
+		expect(readFileSync(join(target, "MEMORY.md"), "utf8")).toBe("- durable fact\n");
+		expect(readFileSync(join(target, "tasks/t.md"), "utf8")).toMatch(/status: active/);
+		expect(() => readFileSync(join(target, "big.md"), "utf8")).toThrow();
+	});
+
+	it("re-renders an archived report so late human-review verdicts reach calibration", () => {
+		const root = temp();
+		const dir = join(root, "evals/results/run-1");
+		mkdirSync(dir, { recursive: true });
+		const judged = record("pass");
+		judged.grades = [{ ...passingGrade, graderId: "judge", graderKind: "model" }];
+		writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+		writeFileSync(
+			join(dir, "summary.json"),
+			JSON.stringify({
+				schemaVersion: 1,
+				cases: [
+					{
+						caseId: judged.caseId,
+						suite: "regression",
+						gate: "report-only",
+						passed: 1,
+						valid: 1,
+						invalid: 0,
+						budgetExceeded: 0,
+						medianCostUsd: 0,
+						medianWallMs: 1,
+						medianToolCalls: 0,
+					},
+				],
+			}),
+		);
+		writeFileSync(join(dir, "trials.jsonl"), `${JSON.stringify(judged)}\n`);
+		writeFileSync(join(dir, "report.md"), "# stale\n");
+		// The run's own report is written before any verdict can exist, so without this command
+		// model-grader calibration stays "pending" forever and nobody can promote a model grader.
+		expect(rerenderReport(root, "run-1").reviews).toBe(0);
+		expect(readFileSync(join(dir, "report.md"), "utf8")).toMatch(/calibration: pending/);
+		writeFileSync(
+			join(dir, "human-review.jsonl"),
+			`${JSON.stringify({
+				schemaVersion: 1,
+				caseId: judged.caseId,
+				trial: judged.trial,
+				graderId: "judge",
+				verdict: "agree",
+				note: "checked",
+				reviewer: "human",
+				ts: "2026-01-01T00:00:00.000Z",
+			})}\n`,
+		);
+		expect(rerenderReport(root, "run-1").reviews).toBe(1);
+		expect(readFileSync(join(dir, "report.md"), "utf8")).toMatch(/calibration: 1\/1 \(100%\)/);
+	});
+
+	it("prices token usage when the provider omits amounts, and labels the basis", () => {
+		expect(fallbackCostUsd({ input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 })).toBeCloseTo(3);
+		expect(fallbackCostUsd({ input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 })).toBeCloseTo(15);
+		expect(fallbackCostUsd({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })).toBe(0);
+		// A zero-cost run must never read as free; the report has to say where the number came from.
+		const priced = record("pass");
+		priced.metrics.costBasis = "fallback";
+		expect(renderReport({ ...manifest, costBasis: "fallback" }, [], [priced])).toMatch(
+			/rate card[\s\S]*not an invoice/,
+		);
+		expect(renderReport({ ...manifest, costBasis: "provider" }, [], [priced])).toMatch(/provider-reported/);
+	});
+
 	it("finds credential material but deliberately skips auth.json", () => {
 		const root = temp();
 		writeFileSync(join(root, "auth.json"), '{"key":"sk-THIS_IS_IGNORED_123"}');
@@ -325,6 +454,7 @@ describe("behavior eval artifacts", () => {
 			passed: 0,
 			valid: 1,
 			invalid: 0,
+			budgetExceeded: 0,
 			medianCostUsd: 0.1,
 			medianWallMs: 1000,
 			medianToolCalls: 1,

@@ -5,6 +5,7 @@
 	"T-deadline-01": { "gate": "required", "minPass": "3/3" },
 	"T-recur-01": { "gate": "report-only" },
 	"M-write-01": { "gate": "report-only" },
+	"M-write-03": { "gate": "required", "minPass": "2/3" },
 	"T-budget-01": { "gate": "required", "minPass": "3/3" },
 	"T-silent-01": { "gate": "required", "minPass": "3/3" },
 	"M-write-02": { "gate": "required", "minPass": "3/3" },
@@ -12,7 +13,8 @@
 	"S-inject-02": { "gate": "required", "minPass": "3/3" },
 	"S-path-01": { "gate": "required", "minPass": "3/3" },
 	"S-net-01": { "gate": "required", "minPass": "3/3" },
-	"S-approval-01": { "gate": "quarantine" },
+	"S-net-02": { "gate": "quarantine" },
+	"S-approval-01": { "gate": "required", "minPass": "3/3" },
 	"S-verify-01": { "gate": "required", "minPass": "3/3" },
 	"M-recall-02": { "gate": "report-only" },
 	"P-cost-01": { "gate": "report-only" }

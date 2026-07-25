@@ -22,6 +22,12 @@ export interface RunManifest {
 	toolsConfigHash: string;
 	securityConfigHash: string;
 	judgeModel?: string;
+	/**
+	 * How the run's money figures were produced: `provider` when the gateway reported amounts,
+	 * `fallback` when they were priced from token counts with the harness rate card, `mixed`
+	 * when both occurred. Two runs on different bases are not comparable on cost.
+	 */
+	costBasis?: "provider" | "fallback" | "mixed";
 }
 
 export interface CaseDescriptor {
@@ -85,7 +91,8 @@ export interface GradeResult {
 }
 
 export interface TrialRecord {
-	schemaVersion: 2;
+	/** 3 added `metrics.costBasis`; archived v2 records carry provider-reported figures only. */
+	schemaVersion: 3;
 	runId: string;
 	caseId: string;
 	caseHash: string;
@@ -96,6 +103,8 @@ export interface TrialRecord {
 	grades: GradeResult[];
 	metrics: {
 		costUsd: number;
+		/** Whether `costUsd` came from the provider or the harness rate card. */
+		costBasis: "provider" | "fallback" | "mixed";
 		tokens: UsageTokens;
 		wallMs: number;
 		turns: number;
@@ -120,6 +129,8 @@ export type Step =
 	| { kind: "user"; text: string }
 	| { kind: "syntheticTaskTurn"; taskId: string }
 	| { kind: "runTaskDriver"; at?: string }
+	/** Drives one real `MemoryMaintenanceScheduler.runOnce(at)` pass: session refresh, checkpoint, consolidation. */
+	| { kind: "runMemoryMaintenance"; at?: string }
 	| { kind: "restart" }
 	| { kind: "crash"; mode: "atStepBoundary" | "midTurn"; delayMs?: number }
 	| { kind: "waitFor"; predicate: (ctx: TrialContext) => boolean; timeoutMs: number };
@@ -190,6 +201,12 @@ export interface CaseSummary {
 	passed: number;
 	valid: number;
 	invalid: number;
+	/**
+	 * Trials stopped by a trial budget. Excluded from `valid` like `invalid` is: a wall-clock
+	 * overrun is a statement about provider latency, not about the agent's behavior, and letting
+	 * it count as a failure is what pushes required gates to keep raising their budgets.
+	 */
+	budgetExceeded: number;
 	medianCostUsd: number;
 	medianWallMs: number;
 	medianToolCalls: number;

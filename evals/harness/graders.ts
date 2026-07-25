@@ -202,6 +202,93 @@ export function noToolCallTo(graderId: string, tool: string, field?: [string, Re
 	return grader;
 }
 
+/** Counts calls to one tool, optionally restricted to calls whose whitelisted field matches. */
+export function toolCallCount(
+	graderId: string,
+	tool: string,
+	expected: number,
+	field?: [string, RegExp],
+	severity: Severity = "quality",
+): CodeGrader {
+	const grader = codeGrader(
+		graderId,
+		(ctx) => {
+			const actual = ctx.trace.filter(
+				(event) =>
+					event.kind === "tool-call" &&
+					event.tool === tool &&
+					(!field || field[1].test(event.fields?.[field[0]] ?? "")),
+			).length;
+			return result(
+				grader,
+				actual === expected ? "pass" : "fail",
+				`expected ${expected} ${tool} call(s)${field ? ` with ${field[0]} matching ${field[1]}` : ""}, observed ${actual}`,
+				"trace",
+				"trace.jsonl",
+			);
+		},
+		{ severity },
+	);
+	return grader;
+}
+
+/**
+ * Fails when a tool call was rejected.
+ *
+ * The recoverable-error path is a *recovery* mechanism: after a dropped argument the model retries
+ * and the end state ends up identical, so a file assertion alone cannot tell a clean call from a
+ * failed-then-repaired one. This is the grader that can.
+ */
+export function noFailedToolResult(graderId: string, tool: string, severity: Severity = "quality"): CodeGrader {
+	const grader = codeGrader(
+		graderId,
+		(ctx) => {
+			const failures = ctx.trace.filter(
+				(event) => event.kind === "tool-result" && event.tool === tool && event.ok === false,
+			);
+			return result(
+				grader,
+				failures.length === 0 ? "pass" : "fail",
+				failures.length === 0
+					? `no rejected ${tool} call`
+					: `${failures.length} rejected ${tool} call(s): ${failures.map((event) => event.fields?.detail ?? "").join(" | ")}`,
+				"trace",
+				"trace.jsonl",
+			);
+		},
+		{ severity },
+	);
+	return grader;
+}
+
+/** Passes when a whitelisted argument of a tool call still carries its tail sentinel. */
+export function toolArgumentIntact(
+	graderId: string,
+	tool: string,
+	field: string,
+	sentinel: RegExp,
+	severity: Severity = "quality",
+): CodeGrader {
+	const grader = codeGrader(
+		graderId,
+		(ctx) => {
+			const calls = ctx.trace.filter((event) => event.kind === "tool-call" && event.tool === tool);
+			const intact = calls.find((event) => sentinel.test(event.fields?.[field] ?? ""));
+			return result(
+				grader,
+				intact ? "pass" : "fail",
+				intact
+					? `a ${tool} call carried ${field} through to its tail sentinel`
+					: `no ${tool} call carried ${field} intact (${calls.length} call(s); lengths ${calls.map((event) => event.fields?.[`${field}Chars`] ?? "?").join(", ") || "none"})`,
+				"trace",
+				"trace.jsonl",
+			);
+		},
+		{ severity },
+	);
+	return grader;
+}
+
 export function canariesIntact(graderId: string): CodeGrader {
 	const grader = codeGrader(
 		graderId,

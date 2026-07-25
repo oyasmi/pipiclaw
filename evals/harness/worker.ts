@@ -6,7 +6,7 @@ import { readActiveTasks } from "../../src/shared/task-ledger.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
-import { hash, tree } from "./util.js";
+import { fallbackCostUsd, hash, tree } from "./util.js";
 
 const [caseId, homeDir, segmentRaw, startRaw, endRaw, mode, externalBaseUrl] = process.argv.slice(2);
 if (!caseId || !homeDir || !segmentRaw || !startRaw || !endRaw || !mode || externalBaseUrl === undefined) {
@@ -40,6 +40,14 @@ function stringField(value: unknown): string | undefined {
 	return undefined;
 }
 
+/**
+ * Grader-visible arguments per tool, in cleartext. Everything else is only hashed.
+ *
+ * These names must track the real tool schemas: a stale entry degrades silently into "the field
+ * was absent", which is indistinguishable from "the model never passed it". `memory_manage` was
+ * exactly that — it listed a non-existent `action` while the schema's discriminator is `op`
+ * (`src/tools/memory-manage.ts`), so no grader could tell a save from a forget.
+ */
 const TOOL_FIELDS: Record<string, string[]> = {
 	read: ["path", "file_path", "offset", "limit"],
 	write: ["path", "file_path"],
@@ -47,11 +55,20 @@ const TOOL_FIELDS: Record<string, string[]> = {
 	bash: ["command", "cmd"],
 	web_fetch: ["url"],
 	web_search: ["query"],
-	task_manage: ["action", "taskId", "id", "status", "nextAction", "externalApproval"],
-	memory_manage: ["action", "id", "content"],
+	task_manage: ["action", "id", "status", "nextAction", "externalApproval", "blockedReason"],
+	memory_manage: ["op", "label", "kind", "target", "query", "content"],
 	session_search: ["query", "offset", "limit"],
-	subagent: ["agent", "label"],
+	subagent: ["agent", "label", "purpose", "returns"],
 };
+
+/**
+ * Per-field character counts, recorded alongside the (clipped) cleartext.
+ *
+ * Tail truncation on long non-ASCII arguments is a real provider failure mode here, and the
+ * cleartext itself is clipped for archive size — so the length has to be captured before
+ * clipping or the evidence destroys the very signal the probe is looking for.
+ */
+const FIELD_CLIP = 2_000;
 
 let observedModel = "unknown";
 const localTrace: TraceEvent[] = [];
@@ -74,11 +91,22 @@ function eventTrace(event: unknown): void {
 		const fields: Record<string, string> = {};
 		for (const key of TOOL_FIELDS[tool ?? ""] ?? []) {
 			const value = stringField(args[key]);
-			if (value !== undefined) fields[key] = value.slice(0, 2_000);
+			if (value === undefined) continue;
+			fields[key] = value.slice(0, FIELD_CLIP);
+			fields[`${key}Chars`] = String([...value].length);
 		}
 		trace({ kind: "tool-call", tool, fields, argsHash: hash(JSON.stringify(record.args)).slice(0, 16) });
 	} else if (type === "tool_execution_end") {
-		trace({ kind: "tool-result", tool: stringField(record.toolName), ok: record.isError === false });
+		const failed = record.isError !== false;
+		// A rejected call is the whole signal for the recoverable-error probes (a dropped argument
+		// surfaces as a rejection followed by a retry), so keep a readable excerpt of why.
+		const detail = failed ? JSON.stringify(record.result ?? record.error ?? null).slice(0, 300) : undefined;
+		trace({
+			kind: "tool-result",
+			tool: stringField(record.toolName),
+			ok: !failed,
+			...(detail ? { fields: { detail } } : {}),
+		});
 	}
 
 	if (type === "message_end" && isRecord(record.message)) {
@@ -88,16 +116,28 @@ function eventTrace(event: unknown): void {
 		if (model) observedModel = model;
 		if (usage) {
 			const cost = isRecord(usage.cost) ? usage.cost : {};
+			const counted = {
+				input: Number(stringField(usage.input) ?? "0"),
+				output: Number(stringField(usage.output) ?? "0"),
+				cacheRead: Number(stringField(usage.cacheRead) ?? "0"),
+				cacheWrite: Number(stringField(usage.cacheWrite) ?? "0"),
+			};
+			// Providers without pricing metadata report 0. Price those turns off the token counts
+			// with a fixed rate card so the cost axis stays usable, and label the basis so the
+			// report never presents a synthetic figure as a provider-reported one.
+			const reported = Number(stringField(cost.total) ?? "0");
+			const provider = Number.isFinite(reported) && reported > 0;
 			trace({
 				kind: "usage",
 				fields: {
 					model: model ?? observedModel,
-					input: stringField(usage.input) ?? "0",
-					output: stringField(usage.output) ?? "0",
-					cacheRead: stringField(usage.cacheRead) ?? "0",
-					cacheWrite: stringField(usage.cacheWrite) ?? "0",
+					input: String(counted.input),
+					output: String(counted.output),
+					cacheRead: String(counted.cacheRead),
+					cacheWrite: String(counted.cacheWrite),
 					total: stringField(usage.total ?? usage.totalTokens) ?? "0",
-					costUsd: stringField(cost.total) ?? "0",
+					costUsd: String(provider ? reported : fallbackCostUsd(counted)),
+					costBasis: provider ? "provider" : "fallback",
 				},
 			});
 		}
@@ -259,6 +299,12 @@ async function main(): Promise<void> {
 				throw new Error("Runtime did not expose TaskDriver.runOnce; use the production runtime driver.");
 			}
 			await runtime.taskDriver.runOnce(step.at ? new Date(step.at) : new Date());
+			await bot.drain();
+		} else if (step.kind === "runMemoryMaintenance") {
+			if (!runtime.memoryMaintenance.runOnce) {
+				throw new Error("Runtime did not expose the memory maintenance scheduler; use the production instance.");
+			}
+			await runtime.memoryMaintenance.runOnce(step.at ? new Date(step.at) : new Date());
 			await bot.drain();
 		} else if (step.kind === "waitFor") {
 			const deadline = Date.now() + step.timeoutMs;

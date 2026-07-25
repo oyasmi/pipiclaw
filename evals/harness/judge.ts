@@ -4,8 +4,8 @@ import { runRetriedSidecarTask, SidecarParseError } from "../../src/memory/sidec
 import { getApiKeyForModel } from "../../src/models/api-keys.js";
 import {
 	createModelRuntime,
-	defaultModel,
 	findModelReferenceMatch,
+	formatModelReference,
 	wrapModelRegistry,
 } from "../../src/models/utils.js";
 import { parseJsonObject } from "../../src/shared/llm-json.js";
@@ -40,8 +40,18 @@ async function main(): Promise<void> {
 	});
 	const registry = wrapModelRegistry(runtime);
 	const requested = process.env.EVAL_JUDGE_MODEL ?? process.env.PIPICLAW_E2E_MODEL ?? "claude-sonnet-4-5";
-	const model =
-		findModelReferenceMatch(requested, registry.getAvailable()).match ?? registry.getAvailable()[0] ?? defaultModel;
+	const available = registry.getAvailable();
+	// No silent fallback. Picking `available[0]` when the requested judge is unavailable made the
+	// judge's identity a function of registry ordering — usually the model under test, grading its
+	// own output — while the manifest still recorded the model that was asked for. A judge that is
+	// not the recorded judge produces scores that cannot be compared across runs, so fail loudly.
+	const model = findModelReferenceMatch(requested, available).match;
+	if (!model) {
+		throw new Error(
+			`Judge model '${requested}' is not available (${available.map((candidate) => formatModelReference(candidate)).join(", ") || "no models configured"}). ` +
+				"Set EVAL_JUDGE_MODEL to an available reference; the harness will not substitute another model.",
+		);
+	}
 	const result = await runRetriedSidecarTask({
 		name: `eval-judge-${input.graderId}`,
 		model,
