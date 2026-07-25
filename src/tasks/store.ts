@@ -106,7 +106,6 @@ export async function claimTaskAttempt(
 			previousLastStartedAt: task.fields.control.lastStartedAt,
 		};
 		task.fields.control.usage.attempts++;
-		task.fields.control.lifetimeUsage.attempts++;
 		task.fields.control.lastStartedAt = now.toISOString();
 		task.fields.control.lastOutcome = "running";
 	});
@@ -124,7 +123,6 @@ export async function releaseTaskAttemptClaim(
 		const control = task.fields.control;
 		if (!control || control.lastStartedAt !== startedAt.toISOString()) return;
 		control.usage.attempts = Math.max(0, control.usage.attempts - 1);
-		control.lifetimeUsage.attempts = Math.max(0, control.lifetimeUsage.attempts - 1);
 		control.lastStartedAt = claim.previousLastStartedAt;
 		control.lastOutcome = claim.previousLastOutcome;
 		control.blockedReason = claim.previousBlockedReason;
@@ -154,17 +152,12 @@ export async function finishTaskAttempt(
 			control.usage.costUsd += Math.max(0, result.costUsd);
 			control.usage.costKnown &&= result.costKnown;
 			control.usage.wallTimeMinutes += Math.max(0, result.wallTimeMinutes);
-			control.lifetimeUsage.tokens += Math.max(0, Math.floor(result.tokens));
-			control.lifetimeUsage.costUsd += Math.max(0, result.costUsd);
-			control.lifetimeUsage.costKnown &&= result.costKnown;
-			control.lifetimeUsage.wallTimeMinutes += Math.max(0, result.wallTimeMinutes);
 			control.lastFinishedAt = result.finishedAt.toISOString();
 			if (result.silent) {
 				// The driver claimed before dispatch to prevent concurrent work. A silent
 				// turn performed no task advancement, so retain its cost audit but not its
 				// attempt charge.
 				control.usage.attempts = Math.max(0, control.usage.attempts - 1);
-				control.lifetimeUsage.attempts = Math.max(0, control.lifetimeUsage.attempts - 1);
 				if (control.lastOutcome === "running") {
 					control.lastOutcome = "pending";
 					control.blockedReason = undefined;

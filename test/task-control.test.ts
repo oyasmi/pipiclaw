@@ -21,7 +21,6 @@ describe("task control", () => {
 			nextAction: "Run integration tests",
 			sideEffects: "external",
 			maxAttempts: 4,
-			maxTokens: 10_000,
 		});
 		expect(control.externalApproval).toBe("required");
 		expect(parseTaskControl(JSON.stringify(control))).toEqual(control);
@@ -43,22 +42,38 @@ describe("task control", () => {
 		expect(control).not.toHaveProperty("isolation");
 	});
 
-	it("reports the first deterministic deadline or cumulative budget violation", () => {
+	// Spec 036 D8: retired keys written by an older build are ignored on read rather than
+	// failing the parse, so stored tasks stay readable with no migration script.
+	it("ignores retired budget and ledger keys written by an older build", () => {
+		const control = parseTaskControl(
+			JSON.stringify({
+				...createDefaultTaskControl(),
+				budget: { maxAttempts: 5, maxTokens: 100, maxCostUsd: 1, maxWallTimeMinutes: 30 },
+				lifetimeUsage: { attempts: 9, tokens: 900, costUsd: 3, costKnown: true, wallTimeMinutes: 40 },
+			}),
+		);
+		expect(control.budget).toEqual({ maxAttempts: 5 });
+		expect(control).not.toHaveProperty("lifetimeUsage");
+	});
+
+	it("reports the first deterministic deadline or attempt violation", () => {
 		const control = createDefaultTaskControl();
 		control.deadline = "2026-07-10T00:00:00.000Z";
 		expect(taskBudgetViolation(control, Date.parse("2026-07-11T00:00:00.000Z"))).toContain("deadline exceeded");
 		control.deadline = undefined;
-		control.budget.maxTokens = 100;
-		control.usage.tokens = 100;
-		expect(taskBudgetViolation(control, 0)).toContain("token budget exhausted");
+		control.usage.attempts = control.budget.maxAttempts;
+		expect(taskBudgetViolation(control, 0)).toContain("attempt budget exhausted");
 	});
 
-	it("marks a configured cost budget unavailable when recorded usage has unknown pricing", () => {
+	// Spec 036 D1: token/cost/wall-time budgets are gone; usage still measures all four
+	// dimensions, but only attempts (and the deadline) can stop a task.
+	it("no longer enforces token, cost or wall-time budgets", () => {
 		const control = createDefaultTaskControl();
-		control.budget.maxCostUsd = 1;
-		control.usage.tokens = 100;
+		control.usage.tokens = 10_000_000;
+		control.usage.costUsd = 999;
 		control.usage.costKnown = false;
-		expect(taskBudgetViolation(control, 0)).toContain("configure model pricing or replace maxCostUsd with maxTokens");
+		control.usage.wallTimeMinutes = 10_000;
+		expect(taskBudgetViolation(control, 0)).toBeUndefined();
 	});
 
 	it("rejects malformed governance instead of silently applying defaults", () => {
@@ -94,13 +109,11 @@ describe("task control", () => {
 		expect(resetTaskControlForCycle(control, "2026-W29").externalApproval).toBe("not-required");
 	});
 
-	it("resets cycle usage while preserving recorded lifetime usage", () => {
+	it("resets cycle usage", () => {
 		const control = createDefaultTaskControl();
 		control.usage = { attempts: 2, tokens: 100, costUsd: 0, costKnown: false, wallTimeMinutes: 3 };
-		control.lifetimeUsage = { attempts: 5, tokens: 500, costUsd: 2, costKnown: true, wallTimeMinutes: 9 };
 		const reset = resetTaskControlForCycle(control, "cycle-2");
 		expect(reset.usage).toEqual({ attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 });
-		expect(reset.lifetimeUsage).toEqual(control.lifetimeUsage);
 	});
 
 	it("uses the verifier's final explicit marker", () => {
@@ -144,7 +157,6 @@ describe("task attempt accounting", () => {
 			costKnown: true,
 			wallTimeMinutes: 2.5,
 		});
-		expect(stored?.fields.control?.lifetimeUsage).toEqual(stored?.fields.control?.usage);
 		expect(await readFile(stored!.path, "utf-8")).toContain('"lastFinishedAt":"2026-07-10T00:03:00.000Z"');
 	});
 
@@ -165,7 +177,6 @@ describe("task attempt accounting", () => {
 		expect(stored?.fields.control).toMatchObject({
 			lastOutcome: "pending",
 			usage: { attempts: 0, tokens: 42, costUsd: 0.01, costKnown: true, wallTimeMinutes: 0.5 },
-			lifetimeUsage: { attempts: 0, tokens: 42, costUsd: 0.01, costKnown: true, wallTimeMinutes: 0.5 },
 		});
 	});
 });

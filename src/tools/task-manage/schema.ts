@@ -25,16 +25,8 @@ const taskControlSchema = Type.Object({
 			description: 'External approval can only be granted by a user with "/tasks approve <id>".',
 		}),
 	),
-	maxAttempts: Type.Optional(Type.Integer({ minimum: 1 })),
-	maxTokens: Type.Optional(Type.Number({ minimum: 0, description: "Per-cycle boundary budget; 0 clears it." })),
-	maxCostUsd: Type.Optional(
-		Type.Number({
-			minimum: 0,
-			description: "Per-cycle boundary budget; requires current-model pricing metadata; 0 clears it.",
-		}),
-	),
-	maxWallTimeMinutes: Type.Optional(
-		Type.Number({ minimum: 0, description: "Per-cycle boundary budget; 0 clears it." }),
+	maxAttempts: Type.Optional(
+		Type.Integer({ minimum: 1, description: "Per-cycle attempt stop-loss; the only per-task budget." }),
 	),
 	verificationMode: Type.Optional(
 		Type.Union([Type.Literal("evidence"), Type.Literal("independent")], {

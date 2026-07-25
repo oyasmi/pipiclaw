@@ -56,8 +56,6 @@ export interface TaskManageToolOptions {
 	channelId: string;
 	/** Project checkout whose artifact state an independent verifier binds to. */
 	workingDirectory?: string;
-	/** Whether the current main model has usable price metadata for maxCostUsd. */
-	costTrackingAvailable?: boolean;
 }
 
 export interface TaskFields {

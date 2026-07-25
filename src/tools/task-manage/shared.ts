@@ -23,18 +23,6 @@ export function tasksDir(options: TaskManageToolOptions): string {
 	return join(options.channelDir, "tasks");
 }
 
-export function assertCostBudgetAvailable(options: TaskManageToolOptions, request: TaskManageRequest): void {
-	if (
-		request.control?.maxCostUsd !== undefined &&
-		request.control.maxCostUsd > 0 &&
-		options.costTrackingAvailable === false
-	) {
-		throw new RecoverableToolError(
-			"maxCostUsd requires model pricing, but the current model has no price metadata. Configure model pricing or use maxTokens instead.",
-		);
-	}
-}
-
 export function eventsDir(options: TaskManageToolOptions): string {
 	return join(options.workspaceDir, "events");
 }

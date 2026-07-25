@@ -17,11 +17,16 @@ export type TaskOutcome = "pending" | "running" | "progress" | "blocked" | "fail
 /** Who paused a task: a user via /tasks pause, or the deterministic governor (ex-`escalated`). */
 export type TaskPausedBy = "user" | "governor";
 
+/**
+ * The single per-task stop-loss (spec 036, D1).
+ *
+ * Token / cost / wall-time budgets were removed: they are per-task per-cycle, while spend is
+ * global — fifty individually-compliant tasks still burn through a monthly budget. Cost control
+ * belongs in a global spend guard, not here. `usage` below still *measures* all four dimensions;
+ * only the enforcement was dropped.
+ */
 export interface TaskBudget {
 	maxAttempts: number;
-	maxTokens?: number;
-	maxCostUsd?: number;
-	maxWallTimeMinutes?: number;
 }
 
 export interface TaskUsage {
@@ -65,8 +70,6 @@ export interface TaskControl {
 	budget: TaskBudget;
 	/** Usage in the current recurring cycle (or the full one-shot task). */
 	usage: TaskUsage;
-	/** Non-resetting audit total; legacy controls seed it from their first parsed cycle usage. */
-	lifetimeUsage: TaskUsage;
 	verification: TaskVerification;
 	worktree?: TaskWorktree;
 	lastStartedAt?: string;
@@ -87,9 +90,6 @@ export interface TaskControlPatch {
 	sideEffects?: TaskSideEffects;
 	externalApproval?: "not-required" | "required" | "granted";
 	maxAttempts?: number;
-	maxTokens?: number;
-	maxCostUsd?: number;
-	maxWallTimeMinutes?: number;
 	verificationMode?: TaskVerificationMode;
 	worktreePath?: string;
 	worktreeBranch?: string;
@@ -198,7 +198,6 @@ export function createDefaultTaskControl(mode: TaskVerificationMode = "independe
 		externalApproval: "not-required",
 		budget: { maxAttempts: 12 },
 		usage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
-		lifetimeUsage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
 		verification: { mode, status: "pending" },
 	};
 }
@@ -216,7 +215,6 @@ export function parseTaskControl(raw: string): TaskControl {
 	const budget = isRecord(value.budget) ? value.budget : {};
 	const usage = isRecord(value.usage) ? value.usage : {};
 	const parsedUsage = parseTaskUsage(usage);
-	const lifetimeUsage = isRecord(value.lifetimeUsage) ? parseTaskUsage(value.lifetimeUsage) : { ...parsedUsage };
 	const verification = isRecord(value.verification) ? value.verification : {};
 	const worktree = isRecord(value.worktree) ? value.worktree : undefined;
 	const maxAttempts = optionalPositive(budget.maxAttempts);
@@ -269,14 +267,8 @@ export function parseTaskControl(raw: string): TaskControl {
 		approvalBy,
 		approvedAt,
 		approvalBodyHash,
-		budget: {
-			maxAttempts: Math.max(1, Math.floor(maxAttempts)),
-			maxTokens: optionalPositive(budget.maxTokens),
-			maxCostUsd: optionalPositive(budget.maxCostUsd),
-			maxWallTimeMinutes: optionalPositive(budget.maxWallTimeMinutes),
-		},
+		budget: { maxAttempts: Math.max(1, Math.floor(maxAttempts)) },
 		usage: parsedUsage,
-		lifetimeUsage,
 		verification: {
 			mode: enumValue(verification.mode, VERIFICATION_MODES, "independent"),
 			status: enumValue(verification.status, VERIFICATION_STATUSES, "pending"),
@@ -329,12 +321,6 @@ function patchOptionalString(current: string | undefined, value: string | undefi
 	return value.trim() || undefined;
 }
 
-function patchPositive(current: number | undefined, value: number | undefined, field: string): number | undefined {
-	if (value === undefined) return current;
-	if (!Number.isFinite(value) || value < 0) throw new Error(`${field} must be a non-negative number.`);
-	return value === 0 ? undefined : value;
-}
-
 export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPatch): TaskControl {
 	const next: TaskControl = structuredClone(control);
 	const invalidatesApproval = control.externalApproval === "granted" && Object.keys(patch).length > 0;
@@ -360,13 +346,6 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 		}
 		next.budget.maxAttempts = patch.maxAttempts;
 	}
-	next.budget.maxTokens = patchPositive(next.budget.maxTokens, patch.maxTokens, "maxTokens");
-	next.budget.maxCostUsd = patchPositive(next.budget.maxCostUsd, patch.maxCostUsd, "maxCostUsd");
-	next.budget.maxWallTimeMinutes = patchPositive(
-		next.budget.maxWallTimeMinutes,
-		patch.maxWallTimeMinutes,
-		"maxWallTimeMinutes",
-	);
 	if (patch.verificationMode !== undefined && patch.verificationMode !== next.verification.mode) {
 		next.verification = { mode: patch.verificationMode, status: "pending" };
 	}
@@ -406,21 +385,6 @@ export function taskBudgetViolation(control: TaskControl, nowMs: number): string
 	}
 	if (control.usage.attempts >= control.budget.maxAttempts) {
 		return `attempt budget exhausted (${control.usage.attempts}/${control.budget.maxAttempts})`;
-	}
-	if (control.budget.maxTokens !== undefined && control.usage.tokens >= control.budget.maxTokens) {
-		return `token budget exhausted (${control.usage.tokens}/${control.budget.maxTokens})`;
-	}
-	if (control.budget.maxCostUsd !== undefined && control.usage.costUsd >= control.budget.maxCostUsd) {
-		return `cost budget exhausted ($${control.usage.costUsd.toFixed(4)}/$${control.budget.maxCostUsd.toFixed(4)})`;
-	}
-	if (control.budget.maxCostUsd !== undefined && !control.usage.costKnown) {
-		return "cost budget unavailable because at least one run model has no pricing; configure model pricing or replace maxCostUsd with maxTokens";
-	}
-	if (
-		control.budget.maxWallTimeMinutes !== undefined &&
-		control.usage.wallTimeMinutes >= control.budget.maxWallTimeMinutes
-	) {
-		return `wall-time budget exhausted (${control.usage.wallTimeMinutes.toFixed(1)}/${control.budget.maxWallTimeMinutes}m)`;
 	}
 	return undefined;
 }

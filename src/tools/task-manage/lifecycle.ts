@@ -15,7 +15,6 @@ import { RecoverableToolError } from "../tool-details.js";
 import {
 	appendCompletionEvidence,
 	applySet,
-	assertCostBudgetAvailable,
 	cleanupTaskEvents,
 	markdownValue,
 	readTaskDocument,
@@ -30,7 +29,6 @@ import { assertVerificationAttestationMatches } from "./verification.js";
 
 export async function setTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
 	if (!request.id) throw new RecoverableToolError('action "set" requires an id.');
-	assertCostBudgetAvailable(options, request);
 	const id = normalizeTaskId(request.id);
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id, request.control !== undefined);

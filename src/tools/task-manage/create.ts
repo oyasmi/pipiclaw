@@ -4,13 +4,7 @@ import { join } from "node:path";
 import { writeFileAtomically } from "../../shared/atomic-file.js";
 import { normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../shared/task-ledger.js";
 import { RecoverableToolError } from "../tool-details.js";
-import {
-	assertCostBudgetAvailable,
-	renderTaskFile,
-	renderTaskSkeleton,
-	tasksDir,
-	validateTaskRelations,
-} from "./shared.js";
+import { renderTaskFile, renderTaskSkeleton, tasksDir, validateTaskRelations } from "./shared.js";
 import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 
 export async function createTask(
@@ -18,7 +12,6 @@ export async function createTask(
 	request: TaskManageRequest,
 ): Promise<TaskManageResult> {
 	if (!request.id) throw new RecoverableToolError('action "create" requires an id.');
-	assertCostBudgetAvailable(options, request);
 	const id = normalizeTaskId(request.id);
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);

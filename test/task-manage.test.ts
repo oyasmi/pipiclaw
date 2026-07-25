@@ -166,22 +166,6 @@ describe("manageTask", () => {
 			).resolves.toMatchObject({ status: "done" });
 		});
 
-		it("rejects maxCostUsd when the current model has no pricing metadata", async () => {
-			await expect(
-				manageTask(
-					{ ...options, costTrackingAvailable: false },
-					{
-						action: "create",
-						id: "unknown-cost",
-						title: "Unknown cost",
-						goal: "Stay within budget",
-						dod: "- [ ] done",
-						control: { maxCostUsd: 1 },
-					},
-				),
-			).rejects.toThrow(/Configure model pricing or use maxTokens/);
-		});
-
 		it("rejects create without required body fields", async () => {
 			await expect(
 				manageTask(options, {

@@ -350,13 +350,9 @@ function renderUsageLine(entry: TaskLedgerEntry): string {
 	if (!control) return `- ${entry.id}: legacy task (no governed usage recorded)`;
 	const verification = control.verification;
 	const cycleCost = control.usage.costKnown ? `$${control.usage.costUsd.toFixed(4)}` : "unavailable";
-	const lifetimeCost = control.lifetimeUsage.costKnown
-		? `$${control.lifetimeUsage.costUsd.toFixed(4)}`
-		: "unavailable";
 	return [
 		`- ${entry.id} — ${entry.title}`,
 		`  this cycle: ${control.usage.attempts}/${control.budget.maxAttempts} attempts, ${control.usage.tokens} tokens, ${cycleCost}, ${control.usage.wallTimeMinutes.toFixed(1)}m`,
-		`  recorded lifetime: ${control.lifetimeUsage.attempts} attempts, ${control.lifetimeUsage.tokens} tokens, ${lifetimeCost}, ${control.lifetimeUsage.wallTimeMinutes.toFixed(1)}m`,
 		`  last run: ${control.lastOutcome}`,
 		`  verification: ${verification.mode}/${verification.status}`,
 	].join("\n");
@@ -386,31 +382,14 @@ async function taskStats(options: HandleTasksCommandOptions, idInput?: string): 
 	const totals = governed.reduce(
 		(total, entry) => {
 			const usage = entry.frontmatter.control!.usage;
-			const lifetime = entry.frontmatter.control!.lifetimeUsage;
 			total.attempts += usage.attempts;
 			total.tokens += usage.tokens;
 			total.costUsd += usage.costUsd;
 			total.costKnown &&= usage.costKnown;
 			total.wallTimeMinutes += usage.wallTimeMinutes;
-			total.lifetimeAttempts += lifetime.attempts;
-			total.lifetimeTokens += lifetime.tokens;
-			total.lifetimeCostUsd += lifetime.costUsd;
-			total.lifetimeCostKnown &&= lifetime.costKnown;
-			total.lifetimeWallTimeMinutes += lifetime.wallTimeMinutes;
 			return total;
 		},
-		{
-			attempts: 0,
-			tokens: 0,
-			costUsd: 0,
-			costKnown: true,
-			wallTimeMinutes: 0,
-			lifetimeAttempts: 0,
-			lifetimeTokens: 0,
-			lifetimeCostUsd: 0,
-			lifetimeCostKnown: true,
-			lifetimeWallTimeMinutes: 0,
-		},
+		{ attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
 	);
 	const verified = governed.filter((entry) => entry.frontmatter.control?.verification.status === "passed").length;
 	const stalled = governed.filter((entry) => entry.frontmatter.control?.lastOutcome === "failed").length;
@@ -419,7 +398,6 @@ async function taskStats(options: HandleTasksCommandOptions, idInput?: string): 
 		"",
 		`governed tasks: ${governed.length}/${entries.length}`,
 		`this cycle: ${totals.attempts} attempts, ${totals.tokens} tokens, ${totals.costKnown ? `$${totals.costUsd.toFixed(4)}` : "cost unavailable"}, ${totals.wallTimeMinutes.toFixed(1)}m`,
-		`recorded lifetime: ${totals.lifetimeAttempts} attempts, ${totals.lifetimeTokens} tokens, ${totals.lifetimeCostKnown ? `$${totals.lifetimeCostUsd.toFixed(4)}` : "cost unavailable"}, ${totals.lifetimeWallTimeMinutes.toFixed(1)}m`,
 		`verification PASS: ${verified}`,
 		`last-run failures: ${stalled}`,
 		"",
