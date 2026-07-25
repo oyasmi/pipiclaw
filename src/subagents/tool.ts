@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
@@ -21,11 +20,10 @@ import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { shellEscape } from "../shared/shell-escape.js";
-import { clipText, errorMessage, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
+import { clipText, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
 import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
-import { applyTaskControlPatch } from "../tasks/control.js";
-import { readStoredTask, updateStoredTask } from "../tasks/store.js";
+import { readStoredTask } from "../tasks/store.js";
 import { parseVerificationVerdict, writeVerificationAttestation } from "../tasks/verification.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
 import { buildToolSet } from "../tools/registry.js";
@@ -75,12 +73,6 @@ const subagentSchema = Type.Object({
 		}),
 	),
 	taskId: Type.Optional(Type.String({ description: "Persistent task id, required when purpose=verify." })),
-	isolation: Type.Optional(
-		Type.Union([Type.Literal("shared"), Type.Literal("worktree")], {
-			description:
-				'"worktree" runs in the task\'s own git worktree, reusing the one recorded on the task or creating it on first use. Requires taskId.',
-		}),
-	),
 	returns: Type.Optional(
 		Type.Union([Type.Literal("text"), Type.Literal("artifact")], {
 			description:
@@ -120,9 +112,6 @@ export interface SubAgentToolDetails {
 	runId: string;
 	purpose: "work" | "verify";
 	taskId?: string;
-	isolation: "shared" | "worktree";
-	worktreePath?: string;
-	worktreeBranch?: string;
 	verificationVerdict?: "pass" | "fail";
 	/** Always populated (spec 032 D4): the full output is saved to `${artifactDir}/output.md` regardless of `returns`. */
 	artifactDir: string;
@@ -134,7 +123,7 @@ export interface SubAgentToolDetails {
 
 export interface SubAgentToolOptions {
 	executor: Executor;
-	/** Host checkout used as the shared cwd and worktree source. Defaults to process.cwd(). */
+	/** Host checkout used as the sub-agent's cwd. Defaults to process.cwd(). */
 	workingDirectory?: string;
 	getCurrentModel: () => Model<Api>;
 	getAvailableModels: () => Model<Api>[];
@@ -203,10 +192,7 @@ interface SubAgentRunContext {
 	runId: string;
 	purpose: "work" | "verify";
 	taskId?: string;
-	isolation: "shared" | "worktree";
 	workingDirectory: string;
-	worktreePath?: string;
-	worktreeBranch?: string;
 	artifactDir: string;
 }
 
@@ -225,15 +211,6 @@ function safeRunSegment(value: string): string {
 	return value.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 48) || "run";
 }
 
-function safeGitBranchSegment(value: string): string {
-	return (
-		value
-			.replace(/[^A-Za-z0-9_-]/g, "-")
-			.replace(/^-+|-+$/g, "")
-			.slice(0, 48) || "run"
-	);
-}
-
 function getSubAgentArtifactsRoot(channelDir: string): string {
 	return join(channelDir, "subagent-artifacts");
 }
@@ -247,116 +224,19 @@ async function prepareArtifactDir(channelDir: string, runId: string): Promise<st
 
 async function prepareRunContext(
 	runId: string,
-	params: { purpose?: "work" | "verify"; taskId?: string; isolation?: "shared" | "worktree" },
+	params: { purpose?: "work" | "verify"; taskId?: string },
 	options: SubAgentToolOptions,
 ): Promise<SubAgentRunContext> {
 	const purpose = params.purpose ?? "work";
 	const taskId = params.taskId?.trim() || undefined;
 	if (purpose === "verify" && !taskId) throw new Error("purpose=verify requires taskId.");
 	if (taskId && !TASK_ID_PATTERN.test(taskId)) throw new Error(`Invalid taskId: ${taskId}`);
-	const ownedTask = taskId ? await readStoredTask(options.channelDir, taskId) : undefined;
-	if (taskId && !ownedTask) {
+	if (taskId && !(await readStoredTask(options.channelDir, taskId))) {
 		throw new Error(`Task ${taskId} does not exist. Create it with task_manage before delegating task-owned work.`);
 	}
 	const artifactDir = await prepareArtifactDir(options.channelDir, runId);
-	const isolation = params.isolation ?? "shared";
-	if (isolation === "shared") {
-		const workingDirectory = resolve(options.workingDirectory ?? process.cwd());
-		return { runId, purpose, taskId, isolation, workingDirectory, artifactDir };
-	}
-	if (!taskId) throw new Error("isolation=worktree requires taskId so the worktree has a durable owner.");
-	if (!ownedTask?.fields.control) {
-		throw new Error(`Task ${taskId} has no governed control metadata. Normalize it with task_manage set first.`);
-	}
-
-	const baseDir = resolve(options.channelDir, "tasks", "worktrees");
-	await mkdir(baseDir, { recursive: true });
-	// The task ledger — not the caller — owns the worktree identity. Reusing what
-	// `control.worktree` already records is what keeps a second delegation on the same task
-	// from creating a rival worktree and orphaning the first one.
-	const recordedPath = ownedTask.fields.control.worktree?.path;
-	if (recordedPath && existsSync(recordedPath)) {
-		const existing = resolve(recordedPath);
-		const rel = relative(baseDir, existing);
-		if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
-			throw new Error(
-				`Task ${taskId} records a worktree outside ${baseDir}: ${existing}. Clear it with task_manage before delegating.`,
-			);
-		}
-		const check = await options.executor.exec(`git -C ${shellEscape(existing)} rev-parse --is-inside-work-tree`);
-		if (check.code !== 0 || check.stdout.trim() !== "true") {
-			throw new Error(
-				`Task ${taskId} records a path that is not a usable git worktree: ${existing}. Clear it with task_manage before delegating.`,
-			);
-		}
-		const branchResult = await options.executor.exec(`git -C ${shellEscape(existing)} branch --show-current`);
-		const context: SubAgentRunContext = {
-			runId,
-			purpose,
-			taskId,
-			isolation,
-			workingDirectory: existing,
-			worktreePath: existing,
-			worktreeBranch: branchResult.code === 0 ? branchResult.stdout.trim() || undefined : undefined,
-			artifactDir,
-		};
-		await recordTaskWorktree(options.channelDir, taskId, context);
-		return context;
-	}
-
-	const sourceDirectory = resolve(options.workingDirectory ?? process.cwd());
-	const rootResult = await options.executor.exec(`git -C ${shellEscape(sourceDirectory)} rev-parse --show-toplevel`);
-	if (rootResult.code !== 0 || !rootResult.stdout.trim()) {
-		throw new Error(
-			"Cannot create an isolated worktree: the current working directory is not inside a git repository.",
-		);
-	}
-	const repoRoot = rootResult.stdout.trim();
-	const runSegment = safeRunSegment(runId).slice(-16);
-	const taskSegment = safeRunSegment(taskId);
-	const path = join(baseDir, taskSegment, runSegment);
-	const branch = `pipiclaw-task/${safeGitBranchSegment(taskId)}/${safeGitBranchSegment(runId).slice(-16)}`;
-	await mkdir(join(baseDir, taskSegment), { recursive: true });
-	const created = await options.executor.exec(
-		`git -C ${shellEscape(repoRoot)} worktree add -b ${shellEscape(branch)} ${shellEscape(path)} HEAD`,
-		{ timeout: 60 },
-	);
-	if (created.code !== 0) {
-		throw new Error(
-			`Could not create git worktree for task ${taskId}: ${created.stderr || created.stdout}. Remove the stale worktree/branch or use isolation=shared.`,
-		);
-	}
-	const context: SubAgentRunContext = {
-		runId,
-		purpose,
-		taskId,
-		isolation,
-		workingDirectory: path,
-		worktreePath: path,
-		worktreeBranch: branch,
-		artifactDir,
-	};
-	try {
-		await recordTaskWorktree(options.channelDir, taskId, context);
-	} catch (error) {
-		await options.executor.exec(`git -C ${shellEscape(repoRoot)} worktree remove --force ${shellEscape(path)}`);
-		await options.executor.exec(`git -C ${shellEscape(repoRoot)} branch -D ${shellEscape(branch)}`);
-		throw new Error(
-			`Created the worktree but could not record its ownership on task ${taskId}; the temporary worktree was removed. ${errorMessage(error)}`,
-		);
-	}
-	return context;
-}
-
-async function recordTaskWorktree(channelDir: string, taskId: string, context: SubAgentRunContext): Promise<void> {
-	await updateStoredTask(channelDir, taskId, (task) => {
-		if (!task.fields.control || !context.worktreePath) return;
-		// The recorded worktree *is* the isolation fact; there is no separate flag to keep in sync.
-		task.fields.control = applyTaskControlPatch(task.fields.control, {
-			worktreePath: context.worktreePath,
-			worktreeBranch: context.worktreeBranch,
-		});
-	});
+	const workingDirectory = resolve(options.workingDirectory ?? process.cwd());
+	return { runId, purpose, taskId, workingDirectory, artifactDir };
 }
 
 async function gitWorkspaceState(executor: Executor): Promise<string | undefined> {
@@ -534,7 +414,6 @@ function buildSubAgentTask(
 		`- Channel id: ${runtimeContext.channelId}`,
 		`- Channel directory: ${runtimeContext.workspaceDir}/${runtimeContext.channelId}`,
 		`- Working directory: ${runContext.workingDirectory}`,
-		`- Filesystem isolation: ${runContext.isolation === "worktree" ? "dedicated git worktree" : "shared with parent"}`,
 		`- Artifact directory: ${runContext.artifactDir}`,
 		`- Your configured role: ${config.name}`,
 	];
@@ -698,9 +577,6 @@ function createDetails(
 		runId: runContext.runId,
 		purpose: runContext.purpose,
 		taskId: runContext.taskId,
-		isolation: runContext.isolation,
-		worktreePath: runContext.worktreePath,
-		worktreeBranch: runContext.worktreeBranch,
 		verificationVerdict,
 		artifactDir: runContext.artifactDir,
 		artifactPath: extras?.artifactPath,

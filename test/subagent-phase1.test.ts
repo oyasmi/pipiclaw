@@ -1,12 +1,10 @@
-import { execFileSync } from "node:child_process";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
-import { createExecutor, type Executor } from "../src/executor.js";
-import { renderTaskDocument } from "../src/shared/task-ledger.js";
+import type { Executor } from "../src/executor.js";
 import {
 	discoverSubAgents,
 	getSubAgentsDir,
@@ -15,7 +13,6 @@ import {
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
-import { applyTaskControlPatch, createDefaultTaskControl } from "../src/tasks/control.js";
 import { readVerificationAttestation } from "../src/tasks/verification.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -110,64 +107,6 @@ function makeSubAgentConfig(overrides: Partial<SubAgentConfig> = {}): SubAgentCo
 function makeDiscovery(workspaceDir: string, agents: SubAgentConfig[]) {
 	return () => ({ directory: join(workspaceDir, "sub-agents"), warnings: [], agents });
 }
-
-/** A committed git repo plus a governed `ship` task, the minimum for worktree isolation. */
-function createWorktreeFixture(): { workspaceDir: string; repoDir: string; channelDir: string } {
-	const workspaceDir = createTempWorkspace();
-	const repoDir = join(workspaceDir, "repo");
-	const channelDir = join(workspaceDir, "dm_123");
-	mkdirSync(repoDir, { recursive: true });
-	mkdirSync(join(channelDir, "tasks"), { recursive: true });
-	writeFileSync(
-		join(channelDir, "tasks", "ship.md"),
-		renderTaskDocument({ status: "open", control: createDefaultTaskControl() }, "# Ship\n"),
-	);
-	execFileSync("git", ["-C", repoDir, "init", "-q"]);
-	execFileSync("git", ["-C", repoDir, "config", "user.email", "test@example.com"]);
-	execFileSync("git", ["-C", repoDir, "config", "user.name", "Test"]);
-	writeFileSync(join(repoDir, "README.md"), "base\n");
-	execFileSync("git", ["-C", repoDir, "add", "README.md"]);
-	execFileSync("git", ["-C", repoDir, "commit", "-qm", "base"]);
-	return { workspaceDir, repoDir, channelDir };
-}
-
-function recordWorktreeOnTask(channelDir: string, worktreePath: string): void {
-	writeFileSync(
-		join(channelDir, "tasks", "ship.md"),
-		renderTaskDocument(
-			{ status: "open", control: applyTaskControlPatch(createDefaultTaskControl(), { worktreePath }) },
-			"# Ship\n",
-		),
-	);
-}
-
-function createWorktreeTool(workspaceDir: string, repoDir: string, channelDir: string) {
-	return createSubAgentTool({
-		executor: createExecutor(),
-		workingDirectory: repoDir,
-		getCurrentModel: () => model,
-		getAvailableModels: () => [model],
-		resolveApiKey: async () => "test-key",
-		workspaceDir,
-		channelDir,
-		runtimeContext: { workspaceDir, channelId: "dm_123" },
-		createWorker: () =>
-			new FakeWorker((_input, worker) => {
-				const message = createAssistantMessage("Implementation complete.");
-				worker.state.messages = [message];
-				worker.emit({ type: "message_end", message });
-			}),
-	});
-}
-
-const worktreeParams = {
-	label: "isolated implementation",
-	name: "implementer",
-	systemPrompt: "Implement the requested change.",
-	task: "Implement in the isolated checkout.",
-	taskId: "ship",
-	isolation: "worktree" as const,
-};
 
 describe("sub-agent discovery", () => {
 	it("loads every production example with the expected routing and resource settings", () => {
@@ -610,94 +549,6 @@ describe("sub-agent tool", () => {
 		});
 	});
 
-	it("runs implementation in a task-owned git worktree", async () => {
-		const workspaceDir = createTempWorkspace();
-		const repoDir = join(workspaceDir, "repo");
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(repoDir, { recursive: true });
-		mkdirSync(join(channelDir, "tasks"), { recursive: true });
-		writeFileSync(
-			join(channelDir, "tasks", "ship.md"),
-			renderTaskDocument({ status: "open", control: createDefaultTaskControl() }, "# Ship\n"),
-		);
-		execFileSync("git", ["-C", repoDir, "init", "-q"]);
-		execFileSync("git", ["-C", repoDir, "config", "user.email", "test@example.com"]);
-		execFileSync("git", ["-C", repoDir, "config", "user.name", "Test"]);
-		writeFileSync(join(repoDir, "README.md"), "base\n");
-		execFileSync("git", ["-C", repoDir, "add", "README.md"]);
-		execFileSync("git", ["-C", repoDir, "commit", "-qm", "base"]);
-		let delegatedTask = "";
-		const tool = createSubAgentTool({
-			executor: createExecutor(),
-			workingDirectory: repoDir,
-			getCurrentModel: () => model,
-			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
-			workspaceDir,
-			channelDir,
-			runtimeContext: { workspaceDir, channelId: "dm_123" },
-			createWorker: () =>
-				new FakeWorker((input, worker) => {
-					delegatedTask = input;
-					const message = createAssistantMessage("Implementation complete.");
-					worker.state.messages = [message];
-					worker.emit({ type: "message_end", message });
-				}),
-		});
-
-		const result = await tool.execute("worktree-call-1", {
-			label: "isolated implementation",
-			name: "implementer",
-			systemPrompt: "Implement the requested change.",
-			tools: ["read", "bash", "write", "edit"],
-			task: "Implement in the isolated checkout.",
-			taskId: "ship",
-			isolation: "worktree",
-		});
-		expect(result.details.isolation).toBe("worktree");
-		expect(result.details.worktreeBranch).toMatch(/^pipiclaw-task\/ship\//);
-		expect(result.details.worktreePath && existsSync(result.details.worktreePath)).toBe(true);
-		expect(delegatedTask).toContain("Filesystem isolation: dedicated git worktree");
-		expect(delegatedTask).toContain(result.details.worktreePath);
-		const task = readFileSync(join(channelDir, "tasks", "ship.md"), "utf-8");
-		expect(task).toContain(`"worktree":{"path":"${result.details.worktreePath}"`);
-		expect(task).toContain(result.details.worktreeBranch);
-	});
-
-	it("reuses the worktree recorded on the task instead of creating a rival one", async () => {
-		const { workspaceDir, repoDir, channelDir } = createWorktreeFixture();
-		const tool = createWorktreeTool(workspaceDir, repoDir, channelDir);
-
-		const first = await tool.execute("worktree-reuse-1", worktreeParams);
-		const second = await tool.execute("worktree-reuse-2", worktreeParams);
-
-		expect(second.details.worktreePath).toBe(first.details.worktreePath);
-		expect(second.details.worktreeBranch).toBe(first.details.worktreeBranch);
-		const listed = execFileSync("git", ["-C", repoDir, "worktree", "list"], { encoding: "utf-8" });
-		expect(listed.split("\n").filter((line) => line.includes("pipiclaw-task/ship"))).toHaveLength(1);
-	});
-
-	it("creates a fresh worktree when the recorded path no longer exists on disk", async () => {
-		const { workspaceDir, repoDir, channelDir } = createWorktreeFixture();
-		recordWorktreeOnTask(channelDir, join(channelDir, "tasks", "worktrees", "ship", "gone"));
-		const tool = createWorktreeTool(workspaceDir, repoDir, channelDir);
-
-		const result = await tool.execute("worktree-stale-1", worktreeParams);
-
-		expect(result.details.worktreePath).not.toContain("gone");
-		expect(result.details.worktreePath && existsSync(result.details.worktreePath)).toBe(true);
-	});
-
-	it("refuses to delegate when the task records a worktree outside the channel worktrees dir", async () => {
-		const { workspaceDir, repoDir, channelDir } = createWorktreeFixture();
-		recordWorktreeOnTask(channelDir, repoDir);
-		const tool = createWorktreeTool(workspaceDir, repoDir, channelDir);
-
-		await expect(tool.execute("worktree-escape-1", worktreeParams)).rejects.toThrow(
-			/records a worktree outside .*Clear it with task_manage/s,
-		);
-	});
-
 	it("preserves partial output and injects minimal runtime context", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_123");
@@ -743,7 +594,9 @@ describe("sub-agent tool", () => {
 		expect(result.details.usage.total).toBe(19);
 		expect(delegatedTask).toContain("Workspace root: /workspace/root");
 		expect(delegatedTask).toContain("Channel id: dm_123");
-		expect(delegatedTask).toContain("Filesystem isolation: shared with parent");
+		// Spec 036 D3: task-owned worktrees are gone, so a sub-agent always shares the
+		// parent's checkout and the runtime context no longer advertises an isolation mode.
+		expect(delegatedTask).not.toContain("Filesystem isolation");
 		expect(delegatedTask).toContain("Inspect the current workspace and summarize the main risks.");
 	});
 

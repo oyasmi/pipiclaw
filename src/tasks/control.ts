@@ -48,11 +48,6 @@ export interface TaskVerification {
 	subjectHash?: string;
 }
 
-export interface TaskWorktree {
-	path: string;
-	branch?: string;
-}
-
 export interface TaskControl {
 	version: 1;
 	priority: TaskPriority;
@@ -71,7 +66,6 @@ export interface TaskControl {
 	/** Usage in the current recurring cycle (or the full one-shot task). */
 	usage: TaskUsage;
 	verification: TaskVerification;
-	worktree?: TaskWorktree;
 	lastStartedAt?: string;
 	lastFinishedAt?: string;
 	/** Identifier of the currently open recurring-task cycle, when applicable. */
@@ -91,8 +85,6 @@ export interface TaskControlPatch {
 	externalApproval?: "not-required" | "required" | "granted";
 	maxAttempts?: number;
 	verificationMode?: TaskVerificationMode;
-	worktreePath?: string;
-	worktreeBranch?: string;
 }
 
 const PRIORITIES: readonly TaskPriority[] = ["low", "normal", "high", "critical"];
@@ -216,7 +208,6 @@ export function parseTaskControl(raw: string): TaskControl {
 	const usage = isRecord(value.usage) ? value.usage : {};
 	const parsedUsage = parseTaskUsage(usage);
 	const verification = isRecord(value.verification) ? value.verification : {};
-	const worktree = isRecord(value.worktree) ? value.worktree : undefined;
 	const maxAttempts = optionalPositive(budget.maxAttempts);
 	if (!maxAttempts || !Number.isInteger(maxAttempts)) {
 		throw new Error("control.budget.maxAttempts must be a positive integer");
@@ -249,9 +240,6 @@ export function parseTaskControl(raw: string): TaskControl {
 			"granted external approval requires external side effects, approvalBy, approvedAt, and approvalBodyHash",
 		);
 	}
-	if (value.worktree !== undefined && (!worktree || !optionalString(worktree.path))) {
-		throw new Error("control.worktree must contain a non-empty path");
-	}
 
 	return {
 		version: 1,
@@ -278,9 +266,6 @@ export function parseTaskControl(raw: string): TaskControl {
 			checkedAt: optionalString(verification.checkedAt),
 			subjectHash: optionalString(verification.subjectHash),
 		},
-		worktree: optionalString(worktree?.path)
-			? { path: optionalString(worktree?.path)!, branch: optionalString(worktree?.branch) }
-			: undefined,
 		lastStartedAt: optionalString(value.lastStartedAt),
 		lastFinishedAt: optionalString(value.lastFinishedAt),
 		cycleId: optionalString(value.cycleId),
@@ -308,7 +293,6 @@ export function resetTaskControlForCycle(control: TaskControl, cycleId: string):
 		approvalBodyHash: undefined,
 		usage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
 		verification: { mode: control.verification.mode, status: "pending" },
-		worktree: undefined,
 		lastStartedAt: undefined,
 		lastFinishedAt: undefined,
 		cycleId: normalizedCycleId,
@@ -348,11 +332,6 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 	}
 	if (patch.verificationMode !== undefined && patch.verificationMode !== next.verification.mode) {
 		next.verification = { mode: patch.verificationMode, status: "pending" };
-	}
-	if (patch.worktreePath !== undefined || patch.worktreeBranch !== undefined) {
-		const path = patchOptionalString(next.worktree?.path, patch.worktreePath);
-		const branch = patchOptionalString(next.worktree?.branch, patch.worktreeBranch);
-		next.worktree = path ? { path, branch } : undefined;
 	}
 	if (next.sideEffects !== "external") {
 		next.externalApproval = "not-required";

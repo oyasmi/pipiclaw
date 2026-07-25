@@ -244,7 +244,6 @@ async function listTasks(channelDir: string): Promise<string> {
 			if (control.parent) detail.push(`parent: ${control.parent}`);
 			if (control.dependsOn.length > 0) detail.push(`depends: ${control.dependsOn.join(",")}`);
 			if (control.nextAction) detail.push(`next: ${control.nextAction}`);
-			if (control.worktree?.branch) detail.push(`branch: ${control.worktree.branch}`);
 			if (control.cycleId) {
 				detail.push(`${status === "done" ? "last" : "current"} cycle: ${control.cycleId}`);
 			}
@@ -516,14 +515,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					issue(
 						`tasks/${entry.id}.md changed after external-action approval was granted.`,
 						`Review the current action and run /tasks approve ${entry.id} again.`,
-					),
-				);
-			}
-			if (control.worktree && !existsSync(control.worktree.path)) {
-				issues.push(
-					issue(
-						`tasks/${entry.id}.md records a missing worktree path: ${control.worktree.path}.`,
-						`Clear the stale worktree metadata or create/reassign an isolated worktree.`,
 					),
 				);
 			}

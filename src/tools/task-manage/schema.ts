@@ -34,8 +34,6 @@ const taskControlSchema = Type.Object({
 				'On create, defaults to "evidence" (maker self-checks the DoD against concrete evidence). Set "independent" only when the task produces a checkable artifact (code, config, a runnable command) that a separate read-only verifier sub-agent can inspect — for research/writing/reminder-style tasks, "evidence" is cheaper and just as trustworthy.',
 		}),
 	),
-	worktreePath: Type.Optional(Type.String({ description: "Owned worktree path; empty clears it." })),
-	worktreeBranch: Type.Optional(Type.String()),
 });
 
 export const taskManageSchema = Type.Object({

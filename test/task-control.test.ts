@@ -44,16 +44,18 @@ describe("task control", () => {
 
 	// Spec 036 D8: retired keys written by an older build are ignored on read rather than
 	// failing the parse, so stored tasks stay readable with no migration script.
-	it("ignores retired budget and ledger keys written by an older build", () => {
+	it("ignores retired budget, ledger and worktree keys written by an older build", () => {
 		const control = parseTaskControl(
 			JSON.stringify({
 				...createDefaultTaskControl(),
 				budget: { maxAttempts: 5, maxTokens: 100, maxCostUsd: 1, maxWallTimeMinutes: 30 },
 				lifetimeUsage: { attempts: 9, tokens: 900, costUsd: 3, costKnown: true, wallTimeMinutes: 40 },
+				worktree: { path: "/tmp/wt", branch: "pipiclaw-task/ship/abc" },
 			}),
 		);
 		expect(control.budget).toEqual({ maxAttempts: 5 });
 		expect(control).not.toHaveProperty("lifetimeUsage");
+		expect(control).not.toHaveProperty("worktree");
 	});
 
 	it("reports the first deterministic deadline or attempt violation", () => {
