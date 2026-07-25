@@ -62,7 +62,7 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 | `task-planning.md` | `task_manage` | 是否建 task、Goal/DoD/Manual/Verification、control 与预算、周期 `schedule` |
 | `task-driving.md` | `task_manage` | driver 恢复、幂等检查、checkpoint，以及停滞/治理器暂停/坏 frontmatter 的修复 |
 | `task-closeout.md` | `task_manage` | candidate、verifier、外部审批、done/cancel 和组合门禁 |
-| `task-delegation.md` | `task_manage` / `subagent` | 父子任务、subagent、worktree、外部 agent 工具的恢复纪律 |
+| `task-delegation.md` | `task_manage` / `subagent` | 任务拆分、subagent、外部 agent 工具的恢复纪律 |
 
 任务生命周期占四份，对应四个**决策时刻**——建档、推进（含修复）、收尾、委派。它们刻意不做成"先读一本再跳转"的路由结构：模型在一次唤醒中只应打开一份文件，多一跳就多一次判断失误的机会。同一时刻需要的知识必须在同一份文件里。
 

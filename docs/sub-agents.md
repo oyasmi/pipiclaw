@@ -6,7 +6,7 @@
 
 子代理是 Pipiclaw 的**委派**能力：把某类任务从主代理手里交给一个更聚焦、工具更窄的角色去做。它和[事件与任务](./events-and-tasks.md)是正交的两条能力——事件与任务解决"何时唤醒、在途状态如何"，子代理解决"这一步该不该换一个专门的角色来做"。
 
-在写密集型子任务、独立验收（verifier）等场景里，子代理会和任务台账咬合（`isolation: worktree`、`purpose: verify`）；这些接缝会在下面点明，并链接回 [events-and-tasks.md](./events-and-tasks.md)。
+在独立验收（verifier）场景里，子代理会和任务台账咬合（`purpose: verify` + `taskId`）；这些接缝会在下面点明，并链接回 [events-and-tasks.md](./events-and-tasks.md)。
 
 ## 它是什么（What It Is）
 
@@ -99,8 +99,7 @@ bashTimeoutSec: 120
 | `paths` | 角色配置 | 建议优先关注的路径 |
 | `thinkingLevel` | `off`（`verify` 为 `medium`） | 推理强度 |
 | `purpose` | `work` | `verify` 进入独立验收协议，需同时传 `taskId` |
-| `taskId` | - | 绑定任务台账；`purpose: verify` 和 `isolation: worktree` 都要求它 |
-| `isolation` | `shared` | `worktree` 使用任务自有的 git worktree |
+| `taskId` | - | 绑定任务台账；`purpose: verify` 要求它 |
 | `returns` | `text` | `artifact` 要求子代理把主产出写成文件并以 `ARTIFACT: <filename>` 结尾 |
 
 ### `effort` 与 frontmatter 数值的关系
@@ -184,12 +183,11 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 - 子代理没有 `subagent` 工具，**不能继续创建下一级代理**。
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。
-- 默认 `isolation: shared`：只隔离对话上下文，文件系统与主代理共享。
-- `isolation: worktree` + `taskId`：从 committed HEAD 创建 task-owned git worktree；runtime 自动把 path/branch 写回 task control，父代理负责 review、merge、cleanup。worktree 只包含 committed HEAD——委派前必须处理好子任务依赖的未提交变更。同一 taskId 的后续委派自动复用台账里记录的 worktree；记录的路径已消失则新建，指向 `tasks/worktrees/` 之外则报错，需先用 `task_manage` 清理。
+- 子代理只隔离对话上下文，文件系统与主代理共享。任务自有的 git worktree 已在 spec 036 移除：git worktree 与父进程同主机、同文件系统、同网络，从来不是安全边界，只是并行分支的便利。需要独立检出时在宿主侧自行 `git worktree add`，把它作为普通工作目录使用。
 - `purpose: verify` + `taskId`：进入独立验收协议，去掉 write/edit 工具，检测 verifier 期间的 git workspace 变化，并要求最后一行明确 `VERDICT: PASS|FAIL`。
 - verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`，主代理用返回的 runId 调 `task_manage verify` 导入；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 
-> `worktree` 与 `verify` 两种模式都以任务台账为前提（需要 `taskId`）。它们在任务生命周期中的确切时机——何时委派写密集型子任务、验收如何咬合 `candidate` / `done` 门禁——见 [events-and-tasks.md](./events-and-tasks.md#受治理-control)。
+> `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合 `candidate` / `done` 门禁——见 [events-and-tasks.md](./events-and-tasks.md#受治理-control)。
 
 ## 推荐写法（Recommended Presets）
 
@@ -247,6 +245,6 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 ## 该看哪份文档
 
-- 定时事件与任务台账（含 worktree/verifier 在任务生命周期里的时机）：[events-and-tasks.md](./events-and-tasks.md)
+- 定时事件与任务台账（含 verifier 在任务生命周期里的时机）：[events-and-tasks.md](./events-and-tasks.md)
 - Runtime playbooks 与知识分层：[runtime-playbooks.md](./runtime-playbooks.md)
 - `channel.json`、`auth.json`、`models.json`、`settings.json`：[configuration.md](./configuration.md)

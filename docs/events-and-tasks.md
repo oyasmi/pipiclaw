@@ -385,7 +385,7 @@ status: active
 wake: 2026-07-08T14:00:00+08:00
 schedule: 0 9 * * 1
 recurrence: 每周一
-control: {"version":1,"priority":"high","lastOutcome":"progress","dependsOn":[],"sideEffects":"external","externalApproval":"required","budget":{"maxAttempts":12,"maxTokens":120000},"usage":{"attempts":2,"tokens":18420,"costUsd":0.42,"costKnown":true,"wallTimeMinutes":16.3},"lifetimeUsage":{"attempts":8,"tokens":72000,"costUsd":1.84,"costKnown":true,"wallTimeMinutes":61.5},"verification":{"mode":"independent","status":"pending"},"nextAction":"等待确认后发布"}
+control: {"version":1,"priority":"high","lastOutcome":"progress","sideEffects":"external","externalApproval":"required","budget":{"maxAttempts":12},"usage":{"attempts":2,"tokens":18420,"costUsd":0.42,"costKnown":true,"wallTimeMinutes":16.3},"verification":{"required":true,"status":"pending"},"nextAction":"等待确认后发布"}
 ---
 
 # 周报编写与发布
@@ -404,7 +404,7 @@ control: {"version":1,"priority":"high","lastOutcome":"progress","dependsOn":[],
 3. 确认后发布、验证、复盘
 
 ## 验收
-Mode: independent
+Independent verification: required
 - 逐项核对 DoD
 - 核对待发布内容与动作参数；实际发布结果在用户批准后写入 done evidence
 
@@ -431,11 +431,10 @@ frontmatter 字段：
 ### 受治理 control
 
 - **调度**：`priority` 决定 ready task 顺序，`deadline` 是硬截止，`nextAction` 是下一步可执行动作。
-- **预算**：`maxAttempts` 必有；可追加本周期累计的 `maxTokens`、`maxCostUsd`、`maxWallTimeMinutes`。driver 每次原生唤醒先 claim attempt，回合结束把主代理与子代理的实际 usage 计回 task；预算在回合边界检查，不能中断一个正在运行的回合。模型缺少价格元数据时 cost 显示 unavailable，不能配置有效的 `maxCostUsd`，应使用 `maxTokens`。达到任一可用上限就被治理器暂停（`paused` + `pausedBy: "governor"`）。`lifetimeUsage` 另存不随周期清零的审计累计，不参与本周期 governor。
-- **关系**：`parent` 表示父任务，`dependsOn` 中的任务必须 done 才能运行/收尾；创建和 set 会拒绝缺失关系、自依赖和环。父任务也不能在仍有未完成 child 时 done。
-- **隔离**：写密集型子任务在委派时传 `subagent` 的 `isolation: worktree`；runtime 自动把 path/branch 记录到 control，父代理负责 review、merge 与 cleanup（见 [sub-agents.md](./sub-agents.md)）。
+- **预算**：只有 `maxAttempts`（spec 036）。driver 每次原生唤醒先 claim attempt，回合结束把主代理与子代理的实际 usage 计回 task；预算在回合边界检查，不能中断一个正在运行的回合。达到上限就被治理器暂停（`paused` + `pausedBy: "governor"`）。`usage` 仍完整记录 tokens/cost/wall-time 供 `/tasks stats` 观察，但**不再据此中止任务**——按任务设成本上限拦不住总量，成本闸应当是全局的。
+- **关系**：无。任务之间没有 `parent`/`dependsOn` 图（spec 036 删除）；先后次序写进正文（目标/手册）或用 `wake` 错开时间，每个任务只按自己的 DoD 收尾。
 - **副作用**：`sideEffects: external` 自动进入 required；agent 不能自授予。用户审阅拟执行动作后，直接发送 `/tasks approve <id>`，runtime 记录 approver/时间与 task body hash 才变为 granted；后续 progress 或正文变化会要求重新授权。
-- **验收**：新任务默认 `verification.mode: evidence`，`done` 时把 maker self-check 记为 PASS；有独立可检查产物时显式选择 `independent`，实现者先 `candidate`，checker-only 回合调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId。PASS 绑定 task 的**契约段**（Goal/DoD/Manual/Verification 及勾选状态，不含 Current Cycle/History）：记日志不失效，改契约才失效。
+- **验收**：只有一种形态——独立验收，由 `verification.required` 开关（默认关闭；`sideEffects: external` 的任务默认打开）。要求验收时实现者先 `candidate`，checker-only 回合调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId；`done` 会重新校验磁盘上的 attestation，手写的 PASS 无效。不要求验收的任务照常在 `done` 时提交 summary/evidence 并写入正文，但不会被记成一次"验收通过"。PASS 绑定 task 的**契约段**（Goal/DoD/Manual/Verification 及勾选状态，不含 Current Cycle/History）：记日志不失效，改契约才失效。
 
 当 independent 与 external 同时存在时，先验收待执行动作得到 PASS，再用 `task_manage set wake=...`（停留在 `verifying` 车道，仅改 wake）等待 `/tasks approve`；只改 wake、不换状态可保留 PASS——**离开 verifying 的 `set` 会作废验收**。获批后执行并直接 done。契约段与 approval 都绑定同一份契约 hash，日志不会误伤；不要把"已经发布"写成 candidate 前必须勾选的 DoD；外部执行结果由 approval audit 和 done evidence 收口。
 
@@ -478,7 +477,7 @@ active ⇄ waiting → (candidate) verifying → done
 周期性任务是**单个文件**：`done` 时"唯一时间规则"用 croner 算出下一次 occurrence 写入 `wake`；到点后 **runtime 直接开新周期**（这是 driver 唯一会唤醒 `status: done` 的场景，没有 `start-cycle` 动作，也不再派发单独的 cycle-start 事件请模型开周期）：
 
 1. `task_manage done` 记录本轮收尾；写盘时唯一时间规则算出下一次 `wake`，状态保持 `done`。
-2. `wake` 到点，runtime 在一次原子写里把"当前周期"及其 completion evidence 折进"历史"、只保留最近的有界工作历史、清空本周期 usage/独立验收/外部授权/worktree 元数据（`lifetimeUsage` 保留）、生成具名 cycleId（`cycle-YYYY-MM-DD`，同日重开加序号）、状态置 `active`，随后派发一条**普通驱动唤醒**。agent 醒来面对的就是一个待推进的新周期，与其他唤醒无异。
+2. `wake` 到点，runtime 在一次原子写里把"当前周期"及其 completion evidence 折进"历史"、只保留最近的有界工作历史、清空本周期 usage/独立验收/外部授权、生成具名 cycleId（`cycle-YYYY-MM-DD`，同日重开加序号）、状态置 `active`，随后派发一条**普通驱动唤醒**。agent 醒来面对的就是一个待推进的新周期，与其他唤醒无异。
 3. 若上一轮还没 done（过期未完成）：先处置旧周期（补完，或明确放弃并记录原因），再开新周期。
 
 周期预算不会跨周期耗尽（reset 随开周期发生）。这一步是确定性文本变换，LLM 出环——不再有"模型没正确开周期"这一类失败。
@@ -530,14 +529,14 @@ task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token
 
 在通道里直接发命令，由 transport 层读文件渲染，不触发 LLM 回合：
 
-- `/tasks` —— 列出 active 任务，按真实调度顺序显示 status/wake、priority/deadline、attempt budget、verification、parent/dependencies 与 nextAction。
+- `/tasks` —— 列出 active 任务，按真实调度顺序显示 status/wake、priority/deadline、attempt budget、verification 与 nextAction。
 - `/tasks show <id>` —— 显示单个任务文件全文（active 或 archive 均可）。
 - `/tasks archive` —— 列出已闭环（归档）的任务。
 - `/tasks approve <id>` —— 唯一的外部副作用授权入口；由 runtime 直接记录用户和时间，不经 LLM。
 - `/tasks pause <id>` / `/tasks resume <id>` —— 持久暂停或恢复该任务的自动 wake；resume 后由下一次 driver scan 接手。
 - `/tasks run <id>` —— 清除 wake 并立即入队一轮 task attempt（DingTalk runtime）；没有 daemon 的 TUI 会把任务置为 ready，并提示你用普通消息继续推进。
 - `/tasks stats [id]` —— 零 LLM 成本查看 governed task 的 attempts、token、cost、wall time、最近结果和 verifier 状态。
-- `/tasks doctor` —— 只读体检 task/event 与治理一致性：坏 control、超预算/截止、缺失关系、未授权 external action、陈旧 verifier PASS、丢失 worktree，以及原有的 frontmatter/wake/event 问题。每条都附 `Next step`。
+- `/tasks doctor` —— 只读体检 task/event 与治理一致性：坏 control、超预算/截止、未授权 external action、陈旧 verifier PASS、仍带已退役 control 键的任务（并列出因此失效的先后次序），以及原有的 frontmatter/wake/event 问题。每条都附 `Next step`。
 
 除显式的 `approve` 安全闸门外，`/tasks` 命令保持只读。想改期、取消、调预算或调整做法，直接告诉 agent，由它通过 `task_manage` 原子更新台账。TUI 里同样可用。
 
@@ -612,7 +611,7 @@ runtime 只提供通用恢复机制：委派时把工具/实例/目录/预期产
 
 ## 该看哪份文档
 
-- 工作区配置子代理（委派、worktree、独立验收）：[sub-agents.md](./sub-agents.md)
+- 工作区配置子代理（委派、独立验收）：[sub-agents.md](./sub-agents.md)
 - `tools.events.enabled` / `tools.tasks.enabled` 等门控开关：[configuration.md](./configuration.md)
 - Runtime playbooks 与知识分层：[runtime-playbooks.md](./runtime-playbooks.md)
 - 长期运行、日志、升级、排障：[deployment-and-operations.md](./deployment-and-operations.md)

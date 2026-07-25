@@ -22,17 +22,15 @@ priority: 40
 - `manual`：可复用的执行步骤、预检与返工教训。
 - `verificationPlan`：验收者能独立执行的确定性检查。
 
-默认独立验收（independent verification）加有限尝试预算。轻量记录性任务确实无需独立验收时，创建时设 `control.verificationMode: evidence`。
+默认不要求独立验收，只有有限尝试预算。任务产出了验收者能独立检查的产物（代码、配置、可运行命令）时，创建时设 `control.verificationRequired: true`；`sideEffects: external` 的任务会自动打开它。
 
 ## control 决策
 
 - `priority` / `deadline`：表达调度重要性和硬期限，不用 `wake` 冒充 deadline。
 - `nextAction`：下一条可执行动作，避免写抽象愿望。
-- `maxAttempts` / `maxTokens` / `maxCostUsd` / `maxWallTimeMinutes`：按风险和规模收紧；这些是**本周期、回合边界检查**的停止条件，不会中断正在运行的单个回合。模型没有价格元数据时不能使用 `maxCostUsd`，改用 `maxTokens`。
+- `maxAttempts`：唯一的按任务停止条件，按风险和规模收紧。它在**本周期、回合边界**检查，不会中断正在运行的单个回合。
 - `sideEffects`：`workspace` 或 `external`。发送、发布、部署、修改外部系统必须选 `external`，它会要求用户 `/tasks approve` 后才能 done。
-- `parent` / `dependsOn`：只用于真实分解；`parent` 表归属，`dependsOn` 表执行前置。
-
-创建和 `set` 会拒绝不存在的关联、自指、parent 环和 dependency 环。父任务可以 `dependsOn` 自己的 child 表达 join；父任务有未闭环 child 时不能 done。
+- 任务之间没有父子或依赖字段。需要表达先后次序时写进 `goal`/`manual`，或用 `wake` 把后续任务排到合适的时间；每个任务只按自己的 DoD 收尾。
 
 外部副作用与独立验收并存时，DoD/Verification 要验收"**待执行动作及其输入已准备正确**"（内容、目标、参数、预演、回滚方案），不要把尚未获批的外部动作本身写成 candidate 前必须勾选的项——否则会形成"先执行才能勾选"与"先验收批准才能执行"的死循环。实际执行结果由审批记录和 done evidence 收口。
 

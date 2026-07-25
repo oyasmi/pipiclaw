@@ -2,12 +2,12 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | PROPOSED |
+| 状态 | IMPLEMENTED（R3a `ffa0a17`、R3b `4f31748`、R3c-1 `64e824f`、R3c-2 `f3b62ed`） |
 | 日期 | 2026-07-25 |
 | 前置 | 019 task-ledger、022 native-task-driver、023 governed-task-loops、027 native-task-recurrence、029 task-lifecycle-simplification、032 subagent-adoption、034 subagent-invocation-surface |
 | 来源 | `docs/refer/pipiclaw-slimming-round2-2026-07-25.md` R3a/R3b/R3c；产品定位裁决＝**无人值守模式** |
 | 关联实现 | `src/tasks/*`、`src/tools/task-manage/*`、`src/runtime/task-driver.ts`、`src/runtime/task-commands.ts`、`src/subagents/tool.ts`、`src/shared/task-ledger.ts`、`src/memory/task-digest.ts`、`docs/events-and-tasks.md` |
-| 预期净删除 | 约 1,900–2,600 行 |
+| 预期净删除 | 估计约 1,900–2,600 行；**实测 −395 行**，差距归因见第 9 节 |
 
 ## 背景
 
@@ -270,14 +270,27 @@ export interface TaskVerification {
 
 ### 指标（对齐 round2 报告第 7 节）
 
-| 指标 | 改前 | 目标 |
-|---|---:|---|
-| `TaskControl` 持久字段数 | ~20 | ≤ 12 |
-| 环检测实现份数 | 4 | 0 |
-| 验收形态数 | 2（含自证） | 1 |
-| `verification` 默认值定义点 | 5（相互矛盾） | 1 |
-| 任务域代码行数 | 4,229 | ≈ 1,900–2,300 |
-| 子代理调用参数 | 15 | 14 |
+| 指标 | 改前 | 目标 | **实测** |
+|---|---:|---|---|
+| 环检测实现份数 | 4 | 0 | **0 ✅** |
+| 验收形态数 | 2（含自证） | 1 | **1 ✅** |
+| `verification` 默认值定义点 | 5（相互矛盾） | 1 | **1 ✅** |
+| 子代理调用参数 | 15 | 14 | **14 ✅** |
+| `TaskBudget` 字段数 | 4 | 1 | **1 ✅** |
+| attestation 字段数 | 12 | 9 | **9 ✅** |
+| `TaskControl` 顶层字段数 | 22 | ≤ 12 | **18 ❌** |
+| 任务域代码行数 | 4,229 | ≈ 1,900–2,300 | **3,963 ❌** |
+| `src/` 总行数 | 32,499 | — | **32,104（−395）** |
+
+`npm run check` 通过，`npm run deadcode` 无孤儿，110 测试文件 / 880 测试（净 +2）。`test/runtime-stop.test.ts` 在全量并行下偶发失败、单独运行通过，且在本 spec 之前的基线上同样失败——是 deep review 已记录的 logger/并行隔离竞态，非本次引入。
+
+### 两项未达标的归因（如实记录）
+
+**`TaskControl` 18 而非 ≤12。** 这个目标与本 spec 自己的 D0-1 相互矛盾，立项时没有察觉。删掉的 4 个顶层字段（`parent`、`dependsOn`、`lifetimeUsage`、`worktree`）之外，剩下的 18 个里有 5 个属于审批链（`sideEffects`、`externalApproval`、`approvalBy`、`approvedAt`、`approvalBodyHash`），而 D0-1 明确规定审批链一个字段都不动。要落到 12 必须动审批链，那是下一个 spec 的地盘。**结论：目标数字应作废，不是实现欠账。** 真正被压缩的是嵌套结构：`TaskBudget` 4→1、attestation 12→9。
+
+**行数 −395 而非 −1,900。** 估算把 `task-ledger.ts`(742) 与 `task-commands.ts`(721) 整体计入"任务治理域"，但两者绝大部分是正文渲染、历史折叠、frontmatter 解析和 `/tasks` 展示面，与被删的治理语义无关，删除触及不到。此外本次**新增**了 D8 的退役键机制（`RETIRED_TASK_CONTROL_KEYS`、`retiredTaskControlKeys`、`describeDroppedTaskRelations`、`rawControl`）以及仓库风格要求的解释性注释，抵掉了一部分。单文件净删最大的是 `subagents/tool.ts` −127、`task-manage/shared.ts` −78、`task-commands.ts` −61、`store.ts` −46。
+
+这条经验对后续几轮有直接价值：**round2 报告第 3 节"行数不是好指标"的结论在这里再次成立。** 本轮真正的收益是 4 套环检测归零、验收从 2 种形态收敛到 1 种、5 个矛盾默认收敛到 1 个——这些都不体现在行数上。后续 R4 的估算应当按"消费面"而不是"所在文件总行数"来做。
 
 ## 风险与残余敞口
 

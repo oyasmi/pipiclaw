@@ -50,7 +50,6 @@ priority: 41
 
 - 方向错：修 Manual/`nextAction`、重新拆解或 cancel。
 - 预算确实不足：向用户说明后用 `task_manage set` 调整 budget/deadline，并把 status 设回 `active`。
-- 依赖终止：恢复或重建依赖，或 `set` 更新 `dependsOn`。
 
 被暂停的任务不能 progress/candidate；`set`（或 `/tasks resume`）是审查原因后的修复入口，**不要反射性加预算**。
 

@@ -1,6 +1,6 @@
 ---
 name: task-delegation
-description: 拆分父子任务（task）、委派子代理（subagent），或创建任务隔离的 worktree 前。
+description: 把工作拆成多个任务（task）、委派子代理（subagent），或交给外部 agent 工具之前。
 requires-tools: task_manage, subagent
 priority: 45
 ---
@@ -9,13 +9,9 @@ priority: 45
 
 只拆真正可分离、可独立验收的工作。两三步顺序操作留在一个 task，避免调度和 attempt 开销。
 
-## 父子任务与依赖
+## 拆分任务
 
-- child 的 `control.parent` 指向父任务。
-- `dependsOn` 表示执行前置；依赖 done 前 driver 不运行 dependent。
-- 父任务可 dependsOn child，等待全部子成果汇合后集成。
-- 依赖缺失、cancelled 或被治理器暂停会令 dependent 被治理器暂停。
-- 父任务有未闭环 child 时不能 done。
+任务之间没有父子或依赖字段，每个任务独立按自己的 DoD 收尾。需要表达先后次序时，把它写进后继任务的 `goal`/`manual`（"在 <前置任务> 完成后再开始"），或用 `wake` 把它排到前置任务预计完成之后。
 
 ## 配置 subagent
 
@@ -27,15 +23,13 @@ priority: 45
 
 ## 产物契约与回传预算
 
-每次委派都会在 `channelDir/subagent-artifacts/<runId>/` 下建产物目录,子代理的完整输出总会落盘到该目录的 `output.md`,与 `returns` 无关。回传给父代理的文本超过大小预算时会被截断,附上 `output.md` 的绝对路径——父代理判断值得保留的内容,按需 `read` 全文,再决定是否经 `memory_manage` 提炼为记忆。产物目录不自动清理,和 worktree 一样由父代理负责闭环:任务收尾时决定保留还是删除。
+每次委派都会在 `channelDir/subagent-artifacts/<runId>/` 下建产物目录,子代理的完整输出总会落盘到该目录的 `output.md`,与 `returns` 无关。回传给父代理的文本超过大小预算时会被截断,附上 `output.md` 的绝对路径——父代理判断值得保留的内容,按需 `read` 全文,再决定是否经 `memory_manage` 提炼为记忆。产物目录不自动清理,由父代理负责闭环:任务收尾时决定保留还是删除。
 
 需要子代理把主产出写成文件而不是回传整段文本时传 `returns: "artifact"`,子代理需以 `ARTIFACT: <filename>` 结尾；忘记该标记时会自动降级为纯文本模式。
 
-## worktree 隔离
+## 文件系统隔离
 
-写密集 child 委派时传 `isolation: worktree` 和 taskId——隔离在委派点声明一次即可，任务本身不需要预先标注。runtime 从 committed HEAD 创建 `pipiclaw-task/<task>/<run>` 分支，把路径/分支记录进 task control。
-
-同一 taskId 的后续委派自动复用台账里记录的 worktree，不需要也无法手工指定路径；台账记录的路径若已不在磁盘上则新建，若指向 `tasks/worktrees/` 之外则报错，需先用 `task_manage` 清理该元数据。worktree 不自动删除；父代理必须 review、merge、验证，然后清理 worktree 与分支。创建前处理好主 checkout 的未提交前置改动。
+没有。子代理与主代理共享同一个 checkout，只隔离对话上下文。需要在独立检出上作业时，在宿主侧自行 `git worktree add`，把它当作普通工作目录传给子代理，并自己负责 review、merge 与清理。
 
 ## 外部 agent 工具
 
@@ -49,4 +43,4 @@ runtime 只规定长程委派的恢复纪律：
 4. 如确需条件触发，按 `event-scheduling.md` 使用用户提供的稳定检测命令；不要临时复制未知脚本，也不要把第三方协议写进 runtime playbook。
 5. task 闭环前清理临时事件和外部实例。
 
-任何委派都不能转移最终交付责任。父代理必须确认成果已进入目标 checkout，而不是只停留在孤儿 worktree、外部实例或口头报告中。
+任何委派都不能转移最终交付责任。父代理必须确认成果已进入目标 checkout，而不是只停留在外部实例或口头报告中。
