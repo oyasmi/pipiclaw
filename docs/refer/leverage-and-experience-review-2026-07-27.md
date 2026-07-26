@@ -7,6 +7,8 @@
 > **修复进度（2026-07-27，第一轮）**：性能 P-1~P-5、体验 U-1~U-4 全部落地，每条的实际做法、与建议的偏差和刻意不做的部分记在对应小节的"修复"段落里。效果类 E-1~E-5 与复杂度类 C-1~C-4 本轮未动。`npm run check`（lint + typecheck + knip + 893 项单测）通过。
 >
 > **修复进度（2026-07-27，第二轮）**：E-2、E-3、E-5、C-4 全部落地；E-1 按缩小后的范围落地（子代理工作目录贯穿 + 验收绑定修复），刻意不做任务台账持有 workDir 那一半，理由见该节。E-4 与 C-1/C-2/C-3 本轮未动。`npm run check`（lint + typecheck + knip + 899 项单测）通过。
+>
+> **修复进度（2026-07-27，第三轮）**：**E-4 经重估后不成立**——原判断把外部 agent 的承载方当成"用户手写 bash"，实际承载方是 agentmux skill，它已经提供了被建议的 `start`/`probe`/`collect`/`steer` 四条原语与实例生命周期，而 agentmux 唯一给不了的"结束时叫醒 channel"正是 `bash async` 的既有职责。runtime 侧零改动；真正的缺口在 playbook 教了轮询而不是作业唤醒，已改。剩余未动项只有 C-1/C-2/C-3。
 
 ## 0. 本轮的评审视角，以及与上一轮的分工
 
@@ -53,7 +55,9 @@
 1. spec 036 D3 刚刚以明确论证删掉了"任务台账持有工作目录身份"（`worktree` 至今躺在 `RETIRED_TASK_CONTROL_KEYS` 里）。换个字段名把它加回去，是在没有新论据的情况下推翻一个刚做完的决定。
 2. 主代理的工具集是**每 channel 构造一次**的，`securityContext` 被所有工具按引用持有。要让它随"当前正在推进哪个任务"变化，就得把它改成回合级可变对象，并让 runtime 从唤醒文本里反推当前任务 id——这正是题目说的"复杂度显著上升"。
 
-主代理跨仓库因此仍然靠绝对路径（`read`/`write`/`edit`/`grep` 都接受）和 `cd <dir> && …`。真正需要独立检出的是**被委派出去的那段工作**，而它现在有参数了。E-1 关于"一个 channel 驱动多个项目"的完整形态留给 E-4 的 external-run 原语，那里才是它自然的落点。
+主代理跨仓库因此仍然靠绝对路径（`read`/`write`/`edit`/`grep` 都接受）和 `cd <dir> && …`。真正需要独立检出的是**被委派出去的那段工作**，而它现在有参数了。
+
+（第三轮补记：E-1 关于"一个 channel 驱动多个项目"的完整形态原本被指望落在 E-4 的 external-run 原语上。E-4 撤销后它其实已经解决——外部 agent 的工作目录由 `agentmux --cwd` 在委派时显式给出，进程内子代理由 `workingDirectory` 给出，两条路径都不需要 runtime 持有一个跨回合的 workDir 身份。）
 
 ### E-2 ✅ 已修复 · 有真实进展的任务也要等 5 分钟才接续，长程自主推进被结构性限速
 
@@ -120,22 +124,72 @@ return EFFECT_TOOLS.has(toolName);  // write, edit, send_media, subagent
 
 playbook 一并改了口径：`task-driving.md` 原本教模型"有语义 checkpoint 时按较短 delay 接续"（等于暗示去操纵字段），现在改成"接续节奏由这一轮实际做了什么决定，不需要你操纵"，与"不要伪造 progress"不再互相拉扯；同时补一句"也不要跑无意义命令"。`docs/events-and-tasks.md` 的节流清单同步更新。
 
-没有做第二条（把 `bash async` 定为硬纪律）：那是 E-4 的地盘。在 external-run 原语存在之前，硬性要求 async 会把"跑一条命令看看结果"也变成建 job，成本高于收益。
+没有做第二条（把 `bash async` 定为硬纪律）：硬性要求 async 会把"跑一条命令看看结果"也变成建 job，成本高于收益。（第三轮补记：E-4 重估后，`bash async` 只在**等待**外部实例这一段成了首选，见 `task-delegation.md`；驱动动作本身仍然是同步 bash，这条判断不变。）
 
-### E-4 🟠 `subagent` 是进程内 pi Agent，不是外部 Coding Agent 的适配层；核心用途没有 runtime 支撑
+### E-4 ✅ 重估后不成立（原判断基于对承载方的错误假设）· runtime 侧无缺口，缺的是 playbook 指错了路
 
-**事实。** `subagent` 工具直接 `new Agent({...})` 起一个进程内的 pi agent（`src/subagents/tool.ts:683-692`），工具集来自同一个 registry（`:373-400`）。它解决的是**上下文隔离 + 预算约束 + 产物落盘**，不是"调用一个比自己更强的外部执行体"。
+**原结论（2026-07-27，第一次写下时）。** `subagent` 是进程内 pi Agent（`src/subagents/tool.ts:683-692`），不是外部 Coding Agent 的适配层；外部 agent 被推给用户层（`src/playbooks/task-delegation.md`、`docs/events-and-tasks.md`、`docs/runtime-playbooks.md:84` 口径一致），而"边界之内什么都没给"——启动、探活、取回、跨重启认领全靠模型手写 bash + wake 轮询。建议做一个协议无关的 **external-run 原语**：由 workspace 配置或 skill 声明 `start`/`probe`/`collect`/`steer` 四条命令模板，runtime 负责持久化、认领、完成唤醒、并发上限。
 
-而外部 agent 被明确推给用户层：`src/playbooks/task-delegation.md` "Pipiclaw 不内置或假设第三方 agent 工具的命令、状态 JSON、检测脚本"，`docs/events-and-tasks.md:581-583`、`docs/runtime-playbooks.md:84` 口径一致。runtime 只保留"恢复纪律"四条（记录标识 → blocked + wake → 醒来查状态 → 闭环清理）。
+**重估触发点。** 承载方不是"用户随手写的 bash"，而是 **agentmux**：CLI 在 `~/bin/agentmux`，skill 装在 `~/.pipiclaw/workspace/skills/agentmux/`，由 `loadPipiclawSkills()` 从 `workspace/skills` 加载并与 pi 自动发现的 skill 合并（`src/agent/workspace-resources.ts:23-27`），workspace 同名覆盖。把它当作已存在的一层来重看，原结论的前提就塌了。
 
-**判断。** 这条边界本身是**正确的产品决策**——把 agentmux/claude/codex 的协议写进 runtime playbook，升级即漂移。问题不在边界，在于**边界之内什么都没给**：外部执行体的启动、探活、取回、跨重启认领，全靠模型手写 bash + task wake 轮询。于是最重要的使用场景，恰好是抽象层最薄的地方。
+**它已经提供的，恰好是被建议的那四条原语**（以本机安装版本实测，`agentmux help`）：
 
-**关键观察：`ChannelJobManager` 已经把这件事做了 80%。** 它用 `nohup` 启动、`.exit` 文件 + `kill -0` 探活、记录镜像到 `state/jobs/<channelId>/`、重启后重新认领并补发唤醒、完成时自动唤醒 channel 并带上输出尾部和完整输出路径（`src/agent/job-manager.ts:12-26, 218-265, 318-400, 478-514`）。缺的只有两件：
+| E-4 想在 runtime 里声明的 | agentmux 里的既有形态 |
+|---|---|
+| `start` | `summon --template <t> --name <n> --cwd <dir> [--prompt ...]`，模板层封装 harness 差异 |
+| `probe` | `inspect` / `list --json`，四态 `idle`/`busy`/`exited`/`lost` |
+| `collect` | `capture [--json --since <cursor>]`，带增量游标 |
+| `steer` | `prompt <n> --text ...`；`--key C-c` 中断；`halt` 停止 |
 
-1. **探活命令不可自定义**：现在写死 `kill -0 <pid>` + `.exit` 文件。外部 agent 通常是"进程还在但会话已完成"，需要用户 skill 提供的检测命令（比如 `agentmux inspect --json | jq -e '.state=="idle"'`）。
-2. **不能中途 steer**：`job` 工具只有 list/poll/cancel（`src/tools/job.ts`），长驻外部 agent 的典型需求是"跑到一半改需求"。
+外部执行体的生命周期与注册表也在 agentmux 手里：实例是独立进程树（tmux 会话或长驻 harness 进程），daemon 重启不影响它；停止后留墓碑而不是消失，`inspect` 仍能读到 `end_reason`。**"跨重启认领"这件事，pipiclaw 侧只需要 task 正文里记着实例名——这本来就是 `task-delegation.md` 第 1 条纪律。**
 
-**建议。** 提出一个**协议无关的 external-run 原语**，作为 job manager 的泛化：由 workspace 配置或 skill 声明 `start` / `probe` / `collect` / `steer` 四条命令（纯字符串模板，runtime 不理解语义、只负责执行并过 command guard），runtime 负责记录持久化、跨重启认领、完成唤醒、并发上限。第三方协议仍留在用户层（边界不破），恢复纪律回到 runtime（模型不用再手搓）。这是把 Pipiclaw 从"能跑 bash 的助手"变成"AI 能力杠杆"的那一步。
+**E-4 列的两条缺口，逐条不成立：**
+
+1. **"探活命令不可自定义"**。这条成立的前提是让 job manager 去理解外部**会话**状态。但只要放进作业的是外部工具自己的**阻塞等待命令**（`agentmux wait <实例> --timeout <长>`），作业的结束就**等于**会话的结束——此时 `kill -0` + `.exit` 探的是等待进程本身，语义正好正确。E-4 说的"进程还在但会话已完成"是 harness 进程与会话的错配，而 `wait` 已经在外部工具那一侧把这个错配解决掉了。runtime 不需要可配置 probe。
+2. **"不能中途 steer"**。这是 pipiclaw **自有**后台作业的限制（`job` 工具只有 list/poll/cancel）。对外部实例，steer 是 `agentmux prompt <n> --text ...` 一条秒级同步 bash，不占作业名额、不需要任何 runtime 机制。把 steer 做进 job manager 只会多出一条与 CLI 重复的路径。
+
+**因此 external-run 原语现在是净负债**：它会把 agentmux 已经做完的编排层在 runtime 里复制一份，并把第三方协议（谁算 idle、cursor 怎么传、模板长什么样）以"配置面"的名义拉回 runtime——正是这条边界当初要避开的东西，还多一份会随 agentmux 升级漂移的模板配置。
+
+**agentmux 唯一给不了的那一块，runtime 早就有了。** agentmux 无从知道 pipiclaw 的存在，所以"外部实例结束 → 叫醒 channel"只能由 runtime 提供，而这正是 `ChannelJobManager` 的既有职责：`nohup` 启动、记录镜像到 `state/jobs/<channelId>/`、重启后重新认领并补发唤醒、完成时带输出尾部 + `taskId` 唤醒 channel、每 channel 5 个并发上限（`src/agent/job-manager.ts:12-26, 218-265, 383-435, 506-549`）。组合起来是一行，不需要任何新代码：
+
+```
+bash async=true taskId=<任务id> timeout=<明显长于预计耗时>
+  agentmux wait <实例> --timeout <同上> --json
+```
+
+四个交叉验证都通过：
+
+- **guard 不拦**：`command-guard` 是黑名单式，`agentmux` 不匹配任何规则（`halt` 那条只在 `parsed.command === "halt"` 时命中，`agentmux halt` 的 command 是 `agentmux`）。
+- **作业常开**：后台作业没有开关（`src/tools/config.ts:42`），主路径永远注入 `jobManager`（`src/tools/index.ts:58`）。
+- **cwd 不咬人**：`agentmux --cwd` 显式传目录，E-1 剩下那一半（主代理 cwd 固定在 daemon 启动目录）在这条路径上不构成问题。
+- **接续节奏对得上**：`bash async` 计一次 effect（`effect-ledger.ts` 的 `details.async !== undefined`），落在 E-2 修复后的快档，唤醒到达后立刻接续。
+
+失败模式也是良性的：作业超时只 `kill` 掉 nohup 的等待进程，harness 实例是另一棵进程树，工作不丢，唤醒照常发出——"超时"在这里等于"提前叫我一次"，而不是"任务失败"。
+
+**真正的缺口在知识层，而且方向是反的。** `task-delegation.md` 原文第 2 条写的是"`progress` 置 blocked，并设置合理 wake"：
+
+- 它教的是**轮询**——每次回访烧一个完整 LLM 回合，而同一个 runtime 已经能做到零轮询、结束即唤醒；
+- `background-jobs.md` 把完成唤醒讲得很清楚，但例子全是构建/测试/大文件下载，**两份 playbook 谁也没指向对方**；
+- 顺带还用了退休的状态名：六态里只有 `waiting`，`blocked` 只是读取层的历史别名（`src/tasks/transitions.ts:19, 76-78`）。
+
+于是最该零轮询的场景，playbook 恰好把模型推进了最费的一条路。这也解释了 E-3 里那个"最卖力干活的回合最容易被判空转"的形状：同步跑外部 agent、写 note、`[SILENT]`——正是被 playbook 教出来的。
+
+**修复（2026-07-27，第三轮）。零 runtime 代码改动，只改知识层。**
+
+`task-delegation.md` 的"外部 agent 工具"一节重写成三档等待，按用户工具的能力从优到劣：
+
+1. **阻塞等待包成后台作业（首选）**：`bash async` + `taskId`，`progress` 置 `waiting` 且**不设 wake**，结束回合等 runtime 叫；并说明作业超时只终止等待、不杀外部实例，以及要给一个明显长于预计耗时的 `timeout`。
+2. **只有状态查询命令时**：periodic + preAction 门控（忙则零 token 静默），保留 `wake` 兜底。
+3. **两者都没有时**才是 `waiting` + `wake` 轮询。
+
+同时把"启动/纠偏/取回/停止都是秒级同步 bash，不需要 runtime 参与"写明——这句话是防止将来有人再次得出 E-4 的原结论。三条不变纪律（记录现场、自己验收、闭环清理）保留，`blocked` 改为 `waiting` + `blockedReason`。`docs/events-and-tasks.md` 的"外部 Agent 工具的回访边界"和 `docs/runtime-playbooks.md` 的第三方工具边界同步为同一口径。新增回归测试 `routes external-agent waiting to the background-job wake before wake polling`，钉住 delegation playbook 必须提到 `bash async` 与 `background-jobs.md`——这条 playbook 是唯一真相源，漂回轮询会被测到。
+
+**保留的真实局限（不修，记在这里）：**
+
+- 并发上限 5 计的是**等待作业**，不是外部实例数：不被 async 等待的实例不占名额。个人规模下够用，需要时再谈。
+- 模型忘记给大 `timeout` 时，等待作业会在默认 300s 被杀并唤醒一次。成本是一个回合，且外部工作不受影响；playbook 已提示，不值得为它加 runtime 校验。
+- 若某个外部工具**没有**阻塞等待命令，就落到第 2/3 档，仍然可用但要烧回合。这是那个工具的形状问题，不是 runtime 的。
+- 本机 `agentmux version` 报 `dev`，无 `run`、`list --all`，且 `~/.pipiclaw/workspace/skills/agentmux/SKILL.md` 与 `ai-skills` 上游已经分叉（上游新增了 `run` 一次成型、`--since` 成本纪律、`pi-rpc` harness）。这属于用户层升级，**恰恰是这条边界想要的形状**：pipiclaw 一行代码都不用改。建议把 skill 与 CLI 同步到上游版本，之后 `agentmux run --timeout <长> --json` 可以直接替掉 `summon + wait` 两步。
 
 ### E-5 ✅ 已修复 · 12000 字符输入上限对"扔一段构建日志过来"是硬伤
 
@@ -354,16 +408,18 @@ src 合计 150 文件 / 32115 行；test 20111 行；evals 3605 行；docs 21257
 | 1 | ~~**E-1 工作目录贯穿**~~ ✅（缩小范围） | 效果 | 已完成子代理 `workingDirectory` + 验收绑定跟随验收者目录；`control.workDir` 与主代理按任务切 cwd 刻意不做，理由见该节。 |
 | 2 | ~~**E-2 + E-3 接续节奏与 effect 定义**~~ ✅ | 效果 | 已完成。接续拆三档、同步 bash 计弱 effect；未加每小时 attempt 上限（`maxAttempts` 已是止损）。 |
 | 3 | ~~**U-1 `/stop` 告知任务已暂停**~~ ✅ | 体验 | 已完成；`handleStop` 现在回传被暂停的任务 id。 |
-| 4 | **E-4 external-run 原语** | 效果 | 收益最大但工作量也最大；`job-manager` 已完成 80%，把 probe 命令做成可配置 + 加一条 steer 是主要增量。**现在是最高优先级。** |
+| 4 | ~~**E-4 external-run 原语**~~ ❌ 撤销 | 效果 | 重估后不成立：四条原语已由 agentmux skill 提供，完成唤醒已由 `bash async` 提供，做进 runtime 是复制 + 漂移。改为知识层修复（playbook 三档等待），已完成。 |
 | 5 | ~~**P-1 惰性 maintenance context**~~ ✅ | 性能 | 已完成。实际范围比"机械改动"大：真正贵的是 gate 之前算掉的材料，不是数组拷贝。 |
 | 6 | ~~**U-2 语言统一** + **E-5 长输入落盘**~~ ✅ | 体验 | 均已完成。E-5 的路径同时进用户回执和送给模型的截断标记。 |
 | 7 | **C-2 0.9.0 砍兼容层** | 复杂度 | 纯减法，减掉几百行代码和测试。 |
 | 8 | ~~P-2/P-3/P-4 执行器与缓存~~ ✅ | 性能 | 已完成（P-2 取更小方案，见该节）。E-2 已落地，这几条没有被放大。 |
 | 9 | C-3 唤醒模板 / ~~C-4 playbook 去重~~ ✅ | 复杂度 | C-4 已完成；C-3 仍待与上一轮 P-08 合并做。 |
 
-**下一轮的起点**：**E-4（external-run 原语）**是唯一还没动的效果项，也是现在收益最高的一条——E-1 剩下的那一半（一个 channel 驱动多个项目的完整形态）本来就该落在它身上，而不是落回任务台账。其次是 C-2（纯减法）和 C-3（与 P-08 合并）。
+**下一轮的起点**：效果类已经没有待办项了（E-4 撤销后，E-1 剩下的那一半也随之解决——"一个 channel 驱动多个项目"的完整形态由 `agentmux --cwd` + 子代理 `workingDirectory` 承担，不需要 runtime 持有 workDir）。剩下的是复杂度类：**C-2（纯减法）**优先，然后 C-3（与上一轮 P-08 合并做）。
 
 **第二轮的验证缺口**：E-2/E-3 的新行为有单测（三档接续、同步 bash 的四种组合），但仍未跑 evals harness 做行为实证；E-5 的落盘只在 `clipUserInput` 层有测试，没有走完整 channel-runner 回合。
+
+**第三轮的验证缺口**：E-4 的重估验证了组合的**每一个环节**（guard 放行、作业常开、cwd 显式传、effect 计数、超时只杀等待进程），但没有端到端跑一次"钉钉发话 → 委派 agentmux → 作业唤醒 → 验收"的真实闭环。这条链上唯一没有既有测试覆盖的是模型会不会照新 playbook 行动，属于行为面，宜用 evals 或一次真实使用验证。
 
 ---
 

@@ -584,7 +584,13 @@ host Git checkout 的 verifier 还会记录 artifact subject（HEAD、working tr
 
 Pipiclaw 不内置 agentmux 或其他第三方 agent 工具的命令、状态协议和检测脚本。这些能力属于用户安装的可执行文件与 workspace skill。
 
-runtime 只提供通用恢复机制：委派时把工具/实例/目录/预期产物写进 task，置 blocked 并设 wake；到点后按用户 skill 检查、取回和验收。如果用户工具提供稳定的完成态检测命令，可以自行用 periodic + preAction 做条件唤醒，但必须保留 wake 兜底，并在闭环时删除临时事件。
+runtime 只提供通用的等待与恢复机制。启动、纠偏、取回、停止都是同步 bash 命令，不需要 runtime 参与；需要 runtime 的只有"agent 不在场的那段等待"，按用户工具的能力有三档：
+
+1. 工具提供阻塞等待命令（等到实例结束才返回）时，用 `bash async` + `taskId` 把它跑成后台作业，task 置 `waiting` 且不设 wake——作业结束时 runtime 自动唤醒 channel 并带上输出尾部，作业记录跨重启认领。作业超时只终止等待进程，外部实例不受影响。
+2. 只有状态查询命令时，用 periodic + preAction 做条件唤醒（忙则零 token 静默），并保留 task `wake` 兜底。
+3. 两者都没有时才退回 `waiting` + `wake` 轮询。
+
+委派时把工具/实例/目录/预期产物/验收方法写进 task 正文，闭环时删除临时事件并清理外部实例。
 
 ---
 

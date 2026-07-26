@@ -108,6 +108,15 @@ describe("runtime playbook catalog", () => {
 		for (const name of namedInDoc) expect(shipped).toContain(name);
 	});
 
+	// The runtime already guarantees a completion wake for background jobs, so an external
+	// agent's own blocking-wait command belongs in one. Delegation used to prescribe plain
+	// wake polling instead, which burns a turn per check-in; keep the routing explicit.
+	it("routes external-agent waiting to the background-job wake before wake polling", () => {
+		const delegation = readFileSync(join(PLAYBOOKS_DIR, "task-delegation.md"), "utf-8");
+		expect(delegation).toContain("bash async");
+		expect(delegation).toContain("background-jobs.md");
+	});
+
 	it("contains no bundled third-party agentmux implementation", () => {
 		const catalogText = loadRuntimePlaybookCatalog()
 			.map((item) => readFileSync(item.path, "utf-8"))
