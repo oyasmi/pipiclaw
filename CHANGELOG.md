@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.10-beta.3] - 2026-07-27
+
 ### Changed
 
 - The interactive surface is now Chinese throughout. `/help` (both command tables, every description, and the surrounding prose), the "no task is running" replies for `/stop`/`/steer`/`/followup`, the steer-queued confirmation, the busy-time slash-command notice, the error card, the TUI stop notices, the whole `/usage` report, and every `/tasks` action receipt are translated; `CommandSpec.description` being the single source means `/help`, TUI completion, and the busy hint moved together. Structured report bodies (`/tasks list|stats|doctor`, `/events`, `/status`) deliberately keep their English field labels — they are data columns, not prose.

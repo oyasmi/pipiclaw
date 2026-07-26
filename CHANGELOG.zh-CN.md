@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.8.10-beta.3] - 2026-07-27
+
 ### 变更
 
 - 交互面统一为中文。`/help`（两张命令表的全部描述与正文）、无运行回合时 `/stop`/`/steer`/`/followup` 的回复、steer 排队回执、忙时斜杠命令提示、错误卡片、TUI 停止提示、整个 `/usage` 报告，以及 `/tasks` 的全部动作回执都已中文化；因为 `CommandSpec.description` 是唯一真相源，`/help`、TUI 补全和忙时提示一次改到位。结构化报告正文（`/tasks list|stats|doctor`、`/events`、`/status`）刻意保留英文字段标签——它们是数据栏位，不是文案。
