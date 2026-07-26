@@ -10,6 +10,7 @@ function stubLedger(fn: (q: UsageSummaryQuery) => Partial<UsageSummary>): UsageL
 		record: () => {},
 		summarize: (q) => ({
 			totalCost: 0,
+			totalTokens: 0,
 			entryCount: 0,
 			byKind: {},
 			byModel: {},
@@ -31,14 +32,14 @@ describe("/usage command parsing", () => {
 describe("usage windows", () => {
 	it("default shows today + this month", () => {
 		const windows = usageWindows("default", NOW);
-		expect(windows.map((w) => w.title)).toEqual(["Today (UTC)", "This month (2026-07)"]);
+		expect(windows.map((w) => w.title)).toEqual(["今天（UTC）", "本月（2026-07）"]);
 		expect(windows[0].since.toISOString()).toBe("2026-07-04T00:00:00.000Z");
 		expect(windows[1].since.toISOString()).toBe("2026-07-01T00:00:00.000Z");
 	});
 
 	it("7d spans the last week", () => {
 		const [window] = usageWindows("7d", NOW);
-		expect(window.title).toBe("Last 7 days");
+		expect(window.title).toBe("最近 7 天");
 		expect(window.since.toISOString()).toBe("2026-06-27T12:00:00.000Z");
 	});
 });
@@ -47,9 +48,10 @@ describe("renderUsageReport", () => {
 	it("renders channel + global cost with kind and model breakdowns", () => {
 		const ledger = stubLedger((q) =>
 			q.channelId
-				? { totalCost: 0.3, entryCount: 2, byKind: { turn: 0.2, sidecar: 0.1 } }
+				? { totalCost: 0.3, totalTokens: 12_000, entryCount: 2, byKind: { turn: 0.2, sidecar: 0.1 } }
 				: {
 						totalCost: 1.5,
+						totalTokens: 2_400_000,
 						entryCount: 5,
 						byModel: { "anthropic/opus": 1.0, "anthropic/haiku": 0.5 },
 						byChannel: { c1: 0.3, c2: 1.2 },
@@ -57,16 +59,16 @@ describe("renderUsageReport", () => {
 		);
 
 		const report = renderUsageReport(ledger, "c1", "month", NOW);
-		expect(report).toContain("This month (2026-07)");
-		expect(report).toContain("This channel: $0.3000");
+		expect(report).toContain("本月（2026-07）");
+		expect(report).toContain("本频道：$0.3000 · 12k tokens");
 		expect(report).toContain("turn $0.2000 · sidecar $0.1000");
-		expect(report).toContain("Global: $1.5000 across 2 channels");
-		expect(report).toContain("Top models: anthropic/opus $1.0000, anthropic/haiku $0.5000");
+		expect(report).toContain("全局：$1.5000 · 2.4M tokens，覆盖 2 个频道");
+		expect(report).toContain("用量最高的模型：anthropic/opus $1.0000，anthropic/haiku $0.5000");
 	});
 
 	it("reports empty windows plainly", () => {
 		const ledger = stubLedger(() => ({}));
 		const report = renderUsageReport(ledger, "c1", "default", NOW);
-		expect(report).toContain("No recorded usage.");
+		expect(report).toContain("暂无用量记录。");
 	});
 });

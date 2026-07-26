@@ -141,6 +141,10 @@ class ChannelDeliveryController {
 		this.progressTextDirty = true;
 		if (this.bot.progressStyle === "rolling") {
 			this.trimToRecentEntries(ROLLING_WINDOW_SIZE);
+			// The header carries elapsed time and a step count, so it changes on every update:
+			// an append-only delta would leave a stale header on the card.
+			this.replayRequired = true;
+			this.sentProgressChars = 0;
 		}
 		if (this.progressWindowStartedAt === 0) {
 			this.progressWindowStartedAt = Date.now();
@@ -233,7 +237,11 @@ class ChannelDeliveryController {
 		try {
 			while (this.appliedRevision < this.desiredRevision) {
 				const mode = this.mode;
-				const progressText = this.getProgressText();
+				const body = this.getProgressText();
+				const progressText =
+					mode === "progress" && this.bot.progressStyle === "rolling" && body
+						? `${this.buildRollingHeader()}\n\n${body}`
+						: body;
 				const throttleBaseAt = this.lastDeliveredAt > 0 ? this.lastDeliveredAt : this.progressWindowStartedAt;
 				if (mode === "progress" && throttleBaseAt > 0) {
 					const remaining = MIN_UPDATE_INTERVAL_MS - (Date.now() - throttleBaseAt);
@@ -272,7 +280,7 @@ class ChannelDeliveryController {
 					} else if (mode === "finalize-existing") {
 						if (content || this.cardWarmupTriggered) {
 							const finalProgressText =
-								this.bot.progressStyle === "rolling" ? this.buildSummaryText("Done") : progressText;
+								this.bot.progressStyle === "rolling" ? this.buildSummaryText() : progressText;
 							touchedRemote = await this.bot.replaceCard(
 								this.event.channelId,
 								content || this.bot.progressStyle === "rolling" ? finalProgressText : NO_CONTENT,
@@ -386,6 +394,27 @@ class ChannelDeliveryController {
 		return this.cachedProgressText;
 	}
 
+	private formatElapsed(ms: number): string {
+		const seconds = Math.max(0, Math.round(ms / 1000));
+		if (seconds < 60) return `${seconds}s`;
+		const minutes = Math.floor(seconds / 60);
+		if (minutes < 60) return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`;
+		return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
+	}
+
+	private elapsedMs(): number {
+		return this.progressStartedAt > 0 ? Date.now() - this.progressStartedAt : 0;
+	}
+
+	/**
+	 * Standing first line for rolling mode. The window only keeps the last few entries, so a long
+	 * turn otherwise gave no way to tell "still working, 14 steps in" from "stuck": every visible
+	 * line looked the same as a minute ago. The numbers are already tracked for the closing summary.
+	 */
+	private buildRollingHeader(): string {
+		return `⏱ ${this.formatElapsed(this.elapsedMs())} · ${this.toolCallCount} 步`;
+	}
+
 	private trimToRecentEntries(maxEntries: number): void {
 		let entryCount = 0;
 		for (const segment of this.progressSegments) {
@@ -415,10 +444,8 @@ class ChannelDeliveryController {
 		this.sentProgressChars = 0;
 	}
 
-	private buildSummaryText(status: "Done"): string {
-		const elapsedSeconds = this.progressStartedAt > 0 ? Math.round((Date.now() - this.progressStartedAt) / 1000) : 0;
-		const toolLabel = this.toolCallCount === 1 ? "1 tool call" : `${this.toolCallCount} tool calls`;
-		return `${status} · ${toolLabel} · ${elapsedSeconds}s`;
+	private buildSummaryText(): string {
+		return `完成 · ${this.toolCallCount} 步 · ${this.formatElapsed(this.elapsedMs())}`;
 	}
 }
 

@@ -132,7 +132,7 @@ sequenceDiagram
 
 细节补充：
 
-- **忙时语义**：任务流式进行中，内建命令（`/help /stop /steer /followup /events /tasks /status /usage`）仍可用；普通消息按 `busyMessageDefault`（默认 `steer`）注入当前轮；`/stop` 会中止当前轮、丢弃排队消息、暂停关联任务并取消 durable-dispatch 租约。会话命令（`/model` `/new` `/compact`）只在空闲时可用。
+- **忙时语义**：任务流式进行中，内建命令（`/help /stop /steer /followup /events /tasks /status /usage`）仍可用；普通消息按 `busyMessageDefault`（默认 `steer`）注入当前轮；`/stop` 会中止当前轮、丢弃排队消息、暂停关联任务并取消 durable-dispatch 租约；回执会指名被暂停的任务和 `/tasks resume <id>`，避免用户以为只是打断了一轮。会话命令（`/model` `/new` `/compact`）只在空闲时可用。
 - **未知斜杠命令在分发处拒绝**（`isKnownSlashCommand`），避免 `/modle` 这类笔误消耗一整轮 LLM。
 - **模型 fallback**（`agent/model-fallback.ts`）：主模型失败 → 切到 `settings.json` 配置的备用模型重试并通知用户；主模型进入冷却期（`PRIMARY_COOLDOWN_MS`），下一轮开始时若冷却期已过则静默切回。
 - **超长输入**截断到 `MAX_USER_MESSAGE_CHARS` 并提示；`PIPICLAW_DEBUG=1` 时每轮完整 prompt 落到频道目录 `last_prompt.json`。
@@ -144,7 +144,7 @@ sequenceDiagram
 | responseMode（channel.json） | 进度展示 | 最终回复 |
 |---|---|---|
 | `full_progress_then_plain_final`（默认） | AI Card 累积全部进度 | 卡片收尾 + plain 消息 |
-| `rolling_progress_then_plain_final` | 卡片滚动窗口（最近 3 段） | 同上 |
+| `rolling_progress_then_plain_final` | 卡片滚动窗口（常驻首行 `⏱ 用时 · N 步` + 最近 3 段） | 同上 |
 | `final_card_only` | 无进度 | 仅最终卡片 |
 
 `ChannelDeliveryController` 维护 revision 计数的同步循环：进度更新合并、≥800ms 节流、卡片预热（`primeCard`）、失败时降级 plain、`flush()` 有 60s 兜底死线保证 `run()` 的 finally 不会永久挂起频道。

@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseTaskControl, type TaskControl, taskPriorityRank } from "../tasks/control.js";
 import { normalizeStoredStatus, TERMINAL_TASK_STATUSES, wasLegacyEscalated } from "../tasks/transitions.js";
@@ -719,6 +719,42 @@ function toEntry(id: string, content: string, now: number): TaskLedgerEntry {
 }
 
 /**
+ * Parsed task files, keyed by path and invalidated by (mtime, ctime, size) — the same
+ * fingerprint the memory candidate store uses.
+ *
+ * The task driver re-reads every channel's whole ledger on every tick *and* after every turn
+ * (`nudge`), so an unchanged file was being read and re-parsed (frontmatter + control JSON +
+ * body scan) many times per minute. Only `actionable` depends on the clock, so it is recomputed
+ * from `now` on every call and never cached.
+ *
+ * Cached entries are handed out by reference, which is safe because every consumer of
+ * `readActiveTasks` only reads: the read-modify-write path goes through `readStoredTask`, which
+ * always reads the file itself. Treat entries from here as immutable.
+ */
+interface CachedTaskParse {
+	mtimeMs: number;
+	ctimeMs: number;
+	size: number;
+	entry: Omit<TaskLedgerEntry, "actionable">;
+}
+
+const parseCache = new Map<string, CachedTaskParse>();
+/** Bound the cache for a long-lived daemon: far above any real ledger, and cheap to refill. */
+const PARSE_CACHE_LIMIT = 512;
+
+async function readEntry(path: string, id: string, now: number): Promise<TaskLedgerEntry> {
+	const stats = await stat(path);
+	const cached = parseCache.get(path);
+	if (cached && cached.mtimeMs === stats.mtimeMs && cached.ctimeMs === stats.ctimeMs && cached.size === stats.size) {
+		return { ...cached.entry, actionable: isTaskActionable(cached.entry.frontmatter, now) };
+	}
+	const entry = toEntry(id, await readFile(path, "utf-8"), now);
+	if (parseCache.size >= PARSE_CACHE_LIMIT) parseCache.clear();
+	parseCache.set(path, { mtimeMs: stats.mtimeMs, ctimeMs: stats.ctimeMs, size: stats.size, entry });
+	return entry;
+}
+
+/**
  * Read every `.md` file in `tasks/` (root only — the `archive/` subdirectory is not
  * scanned), returning entries sorted actionable-first. A file that cannot be read is
  * still returned (fail-open: `readable: false`, `actionable: true`) so problems surface.
@@ -736,10 +772,11 @@ export async function readActiveTasks(tasksDir: string, now: number = Date.now()
 	for (const dirent of dirents) {
 		if (!dirent.isFile() || !dirent.name.endsWith(".md")) continue;
 		const id = dirent.name.slice(0, -".md".length);
+		const path = join(tasksDir, dirent.name);
 		try {
-			const content = await readFile(join(tasksDir, dirent.name), "utf-8");
-			entries.push(toEntry(id, content, now));
+			entries.push(await readEntry(path, id, now));
 		} catch {
+			parseCache.delete(path);
 			entries.push({
 				id,
 				title: id,

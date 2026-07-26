@@ -91,8 +91,8 @@ describe("memory maintenance jobs", () => {
 			settings: settings(),
 			model: TEST_MODEL,
 			resolveApiKey: async () => "",
-			messages,
-			sessionEntries,
+			messages: () => messages,
+			sessionEntries: () => sessionEntries,
 		});
 
 		expect(result).toMatchObject({ skipped: true, skipReason: "clean" });
@@ -115,8 +115,8 @@ describe("memory maintenance jobs", () => {
 			settings: settings(),
 			model: TEST_MODEL,
 			resolveApiKey: async () => "",
-			messages,
-			sessionEntries,
+			messages: () => messages,
+			sessionEntries: () => sessionEntries,
 		});
 
 		expect(result).toMatchObject({ skipped: true, skipReason: "not-idle-yet" });
@@ -133,8 +133,8 @@ describe("memory maintenance jobs", () => {
 			settings: settings(),
 			model: TEST_MODEL,
 			resolveApiKey: async () => "",
-			messages,
-			sessionEntries,
+			messages: () => messages,
+			sessionEntries: () => sessionEntries,
 		});
 
 		expect(result).toMatchObject({ skipped: true, skipReason: "nothing-to-maintain" });
@@ -172,8 +172,8 @@ describe("memory maintenance jobs", () => {
 			settings: settings(),
 			model: TEST_MODEL,
 			resolveApiKey: async () => "",
-			messages,
-			sessionEntries: allEntries,
+			messages: () => messages,
+			sessionEntries: () => allEntries,
 		});
 		expect(runInlineConsolidation).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -202,8 +202,8 @@ describe("memory maintenance jobs", () => {
 			settings: settings(),
 			model: TEST_MODEL,
 			resolveApiKey: async () => "",
-			messages,
-			sessionEntries,
+			messages: () => messages,
+			sessionEntries: () => sessionEntries,
 		});
 		expect(result.error).toContain("model timeout");
 		const state = await readMemoryMaintenanceState(appHomeDir, "dm_1");

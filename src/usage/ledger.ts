@@ -36,6 +36,8 @@ export interface UsageLedgerEntry {
 
 export interface UsageSummary {
 	totalCost: number;
+	/** Tokens behind `totalCost`; the only signal there is when a model reports no pricing. */
+	totalTokens: number;
 	entryCount: number;
 	byKind: Record<string, number>;
 	byModel: Record<string, number>;
@@ -83,8 +85,11 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 
 	return {
 		record(entry: Omit<UsageLedgerEntry, "ts">): void {
-			// No API billing (local models) → no ledger noise.
-			if (!(entry.cost.total > 0)) return;
+			// Record anything that consumed tokens, even at zero cost: a local model, or one whose
+			// pricing metadata is missing, still has to show up somewhere or `/usage` reports nothing
+			// at all and any spend guard built on this ledger fails open. Only a genuinely empty
+			// entry (no tokens, no cost) is dropped as noise.
+			if (!(entry.cost.total > 0) && !(entry.usage.total > 0)) return;
 			if (!entry.channelId) {
 				log.logWarning("Usage ledger entry missing channelId; recording as untracked", `kind=${entry.kind}`);
 			}
@@ -105,6 +110,7 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 			const untilMs = until.getTime();
 			const summary: UsageSummary = {
 				totalCost: 0,
+				totalTokens: 0,
 				entryCount: 0,
 				byKind: {},
 				byModel: {},
@@ -133,6 +139,7 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 					if (query.channelId && entry.channelId !== query.channelId) continue;
 					const cost = entry.cost?.total ?? 0;
 					summary.totalCost += cost;
+					summary.totalTokens += entry.usage?.total ?? 0;
 					summary.entryCount += 1;
 					summary.byKind[entry.kind] = (summary.byKind[entry.kind] ?? 0) + cost;
 					summary.byModel[entry.model] = (summary.byModel[entry.model] ?? 0) + cost;

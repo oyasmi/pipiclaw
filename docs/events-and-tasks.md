@@ -535,10 +535,11 @@ task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token
 - `/tasks approve <id>` —— 唯一的外部副作用授权入口；由 runtime 直接记录用户和时间，不经 LLM。
 - `/tasks pause <id>` / `/tasks resume <id>` —— 持久暂停或恢复该任务的自动 wake；resume 后由下一次 driver scan 接手。
 - `/tasks run <id>` —— 清除 wake 并立即入队一轮 task attempt（DingTalk runtime）；没有 daemon 的 TUI 会把任务置为 ready，并提示你用普通消息继续推进。
+- `/tasks set <id> <wake|next|priority|attempts|deadline> <值>` —— 直接改一个字段，不花一个 LLM 回合。值取该行剩余全部内容（可含空格），留空表示清除（wake/next/deadline）。校验复用 `task_manage set` 的同一套规则（`applyTaskControlPatch`），所以两个入口不会各说各话；状态迁移、验收、审批这些结构性变更仍然只走 `task_manage`。
 - `/tasks stats [id]` —— 零 LLM 成本查看 governed task 的 attempts、token、cost、wall time、最近结果和 verifier 状态。
 - `/tasks doctor` —— 只读体检 task/event 与治理一致性：坏 control、超预算/截止、未授权 external action、陈旧 verifier PASS、仍带已退役 control 键的任务（并列出因此失效的先后次序），以及原有的 frontmatter/wake/event 问题。每条都附 `Next step`。
 
-除显式的 `approve` 安全闸门外，`/tasks` 命令保持只读。想改期、取消、调预算或调整做法，直接告诉 agent，由它通过 `task_manage` 原子更新台账。TUI 里同样可用。
+除 `approve`（安全闸门）与 `set`（单字段直改）外，`/tasks` 命令保持只读。想取消、换状态或调整做法，直接告诉 agent，由它通过 `task_manage` 原子更新台账。TUI 里同样可用。
 
 ### 任务摘要注入（给 agent 看，`<task_agenda>`）
 

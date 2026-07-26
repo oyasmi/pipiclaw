@@ -134,9 +134,9 @@ export class TurnController {
 			case "stop":
 				if (this.deps.runner.isBusy()) {
 					void this.deps.runner.abort();
-					this.deps.frontend.showNotice("Stopping…");
+					this.deps.frontend.showNotice("正在停止…");
 				} else {
-					this.deps.frontend.showNotice("Nothing is running.");
+					this.deps.frontend.showNotice("当前没有运行中的回合。");
 				}
 				return;
 			case "followup":
@@ -249,7 +249,7 @@ export class TurnController {
 	private handleInterrupt(): void {
 		if (this.deps.runner.isBusy()) {
 			void this.deps.runner.abort();
-			this.deps.frontend.showNotice("Stopping…");
+			this.deps.frontend.showNotice("正在停止…");
 			return;
 		}
 		// Idle: first Ctrl-C arms the exit prompt, the next one exits (no time

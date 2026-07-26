@@ -102,7 +102,7 @@ export interface TaskControlPatch {
 	verificationRequired?: boolean;
 }
 
-const PRIORITIES: readonly TaskPriority[] = ["low", "normal", "high", "critical"];
+export const TASK_PRIORITIES: readonly TaskPriority[] = ["low", "normal", "high", "critical"];
 const SIDE_EFFECTS: readonly TaskSideEffects[] = ["workspace", "external"];
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
 const OUTCOMES: readonly TaskOutcome[] = ["pending", "running", "progress", "blocked", "failed"];
@@ -277,7 +277,7 @@ export function parseTaskControl(raw: string): TaskControl {
 
 	return {
 		version: 1,
-		priority: enumValue(value.priority, PRIORITIES, "normal"),
+		priority: enumValue(value.priority, TASK_PRIORITIES, "normal"),
 		deadline,
 		nextAction: optionalString(value.nextAction),
 		lastOutcome: enumValue(canonicalEnumValue(value.lastOutcome), OUTCOMES, "pending"),

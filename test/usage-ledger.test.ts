@@ -78,13 +78,34 @@ describe("usage ledger", () => {
 		expect(typeof sub?.ts).toBe("string");
 	});
 
-	it("skips entries with non-positive cost", async () => {
+	it("keeps a zero-cost entry that still burned tokens, and its tokens are summarized", async () => {
 		const ledger = createUsageLedger({ baseDir: dir });
 		recordAt(ledger, "2026-07-04T00:00:00Z", {
 			channelId: "c1",
 			kind: "turn",
 			model: "local",
 			usage: tokens,
+			cost: cost(0),
+		});
+		await flush(ledger);
+
+		expect(readMonth("2026-07")).toHaveLength(1);
+		const summary = ledger.summarize({
+			since: new Date("2026-07-01T00:00:00Z"),
+			until: new Date("2026-07-31T00:00:00Z"),
+		});
+		expect(summary.totalCost).toBe(0);
+		expect(summary.totalTokens).toBe(tokens.total);
+		expect(summary.entryCount).toBe(1);
+	});
+
+	it("skips an entry with neither tokens nor cost", async () => {
+		const ledger = createUsageLedger({ baseDir: dir });
+		recordAt(ledger, "2026-07-04T00:00:00Z", {
+			channelId: "c1",
+			kind: "turn",
+			model: "local",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			cost: cost(0),
 		});
 		await flush(ledger);

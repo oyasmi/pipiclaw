@@ -47,14 +47,14 @@ describe("handleTasksCommand", () => {
 	}
 
 	it("reports no active tasks for an empty ledger", async () => {
-		expect(await run("")).toContain("No active tasks");
+		expect(await run("")).toContain("当前没有进行中的任务");
 	});
 
 	it("lists active tasks actionable-first", async () => {
 		await writeFile(join(tasksDir, "later.md"), doc(`status: blocked\nwake: ${FUTURE}`, "# Later task"));
 		await writeFile(join(tasksDir, "now.md"), doc("status: in-progress", "# Now task"));
 		const out = await run("");
-		expect(out).toContain("2 active");
+		expect(out).toContain("2 个进行中");
 		expect(out.indexOf("now — Now task")).toBeLessThan(out.indexOf("later — Later task"));
 	});
 
@@ -66,7 +66,7 @@ describe("handleTasksCommand", () => {
 	it("shows a single active task's full content", async () => {
 		await writeFile(join(tasksDir, "weekly.md"), doc("status: open", "# 周报\n\nbody here"));
 		const out = await run("show weekly");
-		expect(out).toContain("# Task: weekly");
+		expect(out).toContain("# 任务：weekly");
 		expect(out).toContain("body here");
 	});
 
@@ -75,12 +75,12 @@ describe("handleTasksCommand", () => {
 		await mkdir(archiveDir, { recursive: true });
 		await writeFile(join(archiveDir, "old.md"), doc("status: done", "# Old"));
 		const out = await run("show old");
-		expect(out).toContain("(archived)");
+		expect(out).toContain("（已归档）");
 		expect(out).toContain("# Old");
 	});
 
 	it("reports a missing task", async () => {
-		expect(await run("show ghost")).toContain("Task not found: ghost");
+		expect(await run("show ghost")).toContain("找不到任务：ghost");
 	});
 
 	it("rejects a traversal id", async () => {
@@ -96,7 +96,7 @@ describe("handleTasksCommand", () => {
 	});
 
 	it("shows usage for an unknown action", async () => {
-		expect(await run("frobnicate")).toContain("Usage:");
+		expect(await run("frobnicate")).toContain("用法：");
 	});
 
 	it("records explicit user approval for external side effects", async () => {
@@ -105,7 +105,7 @@ describe("handleTasksCommand", () => {
 		control.externalApproval = "required";
 		await writeFile(join(tasksDir, "publish.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
 		const out = await run("approve publish");
-		expect(out).toContain("Approved external side effects");
+		expect(out).toContain("已批准任务 publish 的外部副作用");
 		const task = await readFile(join(tasksDir, "publish.md"), "utf-8");
 		expect(task).toContain('"externalApproval":"granted"');
 		expect(task).toContain('"approvalBy":"Alice"');
@@ -113,10 +113,39 @@ describe("handleTasksCommand", () => {
 
 	it("pauses and resumes a task without invoking the model", async () => {
 		await writeFile(join(tasksDir, "long.md"), doc("status: in-progress", STANDARD_BODY));
-		expect(await run("pause long")).toContain("Paused task long");
+		expect(await run("pause long")).toContain("已暂停任务 long");
 		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: paused");
-		expect(await run("resume long")).toContain("Resumed task long");
+		expect(await run("resume long")).toContain("已恢复任务 long");
 		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: active");
+	});
+
+	it("sets a single task field directly, keeping the value's spaces", async () => {
+		const control = createDefaultTaskControl();
+		await writeFile(join(tasksDir, "edit.md"), renderTaskDocument({ status: "active", control }, STANDARD_BODY));
+
+		expect(await run(`set edit wake ${FUTURE}`)).toContain("已更新任务 edit：wake");
+		expect(await readFile(join(tasksDir, "edit.md"), "utf-8")).toContain(`wake: ${FUTURE}`);
+
+		await run("set edit next 跑一遍构建 并贴出失败堆栈");
+		await run("set edit attempts 20");
+		await run("set edit priority high");
+		const stored = await readFile(join(tasksDir, "edit.md"), "utf-8");
+		expect(stored).toContain('"nextAction":"跑一遍构建 并贴出失败堆栈"');
+		expect(stored).toContain('"maxAttempts":20');
+		expect(stored).toContain('"priority":"high"');
+
+		// An empty value clears the field rather than writing an empty string.
+		await run("set edit wake");
+		expect(await readFile(join(tasksDir, "edit.md"), "utf-8")).not.toContain("wake:");
+	});
+
+	it("rejects an invalid field, value, or task id on set", async () => {
+		await writeFile(join(tasksDir, "edit.md"), doc("status: active", STANDARD_BODY));
+		expect(await run("set edit bogus 1")).toContain("用法：/tasks set");
+		expect(await run("set edit wake not-a-date")).toContain("不是合法的 ISO8601 时间");
+		expect(await run("set edit attempts 0")).toContain("attempts 必须是不小于 1 的整数");
+		expect(await run("set edit priority urgent")).toContain("priority 必须是");
+		expect(await run("set ghost priority high")).toContain("找不到任务：ghost");
 	});
 
 	it("stamps pausedBy=user on pause and clears it on resume for a governed task", async () => {
@@ -142,7 +171,7 @@ describe("handleTasksCommand", () => {
 				return true;
 			},
 		});
-		expect(out).toContain("Enqueued task ready");
+		expect(out).toContain("已把任务 ready 排入一次立即执行");
 		expect(dispatches).toEqual(["ready"]);
 		expect(await readFile(join(tasksDir, "ready.md"), "utf-8")).toContain("status: active");
 	});
@@ -219,7 +248,7 @@ describe("handleTasksCommand", () => {
 
 	it("reports no doctor issues for a clean ledger", async () => {
 		await writeFile(join(tasksDir, "active.md"), doc("status: open", STANDARD_BODY));
-		expect(await run("doctor")).toContain("No task ledger issues found");
+		expect(await run("doctor")).toContain("未发现任务台账问题");
 	});
 
 	// Defense in depth: control.verification lives in a file the agent's own write/edit tools
@@ -246,7 +275,7 @@ describe("handleTasksCommand", () => {
 
 	it("doctor accepts wake without a checkin and reports invalid wake values", async () => {
 		await writeFile(join(tasksDir, "waiting.md"), doc(`status: awaiting-user\nwake: ${FUTURE}`, STANDARD_BODY));
-		expect(await run("doctor")).toContain("No task ledger issues found");
+		expect(await run("doctor")).toContain("未发现任务台账问题");
 
 		await writeFile(join(tasksDir, "broken-wake.md"), doc("status: blocked\nwake: soon", STANDARD_BODY));
 		const out = await run("doctor");
@@ -296,6 +325,6 @@ describe("handleTasksCommand", () => {
 			doc(`status: done\nwake: ${FUTURE}\nschedule: 0 9 * * 1\nrecurrence: 每周一`, STANDARD_BODY),
 		);
 		const out = await run("doctor");
-		expect(out).toContain("No task ledger issues found");
+		expect(out).toContain("未发现任务台账问题");
 	});
 });

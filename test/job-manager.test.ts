@@ -23,8 +23,9 @@ class FakeJobExecutor implements Executor {
 			return { code: 0, stdout: `${this.nextPid++}\n`, stderr: "" };
 		}
 		if (command.includes("kill -0")) {
-			// probe: returns EXIT:<code> / ALIVE / GONE
-			return { code: 0, stdout: `${this.probeResult}\n`, stderr: "" };
+			// Batched probe: one branch per job, each printing "<id> EXIT:<code>|ALIVE|GONE".
+			const ids = Array.from(command.matchAll(/printf '%s ALIVE\\n' '([^']*)'/g)).map((match) => match[1]);
+			return { code: 0, stdout: `${ids.map((id) => `${id} ${this.probeResult}`).join("\n")}\n`, stderr: "" };
 		}
 		if (command.startsWith("kill ")) {
 			return { code: 0, stdout: "", stderr: "" };
@@ -67,6 +68,25 @@ describe("ChannelJobManager", () => {
 		// No list/poll/cancel call — rely purely on the internal sweeper to reconcile state.
 		await new Promise((resolve) => setTimeout(resolve, 40));
 		expect(manager.runningCount()).toBe(0);
+	});
+
+	it("probes every running job in a single sweep command", async () => {
+		const executor = new FakeJobExecutor();
+		const manager = new ChannelJobManager("dm_1", executor, 5);
+		for (let i = 0; i < 3; i++) {
+			await manager.start("sleep 100", `job${i}`, 300);
+		}
+		const beforeSweep = executor.commands.length;
+
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		const probes = executor.commands.slice(beforeSweep).filter((command) => command.includes("kill -0"));
+		expect(probes.length).toBeGreaterThan(0);
+		// Every sweep spawns one shell regardless of how many jobs are alive.
+		for (const probe of probes) {
+			expect(probe.split("\n")).toHaveLength(3);
+		}
+		expect(manager.runningCount()).toBe(3);
 	});
 
 	it("caps the number of concurrent running jobs", async () => {

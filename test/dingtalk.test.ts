@@ -95,7 +95,7 @@ function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandle
 	return {
 		isRunning: vi.fn(() => false),
 		handleEvent: vi.fn(async () => {}),
-		handleStop: vi.fn(async () => {}),
+		handleStop: vi.fn(async () => ({})),
 		handleEventsCommand: vi.fn(async () => {}),
 		handleTasksCommand: vi.fn(async () => {}),
 		handleStatusCommand: vi.fn(async () => {}),
@@ -280,7 +280,7 @@ describe("dingtalk", () => {
 			conversationType: "1",
 		});
 		expect(handler.handleStop).toHaveBeenCalledWith("dm_staff_1", bot);
-		expect(bot.sendPlain).toHaveBeenCalledWith("dm_staff_1", "Stopping the current task.");
+		expect(bot.sendPlain).toHaveBeenCalledWith("dm_staff_1", "已停止当前回合。");
 
 		await privateApi.onStreamMessage({
 			text: { content: "/steer focus src" },
@@ -390,7 +390,7 @@ describe("dingtalk", () => {
 
 		expect(handler.handleBusyMessage).not.toHaveBeenCalled();
 		const reply = (bot.sendPlain as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1] as string;
-		expect(reply).toContain("A task is already running");
+		expect(reply).toContain("当前已有回合在运行");
 		expect(reply).toContain("`/status`");
 		expect(reply).toContain("`/model`");
 	});

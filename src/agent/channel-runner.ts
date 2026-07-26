@@ -502,12 +502,12 @@ export class ChannelRunner implements AgentRunner {
 								: undefined;
 						const detailLines = [`\`${baseErrorSummary}\``];
 						if (compactionSummary) {
-							detailLines.push(`Recovery: \`${compactionSummary}\``);
+							detailLines.push(`恢复尝试：\`${compactionSummary}\``);
 						}
 						if (fallbackAttempted && fallbackTargetRef) {
 							detailLines.push(`已切换备用模型 \`${fallbackTargetRef}\` 重试，仍失败。`);
 						}
-						await ctx.replaceMessage(`_Sorry, something went wrong._\n\n${detailLines.join("\n\n")}`);
+						await ctx.replaceMessage(`_抱歉，出错了。_\n\n${detailLines.join("\n\n")}`);
 					} catch (err) {
 						const errMsg = errorMessage(err);
 						log.logWarning("Failed to post error message", errMsg);
@@ -542,8 +542,9 @@ export class ChannelRunner implements AgentRunner {
 				await ctx.close();
 			}
 
-			// Log usage summary
-			if (this.runState.totalUsage.cost.total > 0) {
+			// Log usage summary. Gated on tokens as well as cost: a local (or pricing-less) model
+			// bills nothing, and skipping it here left both the log and the ledger empty.
+			if (this.runState.totalUsage.cost.total > 0 || this.runState.totalUsage.total > 0) {
 				const lastAssistantMessage = getLastAssistantUsage(this.session.messages);
 
 				const contextTokens = lastAssistantMessage
@@ -612,20 +613,17 @@ export class ChannelRunner implements AgentRunner {
 					await this.sendCommandReply(ctx, this.renderContextReport(command.args));
 					return;
 				case "stop":
-					await this.sendCommandReply(ctx, "No task is running. Use `/stop` only while a task is running.");
+					await this.sendCommandReply(ctx, "当前没有运行中的回合，`/stop` 只在回合进行中有意义。");
 					return;
 				case "steer":
 					this.requireQueuedMessage(command.args, "steer");
-					await this.sendCommandReply(
-						ctx,
-						"No task is running. Send the message directly instead of using `/steer`.",
-					);
+					await this.sendCommandReply(ctx, "当前没有运行中的回合，直接发消息即可，不用 `/steer`。");
 					return;
 				case "followup":
 					this.requireQueuedMessage(command.args, "followup");
 					await this.sendCommandReply(
 						ctx,
-						"No task is running. Send the message directly now, or use `/followup` while a task is running.",
+						"当前没有运行中的回合，直接发消息即可；`/followup` 用于回合进行中排队。",
 					);
 					return;
 				default: {
@@ -675,8 +673,10 @@ export class ChannelRunner implements AgentRunner {
 		return {
 			channelId: this.channelId,
 			channelDir: this.channelDir,
-			messages: [...this.session.messages],
-			sessionEntries: [...this.sessionManager.getBranch()],
+			// Snapshot only when a maintenance job actually needs the transcript; most ticks
+			// stop at a schedule gate and never call these.
+			messages: () => [...this.session.messages],
+			sessionEntries: () => [...this.sessionManager.getBranch()],
 			model: this.session.model ?? this.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			settings: {

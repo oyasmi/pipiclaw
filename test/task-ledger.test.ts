@@ -284,6 +284,24 @@ describe("readActiveTasks", () => {
 		expect(entries.find((entry) => entry.id === "ready")?.actionable).toBe(true);
 	});
 
+	it("re-reads a changed file and still re-evaluates actionable against the clock", async () => {
+		const path = join(dir, "cached.md");
+		await writeFile(path, doc(`status: blocked\nwake: ${FUTURE}`, "# Cached"));
+
+		const first = (await readActiveTasks(dir, NOW))[0];
+		expect(first.actionable).toBe(false);
+
+		// Same file, later clock: the cached parse must not freeze the wake verdict.
+		const later = (await readActiveTasks(dir, Date.parse(FUTURE) + 1))[0];
+		expect(later.title).toBe("Cached");
+		expect(later.actionable).toBe(true);
+
+		await writeFile(path, doc("status: in-progress", "# Renamed"));
+		const rewritten = (await readActiveTasks(dir, NOW))[0];
+		expect(rewritten.title).toBe("Renamed");
+		expect(rewritten.frontmatter.status).toBe("active");
+	});
+
 	it("is fail-open on unreadable frontmatter", async () => {
 		await writeFile(join(dir, "broken.md"), "no frontmatter at all");
 		const entry = (await readActiveTasks(dir, NOW))[0];

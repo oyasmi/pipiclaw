@@ -9,14 +9,28 @@ export interface MaintenanceGateDecision {
 	jobKind: MaintenanceJobKind;
 }
 
+/**
+ * Material checks are passed as thunks, never as values.
+ *
+ * Every gate below decides on cheap state (settings, timestamps, idle/backoff windows) before it
+ * looks at any material, and the material is expensive to produce: scanning the whole transcript,
+ * building the incremental source window, reading MEMORY.md/HISTORY.md. Evaluating it up front is
+ * what made an idle daemon pay a real cost on every one-minute tick just to be denied.
+ */
 export interface SessionRefreshGateInput {
 	now: Date;
 	state: MemoryMaintenanceState;
 	sessionMemory: PipiclawSessionMemorySettings;
 	maintenance: PipiclawMemoryMaintenanceSettings;
 	channelActive: boolean;
-	hasNewSessionEntry: boolean;
-	hasMeaningfulMaterial: boolean;
+	hasNewSessionEntry: () => boolean;
+	hasMeaningfulMaterial: () => boolean;
+}
+
+export interface MemoryCheckpointMaterial {
+	hasNewEntry: boolean;
+	hasMeaningfulExchange: boolean;
+	batchSize: number;
 }
 
 export interface MemoryCheckpointGateInput {
@@ -24,10 +38,15 @@ export interface MemoryCheckpointGateInput {
 	state: MemoryMaintenanceState;
 	maintenance: PipiclawMemoryMaintenanceSettings;
 	channelActive: boolean;
-	hasNewEntry: boolean;
-	hasMeaningfulExchange: boolean;
-	batchSize: number;
+	material: () => MemoryCheckpointMaterial;
 	minBatchSize?: number;
+}
+
+export interface StructuralMaintenanceMaterial {
+	memoryCleanupNeeded: boolean;
+	historyFoldingNeeded: boolean;
+	hasMemoryContent: boolean;
+	hasHistoryContent: boolean;
 }
 
 export interface StructuralMaintenanceGateInput {
@@ -35,10 +54,7 @@ export interface StructuralMaintenanceGateInput {
 	state: MemoryMaintenanceState;
 	maintenance: PipiclawMemoryMaintenanceSettings;
 	channelActive: boolean;
-	memoryCleanupNeeded: boolean;
-	historyFoldingNeeded: boolean;
-	hasMemoryContent: boolean;
-	hasHistoryContent: boolean;
+	material: () => Promise<StructuralMaintenanceMaterial>;
 }
 
 export interface StructuralMaintenanceGateDecision extends MaintenanceGateDecision {
@@ -115,10 +131,10 @@ export function shouldRunSessionRefresh(input: SessionRefreshGateInput): Mainten
 	if (!sessionRefreshThresholdMet(input.state, input.sessionMemory)) {
 		return deny("session-refresh", "threshold-not-met");
 	}
-	if (!input.hasNewSessionEntry) {
+	if (!input.hasNewSessionEntry()) {
 		return deny("session-refresh", "no-new-session-entry");
 	}
-	if (!input.hasMeaningfulMaterial) {
+	if (!input.hasMeaningfulMaterial()) {
 		return deny("session-refresh", "no-meaningful-material");
 	}
 	return allow("session-refresh");
@@ -146,21 +162,22 @@ export function shouldRunMemoryCheckpoint(input: MemoryCheckpointGateInput): Mai
 	if (isBeforeOptional(input.now, input.state.failureBackoffUntil)) {
 		return deny("memory-checkpoint", "backoff-active");
 	}
-	if (!input.hasNewEntry) {
+	const material = input.material();
+	if (!material.hasNewEntry) {
 		return deny("memory-checkpoint", "no-new-entry");
 	}
-	if (!input.hasMeaningfulExchange) {
+	if (!material.hasMeaningfulExchange) {
 		return deny("memory-checkpoint", "no-meaningful-exchange");
 	}
-	if (input.batchSize < (input.minBatchSize ?? 2)) {
+	if (material.batchSize < (input.minBatchSize ?? 2)) {
 		return deny("memory-checkpoint", "batch-threshold-not-met");
 	}
 	return allow("memory-checkpoint");
 }
 
-export function shouldRunStructuralMaintenance(
+export async function shouldRunStructuralMaintenance(
 	input: StructuralMaintenanceGateInput,
-): StructuralMaintenanceGateDecision {
+): Promise<StructuralMaintenanceGateDecision> {
 	const jobKind = "structural-maintenance";
 	const denyStructural = (skipReason: string): StructuralMaintenanceGateDecision => ({
 		allowed: false,
@@ -185,12 +202,13 @@ export function shouldRunStructuralMaintenance(
 	if (isBeforeOptional(input.now, input.state.failureBackoffUntil)) {
 		return denyStructural("backoff-active");
 	}
-	if (!input.hasMemoryContent && !input.hasHistoryContent) {
+	const material = await input.material();
+	if (!material.hasMemoryContent && !material.hasHistoryContent) {
 		return denyStructural("empty-template-files");
 	}
 
-	const runMemoryCleanup = input.memoryCleanupNeeded;
-	const runHistoryFolding = input.historyFoldingNeeded;
+	const runMemoryCleanup = material.memoryCleanupNeeded;
+	const runHistoryFolding = material.historyFoldingNeeded;
 	if (!runMemoryCleanup && !runHistoryFolding) {
 		return denyStructural("nothing-to-maintain");
 	}

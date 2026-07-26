@@ -11,7 +11,14 @@ import {
 } from "../shared/task-ledger.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-import { retiredTaskControlKeys, taskBudgetViolation } from "../tasks/control.js";
+import {
+	applyTaskControlPatch,
+	createDefaultTaskControl,
+	retiredTaskControlKeys,
+	TASK_PRIORITIES,
+	type TaskPriority,
+	taskBudgetViolation,
+} from "../tasks/control.js";
 import {
 	claimTaskAttempt,
 	readStoredTask,
@@ -36,6 +43,17 @@ export interface HandleTasksCommandOptions {
 	dispatchTask?: (id: string) => Promise<boolean>;
 }
 
+/**
+ * Fields `/tasks set` can edit directly.
+ *
+ * Deliberately a small, flat set: the ones a user already knows they want to change (when it
+ * should wake, what it should do next, how much rope it has). Everything structural — status
+ * transitions, verification, approval, side effects — stays with `task_manage`, whose state
+ * machine those fields belong to. The value is the rest of the line, so it may contain spaces.
+ */
+const SETTABLE_TASK_FIELDS = ["wake", "next", "priority", "attempts", "deadline"] as const;
+type SettableTaskField = (typeof SETTABLE_TASK_FIELDS)[number];
+
 type TasksCommand =
 	| { action: "list" }
 	| { action: "show"; id: string }
@@ -45,66 +63,78 @@ type TasksCommand =
 	| { action: "pause"; id: string }
 	| { action: "resume"; id: string }
 	| { action: "run"; id: string }
+	| { action: "set"; id: string; field: SettableTaskField; value: string }
 	| { action: "stats"; id?: string };
 
 function usage(): string {
-	return `# Tasks
+	return `# 任务
 
-Usage:
+用法：
 
-- \`/tasks\` — list active tasks in this channel
-- \`/tasks show <id>\` — show a single task file (active or archived)
-- \`/tasks archive\` — list archived (closed) tasks
-- \`/tasks approve <id>\` — explicitly approve this task's external side effects
-- \`/tasks pause <id>\` — stop automatic wake-ups for a task
-- \`/tasks resume <id>\` — make a paused task eligible for the next driver scan
-- \`/tasks run <id>\` — resume and immediately enqueue one task attempt when the runtime is available
-- \`/tasks stats [id]\` — show task-level attempt, token, cost, and verification outcomes
-- \`/tasks doctor\` — check task/event consistency without changing files`;
+- \`/tasks\` — 列出本频道进行中的任务
+- \`/tasks show <id>\` — 查看单个任务文件（进行中或已归档）
+- \`/tasks archive\` — 列出已归档（已关闭）的任务
+- \`/tasks approve <id>\` — 显式批准该任务的外部副作用
+- \`/tasks pause <id>\` — 停止该任务的自动唤醒
+- \`/tasks resume <id>\` — 让暂停的任务在下一轮扫描中恢复
+- \`/tasks run <id>\` — 恢复并立即排入一次执行（需要运行时可用）
+- \`/tasks set <id> <${SETTABLE_TASK_FIELDS.join("|")}> <值>\` — 直接改一个字段，不花一个 LLM 回合
+- \`/tasks stats [id]\` — 查看任务级的尝试次数、token、花费与验收结果
+- \`/tasks doctor\` — 只读检查任务/事件一致性`;
 }
 
 function parseTasksCommand(args: string): TasksCommand {
-	const parts = args.trim().split(/\s+/).filter(Boolean);
+	const trimmed = args.trim();
+	const parts = trimmed.split(/\s+/).filter(Boolean);
 	const action = parts[0];
 
 	if (!action || action === "list") {
-		if (parts.length > 1) throw new Error("Usage: /tasks list");
+		if (parts.length > 1) throw new Error("用法：/tasks list");
 		return { action: "list" };
 	}
 	if (action === "show") {
 		const id = parts[1];
-		if (!id || parts.length > 2) throw new Error("Usage: /tasks show <id>");
+		if (!id || parts.length > 2) throw new Error("用法：/tasks show <id>");
 		return { action: "show", id };
 	}
 	if (action === "archive") {
-		if (parts.length > 1) throw new Error("Usage: /tasks archive");
+		if (parts.length > 1) throw new Error("用法：/tasks archive");
 		return { action: "archive" };
 	}
 	if (action === "doctor") {
-		if (parts.length > 1) throw new Error("Usage: /tasks doctor");
+		if (parts.length > 1) throw new Error("用法：/tasks doctor");
 		return { action: "doctor" };
 	}
 	if (action === "approve") {
 		const id = parts[1];
-		if (!id || parts.length > 2) throw new Error("Usage: /tasks approve <id>");
+		if (!id || parts.length > 2) throw new Error("用法：/tasks approve <id>");
 		return { action: "approve", id };
 	}
 	if (action === "pause" || action === "resume") {
 		const id = parts[1];
-		if (!id || parts.length > 2) throw new Error(`Usage: /tasks ${action} <id>`);
+		if (!id || parts.length > 2) throw new Error(`用法：/tasks ${action} <id>`);
 		return { action, id };
 	}
 	if (action === "run") {
 		const id = parts[1];
-		if (!id || parts.length > 2) throw new Error("Usage: /tasks run <id>");
+		if (!id || parts.length > 2) throw new Error("用法：/tasks run <id>");
 		return { action: "run", id };
+	}
+	if (action === "set") {
+		// Everything after the field name is the value, verbatim — a nextAction is a sentence.
+		const match = /^set\s+(\S+)\s+(\S+)\s*([\s\S]*)$/.exec(trimmed);
+		const field = match?.[2];
+		if (!match || !field || !(SETTABLE_TASK_FIELDS as readonly string[]).includes(field)) {
+			throw new Error(`用法：/tasks set <id> <${SETTABLE_TASK_FIELDS.join("|")}> <值>`);
+		}
+		return { action: "set", id: match[1], field: field as SettableTaskField, value: match[3].trim() };
 	}
 	if (action === "stats") {
 		const id = parts[1];
-		if (parts.length > 2) throw new Error("Usage: /tasks stats [id]");
+		if (parts.length > 2) throw new Error("用法：/tasks stats [id]");
 		return { action: "stats", id };
 	}
-	throw new Error(`Unknown /tasks action: ${action}`);
+	throw new Error(`未知的 /tasks 动作：${action}`);
 }
 
 function tasksDir(channelDir: string): string {
@@ -218,7 +248,7 @@ async function listTasks(channelDir: string): Promise<string> {
 	const now = Date.now();
 	const entries = await readActiveTasks(dir, now);
 	if (entries.length === 0) {
-		return "# Tasks\n\nNo active tasks.";
+		return "# 任务\n\n当前没有进行中的任务。";
 	}
 
 	const blocks = entries.map((entry) => {
@@ -244,38 +274,38 @@ async function listTasks(channelDir: string): Promise<string> {
 		}
 		return `- ${entry.id} — ${entry.title}\n${detail.join("   ")}`;
 	});
-	return `# Tasks: ${entries.length} active\n\n${blocks.join("\n")}`;
+	return `# 任务：${entries.length} 个进行中\n\n${blocks.join("\n")}`;
 }
 
 async function approveTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
-	if (!task) return `Task not found: ${id}`;
+	if (!task) return `找不到任务：${id}`;
 	const control = task.fields.control;
-	if (!control) return `Task ${id} has no governed control metadata. Ask the agent to normalize it before approval.`;
+	if (!control) return `任务 ${id} 没有受治理的 control 元数据，先让 agent 规范化后再审批。`;
 	if (task.fields.status === "done" || task.fields.status === "cancelled") {
-		return `Task ${id} is ${task.fields.status} and cannot receive a new external-action approval.`;
+		return `任务 ${id} 已是 ${task.fields.status}，不能再授予外部动作审批。`;
 	}
 	if (control.sideEffects !== "external") {
-		return `Task ${id} is not marked for external side effects; no approval is required.`;
+		return `任务 ${id} 未标记为外部副作用，无需审批。`;
 	}
 	if (control.externalApproval === "granted") {
-		return `Task ${id} was already approved by ${control.approvalBy ?? "a user"} at ${control.approvedAt ?? "an unknown time"}.`;
+		return `任务 ${id} 已由 ${control.approvalBy ?? "某位用户"} 于 ${control.approvedAt ?? "未知时间"} 批准过。`;
 	}
 	control.externalApproval = "granted";
 	control.approvalBy = options.approver?.trim() || "unknown-user";
 	control.approvedAt = new Date().toISOString();
 	control.approvalBodyHash = taskBodyHash(task.body);
 	await writeStoredTask(task);
-	return `Approved external side effects for task ${id}. Approval is recorded for ${control.approvalBy}.`;
+	return `已批准任务 ${id} 的外部副作用，审批人记为 ${control.approvalBy}。`;
 }
 
 export async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
-	if (!task) return `Task not found: ${id}`;
+	if (!task) return `找不到任务：${id}`;
 	const from = normalizeStoredStatus(task.fields.status);
-	if (from === "paused") return `Task ${id} is already paused.`;
+	if (from === "paused") return `任务 ${id} 已经是暂停状态。`;
 	try {
 		resolveTaskTransition("pause", id, from);
 	} catch (error) {
@@ -288,15 +318,15 @@ export async function pauseTask(options: HandleTasksCommandOptions, idInput: str
 		task.fields.control.blockedReason = `Paused by ${options.approver?.trim() || "a user"}.`;
 	}
 	await writeStoredTask(task);
-	return `Paused task ${id}. Use /tasks resume ${id} when it should continue.`;
+	return `已暂停任务 ${id}。需要继续时用 /tasks resume ${id}。`;
 }
 
 export async function resumeTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
-	if (!task) return `Task not found: ${id}`;
+	if (!task) return `找不到任务：${id}`;
 	const from = normalizeStoredStatus(task.fields.status);
-	if (from !== "paused") return `Task ${id} is ${from}, not paused.`;
+	if (from !== "paused") return `任务 ${id} 当前是 ${from}，并非暂停状态。`;
 	resolveTaskTransition("resume", id, from);
 	task.fields.status = "active";
 	task.fields.wake = undefined;
@@ -305,13 +335,76 @@ export async function resumeTask(options: HandleTasksCommandOptions, idInput: st
 		task.fields.control.blockedReason = undefined;
 	}
 	await writeStoredTask(task);
-	return `Resumed task ${id}; the task driver will pick it up on its next scan.`;
+	return `已恢复任务 ${id}，任务驱动器下一轮扫描会接上。`;
+}
+
+/**
+ * Edit one task field directly.
+ *
+ * The alternative — telling the model "change wake to tomorrow 9am" — costs a whole turn and its
+ * tokens to reach the same one-line write. Validation is not re-implemented here: `wake` reuses
+ * the ledger's ISO8601 rule and everything else goes through `applyTaskControlPatch`, the same
+ * function `task_manage set` uses, so the two entry points cannot drift apart.
+ */
+async function setTaskField(
+	options: HandleTasksCommandOptions,
+	idInput: string,
+	field: SettableTaskField,
+	value: string,
+): Promise<string> {
+	const id = normalizeTaskId(idInput);
+	const task = await readStoredTask(options.channelDir, id);
+	if (!task) return `找不到任务：${id}`;
+
+	if (field === "wake") {
+		if (!value) {
+			task.fields.wake = undefined;
+		} else if (!Number.isFinite(new Date(value).getTime())) {
+			return `wake "${value}" 不是合法的 ISO8601 时间。`;
+		} else {
+			task.fields.wake = value;
+		}
+	} else {
+		const control = task.fields.control ?? createDefaultTaskControl();
+		try {
+			task.fields.control = applyTaskControlPatch(
+				control,
+				field === "next"
+					? { nextAction: value }
+					: field === "deadline"
+						? { deadline: value }
+						: field === "priority"
+							? { priority: parseTaskPriority(value) }
+							: { maxAttempts: parseAttempts(value) },
+			);
+		} catch (error) {
+			return errorMessage(error);
+		}
+	}
+
+	await writeStoredTask(task);
+	return `已更新任务 ${id}：${field} = ${value || "（已清除）"}`;
+}
+
+function parseTaskPriority(value: string): TaskPriority {
+	if (!TASK_PRIORITIES.includes(value as TaskPriority)) {
+		throw new Error(`priority 必须是 ${TASK_PRIORITIES.join(" / ")} 之一。`);
+	}
+	return value as TaskPriority;
+}
+
+function parseAttempts(value: string): number {
+	const parsed = Number(value);
+	if (!Number.isInteger(parsed) || parsed < 1) {
+		throw new Error("attempts 必须是不小于 1 的整数。");
+	}
+	return parsed;
 }
 
 async function runTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
-	if (!task) return `Task not found: ${id}`;
+	if (!task) return `找不到任务：${id}`;
 	const from = normalizeStoredStatus(task.fields.status);
 	try {
 		resolveTaskTransition("run", id, from);
@@ -330,13 +423,13 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 	const enqueued = await options.dispatchTask?.(id);
 	if (!enqueued && claim) await releaseTaskAttemptClaim(options.channelDir, id, claim, now);
 	return enqueued
-		? `Enqueued task ${id} for an immediate attempt.`
-		: `Task ${id} is ready. Start or use the DingTalk daemon for automatic dispatch, or send a normal prompt in this session to advance it.`;
+		? `已把任务 ${id} 排入一次立即执行。`
+		: `任务 ${id} 已就绪。启动钉钉守护进程可自动派发，或在本会话里直接发一条普通消息推进它。`;
 }
 
 function renderUsageLine(entry: TaskLedgerEntry): string {
 	const control = entry.frontmatter.control;
-	if (!control) return `- ${entry.id}: legacy task (no governed usage recorded)`;
+	if (!control) return `- ${entry.id}：旧格式任务（没有受治理的用量记录）`;
 	const verification = control.verification;
 	const cycleCost = control.usage.costKnown ? `$${control.usage.costUsd.toFixed(4)}` : "unavailable";
 	return [
@@ -351,7 +444,7 @@ async function taskStats(options: HandleTasksCommandOptions, idInput?: string): 
 	if (idInput) {
 		const id = normalizeTaskId(idInput);
 		const task = await readStoredTask(options.channelDir, id, true, true);
-		if (!task) return `Task not found: ${id}`;
+		if (!task) return `找不到任务：${id}`;
 		const entry: TaskLedgerEntry = {
 			id,
 			title: extractTaskTitle(task.body, id),
@@ -364,7 +457,7 @@ async function taskStats(options: HandleTasksCommandOptions, idInput?: string): 
 			},
 			actionable: false,
 		};
-		return `# Task Stats\n\n${renderUsageLine(entry)}`;
+		return `# 任务用量\n\n${renderUsageLine(entry)}`;
 	}
 	const entries = await readActiveTasks(tasksDir(options.channelDir));
 	const governed = entries.filter((entry) => entry.frontmatter.control);
@@ -383,7 +476,7 @@ async function taskStats(options: HandleTasksCommandOptions, idInput?: string): 
 	const verified = governed.filter((entry) => entry.frontmatter.control?.verification.status === "passed").length;
 	const stalled = governed.filter((entry) => entry.frontmatter.control?.lastOutcome === "failed").length;
 	return [
-		"# Task Stats",
+		"# 任务用量",
 		"",
 		`governed tasks: ${governed.length}/${entries.length}`,
 		`this cycle: ${totals.attempts} attempts, ${totals.tokens} tokens, ${totals.costKnown ? `$${totals.costUsd.toFixed(4)}` : "cost unavailable"}, ${totals.wallTimeMinutes.toFixed(1)}m`,
@@ -402,21 +495,21 @@ async function showTask(channelDir: string, id: string): Promise<string> {
 
 	const path = existsSync(activePath) ? activePath : existsSync(archivePath) ? archivePath : undefined;
 	if (!path) {
-		return `Task not found: ${taskId}`;
+		return `找不到任务：${taskId}`;
 	}
-	const location = path === archivePath ? " (archived)" : "";
+	const location = path === archivePath ? "（已归档）" : "";
 	const content = await readFile(path, "utf-8");
-	return `# Task: ${taskId}${location}\n\n\`\`\`markdown\n${content}\n\`\`\``;
+	return `# 任务：${taskId}${location}\n\n\`\`\`markdown\n${content}\n\`\`\``;
 }
 
 async function listArchive(channelDir: string): Promise<string> {
 	const dir = join(tasksDir(channelDir), "archive");
 	if (!existsSync(dir)) {
-		return "# Archived Tasks\n\nNo archived tasks.";
+		return "# 已归档任务\n\n暂无已归档任务。";
 	}
 	const filenames = (await readdir(dir)).filter((filename) => filename.endsWith(".md")).sort();
 	if (filenames.length === 0) {
-		return "# Archived Tasks\n\nNo archived tasks.";
+		return "# 已归档任务\n\n暂无已归档任务。";
 	}
 	const blocks: string[] = [];
 	for (const filename of filenames) {
@@ -428,12 +521,12 @@ async function listArchive(channelDir: string): Promise<string> {
 			blocks.push(`- ${id}`);
 		}
 	}
-	return `# Archived Tasks: ${blocks.length}\n\n${blocks.join("\n")}`;
+	return `# 已归档任务：${blocks.length}\n\n${blocks.join("\n")}`;
 }
 
 async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	if (!options.workspaceDir || !options.channelId) {
-		return "# Task Doctor\n\nNot available: workspaceDir and channelId are required.";
+		return "# 任务体检\n\n不可用：需要 workspaceDir 与 channelId。";
 	}
 
 	const now = Date.now();
@@ -618,9 +711,9 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	}
 
 	if (issues.length === 0) {
-		return "# Task Doctor\n\nNo task ledger issues found.";
+		return "# 任务体检\n\n未发现任务台账问题。";
 	}
-	return `# Task Doctor\n\nFound ${issues.length} issue${issues.length === 1 ? "" : "s"}:\n\n${issues.join("\n")}`;
+	return `# 任务体检\n\n发现 ${issues.length} 个问题：\n\n${issues.join("\n")}`;
 }
 
 export async function handleTasksCommand(options: HandleTasksCommandOptions): Promise<string> {
@@ -648,6 +741,8 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 				return await resumeTask(options, command.id);
 			case "run":
 				return await runTask(options, command.id);
+			case "set":
+				return await setTaskField(options, command.id, command.field, command.value);
 			case "stats":
 				return await taskStats(options, command.id);
 			case "doctor":
@@ -655,6 +750,6 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 		}
 	} catch (error) {
 		const message = errorMessage(error);
-		return `Could not ${command.action} tasks: ${message}`;
+		return `执行 /tasks ${command.action} 失败：${message}`;
 	}
 }

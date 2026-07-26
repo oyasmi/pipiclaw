@@ -24,15 +24,15 @@ function startOfUtcMonth(now: Date): Date {
 }
 
 export function usageWindows(mode: UsageQueryMode, now: Date): UsageWindow[] {
-	const monthTitle = `This month (${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")})`;
+	const monthTitle = `本月（${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}）`;
 	switch (mode) {
 		case "7d":
-			return [{ title: "Last 7 days", since: new Date(now.getTime() - 7 * 86_400_000), until: now }];
+			return [{ title: "最近 7 天", since: new Date(now.getTime() - 7 * 86_400_000), until: now }];
 		case "month":
 			return [{ title: monthTitle, since: startOfUtcMonth(now), until: now }];
 		default:
 			return [
-				{ title: "Today (UTC)", since: startOfUtcDay(now), until: now },
+				{ title: "今天（UTC）", since: startOfUtcDay(now), until: now },
 				{ title: monthTitle, since: startOfUtcMonth(now), until: now },
 			];
 	}
@@ -40,6 +40,14 @@ export function usageWindows(mode: UsageQueryMode, now: Date): UsageWindow[] {
 
 function money(n: number): string {
 	return `$${n.toFixed(4)}`;
+}
+
+function tokens(n: number): string {
+	return n >= 1_000_000
+		? `${(n / 1_000_000).toFixed(1)}M tokens`
+		: n >= 1_000
+			? `${Math.round(n / 1_000)}k tokens`
+			: `${n} tokens`;
 }
 
 function topEntries(map: Record<string, number>, limit: number): Array<[string, number]> {
@@ -60,21 +68,23 @@ function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId: strin
 
 	const lines: string[] = [`## ${window.title}`];
 	if (global.entryCount === 0) {
-		lines.push("No recorded usage.");
+		lines.push("暂无用量记录。");
 		return lines.join("\n");
 	}
 
-	lines.push(`This channel: ${money(channel.totalCost)}`);
+	// Tokens are reported next to cost because a local or pricing-less model bills nothing while
+	// still consuming context — "$0.0000" alone would read as "nothing happened".
+	lines.push(`本频道：${money(channel.totalCost)} · ${tokens(channel.totalTokens)}`);
 	const channelKinds = renderKindBreakdown(channel);
 	if (channelKinds) {
 		lines.push(`  ${channelKinds}`);
 	}
 
 	const channelCount = Object.keys(global.byChannel).length;
-	lines.push(`Global: ${money(global.totalCost)} across ${channelCount} channel${channelCount === 1 ? "" : "s"}`);
+	lines.push(`全局：${money(global.totalCost)} · ${tokens(global.totalTokens)}，覆盖 ${channelCount} 个频道`);
 	const topModels = topEntries(global.byModel, 3);
 	if (topModels.length > 0) {
-		lines.push(`  Top models: ${topModels.map(([model, cost]) => `${model} ${money(cost)}`).join(", ")}`);
+		lines.push(`  用量最高的模型：${topModels.map(([model, cost]) => `${model} ${money(cost)}`).join("，")}`);
 	}
 	return lines.join("\n");
 }
@@ -82,5 +92,5 @@ function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId: strin
 export function renderUsageReport(ledger: UsageLedger, channelId: string, mode: UsageQueryMode, now: Date): string {
 	const windows = usageWindows(mode, now);
 	const body = windows.map((window) => renderWindow(window, ledger, channelId)).join("\n\n");
-	return `# Usage\n\n${body}`;
+	return `# 用量\n\n${body}`;
 }

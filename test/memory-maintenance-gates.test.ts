@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	shouldRunMemoryCheckpoint,
 	shouldRunSessionRefresh,
@@ -39,6 +39,19 @@ const maintenance = {
 	cleanupShrinkGuardMinChars: 2_000,
 };
 
+const checkpointMaterial = (batchSize: number) => () => ({
+	hasNewEntry: true,
+	hasMeaningfulExchange: true,
+	batchSize,
+});
+
+const structuralMaterial = (memoryCleanupNeeded: boolean) => async () => ({
+	memoryCleanupNeeded,
+	historyFoldingNeeded: false,
+	hasMemoryContent: true,
+	hasHistoryContent: true,
+});
+
 describe("memory maintenance gates", () => {
 	it("denies session refresh locally before any LLM work is needed", () => {
 		expect(
@@ -48,8 +61,8 @@ describe("memory maintenance gates", () => {
 				sessionMemory,
 				maintenance,
 				channelActive: false,
-				hasNewSessionEntry: true,
-				hasMeaningfulMaterial: true,
+				hasNewSessionEntry: () => true,
+				hasMeaningfulMaterial: () => true,
 			}),
 		).toMatchObject({ allowed: false, skipReason: "clean" });
 		expect(
@@ -59,8 +72,8 @@ describe("memory maintenance gates", () => {
 				sessionMemory,
 				maintenance,
 				channelActive: true,
-				hasNewSessionEntry: true,
-				hasMeaningfulMaterial: true,
+				hasNewSessionEntry: () => true,
+				hasMeaningfulMaterial: () => true,
 			}),
 		).toMatchObject({ allowed: false, skipReason: "channel-active" });
 		expect(
@@ -70,8 +83,8 @@ describe("memory maintenance gates", () => {
 				sessionMemory,
 				maintenance,
 				channelActive: false,
-				hasNewSessionEntry: false,
-				hasMeaningfulMaterial: true,
+				hasNewSessionEntry: () => false,
+				hasMeaningfulMaterial: () => true,
 			}),
 		).toMatchObject({ allowed: false, skipReason: "no-new-session-entry" });
 	});
@@ -83,9 +96,7 @@ describe("memory maintenance gates", () => {
 				state,
 				maintenance,
 				channelActive: false,
-				hasNewEntry: true,
-				hasMeaningfulExchange: true,
-				batchSize: 2,
+				material: checkpointMaterial(2),
 			}),
 		).toMatchObject({ allowed: true });
 		expect(
@@ -94,9 +105,7 @@ describe("memory maintenance gates", () => {
 				state,
 				maintenance,
 				channelActive: false,
-				hasNewEntry: true,
-				hasMeaningfulExchange: true,
-				batchSize: 1,
+				material: checkpointMaterial(1),
 			}),
 		).toMatchObject({ allowed: false, skipReason: "batch-threshold-not-met" });
 		expect(
@@ -105,37 +114,58 @@ describe("memory maintenance gates", () => {
 				state: { ...state, lastCheckpointAt: "2026-04-19T00:55:00.000Z" },
 				maintenance,
 				channelActive: false,
-				hasNewEntry: true,
-				hasMeaningfulExchange: true,
-				batchSize: 2,
+				material: checkpointMaterial(2),
 			}),
 		).toMatchObject({ allowed: false, skipReason: "interval-not-elapsed" });
 	});
 
-	it("splits structural cleanup and folding decisions", () => {
+	it("splits structural cleanup and folding decisions", async () => {
 		expect(
-			shouldRunStructuralMaintenance({
+			await shouldRunStructuralMaintenance({
 				now,
 				state,
 				maintenance,
 				channelActive: false,
-				memoryCleanupNeeded: true,
-				historyFoldingNeeded: false,
-				hasMemoryContent: true,
-				hasHistoryContent: true,
+				material: structuralMaterial(true),
 			}),
 		).toMatchObject({ allowed: true, runMemoryCleanup: true, runHistoryFolding: false });
 		expect(
-			shouldRunStructuralMaintenance({
+			await shouldRunStructuralMaintenance({
 				now,
 				state,
 				maintenance,
 				channelActive: false,
-				memoryCleanupNeeded: false,
-				historyFoldingNeeded: false,
-				hasMemoryContent: true,
-				hasHistoryContent: true,
+				material: structuralMaterial(false),
 			}),
 		).toMatchObject({ allowed: false, skipReason: "nothing-to-maintain" });
+	});
+
+	// The whole point of the thunks: an idle daemon ticks every minute, and a tick that stops at a
+	// schedule gate must not scan the transcript or read MEMORY.md/HISTORY.md to find that out.
+	it("never evaluates material when a cheap schedule gate denies", async () => {
+		const material = vi.fn(() => ({ hasNewEntry: true, hasMeaningfulExchange: true, batchSize: 9 }));
+		const sessionMaterial = vi.fn(() => true);
+		const structural = vi.fn(async () => ({
+			memoryCleanupNeeded: true,
+			historyFoldingNeeded: true,
+			hasMemoryContent: true,
+			hasHistoryContent: true,
+		}));
+
+		shouldRunSessionRefresh({
+			now,
+			state: { ...state, dirty: false },
+			sessionMemory,
+			maintenance,
+			channelActive: false,
+			hasNewSessionEntry: sessionMaterial,
+			hasMeaningfulMaterial: sessionMaterial,
+		});
+		shouldRunMemoryCheckpoint({ now, state, maintenance, channelActive: true, material });
+		await shouldRunStructuralMaintenance({ now, state, maintenance, channelActive: true, material: structural });
+
+		expect(sessionMaterial).not.toHaveBeenCalled();
+		expect(material).not.toHaveBeenCalled();
+		expect(structural).not.toHaveBeenCalled();
 	});
 });

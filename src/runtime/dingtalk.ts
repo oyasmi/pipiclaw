@@ -116,10 +116,19 @@ export interface DingTalkEvent {
 
 export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: string };
 
+/**
+ * What `/stop` actually did. Stopping a task-driven turn also pauses that task, which the user
+ * has to be told: a paused task is never picked up again until `/tasks resume <id>`, so silence
+ * here reads as "the turn was interrupted" while the whole task has in fact gone quiet.
+ */
+export interface StopOutcome {
+	pausedTaskId?: string;
+}
+
 export interface DingTalkHandler {
 	isRunning(channelId: string): boolean;
 	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
-	handleStop(channelId: string, bot: DingTalkBot): Promise<void>;
+	handleStop(channelId: string, bot: DingTalkBot): Promise<StopOutcome>;
 	handleEventsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleTasksCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void>;
@@ -1332,10 +1341,16 @@ export class DingTalkBot implements MediaSender {
 					case "help":
 						await this.sendPlain(channelId, renderBuiltInHelp());
 						return;
-					case "stop":
-						await this.handler.handleStop(channelId, this);
-						await this.sendPlain(channelId, "Stopping the current task.");
+					case "stop": {
+						const outcome = await this.handler.handleStop(channelId, this);
+						await this.sendPlain(
+							channelId,
+							outcome.pausedTaskId
+								? `已停止当前回合。任务 \`${outcome.pausedTaskId}\` 已暂停，用 \`/tasks resume ${outcome.pausedTaskId}\` 继续。`
+								: "已停止当前回合。",
+						);
 						return;
+					}
 					case "steer":
 					case "followup": {
 						const mode = builtInCommand.name === "steer" ? "steer" : "followUp";
@@ -1368,7 +1383,7 @@ export class DingTalkBot implements MediaSender {
 			if (isSlashCommand) {
 				await this.sendPlain(
 					channelId,
-					`A task is already running. While streaming you can use: ${formatBusyCommandList()}. Session commands (\`/model\`, \`/new\`, \`/compact\`, \`/session\`) are available when idle.`,
+					`当前已有回合在运行。运行中可用：${formatBusyCommandList()}。会话命令（\`/model\`、\`/new\`、\`/compact\`、\`/session\`）需要等空闲后再用。`,
 				);
 				return;
 			}

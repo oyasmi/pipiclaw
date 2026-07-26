@@ -20,8 +20,8 @@ describeE2E("E2E: built-in commands", () => {
 
 		const finalText =
 			[...harness.deliveries].reverse().find((delivery) => delivery.method === "sendPlain")?.text ?? "";
-		expect(finalText).toContain("Slash Commands");
-		expect(finalText).toContain("/steer <message>");
+		expect(finalText).toContain("斜杠命令");
+		expect(finalText).toContain("/steer <消息>");
 	});
 
 	// Parity check with the TUI --print regression in tui.test.ts: /tasks resolves
@@ -33,6 +33,6 @@ describeE2E("E2E: built-in commands", () => {
 
 		const newDeliveries = harness.deliveries.slice(deliveriesBefore);
 		expect(newDeliveries).toHaveLength(1);
-		expect(newDeliveries[0]).toMatchObject({ method: "sendPlain", text: "# Tasks\n\nNo active tasks." });
+		expect(newDeliveries[0]).toMatchObject({ method: "sendPlain", text: "# 任务\n\n当前没有进行中的任务。" });
 	});
 });

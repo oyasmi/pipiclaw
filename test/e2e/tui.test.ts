@@ -95,6 +95,6 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 			stdoutSpy.mockRestore();
 		}
 
-		expect(chunks.join("").trim(), getE2ESkipReason() ?? undefined).toBe("# Tasks\n\nNo active tasks.");
+		expect(chunks.join("").trim(), getE2ESkipReason() ?? undefined).toBe("# 任务\n\n当前没有进行中的任务。");
 	});
 });

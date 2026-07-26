@@ -12,8 +12,13 @@ import { getMemoryMaintenanceStateDir } from "./maintenance-state.js";
 export interface MemoryMaintenanceRuntimeContext {
 	channelId: string;
 	channelDir: string;
-	messages: AgentMessage[];
-	sessionEntries: SessionEntry[];
+	/**
+	 * Transcript accessors, not arrays: the scheduler visits a channel every tick but almost
+	 * every tick is denied by a cheap schedule gate. Copying (and then scanning) the whole
+	 * transcript before that verdict was the entire steady-state cost of an idle daemon.
+	 */
+	messages: () => AgentMessage[];
+	sessionEntries: () => SessionEntry[];
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	settings: {

@@ -1,10 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelJobManager } from "../src/agent/job-manager.js";
 import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
 import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
 import { RecordingExecutor } from "./helpers/recording-executor.js";
 
+// The spill file is written straight to the local filesystem, so the test observes that write
+// instead of a `cat > file` command on the executor.
+const writeFileMock = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("node:fs/promises", async (importOriginal) => ({
+	...(await importOriginal<typeof import("node:fs/promises")>()),
+	writeFile: writeFileMock,
+}));
+
 describe("bash tool", () => {
+	beforeEach(() => {
+		writeFileMock.mockClear();
+	});
+
 	it("uses the caller-provided default timeout and returns empty output markers", async () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
 		const tool = createBashTool(executor, { defaultTimeoutSeconds: 45 });
@@ -140,37 +152,26 @@ describe("bash tool", () => {
 		expect(result.details).toMatchObject({ exitCode: 7 });
 	});
 
-	it("truncates long output and spills the full log through the executor", async () => {
+	it("truncates long output and spills the full log to a temp file", async () => {
 		const output = Array.from(
 			{ length: DEFAULT_MAX_LINES + 15 },
 			(_, index) => `line ${index + 1} ${"x".repeat(400)}`,
 		).join("\n");
-		const spilled = new Map<string, string>();
-		const executor = new RecordingExecutor(async (command, options) => {
-			const spillMatch = command.match(/^cat > '(\/tmp\/pipiclaw-bash-[0-9a-f]+\.log)'$/);
-			if (spillMatch) {
-				spilled.set(spillMatch[1], options?.stdin ?? "");
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			return { code: 0, stdout: output, stderr: "" };
-		});
+		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: output, stderr: "" }));
 		const tool = createBashTool(executor);
 
 		const result = await tool.execute("call", { label: "run", command: "printf ..." });
 		const details = result.details as { fullOutputPath?: string; truncation?: { truncated?: boolean } };
 
 		expect(details.truncation?.truncated).toBe(true);
-		expect(details.fullOutputPath).toBeTruthy();
+		expect(details.fullOutputPath).toMatch(/^\/tmp\/pipiclaw-bash-[0-9a-f]+\.log$/);
 		expect(result.content[0]).toMatchObject({
 			type: "text",
 			text: expect.stringContaining("Full output:"),
 		});
-
-		if (!details.fullOutputPath) {
-			throw new Error("Expected full output path");
-		}
-		// The spill goes through the executor so the path is reachable by the read/bash tools.
-		expect(spilled.get(details.fullOutputPath)).toBe(output);
+		// One local write; no second process and no 10MB copy back through a pipe.
+		expect(executor.calls).toHaveLength(1);
+		expect(writeFileMock).toHaveBeenCalledWith(details.fullOutputPath, output, { mode: 0o600 });
 	});
 
 	it("still returns truncated output when the spill write fails", async () => {
@@ -178,12 +179,8 @@ describe("bash tool", () => {
 			{ length: DEFAULT_MAX_LINES + 15 },
 			(_, index) => `line ${index + 1} ${"x".repeat(400)}`,
 		).join("\n");
-		const executor = new RecordingExecutor(async (command) => {
-			if (command.startsWith("cat > ")) {
-				return { code: 1, stdout: "", stderr: "disk full" };
-			}
-			return { code: 0, stdout: output, stderr: "" };
-		});
+		writeFileMock.mockRejectedValueOnce(new Error("disk full") as never);
+		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: output, stderr: "" }));
 		const tool = createBashTool(executor);
 
 		const result = await tool.execute("call", { label: "run", command: "printf ..." });

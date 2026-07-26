@@ -157,7 +157,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 作为长期运行的守护进程，Pipiclaw 除了彩色 console 输出外，还会把结构化日志与 LLM 成本落盘到 `STATE_DIR`（默认 `~/.pipiclaw/state`，随 `PIPICLAW_HOME` 变化）。console 输出保持不变；这些文件是额外产物。
 
 - **结构化日志**：`state/logs/runtime.jsonl`，每行一条 JSON 记录（`ts`/`level`/`event`/`channelId`/`message`/`fields` 等），按大小轮转（默认 5MB × 3）。文件权限 `0600`（含用户消息片段，与 `log.jsonl` 同威胁模型）。
-- **成本账本**：`state/usage/usage-YYYY-MM.jsonl`，按月分文件。每条记录一次开销，分三类 `kind`：`turn`（主轮 assistant，不含子代理）、`subagent`（每次子代理运行）、`sidecar`（每次记忆后台任务）。三类金额可直接加总、无重复计数。`cost.total <= 0`（本地无计费模型）不落盘。
+- **成本账本**：`state/usage/usage-YYYY-MM.jsonl`，按月分文件。每条记录一次开销，分三类 `kind`：`turn`（主轮 assistant，不含子代理）、`subagent`（每次子代理运行）、`sidecar`（每次记忆后台任务）。三类金额可直接加总、无重复计数。只要消耗了 token 就落盘，本地/缺价格元数据的模型也一样（成本记 0，token 照记）——否则 `/usage` 会显示成空、任何基于账本的支出闸门都会 fail-open；只有 token 与成本双零的空条目才丢弃。
 - **查询**：在任意频道发送 `/usage`（今日 + 本月）、`/usage 7d`、`/usage month`，按本频道与全局聚合展示成本、`kind` 分解与 top 模型；busy/idle 均可用，不占用运行队列。
 
 `settings.json` 中的 `logging` 段（均可选，缺省即默认）：
@@ -386,7 +386,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | 取值 | 过程展示 | 最终答案投递 |
 | --- | --- | --- |
 | `full_progress_then_plain_final`（默认） | 完整累积工具/思考/中间文本 | 单独的纯文本消息，卡片收尾为进度全文 |
-| `rolling_progress_then_plain_final` | 仅保留最近 3 条进展 | 单独的纯文本消息，卡片收尾为一行摘要 |
+| `rolling_progress_then_plain_final` | 常驻首行 `⏱ 用时 · N 步` + 最近 3 条进展 | 单独的纯文本消息，卡片收尾为一行摘要 |
 | `final_card_only` | 不展示任何过程 | 最终答案直接写入 AI Card，不再额外发纯文本 |
 
 > 旧字段 `progressDisplay` 与旧值 `responseMode: "progress_then_plain_final"` 已移除，请改用上表取值。

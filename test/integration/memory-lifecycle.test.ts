@@ -104,8 +104,8 @@ function createLifecycleHarness(settings?: Partial<ReturnType<typeof createSetti
 		channelDir,
 		fakePi,
 		lifecycle,
-		messages,
-		sessionEntries,
+		messages: () => messages,
+		sessionEntries: () => sessionEntries,
 	};
 }
 

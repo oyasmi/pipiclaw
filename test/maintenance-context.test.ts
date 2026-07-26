@@ -59,8 +59,8 @@ describe("loadDetachedMaintenanceContext", () => {
 
 		expect(context).not.toBeNull();
 		expect(context?.channelId).toBe("dm_cold");
-		expect(context?.messages.length).toBeGreaterThanOrEqual(2);
-		expect(context?.sessionEntries.length).toBeGreaterThanOrEqual(2);
+		expect(context?.messages().length).toBeGreaterThanOrEqual(2);
+		expect(context?.sessionEntries().length).toBeGreaterThanOrEqual(2);
 		expect(context?.model.id).toBeTruthy();
 		expect(context?.settings.memoryMaintenance).toBeDefined();
 	});
@@ -75,12 +75,14 @@ describe("loadDetachedMaintenanceContext", () => {
 		// prove the cache path by checking a second load still succeeds and returns
 		// equal data, then that an on-disk change is picked up.
 		const second = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, channelDir));
-		expect(second?.sessionEntries.map((entry) => entry.id)).toEqual(first?.sessionEntries.map((entry) => entry.id));
+		expect(second?.sessionEntries().map((entry) => entry.id)).toEqual(
+			first?.sessionEntries().map((entry) => entry.id),
+		);
 
 		const manager = SessionManager.open(join(channelDir, "context.jsonl"), channelDir);
 		manager.appendMessage({ role: "user", content: "再补一句", timestamp: Date.now() } as never);
 		const third = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, channelDir));
-		expect(third?.sessionEntries.length).toBeGreaterThan(first?.sessionEntries.length ?? 0);
+		expect(third?.sessionEntries().length).toBeGreaterThan(first?.sessionEntries().length ?? 0);
 	});
 
 	it("returns null for an unreadable transcript", async () => {

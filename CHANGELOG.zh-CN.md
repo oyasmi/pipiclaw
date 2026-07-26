@@ -4,6 +4,22 @@
 
 ## [未发布]
 
+### 变更
+
+- 交互面统一为中文。`/help`（两张命令表的全部描述与正文）、无运行回合时 `/stop`/`/steer`/`/followup` 的回复、steer 排队回执、忙时斜杠命令提示、错误卡片、TUI 停止提示、整个 `/usage` 报告，以及 `/tasks` 的全部动作回执都已中文化；因为 `CommandSpec.description` 是唯一真相源，`/help`、TUI 补全和忙时提示一次改到位。结构化报告正文（`/tasks list|stats|doctor`、`/events`、`/status`）刻意保留英文字段标签——它们是数据栏位，不是文案。
+- `/stop` 现在说清楚它做了什么。停掉一个任务驱动的回合会同时暂停该任务，而此前这只写进日志，用户看到的仅是 "Stopping the current task."——任务可能因此沉默好几天。`handleStop` 会回传被暂停的任务 id，回执直接点名它和 `/tasks resume <id>`。
+- 新增 `/tasks set <id> <wake|next|priority|attempts|deadline> <值>`：改一个 wake 时间或 attempt 预算不必再花一整个 LLM 回合。值取该行剩余全部内容（所以 `next` 可以是一句话），留空表示清除。校验不重写——`wake` 复用台账的 ISO8601 规则，其余走 `applyTaskControlPatch`，与 `task_manage set` 同一个函数。状态迁移、验收、审批仍归 `task_manage`，那台状态机才是它们的归属。
+- 滚动进度卡常驻首行 `⏱ 3m12s · 14 步`，在只能看到最近三条时也能把"还在跑"和"卡住了"区分开。由于首行随时间变化，滚动模式改为整卡替换而非追加增量（窗口填满后本来就是如此）。收尾摘要同样中文化：`完成 · 14 步 · 3m12s`。
+- `/usage` 在金额旁边显示 token：本地模型或缺价格元数据的模型不计费，但一样在消耗上下文。
+
+### 修复
+
+- 空闲的守护进程不再为每分钟的维护 tick 付真实成本。扫描整份 transcript、构造增量源窗口、读 MEMORY.md/HISTORY.md 这三件事原本都发生在 gate 判定**之前**，而绝大多数 tick 都会被 gate 拒掉；现在它们是 thunk，gate 先判完便宜条件再取材料，并做了记忆化，真正要跑的 job 仍然只读一次。`MemoryMaintenanceRuntimeContext.messages`/`sessionEntries` 变为访问器，`shouldRunStructuralMaintenance` 变为 async。
+- `bash` 超长输出改为直接写文件落盘，不再另起一个 `sh -c 'cat > file'` 进程，省掉一次 spawn 和一次最多 10MB 的管道拷贝；落盘文件权限收为 owner-only。
+- 后台 job 的 sweeper 用一条命令批量探活所有运行中的 job，不再逐个 spawn：跑 N 个后台任务不再是每 10 秒 N 次 spawn。
+- `readActiveTasks` 按 `(mtime, ctime, size)` 缓存解析结果——任务驱动器每个 tick、每个回合结束都要重读整份台账。`actionable` 刻意不进缓存：它是时钟的函数，每次调用都重算。
+- 用量账本保留「零成本但消耗了 token」的条目（本地模型，或缺价格元数据的模型），并给 `UsageSummary` 加上 `totalTokens`。此前这类配置下 `/usage` 直接是空的，任何基于 token 的支出闸门都会 fail-open。只有 token 与成本双零的空条目才会被丢弃。
+
 ## [0.8.10-beta.2] - 2026-07-25
 
 ### 变更

@@ -53,6 +53,7 @@ import {
 	isResponseModeConfig,
 	normalizeBusyMessageDefault,
 	normalizeResponseMode,
+	type StopOutcome,
 } from "./dingtalk.js";
 import { DurableDispatchService } from "./durable-dispatch.js";
 import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
@@ -654,8 +655,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			return channelRunners.get(channelId)?.isBusy() ?? false;
 		},
 
-		async handleStop(channelId: string, _bot: DingTalkBot): Promise<void> {
+		async handleStop(channelId: string, _bot: DingTalkBot): Promise<StopOutcome> {
 			const runner = channelRunners.get(channelId);
+			let pausedTaskId: string | undefined;
 			if (runner?.isBusy()) {
 				runner.requestStop();
 				const taskId = /^\[TASK_(?:DRIVER|CYCLE):([A-Za-z0-9._-]+)\]/.exec(
@@ -670,6 +672,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						},
 						taskId,
 					);
+					pausedTaskId = taskId;
 					log.logInfo(`[${channelId}] ${pauseResult}`);
 				}
 				_bot.discardCard(channelId);
@@ -688,6 +691,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				});
 				log.logInfo(`[${channelId}] Stop requested`);
 			}
+			return { pausedTaskId };
 		},
 
 		async handleEventsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void> {
@@ -763,7 +767,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 
 			if (!trimmedQueueText) {
 				const commandName = mode === "followUp" ? "followup" : "steer";
-				await bot.sendPlain(event.channelId, `Could not queue this message: /${commandName} requires a message.`);
+				await bot.sendPlain(event.channelId, `无法排队：/${commandName} 需要带上消息内容。`);
 				return { kind: "handled" };
 			}
 
@@ -794,8 +798,8 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				);
 
 				const confirmation = event.text.trim().startsWith("/")
-					? "Queued as steer. I’ll apply it after the current tool step finishes."
-					: "Queued as steer. I’ll apply this after the current tool step finishes. Use `/followup <message>` to queue it after completion.";
+					? "已作为 steer 排队，当前工具步骤结束后生效。"
+					: "已作为 steer 排队，当前工具步骤结束后生效。想等整个回合结束再执行，用 `/followup <消息>`。";
 				await bot.sendPlain(event.channelId, confirmation);
 				log.logEvent("info", "agent.turn.steer_queued", "Steer queued", {
 					ctx: { channelId: event.channelId, userName: event.userName },
@@ -809,7 +813,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					return { kind: "requeue", text: trimmedQueueText };
 				}
 				log.logWarning(`[${event.channelId}] Failed to queue ${mode}`, errMsg);
-				await bot.sendPlain(event.channelId, `Could not queue this message: ${errMsg}`);
+				await bot.sendPlain(event.channelId, `无法排队这条消息：${errMsg}`);
 				return { kind: "handled" };
 			}
 		},

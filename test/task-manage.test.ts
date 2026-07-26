@@ -444,7 +444,7 @@ describe("manageTask", () => {
 					channelId: CHANNEL_ID,
 					approver: "Alice",
 				}),
-			).toContain("Approved external side effects");
+			).toContain("已批准任务 verified-publish 的外部副作用");
 
 			await expect(
 				manageTask(options, {

@@ -65,12 +65,15 @@ describe("delivery", () => {
 			await ctx.flush();
 		}
 
-		expect(bot.calls).toEqual([
-			{ method: "appendToCard", args: ["dm_123", "A"] },
-			{ method: "appendToCard", args: ["dm_123", "\n\nB"] },
-			{ method: "appendToCard", args: ["dm_123", "\n\nC"] },
-			{ method: "replaceCard", args: ["dm_123", "B\n\nC\n\nD", false] },
-			{ method: "replaceCard", args: ["dm_123", "C\n\nD\n\nE", false] },
+		// Rolling mode always replaces: the standing header (elapsed · steps) changes every update,
+		// so an append-only delta would leave a stale first line on the card.
+		expect(bot.calls.map((call) => call.method)).toEqual(Array(5).fill("replaceCard"));
+		expect(bot.calls.map((call) => String(call.args[1]).replace(/^⏱ \d+s · /, ""))).toEqual([
+			"0 步\n\nA",
+			"0 步\n\nA\n\nB",
+			"0 步\n\nA\n\nB\n\nC",
+			"0 步\n\nB\n\nC\n\nD",
+			"0 步\n\nC\n\nD\n\nE",
 		]);
 		expect(store.logged.map((entry) => entry.args[1])).toEqual(["A", "B", "C", "D", "E"]);
 	});
@@ -92,6 +95,9 @@ describe("delivery", () => {
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 
+		// The standing header counts tool steps while the turn is still running.
+		expect(String(bot.calls.at(-1)?.args[1])).toMatch(/^⏱ \d+s · 2 步\n\n/);
+
 		await expect(ctx.respondPlain("final answer")).resolves.toBe(true);
 		await ctx.flush();
 
@@ -99,7 +105,7 @@ describe("delivery", () => {
 		expect(bot.calls.at(-2)).toEqual({ method: "sendPlain", args: ["dm_123", "final answer"] });
 		expect(finalCall?.method).toBe("replaceCard");
 		expect(finalCall?.args[0]).toBe("dm_123");
-		expect(finalCall?.args[1]).toMatch(/^Done · 2 tool calls · \d+s$/);
+		expect(finalCall?.args[1]).toMatch(/^完成 · 2 步 · \d+s$/);
 		expect(finalCall?.args[1]).not.toContain("Running:");
 		expect(finalCall?.args[2]).toBe(true);
 	});

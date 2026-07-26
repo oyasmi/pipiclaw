@@ -38,9 +38,19 @@ interface BaseMaintenanceJobInput {
 	settings: MaintenanceJobSettings;
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
-	messages: AgentMessage[];
-	sessionEntries: SessionEntry[];
+	/** Transcript accessors: only called once a gate has decided the job may actually run. */
+	messages: () => AgentMessage[];
+	sessionEntries: () => SessionEntry[];
 	queue?: ChannelMemoryQueue;
+}
+
+/** Evaluate `load` at most once, so a gate and the job body can share one expensive read. */
+function once<T>(load: () => T): () => T {
+	let cached: { value: T } | undefined;
+	return () => {
+		cached ??= { value: load() };
+		return cached.value;
+	};
 }
 
 export interface SessionRefreshJobInput extends BaseMaintenanceJobInput {}
@@ -104,8 +114,8 @@ function makeRunOptions(input: BaseMaintenanceJobInput, usageCorrelationId?: str
 		channelDir: input.channelDir,
 		model: input.model,
 		resolveApiKey: input.resolveApiKey,
-		messages: input.messages,
-		sessionEntries: input.sessionEntries,
+		messages: input.messages(),
+		sessionEntries: input.sessionEntries(),
 		usageCorrelationId,
 		minAutoWriteConfidence: input.settings.memoryMaintenance.minMemoryAutoWriteConfidence,
 	};
@@ -160,15 +170,16 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 	return runQueued(input, async () => {
 		const now = input.now ?? new Date();
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
-		const latestId = latestEntryId(input.sessionEntries);
+		const messages = once(input.messages);
+		const latestEntry = once(() => latestEntryId(input.sessionEntries()));
 		const decision = shouldRunSessionRefresh({
 			now,
 			state,
 			sessionMemory: input.settings.sessionMemory,
 			maintenance: input.settings.memoryMaintenance,
 			channelActive: input.channelActive,
-			hasNewSessionEntry: latestId !== undefined && latestId !== state.lastSessionRefreshedEntryId,
-			hasMeaningfulMaterial: hasMeaningfulMessages(input.messages),
+			hasNewSessionEntry: () => latestEntry() !== undefined && latestEntry() !== state.lastSessionRefreshedEntryId,
+			hasMeaningfulMaterial: () => hasMeaningfulMessages(messages()),
 		});
 		if (!decision.allowed) {
 			await appendJobReviewLog(
@@ -181,12 +192,13 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 			return skipped(decision.jobKind, decision.skipReason ?? "skipped");
 		}
 
+		const latestId = latestEntry();
 		try {
 			const correlationId = `session-refresh:${latestId ?? now.toISOString()}`;
 			await updateChannelSessionMemory({
 				channelId: input.channelId,
 				channelDir: input.channelDir,
-				messages: input.messages,
+				messages: messages(),
 				model: input.model,
 				resolveApiKey: input.resolveApiKey,
 				timeoutMs: input.settings.sessionMemory.timeoutMs,
@@ -231,21 +243,27 @@ export async function runMemoryCheckpointJob(input: MemoryCheckpointJobInput): P
 	return runQueued(input, async () => {
 		const now = input.now ?? new Date();
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
-		const sourceWindow = buildIncrementalMemorySourceWindow({
-			entries: input.sessionEntries,
-			lastEntryId: state.lastCheckpointEntryId,
-			sourceKind: "idle",
-			fallbackMessages: input.messages,
-		});
-		const newEntries = sourceWindow.entries;
+		const loadSourceWindow = once(() =>
+			buildIncrementalMemorySourceWindow({
+				entries: input.sessionEntries(),
+				lastEntryId: state.lastCheckpointEntryId,
+				sourceKind: "idle",
+				fallbackMessages: input.messages(),
+			}),
+		);
 		const decision = shouldRunMemoryCheckpoint({
 			now,
 			state,
 			maintenance: input.settings.memoryMaintenance,
 			channelActive: input.channelActive,
-			hasNewEntry: newEntries.length > 0,
-			hasMeaningfulExchange: hasMeaningfulMessages(sourceWindow.messages),
-			batchSize: newEntries.length,
+			material: () => {
+				const window = loadSourceWindow();
+				return {
+					hasNewEntry: window.entries.length > 0,
+					hasMeaningfulExchange: hasMeaningfulMessages(window.messages),
+					batchSize: window.entries.length,
+				};
+			},
 		});
 		if (!decision.allowed) {
 			await appendJobReviewLog(
@@ -258,6 +276,7 @@ export async function runMemoryCheckpointJob(input: MemoryCheckpointJobInput): P
 			return skipped(decision.jobKind, decision.skipReason ?? "skipped");
 		}
 
+		const sourceWindow = loadSourceWindow();
 		try {
 			const result = await runInlineConsolidation({
 				...makeRunOptions(input),
@@ -313,17 +332,15 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 	return runQueued(input, async () => {
 		const now = input.now ?? new Date();
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
-		const [currentMemory, currentHistory] = await Promise.all([
-			readChannelMemory(input.channelDir),
-			readChannelHistory(input.channelDir),
-		]);
-		const stats = getStructuralMaintenanceStats(currentMemory, currentHistory);
-		const decision = shouldRunStructuralMaintenance({
+		const loadFiles = once(() =>
+			Promise.all([readChannelMemory(input.channelDir), readChannelHistory(input.channelDir)]),
+		);
+		const decision = await shouldRunStructuralMaintenance({
 			now,
 			state,
 			maintenance: input.settings.memoryMaintenance,
 			channelActive: input.channelActive,
-			...stats,
+			material: async () => getStructuralMaintenanceStats(...(await loadFiles())),
 		});
 		if (!decision.allowed) {
 			await appendJobReviewLog(
@@ -336,6 +353,7 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 			return skipped(decision.jobKind, decision.skipReason ?? "skipped");
 		}
 
+		const [currentMemory, currentHistory] = await loadFiles();
 		try {
 			const correlationId = `structural-maintenance:${now.toISOString()}`;
 			const options = makeRunOptions(input, correlationId);

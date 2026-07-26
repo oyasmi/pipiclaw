@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager } from "../agent/job-manager.js";
@@ -7,7 +8,6 @@ import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
-import { shellEscape } from "../shared/shell-escape.js";
 import { maybeOptimizeCommand } from "./command-optimizer.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
@@ -238,20 +238,17 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 
 			const totalBytes = Buffer.byteLength(output, "utf-8");
 
-			// Spill the full output to a temp file (inside the executor's filesystem, so the
-			// reported path is reachable by the model) when it exceeds the inline limit.
-			// Best-effort: if the write fails, we simply omit the path hint from the notice.
+			// Spill the full output to a temp file when it exceeds the inline limit, so the model
+			// can page through the rest with `read`. Written straight to disk rather than piped
+			// through a second `sh -c 'cat > file'`: that spawned a process and copied the whole
+			// (up to 10MB) buffer over a pipe to reach the same local filesystem the executor
+			// already runs on. Best-effort: on failure we simply omit the path hint.
 			let tempFilePath: string | undefined;
 			if (totalBytes > DEFAULT_MAX_BYTES) {
 				const candidatePath = getSpillFilePath();
 				try {
-					const spillResult = await executor.exec(`cat > ${shellEscape(candidatePath)}`, {
-						signal,
-						stdin: output,
-					});
-					if (spillResult.code === 0) {
-						tempFilePath = candidatePath;
-					}
+					await writeFile(candidatePath, output, { mode: 0o600 });
+					tempFilePath = candidatePath;
 				} catch {
 					// Ignore spill failures; the truncated output is still returned.
 				}

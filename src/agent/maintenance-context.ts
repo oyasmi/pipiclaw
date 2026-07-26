@@ -68,6 +68,7 @@ export async function loadDetachedMaintenanceContext(
 		}
 		transcriptCache.set(options.channelDir, cached);
 	}
+	const cachedTranscript = cached;
 
 	const modelRuntime = await createModelRuntime({
 		authConfigPath: options.authConfigPath,
@@ -80,8 +81,8 @@ export async function loadDetachedMaintenanceContext(
 	return {
 		channelId: options.channelId,
 		channelDir: options.channelDir,
-		messages: [...cached.messages],
-		sessionEntries: [...cached.sessionEntries],
+		messages: () => [...cachedTranscript.messages],
+		sessionEntries: () => [...cachedTranscript.sessionEntries],
 		model,
 		resolveApiKey: async (candidate) => getApiKeyForModel(modelRegistry, candidate),
 		settings: {

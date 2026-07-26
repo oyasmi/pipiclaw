@@ -292,12 +292,14 @@ export class ChannelJobManager {
 		}
 		this.sweeping = true;
 		try {
-			for (const record of this.jobs.values()) {
-				if (record.status === "running") {
-					await this.refresh(record).catch((error) => {
-						log.logWarning(`Background job sweep failed to refresh job ${record.id}`, errorMessage(error));
-					});
-				}
+			const running = Array.from(this.jobs.values()).filter((record) => record.status === "running");
+			// One shell for the whole sweep, not one per job: the sweeper runs every 10s for as
+			// long as any job lives, so per-job spawns are the steady-state cost of backgrounding.
+			const probes = await this.probeAll(running);
+			for (const record of running) {
+				await this.applyProbe(record, probes.get(record.id) ?? "").catch((error) => {
+					log.logWarning(`Background job sweep failed to refresh job ${record.id}`, errorMessage(error));
+				});
 			}
 			await this.collectGarbage();
 		} finally {
@@ -306,6 +308,37 @@ export class ChannelJobManager {
 				this.stopSweeper();
 			}
 		}
+	}
+
+	/**
+	 * Probe every given job in one shell invocation, returning `id → EXIT:<code>|ALIVE|GONE`.
+	 *
+	 * Each job contributes one branch that reads its exit-code file if present and otherwise checks
+	 * PID liveness — exactly what the single-job probe did, just batched.
+	 */
+	private async probeAll(records: JobRecord[], signal?: AbortSignal): Promise<Map<string, string>> {
+		const states = new Map<string, string>();
+		if (records.length === 0) {
+			return states;
+		}
+		const script = records
+			.map((record) => {
+				const id = shellEscape(record.id);
+				const exitFile = shellEscape(record.exitFile);
+				return (
+					`if [ -f ${exitFile} ]; then printf '%s EXIT:%s\\n' ${id} "$(cat ${exitFile})"; ` +
+					`elif kill -0 ${record.pid} 2>/dev/null; then printf '%s ALIVE\\n' ${id}; ` +
+					`else printf '%s GONE\\n' ${id}; fi`
+				);
+			})
+			.join("\n");
+		const probe = await this.executor.exec(script, { signal });
+		for (const line of probe.stdout.split("\n")) {
+			const separator = line.indexOf(" ");
+			if (separator <= 0) continue;
+			states.set(line.slice(0, separator), line.slice(separator + 1).trim());
+		}
+		return states;
 	}
 
 	/**
@@ -319,13 +352,15 @@ export class ChannelJobManager {
 		if (record.status !== "running") {
 			return;
 		}
-		// Read the exit-code file if present, and separately check whether the PID is still alive.
-		const probe = await this.executor.exec(
-			`if [ -f ${shellEscape(record.exitFile)} ]; then echo "EXIT:$(cat ${shellEscape(record.exitFile)})"; ` +
-				`elif kill -0 ${record.pid} 2>/dev/null; then echo ALIVE; else echo GONE; fi`,
-			{ signal },
-		);
-		const out = probe.stdout.trim();
+		const probes = await this.probeAll([record], signal);
+		await this.applyProbe(record, probes.get(record.id) ?? "", signal, announce);
+	}
+
+	/** Turn one probe result into a status transition; an unrecognized result only ages the job. */
+	private async applyProbe(record: JobRecord, out: string, signal?: AbortSignal, announce = true): Promise<void> {
+		if (record.status !== "running") {
+			return;
+		}
 		if (out.startsWith("EXIT:")) {
 			const code = Number.parseInt(out.slice("EXIT:".length).trim(), 10);
 			record.exitCode = Number.isFinite(code) ? code : undefined;

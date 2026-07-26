@@ -4,6 +4,22 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- The interactive surface is now Chinese throughout. `/help` (both command tables, every description, and the surrounding prose), the "no task is running" replies for `/stop`/`/steer`/`/followup`, the steer-queued confirmation, the busy-time slash-command notice, the error card, the TUI stop notices, the whole `/usage` report, and every `/tasks` action receipt are translated; `CommandSpec.description` being the single source means `/help`, TUI completion, and the busy hint moved together. Structured report bodies (`/tasks list|stats|doctor`, `/events`, `/status`) deliberately keep their English field labels — they are data columns, not prose.
+- `/stop` now says what it actually did. Stopping a task-driven turn also pauses that task, which previously showed up only in the log while the user was told "Stopping the current task." — a task could then sit silent for days. `handleStop` returns the paused task id and the reply names it along with `/tasks resume <id>`.
+- Added `/tasks set <id> <wake|next|priority|attempts|deadline> <value>`: a direct one-field edit instead of spending a full LLM turn to change a wake time or an attempt budget. The value is the rest of the line (so a `next` action can be a sentence) and an empty value clears the field. Validation is not duplicated — `wake` reuses the ledger's ISO8601 rule and the rest goes through `applyTaskControlPatch`, the same function `task_manage set` uses. Status transitions, verification, and approval stay with `task_manage`, whose state machine owns them.
+- Rolling progress cards keep a standing first line, `⏱ 3m12s · 14 步`, so a long turn is distinguishable from a stuck one when only the last three entries are visible. Because that line changes on every update, rolling mode now replaces the card instead of appending deltas (it already did so once the window filled). The closing summary is Chinese too: `完成 · 14 步 · 3m12s`.
+- `/usage` reports tokens next to cost, since a local or pricing-less model bills nothing while still consuming context.
+
+### Fixed
+
+- An idle daemon no longer pays a real cost on every one-minute maintenance tick. The transcript scan, the incremental source-window build, and the MEMORY.md/HISTORY.md reads all ran *before* the gates that reject almost every tick; they are now thunks the gates evaluate only after the cheap schedule checks pass, memoized so a job that does run still reads once. `MemoryMaintenanceRuntimeContext.messages`/`sessionEntries` become accessors, and `shouldRunStructuralMaintenance` becomes async.
+- Large `bash` output is spilled with a direct file write instead of a second `sh -c 'cat > file'` process, removing a spawn and a pipe copy of up to 10MB; the spill file is now created owner-only.
+- The background-job sweeper probes every running job in one shell invocation instead of one per job, so backgrounding N jobs no longer costs N spawns every 10 seconds.
+- `readActiveTasks` caches parsed task files by `(mtime, ctime, size)` — the task driver re-reads the whole ledger on every tick and after every turn. `actionable` is deliberately never cached: it is a function of the clock, so it is recomputed on every call.
+- The usage ledger keeps entries that consumed tokens at zero cost (local models, or models with no pricing metadata) instead of dropping them, and `UsageSummary` carries `totalTokens`. Previously `/usage` was simply empty for such setups and any token-based spend guard would have failed open. Only entries with neither tokens nor cost are discarded.
+
 ## [0.8.10-beta.2] - 2026-07-25
 
 ### Changed

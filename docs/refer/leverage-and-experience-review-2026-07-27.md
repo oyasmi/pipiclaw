@@ -1,0 +1,337 @@
+# Pipiclaw 杠杆效果 / 性能 / 体验 / 复杂度 评审
+
+日期：2026-07-27
+评审基线：`0.8.10-beta.2`（`master` @ c6f3076）
+评审方式：只读代码审查，从装配根沿真实调用链追踪；对每个结论回到定义点确认，不按文件名或注释推断
+
+> **修复进度（2026-07-27，第一轮）**：性能 P-1~P-5、体验 U-1~U-4 全部落地，每条的实际做法、与建议的偏差和刻意不做的部分记在对应小节的"修复"段落里。效果类 E-1~E-5 与复杂度类 C-1~C-4 本轮未动。`npm run check`（lint + typecheck + knip + 893 项单测）通过。
+
+## 0. 本轮的评审视角，以及与上一轮的分工
+
+`docs/refer/architecture-review-2026-07-25.md` 是一次**正确性 / 架构 / 安全**审查：它问的是"这个系统会不会出错、边界是否自洽"。本轮换一个坐标系，按你实际在乎的四件事重新审：
+
+1. **效果**：它能不能真的比较长程、比较自主地把"驱动别的 AI Coding Agent 干完一件具体事"跑通。
+2. **性能**：每回合、每分钟、每个后台 tick 到底在花什么。
+3. **体验**：一个人在钉钉里长期用它，摩擦在哪。
+4. **复杂度可控**：作为个人项目，维护面是不是已经超过收益。
+
+安全性、隔离性、审计完整性按你的定位**主动降权**：上一轮的 P-02（子代理 bash 绕过 memory write deny）、P-05（path/network guard 不覆盖 bash）、P-11（preAction 拒绝未入审计）在本轮视角下都不是问题，甚至 P-05 那种"bash 就是通用逃逸面"恰恰是本项目要的能力形态——建议按上一轮的结论只**修文档措辞**，不要为它们增加代码约束，那是纯粹的复杂度成本。上一轮的 P-01（task lost update）、P-03（无全局支出闸）、P-12（zero-cost 条目被丢弃）在本轮仍然成立，本轮不重复论证，只在与效果/性能相关处引用。
+
+**一句话结论**：工程质量明显高于一般个人项目——分层清晰、不变量在结构上强制、测试和 spec 齐全。但**能力形状与你陈述的核心用途存在系统性错配**：撬动外部 Coding Agent 所需的三块地基（可指定的工作目录、有进展就快速接续的节奏、外部执行体的生命周期原语）在 runtime 里都不存在，而复杂度预算的大头（记忆子系统 27 文件 / 6035 行）花在了"记住偏好"上。下一轮的正确动作不是继续加深现有分层，而是把工程预算搬到杠杆点上。
+
+---
+
+## 1. 效果（Leverage）：核心用途缺三块地基
+
+### E-1 🔴 整个 daemon 只有一个工作目录，多仓库/多任务并行驱动在结构上不成立
+
+**事实。** 执行器 `spawn("sh", ["-c", command], { detached: true, stdio: [...] })` 不传 `cwd`，因此所有命令都跑在 daemon 进程的 `process.cwd()`（`src/executor.ts:34`）。工具侧同样写死：`securityContext = { workspaceDir, cwd: process.cwd() }`（`src/tools/index.ts:39-42`），于是 `read`/`write`/`edit`/`grep` 的相对路径全部相对 daemon 启动目录解析（`src/security/path-guard.ts:87-96` 的 `resolveTargetPath` 用 `ctx.cwd`）。
+
+子代理更明确：`const workingDirectory = resolve(options.workingDirectory ?? process.cwd())`（`src/subagents/tool.ts:238`），而 `createPipiclawTools` 构造 `createSubAgentTool` 时**从不传 `workingDirectory`**（`src/tools/index.ts:72-90`），`subagentSchema` 里也**没有任何工作目录参数**（`src/subagents/tool.ts:39-98`，只有 `paths` 这个"建议关注路径"的提示字段）。
+
+**这与 playbook 直接矛盾。** `src/playbooks/task-delegation.md` 的"文件系统隔离"一节告诉模型："需要在独立检出上作业时，在宿主侧自行 `git worktree add`，把它当作普通工作目录传给子代理。" —— **这个参数不存在**。模型按 playbook 行动会失败，只能退化成每次 `cd <dir> && <cmd>`；而每次 `bash` 都是新 `sh`，`cd` 不跨调用保留，所以每条命令都要重复前缀。
+
+**更严重的是验收绑定。** 任务完成时的 artifact subject 是 `workspaceSubjectHash(options.workingDirectory ?? process.cwd())`（`src/tools/task-manage/lifecycle.ts:121`、`src/tools/task-manage/verification.ts:76`），而 `workingDirectory` 来自 `ctx.securityContext.cwd`（`src/tools/registry.ts:227`）——也就是 daemon 的 cwd。`workspaceSubjectHash` 内部对该目录跑 `git -C <dir> status/rev-parse/diff`（`src/tasks/artifact-subject.ts:16-24`）。因此：**如果任务真正的产物在另一个仓库，PASS 与 approval 绑定的是错误仓库的 git 状态**；若 daemon cwd 不是 git 目录，`workspaceSubjectHash` 返回 `undefined`，验收退回到"比较 verifier 前后 git status"这条更弱的路径（`src/subagents/tool.ts:819-825`），同样指向错误的目录。这不是安全问题，是**验收语义失效**——一个"独立验收通过"的任务，验的可能是另一个项目。
+
+**建议。** 引入一条贯穿的 `workDir`：
+- 落点在 task frontmatter 的 `control.workDir`（可选，缺省沿用 daemon cwd，保持向后兼容）；channel 级别可以给一个默认值。
+- 消费点四处：`Executor.exec` 增加 `cwd` 选项（`HostExecutor` 直接透传给 `spawn`，比现在 `DirectoryExecutor` 拼 `cd ... &&` 更可靠，见 `src/subagents/tool.ts:199-208`）；`securityContext.cwd`；`subagent` 的 `workingDirectory`（同时给 schema 加一个可选参数，兑现 playbook 的承诺）；`workspaceSubjectHash` 的目标目录。
+- 代价：`workDir` 会成为一个新的持久字段和一个新的模型可见参数。收益：这是"用一个 channel 驱动多个项目"的前提，也是让验收绑定重新有意义的唯一办法。**这是本轮建议里优先级最高的一项。**
+
+### E-2 🔴 有真实进展的任务也要等 5 分钟才接续，长程自主推进被结构性限速
+
+**事实。** `DEFAULT_TASK_DRIVER = { continuationDelayMinutes: 5, stalledRetryMinutes: 60, maxDispatchesPerTick: 4, maxSleepMinutes: 15 }`（`src/settings.ts:233-238`），且这四个键已被列为 retired，用户无法调整（`src/settings.ts:310-313`）。
+
+准入判定：
+
+```ts
+const changed = attempt.fingerprint !== fingerprint;
+const delayMinutes = changed || !attempt.accepted ? settings.continuationDelayMinutes : settings.stalledRetryMinutes;
+return nowMs - attempt.atMs >= delayMinutes * 60_000;
+```
+（`src/runtime/task-driver.ts:117-120`）
+
+也就是说：**fingerprint 变了 = 这一轮确实有进展 → 仍然要等 5 分钟**。`nudge()` 在每个回合结束时被调用（`src/runtime/bootstrap.ts:923`），但它只能提前触发一次扫描，`isEligible` 这道闸照样拦住（`src/runtime/task-driver.ts:273-284`、`:446`）。
+
+**后果。** 一个需要 20 个推进步骤的长程任务，纯等待就是 100 分钟。而"让外部 coding agent 干一小段 → 取回 → review → 决定下一步"恰恰是**高频小步**的形状：每步 5 分钟的强制间隔，会把一个本可以 30 分钟跑完的事拖成半天。这是本项目"长程自主"体感的第一杀手。
+
+**判断。** 这是把**退避策略**当成**节奏策略**用了。退避的目的是防止空转烧 token；有 effect 的接续不该被同一个闸限速。项目里已经有区分二者的现成信号：`effect-ledger`。
+
+**建议。** 把 continuation 拆成三档，用 `getEffectCount` 的增量而不是布尔 fingerprint 决策：
+- 上一轮产生了 effect（write/edit/subagent/send_media/async job）→ **秒级接续**（比如 `MIN_SLEEP_MS` 量级），另配一个"每任务每小时 attempt 上限"防失控；
+- fingerprint 变了但无 effect（只改了状态/笔记）→ 现在的 5 分钟；
+- fingerprint 未变 → 现在的 60 分钟，并继续走 futile 计数。
+
+改动集中在 `isEligible` 和它的调用点，风险低。注意这条依赖上一轮 P-03/P-12：放开接续频率前，最好先有一个可信的 token 账本和一个粗糙的日/月闸，否则失控成本会从"多等一会"变成"多花一笔"。
+
+### E-3 🟠 "进展"的定义恰好排除了驱动外部 agent 最常见的动作
+
+**事实。** 什么算 effect：
+
+```ts
+if (toolName === "bash") {
+    return isRecord(details) && details.async !== undefined;
+}
+return EFFECT_TOOLS.has(toolName);  // write, edit, send_media, subagent
+```
+（`src/agent/effect-ledger.ts:37-49`）
+
+**同步 bash 一律不算 effect**，注释也解释了理由（同一个工具既跑 `ls` 也跑 `rm -rf`，runtime 无法分辨）。同时 `taskFingerprint` 刻意排除 `latestNote`（`src/runtime/task-driver.ts:87-109`），理由同样充分（模型自述不是证据）。
+
+**两条各自合理的规则叠加出一个坏结果。** 一个典型的"驱动外部 agent"回合：同步跑 `claude -p "..."` 或 `agentmux prompt ...`，等它返回，把结果写进 progress note，任务保持 `active` 且 `nextAction` 没变、`wake` 为空。此时：effect 计数不增、`status`/`wake`/`nextAction`/`verification` 全没变 → **fingerprint 不变 → 记一次 futile**。连续 3 次（`FUTILE_WAKE_LIMIT = 3`，`src/runtime/task-driver.ts:52`），治理器直接把任务 `paused + pausedBy=governor`（`:454-467`）。也就是说，**最卖力干活的那种回合，最容易被判定为空转并被停掉。**
+
+`task-driving.md` 教模型每轮更新 `wake`/`nextAction`，这确实能规避；但把正确性寄托在"模型每轮记得改一个无关字段"上是脆的，而且 playbook 同时又警告"不要为了拿到短退避而伪造 progress"——两条指导在这里互相拉扯。
+
+**建议（二选一或都做）。**
+- 让 exit code 为 0 且有 stdout 的同步 `bash` 计一次**弱 effect**（权重可以低于 write，只用于"这轮不是完全空转"的判定）。风险是 `true` 也能刷，但配合 fingerprint + attempts 上限，代价可接受，比现在的假阴性划算。
+- 或者在 `task-delegation.md` / `background-jobs.md` 里把"驱动外部 agent 一律用 `bash async` + `taskId`"定为硬纪律。`async` 已经计 effect，且自带完成唤醒、跨重启认领、并发上限——这条路本来就更对。
+
+### E-4 🟠 `subagent` 是进程内 pi Agent，不是外部 Coding Agent 的适配层；核心用途没有 runtime 支撑
+
+**事实。** `subagent` 工具直接 `new Agent({...})` 起一个进程内的 pi agent（`src/subagents/tool.ts:683-692`），工具集来自同一个 registry（`:373-400`）。它解决的是**上下文隔离 + 预算约束 + 产物落盘**，不是"调用一个比自己更强的外部执行体"。
+
+而外部 agent 被明确推给用户层：`src/playbooks/task-delegation.md` "Pipiclaw 不内置或假设第三方 agent 工具的命令、状态 JSON、检测脚本"，`docs/events-and-tasks.md:581-583`、`docs/runtime-playbooks.md:84` 口径一致。runtime 只保留"恢复纪律"四条（记录标识 → blocked + wake → 醒来查状态 → 闭环清理）。
+
+**判断。** 这条边界本身是**正确的产品决策**——把 agentmux/claude/codex 的协议写进 runtime playbook，升级即漂移。问题不在边界，在于**边界之内什么都没给**：外部执行体的启动、探活、取回、跨重启认领，全靠模型手写 bash + task wake 轮询。于是最重要的使用场景，恰好是抽象层最薄的地方。
+
+**关键观察：`ChannelJobManager` 已经把这件事做了 80%。** 它用 `nohup` 启动、`.exit` 文件 + `kill -0` 探活、记录镜像到 `state/jobs/<channelId>/`、重启后重新认领并补发唤醒、完成时自动唤醒 channel 并带上输出尾部和完整输出路径（`src/agent/job-manager.ts:12-26, 218-265, 318-400, 478-514`）。缺的只有两件：
+
+1. **探活命令不可自定义**：现在写死 `kill -0 <pid>` + `.exit` 文件。外部 agent 通常是"进程还在但会话已完成"，需要用户 skill 提供的检测命令（比如 `agentmux inspect --json | jq -e '.state=="idle"'`）。
+2. **不能中途 steer**：`job` 工具只有 list/poll/cancel（`src/tools/job.ts`），长驻外部 agent 的典型需求是"跑到一半改需求"。
+
+**建议。** 提出一个**协议无关的 external-run 原语**，作为 job manager 的泛化：由 workspace 配置或 skill 声明 `start` / `probe` / `collect` / `steer` 四条命令（纯字符串模板，runtime 不理解语义、只负责执行并过 command guard），runtime 负责记录持久化、跨重启认领、完成唤醒、并发上限。第三方协议仍留在用户层（边界不破），恢复纪律回到 runtime（模型不用再手搓）。这是把 Pipiclaw 从"能跑 bash 的助手"变成"AI 能力杠杆"的那一步。
+
+### E-5 🟡 12000 字符输入上限对"扔一段构建日志过来"是硬伤
+
+**事实。** `MAX_USER_MESSAGE_CHARS = 12_000`（`src/agent/types.ts:207`），超出时截断并提示"⚠️ 消息过长（N 字符），已截断至约 12000 字符后处理"（`src/agent/channel-runner.ts:296-300`）。
+
+**后果。** "把这段失败日志/diff 丢给它去驱动修复"是驱动型使用里最常见的开场动作之一，而这类内容轻松超过 12k。`clipUserInput` 保留头 60% + 尾 40%、丢弃中段（`src/agent/progress-formatter.ts:10-19`），头尾策略本身是合理的默认，但对一段 40k 的构建日志，被丢掉的中段恰好是失败堆栈所在。更关键的是提示只说了"已截断"，**没有给模型或用户任何可执行的下一步**，这与 `AGENTS.md` 里"每个截断输出必须携带 next-step instruction"的自家规则不一致（同上一轮 P-10 的模式）。
+
+**建议。** 提示改成可执行的：把超长部分落盘到 channel 目录下一个临时文件，提示里给出路径并告诉模型"完整内容在 `<path>`，用 `read` 分页查看"。这样长日志不再丢失，且走的是已有的 read 分页链路。
+
+---
+
+## 2. 性能：每分钟和每回合到底在花什么
+
+### P-1 ✅ 已修复 · 每分钟的记忆维护 tick 在任何 gate 判定之前就复制整份 transcript
+
+**事实。** scheduler 每 60 秒跑一次（`DEFAULT_TICK_INTERVAL_MS = 60_000`，`src/memory/scheduler.ts:37`），每次选 `maxConcurrentChannels` 个 channel（生产值 = 1，`src/memory/maintenance-tuning.ts:34`），对每个调用 `getRuntimeContext`。对活跃 channel 走 `runner.getMemoryMaintenanceContext()`：
+
+```ts
+await this.ensureSessionReady();
+this.settingsManager.reload();          // 一次同步文件读
+return {
+    messages: [...this.session.messages],              // 整份对话数组浅拷贝
+    sessionEntries: [...this.sessionManager.getBranch()],  // 整份 session 分支浅拷贝
+    ...
+};
+```
+（`src/agent/channel-runner.ts:672-687`）
+
+**然后**才轮到三个 job 依次判 gate（`src/memory/scheduler.ts:143-180`），绝大多数 tick 三个 gate 全拒（生产 gate 是 10 分钟 idle + 10/20 分钟间隔 + 6 小时结构维护，`src/memory/maintenance-tuning.ts:29-39`）。也就是说**长驻实例的绝大部分维护 tick，做的唯一实事就是复制两个数组、读一次 settings 文件，然后什么都不干**。
+
+单次成本不高（浅拷贝 + 一次 4KB 读），但它是每分钟、永远在跑的。叠加上一轮 P-06 记录的"每 tick 写三条 skip 到 `memory-review.jsonl`"，长驻实例的稳态开销全是无信息写放大。
+
+**建议。** 把 `MemoryMaintenanceRuntimeContext` 的 `messages`/`sessionEntries` 改成惰性 getter（`() => AgentMessage[]`），gate 通过后再求值；`settingsManager.reload()` 同样后移。这是一次纯机械的改动，配合上一轮 P-06 的去重修复一起做，能让"闲置实例接近零开销"这个契约真正成立。
+
+**修复（2026-07-27）。** 按建议做了，但范围比"改成 getter"更大一点：真正贵的不是那两次浅拷贝，而是 gate 之前就被算掉的三样东西——`hasMeaningfulMessages()` 要 sanitize 并扫描整份 transcript、`buildIncrementalMemorySourceWindow()` 要构造增量窗口、structural job 要读两份 MEMORY.md/HISTORY.md。只把数组改成 getter 并不能省掉它们，因为 gate 的入参是提前算好的布尔值。
+
+- `MemoryMaintenanceRuntimeContext.messages`/`sessionEntries` 改为 `() => T[]`（`scheduler.ts`、`channel-runner.ts`、`maintenance-context.ts`）。
+- 三个 gate 的"材料"入参改成 thunk：`hasNewSessionEntry`/`hasMeaningfulMaterial` 是 `() => boolean`，checkpoint 收敛成一个 `material: () => {...}`，structural 是 `material: () => Promise<...>`（该函数因此变 async）。gate 内部仍然是先判便宜条件、再取材料，所以被拒的 tick 一行材料都不会算。
+- jobs 里用一个 8 行的 `once()` 让 gate 与 job 正文共用同一次昂贵求值，不会算两遍。
+- 新增用例 `never evaluates material when a cheap schedule gate denies` 把"闲置 tick 零材料成本"钉成回归测试。
+- 未动：`settingsManager.reload()` 仍在 context 构造时执行。把它也惰性化要求 `settings` 变成 thunk 并穿透所有 job 与 consolidation 入参，收益（每分钟一次 4KB 读）配不上这个改动面。detached 路径的 `createModelRuntime()`（每 tick 读 auth.json + models.json）同理留在原处：缓存它会让模型配置改动在维护路径上失效，属于把性能问题换成正确性问题。
+
+### P-2 ✅ 已修复（按更小的方案） · bash 输出溢出时把 10MB 从进程内存经 stdin 写回磁盘
+
+**事实。** `HostExecutor` 把 stdout/stderr 全量累积到进程内存，各自上限 10MB（`src/executor.ts:94-106`）。`bash` 工具在输出超过 `DEFAULT_MAX_BYTES` 时，**再 spawn 一个 `sh` 跑 `cat > /tmp/pipiclaw-bash-<id>.log`，把刚才那份内存内容通过 stdin 灌回去**（`src/tools/bash.ts:245-258`）。
+
+一次大输出因此付出：一次内存峰值（最多 10MB 字符串，Node 里是 UTF-16，实际约 20MB）+ 一次完整的进程间拷贝 + 一次磁盘写。这条路径在"跑测试套件"、"跑外部 agent 的完整日志"这类场景下是常态而非例外。
+
+**建议。** 让 executor 支持"输出直接重定向到文件"：`exec(cmd, { spillTo: path })` 内部拼 `{ cmd; } > path 2>&1`，然后只 `tail` 需要的尾部。省掉内存峰值和回写。同一改动也让 `job-manager` 的 spill 路径统一。
+
+**修复（2026-07-27）。** 没有采纳 `spillTo`，采纳了它三项成本里的两项：`bash.ts` 的溢出落盘改为直接 `writeFile(path, output, { mode: 0o600 })`，省掉一次 `sh -c 'cat > file'` 进程和一次最多 10MB 的管道拷贝（顺带把权限收成 owner-only，之前靠 /tmp 默认权限）。
+
+不做 `spillTo` 的理由：要在**执行前**决定是否重定向，就必须让每条 bash 命令都先写临时文件、再 `tail` 回来（多两次 exec + 一个文件），而绝大多数命令的输出根本不超限——这是把常见情况的成本抬起来换极少数情况。留在原地的只有 executor 内存里那份字符串累积（本来就有 10MB 上限）。
+
+### P-3 ✅ 已修复 · 运行中的每个后台 job 每 10 秒 spawn 一次 shell 探活
+
+**事实。** sweeper 间隔 `SWEEP_INTERVAL_MS = 10_000`（`src/agent/job-manager.ts:87`），每次对每个 running job 执行一条 `if [ -f ... ]; then ...; elif kill -0 <pid>; then ...; fi` 探测（`:322-327`），每条都是一次完整的 `spawn("sh", ...)`。上限 5 个并发 job（`MAX_RUNNING_JOBS`），即最多每 10 秒 5 次 spawn，持续整个 job 生命周期。
+
+个人规模下这不会压垮机器，但如果按 E-4 的建议把外部 agent 驱动搬到 job 机制上，job 会变成常态而非例外，这个成本值得先解决。
+
+**建议。** 一次 sweep 用**一条**命令批量探测所有 running job（把 pid/exitFile 列表拼进一个循环脚本），把 N 次 spawn 降到 1 次。
+
+**修复（2026-07-27）。** `refresh()` 拆成 `probeAll()`（一条命令里每个 job 一个分支，打印 `<id> EXIT:<code>|ALIVE|GONE`）+ `applyProbe()`（原来的状态迁移逻辑，逐字保留）。sweep 走批量路径，N 次 spawn 变 1 次；`list`/`poll`/`restore` 仍走单 job 的 `refresh()`，行为不变。新增用例断言"一次 sweep 只发一条探活命令，且分支数等于运行中的 job 数"。
+
+### P-4 ✅ 已修复 · TaskDriver 每 tick 全量重读所有 channel 的所有 task 文件
+
+**事实。** `const entries = await readActiveTasks(join(channelDir, "tasks"), nowMs)`（`src/runtime/task-driver.ts:346`），无 mtime 缓存。tick 由定时器（`≤ maxSleepMinutes = 15` 分钟，且被 attempt horizon 拉到 5/60 分钟粒度）和 `nudge()`（**每个回合结束都触发**，`src/runtime/bootstrap.ts:923`）驱动。
+
+在一个持续推进的长任务链上，每个回合结束都会触发一次"读遍所有 channel 的所有任务文件 + 解析 frontmatter + 解析 control JSON"。任务不多时无所谓，但这是 E-2 建议"秒级接续"之后会被放大的路径。
+
+**建议。** 给 `readActiveTasks` 加一层按 `(path, mtimeMs, size)` 的解析结果缓存，和 `MemoryCandidateStore` 的做法完全一致（`src/memory/candidates.ts:59-61, 274-276`）——项目里已经有现成的模式可以照抄。
+
+**修复（2026-07-27）。** 照抄了 candidate store 的指纹，用 `(mtimeMs, ctimeMs, size)`（多一个 ctime：任务写入走 `writeFileAtomically` 的 rename，ctime 一定变，比只看 mtime 更难被同毫秒改写骗过）。关键细节：`actionable` **不进缓存**——它是 `now` 的函数，每次调用都用当前时钟重算，否则一个 wake 到点的任务会永远被判成未到点。缓存上限 512 条，超了整表清空。新增用例覆盖"同一文件换时钟后 actionable 翻转"和"文件改写后被重新解析"。
+
+### P-5 ✅ 已修复 · usage ledger 丢弃 cost=0 的条目，使 token 维度的自动化闸门失去数据基础
+
+上一轮 P-12 已完整论证（`src/usage/ledger.ts:82`：`if (!(entry.cost.total > 0)) return;`）。本轮只补充它与自主性的关系：**E-2 建议放开接续频率、E-4 建议让外部 agent 常驻，两者都需要一个可信的"这个月烧了多少"来兜底**。而现在只要用的是本地模型或缺 pricing 元数据的模型，账本就是空的，`/usage` 看不到任何东西，任何基于 token 的闸门都会 fail-open。**如果要做 E-2，先做 P-12。**
+
+**修复（2026-07-27）。** 落盘条件从"有成本"改成"有 token 或有成本"，只丢弃双零的空条目。但只改这一处并不够，还有两个上游/下游缺口一起补了：
+
+- `channel-runner.ts` 的记账整段被 `if (totalUsage.cost.total > 0)` 包着——本地模型连 `record()` 都到不了。改成 `cost > 0 || tokens > 0`。
+- `UsageSummary` 原本只有金额，于是即使条目落了盘，`/usage` 依然只会显示 `$0.0000`。新增 `totalTokens` 并在 `/usage` 里与金额并列显示（`本频道：$0.0123 · 45k tokens`）。
+
+这样"token 维度的闸门"才真的有数据可读。E-2 的前置条件因此就位（全局日/月支出闸本身仍未做，属于上一轮 P-03）。
+
+---
+
+## 3. 体验：一个人长期用的摩擦点
+
+### U-1 ✅ 已修复 · `/stop` 会顺手把任务 pause，但只告诉用户"Stopping the current task"
+
+**事实。** `handleStop` 在检测到当前回合是 `[TASK_DRIVER:<id>]` 或 `[TASK_CYCLE:<id>]` 驱动时，会调用 `pauseTask` 把该任务置为 `paused`（`src/runtime/bootstrap.ts:657-673`），结果只写进 `log.logInfo`。而用户看到的回复是 `sendPlain(channelId, "Stopping the current task.")`（`src/runtime/dingtalk.ts:1337-1338`）。
+
+**后果。** 用户以为自己只是打断了这一轮，实际上任务已经停摆，必须显式 `/tasks resume <id>` 才会再被 driver 拾起（`task-driving.md` 的"不唤醒"一节确认了这一点）。一个长程任务因此可能沉默几天，而用户完全不知道发生了什么。这是本轮体验部分最值得先修的一条。
+
+**建议。** 回复文案带上后果和恢复入口：`已停止当前回合。任务 <id> 已暂停，用 /tasks resume <id> 继续。` 更进一步可以考虑区分"停这一轮"和"停这个任务"两种意图——但先把告知补上，一行字的成本。
+
+**修复（2026-07-27）。** `DingTalkHandler.handleStop` 从 `Promise<void>` 改为返回 `StopOutcome { pausedTaskId? }`，transport 据此给出：任务被暂停时是 `已停止当前回合。任务 \`<id>\` 已暂停，用 \`/tasks resume <id>\` 继续。`，否则只说 `已停止当前回合。`。没有做"停这一轮 vs 停这个任务"的意图区分——那要新增命令和一套语义，超出这一轮的范围；先让后果可见。
+
+### U-2 ✅ 已修复（交互面，报告字段标签保留英文） · 界面语言中英混杂，且 `/help` 全英文
+
+**事实。**
+- 中文：`未知命令 \`/x\`。发送 \`/help\` 查看可用命令。`（`src/agent/commands.ts:254`）、`⚠️ 消息过长（N 字符）…`（`src/agent/channel-runner.ts:298`）、`⚠️ 模型 X 出错（…），切换到 Y 重试…`（`:428`）、全部 playbook。
+- 英文：`_Sorry, something went wrong._`（`:510`）、`No task is running. Use \`/stop\` only while a task is running.`（`:615`）、`Queued as steer. I'll apply it after…`（`src/runtime/bootstrap.ts:796-798`）、`A task is already running. While streaming you can use: …`（`src/runtime/dingtalk.ts:1371`）、`BUILT_IN_COMMANDS` 全部 description/argumentHint 因而 `/help` 全英文（`src/agent/commands.ts:44-160`）。
+
+**判断。** 这不是"要不要国际化"的问题——项目已经选了中文（playbook、诊断、告警全中文），只是**没选干净**。对一个中文单人使用场景，`/help` 一屏英文是很突兀的落差。
+
+**建议。** `CommandSpec.description` 已经是唯一真相源（`/help`、TUI 补全、busy 提示都从它派生，注释里写明了），改一处即可覆盖三处。剩下十来条散落的英文字符串一次性中文化。这是低风险高感知的改动。
+
+**修复（2026-07-27）。** 定的线是：**会话/交互文案一律中文，结构化报告里的字段标签保留英文**（`status:`、`attempts:`、`next wake:` 这些是数据栏位，翻译反而更难对照代码和 spec）。
+
+已中文化：`BUILT_IN_COMMANDS`/`SESSION_COMMANDS` 的全部 description 与 `<消息>` 一类自由文本占位（因此 `/help`、TUI 补全、busy 提示一次覆盖）、`/help` 正文、错误回执（`_抱歉，出错了。_`）、无运行回合时的 `/stop`·`/steer`·`/followup` 回复、steer 排队回执、忙时斜杠命令提示、TUI 的停止提示、`/usage` 整屏、`/tasks` 的**动作回执**（找不到任务 / 已暂停 / 已恢复 / 已批准 / 已排入执行 / 用法 / 未知动作）与各报告标题。
+
+未动：`/tasks list|stats|doctor` 报告正文里的字段标签与 `Next step:` 诊断行、`/events`、`/status` 的字段名。这些是数据视图；真要翻译应当连同 spec 术语一起做，不适合塞进这一轮。
+
+### U-3 ✅ 已修复 · 长回合缺"已经跑了多久 / 到第几步"的常驻可读性
+
+**事实。** progress 卡以 800ms 节流更新（`MIN_UPDATE_INTERVAL_MS`，`src/runtime/delivery.ts:7`），rolling 模式只保留最近 3 条（`ROLLING_WINDOW_SIZE`，`:8`）。累计耗时和工具调用数**只在收尾时**出现一次：`Done · N tool calls · Ns`（`buildSummaryText`）。
+
+**后果。** 在 rolling 模式下看一个跑了 10 分钟的驱动型回合，用户始终只看到最近 3 条工具标签，无法判断"它到底推进到哪了、还是卡住了"。
+
+**建议。** rolling 模式的卡片首行常驻一个摘要：`⏱ 3m12s · 14 步 · 当前：<label>`。数据（`progressStartedAt`、`toolCallCount`）已经在 `ChannelDeliveryController` 里了，只是现在只在 finalize 时用。
+
+**修复（2026-07-27）。** rolling 模式的卡片首行常驻 `⏱ 3m12s · 14 步`。没有带 `· 当前：<label>`：滚动窗口的最后一条本来就是当前动作，重复一遍只会挤掉一条真实进度。
+
+一个必须一起改的点：首行随时间变化，所以 rolling 模式不能再用"只追加增量"的路径（会留下一条过期的首行），改为每次 replaceCard。窗口满了以后本来就是这样，代价只是前 3 次更新多一次整卡替换。收尾摘要同时中文化为 `完成 · 14 步 · 3m12s`。
+
+### U-4 ✅ 已修复（收窄为单字段直改） · `/tasks` 只能读和治理，创建/修改任务必须走一整个 LLM 回合
+
+**事实。** `/tasks` 的动词是 `show|archive|approve|pause|resume|run|stats|doctor`（`src/agent/commands.ts:83-96`）——全是只读或状态治理。想改一个 `wake`、调一次 `maxAttempts`、修一行 `nextAction`，都得用自然语言让模型去调 `task_manage`，代价是一个完整回合的 token 和几十秒延迟。
+
+**判断。** 这个设计在"让模型拥有台账"的意义上是自洽的，不算错。但对**你自己**这个唯一用户，"我知道我要改哪个字段"是高频场景。`/tasks set <id> wake=...` 这类直达入口的收益/成本比很高，而且 `task_manage set` 的校验逻辑可以直接复用。属于可选优化，不紧急。
+
+**修复（2026-07-27）。** 加了 `/tasks set <id> <wake|next|priority|attempts|deadline> <值>`，语法是"一次一个字段、值取该行剩余全部内容"，不是 `key=value` 列表——后者要处理引号和转义，而 `next` 的值本来就是一句带空格的中文。留空表示清除（wake/next/deadline）。
+
+刻意收窄的边界：只放开这五个"用户自己就知道该改成什么"的字段。`status` 迁移、验收、审批、副作用等级仍然只走 `task_manage`——它们背后是一台状态机（离开 verifying 会作废 PASS、改契约会作废 approval），复制到第二个入口就是复制一份会漂移的规则。校验不重写：`wake` 复用台账的 ISO8601 规则，其余四个走 `applyTaskControlPatch`（`task_manage set` 用的同一个函数），只在 `priority`/`attempts` 上加了两个把字符串转成合法枚举/正整数的解析器。`TASK_PRIORITIES` 因此从 `tasks/control.ts` 导出，避免枚举被抄第二遍。
+
+---
+
+## 4. 复杂度可控性
+
+### C-1 🟠 维护面已经接近个人项目的上限，且大头花在非杠杆处
+
+**规模事实**（`.ts` 行数）：
+
+| 域 | 文件 | 行数 |
+|---|---|---|
+| runtime | 15 | 6183 |
+| **memory** | **27** | **6035** |
+| agent | 24 | 4949 |
+| tools | 29 | 4935 |
+| security | 6 | 1639 |
+| subagents | 2 | 1516 |
+| shared | 16 | 1596 |
+| tui | 10 | 1232 |
+| web | 7 | 1119 |
+| **tasks** | **5** | **909** |
+| usage / models / playbooks | 5 | 554 |
+
+src 合计 150 文件 / 32115 行；test 20111 行；evals 3605 行；docs 21257 行 markdown（含 36 个 spec 目录 / 48 个 md）。**文档与源码之比约 0.66:1。**
+
+**关键对比：真正撬动杠杆的三块——`tasks/`(909) + `job-manager`(585) + `subagents/`(1516) ≈ 3000 行；服务"记住偏好"的记忆子系统 6035 行，是前者的两倍。** 记忆里有 4 层文件、3 个 job、3 类 gate、独立的 state / review-log / tombstones / promotion / candidates / metadata / source-window / task-digest / chinese-words 分词表。
+
+**判断。** 记忆本身做得好（上一轮的 O-08 论证了 archive-before-fold 和 hash-only tombstone 的正确性），本条**不是建议删记忆**。而是提示一个投入比例问题：如果核心用途是撬动外部 Agent，那么下一阶段的工程预算应当压到 E-1/E-2/E-4，而**不是继续加深记忆分层**。记忆子系统建议进入"维护模式"——只修 bug（比如上一轮 P-06 的 skip 去重），不加新层。
+
+### C-2 🟠 历史兼容层对一个个人项目是净成本，0.9.0 应该一次性砍掉
+
+**事实。** 现存的兼容包袱：
+- `RETIRED_SETTINGS_KEYS` 35 项 + `hasNestedKey` 扫描 + 启动告警（`src/settings.ts:279-330`）
+- `RETIRED_TASK_CONTROL_KEYS` + `retiredTaskControlKeys()`（`src/tasks/control.ts:198-218`）
+- `migrateLegacyAppHome` + `LEGACY_APP_HOME_DIR`，代码里自带 `FIXME(0.9.0)`（`src/runtime/bootstrap.ts:304-334`）
+- `migrateLegacyTaskScheduleEvents`（`src/runtime/task-migration.ts`，每次启动都跑一次）
+- settings 的双层类型：用户输入窄接口 + 运行时宽接口，两个形状不镜像
+
+**判断。** 对一个有外部用户的产品，这些都是负责任的做法。对一个**只有你一个用户、你完全知道自己的 `~/.pipiclaw` 里有什么**的项目，它们是纯负债：每一项都要维护、要测试、要在读代码时绕过。
+
+**建议。** 0.9.0 直接删：迁移代码删掉（必要时手动改一次自己的配置），retired keys 列表删掉（改成"未知键一律忽略"或干脆不管）。预计能减掉几百行 + 对应测试，且让 settings/control 的类型回到单一形状。
+
+### C-3 🟡 三处合成唤醒各自硬编码模板，是"agent 反向依赖 runtime"的具体成本
+
+**事实。** 三个地方独立构造 `DingTalkEvent` 并各自手写唤醒文本：
+- `createTaskDriverEvent`（`src/runtime/task-driver.ts:136-173`）
+- `taskEscalationEvent`（`:190-207`）
+- `ChannelJobManager.announce`（`src/agent/job-manager.ts:379-394`）
+
+三份文本各自硬编码 playbook 路径（`join(PLAYBOOKS_DIR, "task-driving.md")` 等）和 `[SILENT]` 约定。改一次静默协议要动三处，且第三处还住在 `agent/` 域里——这就是上一轮 P-08（agent → runtime 反向依赖）在日常维护里的实际成本。
+
+**建议。** 抽一个 `runtime/wake-templates.ts` 集中三类唤醒文本与 dispatchId 规则；顺带按上一轮 P-08 的建议引入 transport-neutral 的合成事件类型，两件事一起做比分开做便宜。
+
+### C-4 🟡 playbook 之间存在知识重复
+
+`task-closeout.md` 的"independent + external 同时存在"（264-276 行）和 `task-driving.md` 的"回合结束必须留下确定性状态"（359 行）各写了一遍 verifying 车道 / 只改 wake 不换状态 / PASS 失效规则；`task-planning.md` 的"外部副作用与独立验收并存时"（447 行）第三次复述了同一套死锁规避逻辑。三处措辞不同，将来改规则时很容易只改一处。
+
+**建议。** 让 `task-closeout.md` 成为门禁规则的唯一真相源，另两处只留一句指针。playbook 的 token 也是每回合成本（catalog 进 system prompt，正文按需 read），去重同时省钱。
+
+---
+
+## 5. 优先级建议
+
+按「对核心用途的收益 ÷ 改动成本」排序：
+
+| # | 项 | 类型 | 为什么排这里 |
+|---|---|---|---|
+| 1 | **E-1 工作目录贯穿** | 效果 | 一个字段 + 四个消费点，但它是"驱动多个项目"和"验收绑定有意义"的共同前提。目前 playbook 已经在教一个做不到的用法。 |
+| 2 | **E-2 + E-3 接续节奏与 effect 定义** | 效果 | 改动局限在 `isEligible` 和 `isEffectfulTool`，直接决定"能不能真的自主跑完一件事"的体感。做之前先补 P-5（上一轮 P-12）。 |
+| 3 | ~~**U-1 `/stop` 告知任务已暂停**~~ ✅ | 体验 | 已完成；`handleStop` 现在回传被暂停的任务 id。 |
+| 4 | **E-4 external-run 原语** | 效果 | 收益最大但工作量也最大；`job-manager` 已完成 80%，把 probe 命令做成可配置 + 加一条 steer 是主要增量。建议在 1、2 完成后立项。 |
+| 5 | ~~**P-1 惰性 maintenance context**~~ ✅ | 性能 | 已完成。实际范围比"机械改动"大：真正贵的是 gate 之前算掉的材料，不是数组拷贝。 |
+| 6 | ~~**U-2 语言统一**~~ ✅ + E-5 长输入落盘 | 体验 | U-2 已完成（交互面中文，报告字段标签保留英文）；E-5 未做。 |
+| 7 | **C-2 0.9.0 砍兼容层** | 复杂度 | 纯减法，减掉几百行代码和测试。 |
+| 8 | ~~P-2/P-3/P-4 执行器与缓存~~ ✅ | 性能 | 已完成（P-2 取更小方案，见该节）。E-2/E-4 落地后不会再被这几条放大。 |
+| 9 | C-3/C-4 唤醒模板与 playbook 去重 | 复杂度 | 与上一轮 P-08 合并做。 |
+
+**下一轮的起点**：优先级 1（E-1 工作目录贯穿）、2（E-2/E-3 接续节奏，P-5 已经把它的前置数据基础补上）、4（E-4 external-run 原语）三条效果项一条没动，它们仍然是收益最高的。
+
+---
+
+## 6. 值得保持的（不要在优化中弄坏）
+
+1. **prompt 的确定性构建与预算体系。** `buildPipiclawSystemPrompt` 明确禁止读时钟、文件序、channel id，这正是两个 channel 共享一份 provider 端 cache prefix 的前提（`src/agent/prompt/builder.ts:1-16`）；runtime-authored 段有 700/1200 unit 的软硬两档预算并在超标时产出 diagnostic。`/context` 能只读地看到分解且不花 LLM 钱。这套东西在长程使用里是省钱和防漂移的核心，任何新增 prompt 内容都应该继续走 section 管道。
+2. **channel 事实随 turn 走、不进 system prompt。** `renderChannelTurnContext()`（`src/agent/channel-runner.ts:742-749`）只有 4 行，把目录和"这些文件是 runtime 维护的"讲清楚，剩下交给工具。这个取舍是对的。
+3. **memory candidate 的 fingerprint 缓存 + WeakMap 分词缓存。** `(exists, mtimeMs, ctimeMs, size)` 判缓存有效（`src/memory/candidates.ts:59-61`），分词结果挂在 candidate 对象上（`src/memory/recall.ts:347-360`）。这让每回合召回在文件没变时几乎零成本——P-4 建议的 task 缓存直接照抄这个模式即可。
+4. **rerank 的 3 秒短皮带 + fail-open。** `MEMORY_RECALL_RERANK_TIMEOUT_MS = 3_000` 且失败回落到本地排序（`src/memory/recall.ts:87, 625-628`），注释里还记录了"曾经对每条中文消息强制 rerank 导致 8 秒延迟"的教训。在关键路径上加 LLM 调用的正确姿势。
+5. **job 的完成唤醒是 runtime 保证，不是模型职责。** `job-manager.ts:12-26` 的注释把理由说清楚了："让模型预测完成时间并安排自己的回调，是它做不对的判断"。这条设计哲学应该扩展到 E-4 的 external-run 原语上。
+6. **`effort` / `context` 三档预设。** 子代理的预算和上下文注入用三个语义档位而不是让模型填数字（`src/subagents/tool.ts:50-64`），配合"触顶时给一轮无工具的收敛回合"（D6，`:762-790`）——比"预算耗尽就丢弃全部工作"好得多。
+
+---
+
+## 7. 本轮盲区
+
+- 未运行 `npm run check` / `npm run eval`：本轮全部结论来自静态代码追踪，未做行为验证。E-2、E-3 的失效路径是从代码推导的，**建议用 evals harness 各写一个用例实证**（driver 的 `runOnce` 和 dispatch observer 都已经为此暴露了，见 `src/runtime/bootstrap.ts:103-118`）。
+- 未实测性能数字：P-1/P-2/P-3 是路径分析而非 profile 结果，量级判断基于代码结构。
+- 未连真实钉钉，U-1/U-3 的体感结论来自代码与文案，未做真人回归。
+- 未审计上游 `@earendil-works/pi-coding-agent`：`AgentSession` 的 compaction、steer 队列、resource reload 行为按其公开契约理解。
+- 未评估 TUI 路径（1232 行）：本轮只从 `ChannelContext` 的第二实现角度确认它没有破坏抽象，没有单独审它的体验。

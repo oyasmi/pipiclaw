@@ -87,10 +87,10 @@ describe("command metadata helpers", () => {
 
 	it("renders help text that describes transport and session commands", () => {
 		const help = renderBuiltInHelp();
-		expect(help).toContain("# Slash Commands");
-		expect(help).toContain("## Transport Commands");
-		expect(help).toContain("## Session Commands");
-		expect(help).toContain("/followup <message>");
+		expect(help).toContain("# 斜杠命令");
+		expect(help).toContain("## 传输层命令");
+		expect(help).toContain("## 会话层命令");
+		expect(help).toContain("/followup <消息>");
 		expect(help).toContain("/events <list|show|delete|history>");
 		expect(help).toContain("busyMessageDefault");
 		expect(help).toContain("responseMode");
