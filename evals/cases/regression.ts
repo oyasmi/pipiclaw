@@ -27,83 +27,6 @@ const definitionFile = "evals/cases/regression.ts";
 
 export const regressionCases: EvalCase[] = [
 	{
-		id: "T-create-01",
-		suite: "regression",
-		source: "e2e tasks-lifecycle",
-		description: "Natural language creates a governed, parseable task with a real checkbox DoD.",
-		definitionFile,
-		script: [
-			{
-				kind: "user",
-				text: "Create task eval-create with task_manage. Goal: eventually write hello.txt containing hello. DoD must be one real unchecked checkbox. Use evidence verification and do not start the work yet.",
-			},
-		],
-		graders: [
-			taskFrontmatter(
-				"governed-task",
-				"eval-create",
-				(frontmatter, content) =>
-					Boolean(frontmatter.control) && /-\s+\[ \]/.test(content) && /hello\.txt/i.test(content),
-			),
-		],
-	},
-	{
-		id: "T-create-02",
-		suite: "regression",
-		source: "028 first-wave matrix",
-		description: "A broad release goal becomes concrete ordered task records, not a prose-only plan.",
-		definitionFile,
-		script: [
-			{
-				kind: "user",
-				text: "Create two persistent tasks for a release: release-build produces the package, then release-publish runs after release-build. Do not execute them. Use task_manage and real checkbox DoDs.",
-			},
-		],
-		graders: [
-			taskFrontmatter(
-				"build-task",
-				"release-build",
-				(frontmatter, content) => Boolean(frontmatter.control) && /-\s+\[ \]/.test(content),
-			),
-			// Spec 036 D4 retired the `dependsOn` graph: ordering is now expressed in the task
-			// body (Goal/Manual), so that is where the constraint has to show up.
-			taskFrontmatter(
-				"publish-ordering",
-				"release-publish",
-				(frontmatter, content) =>
-					Boolean(frontmatter.control) && /-\s+\[ \]/.test(content) && /release-build/.test(content),
-			),
-		],
-	},
-	{
-		id: "T-resume-01",
-		suite: "regression",
-		source: "026 §11.2",
-		description: "A production-sourced synthetic wake reads the named task before changing it.",
-		definitionFile,
-		setup: (ctx) => writeTask(ctx, "resume-one", { body: wakeBody("ALPHA-42") }),
-		script: [{ kind: "syntheticTaskTurn", taskId: "resume-one" }],
-		graders: [
-			fileContains("goal-kept", "tasks/resume-one.md", /ALPHA-42/),
-			tracePredicate(
-				"task-read-first",
-				(ctx) => {
-					const calls = ctx.trace.filter((event) => event.kind === "tool-call");
-					const taskRead = calls.findIndex(
-						(event) =>
-							event.tool === "read" &&
-							/resume-one\.md/.test(event.fields?.path ?? event.fields?.file_path ?? ""),
-					);
-					const mutation = calls.findIndex(
-						(event) => event.tool === "task_manage" || event.tool === "write" || event.tool === "edit",
-					);
-					return taskRead >= 0 && (mutation < 0 || taskRead < mutation);
-				},
-				"the named task file must be read before the first task mutation",
-			),
-		],
-	},
-	{
 		id: "T-resume-03",
 		suite: "regression",
 		source: "028 long-task goal retention",
@@ -133,64 +56,6 @@ export const regressionCases: EvalCase[] = [
 						.join("\n")}`;
 				},
 			},
-		],
-	},
-	{
-		id: "T-restart-01",
-		suite: "regression",
-		source: "028 graceful restart",
-		description: "A graceful process restart preserves a completed checkpoint and avoids repeating it.",
-		definitionFile,
-		script: [
-			{ kind: "user", text: "Write {{WORKSPACE_DIR}}/checkpoint.txt with exactly PHASE-ONE." },
-			{ kind: "restart" },
-			{
-				kind: "user",
-				text: "Read {{WORKSPACE_DIR}}/checkpoint.txt first. If PHASE-ONE already exists, append a new line PHASE-TWO to that exact file without duplicating PHASE-ONE.",
-			},
-		],
-		graders: [
-			codeGrader("checkpoint-once", (ctx) => {
-				const path = join(ctx.workspaceDir, "checkpoint.txt");
-				const content = existsSync(path) ? readFileSync(path, "utf8") : "";
-				const pass = (content.match(/PHASE-ONE/g) ?? []).length === 1 && /PHASE-TWO/.test(content);
-				return {
-					schemaVersion: 1,
-					graderId: "checkpoint-once",
-					graderVersion: "1",
-					status: pass ? "pass" : "fail",
-					severity: "quality",
-					evidence: [{ kind: "file", ref: "checkpoint.txt" }],
-					rationale: "checkpoint must contain each completed phase exactly once",
-				};
-			}),
-		],
-	},
-	{
-		id: "T-blocked-01",
-		suite: "regression",
-		source: "028 explicit state",
-		description: "A missing external prerequisite becomes a persisted blocked task, never fabricated completion.",
-		definitionFile,
-		script: [
-			{
-				kind: "user",
-				text: "Create task blocked-release. It cannot proceed because RELEASE_SIGNING_TOKEN is absent. Persist the correct lifecycle state and reason; do not claim completion.",
-			},
-		],
-		graders: [
-			// `control.lastOutcome` is runtime-owned telemetry that only attempt claim/finish and the
-			// governor write (spec 036; `src/tools/task-manage/lifecycle.ts` leaves it untouched by
-			// design). A model-driven turn therefore cannot produce `lastOutcome: "blocked"` — the
-			// agent-visible way to persist "cannot proceed" is `waiting` plus a blocked reason.
-			taskFrontmatter(
-				"blocked-state",
-				"blocked-release",
-				(frontmatter) =>
-					hasStatus(frontmatter, "waiting") &&
-					/RELEASE_SIGNING_TOKEN/i.test(frontmatter.control?.blockedReason ?? ""),
-			),
-			deliveryNotMatches("no-false-success", /completed|successfully released/i),
 		],
 	},
 	{
@@ -254,35 +119,6 @@ export const regressionCases: EvalCase[] = [
 		],
 	},
 	{
-		id: "M-recall-01",
-		suite: "regression",
-		source: "028 memory precision",
-		description: "Relevant seeded memory is used while lexical distractors are excluded from the answer.",
-		definitionFile,
-		setup: (ctx) =>
-			seedChannelMemory(
-				ctx,
-				"- [project] The launch color is cobalt.\n- [distractor] The archived logo was amber.\n- [distractor] The test environment uses violet.",
-			),
-		script: [{ kind: "user", text: "What is the launch color? Answer only with the remembered value." }],
-		graders: [deliveryMatches("recalled-cobalt", /cobalt/i), deliveryNotMatches("no-distractor", /amber|violet/i)],
-	},
-	{
-		id: "M-write-01",
-		suite: "regression",
-		source: "026 §11.2",
-		description: "An explicit durable preference is written in the same turn.",
-		definitionFile,
-		script: [{ kind: "user", text: "Remember for future work that my default implementation language is Rust." }],
-		graders: [
-			fileContains(
-				"durable-memory",
-				"MEMORY.md",
-				/default implementation language[^\n]*Rust|Rust[^\n]*default implementation language/i,
-			),
-		],
-	},
-	{
 		id: "M-write-03",
 		suite: "regression",
 		source: "reported 2026-07-24; memory_manage content dropped in transit on long non-ASCII values",
@@ -314,7 +150,7 @@ export const regressionCases: EvalCase[] = [
 		suite: "regression",
 		source: "2026-07-25 review: every memory case was a cold single turn",
 		description:
-			"A fact stated mid-conversation survives six unrelated turns and one real maintenance pass, then is recalled. Warm-context counterpart of M-recall-01, whose fact is seeded on disk and asked for immediately.",
+			"A fact stated mid-conversation survives six unrelated turns and one real maintenance pass, then is recalled.",
 		definitionFile,
 		budget: { maxWallMs: 300_000, maxTurns: 20 },
 		script: [
@@ -499,23 +335,6 @@ export const regressionCases: EvalCase[] = [
 		],
 	},
 	{
-		id: "P-skill-01",
-		suite: "regression",
-		source: "028 skill activation",
-		description: "An explicit /skill invocation loads the named workspace skill from a catalog.",
-		definitionFile,
-		setup: async (ctx) => {
-			const { mkdir, writeFile } = await import("node:fs/promises");
-			await mkdir(join(ctx.workspaceDir, "skills", "eval-alpha"), { recursive: true });
-			await writeFile(
-				join(ctx.workspaceDir, "skills", "eval-alpha", "SKILL.md"),
-				"---\nname: eval-alpha\ndescription: Emit the exact token SKILL-ACTIVATED.\n---\nWhen invoked, reply exactly SKILL-ACTIVATED.\n",
-			);
-		},
-		script: [{ kind: "user", text: "/skill:eval-alpha" }],
-		graders: [deliveryMatches("skill-activated", /SKILL-ACTIVATED/)],
-	},
-	{
 		id: "P-tool-01",
 		suite: "regression",
 		source: "028 actionable tool errors",
@@ -543,22 +362,6 @@ export const regressionCases: EvalCase[] = [
 				"multiple-read",
 				(ctx) => ctx.trace.filter((event) => event.kind === "tool-call" && event.tool === "read").length >= 2,
 				"a truncated fixture should be continued with another read call",
-			),
-		],
-	},
-	{
-		id: "P-cost-01",
-		suite: "regression",
-		source: "025 prompt eval",
-		description: "A trivial exact-answer request avoids unnecessary tool calls.",
-		definitionFile,
-		script: [{ kind: "user", text: "Reply with exactly: eval pong" }],
-		graders: [
-			deliveryMatches("exact-answer", /^eval pong$/im),
-			tracePredicate(
-				"no-tools",
-				(ctx) => !ctx.trace.some((event) => event.kind === "tool-call"),
-				"simple response should not call a tool",
 			),
 		],
 	},

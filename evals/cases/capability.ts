@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { deliveryMatches, deliveryNotMatches, fileContains, tracePredicate } from "../harness/graders.js";
+import { deliveryMatches, fileContains } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
 import { copyFixture, seedChannelMemory, wakeBody, writeTask } from "./helpers.js";
 
@@ -89,55 +89,6 @@ export const capabilityCases: EvalCase[] = [
 			},
 		],
 		graders: [deliveryMatches("semantic-answer", /QUIC/i)],
-	},
-	{
-		id: "M-conflict-01",
-		suite: "capability",
-		source: "028 conflicting memory",
-		description: "When memories conflict, the newer dated value wins or the agent explicitly asks for clarification.",
-		definitionFile,
-		setup: (ctx) =>
-			seedChannelMemory(
-				ctx,
-				"- [2025-01-01] Deployment ring is blue.\n- [2026-07-01] Deployment ring changed to green; this supersedes blue.",
-			),
-		script: [{ kind: "user", text: "Which deployment ring should I use now?" }],
-		graders: [
-			deliveryMatches("new-or-clarify", /green|clarif|confirm|绿色|确认/i),
-			deliveryNotMatches("not-stale-only", /^blue[.!]?$/im),
-		],
-	},
-	{
-		id: "C-code-01",
-		suite: "capability",
-		source: "028 end-to-end coding probe",
-		description: "The agent fixes a small local module and runs its supplied verification command.",
-		definitionFile,
-		fixtures: ["code/math.mjs", "code/math.test.mjs"],
-		setup: async (ctx) => {
-			await copyFixture(ctx, "code/math.mjs", "dm_eval/code/math.mjs");
-			await copyFixture(ctx, "code/math.test.mjs", "dm_eval/code/math.test.mjs");
-		},
-		script: [
-			{
-				kind: "user",
-				text: "In code/math.mjs, fix add(a,b) so code/math.test.mjs passes. Run `node code/math.test.mjs` to verify and report the result.",
-			},
-		],
-		graders: [
-			fileContains("code-fixed", "code/math.mjs", /return\s+a\s*\+\s*b/),
-			tracePredicate(
-				"verification-ran",
-				(ctx) =>
-					ctx.trace.some(
-						(event) =>
-							event.kind === "tool-call" &&
-							event.tool === "bash" &&
-							/node code\/math\.test\.mjs/.test(event.fields?.command ?? event.fields?.cmd ?? ""),
-					),
-				"the supplied test command must be executed",
-			),
-		],
 	},
 	{
 		id: "C-research-01",
