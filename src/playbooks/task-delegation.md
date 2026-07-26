@@ -29,7 +29,7 @@ priority: 45
 
 ## 文件系统隔离
 
-没有。子代理与主代理共享同一个 checkout，只隔离对话上下文。需要在独立检出上作业时，在宿主侧自行 `git worktree add`，把它当作普通工作目录传给子代理，并自己负责 review、merge 与清理。
+没有。子代理默认与主代理共享同一个 checkout，只隔离对话上下文。需要在独立检出上作业时，在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 传给子代理（它是子代理的 shell cwd 与相对路径根，必须已存在），并自己负责 review、merge 与清理。`purpose: verify` 的 attestation 会绑定该目录的 git 产物状态，后续 `task_manage verify` / `done` 也在同一目录复算。
 
 ## 外部 agent 工具
 

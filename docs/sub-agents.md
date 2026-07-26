@@ -183,7 +183,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 - 子代理没有 `subagent` 工具，**不能继续创建下一级代理**。
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。
-- 子代理只隔离对话上下文，文件系统与主代理共享。任务自有的 git worktree 已在 spec 036 移除：git worktree 与父进程同主机、同文件系统、同网络，从来不是安全边界，只是并行分支的便利。需要独立检出时在宿主侧自行 `git worktree add`，把它作为普通工作目录使用。
+- 子代理只隔离对话上下文，文件系统与主代理共享。任务自有的 git worktree 已在 spec 036 移除：git worktree 与父进程同主机、同文件系统、同网络，从来不是安全边界，只是并行分支的便利。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，`task_manage verify` / `done` 在同一目录复算 artifact subject。
 - `purpose: verify` + `taskId`：进入独立验收协议，去掉 write/edit 工具，检测 verifier 期间的 git workspace 变化，并要求最后一行明确 `VERDICT: PASS|FAIL`。
 - verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`，主代理用返回的 runId 调 `task_manage verify` 导入；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 

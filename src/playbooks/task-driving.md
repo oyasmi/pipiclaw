@@ -22,7 +22,7 @@ priority: 41
 
 以下生命周期动作本身就是原子 checkpoint，不要再追加 progress：`candidate`、`done`、`skip`、`cancel`。
 
-`verify` 只更新 control、不改正文。PASS 后若还要等外部审批（approval），用 `task_manage set wake=<合理时间>` 停留在 `verifying` 车道——**只改 wake、不换状态**，离开 verifying 会作废 PASS——并请用户 `/tasks approve <id>`。门禁的绑定规则见 `task-closeout.md`。除此之外不要用 `set` 代替正常进度日志。
+`verify` 只更新 control、不改正文。验收与外部审批的全部门禁规则（PASS/approval 的绑定与失效、两个门并存时的顺序）以 `task-closeout.md` 为准，需要时读它，不要凭记忆推断。除此之外不要用 `set` 代替正常进度日志。
 
 ## 等待与继续
 
@@ -32,7 +32,7 @@ priority: 41
 
 内建 driver 分钟级扫描 DingTalk `dm_*/group_*` channel，`wake` 到期后接续；无需 heartbeat、`.checkin` 或额外传感器。TUI 关闭后没有 daemon，不能自动唤醒。
 
-有语义 checkpoint 时按较短 continuation delay 接续；只有用量变化、没有任务变化时按 stalled retry 退避。**不要为了拿到短退避而伪造 progress。**
+接续节奏由这一轮**实际做了什么**决定，不需要你去操纵：产生了可见 effect（write/edit/subagent/后台 job/给用户的回复，或一条跑通并有输出的同步 bash）就立即接续；只改了台账按 continuation delay；什么都没变按 stalled retry 退避。**不要为了拿到短退避而伪造 progress 或跑无意义命令**——真做事自然就快。
 
 ## 汇报与静默
 

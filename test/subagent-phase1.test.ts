@@ -1014,3 +1014,93 @@ describe("sub-agent convergence turn (D6)", () => {
 		expect(callCount).toBe(1);
 	});
 });
+
+/**
+ * Spec 036 D3 retired task-owned worktrees on the premise that a caller needing a separate
+ * checkout would pass it in "as an ordinary working directory" — but the parameter to do so was
+ * never added, so every run was pinned to the daemon's own cwd.
+ */
+describe("sub-agent working directory", () => {
+	function makeTool(workspaceDir: string, channelDir: string, executor: Executor) {
+		return createSubAgentTool({
+			executor,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			channelDir,
+			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			createWorker: () =>
+				new FakeWorker((_input, worker) => {
+					const message = createAssistantMessage("Done.");
+					worker.state.messages = [message];
+					worker.emit({ type: "message_end", message });
+				}),
+		});
+	}
+
+	it("runs commands in the requested checkout and tells the sub-agent about it", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		const checkout = join(workspaceDir, "other-checkout");
+		mkdirSync(channelDir, { recursive: true });
+		mkdirSync(checkout, { recursive: true });
+		const seen: Array<{ command: string; cwd?: string }> = [];
+		const recording: Executor = {
+			async exec(command, options) {
+				seen.push({ command, cwd: options?.cwd });
+				return { stdout: "", stderr: "", code: 0 };
+			},
+		};
+		let delegatedTask = "";
+		const tool = createSubAgentTool({
+			executor: recording,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			channelDir,
+			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			createWorker: (config) => {
+				const worker = new FakeWorker(async (input, self) => {
+					delegatedTask = input;
+					const bash = config.tools.find((tool) => tool.name === "bash");
+					await bash?.execute("t1", { label: "check", command: "git status" });
+					const message = createAssistantMessage("Done.");
+					self.state.messages = [message];
+					self.emit({ type: "message_end", message });
+				});
+				return worker;
+			},
+		});
+
+		await tool.execute("wd-call-1", {
+			label: "explore",
+			name: "explorer",
+			systemPrompt: "Explore.",
+			task: "Look around.",
+			workingDirectory: checkout,
+		});
+
+		// The real child cwd, not a `cd <dir> &&` prefix the guard never saw.
+		expect(seen).toContainEqual({ command: "git status", cwd: checkout });
+		expect(delegatedTask).toContain(`Working directory: ${checkout}`);
+	});
+
+	it("rejects a working directory that does not exist", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(channelDir, { recursive: true });
+		const tool = makeTool(workspaceDir, channelDir, fakeExecutor);
+
+		await expect(
+			tool.execute("wd-call-2", {
+				label: "explore",
+				name: "explorer",
+				systemPrompt: "Explore.",
+				task: "Look around.",
+				workingDirectory: join(workspaceDir, "nope"),
+			}),
+		).rejects.toThrow(/is not an existing directory/);
+	});
+});

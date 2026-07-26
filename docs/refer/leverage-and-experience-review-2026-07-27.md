@@ -5,6 +5,8 @@
 评审方式：只读代码审查，从装配根沿真实调用链追踪；对每个结论回到定义点确认，不按文件名或注释推断
 
 > **修复进度（2026-07-27，第一轮）**：性能 P-1~P-5、体验 U-1~U-4 全部落地，每条的实际做法、与建议的偏差和刻意不做的部分记在对应小节的"修复"段落里。效果类 E-1~E-5 与复杂度类 C-1~C-4 本轮未动。`npm run check`（lint + typecheck + knip + 893 项单测）通过。
+>
+> **修复进度（2026-07-27，第二轮）**：E-2、E-3、E-5、C-4 全部落地；E-1 按缩小后的范围落地（子代理工作目录贯穿 + 验收绑定修复），刻意不做任务台账持有 workDir 那一半，理由见该节。E-4 与 C-1/C-2/C-3 本轮未动。`npm run check`（lint + typecheck + knip + 899 项单测）通过。
 
 ## 0. 本轮的评审视角，以及与上一轮的分工
 
@@ -23,7 +25,7 @@
 
 ## 1. 效果（Leverage）：核心用途缺三块地基
 
-### E-1 🔴 整个 daemon 只有一个工作目录，多仓库/多任务并行驱动在结构上不成立
+### E-1 🟠 已部分修复 · 整个 daemon 只有一个工作目录，多仓库/多任务并行驱动在结构上不成立
 
 **事实。** 执行器 `spawn("sh", ["-c", command], { detached: true, stdio: [...] })` 不传 `cwd`，因此所有命令都跑在 daemon 进程的 `process.cwd()`（`src/executor.ts:34`）。工具侧同样写死：`securityContext = { workspaceDir, cwd: process.cwd() }`（`src/tools/index.ts:39-42`），于是 `read`/`write`/`edit`/`grep` 的相对路径全部相对 daemon 启动目录解析（`src/security/path-guard.ts:87-96` 的 `resolveTargetPath` 用 `ctx.cwd`）。
 
@@ -38,7 +40,22 @@
 - 消费点四处：`Executor.exec` 增加 `cwd` 选项（`HostExecutor` 直接透传给 `spawn`，比现在 `DirectoryExecutor` 拼 `cd ... &&` 更可靠，见 `src/subagents/tool.ts:199-208`）；`securityContext.cwd`；`subagent` 的 `workingDirectory`（同时给 schema 加一个可选参数，兑现 playbook 的承诺）；`workspaceSubjectHash` 的目标目录。
 - 代价：`workDir` 会成为一个新的持久字段和一个新的模型可见参数。收益：这是"用一个 channel 驱动多个项目"的前提，也是让验收绑定重新有意义的唯一办法。**这是本轮建议里优先级最高的一项。**
 
-### E-2 🔴 有真实进展的任务也要等 5 分钟才接续，长程自主推进被结构性限速
+**修复（2026-07-27，第二轮）：采纳四个消费点里的三个，不采纳 `control.workDir`。**
+
+已做：
+
+- `ExecOptions.cwd`，`HostExecutor` 透传给 `spawn`。`DirectoryExecutor` 随之从拼 `cd <dir> && <cmd>` 改成设真实 cwd——那个前缀让 guard 审查到的命令和真正执行的命令不是同一条，且进不去的目录会伪装成命令内部的 shell 错误。
+- **`subagentSchema` 增加 `workingDirectory`**（可选，须是已存在目录，相对路径按 daemon cwd 解析）。这不是新设计，而是补上 spec 036 D3 欠下的账：D3 删掉 task-owned worktree 的前提就是"由用户在宿主侧自行 `git worktree add` 并把路径作为普通工作目录传入"，而那个入参从来没被加上，于是每次运行都被钉死在 daemon 的 cwd 上。子代理侧的 `securityContext.cwd`、executor、`workspaceSubjectHash` 本来就已经全部读 `runContext.workingDirectory`，所以这一个参数一接通，三处同时生效。路径守卫不受影响：它判的是解析后的绝对路径，cwd 在允许根之外只会让相对路径和写死绝对路径一样被拒。
+- **验收绑定跟着验收者走**：attestation 增加 `subjectDir`（记录 subjectHash 是在哪个检出算出来的），`task_manage verify` 与 `done` 改为在该目录复算 artifact subject。没有它，一旦子代理被指向别处，PASS 要么永远复算不上（fail-closed 死锁），要么——更糟——拿另一个仓库的 git 状态去比对。`done` 里顺带把 attestation 的读取提到 subject 复算之前（它才知道目录），身份校验因此先于新鲜度校验。
+
+刻意不做：**任务 frontmatter 的 `control.workDir`，以及主代理 `securityContext.cwd` 的按任务切换。** 两条理由：
+
+1. spec 036 D3 刚刚以明确论证删掉了"任务台账持有工作目录身份"（`worktree` 至今躺在 `RETIRED_TASK_CONTROL_KEYS` 里）。换个字段名把它加回去，是在没有新论据的情况下推翻一个刚做完的决定。
+2. 主代理的工具集是**每 channel 构造一次**的，`securityContext` 被所有工具按引用持有。要让它随"当前正在推进哪个任务"变化，就得把它改成回合级可变对象，并让 runtime 从唤醒文本里反推当前任务 id——这正是题目说的"复杂度显著上升"。
+
+主代理跨仓库因此仍然靠绝对路径（`read`/`write`/`edit`/`grep` 都接受）和 `cd <dir> && …`。真正需要独立检出的是**被委派出去的那段工作**，而它现在有参数了。E-1 关于"一个 channel 驱动多个项目"的完整形态留给 E-4 的 external-run 原语，那里才是它自然的落点。
+
+### E-2 ✅ 已修复 · 有真实进展的任务也要等 5 分钟才接续，长程自主推进被结构性限速
 
 **事实。** `DEFAULT_TASK_DRIVER = { continuationDelayMinutes: 5, stalledRetryMinutes: 60, maxDispatchesPerTick: 4, maxSleepMinutes: 15 }`（`src/settings.ts:233-238`），且这四个键已被列为 retired，用户无法调整（`src/settings.ts:310-313`）。
 
@@ -64,7 +81,18 @@ return nowMs - attempt.atMs >= delayMinutes * 60_000;
 
 改动集中在 `isEligible` 和它的调用点，风险低。注意这条依赖上一轮 P-03/P-12：放开接续频率前，最好先有一个可信的 token 账本和一个粗糙的日/月闸，否则失控成本会从"多等一会"变成"多花一笔"。
 
-### E-3 🟠 "进展"的定义恰好排除了驱动外部 agent 最常见的动作
+**修复（2026-07-27，第二轮）。** 按建议做成三档，`DispatchAttempt` 多存一个 `effects` 基线，`isEligible` 拆出 `attemptDelayMs`：
+
+- 上一轮 effect 计数增长 → 延迟 0，下一次扫描（回合结束的 `nudge`）就接续；
+- fingerprint 变了但 effect 没涨 → `continuationDelayMinutes`（5 分钟）；
+- fingerprint 未变 → `stalledRetryMinutes`（60 分钟），futile 计数照旧；
+- 派发被 channel 拒收 → 仍走 5 分钟（那一轮根本没跑）。
+
+**没有加"每任务每小时 attempt 上限"。** 建议里提到它是为了防失控，但停止条件已经有了：快档同样消耗一次 `budget.maxAttempts`（默认 12），耗尽即被治理器暂停并上报。加第二个计时器等于让两套限额并存、互相解释不清；快档改变的只是这 12 次在墙钟上被用掉的速度，不是总量。P-5 已经把 token 账本补齐，全局日/月支出闸仍是上一轮 P-03 的欠账。
+
+一个必须一起改的点：horizon 循环原本对已接受的 attempt 只登记 `stalledRetry` 一个时刻，于是 5 分钟档实际要等封顶 15 分钟才被重扫。现在两档都登记，`noteHorizon` 自己挑未来最近的那个——短档准时，长档也不会漏。
+
+### E-3 ✅ 已修复 · "进展"的定义恰好排除了驱动外部 agent 最常见的动作
 
 **事实。** 什么算 effect：
 
@@ -86,6 +114,14 @@ return EFFECT_TOOLS.has(toolName);  // write, edit, send_media, subagent
 - 让 exit code 为 0 且有 stdout 的同步 `bash` 计一次**弱 effect**（权重可以低于 write，只用于"这轮不是完全空转"的判定）。风险是 `true` 也能刷，但配合 fingerprint + attempts 上限，代价可接受，比现在的假阴性划算。
 - 或者在 `task-delegation.md` / `background-jobs.md` 里把"驱动外部 agent 一律用 `bash async` + `taskId`"定为硬纪律。`async` 已经计 effect，且自带完成唤醒、跨重启认领、并发上限——这条路本来就更对。
 
+**修复（2026-07-27，第二轮）。** 取第一条：**退出码为 0 且有输出的同步 `bash` 计一次 effect**。`BashToolDetails` 因此无条件记录 `exitCode`（不再只在非零时记）并新增 `producedOutput`；`isEffectfulTool` 读这两个字段。
+
+关于"这会不会把 futile 检测废掉"：会削弱，但削掉的正是它不该管的部分。effect 计数从来不是止损，`budget.maxAttempts` 才是；`echo x` 确实能刷分，可刷分的每一轮照样烧掉一次 attempt，12 轮后一样被暂停。而改之前的假阴性是**真在干活的那种回合**——同步驱动外部 agent、结果写进 note、返回 `[SILENT]`——被判成空转。用一个可绕过的真阳性换一个结构性的假阴性，划算。"futile"现在的含义也更诚实：这一轮**什么都没执行**。
+
+playbook 一并改了口径：`task-driving.md` 原本教模型"有语义 checkpoint 时按较短 delay 接续"（等于暗示去操纵字段），现在改成"接续节奏由这一轮实际做了什么决定，不需要你操纵"，与"不要伪造 progress"不再互相拉扯；同时补一句"也不要跑无意义命令"。`docs/events-and-tasks.md` 的节流清单同步更新。
+
+没有做第二条（把 `bash async` 定为硬纪律）：那是 E-4 的地盘。在 external-run 原语存在之前，硬性要求 async 会把"跑一条命令看看结果"也变成建 job，成本高于收益。
+
 ### E-4 🟠 `subagent` 是进程内 pi Agent，不是外部 Coding Agent 的适配层；核心用途没有 runtime 支撑
 
 **事实。** `subagent` 工具直接 `new Agent({...})` 起一个进程内的 pi agent（`src/subagents/tool.ts:683-692`），工具集来自同一个 registry（`:373-400`）。它解决的是**上下文隔离 + 预算约束 + 产物落盘**，不是"调用一个比自己更强的外部执行体"。
@@ -101,13 +137,21 @@ return EFFECT_TOOLS.has(toolName);  // write, edit, send_media, subagent
 
 **建议。** 提出一个**协议无关的 external-run 原语**，作为 job manager 的泛化：由 workspace 配置或 skill 声明 `start` / `probe` / `collect` / `steer` 四条命令（纯字符串模板，runtime 不理解语义、只负责执行并过 command guard），runtime 负责记录持久化、跨重启认领、完成唤醒、并发上限。第三方协议仍留在用户层（边界不破），恢复纪律回到 runtime（模型不用再手搓）。这是把 Pipiclaw 从"能跑 bash 的助手"变成"AI 能力杠杆"的那一步。
 
-### E-5 🟡 12000 字符输入上限对"扔一段构建日志过来"是硬伤
+### E-5 ✅ 已修复 · 12000 字符输入上限对"扔一段构建日志过来"是硬伤
 
 **事实。** `MAX_USER_MESSAGE_CHARS = 12_000`（`src/agent/types.ts:207`），超出时截断并提示"⚠️ 消息过长（N 字符），已截断至约 12000 字符后处理"（`src/agent/channel-runner.ts:296-300`）。
 
 **后果。** "把这段失败日志/diff 丢给它去驱动修复"是驱动型使用里最常见的开场动作之一，而这类内容轻松超过 12k。`clipUserInput` 保留头 60% + 尾 40%、丢弃中段（`src/agent/progress-formatter.ts:10-19`），头尾策略本身是合理的默认，但对一段 40k 的构建日志，被丢掉的中段恰好是失败堆栈所在。更关键的是提示只说了"已截断"，**没有给模型或用户任何可执行的下一步**，这与 `AGENTS.md` 里"每个截断输出必须携带 next-step instruction"的自家规则不一致（同上一轮 P-10 的模式）。
 
 **建议。** 提示改成可执行的：把超长部分落盘到 channel 目录下一个临时文件，提示里给出路径并告诉模型"完整内容在 `<path>`，用 `read` 分页查看"。这样长日志不再丢失，且走的是已有的 read 分页链路。
+
+**修复（2026-07-27，第二轮）。** 按建议做：超限时先把原文（去 `\r`）写到 `<channelDir>/inbox/message-<ISO>.txt`（`0o600`），再截断。落在 channel 目录下是有意的——那是 `read` 默认允许的路径，恢复走的就是普通分页，不需要为它开口子。
+
+路径同时进两个地方：给用户的中文回执，以及**送进模型的截断标记本身**（`clipUserInput` 多一个可选 `fullTextPath`，标记里带上路径和"用 read 工具翻阅"）。只改用户回执是不够的——真正需要去读那段日志的是模型，而它看不到 `respondInThread`。写盘失败时静默回落到原来的纯截断提示，不让一次 I/O 故障吃掉整个回合。
+
+`/steer`、`/followup` 走的 `queueBusyMessage` 是同一条截断路径，一并接上了同一个落盘。
+
+未做：落盘文件的清理。超长消息本就少见，加一套保留策略要引入"保留几份"这类新常量，而 channel 目录下的 `subagent-artifacts` 等同类产物也都由用户闭环，不为这一处破例。
 
 ---
 
@@ -289,11 +333,15 @@ src 合计 150 文件 / 32115 行；test 20111 行；evals 3605 行；docs 21257
 
 **建议。** 抽一个 `runtime/wake-templates.ts` 集中三类唤醒文本与 dispatchId 规则；顺带按上一轮 P-08 的建议引入 transport-neutral 的合成事件类型，两件事一起做比分开做便宜。
 
-### C-4 🟡 playbook 之间存在知识重复
+### C-4 ✅ 已修复 · playbook 之间存在知识重复
 
 `task-closeout.md` 的"independent + external 同时存在"（264-276 行）和 `task-driving.md` 的"回合结束必须留下确定性状态"（359 行）各写了一遍 verifying 车道 / 只改 wake 不换状态 / PASS 失效规则；`task-planning.md` 的"外部副作用与独立验收并存时"（447 行）第三次复述了同一套死锁规避逻辑。三处措辞不同，将来改规则时很容易只改一处。
 
 **建议。** 让 `task-closeout.md` 成为门禁规则的唯一真相源，另两处只留一句指针。playbook 的 token 也是每回合成本（catalog 进 system prompt，正文按需 read），去重同时省钱。
+
+**修复（2026-07-27，第二轮）。** 按建议做：`task-closeout.md` 开头点明它是验收/审批门禁规则的唯一真相源；`task-driving.md` 删掉重述的 verifying 车道与 PASS 失效规则，改成"需要时读 `task-closeout.md`，不要凭记忆推断"；`task-planning.md` 的死锁规避段落收成一句"只验收准备质量，理由与完整门禁顺序见 `task-closeout.md`"。
+
+评审里的行号（264-276 / 359 / 447）对不上现在的文件（三份分别是 51/77/75 行），但指认的三处重复确实存在，按内容定位处理。
 
 ---
 
@@ -303,17 +351,19 @@ src 合计 150 文件 / 32115 行；test 20111 行；evals 3605 行；docs 21257
 
 | # | 项 | 类型 | 为什么排这里 |
 |---|---|---|---|
-| 1 | **E-1 工作目录贯穿** | 效果 | 一个字段 + 四个消费点，但它是"驱动多个项目"和"验收绑定有意义"的共同前提。目前 playbook 已经在教一个做不到的用法。 |
-| 2 | **E-2 + E-3 接续节奏与 effect 定义** | 效果 | 改动局限在 `isEligible` 和 `isEffectfulTool`，直接决定"能不能真的自主跑完一件事"的体感。做之前先补 P-5（上一轮 P-12）。 |
+| 1 | ~~**E-1 工作目录贯穿**~~ ✅（缩小范围） | 效果 | 已完成子代理 `workingDirectory` + 验收绑定跟随验收者目录；`control.workDir` 与主代理按任务切 cwd 刻意不做，理由见该节。 |
+| 2 | ~~**E-2 + E-3 接续节奏与 effect 定义**~~ ✅ | 效果 | 已完成。接续拆三档、同步 bash 计弱 effect；未加每小时 attempt 上限（`maxAttempts` 已是止损）。 |
 | 3 | ~~**U-1 `/stop` 告知任务已暂停**~~ ✅ | 体验 | 已完成；`handleStop` 现在回传被暂停的任务 id。 |
-| 4 | **E-4 external-run 原语** | 效果 | 收益最大但工作量也最大；`job-manager` 已完成 80%，把 probe 命令做成可配置 + 加一条 steer 是主要增量。建议在 1、2 完成后立项。 |
+| 4 | **E-4 external-run 原语** | 效果 | 收益最大但工作量也最大；`job-manager` 已完成 80%，把 probe 命令做成可配置 + 加一条 steer 是主要增量。**现在是最高优先级。** |
 | 5 | ~~**P-1 惰性 maintenance context**~~ ✅ | 性能 | 已完成。实际范围比"机械改动"大：真正贵的是 gate 之前算掉的材料，不是数组拷贝。 |
-| 6 | ~~**U-2 语言统一**~~ ✅ + E-5 长输入落盘 | 体验 | U-2 已完成（交互面中文，报告字段标签保留英文）；E-5 未做。 |
+| 6 | ~~**U-2 语言统一** + **E-5 长输入落盘**~~ ✅ | 体验 | 均已完成。E-5 的路径同时进用户回执和送给模型的截断标记。 |
 | 7 | **C-2 0.9.0 砍兼容层** | 复杂度 | 纯减法，减掉几百行代码和测试。 |
-| 8 | ~~P-2/P-3/P-4 执行器与缓存~~ ✅ | 性能 | 已完成（P-2 取更小方案，见该节）。E-2/E-4 落地后不会再被这几条放大。 |
-| 9 | C-3/C-4 唤醒模板与 playbook 去重 | 复杂度 | 与上一轮 P-08 合并做。 |
+| 8 | ~~P-2/P-3/P-4 执行器与缓存~~ ✅ | 性能 | 已完成（P-2 取更小方案，见该节）。E-2 已落地，这几条没有被放大。 |
+| 9 | C-3 唤醒模板 / ~~C-4 playbook 去重~~ ✅ | 复杂度 | C-4 已完成；C-3 仍待与上一轮 P-08 合并做。 |
 
-**下一轮的起点**：优先级 1（E-1 工作目录贯穿）、2（E-2/E-3 接续节奏，P-5 已经把它的前置数据基础补上）、4（E-4 external-run 原语）三条效果项一条没动，它们仍然是收益最高的。
+**下一轮的起点**：**E-4（external-run 原语）**是唯一还没动的效果项，也是现在收益最高的一条——E-1 剩下的那一半（一个 channel 驱动多个项目的完整形态）本来就该落在它身上，而不是落回任务台账。其次是 C-2（纯减法）和 C-3（与 P-08 合并）。
+
+**第二轮的验证缺口**：E-2/E-3 的新行为有单测（三档接续、同步 bash 的四种组合），但仍未跑 evals harness 做行为实证；E-5 的落盘只在 `clipUserInput` 层有测试，没有走完整 channel-runner 回合。
 
 ---
 

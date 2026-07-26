@@ -36,14 +36,25 @@ export function resetChannelEffects(): void {
 }
 
 /**
- * Whether a completed tool call counts as an effect. `bash` is the awkward case — the same tool
- * runs `ls` and `rm -rf`, and the runtime cannot tell them apart — so only a background launch
- * (which leaves a job behind) counts. Erring toward "no effect" means a genuinely idle loop is
- * still caught; erring the other way would let any wake claim progress by running `true`.
+ * Whether a completed tool call counts as an effect.
+ *
+ * `bash` is the awkward case: the same tool runs `ls` and `rm -rf`, and the runtime cannot tell
+ * them apart. It used to count only a background launch, which produced the wrong answer for the
+ * single most important shape this runtime has — a turn that synchronously drives an external
+ * coding agent, then records what came back. That turn changes no file the runtime can see and
+ * usually ends `[SILENT]`, so it scored zero effects and, after three of them, got its task paused
+ * by the governor: the hardest-working wake was the one most likely to be judged idle.
+ *
+ * A synchronous command that exited 0 and returned output therefore counts too. That is
+ * bypassable — `echo x` qualifies — but the alternative was a false negative on real work, and the
+ * counter never was the stop-loss: `budget.maxAttempts` bounds a task no matter how productive it
+ * claims to look. What "futile" now means is the honest thing: a wake that executed nothing at all.
  */
 export function isEffectfulTool(toolName: string, details: unknown): boolean {
 	if (toolName === "bash") {
-		return isRecord(details) && details.async !== undefined;
+		if (!isRecord(details)) return false;
+		if (details.async !== undefined) return true;
+		return details.exitCode === 0 && details.producedOutput === true;
 	}
 	return EFFECT_TOOLS.has(toolName);
 }

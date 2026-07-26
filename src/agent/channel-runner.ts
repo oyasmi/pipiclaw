@@ -293,12 +293,16 @@ export class ChannelRunner implements AgentRunner {
 			await this.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
 			const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
+			let oversizedInputPath: string | undefined;
 			if (normalizedInputLength > MAX_USER_MESSAGE_CHARS) {
+				oversizedInputPath = await this.persistOversizedInput(ctx.message.text);
 				await ctx.respondInThread(
-					`⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理。`,
+					oversizedInputPath
+						? `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理；完整内容已存到 \`${oversizedInputPath}\`，可以让我 read 该文件查看被省略的部分。`
+						: `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理。`,
 				);
 			}
-			const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS);
+			const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS, oversizedInputPath);
 			const userMessage = this.formatUserMessage(clippedInput, ctx.message.userName);
 			const preserveRawInput = this.shouldPreserveRawInput(ctx.message.text);
 
@@ -787,6 +791,30 @@ export class ChannelRunner implements AgentRunner {
 		return text.trim().startsWith("/");
 	}
 
+	/**
+	 * Save a message that exceeds the per-turn input budget so its clipped middle stays reachable.
+	 *
+	 * Pasting a long build log or diff is a normal way to start driving work here, and the clip
+	 * keeps head and tail — which is where the failing frames usually are *not*. Landing the
+	 * original under the channel directory puts it inside the paths `read` already allows, so
+	 * recovery is the ordinary paging path rather than a special case.
+	 *
+	 * Best-effort: if the write fails the turn still runs on the clipped text, just without a
+	 * pointer.
+	 */
+	private async persistOversizedInput(text: string): Promise<string | undefined> {
+		try {
+			const dir = join(this.channelDir, "inbox");
+			await mkdir(dir, { recursive: true });
+			const path = join(dir, `message-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`);
+			await writeFile(path, text.replace(/\r/g, ""), { mode: 0o600 });
+			return path;
+		} catch (error) {
+			log.logWarning("Could not persist oversized user message", errorMessage(error));
+			return undefined;
+		}
+	}
+
 	private formatUserMessage(text: string, userName?: string, now: Date = new Date()): string {
 		const pad = (n: number) => n.toString().padStart(2, "0");
 		const offset = -now.getTimezoneOffset();
@@ -818,8 +846,10 @@ export class ChannelRunner implements AgentRunner {
 
 		await this.ensureSessionReady();
 
-		const clippedText = clipUserInput(text, MAX_USER_MESSAGE_CHARS);
-		if (clippedText !== text.trim()) {
+		const oversized = text.replace(/\r/g, "").trim().length > MAX_USER_MESSAGE_CHARS;
+		const oversizedPath = oversized ? await this.persistOversizedInput(text) : undefined;
+		const clippedText = clipUserInput(text, MAX_USER_MESSAGE_CHARS, oversizedPath);
+		if (oversized) {
 			log.logWarning(`[${this.channelId}] Queued message exceeded ${MAX_USER_MESSAGE_CHARS} chars and was clipped`);
 		}
 		const queuedMessage = this.formatUserMessage(clippedText, userName);

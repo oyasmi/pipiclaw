@@ -115,13 +115,17 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 				`Task "${id}" changed after its independent PASS; rerun verification before done.`,
 			);
 		}
+		// Read the attestation first: it names the checkout the verifier actually inspected, which
+		// is what the subject must be recomputed in (a sub-agent may have been pointed elsewhere).
+		const attestation = await assertVerificationAttestationMatches(options.channelDir, id, verification);
 		if (verification.subjectHash) {
 			// Fail closed (spec 036, D7): an attestation bound to a Git subject that cannot be
 			// recomputed is unverifiable, not implicitly fine.
-			const currentSubject = await workspaceSubjectHash(options.workingDirectory ?? process.cwd());
+			const subjectDir = attestation.subjectDir ?? options.workingDirectory ?? process.cwd();
+			const currentSubject = await workspaceSubjectHash(subjectDir);
 			if (!currentSubject) {
 				throw new RecoverableToolError(
-					`Task "${id}" has an independent PASS bound to a Git artifact subject, but the current checkout cannot be read. Run done from the project checkout, or rerun verification.`,
+					`Task "${id}" has an independent PASS bound to the Git artifact subject of ${subjectDir}, but that checkout cannot be read. Restore it, or rerun verification.`,
 				);
 			}
 			if (currentSubject !== verification.subjectHash) {
@@ -130,7 +134,6 @@ export async function doneTask(options: TaskManageToolOptions, request: TaskMana
 				);
 			}
 		}
-		await assertVerificationAttestationMatches(options.channelDir, id, verification);
 	}
 	// Spec 036 D5: `done` always records Summary/Evidence in the body. It no longer also stamps
 	// `verification.status = "passed"` for unverified tasks — that was the maker grading itself,

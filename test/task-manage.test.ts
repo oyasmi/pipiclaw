@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
 import { parseTaskFrontmatter } from "../src/shared/task-ledger.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
+import { workspaceSubjectHash } from "../src/tasks/artifact-subject.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
 import { manageTask, type TaskManageToolOptions } from "../src/tools/task-manage.js";
@@ -541,6 +543,51 @@ describe("manageTask", () => {
 			await expect(
 				manageTask(options, { action: "verify", id: "artifact-bound", verifierRunId: "verify-artifact" }),
 			).rejects.toThrow(/artifacts changed|cannot be read/);
+		});
+
+		// A verifier may be pointed at another checkout via `subagent workingDirectory`. Recomputing
+		// its subject wherever the daemon happens to be running would compare a PASS against an
+		// unrelated repository — the failure mode is a task that verifies clean while the code it
+		// was supposed to check is untouched.
+		it("recomputes the artifact subject in the checkout the verifier inspected", async () => {
+			const checkout = await mkdtemp(join(tmpdir(), "verified-checkout-"));
+			const git = (...args: string[]) => execFileSync("git", ["-C", checkout, ...args], { stdio: "pipe" });
+			try {
+				git("init", "-q");
+				git("config", "user.email", "test@example.com");
+				git("config", "user.name", "Test");
+				await writeFile(join(checkout, "a.txt"), "one\n");
+				git("add", "a.txt");
+				git("commit", "-q", "-m", "init");
+
+				await manageTask(options, {
+					action: "create",
+					id: "elsewhere",
+					title: "Elsewhere",
+					goal: "Ship a verified result",
+					dod: "- [x] Result exists",
+				});
+				await writeVerificationAttestation(channelDir, {
+					runId: "verify-elsewhere",
+					taskId: "elsewhere",
+					verdict: "pass",
+					checkedAt: new Date().toISOString(),
+					evidence: "Passed.",
+					workspaceChanged: false,
+					subjectHash: await workspaceSubjectHash(checkout),
+					subjectDir: checkout,
+				});
+
+				// The daemon's own cwd is a different repository entirely; the attestation still verifies.
+				await expect(
+					manageTask(options, { action: "verify", id: "elsewhere", verifierRunId: "verify-elsewhere" }),
+				).resolves.toMatchObject({ action: "verify" });
+				await expect(
+					manageTask(options, { action: "done", id: "elsewhere", summary: "Done", evidence: "Verified" }),
+				).resolves.toMatchObject({ status: "done" });
+			} finally {
+				await rm(checkout, { recursive: true, force: true });
+			}
 		});
 
 		// Spec 036 D4: the parent/dependsOn graph is gone, and with it the four cycle detectors

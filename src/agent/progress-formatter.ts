@@ -7,7 +7,16 @@ function sanitizeProgressText(text: string): string {
 		.trim();
 }
 
-export function clipUserInput(text: string, maxChars: number): string {
+/**
+ * Head + tail of an over-length message, with the middle replaced by a marker.
+ *
+ * `fullTextPath` matters more than it looks: the dropped middle of a pasted build log is exactly
+ * where the failing stack trace lives, so a marker that only says "omitted" hands the model a
+ * mutilated input and no way to notice. When the caller managed to persist the original, the
+ * marker names it and says how to read it (the same next-step rule every other truncated output
+ * in this runtime follows).
+ */
+export function clipUserInput(text: string, maxChars: number, fullTextPath?: string): string {
 	const normalized = text.replace(/\r/g, "").trim();
 	if (normalized.length <= maxChars) {
 		return normalized;
@@ -15,7 +24,10 @@ export function clipUserInput(text: string, maxChars: number): string {
 
 	const headChars = Math.floor(maxChars * 0.6);
 	const tailChars = maxChars - headChars;
-	return `${normalized.slice(0, headChars)}\n\n[... omitted ${normalized.length - maxChars} chars ...]\n\n${normalized.slice(-tailChars)}`;
+	const recovery = fullTextPath
+		? `; the complete message is saved at ${fullTextPath} — page through it with the read tool before drawing conclusions about the omitted part`
+		: "";
+	return `${normalized.slice(0, headChars)}\n\n[... omitted ${normalized.length - maxChars} chars${recovery} ...]\n\n${normalized.slice(-tailChars)}`;
 }
 
 export function formatProgressEntry(kind: ProgressEntryKind, text: string): string {

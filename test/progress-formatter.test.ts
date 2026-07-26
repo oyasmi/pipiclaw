@@ -7,6 +7,14 @@ describe("progress formatter", () => {
 		expect(clipUserInput(" short\r\n", 10)).toBe("short");
 	});
 
+	// The dropped middle of a pasted log is where the failure usually is; the marker has to say
+	// where the rest went, not just that some of it is missing.
+	it("points at the saved original when the caller persisted it", () => {
+		const clipped = clipUserInput("abcdefghijklmnopqrstuvwxyz", 10, "/ws/dm_1/inbox/message-x.txt");
+		expect(clipped).toContain("omitted 16 chars; the complete message is saved at /ws/dm_1/inbox/message-x.txt");
+		expect(clipped).toContain("read tool");
+	});
+
 	it("formats progress entries without leaking blank or object-replacement content", () => {
 		expect(formatProgressEntry("tool", "\uFFFC\nnpm test\n\n-- --run")).toBe("Running: npm test -- --run");
 		expect(formatProgressEntry("thinking", " checking state ")).toBe("Thinking: checking state");

@@ -5,7 +5,7 @@ import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import { createDefaultTaskControl, type TaskVerification } from "../../tasks/control.js";
 import { readStoredTask, taskBodyHash } from "../../tasks/store.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../../tasks/transitions.js";
-import { readVerificationAttestation } from "../../tasks/verification.js";
+import { readVerificationAttestation, type VerificationAttestation } from "../../tasks/verification.js";
 import { RecoverableToolError } from "../tool-details.js";
 import { readTaskDocument, renderTaskFile, requiredField, tasksDir } from "./shared.js";
 import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
@@ -73,7 +73,9 @@ export async function verifyTask(
 		);
 	}
 	if (attestation.subjectHash) {
-		const currentSubject = await workspaceSubjectHash(options.workingDirectory ?? process.cwd());
+		const currentSubject = await workspaceSubjectHash(
+			attestation.subjectDir ?? options.workingDirectory ?? process.cwd(),
+		);
 		if (!currentSubject) {
 			throw new RecoverableToolError(
 				`Verification run "${runId}" is bound to a Git artifact subject, but the current checkout cannot be read. Rerun verification from the project checkout.`,
@@ -118,7 +120,7 @@ export async function assertVerificationAttestationMatches(
 	channelDir: string,
 	id: string,
 	verification: TaskVerification,
-): Promise<void> {
+): Promise<VerificationAttestation> {
 	if (!verification.runId) {
 		throw new RecoverableToolError(`Task "${id}" has no verification run id; rerun task_manage verify before done.`);
 	}
@@ -138,4 +140,5 @@ export async function assertVerificationAttestationMatches(
 			`Task "${id}" control.verification.bodyHash does not match the attestation for run "${verification.runId}"; rerun task_manage verify.`,
 		);
 	}
+	return attestation;
 }

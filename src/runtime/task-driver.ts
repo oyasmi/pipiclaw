@@ -40,6 +40,8 @@ interface DispatchAttempt {
 	fingerprint: string;
 	atMs: number;
 	accepted: boolean;
+	/** Channel effect tally observed when this attempt was recorded; the baseline for the fast tier. */
+	effects: number;
 	/** Consecutive accepted wakes that ended with the ledger fingerprint unchanged (spec 029, D5). */
 	futileCount: number;
 }
@@ -108,16 +110,45 @@ function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
 	].join("\0");
 }
 
+/**
+ * How long a task must wait after its last attempt, in three tiers.
+ *
+ * Backoff and cadence are different jobs, and one delay used to do both: any wake that changed
+ * the ledger — including one that wrote code — waited out the same continuation delay as one that
+ * only edited a note. A twenty-step task therefore spent well over an hour purely idle, which is
+ * fatal for the "drive an external agent in small steps" shape this driver exists for.
+ *
+ * So the tiers are keyed on evidence, not on the boolean "something changed":
+ * - the channel's effect tally grew ⇒ the last wake actually did something ⇒ continue at once;
+ * - the ledger changed with no effect (status/note churn) ⇒ the ordinary continuation delay;
+ * - nothing changed ⇒ the long stalled-retry backoff, and the futile counter keeps running.
+ *
+ * Nothing here relaxes the stop-losses: the fast tier still costs one attempt against
+ * `budget.maxAttempts`, so a task that spins productively-looking still hits the governor — just
+ * sooner in wall time instead of an hour per step.
+ */
+function attemptDelayMs(
+	attempt: DispatchAttempt,
+	fingerprint: string,
+	effects: number,
+	settings: PipiclawTaskDriverSettings,
+): number {
+	// A dispatch the channel refused never ran; retry it on the short delay regardless of state.
+	if (!attempt.accepted) return settings.continuationDelayMinutes * 60_000;
+	if (attempt.fingerprint === fingerprint) return settings.stalledRetryMinutes * 60_000;
+	if (effects > attempt.effects) return 0;
+	return settings.continuationDelayMinutes * 60_000;
+}
+
 function isEligible(
 	attempt: DispatchAttempt | undefined,
 	fingerprint: string,
+	effects: number,
 	nowMs: number,
 	settings: PipiclawTaskDriverSettings,
 ): boolean {
 	if (!attempt) return true;
-	const changed = attempt.fingerprint !== fingerprint;
-	const delayMinutes = changed || !attempt.accepted ? settings.continuationDelayMinutes : settings.stalledRetryMinutes;
-	return nowMs - attempt.atMs >= delayMinutes * 60_000;
+	return nowMs - attempt.atMs >= attemptDelayMs(attempt, fingerprint, effects, settings);
 }
 
 /**
@@ -443,7 +474,7 @@ export class TaskDriver {
 				const effects = this.options.getEffectCount?.(channelId) ?? 0;
 				const fingerprint = taskFingerprint(entry, effects);
 				const previous = this.attempts.get(key);
-				if (!isEligible(previous, fingerprint, nowMs, settings)) continue;
+				if (!isEligible(previous, fingerprint, effects, nowMs, settings)) continue;
 
 				// D5: a wake that was accepted and left the ledger fingerprint unchanged made no
 				// visible progress. Count consecutive such wakes (a changed fingerprint — including
@@ -473,7 +504,7 @@ export class TaskDriver {
 				const accepted = await this.options.dispatch(event);
 				this.observeDispatch(event, accepted);
 				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim, now);
-				this.attempts.set(key, { fingerprint, atMs: nowMs, accepted, futileCount });
+				this.attempts.set(key, { fingerprint, atMs: nowMs, accepted, effects, futileCount });
 				this.lastDispatchedTaskId.set(channelId, entry.id);
 				if (accepted) {
 					dispatched++;
@@ -488,10 +519,13 @@ export class TaskDriver {
 				if (!seen.has(key)) this.attempts.delete(key);
 			}
 			// A backed-off task becomes eligible again at attempt time + its retry delay; wake then
-			// so an unchanged ledger is still retried without polling. Changed ledgers arrive via nudge.
+			// so an unchanged ledger is still retried without polling. Changed ledgers arrive via
+			// nudge. Both tiers are noted because which one applies depends on the ledger as it will
+			// be *then*: `noteHorizon` keeps whichever is next in the future, so the short tier is
+			// honored on time and the long one is still not missed.
 			for (const attempt of this.attempts.values()) {
-				const delayMinutes = attempt.accepted ? settings.stalledRetryMinutes : settings.continuationDelayMinutes;
-				this.noteHorizon(attempt.atMs + delayMinutes * 60_000, nowMs);
+				this.noteHorizon(attempt.atMs + settings.continuationDelayMinutes * 60_000, nowMs);
+				if (attempt.accepted) this.noteHorizon(attempt.atMs + settings.stalledRetryMinutes * 60_000, nowMs);
 			}
 			const channelSet = new Set(channels);
 			for (const channelId of this.lastDispatchedTaskId.keys()) {

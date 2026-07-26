@@ -27,6 +27,14 @@ export interface VerificationAttestation {
 	workspaceChanged: boolean;
 	/** Git HEAD + working-tree subject that the verifier actually inspected. */
 	subjectHash?: string;
+	/**
+	 * The checkout `subjectHash` was computed in. Recorded so `verify` and `done` recompute the
+	 * subject where the verifier looked, not wherever the daemon happens to be running: a
+	 * sub-agent may be pointed at another checkout via `workingDirectory`, and comparing that
+	 * verdict against the daemon's own cwd would either fail closed forever or — worse — compare
+	 * a PASS against an unrelated repository. Absent on attestations written before this field.
+	 */
+	subjectDir?: string;
 }
 
 function attestationFilename(runId: string): string {
@@ -62,6 +70,7 @@ export async function writeVerificationAttestation(
 		evidence: input.evidence,
 		workspaceChanged: input.workspaceChanged,
 		subjectHash: input.subjectHash,
+		subjectDir: input.subjectHash ? input.subjectDir : undefined,
 	};
 	await mkdir(verificationDir(channelDir), { recursive: true });
 	await writeFileAtomically(
@@ -93,7 +102,9 @@ export async function readVerificationAttestation(channelDir: string, runId: str
 		typeof (value as { evidence?: unknown }).evidence !== "string" ||
 		typeof (value as { workspaceChanged?: unknown }).workspaceChanged !== "boolean" ||
 		((value as { subjectHash?: unknown }).subjectHash !== undefined &&
-			!/^[a-f0-9]{64}$/i.test(String((value as { subjectHash?: unknown }).subjectHash)))
+			!/^[a-f0-9]{64}$/i.test(String((value as { subjectHash?: unknown }).subjectHash))) ||
+		((value as { subjectDir?: unknown }).subjectDir !== undefined &&
+			typeof (value as { subjectDir?: unknown }).subjectDir !== "string")
 	) {
 		throw new Error(`Verification run "${runId}" has an invalid attestation. Run the verifier again.`);
 	}

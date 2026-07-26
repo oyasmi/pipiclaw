@@ -504,12 +504,13 @@ task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token
 为避免错误台账或忘记更新状态造成 token 热循环，driver 有多层节流：
 
 - channel 正在运行时不重复入队；
-- 上一轮修改了 task 文件，最早 5 分钟后继续下一轮；
+- 上一轮**产生了可见 effect**（write/edit/subagent/send_media/后台 job/给用户的回复，或一条跑通并有输出的同步 bash），立即接续下一轮——长程任务是"小步快走"的形状，每步都付一次退避会把半小时的事拖成半天；
+- 上一轮只改了台账、没有 effect，最早 5 分钟后继续下一轮；
 - 上一轮没有留下任何台账变化，退避 60 分钟再重试；
 - **连续 3 次唤醒都没有可见进展**（fingerprint 未变，含 silent），治理器暂停任务（`paused` + `pausedBy: "governor"`）并通知用户——任何唤醒循环要么推进文件，要么在 3 × 退避间隔内被叫停上报，不会无限烧钱。台账一变即清零；计数在内存，重启后重新累计；
 - 每个 tick 全局最多派发 4 个 channel，并轮转起点防止饥饿。
 
-每次受治理唤醒会累计 attempt；回合完成后 runtime 把 token、cost、wall time 回写。等待中的依赖不会触发 agent，也不会消耗 attempt。缺失、cancelled 或被治理器暂停（`paused` + `pausedBy: "governor"`）的依赖属于 terminal failure，依赖方会一起被治理器暂停并给出恢复说明。
+每次受治理唤醒会累计 attempt，立即接续的那一档也不例外——停止条件始终是 `budget.maxAttempts`，快节奏只改变它在墙钟上被耗尽的速度。回合完成后 runtime 把 token、cost、wall time 回写。等待中的依赖不会触发 agent，也不会消耗 attempt。缺失、cancelled 或被治理器暂停（`paused` + `pausedBy: "governor"`）的依赖属于 terminal failure，依赖方会一起被治理器暂停并给出恢复说明。
 
 这些节奏是内置常量，整套机制的开关是 `tools.tasks.enabled`（见 [configuration.md](./configuration.md)）。进程重启后内存中的退避状态会清空，因此遗留 actionable task 会在下一次扫描被重新接起——这是有意的 fail-open 恢复语义。
 

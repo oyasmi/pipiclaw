@@ -1,3 +1,4 @@
+import { existsSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
@@ -19,7 +20,6 @@ import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
-import { shellEscape } from "../shared/shell-escape.js";
 import { clipText, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
 import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
@@ -65,6 +65,12 @@ const subagentSchema = Type.Object({
 	paths: Type.Optional(
 		Type.Array(Type.String(), {
 			description: "Optional preferred file or directory paths for the sub-agent to focus on.",
+		}),
+	),
+	workingDirectory: Type.Optional(
+		Type.String({
+			description:
+				"Optional existing directory to run the sub-agent in (its shell cwd and relative-path root). Use it to work on another checkout — e.g. a `git worktree add`ed one. Defaults to this runtime's own working directory.",
 		}),
 	),
 	purpose: Type.Optional(
@@ -196,6 +202,12 @@ interface SubAgentRunContext {
 	artifactDir: string;
 }
 
+/**
+ * Pins every command a run issues to the run's working directory. It sets the child's real `cwd`
+ * rather than prefixing `cd <dir> &&`: the prefix silently produced a *different* command than the
+ * guard inspected, and a directory that cannot be entered surfaced as a shell error inside an
+ * otherwise successful command line.
+ */
 class DirectoryExecutor implements Executor {
 	constructor(
 		private readonly base: Executor,
@@ -203,7 +215,7 @@ class DirectoryExecutor implements Executor {
 	) {}
 
 	exec(command: string, options?: ExecOptions): Promise<ExecResult> {
-		return this.base.exec(`cd ${shellEscape(this.directory)} && ${command}`, options);
+		return this.base.exec(command, { ...options, cwd: this.directory });
 	}
 }
 
@@ -222,9 +234,29 @@ async function prepareArtifactDir(channelDir: string, runId: string): Promise<st
 	return artifactDir;
 }
 
+/**
+ * Resolve the checkout a run works in (spec 036, D3).
+ *
+ * Spec 036 removed task-owned worktrees on the premise that a caller needing a separate checkout
+ * would `git worktree add` on the host and "pass it in as an ordinary working directory" — but no
+ * parameter for that ever existed, so every run was pinned to the daemon's own cwd. This is that
+ * parameter. Path guards are unaffected: they judge the *resolved absolute* target, so a cwd
+ * outside the allowed roots makes relative paths fail exactly as an absolute one there would.
+ */
+function resolveRunWorkingDirectory(requested: string | undefined, options: SubAgentToolOptions): string {
+	const base = resolve(options.workingDirectory ?? process.cwd());
+	const trimmed = requested?.trim();
+	if (!trimmed) return base;
+	const target = resolve(base, trimmed);
+	if (!existsSync(target) || !statSync(target).isDirectory()) {
+		throw new Error(`workingDirectory "${requested}" is not an existing directory.`);
+	}
+	return target;
+}
+
 async function prepareRunContext(
 	runId: string,
-	params: { purpose?: "work" | "verify"; taskId?: string },
+	params: { purpose?: "work" | "verify"; taskId?: string; workingDirectory?: string },
 	options: SubAgentToolOptions,
 ): Promise<SubAgentRunContext> {
 	const purpose = params.purpose ?? "work";
@@ -235,7 +267,7 @@ async function prepareRunContext(
 		throw new Error(`Task ${taskId} does not exist. Create it with task_manage before delegating task-owned work.`);
 	}
 	const artifactDir = await prepareArtifactDir(options.channelDir, runId);
-	const workingDirectory = resolve(options.workingDirectory ?? process.cwd());
+	const workingDirectory = resolveRunWorkingDirectory(params.workingDirectory, options);
 	return { runId, purpose, taskId, workingDirectory, artifactDir };
 }
 
@@ -844,6 +876,7 @@ export function createSubAgentTool(
 					evidence,
 					workspaceChanged: Boolean(workspaceChanged),
 					subjectHash: workspaceChanged ? undefined : verifierSubjectAfter,
+					subjectDir: runContext.workingDirectory,
 				});
 			}
 

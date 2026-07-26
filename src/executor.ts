@@ -18,6 +18,8 @@ export interface ExecOptions {
 	timeout?: number;
 	signal?: AbortSignal;
 	stdin?: string;
+	/** Directory to run the command in. Defaults to the daemon's own working directory. */
+	cwd?: string;
 }
 
 export interface ExecResult {
@@ -34,6 +36,7 @@ class HostExecutor implements Executor {
 					return spawn("sh", ["-c", command], {
 						detached: true,
 						stdio: ["pipe", "pipe", "pipe"],
+						...(options?.cwd ? { cwd: options.cwd } : {}),
 					});
 				} catch (err) {
 					reject(err instanceof Error ? err : new Error(String(err)));

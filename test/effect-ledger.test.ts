@@ -42,9 +42,18 @@ describe("effect ledger (spec 031, D7)", () => {
 		}
 	});
 
-	it("counts bash only when it launched a background job", () => {
-		// The runtime cannot tell `ls` from `rm -rf`, so a synchronous bash call claims nothing.
-		expect(isEffectfulTool("bash", { kind: "bash" })).toBe(false);
+	it("counts a background launch, and a synchronous command that ran clean and returned output", () => {
 		expect(isEffectfulTool("bash", { kind: "bash", async: { state: "running", jobId: "abc" } })).toBe(true);
+		// The shape this matters for: a turn that drives an external coding agent synchronously
+		// touches no file the runtime can see, and used to score zero.
+		expect(isEffectfulTool("bash", { kind: "bash", exitCode: 0, producedOutput: true })).toBe(true);
+	});
+
+	it("does not count a synchronous command that failed or returned nothing", () => {
+		expect(isEffectfulTool("bash", { kind: "bash", exitCode: 1, producedOutput: true })).toBe(false);
+		expect(isEffectfulTool("bash", { kind: "bash", exitCode: 0, producedOutput: false })).toBe(false);
+		// A result carrying no outcome at all (older shape, or a rejection) claims nothing.
+		expect(isEffectfulTool("bash", { kind: "bash" })).toBe(false);
+		expect(isEffectfulTool("bash", undefined)).toBe(false);
 	});
 });

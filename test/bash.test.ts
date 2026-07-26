@@ -26,7 +26,8 @@ describe("bash tool", () => {
 		expect(executor.calls).toEqual([{ command: "true", options: { timeout: 45, signal: undefined } }]);
 		expect(result).toEqual({
 			content: [{ type: "text", text: "(no output)" }],
-			details: undefined,
+			// A clean run that returned nothing: recorded, but not an effect (see effect-ledger).
+			details: { exitCode: 0, producedOutput: false },
 		});
 	});
 

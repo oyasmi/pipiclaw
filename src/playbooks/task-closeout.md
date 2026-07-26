@@ -7,6 +7,8 @@ priority: 42
 
 # 验收、外部审批与闭环
 
+本文件是验收（verify）与外部审批（approval）门禁规则的唯一真相源，`task-driving.md` 与 `task-planning.md` 只保留指针。
+
 ## 独立验收
 
 1. 只在证据成立后勾选 DoD / Verification checkbox。

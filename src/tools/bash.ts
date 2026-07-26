@@ -60,7 +60,10 @@ const bashSchema = Type.Object({
 interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	/** Always set on the synchronous path, including 0 — the task governor reads it (D7). */
 	exitCode?: number;
+	/** Whether the command wrote anything to stdout/stderr. */
+	producedOutput?: boolean;
 }
 
 export interface BashToolOptions {
@@ -288,8 +291,11 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			// Report the code inline so the model can react without treating it as an error.
 			if (result.code !== 0) {
 				outputText += `\n\nExit code: ${result.code}`;
-				details = { ...details, exitCode: result.code };
 			}
+			// Recorded unconditionally (not only on failure) because the task governor judges a
+			// wake's productivity from it: a command that ran clean and returned something is the
+			// evidence that a turn spent driving an external tool was not idle.
+			details = { ...details, exitCode: result.code, producedOutput: output.trim().length > 0 };
 
 			return { content: [{ type: "text", text: outputText }], details };
 		},

@@ -211,6 +211,37 @@ describe("TaskDriver", () => {
 		expect(dispatch).toHaveBeenCalledTimes(2);
 	});
 
+	// The three continuation tiers, pinned as one story: the same task, the same driver, the only
+	// difference being what the previous wake actually accomplished.
+	it("continues immediately after an effect, waits the continuation delay without one", async () => {
+		await writeTask("dm_a", "work", task("active", undefined, "first"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		let effects = 0;
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+			getEffectCount: () => effects,
+		});
+		await driver.runOnce(NOW);
+		expect(dispatch).toHaveBeenCalledTimes(1);
+
+		// Tier 1: the turn wrote/edited/delegated something. A long chain of small steps must not
+		// pay the continuation delay per step, so the very next scan re-dispatches.
+		effects++;
+		await driver.runOnce(new Date(NOW.getTime() + 1_000));
+		expect(dispatch).toHaveBeenCalledTimes(2);
+
+		// Tier 2: the ledger moved (a due wake was set) but nothing happened in the world —
+		// ordinary continuation delay.
+		await writeTask("dm_a", "work", task("active", "2026-07-10T11:00:00+08:00", "second"));
+		await driver.runOnce(new Date(NOW.getTime() + 2_000));
+		expect(dispatch).toHaveBeenCalledTimes(2);
+		await driver.runOnce(new Date(NOW.getTime() + 1_000 + 5 * 60_000));
+		expect(dispatch).toHaveBeenCalledTimes(3);
+	});
+
 	it("retries an unchanged task after the stalled interval", async () => {
 		await writeTask("dm_a", "work", task("in-progress"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
