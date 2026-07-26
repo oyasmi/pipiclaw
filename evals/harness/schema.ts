@@ -63,9 +63,16 @@ export interface CapturedDelivery {
 		| "finalizeExistingCard"
 		| "finalizeCard"
 		| "discardCard"
+		| "sendMedia"
 		| "sendPlain";
 	channelId: string;
 	text?: string;
+	media?: {
+		fileName: string;
+		kind: "image" | "file";
+		bytes: number;
+		hash: string;
+	};
 	ts: number;
 }
 

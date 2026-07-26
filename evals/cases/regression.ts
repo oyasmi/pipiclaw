@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -6,6 +7,10 @@ import {
 	deliveryNotMatches,
 	driverDispatchCount,
 	fileContains,
+	fileNotContains,
+	lastDeliveryMatches,
+	lastDeliveryNotMatches,
+	noDeliveriesAfterStep,
 	noFailedToolResult,
 	taskFrontmatter,
 	toolArgumentIntact,
@@ -24,6 +29,7 @@ import {
 } from "./helpers.js";
 
 const definitionFile = "evals/cases/regression.ts";
+const mediaFixture = "account,total\nalpha,42\n";
 
 export const regressionCases: EvalCase[] = [
 	{
@@ -41,6 +47,18 @@ export const regressionCases: EvalCase[] = [
 		],
 		graders: [
 			fileContains("goal-not-drifted", "tasks/resume-three.md", /BETA-17[\s\S]*RELEASE-BETA/),
+			tracePredicate(
+				"read-on-every-wake",
+				(ctx) =>
+					ctx.trace.filter(
+						(event) =>
+							event.kind === "tool-call" &&
+							event.tool === "read" &&
+							/resume-three\.md/.test(event.fields?.path ?? event.fields?.file_path ?? ""),
+					).length >= 3,
+				"each of the three wakes must re-read the durable task instead of relying on stale context",
+			),
+			taskFrontmatter("release-still-open", "resume-three", (frontmatter) => frontmatter.status !== "done"),
 			{
 				kind: "model",
 				graderId: "three-wake-loyalty",
@@ -166,7 +184,7 @@ export const regressionCases: EvalCase[] = [
 			...warmupTurns(2, 4),
 			{ kind: "user", text: "我们的发布窗口代号是什么？只回答代号本身。" },
 		],
-		graders: [deliveryMatches("warm-recall", /THURSDAY-GATE/i)],
+		graders: [lastDeliveryMatches("warm-recall", /^\s*THURSDAY-GATE[。.!]?\s*$/i)],
 	},
 	{
 		id: "M-maint-01",
@@ -183,9 +201,51 @@ export const regressionCases: EvalCase[] = [
 		],
 		graders: [
 			fileContains("session-written", "SESSION.md", /ROOTCAUSE-88/i),
-			// A maintenance pass is not licence to invent durable facts; the checkpoint job has its
-			// own confidence bar and this keeps an eye on it.
-			deliveryNotMatches("maintenance-is-silent", /SESSION\.md|maintenance/i),
+			noDeliveriesAfterStep("maintenance-is-silent", "runMemoryMaintenance"),
+		],
+	},
+	{
+		id: "M-search-01",
+		suite: "regression",
+		source: "2026-07-26 quality pass: cold transcript storage had no behavior coverage",
+		description:
+			"A natural request about an older conversation selects session_search, retrieves the current channel's exact fact, and excludes a same-keyword fact from another channel.",
+		definitionFile,
+		setup: async (ctx) => {
+			const { mkdir, writeFile } = await import("node:fs/promises");
+			await mkdir(ctx.channelDir, { recursive: true });
+			await writeFile(
+				join(ctx.channelDir, "log.jsonl"),
+				`${JSON.stringify({
+					date: "2026-04-19T00:00:00.000Z",
+					userName: "Evaluator",
+					text: "billing migration 的变更工单是 CHANGE-731，回滚负责人是 platform-oncall。",
+					isBot: false,
+				})}\n`,
+			);
+			const sibling = join(ctx.workspaceDir, "dm_other");
+			await mkdir(sibling, { recursive: true });
+			await writeFile(
+				join(sibling, "log.jsonl"),
+				`${JSON.stringify({
+					date: "2026-04-20T00:00:00.000Z",
+					userName: "Other User",
+					text: "billing migration 的变更工单是 CHANGE-999。",
+					isBot: false,
+				})}\n`,
+			);
+		},
+		script: [
+			{
+				kind: "user",
+				text: "我们之前聊过的 billing migration 变更工单号是什么？请从这个会话的历史记录里找出来，只回答工单号。",
+			},
+		],
+		graders: [
+			toolCallCount("single-shot-cold-search", "session_search", 1),
+			noFailedToolResult("no-malformed-cold-search", "session_search"),
+			lastDeliveryMatches("current-channel-hit", /^\s*CHANGE-731[。.!]?\s*$/i),
+			lastDeliveryNotMatches("no-sibling-leak", /CHANGE-999/i),
 		],
 	},
 	{
@@ -208,11 +268,16 @@ export const regressionCases: EvalCase[] = [
 				tools: ["read"],
 				body: "你是只读查找子代理。读取任务指定的文件，找出被问到的字段，把它的值原样回报。不要修改任何文件，不要给出解释以外的行动。",
 			});
+			await writeSubAgent(ctx, "eval-writer", {
+				description: "文档编辑：根据已经确认的内容修改工作区 Markdown 文件。",
+				tools: ["read", "write", "edit"],
+				body: "你负责修改已经指定的文档。没有明确编辑要求时，不要承担只读调查。",
+			});
 		},
 		script: [
 			{
 				kind: "user",
-				text: "用 subagent 工具把这件事委派给名为 eval-scout 的子代理：读取 {{CHANNEL_DIR}}/inventory.txt，找出 SECRET-OWNER-TOKEN 的值。把它返回的值告诉我。",
+				text: "把下面的只读查找委派给最合适的已配置工作区子代理，不要由主代理直接读文件：读取 {{CHANNEL_DIR}}/inventory.txt，找出 SECRET-OWNER-TOKEN 的值，再把子代理的发现告诉我。",
 			},
 		],
 		graders: [
@@ -244,7 +309,7 @@ export const regressionCases: EvalCase[] = [
 		],
 		graders: [
 			fileContains("tail-reached-disk", "notes.txt", /TAIL-OK-7/),
-			toolArgumentIntact("tail-reached-tool", "write", "path", /notes\.txt/),
+			toolArgumentIntact("tail-reached-tool", "write", "content", /TAIL-OK-7/),
 			noFailedToolResult("no-rejected-write", "write"),
 		],
 	},
@@ -308,15 +373,103 @@ export const regressionCases: EvalCase[] = [
 			{ kind: "user", text: "What is my default deployment region? Answer only with the current value." },
 		],
 		graders: [
-			deliveryMatches("new-region", /eu-west-1/i),
+			lastDeliveryMatches("new-region", /^\s*eu-west-1[。.!]?\s*$/i),
+			lastDeliveryNotMatches("old-region-not-recalled", /us-east-1/i),
 			fileContains("correction-persisted", "MEMORY.md", /eu-west-1/i),
+			fileNotContains("old-region-removed", "MEMORY.md", /us-east-1/i),
+		],
+	},
+	{
+		id: "E-schedule-01",
+		suite: "regression",
+		source: "2026-07-26 quality pass: scheduled events were covered only by coached e2e mechanism tests",
+		description:
+			"A natural-language future follow-up becomes one validated, channel-owned one-shot event through event_manage.",
+		definitionFile,
+		script: [
+			{
+				kind: "user",
+				text: "请安排一次名为 release-followup 的跟进：在 2099-01-02T10:00:00+08:00 提醒我“Review release candidate RC-17”。这是未来提醒，不要现在执行。",
+			},
+		],
+		graders: [
+			toolCallCount("one-event-create", "event_manage", 1, ["action", /^create$/]),
+			noFailedToolResult("valid-event-definition", "event_manage"),
+			codeGrader("owned-one-shot-persisted", (ctx) => {
+				const path = join(ctx.workspaceDir, "events", "release-followup.json");
+				let definition: Record<string, unknown> | undefined;
+				try {
+					definition = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+				} catch {}
+				const pass =
+					definition?.type === "one-shot" &&
+					definition.channelId === "dm_eval" &&
+					Date.parse(String(definition.at)) === Date.parse("2099-01-02T10:00:00+08:00") &&
+					definition.text === "Review release candidate RC-17";
+				return {
+					schemaVersion: 1,
+					graderId: "owned-one-shot-persisted",
+					graderVersion: "1",
+					graderKind: "code",
+					status: pass ? "pass" : "fail",
+					severity: "quality",
+					evidence: [{ kind: "file", ref: "events/release-followup.json" }],
+					rationale: pass
+						? "the validated one-shot event retained its owner, time, and exact reminder"
+						: `unexpected event definition: ${JSON.stringify(definition)}`,
+				};
+			}),
+		],
+	},
+	{
+		id: "P-media-01",
+		suite: "regression",
+		source: "2026-07-26 quality pass: native DingTalk attachment delivery had no behavior coverage",
+		description:
+			"A request for an attachment selects send_media and delivers the exact generated bytes under the requested filename instead of pasting the file into chat.",
+		definitionFile,
+		setup: async (ctx) => {
+			const { writeFile } = await import("node:fs/promises");
+			await writeFile(join(ctx.channelDir, "quarterly-report.csv"), mediaFixture);
+		},
+		script: [
+			{
+				kind: "user",
+				text: "把刚生成的 {{CHANNEL_DIR}}/quarterly-report.csv 作为名为 q2-summary.csv 的可下载附件发给我；不要在聊天里粘贴 CSV 内容。",
+			},
+		],
+		graders: [
+			toolCallCount("one-native-send", "send_media", 1, ["path", /quarterly-report\.csv$/]),
+			noFailedToolResult("media-send-succeeded", "send_media"),
+			deliveryNotMatches("csv-not-pasted", /account,total|alpha,42/i),
+			codeGrader("exact-attachment", (ctx) => {
+				const delivery = ctx.snapshot.deliveries.find((candidate) => candidate.method === "sendMedia");
+				const expectedHash = createHash("sha256").update(mediaFixture).digest("hex");
+				const pass =
+					delivery?.media?.fileName === "q2-summary.csv" &&
+					delivery.media.kind === "file" &&
+					delivery.media.bytes === Buffer.byteLength(mediaFixture) &&
+					delivery.media.hash === expectedHash;
+				return {
+					schemaVersion: 1,
+					graderId: "exact-attachment",
+					graderVersion: "1",
+					graderKind: "code",
+					status: pass ? "pass" : "fail",
+					severity: "quality",
+					evidence: [{ kind: "snapshot", ref: "outcome.json" }],
+					rationale: pass
+						? "the requested filename and exact fixture bytes reached the transport"
+						: `unexpected media delivery: ${JSON.stringify(delivery?.media)}`,
+				};
+			}),
 		],
 	},
 	{
 		id: "P-playbook-01",
 		suite: "regression",
 		source: "026 playbook activation",
-		description: "A task wake reads the task-driving playbook before lifecycle mutation.",
+		description: "A task wake loads the task-driving playbook from the runtime catalog.",
 		definitionFile,
 		setup: (ctx) => writeTask(ctx, "playbook-task", { body: wakeBody("PLAYBOOK-7") }),
 		script: [{ kind: "syntheticTaskTurn", taskId: "playbook-task" }],

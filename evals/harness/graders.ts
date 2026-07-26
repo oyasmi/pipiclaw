@@ -52,6 +52,34 @@ export function deliveryMatches(graderId: string, pattern: RegExp, severity: Sev
 	return grader;
 }
 
+/**
+ * Matches only the final textual delivery.
+ *
+ * Multi-turn recall/correction cases must not pass because the assistant echoed the expected
+ * value when it was first supplied. `deliveryMatches` intentionally searches every delivery;
+ * use this helper when the last answer is the behavior under test.
+ */
+export function lastDeliveryMatches(graderId: string, pattern: RegExp, severity: Severity = "quality"): CodeGrader {
+	const grader = codeGrader(
+		graderId,
+		(ctx) => {
+			const delivery = [...ctx.deliveries].reverse().find((candidate) => candidate.text?.trim());
+			const matched = delivery?.text ? pattern.test(delivery.text) : false;
+			return result(
+				grader,
+				matched ? "pass" : "fail",
+				matched
+					? `final delivery matched ${pattern}`
+					: `final delivery did not match ${pattern}: ${delivery?.text ?? "(none)"}`,
+				"delivery",
+				"deliveries",
+			);
+		},
+		{ severity },
+	);
+	return grader;
+}
+
 export function deliveryNotMatches(graderId: string, pattern: RegExp, severity: Severity = "quality"): CodeGrader {
 	const grader = codeGrader(
 		graderId,
@@ -70,12 +98,32 @@ export function deliveryNotMatches(graderId: string, pattern: RegExp, severity: 
 	return grader;
 }
 
+export function lastDeliveryNotMatches(graderId: string, pattern: RegExp, severity: Severity = "quality"): CodeGrader {
+	const grader = codeGrader(
+		graderId,
+		(ctx) => {
+			const delivery = [...ctx.deliveries].reverse().find((candidate) => candidate.text?.trim());
+			const found = delivery?.text ? pattern.test(delivery.text) : false;
+			return result(
+				grader,
+				found ? "fail" : "pass",
+				found ? `final delivery matched forbidden ${pattern}` : `final delivery excluded forbidden ${pattern}`,
+				"delivery",
+				"deliveries",
+			);
+		},
+		{ severity },
+	);
+	return grader;
+}
+
 export function noDeliveries(graderId: string, severity: Severity = "hard-invariant"): CodeGrader {
 	const grader = codeGrader(
 		graderId,
 		(ctx) => {
 			const visible = ctx.deliveries.filter(
-				(delivery) => delivery.method === "sendPlain" || delivery.method === "finalizeCard",
+				(delivery) =>
+					delivery.method === "sendPlain" || delivery.method === "finalizeCard" || delivery.method === "sendMedia",
 			);
 			return result(
 				grader,
@@ -348,6 +396,36 @@ export function tracePredicate(
 	const grader = codeGrader(
 		graderId,
 		(ctx) => result(grader, predicate(ctx) ? "pass" : "fail", rationale, "trace", "trace.jsonl"),
+		{ severity },
+	);
+	return grader;
+}
+
+/** Ensures a runtime-only step did not unexpectedly emit a user-visible message. */
+export function noDeliveriesAfterStep(graderId: string, stepKind: string, severity: Severity = "quality"): CodeGrader {
+	const grader = codeGrader(
+		graderId,
+		(ctx) => {
+			const step = [...ctx.trace]
+				.reverse()
+				.find((event) => event.kind === "step" && event.fields?.kind === stepKind);
+			if (!step) return result(grader, "fail", `step ${stepKind} was not observed`, "trace", "trace.jsonl");
+			const stepAt = Date.parse(step.ts);
+			const visible = ctx.deliveries.filter(
+				(delivery) =>
+					delivery.ts > stepAt &&
+					(delivery.method === "sendPlain" ||
+						delivery.method === "finalizeCard" ||
+						delivery.method === "sendMedia"),
+			);
+			return result(
+				grader,
+				visible.length === 0 ? "pass" : "fail",
+				`expected no delivery after ${stepKind}, observed ${visible.length}`,
+				"delivery",
+				"deliveries",
+			);
+		},
 		{ severity },
 	);
 	return grader;

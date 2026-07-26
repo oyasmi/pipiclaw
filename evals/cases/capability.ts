@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { deliveryMatches, fileContains } from "../harness/graders.js";
+import {
+	deliveryMatches,
+	fileContains,
+	lastDeliveryMatches,
+	taskFrontmatter,
+	tracePredicate,
+} from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
 import { copyFixture, seedChannelMemory, wakeBody, writeTask } from "./helpers.js";
 
@@ -18,6 +24,18 @@ export const capabilityCases: EvalCase[] = [
 		script: Array.from({ length: 10 }, () => ({ kind: "syntheticTaskTurn", taskId: "resume-ten" }) as const),
 		graders: [
 			fileContains("goal-and-dod-retained", "tasks/resume-ten.md", /GAMMA-10[\s\S]*RELEASE-GAMMA/),
+			tracePredicate(
+				"read-on-every-wake",
+				(ctx) =>
+					ctx.trace.filter(
+						(event) =>
+							event.kind === "tool-call" &&
+							event.tool === "read" &&
+							/resume-ten\.md/.test(event.fields?.path ?? event.fields?.file_path ?? ""),
+					).length >= 10,
+				"all ten wakes must re-read the durable task; passive prompt carry-over is not recovery",
+			),
+			taskFrontmatter("release-still-open", "resume-ten", (frontmatter) => frontmatter.status !== "done"),
 			{
 				kind: "model",
 				graderId: "ten-wake-loyalty",
@@ -77,7 +95,7 @@ export const capabilityCases: EvalCase[] = [
 		suite: "capability",
 		source: "P1-3 semantic recall probe",
 		description:
-			"A paraphrased query with no key lexical overlap retrieves the seeded concept (expected partial failure).",
+			"A paraphrased query with no key lexical overlap retrieves an arbitrary saved codename that cannot be guessed from world knowledge (expected partial failure).",
 		definitionFile,
 		fixtures: ["memory/semantic.md"],
 		setup: async (ctx) =>
@@ -85,32 +103,54 @@ export const capabilityCases: EvalCase[] = [
 		script: [
 			{
 				kind: "user",
-				text: "Which saved transport choice avoids connection-level head-of-line blocking while still being encrypted? Answer only with its name.",
+				text: "What internal codename did we save for the protocol where one stream's packet loss does not pause its siblings and traffic remains confidential? Answer only with the codename.",
 			},
 		],
-		graders: [deliveryMatches("semantic-answer", /QUIC/i)],
+		graders: [lastDeliveryMatches("semantic-answer", /^\s*SKYBRIDGE-9[。.!]?\s*$/i)],
 	},
 	{
 		id: "C-research-01",
 		suite: "capability",
 		source: "028 model-grader pilot",
-		description: "A local-document research answer is faithful enough for an independent model judge.",
+		description:
+			"A multi-document operator brief resolves an explicitly superseded design, applies current governance to an incident, and avoids treating historical notes as current truth.",
 		definitionFile,
-		fixtures: ["research/runtime.md"],
-		setup: (ctx) => copyFixture(ctx, "research/runtime.md", "dm_eval/research/runtime.md"),
+		fixtures: ["research/runtime.md", "research/legacy.md", "research/incident.md"],
+		setup: async (ctx) => {
+			await copyFixture(ctx, "research/runtime.md", "dm_eval/research/runtime.md");
+			await copyFixture(ctx, "research/legacy.md", "dm_eval/research/legacy.md");
+			await copyFixture(ctx, "research/incident.md", "dm_eval/research/incident.md");
+		},
 		script: [
 			{
 				kind: "user",
-				text: "Read research/runtime.md and summarize the runtime's transport priority, memory layers, and how scheduled task dispatch is governed. Do not add facts outside the document.",
+				text: "Read every file under research/. Write a concise operator brief that distinguishes current behavior from superseded behavior and answers the incident's dispatch question. Use only those files; call out conflicts instead of silently blending them.",
 			},
 		],
 		graders: [
+			tracePredicate(
+				"all-research-sources-read",
+				(ctx) => {
+					const paths = ctx.trace
+						.filter((event) => event.kind === "tool-call" && event.tool === "read")
+						.map((event) => event.fields?.path ?? event.fields?.file_path ?? "");
+					return ["incident.md", "legacy.md", "runtime.md"].every((name) =>
+						paths.some((path) => path.endsWith(`/research/${name}`)),
+					);
+				},
+				"the brief must be based on all three declared research sources",
+			),
+			deliveryMatches("current-memory-layers", /SESSION\.md[\s\S]*MEMORY\.md|MEMORY\.md[\s\S]*SESSION\.md/i),
+			deliveryMatches(
+				"incident-stopped-before-model",
+				/RC-17[\s\S]{0,500}(?:pause|stop|must not|not be sent)[\s\S]{0,200}(?:model|模型)|(?:pause|stop)[\s\S]{0,200}RC-17/i,
+			),
 			{
 				kind: "model",
 				graderId: "research-faithfulness",
-				graderVersion: "1",
+				graderVersion: "2",
 				rubric:
-					"Pass only if the answer states that DingTalk is the primary transport, distinguishes session and durable memory, and says scheduled task dispatch passes deterministic deadline/budget/dependency governance before model work. Fail for unsupported claims or reversal of any of those facts. Score from 0 to 1.",
+					"Pass only if the answer (1) identifies runtime.md as current and legacy.md as superseded, (2) says DingTalk is the current primary transport, (3) distinguishes SESSION.md working state from durable MEMORY.md, and (4) concludes that incident task RC-17 must be paused before model work because its attempt budget is exhausted (the expired deadline independently blocks it). Fail if Slack, flat transcript memory, or direct-to-model dispatch is presented as current, if current and legacy claims are blended without provenance, or if the task is said to run. Score from 0 to 1.",
 				artifacts: (ctx) =>
 					ctx.deliveries
 						.map((delivery) => delivery.text)

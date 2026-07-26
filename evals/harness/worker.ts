@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { MediaSendResult, OutboundMedia } from "../../src/runtime/channel-context.js";
 import type { DingTalkBot, DingTalkEvent, DingTalkHandler } from "../../src/runtime/dingtalk.js";
 import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
 import { readActiveTasks } from "../../src/shared/task-ledger.js";
@@ -50,11 +51,13 @@ function stringField(value: unknown): string | undefined {
  */
 const TOOL_FIELDS: Record<string, string[]> = {
 	read: ["path", "file_path", "offset", "limit"],
-	write: ["path", "file_path"],
+	write: ["path", "file_path", "content"],
 	edit: ["path", "file_path"],
 	bash: ["command", "cmd"],
 	web_fetch: ["url"],
 	web_search: ["query"],
+	send_media: ["path", "fileName"],
+	event_manage: ["action", "name", "definition"],
 	task_manage: ["action", "id", "status", "nextAction", "externalApproval", "blockedReason"],
 	memory_manage: ["op", "label", "kind", "target", "query", "content"],
 	session_search: ["query", "offset", "limit"],
@@ -69,6 +72,15 @@ const TOOL_FIELDS: Record<string, string[]> = {
  * clipping or the evidence destroys the very signal the probe is looking for.
  */
 const FIELD_CLIP = 2_000;
+const FIELD_TAIL_CHARS = 800;
+
+function clipField(value: string): string {
+	const chars = [...value];
+	if (chars.length <= FIELD_CLIP) return value;
+	return `${chars.slice(0, FIELD_CLIP - FIELD_TAIL_CHARS).join("")}\n[…field clipped…]\n${chars
+		.slice(-FIELD_TAIL_CHARS)
+		.join("")}`;
+}
 
 let observedModel = "unknown";
 const localTrace: TraceEvent[] = [];
@@ -92,7 +104,7 @@ function eventTrace(event: unknown): void {
 		for (const key of TOOL_FIELDS[tool ?? ""] ?? []) {
 			const value = stringField(args[key]);
 			if (value === undefined) continue;
-			fields[key] = value.slice(0, FIELD_CLIP);
+			fields[key] = clipField(value);
 			fields[`${key}Chars`] = String([...value].length);
 		}
 		trace({ kind: "tool-call", tool, fields, argsHash: hash(JSON.stringify(record.args)).slice(0, 16) });
@@ -155,8 +167,13 @@ class EvalBot {
 	}
 	async start(): Promise<void> {}
 	async stop(): Promise<void> {}
-	private capture(method: CapturedDelivery["method"], channelId: string, text?: string): void {
-		const delivery = { method, channelId, text, ts: Date.now() } satisfies CapturedDelivery;
+	private capture(
+		method: CapturedDelivery["method"],
+		channelId: string,
+		text?: string,
+		media?: CapturedDelivery["media"],
+	): void {
+		const delivery = { method, channelId, text, media, ts: Date.now() } satisfies CapturedDelivery;
 		localDeliveries.push(delivery);
 		send({ protocol: 1, type: "delivery", delivery });
 	}
@@ -189,6 +206,15 @@ class EvalBot {
 	async sendPlain(channelId: string, text: string): Promise<boolean> {
 		this.capture("sendPlain", channelId, text);
 		return true;
+	}
+	async sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult> {
+		this.capture("sendMedia", channelId, undefined, {
+			fileName: media.fileName,
+			kind: media.kind,
+			bytes: media.data.length,
+			hash: hash(media.data),
+		});
+		return { ok: true };
 	}
 	enqueueEvent(event: DingTalkEvent): boolean {
 		if (!this.handler) return false;

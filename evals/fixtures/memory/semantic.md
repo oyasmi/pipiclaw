@@ -1,3 +1,3 @@
-- [architecture] The selected encrypted multiplexed transport is QUIC.
+- [architecture] The encrypted multiplexed transport that avoids connection-level head-of-line blocking has internal codename SKYBRIDGE-9.
 - [distractor] Batch exports use gzip archives.
 - [distractor] Internal timestamps use UTC.

@@ -3,8 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { seedChannelMemory } from "../evals/cases/helpers.js";
 import { caseHash, validateCases } from "../evals/harness/cases.js";
 import { renderDiff } from "../evals/harness/diff.js";
+import { lastDeliveryMatches, noDeliveriesAfterStep } from "../evals/harness/graders.js";
 import { promoteRun } from "../evals/harness/promote.js";
 import { rerenderReport } from "../evals/harness/report.js";
 import {
@@ -24,6 +26,7 @@ import type {
 	GradeResult,
 	HumanReviewRecord,
 	RunManifest,
+	TrialContext,
 	TrialRecord,
 } from "../evals/harness/schema.js";
 import { containsCredential, credentialMatches, fallbackCostUsd } from "../evals/harness/util.js";
@@ -141,6 +144,65 @@ describe("behavior eval registry and reproducibility", () => {
 				root,
 			),
 		).not.toBe(fixtureChanged);
+	});
+});
+
+describe("behavior eval multi-turn graders", () => {
+	const trialContext = (overrides: Partial<TrialContext> = {}): TrialContext => ({
+		homeDir: "/tmp/eval",
+		workspaceDir: "/tmp/eval/workspace",
+		channelDir: "/tmp/eval/workspace/dm_eval",
+		deliveries: [],
+		trace: [],
+		snapshot: { schemaVersion: 1, deliveries: [], fileTree: [], canaries: [], externalRequests: [] },
+		...overrides,
+	});
+
+	it("matches the final answer instead of accepting an earlier echo", async () => {
+		const grader = lastDeliveryMatches("final", /^TARGET$/);
+		const context = trialContext({
+			deliveries: [
+				{ method: "sendPlain", channelId: "dm_eval", text: "TARGET", ts: 1 },
+				{ method: "sendPlain", channelId: "dm_eval", text: "wrong", ts: 2 },
+			],
+		});
+		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "fail" });
+	});
+
+	it("detects a user-visible delivery emitted by a runtime-only maintenance step", async () => {
+		const grader = noDeliveriesAfterStep("silent", "runMemoryMaintenance");
+		const context = trialContext({
+			trace: [
+				{
+					schemaVersion: 1,
+					seq: 1,
+					ts: "2026-01-01T00:00:00.000Z",
+					segment: 1,
+					kind: "step",
+					fields: { kind: "runMemoryMaintenance" },
+				},
+			],
+			deliveries: [{ method: "sendPlain", channelId: "dm_eval", text: "unexpected", ts: 1_767_225_600_001 }],
+		});
+		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "fail" });
+	});
+
+	it("seeds durable memory under an H2 section so production parsers can manage it", async () => {
+		const root = temp();
+		const channelDir = join(root, "workspace", "dm_eval");
+		await seedChannelMemory(
+			{
+				homeDir: root,
+				workspaceDir: join(root, "workspace"),
+				channelDir,
+				canaryPath: join(root, "canary"),
+				externalBaseUrl: "",
+			},
+			"- Durable preference: cobalt.",
+		);
+		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf8")).toMatch(
+			/^# Channel Memory[\s\S]*^## Seeded Facts[\s\S]*^- Durable preference: cobalt\.$/m,
+		);
 	});
 });
 
