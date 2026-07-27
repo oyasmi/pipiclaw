@@ -289,6 +289,20 @@ describe("handleTasksCommand", () => {
 		expect(await run("doctor")).toContain("no matching verifier attestation on disk");
 	});
 
+	// A parked task is waiting for an external signal. The driver deliberately never comes back
+	// for it, so with no running job carrying its id it is not waiting — it is forgotten.
+	it("doctor flags a parked task that nothing will wake", async () => {
+		await writeFile(join(tasksDir, "parked.md"), doc("status: waiting", STANDARD_BODY));
+		const out = await run("doctor");
+		expect(out).toContain("parked (waiting, no wake)");
+		expect(out).toContain("/tasks run parked");
+	});
+
+	it("doctor leaves a timed re-check alone", async () => {
+		await writeFile(join(tasksDir, "recheck.md"), doc(`status: waiting\nwake: ${FUTURE}`, STANDARD_BODY));
+		expect(await run("doctor")).toContain("未发现任务台账问题");
+	});
+
 	it("doctor reports non-standard task skeletons", async () => {
 		await writeFile(join(tasksDir, "thin.md"), doc("status: open", "# Thin task"));
 		const out = await run("doctor");

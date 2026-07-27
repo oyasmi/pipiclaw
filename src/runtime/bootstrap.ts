@@ -34,10 +34,11 @@ import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
+import { fileStamp } from "../shared/file-stamp.js";
 import { readActiveTasks } from "../shared/task-ledger.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { finishTaskAttempt } from "../tasks/store.js";
-import { loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
+import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import { ensureChannelDir, getChannelDir } from "./channel-paths.js";
@@ -847,7 +848,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						"user message",
 					);
 
-					const ctx = createDingTalkContext(event, bot, store);
+					// Background wakes deliver their result, not their process: no progress card,
+					// no thinking stream, nothing to delete when the check-in ends `[SILENT]`.
+					const ctx = createDingTalkContext(event, bot, store, _isEvent ? "none" : undefined);
 					const builtInCommand = parseBuiltInCommand(event.text);
 
 					if (builtInCommand) {
@@ -1005,6 +1008,19 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				},
 				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,
 			});
+	// `tools.json` is re-read on every driver tick — and a tick follows every turn — so cache the
+	// parse behind the file's change token. `settings.json` gets the same treatment inside
+	// `PipiclawSettingsManager.reload()`, which is why the getSettings closure below stays as-is.
+	let cachedToolsStamp: string | undefined;
+	let cachedTasksEnabled = true;
+	const tasksToolEnabled = (): boolean => {
+		const stamp = fileStamp(getToolsConfigPath(options.paths.appHomeDir));
+		if (stamp !== cachedToolsStamp) {
+			cachedToolsStamp = stamp;
+			cachedTasksEnabled = loadToolsConfig(options.paths.appHomeDir).tools.tasks.enabled;
+		}
+		return cachedTasksEnabled;
+	};
 	const taskDriver = options.createTaskDriver
 		? options.createTaskDriver()
 		: new TaskDriver({
@@ -1018,7 +1034,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					runtimeSettingsManager.reload();
 					return runtimeSettingsManager.getTaskDriverSettings();
 				},
-				isEnabled: () => loadToolsConfig(options.paths.appHomeDir).tools.tasks.enabled,
+				isEnabled: tasksToolEnabled,
 			});
 
 	const shutdownWithReason = async (reason: NodeJS.Signals | "manual" = "manual"): Promise<void> => {

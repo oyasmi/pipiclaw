@@ -150,6 +150,25 @@ describe("PipiclawSettingsManager", () => {
 		expect(new PipiclawSettingsManager(baseDir).getDiagnostics()).toEqual([]);
 	});
 
+	// The task driver reloads on every tick — and ticks after every turn — so an unchanged
+	// file must not be re-read. A *changed* file still must be, which is the risk being pinned.
+	it("re-parses settings.json only when the file changed", () => {
+		const baseDir = createTempDir();
+		const settingsPath = join(baseDir, "settings.json");
+		writeFileSync(settingsPath, "{invalid", "utf-8");
+
+		const manager = new PipiclawSettingsManager(baseDir);
+		expect(manager.drainErrors()).toHaveLength(1);
+
+		manager.reload();
+		// A re-parse would have produced the same parse error again.
+		expect(manager.drainErrors()).toEqual([]);
+
+		writeFileSync(settingsPath, JSON.stringify({ defaultModel: "claude-sonnet-4-5" }), "utf-8");
+		manager.reload();
+		expect(manager.getDefaultModel()).toBe("claude-sonnet-4-5");
+	});
+
 	it("tolerates invalid JSON settings files and exposes compatibility stubs", async () => {
 		const baseDir = createTempDir();
 		const settingsPath = join(baseDir, "settings.json");

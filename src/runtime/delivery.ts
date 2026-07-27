@@ -1,6 +1,6 @@
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
-import type { ChannelContext } from "./channel-context.js";
+import type { ChannelContext, ProgressStyle } from "./channel-context.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 import type { ChannelStore } from "./store.js";
 
@@ -41,7 +41,14 @@ class ChannelDeliveryController {
 		private event: DingTalkEvent,
 		private bot: DingTalkBot,
 		private store: ChannelStore,
+		/** Per-turn override of the channel's configured progress style; see `createDingTalkContext`. */
+		private readonly progressStyleOverride?: ProgressStyle,
 	) {}
+
+	/** The style this turn actually delivers with: the override when present, else the channel's. */
+	private get progressStyle(): ProgressStyle {
+		return this.progressStyleOverride ?? this.bot.progressStyle;
+	}
 
 	buildContext(): ChannelContext {
 		return {
@@ -72,7 +79,7 @@ class ChannelDeliveryController {
 			primeCard: (delayMs: number) => this.primeCard(delayMs),
 			flush: async () => this.flush(),
 			close: async () => this.close(),
-			progressStyle: this.bot.progressStyle,
+			progressStyle: this.progressStyle,
 			finalDelivery: this.bot.finalDelivery,
 		};
 	}
@@ -125,7 +132,7 @@ class ChannelDeliveryController {
 		if (this.closed || this.finalResponseDelivered || !text.trim()) return;
 		// Final-card-only mode shows no progress; ignore any stray progress writes
 		// so we never create or flicker a card before the final replacement.
-		if (this.bot.progressStyle === "none") return;
+		if (this.progressStyle === "none") return;
 
 		this.clearCardWarmup();
 		if (this.progressStartedAt === 0) {
@@ -139,7 +146,7 @@ class ChannelDeliveryController {
 		}
 		this.progressSegments.push(text);
 		this.progressTextDirty = true;
-		if (this.bot.progressStyle === "rolling") {
+		if (this.progressStyle === "rolling") {
 			this.trimToRecentEntries(ROLLING_WINDOW_SIZE);
 			// The header carries elapsed time and a step count, so it changes on every update:
 			// an append-only delta would leave a stale header on the card.
@@ -239,7 +246,7 @@ class ChannelDeliveryController {
 				const mode = this.mode;
 				const body = this.getProgressText();
 				const progressText =
-					mode === "progress" && this.bot.progressStyle === "rolling" && body
+					mode === "progress" && this.progressStyle === "rolling" && body
 						? `${this.buildRollingHeader()}\n\n${body}`
 						: body;
 				const throttleBaseAt = this.lastDeliveredAt > 0 ? this.lastDeliveredAt : this.progressWindowStartedAt;
@@ -280,10 +287,10 @@ class ChannelDeliveryController {
 					} else if (mode === "finalize-existing") {
 						if (content || this.cardWarmupTriggered) {
 							const finalProgressText =
-								this.bot.progressStyle === "rolling" ? this.buildSummaryText() : progressText;
+								this.progressStyle === "rolling" ? this.buildSummaryText() : progressText;
 							touchedRemote = await this.bot.replaceCard(
 								this.event.channelId,
-								content || this.bot.progressStyle === "rolling" ? finalProgressText : NO_CONTENT,
+								content || this.progressStyle === "rolling" ? finalProgressText : NO_CONTENT,
 								true,
 							);
 							if (!touchedRemote) {
@@ -449,6 +456,21 @@ class ChannelDeliveryController {
 	}
 }
 
-export function createDingTalkContext(event: DingTalkEvent, bot: DingTalkBot, store: ChannelStore): ChannelContext {
-	return new ChannelDeliveryController(event, bot, store).buildContext();
+/**
+ * Build the delivery contract for one turn.
+ *
+ * `progressStyleOverride` lets the caller quiet a turn the user did not ask for. Background wakes
+ * (task driver, finished jobs, scheduled events) pass `"none"`: without it every autonomous step
+ * created an AI card in the human's conversation, streamed the model's thinking into it, and — for
+ * the `[SILENT]` turns that are the *normal* outcome of a check-in — deleted the card again. The
+ * final answer is unaffected; it is delivered by `respondPlain`/`replaceMessage` either way, so a
+ * background turn that has something to say still says it.
+ */
+export function createDingTalkContext(
+	event: DingTalkEvent,
+	bot: DingTalkBot,
+	store: ChannelStore,
+	progressStyleOverride?: ProgressStyle,
+): ChannelContext {
+	return new ChannelDeliveryController(event, bot, store, progressStyleOverride).buildContext();
 }

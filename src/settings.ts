@@ -19,6 +19,7 @@ import {
 } from "./memory/maintenance-tuning.js";
 import type { ResponseMode } from "./runtime/dingtalk.js";
 import type { ConfigDiagnostic } from "./shared/config-diagnostics.js";
+import { fileStamp } from "./shared/file-stamp.js";
 
 type PackageSource =
 	| string
@@ -336,6 +337,8 @@ export class PipiclawSettingsManager {
 	private settings: PipiclawSettings;
 	private loadErrors: SettingsError[] = [];
 	private retiredKeys: string[] = [];
+	/** The file's change token as of the last actual parse; see `reload`. */
+	private loadedStamp = "";
 
 	constructor(baseDir: string) {
 		this.settingsPath = join(baseDir, "settings.json");
@@ -345,6 +348,7 @@ export class PipiclawSettingsManager {
 	private load(): PipiclawSettings {
 		this.loadErrors = [];
 		this.retiredKeys = [];
+		this.loadedStamp = fileStamp(this.settingsPath);
 		if (!existsSync(this.settingsPath)) {
 			return {};
 		}
@@ -382,7 +386,16 @@ export class PipiclawSettingsManager {
 		}
 	}
 
+	/**
+	 * Re-read `settings.json`, but only when the file actually changed.
+	 *
+	 * The task driver and the memory scheduler call this on every tick — and the driver ticks
+	 * after every turn — so an unchanged file was being read, JSON-parsed and scanned for retired
+	 * keys many times a minute. Skipping keeps the last parse *and* its diagnostics, which is the
+	 * same thing a re-parse of identical bytes would produce.
+	 */
 	reload(): void {
+		if (fileStamp(this.settingsPath) === this.loadedStamp) return;
 		this.settings = this.load();
 	}
 

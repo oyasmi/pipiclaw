@@ -185,12 +185,17 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
  * *does* carry a wake is an ordinary timed re-check and stays gated on that wake; an
  * unparseable wake still fails open so a hand-edited file surfaces rather than parks forever.
  */
+/** `waiting` with no `wake`: the driver will not come back on its own. See `isTaskActionable`. */
+export function isTaskParked(frontmatter: TaskFrontmatter): boolean {
+	return frontmatter.readable && frontmatter.status === "waiting" && !frontmatter.wake;
+}
+
 export function isTaskActionable(frontmatter: TaskFrontmatter, now: number): boolean {
 	if (!frontmatter.readable) return true;
 	if (frontmatter.controlReadable === false) return true;
 	// status is already canonicalised by parseTaskFrontmatter.
 	if (TERMINAL_TASK_STATUSES.has(frontmatter.status ?? "")) return false;
-	if (frontmatter.status === "waiting" && !frontmatter.wake) return false;
+	if (isTaskParked(frontmatter)) return false;
 	const wakeAt = parseWakeMs(frontmatter);
 	if (wakeAt !== undefined && wakeAt > now) return false;
 	return true;

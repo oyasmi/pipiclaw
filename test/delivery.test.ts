@@ -154,6 +154,40 @@ describe("delivery", () => {
 		expect(store.logged).toHaveLength(1);
 	});
 
+	it("keeps a background wake off the card but still delivers its answer", async () => {
+		const bot = new FakeDingTalkBot();
+		const store = new FakeChannelStore();
+		// What bootstrap passes for a synthetic event (task driver, job wake, scheduled event).
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never, "none");
+
+		expect(ctx.progressStyle).toBe("none");
+		await ctx.respond("Running: bash");
+		await vi.runAllTimersAsync();
+		await ctx.flush();
+		expect(bot.calls).toEqual([]);
+		expect(store.logged).toHaveLength(0);
+
+		await expect(ctx.respondPlain("done")).resolves.toBe(true);
+		await ctx.flush();
+		expect(bot.calls).toEqual([
+			{ method: "sendPlain", args: ["dm_123", "done"] },
+			// No card was ever created, so finalizing is just the local cleanup.
+			{ method: "discardCard", args: ["dm_123"] },
+		]);
+	});
+
+	it("leaves nothing to delete when a silent background wake ends", async () => {
+		const bot = new FakeDingTalkBot();
+		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never, "none");
+
+		await ctx.respond("Running: bash");
+		await ctx.deleteMessage();
+		await vi.runAllTimersAsync();
+		await ctx.flush();
+
+		expect(bot.calls).toEqual([{ method: "discardCard", args: ["dm_123"] }]);
+	});
+
 	it("finalizes a warmed card cleanly when the task finishes before any progress text", async () => {
 		const bot = new FakeDingTalkBot();
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);

@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildPipiclawSystemPrompt, RUNTIME_PROMPT_HARD_UNITS } from "../src/agent/prompt/builder.js";
+import { measureToolSchemas, renderContextReport, TOOL_SCHEMA_TARGET_UNITS } from "../src/agent/prompt/manifest.js";
 import { AGENTS_BUDGET_UNITS, loadWorkspacePromptResources, SOUL_BUDGET_UNITS } from "../src/agent/prompt/resources.js";
 import { MAIN_PROMPT_SECTIONS } from "../src/agent/prompt/sections.js";
 import type { LoadedPromptResource, PromptBuildContext, ToolDescriptor } from "../src/agent/prompt/types.js";
@@ -159,6 +160,51 @@ describe("system prompt structure", () => {
 		expect(build.footer).toContain("## Runtime Boundary");
 		expect(build.text).not.toContain("## Runtime Boundary");
 		expect(countPromptUnits(build.footer)).toBeLessThanOrEqual(60);
+	});
+});
+
+describe("tool schema budget", () => {
+	function report(toolSchemas: { chars: number; units: number }): string {
+		return renderContextReport({
+			build: buildPipiclawSystemPrompt(context()),
+			skills: [],
+			toolNames: FULL_TOOL_NAMES,
+			toolSchemas,
+			detail: false,
+		});
+	}
+
+	it("measures name, description and JSON schema together", () => {
+		const measured = measureToolSchemas([
+			{ name: "read", description: "reads a file", parameters: { type: "object" } },
+			{ name: "write", description: "writes a file" },
+		]);
+
+		expect(measured.chars).toBe(
+			"read".length +
+				"reads a file".length +
+				JSON.stringify({ type: "object" }).length +
+				"write".length +
+				"writes a file".length +
+				"{}".length,
+		);
+		expect(measured.units).toBeGreaterThan(0);
+	});
+
+	it("reports the schemas against their target and stays quiet under it", () => {
+		const out = report({ chars: 20_000, units: TOOL_SCHEMA_TARGET_UNITS });
+
+		expect(out).toContain(`${TOOL_SCHEMA_TARGET_UNITS.toLocaleString("en-US")} units`);
+		expect(out).not.toContain("over target");
+		expect(out).not.toContain("[warning] tools:");
+	});
+
+	it("raises a diagnostic once the schemas pass the target", () => {
+		const out = report({ chars: 40_000, units: TOOL_SCHEMA_TARGET_UNITS + 1 });
+
+		expect(out).toContain("over target");
+		expect(out).toContain("[warning] tools:");
+		expect(out).toContain("unregister a tool");
 	});
 });
 

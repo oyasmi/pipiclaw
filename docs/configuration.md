@@ -389,6 +389,8 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | `rolling_progress_then_plain_final` | 常驻首行 `⏱ 用时 · N 步` + 最近 3 条进展 | 单独的纯文本消息，卡片收尾为一行摘要 |
 | `final_card_only` | 不展示任何过程 | 最终答案直接写入 AI Card，不再额外发纯文本 |
 
+> 上表只覆盖**用户消息**。后台唤醒（任务驱动器、后台作业完成、定时事件）一律不展示过程：不建卡、不推思考流，只在有话要说时投递最终答案。想看后台在忙什么，用 `/status` 与 `/tasks`。
+>
 > 旧字段 `progressDisplay` 与旧值 `responseMode: "progress_then_plain_final"` 已移除，请改用上表取值。
 
 ### 使用说明（Practical Notes）

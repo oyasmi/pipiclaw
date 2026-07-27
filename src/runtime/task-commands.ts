@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
+import { channelJobTaskIds } from "../agent/job-manager.js";
 import { parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
 import {
 	extractTaskTitle,
+	isTaskParked,
 	missingStandardTaskSections,
 	normalizeTaskId,
 	readActiveTasks,
@@ -561,6 +563,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	const activeIds = new Set(entries.map((entry) => entry.id));
 	const archivedIds = await readArchivedTaskIds(options.channelDir);
 	const events = await readTaskEvents(options.workspaceDir, options.channelId);
+	const runningJobTaskIds = channelJobTaskIds(options.channelId);
 	const issues: string[] = [];
 
 	for (const entry of entries) {
@@ -670,6 +673,20 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					),
 				);
 			}
+		}
+
+		// A parked task is waiting for someone to call it: a finished background job, a user
+		// message, or `/tasks run`. The driver deliberately will not (see `isTaskParked`), so with
+		// no running job carrying this id, whether it ever resumes is entirely up to the user.
+		// That is legitimate when it is waiting on an answer — and indistinguishable, on disk,
+		// from a task everyone has forgotten. Report the fact and name every way out.
+		if (isTaskParked(entry.frontmatter) && !runningJobTaskIds.has(entry.id)) {
+			issues.push(
+				issue(
+					`tasks/${entry.id}.md is parked (waiting, no wake) and no running background job will wake it.`,
+					`It resumes only when you reply to it, run /tasks run ${entry.id}, or give it a wake with /tasks set ${entry.id} wake <ISO8601>; cancel it if what it waits for is gone.`,
+				),
+			);
 		}
 
 		if (entry.frontmatter.wake && validWakeMs(entry) === undefined) {

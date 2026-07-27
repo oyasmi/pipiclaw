@@ -10,11 +10,56 @@
  * next to the report — not in the builder's budget path (spec 026 §9, §10.9).
  */
 
+import { countPromptUnits } from "../../shared/prompt-units.js";
 import { estimateTokens, RUNTIME_PROMPT_TARGET_UNITS, sha256 } from "./builder.js";
 import type { LoadedPromptResource, PromptBuildResult, ResolvedPromptSection } from "./types.js";
 
 /** The design ceiling for everything Pipiclaw auto-appends to a turn (spec 026 §5.3). */
 export const AUTOMATIC_TURN_CONTEXT_BUDGET_UNITS = 3_000;
+
+/**
+ * Soft budget for the tool JSON schemas, in the same units as the prompt sections.
+ *
+ * Tool schemas are the larger half of the fixed per-turn cost and were the only part of it with
+ * no budget at all: the runtime-authored prompt is capped at 700 units while the schemas beside it
+ * run several thousand. They sit in the provider's cache prefix, so the steady-state price is low —
+ * but every `rebuildSessionTools` (a `skill_manage` write, `/reload`, any resource reload) swaps
+ * that prefix and pays for all of it again.
+ *
+ * There is no hard cap on purpose. A schema cannot be auto-trimmed the way a prompt section can:
+ * the fix is always a human deciding which tool says less, or which tool should not be registered.
+ * So this is a warning line in the log and in `/context`, not an enforcement point. It is set just
+ * above the current set (≈2.8k units for 15 tools) — one more heavyweight tool crosses it, which
+ * is exactly when someone should be looking.
+ */
+export const TOOL_SCHEMA_TARGET_UNITS = 3_000;
+
+export interface ToolSchemaMeasurement {
+	chars: number;
+	units: number;
+}
+
+/** The one wording for "the tool set is over budget", shared by `/context` and the rebuild log. */
+export function toolSchemaBudgetWarning(measurement: ToolSchemaMeasurement): string {
+	return `tool JSON schemas are ${measurement.units} units (${measurement.chars} chars), over the ${TOOL_SCHEMA_TARGET_UNITS} unit target. Shorten a tool description, move detail into a playbook, or unregister a tool; \`/context detail\` lists the set.`;
+}
+
+/**
+ * What the tool set costs on top of the system prompt. Counts what the provider is actually sent
+ * per tool — name, description and the JSON schema — the same way `/context` has always reported it.
+ */
+export function measureToolSchemas(
+	tools: Array<{ name: string; description: string; parameters?: unknown }>,
+): ToolSchemaMeasurement {
+	let chars = 0;
+	let units = 0;
+	for (const tool of tools) {
+		const text = `${tool.name}${tool.description}${JSON.stringify(tool.parameters ?? {})}`;
+		chars += text.length;
+		units += countPromptUnits(text);
+	}
+	return { chars, units };
+}
 
 export interface PromptTurnContextStats {
 	durableMemoryChars: number;
@@ -33,7 +78,7 @@ export interface PromptContextReportInput {
 	finalPrompt?: string;
 	skills: Array<{ name: string; description: string }>;
 	toolNames: string[];
-	toolSchemaChars: number;
+	toolSchemas: ToolSchemaMeasurement;
 	/** Resolved SOUL.md / AGENTS.md, for the independent body-budget lines. */
 	soul?: LoadedPromptResource;
 	agents?: LoadedPromptResource;
@@ -152,8 +197,9 @@ export function renderContextReport(input: PromptContextReportInput): string {
 	}
 
 	lines.push("");
+	const overToolBudget = input.toolSchemas.units > TOOL_SCHEMA_TARGET_UNITS;
 	lines.push(
-		`Tools: ${input.toolNames.length} registered; JSON schemas ≈ ${formatNumber(input.toolSchemaChars)} chars (billed on top of the system prompt)`,
+		`Tools: ${input.toolNames.length} registered; JSON schemas ≈ ${formatNumber(input.toolSchemas.units)} / ${formatNumber(TOOL_SCHEMA_TARGET_UNITS)} units, ${formatNumber(input.toolSchemas.chars)} chars${overToolBudget ? " — over target" : ""} (billed on top of the system prompt)`,
 	);
 	lines.push(
 		`Skills: ${input.skills.length} visible, ≈${formatNumber(estimateSkillsPromptChars(input.skills))} chars (rendered and managed by pi, not budgeted by Pipiclaw)`,
@@ -180,11 +226,14 @@ export function renderContextReport(input: PromptContextReportInput): string {
 		lines.push(`- user message: ${formatNumber(turn.userMessageChars)} chars (not automatic; not capped here)`);
 	}
 
-	if (build.diagnostics.length > 0) {
+	if (build.diagnostics.length > 0 || overToolBudget) {
 		lines.push("");
 		lines.push("Diagnostics:");
 		for (const diagnostic of build.diagnostics) {
 			lines.push(`- [${diagnostic.level}] ${diagnostic.sectionId}: ${diagnostic.message}`);
+		}
+		if (overToolBudget) {
+			lines.push(`- [warning] tools: ${toolSchemaBudgetWarning(input.toolSchemas)}`);
 		}
 	}
 

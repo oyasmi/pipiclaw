@@ -73,7 +73,14 @@ import {
 import { clipUserInput, formatProgressEntry } from "./progress-formatter.js";
 import { buildPipiclawSystemPrompt } from "./prompt/builder.js";
 import { createPromptBoundaryExtension } from "./prompt/extension.js";
-import { buildPromptManifest, type PromptTurnContextStats, renderContextReport } from "./prompt/manifest.js";
+import {
+	buildPromptManifest,
+	measureToolSchemas,
+	type PromptTurnContextStats,
+	renderContextReport,
+	TOOL_SCHEMA_TARGET_UNITS,
+	toolSchemaBudgetWarning,
+} from "./prompt/manifest.js";
 import { loadWorkspacePromptResources, type WorkspacePromptResources } from "./prompt/resources.js";
 import type { PromptBuildResult } from "./prompt/types.js";
 import { createRunQueue } from "./run-queue.js";
@@ -724,11 +731,7 @@ export class ChannelRunner implements AgentRunner {
 			finalPrompt: this.lastFinalPrompt,
 			skills: this.currentSkills.skills.map((skill) => ({ name: skill.name, description: skill.description })),
 			toolNames: this.currentTools.map((tool) => tool.name),
-			toolSchemaChars: this.currentTools.reduce(
-				(sum, tool) =>
-					sum + tool.name.length + tool.description.length + JSON.stringify(tool.parameters ?? {}).length,
-				0,
-			),
+			toolSchemas: measureToolSchemas(this.currentTools),
 			soul: this.lastWorkspaceResources?.soul,
 			agents: this.lastWorkspaceResources?.agents,
 			lastTurn: this.lastTurnContextStats,
@@ -1272,6 +1275,12 @@ export class ChannelRunner implements AgentRunner {
 			mediaSender: this.mediaSender,
 		});
 		this.currentTools = tools;
+		// Tool schemas are billed with the system prompt and, unlike it, nothing trims them.
+		// Warn where the prompt's own budget diagnostics are reported, once per tool rebuild.
+		const schemas = measureToolSchemas(tools);
+		if (schemas.units > TOOL_SCHEMA_TARGET_UNITS) {
+			log.logWarning(`[${this.channelId}] Tool schema budget`, toolSchemaBudgetWarning(schemas));
+		}
 		return tools;
 	}
 

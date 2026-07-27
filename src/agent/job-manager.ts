@@ -210,6 +210,17 @@ export class ChannelJobManager {
 		return Array.from(this.jobs.values()).filter((job) => job.status === "running").length;
 	}
 
+	/** Task ids that a still-running job on this channel promises to wake. See `channelJobTaskIds`. */
+	runningTaskIds(): Set<string> {
+		const ids = new Set<string>();
+		for (const job of this.jobs.values()) {
+			if (job.status === "running" && job.contract.notify && job.contract.taskId) {
+				ids.add(job.contract.taskId);
+			}
+		}
+		return ids;
+	}
+
 	/**
 	 * Launch a command in the background and return its job id. The wrapper writes merged
 	 * stdout/stderr to a spill file and the command's exit code to a sibling `.exit` file, then
@@ -577,6 +588,18 @@ let runtimeConfig: JobRuntimeConfig = {};
  */
 export function configureJobRuntime(config: JobRuntimeConfig): void {
 	runtimeConfig = config;
+}
+
+/**
+ * Which of this channel's tasks a running background job will wake, without needing an `Executor`.
+ *
+ * Read-only view for `/tasks doctor`: a parked task (`waiting`, no `wake`) is healthy exactly when
+ * something is going to call it. Managers are created lazily by the tool layer *and* eagerly at
+ * startup by `restoreChannelJobs`, so a channel with live jobs always has one; a channel with no
+ * manager simply has no jobs, and the empty set is the right answer.
+ */
+export function channelJobTaskIds(channelId: string): Set<string> {
+	return managers.get(channelId)?.runningTaskIds() ?? new Set<string>();
 }
 
 export function getChannelJobManager(channelId: string, executor: Executor): ChannelJobManager {

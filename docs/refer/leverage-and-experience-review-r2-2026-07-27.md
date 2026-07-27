@@ -7,6 +7,8 @@
 
 > **修复状态（2026-07-27，第一批）**：**E-6 ✅ / E-7 ✅ / E-8 ✅ 部分（拒绝死循环 + 口径写清；滚动窗口不做）/ E-9 ✅**（连带 U-5 ✅、U-6 ✅、C-5 在 `task_manage` 上 ✅）。逐项说明写在各条目末尾的引用块里。改动量：src 14 文件 +155/−101，test 6 文件 +181/−3；`npm run check`（lint + typecheck + knip + 912 tests）全绿。未动：E-8 的滚动窗口、P-6/P-7/P-8、U-7、C-1/C-2/C-3、C-5 对其它工具的抽查。
 
+> **修复状态（2026-07-27，第二批）**：**P-6 ✅ 部分（加预算 + diagnostic；砍描述不做，理由见条目）/ P-7 ✅ / P-8 ✅ / U-7 ✅ 部分（补上"没人会叫醒它"，另两条不补，理由见条目）**。U-5 / U-6 在第一批已随 E-8 / E-6 落地，本批未再动。改动量：src 8 文件、test 5 文件、docs 3 文件；`npm run check`（lint + typecheck + knip + 921 tests）全绿。仍未动：E-8 的滚动窗口、C-1/C-2/C-3、C-5 对其它工具的抽查。
+
 > **与前一份的关系**：那份报告的 E-1~E-5 / P-1~P-5 / U-1~U-4 / C-4 已落地，E-4 已撤销，剩 C-1 / C-2 / C-3 未动。本轮**不重复**那些结论，只在相关处引用。本轮的重点是：**上一轮的三次修复本身引入了什么新问题**，以及此前没被审到的面（工具 schema 成本、后台唤醒的前台开销、`task_manage` 的 schema 漂移）。
 
 ---
@@ -211,6 +213,16 @@ driver 取的是 `getEffectCount(channelId)`（`bootstrap.ts:1005` 注入 `chann
 1. 给工具 schema 一个和 prompt 段落同规格的预算 + diagnostic（复用 `countPromptUnits` 与现有的 diagnostic 管道，`/context` 已经在算这个和了，只差一条阈值）。
 2. 先砍 `task_manage`：E-9 的三个退休字段先删；九个 action 的长描述（单条就 400+ 字符）挪进 `task-planning.md` / `task-closeout.md`，schema 里只留"读哪份 playbook"。这两个工具占 45%，动它们收益最直接 —— 而且这是全项目唯一一处"删字面量就直接省钱"的地方。
 
+---
+
+> **✅ 部分修复（2026-07-27，第二批）：取建议 1；建议 2 不做。**
+>
+> - **先补一次实测**（默认 security/tools + mediaSender，E-9 之后的 15 个工具）：schema 合计 **20,303 字符 / 2,797 units**；`task_manage` 5,053 / 646（23%）、`subagent` 3,351 / 460（16%）。units 是与 prompt 段落同一把尺（`countPromptUnits`），这样预算才能和 spec 026 的 700/1200 放在一起读。
+> - **建议 1（预算 + diagnostic）**：`manifest.ts` 新增 `TOOL_SCHEMA_TARGET_UNITS = 3_000` 与 `measureToolSchemas()`。`/context` 的 Tools 行从"≈N 字符"改成 `units / target + 字符`，超标时追加一条 `[warning] tools:` 到已有的 Diagnostics 段；`buildRuntimeTools()` 每次重建工具集时超标就打一条同文案的 warning（复用 `toolSchemaBudgetWarning`，两处不会分叉）。
+> - **为什么只有软预算、没有硬上限**：prompt 段落超标可以截断，schema 不能——超了以后唯一的动作是人来决定"哪个工具少说话/哪个工具不该注册"。所以这里是一条会响的线，不是一个执行点。阈值压在当前值上方一点（2,797 → 3,000），再加一个重量级工具就会响，那恰好是该有人看一眼的时刻。
+> - **建议 2（把九个 action 的描述挪进 playbook）不做**：这条的前提在 E-9 之后已经不成立了——实测 `action` 那段九选一的描述**总共 410 字符**（不是"单条 400+"），整个 `taskManageSchema` 的描述文本已经全是一行一句。真挪走能省 ~600 字符（占工具总量 3%），代价是把一段**进 cache prefix、稳态约 1/10 价**的常驻文本，换成一次次按需读 playbook 的**全价 turn 内容**，外加重新校准模型对 action 的选择。方向是负的。真要砍这 45%，该砍的是 `subagent`（3.4k 字符且本轮未审），且应当先有 eval 兜底。
+> - **测试**：`prompt-sections.test.ts` 新增 `tool schema budget` 三条（度量口径 = name + description + JSON schema；恰好等于阈值时不报警；超一个 unit 就同时出现 "over target" 与 `[warning] tools:`）。
+
 ### P-7 🟡 后台唤醒默认走完整 progress 卡，长程自主的常态成了前台噪音的常态
 
 **事实。** `responseMode` 默认 `full_progress_then_plain_final`（`src/settings.ts:200`、`src/runtime/bootstrap.ts:173`）⇒ `progressStyle = "full"`（`dingtalk.ts:41-45`）。合成事件（TASK_DRIVER / JOB / EVENT）走的是同一条 `createDingTalkContext`，`handleEvent` 只对它们跳过卡片**预热**（`bootstrap.ts:893-895`），progress 条目照样会懒建卡片。
@@ -221,11 +233,30 @@ driver 取的是 `getEffectCount(channelId)`（`bootstrap.ts:1005` 注入 `chann
 
 **建议。** 按事件来源分档：用户消息保持 `full`；合成事件（`_isEvent === true`）默认降到 `rolling` 或 `none`，把"后台在忙什么"留给 `/status` 和 `/tasks` 去回答。这不需要新配置项 —— `handleEvent` 已经有 `_isEvent` 这个参数，只是目前只用来决定要不要预热卡片。
 
+---
+
+> **✅ 已修复（2026-07-27，第二批）。** 取 `none` 而不是 `rolling`。
+>
+> - **代码**：`createDingTalkContext` 多一个可选的 `progressStyleOverride`，`ChannelDeliveryController` 内部的七处 `this.bot.progressStyle` 收敛成一个 getter；`bootstrap.ts` 的 `handleEvent` 对 `_isEvent` 传 `"none"`。没有新配置项，没有新状态。
+> - **为什么是 `none` 而不是 `rolling`**：`rolling` 仍然建卡、仍然推更新，`[SILENT]` 收尾时仍然要把卡片删掉——那正是这条的病灶（闪一下再消失），只是频率低一点。`none` 让这条路径整个消失：不建卡、不推 thinking、没有卡片要删，progress 那一路的 `archiveBotResponse` 落盘也一并省掉。**最终答案不受影响**，仍走 `respondPlain` / `replaceMessage`——后台回合有话要说照样说，只是不再直播过程。
+> - **顺带**：模型 fallback 提示在 `progressStyle === "none"` 时本来就会走 `respondInThread`（一条独立消息），所以后台回合出错仍然看得见。
+> - **文档**：`docs/configuration.md` 的 responseMode 矩阵与 `docs/architecture.md` 的投递层表格各加一句——两处都写明矩阵只覆盖用户消息，后台唤醒一律不展示过程。
+> - **测试**：`delivery.test.ts` 两条（后台回合的 progress 不产生任何钉钉调用、也不落盘，最终答案照常投递；静默后台回合只剩本地 `discardCard`，没有卡片要删）。`handleEvent` 里那个三元式没有单测——要跑通它得起一个真实回合（要模型），投入产出不划算。
+
 ### P-8 🟡 driver 每次 tick 重读 `settings.json` + `tools.json`
 
 `bootstrap.ts:1006-1010`：`getSettings` 每 tick `reload()`，`isEnabled` 每 tick `loadToolsConfig(appHomeDir)`。而 tick 由 `nudge()` 驱动 —— **每个回合结束都会触发一次**（`bootstrap.ts:927`）。所以每回合至少两次同步读盘 + JSON 解析 + retired-key 扫描。
 
 量级不大（两个几 KB 的文件），但它和第一轮 P-1（维护 tick 在 gate 之前就读 settings）是同一形状的问题，只是当时只审了维护路径。E-2 落地后 tick 频率显著上升，这条跟着被放大。可与 P-4 的任务缓存用同一套 `(mtimeMs, ctimeMs, size)` 指纹解决。
+
+---
+
+> **✅ 已修复（2026-07-27，第二批）。** 就按建议，用 P-4 那套指纹。
+>
+> - **`src/shared/file-stamp.ts`**（新，18 行）：`fileStamp(path)` 返回 `mtime:ctime:size`，读不到就返回 `""`（"文件不存在"本身也是一个稳定状态，值得缓存）。三元组的理由与任务台账缓存一致：原子写是 rename，单看 mtime 会漏。
+> - **`settings.json`**：`PipiclawSettingsManager.reload()` 指纹未变就直接 return。这一处同时覆盖了驱动器 tick、维护调度 tick 和每次 `reloadSessionResources`——也就是第一轮 P-1 那条路径。跳过时连同上次的 diagnostics 一起保留，这与"重新解析同样的字节"得到的结果完全一致。
+> - **`tools.json`**：只有驱动器的 `isEnabled` 是每 tick 读的（`channel-runner` 那次是重建工具集时读，本来就罕见），所以缓存做成 bootstrap 里那个闭包的两行 memo，不动 `loadToolsConfigWithDiagnostics` 的返回值——那个函数的结果目前每次都是新对象，改成共享引用会给所有调用方引入一个不必要的"别改它"约定。
+> - **测试**：`context.test.ts` 一条钉住两个方向——坏 JSON 首次加载报一次错，`reload()` 不再报第二次（证明真的没重新解析）；文件真的改了之后 `reload()` 必须看见新值（这才是缓存的风险所在）。`fileStamp` 没有单独的单测：它的两个行为都由这条测试的两半覆盖。
 
 ---
 
@@ -254,6 +285,17 @@ driver 取的是 `getEffectCount(channelId)`（`bootstrap.ts:1005` 注入 `chann
 ### U-7 🟡 `/tasks doctor` 不检查"没人会来叫醒它"
 
 doctor 已经覆盖不可读 frontmatter、非法 `wake`、退休 control 键、孤儿事件。缺的恰好是停泊类的一致性：`waiting` 无 wake 且无关联 job（E-6 的建议 4）、attempts 已耗尽却还是 `active`、`verification.required` 但从没有过 attestation。这三条都是"任务安静地死掉"的形状，而 doctor 存在的意义就是让安静的失败变响。
+
+---
+
+> **✅ 部分修复（2026-07-27，第二批）：补第一条；另两条经核对不该补。**
+>
+> - **第一条（停泊无人叫醒）已补，且带上了那个关键判据。** 第一批推迟它的理由是"job 记录归 job-manager 所有，要 Executor"——复核后不成立：作业记录本来就落盘、且启动时 `restoreChannelJobs` 会为每个有作业的频道建好管理器，所以只需要一个**只读**入口。新增 `ChannelJobManager.runningTaskIds()`（运行中 + `notify` + 带 taskId）与模块级 `channelJobTaskIds(channelId)`（没有管理器就是空集，答案正好正确），doctor 直接查表。不注入 executor，不复刻记录格式。
+> - **措辞按"等用户"这一类停泊调过**：`waiting` 无 wake 既可能是"等作业"，也可能是"等用户回话"，而 `awaiting-user` 在读取层已经归一成 `waiting`，磁盘上无法区分。所以文案不说"坏了"，只陈述事实并把三条出路一起给出："只有你回复它、`/tasks run`、或给它一个 wake 才会继续；等的东西没了就 cancel"。对等作业的情况这是告警，对等用户的情况这是"该你了"。
+> - **第二条（attempts 耗尽却还 active）不必补：doctor 已经有了。** 现有的 `taskBudgetViolation` 检查对每个非终态任务都跑，attempts 耗尽即命中并给出"显式提高预算或取消"。再加一条只会重复报同一件事。
+> - **第三条（`verification.required` 但从无 attestation）不补。** 对**还在做**的任务，"尚无 attestation"是正常态而非失败——required 的任务本来就是先干活、临门再验收，逐个报警等于对所有健康任务开火。真正的失败形状是"声称 PASS 但盘上没有对应 attestation"，而这一条 doctor 早就有了（`no matching verifier attestation on disk`）。
+> - **测试**：`task-commands.test.ts` 两条（停泊任务被报出并给出 `/tasks run <id>`；带 wake 的定时回访保持静默）；`job-manager.test.ts` 一条（只有"运行中 + notify + 带 taskId"的作业算数，作业一结束该 taskId 立刻从集合里消失）。
+> - **文档**：`docs/events-and-tasks.md` 的 doctor 清单同步。
 
 ---
 
@@ -290,12 +332,14 @@ E-9 不是孤例，而是一种模式：工具的**对外契约**（typebox sche
 | 3 ✅ | **E-9 + C-5 `task_manage` schema 对齐** | 效果/复杂度 🟠 | 纯减法（删三个字段）+ 一次类型收紧。同时解锁"模型可以显式要求独立验收"，并直接砍掉 P-6 的一部分。 |
 | 4 ✅ | **E-7 effect 归因到回合**（按任务，内存版） | 效果 🟠 | 改动集中在 `effect-ledger` 的 key 与 driver 的读取点。它是 E-2 快档的判据，粒度错一级就直接体现在花钱速度上。 |
 | 5 ⏸ | **E-8 attempt 预算改滚动窗口**（本轮不做：新增机制，超出"不显著增加复杂度"边界） | 效果 🟠 | 比 #2 大一些，但这是"长程"这个词能不能兑现的分水岭：12 步 vs 12 步/天。 |
-| 6 | **P-7 合成事件降级 progress** | 性能/体验 🟡 | 用已有的 `_isEvent` 参数，几行。后台自主是常态，前台安静就该是常态。 |
+| 6 ✅ | **P-7 合成事件降级 progress** | 性能/体验 🟡 | 用已有的 `_isEvent` 参数，几行。后台自主是常态，前台安静就该是常态。 |
 | 7 | **C-2 0.9.0 砍兼容层**（沿用上一轮结论） | 复杂度 | 纯减法，几百行 + 对应测试。 |
-| 8 | **P-6 工具 schema 预算** / **U-7 doctor 补检** | 性能/体验 🟡 | 都是"给已有管道加一条阈值/规则"，可与 #3 合并做。 |
-| 9 | **P-8 driver tick 配置缓存** / **C-3 唤醒模板**（沿用上一轮） | 性能/复杂度 🟡 | 与上一轮 P-08 合并做更便宜。 |
+| 8 ✅ | **P-6 工具 schema 预算** / **U-7 doctor 补检** | 性能/体验 🟡 | 都是"给已有管道加一条阈值/规则"，可与 #3 合并做。 |
+| 9 ◐ | **P-8 driver tick 配置缓存** ✅ / **C-3 唤醒模板**（沿用上一轮，未做） | 性能/复杂度 🟡 | 与上一轮 P-08 合并做更便宜。 |
 
 **已执行的第一批 = #1 + #2 + #3 + #4。** 原建议是 #1+#2+#3；#4 一并做了，因为 E-6 修好之后 effect 归因就是快档唯一的判据，两条分开做会留下一个"停泊修好了、但闲聊仍然点燃后台任务链"的中间态。
+
+**已执行的第二批 = #6 + #8 + #9 的 P-8。** 四条各自独立、互不牵连，都落在"给已有管道加一条判断/阈值/规则"的量级：新增 1 个 18 行的共享文件（`file-stamp.ts`）、1 个常量 + 2 个纯函数（工具 schema 预算）、1 个只读查询（作业→任务）、1 个可选参数（progress 降级）。没有新配置项、没有新状态机、没有新后台循环。三条建议被明确放弃并写下了理由：P-6 的"砍 action 描述"（前提在 E-9 之后已不成立，且方向为负）、U-7 的另两条补检（一条已被现有检查覆盖，一条会对健康任务开火）。剩下未动的是 E-8 的滚动窗口、C-1/C-2/C-3、C-5 对其它工具的抽查。
 
 **建议的第一批**：#1 + #2 + #3 是一个自洽的小包 —— 它们共同回答同一个问题："当模型把工作交给外部执行体之后，这个 runtime 应该做什么、不该做什么"。三条一起做完，那条零轮询路径才第一次真正跑得通。
 
