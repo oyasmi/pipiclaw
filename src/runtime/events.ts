@@ -19,11 +19,11 @@ import type { SecurityConfig } from "../security/types.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { taskEventPrefix } from "../shared/task-events.js";
-import { parseTaskFrontmatter } from "../tasks/ledger.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
+import { parseTaskFrontmatter } from "../tasks/ledger.js";
 import { TERMINAL_TASK_STATUSES } from "../tasks/transitions.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
-import { MAX_EVENT_FILES, validateScheduledEvent } from "./event-validation.js";
+import { MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./event-validation.js";
 
 // ============================================================================
 // Event Types
@@ -114,7 +114,7 @@ export interface EventsWatcherOptions {
 const DEBOUNCE_MS = 100;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 100;
-const MAX_TIMEOUT_MS = 2_147_483_647;
+const SCAN_CONCURRENCY = 4;
 const DEFAULT_PRE_ACTION_TIMEOUT_MS = 10_000;
 const TEXT_PREVIEW_MAX_CHARS = 160;
 
@@ -221,9 +221,9 @@ export function parseScheduledEventContent(content: string, filename: string): S
  * The identity of a wake is its *occurrence*, never the moment it happened to be executed.
  * A one-shot keyed on its own `at` therefore lands on the same durable record whether it
  * arrives via the outbox retry or via the post-restart file recovery path, so the two
- * independent retry systems can no longer deliver the same occurrence twice. A periodic is
- * keyed on the cron trigger time, so retries of one occurrence collapse while the next
- * occurrence is a genuinely new record.
+ * independent retry systems can no longer deliver the same occurrence twice. A live periodic
+ * occurrence is keyed on Croner's callback start time, so its durable outbox retries collapse
+ * while the next callback produces a genuinely new record.
  */
 function eventDispatchId(filename: string, event: ScheduledEvent, occurrence: Date): string {
 	const name = eventNameFromFilename(filename);
@@ -250,6 +250,7 @@ export class EventsWatcher {
 	private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
 	private startTime: number;
 	private watcher: FSWatcher | null = null;
+	private started = false;
 	private knownFiles: Set<string> = new Set();
 	private readonly historyAppender?: JsonlAppender;
 
@@ -271,6 +272,7 @@ export class EventsWatcher {
 	}
 
 	start(): void {
+		this.started = true;
 		if (!existsSync(this.eventsDir)) {
 			mkdirSync(this.eventsDir, { recursive: true });
 		}
@@ -278,7 +280,7 @@ export class EventsWatcher {
 
 		log.logInfo(`Events watcher starting, dir: ${this.eventsDir}`);
 
-		this.scanExisting();
+		void this.scanExisting();
 
 		this.watcher = watch(this.eventsDir, (_eventType, filename) => {
 			if (!filename || !filename.endsWith(".json")) return;
@@ -289,6 +291,7 @@ export class EventsWatcher {
 	}
 
 	stop(): void {
+		this.started = false;
 		if (this.watcher) {
 			this.watcher.close();
 			this.watcher = null;
@@ -385,7 +388,7 @@ export class EventsWatcher {
 		);
 	}
 
-	private scanExisting(): void {
+	private async scanExisting(): Promise<void> {
 		let files: string[];
 		try {
 			files = readdirSync(this.eventsDir).filter((f) => f.endsWith(".json"));
@@ -394,8 +397,16 @@ export class EventsWatcher {
 			return;
 		}
 
-		for (const filename of files) {
-			this.handleFile(filename);
+		for (let offset = 0; this.started && offset < files.length; offset += SCAN_CONCURRENCY) {
+			await Promise.all(
+				files.slice(offset, offset + SCAN_CONCURRENCY).map(async (filename) => {
+					try {
+						await this.handleFile(filename);
+					} catch (err) {
+						log.logWarning(`Failed to restore event file: ${filename}`, errorMessage(err));
+					}
+				}),
+			);
 		}
 	}
 
@@ -563,7 +574,7 @@ export class EventsWatcher {
 		}
 
 		const delay = atTime - now;
-		if (delay > MAX_TIMEOUT_MS) {
+		if (delay > MAX_ONE_SHOT_DELAY_MS) {
 			log.logWarning(
 				`One-shot event exceeds maximum supported delay for ${filename}: ${event.at}. Use a periodic cron event instead.`,
 			);
@@ -610,11 +621,11 @@ export class EventsWatcher {
 			}
 		}
 		try {
-			const cron = new Cron(event.schedule, async () => {
+			const cron = new Cron(event.schedule, { protect: true, catch: true }, async () => {
 				try {
 					log.logInfo(`Executing periodic event: ${filename}`);
 					this.appendEventHistory(filename, event, "triggered", "ok");
-					// The cron trigger time — not "now" — is this occurrence's identity (D1).
+					// Croner exposes the callback start time, which distinguishes live occurrences.
 					await this.execute(filename, event, false, cron.currentRun() ?? new Date());
 				} catch (err) {
 					log.logWarning(`Periodic event execution failed: ${filename}`, String(err));
@@ -718,6 +729,9 @@ export class EventsWatcher {
 						},
 					},
 				);
+				if (deleteAfter) {
+					this.deleteFile(filename);
+				}
 				return;
 			}
 		}

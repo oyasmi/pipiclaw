@@ -20,6 +20,9 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 		filename: string,
 		event: { type: "periodic"; channelId: string; text: string; schedule: string; timezone: string },
 	): void;
+	scanExisting(): Promise<void>;
+	started: boolean;
+	crons: Map<string, { options: { protect?: boolean; catch?: boolean } }>;
 	handleFile(filename: string): Promise<void>;
 	sleep(ms: number): Promise<void>;
 	execute(
@@ -47,6 +50,9 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 			filename: string,
 			event: { type: "periodic"; channelId: string; text: string; schedule: string; timezone: string },
 		): void;
+		scanExisting(): Promise<void>;
+		started: boolean;
+		crons: Map<string, { options: { protect?: boolean; catch?: boolean } }>;
 		handleFile(filename: string): Promise<void>;
 		sleep(ms: number): Promise<void>;
 		execute(
@@ -130,6 +136,29 @@ afterEach(() => {
 });
 
 describe("EventsWatcher", () => {
+	it("bounds startup restoration concurrency", async () => {
+		const dir = createTempDir();
+		for (let i = 0; i < 9; i++) {
+			writeFileSync(join(dir, `event-${i}.json`), "{}");
+		}
+		const watcher = createWatcher(dir);
+		const privateApi = getEventsWatcherPrivateApi(watcher);
+		let active = 0;
+		let maxActive = 0;
+		const handleFile = vi.spyOn(privateApi, "handleFile").mockImplementation(async () => {
+			active++;
+			maxActive = Math.max(maxActive, active);
+			await Promise.resolve();
+			active--;
+		});
+
+		privateApi.started = true;
+		await privateApi.scanExisting();
+
+		expect(handleFile).toHaveBeenCalledTimes(9);
+		expect(maxActive).toBe(4);
+	});
+
 	it("parses valid event payloads and rejects invalid ones", () => {
 		const watcher = createWatcher(createTempDir());
 		const privateApi = getEventsWatcherPrivateApi(watcher);
@@ -614,6 +643,26 @@ describe("EventsWatcher", () => {
 		expect(statSync(filePath).isFile()).toBe(true);
 	});
 
+	it("configures periodic events to prevent overlap and catch escaped callback errors", () => {
+		const dir = createTempDir();
+		const watcher = createWatcher(dir);
+		const privateApi = getEventsWatcherPrivateApi(watcher);
+
+		privateApi.handlePeriodic("protected.json", {
+			type: "periodic",
+			channelId: "dm_1",
+			text: "protected",
+			schedule: "0 3 * * 0",
+			timezone: "UTC",
+		});
+
+		expect(privateApi.crons.get("protected.json")?.options).toMatchObject({
+			protect: true,
+			catch: true,
+		});
+		watcher.stop();
+	});
+
 	it("preserves a one-shot event and writes an error marker when the queue is full", async () => {
 		const dir = createTempDir();
 		const filename = "dropped.json";
@@ -710,6 +759,29 @@ describe("EventsWatcher", () => {
 					preAction: expect.objectContaining({ command: "false", exitCode: 1 }),
 				}),
 			]);
+		});
+
+		it("consumes a one-shot event when its action gate blocks", async () => {
+			const dir = createTempDir();
+			const filename = "blocked-once.json";
+			const filePath = join(dir, filename);
+			writeFileSync(filePath, "{}");
+			const watcher = createWatcher(dir);
+			const privateApi = getEventsWatcherPrivateApi(watcher);
+
+			await privateApi.execute(
+				filename,
+				{
+					type: "one-shot",
+					at: "2030-01-01T00:00:00.000Z",
+					channelId: "dm_1",
+					text: "consume me",
+					preAction: { type: "bash", command: "false" },
+				},
+				true,
+			);
+
+			expect(existsSync(filePath)).toBe(false);
 		});
 
 		it("blocks event when action times out", async () => {

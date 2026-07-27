@@ -17,6 +17,8 @@ import type { ScheduledEvent } from "./events.js";
 
 /** one-shot events must be scheduled at least this far out; anything sooner is effectively self-triggering. */
 export const MIN_ONE_SHOT_LEAD_MS = 2 * 60 * 1000;
+/** Node timers cannot represent a longer delay without overflowing their signed 32-bit range. */
+export const MAX_ONE_SHOT_DELAY_MS = 2_147_483_647;
 /** periodic events without a preAction gate may fire no more often than this. */
 export const MIN_PERIODIC_INTERVAL_MS = 30 * 60 * 1000;
 /**
@@ -47,6 +49,18 @@ export function validateOneShotLead(event: ScheduledEvent & { type: "one-shot" }
 	}
 	if (atTime < now + MIN_ONE_SHOT_LEAD_MS) {
 		throw new EventValidationError("one-shot 'at' must be at least 2 minutes in the future (self-triggering guard).");
+	}
+}
+
+function validateOneShotMaximumDelay(event: ScheduledEvent & { type: "one-shot" }, now = Date.now()): void {
+	const atTime = parseLocalTime(event.at);
+	if (atTime === undefined) {
+		throw new EventValidationError(`one-shot 'at' is not a valid local time: ${event.at}`);
+	}
+	if (atTime - now > MAX_ONE_SHOT_DELAY_MS) {
+		throw new EventValidationError(
+			"one-shot 'at' must be within about 24.8 days; use a periodic event for longer delays.",
+		);
 	}
 }
 
@@ -98,8 +112,11 @@ export interface ScheduledEventValidationOptions {
 
 /** Apply every admission rule that depends only on the definition itself. */
 export function validateScheduledEvent(event: ScheduledEvent, options: ScheduledEventValidationOptions = {}): void {
-	if (event.type === "one-shot" && options.enforceOneShotLead !== false) {
-		validateOneShotLead(event, options.now);
+	if (event.type === "one-shot") {
+		validateOneShotMaximumDelay(event, options.now);
+		if (options.enforceOneShotLead !== false) {
+			validateOneShotLead(event, options.now);
+		}
 	}
 	if (event.type === "periodic") {
 		validatePeriodicCadence(event);

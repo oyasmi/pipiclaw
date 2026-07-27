@@ -128,16 +128,16 @@ main.js (CLI 入口，argv 分发)
 
 | 编号 | 严重度 | 描述 | 证据 |
 |---|---|---|---|
-| Event-M1 | **Major** | 一次性事件(one-shot)带 `preAction`、且 gate 未通过时,`execute()` 的 `catch` 分支(`events.js:537-552`)记录历史后直接 `return`,**从未调用 `deleteFile`**;而 `setTimeout` 回调只触发一次、不会再重新调度。结果:该事件文件既不会被删除也不会在本进程生命周期内再被触发,永久停留在 `events/` 目录,与 playbook `event-scheduling.md:39` 承诺的"one-shot 即使 gate 未通过也会被消费"直接矛盾;并且这类遗留文件会被 `event-manage.js` 的 `countEventFiles`(按目录内全部 `.json` 文件计数)计入 `MAX_EVENT_FILES=50` 的工具侧配额,而运行时侧准入判断只统计 `timers.size + crons.size`(活跃调度数),两处配额口径不一致——遗留文件会悄悄侵占配额直至阻塞新事件创建,而运行时侧毫无察觉。 | `runtime/events.js:508-552,584-589`;`tools/event-manage.js:89-94`;对照 `playbooks/event-scheduling.md:39` |
-| Event-M2 | **Major** | periodic 事件的 `new Cron(event.schedule, ...)`(`events.js:454`)未传 `protect: true`,croner 的重叠保护默认关闭。若 preAction 或下游执行变慢(尤其配合较大的 `preAction.timeout`),同一 periodic 事件可能被并发触发两次,造成重复 shell 执行/重复唤醒。一行配置即可修复。 | `runtime/events.js:454`;`node_modules/croner/dist/croner.js`(`_checkTrigger` 里 `protect` 恒为 falsy) |
-| Event-M3 | **Major** | periodic 事件没有"进程重启期间错过触发"的恢复机制,与 one-shot 的处理完全不对称:`handlePeriodic` 重启后只是 `new Cron` 计算未来下一次触发,中间错过的所有 tick 被静默丢弃,且没有任何 `appendHistory` 记录留痕(对比 one-shot 恢复会写明确 reason)。这直接命中"进程重启后能否正确恢复未触发事件"这一核心设计要求,却没有任何补偿或告警。 | `runtime/events.js:443-480` 对比 `397-413` |
-| Event-Minor1 | Minor | `scanExisting()`(`events.js:252-264`)对多个文件的 `handleFile` 调用未 `await`、无并发节流。长时间宕机后重启,若多个 one-shot 同时过期,最坏情况(`MAX_EVENT_FILES=50`)会产生 50 路并发子进程/入队,无背压控制。 | `runtime/events.js:252-264` |
-| Event-Minor2 | Minor | periodic dispatch id 的文档注释称"keyed on the cron trigger time",但实际用 `cron.currentRun() ?? new Date()`,而 croner 内部 `_trigger()` 被调用时未传入预定触发时刻,`currentRun` 实际是调用时的墙钟时间,与注释所称的"cron 触发时刻"存在概念偏差(不影响当前功能,但容易在未来维护时误判其幂等语义边界)。 | `runtime/events.js:119-131,459`;`node_modules/croner/dist/croner.js` |
-| Event-Minor3 | Minor | 两处"事件文件数量上限"统计口径不一致(见 Event-M1 附带发现):运行时侧按活跃调度数、工具侧按目录全部 `.json` 文件数,容易造成"运行时认为还有空位,工具却拒绝创建"的困惑体验。 | `runtime/events.js:372` vs `tools/event-manage.js:89-94` |
-| Event-Minor4 | Minor | `fs.watch`(而非轮询)在部分文件系统(网络盘、某些容器覆盖文件系统)上有已知的丢事件局限;仅在启动时做一次全量兜底扫描(`scanExisting`),运行期间若静默丢失一次变更需等到下次进程重启才能被感知。 | `runtime/events.js:170-174` |
-| Event-S1 | Suggestion | 建议在 `new Cron(...)` 时显式传 `{ catch: true }` 作为纵深防御,当前依赖回调内部自带 try/catch 兜底,足够安全但如果未来重构误删内层 try/catch 会退化为未处理 rejection。 | `runtime/events.js:454-467` |
-| Event-S2 | Suggestion | `preAction` 依赖 `executor.exec` 的 `SIGKILL` 进程组超时,若命令双重 fork/守护化使孙进程逃逸出进程组并持有 stdio 管道,`close` 事件可能迟迟不触发,导致 `await` 挂起超过预期。建议对 preAction 场景额外加一层硬性 wall-clock 兜底。 | `runtime/events.js:619`;`executor.js:52-122` |
-| Event-S3 | Suggestion | `MAX_TIMEOUT_MS = 2_147_483_647`(约 24.8 天,`setTimeout` 32 位有符号整数上限)作为 one-shot 调度上限的处理是正确防御,但建议同步反映在面向用户的 `event_manage` 文档里,避免先创建后被拒绝。 | `runtime/events.js:20` |
+| Event-M1 | **Major，已处理（2026-07-27）** | 问题属实。one-shot 的 preAction 被 gate 拦截或执行失败后，现按 `deleteAfter` 语义消费并删除源文件；periodic 仍只跳过本次 occurrence。补充了回归测试，避免静默遗留文件继续侵占工具侧配额。 | `runtime/events.ts`;`test/events.test.ts` |
+| Event-M2 | **Major，已处理（2026-07-27）** | 问题属实且修复收益高。periodic Cron 现显式启用 `protect: true`，前一次异步回调未结束时不会重叠触发下一次。 | `runtime/events.ts`;`test/events.test.ts` |
+| Event-M3 | **Major，评估后不修（2026-07-27）** | 问题不成立。`docs/events-and-tasks.md` 已明确约定 periodic 不补跑停机期间的全部 occurrence，只从下一次 cron 节奏继续；one-shot 必须补一次与 periodic 可能积累大量过期副作用并不对称。若要可靠补跑还需新增持久 checkpoint、合并和过期策略，复杂度及风险均高于收益。 | `docs/events-and-tasks.md:193-197`;`runtime/events.ts` |
+| Event-Minor1 | **Minor，已处理（2026-07-27）** | 问题属实。启动恢复现按每批最多 4 个文件并发处理，单个文件失败会记录 warning 且不阻断后续批次；stop 后不再启动剩余批次。 | `runtime/events.ts`;`test/events.test.ts` |
+| Event-Minor2 | **Minor，已处理（2026-07-27）** | 问题属实但仅是注释偏差。注释现准确说明 periodic occurrence 使用 Croner 暴露的 callback start time，未引入无必要的调度时刻重建逻辑。 | `runtime/events.ts` |
+| Event-Minor3 | **Minor，评估后不修（2026-07-27）** | 现象属实但主要危害来自 Event-M1 的 one-shot 遗留，已随 M1 消除。剩余差异是两道不同防线：工具限制目录内持久文件，runtime 限制实际活跃调度；强行统一还需定义无效文件、启动时超额文件的取舍和排序，复杂度高于有限的体验收益。现有错误文本已分别明确 `event files` 与 `scheduled events`。 | `runtime/events.ts`;`tools/event-manage.ts` |
+| Event-Minor4 | **Minor，评估后不修（2026-07-27）** | 风险在网络盘或不可靠 overlay 文件系统上属实，但当前 workspace 的主要部署前提是本地文件系统。轮询若要正确识别新增、修改、删除且避免与 watcher 重复调度，需要额外维护文件版本状态；为低概率环境增加常驻 I/O 和状态机性价比低。 | `runtime/events.ts` |
+| Event-S1 | **Suggestion，已处理（2026-07-27）** | 建议合理且成本极低。Cron 在保留回调内业务日志的同时显式启用 `catch: true`，防止未来重构遗漏 catch 时产生未处理 rejection。 | `runtime/events.ts`;`test/events.test.ts` |
+| Event-S2 | **Suggestion，评估后不修（2026-07-27）** | 极端双重 fork 场景理论上成立，但调用方 `Promise.race` 只能提前返回，无法真正回收已逃逸进程，反而会隐藏仍在运行的工作；可靠解决需要 executor 级进程隔离/监督，复杂度显著。当前进程组 `SIGKILL` 已覆盖正常命令树。 | `runtime/events.ts`;`executor.ts` |
+| Event-S3 | **Suggestion，已处理（2026-07-27）** | 问题属实。约 24.8 天的上限现进入共享 admission validation，`event_manage` 会在写文件前给出可恢复错误；工具 schema 与 event scheduling playbook 也同步写明范围，避免“先创建、后被 watcher 拒绝”。 | `runtime/event-validation.ts`;`tools/event-manage.ts`;`playbooks/event-scheduling.md`;`test/event-manage.test.ts` |
 
 ### 2.4 Memory 记忆系统
 
@@ -366,7 +366,7 @@ main.js (CLI 入口，argv 分发)
 
 1. **优先处理 C-1**:即使决定保留 bash 的"高权限"定位,也要先把这一决策写入文档/威胁模型,并评估是否至少对 bash 内的网络目标做一次轻量 `network.js` 复核(尤其是拦截云元数据地址这种低成本高收益的改动)。
 2. **修复 Task-M1/Task-Minor1**:`cancel`/`run` 转换表补上 `done` 起点,是几行代码的改动,直接消除文档与实现的脱节。
-3. **修复 Event-M2**(`protect: true`)与 **Event-M1**(preAction 失败后正确处理事件文件的删除/重试语义,并统一两处配额统计口径):都是高投入产出比的小改动。
+3. **Event-M1/Event-M2（第四轮已处理）**:one-shot gate 未通过后会被消费，periodic Cron 已启用重叠保护；两种配额分别保护持久文件与活跃调度，不强行合并口径。
 4. **修复 M-2(符号链接解析不对称)与 M-3(write/edit 迁移到 writeFileAtomically)**:项目内已有成熟实现,只是工具层没有复用。
 5. **中文场景的 token 估算(Memory-Minor5)**:结合已有的 `chinese-words.js` 中文检测能力,按语言分段估算,这对项目声明的核心场景(钉钉中文助手)属于正确性问题而非锦上添花。
 
@@ -376,7 +376,7 @@ main.js (CLI 入口，argv 分发)
 2. **Memory-M3（第三轮已处理）**:记忆抽取、会话更新、MEMORY 清理与 HISTORY 折叠已共用"输入是数据不是指令"规则。
 3. **M-4**:为 SOUL.md/AGENTS.md 引入默认写保护(至少要求经过明确的用户确认动作才能修改,而非模型可静默改写),消除"默认拒绝敏感位置"宣称与实现之间的缝隙。
 4. **Agent-M1**:job-manager 的清道夫应改为"存在未过期(在保留窗口内)的已完成记录时也保持运行",而不仅仅是"存在运行中作业时才运行",从根源上避免完成记录/临时文件的滞留。
-5. **Event-M3**:为 periodic 事件补上与 one-shot 对称的"重启期间错过触发"检测与告警(即使不逐一补跑,至少要能让运维知道"漏跑了"这一事实)。
+5. **Event-M3（第四轮评估后不修）**:主文档已明确 periodic 不补跑停机期间的历史 occurrence；新增可靠检测仍需持久 checkpoint，复杂度高于收益。
 6. **M-1**:扩展 command-guard 的"下载后执行"检测,覆盖任意下载工具 pipe 到任意解释器的通用模式。
 7. **统一 skill-security 与 path-guard 的路径校验实现**,消除两套平行维护的护栏代码。
 8. **M-5**:为 DingTalk 集成补齐 429/限流的退避重试与 `Retry-After` 处理。

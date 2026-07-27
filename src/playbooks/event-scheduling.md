@@ -12,7 +12,7 @@ priority: 30
 ## 选择类型
 
 - 当前回合立即能做：直接做，不建 immediate。`event_manage` 会拒绝 immediate，防止自触发循环。
-- 将来某时只提醒一次：one-shot，至少提前 2 分钟。
+- 将来某时只提醒一次：one-shot，至少提前 2 分钟、最多约 24.8 天；更远的时间使用 periodic。
 - 固定节奏重复提醒/检查：periodic，五段 cron（按主机时区解释，无 timezone 字段）。
 - 周期性产出任务：单个 task 文件，节奏写在 frontmatter 的 `schedule`，见 `task-planning.md`。
 

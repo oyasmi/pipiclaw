@@ -24,7 +24,7 @@ const eventManageSchema = Type.Object({
 	definition: Type.Optional(
 		Type.String({
 			description:
-				"Full event JSON (required for create/update). one-shot / periodic only; immediate is rejected. channelId defaults to the current channel.",
+				"Full event JSON (required for create/update). one-shot / periodic only; one-shots must be 2 minutes to about 24.8 days out. immediate is rejected. channelId defaults to the current channel.",
 		}),
 	),
 });

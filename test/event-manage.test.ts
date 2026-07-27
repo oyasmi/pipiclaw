@@ -131,6 +131,17 @@ describe("manageEvent create", () => {
 		).rejects.toThrow(/2 minutes/);
 	});
 
+	it("rejects one-shot beyond the Node timer limit before writing it", async () => {
+		await expect(
+			manageEvent(opts(), {
+				action: "create",
+				name: "too-far",
+				definition: JSON.stringify({ type: "one-shot", text: "x", at: futureIso(36_000) }),
+			}),
+		).rejects.toThrow(/24\.8 days/);
+		expect(await listEventFiles()).toEqual([]);
+	});
+
 	it("rejects a periodic cron firing more often than every 30 minutes", async () => {
 		await expect(
 			manageEvent(opts(), {
