@@ -4,6 +4,7 @@ import { serializeConversation } from "@earendil-works/pi-coding-agent";
 import { writeFile } from "fs/promises";
 import { join } from "path";
 import { parseJsonObject } from "../shared/llm-json.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText, errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
@@ -245,13 +246,9 @@ function mergeSessionMemoryState(current: SessionMemoryState, update: SessionMem
 
 async function writeSessionMemoryDebugFile(channelDir: string, error: unknown, rawText: string): Promise<void> {
 	const debugPath = join(channelDir, "SESSION.invalid-response.txt");
-	const header = [
-		`timestamp: ${new Date().toISOString()}`,
-		`error: ${errorMessage(error)}`,
-		"",
-		"raw response:",
-		"",
-	].join("\n");
+	const header = [`timestamp: ${formatLocalTime()}`, `error: ${errorMessage(error)}`, "", "raw response:", ""].join(
+		"\n",
+	);
 	await writeFile(debugPath, `${header}${rawText}\n`, "utf-8");
 }
 

@@ -609,7 +609,7 @@ describe("TaskDriver", () => {
 		await driver.runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
 		const onDisk = await readFile(join(workspaceDir, "dm_a", "tasks", "weekly.md"), "utf-8");
-		expect(onDisk).toMatch(/wake: 2026-07-\d\dT/);
+		expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
 	});
 
 	it("runs the full native recurring loop: done → sleep → runtime reopens cycle → done", async () => {
@@ -670,6 +670,6 @@ describe("TaskDriver", () => {
 			evidence: "Checked",
 		});
 		expect(done2.archived).toBe(false);
-		expect(await readFile(join(channelDir, "tasks", "weekly.md"), "utf-8")).toMatch(/wake: 2026-07-\d\dT/);
+		expect(await readFile(join(channelDir, "tasks", "weekly.md"), "utf-8")).toMatch(/wake: \d{4}-\d\d-\d\dT/);
 	});
 });

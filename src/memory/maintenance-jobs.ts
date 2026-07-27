@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import {
@@ -122,7 +123,7 @@ function makeRunOptions(input: BaseMaintenanceJobInput, usageCorrelationId?: str
 }
 
 function backoffUntil(now: Date, settings: PipiclawMemoryMaintenanceSettings): string {
-	return new Date(now.getTime() + Math.max(0, settings.failureBackoffMinutes) * 60_000).toISOString();
+	return formatLocalTime(new Date(now.getTime() + Math.max(0, settings.failureBackoffMinutes) * 60_000));
 }
 
 async function appendJobReviewLog(
@@ -138,7 +139,7 @@ async function appendJobReviewLog(
 	now: Date,
 ): Promise<void> {
 	await appendMemoryReviewLog(channelDir, {
-		timestamp: now.toISOString(),
+		timestamp: formatLocalTime(now),
 		channelId,
 		reason,
 		...entry,
@@ -194,7 +195,7 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 
 		const latestId = latestEntry();
 		try {
-			const correlationId = `session-refresh:${latestId ?? now.toISOString()}`;
+			const correlationId = `session-refresh:${latestId ?? formatLocalTime(now)}`;
 			await updateChannelSessionMemory({
 				channelId: input.channelId,
 				channelDir: input.channelDir,
@@ -206,7 +207,7 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 			});
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
-				lastSessionRefreshAt: now.toISOString(),
+				lastSessionRefreshAt: formatLocalTime(now),
 				turnsSinceSessionRefresh: 0,
 				toolCallsSinceSessionRefresh: 0,
 				lastSessionRefreshedEntryId: latestId ?? current.lastSessionRefreshedEntryId,
@@ -285,7 +286,7 @@ export async function runMemoryCheckpointJob(input: MemoryCheckpointJobInput): P
 			});
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
-				lastCheckpointAt: now.toISOString(),
+				lastCheckpointAt: formatLocalTime(now),
 				lastCheckpointEntryId: sourceWindow.throughEntryId ?? current.lastCheckpointEntryId,
 				failureBackoffUntil: null,
 			}));
@@ -355,7 +356,7 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 
 		const [currentMemory, currentHistory] = await loadFiles();
 		try {
-			const correlationId = `structural-maintenance:${now.toISOString()}`;
+			const correlationId = `structural-maintenance:${formatLocalTime(now)}`;
 			const options = makeRunOptions(input, correlationId);
 			const cleanedMemory = decision.runMemoryCleanup
 				? await cleanupChannelMemory(options, currentMemory, {
@@ -366,7 +367,7 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 			const foldedHistory = decision.runHistoryFolding ? await foldChannelHistory(options, currentHistory) : false;
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
-				lastStructuralMaintenanceAt: now.toISOString(),
+				lastStructuralMaintenanceAt: formatLocalTime(now),
 				failureBackoffUntil: null,
 			}));
 			await appendJobReviewLog(

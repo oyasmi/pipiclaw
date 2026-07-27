@@ -3,6 +3,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseTaskControl, type TaskControl, taskPriorityRank } from "../tasks/control.js";
 import { normalizeStoredStatus, TERMINAL_TASK_STATUSES, wasLegacyEscalated } from "../tasks/transitions.js";
+import { formatLocalTime, parseLocalTime } from "./local-time.js";
 import { nextTaskWake } from "./task-schedule.js";
 
 /**
@@ -336,7 +337,7 @@ export function normalizeTaskFields(fields: TaskDocumentFields): TaskDocumentFie
 	if (fields.status !== "done" || !fields.schedule) return fields;
 	const next = nextTaskWake(fields.schedule);
 	if (!next) return fields;
-	const wake = next.toISOString();
+	const wake = formatLocalTime(next);
 	return wake === fields.wake ? fields : { ...fields, wake };
 }
 
@@ -696,8 +697,7 @@ function extractLatestNote(content: string): string | undefined {
 
 function parseWakeMs(frontmatter: TaskFrontmatter): number | undefined {
 	if (!frontmatter.wake) return undefined;
-	const at = new Date(frontmatter.wake).getTime();
-	return Number.isFinite(at) ? at : undefined;
+	return parseLocalTime(frontmatter.wake);
 }
 
 /** Actionable first; then earliest wake first (unset wake sorts as "ready now"); then id. */
@@ -708,10 +708,10 @@ export function compareTaskEntries(a: TaskLedgerEntry, b: TaskLedgerEntry): numb
 		const bp = taskPriorityRank(b.frontmatter.control?.priority ?? "normal");
 		if (ap !== bp) return ap - bp;
 		const ad = a.frontmatter.control?.deadline
-			? new Date(a.frontmatter.control.deadline).getTime()
+			? (parseLocalTime(a.frontmatter.control.deadline) ?? Number.POSITIVE_INFINITY)
 			: Number.POSITIVE_INFINITY;
 		const bd = b.frontmatter.control?.deadline
-			? new Date(b.frontmatter.control.deadline).getTime()
+			? (parseLocalTime(b.frontmatter.control.deadline) ?? Number.POSITIVE_INFINITY)
 			: Number.POSITIVE_INFINITY;
 		if (ad !== bd) return ad - bd;
 	}

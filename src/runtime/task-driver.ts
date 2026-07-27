@@ -4,6 +4,7 @@ import { join } from "node:path";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
+import { parseLocalTime } from "../shared/local-time.js";
 import { normalizeTaskFields, readActiveTasks, type TaskLedgerEntry } from "../shared/task-ledger.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
@@ -348,7 +349,7 @@ export class TaskDriver {
 			this.noteHorizon(entry.wakeMs, nowMs);
 			const control = entry.frontmatter.control;
 			if (control?.deadline && !TERMINAL_STATUSES.has(entry.frontmatter.status ?? "")) {
-				this.noteHorizon(new Date(control.deadline).getTime(), nowMs);
+				this.noteHorizon(parseLocalTime(control.deadline), nowMs);
 			}
 		}
 	}

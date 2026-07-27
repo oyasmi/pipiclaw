@@ -138,7 +138,7 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
 
 ### 单次事件（One-Shot）
 
-最适合未来某个时间点的一次性提醒。额外字段 `at`（带时区偏移的 ISO 8601 时间，必填）：
+最适合未来某个时间点的一次性提醒。额外字段 `at`（本地时间，必填；建议带偏移如 `+08:00`，省略则按主机时区解释）：
 
 ```json
 {
@@ -421,7 +421,7 @@ frontmatter 字段：
 | 字段 | 必填 | 取值 | 说明 |
 |------|------|------|------|
 | `status` | 是 | `active` / `waiting` / `verifying` / `paused` / `done` / `cancelled`（六态，每态唯一 driver 行为） | paused/cancelled 不会被 driver 继续（治理器停止的任务是 `paused` + `control.pausedBy: "governor"`，用户暂停是 `pausedBy: "user"`）；done 一般睡眠，唯有有 `schedule` 的周期任务到点被 driver 开新周期；verifying 进入 checker-only 回合。旧值 `open`/`in-progress`→`active`、`awaiting-user`/`blocked`→`waiting`、`escalated`→`paused(governor)` 在读取层无损映射，写盘即新名 |
-| `wake` | 否 | 带时区的 ISO 8601 | 最早值得再看一眼的时间。缺省 = 随时可推进；但 `status: waiting` 且缺省 `wake` 表示"停泊"——driver 永不主动唤醒，只等后台作业结束、用户消息或 `/tasks run`。周期任务 done 后由 driver 写成下一次 occurrence |
+| `wake` | 否 | 本地时间（如 `2026-07-27T07:30:00+08:00`；不带偏移按主机时区解释）；`task_manage`/`/tasks set` 也接受相对量 `+2h`/`+45m`/`+3d` | 最早值得再看一眼的时间。缺省 = 随时可推进；但 `status: waiting` 且缺省 `wake` 表示"停泊"——driver 永不主动唤醒，只等后台作业结束、用户消息或 `/tasks run`。周期任务 done 后由 driver 写成下一次 occurrence |
 | `schedule` | 否 | 五段 cron | 周期节奏的**唯一真相**，按主机时区解释；部署时用 `TZ=<IANA timezone>` 固定。存在 = 周期任务。最密每 30 分钟 |
 | `recurrence` | 否 | 自由文本（如 `每周一`） | 仅作标注给人读，无机器语义 |
 | `control` | 新任务是 | 单行 JSON，`version: 1` | priority/deadline/nextAction、父子依赖、隔离与副作用策略、预算/用量、独立验收状态 |

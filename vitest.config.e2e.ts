@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		environment: "node",
+		env: { TZ: "Asia/Shanghai" },
 		include: ["test/e2e/**/*.test.ts"],
 		testTimeout: 120_000,
 		// afterAll runs the runtime shutdown, whose memory flush may use its full

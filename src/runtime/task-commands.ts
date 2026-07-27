@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { channelJobTaskIds } from "../agent/job-manager.js";
+import { formatLocalTime, parseLocalTime, parseWakeInput } from "../shared/local-time.js";
 import { parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
 import {
 	extractTaskTitle,
@@ -11,6 +12,7 @@ import {
 	readActiveTasks,
 	type TaskLedgerEntry,
 } from "../shared/task-ledger.js";
+import { nextTaskWake } from "../shared/task-schedule.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import {
@@ -157,13 +159,13 @@ function resolveTaskPath(dir: string, id: string, subdir?: string): string {
 
 function relativeWake(wakeMs: number | undefined, now: number): string {
 	if (wakeMs === undefined) return "—";
-	const iso = new Date(wakeMs).toISOString();
+	const local = formatLocalTime(new Date(wakeMs));
 	const diffMs = wakeMs - now;
-	if (diffMs <= 0) return `${iso} (due)`;
+	if (diffMs <= 0) return `${local} (due)`;
 	const minutes = Math.round(diffMs / 60000);
 	const rel =
 		minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`;
-	return `${iso} (${rel})`;
+	return `${local} (${rel})`;
 }
 
 interface TaskEventInfo {
@@ -212,8 +214,7 @@ async function readTaskEvents(workspaceDir: string, channelId: string): Promise<
 function validWakeMs(entry: TaskLedgerEntry): number | undefined {
 	const wake = entry.frontmatter.wake;
 	if (!wake) return undefined;
-	const ms = new Date(wake).getTime();
-	return Number.isFinite(ms) ? ms : undefined;
+	return parseLocalTime(wake);
 }
 
 function issue(problem: string, nextStep: string): string {
@@ -297,7 +298,7 @@ async function approveTask(options: HandleTasksCommandOptions, idInput: string):
 	}
 	control.externalApproval = "granted";
 	control.approvalBy = options.approver?.trim() || "unknown-user";
-	control.approvedAt = new Date().toISOString();
+	control.approvedAt = formatLocalTime();
 	control.approvalBodyHash = taskBodyHash(task.body);
 	await writeStoredTask(task);
 	return `已批准任务 ${id} 的外部副作用，审批人记为 ${control.approvalBy}。`;
@@ -341,7 +342,7 @@ function restartBlockedMessage(id: string, control: TaskControl | undefined): st
 		`任务 ${id} 仍然超出治理限额：${violation}。`,
 		"直接恢复只会在下一轮扫描中被治理器再次暂停，并白白多花一个回合。",
 		`先放宽限额：\`/tasks set ${id} attempts <n>\`（当前上限 ${control.budget.maxAttempts}）` +
-			`${control.deadline ? `，或 \`/tasks set ${id} deadline <ISO8601>\`（当前 ${control.deadline}）` : ""}，然后再试一次。`,
+			`${control.deadline ? `，或 \`/tasks set ${id} deadline <本地时间>\`（当前 ${control.deadline}）` : ""}，然后再试一次。`,
 		"若这个任务已经不该继续，用 `task_manage cancel` 关掉它。",
 	].join("\n");
 }
@@ -370,8 +371,9 @@ export async function resumeTask(options: HandleTasksCommandOptions, idInput: st
  *
  * The alternative — telling the model "change wake to tomorrow 9am" — costs a whole turn and its
  * tokens to reach the same one-line write. Validation is not re-implemented here: `wake` reuses
- * the ledger's ISO8601 rule and everything else goes through `applyTaskControlPatch`, the same
- * function `task_manage set` uses, so the two entry points cannot drift apart.
+ * the shared local-time parser (accepting a local timestamp or a relative offset like `+2h`) and
+ * everything else goes through `applyTaskControlPatch`, the same function `task_manage set` uses,
+ * so the two entry points cannot drift apart.
  */
 async function setTaskField(
 	options: HandleTasksCommandOptions,
@@ -386,10 +388,12 @@ async function setTaskField(
 	if (field === "wake") {
 		if (!value) {
 			task.fields.wake = undefined;
-		} else if (!Number.isFinite(new Date(value).getTime())) {
-			return `wake "${value}" 不是合法的 ISO8601 时间。`;
 		} else {
-			task.fields.wake = value;
+			const ms = parseWakeInput(value);
+			if (ms === undefined) {
+				return `wake "${value}" 不是合法的本地时间（如 2026-07-27T07:30:00+08:00）或相对时长（如 +2h）。`;
+			}
+			task.fields.wake = formatLocalTime(new Date(ms));
 		}
 	} else {
 		const control = task.fields.control ?? createDefaultTaskControl();
@@ -684,7 +688,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md is parked (waiting, no wake) and no running background job will wake it.`,
-					`It resumes only when you reply to it, run /tasks run ${entry.id}, or give it a wake with /tasks set ${entry.id} wake <ISO8601>; cancel it if what it waits for is gone.`,
+					`It resumes only when you reply to it, run /tasks run ${entry.id}, or give it a wake with /tasks set ${entry.id} wake <local time or +2h>; cancel it if what it waits for is gone.`,
 				),
 			);
 		}
@@ -693,9 +697,29 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md has an invalid wake value (${entry.frontmatter.wake}); the native driver will treat it as due.`,
-					`Use task_manage set or progress to replace wake with ISO8601, or clear it if the task should continue now.`,
+					`Use task_manage set or progress to replace wake with a valid local time, or clear it if the task should continue now.`,
 				),
 			);
+		}
+
+		// A recurring task's wake should always be an occurrence of its own schedule. A wake that
+		// isn't — a stale value left over from a since-changed cron, or a hand-typed local↔UTC
+		// slip — silently misses the intended cadence: this is exactly how a production wake got
+		// left pointing at a day the cron never fires on (spec 037).
+		const schedule = entry.frontmatter.schedule;
+		if (recurring && schedule && entry.frontmatter.wake) {
+			const wakeMs = validWakeMs(entry);
+			if (wakeMs !== undefined) {
+				const priorOccurrence = nextTaskWake(schedule, new Date(wakeMs - 1));
+				if (priorOccurrence?.getTime() !== wakeMs) {
+					issues.push(
+						issue(
+							`tasks/${entry.id}.md wake (${formatLocalTime(new Date(wakeMs))}) is not an occurrence of its schedule "${schedule}".`,
+							`Run task_manage set schedule="${schedule}" (unchanged) to recompute wake from the cron, or set wake explicitly.`,
+						),
+					);
+				}
+			}
 		}
 	}
 

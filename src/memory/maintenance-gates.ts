@@ -1,4 +1,5 @@
 import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
+import { parseLocalTime } from "../shared/local-time.js";
 import type { MemoryMaintenanceState } from "./maintenance-state.js";
 
 export type MaintenanceJobKind = "session-refresh" | "memory-checkpoint" | "structural-maintenance";
@@ -74,8 +75,8 @@ function parseTime(value: string | undefined): number | null {
 	if (!value) {
 		return null;
 	}
-	const time = Date.parse(value);
-	return Number.isFinite(time) ? time : null;
+	const time = parseLocalTime(value);
+	return time === undefined ? null : time;
 }
 
 function isBeforeOptional(now: Date, value: string | undefined | null): boolean {

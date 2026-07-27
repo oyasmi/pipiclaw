@@ -78,7 +78,7 @@ describe("ChannelStore", () => {
 			user: "alice",
 			text: "hello",
 			isBot: false,
-			date: "2026-04-01T08:00:00.000Z",
+			date: "2026-04-01T16:00:00.000+08:00",
 		});
 
 		await vi.advanceTimersByTimeAsync(60_001);

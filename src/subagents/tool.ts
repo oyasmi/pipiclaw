@@ -18,6 +18,7 @@ import { formatModelReference } from "../models/utils.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings } from "../settings.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { clipText, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
@@ -872,7 +873,7 @@ export function createSubAgentTool(
 					runId: runContext.runId,
 					taskId: runContext.taskId,
 					verdict: verificationVerdict,
-					checkedAt: new Date().toISOString(),
+					checkedAt: formatLocalTime(),
 					evidence,
 					workspaceChanged: Boolean(workspaceChanged),
 					subjectHash: workspaceChanged ? undefined : verifierSubjectAfter,

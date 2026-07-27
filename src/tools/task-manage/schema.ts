@@ -9,7 +9,12 @@ const taskControlSchema = Type.Object({
 	priority: Type.Optional(
 		Type.Union([Type.Literal("low"), Type.Literal("normal"), Type.Literal("high"), Type.Literal("critical")]),
 	),
-	deadline: Type.Optional(Type.String({ description: "ISO8601 deadline; empty string clears it." })),
+	deadline: Type.Optional(
+		Type.String({
+			description:
+				"Local time deadline, e.g. 2026-07-27T18:00:00+08:00 (host timezone if no offset given); empty string clears it.",
+		}),
+	),
 	nextAction: Type.Optional(Type.String({ description: "Concrete next executable step; empty string clears it." })),
 	blockedReason: Type.Optional(Type.String({ description: "Why work cannot currently proceed; empty clears it." })),
 	sideEffects: Type.Optional(
@@ -82,14 +87,19 @@ export const taskManageSchema = Type.Object({
 	wake: Type.Optional(
 		Type.String({
 			description:
-				"ISO8601 earliest-recheck time for create/progress/set; empty string clears it. The native task driver resumes it; no .checkin event is needed.",
+				"Earliest-recheck time for create/progress/set; empty string clears it. Local time, e.g. " +
+				"2026-07-27T07:30:00+08:00 (host timezone if no offset given), or a relative offset from now " +
+				"like +2h / +45m / +3d — never do the local-to-UTC conversion by hand. The native task driver " +
+				"resumes it; no .checkin event is needed.",
 		}),
 	),
 	schedule: Type.Optional(
 		Type.String({
 			description:
 				"Five-field cron cadence (host timezone) that makes this a recurring task; empty string clears it. " +
-				"On done, the driver sleeps the task until the next occurrence and reopens the next cycle automatically. Min every 30 minutes.",
+				"Changing this on an existing task recomputes wake to the new cadence's next occurrence unless this " +
+				"same call also sets wake explicitly. On done, the driver sleeps the task until the next occurrence " +
+				"and reopens the next cycle automatically. Min every 30 minutes.",
 		}),
 	),
 	recurrence: Type.Optional(

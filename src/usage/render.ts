@@ -15,25 +15,25 @@ interface UsageWindow {
 	until: Date;
 }
 
-function startOfUtcDay(now: Date): Date {
-	return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+function startOfLocalDay(now: Date): Date {
+	return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
-function startOfUtcMonth(now: Date): Date {
-	return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+function startOfLocalMonth(now: Date): Date {
+	return new Date(now.getFullYear(), now.getMonth(), 1);
 }
 
 export function usageWindows(mode: UsageQueryMode, now: Date): UsageWindow[] {
-	const monthTitle = `本月（${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}）`;
+	const monthTitle = `本月（${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}）`;
 	switch (mode) {
 		case "7d":
 			return [{ title: "最近 7 天", since: new Date(now.getTime() - 7 * 86_400_000), until: now }];
 		case "month":
-			return [{ title: monthTitle, since: startOfUtcMonth(now), until: now }];
+			return [{ title: monthTitle, since: startOfLocalMonth(now), until: now }];
 		default:
 			return [
-				{ title: "今天（UTC）", since: startOfUtcDay(now), until: now },
-				{ title: monthTitle, since: startOfUtcMonth(now), until: now },
+				{ title: "今天", since: startOfLocalDay(now), until: now },
+				{ title: monthTitle, since: startOfLocalMonth(now), until: now },
 			];
 	}
 }

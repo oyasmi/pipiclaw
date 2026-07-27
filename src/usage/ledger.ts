@@ -3,6 +3,7 @@ import { join } from "node:path";
 import * as log from "../log.js";
 import { USAGE_STATE_DIR } from "../paths.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
+import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 
 export type UsageKind = "turn" | "subagent" | "sidecar";
 
@@ -94,7 +95,7 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 				log.logWarning("Usage ledger entry missing channelId; recording as untracked", `kind=${entry.kind}`);
 			}
 			const full: UsageLedgerEntry = {
-				ts: new Date().toISOString(),
+				ts: formatLocalTime(),
 				...entry,
 				channelId: entry.channelId || UNTRACKED_CHANNEL_ID,
 			};
@@ -134,8 +135,8 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 					} catch {
 						continue; // tolerate a torn trailing line
 					}
-					const tsMs = Date.parse(entry.ts);
-					if (Number.isNaN(tsMs) || tsMs < sinceMs || tsMs > untilMs) continue;
+					const tsMs = parseLocalTime(entry.ts);
+					if (tsMs === undefined || tsMs < sinceMs || tsMs > untilMs) continue;
 					if (query.channelId && entry.channelId !== query.channelId) continue;
 					const cost = entry.cost?.total ?? 0;
 					summary.totalCost += cost;

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
+import { formatLocalTime, localDayKey, parseLocalTime } from "../shared/local-time.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 
 export type MemoryEntryKind = "fact" | "preference" | "decision" | "constraint" | "open-loop" | "lesson";
@@ -91,7 +92,7 @@ export function getMemoryMetadataPath(channelDir: string): string {
 }
 
 export async function readMemoryMetadata(channelDir: string): Promise<MemoryMetadataFile> {
-	const timestamp = new Date().toISOString();
+	const timestamp = formatLocalTime();
 	const raw = await readOptionalTextFile(getMemoryMetadataPath(channelDir));
 	if (!raw.trim()) return emptyMetadataFile(timestamp);
 	try {
@@ -107,7 +108,7 @@ export async function syncMemoryMetadata(
 	channelDir: string,
 	activeEntries: MetadataEntryView[],
 	updates: MemoryMetadataUpdate[] = [],
-	timestamp: string = new Date().toISOString(),
+	timestamp: string = formatLocalTime(),
 ): Promise<MemoryMetadataFile> {
 	const path = getMemoryMetadataPath(channelDir);
 	return metadataQueue.run(path, async () => {
@@ -174,7 +175,7 @@ export async function recordMemoryRecall(
 	channelDir: string,
 	entryIds: string[],
 	query: string,
-	timestamp: string = new Date().toISOString(),
+	timestamp: string = formatLocalTime(),
 ): Promise<void> {
 	if (entryIds.length === 0) return;
 	const path = getMemoryMetadataPath(channelDir);
@@ -184,10 +185,11 @@ export async function recordMemoryRecall(
 			.update(query.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase())
 			.digest("hex")
 			.slice(0, 16);
-		const day = timestamp.slice(0, 10);
-		const cutoff = new Date(timestamp);
-		cutoff.setUTCDate(cutoff.getUTCDate() - 89);
-		const cutoffDay = cutoff.toISOString().slice(0, 10);
+		const timestampMs = parseLocalTime(timestamp) ?? Date.now();
+		const day = localDayKey(new Date(timestampMs));
+		const cutoffDate = new Date(timestampMs);
+		cutoffDate.setDate(cutoffDate.getDate() - 89);
+		const cutoffDay = localDayKey(cutoffDate);
 		let changed = false;
 		for (const id of new Set(entryIds)) {
 			const entry = current.entries[id];

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
+import { localDayKey } from "../shared/local-time.js";
 import { clipText } from "../shared/text-utils.js";
 import { getChannelMemoryPath, parseChannelMemoryEntries, readChannelMemory } from "./files.js";
 import { syncMemoryMetadata } from "./metadata.js";
@@ -55,8 +56,8 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 		const records = Object.values(metadata.entries);
 		const active = records.filter((entry) => entry.status === "active");
 		const since = new Date();
-		since.setUTCDate(since.getUTCDate() - 29);
-		const sinceDay = since.toISOString().slice(0, 10);
+		since.setDate(since.getDate() - 29);
+		const sinceDay = localDayKey(since);
 		const recalls30d = active.reduce(
 			(sum, entry) =>
 				sum +

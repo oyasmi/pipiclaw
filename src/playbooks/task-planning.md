@@ -47,7 +47,7 @@ DoD 描述最终可验收结果，不把未执行动作写成 `[x] skipped`。�
 - `done`：完成；有 `schedule` 则原地睡到下次 occurrence，否则归档。
 - `cancelled`：放弃并归档。
 
-`wake` 是**最早重新检查时间**，不是截止时间。等待时设置现实的 `wake`；可继续时清空 `wake`，让 driver 按 cooldown 接续。
+`wake` 是**最早重新检查时间**，不是截止时间。等待时设置现实的 `wake`；可继续时清空 `wake`，让 driver 按 cooldown 接续。写本地时间（如 `2026-07-27T07:30:00+08:00`），不要手算 UTC；也可以写相对量 `+2h`/`+45m`/`+3d`。
 
 ## 周期性任务（schedule）
 
@@ -63,7 +63,7 @@ cron 最密每 30 分钟一次，落盘前校验。纯提醒不建 task，用普
 
 到点后 **runtime 直接开下一周期**，不需要（也没有）手工开周期的动作：折叠上一周期日志和 evidence 入 History、限制工作正文只保留最近周期、清空本周期用量与验收授权元数据、置 `active`，然后派发一条普通驱动唤醒。累计审计 usage 不会清零。你醒来面对的就是一个待推进的新周期，和其他唤醒无异。
 
-- 改节奏：`task_manage set schedule="<新 cron>"`；任务当前是 done 时写盘会重算 `wake`。一处真相。
+- 改节奏：`task_manage set schedule="<新 cron>"`；只要这次调用没有同时显式给 `wake`，写盘就会把 `wake` 重算到新节奏的下一次 occurrence（不论当前 status，停泊任务除外）。一处真相。
 - 暂停 / 恢复：`/tasks pause <id>` / `/tasks resume <id>`。
 - 退役：`task_manage cancel`，归档任务并清理全部 task-owned 事件。
 - 上周期未完成：不要覆盖或虚勾 DoD。先完成、如实缩小本轮范围并验收，或与用户确认后 cancel 整项任务。

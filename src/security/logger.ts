@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import type { SecurityConfig, SecurityLogEvent } from "./types.js";
 
 const AUDIT_WRITE_TIMEOUT_MS = 1_000;
@@ -33,7 +34,7 @@ export async function logSecurityEvent(
 	let timer: NodeJS.Timeout | undefined;
 	try {
 		await Promise.race([
-			getAppender(getLogPath(workspaceDir, config)).append({ date: new Date().toISOString(), ...event }),
+			getAppender(getLogPath(workspaceDir, config)).append({ date: formatLocalTime(), ...event }),
 			new Promise<void>((resolve) => {
 				timer = setTimeout(resolve, AUDIT_WRITE_TIMEOUT_MS);
 				timer.unref?.();

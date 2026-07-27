@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
+import { formatLocalTime } from "../src/shared/local-time.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/shared/task-ledger.js";
+import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { taskBodyHash } from "../src/tasks/store.js";
 
@@ -124,7 +126,7 @@ describe("handleTasksCommand", () => {
 		await writeFile(join(tasksDir, "edit.md"), renderTaskDocument({ status: "active", control }, STANDARD_BODY));
 
 		expect(await run(`set edit wake ${FUTURE}`)).toContain("已更新任务 edit：wake");
-		expect(await readFile(join(tasksDir, "edit.md"), "utf-8")).toContain(`wake: ${FUTURE}`);
+		expect(await readFile(join(tasksDir, "edit.md"), "utf-8")).toContain("wake: 2026-07-08T23:59:00.000+08:00");
 
 		await run("set edit next 跑一遍构建 并贴出失败堆栈");
 		await run("set edit attempts 20");
@@ -142,7 +144,7 @@ describe("handleTasksCommand", () => {
 	it("rejects an invalid field, value, or task id on set", async () => {
 		await writeFile(join(tasksDir, "edit.md"), doc("status: active", STANDARD_BODY));
 		expect(await run("set edit bogus 1")).toContain("用法：/tasks set");
-		expect(await run("set edit wake not-a-date")).toContain("不是合法的 ISO8601 时间");
+		expect(await run("set edit wake not-a-date")).toContain("不是合法的本地时间");
 		expect(await run("set edit attempts 0")).toContain("attempts 必须是不小于 1 的整数");
 		expect(await run("set edit priority urgent")).toContain("priority 必须是");
 		expect(await run("set ghost priority high")).toContain("找不到任务：ghost");
@@ -320,6 +322,28 @@ describe("handleTasksCommand", () => {
 		expect(out).toContain("native driver will treat it as due");
 	});
 
+	// Regression: production incident where a recurring task's wake was left pointing at a day
+	// its cron never fires on (the cron was changed but the write path that recomputes wake only
+	// fires on `done`). Doctor must catch this rather than let the task silently miss its cycle.
+	it("doctor flags a recurring task whose wake is not an occurrence of its own schedule", async () => {
+		await writeFile(
+			join(tasksDir, "weekly-report.md"),
+			doc("status: active\nschedule: 30 7 * * 1\nwake: 2026-07-27T23:30:00.000Z", STANDARD_BODY),
+		);
+		const out = await run("doctor");
+		expect(out).toContain('is not an occurrence of its schedule "30 7 * * 1"');
+		expect(out).toContain('task_manage set schedule="30 7 * * 1"');
+	});
+
+	it("doctor stays quiet when a recurring task's wake matches its own schedule", async () => {
+		const next = nextTaskWake("30 7 * * 1")!;
+		await writeFile(
+			join(tasksDir, "weekly-report.md"),
+			doc(`status: active\nschedule: 30 7 * * 1\nwake: ${formatLocalTime(next)}`, STANDARD_BODY),
+		);
+		expect(await run("doctor")).toContain("未发现任务台账问题");
+	});
+
 	it("doctor reports task/event consistency issues", async () => {
 		await writeFile(
 			join(tasksDir, "weekly.md"),
@@ -357,9 +381,10 @@ describe("handleTasksCommand", () => {
 	});
 
 	it("doctor accepts a native recurring task with no schedule event and no recurrence pairing issue", async () => {
+		const wake = formatLocalTime(nextTaskWake("0 9 * * 1")!);
 		await writeFile(
 			join(tasksDir, "weekly.md"),
-			doc(`status: done\nwake: ${FUTURE}\nschedule: 0 9 * * 1\nrecurrence: 每周一`, STANDARD_BODY),
+			doc(`status: done\nwake: ${wake}\nschedule: 0 9 * * 1\nrecurrence: 每周一`, STANDARD_BODY),
 		);
 		const out = await run("doctor");
 		expect(out).toContain("未发现任务台账问题");

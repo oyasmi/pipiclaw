@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "fs";
 import { writeFile } from "fs/promises";
 import { basename, dirname, join } from "path";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import { ensureChannelDir } from "./channel-paths.js";
 
 const MAX_LOG_SIZE_BYTES = 1_000_000;
@@ -119,7 +120,7 @@ export class ChannelStore {
 		const logPath = join(this.getChannelDir(channelId), "log.jsonl");
 
 		if (!message.date) {
-			message.date = new Date().toISOString();
+			message.date = formatLocalTime();
 		}
 
 		if (!this.archiveAppender.tryAppend({ filePath: logPath, value: message }, "critical")) {
@@ -143,7 +144,7 @@ export class ChannelStore {
 	 */
 	async logBotResponse(channelId: string, text: string, ts: string): Promise<void> {
 		await this.logMessage(channelId, {
-			date: new Date().toISOString(),
+			date: formatLocalTime(),
 			ts,
 			user: "bot",
 			text,

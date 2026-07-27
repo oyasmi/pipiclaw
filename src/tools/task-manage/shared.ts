@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { parseScheduledEventContent } from "../../runtime/events.js";
+import { formatLocalTime, parseWakeInput } from "../../shared/local-time.js";
 import { taskEventPrefix } from "../../shared/task-events.js";
 import {
 	parseTaskFrontmatter,
@@ -86,7 +87,8 @@ export function renderTaskSkeleton(request: TaskManageRequest): { fields: TaskFi
 	// freshly opened task with no caller-supplied wake is seeded — an explicit wake (including a
 	// past one for "start now") or a non-active initial status is always honoured verbatim.
 	if (fields.schedule && fields.status === "active" && request.wake === undefined) {
-		fields.wake = nextTaskWake(fields.schedule)?.toISOString();
+		const next = nextTaskWake(fields.schedule);
+		fields.wake = next ? formatLocalTime(next) : undefined;
 	}
 	const body = renderStandardTaskBody({
 		title,
@@ -171,10 +173,14 @@ export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFi
 		const trimmed = request.wake.trim();
 		if (trimmed === "") {
 			next.wake = undefined;
-		} else if (!Number.isFinite(new Date(trimmed).getTime())) {
-			throw new RecoverableToolError(`wake "${request.wake}" is not a valid ISO8601 date.`);
 		} else {
-			next.wake = trimmed;
+			const ms = parseWakeInput(trimmed);
+			if (ms === undefined) {
+				throw new RecoverableToolError(
+					`wake "${request.wake}" is not a valid local time (e.g. 2026-07-27T07:30:00+08:00) or relative offset (e.g. +2h).`,
+				);
+			}
+			next.wake = formatLocalTime(new Date(ms));
 		}
 	}
 	if (request.schedule !== undefined) {
@@ -184,6 +190,16 @@ export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFi
 		} else {
 			validateTaskSchedule(trimmed);
 			next.schedule = trimmed;
+			// A cadence change without an explicit new wake in the same call means the old
+			// wake belongs to the old rhythm — recompute it against the new cron so a stale
+			// or hand-typed value can never silently point at an occurrence the new schedule
+			// doesn't have. A parked task (waiting, no wake) is left parked: it intentionally
+			// has no wake at all, and this must not be the thing that gives it one.
+			const parked = next.status === "waiting" && next.wake === undefined;
+			if (request.wake === undefined && !parked) {
+				const nextWake = nextTaskWake(trimmed);
+				if (nextWake) next.wake = formatLocalTime(nextWake);
+			}
 		}
 	}
 	if (request.recurrence !== undefined) {

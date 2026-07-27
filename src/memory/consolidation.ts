@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import { getLatestCompactionEntry, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import { splitH2Sections } from "../shared/markdown-sections.js";
 import { runMemoryExtraction, toMemoryOp } from "./extraction.js";
 import {
@@ -227,7 +228,7 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 		includeHistoryBlock: mode === "boundary",
 		usageContext: usageContextFor(options.channelId, correlationId),
 	});
-	const timestamp = new Date().toISOString();
+	const timestamp = formatLocalTime();
 
 	// The same bar the growth review applies. Consolidation used to write whatever the model
 	// returned, which is how transient state reached durable memory: the strictest reviewer
@@ -355,7 +356,7 @@ export async function foldChannelHistory(options: ConsolidationRunOptions, curre
 	// Preserve the raw blocks before folding turns them lossy, so nothing is
 	// permanently blurred by repeated folds.
 	await appendChannelHistoryArchive(options.channelDir, {
-		timestamp: new Date().toISOString(),
+		timestamp: formatLocalTime(),
 		content: renderedOlder,
 	});
 
@@ -371,7 +372,7 @@ ${renderedOlder}`;
 		usageContextFor(options.channelId, options.usageCorrelationId),
 	);
 
-	const foldedHeading = `## Folded History Through ${olderSections[olderSections.length - 1]?.heading ?? new Date().toISOString()}`;
+	const foldedHeading = `## Folded History Through ${olderSections[olderSections.length - 1]?.heading ?? formatLocalTime()}`;
 	const rebuiltHistory = [
 		"# Channel History",
 		"",

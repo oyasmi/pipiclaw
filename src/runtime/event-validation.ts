@@ -1,6 +1,7 @@
 import { Cron } from "croner";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
+import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { ScheduledEvent } from "./events.js";
 
@@ -40,9 +41,9 @@ export class EventValidationError extends Error {
 }
 
 export function validateOneShotLead(event: ScheduledEvent & { type: "one-shot" }, now = Date.now()): void {
-	const atTime = new Date(event.at).getTime();
-	if (!Number.isFinite(atTime)) {
-		throw new EventValidationError(`one-shot 'at' is not a valid date: ${event.at}`);
+	const atTime = parseLocalTime(event.at);
+	if (atTime === undefined) {
+		throw new EventValidationError(`one-shot 'at' is not a valid local time: ${event.at}`);
 	}
 	if (atTime < now + MIN_ONE_SHOT_LEAD_MS) {
 		throw new EventValidationError("one-shot 'at' must be at least 2 minutes in the future (self-triggering guard).");

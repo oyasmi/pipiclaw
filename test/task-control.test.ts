@@ -186,7 +186,7 @@ describe("task attempt accounting", () => {
 			costKnown: true,
 			wallTimeMinutes: 2.5,
 		});
-		expect(await readFile(stored!.path, "utf-8")).toContain('"lastFinishedAt":"2026-07-10T00:03:00.000Z"');
+		expect(await readFile(stored!.path, "utf-8")).toContain('"lastFinishedAt":"2026-07-10T08:03:00.000+08:00"');
 	});
 
 	it("does not charge an attempt to a silent driver run while retaining its usage audit", async () => {

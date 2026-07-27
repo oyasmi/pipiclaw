@@ -12,6 +12,7 @@ import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
 import * as log from "../log.js";
 import type { ChannelStore } from "../runtime/store.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { bold, dim } from "./colors.js";
 import { type DispatchDeps, dispatch } from "./commands.js";
@@ -234,7 +235,7 @@ export class TurnController {
 	private async archiveIncoming(input: TurnInput): Promise<void> {
 		try {
 			await this.deps.store.logMessage(this.deps.channelId, {
-				date: new Date().toISOString(),
+				date: formatLocalTime(),
 				ts: input.ts,
 				user: input.user,
 				userName: input.userName,

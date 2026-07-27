@@ -2,6 +2,7 @@ import * as log from "../log.js";
 import type { MemoryLifecycle } from "../memory/lifecycle.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import { extractLabelFromArgs, truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
@@ -183,7 +184,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			queue.enqueue(
 				() =>
 					store?.logSubAgentRun(logCtx.channelId, {
-						date: new Date().toISOString(),
+						date: formatLocalTime(),
 						toolCallId: event.toolCallId,
 						label,
 						agent: subAgentDetails.agent,

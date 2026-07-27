@@ -53,6 +53,7 @@ import type { ChannelStore } from "../runtime/store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostics.js";
+import { formatLocalTime, localStampForFilename } from "../shared/local-time.js";
 import { countPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
@@ -809,7 +810,7 @@ export class ChannelRunner implements AgentRunner {
 		try {
 			const dir = join(this.channelDir, "inbox");
 			await mkdir(dir, { recursive: true });
-			const path = join(dir, `message-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`);
+			const path = join(dir, `message-${localStampForFilename()}.txt`);
 			await writeFile(path, text.replace(/\r/g, ""), { mode: 0o600 });
 			return path;
 		} catch (error) {
@@ -819,13 +820,7 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	private formatUserMessage(text: string, userName?: string, now: Date = new Date()): string {
-		const pad = (n: number) => n.toString().padStart(2, "0");
-		const offset = -now.getTimezoneOffset();
-		const offsetSign = offset >= 0 ? "+" : "-";
-		const offsetHours = pad(Math.floor(Math.abs(offset) / 60));
-		const offsetMins = pad(Math.abs(offset) % 60);
-		const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}${offsetSign}${offsetHours}:${offsetMins}`;
-		return `[${timestamp}] [${userName || "unknown"}]: ${text}`;
+		return `[${formatLocalTime(now)}] [${userName || "unknown"}]: ${text}`;
 	}
 
 	/**

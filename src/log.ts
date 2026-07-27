@@ -1,6 +1,7 @@
 import { styleText } from "node:util";
 import { RUNTIME_LOG_PATH } from "./paths.js";
 import { createJsonlAppender, type JsonlAppender } from "./shared/jsonl-appender.js";
+import { formatLocalTime } from "./shared/local-time.js";
 
 export interface LogContext {
 	channelId: string;
@@ -118,21 +119,6 @@ function sanitizeFields(fields: Record<string, unknown> | undefined): Record<str
 	return result;
 }
 
-function formatTimestamp(date = new Date()): string {
-	const offsetMinutes = -date.getTimezoneOffset();
-	const sign = offsetMinutes >= 0 ? "+" : "-";
-	const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(2, "0");
-	const offsetRemainder = String(Math.abs(offsetMinutes) % 60).padStart(2, "0");
-	const year = date.getFullYear();
-	const month = String(date.getMonth() + 1).padStart(2, "0");
-	const day = String(date.getDate()).padStart(2, "0");
-	const hours = String(date.getHours()).padStart(2, "0");
-	const minutes = String(date.getMinutes()).padStart(2, "0");
-	const seconds = String(date.getSeconds()).padStart(2, "0");
-	const milliseconds = String(date.getMilliseconds()).padStart(3, "0");
-	return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${sign}${offsetHours}:${offsetRemainder}`;
-}
-
 function renderField(value: unknown): string {
 	if (typeof value === "string") return JSON.stringify(value);
 	try {
@@ -153,7 +139,7 @@ function formatConsoleLine(level: LogLevel, event: string, message: string, opti
 		.sort(([left], [right]) => left.localeCompare(right))
 		.map(([key, value]) => `${key}=${renderField(value)}`)
 		.join(" ");
-	return `${formatTimestamp()} ${level.toUpperCase().padEnd(5)} ${event} ${summarizeString(message)}${suffix ? ` ${suffix}` : ""}`;
+	return `${formatLocalTime()} ${level.toUpperCase().padEnd(5)} ${event} ${summarizeString(message)}${suffix ? ` ${suffix}` : ""}`;
 }
 
 function colorFor(level: LogLevel): Parameters<typeof styleText>[0] {
@@ -174,7 +160,7 @@ function emit(level: LogLevel, event: string, message: string, options: LogOptio
 	const details = options.details ? summarizeString(options.details) : undefined;
 	fileSink.tryAppend(
 		{
-			ts: new Date().toISOString(),
+			ts: formatLocalTime(),
 			level,
 			event,
 			message: summarizeString(message),

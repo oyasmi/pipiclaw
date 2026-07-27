@@ -62,7 +62,7 @@ describe("manageTask", () => {
 			expect(result.status).toBe("active");
 			const onDisk = await readFile(join(tasksDir, "weekly-report.md"), "utf-8");
 			expect(onDisk).toContain("status: active");
-			expect(onDisk).toContain("wake: 2026-07-08T14:00:00+08:00");
+			expect(onDisk).toContain("wake: 2026-07-08T14:00:00.000+08:00");
 			expect(onDisk).toContain("recurrence: 每周一");
 			expect(onDisk).toContain("# Weekly Report");
 			expect(onDisk).toContain("## Goal");
@@ -128,8 +128,9 @@ describe("manageTask", () => {
 			expect(result.notice).toContain("首次唤醒");
 		});
 
-		// An explicit wake (including a past one for "start now") is honoured verbatim: the caller,
-		// not cron, decides the first run when they say so.
+		// An explicit wake (including a past one for "start now") is honoured — normalized to the
+		// canonical local-time format, but the same absolute instant — instead of seeded from cron:
+		// the caller, not cron, decides the first run when they say so.
 		it("honours an explicit wake on a recurring task instead of seeding the next occurrence", async () => {
 			await manageTask(options, {
 				action: "create",
@@ -141,7 +142,7 @@ describe("manageTask", () => {
 				wake: "2000-01-01T00:00:00.000Z",
 			});
 			const onDisk = await readFile(join(tasksDir, "start-now.md"), "utf-8");
-			expect(onDisk).toContain("wake: 2000-01-01T00:00:00.000Z");
+			expect(onDisk).toContain("wake: 2000-01-01T08:00:00.000+08:00");
 		});
 
 		// Independent verification costs an extra dispatch round plus a verifier sub-agent run,
@@ -228,7 +229,7 @@ describe("manageTask", () => {
 			});
 			expect(result.status).toBe("waiting");
 			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
-			expect(onDisk).toBe(taskDoc("status: waiting\nwake: 2026-07-08T14:00:00+08:00\nrecurrence: 每周一", body));
+			expect(onDisk).toBe(taskDoc("status: waiting\nwake: 2026-07-08T14:00:00.000+08:00\nrecurrence: 每周一", body));
 		});
 
 		it("clears wake when given an empty string", async () => {
@@ -240,7 +241,9 @@ describe("manageTask", () => {
 
 		it("rejects an invalid wake", async () => {
 			await writeTask("t", "status: open", "# T");
-			await expect(manageTask(options, { action: "set", id: "t", wake: "soon" })).rejects.toThrow(/ISO8601/);
+			await expect(manageTask(options, { action: "set", id: "t", wake: "soon" })).rejects.toThrow(
+				/valid local time/,
+			);
 		});
 
 		it("rejects setting status to done (use action done)", async () => {
@@ -306,7 +309,7 @@ describe("manageTask", () => {
 			});
 			expect(result.status).toBe("active");
 			const onDisk = await readFile(join(tasksDir, "long-work.md"), "utf-8");
-			expect(onDisk).toContain("wake: 2026-07-08T14:00:00+08:00");
+			expect(onDisk).toContain("wake: 2026-07-08T14:00:00.000+08:00");
 			expect(onDisk).toContain("- Implemented parser; targeted tests pass; next: integration test.");
 		});
 
@@ -880,6 +883,49 @@ describe("manageTask", () => {
 			// wake was recomputed off the new cadence, no longer the old Monday value.
 			expect(onDisk).not.toContain("wake: 2026-07-13T09:30:00+08:00");
 			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
+		});
+
+		// Regression: production incident where a task's cron was changed (10:30 → 7:30) while
+		// the task was `active` (not `done`), so the single time rule (which only fires on done)
+		// never recomputed wake — the old wake stayed on disk, pointed at an occurrence the new
+		// cron doesn't have, and the driver missed the whole cycle. Changing schedule must
+		// recompute wake to the new cadence's next occurrence whenever the same call doesn't
+		// also set wake explicitly, regardless of the task's current status.
+		it("recomputes wake when set changes the schedule of an active (not done) task", async () => {
+			await writeTask("weekly-report", "status: active\nschedule: 30 10 * * 1", "# Weekly Report");
+			await manageTask(options, { action: "set", id: "weekly-report", schedule: "30 7 * * 1" });
+			const onDisk = await readFile(join(tasksDir, "weekly-report.md"), "utf-8");
+			expect(onDisk).toContain("schedule: 30 7 * * 1");
+			const wakeLine = /wake: (\S+)/.exec(onDisk)?.[1];
+			expect(wakeLine).toBeDefined();
+			const expected = nextTaskWake("30 7 * * 1");
+			// The recomputed wake must be an actual occurrence of the new cron, not a stale or
+			// hand-typed value pointing at some other day.
+			expect(new Date(wakeLine!).getTime()).toBe(expected?.getTime());
+		});
+
+		// A parked task (waiting, no wake) must stay parked: changing its schedule is not a
+		// license to hand it a wake it never had.
+		it("leaves a parked task parked when its schedule changes", async () => {
+			await writeTask("weekly-report", "status: waiting\nschedule: 30 10 * * 1", "# Weekly Report");
+			await manageTask(options, { action: "set", id: "weekly-report", schedule: "30 7 * * 1" });
+			const onDisk = await readFile(join(tasksDir, "weekly-report.md"), "utf-8");
+			expect(onDisk).toContain("schedule: 30 7 * * 1");
+			expect(onDisk).not.toContain("wake:");
+		});
+
+		// An explicit wake in the same call still wins over the recompute.
+		it("honours an explicit wake given alongside a schedule change", async () => {
+			await writeTask("weekly-report", "status: active\nschedule: 30 10 * * 1", "# Weekly Report");
+			await manageTask(options, {
+				action: "set",
+				id: "weekly-report",
+				schedule: "30 7 * * 1",
+				wake: "+2h",
+			});
+			const onDisk = await readFile(join(tasksDir, "weekly-report.md"), "utf-8");
+			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
+			expect(onDisk).not.toMatch(/wake: \d{4}-\d\d-\d\dT07:30/);
 		});
 	});
 

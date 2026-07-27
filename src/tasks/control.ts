@@ -1,3 +1,4 @@
+import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 export type TaskPriority = "low" | "normal" | "high" | "critical";
 /**
@@ -249,8 +250,8 @@ export function parseTaskControl(raw: string): TaskControl {
 		throw new Error("control.budget.maxAttempts must be a positive integer");
 	}
 	const deadline = optionalString(value.deadline);
-	if (deadline && !Number.isFinite(new Date(deadline).getTime())) {
-		throw new Error("control.deadline must be a valid ISO8601 date");
+	if (deadline && parseLocalTime(deadline) === undefined) {
+		throw new Error("control.deadline must be a valid local time");
 	}
 	const sideEffects = enumValue(canonicalEnumValue(value.sideEffects), SIDE_EFFECTS, "workspace");
 	const externalApproval = enumValue(
@@ -342,10 +343,15 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 	const invalidatesApproval = control.externalApproval === "granted" && Object.keys(patch).length > 0;
 	const explicitlySetsExternalApproval = patch.externalApproval !== undefined;
 	if (patch.priority !== undefined) next.priority = patch.priority;
-	if (patch.deadline?.trim() && !Number.isFinite(new Date(patch.deadline).getTime())) {
-		throw new Error(`deadline "${patch.deadline}" is not a valid ISO8601 date.`);
+	let normalizedDeadlinePatch = patch.deadline;
+	if (patch.deadline?.trim()) {
+		const deadlineMs = parseLocalTime(patch.deadline);
+		if (deadlineMs === undefined) {
+			throw new Error(`deadline "${patch.deadline}" is not a valid local time.`);
+		}
+		normalizedDeadlinePatch = formatLocalTime(new Date(deadlineMs));
 	}
-	next.deadline = patchOptionalString(next.deadline, patch.deadline);
+	next.deadline = patchOptionalString(next.deadline, normalizedDeadlinePatch);
 	next.nextAction = patchOptionalString(next.nextAction, patch.nextAction);
 	next.blockedReason = patchOptionalString(next.blockedReason, patch.blockedReason);
 	if (patch.sideEffects !== undefined) next.sideEffects = patch.sideEffects;
@@ -396,8 +402,8 @@ export function taskPriorityRank(priority: TaskPriority): number {
 
 export function taskBudgetViolation(control: TaskControl, nowMs: number): string | undefined {
 	if (control.deadline) {
-		const deadlineMs = new Date(control.deadline).getTime();
-		if (Number.isFinite(deadlineMs) && deadlineMs < nowMs) return `deadline exceeded (${control.deadline})`;
+		const deadlineMs = parseLocalTime(control.deadline);
+		if (deadlineMs !== undefined && deadlineMs < nowMs) return `deadline exceeded (${control.deadline})`;
 	}
 	if (control.usage.attempts >= control.budget.maxAttempts) {
 		return `attempt budget exhausted (${control.usage.attempts}/${control.budget.maxAttempts})`;

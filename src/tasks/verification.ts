@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
+import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { readStoredTask, taskBodyHash } from "./store.js";
 
@@ -97,7 +98,7 @@ export async function readVerificationAttestation(channelDir: string, runId: str
 		typeof (value as { taskId?: unknown }).taskId !== "string" ||
 		((value as { verdict?: unknown }).verdict !== "pass" && (value as { verdict?: unknown }).verdict !== "fail") ||
 		typeof (value as { checkedAt?: unknown }).checkedAt !== "string" ||
-		!Number.isFinite(new Date((value as { checkedAt: string }).checkedAt).getTime()) ||
+		parseLocalTime((value as { checkedAt: string }).checkedAt) === undefined ||
 		!/^[a-f0-9]{64}$/i.test(String((value as { bodyHash?: unknown }).bodyHash)) ||
 		typeof (value as { evidence?: unknown }).evidence !== "string" ||
 		typeof (value as { workspaceChanged?: unknown }).workspaceChanged !== "boolean" ||

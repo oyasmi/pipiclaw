@@ -10,6 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as log from "../log.js";
 import type { PipiclawSessionMemorySettings } from "../settings.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import {
@@ -226,7 +227,7 @@ export class MemoryLifecycle {
 	}): Promise<void> {
 		try {
 			await appendMemoryReviewLog(this.options.channelDir, {
-				timestamp: new Date().toISOString(),
+				timestamp: formatLocalTime(),
 				channelId: this.options.channelId,
 				...entry,
 			});
@@ -333,7 +334,7 @@ export class MemoryLifecycle {
 				await updateMemoryMaintenanceState(this.options.appHomeDir, this.options.channelId, (current) => ({
 					...current,
 					lastCheckpointEntryId: sourceWindow.throughEntryId,
-					lastCheckpointAt: new Date().toISOString(),
+					lastCheckpointAt: formatLocalTime(),
 					failureBackoffUntil: null,
 				}));
 			}
@@ -409,7 +410,7 @@ export class MemoryLifecycle {
 		const event: MemoryActivityEvent = {
 			kind,
 			channelId: this.options.channelId,
-			timestamp: now.toISOString(),
+			timestamp: formatLocalTime(now),
 			latestSessionEntryId,
 		};
 		try {

@@ -4,6 +4,7 @@ import { copyFile, readdir, rm } from "fs/promises";
 import { basename, join } from "path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
+import { formatLocalTime, localStampForFilename } from "../shared/local-time.js";
 import { type MemoryMetadataUpdate, type MemoryWriteMetadataInput, syncMemoryMetadata } from "./metadata.js";
 import { containsSecret, REDACTED_SECRET } from "./policy.js";
 import { appendMemoryTombstone, hashMemoryContent, readMemoryTombstones } from "./tombstones.js";
@@ -175,7 +176,7 @@ export interface ApplyMemoryOpsResult {
 export async function applyChannelMemoryOps(
 	channelDir: string,
 	ops: MemoryOp[],
-	timestamp: string = new Date().toISOString(),
+	timestamp: string = formatLocalTime(),
 ): Promise<ApplyMemoryOpsResult> {
 	const result: ApplyMemoryOpsResult = {
 		added: 0,
@@ -315,7 +316,7 @@ async function backupBeforeRewrite(channelDir: string, sourcePath: string): Prom
 		}
 		const backupDir = join(channelDir, MEMORY_BACKUP_DIR);
 		mkdirSync(backupDir, { recursive: true });
-		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+		const stamp = localStampForFilename();
 		const name = basename(sourcePath, ".md");
 		await copyFile(sourcePath, join(backupDir, `${name}-${stamp}.md`));
 		const files = (await readdir(backupDir))

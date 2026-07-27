@@ -30,11 +30,12 @@ describe("/usage command parsing", () => {
 });
 
 describe("usage windows", () => {
-	it("default shows today + this month", () => {
+	it("default shows today + this month (host-local boundaries)", () => {
 		const windows = usageWindows("default", NOW);
-		expect(windows.map((w) => w.title)).toEqual(["今天（UTC）", "本月（2026-07）"]);
-		expect(windows[0].since.toISOString()).toBe("2026-07-04T00:00:00.000Z");
-		expect(windows[1].since.toISOString()).toBe("2026-07-01T00:00:00.000Z");
+		expect(windows.map((w) => w.title)).toEqual(["今天", "本月（2026-07）"]);
+		// NOW is 2026-07-04T12:00:00Z = 2026-07-04T20:00:00+08:00 under the pinned test TZ.
+		expect(windows[0].since.toISOString()).toBe("2026-07-03T16:00:00.000Z");
+		expect(windows[1].since.toISOString()).toBe("2026-06-30T16:00:00.000Z");
 	});
 
 	it("7d spans the last week", () => {

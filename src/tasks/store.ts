@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
+import { formatLocalTime } from "../shared/local-time.js";
 import {
 	normalizeTaskId,
 	parseTaskFrontmatter,
@@ -106,7 +107,7 @@ export async function claimTaskAttempt(
 			previousLastStartedAt: task.fields.control.lastStartedAt,
 		};
 		task.fields.control.usage.attempts++;
-		task.fields.control.lastStartedAt = now.toISOString();
+		task.fields.control.lastStartedAt = formatLocalTime(now);
 		task.fields.control.lastOutcome = "running";
 	});
 	if (claim && document?.fields.control) claim.control = document.fields.control;
@@ -121,7 +122,7 @@ export async function releaseTaskAttemptClaim(
 ): Promise<void> {
 	await updateStoredTask(channelDir, id, (task) => {
 		const control = task.fields.control;
-		if (!control || control.lastStartedAt !== startedAt.toISOString()) return;
+		if (!control || control.lastStartedAt !== formatLocalTime(startedAt)) return;
 		control.usage.attempts = Math.max(0, control.usage.attempts - 1);
 		control.lastStartedAt = claim.previousLastStartedAt;
 		control.lastOutcome = claim.previousLastOutcome;
@@ -152,7 +153,7 @@ export async function finishTaskAttempt(
 			control.usage.costUsd += Math.max(0, result.costUsd);
 			control.usage.costKnown &&= result.costKnown;
 			control.usage.wallTimeMinutes += Math.max(0, result.wallTimeMinutes);
-			control.lastFinishedAt = result.finishedAt.toISOString();
+			control.lastFinishedAt = formatLocalTime(result.finishedAt);
 			if (result.silent) {
 				// The driver claimed before dispatch to prevent concurrent work. A silent
 				// turn performed no task advancement, so retain its cost audit but not its

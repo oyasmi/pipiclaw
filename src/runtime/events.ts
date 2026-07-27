@@ -17,6 +17,7 @@ import * as log from "../log.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
+import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { taskEventPrefix } from "../shared/task-events.js";
 import { parseTaskFrontmatter } from "../shared/task-ledger.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
@@ -38,7 +39,7 @@ export interface OneShotEvent {
 	type: "one-shot";
 	channelId: string;
 	text: string;
-	at: string; // ISO 8601 with timezone offset
+	at: string; // local time (host timezone if no offset given), e.g. 2026-07-27T07:30:00+08:00
 	preAction?: EventAction;
 }
 
@@ -116,23 +117,6 @@ const RETRY_BASE_MS = 100;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const DEFAULT_PRE_ACTION_TIMEOUT_MS = 10_000;
 const TEXT_PREVIEW_MAX_CHARS = 160;
-
-function pad2(value: number): string {
-	return String(value).padStart(2, "0");
-}
-
-function pad3(value: number): string {
-	return String(value).padStart(3, "0");
-}
-
-export function formatLocalTimestamp(date: Date = new Date()): string {
-	const offsetMinutes = -date.getTimezoneOffset();
-	const offsetSign = offsetMinutes >= 0 ? "+" : "-";
-	const absOffsetMinutes = Math.abs(offsetMinutes);
-	const offsetHours = Math.floor(absOffsetMinutes / 60);
-	const offsetRemainderMinutes = absOffsetMinutes % 60;
-	return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}.${pad3(date.getMilliseconds())}${offsetSign}${pad2(offsetHours)}:${pad2(offsetRemainderMinutes)}`;
-}
 
 function truncateTextPreview(text: string): string {
 	const normalized = text.replace(/\s+/g, " ").trim();
@@ -355,7 +339,7 @@ export class EventsWatcher {
 		}
 		const { filename, ...rest } = record;
 		const fullRecord: EventHistoryRecord = {
-			ts: formatLocalTimestamp(),
+			ts: formatLocalTime(),
 			eventName: eventNameFromFilename(filename),
 			eventPath: resolve(this.eventsDir, filename),
 			...rest,
@@ -559,10 +543,10 @@ export class EventsWatcher {
 	}
 
 	private async handleOneShot(filename: string, event: OneShotEvent): Promise<void> {
-		const atTime = new Date(event.at).getTime();
+		const atTime = parseLocalTime(event.at);
 		const now = Date.now();
 
-		if (!Number.isFinite(atTime)) {
+		if (atTime === undefined) {
 			log.logWarning(`Invalid one-shot time for ${filename}: ${event.at}`);
 			this.appendEventHistory(filename, event, "invalid", "error", { reason: `Invalid one-shot time: ${event.at}` });
 			this.markInvalid(filename, `Invalid one-shot time: ${event.at}`);
@@ -592,7 +576,7 @@ export class EventsWatcher {
 
 		log.logInfo(`Scheduling one-shot event: ${filename} in ${Math.round(delay / 1000)}s`);
 		this.appendEventHistory(filename, event, "scheduled", "ok", {
-			nextRunAt: formatLocalTimestamp(new Date(atTime)),
+			nextRunAt: formatLocalTime(new Date(atTime)),
 		});
 
 		const timer = setTimeout(async () => {
@@ -644,13 +628,7 @@ export class EventsWatcher {
 
 			const next = cron.nextRun();
 			log.logInfo(`Scheduled periodic event: ${filename}, next run: ${next?.toISOString() ?? "unknown"}`);
-			this.appendEventHistory(
-				filename,
-				event,
-				"scheduled",
-				"ok",
-				next ? { nextRunAt: formatLocalTimestamp(next) } : {},
-			);
+			this.appendEventHistory(filename, event, "scheduled", "ok", next ? { nextRunAt: formatLocalTime(next) } : {});
 		} catch (err) {
 			log.logWarning(`Invalid cron schedule for ${filename}: ${event.schedule}`, String(err));
 			this.appendEventHistory(filename, event, "invalid", "error", {
