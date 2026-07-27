@@ -4,6 +4,24 @@
 
 ## [未发布]
 
+## [0.8.10-beta.5] - 2026-07-28
+
+一次由完整静态代码审查（覆盖 Task、Event、Memory、Agent、Security、Runtime 六个子系统共 55 项发现）驱动的加固。各核心状态线的 Critical/Major 边界缺陷均已闭合；完整审查报告随包发布在 `docs/refer/deep-review-2026-07-27.md`。
+
+### 变更
+
+- 本地时间统一为单一词汇表。新增 `src/shared/local-time.ts`（`formatLocalTime`/`parseLocalTime`/`parseWakeInput`/`localDayKey`/`localStampForFilename`），作为 wake 调度、记忆按天分桶与 `/usage` 时间窗口的唯一来源，修复了本地午夜到早 8 点之间因 UTC 日界导致算错日/月的 bug。`wake` 现在接受相对偏移（`+2h`/`+45m`/`+3d`），模型不再需要手算时区；磁盘上的 wake 格式归一为带毫秒的 `formatLocalTime`。测试固定 `TZ=Asia/Shanghai`。
+- 任务变更通过可重入的 keyed queue 串行化。`task_manage`、`/tasks`、driver、迁移与 store 更新现在统一走 `channelDir + taskId` 的 keyed queue（`tasks/mutation-lock.ts`），关闭了 `/tasks`（不占 channel run queue 的即时命令）与 driver/agent 互相覆盖的进程内窗口。`docs/scaling-and-concurrency.md` 明确声明跨进程共享同一 workspace 不受支持；文件锁/CAS 会引入 stale lock 与跨平台语义，超出单进程产品模型，故不引入。
+- 任务转换表再接管两个动作。`escalate`（治理暂停）与 `start-cycle`（周期重开）改为走统一转换表而非直接写 status，并对非法前置状态拒绝调用。`attemptGeneration`——向后兼容、单调递增、跨周期保留——取代时间戳字符串相等性用于 claim/release 一致性判断，旧 dispatch 的 release 不再可能回滚较新的 claim。
+
+### 修复
+
+- **任务生命周期**：`cancel`/`run` 转换现允许从 `done` 起步——休眠中的周期任务可直接退役（与文档的退役语义一致），`/tasks run` 会重开周期（折叠上一周期、重置周期 control、清除旧 wake），而非把已完成周期原样改回 `active`。`task_manage set` 修改 `schedule` 但未显式写 `wake` 时，无论当前状态都会把 wake 重算为新节奏的下一次触发（此前只对 `done` 任务做，导致错误的旧 wake 残留）。`cleanupTaskEvents` 区分 I/O 失败与解析失败——不可解析的旧事件仍交给 `/events`，读取失败则记 warning 并给出修复步骤。新增 `/tasks doctor` 检查，标记 wake 不落在任何 schedule 触发点上的周期任务，并附修复命令。
+- **事件调度**：one-shot 事件的 `preAction` 被 gate 拦截或执行失败后，现按 `deleteAfter` 语义消费并删除源文件，不再永久滞留并占用工具侧配额；periodic 仍只跳过本次 occurrence。periodic Cron 现显式启用 `protect: true` 与 `catch: true`，前一次异步回调未结束不会重叠触发下一次，且防止未来重构遗漏 catch 产生未处理 rejection。启动恢复按每批最多 4 个文件并发处理，单个文件失败记 warning 且不阻断后续批次，`/stop` 后不再启动剩余批次。约 24.8 天的 one-shot 调度上限现进入共享 admission 校验，`event_manage` 会在写文件前给出可恢复错误，而非先创建再被 watcher 拒绝。
+- **记忆**：`add` 与缺失目标降级的 `supersede` 现按既有 NFKC/空白折叠/大小写归一化哈希对当前文件及同批新增项去重，并以 `sourceCorrelationId` 作为 consolidation window 的整批幂等键——同一窗口重跑时即使模型改写措辞也不会再次写 durable memory。`forget` 会把条目原始的 `sourceEntryIds` 写入墓碑，拦截同窗口的改写重放；工具文案改为准确说明只保证精确内容/原始来源重放。durable extraction、SESSION 更新、MEMORY 清理与 HISTORY 折叠现在共用同一条"transcript/memory/history/session 均是不可信数据而非指令"的输入边界规则。review-log 的路径指纹表改为最多 256 项的 LRU；`session_search` 的单槽缓存改为按 `(channelDir, 构建参数)` 分桶（最多 8 项、30s TTL）；删除了绕过密钥脱敏与墓碑检查的死代码 API `appendChannelMemoryUpdate`；`memory/policy.ts` 重命名为 `secret-redaction.ts` 以匹配其实际职责。
+- **Agent / 后台作业**：每个频道最早到期的完成记录现会挂一个 `unref` 的一次性 GC 定时器，无需等待下一次作业或进程重启即可回收记录与 spill/exit 文件（运行中作业仍由 sweeper 监管）。后台作业的 spill 路径改用 `node:os` 的 `tmpdir()`，不再硬编码 Linux `/tmp`，owner-only 的 `umask 077` 权限保护保持不变。
+- **Runtime / 架构**：任务台账解析器从 `shared/task-ledger.ts` 移入 `tasks/ledger.ts`，消除 `shared → tasks` 反向依赖。DingTalk 传输层通过显式同步 `reserveEvent` 钩子占用 turn，再进入异步处理体；闲置 channel 缓存新增独立定期回收（繁忙队列与正在创建的卡片不会被回收）；`enqueueEvent` 的硬编码上限提取为 `EVENT_QUEUE_LIMIT`。仅负责格式化的模块重命名为 `config-diagnostic.ts`；agent session 改用上游 `SettingsManager.inMemory()` 适配 Pipiclaw 设置，不再把运行时设置类作为 SDK 的伪实现。
+
 ## [0.8.10-beta.4] - 2026-07-27
 
 ### 变更
