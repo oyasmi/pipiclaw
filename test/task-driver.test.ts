@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { discoverTaskChannels, TaskDriver } from "../src/runtime/task-driver.js";
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
-import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { finishTaskAttempt } from "../src/tasks/store.js";
 import { manageTask } from "../src/tools/task-manage.js";
 

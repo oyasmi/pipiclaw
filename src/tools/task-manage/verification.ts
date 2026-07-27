@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import { writeFileAtomically } from "../../shared/atomic-file.js";
-import { appendCurrentCycleNote, normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../tasks/ledger.js";
 import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import { createDefaultTaskControl, type TaskVerification } from "../../tasks/control.js";
+import { appendCurrentCycleNote, normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../tasks/ledger.js";
 import { readStoredTask, taskBodyHash } from "../../tasks/store.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../../tasks/transitions.js";
 import { readVerificationAttestation, type VerificationAttestation } from "../../tasks/verification.js";

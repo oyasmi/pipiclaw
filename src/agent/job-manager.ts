@@ -218,14 +218,20 @@ export class ChannelJobManager {
 		const nextExpiry = Array.from(this.jobs.values())
 			.filter((record) => isTerminal(record.status) && record.finishedAt)
 			.map((record) => record.finishedAt! + FINISHED_JOB_RETENTION_MS)
-			.reduce<number | undefined>((earliest, expiry) => (earliest === undefined ? expiry : Math.min(earliest, expiry)), undefined);
+			.reduce<number | undefined>(
+				(earliest, expiry) => (earliest === undefined ? expiry : Math.min(earliest, expiry)),
+				undefined,
+			);
 		if (nextExpiry === undefined) {
 			return;
 		}
-		this.garbageCollectionTimer = setTimeout(() => {
-			this.garbageCollectionTimer = undefined;
-			void this.collectGarbage().finally(() => this.scheduleGarbageCollection());
-		}, Math.max(0, nextExpiry - now));
+		this.garbageCollectionTimer = setTimeout(
+			() => {
+				this.garbageCollectionTimer = undefined;
+				void this.collectGarbage().finally(() => this.scheduleGarbageCollection());
+			},
+			Math.max(0, nextExpiry - now),
+		);
 		this.garbageCollectionTimer.unref?.();
 	}
 

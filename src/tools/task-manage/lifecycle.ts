@@ -1,14 +1,14 @@
 import { mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../../shared/atomic-file.js";
+import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
+import { invalidateTaskVerification } from "../../tasks/control.js";
 import {
 	appendCurrentCycleNote,
 	normalizeTaskId,
 	readActiveTasks,
 	uncheckedTaskAcceptanceItems,
 } from "../../tasks/ledger.js";
-import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
-import { invalidateTaskVerification } from "../../tasks/control.js";
 import { taskBodyHash } from "../../tasks/store.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../../tasks/transitions.js";
 import { RecoverableToolError } from "../tool-details.js";

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { renderTaskDocument } from "../../src/tasks/ledger.js";
 import { createDefaultTaskControl, type TaskControl } from "../../src/tasks/control.js";
+import { renderTaskDocument } from "../../src/tasks/ledger.js";
 import type { TaskStatus } from "../../src/tasks/transitions.js";
 import type { TrialSetup } from "../harness/schema.js";
 
