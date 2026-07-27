@@ -4,6 +4,21 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.10-beta.4] - 2026-07-27
+
+### Changed
+
+- Task-waiting semantics converge on one place. A task is only actionable when it is both `waiting` and has a parseable `wake`; a `waiting` task with no wake parks and the driver no longer polls it, while a wake that fails to parse still fails open (parses ⇒ actionable, parse-error ⇒ actionable). The two prior legacy statuses (`blocked`, `awaiting-user`) are mapped to `waiting` at the read layer, so a historically blocked task with no wake now parks on upgrade instead of being polled — semantically identical, and resolvable with `/tasks run`. `task_manage progress`/`set` receipts now say when a parked task will not be woken by the driver. The waiting contract is documented once in `task-delegation.md`, fixing a stale frontmatter contract that would otherwise have been the fourth version of it.
+- Effect attribution is now per-task rather than per-channel. A new in-memory effect ledger keys effects by `(channelId, taskId)`; bootstrap diffs the effect counter across each runner turn and attributes the turn's effects to the owning task, so the driver's futile-wake and fast-lane signals (`getEffectCount` is now `(channelId, taskId)`) and the fingerprint share one definition. The counts stay in-process, consistent with the attempt/futile counters that were never persisted.
+- `/tasks resume` and `/tasks run` now refuse to revive a task that still violates its budget. `taskBudgetViolation` runs before the status write, so an over-budget task is not flipped back to runnable; the reply names the limit and gives the exact command to raise it. The default `maxAttempts` is 12 and is a lifetime budget for one-shot tasks.
+
+### Fixed
+
+- `awaiting-user` is now normalized to `waiting` at the read layer, eliminating the divergent third status value. `/tasks doctor` reports parked tasks factually and points to the three ways out (no false positives on healthy parked tasks).
+- Tool schemas are now soft-budgeted: a `TOOL_SCHEMA_TARGET_UNITS` target and `measureToolSchemas()` cap the tool schema block, `/context` reports the Tools line in units with a target, and an overflow surfaces in Diagnostics and a `buildRuntimeTools` warning.
+- Background wakeups no longer live-stream progress. Synthetic dispatch passes a `progressStyleOverride` of `"none"` (rather than `"rolling"`), so a parked-task nudge or scheduled wake no longer creates and deletes a card in the user's view — the work happens silently.
+- A maintenance tick no longer re-reads the task ledger when nothing changed. `SettingsManager.reload()` returns early when the settings file fingerprint is unchanged (`file-stamp.ts`), and the tools.json-driven tick is memoized inside bootstrap.
+
 ## [0.8.10-beta.3] - 2026-07-27
 
 ### Changed

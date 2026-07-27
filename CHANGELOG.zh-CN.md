@@ -4,6 +4,21 @@
 
 ## [未发布]
 
+## [0.8.10-beta.4] - 2026-07-27
+
+### 变更
+
+- 任务等待语义收敛到一处。任务只有同时满足 `waiting` 且 `wake` 可解析才可推进；`waiting` 但无 `wake` 的任务进入停泊，driver 不再轮询，而 `wake` 解析失败仍 fail-open（能解析 ⇒ 可推进，解析报错 ⇒ 可推进）。两个旧状态（`blocked`、`awaiting-user`）在读取层映射为 `waiting`，所以历史上「blocked 且无 wake」的任务升级后会停泊而非被轮询——语义一致，可用 `/tasks run` 解除。`task_manage progress`/`set` 的回执现在会说明停泊任务不会被 driver 唤醒。等待契约只在 `task-delegation.md` 记一处，修正了原本陈旧的 frontmatter 契约——否则那会是它的第四个版本。
+- effect 归因从「按频道」改为「按任务」。新增内存态 effect 台账，按 `(channelId, taskId)` 记账；bootstrap 在每个 runner 回合前后取差值，把这一回合的 effect 记到所属任务上，使 driver 的 futile-wake 与快档信号（`getEffectCount` 现为 `(channelId, taskId)`）与 fingerprint 共用同一定义。计数保留在进程内，与从未落盘的 attempt/futile 计数口径一致。
+- `/tasks resume` 与 `/tasks run` 现在会拒绝复活仍然超额的任务。`taskBudgetViolation` 在写状态前先跑，超额任务不会被翻回可运行状态；回执点名上限并给出提额的确切命令。默认 `maxAttempts` 为 12，对一次性任务是终身额度。
+
+### 修复
+
+- `awaiting-user` 现在在读取层归一为 `waiting`，消除了第三种分叉的状态值。`/tasks doctor` 客观陈述停泊任务并给出三条出路（不对健康停泊任务误报）。
+- 工具 schema 现在带软预算：`TOOL_SCHEMA_TARGET_UNITS` 目标与 `measureToolSchemas()` 给工具 schema 块设上限，`/context` 的 Tools 行改用 units 并带目标值，溢出进入 Diagnostics 与一条 `buildRuntimeTools` warning。
+- 后台唤醒不再直播过程。合成派发传入 `progressStyleOverride` 为 `"none"`（而非 `"rolling"`），停泊任务 nudge 或定时唤醒不再在用户视图里建卡又删卡——工作静默进行。
+- 维护 tick 在无变化时不再重读任务台账。`SettingsManager.reload()` 在设置文件指纹未变时直接返回（`file-stamp.ts`），tools.json 驱动的 tick 在 bootstrap 内做了 memo。
+
 ## [0.8.10-beta.3] - 2026-07-27
 
 ### 变更
