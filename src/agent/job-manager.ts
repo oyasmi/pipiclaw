@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Executor } from "../executor.js";
 import * as log from "../log.js";
@@ -94,7 +95,7 @@ export const FINISHED_JOB_RETENTION_MS = 24 * 60 * 60_000;
 const WAKE_OUTPUT_TAIL_BYTES = 2_000;
 
 function jobSpillPath(id: string): string {
-	return `/tmp/pipiclaw-job-${id}.log`;
+	return join(tmpdir(), `pipiclaw-job-${id}.log`);
 }
 
 function isTerminal(status: JobStatus): boolean {
@@ -148,6 +149,7 @@ function toSnapshot(record: JobRecord): JobSnapshot {
 export class ChannelJobManager {
 	private readonly jobs = new Map<string, JobRecord>();
 	private sweepTimer?: ReturnType<typeof setInterval>;
+	private garbageCollectionTimer?: ReturnType<typeof setTimeout>;
 	private sweeping = false;
 
 	private readonly options: JobManagerOptions;
@@ -200,6 +202,31 @@ export class ChannelJobManager {
 				await this.forget(record);
 			}
 		}
+	}
+
+	/**
+	 * Arrange the next terminal-record cleanup independently of future job activity. A repeating
+	 * sweeper is necessary while processes are running; after that, one unref'ed timeout is enough
+	 * to enforce the retention promise without keeping an idle channel awake every few seconds.
+	 */
+	private scheduleGarbageCollection(): void {
+		if (this.garbageCollectionTimer) {
+			clearTimeout(this.garbageCollectionTimer);
+			this.garbageCollectionTimer = undefined;
+		}
+		const now = Date.now();
+		const nextExpiry = Array.from(this.jobs.values())
+			.filter((record) => isTerminal(record.status) && record.finishedAt)
+			.map((record) => record.finishedAt! + FINISHED_JOB_RETENTION_MS)
+			.reduce<number | undefined>((earliest, expiry) => (earliest === undefined ? expiry : Math.min(earliest, expiry)), undefined);
+		if (nextExpiry === undefined) {
+			return;
+		}
+		this.garbageCollectionTimer = setTimeout(() => {
+			this.garbageCollectionTimer = undefined;
+			void this.collectGarbage().finally(() => this.scheduleGarbageCollection());
+		}, Math.max(0, nextExpiry - now));
+		this.garbageCollectionTimer.unref?.();
 	}
 
 	get channel(): string {
@@ -403,6 +430,7 @@ export class ChannelJobManager {
 		}
 		await this.persist(record);
 		await this.announce(record, signal);
+		this.scheduleGarbageCollection();
 	}
 
 	/**
@@ -555,6 +583,7 @@ export class ChannelJobManager {
 		}
 
 		await this.collectGarbage();
+		this.scheduleGarbageCollection();
 		this.ensureSweeper();
 		return restored;
 	}

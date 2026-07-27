@@ -174,15 +174,15 @@ main.js (CLI 入口，argv 分发)
 
 | 编号 | 严重度 | 描述 | 证据 |
 |---|---|---|---|
-| Agent-M1 | **Major** | `job-manager.js` 的 `sweep()`(197-220 行)在 `finally` 块里,若 `runningCount()===0` 就立刻 `stopSweeper()`。而 `collectGarbage()`(基于 `FINISHED_JOB_RETENTION_MS=24h`)仅在 `sweep()` 和 `restore()` 内被调用。也就是说:一旦某 channel 的最后一个后台作业结束,sweeper 立刻停转,该已完成作业的记录、`/tmp/pipiclaw-job-*.log` spill 文件,只有在 24 小时后、且"下一次有新作业启动触发 `ensureSweeper()`"或"进程重启触发 `restore()`"时才会被清理。若该 channel 此后再无后台作业(常见——一次性任务),这些记录和 `/tmp` 日志文件会无限期滞留直到进程重启。同一根因的另一面:超时强制执行(`applyProbe` 检查 wall-clock 超时)也依赖同一 sweeper 节奏或显式轮询,sweeper 停转后一个孤儿作业可能超时后仍长期运行不被杀死。 | `agent/job-manager.js:109-115,197-220,264-286` |
-| Agent-M2 | **Major**(已知设计取舍,仍列为风险) | 子代理默认可用 `write`/`edit` 工具,且 playbook `task-delegation.md` 明确写"没有"文件系统隔离——子代理与主 agent 共享同一 checkout,只隔离对话上下文。若主 agent 与子代理并发执行(多个 subagent 工具调用,或子代理运行期间父 turn 逻辑继续跑),二者对同一 checkout 的并发写没有任何锁或协调机制,只能靠用户自建 `git worktree` 规避。 | `subagents/tool.js`(`ALLOWED_SUB_AGENT_TOOLS`);`playbooks/task-delegation.md` |
-| Agent-Minor1 | Minor | `effect-ledger.js` 注释显式承认"turns are serialized per channel"是其正确归因的前提,而普通文本回复(非 `[SILENT]`)也计入 channel 级效果 tally,与 task 级效果的 delta 归因共用同一强假设。若未来放开同 channel 并发 turn,这套治理机制会静默失真且不会报错。 | `agent/effect-ledger.js`;`agent/session-events.js:262` |
-| Agent-Minor2 | Minor | `channel-runner.js` 的 `setSessionBaseToolsOverride()` 直接读写 SDK(`@earendil-works/pi-coding-agent`)私有字段 `session._baseToolsOverride`,虽有运行时防御性检测(`"_baseToolsOverride" in target`)但本质仍是对第三方内部实现的硬编码依赖,上游重命名/移除该字段时工具热重载会静默失效(仅警告日志,不阻断运行)。 | `agent/channel-runner.js:1078-1084` |
-| Agent-Minor3 | Minor | `getPreventiveCompactionDecision()` 在 `contextTokens` 为 `null/undefined/NaN/负数` 时直接 `shouldCompact:false`,且无任何日志。若 SDK 长期不上报 context usage,预防性压缩会静默持续失效而无从察觉。 | `agent/context-budget.js:16-23` |
-| Agent-Minor4 | Minor | `job-manager.js` 的 `jobSpillPath(id)` 硬编码路径前缀为 `/tmp/pipiclaw-job-${id}.log`,而非复用 `security/path-guard.js` 已定义的 `TEMP_PREFIXES`/`tmpdir()` 动态解析,平铺在 `/tmp` 根下(内容有 `umask 077` 保护,但文件名/存在性在多用户主机上理论上可被探测)。 | `agent/job-manager.js:30-32` |
-| Agent-S1 | Suggestion | `prompt/manifest.js` 的 `TOOL_SCHEMA_TARGET_UNITS=3000` 只是警告线而非强制截断,`buildRuntimeTools()` 超预算只打 `logWarning`,工具越注册越多时每回合固定计费的 tool schema 部分没有自动化上限,只能靠人工看日志。 | `agent/prompt/manifest.js:14-31`;`agent/channel-runner.js:1034-1064` |
-| Agent-S2 | Suggestion | `isEffectfulTool()` 对同步 `bash` 命令的"有效果"判定(exit 0 且有输出即算)注释自认"echo x qualifies"可被 game,是已知且文档化的局限,有 `maxAttempts` 兜底,非严重风险。 | `agent/effect-ledger.js:66-82` |
-| Agent-S3 | Suggestion | `model-fallback.js` 的 `PRIMARY_COOLDOWN_MS` 固定 5 分钟,无指数退避,主模型持续不稳定时可能每 5 分钟切回失败一次再切回备用,造成轻微振荡。 | `agent/model-fallback.js:13`;`channel-runner.js:711-728` |
+| Agent-M1 | **Major，已处理（2026-07-27）** | 问题属实：完成记录的回收此前依赖下次启动作业或进程重启。现为每个 channel 的最早到期完成记录设置一个 `unref` 的一次性 GC 定时器；运行中作业仍由 sweeper 监管，保留期满后无需新业务活动即可删除记录与 spill/exit 文件。原报告关于“sweeper 停止后遗漏运行中超时作业”的推论不成立，因为停止条件就是没有 running job。 | `agent/job-manager.ts`;`test/job-manager.test.ts` |
+| Agent-M2 | **Major，评估后不修（2026-07-27）** | 风险属实，但这是明确的共享工作区设计取舍，且 playbook 已披露并建议需要隔离时使用 `git worktree`。引入文件锁会使正常协作与 Git 操作复杂化，不能正确解决任意 shell 写入；默认禁止子代理写入又会损失其主要价值，当前性价比不足。 | `subagents/tool.ts`;`playbooks/task-delegation.md` |
+| Agent-Minor1 | **Minor，评估后不修（2026-07-27）** | 属于未来放开同 channel 并行 turn 时才会触发的前提风险。当前队列的串行性正是运行时不变量；为尚不存在的并发模型增加归因协议会徒增复杂度。 | `agent/effect-ledger.ts`;`agent/session-events.ts` |
+| Agent-Minor2 | **Minor，评估后不修（2026-07-27）** | 私有字段依赖属实，但 SDK 没有公开替代 setter，且耦合已集中于一个有显式 warning 的小方法。移除热重载或 fork 上游的成本均高于当前已可观测的兼容性风险。 | `agent/channel-runner.ts` |
+| Agent-Minor3 | **Minor，评估后不修（2026-07-27）** | 用量未知时跳过预防性压缩是安全降级；在纯函数中加入日志会破坏其职责边界，而在每 turn 记录又可能造成日志噪声。SDK 当前会提供该数据，暂无证据表明这是生产问题。 | `agent/context-budget.ts` |
+| Agent-Minor4 | **Minor，已处理（2026-07-27）** | 问题属实且修复成本低：spill 路径改用 `node:os` 的 `tmpdir()`，避免硬编码 Linux `/tmp`；现有 `umask 077` 权限保护保持不变。 | `agent/job-manager.ts`;`test/job-manager.test.ts` |
+| Agent-S1 | **Suggestion，评估后不修（2026-07-27）** | 硬截断工具 schema 会使已注册工具无提示地不可用，风险高于当前告警；应由工具注册治理控制总量。 | `agent/prompt/manifest.ts`;`agent/channel-runner.ts` |
+| Agent-S2 | **Suggestion，评估后不修（2026-07-27）** | 已知的 `bash` 近似判定是为避免真实同步外部工作被误判为无进展，且 `maxAttempts` 提供硬上限。精确识别 shell 副作用不现实，现有取舍合理。 | `agent/effect-ledger.ts` |
+| Agent-S3 | **Suggestion，评估后不修（2026-07-27）** | 固定冷却的轻微振荡风险属实，但指数退避会延迟服务恢复；仅一次失败后切换的现有策略更符合可用性目标。 | `agent/model-fallback.ts`;`agent/channel-runner.ts` |
 
 ### 2.6 Tool 系统与安全边界
 

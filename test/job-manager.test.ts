@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { ChannelJobManager, MAX_RUNNING_JOBS } from "../src/agent/job-manager.js";
+import { describe, expect, it, vi } from "vitest";
+import { ChannelJobManager, FINISHED_JOB_RETENTION_MS, MAX_RUNNING_JOBS } from "../src/agent/job-manager.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -68,6 +68,25 @@ describe("ChannelJobManager", () => {
 		// No list/poll/cancel call — rely purely on the internal sweeper to reconcile state.
 		await new Promise((resolve) => setTimeout(resolve, 40));
 		expect(manager.runningCount()).toBe(0);
+	});
+
+	it("removes a finished job at retention expiry without another job starting", async () => {
+		vi.useFakeTimers();
+		try {
+			const executor = new FakeJobExecutor();
+			// Keep the running-job sweeper beyond the retention window: after list() finishes the
+			// job it stops, so only the independent GC timeout can remove this record.
+			const manager = new ChannelJobManager("dm_1", executor, FINISHED_JOB_RETENTION_MS + 1);
+			const job = await manager.start("true", "quick", 300);
+			executor.probeResult = "EXIT:0";
+			await manager.list();
+			expect((await manager.list()).map((snapshot) => snapshot.id)).toContain(job.id);
+
+			await vi.advanceTimersByTimeAsync(FINISHED_JOB_RETENTION_MS);
+			expect((await manager.list()).map((snapshot) => snapshot.id)).not.toContain(job.id);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("probes every running job in a single sweep command", async () => {
