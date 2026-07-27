@@ -16,6 +16,7 @@ import {
 	appendCompletionEvidence,
 	applySet,
 	cleanupTaskEvents,
+	describeTaskSchedule,
 	markdownValue,
 	readTaskDocument,
 	renderTaskFile,
@@ -44,7 +45,7 @@ export async function setTask(options: TaskManageToolOptions, request: TaskManag
 		id,
 		path: taskPath,
 		status: nextFields.status,
-		notice: `已更新任务 \`${id}\`（status: ${nextFields.status}${nextFields.wake ? `, wake: ${nextFields.wake}` : ""}）。`,
+		notice: `已更新任务 \`${id}\`（${describeTaskSchedule(nextFields)}）。`,
 	};
 }
 
@@ -76,7 +77,7 @@ export async function progressTask(
 		id,
 		path: taskPath,
 		status: nextFields.status,
-		notice: `已记录任务 \`${id}\` 的进展（status: ${nextFields.status}${nextFields.wake ? `, wake: ${nextFields.wake}` : ""}）。`,
+		notice: `已记录任务 \`${id}\` 的进展（${describeTaskSchedule(nextFields)}）。`,
 	};
 }
 

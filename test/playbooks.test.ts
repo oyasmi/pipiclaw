@@ -117,6 +117,17 @@ describe("runtime playbook catalog", () => {
 		expect(delegation).toContain("background-jobs.md");
 	});
 
+	// "How to wait" was told three different ways across three playbooks, two of them describing a
+	// parking mechanism the driver did not implement. The mechanism exists now (waiting with no
+	// wake is never dispatched); keep the description in one place and keep the other playbooks
+	// pointing at it rather than restating it.
+	it("keeps task-delegation.md the single source of truth for the two waiting shapes", () => {
+		const delegation = readFileSync(join(PLAYBOOKS_DIR, "task-delegation.md"), "utf-8");
+		expect(delegation).toContain("唯一真相源");
+		expect(delegation).toContain("停泊");
+		expect(readFileSync(join(PLAYBOOKS_DIR, "task-driving.md"), "utf-8")).toContain("task-delegation.md");
+	});
+
 	it("contains no bundled third-party agentmux implementation", () => {
 		const catalogText = loadRuntimePlaybookCatalog()
 			.map((item) => readFileSync(item.path, "utf-8"))

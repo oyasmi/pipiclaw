@@ -41,6 +41,8 @@ Pipiclaw 不内置或假设第三方 agent 工具的命令、状态 JSON、检�
 2. **稳定的完成态检测命令**：只有状态查询、没有阻塞等待时，按 `event-scheduling.md` 用 periodic + preAction 门控——对方忙就静默跳过，零 token。
 3. **wake 轮询（兜底）**：两者都没有时才用，`progress` 置 `waiting` + 合理 `wake`，醒来查状态、更新证据、必要时把 wake 推后。
 
+两种等待形态就这两个（本节是唯一真相源）：**`waiting` 且无 `wake` = 停泊**，driver 不会来打扰，只有后台作业结束、用户消息或 `/tasks run` 会叫醒你；**`waiting` + `wake` = 定时回访**，到点由 driver 接续。
+
 无论走哪条，三条纪律不变：
 
 1. 委派时把工具、实例标识、工作目录/分支、预期产物和验收方法写进 task 正文，等谁、等什么写进 `blockedReason`。重启后这些是唯一能恢复现场的东西。

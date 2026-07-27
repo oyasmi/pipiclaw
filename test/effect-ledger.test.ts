@@ -3,7 +3,9 @@ import {
 	channelEffectCount,
 	isEffectfulTool,
 	noteChannelEffect,
+	noteTaskEffects,
 	resetChannelEffects,
+	taskEffectCount,
 } from "../src/agent/effect-ledger.js";
 
 describe("effect ledger (spec 031, D7)", () => {
@@ -18,6 +20,24 @@ describe("effect ledger (spec 031, D7)", () => {
 		noteChannelEffect("dm_2");
 		expect(channelEffectCount("dm_1")).toBe(2);
 		expect(channelEffectCount("dm_2")).toBe(1);
+	});
+
+	// The governor asks "did *this task's* wake accomplish anything?". A channel total answers a
+	// different question — it also counts the user's small talk and every other task's work.
+	it("keeps per-task credit separate from the channel total", () => {
+		noteChannelEffect("dm_1");
+		noteTaskEffects("dm_1", "alpha", 1);
+		noteTaskEffects("dm_1", "beta", 2);
+		expect(taskEffectCount("dm_1", "alpha")).toBe(1);
+		expect(taskEffectCount("dm_1", "beta")).toBe(2);
+		expect(taskEffectCount("dm_2", "alpha")).toBe(0);
+		expect(taskEffectCount("dm_1", "never-run")).toBe(0);
+	});
+
+	it("ignores an empty or negative turn delta", () => {
+		noteTaskEffects("dm_1", "alpha", 0);
+		noteTaskEffects("dm_1", "alpha", -3);
+		expect(taskEffectCount("dm_1", "alpha")).toBe(0);
 	});
 
 	it("treats world-changing tools as effects", () => {

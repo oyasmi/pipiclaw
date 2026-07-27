@@ -78,6 +78,20 @@ describe("isTaskActionable (frontmatter contract)", () => {
 	it("unreadable frontmatter is fail-open (actionable)", () => {
 		expect(isTaskActionable({ readable: false }, NOW)).toBe(true);
 	});
+
+	// The runtime's own preferred delegation shape parks a task on an external signal:
+	// start a blocking wait as a background job, set waiting with no wake, end the turn.
+	// If the driver treats that as "ready", it re-dispatches immediately, finds the job still
+	// running, and three [SILENT] wakes later the governor pauses the task.
+	it("waiting with no wake is parked, not ready", () => {
+		expect(isTaskActionable({ readable: true, status: "waiting" }, NOW)).toBe(false);
+	});
+	it("waiting with a due wake is still a timed re-check", () => {
+		expect(isTaskActionable({ readable: true, status: "waiting", wake: PAST }, NOW)).toBe(true);
+	});
+	it("waiting with an unparseable wake still fails open so the file can be repaired", () => {
+		expect(isTaskActionable({ readable: true, status: "waiting", wake: "not a date" }, NOW)).toBe(true);
+	});
 });
 
 describe("extractTaskTitle / taskBody", () => {

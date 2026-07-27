@@ -26,10 +26,10 @@ export interface TaskDriverOptions {
 	onDispatch?: (event: DingTalkEvent, accepted: boolean) => void;
 	getSettings: () => PipiclawTaskDriverSettings;
 	/**
-	 * Externally visible effects recorded for a channel so far (spec 031, D7). Defaults to a
-	 * constant, which simply makes the fingerprint depend on ledger fields alone.
+	 * Externally visible effects produced by this task's own turns so far (spec 031, D7).
+	 * Defaults to a constant, which simply makes the fingerprint depend on ledger fields alone.
 	 */
-	getEffectCount?: (channelId: string) => number;
+	getEffectCount?: (channelId: string, taskId: string) => number;
 	/** Master autonomy switch (`tools.tasks.enabled`); re-read every tick. Defaults to on. */
 	isEnabled?: () => boolean;
 	/** Test-only override for the idle-sleep cap; production uses `settings.maxSleepMinutes`. */
@@ -40,7 +40,7 @@ interface DispatchAttempt {
 	fingerprint: string;
 	atMs: number;
 	accepted: boolean;
-	/** Channel effect tally observed when this attempt was recorded; the baseline for the fast tier. */
+	/** The task's effect tally when this attempt was recorded; the baseline for the fast tier. */
 	effects: number;
 	/** Consecutive accepted wakes that ended with the ledger fingerprint unchanged (spec 029, D5). */
 	futileCount: number;
@@ -91,8 +91,9 @@ function attemptKey(channelId: string, taskId: string): string {
  *
  * `latestNote` is deliberately absent (spec 031, D7): it is the model's own account of its work,
  * so including it let a wake that did nothing but append a note reset the futile counter forever,
- * and let a wake that changed real files count as stalled. The channel's effect tally stands in
- * for the work itself instead.
+ * and let a wake that changed real files count as stalled. The task's own effect tally stands in
+ * for the work itself instead — per task, not per channel, so a neighbour's activity (including
+ * the user chatting) neither certifies progress here nor hides a task that is spinning.
  */
 function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
 	const control = entry.frontmatter.control;
@@ -119,7 +120,7 @@ function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
  * fatal for the "drive an external agent in small steps" shape this driver exists for.
  *
  * So the tiers are keyed on evidence, not on the boolean "something changed":
- * - the channel's effect tally grew ⇒ the last wake actually did something ⇒ continue at once;
+ * - this task's effect tally grew ⇒ its last wake actually did something ⇒ continue at once;
  * - the ledger changed with no effect (status/note churn) ⇒ the ordinary continuation delay;
  * - nothing changed ⇒ the long stalled-retry backoff, and the futile counter keeps running.
  *
@@ -471,7 +472,7 @@ export class TaskDriver {
 				}
 
 				const key = attemptKey(channelId, entry.id);
-				const effects = this.options.getEffectCount?.(channelId) ?? 0;
+				const effects = this.options.getEffectCount?.(channelId, entry.id) ?? 0;
 				const fingerprint = taskFingerprint(entry, effects);
 				const previous = this.attempts.get(key);
 				if (!isEligible(previous, fingerprint, effects, nowMs, settings)) continue;

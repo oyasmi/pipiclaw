@@ -12,8 +12,6 @@ const taskControlSchema = Type.Object({
 	deadline: Type.Optional(Type.String({ description: "ISO8601 deadline; empty string clears it." })),
 	nextAction: Type.Optional(Type.String({ description: "Concrete next executable step; empty string clears it." })),
 	blockedReason: Type.Optional(Type.String({ description: "Why work cannot currently proceed; empty clears it." })),
-	parent: Type.Optional(Type.String({ description: "Parent task id; empty clears it." })),
-	dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Task ids that must be done first." })),
 	sideEffects: Type.Optional(
 		Type.Union([Type.Literal("workspace"), Type.Literal("external")], {
 			description:
@@ -26,12 +24,16 @@ const taskControlSchema = Type.Object({
 		}),
 	),
 	maxAttempts: Type.Optional(
-		Type.Integer({ minimum: 1, description: "Per-cycle attempt stop-loss; the only per-task budget." }),
-	),
-	verificationMode: Type.Optional(
-		Type.Union([Type.Literal("evidence"), Type.Literal("independent")], {
+		Type.Integer({
+			minimum: 1,
 			description:
-				'On create, defaults to "evidence" (maker self-checks the DoD against concrete evidence). Set "independent" only when the task produces a checkable artifact (code, config, a runnable command) that a separate read-only verifier sub-agent can inspect — for research/writing/reminder-style tasks, "evidence" is cheaper and just as trustworthy.',
+				"Attempt stop-loss; the only per-task budget. Default 12, spent over the whole task (recurring: per cycle) — raise it on create for long multi-step work.",
+		}),
+	),
+	verificationRequired: Type.Optional(
+		Type.Boolean({
+			description:
+				"Whether done requires an independent verifier attestation. Default false; set true only when the task produces a checkable artifact (code, config, a runnable command) a read-only verifier sub-agent can inspect.",
 		}),
 	),
 });

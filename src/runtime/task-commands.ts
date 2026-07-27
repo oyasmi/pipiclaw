@@ -16,6 +16,7 @@ import {
 	createDefaultTaskControl,
 	retiredTaskControlKeys,
 	TASK_PRIORITIES,
+	type TaskControl,
 	type TaskPriority,
 	taskBudgetViolation,
 } from "../tasks/control.js";
@@ -321,12 +322,36 @@ export async function pauseTask(options: HandleTasksCommandOptions, idInput: str
 	return `已暂停任务 ${id}。需要继续时用 /tasks resume ${id}。`;
 }
 
+/**
+ * Why restarting this task would immediately stop it again, or `undefined` when it is free to run.
+ *
+ * The governor pauses on the same condition it re-checks on the next scan, so a plain resume of a
+ * budget/deadline-exhausted task looked like it worked, cost one escalation turn, and landed back
+ * in `paused` minutes later — while three separate places (the `/stop` receipt, `/tasks` usage,
+ * the driving playbook) told the user resume was the fix. Refuse instead, and name the command
+ * that actually unblocks it.
+ */
+function restartBlockedMessage(id: string, control: TaskControl | undefined): string | undefined {
+	if (!control) return undefined;
+	const violation = taskBudgetViolation(control, Date.now());
+	if (!violation) return undefined;
+	return [
+		`任务 ${id} 仍然超出治理限额：${violation}。`,
+		"直接恢复只会在下一轮扫描中被治理器再次暂停，并白白多花一个回合。",
+		`先放宽限额：\`/tasks set ${id} attempts <n>\`（当前上限 ${control.budget.maxAttempts}）` +
+			`${control.deadline ? `，或 \`/tasks set ${id} deadline <ISO8601>\`（当前 ${control.deadline}）` : ""}，然后再试一次。`,
+		"若这个任务已经不该继续，用 `task_manage cancel` 关掉它。",
+	].join("\n");
+}
+
 export async function resumeTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `找不到任务：${id}`;
 	const from = normalizeStoredStatus(task.fields.status);
 	if (from !== "paused") return `任务 ${id} 当前是 ${from}，并非暂停状态。`;
+	const blocked = restartBlockedMessage(id, task.fields.control);
+	if (blocked) return blocked;
 	resolveTaskTransition("resume", id, from);
 	task.fields.status = "active";
 	task.fields.wake = undefined;
@@ -411,6 +436,8 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 	} catch (error) {
 		return errorMessage(error);
 	}
+	const blocked = restartBlockedMessage(id, task.fields.control);
+	if (blocked) return blocked;
 	task.fields.status = "active";
 	task.fields.wake = undefined;
 	if (task.fields.control) {

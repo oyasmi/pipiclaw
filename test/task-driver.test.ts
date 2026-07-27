@@ -190,6 +190,86 @@ describe("TaskDriver", () => {
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_ESCALATION:late]");
 	});
 
+	// E-6: the zero-polling delegation path (start a blocking wait as a background job, park the
+	// task, end the turn) is the runtime's own recommendation. The driver used to re-dispatch it
+	// on the very next nudge, so the model woke with nothing to do, answered [SILENT], and after
+	// three such wakes the governor paused the task it was faithfully waiting on.
+	it("leaves a parked task (waiting, no wake) alone until something external wakes it", async () => {
+		await writeTask("dm_a", "parked", task("waiting"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+
+		await driver.runOnce(NOW);
+		// Well past every retry tier: parking is not a backoff.
+		await driver.runOnce(new Date(NOW.getTime() + 6 * 60 * 60_000));
+		expect(dispatch).not.toHaveBeenCalled();
+
+		// The job finishes, its wake turn moves the task back to active — now the driver continues.
+		await writeTask("dm_a", "parked", task("active", undefined, "job returned"));
+		await driver.runOnce(new Date(NOW.getTime() + 6 * 60 * 60_000 + 1_000));
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:parked]");
+	});
+
+	// A parked task is still governed: parking must not become a way to outlive a deadline.
+	it("still escalates a parked task that broke its deadline", async () => {
+		await writeTask(
+			"dm_a",
+			"overdue",
+			governedTask("waiting", (control) => {
+				control.deadline = "2026-07-10T03:00:00.000Z";
+			}),
+		);
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+		await driver.runOnce(NOW);
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_ESCALATION:overdue]");
+	});
+
+	// E-7: effects are counted per channel but judged per task. A neighbour's activity — including
+	// the user simply chatting — used to make every task in the channel look like it had just made
+	// progress, which both fired the fast tier and reset the futile counter.
+	it("judges progress by this task's own effects, not the channel's", async () => {
+		await writeTask("dm_a", "mine", task("active", undefined, "first"));
+		await writeTask("dm_a", "other", task("active", undefined, "first"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const effects = new Map<string, number>();
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+			getEffectCount: (_channelId, taskId) => effects.get(taskId) ?? 0,
+		});
+
+		// Both tasks get one wake (round-robin), then the neighbour does real work.
+		await driver.runOnce(NOW);
+		await driver.runOnce(new Date(NOW.getTime() + 1_000));
+		expect(dispatch).toHaveBeenCalledTimes(2);
+		effects.set("other", 1);
+
+		// "mine" changed nothing and did nothing, so it stays on its own backoff. With a
+		// channel-wide tally it would have been re-dispatched here, seconds after a wake it
+		// spent idle, on the strength of work another task did.
+		await driver.runOnce(new Date(NOW.getTime() + 2_000));
+		expect(dispatch).toHaveBeenCalledTimes(2);
+
+		// Its own effect is what continues it.
+		effects.set("mine", 1);
+		await driver.runOnce(new Date(NOW.getTime() + 3_000));
+		expect(dispatch).toHaveBeenCalledTimes(3);
+		expect(dispatch.mock.calls[2]?.[0].text).toContain("[TASK_DRIVER:mine]");
+	});
+
 	it("backs off unchanged tasks but promptly continues after real progress", async () => {
 		await writeTask("dm_a", "work", task("in-progress", undefined, "first"));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);

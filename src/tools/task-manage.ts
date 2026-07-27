@@ -1,5 +1,4 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { TaskControlPatch } from "../tasks/control.js";
 import { createTask } from "./task-manage/create.js";
 import { cancelTask, doneTask, listTasks, progressTask, setTask, skipTask } from "./task-manage/lifecycle.js";
 import { parseAction, taskManageSchema } from "./task-manage/schema.js";
@@ -54,50 +53,11 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 			"verifier attestation, complete verified work, skip one recurring occurrence, cancel abandoned work, or list tasks. Use progress for routine " +
 			"end-of-turn checkpoints; use write/edit only for substantial Goal/DoD/Manual/Verification changes.",
 		parameters: taskManageSchema,
-		execute: async (
-			_toolCallId: string,
-			args: {
-				label: string;
-				action: string;
-				id?: string;
-				title?: string;
-				goal?: string;
-				dod?: string;
-				manual?: string;
-				verificationPlan?: string;
-				control?: TaskControlPatch;
-				status?: string;
-				wake?: string;
-				schedule?: string;
-				recurrence?: string;
-				note?: string;
-				verifierRunId?: string;
-				summary?: string;
-				evidence?: string;
-				residualRisk?: string;
-				reason?: string;
-			},
-		) => {
-			const result = await manageTask(options, {
-				action: parseAction(args.action),
-				id: args.id,
-				title: args.title,
-				goal: args.goal,
-				dod: args.dod,
-				manual: args.manual,
-				verificationPlan: args.verificationPlan,
-				control: args.control,
-				status: args.status,
-				wake: args.wake,
-				schedule: args.schedule,
-				recurrence: args.recurrence,
-				note: args.note,
-				verifierRunId: args.verifierRunId,
-				summary: args.summary,
-				evidence: args.evidence,
-				residualRisk: args.residualRisk,
-				reason: args.reason,
-			});
+		// `args` is typed from `taskManageSchema`, and so is `TaskManageRequest`: the request is
+		// the validated arguments minus `label`, with no third hand-written copy to drift.
+		execute: async (_toolCallId, args) => {
+			const { label: _label, ...request } = args;
+			const result = await manageTask(options, { ...request, action: parseAction(request.action) });
 			return {
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				details: {

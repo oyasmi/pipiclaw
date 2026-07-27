@@ -6,7 +6,7 @@ import {
 	parseBuiltInCommand,
 	slashCommandName,
 } from "../agent/commands.js";
-import { channelEffectCount } from "../agent/effect-ledger.js";
+import { channelEffectCount, noteTaskEffects, taskEffectCount } from "../agent/effect-ledger.js";
 import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
 import { configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
@@ -893,8 +893,19 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					if (!_isEvent) {
 						ctx.primeCard(350);
 					}
+					// Effects are tallied per channel; the governor needs them per task, so one
+					// task-driver turn is measured as a delta (turns on a channel are serialized)
+					// and credited to the task it was dispatched for.
+					const effectsBefore = channelEffectCount(event.channelId);
 					const result = await runner.run(ctx, store);
 					const taskDriverMatch = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text);
+					if (taskDriverMatch?.[1]) {
+						noteTaskEffects(
+							event.channelId,
+							taskDriverMatch[1],
+							channelEffectCount(event.channelId) - effectsBefore,
+						);
+					}
 					if (taskDriverMatch?.[1] && result.usage && result.durationMs !== undefined) {
 						await finishTaskAttempt(
 							getChannelDir(options.paths.workspaceDir, event.channelId),
@@ -1002,7 +1013,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 				onDispatch: options.onTaskDriverDispatch,
-				getEffectCount: channelEffectCount,
+				getEffectCount: taskEffectCount,
 				getSettings: () => {
 					runtimeSettingsManager.reload();
 					return runtimeSettingsManager.getTaskDriverSettings();

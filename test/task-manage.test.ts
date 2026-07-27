@@ -8,9 +8,10 @@ import { handleTasksCommand } from "../src/runtime/task-commands.js";
 import { parseTaskFrontmatter } from "../src/shared/task-ledger.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { workspaceSubjectHash } from "../src/tasks/artifact-subject.js";
-import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { createDefaultTaskControl, RETIRED_TASK_CONTROL_KEYS } from "../src/tasks/control.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
-import { manageTask, type TaskManageToolOptions } from "../src/tools/task-manage.js";
+import { taskManageSchema } from "../src/tools/task-manage/schema.js";
+import { manageTask, type TaskManageRequest, type TaskManageToolOptions } from "../src/tools/task-manage.js";
 
 const CHANNEL_ID = "dm_1";
 
@@ -619,7 +620,13 @@ describe("manageTask", () => {
 				control: { verificationRequired: false, sideEffects: "external" },
 			});
 			await expect(
-				manageTask(options, { action: "set", id: "publish", control: { externalApproval: "granted" } }),
+				// The schema does not offer "granted" at all; the cast simulates a caller that
+				// bypasses it, which is exactly what the runtime guard has to catch.
+				manageTask(options, {
+					action: "set",
+					id: "publish",
+					control: { externalApproval: "granted" } as unknown as TaskManageRequest["control"],
+				}),
 			).rejects.toThrow(/\/tasks approve/);
 		});
 
@@ -886,5 +893,28 @@ describe("manageTask", () => {
 				{ id: "b", title: "Task B", status: "done", wake: undefined, actionable: false, control: undefined },
 			]);
 		});
+	});
+});
+
+// The schema is the only description of this tool the model ever sees, and it had drifted in
+// both directions: it advertised three fields the runtime drops on write (so the model expressed
+// intent that silently vanished), while `verificationRequired` — the one switch that turns on
+// independent acceptance — was read by the implementation and absent from the schema, so no model
+// could ask for it. `TaskManageRequest` is now derived from this schema, which keeps the two in
+// step; this test guards the schema's own content.
+describe("task_manage schema", () => {
+	const advertised = Object.keys(
+		(taskManageSchema.properties.control as unknown as { properties: Record<string, unknown> }).properties,
+	);
+
+	it("does not advertise control fields the runtime discards", () => {
+		for (const retired of RETIRED_TASK_CONTROL_KEYS) {
+			expect(advertised).not.toContain(retired.split(".")[0]);
+		}
+		expect(advertised).not.toContain("verificationMode");
+	});
+
+	it("exposes the switch that requires independent verification", () => {
+		expect(advertised).toContain("verificationRequired");
 	});
 });

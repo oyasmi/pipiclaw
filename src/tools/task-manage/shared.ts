@@ -11,7 +11,7 @@ import {
 	upsertCurrentCycleCompletionEvidence,
 } from "../../shared/task-ledger.js";
 import { nextTaskWake, validateTaskSchedule } from "../../shared/task-schedule.js";
-import { applyTaskControlPatch, createDefaultTaskControl } from "../../tasks/control.js";
+import { applyTaskControlPatch, createDefaultTaskControl, type TaskControlPatch } from "../../tasks/control.js";
 import { isSettableTaskStatus } from "../../tasks/transitions.js";
 import { RecoverableToolError } from "../tool-details.js";
 import { SETTABLE_STATUSES } from "./schema.js";
@@ -136,10 +136,27 @@ export async function readTaskDocument(
 	};
 }
 
+/**
+ * The scheduling half of a lifecycle notice: where the task stands and who will wake it.
+ *
+ * Parking (`waiting` with no wake) is the one state whose consequence is not obvious from the
+ * status alone — the driver deliberately never returns to it — so the notice says so at the
+ * moment the model chooses it, rather than leaving it to be rediscovered by a task that goes quiet.
+ */
+export function describeTaskSchedule(fields: TaskFields): string {
+	if (fields.status === "waiting" && !fields.wake) {
+		return "status: waiting（已停泊：driver 不会再叫你，等后台作业结束、用户消息或 /tasks run）";
+	}
+	return `status: ${fields.status}${fields.wake ? `, wake: ${fields.wake}` : ""}`;
+}
+
 /** Apply a `set` request's optional fields onto the existing frontmatter. */
 export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFields {
 	const next: TaskFields = { ...fields };
-	if (request.control?.externalApproval === "granted") {
+	// The schema does not offer "granted", but the check stays: this is the only place that
+	// guarantees a self-granted approval cannot reach disk, whatever the caller sends.
+	const patch: TaskControlPatch = request.control ?? {};
+	if (patch.externalApproval === "granted") {
 		throw new Error('Only a user can grant external-action approval with "/tasks approve <id>".');
 	}
 	if (request.status !== undefined) {

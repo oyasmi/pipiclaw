@@ -26,7 +26,9 @@ priority: 41
 
 ## 等待与继续
 
-- 等用户/外部系统/委派：`waiting` + 合理 `wake`，把等谁、等什么写进 `blockedReason`。
+- 等一个会自己叫醒你的信号（后台作业结束、用户回话）：`waiting` **且不设 `wake`** —— 这是停泊，driver 不会来打扰；等待形态的完整选择见 `task-delegation.md`。
+- 等一个没人会通知的外部状态：`waiting` + 合理 `wake`，到点回访。
+- 两者都把等谁、等什么写进 `blockedReason`。
 - 当前仍可继续：保持 `active`，清空 `wake`。
 - 明确停止：由用户 pause；不要用极远的 `wake` 模拟暂停。
 
@@ -55,9 +57,10 @@ priority: 41
 
 ## 不唤醒或频繁唤醒
 
-可推进 = 非 done/cancelled/paused，且 `wake` 缺失、无效或已到期。
+可推进 = 非 done/cancelled/paused、非停泊（`waiting` 且无 `wake`），且 `wake` 缺失、无效或已到期。
 
-- `paused`：用户 `/tasks resume <id>`。
+- 停泊中：这是有意的，等外部信号即可；确认没人会来叫时用 `/tasks run <id>` 或改回 `active`。
+- `paused`：用户 `/tasks resume <id>`；若是治理器因预算耗尽暂停，得先 `/tasks set <id> attempts <n>` 放宽，否则 resume 会被拒绝。
 - `wake` 太远：纠正 `wake`；急催用 `/tasks run <id>`。
 - TUI 已关闭：没有 daemon，不能自动唤醒。
 - 反复空转：查最新 note 和 `nextAction`，修 Manual。

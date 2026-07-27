@@ -421,7 +421,7 @@ frontmatter 字段：
 | 字段 | 必填 | 取值 | 说明 |
 |------|------|------|------|
 | `status` | 是 | `active` / `waiting` / `verifying` / `paused` / `done` / `cancelled`（六态，每态唯一 driver 行为） | paused/cancelled 不会被 driver 继续（治理器停止的任务是 `paused` + `control.pausedBy: "governor"`，用户暂停是 `pausedBy: "user"`）；done 一般睡眠，唯有有 `schedule` 的周期任务到点被 driver 开新周期；verifying 进入 checker-only 回合。旧值 `open`/`in-progress`→`active`、`awaiting-user`/`blocked`→`waiting`、`escalated`→`paused(governor)` 在读取层无损映射，写盘即新名 |
-| `wake` | 否 | 带时区的 ISO 8601 | 最早值得再看一眼的时间。缺省 = 随时可推进。周期任务 done 后由 driver 写成下一次 occurrence |
+| `wake` | 否 | 带时区的 ISO 8601 | 最早值得再看一眼的时间。缺省 = 随时可推进；但 `status: waiting` 且缺省 `wake` 表示"停泊"——driver 永不主动唤醒，只等后台作业结束、用户消息或 `/tasks run`。周期任务 done 后由 driver 写成下一次 occurrence |
 | `schedule` | 否 | 五段 cron | 周期节奏的**唯一真相**，按主机时区解释；部署时用 `TZ=<IANA timezone>` 固定。存在 = 周期任务。最密每 30 分钟 |
 | `recurrence` | 否 | 自由文本（如 `每周一`） | 仅作标注给人读，无机器语义 |
 | `control` | 新任务是 | 单行 JSON，`version: 1` | priority/deadline/nextAction、父子依赖、隔离与副作用策略、预算/用量、独立验收状态 |
@@ -446,9 +446,9 @@ frontmatter 字段：
 
 1. **frontmatter 块** = 文件必须以 `---` 开头；块的结束是其后第一个 `\n---`。取二者之间的内容为 frontmatter。不满足（无起始 `---` 或找不到结束 `---`）→ **无可读 frontmatter**。
 2. **字段提取** = 在块内逐行找 `key: value`：以第一个 `:` 切分，键取左侧 `trim()`，值取右侧 `trim()`。不解析嵌套 YAML；只认 status/wake/schedule/recurrence/control 五个平铺键。control 的值是单行 JSON。
-3. **`status`**：`done` / `cancelled` / `paused` 不 actionable；其余状态按 wake 判定。
+3. **`status`**：`done` / `cancelled` / `paused` 不 actionable；`waiting` **且没有 `wake` 键**是"停泊"，也不 actionable（等外部信号，见下）；其余状态按 wake 判定。
 4. **`wake`**：解析为时间戳。**缺省、为空、或无法解析 → 视为"随时可推进"（不构成推迟）**；能解析且 `wake > now` → 该任务"未到点"。
-5. **判定：`actionable`（可推进）** = `status` 未关闭 **且**（无有效 `wake` **或** `wake ≤ now`）。driver 在此之前还会对睡眠任务执行零 token 的 deadline/budget/terminal-dependency 检查。
+5. **判定：`actionable`（可推进）** = `status` 未关闭、非停泊 **且**（无有效 `wake` **或** `wake ≤ now`）。driver 在此之前还会对睡眠任务执行零 token 的 deadline/budget 检查。
 6. **fail-open**：frontmatter、control 或文件不可读 → 视为 actionable，让 agent/doctor 暴露并修复，而不是静默漏掉。
 
 > 一句话记忆：**先做确定性治理门禁，再对 ready task 唤醒模型；读不懂就暴露并修复。**

@@ -157,6 +157,29 @@ describe("handleTasksCommand", () => {
 		expect(await readFile(join(tasksDir, "gov.md"), "utf-8")).not.toContain('"pausedBy"');
 	});
 
+	// The governor pauses on the same condition it re-checks on the next scan, so a plain resume
+	// of an exhausted task "succeeded" and was paused again minutes later — one wasted escalation
+	// turn per press, forever. Refuse, and name the command that actually unblocks it.
+	it("refuses to resume or run a task the governor would immediately stop again", async () => {
+		const control = createDefaultTaskControl();
+		control.budget.maxAttempts = 2;
+		control.usage.attempts = 2;
+		control.pausedBy = "governor";
+		await writeFile(join(tasksDir, "spent.md"), renderTaskDocument({ status: "paused", control }, STANDARD_BODY));
+
+		const resumed = await run("resume spent");
+		expect(resumed).toContain("attempt budget exhausted (2/2)");
+		expect(resumed).toContain("/tasks set spent attempts");
+		// Refusing means refusing: the task must still be paused.
+		expect(await readFile(join(tasksDir, "spent.md"), "utf-8")).toContain("status: paused");
+		expect(await run("run spent")).toContain("attempt budget exhausted (2/2)");
+
+		// Raising the budget is what unblocks it, exactly as the message says.
+		await run("set spent attempts 20");
+		expect(await run("resume spent")).toContain("已恢复任务 spent");
+		expect(await readFile(join(tasksDir, "spent.md"), "utf-8")).toContain("status: active");
+	});
+
 	it("runs a ready task through the runtime dispatch callback", async () => {
 		await writeFile(join(tasksDir, "ready.md"), doc("status: paused", STANDARD_BODY));
 		const dispatches: string[] = [];

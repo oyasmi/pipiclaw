@@ -9,7 +9,8 @@ import { RecoverableToolError } from "../shared/recoverable-error.js";
  * the `/tasks` command handlers, so an illegal transition always fails the same way.
  *
  *   active     → dispatchable now (wake-gated: not yet due ⇒ sleep until wake)
- *   waiting    → sleep until wake, then dispatch
+ *   waiting    → with a wake: sleep until it, then dispatch. Without one: parked — the driver
+ *                never wakes it; a job completion, a user message or `/tasks run` does.
  *   verifying  → dispatch a checker-only turn
  *   paused     → never dispatched (excluded at the driver scan layer, zero token)
  *   done       → recurring: reopen next cycle at wake; otherwise archived

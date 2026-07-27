@@ -43,7 +43,7 @@ export interface TaskLedgerEntry {
 	/** First `# ` heading in the body, or the id when none. */
 	title: string;
 	frontmatter: TaskFrontmatter;
-	/** status ≠ done AND (no valid wake OR wake ≤ now). Matches the sensor exactly. */
+	/** Non-terminal, not parked (`waiting` without a wake), and (no valid wake OR wake ≤ now). */
 	actionable: boolean;
 	/** Milliseconds since epoch parsed from `wake`, or undefined when unset/unparseable. */
 	wakeMs?: number;
@@ -175,12 +175,22 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
  * The single shared judgement: is there work to do on this task right now?
  * Unreadable frontmatter is fail-open (actionable) so a corrupt ledger surfaces
  * rather than being silently skipped.
+ *
+ * `waiting` with no `wake` is the *parked* form (`src/tasks/transitions.ts`): the task is
+ * blocked on an external signal — a background job finishing, the user answering, `/tasks run` —
+ * and only that signal may resume it. Without this the runtime's own recommended shape for
+ * delegating work (start a blocking wait as a `bash async` job, park the task, end the turn)
+ * was re-dispatched the instant the turn ended, found the job still running, answered
+ * `[SILENT]`, and after three such wakes got paused by the governor. A `waiting` task that
+ * *does* carry a wake is an ordinary timed re-check and stays gated on that wake; an
+ * unparseable wake still fails open so a hand-edited file surfaces rather than parks forever.
  */
 export function isTaskActionable(frontmatter: TaskFrontmatter, now: number): boolean {
 	if (!frontmatter.readable) return true;
 	if (frontmatter.controlReadable === false) return true;
 	// status is already canonicalised by parseTaskFrontmatter.
 	if (TERMINAL_TASK_STATUSES.has(frontmatter.status ?? "")) return false;
+	if (frontmatter.status === "waiting" && !frontmatter.wake) return false;
 	const wakeAt = parseWakeMs(frontmatter);
 	if (wakeAt !== undefined && wakeAt > now) return false;
 	return true;
