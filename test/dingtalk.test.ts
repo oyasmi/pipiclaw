@@ -138,6 +138,7 @@ type PrivateBotApi = {
 	getConversationMeta(
 		channelId: string,
 	): { conversationId: string; conversationType: string; senderId: string } | null;
+	cleanupIdleChannelCaches(now?: number): void;
 	handleRawMessage(message: { headers?: { messageId?: string }; data: unknown }): {
 		status: "SUCCESS";
 		message: string;
@@ -493,6 +494,22 @@ describe("dingtalk", () => {
 		});
 	});
 
+	it("reclaims idle per-channel caches after the retention window", () => {
+		const { bot } = createBot();
+		const privateApi = getPrivateApi(bot);
+		privateApi.setConversationMeta("dm_staff_1", {
+			conversationId: "conv_1",
+			conversationType: "1",
+			senderId: "staff_1",
+		});
+		(bot as unknown as { getQueue(channelId: string): unknown }).getQueue("dm_staff_1");
+
+		privateApi.cleanupIdleChannelCaches(Date.now() + 2 * 60 * 60 * 1000);
+
+		expect((bot as unknown as { convMeta: Map<string, unknown> }).convMeta.has("dm_staff_1")).toBe(false);
+		expect((bot as unknown as { queues: Map<string, unknown> }).queues.has("dm_staff_1")).toBe(false);
+	});
+
 	it("sends plain DM and group messages using cached metadata", async () => {
 		const { bot } = createBot();
 		const privateApi = getPrivateApi(bot);
@@ -627,6 +644,28 @@ describe("dingtalk", () => {
 
 		expect(releaseCurrent).not.toBeNull();
 		releaseCurrent!();
+	});
+
+	it("reserves a queued turn before entering its async handler", async () => {
+		const order: string[] = [];
+		const { bot } = createBot({
+			reserveEvent: vi.fn(() => order.push("reserve")),
+			handleEvent: vi.fn(async () => {
+				order.push("handle");
+			}),
+		});
+		bot.enqueueEvent({
+			type: "dm",
+			channelId: "dm_reserve",
+			ts: "1",
+			user: "staff_1",
+			userName: "Alice",
+			text: "work",
+			conversationId: "conv_1",
+			conversationType: "1",
+		});
+		await flushMicrotasks();
+		expect(order).toEqual(["reserve", "handle"]);
 	});
 
 	it("acks downstream messages and deduplicates repeated deliveries", async () => {

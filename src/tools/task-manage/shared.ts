@@ -10,7 +10,7 @@ import {
 	renderTaskDocument,
 	taskBody,
 	upsertCurrentCycleCompletionEvidence,
-} from "../../shared/task-ledger.js";
+} from "../../tasks/ledger.js";
 import { nextTaskWake, validateTaskSchedule } from "../../shared/task-schedule.js";
 import { applyTaskControlPatch, createDefaultTaskControl, type TaskControlPatch } from "../../tasks/control.js";
 import { isSettableTaskStatus } from "../../tasks/transitions.js";

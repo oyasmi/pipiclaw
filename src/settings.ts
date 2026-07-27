@@ -18,7 +18,7 @@ import {
 	type MemoryMaintenanceTuning,
 } from "./memory/maintenance-tuning.js";
 import type { ResponseMode } from "./runtime/dingtalk.js";
-import type { ConfigDiagnostic } from "./shared/config-diagnostics.js";
+import type { ConfigDiagnostic } from "./shared/config-diagnostic.js";
 import { fileStamp } from "./shared/file-stamp.js";
 
 type PackageSource =

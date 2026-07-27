@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_HOME_DIR } from "../paths.js";
-import type { ConfigDiagnostic } from "../shared/config-diagnostics.js";
+import type { ConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../../shared/atomic-file.js";
-import { normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../shared/task-ledger.js";
+import { normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../tasks/ledger.js";
 import { RecoverableToolError } from "../tool-details.js";
 import { renderTaskFile, renderTaskSkeleton, tasksDir } from "./shared.js";
 import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";

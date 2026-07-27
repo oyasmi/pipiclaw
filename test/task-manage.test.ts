@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
-import { parseTaskFrontmatter } from "../src/shared/task-ledger.js";
+import { parseTaskFrontmatter } from "../src/tasks/ledger.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { workspaceSubjectHash } from "../src/tasks/artifact-subject.js";
 import { createDefaultTaskControl, RETIRED_TASK_CONTROL_KEYS } from "../src/tasks/control.js";

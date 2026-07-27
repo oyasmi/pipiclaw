@@ -24,6 +24,11 @@ export class ChannelQueue {
 		return this.queue.length;
 	}
 
+	/** True only when no queued or in-flight work still owns this channel. */
+	isIdle(): boolean {
+		return !this.processing && this.queue.length === 0;
+	}
+
 	private async processNext(): Promise<void> {
 		if (this.processing || this.stopped || this.queue.length === 0) return;
 		this.processing = true;

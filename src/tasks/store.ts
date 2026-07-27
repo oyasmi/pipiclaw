@@ -12,7 +12,7 @@ import {
 	type TaskDocumentFields,
 	taskBody,
 	taskContractSegment,
-} from "../shared/task-ledger.js";
+} from "./ledger.js";
 import { resetTaskControlForCycle, type TaskControl, type TaskOutcome } from "./control.js";
 
 export interface StoredTaskDocument {

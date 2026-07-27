@@ -5,7 +5,7 @@ import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
 import { parseLocalTime } from "../shared/local-time.js";
-import { normalizeTaskFields, readActiveTasks, type TaskLedgerEntry } from "../shared/task-ledger.js";
+import { normalizeTaskFields, readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
 import {

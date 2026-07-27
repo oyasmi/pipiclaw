@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { MediaSendResult, OutboundMedia } from "../../src/runtime/channel-context.js";
 import type { DingTalkBot, DingTalkEvent, DingTalkHandler } from "../../src/runtime/dingtalk.js";
 import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
-import { readActiveTasks } from "../../src/shared/task-ledger.js";
+import { readActiveTasks } from "../../src/tasks/ledger.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";

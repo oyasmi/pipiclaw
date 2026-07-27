@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseTaskFrontmatter } from "../../src/shared/task-ledger.js";
+import { parseTaskFrontmatter } from "../../src/tasks/ledger.js";
 import type { CodeGrader, GradeResult, Severity, TrialContext } from "./schema.js";
 
 function result(

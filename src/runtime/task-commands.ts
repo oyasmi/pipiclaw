@@ -11,7 +11,7 @@ import {
 	normalizeTaskId,
 	readActiveTasks,
 	type TaskLedgerEntry,
-} from "../shared/task-ledger.js";
+} from "../tasks/ledger.js";
 import { nextTaskWake } from "../shared/task-schedule.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";

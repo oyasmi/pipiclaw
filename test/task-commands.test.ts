@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
 import { formatLocalTime } from "../src/shared/local-time.js";
-import { renderStandardTaskBody, renderTaskDocument } from "../src/shared/task-ledger.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { taskBodyHash } from "../src/tasks/store.js";

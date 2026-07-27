@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { parseTaskFrontmatter } from "../../src/shared/task-ledger.js";
+import { parseTaskFrontmatter } from "../../src/tasks/ledger.js";
 import { createRuntimeHarness, type E2ERuntimeHarness } from "../support/runtime-harness.js";
 import { canRunE2E, getE2ESkipReason } from "../support/setup.js";
 

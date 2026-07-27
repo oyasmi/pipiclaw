@@ -19,7 +19,7 @@ import type { SecurityConfig } from "../security/types.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { taskEventPrefix } from "../shared/task-events.js";
-import { parseTaskFrontmatter } from "../shared/task-ledger.js";
+import { parseTaskFrontmatter } from "../tasks/ledger.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { TERMINAL_TASK_STATUSES } from "../tasks/transitions.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";

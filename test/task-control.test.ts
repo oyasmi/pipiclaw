@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { renderTaskDocument } from "../src/shared/task-ledger.js";
+import { renderTaskDocument } from "../src/tasks/ledger.js";
 import {
 	applyTaskControlPatch,
 	createDefaultTaskControl,

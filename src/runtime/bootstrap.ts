@@ -33,9 +33,9 @@ import {
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { PipiclawSettingsManager } from "../settings.js";
-import { formatConfigDiagnostic } from "../shared/config-diagnostics.js";
+import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { fileStamp } from "../shared/file-stamp.js";
-import { readActiveTasks } from "../shared/task-ledger.js";
+import { readActiveTasks } from "../tasks/ledger.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { finishTaskAttempt } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
@@ -819,6 +819,12 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			}
 		},
 
+		reserveEvent(event: DingTalkEvent): void {
+			// This must remain synchronous. DingTalkBot calls it before awaiting the queued
+			// handler, making the busy state observable to another message in the same tick.
+			getRunner(event.channelId).beginTurn(event.text);
+		},
+
 		async handleEvent(event: DingTalkEvent, bot: DingTalkBot, _isEvent?: boolean): Promise<void> {
 			if (shuttingDown) {
 				log.logInfo(`[${event.channelId}] Ignoring event during shutdown`);
@@ -826,12 +832,6 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			}
 
 			const runner = getRunner(event.channelId);
-			// Reserve the turn synchronously, before yielding to the async task body.
-			// The channel queue invokes this handler's synchronous prefix within the
-			// same tick as dispatch, so beginning the turn here closes the window
-			// where a second message arriving in the same tick saw an idle runner and
-			// was routed as a fresh run instead of a steer/follow-up.
-			runner.beginTurn(event.text);
 			await durableDispatch?.markStarted(event.dispatchId);
 			const task = (async () => {
 				try {

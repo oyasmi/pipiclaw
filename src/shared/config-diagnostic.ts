@@ -1,3 +1,4 @@
+/** A single configuration validation finding, rendered by `formatConfigDiagnostic`. */
 export interface ConfigDiagnostic {
 	source: "settings" | "tools" | "security";
 	path: string;

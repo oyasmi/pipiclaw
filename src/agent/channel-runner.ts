@@ -12,7 +12,7 @@ import {
 	type ModelRegistry,
 	type ModelRuntime,
 	type ResourceLoader,
-	type SettingsManager as SDKSettingsManager,
+	SettingsManager as SDKSettingsManager,
 	SessionManager,
 	type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
@@ -52,7 +52,7 @@ import type { ChannelContext, MediaSender } from "../runtime/channel-context.js"
 import type { ChannelStore } from "../runtime/store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { PipiclawSettingsManager } from "../settings.js";
-import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostics.js";
+import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { formatLocalTime, localStampForFilename } from "../shared/local-time.js";
 import { countPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -114,7 +114,17 @@ function getFinalOutcomeText(outcome: FinalOutcome): string | null {
 }
 
 function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsManager {
-	return manager as unknown as SDKSettingsManager;
+	// The upstream session needs its broad interactive SettingsManager surface, while
+	// Pipiclaw deliberately owns a small runtime-specific settings contract. Build a
+	// real upstream manager from that contract instead of making PipiclawSettingsManager
+	// pretend to implement dozens of unrelated no-op UI preferences.
+	return SDKSettingsManager.inMemory({
+		defaultProvider: manager.getDefaultProvider(),
+		defaultModel: manager.getDefaultModel(),
+		defaultThinkingLevel: manager.getDefaultThinkingLevel(),
+		compaction: manager.getCompactionSettings(),
+		retry: manager.getRetrySettings(),
+	});
 }
 
 const DEFAULT_MAIN_THINKING_LEVEL: ThinkingLevel = "medium";

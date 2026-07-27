@@ -127,6 +127,11 @@ export interface StopOutcome {
 
 export interface DingTalkHandler {
 	isRunning(channelId: string): boolean;
+	/**
+	 * Synchronously reserve an inbound turn before the queued async body yields.
+	 * The transport calls this hook, when provided, immediately before `handleEvent`.
+	 */
+	reserveEvent?(event: DingTalkEvent): void;
 	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
 	handleStop(channelId: string, bot: DingTalkBot): Promise<StopOutcome>;
 	handleEventsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
@@ -228,6 +233,12 @@ const http = axios.create({ timeout: DINGTALK_HTTP_TIMEOUT_MS });
 // still runs a full serialized turn, so an unbounded queue means unbounded backlog time
 // and unbounded memory, not just a slow channel.
 const USER_MESSAGE_QUEUE_LIMIT = 20;
+const EVENT_QUEUE_LIMIT = 5;
+// Channel metadata is persisted on disk, so these in-memory caches can be safely
+// reclaimed after inactivity. A stale unfinished card falls back to a fresh card
+// on the next update rather than retaining one channel forever.
+const CHANNEL_CACHE_TTL_MS = 60 * 60 * 1000;
+const CHANNEL_CACHE_SWEEP_MS = 10 * 60 * 1000;
 const TOKEN_REFRESH_SECS = 90 * 60; // 1.5 hours (tokens expire after 2 hours)
 const CONNECT_ATTEMPT_TIMEOUT_MS = 10_000;
 const SOCKET_CLOSE_GRACE_MS = 1_000;
@@ -259,6 +270,7 @@ export class DingTalkBot implements MediaSender {
 
 	// Conversation metadata cache: channelId → metadata
 	private convMeta = new Map<string, ConversationMeta>();
+	private channelLastActiveAt = new Map<string, number>();
 
 	// Per-channel queues
 	private queues = new Map<string, ChannelQueue>();
@@ -275,6 +287,7 @@ export class DingTalkBot implements MediaSender {
 	// attempt and leave isReconnecting stuck true forever.
 	private reconnectDelayTimer: NodeJS.Timeout | null = null;
 	private reconnectDelayResolve: (() => void) | null = null;
+	private channelCacheSweepTimer: NodeJS.Timeout | null = null;
 	private isReconnecting = false;
 	private isStopped = false;
 	private reconnectAttempts = 0;
@@ -292,6 +305,8 @@ export class DingTalkBot implements MediaSender {
 			responseMode: normalizeResponseMode(config.responseMode),
 			cardAutoLayout: config.cardAutoLayout ?? true,
 		};
+		this.channelCacheSweepTimer = setInterval(() => this.cleanupIdleChannelCaches(), CHANNEL_CACHE_SWEEP_MS);
+		this.channelCacheSweepTimer.unref?.();
 	}
 
 	get busyMessageDefault(): BusyMessageMode {
@@ -701,6 +716,10 @@ export class DingTalkBot implements MediaSender {
 		log.logInfo("DingTalk: stopping bot");
 		this.isStopped = true;
 		this.clearAllTimers();
+		if (this.channelCacheSweepTimer) {
+			clearInterval(this.channelCacheSweepTimer);
+			this.channelCacheSweepTimer = null;
+		}
 		for (const queue of this.queues.values()) {
 			queue.stop();
 		}
@@ -724,7 +743,7 @@ export class DingTalkBot implements MediaSender {
 			return false;
 		}
 		const queue = this.getQueue(event.channelId);
-		if (queue.size() >= 5) {
+		if (queue.size() >= EVENT_QUEUE_LIMIT) {
 			log.logEvent("warn", "runtime.channel_queue.full", "Discarding incoming event", {
 				ctx: { channelId: event.channelId, userName: event.userName },
 				fields: { messageLength: event.text.length },
@@ -738,6 +757,7 @@ export class DingTalkBot implements MediaSender {
 		queue.enqueue(async () => {
 			this.activeMessageProcessing = true;
 			try {
+				this.handler.reserveEvent?.(event);
 				await this.handler.handleEvent(event, this, true);
 			} finally {
 				this.activeMessageProcessing = false;
@@ -763,6 +783,7 @@ export class DingTalkBot implements MediaSender {
 		queue.enqueue(async () => {
 			this.activeMessageProcessing = true;
 			try {
+				this.handler.reserveEvent?.(queuedEvent);
 				await this.handler.handleEvent(queuedEvent, this);
 			} finally {
 				this.activeMessageProcessing = false;
@@ -1409,6 +1430,7 @@ export class DingTalkBot implements MediaSender {
 	}
 
 	private getQueue(channelId: string): ChannelQueue {
+		this.touchChannel(channelId);
 		let queue = this.queues.get(channelId);
 		if (!queue) {
 			queue = new ChannelQueue();
@@ -1418,6 +1440,7 @@ export class DingTalkBot implements MediaSender {
 	}
 
 	private getConversationMeta(channelId: string): ConversationMeta | null {
+		this.touchChannel(channelId);
 		const cached = this.convMeta.get(channelId);
 		if (cached) return cached;
 
@@ -1446,6 +1469,7 @@ export class DingTalkBot implements MediaSender {
 	}
 
 	private setConversationMeta(channelId: string, meta: ConversationMeta): void {
+		this.touchChannel(channelId);
 		this.convMeta.set(channelId, meta);
 
 		const metaPath = this.getConversationMetaPath(channelId);
@@ -1462,5 +1486,25 @@ export class DingTalkBot implements MediaSender {
 	private getConversationMetaPath(channelId: string): string | null {
 		if (!this.config.stateDir) return null;
 		return join(getChannelDir(this.config.stateDir, channelId), ".channel-meta.json");
+	}
+
+	private touchChannel(channelId: string): void {
+		this.channelLastActiveAt.set(channelId, Date.now());
+	}
+
+	private cleanupIdleChannelCaches(now = Date.now()): void {
+		const cutoff = now - CHANNEL_CACHE_TTL_MS;
+		for (const [channelId, lastActiveAt] of this.channelLastActiveAt) {
+			if (lastActiveAt > cutoff) continue;
+			const queue = this.queues.get(channelId);
+			if (!queue?.isIdle() || this.cardCreationInFlight.has(channelId)) continue;
+
+			const card = this.activeCards.get(channelId);
+			if (card && card.lastUpdated * 1000 > cutoff) continue;
+			this.activeCards.delete(channelId);
+			this.convMeta.delete(channelId);
+			this.queues.delete(channelId);
+			this.channelLastActiveAt.delete(channelId);
+		}
 	}
 }

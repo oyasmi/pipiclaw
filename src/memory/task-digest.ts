@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { countPromptUnits } from "../shared/prompt-units.js";
-import { readActiveTasks, type TaskLedgerEntry } from "../shared/task-ledger.js";
+import { readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
 
 /** Automatic-context share for the in-flight task agenda (spec 026 §5.3). */
 export const TASK_AGENDA_MAX_UNITS = 600;
