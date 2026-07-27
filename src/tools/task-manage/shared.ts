@@ -1,9 +1,13 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import * as log from "../../log.js";
 import { parseScheduledEventContent } from "../../runtime/events.js";
 import { formatLocalTime, parseWakeInput } from "../../shared/local-time.js";
 import { taskEventPrefix } from "../../shared/task-events.js";
+import { nextTaskWake, validateTaskSchedule } from "../../shared/task-schedule.js";
+import { errorMessage } from "../../shared/text-utils.js";
+import { applyTaskControlPatch, createDefaultTaskControl, type TaskControlPatch } from "../../tasks/control.js";
 import {
 	parseTaskFrontmatter,
 	renderStandardTaskBody,
@@ -11,8 +15,6 @@ import {
 	taskBody,
 	upsertCurrentCycleCompletionEvidence,
 } from "../../tasks/ledger.js";
-import { nextTaskWake, validateTaskSchedule } from "../../shared/task-schedule.js";
-import { applyTaskControlPatch, createDefaultTaskControl, type TaskControlPatch } from "../../tasks/control.js";
 import { isSettableTaskStatus } from "../../tasks/transitions.js";
 import { RecoverableToolError } from "../tool-details.js";
 import { SETTABLE_STATUSES } from "./schema.js";
@@ -65,7 +67,10 @@ function normalizeCreateStatus(status: string | undefined): (typeof SETTABLE_STA
 	throw new RecoverableToolError(`Invalid status "${status}". Use one of ${SETTABLE_STATUSES.join(", ")}.`);
 }
 
-export function renderTaskSkeleton(request: TaskManageRequest): { fields: TaskFields; body: string } {
+export function renderTaskSkeleton(request: TaskManageRequest): {
+	fields: TaskFields;
+	body: string;
+} {
 	const title = requiredField(request.title, "title", "create");
 	const goal = requiredField(request.goal, "goal", "create");
 	const dod = requiredField(request.dod, "dod", "create");
@@ -232,8 +237,18 @@ export async function cleanupTaskEvents(options: TaskManageToolOptions, id: stri
 	for (const filename of (await readdir(dir)).sort()) {
 		if (!filename.endsWith(".json") || !filename.startsWith(prefix)) continue;
 		const eventPath = join(dir, filename);
+		let content: string;
 		try {
-			parseScheduledEventContent(await readFile(eventPath, "utf-8"), filename);
+			content = await readFile(eventPath, "utf-8");
+		} catch (error) {
+			log.logWarning(
+				`Could not read task-owned event ${filename} during cleanup`,
+				`${errorMessage(error)}. Fix filesystem access, then use /events show ${filename.slice(0, -".json".length)} and retry cleanup.`,
+			);
+			continue;
+		}
+		try {
+			parseScheduledEventContent(content, filename);
 		} catch {
 			continue; // can't classify → leave it for /events to handle
 		}

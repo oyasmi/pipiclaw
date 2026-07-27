@@ -38,7 +38,9 @@ export type TaskLifecycleAction =
 	| "set"
 	| "pause"
 	| "resume"
-	| "run";
+	| "run"
+	| "escalate"
+	| "start-cycle";
 
 interface TransitionRule {
 	/** Statuses the action may be invoked from. `create` starts from nothing. */
@@ -54,11 +56,19 @@ const TRANSITIONS: Record<TaskLifecycleAction, TransitionRule> = {
 	verify: { from: ["verifying"], to: "verifying" },
 	done: { from: ["active", "waiting", "verifying"], to: "done" },
 	skip: { from: ["active", "waiting", "verifying"], to: "done" },
-	cancel: { from: ["active", "waiting", "verifying", "paused"], to: "cancelled" },
-	set: { from: ["active", "waiting", "verifying", "paused", "done"], to: "caller" },
+	cancel: {
+		from: ["active", "waiting", "verifying", "paused", "done"],
+		to: "cancelled",
+	},
+	set: {
+		from: ["active", "waiting", "verifying", "paused", "done"],
+		to: "caller",
+	},
 	pause: { from: ["active", "waiting", "verifying"], to: "paused" },
 	resume: { from: ["paused"], to: "active" },
-	run: { from: ["paused", "active", "waiting"], to: "active" },
+	run: { from: ["paused", "active", "waiting", "done"], to: "active" },
+	escalate: { from: ["active", "waiting", "verifying"], to: "paused" },
+	"start-cycle": { from: ["done"], to: "active" },
 };
 
 /**

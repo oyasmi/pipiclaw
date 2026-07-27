@@ -83,6 +83,8 @@ export interface TaskControl {
 	/** Usage in the current recurring cycle (or the full one-shot task). */
 	usage: TaskUsage;
 	verification: TaskVerification;
+	/** Monotonic claim identity; prevents an older failed dispatch from releasing a newer claim. */
+	attemptGeneration: number;
 	lastStartedAt?: string;
 	lastFinishedAt?: string;
 	/** Identifier of the currently open recurring-task cycle, when applicable. */
@@ -123,6 +125,14 @@ function finiteNonNegative(value: unknown, fallback = 0): number {
 	if (value === undefined) return fallback;
 	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
 		throw new Error("control usage values must be finite non-negative numbers");
+	}
+	return value;
+}
+
+function nonNegativeInteger(value: unknown, fallback = 0): number {
+	if (value === undefined) return fallback;
+	if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+		throw new Error("control.attemptGeneration must be a non-negative integer; remove it to rebuild from 0.");
 	}
 	return value;
 }
@@ -226,8 +236,15 @@ export function createDefaultTaskControl(requiresVerification = false): TaskCont
 		sideEffects: "workspace",
 		externalApproval: "not-required",
 		budget: { maxAttempts: 12 },
-		usage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
+		usage: {
+			attempts: 0,
+			tokens: 0,
+			costUsd: 0,
+			costKnown: true,
+			wallTimeMinutes: 0,
+		},
 		verification: { required: requiresVerification, status: "pending" },
+		attemptGeneration: 0,
 	};
 }
 
@@ -299,6 +316,7 @@ export function parseTaskControl(raw: string): TaskControl {
 			checkedAt: optionalString(verification.checkedAt),
 			subjectHash: optionalString(verification.subjectHash),
 		},
+		attemptGeneration: nonNegativeInteger(value.attemptGeneration),
 		lastStartedAt: optionalString(value.lastStartedAt),
 		lastFinishedAt: optionalString(value.lastFinishedAt),
 		cycleId: optionalString(value.cycleId),
@@ -324,8 +342,17 @@ export function resetTaskControlForCycle(control: TaskControl, cycleId: string):
 		approvalBy: undefined,
 		approvedAt: undefined,
 		approvalBodyHash: undefined,
-		usage: { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
-		verification: { required: control.verification.required, status: "pending" },
+		usage: {
+			attempts: 0,
+			tokens: 0,
+			costUsd: 0,
+			costKnown: true,
+			wallTimeMinutes: 0,
+		},
+		verification: {
+			required: control.verification.required,
+			status: "pending",
+		},
 		lastStartedAt: undefined,
 		lastFinishedAt: undefined,
 		cycleId: normalizedCycleId,
@@ -363,7 +390,10 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 		next.budget.maxAttempts = patch.maxAttempts;
 	}
 	if (patch.verificationRequired !== undefined && patch.verificationRequired !== next.verification.required) {
-		next.verification = { required: patch.verificationRequired, status: "pending" };
+		next.verification = {
+			required: patch.verificationRequired,
+			status: "pending",
+		};
 	}
 	if (next.sideEffects !== "external") {
 		next.externalApproval = "not-required";
@@ -413,7 +443,13 @@ export function taskBudgetViolation(control: TaskControl, nowMs: number): string
 
 export function invalidateTaskVerification(control: TaskControl): TaskControl {
 	if (control.verification.status === "pending") return control;
-	return { ...control, verification: { required: control.verification.required, status: "pending" } };
+	return {
+		...control,
+		verification: {
+			required: control.verification.required,
+			status: "pending",
+		},
+	};
 }
 
 export function invalidateTaskApproval(control: TaskControl): TaskControl {

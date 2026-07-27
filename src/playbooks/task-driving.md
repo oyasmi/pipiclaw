@@ -57,7 +57,7 @@ priority: 41
 
 ## 不唤醒或频繁唤醒
 
-可推进 = 非 done/cancelled/paused、非停泊（`waiting` 且无 `wake`），且 `wake` 缺失、无效或已到期。
+driver 可推进状态包括 `active`、`waiting` 和 `verifying`：其中 `verifying` 会进入只读 checker 回合；三者还必须非停泊（`waiting` 且无 `wake`），且 `wake` 缺失、无效或已到期。`done` 周期任务只在下一次 `wake` 到期时由 runtime 打开新周期，`cancelled`/`paused` 不推进。
 
 - 停泊中：这是有意的，等外部信号即可；确认没人会来叫时用 `/tasks run <id>` 或改回 `active`。
 - `paused`：用户 `/tasks resume <id>`；若是治理器因预算耗尽暂停，得先 `/tasks set <id> attempts <n>` 放宽，否则 resume 会被拒绝。

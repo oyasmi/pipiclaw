@@ -107,16 +107,16 @@ main.js (CLI 入口，argv 分发)
 
 | 编号 | 严重度 | 描述 | 证据 |
 |---|---|---|---|
-| Task-M1 | **Major** | `cancel` 转换表(`transitions.js:31`)不含 `done` 起点,而周期任务的常态恰恰是 `done`(原地休眠等下个周期)。用户/agent 无法对一个正在休眠的周期任务直接执行 `task_manage cancel`,与 playbook `task-planning.md:68`「退役:task_manage cancel」的描述脱节,必须先 `set` 把状态掰回 `active`/`waiting`/`paused` 再 cancel,多了一步无文档提示的隐性操作。 | `tasks/transitions.js:31`;`tools/task-manage/lifecycle.js:178-186` |
-| Task-M2 | **Major** | 存储层 `updateStoredTask`(`tasks/store.js:52-59`)是纯粹的 read-await-modify-write,没有文件锁或 CAS。正确性完全依赖"同一 channel 内 turn 串行执行"这一隐式约定,该约定未在 `store.d.ts` 接口层面强制或文档化。当前单进程+按 channel 排队的生产路径下大概率安全,但 `store.js` 是被 `task-driver.js`/`task-migration.js`/`task-commands.js` 等多处直接调用的通用 API,启动期迁移(`task-migration.js:50-57`)与首次 driver tick 之间也存在理论竞态窗口;一旦引入多进程部署或任何绕开 per-channel 队列的新入口,会静默丢失更新。 | `tasks/store.js:52-59`;`runtime/bootstrap.js:584,646` |
-| Task-Minor1 | Minor | `run` 转换表(`transitions.js:35`)同样不含 `done`,`/tasks run` 无法直接催醒休眠中的周期任务,只能绕行 `set wake=now`。 | `tasks/transitions.js:35`;`runtime/task-commands.js:379-409` |
-| Task-Minor2 | Minor | `escalateTask`/`openRecurringTaskCycle`(`tasks/store.js:125-136,159-172`)直接赋值 `status` 字段,绕开 `resolveTaskTransition`,与模块顶部"单一转换表"的说法不完全一致。目前靠调用点的隐式前置条件保证安全,但属于容易被后续新增调用点复制却忘记加守卫的技术债。 | `tasks/store.js:125-136,159-172` |
-| Task-Minor3 | Minor | `claimTaskAttempt`/`releaseTaskAttemptClaim` 用 `lastStartedAt` 时间戳字符串相等性判断"这次 claim 是否仍是最新一次",是一种简易乐观锁,理论上同秒内多次 claim 存在极小碰撞窗口(实际 claim 频率远低于秒级)。 | `tasks/store.js:79-89` |
-| Task-Minor4 | Minor | `parseCache`(`shared/task-ledger.js:660-674`)基于文件系统 `mtimeMs`/`ctimeMs`/`size` 三元组判新鲜度,低精度文件系统上理论上有极短暂的过期读风险(仅影响只读列表展示,不影响读改写路径)。 | `shared/task-ledger.js:663-674` |
-| Task-Minor5 | Minor | `cleanupTaskEvents` 把 I/O 异常与内容解析异常混在同一个 `catch` 块静默跳过,磁盘故障等真实问题会被当作"不可解析的旧事件"悄悄忽略,不利排障。 | `tools/task-manage/shared.js:192-197` |
-| Task-S1 | Suggestion | `task-driving.md` 对 `verifying` 状态的"可推进"语义未与 `active`/`waiting` 放在同一处说明,读者需跳到别处才能拼出完整图景。 | `playbooks/task-driving.md:60`;`runtime/task-driver.js:116-121` |
-| Task-S2 | Suggestion | `runtime/task-commands.js`(651 行)职责偏重,建议按 `task-manage/` 的模式拆分。 | `runtime/task-commands.js` 全文件 |
-| Task-S3 | Suggestion | `claim`/`release` 补偿机制建议引入单调递增的 `attemptGeneration` 字段替代时间戳字符串比较,消除同秒内多次 claim 的理论碰撞窗口。 | `tasks/store.js:60-89` |
+| Task-M1 | **Major，已处理（2026-07-27）** | 问题属实且直接违背周期任务退役语义。`cancel` 转换现允许从 `done` 进入 `cancelled`，休眠中的周期任务可直接取消并归档；已补回归测试。 | `tasks/transitions.ts`;`tools/task-manage/lifecycle.ts`;`test/task-manage.test.ts` |
+| Task-M2 | **Major，已处理（2026-07-27）** | 问题属实，且 `/tasks` 是不占 channel run queue 的即时命令，所以当前单进程内也存在与 driver/agent 更新互相覆盖的窗口。现按 `channelDir + taskId` 用可重入 keyed queue 串行化 task_manage、`/tasks`、driver、迁移和 store 更新；文档同时明确跨进程共享同一 workspace 不受支持。文件锁/CAS 会引入 stale lock、冲突重试和跨平台语义，超出当前单进程产品模型，故不引入。 | `tasks/mutation-lock.ts`;`tasks/store.ts`;`tools/task-manage.ts`;`runtime/task-commands.ts`;`docs/scaling-and-concurrency.md`;`test/task-control.test.ts` |
+| Task-Minor1 | **Minor，已处理（2026-07-27）** | 问题属实且修复成本低。`run` 转换现允许从 `done` 唤醒；`/tasks run` 会用统一的周期重开逻辑折叠上一周期、重置周期 control、清除旧 wake，再立即派发，而不是把已完成周期原样改回 active。 | `tasks/transitions.ts`;`runtime/task-commands.ts`;`test/task-commands.test.ts` |
+| Task-Minor2 | **Minor，已处理（2026-07-27）** | 问题属实。统一转换表新增 runtime 内部动作 `escalate` 与 `start-cycle`，治理暂停和周期重开不再直接写 status，并会拒绝不合法的调用前置状态。 | `tasks/transitions.ts`;`tasks/store.ts`;`test/task-driver.test.ts` |
+| Task-Minor3 | **Minor，已处理（2026-07-27）** | 风险真实但原报告“同秒”不准确：本地时间格式包含毫秒，碰撞窗口是同毫秒。已与 Task-S3 合并处理，control 增加向后兼容、单调递增的 `attemptGeneration`；旧 dispatch 的 release 不再可能回滚较新的 claim。 | `tasks/control.ts`;`tasks/store.ts`;`test/task-control.test.ts` |
+| Task-Minor4 | **Minor，评估后不修（2026-07-27）** | 理论风险成立，但仅在低时间精度文件系统、相同时间戳与大小的快速重写组合下造成短暂的只读列表旧值；实际读改写路径不使用该缓存。加入内容哈希会把每次列表的缓存命中重新变成全量读取，移除缓存又牺牲常用列表性能，性价比低。 | `tasks/ledger.ts` |
+| Task-Minor5 | **Minor，已处理（2026-07-27）** | 问题属实。读取 I/O 与事件内容解析现分开处理：不可解析旧事件仍交给 `/events`，读取失败则写 warning，并附带修复文件访问后用 `/events show` 检查和重试清理的下一步。 | `tools/task-manage/shared.ts` |
+| Task-S1 | **Suggestion，已处理（2026-07-27）** | 建议合理且成本低。driver 的可推进说明现将 `active`、`waiting`、`verifying` 并列，并明确 verifying 使用 checker-only 回合及 done 周期重开语义。 | `playbooks/task-driving.md` |
+| Task-S2 | **Suggestion，评估后不修（2026-07-27）** | 文件偏长属实，但当前主要长度来自只读 doctor 诊断和格式化；仅按行数拆分不会修复行为问题，反而会扩大本轮并发正确性改动的审查面。等命令域出现实际独立演进需求时再按职责拆分。 | `runtime/task-commands.ts` |
+| Task-S3 | **Suggestion，已处理（2026-07-27）** | 建议与 Task-Minor3 是同一问题，已采用。`attemptGeneration` 对旧任务缺省为 0、每次 claim 递增、跨周期保留，release 只补偿 generation 仍匹配的 claim。 | `tasks/control.ts`;`tasks/store.ts`;`test/task-control.test.ts` |
 
 ### 2.3 Event 调度系统
 
@@ -212,7 +212,7 @@ main.js (CLI 入口，argv 分发)
 
 #### Suggestion
 
-- 敏感文件名探测(扩展名+关键词启发式)天然可被"改名"绕过,是启发式方案的固有局限而非实现错误,建议文档中明确声明其"尽力而为"性质。
+- **S-1，已处理（2026-07-27）**：问题属实且属于启发式方案的固有边界。安全文档现明确扩展名/关键词探测是“尽力而为”的非内容扫描，改名可绕过，并给出对自定义凭据目录配置 deny、用独立账号/容器隔离的下一步（`docs/security.md`）。
 
 **设计亮点**(详见第 3 节):`network.js` 的 SSRF 防护相当完整(每一跳重定向单独重新校验、`web/client.js` 的 `pinnedLookup` 消除 DNS rebinding TOCTOU);`web/extract.js` 的 jsdom 使用未开启 `runScripts`/`resources`,抓取的恶意 HTML 不会被执行;`command-guard.js` 对嵌套命令(`sh -c`、`find -exec`、透明包装器)的递归解析设计,以及 `allowPatterns` 从子串匹配改为前缀锚定匹配(修复过"`git status` 白名单被 `git status; rm -rf /` 冒用"的真实绕过案例)。
 

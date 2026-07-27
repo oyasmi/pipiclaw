@@ -135,19 +135,18 @@ describe("runtime stop handling", () => {
 			createEventsWatcher: () => ({ start() {}, stop() {} }),
 		});
 
-		const task = runtime.handler.handleEvent(
-			{
-				type: "dm",
-				channelId: "dm_tester",
-				ts: "1000",
-				user: "tester",
-				userName: "Tester",
-				text: "please keep working",
-				conversationId: "conv_1",
-				conversationType: "1",
-			},
-			bot as unknown as DingTalkBot,
-		);
+		const event = {
+			type: "dm",
+			channelId: "dm_tester",
+			ts: "1000",
+			user: "tester",
+			userName: "Tester",
+			text: "please keep working",
+			conversationId: "conv_1",
+			conversationType: "1",
+		} as const;
+		runtime.handler.reserveEvent?.(event);
+		const task = runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
 
 		await Promise.resolve();
 		await runtime.handler.handleStop("dm_tester", bot as unknown as DingTalkBot);
@@ -220,19 +219,18 @@ describe("runtime stop handling", () => {
 			createEventsWatcher: () => ({ start() {}, stop() {} }),
 		});
 
-		const task = runtime.handler.handleEvent(
-			{
-				type: "dm",
-				channelId: "dm_tester",
-				ts: "1000",
-				user: "TASK_DRIVER",
-				userName: "TASK_DRIVER",
-				text: "[TASK_DRIVER:long-run] Resume task long-run.",
-				conversationId: "conv_1",
-				conversationType: "1",
-			},
-			bot as unknown as DingTalkBot,
-		);
+		const event = {
+			type: "dm",
+			channelId: "dm_tester",
+			ts: "1000",
+			user: "TASK_DRIVER",
+			userName: "TASK_DRIVER",
+			text: "[TASK_DRIVER:long-run] Resume task long-run.",
+			conversationId: "conv_1",
+			conversationType: "1",
+		} as const;
+		runtime.handler.reserveEvent?.(event);
+		const task = runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
 
 		await runStarted;
 		const outcome = await runtime.handler.handleStop("dm_tester", bot as unknown as DingTalkBot);

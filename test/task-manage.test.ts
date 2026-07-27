@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
-import { parseTaskFrontmatter } from "../src/tasks/ledger.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { workspaceSubjectHash } from "../src/tasks/artifact-subject.js";
 import { createDefaultTaskControl, RETIRED_TASK_CONTROL_KEYS } from "../src/tasks/control.js";
+import { parseTaskFrontmatter } from "../src/tasks/ledger.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
 import { taskManageSchema } from "../src/tools/task-manage/schema.js";
 import { manageTask, type TaskManageRequest, type TaskManageToolOptions } from "../src/tools/task-manage.js";
@@ -883,6 +883,22 @@ describe("manageTask", () => {
 			// wake was recomputed off the new cadence, no longer the old Monday value.
 			expect(onDisk).not.toContain("wake: 2026-07-13T09:30:00+08:00");
 			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
+		});
+
+		it("cancels and archives a sleeping recurring task directly", async () => {
+			await writeTask(
+				"retired-weekly",
+				"status: done\nschedule: 30 9 * * 1\nwake: 2026-08-03T09:30:00+08:00",
+				"# Retired weekly",
+			);
+			const result = await manageTask(options, {
+				action: "cancel",
+				id: "retired-weekly",
+				reason: "The recurring workflow was retired.",
+			});
+			expect(result).toMatchObject({ status: "cancelled", archived: true });
+			expect(existsSync(join(tasksDir, "retired-weekly.md"))).toBe(false);
+			expect(await readFile(join(tasksDir, "archive", "retired-weekly.md"), "utf-8")).toContain("status: cancelled");
 		});
 
 		// Regression: production incident where a task's cron was changed (10:30 → 7:30) while

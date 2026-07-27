@@ -31,6 +31,8 @@ Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的
 | 会话命令（`/model` `/new` `/compact` `/session`） | 提示空闲后再用 |
 | 未知 `/` 命令 | 直接拒绝并提示 `/help`，不发给模型 |
 
+`/tasks` 命令虽然不占用运行队列，但同一 task 的命令、agent 工具调用、driver 治理和启动迁移会经过进程内 keyed queue 串行修改，避免 read-modify-write 相互覆盖。这个保证只在单进程内成立：**不要让多个 Pipiclaw 进程共享同一个 workspace**；需要拆实例时必须使用彼此独立的工作区。
+
 **后台负载也在同一进程里。** 除用户回合外，还有几类受控的后台工作会消耗 LLM API：
 
 - 记忆维护调度器：本地闸门通过后才做 LLM 整理，每 tick 最多处理 1 个通道（内置常量；整体可用 `memoryMaintenance.enabled` 关闭）；

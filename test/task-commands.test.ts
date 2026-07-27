@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
 import { formatLocalTime } from "../src/shared/local-time.js";
-import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
 import { taskBodyHash } from "../src/tasks/store.js";
 
 const FUTURE = "2026-07-08T23:59:00+08:00";
@@ -199,6 +199,38 @@ describe("handleTasksCommand", () => {
 		expect(out).toContain("已把任务 ready 排入一次立即执行");
 		expect(dispatches).toEqual(["ready"]);
 		expect(await readFile(join(tasksDir, "ready.md"), "utf-8")).toContain("status: active");
+	});
+
+	it("runs a sleeping recurring task immediately", async () => {
+		await writeFile(
+			join(tasksDir, "weekly.md"),
+			renderTaskDocument(
+				{
+					status: "done",
+					schedule: "0 9 * * 1",
+					wake: "2026-08-03T09:00:00+08:00",
+					control: createDefaultTaskControl(),
+				},
+				STANDARD_BODY,
+			),
+		);
+		const dispatches: string[] = [];
+		const out = await handleTasksCommand({
+			args: "run weekly",
+			channelDir,
+			workspaceDir,
+			channelId,
+			dispatchTask: async (id) => {
+				dispatches.push(id);
+				return true;
+			},
+		});
+		expect(out).toContain("已把任务 weekly 排入一次立即执行");
+		expect(dispatches).toEqual(["weekly"]);
+		const stored = await readFile(join(tasksDir, "weekly.md"), "utf-8");
+		expect(stored).toContain("status: active");
+		expect(stored).not.toContain("wake:");
+		expect(stored).toContain('"cycleId":"cycle-');
 	});
 
 	it("renders token and verification stats without an LLM turn", async () => {

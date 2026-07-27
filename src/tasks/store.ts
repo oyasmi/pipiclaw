@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime } from "../shared/local-time.js";
+import { resetTaskControlForCycle, type TaskControl, type TaskOutcome } from "./control.js";
 import {
 	normalizeTaskId,
 	parseTaskFrontmatter,
@@ -13,7 +14,8 @@ import {
 	taskBody,
 	taskContractSegment,
 } from "./ledger.js";
-import { resetTaskControlForCycle, type TaskControl, type TaskOutcome } from "./control.js";
+import { withTaskMutation } from "./mutation-lock.js";
+import { normalizeStoredStatus, resolveTaskTransition } from "./transitions.js";
 
 export interface StoredTaskDocument {
 	id: string;
@@ -78,11 +80,13 @@ export async function updateStoredTask(
 	update: (document: StoredTaskDocument) => void,
 	includeArchive = false,
 ): Promise<StoredTaskDocument | undefined> {
-	const document = await readStoredTask(channelDir, id, includeArchive);
-	if (!document) return undefined;
-	update(document);
-	await writeStoredTask(document);
-	return document;
+	return withTaskMutation(channelDir, id, async () => {
+		const document = await readStoredTask(channelDir, id, includeArchive);
+		if (!document) return undefined;
+		update(document);
+		await writeStoredTask(document);
+		return document;
+	});
 }
 
 export interface TaskAttemptClaim {
@@ -90,6 +94,7 @@ export interface TaskAttemptClaim {
 	previousLastOutcome: TaskOutcome;
 	previousBlockedReason?: string;
 	previousLastStartedAt?: string;
+	generation: number;
 }
 
 export async function claimTaskAttempt(
@@ -105,8 +110,10 @@ export async function claimTaskAttempt(
 			previousLastOutcome: task.fields.control.lastOutcome,
 			previousBlockedReason: task.fields.control.blockedReason,
 			previousLastStartedAt: task.fields.control.lastStartedAt,
+			generation: task.fields.control.attemptGeneration + 1,
 		};
 		task.fields.control.usage.attempts++;
+		task.fields.control.attemptGeneration = claim.generation;
 		task.fields.control.lastStartedAt = formatLocalTime(now);
 		task.fields.control.lastOutcome = "running";
 	});
@@ -114,15 +121,10 @@ export async function claimTaskAttempt(
 	return claim;
 }
 
-export async function releaseTaskAttemptClaim(
-	channelDir: string,
-	id: string,
-	claim: TaskAttemptClaim,
-	startedAt: Date,
-): Promise<void> {
+export async function releaseTaskAttemptClaim(channelDir: string, id: string, claim: TaskAttemptClaim): Promise<void> {
 	await updateStoredTask(channelDir, id, (task) => {
 		const control = task.fields.control;
-		if (!control || control.lastStartedAt !== formatLocalTime(startedAt)) return;
+		if (!control || control.attemptGeneration !== claim.generation) return;
 		control.usage.attempts = Math.max(0, control.usage.attempts - 1);
 		control.lastStartedAt = claim.previousLastStartedAt;
 		control.lastOutcome = claim.previousLastOutcome;
@@ -182,7 +184,7 @@ export async function finishTaskAttempt(
  */
 export async function escalateTask(channelDir: string, id: string, reason: string): Promise<boolean> {
 	const document = await updateStoredTask(channelDir, id, (task) => {
-		task.fields.status = "paused";
+		task.fields.status = resolveTaskTransition("escalate", id, normalizeStoredStatus(task.fields.status));
 		task.fields.wake = undefined;
 		if (task.fields.control) {
 			task.fields.control.pausedBy = "governor";
@@ -222,9 +224,9 @@ export async function openRecurringTaskCycle(
 ): Promise<{ document: StoredTaskDocument; cycleId: string } | undefined> {
 	let cycleId: string | undefined;
 	const document = await updateStoredTask(channelDir, id, (task) => {
+		task.fields.status = resolveTaskTransition("start-cycle", id, normalizeStoredStatus(task.fields.status));
 		cycleId = nextCycleId(task.fields.control?.cycleId, now);
 		task.body = startTaskCycle(task.body, cycleId);
-		task.fields.status = "active";
 		task.fields.wake = undefined;
 		if (task.fields.control) task.fields.control = resetTaskControlForCycle(task.fields.control, cycleId);
 	});

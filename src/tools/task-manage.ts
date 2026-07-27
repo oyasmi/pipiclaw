@@ -1,4 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { normalizeTaskId } from "../tasks/ledger.js";
+import { withTaskMutation } from "../tasks/mutation-lock.js";
 import { createTask } from "./task-manage/create.js";
 import { cancelTask, doneTask, listTasks, progressTask, setTask, skipTask } from "./task-manage/lifecycle.js";
 import { parseAction, taskManageSchema } from "./task-manage/schema.js";
@@ -21,6 +23,16 @@ export type {
 export async function manageTask(
 	options: TaskManageToolOptions,
 	request: TaskManageRequest,
+): Promise<TaskManageResult> {
+	if (request.action === "list") return listTasks(options);
+	if (!request.id) return dispatchTaskMutation(options, request);
+	const id = normalizeTaskId(request.id);
+	return withTaskMutation(options.channelDir, id, () => dispatchTaskMutation(options, request));
+}
+
+function dispatchTaskMutation(
+	options: TaskManageToolOptions,
+	request: Exclude<TaskManageRequest, { action: "list" }> | TaskManageRequest,
 ): Promise<TaskManageResult> {
 	switch (request.action) {
 		case "create":
@@ -57,7 +69,10 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 		// the validated arguments minus `label`, with no third hand-written copy to drift.
 		execute: async (_toolCallId, args) => {
 			const { label: _label, ...request } = args;
-			const result = await manageTask(options, { ...request, action: parseAction(request.action) });
+			const result = await manageTask(options, {
+				...request,
+				action: parseAction(request.action),
+			});
 			return {
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 				details: {

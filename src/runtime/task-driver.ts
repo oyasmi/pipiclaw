@@ -5,9 +5,9 @@ import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
 import { parseLocalTime } from "../shared/local-time.js";
-import { normalizeTaskFields, readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
+import { normalizeTaskFields, readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
 import {
 	claimTaskAttempt,
 	escalateTask,
@@ -505,7 +505,7 @@ export class TaskDriver {
 				const event = createTaskDriverEvent(channelId, entry, nowMs);
 				const accepted = await this.options.dispatch(event);
 				this.observeDispatch(event, accepted);
-				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim, now);
+				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim);
 				this.attempts.set(key, { fingerprint, atMs: nowMs, accepted, effects, futileCount });
 				this.lastDispatchedTaskId.set(channelId, entry.id);
 				if (accepted) {

@@ -4,14 +4,6 @@ import { join, resolve, sep } from "node:path";
 import { channelJobTaskIds } from "../agent/job-manager.js";
 import { formatLocalTime, parseLocalTime, parseWakeInput } from "../shared/local-time.js";
 import { parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
-import {
-	extractTaskTitle,
-	isTaskParked,
-	missingStandardTaskSections,
-	normalizeTaskId,
-	readActiveTasks,
-	type TaskLedgerEntry,
-} from "../tasks/ledger.js";
 import { nextTaskWake } from "../shared/task-schedule.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
@@ -25,7 +17,17 @@ import {
 	taskBudgetViolation,
 } from "../tasks/control.js";
 import {
+	extractTaskTitle,
+	isTaskParked,
+	missingStandardTaskSections,
+	normalizeTaskId,
+	readActiveTasks,
+	type TaskLedgerEntry,
+} from "../tasks/ledger.js";
+import { withTaskMutation } from "../tasks/mutation-lock.js";
+import {
 	claimTaskAttempt,
+	openRecurringTaskCycle,
 	readStoredTask,
 	releaseTaskAttemptClaim,
 	taskBodyHash,
@@ -132,7 +134,12 @@ function parseTasksCommand(args: string): TasksCommand {
 		if (!match || !field || !(SETTABLE_TASK_FIELDS as readonly string[]).includes(field)) {
 			throw new Error(`用法：/tasks set <id> <${SETTABLE_TASK_FIELDS.join("|")}> <值>`);
 		}
-		return { action: "set", id: match[1], field: field as SettableTaskField, value: match[3].trim() };
+		return {
+			action: "set",
+			id: match[1],
+			field: field as SettableTaskField,
+			value: match[3].trim(),
+		};
 	}
 	if (action === "stats") {
 		const id = parts[1];
@@ -306,6 +313,10 @@ async function approveTask(options: HandleTasksCommandOptions, idInput: string):
 
 export async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
+	return withTaskMutation(options.channelDir, id, () => pauseTaskLocked(options, id));
+}
+
+async function pauseTaskLocked(options: HandleTasksCommandOptions, id: string): Promise<string> {
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `找不到任务：${id}`;
 	const from = normalizeStoredStatus(task.fields.status);
@@ -444,17 +455,27 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 	}
 	const blocked = restartBlockedMessage(id, task.fields.control);
 	if (blocked) return blocked;
-	task.fields.status = "active";
-	task.fields.wake = undefined;
-	if (task.fields.control) {
-		task.fields.control.pausedBy = undefined;
-		task.fields.control.blockedReason = undefined;
-	}
-	await writeStoredTask(task);
 	const now = new Date();
-	const claim = task.fields.control ? await claimTaskAttempt(options.channelDir, id, now) : undefined;
+	let claimedControl = task.fields.control;
+	if (from === "done") {
+		if (!task.fields.schedule) {
+			return `任务 ${id} 已完成且不是周期任务，不能重新运行；如需新工作请创建新的 task id。`;
+		}
+		const opened = await openRecurringTaskCycle(options.channelDir, id, now);
+		if (!opened) return `任务 ${id} 无法打开新周期；先用 /tasks doctor 检查任务文件。`;
+		claimedControl = opened.document.fields.control;
+	} else {
+		task.fields.status = "active";
+		task.fields.wake = undefined;
+		if (task.fields.control) {
+			task.fields.control.pausedBy = undefined;
+			task.fields.control.blockedReason = undefined;
+		}
+		await writeStoredTask(task);
+	}
+	const claim = claimedControl ? await claimTaskAttempt(options.channelDir, id, now) : undefined;
 	const enqueued = await options.dispatchTask?.(id);
-	if (!enqueued && claim) await releaseTaskAttemptClaim(options.channelDir, id, claim, now);
+	if (!enqueued && claim) await releaseTaskAttemptClaim(options.channelDir, id, claim);
 	return enqueued
 		? `已把任务 ${id} 排入一次立即执行。`
 		: `任务 ${id} 已就绪。启动钉钉守护进程可自动派发，或在本会话里直接发一条普通消息推进它。`;
@@ -794,30 +815,37 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 	}
 
 	try {
-		switch (command.action) {
-			case "list":
-				return await listTasks(options.channelDir);
-			case "show":
-				return await showTask(options.channelDir, command.id);
-			case "archive":
-				return await listArchive(options.channelDir);
-			case "approve":
-				return await approveTask(options, command.id);
-			case "pause":
-				return await pauseTask(options, command.id);
-			case "resume":
-				return await resumeTask(options, command.id);
-			case "run":
-				return await runTask(options, command.id);
-			case "set":
-				return await setTaskField(options, command.id, command.field, command.value);
-			case "stats":
-				return await taskStats(options, command.id);
-			case "doctor":
-				return await doctor(options);
+		if ("id" in command && command.id && !["show", "stats"].includes(command.action)) {
+			return await withTaskMutation(options.channelDir, command.id, () => dispatchTasksCommand(options, command));
 		}
+		return await dispatchTasksCommand(options, command);
 	} catch (error) {
 		const message = errorMessage(error);
 		return `执行 /tasks ${command.action} 失败：${message}`;
+	}
+}
+
+async function dispatchTasksCommand(options: HandleTasksCommandOptions, command: TasksCommand): Promise<string> {
+	switch (command.action) {
+		case "list":
+			return await listTasks(options.channelDir);
+		case "show":
+			return await showTask(options.channelDir, command.id);
+		case "archive":
+			return await listArchive(options.channelDir);
+		case "approve":
+			return await approveTask(options, command.id);
+		case "pause":
+			return await pauseTask(options, command.id);
+		case "resume":
+			return await resumeTask(options, command.id);
+		case "run":
+			return await runTask(options, command.id);
+		case "set":
+			return await setTaskField(options, command.id, command.field, command.value);
+		case "stats":
+			return await taskStats(options, command.id);
+		case "doctor":
+			return await doctor(options);
 	}
 }

@@ -2,7 +2,6 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { renderTaskDocument } from "../src/tasks/ledger.js";
 import {
 	applyTaskControlPatch,
 	createDefaultTaskControl,
@@ -11,7 +10,15 @@ import {
 	resetTaskControlForCycle,
 	taskBudgetViolation,
 } from "../src/tasks/control.js";
-import { claimTaskAttempt, finishTaskAttempt, readStoredTask } from "../src/tasks/store.js";
+import { renderTaskDocument } from "../src/tasks/ledger.js";
+import { withTaskMutation } from "../src/tasks/mutation-lock.js";
+import {
+	claimTaskAttempt,
+	finishTaskAttempt,
+	readStoredTask,
+	releaseTaskAttemptClaim,
+	updateStoredTask,
+} from "../src/tasks/store.js";
 import { parseVerificationVerdict } from "../src/tasks/verification.js";
 
 describe("task control", () => {
@@ -40,6 +47,12 @@ describe("task control", () => {
 		expect(control.sideEffects).toBe("workspace");
 		expect(control.lastOutcome).toBe("progress");
 		expect(control).not.toHaveProperty("isolation");
+	});
+
+	it("defaults the claim generation when reading pre-generation control metadata", () => {
+		const legacy = createDefaultTaskControl();
+		const { attemptGeneration: _generation, ...stored } = legacy;
+		expect(parseTaskControl(JSON.stringify(stored)).attemptGeneration).toBe(0);
 	});
 
 	// Spec 036 D8: retired keys written by an older build are ignored on read rather than
@@ -207,5 +220,55 @@ describe("task attempt accounting", () => {
 			lastOutcome: "pending",
 			usage: { attempts: 0, tokens: 42, costUsd: 0.01, costKnown: true, wallTimeMinutes: 0.5 },
 		});
+	});
+
+	it("does not let an older failed dispatch release a newer claim with the same timestamp", async () => {
+		const path = join(channelDir, "tasks", "claimed.md");
+		await writeFile(
+			path,
+			renderTaskDocument({ status: "active", control: createDefaultTaskControl() }, "# Claimed\n"),
+		);
+		const now = new Date("2026-07-10T00:00:00.000Z");
+		const first = await claimTaskAttempt(channelDir, "claimed", now);
+		const second = await claimTaskAttempt(channelDir, "claimed", now);
+		expect(first?.generation).toBe(1);
+		expect(second?.generation).toBe(2);
+
+		await releaseTaskAttemptClaim(channelDir, "claimed", first!);
+		expect((await readStoredTask(channelDir, "claimed"))?.fields.control).toMatchObject({
+			attemptGeneration: 2,
+			lastOutcome: "running",
+			usage: { attempts: 2 },
+		});
+
+		await releaseTaskAttemptClaim(channelDir, "claimed", second!);
+		expect((await readStoredTask(channelDir, "claimed"))?.fields.control).toMatchObject({
+			attemptGeneration: 2,
+			lastOutcome: "running",
+			usage: { attempts: 1 },
+		});
+	});
+
+	it("serializes lower-level task updates behind an existing task mutation", async () => {
+		const path = join(channelDir, "tasks", "serial.md");
+		await writeFile(
+			path,
+			renderTaskDocument({ status: "active", control: createDefaultTaskControl() }, "# Serial\n"),
+		);
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const blocker = withTaskMutation(channelDir, "serial", () => held);
+		let updated = false;
+		const update = updateStoredTask(channelDir, "serial", (task) => {
+			task.fields.control!.usage.attempts++;
+			updated = true;
+		});
+		await Promise.resolve();
+		expect(updated).toBe(false);
+		release();
+		await Promise.all([blocker, update]);
+		expect((await readStoredTask(channelDir, "serial"))?.fields.control?.usage.attempts).toBe(1);
 	});
 });

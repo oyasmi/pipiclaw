@@ -125,6 +125,8 @@ $PIPICLAW_HOME/security.json
 - 私钥扩展名：`.pem`、`.key`、`.p12`、`.pfx`
 - 文件名关键词：`id_rsa`、`id_ed25519`、`private`、`secret`、`credentials`
 
+这些扩展名和关键词检查是**尽力而为的启发式防线**，不是内容扫描：把敏感文件改成普通名称即可绕过它。对自定义凭据目录应配置明确的 `readDeny` / `writeDeny`；高价值部署还应使用独立账号或容器做 OS 级隔离。
+
 ## 配置文件示例（Example `~/.pipiclaw/security.json`）
 
 下面给出一个完整示例：
