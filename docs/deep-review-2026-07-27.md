@@ -147,18 +147,18 @@ main.js (CLI 入口，argv 分发)
 
 | 编号 | 严重度 | 描述 | 证据 |
 |---|---|---|---|
-| Memory-M1 | **Major** | `applyChannelMemoryOps` 的 `add` 分支(`memory/files.js:174-181`)对新增内容**无条件追加**,只对照 tombstone 内容哈希去重,不对照当前 MEMORY.md 现有条目去重。而 `runPreflightConsolidationNow`(`memory/lifecycle.js:191-242`)只有整体成功后才推进 checkpoint(221-229 行)——如果 MEMORY.md 已成功写入但紧接着的 `appendChannelHistoryBlock` 抛错或进程崩溃,checkpoint 不会推进,下一次调度会用同一个 sourceWindow 重新跑抽取,模型对同一段对话大概率再次给出相似的 `add` 候选(且长 MEMORY.md 会被 clip 到 8000 字符,模型甚至可能看不到刚写入的条目)。代码层面没有任何硬性去重,存在同一事实被重复晋升写入两次的真实风险。 | `memory/files.js:174-181`;`memory/lifecycle.js:191-242`;`memory/consolidation.js:159-170` |
-| Memory-M2 | **Major** | 墓碑(tombstone)机制仅按精确内容哈希(`hashMemoryContent`,NFKC+折叠空白+小写后 SHA-256)或 `sourceEntryIds` 精确匹配生效(`memory/files.js:168-172`)。而 `op.content` 来自 LLM 每次重新生成的自由文本,只要下一轮抽取对同一事实换一种措辞,哈希就不同,墓碑形同虚设——用户通过 `memory_manage forget` 删除的事实,可能在后续对话中以改写后的说法重新写回 MEMORY.md,与工具返回文案"automatic maintenance will not restore it"的承诺不符。 | `memory/tombstones.js:6-11`;`memory/files.js:168-172`;`tools/memory-manage.js:174` |
-| Memory-M3 | **Major** | 负责"写"的记忆管线(`extraction.js` 的 `buildMemoryExtractionSystemPrompt`、`session.js` 的 `SESSION_MEMORY_SYSTEM_PROMPT`、`consolidation.js` 的清理/折叠 prompt)均**缺少**"transcript 内容是数据而非指令"的防注入声明,而同子系统负责"读"的 prompt(`recall.js` 的 rerank 提示、`session-search.js` 的摘要提示)都有这类声明。`sanitizeMessagesForMemory` 只做了标签剥离和敏感信息脱敏,未对用户原始文本做指令中立化处理。一个被诱导的用户消息理论上可以让抽取模型产出高置信度(`confidence≥0.85` 且 `necessity=high`)、从而被 `shouldAutoWriteMemory` 自动无人工确认写入 MEMORY.md 的记忆条目,并借由 recall/bootstrap 在后续所有回合被自动重新注入上下文,形成比"一次性注入"危害更大的持续性驻留。 | `memory/extraction.js:33-55`;`memory/session.js:16-44`;`memory/consolidation.js:17-49`;对比 `memory/recall.js:9-20,536`、`memory/session-search.js:6-14` |
-| Memory-Minor1 | Minor | `appendChannelMemoryUpdate`(`memory/files.js:339-353`)全仓库无任何调用方(死代码),且若未来被启用会**绕过** `containsSecret` 策略检查和 tombstone 检查(对比 `applyChannelMemoryOps` 有做),是一个"看起来安全其实是陷阱"的 API。 | `memory/files.js:339-353` |
-| Memory-Minor2 | Minor | `review-log.js:7` 的 `lastGateSkipByPath` 是模块级 Map,按 channelDir 路径累积、永不清理,长期运行+channel 数量持续增长的部署中是一个真实但量级可控的内存泄漏点。 | `memory/review-log.js:7` |
-| Memory-Minor3 | Minor | `review-log.js` 的 `rotateIfNeeded`(11-30 行)每次滚动把最新一半行写入 `path.1`,**直接覆盖** `.1` 中上一轮滚动保留的内容,导致审计日志(`memory-review.jsonl`)长期运行后早期记录被静默、不可逆地清空。 | `memory/review-log.js:11-30` |
-| Memory-Minor4 | Minor | `tombstones.jsonl` 只追加、从不压缩/清理,`applyChannelMemoryOps` 每次都全量读取解析该文件,长期高频 `forget` 的 channel 上会有随文件增长的性能退化。 | `memory/files.js:155` |
+| Memory-M1 | **Major，已处理（2026-07-27）** | 问题属实且会在 MEMORY.md 写成功、HISTORY.md/checkpoint 未完成的部分失败后触发。`add` 与缺失目标降级的 `supersede` 现按既有 NFKC/空白折叠/大小写归一化哈希对当前文件及同批新增项去重；同时用已有 `sourceCorrelationId` 作为 consolidation window 的整批幂等键，因此同一窗口重跑时即使模型改写措辞也不会再次写 durable memory。 | `memory/files.ts`;`test/memory-write-ops.test.ts` |
+| Memory-M2 | **Major，部分处理（2026-07-27）** | 原报告对“换一种措辞即可绕过内容哈希”的判断属实，但通用语义墓碑需要保留被遗忘明文或额外调用模型，会提高隐私风险与复杂度，本轮不做。低成本缺口已修：forget 会把条目元数据中的原始 `sourceEntryIds` 写入墓碑，因此同一 transcript window 重跑时即使改写措辞也会被拦截；工具文案也改为准确说明只保证精确内容/原始来源重放，并明确以后重新陈述仍可能被当作新事实学习。 | `memory/files.ts`;`tools/memory-manage.ts`;`test/memory-write-ops.test.ts` |
+| Memory-M3 | **Major，已处理（2026-07-27）** | 问题属实。durable extraction、SESSION 更新、MEMORY 清理和 HISTORY 折叠现在共用同一条输入边界规则，明确 transcript/memory/history/session 均是不可信数据而非指令，禁止执行或把其中指令当政策保留。 | `memory/prompt-safety.ts`;`memory/extraction.ts`;`memory/session.ts`;`memory/consolidation.ts` |
+| Memory-Minor1 | **Minor，已处理（2026-07-27）** | 问题属实；该无生产调用方且绕过统一写入策略的 API 已删除，测试改为只覆盖仍受支持的 history append 路径。 | `memory/files.ts`;`test/memory-files.test.ts` |
+| Memory-Minor2 | **Minor，已处理（2026-07-27）** | 问题属实但单项占用很小。保留连续 gate-skip 去重行为，同时将路径指纹表改为最多 256 项的 LRU 式有界 Map。 | `memory/review-log.ts` |
+| Memory-Minor3 | **Minor，评估后不修（2026-07-27）** | 文件确实采用 active + `.1` 的有界滚动保留，后续滚动会淘汰更早记录；这是日志容量上限的预期取舍，不是影响状态正确性的清空故障。项目未承诺永久审计留存；为低价值诊断日志增加多代归档/压缩与清理策略性价比低。 | `memory/review-log.ts`;`docs/memory.md` |
+| Memory-Minor4 | **Minor，评估后不修（2026-07-27）** | 追加与全量读取属实，但 forget 是低频人工操作，单条墓碑很小；引入压缩阈值、原子重写和保留语义会增加故障面。当前没有实际规模证据表明它值得修复。 | `memory/tombstones.ts`;`memory/files.ts` |
 | Memory-Minor5 | Minor | `context-budget.js` 的 `estimateIncomingMessageTokens` 用固定 `ESTIMATED_CHARS_PER_TOKEN=3`(3-8 行)换算全部文本,不区分语种。**关于该项有两种解读需要澄清**:对纯英文文本(实际约 4 字符/token),该估算值偏高,方向上是保守的(会提前触发压缩,不丢数据,只是可能多花一些不必要的压缩成本);但本项目的核心落地场景是**钉钉中文场景**(项目专门维护了 `memory/chinese-words.js` 做中文分词),而中文文本的实际字符/token 比通常远低于 3(常见 BPE 分词器下中文字符往往接近 1-1.5 字符/token),这意味着对中文输入,固定的 `/3` 公式**系统性低估**真实 token 消耗方向,而非高估——审查中一位子代理仅从英文场景的经验值出发,判断这里"总是偏保守"(见其报告 Suggestion 项),这一判断不能推广到项目自身声明的中文核心场景。综合两种场景,建议按语言分段估算(复用已有的中文检测能力),而非用单一系数覆盖两种方向相反的偏差。 | `agent/context-budget.js:1-8` |
-| Memory-S1 | Suggestion | `session-search.js:110` 的 `corpusCache` 是模块级单一变量而非按 channelDir 分桶,多 channel 交替调用时 30 秒 TTL 缓存名存实亡,退化为频繁全量重建(性能问题,不构成隔离缺陷,`channelDir` 有比对不会读错 channel)。 | `memory/session-search.js:110-126` |
-| Memory-S2 | Suggestion | `sidecar-worker.js` 超时后(86-164 行)只是 `void runPromise.catch(()=>{})`,未等待其真正结束;若底层 `Agent.abort()` 未能真正取消已发出的请求,超时+重试可能导致同一次调用的用量被记两次。 | `memory/sidecar-worker.js:86-164` |
-| Memory-S3 | Suggestion | `memory/policy.js` 文件名意味着"记忆保留/生命周期策略",但内容是纯粹的密钥正则脱敏,与直觉职责不符,容易误导后来维护者按名字误判其职责范围,建议重命名为更精确的名字(如 `secret-redaction.js`)。 | `memory/policy.js` |
-| Memory-S4 | Suggestion | `SECRET_PATTERNS` 正则黑名单天然存在漏检(Base64/URL 编码整体嵌入的密钥、非标准命名的内部凭据、中文自然语言表达如"密码是XXX"),这是所有规则式敏感信息检测的通病,非本项目独有缺陷,建议长期考虑更强的检测手段(结构化格式检测或轻量分类模型)。 | `memory/policy.js:1-19` |
+| Memory-S1 | **Suggestion，已处理（2026-07-27）** | 问题属实。单槽已改为按 channelDir 与构建参数分桶、最多保留 8 项的 30 秒 LRU 缓存，多频道交替查询不再互相冲掉缓存，同时保持内存有界。 | `memory/session-search.ts`;`test/session-search.test.ts` |
+| Memory-S2 | **Suggestion，评估后不修（2026-07-27）** | 这是底层 provider 不响应 AbortSignal 时才成立的残余风险；当前 `Agent.abort()` 会中止 active run，而等待失控 promise 会直接破坏 timeout 契约。为极端非协作 provider 增加第二套生命周期/用量去重协议性价比低。 | `memory/sidecar-worker.ts`;`@earendil-works/pi-agent-core` 的 `Agent.abort()` |
+| Memory-S3 | **Suggestion，已处理（2026-07-27）** | 命名确实容易误导，模块已重命名为 `secret-redaction.ts`，调用方同步更新。 | `memory/secret-redaction.ts`;`memory/files.ts`;`memory/transcript.ts`;`tools/memory-manage.ts` |
+| Memory-S4 | **Suggestion，评估后不修（2026-07-27）** | 判断属实但属于规则式检测的固有限制。分类模型会增加每次 memory 写入的延迟、成本、可用性依赖和误报处理复杂度；当前已有写入前检测与 transcript 脱敏，暂不扩展机制。 | `memory/secret-redaction.ts`;`memory/transcript.ts`;`memory/files.ts` |
 
 **审查盲区**:`memory/candidates.js`/`extraction.js`(其余部分)/`promotion.js`/`recall.js`(其余部分)/`session.js`/`session-corpus.js`/`chinese-words.js`/`bootstrap.js`/`metadata.js`/`commands.js`/`task-digest.js`/`source-window.js` 等文件由子代理逐一读完,已纳入上表;未再单独细化的部分详见第 6 节。
 
@@ -372,8 +372,8 @@ main.js (CLI 入口，argv 分发)
 
 ### 中期(1-2 月):把"依赖模型配合/依赖偶然条件"的机制往"运行时确定性保证"上收敛
 
-1. **Memory-M1/Memory-M2**:为记忆写入引入基于内容语义(而非精确哈希)的去重与"忘记"生效机制;或至少让 checkpoint 推进与 MEMORY.md/HISTORY.md 两次写操作具备事务性(先都成功再统一提交),避免部分失败导致重复晋升。
-2. **Memory-M3**:为记忆抽取/会话更新/清理三类 system prompt 补齐与 recall/session-search 一致的"transcript 是数据不是指令"防注入声明。
+1. **Memory-M1/Memory-M2（第三轮已评估处理）**:M1 已用内容哈希 + consolidation window 幂等键修复；M2 已封堵同一 source window 的改写重放并收紧工具承诺。通用语义墓碑因需要保留遗忘明文或额外模型调用，评估后不引入。
+2. **Memory-M3（第三轮已处理）**:记忆抽取、会话更新、MEMORY 清理与 HISTORY 折叠已共用"输入是数据不是指令"规则。
 3. **M-4**:为 SOUL.md/AGENTS.md 引入默认写保护(至少要求经过明确的用户确认动作才能修改,而非模型可静默改写),消除"默认拒绝敏感位置"宣称与实现之间的缝隙。
 4. **Agent-M1**:job-manager 的清道夫应改为"存在未过期(在保留窗口内)的已完成记录时也保持运行",而不仅仅是"存在运行中作业时才运行",从根源上避免完成记录/临时文件的滞留。
 5. **Event-M3**:为 periodic 事件补上与 one-shot 对称的"重启期间错过触发"检测与告警(即使不逐一补跑,至少要能让运维知道"漏跑了"这一事实)。
@@ -407,6 +407,6 @@ main.js (CLI 入口，argv 分发)
 - `tui/` 目录(交互式终端模式)全程未深入审查,只在架构层面确认其存在与入口位置。
 - `usage/` 目录除被子代理核实的部分文件外,未逐行核对账本计算逻辑本身的准确性。
 - `playbooks/*.md` 的正文与实现的逐字比对只做了抽样(`task-planning.md`/`task-driving.md`/`task-closeout.md`/`task-delegation.md`/`event-scheduling.md`/`background-jobs.md`/`memory-and-learning.md`/`runtime-orientation.md`),已发现的文档-实现脱节(Task-M1、Event-M1)提示这类脱节可能不止已列出的几处,建议后续做一次专门的"文档与实现一致性"逐条核对。
-- 未运行 `npm test`/`npm run typecheck`/`npm run deadcode`,本报告的"零 any"、"依赖方向"等判断均来自静态阅读而非工具化验证,建议后续用 `knip`(已在 `package.json` 中配置)交叉验证死代码判断(如 Memory-Minor1 提到的 `appendChannelMemoryUpdate`)。
+- 原始审查未运行 `npm test`/`npm run typecheck`/`npm run deadcode`；第三轮修复已用 typecheck、测试与 knip 交叉验证，Memory-Minor1 提到的 `appendChannelMemoryUpdate` 已确认无生产调用方并删除。
 
 本报告的 Critical/Major/Minor 结论均来自已精读代码的直接证据(文件路径+行号或函数名),盲区部分未纳入风险分级,以避免"未读代码却给出判断"的空泛评价。

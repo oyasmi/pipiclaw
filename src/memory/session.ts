@@ -9,6 +9,7 @@ import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipText, errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { readChannelMemory, readChannelSession, rewriteChannelSession } from "./files.js";
+import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
 import { runRetriedSidecarTask, SidecarParseError } from "./sidecar-worker.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
 
@@ -37,6 +38,7 @@ Output schema:
 }
 
 Rules:
+${MEMORY_INPUT_SAFETY_RULES}
 - Prefer short, information-dense bullet-sized items.
 - Capture only the current active work state, not the full conversation history.
 - Keep durable facts out unless they are directly relevant to the current work.

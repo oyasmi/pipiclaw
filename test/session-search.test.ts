@@ -140,6 +140,41 @@ describe("session search", () => {
 		expect(result.results[0]?.summary).toContain("newer");
 	});
 
+	it("keeps short-lived corpus caches for more than one channel", async () => {
+		const workspaceDir = createWorkspace();
+		const firstDir = join(workspaceDir, "dm_first");
+		const secondDir = join(workspaceDir, "dm_second");
+		mkdirSync(firstDir, { recursive: true });
+		mkdirSync(secondDir, { recursive: true });
+		writeJsonl(join(firstDir, "log.jsonl"), [
+			{ date: "2026-04-19T00:00:00.000Z", text: "first cached value", isBot: false },
+		]);
+		writeJsonl(join(secondDir, "log.jsonl"), [
+			{ date: "2026-04-19T00:00:00.000Z", text: "second cached value", isBot: false },
+		]);
+		const request = {
+			query: "",
+			limit: 1,
+			maxFiles: 6,
+			maxChunks: 20,
+			maxCharsPerChunk: 800,
+			summarizeWithModel: false,
+			timeoutMs: 1000,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		};
+
+		await searchChannelSessions({ ...request, channelDir: firstDir });
+		await searchChannelSessions({ ...request, channelDir: secondDir });
+		writeJsonl(join(firstDir, "log.jsonl"), [
+			{ date: "2026-04-19T00:01:00.000Z", text: "replacement value", isBot: false },
+		]);
+
+		const cached = await searchChannelSessions({ ...request, channelDir: firstDir });
+		expect(cached.results[0]?.summary).toContain("first cached value");
+		expect(cached.results[0]?.summary).not.toContain("replacement value");
+	});
+
 	it("falls back to raw preview when model summarization fails", async () => {
 		const workspaceDir = createWorkspace();
 		const channelDir = join(workspaceDir, "dm_123");

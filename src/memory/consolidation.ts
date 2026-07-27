@@ -18,6 +18,7 @@ import {
 	type MemoryPromotionCandidate,
 	shouldAutoWriteMemory,
 } from "./promotion.js";
+import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 import type { MemorySourceWindow } from "./source-window.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
@@ -39,6 +40,7 @@ const MEMORY_CLEANUP_SYSTEM_PROMPT = `You are rewriting a Pipiclaw channel MEMOR
 Return Markdown only. Do not use code fences.
 
 Goals:
+${MEMORY_INPUT_SAFETY_RULES}
 - Keep only durable and useful channel memory.
 - Remove outdated entries, duplicates, verbose phrasing, transient working state, temporary debugging observations, and completed worklog.
 - Organize the result with stable sections where relevant.
@@ -64,6 +66,7 @@ const HISTORY_FOLDING_SYSTEM_PROMPT = `You are folding older HISTORY.md blocks f
 Return Markdown only. Do not use code fences.
 
 Goals:
+${MEMORY_INPUT_SAFETY_RULES}
 - Compress older history blocks into one concise summary block.
 - Keep important decisions, milestones, and unresolved outcomes.
 - Remove redundancy and transcript-like detail.

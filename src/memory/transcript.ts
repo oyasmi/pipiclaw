@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { buildStandardMessages } from "../shared/type-guards.js";
-import { redactSecrets } from "./policy.js";
+import { redactSecrets } from "./secret-redaction.js";
 
 // The channel runner prepends the channel capsule, recalled memory, the task agenda
 // and the durable bootstrap to the raw user input, then wraps the input itself in

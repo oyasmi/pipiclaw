@@ -3,7 +3,6 @@ import { join } from "path";
 import { describe, expect, it } from "vitest";
 import {
 	appendChannelHistoryBlock,
-	appendChannelMemoryUpdate,
 	ensureChannelMemoryFilesSync,
 	readChannelHistory,
 	readChannelMemory,
@@ -57,13 +56,9 @@ describe("memory-files", () => {
 		expect(await readChannelHistory(channelDir)).toContain("# Channel History");
 	});
 
-	it("appends memory and history blocks and ignores empty history updates", async () => {
+	it("appends history blocks and ignores empty history updates", async () => {
 		const channelDir = createTempDir();
 
-		await appendChannelMemoryUpdate(channelDir, {
-			timestamp: "2026-03-31T00:00:00.000Z",
-			entries: ["Keep this", "And this"],
-		});
 		await appendChannelHistoryBlock(channelDir, {
 			timestamp: "2026-03-31T00:00:00.000Z",
 			content: "Past summary",
@@ -73,11 +68,8 @@ describe("memory-files", () => {
 			content: "   ",
 		});
 
-		const memory = readFileSync(join(channelDir, "MEMORY.md"), "utf-8");
 		const history = readFileSync(join(channelDir, "HISTORY.md"), "utf-8");
 
-		expect(memory).toContain("## Update 2026-03-31T00:00:00.000Z");
-		expect(memory).toContain("- Keep this");
 		expect(history).toContain("## 2026-03-31T00:00:00.000Z");
 		expect(history.match(/## 2026-03-31T00:00:00.000Z/g)).toHaveLength(1);
 	});

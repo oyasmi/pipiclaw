@@ -6,7 +6,7 @@ import { writeFileAtomically } from "../shared/atomic-file.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { formatLocalTime, localStampForFilename } from "../shared/local-time.js";
 import { type MemoryMetadataUpdate, type MemoryWriteMetadataInput, syncMemoryMetadata } from "./metadata.js";
-import { containsSecret, REDACTED_SECRET } from "./policy.js";
+import { containsSecret, REDACTED_SECRET } from "./secret-redaction.js";
 import { appendMemoryTombstone, hashMemoryContent, readMemoryTombstones } from "./tombstones.js";
 
 const DEFAULT_CHANNEL_MEMORY = `# Channel Memory
@@ -166,6 +166,7 @@ export interface ApplyMemoryOpsResult {
 	forgotten: number;
 	blockedByPolicy: number;
 	blockedByTombstone: number;
+	skippedDuplicate: number;
 }
 
 /**
@@ -187,6 +188,7 @@ export async function applyChannelMemoryOps(
 		forgotten: 0,
 		blockedByPolicy: 0,
 		blockedByTombstone: 0,
+		skippedDuplicate: 0,
 	};
 	if (ops.length === 0) {
 		return result;
@@ -200,10 +202,14 @@ export async function applyChannelMemoryOps(
 	const byId = new Map(existingEntries.map((entry) => [entry.id, entry]));
 	// Reconcile legacy entries before applying removals so terminal status retains
 	// the entry's provenance even when no sidecar record existed yet.
-	await syncMemoryMetadata(channelDir, existingEntries, [], timestamp);
+	const currentMetadata = await syncMemoryMetadata(channelDir, existingEntries, [], timestamp);
 	const tombstones = await readMemoryTombstones(channelDir);
 	const tombstoneHashes = new Set(tombstones.map((tombstone) => tombstone.contentHash));
 	const tombstoneSourceIds = new Set(tombstones.flatMap((tombstone) => tombstone.sourceEntryIds ?? []));
+	const activeContentHashes = new Set(existingEntries.map((entry) => hashMemoryContent(entry.content)));
+	const appliedSourceCorrelationIds = new Set(
+		Object.values(currentMetadata.entries).flatMap((entry) => entry.sourceCorrelationIds),
+	);
 
 	const removals = new Set<number>();
 	const replacements = new Map<number, string>();
@@ -212,6 +218,10 @@ export async function applyChannelMemoryOps(
 
 	for (const op of ops) {
 		if (op.op === "add" || op.op === "supersede") {
+			if (op.metadata?.sourceCorrelationId && appliedSourceCorrelationIds.has(op.metadata.sourceCorrelationId)) {
+				result.skippedDuplicate++;
+				continue;
+			}
 			if (containsSecret(op.content) || op.content.includes(REDACTED_SECRET)) {
 				result.blockedByPolicy++;
 				continue;
@@ -227,8 +237,14 @@ export async function applyChannelMemoryOps(
 
 		if (op.op === "add") {
 			if (op.content.trim()) {
+				const contentHash = hashMemoryContent(op.content);
+				if (activeContentHashes.has(contentHash)) {
+					result.skippedDuplicate++;
+					continue;
+				}
 				const id = generateMemoryEntryId();
 				additions.push({ content: op.content.trim(), id });
+				activeContentHashes.add(contentHash);
 				metadataUpdates.push({ id, status: "active", metadata: op.metadata, sourceEntryIds: op.sourceEntryIds });
 				result.added++;
 			}
@@ -240,16 +256,22 @@ export async function applyChannelMemoryOps(
 			if (target) {
 				removals.add(target.lineIndex);
 				if (op.op === "forget") {
+					const sourceEntryIds = Array.from(
+						new Set([
+							...(currentMetadata.entries[target.id]?.sourceEntryIds ?? []),
+							...(op.sourceEntryIds ?? []),
+						]),
+					);
 					await appendMemoryTombstone(channelDir, {
 						entryId: target.id,
 						contentHash: hashMemoryContent(target.content),
 						deletedAt: timestamp,
 						scope: "channel",
 						reason: op.reason?.trim() || "user forget",
-						sourceEntryIds: op.sourceEntryIds,
+						sourceEntryIds,
 					});
 					result.forgotten++;
-					metadataUpdates.push({ id: target.id, status: "forgotten", sourceEntryIds: op.sourceEntryIds });
+					metadataUpdates.push({ id: target.id, status: "forgotten", sourceEntryIds });
 				} else {
 					result.invalidated++;
 					metadataUpdates.push({ id: target.id, status: "invalidated" });
@@ -276,8 +298,14 @@ export async function applyChannelMemoryOps(
 			});
 			result.superseded++;
 		} else {
+			const contentHash = hashMemoryContent(op.content);
+			if (activeContentHashes.has(contentHash)) {
+				result.skippedDuplicate++;
+				continue;
+			}
 			const id = generateMemoryEntryId();
 			additions.push({ content: op.content.trim(), id });
+			activeContentHashes.add(contentHash);
 			metadataUpdates.push({ id, status: "active", metadata: op.metadata, sourceEntryIds: op.sourceEntryIds });
 			result.downgradedToAdd++;
 			result.missingTarget++;
@@ -327,11 +355,6 @@ async function backupBeforeRewrite(channelDir: string, sourcePath: string): Prom
 	} catch {
 		/* best-effort backup */
 	}
-}
-
-export interface MemoryUpdateBlock {
-	timestamp: string;
-	entries: string[];
 }
 
 export interface HistoryBlock {
@@ -414,23 +437,6 @@ export async function rewriteChannelSession(channelDir: string, content: string)
 	await ensureChannelMemoryFiles(channelDir);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_SESSION;
 	await writeFileAtomically(getChannelSessionPath(channelDir), nextContent);
-}
-
-export async function appendChannelMemoryUpdate(channelDir: string, block: MemoryUpdateBlock): Promise<void> {
-	if (block.entries.length === 0) {
-		return;
-	}
-
-	await ensureChannelMemoryFiles(channelDir);
-	const path = getChannelMemoryPath(channelDir);
-	const existing = await readOptionalTextFile(path);
-	const renderedBlock = [
-		`## Update ${block.timestamp}`,
-		...block.entries.map((entry) => renderMemoryEntryLine(entry, generateMemoryEntryId())),
-	].join("\n");
-	const nextContent = `${ensureTrailingNewlines(existing)}${renderedBlock}\n`;
-	await writeFileAtomically(path, nextContent);
-	await syncMemoryMetadata(channelDir, parseChannelMemoryEntries(nextContent), [], block.timestamp);
 }
 
 export function getChannelHistoryArchivePath(channelDir: string): string {

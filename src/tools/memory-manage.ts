@@ -5,9 +5,9 @@ import * as log from "../log.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory/channel-maintenance-queue.js";
 import { applyChannelMemoryOps, getChannelMemoryPath, parseChannelMemoryEntries } from "../memory/files.js";
-import { containsSecret } from "../memory/policy.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
+import { containsSecret } from "../memory/secret-redaction.js";
 import { hashMemoryContent } from "../memory/tombstones.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
@@ -147,10 +147,14 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 			]),
 		);
 		options.memoryCandidateStore.invalidate(getChannelMemoryPath(options.channelDir));
-		return textResult(`Saved to channel memory${kind ? ` (${kind})` : ""}.`, {
+		const message =
+			result.added > 0
+				? `Saved to channel memory${kind ? ` (${kind})` : ""}.`
+				: "That memory is already present; no duplicate was added.";
+		return textResult(message, {
 			kind: "memory_manage",
 			op: "save",
-			saved: result.added > 0,
+			saved: result.added > 0 || result.skippedDuplicate > 0,
 		});
 	}
 
@@ -235,7 +239,7 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 			log.logWarning(`Failed to append memory review log for channel ${options.channelId}`, errorMessage(error));
 		});
 		return textResult(
-			"Removed the entry from active channel memory and recorded a tombstone so automatic maintenance will not restore it. Original session history and retention backups are unchanged.",
+			"Removed the entry from active channel memory. Its exact content and source transcript window are tombstoned against automatic replay; if the fact is stated again later, it may be learned as new. Original session history and retention backups are unchanged.",
 			{ kind: "memory_manage", op: "forget", forgotten: true, entryId: removed.id },
 		);
 	}

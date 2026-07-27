@@ -27,6 +27,7 @@ export interface MemoryReviewLogEntry {
 }
 
 const REVIEW_LOG_MAX_BYTES = 1_024 * 1_024; // 1 MB
+const MAX_GATE_SKIP_PATHS = 256;
 
 const writeQueue = createSerialQueue<string>();
 const lastGateSkipByPath = new Map<string, string>();
@@ -66,7 +67,12 @@ export async function appendMemoryReviewLog(channelDir: string, entry: MemoryRev
 	if (gateSkipOnly) {
 		const fingerprint = JSON.stringify({ reason: entry.reason, skipped: entry.skipped });
 		if (lastGateSkipByPath.get(path) === fingerprint) return;
+		lastGateSkipByPath.delete(path);
 		lastGateSkipByPath.set(path, fingerprint);
+		if (lastGateSkipByPath.size > MAX_GATE_SKIP_PATHS) {
+			const oldestPath = lastGateSkipByPath.keys().next().value;
+			if (oldestPath) lastGateSkipByPath.delete(oldestPath);
+		}
 	} else {
 		lastGateSkipByPath.delete(path);
 	}

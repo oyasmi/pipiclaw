@@ -13,6 +13,7 @@ import {
 } from "./files.js";
 import type { MemoryEntryKind } from "./metadata.js";
 import type { MemoryPromotionCandidate } from "./promotion.js";
+import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
 import { runRetriedSidecarTask } from "./sidecar-worker.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
 
@@ -68,6 +69,7 @@ export function buildMemoryExtractionSystemPrompt(options: MemoryExtractionPromp
 		"}",
 		"",
 		"Rules:",
+		MEMORY_INPUT_SAFETY_RULES,
 		MEMORY_OPS_RULES,
 		...(options.includeHistoryBlock ? [HISTORY_BLOCK_RULES] : []),
 	].join("\n");

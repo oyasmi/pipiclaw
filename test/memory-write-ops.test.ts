@@ -40,6 +40,54 @@ describe("channel memory write ops", () => {
 		expect(new Set(entries.map((entry) => entry.id)).size).toBe(2);
 	});
 
+	it("treats normalized duplicate adds as idempotent", async () => {
+		const channelDir = createTempDir();
+		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "User prefers dark mode" }]);
+
+		const result = await applyChannelMemoryOps(channelDir, [
+			{ op: "add", content: "  user   PREFERS dark mode  " },
+			{ op: "add", content: "USER PREFERS DARK MODE" },
+		]);
+
+		expect(result.added).toBe(0);
+		expect(result.skippedDuplicate).toBe(2);
+		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(1);
+	});
+
+	it("deduplicates repeated adds within one operation batch", async () => {
+		const channelDir = createTempDir();
+		const result = await applyChannelMemoryOps(channelDir, [
+			{ op: "add", content: "Default deploy is blue-green" },
+			{ op: "add", content: "default deploy is blue-green" },
+		]);
+
+		expect(result.added).toBe(1);
+		expect(result.skippedDuplicate).toBe(1);
+		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(1);
+	});
+
+	it("treats a repeated consolidation window as idempotent even when wording changes", async () => {
+		const channelDir = createTempDir();
+		const metadata = { sourceCorrelationId: "window-42" };
+		await applyChannelMemoryOps(channelDir, [
+			{ op: "add", content: "User prefers dark mode", metadata },
+			{ op: "add", content: "Production deploys use blue-green", metadata },
+		]);
+
+		const replayed = await applyChannelMemoryOps(channelDir, [
+			{ op: "add", content: "Dark mode is the user's preference", metadata },
+			{ op: "add", content: "Use a blue-green strategy in production", metadata },
+		]);
+
+		expect(replayed.added).toBe(0);
+		expect(replayed.skippedDuplicate).toBe(2);
+		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+		expect(entries.map((entry) => entry.content)).toEqual([
+			"User prefers dark mode",
+			"Production deploys use blue-green",
+		]);
+	});
+
 	it("supersede replaces an existing entry in place, keeping its id", async () => {
 		const channelDir = createTempDir();
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Old preference: light mode" }]);
@@ -147,6 +195,30 @@ describe("channel memory write ops", () => {
 
 		const resurrected = await applyChannelMemoryOps(channelDir, [{ op: "add", content: "User prefers cobalt blue" }]);
 		expect(resurrected.blockedByTombstone).toBe(1);
+		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(0);
+	});
+
+	it("blocks a paraphrased replay from the forgotten entry's source window", async () => {
+		const channelDir = createTempDir();
+		await applyChannelMemoryOps(channelDir, [
+			{
+				op: "add",
+				content: "User prefers cobalt blue",
+				sourceEntryIds: ["session-entry-42"],
+			},
+		]);
+		const [entry] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+		await applyChannelMemoryOps(channelDir, [{ op: "forget", targetId: entry.id }]);
+
+		const replayed = await applyChannelMemoryOps(channelDir, [
+			{
+				op: "add",
+				content: "Cobalt blue is the user's preferred color",
+				sourceEntryIds: ["session-entry-42"],
+			},
+		]);
+
+		expect(replayed.blockedByTombstone).toBe(1);
 		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(0);
 	});
 });
