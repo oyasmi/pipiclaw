@@ -13,7 +13,22 @@
  */
 
 const LOCAL_TIME_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:?\d{2})?$/;
+/** A bare calendar date with no time component, e.g. `2026-07-27` — local midnight, never UTC midnight. */
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const RELATIVE_TIME_PATTERN = /^([+-])(\d+(?:\.\d+)?)(s|m|h|d)$/i;
+
+function isValidDateParts(year: number, month: number, day: number): boolean {
+	if (month < 0 || month > 11) return false;
+	if (day < 1 || day > 31) return false;
+	// Reject calendar overflow (e.g. day 31 in a 30-day month) instead of letting Date silently
+	// roll it into the next month.
+	const probe = new Date(year, month, day);
+	return probe.getFullYear() === year && probe.getMonth() === month && probe.getDate() === day;
+}
+
+function isValidTimeParts(hour: number, minute: number, second: number): boolean {
+	return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 && second >= 0 && second <= 59;
+}
 
 function pad2(value: number): string {
 	return String(value).padStart(2, "0");
@@ -58,11 +73,22 @@ export function localDayKey(date: Date = new Date()): string {
  */
 export function parseLocalTime(value: string): number | undefined {
 	const trimmed = value.trim();
+	const dateOnly = DATE_ONLY_PATTERN.exec(trimmed);
+	if (dateOnly) {
+		const [, y, mo, d] = dateOnly;
+		const year = Number(y);
+		const month = Number(mo) - 1;
+		const day = Number(d);
+		if (!isValidDateParts(year, month, day)) return undefined;
+		// A bare date has no time component to be ambiguous about: local midnight, same as
+		// `new Date(year, month, day)` — never the UTC-midnight reading `new Date(trimmed)` gives.
+		return new Date(year, month, day).getTime();
+	}
 	const match = LOCAL_TIME_PATTERN.exec(trimmed);
 	if (!match) {
-		// Fall back to a permissive parse for other legitimate ISO-ish inputs (e.g. no
-		// milliseconds is already covered above; this catches anything else Date can parse
-		// unambiguously, such as an explicit-offset string with unusual spacing).
+		// Fall back to a permissive parse for other legitimate ISO-ish inputs (e.g. a
+		// datetime with no seconds, `2026-07-27T07:30`). The bare-date UTC-midnight trap this
+		// module exists to avoid is handled above, before this fallback is ever reached.
 		const fallback = new Date(trimmed).getTime();
 		return Number.isFinite(fallback) ? fallback : undefined;
 	}
@@ -74,6 +100,7 @@ export function parseLocalTime(value: string): number | undefined {
 	const minute = Number(mi);
 	const second = Number(s);
 	const millis = ms ? Number(ms.padEnd(3, "0")) : 0;
+	if (!isValidDateParts(year, month, day) || !isValidTimeParts(hour, minute, second)) return undefined;
 
 	if (!offset) {
 		const local = new Date(year, month, day, hour, minute, second, millis);
@@ -85,6 +112,7 @@ export function parseLocalTime(value: string): number | undefined {
 	const offsetMatch = /^([+-])(\d{2}):?(\d{2})$/.exec(offset);
 	if (!offsetMatch) return undefined;
 	const [, sign, offH, offM] = offsetMatch;
+	if (Number(offH) > 23 || Number(offM) > 59) return undefined;
 	const offsetMinutesTotal = (Number(offH) * 60 + Number(offM)) * (sign === "-" ? -1 : 1);
 	const utcMs = Date.UTC(year, month, day, hour, minute, second, millis);
 	return utcMs - offsetMinutesTotal * 60_000;

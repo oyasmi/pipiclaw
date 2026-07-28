@@ -166,7 +166,12 @@ function taskDispatchId(channelId: string, entry: TaskLedgerEntry, nowMs: number
 	return `task:${channelId}:${entry.id}:${occurrence}`;
 }
 
-export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): DingTalkEvent {
+export function createTaskDriverEvent(
+	channelId: string,
+	entry: TaskLedgerEntry,
+	nowMs: number,
+	attemptGeneration?: number,
+): DingTalkEvent {
 	const verification = entry.frontmatter.control?.verification;
 	const verificationInstruction =
 		entry.frontmatter.status === "verifying"
@@ -202,6 +207,7 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
 		dispatchId: taskDispatchId(channelId, entry, nowMs),
+		taskAttemptGeneration: attemptGeneration,
 	};
 }
 
@@ -502,7 +508,7 @@ export class TaskDriver {
 				// Claiming an attempt only touches usage bookkeeping, which the fingerprint
 				// deliberately excludes, so there is nothing to recompute here.
 				const claim = entry.frontmatter.control ? await claimTaskAttempt(channelDir, entry.id, now) : undefined;
-				const event = createTaskDriverEvent(channelId, entry, nowMs);
+				const event = createTaskDriverEvent(channelId, entry, nowMs, claim?.generation);
 				const accepted = await this.options.dispatch(event);
 				this.observeDispatch(event, accepted);
 				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim);

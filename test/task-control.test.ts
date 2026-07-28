@@ -249,6 +249,59 @@ describe("task attempt accounting", () => {
 		});
 	});
 
+	it("does not let a stale claim's finish overwrite a newer claim's outcome (H-1)", async () => {
+		const path = join(channelDir, "tasks", "overlap.md");
+		await writeFile(
+			path,
+			renderTaskDocument({ status: "active", control: createDefaultTaskControl() }, "# Overlap\n"),
+		);
+		const now = new Date("2026-07-10T00:00:00.000Z");
+		const first = await claimTaskAttempt(channelDir, "overlap", now);
+		const second = await claimTaskAttempt(channelDir, "overlap", now);
+		expect(first?.generation).toBe(1);
+		expect(second?.generation).toBe(2);
+
+		// The stale (gen 1) turn's completion is delivered after the newer (gen 2) claim already
+		// marked the task "running" again. Its usage still counts, but it must not clobber the
+		// task's outcome/blockedReason/lastFinishedAt out from under the still-in-flight gen-2 attempt.
+		await finishTaskAttempt(channelDir, "overlap", {
+			tokens: 10,
+			costUsd: 0.01,
+			costKnown: true,
+			wallTimeMinutes: 1,
+			failed: true,
+			finishedAt: new Date("2026-07-10T00:05:00.000Z"),
+			generation: first!.generation,
+		});
+		const afterStaleFinish = (await readStoredTask(channelDir, "overlap"))?.fields.control;
+		expect(afterStaleFinish).toMatchObject({
+			attemptGeneration: 2,
+			lastOutcome: "running",
+			blockedReason: undefined,
+			usage: { attempts: 2, tokens: 10, costUsd: 0.01, wallTimeMinutes: 1 },
+		});
+		expect(afterStaleFinish?.lastFinishedAt).toBeUndefined();
+
+		// The real (gen 2) finish still applies normally.
+		await finishTaskAttempt(channelDir, "overlap", {
+			tokens: 5,
+			costUsd: 0.02,
+			costKnown: true,
+			wallTimeMinutes: 2,
+			failed: false,
+			finishedAt: new Date("2026-07-10T00:06:00.000Z"),
+			generation: second!.generation,
+		});
+		const afterRealFinish = (await readStoredTask(channelDir, "overlap"))?.fields.control;
+		expect(afterRealFinish).toMatchObject({
+			attemptGeneration: 2,
+			lastOutcome: "progress",
+			blockedReason: undefined,
+			usage: { attempts: 2, tokens: 15, costUsd: 0.03, wallTimeMinutes: 3 },
+		});
+		expect(afterRealFinish?.lastFinishedAt).toBe("2026-07-10T08:06:00.000+08:00");
+	});
+
 	it("serializes lower-level task updates behind an existing task mutation", async () => {
 		const path = join(channelDir, "tasks", "serial.md");
 		await writeFile(

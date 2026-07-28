@@ -42,6 +42,29 @@ describe("parseLocalTime", () => {
 		expect(parseLocalTime("soon")).toBeUndefined();
 		expect(parseLocalTime("not-a-date")).toBeUndefined();
 	});
+
+	it("interprets a bare date with no time component as local midnight, not UTC midnight (H-2)", () => {
+		// Regression: the regex-miss fallback used to hand a date-only string straight to
+		// `new Date(...)`, which ECMAScript parses as UTC midnight — the exact trap this
+		// module's own header comment says it exists to avoid.
+		const localMidnight = new Date(2026, 6, 27).getTime();
+		expect(parseLocalTime("2026-07-27")).toBe(localMidnight);
+		expect(parseLocalTime("2026-07-27")).not.toBe(new Date("2026-07-27").getTime());
+	});
+
+	it("rejects out-of-range month/day/hour/minute/second instead of letting Date roll them over", () => {
+		expect(parseLocalTime("2026-13-01T00:00:00")).toBeUndefined();
+		expect(parseLocalTime("2026-02-30T00:00:00")).toBeUndefined();
+		expect(parseLocalTime("2026-07-27T25:00:00")).toBeUndefined();
+		expect(parseLocalTime("2026-07-27T00:60:00")).toBeUndefined();
+		expect(parseLocalTime("2026-07-27T00:00:60")).toBeUndefined();
+		expect(parseLocalTime("2026-07-32")).toBeUndefined();
+	});
+
+	it("rejects an out-of-range explicit offset", () => {
+		expect(parseLocalTime("2026-07-27T07:30:00+24:00")).toBeUndefined();
+		expect(parseLocalTime("2026-07-27T07:30:00+08:60")).toBeUndefined();
+	});
 });
 
 describe("parseWakeInput", () => {

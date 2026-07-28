@@ -112,6 +112,12 @@ export interface DingTalkEvent {
 	conversationType: string; // "1" = DM, "2" = group
 	/** Runtime-owned durable-dispatch record, absent for normal inbound messages. */
 	dispatchId?: string;
+	/**
+	 * The `attemptGeneration` this event's claim recorded, for `[TASK_DRIVER:id]` events only.
+	 * Carried through durable dispatch so `finishTaskAttempt` can tell a stale, superseded claim's
+	 * turn from the current one, even when redelivery or claim races reorder completions.
+	 */
+	taskAttemptGeneration?: number;
 }
 
 export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: string };

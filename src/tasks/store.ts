@@ -143,6 +143,15 @@ export async function finishTaskAttempt(
 		failed: boolean;
 		silent?: boolean;
 		finishedAt: Date;
+		/**
+		 * The `attemptGeneration` this turn's claim recorded (spec 029's monotonic claim
+		 * identity, see `TaskControl.attemptGeneration`). When present and stale — a newer
+		 * claim has since superseded it — usage is still tallied (the spend genuinely
+		 * happened), but the outcome/finish fields are left alone so a slow, superseded turn
+		 * cannot overwrite the newer attempt's in-flight or already-finished state. Absent
+		 * (e.g. legacy callers) means "apply unconditionally", matching prior behavior.
+		 */
+		generation?: number;
 	},
 ): Promise<void> {
 	await updateStoredTask(
@@ -155,6 +164,7 @@ export async function finishTaskAttempt(
 			control.usage.costUsd += Math.max(0, result.costUsd);
 			control.usage.costKnown &&= result.costKnown;
 			control.usage.wallTimeMinutes += Math.max(0, result.wallTimeMinutes);
+			if (result.generation !== undefined && control.attemptGeneration !== result.generation) return;
 			control.lastFinishedAt = formatLocalTime(result.finishedAt);
 			if (result.silent) {
 				// The driver claimed before dispatch to prevent concurrent work. A silent

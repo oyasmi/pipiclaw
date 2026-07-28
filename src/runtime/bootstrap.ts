@@ -712,7 +712,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				channelId: event.channelId,
 				approver:
 					event.userName && event.userName !== event.user ? `${event.userName} (${event.user})` : event.user,
-				dispatchTask: async (id) => {
+				dispatchTask: async (id, attemptGeneration) => {
 					const channelDir = getChannelDir(options.paths.workspaceDir, event.channelId);
 					const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
 						(candidate) => candidate.id === id,
@@ -721,7 +721,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					// A human asking to run a task twice means twice, so this key is deliberately
 					// unique per invocation rather than sharing the driver's occurrence key (D1).
 					const now = Date.now();
-					const driverEvent = createTaskDriverEvent(event.channelId, entry, now);
+					const driverEvent = createTaskDriverEvent(event.channelId, entry, now, attemptGeneration);
 					return (
 						(await durableDispatch?.dispatch({
 							...driverEvent,
@@ -921,6 +921,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 								failed: result.stopReason === "error" || result.stopReason === "aborted",
 								silent: result.silent,
 								finishedAt: new Date(),
+								generation: event.taskAttemptGeneration,
 							},
 						);
 					}

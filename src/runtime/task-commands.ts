@@ -47,7 +47,7 @@ export interface HandleTasksCommandOptions {
 	/** Direct command issuer; used to create an auditable external-action approval. */
 	approver?: string;
 	/** Optional immediate task wake, available in the long-lived DingTalk runtime. */
-	dispatchTask?: (id: string) => Promise<boolean>;
+	dispatchTask?: (id: string, attemptGeneration?: number) => Promise<boolean>;
 }
 
 /**
@@ -474,7 +474,7 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 		await writeStoredTask(task);
 	}
 	const claim = claimedControl ? await claimTaskAttempt(options.channelDir, id, now) : undefined;
-	const enqueued = await options.dispatchTask?.(id);
+	const enqueued = await options.dispatchTask?.(id, claim?.generation);
 	if (!enqueued && claim) await releaseTaskAttemptClaim(options.channelDir, id, claim);
 	return enqueued
 		? `已把任务 ${id} 排入一次立即执行。`
