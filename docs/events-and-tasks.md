@@ -60,17 +60,16 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 
 | 类型 | 说明 | 是否自动删除 |
 |------|------|--------------|
-| `immediate` | 进程看到文件后立即触发 | 是 |
 | `one-shot` | 在指定时间触发一次 | 是 |
 | `periodic` | 按 cron 周期触发 | 否 |
 
 ## 通用字段（Common Fields）
 
-三类事件都需要下面几个字段：
+两类事件都需要下面几个字段：
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `type` | 是 | `immediate`、`one-shot` 或 `periodic` |
+| `type` | 是 | `one-shot` 或 `periodic` |
 | `channelId` | 是 | 目标会话通道 ID，例如 `dm_<staffId>` 或 `group_<conversationId>` |
 | `text` | 是 | 事件触发后发送给 Pipiclaw 的文本内容 |
 | `preAction` | 否 | 触发前执行的动作门控，见下方说明 |
@@ -118,23 +117,11 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 
 Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检测脚本或状态协议。工具专属命令应由用户层可执行文件和 workspace skill 提供。
 
-## 三类事件详解（The Three Event Types）
+## 两类事件详解（The Two Event Types）
 
-### 立即事件（Immediate）
+### Immediate 已退役
 
-最适合手动触发一次任务。
-
-```json
-{
-  "type": "immediate",
-  "channelId": "dm_your-staff-id",
-  "text": "整理当前会话的 MEMORY.md，把过时内容删掉。"
-}
-```
-
-- 文件被检测到后会尽快执行。
-- 事件入队成功后，文件会被自动删除。
-- 如果这是进程启动前遗留的旧文件，Pipiclaw 会把它当成过期事件并删除。
+旧版本的 `immediate` 事件已经退役。当前回合能完成的事应直接在当前回合完成；需要未来唤醒时使用 `one-shot`，需要周期检查时使用 `periodic`。
 
 ### 单次事件（One-Shot）
 
@@ -236,7 +223,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 | 入口 | 谁用 | 能做什么 |
 |------|------|----------|
-| 手工编辑 `*.json` | 人 | 任意增改，不受任何闸门限制 |
+| 手工编辑 `*.json` | 人 | 任意增改；最终仍由 watcher 装载校验 |
 | `/events` 命令 | 人（钉钉侧） | list / show / delete / history —— 只读 + 删除 |
 | `event_manage` 工具 | 主 agent | create / update / delete —— 带写入时校验和防自激励闸门 |
 
@@ -278,7 +265,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
    - `periodic` 的 cron 最密每 **30 分钟**一次；**带 `preAction` 门控时放宽到最密每 5 分钟**——传感器条件不成立时静默、零 token，适合调用用户已安装的稳定检测命令；硬下限仍是 5 分钟；
    - `workspace/events/` 内事件文件数达到 50 时拒绝再 create。
 
-> 用户手工编辑 `*.json` 或用 `/events` 不受这些闸门限制——它们只约束 agent 的自调度。
+> 手工编辑会绕过 `event_manage` 的 channel 所有权、提前量等即时错误提示，但 watcher 仍是最终信任边界：`immediate`、过密 cron、过多事件和被 command guard 拒绝的 `preAction` 仍会被拒绝。`one-shot` 的 2 分钟提前量只用于约束 agent 写入；手工文件若是在当前进程启动前遗留且已经错过，会按可靠恢复语义补投递一次。
 > 注意：第 4 条的两道 guard 检查都以 `security.json` 里 `commandGuard.enabled` 为前提；全局关闭 command guard 时，写入时与触发时的检查都不生效（这是既有安全语义）。
 
 **典型用法。** 安排一个与 task 无关的独立提醒：
@@ -424,7 +411,7 @@ frontmatter 字段：
 | `wake` | 否 | 本地时间（如 `2026-07-27T07:30:00+08:00`；不带偏移按主机时区解释）；`task_manage`/`/tasks set` 也接受相对量 `+2h`/`+45m`/`+3d` | 最早值得再看一眼的时间。缺省 = 随时可推进；但 `status: waiting` 且缺省 `wake` 表示"停泊"——driver 永不主动唤醒，只等后台作业结束、用户消息或 `/tasks run`。周期任务 done 后由 driver 写成下一次 occurrence |
 | `schedule` | 否 | 五段 cron | 周期节奏的**唯一真相**，按主机时区解释；部署时用 `TZ=<IANA timezone>` 固定。存在 = 周期任务。最密每 30 分钟 |
 | `recurrence` | 否 | 自由文本（如 `每周一`） | 仅作标注给人读，无机器语义 |
-| `control` | 新任务是 | 单行 JSON，`version: 1` | priority/deadline/nextAction、父子依赖、隔离与副作用策略、预算/用量、独立验收状态 |
+| `control` | 新任务是 | 单行 JSON，`version: 1` | priority/deadline/nextAction、副作用策略、预算/用量、独立验收状态 |
 
 旧任务没有 `control` 仍可运行，按 evidence-only 的兼容路径收尾；新任务由 `task_manage create` 自动生成受校验的 control。不要手写或多行格式化这段 JSON，日常修改交给 `task_manage set/progress`。
 
@@ -497,7 +484,7 @@ task.<channelId>.<任务id>.<用途>.json
 
 ## 内建 task driver
 
-task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token）：先拦截超 deadline/budget 或 terminal dependency 的任务并升级，再从 dependency-ready 的 actionable task 中按 priority/deadline 排序、并为到点的周期任务派发 cycle-start，向对应 channel 入队一条唤醒消息。
+task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token）：先执行 deadline / attempt budget 等确定性治理门禁，再按 priority/deadline 从 actionable task 中挑选要推进的任务；到点的周期 done task 会先在 runtime 内确定性打开新周期，再作为普通任务唤醒对应 channel。
 
 **唤醒机制是单个自适应 timer + nudge**，不再固定每分钟轮询：每次扫描顺手收集"下一个感兴趣时刻"（最近的未到点 `wake`、退避到期、deadline），睡到那一刻或封顶 15 分钟为止；回合结束会 nudge 立即重扫，让连续推进的任务链即时衔接。绕过 runtime 的手工编辑最坏等一个封顶周期才被接起，`/tasks run <id>` 兜底。
 
@@ -510,7 +497,7 @@ task driver 随 DingTalk daemon 启动，做廉价的确定性扫描（零 token
 - **连续 3 次唤醒都没有可见进展**（fingerprint 未变，含 silent），治理器暂停任务（`paused` + `pausedBy: "governor"`）并通知用户——任何唤醒循环要么推进文件，要么在 3 × 退避间隔内被叫停上报，不会无限烧钱。台账一变即清零；计数在内存，重启后重新累计；
 - 每个 tick 全局最多派发 4 个 channel，并轮转起点防止饥饿。
 
-每次受治理唤醒会累计 attempt，立即接续的那一档也不例外——停止条件始终是 `budget.maxAttempts`，快节奏只改变它在墙钟上被耗尽的速度。回合完成后 runtime 把 token、cost、wall time 回写。等待中的依赖不会触发 agent，也不会消耗 attempt。缺失、cancelled 或被治理器暂停（`paused` + `pausedBy: "governor"`）的依赖属于 terminal failure，依赖方会一起被治理器暂停并给出恢复说明。
+每次受治理唤醒会累计 attempt，立即接续的那一档也不例外——停止条件始终是 `budget.maxAttempts`，快节奏只改变它在墙钟上被耗尽的速度。回合完成后 runtime 把 token、cost、wall time 回写。
 
 这些节奏是内置常量，整套机制的开关是 `tools.tasks.enabled`（见 [configuration.md](./configuration.md)）。进程重启后内存中的退避状态会清空，因此遗留 actionable task 会在下一次扫描被重新接起——这是有意的 fail-open 恢复语义。
 
@@ -565,12 +552,13 @@ do this turn. Full detail lives in the matching tasks/<id>.md file.
 
 `task_manage` 管住创建、日常 checkpoint、frontmatter 与闭环这些必须正确的写路径；Goal/DoD/Manual 的大幅调整仍用 write/edit：
 
-- `create` —— 创建 Goal/DoD/Manual/Verification/Current Cycle/History 标准骨架和默认 independent、12 attempts 的 control。
-- `progress` —— 原子追加周期记录并更新 status/wake/control；任何实际进展会让旧 verifier PASS 失效。
+- `create` —— 创建 Goal/DoD/Manual/Verification/Current Cycle/History 标准骨架和默认不要求独立验收、12 attempts 的 control；`sideEffects: external` 会自动要求独立验收与用户审批。
+- `progress` —— 原子追加 Current Cycle 记录并更新 status/wake/control；不改 Goal/DoD/Manual/Verification 等契约段，也不会因普通日志让旧 verifier PASS 或 approval 失效。
 - `candidate` —— 当 DoD/Verification checkbox 均已用证据勾选后，将任务放入 `verifying`。driver 会在下一回合要求独立 checker；不要在该回合继续修改实现。
-- `set` —— 修正 metadata/control，不记进展；校验日期、预算、关系存在且无环。不能用它自授予 external approval。
+- `set` —— 修正 metadata/control，不记进展；校验日期、预算、状态迁移和门禁。不能用它自授予 external approval。
 - `verify` —— 导入 `purpose=verify` subagent 的 durable attestation；run 必须属于当前 task、没有改 workspace、且 task body hash 未变化。
-- `done` —— 门禁 DoD/Verification 中未勾选的 checkbox、dependencies/children、external approval、independent PASS 与 body hash，再记录 summary/evidence、归档/保留周期任务并清事件。
+- `done` —— 门禁 DoD/Verification 中未勾选的 checkbox、external approval、independent PASS 与 body hash，再记录 summary/evidence、归档/保留周期任务并清事件。
+- `skip` —— 跳过周期任务的当前 occurrence，记录原因并按 `schedule` 重新休眠；不要求虚勾 DoD，也不写 completion evidence。
 - `cancel` —— 记录原因、取消并归档，同时清理全部 task-owned events。
 - `list` —— 返回结构化 active task 与完整 control 摘要。
 
@@ -620,7 +608,7 @@ runtime 只提供通用的等待与恢复机制。启动、纠偏、取回、停
 ## 该看哪份文档
 
 - 工作区配置子代理（委派、独立验收）：[sub-agents.md](./sub-agents.md)
-- `tools.events.enabled` / `tools.tasks.enabled` 等门控开关：[configuration.md](./configuration.md)
+- `tools.tasks.enabled`、事件与 web 工具配置：[configuration.md](./configuration.md)
 - Runtime playbooks 与知识分层：[runtime-playbooks.md](./runtime-playbooks.md)
 - 长期运行、日志、升级、排障：[deployment-and-operations.md](./deployment-and-operations.md)
 - 设计规格与取舍：[specs/019-task-ledger/design.md](./specs/019-task-ledger/design.md)

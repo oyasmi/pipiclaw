@@ -1,6 +1,6 @@
 # Pipiclaw
 
-Pipiclaw 是一个个人 AI 助手运行时（AI assistant runtime）。它以 [`pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 为核心，把一个编码代理变成可以长期使用的工作助手：接入钉钉、保留跨会话记忆、按计划自主推进任务，并实时告诉你它正在做什么。
+Pipiclaw 是一个钉钉优先、可长期运行的 AI coding assistant runtime，个人和团队都可以使用。它以 [`pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 为核心，把一个编码代理变成可以长期使用的工作助手：接入钉钉、保留跨会话记忆、按计划自主推进任务，并实时告诉你它正在做什么。
 
 如果你希望 AI 助手不只是聊天，而是能在钉钉里持续工作、记住上下文、到点自己干活，那么 Pipiclaw 就是为此设计的。
 
@@ -14,13 +14,13 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 
 **记得住事。** 每个会话通道（channel）有自己的分层记忆：`SESSION.md`（当前工作态）、`MEMORY.md`（稳定事实与偏好）、`HISTORY.md`（更早摘要），工作区层还有 `SOUL.md`（身份语气）与 `AGENTS.md`（工作规则）。运行时按当前请求做相关召回（relevant recall），后台维护调度器在本地闸门通过后才做 LLM 整理，不烧无谓的 token。冷存储历史可用 `session_search` 按需检索，`memory_manage` 支持按需保存、检索、忘记。
 
-**自己推进长程工作。** 定时事件支持立即、单次、周期三类，`preAction` 可用脚本做零 token 的触发前门控。语义更高一层的是任务台账（task ledger）：任务以 Markdown 文件持久存在，内建 task driver 到点自动恢复、有进展有界续跑、停滞自动退避；配套受预算约束的恢复、独立验收、外部副作用授权，以及 `/tasks` 系列零 LLM 成本的控制面命令。
+**自己推进长程工作。** 定时事件支持单次、周期两类，`preAction` 可用脚本做零 token 的触发前门控；当前回合能做的事直接做，不再创建 immediate 事件。语义更高一层的是任务台账（task ledger）：任务以 Markdown 文件持久存在，内建 task driver 到点自动恢复、有进展有界续跑、停滞自动退避；配套受预算约束的恢复、独立验收、外部副作用授权，以及 `/tasks` 系列零 LLM 成本的控制面命令。
 
-**会用工具、能委派。** 内建 `bash`（支持 `async` 后台作业）、`read`（含目录树与 PDF）、`write` / `edit`、结构化 `grep`、`web_search` / `web_fetch`（结果缓存与分页续读），以及 `send_media`——生成好的报表、截图、导出文件可以作为原生附件直接发回钉钉，而不是丢给你一个打不开的主机路径。工作区配置的子代理可以把 reviewer、researcher 这类角色沉淀成可复用能力，支持独立验收（verify）；workspace skills 沉淀你自己的流程知识。完整清单见 [docs/tools.md](./docs/tools.md)。
+**会用工具、能委派。** 内建 `bash`（支持 `async` 后台作业）、`read`（含目录树与 PDF）、`write` / `edit`、结构化 `grep`、`web_search` / `web_fetch`（结果缓存与分页续读），以及 `send_media`——生成好的报表、截图、导出文件可以作为原生附件直接发回钉钉，而不是丢给你一个打不开的主机路径。工作区配置的子代理可以把 reviewer、researcher 这类角色沉淀成可复用能力，支持独立验收（verify）；workspace skills 沉淀你自己的流程知识。完整清单见 [docs/tools.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/tools.md)。
 
-**有安全护栏。** 所有文件、命令、网络工具都经过安全守卫：`bash` 命令拦截、统一路径检查、常见凭据与敏感位置默认拒绝、阻断写入审计日志；可通过 `security.json` 做实例级策略调整。详见 [docs/security.md](./docs/security.md)。
+**有安全护栏。** 所有文件、命令、网络工具都经过安全守卫：`bash` 命令拦截、统一路径检查、常见凭据与敏感位置默认拒绝、阻断写入审计日志；可通过 `security.json` 做实例级策略调整。详见 [docs/security.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/security.md)。
 
-**知识不随升级漂移。** Runtime 机制知识以 playbooks 随 npm 包发布、按需加载，系统提示只保留小型索引；`AGENTS.md` 与 workspace skills 完全归你和团队所有，升级不会覆盖，也不需要抄录产品文档。详见 [docs/runtime-playbooks.md](./docs/runtime-playbooks.md)。
+**知识不随升级漂移。** Runtime 机制知识以 playbooks 随 npm 包发布、按需加载，系统提示只保留小型索引；`AGENTS.md` 与 workspace skills 完全归你和团队所有，升级不会覆盖，也不需要抄录产品文档。详见 [docs/runtime-playbooks.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/runtime-playbooks.md)。
 
 ## 快速开始（Quickstart）
 
@@ -92,7 +92,7 @@ pipiclaw
 - `robotCode` 留空时回退到 `clientId`。
 - `cardTemplateId` 建议配置（正常使用推荐启用 AI Card）；示例先留空是为了让第一轮接入更稳，排查链路时也建议临时留空。
 - `allowFrom` 为 `[]` 或省略时允许所有人；灰度期可填测试人员的 staff ID。
-- 更多字段（`busyMessageDefault`、`responseMode`、`cardAutoLayout`）见[配置手册](./docs/configuration.md)。
+- 更多字段（`busyMessageDefault`、`responseMode`、`cardAutoLayout`）见[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)和[字段参考](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration-reference.md)。
 
 ### 6. 配置模型（Configure Models）
 
@@ -131,7 +131,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 - `apiKey` 可以写真实 key、环境变量名，或 `!command`；不想把凭据写进 `models.json`，可在 `auth.json` 写同名 provider 的凭据。
 - 很多 OpenAI-compatible 服务不支持 `developer` role / `reasoning_effort`，遇到兼容问题先保留上面的 `compat`。
-- 完整字段与更多场景（Ollama、企业代理等）见[配置手册](./docs/configuration.md)。
+- 完整字段与更多场景（Ollama、企业代理等）见[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)和[字段参考](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration-reference.md)。
 
 ### 7. 可选：设置默认模型（Optional: Set a Default Model）
 
@@ -163,7 +163,7 @@ pipiclaw
 2. 填入搜索 provider 的 `apiKey`（默认示例为 Brave）
 3. 如需代理，设置 `tools.web.proxy`（未设置时回退到标准的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`）
 
-搜索后端支持 `duckduckgo`、`brave`、`tavily`、`jina`、`searxng`，完整字段见[配置手册](./docs/configuration.md)。
+搜索后端支持 `duckduckgo`、`brave`、`tavily`、`jina`、`searxng`，完整字段见[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)和[字段参考](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration-reference.md)。
 
 ### 10. 在钉钉中验证（Verify in DingTalk）
 
@@ -175,7 +175,7 @@ pipiclaw
 
 如果一切正常，配置了 AI Card 时你会看到过程更新，否则机器人直接发普通消息回复；Pipiclaw 会在本地创建对应的会话通道目录，后续会话复用该通道的工作区与记忆。
 
-**第一次没跑通？** 最常见的三类原因：`channel.json` 残留 `your-*` 占位值（进程启动即退出）；模型凭据或 `models.json` 配置不可用（能收消息但首次调用失败）；`allowFrom` 挡住了你的账号或 Stream Mode 未开启（收到消息但不回复）。系统化排查见[部署与运维指南](./docs/deployment-and-operations.md)；设置 `PIPICLAW_DEBUG=1` 可在会话通道目录写出 `last_prompt.json` 检查精确提示词。
+**第一次没跑通？** 最常见的三类原因：`channel.json` 残留 `your-*` 占位值（进程启动即退出）；模型凭据或 `models.json` 配置不可用（能收消息但首次调用失败）；`allowFrom` 挡住了你的账号或 Stream Mode 未开启（收到消息但不回复）。系统化排查见[部署与运维指南](https://github.com/oyasmi/pipiclaw/blob/main/docs/deployment-and-operations.md)；设置 `PIPICLAW_DEBUG=1` 可在会话通道目录写出 `last_prompt.json` 检查精确提示词。
 
 ### 让 AI Agent 帮你完成安装（For AI Agent）
 
@@ -215,41 +215,44 @@ pipiclaw
 | `/steer <message>` | 当前任务继续执行时追加引导信息 |
 | `/followup <message>` | 排队新请求，等当前任务结束后执行 |
 | `/events list\|show\|delete\|history` | 查看与管理 `workspace/events/` 中的定时事件 |
-| `/tasks [show\|archive\|approve\|pause\|resume\|run\|stats\|doctor]` | 查看与治理任务台账，`approve` 是外部副作用的唯一授权入口 |
+| `/tasks [show\|archive\|approve\|pause\|resume\|run\|set\|stats\|doctor]` | 查看与治理任务台账，`approve` 是外部副作用的唯一授权入口，`set` 可零 LLM 成本直改 wake/next/priority/attempts/deadline |
 | `/status` | 运行时状态：执行状态、当前模型、上下文用量、运行时长、版本 |
 | `/usage [7d\|month]` | 本通道与全局的 LLM 成本，按类型和 Top 模型拆分 |
 | `/context [detail]` | 当前发给模型的上下文构成：system prompt 各 section 体量与 fingerprint、工具 schema 开销、上一轮动态上下文 |
 | `/new` | 开启新会话 |
 | `/compact [instructions]` | 手动压缩当前会话上下文 |
+| `/memory [status\|list\|show\|pending]` | 查看当前频道的活动记忆、metadata、墓碑和待处理建议 |
 | `/session` | 当前会话状态、消息统计、token 使用量 |
 | `/model [引用]` | 查看或切换模型 |
 | `/thinking [level\|cycle]` | 查看、设置或轮换当前会话的 thinking level（默认 `medium`，按模型能力自动 clamp） |
 
 说明：
 
-- 前九条由传输层直接处理，**忙碌时也可用**（`/context` 是只读统计，零 LLM 成本）；后五条会话命令仅空闲时可用（忙碌时会收到提示）。
+- 前九条由传输层直接处理，**忙碌时也可用**（`/context` 是只读统计，零 LLM 成本）；后六条会话命令仅空闲时可用（忙碌时会收到提示）。
 - 忙碌时的普通消息默认等价于 `/steer`，可通过 `channel.json` 的 `busyMessageDefault` 改为排队（`followUp`）。
 - 未知的斜杠命令会被直接拒绝并提示 `/help`，不会作为普通消息发给模型（避免 `/modle` 这类笔误变成一整轮 LLM 调用）。workspace skill 也可作为命令调用（`/skill:<名称>`）。
 - `/model` 依次尝试精确 `provider/modelId`、精确 `modelId`、对完整引用的子串匹配，只有唯一命中时才切换，例如 `/model turbo`。
 
-事件与任务的详细用法见 [docs/events-and-tasks.md](./docs/events-and-tasks.md)；子代理见 [docs/sub-agents.md](./docs/sub-agents.md)。
+事件与任务的详细用法见 [docs/events-and-tasks.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/events-and-tasks.md)；子代理见 [docs/sub-agents.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md)。
 
 ## 文档地图（Documentation）
 
-完整索引见 **[docs/README.md](./docs/README.md)**（按使用者 / 管理员 / 开发者分组）。常用入口：
+完整索引见 **[docs/README.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/README.md)**（按使用者 / 管理员 / 开发者分组）。常用入口：
 
 | 文档 | 内容 |
 |------|------|
-| [docs/tools.md](./docs/tools.md) | 工具总览：每个能力做什么、开关在哪、子代理是否可用 |
-| [docs/memory.md](./docs/memory.md) | 记忆分层：它记得什么、怎么让它记住或忘掉 |
-| [docs/configuration.md](./docs/configuration.md) | 全部配置项：钉钉、模型、settings、tools、TUI、记忆与工作区文件 |
-| [docs/events-and-tasks.md](./docs/events-and-tasks.md) | 定时事件（含 `preAction` 门控、`event_manage`）、任务台账、内建 task driver、`/tasks` 控制面与 `task_manage` 工具 |
-| [docs/sub-agents.md](./docs/sub-agents.md) | 工作区配置子代理：委派与独立验收 |
-| [docs/security.md](./docs/security.md) | 默认安全策略、`security.json` 配置与已知边界 |
-| [docs/deployment-and-operations.md](./docs/deployment-and-operations.md) | 长期运行、日志、可观测性、升级、备份与排障 |
-| [docs/scaling-and-concurrency.md](./docs/scaling-and-concurrency.md) | 并发模型与容量边界 |
-| [docs/architecture.md](./docs/architecture.md) | as-implemented 架构：运行时拓扑、消息生命周期、并发表、磁盘布局 |
-| [docs/runtime-playbooks.md](./docs/runtime-playbooks.md) | Runtime playbooks 与知识分层模型 |
+| [docs/tools.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/tools.md) | 工具总览：每个能力做什么、开关在哪、子代理是否可用 |
+| [docs/memory.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/memory.md) | 记忆分层：它记得什么、怎么让它记住或忘掉 |
+| [docs/configuration.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md) | 配置速查：现在该改哪个文件 |
+| [docs/configuration-reference.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration-reference.md) | 字段参考：钉钉、模型、settings、tools、TUI、记忆与工作区文件 |
+| [docs/runtime-mechanisms.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/runtime-mechanisms.md) | 机制说明：fallback、记忆维护、事件、后台作业、任务 driver |
+| [docs/events-and-tasks.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/events-and-tasks.md) | 定时事件（含 `preAction` 门控、`event_manage`）、任务台账、内建 task driver、`/tasks` 控制面与 `task_manage` 工具 |
+| [docs/sub-agents.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md) | 工作区配置子代理：委派与独立验收 |
+| [docs/security.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/security.md) | 默认安全策略、`security.json` 配置与已知边界 |
+| [docs/deployment-and-operations.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/deployment-and-operations.md) | 长期运行、日志、可观测性、升级、备份与排障 |
+| [docs/scaling-and-concurrency.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md) | 并发模型与容量边界 |
+| [docs/architecture.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/architecture.md) | as-implemented 架构：运行时拓扑、消息生命周期、并发表、磁盘布局 |
+| [docs/runtime-playbooks.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/runtime-playbooks.md) | Runtime playbooks 与知识分层模型 |
 
 ## 开发（Development）
 

@@ -47,13 +47,13 @@
 
 `bash` 传 `async: true` 立即返回 job id，命令在后台继续跑；`job` 负责之后的 `list` / `poll` / `cancel`。
 
-关键约束：每个 channel 最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**；**已结束的作业只在被 list/poll/cancel 时才回收名额**。所以从不回查的作业会一直占着槽位。作业不跨进程存活——daemon 重启后未取回的输出就没有了，重要产物应由命令自己写进文件。
+关键约束：每个 channel 最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<channelId>/`，daemon 重启后会认领仍在运行的作业；runtime sweeper 约每 30 秒检查一次，作业完成后自动唤醒对应 channel 并带上输出尾部。已结束作业保留 24 小时供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
 
 ## 网页工具（`web_search` / `web_fetch`）
 
 默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（brave / tavily / jina / searxng / duckduckgo）。抓取有字符数、响应体积、超时等上限，长页面通过 offset 分页续读。完整字段见 [configuration.md](./configuration.md#内建工具配置文件-toolsjsontoolsjson)。
 
-出站网络同样受 `security.json` 的网络守卫约束。
+出站网络同样受 `security.json` 的网络守卫约束。首次初始化生成的 `security.json` 模板里 `networkGuard.enabled` 为 `false`；若删除该字段或自行从内置默认开始，则 network guard 默认开启。
 
 ## 附件交付（`send_media`）
 

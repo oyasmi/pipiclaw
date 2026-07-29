@@ -10,11 +10,11 @@ priority: 41
 ## 每次唤醒先恢复真相
 
 1. 打开消息指定的 `tasks/<id>.md`，不要只依赖唤醒文本、旧对话或记忆。
-2. 核对 status、最新 Current Cycle note、`nextAction`、`wake`、预算、依赖、`sideEffects` 和 verification。
+2. 核对 status、最新 Current Cycle note、`nextAction`、`wake`、deadline / attempt budget、`sideEffects` 和 verification。
 3. 检查上一步产物**是否已经存在**。派发语义是 at-least-once，宕机或租约重放可能让同一步再次到达。
 4. 只推进一个清晰的下一阶段；不要在未知状态下重复外部动作。
 
-依赖未完成时 driver 跳过任务且不消耗 attempt；依赖缺失/cancelled/被治理器暂停、deadline 或累计预算耗尽会令任务被治理器暂停（`paused` + `pausedBy=governor`）。
+deadline 或 attempt budget 耗尽会令任务被治理器暂停（`paused` + `pausedBy=governor`）；连续 3 次唤醒都没有可见进展也会触发同样的暂停。
 
 ## 回合结束必须留下确定性状态
 
@@ -48,7 +48,7 @@ priority: 41
 
 ## 被治理器暂停（paused + pausedBy=governor）
 
-治理器在 deadline、累计预算耗尽、终态依赖，或**连续 3 次唤醒都没有可见进展**（fingerprint 未变，含 silent）时暂停任务（旧称 escalated）。先读 Current Cycle 和 stats，判断是空转、范围错误、预算过小还是依赖终止：
+治理器在 deadline、attempt budget 耗尽，或**连续 3 次唤醒都没有可见进展**（fingerprint 未变，含 silent）时暂停任务（旧称 escalated）。先读 Current Cycle 和 stats，判断是空转、范围错误还是预算过小：
 
 - 方向错：修 Manual/`nextAction`、重新拆解或 cancel。
 - 预算确实不足：向用户说明后用 `task_manage set` 调整 budget/deadline，并把 status 设回 `active`。

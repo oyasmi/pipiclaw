@@ -8,13 +8,16 @@
 
 ## 总览（Overview）
 
-Pipiclaw 的安全控制目前主要分成两层：
+Pipiclaw 的安全控制目前主要分成三层：
 
 1. 命令防护（command guard）
    作用于 `bash` 工具，拦截明显高风险的命令
 
 2. 路径防护（path guard）
    作用于 `read` / `write` / `edit` 等显式文件工具，统一判断路径是否允许访问
+
+3. 网络防护（network guard）
+   作用于 web 工具的出站请求与重定向，避免访问 localhost、云元数据服务和私网地址
 
 这套防护的目标不是把 Pipiclaw 变成强隔离沙箱，而是在保留日常可用性的前提下，把最常见、最危险的误操作和越权访问挡在工具层外面，而不是只靠 prompt 提示。
 
@@ -43,7 +46,7 @@ $PIPICLAW_HOME/security.json
 说明：
 
 - 这份配置约束的是整个 Pipiclaw 实例的工具边界
-- 它不会自动生成；如果文件不存在，就使用内置默认值
+- 首次启动会生成一份最小模板；如果文件不存在，就使用内置默认值
 - 相关代码见 `src/security/config.ts`
 
 ## 当前默认安全策略（Default Security Policy）
@@ -127,6 +130,21 @@ $PIPICLAW_HOME/security.json
 
 这些扩展名和关键词检查是**尽力而为的启发式防线**，不是内容扫描：把敏感文件改成普通名称即可绕过它。对自定义凭据目录应配置明确的 `readDeny` / `writeDeny`；高价值部署还应使用独立账号或容器做 OS 级隔离。
 
+### 4. 网络守卫默认策略
+
+需要区分两种“默认”：
+
+- **首次初始化生成的 `security.json` 模板**：显式写入 `networkGuard.enabled: false`，减少个人开发机上代理、内网 SearXNG 等场景的启动摩擦。
+- **代码内置默认值**：如果 `security.json` 不存在，或你删除了 `networkGuard.enabled` 字段，则 `networkGuard.enabled` 默认为 `true`。
+
+启用后，network guard 只允许 `http` / `https` URL，并会拦截：
+
+- `localhost`、`*.localhost`、`metadata`、`metadata.google.internal`、`169.254.169.254`
+- 解析到私网、回环、链路本地、CGNAT、benchmark 等地址段的主机
+- 解析失败的主机
+
+需要访问可信内网服务时，用 `allowedHosts` 精确放行主机名，或用 `allowedCidrs` 放行地址段。重定向目标也会重新检查，最多跟随 `maxRedirects` 次。
+
 ## 配置文件示例（Example `~/.pipiclaw/security.json`）
 
 下面给出一个完整示例：
@@ -166,6 +184,16 @@ $PIPICLAW_HOME/security.json
     ],
     "resolveSymlinks": true
   },
+  "networkGuard": {
+    "enabled": true,
+    "allowedHosts": [
+      "searx.internal.example"
+    ],
+    "allowedCidrs": [
+      "10.20.0.0/16"
+    ],
+    "maxRedirects": 5
+  },
   "audit": {
     "logBlocked": true,
     "logFile": "~/.pipiclaw/workspace/.pipiclaw/security.log"
@@ -188,6 +216,7 @@ $PIPICLAW_HOME/security.json
 | `enabled` | `boolean` | 是否启用整套安全层 |
 | `commandGuard` | `object` | `bash` 工具的命令防护 |
 | `pathGuard` | `object` | 文件工具的路径防护 |
+| `networkGuard` | `object` | web 工具的出站网络防护 |
 | `audit` | `object` | 阻断事件审计日志 |
 
 ### `commandGuard`
@@ -223,6 +252,22 @@ $PIPICLAW_HOME/security.json
 - 相对路径会相对 Pipiclaw workspace 根解析
 - 这是“前缀型路径规则”，不是任意 glob 匹配
 - 基础敏感路径 deny 仍然保留；配置不是“完全绕过所有底线”的总开关
+
+### `networkGuard`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `enabled` | `boolean` | 是否启用网络防护；首次生成模板为 `false`，内置默认值为 `true` |
+| `allowedHosts` | `string[]` | 精确放行的主机名；匹配规范化后的 hostname，不是 glob |
+| `allowedCidrs` | `string[]` | 允许访问的 CIDR 地址段，可用于可信内网服务 |
+| `maxRedirects` | `number` | web fetch 最多跟随的重定向次数；必须为正数，默认 `5` |
+
+说明：
+
+- 只支持 `http` / `https`。
+- `allowedHosts` 会直接放行对应 hostname；`allowedCidrs` 会放行解析后的 IP。
+- 未放行时，localhost、云元数据服务、私网和链路本地地址会被拦截。
+- 每次重定向后的目标 URL 都会重新执行同一套检查。
 
 ### `audit`
 
@@ -366,6 +411,9 @@ $PIPICLAW_HOME/security.json
     ],
     "resolveSymlinks": true
   },
+  "networkGuard": {
+    "enabled": false
+  },
   "audit": {
     "logBlocked": true
   }
@@ -426,6 +474,12 @@ $PIPICLAW_HOME/security.json
       "/usr/"
     ],
     "resolveSymlinks": true
+  },
+  "networkGuard": {
+    "enabled": true,
+    "allowedHosts": [],
+    "allowedCidrs": [],
+    "maxRedirects": 5
   },
   "audit": {
     "logBlocked": true,
