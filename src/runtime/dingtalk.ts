@@ -202,6 +202,8 @@ interface DingTalkSocketLike {
 	close?: () => void;
 	terminate?: () => void;
 	removeAllListeners?: () => void;
+	removeListener?: (event: "error", listener: (error: Error) => void) => void;
+	on(event: "error", listener: (error: Error) => void): void;
 	on(event: "pong", listener: () => void): void;
 	on(event: "close", listener: (code: number, reason: string) => void): void;
 	on(event: "message", listener: (raw: string) => void): void;
@@ -464,6 +466,9 @@ export class DingTalkBot implements MediaSender {
 		}
 
 		socket.removeAllListeners?.();
+		// ws emits an asynchronous error when close() aborts a CONNECTING socket.
+		const ignoreCleanupError = (): void => {};
+		socket.on("error", ignoreCleanupError);
 
 		if ((socket.readyState ?? SOCKET_STATE_CLOSED) !== SOCKET_STATE_CLOSED) {
 			try {
@@ -484,6 +489,9 @@ export class DingTalkBot implements MediaSender {
 			}
 		}
 
+		if ((socket.readyState ?? SOCKET_STATE_CLOSED) === SOCKET_STATE_CLOSED) {
+			socket.removeListener?.("error", ignoreCleanupError);
+		}
 		this.clearClientSocketReference();
 	}
 

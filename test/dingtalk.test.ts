@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -740,6 +741,45 @@ describe("dingtalk", () => {
 		expect(staleSocket.close).toHaveBeenCalledTimes(1);
 		expect(staleSocket.terminate).toHaveBeenCalledTimes(1);
 		expect(client.connect).toHaveBeenCalledTimes(2);
+	});
+
+	it("absorbs the asynchronous error from closing a connecting socket", async () => {
+		const emitter = new EventEmitter();
+		const connectingSocket = {
+			readyState: 0,
+			ping: vi.fn(),
+			on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+				emitter.on(event, listener);
+			}),
+			close: vi.fn(() => {
+				queueMicrotask(() => {
+					emitter.emit("error", new Error("WebSocket was closed before the connection was established"));
+					connectingSocket.readyState = 3;
+				});
+			}),
+			terminate: vi.fn(() => {
+				connectingSocket.readyState = 3;
+			}),
+			removeAllListeners: vi.fn(() => {
+				emitter.removeAllListeners();
+			}),
+			removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+				emitter.removeListener(event, listener);
+			}),
+		};
+		fakeClientState.connectImpl = (client) => {
+			client.socket = connectingSocket;
+			return new Promise<void>(() => {});
+		};
+
+		const { bot } = createBot();
+		const startPromise = bot.start();
+		await vi.advanceTimersByTimeAsync(11_250);
+		await startPromise;
+
+		expect(connectingSocket.close).toHaveBeenCalledTimes(1);
+		expect(connectingSocket.terminate).not.toHaveBeenCalled();
+		expect(emitter.listenerCount("error")).toBe(0);
 	});
 
 	it("times out hanging connect attempts and allows a later retry", async () => {
