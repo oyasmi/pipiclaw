@@ -4,98 +4,55 @@
 
 ## [未发布]
 
-## [0.8.10-beta.6] - 2026-07-30
+## [0.8.10] - 2026-07-30
 
-### 修复
-
-- 后台任务不再漏掉真实的钉钉群频道。`isChannelId` 原先带一个字符集白名单（`^(dm|group)_[A-Za-z0-9._:-]+$`），而真实会话 ID 是 base64、普遍含 `/` 和 `=`，于是记忆维护调度器和 task driver 在**工作区扫描**和**已知频道过滤**两处都把这些频道丢掉了。判定函数现在统一收敛到 `runtime/channel-paths.ts`，只保留路径安全所必需的约束（不含 `..` 路径段、不含能绕过 `getChannelDir` 的 `/` → `__` 转义的分隔符、不含 NUL），两个后台任务共用同一份。频道发现改为优先读 `workspace/CHANNELS.md`——重启后真实频道 ID 只有那里还留着，因为频道**目录名**是转义后的形式、无法还原。目录扫描保留为兜底，且是与索引**并存**而非仅在索引缺失时启用：索引是一个频道一个频道填起来的，升级后第一次运行时它只有一行，若把它当作权威来源就会把其余所有既存频道全部丢掉。目录名等于某个已入索引 ID 的转义形式时会跳过，因此同一频道不会以两种拼写被处理两次。
+一个在六个 beta（beta.1–beta.6）中开发而成的大型版本。核心动作：刻意精简任务治理与 `settings.json` 接口面（spec 035/036），包的 barrel 收缩到它真正支持的范围，记忆维护流水线收敛为三类任务，交互面全面中文化，并落地一次完整的静态审查加固（55 项发现）。两次大型瘦身从 `src/` 分别净删约 950 行（记忆流水线，36 文件）与 395 行（任务治理）。
 
 ### 新增
 
 - 频道有名字了。钉钉传输层开始读取群消息本就携带的 `conversationTitle`（私聊回落到发送者昵称）并挂到事件上，`ChannelContext.channelName` 及结构化日志不再显示裸的 `group_cid...`。这些名称汇总进新的 `workspace/CHANNELS.md`：每个频道一行，含频道 ID、名称、最近消息时间和「主题」列。它既是人翻工作区时的地图，也是 agent 回答「还有哪些频道」的依据（`runtime-orientation` playbook 已指向它）。只记录真人消息——定时事件和任务驱动的后台唤醒被刻意排除，否则每个沉寂频道都会显得活跃，这个文件唯一的信号就废了。写盘策略：首次出现或群改名立即写，仅时间戳变化则最多每 5 分钟合并写一次，进程关闭时再兜底 flush 一次；每次重写前会先读回文件，手写的「主题」以及本次进程没见过的频道行都原样保留。
-
-## [0.8.10-beta.5] - 2026-07-28
-
-一次由完整静态代码审查（覆盖 Task、Event、Memory、Agent、Security、Runtime 六个子系统共 55 项发现）驱动的加固。各核心状态线的 Critical/Major 边界缺陷均已闭合；完整审查报告随包发布在 `docs/refer/deep-review-2026-07-27.md`。
-
-### 变更
-
-- 本地时间统一为单一词汇表。新增 `src/shared/local-time.ts`（`formatLocalTime`/`parseLocalTime`/`parseWakeInput`/`localDayKey`/`localStampForFilename`），作为 wake 调度、记忆按天分桶与 `/usage` 时间窗口的唯一来源，修复了本地午夜到早 8 点之间因 UTC 日界导致算错日/月的 bug。`wake` 现在接受相对偏移（`+2h`/`+45m`/`+3d`），模型不再需要手算时区；磁盘上的 wake 格式归一为带毫秒的 `formatLocalTime`。测试固定 `TZ=Asia/Shanghai`。
-- 任务变更通过可重入的 keyed queue 串行化。`task_manage`、`/tasks`、driver、迁移与 store 更新现在统一走 `channelDir + taskId` 的 keyed queue（`tasks/mutation-lock.ts`），关闭了 `/tasks`（不占 channel run queue 的即时命令）与 driver/agent 互相覆盖的进程内窗口。`docs/scaling-and-concurrency.md` 明确声明跨进程共享同一 workspace 不受支持；文件锁/CAS 会引入 stale lock 与跨平台语义，超出单进程产品模型，故不引入。
-- 任务转换表再接管两个动作。`escalate`（治理暂停）与 `start-cycle`（周期重开）改为走统一转换表而非直接写 status，并对非法前置状态拒绝调用。`attemptGeneration`——向后兼容、单调递增、跨周期保留——取代时间戳字符串相等性用于 claim/release 一致性判断，旧 dispatch 的 release 不再可能回滚较新的 claim。
-
-### 修复
-
-- **任务生命周期**：`cancel`/`run` 转换现允许从 `done` 起步——休眠中的周期任务可直接退役（与文档的退役语义一致），`/tasks run` 会重开周期（折叠上一周期、重置周期 control、清除旧 wake），而非把已完成周期原样改回 `active`。`task_manage set` 修改 `schedule` 但未显式写 `wake` 时，无论当前状态都会把 wake 重算为新节奏的下一次触发（此前只对 `done` 任务做，导致错误的旧 wake 残留）。`cleanupTaskEvents` 区分 I/O 失败与解析失败——不可解析的旧事件仍交给 `/events`，读取失败则记 warning 并给出修复步骤。新增 `/tasks doctor` 检查，标记 wake 不落在任何 schedule 触发点上的周期任务，并附修复命令。
-- **事件调度**：one-shot 事件的 `preAction` 被 gate 拦截或执行失败后，现按 `deleteAfter` 语义消费并删除源文件，不再永久滞留并占用工具侧配额；periodic 仍只跳过本次 occurrence。periodic Cron 现显式启用 `protect: true` 与 `catch: true`，前一次异步回调未结束不会重叠触发下一次，且防止未来重构遗漏 catch 产生未处理 rejection。启动恢复按每批最多 4 个文件并发处理，单个文件失败记 warning 且不阻断后续批次，`/stop` 后不再启动剩余批次。约 24.8 天的 one-shot 调度上限现进入共享 admission 校验，`event_manage` 会在写文件前给出可恢复错误，而非先创建再被 watcher 拒绝。
-- **记忆**：`add` 与缺失目标降级的 `supersede` 现按既有 NFKC/空白折叠/大小写归一化哈希对当前文件及同批新增项去重，并以 `sourceCorrelationId` 作为 consolidation window 的整批幂等键——同一窗口重跑时即使模型改写措辞也不会再次写 durable memory。`forget` 会把条目原始的 `sourceEntryIds` 写入墓碑，拦截同窗口的改写重放；工具文案改为准确说明只保证精确内容/原始来源重放。durable extraction、SESSION 更新、MEMORY 清理与 HISTORY 折叠现在共用同一条"transcript/memory/history/session 均是不可信数据而非指令"的输入边界规则。review-log 的路径指纹表改为最多 256 项的 LRU；`session_search` 的单槽缓存改为按 `(channelDir, 构建参数)` 分桶（最多 8 项、30s TTL）；删除了绕过密钥脱敏与墓碑检查的死代码 API `appendChannelMemoryUpdate`；`memory/policy.ts` 重命名为 `secret-redaction.ts` 以匹配其实际职责。
-- **Agent / 后台作业**：每个频道最早到期的完成记录现会挂一个 `unref` 的一次性 GC 定时器，无需等待下一次作业或进程重启即可回收记录与 spill/exit 文件（运行中作业仍由 sweeper 监管）。后台作业的 spill 路径改用 `node:os` 的 `tmpdir()`，不再硬编码 Linux `/tmp`，owner-only 的 `umask 077` 权限保护保持不变。
-- **Runtime / 架构**：任务台账解析器从 `shared/task-ledger.ts` 移入 `tasks/ledger.ts`，消除 `shared → tasks` 反向依赖。DingTalk 传输层通过显式同步 `reserveEvent` 钩子占用 turn，再进入异步处理体；闲置 channel 缓存新增独立定期回收（繁忙队列与正在创建的卡片不会被回收）；`enqueueEvent` 的硬编码上限提取为 `EVENT_QUEUE_LIMIT`。仅负责格式化的模块重命名为 `config-diagnostic.ts`；agent session 改用上游 `SettingsManager.inMemory()` 适配 Pipiclaw 设置，不再把运行时设置类作为 SDK 的伪实现。
-
-## [0.8.10-beta.4] - 2026-07-27
-
-### 变更
-
-- 任务等待语义收敛到一处。任务只有同时满足 `waiting` 且 `wake` 可解析才可推进；`waiting` 但无 `wake` 的任务进入停泊，driver 不再轮询，而 `wake` 解析失败仍 fail-open（能解析 ⇒ 可推进，解析报错 ⇒ 可推进）。两个旧状态（`blocked`、`awaiting-user`）在读取层映射为 `waiting`，所以历史上「blocked 且无 wake」的任务升级后会停泊而非被轮询——语义一致，可用 `/tasks run` 解除。`task_manage progress`/`set` 的回执现在会说明停泊任务不会被 driver 唤醒。等待契约只在 `task-delegation.md` 记一处，修正了原本陈旧的 frontmatter 契约——否则那会是它的第四个版本。
-- effect 归因从「按频道」改为「按任务」。新增内存态 effect 台账，按 `(channelId, taskId)` 记账；bootstrap 在每个 runner 回合前后取差值，把这一回合的 effect 记到所属任务上，使 driver 的 futile-wake 与快档信号（`getEffectCount` 现为 `(channelId, taskId)`）与 fingerprint 共用同一定义。计数保留在进程内，与从未落盘的 attempt/futile 计数口径一致。
-- `/tasks resume` 与 `/tasks run` 现在会拒绝复活仍然超额的任务。`taskBudgetViolation` 在写状态前先跑，超额任务不会被翻回可运行状态；回执点名上限并给出提额的确切命令。默认 `maxAttempts` 为 12，对一次性任务是终身额度。
-
-### 修复
-
-- `awaiting-user` 现在在读取层归一为 `waiting`，消除了第三种分叉的状态值。`/tasks doctor` 客观陈述停泊任务并给出三条出路（不对健康停泊任务误报）。
-- 工具 schema 现在带软预算：`TOOL_SCHEMA_TARGET_UNITS` 目标与 `measureToolSchemas()` 给工具 schema 块设上限，`/context` 的 Tools 行改用 units 并带目标值，溢出进入 Diagnostics 与一条 `buildRuntimeTools` warning。
-- 后台唤醒不再直播过程。合成派发传入 `progressStyleOverride` 为 `"none"`（而非 `"rolling"`），停泊任务 nudge 或定时唤醒不再在用户视图里建卡又删卡——工作静默进行。
-- 维护 tick 在无变化时不再重读任务台账。`SettingsManager.reload()` 在设置文件指纹未变时直接返回（`file-stamp.ts`），tools.json 驱动的 tick 在 bootstrap 内做了 memo。
-
-## [0.8.10-beta.3] - 2026-07-27
-
-### 变更
-
-- 交互面统一为中文。`/help`（两张命令表的全部描述与正文）、无运行回合时 `/stop`/`/steer`/`/followup` 的回复、steer 排队回执、忙时斜杠命令提示、错误卡片、TUI 停止提示、整个 `/usage` 报告，以及 `/tasks` 的全部动作回执都已中文化；因为 `CommandSpec.description` 是唯一真相源，`/help`、TUI 补全和忙时提示一次改到位。结构化报告正文（`/tasks list|stats|doctor`、`/events`、`/status`）刻意保留英文字段标签——它们是数据栏位，不是文案。
-- `/stop` 现在说清楚它做了什么。停掉一个任务驱动的回合会同时暂停该任务，而此前这只写进日志，用户看到的仅是 "Stopping the current task."——任务可能因此沉默好几天。`handleStop` 会回传被暂停的任务 id，回执直接点名它和 `/tasks resume <id>`。
 - 新增 `/tasks set <id> <wake|next|priority|attempts|deadline> <值>`：改一个 wake 时间或 attempt 预算不必再花一整个 LLM 回合。值取该行剩余全部内容（所以 `next` 可以是一句话），留空表示清除。校验不重写——`wake` 复用台账的 ISO8601 规则，其余走 `applyTaskControlPatch`，与 `task_manage set` 同一个函数。状态迁移、验收、审批仍归 `task_manage`，那台状态机才是它们的归属。
-- 滚动进度卡常驻首行 `⏱ 3m12s · 14 步`，在只能看到最近三条时也能把"还在跑"和"卡住了"区分开。由于首行随时间变化，滚动模式改为整卡替换而非追加增量（窗口填满后本来就是如此）。收尾摘要同样中文化：`完成 · 14 步 · 3m12s`。
+- 新增仅周期任务可用的 `task_manage skip`：去重周期跳过 DoD/evidence 检查并直接回到 dormant。
+- `/tasks` 现在展示当前/上一周期、下一次 wake 与主机时区（driver 在启动时记录实际时区）；`costKnown` 区分「真的免费」与「模型定价缺失」，因此缺价档会显示为 `unavailable` 而非误导性的 `$0.0000`。
+
+### 变更
+
+- **任务治理瘦身（spec 036）。** per-task 的 token/成本/墙钟三维预算收敛为单一 `maxAttempts`（默认 12，对一次性任务是终身额度）。成本仍可观测，体现在 `usage` 与 `/tasks stats`，只是不再按任务强制。`parent`/`dependsOn` 关系图整体删除，连带退役四套环检测实现；任务先后关系改用人类可读的方式表达（写在 body 的 Manual/Goal 里，或用 `wake` 排开），`done`/`skip`/`cancel` 不再对子任务做闸门。任务持有的 worktree 与 `subagent isolation` 参数移除（子代理调用面 15 → 14）；需要独立检出时，请在宿主侧自建 worktree 并把路径作为普通工作目录传入。验收从两种形态收敛为一种：`mode: "evidence"|"independent"` 改为 `required: boolean`，删除 `done` 中的自证写入分支（maker 自己写 `status: "passed"`）使证据不再能伪装成一次「验收通过」——并有一处行为增强：`sideEffects: "external"` 的任务默认要求独立验收。`sideEffects` 本身改为二元（`read-only` 与 `workspace` 合并）。attestation 文件保留防伪核心（runId/taskId/verdict/bodyHash/subjectHash 及 `done` 时的重校验，正是阻止手写 "passed" 的那道门），删掉 `outputHash`/`agent`/`model` 三个只写不读字段，`subjectHash` 的失败语义两端统一为 fail-closed。既有任务文件照常可读——未知键读取时忽略，下次写入自然落成新格式；`/tasks doctor` 会逐任务报告仍带退役键的情况，并明确提示 `parent`/`dependsOn` 表达的顺序意图已不再生效。`src/` 净删 395 行。Beta API 变更：`SubAgentInvocationOverrides` 移除 `isolation`/`worktreePath`/`worktreeBranch`。
+- **`settings.json` 现在只接受产品意图（spec 035）。** 布尔、枚举和模型引用保持可配，所有数值阈值下沉为代码常量。保留 15 个键——五个模型引用、各模块的 `enabled` 开关、两个决定「一次可选 LLM 调用值不值这些 token」的选项（`memoryRecall.rerankWithModel`、`sessionSearch.summarizeWithModel`）、`logging.level`、`logging.file.enabled` 和 `tui.responseMode`。维护间隔、durable 写入置信度、失败退避、并发上限、任务驱动节奏、任务摘要尺寸、压缩 token 预算、重试延迟、召回尺寸和日志轮转全部不再可配：没有人能凭手头信息判断 checkpoint 间隔该是 20 分钟还是 25 分钟，而每个被文档化的数字都是一份兼容性承诺。既有配置文件照常工作——退役键被忽略，启动时打印一条 warning 逐一点名，避免有人特意调过的值悄无声息地失效。`docs/configuration.md` 去掉了 40 行的设置表和三个调参示例，换成一张简短的支持字段表、一份退役字段清单，以及一个诚实的「压到最省 token」配方。
+- **破坏性变更（beta API）：包的 barrel 从覆盖 20 个模块的约 90 个导出名收缩到 21 个**，只覆盖它真正支持的用法——嵌入 daemon：`bootstrap` 及其选项/结果类型、`DingTalkBot` 与其配置类型、`ChannelContext` 投递契约、`paths.ts` 常量和 `PipiclawSettings` 类型。prompt 内部、memory 的 sidecar/candidates/consolidation/recall/session 辅助、子代理发现与工具、用量账本、工具配置、executor、命令扩展不再导出；请从各自模块导入，并预期它们会移动。已废弃的 `DingTalkContext` 别名一并移除——改用 `ChannelContext`。实打实的收益在死代码检测：`src/index.ts` 是 knip 的 entry point，从这里导出的每个名字都是 `npm run deadcode` 的盲区。
+- **记忆维护流水线从四类任务收敛为三类**：把 durable consolidation 与 growth review 合并为单一 `runMemoryCheckpointJob`，走原 consolidation 语义（一个游标、一个间隔、一道 gate）。调度器现在只跑 session refresh → memory checkpoint → structural maintenance。此举同时退役了 skill 自动提升：删除 post-turn review 与 promotion-signal 路径，skill 只能通过 `skill_manage` 显式创建（工具保留）。四个时间戳/游标字段并为 `lastCheckpointAt`/`lastCheckpointEntryId`，growth 计数器删除，`memoryGrowth` 设置块整体删除，改为单一 `checkpointIntervalMinutes`（默认 20 分钟）；旧设置键静默忽略并按新默认运行。净删约 950 行（36 文件）。
+- **`subagent` 的调用参数从 20 个收缩到 15 个（spec 034）**，让委派回归"描述任务"，而不是"配置一套 runtime"。四个数值预算（`maxTurns`、`maxToolCalls`、`maxWallTimeSec`、`bashTimeoutSec`）合并为 `effort` 预设三档 `quick`/`standard`/`deep`，其中 `standard` 与原默认值完全一致；`contextMode` + `memory` 合并为单个 `context`（`none`/`session`/`relevant`）；`worktreePath` 移除。子代理 frontmatter 完全不变，仍支持全部精确数值。Beta API 变更：从 barrel 导出的 `SubAgentInvocationOverrides` 新增 `effort`/`context`，移除上述七个字段。
+- **交互面统一为中文。** `/help`（两张命令表的全部描述与正文）、无运行回合时 `/stop`/`/steer`/`/followup` 的回复、steer 排队回执、忙时斜杠命令提示、错误卡片、TUI 停止提示、整个 `/usage` 报告，以及 `/tasks` 的全部动作回执都已中文化；因为 `CommandSpec.description` 是唯一真相源，`/help`、TUI 补全和忙时提示一次改到位。结构化报告正文（`/tasks list|stats|doctor`、`/events`、`/status`）刻意保留英文字段标签——它们是数据栏位，不是文案。
+- **任务等待语义收敛到一处。** 任务只有同时满足 `waiting` 且 `wake` 可解析才可推进；`waiting` 但无 `wake` 的任务进入停泊，driver 不再轮询，而 `wake` 解析失败仍 fail-open（能解析 ⇒ 可推进，解析报错 ⇒ 可推进）。两个旧状态（`blocked`、`awaiting-user`）在读取层映射为 `waiting`，所以历史上「blocked 且无 wake」的任务升级后会停泊而非被轮询——语义一致，可用 `/tasks run` 解除。`/tasks resume` 与 `/tasks run` 现在会拒绝复活仍然超额的任务。
+- **effect 归因从「按频道」改为「按任务」。** 新增内存态 effect 台账，按 `(channelId, taskId)` 记账；bootstrap 在每个 runner 回合前后取差值，把这一回合的 effect 记到所属任务上，使 driver 的 futile-wake 与快档信号与 fingerprint 共用同一定义。计数保留在进程内，与从未落盘的 attempt/futile 计数口径一致。
+- **任务变更通过可重入的 keyed queue 串行化**（`channelDir + taskId`，`tasks/mutation-lock.ts`），关闭了 `/tasks`（不占 channel run queue 的即时命令）与 driver/agent 互相覆盖的进程内窗口。`escalate`（治理暂停）与 `start-cycle`（周期重开）改为走统一转换表而非直接写 status，并对非法前置状态拒绝调用；`attemptGeneration`——向后兼容、单调递增、跨周期保留——取代时间戳字符串相等性用于 claim/release 一致性判断，旧 dispatch 的 release 不再可能回滚较新的 claim。
+- **本地时间统一为单一词汇表。** 新增 `src/shared/local-time.ts`（`formatLocalTime`/`parseLocalTime`/`parseWakeInput`/`localDayKey`/`localStampForFilename`），作为 wake 调度、记忆按天分桶与 `/usage` 时间窗口的唯一来源，修复了本地午夜到早 8 点之间因 UTC 日界导致算错日/月的 bug。`wake` 现在接受相对偏移（`+2h`/`+45m`/`+3d`），模型不再需要手算时区；磁盘上的 wake 格式归一为带毫秒的 `formatLocalTime`。测试固定 `TZ=Asia/Shanghai`。
+- `/stop` 现在说清楚它做了什么。停掉一个任务驱动的回合会同时暂停该任务，而此前这只写进日志；`handleStop` 会回传被暂停的任务 id，回执直接点名它和 `/tasks resume <id>`。
+- 滚动进度卡常驻首行 `⏱ 3m12s · 14 步`，在只能看到最近三条时也能把"还在跑"和"卡住了"区分开。由于首行随时间变化，滚动模式改为整卡替换而非追加增量。收尾摘要同样中文化：`完成 · 14 步 · 3m12s`。
 - `/usage` 在金额旁边显示 token：本地模型或缺价格元数据的模型不计费，但一样在消耗上下文。
 
 ### 修复
 
-- 空闲的守护进程不再为每分钟的维护 tick 付真实成本。扫描整份 transcript、构造增量源窗口、读 MEMORY.md/HISTORY.md 这三件事原本都发生在 gate 判定**之前**，而绝大多数 tick 都会被 gate 拒掉；现在它们是 thunk，gate 先判完便宜条件再取材料，并做了记忆化，真正要跑的 job 仍然只读一次。`MemoryMaintenanceRuntimeContext.messages`/`sessionEntries` 变为访问器，`shouldRunStructuralMaintenance` 变为 async。
+- **频道。** 后台任务不再漏掉真实的钉钉群频道。`isChannelId` 原先带一个字符集白名单（`^(dm|group)_[A-Za-z0-9._:-]+$`），而真实会话 ID 是 base64、普遍含 `/` 和 `=`，于是记忆维护调度器和 task driver 在**工作区扫描**和**已知频道过滤**两处都把这些频道丢掉了。判定函数现在统一收敛到 `runtime/channel-paths.ts`，只保留路径安全所必需的约束，两个后台任务共用同一份。频道发现改为优先读 `workspace/CHANNELS.md`——重启后真实频道 ID 只有那里还留着，因为频道**目录名**是转义后的形式、无法还原。目录扫描保留为兜底，且是与索引**并存**；目录名等于某个已入索引 ID 的转义形式时会跳过，因此同一频道不会以两种拼写被处理两次。
+- **加固一轮（55 项发现；完整审查报告随包发布在 `docs/refer/deep-review-2026-07-27.md`）。**
+  - *任务生命周期*：`cancel`/`run` 转换现允许从 `done` 起步——休眠中的周期任务可直接退役（与文档的退役语义一致），`/tasks run` 会重开周期（折叠上一周期、重置周期 control、清除旧 wake）。`task_manage set` 修改 `schedule` 但未显式写 `wake` 时，无论当前状态都会把 wake 重算为新节奏的下一次触发。`cleanupTaskEvents` 区分 I/O 失败与解析失败——不可解析的旧事件仍交给 `/events`，读取失败则记 warning 并给出修复步骤。新增 `/tasks doctor` 检查，标记 wake 不落在任何 schedule 触发点上的周期任务，并附修复命令。
+  - *事件调度*：one-shot 事件的 `preAction` 被 gate 拦截或执行失败后，现按 `deleteAfter` 语义消费并删除源文件，不再永久滞留并占用工具侧配额；periodic 仍只跳过本次 occurrence。periodic Cron 现显式启用 `protect: true` 与 `catch: true`，前一次异步回调未结束不会重叠触发下一次。启动恢复按每批最多 4 个文件并发处理，单个文件失败记 warning 且不阻断后续批次，`/stop` 后不再启动剩余批次。约 24.8 天的 one-shot 调度上限现进入共享 admission 校验，`event_manage` 会在写文件前给出可恢复错误。
+  - *记忆*：`add` 与缺失目标降级的 `supersede` 现按既有 NFKC/空白折叠/大小写归一化哈希对当前文件及同批新增项去重，并以 `sourceCorrelationId` 作为 consolidation window 的整批幂等键；`forget` 会把条目原始的 `sourceEntryIds` 写入墓碑，拦截同窗口的改写重放。durable extraction、SESSION 更新、MEMORY 清理与 HISTORY 折叠现在共用同一条"transcript/memory/history/session 均是不可信数据而非指令"的输入边界规则。review-log 的路径指纹表改为最多 256 项的 LRU；`session_search` 的单槽缓存改为按 `(channelDir, 构建参数)` 分桶（最多 8 项、30s TTL）；删除了绕过密钥脱敏与墓碑检查的死代码 API `appendChannelMemoryUpdate`；`memory/policy.ts` 重命名为 `secret-redaction.ts` 以匹配其实际职责。
+  - *Agent / 后台作业*：每个频道最早到期的完成记录现会挂一个 `unref` 的一次性 GC 定时器，无需等待下一次作业或进程重启即可回收记录与 spill/exit 文件。后台作业的 spill 路径改用 `node:os` 的 `tmpdir()`，不再硬编码 Linux `/tmp`，owner-only 的 `umask 077` 权限保护保持不变。
+  - *Runtime / 架构*：任务台账解析器从 `shared/task-ledger.ts` 移入 `tasks/ledger.ts`，消除 `shared → tasks` 反向依赖。DingTalk 传输层通过显式同步 `reserveEvent` 钩子占用 turn，再进入异步处理体；闲置 channel 缓存新增独立定期回收（繁忙队列与正在创建的卡片不会被回收）；`enqueueEvent` 的硬编码上限提取为 `EVENT_QUEUE_LIMIT`；仅负责格式化的模块重命名为 `config-diagnostic.ts`；agent session 改用上游 `SettingsManager.inMemory()` 适配 Pipiclaw 设置。
+- 空闲的守护进程不再为每分钟的维护 tick 付真实成本——扫描整份 transcript、构造增量源窗口、读 MEMORY.md/HISTORY.md 这三件事原本都发生在 gate 判定**之前**，而绝大多数 tick 都会被 gate 拒掉；现在它们是记忆化 thunk，gate 先判完便宜条件再取材料，真正要跑的 job 仍然只读一次。
 - `bash` 超长输出改为直接写文件落盘，不再另起一个 `sh -c 'cat > file'` 进程，省掉一次 spawn 和一次最多 10MB 的管道拷贝；落盘文件权限收为 owner-only。
 - 后台 job 的 sweeper 用一条命令批量探活所有运行中的 job，不再逐个 spawn：跑 N 个后台任务不再是每 10 秒 N 次 spawn。
-- `readActiveTasks` 按 `(mtime, ctime, size)` 缓存解析结果——任务驱动器每个 tick、每个回合结束都要重读整份台账。`actionable` 刻意不进缓存：它是时钟的函数，每次调用都重算。
-- 用量账本保留「零成本但消耗了 token」的条目（本地模型，或缺价格元数据的模型），并给 `UsageSummary` 加上 `totalTokens`。此前这类配置下 `/usage` 直接是空的，任何基于 token 的支出闸门都会 fail-open。只有 token 与成本双零的空条目才会被丢弃。
+- `readActiveTasks` 按 `(mtime, ctime, size)` 缓存解析结果；`actionable` 刻意不进缓存：它是时钟的函数，每次调用都重算。
+- 用量账本保留「零成本但消耗了 token」的条目（本地模型，或缺价格元数据的模型），并给 `UsageSummary` 加上 `totalTokens`；只有 token 与成本双零的空条目才会被丢弃。
+- `awaiting-user` 现在在读取层归一为 `waiting`，消除了第三种分叉的状态值。
+- 工具 schema 现在带软预算：`TOOL_SCHEMA_TARGET_UNITS` 目标与 `measureToolSchemas()` 给工具 schema 块设上限，`/context` 的 Tools 行改用 units 并带目标值，溢出进入 Diagnostics。
+- 后台唤醒不再直播过程。合成派发传入 `progressStyleOverride` 为 `"none"`，停泊任务 nudge 或定时唤醒不再在用户视图里建卡又删卡——工作静默进行。
+- 维护 tick 在无变化时不再重读任务台账：`SettingsManager.reload()` 在设置文件指纹未变时直接返回，tools.json 驱动的 tick 在 bootstrap 内做了 memo。
 
-## [0.8.10-beta.2] - 2026-07-25
+### 移除
 
-### 变更
-
-- 对任务治理域做瘦身（spec 036），删掉四类「付了完整代码成本却换不到跨重启保证」的复杂度——治理的守护状态本就是内存态，重启即失效。per-task 的 token/成本/墙钟三维预算收敛为单一 `maxAttempts`（唯一保留的 per-task 止损；成本仍可观测，体现在 `usage` 与 `/tasks stats`，只是不再按任务强制），非重置的 `lifetimeUsage` 双账本删除——对一次性任务而言当前用量本就等于 lifetime，周期任务的跨周期历史留在 body 的 `History` 段落里。`parent`/`dependsOn` 关系图整体删除，连带退役四套环检测实现；任务先后关系改用人类可读的方式表达（写在 body 的 Manual/Goal 里，或用 `wake` 排开），`done`/`skip`/`cancel` 不再对子任务做闸门。任务持有的 worktree 与 `subagent isolation` 参数移除（子代理调用面 15 → 14）；需要独立检出时，请在宿主侧自建 worktree 并把路径作为普通工作目录传入。验收从两种形态收敛为一种：`mode: "evidence"|"independent"` 改为 `required: boolean`，删除 `done` 中的自证写入分支（maker 自己写 `status: "passed"`）使证据不再能伪装成一次「验收通过」，原本 4 处互相矛盾的默认值归一为一处——并有一处行为增强：`sideEffects: "external"` 的任务默认要求独立验收。attestation 文件保留防伪核心（runId/taskId/verdict/bodyHash/subjectHash 及 `done` 时的重校验，正是阻止手写 "passed" 的那道门），删掉 `outputHash`/`agent`/`model` 三个只写不读字段，`subjectHash` 的失败语义两端统一为 fail-closed。既有任务文件照常可读——未知键读取时忽略，下次写入自然落成新格式；`/tasks doctor` 会逐任务报告仍带退役键的情况，并明确提示 `parent`/`dependsOn` 表达的顺序意图已不再生效。`src/` 净删 395 行。Beta API 变更：`SubAgentInvocationOverrides` 移除 `isolation`/`worktreePath`/`worktreeBranch`。
-- `settings.json` 现在只接受产品意图，公共 API 也只覆盖「嵌入 daemon」这一种用法（spec 035）。设置的分界线是机械的：布尔、枚举和模型引用保持可配，所有数值阈值下沉为代码常量。保留 15 个键——五个模型引用、各模块的 `enabled` 开关、两个决定「一次可选 LLM 调用值不值这些 token」的选项（`memoryRecall.rerankWithModel`、`sessionSearch.summarizeWithModel`）、`logging.level`、`logging.file.enabled` 和 `tui.responseMode`。维护间隔、durable 写入置信度、失败退避、并发上限、任务驱动节奏、任务摘要尺寸、压缩 token 预算、重试延迟、召回尺寸和日志轮转全部不再可配：没有人能凭手头信息判断 checkpoint 间隔该是 20 分钟还是 25 分钟，而每个被文档化的数字都是一份兼容性承诺。既有配置文件照常工作——退役键被忽略，启动时打印一条 warning 逐一点名，避免有人特意调过的值悄无声息地失效。`docs/configuration.md` 去掉了 40 行的设置表和三个调参示例，换成一张简短的支持字段表、一份退役字段清单，以及一个诚实的「压到最省 token」配方。
-- **破坏性变更（beta API）**：包的 barrel 从覆盖 20 个模块的约 90 个导出名收缩到 21 个，只覆盖它真正支持的用法——嵌入 daemon：`bootstrap` 及其选项/结果类型、`DingTalkBot` 与其配置类型、`ChannelContext` 投递契约、`paths.ts` 常量和 `PipiclawSettings` 类型。prompt 内部、memory 的 sidecar/candidates/consolidation/recall/session 辅助、子代理发现与工具、用量账本、工具配置、executor、命令扩展不再导出；请从各自模块导入，并预期它们会移动。已废弃的 `DingTalkContext` 别名一并移除——改用 `ChannelContext`。仓库内没有任何代码导入过 barrel，README 也从未记载 SDK 用法，因此只影响外部嵌入方。实打实的收益在死代码检测：`src/index.ts` 是 knip 的 entry point，从这里导出的每个名字都是 `npm run deadcode` 的盲区。
-
-### 修复
-
-- 三处「文档承诺了但代码不读」的死配置已清除。`sessionSearch.enabled` 被文档标注为控制冷路径 transcript 检索，但 `session_search` 一直是无条件注册的——现在文档改为与 `grep`、`memory_manage` 一致的恒开。`sessionMemory.failureBackoffTurns`（此前已标注 "Legacy"）同样无人读取。`getCompactionReserveTokens()`、`getCompactionKeepRecentTokens()` 和 `applyOverrides()` 在包括 pi SDK 在内的全仓库都没有调用者，已删除；SDK 确实会反射调用的那些 getter 一个未动。
-
-## [0.8.10-beta.1] - 2026-07-24
-
-### 新增
-
-- 任务用量现在被诚实记账，并区分生命周期维度。新增不重置的 `lifetimeUsage`，在 `start-cycle` 会重置的每周期用量之外累计 attempt/token/cost/wall-time（磁盘上的 `control` 仍为 version 1，读取时自动回填）。`costKnown` 区分「真的免费」与「模型定价缺失」，因此缺价档会显示为 `unavailable` 而非误导性的 `$0.0000`；超出 `maxCostUsd` 变为带下一步的可恢复拒绝。`/tasks` 现在展示当前/上一周期、下一次 wake 与主机时区，driver 在启动时记录实际时区。
-- 新增仅周期任务可用的 `task_manage skip`：去重周期跳过 DoD/evidence 检查并直接回到 dormant，但未完成的子任务仍会阻止 skip。
-- evidence 模式下的 `done` 现在会写入完整的验收记录（`verification.status=passed`、evidence、时间戳与契约 hash），使通过 evidence 完成的任务满足与显式 verify 相同的验收契约。
-
-### 变更
-
-- 将记忆维护流水线从四类任务收敛为三类：把 durable consolidation 与 growth review 合并为单一 `runMemoryCheckpointJob`，走原 consolidation 语义（一个游标、一个间隔、一道 gate）。调度器现在只跑 session refresh → memory checkpoint → structural maintenance；边界事件（compact/`/new`/shutdown）继续走 `runInlineConsolidation`，与 checkpoint 共享同一游标与提炼通道。此举同时退役了 skill 自动提升：删除 post-turn review 与 promotion-signal 路径，`extraction.ts` 去掉 skill 分支与 schema，skill 只能通过 `skill_manage` 显式创建（工具保留）。状态与设置相应收敛——四个时间戳/游标字段并为 `lastCheckpointAt`/`lastCheckpointEntryId`，growth 计数器删除，`normalizeState` 迁移旧字段，`memoryGrowth` 设置块整体删除，改为单一 `checkpointIntervalMinutes`（默认 20 分钟）；旧设置键静默忽略并按新默认运行。净删约 950 行（36 文件）。Beta API 变更：`memoryGrowth` 设置块与 `runGrowthReviewJob`/skill 自动写入内部实现已移除。
-- 三处任务控制简化，去掉并行的状态机而不改变行为（磁盘格式向后兼容——未知键读取时忽略，退役枚举值在下次写入时规范化）。删除 `control.isolation`：没有任何代码读取它做决策，且 `recordTaskWorktree` 已把同一事实镜像到 `control.worktree`，隔离意图现在在委派点声明一次，`control.worktree` 是否存在*即*隔离事实。`lastOutcome` 改为 runtime 专属：移除 lifecycle、verification 与 `/tasks pause|resume|run` 中全部 10 处手写赋值，并从工具 schema 与 `TaskControlPatch` 中删除，使模型无法再设置它——只有 attempt claim/finish 与 governor 升级会写入，枚举从 7 收敛到 5（verified/skipped 已无写入方），含义收敛为「上一次 agent 回合如何结束」（`/tasks stats` 标签改为「last run:」）。`sideEffects` 改为二元：`read-only` 与 `workspace` 在各处等价（仅检查 `=== "external"`），故合并，并在 schema 注明 `external` 触发审批门禁，使枚举的机器语义自文档化。
-- 为周期任务正文加上边界，并让 legacy 台账自愈。Evidence 现在在 `Current Cycle` 内 upsert；`History` 上限为 8 条 / 24 KiB（每条 4 KiB），截断时附 `session_search` 指引。legacy 格式台账在下次开启周期时自动迁移：丢弃重复的顶层 `Evidence`，保留最新一条，其余折入 `History`。当历史中存在多个 `Current Cycle` 标题时，始终选中正文内的当前周期，修复了进展被写入陈旧周期的问题。
-- 将 `subagent` 的调用参数从 20 个收缩到 15 个（spec 034），让委派回归"描述任务"，而不是"配置一套 runtime"。四个数值预算（`maxTurns`、`maxToolCalls`、`maxWallTimeSec`、`bashTimeoutSec`）合并为 `effort` 预设三档 `quick`/`standard`/`deep`，其中 `standard` 与原默认值完全一致；`contextMode` + `memory` 合并为单个 `context`（`none`/`session`/`relevant`）；`worktreePath` 移除。子代理 frontmatter 完全不变，仍支持全部精确数值，既有 `workspace/sub-agents/*.md` 行为一字不改。Beta API 变更：从 barrel 导出的 `SubAgentInvocationOverrides` 新增 `effort`/`context`，移除上述七个字段。
-- `isolation: worktree` 改为复用任务台账里已记录的 worktree，不再要求调用方传路径。这同时修掉一个真实缺陷：此前对同一 `taskId` 发起第二次 worktree 委派会新建一个并列的 worktree 并覆盖 `control.worktree`，把第一个变成孤儿。台账记录的路径若已从磁盘消失则重新创建；若指向频道 `tasks/worktrees/` 之外则直接报错，并提示用 `task_manage` 清理。
-
-### 修复
-
-- 子代理现在真的可以被授予 `grep`。工具注册表一直把它标记为 `availableToSubagents`，但子代理工具白名单里没有它，导致请求该工具直接失败，只读检索类角色只能改用 `bash`。默认工具集仍为 `read` + `bash`。
+- 三处「文档承诺了但代码不读」的设置已清除：`sessionSearch.enabled`（被文档标注为控制冷路径检索，但 `session_search` 一直是无条件注册的）、`sessionMemory.failureBackoffTurns`（此前已标注 "Legacy"），以及包括 pi SDK 在内全仓库都没有调用者的 `getCompactionReserveTokens`/`getCompactionKeepRecentTokens`/`applyOverrides`。
 
 ## [0.8.9] - 2026-07-22
 
