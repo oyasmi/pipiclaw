@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.10-beta.6] - 2026-07-30
+
 ### Fixed
 
 - Background workers no longer skip real DingTalk group channels. `isChannelId` carried a charset allowlist (`^(dm|group)_[A-Za-z0-9._:-]+$`) that rejects every base64 conversation id — they routinely contain `/` and `=` — so the memory-maintenance scheduler and the task driver dropped those channels from both their workspace scan *and* their known-channel filter. The predicate now lives once in `runtime/channel-paths.ts`, constrains only what path safety requires (no `..` segment, no separator surviving `getChannelDir`'s `/` → `__` escaping, no NUL), and both workers share it. Channel discovery additionally reads `workspace/CHANNELS.md` first, which is the only place a real id survives a restart: a channel *directory* is the escaped form and cannot be turned back into its id. The directory scan is kept as a fallback alongside the index rather than only when the index is missing, because the index fills in one channel at a time — on the first run after an upgrade it holds a single row, and treating that as authoritative would drop every other pre-existing channel. Directories whose name is the escaped form of an already-indexed id are skipped, so no channel is visited twice under two spellings.
