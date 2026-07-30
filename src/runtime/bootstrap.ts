@@ -41,6 +41,7 @@ import { finishTaskAttempt } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
+import { type ChannelIndex, createChannelIndex } from "./channel-index.js";
 import { ensureChannelDir, getChannelDir } from "./channel-paths.js";
 import { createDingTalkContext } from "./delivery.js";
 import {
@@ -606,6 +607,9 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	const cliVersion = readCliVersion();
 	const channelRunners = new Map<string, AgentRunner>();
 	const activeTasks = new Set<Promise<void>>();
+	// `workspace/CHANNELS.md`: names every channel id so the workspace, the logs and the agent
+	// stop dealing in `group_cid...`. Writes are debounced internally (see channel-index.ts).
+	const channelIndex: ChannelIndex = createChannelIndex({ workspaceDir: options.paths.workspaceDir });
 	let durableDispatch: DurableDispatchService | undefined;
 	let shuttingDown = false;
 	let shutdownPromise: Promise<void> | null = null;
@@ -654,6 +658,11 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	const handler: DingTalkHandler = {
 		isRunning(channelId: string): boolean {
 			return channelRunners.get(channelId)?.isBusy() ?? false;
+		},
+
+		noteChannelActivity(observation): void {
+			if (shuttingDown) return;
+			channelIndex.note(observation);
 		},
 
 		async handleStop(channelId: string, _bot: DingTalkBot): Promise<StopOutcome> {
@@ -1108,6 +1117,8 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 
 			const storageFlushes = [
 				store.close(),
+				// Cancels the debounce timer and lands the last activity times.
+				channelIndex.close(),
 				getUsageLedger().flush?.() ?? Promise.resolve(),
 				flushSecurityLogs(),
 				...(eventsWatcher.flush ? [eventsWatcher.flush()] : []),

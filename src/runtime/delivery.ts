@@ -60,7 +60,9 @@ class ChannelDeliveryController {
 				channel: this.event.channelId,
 				ts: this.event.ts,
 			},
-			channelName: this.event.channelId,
+			// The group title when the transport supplied one; the raw id is the fallback so a
+			// synthetic event (which carries no conversation payload) still names its channel.
+			channelName: this.event.channelName ?? this.event.channelId,
 			respond: async (text: string, shouldLog = true) => this.appendProgress(text, shouldLog),
 			respondPlain: async (text: string, shouldLog = true) => this.sendFinal(text, shouldLog),
 			replaceMessage: async (text: string) => this.replaceWithFinal(text),

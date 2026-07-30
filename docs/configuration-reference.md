@@ -47,6 +47,7 @@ Pipiclaw 默认在下面这个目录初始化所有配置：
     ├── AGENTS.md
     ├── MEMORY.md
     ├── ENVIRONMENT.md
+    ├── CHANNELS.md
     ├── events/
     ├── skills/
     └── sub-agents/
@@ -76,6 +77,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `~/.pipiclaw/workspace/AGENTS.md` | 工作区 | 工作规则与行为约束 | 是 |
 | `~/.pipiclaw/workspace/MEMORY.md` | 工作区 | 持久化共享记忆 | 是 |
 | `~/.pipiclaw/workspace/ENVIRONMENT.md` | 工作区 | 环境事实与重要环境变更记录 | 是 |
+| `~/.pipiclaw/workspace/CHANNELS.md` | 工作区 | 频道索引：ID / 名称 / 最近消息 / 主题。前三列 runtime 自动维护，「主题」列可手工编辑并会被保留 | 仅「主题」列 |
 | `~/.pipiclaw/workspace/events/` | 工作区 | 定时事件目录 | 是 |
 | `~/.pipiclaw/workspace/sub-agents/` | 工作区 | 工作区配置子代理目录 | 是 |
 | `~/.pipiclaw/workspace/skills/` | 工作区 | 工作区级技能目录 | 是 |

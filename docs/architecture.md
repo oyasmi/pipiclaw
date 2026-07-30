@@ -290,6 +290,7 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 │   ├── SOUL.md                    # 身份与语气（注入系统提示词最前）
 │   ├── AGENTS.md                  # 用户/团队操作规则（经 SDK agentsFiles 注入）
 │   ├── MEMORY.md / ENVIRONMENT.md # 管理员维护的共享背景 / 机器事实
+│   ├── CHANNELS.md                # runtime 维护的频道索引（ID / 名称 / 最近消息 / 主题）
 │   ├── skills/  sub-agents/  events/
 │   └── <channelId>/               # dm_* / group_*，每频道一目录
 │       ├── SESSION.md  MEMORY.md  HISTORY.md

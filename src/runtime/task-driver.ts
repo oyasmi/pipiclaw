@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
@@ -16,6 +15,8 @@ import {
 	updateStoredTask,
 } from "../tasks/store.js";
 import { TERMINAL_TASK_STATUSES } from "../tasks/transitions.js";
+import { discoverWorkspaceChannelIds } from "./channel-index.js";
+import { isChannelId } from "./channel-paths.js";
 import type { DingTalkEvent } from "./dingtalk.js";
 
 export interface TaskDriverOptions {
@@ -53,12 +54,7 @@ const NUDGE_DEBOUNCE_MS = 50;
 const MIN_SLEEP_MS = 250;
 /** Consecutive no-progress wakes before the governor pauses a task (spec 029, D5). */
 const FUTILE_WAKE_LIMIT = 3;
-const CHANNEL_ID_PATTERN = /^(dm|group)_[A-Za-z0-9._:-]+$/;
 const TERMINAL_STATUSES = TERMINAL_TASK_STATUSES;
-
-function isChannelId(value: string): boolean {
-	return CHANNEL_ID_PATTERN.test(value);
-}
 
 export async function discoverTaskChannels(
 	workspaceDir: string,
@@ -68,13 +64,8 @@ export async function discoverTaskChannels(
 	for (const channelId of knownChannelIds) {
 		if (isChannelId(channelId)) channels.add(channelId);
 	}
-	try {
-		const entries = await readdir(workspaceDir, { withFileTypes: true });
-		for (const entry of entries) {
-			if (entry.isDirectory() && isChannelId(entry.name)) channels.add(entry.name);
-		}
-	} catch {
-		// A missing/unreadable workspace simply has no tasks to drive this tick.
+	for (const channelId of await discoverWorkspaceChannelIds(workspaceDir)) {
+		channels.add(channelId);
 	}
 	return Array.from(channels).sort();
 }

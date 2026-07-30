@@ -25,6 +25,7 @@ Workspace 根目录：
 - `AGENTS.md`：用户/团队工作原则，只读注入。
 - `MEMORY.md`：管理员维护的共享背景，按需读取。
 - `ENVIRONMENT.md`：机器环境事实和重要变更，按需读取、可维护。
+- `CHANNELS.md`：runtime 维护的频道索引（频道 ID / 名称 / 最近消息 / 主题）。需要知道还有哪些频道、某个 `group_...` ID 对应哪个群时读它；「主题」一列可以补写，其余三列会被重写覆盖。
 - `skills/`：workspace 级程序性知识；通过 `skill_manage` 管理。
 - `sub-agents/`：工作区配置的子代理；只加载实际存在的 Markdown 文件。
 - `events/`：全 workspace 的调度事件。

@@ -4,6 +4,10 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import * as log from "../log.js";
+// The channel index is a runtime-owned workspace artifact; the scheduler is one of its two
+// read-only consumers (see `discoverWorkspaceChannelIds`).
+import { discoverWorkspaceChannelIds } from "../runtime/channel-index.js";
+import { isChannelId } from "../runtime/channel-paths.js";
 import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { runMemoryCheckpointJob, runSessionRefreshJob, runStructuralMaintenanceJob } from "./maintenance-jobs.js";
@@ -40,20 +44,6 @@ export interface MemoryMaintenanceSchedulerOptions {
 }
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
-const CHANNEL_ID_PATTERN = /^(dm|group)_[A-Za-z0-9._:-]+$/;
-
-function isChannelId(value: string): boolean {
-	return CHANNEL_ID_PATTERN.test(value);
-}
-
-async function listWorkspaceChannels(workspaceDir: string): Promise<string[]> {
-	try {
-		const entries = await readdir(workspaceDir, { withFileTypes: true });
-		return entries.filter((entry) => entry.isDirectory() && isChannelId(entry.name)).map((entry) => entry.name);
-	} catch {
-		return [];
-	}
-}
 
 async function listStateChannels(appHomeDir: string): Promise<string[]> {
 	try {
@@ -78,7 +68,7 @@ export async function discoverMemoryMaintenanceChannels(input: {
 			channels.add(channelId);
 		}
 	}
-	for (const channelId of await listWorkspaceChannels(input.workspaceDir)) {
+	for (const channelId of await discoverWorkspaceChannelIds(input.workspaceDir)) {
 		channels.add(channelId);
 	}
 	for (const channelId of await listStateChannels(input.appHomeDir)) {

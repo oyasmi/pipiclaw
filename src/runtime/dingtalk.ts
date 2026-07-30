@@ -19,6 +19,7 @@ import { isRecord } from "../shared/type-guards.js";
 // and live in channel-context.ts. Only the traits are used here, to map the
 // DingTalk-config `ResponseMode` onto them (progressStyleOf/finalDeliveryOf).
 import type { FinalDelivery, MediaSender, MediaSendResult, OutboundMedia, ProgressStyle } from "./channel-context.js";
+import type { ChannelObservation } from "./channel-index.js";
 import { getChannelDir } from "./channel-paths.js";
 // Turn serialization is runtime policy; the queue lives in its own module and
 // this transport only consumes it.
@@ -110,6 +111,11 @@ export interface DingTalkEvent {
 	text: string;
 	conversationId: string;
 	conversationType: string; // "1" = DM, "2" = group
+	/**
+	 * Human-readable channel name: the group title, or the peer's nickname for a DM. Absent on
+	 * synthetic events (scheduled events, task-driver wakes), which carry no conversation payload.
+	 */
+	channelName?: string;
 	/** Runtime-owned durable-dispatch record, absent for normal inbound messages. */
 	dispatchId?: string;
 	/**
@@ -133,6 +139,12 @@ export interface StopOutcome {
 
 export interface DingTalkHandler {
 	isRunning(channelId: string): boolean;
+	/**
+	 * Note that a real person just wrote in this channel. Called once per accepted inbound
+	 * message, before any busy/command routing, and never for synthetic wakes — see the
+	 * maintenance contract in `channel-index.ts`. Must stay synchronous and cheap.
+	 */
+	noteChannelActivity?(observation: ChannelObservation): void;
 	/**
 	 * Synchronously reserve an inbound turn before the queued async body yields.
 	 * The transport calls this hook, when provided, immediately before `handleEvent`.
@@ -187,6 +199,8 @@ interface DingTalkIncomingMessage {
 	senderNick?: string;
 	conversationId?: string;
 	conversationType?: string;
+	/** Group title. Present on group messages only; DingTalk omits it for DMs. */
+	conversationTitle?: string;
 	msgtype?: string;
 	text?: {
 		content?: string;
@@ -1346,12 +1360,21 @@ export class DingTalkBot implements MediaSender {
 			fields: { messageType: conversationType === "2" ? "group" : "dm", messageLength: content.length },
 		});
 
+		// A group carries its title on every message; a DM has none, so the peer's nickname is
+		// the only human-readable handle that channel will ever have.
+		const conversationTitle = typeof data.conversationTitle === "string" ? data.conversationTitle.trim() : "";
+		const channelName = (conversationType === "2" ? conversationTitle : senderName) || undefined;
+
 		// Cache conversation metadata for card creation
 		this.setConversationMeta(channelId, {
 			conversationId,
 			conversationType,
 			senderId,
 		});
+
+		// The one place a real person's message is seen before command/busy routing splits the
+		// path, so the channel index counts every human message and no synthetic wake.
+		this.handler.noteChannelActivity?.({ channelId, name: channelName, at: Date.now() });
 
 		// Build event
 		const event: DingTalkEvent = {
@@ -1363,6 +1386,7 @@ export class DingTalkBot implements MediaSender {
 			text: content,
 			conversationId,
 			conversationType,
+			...(channelName ? { channelName } : {}),
 		};
 
 		const builtInCommand = parseBuiltInCommand(content);

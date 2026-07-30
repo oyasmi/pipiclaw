@@ -4,6 +4,14 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Background workers no longer skip real DingTalk group channels. `isChannelId` carried a charset allowlist (`^(dm|group)_[A-Za-z0-9._:-]+$`) that rejects every base64 conversation id — they routinely contain `/` and `=` — so the memory-maintenance scheduler and the task driver dropped those channels from both their workspace scan *and* their known-channel filter. The predicate now lives once in `runtime/channel-paths.ts`, constrains only what path safety requires (no `..` segment, no separator surviving `getChannelDir`'s `/` → `__` escaping, no NUL), and both workers share it. Channel discovery additionally reads `workspace/CHANNELS.md` first, which is the only place a real id survives a restart: a channel *directory* is the escaped form and cannot be turned back into its id. The directory scan is kept as a fallback alongside the index rather than only when the index is missing, because the index fills in one channel at a time — on the first run after an upgrade it holds a single row, and treating that as authoritative would drop every other pre-existing channel. Directories whose name is the escaped form of an already-indexed id are skipped, so no channel is visited twice under two spellings.
+
+### Added
+
+- Channels now have names. The DingTalk transport reads the `conversationTitle` every group message already carries (a DM falls back to the sender's nickname) and puts it on the event, so `ChannelContext.channelName` — and with it the structured logs — stop reporting the raw `group_cid...` id. The names are collected into a new runtime-maintained `workspace/CHANNELS.md`: one row per channel with its id, name, last human message, and a `主题` column. It is both the operator's map of an otherwise unreadable workspace and the agent's answer to "what other channels are there?" (`runtime-orientation` playbook points at it). Only real inbound messages are recorded — scheduled events and task-driver wakes are deliberately excluded, since counting them would make every dormant channel look active and destroy the file's only signal. Writes are immediate for a first sighting or a rename and debounced to at most once per 5 minutes for a timestamp-only change, with a final flush at shutdown; every rewrite re-reads the file first, so a hand-written `主题` and rows for channels this process never saw are preserved verbatim.
+
 ## [0.8.10-beta.5] - 2026-07-28
 
 A hardening pass driven by a full static code review (55 findings across the Task, Event, Memory, Agent, Security, and Runtime subsystems). The Critical/Major boundary bugs in each core state line are closed; the full review report ships under `docs/refer/deep-review-2026-07-27.md`.

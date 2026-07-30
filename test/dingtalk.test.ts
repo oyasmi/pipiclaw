@@ -251,6 +251,76 @@ describe("dingtalk", () => {
 		});
 	});
 
+	it("names a channel from the group title, falling back to the sender nickname for a DM", async () => {
+		const noteChannelActivity = vi.fn();
+		const { bot, handler } = createBot({ noteChannelActivity });
+		const privateApi = getPrivateApi(bot);
+
+		await privateApi.onStreamMessage({
+			text: { content: "hi" },
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_group",
+			conversationType: "2",
+			conversationTitle: "  投资理财  ",
+		});
+		await flushMicrotasks();
+
+		expect(noteChannelActivity).toHaveBeenCalledWith(
+			expect.objectContaining({ channelId: "group_conv_group", name: "投资理财" }),
+		);
+		expect(handler.handleEvent).toHaveBeenCalledWith(
+			expect.objectContaining({ channelId: "group_conv_group", channelName: "投资理财" }),
+			bot,
+		);
+
+		// A DM carries no title, so the peer's nickname is the only handle it will ever have.
+		await privateApi.onStreamMessage({
+			text: { content: "hi" },
+			senderStaffId: "staff_2",
+			senderNick: "Bob",
+			conversationId: "conv_dm",
+			conversationType: "1",
+		});
+		await flushMicrotasks();
+
+		expect(noteChannelActivity).toHaveBeenLastCalledWith(
+			expect.objectContaining({ channelId: "dm_staff_2", name: "Bob" }),
+		);
+	});
+
+	it("records channel activity for a busy-path message too, but never for an unauthorized one", async () => {
+		const noteChannelActivity = vi.fn();
+		const { bot } = createBot({ noteChannelActivity, isRunning: vi.fn(() => true) }, { allowFrom: ["staff_ok"] });
+		bot.sendPlain = vi.fn(async () => true);
+		const privateApi = getPrivateApi(bot);
+
+		await privateApi.onStreamMessage({
+			text: { content: "blocked" },
+			senderStaffId: "staff_nope",
+			senderNick: "Mallory",
+			conversationId: "conv_group",
+			conversationType: "2",
+			conversationTitle: "投资理财",
+		});
+		await flushMicrotasks();
+		expect(noteChannelActivity).not.toHaveBeenCalled();
+
+		// The hook sits before busy/command routing, so a steer still counts as human activity.
+		await privateApi.onStreamMessage({
+			text: { content: "keep going" },
+			senderStaffId: "staff_ok",
+			senderNick: "Alice",
+			conversationId: "conv_group",
+			conversationType: "2",
+			conversationTitle: "投资理财",
+		});
+		await flushMicrotasks();
+		expect(noteChannelActivity).toHaveBeenCalledWith(
+			expect.objectContaining({ channelId: "group_conv_group", name: "投资理财" }),
+		);
+	});
+
 	it("ignores unauthorized senders", async () => {
 		const { bot, handler } = createBot({}, { allowFrom: ["staff_ok"] });
 		const privateApi = getPrivateApi(bot);
