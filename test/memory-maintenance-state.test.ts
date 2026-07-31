@@ -4,13 +4,24 @@ import { describe, expect, it } from "vitest";
 import { createChannelMemoryQueue } from "../src/memory/channel-maintenance-queue.js";
 import {
 	applyMemoryActivityToState,
+	createMemoryActivityRecorder,
 	getMemoryMaintenanceStatePath,
+	type MemoryActivityEvent,
 	readMemoryMaintenanceState,
 	updateMemoryMaintenanceState,
 } from "../src/memory/maintenance-state.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-maintenance-state-");
+
+function activity(kind: MemoryActivityEvent["kind"], index: number): MemoryActivityEvent {
+	return {
+		kind,
+		channelId: "dm_1",
+		timestamp: new Date(Date.UTC(2026, 3, 1, 0, 0, index)).toISOString(),
+		latestSessionEntryId: `entry-${index}`,
+	};
+}
 
 describe("channel maintenance queue", () => {
 	it("serializes same-channel jobs and continues after failures", async () => {
@@ -149,5 +160,87 @@ describe("memory maintenance state", () => {
 			turnsSinceSessionRefresh: 0,
 			toolCallsSinceSessionRefresh: 0,
 		});
+	});
+});
+
+describe("memory activity recorder", () => {
+	it("collapses a burst into one write that matches event-by-event application", async () => {
+		const appHomeDir = createTempDir();
+		const events: MemoryActivityEvent[] = [
+			activity("user-turn-started", 0),
+			activity("tool-call", 1),
+			activity("tool-call", 2),
+			activity("tool-call", 3),
+			activity("assistant-turn-completed", 4),
+			activity("boundary", 5),
+		];
+
+		const recorder = createMemoryActivityRecorder({
+			appHomeDir,
+			debounceMs: 60_000, // long enough that only the explicit flush writes
+			onError: (_channelId, error) => {
+				throw error;
+			},
+		});
+		for (const event of events) {
+			recorder.record(event);
+		}
+		// Nothing has touched disk yet: the whole burst is still buffered.
+		expect(await readMemoryMaintenanceState(appHomeDir, "dm_1")).toMatchObject({
+			dirty: false,
+			toolCallsSinceSessionRefresh: 0,
+			turnsSinceSessionRefresh: 0,
+		});
+
+		await recorder.flush("dm_1");
+		const batched = await readMemoryMaintenanceState(appHomeDir, "dm_1");
+
+		// The same events applied one at a time, the way the runtime used to write them.
+		const perEventDir = createTempDir();
+		for (const event of events) {
+			await updateMemoryMaintenanceState(perEventDir, "dm_1", (state) => applyMemoryActivityToState(state, event));
+		}
+		const perEvent = await readMemoryMaintenanceState(perEventDir, "dm_1");
+
+		expect(batched).toEqual(perEvent);
+		expect(batched).toMatchObject({
+			dirty: true,
+			toolCallsSinceSessionRefresh: 3,
+			turnsSinceSessionRefresh: 1,
+			lastSessionEntryId: "entry-5",
+		});
+	});
+
+	it("flushes on the debounce and accumulates onto state written by other writers", async () => {
+		const appHomeDir = createTempDir();
+		const recorder = createMemoryActivityRecorder({ appHomeDir, debounceMs: 5 });
+
+		// A checkpoint written directly, as the consolidation path does.
+		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
+			...state,
+			lastCheckpointEntryId: "entry-99",
+			toolCallsSinceSessionRefresh: 2,
+		}));
+
+		recorder.record(activity("tool-call", 1));
+		await new Promise((resolve) => setTimeout(resolve, 30));
+
+		const state = await readMemoryMaintenanceState(appHomeDir, "dm_1");
+		// The debounced write must add to the existing counter, not replace the record.
+		expect(state.toolCallsSinceSessionRefresh).toBe(3);
+		expect(state.lastCheckpointEntryId).toBe("entry-99");
+	});
+
+	it("flush is idempotent and covers every buffered channel", async () => {
+		const appHomeDir = createTempDir();
+		const recorder = createMemoryActivityRecorder({ appHomeDir, debounceMs: 60_000 });
+
+		recorder.record({ ...activity("tool-call", 1), channelId: "dm_a" });
+		recorder.record({ ...activity("tool-call", 2), channelId: "dm_b" });
+		await recorder.flush();
+		await recorder.flush();
+
+		expect((await readMemoryMaintenanceState(appHomeDir, "dm_a")).toolCallsSinceSessionRefresh).toBe(1);
+		expect((await readMemoryMaintenanceState(appHomeDir, "dm_b")).toolCallsSinceSessionRefresh).toBe(1);
 	});
 });

@@ -342,9 +342,19 @@ interface CandidateTokenIndex {
 	all: Set<string>;
 }
 
+/** The three scoring fields of a candidate, lowercased once for substring matching. */
+interface CandidateLowerFields {
+	title: string;
+	content: string;
+	path: string;
+}
+
 // Candidates are cached objects reused across turns by the MemoryCandidateStore, so keying
 // off the object identity keeps tokenization off the hot path for unchanged memory files.
 const candidateTokenCache = new WeakMap<MemoryCandidate, CandidateTokenIndex>();
+// Same idea for the exact-match pass: it lowercases the full body of every candidate, which
+// without this allocated a throwaway copy of the entire memory corpus on every turn.
+const candidateLowerCache = new WeakMap<MemoryCandidate, CandidateLowerFields>();
 
 function getCandidateTokens(candidate: MemoryCandidate): CandidateTokenIndex {
 	const cached = candidateTokenCache.get(candidate);
@@ -357,6 +367,20 @@ function getCandidateTokens(candidate: MemoryCandidate): CandidateTokenIndex {
 	const index: CandidateTokenIndex = { title, content, path, all: new Set([...title, ...content, ...path]) };
 	candidateTokenCache.set(candidate, index);
 	return index;
+}
+
+function getCandidateLowerFields(candidate: MemoryCandidate): CandidateLowerFields {
+	const cached = candidateLowerCache.get(candidate);
+	if (cached) {
+		return cached;
+	}
+	const fields: CandidateLowerFields = {
+		title: candidate.title.toLowerCase(),
+		content: (candidate.searchText ?? candidate.content).toLowerCase(),
+		path: candidate.path.toLowerCase(),
+	};
+	candidateLowerCache.set(candidate, fields);
+	return fields;
 }
 
 function buildDocumentFrequency(candidates: MemoryCandidate[]): Map<string, number> {
@@ -409,29 +433,28 @@ function computeMatchEvidence(
 	return { mass, matchedCount };
 }
 
-function computeExactMatchBoost(query: string, candidate: MemoryCandidate): number {
-	const normalizedQuery = query.trim().toLowerCase();
+/** `normalizedQuery` is lowercased and length-checked once by the caller, not per candidate. */
+function computeExactMatchBoost(normalizedQuery: string, candidate: MemoryCandidate): number {
 	if (!normalizedQuery) {
 		return 0;
 	}
 
-	const minLength = containsHanText(normalizedQuery) ? 2 : 4;
-	if (normalizedQuery.length < minLength) {
-		return 0;
-	}
-
+	const fields = getCandidateLowerFields(candidate);
 	let boost = 0;
-	const scoringFields: Array<[string, number]> = [
-		[candidate.title, 4],
-		[candidate.searchText ?? candidate.content, 3],
-		[candidate.path, 1.5],
-	];
-	for (const [field, value] of scoringFields) {
-		if (field.toLowerCase().includes(normalizedQuery)) {
-			boost += value;
-		}
-	}
+	if (fields.title.includes(normalizedQuery)) boost += 4;
+	if (fields.content.includes(normalizedQuery)) boost += 3;
+	if (fields.path.includes(normalizedQuery)) boost += 1.5;
 	return boost;
+}
+
+/**
+ * The query as `computeExactMatchBoost` wants it, or `""` when it is too short to be evidence
+ * on its own (a 2-char Han fragment is meaningful, a 2-char Latin one is not).
+ */
+function normalizeExactMatchQuery(query: string): string {
+	const normalizedQuery = query.trim().toLowerCase();
+	const minLength = containsHanText(normalizedQuery) ? 2 : 4;
+	return normalizedQuery.length >= minLength ? normalizedQuery : "";
 }
 
 function computeRecencyBoost(timestamp: string | undefined): number {
@@ -496,7 +519,7 @@ function compareScoredCandidates(a: ScoredCandidate, b: ScoredCandidate): number
 }
 
 function scoreCandidate(
-	query: string,
+	exactMatchQuery: string,
 	queryTokens: string[],
 	intents: Set<QueryIntent>,
 	candidate: MemoryCandidate,
@@ -504,7 +527,7 @@ function scoreCandidate(
 	totalCandidates: number,
 ): ScoredCandidate | null {
 	const evidence = computeMatchEvidence(queryTokens, candidate, documentFrequencies, totalCandidates);
-	const totalEvidence = evidence.mass + computeExactMatchBoost(query, candidate);
+	const totalEvidence = evidence.mass + computeExactMatchBoost(exactMatchQuery, candidate);
 	if (totalEvidence < MIN_MATCH_EVIDENCE) {
 		return null;
 	}
@@ -730,11 +753,12 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 
 	const queryTokens = tokenize(query);
 	const queryIntents = detectQueryIntents(query);
+	const exactMatchQuery = normalizeExactMatchQuery(query);
 	const documentFrequencies = buildDocumentFrequency(eligibleCandidates);
 	const totalCandidates = eligibleCandidates.length;
 	const scored = eligibleCandidates
 		.map((candidate) =>
-			scoreCandidate(query, queryTokens, queryIntents, candidate, documentFrequencies, totalCandidates),
+			scoreCandidate(exactMatchQuery, queryTokens, queryIntents, candidate, documentFrequencies, totalCandidates),
 		)
 		.filter((candidate): candidate is ScoredCandidate => candidate !== null)
 		.sort(compareScoredCandidates);

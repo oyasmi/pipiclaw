@@ -288,13 +288,14 @@ class ChannelDeliveryController {
 						}
 					} else if (mode === "finalize-existing") {
 						if (content || this.cardWarmupTriggered) {
-							const finalProgressText =
-								this.progressStyle === "rolling" ? this.buildSummaryText() : progressText;
-							touchedRemote = await this.bot.replaceCard(
-								this.event.channelId,
-								content || this.progressStyle === "rolling" ? finalProgressText : NO_CONTENT,
-								true,
-							);
+							const isRolling = this.progressStyle === "rolling";
+							const finalProgressText = isRolling ? this.buildSummaryText() : progressText;
+							// A warmed-but-empty card in full mode has nothing to show, so it finalizes
+							// blank; rolling mode always has its closing summary to put there.
+							// (`||` binds tighter than `?:` — this used to read as one condition and
+							// was a standing invitation to misparse it.)
+							const finalCardText = content || isRolling ? finalProgressText : NO_CONTENT;
+							touchedRemote = await this.bot.replaceCard(this.event.channelId, finalCardText, true);
 							if (!touchedRemote) {
 								this.bot.discardCard(this.event.channelId);
 							} else {

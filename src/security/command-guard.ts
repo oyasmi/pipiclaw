@@ -355,16 +355,33 @@ function extractFindExecCommands(parsed: ParsedCommand): string[][] {
 	return inner;
 }
 
+/**
+ * How many suffix positions of a wrapper's arguments are treated as candidate command starts.
+ *
+ * The scan below is a superset heuristic, not a soundness requirement: the wrapper's own direct
+ * rule, `sh -c` bodies and `find -exec` are all matched separately and are unaffected by this
+ * bound. Without a bound the scan is quadratic in the argument count — every suffix is sliced and
+ * re-joined into a normalized command line — and it recurses, so a wrapper whose arguments contain
+ * further wrappers multiplied that cost up to `MAX_GUARD_DEPTH` times. Measured: ~6ms at 200
+ * arguments, ~36ms at 800, which a long file list reaches without trying.
+ *
+ * A real inner command starts within the first few tokens, after the wrapper's own flags; no
+ * wrapper in `WRAPPER_COMMANDS` takes anything close to 32 of them. Positions beyond this are
+ * operands of the inner command, which has already been inspected from its own start position.
+ */
+const MAX_WRAPPER_CANDIDATES = 32;
+
 // For a generic wrapper, the inner command can sit anywhere after the wrapper's
 // own options/operands (whose grammar varies per tool). Rather than parse each
-// wrapper's flags precisely, evaluate every suffix position as a candidate
-// command start — this only ever adds detections, never relaxes them.
+// wrapper's flags precisely, evaluate the leading suffix positions as candidate
+// command starts — this only ever adds detections, never relaxes them.
 function extractWrapperCandidates(parsed: ParsedCommand): string[][] {
 	if (!WRAPPER_COMMANDS.has(parsed.command)) {
 		return [];
 	}
 	const candidates: string[][] = [];
-	for (let i = 0; i < parsed.args.length; i++) {
+	const limit = Math.min(parsed.args.length, MAX_WRAPPER_CANDIDATES);
+	for (let i = 0; i < limit; i++) {
 		candidates.push(parsed.args.slice(i));
 	}
 	return candidates;
@@ -402,6 +419,36 @@ function hasDangerousDeletionTarget(args: string[]): boolean {
 
 function joinedArgs(parsed: ParsedCommand): string {
 	return parsed.args.join(" ");
+}
+
+interface CompiledDenyPattern {
+	pattern: string;
+	regex: RegExp;
+}
+
+/**
+ * `matchRule` runs once per atom per recursion level, so compiling the configured patterns inside
+ * it recompiled the same regexes many times for a single guarded command. The list comes from
+ * `security.json` and is rebuilt only when that file is reloaded, so caching on its identity is
+ * enough. Invalid patterns are dropped here, once, instead of throwing on every evaluation.
+ */
+const denyPatternCache = new WeakMap<string[], CompiledDenyPattern[]>();
+
+function compileDenyPatterns(patterns: string[]): CompiledDenyPattern[] {
+	const cached = denyPatternCache.get(patterns);
+	if (cached) {
+		return cached;
+	}
+	const compiled: CompiledDenyPattern[] = [];
+	for (const pattern of patterns) {
+		try {
+			compiled.push({ pattern, regex: new RegExp(pattern, "i") });
+		} catch {
+			// Ignore invalid user patterns.
+		}
+	}
+	denyPatternCache.set(patterns, compiled);
+	return compiled;
 }
 
 function matchRule(parsed: ParsedCommand, config: SecurityConfig["commandGuard"]): CommandRuleMatch | null {
@@ -548,19 +595,14 @@ function matchRule(parsed: ParsedCommand, config: SecurityConfig["commandGuard"]
 		}
 	}
 
-	for (const pattern of config.additionalDenyPatterns) {
-		try {
-			const regex = new RegExp(pattern, "i");
-			if (regex.test(normalized)) {
-				return {
-					category: "configured-command-deny",
-					rule: pattern,
-					reason: "Command matched a configured deny pattern",
-					matchedText: normalized,
-				};
-			}
-		} catch {
-			// Ignore invalid user patterns.
+	for (const { pattern, regex } of compileDenyPatterns(config.additionalDenyPatterns)) {
+		if (regex.test(normalized)) {
+			return {
+				category: "configured-command-deny",
+				rule: pattern,
+				reason: "Command matched a configured deny pattern",
+				matchedText: normalized,
+			};
 		}
 	}
 

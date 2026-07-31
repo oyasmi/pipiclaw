@@ -62,9 +62,11 @@ function renderKindBreakdown(summary: UsageSummary): string | null {
 	return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId: string): string {
-	const global = ledger.summarize({ since: window.since, until: window.until });
-	const channel = ledger.summarize({ since: window.since, until: window.until, channelId });
+async function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId: string): Promise<string> {
+	const [global, channel] = await Promise.all([
+		ledger.summarize({ since: window.since, until: window.until }),
+		ledger.summarize({ since: window.since, until: window.until, channelId }),
+	]);
 
 	const lines: string[] = [`## ${window.title}`];
 	if (global.entryCount === 0) {
@@ -89,8 +91,13 @@ function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId: strin
 	return lines.join("\n");
 }
 
-export function renderUsageReport(ledger: UsageLedger, channelId: string, mode: UsageQueryMode, now: Date): string {
+export async function renderUsageReport(
+	ledger: UsageLedger,
+	channelId: string,
+	mode: UsageQueryMode,
+	now: Date,
+): Promise<string> {
 	const windows = usageWindows(mode, now);
-	const body = windows.map((window) => renderWindow(window, ledger, channelId)).join("\n\n");
-	return `# 用量\n\n${body}`;
+	const rendered = await Promise.all(windows.map((window) => renderWindow(window, ledger, channelId)));
+	return `# 用量\n\n${rendered.join("\n\n")}`;
 }

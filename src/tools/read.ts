@@ -92,12 +92,16 @@ export interface ReadToolOptions {
 	channelId?: string;
 }
 
-function countTextLines(content: string): number {
+/** Lines in `content`, given its `split("\n")` — callers that already split should pass it. */
+function countSplitLines(content: string, lines: string[]): number {
 	if (content.length === 0) {
 		return 0;
 	}
+	return content.endsWith("\n") ? lines.length - 1 : lines.length;
+}
 
-	return content.endsWith("\n") ? content.split("\n").length - 1 : content.split("\n").length;
+function countTextLines(content: string): number {
+	return countSplitLines(content, content.split("\n"));
 }
 
 function formatPathBlockMessage(resolvedPath: string | undefined, category?: string, reason?: string): string {
@@ -246,8 +250,18 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 								.slice(startLine - 1)
 								.join("\n");
 			} else {
-				const cmd = startLine === 1 ? `cat ${shellEscape(path)}` : `tail -n +${startLine} ${shellEscape(path)}`;
-				const result = await executor.exec(cmd, { signal });
+				// Bounded at the source. The output is capped below at min(DEFAULT_MAX_LINES,
+				// DEFAULT_MAX_BYTES) anyway, so piping a multi-hundred-megabyte log through the
+				// executor and materializing it as a JS string first only bought a second full read
+				// of the file and the peak memory to hold it. Reading twice the byte cap always
+				// leaves `truncateHead` enough to apply whichever limit binds first — the byte cap
+				// is half the window, and however short the lines are, DEFAULT_MAX_LINES of them
+				// are either within the window or already past the byte cap.
+				const readWindowBytes = DEFAULT_MAX_BYTES * 2;
+				const source = startLine === 1 ? `cat ${shellEscape(path)}` : `tail -n +${startLine} ${shellEscape(path)}`;
+				// `sh -c` runs without pipefail, so the pipeline reports head's status; head closing
+				// the pipe early is the point, not a failure.
+				const result = await executor.exec(`${source} | head -c ${readWindowBytes}`, { signal });
 				if (result.code !== 0) {
 					throw new Error(result.stderr || `Failed to read file: ${path}`);
 				}
@@ -258,7 +272,7 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			// Apply user limit if specified
 			if (limit !== undefined) {
 				const lines = selectedContent.split("\n");
-				const endLine = Math.min(limit, countTextLines(selectedContent));
+				const endLine = Math.min(limit, countSplitLines(selectedContent, lines));
 				selectedContent = lines.slice(0, endLine).join("\n");
 				userLimitedLines = endLine;
 			}

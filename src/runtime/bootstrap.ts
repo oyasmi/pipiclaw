@@ -752,7 +752,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		},
 
 		async handleUsageCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void> {
-			const response = renderUsageReport(getUsageLedger(), event.channelId, parseUsageMode(args), new Date());
+			const response = await renderUsageReport(getUsageLedger(), event.channelId, parseUsageMode(args), new Date());
 			await bot.sendPlain(event.channelId, response);
 		},
 

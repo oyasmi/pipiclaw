@@ -112,6 +112,27 @@ function resolveExistingAncestor(path: string): string {
 	}
 }
 
+/**
+ * `resolveForGuard` for the two roots every call resolves: the workspace and the home directory.
+ *
+ * Unlike a guarded target, these are existing directories that do not move for the life of the
+ * process, so their realpath is stable — but resolving them cost two `realpathSync` calls on
+ * *every* guarded read and write. Cached on the literal input so a different workspace (tests,
+ * a second runtime in-process) still resolves correctly.
+ */
+const rootRealPathCache = new Map<string, string>();
+
+function resolveRootForGuard(path: string, ctx: PathGuardContext): string {
+	const key = `${ctx.config.resolveSymlinks !== false}\0${path}`;
+	const cached = rootRealPathCache.get(key);
+	if (cached !== undefined) {
+		return cached;
+	}
+	const resolved = resolveForGuard(path, ctx);
+	rootRealPathCache.set(key, resolved);
+	return resolved;
+}
+
 function resolveForGuard(path: string, ctx: PathGuardContext): string {
 	const normalized = normalize(path);
 	const resolveSymlinks = ctx.config.resolveSymlinks !== false;
@@ -132,16 +153,47 @@ function matchesAnyPath(path: string, exactPaths: string[], prefixes: string[]):
 	return exactPaths.includes(path) || prefixes.some((prefix) => startsWithPathPrefix(path, prefix));
 }
 
-function matchesSensitiveReadPath(path: string, homeDir: string): boolean {
-	const sensitiveHomePrefixes = HOME_SENSITIVE_PREFIXES.map((item) => resolveHomeConfiguredPath(item, homeDir));
-	const sensitiveHomeFiles = HOME_SENSITIVE_FILES.map((item) => resolveHomeConfiguredPath(item, homeDir));
-	const sensitiveSystemPrefixes = SYSTEM_SENSITIVE_PREFIXES.map((item) => normalize(item));
-	const sensitiveSystemFiles = SYSTEM_SENSITIVE_FILES.map((item) => normalize(item));
+interface SensitivePathTable {
+	homePrefixes: string[];
+	homeFiles: string[];
+	writeDenyHomeFiles: string[];
+}
 
-	if (matchesAnyPath(path, sensitiveHomeFiles, sensitiveHomePrefixes)) {
+/**
+ * The sensitive-path lists are module constants; only `homeDir` varies, and in practice it is one
+ * value for the life of the process. Resolving all ~25 of them (null-strip, NFKC-normalize,
+ * expand, normalize) on every single guarded read/write was pure repeated work, so the resolved
+ * table is memoized per home directory.
+ */
+const sensitivePathTables = new Map<string, SensitivePathTable>();
+
+function getSensitivePathTable(homeDir: string): SensitivePathTable {
+	const cached = sensitivePathTables.get(homeDir);
+	if (cached) {
+		return cached;
+	}
+	const table: SensitivePathTable = {
+		homePrefixes: HOME_SENSITIVE_PREFIXES.map((item) => resolveHomeConfiguredPath(item, homeDir)),
+		homeFiles: HOME_SENSITIVE_FILES.map((item) => resolveHomeConfiguredPath(item, homeDir)),
+		writeDenyHomeFiles: WRITE_DENY_HOME_FILES.map((item) => resolveHomeConfiguredPath(item, homeDir)),
+	};
+	sensitivePathTables.set(homeDir, table);
+	return table;
+}
+
+/** Path-independent, so resolved once at module load. */
+const SENSITIVE_SYSTEM_PREFIXES = SYSTEM_SENSITIVE_PREFIXES.map((item) => normalize(item));
+const SENSITIVE_SYSTEM_FILES = SYSTEM_SENSITIVE_FILES.map((item) => normalize(item));
+const NORMALIZED_SYSTEM_DENY_PREFIXES = SYSTEM_DENY_PREFIXES.map((prefix) => normalize(prefix));
+const NORMALIZED_TEMP_PREFIXES = TEMP_PREFIXES.map((prefix) => normalize(prefix));
+
+function matchesSensitiveReadPath(path: string, homeDir: string): boolean {
+	const table = getSensitivePathTable(homeDir);
+
+	if (matchesAnyPath(path, table.homeFiles, table.homePrefixes)) {
 		return true;
 	}
-	if (matchesAnyPath(path, sensitiveSystemFiles, sensitiveSystemPrefixes)) {
+	if (matchesAnyPath(path, SENSITIVE_SYSTEM_FILES, SENSITIVE_SYSTEM_PREFIXES)) {
 		return true;
 	}
 	if (PROC_MEM_PATH.test(path)) {
@@ -160,17 +212,32 @@ function matchesSensitiveWritePath(path: string, homeDir: string): boolean {
 	if (matchesSensitiveReadPath(path, homeDir)) {
 		return true;
 	}
-	const writeDenyHomeFiles = WRITE_DENY_HOME_FILES.map((item) => resolveHomeConfiguredPath(item, homeDir));
-	return writeDenyHomeFiles.includes(path);
+	return getSensitivePathTable(homeDir).writeDenyHomeFiles.includes(path);
 }
 
-function isWithinTemp(path: string): boolean {
-	const configuredPrefixes = TEMP_PREFIXES.map((prefix) => normalize(prefix));
+/**
+ * Resolving the runtime temp directory costs an `existsSync` plus a `realpathSync` walk, and
+ * `isWithinTemp` is consulted up to twice per guarded path. `tmpdir()` reads TMPDIR/TEMP each
+ * time, so the cache is keyed on it: an env change still takes effect, it just stops paying for
+ * the syscalls on every tool call.
+ */
+let tempPrefixCache: { tmpDir: string; prefixes: string[] } | null = null;
+
+function getTempPrefixes(): string[] {
 	const runtimeTmpDir = normalize(tmpdir());
+	if (tempPrefixCache?.tmpDir === runtimeTmpDir) {
+		return tempPrefixCache.prefixes;
+	}
 	const runtimePrefixes = existsSync(runtimeTmpDir)
 		? [runtimeTmpDir, resolveExistingAncestor(runtimeTmpDir)]
 		: [runtimeTmpDir];
-	return [...configuredPrefixes, ...runtimePrefixes].some((prefix) => startsWithPathPrefix(path, prefix));
+	const prefixes = [...NORMALIZED_TEMP_PREFIXES, ...runtimePrefixes];
+	tempPrefixCache = { tmpDir: runtimeTmpDir, prefixes };
+	return prefixes;
+}
+
+function isWithinTemp(path: string): boolean {
+	return getTempPrefixes().some((prefix) => startsWithPathPrefix(path, prefix));
 }
 
 function isWithinHome(path: string, homeDir: string): boolean {
@@ -185,9 +252,13 @@ function isDeniedSystemPath(path: string): boolean {
 	if (isWithinTemp(path)) {
 		return false;
 	}
-	return SYSTEM_DENY_PREFIXES.some((prefix) => startsWithPathPrefix(path, normalize(prefix)));
+	return NORMALIZED_SYSTEM_DENY_PREFIXES.some((prefix) => startsWithPathPrefix(path, prefix));
 }
 
+// Deliberately not cached: a configured allow/deny entry may not exist yet, and `resolveForGuard`
+// resolves a missing path through its nearest existing ancestor. Caching that would freeze the
+// pre-creation answer, so a path later created as a symlink would stop being resolved to its
+// target. Both lists are empty by default, so this costs nothing unless the operator opts in.
 function matchesConfiguredPath(path: string, entries: string[], ctx: PathGuardContext): boolean {
 	return entries
 		.map((entry) => resolveForGuard(resolveConfiguredPath(entry, ctx), ctx))
@@ -229,8 +300,8 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 	const homeDir = ctx.homeDir ?? homedir();
 	const effectiveCtx: PathGuardContext = {
 		...ctx,
-		workspaceDir: resolveForGuard(ctx.workspaceDir, ctx),
-		homeDir: resolveForGuard(homeDir, ctx),
+		workspaceDir: resolveRootForGuard(ctx.workspaceDir, ctx),
+		homeDir: resolveRootForGuard(homeDir, ctx),
 	};
 	const resolvedTarget = resolveTargetPath(rawPath, ctx);
 	const guardedPath = resolveForGuard(resolvedTarget, ctx);

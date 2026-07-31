@@ -918,57 +918,22 @@ export class DingTalkBot implements MediaSender {
 
 	/**
 	 * Send a normal message natively mapping DM and Group to correct endpoints (fallback when no card).
+	 *
+	 * Only the message shape is decided here; the DM-vs-group routing and the POST itself belong to
+	 * `sendRobotMessage`, which every other outbound message type already goes through.
 	 */
 	async sendPlain(channelId: string, text: string): Promise<boolean> {
-		const token = await this.getAccessToken();
-		if (!token) return false;
-
 		const meta = this.getConversationMeta(channelId);
 		if (!meta) {
 			log.logWarning(`No conversation metadata for ${channelId}, cannot send plain message`);
 			return false;
 		}
 
-		const robotCode = this.config.robotCode || this.config.clientId;
-		const isGroup = meta.conversationType === "2";
-
 		const hasMarkdown = /^#{1,6}\s|^\s*[-*]\s|\*\*.*\*\*|```|`[^`]+`|\[.*?\]\(.*?\)/m.test(text);
-
 		const msgKey = hasMarkdown ? "sampleMarkdown" : "sampleText";
 		const msgParam = hasMarkdown ? JSON.stringify({ text, title: "Bot" }) : JSON.stringify({ content: text });
 
-		const url = isGroup
-			? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
-			: `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
-
-		const body: any = {
-			robotCode,
-			msgKey,
-			msgParam,
-		};
-
-		if (isGroup) {
-			body.openConversationId = meta.conversationId;
-		} else {
-			body.userIds = [meta.senderId];
-		}
-
-		try {
-			await http.post(url, body, {
-				headers: {
-					"x-acs-dingtalk-access-token": token,
-					"Content-Type": "application/json",
-				},
-			});
-			return true;
-		} catch (err) {
-			if (axios.isAxiosError(err) && err.response) {
-				log.logWarning(`DingTalk plain send failed (${err.response.status})`, JSON.stringify(err.response.data));
-			} else {
-				log.logWarning("DingTalk plain send error", errorMessage(err));
-			}
-			return false;
-		}
+		return this.sendRobotMessage(meta, msgKey, msgParam);
 	}
 
 	// ==========================================================================
@@ -1063,8 +1028,8 @@ export class DingTalkBot implements MediaSender {
 
 	/**
 	 * POST a robot message with an arbitrary msgKey/msgParam, routing DM vs group
-	 * to the correct endpoint. Shared by the media path; `sendPlain` predates this
-	 * and keeps its own inlined copy to avoid a regression-prone refactor.
+	 * to the correct endpoint. The single outbound path for every non-card message:
+	 * plain text/markdown, images, and files.
 	 */
 	private async sendRobotMessage(meta: ConversationMeta, msgKey: string, msgParam: string): Promise<boolean> {
 		const token = await this.getAccessToken();

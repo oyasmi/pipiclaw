@@ -3,7 +3,7 @@ import { writeFile } from "fs/promises";
 import { basename, dirname, join } from "path";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime } from "../shared/local-time.js";
-import { ensureChannelDir } from "./channel-paths.js";
+import { getChannelDir } from "./channel-paths.js";
 
 const MAX_LOG_SIZE_BYTES = 1_000_000;
 const DEDUPE_TTL_MS = 60_000;
@@ -92,10 +92,16 @@ export class ChannelStore {
 	}
 
 	/**
-	 * Get or create the directory for a channel/DM
+	 * The archive path for a channel — resolved, not created.
+	 *
+	 * This used to call `ensureChannelDir`, i.e. a synchronous `mkdirSync` on the event loop for
+	 * every archived message. `logBotResponse` runs on every progress update of a streaming turn,
+	 * so that was a blocking syscall per progress tick. The appender's own `ensureDir` already
+	 * creates the directory before it writes, and memoizes it, so the mkdir here was pure
+	 * duplicated I/O.
 	 */
-	getChannelDir(channelId: string): string {
-		return ensureChannelDir(this.workingDir, channelId);
+	private channelArchiveDir(channelId: string): string {
+		return getChannelDir(this.workingDir, channelId);
 	}
 
 	/**
@@ -117,7 +123,7 @@ export class ChannelStore {
 			this.recentlyLogged.delete(dedupeKey);
 		}
 
-		const logPath = join(this.getChannelDir(channelId), "log.jsonl");
+		const logPath = join(this.channelArchiveDir(channelId), "log.jsonl");
 
 		if (!message.date) {
 			message.date = formatLocalTime();
@@ -133,7 +139,7 @@ export class ChannelStore {
 
 	async logSubAgentRun(channelId: string, run: LoggedSubAgentRun): Promise<void> {
 		if (this.closed) return;
-		const logPath = join(this.getChannelDir(channelId), "subagent-runs.jsonl");
+		const logPath = join(this.channelArchiveDir(channelId), "subagent-runs.jsonl");
 		if (!this.archiveAppender.tryAppend({ filePath: logPath, value: run })) {
 			throw new Error("Sub-agent archive queue is full. Retry after pending log writes drain.");
 		}

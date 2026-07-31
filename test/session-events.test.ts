@@ -17,7 +17,7 @@ function createLedger(records: Array<Omit<UsageLedgerEntry, "ts">> = []): UsageL
 		record: (entry) => {
 			records.push(entry);
 		},
-		summarize: () => ({ totalCost: 0, totalTokens: 0, entryCount: 0, byKind: {}, byModel: {}, byChannel: {} }),
+		summarize: async () => ({ totalCost: 0, totalTokens: 0, entryCount: 0, byKind: {}, byModel: {}, byChannel: {} }),
 	};
 }
 

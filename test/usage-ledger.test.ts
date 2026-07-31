@@ -90,7 +90,7 @@ describe("usage ledger", () => {
 		await flush(ledger);
 
 		expect(readMonth("2026-07")).toHaveLength(1);
-		const summary = ledger.summarize({
+		const summary = await ledger.summarize({
 			since: new Date("2026-07-01T00:00:00Z"),
 			until: new Date("2026-07-31T00:00:00Z"),
 		});
@@ -155,14 +155,14 @@ describe("usage ledger", () => {
 		await flush(ledger);
 
 		const window = { since: new Date("2026-07-01T00:00:00Z"), until: new Date("2026-07-31T00:00:00Z") };
-		const all = ledger.summarize(window);
+		const all = await ledger.summarize(window);
 		expect(all.totalCost).toBeCloseTo(0.7);
 		expect(all.entryCount).toBe(3);
 		expect(all.byKind.turn).toBeCloseTo(0.5);
 		expect(all.byKind.subagent).toBeCloseTo(0.2);
 		expect(all.byChannel.c1).toBeCloseTo(0.3);
 
-		const c1 = ledger.summarize({ ...window, channelId: "c1" });
+		const c1 = await ledger.summarize({ ...window, channelId: "c1" });
 		expect(c1.totalCost).toBeCloseTo(0.3);
 		expect(c1.byModel["m/b"]).toBeUndefined();
 	});
@@ -186,7 +186,7 @@ describe("usage ledger", () => {
 		});
 		await flush(ledger);
 
-		const summary = ledger.summarize({
+		const summary = await ledger.summarize({
 			since: new Date("2026-06-29T00:00:00Z"),
 			until: new Date("2026-07-02T00:00:00Z"),
 		});

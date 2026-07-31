@@ -8,7 +8,7 @@ const NOW = new Date("2026-07-04T12:00:00Z");
 function stubLedger(fn: (q: UsageSummaryQuery) => Partial<UsageSummary>): UsageLedger {
 	return {
 		record: () => {},
-		summarize: (q) => ({
+		summarize: async (q) => ({
 			totalCost: 0,
 			totalTokens: 0,
 			entryCount: 0,
@@ -46,7 +46,7 @@ describe("usage windows", () => {
 });
 
 describe("renderUsageReport", () => {
-	it("renders channel + global cost with kind and model breakdowns", () => {
+	it("renders channel + global cost with kind and model breakdowns", async () => {
 		const ledger = stubLedger((q) =>
 			q.channelId
 				? { totalCost: 0.3, totalTokens: 12_000, entryCount: 2, byKind: { turn: 0.2, sidecar: 0.1 } }
@@ -59,7 +59,7 @@ describe("renderUsageReport", () => {
 					},
 		);
 
-		const report = renderUsageReport(ledger, "c1", "month", NOW);
+		const report = await renderUsageReport(ledger, "c1", "month", NOW);
 		expect(report).toContain("本月（2026-07）");
 		expect(report).toContain("本频道：$0.3000 · 12k tokens");
 		expect(report).toContain("turn $0.2000 · sidecar $0.1000");
@@ -67,9 +67,9 @@ describe("renderUsageReport", () => {
 		expect(report).toContain("用量最高的模型：anthropic/opus $1.0000，anthropic/haiku $0.5000");
 	});
 
-	it("reports empty windows plainly", () => {
+	it("reports empty windows plainly", async () => {
 		const ledger = stubLedger(() => ({}));
-		const report = renderUsageReport(ledger, "c1", "default", NOW);
+		const report = await renderUsageReport(ledger, "c1", "default", NOW);
 		expect(report).toContain("暂无用量记录。");
 	});
 });

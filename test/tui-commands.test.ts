@@ -6,7 +6,7 @@ function deps(overrides: Partial<DispatchDeps> = {}): DispatchDeps {
 		renderHelp: () => "HELP",
 		renderStatus: () => "STATUS",
 		renderContext: (args) => `CONTEXT:${args}`,
-		renderUsage: (args) => `USAGE:${args}`,
+		renderUsage: async (args) => `USAGE:${args}`,
 		runEvents: async (args) => `EVENTS:${args}`,
 		runTasks: async (args) => `TASKS:${args}`,
 		...overrides,

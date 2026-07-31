@@ -115,7 +115,7 @@ function setup({ start = false, now = () => 0 }: { start?: boolean; now?: () => 
 		channelId: "tui_local",
 		userName: "tester",
 		renderHelp: () => "HELP",
-		renderUsage: () => "USAGE",
+		renderUsage: async () => "USAGE",
 		runEvents: async () => "EVENTS",
 		runTasks: async () => "TASKS",
 		statusInfo: { version: "1", startedAt: 0 },

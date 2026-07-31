@@ -33,7 +33,7 @@ export interface TurnControllerDeps {
 	userName: string;
 	/** Info commands that do not depend on run state. */
 	renderHelp: () => string;
-	renderUsage: (args: string) => string;
+	renderUsage: (args: string) => Promise<string>;
 	runEvents: (args: string) => Promise<string>;
 	runTasks: (args: string) => Promise<string>;
 	/** Static bits the status renderer needs alongside the live run state. */

@@ -30,9 +30,9 @@ import { handleMemoryCommand } from "../memory/commands.js";
 import { getChannelMemoryPath } from "../memory/files.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import {
-	applyMemoryActivityToState,
+	createMemoryActivityRecorder,
 	type MemoryActivityEvent,
-	updateMemoryMaintenanceState,
+	type MemoryActivityRecorder,
 } from "../memory/maintenance-state.js";
 import { MEMORY_RECALL_MAX_UNITS, recallRelevantMemory } from "../memory/recall.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
@@ -152,6 +152,7 @@ export class ChannelRunner implements AgentRunner {
 	private readonly memoryLifecycle: MemoryLifecycle;
 	private readonly ledger = getUsageLedger();
 	private readonly memoryCandidateStore: MemoryCandidateStore;
+	private readonly memoryActivityRecorder: MemoryActivityRecorder;
 	private readonly sessionResourceGate: SessionResourceGate;
 	private readonly sessionReady: Promise<void>;
 	private sessionRuntime!: AgentSessionRuntime;
@@ -206,6 +207,11 @@ export class ChannelRunner implements AgentRunner {
 		this.settingsManager = new PipiclawSettingsManager(this.appHomeDir);
 		this.reportSettingsDiagnostics();
 		this.memoryCandidateStore = createMemoryCandidateStore();
+		this.memoryActivityRecorder = createMemoryActivityRecorder({
+			appHomeDir: this.appHomeDir,
+			onError: (channelId, error) =>
+				log.logWarning(`[${channelId}] Failed to record memory maintenance state`, errorMessage(error)),
+		});
 
 		// The real model/auth runtime is built asynchronously in initializeSession
 		// (ModelRuntime.create is async). Until then the agent runs on a placeholder
@@ -233,9 +239,7 @@ export class ChannelRunner implements AgentRunner {
 			getModel: () => this.session.model ?? this.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			getSessionMemorySettings: () => this.settingsManager.getSessionMemorySettings(),
-			recordMemoryActivity: (event) => {
-				void this.recordMemoryActivity(event);
-			},
+			recordMemoryActivity: (event) => this.recordMemoryActivity(event),
 		});
 
 		this.sessionResourceGate = new SessionResourceGate(async () => {
@@ -336,6 +340,17 @@ export class ChannelRunner implements AgentRunner {
 				channelCapsuleText = this.renderChannelTurnContext();
 				promptText = `${channelCapsuleText}\n\n<user_message>\n${promptText}\n</user_message>`;
 
+				// The task digest reads the whole tasks/ directory and depends on nothing the memory
+				// work below produces, so it runs alongside the bootstrap and recall rather than
+				// queuing behind them. Settled into a result object rather than left as a bare
+				// promise: if recall throws first we would otherwise leave a rejection unobserved,
+				// which Node's default policy turns into a process exit. Rethrown at the await, so a
+				// digest failure still fails the turn exactly as it did when this ran inline.
+				const taskDigestPromise = (this.tasksEnabled ? this.buildTaskDigestForTurn() : Promise.resolve("")).then(
+					(text) => ({ text }) as { text: string; error?: never },
+					(error: unknown) => ({ error }) as { text?: never; error: unknown },
+				);
+
 				if (this.firstTurnMemoryBootstrapPending) {
 					const bootstrap = await this.buildFirstTurnMemoryBootstrap();
 					durableMemoryBootstrapText = bootstrap.renderedText;
@@ -357,9 +372,12 @@ export class ChannelRunner implements AgentRunner {
 						maxUnits: MEMORY_RECALL_MAX_UNITS,
 						rerankWithModel: recallSettings.rerankWithModel,
 						excludedCandidateIds: bootstrapCandidateIds,
-						// Let shouldUseModelRerank's own memory-intent gate decide (it already handles
-						// Chinese phrasing) — forcing autoRerank for every Han-script message triggered a
-						// model rerank (up to 8s) on nearly every Chinese turn once memory filled up.
+						// `rerankWithModel` is passed through as configured; `shouldUseModelRerank`
+						// owns the decision. Under "auto" it reranks whenever the shortlist is
+						// over-full *and* the local ranking has no clear winner — script-independent,
+						// so a Chinese turn is treated exactly like an English one. That rerank is an
+						// LLM call on the critical path of the turn, capped at
+						// MEMORY_RECALL_RERANK_TIMEOUT_MS and failing open to the local ranking.
 						model: this.session.model ?? this.activeModel,
 						resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 						candidateStore: this.memoryCandidateStore,
@@ -371,18 +389,13 @@ export class ChannelRunner implements AgentRunner {
 					}
 				}
 
-				// Gated by the same master autonomy switch as task_manage and the TaskDriver.
-				if (this.tasksEnabled) {
-					const taskDigestSettings = this.settingsManager.getTaskDigestSettings();
-					taskDigestText = await buildTaskDigest({
-						channelDir: this.channelDir,
-						maxTasks: taskDigestSettings.maxTasks,
-						maxChars: taskDigestSettings.maxChars,
-						maxUnits: TASK_AGENDA_MAX_UNITS,
-					});
-					if (taskDigestText) {
-						promptText = `${taskDigestText}\n\n${promptText}`;
-					}
+				const taskDigestResult = await taskDigestPromise;
+				if (taskDigestResult.error !== undefined) {
+					throw taskDigestResult.error;
+				}
+				taskDigestText = taskDigestResult.text ?? "";
+				if (taskDigestText) {
+					promptText = `${taskDigestText}\n\n${promptText}`;
 				}
 
 				if (durableMemoryBootstrapText) {
@@ -607,6 +620,11 @@ export class ChannelRunner implements AgentRunner {
 				}
 			}
 
+			// The turn is over, so the channel is about to look idle to the maintenance gates —
+			// which is exactly when this state has to be on disk. Everything buffered during the
+			// turn lands here in one write.
+			await this.flushMemoryActivity();
+
 			// Clear run state
 			this.runState.ctx = null;
 			this.runState.logCtx = null;
@@ -687,6 +705,7 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	async flushMemoryForShutdown(): Promise<void> {
+		await this.flushMemoryActivity();
 		await this.memoryLifecycle.flushForShutdown();
 	}
 
@@ -775,22 +794,26 @@ export class ChannelRunner implements AgentRunner {
 		}
 	}
 
-	private async recordMemoryActivity(event: MemoryActivityEvent): Promise<void> {
+	/**
+	 * Buffer one activity event. The write itself is batched by the recorder (see
+	 * `createMemoryActivityRecorder`); `run()` flushes at the end of every turn, which is the
+	 * point the maintenance gates actually start looking at this state.
+	 */
+	private recordMemoryActivity(event: MemoryActivityEvent): void {
 		const maintenanceSettings = this.settingsManager.getMemoryMaintenanceSettings();
 		const eventTime = Date.parse(event.timestamp);
 		const eligibleAfter = Number.isFinite(eventTime)
 			? new Date(eventTime + Math.max(0, maintenanceSettings.minIdleMinutesBeforeLlmWork) * 60_000).toISOString()
 			: undefined;
+		this.memoryActivityRecorder.record({ ...event, eligibleAfter });
+	}
+
+	/** Best-effort: a lost activity counter delays maintenance, it never breaks a turn. */
+	private async flushMemoryActivity(): Promise<void> {
 		try {
-			await updateMemoryMaintenanceState(this.appHomeDir, this.channelId, (state) =>
-				applyMemoryActivityToState(state, {
-					...event,
-					eligibleAfter,
-				}),
-			);
+			await this.memoryActivityRecorder.flush(this.channelId);
 		} catch (error) {
-			const message = errorMessage(error);
-			log.logWarning(`[${this.channelId}] Failed to record memory maintenance state`, message);
+			log.logWarning(`[${this.channelId}] Failed to flush memory maintenance state`, errorMessage(error));
 		}
 	}
 
@@ -1355,6 +1378,17 @@ export class ChannelRunner implements AgentRunner {
 			}).catch((err) => {
 				log.logWarning(`[${this.channelId}] session event handler failed`, errorMessage(err));
 			});
+		});
+	}
+
+	/** Gated by the same master autonomy switch as task_manage and the TaskDriver. */
+	private buildTaskDigestForTurn(): Promise<string> {
+		const taskDigestSettings = this.settingsManager.getTaskDigestSettings();
+		return buildTaskDigest({
+			channelDir: this.channelDir,
+			maxTasks: taskDigestSettings.maxTasks,
+			maxChars: taskDigestSettings.maxChars,
+			maxUnits: TASK_AGENDA_MAX_UNITS,
 		});
 	}
 

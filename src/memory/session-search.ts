@@ -85,11 +85,28 @@ function computeRecencyBoost(timestamp: string | undefined): number {
 	return 0;
 }
 
-function scoreDocument(document: SessionSearchDocument, query: string, queryTokens: string[]): ScoredDocument {
-	const text = document.text;
-	const lowerText = text.toLowerCase();
-	const lowerQuery = query.trim().toLowerCase();
-	const documentTokens = new Set(tokenizeRecallText(text));
+/**
+ * Tokenizing a document is by far the most expensive part of a search — a few milliseconds for a
+ * multi-kilobyte transcript hit, times every document in the corpus. The corpus itself is already
+ * cached for {@link CORPUS_CACHE_TTL_MS}, so keying off the document's object identity keeps every
+ * search inside that window from re-deriving tokens it has already derived. Entries disappear with
+ * the cached corpus that owns them.
+ */
+const documentTokenCache = new WeakMap<SessionSearchDocument, Set<string>>();
+
+function getDocumentTokens(document: SessionSearchDocument): Set<string> {
+	const cached = documentTokenCache.get(document);
+	if (cached) {
+		return cached;
+	}
+	const tokens = new Set(tokenizeRecallText(document.text));
+	documentTokenCache.set(document, tokens);
+	return tokens;
+}
+
+function scoreDocument(document: SessionSearchDocument, lowerQuery: string, queryTokens: string[]): ScoredDocument {
+	const lowerText = document.text.toLowerCase();
+	const documentTokens = getDocumentTokens(document);
 	const matches: string[] = [];
 	let matchedTokens = 0;
 
@@ -219,9 +236,13 @@ export async function searchChannelSessions(request: SearchChannelSessionsReques
 		.sort(sortRecentDocuments)
 		.slice(0, maxChunks);
 
+	// Both derived once, not per document: `tokenizeRecallText` is milliseconds on real input and
+	// this loop runs over the whole corpus.
+	const queryTokens = query ? tokenizeRecallText(query) : [];
+	const lowerQuery = query.toLowerCase();
 	const selected = query
 		? documents
-				.map((document) => scoreDocument(document, query, tokenizeRecallText(query)))
+				.map((document) => scoreDocument(document, lowerQuery, queryTokens))
 				.filter((entry) => entry.score > 0)
 				.sort((a, b) => b.score - a.score)
 				.slice(0, limit)

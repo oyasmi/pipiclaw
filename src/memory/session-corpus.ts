@@ -262,20 +262,23 @@ async function listChannelSessionJsonlFiles(channelDir: string, maxFiles: number
 		throw error;
 	}
 
-	const candidates: Array<{ path: string; mtimeMs: number }> = [];
-	for (const name of names) {
-		if (!name.endsWith(".jsonl") || IGNORED_JSONL_FILES.has(name)) {
-			continue;
-		}
-		const path = join(channelDir, name);
-		try {
-			const stats = await stat(path);
-			if (!stats.isFile()) {
-				continue;
-			}
-			candidates.push({ path, mtimeMs: stats.mtimeMs });
-		} catch {}
-	}
+	// Stat in parallel: this is one round trip per session file in the channel directory, and
+	// awaiting them one at a time made the corpus build scale with the file count rather than
+	// with the slowest stat.
+	const stated = await Promise.all(
+		names
+			.filter((name) => name.endsWith(".jsonl") && !IGNORED_JSONL_FILES.has(name))
+			.map(async (name) => {
+				const path = join(channelDir, name);
+				try {
+					const stats = await stat(path);
+					return stats.isFile() ? { path, mtimeMs: stats.mtimeMs } : null;
+				} catch {
+					return null;
+				}
+			}),
+	);
+	const candidates = stated.filter((entry): entry is { path: string; mtimeMs: number } => entry !== null);
 
 	return candidates
 		.sort((a, b) => b.mtimeMs - a.mtimeMs)

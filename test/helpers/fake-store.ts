@@ -1,5 +1,3 @@
-import { join } from "path";
-
 export class FakeChannelStore {
 	logged: Array<{ method: string; args: unknown[] }> = [];
 
@@ -14,9 +12,5 @@ export class FakeChannelStore {
 
 	async logSubAgentRun(channelId: string, run: unknown): Promise<void> {
 		this.logged.push({ method: "logSubAgentRun", args: [channelId, run] });
-	}
-
-	getChannelDir(channelId: string): string {
-		return join("/tmp", channelId);
 	}
 }

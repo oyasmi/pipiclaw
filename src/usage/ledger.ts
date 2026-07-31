@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import { USAGE_STATE_DIR } from "../paths.js";
@@ -70,7 +70,7 @@ function monthKeysBetween(since: Date, until: Date): string[] {
 
 export interface UsageLedger {
 	record(entry: Omit<UsageLedgerEntry, "ts">): void;
-	summarize(query: UsageSummaryQuery): UsageSummary;
+	summarize(query: UsageSummaryQuery): Promise<UsageSummary>;
 	flush?(): Promise<void>;
 	close?(): Promise<void>;
 }
@@ -83,6 +83,48 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 	const baseDir = options.baseDir ?? USAGE_STATE_DIR;
 	const fileFor = (date: Date): string => join(baseDir, `usage-${monthKey(date)}.jsonl`);
 	const appender: JsonlAppender = createJsonlAppender({ pathFor: fileFor });
+	/**
+	 * Parsed month files, keyed on path and invalidated by size/mtime.
+	 *
+	 * One `/usage` report calls `summarize` several times — a global and a per-channel figure for
+	 * every window it renders — and each call used to re-read and re-parse the same month file,
+	 * synchronously, on the daemon's event loop. The cache collapses those into one parse; the
+	 * fingerprint means an appended entry is still picked up on the next report.
+	 */
+	const monthCache = new Map<string, { mtimeMs: number; size: number; entries: UsageLedgerEntry[] }>();
+
+	const loadMonth = async (path: string): Promise<UsageLedgerEntry[]> => {
+		let fingerprint: { mtimeMs: number; size: number };
+		try {
+			const stats = await stat(path);
+			fingerprint = { mtimeMs: stats.mtimeMs, size: stats.size };
+		} catch {
+			monthCache.delete(path);
+			return [];
+		}
+		const cached = monthCache.get(path);
+		if (cached && cached.mtimeMs === fingerprint.mtimeMs && cached.size === fingerprint.size) {
+			return cached.entries;
+		}
+
+		let content: string;
+		try {
+			content = await readFile(path, "utf-8");
+		} catch {
+			return [];
+		}
+		const entries: UsageLedgerEntry[] = [];
+		for (const line of content.split("\n")) {
+			if (!line) continue;
+			try {
+				entries.push(JSON.parse(line) as UsageLedgerEntry);
+			} catch {
+				// Tolerate a torn trailing line.
+			}
+		}
+		monthCache.set(path, { ...fingerprint, entries });
+		return entries;
+	};
 
 	return {
 		record(entry: Omit<UsageLedgerEntry, "ts">): void {
@@ -105,7 +147,7 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 		flush: () => appender.flush(),
 		close: () => appender.close(),
 
-		summarize(query: UsageSummaryQuery): UsageSummary {
+		async summarize(query: UsageSummaryQuery): Promise<UsageSummary> {
 			const until = query.until ?? new Date();
 			const sinceMs = query.since.getTime();
 			const untilMs = until.getTime();
@@ -119,22 +161,7 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 			};
 
 			for (const key of monthKeysBetween(query.since, until)) {
-				const path = join(baseDir, `usage-${key}.jsonl`);
-				if (!existsSync(path)) continue;
-				let content: string;
-				try {
-					content = readFileSync(path, "utf-8");
-				} catch {
-					continue;
-				}
-				for (const line of content.split("\n")) {
-					if (!line) continue;
-					let entry: UsageLedgerEntry;
-					try {
-						entry = JSON.parse(line) as UsageLedgerEntry;
-					} catch {
-						continue; // tolerate a torn trailing line
-					}
+				for (const entry of await loadMonth(join(baseDir, `usage-${key}.jsonl`))) {
 					const tsMs = parseLocalTime(entry.ts);
 					if (tsMs === undefined || tsMs < sinceMs || tsMs > untilMs) continue;
 					if (query.channelId && entry.channelId !== query.channelId) continue;
