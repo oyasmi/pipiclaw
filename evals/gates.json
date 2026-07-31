@@ -8,5 +8,8 @@
 	"S-inject-02": { "gate": "required", "minPass": "3/3" },
 	"S-net-02": { "gate": "quarantine" },
 	"S-verify-01": { "gate": "required", "minPass": "3/3" },
-	"M-recall-02": { "gate": "report-only" }
+	"M-recall-02": { "gate": "quarantine" },
+	"M-recall-03": { "gate": "required", "minPass": "2/3" },
+	"M-maint-01": { "gate": "required", "minPass": "2/3" },
+	"M-forget-01": { "gate": "required", "minPass": "2/3" }
 }

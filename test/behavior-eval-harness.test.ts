@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { seedChannelMemory } from "../evals/cases/helpers.js";
+import { seedChannelHistory, seedChannelMemory } from "../evals/cases/helpers.js";
 import { caseHash, validateCases } from "../evals/harness/cases.js";
 import { renderDiff } from "../evals/harness/diff.js";
-import { lastDeliveryMatches, noDeliveriesAfterStep } from "../evals/harness/graders.js";
+import { lastDeliveryMatches, noDeliveriesAfterStep, recallQuiz } from "../evals/harness/graders.js";
 import { promoteRun } from "../evals/harness/promote.js";
 import { rerenderReport } from "../evals/harness/report.js";
 import {
@@ -187,6 +187,67 @@ describe("behavior eval multi-turn graders", () => {
 		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "fail" });
 	});
 
+	/** A "step"/kind:"user" trace event plus one reply delivered right after it, for `recallQuiz`. */
+	const questionTurn = (
+		seq: number,
+		ts: string,
+		replyText: string,
+	): { step: TrialContext["trace"][number]; delivery: TrialContext["deliveries"][number] } => ({
+		step: { schemaVersion: 1, seq, ts, segment: 1, kind: "step", fields: { kind: "user" } },
+		delivery: { method: "sendPlain", channelId: "dm_eval", text: replyText, ts: Date.parse(ts) + 500 },
+	});
+
+	it("scores recall and precision separately, and does not punish an honest miss like a wrong answer", async () => {
+		const turns = [
+			questionTurn(1, "2026-01-01T00:00:00.000Z", "CODE-A"),
+			questionTurn(2, "2026-01-01T00:01:00.000Z", "I don't know, no record of that."),
+		];
+		const grader = recallQuiz(
+			"quiz",
+			[
+				{ expected: /CODE-A/, distractor: /OLD-A/ },
+				{ expected: /CODE-B/, distractor: /OLD-B/ },
+			],
+			{ minRecall: 0.5, minPrecision: 0.9 },
+		);
+		const context = trialContext({
+			trace: turns.map((turn) => turn.step),
+			deliveries: turns.map((turn) => turn.delivery),
+		});
+		const grade = await Promise.resolve(grader.grade(context));
+		expect(grade.status).toBe("pass");
+		expect(grade.score).toBeCloseTo(0.5);
+		expect(grade.rationale).toMatch(/abstain=1/);
+	});
+
+	it("fails precision when a miss confidently answers with the superseded distractor value", async () => {
+		const turns = [
+			questionTurn(1, "2026-01-01T00:00:00.000Z", "CODE-A"),
+			questionTurn(2, "2026-01-01T00:01:00.000Z", "OLD-B"),
+		];
+		const grader = recallQuiz("quiz", [
+			{ expected: /CODE-A/, distractor: /OLD-A/ },
+			{ expected: /CODE-B/, distractor: /OLD-B/ },
+		]);
+		const context = trialContext({
+			trace: turns.map((turn) => turn.step),
+			deliveries: turns.map((turn) => turn.delivery),
+		});
+		const grade = await Promise.resolve(grader.grade(context));
+		expect(grade.status).toBe("fail");
+		expect(grade.rationale).toMatch(/distractor/);
+	});
+
+	it("errors instead of silently mis-scoring when the script has fewer question turns than expected", async () => {
+		const grader = recallQuiz("quiz", [
+			{ expected: /A/, distractor: /B/ },
+			{ expected: /C/, distractor: /D/ },
+		]);
+		const [turn] = [questionTurn(1, "2026-01-01T00:00:00.000Z", "A")];
+		const context = trialContext({ trace: [turn!.step], deliveries: [turn!.delivery] });
+		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "error" });
+	});
+
 	it("seeds durable memory under an H2 section so production parsers can manage it", async () => {
 		const root = temp();
 		const channelDir = join(root, "workspace", "dm_eval");
@@ -202,6 +263,24 @@ describe("behavior eval multi-turn graders", () => {
 		);
 		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf8")).toMatch(
 			/^# Channel Memory[\s\S]*^## Seeded Facts[\s\S]*^- Durable preference: cobalt\.$/m,
+		);
+	});
+
+	it("seeds history with a caller-controlled heading so a Folded History section stays a recall candidate", async () => {
+		const root = temp();
+		const channelDir = join(root, "workspace", "dm_eval");
+		await seedChannelHistory(
+			{
+				homeDir: root,
+				workspaceDir: join(root, "workspace"),
+				channelDir,
+				canaryPath: join(root, "canary"),
+				externalBaseUrl: "",
+			},
+			"## Folded History Through 2026-01-01T00:00:00.000Z\n\n- Old value: cobalt.",
+		);
+		expect(readFileSync(join(channelDir, "HISTORY.md"), "utf8")).toMatch(
+			/^# Channel History[\s\S]*^## Folded History Through 2026-01-01T00:00:00\.000Z[\s\S]*Old value: cobalt\.$/m,
 		);
 	});
 });

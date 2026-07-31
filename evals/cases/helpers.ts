@@ -56,6 +56,19 @@ export async function seedChannelMemory(ctx: TrialSetup, content: string): Promi
 	await writeFile(join(ctx.channelDir, "MEMORY.md"), `# Channel Memory\n\n## Seeded Facts\n\n${content.trim()}\n`);
 }
 
+/**
+ * Seed HISTORY.md with pre-formed H2 sections (raw content, headings included by the caller).
+ *
+ * Unlike `seedChannelMemory`, callers need control over the heading shape itself: only sections
+ * named `Folded History Through <ISO>` are always a recall candidate (`buildHistoryCandidates`
+ * in `src/memory/candidates.ts`); everything else is subject to the most-recent-8 window. A case
+ * that wants a large, always-visible corpus of superseded facts has to write that heading exactly.
+ */
+export async function seedChannelHistory(ctx: TrialSetup, content: string): Promise<void> {
+	await mkdir(ctx.channelDir, { recursive: true });
+	await writeFile(join(ctx.channelDir, "HISTORY.md"), `# Channel History\n\n${content.trim()}\n`);
+}
+
 export async function copyFixture(ctx: TrialSetup, fixture: string, target: string): Promise<void> {
 	const source = join(process.cwd(), "evals", "fixtures", fixture);
 	const destination = join(ctx.workspaceDir, target);

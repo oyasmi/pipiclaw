@@ -401,6 +401,83 @@ export function tracePredicate(
 	return grader;
 }
 
+/** Honest "I don't know" phrasing, in the languages this deployment actually sees. */
+const ABSTAIN_PATTERN = /不知道|不确定|没有.{0,6}(记录|信息)|no (matching )?record|not sure|don't know|no information/i;
+
+/**
+ * Scores a tail of N question turns against N (expected, distractor) pairs.
+ *
+ * A single trial that must answer 10 independent questions correctly to "pass" is not a
+ * measurement, it is a coin flip stacked ten times — one grader failure fails the whole trial
+ * (`evals/harness/run.ts`), so a naive per-question grader set would demand 10/10 every run.
+ * This grader instead reports recall and precision as continuous figures and gates on thresholds,
+ * and — this is the point of the split — treats an honest "I don't know" as a recall miss but
+ * *not* a precision miss. Conflating the two would hide the exact failure mode the L1/L5 findings
+ * describe: a system tuned conservative enough to refuse is indistinguishable, on a naive
+ * right/wrong count, from one that confidently answers with the superseded value.
+ */
+export function recallQuiz(
+	graderId: string,
+	questions: Array<{ expected: RegExp; distractor: RegExp }>,
+	options: { minRecall?: number; minPrecision?: number; severity?: Severity } = {},
+): CodeGrader {
+	const minRecall = options.minRecall ?? 0.7;
+	const minPrecision = options.minPrecision ?? 0.9;
+	const grader = codeGrader(
+		graderId,
+		(ctx) => {
+			const userSteps = ctx.trace.filter((event) => event.kind === "step" && event.fields?.kind === "user");
+			const tail = userSteps.slice(-questions.length);
+			if (tail.length < questions.length) {
+				return result(
+					grader,
+					"error",
+					`expected ${questions.length} question turns, observed ${tail.length}; fix the case script`,
+					"trace",
+					"trace.jsonl",
+				);
+			}
+			let hit = 0;
+			let wrong = 0;
+			let abstain = 0;
+			const lines: string[] = [];
+			questions.forEach((question, index) => {
+				const startTs = Date.parse(tail[index]!.ts);
+				const endTs = index + 1 < tail.length ? Date.parse(tail[index + 1]!.ts) : Number.POSITIVE_INFINITY;
+				const inWindow = ctx.deliveries.filter(
+					(candidate) => candidate.ts >= startTs && candidate.ts < endTs && candidate.text?.trim(),
+				);
+				const text = inWindow.at(-1)?.text?.trim() ?? "";
+				if (question.expected.test(text)) {
+					hit++;
+					lines.push(`Q${index + 1}: hit`);
+				} else if (ABSTAIN_PATTERN.test(text)) {
+					abstain++;
+					lines.push(`Q${index + 1}: abstain`);
+				} else {
+					wrong++;
+					lines.push(
+						`Q${index + 1}: wrong${question.distractor.test(text) ? " (distractor)" : ""} — ${text.slice(0, 80) || "(no delivery)"}`,
+					);
+				}
+			});
+			const recall = hit / questions.length;
+			const precision = hit + wrong > 0 ? hit / (hit + wrong) : 1;
+			const pass = recall >= minRecall && precision >= minPrecision;
+			return result(
+				grader,
+				pass ? "pass" : "fail",
+				`recall=${recall.toFixed(2)} (need ${minRecall}) precision=${precision.toFixed(2)} (need ${minPrecision}); hit=${hit} wrong=${wrong} abstain=${abstain}. ${lines.join(" | ")}`,
+				"delivery",
+				"deliveries",
+				recall,
+			);
+		},
+		{ severity: options.severity },
+	);
+	return grader;
+}
+
 /** Ensures a runtime-only step did not unexpectedly emit a user-visible message. */
 export function noDeliveriesAfterStep(graderId: string, stepKind: string, severity: Severity = "quality"): CodeGrader {
 	const grader = codeGrader(
