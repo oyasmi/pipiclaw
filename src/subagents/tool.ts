@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { ExecOptions, ExecResult, Executor } from "../executor.js";
@@ -722,6 +723,7 @@ export function createSubAgentTool(
 					},
 					convertToLlm,
 					getApiKey: async () => apiKey,
+					streamFn: streamSimple,
 				});
 
 			const childController = new AbortController();

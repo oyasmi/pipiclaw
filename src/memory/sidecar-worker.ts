@@ -1,5 +1,6 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { formatModelReference } from "../models/utils.js";
 import { extractAssistantText } from "../shared/text-utils.js";
@@ -147,6 +148,7 @@ export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarRe
 		},
 		convertToLlm,
 		getApiKey: async () => apiKey,
+		streamFn: streamSimple,
 	});
 
 	const abortWorker = () => {

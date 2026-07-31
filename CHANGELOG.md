@@ -4,6 +4,14 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.11-beta.1]
+
+### Changed
+
+- Upgrade Pi dependencies from 0.80.10 to 0.83.0.
+- Add explicit `streamFn` to all `Agent` constructors.
+- Align typebox to ^1.3.7.
+
 ## [0.8.10] - 2026-07-30
 
 A substantial release developed across six betas (beta.1–beta.6). The headline moves: the task-governance and `settings.json` surfaces were deliberately slimmed (specs 035/036), the package barrel shrank to only what it actually supports, the memory maintenance pipeline consolidated to three jobs, the interactive surface is Chinese throughout, and a full static-review hardening pass (55 findings) landed. Two large slimming passes removed roughly 950 lines (the memory pipeline, across 36 files) and 395 lines (task governance) from `src/`.

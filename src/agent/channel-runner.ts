@@ -1,6 +1,6 @@
 import { Agent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
+import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
 import {
 	AgentSession,
 	AgentSessionRuntime,
@@ -221,6 +221,7 @@ export class ChannelRunner implements AgentRunner {
 			},
 			convertToLlm,
 			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.activeModel),
+			streamFn: streamSimple,
 		});
 
 		this.memoryLifecycle = new MemoryLifecycle({
@@ -1240,6 +1241,7 @@ export class ChannelRunner implements AgentRunner {
 			},
 			convertToLlm,
 			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.activeModel),
+			streamFn: streamSimple,
 		});
 		this.initializeThinkingLevel(agent, this.activeModel, sessionManager);
 		const resourceLoader = this.createResourceLoader();
