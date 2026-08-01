@@ -86,6 +86,11 @@ function attemptKey(channelId: string, taskId: string): string {
  * and let a wake that changed real files count as stalled. The task's own effect tally stands in
  * for the work itself instead — per task, not per channel, so a neighbour's activity (including
  * the user chatting) neither certifies progress here nor hides a task that is spinning.
+ *
+ * `entry.plan` is absent for the same reason (spec 037, D5): checking off a Plan step is a
+ * model-reported claim, not evidence of an effect. If plan state fed the fingerprint, ticking a
+ * checkbox would reset the futile counter and buy the short retry tier — a governor bypass this
+ * driver must not offer. The Plan is a capsule/agenda display concern only.
  */
 function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
 	const control = entry.frontmatter.control;
@@ -176,6 +181,11 @@ export function createTaskDriverEvent(
 	const control = entry.frontmatter.control;
 	const capsule = [
 		`Task capsule: title=${entry.title}; status=${entry.frontmatter.status ?? "active"};`,
+		// Surfacing the Plan's progress and current step here is the point of spec 037, D2/D4: the
+		// model no longer has to re-derive "what step am I on" from latestNote/nextAction each wake.
+		entry.plan
+			? `plan=${entry.plan.done}/${entry.plan.total} done, current=${entry.plan.current?.id ?? "none"};`
+			: "",
 		entry.latestNote ? `latest=${entry.latestNote};` : "",
 		control?.nextAction ? `next=${control.nextAction};` : "",
 		control ? `budget=${control.usage.attempts}/${control.budget.maxAttempts} attempts;` : "",

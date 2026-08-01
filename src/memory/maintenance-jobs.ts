@@ -20,6 +20,8 @@ import {
 	shouldRunStructuralMaintenance,
 } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "./maintenance-state.js";
+import { readMemoryMetadata } from "./metadata.js";
+import { collectExpiredEntryIds, expireMemoryEntries } from "./probation.js";
 import { appendMemoryReviewLog, type MemoryReviewReason } from "./review-log.js";
 import { updateChannelSessionMemory } from "./session.js";
 import { buildIncrementalMemorySourceWindow } from "./source-window.js";
@@ -336,12 +338,19 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 		const loadFiles = once(() =>
 			Promise.all([readChannelMemory(input.channelDir), readChannelHistory(input.channelDir)]),
 		);
+		const loadExpiredCount = once(async () => {
+			const metadata = await readMemoryMetadata(input.channelDir);
+			return collectExpiredEntryIds(metadata, now).length;
+		});
 		const decision = await shouldRunStructuralMaintenance({
 			now,
 			state,
 			maintenance: input.settings.memoryMaintenance,
 			channelActive: input.channelActive,
-			material: async () => getStructuralMaintenanceStats(...(await loadFiles())),
+			material: async () => ({
+				...getStructuralMaintenanceStats(...(await loadFiles())),
+				expiredEntryCount: await loadExpiredCount(),
+			}),
 		});
 		if (!decision.allowed) {
 			await appendJobReviewLog(
@@ -354,10 +363,17 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 			return skipped(decision.jobKind, decision.skipReason ?? "skipped");
 		}
 
-		const [currentMemory, currentHistory] = await loadFiles();
 		try {
 			const correlationId = `structural-maintenance:${formatLocalTime(now)}`;
 			const options = makeRunOptions(input, correlationId);
+			// Probation/expiresAt eviction runs first, deterministically, before the LLM cleanup
+			// pass sees the file — no point spending a cleanup prompt on entries about to be
+			// invalidated (spec 037, D8).
+			const expiredCount = decision.runProbationExpiry ? await expireMemoryEntries(input.channelDir, now) : 0;
+			const [cachedMemory, currentHistory] = await loadFiles();
+			// `loadFiles`'s cached read predates the expiry write above, so a fresh read is needed
+			// whenever expiry actually changed the file; otherwise the cache is still accurate.
+			const currentMemory = expiredCount > 0 ? await readChannelMemory(input.channelDir) : cachedMemory;
 			const cleanedMemory = decision.runMemoryCleanup
 				? await cleanupChannelMemory(options, currentMemory, {
 						cleanupShrinkGuardMinRatio: input.settings.memoryMaintenance.cleanupShrinkGuardMinRatio,
@@ -377,6 +393,7 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 				{
 					correlationId,
 					actions: [
+						...(expiredCount > 0 ? [{ target: "MEMORY.md", action: "expire", entries: expiredCount }] : []),
 						...(cleanedMemory ? [{ target: "MEMORY.md", action: "rewrite" }] : []),
 						...(foldedHistory ? [{ target: "HISTORY.md", action: "rewrite" }] : []),
 					],

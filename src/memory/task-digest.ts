@@ -50,6 +50,12 @@ function renderLine(entry: TaskLedgerEntry, now: number): string {
 		if (control.deadline) parts.push(`deadline ${control.deadline}`);
 		if (control.nextAction) parts.push(`next ${control.nextAction}`);
 	}
+	// spec 037, D4: the agenda shows Plan progress and the current step, not the full Plan — the
+	// complete section is only read from the task file at wake time (task-driver.ts's capsule),
+	// staying well inside the 600-unit budget this block competes for (spec 025/026).
+	if (entry.plan) {
+		parts.push(`plan ${entry.plan.done}/${entry.plan.total} · @${entry.plan.current?.id ?? "-"}`);
+	}
 	if (entry.latestNote) {
 		const note = entry.latestNote.length > 80 ? `${entry.latestNote.slice(0, 79)}…` : entry.latestNote;
 		parts.push(note);

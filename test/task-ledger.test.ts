@@ -4,16 +4,19 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	appendCurrentCycleNote,
+	applyTaskPlanPatch,
 	extractTaskTitle,
 	isTaskActionable,
 	MAX_INLINE_TASK_HISTORY_ENTRIES,
 	missingStandardTaskSections,
 	normalizeTaskId,
 	parseTaskFrontmatter,
+	parseTaskPlan,
 	readActiveTasks,
 	renderStandardTaskBody,
 	startTaskCycle,
 	taskBody,
+	taskContractSegment,
 	uncheckedTaskAcceptanceItems,
 	upsertCurrentCycleCompletionEvidence,
 } from "../src/tasks/ledger.js";
@@ -330,5 +333,188 @@ describe("readActiveTasks", () => {
 		);
 		const entry = (await readActiveTasks(dir, NOW))[0];
 		expect(entry.latestNote).toBe("second");
+	});
+});
+
+// spec 037, D2: the Plan section carrier.
+describe("parseTaskPlan", () => {
+	it("returns undefined for a task with no Plan section", () => {
+		const body = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D" });
+		expect(parseTaskPlan(body)).toBeUndefined();
+	});
+
+	it("parses the four checkbox states, dod refs, and derives the current step", () => {
+		const body = [
+			"# T",
+			"",
+			"## Plan",
+			"- [x] P1 align schema → dod:1",
+			"- [ ] P2 migrate reader -> dod:1,2",
+			"- [!] P3 staging rollout (blocked on ops)",
+			"- [~] P4 legacy shim (superseded by P2)",
+			"",
+			"## Current Cycle",
+			"- note",
+			"",
+			"## History",
+			"",
+		].join("\n");
+		const plan = parseTaskPlan(body);
+		expect(plan).toBeDefined();
+		expect(plan?.steps).toEqual([
+			{ id: "P1", status: "done", text: "align schema", dodRefs: [1], lineIndex: 3 },
+			{ id: "P2", status: "todo", text: "migrate reader", dodRefs: [1, 2], lineIndex: 4 },
+			{ id: "P3", status: "blocked", text: "staging rollout (blocked on ops)", dodRefs: [], lineIndex: 5 },
+			{ id: "P4", status: "dropped", text: "legacy shim (superseded by P2)", dodRefs: [], lineIndex: 6 },
+		]);
+		// total excludes the dropped step; current is the first todo/blocked in document order.
+		expect(plan?.total).toBe(3);
+		expect(plan?.done).toBe(1);
+		expect(plan?.current?.id).toBe("P2");
+	});
+
+	it("assigns a positional fallback id to a hand-written step without one", () => {
+		const body = ["# T", "", "## Plan", "- [ ] do the thing", "- [ ] P2 explicit id", ""].join("\n");
+		const plan = parseTaskPlan(body);
+		expect(plan?.steps[0]).toMatchObject({ id: "P1", text: "do the thing" });
+		expect(plan?.steps[1]).toMatchObject({ id: "P2", text: "explicit id" });
+	});
+
+	it("has no current step once every step is done or dropped", () => {
+		const body = ["# T", "", "## Plan", "- [x] P1 done", "- [~] P2 dropped", ""].join("\n");
+		expect(parseTaskPlan(body)?.current).toBeUndefined();
+	});
+
+	it("supports the Chinese heading alias", () => {
+		const body = ["# T", "", "## 计划", "- [ ] P1 步骤一", ""].join("\n");
+		expect(parseTaskPlan(body)?.steps).toHaveLength(1);
+	});
+});
+
+// spec 037, D1: the single most load-bearing invariant in the whole spec — inserting a Plan
+// section between Verification and Current Cycle must not change the contract segment used for
+// verification PASS / external approval hashing.
+describe("taskContractSegment with a Plan section (spec 037, D1)", () => {
+	it("is byte-identical whether or not a Plan section follows Verification", () => {
+		const withoutPlan = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D" });
+		const withPlan = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D", plan: "step one\nstep two" });
+
+		expect(withPlan).not.toBe(withoutPlan);
+		expect(taskContractSegment(withPlan)).toBe(taskContractSegment(withoutPlan));
+	});
+
+	it("stops at Plan even when Plan is the only later section (no Current Cycle)", () => {
+		const body = ["# T", "", "## Goal", "G", "", "## Plan", "- [ ] P1 step", ""].join("\n");
+		expect(taskContractSegment(body)).toBe(["# T", "", "## Goal", "G"].join("\n"));
+	});
+});
+
+describe("startTaskCycle resets Plan step checkboxes (spec 037, D3)", () => {
+	it("resets done and blocked steps to todo, but leaves dropped steps alone", () => {
+		const body = [
+			"# Weekly",
+			"",
+			"## Goal",
+			"G",
+			"",
+			"## DoD",
+			"- [x] D",
+			"",
+			"## Manual",
+			"- m",
+			"",
+			"## Verification",
+			"- v",
+			"",
+			"## Plan",
+			"- [x] P1 done last cycle",
+			"- [!] P2 was blocked",
+			"- [~] P3 dropped last cycle",
+			"",
+			"## Current Cycle",
+			"- did stuff",
+			"",
+			"## History",
+			"",
+		].join("\n");
+
+		const next = startTaskCycle(body, "cycle-2");
+		const plan = parseTaskPlan(next);
+		expect(plan?.steps.map((step) => ({ id: step.id, status: step.status }))).toEqual([
+			{ id: "P1", status: "todo" },
+			{ id: "P2", status: "todo" },
+			{ id: "P3", status: "dropped" },
+		]);
+	});
+});
+
+describe("applyTaskPlanPatch (spec 037, D3)", () => {
+	it("updates an existing step's status and text in place, preserving dod refs", () => {
+		const body = [
+			"# T",
+			"",
+			"## Plan",
+			"- [ ] P1 old text → dod:1,2",
+			"",
+			"## Current Cycle",
+			"",
+			"## History",
+			"",
+		].join("\n");
+		const { body: next, summary } = applyTaskPlanPatch(body, [{ id: "P1", status: "done" }]);
+		const plan = parseTaskPlan(next);
+		expect(plan?.steps[0]).toMatchObject({ id: "P1", status: "done", text: "old text", dodRefs: [1, 2] });
+		expect(summary).toBe("plan: P1→done");
+	});
+
+	it("appends a new step with a not-yet-seen id", () => {
+		const body = ["# T", "", "## Plan", "- [x] P1 done", "", "## Current Cycle", "", "## History", ""].join("\n");
+		const { body: next, summary } = applyTaskPlanPatch(body, [{ id: "P2", text: "new step", status: "blocked" }]);
+		const plan = parseTaskPlan(next);
+		expect(plan?.steps).toHaveLength(2);
+		expect(plan?.steps[1]).toMatchObject({ id: "P2", status: "blocked", text: "new step" });
+		expect(summary).toBe("plan: +P2 new step");
+	});
+
+	it("inserts an empty Plan section before Current Cycle when the task has none yet", () => {
+		const body = ["# T", "", "## Goal", "G", "", "## Current Cycle", "- note", "", "## History", ""].join("\n");
+		const { body: next } = applyTaskPlanPatch(body, [{ id: "P1", text: "first step" }]);
+		expect(parseTaskPlan(next)?.steps).toEqual([
+			expect.objectContaining({ id: "P1", status: "todo", text: "first step" }),
+		]);
+		// The insertion must not disturb Current Cycle content that follows it.
+		expect(next).toContain("## Current Cycle\n- note");
+	});
+
+	it("rejects appending a new step id without text", () => {
+		const body = ["# T", "", "## Plan", "- [ ] P1 existing", "", "## Current Cycle", "", "## History", ""].join("\n");
+		expect(() => applyTaskPlanPatch(body, [{ id: "P2" }])).toThrow(/does not exist yet/);
+	});
+
+	it("applies multiple patches in one call and folds them into one summary", () => {
+		const body = [
+			"# T",
+			"",
+			"## Plan",
+			"- [ ] P1 step one",
+			"- [ ] P2 step two",
+			"",
+			"## Current Cycle",
+			"",
+			"## History",
+			"",
+		].join("\n");
+		const { body: next, summary } = applyTaskPlanPatch(body, [
+			{ id: "P1", status: "done" },
+			{ id: "P2", status: "blocked" },
+			{ id: "P3", text: "step three" },
+		]);
+		expect(summary).toBe("plan: P1→done; P2→blocked; +P3 step three");
+		expect(parseTaskPlan(next)?.steps.map((step) => step.status)).toEqual(["done", "blocked", "todo"]);
+	});
+
+	it("is a no-op returning the original body when there are no patches", () => {
+		const body = ["# T", "", "## Current Cycle", "", "## History", ""].join("\n");
+		expect(applyTaskPlanPatch(body, [])).toEqual({ body, summary: "" });
 	});
 });

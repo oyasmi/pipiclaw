@@ -12,7 +12,8 @@ import {
 	readChannelSession,
 } from "./files.js";
 import type { MemoryEntryKind } from "./metadata.js";
-import type { MemoryPromotionCandidate } from "./promotion.js";
+import { probationDeadline } from "./probation.js";
+import type { MemoryPromotionCandidate, MemoryWriteTier } from "./promotion.js";
 import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
 import { runRetriedSidecarTask } from "./sidecar-worker.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
@@ -24,7 +25,7 @@ import { sanitizeMessagesForMemory } from "./transcript.js";
  * separate prompts with three schemas and three quality bars — and because two of them
  * applied no confidence gate at all, the standard for MEMORY.md was set by whichever
  * writer happened to fire. They now share this prompt, this schema, and (via
- * `shouldAutoWriteMemory`) one bar. Callers still own their own side effects: only
+ * `classifyMemoryWrite`) the same two-tier bar. Callers still own their own side effects: only
  * boundaries write HISTORY.md.
  */
 
@@ -37,9 +38,12 @@ const MEMORY_OPS_RULES = `- memoryOps entries operate on the durable channel MEM
 - Each content string must be a standalone, keyword-rich sentence fragment suitable for a Markdown bullet (no leading "-"). Write it so future keyword search can find it.
 - Do not add content already present in SESSION.md or MEMORY.md; prefer supersede/invalidate over piling on near-duplicates.
 - Do not promote active execution state, temporary debugging observations, completed worklog, raw transcript quotes, acknowledgements, or formatting instructions.
-- Every memoryOp must carry a calibrated confidence (0.0-1.0) and a necessity of "low", "medium", or "high".
-- necessity is "high" only when future turns would go wrong without this entry. Routine progress is "low".
-- Be conservative. Empty arrays are correct when nothing should be stored. Put anything you considered and rejected in "discarded".`;
+- Every memoryOp must carry a calibrated confidence (0.0-1.0) and a necessity of "low", "medium", or "high":
+  - "high": a hard constraint or rule — future turns would go wrong or redo work without this entry.
+  - "medium": day-to-day operating knowledge of the team/project that is not a hard constraint — who owns what, what a term or shorthand defaults to, a naming or release convention, who has to sign off on something, a contact for a recurring counterpart. Nothing breaks without it, but knowing it clearly saves rework.
+  - "low": one-off progress, transient state, or anything recoverable by re-reading a file.
+- Do not pad "high" with material that is only "medium". Do not withhold genuine team/project operating knowledge just because a single missing turn would not break without it — that is exactly what "medium" is for.
+- Empty arrays are correct when nothing should be stored; do not force items in. Put anything you considered and rejected in "discarded".`;
 
 const HISTORY_BLOCK_RULES = `- historyBlock: concise Markdown summarizing the conversation chunk for later recovery.
 - For any conversation that contains at least one meaningful user request and one meaningful assistant reply, return a non-empty historyBlock with at least one bullet.
@@ -151,10 +155,19 @@ export function parseMemoryExtractionResult(value: unknown): MemoryExtractionRes
 	};
 }
 
-/** Turn an accepted candidate into a write op, stamping shared provenance metadata. */
+/**
+ * Turn an accepted candidate into a write op, stamping shared provenance metadata.
+ *
+ * `tier` stamps `probationUntil` (spec 037, D6/D7): a probationary `add` gets a 30-day deadline
+ * that is cancelled the first time the entry is recalled (`recordMemoryRecall`); a durable write
+ * stamps `null` to explicitly clear any prior probation — relevant when a durable `supersede`
+ * replaces a probationary entry in place (same entry id), which must not silently inherit the
+ * old deadline.
+ */
 export function toMemoryOp(
 	candidate: MemoryPromotionCandidate,
 	provenance: { sourceEntryIds?: string[]; correlationId?: string },
+	tier: MemoryWriteTier,
 ): MemoryOp {
 	if (candidate.op === "invalidate") {
 		return { op: "invalidate", targetId: candidate.targetId ?? "", reason: candidate.reason };
@@ -164,6 +177,7 @@ export function toMemoryOp(
 		sourceType: "agent" as const,
 		trust: "inferred" as const,
 		sourceCorrelationId: provenance.correlationId,
+		probationUntil: tier === "probationary" ? probationDeadline() : null,
 	};
 	if (candidate.op === "supersede") {
 		return {

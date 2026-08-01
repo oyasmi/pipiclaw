@@ -871,6 +871,118 @@ describe("manageTask", () => {
 		});
 	});
 
+	describe("plan (spec 037, D1/D3)", () => {
+		it("create renders initial Plan steps with auto-assigned ids", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "planned",
+				title: "Planned",
+				goal: "Ship the migration",
+				dod: "- [ ] Migration complete",
+				plan: "align schema\nP2 migrate reader",
+			});
+			const onDisk = await readFile(join(tasksDir, "planned.md"), "utf-8");
+			expect(onDisk).toContain("## Plan\n- [ ] P1 align schema\n- [ ] P2 migrate reader");
+		});
+
+		it("progress updates plan step status via planSteps and folds a delta into the note", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "steps",
+				title: "Steps",
+				goal: "G",
+				dod: "- [ ] D",
+				plan: "step one\nstep two",
+			});
+			await manageTask(options, {
+				action: "progress",
+				id: "steps",
+				note: "Finished the first step.",
+				planSteps: [{ id: "P1", status: "done" }],
+			});
+			const onDisk = await readFile(join(tasksDir, "steps.md"), "utf-8");
+			expect(onDisk).toContain("- [x] P1 step one");
+			expect(onDisk).toContain("- Finished the first step. plan: P1→done");
+		});
+
+		it("progress appends a new plan step by id when it does not exist yet", async () => {
+			await writeTask(
+				"grows",
+				"status: active",
+				"# Grows\n\n## Goal\nG\n\n## DoD\n- [ ] D\n\n## Current Cycle\n\n## History\n",
+			);
+			await manageTask(options, {
+				action: "progress",
+				id: "grows",
+				note: "Realized we need a rollback step.",
+				planSteps: [{ id: "P1", text: "add rollback plan" }],
+			});
+			const onDisk = await readFile(join(tasksDir, "grows.md"), "utf-8");
+			expect(onDisk).toContain("## Plan\n- [ ] P1 add rollback plan");
+		});
+
+		// The single most load-bearing invariant in spec 037: adding a Plan (via create's `plan`,
+		// or via progress's planSteps) must never invalidate an already-recorded independent PASS.
+		it("does not invalidate an independent PASS when planSteps changes plan status", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "verified-with-plan",
+				title: "Verified with plan",
+				goal: "Ship a checked result",
+				dod: "- [x] Result exists",
+				plan: "do the work",
+				control: { verificationRequired: true },
+			});
+			await writeVerificationAttestation(channelDir, {
+				runId: "verified-with-plan-run",
+				taskId: "verified-with-plan",
+				verdict: "pass",
+				checkedAt: new Date().toISOString(),
+				evidence: "Deterministic check passed.",
+				workspaceChanged: false,
+			});
+			await manageTask(options, {
+				action: "verify",
+				id: "verified-with-plan",
+				verifierRunId: "verified-with-plan-run",
+			});
+
+			await manageTask(options, {
+				action: "progress",
+				id: "verified-with-plan",
+				note: "Marked the only plan step done.",
+				planSteps: [{ id: "P1", status: "done" }],
+			});
+
+			await expect(
+				manageTask(options, {
+					action: "done",
+					id: "verified-with-plan",
+					summary: "Done",
+					evidence: "Run verified-with-plan-run passed.",
+				}),
+			).resolves.toMatchObject({ status: "done" });
+		});
+
+		it("rejects progress planSteps that add a new id without text", async () => {
+			await manageTask(options, {
+				action: "create",
+				id: "bad-step",
+				title: "Bad step",
+				goal: "G",
+				dod: "- [ ] D",
+			});
+			await expect(
+				manageTask(options, {
+					action: "progress",
+					id: "bad-step",
+					note: "note",
+					planSteps: [{ id: "P9" }],
+				}),
+			).rejects.toThrow(/does not exist yet/);
+		});
+	});
+
 	describe("recurring wake (single time rule)", () => {
 		// Cycle reopening is now a deterministic runtime step (D2, openRecurringTaskCycle); the
 		// `start-cycle` action no longer exists. The write-path invariant that a done recurring

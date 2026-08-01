@@ -4,6 +4,11 @@
 
 ## [未发布]
 
+### 新增
+
+- 任务正文新增可选的 `## Plan` 段（spec 037）：介于 Goal/DoD 契约与只增的 Current Cycle 日志之间的「手段层」。步骤有四态（`[ ]` 待办、`[x]` 完成、`[!]` 阻塞、`[~]` 放弃）与可选的 `→ dod:N` 引用；当前步骤由 runtime 从文档顺序推导（第一个待办或阻塞项），从不由模型自报。`task_manage create` 支持可选的 `plan`（一行一步）；`task_manage progress` 支持 `planSteps` 更新或追加步骤，改动会折进同一条 Current Cycle 记录。Plan 状态变化不会使已有的独立验收 PASS 或外部审批失效（契约段的终点现在是 Plan 与 Current Cycle 中先出现的那个），且被有意排除在任务驱动器的停滞指纹之外——勾一个复选框不能重置 futile 计数。唤醒胶囊与 `<task_agenda>` 现在显示计划进度和当前步骤；`/tasks doctor` 会检查没有步骤覆盖的 DoD 项，以及指向不存在 DoD 项的步骤引用。
+- 后台记忆固化现在按两档写入，而不是一档（spec 037）：`necessity: high` 的候选不变（永久写入，`confidence ≥ 0.85`）；新增 `necessity: medium` 且 `confidence ≥ 0.9` 的候选会以 30 天试用期写入（每次固化最多 5 条），而不是直接丢弃。试用期条目在首次被召回、或被重复/替换写入时转正为永久；若从未被召回，会由结构性维护作业将其失效（不打墓碑——同一事实之后仍可被重新学到）。`/memory status`/`list` 会显示试用期条目数量与到期时间。
+
 ### 变更
 
 - 记忆维护的活动记录改为批量落盘，不再每次工具调用写一次。此前每个工具调用都会通过 `writeFileAtomically` 对频道状态 JSON 做一次读改写——每次两个 fsync——一个 30 步的回合就要付 30 遍，而这块存储的延迟并不由运行时掌控。新增的 `createMemoryActivityRecorder` 把一整段突发折叠成固定大小的增量（时间戳后写覆盖、计数器累加、`dirty` 粘滞），在 5 秒防抖、每个回合结束以及进程关闭时落盘。批量是安全的，因为没有任何消费者需要即时读到它：`maintenance-gates.ts` 里每个门在频道活跃时都直接拒绝，`eligibleAfter` 随后还要压住 `minIdleMinutesBeforeLlmWork` 分钟，调度器则是每分钟轮询一次——状态只需要在频道转为空闲的那一刻是准确的，而回合结束的 flush 正好落在那里。实测 30 次工具调用的回合：写入耗时 26ms → 1ms。

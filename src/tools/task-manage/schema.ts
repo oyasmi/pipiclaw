@@ -77,6 +77,36 @@ export const taskManageSchema = Type.Object({
 	verificationPlan: Type.Optional(
 		Type.String({ description: "Optional for create: deterministic checks the verifier must perform." }),
 	),
+	plan: Type.Optional(
+		Type.String({
+			description:
+				'Optional for create: initial "## Plan" steps, one per line — the means, not the DoD. A step without a ' +
+				'leading "P<n>" id gets one auto-assigned in order. Update step status/text later via progress\'s planSteps, not by editing this at create time.',
+		}),
+	),
+	planSteps: Type.Optional(
+		Type.Array(
+			Type.Object({
+				id: Type.String({
+					description: 'Plan step id, e.g. "P2". An id not yet present is appended as a new step.',
+				}),
+				status: Type.Optional(
+					Type.Union(
+						[Type.Literal("todo"), Type.Literal("done"), Type.Literal("blocked"), Type.Literal("dropped")],
+						{ description: "New status for this step; omit to leave it unchanged." },
+					),
+				),
+				text: Type.Optional(
+					Type.String({ description: "New step text; required when appending a step with an unseen id." }),
+				),
+			}),
+			{
+				description:
+					"For progress: update or append Plan steps by id, e.g. mark P2 done, P3 blocked, and add a new P5. " +
+					'Requires the task to already have a "## Plan" section, or this call is the one that creates it.',
+			},
+		),
+	),
 	control: Type.Optional(taskControlSchema),
 	status: Type.Optional(
 		Type.Union(

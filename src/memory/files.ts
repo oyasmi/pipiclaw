@@ -167,6 +167,8 @@ export interface ApplyMemoryOpsResult {
 	blockedByPolicy: number;
 	blockedByTombstone: number;
 	skippedDuplicate: number;
+	/** Existing entries whose probation was cleared by a durable duplicate `add` (spec 037, D7). */
+	promotedFromProbation: number;
 }
 
 /**
@@ -189,6 +191,7 @@ export async function applyChannelMemoryOps(
 		blockedByPolicy: 0,
 		blockedByTombstone: 0,
 		skippedDuplicate: 0,
+		promotedFromProbation: 0,
 	};
 	if (ops.length === 0) {
 		return result;
@@ -207,6 +210,9 @@ export async function applyChannelMemoryOps(
 	const tombstoneHashes = new Set(tombstones.map((tombstone) => tombstone.contentHash));
 	const tombstoneSourceIds = new Set(tombstones.flatMap((tombstone) => tombstone.sourceEntryIds ?? []));
 	const activeContentHashes = new Set(existingEntries.map((entry) => hashMemoryContent(entry.content)));
+	const activeEntryIdByContentHash = new Map(
+		existingEntries.map((entry) => [hashMemoryContent(entry.content), entry.id]),
+	);
 	const appliedSourceCorrelationIds = new Set(
 		Object.values(currentMetadata.entries).flatMap((entry) => entry.sourceCorrelationIds),
 	);
@@ -240,6 +246,18 @@ export async function applyChannelMemoryOps(
 				const contentHash = hashMemoryContent(op.content);
 				if (activeContentHashes.has(contentHash)) {
 					result.skippedDuplicate++;
+					// A durable write (explicit `probationUntil: null`) restating a fact that is
+					// already stored, possibly on probation, is itself evidence the fact matters —
+					// promote the existing entry in place (spec 037, D7 path 2). A probationary
+					// restatement leaves the existing entry's deadline untouched: seeing the same
+					// medium-necessity thing twice does not by itself earn it a permanent slot.
+					if (op.metadata?.probationUntil === null) {
+						const existingId = activeEntryIdByContentHash.get(contentHash);
+						if (existingId) {
+							metadataUpdates.push({ id: existingId, metadata: { probationUntil: null } });
+							result.promotedFromProbation++;
+						}
+					}
 					continue;
 				}
 				const id = generateMemoryEntryId();

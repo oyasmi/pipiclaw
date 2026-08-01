@@ -142,7 +142,14 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 				{
 					op: "add",
 					content: trimmed,
-					metadata: { kind: normalizeMemoryKind(kind), sourceType: "user", trust: "explicit" },
+					// A user explicitly saying "remember this" is never probationary, and restating a
+					// fact the runtime had already put on probation promotes it (spec 037, D7).
+					metadata: {
+						kind: normalizeMemoryKind(kind),
+						sourceType: "user",
+						trust: "explicit",
+						probationUntil: null,
+					},
 				},
 			]),
 		);

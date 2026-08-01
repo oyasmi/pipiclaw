@@ -17,6 +17,7 @@ import {
 	taskBudgetViolation,
 } from "../tasks/control.js";
 import {
+	countTaskDodItems,
 	extractTaskTitle,
 	isTaskParked,
 	missingStandardTaskSections,
@@ -697,6 +698,37 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 						`Ask the agent to normalize tasks/${entry.id}.md to the standard task skeleton.`,
 					),
 				);
+			}
+
+			// spec 037, D4: two deterministic, zero-LLM-cost drift checks between a Plan and its
+			// DoD — the first real consumer of "is the plan still pointed at the goal?".
+			if (entry.plan) {
+				const dodCount = countTaskDodItems(content);
+				const invalidRefs = entry.plan.steps.flatMap((step) =>
+					step.dodRefs.filter((ref) => ref < 1 || ref > dodCount).map((ref) => `${step.id}→dod:${ref}`),
+				);
+				if (invalidRefs.length > 0) {
+					issues.push(
+						issue(
+							`tasks/${entry.id}.md Plan references DoD item(s) that do not exist: ${invalidRefs.join(", ")}.`,
+							`Fix the "→ dod:N" reference(s) in the Plan, or renumber them if the DoD list changed.`,
+						),
+					);
+				}
+				const covered = new Set(
+					entry.plan.steps.filter((step) => step.status !== "dropped").flatMap((step) => step.dodRefs),
+				);
+				const uncovered = Array.from({ length: dodCount }, (_, index) => index + 1).filter(
+					(dodIndex) => !covered.has(dodIndex),
+				);
+				if (dodCount > 0 && uncovered.length > 0) {
+					issues.push(
+						issue(
+							`tasks/${entry.id}.md has DoD item(s) with no Plan step covering them: dod:${uncovered.join(",")}.`,
+							`Add or update a Plan step's "→ dod:${uncovered[0]}" reference, or confirm those DoD items need no dedicated step.`,
+						),
+					);
+				}
 			}
 		}
 

@@ -222,7 +222,8 @@ flowchart LR
 - **召回打分是"证据制"而非"覆盖率制"**：候选按匹配到的 query token 的**特异性质量**累加计分（token 越长、越罕见、越非停用词，权重越高；再按候选集内的文档频率轻度衰减），达到绝对阈值即入围。刻意**不按 query 长度归一**——早期实现用"命中 token 数 / query token 数"做门槛，导致用户消息越详细召回越少（一条 60 token 的提问即使点名了记忆主题也过不了 25% 覆盖率门槛）。中文额外发射三元组，让"包管理器"这类被贪心分词打散的复合词仍能整体匹配。
 - **召回宽、重排窄**：词法层负责不漏（宽入围），LLM 重排只负责裁剪。重排仅在入围数超过 `maxInjected` **且**本地排序不存在明显赢家时触发，3s 超时且失败即放行到本地排序——它在每轮的关键路径上，只能减少上下文，不能补救漏召回。
 - **出口（写）**：固化只发生在明确边界——压缩前、`/new` 前（后台异步、快照先行）、关机 flush、以及后台维护 job。每次固化写 `review-log`（可审计）。
-- **只有一条提炼路径**（`extraction.ts`）：边界固化与空闲 checkpoint 共用同一个 prompt、同一份 JSON schema、同一道置信度闸门（`shouldAutoWriteMemory`）。此前多条路径各写各的 prompt，其中有的完全不设置信度门槛，于是 `MEMORY.md` 的质量由最不严谨的那条决定。调用方仍各自负责副作用：只有边界写 `HISTORY.md`。被闸门拒绝的候选不会静默消失——写进 `memory-review.jsonl` 的 `skipped`，且素材本身仍留在 `HISTORY.md` 与冷存储中。
+- **只有一条提炼路径**（`extraction.ts`）：边界固化与空闲 checkpoint 共用同一个 prompt、同一份 JSON schema、同一套两档置信度闸门（`classifyMemoryWrite`，spec 037 D6）。此前多条路径各写各的 prompt，其中有的完全不设置信度门槛，于是 `MEMORY.md` 的质量由最不严谨的那条决定。调用方仍各自负责副作用：只有边界写 `HISTORY.md`。被闸门拒绝的候选不会静默消失——写进 `memory-review.jsonl` 的 `skipped`，且素材本身仍留在 `HISTORY.md` 与冷存储中。
+- **两档写入 + 试用期**（spec 037）：`necessity: high` 且 `confidence ≥ 0.85` 永久写入（与此前一致）；`necessity: medium` 且 `confidence ≥ 0.9` 以 30 天试用期写入（`metadata.probationUntil`，每次固化最多 5 条），只对 `add` 生效——`supersede`/`invalidate` 永远要求永久档，避免覆盖/删除操作本身过期后复活旧内容。试用期条目在被召回一次（`recordMemoryRecall`）、被重复 add 命中（`applyChannelMemoryOps` 的 `skippedDuplicate` 分支）、或被永久 supersede 替换时转正；从未转正的条目由 `structural-maintenance` job 里的确定性前置步骤（`probation.ts`）用 `invalidate`（不是 `forget`）清理——不留墓碑，同一事实之后仍可被重新学到。
 - **调度器**（`scheduler.ts`）每 tick 轮转选取不活跃频道（`maxConcurrentChannels` 上限），三个 job 按优先级依次尝试，**先跑成一个就停**；每个 job 先过各自的确定性 gate（空闲时长、距上次运行间隔、素材是否有意义、夜间窗口等），gate 不放行则零 LLM 成本。频道上下文的取法：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的**磁盘冷上下文**（SessionManager 直读 context.jsonl + mtime/size 缓存），不会为历史频道复活完整 Runner。
 - **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、最多 2 次尝试、JSON 解析校验、用量记入账本（kind=`sidecar`）。记忆 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次维护结果；重复的纯 gate-skip 审计会合并降噪。
 
@@ -241,6 +242,8 @@ flowchart LR
 | 用户命令 | `/events` | `/tasks`（含 `approve`——外部副作用需显式批准，与验证 PASS 一样对任务体做 hash 绑定） |
 
 TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`（带任务胶囊摘要），走与用户消息完全相同的串行轮次管道；轮次结束后把 usage/耗时回写任务控制块（`finishTaskAttempt`）。整套任务机制（`task_manage` 工具、TaskDriver、任务摘要注入）由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
+
+任务正文可选携带一段 `## Plan`（spec 037）：介于 Goal/DoD 契约与只增的 Current Cycle 日志之间的手段层，四态 checkbox（`[ ]`/`[x]`/`[!]`/`[~]`），当前步骤由 runtime 从文档顺序推导、不由模型自报，唤醒胶囊与任务摘要都会显示进度和当前步骤。契约段哈希的边界因此改为「Plan 与 Current Cycle 中先出现的那个」，使 Plan 步骤状态变化永不影响已记录的验证 PASS 或外部审批。Plan 状态刻意不进入 TaskDriver 的停滞 fingerprint——勾一个复选框不能重置连续无进展计数、买到快速重试档。
 
 ## 8. 工具层与子代理
 

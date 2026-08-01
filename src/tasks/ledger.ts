@@ -2,6 +2,7 @@ import type { Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { nextTaskWake } from "../shared/task-schedule.js";
 import { parseTaskControl, type TaskControl, taskPriorityRank } from "./control.js";
 import { normalizeStoredStatus, TERMINAL_TASK_STATUSES, wasLegacyEscalated } from "./transitions.js";
@@ -50,6 +51,8 @@ export interface TaskLedgerEntry {
 	wakeMs?: number;
 	/** First bullet/line under a "当前周期"/"current cycle" heading, if any (digest only). */
 	latestNote?: string;
+	/** Parsed `## Plan` section, if the task has one (spec 037, D2). */
+	plan?: TaskPlanSummary;
 }
 
 export interface TaskSkeletonInput {
@@ -59,6 +62,8 @@ export interface TaskSkeletonInput {
 	manual?: string;
 	verificationPlan?: string;
 	verificationRequired?: boolean;
+	/** Optional initial `## Plan` steps, one per line; a missing `P<n>` prefix is auto-assigned. */
+	plan?: string;
 }
 
 const FRONTMATTER_FIELDS = ["status", "wake", "schedule", "recurrence", "control"] as const;
@@ -75,6 +80,13 @@ export const STANDARD_TASK_SECTIONS = [
 	{ label: "Current Cycle", names: ["Current Cycle", "当前周期"] },
 	{ label: "History", names: ["History", "历史"] },
 ] as const;
+
+/**
+ * `## Plan` is a deliberately optional section (spec 037, D2) — it is not part of
+ * `STANDARD_TASK_SECTIONS`, so `missingStandardTaskSections` never flags its absence. A two-step
+ * task or any pre-existing task simply has no Plan.
+ */
+const PLAN_SECTION_NAMES = ["Plan", "计划"] as const;
 
 /** Recurring task files are working context, not an unbounded audit log. */
 export const MAX_INLINE_TASK_HISTORY_ENTRIES = 8;
@@ -105,23 +117,242 @@ export function taskBody(content: string): string {
 }
 
 /**
- * The task's *contract* segment: the body up to (excluding) the "Current Cycle" heading —
- * i.e. the H1 title, Goal, DoD (with its checkbox state), Manual and Verification (spec 029, D4).
+ * The task's *contract* segment: the body up to (excluding) whichever of "Plan" or "Current
+ * Cycle" appears first — i.e. the H1 title, Goal, DoD (with its checkbox state), Manual and
+ * Verification (spec 029, D4).
  *
  * Verification PASS and external approval bind to this segment, not the whole body, so routine
- * `progress` notes (Current Cycle) and appended History/Completion Evidence never invalidate a
- * PASS or approval — only a change to what the task promises to do and how it is checked does.
- * A body without a Current Cycle heading (non-standard) falls back to the whole body.
+ * `progress` notes (Current Cycle, and — spec 037, D1 — Plan step status) never invalidate a
+ * PASS or approval; only a change to what the task promises to do and how it is checked does.
+ * Plan is deliberately excluded from the contract even though it always precedes Current Cycle
+ * in a freshly rendered skeleton: it is the task's *means*, not its promise, and is meant to be
+ * revised without re-triggering verification. This also means a task with an existing PASS can
+ * have `## Plan` inserted between Verification and Current Cycle with the contract segment
+ * unchanged byte-for-byte, as long as nothing before it changed.
+ * A body without either heading (non-standard) falls back to the whole body.
  */
 export function taskContractSegment(body: string): string {
 	const lines = body.split("\n");
 	for (let index = 0; index < lines.length; index++) {
 		const match = /^#{1,6}\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (match && matchesTaskSectionTitle(match[1] ?? "", ["Current Cycle", "当前周期"])) {
+		if (
+			match &&
+			(matchesTaskSectionTitle(match[1] ?? "", PLAN_SECTION_NAMES) ||
+				matchesTaskSectionTitle(match[1] ?? "", ["Current Cycle", "当前周期"]))
+		) {
 			return lines.slice(0, index).join("\n").replace(/\s+$/, "");
 		}
 	}
 	return body;
+}
+
+export type TaskPlanStepStatus = "todo" | "done" | "blocked" | "dropped";
+
+export interface TaskPlanStep {
+	/** `P<n>` by convention; a hand-written step without one gets its position as a fallback. */
+	id: string;
+	status: TaskPlanStepStatus;
+	text: string;
+	/** DoD item numbers this step claims to cover, from a trailing `→ dod:1,2` (or `-> dod:1,2`). */
+	dodRefs: number[];
+	lineIndex: number;
+}
+
+export interface TaskPlanSummary {
+	steps: TaskPlanStep[];
+	/** Count of steps, excluding `dropped` ones. */
+	total: number;
+	done: number;
+	/** The first `todo` or `blocked` step in document order; `undefined` once nothing is left to do. */
+	current?: TaskPlanStep;
+}
+
+const PLAN_STEP_STATUS_BY_MARKER: Record<string, TaskPlanStepStatus> = {
+	" ": "todo",
+	x: "done",
+	X: "done",
+	"!": "blocked",
+	"~": "dropped",
+};
+const PLAN_CHECKBOX_LINE = /^\s*[-*]\s+\[([ xX!~])\]\s+(.*)$/;
+const PLAN_STEP_ID_PREFIX = /^(P\d+)[.、)]?\s+(\S.*)$/i;
+const PLAN_DOD_REF_SUFFIX = /(?:→|->)\s*dod:\s*([\d,\s]+)\s*$/i;
+
+function parsePlanStepLine(line: string, lineIndex: number, fallbackId: string): TaskPlanStep | undefined {
+	const checkbox = PLAN_CHECKBOX_LINE.exec(line);
+	if (!checkbox) return undefined;
+	const status = PLAN_STEP_STATUS_BY_MARKER[checkbox[1] ?? " "] ?? "todo";
+	let rest = (checkbox[2] ?? "").trim();
+
+	let dodRefs: number[] = [];
+	const dodMatch = PLAN_DOD_REF_SUFFIX.exec(rest);
+	if (dodMatch) {
+		dodRefs = (dodMatch[1] ?? "")
+			.split(",")
+			.map((part) => Number.parseInt(part.trim(), 10))
+			.filter((n) => Number.isInteger(n) && n > 0);
+		rest = rest.slice(0, dodMatch.index).trim();
+	}
+
+	const idMatch = PLAN_STEP_ID_PREFIX.exec(rest);
+	const id = idMatch ? (idMatch[1] ?? fallbackId).toUpperCase() : fallbackId;
+	const text = idMatch ? (idMatch[2] ?? "").trim() : rest;
+	return { id, status, text, dodRefs, lineIndex };
+}
+
+/**
+ * Parse the optional `## Plan` section: a fourth, hand-maintained layer between the contract
+ * (Goal/DoD/Manual/Verification) and the append-only Current Cycle/History log (spec 037, D2).
+ *
+ * Four checkbox states — `[ ]` todo, `[x]` done, `[!]` blocked, `[~]` dropped — and no separate
+ * "doing" marker: the current step is *derived* (first `todo`/`blocked` in document order), not
+ * self-reported, for the same reason `task-driver.ts`'s fingerprint excludes the model's own
+ * progress notes — a runtime-derived signal cannot be talked into lying about itself.
+ *
+ * Returns `undefined` when there is no Plan heading, or the heading has no checkbox lines under
+ * it (nothing to summarize) — both read the same as "this task has no Plan yet".
+ */
+export function parseTaskPlan(content: string): TaskPlanSummary | undefined {
+	const lines = content.split("\n");
+	let sectionStart = -1;
+	let sectionLevel = 0;
+	for (let index = 0; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (!match || !matchesTaskSectionTitle(match[2] ?? "", PLAN_SECTION_NAMES)) continue;
+		sectionStart = index;
+		sectionLevel = match[1]?.length ?? 0;
+		break;
+	}
+	if (sectionStart === -1) return undefined;
+
+	let sectionEnd = lines.length;
+	for (let index = sectionStart + 1; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
+		if (match && (match[1]?.length ?? 7) <= sectionLevel) {
+			sectionEnd = index;
+			break;
+		}
+	}
+
+	const steps: TaskPlanStep[] = [];
+	let position = 0;
+	for (let index = sectionStart + 1; index < sectionEnd; index++) {
+		const line = lines[index] ?? "";
+		if (!/^\s*[-*]\s+\[/.test(line)) continue;
+		position++;
+		const step = parsePlanStepLine(line, index, `P${position}`);
+		if (step) steps.push(step);
+	}
+	if (steps.length === 0) return undefined;
+
+	return {
+		steps,
+		total: steps.filter((step) => step.status !== "dropped").length,
+		done: steps.filter((step) => step.status === "done").length,
+		current: steps.find((step) => step.status === "todo" || step.status === "blocked"),
+	};
+}
+
+export interface TaskPlanStepPatch {
+	id: string;
+	status?: TaskPlanStepStatus;
+	text?: string;
+}
+
+export interface ApplyTaskPlanPatchResult {
+	body: string;
+	/** Human-readable delta, meant to be folded into the caller's Current Cycle note; `""` if nothing changed. */
+	summary: string;
+}
+
+const PLAN_STATUS_MARKER: Record<TaskPlanStepStatus, string> = { todo: " ", done: "x", blocked: "!", dropped: "~" };
+
+function renderPlanStepLine(id: string, status: TaskPlanStepStatus, text: string, dodRefs: number[] = []): string {
+	const suffix = dodRefs.length > 0 ? ` → dod:${dodRefs.join(",")}` : "";
+	return `- [${PLAN_STATUS_MARKER[status]}] ${id} ${text}${suffix}`;
+}
+
+/** Insert an empty "## Plan" heading immediately before "## Current Cycle" (spec 037, D3). */
+function insertEmptyPlanSection(body: string): string {
+	const lines = body.split("\n");
+	for (let index = 0; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (match && matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) {
+			lines.splice(index, 0, "## Plan", "");
+			return lines.join("\n");
+		}
+	}
+	throw new RecoverableToolError(
+		'Task body has no "Current Cycle" section, so a Plan cannot be inserted; normalize the task skeleton with edit first.',
+	);
+}
+
+/**
+ * Update or append Plan steps by id (spec 037, D3). An id that already exists gets its
+ * status/text patched in place, preserving its `dod` refs and position; an unseen id is appended
+ * as a new step (`text` is then required — there is nothing sensible to append otherwise). A task
+ * with no `## Plan` section yet gets an empty one inserted before Current Cycle first, so the
+ * very first `planSteps` call on a task is also the one that creates its Plan.
+ *
+ * The returned `summary` is deliberately not a new persisted field (see the file-level doc on
+ * `TaskPlanSummary`): it is meant to be appended to the caller's own Current Cycle note, so the
+ * change history rides on the log `startTaskCycle` already folds into History — no second,
+ * unconsumed revision counter.
+ */
+export function applyTaskPlanPatch(body: string, patches: readonly TaskPlanStepPatch[]): ApplyTaskPlanPatchResult {
+	if (patches.length === 0) return { body, summary: "" };
+
+	let working = parseTaskPlan(body) ? body : insertEmptyPlanSection(body);
+	const deltas: string[] = [];
+
+	for (const patch of patches) {
+		const trimmedId = patch.id.trim();
+		if (!trimmedId) throw new RecoverableToolError("A planSteps entry's id must not be empty.");
+		const existing = parseTaskPlan(working)?.steps.find((step) => step.id.toUpperCase() === trimmedId.toUpperCase());
+
+		if (existing) {
+			const lines = working.split("\n");
+			const nextStatus = patch.status ?? existing.status;
+			const nextText = patch.text?.trim() || existing.text;
+			lines[existing.lineIndex] = renderPlanStepLine(existing.id, nextStatus, nextText, existing.dodRefs);
+			working = lines.join("\n");
+			deltas.push(patch.status ? `${existing.id}→${patch.status}` : `${existing.id} updated`);
+			continue;
+		}
+
+		const text = patch.text?.trim();
+		if (!text) {
+			throw new RecoverableToolError(
+				`Plan step "${trimmedId}" does not exist yet; adding a new step requires text.`,
+			);
+		}
+		const id = trimmedId.toUpperCase();
+		const lines = working.split("\n");
+		let sectionStart = -1;
+		let sectionLevel = 0;
+		for (let index = 0; index < lines.length; index++) {
+			const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+			if (match && matchesTaskSectionTitle(match[2] ?? "", PLAN_SECTION_NAMES)) {
+				sectionStart = index;
+				sectionLevel = match[1]?.length ?? 0;
+				break;
+			}
+		}
+		let insertAt = lines.length;
+		for (let index = sectionStart + 1; index < lines.length; index++) {
+			const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
+			if (match && (match[1]?.length ?? 7) <= sectionLevel) {
+				insertAt = index;
+				break;
+			}
+		}
+		while (insertAt > sectionStart + 1 && (lines[insertAt - 1] ?? "").trim() === "") insertAt--;
+		lines.splice(insertAt, 0, renderPlanStepLine(id, patch.status ?? "todo", text));
+		working = lines.join("\n");
+		deltas.push(`+${id} ${text}`);
+	}
+
+	return { body: working, summary: deltas.length > 0 ? `plan: ${deltas.join("; ")}` : "" };
 }
 
 /** Parse the leading `---` frontmatter block into the three known fields. */
@@ -283,11 +514,45 @@ export function uncheckedTaskAcceptanceItems(content: string): string[] {
 	return unchecked;
 }
 
+/**
+ * Count of checkbox items (checked or not) under the DoD heading, for cross-referencing a Plan
+ * step's `→ dod:N` refs (spec 037, D4 — `/tasks doctor`'s drift checks).
+ */
+export function countTaskDodItems(content: string): number {
+	let inDod = false;
+	let sectionLevel = 0;
+	let count = 0;
+	for (const line of content.split("\n")) {
+		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+		if (heading) {
+			const level = heading[1]?.length ?? 7;
+			if (matchesTaskSectionTitle(heading[2] ?? "", ["DoD"])) {
+				inDod = true;
+				sectionLevel = level;
+			} else if (inDod && level <= sectionLevel) {
+				inDod = false;
+			}
+			continue;
+		}
+		if (inDod && /^\s*[-*]\s+\[[ xX]\]/.test(line)) count++;
+	}
+	return count;
+}
+
+/** A plain plan-step line gets an auto-assigned `P<n>` id unless it already starts with one. */
+function ensurePlanStepId(line: string, fallbackIndex: number): string {
+	return PLAN_STEP_ID_PREFIX.test(line) ? line : `P${fallbackIndex} ${line}`;
+}
+
 export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 	const manual = input.manual?.trim() || DEFAULT_TASK_MANUAL;
 	const verificationPlan =
 		input.verificationPlan?.trim() ||
 		"- Check every DoD item against concrete evidence.\n- Run the relevant deterministic checks before declaring PASS.";
+	const planLines = (input.plan ?? "")
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
 	return [
 		`# ${input.title}`,
 		"",
@@ -306,6 +571,11 @@ export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 		...(input.verificationRequired ? ["Independent verification: required"] : []),
 		verificationPlan,
 		"",
+		// Plan is optional (spec 037, D2/D3): omitted entirely when create was not given one,
+		// rather than rendering an empty section a doctor check would then have to special-case.
+		...(planLines.length > 0
+			? ["## Plan", ...planLines.map((line, index) => `- [ ] ${ensurePlanStepId(line, index + 1)}`), ""]
+			: []),
 		"## Current Cycle",
 		"- Created; next step: start work and append progress here before ending each turn.",
 		"",
@@ -634,7 +904,7 @@ export function startTaskCycle(content: string, cycleId: string): string {
 	// canonical History heading remains predictable and preserves all older notes.
 	lines.splice(shiftedHistoryStart + 1, 0, ...historyEntry);
 	const compacted = compactTaskHistory(lines.join("\n"), legacy.blocks.length > 1);
-	return resetTaskAcceptanceCheckboxes(compacted);
+	return resetPlanStepCheckboxes(resetTaskAcceptanceCheckboxes(compacted));
 }
 
 /**
@@ -667,6 +937,41 @@ function resetTaskAcceptanceCheckboxes(content: string): string {
 		}
 		if (!section) continue;
 		const checkbox = /^(\s*[-*]\s+)\[[xX]\](\s*.*)$/.exec(line);
+		if (checkbox) lines[index] = `${checkbox[1]}[ ]${checkbox[2]}`;
+	}
+	return lines.join("\n");
+}
+
+/**
+ * Reset `## Plan` steps for a new cycle: `[x]` done and `[!]` blocked both go back to `[ ]`
+ * todo, exactly like `resetTaskAcceptanceCheckboxes` — a stale "done" step from the previous
+ * cycle must not silently pass as still true. `[~]` dropped is left alone: that step was
+ * deliberately abandoned, not merely finished, and a new cycle should not resurrect it.
+ */
+function resetPlanStepCheckboxes(content: string): string {
+	const lines = content.split("\n");
+	let sectionStart = -1;
+	let sectionLevel = 0;
+	for (let index = 0; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (!match || !matchesTaskSectionTitle(match[2] ?? "", PLAN_SECTION_NAMES)) continue;
+		sectionStart = index;
+		sectionLevel = match[1]?.length ?? 0;
+		break;
+	}
+	if (sectionStart === -1) return content;
+
+	let sectionEnd = lines.length;
+	for (let index = sectionStart + 1; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
+		if (match && (match[1]?.length ?? 7) <= sectionLevel) {
+			sectionEnd = index;
+			break;
+		}
+	}
+
+	for (let index = sectionStart + 1; index < sectionEnd; index++) {
+		const checkbox = /^(\s*[-*]\s+)\[[xX!]\](\s*.*)$/.exec(lines[index] ?? "");
 		if (checkbox) lines[index] = `${checkbox[1]}[ ]${checkbox[2]}`;
 	}
 	return lines.join("\n");
@@ -730,6 +1035,7 @@ function toEntry(id: string, content: string, now: number): TaskLedgerEntry {
 		actionable: isTaskActionable(frontmatter, now),
 		wakeMs: parseWakeMs(frontmatter),
 		latestNote: extractLatestNote(content),
+		plan: parseTaskPlan(content),
 	};
 }
 

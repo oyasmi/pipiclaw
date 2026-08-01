@@ -88,7 +88,7 @@ describe("runInlineConsolidation with ops", () => {
 		});
 	});
 
-	it("holds consolidation to the same auto-write bar as the growth review", async () => {
+	it("holds consolidation to the same durable bar as the growth review", async () => {
 		const channelDir = createTempChannel();
 		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
 			const json = JSON.stringify({
@@ -103,9 +103,9 @@ describe("runInlineConsolidation with ops", () => {
 					{ op: "add", content: "Transient debugging note", kind: "fact", confidence: 0.4, necessity: "low" },
 					{
 						op: "add",
-						content: "Plausible but not load-bearing",
+						content: "Not confident enough for probation either",
 						kind: "fact",
-						confidence: 0.95,
+						confidence: 0.7,
 						necessity: "medium",
 					},
 				],
@@ -125,12 +125,78 @@ describe("runInlineConsolidation with ops", () => {
 		const memory = await readChannelMemory(channelDir);
 		expect(memory).toContain("Durable deploy constraint");
 		expect(memory).not.toContain("Transient debugging note");
-		expect(memory).not.toContain("Plausible but not load-bearing");
+		expect(memory).not.toContain("Not confident enough for probation either");
 		// Rejected candidates stay visible to the review log rather than vanishing.
 		expect(result.rejectedMemoryOps.map((candidate) => candidate.content)).toEqual([
 			"Transient debugging note",
-			"Plausible but not load-bearing",
+			"Not confident enough for probation either",
 		]);
+		expect(result.appendedDurableEntries).toBe(1);
+		expect(result.appendedProbationaryEntries).toBe(0);
+	});
+
+	it("writes a high-confidence medium-necessity candidate on probation, not durably (spec 037, D6)", async () => {
+		const channelDir = createTempChannel();
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
+			const json = JSON.stringify({
+				memoryOps: [
+					{
+						op: "add",
+						content: "The release channel defaults to Thursday cuts",
+						kind: "fact",
+						confidence: 0.95,
+						necessity: "medium",
+					},
+				],
+				historyBlock: "",
+			});
+			return { rawText: json, output: task.parse(json) } as never;
+		});
+
+		const result = await runInlineConsolidation({
+			channelDir,
+			model: fakeModel,
+			resolveApiKey,
+			messages,
+			mode: "idle",
+		});
+
+		expect(result.appendedDurableEntries).toBe(0);
+		expect(result.appendedProbationaryEntries).toBe(1);
+		const memory = await readChannelMemory(channelDir);
+		expect(memory).toContain("The release channel defaults to Thursday cuts");
+		const [entry] = parseChannelMemoryEntries(memory);
+		expect((await readMemoryMetadata(channelDir)).entries[entry.id]?.probationUntil).toBeTruthy();
+	});
+
+	it("caps probationary writes at the per-run limit, rejecting the overflow (spec 037, D6)", async () => {
+		const channelDir = createTempChannel();
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
+			const json = JSON.stringify({
+				memoryOps: Array.from({ length: 8 }, (_, index) => ({
+					op: "add",
+					content: `Medium-necessity operating fact number ${index}`,
+					kind: "fact",
+					confidence: 0.95,
+					necessity: "medium",
+				})),
+				historyBlock: "",
+			});
+			return { rawText: json, output: task.parse(json) } as never;
+		});
+
+		const result = await runInlineConsolidation({
+			channelDir,
+			model: fakeModel,
+			resolveApiKey,
+			messages,
+			mode: "idle",
+		});
+
+		expect(result.appendedProbationaryEntries).toBe(5);
+		expect(result.rejectedMemoryOps).toHaveLength(3);
+		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+		expect(entries).toHaveLength(5);
 	});
 });
 

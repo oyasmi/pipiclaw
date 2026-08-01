@@ -10,7 +10,7 @@ priority: 41
 ## 每次唤醒先恢复真相
 
 1. 打开消息指定的 `tasks/<id>.md`，不要只依赖唤醒文本、旧对话或记忆。
-2. 核对 status、最新 Current Cycle note、`nextAction`、`wake`、deadline / attempt budget、`sideEffects` 和 verification。
+2. 核对 status、最新 Current Cycle note、`nextAction`、`wake`、deadline / attempt budget、`sideEffects` 和 verification。有 Plan 时看当前步骤（胶囊里的 `plan=` 字段已经给出，正文里也能看到第一个 `[ ]`/`[!]`），不要重新猜"上次做到哪了"。
 3. 检查上一步产物**是否已经存在**。派发语义是 at-least-once，宕机或租约重放可能让同一步再次到达。
 4. 只推进一个清晰的下一阶段；不要在未知状态下重复外部动作。
 
@@ -18,7 +18,7 @@ deadline 或 attempt budget 耗尽会令任务被治理器暂停（`paused` + `p
 
 ## 回合结束必须留下确定性状态
 
-仍开放且正文或进展发生变化时，用 `task_manage progress` 一次性记录：发生了什么、看到了什么证据、下一步是什么、status 与 `wake`。
+仍开放且正文或进展发生变化时，用 `task_manage progress` 一次性记录：发生了什么、看到了什么证据、下一步是什么、status 与 `wake`。有 Plan 的任务，步骤完成、受阻或需要新增时，在同一次 `progress` 调用里带上 `planSteps`（如 `[{id:"P2", status:"done"}]`），不要单独用 `write`/`edit` 改 Plan 段——变更会自动折进这条 note，不需要重复写一遍。
 
 以下生命周期动作本身就是原子 checkpoint，不要再追加 progress：`candidate`、`done`、`skip`、`cancel`。
 

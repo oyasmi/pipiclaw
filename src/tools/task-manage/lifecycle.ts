@@ -5,6 +5,7 @@ import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import { invalidateTaskVerification } from "../../tasks/control.js";
 import {
 	appendCurrentCycleNote,
+	applyTaskPlanPatch,
 	normalizeTaskId,
 	readActiveTasks,
 	uncheckedTaskAcceptanceItems,
@@ -70,7 +71,13 @@ export async function progressTask(
 	if (nextFields.control && request.status !== "waiting" && request.control?.blockedReason === undefined) {
 		nextFields.control.blockedReason = undefined;
 	}
-	const nextBody = appendCurrentCycleNote(body, note);
+	// planSteps deltas fold into the same Current Cycle note (spec 037, D3): the plan's change
+	// history rides on the log startTaskCycle already archives into History, rather than a second,
+	// separately-maintained revision trail nothing else consumes.
+	const { body: bodyWithPlan, summary: planSummary } = request.planSteps?.length
+		? applyTaskPlanPatch(body, request.planSteps)
+		: { body, summary: "" };
+	const nextBody = appendCurrentCycleNote(bodyWithPlan, planSummary ? `${note} ${planSummary}` : note);
 	await writeFileAtomically(taskPath, renderTaskFile(nextFields, nextBody));
 	return {
 		action: "progress",

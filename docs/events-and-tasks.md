@@ -421,7 +421,23 @@ frontmatter 字段：
 - **预算**：只有 `maxAttempts`（spec 036）。driver 每次原生唤醒先 claim attempt，回合结束把主代理与子代理的实际 usage 计回 task；预算在回合边界检查，不能中断一个正在运行的回合。达到上限就被治理器暂停（`paused` + `pausedBy: "governor"`）。`usage` 仍完整记录 tokens/cost/wall-time 供 `/tasks stats` 观察，但**不再据此中止任务**——按任务设成本上限拦不住总量，成本闸应当是全局的。
 - **关系**：无。任务之间没有 `parent`/`dependsOn` 图（spec 036 删除）；先后次序写进正文（目标/手册）或用 `wake` 错开时间，每个任务只按自己的 DoD 收尾。
 - **副作用**：`sideEffects: external` 自动进入 required；agent 不能自授予。用户审阅拟执行动作后，直接发送 `/tasks approve <id>`，runtime 记录 approver/时间与 task body hash 才变为 granted；后续 progress 或正文变化会要求重新授权。
-- **验收**：只有一种形态——独立验收，由 `verification.required` 开关（默认关闭；`sideEffects: external` 的任务默认打开）。要求验收时实现者先 `candidate`，checker-only 回合调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId；`done` 会重新校验磁盘上的 attestation，手写的 PASS 无效。不要求验收的任务照常在 `done` 时提交 summary/evidence 并写入正文，但不会被记成一次"验收通过"。PASS 绑定 task 的**契约段**（Goal/DoD/Manual/Verification 及勾选状态，不含 Current Cycle/History）：记日志不失效，改契约才失效。
+- **验收**：只有一种形态——独立验收，由 `verification.required` 开关（默认关闭；`sideEffects: external` 的任务默认打开）。要求验收时实现者先 `candidate`，checker-only 回合调用 `subagent purpose=verify taskId=<id>`，再用 `task_manage verify` 导入 runId；`done` 会重新校验磁盘上的 attestation，手写的 PASS 无效。不要求验收的任务照常在 `done` 时提交 summary/evidence 并写入正文，但不会被记成一次"验收通过"。PASS 绑定 task 的**契约段**（Goal/DoD/Manual/Verification 及勾选状态，不含 Plan/Current Cycle/History）：记日志、改 Plan 步骤都不失效，改契约才失效。
+
+### Plan（可选，spec 037）
+
+正文可以在 Verification 之后、Current Cycle 之前加一段 `## Plan`：任务的手段层，与 Goal/DoD 这个承诺层分开。
+
+```
+## Plan
+- [x] P1 对齐上游 schema 字段 → dod:1
+- [ ] P2 迁移 reader 到新 schema → dod:1,2
+- [!] P3 联调 staging（等运维开权限）
+- [~] P4 旧兼容层（改由 P2 覆盖）
+```
+
+四态 checkbox：`[ ]` 待办、`[x]` 完成、`[!]` 阻塞、`[~]` 放弃（连同一句为什么，不静默删行）。**没有"进行中"态**——当前步骤由 runtime 从文档顺序推导（第一个待办或阻塞项），显示在唤醒胶囊和 `<task_agenda>` 里，不需要模型自报，也不采信模型自报。可选的 `→ dod:1,2` 声明这一步覆盖哪些 DoD 序号；`/tasks doctor` 会检查引用是否有效、是否有 DoD 项完全没有步骤覆盖。
+
+写入面：`task_manage create` 的 `plan` 参数（一行一步，缺 `P<n>` 前缀自动补）；`task_manage progress` 的 `planSteps`（`[{id, status?, text?}]`，改状态或追加新步骤），改动会折进这次 progress 的 Current Cycle 记录里。Plan 状态变化不进入 TaskDriver 的停滞 fingerprint，也不影响契约哈希——它是手段，不是验收门。
 
 当 independent 与 external 同时存在时，先验收待执行动作得到 PASS，再用 `task_manage set wake=...`（停留在 `verifying` 车道，仅改 wake）等待 `/tasks approve`；只改 wake、不换状态可保留 PASS——**离开 verifying 的 `set` 会作废验收**。获批后执行并直接 done。契约段与 approval 都绑定同一份契约 hash，日志不会误伤；不要把"已经发布"写成 candidate 前必须勾选的 DoD；外部执行结果由 approval audit 和 done evidence 收口。
 

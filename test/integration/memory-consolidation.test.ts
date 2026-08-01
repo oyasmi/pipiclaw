@@ -74,6 +74,8 @@ describe("memory-consolidation integration", () => {
 		expect(result).toEqual({
 			skipped: true,
 			appendedMemoryEntries: 0,
+			appendedDurableEntries: 0,
+			appendedProbationaryEntries: 0,
 			appendedHistoryBlock: false,
 			rejectedMemoryOps: [],
 		});

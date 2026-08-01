@@ -45,12 +45,15 @@ const checkpointMaterial = (batchSize: number) => () => ({
 	batchSize,
 });
 
-const structuralMaterial = (memoryCleanupNeeded: boolean) => async () => ({
-	memoryCleanupNeeded,
-	historyFoldingNeeded: false,
-	hasMemoryContent: true,
-	hasHistoryContent: true,
-});
+const structuralMaterial =
+	(memoryCleanupNeeded: boolean, expiredEntryCount = 0) =>
+	async () => ({
+		memoryCleanupNeeded,
+		historyFoldingNeeded: false,
+		hasMemoryContent: true,
+		hasHistoryContent: true,
+		expiredEntryCount,
+	});
 
 describe("memory maintenance gates", () => {
 	it("denies session refresh locally before any LLM work is needed", () => {
@@ -140,6 +143,20 @@ describe("memory maintenance gates", () => {
 		).toMatchObject({ allowed: false, skipReason: "nothing-to-maintain" });
 	});
 
+	// spec 037, D8: expired probationary entries must be evicted even when neither cleanup nor
+	// history folding is otherwise due.
+	it("allows structural maintenance for probation expiry alone", async () => {
+		expect(
+			await shouldRunStructuralMaintenance({
+				now,
+				state,
+				maintenance,
+				channelActive: false,
+				material: structuralMaterial(false, 2),
+			}),
+		).toMatchObject({ allowed: true, runMemoryCleanup: false, runHistoryFolding: false, runProbationExpiry: true });
+	});
+
 	// The whole point of the thunks: an idle daemon ticks every minute, and a tick that stops at a
 	// schedule gate must not scan the transcript or read MEMORY.md/HISTORY.md to find that out.
 	it("never evaluates material when a cheap schedule gate denies", async () => {
@@ -150,6 +167,7 @@ describe("memory maintenance gates", () => {
 			historyFoldingNeeded: true,
 			hasMemoryContent: true,
 			hasHistoryContent: true,
+			expiredEntryCount: 0,
 		}));
 
 		shouldRunSessionRefresh({

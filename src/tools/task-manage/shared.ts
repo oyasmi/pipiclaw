@@ -102,6 +102,7 @@ export function renderTaskSkeleton(request: TaskManageRequest): {
 		manual: request.manual,
 		verificationPlan: request.verificationPlan,
 		verificationRequired: control.verification.required,
+		plan: request.plan,
 	});
 	return { fields, body };
 }

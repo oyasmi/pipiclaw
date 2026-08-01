@@ -152,6 +152,8 @@ describe("memory maintenance jobs", () => {
 		vi.mocked(runInlineConsolidation).mockResolvedValue({
 			skipped: false,
 			appendedMemoryEntries: 0,
+			appendedDurableEntries: 0,
+			appendedProbationaryEntries: 0,
 			appendedHistoryBlock: false,
 			rejectedMemoryOps: [],
 		});

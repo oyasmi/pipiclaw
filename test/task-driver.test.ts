@@ -76,6 +76,26 @@ describe("TaskDriver", () => {
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("Task capsule: title=Task; status=active;");
 	});
 
+	// spec 037, D4: the wake capsule surfaces Plan progress and the current step so the model does
+	// not have to re-derive them from latestNote/nextAction every wake.
+	it("includes plan progress and the current step in the wake capsule", async () => {
+		await writeTask(
+			"dm_plan",
+			"with-plan",
+			"---\nstatus: active\n---\n# Task\n\n## Plan\n- [x] P1 align schema\n- [ ] P2 migrate reader\n\n## Current Cycle\n- created\n",
+		);
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+		});
+
+		await driver.runOnce(NOW);
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("plan=1/2 done, current=P2;");
+	});
+
 	it("keys a wake on the task's occurrence and an escalation on its cause (spec 031, D1)", async () => {
 		await writeTask("dm_a", "scheduled", task("active", "2026-07-10T09:00:00+08:00"));
 		await writeTask("dm_b", "unscheduled", task("active"));
@@ -403,6 +423,44 @@ describe("TaskDriver", () => {
 			await manageTask(
 				{ channelDir: join(workspaceDir, "dm_a"), workspaceDir, channelId: "dm_a" },
 				{ action: "progress", id: "stuck", note: `still working, pass ${i}` },
+			);
+		}
+		await driver.runOnce(new Date(NOW.getTime() + 3 * 61 * 60_000));
+
+		const last = dispatch.mock.calls.at(-1)?.[0].text ?? "";
+		expect(last).toContain("[TASK_ESCALATION:stuck]");
+		expect(last).toContain("no visible progress in 3 consecutive wakes");
+	});
+
+	// spec 037, D5: checking off a Plan step is the same kind of model self-report as a progress
+	// note — it must not reset the futile counter or buy the fast retry tier on its own.
+	it("does not let a plan step status change alone reset the no-progress count", async () => {
+		await writeTask(
+			"dm_a",
+			"stuck",
+			renderTaskDocument(
+				{ status: "active", control: createDefaultTaskControl() },
+				"# Task\n\n## Plan\n- [ ] P1 step one\n\n## Current Cycle\n- created\n\n## Verification\n- check\n",
+			),
+		);
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const driver = new TaskDriver({
+			workspaceDir,
+			isChannelActive: () => false,
+			dispatch,
+			getSettings: () => SETTINGS,
+			getEffectCount: () => 0,
+		});
+
+		// Every wake flips the same step's status — the body changes each time, but body content
+		// (Plan included) was never part of the fingerprint, so this must escalate exactly like the
+		// note-only case above.
+		const planStatuses = ["blocked", "done", "blocked"] as const;
+		for (let i = 0; i < 3; i++) {
+			await driver.runOnce(new Date(NOW.getTime() + i * 61 * 60_000));
+			await manageTask(
+				{ channelDir: join(workspaceDir, "dm_a"), workspaceDir, channelId: "dm_a" },
+				{ action: "progress", id: "stuck", note: `pass ${i}`, planSteps: [{ id: "P1", status: planStatuses[i] }] },
 			);
 		}
 		await driver.runOnce(new Date(NOW.getTime() + 3 * 61 * 60_000));

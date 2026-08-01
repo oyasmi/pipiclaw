@@ -8,6 +8,8 @@ vi.mock("../src/memory/consolidation.js", () => ({
 	runInlineConsolidation: vi.fn().mockResolvedValue({
 		skipped: false,
 		appendedMemoryEntries: 1,
+		appendedDurableEntries: 1,
+		appendedProbationaryEntries: 0,
 		appendedHistoryBlock: true,
 		rejectedMemoryOps: [],
 	}),

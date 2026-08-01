@@ -55,6 +55,9 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 		const tombstones = await readMemoryTombstones(options.channelDir);
 		const records = Object.values(metadata.entries);
 		const active = records.filter((entry) => entry.status === "active");
+		const probationary = active
+			.filter((entry) => entry.probationUntil)
+			.sort((a, b) => (a.probationUntil ?? "").localeCompare(b.probationUntil ?? ""));
 		const since = new Date();
 		since.setDate(since.getDate() - 29);
 		const sinceDay = localDayKey(since);
@@ -76,6 +79,7 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 			"",
 			`- Active entries: \`${entries.length}\``,
 			`- Metadata records: \`${records.length}\``,
+			`- Probationary: \`${probationary.length}\`${probationary.length > 0 ? ` (earliest expiry \`${probationary[0].probationUntil}\`)` : ""}`,
 			`- Pending suggestions: \`${pending.length}\``,
 			`- Tombstones: \`${tombstones.length}\``,
 			`- Total recalls: \`${active.reduce((sum, entry) => sum + entry.recallCount, 0)}\``,
@@ -98,7 +102,8 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 		const visible = entries.slice(0, 50);
 		const lines = visible.map((entry) => {
 			const record = metadata.entries[entry.id];
-			return `- \`${entry.id}\` [${record?.kind ?? "fact"}] ${clipText(entry.content, 180, { headRatio: 1 })}`;
+			const probation = record?.probationUntil ? ` (probation until \`${record.probationUntil}\`)` : "";
+			return `- \`${entry.id}\` [${record?.kind ?? "fact"}]${probation} ${clipText(entry.content, 180, { headRatio: 1 })}`;
 		});
 		if (entries.length > visible.length) {
 			lines.push(

@@ -41,6 +41,16 @@ describe("buildTaskDigest", () => {
 		expect(out).toContain("</task_agenda>");
 	});
 
+	// spec 037, D4: the agenda line shows Plan progress and the current step.
+	it("includes plan progress and the current step when the task has a Plan", async () => {
+		await writeFile(
+			join(tasksDir, "planned.md"),
+			doc("status: active", "# Planned\n\n## Plan\n- [x] P1 step one\n- [ ] P2 step two\n"),
+		);
+		const out = await digest();
+		expect(out).toContain("plan 1/2 · @P2");
+	});
+
 	it("excludes done tasks but keeps other non-done ones", async () => {
 		await writeFile(join(tasksDir, "open.md"), doc("status: in-progress", "# Open one"));
 		await writeFile(join(tasksDir, "closed.md"), doc("status: done", "# Closed one"));

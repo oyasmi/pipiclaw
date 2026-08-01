@@ -48,6 +48,8 @@ export interface StructuralMaintenanceMaterial {
 	historyFoldingNeeded: boolean;
 	hasMemoryContent: boolean;
 	hasHistoryContent: boolean;
+	/** Active entries whose probation lapsed or `expiresAt` was reached (spec 037, D8). */
+	expiredEntryCount: number;
 }
 
 export interface StructuralMaintenanceGateInput {
@@ -61,6 +63,7 @@ export interface StructuralMaintenanceGateInput {
 export interface StructuralMaintenanceGateDecision extends MaintenanceGateDecision {
 	runMemoryCleanup: boolean;
 	runHistoryFolding: boolean;
+	runProbationExpiry: boolean;
 }
 
 function deny(jobKind: MaintenanceJobKind, skipReason: string): MaintenanceGateDecision {
@@ -186,6 +189,7 @@ export async function shouldRunStructuralMaintenance(
 		skipReason,
 		runMemoryCleanup: false,
 		runHistoryFolding: false,
+		runProbationExpiry: false,
 	});
 
 	if (input.channelActive) {
@@ -204,13 +208,14 @@ export async function shouldRunStructuralMaintenance(
 		return denyStructural("backoff-active");
 	}
 	const material = await input.material();
-	if (!material.hasMemoryContent && !material.hasHistoryContent) {
+	const runProbationExpiry = material.expiredEntryCount > 0;
+	if (!material.hasMemoryContent && !material.hasHistoryContent && !runProbationExpiry) {
 		return denyStructural("empty-template-files");
 	}
 
 	const runMemoryCleanup = material.memoryCleanupNeeded;
 	const runHistoryFolding = material.historyFoldingNeeded;
-	if (!runMemoryCleanup && !runHistoryFolding) {
+	if (!runMemoryCleanup && !runHistoryFolding && !runProbationExpiry) {
 		return denyStructural("nothing-to-maintain");
 	}
 
@@ -219,5 +224,6 @@ export async function shouldRunStructuralMaintenance(
 		jobKind,
 		runMemoryCleanup,
 		runHistoryFolding,
+		runProbationExpiry,
 	};
 }

@@ -21,6 +21,13 @@ export interface MemoryWriteMetadataInput {
 	expiresAt?: string;
 	sensitivity?: MemorySensitivity;
 	sourceCorrelationId?: string;
+	/**
+	 * Probationary write deadline (spec 037, D6/D7): `undefined` leaves any existing value alone,
+	 * a string sets/renews it, `null` explicitly clears it (promotion to durable). Distinct from
+	 * `undefined` because "keep previous" and "durable now" are different intents — a durable
+	 * supersede replacing a probationary entry in place must clear it, not silently inherit it.
+	 */
+	probationUntil?: string | null;
 }
 
 export interface MemoryEntryMetadata {
@@ -45,6 +52,8 @@ export interface MemoryEntryMetadata {
 	lastRecalledAt?: string;
 	queryFingerprints: string[];
 	recallByDay: Record<string, number>;
+	/** Set only while this entry is on probation (spec 037, D7); absent = durable. */
+	probationUntil?: string;
 }
 
 export interface MemoryMetadataFile {
@@ -150,6 +159,8 @@ export async function syncMemoryMetadata(
 				lastRecalledAt: previous?.lastRecalledAt,
 				queryFingerprints: previous?.queryFingerprints ?? [],
 				recallByDay: previous?.recallByDay ?? {},
+				probationUntil:
+					hint?.probationUntil === null ? undefined : (hint?.probationUntil ?? previous?.probationUntil),
 			};
 		}
 
@@ -204,6 +215,10 @@ export async function recordMemoryRecall(
 				lastRecalledAt: timestamp,
 				queryFingerprints: fingerprints,
 				recallByDay: { ...recallByDay, [day]: (recallByDay[day] ?? 0) + 1 },
+				// Being recalled at all is the evidence a probationary entry needs to earn its
+				// permanent place (spec 037, D7) — this write was already happening on every
+				// recall, so promotion rides along for free.
+				probationUntil: undefined,
 			};
 			changed = true;
 		}

@@ -344,6 +344,54 @@ describe("handleTasksCommand", () => {
 		expect(out).toContain("normalize tasks/thin.md");
 	});
 
+	// spec 037, D4: two deterministic Plan/DoD drift checks.
+	it("doctor flags a Plan step whose dod ref does not exist", async () => {
+		await writeFile(
+			join(tasksDir, "bad-ref.md"),
+			doc(
+				"status: active",
+				"# Bad ref\n\n## DoD\n- [ ] Done\n\n## Plan\n- [ ] P1 do it → dod:2\n\n## Current Cycle\n\n## History\n",
+			),
+		);
+		const out = await run("doctor");
+		expect(out).toContain("Plan references DoD item(s) that do not exist: P1→dod:2");
+	});
+
+	it("doctor flags a DoD item with no Plan step covering it", async () => {
+		await writeFile(
+			join(tasksDir, "uncovered.md"),
+			doc(
+				"status: active",
+				"# Uncovered\n\n## DoD\n- [ ] First\n- [ ] Second\n\n## Plan\n- [ ] P1 covers first → dod:1\n\n## Current Cycle\n\n## History\n",
+			),
+		);
+		const out = await run("doctor");
+		expect(out).toContain("DoD item(s) with no Plan step covering them: dod:2");
+	});
+
+	it("doctor does not count a dropped step's dod ref as coverage", async () => {
+		await writeFile(
+			join(tasksDir, "dropped-cover.md"),
+			doc(
+				"status: active",
+				"# Dropped cover\n\n## DoD\n- [ ] Only item\n\n## Plan\n- [~] P1 abandoned → dod:1\n\n## Current Cycle\n\n## History\n",
+			),
+		);
+		const out = await run("doctor");
+		expect(out).toContain("DoD item(s) with no Plan step covering them: dod:1");
+	});
+
+	it("doctor stays quiet when every DoD item is covered and every ref is valid", async () => {
+		const body = renderStandardTaskBody({
+			title: "Covered",
+			goal: "G",
+			dod: "- [ ] First\n- [ ] Second",
+			plan: "P1 both → dod:1,2",
+		});
+		await writeFile(join(tasksDir, "covered.md"), doc("status: active", body));
+		expect(await run("doctor")).toContain("未发现任务台账问题");
+	});
+
 	it("doctor accepts wake without a checkin and reports invalid wake values", async () => {
 		await writeFile(join(tasksDir, "waiting.md"), doc(`status: awaiting-user\nwake: ${FUTURE}`, STANDARD_BODY));
 		expect(await run("doctor")).toContain("未发现任务台账问题");

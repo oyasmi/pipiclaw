@@ -14,9 +14,10 @@ import {
 	rewriteChannelMemory,
 } from "./files.js";
 import {
+	classifyMemoryWrite,
 	DEFAULT_MEMORY_AUTO_WRITE_CONFIDENCE,
+	MAX_PROBATION_WRITES_PER_RUN,
 	type MemoryPromotionCandidate,
-	shouldAutoWriteMemory,
 } from "./promotion.js";
 import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
 import { runSidecarTask } from "./sidecar-worker.js";
@@ -96,8 +97,15 @@ function usageContextFor(
 export interface InlineConsolidationResult {
 	skipped: boolean;
 	appendedMemoryEntries: number;
+	/**
+	 * Ops sent per tier (spec 037, D6), for review-log breakdown. Pre-application tallies — like
+	 * `rejectedMemoryOps`, these describe what the gate decided, not what ultimately landed after
+	 * dedup/tombstone checks inside `applyChannelMemoryOps`.
+	 */
+	appendedDurableEntries: number;
+	appendedProbationaryEntries: number;
 	appendedHistoryBlock: boolean;
-	/** Candidates the confidence gate turned down, surfaced for the review log. */
+	/** Candidates the confidence gate turned down (including probation over the per-run cap), surfaced for the review log. */
 	rejectedMemoryOps: MemoryPromotionCandidate[];
 }
 
@@ -214,7 +222,14 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 		(sourceEntries.length > 0 ? extractMessagesFromSessionEntries(sourceEntries) : options.messages);
 
 	if (!hasMeaningfulMessages(sanitizeMessagesForMemory(relevantMessages))) {
-		return { skipped: true, appendedMemoryEntries: 0, appendedHistoryBlock: false, rejectedMemoryOps: [] };
+		return {
+			skipped: true,
+			appendedMemoryEntries: 0,
+			appendedDurableEntries: 0,
+			appendedProbationaryEntries: 0,
+			appendedHistoryBlock: false,
+			rejectedMemoryOps: [],
+		};
 	}
 
 	const correlationId = options.sourceWindow?.windowId ?? options.usageCorrelationId;
@@ -237,21 +252,37 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 	// returned, which is how transient state reached durable memory: the strictest reviewer
 	// was gated behind a keyword scan while the ungated paths wrote freely. Rejected material
 	// is not lost — historyBlock and cold storage still carry it.
+	//
+	// Two tiers (spec 037, D6): durable is unlimited, exactly as before; probationary is capped
+	// per run so a single talkative window cannot flood MEMORY.md with unconfirmed entries.
+	// Overflow beyond the cap is rejected, not deferred — the next idle window gets its own
+	// extraction pass and its own cap.
 	const threshold = options.minAutoWriteConfidence ?? DEFAULT_MEMORY_AUTO_WRITE_CONFIDENCE;
-	const accepted: MemoryPromotionCandidate[] = [];
+	const durableCandidates: MemoryPromotionCandidate[] = [];
+	const probationaryCandidates: MemoryPromotionCandidate[] = [];
 	const rejectedMemoryOps: MemoryPromotionCandidate[] = [];
 	for (const candidate of response.memoryOps) {
-		(shouldAutoWriteMemory(candidate, threshold) ? accepted : rejectedMemoryOps).push(candidate);
+		const tier = classifyMemoryWrite(candidate, threshold);
+		if (tier === "durable") durableCandidates.push(candidate);
+		else if (tier === "probationary") probationaryCandidates.push(candidate);
+		else rejectedMemoryOps.push(candidate);
 	}
+	const acceptedProbationary = probationaryCandidates.slice(0, MAX_PROBATION_WRITES_PER_RUN);
+	rejectedMemoryOps.push(...probationaryCandidates.slice(MAX_PROBATION_WRITES_PER_RUN));
 
 	let appliedMemoryOps = 0;
-	if (accepted.length > 0 && !options.sourceWindow?.hasExternalToolContent) {
+	if (
+		(durableCandidates.length > 0 || acceptedProbationary.length > 0) &&
+		!options.sourceWindow?.hasExternalToolContent
+	) {
 		const sourceEntryIds = options.sourceWindow?.entries.map((entry) => entry.id) ?? [];
-		const applied = await applyChannelMemoryOps(
-			options.channelDir,
-			accepted.map((candidate) => toMemoryOp(candidate, { sourceEntryIds, correlationId })),
-			timestamp,
-		);
+		const ops = [
+			...durableCandidates.map((candidate) => toMemoryOp(candidate, { sourceEntryIds, correlationId }, "durable")),
+			...acceptedProbationary.map((candidate) =>
+				toMemoryOp(candidate, { sourceEntryIds, correlationId }, "probationary"),
+			),
+		];
+		const applied = await applyChannelMemoryOps(options.channelDir, ops, timestamp);
 		appliedMemoryOps = applied.added + applied.superseded + applied.invalidated + applied.downgradedToAdd;
 	}
 
@@ -265,6 +296,8 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 	return {
 		skipped: false,
 		appendedMemoryEntries: appliedMemoryOps,
+		appendedDurableEntries: durableCandidates.length,
+		appendedProbationaryEntries: acceptedProbationary.length,
 		appendedHistoryBlock: mode === "boundary" && response.historyBlock.trim().length > 0,
 		rejectedMemoryOps,
 	};
