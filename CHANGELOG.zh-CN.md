@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.8.11-beta.2] - 2026-08-01
+
 ### 新增
 
 - 任务正文新增可选的 `## Plan` 段（spec 037）：介于 Goal/DoD 契约与只增的 Current Cycle 日志之间的「手段层」。步骤有四态（`[ ]` 待办、`[x]` 完成、`[!]` 阻塞、`[~]` 放弃）与可选的 `→ dod:N` 引用；当前步骤由 runtime 从文档顺序推导（第一个待办或阻塞项），从不由模型自报。`task_manage create` 支持可选的 `plan`（一行一步）；`task_manage progress` 支持 `planSteps` 更新或追加步骤，改动会折进同一条 Current Cycle 记录。Plan 状态变化不会使已有的独立验收 PASS 或外部审批失效（契约段的终点现在是 Plan 与 Current Cycle 中先出现的那个），且被有意排除在任务驱动器的停滞指纹之外——勾一个复选框不能重置 futile 计数。唤醒胶囊与 `<task_agenda>` 现在显示计划进度和当前步骤；`/tasks doctor` 会检查没有步骤覆盖的 DoD 项，以及指向不存在 DoD 项的步骤引用。

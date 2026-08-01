@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.11-beta.2] - 2026-08-01
+
 ### Added
 
 - Tasks may now carry an optional `## Plan` section (spec 037): a means layer between the Goal/DoD contract and the append-only Current Cycle log. Steps have four states (`[ ]` todo, `[x]` done, `[!]` blocked, `[~]` dropped) and an optional `→ dod:N` reference; the current step is derived (first todo/blocked in document order), never self-reported. `task_manage create` takes an optional `plan` (one step per line); `task_manage progress` takes `planSteps` to update or append steps, folding the delta into the same Current Cycle note. Plan status changes never invalidate an independent verification PASS or external approval (the contract segment now ends at whichever of Plan/Current Cycle comes first), and are deliberately excluded from the task driver's stall fingerprint — ticking a checkbox cannot reset the futile-wake counter. The wake capsule and `<task_agenda>` now show plan progress and the current step; `/tasks doctor` flags DoD items no step covers and step refs to DoD items that do not exist.
