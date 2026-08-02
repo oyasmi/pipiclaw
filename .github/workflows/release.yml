@@ -14,19 +14,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-
       - name: Resolve tag
         id: tag
         run: |
@@ -36,17 +31,36 @@ jobs:
             echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Verify tag exists
-        run: git rev-parse "${{ steps.tag.outputs.value }}"
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.tag.outputs.value }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify tag matches package.json version
+        run: |
+          tag="${{ steps.tag.outputs.value }}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "v$pkg_version" ]; then
+            echo "::error::Tag $tag does not match package.json version v$pkg_version"
+            exit 1
+          fi
 
       - run: npm ci
       - run: npm run check
       - run: npm run build
       - run: npm pack
 
+      - name: Generate checksums
+        run: sha256sum *.tgz > checksums.txt
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ steps.tag.outputs.value }}" *.tgz \
+          gh release create "${{ steps.tag.outputs.value }}" *.tgz checksums.txt \
             --generate-notes
