@@ -4,1091 +4,306 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { handleTasksCommand } from "../src/runtime/task-commands.js";
+import { formatLocalTime } from "../src/shared/local-time.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { workspaceSubjectHash } from "../src/tasks/artifact-subject.js";
-import { createDefaultTaskControl, RETIRED_TASK_CONTROL_KEYS } from "../src/tasks/control.js";
-import { parseTaskFrontmatter } from "../src/tasks/ledger.js";
+import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { renderStandardTaskBody } from "../src/tasks/ledger.js";
+import { readStoredTask } from "../src/tasks/store.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
-import { taskManageSchema } from "../src/tools/task-manage/schema.js";
+import { parseAction } from "../src/tools/task-manage/schema.js";
 import { manageTask, type TaskManageRequest, type TaskManageToolOptions } from "../src/tools/task-manage.js";
 
 const CHANNEL_ID = "dm_1";
+const STANDARD_BODY = renderStandardTaskBody({
+	title: "Work",
+	goal: "Do the work.",
+	dod: "- [x] Result is ready",
+	manual: "Keep the task scoped.",
+});
 
-function taskDoc(front: string, body: string): string {
+function doc(front: string, body = STANDARD_BODY): string {
 	return `---\n${front}\n---\n\n${body}`;
 }
 
-describe("manageTask", () => {
+describe("task_manage v2", () => {
 	let workspaceDir: string;
 	let channelDir: string;
 	let tasksDir: string;
-	let eventsDir: string;
+	let subjectDir: string | undefined;
 	let options: TaskManageToolOptions;
 
 	beforeEach(async () => {
-		workspaceDir = await mkdtemp(join(tmpdir(), "task-manage-"));
+		workspaceDir = await mkdtemp(join(tmpdir(), "task-manage-v2-"));
 		channelDir = join(workspaceDir, CHANNEL_ID);
 		tasksDir = join(channelDir, "tasks");
-		eventsDir = join(workspaceDir, "events");
-		await mkdir(tasksDir, { recursive: true });
-		await mkdir(eventsDir, { recursive: true });
+		await mkdir(join(tasksDir, "archive"), { recursive: true });
 		options = { workspaceDir, channelDir, channelId: CHANNEL_ID };
 	});
 	afterEach(async () => {
 		await rm(workspaceDir, { recursive: true, force: true });
+		if (subjectDir) await rm(subjectDir, { recursive: true, force: true });
 	});
 
-	async function writeTask(id: string, front: string, body: string): Promise<void> {
-		await writeFile(join(tasksDir, `${id}.md`), taskDoc(front, body));
-	}
-	async function writeEvent(name: string, event: object): Promise<void> {
-		await writeFile(join(eventsDir, `${name}.json`), JSON.stringify(event));
+	async function writeTask(id: string, front: string, body = STANDARD_BODY): Promise<void> {
+		await writeFile(join(tasksDir, `${id}.md`), doc(front, body));
 	}
 
-	describe("create", () => {
-		it("creates a standard task skeleton", async () => {
-			const result = await manageTask(options, {
-				action: "create",
-				id: "weekly-report",
-				title: "Weekly Report",
-				goal: "Publish the weekly report after user confirmation.",
-				dod: "- [ ] Draft reviewed\n- [ ] Report published",
-				manual: "Collect inputs, draft, ask for confirmation, publish.",
-				status: "active",
-				wake: "2026-07-08T14:00:00+08:00",
-				recurrence: "每周一",
-			});
-			expect(result.status).toBe("active");
-			const onDisk = await readFile(join(tasksDir, "weekly-report.md"), "utf-8");
-			expect(onDisk).toContain("status: active");
-			expect(onDisk).toContain("wake: 2026-07-08T14:00:00.000+08:00");
-			expect(onDisk).toContain("recurrence: 每周一");
-			expect(onDisk).toContain("# Weekly Report");
-			expect(onDisk).toContain("## Goal");
-			expect(onDisk).toContain("## DoD");
-			expect(onDisk).toContain("## Manual");
-			expect(onDisk).toContain("## Current Cycle");
-			expect(onDisk).toContain("## History");
+	async function createOneShot(id = "work", control?: TaskManageRequest["control"]): Promise<void> {
+		await manageTask(options, {
+			action: "create",
+			id,
+			title: "Work",
+			goal: "Do the work.",
+			dod: "- [x] Result is ready",
+			control,
 		});
+	}
 
-		it("persists a valid schedule and rejects an unparseable or too-frequent one", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "cadenced",
-				title: "Cadenced",
-				goal: "Do it weekly",
-				dod: "- [ ] done",
-				schedule: "30 9 * * 1",
-			});
-			expect(await readFile(join(tasksDir, "cadenced.md"), "utf-8")).toContain("schedule: 30 9 * * 1");
-
-			await expect(
-				manageTask(options, {
-					action: "create",
-					id: "bad-cron",
-					title: "Bad",
-					goal: "x",
-					dod: "- [ ] done",
-					schedule: "not a cron",
-				}),
-			).rejects.toThrow(/schedule/);
-
-			await expect(
-				manageTask(options, {
-					action: "create",
-					id: "too-fast",
-					title: "Fast",
-					goal: "x",
-					dod: "- [ ] done",
-					schedule: "*/5 * * * *",
-				}),
-			).rejects.toThrow(/30 minutes/);
+	it("creates one-shot active work with a v2 control and no approval surface", async () => {
+		const result = await manageTask(options, {
+			action: "create",
+			id: "work",
+			title: "Work",
+			goal: "Do the work.",
+			dod: "- [ ] Result is ready",
+			control: { verificationRequired: false, priority: "high" },
 		});
-
-		// A recurring task created without an explicit wake must follow cron semantics: the first
-		// run is deferred to the next occurrence. Otherwise it is `open` + no wake → immediately
-		// actionable, so the driver resumes it at creation time instead of at the scheduled time.
-		it("seeds a recurring task's first wake with the next occurrence when no wake is given", async () => {
-			const result = await manageTask(options, {
-				action: "create",
-				id: "daily-review",
-				title: "Daily Review",
-				goal: "Review every morning.",
-				dod: "- [ ] reviewed",
-				schedule: "41 2 * * *",
-			});
-			const onDisk = await readFile(join(tasksDir, "daily-review.md"), "utf-8");
-			const wake = /wake: (.+)/.exec(onDisk)?.[1];
-			expect(wake).toBeDefined();
-			const expected = nextTaskWake("41 2 * * *");
-			expect(new Date(wake!).getTime()).toBe(expected?.getTime());
-			// Not actionable until the seeded wake, so the driver defers the first run.
-			expect(new Date(wake!).getTime()).toBeGreaterThan(Date.now());
-			expect(result.notice).toContain("首次唤醒");
-		});
-
-		// An explicit wake (including a past one for "start now") is honoured — normalized to the
-		// canonical local-time format, but the same absolute instant — instead of seeded from cron:
-		// the caller, not cron, decides the first run when they say so.
-		it("honours an explicit wake on a recurring task instead of seeding the next occurrence", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "start-now",
-				title: "Start Now",
-				goal: "Begin immediately, then recur.",
-				dod: "- [ ] done",
-				schedule: "41 2 * * *",
-				wake: "2000-01-01T00:00:00.000Z",
-			});
-			const onDisk = await readFile(join(tasksDir, "start-now.md"), "utf-8");
-			expect(onDisk).toContain("wake: 2000-01-01T08:00:00.000+08:00");
-		});
-
-		// Independent verification costs an extra dispatch round plus a verifier sub-agent run,
-		// which only pays off when there is a checkable artifact. Defaulting every new task to
-		// it taxes research/writing/reminder-style tasks that are the common case for a personal
-		// assistant; the model must opt in explicitly (spec 036, D5).
-		it("does not require independent verification by default", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "research",
-				title: "Research task",
-				goal: "Summarize a topic",
-				dod: "- [x] Summary written",
-			});
-			const onDisk = await readFile(join(tasksDir, "research.md"), "utf-8");
-			expect(onDisk).toContain('"required":false');
-			expect(onDisk).not.toContain("Independent verification: required");
-			// Closes on its own DoD; no verifier attestation needed.
-			await expect(
-				manageTask(options, {
-					action: "done",
-					id: "research",
-					summary: "Summary written and shared.",
-					evidence: "Summary text checked against the DoD.",
-				}),
-			).resolves.toMatchObject({ status: "done" });
-		});
-
-		it("rejects create without required body fields", async () => {
-			await expect(
-				manageTask(options, {
-					action: "create",
-					id: "thin",
-					title: "Thin task",
-					goal: "Do something",
-				}),
-			).rejects.toThrow(/requires dod/);
-		});
-
-		// Regression: DoD written as prose or a numbered list (no "- [ ]" anywhere) used
-		// to be accepted silently, defeating the candidate/done acceptance gate later.
-		it("rejects a DoD with no checkbox items", async () => {
-			await expect(
-				manageTask(options, {
-					action: "create",
-					id: "no-checkboxes",
-					title: "Prose DoD",
-					goal: "Do something",
-					dod: "1. Draft reviewed\n2. Report published",
-				}),
-			).rejects.toThrow(/no checklist items/);
-			expect(existsSync(join(tasksDir, "no-checkboxes.md"))).toBe(false);
-		});
-
-		it("rejects duplicate active task ids", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "dup",
-				title: "Duplicate",
-				goal: "Do it",
-				dod: "- [ ] Done",
-			});
-			await expect(
-				manageTask(options, {
-					action: "create",
-					id: "dup",
-					title: "Duplicate again",
-					goal: "Do it again",
-					dod: "- [ ] Done",
-				}),
-			).rejects.toThrow(/already exists/);
-		});
+		expect(result).toMatchObject({ action: "create", status: "active" });
+		const stored = await readFile(join(tasksDir, "work.md"), "utf-8");
+		expect(stored).toContain("status: active");
+		expect(stored).toContain('"version":2');
+		expect(stored).toMatch(/"provenance":\{"createdAt":"[^"]+"\}/);
+		expect(stored).not.toMatch(/sideEffects|externalApproval|approvalBy|approvedAt|approvalBodyHash/);
 	});
 
-	describe("set", () => {
-		it("rewrites only the frontmatter, preserving the body verbatim", async () => {
-			const body = "# 周报\n\n## 目标\n每周一\n\n## 当前周期\n- 草稿已发";
-			await writeTask("weekly", "status: open\nrecurrence: 每周一", body);
-			const result = await manageTask(options, {
-				action: "set",
-				id: "weekly",
-				status: "waiting",
-				wake: "2026-07-08T14:00:00+08:00",
-			});
-			expect(result.status).toBe("waiting");
-			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
-			expect(onDisk).toBe(taskDoc("status: waiting\nwake: 2026-07-08T14:00:00.000+08:00\nrecurrence: 每周一", body));
+	it("creates recurring work sleeping with its first occurrence and no dispatch", async () => {
+		const result = await manageTask(options, {
+			action: "create",
+			id: "weekly",
+			title: "Weekly",
+			goal: "Run weekly.",
+			dod: "- [ ] Result is ready",
+			schedule: "0 9 * * 1",
 		});
-
-		it("clears wake when given an empty string", async () => {
-			await writeTask("t", "status: blocked\nwake: 2026-07-08T14:00:00+08:00", "# T\nbody");
-			await manageTask(options, { action: "set", id: "t", wake: "" });
-			const onDisk = await readFile(join(tasksDir, "t.md"), "utf-8");
-			expect(onDisk).not.toContain("wake:");
-		});
-
-		it("rejects an invalid wake", async () => {
-			await writeTask("t", "status: open", "# T");
-			await expect(manageTask(options, { action: "set", id: "t", wake: "soon" })).rejects.toThrow(
-				/valid local time/,
-			);
-		});
-
-		it("rejects setting status to done (use action done)", async () => {
-			await writeTask("t", "status: open", "# T");
-			await expect(manageTask(options, { action: "set", id: "t", status: "done" })).rejects.toThrow(/done/);
-		});
-
-		it("invalidates a recorded verification when set leaves the verifying lane", async () => {
-			const control = createDefaultTaskControl(true);
-			control.verification = { required: true, status: "passed", runId: "r1", bodyHash: "abc" };
-			await writeTask("v", `status: verifying\ncontrol: ${JSON.stringify(control)}`, "# V\n\n## Current Cycle\n- x");
-			const result = await manageTask(options, { action: "set", id: "v", status: "active" });
-			expect(result.status).toBe("active");
-			const onDisk = await readFile(join(tasksDir, "v.md"), "utf-8");
-			expect(onDisk).toContain('"status":"pending"');
-			expect(onDisk).not.toContain('"status":"passed"');
-		});
-
-		it("fails closed on unreadable frontmatter", async () => {
-			await writeFile(join(tasksDir, "broken.md"), "no frontmatter");
-			await expect(manageTask(options, { action: "set", id: "broken", status: "open" })).rejects.toThrow(
-				/no readable frontmatter/,
-			);
-		});
-
-		it("fails closed on invalid control except for an explicit governed repair", async () => {
-			await writeTask("broken-control", "status: open\ncontrol: {bad", "# Broken\n\n## Current Cycle\n- x");
-			await expect(
-				manageTask(options, { action: "progress", id: "broken-control", note: "continue" }),
-			).rejects.toThrow(/invalid control metadata/);
-			await manageTask(options, {
-				action: "set",
-				id: "broken-control",
-				control: { priority: "high", verificationRequired: true },
-			});
-			const repaired = await readFile(join(tasksDir, "broken-control.md"), "utf-8");
-			expect(repaired).toContain('"priority":"high"');
-			expect(repaired).toContain('"required":true');
-		});
-
-		it("rejects a missing task", async () => {
-			await expect(manageTask(options, { action: "set", id: "ghost", status: "open" })).rejects.toThrow(
-				/does not exist/,
-			);
-		});
+		const stored = await readFile(join(tasksDir, "weekly.md"), "utf-8");
+		expect(result.status).toBe("sleeping");
+		expect(stored).toContain("status: sleeping");
+		expect(stored).toContain(`wake: ${formatLocalTime(nextTaskWake("0 9 * * 1")!)}`);
+		expect(stored).not.toContain('"cycleId"');
 	});
 
-	describe("progress", () => {
-		it("atomically appends a cycle note and updates status/wake", async () => {
-			await manageTask(options, {
+	it("rejects sleeping for a one-shot task and rejects retired action names", async () => {
+		await expect(
+			manageTask(options, {
 				action: "create",
-				id: "long-work",
-				title: "Long work",
-				goal: "Finish safely",
-				dod: "- [ ] Tests pass",
-			});
-			const result = await manageTask(options, {
-				action: "progress",
-				id: "long-work",
-				note: "Implemented parser; targeted tests pass; next: integration test.",
-				status: "active",
-				wake: "2026-07-08T14:00:00+08:00",
-			});
-			expect(result.status).toBe("active");
-			const onDisk = await readFile(join(tasksDir, "long-work.md"), "utf-8");
-			expect(onDisk).toContain("wake: 2026-07-08T14:00:00.000+08:00");
-			expect(onDisk).toContain("- Implemented parser; targeted tests pass; next: integration test.");
-		});
-
-		it("requires a note and a standard Current Cycle section", async () => {
-			await writeTask("thin", "status: open", "# Thin");
-			await expect(manageTask(options, { action: "progress", id: "thin" })).rejects.toThrow(/requires note/);
-			await expect(manageTask(options, { action: "progress", id: "thin", note: "Started." })).rejects.toThrow(
-				/normalize the task skeleton/,
-			);
-		});
+				id: "bad",
+				title: "Bad",
+				goal: "G",
+				dod: "- [ ] D",
+				status: "sleeping",
+			}),
+		).rejects.toThrow(/one-shot/);
+		expect(() => parseAction("approve")).toThrow(/Unsupported task action/);
 	});
 
-	describe("candidate", () => {
-		it("moves a checked task into the independent verification lane", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "candidate",
-				title: "Candidate",
-				goal: "Produce a reviewed result",
-				dod: "- [x] Result is ready",
-			});
-			const result = await manageTask(options, {
-				action: "candidate",
-				id: "candidate",
-				note: "All deterministic checks pass; request independent review.",
-			});
-			expect(result).toMatchObject({ action: "candidate", status: "verifying" });
-			const onDisk = await readFile(join(tasksDir, "candidate.md"), "utf-8");
-			expect(onDisk).toContain("status: verifying");
-			expect(onDisk).toContain('"nextAction":"Run a purpose=verify sub-agent and import its attestation."');
+	it("progresses active work and normalizes a future wake to waiting", async () => {
+		await createOneShot("progress");
+		const result = await manageTask(options, {
+			action: "progress",
+			id: "progress",
+			note: "Build complete; wait for the scheduled check.",
+			wake: "2026-08-05T09:00:00+08:00",
 		});
-
-		it("does not send unchecked work to the verifier", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "unchecked-candidate",
-				title: "Unchecked",
-				goal: "Produce a reviewed result",
-				dod: "- [ ] Result is ready",
-			});
-			await expect(
-				manageTask(options, {
-					action: "candidate",
-					id: "unchecked-candidate",
-					note: "Looks plausible.",
-				}),
-			).rejects.toThrow(/unchecked acceptance/);
-		});
-
-		// Defense in depth: a task hand-edited (write/edit) after creation to drop its
-		// checkboxes must still be blocked, not just tasks created through this tool.
-		it("still blocks a hand-edited DoD that lost its checkboxes", async () => {
-			await writeTask(
-				"hand-edited",
-				'status: open\ncontrol: {"version":1,"priority":"normal","lastOutcome":"pending","dependsOn":[],"isolation":"shared","sideEffects":"workspace","externalApproval":"not-required","budget":{"maxAttempts":12},"usage":{"attempts":0,"tokens":0,"costUsd":0,"wallTimeMinutes":0},"verification":{"mode":"independent","status":"pending"}}',
-				"# Hand Edited\n\n## Goal\nG\n\n## DoD\n1. Done\n\n## Manual\nM\n\n## Verification\nMode: independent\n\n## Current Cycle\n\n## History\n",
-			);
-			await expect(
-				manageTask(options, { action: "candidate", id: "hand-edited", note: "Looks done." }),
-			).rejects.toThrow(/no checklist items/);
-		});
+		expect(result.status).toBe("waiting");
+		const stored = await readStoredTask(channelDir, "progress");
+		expect(stored?.fields).toMatchObject({ status: "waiting", wake: "2026-08-05T09:00:00.000+08:00" });
+		expect(stored?.fields.control?.waitingFor).toBe("time");
 	});
 
-	describe("done", () => {
-		it("allows an externally scoped task explicitly marked not-required to close", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "automated-report",
-				title: "Automated report",
-				goal: "Publish a scheduled report without a per-run approval.",
-				dod: "- [x] Report published",
-				control: {
-					verificationRequired: false,
-					sideEffects: "external",
-					externalApproval: "not-required",
+	it("requests verification through a durable callback and parks on a verification signal", async () => {
+		await createOneShot("verify-me", { verificationRequired: true });
+		const dispatched: string[] = [];
+		const result = await manageTask(
+			{
+				...options,
+				dispatchVerification: async (id) => {
+					dispatched.push(id);
+					return true;
 				},
-			});
-			await manageTask(options, {
-				action: "set",
-				id: "automated-report",
-				wake: "2026-07-14T09:00:00+08:00",
-			});
-			expect(await readFile(join(tasksDir, "automated-report.md"), "utf-8")).toContain(
-				'"externalApproval":"not-required"',
-			);
-			await expect(
-				manageTask(options, {
-					action: "done",
-					id: "automated-report",
-					summary: "The report was published.",
-					evidence: "Scheduled publishing log confirms completion.",
-				}),
-			).resolves.toMatchObject({ status: "done", archived: true });
-		});
-
-		it("preserves an independent PASS while waiting for external approval via set", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "verified-publish",
-				title: "Verified publish",
-				goal: "Publish an independently checked result",
-				dod: "- [x] Draft is ready\n- [x] Publish action is prepared",
-				control: { sideEffects: "external" },
-			});
-			await manageTask(options, {
-				action: "candidate",
-				id: "verified-publish",
-				note: "Draft and publish plan are ready for independent review.",
-			});
-			await writeVerificationAttestation(channelDir, {
-				runId: "verify-publish",
-				taskId: "verified-publish",
-				verdict: "pass",
-				checkedAt: new Date().toISOString(),
-				evidence: "Draft and prepared action are correct.",
-				workspaceChanged: false,
-			});
-			await manageTask(options, {
-				action: "verify",
-				id: "verified-publish",
-				verifierRunId: "verify-publish",
-			});
-
-			// `set` that stays in the verifying lane changes only frontmatter, so it can schedule
-			// approval waiting without invalidating the PASS. A set that *leaves* `verifying` would
-			// invalidate it (D3); the PASS binds to the contract segment, so Current Cycle logging
-			// no longer breaks it (D4).
-			await manageTask(options, {
-				action: "set",
-				id: "verified-publish",
-				wake: "2026-07-12T14:00:00+08:00",
-			});
-			expect(
-				await handleTasksCommand({
-					args: "approve verified-publish",
-					channelDir,
-					workspaceDir,
-					channelId: CHANNEL_ID,
-					approver: "Alice",
-				}),
-			).toContain("已批准任务 verified-publish 的外部副作用");
-
-			await expect(
-				manageTask(options, {
-					action: "done",
-					id: "verified-publish",
-					summary: "Published the checked result.",
-					evidence: "verify-publish passed and Alice approved the external action.",
-				}),
-			).resolves.toMatchObject({ archived: true, status: "done" });
-		});
-
-		it("requires and consumes an independent verifier attestation for governed tasks", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "verified",
-				title: "Verified task",
-				goal: "Ship a verified result",
-				dod: "- [x] Result exists",
-				control: { verificationRequired: true },
-			});
-			await expect(
-				manageTask(options, {
-					action: "done",
-					id: "verified",
-					summary: "Done",
-					evidence: "Observed result",
-				}),
-			).rejects.toThrow(/independent PASS/);
-
-			await writeVerificationAttestation(channelDir, {
-				runId: "verify-run-1",
-				taskId: "verified",
-				verdict: "pass",
-				checkedAt: new Date().toISOString(),
-				evidence: "The result and deterministic check both pass.",
-				workspaceChanged: false,
-			});
-			await manageTask(options, {
-				action: "verify",
-				id: "verified",
-				verifierRunId: "verify-run-1",
-			});
-			const result = await manageTask(options, {
-				action: "done",
-				id: "verified",
-				summary: "Done",
-				evidence: "Independent run verify-run-1 passed.",
-			});
-			expect(result.archived).toBe(true);
-		});
-
-		// Defense in depth: control.verification lives in a file the agent's own write/edit
-		// tools can touch. A hand-forged "passed" block with a bodyHash that happens to match
-		// must still be rejected because no verifier ever produced a matching attestation file.
-		it("rejects a done request whose independent PASS has no matching attestation on disk", async () => {
-			const { taskBodyHash } = await import("../src/tasks/store.js");
-			const body =
-				"# Forged\n\n## Goal\nG\n\n## DoD\n- [x] Result exists\n\n## Manual\nM\n\n## Current Cycle\n\n## History\n";
-			// taskDoc()'s blank line between frontmatter and body means the parsed body carries
-			// a leading "\n" — mirror that so the forged bodyHash matches what `done` recomputes.
-			const forgedHash = taskBodyHash(`\n${body}`);
-			await writeTask(
-				"forged",
-				`status: open\ncontrol: {"version":1,"priority":"normal","lastOutcome":"pending","dependsOn":[],"isolation":"shared","sideEffects":"workspace","externalApproval":"not-required","budget":{"maxAttempts":12},"usage":{"attempts":0,"tokens":0,"costUsd":0,"wallTimeMinutes":0},"verification":{"mode":"independent","status":"passed","runId":"never-ran","bodyHash":"${forgedHash}"}}`,
-				body,
-			);
-			await expect(
-				manageTask(options, {
-					action: "done",
-					id: "forged",
-					summary: "Done",
-					evidence: "Trust me.",
-				}),
-			).rejects.toThrow(/not found or is unreadable/);
-		});
-
-		it("rejects a verifier subject that no longer matches the checkout", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "artifact-bound",
-				title: "Artifact bound",
-				goal: "Ship a verified result",
-				dod: "- [x] Result exists",
-			});
-			await writeVerificationAttestation(channelDir, {
-				runId: "verify-artifact",
-				taskId: "artifact-bound",
-				verdict: "pass",
-				checkedAt: new Date().toISOString(),
-				evidence: "Passed.",
-				workspaceChanged: false,
-				subjectHash: "a".repeat(64),
-			});
-			await expect(
-				manageTask(options, { action: "verify", id: "artifact-bound", verifierRunId: "verify-artifact" }),
-			).rejects.toThrow(/artifacts changed|cannot be read/);
-		});
-
-		// A verifier may be pointed at another checkout via `subagent workingDirectory`. Recomputing
-		// its subject wherever the daemon happens to be running would compare a PASS against an
-		// unrelated repository — the failure mode is a task that verifies clean while the code it
-		// was supposed to check is untouched.
-		it("recomputes the artifact subject in the checkout the verifier inspected", async () => {
-			const checkout = await mkdtemp(join(tmpdir(), "verified-checkout-"));
-			const git = (...args: string[]) => execFileSync("git", ["-C", checkout, ...args], { stdio: "pipe" });
-			try {
-				git("init", "-q");
-				git("config", "user.email", "test@example.com");
-				git("config", "user.name", "Test");
-				await writeFile(join(checkout, "a.txt"), "one\n");
-				git("add", "a.txt");
-				git("commit", "-q", "-m", "init");
-
-				await manageTask(options, {
-					action: "create",
-					id: "elsewhere",
-					title: "Elsewhere",
-					goal: "Ship a verified result",
-					dod: "- [x] Result exists",
-				});
-				await writeVerificationAttestation(channelDir, {
-					runId: "verify-elsewhere",
-					taskId: "elsewhere",
-					verdict: "pass",
-					checkedAt: new Date().toISOString(),
-					evidence: "Passed.",
-					workspaceChanged: false,
-					subjectHash: await workspaceSubjectHash(checkout),
-					subjectDir: checkout,
-				});
-
-				// The daemon's own cwd is a different repository entirely; the attestation still verifies.
-				await expect(
-					manageTask(options, { action: "verify", id: "elsewhere", verifierRunId: "verify-elsewhere" }),
-				).resolves.toMatchObject({ action: "verify" });
-				await expect(
-					manageTask(options, { action: "done", id: "elsewhere", summary: "Done", evidence: "Verified" }),
-				).resolves.toMatchObject({ status: "done" });
-			} finally {
-				await rm(checkout, { recursive: true, force: true });
-			}
-		});
-
-		// Spec 036 D4: the parent/dependsOn graph is gone, and with it the four cycle detectors
-		// and the child gate on done. Ordering now lives in the task body, so a task closes on
-		// its own DoD alone.
-		it("closes a task on its own DoD without consulting other tasks", async () => {
-			for (const id of ["alpha", "beta"]) {
-				await manageTask(options, {
-					action: "create",
-					id,
-					title: id,
-					goal: `Finish ${id}`,
-					dod: "- [x] complete",
-					control: { verificationRequired: false },
-				});
-			}
-			await expect(
-				manageTask(options, { action: "done", id: "alpha", summary: "Done", evidence: "Checked" }),
-			).resolves.toMatchObject({ status: "done" });
-		});
-
-		it("does not let the agent self-grant external approval", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "publish",
-				title: "Publish",
-				goal: "Publish externally",
-				dod: "- [ ] published",
-				control: { verificationRequired: false, sideEffects: "external" },
-			});
-			await expect(
-				// The schema does not offer "granted" at all; the cast simulates a caller that
-				// bypasses it, which is exactly what the runtime guard has to catch.
-				manageTask(options, {
-					action: "set",
-					id: "publish",
-					control: { externalApproval: "granted" } as unknown as TaskManageRequest["control"],
-				}),
-			).rejects.toThrow(/\/tasks approve/);
-		});
-
-		it("rejects unchecked structured acceptance items", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "unchecked",
-				title: "Unchecked",
-				goal: "Finish all checks",
-				dod: "- [x] implementation exists\n- [ ] integration test passes",
-				control: { verificationRequired: false },
-			});
-			await expect(
-				manageTask(options, {
-					action: "done",
-					id: "unchecked",
-					summary: "Done",
-					evidence: "Implementation checked",
-				}),
-			).rejects.toThrow(/integration test passes/);
-		});
-
-		it("archives a one-shot task and deletes its residual one-shot events", async () => {
-			await writeTask("fix-bug", "status: in-progress", "# Fix bug");
-			await writeEvent("task.dm_1.fix-bug.checkin", {
-				type: "one-shot",
-				channelId: CHANNEL_ID,
-				text: "推进任务 fix-bug",
-				at: "2026-07-09T10:00:00+08:00",
-			});
-			await writeEvent("task.dm_1.fix-bug.sensor", {
-				type: "periodic",
-				channelId: CHANNEL_ID,
-				text: "推进任务 fix-bug（外部工作已就绪）",
-				schedule: "*/10 * * * *",
-				timezone: "Asia/Shanghai",
-				preAction: { type: "bash", command: "external-agent status helper" },
-			});
-			const result = await manageTask(options, {
-				action: "done",
-				id: "fix-bug",
-				summary: "Fixed the login crash.",
-				evidence: "npm test -- login passed.",
-			});
-			expect(result.archived).toBe(true);
-			expect(result.deletedEvents).toEqual(["task.dm_1.fix-bug.checkin", "task.dm_1.fix-bug.sensor"]);
-			expect(existsSync(join(tasksDir, "fix-bug.md"))).toBe(false);
-			expect(existsSync(join(tasksDir, "archive", "fix-bug.md"))).toBe(true);
-			expect(existsSync(join(eventsDir, "task.dm_1.fix-bug.checkin.json"))).toBe(false);
-			expect(existsSync(join(eventsDir, "task.dm_1.fix-bug.sensor.json"))).toBe(false);
-			const archived = await readFile(join(tasksDir, "archive", "fix-bug.md"), "utf-8");
-			expect(archived).toContain("## Completion Evidence");
-			expect(archived).toContain("- Summary: Fixed the login crash.");
-			expect(archived).toContain("- Evidence: npm test -- login passed.");
-		});
-
-		// D6: recurrence lives only in `schedule` frontmatter; close-out deletes every task-owned
-		// event (including a stray `.schedule`), since the driver reopens cycles from frontmatter.
-		it("keeps a frontmatter-recurring task in place and deletes all its task-owned events", async () => {
-			await writeTask("weekly", "status: in-progress\nschedule: 0 9 * * 1\nrecurrence: 每周一", "# Weekly");
-			await writeEvent("task.dm_1.weekly.schedule", {
-				type: "periodic",
-				channelId: CHANNEL_ID,
-				text: "推进任务 weekly",
-				schedule: "0 9 * * 1",
-				timezone: "Asia/Shanghai",
-			});
-			await writeEvent("task.dm_1.weekly.checkin", {
-				type: "one-shot",
-				channelId: CHANNEL_ID,
-				text: "回访",
-				at: "2026-07-09T10:00:00+08:00",
-			});
-			await writeEvent("task.dm_1.weekly.sensor", {
-				type: "periodic",
-				channelId: CHANNEL_ID,
-				text: "回访委派",
-				schedule: "*/10 * * * *",
-				timezone: "Asia/Shanghai",
-				preAction: { type: "bash", command: "external-agent status helper" },
-			});
-			const result = await manageTask(options, {
-				action: "done",
-				id: "weekly",
-				summary: "Published this week's report.",
-				evidence: "User confirmed the report was posted.",
-				residualRisk: "Next week still needs data source X checked.",
-			});
-			expect(result.archived).toBe(false);
-			expect(existsSync(join(tasksDir, "weekly.md"))).toBe(true);
-			// Every task-owned event is cleaned up; the cadence lives on in frontmatter only.
-			expect(existsSync(join(eventsDir, "task.dm_1.weekly.schedule.json"))).toBe(false);
-			expect(existsSync(join(eventsDir, "task.dm_1.weekly.checkin.json"))).toBe(false);
-			expect(existsSync(join(eventsDir, "task.dm_1.weekly.sensor.json"))).toBe(false);
-			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
-			expect(onDisk).toContain("status: done");
-			expect(onDisk).toContain("schedule: 0 9 * * 1");
-			expect(onDisk).toContain("- Summary: Published this week's report.");
-			expect(onDisk).toContain("- Evidence: User confirmed the report was posted.");
-			expect(onDisk).toContain("- Residual risk: Next week still needs data source X checked.");
-		});
-
-		it("requires close-out summary and evidence", async () => {
-			await writeTask("t", "status: in-progress", "# T");
-			await expect(manageTask(options, { action: "done", id: "t", summary: "Done" })).rejects.toThrow(
-				/requires evidence/,
-			);
-		});
-
-		it("keeps a native recurring task in place and computes its next wake on done", async () => {
-			await writeTask(
-				"weekly",
-				"status: in-progress\nschedule: 30 9 * * 1",
-				"# Weekly\n\n## DoD\n- [x] published\n",
-			);
-			const result = await manageTask(options, {
-				action: "done",
-				id: "weekly",
-				summary: "Published this week.",
-				evidence: "User confirmed.",
-			});
-			expect(result.archived).toBe(false);
-			expect(existsSync(join(tasksDir, "weekly.md"))).toBe(true);
-			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
-			expect(onDisk).toContain("status: done");
-			expect(onDisk).toContain("schedule: 30 9 * * 1");
-			// wake is the next Monday 09:30 occurrence (host timezone).
-			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
-		});
-
-		// Spec 036 D5: `done` records Summary/Evidence in the body but no longer stamps
-		// `verification.status = "passed"` for an unverified task. That stamp was the maker
-		// grading its own work, and it made a self-report indistinguishable from a verdict.
-		it("records completion evidence in Current Cycle without self-certifying a PASS", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "evidence-pass",
-				title: "Evidence pass",
-				goal: "Produce a checked result",
-				dod: "- [x] result checked",
-				schedule: "30 9 * * 1",
-				control: { verificationRequired: false },
-			});
-			await manageTask(options, {
-				action: "done",
-				id: "evidence-pass",
-				summary: "Result produced.",
-				evidence: "Deterministic check passed.",
-			});
-			const onDisk = await readFile(join(tasksDir, "evidence-pass.md"), "utf-8");
-			const control = parseTaskFrontmatter(onDisk).control;
-			// The verdict is recorded in `control.verification`; `lastOutcome` is runtime-owned
-			// telemetry about the last agent run and is not touched by a task_manage action.
-			expect(control?.lastOutcome).toBe("pending");
-			// The evidence lives in the body, and verification stays untouched at pending.
-			expect(control?.verification).toMatchObject({ required: false, status: "pending" });
-			expect(onDisk).toContain("Deterministic check passed.");
-			expect(onDisk.match(/^### Completion Evidence$/gm)).toHaveLength(1);
-			expect(onDisk).not.toMatch(/^## Completion Evidence$/m);
-		});
+			},
+			{ action: "request-verification", id: "verify-me", note: "All acceptance checks are complete." },
+		);
+		expect(result).toMatchObject({ action: "request-verification", status: "waiting" });
+		expect(dispatched).toEqual(["verify-me"]);
+		const stored = await readStoredTask(channelDir, "verify-me");
+		expect(stored?.fields).toMatchObject({ status: "waiting", wake: undefined });
+		expect(stored?.fields.control).toMatchObject({ waitingFor: "verification", verification: { status: "pending" } });
 	});
 
-	describe("skip", () => {
-		it("closes one recurring occurrence without checking DoD or writing completion evidence", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "dedup",
-				title: "Deduplicated run",
-				goal: "Produce one report per day",
-				dod: "- [ ] report produced",
-				schedule: "30 9 * * *",
-			});
-			const result = await manageTask(options, {
-				action: "skip",
-				id: "dedup",
-				reason: "The manual run already produced today's report.",
-			});
-			expect(result).toMatchObject({ action: "skip", status: "done", archived: false });
-			const onDisk = await readFile(join(tasksDir, "dedup.md"), "utf-8");
-			expect(onDisk).toContain("status: done");
-			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
-			expect(onDisk).toContain("Skipped: The manual run already produced today's report.");
-			expect(onDisk).not.toContain("Completion Evidence");
-			expect(parseTaskFrontmatter(onDisk).control?.lastOutcome).toBe("pending");
-		});
-
-		it("rejects skip for a one-shot task with an actionable next step", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "one-shot",
-				title: "One shot",
-				goal: "Finish once",
-				dod: "- [ ] done",
-			});
-			await expect(manageTask(options, { action: "skip", id: "one-shot", reason: "not today" })).rejects.toThrow(
-				/use action "cancel".*"done"/,
-			);
-		});
+	it("rolls verification back to active when the checker cannot be enqueued", async () => {
+		await createOneShot("retry-verification", { verificationRequired: true });
+		await expect(
+			manageTask(
+				{ ...options, dispatchVerification: async () => false },
+				{ action: "request-verification", id: "retry-verification", note: "Request review." },
+			),
+		).rejects.toThrow(/restored to active/);
+		const stored = await readStoredTask(channelDir, "retry-verification");
+		expect(stored?.fields.status).toBe("active");
+		expect(stored?.fields.control?.waitingFor).toBeUndefined();
 	});
 
-	describe("contract-bound hash (D4)", () => {
-		async function passIndependent(id: string): Promise<void> {
-			await manageTask(options, {
-				action: "create",
-				id,
-				title: id,
-				goal: "Ship a checked result",
-				dod: "- [x] Result exists",
-				control: { verificationRequired: true },
-			});
-			await writeVerificationAttestation(channelDir, {
-				runId: `${id}-run`,
-				taskId: id,
-				verdict: "pass",
-				checkedAt: new Date().toISOString(),
-				evidence: "Deterministic check passed.",
-				workspaceChanged: false,
-			});
-			await manageTask(options, { action: "verify", id, verifierRunId: `${id}-run` });
-		}
-
-		it("keeps an independent PASS alive across a Current Cycle progress note", async () => {
-			await passIndependent("logged");
-			await manageTask(options, { action: "progress", id: "logged", note: "Recorded a routine checkpoint." });
-			await expect(
-				manageTask(options, { action: "done", id: "logged", summary: "Done", evidence: "Run logged-run passed." }),
-			).resolves.toMatchObject({ status: "done" });
+	it("imports a real verifier attestation and then completes without approval", async () => {
+		await createOneShot("verified", { verificationRequired: true });
+		const withVerifier = { ...options, dispatchVerification: async () => true };
+		await manageTask(withVerifier, {
+			action: "request-verification",
+			id: "verified",
+			note: "Ready for independent verification.",
 		});
-
-		it("invalidates the PASS when the contract (a DoD checkbox) changes", async () => {
-			await passIndependent("edited");
-			const path = join(tasksDir, "edited.md");
-			// A contract edit via write/edit: uncheck the DoD item. done must now reject the stale PASS.
-			const mutated = (await readFile(path, "utf-8")).replace("- [x] Result exists", "- [ ] Result exists");
-			await writeFile(path, mutated);
-			await expect(
-				manageTask(options, { action: "done", id: "edited", summary: "Done", evidence: "x" }),
-			).rejects.toThrow(/unchecked acceptance items|changed after its independent PASS/);
+		const attestation = await writeVerificationAttestation(channelDir, {
+			runId: "run-1",
+			taskId: "verified",
+			verdict: "pass",
+			checkedAt: "2026-08-04T12:00:00+08:00",
+			evidence: "The checked result exists and the test command passed.",
+			workspaceChanged: false,
 		});
+		const verified = await manageTask(withVerifier, {
+			action: "verify",
+			id: "verified",
+			verifierRunId: attestation.runId,
+		});
+		expect(verified.status).toBe("active");
+		const completed = await manageTask(options, {
+			action: "complete",
+			id: "verified",
+			summary: "Result is complete.",
+			evidence: "Independent verifier run-1 passed.",
+		});
+		expect(completed).toMatchObject({ action: "complete", archived: true });
+		const archive = join(tasksDir, "archive", "verified.md");
+		expect(existsSync(archive)).toBe(true);
+		const archived = await readFile(archive, "utf-8");
+		expect(archived).toContain("outcome: completed");
+		expect(archived).not.toContain("status:");
 	});
 
-	describe("plan (spec 037, D1/D3)", () => {
-		it("create renders initial Plan steps with auto-assigned ids", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "planned",
-				title: "Planned",
-				goal: "Ship the migration",
-				dod: "- [ ] Migration complete",
-				plan: "align schema\nP2 migrate reader",
-			});
-			const onDisk = await readFile(join(tasksDir, "planned.md"), "utf-8");
-			expect(onDisk).toContain("## Plan\n- [ ] P1 align schema\n- [ ] P2 migrate reader");
+	it("anchors completion subject freshness to the durable attestation", async () => {
+		subjectDir = await mkdtemp(join(tmpdir(), "task-manage-subject-"));
+		execFileSync("git", ["-C", subjectDir, "init", "-q"], { stdio: "pipe" });
+		execFileSync("git", ["-C", subjectDir, "config", "user.email", "test@example.com"], { stdio: "pipe" });
+		execFileSync("git", ["-C", subjectDir, "config", "user.name", "Test"], { stdio: "pipe" });
+		await writeFile(join(subjectDir, "artifact.txt"), "before\n");
+		execFileSync("git", ["-C", subjectDir, "add", "artifact.txt"], { stdio: "pipe" });
+		execFileSync("git", ["-C", subjectDir, "commit", "-q", "-m", "init"], { stdio: "pipe" });
+
+		await createOneShot("subject-drift", { verificationRequired: true });
+		const withVerifier = {
+			...options,
+			workingDirectory: subjectDir,
+			dispatchVerification: async () => true,
+		};
+		await manageTask(withVerifier, {
+			action: "request-verification",
+			id: "subject-drift",
+			note: "Ready for independent verification.",
+		});
+		const subjectHash = await workspaceSubjectHash(subjectDir);
+		expect(subjectHash).toBeDefined();
+		const attestation = await writeVerificationAttestation(channelDir, {
+			runId: "subject-run",
+			taskId: "subject-drift",
+			verdict: "pass",
+			checkedAt: "2026-08-04T12:00:00+08:00",
+			evidence: "The checked result exists.",
+			workspaceChanged: false,
+			subjectHash,
+			subjectDir,
+		});
+		await manageTask(withVerifier, {
+			action: "verify",
+			id: "subject-drift",
+			verifierRunId: attestation.runId,
 		});
 
-		it("progress updates plan step status via planSteps and folds a delta into the note", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "steps",
-				title: "Steps",
-				goal: "G",
-				dod: "- [ ] D",
-				plan: "step one\nstep two",
-			});
-			await manageTask(options, {
-				action: "progress",
-				id: "steps",
-				note: "Finished the first step.",
-				planSteps: [{ id: "P1", status: "done" }],
-			});
-			const onDisk = await readFile(join(tasksDir, "steps.md"), "utf-8");
-			expect(onDisk).toContain("- [x] P1 step one");
-			expect(onDisk).toContain("- Finished the first step. plan: P1→done");
-		});
+		await writeFile(join(subjectDir, "artifact.txt"), "after\n");
+		const taskPath = join(tasksDir, "subject-drift.md");
+		const stored = await readFile(taskPath, "utf-8");
+		const controlLine = stored.match(/^control: (.+)$/m);
+		expect(controlLine?.[1]).toBeDefined();
+		const control = JSON.parse(controlLine?.[1] ?? "{}") as {
+			verification?: { subjectHash?: string };
+		};
+		delete control.verification?.subjectHash;
+		await writeFile(taskPath, stored.replace(/^control: .+$/m, `control: ${JSON.stringify(control)}`));
 
-		it("progress appends a new plan step by id when it does not exist yet", async () => {
-			await writeTask(
-				"grows",
-				"status: active",
-				"# Grows\n\n## Goal\nG\n\n## DoD\n- [ ] D\n\n## Current Cycle\n\n## History\n",
-			);
-			await manageTask(options, {
-				action: "progress",
-				id: "grows",
-				note: "Realized we need a rollback step.",
-				planSteps: [{ id: "P1", text: "add rollback plan" }],
-			});
-			const onDisk = await readFile(join(tasksDir, "grows.md"), "utf-8");
-			expect(onDisk).toContain("## Plan\n- [ ] P1 add rollback plan");
-		});
-
-		// The single most load-bearing invariant in spec 037: adding a Plan (via create's `plan`,
-		// or via progress's planSteps) must never invalidate an already-recorded independent PASS.
-		it("does not invalidate an independent PASS when planSteps changes plan status", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "verified-with-plan",
-				title: "Verified with plan",
-				goal: "Ship a checked result",
-				dod: "- [x] Result exists",
-				plan: "do the work",
-				control: { verificationRequired: true },
-			});
-			await writeVerificationAttestation(channelDir, {
-				runId: "verified-with-plan-run",
-				taskId: "verified-with-plan",
-				verdict: "pass",
-				checkedAt: new Date().toISOString(),
-				evidence: "Deterministic check passed.",
-				workspaceChanged: false,
-			});
-			await manageTask(options, {
-				action: "verify",
-				id: "verified-with-plan",
-				verifierRunId: "verified-with-plan-run",
-			});
-
-			await manageTask(options, {
-				action: "progress",
-				id: "verified-with-plan",
-				note: "Marked the only plan step done.",
-				planSteps: [{ id: "P1", status: "done" }],
-			});
-
-			await expect(
-				manageTask(options, {
-					action: "done",
-					id: "verified-with-plan",
-					summary: "Done",
-					evidence: "Run verified-with-plan-run passed.",
-				}),
-			).resolves.toMatchObject({ status: "done" });
-		});
-
-		it("rejects progress planSteps that add a new id without text", async () => {
-			await manageTask(options, {
-				action: "create",
-				id: "bad-step",
-				title: "Bad step",
-				goal: "G",
-				dod: "- [ ] D",
-			});
-			await expect(
-				manageTask(options, {
-					action: "progress",
-					id: "bad-step",
-					note: "note",
-					planSteps: [{ id: "P9" }],
-				}),
-			).rejects.toThrow(/does not exist yet/);
-		});
+		await expect(
+			manageTask(withVerifier, {
+				action: "complete",
+				id: "subject-drift",
+				summary: "Result is complete.",
+				evidence: "Independent verifier passed before the subject drifted.",
+			}),
+		).rejects.toThrow(/artifacts changed/);
+		expect(existsSync(taskPath)).toBe(true);
 	});
 
-	describe("recurring wake (single time rule)", () => {
-		// Cycle reopening is now a deterministic runtime step (D2, openRecurringTaskCycle); the
-		// `start-cycle` action no longer exists. The write-path invariant that a done recurring
-		// task always carries the next-occurrence wake is exercised here.
-		it("recomputes wake when set changes the schedule of a done task", async () => {
-			await writeTask("weekly", "status: done\nschedule: 30 9 * * 1\nwake: 2026-07-13T09:30:00+08:00", "# Weekly");
-			await manageTask(options, { action: "set", id: "weekly", schedule: "0 18 * * 5" });
-			const onDisk = await readFile(join(tasksDir, "weekly.md"), "utf-8");
-			expect(onDisk).toContain("schedule: 0 18 * * 5");
-			// wake was recomputed off the new cadence, no longer the old Monday value.
-			expect(onDisk).not.toContain("wake: 2026-07-13T09:30:00+08:00");
-			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
+	it("completes one-shot work directly into the archive", async () => {
+		await createOneShot("done");
+		const result = await manageTask(options, {
+			action: "complete",
+			id: "done",
+			summary: "Finished.",
+			evidence: "The checked DoD item is present.",
 		});
-
-		it("cancels and archives a sleeping recurring task directly", async () => {
-			await writeTask(
-				"retired-weekly",
-				"status: done\nschedule: 30 9 * * 1\nwake: 2026-08-03T09:30:00+08:00",
-				"# Retired weekly",
-			);
-			const result = await manageTask(options, {
-				action: "cancel",
-				id: "retired-weekly",
-				reason: "The recurring workflow was retired.",
-			});
-			expect(result).toMatchObject({ status: "cancelled", archived: true });
-			expect(existsSync(join(tasksDir, "retired-weekly.md"))).toBe(false);
-			expect(await readFile(join(tasksDir, "archive", "retired-weekly.md"), "utf-8")).toContain("status: cancelled");
-		});
-
-		// Regression: production incident where a task's cron was changed (10:30 → 7:30) while
-		// the task was `active` (not `done`), so the single time rule (which only fires on done)
-		// never recomputed wake — the old wake stayed on disk, pointed at an occurrence the new
-		// cron doesn't have, and the driver missed the whole cycle. Changing schedule must
-		// recompute wake to the new cadence's next occurrence whenever the same call doesn't
-		// also set wake explicitly, regardless of the task's current status.
-		it("recomputes wake when set changes the schedule of an active (not done) task", async () => {
-			await writeTask("weekly-report", "status: active\nschedule: 30 10 * * 1", "# Weekly Report");
-			await manageTask(options, { action: "set", id: "weekly-report", schedule: "30 7 * * 1" });
-			const onDisk = await readFile(join(tasksDir, "weekly-report.md"), "utf-8");
-			expect(onDisk).toContain("schedule: 30 7 * * 1");
-			const wakeLine = /wake: (\S+)/.exec(onDisk)?.[1];
-			expect(wakeLine).toBeDefined();
-			const expected = nextTaskWake("30 7 * * 1");
-			// The recomputed wake must be an actual occurrence of the new cron, not a stale or
-			// hand-typed value pointing at some other day.
-			expect(new Date(wakeLine!).getTime()).toBe(expected?.getTime());
-		});
-
-		// A parked task (waiting, no wake) must stay parked: changing its schedule is not a
-		// license to hand it a wake it never had.
-		it("leaves a parked task parked when its schedule changes", async () => {
-			await writeTask("weekly-report", "status: waiting\nschedule: 30 10 * * 1", "# Weekly Report");
-			await manageTask(options, { action: "set", id: "weekly-report", schedule: "30 7 * * 1" });
-			const onDisk = await readFile(join(tasksDir, "weekly-report.md"), "utf-8");
-			expect(onDisk).toContain("schedule: 30 7 * * 1");
-			expect(onDisk).not.toContain("wake:");
-		});
-
-		// An explicit wake in the same call still wins over the recompute.
-		it("honours an explicit wake given alongside a schedule change", async () => {
-			await writeTask("weekly-report", "status: active\nschedule: 30 10 * * 1", "# Weekly Report");
-			await manageTask(options, {
-				action: "set",
-				id: "weekly-report",
-				schedule: "30 7 * * 1",
-				wake: "+2h",
-			});
-			const onDisk = await readFile(join(tasksDir, "weekly-report.md"), "utf-8");
-			expect(onDisk).toMatch(/wake: \d{4}-\d\d-\d\dT/);
-			expect(onDisk).not.toMatch(/wake: \d{4}-\d\d-\d\dT07:30/);
-		});
+		expect(result).toMatchObject({ archived: true, status: undefined });
+		expect(existsSync(join(tasksDir, "done.md"))).toBe(false);
+		expect(await readFile(join(tasksDir, "archive", "done.md"), "utf-8")).toContain("outcome: completed");
 	});
 
-	describe("list", () => {
-		it("returns structured active tasks", async () => {
-			await writeTask("a", "status: in-progress", "# Task A");
-			await writeTask("b", "status: done", "# Task B");
-			const result = await manageTask(options, { action: "list" });
-			expect(result.tasks).toEqual([
-				{ id: "a", title: "Task A", status: "active", wake: undefined, actionable: true, control: undefined },
-				{ id: "b", title: "Task B", status: "done", wake: undefined, actionable: false, control: undefined },
-			]);
+	it("closes recurring complete and skip as sleeping, not as live terminal states", async () => {
+		await writeTask("complete-cycle", "status: active\nschedule: 0 9 * * 1");
+		const completed = await manageTask(options, {
+			action: "complete",
+			id: "complete-cycle",
+			summary: "Cycle complete.",
+			evidence: "All checks passed.",
 		});
+		expect(completed).toMatchObject({ status: "sleeping", archived: false });
+		const completedStored = await readStoredTask(channelDir, "complete-cycle");
+		expect(completedStored?.fields.status).toBe("sleeping");
+		expect(completedStored?.fields.wake).toBeDefined();
+
+		await writeTask(
+			"skip-cycle",
+			`status: active\nschedule: 0 9 * * 1\ncontrol: ${JSON.stringify(createDefaultTaskControl())}`,
+		);
+		const skipped = await manageTask(options, {
+			action: "skip",
+			id: "skip-cycle",
+			reason: "The source report was not produced.",
+		});
+		expect(skipped).toMatchObject({ status: "sleeping", archived: false });
+		const skippedStored = await readStoredTask(channelDir, "skip-cycle");
+		expect(skippedStored?.fields.status).toBe("sleeping");
+		expect(skippedStored?.fields.control?.verification.status).toBe("pending");
 	});
-});
 
-// The schema is the only description of this tool the model ever sees, and it had drifted in
-// both directions: it advertised three fields the runtime drops on write (so the model expressed
-// intent that silently vanished), while `verificationRequired` — the one switch that turns on
-// independent acceptance — was read by the implementation and absent from the schema, so no model
-// could ask for it. `TaskManageRequest` is now derived from this schema, which keeps the two in
-// step; this test guards the schema's own content.
-describe("task_manage schema", () => {
-	const advertised = Object.keys(
-		(taskManageSchema.properties.control as unknown as { properties: Record<string, unknown> }).properties,
-	);
-
-	it("does not advertise control fields the runtime discards", () => {
-		for (const retired of RETIRED_TASK_CONTROL_KEYS) {
-			expect(advertised).not.toContain(retired.split(".")[0]);
-		}
-		expect(advertised).not.toContain("verificationMode");
+	it("cancels a sleeping recurring task into a cancelled archive", async () => {
+		await writeTask("cancel-cycle", "status: sleeping\nschedule: 0 9 * * 1\nwake: 2026-08-10T09:00:00+08:00");
+		const result = await manageTask(options, { action: "cancel", id: "cancel-cycle", reason: "No longer needed." });
+		expect(result).toMatchObject({ archived: true });
+		expect(await readFile(join(tasksDir, "archive", "cancel-cycle.md"), "utf-8")).toContain("outcome: cancelled");
 	});
 
-	it("exposes the switch that requires independent verification", () => {
-		expect(advertised).toContain("verificationRequired");
+	it("keeps task ids and document sections strict", async () => {
+		await expect(
+			manageTask(options, { action: "create", id: "bad/id", title: "Bad", goal: "G", dod: "- [ ] D" }),
+		).rejects.toThrow(/Invalid task id/);
+		await expect(
+			manageTask(options, { action: "create", id: "no-dod", title: "No DoD", goal: "G", dod: "prose" }),
+		).rejects.toThrow(/no checklist items/);
 	});
 });

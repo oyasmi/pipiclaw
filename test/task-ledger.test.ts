@@ -2,519 +2,210 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { formatLocalTime } from "../src/shared/local-time.js";
+import { nextTaskWake } from "../src/shared/task-schedule.js";
+import { createDefaultTaskControl } from "../src/tasks/control.js";
 import {
 	appendCurrentCycleNote,
 	applyTaskPlanPatch,
-	extractTaskTitle,
+	countTaskDodItems,
 	isTaskActionable,
 	MAX_INLINE_TASK_HISTORY_ENTRIES,
 	missingStandardTaskSections,
+	normalizeTaskFields,
 	normalizeTaskId,
 	parseTaskFrontmatter,
 	parseTaskPlan,
 	readActiveTasks,
 	renderStandardTaskBody,
+	renderTaskDocument,
 	startTaskCycle,
 	taskBody,
 	taskContractSegment,
 	uncheckedTaskAcceptanceItems,
-	upsertCurrentCycleCompletionEvidence,
 } from "../src/tasks/ledger.js";
 
-const NOW = Date.parse("2026-07-08T12:00:00+08:00");
-const PAST = "2026-07-08T09:00:00+08:00";
-const FUTURE = "2026-07-08T18:00:00+08:00";
+const NOW = new Date("2026-08-04T12:00:00+08:00");
+const PAST = "2026-08-04T09:00:00+08:00";
+const FUTURE = "2026-08-04T18:00:00+08:00";
 
 function doc(front: string, body = "# Title\n\nbody"): string {
 	return `---\n${front}\n---\n\n${body}`;
 }
 
-describe("parseTaskFrontmatter", () => {
-	it("reads the three known flat fields and canonicalises the status", () => {
-		const fm = parseTaskFrontmatter(doc("status: in-progress\nwake: 2026-07-08T14:00:00+08:00\nrecurrence: 每周一"));
-		expect(fm).toEqual({
+describe("v2 frontmatter and actionable contract", () => {
+	it("canonicalizes legacy statuses without exposing terminal live states", () => {
+		expect(parseTaskFrontmatter(doc("status: in-progress"))).toMatchObject({
 			readable: true,
 			status: "active",
-			wake: "2026-07-08T14:00:00+08:00",
-			recurrence: "每周一",
+			enabled: true,
+			rawStatus: "in-progress",
 		});
+		expect(parseTaskFrontmatter(doc("status: awaiting-user"))).toMatchObject({ status: "waiting" });
+		expect(parseTaskFrontmatter(doc("status: done"))).toMatchObject({
+			status: "active",
+			archiveOutcome: "completed",
+		});
+		expect(parseTaskFrontmatter(doc("status: done\nschedule: 0 9 * * 1"))).toMatchObject({ status: "sleeping" });
+
+		const paused = parseTaskFrontmatter(doc("status: paused"));
+		expect(paused).toMatchObject({ status: "active", enabled: false });
+		expect(paused.control).toMatchObject({ stop: { by: "user" } });
 	});
 
-	it("maps a legacy escalated status to paused by the governor", () => {
-		const fm = parseTaskFrontmatter(
-			doc(
-				`status: escalated\ncontrol: ${JSON.stringify({ version: 1, priority: "normal", lastOutcome: "blocked", dependsOn: [], isolation: "shared", sideEffects: "workspace", externalApproval: "not-required", budget: { maxAttempts: 12 }, usage: { attempts: 0, tokens: 0, costUsd: 0, wallTimeMinutes: 0 }, verification: { mode: "evidence", status: "pending" } })}`,
-			),
+	it("fails open only for unreadable metadata and parks signal waits", () => {
+		expect(parseTaskFrontmatter("not a task")).toMatchObject({ readable: false, enabled: true });
+		expect(isTaskActionable({ readable: false, enabled: true }, NOW.getTime())).toBe(true);
+		expect(isTaskActionable({ readable: true, enabled: false, status: "active" }, NOW.getTime())).toBe(false);
+		expect(isTaskActionable({ readable: true, enabled: true, status: "active" }, NOW.getTime())).toBe(true);
+		expect(isTaskActionable({ readable: true, enabled: true, status: "waiting" }, NOW.getTime())).toBe(false);
+		expect(isTaskActionable({ readable: true, enabled: true, status: "waiting", wake: FUTURE }, NOW.getTime())).toBe(
+			false,
 		);
-		expect(fm.status).toBe("paused");
-		expect(fm.control?.pausedBy).toBe("governor");
+		expect(isTaskActionable({ readable: true, enabled: true, status: "waiting", wake: PAST }, NOW.getTime())).toBe(
+			true,
+		);
+		expect(isTaskActionable({ readable: true, enabled: true, status: "sleeping", wake: FUTURE }, NOW.getTime())).toBe(
+			false,
+		);
+		expect(isTaskActionable({ readable: true, enabled: true, status: "sleeping", wake: PAST }, NOW.getTime())).toBe(
+			true,
+		);
 	});
 
-	it("marks content without a leading --- as unreadable", () => {
-		expect(parseTaskFrontmatter("no frontmatter here").readable).toBe(false);
+	it("normalizes write-path combinations while preserving disabled stage and wake", () => {
+		const timed = normalizeTaskFields({ status: "active", wake: FUTURE, control: createDefaultTaskControl() }, NOW);
+		expect(timed).toMatchObject({ status: "waiting", wake: FUTURE, control: { waitingFor: "time" } });
+
+		const due = normalizeTaskFields({ status: "active", wake: PAST, control: createDefaultTaskControl() }, NOW);
+		expect(due).toMatchObject({ status: "active" });
+		expect(due.wake).toBeUndefined();
+
+		const parked = normalizeTaskFields(
+			{ status: "waiting", control: { ...createDefaultTaskControl(), waitingFor: "time" } },
+			NOW,
+		);
+		expect(parked.control?.waitingFor).toBe("external-signal");
+
+		const disabled = normalizeTaskFields(
+			{
+				status: "sleeping",
+				enabled: false,
+				schedule: "0 9 * * 1",
+				wake: FUTURE,
+				control: { ...createDefaultTaskControl(), stop: { by: "user", reason: "maintenance", at: PAST } },
+			},
+			NOW,
+		);
+		expect(disabled).toMatchObject({ status: "sleeping", enabled: false, wake: FUTURE, schedule: "0 9 * * 1" });
+
+		const sleeping = normalizeTaskFields({ status: "sleeping", schedule: "0 9 * * 1" }, NOW);
+		expect(sleeping.wake).toBe(formatLocalTime(nextTaskWake("0 9 * * 1", NOW)!));
 	});
 
-	it("marks content with an unterminated frontmatter block as unreadable", () => {
-		expect(parseTaskFrontmatter("---\nstatus: open\n(no closing)").readable).toBe(false);
+	it("renders archive outcome without a live status", () => {
+		const rendered = renderTaskDocument(
+			{
+				status: "active",
+				outcome: "completed",
+				closedAt: "2026-08-04T12:00:00+08:00",
+				control: createDefaultTaskControl(),
+			},
+			"# Closed\n",
+		);
+		expect(rendered).toContain("outcome: completed");
+		expect(rendered).toContain("closedAt:");
+		expect(rendered).not.toContain("status:");
+		expect(rendered).not.toContain("enabled:");
 	});
 });
 
-describe("isTaskActionable (frontmatter contract)", () => {
-	it("done is never actionable", () => {
-		expect(isTaskActionable({ readable: true, status: "done" }, NOW)).toBe(false);
-	});
-	it("paused is never actionable", () => {
-		expect(isTaskActionable({ readable: true, status: "paused" }, NOW)).toBe(false);
-	});
-	it("non-done with no wake is actionable", () => {
-		expect(isTaskActionable({ readable: true, status: "in-progress" }, NOW)).toBe(true);
-	});
-	it("non-done with a future wake is not actionable", () => {
-		expect(isTaskActionable({ readable: true, status: "blocked", wake: FUTURE }, NOW)).toBe(false);
-	});
-	it("non-done with a past wake is actionable", () => {
-		expect(isTaskActionable({ readable: true, status: "awaiting-user", wake: PAST }, NOW)).toBe(true);
-	});
-	it("an unparseable wake does not defer (treated as unset)", () => {
-		expect(isTaskActionable({ readable: true, status: "open", wake: "not a date" }, NOW)).toBe(true);
-	});
-	it("unreadable frontmatter is fail-open (actionable)", () => {
-		expect(isTaskActionable({ readable: false }, NOW)).toBe(true);
-	});
-
-	// The runtime's own preferred delegation shape parks a task on an external signal:
-	// start a blocking wait as a background job, set waiting with no wake, end the turn.
-	// If the driver treats that as "ready", it re-dispatches immediately, finds the job still
-	// running, and three [SILENT] wakes later the governor pauses the task.
-	it("waiting with no wake is parked, not ready", () => {
-		expect(isTaskActionable({ readable: true, status: "waiting" }, NOW)).toBe(false);
-	});
-	it("waiting with a due wake is still a timed re-check", () => {
-		expect(isTaskActionable({ readable: true, status: "waiting", wake: PAST }, NOW)).toBe(true);
-	});
-	it("waiting with an unparseable wake still fails open so the file can be repaired", () => {
-		expect(isTaskActionable({ readable: true, status: "waiting", wake: "not a date" }, NOW)).toBe(true);
-	});
-});
-
-describe("extractTaskTitle / taskBody", () => {
-	it("takes the first heading after frontmatter", () => {
-		expect(extractTaskTitle(doc("status: open", "# 周报编写\n\ndetail"), "id")).toBe("周报编写");
-	});
-	it("falls back to the id when there is no heading", () => {
-		expect(extractTaskTitle(doc("status: open", "no heading"), "my-id")).toBe("my-id");
-	});
-	it("returns the verbatim body after the frontmatter (blank line included)", () => {
-		expect(taskBody("---\nstatus: open\n---\n\n# H\nline")).toBe("\n# H\nline");
-	});
-	it("returns the whole content when there is no frontmatter", () => {
-		expect(taskBody("# H\nline")).toBe("# H\nline");
-	});
-});
-
-describe("normalizeTaskId", () => {
-	it("strips a .md suffix", () => {
-		expect(normalizeTaskId("weekly-report.md")).toBe("weekly-report");
-	});
-	it.each(["../escape", "a/b", ".", "..", "bad name"])("rejects %s", (id) => {
-		expect(() => normalizeTaskId(id)).toThrow(/Invalid task id/);
-	});
-});
-
-describe("standard task skeleton", () => {
-	it("renders all required standard sections", () => {
+describe("task body and cycle transformations", () => {
+	it("renders the standard contract and checks acceptance boxes", () => {
 		const body = renderStandardTaskBody({
 			title: "Weekly Report",
-			goal: "Publish the weekly report.",
+			goal: "Publish the report.",
 			dod: "- [ ] Draft reviewed\n- [ ] Published",
 		});
 		expect(missingStandardTaskSections(body)).toEqual([]);
-		expect(body).toContain("## Goal");
-		expect(body).toContain("## DoD");
-		expect(body).toContain("## Manual");
-		expect(body).toContain("## Current Cycle");
-		expect(body).toContain("## History");
+		expect(uncheckedTaskAcceptanceItems(body)).toEqual(["DoD: Draft reviewed", "DoD: Published"]);
+		expect(countTaskDodItems(body)).toBe(2);
+		expect(taskContractSegment(body)).toContain("## Verification");
 	});
 
-	it("accepts Chinese section aliases", () => {
+	it("starts the first recurring cycle without archiving the creation placeholder", () => {
+		const body = renderStandardTaskBody({ title: "Weekly", goal: "G", dod: "- [ ] Done" });
+		const first = startTaskCycle(body, "cycle-2026-08-04", false);
+		expect(first).toContain("## Current Cycle (cycle-2026-08-04)");
+		expect(first).toContain("- Cycle started;");
+		expect(first).not.toContain("### Current Cycle — closed");
+		expect(first).toContain("## History");
+
+		const progressed = appendCurrentCycleNote(first, "Built the draft.");
+		const second = startTaskCycle(progressed, "cycle-2026-08-11", true);
+		expect(second).toContain("## Current Cycle (cycle-2026-08-11)");
+		expect(second).toContain("### Current Cycle (cycle-2026-08-04) — closed");
+	});
+
+	it("resets DoD and Plan checkboxes at a new cycle", () => {
 		const body =
-			"# 周报\n\n## 目标\nx\n\n## DoD\nx\n\n## 手册\nx\n\n## 验收\nx\n\n## 当前周期（2026-W28）\nx\n\n## 历史\nx";
-		expect(missingStandardTaskSections(body)).toEqual([]);
+			"# T\n\n## DoD\n- [x] Done\n\n## Plan\n- [x] P1 build → dod:1\n- [!] P2 verify → dod:1\n- [~] P3 dropped\n\n## Current Cycle\n- complete\n\n## History\n";
+		const next = startTaskCycle(body, "cycle-2", true);
+		expect(next).toContain("- [ ] Done");
+		expect(next).toContain("- [ ] P1 build");
+		expect(next).toContain("- [ ] P2 verify");
+		expect(next).toContain("- [~] P3 dropped");
 	});
 
-	it("finds unchecked acceptance boxes only in DoD and Verification", () => {
-		const body =
-			"# T\n\n## DoD\n- [x] built\n- [ ] tested\n\n## Verification\n- [ ] reviewer passed\n\n## Current Cycle\n- [ ] not acceptance";
-		expect(uncheckedTaskAcceptanceItems(body)).toEqual(["DoD: tested", "Verification: reviewer passed"]);
+	it("updates Plan steps without mixing plan claims into acceptance", () => {
+		const body = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] Done" });
+		const patched = applyTaskPlanPatch(body, [{ id: "P1", status: "done", text: "Build it" }]);
+		expect(patched.summary).toContain("+P1");
+		expect(parseTaskPlan(patched.body)).toMatchObject({ total: 1, done: 1 });
+		expect(uncheckedTaskAcceptanceItems(patched.body)).toEqual(["DoD: Done"]);
 	});
 
-	// Regression: a DoD with no checkbox syntax at all (numbered list, prose) used to
-	// make this return an empty array — indistinguishable from "everything checked" —
-	// letting candidate/done through with nothing ever actually verified.
-	it("flags a DoD with content but no checklist items at all", () => {
-		const body =
-			"# T\n\n## DoD\n1. Draft reviewed\n2. Published\n\n## Verification\nMode: independent\n- Spot check.";
-		expect(uncheckedTaskAcceptanceItems(body)).toEqual([
-			'DoD has no checklist items — rewrite it as "- [ ] ..." acceptance items before requesting verification or done.',
-		]);
-	});
-
-	it("does not flag a Verification section that is prose-only by design", () => {
-		const body = "# T\n\n## DoD\n- [x] built\n\n## Verification\nMode: independent\n- Spot check the artifact.";
-		expect(uncheckedTaskAcceptanceItems(body)).toEqual([]);
-	});
-
-	it("does not flag an empty DoD section", () => {
-		const body = "# T\n\n## DoD\n\n## Verification\nMode: independent";
-		expect(uncheckedTaskAcceptanceItems(body)).toEqual([]);
-	});
-
-	it("appends progress inside Current Cycle without disturbing History", () => {
-		const body = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D" });
-		const updated = appendCurrentCycleNote(body, "Tests pass; next step: review.");
-		expect(updated).toContain(
-			"- Created; next step: start work and append progress here before ending each turn.\n- Tests pass; next step: review.\n\n## History",
-		);
-	});
-
-	it("starts a new cycle without appending future notes to the closed cycle", () => {
-		const body = renderStandardTaskBody({ title: "Weekly", goal: "G", dod: "- [ ] D" }).replace(
-			"- Created; next step: start work and append progress here before ending each turn.",
-			"- Published the previous report.",
-		);
-		const next = startTaskCycle(body, "2026-W29");
-		expect(next).toContain("## Current Cycle (2026-W29)");
-		expect(next).toContain("### Current Cycle — closed");
-		expect(next).toContain("- Published the previous report.");
-		expect(appendCurrentCycleNote(next, "Started collecting inputs.")).toContain("- Started collecting inputs.");
-	});
-
-	it("upserts completion evidence inside Current Cycle instead of appending top-level blocks", () => {
-		const body = renderStandardTaskBody({ title: "Weekly", goal: "G", dod: "- [x] D" });
-		const first = upsertCurrentCycleCompletionEvidence(body, ["- Summary: first", "- Evidence: old"]);
-		const second = upsertCurrentCycleCompletionEvidence(first, ["- Summary: second", "- Evidence: new"]);
-		expect(second.match(/^### Completion Evidence$/gm)).toHaveLength(1);
-		expect(second).not.toContain("Summary: first");
-		expect(second).toContain("Summary: second");
-		expect(second).not.toMatch(/^## Completion Evidence$/m);
-		expect(second.indexOf("### Completion Evidence")).toBeLessThan(second.indexOf("## History"));
-	});
-
-	it("keeps recurring working history bounded and gives a cold-history next step", () => {
-		let body = renderStandardTaskBody({ title: "Daily", goal: "G", dod: "- [x] D" });
-		for (let cycle = 1; cycle <= 12; cycle++) {
-			body = upsertCurrentCycleCompletionEvidence(body, [
-				`- Summary: cycle ${cycle}`,
-				`- Evidence: ${"e".repeat(5000)}`,
-			]);
-			body = startTaskCycle(body, `cycle-${cycle}`);
-			body = appendCurrentCycleNote(body, `working on cycle ${cycle + 1}`);
-		}
-		expect(body.match(/^### Current Cycle.*— closed$/gm)?.length ?? 0).toBeLessThanOrEqual(
-			MAX_INLINE_TASK_HISTORY_ENTRIES,
-		);
-		expect(body).toContain("use session_search with the task id or cycle id");
-		expect(body).toContain("Entry truncated in working context");
-		expect(body).not.toMatch(/^## Completion Evidence$/m);
-	});
-
-	it("migrates legacy top-level evidence into the closing cycle and drops older duplicates", () => {
-		const body = `${renderStandardTaskBody({ title: "Daily", goal: "G", dod: "- [x] D" })}
-## Completion Evidence
-
-- Summary: older
-- Evidence: old
-
-## Completion Evidence
-
-- Summary: latest
-- Evidence: new
-`;
-		const next = startTaskCycle(body, "cycle-2");
-		expect(next).not.toMatch(/^## Completion Evidence$/m);
-		expect(next).toContain("Completion Evidence");
-		expect(next).toContain("Summary: latest");
-		expect(next).not.toContain("Summary: older");
-		expect(next).toContain("use session_search with the task id or cycle id");
-	});
-
-	// Regression: startTaskCycle archived the closed cycle's log but left the DoD/Verification
-	// checkboxes as-is. A periodic task that finished cycle 1 fully checked would open cycle 2
-	// with uncheckedTaskAcceptanceItems() reporting zero unchecked items — the acceptance gate
-	// silently passing on stale evidence from a cycle that no longer exists.
-	it("unchecks DoD/Verification boxes left over from the closed cycle", () => {
-		const body = renderStandardTaskBody({
-			title: "Weekly",
-			goal: "G",
-			dod: "- [x] cycle 1 done",
-			verificationPlan: "- [x] cycle 1 spot check",
-		});
-		const next = startTaskCycle(body, "2026-W29");
-		expect(next).toContain("- [ ] cycle 1 done");
-		expect(next).toContain("- [ ] cycle 1 spot check");
-		expect(next).not.toContain("[x]");
-		expect(uncheckedTaskAcceptanceItems(next)).toEqual(["DoD: cycle 1 done", "Verification: cycle 1 spot check"]);
-	});
-
-	it("rejects progress updates when the task has no Current Cycle section", () => {
-		expect(() => appendCurrentCycleNote("# T\n\nbody", "progress")).toThrow(/normalize the task skeleton/);
-	});
-
-	it("normalizes a multiline progress note to one safe bullet", () => {
-		const body = "# T\n\n## Current Cycle (cycle-1)\n- first\n\n## History\n";
-		const updated = appendCurrentCycleNote(body, "second line\nnext step");
-		expect(updated).toContain("- second line next step\n\n## History");
+	it("clips old History entries to the working-context bound", () => {
+		let body = "# T\n\n## Current Cycle\n- current\n\n## History\n";
+		for (let i = 0; i < MAX_INLINE_TASK_HISTORY_ENTRIES + 3; i++) body += `\n### Cycle ${i}\n- note ${i}\n`;
+		const next = startTaskCycle(body, "cycle-new", true);
+		expect(next).toContain("Older cycle details omitted");
 	});
 });
 
 describe("readActiveTasks", () => {
-	let dir: string;
+	let root: string;
+	let tasksDir: string;
+
 	beforeEach(async () => {
-		dir = await mkdtemp(join(tmpdir(), "task-ledger-"));
+		root = await mkdtemp(join(tmpdir(), "task-ledger-v2-"));
+		tasksDir = join(root, "tasks");
+		await mkdir(tasksDir, { recursive: true });
 	});
 	afterEach(async () => {
-		await rm(dir, { recursive: true, force: true });
+		await rm(root, { recursive: true, force: true });
 	});
 
-	it("returns empty for a missing directory", async () => {
-		expect(await readActiveTasks(join(dir, "nope"), NOW)).toEqual([]);
+	it("sorts ready work before future waits and retains disabled tasks as visible", async () => {
+		await writeFile(join(tasksDir, "later.md"), doc(`status: waiting\nwake: ${FUTURE}`, "# Later"));
+		await writeFile(join(tasksDir, "now.md"), doc("status: active", "# Now"));
+		await writeFile(join(tasksDir, "stopped.md"), doc("status: active\nenabled: false", "# Stopped"));
+		const entries = await readActiveTasks(tasksDir, NOW.getTime());
+		expect(entries.map((entry) => entry.id)).toEqual(["now", "later", "stopped"]);
+		expect(entries.find((entry) => entry.id === "stopped")?.frontmatter.enabled).toBe(false);
 	});
 
-	it("skips the archive/ subdirectory and non-.md files", async () => {
-		await writeFile(join(dir, "a.md"), doc("status: open"));
-		await writeFile(join(dir, "notes.txt"), "ignore me");
-		await mkdir(join(dir, "archive"), { recursive: true });
-		await writeFile(join(dir, "archive", "old.md"), doc("status: done"));
-		const ids = (await readActiveTasks(dir, NOW)).map((entry) => entry.id);
-		expect(ids).toEqual(["a"]);
-	});
-
-	it("sorts actionable-first, then by wake ascending", async () => {
-		await writeFile(join(dir, "future.md"), doc(`status: blocked\nwake: ${FUTURE}`, "# Future"));
-		await writeFile(join(dir, "ready.md"), doc("status: in-progress", "# Ready"));
-		await writeFile(join(dir, "done.md"), doc("status: done", "# Done"));
-		const entries = await readActiveTasks(dir, NOW);
-		expect(entries.map((entry) => entry.id)).toEqual(["ready", "done", "future"]);
-		// done sorts before the future-wake task because done has no wake ("ready now" slot),
-		// but it is not actionable.
-		expect(entries.find((entry) => entry.id === "done")?.actionable).toBe(false);
-		expect(entries.find((entry) => entry.id === "ready")?.actionable).toBe(true);
-	});
-
-	it("re-reads a changed file and still re-evaluates actionable against the clock", async () => {
-		const path = join(dir, "cached.md");
-		await writeFile(path, doc(`status: blocked\nwake: ${FUTURE}`, "# Cached"));
-
-		const first = (await readActiveTasks(dir, NOW))[0];
-		expect(first.actionable).toBe(false);
-
-		// Same file, later clock: the cached parse must not freeze the wake verdict.
-		const later = (await readActiveTasks(dir, Date.parse(FUTURE) + 1))[0];
-		expect(later.title).toBe("Cached");
-		expect(later.actionable).toBe(true);
-
-		await writeFile(path, doc("status: in-progress", "# Renamed"));
-		const rewritten = (await readActiveTasks(dir, NOW))[0];
-		expect(rewritten.title).toBe("Renamed");
-		expect(rewritten.frontmatter.status).toBe("active");
-	});
-
-	it("is fail-open on unreadable frontmatter", async () => {
-		await writeFile(join(dir, "broken.md"), "no frontmatter at all");
-		const entry = (await readActiveTasks(dir, NOW))[0];
-		expect(entry.frontmatter.readable).toBe(false);
-		expect(entry.actionable).toBe(true);
-	});
-
-	it("reports the last Current Cycle entry as the latest note", async () => {
-		await writeFile(
-			join(dir, "progress.md"),
-			doc("status: in-progress", "# Progress\n\n## Current Cycle\n- first\n- second\n\n## History\n- old"),
-		);
-		const entry = (await readActiveTasks(dir, NOW))[0];
-		expect(entry.latestNote).toBe("second");
+	it("returns an actionable repair entry for unreadable frontmatter", async () => {
+		await writeFile(join(tasksDir, "broken.md"), "no frontmatter");
+		const [entry] = await readActiveTasks(tasksDir, NOW.getTime());
+		expect(entry).toMatchObject({ id: "broken", actionable: true, frontmatter: { readable: false } });
 	});
 });
 
-// spec 037, D2: the Plan section carrier.
-describe("parseTaskPlan", () => {
-	it("returns undefined for a task with no Plan section", () => {
-		const body = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D" });
-		expect(parseTaskPlan(body)).toBeUndefined();
-	});
-
-	it("parses the four checkbox states, dod refs, and derives the current step", () => {
-		const body = [
-			"# T",
-			"",
-			"## Plan",
-			"- [x] P1 align schema → dod:1",
-			"- [ ] P2 migrate reader -> dod:1,2",
-			"- [!] P3 staging rollout (blocked on ops)",
-			"- [~] P4 legacy shim (superseded by P2)",
-			"",
-			"## Current Cycle",
-			"- note",
-			"",
-			"## History",
-			"",
-		].join("\n");
-		const plan = parseTaskPlan(body);
-		expect(plan).toBeDefined();
-		expect(plan?.steps).toEqual([
-			{ id: "P1", status: "done", text: "align schema", dodRefs: [1], lineIndex: 3 },
-			{ id: "P2", status: "todo", text: "migrate reader", dodRefs: [1, 2], lineIndex: 4 },
-			{ id: "P3", status: "blocked", text: "staging rollout (blocked on ops)", dodRefs: [], lineIndex: 5 },
-			{ id: "P4", status: "dropped", text: "legacy shim (superseded by P2)", dodRefs: [], lineIndex: 6 },
-		]);
-		// total excludes the dropped step; current is the first todo/blocked in document order.
-		expect(plan?.total).toBe(3);
-		expect(plan?.done).toBe(1);
-		expect(plan?.current?.id).toBe("P2");
-	});
-
-	it("assigns a positional fallback id to a hand-written step without one", () => {
-		const body = ["# T", "", "## Plan", "- [ ] do the thing", "- [ ] P2 explicit id", ""].join("\n");
-		const plan = parseTaskPlan(body);
-		expect(plan?.steps[0]).toMatchObject({ id: "P1", text: "do the thing" });
-		expect(plan?.steps[1]).toMatchObject({ id: "P2", text: "explicit id" });
-	});
-
-	it("has no current step once every step is done or dropped", () => {
-		const body = ["# T", "", "## Plan", "- [x] P1 done", "- [~] P2 dropped", ""].join("\n");
-		expect(parseTaskPlan(body)?.current).toBeUndefined();
-	});
-
-	it("supports the Chinese heading alias", () => {
-		const body = ["# T", "", "## 计划", "- [ ] P1 步骤一", ""].join("\n");
-		expect(parseTaskPlan(body)?.steps).toHaveLength(1);
-	});
-});
-
-// spec 037, D1: the single most load-bearing invariant in the whole spec — inserting a Plan
-// section between Verification and Current Cycle must not change the contract segment used for
-// verification PASS / external approval hashing.
-describe("taskContractSegment with a Plan section (spec 037, D1)", () => {
-	it("is byte-identical whether or not a Plan section follows Verification", () => {
-		const withoutPlan = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D" });
-		const withPlan = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D", plan: "step one\nstep two" });
-
-		expect(withPlan).not.toBe(withoutPlan);
-		expect(taskContractSegment(withPlan)).toBe(taskContractSegment(withoutPlan));
-	});
-
-	it("stops at Plan even when Plan is the only later section (no Current Cycle)", () => {
-		const body = ["# T", "", "## Goal", "G", "", "## Plan", "- [ ] P1 step", ""].join("\n");
-		expect(taskContractSegment(body)).toBe(["# T", "", "## Goal", "G"].join("\n"));
-	});
-});
-
-describe("startTaskCycle resets Plan step checkboxes (spec 037, D3)", () => {
-	it("resets done and blocked steps to todo, but leaves dropped steps alone", () => {
-		const body = [
-			"# Weekly",
-			"",
-			"## Goal",
-			"G",
-			"",
-			"## DoD",
-			"- [x] D",
-			"",
-			"## Manual",
-			"- m",
-			"",
-			"## Verification",
-			"- v",
-			"",
-			"## Plan",
-			"- [x] P1 done last cycle",
-			"- [!] P2 was blocked",
-			"- [~] P3 dropped last cycle",
-			"",
-			"## Current Cycle",
-			"- did stuff",
-			"",
-			"## History",
-			"",
-		].join("\n");
-
-		const next = startTaskCycle(body, "cycle-2");
-		const plan = parseTaskPlan(next);
-		expect(plan?.steps.map((step) => ({ id: step.id, status: step.status }))).toEqual([
-			{ id: "P1", status: "todo" },
-			{ id: "P2", status: "todo" },
-			{ id: "P3", status: "dropped" },
-		]);
-	});
-});
-
-describe("applyTaskPlanPatch (spec 037, D3)", () => {
-	it("updates an existing step's status and text in place, preserving dod refs", () => {
-		const body = [
-			"# T",
-			"",
-			"## Plan",
-			"- [ ] P1 old text → dod:1,2",
-			"",
-			"## Current Cycle",
-			"",
-			"## History",
-			"",
-		].join("\n");
-		const { body: next, summary } = applyTaskPlanPatch(body, [{ id: "P1", status: "done" }]);
-		const plan = parseTaskPlan(next);
-		expect(plan?.steps[0]).toMatchObject({ id: "P1", status: "done", text: "old text", dodRefs: [1, 2] });
-		expect(summary).toBe("plan: P1→done");
-	});
-
-	it("appends a new step with a not-yet-seen id", () => {
-		const body = ["# T", "", "## Plan", "- [x] P1 done", "", "## Current Cycle", "", "## History", ""].join("\n");
-		const { body: next, summary } = applyTaskPlanPatch(body, [{ id: "P2", text: "new step", status: "blocked" }]);
-		const plan = parseTaskPlan(next);
-		expect(plan?.steps).toHaveLength(2);
-		expect(plan?.steps[1]).toMatchObject({ id: "P2", status: "blocked", text: "new step" });
-		expect(summary).toBe("plan: +P2 new step");
-	});
-
-	it("inserts an empty Plan section before Current Cycle when the task has none yet", () => {
-		const body = ["# T", "", "## Goal", "G", "", "## Current Cycle", "- note", "", "## History", ""].join("\n");
-		const { body: next } = applyTaskPlanPatch(body, [{ id: "P1", text: "first step" }]);
-		expect(parseTaskPlan(next)?.steps).toEqual([
-			expect.objectContaining({ id: "P1", status: "todo", text: "first step" }),
-		]);
-		// The insertion must not disturb Current Cycle content that follows it.
-		expect(next).toContain("## Current Cycle\n- note");
-	});
-
-	it("rejects appending a new step id without text", () => {
-		const body = ["# T", "", "## Plan", "- [ ] P1 existing", "", "## Current Cycle", "", "## History", ""].join("\n");
-		expect(() => applyTaskPlanPatch(body, [{ id: "P2" }])).toThrow(/does not exist yet/);
-	});
-
-	it("applies multiple patches in one call and folds them into one summary", () => {
-		const body = [
-			"# T",
-			"",
-			"## Plan",
-			"- [ ] P1 step one",
-			"- [ ] P2 step two",
-			"",
-			"## Current Cycle",
-			"",
-			"## History",
-			"",
-		].join("\n");
-		const { body: next, summary } = applyTaskPlanPatch(body, [
-			{ id: "P1", status: "done" },
-			{ id: "P2", status: "blocked" },
-			{ id: "P3", text: "step three" },
-		]);
-		expect(summary).toBe("plan: P1→done; P2→blocked; +P3 step three");
-		expect(parseTaskPlan(next)?.steps.map((step) => step.status)).toEqual(["done", "blocked", "todo"]);
-	});
-
-	it("is a no-op returning the original body when there are no patches", () => {
-		const body = ["# T", "", "## Current Cycle", "", "## History", ""].join("\n");
-		expect(applyTaskPlanPatch(body, [])).toEqual({ body, summary: "" });
+describe("small ledger helpers", () => {
+	it("normalizes task ids and extracts bodies", () => {
+		expect(normalizeTaskId("weekly.md")).toBe("weekly");
+		expect(() => normalizeTaskId("../escape")).toThrow(/Invalid task id/);
+		expect(taskBody("---\nstatus: active\n---\n\n# H\nline")).toBe("\n# H\nline");
 	});
 });

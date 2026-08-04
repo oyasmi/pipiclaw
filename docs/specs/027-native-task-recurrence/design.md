@@ -1,3 +1,5 @@
+> **当前周期任务语义已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本文中的 `done + schedule` 是历史状态表达；当前使用 `sleeping + enabled + wake`。
+
 # 周期任务原生化：schedule 收进 task frontmatter
 
 | 字段 | 值 |

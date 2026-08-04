@@ -1,3 +1,5 @@
+> **Superseded for current Task behavior by [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md).** The state and command model below is retained as historical design context.
+
 # 024 — Task Loop v2
 
 | Field | Value |

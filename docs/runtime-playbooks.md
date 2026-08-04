@@ -44,7 +44,7 @@ runtime 从 metadata 自动生成系统提示中的目录。四个字段各有�
 
 description 同时说明内容和触发场景；完整正文留在包内，只有匹配当前任务时才通过 read 加载。这与 workspace skill 的"metadata 触发、正文按需加载"原则一致。
 
-**description 用中文书写，并在关键概念上附英文术语**（如「任务（task）」「子代理（subagent）」「审批（approval）」）。用户的请求是中文的，触发匹配发生在中文语境里；英文术语则保证 `TASK_DRIVER`、`preAction`、`schedule` 这类在提示词和报错里以英文出现的记号也能命中。
+**description 用中文书写，并在关键概念上附英文术语**（如「任务（task）」「子代理（subagent）」「验收（verification）」）。用户的请求是中文的，触发匹配发生在中文语境里；英文术语则保证 `TASK_DRIVER`、`preAction`、`schedule` 这类在提示词和报错里以英文出现的记号也能命中。
 
 构建后文件位于 `dist/playbooks/`。path guard 只允许读取该目录，不允许 agent 写入；npm 升级会整体更新。源码 checkout 优先读取 `src/playbooks/`，便于开发时立即验证文档。
 
@@ -60,8 +60,8 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 | `event-scheduling.md` | `event_manage` | 提醒、one-shot、periodic、preAction 传感器、跨回合回访 |
 | `background-jobs.md` | `job` | `bash async` 启停、poll 纪律、并发上限、跨回合等待 |
 | `task-planning.md` | `task_manage` | 是否建 task、Goal/DoD/Manual/Verification、control 与预算、周期 `schedule` |
-| `task-driving.md` | `task_manage` | driver 恢复、幂等检查、checkpoint，以及停滞/治理器暂停/坏 frontmatter 的修复 |
-| `task-closeout.md` | `task_manage` | candidate、verifier、外部审批、done/cancel 和组合门禁 |
+| `task-driving.md` | `task_manage` | driver 恢复、幂等检查、checkpoint，以及停滞/治理器停用/坏 frontmatter 的修复 |
+| `task-closeout.md` | `task_manage` | request-verification、verifier、complete/skip/cancel 和幂等闭环 |
 | `task-delegation.md` | `task_manage` / `subagent` | 任务拆分、subagent、外部 agent 工具的恢复纪律 |
 
 任务生命周期占四份，对应四个**决策时刻**——建档、推进（含修复）、收尾、委派。它们刻意不做成"先读一本再跳转"的路由结构：模型在一次唤醒中只应打开一份文件，多一跳就多一次判断失误的机会。同一时刻需要的知识必须在同一份文件里。
@@ -71,7 +71,7 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 1. **description 是触发器**：包含"讲什么"和"什么时候读"，中文书写并附英文术语，名称使用短小 kebab-case。
 2. **一个决策时刻一份文件**：宁可一份稍长，也不要让模型为了完成一件事读两份。反过来，两个不会同时发生的场景不要塞进一份。
 3. **默认模型已有通用能力**：只写 Pipiclaw 特有、容易出错或跨工具的知识。
-4. **按脆弱程度决定自由度**：hash/approval/candidate 等窄桥给精确顺序；开放的规划问题给判断条件。
+4. **按脆弱程度决定自由度**：hash/verification/幂等 request id 等窄桥给精确顺序；开放的规划问题给判断条件。
 5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。契约 hash 绑定语义只在 `task-closeout.md` 定义即是一例。
 6. **错误可恢复**：解释门禁为什么拒绝，并给可以执行的下一步。
 7. **控制长度**：正文以 80 行为软上限，多数应在 50 行以内。超出通常意味着混进了两个决策时刻，或抄了工具 schema 已有的内容——先检查这两条，再考虑是否真的需要更长。`task-planning.md` 与 `task-driving.md` 是刻意最长的两份：它们各自合并了原先拆开的建档/周期、推进/修复，因为那两组内容总是在同一时刻被需要。
@@ -85,7 +85,7 @@ Pipiclaw 可以通过 bash、subagent、event preAction 与用户安装的工具
 
 ## 面向 workspace 的迁移
 
-已有 `AGENTS.md` 如果包含 Pipiclaw 文件语义、task/event SOP、driver cooldown、审批命令或 verifier 细节，应删除这些镜像内容，改为引用对应 playbook。workspace `sub-agents/` 中的角色定义则属于用户可修改配置，不是 Pipiclaw 随包注入的默认内容。保留的应是：
+已有 `AGENTS.md` 如果包含 Pipiclaw 文件语义、task/event SOP、driver cooldown、已删除命令或 verifier 细节，应删除这些镜像内容，改为引用对应 playbook。workspace `sub-agents/` 中的角色定义则属于用户可修改配置，不是 Pipiclaw 随包注入的默认内容。保留的应是：
 
 - 称呼、沟通风格和默认工作环；
 - 团队安全政策和外部影响边界；

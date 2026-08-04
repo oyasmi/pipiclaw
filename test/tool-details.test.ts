@@ -189,23 +189,23 @@ describe("rejections stay out of the user's chat", () => {
 		expect(String(respond.mock.calls[0][0])).toContain("Command blocked");
 	});
 
-	it("still shows an error bubble for a gate only the user can clear", async () => {
-		// An approval gate is thrown as a plain Error, so it arrives with isError and must
-		// remain visible: the user is the one who has to run /tasks approve.
+	it("still shows an error bubble for a scope decision only the user can clear", async () => {
+		// A user-only scope decision is thrown as a plain Error, so it arrives with isError and
+		// must remain visible instead of being treated as model-fixable tool validation.
 		const respond = vi.fn(async (_text: string, _final?: boolean) => {});
 		const ctx = createContext(respond);
 
 		await endEvent(
 			ctx,
 			{
-				content: [{ type: "text", text: 'Task "x" requires explicit external-action approval' }],
+				content: [{ type: "text", text: 'Task "x" requires a user decision outside its current scope' }],
 				details: { kind: "task_manage" },
 			},
 			true,
 		);
 
 		expect(respond).toHaveBeenCalledTimes(1);
-		expect(String(respond.mock.calls[0][0])).toContain("external-action approval");
+		expect(String(respond.mock.calls[0][0])).toContain("user decision outside its current scope");
 	});
 });
 

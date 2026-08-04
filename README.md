@@ -14,7 +14,7 @@ npm package: [`@oyasmi/pipiclaw`](https://www.npmjs.com/package/@oyasmi/pipiclaw
 
 **记得住事。** 每个会话通道（channel）有自己的分层记忆：`SESSION.md`（当前工作态）、`MEMORY.md`（稳定事实与偏好）、`HISTORY.md`（更早摘要），工作区层还有 `SOUL.md`（身份语气）与 `AGENTS.md`（工作规则）。运行时按当前请求做相关召回（relevant recall），后台维护调度器在本地闸门通过后才做 LLM 整理，不烧无谓的 token。冷存储历史可用 `session_search` 按需检索，`memory_manage` 支持按需保存、检索、忘记。
 
-**自己推进长程工作。** 定时事件支持单次、周期两类，`preAction` 可用脚本做零 token 的触发前门控；当前回合能做的事直接做，不再创建 immediate 事件。语义更高一层的是任务台账（task ledger）：任务以 Markdown 文件持久存在，内建 task driver 到点自动恢复、有进展有界续跑、停滞自动退避；配套受预算约束的恢复、独立验收、外部副作用授权，以及 `/tasks` 系列零 LLM 成本的控制面命令。
+**自己推进长程工作。** 定时事件支持单次、周期两类，`preAction` 可用脚本做零 token 的触发前门控；当前回合能做的事直接做，不再创建 immediate 事件。语义更高一层的是任务台账（task ledger）：任务以 Markdown 文件持久存在，内建 task driver 到点自动恢复、有进展有界续跑、停滞自动退避；配套受预算约束的恢复、独立验收、能力边界、幂等执行与审计，以及 `/tasks` 系列零 LLM 成本的控制面命令。
 
 **会用工具、能委派。** 内建 `bash`（支持 `async` 后台作业）、`read`（含目录树与 PDF）、`write` / `edit`、结构化 `grep`、`web_search` / `web_fetch`（结果缓存与分页续读），以及 `send_media`——生成好的报表、截图、导出文件可以作为原生附件直接发回钉钉，而不是丢给你一个打不开的主机路径。工作区配置的子代理可以把 reviewer、researcher 这类角色沉淀成可复用能力，支持独立验收（verify）；workspace skills 沉淀你自己的流程知识。完整清单见 [docs/tools.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/tools.md)。
 
@@ -215,7 +215,7 @@ pipiclaw
 | `/steer <message>` | 当前任务继续执行时追加引导信息 |
 | `/followup <message>` | 排队新请求，等当前任务结束后执行 |
 | `/events list\|show\|delete\|history` | 查看与管理 `workspace/events/` 中的定时事件 |
-| `/tasks [show\|archive\|approve\|pause\|resume\|run\|set\|stats\|doctor]` | 查看与治理任务台账，`approve` 是外部副作用的唯一授权入口，`set` 可零 LLM 成本直改 wake/next/priority/attempts/deadline |
+| `/tasks [show\|archive\|pause\|resume\|run\|set\|stats\|doctor]` | 查看与治理任务台账；pause/resume 保留任务阶段与 wake，`set` 可零 LLM 成本直改 wake/next/priority/attempts/deadline |
 | `/status` | 运行时状态：执行状态、当前模型、上下文用量、运行时长、版本 |
 | `/usage [7d\|month]` | 本通道与全局的 LLM 成本，按类型和 Top 模型拆分 |
 | `/context [detail]` | 当前发给模型的上下文构成：system prompt 各 section 体量与 fingerprint、工具 schema 开销、上一轮动态上下文 |

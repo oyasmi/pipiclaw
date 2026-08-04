@@ -13,7 +13,7 @@ export type VerificationVerdict = "pass" | "fail";
  *
  * This file is the anti-self-certification core: the task Markdown is writable by the agent's
  * own write/edit tools, so a hand-written `status: "passed"` proves nothing. Every field here
- * is re-checked at `done`, which is why the set is exactly the fields something reads —
+ * is re-checked at `complete`, which is why the set is exactly the fields something reads —
  * `agent`, `model` and `outputHash` were stored and strictly validated but never once
  * consulted, so they are gone.
  */
@@ -29,7 +29,7 @@ export interface VerificationAttestation {
 	/** Git HEAD + working-tree subject that the verifier actually inspected. */
 	subjectHash?: string;
 	/**
-	 * The checkout `subjectHash` was computed in. Recorded so `verify` and `done` recompute the
+	 * The checkout `subjectHash` was computed in. Recorded so `verify` and `complete` recompute the
 	 * subject where the verifier looked, not wherever the daemon happens to be running: a
 	 * sub-agent may be pointed at another checkout via `workingDirectory`, and comparing that
 	 * verdict against the daemon's own cwd would either fail closed forever or — worse — compare

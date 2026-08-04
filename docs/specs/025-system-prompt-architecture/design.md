@@ -1,5 +1,7 @@
 # Pipiclaw System Prompt 架构与优化实施方案
 
+> **当前 Task 状态、权限边界与验收口径已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本文中的 Task approval、旧生命周期和旧 prompt gate 只保留为历史设计背景。
+
 | 字段 | 值 |
 |------|------|
 | 状态 | Phase 1–3 代码完成；Phase 0 behavior-eval harness 与首个 baseline 已建立；DoD 11 的 prompt A/B 尚待候选变更，Phase 4 未启动 |

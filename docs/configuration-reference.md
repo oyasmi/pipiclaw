@@ -213,7 +213,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 自主长程任务总开关（`tools.tasks`）
 
-`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：`task_manage` 工具（agent 维护[受治理任务台账](./events-and-tasks.md)：create/progress/set/verify/done/cancel/list）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
+`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：`task_manage` 工具（agent 维护[任务台账](./events-and-tasks.md)：create/progress/set/request-verification/verify/complete/skip/cancel/list）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
 
 ```jsonc
 {
@@ -224,8 +224,8 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 ```
 
 - 关掉后主 agent 仍可用 read/edit/write 直接维护 task 文件，只是没有工具保真、不会被后台唤醒、也不注入摘要。
-- 该工具只发给主 agent，不进子代理工具集。新任务默认不要求独立验收，attempt 上限 12；可设置 deadline、`verificationRequired` 与 sideEffects（`external` 会自动要求独立验收与用户审批）。`progress` 只追加 Current Cycle 条目；Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
-- agent 不能把 external approval 设为 granted；用户必须直接发送 `/tasks approve <id>`，runtime 才记录可审计授权。
+- 该工具只发给主 agent，不进子代理工具集。新任务默认不要求独立验收，attempt 上限 12；可设置 deadline、`verificationRequired`、waitingFor 和 nextAction。`progress` 只追加 Current Cycle 条目；Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
+- Task 创建即持续委托；外部动作由能力配置、任务 Goal、scope、真实状态查询和幂等 request id 约束，结果必须写入任务证据。
 
 ### 结构化搜索工具（`grep`，恒开）
 
@@ -282,11 +282,11 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。是否注入完全由总开关 `tools.tasks.enabled`（tools.json）决定，没有单独的配置项。
 
-摘要上限固定为 8 条任务 / 约 1000 字符，超出会截断并标注剩余数量。摘要只收录 status ≠ done 的任务，无 active 任务时不注入。
+摘要上限固定为 8 条任务 / 约 1000 字符，超出会截断并标注剩余数量。摘要包含活动目录中的 active/waiting/sleeping 任务，并显示 disabled、wake、waitingFor 与 cycle。
 
 ### 内建任务驱动器（Task Driver，恒随任务开关）
 
-DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描本身不调用模型；只有存在 actionable task（status ≠ done 且 wake 未设/已到）时才入队唤醒，因此不再需要手工 heartbeat event、`tasks-pending.mjs` 或 task `.checkin` 事件。是否运行完全由总开关 `tools.tasks.enabled`（tools.json）决定；节奏是内置常量，不可配。
+DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描本身不调用模型；只有 enabled 且可恢复的 active task，或 due waiting/sleeping transition，才入队唤醒；waiting 无 wake、disabled 和归档任务零 dispatch。因此不再需要手工 heartbeat event、`tasks-pending.mjs` 或 task `.checkin` 事件。是否运行完全由总开关 `tools.tasks.enabled`（tools.json）决定；节奏是内置常量，不可配。
 
 行为（供理解，非配置项）：
 

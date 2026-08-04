@@ -331,7 +331,7 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 
 通常先检查：
 
-- `/tasks` 中该任务的 `status` 与 `wake`：`paused` / `done` / `cancelled` 不会被 driver 继续；`wake` 未到点属于正常等待。被治理器停止的任务显示为 `paused` + `control.pausedBy: "governor"`（旧版本称 `escalated`）
+- `/tasks` 中该任务的 `status`、`enabled` 与 `wake`：disabled、waiting 无 wake 和归档任务不会被 driver 继续；future wake 属于正常等待。被治理器停止的任务显示为 `status: active` + `enabled: false` + `control.stop.by: "governor"`
 - `/tasks doctor` 是否报出坏 frontmatter、超预算、缺失依赖等问题
 - 上一轮是否没有留下任何台账变化——driver 会对无变化的任务退避（默认 60 分钟）再重试，重启进程会清空退避、下一次扫描重新接起
 - `tools.json` 的 `tools.tasks.enabled`（自主长程任务总开关）是否被关闭

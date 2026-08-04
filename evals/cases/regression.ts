@@ -58,7 +58,11 @@ export const regressionCases: EvalCase[] = [
 					).length >= 3,
 				"each of the three wakes must re-read the durable task instead of relying on stale context",
 			),
-			taskFrontmatter("release-still-open", "resume-three", (frontmatter) => frontmatter.status !== "done"),
+			taskFrontmatter(
+				"release-still-open",
+				"resume-three",
+				(frontmatter) => frontmatter.archiveOutcome === undefined,
+			),
 			{
 				kind: "model",
 				graderId: "three-wake-loyalty",
@@ -91,16 +95,14 @@ export const regressionCases: EvalCase[] = [
 		script: [{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" }],
 		graders: [
 			driverDispatchCount("deadline-dispatch", 1),
-			// Spec 036 D3 retired the `escalated` status: the deterministic governor now writes
-			// `paused` + `control.pausedBy: "governor"` (`src/tasks/store.ts` escalateTask), and
-			// `parseTaskFrontmatter` canonicalises any legacy value on read — so asserting the old
-			// string could never be true again.
+			// v2 keeps the live stage and records a structured governor stop orthogonally.
 			taskFrontmatter(
 				"deadline-escalated",
 				"expired-task",
 				(frontmatter, content) =>
-					hasStatus(frontmatter, "paused") &&
-					frontmatter.control?.pausedBy === "governor" &&
+					hasStatus(frontmatter, "active") &&
+					frontmatter.enabled === false &&
+					frontmatter.control?.stop?.by === "governor" &&
 					/DEADLINE-LOCK/.test(content),
 			),
 		],
@@ -117,10 +119,10 @@ export const regressionCases: EvalCase[] = [
 		budget: { maxWallMs: 300_000, maxTurns: 18 },
 		setup: (ctx) =>
 			writeTask(ctx, "daily-cycle", {
-				status: "done",
+				status: "sleeping",
 				wake: "2025-12-31T00:00:00.000Z",
 				schedule: "0 0 * * *",
-				body: "# Task\n\n## Goal\nOn cycle start, use task_manage start-cycle, record CYCLE-STARTED, then close this evidence-only cycle.\n\n## DoD\n- [ ] CYCLE-STARTED recorded\n",
+				body: "# Task\n\n## Goal\nOn cycle start, record CYCLE-STARTED, then close this evidence-only cycle with task_manage complete. The runtime opens the recurring cycle before dispatch; do not call a cycle-opening action.\n\n## DoD\n- [ ] CYCLE-STARTED recorded\n",
 			}),
 		script: [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },

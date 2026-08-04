@@ -1,5 +1,7 @@
 # 026 — 瘦身后 system prompt 的真实拼装示例
 
+> **其中 Task 权限、生命周期与验收提示已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本示例保留 prompt 拼装背景；旧 Task approval 文案不是当前运行时契约。
+
 本文件是 spec 026 落地后，一个具体场景下**实际拼装出来的 system prompt** 的完整示例，供审阅与回归对照。正文段由 `buildPipiclawSystemPrompt`（`src/agent/prompt/`）真实产出；`<available_skills>` 与 `Current date` / `Current working directory` 由 pi 追加；最后的 `## Runtime Boundary` footer 由 `before_agent_start` 扩展在 pi tail 之后追加（`src/agent/prompt/extension.ts`）。
 
 ## 1. 场景

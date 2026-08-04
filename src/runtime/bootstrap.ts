@@ -37,7 +37,7 @@ import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { fileStamp } from "../shared/file-stamp.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { readActiveTasks } from "../tasks/ledger.js";
-import { finishTaskAttempt } from "../tasks/store.js";
+import { activateWaitingTask, claimTaskAttempt, finishTaskAttempt } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
@@ -62,8 +62,8 @@ import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
 import { ChannelStore } from "./store.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
-import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";
-import { migrateLegacyTaskScheduleEvents } from "./task-migration.js";
+import { createTaskDriverEvent, createTaskVerificationEvent, TaskDriver } from "./task-driver.js";
+import { migrateLegacyTaskScheduleEvents, migrateLegacyTaskState } from "./task-migration.js";
 import { DEFAULT_AGENTS, DEFAULT_SOUL } from "./workspace-templates.js";
 
 export interface BootstrapPaths {
@@ -649,6 +649,13 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				// `bot` is defined below in this same scope and initialized before any message
 				// (and thus any getRunner call) can arrive.
 				mediaSender: bot,
+				dispatchVerification: async (taskId) => {
+					const entries = await readActiveTasks(join(channelDir, "tasks"));
+					const entry = entries.find((candidate) => candidate.id === taskId);
+					if (!entry) return false;
+					const verificationEvent = createTaskVerificationEvent(channelId, entry, Date.now());
+					return (await durableDispatch?.dispatch(verificationEvent)) ?? false;
+				},
 			});
 			channelRunners.set(channelId, runner);
 		}
@@ -670,15 +677,12 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			let pausedTaskId: string | undefined;
 			if (runner?.isBusy()) {
 				runner.requestStop();
-				const taskId = /^\[TASK_(?:DRIVER|CYCLE):([A-Za-z0-9._-]+)\]/.exec(
-					runner.getTurnStatus().taskText ?? "",
-				)?.[1];
+				const taskId = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(runner.getTurnStatus().taskText ?? "")?.[1];
 				if (taskId) {
 					const pauseResult = await pauseTask(
 						{
 							args: "",
 							channelDir: getChannelDir(options.paths.workspaceDir, channelId),
-							approver: "user via /stop",
 						},
 						taskId,
 					);
@@ -692,13 +696,17 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				if (dropped > 0) {
 					log.logInfo(`[${channelId}] Dropped ${dropped} queued message(s) on stop`);
 				}
-				const canceled = await durableDispatch?.cancelChannel(channelId);
-				if (canceled) {
-					log.logInfo(`[${channelId}] Reset ${canceled} durable-dispatch lease(s) on stop`);
-				}
 				void runner.abort().catch((err) => {
 					log.logWarning(`[${channelId}] Failed to abort run`, errorMessage(err));
 				});
+				void durableDispatch
+					?.cancelChannel(channelId)
+					.then((canceled) => {
+						if (canceled) log.logInfo(`[${channelId}] Reset ${canceled} durable-dispatch lease(s) on stop`);
+					})
+					.catch((err) => {
+						log.logWarning(`[${channelId}] Failed to reset durable-dispatch leases on stop`, errorMessage(err));
+					});
 				log.logInfo(`[${channelId}] Stop requested`);
 			}
 			return { pausedTaskId };
@@ -719,8 +727,6 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				channelDir: getChannelDir(options.paths.workspaceDir, event.channelId),
 				workspaceDir: options.paths.workspaceDir,
 				channelId: event.channelId,
-				approver:
-					event.userName && event.userName !== event.user ? `${event.userName} (${event.user})` : event.user,
 				dispatchTask: async (id, attemptGeneration) => {
 					const channelDir = getChannelDir(options.paths.workspaceDir, event.channelId);
 					const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
@@ -909,8 +915,20 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 					// task-driver turn is measured as a delta (turns on a channel are serialized)
 					// and credited to the task it was dispatched for.
 					const effectsBefore = channelEffectCount(event.channelId);
+					const jobTaskId = /^\[JOB:[^\]]+\][\s\S]*?belongs to task ([A-Za-z0-9._-]+)\./.exec(event.text)?.[1];
+					let recoveredJobTaskId: string | undefined;
+					if (jobTaskId) {
+						const channelDir = getChannelDir(options.paths.workspaceDir, event.channelId);
+						const activated = await activateWaitingTask(channelDir, jobTaskId, "job");
+						if (activated) recoveredJobTaskId = jobTaskId;
+						if (activated?.fields.control) {
+							const claim = await claimTaskAttempt(channelDir, jobTaskId, new Date());
+							if (claim) event.taskAttemptGeneration = claim.generation;
+						}
+					}
 					const result = await runner.run(ctx, store);
 					const taskDriverMatch = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text);
+					const taskAttemptId = taskDriverMatch?.[1] ?? recoveredJobTaskId;
 					if (taskDriverMatch?.[1]) {
 						noteTaskEffects(
 							event.channelId,
@@ -918,21 +936,24 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 							channelEffectCount(event.channelId) - effectsBefore,
 						);
 					}
-					if (taskDriverMatch?.[1] && result.usage && result.durationMs !== undefined) {
-						await finishTaskAttempt(
-							getChannelDir(options.paths.workspaceDir, event.channelId),
-							taskDriverMatch[1],
-							{
-								tokens: result.usage.total,
-								costUsd: result.usage.cost.total,
-								costKnown: result.costKnown === true,
-								wallTimeMinutes: result.durationMs / 60_000,
-								failed: result.stopReason === "error" || result.stopReason === "aborted",
-								silent: result.silent,
-								finishedAt: new Date(),
-								generation: event.taskAttemptGeneration,
-							},
+					if (recoveredJobTaskId) {
+						noteTaskEffects(
+							event.channelId,
+							recoveredJobTaskId,
+							channelEffectCount(event.channelId) - effectsBefore,
 						);
+					}
+					if (taskAttemptId && result.usage && result.durationMs !== undefined) {
+						await finishTaskAttempt(getChannelDir(options.paths.workspaceDir, event.channelId), taskAttemptId, {
+							tokens: result.usage.total,
+							costUsd: result.usage.cost.total,
+							costKnown: result.costKnown === true,
+							wallTimeMinutes: result.durationMs / 60_000,
+							failed: result.stopReason === "error" || result.stopReason === "aborted",
+							silent: result.silent,
+							finishedAt: new Date(),
+							generation: event.taskAttemptGeneration,
+						});
 					}
 
 					if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {
@@ -946,7 +967,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				} finally {
 					await durableDispatch?.markCompleted(event.dispatchId);
 					runner.endTurn();
-					// A finished turn may have written task files (progress/done/set); rescan
+					// A finished turn may have written task files (progress/complete/set); rescan
 					// now so a continuing task chain advances immediately instead of after a full sleep.
 					taskDriver.nudge?.();
 				}
@@ -1040,6 +1061,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 				onDispatch: options.onTaskDriverDispatch,
 				getEffectCount: taskEffectCount,
+				notify: (receipt) => bot.sendPlain(receipt.channelId, receipt.text),
 				getSettings: () => {
 					runtimeSettingsManager.reload();
 					return runtimeSettingsManager.getTaskDriverSettings();
@@ -1151,6 +1173,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		// One-time close of the 027 migration window: fold any residual legacy `.schedule`
 		// events into task frontmatter before the driver relies on frontmatter as the only cadence.
 		void migrateLegacyTaskScheduleEvents(options.paths.workspaceDir);
+		void migrateLegacyTaskState(options.paths.workspaceDir);
 		eventsWatcher.start();
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();

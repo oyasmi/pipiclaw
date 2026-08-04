@@ -83,14 +83,12 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		name: "tasks",
-		argumentHint:
-			"[show <id>|archive|approve <id>|pause <id>|resume <id>|run <id>|set <id> <字段> <值>|stats [id]|doctor]",
-		description: "查看、诊断并直接编辑本频道的任务台账；`approve` 用于放行外部副作用",
+		argumentHint: "[show <id>|archive|pause <id>|resume <id>|run <id>|set <id> <字段> <值>|stats [id]|doctor]",
+		description: "查看、诊断并直接编辑本频道的任务台账；pause 只停用执行，保留阶段与 wake",
 		examples: [
 			"/tasks",
 			"/tasks show weekly-report",
 			"/tasks archive",
-			"/tasks approve publish-release",
 			"/tasks pause weekly-report",
 			"/tasks resume weekly-report",
 			"/tasks run weekly-report",

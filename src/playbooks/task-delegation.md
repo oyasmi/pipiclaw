@@ -1,52 +1,30 @@
 ---
 name: task-delegation
-description: 把工作拆成多个任务（task）、委派子代理（subagent），或交给外部 agent 工具之前。
+description: 拆分任务（task）、委派子代理（subagent），或等待外部 agent/job 的恢复信号时。
 requires-tools: task_manage, subagent
 priority: 45
 ---
 
 # 任务分解与委派
 
-只拆真正可分离、可独立验收的工作。两三步顺序操作留在一个 task，避免调度和 attempt 开销。
+只拆真正可分离、可独立验收的工作。任务之间没有依赖字段；先后条件写进后继任务 Goal/Manual 或由 wake 错开。
 
-## 拆分任务
+## 子代理
 
-任务之间没有父子或依赖字段，每个任务独立按自己的 DoD 收尾。需要表达先后次序时，把它写进后继任务的 `goal`/`manual`（"在 <前置任务> 完成后再开始"），或用 `wake` 把它排到前置任务预计完成之后。
+委派说明必须包含目标、范围、路径、约束、验收方法和返回格式。独立验收使用 `purpose: verify` + `taskId`，verifier 不能 write/edit，结果写 durable attestation。主 Agent 负责 review、验证和台账闭环。
 
-## 配置 subagent
+## 外部 agent 与等待
 
-不需要预先配置：不传 `agent` 时给 `systemPrompt` 即可发起委派，`workspaceDir/sub-agents/` 为空不影响这条路径。若需要可复用角色，把 Markdown 配置放入该目录；runtime 只加载实际存在的配置。仓库提供 explorer、researcher、reviewer、verifier、git-committer 五份可复制模板，见 `examples/sub-agents/`。选择明确适合的配置 agent；没有时使用聚焦的 inline `systemPrompt`。task 描述必须包含目标、范围、相关路径、约束、验收方法和返回格式，因为子代理看不到主对话。
+本页是 waiting 两种形态的唯一真相源；`waiting + wake` 是定时等待，`waiting` 无 wake 是停泊信号等待。后台作业的实现细节见 `background-jobs.md`。
 
-执行预算用 `effort` 三档:`quick`(窄查找)、`standard`(默认)、`deep`(长程分析);精确的轮数/调用数/墙钟数值只在 workspace 配置的 frontmatter 里调,调用时不必给。上下文注入用 `context`:`none`(默认,完全隔离)、`session`、`relevant`。进程内 subagent 同回合同步返回,不需要回访事件；主 agent 负责验收结果和更新台账,子代理不驱动 task/event 台账。触顶时子代理会收敛输出已完成的结论而不是整段丢弃,但预算仍然是真实上限,不要依赖它兜底过大的任务。
+runtime 不假设第三方工具的命令、状态协议或检测脚本。优先使用用户提供的 skill；等待形态按恢复能力选择：
 
-独立验收必须 `purpose: verify` + `taskId`,见 `task-closeout.md`。
+1. 有阻塞等待命令：用 `bash async` + `taskId`，progress 为 `waiting`、`waitingFor: job`、不设 wake。job 完成时 runtime 只恢复所属 task。
+2. 只有状态查询：用 event sensor 或 `waiting + wake`，把回访条件写进 blockedReason。
+3. 没有可用信号：等待用户时 `waitingFor: user`、无 wake，或让用户用 `/tasks run <id>`。
 
-## 产物契约与回传预算
+普通 driver 不轮询 `waiting` 无 wake。所有外部动作都要写任务 scope、实例标识、工作目录、预期产物、验收方法、幂等 request id 和 recovery plan。
 
-每次委派都会在 `channelDir/subagent-artifacts/<runId>/` 下建产物目录,子代理的完整输出总会落盘到该目录的 `output.md`,与 `returns` 无关。回传给父代理的文本超过大小预算时会被截断,附上 `output.md` 的绝对路径——父代理判断值得保留的内容,按需 `read` 全文,再决定是否经 `memory_manage` 提炼为记忆。产物目录不自动清理,由父代理负责闭环:任务收尾时决定保留还是删除。
+## 产物与闭环
 
-需要子代理把主产出写成文件而不是回传整段文本时传 `returns: "artifact"`,子代理需以 `ARTIFACT: <filename>` 结尾；忘记该标记时会自动降级为纯文本模式。
-
-## 文件系统隔离
-
-没有。子代理默认与主代理共享同一个 checkout，只隔离对话上下文。需要在独立检出上作业时，在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 传给子代理（它是子代理的 shell cwd 与相对路径根，必须已存在），并自己负责 review、merge 与清理。`purpose: verify` 的 attestation 会绑定该目录的 git 产物状态，后续 `task_manage verify` / `done` 也在同一目录复算。
-
-## 外部 agent 工具
-
-Pipiclaw 不内置或假设第三方 agent 工具的命令、状态 JSON、检测脚本。如何启动、探活、取回、steer 由用户安装的可执行文件和 workspace skill 决定——先读那份 skill，再决定用哪条命令，不要临时复制来源不明的脚本。
-
-启动、纠偏、取回、停止都是秒级的同步命令，直接 `bash` 调用即可。runtime 只补它们补不了的那一块：**你不在场的那段等待**。按用户工具的能力从优到劣选一条：
-
-1. **阻塞等待包成后台作业（首选）**：工具若提供"等到外部实例结束/空闲才返回"的命令，用 `bash async` + `taskId` 跑它，`progress` 置 `waiting` 且**不设 wake**，然后结束回合——作业结束时 runtime 自动叫醒你并带上输出尾部，见 `background-jobs.md`。作业超时只终止等待本身，不会杀掉外部实例：醒来确认对方还在跑，再起一个等待作业即可。给等待作业一个明显长于预计耗时的 `timeout`，别让它每五分钟叫你一次。
-2. **稳定的完成态检测命令**：只有状态查询、没有阻塞等待时，按 `event-scheduling.md` 用 periodic + preAction 门控——对方忙就静默跳过，零 token。
-3. **wake 轮询（兜底）**：两者都没有时才用，`progress` 置 `waiting` + 合理 `wake`，醒来查状态、更新证据、必要时把 wake 推后。
-
-两种等待形态就这两个（本节是唯一真相源）：**`waiting` 且无 `wake` = 停泊**，driver 不会来打扰，只有后台作业结束、用户消息或 `/tasks run` 会叫醒你；**`waiting` + `wake` = 定时回访**，到点由 driver 接续。
-
-无论走哪条，三条纪律不变：
-
-1. 委派时把工具、实例标识、工作目录/分支、预期产物和验收方法写进 task 正文，等谁、等什么写进 `blockedReason`。重启后这些是唯一能恢复现场的东西。
-2. 取回后自己 review 和验证。对方报告完成、进程退出码为 0、实例回到空闲，都不是验收证据。
-3. task 闭环前清理临时事件和外部实例。
-
-任何委派都不能转移最终交付责任。父代理必须确认成果已进入目标 checkout，而不是只停留在外部实例或口头报告中。
+重要产物写入目标 checkout，不只留在 stdout 或 subagent 返回文本。取回后核对真实文件和测试结果，再 progress/verify/complete。task cancel/complete 会清理 task-owned events；不要遗留一个会继续唤醒已归档任务的事件。

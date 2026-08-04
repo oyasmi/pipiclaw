@@ -16,6 +16,8 @@ export interface RunnerFactoryPaths {
 	 * of the runner cache key — it is a stable per-process transport handle.
 	 */
 	mediaSender?: MediaSender;
+	/** Runtime callback that durably enqueues an independent task verifier. */
+	dispatchVerification?: (taskId: string) => Promise<boolean>;
 }
 
 function runnerKey(paths: RunnerFactoryPaths, channelId: string, channelDir: string): string {

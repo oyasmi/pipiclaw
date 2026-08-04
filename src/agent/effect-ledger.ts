@@ -6,7 +6,7 @@ import { isRecord } from "../shared/type-guards.js";
  * The task governor has to answer "did that wake accomplish anything?". It used to answer by
  * diffing the task file's own metadata — including the model-written progress note — which made
  * the check both bypassable and unfair: a model that appended a note every wake looked productive
- * forever, while a model that changed code without writing a note looked stalled and got paused.
+ * forever, while a model that changed code without writing a note looked stalled and got disabled.
  *
  * Effects are counted here instead, and only for things that change the world outside the task
  * ledger: writes, outbound media, sub-agent runs, background job launches, and a user-visible
@@ -71,7 +71,7 @@ export function resetChannelEffects(): void {
  * them apart. It used to count only a background launch, which produced the wrong answer for the
  * single most important shape this runtime has — a turn that synchronously drives an external
  * coding agent, then records what came back. That turn changes no file the runtime can see and
- * usually ends `[SILENT]`, so it scored zero effects and, after three of them, got its task paused
+ * usually ends `[SILENT]`, so it scored zero effects and, after three of them, got its task disabled
  * by the governor: the hardest-working wake was the one most likely to be judged idle.
  *
  * A synchronous command that exited 0 and returned output therefore counts too. That is

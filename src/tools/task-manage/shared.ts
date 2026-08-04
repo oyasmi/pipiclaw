@@ -7,8 +7,9 @@ import { formatLocalTime, parseWakeInput } from "../../shared/local-time.js";
 import { taskEventPrefix } from "../../shared/task-events.js";
 import { nextTaskWake, validateTaskSchedule } from "../../shared/task-schedule.js";
 import { errorMessage } from "../../shared/text-utils.js";
-import { applyTaskControlPatch, createDefaultTaskControl, type TaskControlPatch } from "../../tasks/control.js";
+import { applyTaskControlPatch, createDefaultTaskControl } from "../../tasks/control.js";
 import {
+	normalizeTaskFields,
 	parseTaskFrontmatter,
 	renderStandardTaskBody,
 	renderTaskDocument,
@@ -41,7 +42,7 @@ export function requiredField(value: string | undefined, field: string, action: 
 }
 
 export function requireNonEmpty(value: string | undefined, field: string): string {
-	return requiredField(value, field, "done");
+	return requiredField(value, field, "complete");
 }
 
 export function markdownValue(value: string): string {
@@ -74,24 +75,22 @@ export function renderTaskSkeleton(request: TaskManageRequest): {
 	const title = requiredField(request.title, "title", "create");
 	const goal = requiredField(request.goal, "goal", "create");
 	const dod = requiredField(request.dod, "dod", "create");
-	// Independent verification is a real tax (an extra dispatch round plus a verifier
-	// sub-agent run) that only pays off when there is something a read-only verifier can
-	// actually check, so it is opt-in. `applyTaskControlPatch` still turns it on by default
-	// for external side effects (spec 036, D5).
+	// Independent verification is opt-in: it is a quality fact, not an external-action policy.
 	const control = applyTaskControlPatch(
-		createDefaultTaskControl(request.control?.verificationRequired ?? false),
+		createDefaultTaskControl(request.control?.verificationRequired ?? false, { createdAt: formatLocalTime() }),
 		request.control ?? {},
 	);
-	const fields = applySet({ status: normalizeCreateStatus(request.status), control }, request);
-	// First-cycle scheduling. A recurring task created without an explicit wake follows cron
-	// semantics: its first run is deferred to the next scheduled occurrence, not fired now.
-	// Without this the task is `active` + no `wake` → immediately actionable, so the driver
-	// resumes it the instant it is created (ignoring the schedule) and re-dispatches it every
-	// backoff interval; an agent expecting a scheduled wake then idles through those dispatches.
-	// Seeding the first wake here mirrors what `done` does for every subsequent cycle. Only a
-	// freshly opened task with no caller-supplied wake is seeded — an explicit wake (including a
-	// past one for "start now") or a non-active initial status is always honoured verbatim.
-	if (fields.schedule && fields.status === "active" && request.wake === undefined) {
+	const fields = applySet({ status: normalizeCreateStatus(request.status), enabled: true, control }, request);
+	if (!fields.schedule && fields.status === "sleeping") {
+		throw new RecoverableToolError('A one-shot task cannot use status "sleeping"; create it as active or waiting.');
+	}
+	// Recurring creation always starts asleep. The first occurrence and every later occurrence use
+	// the same runtime cycle-open operation; creation itself never dispatches work.
+	if (fields.schedule) {
+		fields.status = "sleeping";
+		fields.enabled = true;
+	}
+	if (fields.schedule && request.wake === undefined) {
 		const next = nextTaskWake(fields.schedule);
 		fields.wake = next ? formatLocalTime(next) : undefined;
 	}
@@ -135,10 +134,15 @@ export async function readTaskDocument(
 	return {
 		fields: {
 			status: frontmatter.status ?? "active",
+			enabled: frontmatter.enabled,
 			wake: frontmatter.wake,
 			schedule: frontmatter.schedule,
 			recurrence: frontmatter.recurrence,
-			control: frontmatter.control,
+			// A successful task_manage write upgrades a hand-written/v0 task to the v2
+			// control contract instead of preserving an ungoverned task indefinitely.
+			control: frontmatter.control ?? createDefaultTaskControl(),
+			outcome: frontmatter.archiveOutcome,
+			closedAt: frontmatter.closedAt,
 		},
 		body: taskBody(content),
 	};
@@ -152,8 +156,11 @@ export async function readTaskDocument(
  * moment the model chooses it, rather than leaving it to be rediscovered by a task that goes quiet.
  */
 export function describeTaskSchedule(fields: TaskFields): string {
+	if (fields.enabled === false) {
+		return `status: ${fields.status}（已停用${fields.control?.stop ? `：${fields.control.stop.reason}` : ""}）`;
+	}
 	if (fields.status === "waiting" && !fields.wake) {
-		return "status: waiting（已停泊：driver 不会再叫你，等后台作业结束、用户消息或 /tasks run）";
+		return `status: waiting（已停泊：等待 ${fields.control?.waitingFor ?? "external-signal"}；driver 不会轮询）`;
 	}
 	return `status: ${fields.status}${fields.wake ? `, wake: ${fields.wake}` : ""}`;
 }
@@ -161,16 +168,10 @@ export function describeTaskSchedule(fields: TaskFields): string {
 /** Apply a `set` request's optional fields onto the existing frontmatter. */
 export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFields {
 	const next: TaskFields = { ...fields };
-	// The schema does not offer "granted", but the check stays: this is the only place that
-	// guarantees a self-granted approval cannot reach disk, whatever the caller sends.
-	const patch: TaskControlPatch = request.control ?? {};
-	if (patch.externalApproval === "granted") {
-		throw new Error('Only a user can grant external-action approval with "/tasks approve <id>".');
-	}
 	if (request.status !== undefined) {
 		if (!isSettableTaskStatus(request.status)) {
 			throw new RecoverableToolError(
-				`Invalid status "${request.status}". Use one of ${SETTABLE_STATUSES.join(", ")}, or action "done".`,
+				`Invalid status "${request.status}". Use one of ${SETTABLE_STATUSES.join(", ")}, or action "complete".`,
 			);
 		}
 		next.status = request.status;
@@ -215,13 +216,11 @@ export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFi
 	if (request.control !== undefined) {
 		next.control = applyTaskControlPatch(next.control ?? createDefaultTaskControl(), request.control);
 	}
-	// A done recurring task's wake is the single time rule's job: `normalizeTaskFields` fills the
-	// next occurrence on the write path, so no per-action recompute lives here anymore (D1).
-	return next;
+	return normalizeTaskFields(next);
 }
 
 /**
- * On close-out (done or cancel), delete every task-owned event.
+ * On close-out (complete or cancel), delete every task-owned event.
  *
  * Recurrence cadence now lives solely in the task's `schedule` frontmatter (027/029), so a
  * recurring task needs no surviving `.schedule` event — the driver reopens each cycle from

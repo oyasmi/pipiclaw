@@ -1,5 +1,7 @@
 # 026 — System Prompt 瘦身与按意图加载
 
+> **当前 Task 状态、权限边界与验收口径已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本文中的 Task approval 与旧 prompt gate 只保留为历史设计背景。
+
 | 字段 | 值 |
 |---|---|
 | 状态 | IMPLEMENTED（behavior eval harness 与首个 baseline 已建；DoD #11 的 hard-invariant 零违规仍受 S-net quarantine 缺陷阻塞） |

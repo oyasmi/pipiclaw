@@ -1,3 +1,5 @@
+> **当前 Task 状态与生命周期已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本文保留 native driver 与原子 checkpoint 的历史设计背景。
+
 # Native Task Driver 与原子进展 checkpoint
 
 | 字段 | 值 |

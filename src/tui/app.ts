@@ -149,7 +149,6 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 				channelDir,
 				workspaceDir: paths.workspaceDir,
 				channelId,
-				approver: safeUserName(),
 			}),
 		statusInfo: { version: readCliVersion(), startedAt: Date.now() },
 	});

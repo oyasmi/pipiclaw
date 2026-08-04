@@ -42,7 +42,7 @@ describeE2E("E2E: task lifecycle", () => {
 		await harness.sendUserMessage(
 			`帮我建一个任务台账，id 用 ${taskId}，标题随意，目标是记录一个数字。` +
 				"DoD 只写一条 checkbox：把数字 42 记录到任务的 Current Cycle 里。" +
-				"verification 用 evidence 模式（不需要独立验证）。现在先不要开始做，只创建任务即可。",
+				"不要求独立验收。现在先不要开始做，只创建任务即可。",
 		);
 
 		expect(existsSync(activeTaskPath()), getE2ESkipReason() ?? undefined).toBe(true);
@@ -63,12 +63,12 @@ describeE2E("E2E: task lifecycle", () => {
 		// closely enough to exercise the same SOP a live driver wake would trigger.
 		await harness.sendUserMessage(
 			`[TASK_DRIVER:${taskId}] Resume task ${taskId}. Open tasks/${taskId}.md, advance the next concrete step, ` +
-				"and atomically record what changed with task_manage progress (or task_manage done if the DoD is fully " +
+				"and atomically record what changed with task_manage progress (or task_manage complete if the DoD is fully " +
 				"satisfied). If no user-visible update is needed, respond with [SILENT].",
 		);
 
-		// The evidence-mode DoD is trivially satisfiable in one turn, so the model may
-		// legitimately drive straight through progress -> done -> archive, not just
+		// The DoD is trivially satisfiable in one turn, so the model may
+		// legitimately drive straight through progress -> complete -> archive, not just
 		// checkpoint and stop. Either outcome is correct; both must leave a task file
 		// behind with the checkpoint evidence and parsable control metadata.
 		expect(existsSync(currentTaskPath()), getE2ESkipReason() ?? undefined).toBe(true);

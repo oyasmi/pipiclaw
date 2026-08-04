@@ -1,100 +1,79 @@
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-/**
- * The task status model and its single transition table (spec 029, D3).
- *
- * There are six canonical statuses. Every status maps to exactly one driver behaviour;
- * statuses that used to differ only for human readers were merged (their nuance now lives
- * in free-text `control.blockedReason`). A single `action × fromStatus → toStatus` table
- * replaces the per-action status guards that used to be scattered across `task_manage` and
- * the `/tasks` command handlers, so an illegal transition always fails the same way.
- *
- *   active     → dispatchable now (wake-gated: not yet due ⇒ sleep until wake)
- *   waiting    → with a wake: sleep until it, then dispatch. Without one: parked — the driver
- *                never wakes it; a job completion, a user message or `/tasks run` does.
- *   verifying  → dispatch a checker-only turn
- *   paused     → never dispatched (excluded at the driver scan layer, zero token)
- *   done       → recurring: reopen next cycle at wake; otherwise archived
- *   cancelled  → archived, never
- */
 
-export const TASK_STATUSES = ["active", "waiting", "verifying", "done", "cancelled", "paused"] as const;
+/** The only lifecycle stages stored in an active task directory. */
+export const TASK_STATUSES = ["active", "waiting", "sleeping"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
-/** Statuses a user/agent may set directly via create/progress/set. */
-export const SETTABLE_TASK_STATUSES = ["active", "waiting", "paused"] as const;
+/** Statuses a model/user may set directly; recurring sleeping is runtime-owned but repairable. */
+export const SETTABLE_TASK_STATUSES = ["active", "waiting", "sleeping"] as const;
 export type SettableTaskStatus = (typeof SETTABLE_TASK_STATUSES)[number];
-
-/** Statuses the driver never dispatches. */
-export const TERMINAL_TASK_STATUSES = new Set<string>(["done", "cancelled", "paused"]);
 
 export type TaskLifecycleAction =
 	| "create"
 	| "progress"
-	| "candidate"
+	| "request-verification"
 	| "verify"
-	| "done"
+	| "complete"
 	| "skip"
 	| "cancel"
 	| "set"
 	| "pause"
 	| "resume"
 	| "run"
-	| "escalate"
-	| "start-cycle";
+	| "governor-stop"
+	| "wait-due"
+	| "cycle-due";
 
 interface TransitionRule {
-	/** Statuses the action may be invoked from. `create` starts from nothing. */
 	from: readonly TaskStatus[];
-	/** A fixed target status, or "caller" when the request supplies a settable status. */
+	/** The operation chooses its final archive/sleeping result outside the live status graph. */
 	to: TaskStatus | "caller";
 }
 
+const LIVE = ["active", "waiting", "sleeping"] as const;
+const WORKABLE = ["active", "waiting"] as const;
+
 const TRANSITIONS: Record<TaskLifecycleAction, TransitionRule> = {
 	create: { from: [], to: "active" },
-	progress: { from: ["active", "waiting", "verifying"], to: "caller" },
-	candidate: { from: ["active", "waiting"], to: "verifying" },
-	verify: { from: ["verifying"], to: "verifying" },
-	done: { from: ["active", "waiting", "verifying"], to: "done" },
-	skip: { from: ["active", "waiting", "verifying"], to: "done" },
-	cancel: {
-		from: ["active", "waiting", "verifying", "paused", "done"],
-		to: "cancelled",
-	},
-	set: {
-		from: ["active", "waiting", "verifying", "paused", "done"],
-		to: "caller",
-	},
-	pause: { from: ["active", "waiting", "verifying"], to: "paused" },
-	resume: { from: ["paused"], to: "active" },
-	run: { from: ["paused", "active", "waiting", "done"], to: "active" },
-	escalate: { from: ["active", "waiting", "verifying"], to: "paused" },
-	"start-cycle": { from: ["done"], to: "active" },
+	progress: { from: WORKABLE, to: "caller" },
+	"request-verification": { from: ["active"], to: "waiting" },
+	verify: { from: ["waiting"], to: "active" },
+	complete: { from: ["active"], to: "caller" },
+	skip: { from: WORKABLE, to: "sleeping" },
+	cancel: { from: LIVE, to: "caller" },
+	set: { from: LIVE, to: "caller" },
+	pause: { from: LIVE, to: "caller" },
+	resume: { from: LIVE, to: "caller" },
+	run: { from: LIVE, to: "active" },
+	"governor-stop": { from: LIVE, to: "caller" },
+	"wait-due": { from: ["waiting"], to: "active" },
+	"cycle-due": { from: ["sleeping"], to: "active" },
 };
 
-/**
- * Map a stored (possibly legacy) status string to a canonical status.
- * Legacy files are read losslessly and written back canonical on the next write;
- * there is no disk migration. `escalated` maps to `paused` — the caller is expected to
- * stamp `control.pausedBy = "governor"` to preserve the "stopped by the governor" nuance.
- */
-export function normalizeStoredStatus(raw: string | undefined): TaskStatus {
+/** Map legacy on-disk values to the v2 reader vocabulary. */
+export function normalizeStoredStatus(raw: string | undefined, recurring = false): TaskStatus {
 	switch (raw) {
 		case undefined:
 		case "":
 		case "open":
 		case "in-progress":
+		case "verifying":
 			return "active";
 		case "awaiting-user":
 		case "blocked":
 			return "waiting";
+		case "paused":
 		case "escalated":
-			return "paused";
+			return "active";
+		case "done":
+			return recurring ? "sleeping" : "active";
+		case "cancelled":
+			return "active";
 		default:
 			return (TASK_STATUSES as readonly string[]).includes(raw) ? (raw as TaskStatus) : "active";
 	}
 }
 
-/** True when the stored status was the legacy `escalated` (⇒ paused by the governor). */
 export function wasLegacyEscalated(raw: string | undefined): boolean {
 	return raw === "escalated";
 }
@@ -103,11 +82,7 @@ export function isSettableTaskStatus(value: string): value is SettableTaskStatus
 	return (SETTABLE_TASK_STATUSES as readonly string[]).includes(value);
 }
 
-/**
- * Assert an action is legal from the current status, throwing a uniform error otherwise.
- * Returns the resolved target status: a fixed status, or — for `to: "caller"` actions —
- * `requestedStatus` when supplied (validated as settable) else the unchanged `from`.
- */
+/** Assert an action is legal and resolve caller-supplied target status. */
 export function resolveTaskTransition(
 	action: TaskLifecycleAction,
 	id: string,

@@ -1,3 +1,5 @@
+> **当前语义已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本文中的策略字段与生命周期口径属于 Task v1 历史契约。
+
 # 任务治理瘦身：把预算、worktree、关系图删掉，把验收收敛成一件事
 
 | 字段 | 值 |

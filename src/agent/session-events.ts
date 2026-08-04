@@ -221,7 +221,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		// fault: the model normally corrects it on the next call. It is logged so the retry is
 		// still diagnosable, but never rendered to the user — a red bubble would report a failure
 		// that never happened and make the assistant look broken mid-turn. Rejections the *user*
-		// must resolve (an approval gate, a guard refusal) stay plain errors and remain visible.
+		// must resolve (a security guard refusal or an external decision) stay plain errors and remain visible.
 		const rejected = details?.recoverable === true;
 		const treatAsError = event.isError || Boolean(subAgentDetails?.failed);
 		if (treatAsError) {

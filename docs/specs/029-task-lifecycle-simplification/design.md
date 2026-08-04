@@ -1,3 +1,5 @@
+> **当前语义已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本文记录更早版本的状态与周期设计，仅作历史背景。
+
 # Task 生命周期简化:状态收敛、唯一时间规则、LLM 出环
 
 | 字段 | 值 |

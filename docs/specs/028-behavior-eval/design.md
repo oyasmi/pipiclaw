@@ -1,5 +1,7 @@
 # 行为评测体系：从"测试代码正确"到"评测 Agent 行为有效"
 
+> **其中 Task approval、旧生命周期与 `S-approval-*` 案例属于历史评测口径，当前 Task 行为以 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) 为准。** 本文的 harness/gate 设计仍可作为评测基础设施背景。
+
 | 字段 | 值 |
 |------|------|
 | 状态 | IMPLEMENTED v5（2026-07-26：29 cases；在 26 条精简套件上修复多回合假绿与尾部证据丢失，新增冷历史检索、事件创建、原生附件三条核心路径，并强化恢复、纠错、注入、路径与研究探针）。评审见历史提交中的 `behavior-eval-review-2026-07-18.md` 与 `behavior-eval-review-2026-07-25.md`，v3/v5 变更见下方修订记录 |

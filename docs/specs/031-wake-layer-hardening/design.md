@@ -1,5 +1,7 @@
 # 唤醒层加固:投递幂等、准入下沉、作业持久化
 
+> **当前 Task 状态与终态归档语义已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本文的 durable dispatch、作业恢复与幂等设计仍是有效背景；旧 terminal/status 名称仅作历史记录。
+
 | 字段 | 值 |
 |------|------|
 | 状态 | 已落地（D1–D7 全部实现） |

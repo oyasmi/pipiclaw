@@ -3,8 +3,14 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
-import { formatLocalTime } from "../shared/local-time.js";
-import { resetTaskControlForCycle, type TaskControl, type TaskOutcome } from "./control.js";
+import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
+import {
+	createDefaultTaskControl,
+	resetTaskControlForCycle,
+	type TaskControl,
+	type TaskOutcome,
+	type TaskWaitingFor,
+} from "./control.js";
 import {
 	normalizeTaskId,
 	parseTaskFrontmatter,
@@ -26,8 +32,8 @@ export interface StoredTaskDocument {
 
 /**
  * Hash the task's *contract* segment (Goal/DoD/Manual/Verification), not the whole body, so
- * verification PASS and external approval survive routine Current Cycle / History logging and
- * only break when the contract itself changes (spec 029, D4). Old attestations that hashed the
+ * verification PASS survives routine Current Cycle / History logging and only breaks when the
+ * contract itself changes (spec 029, D4). Old attestations that hashed the
  * whole body naturally fail this check after upgrade and are re-verified — verification should
  * always reflect current content, so there is no compatibility burden.
  */
@@ -61,10 +67,14 @@ export async function readStoredTask(
 		path,
 		fields: {
 			status: frontmatter.status ?? "active",
+			legacyStatus: frontmatter.rawStatus,
+			enabled: frontmatter.enabled,
 			wake: frontmatter.wake,
 			schedule: frontmatter.schedule,
 			recurrence: frontmatter.recurrence,
 			control: frontmatter.control,
+			outcome: frontmatter.archiveOutcome,
+			closedAt: frontmatter.closedAt,
 		},
 		body: taskBody(content),
 	};
@@ -104,7 +114,9 @@ export async function claimTaskAttempt(
 ): Promise<TaskAttemptClaim | undefined> {
 	let claim: TaskAttemptClaim | undefined;
 	const document = await updateStoredTask(channelDir, id, (task) => {
-		if (!task.fields.control) return;
+		const status = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+		if (status !== "active" || task.fields.enabled === false) return;
+		task.fields.control ??= createDefaultTaskControl();
 		claim = {
 			control: task.fields.control,
 			previousLastOutcome: task.fields.control.lastOutcome,
@@ -188,33 +200,52 @@ export async function finishTaskAttempt(
 }
 
 /**
- * A governor stop: the deterministic task governor pauses the task (spec 029, D3 — this is
- * the former `escalated` status, now `paused` + `pausedBy: "governor"`), records the reason,
- * and clears the wake so no automatic dispatch resumes it until a human intervenes.
+ * A governor stop: disable the task without changing its lifecycle stage or wake. The structured
+ * stop record is the durable recovery receipt; notification is handled by the runtime driver.
  */
 export async function escalateTask(channelDir: string, id: string, reason: string): Promise<boolean> {
 	const document = await updateStoredTask(channelDir, id, (task) => {
-		task.fields.status = resolveTaskTransition("escalate", id, normalizeStoredStatus(task.fields.status));
-		task.fields.wake = undefined;
-		if (task.fields.control) {
-			task.fields.control.pausedBy = "governor";
-			task.fields.control.lastOutcome = "blocked";
-			task.fields.control.blockedReason = reason;
-		}
+		const status = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+		resolveTaskTransition("governor-stop", id, status);
+		task.fields.enabled = false;
+		task.fields.control ??= createDefaultTaskControl();
+		task.fields.control.stop = { by: "governor", reason, at: formatLocalTime() };
+		task.fields.control.lastOutcome = "blocked";
+		task.fields.control.blockedReason = reason;
 	});
 	return document !== undefined;
+}
+
+/** Atomically convert a due timed wait to active before any wake is dispatched. */
+export async function activateWaitingTask(
+	channelDir: string,
+	id: string,
+	expectedWaitingFor?: TaskWaitingFor,
+): Promise<StoredTaskDocument | undefined> {
+	let activated = false;
+	const document = await updateStoredTask(channelDir, id, (task) => {
+		const status = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+		if (status !== "waiting" || task.fields.enabled === false) return;
+		if (expectedWaitingFor && task.fields.control?.waitingFor !== expectedWaitingFor) return;
+		activated = true;
+		task.fields.control ??= createDefaultTaskControl();
+		task.fields.status = "active";
+		task.fields.wake = undefined;
+		if (task.fields.control) {
+			task.fields.control.waitingFor = undefined;
+			task.fields.control.blockedReason = undefined;
+		}
+	});
+	return activated ? document : undefined;
 }
 
 /**
  * A stable cycle id for a runtime-opened recurring cycle: `cycle-YYYY-MM-DD`, disambiguated
  * with a `-N` suffix when the same task is reopened more than once on the same local day.
  */
-export function nextCycleId(previousCycleId: string | undefined, now: Date): string {
-	const y = now.getFullYear();
-	const m = String(now.getMonth() + 1).padStart(2, "0");
-	const d = String(now.getDate()).padStart(2, "0");
-	const base = `cycle-${y}-${m}-${d}`;
-	if (!previousCycleId || (previousCycleId !== base && !previousCycleId.startsWith(`${base}-`))) return base;
+export function nextCycleId(previousCycleId: string | undefined, occurrence: Date): string {
+	const base = `cycle-${occurrence.getFullYear()}-${String(occurrence.getMonth() + 1).padStart(2, "0")}-${String(occurrence.getDate()).padStart(2, "0")}`;
+	if (!previousCycleId || !previousCycleId.startsWith(base)) return base;
 	const suffix = previousCycleId.slice(base.length + 1);
 	const previousCount = suffix ? Number.parseInt(suffix, 10) : 1;
 	const nextCount = Number.isFinite(previousCount) && previousCount >= 1 ? previousCount + 1 : 2;
@@ -222,23 +253,32 @@ export function nextCycleId(previousCycleId: string | undefined, now: Date): str
 }
 
 /**
- * Open the next cycle of a done recurring task entirely in the runtime (spec 029, D2):
+ * Open the next cycle of a sleeping recurring task entirely in the runtime (spec 029, D2):
  * fold the previous cycle's log into History, reset per-cycle control, clear the wake, and
  * mark it `active`. This is the deterministic replacement for the retired
- * `task_manage start-cycle` action — no LLM turn is spent just to reopen a cycle.
+ * no LLM turn is spent just to reopen a cycle.
  */
 export async function openRecurringTaskCycle(
 	channelDir: string,
 	id: string,
 	now: Date,
+	force = false,
 ): Promise<{ document: StoredTaskDocument; cycleId: string } | undefined> {
 	let cycleId: string | undefined;
 	const document = await updateStoredTask(channelDir, id, (task) => {
-		task.fields.status = resolveTaskTransition("start-cycle", id, normalizeStoredStatus(task.fields.status));
-		cycleId = nextCycleId(task.fields.control?.cycleId, now);
-		task.body = startTaskCycle(task.body, cycleId);
+		const status = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+		if (status !== "sleeping" || !task.fields.schedule) return;
+		const wakeMs = task.fields.wake ? parseLocalTime(task.fields.wake) : undefined;
+		if (!force && (task.fields.enabled === false || wakeMs === undefined || wakeMs > now.getTime())) return;
+		const occurrence = !force && wakeMs !== undefined ? new Date(wakeMs) : now;
+		cycleId = nextCycleId(task.fields.control?.cycleId, occurrence);
+		task.fields.control ??= createDefaultTaskControl();
+		const firstCycle = !task.fields.control.cycleId;
+		task.body = startTaskCycle(task.body, cycleId, !firstCycle);
+		task.fields.status = "active";
+		task.fields.enabled = true;
 		task.fields.wake = undefined;
-		if (task.fields.control) task.fields.control = resetTaskControlForCycle(task.fields.control, cycleId);
+		task.fields.control = resetTaskControlForCycle(task.fields.control, cycleId);
 	});
 	if (!document || !cycleId) return undefined;
 	return { document, cycleId };

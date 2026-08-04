@@ -4,7 +4,7 @@ import { join, resolve, sep } from "node:path";
 import { channelJobTaskIds } from "../agent/job-manager.js";
 import { formatLocalTime, parseLocalTime, parseWakeInput } from "../shared/local-time.js";
 import { parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
-import { nextTaskWake } from "../shared/task-schedule.js";
+import { nextTaskWake, validateTaskSchedule } from "../shared/task-schedule.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import {
@@ -12,7 +12,6 @@ import {
 	createDefaultTaskControl,
 	retiredTaskControlKeys,
 	TASK_PRIORITIES,
-	type TaskControl,
 	type TaskPriority,
 	taskBudgetViolation,
 } from "../tasks/control.js";
@@ -23,6 +22,7 @@ import {
 	missingStandardTaskSections,
 	normalizeTaskId,
 	readActiveTasks,
+	recurringTaskMissedOccurrence,
 	type TaskLedgerEntry,
 } from "../tasks/ledger.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
@@ -45,8 +45,6 @@ export interface HandleTasksCommandOptions {
 	/** Workspace directory; required for `/tasks doctor` because events are workspace-scoped. */
 	workspaceDir?: string;
 	channelId?: string;
-	/** Direct command issuer; used to create an auditable external-action approval. */
-	approver?: string;
 	/** Optional immediate task wake, available in the long-lived DingTalk runtime. */
 	dispatchTask?: (id: string, attemptGeneration?: number) => Promise<boolean>;
 }
@@ -56,7 +54,7 @@ export interface HandleTasksCommandOptions {
  *
  * Deliberately a small, flat set: the ones a user already knows they want to change (when it
  * should wake, what it should do next, how much rope it has). Everything structural — status
- * transitions, verification, approval, side effects — stays with `task_manage`, whose state
+ * transitions and verification — stays with `task_manage`, whose state
  * machine those fields belong to. The value is the rest of the line, so it may contain spaces.
  */
 const SETTABLE_TASK_FIELDS = ["wake", "next", "priority", "attempts", "deadline"] as const;
@@ -67,7 +65,6 @@ type TasksCommand =
 	| { action: "show"; id: string }
 	| { action: "archive" }
 	| { action: "doctor" }
-	| { action: "approve"; id: string }
 	| { action: "pause"; id: string }
 	| { action: "resume"; id: string }
 	| { action: "run"; id: string }
@@ -82,9 +79,8 @@ function usage(): string {
 - \`/tasks\` — 列出本频道进行中的任务
 - \`/tasks show <id>\` — 查看单个任务文件（进行中或已归档）
 - \`/tasks archive\` — 列出已归档（已关闭）的任务
-- \`/tasks approve <id>\` — 显式批准该任务的外部副作用
-- \`/tasks pause <id>\` — 停止该任务的自动唤醒
-- \`/tasks resume <id>\` — 让暂停的任务在下一轮扫描中恢复
+- \`/tasks pause <id>\` — 停止该任务的自动执行（保留当前阶段与 wake）
+- \`/tasks resume <id>\` — 重新启用该任务，按当前阶段继续
 - \`/tasks run <id>\` — 恢复并立即排入一次执行（需要运行时可用）
 - \`/tasks set <id> <${SETTABLE_TASK_FIELDS.join("|")}> <值>\` — 直接改一个字段，不花一个 LLM 回合
 - \`/tasks stats [id]\` — 查看任务级的尝试次数、token、花费与验收结果
@@ -112,11 +108,6 @@ function parseTasksCommand(args: string): TasksCommand {
 	if (action === "doctor") {
 		if (parts.length > 1) throw new Error("用法：/tasks doctor");
 		return { action: "doctor" };
-	}
-	if (action === "approve") {
-		const id = parts[1];
-		if (!id || parts.length > 2) throw new Error("用法：/tasks approve <id>");
-		return { action: "approve", id };
 	}
 	if (action === "pause" || action === "resume") {
 		const id = parts[1];
@@ -258,7 +249,7 @@ async function readActiveTaskContent(channelDir: string, id: string): Promise<st
 async function listTasks(channelDir: string): Promise<string> {
 	const dir = tasksDir(channelDir);
 	const now = Date.now();
-	const entries = await readActiveTasks(dir, now);
+	const entries = (await readActiveTasks(dir, now)).filter((entry) => !entry.frontmatter.archiveOutcome);
 	if (entries.length === 0) {
 		return "# 任务\n\n当前没有进行中的任务。";
 	}
@@ -271,45 +262,22 @@ async function listTasks(channelDir: string): Promise<string> {
 			detail.push(`priority: ${control.priority}`);
 			detail.push(`attempts: ${control.usage.attempts}/${control.budget.maxAttempts}`);
 			if (control.verification.required) detail.push(`verify: required/${control.verification.status}`);
-			if (control.sideEffects !== "workspace") {
-				detail.push(`effects: ${control.sideEffects}/${control.externalApproval}`);
-			}
+			if (control.waitingFor) detail.push(`waiting for: ${control.waitingFor}`);
+			if (control.stop) detail.push(`stop: ${control.stop.by} — ${control.stop.reason}`);
 			if (control.deadline) detail.push(`deadline: ${control.deadline}`);
 			if (control.nextAction) detail.push(`next: ${control.nextAction}`);
 			if (control.cycleId) {
-				detail.push(`${status === "done" ? "last" : "current"} cycle: ${control.cycleId}`);
+				detail.push(`${status === "sleeping" ? "last" : "current"} cycle: ${control.cycleId}`);
 			}
 		}
+		if (entry.frontmatter.enabled === false) detail.push("enabled: false");
 		if (entry.frontmatter.recurrence) detail.push(`recurrence: ${entry.frontmatter.recurrence}`);
 		if (entry.frontmatter.schedule) {
 			detail.push(`schedule timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone} (host)`);
 		}
 		return `- ${entry.id} — ${entry.title}\n${detail.join("   ")}`;
 	});
-	return `# 任务：${entries.length} 个进行中\n\n${blocks.join("\n")}`;
-}
-
-async function approveTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
-	const id = normalizeTaskId(idInput);
-	const task = await readStoredTask(options.channelDir, id);
-	if (!task) return `找不到任务：${id}`;
-	const control = task.fields.control;
-	if (!control) return `任务 ${id} 没有受治理的 control 元数据，先让 agent 规范化后再审批。`;
-	if (task.fields.status === "done" || task.fields.status === "cancelled") {
-		return `任务 ${id} 已是 ${task.fields.status}，不能再授予外部动作审批。`;
-	}
-	if (control.sideEffects !== "external") {
-		return `任务 ${id} 未标记为外部副作用，无需审批。`;
-	}
-	if (control.externalApproval === "granted") {
-		return `任务 ${id} 已由 ${control.approvalBy ?? "某位用户"} 于 ${control.approvedAt ?? "未知时间"} 批准过。`;
-	}
-	control.externalApproval = "granted";
-	control.approvalBy = options.approver?.trim() || "unknown-user";
-	control.approvedAt = formatLocalTime();
-	control.approvalBodyHash = taskBodyHash(task.body);
-	await writeStoredTask(task);
-	return `已批准任务 ${id} 的外部副作用，审批人记为 ${control.approvalBy}。`;
+	return `# 任务：${entries.length} 个活动任务\n\n${blocks.join("\n")}`;
 }
 
 export async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
@@ -320,62 +288,34 @@ export async function pauseTask(options: HandleTasksCommandOptions, idInput: str
 async function pauseTaskLocked(options: HandleTasksCommandOptions, id: string): Promise<string> {
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `找不到任务：${id}`;
-	const from = normalizeStoredStatus(task.fields.status);
-	if (from === "paused") return `任务 ${id} 已经是暂停状态。`;
+	const from = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
 	try {
 		resolveTaskTransition("pause", id, from);
 	} catch (error) {
 		return errorMessage(error);
 	}
-	task.fields.status = "paused";
-	task.fields.wake = undefined;
-	if (task.fields.control) {
-		task.fields.control.pausedBy = "user";
-		task.fields.control.blockedReason = `Paused by ${options.approver?.trim() || "a user"}.`;
-	}
+	if (task.fields.enabled === false) return `任务 ${id} 已停用。需要继续时用 /tasks resume ${id}。`;
+	task.fields.enabled = false;
+	const control = task.fields.control ?? createDefaultTaskControl();
+	control.stop = { by: "user", reason: "Disabled by /tasks pause.", at: formatLocalTime() };
+	task.fields.control = control;
 	await writeStoredTask(task);
-	return `已暂停任务 ${id}。需要继续时用 /tasks resume ${id}。`;
-}
-
-/**
- * Why restarting this task would immediately stop it again, or `undefined` when it is free to run.
- *
- * The governor pauses on the same condition it re-checks on the next scan, so a plain resume of a
- * budget/deadline-exhausted task looked like it worked, cost one escalation turn, and landed back
- * in `paused` minutes later — while three separate places (the `/stop` receipt, `/tasks` usage,
- * the driving playbook) told the user resume was the fix. Refuse instead, and name the command
- * that actually unblocks it.
- */
-function restartBlockedMessage(id: string, control: TaskControl | undefined): string | undefined {
-	if (!control) return undefined;
-	const violation = taskBudgetViolation(control, Date.now());
-	if (!violation) return undefined;
-	return [
-		`任务 ${id} 仍然超出治理限额：${violation}。`,
-		"直接恢复只会在下一轮扫描中被治理器再次暂停，并白白多花一个回合。",
-		`先放宽限额：\`/tasks set ${id} attempts <n>\`（当前上限 ${control.budget.maxAttempts}）` +
-			`${control.deadline ? `，或 \`/tasks set ${id} deadline <本地时间>\`（当前 ${control.deadline}）` : ""}，然后再试一次。`,
-		"若这个任务已经不该继续，用 `task_manage cancel` 关掉它。",
-	].join("\n");
+	return `已停用任务 ${id}。当前阶段与 wake 已保留；需要继续时用 /tasks resume ${id}。`;
 }
 
 export async function resumeTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `找不到任务：${id}`;
-	const from = normalizeStoredStatus(task.fields.status);
-	if (from !== "paused") return `任务 ${id} 当前是 ${from}，并非暂停状态。`;
-	const blocked = restartBlockedMessage(id, task.fields.control);
-	if (blocked) return blocked;
+	const from = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+	if (task.fields.enabled !== false) return `任务 ${id} 已启用。`;
 	resolveTaskTransition("resume", id, from);
-	task.fields.status = "active";
-	task.fields.wake = undefined;
+	task.fields.enabled = true;
 	if (task.fields.control) {
-		task.fields.control.pausedBy = undefined;
-		task.fields.control.blockedReason = undefined;
+		task.fields.control.stop = undefined;
 	}
 	await writeStoredTask(task);
-	return `已恢复任务 ${id}，任务驱动器下一轮扫描会接上。`;
+	return `已重新启用任务 ${id}，任务驱动器会按当前阶段与 wake 接上。`;
 }
 
 /**
@@ -454,27 +394,25 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 	} catch (error) {
 		return errorMessage(error);
 	}
-	const blocked = restartBlockedMessage(id, task.fields.control);
-	if (blocked) return blocked;
 	const now = new Date();
-	let claimedControl = task.fields.control;
-	if (from === "done") {
+	if (from === "sleeping") {
 		if (!task.fields.schedule) {
-			return `任务 ${id} 已完成且不是周期任务，不能重新运行；如需新工作请创建新的 task id。`;
+			return `任务 ${id} 没有 schedule，不能从 sleeping 打开周期；如需新工作请创建新的 task id。`;
 		}
-		const opened = await openRecurringTaskCycle(options.channelDir, id, now);
+		const opened = await openRecurringTaskCycle(options.channelDir, id, now, true);
 		if (!opened) return `任务 ${id} 无法打开新周期；先用 /tasks doctor 检查任务文件。`;
-		claimedControl = opened.document.fields.control;
 	} else {
 		task.fields.status = "active";
 		task.fields.wake = undefined;
+		task.fields.enabled = true;
 		if (task.fields.control) {
-			task.fields.control.pausedBy = undefined;
+			task.fields.control.stop = undefined;
+			task.fields.control.waitingFor = undefined;
 			task.fields.control.blockedReason = undefined;
 		}
 		await writeStoredTask(task);
 	}
-	const claim = claimedControl ? await claimTaskAttempt(options.channelDir, id, now) : undefined;
+	const claim = await claimTaskAttempt(options.channelDir, id, now);
 	const enqueued = await options.dispatchTask?.(id, claim?.generation);
 	if (!enqueued && claim) await releaseTaskAttemptClaim(options.channelDir, id, claim);
 	return enqueued
@@ -506,7 +444,9 @@ async function taskStats(options: HandleTasksCommandOptions, idInput?: string): 
 			frontmatter: {
 				readable: true,
 				status: task.fields.status,
+				enabled: task.fields.enabled !== false,
 				wake: task.fields.wake,
+				schedule: task.fields.schedule,
 				recurrence: task.fields.recurrence,
 				control: task.fields.control,
 			},
@@ -514,7 +454,9 @@ async function taskStats(options: HandleTasksCommandOptions, idInput?: string): 
 		};
 		return `# 任务用量\n\n${renderUsageLine(entry)}`;
 	}
-	const entries = await readActiveTasks(tasksDir(options.channelDir));
+	const entries = (await readActiveTasks(tasksDir(options.channelDir))).filter(
+		(entry) => !entry.frontmatter.archiveOutcome,
+	);
 	const governed = entries.filter((entry) => entry.frontmatter.control);
 	const totals = governed.reduce(
 		(total, entry) => {
@@ -614,9 +556,17 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		}
 
 		const control = entry.frontmatter.control;
+		if (!control && entry.frontmatter.enabled === false) {
+			issues.push(
+				issue(
+					`tasks/${entry.id}.md is disabled but has no v2 control.stop receipt.`,
+					`Use task_manage set to repair control metadata, then /tasks resume ${entry.id} when it is safe to continue.`,
+				),
+			);
+		}
 		if (control) {
 			const storedTask = await readStoredTask(options.channelDir, entry.id);
-			const violation = taskBudgetViolation(control, now);
+			const violation = taskBudgetViolation(control, now, status as "active" | "waiting" | "sleeping");
 			if (violation) {
 				issues.push(
 					issue(
@@ -625,27 +575,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					),
 				);
 			}
-			if (control.sideEffects === "external" && control.externalApproval === "required") {
-				issues.push(
-					issue(
-						`tasks/${entry.id}.md requires external side effects but has no user approval.`,
-						`After reviewing the proposed action, a user must run /tasks approve ${entry.id}.`,
-					),
-				);
-			}
-			if (
-				control.externalApproval === "granted" &&
-				storedTask &&
-				control.approvalBodyHash !== taskBodyHash(storedTask.body)
-			) {
-				issues.push(
-					issue(
-						`tasks/${entry.id}.md changed after external-action approval was granted.`,
-						`Review the current action and run /tasks approve ${entry.id} again.`,
-					),
-				);
-			}
-			if (status !== "done" && control.verification.status === "passed" && control.verification.bodyHash) {
+			if (status !== "sleeping" && control.verification.status === "passed" && control.verification.bodyHash) {
 				if (storedTask && taskBodyHash(storedTask.body) !== control.verification.bodyHash) {
 					issues.push(
 						issue(
@@ -669,14 +599,100 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					}
 				}
 			}
+			if (entry.frontmatter.enabled === false && !control.stop) {
+				issues.push(
+					issue(
+						`tasks/${entry.id}.md is disabled without a control.stop receipt.`,
+						`Use /tasks resume ${entry.id} after deciding who stopped it, or write a valid stop record with task_manage set.`,
+					),
+				);
+			}
+			if (entry.frontmatter.enabled !== false && control.stop) {
+				issues.push(
+					issue(
+						`tasks/${entry.id}.md has a stop receipt but enabled is true.`,
+						`Run /tasks resume ${entry.id} to clear the stale stop receipt, or disable the task explicitly.`,
+					),
+				);
+			}
 		}
 
 		const recurring = Boolean(entry.frontmatter.schedule);
-		if (status === "done" && !recurring) {
+		if (status === "sleeping" && !recurring) {
 			issues.push(
 				issue(
-					`tasks/${entry.id}.md is done but still in the active directory.`,
-					`Archive one-shot task ${entry.id}, or add a schedule cron with task_manage set if it is recurring.`,
+					`tasks/${entry.id}.md is sleeping without a recurring schedule.`,
+					`Use task_manage complete/cancel for a one-shot task, or add a valid schedule before sleeping it.`,
+				),
+			);
+		}
+		if (recurring) {
+			try {
+				validateTaskSchedule(entry.frontmatter.schedule!);
+			} catch (error) {
+				issues.push(
+					issue(
+						`tasks/${entry.id}.md has an invalid schedule: ${errorMessage(error)}`,
+						`Repair or clear schedule for ${entry.id}; the driver will keep this task disabled until repaired.`,
+					),
+				);
+			}
+			if (status === "sleeping" && !entry.frontmatter.wake) {
+				issues.push(
+					issue(
+						`tasks/${entry.id}.md is sleeping but has no wake.`,
+						`Repair the schedule and wake, then run /tasks resume ${entry.id} after review.`,
+					),
+				);
+			}
+		}
+		if (
+			status === "active" &&
+			entry.frontmatter.wake &&
+			validWakeMs(entry) !== undefined &&
+			validWakeMs(entry)! > now
+		) {
+			issues.push(
+				issue(
+					`tasks/${entry.id}.md is active but its wake is in the future.`,
+					`Use task_manage set/progress to make it waiting with waitingFor=time, or clear wake to continue now.`,
+				),
+			);
+		}
+		if (status === "waiting" && entry.frontmatter.wake && !control?.waitingFor) {
+			issues.push(
+				issue(
+					`tasks/${entry.id}.md is waiting on a timed wake but has no waitingFor marker.`,
+					`Run task_manage set with control.waitingFor=time or progress the task to normalize the wait.`,
+				),
+			);
+		}
+		if (
+			status === "waiting" &&
+			entry.frontmatter.wake &&
+			control?.waitingFor &&
+			!["time", "external-signal"].includes(control.waitingFor)
+		) {
+			issues.push(
+				issue(
+					`tasks/${entry.id}.md is waiting on a wake but waitingFor=${control.waitingFor} is not a timed source.`,
+					`Set control.waitingFor to time, or clear wake and record the real signal source before resuming ${entry.id}.`,
+				),
+			);
+		}
+		if (status === "waiting" && !entry.frontmatter.wake && control?.waitingFor === "time") {
+			issues.push(
+				issue(
+					`tasks/${entry.id}.md is parked but waitingFor=time has no wake.`,
+					`Set a valid wake or change waitingFor to the actual recovery source.`,
+				),
+			);
+		}
+		if (recurringTaskMissedOccurrence({ status, schedule: entry.frontmatter.schedule, control }, new Date(now))) {
+			issues.push(
+				issue(
+					`tasks/${entry.id}.md has an open ${status} cycle past its next recurring occurrence; no concurrent cycle was opened.`,
+					`Finish, skip, or cancel the current cycle for ${entry.id}; then let the driver compute the next occurrence.`,
 				),
 			);
 		}
@@ -737,7 +753,9 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		// no running job carrying this id, whether it ever resumes is entirely up to the user.
 		// That is legitimate when it is waiting on an answer — and indistinguishable, on disk,
 		// from a task everyone has forgotten. Report the fact and name every way out.
-		if (isTaskParked(entry.frontmatter) && !runningJobTaskIds.has(entry.id)) {
+		const hasDurableWaitingSource =
+			control?.waitingFor === "verification" || (control?.waitingFor === "job" && runningJobTaskIds.has(entry.id));
+		if (isTaskParked(entry.frontmatter) && !hasDurableWaitingSource) {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md is parked (waiting, no wake) and no running background job will wake it.`,
@@ -865,8 +883,6 @@ async function dispatchTasksCommand(options: HandleTasksCommandOptions, command:
 			return await showTask(options.channelDir, command.id);
 		case "archive":
 			return await listArchive(options.channelDir);
-		case "approve":
-			return await approveTask(options, command.id);
 		case "pause":
 			return await pauseTask(options, command.id);
 		case "resume":

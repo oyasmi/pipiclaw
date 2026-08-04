@@ -38,15 +38,19 @@ function relativeWake(wakeMs: number | undefined, now: number): string {
 
 function renderLine(entry: TaskLedgerEntry, now: number): string {
 	const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "active") : "⚠ unreadable frontmatter";
-	const parts = [`${entry.id} — ${entry.title}`, status, relativeWake(entry.wakeMs, now)];
+	const parts = [
+		`${entry.id} — ${entry.title}`,
+		status,
+		entry.frontmatter.enabled === false ? "disabled" : "enabled",
+		relativeWake(entry.wakeMs, now),
+	];
 	const control = entry.frontmatter.control;
 	if (control) {
 		parts.push(`priority ${control.priority}`);
 		parts.push(`attempt ${control.usage.attempts}/${control.budget.maxAttempts}`);
 		if (control.verification.required) parts.push(`verify required/${control.verification.status}`);
-		if (control.sideEffects !== "workspace") {
-			parts.push(`effects ${control.sideEffects}/${control.externalApproval}`);
-		}
+		if (control.waitingFor) parts.push(`waiting for ${control.waitingFor}`);
+		if (control.stop) parts.push(`stop ${control.stop.by}: ${control.stop.reason}`);
 		if (control.deadline) parts.push(`deadline ${control.deadline}`);
 		if (control.nextAction) parts.push(`next ${control.nextAction}`);
 	}
@@ -64,15 +68,17 @@ function renderLine(entry: TaskLedgerEntry, now: number): string {
 }
 
 /**
- * Render the in-flight task agenda, or `""` when there is nothing actionable to show.
- * Only status ≠ done tasks are included (a done periodic task is sleeping, not on the agenda).
+ * Render the in-flight task agenda, or `""` when there are no live tasks to show.
+ * Sleeping and disabled tasks stay visible so the model can distinguish dormant work from lost
+ * work and tell the user which recovery source is needed.
  */
 export async function buildTaskDigest(options: TaskDigestOptions): Promise<string> {
 	const now = options.now ?? Date.now();
 	const tasksDir = join(options.channelDir, "tasks");
 	const all = await readActiveTasks(tasksDir, now);
-	// done periodic tasks are asleep; only non-done tasks form the agenda.
-	const agenda = all.filter((entry) => entry.frontmatter.status !== "done" || !entry.frontmatter.readable);
+	// A legacy terminal file may briefly remain in the active directory while startup migration
+	// is running. It is already non-actionable at the ledger layer and must not enter prompt context.
+	const agenda = all.filter((entry) => !entry.frontmatter.archiveOutcome);
 	if (agenda.length === 0) return "";
 
 	const shown = agenda.slice(0, Math.max(1, options.maxTasks));

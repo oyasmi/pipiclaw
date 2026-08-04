@@ -130,7 +130,7 @@ export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: s
 
 /**
  * What `/stop` actually did. Stopping a task-driven turn also pauses that task, which the user
- * has to be told: a paused task is never picked up again until `/tasks resume <id>`, so silence
+ * has to be told: a disabled task is never picked up again until `/tasks resume <id>`, so silence
  * here reads as "the turn was interrupted" while the whole task has in fact gone quiet.
  */
 export interface StopOutcome {

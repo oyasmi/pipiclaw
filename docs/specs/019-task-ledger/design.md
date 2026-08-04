@@ -1,5 +1,7 @@
 # Task Ledger（任务台账）设计方案
 
+> **当前 Task 生命周期与状态语义已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本文的历史 ledger 与周期事件背景仅用于追溯。
+
 > 历史设计：其中手工 heartbeat、`tasks-pending.mjs` 与 wake/checkin 双写已由 [022 Native Task Driver](../022-native-task-driver/design.md) 取代；task 文件格式和周期 `.schedule` 约定仍有效。
 
 | 字段 | 值 |

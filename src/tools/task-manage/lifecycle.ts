@@ -1,8 +1,8 @@
 import { mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../../shared/atomic-file.js";
+import { formatLocalTime } from "../../shared/local-time.js";
 import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
-import { invalidateTaskVerification } from "../../tasks/control.js";
 import {
 	appendCurrentCycleNote,
 	applyTaskPlanPatch,
@@ -32,13 +32,11 @@ export async function setTask(options: TaskManageToolOptions, request: TaskManag
 	const id = normalizeTaskId(request.id);
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id, request.control !== undefined);
-	const fromStatus = normalizeStoredStatus(fields.status);
+	const fromStatus = normalizeStoredStatus(fields.status, Boolean(fields.schedule));
 	resolveTaskTransition("set", id, fromStatus, request.status);
 	const nextFields = applySet(fields, request);
-	// Leaving the verification lane by hand invalidates any recorded verdict — a passed/failed
-	// attestation only describes the task while it stayed in `verifying` (D3).
-	if (fromStatus === "verifying" && nextFields.status !== "verifying" && nextFields.control) {
-		nextFields.control = invalidateTaskVerification(nextFields.control);
+	if (nextFields.status === "sleeping" && !nextFields.schedule) {
+		throw new RecoverableToolError(`Task "${id}" is one-shot; sleeping is valid only for recurring tasks.`);
 	}
 	await writeFileAtomically(taskPath, renderTaskFile(nextFields, body));
 	return {
@@ -59,21 +57,25 @@ export async function progressTask(
 	const note = requiredField(request.note, "note", "progress");
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	resolveTaskTransition("progress", id, normalizeStoredStatus(fields.status), request.status);
-	const nextFields = applySet(fields, request);
-	// D4: a progress note only appends to Current Cycle — it never touches the contract segment
-	// that PASS/approval bind to, so it no longer invalidates verification or approval. A real
-	// contract change (Goal/DoD/Manual/Verification) goes through write/edit and is caught by the
-	// contract-hash checks in verify/done/approve.
-	// Recording progress clears a stale "why it cannot proceed" note unless this call is parking
-	// the task (`waiting`) or states a new reason itself. `lastOutcome` is deliberately untouched:
-	// the runtime owns it (attempt claim/finish), so an action never has to keep it in sync.
-	if (nextFields.control && request.status !== "waiting" && request.control?.blockedReason === undefined) {
-		nextFields.control.blockedReason = undefined;
+	const from = normalizeStoredStatus(fields.status, Boolean(fields.schedule));
+	resolveTaskTransition("progress", id, from, request.status);
+	if (from === "sleeping") {
+		throw new RecoverableToolError(`Task "${id}" is sleeping; wait for its occurrence or use /tasks run ${id}.`);
 	}
-	// planSteps deltas fold into the same Current Cycle note (spec 037, D3): the plan's change
-	// history rides on the log startTaskCycle already archives into History, rather than a second,
-	// separately-maintained revision trail nothing else consumes.
+	const nextFields = applySet(fields, request);
+	if (nextFields.status === "sleeping") {
+		throw new RecoverableToolError(
+			`Progress cannot open a recurring cycle; use /tasks run ${id} or wait for its wake.`,
+		);
+	}
+	if (nextFields.control) {
+		if (nextFields.status === "active") {
+			nextFields.control.waitingFor = undefined;
+			nextFields.control.blockedReason = undefined;
+		} else if (!nextFields.control.waitingFor) {
+			nextFields.control.waitingFor = nextFields.wake ? "time" : "external-signal";
+		}
+	}
 	const { body: bodyWithPlan, summary: planSummary } = request.planSteps?.length
 		? applyTaskPlanPatch(body, request.planSteps)
 		: { body, summary: "" };
@@ -88,133 +90,128 @@ export async function progressTask(
 	};
 }
 
-export async function doneTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
-	if (!request.id) throw new RecoverableToolError('action "done" requires an id.');
+export async function completeTask(
+	options: TaskManageToolOptions,
+	request: TaskManageRequest,
+): Promise<TaskManageResult> {
+	if (!request.id) throw new RecoverableToolError('action "complete" requires an id.');
 	const id = normalizeTaskId(request.id);
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	resolveTaskTransition("done", id, normalizeStoredStatus(fields.status));
+	resolveTaskTransition("complete", id, normalizeStoredStatus(fields.status, Boolean(fields.schedule)));
 	const uncheckedAcceptance = uncheckedTaskAcceptanceItems(body);
 	if (uncheckedAcceptance.length > 0) {
 		throw new RecoverableToolError(
-			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before done.`,
+			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before complete.`,
 		);
-	}
-	if (fields.control?.sideEffects === "external") {
-		if (fields.control.externalApproval === "required") {
-			throw new Error(`Task "${id}" requires explicit external-action approval before it can be completed.`);
-		}
-		if (fields.control.externalApproval === "granted" && fields.control.approvalBodyHash !== taskBodyHash(body)) {
-			throw new Error(
-				`Task "${id}" changed after external-action approval; ask the user to run /tasks approve ${id} again.`,
-			);
-		}
 	}
 	if (fields.control?.verification.required) {
 		const verification = fields.control.verification;
 		if (verification.status !== "passed" || !verification.bodyHash || !verification.runId) {
 			throw new RecoverableToolError(
-				`Task "${id}" requires an independent PASS. Run a purpose=verify sub-agent, then task_manage verify with its run id.`,
+				`Task "${id}" requires an independent PASS. Request verification, then task_manage verify with its run id.`,
 			);
 		}
 		if (verification.bodyHash !== taskBodyHash(body)) {
 			throw new RecoverableToolError(
-				`Task "${id}" changed after its independent PASS; rerun verification before done.`,
+				`Task "${id}" changed after its independent PASS; request verification again before complete.`,
 			);
 		}
-		// Read the attestation first: it names the checkout the verifier actually inspected, which
-		// is what the subject must be recomputed in (a sub-agent may have been pointed elsewhere).
 		const attestation = await assertVerificationAttestationMatches(options.channelDir, id, verification);
-		if (verification.subjectHash) {
-			// Fail closed (spec 036, D7): an attestation bound to a Git subject that cannot be
-			// recomputed is unverifiable, not implicitly fine.
+		// The attestation is the durable source of the artifact subject. The mirrored control
+		// field is writable task metadata, so it must not decide whether freshness is checked.
+		if (attestation.subjectHash) {
 			const subjectDir = attestation.subjectDir ?? options.workingDirectory ?? process.cwd();
 			const currentSubject = await workspaceSubjectHash(subjectDir);
 			if (!currentSubject) {
 				throw new RecoverableToolError(
-					`Task "${id}" has an independent PASS bound to the Git artifact subject of ${subjectDir}, but that checkout cannot be read. Restore it, or rerun verification.`,
+					`Task "${id}" has an independent PASS bound to ${subjectDir}, but that checkout cannot be read. Restore it or request verification again.`,
 				);
 			}
-			if (currentSubject !== verification.subjectHash) {
+			if (currentSubject !== attestation.subjectHash) {
 				throw new RecoverableToolError(
-					`Task "${id}" artifacts changed after its independent PASS; rerun verification before done.`,
+					`Task "${id}" artifacts changed after its independent PASS; request verification again.`,
 				);
 			}
 		}
 	}
-	// Spec 036 D5: `done` always records Summary/Evidence in the body. It no longer also stamps
-	// `verification.status = "passed"` for unverified tasks — that was the maker grading itself,
-	// and it made a self-report indistinguishable from a verifier's verdict.
+
 	const bodyWithEvidence = appendCompletionEvidence(body, request);
-	if (fields.control) fields.control.blockedReason = undefined;
-
-	// A recurring task (schedule frontmatter) sleeps in place until its next occurrence. The
-	// wake is cleared here and refilled to the next cron occurrence by the single time rule
-	// (`normalizeTaskFields`) on the write path, so "done + wake" always describes "asleep
-	// until next cycle" without a per-action recompute (D1).
-	const doneFields: TaskFields = { ...fields, status: "done", wake: undefined };
-	await writeFileAtomically(taskPath, renderTaskFile(doneFields, bodyWithEvidence));
-	const { deleted } = await cleanupTaskEvents(options, id);
-
-	// Recurring (schedule frontmatter) sleeps in place; one-shot → archive.
+	if (fields.control) {
+		fields.control.blockedReason = undefined;
+		fields.control.waitingFor = undefined;
+	}
 	const recurring = Boolean(fields.schedule);
-	let archived = false;
+	const closedAt = formatLocalTime();
 	let finalPath = taskPath;
-	if (!recurring) {
+	let archived = false;
+	if (recurring) {
+		const sleepingFields: TaskFields = {
+			...fields,
+			status: "sleeping",
+			enabled: true,
+			wake: undefined,
+		};
+		await writeFileAtomically(taskPath, renderTaskFile(sleepingFields, bodyWithEvidence));
+	} else {
 		const archiveDir = join(dir, "archive");
 		await mkdir(archiveDir, { recursive: true });
+		const archiveFields: TaskFields = {
+			...fields,
+			outcome: "completed",
+			closedAt,
+			enabled: undefined,
+		};
+		await writeFileAtomically(taskPath, renderTaskFile(archiveFields, bodyWithEvidence));
 		finalPath = join(archiveDir, `${id}.md`);
 		await rename(taskPath, finalPath);
 		archived = true;
 	}
-
+	const { deleted } = await cleanupTaskEvents(options, id);
 	const cleanup = deleted.length > 0 ? `，清理事件 ${deleted.join(", ")}` : "";
-	const disposition = archived ? "已归档" : "周期任务留原地待下次唤醒";
 	return {
-		action: "done",
+		action: "complete",
 		id,
 		path: finalPath,
-		status: "done",
+		status: recurring ? "sleeping" : undefined,
 		archived,
 		deletedEvents: deleted,
-		notice: `任务 \`${id}\` 已完成（${disposition}${cleanup}）。`,
+		notice: `任务 \`${id}\` 已完成（${archived ? "已归档" : "已进入 sleeping，等待下一 occurrence"}${cleanup}）。`,
 	};
 }
 
-/**
- * Close one recurring occurrence without pretending its DoD was completed.
- *
- * This is the stateful counterpart of a silent/deduplicated wake: merely returning
- * `[SILENT]` would leave the runtime-opened cycle active with no wake and cause retries.
- */
 export async function skipTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
 	if (!request.id) throw new RecoverableToolError('action "skip" requires an id.');
 	const id = normalizeTaskId(request.id);
 	const reason = requiredField(request.reason, "reason", "skip");
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	resolveTaskTransition("skip", id, normalizeStoredStatus(fields.status));
+	resolveTaskTransition("skip", id, normalizeStoredStatus(fields.status, Boolean(fields.schedule)));
 	if (!fields.schedule) {
 		throw new RecoverableToolError(
-			`Task "${id}" is not recurring; use action "cancel" to abandon it or "done" after satisfying its DoD.`,
+			`Task "${id}" is not recurring; use complete after satisfying its DoD or cancel it.`,
 		);
 	}
 	const skippedBody = appendCurrentCycleNote(body, `Skipped: ${reason}`);
 	if (fields.control) {
 		fields.control.blockedReason = undefined;
+		fields.control.waitingFor = undefined;
 		fields.control.verification = { required: fields.control.verification.required, status: "pending" };
 	}
-	await writeFileAtomically(taskPath, renderTaskFile({ ...fields, status: "done", wake: undefined }, skippedBody));
+	await writeFileAtomically(
+		taskPath,
+		renderTaskFile({ ...fields, status: "sleeping", enabled: true, wake: undefined }, skippedBody),
+	);
 	const { deleted } = await cleanupTaskEvents(options, id);
 	return {
 		action: "skip",
 		id,
 		path: taskPath,
-		status: "done",
+		status: "sleeping",
 		archived: false,
 		deletedEvents: deleted,
-		notice: `任务 \`${id}\` 本周期已跳过并休眠至下一次计划唤醒；若无需通知用户，请回复 [SILENT]。`,
+		notice: `任务 \`${id}\` 本周期已跳过并进入 sleeping，等待下一次计划唤醒；若无需通知用户，请回复 [SILENT]。`,
 	};
 }
 
@@ -228,23 +225,25 @@ export async function cancelTask(
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	resolveTaskTransition("cancel", id, normalizeStoredStatus(fields.status));
-	if (fields.control) fields.control.blockedReason = `Cancelled: ${reason}`;
+	resolveTaskTransition("cancel", id, normalizeStoredStatus(fields.status, Boolean(fields.schedule)));
 	const cancelledBody = `${body.replace(/\n+$/, "\n")}\n## Cancellation\n\n- Reason: ${markdownValue(reason)}\n`;
-	await writeFileAtomically(
-		taskPath,
-		renderTaskFile({ ...fields, status: "cancelled", wake: undefined }, cancelledBody),
-	);
-	const { deleted } = await cleanupTaskEvents(options, id);
 	const archiveDir = join(dir, "archive");
 	await mkdir(archiveDir, { recursive: true });
+	await writeFileAtomically(
+		taskPath,
+		renderTaskFile(
+			{ ...fields, outcome: "cancelled", closedAt: formatLocalTime(), enabled: undefined },
+			cancelledBody,
+		),
+	);
+	const { deleted } = await cleanupTaskEvents(options, id);
 	const finalPath = join(archiveDir, `${id}.md`);
 	await rename(taskPath, finalPath);
 	return {
 		action: "cancel",
 		id,
 		path: finalPath,
-		status: "cancelled",
+		status: undefined,
 		archived: true,
 		deletedEvents: deleted,
 		notice: `任务 \`${id}\` 已取消并归档${deleted.length ? `，清理事件 ${deleted.join(", ")}` : ""}。`,
@@ -252,17 +251,18 @@ export async function cancelTask(
 }
 
 export async function listTasks(options: TaskManageToolOptions): Promise<TaskManageResult> {
-	const entries = await readActiveTasks(tasksDir(options));
+	const entries = (await readActiveTasks(tasksDir(options))).filter((entry) => !entry.frontmatter.archiveOutcome);
 	return {
 		action: "list",
 		tasks: entries.map((entry) => ({
 			id: entry.id,
 			title: entry.title,
 			status: entry.frontmatter.readable ? (entry.frontmatter.status ?? "active") : "unreadable",
+			enabled: entry.frontmatter.enabled,
 			wake: entry.frontmatter.wake,
 			actionable: entry.actionable,
 			control: entry.frontmatter.control,
 		})),
-		notice: `台账共有 ${entries.length} 个 active 任务。`,
+		notice: `台账共有 ${entries.length} 个 active 目录任务。`,
 	};
 }

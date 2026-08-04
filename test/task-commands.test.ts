@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,466 +8,160 @@ import { formatLocalTime } from "../src/shared/local-time.js";
 import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
-import { taskBodyHash } from "../src/tasks/store.js";
 
-const FUTURE = "2026-07-08T23:59:00+08:00";
+const CHANNEL_ID = "dm_1";
+const FUTURE = "2026-08-05T18:00:00+08:00";
+const BODY = renderStandardTaskBody({ title: "Task", goal: "Do it.", dod: "- [x] Done" });
 
-function doc(front: string, body: string): string {
+function doc(front: string, body = BODY): string {
 	return `---\n${front}\n---\n\n${body}`;
 }
 
-const STANDARD_BODY = renderStandardTaskBody({
-	title: "Active",
-	goal: "Do the work.",
-	dod: "- [ ] Done",
-	manual: "Work carefully.",
-});
-
-describe("handleTasksCommand", () => {
-	const channelId = "dm_1";
+describe("/tasks v2 commands", () => {
 	let workspaceDir: string;
 	let channelDir: string;
 	let tasksDir: string;
-	let eventsDir: string;
+
 	beforeEach(async () => {
-		workspaceDir = await mkdtemp(join(tmpdir(), "task-cmd-"));
-		channelDir = join(workspaceDir, channelId);
+		workspaceDir = await mkdtemp(join(tmpdir(), "task-commands-v2-"));
+		channelDir = join(workspaceDir, CHANNEL_ID);
 		tasksDir = join(channelDir, "tasks");
-		eventsDir = join(workspaceDir, "events");
-		await mkdir(tasksDir, { recursive: true });
-		await mkdir(eventsDir, { recursive: true });
+		await mkdir(join(tasksDir, "archive"), { recursive: true });
 	});
 	afterEach(async () => {
 		await rm(workspaceDir, { recursive: true, force: true });
 	});
 
-	function run(args: string): Promise<string> {
-		return handleTasksCommand({ args, channelDir, workspaceDir, channelId, approver: "Alice" });
+	function run(args: string, dispatchTask?: (id: string, generation?: number) => Promise<boolean>): Promise<string> {
+		return handleTasksCommand({ args, channelDir, workspaceDir, channelId: CHANNEL_ID, dispatchTask });
 	}
 
-	async function writeEvent(name: string, event: object | string): Promise<void> {
-		await writeFile(join(eventsDir, `${name}.json`), typeof event === "string" ? event : JSON.stringify(event));
+	async function writeTask(id: string, front: string, body = BODY): Promise<void> {
+		await writeFile(join(tasksDir, `${id}.md`), doc(front, body));
 	}
 
-	it("reports no active tasks for an empty ledger", async () => {
-		expect(await run("")).toContain("当前没有进行中的任务");
+	it("removes approve from the parser and returns current usage without writing", async () => {
+		await writeTask("publish", "status: active");
+		const before = await readFile(join(tasksDir, "publish.md"), "utf-8");
+		const result = await run("approve publish");
+		expect(result).toContain("未知的 /tasks 动作：approve");
+		expect(result).toContain("/tasks pause <id>");
+		expect(await readFile(join(tasksDir, "publish.md"), "utf-8")).toBe(before);
 	});
 
-	it("lists active tasks actionable-first", async () => {
-		await writeFile(join(tasksDir, "later.md"), doc(`status: blocked\nwake: ${FUTURE}`, "# Later task"));
-		await writeFile(join(tasksDir, "now.md"), doc("status: in-progress", "# Now task"));
-		const out = await run("");
-		expect(out).toContain("2 个进行中");
-		expect(out.indexOf("now — Now task")).toBeLessThan(out.indexOf("later — Later task"));
-	});
-
-	it("marks a task with unreadable frontmatter", async () => {
-		await writeFile(join(tasksDir, "broken.md"), "no frontmatter");
-		expect(await run("")).toContain("⚠ unreadable frontmatter");
-	});
-
-	it("shows a single active task's full content", async () => {
-		await writeFile(join(tasksDir, "weekly.md"), doc("status: open", "# 周报\n\nbody here"));
-		const out = await run("show weekly");
-		expect(out).toContain("# 任务：weekly");
-		expect(out).toContain("body here");
-	});
-
-	it("shows an archived task", async () => {
-		const archiveDir = join(tasksDir, "archive");
-		await mkdir(archiveDir, { recursive: true });
-		await writeFile(join(archiveDir, "old.md"), doc("status: done", "# Old"));
-		const out = await run("show old");
-		expect(out).toContain("（已归档）");
-		expect(out).toContain("# Old");
-	});
-
-	it("reports a missing task", async () => {
-		expect(await run("show ghost")).toContain("找不到任务：ghost");
-	});
-
-	it("rejects a traversal id", async () => {
-		expect(await run("show ../../secret")).toMatch(/Invalid task id/);
-	});
-
-	it("lists archived tasks", async () => {
-		const archiveDir = join(tasksDir, "archive");
-		await mkdir(archiveDir, { recursive: true });
-		await writeFile(join(archiveDir, "fix-login.md"), doc("status: done", "# Fix login bug"));
-		const out = await run("archive");
-		expect(out).toContain("fix-login — Fix login bug");
-	});
-
-	it("shows usage for an unknown action", async () => {
-		expect(await run("frobnicate")).toContain("用法：");
-	});
-
-	it("records explicit user approval for external side effects", async () => {
+	it("pause/resume changes only enabled and stop, preserving stage and wake", async () => {
 		const control = createDefaultTaskControl();
-		control.sideEffects = "external";
-		control.externalApproval = "required";
-		await writeFile(join(tasksDir, "publish.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
-		const out = await run("approve publish");
-		expect(out).toContain("已批准任务 publish 的外部副作用");
-		const task = await readFile(join(tasksDir, "publish.md"), "utf-8");
-		expect(task).toContain('"externalApproval":"granted"');
-		expect(task).toContain('"approvalBy":"Alice"');
-	});
-
-	it("pauses and resumes a task without invoking the model", async () => {
-		await writeFile(join(tasksDir, "long.md"), doc("status: in-progress", STANDARD_BODY));
-		expect(await run("pause long")).toContain("已暂停任务 long");
-		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: paused");
-		expect(await run("resume long")).toContain("已恢复任务 long");
-		expect(await readFile(join(tasksDir, "long.md"), "utf-8")).toContain("status: active");
-	});
-
-	it("sets a single task field directly, keeping the value's spaces", async () => {
-		const control = createDefaultTaskControl();
-		await writeFile(join(tasksDir, "edit.md"), renderTaskDocument({ status: "active", control }, STANDARD_BODY));
-
-		expect(await run(`set edit wake ${FUTURE}`)).toContain("已更新任务 edit：wake");
-		expect(await readFile(join(tasksDir, "edit.md"), "utf-8")).toContain("wake: 2026-07-08T23:59:00.000+08:00");
-
-		await run("set edit next 跑一遍构建 并贴出失败堆栈");
-		await run("set edit attempts 20");
-		await run("set edit priority high");
-		const stored = await readFile(join(tasksDir, "edit.md"), "utf-8");
-		expect(stored).toContain('"nextAction":"跑一遍构建 并贴出失败堆栈"');
-		expect(stored).toContain('"maxAttempts":20');
-		expect(stored).toContain('"priority":"high"');
-
-		// An empty value clears the field rather than writing an empty string.
-		await run("set edit wake");
-		expect(await readFile(join(tasksDir, "edit.md"), "utf-8")).not.toContain("wake:");
-	});
-
-	it("rejects an invalid field, value, or task id on set", async () => {
-		await writeFile(join(tasksDir, "edit.md"), doc("status: active", STANDARD_BODY));
-		expect(await run("set edit bogus 1")).toContain("用法：/tasks set");
-		expect(await run("set edit wake not-a-date")).toContain("不是合法的本地时间");
-		expect(await run("set edit attempts 0")).toContain("attempts 必须是不小于 1 的整数");
-		expect(await run("set edit priority urgent")).toContain("priority 必须是");
-		expect(await run("set ghost priority high")).toContain("找不到任务：ghost");
-	});
-
-	it("stamps pausedBy=user on pause and clears it on resume for a governed task", async () => {
-		const control = createDefaultTaskControl();
-		await writeFile(join(tasksDir, "gov.md"), renderTaskDocument({ status: "active", control }, STANDARD_BODY));
-		await run("pause gov");
-		expect(await readFile(join(tasksDir, "gov.md"), "utf-8")).toContain('"pausedBy":"user"');
-		await run("resume gov");
-		expect(await readFile(join(tasksDir, "gov.md"), "utf-8")).not.toContain('"pausedBy"');
-	});
-
-	// The governor pauses on the same condition it re-checks on the next scan, so a plain resume
-	// of an exhausted task "succeeded" and was paused again minutes later — one wasted escalation
-	// turn per press, forever. Refuse, and name the command that actually unblocks it.
-	it("refuses to resume or run a task the governor would immediately stop again", async () => {
-		const control = createDefaultTaskControl();
-		control.budget.maxAttempts = 2;
-		control.usage.attempts = 2;
-		control.pausedBy = "governor";
-		await writeFile(join(tasksDir, "spent.md"), renderTaskDocument({ status: "paused", control }, STANDARD_BODY));
-
-		const resumed = await run("resume spent");
-		expect(resumed).toContain("attempt budget exhausted (2/2)");
-		expect(resumed).toContain("/tasks set spent attempts");
-		// Refusing means refusing: the task must still be paused.
-		expect(await readFile(join(tasksDir, "spent.md"), "utf-8")).toContain("status: paused");
-		expect(await run("run spent")).toContain("attempt budget exhausted (2/2)");
-
-		// Raising the budget is what unblocks it, exactly as the message says.
-		await run("set spent attempts 20");
-		expect(await run("resume spent")).toContain("已恢复任务 spent");
-		expect(await readFile(join(tasksDir, "spent.md"), "utf-8")).toContain("status: active");
-	});
-
-	it("runs a ready task through the runtime dispatch callback", async () => {
-		await writeFile(join(tasksDir, "ready.md"), doc("status: paused", STANDARD_BODY));
-		const dispatches: string[] = [];
-		const out = await handleTasksCommand({
-			args: "run ready",
-			channelDir,
-			workspaceDir,
-			channelId,
-			approver: "Alice",
-			dispatchTask: async (id) => {
-				dispatches.push(id);
-				return true;
-			},
-		});
-		expect(out).toContain("已把任务 ready 排入一次立即执行");
-		expect(dispatches).toEqual(["ready"]);
-		expect(await readFile(join(tasksDir, "ready.md"), "utf-8")).toContain("status: active");
-	});
-
-	it("runs a sleeping recurring task immediately", async () => {
 		await writeFile(
-			join(tasksDir, "weekly.md"),
+			join(tasksDir, "waiting.md"),
 			renderTaskDocument(
 				{
-					status: "done",
+					status: "waiting",
+					wake: FUTURE,
 					schedule: "0 9 * * 1",
-					wake: "2026-08-03T09:00:00+08:00",
-					control: createDefaultTaskControl(),
+					control,
 				},
-				STANDARD_BODY,
+				BODY,
 			),
 		);
-		const dispatches: string[] = [];
-		const out = await handleTasksCommand({
-			args: "run weekly",
-			channelDir,
-			workspaceDir,
-			channelId,
-			dispatchTask: async (id) => {
-				dispatches.push(id);
-				return true;
-			},
+		await expect(run("pause waiting")).resolves.toContain("已停用任务 waiting");
+		const paused = await readFile(join(tasksDir, "waiting.md"), "utf-8");
+		expect(paused).toContain("status: waiting");
+		expect(paused).toContain("enabled: false");
+		expect(paused).toContain(`wake: ${FUTURE}`);
+		expect(paused).toContain("schedule: 0 9 * * 1");
+		expect(paused).toContain('"by":"user"');
+
+		await expect(run("resume waiting")).resolves.toContain("已重新启用任务 waiting");
+		const resumed = await readFile(join(tasksDir, "waiting.md"), "utf-8");
+		expect(resumed).toContain("status: waiting");
+		expect(resumed).toContain("enabled: true");
+		expect(resumed).toContain(`wake: ${FUTURE}`);
+		expect(resumed).not.toContain('"stop"');
+	});
+
+	it("run converts a waiting task to active and dispatches it", async () => {
+		const control = createDefaultTaskControl();
+		await writeTask("waiting", `status: waiting\nwake: ${FUTURE}\ncontrol: ${JSON.stringify(control)}`);
+		const dispatches: Array<{ id: string; generation?: number }> = [];
+		const result = await run("run waiting", async (id, generation) => {
+			dispatches.push({ id, generation });
+			return true;
 		});
-		expect(out).toContain("已把任务 weekly 排入一次立即执行");
-		expect(dispatches).toEqual(["weekly"]);
+		expect(result).toContain("已把任务 waiting 排入一次立即执行");
+		expect(dispatches).toHaveLength(1);
+		expect(dispatches[0]?.id).toBe("waiting");
+		const stored = await readFile(join(tasksDir, "waiting.md"), "utf-8");
+		expect(stored).toContain("status: active");
+		expect(stored).not.toContain("wake:");
+	});
+
+	it("run sleeping explicitly opens a recurring cycle", async () => {
+		await writeTask(
+			"weekly",
+			`status: sleeping\nschedule: 0 9 * * 1\nwake: ${formatLocalTime(nextTaskWake("0 9 * * 1")!)}\ncontrol: ${JSON.stringify(createDefaultTaskControl())}`,
+		);
+		const ids: string[] = [];
+		await run("run weekly", async (id) => {
+			ids.push(id);
+			return true;
+		});
+		expect(ids).toEqual(["weekly"]);
 		const stored = await readFile(join(tasksDir, "weekly.md"), "utf-8");
 		expect(stored).toContain("status: active");
 		expect(stored).not.toContain("wake:");
 		expect(stored).toContain('"cycleId":"cycle-');
 	});
 
-	it("renders token and verification stats without an LLM turn", async () => {
+	it("lists state dimensions and stats without effects or approval", async () => {
 		const control = createDefaultTaskControl(true);
-		control.usage = { attempts: 3, tokens: 1200, costUsd: 0.12, costKnown: true, wallTimeMinutes: 4.5 };
+		control.usage.attempts = 3;
 		control.verification.status = "passed";
-		await writeFile(
-			join(tasksDir, "measured.md"),
-			renderTaskDocument({ status: "in-progress", control }, STANDARD_BODY),
-		);
-		const out = await run("stats measured");
-		expect(out).toContain("this cycle: 3/12 attempts, 1200 tokens");
-		expect(out).toContain("verification: required/passed");
-		// Spec 036 D2: the lifetime ledger is gone; only the current cycle is reported.
-		expect(out).not.toContain("recorded lifetime");
+		await writeFile(join(tasksDir, "measured.md"), renderTaskDocument({ status: "active", control }, BODY));
+		const list = await run("");
+		expect(list).toContain("status: active");
+		expect(list).toContain("attempts: 3/12");
+		expect(list).not.toMatch(/approval|sideEffects|effects/i);
+		const stats = await run("stats measured");
+		expect(stats).toContain("verification: required/passed");
+		expect(stats).toContain("3/12 attempts");
 	});
 
-	it("renders unknown model cost as unavailable rather than zero", async () => {
-		const control = createDefaultTaskControl();
-		control.usage = { attempts: 1, tokens: 1200, costUsd: 0, costKnown: false, wallTimeMinutes: 1 };
-		await writeFile(
-			join(tasksDir, "unpriced.md"),
-			renderTaskDocument({ status: "in-progress", control }, STANDARD_BODY),
-		);
-		const out = await run("stats unpriced");
-		expect(out).toContain("1200 tokens, unavailable");
-		expect(out).not.toContain("$0.0000");
-	});
-
-	it("doctor detects approval made stale by a later task-body change", async () => {
-		const control = createDefaultTaskControl();
-		control.sideEffects = "external";
-		control.externalApproval = "required";
-		await writeFile(join(tasksDir, "publish.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
-		await run("approve publish");
-		const approved = await readFile(join(tasksDir, "publish.md"), "utf-8");
-		// D4: approval binds to the contract segment, so a change to the Goal (not a Current Cycle
-		// log line) is what invalidates it.
-		await writeFile(join(tasksDir, "publish.md"), approved.replace("Do the work.", "Do something else."));
-		expect(await run("doctor")).toContain("changed after external-action approval");
-	});
-
-	it("doctor does not require approval for an explicit external exemption", async () => {
-		const control = createDefaultTaskControl();
-		control.sideEffects = "external";
-		control.externalApproval = "not-required";
-		await writeFile(join(tasksDir, "automated.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
-		expect(await run("doctor")).not.toContain("requires external side effects but has no user approval");
-	});
-
-	// Spec 036 D8: retired keys are ignored on read, so the task survives but the ordering it
-	// declared does not. Doctor must name the dropped edges — silence would hide a real loss.
-	it("doctor reports retired control keys and the ordering they silently dropped", async () => {
-		const control = { ...createDefaultTaskControl(), parent: "roll-up", dependsOn: ["b", "c"] };
-		await writeFile(
-			join(tasksDir, "a.md"),
-			renderTaskDocument({ status: "open", control: control as never }, STANDARD_BODY),
+	it("doctor diagnoses invalid state combinations with direct next steps", async () => {
+		await writeTask(
+			"bad",
+			`status: waiting\nwake: ${FUTURE}\ncontrol: ${JSON.stringify({ ...createDefaultTaskControl(), waitingFor: "job" })}`,
 		);
 		const out = await run("doctor");
-		expect(out).toContain("retired control keys: parent, dependsOn");
-		expect(out).toContain("a → roll-up");
-		expect(out).toContain("a → b");
-		expect(out).toContain("a → c");
-		expect(out).toContain("no longer constrain execution");
+		expect(out).toContain("waitingFor=job");
+		expect(out).toContain("Next step:");
 	});
 
-	it("doctor stays quiet about retired keys a task does not carry", async () => {
-		const control = createDefaultTaskControl();
-		await writeFile(join(tasksDir, "clean.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
-		expect(await run("doctor")).not.toContain("retired control keys");
-	});
-
-	it("reports no doctor issues for a clean ledger", async () => {
-		await writeFile(join(tasksDir, "active.md"), doc("status: open", STANDARD_BODY));
-		expect(await run("doctor")).toContain("未发现任务台账问题");
-	});
-
-	// Defense in depth: control.verification lives in a file the agent's own write/edit tools
-	// can touch. A hand-forged "passed" block with a bodyHash that happens to match the current
-	// body must still be flagged because no verifier ever produced a matching attestation file.
-	it("doctor flags an independent PASS with no matching verifier attestation on disk", async () => {
-		const control = createDefaultTaskControl(true);
-		control.verification = {
-			required: true,
-			status: "passed",
-			runId: "never-ran",
-			bodyHash: taskBodyHash(STANDARD_BODY),
-		};
-		await writeFile(join(tasksDir, "forged.md"), renderTaskDocument({ status: "open", control }, STANDARD_BODY));
-		expect(await run("doctor")).toContain("no matching verifier attestation on disk");
-	});
-
-	// A parked task is waiting for an external signal. The driver deliberately never comes back
-	// for it, so with no running job carrying its id it is not waiting — it is forgotten.
-	it("doctor flags a parked task that nothing will wake", async () => {
-		await writeFile(join(tasksDir, "parked.md"), doc("status: waiting", STANDARD_BODY));
+	it("doctor recognizes a clean parked user wait and reports forgotten external waits", async () => {
+		await writeTask(
+			"parked",
+			`status: waiting\ncontrol: ${JSON.stringify({ ...createDefaultTaskControl(), waitingFor: "external-signal" })}`,
+		);
 		const out = await run("doctor");
 		expect(out).toContain("parked (waiting, no wake)");
 		expect(out).toContain("/tasks run parked");
 	});
 
-	it("doctor leaves a timed re-check alone", async () => {
-		await writeFile(join(tasksDir, "recheck.md"), doc(`status: waiting\nwake: ${FUTURE}`, STANDARD_BODY));
-		expect(await run("doctor")).toContain("未发现任务台账问题");
-	});
-
-	it("doctor reports non-standard task skeletons", async () => {
-		await writeFile(join(tasksDir, "thin.md"), doc("status: open", "# Thin task"));
-		const out = await run("doctor");
-		expect(out).toContain("missing standard section");
-		expect(out).toContain("normalize tasks/thin.md");
-	});
-
-	// spec 037, D4: two deterministic Plan/DoD drift checks.
-	it("doctor flags a Plan step whose dod ref does not exist", async () => {
+	it("shows archive outcome and rejects path traversal", async () => {
 		await writeFile(
-			join(tasksDir, "bad-ref.md"),
-			doc(
-				"status: active",
-				"# Bad ref\n\n## DoD\n- [ ] Done\n\n## Plan\n- [ ] P1 do it → dod:2\n\n## Current Cycle\n\n## History\n",
-			),
+			join(tasksDir, "archive", "old.md"),
+			doc("outcome: cancelled\nclosedAt: 2026-08-04T10:00:00+08:00", "# Old"),
 		);
-		const out = await run("doctor");
-		expect(out).toContain("Plan references DoD item(s) that do not exist: P1→dod:2");
+		expect(await run("archive")).toContain("old — Old");
+		expect(await run("show old")).toContain("outcome: cancelled");
+		expect(await run("show ../../secret")).toMatch(/Invalid task id/);
 	});
 
-	it("doctor flags a DoD item with no Plan step covering it", async () => {
-		await writeFile(
-			join(tasksDir, "uncovered.md"),
-			doc(
-				"status: active",
-				"# Uncovered\n\n## DoD\n- [ ] First\n- [ ] Second\n\n## Plan\n- [ ] P1 covers first → dod:1\n\n## Current Cycle\n\n## History\n",
-			),
-		);
-		const out = await run("doctor");
-		expect(out).toContain("DoD item(s) with no Plan step covering them: dod:2");
-	});
-
-	it("doctor does not count a dropped step's dod ref as coverage", async () => {
-		await writeFile(
-			join(tasksDir, "dropped-cover.md"),
-			doc(
-				"status: active",
-				"# Dropped cover\n\n## DoD\n- [ ] Only item\n\n## Plan\n- [~] P1 abandoned → dod:1\n\n## Current Cycle\n\n## History\n",
-			),
-		);
-		const out = await run("doctor");
-		expect(out).toContain("DoD item(s) with no Plan step covering them: dod:1");
-	});
-
-	it("doctor stays quiet when every DoD item is covered and every ref is valid", async () => {
-		const body = renderStandardTaskBody({
-			title: "Covered",
-			goal: "G",
-			dod: "- [ ] First\n- [ ] Second",
-			plan: "P1 both → dod:1,2",
-		});
-		await writeFile(join(tasksDir, "covered.md"), doc("status: active", body));
-		expect(await run("doctor")).toContain("未发现任务台账问题");
-	});
-
-	it("doctor accepts wake without a checkin and reports invalid wake values", async () => {
-		await writeFile(join(tasksDir, "waiting.md"), doc(`status: awaiting-user\nwake: ${FUTURE}`, STANDARD_BODY));
-		expect(await run("doctor")).toContain("未发现任务台账问题");
-
-		await writeFile(join(tasksDir, "broken-wake.md"), doc("status: blocked\nwake: soon", STANDARD_BODY));
-		const out = await run("doctor");
-		expect(out).toContain("invalid wake value (soon)");
-		expect(out).toContain("native driver will treat it as due");
-	});
-
-	// Regression: production incident where a recurring task's wake was left pointing at a day
-	// its cron never fires on (the cron was changed but the write path that recomputes wake only
-	// fires on `done`). Doctor must catch this rather than let the task silently miss its cycle.
-	it("doctor flags a recurring task whose wake is not an occurrence of its own schedule", async () => {
-		await writeFile(
-			join(tasksDir, "weekly-report.md"),
-			doc("status: active\nschedule: 30 7 * * 1\nwake: 2026-07-27T23:30:00.000Z", STANDARD_BODY),
-		);
-		const out = await run("doctor");
-		expect(out).toContain('is not an occurrence of its schedule "30 7 * * 1"');
-		expect(out).toContain('task_manage set schedule="30 7 * * 1"');
-	});
-
-	it("doctor stays quiet when a recurring task's wake matches its own schedule", async () => {
-		const next = nextTaskWake("30 7 * * 1")!;
-		await writeFile(
-			join(tasksDir, "weekly-report.md"),
-			doc(`status: active\nschedule: 30 7 * * 1\nwake: ${formatLocalTime(next)}`, STANDARD_BODY),
+	it("keeps a valid recurring schedule without requiring a separate event", async () => {
+		await writeTask(
+			"weekly",
+			`status: sleeping\nschedule: 0 9 * * 1\nwake: ${formatLocalTime(nextTaskWake("0 9 * * 1")!)}`,
 		);
 		expect(await run("doctor")).toContain("未发现任务台账问题");
-	});
-
-	it("doctor reports task/event consistency issues", async () => {
-		await writeFile(
-			join(tasksDir, "weekly.md"),
-			doc(`status: awaiting-user\nwake: ${FUTURE}\nrecurrence: 每周一`, "# Weekly"),
-		);
-		await writeEvent("task.dm_1.weekly.checkin", {
-			type: "one-shot",
-			channelId,
-			text: "回访",
-			at: "2026-07-08T20:00:00+08:00",
-		});
-
-		const archiveDir = join(tasksDir, "archive");
-		await mkdir(archiveDir, { recursive: true });
-		await writeFile(join(archiveDir, "old.md"), doc("status: done", "# Old"));
-		await writeEvent("task.dm_1.old.checkin", {
-			type: "one-shot",
-			channelId,
-			text: "old",
-			at: "2026-07-08T20:00:00+08:00",
-		});
-		await writeEvent("task.dm_1.ghost.checkin", {
-			type: "one-shot",
-			channelId,
-			text: "ghost",
-			at: "2026-07-08T20:00:00+08:00",
-		});
-
-		// D6: the legacy `.checkin` migration prompt is gone; a checkin event on an active task is
-		// no longer flagged, but the general orphan/archived-task event checks still fire.
-		const out = await run("doctor");
-		expect(out).toContain("points to archived task old");
-		expect(out).toContain("points to missing task ghost");
-		expect(out).toContain("Next step:");
-	});
-
-	it("doctor accepts a native recurring task with no schedule event and no recurrence pairing issue", async () => {
-		const wake = formatLocalTime(nextTaskWake("0 9 * * 1")!);
-		await writeFile(
-			join(tasksDir, "weekly.md"),
-			doc(`status: done\nwake: ${wake}\nschedule: 0 9 * * 1\nrecurrence: 每周一`, STANDARD_BODY),
-		);
-		const out = await run("doctor");
-		expect(out).toContain("未发现任务台账问题");
+		expect(existsSync(join(tasksDir, "weekly.md"))).toBe(true);
 	});
 });

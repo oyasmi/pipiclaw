@@ -21,7 +21,6 @@ import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { taskEventPrefix } from "../shared/task-events.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { parseTaskFrontmatter } from "../tasks/ledger.js";
-import { TERMINAL_TASK_STATUSES } from "../tasks/transitions.js";
 import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
 import { MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./event-validation.js";
 
@@ -671,8 +670,10 @@ export class EventsWatcher {
 		} catch {
 			return `owning task ${taskId} no longer exists`;
 		}
-		const status = parseTaskFrontmatter(content).status ?? "";
-		return TERMINAL_TASK_STATUSES.has(status) ? `owning task ${taskId} is ${status}` : undefined;
+		const frontmatter = parseTaskFrontmatter(content);
+		return frontmatter.archiveOutcome
+			? `owning task ${taskId} is archived (${frontmatter.archiveOutcome})`
+			: undefined;
 	}
 
 	private async execute(

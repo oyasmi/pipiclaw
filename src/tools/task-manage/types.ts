@@ -15,6 +15,7 @@ export interface TaskManageResult {
 		id: string;
 		title: string;
 		status: string;
+		enabled: boolean;
 		wake?: string;
 		actionable: boolean;
 		control?: TaskControl;
@@ -33,7 +34,7 @@ export interface TaskManageResult {
  * of drift a compile error. `label` is the tool's UI affordance, not part of the request.
  *
  * `status` stays a plain string: it is validated in code against the transition table so a legacy
- * or closing value ("open", "done") gets a fixable error naming the right action, rather than a
+ * or closing legacy value gets a fixable error naming the right action, rather than a
  * bare schema rejection.
  */
 export type TaskManageRequest = Omit<Static<typeof taskManageSchema>, "label" | "status"> & {
@@ -46,12 +47,17 @@ export interface TaskManageToolOptions {
 	channelId: string;
 	/** Project checkout whose artifact state an independent verifier binds to. */
 	workingDirectory?: string;
+	/** Durable checker dispatch supplied by the long-lived runtime. */
+	dispatchVerification?: (taskId: string) => Promise<boolean>;
 }
 
 export interface TaskFields {
 	status: string;
+	enabled?: boolean;
 	wake?: string;
 	schedule?: string;
 	recurrence?: string;
 	control?: TaskControl;
+	outcome?: "completed" | "cancelled";
+	closedAt?: string;
 }

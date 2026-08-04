@@ -68,15 +68,15 @@
 
 当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进任务正文或用 `wake` 错开；每个任务只按自己的 Goal、DoD、Manual、Verification 和 control 收口。旧任务里残留的 retired control keys 会被读取层忽略，并由 `/tasks doctor` 报告。
 
-TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的 `wake`、deadline、退避到期和回合结束 nudge 决定下一次扫描；单次最多派发 4 个 channel，同一 channel 每 tick 至多一个任务。连续 3 次 accepted wake 都没有可见进展时，治理器把任务置为 `paused` + `control.pausedBy: "governor"` 并通知用户。
+TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的 `wake`、deadline、退避到期和回合结束 nudge 决定下一次扫描；单次最多派发 4 个 channel，同一 channel 每 tick 至多一个任务。连续 3 次 active wake 都没有可见进展时，治理器写 `enabled: false`、`status: active` 和 `control.stop.by: "governor"`，再直接通知用户。
 
-周期任务只靠 task frontmatter 的 `schedule`。`done` 后文件留在原地并睡到下一次 occurrence；到点后 runtime 确定性打开新周期，不需要 `.schedule` event，也没有 `start-cycle` 工具动作。
+周期任务只靠 task frontmatter 的 `schedule`。complete 后文件留在原地并进入 `sleeping`，到点后 runtime 确定性打开新周期，不需要 `.schedule` event，也没有单独的开周期工具动作。
 
 ## 子代理与验收
 
 `workspace/sub-agents/*.md` 只加载实际存在的配置。没有配置文件也能通过 `subagent` 工具传 inline `systemPrompt` 委派。子代理不能再创建子代理；文件系统与主代理共享，`bash` 工具不是结构性只读沙箱。
 
-独立验收使用 `purpose: verify` + `taskId`。verifier 无 write/edit，必须以 `VERDICT: PASS` 或 `VERDICT: FAIL` 结束。`task_manage verify` 导入 attestation；`done` 会重新校验任务契约 hash 和 Git artifact subject，防止验收后内容变化。
+独立验收使用 `purpose: verify` + `taskId`。verifier 无 write/edit，必须以 `VERDICT: PASS` 或 `VERDICT: FAIL` 结束。`task_manage verify` 导入 attestation；`complete` 会重新校验任务契约 hash 和 Git artifact subject，防止验收后内容变化。
 
 ## 日志与账本
 

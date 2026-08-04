@@ -17,16 +17,17 @@ const taskControlSchema = Type.Object({
 	),
 	nextAction: Type.Optional(Type.String({ description: "Concrete next executable step; empty string clears it." })),
 	blockedReason: Type.Optional(Type.String({ description: "Why work cannot currently proceed; empty clears it." })),
-	sideEffects: Type.Optional(
-		Type.Union([Type.Literal("workspace"), Type.Literal("external")], {
-			description:
-				'"external" (sending, publishing, deploying, changing an outside system) requires user approval via "/tasks approve" before done.',
-		}),
-	),
-	externalApproval: Type.Optional(
-		Type.Union([Type.Literal("not-required"), Type.Literal("required")], {
-			description: 'External approval can only be granted by a user with "/tasks approve <id>".',
-		}),
+	waitingFor: Type.Optional(
+		Type.Union(
+			[
+				Type.Literal("time"),
+				Type.Literal("user"),
+				Type.Literal("job"),
+				Type.Literal("verification"),
+				Type.Literal("external-signal"),
+			],
+			{ description: "Diagnostic recovery source; it does not create a new lifecycle status." },
+		),
 	),
 	maxAttempts: Type.Optional(
 		Type.Integer({
@@ -38,7 +39,7 @@ const taskControlSchema = Type.Object({
 	verificationRequired: Type.Optional(
 		Type.Boolean({
 			description:
-				"Whether done requires an independent verifier attestation. Default false; set true only when the task produces a checkable artifact (code, config, a runnable command) a read-only verifier sub-agent can inspect.",
+				"Whether complete requires an independent verifier attestation. Default false; set true only when the task produces a checkable artifact (code, config, a runnable command) a read-only verifier sub-agent can inspect.",
 		}),
 	),
 });
@@ -50,27 +51,27 @@ export const taskManageSchema = Type.Object({
 			Type.Literal("create"),
 			Type.Literal("progress"),
 			Type.Literal("set"),
+			Type.Literal("request-verification"),
 			Type.Literal("verify"),
-			Type.Literal("done"),
+			Type.Literal("complete"),
 			Type.Literal("skip"),
 			Type.Literal("cancel"),
-			Type.Literal("candidate"),
 			Type.Literal("list"),
 		],
 		{
 			description:
-				'"create" writes a governed task; "progress" atomically checkpoints work; "candidate" requests independent verification; "set" repairs metadata; "verify" imports an independent verifier attestation; "done" closes verified work; "skip" closes one recurring occurrence without claiming completion; "cancel" closes abandoned work; "list" returns tasks. Recurring cycles are reopened automatically by the runtime.',
+				'"create" writes a persistent task; "progress" checkpoints work; "request-verification" parks active work and schedules an independent checker; "set" repairs metadata; "verify" imports an attestation; "complete" closes a task; "skip" closes one recurring occurrence without claiming completion; "cancel" archives abandoned work; "list" returns tasks. Recurring tasks sleep between occurrences.',
 		},
 	),
 	id: Type.Optional(
-		Type.String({ description: "Task id (filename without .md). Required for create/progress/set/done." }),
+		Type.String({ description: "Task id (filename without .md). Required for create/progress/set/complete." }),
 	),
 	title: Type.Optional(Type.String({ description: "Required for create: task title used as the H1 heading." })),
 	goal: Type.Optional(Type.String({ description: "Required for create: concise task goal." })),
 	dod: Type.Optional(
 		Type.String({
 			description:
-				'Required for create: acceptance criteria as Markdown checklist items, one per line, e.g. "- [ ] <criterion>". Plain prose or a numbered list without checkboxes is rejected — candidate/done can only verify items that are checkable.',
+				'Required for create: acceptance criteria as Markdown checklist items, one per line, e.g. "- [ ] <criterion>". Plain prose or a numbered list without checkboxes is rejected — verification/complete can only verify items that are checkable.',
 		}),
 	),
 	manual: Type.Optional(Type.String({ description: "Optional for create: initial operating steps or checklist." })),
@@ -111,7 +112,7 @@ export const taskManageSchema = Type.Object({
 	status: Type.Optional(
 		Type.Union(
 			SETTABLE_STATUSES.map((status) => Type.Literal(status)),
-			{ description: "New status for create/progress/set. To close a task use action done, not status." },
+			{ description: "New status for create/progress/set. Use complete/skip/cancel for lifecycle close-out." },
 		),
 	),
 	wake: Type.Optional(
@@ -128,8 +129,7 @@ export const taskManageSchema = Type.Object({
 			description:
 				"Five-field cron cadence (host timezone) that makes this a recurring task; empty string clears it. " +
 				"Changing this on an existing task recomputes wake to the new cadence's next occurrence unless this " +
-				"same call also sets wake explicitly. On done, the driver sleeps the task until the next occurrence " +
-				"and reopens the next cycle automatically. Min every 30 minutes.",
+				"same call also sets wake explicitly. Recurring creation starts in sleeping and opens cycles at occurrences. Min every 30 minutes.",
 		}),
 	),
 	recurrence: Type.Optional(
@@ -144,14 +144,16 @@ export const taskManageSchema = Type.Object({
 	verifierRunId: Type.Optional(
 		Type.String({ description: "Required for verify: run id returned by a purpose=verify sub-agent." }),
 	),
-	summary: Type.Optional(Type.String({ description: "Required for done: concise completion summary." })),
+	summary: Type.Optional(Type.String({ description: "Required for complete: concise completion summary." })),
 	evidence: Type.Optional(
 		Type.String({
 			description:
-				"Required for done: verification evidence (tests, commands, review result, external confirmation, or a clear not-run reason).",
+				"Required for complete: verification evidence (tests, commands, review result, external confirmation, or a clear not-run reason).",
 		}),
 	),
-	residualRisk: Type.Optional(Type.String({ description: "Optional for done: remaining risk or follow-up note." })),
+	residualRisk: Type.Optional(
+		Type.String({ description: "Optional for complete: remaining risk or follow-up note." }),
+	),
 	reason: Type.Optional(
 		Type.String({ description: "Required for skip/cancel: why this occurrence was skipped or the task abandoned." }),
 	),
@@ -161,10 +163,10 @@ export function parseAction(action: string): TaskManageAction {
 	if (
 		action === "create" ||
 		action === "progress" ||
-		action === "candidate" ||
+		action === "request-verification" ||
 		action === "set" ||
 		action === "verify" ||
-		action === "done" ||
+		action === "complete" ||
 		action === "skip" ||
 		action === "cancel" ||
 		action === "list"
@@ -172,6 +174,6 @@ export function parseAction(action: string): TaskManageAction {
 		return action;
 	}
 	throw new RecoverableToolError(
-		"Unsupported task action. Use create, progress, candidate, set, verify, done, skip, cancel, or list.",
+		"Unsupported task action. Next step: use create, progress, request-verification, set, verify, complete, skip, cancel, or list.",
 	);
 }

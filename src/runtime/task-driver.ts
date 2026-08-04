@@ -4,17 +4,23 @@ import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
 import { parseLocalTime } from "../shared/local-time.js";
+import { nextTaskWake } from "../shared/task-schedule.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
-import { normalizeTaskFields, readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
 import {
+	normalizeTaskFields,
+	readActiveTasks,
+	recurringTaskMissedOccurrence,
+	type TaskLedgerEntry,
+} from "../tasks/ledger.js";
+import {
+	activateWaitingTask,
 	claimTaskAttempt,
 	escalateTask,
 	openRecurringTaskCycle,
 	releaseTaskAttemptClaim,
 	updateStoredTask,
 } from "../tasks/store.js";
-import { TERMINAL_TASK_STATUSES } from "../tasks/transitions.js";
 import { discoverWorkspaceChannelIds } from "./channel-index.js";
 import { isChannelId } from "./channel-paths.js";
 import type { DingTalkEvent } from "./dingtalk.js";
@@ -36,6 +42,8 @@ export interface TaskDriverOptions {
 	isEnabled?: () => boolean;
 	/** Test-only override for the idle-sleep cap; production uses `settings.maxSleepMinutes`. */
 	intervalMs?: number;
+	/** Direct, non-LLM receipt for deterministic governor stops. */
+	notify?: (event: DingTalkEvent) => boolean | Promise<boolean>;
 }
 
 interface DispatchAttempt {
@@ -54,7 +62,6 @@ const NUDGE_DEBOUNCE_MS = 50;
 const MIN_SLEEP_MS = 250;
 /** Consecutive no-progress wakes before the governor pauses a task (spec 029, D5). */
 const FUTILE_WAKE_LIMIT = 3;
-const TERMINAL_STATUSES = TERMINAL_TASK_STATUSES;
 
 export async function discoverTaskChannels(
 	workspaceDir: string,
@@ -91,6 +98,10 @@ function attemptKey(channelId: string, taskId: string): string {
  * model-reported claim, not evidence of an effect. If plan state fed the fingerprint, ticking a
  * checkbox would reset the futile counter and buy the short retry tier — a governor bypass this
  * driver must not offer. The Plan is a capsule/agenda display concern only.
+ *
+ * nextAction and blockedReason are also model-written explanations, not evidence of an effect.
+ * Including either lets a progress/set call reset the futile counter without changing the task's
+ * externally observable work.
  */
 function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
 	const control = entry.frontmatter.control;
@@ -100,9 +111,10 @@ function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
 		entry.frontmatter.wake ?? "",
 		entry.frontmatter.schedule ?? "",
 		entry.frontmatter.recurrence ?? "",
-		control?.nextAction ?? "",
-		control?.blockedReason ?? "",
 		control?.verification.status ?? "",
+		control?.waitingFor ?? "",
+		entry.frontmatter.enabled === false ? "disabled" : "enabled",
+		control?.stop?.reason ?? "",
 		control?.cycleId ?? "",
 		`effects:${effects}`,
 	].join("\0");
@@ -158,7 +170,7 @@ function isEligible(
  * collapsing them would silently drop the later one.
  */
 function taskDispatchId(channelId: string, entry: TaskLedgerEntry, nowMs: number): string {
-	const occurrence = entry.frontmatter.wake ?? `t${nowMs}`;
+	const occurrence = entry.frontmatter.control?.cycleId ?? entry.frontmatter.wake ?? `t${nowMs}`;
 	return `task:${channelId}:${entry.id}:${occurrence}`;
 }
 
@@ -168,16 +180,11 @@ export function createTaskDriverEvent(
 	nowMs: number,
 	attemptGeneration?: number,
 ): DingTalkEvent {
-	const verification = entry.frontmatter.control?.verification;
-	const verificationInstruction =
-		entry.frontmatter.status === "verifying"
-			? verification?.status === "passed"
-				? ` Independent verification already passed; preserve its body/artifact hashes and follow ${join(PLAYBOOKS_DIR, "task-closeout.md")}.`
-				: ` This is a checker-only turn: read ${join(PLAYBOOKS_DIR, "task-closeout.md")} and do not continue implementation.`
-			: "";
-	const repair = entry.frontmatter.readable
-		? ""
-		: ` Its frontmatter is unreadable: also read ${join(PLAYBOOKS_DIR, "task-driving.md")}.`;
+	const repairOnly = !entry.frontmatter.readable || entry.frontmatter.controlReadable === false;
+	const repair = repairOnly
+		? ` Task metadata is not readable; repair only the frontmatter/control in tasks/${entry.id}.md, then stop. ` +
+			`Do not execute the task goal or any external action. Read ${join(PLAYBOOKS_DIR, "task-driving.md")} for the repair path.`
+		: "";
 	const control = entry.frontmatter.control;
 	const capsule = [
 		`Task capsule: title=${entry.title}; status=${entry.frontmatter.status ?? "active"};`,
@@ -200,8 +207,10 @@ export function createTaskDriverEvent(
 		text:
 			`[TASK_DRIVER:${entry.id}] Resume task ${entry.id}. ${capsule}${repair} ` +
 			`Open tasks/${entry.id}.md and read ${join(PLAYBOOKS_DIR, "task-driving.md")} before acting. ` +
-			"Advance the next concrete step under the task's current control, acceptance, approval, and verification state. " +
-			`If complete or waiting, use the matching task_manage lifecycle/checkpoint action from the playbook.${verificationInstruction} ` +
+			(repairOnly
+				? "After the metadata is repaired, leave task work for a later wake. "
+				: "Advance the next concrete step under the task's current goal, control, acceptance, and verification state. ") +
+			`If complete or waiting, use the matching task_manage lifecycle/checkpoint action from the playbook. ` +
 			"For a recurring occurrence intentionally not run because it is duplicate or already satisfied, call task_manage skip with the reason, then respond with exactly [SILENT]. " +
 			"If no task state or tool action is needed and this wake produces no user-visible result, respond with exactly [SILENT].",
 		ts: String(nowMs),
@@ -212,31 +221,57 @@ export function createTaskDriverEvent(
 	};
 }
 
-/** status done + a schedule cadence + a valid wake that is due → time to open the next cycle. */
+/** Durable checker wake created by request-verification; it is a normal main-agent turn. */
+export function createTaskVerificationEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): DingTalkEvent {
+	const control = entry.frontmatter.control;
+	return {
+		type: channelId.startsWith("group_") ? "group" : "dm",
+		channelId,
+		user: "TASK_VERIFIER",
+		userName: "TASK_VERIFIER",
+		text:
+			`[TASK_VERIFY:${entry.id}] Verify task ${entry.id} independently. ` +
+			`Read tasks/${entry.id}.md and the workspace verification instructions, then run a read-only ` +
+			`subagent with purpose=verify. Import its attestation with task_manage verify using the returned run id. ` +
+			`Do not modify the workspace or task contract; if verification fails, record the failure and leave the task recoverable.`,
+		ts: String(nowMs),
+		conversationId: "",
+		conversationType: channelId.startsWith("group_") ? "2" : "1",
+		dispatchId: `task:${channelId}:${entry.id}:verification:${control?.cycleId ?? `t${nowMs}`}`,
+	};
+}
+
+/** sleeping + a schedule cadence + a valid wake that is due → time to open the next cycle. */
 function isCycleStartReady(entry: TaskLedgerEntry, nowMs: number): boolean {
 	return (
-		entry.frontmatter.status === "done" &&
+		entry.frontmatter.status === "sleeping" &&
+		entry.frontmatter.enabled !== false &&
 		Boolean(entry.frontmatter.schedule) &&
 		entry.wakeMs !== undefined &&
 		entry.wakeMs <= nowMs
 	);
 }
 
-/** done + schedule but no parseable wake → self-heal target (recompute wake, zero token). */
+/** sleeping + schedule but no parseable wake → self-heal target (recompute wake, zero token). */
 function needsWakeHeal(entry: TaskLedgerEntry): boolean {
-	return entry.frontmatter.status === "done" && Boolean(entry.frontmatter.schedule) && entry.wakeMs === undefined;
+	return entry.frontmatter.status === "sleeping" && Boolean(entry.frontmatter.schedule) && entry.wakeMs === undefined;
 }
 
-function taskEscalationEvent(channelId: string, entry: TaskLedgerEntry, reason: string, nowMs: number): DingTalkEvent {
+export function taskGovernorReceipt(
+	channelId: string,
+	entry: TaskLedgerEntry,
+	reason: string,
+	nowMs: number,
+): DingTalkEvent {
 	return {
 		type: channelId.startsWith("group_") ? "group" : "dm",
 		channelId,
 		user: "TASK_DRIVER",
 		userName: "TASK_DRIVER",
 		text:
-			`[TASK_ESCALATION:${entry.id}] Task ${entry.id} (${entry.title}) was stopped by the deterministic task ` +
-			`governor: ${reason}. Read ${join(PLAYBOOKS_DIR, "task-driving.md")}, diagnose before changing control, ` +
-			"inform the user of the cause and recovery, and do not continue implementation in this run.",
+			`任务 ${entry.id}（${entry.title}）已停止自动执行：${reason}\n` +
+			`当前阶段：${entry.frontmatter.status ?? "active"}${entry.frontmatter.control?.cycleId ? `；周期：${entry.frontmatter.control.cycleId}` : ""}\n` +
+			`继续：/tasks resume ${entry.id}\n立即执行：/tasks run ${entry.id}\n不再需要：让 Agent cancel 该任务。`,
 		ts: String(nowMs),
 		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
@@ -353,9 +388,14 @@ export class TaskDriver {
 
 	private collectHorizons(entries: TaskLedgerEntry[], nowMs: number): void {
 		for (const entry of entries) {
-			this.noteHorizon(entry.wakeMs, nowMs);
+			if (entry.frontmatter.enabled !== false) this.noteHorizon(entry.wakeMs, nowMs);
 			const control = entry.frontmatter.control;
-			if (control?.deadline && !TERMINAL_STATUSES.has(entry.frontmatter.status ?? "")) {
+			if (
+				entry.frontmatter.enabled !== false &&
+				control?.deadline &&
+				(entry.frontmatter.status === "active" || entry.frontmatter.status === "waiting") &&
+				!entry.frontmatter.archiveOutcome
+			) {
 				this.noteHorizon(parseLocalTime(control.deadline), nowMs);
 			}
 		}
@@ -383,20 +423,61 @@ export class TaskDriver {
 				const channelId = channels[(start + offset) % channels.length];
 				if (!channelId) continue;
 				const channelDir = join(this.options.workspaceDir, channelId);
-				const entries = await readActiveTasks(join(channelDir, "tasks"), nowMs);
+				let entries = await readActiveTasks(join(channelDir, "tasks"), nowMs);
 				for (const entry of entries) seen.add(attemptKey(channelId, entry.id));
 				this.collectHorizons(entries, nowMs);
+				for (const entry of entries) {
+					if (
+						entry.frontmatter.enabled !== false &&
+						recurringTaskMissedOccurrence(
+							{
+								status: entry.frontmatter.status ?? "active",
+								schedule: entry.frontmatter.schedule,
+								control: entry.frontmatter.control,
+							},
+							now,
+						)
+					) {
+						log.logWarning(
+							`[${channelId}] Task ${entry.id} has a missed recurring occurrence; keeping the current cycle open`,
+						);
+					}
+				}
 
-				if (dispatched >= settings.maxDispatchesPerTick || this.options.isChannelActive(channelId)) continue;
-
-				// Zero-token self-heal: a done recurring task with a missing/unparseable wake (usually a
+				// Zero-token self-heal: a sleeping recurring task with a missing/unparseable wake (usually a
 				// hand edit that bypassed the runtime) gets its next occurrence recomputed via the same
 				// `normalizeTaskFields` write-path invariant, rather than fail-open into an accidental cycle.
 				for (const entry of entries) {
+					if (entry.frontmatter.status !== "sleeping" || entry.frontmatter.enabled === false) continue;
+					if (!entry.frontmatter.schedule) {
+						const reason = "sleeping recurring task has no schedule";
+						if (await escalateTask(channelDir, entry.id, reason)) {
+							const receipt = taskGovernorReceipt(channelId, entry, reason, nowMs);
+							try {
+								await this.options.notify?.(receipt);
+							} catch (error) {
+								log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
+							}
+						}
+						continue;
+					}
+					const scheduleWake = nextTaskWake(entry.frontmatter.schedule, now);
+					if (!scheduleWake) {
+						const reason = `sleeping task has invalid schedule: ${entry.frontmatter.schedule}`;
+						if (await escalateTask(channelDir, entry.id, reason)) {
+							const receipt = taskGovernorReceipt(channelId, entry, reason, nowMs);
+							try {
+								await this.options.notify?.(receipt);
+							} catch (error) {
+								log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
+							}
+						}
+						continue;
+					}
 					if (!needsWakeHeal(entry)) continue;
 					let healedWake: string | undefined;
 					await updateStoredTask(channelDir, entry.id, (task) => {
-						healedWake = normalizeTaskFields(task.fields).wake;
+						healedWake = normalizeTaskFields(task.fields, now).wake;
 						task.fields.wake = healedWake;
 					});
 					if (!healedWake) {
@@ -414,21 +495,45 @@ export class TaskDriver {
 				for (const candidate of entries) {
 					const status = candidate.frontmatter.status;
 					const control = candidate.frontmatter.control;
-					if (!control || TERMINAL_STATUSES.has(status ?? "")) continue;
-					const escalationReason = taskBudgetViolation(control, nowMs);
+					if (!control || candidate.frontmatter.archiveOutcome || candidate.frontmatter.enabled === false)
+						continue;
+					const escalationReason = taskBudgetViolation(
+						control,
+						nowMs,
+						status as "active" | "waiting" | "sleeping",
+					);
 					if (!escalationReason) continue;
 					governanceHandled = true;
-					const escalationEvent = taskEscalationEvent(channelId, candidate, escalationReason, nowMs);
-					const accepted = await this.options.dispatch(escalationEvent);
-					this.observeDispatch(escalationEvent, accepted);
-					if (accepted && (await escalateTask(channelDir, candidate.id, escalationReason))) {
-						dispatched++;
-						lastDispatchOffset = offset;
-						log.logWarning(`[${channelId}] Task driver paused ${candidate.id} (governor)`, escalationReason);
+					if (await escalateTask(channelDir, candidate.id, escalationReason)) {
+						const receipt = taskGovernorReceipt(channelId, candidate, escalationReason, nowMs);
+						try {
+							await this.options.notify?.(receipt);
+						} catch (error) {
+							log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
+						}
+						log.logWarning(`[${channelId}] Task driver disabled ${candidate.id} (governor)`, escalationReason);
 					}
 					break;
 				}
 				if (governanceHandled) continue;
+				// Deterministic maintenance above must not wait for an idle channel. Only model dispatch
+				// and the transitions immediately preceding it are gated by the channel's busy state.
+				if (dispatched >= settings.maxDispatchesPerTick || this.options.isChannelActive(channelId)) continue;
+
+				// Timed waits become active atomically before dispatch. Sleeping due tasks use the same
+				// runtime cycle-open path as the first occurrence.
+				let hadDueWaiting = false;
+				for (const candidate of entries) {
+					if (candidate.frontmatter.status !== "waiting" || candidate.frontmatter.enabled === false) continue;
+					if (candidate.wakeMs !== undefined && candidate.wakeMs <= nowMs) {
+						hadDueWaiting = true;
+						await activateWaitingTask(channelDir, candidate.id);
+					}
+				}
+				// A failed activation means another writer won the transition (or disabled the
+				// task). Re-read before choosing a candidate so a stale waiting capsule can never
+				// be dispatched as if its atomic active transition had succeeded.
+				if (hadDueWaiting) entries = await readActiveTasks(join(channelDir, "tasks"), nowMs);
 
 				// Actionable tasks and cycle-start-ready recurring tasks share one per-channel slot
 				// and the same round-robin fairness. A cycle-start-ready task is folded into its next
@@ -448,8 +553,8 @@ export class TaskDriver {
 
 				// A cycle-start-ready recurring task is reopened in-process before dispatch: fold the
 				// previous cycle, reset per-cycle control, mark it active. If the write fails we skip
-				// this tick rather than dispatch a stale `done` capsule.
-				if (!entry.actionable && isCycleStartReady(entry, nowMs)) {
+				// this tick rather than dispatch a stale sleeping capsule.
+				if (isCycleStartReady(entry, nowMs)) {
 					let opened: Awaited<ReturnType<typeof openRecurringTaskCycle>>;
 					try {
 						opened = await openRecurringTaskCycle(channelDir, entry.id, now);
@@ -465,7 +570,12 @@ export class TaskDriver {
 						log.logWarning(`[${channelId}] Task driver could not open next cycle for ${entry.id}`);
 						continue;
 					}
-					entry = {
+					// Re-read after the atomic open so the capsule contains the new Current Cycle/Plan,
+					// rather than the sleeping occurrence's just-closed note.
+					const refreshed = (await readActiveTasks(join(channelDir, "tasks"), nowMs)).find(
+						(candidate) => candidate.id === entry?.id,
+					);
+					entry = refreshed ?? {
 						...entry,
 						frontmatter: {
 							...entry.frontmatter,
@@ -480,6 +590,7 @@ export class TaskDriver {
 				}
 
 				const key = attemptKey(channelId, entry.id);
+				const repairOnly = !entry.frontmatter.readable || entry.frontmatter.controlReadable === false;
 				const effects = this.options.getEffectCount?.(channelId, entry.id) ?? 0;
 				const fingerprint = taskFingerprint(entry, effects);
 				const previous = this.attempts.get(key);
@@ -490,25 +601,27 @@ export class TaskDriver {
 				// a progress note or a failure — resets the count); after the limit the governor
 				// pauses the task and notifies the user, so no silent loop burns tokens forever.
 				const futileCount =
-					previous?.accepted && previous.fingerprint === fingerprint ? previous.futileCount + 1 : 0;
+					!repairOnly && previous?.accepted && previous.fingerprint === fingerprint ? previous.futileCount + 1 : 0;
 				if (futileCount >= FUTILE_WAKE_LIMIT) {
 					const reason = `task made no visible progress in ${FUTILE_WAKE_LIMIT} consecutive wakes`;
-					const escalationEvent = taskEscalationEvent(channelId, entry, reason, nowMs);
-					const accepted = await this.options.dispatch(escalationEvent);
-					this.observeDispatch(escalationEvent, accepted);
-					if (accepted && (await escalateTask(channelDir, entry.id, reason))) {
+					if (await escalateTask(channelDir, entry.id, reason)) {
+						const receipt = taskGovernorReceipt(channelId, entry, reason, nowMs);
+						try {
+							await this.options.notify?.(receipt);
+						} catch (error) {
+							log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
+						}
 						this.attempts.delete(key);
 						this.lastDispatchedTaskId.set(channelId, entry.id);
-						dispatched++;
-						lastDispatchOffset = offset;
-						log.logWarning(`[${channelId}] Task driver paused ${entry.id} (governor)`, reason);
+						log.logWarning(`[${channelId}] Task driver disabled ${entry.id} (governor)`, reason);
 					}
 					continue;
 				}
 
 				// Claiming an attempt only touches usage bookkeeping, which the fingerprint
 				// deliberately excludes, so there is nothing to recompute here.
-				const claim = entry.frontmatter.control ? await claimTaskAttempt(channelDir, entry.id, now) : undefined;
+				const claim = repairOnly ? undefined : await claimTaskAttempt(channelDir, entry.id, now);
+				if (claim) entry.frontmatter.control = claim.control;
 				const event = createTaskDriverEvent(channelId, entry, nowMs, claim?.generation);
 				const accepted = await this.options.dispatch(event);
 				this.observeDispatch(event, accepted);

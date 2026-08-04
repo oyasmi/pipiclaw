@@ -8,6 +8,8 @@ priority: 10
 
 > 内置只读 playbook，随 Pipiclaw 版本发布。这里记录产品机制；用户偏好和团队流程属于 workspace `AGENTS.md` / `skills/`。
 
+Pipiclaw 不内置或假设第三方 agent 工具；外部 agent 的命令和完成态由用户提供的 skill 定义。
+
 ## 知识与指令的四层
 
 1. **System prompt**：每回合都不能忘的安全边界、资源所有权和最小纪律。

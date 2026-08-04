@@ -43,7 +43,7 @@ export const capabilityCases: EvalCase[] = [
 					).length >= 10,
 				"all ten wakes must re-read the durable task; passive prompt carry-over is not recovery",
 			),
-			taskFrontmatter("release-still-open", "resume-ten", (frontmatter) => frontmatter.status !== "done"),
+			taskFrontmatter("release-still-open", "resume-ten", (frontmatter) => frontmatter.archiveOutcome === undefined),
 			{
 				kind: "model",
 				graderId: "ten-wake-loyalty",
@@ -258,7 +258,12 @@ export const capabilityCases: EvalCase[] = [
 			taskFrontmatter(
 				"not-misfired-by-governor",
 				"long-run",
-				(frontmatter) => !(frontmatter.status === "paused" && frontmatter.control?.pausedBy === "governor"),
+				(frontmatter) =>
+					!(
+						frontmatter.status === "active" &&
+						frontmatter.enabled === false &&
+						frontmatter.control?.stop?.by === "governor"
+					),
 			),
 			taskFrontmatter(
 				"detour-recorded",

@@ -1,6 +1,6 @@
 ---
 name: task-planning
-description: 创建或重构长程任务（task）、在 task 与事件（event）之间取舍，或设定周期节奏（schedule）。
+description: 创建或重构长程任务（task）、选择 task 与事件（event），或设定周期节奏（schedule）。
 requires-tools: task_manage
 priority: 40
 ---
@@ -9,7 +9,7 @@ priority: 40
 
 ## 什么时候创建 task
 
-只有工作需要**跨回合恢复**时才建：多步骤目标、等待人或外部系统、委派工作、周期性产出。当前回合能完成的简单请求不要建台账；纯提醒（无产出、无验收）用事件（event），见 `event-scheduling.md`。
+只有工作需要跨回合恢复时才建：多步骤目标、等待人或外部系统、委派工作、周期性产出。当前回合能完成的简单请求不要建台账；纯提醒或外部条件探测用 event。
 
 ## 创建内容
 
@@ -17,73 +17,40 @@ priority: 40
 
 - `id`：稳定的 kebab-case。
 - `title`：一句话标题。
-- `goal`：最终要成立的**结果**，不写行动清单。
-- `dod`：客观验收标准，每项必须是 `- [ ]` checkbox；纯 prose 或编号列表会被拒。
-- `manual`：可复用的执行步骤、预检与返工教训。
-- `verificationPlan`：验收者能独立执行的确定性检查。
+- `goal`：最终要成立的结果，不写行动清单。
+- `dod`：客观验收标准，每项必须是 `- [ ]` checkbox。
+- `manual`：可复用的执行步骤、预检、幂等方法和返工教训。
+- `verificationPlan`：独立验收者能执行的确定性检查。
 
-默认不要求独立验收，只有有限尝试预算。任务产出了验收者能独立检查的产物（代码、配置、可运行命令）时，创建时设 `control.verificationRequired: true`；`sideEffects: external` 的任务会自动打开它。
+Task 创建即持续委托；是否触达外部系统由可用工具、security 配置、任务 Goal 和幂等检查共同约束。不存在按动作逐次授权字段。
 
-## control 决策
+有代码、配置或可复现产物时，显式设置 `control.verificationRequired: true`；纯提醒、沟通和主观写作通常保持默认 false。
+
+## Control 决策
 
 - `priority` / `deadline`：表达调度重要性和硬期限，不用 `wake` 冒充 deadline。
-- `nextAction`：下一条可执行动作，避免写抽象愿望。
-- `maxAttempts`：唯一的按任务停止条件，默认 12，按风险和规模调整。它在**本周期、回合边界**检查，不会中断正在运行的单个回合。周期任务每开一个新周期清零，**一次性任务则是终身额度**——预计要十几步以上的长程任务，创建时就把它调高，不要等治理器把任务停掉再补。
-- `sideEffects`：`workspace` 或 `external`。发送、发布、部署、修改外部系统必须选 `external`，它会要求用户 `/tasks approve` 后才能 done。
-- 任务之间没有父子或依赖字段。需要表达先后次序时写进 `goal`/`manual`，或用 `wake` 把后续任务排到合适的时间；每个任务只按自己的 DoD 收尾。
+- `nextAction`：下一条可执行动作，避免抽象愿望。
+- `maxAttempts`：唯一按任务计数的 attempt stop-loss，默认 12；周期任务每次开新 cycle 清零。
+- `waitingFor`：记录恢复源：time、user、job、verification 或 external-signal。
+- `blockedReason`：写清楚等待的对象、条件和下一步。
+- `wake`：最早回访时间；future wake 会使任务规范为 waiting。
+- `schedule`：五字段 cron；存在即 recurring。
 
-外部副作用与独立验收并存时，DoD/Verification 只验收"**待执行动作及其输入已准备正确**"，不要把尚未获批的外部动作本身写成必须勾选的项；理由与完整门禁顺序见 `task-closeout.md`。
+Goal/DoD/Manual/Verification 描述最终结果和检查方法，不把“查不到状态”写成已完成。外部动作必须先查询真实状态，携带稳定 request/message id，成功后把结果写入 Current Cycle 或 completion evidence。
 
-DoD 描述最终可验收结果，不把未执行动作写成 `[x] skipped`。存在条件分支时，用一个结果项表达“完成 A，或在条件不成立时交付 B 并附理由”；执行哪条路径由 evidence 证明。
+## Plan：手段层
 
-## 计划（Plan）：手段层，不是第二份 DoD
+预计需要多次唤醒时，用 `plan` 创建步骤，或用 `task_manage progress` 的 `planSteps` 更新。Plan 是手段，不是第二份 DoD；每步写可验证产出，可选 `→ dod:1,2` 引用。四态为 `[ ]` todo、`[x]` done、`[!]` blocked、`[~]` dropped。当前步骤由 runtime 从文档顺序推导。
 
-预计需要 5 步以上，或会跨 3 次以上唤醒才能完成时，创建阶段用 `plan` 参数给出初始步骤（一行一步），或后续用 `task_manage progress` 的 `planSteps` 追加。控制在 3–9 步，每步应有可独立验证的产出，不要把 DoD 逐条照抄成步骤——DoD 是**要交付什么**，Plan 是**打算怎么做**，两者粒度不同才有意义。步骤可选地用 `→ dod:1,2` 声明它覆盖哪些 DoD 项；`/tasks doctor` 会检查引用是否有效、是否有 DoD 项完全没有步骤覆盖。
+## 三态与周期
 
-步骤只有四态：`[ ]` 待办、`[x]` 完成、`[!]` 阻塞（写清楚等什么）、`[~]` 放弃（连同一句为什么，不要直接删行）。**没有"进行中"态**——当前步骤由 runtime 从文档顺序自动推导（第一个待办或阻塞项），每次唤醒的任务胶囊和 `<task_agenda>` 都会显示它，不需要自己申报。
+- `active`：当前有具体工作可推进。
+- `waiting`：等待真实条件；有 wake 是定时回访，无 wake 是 signal parked，driver 不轮询。
+- `sleeping`：recurring occurrence 已闭环，等待 schedule 的下一次 wake。
+- `enabled: false`：正交停用，保留 status、wake、schedule；恢复只改回 true。
 
-更新步骤状态只用 `task_manage progress` 的 `planSteps`（`[{id, status?, text?}]`），不要用 `write`/`edit` 手改 Plan 段——那样会绕开唤醒胶囊的推导逻辑且容易打乱格式。改动会自动折进这次 `progress` 的 Current Cycle 记录里，不需要额外记一遍。
-
-Plan 与契约段（Goal/DoD/Manual/Verification）分开：**改 Plan 步骤状态不会使已有的独立验收 PASS 或外部审批失效**，因为它是任务的手段而非承诺。反过来，Plan 也不是新增的验收门——`done` 只看 DoD，不检查 Plan 是否全部勾完。
-
-发现打法需要大改（不只是勾一步）时，直接调用 `planSteps` 重写受影响的步骤即可，同样不必大改正文；只有需要重新组织整个正文结构时才用 `edit`。
-
-`nextAction` 和 Plan 不要互相重复：`nextAction` 是"当前步骤内接下来那个具体动作"，Plan 是"整个任务的步骤阶梯"。跨任务可复用的方法与返工教训继续写进 Manual，不要塞进某一步的文案里。
-
-## 六个状态与时间
-
-每个状态只对应一种 driver 行为：
-
-- `active`：可推进（受 `wake` 门控）。
-- `waiting`：等用户/外部条件/委派结果；等谁、等什么写进 `control.blockedReason`。
-- `verifying`：只做独立验收，不继续实现。
-- `paused`：driver 不运行。用户暂停记 `pausedBy=user`，治理器停止记 `pausedBy=governor`。
-- `done`：完成；有 `schedule` 则原地睡到下次 occurrence，否则归档。
-- `cancelled`：放弃并归档。
-
-`wake` 是**最早重新检查时间**，不是截止时间。等待时设置现实的 `wake`；可继续时清空 `wake`，让 driver 按 cooldown 接续。写本地时间（如 `2026-07-27T07:30:00+08:00`），不要手算 UTC；也可以写相对量 `+2h`/`+45m`/`+3d`。
-
-## 周期性任务（schedule）
-
-一个周期任务就是**一个文件**：`tasks/<id>.md`。节奏写在 frontmatter 的 `schedule`（五段 cron，按主机时区解释；部署时用 `TZ` 固定所需 IANA 时区），做法与跨周期经验写在正文。没有配套事件，也没有 `.schedule` 命名约定。`recurrence` 只是给人看的可选标注（如 `每周一`），没有机器语义——**周期性 = `schedule` 是否存在**。
-
-```
-task_manage create id=weekly-report title=... goal=... dod=... schedule="30 9 * * 1"
-```
-
-cron 最密每 30 分钟一次，落盘前校验。纯提醒不建 task，用普通 periodic 事件。
-
-**首次执行遵循 cron 语义**：不显式传 `wake` 时，create 会把 `wake` 预约到下一次 occurrence，任务处于 `active` + 未来 `wake`——像 crontab 一样，创建不等于立刻跑。需要立刻开跑就显式传一个当下或过去的 `wake`。
-
-到点后 **runtime 直接开下一周期**，不需要（也没有）手工开周期的动作：折叠上一周期日志和 evidence 入 History、限制工作正文只保留最近周期、清空本周期用量与验收授权元数据、置 `active`，然后派发一条普通驱动唤醒。累计审计 usage 不会清零。你醒来面对的就是一个待推进的新周期，和其他唤醒无异。
-
-- 改节奏：`task_manage set schedule="<新 cron>"`；只要这次调用没有同时显式给 `wake`，写盘就会把 `wake` 重算到新节奏的下一次 occurrence（不论当前 status，停泊任务除外）。一处真相。
-- 暂停 / 恢复：`/tasks pause <id>` / `/tasks resume <id>`。
-- 退役：`task_manage cancel`，归档任务并清理全部 task-owned 事件。
-- 上周期未完成：不要覆盖或虚勾 DoD。先完成、如实缩小本轮范围并验收，或与用户确认后 cancel 整项任务。
-
-每轮闭环前把返工原因、预检步骤和格式偏好写回 Manual；跨任务可复用时才沉淀成 workspace skill。
+recurring create 始终写 `sleeping + enabled: true + next wake`，创建不派发首轮。首轮和续轮都由 runtime 的 cycle-open 操作初始化 Current Cycle；首轮不把占位内容写进 History。一次性任务不能 sleeping，闭环后归档。
 
 ## 建档后自检
 
-创建后读取落盘文件，确认 Goal、DoD、Manual、Verification 和 control 与真实意图一致。后续每个驱动回合按 `task-driving.md` 推进。
+创建后读取落盘文件，确认 Goal、DoD、Manual、Verification、status、enabled、wake 和 control 与真实意图一致。后续驱动回合按 `task-driving.md`，验收和闭环按 `task-closeout.md`。

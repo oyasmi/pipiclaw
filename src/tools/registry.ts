@@ -62,6 +62,7 @@ export interface ToolBuildContext {
 	 * files. Gates the `send_media` tool; sub-agents never receive it.
 	 */
 	mediaSender?: MediaSender;
+	dispatchVerification?: (taskId: string) => Promise<boolean>;
 }
 
 export interface ToolRegistration {
@@ -225,6 +226,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				channelDir: ctx.channelDir,
 				channelId: ctx.channelId,
 				workingDirectory: ctx.securityContext.cwd,
+				dispatchVerification: ctx.dispatchVerification,
 			}),
 	},
 	{

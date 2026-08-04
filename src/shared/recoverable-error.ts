@@ -10,7 +10,7 @@
  *
  * Throw a plain `Error` instead when the user genuinely has to act or know:
  *   - a security guard refused the call (the user may need to adjust security.json),
- *   - progress needs a human decision (`/tasks approve <id>`),
+ *   - progress needs a human decision outside the model's current task scope,
  *   - state is corrupt and needs manual repair,
  *   - the tool itself broke (I/O failure, a bug).
  *

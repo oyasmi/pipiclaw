@@ -237,7 +237,8 @@ describe("runtime stop handling", () => {
 		await task;
 
 		expect(runner.abort).toHaveBeenCalledTimes(1);
-		expect(readFileSync(taskPath, "utf-8")).toContain("status: paused");
+		expect(readFileSync(taskPath, "utf-8")).toContain("status: active");
+		expect(readFileSync(taskPath, "utf-8")).toContain("enabled: false");
 		// The transport turns this into the user-facing "任务 X 已暂停，用 /tasks resume X 继续" notice.
 		expect(outcome).toEqual({ pausedTaskId: "long-run" });
 

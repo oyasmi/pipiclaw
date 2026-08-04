@@ -183,11 +183,11 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 - 子代理没有 `subagent` 工具，**不能继续创建下一级代理**。
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。
-- 子代理只隔离对话上下文，文件系统与主代理共享。任务自有的 git worktree 已在 spec 036 移除：git worktree 与父进程同主机、同文件系统、同网络，从来不是安全边界，只是并行分支的便利。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，`task_manage verify` / `done` 在同一目录复算 artifact subject。
+- 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，`task_manage verify` / `complete` 在同一目录复算 artifact subject。
 - `purpose: verify` + `taskId`：进入独立验收协议，去掉 write/edit 工具，检测 verifier 期间的 git workspace 变化，并要求最后一行明确 `VERDICT: PASS|FAIL`。
 - verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`，主代理用返回的 runId 调 `task_manage verify` 导入；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 
-> `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合 `candidate` / `done` 门禁——见 [events-and-tasks.md](./events-and-tasks.md#受治理-control)。
+> `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合 `request-verification` / `complete`——见 [events-and-tasks.md](./events-and-tasks.md#control-与恢复事实)。
 
 ## 推荐写法（Recommended Presets）
 
@@ -241,7 +241,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - `model` 只写了模糊名字，结果无法精确匹配。
 - 只在正文描述使用时机，导致主代理无法从目录中的 `description` 正确选择角色。
 - 把 `read,bash` 误认为 runtime 强制只读，未约束 bash 的写命令。
-- 在没有可追溯用户授权时让 Git 子代理自动 push。
+- 在任务 Goal 未覆盖目标仓库或 ref 时让 Git 子代理自动 push。
 
 ## 该看哪份文档
 

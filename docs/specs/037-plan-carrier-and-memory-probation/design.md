@@ -1,3 +1,5 @@
+> **当前 Task 生命周期语义已由 [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md) supersede。** 本文的 Plan carrier 与记忆试用期设计仍是有效背景；旧策略字段只作历史记录。
+
 # 计划承载体与记忆试用期：给长程任务补「手段层」，给durable memory补「中间态」
 
 | 字段 | 值 |

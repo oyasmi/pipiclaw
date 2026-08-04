@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { writeFileAtomically } from "../../shared/atomic-file.js";
+import { errorMessage } from "../../shared/text-utils.js";
 import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import { createDefaultTaskControl, type TaskVerification } from "../../tasks/control.js";
 import { appendCurrentCycleNote, normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../tasks/ledger.js";
@@ -11,41 +12,62 @@ import { readTaskDocument, renderTaskFile, requiredField, tasksDir } from "./sha
 import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 
 /**
- * Move a task into the verification lane. The runtime driver will explicitly
- * wake a fresh verifier on the next attempt, keeping the maker from grading
- * its own work in the same reasoning context.
+ * Park an active task for an independent checker. The runtime callback creates the durable
+ * checker dispatch; the task is never placed in a special lifecycle status.
  */
-export async function candidateTask(
+export async function requestVerificationTask(
 	options: TaskManageToolOptions,
 	request: TaskManageRequest,
 ): Promise<TaskManageResult> {
-	if (!request.id) throw new RecoverableToolError('action "candidate" requires an id.');
+	if (!request.id) throw new RecoverableToolError('action "request-verification" requires an id.');
 	const id = normalizeTaskId(request.id);
-	const note = requiredField(request.note, "note", "candidate");
+	const note = requiredField(request.note, "note", "request-verification");
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	resolveTaskTransition("candidate", id, normalizeStoredStatus(fields.status));
+	resolveTaskTransition("request-verification", id, normalizeStoredStatus(fields.status, Boolean(fields.schedule)));
 	const uncheckedAcceptance = uncheckedTaskAcceptanceItems(body);
 	if (uncheckedAcceptance.length > 0) {
 		throw new RecoverableToolError(
 			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before requesting verification.`,
 		);
 	}
+	if (!options.dispatchVerification) {
+		throw new RecoverableToolError(
+			`Task "${id}" cannot enter verification wait because the durable checker is unavailable. Retry request-verification when the runtime can enqueue a checker.`,
+		);
+	}
+	const originalFields = structuredClone(fields);
 	const control = fields.control ?? createDefaultTaskControl(true);
 	control.verification = { required: true, status: "pending" };
 	control.blockedReason = undefined;
-	control.nextAction = "Run a purpose=verify sub-agent and import its attestation.";
+	control.waitingFor = "verification";
+	control.nextAction = "Wait for the durable checker, then import its attestation.";
+	const waitingFields = { ...fields, status: "waiting" as const, wake: undefined, control };
 	const nextBody = appendCurrentCycleNote(body, note);
-	await writeFileAtomically(
-		taskPath,
-		renderTaskFile({ ...fields, status: "verifying", wake: undefined, control }, nextBody),
-	);
+	await writeFileAtomically(taskPath, renderTaskFile(waitingFields, nextBody));
+	let accepted: boolean;
+	try {
+		accepted = await options.dispatchVerification(id);
+	} catch (error) {
+		await writeFileAtomically(taskPath, renderTaskFile(originalFields, nextBody));
+		throw new RecoverableToolError(
+			`Could not enqueue the verification checker for task "${id}": ${errorMessage(error)}. The task was restored to active; retry request-verification.`,
+		);
+	}
+	if (!accepted) {
+		// Do not leave a signal-waiting task with no signal source. Roll back atomically to active;
+		// the caller can retry once durable dispatch is available.
+		await writeFileAtomically(taskPath, renderTaskFile(originalFields, nextBody));
+		throw new RecoverableToolError(
+			`Could not enqueue the verification checker for task "${id}". The task was restored to active; retry request-verification.`,
+		);
+	}
 	return {
-		action: "candidate",
+		action: "request-verification",
 		id,
 		path: taskPath,
-		status: "verifying",
-		notice: `任务 \`${id}\` 已进入独立验收队列；driver 将安排 verifier。`,
+		status: "waiting",
+		notice: `任务 \`${id}\` 已进入独立验收等待；checker 完成后 runtime 会恢复任务。`,
 	};
 }
 
@@ -58,6 +80,12 @@ export async function verifyTask(
 	const runId = requiredField(request.verifierRunId, "verifierRunId", "verify");
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) throw new RecoverableToolError(`Task "${id}" does not exist; create it before verification.`);
+	resolveTaskTransition("verify", id, normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule)));
+	if (task.fields.control?.waitingFor !== "verification") {
+		throw new RecoverableToolError(
+			`Task "${id}" is not waiting for verification. Request verification first so the checker signal is tied to this task.`,
+		);
+	}
 	const attestation = await readVerificationAttestation(options.channelDir, runId);
 	if (attestation.taskId !== id) {
 		throw new RecoverableToolError(
@@ -99,13 +127,17 @@ export async function verifyTask(
 	};
 	// The verdict lives in `control.verification`; `lastOutcome` stays runtime-owned telemetry.
 	control.blockedReason = attestation.verdict === "fail" ? attestation.evidence : undefined;
+	control.waitingFor = undefined;
+	control.nextAction = undefined;
 	task.fields.control = control;
+	task.fields.status = "active";
+	task.fields.wake = undefined;
 	await writeFileAtomically(task.path, renderTaskFile(task.fields, task.body));
 	return {
 		action: "verify",
 		id,
 		path: task.path,
-		status: task.fields.status,
+		status: "active",
 		notice: `任务 \`${id}\` 独立验收结果：${attestation.verdict.toUpperCase()}（run: ${runId}）。`,
 	};
 }
@@ -114,7 +146,7 @@ export async function verifyTask(
  * `verify` writes control.verification from a real attestation file, but the task Markdown
  * itself is writable by the agent's own write/edit tools — nothing stops it from hand-crafting
  * a "passed" verification block that was never backed by a real verifier run. Re-check the
- * attestation file on the consuming side (done/doctor) too, not just at import time.
+ * attestation file on the consuming side (complete/doctor) too, not just at import time.
  */
 export async function assertVerificationAttestationMatches(
 	channelDir: string,
@@ -122,7 +154,9 @@ export async function assertVerificationAttestationMatches(
 	verification: TaskVerification,
 ): Promise<VerificationAttestation> {
 	if (!verification.runId) {
-		throw new RecoverableToolError(`Task "${id}" has no verification run id; rerun task_manage verify before done.`);
+		throw new RecoverableToolError(
+			`Task "${id}" has no verification run id; rerun task_manage verify before complete.`,
+		);
 	}
 	const attestation = await readVerificationAttestation(channelDir, verification.runId);
 	if (attestation.taskId !== id) {

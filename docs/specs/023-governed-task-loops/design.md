@@ -1,3 +1,5 @@
+> **Superseded for current Task behavior by [038 Task Autonomy State v2](../038-task-autonomy-state-v2/design.md).** This document records the earlier governance design; its approval fields, lifecycle states, and command examples are historical only.
+
 # 023 — Governed Task Loops
 
 ## 目标与范围

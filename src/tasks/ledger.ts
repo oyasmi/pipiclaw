@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { nextTaskWake } from "../shared/task-schedule.js";
-import { parseTaskControl, type TaskControl, taskPriorityRank } from "./control.js";
-import { normalizeStoredStatus, TERMINAL_TASK_STATUSES, wasLegacyEscalated } from "./transitions.js";
+import { createDefaultTaskControl, parseTaskControl, type TaskControl, taskPriorityRank } from "./control.js";
+import { normalizeStoredStatus, wasLegacyEscalated } from "./transitions.js";
+
+export type TaskArchiveOutcome = "completed" | "cancelled";
 
 /**
  * Shared reader for the task ledger (`workspace/<channelId>/tasks/*.md`).
@@ -15,7 +17,7 @@ import { normalizeStoredStatus, TERMINAL_TASK_STATUSES, wasLegacyEscalated } fro
  * halves — a dependency-free `tasks-pending.mjs` sensor under workspace/skills was the
  * other — but the native TaskDriver (spec 022) replaced that sensor, so `actionable` now
  * has a single owner. The parsing stays deliberately literal (flat `key: value` fields,
- * done-vs-not-done, wake gating, fail-open on unreadable frontmatter) because task files
+ * live-vs-archived, wake gating, fail-open on unreadable frontmatter) because task files
  * are hand-editable and must degrade toward "wake me up so I can be fixed".
  * `/tasks`, the task digest, and `task_manage list` all read through here.
  */
@@ -24,6 +26,12 @@ export interface TaskFrontmatter {
 	/** false => frontmatter could not be read (fail-open: the task is treated as actionable). */
 	readable: boolean;
 	status?: string;
+	/** Raw status before the v1 reader migration, for deterministic startup migration/doctor. */
+	rawStatus?: string;
+	/** True when a legacy terminal file in the active directory needs archiving. */
+	archiveOutcome?: TaskArchiveOutcome;
+	closedAt?: string;
+	enabled: boolean;
 	wake?: string;
 	/** Five-field cron cadence (host timezone). Present ⇒ this is a recurring task. */
 	schedule?: string;
@@ -66,7 +74,16 @@ export interface TaskSkeletonInput {
 	plan?: string;
 }
 
-const FRONTMATTER_FIELDS = ["status", "wake", "schedule", "recurrence", "control"] as const;
+const FRONTMATTER_FIELDS = [
+	"status",
+	"enabled",
+	"wake",
+	"schedule",
+	"recurrence",
+	"outcome",
+	"closedAt",
+	"control",
+] as const;
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export const DEFAULT_TASK_MANUAL =
@@ -121,9 +138,9 @@ export function taskBody(content: string): string {
  * Cycle" appears first — i.e. the H1 title, Goal, DoD (with its checkbox state), Manual and
  * Verification (spec 029, D4).
  *
- * Verification PASS and external approval bind to this segment, not the whole body, so routine
- * `progress` notes (Current Cycle, and — spec 037, D1 — Plan step status) never invalidate a
- * PASS or approval; only a change to what the task promises to do and how it is checked does.
+ * Verification PASS binds to this segment, not the whole body, so routine `progress` notes
+ * (Current Cycle, and — spec 037, D1 — Plan step status) never invalidate a PASS; only a change
+ * to what the task promises to do and how it is checked does.
  * Plan is deliberately excluded from the contract even though it always precedes Current Cycle
  * in a freshly rendered skeleton: it is the task's *means*, not its promise, and is meant to be
  * revised without re-triggering verification. This also means a task with an existing PASS can
@@ -355,14 +372,14 @@ export function applyTaskPlanPatch(body: string, patches: readonly TaskPlanStepP
 	return { body: working, summary: deltas.length > 0 ? `plan: ${deltas.join("; ")}` : "" };
 }
 
-/** Parse the leading `---` frontmatter block into the three known fields. */
+/** Parse the leading frontmatter block and normalize legacy v1 fields in memory. */
 export function parseTaskFrontmatter(content: string): TaskFrontmatter {
-	if (!content.startsWith("---")) return { readable: false };
+	if (!content.startsWith("---")) return { readable: false, enabled: true };
 	const end = content.indexOf("\n---", 3);
-	if (end === -1) return { readable: false };
+	if (end === -1) return { readable: false, enabled: true };
 
 	const block = content.slice(3, end);
-	const frontmatter: TaskFrontmatter = { readable: true };
+	const frontmatter: TaskFrontmatter = { readable: true, enabled: true };
 	for (const line of block.split("\n")) {
 		const idx = line.indexOf(":");
 		if (idx === -1) continue;
@@ -385,19 +402,38 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 						frontmatter.controlReadable = false;
 					}
 				}
-			} else {
-				frontmatter[key as "status" | "wake" | "schedule" | "recurrence"] = value || undefined;
+			} else if (key === "enabled") {
+				frontmatter.enabled = value !== "false";
+			} else if (key === "outcome") {
+				if (value === "completed" || value === "cancelled") frontmatter.archiveOutcome = value;
+			} else if (key === "closedAt") {
+				frontmatter.closedAt = value || undefined;
+			} else if (key === "status" || key === "wake" || key === "schedule" || key === "recurrence") {
+				frontmatter[key] = value || undefined;
 			}
 		}
 	}
-	// Canonicalise the (possibly legacy) status on read. A legacy `escalated` file is read as
-	// `paused` by the deterministic governor; the nuance is preserved in control.pausedBy so
-	// nothing downstream has to know the old name.
+	// Canonicalise the possibly legacy status on read. Terminal v1 values are marked as archive
+	// outcomes so an active-directory scan can never execute them before startup migration moves
+	// them. A legacy recurring terminal is the v2 sleeping state.
 	const rawStatus = frontmatter.status;
+	frontmatter.rawStatus = rawStatus;
 	if (frontmatter.readable) {
-		frontmatter.status = normalizeStoredStatus(rawStatus);
-		if (wasLegacyEscalated(rawStatus) && frontmatter.control && frontmatter.control.pausedBy === undefined) {
-			frontmatter.control.pausedBy = "governor";
+		if (rawStatus === "done" && !frontmatter.schedule) frontmatter.archiveOutcome = "completed";
+		if (rawStatus === "cancelled") frontmatter.archiveOutcome = "cancelled";
+		frontmatter.status = normalizeStoredStatus(rawStatus, Boolean(frontmatter.schedule));
+		if (rawStatus === "paused" || wasLegacyEscalated(rawStatus)) {
+			frontmatter.enabled = false;
+			frontmatter.control ??= createDefaultTaskControl();
+			if (frontmatter.control && !frontmatter.control.stop) {
+				frontmatter.control.stop = {
+					by: wasLegacyEscalated(rawStatus) ? "governor" : "user",
+					reason:
+						frontmatter.control.blockedReason ??
+						`Task stopped by ${wasLegacyEscalated(rawStatus) ? "governor" : "user"}.`,
+					at: formatLocalTime(),
+				};
+			}
 		}
 	}
 	return frontmatter;
@@ -413,7 +449,7 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
  * and only that signal may resume it. Without this the runtime's own recommended shape for
  * delegating work (start a blocking wait as a `bash async` job, park the task, end the turn)
  * was re-dispatched the instant the turn ended, found the job still running, answered
- * `[SILENT]`, and after three such wakes got paused by the governor. A `waiting` task that
+ * `[SILENT]`, and after three such wakes was disabled by the governor. A `waiting` task that
  * *does* carry a wake is an ordinary timed re-check and stays gated on that wake; an
  * unparseable wake still fails open so a hand-edited file surfaces rather than parks forever.
  */
@@ -425,8 +461,12 @@ export function isTaskParked(frontmatter: TaskFrontmatter): boolean {
 export function isTaskActionable(frontmatter: TaskFrontmatter, now: number): boolean {
 	if (!frontmatter.readable) return true;
 	if (frontmatter.controlReadable === false) return true;
+	if (frontmatter.archiveOutcome || frontmatter.enabled === false) return false;
 	// status is already canonicalised by parseTaskFrontmatter.
-	if (TERMINAL_TASK_STATUSES.has(frontmatter.status ?? "")) return false;
+	if (frontmatter.status === "sleeping") {
+		const wakeAt = parseWakeMs(frontmatter);
+		return wakeAt !== undefined && wakeAt <= now;
+	}
 	if (isTaskParked(frontmatter)) return false;
 	const wakeAt = parseWakeMs(frontmatter);
 	if (wakeAt !== undefined && wakeAt > now) return false;
@@ -475,7 +515,7 @@ export function missingStandardTaskSections(content: string): string[] {
  * Without the "no checklist items" case, a DoD written as prose or a numbered
  * list (no `- [ ]` anywhere) makes this function return an empty array —
  * indistinguishable from "everything is checked" — which would silently let
- * `task_manage candidate`/`done` through with nothing ever actually verified.
+ * `task_manage request-verification`/`complete` through with nothing ever actually verified.
  */
 export function uncheckedTaskAcceptanceItems(content: string): string[] {
 	const unchecked: string[] = [];
@@ -508,7 +548,7 @@ export function uncheckedTaskAcceptanceItems(content: string): string[] {
 	}
 	if (dodHasContent && !dodHasCheckbox) {
 		unchecked.push(
-			'DoD has no checklist items — rewrite it as "- [ ] ..." acceptance items before requesting verification or done.',
+			'DoD has no checklist items — rewrite it as "- [ ] ..." acceptance items before requesting verification or complete.',
 		);
 	}
 	return unchecked;
@@ -586,34 +626,109 @@ export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 
 export interface TaskDocumentFields {
 	status: string;
+	/** Raw v1 value retained only in memory for startup migration. */
+	legacyStatus?: string;
+	enabled?: boolean;
 	wake?: string;
 	schedule?: string;
 	recurrence?: string;
 	control?: TaskControl;
+	outcome?: TaskArchiveOutcome;
+	closedAt?: string;
 }
 
 /**
- * The single time rule, enforced on the write path (spec 029, D1).
- *
- * The rule "a done recurring task's next wake is its cron next occurrence" becomes a
- * construction-time invariant: every `done + schedule` document has its `wake` set to the
- * next occurrence on the write path, regardless of any prior/stale/unparseable value. Once
- * the cycle comes due the runtime reopens it (status leaves `done`, so this no longer fires).
- * Every other field combination is left verbatim — `create`'s first-cycle seed (status
- * `active`) and an explicit `wake` on a non-recurring task are honoured. When the cron cannot
- * be parsed the existing value is kept so the corruption surfaces rather than being erased.
+ * Enforce the v2 write-path invariants. Runtime due transitions are intentionally separate: a
+ * waiting task is first written active, and a sleeping task is first opened into a cycle, before
+ * the driver dispatches anything.
  */
-export function normalizeTaskFields(fields: TaskDocumentFields): TaskDocumentFields {
-	if (fields.status !== "done" || !fields.schedule) return fields;
-	const next = nextTaskWake(fields.schedule);
-	if (!next) return fields;
-	const wake = formatLocalTime(next);
-	return wake === fields.wake ? fields : { ...fields, wake };
+export function normalizeTaskFields(fields: TaskDocumentFields, now: Date = new Date()): TaskDocumentFields {
+	const next: TaskDocumentFields = {
+		...fields,
+		status: normalizeStoredStatus(fields.status, Boolean(fields.schedule)),
+		enabled: fields.enabled !== false,
+	};
+	if (next.outcome) {
+		// Archive documents are never driver inputs. Do not carry a live stop marker into them.
+		next.enabled = undefined;
+		return next;
+	}
+	if (next.enabled === true && next.control?.stop) {
+		next.control = { ...next.control, stop: undefined };
+	}
+	if (next.enabled === false) {
+		// Pausing is intentionally lossless: do not normalize status, wake, or schedule while disabled.
+		// A hand-written disabled task without a stop receipt is diagnosed rather than given a fabricated actor.
+		return next;
+	}
+
+	const nowMs = now.getTime();
+	const wakeMs = next.wake ? parseLocalTime(next.wake) : undefined;
+	if (next.status === "active") {
+		if (wakeMs !== undefined && wakeMs > nowMs) {
+			next.status = "waiting";
+			next.control = next.control ? { ...next.control, waitingFor: "time" } : undefined;
+		} else {
+			next.wake = undefined;
+			next.control = next.control ? { ...next.control, waitingFor: undefined } : undefined;
+		}
+	}
+	if (next.status === "waiting") {
+		if (next.wake && wakeMs !== undefined) {
+			const waitingFor = next.control?.waitingFor === "external-signal" ? "external-signal" : "time";
+			next.control = next.control ? { ...next.control, waitingFor } : undefined;
+		} else if (!next.wake && next.control) {
+			const waitingFor = next.control.waitingFor === "time" ? "external-signal" : next.control.waitingFor;
+			next.control = { ...next.control, waitingFor: waitingFor ?? "external-signal" };
+		}
+	}
+	if (next.status === "sleeping" && next.schedule) {
+		const occurrence = next.wake ? parseLocalTime(next.wake) : undefined;
+		const validOccurrence =
+			occurrence !== undefined && nextTaskWake(next.schedule, new Date(occurrence - 1))?.getTime() === occurrence;
+		if (!validOccurrence) {
+			const upcoming = nextTaskWake(next.schedule, now);
+			if (upcoming) next.wake = formatLocalTime(upcoming);
+		}
+		if (next.control?.waitingFor) {
+			next.control = { ...next.control, waitingFor: undefined };
+		}
+	}
+	return next;
+}
+
+/**
+ * Whether an open recurring cycle has already crossed its next schedule occurrence.
+ * The runtime must keep working on the old cycle rather than opening a concurrent one.
+ * Cycle ids intentionally carry the local calendar date; the optional suffix handles a
+ * same-day manual reopen deterministically.
+ */
+export function recurringTaskMissedOccurrence(fields: TaskDocumentFields, now: Date = new Date()): boolean {
+	if (!fields.schedule || (fields.status !== "active" && fields.status !== "waiting") || !fields.control?.cycleId) {
+		return false;
+	}
+	const match = /^cycle-(\d{4})-(\d{2})-(\d{2})(?:-(\d+))?$/.exec(fields.control.cycleId);
+	if (!match) return false;
+	const start = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+	if (!Number.isFinite(start.getTime())) return false;
+	let occurrence = nextTaskWake(fields.schedule, new Date(start.getTime() - 1));
+	const count = match[4] ? Number.parseInt(match[4], 10) : 1;
+	for (let index = 1; occurrence && index < count; index++) {
+		occurrence = nextTaskWake(fields.schedule, occurrence);
+	}
+	const next = occurrence ? nextTaskWake(fields.schedule, occurrence) : undefined;
+	return next !== undefined && next.getTime() <= now.getTime();
 }
 
 export function renderTaskDocument(fields: TaskDocumentFields, rawBody: string): string {
 	const document = normalizeTaskFields(fields);
-	const lines = ["---", `status: ${document.status}`];
+	const lines = ["---"];
+	if (document.outcome) {
+		lines.push(`outcome: ${document.outcome}`);
+		if (document.closedAt) lines.push(`closedAt: ${document.closedAt}`);
+	} else {
+		lines.push(`status: ${document.status}`, `enabled: ${document.enabled !== false}`);
+	}
 	if (document.wake) lines.push(`wake: ${document.wake}`);
 	if (document.schedule) lines.push(`schedule: ${document.schedule}`);
 	if (document.recurrence) lines.push(`recurrence: ${document.recurrence}`);
@@ -663,7 +778,7 @@ export function appendCurrentCycleNote(content: string, note: string): string {
  * Upsert the completion evidence subsection inside Current Cycle.
  *
  * Evidence is part of the cycle log, not a new top-level section. This makes the next
- * `startTaskCycle` fold it into the matching History entry and prevents repeated `done`
+ * `startTaskCycle` fold it into the matching History entry and prevents repeated completion
  * attempts from appending duplicate evidence blocks.
  */
 export function upsertCurrentCycleCompletionEvidence(content: string, evidenceLines: readonly string[]): string {
@@ -836,7 +951,7 @@ function compactTaskHistory(content: string, alreadyOmitted = false): string {
  * instead of asking the model to hand-edit headings and risk appending future
  * checkpoints to the previous cycle.
  */
-export function startTaskCycle(content: string, cycleId: string): string {
+export function startTaskCycle(content: string, cycleId: string, archivePrevious = true): string {
 	const normalizedCycleId = cycleId.trim();
 	if (!normalizedCycleId) throw new Error("Cycle id must not be empty.");
 	const legacy = stripLegacyCompletionEvidence(content);
@@ -895,14 +1010,12 @@ export function startTaskCycle(content: string, cycleId: string): string {
 	lines.splice(currentStart, currentEnd - currentStart, ...replacement);
 
 	const shiftedHistoryStart = historyStart + replacement.length - (currentEnd - currentStart);
-	const historyEntry = [
-		`### ${previousHeading} — closed`,
-		...(previous ? [previous] : ["- No checkpoint was recorded in the previous cycle."]),
-		"",
-	];
-	// A nested history heading would be unusual; inserting directly after the
-	// canonical History heading remains predictable and preserves all older notes.
-	lines.splice(shiftedHistoryStart + 1, 0, ...historyEntry);
+	if (archivePrevious && previous && !/^[-*]\s+Created; next step:/i.test(previous)) {
+		const historyEntry = [`### ${previousHeading} — closed`, previous, ""];
+		// A nested history heading would be unusual; inserting directly after the
+		// canonical History heading remains predictable and preserves all older notes.
+		lines.splice(shiftedHistoryStart + 1, 0, ...historyEntry);
+	}
 	const compacted = compactTaskHistory(lines.join("\n"), legacy.blocks.length > 1);
 	return resetPlanStepCheckboxes(resetTaskAcceptanceCheckboxes(compacted));
 }
@@ -1008,6 +1121,7 @@ function parseWakeMs(frontmatter: TaskFrontmatter): number | undefined {
 /** Actionable first; then earliest wake first (unset wake sorts as "ready now"); then id. */
 export function compareTaskEntries(a: TaskLedgerEntry, b: TaskLedgerEntry): number {
 	if (a.actionable !== b.actionable) return a.actionable ? -1 : 1;
+	if (a.frontmatter.enabled !== b.frontmatter.enabled) return a.frontmatter.enabled ? -1 : 1;
 	if (a.actionable && b.actionable) {
 		const ap = taskPriorityRank(a.frontmatter.control?.priority ?? "normal");
 		const bp = taskPriorityRank(b.frontmatter.control?.priority ?? "normal");
@@ -1101,7 +1215,7 @@ export async function readActiveTasks(tasksDir: string, now: number = Date.now()
 			entries.push({
 				id,
 				title: id,
-				frontmatter: { readable: false },
+				frontmatter: { readable: false, enabled: true },
 				actionable: true,
 			});
 		}
