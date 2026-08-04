@@ -60,6 +60,7 @@ import {
 import { DurableDispatchService } from "./durable-dispatch.js";
 import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
+import { installLlmProxy } from "./proxy.js";
 import { ChannelStore } from "./store.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
 import { createTaskDriverEvent, createTaskVerificationEvent, TaskDriver } from "./task-driver.js";
@@ -1206,6 +1207,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 export function prepareAppServices(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): {
 	settingsManager: PipiclawSettingsManager;
 } {
+	// Shared by the DingTalk daemon and the TUI (both call prepareAppServices), so this
+	// covers every entrypoint that talks to an LLM provider.
+	installLlmProxy();
+
 	const settingsManager = new PipiclawSettingsManager(paths.appHomeDir);
 	for (const { scope, error } of settingsManager.drainErrors()) {
 		log.logWarning(`Failed to load ${scope} settings`, `${error.message}\n${paths.settingsConfigPath}`);

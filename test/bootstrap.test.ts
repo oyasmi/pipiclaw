@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
+import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	BootstrapExitError,
@@ -10,6 +11,7 @@ import {
 	loadConfig,
 	migrateLegacyAppHome,
 	parseArgs,
+	prepareAppServices,
 } from "../src/runtime/bootstrap.js";
 import { ChannelStore } from "../src/runtime/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -234,5 +236,28 @@ describe("bootstrap", () => {
 		expect(readFileSync(paths.channelConfigPath, "utf-8")).toContain('"clientId": "client-id"');
 
 		await expect(app.shutdown()).resolves.toBeUndefined();
+	});
+});
+
+describe("prepareAppServices", () => {
+	const originalProxyEnv = process.env.PIPICLAW_PROXY;
+
+	afterEach(() => {
+		if (originalProxyEnv === undefined) delete process.env.PIPICLAW_PROXY;
+		else process.env.PIPICLAW_PROXY = originalProxyEnv;
+	});
+
+	it("installs the LLM proxy dispatcher when PIPICLAW_PROXY is set", () => {
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+		const originalDispatcher = getGlobalDispatcher();
+		process.env.PIPICLAW_PROXY = "http://127.0.0.1:65535";
+
+		try {
+			prepareAppServices(paths);
+			expect(getGlobalDispatcher()).not.toBe(originalDispatcher);
+		} finally {
+			setGlobalDispatcher(originalDispatcher);
+		}
 	});
 });

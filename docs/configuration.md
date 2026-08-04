@@ -46,6 +46,7 @@ POSIX 环境；Windows 请使用 WSL2。
 | 改工作规则 | `workspace/AGENTS.md` | 团队规则、安全边界、项目工作流 |
 | 加可复用角色 | `workspace/sub-agents/*.md` | 子代理 frontmatter + system prompt |
 | 加可复用流程 | `workspace/skills/` | 通过 `skill_manage` 创建/维护 workspace skill |
+| 让 LLM 请求走代理 | 环境变量 `PIPICLAW_PROXY` | 见下方「LLM 请求走代理」 |
 
 ## 钉钉最小配置
 
@@ -193,6 +194,35 @@ SearXNG 也必须打开总开关：
 }
 ```
 
+## LLM 请求走代理
+
+`tools.json` 里的 `tools.web.proxy` 只管 `web_search`/`web_fetch` 这两个工具的出站请求。**主 Agent、子 Agent、记忆维护 sidecar 发往模型 API 的请求（含 OAuth 刷新、模型目录拉取）默认直连，不受 `tools.web.proxy` 影响**——Node 内置的 `fetch` 不读任何 `*_PROXY` 环境变量，Anthropic/OpenAI/Mistral 等 SDK 也都基于它。要让这部分请求走代理，用环境变量：
+
+```bash
+export PIPICLAW_PROXY=http://127.0.0.1:7890
+# 可选：这个代理不代理的目标（逗号分隔，支持 host、host:port、*.suffix）
+export PIPICLAW_NO_PROXY=internal.example.com,10.0.0.0/8
+```
+
+只支持 `http://`/`https://` 代理 URL，**不支持 `socks5://`**：配了 SOCKS 地址会在启动日志里警告，并保持直连，不会静默失败。
+
+### 和标准 `HTTP_PROXY`/`HTTPS_PROXY` 的关系
+
+| 设置 | LLM 请求（主/子 Agent、记忆 sidecar） | 钉钉 HTTP API（发消息、卡片流式） | 钉钉 WebSocket 长连接 |
+|---|---|---|---|
+| 只设 `PIPICLAW_PROXY` | 走代理 | 直连 | 直连 |
+| 只设标准 `HTTP_PROXY`/`HTTPS_PROXY` | 走代理 | 走代理（axios 自己也读这两个变量） | 直连（`ws` 不读代理变量） |
+| 两者都设 | `PIPICLAW_PROXY` 生效，标准变量被忽略 | 走代理 | 直连 |
+
+`PIPICLAW_PROXY` 是独立变量，不是巧合：钉钉的 axios 客户端会自己读标准 `HTTP_PROXY`/`HTTPS_PROXY`，如果只想让模型请求走代理、钉钉直连，就必须用 `PIPICLAW_PROXY`，否则设标准变量会把钉钉的 HTTP 调用也捎带代理（而它的 WebSocket 连接依然直连，变成一半走一半不走）。bash 工具里的子进程（`curl`、`npm` 等）会继承进程环境，因此仍然遵循标准 `HTTP_PROXY`/`HTTPS_PROXY`。
+
+标准变量按惯例大小写皆可（`HTTPS_PROXY`/`https_proxy`），但**不识别 `ALL_PROXY`**——只认 `HTTP_PROXY`/`HTTPS_PROXY`。`PIPICLAW_NO_PROXY` 未设置时会回落到标准 `NO_PROXY`/`no_proxy`。
+
+### 已知不覆盖
+
+- Bedrock 和 OpenAI Codex 的 WebSocket transport 走独立的 HTTP 客户端，只认标准 `HTTP_PROXY`/`HTTPS_PROXY`（也不支持 SOCKS），不认 `PIPICLAW_PROXY`。
+- `tools.web.proxy` 反过来也不受 `PIPICLAW_PROXY` 影响，两者互不联动，按各自的意图独立配置。
+
 ## 安全策略
 
 `security.json` 的首次初始化模板会开启 command/path guard，并关闭 network guard：
@@ -230,6 +260,7 @@ SearXNG 也必须打开总开关：
 | 控制后台记忆成本 | 保留 `memoryMaintenance.enabled: true`，优先关闭 `memoryRecall.rerankWithModel` 与 `sessionSearch.summarizeWithModel` |
 | 多用户灰度 | `channel.json.allowFrom` 填 staff ID 列表 |
 | 长期 daemon | 用 systemd/pm2/supervisor；日志和账本默认落在 `state/` |
+| 部署环境无法直连模型 API | 设环境变量 `PIPICLAW_PROXY`（只代理 LLM 请求，钉钉不受影响），见「LLM 请求走代理」 |
 
 ## 相关文档
 

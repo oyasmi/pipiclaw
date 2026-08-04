@@ -91,7 +91,9 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `PIPICLAW_DEBUG` | 在会话通道目录中写出 `last_prompt.json` |
 | `PIPICLAW_LOG_LEVEL` | 覆盖日志级别（`debug` \| `info` \| `warn` \| `error`），优先于 `settings.json` |
 | `PIPICLAW_LOG_FILE` | `0`/`1` 关闭或开启文件落盘，优先于 `settings.json` |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` | 标准代理环境变量；DingTalk runtime 和 web 工具默认都会尊重 |
+| `PIPICLAW_PROXY` | 仅让 LLM 请求（主/子 Agent、记忆 sidecar）走这个 `http://`/`https://` 代理；DingTalk 和 web 工具不受影响。优先于标准 `HTTP_PROXY`/`HTTPS_PROXY`。不支持 SOCKS，详见 [configuration.md](./configuration.md#llm-请求走代理) |
+| `PIPICLAW_NO_PROXY` | `PIPICLAW_PROXY` 的例外目标列表（逗号分隔）；未设置时回落到标准 `NO_PROXY` |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 标准代理环境变量。DingTalk runtime 和 web 工具通过 `proxy-from-env`，额外识别 `ALL_PROXY`；LLM 请求路径（undici）**不识别 `ALL_PROXY`**，只认 `HTTP_PROXY`/`HTTPS_PROXY`（大小写皆可），且只在未设置 `PIPICLAW_PROXY` 时对 LLM 请求生效 |
 
 > Pipiclaw 的工具执行层按 POSIX shell 语义工作（`bash`、`read`、`write`、`edit` 等工具内部都会调用 `sh` 风格命令），面向 Linux / macOS 运行，不支持 Windows。
 
