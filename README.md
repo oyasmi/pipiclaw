@@ -153,7 +153,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pipiclaw
 ```
 
-等价于 `pipiclaw run`（运行钉钉常驻进程）；`pipiclaw tui` 进入终端对话，`pipiclaw --help` 查看全部命令与选项。
+等价于 `pipiclaw run`（运行钉钉常驻进程）；`pipiclaw tui` 进入终端对话，`pipiclaw auth login` 管理订阅登录类 provider（ChatGPT Plus/Pro、Claude Pro/Max 等，见 [docs/configuration.md](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)），`pipiclaw --help` 查看全部命令与选项。
 
 ### 9. 可选：启用内建 Web 工具（Optional: Enable Web Tools）
 

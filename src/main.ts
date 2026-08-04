@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { runAuth } from "./models/auth-cli.js";
 import { bootstrap, isBootstrapExitError } from "./runtime/bootstrap.js";
 import { runTui } from "./tui/cli.js";
 
@@ -19,6 +20,9 @@ if (command === "tui") {
 	// keep the event loop alive, so the process would otherwise hang after the UI
 	// tears down.
 	runTui(process.argv).then(() => process.exit(0), handleError);
+} else if (command === "auth") {
+	// readline keeps stdin open, so exit explicitly on success too.
+	runAuth(process.argv).then(() => process.exit(0), handleError);
 } else if (command === undefined || command === "run" || command.startsWith("-")) {
 	// Default mode: the long-lived DingTalk daemon. `run` names it explicitly;
 	// a bare `pipiclaw` still runs it, and leading flags (--version/--help) are
@@ -29,6 +33,7 @@ if (command === "tui") {
 	console.error(`Unknown command: ${command}`);
 	console.error("Usage: pipiclaw [run] [options]         Run the DingTalk daemon (default)");
 	console.error("       pipiclaw tui [options] [prompt]   Chat with the agent in the terminal");
+	console.error("       pipiclaw auth status|login|logout Manage provider credentials");
 	console.error("Run `pipiclaw --help` for options.");
 	process.exit(1);
 }

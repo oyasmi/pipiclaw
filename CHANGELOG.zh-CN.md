@@ -4,6 +4,10 @@
 
 ## [未发布]
 
+### 新增
+
+- `pipiclaw auth status|login|logout`（spec 039）：独立的 CLI 子命令，管理 provider 凭据——订阅登录（ChatGPT Plus/Pro、Claude Pro/Max、GitHub Copilot 等支持 OAuth 的 provider）以及交互式 API key 录入，走 SDK 的 `ModelRuntime.login`。刻意只做 CLI：钉钉端不识别 `/login`（群聊里粘贴凭据会经过 `log.jsonl` 和记忆层，等同泄露），本期也不做 TUI（SSH 上服务器登录一次退出，本来就是 CLI 的天然形态）。凭据仍然落在 `APP_HOME_DIR/auth.json`，格式不变；正在运行的守护进程或 TUI 会话要重启才能用上新凭据（`AuthStorage` 持有内存快照）。`--device-code`/`--no-browser`/`--yes` 支持无头/脚本化场景；退出码 0/1/2/130（成功/用法错误/登录失败/取消）。
+
 ## [0.8.11-beta.2] - 2026-08-01
 
 ### 新增

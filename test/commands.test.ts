@@ -43,6 +43,11 @@ describe("commands", () => {
 		expect(parseBuiltInCommand("/unknown something")).toBeNull();
 	});
 
+	it("never exposes /login — provider login is a CLI-only operation (spec 039 §3.1)", () => {
+		expect(parseBuiltInCommand("/login")).toBeNull();
+		expect(isKnownCommandName("login")).toBe(false);
+	});
+
 	it("splits on any whitespace so a newline after the command still parses", () => {
 		expect(parseBuiltInCommand("/steer\n修复这个")).toEqual({
 			name: "steer",

@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -10,11 +11,22 @@ export const defaultModel = getModel("anthropic", "claude-sonnet-4-5");
  * Construct the canonical async model/auth runtime (replaces the old
  * `AuthStorage.create` + `ModelRegistry` pairing). pi 0.80.8+ folded auth and
  * model resolution into a single async `ModelRuntime`.
+ *
+ * `authConfigPath` must always be given explicitly and be absolute: pipiclaw
+ * never wants `AuthStorage`'s undefined-path fallback to `~/.pi/agent/auth.json`
+ * (spec 039 §4). Do not call the SDK's `getAuthPath()` / `getAgentDir()` /
+ * no-arg `readStoredCredential()`, and do not set `PI_CODING_AGENT_DIR` —
+ * all three can silently move credential I/O away from `APP_HOME_DIR`.
  */
 export async function createModelRuntime(options: {
 	authConfigPath: string;
 	modelsConfigPath: string;
 }): Promise<ModelRuntime> {
+	if (!options.authConfigPath || !isAbsolute(options.authConfigPath)) {
+		throw new Error(
+			`createModelRuntime: authConfigPath must be a non-empty absolute path, got ${JSON.stringify(options.authConfigPath)}`,
+		);
+	}
 	return ModelRuntime.create({
 		authPath: options.authConfigPath,
 		modelsPath: options.modelsConfigPath,

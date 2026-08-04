@@ -43,7 +43,8 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | `src/playbooks/` | 随包发布的只读运行时手册（agent 按需 read） | `catalog.ts` + `*.md` |
 | `src/shared/` | 串行队列、原子写、JSONL appender 等基础件 | `serial-queue.ts`、`atomic-file.ts` |
 | `src/paths.ts` | 所有磁盘路径的集中定义 | — |
-| `src/main.ts` | 薄入口：`run`→daemon，`tui`→终端 | — |
+| `src/main.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理 | — |
+| `src/models/` | 模型/凭据运行时封装 + `pipiclaw auth` CLI | `utils.ts`（`createModelRuntime`）、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面）、`auth-cli.ts` |
 
 ## 3. 运行时拓扑
 
@@ -345,6 +346,8 @@ flowchart LR
 ```
 
 关机 flush 用比平时更宽松的 gate：只要有未固化的持久活动（哪怕没有完整 assistant 轮）就做最后一次固化——这是最后的持久化机会。
+
+**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/models/auth-cli.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器或频道目录——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端永不提供登录入口，TUI 本期也不内嵌，详见 `docs/specs/039-provider-login-cli/design.md`。
 
 ## 12.1 公共 API 面（`src/index.ts`，spec 035）
 

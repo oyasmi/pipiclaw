@@ -4,6 +4,10 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Added
+
+- `pipiclaw auth status|login|logout` (spec 039): a standalone CLI subcommand for provider credential management — OAuth subscription login (ChatGPT Plus/Pro, Claude Pro/Max, GitHub Copilot, and other OAuth-capable providers) plus interactive API-key entry, going through the SDK's `ModelRuntime.login`. Deliberately CLI-only: it never touches DingTalk (`/login` stays unrecognized — login in a group chat would leak credentials into `log.jsonl` and memory) and doesn't add a TUI mode this round (a one-shot SSH-and-log-in session is already the CLI's native shape). Credentials still land in `APP_HOME_DIR/auth.json`, unchanged in format; a running daemon or TUI session must be restarted to pick up a new credential (`AuthStorage` holds an in-memory snapshot). `--device-code`/`--no-browser`/`--yes` support headless/scripted use; exit codes are 0/1/2/130 (success/usage error/login failure/cancelled).
+
 ## [0.8.11-beta.2] - 2026-08-01
 
 ### Added

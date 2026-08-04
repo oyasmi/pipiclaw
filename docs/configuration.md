@@ -133,6 +133,35 @@ export ANTHROPIC_API_KEY=sk-ant-...
 }
 ```
 
+### 订阅登录（OAuth provider）
+
+部分 provider 用订阅账号登录而不是 API key（`openai-codex` = ChatGPT Plus/Pro、`anthropic` = Claude
+Pro/Max，以及 `github-copilot`、`kimi-coding`、`xai`、`openrouter` 等，取决于 SDK 内置的 provider
+目录）。这类登录只在独立命令 `pipiclaw auth` 里做——钉钉端不提供任何登录入口，TUI 本期也不内嵌
+（详见 `docs/specs/039-provider-login-cli/design.md`）。
+
+```bash
+pipiclaw auth status                 # 列出每个 provider 的配置状态、凭据类型、来源
+pipiclaw auth login                  # 交互式：先选认证方式，再选 provider
+pipiclaw auth login openai-codex     # 直接指定 provider（id 或名字，大小写不敏感）
+pipiclaw auth logout openai-codex    # 删除已存凭据（会二次确认，--yes 跳过）
+```
+
+凭据落在 `auth.json`（`~/.pipiclaw/auth.json`，`PIPICLAW_HOME` 会跟随），与手填的 API key 同文件同权限
+（0600）。
+
+无头服务器（SSH 上去，没有本地浏览器）：优先 `pipiclaw auth login --device-code`，在手机或本地浏览器上
+打开打印出的 URL 输入用户码，服务器端轮询即可，不需要占用回调端口；一定要走浏览器流的话，用
+`ssh -L 1455:127.0.0.1:1455 …` 转发再打开打印出的 URL。
+
+**其它进程不会自动看到新凭据**：一次 `pipiclaw auth login` 之后，正在运行的钉钉守护进程或 TUI 会话
+仍然用登录前读到的那份 auth.json 快照，必须重启才能用上新凭据；`pipiclaw auth status` 也会复述这一点。
+
+Codex 对话流量的代理注意事项：`openai-codex-responses` 默认走 WebSocket transport，只认标准
+`HTTP_PROXY`/`HTTPS_PROXY`（不认 `PIPICLAW_PROXY`，见下方「已知不覆盖」），登录本身走 `fetch`、受
+`PIPICLAW_PROXY` 管辖，但登录成功不等于对话请求也走了代理——只设了 `PIPICLAW_PROXY` 时,
+`pipiclaw auth login` 结束时会给出告警。
+
 ## 内建工具
 
 `tools.json` 的当前 bootstrap 模板等价于：

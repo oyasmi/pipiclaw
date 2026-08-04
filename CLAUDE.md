@@ -18,6 +18,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Node `>= 22.19.0`.
 
+## Git
+
+- Write good commit messages: a concise imperative subject line (e.g. `feat: add proxy routing for LLM requests`), optionally followed by a blank line and a body that explains *why* the change was made. Match the existing conventional-commit style (`feat:`, `fix:`, `chore:`, `ci:`, `docs:`, etc.).
+- **Never add a `Co-Authored-By:` trailer** (or any similar signature) to commit messages.
+
 ## Architecture
 
 Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent` SDK (a fork of `@mariozechner/pi-coding-agent`) and drives it from DingTalk. The layers below are traversed on every message.
