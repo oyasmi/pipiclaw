@@ -4,9 +4,16 @@
 
 ## [未发布]
 
+## [0.8.11-beta.3] - 2026-08-04
+
 ### 新增
 
+- LLM 请求现在可以经由可配置的代理转发。新增 `installLlmProxy()`（`src/runtime/proxy.ts`）接入 `prepareAppServices()`，使钉钉守护进程与 TUI 从单一调用点统一遵循代理配置。`PIPICLAW_PROXY`/`PIPICLAW_NO_PROXY` 优先于标准的 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`；socks5 与无法解析的 URL 会回退为直连并告警，而不是静默失败。未配置任何代理时为空操作。新增 `undici` 为直接依赖。
 - `pipiclaw auth status|login|logout`（spec 039）：独立的 CLI 子命令，管理 provider 凭据——订阅登录（ChatGPT Plus/Pro、Claude Pro/Max、GitHub Copilot 等支持 OAuth 的 provider）以及交互式 API key 录入，走 SDK 的 `ModelRuntime.login`。刻意只做 CLI：钉钉端不识别 `/login`（群聊里粘贴凭据会经过 `log.jsonl` 和记忆层，等同泄露），本期也不做 TUI（SSH 上服务器登录一次退出，本来就是 CLI 的天然形态）。凭据仍然落在 `APP_HOME_DIR/auth.json`，格式不变；正在运行的守护进程或 TUI 会话要重启才能用上新凭据（`AuthStorage` 持有内存快照）。`--device-code`/`--no-browser`/`--yes` 支持无头/脚本化场景；退出码 0/1/2/130（成功/用法错误/登录失败/取消）。
+
+### 变更
+
+- **任务自治 v2（spec 038）。** 整体删除任务级外部审批（`sideEffects`、`externalApproval`、`approvalBy`/`approvedAt`/`approvalBodyHash`、`/tasks approve` 命令以及 `done` 的审批门禁），活动任务状态收敛为三种——`active` | `waiting` | `sleeping`。暂停改为正交属性（`enabled: boolean`）而非一种状态值：一次性任务在完成或取消后归档，周期任务完成时回到 `sleeping`。独立验收仍然保留，但不再是任务生命周期状态。任务现在代表的是「常驻委派」：Pipiclaw 在 goal/工具/凭据/安全边界内自治推进，直到完成、取消或被暂停，不再就每个动作或每个周期请求审批。
 
 ## [0.8.11-beta.2] - 2026-08-01
 

@@ -4,9 +4,16 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.11-beta.3] - 2026-08-04
+
 ### Added
 
+- LLM requests now route through a configurable proxy. A new `installLlmProxy()` (`src/runtime/proxy.ts`) is wired into `prepareAppServices()`, so the DingTalk daemon and the TUI honor proxy configuration from a single call site. `PIPICLAW_PROXY`/`PIPICLAW_NO_PROXY` take precedence over the standard `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`; socks5 and unparseable URLs fall back to a direct connection with a warning rather than failing silently. It is a no-op when nothing is configured. Adds `undici` as a direct dependency.
 - `pipiclaw auth status|login|logout` (spec 039): a standalone CLI subcommand for provider credential management — OAuth subscription login (ChatGPT Plus/Pro, Claude Pro/Max, GitHub Copilot, and other OAuth-capable providers) plus interactive API-key entry, going through the SDK's `ModelRuntime.login`. Deliberately CLI-only: it never touches DingTalk (`/login` stays unrecognized — login in a group chat would leak credentials into `log.jsonl` and memory) and doesn't add a TUI mode this round (a one-shot SSH-and-log-in session is already the CLI's native shape). Credentials still land in `APP_HOME_DIR/auth.json`, unchanged in format; a running daemon or TUI session must be restarted to pick up a new credential (`AuthStorage` holds an in-memory snapshot). `--device-code`/`--no-browser`/`--yes` support headless/scripted use; exit codes are 0/1/2/130 (success/usage error/login failure/cancelled).
+
+### Changed
+
+- **Task autonomy v2 (spec 038).** Task-level external approval is deleted entirely (`sideEffects`, `externalApproval`, `approvalBy`/`approvedAt`/`approvalBodyHash`, the `/tasks approve` command, and the `done` approval gate), and the active task status collapses to three states — `active` | `waiting` | `sleeping`. Pause is now orthogonal (`enabled: boolean`) instead of a status value: one-shot tasks archive on completion or cancellation, and recurring tasks close back into `sleeping`. Verification remains independent but is no longer a task-lifecycle state. The model a task now represents is standing delegation: Pipiclaw drives autonomously within goal/tool/credential/security bounds until it is done, cancelled, or paused, and no longer asks for per-action or per-cycle approval.
 
 ## [0.8.11-beta.2] - 2026-08-01
 
