@@ -20,10 +20,9 @@ const EXPECTED_PLAYBOOKS = [
 	"outbound-media.md",
 	"event-scheduling.md",
 	"background-jobs.md",
+	"agent-delegation.md",
 	"task-planning.md",
 	"task-driving.md",
-	"task-closeout.md",
-	"task-delegation.md",
 ];
 
 const ALL_TOOLS = [
@@ -62,9 +61,10 @@ describe("runtime playbook catalog", () => {
 		expect(withoutTasks).toContain("memory-and-learning.md");
 		expect(withoutTasks.filter((name) => name.startsWith("task-"))).toEqual([]);
 
-		// Sub-agents without tasks still need the delegation playbook (any-of, not all-of).
+		// Agent delegation remains discoverable without task_manage or a built-in subagent;
+		// external Agent capabilities may arrive through a user-provided skill.
 		const subagentOnly = selectRuntimePlaybooks(catalog, ["read", "subagent"]).map((item) => item.filename);
-		expect(subagentOnly).toEqual(["runtime-orientation.md", "task-delegation.md"]);
+		expect(subagentOnly).toEqual(["runtime-orientation.md", "agent-delegation.md"]);
 
 		expect(selectRuntimePlaybooks(catalog, ALL_TOOLS)).toHaveLength(EXPECTED_PLAYBOOKS.length);
 	});
@@ -112,7 +112,7 @@ describe("runtime playbook catalog", () => {
 	// agent's own blocking-wait command belongs in one. Delegation used to prescribe plain
 	// wake polling instead, which burns a turn per check-in; keep the routing explicit.
 	it("routes external-agent waiting to the background-job wake before wake polling", () => {
-		const delegation = readFileSync(join(PLAYBOOKS_DIR, "task-delegation.md"), "utf-8");
+		const delegation = readFileSync(join(PLAYBOOKS_DIR, "agent-delegation.md"), "utf-8");
 		expect(delegation).toContain("bash async");
 		expect(delegation).toContain("background-jobs.md");
 	});
@@ -121,11 +121,26 @@ describe("runtime playbook catalog", () => {
 	// parking mechanism the driver did not implement. The mechanism exists now (waiting with no
 	// wake is never dispatched); keep the description in one place and keep the other playbooks
 	// pointing at it rather than restating it.
-	it("keeps task-delegation.md the single source of truth for the two waiting shapes", () => {
-		const delegation = readFileSync(join(PLAYBOOKS_DIR, "task-delegation.md"), "utf-8");
-		expect(delegation).toContain("唯一真相源");
-		expect(delegation).toContain("停泊");
-		expect(readFileSync(join(PLAYBOOKS_DIR, "task-driving.md"), "utf-8")).toContain("task-delegation.md");
+	it("keeps task-driving.md the single source of truth for the two task waiting shapes", () => {
+		const driving = readFileSync(join(PLAYBOOKS_DIR, "task-driving.md"), "utf-8");
+		expect(driving).toContain("唯一真相源");
+		expect(driving).toContain("停泊");
+		expect(driving).toContain("agent-delegation.md");
+	});
+
+	it("keeps post-creation task verification and closeout in task-driving.md", () => {
+		const driving = readFileSync(join(PLAYBOOKS_DIR, "task-driving.md"), "utf-8");
+		expect(driving).toContain("request-verification");
+		expect(driving).toContain("contract body hash");
+		expect(driving).toContain("## complete / skip / cancel");
+	});
+
+	it("maps app, workspace, channel, and delegated-tool knowledge in runtime orientation", () => {
+		const orientation = readFileSync(join(PLAYBOOKS_DIR, "runtime-orientation.md"), "utf-8");
+		expect(orientation).toContain("App home");
+		expect(orientation).toContain("channel.json");
+		expect(orientation).toContain("SESSION.md");
+		expect(orientation).toContain("agent-delegation.md");
 	});
 
 	it("contains no bundled third-party agentmux implementation", () => {
@@ -134,7 +149,7 @@ describe("runtime playbook catalog", () => {
 			.join("\n");
 		expect(catalogText).not.toContain("agentmux-idle");
 		expect(catalogText).not.toContain("agentmux inspect");
-		expect(catalogText).toContain("Pipiclaw 不内置或假设第三方 agent 工具");
+		expect(catalogText).toContain("第三方工具的命令和完成态由用户提供的 skill 定义");
 	});
 });
 

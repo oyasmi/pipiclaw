@@ -14,8 +14,8 @@ export interface RuntimePlaybookMetadata {
 	path: string;
 	/**
 	 * Listed only when at least one of these tools is registered — any-of, not all-of:
-	 * task-delegation matters to a runtime with tasks *or* with sub-agents. Empty = always
-	 * listed. (Prompt sections gate the other way: see `requiresAllTools` in agent/prompt/types.ts.)
+	 * a guide spanning user-provided tools can leave this empty so it remains discoverable.
+	 * (Prompt sections gate the other way: see `requiresAllTools` in agent/prompt/types.ts.)
 	 */
 	requiresAnyTool: string[];
 	/** Ascending; ties break on filename. */

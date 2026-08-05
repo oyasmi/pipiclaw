@@ -11,6 +11,10 @@ priority: 40
 
 只有工作需要跨回合恢复时才建：多步骤目标、等待人或外部系统、委派工作、周期性产出。当前回合能完成的简单请求不要建台账；纯提醒或外部条件探测用 event。
 
+## 拆分与委派
+
+只把可独立推进、可独立验收的长期工作拆成多个 task。任务之间没有依赖字段；先后条件写进后继任务的 Goal/Manual，或用 wake 错开。仅在当前回合委派 subagent 或外部 Agent 不需要建 task；通用委派纪律见 `agent-delegation.md`。
+
 ## 创建内容
 
 调用 `task_manage create`：
@@ -53,4 +57,4 @@ recurring create 始终写 `sleeping + enabled: true + next wake`，创建不派
 
 ## 建档后自检
 
-创建后读取落盘文件，确认 Goal、DoD、Manual、Verification、status、enabled、wake 和 control 与真实意图一致。后续驱动回合按 `task-driving.md`，验收和闭环按 `task-closeout.md`。
+创建后读取落盘文件，确认 Goal、DoD、Manual、Verification、status、enabled、wake 和 control 与真实意图一致。后续推进、等待、验收和闭环都按 `task-driving.md`。

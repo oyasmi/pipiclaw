@@ -59,12 +59,11 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 | `outbound-media.md` | `send_media` | 把报表、截图、导出文件作为附件交付给用户 |
 | `event-scheduling.md` | `event_manage` | 提醒、one-shot、periodic、preAction 传感器、跨回合回访 |
 | `background-jobs.md` | `job` | `bash async` 启停、poll 纪律、并发上限、跨回合等待 |
+| `agent-delegation.md` | 恒在 | 内部 subagent 与外部 AI Agent 的任务指令、并行隔离、等待、纠偏和验收 |
 | `task-planning.md` | `task_manage` | 是否建 task、Goal/DoD/Manual/Verification、control 与预算、周期 `schedule` |
-| `task-driving.md` | `task_manage` | driver 恢复、幂等检查、checkpoint，以及停滞/治理器停用/坏 frontmatter 的修复 |
-| `task-closeout.md` | `task_manage` | request-verification、verifier、complete/skip/cancel 和幂等闭环 |
-| `task-delegation.md` | `task_manage` / `subagent` | 任务拆分、subagent、外部 agent 工具的恢复纪律 |
+| `task-driving.md` | `task_manage` | driver 恢复、checkpoint、等待、验收、闭环、治理器停用及坏 frontmatter 修复 |
 
-任务生命周期占四份，对应四个**决策时刻**——建档、推进（含修复）、收尾、委派。它们刻意不做成"先读一本再跳转"的路由结构：模型在一次唤醒中只应打开一份文件，多一跳就多一次判断失误的机会。同一时刻需要的知识必须在同一份文件里。
+任务机制只占两份：`task-planning.md` 负责是否建档和任务契约，`task-driving.md` 负责建档后的推进、等待、验收、闭环与修复。Agent 委派不是 task 专属机制，因此独立为通用 playbook：当前回合的临时委派无需创建 task，需要跨回合恢复时才由 task 记录状态。
 
 ## Playbook 编写原则
 
@@ -72,16 +71,16 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 2. **一个决策时刻一份文件**：宁可一份稍长，也不要让模型为了完成一件事读两份。反过来，两个不会同时发生的场景不要塞进一份。
 3. **默认模型已有通用能力**：只写 Pipiclaw 特有、容易出错或跨工具的知识。
 4. **按脆弱程度决定自由度**：hash/verification/幂等 request id 等窄桥给精确顺序；开放的规划问题给判断条件。
-5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。契约 hash 绑定语义只在 `task-closeout.md` 定义即是一例。
+5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。契约 hash 绑定语义只在 `task-driving.md` 定义即是一例。
 6. **错误可恢复**：解释门禁为什么拒绝，并给可以执行的下一步。
-7. **控制长度**：正文以 80 行为软上限，多数应在 50 行以内。超出通常意味着混进了两个决策时刻，或抄了工具 schema 已有的内容——先检查这两条，再考虑是否真的需要更长。`task-planning.md` 与 `task-driving.md` 是刻意最长的两份：它们各自合并了原先拆开的建档/周期、推进/修复，因为那两组内容总是在同一时刻被需要。
+7. **控制长度**：正文以 80 行为软上限，多数应在 50 行以内。超出通常意味着混进了两个决策时刻，或抄了工具 schema 已有的内容——先检查这两条，再考虑是否真的需要更长。`task-planning.md` 与 `task-driving.md` 是刻意最长的两份：前者覆盖建档与周期，后者集中建档后的推进、等待、验收、闭环与修复。
 8. **与代码共同验证**：metadata/catalog、prompt 不加载正文、path guard、本文目录表与实际文件的对账都有测试；构建产物（`dist/playbooks/` 只含 `.md`）按 build 脚本保证，发版前人工核对。
 
 ## 第三方工具边界
 
 Pipiclaw 可以通过 bash、subagent、event preAction 与用户安装的工具协作，但不会捆绑某个第三方工具的命令、状态协议或检测脚本。
 
-例如 agentmux 的启动、inspect/capture 语义和完成态检测属于用户安装的 agentmux skill/可执行文件。runtime playbook 只说明通用纪律：记录委派标识和产物、优先把工具自带的阻塞等待包成 `bash async` 作业（由 runtime 保证完成唤醒与跨重启认领），没有阻塞等待时才降级为 preAction 门控或 `wake` 轮询，然后按用户 skill 取回、review、验证、清理。这样第三方工具可以独立升级，也不会污染 Pipiclaw 的产品知识层。
+例如 agentmux 的启动、inspect/capture 语义和完成态检测属于用户安装的 agentmux skill/可执行文件。`agent-delegation.md` 只说明通用纪律：记录委派标识和产物、优先把工具自带的阻塞等待包成 `bash async` 作业（由 runtime 保证完成唤醒与跨重启认领），没有阻塞等待时才降级为 preAction 门控或定时回访，然后按用户 skill 取回、review、验证、清理。这样第三方工具可以独立升级，也不会污染 Pipiclaw 的产品知识层。
 
 ## 面向 workspace 的迁移
 

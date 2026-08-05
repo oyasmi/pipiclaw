@@ -146,7 +146,7 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 				"## Sub-Agents",
 				"Delegate with `subagent`: pass an inline `systemPrompt` (no configured agent is required).",
 				"A sub-agent starts blank — state goal, scope, paths, constraints, acceptance criteria in `task`.",
-				"Read task-delegation.md before non-trivial delegation.",
+				"Read agent-delegation.md before non-trivial delegation.",
 			].join("\n");
 		}
 		return [
@@ -154,7 +154,7 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 			"A sub-agent starts blank: state the goal, scope, paths, constraints and acceptance criteria in the task you hand it.",
 			...context.subAgents.map((agent) => `- ${agent.name} — ${agent.description}`),
 			"",
-			"Read task-delegation.md before non-trivial delegation, and task-closeout.md before independent verification.",
+			"Read agent-delegation.md before non-trivial delegation, and task-driving.md before independent verification.",
 		].join("\n");
 	},
 };
