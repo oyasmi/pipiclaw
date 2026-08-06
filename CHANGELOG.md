@@ -4,6 +4,12 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.11-beta.5] - 2026-08-06
+
+### Fixed
+
+- Fixed `pipiclaw --version` (and every other command) crashing on install with `ERR_MODULE_NOT_FOUND: dist/playbooks/catalog.js`. `scripts/copy-md-assets.mjs` was `rmSync`-ing the whole `dist/playbooks` directory to drop stale `.md` files, which also deleted the `catalog.js`/`catalog.d.ts` that `tsc` had just emitted there moments earlier in the same build step. It now removes only `.md` files no longer present in `src/playbooks` instead of the directory itself. Introduced in 0.8.11-beta.4.
+
 ## [0.8.11-beta.4] - 2026-08-06
 
 ## [0.8.11-beta.3] - 2026-08-04

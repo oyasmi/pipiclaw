@@ -8,11 +8,15 @@ const DIRS = ["playbooks"];
 for (const dir of DIRS) {
 	const src = `src/${dir}`;
 	const dst = `dist/${dir}`;
-	rmSync(dst, { recursive: true, force: true });
 	mkdirSync(dst, { recursive: true });
-	for (const file of readdirSync(src)) {
-		if (file.endsWith(".md")) {
-			copyFileSync(`${src}/${file}`, `${dst}/${file}`);
+
+	const wanted = new Set(readdirSync(src).filter((file) => file.endsWith(".md")));
+	for (const file of readdirSync(dst)) {
+		if (file.endsWith(".md") && !wanted.has(file)) {
+			rmSync(`${dst}/${file}`, { force: true });
 		}
+	}
+	for (const file of wanted) {
+		copyFileSync(`${src}/${file}`, `${dst}/${file}`);
 	}
 }

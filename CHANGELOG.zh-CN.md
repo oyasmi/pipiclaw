@@ -4,6 +4,12 @@
 
 ## [未发布]
 
+## [0.8.11-beta.5] - 2026-08-06
+
+### 修复
+
+- 修复了 `pipiclaw --version`（以及其他所有命令）安装后崩溃的问题，报错为 `ERR_MODULE_NOT_FOUND: dist/playbooks/catalog.js`。`scripts/copy-md-assets.mjs` 为了清理过期的 `.md` 文件，`rmSync` 掉了整个 `dist/playbooks` 目录，结果把同一次构建中 `tsc` 刚刚生成到该目录下的 `catalog.js`/`catalog.d.ts` 也一并删除了。现在改为只删除 `src/playbooks` 中已不存在的 `.md` 文件，而不是删除整个目录。该问题由 0.8.11-beta.4 引入。
+
 ## [0.8.11-beta.4] - 2026-08-06
 
 ## [0.8.11-beta.3] - 2026-08-04
