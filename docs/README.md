@@ -8,6 +8,7 @@ Pipiclaw 是一个钉钉优先、可长期运行的 AI coding assistant runtime�
 
 | 文档 | 回答什么 |
 |---|---|
+| [design-philosophy.md](./design-philosophy.md) | Pipiclaw 为什么这样设计？后续能力应遵守哪些原则？ |
 | [tools.md](./tools.md) | 它能干什么？某个能力为什么没出现？ |
 | [memory.md](./memory.md) | 它记得什么？怎么让它记住或忘掉？ |
 | [events-and-tasks.md](./events-and-tasks.md) | 怎么让它定时做事、怎么让它带着进度本干长活？ |
@@ -29,6 +30,7 @@ Pipiclaw 是一个钉钉优先、可长期运行的 AI coding assistant runtime�
 | 文档 | 回答什么 |
 |---|---|
 | [architecture.md](./architecture.md) | 代码现在是什么样：运行时拓扑、消息生命周期、并发表、磁盘布局 |
+| [design-and-implementation-review-2026-08-06.md](./design-and-implementation-review-2026-08-06.md) | 当前设计与实现的风险、证据和优化路线 |
 | [runtime-playbooks.md](./runtime-playbooks.md) | 知识分层模型，以及怎么写给 agent 读的 playbook |
 | [specs/](./specs/) | 历史设计记录与取舍（`NNN-*`，按实现顺序编号）；当前行为以 README、`docs/` 顶层手册和代码为准 |
 | [../AGENTS.md](../AGENTS.md) | 域边界与工程规则 |
