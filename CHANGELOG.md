@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.8.11-beta.4] - 2026-08-06
+
 ## [0.8.11-beta.3] - 2026-08-04
 
 ### Added
