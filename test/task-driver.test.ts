@@ -12,6 +12,7 @@ import {
 } from "../src/runtime/task-driver.js";
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
 import { formatLocalTime } from "../src/shared/local-time.js";
+import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
 
@@ -127,12 +128,14 @@ describe("TaskDriver v2", () => {
 
 	it("self-heals a missing sleeping wake with zero dispatch", async () => {
 		const path = await writeTask("dm_a", "heal", taskDoc("sleeping", { schedule: "0 9 * * *" }));
+		const rendered = await readFile(path, "utf-8");
+		await writeFile(path, rendered.replace(/^wake: .*\n/m, ""));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
 		const after = await readFile(path, "utf-8");
 		expect(after).toContain("status: sleeping");
-		expect(after).toContain(`wake: ${formatLocalTime(new Date("2026-08-05T09:00:00+08:00"))}`);
+		expect(after).toContain(`wake: ${formatLocalTime(nextTaskWake("0 9 * * *", NOW)!)}`);
 	});
 
 	it("stops a sleeping task with a bad schedule and sends a deterministic receipt", async () => {

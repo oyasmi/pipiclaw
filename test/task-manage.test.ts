@@ -109,15 +109,16 @@ describe("task_manage v2", () => {
 
 	it("progresses active work and normalizes a future wake to waiting", async () => {
 		await createOneShot("progress");
+		const futureWake = formatLocalTime(new Date(Date.now() + 24 * 60 * 60 * 1000));
 		const result = await manageTask(options, {
 			action: "progress",
 			id: "progress",
 			note: "Build complete; wait for the scheduled check.",
-			wake: "2026-08-05T09:00:00+08:00",
+			wake: futureWake,
 		});
 		expect(result.status).toBe("waiting");
 		const stored = await readStoredTask(channelDir, "progress");
-		expect(stored?.fields).toMatchObject({ status: "waiting", wake: "2026-08-05T09:00:00.000+08:00" });
+		expect(stored?.fields).toMatchObject({ status: "waiting", wake: futureWake });
 		expect(stored?.fields.control?.waitingFor).toBe("time");
 	});
 

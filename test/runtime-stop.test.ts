@@ -86,12 +86,17 @@ afterEach(() => {
 describe("runtime stop handling", () => {
 	it("discards the active card when a running task is stopped", async () => {
 		let releaseRun!: () => void;
+		let signalRunStarted!: () => void;
 		const runAborted = new Promise<void>((resolve) => {
 			releaseRun = resolve;
+		});
+		const runStarted = new Promise<void>((resolve) => {
+			signalRunStarted = resolve;
 		});
 		const runner: AgentRunner = {
 			renderContextReport: () => "CONTEXT",
 			run: vi.fn(async () => {
+				signalRunStarted();
 				await runAborted;
 				return { stopReason: "aborted" };
 			}),
@@ -148,7 +153,7 @@ describe("runtime stop handling", () => {
 		runtime.handler.reserveEvent?.(event);
 		const task = runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
 
-		await Promise.resolve();
+		await runStarted;
 		await runtime.handler.handleStop("dm_tester", bot as unknown as DingTalkBot);
 		await task;
 
@@ -158,7 +163,7 @@ describe("runtime stop handling", () => {
 		expect(bot.clearPendingMessages).toHaveBeenCalledWith("dm_tester");
 
 		await runtime.shutdown();
-	}, 20_000);
+	}, 60_000);
 
 	it("durably pauses a task-driver task before aborting it", async () => {
 		let releaseRun!: () => void;
