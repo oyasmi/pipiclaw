@@ -4,43 +4,31 @@
 
 ## [未发布]
 
-## [0.8.11-beta.5] - 2026-08-06
+## [0.8.11] - 2026-08-07
+
+### 新增
+
+- Pi 依赖升级至 0.83.0，为所有 `Agent` 构造显式传入 `streamFn`，并将 `typebox` 对齐到 `^1.3.7`。
+- 任务正文新增可选的 `## Plan` 段，支持推导当前步骤、四种步骤状态、DoD 引用，并在任务胶囊和议程中展示计划进度；`doctor` 会检查未覆盖的 DoD 项和无效引用。
+- 后台记忆固化新增两档写入：高必要性候选永久写入，高置信度的中必要性候选进入有上限的 30 天试用期；被召回、重复或替换的试用条目会转正，过期条目失效后仍可重新学习。
+- 新增守护进程和 TUI 共用的可配置 LLM 代理；Pipiclaw 专用环境变量优先，无法解析或不支持的代理地址会告警并回退直连。
+- 新增无需频道上下文的 `pipiclaw auth status|login|logout` CLI，支持 OAuth、API key、device code、无头运行、安全取消和明确退出码；钉钉端不会接受 `/login`。
+
+### 变更
+
+- **任务自治 v2（spec 038）。** 删除任务级外部审批及 `/tasks approve` 流程。活动任务状态收敛为 `active` | `waiting` | `sleeping`，暂停改为正交属性；一次性任务完成或取消后归档，周期任务回到 `sleeping`，验收仍独立保留。任务现在是在目标、工具、凭据和安全边界内持续运行的常驻委派。
+- 减少热路径 I/O 和重复计算：记忆活动批量落盘，搜索分词与召回归一化缓存化，路径/命令守卫避免重复工作，大文件从源头限长读取，usage 报告使用异步的 mtime 缓存，任务摘要与召回并行；流式归档进度不再重复创建目录，普通消息复用统一投递路径。
+- runtime playbook 收敛为 planning 与 driving 两份，委派移入独立的 `agent-delegation` playbook，并新增设计理念指南及文档索引。
 
 ### 修复
 
-- 修复了 `pipiclaw --version`（以及其他所有命令）安装后崩溃的问题，报错为 `ERR_MODULE_NOT_FOUND: dist/playbooks/catalog.js`。`scripts/copy-md-assets.mjs` 为了清理过期的 `.md` 文件，`rmSync` 掉了整个 `dist/playbooks` 目录，结果把同一次构建中 `tsc` 刚刚生成到该目录下的 `catalog.js`/`catalog.d.ts` 也一并删除了。现在改为只删除 `src/playbooks` 中已不存在的 `.md` 文件，而不是删除整个目录。该问题由 0.8.11-beta.4 引入。
+- 稳定任务调度、任务生命周期和 `/stop` 行为相关回归测试。
+- 修复构建流程清理过期 Markdown 时误删已编译的 `dist/playbooks/catalog.js` 和 `catalog.d.ts` 的问题。现在只删除过期 Markdown，安装后的 `pipiclaw --version` 等命令可正常运行。
 
-## [0.8.11-beta.4] - 2026-08-06
+### 测试与发布
 
-## [0.8.11-beta.3] - 2026-08-04
-
-### 新增
-
-- LLM 请求现在可以经由可配置的代理转发。新增 `installLlmProxy()`（`src/runtime/proxy.ts`）接入 `prepareAppServices()`，使钉钉守护进程与 TUI 从单一调用点统一遵循代理配置。`PIPICLAW_PROXY`/`PIPICLAW_NO_PROXY` 优先于标准的 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`；socks5 与无法解析的 URL 会回退为直连并告警，而不是静默失败。未配置任何代理时为空操作。新增 `undici` 为直接依赖。
-- `pipiclaw auth status|login|logout`（spec 039）：独立的 CLI 子命令，管理 provider 凭据——订阅登录（ChatGPT Plus/Pro、Claude Pro/Max、GitHub Copilot 等支持 OAuth 的 provider）以及交互式 API key 录入，走 SDK 的 `ModelRuntime.login`。刻意只做 CLI：钉钉端不识别 `/login`（群聊里粘贴凭据会经过 `log.jsonl` 和记忆层，等同泄露），本期也不做 TUI（SSH 上服务器登录一次退出，本来就是 CLI 的天然形态）。凭据仍然落在 `APP_HOME_DIR/auth.json`，格式不变；正在运行的守护进程或 TUI 会话要重启才能用上新凭据（`AuthStorage` 持有内存快照）。`--device-code`/`--no-browser`/`--yes` 支持无头/脚本化场景；退出码 0/1/2/130（成功/用法错误/登录失败/取消）。
-
-### 变更
-
-- **任务自治 v2（spec 038）。** 整体删除任务级外部审批（`sideEffects`、`externalApproval`、`approvalBy`/`approvedAt`/`approvalBodyHash`、`/tasks approve` 命令以及 `done` 的审批门禁），活动任务状态收敛为三种——`active` | `waiting` | `sleeping`。暂停改为正交属性（`enabled: boolean`）而非一种状态值：一次性任务在完成或取消后归档，周期任务完成时回到 `sleeping`。独立验收仍然保留，但不再是任务生命周期状态。任务现在代表的是「常驻委派」：Pipiclaw 在 goal/工具/凭据/安全边界内自治推进，直到完成、取消或被暂停，不再就每个动作或每个周期请求审批。
-
-## [0.8.11-beta.2] - 2026-08-01
-
-### 新增
-
-- 任务正文新增可选的 `## Plan` 段（spec 037）：介于 Goal/DoD 契约与只增的 Current Cycle 日志之间的「手段层」。步骤有四态（`[ ]` 待办、`[x]` 完成、`[!]` 阻塞、`[~]` 放弃）与可选的 `→ dod:N` 引用；当前步骤由 runtime 从文档顺序推导（第一个待办或阻塞项），从不由模型自报。`task_manage create` 支持可选的 `plan`（一行一步）；`task_manage progress` 支持 `planSteps` 更新或追加步骤，改动会折进同一条 Current Cycle 记录。Plan 状态变化不会使已有的独立验收 PASS 或外部审批失效（契约段的终点现在是 Plan 与 Current Cycle 中先出现的那个），且被有意排除在任务驱动器的停滞指纹之外——勾一个复选框不能重置 futile 计数。唤醒胶囊与 `<task_agenda>` 现在显示计划进度和当前步骤；`/tasks doctor` 会检查没有步骤覆盖的 DoD 项，以及指向不存在 DoD 项的步骤引用。
-- 后台记忆固化现在按两档写入，而不是一档（spec 037）：`necessity: high` 的候选不变（永久写入，`confidence ≥ 0.85`）；新增 `necessity: medium` 且 `confidence ≥ 0.9` 的候选会以 30 天试用期写入（每次固化最多 5 条），而不是直接丢弃。试用期条目在首次被召回、或被重复/替换写入时转正为永久；若从未被召回，会由结构性维护作业将其失效（不打墓碑——同一事实之后仍可被重新学到）。`/memory status`/`list` 会显示试用期条目数量与到期时间。
-
-### 变更
-
-- 记忆维护的活动记录改为批量落盘，不再每次工具调用写一次。此前每个工具调用都会通过 `writeFileAtomically` 对频道状态 JSON 做一次读改写——每次两个 fsync——一个 30 步的回合就要付 30 遍，而这块存储的延迟并不由运行时掌控。新增的 `createMemoryActivityRecorder` 把一整段突发折叠成固定大小的增量（时间戳后写覆盖、计数器累加、`dirty` 粘滞），在 5 秒防抖、每个回合结束以及进程关闭时落盘。批量是安全的，因为没有任何消费者需要即时读到它：`maintenance-gates.ts` 里每个门在频道活跃时都直接拒绝，`eligibleAfter` 随后还要压住 `minIdleMinutesBeforeLlmWork` 分钟，调度器则是每分钟轮询一次——状态只需要在频道转为空闲的那一刻是准确的，而回合结束的 flush 正好落在那里。实测 30 次工具调用的回合：写入耗时 26ms → 1ms。
-- `session_search` 不再重复推导已有的分词结果。查询原本写在按文档遍历的 `.map()` 回调里——每篇文档重分一次，一次搜索最多 500 次——而且语料本身已缓存 30 秒，文档却每次搜索都重新分词。现在查询只分一次，文档分词结果按对象身份缓存，缓存窗口内的重复搜索因此省掉约一秒的分词（实测每篇约 7KB 的文档 2.24ms）。
-- `guardPath` 不再在每次受保护的读写上重建常量表并重复走文件系统。约 25 条敏感路径按 home 目录解析一次，系统路径表在模块加载时解析一次，临时目录与 workspace/home 的 realpath 改为记忆化，不再每次调用都 `realpathSync`。每次调用 0.098ms → 0.035ms。配置的 allow/deny 列表**刻意不缓存**：这些条目可能尚不存在，冻结「创建前」的解析结果会导致之后被创建为软链的路径不再被解析到其目标。
-- `ChannelStore` 只解析归档路径，不再顺带创建。它此前对每条归档消息都调用 `ensureChannelDir`（同步 `mkdirSync`），而 `logBotResponse` 在流式回合的每次进度更新时都会跑，等于每个进度节拍打一次阻塞系统调用。appender 自身的 `ensureDir` 本来就会在写入前创建目录并记忆化。
-- 记忆召回缓存候选项的小写副本。`computeExactMatchBoost` 此前每回合把每个候选的完整正文 `toLowerCase` 一遍，等于为整个记忆语料分配一份用完即弃的副本；查询侧的归一化也移出了按候选的循环。
-- `guardCommand` 重新变回参数量的线性复杂度。通用包装命令启发式（`xargs`、`env`、`timeout` 等）会把**每一个**后缀位置都当作候选命令起点，逐个切片并重新拼接，并且还会递归——二次复杂度，且最多被 `MAX_GUARD_DEPTH` 再乘一遍。现在扫描限制在前 32 个位置，没有任何包装命令的自身选项能接近这个数；配置的 deny 正则也改为只编译一次，而不是每个 atom、每层递归各编译一遍。800 个参数时：36ms → 3.3ms。
-- `read` 不再把大文件读两遍。它先用 `awk` 数行数，再把整个文件灌进 JS 字符串然后截断到 50KB；现在读取在源头就有界，几百 MB 的日志只需一次有界读取，省掉完整的第二遍扫描和驻留它所需的峰值内存。
-- `/usage` 不再阻塞事件循环。`summarize` 用 `readFileSync` 读取并解析月度文件，而一次报告会对同一个文件调用它多次（每个时间窗一个全局数字加一个本频道数字）。现在读取是异步的，解析后的月度文件按 size/mtime 缓存，一次报告对每个文件只解析一次。
-- `sendPlain` 改为走 `sendRobotMessage`，不再保留一份几乎相同的单聊/群聊路由与 POST 内联副本，同时消除了运行时里最后一处非 `AgentTool` 的 `any`。
+- 新增分别评估召回率和精确率的评测 grader、记忆和能力用例，并加固评测门禁与报告。
+- 加固发布流水线：校验 tag checkout、tag 与 package 版本一致性，生成 tarball 校验和，并防止同一 tag 重复发布。
 
 ## [0.8.10] - 2026-07-30
 

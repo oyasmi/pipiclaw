@@ -4,51 +4,31 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
-## [0.8.11-beta.5] - 2026-08-06
+## [0.8.11] - 2026-08-07
+
+### Added
+
+- Upgraded the Pi dependencies to 0.83.0, added explicit `streamFn` to every `Agent` constructor, and aligned `typebox` to `^1.3.7`.
+- Tasks now support an optional `## Plan` section with derived current-step tracking, four step states, DoD references, plan progress in task capsules and agendas, and doctor diagnostics for uncovered or invalid references.
+- Background memory consolidation now writes high-necessity candidates durably and high-confidence medium-necessity candidates to a capped 30-day probation tier. Recalled, duplicated, or superseded probation entries are promoted; expired entries are invalidated and can be relearned.
+- Added configurable LLM proxy support for the daemon and TUI, with Pipiclaw-specific environment variables taking precedence and invalid or unsupported proxy URLs falling back to a warned direct connection.
+- Added the channel-less `pipiclaw auth status|login|logout` CLI for OAuth, API-key, and device-code provider authentication, with headless options, safe cancellation, and explicit exit codes. Credentials are never accepted through DingTalk `/login`.
+
+### Changed
+
+- **Task autonomy v2 (spec 038).** Removed task-level external approval and the `/tasks approve` flow. Active tasks now use `active` | `waiting` | `sleeping`; pause is orthogonal, one-shot tasks archive on completion or cancellation, and recurring tasks return to `sleeping`. Verification remains independent. Tasks now represent standing delegation within their goal, tool, credential, and security bounds.
+- Reduced hot-path I/O and repeated computation: memory activity is batched, search tokenization and recall normalization are cached, path and command guards avoid repeated work, large reads are bounded at the source, usage reports use asynchronous mtime-aware caches, and background task digest work overlaps with recall. Streaming archive paths no longer create directories per progress update, and plain messages share the common robot-message delivery path.
+- Collapsed the runtime playbooks to planning and driving, moved delegation into a standalone `agent-delegation` playbook, and added the design-philosophy guide and related documentation links.
 
 ### Fixed
 
-- Fixed `pipiclaw --version` (and every other command) crashing on install with `ERR_MODULE_NOT_FOUND: dist/playbooks/catalog.js`. `scripts/copy-md-assets.mjs` was `rmSync`-ing the whole `dist/playbooks` directory to drop stale `.md` files, which also deleted the `catalog.js`/`catalog.d.ts` that `tsc` had just emitted there moments earlier in the same build step. It now removes only `.md` files no longer present in `src/playbooks` instead of the directory itself. Introduced in 0.8.11-beta.4.
+- Stabilized task scheduling, task lifecycle, and `/stop` behavior in the regression suite.
+- Fixed the build pipeline deleting compiled `dist/playbooks/catalog.js` and `catalog.d.ts` while removing stale Markdown assets. It now removes only obsolete Markdown files, so installed commands including `pipiclaw --version` work correctly.
 
-## [0.8.11-beta.4] - 2026-08-06
+### Tests and release
 
-## [0.8.11-beta.3] - 2026-08-04
-
-### Added
-
-- LLM requests now route through a configurable proxy. A new `installLlmProxy()` (`src/runtime/proxy.ts`) is wired into `prepareAppServices()`, so the DingTalk daemon and the TUI honor proxy configuration from a single call site. `PIPICLAW_PROXY`/`PIPICLAW_NO_PROXY` take precedence over the standard `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`; socks5 and unparseable URLs fall back to a direct connection with a warning rather than failing silently. It is a no-op when nothing is configured. Adds `undici` as a direct dependency.
-- `pipiclaw auth status|login|logout` (spec 039): a standalone CLI subcommand for provider credential management — OAuth subscription login (ChatGPT Plus/Pro, Claude Pro/Max, GitHub Copilot, and other OAuth-capable providers) plus interactive API-key entry, going through the SDK's `ModelRuntime.login`. Deliberately CLI-only: it never touches DingTalk (`/login` stays unrecognized — login in a group chat would leak credentials into `log.jsonl` and memory) and doesn't add a TUI mode this round (a one-shot SSH-and-log-in session is already the CLI's native shape). Credentials still land in `APP_HOME_DIR/auth.json`, unchanged in format; a running daemon or TUI session must be restarted to pick up a new credential (`AuthStorage` holds an in-memory snapshot). `--device-code`/`--no-browser`/`--yes` support headless/scripted use; exit codes are 0/1/2/130 (success/usage error/login failure/cancelled).
-
-### Changed
-
-- **Task autonomy v2 (spec 038).** Task-level external approval is deleted entirely (`sideEffects`, `externalApproval`, `approvalBy`/`approvedAt`/`approvalBodyHash`, the `/tasks approve` command, and the `done` approval gate), and the active task status collapses to three states — `active` | `waiting` | `sleeping`. Pause is now orthogonal (`enabled: boolean`) instead of a status value: one-shot tasks archive on completion or cancellation, and recurring tasks close back into `sleeping`. Verification remains independent but is no longer a task-lifecycle state. The model a task now represents is standing delegation: Pipiclaw drives autonomously within goal/tool/credential/security bounds until it is done, cancelled, or paused, and no longer asks for per-action or per-cycle approval.
-
-## [0.8.11-beta.2] - 2026-08-01
-
-### Added
-
-- Tasks may now carry an optional `## Plan` section (spec 037): a means layer between the Goal/DoD contract and the append-only Current Cycle log. Steps have four states (`[ ]` todo, `[x]` done, `[!]` blocked, `[~]` dropped) and an optional `→ dod:N` reference; the current step is derived (first todo/blocked in document order), never self-reported. `task_manage create` takes an optional `plan` (one step per line); `task_manage progress` takes `planSteps` to update or append steps, folding the delta into the same Current Cycle note. Plan status changes never invalidate an independent verification PASS or external approval (the contract segment now ends at whichever of Plan/Current Cycle comes first), and are deliberately excluded from the task driver's stall fingerprint — ticking a checkbox cannot reset the futile-wake counter. The wake capsule and `<task_agenda>` now show plan progress and the current step; `/tasks doctor` flags DoD items no step covers and step refs to DoD items that do not exist.
-- Background memory consolidation now writes on two tiers instead of one (spec 037): `necessity: high` candidates are unchanged (durable, `confidence ≥ 0.85`), and `necessity: medium` candidates at `confidence ≥ 0.9` are now written on a 30-day probation (capped at 5 per consolidation run) instead of being discarded. A probationary entry is promoted to durable the first time it is recalled, or when a duplicate/superseding write restates it; if never recalled, it is invalidated (not tombstoned — the same fact can be relearned later) by the structural-maintenance job. `/memory status`/`list` show probationary counts and expiry.
-
-### Changed
-
-- Memory-maintenance activity is now written in batches instead of once per tool call. Every tool call used to trigger a read-modify-write of the channel's state JSON through `writeFileAtomically` — two fsyncs apiece — so a thirty-step turn paid that thirty times on storage whose latency the runtime does not control. A new `createMemoryActivityRecorder` collapses a burst into a fixed-size delta (last-write-wins timestamps, summed counters, sticky `dirty`) and flushes it on a 5s debounce, at the end of every turn, and at shutdown. Batching is safe because nothing reads this state promptly: every gate in `maintenance-gates.ts` denies outright while the channel is active, `eligibleAfter` then holds maintenance off for `minIdleMinutesBeforeLlmWork`, and the scheduler polls once a minute — so the state only has to be accurate by the time the channel goes idle, which is exactly where the turn-end flush puts it. Measured on a 30-tool-call turn: 26ms of writes down to 1ms.
-- `session_search` no longer re-derives tokens it already has. The query was being tokenized inside the per-document `.map()` — once per document, up to 500 times per search — and every document was re-tokenized on every search even though the corpus itself is cached for 30s. The query is now tokenized once and document tokens are cached on the document's object identity, so repeat searches within the cache window skip roughly a second of tokenization (measured 2.24ms per ~7KB document).
-- `guardPath` stopped rebuilding its constant tables and re-walking the filesystem on every guarded read/write. The ~25 sensitive-path entries are resolved once per home directory, the system-path lists once at module load, and the temp-directory and workspace/home realpaths are memoized rather than re-`realpathSync`ed per call. 0.098ms → 0.035ms per call. The configured allow/deny lists are deliberately *not* cached: those entries may not exist yet, and freezing a pre-creation resolution would stop a path later created as a symlink from being resolved to its target.
-- `ChannelStore` resolves archive paths without creating them. It called `ensureChannelDir` — a synchronous `mkdirSync` — for every archived message, and `logBotResponse` runs on every progress update of a streaming turn, so that was a blocking syscall per progress tick. The appender's own `ensureDir` already creates and memoizes the directory before writing.
-- Memory recall caches the lowercased form of each candidate. `computeExactMatchBoost` lowercased every candidate's full body on every turn, allocating a throwaway copy of the entire memory corpus; the query's own normalization also moved out of the per-candidate loop.
-- `guardCommand` is linear in argument count again. The generic wrapper heuristic (`xargs`, `env`, `timeout`, …) evaluated *every* suffix position as a candidate command start, re-slicing and re-joining each one, and recursed — quadratic, and multiplied up to `MAX_GUARD_DEPTH`. The scan is now bounded at 32 leading positions, which no wrapper's own flag list comes close to, and configured deny patterns are compiled once instead of per atom per recursion level. At 800 arguments: 36ms → 3.3ms.
-- `read` no longer reads a large file twice. It counted lines with `awk` and then piped the whole file into a JS string before truncating it to 50KB; the content read is now bounded at the source, so a multi-hundred-megabyte log costs one bounded read rather than a full second pass and the peak memory to hold it.
-- `/usage` no longer blocks the event loop. `summarize` read and parsed month files with `readFileSync`, and one report calls it several times over the same file (a global and a per-channel figure per window). Reads are async now, and parsed month files are cached against size/mtime so a report parses each file once.
-- `sendPlain` now routes through `sendRobotMessage` instead of keeping a near-identical inlined copy of the DM-vs-group routing and POST, removing the last non-`AgentTool` `any` in the runtime.
-
-## [0.8.11-beta.1]
-
-### Changed
-
-- Upgrade Pi dependencies from 0.80.10 to 0.83.0.
-- Add explicit `streamFn` to all `Agent` constructors.
-- Align typebox to ^1.3.7.
+- Added separate recall/precision evaluation grading and new memory and capability cases, and hardened evaluation gates and reports.
+- Hardened release automation with tag checkout verification, package-version/tag consistency checks, tarball checksums, and duplicate-run protection.
 
 ## [0.8.10] - 2026-07-30
 
