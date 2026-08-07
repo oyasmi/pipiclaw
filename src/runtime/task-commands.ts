@@ -7,6 +7,7 @@ import { parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
 import { nextTaskWake, validateTaskSchedule } from "../shared/task-schedule.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
+import { channelDelegationTaskIds } from "../subagents/runs.js";
 import {
 	applyTaskControlPatch,
 	createDefaultTaskControl,
@@ -532,6 +533,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	const archivedIds = await readArchivedTaskIds(options.channelDir);
 	const events = await readTaskEvents(options.workspaceDir, options.channelId);
 	const runningJobTaskIds = channelJobTaskIds(options.channelId);
+	const runningDelegationTaskIds = channelDelegationTaskIds(options.channelId);
 	const issues: string[] = [];
 
 	for (const entry of entries) {
@@ -754,7 +756,9 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		// That is legitimate when it is waiting on an answer — and indistinguishable, on disk,
 		// from a task everyone has forgotten. Report the fact and name every way out.
 		const hasDurableWaitingSource =
-			control?.waitingFor === "verification" || (control?.waitingFor === "job" && runningJobTaskIds.has(entry.id));
+			control?.waitingFor === "verification" ||
+			(control?.waitingFor === "job" && runningJobTaskIds.has(entry.id)) ||
+			(control?.waitingFor === "external-signal" && runningDelegationTaskIds.has(entry.id));
 		if (isTaskParked(entry.frontmatter) && !hasDurableWaitingSource) {
 			issues.push(
 				issue(

@@ -253,6 +253,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 export const TOOL_NAMES: ReadonlySet<string> = new Set<string>([
 	...TOOL_REGISTRY.map((registration) => registration.name),
 	"subagent",
+	"subagent_manage",
 ]);
 
 export interface BuildToolSetOptions {

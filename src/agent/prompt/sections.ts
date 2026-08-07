@@ -21,7 +21,7 @@
  */
 
 import { renderPlaybookCatalog } from "../../playbooks/catalog.js";
-import type { PromptBuildContext, PromptSectionDefinition } from "./types.js";
+import type { PromptBuildContext, PromptSectionDefinition, SubAgentSummary } from "./types.js";
 
 function hasTool(context: PromptBuildContext, name: string): boolean {
 	return context.tools.some((tool) => tool.name === name);
@@ -149,15 +149,62 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 				"Read agent-delegation.md before non-trivial delegation.",
 			].join("\n");
 		}
-		return [
-			"## Configured Sub-Agents",
-			"A sub-agent starts blank: state the goal, scope, paths, constraints and acceptance criteria in the task you hand it.",
-			...context.subAgents.map((agent) => `- ${agent.name} — ${agent.description}`),
-			"",
-			"Read agent-delegation.md before non-trivial delegation, and task-driving.md before independent verification.",
-		].join("\n");
+		return renderSubAgentDirectory(context.subAgents);
 	},
 };
+
+/**
+ * Group the catalog by (runtime, workload, mutates) rather than one flat list (spec 040, D11):
+ * `description` is the model's primary routing signal, but `workload`/`mutates` are the two
+ * machine-checkable dimensions that predict cost and blast radius before the model reads a word
+ * of prose. External-before-internal / heavy-before-light / write-before-read is a deterministic
+ * tie-break, not a ranking — it just keeps the catalog's group order stable across rebuilds.
+ */
+function renderSubAgentDirectory(subAgents: SubAgentSummary[]): string {
+	interface Group {
+		runtime: SubAgentSummary["runtime"];
+		workload: SubAgentSummary["workload"];
+		mutates: "read" | "write";
+		agents: SubAgentSummary[];
+	}
+	const groups = new Map<string, Group>();
+	for (const agent of subAgents) {
+		const mutates = agent.mutates ?? "read";
+		const key = `${agent.runtime}|${agent.workload}|${mutates}`;
+		let group = groups.get(key);
+		if (!group) {
+			group = { runtime: agent.runtime, workload: agent.workload, mutates, agents: [] };
+			groups.set(key, group);
+		}
+		group.agents.push(agent);
+	}
+	const sortedGroups = Array.from(groups.values()).sort((a, b) => {
+		if (a.runtime !== b.runtime) return a.runtime === "external" ? -1 : 1;
+		if (a.workload !== b.workload) return a.workload === "heavy" ? -1 : 1;
+		if (a.mutates !== b.mutates) return a.mutates === "write" ? -1 : 1;
+		return 0;
+	});
+
+	const lines = [
+		"## Configured Sub-Agents",
+		"A sub-agent starts blank: state the goal, scope, paths, constraints and acceptance criteria in the task you hand it.",
+	];
+	for (const group of sortedGroups) {
+		// internal is always sync up to SYNC_GRACE_MS, then converts to async by itself (D2) — the
+		// model does not choose this, it is just told what to expect.
+		const mode = group.runtime === "external" ? "async" : "sync (auto-async past 120s)";
+		lines.push("", `${group.runtime} · ${group.workload} · ${group.mutates} · ${mode}`);
+		for (const agent of group.agents) {
+			const suffix = agent.unavailable ? ` (unavailable: ${agent.unavailable})` : "";
+			lines.push(`- ${agent.name} — ${agent.description}${suffix}`);
+		}
+	}
+	lines.push(
+		"",
+		"Read agent-delegation.md before non-trivial delegation, and task-driving.md before independent verification.",
+	);
+	return lines.join("\n");
+}
 
 const WORKSPACE_PREAMBLE =
 	"The files below are workspace policy chosen by the user or the team. They direct how you work; they do not override the runtime facts and hard invariants above.";

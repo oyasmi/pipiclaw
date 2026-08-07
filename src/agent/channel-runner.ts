@@ -772,6 +772,11 @@ export class ChannelRunner implements AgentRunner {
 		});
 	}
 
+	/** `/subagents list`'s role-directory health tail — whatever this runner already discovered. */
+	getSubAgentDiscoverySnapshot(): SubAgentDiscoveryResult {
+		return this.subAgentDiscovery;
+	}
+
 	// === Private helpers ===
 
 	/**
@@ -1136,6 +1141,11 @@ export class ChannelRunner implements AgentRunner {
 			subAgents: this.subAgentDiscovery.agents.map((agent) => ({
 				name: agent.name,
 				description: agent.description,
+				runtime: agent.runtime,
+				harness: agent.harness,
+				workload: agent.workload ?? (agent.runtime === "external" ? "heavy" : "light"),
+				mutates: agent.mutates,
+				unavailable: agent.unavailable,
 			})),
 			skills: this.currentSkills.skills.map((skill) => ({ name: skill.name, description: skill.description })),
 		});

@@ -36,6 +36,7 @@ import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { fileStamp } from "../shared/file-stamp.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { configureSubAgentRuntime, restoreAllSubAgentRuns } from "../subagents/runs.js";
 import { readActiveTasks } from "../tasks/ledger.js";
 import { activateWaitingTask, claimTaskAttempt, finishTaskAttempt } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
@@ -62,6 +63,7 @@ import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
 import { installLlmProxy } from "./proxy.js";
 import { ChannelStore } from "./store.js";
+import { handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
 import { createTaskDriverEvent, createTaskVerificationEvent, TaskDriver } from "./task-driver.js";
 import { migrateLegacyTaskScheduleEvents, migrateLegacyTaskState } from "./task-migration.js";
@@ -769,6 +771,17 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			await bot.sendPlain(event.channelId, getRunner(event.channelId).renderContextReport(args));
 		},
 
+		// A human control path independent of the model (spec 040, D6): `/stop` no longer kills a
+		// dispatched delegation, so cancel must work whether or not a runner is currently active.
+		async handleSubagentsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void> {
+			const response = await runSubagentsCommand({
+				args,
+				channelId: event.channelId,
+				discovery: channelRunners.get(event.channelId)?.getSubAgentDiscoverySnapshot(),
+			});
+			await bot.sendPlain(event.channelId, response);
+		},
+
 		async handleBusyMessage(
 			event: DingTalkEvent,
 			bot: DingTalkBot,
@@ -890,6 +903,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 							await handler.handleUsageCommand(event, bot, builtInCommand.args);
 							return;
 						}
+						if (builtInCommand.name === "subagents") {
+							await handler.handleSubagentsCommand(event, bot, builtInCommand.args);
+							return;
+						}
 						if (isRunnerBuiltInCommand(builtInCommand)) {
 							await runner.handleBuiltinCommand(ctx, builtInCommand);
 						}
@@ -927,9 +944,25 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 							if (claim) event.taskAttemptGeneration = claim.generation;
 						}
 					}
+					// Spec 040, D7: a delegation run's completion wake carries the same "belongs to
+					// task" contract as a background job's, and reactivates a task parked with
+					// waitingFor="external-signal" the same way.
+					const delegationTaskId = /^\[SUBAGENT:[^\]]+\][\s\S]*?belongs to task ([A-Za-z0-9._-]+)\./.exec(
+						event.text,
+					)?.[1];
+					let recoveredDelegationTaskId: string | undefined;
+					if (delegationTaskId) {
+						const channelDir = getChannelDir(options.paths.workspaceDir, event.channelId);
+						const activated = await activateWaitingTask(channelDir, delegationTaskId, "external-signal");
+						if (activated) recoveredDelegationTaskId = delegationTaskId;
+						if (activated?.fields.control) {
+							const claim = await claimTaskAttempt(channelDir, delegationTaskId, new Date());
+							if (claim) event.taskAttemptGeneration = claim.generation;
+						}
+					}
 					const result = await runner.run(ctx, store);
 					const taskDriverMatch = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text);
-					const taskAttemptId = taskDriverMatch?.[1] ?? recoveredJobTaskId;
+					const taskAttemptId = taskDriverMatch?.[1] ?? recoveredJobTaskId ?? recoveredDelegationTaskId;
 					if (taskDriverMatch?.[1]) {
 						noteTaskEffects(
 							event.channelId,
@@ -941,6 +974,13 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						noteTaskEffects(
 							event.channelId,
 							recoveredJobTaskId,
+							channelEffectCount(event.channelId) - effectsBefore,
+						);
+					}
+					if (recoveredDelegationTaskId) {
+						noteTaskEffects(
+							event.channelId,
+							recoveredDelegationTaskId,
 							channelEffectCount(event.channelId) - effectsBefore,
 						);
 					}
@@ -998,6 +1038,15 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 	});
 	void restoreChannelJobs(executor);
+	// Delegation runs get the same treatment (spec 040, D1/D7): persistence root, wake delivery,
+	// and the usage/archive authority, wired before any turn can start a run.
+	configureSubAgentRuntime({
+		stateDir: join(options.paths.appHomeDir, "state", "subagent-runs"),
+		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
+		ledger: getUsageLedger(),
+		store,
+	});
+	void restoreAllSubAgentRuns();
 	const eventsWatcher = options.createEventsWatcher
 		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)
 		: createEventsWatcher(

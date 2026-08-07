@@ -8,11 +8,12 @@ import type { MediaSender } from "../runtime/channel-context.js";
 import { loadSecurityConfig } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings, PipiclawSessionSearchSettings } from "../settings.js";
-import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
 import { createSubAgentTool } from "../subagents/tool.js";
 import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
 import { buildToolSet } from "./registry.js";
+import { createSubAgentManageTool } from "./subagent-manage.js";
 import { withToolDetails } from "./tool-details.js";
 
 export interface CreatePipiclawToolsOptions {
@@ -37,7 +38,12 @@ export interface CreatePipiclawToolsOptions {
 }
 
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {
-	const securityConfig = options.securityConfig ?? loadSecurityConfig(APP_HOME_DIR);
+	// Spec 040, D8.1: the main agent's own write/edit tools can write a self-authorizing
+	// `runtime: external` role file just as readily as a sub-agent's can; deny it here too.
+	const securityConfig = withSubAgentsDirWriteDeny(
+		options.securityConfig ?? loadSecurityConfig(APP_HOME_DIR),
+		options.workspaceDir,
+	);
 	const toolsConfig = options.toolsConfig ?? loadToolsConfig(APP_HOME_DIR);
 	const securityContext = {
 		workspaceDir: options.workspaceDir,
@@ -91,6 +97,14 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 				},
 			}),
 			"subagent",
+		),
+		withToolDetails(
+			createSubAgentManageTool({
+				channelId: options.channelId,
+				channelDir: options.channelDir,
+				getSubAgentDiscovery: options.getSubAgentDiscovery,
+			}),
+			"subagent_manage",
 		),
 	];
 }

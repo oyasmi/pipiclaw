@@ -95,6 +95,7 @@ describe("runtime stop handling", () => {
 		});
 		const runner: AgentRunner = {
 			renderContextReport: () => "CONTEXT",
+			getSubAgentDiscoverySnapshot: () => ({ directory: "", agents: [], warnings: [] }),
 			run: vi.fn(async () => {
 				signalRunStarted();
 				await runAborted;
@@ -176,6 +177,7 @@ describe("runtime stop handling", () => {
 		});
 		const runner: AgentRunner = {
 			renderContextReport: () => "CONTEXT",
+			getSubAgentDiscoverySnapshot: () => ({ directory: "", agents: [], warnings: [] }),
 			run: vi.fn(async () => {
 				signalRunStarted();
 				await runAborted;

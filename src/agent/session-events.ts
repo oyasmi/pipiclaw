@@ -2,7 +2,6 @@ import * as log from "../log.js";
 import type { MemoryLifecycle } from "../memory/lifecycle.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
-import { formatLocalTime } from "../shared/local-time.js";
 import { extractLabelFromArgs, truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
@@ -106,7 +105,7 @@ function mergeAssistantUsage(
 }
 
 export async function handleSessionEvent(event: unknown, context: SessionEventHandlerContext): Promise<void> {
-	const { ctx, logCtx, queue, pendingTools, store, runState, memoryLifecycle, ledger } = context;
+	const { ctx, logCtx, queue, pendingTools, runState, memoryLifecycle } = context;
 	const showProgress = ctx.progressStyle !== "none";
 	const finalToCard = ctx.finalDelivery === "card";
 
@@ -156,55 +155,16 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 				: null;
 
 		if (subAgentDetails) {
+			// Spec 040, D7: `runs.ts` is the sole settlement/ledger/archive authority for every
+			// delegation run, sync or async, so its own `settle()` writes the ledger entry and the
+			// archive record exactly once. This handler only folds the run's usage into the current
+			// turn's displayed total — a dispatched-placeholder result contributes whatever usage
+			// had accrued by the time the grace window elapsed, fine for a live tally; the ledger
+			// entry `runs.ts` writes later carries the true total.
 			mergeSubAgentUsage(runState.totalUsage, subAgentDetails);
 			runState.usageSources++;
 			runState.costKnown &&=
 				subAgentDetails.usage.cost.total > 0 || (context.isModelCostKnown?.(subAgentDetails.model) ?? false);
-			const label =
-				pending?.args &&
-				typeof pending.args === "object" &&
-				"label" in pending.args &&
-				typeof (pending.args as { label?: unknown }).label === "string"
-					? ((pending.args as { label: string }).label ?? "subagent").trim()
-					: "subagent";
-			ledger.record({
-				channelId: logCtx.channelId,
-				kind: "subagent",
-				model: subAgentDetails.model,
-				label,
-				usage: {
-					input: subAgentDetails.usage.input,
-					output: subAgentDetails.usage.output,
-					cacheRead: subAgentDetails.usage.cacheRead,
-					cacheWrite: subAgentDetails.usage.cacheWrite,
-					total: subAgentDetails.usage.total,
-				},
-				cost: { ...subAgentDetails.usage.cost },
-			});
-			queue.enqueue(
-				() =>
-					store?.logSubAgentRun(logCtx.channelId, {
-						date: formatLocalTime(),
-						toolCallId: event.toolCallId,
-						label,
-						agent: subAgentDetails.agent,
-						source: subAgentDetails.source,
-						model: subAgentDetails.model,
-						tools: [...subAgentDetails.tools],
-						turns: subAgentDetails.turns,
-						toolCalls: subAgentDetails.toolCalls,
-						durationMs: subAgentDetails.durationMs,
-						failed: subAgentDetails.failed,
-						failureReason: subAgentDetails.failureReason,
-						output: resultStr.length > 16000 ? resultStr.slice(0, 16000) : resultStr,
-						outputTruncated: resultStr.length > 16000,
-						usage: {
-							...subAgentDetails.usage,
-							cost: { ...subAgentDetails.usage.cost },
-						},
-					}) ?? Promise.resolve(),
-				"sub-agent run log",
-			);
 		}
 
 		const details = toolResultDetails(event.result);

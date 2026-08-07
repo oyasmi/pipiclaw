@@ -31,8 +31,14 @@ export interface UsageLedgerEntry {
 	label?: string;
 	/** Joins sidecar cost to the memory source window and review-log outcome. */
 	correlationId?: string;
+	/** Idempotency key for a delegation run's usage entry (spec 040, D7); absent for turn/sidecar kinds. */
+	runId?: string;
 	usage: UsageTokens;
 	cost: UsageCost;
+	/** False only when the harness cannot report tokens at all (external `exec`). Display as "unknown", not 0. */
+	usageKnown?: boolean;
+	/** False when the harness omits a cost field (external `codex-cli`/`exec`). Display as "unknown", not 0. */
+	costKnown?: boolean;
 }
 
 export interface UsageSummary {

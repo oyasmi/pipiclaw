@@ -86,4 +86,25 @@ export interface BlockedNetworkLogEvent extends SecurityLogEventBase {
 	reason?: string;
 }
 
-export type SecurityLogEvent = BlockedPathLogEvent | BlockedCommandLogEvent | BlockedNetworkLogEvent;
+/**
+ * A *permitted* external delegation dispatch (spec 040, D8.1). Unlike the three events above,
+ * this records an action that was executed, not one that was blocked — external runs never pass
+ * through command-guard, so the argv actually spawned has to be captured somewhere. `audit.logBlocked`
+ * must not suppress it: see `logSecurityEvent`.
+ */
+export interface ExternalAgentLogEvent extends SecurityLogEventBase {
+	type: "external-agent";
+	runId: string;
+	agent: string;
+	harness: string;
+	argv: string[];
+	workingDirectory: string;
+	mutates: "read" | "write";
+	model?: string;
+}
+
+export type SecurityLogEvent =
+	| BlockedPathLogEvent
+	| BlockedCommandLogEvent
+	| BlockedNetworkLogEvent
+	| ExternalAgentLogEvent;

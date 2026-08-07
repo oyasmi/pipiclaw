@@ -108,13 +108,15 @@ describe("runtime playbook catalog", () => {
 		for (const name of namedInDoc) expect(shipped).toContain(name);
 	});
 
-	// The runtime already guarantees a completion wake for background jobs, so an external
-	// agent's own blocking-wait command belongs in one. Delegation used to prescribe plain
-	// wake polling instead, which burns a turn per check-in; keep the routing explicit.
-	it("routes external-agent waiting to the background-job wake before wake polling", () => {
+	// Spec 040, D2: a delegation run now wakes its own channel by itself (sync grace window, then
+	// async) — the model no longer needs to wrap external waiting in a background job. Delegation
+	// used to route this through `bash async`; that routing is gone, and polling via the
+	// delegation tool itself is explicitly discouraged in favor of `subagent_manage op=list`.
+	it("tells the model a dispatched run wakes itself, rather than routing waiting through bash async", () => {
 		const delegation = readFileSync(join(PLAYBOOKS_DIR, "agent-delegation.md"), "utf-8");
-		expect(delegation).toContain("bash async");
-		expect(delegation).toContain("background-jobs.md");
+		expect(delegation).toContain("subagent_manage");
+		expect(delegation).toContain("不要轮询");
+		expect(delegation).not.toContain("bash async");
 	});
 
 	// "How to wait" was told three different ways across three playbooks, two of them describing a
@@ -149,7 +151,10 @@ describe("runtime playbook catalog", () => {
 			.join("\n");
 		expect(catalogText).not.toContain("agentmux-idle");
 		expect(catalogText).not.toContain("agentmux inspect");
-		expect(catalogText).toContain("第三方工具的命令和完成态由用户提供的 skill 定义");
+		// Spec 040: external delegation is now runtime-driven (role files + subagent tools), not a
+		// user-provided skill wrapping a third-party CLI — only non-delegation third-party tool use
+		// still routes through skills.
+		expect(catalogText).toContain("不通过委派角色调用的第三方工具用法读对应 skill");
 	});
 });
 

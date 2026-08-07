@@ -26,6 +26,7 @@ import { ensureChannelDir } from "../runtime/channel-paths.js";
 import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
 import { handleEventsCommand } from "../runtime/event-commands.js";
 import { ChannelStore } from "../runtime/store.js";
+import { handleSubagentsCommand } from "../runtime/subagent-commands.js";
 import { handleTasksCommand } from "../runtime/task-commands.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { getUsageLedger } from "../usage/ledger.js";
@@ -150,6 +151,8 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 				workspaceDir: paths.workspaceDir,
 				channelId,
 			}),
+		runSubagents: (args) =>
+			handleSubagentsCommand({ args, channelId, discovery: runner.getSubAgentDiscoverySnapshot() }),
 		statusInfo: { version: readCliVersion(), startedAt: Date.now() },
 	});
 

@@ -48,6 +48,15 @@ export interface ToolDescriptor {
 export interface SubAgentSummary {
 	name: string;
 	description: string;
+	/** Defaults to "internal"; drives the D11 directory grouping (runtime · workload · mutates). */
+	runtime: "internal" | "external";
+	harness?: "claude-code" | "codex-cli" | "exec";
+	/** Always resolved (D11 default: external→heavy, internal→light) — never undefined here. */
+	workload: "light" | "heavy";
+	/** Resolved for internal (inferred from tools) and required for external; undefined only for a malformed record. */
+	mutates?: "read" | "write";
+	/** Present only when the role is listed but currently cannot be invoked (e.g. missing binary). */
+	unavailable?: string;
 }
 
 /** A workspace file (SOUL.md / AGENTS.md) resolved for injection. */

@@ -440,16 +440,16 @@ export class ChannelJobManager {
 	}
 
 	/**
-	 * Wake the channel for a finished job. `notified` is persisted before anything else can run
-	 * again, so a restart mid-announce cannot produce a second wake; the dispatch id is stable for
-	 * the same reason (spec 031, D1).
+	 * Wake the channel for a finished job. `dispatch()` durably persists its own pending record
+	 * (and is idempotent on dispatch id) before this call can be interrupted, so it is safe to call
+	 * again after a crash; `notified` is only persisted *after* it returns, so a crash between the
+	 * two can only cause a redelivery, never a lost wake (spec 040, D7 — this reorders a prior
+	 * version that persisted `notified` first, which could crash-lose the wake entirely).
 	 */
 	private async announce(record: JobRecord, signal?: AbortSignal): Promise<void> {
 		if (!this.options.dispatch || !record.contract.notify || record.notified) {
 			return;
 		}
-		record.notified = true;
-		await this.persist(record);
 
 		const output = await this.readOutput(record.id, signal);
 		const tail = output?.text.slice(-WAKE_OUTPUT_TAIL_BYTES).trim();
@@ -476,7 +476,10 @@ export class ChannelJobManager {
 			await this.options.dispatch(event);
 		} catch (error) {
 			log.logWarning(`Failed to dispatch completion wake for job ${record.id}`, errorMessage(error));
+			return;
 		}
+		record.notified = true;
+		await this.persist(record);
 	}
 
 	private async kill(record: JobRecord, signal?: AbortSignal): Promise<void> {

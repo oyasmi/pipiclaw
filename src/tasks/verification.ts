@@ -36,6 +36,14 @@ export interface VerificationAttestation {
 	 * a PASS against an unrelated repository. Absent on attestations written before this field.
 	 */
 	subjectDir?: string;
+	/**
+	 * `enforced` — a built-in verifier, whose write/edit tools are structurally removed before it
+	 * runs (a real gate). `advisory` — an external verifier (spec 040, D9): the tools cannot be
+	 * removed, so the verdict rests on the target CLI's own sandbox flag plus the workspace hash,
+	 * neither of which pipiclaw can prove. Defaults to `enforced` for attestations written before
+	 * this field existed — every verifier was built-in then.
+	 */
+	verificationStrength: "enforced" | "advisory";
 }
 
 function attestationFilename(runId: string): string {
@@ -72,6 +80,7 @@ export async function writeVerificationAttestation(
 		workspaceChanged: input.workspaceChanged,
 		subjectHash: input.subjectHash,
 		subjectDir: input.subjectHash ? input.subjectDir : undefined,
+		verificationStrength: input.verificationStrength,
 	};
 	await mkdir(verificationDir(channelDir), { recursive: true });
 	await writeFileAtomically(
@@ -105,9 +114,16 @@ export async function readVerificationAttestation(channelDir: string, runId: str
 		((value as { subjectHash?: unknown }).subjectHash !== undefined &&
 			!/^[a-f0-9]{64}$/i.test(String((value as { subjectHash?: unknown }).subjectHash))) ||
 		((value as { subjectDir?: unknown }).subjectDir !== undefined &&
-			typeof (value as { subjectDir?: unknown }).subjectDir !== "string")
+			typeof (value as { subjectDir?: unknown }).subjectDir !== "string") ||
+		((value as { verificationStrength?: unknown }).verificationStrength !== undefined &&
+			(value as { verificationStrength?: unknown }).verificationStrength !== "enforced" &&
+			(value as { verificationStrength?: unknown }).verificationStrength !== "advisory")
 	) {
 		throw new Error(`Verification run "${runId}" has an invalid attestation. Run the verifier again.`);
 	}
-	return value as VerificationAttestation;
+	// Pre-spec-040 attestations predate this field; every verifier back then was built-in.
+	return {
+		...(value as VerificationAttestation),
+		verificationStrength: (value as VerificationAttestation).verificationStrength ?? "enforced",
+	};
 }

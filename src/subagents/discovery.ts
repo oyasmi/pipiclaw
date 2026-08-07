@@ -1,3 +1,5 @@
+import { existsSync as existsSyncFs } from "node:fs";
+import { join as joinPath, delimiter as pathDelimiter } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { Dirent } from "fs";
@@ -5,6 +7,8 @@ import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { findExactModelReferenceMatch, formatModelReference } from "../models/utils.js";
 import { SUB_AGENTS_DIR_NAME } from "../paths.js";
+import type { SecurityConfig } from "../security/types.js";
+import { splitShellWords } from "../shared/shell-words.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 const ALLOWED_SUB_AGENT_TOOLS = ["read", "grep", "bash", "edit", "write", "web_search", "web_fetch"] as const;
@@ -13,16 +17,27 @@ const DEFAULT_MAX_TURNS = 24;
 const DEFAULT_MAX_TOOL_CALLS = 48;
 const DEFAULT_MAX_WALL_TIME_SEC = 300;
 const DEFAULT_BASH_TIMEOUT_SEC = 120;
+/** External runs have no turn/tool-call budget (D5); wall time is their only lever. */
+const DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC = 1800;
 const MAX_SUB_AGENT_TASK_CHARS = 12000;
 const MAX_SUB_AGENT_SYSTEM_PROMPT_CHARS = 16000;
 const ALLOWED_CONTEXT_MODES = ["isolated", "contextual"] as const;
 const ALLOWED_MEMORY_MODES = ["none", "session", "relevant"] as const;
-const ALLOWED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+// "max" is a real SDK ThinkingLevel; pipiclaw's own whitelist previously omitted it (spec 040, D4).
+const ALLOWED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const ALLOWED_RUNTIMES = ["internal", "external"] as const;
+const ALLOWED_HARNESSES = ["claude-code", "codex-cli", "exec"] as const;
+const ALLOWED_WORKLOADS = ["light", "heavy"] as const;
+const ALLOWED_MUTATES = ["read", "write"] as const;
 
 export type SubAgentToolName = (typeof ALLOWED_SUB_AGENT_TOOLS)[number];
 export type SubAgentContextMode = (typeof ALLOWED_CONTEXT_MODES)[number];
 export type SubAgentMemoryMode = (typeof ALLOWED_MEMORY_MODES)[number];
 export type SubAgentThinkingLevel = (typeof ALLOWED_THINKING_LEVELS)[number];
+export type SubAgentRuntime = (typeof ALLOWED_RUNTIMES)[number];
+export type SubAgentHarness = (typeof ALLOWED_HARNESSES)[number];
+export type SubAgentWorkload = (typeof ALLOWED_WORKLOADS)[number];
+export type SubAgentMutates = (typeof ALLOWED_MUTATES)[number];
 
 /**
  * Execution budgets as a single named tuple. Frontmatter keeps the four numeric knobs
@@ -74,6 +89,27 @@ export interface SubAgentConfig {
 	thinkingLevel?: SubAgentThinkingLevel;
 	filePath?: string;
 	source: "predefined" | "inline";
+	/** Defaults to "internal"; existing role files therefore parse unchanged (spec 040, D5). */
+	runtime: SubAgentRuntime;
+	/** External only. */
+	harness?: SubAgentHarness;
+	/** External only: the raw, unvalidated command line. Tokenized by the harness at invocation
+	 *  time (D4), never by discovery — discovery only checks that it is non-empty. */
+	command?: string;
+	/** External only: run `command` through `/bin/sh -lc` instead of argv-direct spawn (D4). */
+	shell?: boolean;
+	/** External only: env vars appended to (and overriding) the inherited environment (D8.2). */
+	env?: Record<string, string>;
+	/** Drives system-prompt directory grouping (D11); defaults by runtime when unset. */
+	workload?: SubAgentWorkload;
+	/** Required for external (an explicit declaration); optional for internal (inferred from `tools`). */
+	mutates?: SubAgentMutates;
+	/** External only: the harness's own model string, passed through unresolved (D5) — never
+	 *  looked up in `models.json`, because pipiclaw cannot validate another CLI's model names. */
+	externalModelRef?: string;
+	/** Set when the role is otherwise valid but currently cannot be invoked (e.g. missing binary).
+	 *  The role is still listed — never silently dropped (D5) — and invocation must explain why. */
+	unavailable?: string;
 }
 
 export interface ResolvedSubAgentConfig extends Omit<SubAgentConfig, "model" | "modelRef" | "thinkingLevel"> {
@@ -125,6 +161,26 @@ function validateSubAgentSystemPrompt(systemPrompt: string, label: string): stri
 
 export function getSubAgentsDir(workspaceDir: string): string {
 	return join(workspaceDir, SUB_AGENTS_DIR_NAME);
+}
+
+/**
+ * Deny `write`/`edit` on `workspace/sub-agents/` itself (spec 040, D8.1).
+ *
+ * `DEFAULT_SECURITY_CONFIG.writeAllow` is empty and `pathAllowedByDefaults` permits the whole
+ * workspace, so without this the main agent (and a sub-agent it dispatches) can write a
+ * `runtime: external` role file with an arbitrary `command` and then invoke it — a command-guard
+ * bypass wearing a delegation costume. This closes the `write`/`edit` path; it does not close
+ * `bash` (same known gap as the memory-write-deny it mirrors — see the spec's risk list). The
+ * role directory hot-reloads on purpose (P4): this is the only gate, and it must stay cheap.
+ */
+export function withSubAgentsDirWriteDeny(config: SecurityConfig, workspaceDir: string): SecurityConfig {
+	return {
+		...config,
+		pathGuard: {
+			...config.pathGuard,
+			writeDeny: [...config.pathGuard.writeDeny, getSubAgentsDir(workspaceDir)],
+		},
+	};
 }
 
 function readOptionalTrimmedString(value: unknown): string | undefined {
@@ -342,9 +398,277 @@ function resolveModelReference(
 	return { error: `Model reference "${modelRef}" was not found among available models.` };
 }
 
+function parseRuntime(raw: unknown): { value: SubAgentRuntime; error?: string } {
+	const normalized = readOptionalTrimmedString(raw);
+	if (!normalized) return { value: "internal" };
+	if (ALLOWED_RUNTIMES.includes(normalized as SubAgentRuntime)) {
+		return { value: normalized as SubAgentRuntime };
+	}
+	return {
+		value: "internal",
+		error: `Unknown runtime "${normalized}". Allowed values: ${ALLOWED_RUNTIMES.join(", ")}`,
+	};
+}
+
+function parseHarness(raw: unknown): { value?: SubAgentHarness; error?: string } {
+	const normalized = readOptionalTrimmedString(raw);
+	if (!normalized) return {};
+	if (ALLOWED_HARNESSES.includes(normalized as SubAgentHarness)) {
+		return { value: normalized as SubAgentHarness };
+	}
+	return { error: `Unknown harness "${normalized}". Allowed values: ${ALLOWED_HARNESSES.join(", ")}` };
+}
+
+function parseWorkload(raw: unknown): { value?: SubAgentWorkload; error?: string } {
+	const normalized = readOptionalTrimmedString(raw);
+	if (!normalized) return {};
+	if (ALLOWED_WORKLOADS.includes(normalized as SubAgentWorkload)) {
+		return { value: normalized as SubAgentWorkload };
+	}
+	return { error: `Unknown workload "${normalized}". Allowed values: ${ALLOWED_WORKLOADS.join(", ")}` };
+}
+
+function parseMutates(raw: unknown): { value?: SubAgentMutates; error?: string } {
+	const normalized = readOptionalTrimmedString(raw);
+	if (!normalized) return {};
+	if (ALLOWED_MUTATES.includes(normalized as SubAgentMutates)) {
+		return { value: normalized as SubAgentMutates };
+	}
+	return { error: `Unknown mutates "${normalized}". Allowed values: ${ALLOWED_MUTATES.join(", ")}` };
+}
+
+function parseBooleanField(raw: unknown, label: string): { value?: boolean; error?: string } {
+	if (raw === undefined || raw === null) return {};
+	if (typeof raw === "boolean") return { value: raw };
+	if (raw === "true") return { value: true };
+	if (raw === "false") return { value: false };
+	return { error: `Invalid "${label}" frontmatter: expected true or false` };
+}
+
+function parseEnvMap(raw: unknown): { value?: Record<string, string>; error?: string } {
+	if (raw === undefined || raw === null) return {};
+	if (typeof raw !== "object" || Array.isArray(raw)) {
+		return { error: 'Invalid "env" frontmatter: expected a mapping of string to string' };
+	}
+	const value: Record<string, string> = {};
+	for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+		if (typeof val !== "string") {
+			return { error: `Invalid "env.${key}" frontmatter: expected a string` };
+		}
+		value[key] = val;
+	}
+	return { value };
+}
+
+/** First whitespace-delimited token of `command` (its executable), respecting quotes (D4). */
+function firstCommandToken(command: string): string | undefined {
+	return splitShellWords(command)[0];
+}
+
+/** Existence check only (no exec-bit probe): cheap, spawn-free, good enough for "is it installed". */
+function isExecutableAvailable(token: string): boolean {
+	if (token.includes("/")) {
+		return existsSyncFs(token);
+	}
+	const pathEnv = process.env.PATH ?? "";
+	return pathEnv.split(pathDelimiter).some((dir) => dir && existsSyncFs(joinPath(dir, token)));
+}
+
+/** Fields that only mean something for one runtime; present under the other, they are rejected
+ *  outright rather than silently ignored (spec 040, D5 — "对某种 runtime 无意义的字段一律驳回"). */
+const FIELDS_REJECTED_FOR_INTERNAL = ["harness", "command"] as const;
+const FIELDS_REJECTED_FOR_EXTERNAL = ["tools", "maxTurns", "maxToolCalls", "bashTimeoutSec"] as const;
+
+function rejectedFieldNames(frontmatter: Record<string, unknown>, names: readonly string[]): string[] {
+	return names.filter((name) => frontmatter[name] !== undefined);
+}
+
+function inferMutatesFromTools(tools: SubAgentToolName[]): SubAgentMutates {
+	return tools.includes("write") || tools.includes("edit") ? "write" : "read";
+}
+
 interface DirScanResult {
 	agents: SubAgentConfig[];
 	warnings: string[];
+}
+
+interface ParsedAgent {
+	agent?: SubAgentConfig;
+	warning?: string;
+}
+
+function parseInternalAgent(
+	entryName: string,
+	filePath: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	name: string,
+	description: string,
+	availableModels: Model<Api>[],
+): ParsedAgent {
+	const rejected = rejectedFieldNames(frontmatter, FIELDS_REJECTED_FOR_INTERNAL);
+	if (rejected.length > 0) {
+		return { warning: `${entryName}: field(s) ${rejected.join(", ")} are only valid for runtime: external` };
+	}
+
+	const toolParse = parseToolNames(frontmatter.tools);
+	if (toolParse.error) return { warning: `${entryName}: ${toolParse.error}` };
+
+	const contextMode = parseContextMode(frontmatter.contextMode);
+	if (contextMode.error) return { warning: `${entryName}: ${contextMode.error}` };
+
+	const memoryMode = parseMemoryMode(frontmatter.memory, contextMode.value);
+	if (memoryMode.error) return { warning: `${entryName}: ${memoryMode.error}` };
+
+	const parsedPaths = parseStringList(frontmatter.paths, "paths");
+	if (parsedPaths.error) return { warning: `${entryName}: ${parsedPaths.error}` };
+
+	const thinkingLevel = parseThinkingLevel(frontmatter.thinkingLevel);
+	if (thinkingLevel.error) return { warning: `${entryName}: ${thinkingLevel.error}` };
+
+	const workload = parseWorkload(frontmatter.workload);
+	if (workload.error) return { warning: `${entryName}: ${workload.error}` };
+
+	const mutates = parseMutates(frontmatter.mutates);
+	if (mutates.error) return { warning: `${entryName}: ${mutates.error}` };
+
+	const maxTurns = parsePositiveInteger(frontmatter.maxTurns, DEFAULT_MAX_TURNS);
+	const maxToolCalls = parsePositiveInteger(frontmatter.maxToolCalls, DEFAULT_MAX_TOOL_CALLS);
+	const maxWallTimeSec = parsePositiveInteger(frontmatter.maxWallTimeSec, DEFAULT_MAX_WALL_TIME_SEC);
+	const bashTimeoutSec = parsePositiveInteger(frontmatter.bashTimeoutSec, DEFAULT_BASH_TIMEOUT_SEC);
+	const numericWarning = [maxTurns.warning, maxToolCalls.warning, maxWallTimeSec.warning, bashTimeoutSec.warning].find(
+		Boolean,
+	);
+	// A malformed numeric field falls back to its default rather than dropping the whole role —
+	// but it is still reported, via the first warning found.
+	const modelRef = readOptionalTrimmedString(frontmatter.model);
+	let model: Model<Api> | undefined;
+	if (modelRef) {
+		const resolved = resolveModelReference(modelRef, availableModels);
+		if (!resolved.model) return { warning: `${entryName}: ${resolved.error}` };
+		model = resolved.model;
+	}
+
+	const trimmedBody = body.trim();
+	if (!trimmedBody) return { warning: `${entryName}: empty system prompt body` };
+	const promptLengthError = validateSubAgentSystemPrompt(trimmedBody, "Sub-agent system prompt");
+	if (promptLengthError) return { warning: `${entryName}: ${promptLengthError}` };
+
+	return {
+		warning: numericWarning ? `${entryName}: ${numericWarning}` : undefined,
+		agent: {
+			name,
+			description,
+			systemPrompt: trimmedBody,
+			tools: toolParse.tools,
+			model,
+			modelRef: modelRef || (model ? formatModelReference(model) : undefined),
+			maxTurns: maxTurns.value,
+			maxToolCalls: maxToolCalls.value,
+			maxWallTimeSec: maxWallTimeSec.value,
+			bashTimeoutSec: bashTimeoutSec.value,
+			contextMode: contextMode.value,
+			memory: memoryMode.value,
+			paths: parsedPaths.values,
+			thinkingLevel: thinkingLevel.value,
+			filePath,
+			source: "predefined",
+			runtime: "internal",
+			workload: workload.value ?? "light", // D11 default-by-runtime.
+			mutates: mutates.value ?? inferMutatesFromTools(toolParse.tools),
+		},
+	};
+}
+
+function parseExternalAgent(
+	entryName: string,
+	filePath: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	name: string,
+	description: string,
+): ParsedAgent {
+	const rejected = rejectedFieldNames(frontmatter, FIELDS_REJECTED_FOR_EXTERNAL);
+	if (rejected.length > 0) {
+		return { warning: `${entryName}: field(s) ${rejected.join(", ")} are not valid for runtime: external` };
+	}
+
+	const harness = parseHarness(frontmatter.harness);
+	if (harness.error) return { warning: `${entryName}: ${harness.error}` };
+	if (!harness.value) return { warning: `${entryName}: runtime: external requires "harness"` };
+
+	const command = readOptionalTrimmedString(frontmatter.command);
+	if (!command) return { warning: `${entryName}: runtime: external requires a non-empty "command"` };
+
+	const mutates = parseMutates(frontmatter.mutates);
+	if (mutates.error) return { warning: `${entryName}: ${mutates.error}` };
+	if (!mutates.value) return { warning: `${entryName}: runtime: external requires "mutates" (read or write)` };
+
+	const shell = parseBooleanField(frontmatter.shell, "shell");
+	if (shell.error) return { warning: `${entryName}: ${shell.error}` };
+
+	const env = parseEnvMap(frontmatter.env);
+	if (env.error) return { warning: `${entryName}: ${env.error}` };
+
+	const workload = parseWorkload(frontmatter.workload);
+	if (workload.error) return { warning: `${entryName}: ${workload.error}` };
+
+	const thinkingLevel = parseThinkingLevel(frontmatter.thinkingLevel);
+	if (thinkingLevel.error) return { warning: `${entryName}: ${thinkingLevel.error}` };
+
+	const parsedPaths = parseStringList(frontmatter.paths, "paths");
+	if (parsedPaths.error) return { warning: `${entryName}: ${parsedPaths.error}` };
+
+	const contextMode = parseContextMode(frontmatter.contextMode);
+	if (contextMode.error) return { warning: `${entryName}: ${contextMode.error}` };
+
+	const memoryMode = parseMemoryMode(frontmatter.memory, contextMode.value);
+	if (memoryMode.error) return { warning: `${entryName}: ${memoryMode.error}` };
+
+	const maxWallTimeSec = parsePositiveInteger(frontmatter.maxWallTimeSec, DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC);
+
+	const trimmedBody = body.trim();
+	if (!trimmedBody) return { warning: `${entryName}: empty system prompt body` };
+	const promptLengthError = validateSubAgentSystemPrompt(trimmedBody, "Sub-agent system prompt");
+	if (promptLengthError) return { warning: `${entryName}: ${promptLengthError}` };
+
+	// A missing binary never drops the role (that would silently push the model back onto
+	// internal delegation, exactly the failure mode this spec exists to close) — it is listed,
+	// marked unavailable, and only refuses at invocation time, with an installation hint.
+	const executable = firstCommandToken(command);
+	const unavailable =
+		executable && !isExecutableAvailable(executable)
+			? `executable "${executable}" was not found on PATH; install it or fix "command" in ${filePath}`
+			: undefined;
+
+	return {
+		agent: {
+			name,
+			description,
+			systemPrompt: trimmedBody,
+			tools: [],
+			modelRef: undefined,
+			externalModelRef: readOptionalTrimmedString(frontmatter.model),
+			maxTurns: DEFAULT_MAX_TURNS,
+			maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
+			maxWallTimeSec: maxWallTimeSec.value,
+			bashTimeoutSec: DEFAULT_BASH_TIMEOUT_SEC,
+			contextMode: contextMode.value,
+			memory: memoryMode.value,
+			paths: parsedPaths.values,
+			thinkingLevel: thinkingLevel.value,
+			filePath,
+			source: "predefined",
+			runtime: "external",
+			harness: harness.value,
+			command,
+			shell: shell.value,
+			env: env.value,
+			workload: workload.value ?? "heavy", // D11 default-by-runtime.
+			mutates: mutates.value,
+			unavailable,
+		},
+	};
 }
 
 /** Parses every `*.md` sub-agent definition in the user's workspace directory. */
@@ -391,87 +715,29 @@ function loadAgentsFromDir(directory: string, availableModels: Model<Api>[]): Di
 		// Claim the name before later validation so a malformed duplicate cannot shadow a valid one.
 		knownNames.add(name);
 
-		const toolParse = parseToolNames(frontmatter.tools);
-		if (toolParse.error) {
-			warnings.push(`${entry.name}: ${toolParse.error}`);
+		// The working directory is a per-delegation decision (workingDirectory on the call), never
+		// a role default — a `cwd` default would let a model skip the thinking it must do every
+		// time (spec 040, D5), and would silently collide two parallel writers on one checkout.
+		if (frontmatter.cwd !== undefined) {
+			warnings.push(
+				`${entry.name}: "cwd" is not a role field; pass workingDirectory on the delegation call instead`,
+			);
 			continue;
 		}
 
-		const contextMode = parseContextMode(frontmatter.contextMode);
-		if (contextMode.error) {
-			warnings.push(`${entry.name}: ${contextMode.error}`);
+		const runtimeParse = parseRuntime(frontmatter.runtime);
+		if (runtimeParse.error) {
+			warnings.push(`${entry.name}: ${runtimeParse.error}`);
 			continue;
 		}
 
-		const memoryMode = parseMemoryMode(frontmatter.memory, contextMode.value);
-		if (memoryMode.error) {
-			warnings.push(`${entry.name}: ${memoryMode.error}`);
-			continue;
-		}
+		const parsed =
+			runtimeParse.value === "internal"
+				? parseInternalAgent(entry.name, filePath, frontmatter, body, name, description, availableModels)
+				: parseExternalAgent(entry.name, filePath, frontmatter, body, name, description);
 
-		const parsedPaths = parseStringList(frontmatter.paths, "paths");
-		if (parsedPaths.error) {
-			warnings.push(`${entry.name}: ${parsedPaths.error}`);
-			continue;
-		}
-
-		const thinkingLevel = parseThinkingLevel(frontmatter.thinkingLevel);
-		if (thinkingLevel.error) {
-			warnings.push(`${entry.name}: ${thinkingLevel.error}`);
-			continue;
-		}
-
-		const maxTurns = parsePositiveInteger(frontmatter.maxTurns, DEFAULT_MAX_TURNS);
-		const maxToolCalls = parsePositiveInteger(frontmatter.maxToolCalls, DEFAULT_MAX_TOOL_CALLS);
-		const maxWallTimeSec = parsePositiveInteger(frontmatter.maxWallTimeSec, DEFAULT_MAX_WALL_TIME_SEC);
-		const bashTimeoutSec = parsePositiveInteger(frontmatter.bashTimeoutSec, DEFAULT_BASH_TIMEOUT_SEC);
-
-		for (const warning of [maxTurns.warning, maxToolCalls.warning, maxWallTimeSec.warning, bashTimeoutSec.warning]) {
-			if (warning) {
-				warnings.push(`${entry.name}: ${warning}`);
-			}
-		}
-
-		const modelRef = readOptionalTrimmedString(frontmatter.model);
-		let model: Model<Api> | undefined;
-		if (modelRef) {
-			const resolved = resolveModelReference(modelRef, availableModels);
-			if (!resolved.model) {
-				warnings.push(`${entry.name}: ${resolved.error}`);
-				continue;
-			}
-			model = resolved.model;
-		}
-
-		const trimmedBody = body.trim();
-		if (!trimmedBody) {
-			warnings.push(`${entry.name}: empty system prompt body`);
-			continue;
-		}
-		const promptLengthError = validateSubAgentSystemPrompt(trimmedBody, "Sub-agent system prompt");
-		if (promptLengthError) {
-			warnings.push(`${entry.name}: ${promptLengthError}`);
-			continue;
-		}
-
-		agents.push({
-			name,
-			description,
-			systemPrompt: trimmedBody,
-			tools: toolParse.tools,
-			model,
-			modelRef: modelRef || (model ? formatModelReference(model) : undefined),
-			maxTurns: maxTurns.value,
-			maxToolCalls: maxToolCalls.value,
-			maxWallTimeSec: maxWallTimeSec.value,
-			bashTimeoutSec: bashTimeoutSec.value,
-			contextMode: contextMode.value,
-			memory: memoryMode.value,
-			paths: parsedPaths.values,
-			thinkingLevel: thinkingLevel.value,
-			filePath,
-			source: "predefined",
-		});
+		if (parsed.warning) warnings.push(parsed.warning);
+		if (parsed.agent) agents.push(parsed.agent);
 	}
 
 	return { agents, warnings };
@@ -499,6 +765,10 @@ export function resolveSubAgentConfig(
 	if (overrides.agent && !baseConfig) {
 		const available = predefinedAgents.length > 0 ? predefinedAgents.map((agent) => agent.name).join(", ") : "none";
 		return { error: `Unknown sub-agent "${overrides.agent}". Available sub-agents: ${available}.` };
+	}
+	// Listed, never dropped (spec 040, D5) — but refused here with the reason, not a fallback.
+	if (baseConfig?.unavailable) {
+		return { error: `Sub-agent "${baseConfig.name}" is currently unavailable: ${baseConfig.unavailable}` };
 	}
 
 	if (!baseConfig && (!overrides.systemPrompt || !overrides.systemPrompt.trim())) {
@@ -601,6 +871,15 @@ export function resolveSubAgentConfig(
 			thinkingLevel,
 			filePath: baseConfig?.filePath,
 			source: baseConfig ? "predefined" : "inline",
+			runtime: baseConfig?.runtime ?? "internal",
+			harness: baseConfig?.harness,
+			command: baseConfig?.command,
+			shell: baseConfig?.shell,
+			env: baseConfig?.env,
+			workload: baseConfig?.workload,
+			mutates: baseConfig?.mutates ?? inferMutatesFromTools(tools.tools),
+			externalModelRef: baseConfig?.externalModelRef,
+			unavailable: baseConfig?.unavailable,
 		},
 	};
 }

@@ -100,6 +100,7 @@ function makeSubAgentConfig(overrides: Partial<SubAgentConfig> = {}): SubAgentCo
 		memory: "none",
 		paths: [],
 		source: "predefined",
+		runtime: "internal",
 		...overrides,
 	};
 }
@@ -196,6 +197,39 @@ describe("sub-agent discovery", () => {
 			"不要用于实现修复或按 DoD 做最终验收",
 		);
 		expect(discovery.agents.find((agent) => agent.name === "git-committer")?.description).toContain("默认不 push");
+	});
+
+	it("loads the external production examples (builder, external-reviewer) with the D5 field matrix satisfied", () => {
+		const workspaceDir = createTempWorkspace();
+		const subAgentsDir = getSubAgentsDir(workspaceDir);
+		mkdirSync(subAgentsDir, { recursive: true });
+
+		for (const name of ["builder", "external-reviewer"]) {
+			const example = readFileSync(join(process.cwd(), "examples", "sub-agents", `${name}.md`), "utf-8");
+			writeFileSync(join(subAgentsDir, `${name}.md`), example, "utf-8");
+		}
+
+		const discovery = discoverSubAgents(workspaceDir, [model]);
+		expect(discovery.warnings).toEqual([]);
+		expect(discovery.agents).toHaveLength(2);
+
+		const builder = discovery.agents.find((agent) => agent.name === "builder");
+		expect(builder).toMatchObject({
+			runtime: "external",
+			harness: "claude-code",
+			mutates: "write",
+			workload: "heavy",
+		});
+		expect(builder?.command).toBe("claude --dangerously-skip-permissions");
+		// Neither binary is expected to be installed in every dev/CI sandbox; the role is still
+		// listed (never silently dropped) and, when missing, marked unavailable with an install
+		// hint (D5) — either outcome is acceptable here, but nothing else is.
+		if (builder?.unavailable !== undefined) {
+			expect(builder.unavailable).toContain('executable "claude" was not found on PATH');
+		}
+
+		const reviewer = discovery.agents.find((agent) => agent.name === "external-reviewer");
+		expect(reviewer).toMatchObject({ runtime: "external", harness: "codex-cli", mutates: "read", workload: "heavy" });
 	});
 
 	it("ignores predefined prompts that exceed the length limit", () => {
@@ -971,7 +1005,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		expect(result.details.failureReason).toContain("Tool call budget exceeded");
 	});
 
-	it("does not run a convergence turn when the parent aborts (/stop), even if the budget was also hit", async () => {
+	it("keeps running (including the convergence turn) after the parent /stop signal aborts mid-run — spec 040 D2 decouples a run's lifecycle from the tool call's AbortSignal", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_123");
 		mkdirSync(channelDir, { recursive: true });
@@ -989,12 +1023,63 @@ describe("sub-agent convergence turn (D6)", () => {
 			createWorker: () =>
 				new FakeWorker((_input, worker) => {
 					callCount++;
-					for (let i = 0; i < 3; i++) {
-						worker.emit({ type: "tool_execution_start", toolCallId: `t${i}`, toolName: "read", args: {} });
+					if (callCount === 1) {
+						for (let i = 0; i < 3; i++) {
+							worker.emit({ type: "tool_execution_start", toolCallId: `t${i}`, toolName: "read", args: {} });
+						}
+						// /stop fires mid-run, in the same tick the tool-call budget trips. Under D2
+						// this no longer reaches the delegation — only `subagent_manage op=cancel` can.
+						controller.abort();
+						const message = createAssistantMessage("");
+						worker.state.messages = [message];
+						worker.emit({ type: "message_end", message });
+						return;
 					}
-					// The user hits /stop in the same tick the budget trips; /stop must win.
-					controller.abort();
-					const message = createAssistantMessage("");
+					const message = createAssistantMessage("Confirmed: found the entrypoint despite /stop.");
+					worker.state.messages = [...worker.state.messages, message];
+					worker.emit({ type: "message_end", message });
+				}),
+		});
+
+		const result = await tool.execute(
+			"converge-call-3",
+			{
+				label: "explore",
+				agent: "explorer",
+				task: "Map the whole repo.",
+			},
+			controller.signal,
+		);
+
+		// The budget abort still ran its D6 convergence turn — /stop no longer skips it, because
+		// /stop no longer reaches a dispatched run at all.
+		expect(callCount).toBe(2);
+		expect(result.details.failed).toBe(true);
+		expect(result.details.failureReason).toContain("Tool call budget exceeded");
+		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
+		expect(text).toContain("Confirmed: found the entrypoint despite /stop.");
+	});
+
+	it("rejects immediately without launching when the signal is already aborted before the call starts", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(channelDir, { recursive: true });
+		const controller = new AbortController();
+		controller.abort();
+		let started = false;
+		const tool = createSubAgentTool({
+			executor: fakeExecutor,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			channelDir,
+			getSubAgentDiscovery: makeDiscovery(workspaceDir, [tightBudgetExplorer]),
+			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			createWorker: () =>
+				new FakeWorker((_input, worker) => {
+					started = true;
+					const message = createAssistantMessage("should not run");
 					worker.state.messages = [message];
 					worker.emit({ type: "message_end", message });
 				}),
@@ -1002,16 +1087,12 @@ describe("sub-agent convergence turn (D6)", () => {
 
 		await expect(
 			tool.execute(
-				"converge-call-3",
-				{
-					label: "explore",
-					agent: "explorer",
-					task: "Map the whole repo.",
-				},
+				"converge-call-4",
+				{ label: "explore", agent: "explorer", task: "Map the whole repo." },
 				controller.signal,
 			),
 		).rejects.toThrow("Sub-agent aborted");
-		expect(callCount).toBe(1);
+		expect(started).toBe(false);
 	});
 });
 

@@ -60,6 +60,18 @@ describe("workspaceSubjectHash", () => {
 		expect(after).not.toBe(before);
 	});
 
+	// Spec 040, D9: `git status --porcelain` only reports an untracked file's path and status —
+	// two different untracked files with the same name are indistinguishable to it. Before this
+	// fix, an external verifier that edited an already-untracked file's *content* (or reverted it
+	// after inspection) left the hash unchanged, so the attestation would not detect the change.
+	it("changes when an already-untracked file's content changes, not just its presence", async () => {
+		writeFileSync(join(dir, "scratch.txt"), "original\n");
+		const before = await workspaceSubjectHash(dir);
+		writeFileSync(join(dir, "scratch.txt"), "tampered\n");
+		const after = await workspaceSubjectHash(dir);
+		expect(after).not.toBe(before);
+	});
+
 	it("changes across commits even with an otherwise-clean tree", async () => {
 		const before = await workspaceSubjectHash(dir);
 		writeFileSync(join(dir, "a.txt"), "one\ntwo\n");

@@ -157,6 +157,7 @@ export interface DingTalkHandler {
 	handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void>;
 	handleUsageCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleContextCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
+	handleSubagentsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
 	handleBusyMessage(
 		event: DingTalkEvent,
 		bot: DingTalkBot,
@@ -1398,6 +1399,9 @@ export class DingTalkBot implements MediaSender {
 						return;
 					case "context":
 						await this.handler.handleContextCommand(event, this, builtInCommand.args);
+						return;
+					case "subagents":
+						await this.handler.handleSubagentsCommand(event, this, builtInCommand.args);
 						return;
 				}
 			}

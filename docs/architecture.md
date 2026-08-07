@@ -34,7 +34,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | `src/memory/` | 分层记忆子系统：召回、固化、门控维护流水线 | `lifecycle.ts`、`recall.ts`、`extraction.ts`、`consolidation.ts`、`scheduler.ts`、`maintenance-{jobs,gates,state}.ts`、`sidecar-worker.ts` |
 | `src/tools/` | 交给 agent 的工具集，单一声明式注册表 | `registry.ts`（唯一事实源）、各 `create*Tool` |
 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
-| `src/subagents/` | 子代理发现与 `subagent` 工具 | `discovery.ts`、`tool.ts` |
+| `src/subagents/` | 子代理发现、run 生命周期（内置+外部统一）、workspace 写锁、外部 harness 适配器 | `discovery.ts`、`tool.ts`、`runs.ts`、`workspace-lease.ts`、`external/`（`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`exec.ts`） |
 | `src/tasks/` + `src/shared/task-ledger.ts` | 持久任务的控制块、验证、存储 | `control.ts`、`store.ts`、`verification.ts` |
 | `src/runtime/events.ts` + `src/tools/event-manage.ts` | 定时/传感器事件 | — |
 | `src/tui/` | 终端前端（第二个 `ChannelContext` 实现） | `cli.ts`、`app.ts`、`turn-controller.ts` |
@@ -133,7 +133,7 @@ sequenceDiagram
 
 细节补充：
 
-- **忙时语义**：任务流式进行中，内建命令（`/help /stop /steer /followup /events /tasks /status /usage`）仍可用；普通消息按 `busyMessageDefault`（默认 `steer`）注入当前轮；`/stop` 会中止当前轮、丢弃排队消息、暂停关联任务并取消 durable-dispatch 租约；回执会指名被暂停的任务和 `/tasks resume <id>`，避免用户以为只是打断了一轮。会话命令（`/model` `/new` `/compact`）只在空闲时可用。
+- **忙时语义**：任务流式进行中，内建命令（`/help /stop /steer /followup /events /tasks /status /usage /context /subagents`）仍可用；普通消息按 `busyMessageDefault`（默认 `steer`）注入当前轮；`/stop` 会中止当前轮、丢弃排队消息、暂停关联任务并取消 durable-dispatch 租约——但**不再**连带终止已派发的委派 run（spec 040），停止一个 run 需要显式 `/subagents cancel <runId>`；回执会指名被暂停的任务和 `/tasks resume <id>`，避免用户以为只是打断了一轮。会话命令（`/model` `/new` `/compact`）只在空闲时可用。
 - **未知斜杠命令在分发处拒绝**（`isKnownSlashCommand`），避免 `/modle` 这类笔误消耗一整轮 LLM。
 - **模型 fallback**（`agent/model-fallback.ts`）：主模型失败 → 切到 `settings.json` 配置的备用模型重试并通知用户；主模型进入冷却期（`PRIMARY_COOLDOWN_MS`），下一轮开始时若冷却期已过则静默切回。
 - **超长输入**截断到 `MAX_USER_MESSAGE_CHARS` 并提示；`PIPICLAW_DEBUG=1` 时每轮完整 prompt 落到频道目录 `last_prompt.json`。
@@ -164,9 +164,12 @@ sequenceDiagram
 | `sessionRefreshQueue` | `memory/lifecycle.ts` | SESSION.md 刷新 | 每频道 |
 | `ChannelStore.writeQueue` | `runtime/store.ts` | `log.jsonl` 追加与轮转 | 每频道 |
 | `DurableDispatchService.queue` | `runtime/durable-dispatch.ts` | 外发箱记录的读写 | 每记录 id |
+| `SubAgentRunManager.queue` | `subagents/runs.ts` | 一个 run 的 register/settle/cancel：保证结算、记账、唤醒各只发生一次（三个幂等标记见下） | 每 runId（manager 本身每频道一个单例） |
 | `writeFileAtomically` | `shared/atomic-file.ts` | 配置/状态文件：写临时文件再 rename | 每次写 |
 
-另外两个互斥点：`SessionResourceGate`（`agent/session-resource-gate.ts`）让"资源热重载"与"prompt 进行中"互斥；`DingTalkBot` 内卡片创建和 access token 刷新都做了 singleflight 合并。
+另外两个互斥点：`SessionResourceGate`（`agent/session-resource-gate.ts`）让"资源热重载"与"prompt 进行中"互斥；`DingTalkBot` 内卡片创建和 access token 刷新都做了 singleflight 合并；`subagents/workspace-lease.ts` 是进程级的排他写锁（不是队列，没有等待语义），只有 `mutates: write` 的委派 run 会取它，key 是工作目录的 realpath，父子目录也算冲突——第二个写入者直接被拒绝，不是排队。
+
+**委派 run 的生命周期不受 `ChannelQueue`/轮次状态机约束**：内置子代理超过 120s（或外部委派一开始）就从"这一轮的一部分"变成"跨轮存活的后台工作"，由 `SubAgentRunManager` 统一管理，通过 `DurableDispatchService` 完成时唤醒频道——与后台 job 是同一条唤醒管线，`/stop` 不再连带终止它（需要 `subagent_manage op=cancel` 或 `/subagents cancel`）。
 
 **忙态的单一所有者是 Runner 的轮次状态机**（`agent/types.ts` 的 `TurnPhase`：`idle → dispatching → preparing → streaming → finishing`）。传输层在派发消息的同一 tick 内同步调用 `runner.beginTurn()`、结束后 `endTurn()`；钉钉的忙时路由、TUI 的轮次控制、调度器的 `isChannelActive`、`/status` 全部从 `runner.isBusy()/getTurnStatus()` 派生，不再各持一份 flag。steer 窗口判断也单点化在 runner 的 `assertBusyWindowOpen`。
 
@@ -256,13 +259,15 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 | `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；Brave 搜索 + Readability 正文提取，支持代理） |
 | `session_search` / `memory_manage` / `skill_manage` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
 | `task_manage` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要 |
-| `subagent` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
+| `subagent` / `subagent_manage` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
 
 增强类开关：`tools.rtk`（token 优化改写，默认关）、`tools.bashInterceptor`（把裸 `cat`/递归 grep/`sed -i` 导向专用工具，默认开）。
 
 `write.ts` 是共享 `write-content.ts` 的薄包装（子代理工具也复用后者）——这个拆分是有意的。
 
-**子代理**（`subagents/`）：只定义在 `workspace/sub-agents/*.md`（frontmatter：模型、工具、限额、上下文/记忆模式），也支持调用时内联定义；Pipiclaw 不自动注入默认角色。硬约束：工具白名单仅 `read/grep/bash/edit/write/web_search/web_fetch`（默认 `read+bash`），默认限额 24 turns / 48 tool calls / 300s 墙钟。调用面只暴露 `effort` 三档预设（quick/standard/deep）和 `context` 三档注入，精确数值留给 frontmatter。每次运行完整记录到频道存储并单独记账（kind=`subagent`），避免与主轮用量重复计数。
+**子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 字段区分 `internal`（默认，进程内隔离上下文子代理）与 `external`（一次性调用 claude-code / codex-cli / exec，argv 直连、不经过 shell），也支持调用时内联定义一个 internal 角色；Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置硬约束：工具白名单仅 `read/grep/bash/edit/write/web_search/web_fetch`（默认 `read+bash`），默认限额 24 turns / 48 tool calls / 300s 墙钟；外部角色没有轮数/工具调用概念，只有 `maxWallTimeSec`（默认 1800s）。调用面（`subagent` 工具）内外共用同一 schema。
+
+`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_manage`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器结构性移除 write/edit（`verificationStrength: enforced`），外部验证器做不到，只能靠事后 `workspaceSubjectHash`（现已把未跟踪文件的内容也纳入哈希）比对（`verificationStrength: advisory`）。
 
 ## 9. 安全层（`src/security/`）
 
@@ -279,7 +284,7 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 ## 10. 模型与用量
 
 - **模型解析**：`models.json`（供应商/模型定义）+ `auth.json`（密钥）→ SDK `ModelRegistry`；启动时取 `settings.json` 保存的默认模型，否则第一个可用模型。`/model` 切换会重定义"主模型"并清空 fallback 状态。
-- **用量账本**（`usage/ledger.ts`）：JSONL 落在 `state/usage/`，条目分 `turn`（主轮，只记 assistant 用量）/ `subagent` / `sidecar` 三类，保证 Σ(条目) = 真实开销、无重复计数。`/usage` 命令渲染汇总。
+- **用量账本**（`usage/ledger.ts`）：JSONL 落在 `state/usage/`，条目分 `turn`（主轮，只记 assistant 用量）/ `subagent`（内置外部委派 run，由 `subagents/runs.ts` 统一写入，只在结算时写一次）/ `sidecar` 三类，保证 Σ(条目) = 真实开销、无重复计数。条目带 `usageKnown`/`costKnown` 标记——`codex-cli` 不报成本、`exec` 连 token 都不报，`/usage` 展示"未知"而不是 0。`/usage` 命令渲染汇总。
 - **上下文预算**（`agent/context-budget.ts`）：对"已组装完成的完整 prompt"（含召回/摘要/引导）估算 token，投影超过阈值先做预防性 compact，而不是等 SDK 撞墙。
 
 ## 11. 磁盘布局（`src/paths.ts` 集中定义）

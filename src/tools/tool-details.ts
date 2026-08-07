@@ -38,7 +38,8 @@ export type ToolDetailsKind =
 	| "event_manage"
 	| "task_manage"
 	| "job"
-	| "subagent";
+	| "subagent"
+	| "subagent_manage";
 
 /** The fields every tool result's `details` carries. Tool-specific fields extend this. */
 export interface ToolDetails {

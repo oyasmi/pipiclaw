@@ -16,6 +16,7 @@ const {
 	createEventManageToolMock,
 	createTaskManageToolMock,
 	createSubAgentToolMock,
+	createSubAgentManageToolMock,
 } = vi.hoisted(() => ({
 	createReadToolMock: vi.fn(() => ({ name: "read" })),
 	createBashToolMock: vi.fn(() => ({ name: "bash" })),
@@ -30,6 +31,7 @@ const {
 	createEventManageToolMock: vi.fn(() => ({ name: "event_manage" })),
 	createTaskManageToolMock: vi.fn(() => ({ name: "task_manage" })),
 	createSubAgentToolMock: vi.fn(() => ({ name: "subagent" })),
+	createSubAgentManageToolMock: vi.fn(() => ({ name: "subagent_manage" })),
 }));
 
 const securityConfig = {
@@ -105,6 +107,7 @@ vi.mock("../src/tools/skill-manage.js", () => ({ createSkillManageTool: createSk
 vi.mock("../src/tools/event-manage.js", () => ({ createEventManageTool: createEventManageToolMock }));
 vi.mock("../src/tools/task-manage.js", () => ({ createTaskManageTool: createTaskManageToolMock }));
 vi.mock("../src/subagents/tool.js", () => ({ createSubAgentTool: createSubAgentToolMock }));
+vi.mock("../src/tools/subagent-manage.js", () => ({ createSubAgentManageTool: createSubAgentManageToolMock }));
 vi.mock("../src/security/config.js", () => ({ loadSecurityConfig: vi.fn(() => securityConfig) }));
 vi.mock("../src/tools/config.js", () => ({ loadToolsConfig: vi.fn(() => toolsConfig) }));
 
@@ -127,6 +130,7 @@ const ALL_TOOL_NAMES = [
 	"task_manage",
 	"job",
 	"subagent",
+	"subagent_manage",
 ];
 
 const baseToolOptions = {
@@ -231,6 +235,12 @@ describe("tools index", () => {
 		};
 
 		const tools = createPipiclawTools(options);
+		// Spec 040, D8.1: the main agent's securityConfig gets workspace/sub-agents/ appended to
+		// writeDeny before it reaches any leaf tool.
+		const expectedSecurityConfig = {
+			...securityConfig,
+			pathGuard: { ...securityConfig.pathGuard, writeDeny: ["/repo/sub-agents"] },
+		};
 
 		expect(tools.map((tool) => tool.name)).toEqual([
 			"read",
@@ -247,9 +257,10 @@ describe("tools index", () => {
 			"task_manage",
 			"job",
 			"subagent",
+			"subagent_manage",
 		]);
 		expect(createReadToolMock).toHaveBeenCalledWith(executor, {
-			securityConfig,
+			securityConfig: expectedSecurityConfig,
 			securityContext: {
 				workspaceDir: "/repo",
 				cwd: process.cwd(),
@@ -257,7 +268,7 @@ describe("tools index", () => {
 			channelId: "dm_42",
 		});
 		expect(createBashToolMock).toHaveBeenCalledWith(executor, {
-			securityConfig,
+			securityConfig: expectedSecurityConfig,
 			securityContext: {
 				workspaceDir: "/repo",
 				cwd: process.cwd(),
@@ -269,13 +280,13 @@ describe("tools index", () => {
 		});
 		expect(createWebSearchToolMock).toHaveBeenCalledWith({
 			webConfig: toolsConfig.tools.web,
-			securityConfig,
+			securityConfig: expectedSecurityConfig,
 			workspaceDir: "/repo",
 			channelId: "dm_42",
 		});
 		expect(createWebFetchToolMock).toHaveBeenCalledWith({
 			webConfig: toolsConfig.tools.web,
-			securityConfig,
+			securityConfig: expectedSecurityConfig,
 			workspaceDir: "/repo",
 			channelId: "dm_42",
 			channelDir: "/repo/dm_42",
@@ -290,7 +301,7 @@ describe("tools index", () => {
 			getSubAgentDiscovery: options.getSubAgentDiscovery,
 			getMemoryRecallSettings: options.getMemoryRecallSettings,
 			memoryCandidateStore: options.memoryCandidateStore,
-			securityConfig,
+			securityConfig: expectedSecurityConfig,
 			webConfig: toolsConfig.tools.web,
 			rtkEnabled: false,
 			runtimeContext: {

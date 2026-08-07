@@ -170,6 +170,7 @@ describe("task_manage v2", () => {
 			checkedAt: "2026-08-04T12:00:00+08:00",
 			evidence: "The checked result exists and the test command passed.",
 			workspaceChanged: false,
+			verificationStrength: "enforced",
 		});
 		const verified = await manageTask(withVerifier, {
 			action: "verify",
@@ -222,6 +223,7 @@ describe("task_manage v2", () => {
 			workspaceChanged: false,
 			subjectHash,
 			subjectDir,
+			verificationStrength: "enforced",
 		});
 		await manageTask(withVerifier, {
 			action: "verify",

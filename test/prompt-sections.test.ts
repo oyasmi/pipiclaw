@@ -59,7 +59,9 @@ function context(overrides: Partial<PromptBuildContext> = {}): PromptBuildContex
 			loadRuntimePlaybookCatalog(),
 			toolList.map((tool) => tool.name),
 		),
-		subAgents: [{ name: "reviewer", description: "Reviews a diff" }],
+		subAgents: [
+			{ name: "reviewer", description: "Reviews a diff", runtime: "internal", workload: "light", mutates: "read" },
+		],
 		...overrides,
 	};
 }
@@ -237,10 +239,76 @@ describe("configured sub-agents section", () => {
 
 	it("appears when at least one sub-agent is defined and the tool is on", () => {
 		const build = buildPipiclawSystemPrompt(
-			context({ subAgents: [{ name: "reviewer", description: "Reviews a diff" }] }),
+			context({
+				subAgents: [
+					{
+						name: "reviewer",
+						description: "Reviews a diff",
+						runtime: "internal",
+						workload: "light",
+						mutates: "read",
+					},
+				],
+			}),
 		);
 		expect(build.text).toContain("## Configured Sub-Agents");
 		expect(build.text).toContain("- reviewer — Reviews a diff");
+	});
+
+	it("groups the catalog by runtime · workload · mutates, external-heavy first, and marks unavailable roles (spec 040, D11)", () => {
+		const build = buildPipiclawSystemPrompt(
+			context({
+				subAgents: [
+					{
+						name: "explorer",
+						description: "Quick lookups",
+						runtime: "internal",
+						workload: "light",
+						mutates: "read",
+					},
+					{
+						name: "builder",
+						description: "Heavy external builder",
+						runtime: "external",
+						harness: "claude-code",
+						workload: "heavy",
+						mutates: "write",
+					},
+					{
+						name: "reviewer",
+						description: "Heavy external reviewer",
+						runtime: "external",
+						harness: "codex-cli",
+						workload: "heavy",
+						mutates: "read",
+					},
+					{
+						name: "flaky",
+						description: "Missing binary",
+						runtime: "external",
+						harness: "exec",
+						workload: "heavy",
+						mutates: "read",
+						unavailable: 'executable "flaky-bin" was not found on PATH',
+					},
+				],
+			}),
+		);
+
+		const text = build.text;
+		// external groups appear before the internal group.
+		const builderGroupIndex = text.indexOf("external · heavy · write · async");
+		const reviewerGroupIndex = text.indexOf("external · heavy · read · async");
+		const explorerGroupIndex = text.indexOf("internal · light · read · sync (auto-async past 120s)");
+		expect(builderGroupIndex).toBeGreaterThan(-1);
+		expect(reviewerGroupIndex).toBeGreaterThan(builderGroupIndex);
+		expect(explorerGroupIndex).toBeGreaterThan(reviewerGroupIndex);
+
+		// reviewer and flaky share the same group (external · heavy · read) and are listed together.
+		expect(text).toContain("- reviewer — Heavy external reviewer");
+		expect(text).toContain('- flaky — Missing binary (unavailable: executable "flaky-bin" was not found on PATH)');
+		// Unavailable roles are listed, never dropped, and the error text never suggests internal fallback.
+		expect(text).not.toContain("use an internal role instead");
 	});
 });
 

@@ -219,7 +219,7 @@ describe("usage accounting", () => {
 		expect(knownState.costKnown).toBe(true);
 	});
 
-	it("records sub-agent usage separately and excludes it from assistantUsage (no double counting)", async () => {
+	it("folds sub-agent usage into the turn tally without double counting, and no longer writes the ledger itself (spec 040 D7)", async () => {
 		const ctx = createContext();
 		const runState = createEmptyRunState();
 		const records: Array<Omit<UsageLedgerEntry, "ts">> = [];
@@ -272,10 +272,9 @@ describe("usage accounting", () => {
 			context,
 		);
 
-		// Ledger sees the sub-agent entry; assistantUsage stays assistant-only.
-		const subEntry = records.find((r) => r.kind === "subagent");
-		expect(subEntry?.cost.total).toBeCloseTo(0.28);
-		expect(subEntry?.label).toBe("researcher");
+		// Spec 040, D7: `runs.ts` is now the sole ledger/archive authority for delegation runs, so
+		// this handler must not write a ledger entry itself — only fold usage into the turn tally.
+		expect(records.find((r) => r.kind === "subagent")).toBeUndefined();
 		expect(runState.assistantUsage.cost.total).toBeCloseTo(0.155);
 		// totalUsage (console) is assistant + sub-agent.
 		expect(runState.totalUsage.cost.total).toBeCloseTo(0.435);

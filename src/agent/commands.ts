@@ -7,7 +7,8 @@ export type BuiltInCommandName =
 	| "tasks"
 	| "status"
 	| "usage"
-	| "context";
+	| "context"
+	| "subagents";
 
 /** The four transport commands handled by `ChannelRunner.handleBuiltinCommand`. */
 export type RunnerBuiltInCommandName = "help" | "stop" | "steer" | "followup" | "context";
@@ -119,6 +120,15 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		examples: ["/context", "/context detail"],
 		// Read-only accounting of state the runner already holds: no LLM call, no session
 		// access, so it answers mid-turn like /status and /usage do.
+		availableWhileBusy: true,
+	},
+	{
+		name: "subagents",
+		argumentHint: "<list|show <runId>|cancel <runId>>",
+		description: "查看与控制委派 run（内置与外部）；cancel 不经过模型，直接终止",
+		examples: ["/subagents list", "/subagents show a1b2c3d4", "/subagents cancel a1b2c3d4"],
+		// A human control path independent of the model (spec 040, D6): /stop no longer kills a
+		// dispatched delegation, so cancel must work even when the model/turn is unavailable.
 		availableWhileBusy: true,
 	},
 ];

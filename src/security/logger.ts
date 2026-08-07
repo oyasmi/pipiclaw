@@ -29,7 +29,9 @@ export async function logSecurityEvent(
 	config: SecurityConfig,
 	event: SecurityLogEvent,
 ): Promise<void> {
-	if (!config.audit.logBlocked) return;
+	// external-agent records a permitted action, not a blocked one (spec 040, D8.1): it must not
+	// disappear just because the operator only wants blocked-action logging.
+	if (!config.audit.logBlocked && event.type !== "external-agent") return;
 
 	let timer: NodeJS.Timeout | undefined;
 	try {

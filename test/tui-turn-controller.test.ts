@@ -17,6 +17,9 @@ class FakeRunner implements AgentRunner {
 	renderContextReport(): string {
 		return "CONTEXT";
 	}
+	getSubAgentDiscoverySnapshot() {
+		return { directory: "", agents: [], warnings: [] };
+	}
 	beginTurn(taskText: string): void {
 		this.turnStatus = { phase: "dispatching", stopRequested: false, taskText };
 	}
@@ -118,6 +121,7 @@ function setup({ start = false, now = () => 0 }: { start?: boolean; now?: () => 
 		renderUsage: async () => "USAGE",
 		runEvents: async () => "EVENTS",
 		runTasks: async () => "TASKS",
+		runSubagents: async () => "SUBAGENTS",
 		statusInfo: { version: "1", startedAt: 0 },
 		now,
 	});

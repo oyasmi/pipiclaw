@@ -2,6 +2,7 @@ import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import type { UsageTotals } from "../shared/types.js";
+import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import type { RunnerBuiltInCommand } from "./commands.js";
 
 export interface RunnerStatusSnapshot {
@@ -55,6 +56,9 @@ export interface AgentRunner {
 	getStatusSnapshot(): RunnerStatusSnapshot;
 	/** `/context`: prompt/tool-schema accounting for the live session (spec 025 §9). */
 	renderContextReport(args?: string): string;
+	/** `/subagents list`'s role-directory health tail (spec 040, D6): whatever this runner has
+	 *  already discovered, without forcing a rescan. */
+	getSubAgentDiscoverySnapshot(): SubAgentDiscoveryResult;
 	abort(): Promise<void>;
 	/**
 	 * Synchronously reserve the turn for a message. Transports MUST call this in
