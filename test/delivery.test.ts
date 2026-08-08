@@ -83,15 +83,15 @@ describe("delivery", () => {
 		bot.responseMode = "rolling_progress_then_plain_final";
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
 
-		await ctx.respond("▸ read docs");
+		await ctx.respond("▶ read docs");
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 		await vi.advanceTimersByTimeAsync(1200);
-		await ctx.respond("💭 checking design");
+		await ctx.respond("● checking design");
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 		await vi.advanceTimersByTimeAsync(1200);
-		await ctx.respond("▸ update files");
+		await ctx.respond("▶ update files");
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 
@@ -106,7 +106,7 @@ describe("delivery", () => {
 		expect(finalCall?.method).toBe("replaceCard");
 		expect(finalCall?.args[0]).toBe("dm_123");
 		expect(finalCall?.args[1]).toMatch(/^完成 · 2 步 · \d+s$/);
-		expect(finalCall?.args[1]).not.toContain("▸");
+		expect(finalCall?.args[1]).not.toContain("▶");
 		expect(finalCall?.args[2]).toBe(true);
 	});
 
@@ -115,7 +115,7 @@ describe("delivery", () => {
 		bot.responseMode = "rolling_progress_then_plain_final";
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
 
-		await ctx.respond("▸ collect context");
+		await ctx.respond("▶ collect context");
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 		await ctx.replaceMessage("final fallback text");
@@ -161,7 +161,7 @@ describe("delivery", () => {
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never, "none");
 
 		expect(ctx.progressStyle).toBe("none");
-		await ctx.respond("▸ bash");
+		await ctx.respond("▶ bash");
 		await vi.runAllTimersAsync();
 		await ctx.flush();
 		expect(bot.calls).toEqual([]);
@@ -180,7 +180,7 @@ describe("delivery", () => {
 		const bot = new FakeDingTalkBot();
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never, "none");
 
-		await ctx.respond("▸ bash");
+		await ctx.respond("▶ bash");
 		await ctx.deleteMessage();
 		await vi.runAllTimersAsync();
 		await ctx.flush();

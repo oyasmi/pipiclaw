@@ -140,7 +140,7 @@ class ChannelDeliveryController {
 		if (this.progressStartedAt === 0) {
 			this.progressStartedAt = Date.now();
 		}
-		if (text.startsWith("▸ ")) {
+		if (text.startsWith("▶ ")) {
 			this.toolCallCount++;
 		}
 		if (this.progressSegments.length > 0) {
