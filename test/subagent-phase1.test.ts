@@ -115,14 +115,14 @@ describe("sub-agent discovery", () => {
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
 
-		for (const name of ["explorer", "researcher", "reviewer", "verifier", "git-committer"]) {
+		for (const name of ["explorer", "log-sifter", "git-committer"]) {
 			const example = readFileSync(join(process.cwd(), "examples", "sub-agents", `${name}.md`), "utf-8");
 			writeFileSync(join(subAgentsDir, `${name}.md`), example, "utf-8");
 		}
 
 		const discovery = discoverSubAgents(workspaceDir, [model]);
 		expect(discovery.warnings).toEqual([]);
-		expect(discovery.agents).toHaveLength(5);
+		expect(discovery.agents).toHaveLength(3);
 		expect(
 			Object.fromEntries(
 				discovery.agents.map((agent) => [
@@ -148,32 +148,14 @@ describe("sub-agent discovery", () => {
 				maxWallTimeSec: 180,
 				bashTimeoutSec: 60,
 			},
-			researcher: {
-				thinkingLevel: "medium",
+			"log-sifter": {
+				thinkingLevel: "low",
 				contextMode: "isolated",
 				memory: "none",
-				maxTurns: 16,
-				maxToolCalls: 32,
+				maxTurns: 14,
+				maxToolCalls: 36,
 				maxWallTimeSec: 240,
-				bashTimeoutSec: 120,
-			},
-			reviewer: {
-				thinkingLevel: "medium",
-				contextMode: "contextual",
-				memory: "relevant",
-				maxTurns: 20,
-				maxToolCalls: 40,
-				maxWallTimeSec: 300,
-				bashTimeoutSec: 120,
-			},
-			verifier: {
-				thinkingLevel: "medium",
-				contextMode: "isolated",
-				memory: "none",
-				maxTurns: 24,
-				maxToolCalls: 48,
-				maxWallTimeSec: 300,
-				bashTimeoutSec: 120,
+				bashTimeoutSec: 90,
 			},
 			"git-committer": {
 				thinkingLevel: "medium",
@@ -190,46 +172,58 @@ describe("sub-agent discovery", () => {
 			expect(agent.description).toContain("使用");
 			expect(agent.systemPrompt).toMatch(/[\u3400-\u9fff]/u);
 		}
-		expect(discovery.agents.find((agent) => agent.name === "verifier")?.description).toContain(
-			"purpose=verify 与 taskId",
-		);
-		expect(discovery.agents.find((agent) => agent.name === "reviewer")?.description).toContain(
-			"不要用于实现修复或按 DoD 做最终验收",
+		expect(discovery.agents.find((agent) => agent.name === "explorer")?.description).toContain("不需要修改文件");
+		expect(discovery.agents.find((agent) => agent.name === "log-sifter")?.description).toContain(
+			"避免几十万行内容进入主会话上下文",
 		);
 		expect(discovery.agents.find((agent) => agent.name === "git-committer")?.description).toContain("默认不 push");
 	});
 
-	it("loads the external production examples (builder, external-reviewer) with the D5 field matrix satisfied", () => {
+	it("loads the external production examples with the D5 field matrix satisfied", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
 
-		for (const name of ["builder", "external-reviewer"]) {
+		const claudeRoles = ["planner", "builder", "builder-hard"];
+		const codexReadRoles = ["reviewer", "scout"];
+		const codexWriteRoles = ["verifier", "worker", "documenter"];
+		for (const name of [...claudeRoles, ...codexReadRoles, ...codexWriteRoles]) {
 			const example = readFileSync(join(process.cwd(), "examples", "sub-agents", `${name}.md`), "utf-8");
 			writeFileSync(join(subAgentsDir, `${name}.md`), example, "utf-8");
 		}
 
 		const discovery = discoverSubAgents(workspaceDir, [model]);
 		expect(discovery.warnings).toEqual([]);
-		expect(discovery.agents).toHaveLength(2);
+		expect(discovery.agents).toHaveLength(8);
 
-		const builder = discovery.agents.find((agent) => agent.name === "builder");
-		expect(builder).toMatchObject({
-			runtime: "external",
-			harness: "claude-code",
-			mutates: "write",
-			workload: "heavy",
-		});
-		expect(builder?.command).toBe("claude --dangerously-skip-permissions");
-		// Neither binary is expected to be installed in every dev/CI sandbox; the role is still
-		// listed (never silently dropped) and, when missing, marked unavailable with an install
-		// hint (D5) — either outcome is acceptable here, but nothing else is.
-		if (builder?.unavailable !== undefined) {
-			expect(builder.unavailable).toContain('executable "claude" was not found on PATH');
+		for (const agent of discovery.agents) {
+			expect(agent).toMatchObject({ runtime: "external", workload: "heavy" });
+			// Neither binary is expected to be installed in every dev/CI sandbox; the role is still
+			// listed (never silently dropped) and, when missing, marked unavailable with an install
+			// hint (D5) — either outcome is acceptable here, but nothing else is.
+			if (agent.unavailable !== undefined) {
+				expect(agent.unavailable).toMatch(/executable "(claude|codex)" was not found on PATH/);
+			}
 		}
 
-		const reviewer = discovery.agents.find((agent) => agent.name === "external-reviewer");
-		expect(reviewer).toMatchObject({ runtime: "external", harness: "codex-cli", mutates: "read", workload: "heavy" });
+		for (const name of claudeRoles) {
+			const agent = discovery.agents.find((candidate) => candidate.name === name);
+			expect(agent).toMatchObject({ harness: "claude-code", mutates: "write" });
+			expect(agent?.command).toBe("claude --dangerously-skip-permissions");
+		}
+		// Read-only roles declare `mutates: read`, and that declaration is backed by the target
+		// CLI's own sandbox flag rather than by pipiclaw (D8) — which is also what lets them stay
+		// out of the workspace write lease and serve `purpose=verify`.
+		for (const name of codexReadRoles) {
+			const agent = discovery.agents.find((candidate) => candidate.name === name);
+			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "read" });
+			expect(agent?.command).toContain("--sandbox read-only");
+		}
+		for (const name of codexWriteRoles) {
+			const agent = discovery.agents.find((candidate) => candidate.name === name);
+			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "write" });
+			expect(agent?.command).toContain("--sandbox workspace-write");
+		}
 	});
 
 	it("ignores predefined prompts that exceed the length limit", () => {

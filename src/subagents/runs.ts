@@ -119,7 +119,7 @@ export interface SettleInput {
 	turns: number;
 	toolCalls: number;
 	durationMs: number;
-	/** Full reply text, already saved to `output.md` by the caller. Only its tail goes in the wake. */
+	/** Full reply text. Settlement saves it to `output.md`; only its tail goes in the wake. */
 	outputText: string;
 	verificationVerdict?: "pass" | "fail";
 	verificationStrength?: "enforced" | "advisory";
@@ -196,6 +196,24 @@ export class SubAgentRunManager {
 			await writeFileAtomically(path, `${JSON.stringify(record)}\n`);
 		} catch (error) {
 			log.logWarning(`Failed to persist sub-agent run ${record.runId}`, errorMessage(error));
+		}
+	}
+
+	/**
+	 * The full reply text always lands in `<artifactDir>/output.md` (spec 032 D4, carried into 040
+	 * D1's settlement step). It is written here, in the one place every runtime settles, rather than
+	 * in each caller: the completion wake points at this file, and it is what makes an inline-returned
+	 * result self-recoverable after a crash (D2). A failed write must not block settlement — losing
+	 * the artifact is bad, leaving the run stuck in `running` is worse.
+	 */
+	private async writeOutputFile(record: RunRecord, outputText: string): Promise<boolean> {
+		if (!outputText.trim()) return false;
+		try {
+			await writeFileAtomically(join(record.artifactDir, "output.md"), outputText);
+			return true;
+		} catch (error) {
+			log.logWarning(`Failed to write output.md for sub-agent run ${record.runId}`, errorMessage(error));
+			return false;
 		}
 	}
 
@@ -313,6 +331,7 @@ export class SubAgentRunManager {
 			if (input.sessionId) record.sessionId = input.sessionId;
 			record.finishedAt = Date.now();
 			record.settledAt = record.finishedAt;
+			const outputSaved = await this.writeOutputFile(record, input.outputText);
 			releaseWorkspaceLease(record.leaseKey);
 			await this.persist(record);
 			this.cancelHandles.delete(runId);
@@ -368,7 +387,7 @@ export class SubAgentRunManager {
 				await this.persist(record);
 				return;
 			}
-			await this.announce(record, input.outputText);
+			await this.announce(record, input.outputText, outputSaved);
 		});
 	}
 
@@ -378,7 +397,7 @@ export class SubAgentRunManager {
 	 * `dispatchId`, so calling it again after a crash between here and marking `wakeEnqueued` is
 	 * harmless — this is the same fix as job-manager's `announce()` reordering (D7).
 	 */
-	private async announce(record: RunRecord, outputText: string): Promise<void> {
+	private async announce(record: RunRecord, outputText: string, outputSaved: boolean): Promise<void> {
 		if (!this.options.dispatch) return;
 		const tail = outputText.slice(-WAKE_OUTPUT_TAIL_CHARS).trim();
 		const harnessLabel = record.harness ? `${record.runtime}/${record.harness}` : record.runtime;
@@ -396,7 +415,12 @@ export class SubAgentRunManager {
 				`[SUBAGENT:${record.runId}] Delegation "${record.label}" -> ${record.agent} (${harnessLabel}) finished: ` +
 				`${record.status} (${formatDuration(record.durationMs ?? 0)}).${belongsTo}${verdictLine}\n` +
 				`Result:\n${tail || "(no output)"}\n` +
-				`Full output: ${join(record.artifactDir, "output.md")}\n` +
+				// A run that produced no text has no output.md; pointing at it would send the model
+				// after a file that does not exist. The artifact dir still holds the run's evidence
+				// (an external run's stderr.log in particular), so that is what it gets instead.
+				(outputSaved
+					? `Full output: ${join(record.artifactDir, "output.md")}\n`
+					: `No text output was produced. Run artifacts: ${record.artifactDir}\n`) +
 				"Continue whatever was waiting on this delegation. If it needs no follow-up, respond with exactly [SILENT].",
 			ts: String(Date.now()),
 			conversationId: "",

@@ -207,4 +207,25 @@ Body.
 		expect(result.agents.find((agent) => agent.name === "writer")?.mutates).toBe("write");
 		expect(result.agents.find((agent) => agent.name === "reader")?.mutates).toBe("read");
 	});
+
+	it("ignores a README in the role directory instead of warning about its missing frontmatter", () => {
+		const workspaceDir = createTempWorkspace();
+		writeRole(workspaceDir, "README.md", "# Roles in this directory\n\nCopy what you need.\n");
+		writeRole(
+			workspaceDir,
+			"reader.md",
+			`---
+name: reader
+description: internal role
+tools: read
+---
+
+Body.
+`,
+		);
+
+		const result = discover(workspaceDir);
+		expect(result.agents.map((agent) => agent.name)).toEqual(["reader"]);
+		expect(result.warnings).toEqual([]);
+	});
 });

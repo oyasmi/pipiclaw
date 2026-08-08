@@ -1,6 +1,6 @@
 import type { ChildProcess, spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -104,6 +104,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		child.emit("close", 0);
 
 		await waitFor(() => manager.get("run-ext-1")?.status === "completed");
+		await waitFor(() => dispatched.length > 0);
 		const record = manager.get("run-ext-1");
 		expect(record?.sessionId).toBe("thread-xyz");
 		expect(record?.usageKnown).toBe(true);
@@ -112,6 +113,12 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(dispatched).toHaveLength(1);
 		expect(dispatched[0]?.text).toContain("[SUBAGENT:run-ext-1]");
 		expect(dispatched[0]?.text).toContain("All done.");
+
+		// Spec 040 D1: settlement writes the full text to output.md for every runtime, which is
+		// exactly the file the completion wake points the parent agent at.
+		const outputPath = join(artifactDir, "output.md");
+		expect(readFileSync(outputPath, "utf-8")).toBe("All done.");
+		expect(dispatched[0]?.text).toContain(`Full output: ${outputPath}`);
 	});
 
 	it("settles failed when the process exits 0 but no protocol terminal event was observed", async () => {
@@ -154,6 +161,11 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(manager.get("run-ext-2")?.status).toBe("failed");
 		expect(manager.get("run-ext-2")?.failureReason).toContain("no protocol terminal event");
 		expect(dispatched).toHaveLength(1);
+		// Nothing was produced, so there is no output.md to point at — the wake sends the parent to
+		// the artifact directory (where stderr.log lives) instead of a file that does not exist.
+		expect(existsSync(join(artifactDir, "output.md"))).toBe(false);
+		expect(dispatched[0]?.text).not.toContain("output.md");
+		expect(dispatched[0]?.text).toContain(`Run artifacts: ${artifactDir}`);
 	});
 
 	it("settles failed immediately when spawn itself fails (e.g. missing binary)", async () => {
@@ -283,6 +295,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		child.emit("close", 0);
 
 		await waitFor(() => manager.get("run-ext-5")?.status === "completed");
+		await waitFor(() => dispatched.length > 0);
 		expect(manager.get("run-ext-5")?.costKnown).toBe(true);
 		expect(dispatched).toHaveLength(1);
 		expect(dispatched[0]?.text).toContain("Looks good.");

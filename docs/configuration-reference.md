@@ -1154,7 +1154,7 @@ web 工具的代理顺序是：
 
 ## 子代理目录 `workspace/sub-agents/`（`workspace/sub-agents/`）
 
-放工作区配置子代理（sub-agent）。适合把 reviewer、researcher、planner 之类角色固化下来。运行时只加载这个目录中实际存在的配置；Pipiclaw 不内置默认 sub-agent。仓库中的 [`examples/sub-agents/`](../examples/sub-agents/) 提供可复制的 explorer、researcher、reviewer、verifier、git-committer 模板。
+放工作区配置子代理（sub-agent）。适合把 reviewer、planner、builder 之类角色固化下来。运行时只加载这个目录中实际存在的配置；Pipiclaw 不内置默认 sub-agent。仓库中的 [`examples/sub-agents/`](../examples/sub-agents/) 提供可复制的成品模板：内置的 explorer、log-sifter、git-committer，以及外部（`runtime: external`）的 planner、builder、builder-hard、reviewer、verifier、scout、worker、documenter。
 
 详细字段、示例和推荐写法见 [sub-agents.md](./sub-agents.md)。
 

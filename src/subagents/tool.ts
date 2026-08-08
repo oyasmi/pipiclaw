@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
@@ -358,17 +358,18 @@ interface FinalizedSubAgentOutput {
  * whether it fits the reply budget. What comes back to the parent is capped at
  * MAX_SUBAGENT_RESULT_UNITS; a reply over budget is truncated with a pointer to the file
  * a chatty sub-agent can no longer blow out the parent's context.
+ *
+ * The file itself is written by `SubAgentRunManager.settle()` — the one settlement point both
+ * runtimes share (spec 040 D1) — which always runs before this call's reply reaches the parent.
+ * This function only needs the path, to point at it.
  */
-async function finalizeSubAgentOutput(
+function finalizeSubAgentOutput(
 	runContext: SubAgentRunContext,
 	finalText: string,
 	returns: "text" | "artifact",
-): Promise<FinalizedSubAgentOutput> {
+): FinalizedSubAgentOutput {
 	const trimmed = finalText.trim();
 	const outputPath = join(runContext.artifactDir, "output.md");
-	if (trimmed) {
-		await writeFile(outputPath, finalText, "utf-8");
-	}
 
 	let artifactPath: string | undefined;
 	if (returns === "artifact" && trimmed) {
@@ -1063,7 +1064,7 @@ export function createSubAgentTool(
 						throw new Error(buildFailureText(config, effectiveFailureReason, finalText));
 					}
 					emitUpdate(formatStatus(config.name, "stopped"));
-					const finalized = await finalizeSubAgentOutput(runContext, finalText, returns);
+					const finalized = finalizeSubAgentOutput(runContext, finalText, returns);
 					return {
 						toolResult: {
 							content: [
@@ -1091,7 +1092,7 @@ export function createSubAgentTool(
 					};
 				}
 
-				const finalized = await finalizeSubAgentOutput(runContext, finalText, returns);
+				const finalized = finalizeSubAgentOutput(runContext, finalText, returns);
 				return {
 					toolResult: {
 						content: [

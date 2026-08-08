@@ -22,10 +22,14 @@
 仓库提供了可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)，既有内置角色也有外部角色。例如：
 
 ```bash
-cp examples/sub-agents/{explorer,researcher,reviewer,verifier,git-committer}.md ~/.pipiclaw/workspace/sub-agents/
+# 内置角色（无需额外安装）：
+cp examples/sub-agents/{explorer,log-sifter,git-committer}.md ~/.pipiclaw/workspace/sub-agents/
 # 外部角色（需要先在宿主机安装对应 CLI 并完成登录）：
-cp examples/sub-agents/{builder,external-reviewer}.md ~/.pipiclaw/workspace/sub-agents/
+cp examples/sub-agents/{planner,builder,builder-hard}.md ~/.pipiclaw/workspace/sub-agents/                # 需要 claude
+cp examples/sub-agents/{reviewer,verifier,scout,worker,documenter}.md ~/.pipiclaw/workspace/sub-agents/   # 需要 codex
 ```
+
+八个外部角色构成一个可直接使用的开发闭环（planner → reviewer → builder → reviewer → verifier → documenter，闭环外由 worker 和 scout 承接），细节见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。
 
 不复制模板也完全可以使用 inline `systemPrompt` 委派——但 inline 委派永远是 `runtime: internal`，外部角色必须以配置文件的形式存在（需要 `harness`/`command`，无法通过调用参数临时拼出）。`purpose: verify` 的验收约束由 runtime 执行，不要求一定配置名为 `verifier` 的文件。
 
@@ -342,19 +346,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 ## 推荐写法（Recommended Presets）
 
-**Reviewer**（内置）—— 审查改动、找回归风险、补测试建议：
-
-- `tools: read,bash`
-- `contextMode: contextual` + `memory: relevant`
-- `thinkingLevel: medium`
-- `paths: src/, test/`
-- 它在实现过程中提供 findings，不替代使用 `purpose=verify + taskId` 的最终验收
-
-**Researcher**（内置）—— 检索当前或仓库外的信息、核对来源并综合结论：
-
-- `tools: web_search,web_fetch,read`
-- 边界清晰的研究任务使用 `contextMode: isolated` + `memory: none`
-- `thinkingLevel: medium`
+[`examples/sub-agents/`](../examples/sub-agents/) 里的成品按下面的思路配置。内置角色的价值是**低延迟和上下文隔离**，外部角色的价值是**算力和跨会话续接**——按这条线分工，而不是按任务听起来重不重。
 
 **Explorer**（内置）—— 定位仓库实现、追踪调用链、梳理模块关系：
 
@@ -362,12 +354,12 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - `contextMode: isolated` + `memory: none`
 - `thinkingLevel: low`
 
-**Verifier**（内置）—— 对受治理任务执行独立终验：
+**Log sifter**（内置）—— 从大体量日志或命令输出中筛出证据，避免原文进入主会话上下文：
 
 - `tools: read,bash`
 - `contextMode: isolated` + `memory: none`
-- `thinkingLevel: medium`
-- 调用时必须传 `purpose: verify` 和 `taskId`
+- `thinkingLevel: low`
+- 输出契约明确要求「宁可少带并说明未覆盖范围」，否则它会把日志整段搬回来，失去存在意义
 
 **Git committer**（内置）—— 将用户明确指定的现有改动整理成 commit：
 
@@ -376,21 +368,24 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - `thinkingLevel: medium`
 - 默认只创建本地 commit；只有用户明确要求时才 push
 
-**Worker**（内置）—— 执行边界清晰的局部改动：
-
-- `tools: read,edit,write,bash`
-- `contextMode: contextual` + `memory: relevant`
-- `paths` 明确写出负责的目录
-
-**Builder**（外部，claude-code）—— 跨多文件的重型实现，需要自测：
+**Planner / Builder / Builder-hard**（外部，claude-code）—— 方案收敛与跨多文件的重型实现：
 
 - `harness: claude-code`，`mutates: write`，`workload: heavy`
-- `maxWallTimeSec` 给足（例如 3600）——它是重活，不指望在同步宽限窗口内返回
+- `model` 原样透传（`opus` / `sonnet`），用 `thinkingLevel` 区分强度档位（high / medium / xhigh）
+- `maxWallTimeSec` 给足（3600～5400）——它们是重活，不指望在同步宽限窗口内返回
+- 并行派发必须为每个 run 指定不同的 `workingDirectory`，否则第二个会被工作区写锁拒绝
 
-**External reviewer**（外部，codex-cli）—— 用另一家模型独立复核实现：
+**Reviewer / Scout**（外部，codex-cli，只读）—— 独立挑错与单点事实查询：
 
-- `harness: codex-cli`，`mutates: read`，`workload: heavy`
-- 可用于 `purpose=verify`，但 attestation 是 `advisory`，仍需主代理按风险抽查
+- `command` 用 `codex exec --sandbox read-only`，让 `mutates: read` 是被 CLI 强制的声明而不只是一句话
+- 只读角色不参与工作区写锁，可以与 builder 并行
+- `reviewer` 可用于 `purpose=verify`，但 attestation 是 `advisory`，仍需主代理按风险抽查
+
+**Verifier / Worker / Documenter**（外部，codex-cli，可写）—— 运行取证、通用分析、文档与交付：
+
+- `command` 用 `codex exec --sandbox workspace-write`，`mutates: write`
+- `verifier` 会写构建产物、夹具和报告，因此**不能**用于 `purpose=verify`——如实声明为 `write` 的角色会被 runtime 拒绝承担验收
+- `documenter` 可按任务创建 commit；push 需要单独授权
 
 ## 常见错误（Common Mistakes）
 

@@ -684,6 +684,9 @@ function loadAgentsFromDir(directory: string, availableModels: Model<Api>[]): Di
 	try {
 		entries = readdirSync(directory, { withFileTypes: true })
 			.filter((entry) => entry.name.endsWith(".md") && (entry.isFile() || entry.isSymbolicLink()))
+			// A README is documentation about the directory, not a role in it — a warning about its
+			// missing frontmatter is noise every time someone copies `examples/sub-agents/` wholesale.
+			.filter((entry) => entry.name.toLowerCase() !== "readme.md")
 			.sort((a, b) => a.name.localeCompare(b.name));
 	} catch (error) {
 		return { agents: [], warnings: [`Failed to read sub-agents directory (${errorMessage(error)})`] };
