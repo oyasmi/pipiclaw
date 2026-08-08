@@ -7,6 +7,7 @@ tools:
 contextMode: isolated
 memory: none
 thinkingLevel: medium
+mutates: write
 maxTurns: 10
 maxToolCalls: 20
 maxWallTimeSec: 120
