@@ -44,6 +44,37 @@ export const MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL = 5;
  *  not the full cross-subsystem (task/job/sidecar) admission scheme the design doc leaves open. */
 export const MAX_RUNNING_SUBAGENT_RUNS_PER_HOST = 20;
 
+/**
+ * Human-typeable run ids (spec 041). Runs used to be identified by the dispatching tool call's
+ * own id, which on some providers is a `call_<24 chars>|fc_<50 chars>` composite — useless in a
+ * chat UI where a human has to read it back to cancel or inspect a run. `mintRunId()` on
+ * `SubAgentRunManager` produces `run_` + 6 chars instead; the alphabet excludes 0/1/i/l/o/u
+ * because those are the characters people misread on a phone screen or misspeak out loud.
+ */
+export const RUN_ID_PREFIX = "run_";
+const RUN_ID_ALPHABET = "23456789abcdefghjkmnpqrstvwxyz";
+const RUN_ID_SUFFIX_LEN = 6;
+
+function randomRunIdSuffix(): string {
+	let suffix = "";
+	for (let i = 0; i < RUN_ID_SUFFIX_LEN; i++) {
+		suffix += RUN_ID_ALPHABET[Math.floor(Math.random() * RUN_ID_ALPHABET.length)];
+	}
+	return suffix;
+}
+
+/** Strips a leading `run_` (case-insensitive) so `show a1b2c3` and `show run_a1b2c3` resolve
+ *  the same way — nobody should have to remember whether the prefix is required. */
+function normalizeRunIdQuery(query: string): string {
+	const lower = query.trim().toLowerCase();
+	return lower.startsWith(RUN_ID_PREFIX) ? lower.slice(RUN_ID_PREFIX.length) : lower;
+}
+
+export type RunResolution =
+	| { kind: "found"; record: RunRecord }
+	| { kind: "ambiguous"; candidates: RunRecord[] }
+	| { kind: "not_found" };
+
 export interface RunUsage {
 	usage: UsageTotals;
 	/** False only for harnesses that cannot report tokens at all (`exec`). */
@@ -260,6 +291,33 @@ export class SubAgentRunManager {
 		return Array.from(this.runs.values()).filter((record) => record.status === "running").length;
 	}
 
+	/** Mint a short, human-typeable run id (spec 041). Retried against currently known records;
+	 *  the id space (30^6 ≈ 7.3e8) makes a real collision astronomically unlikely, so this is a
+	 *  defensive check, not a real bottleneck. */
+	mintRunId(): string {
+		for (let attempt = 0; attempt < 20; attempt++) {
+			const id = `${RUN_ID_PREFIX}${randomRunIdSuffix()}`;
+			if (!this.runs.has(id)) return id;
+		}
+		throw new Error("Could not mint a unique delegation run id.");
+	}
+
+	/** Resolve a user- or model-supplied id, exact or by unambiguous prefix (spec 041): `show
+	 *  a1b2c3` and `show run_a1b2c3` both work without retyping the full id. */
+	resolveRef(query: string): RunResolution {
+		const trimmed = query.trim();
+		const exact = this.runs.get(trimmed);
+		if (exact) return { kind: "found", record: exact };
+		const needle = normalizeRunIdQuery(trimmed);
+		if (!needle) return { kind: "not_found" };
+		const candidates = Array.from(this.runs.values()).filter((record) =>
+			normalizeRunIdQuery(record.runId).startsWith(needle),
+		);
+		if (candidates.length === 1) return { kind: "found", record: candidates[0] };
+		if (candidates.length > 1) return { kind: "ambiguous", candidates };
+		return { kind: "not_found" };
+	}
+
 	/** Register the run's lifecycle before any work starts, and persist it immediately (D1). */
 	async register(input: RegisterRunInput): Promise<RunRecord> {
 		return hostAdmissionQueue.run("host", () =>
@@ -278,6 +336,9 @@ export class SubAgentRunManager {
 						`Too many delegation runs already running host-wide (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_HOST}). ` +
 							"Wait for one to finish before dispatching another.",
 					);
+				}
+				if (this.runs.has(input.runId)) {
+					throw new Error(`Run id "${input.runId}" is already registered on this channel.`);
 				}
 				const record: RunRecord = {
 					...input,

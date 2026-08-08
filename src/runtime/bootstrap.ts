@@ -41,6 +41,7 @@ import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { fileStamp } from "../shared/file-stamp.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
 import {
 	configureSubAgentRuntime,
 	getSubAgentRunManager,
@@ -955,6 +956,14 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 				args,
 				channelId: event.channelId,
 				discovery: channelRunners.get(event.channelId)?.getSubAgentDiscoverySnapshot(),
+				// `roles` needs a role directory even for a channel that has never spoken this boot —
+				// resolved from disk, without spinning up a full ChannelRunner (spec 041).
+				getDetachedDiscovery: () =>
+					loadDetachedSubAgentDiscovery({
+						workspaceDir: options.paths.workspaceDir,
+						authConfigPath: options.paths.authConfigPath,
+						modelsConfigPath: options.paths.modelsConfigPath,
+					}),
 			});
 			await bot.sendPlain(event.channelId, response);
 		},

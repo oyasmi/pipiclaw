@@ -210,10 +210,15 @@ maxWallTimeSec: 3600
 **人侧**——运行时命令，不经过模型：
 
 ```text
-/subagents list                 # 在途与近期 run；末尾附角色目录健康度（不可用角色及原因、discovery warning）
-/subagents show <runId>         # 完整记录、实际 argv、产物路径
-/subagents cancel <runId>       # 直接杀进程组 / abort，不经过模型
+/subagents                      # 运行中的 run + 最近完成的几条 + 角色目录摘要
+/subagents list [running|failed|all]  # 按状态筛选
+/subagents show <runId>         # 完整记录、实际 argv、stderr 尾部
+/subagents output <runId>       # 该 run 的文本产出（output.md 尾部）
+/subagents cancel <runId|all>   # 直接杀进程组 / abort，不经过模型；all 终止本频道所有在途 run
+/subagents roles [name]         # 角色目录；带 name 查看单个角色详情（tools、预算、system prompt……）
 ```
+
+`runId` 是短小可读的 `run_` + 6 位字符（例如 `run_a1b2c3`），不再是派发它的那次工具调用自身的 id（后者在某些 provider 上是一长串 `call_…|fc_…` 复合 id）。命令支持不带 `run_` 前缀的简写，只要能唯一匹配即可，例如 `/subagents show a1b2c3`。
 
 ## 关键字段怎么理解（How to Use the Key Fields）
 

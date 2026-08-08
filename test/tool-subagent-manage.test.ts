@@ -239,11 +239,13 @@ describe("subagent_manage tool", () => {
 			task: "keep going",
 		});
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
-		expect(text).toContain("call-7");
+		// spec 041: follow_up mints its own short run id rather than reusing the dispatching tool
+		// call's id (which is a long, provider-specific composite on some providers).
+		expect(text).toMatch(/runId=run_[a-z0-9]{6}/);
 		expect(text).toContain("run-6");
 		expect(launchExternalRunMock).toHaveBeenCalledTimes(1);
 		expect(launchExternalRunMock.mock.calls[0]?.[0]).toMatchObject({
-			runId: "call-7",
+			runId: expect.stringMatching(/^run_[a-z0-9]{6}$/),
 			resumeSessionId: "thread-abc",
 			harness: "codex-cli",
 			task: "keep going",

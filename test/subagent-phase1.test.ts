@@ -564,15 +564,16 @@ describe("sub-agent tool", () => {
 			purpose: "verify",
 			taskId: "ship",
 		});
+		// spec 041: the run's own id, minted by the manager — never the dispatching tool call's id.
+		expect(result.details.runId).toMatch(/^run_[a-z0-9]{6}$/);
 		expect(result.details).toMatchObject({
-			runId: "verify-call-1",
 			purpose: "verify",
 			taskId: "ship",
 			verificationVerdict: "pass",
 		});
 		expect(delegatedTask).toContain(join(channelDir, "tasks", "ship.md"));
 		expect(delegatedTask).toContain("VERDICT: PASS or VERDICT: FAIL");
-		await expect(readVerificationAttestation(channelDir, "verify-call-1")).resolves.toMatchObject({
+		await expect(readVerificationAttestation(channelDir, result.details.runId)).resolves.toMatchObject({
 			taskId: "ship",
 			verdict: "pass",
 			workspaceChanged: false,
@@ -811,7 +812,7 @@ describe("sub-agent artifact contract (D4)", () => {
 			task: "Find the entrypoint.",
 		});
 
-		expect(result.details.artifactDir).toContain(join("subagent-artifacts", "artifact-call-1"));
+		expect(result.details.artifactDir).toContain(join("subagent-artifacts", result.details.runId));
 		expect(existsSync(result.details.artifactDir)).toBe(true);
 		expect(delegatedTask).toContain(`Artifact directory: ${result.details.artifactDir}`);
 		expect(readFileSync(join(result.details.artifactDir, "output.md"), "utf-8")).toBe("Done.");

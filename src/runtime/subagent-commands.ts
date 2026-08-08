@@ -1,34 +1,49 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { errorMessage } from "../shared/text-utils.js";
-import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
-import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
+import type { SubAgentConfig, SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { elapsedMs, formatCost, formatDuration, harnessLabel } from "../subagents/format.js";
+import { getSubAgentRunManager, type RunRecord, type RunResolution } from "../subagents/runs.js";
 
 /**
- * `/subagents` — the human control path that does not depend on the model (spec 040, D6).
- * `/stop` no longer kills a dispatched delegation (D2), so cancel needs a route that works even
- * when the model is unavailable or the turn is stuck. Mirrors `event-commands.ts`'s shape: pure
- * functions returning markdown, no bot/event coupling.
+ * `/subagents` — the human control path that does not depend on the model (spec 040 D6, polished
+ * by spec 041). Mirrors `task-commands.ts`'s shape: pure functions returning markdown, no
+ * bot/event coupling.
  */
 
 export interface HandleSubagentsCommandOptions {
 	args: string;
 	channelId: string;
-	/** Best-effort role-directory snapshot for the `list` health tail; omitted when no runner is
-	 *  currently active for this channel (mirrors how `/status` degrades without a live runner). */
+	/** Best-effort role-directory snapshot for `roles` / the overview tail; omitted when no runner
+	 *  is currently active for this channel (mirrors how `/status` degrades without a live runner). */
 	discovery?: SubAgentDiscoveryResult;
+	/** Fallback used only when `discovery` is absent: resolves the role directory from disk without
+	 *  a live `ChannelRunner` (spec 041). Lazy — never called unless a `roles` view is actually rendered. */
+	getDetachedDiscovery?: () => Promise<SubAgentDiscoveryResult>;
 }
 
-type SubagentsCommand = { action: "list" } | { action: "show"; runId: string } | { action: "cancel"; runId: string };
+type ListFilter = "default" | "running" | "failed" | "all";
+
+type SubagentsCommand =
+	| { action: "list"; filter: ListFilter }
+	| { action: "show"; ref: string }
+	| { action: "output"; ref: string }
+	| { action: "cancel"; ref: string }
+	| { action: "roles"; name?: string };
 
 function usage(): string {
-	return `# Subagents
+	return `# 委派 Run
 
-Usage:
+用法：
 
-- \`/subagents list\`
-- \`/subagents show <runId>\`
-- \`/subagents cancel <runId>\``;
+- \`/subagents\` — 运行中的 run + 最近完成的几条 + 角色目录摘要
+- \`/subagents list [running|failed|all]\` — 按状态筛选
+- \`/subagents show <runId>\` — 单个 run 的完整详情（含实际 argv、stderr 尾部）
+- \`/subagents output <runId>\` — 该 run 的文本产出（output.md 尾部）
+- \`/subagents cancel <runId|all>\` — 直接终止，不经过模型
+- \`/subagents roles [name]\` — 角色目录；带 name 时查看单个角色的详情
+
+\`runId\` 支持不带 \`run_\` 前缀的简写，只要能唯一匹配即可，例如 \`show a1b2c3\`。`;
 }
 
 function parseSubagentsCommand(args: string): SubagentsCommand {
@@ -36,92 +51,287 @@ function parseSubagentsCommand(args: string): SubagentsCommand {
 	const action = parts[0];
 
 	if (!action || action === "list") {
-		if (parts.length > 1) throw new Error("Usage: /subagents list");
-		return { action: "list" };
+		const filterArg = parts[1];
+		if (!filterArg) {
+			if (parts.length > 1) throw new Error("用法：/subagents [list] [running|failed|all]");
+			return { action: "list", filter: "default" };
+		}
+		if ((filterArg !== "running" && filterArg !== "failed" && filterArg !== "all") || parts.length > 2) {
+			throw new Error("用法：/subagents list [running|failed|all]");
+		}
+		return { action: "list", filter: filterArg };
 	}
 	if (action === "show") {
-		if (!parts[1] || parts.length > 2) throw new Error("Usage: /subagents show <runId>");
-		return { action: "show", runId: parts[1] };
+		if (!parts[1] || parts.length > 2) throw new Error("用法：/subagents show <runId>");
+		return { action: "show", ref: parts[1] };
+	}
+	if (action === "output") {
+		if (!parts[1] || parts.length > 2) throw new Error("用法：/subagents output <runId>");
+		return { action: "output", ref: parts[1] };
 	}
 	if (action === "cancel") {
-		if (!parts[1] || parts.length > 2) throw new Error("Usage: /subagents cancel <runId>");
-		return { action: "cancel", runId: parts[1] };
+		if (!parts[1] || parts.length > 2) throw new Error("用法：/subagents cancel <runId|all>");
+		return { action: "cancel", ref: parts[1] };
 	}
-	throw new Error(`Unknown /subagents action: ${action}`);
+	if (action === "roles") {
+		if (parts.length > 2) throw new Error("用法：/subagents roles [name]");
+		return { action: "roles", name: parts[1] };
+	}
+	throw new Error(`未知的 /subagents 子命令：${action}`);
 }
 
-function formatDuration(ms: number): string {
-	const seconds = Math.round(ms / 1000);
-	if (seconds < 60) return `${seconds}s`;
-	return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
-}
-
-function elapsedMs(record: RunRecord): number {
-	return (record.finishedAt ?? Date.now()) - record.startedAt;
+function statusLabel(status: RunRecord["status"]): string {
+	switch (status) {
+		case "running":
+			return "运行中";
+		case "completed":
+			return "已完成";
+		case "failed":
+			return "失败";
+		case "cancelled":
+			return "已取消";
+		case "lost":
+			return "丢失（daemon 重启或无法确认）";
+	}
 }
 
 function formatRunLine(record: RunRecord): string {
-	const harness = record.harness ? `${record.runtime}/${record.harness}` : record.runtime;
-	const task = record.taskId ? `, task ${record.taskId}` : "";
-	return `- [${record.runId}] ${record.agent} (${harness}) — ${record.status} (${formatDuration(elapsedMs(record))}${task})`;
+	const bits = [harnessLabel(record), formatDuration(elapsedMs(record))];
+	if (record.taskId) bits.push(`task ${record.taskId}`);
+	if (record.leaseKey) bits.push("持有写锁");
+	const cost = formatCost(record);
+	if (cost) bits.push(cost);
+	const header = `- \`${record.runId}\` ${record.agent} (${bits.join(", ")}) — ${statusLabel(record.status)} — "${record.label}"`;
+	if (record.status === "failed" && record.failureReason) {
+		return `${header}\n  失败原因：${record.failureReason}`;
+	}
+	return header;
 }
 
-function formatHealthTail(discovery: SubAgentDiscoveryResult): string {
+async function resolveDiscovery(options: HandleSubagentsCommandOptions): Promise<SubAgentDiscoveryResult | undefined> {
+	if (options.discovery) return options.discovery;
+	if (!options.getDetachedDiscovery) return undefined;
+	try {
+		return await options.getDetachedDiscovery();
+	} catch {
+		return undefined;
+	}
+}
+
+function formatRolesTail(discovery: SubAgentDiscoveryResult): string {
 	const unavailable = discovery.agents.filter((agent) => agent.unavailable);
-	const lines: string[] = [];
-	if (unavailable.length > 0 || discovery.warnings.length > 0) {
-		lines.push("", "## Role directory health");
-	}
-	for (const agent of unavailable) {
-		lines.push(`- \`${agent.name}\`: unavailable (${agent.unavailable})`);
-	}
+	const available = discovery.agents.length - unavailable.length;
+	const parts = [`角色目录：${available} 个可用`];
+	if (unavailable.length > 0) parts.push(`${unavailable.length} 个不可用`);
+	let line = `${parts.join("，")} — 用 /subagents roles 查看`;
 	for (const warning of discovery.warnings) {
-		lines.push(`- discovery warning: ${warning}`);
+		line += `\n⚠ discovery: ${warning}`;
 	}
-	return lines.join("\n");
+	return line;
 }
 
-async function listRuns(channelId: string, discovery?: SubAgentDiscoveryResult): Promise<string> {
-	const records = getSubAgentRunManager(channelId).list();
-	const body =
-		records.length === 0
-			? "No delegation runs."
-			: records
-					.sort((a, b) => b.startedAt - a.startedAt)
-					.map(formatRunLine)
-					.join("\n");
-	const tail = discovery ? formatHealthTail(discovery) : "";
-	return `# Subagent runs\n\n${body}${tail}`;
+const DEFAULT_LIST_COMPLETED_LIMIT = 5;
+
+async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilter): Promise<string> {
+	const records = getSubAgentRunManager(options.channelId).list();
+	if (records.length === 0) return "# 委派 Run\n\n没有委派记录。";
+
+	const running = records.filter((record) => record.status === "running").sort((a, b) => b.startedAt - a.startedAt);
+	const terminal = records
+		.filter((record) => record.status !== "running")
+		.sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt));
+
+	const sections: string[] = [];
+
+	if (filter === "running") {
+		sections.push(running.length === 0 ? "没有正在运行的 run。" : running.map(formatRunLine).join("\n"));
+		return `# 委派 Run — 运行中\n\n${sections.join("\n")}`;
+	}
+	if (filter === "failed") {
+		const failed = terminal.filter((record) => record.status === "failed");
+		sections.push(failed.length === 0 ? "没有失败的 run。" : failed.map(formatRunLine).join("\n"));
+		return `# 委派 Run — 失败\n\n${sections.join("\n")}`;
+	}
+	if (filter === "all") {
+		sections.push([...running, ...terminal].map(formatRunLine).join("\n"));
+		return `# 委派 Run — 全部（${records.length}）\n\n${sections.join("\n")}`;
+	}
+
+	// default: an overview — every running run, plus a capped tail of recent completions.
+	if (running.length > 0) {
+		sections.push(`## 运行中 (${running.length})\n${running.map(formatRunLine).join("\n")}`);
+	}
+	const shown = terminal.slice(0, DEFAULT_LIST_COMPLETED_LIMIT);
+	if (shown.length > 0) {
+		const countNote =
+			terminal.length > shown.length ? `显示 ${shown.length} / 共 ${terminal.length}` : `${shown.length}`;
+		sections.push(`## 最近完成 (${countNote})\n${shown.map(formatRunLine).join("\n")}`);
+	}
+	if (sections.length === 0) sections.push("没有委派记录。");
+
+	const discovery = await resolveDiscovery(options);
+	if (discovery) sections.push(formatRolesTail(discovery));
+	sections.push("用 `/subagents show <runId>` 看详情，`/subagents output <runId>` 看产出。");
+
+	return `# 委派 Run\n\n${sections.join("\n\n")}`;
 }
 
 const STDERR_TAIL_CHARS = 2_000;
+const OUTPUT_TAIL_CHARS = 4_000;
 
-async function formatRunDetail(record: RunRecord): Promise<string> {
-	const parts = [`# Run ${record.runId}`, "", "```json", JSON.stringify(record, null, 2), "```"];
-	// D6: "show" is the human/model escape hatch for a stuck or failed external run, so its
-	// stderr belongs here even though it never rides the completion wake (that only carries
-	// the harness's own parsed output).
+function formatRunResolution(resolution: RunResolution, ref: string): string | undefined {
+	if (resolution.kind === "not_found") return `未找到 run：\`${ref}\``;
+	if (resolution.kind === "ambiguous") {
+		const candidates = resolution.candidates.map((record) => `\`${record.runId}\` (${record.agent})`).join("、");
+		return `"${ref}" 匹配到多个 run：${candidates}。请提供更完整的 runId。`;
+	}
+	return undefined;
+}
+
+async function showRun(channelId: string, ref: string): Promise<string> {
+	const resolution = getSubAgentRunManager(channelId).resolveRef(ref);
+	const error = formatRunResolution(resolution, ref);
+	if (error || resolution.kind !== "found") return error ?? `未找到 run：\`${ref}\``;
+	const record = resolution.record;
+
+	const lines = [
+		`# Run \`${record.runId}\``,
+		"",
+		`角色：${record.agent} (${harnessLabel(record)}, ${record.source})`,
+		`标签：${record.label}`,
+		`状态：${statusLabel(record.status)}（耗时 ${formatDuration(elapsedMs(record))}）`,
+	];
+	if (record.failureReason) lines.push(`失败原因：${record.failureReason}`);
+	if (record.verificationVerdict) {
+		lines.push(
+			`验收结论：${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}${record.verificationStrength === "advisory" ? "（advisory）" : ""}`,
+		);
+	}
+	lines.push(`开始：${new Date(record.startedAt).toLocaleString()}`);
+	if (record.finishedAt) lines.push(`结束：${new Date(record.finishedAt).toLocaleString()}`);
+	lines.push(
+		`purpose：${record.purpose}`,
+		`工作目录：\`${record.workingDirectory}\``,
+		`产物目录：\`${record.artifactDir}\``,
+	);
+	if (record.taskId) lines.push(`所属任务：${record.taskId}`);
+	if (record.leaseKey) lines.push("持有写锁：是");
+	if (record.model) lines.push(`模型：${record.model}`);
+	const cost = formatCost(record);
+	lines.push(
+		`usage：input=${record.usage.input} output=${record.usage.output}${cost ? ` cost=${cost}` : record.costKnown ? "" : "（cost 未知）"}`,
+	);
+	if (record.argv) lines.push("", "实际 argv：", "```", JSON.stringify(record.argv), "```");
+	if (record.sessionId) lines.push(`sessionId：\`${record.sessionId}\`（可用于 subagent_manage op=follow_up）`);
+
 	if (record.runtime === "external") {
 		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")
 			.then((text) => text.slice(-STDERR_TAIL_CHARS))
 			.catch(() => undefined);
 		if (stderrTail?.trim()) {
-			parts.push("", "## stderr (tail)", "```", stderrTail, "```");
+			lines.push("", "## stderr (tail)", "```", stderrTail, "```");
 		}
 	}
-	return parts.join("\n");
+	return lines.join("\n");
 }
 
-async function showRun(channelId: string, runId: string): Promise<string> {
-	const record = getSubAgentRunManager(channelId).get(runId);
-	if (!record) return `Run not found: ${runId}`;
-	return formatRunDetail(record);
+async function showOutput(channelId: string, ref: string): Promise<string> {
+	const resolution = getSubAgentRunManager(channelId).resolveRef(ref);
+	const error = formatRunResolution(resolution, ref);
+	if (error || resolution.kind !== "found") return error ?? `未找到 run：\`${ref}\``;
+	const record = resolution.record;
+
+	const outputText = await readFile(join(record.artifactDir, "output.md"), "utf-8").catch(() => undefined);
+	if (!outputText?.trim()) {
+		const runningNote = record.status === "running" ? "该 run 仍在运行，可能还没有产出。" : "该 run 没有文本产出。";
+		return `# Run \`${record.runId}\` 的产出\n\n${runningNote}产物目录：\`${record.artifactDir}\``;
+	}
+	const tail = outputText.slice(-OUTPUT_TAIL_CHARS);
+	const truncatedNote =
+		outputText.length > tail.length ? `（只显示末尾 ${OUTPUT_TAIL_CHARS} 字符，完整内容见上方产物目录）\n\n` : "";
+	return `# Run \`${record.runId}\` 的产出\n\n${truncatedNote}\`\`\`\n${tail}\n\`\`\``;
 }
 
-async function cancelRun(channelId: string, runId: string): Promise<string> {
-	const status = await getSubAgentRunManager(channelId).cancel(runId);
-	if (status === "not_found") return `Run not found: ${runId}`;
-	return `Cancel requested for run \`${runId}\`: ${status}`;
+async function cancelRun(channelId: string, ref: string): Promise<string> {
+	const manager = getSubAgentRunManager(channelId);
+	if (ref === "all") {
+		const running = manager.list().filter((record) => record.status === "running");
+		if (running.length === 0) return "没有正在运行的 run。";
+		const results = await Promise.all(
+			running.map(async (record) => {
+				const status = await manager.cancel(record.runId);
+				return `- \`${record.runId}\` (${record.agent})：${status}`;
+			}),
+		);
+		return `# 已请求终止 ${running.length} 个 run\n\n${results.join("\n")}`;
+	}
+	const resolution = manager.resolveRef(ref);
+	const error = formatRunResolution(resolution, ref);
+	if (error || resolution.kind !== "found") return error ?? `未找到 run：\`${ref}\``;
+	const status = await manager.cancel(resolution.record.runId);
+	return `已请求终止 run \`${resolution.record.runId}\`：${status}`;
+}
+
+function formatRoleSummaryLine(agent: SubAgentConfig): string {
+	const kind = agent.runtime === "external" ? `外部/${agent.harness}` : "内置";
+	const mutates = agent.mutates ?? (agent.tools.includes("write") || agent.tools.includes("edit") ? "write" : "read");
+	const unavailable = agent.unavailable ? ` — ⚠ 不可用：${agent.unavailable}` : "";
+	return `- \`${agent.name}\` (${kind}, ${mutates}) — ${agent.description}${unavailable}`;
+}
+
+function formatRoleDetail(agent: SubAgentConfig): string {
+	const kind = agent.runtime === "external" ? `外部/${agent.harness}` : "内置";
+	const lines = [
+		`# 角色 \`${agent.name}\``,
+		"",
+		`runtime：${kind}`,
+		`来源：${agent.source} (${agent.filePath ?? "inline"})`,
+		`说明：${agent.description}`,
+	];
+	if (agent.unavailable) lines.push(`⚠ 不可用：${agent.unavailable}`);
+	lines.push(`mutates：${agent.mutates ?? "(未声明，由 tools 推断)"}`);
+	if (agent.runtime === "internal") {
+		lines.push(
+			`模型：${agent.modelRef ?? "(默认)"}`,
+			`tools：${agent.tools.join(", ") || "(none)"}`,
+			`预算：maxTurns=${agent.maxTurns} maxToolCalls=${agent.maxToolCalls} maxWallTimeSec=${agent.maxWallTimeSec} bashTimeoutSec=${agent.bashTimeoutSec}`,
+			`contextMode：${agent.contextMode}，memory：${agent.memory}`,
+		);
+	} else {
+		lines.push(
+			`command：\`${agent.command ?? ""}\`${agent.shell ? "（通过 shell 执行）" : ""}`,
+			`maxWallTimeSec：${agent.maxWallTimeSec}`,
+		);
+		if (agent.externalModelRef) lines.push(`模型：${agent.externalModelRef}`);
+	}
+	if (agent.paths.length > 0) lines.push(`paths：${agent.paths.join(", ")}`);
+	lines.push("", "system prompt：", "```", agent.systemPrompt, "```");
+	return lines.join("\n");
+}
+
+async function showRoles(options: HandleSubagentsCommandOptions, name?: string): Promise<string> {
+	const discovery = await resolveDiscovery(options);
+	if (!discovery) {
+		return "角色目录不可用：本频道尚未激活过运行时，且无法在离线状态下解析模型引用。先给这个频道发一条消息，再重试。";
+	}
+	if (name) {
+		const agent = discovery.agents.find((candidate) => candidate.name === name);
+		if (!agent) {
+			const available = discovery.agents.length > 0 ? discovery.agents.map((a) => a.name).join(", ") : "(none)";
+			return `未找到角色 "${name}"。可用角色：${available}`;
+		}
+		return formatRoleDetail(agent);
+	}
+
+	const internal = discovery.agents.filter((agent) => agent.runtime === "internal");
+	const external = discovery.agents.filter((agent) => agent.runtime === "external");
+	const sections = [`# 角色目录\n\n目录：\`${discovery.directory}\``];
+	if (external.length > 0) sections.push(`## 外部\n${external.map(formatRoleSummaryLine).join("\n")}`);
+	if (internal.length > 0) sections.push(`## 内置\n${internal.map(formatRoleSummaryLine).join("\n")}`);
+	if (discovery.agents.length === 0) sections.push("目录为空。");
+	for (const warning of discovery.warnings) sections.push(`⚠ discovery: ${warning}`);
+	sections.push("用 `/subagents roles <name>` 看单个角色的详情。");
+	return sections.join("\n\n");
 }
 
 export async function handleSubagentsCommand(options: HandleSubagentsCommandOptions): Promise<string> {
@@ -135,13 +345,17 @@ export async function handleSubagentsCommand(options: HandleSubagentsCommandOpti
 	try {
 		switch (command.action) {
 			case "list":
-				return await listRuns(options.channelId, options.discovery);
+				return await listRuns(options, command.filter);
 			case "show":
-				return await showRun(options.channelId, command.runId);
+				return await showRun(options.channelId, command.ref);
+			case "output":
+				return await showOutput(options.channelId, command.ref);
 			case "cancel":
-				return await cancelRun(options.channelId, command.runId);
+				return await cancelRun(options.channelId, command.ref);
+			case "roles":
+				return await showRoles(options, command.name);
 		}
 	} catch (error) {
-		return `Could not ${command.action} subagent run(s): ${errorMessage(error)}`;
+		return `执行 /subagents ${command.action} 失败：${errorMessage(error)}`;
 	}
 }

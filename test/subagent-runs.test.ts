@@ -311,3 +311,66 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(manager.runningTaskIds()).toEqual(new Set());
 	});
 });
+
+/** spec 041: short, human-typeable run ids, and prefix resolution for the commands that use them. */
+describe("SubAgentRunManager run id minting and resolution (spec 041)", () => {
+	it("mintRunId produces run_ + 6 lowercase chars from a misread-resistant alphabet", () => {
+		const manager = new SubAgentRunManager("dm_mint", {});
+		for (let i = 0; i < 50; i++) {
+			expect(manager.mintRunId()).toMatch(/^run_[23456789abcdefghjkmnpqrstvwxyz]{6}$/);
+		}
+	});
+
+	it("mintRunId never reuses an id already held by a known record", async () => {
+		const manager = new SubAgentRunManager("dm_mint_unique", {});
+		const minted = new Set<string>();
+		for (let i = 0; i < 20; i++) {
+			const id = manager.mintRunId();
+			expect(minted.has(id)).toBe(false);
+			minted.add(id);
+			await register(manager, { runId: id, channelId: "dm_mint_unique" });
+			// A settled run still occupies its id (only forgotten after GC), which is what
+			// mintRunId must avoid reissuing; settle it so registration doesn't hit the
+			// per-channel running-run cap on later iterations.
+			await manager.settle(id, baseSettleInput(), { announce: false });
+		}
+	});
+
+	it("register rejects a runId that is already registered", async () => {
+		const manager = new SubAgentRunManager("dm_dup", {});
+		await register(manager, { runId: "run-dup", channelId: "dm_dup" });
+		await expect(register(manager, { runId: "run-dup", channelId: "dm_dup" })).rejects.toThrow("already registered");
+	});
+
+	it("resolveRef matches an exact id first, even if it happens to be a prefix of another", async () => {
+		const manager = new SubAgentRunManager("dm_resolve", {});
+		await register(manager, { runId: "run_abc123", channelId: "dm_resolve" });
+		await register(manager, { runId: "run_abc123xyz", channelId: "dm_resolve" });
+		const resolution = manager.resolveRef("run_abc123");
+		expect(resolution).toMatchObject({ kind: "found", record: { runId: "run_abc123" } });
+	});
+
+	it("resolveRef matches a unique prefix, with or without the run_ prefix, case-insensitively", async () => {
+		const manager = new SubAgentRunManager("dm_resolve_prefix", {});
+		await register(manager, { runId: "run_qwe789", channelId: "dm_resolve_prefix" });
+		expect(manager.resolveRef("qwe7")).toMatchObject({ kind: "found", record: { runId: "run_qwe789" } });
+		expect(manager.resolveRef("run_qwe7")).toMatchObject({ kind: "found", record: { runId: "run_qwe789" } });
+		expect(manager.resolveRef("QWE7")).toMatchObject({ kind: "found", record: { runId: "run_qwe789" } });
+	});
+
+	it("resolveRef reports ambiguous when a prefix matches more than one run", async () => {
+		const manager = new SubAgentRunManager("dm_resolve_ambiguous", {});
+		await register(manager, { runId: "run_zzz111", channelId: "dm_resolve_ambiguous" });
+		await register(manager, { runId: "run_zzz222", channelId: "dm_resolve_ambiguous" });
+		const resolution = manager.resolveRef("zzz");
+		expect(resolution.kind).toBe("ambiguous");
+		if (resolution.kind === "ambiguous") {
+			expect(resolution.candidates.map((record) => record.runId).sort()).toEqual(["run_zzz111", "run_zzz222"]);
+		}
+	});
+
+	it("resolveRef reports not_found for an unknown id or prefix", () => {
+		const manager = new SubAgentRunManager("dm_resolve_missing", {});
+		expect(manager.resolveRef("nope").kind).toBe("not_found");
+	});
+});

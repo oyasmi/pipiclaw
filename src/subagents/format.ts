@@ -1,0 +1,28 @@
+import type { RunRecord } from "./runs.js";
+
+/**
+ * Shared display primitives for delegation runs (spec 041), used by both the model-facing
+ * `subagent_manage` tool and the human-facing `/subagents` runtime command. Only the pieces that
+ * are genuinely language/audience-neutral live here — duration math, the harness label, and the
+ * cost guard — not full line templates, since the two surfaces render in different languages.
+ */
+
+export function formatDuration(ms: number): string {
+	const seconds = Math.round(ms / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+}
+
+export function elapsedMs(record: RunRecord, now = Date.now()): number {
+	return (record.finishedAt ?? now) - record.startedAt;
+}
+
+export function harnessLabel(record: RunRecord): string {
+	return record.harness ? `${record.runtime}/${record.harness}` : record.runtime;
+}
+
+/** `undefined` when cost genuinely is not known (e.g. `codex-cli`, `exec`) — never displayed as $0. */
+export function formatCost(record: RunRecord): string | undefined {
+	if (!record.costKnown) return undefined;
+	return `$${record.usage.cost.total.toFixed(2)}`;
+}

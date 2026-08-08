@@ -103,12 +103,14 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 			details: SubAgentToolDetails;
 		};
 		const text = result.content[0]?.text ?? "";
-		expect(text).toContain("[Dispatched] runId=dispatch-call-1");
+		// spec 041: the run gets its own short id, never the dispatching tool call's id ("dispatch-call-1").
+		const runId = result.details.runId;
+		expect(runId).toMatch(/^run_[a-z0-9]{6}$/);
+		expect(text).toContain(`[Dispatched] runId=${runId}`);
 		expect(result.details.dispatched).toBe(true);
-		expect(result.details.runId).toBe("dispatch-call-1");
 		expect(dispatched).toHaveLength(0); // not settled yet — nothing to announce
 
-		const run = getSubAgentRunManager("dm_123").get("dispatch-call-1");
+		const run = getSubAgentRunManager("dm_123").get(runId);
 		expect(run?.status).toBe("running");
 
 		// The run keeps executing in the background; let it finish now.
@@ -121,8 +123,8 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		}
 
 		expect(dispatched).toHaveLength(1);
-		expect(dispatched[0]?.dispatchId).toBe("subagent:dm_123:dispatch-call-1:done");
-		expect(dispatched[0]?.text).toContain("[SUBAGENT:dispatch-call-1]");
-		expect(getSubAgentRunManager("dm_123").get("dispatch-call-1")?.status).toBe("completed");
+		expect(dispatched[0]?.dispatchId).toBe(`subagent:dm_123:${runId}:done`);
+		expect(dispatched[0]?.text).toContain(`[SUBAGENT:${runId}]`);
+		expect(getSubAgentRunManager("dm_123").get(runId)?.status).toBe("completed");
 	});
 });

@@ -124,9 +124,17 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		name: "subagents",
-		argumentHint: "<list|show <runId>|cancel <runId>>",
-		description: "查看与控制委派 run（内置与外部）；cancel 不经过模型，直接终止",
-		examples: ["/subagents list", "/subagents show a1b2c3d4", "/subagents cancel a1b2c3d4"],
+		argumentHint: "<list [running|failed|all]|show <id>|output <id>|cancel <id|all>|roles [name]>",
+		description: "查看与控制委派 run（内置与外部）、浏览角色目录；cancel 不经过模型，直接终止",
+		examples: [
+			"/subagents",
+			"/subagents list failed",
+			"/subagents show run_a1b2c3",
+			"/subagents output run_a1b2c3",
+			"/subagents cancel run_a1b2c3",
+			"/subagents roles",
+			"/subagents roles builder-hard",
+		],
 		// A human control path independent of the model (spec 040, D6): /stop no longer kills a
 		// dispatched delegation, so cancel must work even when the model/turn is unavailable.
 		availableWhileBusy: true,

@@ -704,7 +704,10 @@ export function createSubAgentTool(
 
 			const config = invocation.config;
 			const returns = params.returns ?? "text";
-			const runContext = await prepareRunContext(_toolCallId, params, options);
+			const runManager = (options.getRunManager ?? getSubAgentRunManager)(options.runtimeContext.channelId);
+			// A short, human-typeable id (spec 041) — never the dispatching tool call's own id, which
+			// on some providers is a long `call_<id>|fc_<id>` composite unreadable in a chat UI.
+			const runContext = await prepareRunContext(runManager.mintRunId(), params, options);
 
 			// D9: an independent verifier checks against a target that isn't moving under it. It
 			// never takes a lease itself, but a target with an active write lease is refused up
@@ -835,7 +838,6 @@ export function createSubAgentTool(
 			let detached = false;
 			let lastUpdateText = "";
 
-			const runManager = (options.getRunManager ?? getSubAgentRunManager)(options.runtimeContext.channelId);
 			try {
 				await runManager.register({
 					runId: runContext.runId,
