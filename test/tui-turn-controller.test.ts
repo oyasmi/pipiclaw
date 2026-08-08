@@ -26,6 +26,11 @@ class FakeRunner implements AgentRunner {
 	endTurn(): void {
 		this.turnStatus = { phase: "idle", stopRequested: false };
 	}
+	forceEndTurn(): boolean {
+		if (this.turnStatus.phase === "idle") return false;
+		this.turnStatus = { phase: "idle", stopRequested: false };
+		return true;
+	}
 	isBusy(): boolean {
 		return this.turnStatus.phase !== "idle";
 	}

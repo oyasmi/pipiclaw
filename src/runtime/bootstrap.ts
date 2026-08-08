@@ -691,6 +691,50 @@ export async function claimVerifiedDelegationWake(
 	};
 }
 
+/**
+ * How long `/stop` waits for the turn to actually end before force-releasing it.
+ * `requestStop` + `abort` only reach the agent loop; a turn wedged in its
+ * epilogue (delivery drain, session-resource reload, memory flush) ignores both
+ * and would otherwise keep the channel reporting "已有回合在运行" indefinitely.
+ */
+const STOP_FORCE_END_GRACE_MS = 15_000;
+const STOP_FORCE_END_POLL_MS = 250;
+
+function sleepUnref(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, ms);
+		timer.unref?.();
+	});
+}
+
+/**
+ * Watchdog for `/stop`: release the channel if the stopped turn has not ended
+ * once the grace window elapses. Returns true when it had to force the release.
+ */
+export async function forceEndStuckTurnAfterStop(input: {
+	channelId: string;
+	runner: AgentRunner;
+	graceMs?: number;
+	pollMs?: number;
+	notify?: (text: string) => Promise<unknown>;
+}): Promise<boolean> {
+	const graceMs = input.graceMs ?? STOP_FORCE_END_GRACE_MS;
+	const pollMs = input.pollMs ?? STOP_FORCE_END_POLL_MS;
+	const deadline = Date.now() + graceMs;
+	while (input.runner.isBusy() && Date.now() < deadline) {
+		await sleepUnref(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+	}
+	if (!input.runner.forceEndTurn(`/stop did not take effect within ${graceMs}ms`)) {
+		return false;
+	}
+	await input
+		.notify?.(
+			`⚠️ 上一个回合的收尾卡住了，已强制结束以释放会话（后台清理仍在继续）。现在可以正常发消息或使用 \`/new\`、\`/model\`。`,
+		)
+		.catch(() => undefined);
+	return true;
+}
+
 interface RuntimeContextOptions {
 	paths: BootstrapPaths;
 	dingtalkConfig: DingTalkConfig;
@@ -712,6 +756,8 @@ interface RuntimeContextOptions {
 	registerSignalHandlers?: boolean;
 	/** Test-only fault seams for the atomic structured-wake task transition. */
 	wakeTransitionHooks?: Partial<Record<"job" | "subagent", WakeTaskTransitionHooks>>;
+	/** Override the `/stop` watchdog's grace window (tests use a short one). */
+	stopForceEndGraceMs?: number;
 }
 
 export function createRuntimeContext(options: RuntimeContextOptions): RuntimeContext & { bot: DingTalkBot } {
@@ -724,6 +770,8 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 	const cliVersion = readCliVersion();
 	const channelRunners = new Map<string, AgentRunner>();
 	const activeTasks = new Set<Promise<void>>();
+	/** Channels with a `/stop` watchdog in flight, so a burst of `/stop` starts only one. */
+	const stopWatchdogs = new Set<string>();
 	// `workspace/CHANNELS.md`: names every channel id so the workspace, the logs and the agent
 	// stop dealing in `group_cid...`. Writes are debounced internally (see channel-index.ts).
 	const channelIndex: ChannelIndex = createChannelIndex({ workspaceDir: options.paths.workspaceDir });
@@ -825,6 +873,21 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 						log.logWarning(`[${channelId}] Failed to reset durable-dispatch leases on stop`, errorMessage(err));
 					});
 				log.logInfo(`[${channelId}] Stop requested`);
+				if (!stopWatchdogs.has(channelId)) {
+					stopWatchdogs.add(channelId);
+					void forceEndStuckTurnAfterStop({
+						channelId,
+						runner,
+						graceMs: options.stopForceEndGraceMs,
+						notify: (text) => _bot.sendPlain(channelId, text),
+					})
+						.catch((err) => {
+							log.logWarning(`[${channelId}] Stop watchdog failed`, errorMessage(err));
+						})
+						.finally(() => {
+							stopWatchdogs.delete(channelId);
+						});
+				}
 			}
 			return { pausedTaskId };
 		},

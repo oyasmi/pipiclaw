@@ -68,6 +68,14 @@ export interface AgentRunner {
 	beginTurn(taskText: string): void;
 	/** Release the turn (idempotent). Transports call this after all per-message work. */
 	endTurn(): void;
+	/**
+	 * Release a turn whose owner is wedged (a stalled epilogue: delivery drain,
+	 * resource reload, memory flush) so the channel stops reporting busy. The
+	 * wedged turn keeps running to completion; its later `endTurn` is ignored.
+	 * Returns false when the runner was already idle. `/stop`'s last resort — a
+	 * normal stop goes through `requestStop` + `abort`.
+	 */
+	forceEndTurn(reason: string): boolean;
 	/** True from beginTurn until endTurn. */
 	isBusy(): boolean;
 	/** Mark the current turn as user-stopped (no-op when idle). */

@@ -251,4 +251,97 @@ describe("runtime stop handling", () => {
 
 		await runtime.shutdown();
 	}, 20_000);
+
+	it("force-releases the channel when a stopped turn never finishes its epilogue", async () => {
+		let signalRunStarted!: () => void;
+		let releaseRun!: () => void;
+		const runStarted = new Promise<void>((resolve) => {
+			signalRunStarted = resolve;
+		});
+		// The turn ignores abort(): it is wedged in its teardown (delivery drain,
+		// resource reload, memory flush), which is exactly what /stop cannot reach.
+		const wedged = new Promise<void>((resolve) => {
+			releaseRun = resolve;
+		});
+		const runner: AgentRunner = {
+			renderContextReport: () => "CONTEXT",
+			getSubAgentDiscoverySnapshot: () => ({ directory: "", agents: [], warnings: [] }),
+			run: vi.fn(async () => {
+				signalRunStarted();
+				await wedged;
+				return { stopReason: "stop" };
+			}),
+			handleBuiltinCommand: vi.fn(async () => {}),
+			isKnownSlashCommand: vi.fn(() => false),
+			queueSteer: vi.fn(async () => {}),
+			flushMemoryForShutdown: vi.fn(async () => {}),
+			getMemoryMaintenanceContext: vi.fn(async () => {
+				throw new Error("not used");
+			}),
+			getStatusSnapshot: vi.fn(() => ({
+				model: "test/model",
+				contextTokens: 0,
+				contextWindow: 200000,
+				thinkingLevel: "off",
+			})),
+			abort: vi.fn(async () => {}),
+			...createFakeTurnState(),
+		};
+		getOrCreateRunnerMock.mockReturnValue(runner);
+
+		const { bootstrapAppHome, createRuntimeContext } = await import("../src/runtime/bootstrap.js");
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+
+		const bot = new FakeTestBot();
+		const runtime = createRuntimeContext({
+			paths,
+			dingtalkConfig: {
+				clientId: "client-id",
+				clientSecret: "client-secret",
+				robotCode: "client-id",
+				cardTemplateKey: "content",
+				stateDir: paths.workspaceDir,
+			} satisfies DingTalkConfig,
+			registerSignalHandlers: false,
+			startServices: false,
+			stopForceEndGraceMs: 50,
+			createBot: () => bot as unknown as DingTalkBot,
+			createEventsWatcher: () => ({ start() {}, stop() {} }),
+		});
+
+		const event = {
+			type: "dm",
+			channelId: "dm_tester",
+			ts: "1000",
+			user: "tester",
+			userName: "Tester",
+			text: "please keep working",
+			conversationId: "conv_1",
+			conversationType: "1",
+		} as const;
+		runtime.handler.reserveEvent?.(event);
+		const task = runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
+
+		await runStarted;
+		await runtime.handler.handleStop("dm_tester", bot as unknown as DingTalkBot);
+		// The wedged turn is still running, so /stop alone leaves the channel busy.
+		expect(runtime.handler.isRunning("dm_tester")).toBe(true);
+
+		const deadline = Date.now() + 5_000;
+		while (runtime.handler.isRunning("dm_tester") && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		expect(runtime.handler.isRunning("dm_tester")).toBe(false);
+		expect(bot.deliveries.some((entry) => String(entry.args[1]).includes("强制结束"))).toBe(true);
+
+		// The wedged turn's own late release must not disturb whatever runs next.
+		runner.beginTurn("next message");
+		releaseRun();
+		await task;
+		expect(runtime.handler.isRunning("dm_tester")).toBe(true);
+		runner.endTurn();
+
+		await runtime.shutdown();
+	}, 20_000);
 });

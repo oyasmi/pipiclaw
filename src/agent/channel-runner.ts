@@ -58,6 +58,7 @@ import { countPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
+import { withTimeout } from "../shared/with-timeout.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
@@ -129,6 +130,16 @@ function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsMana
 
 const DEFAULT_MAIN_THINKING_LEVEL: ThinkingLevel = "medium";
 
+/**
+ * Ceilings for the two awaited steps of a session-resource reload. Both reach
+ * the network (model/auth re-resolution; the SDK session's own reload) and
+ * neither carries a timeout of its own, so a stalled provider used to freeze a
+ * reload — and, before the gate detached it, the turn that triggered it. On
+ * timeout the reload keeps the resources it already had and logs.
+ */
+const MODEL_REGISTRY_REFRESH_TIMEOUT_MS = 15_000;
+const SESSION_RELOAD_TIMEOUT_MS = 30_000;
+
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
 	private readonly executor: Executor;
@@ -179,6 +190,12 @@ export class ChannelRunner implements AgentRunner {
 		phase: "idle",
 		stopRequested: false,
 	};
+	/**
+	 * Turns released by `forceEndTurn` whose owner has not called `endTurn` yet.
+	 * That late release must be swallowed, or it would clear the busy state of
+	 * whichever turn started in the meantime.
+	 */
+	private abandonedTurns = 0;
 	/** When the primary model last failed and we switched to the backup. null = on primary. */
 	private primaryFailedAt: number | null = null;
 
@@ -261,11 +278,37 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	endTurn(): void {
+		// A turn that `forceEndTurn` already released no longer owns this state.
+		if (this.abandonedTurns > 0) {
+			this.abandonedTurns--;
+			return;
+		}
 		this.turn = { phase: "idle", stopRequested: false };
+	}
+
+	forceEndTurn(reason: string): boolean {
+		if (this.turn.phase === "idle") {
+			return false;
+		}
+		log.logWarning(
+			`[${this.channelId}] Force-ending a stuck turn (phase=${this.turn.phase})`,
+			`${reason}; its own teardown is still running and will be ignored when it finishes`,
+		);
+		this.abandonedTurns++;
+		this.turn = { phase: "idle", stopRequested: false };
+		return true;
 	}
 
 	isBusy(): boolean {
 		return this.turn.phase !== "idle";
+	}
+
+	/** Advance a turn's phase, unless that turn has since been released. */
+	private setPhase(turn: { phase: TurnPhase }, phase: TurnPhase): void {
+		if (this.turn !== turn) {
+			return;
+		}
+		this.turn.phase = phase;
 	}
 
 	requestStop(): void {
@@ -297,7 +340,10 @@ export class ChannelRunner implements AgentRunner {
 		if (implicitTurn) {
 			this.beginTurn(ctx.message.text);
 		}
-		this.turn.phase = "preparing";
+		// Every later phase write goes through this reference: once `forceEndTurn`
+		// has released this turn, `this.turn` may already belong to the next one.
+		const ownTurn = this.turn;
+		this.setPhase(ownTurn, "preparing");
 
 		const runQueue = createRunQueue();
 		this.runState.queue = runQueue.queue;
@@ -486,7 +532,7 @@ export class ChannelRunner implements AgentRunner {
 				fields: { error: this.runState.errorMessage },
 			});
 		} finally {
-			this.turn.phase = "finishing";
+			this.setPhase(ownTurn, "finishing");
 			// Debug dump (PIPICLAW_DEBUG=1). Written after the run so `systemPrompt` is the
 			// string the provider actually received — base sections, pi's tail, and the boundary
 			// footer the prompt extension appends at before_agent_start.
@@ -1031,7 +1077,13 @@ export class ChannelRunner implements AgentRunner {
 		this.currentSkills = skills;
 		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
 		this.rebuildSessionTools();
-		await this.session.reload();
+		try {
+			await withTimeout(`[${this.channelId}] session reload`, SESSION_RELOAD_TIMEOUT_MS, () =>
+				this.session.reload(),
+			);
+		} catch (error) {
+			log.logWarning(`[${this.channelId}] Session reload did not settle`, errorMessage(error));
+		}
 	}
 
 	private async bindSessionExtensions(): Promise<void> {
@@ -1090,7 +1142,20 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	private async refreshSubAgentDiscovery(): Promise<SubAgentDiscoveryResult> {
-		await this.modelRegistry.refresh();
+		// Re-resolves models.json *and* every provider's auth, which for an OAuth
+		// provider is a network call. Failing open keeps the last known model
+		// snapshot — stale availability is a far smaller problem than a reload
+		// (and, through it, a `/new` turn) that never returns.
+		try {
+			await withTimeout(`[${this.channelId}] model registry refresh`, MODEL_REGISTRY_REFRESH_TIMEOUT_MS, () =>
+				this.modelRegistry.refresh(),
+			);
+		} catch (error) {
+			log.logWarning(
+				`[${this.channelId}] Model registry refresh did not settle; using the previous model snapshot`,
+				errorMessage(error),
+			);
+		}
 		const discovery = discoverSubAgents(this.workspaceDir, this.modelRegistry.getAvailable());
 		for (const warning of discovery.warnings) {
 			log.logWarning(`Sub-agent config warning (${this.channelId})`, warning);
