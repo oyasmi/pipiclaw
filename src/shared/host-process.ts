@@ -18,9 +18,15 @@ export function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * SIGTERM the process group, then SIGKILL it after a short grace period if it is still alive.
+ * SIGTERM the process group, then unconditionally SIGKILL it after a short grace period.
  * `detached: true` at spawn time makes the child its own process-group leader, so `-pid` reaches
  * it and everything it spawned.
+ *
+ * The SIGKILL is not gated on a liveness probe of the leader pid: a leader that exits before a
+ * lingering descendant (e.g. a shell that forked and returned) would make `isProcessAlive(pid)`
+ * report false while the descendant is still alive and still holding the workspace, so probing
+ * only the leader and skipping the SIGKILL on that basis is exactly the wrong direction to err in.
+ * A dead group simply makes the SIGKILL a harmless ESRCH, caught below.
  */
 export async function killProcessGroup(pid: number, graceMs = 300): Promise<void> {
 	try {
@@ -28,7 +34,6 @@ export async function killProcessGroup(pid: number, graceMs = 300): Promise<void
 	} catch {
 		return; // Already gone.
 	}
-	if (!isProcessAlive(pid)) return;
 	await new Promise((resolve) => setTimeout(resolve, graceMs));
 	try {
 		process.kill(-pid, "SIGKILL");

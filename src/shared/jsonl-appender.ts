@@ -36,6 +36,8 @@ export interface JsonlAppenderOptions {
 export interface JsonlAppender {
 	/** Queue and await one record. Never throws; a full or closed writer drops it. */
 	append(record: unknown, priority?: JsonlPriority): Promise<void>;
+	/** Queue and durably append one record, rejecting on serialization, capacity, closure, or I/O failure. */
+	appendStrict(record: unknown, priority?: JsonlPriority): Promise<void>;
 	/** Queue one record without waiting for disk. Returns false when it cannot be accepted. */
 	tryAppend(record: unknown, priority?: JsonlPriority): boolean;
 	/** Wait until every currently accepted record has finished. */
@@ -149,13 +151,14 @@ export function createJsonlAppender(options: JsonlAppenderOptions): JsonlAppende
 		sizes.set(filePath, (await currentSize(filePath)) + lineBytes);
 	};
 
-	const serialize = (record: unknown): Omit<PendingLine, "completion"> | null => {
+	const serialize = (record: unknown, strict: boolean): Omit<PendingLine, "completion"> | null => {
 		try {
 			const json = JSON.stringify(options.recordForWrite ? options.recordForWrite(record) : record);
 			if (json === undefined) throw new Error("JSONL records must be JSON-serializable values");
 			const line = `${json}\n`;
 			return { filePath: resolvePath(new Date(), record), line, bytes: Buffer.byteLength(line) };
-		} catch {
+		} catch (error) {
+			if (strict) throw error;
 			if (!warnedDrop) {
 				warnedDrop = true;
 				fallbackWarning("runtime.log_sink.dropped", "Failed to serialize JSONL record; record was dropped");
@@ -164,13 +167,17 @@ export function createJsonlAppender(options: JsonlAppenderOptions): JsonlAppende
 		}
 	};
 
-	const enqueue = (record: unknown, priority: JsonlPriority): PendingLine | null => {
-		if (closed) return null;
-		const serialized = serialize(record);
+	const enqueue = (record: unknown, priority: JsonlPriority, strict = false): PendingLine | null => {
+		if (closed) {
+			if (strict) throw new Error("JSONL appender is closed");
+			return null;
+		}
+		const serialized = serialize(record, strict);
 		if (!serialized) return null;
 		const recordLimit = priority === "critical" ? maxPendingRecords : maxPendingRecords - reservedCriticalRecords;
 		const byteLimit = priority === "critical" ? maxPendingBytes : maxPendingBytes - reservedCriticalBytes;
 		if (pending.size >= recordLimit || pendingBytes + serialized.bytes > byteLimit) {
+			if (strict) throw new Error("JSONL queue limit reached");
 			if (!warnedDrop) {
 				warnedDrop = true;
 				fallbackWarning("runtime.log_sink.dropped", "JSONL queue limit reached; record was dropped");
@@ -179,19 +186,22 @@ export function createJsonlAppender(options: JsonlAppenderOptions): JsonlAppende
 		}
 
 		const previous = chains.get(serialized.filePath) ?? Promise.resolve();
-		const result = previous
+		const writeResult = previous
 			.catch(() => undefined)
-			.then(async () => {
-				try {
-					await write(serialized.filePath, serialized.line, serialized.bytes);
-					warnedWrite = false;
-				} catch {
-					if (!warnedWrite) {
-						warnedWrite = true;
-						fallbackWarning("runtime.log_sink.failed", "Failed to append JSONL record; continuing without it");
-					}
-				}
-			});
+			.then(() => write(serialized.filePath, serialized.line, serialized.bytes));
+		const result = strict
+			? writeResult
+			: writeResult.then(
+					() => {
+						warnedWrite = false;
+					},
+					() => {
+						if (!warnedWrite) {
+							warnedWrite = true;
+							fallbackWarning("runtime.log_sink.failed", "Failed to append JSONL record; continuing without it");
+						}
+					},
+				);
 		const completion = result.finally(() => {
 			pending.delete(completion);
 			pendingBytes -= serialized.bytes;
@@ -213,6 +223,11 @@ export function createJsonlAppender(options: JsonlAppenderOptions): JsonlAppende
 	return {
 		async append(record: unknown, priority: JsonlPriority = "critical"): Promise<void> {
 			await enqueue(record, priority)?.completion;
+		},
+		async appendStrict(record: unknown, priority: JsonlPriority = "critical"): Promise<void> {
+			const pendingLine = enqueue(record, priority, true);
+			if (!pendingLine) throw new Error("JSONL record was not accepted");
+			await pendingLine.completion;
 		},
 		tryAppend(record: unknown, priority: JsonlPriority = "normal"): boolean {
 			return enqueue(record, priority) !== null;

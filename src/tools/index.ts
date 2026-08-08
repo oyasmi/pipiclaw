@@ -103,6 +103,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 				channelId: options.channelId,
 				channelDir: options.channelDir,
 				getSubAgentDiscovery: options.getSubAgentDiscovery,
+				workspaceDir: options.workspaceDir,
+				securityConfig,
 			}),
 			"subagent_manage",
 		),

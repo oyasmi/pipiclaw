@@ -62,6 +62,19 @@ function renderKindBreakdown(summary: UsageSummary): string | null {
 	return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+/**
+ * Some harnesses cannot report tokens or cost at all (`exec` reports neither; `codex-cli` reports
+ * no cost). Those runs are never dropped from the ledger (spec 040, T7) but their totals are
+ * always 0 by construction, so the aggregate total must say so explicitly — otherwise "$0.0000"
+ * reads as "these runs cost nothing" instead of "cost unknown for some of these runs".
+ */
+function unknownNote(summary: UsageSummary): string | null {
+	const parts: string[] = [];
+	if (summary.unknownCostCount > 0) parts.push(`${summary.unknownCostCount} 次成本未知`);
+	if (summary.unknownUsageCount > 0) parts.push(`${summary.unknownUsageCount} 次用量未知`);
+	return parts.length > 0 ? `（另有 ${parts.join("，")}，未计入以上合计）` : null;
+}
+
 async function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId: string): Promise<string> {
 	const [global, channel] = await Promise.all([
 		ledger.summarize({ since: window.since, until: window.until }),
@@ -81,12 +94,20 @@ async function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId:
 	if (channelKinds) {
 		lines.push(`  ${channelKinds}`);
 	}
+	const channelUnknown = unknownNote(channel);
+	if (channelUnknown) {
+		lines.push(`  ${channelUnknown}`);
+	}
 
 	const channelCount = Object.keys(global.byChannel).length;
 	lines.push(`全局：${money(global.totalCost)} · ${tokens(global.totalTokens)}，覆盖 ${channelCount} 个频道`);
 	const topModels = topEntries(global.byModel, 3);
 	if (topModels.length > 0) {
 		lines.push(`  用量最高的模型：${topModels.map(([model, cost]) => `${model} ${money(cost)}`).join("，")}`);
+	}
+	const globalUnknown = unknownNote(global);
+	if (globalUnknown) {
+		lines.push(`  ${globalUnknown}`);
 	}
 	return lines.join("\n");
 }

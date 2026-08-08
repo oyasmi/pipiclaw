@@ -82,6 +82,9 @@ export interface RunRecord extends RunUsage {
 	usageRecorded?: boolean;
 	/** Set once the completion wake has been hallmarked for delivery; guards against a duplicate wake. */
 	wakeEnqueued?: boolean;
+	/** Durable one-time relationship between the internally produced wake and task activation (T9). */
+	wakeClaimDispatchId?: string;
+	wakeConsumedAt?: number;
 	// External-runtime fields (spec 040 phase 2+). Present only once the external harness lands;
 	// kept optional here so the record shape does not need another migration when it does.
 	pid?: number;
@@ -135,6 +138,11 @@ export interface RunManagerOptions {
 	store?: ChannelStore;
 }
 
+/** Registration is serialized across channel managers so the host-wide count and insertion are
+ * one admission transaction. The per-run manager queue alone cannot protect the 19 -> 20 edge
+ * when two different channels register concurrently. */
+const hostAdmissionQueue = createSerialQueue<"host">();
+
 /** Bytes of the reply text carried inline in the completion wake, matching job-manager's tail budget. */
 const WAKE_OUTPUT_TAIL_CHARS = 2_000;
 
@@ -178,6 +186,9 @@ export class SubAgentRunManager {
 	 *  kill goes through pid, not this map, once phase 2/3 lands). Never persisted: a restart loses
 	 *  the only thing that could reach an in-process worker anyway (D10.3). */
 	private readonly cancelHandles = new Map<string, () => void>();
+	/** External launch intents exist before a safe live child handle does. A cancel in that window
+	 * is remembered here and consumed before spawn, rather than spawning a process nothing can cancel. */
+	private readonly externalLaunches = new Map<string, { cancelRequested: boolean }>();
 	private readonly queue = createSerialQueue<string>();
 
 	constructor(
@@ -189,12 +200,13 @@ export class SubAgentRunManager {
 		return this.options.stateDir ? join(this.options.stateDir, this.channelId, `${runId}.json`) : undefined;
 	}
 
-	private async persist(record: RunRecord): Promise<void> {
+	private async persist(record: RunRecord, required = false): Promise<void> {
 		const path = this.recordPath(record.runId);
 		if (!path) return;
 		try {
 			await writeFileAtomically(path, `${JSON.stringify(record)}\n`);
 		} catch (error) {
+			if (required) throw error;
 			log.logWarning(`Failed to persist sub-agent run ${record.runId}`, errorMessage(error));
 		}
 	}
@@ -220,6 +232,7 @@ export class SubAgentRunManager {
 	private async forget(record: RunRecord): Promise<void> {
 		this.runs.delete(record.runId);
 		this.cancelHandles.delete(record.runId);
+		this.externalLaunches.delete(record.runId);
 		const path = this.recordPath(record.runId);
 		if (path) await unlink(path).catch(() => undefined);
 	}
@@ -249,32 +262,60 @@ export class SubAgentRunManager {
 
 	/** Register the run's lifecycle before any work starts, and persist it immediately (D1). */
 	async register(input: RegisterRunInput): Promise<RunRecord> {
-		// D10.2: a per-channel and a host-wide cap, both code constants (a local response to a
-		// runaway model, not a global cross-subsystem admission scheme — see the design doc's
-		// non-goals). Checked before anything is persisted, so a rejected run costs nothing.
-		if (this.runningCount() >= MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL) {
-			throw new Error(
-				`Too many delegation runs already running on this channel (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL}). ` +
-					"Wait for one to finish, or cancel one with subagent_manage first.",
-			);
-		}
-		if (totalRunningSubAgentRuns() >= MAX_RUNNING_SUBAGENT_RUNS_PER_HOST) {
-			throw new Error(
-				`Too many delegation runs already running host-wide (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_HOST}). ` +
-					"Wait for one to finish before dispatching another.",
-			);
-		}
-		const record: RunRecord = {
-			...input,
-			status: "running",
-			startedAt: Date.now(),
-			usage: emptyUsage(),
-			usageKnown: true,
-			costKnown: true,
-		};
-		this.runs.set(record.runId, record);
-		await this.persist(record);
-		return record;
+		return hostAdmissionQueue.run("host", () =>
+			this.queue.run(input.runId, async () => {
+				// D10.2: a per-channel and a host-wide cap, both code constants (a local response to a
+				// runaway model, not a global cross-subsystem admission scheme — see the design doc's
+				// non-goals). Checked before anything is persisted, so a rejected run costs nothing.
+				if (this.runningCount() >= MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL) {
+					throw new Error(
+						`Too many delegation runs already running on this channel (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL}). ` +
+							"Wait for one to finish, or cancel one with subagent_manage first.",
+					);
+				}
+				if (totalRunningSubAgentRuns() >= MAX_RUNNING_SUBAGENT_RUNS_PER_HOST) {
+					throw new Error(
+						`Too many delegation runs already running host-wide (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_HOST}). ` +
+							"Wait for one to finish before dispatching another.",
+					);
+				}
+				const record: RunRecord = {
+					...input,
+					status: "running",
+					startedAt: Date.now(),
+					usage: emptyUsage(),
+					usageKnown: true,
+					costKnown: true,
+				};
+				this.runs.set(record.runId, record);
+				if (record.runtime === "external") this.externalLaunches.set(record.runId, { cancelRequested: false });
+				try {
+					await this.persist(record, true);
+				} catch (error) {
+					this.runs.delete(record.runId);
+					this.externalLaunches.delete(record.runId);
+					throw error;
+				}
+				return record;
+			}),
+		);
+	}
+
+	/** Atomically crosses the external launch cancel window. The supplied live-handle callback is
+	 * installed before this method resolves; a cancel queued during register is observed first and
+	 * makes this return false, so the caller must not spawn. */
+	async claimExternalLaunch(runId: string, cancel: () => void): Promise<boolean> {
+		return this.queue.run(runId, async () => {
+			const record = this.runs.get(runId);
+			const launch = this.externalLaunches.get(runId);
+			if (!record || record.status !== "running" || !launch || launch.cancelRequested) {
+				this.externalLaunches.delete(runId);
+				return false;
+			}
+			this.cancelHandles.set(runId, cancel);
+			this.externalLaunches.delete(runId);
+			return true;
+		});
 	}
 
 	/**
@@ -295,7 +336,48 @@ export class SubAgentRunManager {
 		// claude-code pre-assigns its session id before running (D4); persisting it here, not just
 		// at settle(), means a run that crashes before any output is still resumable.
 		if (info.sessionId) record.sessionId = info.sessionId;
-		await this.persist(record);
+		await this.persist(record, true);
+	}
+
+	/** Reserve a task wake exactly once. A replay of the same durable dispatch may resume an
+	 * interrupted activation, while copied text or a different dispatch id can never claim it. */
+	async beginWakeConsumption(runId: string, taskId: string, dispatchId: string): Promise<boolean> {
+		return this.queue.run(runId, async () => {
+			const record = this.runs.get(runId);
+			const expected = `subagent:${record?.channelId}:${runId}:done`;
+			if (
+				!record?.settledAt ||
+				record.taskId !== taskId ||
+				dispatchId !== expected ||
+				record.wakeConsumedAt ||
+				(record.wakeClaimDispatchId && record.wakeClaimDispatchId !== dispatchId)
+			) {
+				return false;
+			}
+			const previousClaim = record.wakeClaimDispatchId;
+			record.wakeClaimDispatchId = dispatchId;
+			try {
+				await this.persist(record, true);
+			} catch (error) {
+				record.wakeClaimDispatchId = previousClaim;
+				throw error;
+			}
+			return true;
+		});
+	}
+
+	async finishWakeConsumption(runId: string, dispatchId: string): Promise<void> {
+		await this.queue.run(runId, async () => {
+			const record = this.runs.get(runId);
+			if (!record || record.wakeClaimDispatchId !== dispatchId || record.wakeConsumedAt) return;
+			record.wakeConsumedAt = Date.now();
+			try {
+				await this.persist(record, true);
+			} catch (error) {
+				record.wakeConsumedAt = undefined;
+				throw error;
+			}
+		});
 	}
 
 	/** Let a caller (subagent tool) register a way to abort this run's in-process worker. */
@@ -335,6 +417,7 @@ export class SubAgentRunManager {
 			releaseWorkspaceLease(record.leaseKey);
 			await this.persist(record);
 			this.cancelHandles.delete(runId);
+			this.externalLaunches.delete(runId);
 
 			if (!record.usageRecorded) {
 				record.usageRecorded = true;
@@ -426,6 +509,16 @@ export class SubAgentRunManager {
 			conversationId: "",
 			conversationType: record.channelId.startsWith("group_") ? "2" : "1",
 			dispatchId: `subagent:${record.channelId}:${record.runId}:done`,
+			...(record.taskId
+				? {
+						internalWake: {
+							kind: "subagent" as const,
+							resourceId: record.runId,
+							taskId: record.taskId,
+							dispatchId: `subagent:${record.channelId}:${record.runId}:done`,
+						},
+					}
+				: {}),
 		};
 		try {
 			await this.options.dispatch(event);
@@ -447,6 +540,10 @@ export class SubAgentRunManager {
 			this.cancelHandles.delete(runId);
 			if (cancelHandle) {
 				cancelHandle();
+			} else if (record.runtime === "external" && this.externalLaunches.has(runId)) {
+				// The process has not spawned yet; claimExternalLaunch() will observe this request
+				// and refuse to spawn instead of starting an uncancellable child.
+				this.externalLaunches.get(runId)!.cancelRequested = true;
 			} else {
 				// No in-process handle (external runtime, not yet wired, or a run this process did
 				// not launch): mark it lost rather than pretend a cancel we could not perform happened.

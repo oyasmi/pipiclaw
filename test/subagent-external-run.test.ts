@@ -1,12 +1,14 @@
 import type { ChildProcess, spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
+import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { launchExternalRun } from "../src/subagents/external/run.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
+import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spec 040, D1/D3/D4: the external-run orchestrator, driven with a fake `spawn` so the test
@@ -82,6 +84,9 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			workingDirectory: workspaceDir,
 			artifactDir,
 			purpose: "work",
+			mutates: "write",
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
 			spawnFn: spawnFnForInput,
 		});
 
@@ -93,6 +98,23 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		await waitFor(() => manager.get("run-ext-1")?.pid !== undefined);
 		expect(manager.get("run-ext-1")?.status).toBe("running");
 		expect(manager.get("run-ext-1")?.pid).toBe(5150);
+
+		// D8.1/T5: the dispatch is audited once argv/cwd/role/mutates/model/runId are all final,
+		// unconditionally (not gated on `audit.logBlocked`).
+		const auditLog = readFileSync(join(workspaceDir, ".pipiclaw", "security.log"), "utf-8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		const externalAgentEvent = auditLog.find((entry) => entry.type === "external-agent");
+		expect(externalAgentEvent).toMatchObject({
+			type: "external-agent",
+			runId: "run-ext-1",
+			agent: "builder",
+			harness: "codex-cli",
+			argv: ["codex", "exec", "--json", "-"],
+			workingDirectory: workspaceDir,
+			mutates: "write",
+		});
 
 		child.stdout.write(`${JSON.stringify({ type: "thread.started", thread_id: "thread-xyz" })}\n`);
 		child.stdout.write(
@@ -150,6 +172,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			workingDirectory: workspaceDir,
 			artifactDir,
 			purpose: "work",
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
 			spawnFn: spawnFnForInput,
 		});
 
@@ -199,6 +223,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			workingDirectory: workspaceDir,
 			artifactDir,
 			purpose: "work",
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
 			spawnFn: spawnFnForInput,
 		});
 
@@ -207,6 +233,195 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(manager.get("run-ext-3")?.status).toBe("failed");
 		expect(manager.get("run-ext-3")?.failureReason).toContain("Failed to launch");
 		expect(dispatched).toHaveLength(1);
+	});
+
+	it("captures a real short-lived child that closes before launchExternalRun returns", async () => {
+		const workspaceDir = createTempWorkspace();
+		const artifactDir = join(workspaceDir, "dm_short", "subagent-artifacts", "run-short");
+		const dispatched: DingTalkEvent[] = [];
+		configureSubAgentRuntime({
+			dispatch: (event) => {
+				dispatched.push(event);
+				return true;
+			},
+		});
+
+		await launchExternalRun({
+			runId: "run-short",
+			channelId: "dm_short",
+			label: "short",
+			agent: "runner",
+			source: "inline",
+			harness: "exec",
+			command: "printf short-lived",
+			maxWallTimeSec: 10,
+			systemPrompt: "System.",
+			task: "Task.",
+			workingDirectory: workspaceDir,
+			artifactDir,
+			purpose: "work",
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
+		});
+
+		const manager = getSubAgentRunManager("dm_short");
+		await waitFor(() => manager.get("run-short")?.status !== "running");
+		await waitFor(() => dispatched.length === 1);
+		expect(manager.get("run-short")?.status).toBe("completed");
+		expect(readFileSync(join(artifactDir, "output.md"), "utf-8")).toContain("short-lived");
+		expect(dispatched).toHaveLength(1);
+	});
+
+	it("cancels a launch intent before spawn when cancel arrives after register", async () => {
+		const workspaceDir = createTempWorkspace();
+		const artifactDir = join(workspaceDir, "dm_launch_cancel", "subagent-artifacts", "run-launch-cancel");
+		configureSubAgentRuntime({});
+		const manager = getSubAgentRunManager("dm_launch_cancel");
+		await manager.register({
+			runId: "run-launch-cancel",
+			channelId: "dm_launch_cancel",
+			runtime: "external",
+			agent: "runner",
+			label: "cancel launch",
+			source: "inline",
+			tools: [],
+			purpose: "work",
+			workingDirectory: workspaceDir,
+			artifactDir,
+		});
+		await manager.cancel("run-launch-cancel");
+		const claimed = await manager.claimExternalLaunch("run-launch-cancel", () => {});
+
+		expect(claimed).toBe(false);
+	});
+
+	it("terminates descendants before settling and releasing the external write lease", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_descendant";
+		const runId = "run-descendant";
+		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", runId);
+		const marker = join(workspaceDir, "late-write.txt");
+		const script = join(workspaceDir, "leader.cjs");
+		writeFileSync(
+			script,
+			`const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e","setTimeout(()=>require('node:fs').writeFileSync(process.argv[1],'late'),1000)",${JSON.stringify(marker)}],{stdio:"ignore"});c.unref();process.stdout.write("leader done");process.exit(0);`,
+		);
+		const lease = acquireWorkspaceLease({ runId, channelId, workingDirectory: workspaceDir });
+		expect(lease.ok).toBe(true);
+		configureSubAgentRuntime({ dispatch: () => true });
+
+		await launchExternalRun({
+			runId,
+			channelId,
+			label: "descendant",
+			agent: "runner",
+			source: "inline",
+			harness: "exec",
+			command: `${process.execPath} ${script}`,
+			maxWallTimeSec: 10,
+			systemPrompt: "System.",
+			task: "Task.",
+			workingDirectory: workspaceDir,
+			artifactDir,
+			purpose: "work",
+			mutates: "write",
+			leaseKey: lease.ok ? lease.leaseKey : undefined,
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
+		});
+		const manager = getSubAgentRunManager(channelId);
+		expect(acquireWorkspaceLease({ runId: "competing", channelId, workingDirectory: workspaceDir }).ok).toBe(false);
+		await waitFor(() => manager.get(runId)?.status !== "running", 5_000);
+		await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+		expect(existsSync(marker)).toBe(false);
+		const nextLease = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory: workspaceDir });
+		expect(nextLease.ok).toBe(true);
+		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey);
+	});
+
+	it.each(["cancel", "timeout"] as const)(
+		"terminates the owned descendant group on %s before releasing the write lease",
+		async (mode) => {
+			const workspaceDir = createTempWorkspace();
+			const channelId = `dm_group_${mode}`;
+			const runId = `run-group-${mode}`;
+			const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", runId);
+			const marker = join(workspaceDir, `${mode}-late-write.txt`);
+			const script = join(workspaceDir, `${mode}-leader.cjs`);
+			writeFileSync(
+				script,
+				`const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e","setTimeout(()=>require('node:fs').writeFileSync(process.argv[1],'late'),700)",${JSON.stringify(marker)}],{stdio:"ignore"});c.unref();setInterval(()=>{},1000);`,
+			);
+			const lease = acquireWorkspaceLease({ runId, channelId, workingDirectory: workspaceDir });
+			expect(lease.ok).toBe(true);
+			configureSubAgentRuntime({ dispatch: () => true });
+
+			await launchExternalRun({
+				runId,
+				channelId,
+				label: mode,
+				agent: "runner",
+				source: "inline",
+				harness: "exec",
+				command: `${process.execPath} ${script}`,
+				maxWallTimeSec: mode === "timeout" ? 0.05 : 10,
+				systemPrompt: "System.",
+				task: "Task.",
+				workingDirectory: workspaceDir,
+				artifactDir,
+				purpose: "work",
+				mutates: "write",
+				leaseKey: lease.ok ? lease.leaseKey : undefined,
+				workspaceDir,
+				securityConfig: DEFAULT_SECURITY_CONFIG,
+			});
+			const manager = getSubAgentRunManager(channelId);
+			if (mode === "cancel") await manager.cancel(runId);
+			expect(acquireWorkspaceLease({ runId: "blocked", channelId, workingDirectory: workspaceDir }).ok).toBe(false);
+			await waitFor(() => manager.get(runId)?.status !== "running", 5_000);
+			await new Promise((resolve) => setTimeout(resolve, 800));
+
+			expect(existsSync(marker)).toBe(false);
+			expect(manager.get(runId)?.status).toBe(mode === "cancel" ? "cancelled" : "failed");
+			const nextLease = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory: workspaceDir });
+			expect(nextLease.ok).toBe(true);
+			if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey);
+		},
+	);
+
+	it("rejects dispatch before spawn when the mandatory audit record cannot be written", async () => {
+		const workspaceDir = createTempWorkspace();
+		const artifactDir = join(workspaceDir, "dm_audit_fail", "subagent-artifacts", "run-audit-fail");
+		const auditDirectory = join(workspaceDir, "audit-is-a-directory");
+		mkdirSync(auditDirectory, { recursive: true });
+		const { spawnFn, spawnFnForInput } = makeFakeSpawn();
+
+		await expect(
+			launchExternalRun({
+				runId: "run-audit-fail",
+				channelId: "dm_audit_fail",
+				label: "must be audited",
+				agent: "builder",
+				source: "predefined",
+				harness: "exec",
+				command: "printf unsafe",
+				maxWallTimeSec: 10,
+				systemPrompt: "System.",
+				task: "Task.",
+				workingDirectory: workspaceDir,
+				artifactDir,
+				purpose: "work",
+				workspaceDir,
+				securityConfig: {
+					...DEFAULT_SECURITY_CONFIG,
+					audit: { ...DEFAULT_SECURITY_CONFIG.audit, logFile: auditDirectory },
+				},
+				spawnFn: spawnFnForInput,
+			}),
+		).rejects.toThrow();
+		expect(spawnFn).not.toHaveBeenCalled();
+		expect(getSubAgentRunManager("dm_audit_fail").get("run-audit-fail")).toBeUndefined();
 	});
 
 	it("rejects an unknown harness before ever spawning", async () => {
@@ -232,6 +447,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 				workingDirectory: workspaceDir,
 				artifactDir,
 				purpose: "work",
+				workspaceDir,
+				securityConfig: DEFAULT_SECURITY_CONFIG,
 				spawnFn: spawnFnForInput,
 			}),
 		).rejects.toThrow("Unknown external harness");
@@ -267,6 +484,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			workingDirectory: workspaceDir,
 			artifactDir,
 			purpose: "work",
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
 			spawnFn: spawnFnForInput,
 		});
 

@@ -15,6 +15,8 @@ function stubLedger(fn: (q: UsageSummaryQuery) => Partial<UsageSummary>): UsageL
 			byKind: {},
 			byModel: {},
 			byChannel: {},
+			unknownUsageCount: 0,
+			unknownCostCount: 0,
 			...fn(q),
 		}),
 	};
@@ -71,5 +73,29 @@ describe("renderUsageReport", () => {
 		const ledger = stubLedger(() => ({}));
 		const report = await renderUsageReport(ledger, "c1", "default", NOW);
 		expect(report).toContain("暂无用量记录。");
+	});
+
+	it("discloses runs with unknown cost/usage instead of silently folding them into the total (spec 040, T7)", async () => {
+		const ledger = stubLedger((q) =>
+			q.channelId
+				? { totalCost: 0.2, totalTokens: 5_000, entryCount: 2, unknownCostCount: 2, unknownUsageCount: 1 }
+				: { totalCost: 0.2, totalTokens: 5_000, entryCount: 2, unknownCostCount: 2, unknownUsageCount: 1 },
+		);
+
+		const report = await renderUsageReport(ledger, "c1", "month", NOW);
+		expect(report).toContain("2 次成本未知");
+		expect(report).toContain("1 次用量未知");
+		expect(report).toContain("未计入以上合计");
+	});
+
+	it("omits the unknown-cost note when every run in the window has known usage and cost", async () => {
+		const ledger = stubLedger((q) =>
+			q.channelId
+				? { totalCost: 0.3, totalTokens: 12_000, entryCount: 2 }
+				: { totalCost: 1.5, totalTokens: 2_400_000, entryCount: 5 },
+		);
+
+		const report = await renderUsageReport(ledger, "c1", "month", NOW);
+		expect(report).not.toContain("未知");
 	});
 });

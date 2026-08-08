@@ -1,10 +1,16 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
+import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
+import type { SecurityConfig } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { launchExternalRun } from "../subagents/external/run.js";
 import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
-import { acquireWorkspaceLease, formatWorkspaceLeaseConflict } from "../subagents/workspace-lease.js";
+import {
+	acquireWorkspaceLease,
+	formatWorkspaceLeaseConflict,
+	releaseWorkspaceLease,
+} from "../subagents/workspace-lease.js";
 
 const subagentManageSchema = Type.Object({
 	label: Type.String({ description: "Brief description of what you're checking (shown to user)" }),
@@ -23,6 +29,10 @@ export interface SubAgentManageToolOptions {
 	channelDir?: string;
 	/** Needed only for `follow_up`: re-resolves the role's current config by name. */
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
+	/** Needed only for `follow_up`, which dispatches a new external process and must audit it
+	 *  exactly like the initial dispatch (D8.1/T5). */
+	workspaceDir?: string;
+	securityConfig?: SecurityConfig;
 }
 
 interface SubAgentManageArgs {
@@ -139,29 +149,40 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 				leaseKey = lease.leaseKey;
 			}
 
-			await launchExternalRun({
-				runId: toolCallId,
-				channelId: options.channelId,
-				channelDir: options.channelDir,
-				label: `follow-up: ${task.slice(0, 80)}`,
-				agent: role.name,
-				source: role.source,
-				harness,
-				command: role.command ?? "",
-				shell: role.shell,
-				env: role.env,
-				externalModelRef: role.externalModelRef,
-				thinkingLevel: role.thinkingLevel,
-				maxWallTimeSec: role.maxWallTimeSec,
-				systemPrompt: role.systemPrompt,
-				task,
-				workingDirectory: record.workingDirectory,
-				artifactDir: record.artifactDir.replace(/[^/\\]+$/, toolCallId),
-				purpose: record.purpose,
-				taskId: record.taskId,
-				leaseKey,
-				resumeSessionId: record.sessionId,
-			});
+			try {
+				await launchExternalRun({
+					runId: toolCallId,
+					channelId: options.channelId,
+					channelDir: options.channelDir,
+					label: `follow-up: ${task.slice(0, 80)}`,
+					agent: role.name,
+					source: role.source,
+					harness,
+					command: role.command ?? "",
+					shell: role.shell,
+					env: role.env,
+					externalModelRef: role.externalModelRef,
+					thinkingLevel: role.thinkingLevel,
+					maxWallTimeSec: role.maxWallTimeSec,
+					systemPrompt: role.systemPrompt,
+					task,
+					workingDirectory: record.workingDirectory,
+					artifactDir: record.artifactDir.replace(/[^/\\]+$/, toolCallId),
+					purpose: record.purpose,
+					taskId: record.taskId,
+					leaseKey,
+					resumeSessionId: record.sessionId,
+					mutates: role.mutates,
+					workspaceDir: options.workspaceDir ?? "",
+					securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
+				});
+			} catch (error) {
+				// Until launchExternalRun has durably registered the run, no settlement authority owns
+				// this lease. Releasing here mirrors the initial subagent dispatch path and covers prompt,
+				// artifact, audit, invocation, and pre-spawn failures in follow_up.
+				releaseWorkspaceLease(leaseKey);
+				throw error;
+			}
 
 			return {
 				content: [

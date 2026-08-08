@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import type { LoggedSubAgentRun } from "../src/runtime/store.js";
-import { type SettleInput, SubAgentRunManager } from "../src/subagents/runs.js";
+import {
+	configureSubAgentRuntime,
+	getSubAgentRunManager,
+	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
+	type SettleInput,
+	SubAgentRunManager,
+} from "../src/subagents/runs.js";
 import type { UsageLedgerEntry } from "../src/usage/ledger.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -49,6 +55,8 @@ function makeLedger() {
 				byKind: {},
 				byModel: {},
 				byChannel: {},
+				unknownUsageCount: 0,
+				unknownCostCount: 0,
 			}),
 		},
 	};
@@ -95,6 +103,44 @@ function register(manager: SubAgentRunManager, overrides: Partial<Parameters<Sub
 }
 
 describe("SubAgentRunManager (spec 040, D1/D7)", () => {
+	it("admits at most one cross-channel registration at the host cap boundary", async () => {
+		configureSubAgentRuntime({});
+		const prefix = `host-cap-${Date.now()}`;
+		for (let index = 0; index < MAX_RUNNING_SUBAGENT_RUNS_PER_HOST - 1; index++) {
+			const channelId = `${prefix}-${index}`;
+			await register(getSubAgentRunManager(channelId), { runId: `run-${index}`, channelId });
+		}
+
+		const firstChannel = `${prefix}-first`;
+		const secondChannel = `${prefix}-second`;
+		const results = await Promise.allSettled([
+			register(getSubAgentRunManager(firstChannel), { runId: "edge-first", channelId: firstChannel }),
+			register(getSubAgentRunManager(secondChannel), { runId: "edge-second", channelId: secondChannel }),
+		]);
+
+		expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+		expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+		expect(results.find((result) => result.status === "rejected")).toMatchObject({
+			reason: expect.objectContaining({ message: expect.stringContaining("host-wide") }),
+		});
+		const total = Array.from({ length: MAX_RUNNING_SUBAGENT_RUNS_PER_HOST - 1 }, (_, index) =>
+			getSubAgentRunManager(`${prefix}-${index}`).runningCount(),
+		).reduce((sum, count) => sum + count, 0);
+		expect(
+			total +
+				getSubAgentRunManager(firstChannel).runningCount() +
+				getSubAgentRunManager(secondChannel).runningCount(),
+		).toBe(MAX_RUNNING_SUBAGENT_RUNS_PER_HOST);
+
+		await Promise.all([
+			...Array.from({ length: MAX_RUNNING_SUBAGENT_RUNS_PER_HOST - 1 }, (_, index) =>
+				getSubAgentRunManager(`${prefix}-${index}`).cancel(`run-${index}`),
+			),
+			getSubAgentRunManager(firstChannel).cancel("edge-first"),
+			getSubAgentRunManager(secondChannel).cancel("edge-second"),
+		]);
+	});
+
 	it("settling inline (announce:false) records usage/archive once and marks wakeEnqueued without dispatching", async () => {
 		const { ledger, records } = makeLedger();
 		const { store, archived } = makeStore();
@@ -126,6 +172,12 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 		expect(events).toHaveLength(1);
 		expect(events[0]?.dispatchId).toBe("subagent:dm_123:run-1:done");
+		expect(events[0]?.internalWake).toEqual({
+			kind: "subagent",
+			resourceId: "run-1",
+			taskId: "T-7",
+			dispatchId: "subagent:dm_123:run-1:done",
+		});
 		expect(events[0]?.text).toContain("[SUBAGENT:run-1]");
 		expect(events[0]?.text).toContain("It belongs to task T-7.");
 		expect(events[0]?.text).toContain("Found the bug in src/index.ts.");
@@ -147,6 +199,16 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(events).toHaveLength(1);
 		expect(records).toHaveLength(1);
 		expect(archived).toHaveLength(1);
+	});
+
+	it("consumes an exact durable task wake once and rejects its replay", async () => {
+		const manager = new SubAgentRunManager("dm_123", {});
+		await register(manager, { taskId: "T-once" });
+		await manager.settle("run-1", baseSettleInput(), { announce: false });
+		const dispatchId = "subagent:dm_123:run-1:done";
+		await expect(manager.beginWakeConsumption("run-1", "T-once", dispatchId)).resolves.toBe(true);
+		await manager.finishWakeConsumption("run-1", dispatchId);
+		await expect(manager.beginWakeConsumption("run-1", "T-once", dispatchId)).resolves.toBe(false);
 	});
 
 	it("cancel invokes the registered handle and does not itself dispatch a wake", async () => {

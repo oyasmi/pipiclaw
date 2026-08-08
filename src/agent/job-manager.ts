@@ -6,6 +6,7 @@ import type { Executor } from "../executor.js";
 import * as log from "../log.js";
 import type { DingTalkEvent } from "../runtime/dingtalk.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
+import { createSerialQueue } from "../shared/serial-queue.js";
 import { shellEscape } from "../shared/shell-escape.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
@@ -36,6 +37,9 @@ export interface JobSnapshot {
 	startedAt: number;
 	durationMs: number;
 	exitCode?: number;
+	/** The task this job's completion wake belongs to, if any — lets a caller verify that a
+	 *  `[JOB:<id>] ... belongs to task <taskId>.` wake actually names the job it claims to (T9). */
+	taskId?: string;
 }
 
 /** What should happen when the job finishes. */
@@ -56,6 +60,8 @@ interface JobRecord extends JobSnapshot {
 	finishedAt?: number;
 	/** Set once the completion wake has been dispatched, so a restart cannot re-announce it. */
 	notified?: boolean;
+	wakeClaimDispatchId?: string;
+	wakeConsumedAt?: number;
 }
 
 export interface JobStartOptions {
@@ -143,11 +149,13 @@ function toSnapshot(record: JobRecord): JobSnapshot {
 		startedAt: record.startedAt,
 		durationMs: record.status === "running" ? Date.now() - record.startedAt : record.durationMs,
 		exitCode: record.exitCode,
+		taskId: record.contract.taskId,
 	};
 }
 
 export class ChannelJobManager {
 	private readonly jobs = new Map<string, JobRecord>();
+	private readonly wakeQueue = createSerialQueue<string>();
 	private sweepTimer?: ReturnType<typeof setInterval>;
 	private garbageCollectionTimer?: ReturnType<typeof setTimeout>;
 	private sweeping = false;
@@ -170,7 +178,7 @@ export class ChannelJobManager {
 	}
 
 	/** Mirror a record to disk. Persistence is best-effort: it must never fail a job operation. */
-	private async persist(record: JobRecord): Promise<void> {
+	private async persist(record: JobRecord, required = false): Promise<void> {
 		const path = this.recordPath(record.id);
 		if (!path) return;
 		try {
@@ -178,6 +186,7 @@ export class ChannelJobManager {
 			// The record carries the full command line, so keep it owner-only.
 			await chmod(path, 0o600).catch(() => undefined);
 		} catch (error) {
+			if (required) throw error;
 			log.logWarning(`Failed to persist background job ${record.id}`, errorMessage(error));
 		}
 	}
@@ -471,6 +480,16 @@ export class ChannelJobManager {
 			conversationId: "",
 			conversationType: this.channelId.startsWith("group_") ? "2" : "1",
 			dispatchId: `job:${this.channelId}:${record.id}:done`,
+			...(record.contract.taskId
+				? {
+						internalWake: {
+							kind: "job" as const,
+							resourceId: record.id,
+							taskId: record.contract.taskId,
+							dispatchId: `job:${this.channelId}:${record.id}:done`,
+						},
+					}
+				: {}),
 		};
 		try {
 			await this.options.dispatch(event);
@@ -493,6 +512,46 @@ export class ChannelJobManager {
 			await this.refresh(record, signal);
 		}
 		return Array.from(this.jobs.values()).map(toSnapshot);
+	}
+
+	async beginWakeConsumption(id: string, taskId: string, dispatchId: string): Promise<boolean> {
+		return this.wakeQueue.run(id, async () => {
+			const record = this.jobs.get(id);
+			const expected = `job:${this.channelId}:${id}:done`;
+			if (
+				!record ||
+				record.status === "running" ||
+				record.contract.taskId !== taskId ||
+				dispatchId !== expected ||
+				record.wakeConsumedAt ||
+				(record.wakeClaimDispatchId && record.wakeClaimDispatchId !== dispatchId)
+			) {
+				return false;
+			}
+			const previousClaim = record.wakeClaimDispatchId;
+			record.wakeClaimDispatchId = dispatchId;
+			try {
+				await this.persist(record, true);
+			} catch (error) {
+				record.wakeClaimDispatchId = previousClaim;
+				throw error;
+			}
+			return true;
+		});
+	}
+
+	async finishWakeConsumption(id: string, dispatchId: string): Promise<void> {
+		await this.wakeQueue.run(id, async () => {
+			const record = this.jobs.get(id);
+			if (!record || record.wakeClaimDispatchId !== dispatchId || record.wakeConsumedAt) return;
+			record.wakeConsumedAt = Date.now();
+			try {
+				await this.persist(record, true);
+			} catch (error) {
+				record.wakeConsumedAt = undefined;
+				throw error;
+			}
+		});
 	}
 
 	async cancel(ids: string[], signal?: AbortSignal): Promise<Array<{ id: string; status: JobStatus | "not_found" }>> {

@@ -4,6 +4,8 @@ import { createWriteStream } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../../log.js";
+import { logSecurityEvent } from "../../security/logger.js";
+import type { SecurityConfig } from "../../security/types.js";
 import { killProcessGroup } from "../../shared/host-process.js";
 import { formatLocalTime } from "../../shared/local-time.js";
 import { splitShellWords } from "../../shared/shell-words.js";
@@ -11,7 +13,7 @@ import { errorMessage } from "../../shared/text-utils.js";
 import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import { parseVerificationVerdict, writeVerificationAttestation } from "../../tasks/verification.js";
 import type { SubAgentThinkingLevel } from "../discovery.js";
-import { getSubAgentRunManager, type SettleInput } from "../runs.js";
+import { getSubAgentRunManager, type RunMutates, type SettleInput } from "../runs.js";
 import { classifyExternalOutcome } from "./harness.js";
 import { getExternalHarness } from "./registry.js";
 
@@ -47,6 +49,14 @@ export interface LaunchExternalRunInput {
 	taskId?: string;
 	leaseKey?: string;
 	resumeSessionId?: string;
+	/** The role's own `mutates` declaration, carried through to the dispatch audit event (D8.1). */
+	mutates?: RunMutates;
+	/** Where the audit trail lives (`<workspaceDir>/.pipiclaw/security.log` by default) and whether
+	 *  it is enabled — every external dispatch writes an `external-agent` audit event (D8.1), since
+	 *  external processes never pass through command-guard and this is the only record of what
+	 *  actually ran. */
+	workspaceDir: string;
+	securityConfig: SecurityConfig;
 	/** Test seam: inject a fake `child_process.spawn`. */
 	spawnFn?: typeof nodeSpawn;
 }
@@ -97,6 +107,23 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 				systemPromptFile,
 				resumeSessionId: input.resumeSessionId,
 			});
+	const spawnedArgv = [invocation.executable, ...invocation.args];
+
+	// Security gate: the final executable/argv/cwd/capability record must be durable before a
+	// process can exist. `external-agent` uses the strict appender path and rejects on queue or I/O
+	// failure; callers then release any admission lease without an unaudited child ever starting.
+	await logSecurityEvent(input.workspaceDir, input.securityConfig, {
+		type: "external-agent",
+		tool: "subagent",
+		channelId: input.channelId,
+		runId: input.runId,
+		agent: input.agent,
+		harness: harness.id,
+		argv: spawnedArgv,
+		workingDirectory: input.workingDirectory,
+		mutates: input.mutates ?? "read",
+		model: input.externalModelRef,
+	});
 
 	const runManager = getSubAgentRunManager(input.channelId);
 	await runManager.register({
@@ -115,6 +142,19 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		artifactDir: input.artifactDir,
 		leaseKey: input.leaseKey,
 	});
+
+	let cancelledBeforeSpawn = false;
+	const launchClaimed = await runManager.claimExternalLaunch(input.runId, () => {
+		cancelledBeforeSpawn = true;
+	});
+	if (!launchClaimed) {
+		await runManager.settle(
+			input.runId,
+			{ ...failedSettleInput("Cancelled before the external process was spawned."), status: "cancelled" },
+			{ announce: false },
+		);
+		return;
+	}
 
 	const eventsPath = join(input.artifactDir, "events.jsonl");
 	const stderrPath = join(input.artifactDir, "stderr.log");
@@ -159,11 +199,22 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	}
 
 	const pid = child.pid;
+	if (cancelledBeforeSpawn) {
+		void killProcessGroup(pid);
+		eventsStream.close();
+		stderrStream.close();
+		await runManager.settle(
+			input.runId,
+			{ ...failedSettleInput("Cancelled while the external process was spawning."), status: "cancelled" },
+			{ announce: false },
+		);
+		return;
+	}
 	const fingerprint = randomBytes(6).toString("hex");
 	await runManager.setLaunched(input.runId, {
 		pid,
 		fingerprint,
-		argv: [invocation.executable, ...invocation.args],
+		argv: spawnedArgv,
 		sessionId: invocation.presetSessionId,
 	});
 
@@ -174,7 +225,9 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		child.stdin.end(stdinContent);
 	}
 
+	let cancelled = false;
 	runManager.registerCancelHandle(input.runId, () => {
+		cancelled = true;
 		void killProcessGroup(pid);
 	});
 	const wallClockTimer = setTimeout(() => {
@@ -189,8 +242,25 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	}).then(async (exitCode) => {
 		clearTimeout(wallClockTimer);
 		runManager.clearCancelHandle(input.runId);
+		// The leader can exit before a detached descendant it spawned (e.g. a shell that forked and
+		// returned); `-pid` still reaches the whole group as long as the group itself is still
+		// around, so reap it unconditionally rather than only on an explicit cancel/timeout.
+		await killProcessGroup(pid);
 		await new Promise<void>((resolve) => eventsStream.end(resolve));
 		await new Promise<void>((resolve) => stderrStream.end(resolve));
+
+		if (cancelled) {
+			await runManager
+				.settle(
+					input.runId,
+					{ ...failedSettleInput("Cancelled by request."), status: "cancelled" },
+					{ announce: false },
+				)
+				.catch((error) => {
+					log.logWarning(`Failed to settle external run ${input.runId}`, errorMessage(error));
+				});
+			return;
+		}
 
 		const eventsText = await readFile(eventsPath, "utf-8").catch(() => "");
 		const stderrTail = (await readFile(stderrPath, "utf-8").catch(() => "")).slice(-WAKE_OUTPUT_TAIL_CHARS);

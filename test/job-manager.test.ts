@@ -283,6 +283,16 @@ describe("ChannelJobManager persistence and completion wakes (spec 031, D6)", ()
 		expect(events[0]?.text).toContain("build succeeded");
 		expect(events[0]?.text).toContain("It belongs to task release.");
 		expect(events[0]?.dispatchId).toBe(`job:dm_1:${job.id}:done`);
+		expect(events[0]?.internalWake).toEqual({
+			kind: "job",
+			resourceId: job.id,
+			taskId: "release",
+			dispatchId: `job:dm_1:${job.id}:done`,
+		});
+		const dispatchId = events[0]?.dispatchId ?? "";
+		await expect(manager.beginWakeConsumption(job.id, "release", dispatchId)).resolves.toBe(true);
+		await manager.finishWakeConsumption(job.id, dispatchId);
+		await expect(manager.beginWakeConsumption(job.id, "release", dispatchId)).resolves.toBe(false);
 	});
 
 	it("announces a job that finished while the daemon was down", async () => {

@@ -1,6 +1,9 @@
 ---
 name: verifier
-description: 运行验证者（外部 codex-cli，异步，中低成本）。用于实际启动或运行系统：问题复现、可行性实验、冒烟、定向或全量回归、运行数据分析，证明现实行为是否符合设想；也可在实现前建立基线。派发时给出稳定的 commit 或 diff、编号验收标准、可用环境、启停方法、测试数据与命令，它按验收项交付可复现的通过/失败/阻塞证据，并可创建验证脚本、夹具、环境配置和验证报告。它会写文件（构建产物、测试数据、报告），因此**不能**用于 purpose=verify——受治理任务的独立终验请用声明 mutates: read 的角色。不要与 builder 或 reviewer 并发指向同一个工作目录。
+description: >-
+  运行验证者（外部 codex-cli，异步，中低成本）。用于实际启动或运行系统：问题复现、可行性实验、冒烟、定向或全量回归、运行数据分析，证明现实行为是否符合设想；也可在实现前建立基线。
+  派发时给出稳定的 commit 或 diff、编号验收标准、可用环境、启停方法、测试数据与命令；它按验收项交付可复现的通过/失败/阻塞证据，并可创建验证脚本、夹具、环境配置和验证报告。
+  它会写文件（构建产物、测试数据、报告），因此**不能**用于 purpose=verify——受治理任务的独立终验请用声明 `mutates: read` 的角色。不要与 builder 或 reviewer 并发指向同一个工作目录。
 runtime: external
 harness: codex-cli
 command: codex exec --sandbox workspace-write --skip-git-repo-check

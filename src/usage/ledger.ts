@@ -49,6 +49,13 @@ export interface UsageSummary {
 	byKind: Record<string, number>;
 	byModel: Record<string, number>;
 	byChannel: Record<string, number>;
+	/** Entries with `usageKnown === false` (e.g. the `exec` harness never reports tokens at all).
+	 *  Their `usage.total` is always 0 and never contributes to `totalTokens` — display this count
+	 *  rather than let those runs silently read as "0 tokens used". */
+	unknownUsageCount: number;
+	/** Entries with `costKnown === false` (e.g. `codex-cli`/`exec`, which report no cost field).
+	 *  Their `cost.total` is always 0 and never contributes to `totalCost` — same rationale. */
+	unknownCostCount: number;
 }
 
 export interface UsageSummaryQuery {
@@ -137,8 +144,13 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 			// Record anything that consumed tokens, even at zero cost: a local model, or one whose
 			// pricing metadata is missing, still has to show up somewhere or `/usage` reports nothing
 			// at all and any spend guard built on this ledger fails open. Only a genuinely empty
-			// entry (no tokens, no cost) is dropped as noise.
-			if (!(entry.cost.total > 0) && !(entry.usage.total > 0)) return;
+			// entry (no tokens, no cost, and nothing unknown either) is dropped as noise — an entry
+			// with `usageKnown`/`costKnown` false always has zero numeric totals by construction (the
+			// harness has nothing to report), so without this exemption every such run would be
+			// silently dropped instead of showing up as "unknown" (spec 040, T7).
+			const hasKnownSignal = entry.cost.total > 0 || entry.usage.total > 0;
+			const hasUnknownSignal = entry.usageKnown === false || entry.costKnown === false;
+			if (!hasKnownSignal && !hasUnknownSignal) return;
 			if (!entry.channelId) {
 				log.logWarning("Usage ledger entry missing channelId; recording as untracked", `kind=${entry.kind}`);
 			}
@@ -164,6 +176,8 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 				byKind: {},
 				byModel: {},
 				byChannel: {},
+				unknownUsageCount: 0,
+				unknownCostCount: 0,
 			};
 
 			for (const key of monthKeysBetween(query.since, until)) {
@@ -178,6 +192,10 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 					summary.byKind[entry.kind] = (summary.byKind[entry.kind] ?? 0) + cost;
 					summary.byModel[entry.model] = (summary.byModel[entry.model] ?? 0) + cost;
 					summary.byChannel[entry.channelId] = (summary.byChannel[entry.channelId] ?? 0) + cost;
+					// `undefined` (every entry recorded before this field existed) counts as known —
+					// backward compatibility for a ledger that predates this distinction.
+					if (entry.usageKnown === false) summary.unknownUsageCount += 1;
+					if (entry.costKnown === false) summary.unknownCostCount += 1;
 				}
 			}
 

@@ -186,6 +186,21 @@ export class DurableDispatchService {
 		});
 	}
 
+	/** Release a failed handler's in-process claim without deleting its durable record. Structured
+	 * wake activation uses this for transient task/job/run persistence failures so the next drain
+	 * can retry the same dispatch id instead of losing the only completion signal. */
+	async markRetryable(id: string | undefined): Promise<void> {
+		if (!id) return;
+		this.running.delete(id);
+		await this.queue.run(id, async () => {
+			const record = await this.read(id);
+			if (!record) return;
+			record.status = "pending";
+			record.leaseExpiresAt = undefined;
+			await this.write(record);
+		});
+	}
+
 	async drainOnce(now = Date.now()): Promise<void> {
 		let filenames: string[];
 		try {

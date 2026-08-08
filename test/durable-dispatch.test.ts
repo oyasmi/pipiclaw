@@ -1,8 +1,14 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { claimVerifiedDelegationWake } from "../src/runtime/bootstrap.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
+import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
+import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { renderTaskDocument } from "../src/tasks/ledger.js";
+import { readStoredTask } from "../src/tasks/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const tempDir = useTempDirs("pipiclaw-dispatch-");
@@ -106,6 +112,95 @@ describe("DurableDispatchService", () => {
 		expect(delivered[1]?.dispatchId).toBe(delivered[0]?.dispatchId);
 		const stored = JSON.parse(readFileSync(join(stateDir, `${delivered[0]?.dispatchId}.json`), "utf-8"));
 		expect(stored.event.text).toBe("[EVENT:once] do work");
+	});
+
+	it("redelivers a structured task wake once despite the redelivery text prefix", async () => {
+		const root = tempDir();
+		const stateDir = join(root, "state", "dispatch");
+		const workspaceDir = join(root, "workspace");
+		const channelId = "dm_redelivery_task";
+		const channelDir = join(workspaceDir, channelId);
+		await mkdir(join(channelDir, "tasks", "archive"), { recursive: true });
+		await writeFile(
+			join(channelDir, "tasks", "T-redelivery.md"),
+			renderTaskDocument(
+				{
+					status: "waiting",
+					control: { ...createDefaultTaskControl(), waitingFor: "external-signal" },
+				},
+				"# Redelivery\n",
+			),
+		);
+		configureSubAgentRuntime({});
+		const manager = getSubAgentRunManager(channelId);
+		await manager.register({
+			runId: "run-redelivery",
+			channelId,
+			runtime: "external",
+			harness: "exec",
+			agent: "runner",
+			label: "redelivery",
+			source: "inline",
+			tools: [],
+			purpose: "work",
+			taskId: "T-redelivery",
+			workingDirectory: workspaceDir,
+			artifactDir: join(root, "artifacts"),
+		});
+		await manager.settle(
+			"run-redelivery",
+			{
+				status: "completed",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				usageKnown: false,
+				costKnown: false,
+				turns: 0,
+				toolCalls: 0,
+				durationMs: 1,
+				outputText: "done",
+			},
+			{ announce: false },
+		);
+		const dispatchId = `subagent:${channelId}:run-redelivery:done`;
+		const wake: DingTalkEvent = {
+			...event(),
+			channelId,
+			text: "[SUBAGENT:run-redelivery] done. It belongs to task T-redelivery.",
+			dispatchId,
+			internalWake: { kind: "subagent", resourceId: "run-redelivery", taskId: "T-redelivery", dispatchId },
+		};
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			leaseMs: 10,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(wake); // delivery #1 crashes before activation
+		await service.drainOnce(Date.now() + 11);
+		expect(delivered[1]?.text).toContain("[REDELIVERY:2]");
+
+		const claimed = await claimVerifiedDelegationWake(delivered[1]!, workspaceDir);
+		expect(claimed?.activated).toBe(true);
+		expect(claimed?.generation).toBe(1);
+		await claimed?.finish();
+		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.status).toBe("active");
+
+		await service.drainOnce(Date.now() + 22);
+		expect(delivered[2]?.text).toContain("[REDELIVERY:3]");
+		await expect(claimVerifiedDelegationWake(delivered[2]!, workspaceDir)).resolves.toBeUndefined();
+		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.control?.attemptGeneration).toBe(1);
 	});
 
 	it("renews the lease of a turn this process is still running (spec 031, D2)", async () => {

@@ -112,6 +112,68 @@ describe("usage ledger", () => {
 		expect(readMonth("2026-07")).toEqual([]);
 	});
 
+	it("keeps a zero/zero entry when usage or cost is explicitly unknown, rather than dropping it as noise (spec 040, T7)", async () => {
+		const ledger = createUsageLedger({ baseDir: dir });
+		// `exec`: neither tokens nor cost is ever known.
+		recordAt(ledger, "2026-07-04T00:00:00Z", {
+			channelId: "c1",
+			kind: "subagent",
+			model: "unknown",
+			runId: "run-exec-1",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			cost: cost(0),
+			usageKnown: false,
+			costKnown: false,
+		});
+		// `codex-cli`: tokens known, cost unknown.
+		recordAt(ledger, "2026-07-04T00:00:00Z", {
+			channelId: "c1",
+			kind: "subagent",
+			model: "openai/gpt-5-codex",
+			runId: "run-codex-1",
+			usage: tokens,
+			cost: cost(0),
+			usageKnown: true,
+			costKnown: false,
+		});
+		await flush(ledger);
+
+		const entries = readMonth("2026-07");
+		expect(entries.map((e) => e.runId).sort()).toEqual(["run-codex-1", "run-exec-1"]);
+
+		const summary = await ledger.summarize({
+			since: new Date("2026-07-01T00:00:00Z"),
+			until: new Date("2026-07-31T00:00:00Z"),
+		});
+		expect(summary.entryCount).toBe(2);
+		expect(summary.unknownCostCount).toBe(2);
+		expect(summary.unknownUsageCount).toBe(1);
+		// Unknown-cost/usage entries always have zero numeric totals, so the sum stays exact —
+		// unknownCostCount/unknownUsageCount is what tells the display layer not to read that as
+		// "these runs were free".
+		expect(summary.totalCost).toBe(0);
+		expect(summary.totalTokens).toBe(tokens.total);
+	});
+
+	it("treats a pre-T7 entry with no usageKnown/costKnown field as known, not unknown (backward compatibility)", async () => {
+		const ledger = createUsageLedger({ baseDir: dir });
+		recordAt(ledger, "2026-07-04T00:00:00Z", {
+			channelId: "c1",
+			kind: "turn",
+			model: "m/a",
+			usage: tokens,
+			cost: cost(0.1),
+		});
+		await flush(ledger);
+
+		const summary = await ledger.summarize({
+			since: new Date("2026-07-01T00:00:00Z"),
+			until: new Date("2026-07-31T00:00:00Z"),
+		});
+		expect(summary.unknownCostCount).toBe(0);
+		expect(summary.unknownUsageCount).toBe(0);
+	});
+
 	it("records missing channelId as (untracked) and warns", async () => {
 		const warnSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		const ledger = createUsageLedger({ baseDir: dir });

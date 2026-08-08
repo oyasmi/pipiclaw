@@ -118,6 +118,14 @@ export interface DingTalkEvent {
 	channelName?: string;
 	/** Runtime-owned durable-dispatch record, absent for normal inbound messages. */
 	dispatchId?: string;
+	/** Structured wake provenance created only by in-process producers. DingTalk inbound parsing
+	 * never copies arbitrary payload fields into this event, so user text cannot manufacture it. */
+	internalWake?: {
+		kind: "job" | "subagent";
+		resourceId: string;
+		taskId: string;
+		dispatchId: string;
+	};
 	/**
 	 * The `attemptGeneration` this event's claim recorded, for `[TASK_DRIVER:id]` events only.
 	 * Carried through durable dispatch so `finishTaskAttempt` can tell a stale, superseded claim's

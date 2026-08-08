@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
+import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { createSubAgentManageTool } from "../src/tools/subagent-manage.js";
 
 const { launchExternalRunMock } = vi.hoisted(() => ({
@@ -204,6 +205,7 @@ describe("subagent_manage tool", () => {
 
 		const tool = createSubAgentManageTool({
 			channelId,
+			workspaceDir: "/workspace",
 			getSubAgentDiscovery: () => ({
 				directory: "/workspace/sub-agents",
 				warnings: [],
@@ -245,6 +247,91 @@ describe("subagent_manage tool", () => {
 			resumeSessionId: "thread-abc",
 			harness: "codex-cli",
 			task: "keep going",
+			mutates: "read",
+			workspaceDir: "/workspace",
 		});
+	});
+
+	it("releases a follow_up write lease when launch fails before lifecycle ownership transfers", async () => {
+		configureSubAgentRuntime({});
+		launchExternalRunMock.mockRejectedValueOnce(new Error("prompt write failed"));
+		const channelId = `dm_manage_followup_failure_${Date.now()}`;
+		const workingDirectory = `/tmp/checkout-followup-${Date.now()}`;
+		const manager = getSubAgentRunManager(channelId);
+		await manager.register({
+			runId: "run-parent",
+			channelId,
+			runtime: "external",
+			harness: "codex-cli",
+			agent: "builder",
+			label: "build",
+			source: "predefined",
+			tools: [],
+			purpose: "work",
+			workingDirectory,
+			artifactDir: `${workingDirectory}/subagent-artifacts/run-parent`,
+		});
+		await manager.settle(
+			"run-parent",
+			{
+				status: "completed",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				usageKnown: true,
+				costKnown: false,
+				turns: 0,
+				toolCalls: 0,
+				durationMs: 1,
+				outputText: "done",
+				sessionId: "thread-lease",
+			},
+			{ announce: false },
+		);
+		const tool = createSubAgentManageTool({
+			channelId,
+			workspaceDir: "/workspace",
+			getSubAgentDiscovery: () => ({
+				directory: "/workspace/sub-agents",
+				warnings: [],
+				agents: [
+					{
+						name: "builder",
+						description: "builder",
+						systemPrompt: "build",
+						tools: [],
+						maxTurns: 1,
+						maxToolCalls: 1,
+						maxWallTimeSec: 60,
+						bashTimeoutSec: 10,
+						contextMode: "isolated",
+						memory: "none",
+						paths: [],
+						source: "predefined",
+						runtime: "external",
+						harness: "codex-cli",
+						command: "codex exec",
+						mutates: "write",
+					},
+				],
+			}),
+		});
+
+		await expect(
+			tool.execute("call-followup-fail", {
+				label: "continue",
+				op: "follow_up",
+				runId: "run-parent",
+				task: "continue",
+			}),
+		).rejects.toThrow("prompt write failed");
+		const next = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory });
+		expect(next.ok).toBe(true);
+		if (next.ok) releaseWorkspaceLease(next.leaseKey);
 	});
 });

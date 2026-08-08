@@ -171,10 +171,14 @@ export interface SubAgentToolOptions {
 		apiKey: string;
 		tools: AgentTool<any>[];
 	}) => SubAgentWorker;
+	/** Test seam for failures while constructing the scoped tool set after durable registration. */
+	buildTools?: typeof buildSubagentTools;
 	/** Test-only override for the D6 convergence-turn wall clock; defaults to CONVERGENCE_WALL_CLOCK_MS. */
 	convergenceWallClockMs?: number;
 	/** Test-only override for the D2 sync grace window; defaults to SYNC_GRACE_MS. */
 	syncGraceMs?: number;
+	/** Test seam for setup/admission failures. Production uses the process-wide channel manager. */
+	getRunManager?: typeof getSubAgentRunManager;
 }
 
 interface SubAgentWorker {
@@ -769,6 +773,9 @@ export function createSubAgentTool(
 						purpose: runContext.purpose,
 						taskId: runContext.taskId,
 						leaseKey,
+						mutates: config.mutates,
+						workspaceDir: options.workspaceDir,
+						securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
 					});
 				} catch (error) {
 					releaseWorkspaceLease(leaseKey);
@@ -808,7 +815,13 @@ export function createSubAgentTool(
 			}
 
 			const scopedExecutor = new DirectoryExecutor(options.executor, runContext.workingDirectory);
-			const apiKey = await options.resolveApiKey(config.model);
+			let apiKey: string;
+			try {
+				apiKey = await options.resolveApiKey(config.model);
+			} catch (error) {
+				releaseWorkspaceLease(leaseKey);
+				throw error;
+			}
 			const startedAt = Date.now();
 			const usage = createEmptyUsageTotals();
 			let assistantTurns = 0;
@@ -822,22 +835,29 @@ export function createSubAgentTool(
 			let detached = false;
 			let lastUpdateText = "";
 
-			const runManager = getSubAgentRunManager(options.runtimeContext.channelId);
-			await runManager.register({
-				runId: runContext.runId,
-				channelId: options.runtimeContext.channelId,
-				runtime: "internal",
-				agent: config.name,
-				label: params.label,
-				source: config.source,
-				tools: [...config.tools],
-				model: formatModelReference(config.model),
-				purpose: runContext.purpose,
-				taskId: runContext.taskId,
-				workingDirectory: runContext.workingDirectory,
-				artifactDir: runContext.artifactDir,
-				leaseKey,
-			});
+			const runManager = (options.getRunManager ?? getSubAgentRunManager)(options.runtimeContext.channelId);
+			try {
+				await runManager.register({
+					runId: runContext.runId,
+					channelId: options.runtimeContext.channelId,
+					runtime: "internal",
+					agent: config.name,
+					label: params.label,
+					source: config.source,
+					tools: [...config.tools],
+					model: formatModelReference(config.model),
+					purpose: runContext.purpose,
+					taskId: runContext.taskId,
+					workingDirectory: runContext.workingDirectory,
+					artifactDir: runContext.artifactDir,
+					leaseKey,
+				});
+			} catch (error) {
+				// Until the durable running record exists, setup still owns the lease. A channel/host
+				// admission rejection or required persist failure must leave no invisible writer lock.
+				releaseWorkspaceLease(leaseKey);
+				throw error;
+			}
 
 			const emitUpdate = (text: string) => {
 				// Once detached, execute() has already returned to the SDK; nothing is listening
@@ -863,83 +883,124 @@ export function createSubAgentTool(
 				});
 			};
 
-			const availableTools = buildSubagentTools(scopedExecutor, config.bashTimeoutSec, options, runContext);
-			const verifierGitStateBefore =
-				runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
-			const verifierSubjectBefore =
-				runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
+			let worker: SubAgentWorker | undefined;
+			let wallClockTimer: ReturnType<typeof setTimeout> | undefined;
+			let unsubscribe: (() => void) | undefined;
+			let verifierGitStateBefore: string | undefined;
+			let verifierSubjectBefore: string | undefined;
+			try {
+				const availableTools = (options.buildTools ?? buildSubagentTools)(
+					scopedExecutor,
+					config.bashTimeoutSec,
+					options,
+					runContext,
+				);
+				verifierGitStateBefore =
+					runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
+				verifierSubjectBefore =
+					runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
 
-			const worker =
-				options.createWorker?.({
-					subAgent: config,
-					apiKey,
-					tools: filterToolsByName(availableTools, config.tools),
-				}) ??
-				new Agent({
-					initialState: {
-						systemPrompt: config.systemPrompt,
-						model: config.model,
-						thinkingLevel: config.thinkingLevel,
+				worker =
+					options.createWorker?.({
+						subAgent: config,
+						apiKey,
 						tools: filterToolsByName(availableTools, config.tools),
-					},
-					convertToLlm,
-					getApiKey: async () => apiKey,
-					streamFn: streamSimple,
+					}) ??
+					new Agent({
+						initialState: {
+							systemPrompt: config.systemPrompt,
+							model: config.model,
+							thinkingLevel: config.thinkingLevel,
+							tools: filterToolsByName(availableTools, config.tools),
+						},
+						convertToLlm,
+						getApiKey: async () => apiKey,
+						streamFn: streamSimple,
+					});
+
+				runManager.registerCancelHandle(runContext.runId, () => {
+					externallyCancelled = true;
+					worker?.abort();
 				});
 
-			runManager.registerCancelHandle(runContext.runId, () => {
-				externallyCancelled = true;
-				worker.abort();
-			});
-
-			const wallClockTimer = setTimeout(() => {
-				failureReason = `Wall time budget exceeded (${config.maxWallTimeSec}s)`;
-				budgetExceeded = true;
-				worker.abort();
-			}, config.maxWallTimeSec * 1000);
-
-			const unsubscribe = worker.subscribe((event: AgentEvent) => {
-				if (event.type === "message_end" && isAssistantMessage(event.message)) {
-					assistantTurns++;
-					const messageUsage = event.message.usage;
-					usage.input += messageUsage.input;
-					usage.output += messageUsage.output;
-					usage.cacheRead += messageUsage.cacheRead;
-					usage.cacheWrite += messageUsage.cacheWrite;
-					usage.total += messageUsage.totalTokens;
-					usage.cost.input += messageUsage.cost.input;
-					usage.cost.output += messageUsage.cost.output;
-					usage.cost.cacheRead += messageUsage.cost.cacheRead;
-					usage.cost.cacheWrite += messageUsage.cost.cacheWrite;
-					usage.cost.total += messageUsage.cost.total;
-				}
-
-				if (event.type === "tool_execution_start") {
-					toolCalls++;
-					const label = extractLabelFromArgs(event.args) || event.toolName;
-					emitUpdate(formatStatus(config.name, label));
-					if (toolCalls > config.maxToolCalls) {
-						failureReason = `Tool call budget exceeded (${config.maxToolCalls})`;
-						budgetExceeded = true;
-						emitUpdate(formatStatus(config.name, "tool budget reached"));
-						worker.abort();
-					}
-				}
-
-				if (
-					event.type === "turn_end" &&
-					isAssistantMessage(event.message) &&
-					event.toolResults.length > 0 &&
-					assistantTurns >= config.maxTurns
-				) {
-					failureReason = `Turn budget exceeded (${config.maxTurns})`;
+				wallClockTimer = setTimeout(() => {
+					failureReason = `Wall time budget exceeded (${config.maxWallTimeSec}s)`;
 					budgetExceeded = true;
-					emitUpdate(formatStatus(config.name, "turn budget reached"));
-					worker.abort();
-				}
-			});
+					worker?.abort();
+				}, config.maxWallTimeSec * 1000);
 
-			emitUpdate(formatStatus(config.name, "started"));
+				unsubscribe = worker.subscribe((event: AgentEvent) => {
+					if (event.type === "message_end" && isAssistantMessage(event.message)) {
+						assistantTurns++;
+						const messageUsage = event.message.usage;
+						usage.input += messageUsage.input;
+						usage.output += messageUsage.output;
+						usage.cacheRead += messageUsage.cacheRead;
+						usage.cacheWrite += messageUsage.cacheWrite;
+						usage.total += messageUsage.totalTokens;
+						usage.cost.input += messageUsage.cost.input;
+						usage.cost.output += messageUsage.cost.output;
+						usage.cost.cacheRead += messageUsage.cost.cacheRead;
+						usage.cost.cacheWrite += messageUsage.cost.cacheWrite;
+						usage.cost.total += messageUsage.cost.total;
+					}
+
+					if (event.type === "tool_execution_start") {
+						toolCalls++;
+						const label = extractLabelFromArgs(event.args) || event.toolName;
+						emitUpdate(formatStatus(config.name, label));
+						if (toolCalls > config.maxToolCalls) {
+							failureReason = `Tool call budget exceeded (${config.maxToolCalls})`;
+							budgetExceeded = true;
+							emitUpdate(formatStatus(config.name, "tool budget reached"));
+							worker?.abort();
+						}
+					}
+
+					if (
+						event.type === "turn_end" &&
+						isAssistantMessage(event.message) &&
+						event.toolResults.length > 0 &&
+						assistantTurns >= config.maxTurns
+					) {
+						failureReason = `Turn budget exceeded (${config.maxTurns})`;
+						budgetExceeded = true;
+						emitUpdate(formatStatus(config.name, "turn budget reached"));
+						worker?.abort();
+					}
+				});
+
+				emitUpdate(formatStatus(config.name, "started"));
+			} catch (error) {
+				unsubscribe?.();
+				if (wallClockTimer) clearTimeout(wallClockTimer);
+				runManager.clearCancelHandle(runContext.runId);
+				try {
+					worker?.abort();
+				} catch {
+					// Preserve the setup error; settlement below is the lifecycle authority.
+				}
+				const setupError = error instanceof Error ? error : new Error(String(error));
+				await runManager.settle(
+					runContext.runId,
+					{
+						status: "failed",
+						failureReason: setupError.message,
+						usage,
+						usageKnown: true,
+						costKnown: true,
+						turns: assistantTurns,
+						toolCalls,
+						durationMs: Date.now() - startedAt,
+						outputText: "",
+					},
+					{ announce: false },
+				);
+				throw setupError;
+			}
+			const activeWorker = worker!;
+			const activeUnsubscribe = unsubscribe!;
+			const activeWallClockTimer = wallClockTimer!;
 
 			/**
 			 * Runs the worker to completion, including the D6 convergence turn, and returns the
@@ -953,27 +1014,27 @@ export function createSubAgentTool(
 			}> {
 				try {
 					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel);
-					await worker.prompt(
+					await activeWorker.prompt(
 						buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks, runContext, returns),
 					);
-					await worker.waitForIdle();
+					await activeWorker.waitForIdle();
 
 					// D6: a self-inflicted budget abort gets one tool-free turn to converge on a
 					// conclusion instead of discarding the work outright. An explicit cancel skips
 					// this — the model asked this run to stop now, not to wrap up.
 					if (budgetExceeded && !externallyCancelled) {
-						clearTimeout(wallClockTimer);
+						clearTimeout(activeWallClockTimer);
 						emitUpdate(formatStatus(config.name, "converging on budget exhaustion"));
-						const preConvergenceMessageCount = worker.state.messages.length;
-						worker.state.tools = [];
+						const preConvergenceMessageCount = activeWorker.state.messages.length;
+						activeWorker.state.tools = [];
 						let convergenceTimedOut = false;
 						const convergenceTimer = setTimeout(() => {
 							convergenceTimedOut = true;
-							worker.abort();
+							activeWorker.abort();
 						}, options.convergenceWallClockMs ?? CONVERGENCE_WALL_CLOCK_MS);
 						try {
-							await worker.prompt(CONVERGENCE_PROMPT);
-							await worker.waitForIdle();
+							await activeWorker.prompt(CONVERGENCE_PROMPT);
+							await activeWorker.waitForIdle();
 						} catch {
 							// Best effort: fall through to whatever worker.state.messages holds.
 						} finally {
@@ -982,15 +1043,15 @@ export function createSubAgentTool(
 						if (convergenceTimedOut) {
 							// Revert to the pre-D6 behavior: drop the (aborted, possibly partial)
 							// convergence turn and fall back to whatever came before it.
-							worker.state.messages = worker.state.messages.slice(0, preConvergenceMessageCount);
+							activeWorker.state.messages = activeWorker.state.messages.slice(0, preConvergenceMessageCount);
 						}
 					}
 				} finally {
-					unsubscribe();
-					clearTimeout(wallClockTimer);
+					activeUnsubscribe();
+					clearTimeout(activeWallClockTimer);
 				}
 
-				const lastAssistantMessage = getLastAssistantMessage(worker.state.messages);
+				const lastAssistantMessage = getLastAssistantMessage(activeWorker.state.messages);
 				const durationMs = Date.now() - startedAt;
 				if (!lastAssistantMessage) {
 					failureReason = failureReason || "Sub-agent returned no assistant message";

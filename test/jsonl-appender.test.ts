@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -89,5 +89,15 @@ describe("jsonl-appender", () => {
 
 		expect(writeSpy).toHaveBeenCalledTimes(1);
 		expect(String(writeSpy.mock.calls[0]?.[0])).toContain("runtime.log_sink.failed");
+	});
+
+	it("strict append rejects capacity and I/O failures", async () => {
+		const directoryTarget = join(dir, "not-a-file");
+		mkdirSync(directoryTarget);
+		const broken = createJsonlAppender({ path: directoryTarget });
+		await expect(broken.appendStrict({ security: true })).rejects.toThrow();
+
+		const full = createJsonlAppender({ path: join(dir, "full.jsonl"), maxPendingRecords: 0 });
+		await expect(full.appendStrict({ security: true })).rejects.toThrow("queue limit");
 	});
 });

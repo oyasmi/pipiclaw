@@ -185,8 +185,8 @@ describe("sub-agent discovery", () => {
 		mkdirSync(subAgentsDir, { recursive: true });
 
 		const claudeRoles = ["planner", "builder", "builder-hard"];
-		const codexReadRoles = ["reviewer", "scout"];
-		const codexWriteRoles = ["verifier", "worker", "documenter"];
+		const codexReadRoles = ["scout"];
+		const codexWriteRoles = ["reviewer", "verifier", "worker", "documenter"];
 		for (const name of [...claudeRoles, ...codexReadRoles, ...codexWriteRoles]) {
 			const example = readFileSync(join(process.cwd(), "examples", "sub-agents", `${name}.md`), "utf-8");
 			writeFileSync(join(subAgentsDir, `${name}.md`), example, "utf-8");
@@ -213,7 +213,9 @@ describe("sub-agent discovery", () => {
 		}
 		// Read-only roles declare `mutates: read`, and that declaration is backed by the target
 		// CLI's own sandbox flag rather than by pipiclaw (D8) — which is also what lets them stay
-		// out of the workspace write lease and serve `purpose=verify`.
+		// out of the workspace write lease and serve `purpose=verify`. `reviewer` is `mutates: write`
+		// because it must land its review report on disk; codex-cli has no sandbox tier between
+		// read-only and workspace-write, so it takes the write lease and cannot serve `purpose=verify`.
 		for (const name of codexReadRoles) {
 			const agent = discovery.agents.find((candidate) => candidate.name === name);
 			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "read" });

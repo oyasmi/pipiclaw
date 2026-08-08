@@ -1,10 +1,17 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
+import {
+	configureSubAgentRuntime,
+	getSubAgentRunManager,
+	MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL,
+	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
+	SubAgentRunManager,
+} from "../src/subagents/runs.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -57,7 +64,7 @@ function createAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
-function makeTool(workspaceDir: string, channelDir: string) {
+function makeTool(workspaceDir: string, channelDir: string, channelId = "dm_lease") {
 	return createSubAgentTool({
 		executor: fakeExecutor,
 		getCurrentModel: () => model,
@@ -66,7 +73,7 @@ function makeTool(workspaceDir: string, channelDir: string) {
 		workspaceDir,
 		workingDirectory: workspaceDir,
 		channelDir,
-		runtimeContext: { workspaceDir, channelId: "dm_lease" },
+		runtimeContext: { workspaceDir, channelId },
 		createWorker: () =>
 			new FakeWorker((_input, worker) => {
 				const message = createAssistantMessage("Done.");
@@ -77,6 +84,141 @@ function makeTool(workspaceDir: string, channelDir: string) {
 }
 
 describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
+	function writeParams() {
+		return {
+			label: "edit files",
+			name: "writer",
+			systemPrompt: "Edit things.",
+			tools: ["read", "edit"],
+			task: "Change a file.",
+		};
+	}
+
+	function expectWorkspaceAvailable(workspaceDir: string, channelId: string) {
+		const next = acquireWorkspaceLease({ runId: "next-writer", channelId, workingDirectory: workspaceDir });
+		expect(next.ok).toBe(true);
+		releaseWorkspaceLease(next.ok ? next.leaseKey : undefined);
+	}
+
+	it("releases the lease when resolveApiKey rejects before registration", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_resolve_reject";
+		const channelDir = join(workspaceDir, channelId);
+		mkdirSync(channelDir, { recursive: true });
+		const manager = new SubAgentRunManager(channelId, {});
+		const tool = createSubAgentTool({
+			executor: fakeExecutor,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => {
+				throw new Error("api key lookup rejected");
+			},
+			workspaceDir,
+			channelDir,
+			runtimeContext: { workspaceDir, channelId },
+			getRunManager: () => manager,
+		});
+
+		await expect(tool.execute("resolve-reject", writeParams())).rejects.toThrow("api key lookup rejected");
+		expect(manager.runningCount()).toBe(0);
+		expectWorkspaceAvailable(workspaceDir, channelId);
+	});
+
+	it("releases the lease when per-channel admission rejects registration", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_channel_cap_reject";
+		const channelDir = join(workspaceDir, channelId);
+		mkdirSync(channelDir, { recursive: true });
+		const manager = new SubAgentRunManager(channelId, {});
+		for (let index = 0; index < MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL; index++) {
+			await manager.register({
+				runId: `existing-${index}`,
+				channelId,
+				runtime: "internal",
+				agent: "reader",
+				label: "existing",
+				source: "inline",
+				tools: [],
+				purpose: "work",
+				workingDirectory: workspaceDir,
+				artifactDir: join(workspaceDir, "artifacts", `existing-${index}`),
+			});
+		}
+		const rejectingTool = createSubAgentTool({
+			executor: fakeExecutor,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			channelDir,
+			runtimeContext: { workspaceDir, channelId },
+			getRunManager: () => manager,
+		});
+
+		await expect(rejectingTool.execute("channel-cap-reject", writeParams())).rejects.toThrow("on this channel");
+		expect(manager.runningCount()).toBe(MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL);
+		expectWorkspaceAvailable(workspaceDir, channelId);
+	});
+
+	it("releases the lease when host-wide admission rejects registration", async () => {
+		configureSubAgentRuntime({});
+		const prefix = `tool-host-cap-${Date.now()}`;
+		for (let index = 0; index < MAX_RUNNING_SUBAGENT_RUNS_PER_HOST; index++) {
+			const channelId = `${prefix}-${index}`;
+			await getSubAgentRunManager(channelId).register({
+				runId: `existing-${index}`,
+				channelId,
+				runtime: "internal",
+				agent: "reader",
+				label: "existing",
+				source: "inline",
+				tools: [],
+				purpose: "work",
+				workingDirectory: "/tmp",
+				artifactDir: `/tmp/existing-${index}`,
+			});
+		}
+		const workspaceDir = createTempWorkspace();
+		const channelId = `${prefix}-rejected`;
+		const channelDir = join(workspaceDir, channelId);
+		mkdirSync(channelDir, { recursive: true });
+		const tool = makeTool(workspaceDir, channelDir, channelId);
+
+		await expect(tool.execute("host-cap-reject", writeParams())).rejects.toThrow("host-wide");
+		expect(getSubAgentRunManager(channelId).runningCount()).toBe(0);
+		expectWorkspaceAvailable(workspaceDir, channelId);
+		await Promise.all(
+			Array.from({ length: MAX_RUNNING_SUBAGENT_RUNS_PER_HOST }, (_, index) =>
+				getSubAgentRunManager(`${prefix}-${index}`).cancel(`existing-${index}`),
+			),
+		);
+	});
+
+	it("releases the lease and removes the provisional record when required registration persistence fails", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_persist_reject";
+		const channelDir = join(workspaceDir, channelId);
+		mkdirSync(channelDir, { recursive: true });
+		const blockedStateDir = join(workspaceDir, "state-file");
+		writeFileSync(blockedStateDir, "not a directory");
+		const manager = new SubAgentRunManager(channelId, { stateDir: blockedStateDir });
+		const tool = createSubAgentTool({
+			executor: fakeExecutor,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			channelDir,
+			runtimeContext: { workspaceDir, channelId },
+			getRunManager: () => manager,
+		});
+
+		await expect(tool.execute("persist-reject", writeParams())).rejects.toThrow();
+		expect(manager.runningCount()).toBe(0);
+		expect(manager.list()).toHaveLength(0);
+		expectWorkspaceAvailable(workspaceDir, channelId);
+	});
+
 	it("rejects a write-mutating internal delegation when another run already holds the directory", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_lease");

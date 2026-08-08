@@ -45,6 +45,18 @@ export interface TaskProvenance {
 	sourceMessageId?: string;
 }
 
+/** Durable ownership marker for the interval between a structured completion wake activating a
+ * task and its transport accepting the corresponding turn. */
+export interface TaskWakeHandoff {
+	kind: "subagent";
+	resourceId: string;
+	dispatchId: string;
+	generation: number;
+	previousLastOutcome: TaskOutcome;
+	previousBlockedReason?: string;
+	previousLastStartedAt?: string;
+}
+
 /** The v2 persisted control block. Execution authority comes from capability and scope. */
 export interface TaskControl {
 	version: 2;
@@ -65,6 +77,7 @@ export interface TaskControl {
 	/** Present only while the task is disabled. */
 	stop?: TaskStop;
 	provenance?: TaskProvenance;
+	wakeHandoff?: TaskWakeHandoff;
 }
 
 export interface TaskControlPatch {
@@ -166,6 +179,23 @@ function parseProvenance(value: unknown): TaskProvenance | undefined {
 		throw new Error("control.provenance.createdAt must be a valid local time");
 	}
 	return { createdBy, createdAt, sourceMessageId };
+}
+
+function parseWakeHandoff(value: unknown): TaskWakeHandoff | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) throw new Error("control.wakeHandoff must be an object");
+	if (value.kind !== "subagent" || typeof value.resourceId !== "string" || typeof value.dispatchId !== "string") {
+		throw new Error("control.wakeHandoff requires kind=subagent, resourceId, and dispatchId");
+	}
+	return {
+		kind: "subagent",
+		resourceId: value.resourceId,
+		dispatchId: value.dispatchId,
+		generation: nonNegativeInteger(value.generation),
+		previousLastOutcome: enumValue(normalizeLegacyOutcome(value.previousLastOutcome), OUTCOMES, "pending"),
+		previousBlockedReason: optionalString(value.previousBlockedReason),
+		previousLastStartedAt: optionalString(value.previousLastStartedAt),
+	};
 }
 
 /**
@@ -286,6 +316,7 @@ export function parseTaskControl(raw: string): TaskControl {
 		cycleId: optionalString(value.cycleId),
 		stop,
 		provenance: parseProvenance(value.provenance),
+		wakeHandoff: parseWakeHandoff(value.wakeHandoff),
 	};
 }
 
@@ -309,6 +340,7 @@ export function resetTaskControlForCycle(control: TaskControl, cycleId: string):
 		lastFinishedAt: undefined,
 		cycleId: normalizedCycleId,
 		stop: undefined,
+		wakeHandoff: undefined,
 	};
 }
 

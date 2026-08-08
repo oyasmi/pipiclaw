@@ -10,6 +10,7 @@ import {
 	type TaskControl,
 	type TaskOutcome,
 	type TaskWaitingFor,
+	type TaskWakeHandoff,
 } from "./control.js";
 import {
 	normalizeTaskId,
@@ -237,6 +238,123 @@ export async function activateWaitingTask(
 		}
 	});
 	return activated ? document : undefined;
+}
+
+export interface WakeTaskTransitionHooks {
+	/** Test-only fault seam: both hooks run before the single atomic task-file write. */
+	beforeActivation?: () => void;
+	beforeAttemptClaim?: () => void;
+}
+
+export interface WakeTaskHandoffInput {
+	kind: "subagent";
+	resourceId: string;
+	dispatchId: string;
+}
+
+/** Activate a completion-woken task and claim its next attempt in one task-file mutation. Keeping
+ * these state changes in one atomic write means a transient failure cannot leave the task active
+ * but unclaimed, which would make a retry of the same durable wake look ineligible. */
+export async function activateWaitingTaskAndClaimAttempt(
+	channelDir: string,
+	id: string,
+	expectedWaitingFor: TaskWaitingFor,
+	now: Date,
+	hooks?: WakeTaskTransitionHooks,
+	handoff?: WakeTaskHandoffInput,
+): Promise<{ document: StoredTaskDocument; generation: number } | undefined> {
+	let generation: number | undefined;
+	const document = await updateStoredTask(channelDir, id, (task) => {
+		const status = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+		const existingHandoff = task.fields.control?.wakeHandoff;
+		if (
+			handoff &&
+			status === "active" &&
+			existingHandoff?.kind === handoff.kind &&
+			existingHandoff.resourceId === handoff.resourceId &&
+			existingHandoff.dispatchId === handoff.dispatchId &&
+			task.fields.control?.attemptGeneration === existingHandoff.generation
+		) {
+			generation = existingHandoff.generation;
+			return;
+		}
+		if (status !== "waiting" || task.fields.enabled === false) return;
+		if (task.fields.control?.waitingFor !== expectedWaitingFor) return;
+		hooks?.beforeActivation?.();
+		task.fields.control ??= createDefaultTaskControl();
+		task.fields.status = "active";
+		task.fields.wake = undefined;
+		task.fields.control.waitingFor = undefined;
+		task.fields.control.blockedReason = undefined;
+
+		hooks?.beforeAttemptClaim?.();
+		generation = task.fields.control.attemptGeneration + 1;
+		const previousLastOutcome = task.fields.control.lastOutcome;
+		const previousBlockedReason = task.fields.control.blockedReason;
+		const previousLastStartedAt = task.fields.control.lastStartedAt;
+		task.fields.control.usage.attempts++;
+		task.fields.control.attemptGeneration = generation;
+		task.fields.control.lastStartedAt = formatLocalTime(now);
+		task.fields.control.lastOutcome = "running";
+		if (handoff) {
+			task.fields.control.wakeHandoff = {
+				...handoff,
+				generation,
+				previousLastOutcome,
+				previousBlockedReason,
+				previousLastStartedAt,
+			};
+		}
+	});
+	return document && generation !== undefined ? { document, generation } : undefined;
+}
+
+function isMatchingWakeHandoff(
+	handoff: TaskWakeHandoff | undefined,
+	expected: WakeTaskHandoffInput,
+): handoff is TaskWakeHandoff {
+	return (
+		handoff?.kind === expected.kind &&
+		handoff.resourceId === expected.resourceId &&
+		handoff.dispatchId === expected.dispatchId
+	);
+}
+
+/** Return a transport-rejected structured wake to its exact pre-activation task state. */
+export async function rollbackWakeTaskActivation(
+	channelDir: string,
+	id: string,
+	expected: WakeTaskHandoffInput,
+): Promise<void> {
+	await updateStoredTask(channelDir, id, (task) => {
+		const control = task.fields.control;
+		const handoff = control?.wakeHandoff;
+		if (!control || !isMatchingWakeHandoff(handoff, expected) || control.attemptGeneration !== handoff.generation) {
+			return;
+		}
+		task.fields.status = "waiting";
+		task.fields.wake = undefined;
+		control.waitingFor = "external-signal";
+		control.usage.attempts = Math.max(0, control.usage.attempts - 1);
+		control.attemptGeneration = Math.max(0, handoff.generation - 1);
+		control.lastOutcome = handoff.previousLastOutcome;
+		control.blockedReason = handoff.previousBlockedReason;
+		control.lastStartedAt = handoff.previousLastStartedAt;
+		control.wakeHandoff = undefined;
+	});
+}
+
+/** Clear the durable handoff after the transport has accepted the activated turn. */
+export async function finishWakeTaskActivation(
+	channelDir: string,
+	id: string,
+	expected: WakeTaskHandoffInput,
+): Promise<void> {
+	await updateStoredTask(channelDir, id, (task) => {
+		if (isMatchingWakeHandoff(task.fields.control?.wakeHandoff, expected) && task.fields.control) {
+			task.fields.control.wakeHandoff = undefined;
+		}
+	});
 }
 
 /**
