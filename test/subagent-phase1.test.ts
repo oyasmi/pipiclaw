@@ -161,10 +161,10 @@ describe("sub-agent discovery", () => {
 				thinkingLevel: "medium",
 				contextMode: "isolated",
 				memory: "none",
-				maxTurns: 18,
-				maxToolCalls: 40,
-				maxWallTimeSec: 240,
-				bashTimeoutSec: 120,
+				maxTurns: 10,
+				maxToolCalls: 20,
+				maxWallTimeSec: 120,
+				bashTimeoutSec: 60,
 			},
 		});
 
