@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalHome = process.env.PIPICLAW_HOME;
+const originalOffline = process.env.PI_OFFLINE;
 
 let home: string;
 
@@ -25,6 +26,7 @@ describe("auth.json path guardrails (spec 039 §4.2)", () => {
 	afterEach(() => {
 		rmSync(home, { recursive: true, force: true });
 		restoreEnv("PIPICLAW_HOME", originalHome);
+		restoreEnv("PI_OFFLINE", originalOffline);
 	});
 
 	it("places AUTH_CONFIG_PATH under the default app home", async () => {
@@ -56,6 +58,9 @@ describe("auth.json path guardrails (spec 039 §4.2)", () => {
 
 	it("login orchestration writes to the configured authConfigPath, not ~/.pi/agent/auth.json", async () => {
 		process.env.PIPICLAW_HOME = home;
+		// ModelRuntime.login() refreshes the model catalog from pi.dev with no timeout of its own;
+		// force offline so this test's outcome depends on file writes, not live network latency.
+		process.env.PI_OFFLINE = "1";
 		const paths = await loadPaths();
 		const { createModelRuntime } = await import("../src/models/utils.js");
 		const { loginProvider } = await import("../src/models/provider-login.js");
