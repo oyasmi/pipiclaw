@@ -4,6 +4,24 @@
 
 ## [未发布]
 
+## [0.9.0-beta.1] - 2026-08-08
+
+### 新增
+
+- 引入统一的子代理 run 生命周期，统一支持内置与外部 runtime 的注册、结算、用量记账、完成唤醒和取消；结算、记账与唤醒均具备幂等保护，并提供 120 秒同步宽限窗口。长时间委派会继续异步运行，`/stop` 不再连带终止已经派发的 run。
+- 新增 Claude Code、Codex CLI 和任意可执行程序的外部 Agent 支持。对应 harness 覆盖参数组装、NDJSON/stream-json 解析、脱离主进程的进程编排、重启恢复，以及可续接的 Claude Code/Codex CLI run 的 follow-up。
+- 新增 `subagent_manage` 工具和 `/subagents list|show|cancel` 控制面，并加入 workspace 写锁、频道级与全局在途并发上限，以及禁止代理写入自己的 `workspace/sub-agents/` 授权配置的防护。
+
+### 变更
+
+- 现有 `subagent` 调用面同时支持配置好的外部角色和内置角色。异步 run 会返回 `runId`，完成后自动唤醒频道；任务台账可以等待 `external-signal`。
+- 产物 subject 哈希和验收现在会纳入未跟踪文件内容。内置验收仍具备强制写保护；外部验收明确标记为 advisory，并报告验收期间的工作区变化，供后续复核。
+- 更新子代理文档、委派 playbook、架构说明，以及面向内置和外部工作流的可复制角色示例。
+
+### 测试与发布
+
+- 新增 run 生命周期与幂等性、异步派发、三种外部 harness、重启/续接、角色发现与命令面、workspace 写锁、写入拒绝和工具集成等测试覆盖。
+
 ## [0.8.11] - 2026-08-07
 
 ### 新增

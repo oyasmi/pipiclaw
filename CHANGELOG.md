@@ -4,6 +4,24 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.0-beta.1] - 2026-08-08
+
+### Added
+
+- Added a unified sub-agent run lifecycle shared by internal and external runtimes, with idempotent settlement, usage accounting, completion wake-ups, cancellation, and a 120-second synchronous grace window. Long-running delegations continue asynchronously, and `/stop` no longer kills an already-dispatched run.
+- Added external-agent support for Claude Code, Codex CLI, and arbitrary executables. The harnesses cover argument assembly, NDJSON/stream-json parsing, detached process orchestration, restart reconciliation, and follow-up continuation for resumable Claude Code and Codex CLI runs.
+- Added the `subagent_manage` tool and `/subagents list|show|cancel` control surface, plus workspace write leases, per-channel and global in-flight concurrency caps, and a guard preventing agents from writing their own `workspace/sub-agents/` authorization files.
+
+### Changed
+
+- The existing `subagent` invocation surface now works with configured external roles as well as internal roles. Asynchronous runs return a `runId` and wake the channel when they finish; task records can wait for an `external-signal`.
+- Verification and artifact subject hashing now account for untracked-file content. Internal verification keeps enforced write protection, while external verification is explicitly advisory and reports workspace changes for follow-up review.
+- Refreshed sub-agent documentation, delegation playbooks, architecture notes, and copyable role examples for internal and external workflows.
+
+### Tests and release
+
+- Added coverage for run lifecycle and idempotency, asynchronous dispatch, all three external harnesses, restart/follow-up behavior, discovery and command surfaces, workspace leases, write denial, and tool integration.
+
 ## [0.8.11] - 2026-08-07
 
 ### Added
