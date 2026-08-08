@@ -49,7 +49,7 @@ describe("delivery", () => {
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 
-		expect(bot.calls).toEqual([{ method: "appendToCard", args: ["dm_123", "A \n B"] }]);
+		expect(bot.calls).toEqual([{ method: "appendToCard", args: ["dm_123", "- A\n- B"] }]);
 		expect(store.logged).toHaveLength(2);
 	});
 
@@ -69,11 +69,11 @@ describe("delivery", () => {
 		// so an append-only delta would leave a stale first line on the card.
 		expect(bot.calls.map((call) => call.method)).toEqual(Array(5).fill("replaceCard"));
 		expect(bot.calls.map((call) => String(call.args[1]).replace(/^⏱ \d+s · /, ""))).toEqual([
-			"0 步\n\nA",
-			"0 步\n\nA \n B",
-			"0 步\n\nA \n B \n C",
-			"0 步\n\nB \n C \n D",
-			"0 步\n\nC \n D \n E",
+			"0 步\n\n- A",
+			"0 步\n\n- A\n- B",
+			"0 步\n\n- A\n- B\n- C",
+			"0 步\n\n- B\n- C\n- D",
+			"0 步\n\n- C\n- D\n- E",
 		]);
 		expect(store.logged.map((entry) => entry.args[1])).toEqual(["A", "B", "C", "D", "E"]);
 	});
@@ -259,9 +259,9 @@ describe("delivery", () => {
 		await failedCtx.flush();
 
 		expect(failedBot.calls).toEqual([
-			{ method: "appendToCard", args: ["dm_123", "hello"] },
+			{ method: "appendToCard", args: ["dm_123", "- hello"] },
 			{ method: "discardCard", args: ["dm_123"] },
-			{ method: "replaceCard", args: ["dm_123", "hello \n world", false] },
+			{ method: "replaceCard", args: ["dm_123", "- hello\n- world", false] },
 		]);
 	});
 
@@ -292,9 +292,9 @@ describe("delivery", () => {
 		await expect(ctx.respondPlain("final")).resolves.toBe(true);
 
 		expect(bot.calls).toEqual([
-			{ method: "appendToCard", args: ["dm_123", "progress"] },
+			{ method: "appendToCard", args: ["dm_123", "- progress"] },
 			{ method: "sendPlain", args: ["dm_123", "final"] },
-			{ method: "replaceCard", args: ["dm_123", "progress", true] },
+			{ method: "replaceCard", args: ["dm_123", "- progress", true] },
 		]);
 	});
 });

@@ -7,10 +7,11 @@ import type { ChannelStore } from "./store.js";
 const MIN_UPDATE_INTERVAL_MS = 800;
 const ROLLING_WINDOW_SIZE = 3;
 const NO_CONTENT = "";
-// DingTalk's markdown line break: "\n" padded with a space on each side (per DingTalk's
-// own markdown guide). A bare blank line reads as a full paragraph break (too much
-// vertical gap between progress entries); a bare "\n" is swallowed by the renderer.
-const PROGRESS_LINE_BREAK = " \n ";
+// DingTalk's card renderer swallows a bare "\n" between plain lines (and a blank-line
+// paragraph break leaves too much vertical gap), but it does reliably break a markdown
+// list onto separate lines. Render each progress entry as a list item instead.
+const PROGRESS_LINE_BREAK = "\n";
+const PROGRESS_ENTRY_PREFIX = "- ";
 // Last-resort ceiling on how long flush() will block a caller. Outbound HTTP now
 // has its own timeout, so the sync loop is already bounded; this only guards against
 // an unforeseen stall so run()'s finally can never hang the channel forever.
@@ -150,7 +151,7 @@ class ChannelDeliveryController {
 		if (this.progressSegments.length > 0) {
 			this.progressSegments.push(PROGRESS_LINE_BREAK);
 		}
-		this.progressSegments.push(text);
+		this.progressSegments.push(`${PROGRESS_ENTRY_PREFIX}${text}`);
 		this.progressTextDirty = true;
 		if (this.progressStyle === "rolling") {
 			this.trimToRecentEntries(ROLLING_WINDOW_SIZE);
