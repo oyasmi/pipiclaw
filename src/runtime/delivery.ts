@@ -140,11 +140,11 @@ class ChannelDeliveryController {
 		if (this.progressStartedAt === 0) {
 			this.progressStartedAt = Date.now();
 		}
-		if (text.startsWith("Running:")) {
+		if (text.startsWith("▸ ")) {
 			this.toolCallCount++;
 		}
 		if (this.progressSegments.length > 0) {
-			this.progressSegments.push("\n\n");
+			this.progressSegments.push("\n");
 		}
 		this.progressSegments.push(text);
 		this.progressTextDirty = true;
@@ -428,7 +428,7 @@ class ChannelDeliveryController {
 	private trimToRecentEntries(maxEntries: number): void {
 		let entryCount = 0;
 		for (const segment of this.progressSegments) {
-			if (segment !== "\n\n") {
+			if (segment !== "\n") {
 				entryCount++;
 			}
 		}
@@ -441,11 +441,11 @@ class ChannelDeliveryController {
 		let removedEntries = 0;
 		while (removedEntries < entriesToRemove && this.progressSegments.length > 0) {
 			const segment = this.progressSegments.shift();
-			if (segment !== "\n\n") {
+			if (segment !== "\n") {
 				removedEntries++;
 			}
 		}
-		while (this.progressSegments[0] === "\n\n") {
+		while (this.progressSegments[0] === "\n") {
 			this.progressSegments.shift();
 		}
 

@@ -49,7 +49,7 @@ describe("delivery", () => {
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 
-		expect(bot.calls).toEqual([{ method: "appendToCard", args: ["dm_123", "A\n\nB"] }]);
+		expect(bot.calls).toEqual([{ method: "appendToCard", args: ["dm_123", "A\nB"] }]);
 		expect(store.logged).toHaveLength(2);
 	});
 
@@ -70,10 +70,10 @@ describe("delivery", () => {
 		expect(bot.calls.map((call) => call.method)).toEqual(Array(5).fill("replaceCard"));
 		expect(bot.calls.map((call) => String(call.args[1]).replace(/^⏱ \d+s · /, ""))).toEqual([
 			"0 步\n\nA",
-			"0 步\n\nA\n\nB",
-			"0 步\n\nA\n\nB\n\nC",
-			"0 步\n\nB\n\nC\n\nD",
-			"0 步\n\nC\n\nD\n\nE",
+			"0 步\n\nA\nB",
+			"0 步\n\nA\nB\nC",
+			"0 步\n\nB\nC\nD",
+			"0 步\n\nC\nD\nE",
 		]);
 		expect(store.logged.map((entry) => entry.args[1])).toEqual(["A", "B", "C", "D", "E"]);
 	});
@@ -83,15 +83,15 @@ describe("delivery", () => {
 		bot.responseMode = "rolling_progress_then_plain_final";
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
 
-		await ctx.respond("Running: read docs");
+		await ctx.respond("▸ read docs");
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 		await vi.advanceTimersByTimeAsync(1200);
-		await ctx.respond("Thinking: checking design");
+		await ctx.respond("💭 checking design");
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 		await vi.advanceTimersByTimeAsync(1200);
-		await ctx.respond("Running: update files");
+		await ctx.respond("▸ update files");
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 
@@ -106,7 +106,7 @@ describe("delivery", () => {
 		expect(finalCall?.method).toBe("replaceCard");
 		expect(finalCall?.args[0]).toBe("dm_123");
 		expect(finalCall?.args[1]).toMatch(/^完成 · 2 步 · \d+s$/);
-		expect(finalCall?.args[1]).not.toContain("Running:");
+		expect(finalCall?.args[1]).not.toContain("▸");
 		expect(finalCall?.args[2]).toBe(true);
 	});
 
@@ -115,7 +115,7 @@ describe("delivery", () => {
 		bot.responseMode = "rolling_progress_then_plain_final";
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
 
-		await ctx.respond("Running: collect context");
+		await ctx.respond("▸ collect context");
 		await vi.advanceTimersByTimeAsync(800);
 		await ctx.flush();
 		await ctx.replaceMessage("final fallback text");
@@ -161,7 +161,7 @@ describe("delivery", () => {
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never, "none");
 
 		expect(ctx.progressStyle).toBe("none");
-		await ctx.respond("Running: bash");
+		await ctx.respond("▸ bash");
 		await vi.runAllTimersAsync();
 		await ctx.flush();
 		expect(bot.calls).toEqual([]);
@@ -180,7 +180,7 @@ describe("delivery", () => {
 		const bot = new FakeDingTalkBot();
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never, "none");
 
-		await ctx.respond("Running: bash");
+		await ctx.respond("▸ bash");
 		await ctx.deleteMessage();
 		await vi.runAllTimersAsync();
 		await ctx.flush();
@@ -261,7 +261,7 @@ describe("delivery", () => {
 		expect(failedBot.calls).toEqual([
 			{ method: "appendToCard", args: ["dm_123", "hello"] },
 			{ method: "discardCard", args: ["dm_123"] },
-			{ method: "replaceCard", args: ["dm_123", "hello\n\nworld", false] },
+			{ method: "replaceCard", args: ["dm_123", "hello\nworld", false] },
 		]);
 	});
 

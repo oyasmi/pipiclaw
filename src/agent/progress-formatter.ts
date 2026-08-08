@@ -37,11 +37,11 @@ export function formatProgressEntry(kind: ProgressEntryKind, text: string): stri
 	const normalized = cleaned.replace(/\n+/g, " ").trim();
 	switch (kind) {
 		case "tool":
-			return `Running: ${normalized}`;
+			return `▸ ${normalized}`;
 		case "thinking":
-			return `Thinking: ${normalized}`;
+			return `💭 ${normalized}`;
 		case "error":
-			return `Error: ${normalized}`;
+			return `⚠ ${normalized}`;
 		case "assistant":
 			return normalized;
 	}

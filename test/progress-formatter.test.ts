@@ -16,9 +16,9 @@ describe("progress formatter", () => {
 	});
 
 	it("formats progress entries without leaking blank or object-replacement content", () => {
-		expect(formatProgressEntry("tool", "\uFFFC\nnpm test\n\n-- --run")).toBe("Running: npm test -- --run");
-		expect(formatProgressEntry("thinking", " checking state ")).toBe("Thinking: checking state");
-		expect(formatProgressEntry("error", " boom ")).toBe("Error: boom");
+		expect(formatProgressEntry("tool", "\uFFFC\nnpm test\n\n-- --run")).toBe("\u25B8 npm test -- --run");
+		expect(formatProgressEntry("thinking", " checking state ")).toBe("\uD83D\uDCAD checking state");
+		expect(formatProgressEntry("error", " boom ")).toBe("\u26A0 boom");
 		expect(formatProgressEntry("assistant", " done\nnow ")).toBe("done now");
 		expect(formatProgressEntry("assistant", "\uFFFC\n \r")).toBe("");
 	});
