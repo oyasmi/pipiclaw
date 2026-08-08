@@ -375,16 +375,16 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - `maxWallTimeSec` 给足（3600～5400）——它们是重活，不指望在同步宽限窗口内返回
 - 并行派发必须为每个 run 指定不同的 `workingDirectory`，否则第二个会被工作区写锁拒绝
 
-**Reviewer / Scout**（外部，codex-cli，只读）—— 独立挑错与单点事实查询：
+**Scout**（外部，codex-cli，只读）—— 单点事实查询：
 
 - `command` 用 `codex exec --sandbox read-only`，让 `mutates: read` 是被 CLI 强制的声明而不只是一句话
 - 只读角色不参与工作区写锁，可以与 builder 并行
-- `reviewer` 可用于 `purpose=verify`，但 attestation 是 `advisory`，仍需主代理按风险抽查
 
-**Verifier / Worker / Documenter**（外部，codex-cli，可写）—— 运行取证、通用分析、文档与交付：
+**Reviewer / Verifier / Worker / Documenter**（外部，codex-cli，可写）—— 独立挑错、运行取证、通用分析、文档与交付：
 
 - `command` 用 `codex exec --sandbox workspace-write`，`mutates: write`
-- `verifier` 会写构建产物、夹具和报告，因此**不能**用于 `purpose=verify`——如实声明为 `write` 的角色会被 runtime 拒绝承担验收
+- `reviewer` 会落盘评审报告，`verifier` 会写构建产物、夹具和报告，因此两者都**不能**用于 `purpose=verify`——如实声明为 `write` 的角色会被 runtime 拒绝承担验收。示例目录里没有可承担外部验收的角色；需要外部 `purpose=verify` 时，自行配置一个 `--sandbox read-only` + `mutates: read` 的评审角色
+- `reviewer` 取工作区写锁，不能再与 builder 并发指向同一棵工作树；并行评审请先 `git worktree add`
 - `documenter` 可按任务创建 commit；push 需要单独授权
 
 ## 常见错误（Common Mistakes）
