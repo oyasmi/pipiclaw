@@ -4,6 +4,20 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.0-beta.2] - 2026-08-08
+
+### Added
+
+- Structured wake provenance for sub-agent and background-job completion wakes. Producers stamp a trusted `internalWake` envelope with a durable dispatch id, and plaintext `[JOB:]/[SUBAGENT:]` text is treated as an unauthenticated candidate claim. Verified/trusted predicates stop copied text or an external agent's stdout from forging a wake that advances a task.
+- Two-phase claim→finish wake consumption with durable one-time markers, per-queue serialization, and atomic task activation that rolls back if the transport rejects the turn. Unverifiable or duplicate wakes are dropped, and the durable dispatcher re-delivers when consumption did not finalize.
+
+### Changed
+
+- External-agent dispatch is now a hard audit gate: the `external-agent` audit record is written strictly (throwing on capacity/IO failure) and awaited before any child process is spawned, so a run cannot start unrecorded.
+- Host-wide admission now serializes sub-agent registration to close the cross-channel concurrency boundary; workspace write leases are released on every setup-failure path, including follow-up pre-spawn failures.
+- `killProcessGroup` no longer skips `SIGKILL` when a detached descendant keeps the process group alive; the external run now honors the cancel window between register and spawn and reaps the process group on every settle.
+- Usage accounting now keeps entries marked cost/usage unknown and discloses the unknown counts on render, so "unknown" no longer reads as "free".
+
 ## [0.9.0-beta.1] - 2026-08-08
 
 ### Added
