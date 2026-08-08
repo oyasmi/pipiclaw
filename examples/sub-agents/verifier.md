@@ -6,7 +6,7 @@ description: >-
   它会写文件（构建产物、测试数据、报告），因此**不能**用于 purpose=verify——受治理任务的独立终验请用声明 `mutates: read` 的角色。不要与 builder 或 reviewer 并发指向同一个工作目录。
 runtime: external
 harness: codex-cli
-command: codex exec --sandbox workspace-write --skip-git-repo-check
+command: codex exec --sandbox danger-full-access --ask-for-approval never --skip-git-repo-check
 thinkingLevel: medium
 workload: heavy
 mutates: write

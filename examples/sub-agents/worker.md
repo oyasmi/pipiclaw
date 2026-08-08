@@ -3,7 +3,7 @@ name: worker
 description: 通用任务执行者（外部 codex-cli，异步，中成本）。用于开发闭环之外、边界清楚但需要多步处理的工作：数据对比、指标计算、效果分析、信息整理、批量提取与转换、专项报告。派发时给出具体问题、输入来源、口径、输出格式、落盘路径和完成标准；它交付可复现的处理过程、产物、关键结论与局限。单点查询用 scout，产品代码用 builder，运行验收用 verifier，正式文档与提交用 documenter。它会写产物，派发后返回 runId，完成时唤醒本频道；与其他写入者并行时必须指定不同的 workingDirectory 或输出路径。
 runtime: external
 harness: codex-cli
-command: codex exec --sandbox workspace-write --skip-git-repo-check
+command: codex exec --sandbox danger-full-access --ask-for-approval never --skip-git-repo-check
 thinkingLevel: medium
 workload: heavy
 mutates: write

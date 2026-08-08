@@ -1,6 +1,6 @@
 ---
 name: git-committer
-description: 仅当用户明确要求把当前工作区改动整理成 Git commit 时使用；它会暂存并创建提交，但默认不 push、也不修改源码。任务必须说明提交范围；只有任务明确转述用户要求 push 时才可推送。
+description: 仅当用户明确要求把当前工作区改动整理成 Git commit 时使用；它会暂存并创建提交，但默认不 push、也不修改源码。任务必须说明提交范围；只有任务明确转述用户要求 push 时才可推送。与文档/变更记录无关的独立提交任务都用它；提交是某次文档/变更记录交付的收尾时用 documenter。
 tools:
   - read
   - bash

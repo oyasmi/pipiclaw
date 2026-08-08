@@ -31,7 +31,7 @@ planner（需求 / 方案 / 验收 / 拆解）
   → builder（代码 + 单元测试）      ← 卡住时换 builder-hard
   → reviewer（实现评审）
   → verifier（实际运行取证）
-  → documenter（文档 / 变更记录 / 提交 / 交付）
+  → documenter（文档 / 变更记录 / 交付，随任务顺带提交）
 ```
 
 reviewer 发现的问题回流给产出角色；verifier 失败回流给 builder，不在验证环节就地修复。闭环之外：worker 承接通用多步分析与产出，scout 只做单点事实查询。
@@ -42,16 +42,18 @@ reviewer 发现的问题回流给产出角色；verifier 失败回流给 builder
 | `builder` | claude-code (sonnet) | `write` | medium | 边界清晰、验收已定义的实现 + 单元测试 |
 | `builder-hard` | claude-code (opus) | `write` | xhigh | builder 已失败、根因难定位或多契约耦合的实现 |
 | `reviewer` | codex-cli | `write` | high | 与产出者分离的方案 / 代码 / 文档挑错，并落盘评审报告 |
-| `verifier` | codex-cli | `write` | medium | 实际运行系统、复现、冒烟、回归、取证 |
+| `verifier` | codex-cli（无沙箱） | `write` | medium | 实际运行系统、复现、冒烟、回归、取证 |
 | `scout` | codex-cli（只读沙箱） | `read` | low | 大仓库里的单点事实查询 |
-| `worker` | codex-cli | `write` | medium | 闭环外的数据对比、指标计算、批量处理、专项报告 |
-| `documenter` | codex-cli | `write` | medium | 文档、变更记录、commit 与最终交付 |
+| `worker` | codex-cli（无沙箱） | `write` | medium | 闭环外的数据对比、指标计算、批量处理、专项报告 |
+| `documenter` | codex-cli（无沙箱） | `write` | medium | 文档、变更记录，随文档任务顺带 commit 与最终交付；独立提交任务用 `git-committer` |
 
 `scout` 用 `--sandbox read-only` 启动 codex，因此它的 `mutates: read` 是被目标 CLI 真正强制的，而不只是一个声明——这也是它不参与工作区写锁、可以与 builder 并行的原因。
 
 `reviewer` 需要落盘评审报告，因此用 `--sandbox workspace-write` 并如实声明 `mutates: write`：它的正文约束「只写报告、不改被评对象」，但那是提示词纪律而非沙箱边界。代价有两处——它会取工作区写锁（不能与 builder / verifier 并发指向同一棵工作树，并行评审请先 `git worktree add`），并且不能承担 `purpose=verify`。
 
 `purpose=verify` 只接受 `mutates: read` 的外部角色，本目录里没有这样的验收角色（`scout` 的定位是单点查询，不适合终验）。需要外部独立验收时，自行复制一份 `reviewer` 改成 `--sandbox read-only` + `mutates: read` 并去掉报告落盘；外部验收的 attestation 强度是 `advisory`，主代理仍需按风险抽查。
+
+`documenter`、`verifier`、`worker` 用 `--sandbox danger-full-access --ask-for-approval never`，即完全不沙箱化，而不是 `workspace-write`。原因：Codex 的 `workspace-write` 沙箱把 `.git/` 强制设为只读（这是 Codex 自身的安全策略，与 pipiclaw 无关），`git add` 需要创建 `.git/index.lock` 会直接失败，`git commit` 还需要写 `objects`、`refs`、`logs`。三者的正文都把「任务明确授权时执行 git commit / push」列为职责的一部分，`workspace-write` 会让这个职责始终不可用，所以只能退到 `danger-full-access`；这意味着目标 CLI 对文件系统和网络完全不设限，唯一的边界回到正文纪律和派发时给出的授权范围。`reviewer` 正文明确「不改配置、依赖和 git 历史」，从不需要提交，因此仍用 `--sandbox workspace-write`，不做这个放宽。
 
 ## 使用原则
 
@@ -63,6 +65,7 @@ reviewer 发现的问题回流给产出角色；verifier 失败回流给 builder
 - `tools` 只是工具白名单，不等同于只读沙箱。拥有 `bash` 的内置角色仍须遵守正文和应用级 `security.json` 的限制。
 - 外部角色**没有** `tools` 字段（写了会被驳回）。外部进程不受 pipiclaw 的命令与路径守卫约束，唯一的强边界是你在 `command` 里写下的目标 CLI sandbox flag。
 - `git-committer` 和 `documenter` 只有在任务明确转述用户要求 push 时才能推送；创建了 commit 不代表自动获得 push 授权。
+- `documenter` 和 `git-committer` 的提交职责按任务性质分：任务同时要求文档/变更记录与提交时派 `documenter`，commit 是文档交付的收尾；与文档无关的独立提交任务派 `git-committer`。
 
 Pipiclaw 只加载工作区 `sub-agents/` 中实际存在且有效的 Markdown 文件。空目录是合法配置；没有合适的预定义角色时仍可使用 inline `systemPrompt`。`purpose: verify` 的验收约束由 runtime 执行，不要求配置文件必须名为 `verifier`。
 
