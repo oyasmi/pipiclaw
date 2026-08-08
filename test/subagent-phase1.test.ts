@@ -186,8 +186,12 @@ describe("sub-agent discovery", () => {
 
 		const claudeRoles = ["planner", "builder", "builder-hard"];
 		const codexReadRoles = ["scout"];
-		const codexWriteRoles = ["reviewer", "verifier", "worker", "documenter"];
-		for (const name of [...claudeRoles, ...codexReadRoles, ...codexWriteRoles]) {
+		// reviewer stays on workspace-write (must not touch Git history); verifier/worker/documenter
+		// run with danger-full-access because workspace-write makes .git metadata read-only, which
+		// blocks the Git operations their documented responsibilities may require (see 0833150).
+		const codexWorkspaceWriteRoles = ["reviewer"];
+		const codexFullAccessRoles = ["verifier", "worker", "documenter"];
+		for (const name of [...claudeRoles, ...codexReadRoles, ...codexWorkspaceWriteRoles, ...codexFullAccessRoles]) {
 			const example = readFileSync(join(process.cwd(), "examples", "sub-agents", `${name}.md`), "utf-8");
 			writeFileSync(join(subAgentsDir, `${name}.md`), example, "utf-8");
 		}
@@ -221,10 +225,15 @@ describe("sub-agent discovery", () => {
 			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "read" });
 			expect(agent?.command).toContain("--sandbox read-only");
 		}
-		for (const name of codexWriteRoles) {
+		for (const name of codexWorkspaceWriteRoles) {
 			const agent = discovery.agents.find((candidate) => candidate.name === name);
 			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "write" });
 			expect(agent?.command).toContain("--sandbox workspace-write");
+		}
+		for (const name of codexFullAccessRoles) {
+			const agent = discovery.agents.find((candidate) => candidate.name === name);
+			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "write" });
+			expect(agent?.command).toContain("--sandbox danger-full-access");
 		}
 	});
 
