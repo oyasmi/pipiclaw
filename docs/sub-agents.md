@@ -193,7 +193,7 @@ maxWallTimeSec: 3600
 | `name` | `dynamic-subagent` | inline 子代理的显示名，进入运行记录 |
 | `tools` | 角色配置或 `read,bash` | 工具白名单（仅内置） |
 | `model` | 见[模型解析顺序](./configuration.md) | 精确模型引用（仅内置；外部角色的模型只能在角色文件里配） |
-| `effort` | `standard` | 执行预算档位：`quick`、`standard`、`deep`（仅内置；外部只有 `maxWallTimeSec` 一个预算维度） |
+| `effort` | `standard` | 执行预算档位：`quick`、`standard`、`deep`。内置替换四个数值预算；外部只有 `maxWallTimeSec` 一个维度，`quick`/`deep` 按外部量级取值，`standard`/不传沿用角色自身的 `maxWallTimeSec` |
 | `context` | `none` | 上下文注入：`none`、`session`、`relevant`（仅内置） |
 | `paths` | 角色配置 | 建议优先关注的路径 |
 | `workingDirectory` | runtime 自身工作目录 | **每次委派都应显式传**；必须是已存在目录。并行写入的分片必须各自 `git worktree add` 后指向不同 checkout |
@@ -202,9 +202,11 @@ maxWallTimeSec: 3600
 | `taskId` | - | 绑定任务台账；`purpose: verify` 要求它 |
 | `returns` | `text` | `artifact` 要求子代理把主产出写成文件并以 `ARTIFACT: <filename>` 结尾（仅内置；外部角色的产出固定落在 `output.md`） |
 
-### `effort` 与 frontmatter 数值的关系（仅内置）
+### `effort` 与 frontmatter 数值的关系
 
-`effort` 是四个数值预算的命名组合。调用时传 `effort` 会**整组替换**预算，而不是逐字段合并；不传则沿用角色 frontmatter 里的精确数值（没有配置角色时用内置默认）。
+`effort` 是执行预算的命名组合，内置和外部各有一套换算，都以**整组替换**（不传则沿用角色 frontmatter 里的精确数值，没有配置角色时用默认）而不是逐字段合并。
+
+内置（四个数值预算都受影响）：
 
 | `effort` | maxTurns | maxToolCalls | maxWallTimeSec | bashTimeoutSec |
 |---|---|---|---|---|
@@ -213,6 +215,14 @@ maxWallTimeSec: 3600
 | `deep` | 48 | 96 | 900 | 180 |
 
 `standard` 与内置默认值完全一致，所以不传 `effort` 时行为不变。
+
+外部（没有轮次/工具调用预算，`effort` 只移动 `maxWallTimeSec`，数值是外部量级，不是内置表格里的秒数）：
+
+| `effort` | maxWallTimeSec |
+|---|---|
+| `quick` | 600 |
+| `standard` | 角色自身 `maxWallTimeSec`（未设置时 1800） |
+| `deep` | 5400 |
 
 ### `context` 与 frontmatter 的关系（仅内置）
 

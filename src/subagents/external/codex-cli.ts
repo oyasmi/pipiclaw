@@ -69,12 +69,7 @@ export const codexCliHarness: ExternalHarness = {
 			? [...baseArgs, "resume", input.resumeSessionId, "--json", "-"]
 			: [...baseArgs, "--json", "-"];
 
-		return {
-			executable,
-			args,
-			resumable: true,
-			promptFiles: used.has("$PROMPT_FILE") ? [input.promptFile] : undefined,
-		};
+		return { executable, args, resumable: true };
 	},
 
 	parseOutcome(input: ParseOutcomeInput): ExternalOutcome {
@@ -145,7 +140,6 @@ export const codexCliHarness: ExternalHarness = {
 			usage,
 			usageKnown,
 			costKnown: false, // codex-cli never reports a cost field (D4).
-			outputTruncated: false,
 			stderrTail: input.stderrTail,
 			errorMessage,
 		};

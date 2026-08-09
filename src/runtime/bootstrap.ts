@@ -47,6 +47,7 @@ import {
 	getSubAgentRunManager,
 	type RunRecord,
 	restoreAllSubAgentRuns,
+	stopSubAgentSweeper,
 } from "../subagents/runs.js";
 import { readActiveTasks } from "../tasks/ledger.js";
 import {
@@ -761,7 +762,9 @@ interface RuntimeContextOptions {
 	stopForceEndGraceMs?: number;
 }
 
-export function createRuntimeContext(options: RuntimeContextOptions): RuntimeContext & { bot: DingTalkBot } {
+export async function createRuntimeContext(
+	options: RuntimeContextOptions,
+): Promise<RuntimeContext & { bot: DingTalkBot }> {
 	const startServices = options.startServices ?? true;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
@@ -1290,7 +1293,10 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 		ledger: getUsageLedger(),
 		store,
 	});
-	void restoreAllSubAgentRuns();
+	// Admission (bot.start() below) must not open until every persisted run is back in memory
+	// (P0-1): a message arriving mid-restore would see partial running-count/short-id/lease state,
+	// and durableDispatch's redelivery of a pending completion wake would find no record to claim.
+	await restoreAllSubAgentRuns();
 	const eventsWatcher = options.createEventsWatcher
 		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)
 		: createEventsWatcher(
@@ -1376,6 +1382,7 @@ export function createRuntimeContext(options: RuntimeContextOptions): RuntimeCon
 			durableDispatch?.stop();
 			memoryMaintenanceScheduler.stop();
 			eventsWatcher.stop();
+			stopSubAgentSweeper();
 			await bot.stop();
 
 			const runningTasks = Array.from(activeTasks);
@@ -1544,7 +1551,7 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 	prepareAppServices(paths);
 
 	log.logStartup(paths.workspaceDir);
-	const runtime = createRuntimeContext({
+	const runtime = await createRuntimeContext({
 		paths,
 		dingtalkConfig,
 		registerSignalHandlers,

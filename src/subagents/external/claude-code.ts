@@ -76,8 +76,7 @@ export const claudeCodeHarness: ExternalHarness = {
 			args.push("--session-id", presetSessionId);
 		}
 
-		const promptFiles = [input.systemPromptFile, ...(used.has("$PROMPT_FILE") ? [input.promptFile] : [])];
-		return { executable, args, resumable: true, promptFiles, presetSessionId };
+		return { executable, args, resumable: true, presetSessionId };
 	},
 
 	parseOutcome(input: ParseOutcomeInput): ExternalOutcome {
@@ -160,7 +159,6 @@ export const claudeCodeHarness: ExternalHarness = {
 			usage,
 			usageKnown,
 			costKnown,
-			outputTruncated: false,
 			stderrTail: input.stderrTail,
 			errorMessage,
 		};

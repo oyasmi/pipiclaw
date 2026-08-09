@@ -34,7 +34,13 @@ export const execHarness: ExternalHarness = {
 	parseOutcome(input: ParseOutcomeInput): ExternalOutcome {
 		const text = input.eventsText;
 		const truncated = text.length > MAX_OUTPUT_CHARS;
-		const finalText = truncated ? text.slice(0, MAX_OUTPUT_CHARS) : text;
+		// The full, untruncated capture always stays on disk as this run's events.jsonl (spec 040
+		// D1's layout, unconditional for every external run) — a truncated reply must say so
+		// explicitly rather than silently dropping the tail (P1-3: the playbook's "full text is
+		// always recoverable" promise did not actually hold for a chatty `exec` role).
+		const finalText = truncated
+			? `${text.slice(0, MAX_OUTPUT_CHARS)}\n\n[... output truncated at ${MAX_OUTPUT_CHARS} characters; the full capture is this run's events.jsonl ...]`
+			: text;
 		return {
 			finalText,
 			terminalSeen: false, // Always false, even on success — exec has no protocol terminal (D4/D9).
@@ -42,7 +48,6 @@ export const execHarness: ExternalHarness = {
 			exitCode: input.exitCode,
 			usageKnown: false,
 			costKnown: false,
-			outputTruncated: truncated,
 			stderrTail: input.stderrTail,
 			errorMessage: input.exitCode === 0 ? undefined : `exec exited with code ${input.exitCode ?? "unknown"}`,
 		};

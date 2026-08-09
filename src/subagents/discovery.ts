@@ -57,6 +57,18 @@ export const SUB_AGENT_EFFORT_PRESETS = {
 	deep: { maxTurns: 48, maxToolCalls: 96, maxWallTimeSec: 900, bashTimeoutSec: 180 },
 } as const;
 
+/**
+ * External runs have no turn/tool-call budget (D5) — `effort` only ever moves wall time, and at
+ * external scale, not the internal tuple above (P1-3: those numbers previously leaked onto
+ * external roles unchanged, where `deep` at 900s was *shorter* than the external default).
+ * `standard` and an unset `effort` both keep the role's own `maxWallTimeSec` (or the external
+ * default), so this only has entries for the two presets that actually override it.
+ */
+export const SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC: Partial<Record<keyof typeof SUB_AGENT_EFFORT_PRESETS, number>> = {
+	quick: 600,
+	deep: 5400,
+};
+
 export type SubAgentEffort = keyof typeof SUB_AGENT_EFFORT_PRESETS;
 
 const ALLOWED_EFFORTS = Object.keys(SUB_AGENT_EFFORT_PRESETS) as SubAgentEffort[];
@@ -807,16 +819,30 @@ export function resolveSubAgentConfig(
 	if (effortOverride.error) {
 		return { error: effortOverride.error };
 	}
+	const effectiveRuntime = baseConfig?.runtime ?? "internal";
 	// An explicit `effort` replaces the whole budget tuple rather than merging field by
-	// field, so a preset never produces a combination no preset describes.
-	const budget = effortOverride.value
-		? SUB_AGENT_EFFORT_PRESETS[effortOverride.value]
-		: {
-				maxTurns: baseConfig?.maxTurns ?? DEFAULT_MAX_TURNS,
-				maxToolCalls: baseConfig?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS,
-				maxWallTimeSec: baseConfig?.maxWallTimeSec ?? DEFAULT_MAX_WALL_TIME_SEC,
-				bashTimeoutSec: baseConfig?.bashTimeoutSec ?? DEFAULT_BASH_TIMEOUT_SEC,
-			};
+	// field, so a preset never produces a combination no preset describes. External is a
+	// separate branch (P1-3): it has no turn/tool-call budget, and effort's wall-time numbers
+	// are at external scale, not the internal tuple.
+	const budget =
+		effectiveRuntime === "external"
+			? {
+					maxTurns: DEFAULT_MAX_TURNS,
+					maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
+					maxWallTimeSec:
+						(effortOverride.value && SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC[effortOverride.value]) ??
+						baseConfig?.maxWallTimeSec ??
+						DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC,
+					bashTimeoutSec: DEFAULT_BASH_TIMEOUT_SEC,
+				}
+			: effortOverride.value
+				? SUB_AGENT_EFFORT_PRESETS[effortOverride.value]
+				: {
+						maxTurns: baseConfig?.maxTurns ?? DEFAULT_MAX_TURNS,
+						maxToolCalls: baseConfig?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS,
+						maxWallTimeSec: baseConfig?.maxWallTimeSec ?? DEFAULT_MAX_WALL_TIME_SEC,
+						bashTimeoutSec: baseConfig?.bashTimeoutSec ?? DEFAULT_BASH_TIMEOUT_SEC,
+					};
 
 	const contextOverride = parseContextChoice(overrides.context);
 	if (contextOverride.error) {

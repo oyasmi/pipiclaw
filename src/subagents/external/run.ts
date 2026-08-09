@@ -1,12 +1,11 @@
 import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { createWriteStream } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../../log.js";
 import { logSecurityEvent } from "../../security/logger.js";
 import type { SecurityConfig } from "../../security/types.js";
-import { killProcessGroup } from "../../shared/host-process.js";
+import { killProcessGroup, readProcessStartTime } from "../../shared/host-process.js";
 import { formatLocalTime } from "../../shared/local-time.js";
 import { splitShellWords } from "../../shared/shell-words.js";
 import { errorMessage } from "../../shared/text-utils.js";
@@ -22,6 +21,11 @@ import { getExternalHarness } from "./registry.js";
  * detached process. The launch order matters (D1): admission and the lease are the caller's job
  * (tool.ts, shared with internal runs); this module owns everything from "persist launch intent"
  * onward — spawn, pid persistence, stdin delivery, output capture, and settlement.
+ *
+ * stdout/stderr are opened as real files and handed to the child directly via `stdio` (P0-1): the
+ * child writes its own output, so it survives the daemon disappearing mid-run instead of writing
+ * into a pipe nobody is reading. A restart's own recovery (`SubAgentRunManager.restore()` /
+ * `sweep()`) reads the same files back once the process is confirmed gone.
  */
 
 export interface LaunchExternalRunInput {
@@ -158,12 +162,17 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 
 	const eventsPath = join(input.artifactDir, "events.jsonl");
 	const stderrPath = join(input.artifactDir, "stderr.log");
-	const eventsStream = createWriteStream(eventsPath);
-	const stderrStream = createWriteStream(stderrPath);
-	// A stream closed before its "open" completes (e.g. the spawn-failure path below) can emit its
-	// own "error"; without a listener that becomes an uncaught exception rather than a settled run.
-	eventsStream.on("error", () => {});
-	stderrStream.on("error", () => {});
+	let eventsFd: number;
+	let stderrFd: number;
+	try {
+		eventsFd = openSync(eventsPath, "a");
+		stderrFd = openSync(stderrPath, "a");
+	} catch (error) {
+		await runManager.settle(input.runId, failedSettleInput(`Failed to open output files: ${errorMessage(error)}`), {
+			announce: true,
+		});
+		return;
+	}
 
 	const spawnFn = input.spawnFn ?? nodeSpawn;
 	let child: ChildProcess;
@@ -172,24 +181,28 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			detached: true,
 			cwd: input.workingDirectory,
 			env: input.env ? { ...process.env, ...input.env } : process.env,
-			stdio: ["pipe", "pipe", "pipe"],
+			// stdout/stderr point straight at the artifact files (P0-1): the child writes them
+			// itself, so they land on disk even if this daemon disappears before it exits.
+			stdio: ["pipe", eventsFd, stderrFd],
 		});
 	} catch (error) {
-		eventsStream.close();
-		stderrStream.close();
+		closeSync(eventsFd);
+		closeSync(stderrFd);
 		await runManager.settle(input.runId, failedSettleInput(`Failed to launch: ${errorMessage(error)}`), {
 			announce: true,
 		});
 		return;
 	}
+	// The child has its own duped copy of both fds now; ours would otherwise leak across the
+	// lifetime of a long-running daemon dispatching many external runs.
+	closeSync(eventsFd);
+	closeSync(stderrFd);
 
 	const spawnFailure = await new Promise<Error | undefined>((resolve) => {
 		child.once("error", (error) => resolve(error));
 		child.once("spawn", () => resolve(undefined));
 	});
 	if (spawnFailure || !child.pid) {
-		eventsStream.close();
-		stderrStream.close();
 		await runManager.settle(
 			input.runId,
 			failedSettleInput(`Failed to launch: ${spawnFailure ? errorMessage(spawnFailure) : "no pid"}`),
@@ -199,10 +212,16 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	}
 
 	const pid = child.pid;
+	const processStartedAt = Date.now();
+	// Attached immediately, before any further `await`: a very fast process (e.g. `exec` running
+	// `printf`) can exit and fire "close" before a listener registered after an async gap ever
+	// gets attached — `EventEmitter` does not replay missed events, so that gap would hang this
+	// run in `running` forever.
+	const closePromise = new Promise<number | undefined>((resolve) => {
+		child.once("close", (code) => resolve(code ?? undefined));
+	});
 	if (cancelledBeforeSpawn) {
 		void killProcessGroup(pid);
-		eventsStream.close();
-		stderrStream.close();
 		await runManager.settle(
 			input.runId,
 			{ ...failedSettleInput("Cancelled while the external process was spawning."), status: "cancelled" },
@@ -210,51 +229,77 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		);
 		return;
 	}
-	const fingerprint = randomBytes(6).toString("hex");
+
+	// The OS-verifiable identity check (D10.3): a restart tells this pid apart from an unrelated
+	// process that later reuses the same number. `undefined` when `ps` itself is unavailable —
+	// restore()/sweep() then fall back to trusting `isProcessAlive` alone.
+	const pidStartedAt = await readProcessStartTime(pid);
+	const deadlineAt = processStartedAt + input.maxWallTimeSec * 1000;
 	await runManager.setLaunched(input.runId, {
 		pid,
-		fingerprint,
+		pidStartedAt,
 		argv: spawnedArgv,
+		deadlineAt,
 		sessionId: invocation.presetSessionId,
 	});
 
-	child.stdout?.on("data", (chunk: Buffer) => eventsStream.write(chunk));
-	child.stderr?.on("data", (chunk: Buffer) => stderrStream.write(chunk));
 	if (child.stdin) {
 		child.stdin.on("error", () => {}); // EPIPE if the process already exited; harmless.
 		child.stdin.end(stdinContent);
 	}
 
-	let cancelled = false;
 	runManager.registerCancelHandle(input.runId, () => {
-		cancelled = true;
 		void killProcessGroup(pid);
 	});
-	const wallClockTimer = setTimeout(() => {
+	// The narrow window between the pre-spawn placeholder handle (claimExternalLaunch) and the
+	// real one just above: a cancel arriving there durably marked `terminationReason` (P1-1) but
+	// had no live process to kill yet. Act on it now.
+	if (runManager.get(input.runId)?.terminationReason === "cancelled") {
 		void killProcessGroup(pid);
+	}
+	// Prompt, same-process enforcement (the sweeper is the cross-restart backstop for this
+	// deadline, at coarser granularity — see SWEEP_INTERVAL_MS in runs.ts).
+	const wallClockTimer = setTimeout(() => {
+		void runManager.markTerminationReason(input.runId, "timeout").then(() => killProcessGroup(pid));
 	}, input.maxWallTimeSec * 1000);
 	wallClockTimer.unref?.();
 
 	// Deliberately not awaited by the caller (D2: external's sync grace window is 0) — this
 	// continues in the background and settles the run itself once the process exits.
-	void new Promise<number | undefined>((resolve) => {
-		child.once("close", (code) => resolve(code ?? undefined));
-	}).then(async (exitCode) => {
+	void closePromise.then(async (exitCode) => {
 		clearTimeout(wallClockTimer);
 		runManager.clearCancelHandle(input.runId);
 		// The leader can exit before a detached descendant it spawned (e.g. a shell that forked and
 		// returned); `-pid` still reaches the whole group as long as the group itself is still
 		// around, so reap it unconditionally rather than only on an explicit cancel/timeout.
 		await killProcessGroup(pid);
-		await new Promise<void>((resolve) => eventsStream.end(resolve));
-		await new Promise<void>((resolve) => stderrStream.end(resolve));
 
-		if (cancelled) {
+		const durationMs = Date.now() - processStartedAt;
+		const terminationReason = runManager.get(input.runId)?.terminationReason;
+		if (terminationReason === "cancelled") {
 			await runManager
 				.settle(
 					input.runId,
-					{ ...failedSettleInput("Cancelled by request."), status: "cancelled" },
+					{ ...failedSettleInput("Cancelled by request."), status: "cancelled", durationMs },
 					{ announce: false },
+				)
+				.catch((error) => {
+					log.logWarning(`Failed to settle external run ${input.runId}`, errorMessage(error));
+				});
+			return;
+		}
+		if (terminationReason === "timeout") {
+			// A distinct failure reason from "no protocol terminal event" (P1-1): the process was
+			// killed on purpose, not just silent — even if a CLI happened to emit a success terminal
+			// right before SIGTERM landed, the budget is what ended this run.
+			await runManager
+				.settle(
+					input.runId,
+					{
+						...failedSettleInput(`Wall time budget exceeded (${input.maxWallTimeSec}s)`),
+						durationMs,
+					},
+					{ announce: true },
 				)
 				.catch((error) => {
 					log.logWarning(`Failed to settle external run ${input.runId}`, errorMessage(error));
@@ -317,7 +362,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 					costKnown: outcome.costKnown,
 					turns: 0,
 					toolCalls: 0,
-					durationMs: 0,
+					durationMs,
 					outputText: outcome.finalText,
 					sessionId: outcome.sessionId,
 					verificationVerdict,

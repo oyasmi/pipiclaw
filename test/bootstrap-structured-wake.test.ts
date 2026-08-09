@@ -113,7 +113,7 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 	const fakeRunner = runner();
 	getOrCreateRunnerMock.mockReturnValue(fakeRunner);
 	const bot = new WakeBot();
-	const runtime = createRuntimeContext({
+	const runtime = await createRuntimeContext({
 		paths: runtimePaths,
 		dingtalkConfig: { clientId: "id", clientSecret: "secret", stateDir: runtimePaths.workspaceDir },
 		registerSignalHandlers: false,

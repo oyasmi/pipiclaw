@@ -85,7 +85,7 @@ describe("createRuntimeContext", () => {
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 		const taskDriver = { start: vi.fn(), stop: vi.fn() };
 
-		const runtime = createRuntimeContext({
+		const runtime = await createRuntimeContext({
 			paths,
 			dingtalkConfig: {
 				clientId: "client-id",
@@ -124,7 +124,7 @@ describe("createRuntimeContext", () => {
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 		const memoryScheduler = { start: vi.fn(), stop: vi.fn() };
 		const taskDriver = { start: vi.fn(), stop: vi.fn() };
-		const runtime = createRuntimeContext({
+		const runtime = await createRuntimeContext({
 			paths,
 			dingtalkConfig: {
 				clientId: "client-id",
@@ -152,7 +152,7 @@ describe("createRuntimeContext", () => {
 		const bot = new FakeTestBot();
 		const eventsWatcher = { start: vi.fn(), stop: vi.fn() };
 
-		const runtime = createRuntimeContext({
+		const runtime = await createRuntimeContext({
 			paths,
 			dingtalkConfig: {
 				clientId: "client-id",
@@ -196,7 +196,7 @@ describe("createRuntimeContext", () => {
 			}),
 		);
 
-		const runtime = createRuntimeContext({
+		const runtime = await createRuntimeContext({
 			paths,
 			dingtalkConfig: {
 				clientId: "client-id",

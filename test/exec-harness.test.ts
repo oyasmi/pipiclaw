@@ -38,10 +38,11 @@ describe("exec harness: parseOutcome", () => {
 		expect(outcome.errorMessage).toContain("exit");
 	});
 
-	it("truncates very long stdout and reports outputTruncated", () => {
+	it("truncates very long stdout and points the reply at events.jsonl for the full capture (P1-3)", () => {
 		const longText = "x".repeat(20_000);
 		const outcome = execHarness.parseOutcome({ eventsText: longText, exitCode: 0 });
-		expect(outcome.outputTruncated).toBe(true);
 		expect(outcome.finalText.length).toBeLessThan(longText.length);
+		expect(outcome.finalText).toContain("truncated");
+		expect(outcome.finalText).toContain("events.jsonl");
 	});
 });

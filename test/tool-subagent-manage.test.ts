@@ -254,6 +254,170 @@ describe("subagent_manage tool", () => {
 		});
 	});
 
+	it("follow_up is rejected when the role's harness changed since the original run (P1-2)", async () => {
+		configureSubAgentRuntime({});
+		launchExternalRunMock.mockClear();
+		const channelId = `dm_manage_followup_harness_${Date.now()}`;
+		const manager = getSubAgentRunManager(channelId);
+		await manager.register({
+			runId: "run-harness",
+			channelId,
+			runtime: "external",
+			harness: "codex-cli",
+			agent: "builder",
+			label: "build",
+			source: "predefined",
+			tools: [],
+			purpose: "work",
+			workingDirectory: "/tmp/checkout",
+			artifactDir: "/tmp/checkout/subagent-artifacts/run-harness",
+		});
+		await manager.settle(
+			"run-harness",
+			{
+				status: "completed",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				usageKnown: true,
+				costKnown: false,
+				turns: 0,
+				toolCalls: 0,
+				durationMs: 0,
+				outputText: "Done.",
+				sessionId: "thread-abc",
+			},
+			{ announce: false },
+		);
+
+		const tool = createSubAgentManageTool({
+			channelId,
+			workspaceDir: "/workspace",
+			getSubAgentDiscovery: () => ({
+				directory: "/workspace/sub-agents",
+				warnings: [],
+				agents: [
+					{
+						name: "builder",
+						description: "builder role",
+						systemPrompt: "You build things.",
+						tools: [],
+						maxTurns: 24,
+						maxToolCalls: 48,
+						maxWallTimeSec: 1800,
+						bashTimeoutSec: 120,
+						contextMode: "isolated",
+						memory: "none",
+						paths: [],
+						source: "predefined",
+						runtime: "external",
+						// Role was edited to claude-code since run-harness was dispatched on codex-cli.
+						harness: "claude-code",
+						command: "claude --dangerously-skip-permissions",
+						mutates: "read",
+					},
+				],
+			}),
+		});
+
+		await expect(
+			tool.execute("call-harness-mismatch", {
+				label: "continue",
+				op: "follow_up",
+				runId: "run-harness",
+				task: "keep going",
+			}),
+		).rejects.toThrow('now uses harness "claude-code"');
+		expect(launchExternalRunMock).not.toHaveBeenCalled();
+	});
+
+	it("follow_up is rejected when the current role runs through a shell (P1-2)", async () => {
+		configureSubAgentRuntime({});
+		launchExternalRunMock.mockClear();
+		const channelId = `dm_manage_followup_shell_${Date.now()}`;
+		const manager = getSubAgentRunManager(channelId);
+		await manager.register({
+			runId: "run-shell",
+			channelId,
+			runtime: "external",
+			harness: "codex-cli",
+			agent: "builder",
+			label: "build",
+			source: "predefined",
+			tools: [],
+			purpose: "work",
+			workingDirectory: "/tmp/checkout",
+			artifactDir: "/tmp/checkout/subagent-artifacts/run-shell",
+		});
+		await manager.settle(
+			"run-shell",
+			{
+				status: "completed",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				usageKnown: true,
+				costKnown: false,
+				turns: 0,
+				toolCalls: 0,
+				durationMs: 0,
+				outputText: "Done.",
+				sessionId: "thread-abc",
+			},
+			{ announce: false },
+		);
+
+		const tool = createSubAgentManageTool({
+			channelId,
+			workspaceDir: "/workspace",
+			getSubAgentDiscovery: () => ({
+				directory: "/workspace/sub-agents",
+				warnings: [],
+				agents: [
+					{
+						name: "builder",
+						description: "builder role",
+						systemPrompt: "You build things.",
+						tools: [],
+						maxTurns: 24,
+						maxToolCalls: 48,
+						maxWallTimeSec: 1800,
+						bashTimeoutSec: 120,
+						contextMode: "isolated",
+						memory: "none",
+						paths: [],
+						source: "predefined",
+						runtime: "external",
+						harness: "codex-cli",
+						command: "codex exec",
+						shell: true,
+						mutates: "read",
+					},
+				],
+			}),
+		});
+
+		await expect(
+			tool.execute("call-shell-mismatch", {
+				label: "continue",
+				op: "follow_up",
+				runId: "run-shell",
+				task: "keep going",
+			}),
+		).rejects.toThrow("runs its command through a shell");
+		expect(launchExternalRunMock).not.toHaveBeenCalled();
+	});
+
 	it("releases a follow_up write lease when launch fails before lifecycle ownership transfers", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockRejectedValueOnce(new Error("prompt write failed"));

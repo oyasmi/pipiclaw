@@ -302,6 +302,61 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(restored.get("run-done")?.status).toBe("completed");
 	});
 
+	it("an archive write failure does not swallow the completion wake (P0-2)", async () => {
+		const { ledger, records } = makeLedger();
+		const { dispatch, events } = makeDispatch();
+		const failingStore = {
+			logSubAgentRun: async () => {
+				throw new Error("Sub-agent archive queue is full.");
+			},
+		} as unknown as import("../src/runtime/store.js").ChannelStore;
+		const manager = new SubAgentRunManager("dm_123", { ledger, store: failingStore, dispatch });
+		await register(manager);
+
+		await manager.settle("run-1", baseSettleInput(), { announce: true });
+
+		expect(records).toHaveLength(1); // usage still recorded
+		expect(events).toHaveLength(1); // wake still dispatched despite the archive failure
+		expect(manager.get("run-1")?.status).toBe("completed");
+		expect(manager.get("run-1")?.wakeEnqueued).toBe(true);
+	});
+
+	it("restore re-announces a settled record whose wake never went out (P0-2)", async () => {
+		const stateDir = createTempDir();
+		mkdirSync(join(stateDir, "dm_123"), { recursive: true });
+
+		// Simulate a crash between settlement and dispatch: settle with a dispatch that always
+		// fails, so `wakeEnqueued` is never set, then persist that half-finished state.
+		const writer = new SubAgentRunManager("dm_123", {
+			stateDir,
+			dispatch: () => {
+				throw new Error("dispatch unavailable");
+			},
+		});
+		await writer.register({
+			runId: "run-unwoken",
+			channelId: "dm_123",
+			runtime: "internal",
+			agent: "explorer",
+			label: "explore",
+			source: "predefined",
+			tools: [],
+			purpose: "work",
+			workingDirectory: "/tmp",
+			artifactDir: "/tmp/artifacts/run-unwoken",
+		});
+		await writer.settle("run-unwoken", baseSettleInput(), { announce: true });
+		expect(writer.get("run-unwoken")?.wakeEnqueued).toBeUndefined();
+
+		const { dispatch, events } = makeDispatch();
+		const restored = new SubAgentRunManager("dm_123", { stateDir, dispatch });
+		await restored.restore();
+
+		expect(events).toHaveLength(1);
+		expect(events[0]?.text).toContain("[SUBAGENT:run-unwoken]");
+		expect(restored.get("run-unwoken")?.wakeEnqueued).toBe(true);
+	});
+
 	it("runningTaskIds reports only tasks behind a still-running run", async () => {
 		const manager = new SubAgentRunManager("dm_123", {});
 		await register(manager, { taskId: "T-1" });

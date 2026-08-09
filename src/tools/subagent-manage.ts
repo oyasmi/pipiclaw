@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
@@ -7,6 +8,7 @@ import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { launchExternalRun } from "../subagents/external/run.js";
 import { elapsedMs, formatCost, formatDuration, harnessLabel } from "../subagents/format.js";
 import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
+import { buildVerificationProtocol } from "../subagents/tool.js";
 import {
 	acquireWorkspaceLease,
 	formatWorkspaceLeaseConflict,
@@ -138,6 +140,20 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 			if (role.unavailable) {
 				throw new RecoverableToolError(`Role "${record.agent}" is currently unavailable: ${role.unavailable}`);
 			}
+			// P1-2: a role hot-edited between the original run and this follow-up must not silently
+			// resume under a stale harness (the wrong CLI would parse a command it never wrote), or
+			// masquerade a shell role as resumable (there is no flag to carry `resumeSessionId` into
+			// `/bin/sh -lc`, so the run would silently start a fresh, unrelated session anyway).
+			if (role.harness !== harness) {
+				throw new RecoverableToolError(
+					`Role "${record.agent}" now uses harness "${role.harness}", but run "${resolvedRunId}" was started on "${harness}". Delegate a new run instead of resuming across a harness change.`,
+				);
+			}
+			if (role.shell) {
+				throw new RecoverableToolError(
+					`Role "${record.agent}" runs its command through a shell, which has no way to carry a resume session id. Delegate a new run instead, carrying forward whatever context it needs.`,
+				);
+			}
 
 			// A short, human-typeable id (spec 041) — the follow-up gets a fresh identity, not the
 			// dispatching tool call's own id.
@@ -156,6 +172,15 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 				leaseKey = lease.leaseKey;
 			}
 
+			// The initial dispatch envelopes verify runs with the protocol (tool.ts); a follow-up
+			// on a verify run must carry the same protocol, not just the bare instruction (D9).
+			const envelopedTask =
+				record.purpose === "verify" && record.taskId
+					? `${task.trim()}\n\n${buildVerificationProtocol(
+							join(options.workspaceDir ?? "", options.channelId, "tasks", `${record.taskId}.md`),
+						)}`
+					: task;
+
 			try {
 				await launchExternalRun({
 					runId: newRunId,
@@ -172,7 +197,7 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 					thinkingLevel: role.thinkingLevel,
 					maxWallTimeSec: role.maxWallTimeSec,
 					systemPrompt: role.systemPrompt,
-					task,
+					task: envelopedTask,
 					workingDirectory: record.workingDirectory,
 					artifactDir: record.artifactDir.replace(/[^/\\]+$/, newRunId),
 					purpose: record.purpose,

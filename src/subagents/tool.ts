@@ -23,6 +23,7 @@ import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText, errorMessage, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
 import type { UsageTotals } from "../shared/types.js";
 import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
@@ -106,6 +107,7 @@ const subagentSchema = Type.Object({
 				Type.Literal("medium"),
 				Type.Literal("high"),
 				Type.Literal("xhigh"),
+				Type.Literal("max"),
 			],
 			{
 				description:
@@ -273,7 +275,7 @@ function resolveRunWorkingDirectory(requested: string | undefined, options: SubA
 	if (!trimmed) return base;
 	const target = resolve(base, trimmed);
 	if (!existsSync(target) || !statSync(target).isDirectory()) {
-		throw new Error(`workingDirectory "${requested}" is not an existing directory.`);
+		throw new RecoverableToolError(`workingDirectory "${requested}" is not an existing directory.`);
 	}
 	return target;
 }
@@ -285,10 +287,12 @@ async function prepareRunContext(
 ): Promise<SubAgentRunContext> {
 	const purpose = params.purpose ?? "work";
 	const taskId = params.taskId?.trim() || undefined;
-	if (purpose === "verify" && !taskId) throw new Error("purpose=verify requires taskId.");
-	if (taskId && !TASK_ID_PATTERN.test(taskId)) throw new Error(`Invalid taskId: ${taskId}`);
+	if (purpose === "verify" && !taskId) throw new RecoverableToolError("purpose=verify requires taskId.");
+	if (taskId && !TASK_ID_PATTERN.test(taskId)) throw new RecoverableToolError(`Invalid taskId: ${taskId}`);
 	if (taskId && !(await readStoredTask(options.channelDir, taskId))) {
-		throw new Error(`Task ${taskId} does not exist. Create it with task_manage before delegating task-owned work.`);
+		throw new RecoverableToolError(
+			`Task ${taskId} does not exist. Create it with task_manage before delegating task-owned work.`,
+		);
 	}
 	const artifactDir = await prepareArtifactDir(options.channelDir, runId);
 	const workingDirectory = resolveRunWorkingDirectory(params.workingDirectory, options);
@@ -467,6 +471,17 @@ function buildSubagentTools(
 	).filter((tool) => runContext.purpose !== "verify" || (tool.name !== "write" && tool.name !== "edit"));
 }
 
+/** Shared by both runtimes' task envelopes and `subagent_manage`'s verify follow-up (spec 040, D9). */
+export function buildVerificationProtocol(taskPath: string): string {
+	return [
+		"Verification protocol:",
+		`- Independently inspect ${taskPath} and verify every DoD/Verification item against concrete evidence.`,
+		"- You are the checker, not the maker. Do not edit files or fix failures; report them.",
+		"- Run deterministic checks when available and distinguish observed evidence from assumptions.",
+		"- End the response with exactly one final line: VERDICT: PASS or VERDICT: FAIL.",
+	].join("\n");
+}
+
 function buildSubAgentTask(
 	task: string,
 	config: ResolvedSubAgentConfig,
@@ -496,14 +511,7 @@ function buildSubAgentTask(
 	lines.push("", `Task:`, taskText);
 	if (runContext.purpose === "verify") {
 		const taskPath = join(runtimeContext.workspaceDir, runtimeContext.channelId, "tasks", `${runContext.taskId}.md`);
-		lines.push(
-			"",
-			"Verification protocol:",
-			`- Independently inspect ${taskPath} and verify every DoD/Verification item against concrete evidence.`,
-			"- You are the checker, not the maker. Do not edit files or fix failures; report them.",
-			"- Run deterministic checks when available and distinguish observed evidence from assumptions.",
-			"- End the response with exactly one final line: VERDICT: PASS or VERDICT: FAIL.",
-		);
+		lines.push("", buildVerificationProtocol(taskPath));
 	} else if (returns === "artifact") {
 		lines.push(
 			"",
@@ -687,7 +695,7 @@ export function createSubAgentTool(
 			const currentModel = options.getCurrentModel();
 			const taskLengthError = validateSubAgentTask(params.task);
 			if (taskLengthError) {
-				throw new Error(taskLengthError);
+				throw new RecoverableToolError(taskLengthError);
 			}
 			const invocation = resolveSubAgentConfig(
 				availableModels,
@@ -697,7 +705,7 @@ export function createSubAgentTool(
 				options.getSubAgentModelReference?.() ?? undefined,
 			);
 			if (!invocation.config) {
-				throw new Error(
+				throw new RecoverableToolError(
 					`${invocation.error}\n\nAvailable configured sub-agents:\n${formatSubAgentList(discovery.agents)}`,
 				);
 			}
@@ -716,18 +724,18 @@ export function createSubAgentTool(
 				// A role that admits it writes cannot also be the checker, and `exec` has no protocol
 				// terminal to prove it even ran to completion — both are hard "no"s, not advisories.
 				if (config.mutates === "write") {
-					throw new Error(
+					throw new RecoverableToolError(
 						`Sub-agent "${config.name}" declares mutates: write and cannot be used for purpose=verify.`,
 					);
 				}
 				if (config.runtime === "external" && config.harness === "exec") {
-					throw new Error(
+					throw new RecoverableToolError(
 						`Sub-agent "${config.name}" uses the exec harness, which has no protocol terminal and cannot be used for purpose=verify.`,
 					);
 				}
 				const holder = findWorkspaceLeaseHolder(runContext.workingDirectory);
 				if (holder) {
-					throw new Error(
+					throw new RecoverableToolError(
 						`Cannot verify "${runContext.workingDirectory}": ${formatWorkspaceLeaseConflict(holder)}`,
 					);
 				}
@@ -744,7 +752,7 @@ export function createSubAgentTool(
 					workingDirectory: runContext.workingDirectory,
 				});
 				if (!lease.ok) {
-					throw new Error(formatWorkspaceLeaseConflict(lease.heldBy));
+					throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
 				}
 				leaseKey = lease.leaseKey;
 			}
@@ -755,6 +763,18 @@ export function createSubAgentTool(
 					throw new Error(`Sub-agent "${config.name}" has runtime: external but no harness configured.`);
 				}
 				try {
+					// D9/T5: external roles get the same task envelope internal workers do — runtime
+					// paths, injected context blocks, and (for purpose=verify) the verification
+					// protocol — rather than the raw task text (spec 040 gap closed post-review).
+					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel);
+					const envelopedTask = buildSubAgentTask(
+						params.task,
+						config,
+						options.runtimeContext,
+						contextualBlocks,
+						runContext,
+						returns,
+					);
 					await launchExternalRun({
 						runId: runContext.runId,
 						channelId: options.runtimeContext.channelId,
@@ -770,7 +790,7 @@ export function createSubAgentTool(
 						thinkingLevel: config.thinkingLevel,
 						maxWallTimeSec: config.maxWallTimeSec,
 						systemPrompt: config.systemPrompt,
-						task: params.task,
+						task: envelopedTask,
 						workingDirectory: runContext.workingDirectory,
 						artifactDir: runContext.artifactDir,
 						purpose: runContext.purpose,
@@ -1148,7 +1168,9 @@ export function createSubAgentTool(
 						},
 						settleInput: {
 							...baseSettleInput,
-							status: "failed",
+							// An explicit cancel is not a failure (P1-1) — the model asked this run to
+							// stop, and it did.
+							status: externallyCancelled ? "cancelled" : "failed",
 							failureReason: effectiveFailureReason,
 							outputText: finalText,
 						},
@@ -1184,7 +1206,7 @@ export function createSubAgentTool(
 			/** Best-effort settle input for the one fatal path that rejects instead of resolving. */
 			function fatalSettleInput(error: Error): SettleInput {
 				return {
-					status: "failed",
+					status: externallyCancelled ? "cancelled" : "failed",
 					failureReason: failureReason || error.message,
 					usage,
 					usageKnown: true,

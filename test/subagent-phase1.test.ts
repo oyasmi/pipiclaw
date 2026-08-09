@@ -10,6 +10,7 @@ import {
 	getSubAgentsDir,
 	resolveSubAgentConfig,
 	SUB_AGENT_EFFORT_PRESETS,
+	SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC,
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
@@ -395,6 +396,57 @@ Review files carefully.`,
 		expect(resolveSubAgentConfig([model], model, [], { systemPrompt: "Work", effort: "extreme" }).error).toContain(
 			'Unknown effort "extreme"',
 		);
+	});
+
+	it("external effort only moves maxWallTimeSec, at external scale, not the internal tuple (P1-3)", () => {
+		const externalRole: SubAgentConfig = {
+			name: "builder",
+			description: "build things",
+			systemPrompt: "Build the thing.",
+			tools: [],
+			maxTurns: 24,
+			maxToolCalls: 48,
+			maxWallTimeSec: 1800,
+			bashTimeoutSec: 120,
+			contextMode: "isolated",
+			memory: "none",
+			paths: [],
+			source: "predefined",
+			runtime: "external",
+			harness: "codex-cli",
+			command: "codex exec",
+			mutates: "read",
+		};
+
+		// No effort: the role's own maxWallTimeSec survives untouched.
+		expect(resolveSubAgentConfig([model], model, [externalRole], { agent: "builder" }).config).toMatchObject({
+			maxWallTimeSec: 1800,
+		});
+
+		// quick/deep move only maxWallTimeSec, to external-scale numbers -- not
+		// SUB_AGENT_EFFORT_PRESETS.deep's 900s, which used to leak onto external roles and was
+		// actually *shorter* than the external default.
+		expect(
+			resolveSubAgentConfig([model], model, [externalRole], { agent: "builder", effort: "quick" }).config,
+		).toMatchObject({
+			maxWallTimeSec: SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC.quick,
+			maxTurns: 24,
+			maxToolCalls: 48,
+			bashTimeoutSec: 120,
+		});
+		expect(
+			resolveSubAgentConfig([model], model, [externalRole], { agent: "builder", effort: "deep" }).config
+				?.maxWallTimeSec,
+		).toBe(SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC.deep);
+		expect(SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC.deep).toBeGreaterThan(
+			SUB_AGENT_EFFORT_PRESETS.deep.maxWallTimeSec,
+		);
+
+		// standard keeps the role's own maxWallTimeSec, same as no effort at all.
+		expect(
+			resolveSubAgentConfig([model], model, [externalRole], { agent: "builder", effort: "standard" }).config
+				?.maxWallTimeSec,
+		).toBe(1800);
 	});
 
 	it("lets a sub-agent request grep, which the tool registry already exposes to sub-agents", () => {

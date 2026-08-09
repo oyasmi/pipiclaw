@@ -1,6 +1,6 @@
 import type { ChildProcess, spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,8 +17,8 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const createTempWorkspace = useTempDirs("pipiclaw-subagent-external-run-");
 
 class FakeChildProcess extends EventEmitter {
-	stdout = new PassThrough();
-	stderr = new PassThrough();
+	// stdout/stderr are real files under fd-direct stdio (P0-1) — the fake process has none, so
+	// tests simulate its output by writing straight to `events.jsonl`/`stderr.log` instead.
 	stdin = new PassThrough();
 	pid: number | undefined;
 }
@@ -116,12 +116,14 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			mutates: "write",
 		});
 
-		child.stdout.write(`${JSON.stringify({ type: "thread.started", thread_id: "thread-xyz" })}\n`);
-		child.stdout.write(
-			`${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "All done." } })}\n`,
-		);
-		child.stdout.write(
-			`${JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 5 } })}\n`,
+		// P0-1: the child now writes its own output file directly (fd-direct stdio), so a fake
+		// spawn's "process" simulates that by writing the artifact file itself rather than piping
+		// through `child.stdout`.
+		appendFileSync(
+			join(artifactDir, "events.jsonl"),
+			`${JSON.stringify({ type: "thread.started", thread_id: "thread-xyz" })}\n` +
+				`${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "All done." } })}\n` +
+				`${JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 5 } })}\n`,
 		);
 		child.emit("close", 0);
 
@@ -502,7 +504,8 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		await waitFor(() => manager.get("run-ext-5")?.sessionId !== undefined);
 		expect(manager.get("run-ext-5")?.sessionId).toBe(presetSessionId);
 
-		child.stdout.write(
+		appendFileSync(
+			join(artifactDir, "events.jsonl"),
 			`${JSON.stringify({
 				type: "result",
 				is_error: false,

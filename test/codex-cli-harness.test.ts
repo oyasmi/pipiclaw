@@ -63,7 +63,6 @@ describe("codex-cli harness: buildInvocation", () => {
 			"--json",
 			"-",
 		]);
-		expect(result.promptFiles).toEqual([baseInvocation.promptFile]);
 	});
 
 	it("builds a resume invocation with father args before 'resume <id>' and --json - last", () => {
@@ -137,7 +136,6 @@ describe("classifyExternalOutcome (D4 status table)", () => {
 				protocolStatus: "completed",
 				usageKnown: true,
 				costKnown: false,
-				outputTruncated: false,
 			}).status,
 		).toBe("completed");
 	});
@@ -149,7 +147,6 @@ describe("classifyExternalOutcome (D4 status table)", () => {
 			protocolStatus: "absent",
 			usageKnown: false,
 			costKnown: false,
-			outputTruncated: false,
 		});
 		expect(result.status).toBe("failed");
 	});
@@ -162,7 +159,6 @@ describe("classifyExternalOutcome (D4 status table)", () => {
 				protocolStatus: "completed",
 				usageKnown: false,
 				costKnown: false,
-				outputTruncated: false,
 			}).status,
 		).toBe("completed");
 		expect(
@@ -172,7 +168,6 @@ describe("classifyExternalOutcome (D4 status table)", () => {
 				protocolStatus: "failed",
 				usageKnown: false,
 				costKnown: false,
-				outputTruncated: false,
 			}).status,
 		).toBe("failed");
 	});

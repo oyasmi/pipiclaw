@@ -4,7 +4,8 @@ import * as log from "../log.js";
 import type { DingTalkEvent } from "../runtime/dingtalk.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
-import { isProcessAlive } from "../shared/host-process.js";
+import { isProcessAlive, killProcessGroup, readProcessStartTime } from "../shared/host-process.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
@@ -12,7 +13,7 @@ import type { UsageTotals } from "../shared/types.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { classifyExternalOutcome } from "./external/harness.js";
 import { getExternalHarness } from "./external/registry.js";
-import { releaseWorkspaceLease } from "./workspace-lease.js";
+import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "./workspace-lease.js";
 
 /**
  * The run: one abstraction level for delegation, whether it executes as an in-process sub-agent
@@ -119,7 +120,16 @@ export interface RunRecord extends RunUsage {
 	// External-runtime fields (spec 040 phase 2+). Present only once the external harness lands;
 	// kept optional here so the record shape does not need another migration when it does.
 	pid?: number;
-	fingerprint?: string;
+	/** `ps`'s `lstart` for `pid` at launch — the OS-verifiable identity check that tells this
+	 *  process apart from an unrelated one that later reuses the same pid (D10.3). */
+	pidStartedAt?: string;
+	/** Wall-clock deadline (`setLaunched` time + `maxWallTimeSec`), so a restart can resume
+	 *  enforcing it — an in-process timer dies with the process that set it. */
+	deadlineAt?: number;
+	/** Set before the kill signal is sent, so whichever code path eventually settles this run (the
+	 *  live in-process watcher or the cross-restart sweeper) reports why, instead of guessing from
+	 *  protocol output alone (P1-1). */
+	terminationReason?: "timeout" | "cancelled";
 	argv?: string[];
 	sessionId?: string;
 	leaseKey?: string;
@@ -326,19 +336,19 @@ export class SubAgentRunManager {
 				// runaway model, not a global cross-subsystem admission scheme — see the design doc's
 				// non-goals). Checked before anything is persisted, so a rejected run costs nothing.
 				if (this.runningCount() >= MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL) {
-					throw new Error(
+					throw new RecoverableToolError(
 						`Too many delegation runs already running on this channel (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL}). ` +
 							"Wait for one to finish, or cancel one with subagent_manage first.",
 					);
 				}
 				if (totalRunningSubAgentRuns() >= MAX_RUNNING_SUBAGENT_RUNS_PER_HOST) {
-					throw new Error(
+					throw new RecoverableToolError(
 						`Too many delegation runs already running host-wide (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_HOST}). ` +
 							"Wait for one to finish before dispatching another.",
 					);
 				}
 				if (this.runs.has(input.runId)) {
-					throw new Error(`Run id "${input.runId}" is already registered on this channel.`);
+					throw new RecoverableToolError(`Run id "${input.runId}" is already registered on this channel.`);
 				}
 				const record: RunRecord = {
 					...input,
@@ -387,13 +397,14 @@ export class SubAgentRunManager {
 	 */
 	async setLaunched(
 		runId: string,
-		info: { pid: number; fingerprint: string; argv: string[]; sessionId?: string },
+		info: { pid: number; pidStartedAt?: string; argv: string[]; deadlineAt: number; sessionId?: string },
 	): Promise<void> {
 		const record = this.runs.get(runId);
 		if (!record) return;
 		record.pid = info.pid;
-		record.fingerprint = info.fingerprint;
+		record.pidStartedAt = info.pidStartedAt;
 		record.argv = info.argv;
+		record.deadlineAt = info.deadlineAt;
 		// claude-code pre-assigns its session id before running (D4); persisting it here, not just
 		// at settle(), means a run that crashes before any output is still resumable.
 		if (info.sessionId) record.sessionId = info.sessionId;
@@ -446,6 +457,20 @@ export class SubAgentRunManager {
 		this.cancelHandles.set(runId, cancel);
 	}
 
+	/** Record why a still-running external run is about to be killed, before the signal is sent
+	 *  (P1-1) — see the `terminationReason` field doc. A no-op once the run is no longer running.
+	 *  Called by both the live in-process watcher (`external/run.ts`) and `sweep()` below. */
+	async markTerminationReason(runId: string, reason: "timeout" | "cancelled"): Promise<void> {
+		await this.queue.run(runId, async () => {
+			const record = this.runs.get(runId);
+			if (!record || record.status !== "running") return;
+			record.terminationReason = reason;
+			await this.persist(record).catch((error) => {
+				log.logWarning(`Failed to persist termination reason for run ${runId}`, errorMessage(error));
+			});
+		});
+	}
+
 	clearCancelHandle(runId: string): void {
 		this.cancelHandles.delete(runId);
 	}
@@ -461,6 +486,10 @@ export class SubAgentRunManager {
 			const record = this.runs.get(runId);
 			if (!record || record.settledAt) return; // Idempotent: already settled, never replay.
 
+			// The terminal fields are persisted, required, before any side effect runs (P0-2): a
+			// failed persist here rolls the record back to `running` so a restart replays settlement
+			// from scratch instead of applying side effects the disk never recorded.
+			const snapshot = { ...record };
 			record.status = input.status;
 			record.failureReason = input.failureReason;
 			record.usage = input.usage;
@@ -474,11 +503,19 @@ export class SubAgentRunManager {
 			if (input.sessionId) record.sessionId = input.sessionId;
 			record.finishedAt = Date.now();
 			record.settledAt = record.finishedAt;
+			try {
+				await this.persist(record, true);
+			} catch (error) {
+				Object.assign(record, snapshot);
+				throw error;
+			}
+
 			const outputSaved = await this.writeOutputFile(record, input.outputText);
 			releaseWorkspaceLease(record.leaseKey);
-			await this.persist(record);
+			record.leaseKey = undefined; // Terminal records never display as "lease held" (P1-4).
 			this.cancelHandles.delete(runId);
 			this.externalLaunches.delete(runId);
+			await this.persist(record);
 
 			if (!record.usageRecorded) {
 				record.usageRecorded = true;
@@ -499,29 +536,35 @@ export class SubAgentRunManager {
 					usageKnown: input.usageKnown,
 					costKnown: input.costKnown,
 				});
-				await this.options.store?.logSubAgentRun(record.channelId, {
-					date: new Date().toISOString(),
-					toolCallId: record.runId,
-					label: record.label,
-					agent: record.agent,
-					source: record.source,
-					model: record.model ?? "unknown",
-					tools: record.tools,
-					turns: input.turns,
-					toolCalls: input.toolCalls,
-					durationMs: input.durationMs,
-					failed: input.status !== "completed",
-					failureReason: input.failureReason,
-					output: input.outputText.length > 16_000 ? input.outputText.slice(0, 16_000) : input.outputText,
-					outputTruncated: input.outputText.length > 16_000,
-					usage: { ...input.usage, cost: { ...input.usage.cost } },
-					runId: record.runId,
-					runtime: record.runtime,
-					harness: record.harness,
-					status: record.status,
-					taskId: record.taskId,
-					artifactDir: record.artifactDir,
-				});
+				// Archive is an observability write, not a settlement fact — a full queue must not
+				// swallow the completion wake below (P0-2).
+				await this.options.store
+					?.logSubAgentRun(record.channelId, {
+						date: new Date().toISOString(),
+						toolCallId: record.runId,
+						label: record.label,
+						agent: record.agent,
+						source: record.source,
+						model: record.model ?? "unknown",
+						tools: record.tools,
+						turns: input.turns,
+						toolCalls: input.toolCalls,
+						durationMs: input.durationMs,
+						failed: input.status !== "completed",
+						failureReason: input.failureReason,
+						output: input.outputText.length > 16_000 ? input.outputText.slice(0, 16_000) : input.outputText,
+						outputTruncated: input.outputText.length > 16_000,
+						usage: { ...input.usage, cost: { ...input.usage.cost } },
+						runId: record.runId,
+						runtime: record.runtime,
+						harness: record.harness,
+						status: record.status,
+						taskId: record.taskId,
+						artifactDir: record.artifactDir,
+					})
+					.catch((error) => {
+						log.logWarning(`Failed to archive sub-agent run ${record.runId}`, errorMessage(error));
+					});
 				await this.persist(record);
 			}
 
@@ -600,23 +643,42 @@ export class SubAgentRunManager {
 			const cancelHandle = this.cancelHandles.get(runId);
 			this.cancelHandles.delete(runId);
 			if (cancelHandle) {
+				// External: mark the reason before the handle kills the process, so whichever code
+				// path settles this run (the live watcher below, or the sweeper if that watcher's
+				// process disappears mid-kill) reports "cancelled" instead of guessing from
+				// whatever the process happened to print before it died (P1-1). This also covers
+				// the pre-spawn placeholder handle `claimExternalLaunch` installs: a cancel that
+				// lands in that narrow window durably marks the intent even though the placeholder
+				// itself does nothing else.
+				if (record.runtime === "external") {
+					record.terminationReason = "cancelled";
+					await this.persist(record).catch(() => undefined);
+				}
 				cancelHandle();
 			} else if (record.runtime === "external" && this.externalLaunches.has(runId)) {
 				// The process has not spawned yet; claimExternalLaunch() will observe this request
 				// and refuse to spawn instead of starting an uncancellable child.
 				this.externalLaunches.get(runId)!.cancelRequested = true;
+			} else if (record.runtime === "external" && record.pid) {
+				// Adopted from a previous daemon (spec 040, D10.3): no live in-process watcher, but
+				// the run is genuinely still running and the sweeper is observing it. Kill it now
+				// rather than relabeling a live process "lost" without touching it.
+				record.terminationReason = "cancelled";
+				await this.persist(record).catch(() => undefined);
+				await killProcessGroup(record.pid).catch(() => undefined);
 			} else {
-				// No in-process handle (external runtime, not yet wired, or a run this process did
-				// not launch): mark it lost rather than pretend a cancel we could not perform happened.
+				// Truly unreachable (e.g. an internal run this process did not launch): mark it lost
+				// rather than pretend a cancel we could not perform happened.
 				record.status = "lost";
 				record.finishedAt = Date.now();
 				record.settledAt = record.finishedAt;
 				record.wakeEnqueued = true;
 				releaseWorkspaceLease(record.leaseKey);
+				record.leaseKey = undefined;
 				await this.persist(record);
 				return record.status;
 			}
-			return "running"; // The registered cancel handle drives the run to its own settle() call.
+			return "running"; // The handle, or the sweeper once the process exits, drives the settle() call.
 		});
 	}
 
@@ -673,28 +735,67 @@ export class SubAgentRunManager {
 				});
 			}
 			if (record.runtime === "external" && record.status === "running") {
+				// A write run adopted mid-flight must keep excluding other writers the same way it
+				// did before the restart (D10.1); the lease itself is a process-local Map, so a
+				// fresh process starts with none held until this rebuilds it (P0-1).
+				if (record.leaseKey) {
+					const rebuilt = acquireWorkspaceLease({
+						runId: record.runId,
+						channelId: record.channelId,
+						workingDirectory: record.workingDirectory,
+					});
+					if (!rebuilt.ok) {
+						log.logWarning(
+							`Could not rebuild workspace lease for adopted run ${record.runId}`,
+							formatWorkspaceLeaseConflict(rebuilt.heldBy),
+						);
+					}
+				}
 				await this.reconcileExternalRun(record).catch((error) => {
 					log.logWarning(`Failed to reconcile external run ${record?.runId}`, errorMessage(error));
 				});
 			}
 			if (isTerminal(record.status) && record.settledAt) {
+				// A settled-but-unwoken record means the wake was lost between settlement and
+				// dispatch (e.g. the archive-queue failure this restart may itself be recovering
+				// from, P0-2) — durable dispatch is idempotent on dispatchId, so re-announcing is
+				// harmless even if the original wake actually made it out.
+				if (!record.wakeEnqueued) {
+					const outputText = await readFile(join(record.artifactDir, "output.md"), "utf-8").catch(() => "");
+					await this.announce(record, outputText, Boolean(outputText.trim())).catch((error) => {
+						log.logWarning(`Failed to re-announce sub-agent run ${record?.runId}`, errorMessage(error));
+					});
+				}
 				await this.collectGarbageIfExpired(record);
 			}
 		}
 		return restored;
 	}
 
+	/** Whether `record.pid` is still the same process that was launched, when that can be checked
+	 *  at all (D10.3). A missing `pidStartedAt` (an older record, or a `ps` that failed once at
+	 *  launch) means there is nothing to compare against — trust `isProcessAlive` alone rather
+	 *  than manufacture a false negative. */
+	private async isSameProcess(record: RunRecord): Promise<boolean> {
+		if (!record.pid) return false;
+		if (!record.pidStartedAt) return true;
+		const current = await readProcessStartTime(record.pid);
+		return current === record.pidStartedAt;
+	}
+
 	/**
-	 * Restart reconciliation for an external run still marked `running` (D10.3). Unlike internal
+	 * Restart reconciliation for an external run still marked `running` (D10.3), and the terminal
+	 * judgement `sweep()` uses once an adopted run's process is confirmed gone. Unlike internal
 	 * runs, a `detached` external process outlives the daemon, so the first move is a liveness
 	 * probe, not an automatic `lost`:
 	 *
 	 * - no `pid` at all: the intent was persisted but spawn was never confirmed — cannot prove it
 	 *   ever started, so it is judged `lost` the same as an internal run (D1).
-	 * - `pid` alive: genuinely still running. Left alone; it will settle itself when it exits.
-	 * - `pid` gone: the process finished or died while the daemon was down. `events.jsonl` is the
-	 *   only remaining evidence, so it drives the terminal judgement via the same D4 status table
-	 *   the live post-exit path uses.
+	 * - `pid` alive under the same identity: genuinely still running. Left alone.
+	 * - `pid` gone (or reused by an unrelated process): the process finished, died, or was killed
+	 *   while the daemon was down. A `terminationReason` set before the kill (P1-1) takes priority
+	 *   over guessing from output; absent that, `events.jsonl` drives the same D4 status table the
+	 *   live post-exit path uses.
 	 */
 	private async reconcileExternalRun(record: RunRecord): Promise<void> {
 		if (!record.pid) {
@@ -715,8 +816,46 @@ export class SubAgentRunManager {
 			);
 			return;
 		}
-		if (isProcessAlive(record.pid)) {
+		if (isProcessAlive(record.pid) && (await this.isSameProcess(record))) {
 			return; // Still genuinely running; nothing to reconcile yet.
+		}
+		const durationMs = Date.now() - record.startedAt;
+		if (record.terminationReason === "cancelled") {
+			await this.settle(
+				record.runId,
+				{
+					status: "cancelled",
+					failureReason: "Cancelled by request.",
+					usage: record.usage,
+					usageKnown: record.usageKnown,
+					costKnown: record.costKnown,
+					turns: record.turns ?? 0,
+					toolCalls: record.toolCalls ?? 0,
+					durationMs,
+					outputText: "",
+				},
+				{ announce: false },
+			);
+			return;
+		}
+		if (record.terminationReason === "timeout") {
+			const budgetSec = record.deadlineAt ? Math.round((record.deadlineAt - record.startedAt) / 1000) : undefined;
+			await this.settle(
+				record.runId,
+				{
+					status: "failed",
+					failureReason: `Wall time budget exceeded${budgetSec ? ` (${budgetSec}s)` : ""}`,
+					usage: record.usage,
+					usageKnown: record.usageKnown,
+					costKnown: record.costKnown,
+					turns: record.turns ?? 0,
+					toolCalls: record.toolCalls ?? 0,
+					durationMs,
+					outputText: "",
+				},
+				{ announce: true },
+			);
+			return;
 		}
 		const harness = record.harness ? getExternalHarness(record.harness) : undefined;
 		const eventsText = await readFile(join(record.artifactDir, "events.jsonl"), "utf-8").catch(() => "");
@@ -729,7 +868,6 @@ export class SubAgentRunManager {
 			protocolStatus: "unparsable" as const,
 			usageKnown: false,
 			costKnown: false,
-			outputTruncated: false,
 			stderrTail,
 		};
 		const classification = harness
@@ -745,12 +883,32 @@ export class SubAgentRunManager {
 				costKnown: outcome.costKnown,
 				turns: record.turns ?? 0,
 				toolCalls: record.toolCalls ?? 0,
-				durationMs: Date.now() - record.startedAt,
+				durationMs,
 				outputText: outcome.finalText,
 				sessionId: outcome.sessionId,
 			},
 			{ announce: true },
 		);
+	}
+
+	/**
+	 * Periodic host-wide check for external runs (spec 040, D10.3): kills anything past its
+	 * deadline, and reconciles anything a `close` event will never fire for — a run adopted from a
+	 * previous daemon via `restore()`, or (rarely) one whose local watcher already unwound without
+	 * settling it. `reconcileExternalRun` no-ops on a genuinely still-running, still-watched run,
+	 * so sweeping one this process itself launched is harmless, not just adopted ones.
+	 */
+	async sweep(now = Date.now()): Promise<void> {
+		for (const record of Array.from(this.runs.values())) {
+			if (record.status !== "running" || record.runtime !== "external" || !record.pid) continue;
+			if (record.deadlineAt && now >= record.deadlineAt && record.terminationReason !== "timeout") {
+				await this.markTerminationReason(record.runId, "timeout");
+				await killProcessGroup(record.pid).catch(() => undefined);
+			}
+			await this.reconcileExternalRun(record).catch((error) => {
+				log.logWarning(`Failed to sweep external run ${record.runId}`, errorMessage(error));
+			});
+		}
 	}
 
 	/** Drop a settled record once its retention window has passed, mirroring job-manager's GC. */
@@ -786,9 +944,38 @@ function totalRunningSubAgentRuns(): number {
 
 let runtimeConfig: RunManagerOptions = {};
 
+/** How often the host-wide sweep checks external runs for an overdue deadline or a process that
+ *  exited while nobody was watching it (D10.3). A code constant per CLAUDE.md's rule for numeric
+ *  thresholds — deliberately coarse (budgets are in the 300-1800s range) since it exists to
+ *  guarantee eventual enforcement across a restart, not to replace the live in-process watcher's
+ *  prompt one. */
+const SWEEP_INTERVAL_MS = 30_000;
+let sweepTimer: ReturnType<typeof setInterval> | undefined;
+
+async function sweepAllChannels(): Promise<void> {
+	for (const manager of managers.values()) {
+		await manager.sweep().catch((error) => log.logWarning("Sub-agent sweep failed", errorMessage(error)));
+	}
+}
+
+function startSubAgentSweeper(): void {
+	if (sweepTimer) clearInterval(sweepTimer);
+	sweepTimer = setInterval(() => void sweepAllChannels(), SWEEP_INTERVAL_MS);
+	sweepTimer.unref?.();
+}
+
+/** Test seam: stop the background sweeper so it doesn't outlive a test's own fake timers or run. */
+export function stopSubAgentSweeper(): void {
+	if (sweepTimer) {
+		clearInterval(sweepTimer);
+		sweepTimer = undefined;
+	}
+}
+
 /** Give runs their persistence root, wake delivery, ledger, and archive. Called once from bootstrap. */
 export function configureSubAgentRuntime(config: RunManagerOptions): void {
 	runtimeConfig = config;
+	startSubAgentSweeper();
 }
 
 export function getSubAgentRunManager(channelId: string): SubAgentRunManager {

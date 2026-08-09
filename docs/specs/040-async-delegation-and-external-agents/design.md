@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | PROPOSED（经一轮外部审查修订，2026-08-08） |
+| 状态 | PARTIALLY IMPLEMENTED（2026-08-09 审查后收敛；与本文档的偏差见下方"与实现的偏差"） |
 | 日期 | 2026-08-08 |
 | 前置 | 002 subagent、031 wake-layer-hardening（D6 后台作业）、032 subagent adoption、033 workspace-subagents-only、034 subagent invocation surface、036 task governance slimming |
 | 关联实现 | `src/subagents/`（新增 `runs.ts`、`workspace-lease.ts`、`external/`）、`src/agent/job-manager.ts`、`src/shared/host-process.ts`（新增）、`src/security/`、`src/tasks/`、`src/usage/ledger.ts`、`src/runtime/store.ts`、`src/runtime/bootstrap.ts`、`src/runtime/`（`/subagents` 命令）、`src/agent/prompt/sections.ts`、`src/playbooks/agent-delegation.md`、`docs/sub-agents.md`、`examples/sub-agents/` |
@@ -605,6 +605,14 @@ A sub-agent starts blank: state goal, scope, paths, constraints and acceptance c
 - **verify**：外部角色声明 `mutates: write` 或 harness 为 `exec` 时 `purpose=verify` 被拒；目标目录上有活跃写 lease 时 verify 被拒；untracked 文件内容变化能被 `workspaceSubjectHash` 检出；attestation 含 `verificationStrength` 且 `advisory` 在唤醒文本中可见。
 - **成本**：`costKnown: false` 的 run 在 `/usage` 展示为未知而非 0。
 - **e2e（opt-in，`vitest.config.e2e.ts`）**：每个 harness 一个真实冒烟，防 CLI schema 漂移；默认不在 `npm run test` 中运行。
+
+## 与实现的偏差
+
+2026-08-09 一轮审查（`docs/subagent-chain-review-2026-08-09.md`）核实并修复了本文档承诺、但实现当时尚未兑现的几处生命周期缺口（重启后不重新接管外部进程、结算副作用顺序、外部路径缺任务信封等）；这些已收敛，不再是偏差。以下三处是仍然存在、有意保留的偏差：
+
+1. **`effort` 的外部语义与本文档不同**。本文档设想外部 `effort` 用 `600/1800/5400s`；修复前的实现把内置的 `120/300/900s` 元组直接套用到外部角色（`deep` 反而比外部默认墙钟更短）。现已改为：外部角色的 `effort` 只移动 `maxWallTimeSec`，取值为 `quick=600s`/`deep=5400s`，`standard` 或不传沿用角色自身配置（`docs/sub-agents.md` 已同步）。
+2. **`fingerprint` 被 `pidStartedAt` 取代**。本文档与早期实现设想的随机 `fingerprint` 从未被消费、对 PID 复用零防护；现改为持久化 `ps` 的 `lstart` 输出，重启和周期性 sweep 都据此核实一个 pid 是否仍是原来那个进程，而不是已被复用的另一个。
+3. **本文档设想的 24 小时辅助产物清理未实现**。`SubAgentRunManager` 的 GC 只清理终态 run 记录本身（`collectGarbageIfExpired`），不清理 `subagent-artifacts/` 下的 `events.jsonl`/`stderr.log`/`output.md` 等文件；这些产物目前无限期保留，需要人工清理磁盘空间。
 
 ## 风险
 

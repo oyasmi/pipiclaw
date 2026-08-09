@@ -29,7 +29,6 @@ describe("claude-code harness: buildInvocation", () => {
 		expect(result.presetSessionId).toBeDefined();
 		expect(result.args).toContain(result.presetSessionId);
 		expect(result.resumable).toBe(true);
-		expect(result.promptFiles).toContain(baseInvocation.systemPromptFile);
 	});
 
 	it("uses --resume <session_id> instead of --session-id when resuming, and does not mint a new session id", () => {

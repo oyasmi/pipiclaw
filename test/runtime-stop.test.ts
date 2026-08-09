@@ -126,7 +126,7 @@ describe("runtime stop handling", () => {
 		bootstrapAppHome(paths);
 
 		const bot = new FakeTestBot();
-		const runtime = createRuntimeContext({
+		const runtime = await createRuntimeContext({
 			paths,
 			dingtalkConfig: {
 				clientId: "client-id",
@@ -211,7 +211,7 @@ describe("runtime stop handling", () => {
 		writeFileSync(taskPath, "---\nstatus: in-progress\n---\n\n# Long running task\n", "utf-8");
 
 		const bot = new FakeTestBot();
-		const runtime = createRuntimeContext({
+		const runtime = await createRuntimeContext({
 			paths,
 			dingtalkConfig: {
 				clientId: "client-id",
@@ -294,7 +294,7 @@ describe("runtime stop handling", () => {
 		bootstrapAppHome(paths);
 
 		const bot = new FakeTestBot();
-		const runtime = createRuntimeContext({
+		const runtime = await createRuntimeContext({
 			paths,
 			dingtalkConfig: {
 				clientId: "client-id",

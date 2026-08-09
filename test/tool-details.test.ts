@@ -7,6 +7,7 @@ import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 import type { ChannelContext } from "../src/runtime/channel-context.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { RecoverableToolError } from "../src/shared/recoverable-error.js";
+import { createSubAgentTool } from "../src/subagents/tool.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { buildToolSet, type ToolBuildContext } from "../src/tools/registry.js";
 import { isRecoverableRejection, toolResultDetails, withToolDetails } from "../src/tools/tool-details.js";
@@ -231,5 +232,27 @@ describe("registry wiring", () => {
 		const result = await grep.execute("c1", { label: "search", pattern: "x", path: "/tmp/ws" });
 
 		expect(toolResultDetails(result)?.kind).toBe("grep");
+	});
+
+	it("delivers a real subagent admission rejection (unknown role) as a rejection, not a thrown error (P1-5)", async () => {
+		// `subagent` is wired the same way as every registry tool (tools/index.ts), just outside
+		// buildToolSet to avoid an import cycle — wire it identically here.
+		const tool = withToolDetails(
+			createSubAgentTool({
+				executor: { exec: async () => ({ stdout: "", stderr: "", code: 0 }) },
+				getCurrentModel: () => ({}) as never,
+				getAvailableModels: () => [],
+				resolveApiKey: async () => "key",
+				workspaceDir: "/tmp/ws",
+				channelDir: "/tmp/ws/dm_1",
+				runtimeContext: { workspaceDir: "/tmp/ws", channelId: "dm_1" },
+			}),
+			"subagent",
+		);
+
+		const result = await tool.execute("c1", { label: "delegate", agent: "no-such-role", task: "do the thing" });
+
+		expect(isRecoverableRejection(result)).toBe(true);
+		expect(JSON.stringify(result.content[0])).toContain("Unknown sub-agent");
 	});
 });

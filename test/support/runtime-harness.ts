@@ -32,7 +32,7 @@ export async function createRuntimeHarness(options?: {
 	const channelId = options?.channelId ?? "dm_e2e_user";
 	const channelDir = join(home.workspaceDir, getChannelDirName(channelId));
 	const fakeBot = new E2EFakeDingTalkBot();
-	const runtime = createRuntimeContext({
+	const runtime = await createRuntimeContext({
 		paths: {
 			appName: "pipiclaw",
 			appHomeDir: home.homeDir,

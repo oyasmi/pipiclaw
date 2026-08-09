@@ -29,8 +29,6 @@ export interface BuildInvocationResult {
 	args: string[];
 	/** Whether this harness can be continued later via `resumeSessionId` (claude-code/codex-cli). */
 	resumable: boolean;
-	/** Paths this invocation references by flag, beyond stdin — kept for the `/subagents show` argv dump. */
-	promptFiles?: string[];
 	/**
 	 * claude-code only (D4): a session id it picked and passed via `--session-id` *before* running,
 	 * so `resume` does not depend on first successfully parsing a `result` event out of a run that
@@ -55,7 +53,6 @@ export interface ExternalOutcome {
 	usageKnown: boolean;
 	/** `codex-cli`/`exec` are always false: neither reports a cost field. */
 	costKnown: boolean;
-	outputTruncated: boolean;
 	stderrTail?: string;
 	errorMessage?: string;
 }
