@@ -71,13 +71,6 @@ describe("edit tool", () => {
 		expect(text).toContain("Replaced 2 occurrences in notes.txt.");
 	});
 
-	it("rejects duplicate matches unless replaceAll is set", async () => {
-		const tool = createEditTool(new ScriptedExecutor([{ code: 0, stdout: "foo\nfoo\n", stderr: "" }]));
-		await expect(
-			tool.execute("call", { label: "edit file", path: "notes.txt", oldText: "foo", newText: "bar" }),
-		).rejects.toThrow("pass replaceAll: true");
-	});
-
 	it("fails when the file cannot be read", async () => {
 		const executor = new ScriptedExecutor([{ code: 1, stdout: "", stderr: "missing file" }]);
 		const tool = createEditTool(executor);

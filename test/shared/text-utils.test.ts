@@ -23,18 +23,24 @@ function createAssistantMessage(content: AssistantMessage["content"]): Assistant
 }
 
 describe("shared/text-utils", () => {
-	it("clips text with a head/tail strategy by default", () => {
-		const clipped = clipText("abcdefghijklmnopqrstuvwxyz", 10);
-		expect(clipped).toBe("abcd\n\n[... omitted middle section ...]\n\nuvwxyz");
-	});
-
-	it("clips text as a simple tail truncation when requested", () => {
-		const clipped = clipText("abcdefghijklmnopqrstuvwxyz", 10, { headRatio: 1, omitHint: "..." });
-		expect(clipped).toBe("abcdefg...");
-	});
-
-	it("returns unchanged text when clipping is unnecessary", () => {
-		expect(clipText("  hello  ", 10)).toBe("hello");
+	it.each([
+		[
+			"head/tail strategy by default",
+			"abcdefghijklmnopqrstuvwxyz",
+			10,
+			undefined,
+			"abcd\n\n[... omitted middle section ...]\n\nuvwxyz",
+		],
+		[
+			"a simple tail truncation when requested",
+			"abcdefghijklmnopqrstuvwxyz",
+			10,
+			{ headRatio: 1, omitHint: "..." },
+			"abcdefg...",
+		],
+		["unchanged text when clipping is unnecessary", "  hello  ", 10, undefined, "hello"],
+	] as const)("clips with %s", (_label, text, limit, options, expected) => {
+		expect(clipText(text, limit, options)).toBe(expected);
 	});
 
 	it("extracts trimmed labels from tool args", () => {

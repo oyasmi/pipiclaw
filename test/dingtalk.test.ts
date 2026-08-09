@@ -285,9 +285,12 @@ describe("dingtalk", () => {
 		);
 	});
 
-	it("records channel activity for a busy-path message too, but never for an unauthorized one", async () => {
+	it("records channel activity for a busy-path message too, but ignores an unauthorized sender entirely", async () => {
 		const noteChannelActivity = vi.fn();
-		const { bot } = createBot({ noteChannelActivity, isRunning: vi.fn(() => true) }, { allowFrom: ["staff_ok"] });
+		const { bot, handler } = createBot(
+			{ noteChannelActivity, isRunning: vi.fn(() => true) },
+			{ allowFrom: ["staff_ok"] },
+		);
 		bot.sendPlain = vi.fn(async () => true);
 		const privateApi = getPrivateApi(bot);
 
@@ -301,6 +304,7 @@ describe("dingtalk", () => {
 		});
 		await flushMicrotasks();
 		expect(noteChannelActivity).not.toHaveBeenCalled();
+		expect(handler.handleEvent).not.toHaveBeenCalled();
 
 		// The hook sits before busy/command routing, so a steer still counts as human activity.
 		await privateApi.onStreamMessage({
@@ -315,22 +319,6 @@ describe("dingtalk", () => {
 		expect(noteChannelActivity).toHaveBeenCalledWith(
 			expect.objectContaining({ channelId: "group_conv_group", name: "投资理财" }),
 		);
-	});
-
-	it("ignores unauthorized senders", async () => {
-		const { bot, handler } = createBot({}, { allowFrom: ["staff_ok"] });
-		const privateApi = getPrivateApi(bot);
-
-		await privateApi.onStreamMessage({
-			text: { content: "blocked" },
-			senderStaffId: "staff_nope",
-			senderNick: "Mallory",
-			conversationId: "conv_1",
-			conversationType: "1",
-		});
-		await flushMicrotasks();
-
-		expect(handler.handleEvent).not.toHaveBeenCalled();
 	});
 
 	it("routes busy transport commands correctly", async () => {

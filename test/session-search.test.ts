@@ -233,4 +233,24 @@ describe("session search", () => {
 		expect(result.searchedDocuments).toBe(1);
 		expect(result.results).toEqual([]);
 	});
+
+	it("caps documents at maxDocumentsTotal and keeps newest", async () => {
+		const workspaceDir = createWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(channelDir, { recursive: true });
+		const entries = Array.from({ length: 200 }, (_, i) => ({
+			date: new Date(Date.now() - (200 - i) * 60_000).toISOString(),
+			userName: "Alice",
+			text: `message number ${i}`,
+			isBot: false,
+		}));
+		writeJsonl(join(channelDir, "log.jsonl"), entries);
+
+		const docs = await buildSessionCorpus({ channelDir, maxFiles: 6, maxDocumentsTotal: 50 });
+
+		expect(docs.length).toBeLessThanOrEqual(50);
+		// Should keep newest (tail) entries
+		const lastDoc = docs[docs.length - 1];
+		expect(lastDoc?.text).toContain("message number 199");
+	});
 });

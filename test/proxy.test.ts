@@ -71,20 +71,15 @@ describe("installLlmProxy", () => {
 		expect(result.source).toBe("PIPICLAW_PROXY");
 	});
 
-	it("rejects a socks5 PIPICLAW_PROXY, warns, and stays direct", () => {
-		process.env.PIPICLAW_PROXY = "socks5://127.0.0.1:1080";
+	it.each([
+		{ label: "socks5 protocol", value: "socks5://127.0.0.1:1080", warning: "unsupported protocol" },
+		{ label: "unparseable URL", value: "not-a-url", warning: "not a valid URL" },
+	])("rejects a bad PIPICLAW_PROXY ($label), warns, and stays direct", ({ value, warning }) => {
+		process.env.PIPICLAW_PROXY = value;
 		const result = installLlmProxy();
 		expect(result).toEqual({ installed: false, source: "none" });
 		expect(getGlobalDispatcher()).toBe(originalDispatcher);
-		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("unsupported protocol"));
-	});
-
-	it("rejects an unparseable PIPICLAW_PROXY, warns, and stays direct", () => {
-		process.env.PIPICLAW_PROXY = "not-a-url";
-		const result = installLlmProxy();
-		expect(result).toEqual({ installed: false, source: "none" });
-		expect(getGlobalDispatcher()).toBe(originalDispatcher);
-		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("not a valid URL"));
+		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(warning));
 	});
 
 	it("redacts proxy credentials from the log line", () => {

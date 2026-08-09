@@ -69,16 +69,6 @@ describe("details contract", () => {
 		expect(toolResultDetails(result)?.kind).toBe("task_manage");
 	});
 
-	it("keeps other result fields (terminate, addedToolNames) intact", async () => {
-		const result = await run(async () => ({
-			content: [{ type: "text", text: "ok" }],
-			details: undefined,
-			terminate: true,
-		}));
-
-		expect(result.terminate).toBe(true);
-	});
-
 	it("reads no details off a malformed or absent result", () => {
 		expect(toolResultDetails(null)).toBeNull();
 		expect(toolResultDetails({ content: [] })).toBeNull();

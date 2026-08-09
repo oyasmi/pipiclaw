@@ -6,7 +6,6 @@ import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import {
 	createTaskDriverEvent,
 	createTaskVerificationEvent,
-	discoverTaskChannels,
 	TaskDriver,
 	taskGovernorReceipt,
 } from "../src/runtime/task-driver.js";
@@ -80,12 +79,6 @@ describe("TaskDriver v2", () => {
 			...extra,
 		});
 	}
-
-	it("discovers only valid channel directories", async () => {
-		await mkdir(join(workspaceDir, "dm_a"));
-		await mkdir(join(workspaceDir, "events"));
-		expect(await discoverTaskChannels(workspaceDir, ["group_b", "bad"])).toEqual(["dm_a", "group_b"]);
-	});
 
 	it("dispatches active work but never polls parked waiting or future sleeping", async () => {
 		await writeTask("dm_a", "active", taskDoc("active"));

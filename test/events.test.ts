@@ -703,7 +703,10 @@ describe("EventsWatcher", () => {
 	});
 
 	describe("action gate", () => {
-		it("enqueues event when action exits with code 0", async () => {
+		it.each([
+			["exits with code 0", { type: "bash" as const, command: "true" }, "should pass"],
+			["is not specified (regression)", undefined, "no action"],
+		] as const)("enqueues event when action %s", async (_label, preAction, text) => {
 			const dir = createTempDir();
 			const filename = "gated.json";
 			writeFileSync(join(dir, filename), "{}");
@@ -713,18 +716,12 @@ describe("EventsWatcher", () => {
 
 			await privateApi.execute(
 				filename,
-				{
-					type: "one-shot",
-					at: "2030-01-01T00:00:00.000Z",
-					channelId: "dm_1",
-					text: "should pass",
-					preAction: { type: "bash", command: "true" },
-				},
+				{ type: "one-shot", at: "2030-01-01T00:00:00.000Z", channelId: "dm_1", text, preAction },
 				false,
 			);
 
 			expect(bot.events).toHaveLength(1);
-			expect(bot.events[0].text).toContain("should pass");
+			expect(bot.events[0].text).toContain(text);
 		});
 
 		it("blocks event when action exits with non-zero code", async () => {
@@ -784,9 +781,12 @@ describe("EventsWatcher", () => {
 			expect(existsSync(filePath)).toBe(false);
 		});
 
-		it("blocks event when action times out", async () => {
+		it.each([
+			["times out", { type: "bash" as const, command: "sleep 30", timeout: 100 }],
+			["the command does not exist", { type: "bash" as const, command: "/nonexistent/binary/xyz" }],
+		] as const)("blocks event when action %s", async (_label, preAction) => {
 			const dir = createTempDir();
-			const filename = "timeout.json";
+			const filename = "blocked-action.json";
 			writeFileSync(join(dir, filename), "{}");
 			const bot = new FakeBot(true);
 			const watcher = createWatcher(dir, bot);
@@ -798,59 +798,13 @@ describe("EventsWatcher", () => {
 					type: "one-shot",
 					at: "2030-01-01T00:00:00.000Z",
 					channelId: "dm_1",
-					text: "should timeout",
-					preAction: { type: "bash", command: "sleep 30", timeout: 100 },
+					text: "should not pass",
+					preAction,
 				},
 				false,
 			);
 
 			expect(bot.events).toHaveLength(0);
-		});
-
-		it("blocks event when action command does not exist", async () => {
-			const dir = createTempDir();
-			const filename = "noexist.json";
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const watcher = createWatcher(dir, bot);
-			const privateApi = getEventsWatcherPrivateApi(watcher);
-
-			await privateApi.execute(
-				filename,
-				{
-					type: "one-shot",
-					at: "2030-01-01T00:00:00.000Z",
-					channelId: "dm_1",
-					text: "bad command",
-					preAction: { type: "bash", command: "/nonexistent/binary/xyz" },
-				},
-				false,
-			);
-
-			expect(bot.events).toHaveLength(0);
-		});
-
-		it("enqueues event normally when no action is specified (regression)", async () => {
-			const dir = createTempDir();
-			const filename = "noaction.json";
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const watcher = createWatcher(dir, bot);
-			const privateApi = getEventsWatcherPrivateApi(watcher);
-
-			await privateApi.execute(
-				filename,
-				{
-					type: "one-shot",
-					at: "2030-01-01T00:00:00.000Z",
-					channelId: "dm_1",
-					text: "no action",
-				},
-				false,
-			);
-
-			expect(bot.events).toHaveLength(1);
-			expect(bot.events[0].text).toContain("no action");
 		});
 
 		it("blocks event when guardCommand rejects the command", async () => {

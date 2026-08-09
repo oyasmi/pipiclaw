@@ -117,38 +117,24 @@ describe("ChannelJobManager", () => {
 		await expect(manager.start("sleep 100", "one too many", 300)).rejects.toThrow(/Too many background jobs/);
 	});
 
-	it("marks a job completed when its exit file reports success", async () => {
-		const executor = new FakeJobExecutor();
-		const manager = new ChannelJobManager("dm_1", executor);
-		const job = await manager.start("true", "ok", 300);
-		executor.probeResult = "EXIT:0";
+	it.each([
+		{ probeResult: "EXIT:0", expectedStatus: "completed", expectedExitCode: 0 },
+		{ probeResult: "EXIT:2", expectedStatus: "failed", expectedExitCode: 2 },
+		{ probeResult: "GONE", expectedStatus: "lost", expectedExitCode: undefined },
+	])(
+		"marks a job $expectedStatus when the probe reports $probeResult",
+		async ({ probeResult, expectedStatus, expectedExitCode }) => {
+			const executor = new FakeJobExecutor();
+			const manager = new ChannelJobManager("dm_1", executor);
+			const job = await manager.start("cmd", "job", 300);
+			executor.probeResult = probeResult;
 
-		const [snapshot] = await manager.list();
-		expect(snapshot.id).toBe(job.id);
-		expect(snapshot.status).toBe("completed");
-		expect(snapshot.exitCode).toBe(0);
-	});
-
-	it("marks a job failed on a non-zero exit code", async () => {
-		const executor = new FakeJobExecutor();
-		const manager = new ChannelJobManager("dm_1", executor);
-		await manager.start("false", "fail", 300);
-		executor.probeResult = "EXIT:2";
-
-		const [snapshot] = await manager.list();
-		expect(snapshot.status).toBe("failed");
-		expect(snapshot.exitCode).toBe(2);
-	});
-
-	it("marks a job lost when the process vanished without an exit code", async () => {
-		const executor = new FakeJobExecutor();
-		const manager = new ChannelJobManager("dm_1", executor);
-		await manager.start("cmd", "gone", 300);
-		executor.probeResult = "GONE";
-
-		const [snapshot] = await manager.list();
-		expect(snapshot.status).toBe("lost");
-	});
+			const [snapshot] = await manager.list();
+			expect(snapshot.id).toBe(job.id);
+			expect(snapshot.status).toBe(expectedStatus);
+			if (expectedExitCode !== undefined) expect(snapshot.exitCode).toBe(expectedExitCode);
+		},
+	);
 
 	it("kills and fails a job that overruns its timeout", async () => {
 		const executor = new FakeJobExecutor();

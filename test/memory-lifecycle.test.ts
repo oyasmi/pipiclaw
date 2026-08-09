@@ -215,7 +215,23 @@ describe("MemoryLifecycle", () => {
 		expect(runInlineConsolidation).not.toHaveBeenCalled();
 	});
 
-	it("flushes pending durable memory during shutdown", async () => {
+	it.each([
+		{
+			label: "flushes pending durable memory from a completed assistant turn",
+			activity: (lifecycle: MemoryLifecycle) => lifecycle.noteCompletedAssistantTurn(),
+			expectedFlush: true,
+		},
+		{
+			label: "flushes a tool-only session even without an assistant turn",
+			activity: (lifecycle: MemoryLifecycle) => lifecycle.noteToolCall(),
+			expectedFlush: true,
+		},
+		{
+			label: "skips the flush when there is no pending durable activity",
+			activity: () => {},
+			expectedFlush: false,
+		},
+	])("$label", async ({ activity, expectedFlush }) => {
 		const lifecycle = createLifecycle({
 			minTurnsBetweenUpdate: 99,
 			minToolCallsBetweenUpdate: 99,
@@ -223,37 +239,15 @@ describe("MemoryLifecycle", () => {
 			forceRefreshBeforeNewSession: false,
 		});
 
-		lifecycle.noteCompletedAssistantTurn();
+		activity(lifecycle);
 
 		await lifecycle.flushForShutdown();
 
-		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-	});
-
-	it("flushes a tool-only session on shutdown even without an assistant turn", async () => {
-		const lifecycle = createLifecycle({
-			minTurnsBetweenUpdate: 99,
-			minToolCallsBetweenUpdate: 99,
-			forceRefreshBeforeCompact: false,
-			forceRefreshBeforeNewSession: false,
-		});
-
-		lifecycle.noteToolCall();
-
-		await lifecycle.flushForShutdown();
-
-		expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
-	});
-
-	it("skips shutdown flush when there is no pending durable activity", async () => {
-		const lifecycle = createLifecycle({
-			forceRefreshBeforeCompact: false,
-			forceRefreshBeforeNewSession: false,
-		});
-
-		await lifecycle.flushForShutdown();
-
-		expect(runInlineConsolidation).not.toHaveBeenCalled();
+		if (expectedFlush) {
+			expect(runInlineConsolidation).toHaveBeenCalledTimes(1);
+		} else {
+			expect(runInlineConsolidation).not.toHaveBeenCalled();
+		}
 	});
 
 	it("records boundary events after compaction and new-session starts without running maintenance", async () => {

@@ -8,31 +8,10 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const makeTempDir = useTempDirs("pipiclaw-settings-");
 
 describe("settings manager", () => {
-	it("reports parse errors and falls back to defaults", () => {
-		const appHomeDir = makeTempDir();
-		writeFileSync(join(appHomeDir, "settings.json"), "{", "utf-8");
-
-		const manager = new PipiclawSettingsManager(appHomeDir);
-		expect(manager.getDefaultThinkingLevel()).toBeUndefined();
-
-		const diagnostics = manager.drainErrors();
-		expect(diagnostics).toHaveLength(1);
-		expect(diagnostics[0]?.error.message).toContain("Expected property name");
-		expect(manager.drainErrors()).toEqual([]);
-	});
-
-	it("keeps memory maintenance cadence on constants regardless of the file", () => {
-		const dir = makeTempDir();
-		writeFileSync(
-			join(dir, "settings.json"),
-			JSON.stringify({ memoryMaintenance: { checkpointIntervalMinutes: 45 } }),
-			"utf-8",
-		);
-
-		const maintenance = new PipiclawSettingsManager(dir).getMemoryMaintenanceSettings();
-		expect(maintenance.checkpointIntervalMinutes).toBe(20);
-		expect(maintenance.minMemoryAutoWriteConfidence).toBe(0.85);
-	});
+	// Parse-error fallback and the memory-maintenance-cadence-ignores-config behavior are both
+	// covered against the real settings authority in context.test.ts (`tolerates invalid JSON
+	// settings files…` / `re-parses settings.json only when the file changed`, and `keeps the
+	// enabled switch configurable while ignoring retired numeric keys`, respectively).
 
 	it("resolves the fallback model reference, treating empty/missing as unset", () => {
 		const setDir = makeTempDir();

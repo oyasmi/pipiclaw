@@ -148,15 +148,11 @@ describe("runtime playbook catalog", () => {
 	// parking mechanism the driver did not implement. The mechanism exists now (waiting with no
 	// wake is never dispatched); keep the description in one place and keep the other playbooks
 	// pointing at it rather than restating it.
-	it("keeps task-driving.md the single source of truth for the two task waiting shapes", () => {
+	it("keeps task-driving.md the single source of truth for waiting, verification, and closeout", () => {
 		const driving = readFileSync(join(PLAYBOOKS_DIR, "task-driving.md"), "utf-8");
 		expect(driving).toContain("唯一真相源");
 		expect(driving).toContain("停泊");
 		expect(driving).toContain("agent-delegation.md");
-	});
-
-	it("keeps post-creation task verification and closeout in task-driving.md", () => {
-		const driving = readFileSync(join(PLAYBOOKS_DIR, "task-driving.md"), "utf-8");
 		expect(driving).toContain("request-verification");
 		expect(driving).toContain("contract body hash");
 		expect(driving).toContain("## complete / skip / cancel");

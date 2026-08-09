@@ -81,9 +81,38 @@ afterEach(() => {
 });
 
 describe("memory maintenance jobs", () => {
-	it("does not call session refresh sidecar when the gate denies", async () => {
+	it.each([
+		{
+			label: "session refresh job when the gate denies (clean)",
+			runJob: runSessionRefreshJob,
+			setup: async (_appHomeDir: string) => {},
+			skipReason: "clean",
+			calledMock: updateChannelSessionMemory,
+		},
+		{
+			label: "checkpoint job when the gate denies (not idle yet)",
+			runJob: runMemoryCheckpointJob,
+			setup: async (appHomeDir: string) =>
+				updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
+					...state,
+					dirty: true,
+					eligibleAfter: "2999-01-01T00:00:00.000Z",
+				})),
+			skipReason: "not-idle-yet",
+			calledMock: runInlineConsolidation,
+		},
+		{
+			label: "structural maintenance job when files are under threshold",
+			runJob: runStructuralMaintenanceJob,
+			setup: async (_appHomeDir: string) => {},
+			skipReason: "nothing-to-maintain",
+			calledMock: runSidecarTask,
+		},
+	])("does not call the sidecar for $label", async ({ runJob, setup, skipReason, calledMock }) => {
 		const { appHomeDir, channelDir } = await harness();
-		const result = await runSessionRefreshJob({
+		await setup(appHomeDir);
+
+		const result = await runJob({
 			appHomeDir,
 			channelId: "dm_1",
 			channelDir,
@@ -95,50 +124,8 @@ describe("memory maintenance jobs", () => {
 			sessionEntries: () => sessionEntries,
 		});
 
-		expect(result).toMatchObject({ skipped: true, skipReason: "clean" });
-		expect(updateChannelSessionMemory).not.toHaveBeenCalled();
-	});
-
-	it("does not call the checkpoint sidecar when the gate denies", async () => {
-		const { appHomeDir, channelDir } = await harness();
-		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
-			...state,
-			dirty: true,
-			eligibleAfter: "2999-01-01T00:00:00.000Z",
-		}));
-
-		const result = await runMemoryCheckpointJob({
-			appHomeDir,
-			channelId: "dm_1",
-			channelDir,
-			channelActive: false,
-			settings: settings(),
-			model: TEST_MODEL,
-			resolveApiKey: async () => "",
-			messages: () => messages,
-			sessionEntries: () => sessionEntries,
-		});
-
-		expect(result).toMatchObject({ skipped: true, skipReason: "not-idle-yet" });
-		expect(runInlineConsolidation).not.toHaveBeenCalled();
-	});
-
-	it("does not call structural sidecars when files are under threshold", async () => {
-		const { appHomeDir, channelDir } = await harness();
-		const result = await runStructuralMaintenanceJob({
-			appHomeDir,
-			channelId: "dm_1",
-			channelDir,
-			channelActive: false,
-			settings: settings(),
-			model: TEST_MODEL,
-			resolveApiKey: async () => "",
-			messages: () => messages,
-			sessionEntries: () => sessionEntries,
-		});
-
-		expect(result).toMatchObject({ skipped: true, skipReason: "nothing-to-maintain" });
-		expect(runSidecarTask).not.toHaveBeenCalled();
+		expect(result).toMatchObject({ skipped: true, skipReason });
+		expect(calledMock).not.toHaveBeenCalled();
 	});
 
 	it("passes only entries after the checkpoint cursor to consolidation", async () => {

@@ -337,31 +337,21 @@ describe("workspace resources in the prompt", () => {
 		expect(build.text.match(/<workspace_instructions/g)).toHaveLength(1);
 	});
 
-	it("injects SOUL whole under its unit budget and clips only just over it", () => {
+	it.each([
+		{ label: "SOUL", file: "SOUL.md", field: "soul" as const, budget: SOUL_BUDGET_UNITS },
+		{ label: "AGENTS", file: "AGENTS.md", field: "agents" as const, budget: AGENTS_BUDGET_UNITS },
+	])("injects $label whole under its unit budget and clips only just over it", ({ file, field, budget }) => {
 		const workspaceDir = makeTempDir();
 
-		writeFileSync(join(workspaceDir, "SOUL.md"), "字".repeat(SOUL_BUDGET_UNITS - 1));
-		const under = loadWorkspacePromptResources(workspaceDir).soul;
+		writeFileSync(join(workspaceDir, file), "字".repeat(budget - 1));
+		const under = loadWorkspacePromptResources(workspaceDir)[field];
 		expect(under?.truncated).toBe(false);
-		expect(under?.injectedUnits).toBe(SOUL_BUDGET_UNITS - 1);
+		expect(under?.injectedUnits).toBe(budget - 1);
 
-		writeFileSync(join(workspaceDir, "SOUL.md"), "字".repeat(SOUL_BUDGET_UNITS + 1));
-		const over = loadWorkspacePromptResources(workspaceDir).soul;
+		writeFileSync(join(workspaceDir, file), "字".repeat(budget + 1));
+		const over = loadWorkspacePromptResources(workspaceDir)[field];
 		expect(over?.truncated).toBe(true);
-		expect(over?.injectedUnits).toBeLessThanOrEqual(SOUL_BUDGET_UNITS);
-	});
-
-	it("injects AGENTS whole under its unit budget and clips only just over it", () => {
-		const workspaceDir = makeTempDir();
-
-		writeFileSync(join(workspaceDir, "AGENTS.md"), "字".repeat(AGENTS_BUDGET_UNITS - 1));
-		const under = loadWorkspacePromptResources(workspaceDir).agents;
-		expect(under?.truncated).toBe(false);
-
-		writeFileSync(join(workspaceDir, "AGENTS.md"), "字".repeat(AGENTS_BUDGET_UNITS + 1));
-		const over = loadWorkspacePromptResources(workspaceDir).agents;
-		expect(over?.truncated).toBe(true);
-		expect(over?.injectedUnits).toBeLessThanOrEqual(AGENTS_BUDGET_UNITS);
+		expect(over?.injectedUnits).toBeLessThanOrEqual(budget);
 	});
 
 	it("does not let a huge SOUL shrink AGENTS, or a huge AGENTS shrink SOUL", () => {

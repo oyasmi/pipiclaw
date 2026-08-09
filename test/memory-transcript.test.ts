@@ -3,23 +3,21 @@ import { describe, expect, it } from "vitest";
 import { sanitizeMessagesForMemory, stripInjectedMemoryContext } from "../src/memory/transcript.js";
 
 describe("stripInjectedMemoryContext", () => {
-	it("removes runtime_context and unwraps user_message", () => {
-		const raw = [
-			"<runtime_context>",
-			"Relevant context for this turn:",
-			"[channel-memory/Constraints]",
-			"- Keep prod online.",
-			"</runtime_context>",
-			"",
-			"<user_message>",
-			"重启一下服务",
-			"</user_message>",
-		].join("\n");
+	it.each([
+		{
+			tag: "runtime_context",
+			body: "Relevant context for this turn:\n[channel-memory/Constraints]\n- Keep prod online.",
+		},
+		{ tag: "runtime_turn_context", body: "Relevant context for this turn only." },
+		{ tag: "durable_memory_snapshot", body: "[Channel MEMORY.md]\n- Something durable." },
+		{ tag: "task_agenda", body: "- Finish the migration." },
+	])("removes the injected <$tag> block and unwraps user_message", ({ tag, body }) => {
+		const raw = [`<${tag}>`, body, `</${tag}>`, "", "<user_message>", "重启一下服务", "</user_message>"].join("\n");
 
 		expect(stripInjectedMemoryContext(raw)).toBe("重启一下服务");
 	});
 
-	it("removes the durable memory bootstrap block", () => {
+	it("removes an injected block with no user_message wrapper", () => {
 		const raw = [
 			"<durable_memory_snapshot>",
 			"[Channel MEMORY.md]",

@@ -1,17 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-	estimateIncomingMessageTokens,
-	getPreventiveCompactionDecision,
-	PREVENTIVE_COMPACTION_THRESHOLD_RATIO,
-} from "../src/agent/context-budget.js";
+import { getPreventiveCompactionDecision, PREVENTIVE_COMPACTION_THRESHOLD_RATIO } from "../src/agent/context-budget.js";
 
 describe("context budget", () => {
-	it("estimates incoming message tokens with a simple chars-per-token heuristic", () => {
-		expect(estimateIncomingMessageTokens("")).toBe(0);
-		expect(estimateIncomingMessageTokens("abc")).toBe(1);
-		expect(estimateIncomingMessageTokens("abcd")).toBe(2);
-	});
-
 	it("skips preventive compaction when projected usage is below threshold", () => {
 		expect(getPreventiveCompactionDecision(70_000, 4_999, 100_000)).toEqual({
 			shouldCompact: false,

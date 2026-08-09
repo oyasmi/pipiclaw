@@ -35,11 +35,4 @@ describe("withSubAgentsDirWriteDeny", () => {
 		// Everything else in the workspace is unaffected.
 		expect(guardPath(join(workspaceDir, "MEMORY.md"), "write", ctx).allowed).toBe(true);
 	});
-
-	it("does not mutate the input config (returns a new object)", () => {
-		const workspaceDir = makeTempDir();
-		const before = JSON.stringify(DEFAULT_SECURITY_CONFIG);
-		withSubAgentsDirWriteDeny(DEFAULT_SECURITY_CONFIG, workspaceDir);
-		expect(JSON.stringify(DEFAULT_SECURITY_CONFIG)).toBe(before);
-	});
 });

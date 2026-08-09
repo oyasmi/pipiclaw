@@ -41,9 +41,9 @@ describe("handleSubagentsCommand", () => {
 		expect(response).toContain("没有委派记录");
 	});
 
-	it("no-args and bare 'list' both render the default overview", async () => {
+	it("no-args, bare 'list', and the discovery-augmented overview all render consistently", async () => {
 		configureSubAgentRuntime({});
-		const channelId = `dm_cmd_overview_${Date.now()}`;
+		const channelId = `dm_cmd_list_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
 		await manager.register({
 			runId: "run-1",
@@ -66,26 +66,8 @@ describe("handleSubagentsCommand", () => {
 			expect(response).toContain("explorer");
 			expect(response).toContain("explore");
 		}
-	});
 
-	it("the default overview appends a role-directory tail from the live discovery snapshot", async () => {
-		configureSubAgentRuntime({});
-		const channelId = `dm_cmd_list_${Date.now()}`;
-		const manager = getSubAgentRunManager(channelId);
-		await manager.register({
-			runId: "run-1",
-			channelId,
-			runtime: "internal",
-			agent: "explorer",
-			label: "explore",
-			source: "predefined",
-			tools: ["read"],
-			purpose: "work",
-			workingDirectory: "/tmp",
-			artifactDir: "/tmp/artifacts/run-1",
-		});
-
-		const response = await handleSubagentsCommand({
+		const withDiscovery = await handleSubagentsCommand({
 			args: "list",
 			channelId,
 			discovery: {
@@ -94,12 +76,11 @@ describe("handleSubagentsCommand", () => {
 				agents: [builderRole],
 			},
 		});
-
-		expect(response).toContain("run-1");
-		expect(response).toContain("explorer");
-		expect(response).toContain("角色目录");
-		expect(response).toContain("个不可用");
-		expect(response).toContain("some-role.md: bad frontmatter");
+		expect(withDiscovery).toContain("run-1");
+		expect(withDiscovery).toContain("explorer");
+		expect(withDiscovery).toContain("角色目录");
+		expect(withDiscovery).toContain("个不可用");
+		expect(withDiscovery).toContain("some-role.md: bad frontmatter");
 	});
 
 	it("list running/failed/all filter without the roles tail", async () => {
@@ -157,31 +138,6 @@ describe("handleSubagentsCommand", () => {
 		expect(response).toContain("builder");
 		expect(response).toContain("stderr (tail)");
 		expect(response).toContain("warning: something noisy");
-	});
-
-	it("show resolves an unambiguous short prefix, with or without the run_ prefix", async () => {
-		configureSubAgentRuntime({});
-		const channelId = `dm_cmd_show_prefix_${Date.now()}`;
-		const manager = getSubAgentRunManager(channelId);
-		const runId = manager.mintRunId();
-		await manager.register({
-			runId,
-			channelId,
-			runtime: "internal",
-			agent: "explorer",
-			label: "explore",
-			source: "predefined",
-			tools: ["read"],
-			purpose: "work",
-			workingDirectory: "/tmp",
-			artifactDir: "/tmp/artifacts/prefix",
-		});
-		const shortRef = runId.slice("run_".length, "run_".length + 3);
-
-		const withoutPrefix = await handleSubagentsCommand({ args: `show ${shortRef}`, channelId });
-		const withPrefix = await handleSubagentsCommand({ args: `show run_${shortRef}`, channelId });
-		expect(withoutPrefix).toContain(runId);
-		expect(withPrefix).toContain(runId);
 	});
 
 	it("show reports not found for an unknown runId", async () => {

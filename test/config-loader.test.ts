@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import type { ModelRegistry, Skill } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, writeFileSync } from "fs";
+import { mkdirSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -13,7 +13,6 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 	loadSkillsFromDir: loadSkillsFromDirMock,
 }));
 
-import { loadWorkspacePromptResources } from "../src/agent/prompt/resources.js";
 import { loadPipiclawSkills, resolvePipiclawSkills } from "../src/agent/workspace-resources.js";
 import { getApiKeyForModel } from "../src/models/api-keys.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -43,24 +42,8 @@ afterEach(() => {
 });
 
 describe("config-loader", () => {
-	it("loads workspace-level SOUL.md and AGENTS.md when present", () => {
-		const workspaceDir = createTempDir();
-		writeFileSync(join(workspaceDir, "SOUL.md"), "  be concise  ");
-		writeFileSync(join(workspaceDir, "AGENTS.md"), "  use tests  ");
-
-		const resources = loadWorkspacePromptResources(workspaceDir);
-		expect(resources.soul?.content).toBe("be concise");
-		expect(resources.soul?.isDefaultTemplate).toBe(false);
-		expect(resources.agents?.content).toBe("use tests");
-	});
-
-	it("reports no resources when the workspace config files are missing", () => {
-		const workspaceDir = createTempDir();
-
-		const resources = loadWorkspacePromptResources(workspaceDir);
-		expect(resources.soul).toBeUndefined();
-		expect(resources.agents).toBeUndefined();
-	});
+	// SOUL.md/AGENTS.md loading (present and missing) is covered by prompt-sections.test.ts,
+	// which exercises loadWorkspacePromptResources across 7 call sites.
 
 	it("loads workspace-level skills only", () => {
 		const workspaceDir = createTempDir();

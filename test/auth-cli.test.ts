@@ -20,51 +20,41 @@ describe("parseAuthArgs", () => {
 		expect(parseAuthArgs(["bogus"])).toEqual({ kind: "error", message: "Unknown subcommand: bogus" });
 	});
 
-	describe("status", () => {
-		it("parses with no options", () => {
-			expect(parseAuthArgs(["status"])).toEqual({ kind: "status" });
-		});
+	it.each([
+		["status", { kind: "status" }],
+		[
+			"login",
+			{ kind: "login", provider: undefined, apiKey: false, oauth: false, deviceCode: false, noBrowser: false },
+		],
+		["logout", { kind: "logout", provider: undefined, yes: false }],
+	] as const)("parses %s with no arguments", (subcommand, expected) => {
+		expect(parseAuthArgs([subcommand])).toEqual(expected);
+	});
 
-		it("rejects unknown options", () => {
-			expect(parseAuthArgs(["status", "--bogus"])).toEqual({ kind: "error", message: "Unknown option: --bogus" });
-		});
-
-		it("supports --help", () => {
-			expect(parseAuthArgs(["status", "--help"])).toEqual({ kind: "help" });
-		});
+	// status/login/logout each parse their own `--help`/unknown-option branch inline (not through a
+	// shared helper), so this table exercises all three independently rather than just once.
+	it.each([
+		["status", ["--help"], { kind: "help" }],
+		["status", ["--bogus"], { kind: "error", message: "Unknown option: --bogus" }],
+		["login", ["--bogus"], { kind: "error", message: "Unknown option: --bogus" }],
+		["logout", ["--bogus"], { kind: "error", message: "Unknown option: --bogus" }],
+	] as const)("dispatches %s %j through its per-subcommand option parsing", (subcommand, args, expected) => {
+		expect(parseAuthArgs([subcommand, ...args])).toEqual(expected);
 	});
 
 	describe("login", () => {
-		it("parses with no arguments", () => {
-			expect(parseAuthArgs(["login"])).toEqual({
+		it.each([
+			[
+				"openai-codex",
+				["--oauth", "--device-code", "--no-browser"],
+				{ apiKey: false, oauth: true, deviceCode: true, noBrowser: true },
+			],
+			["anthropic", ["--api-key"], { apiKey: true, oauth: false, deviceCode: false, noBrowser: false }],
+		] as const)("parses provider %s with flags %j", (provider, flags, flagExpectations) => {
+			expect(parseAuthArgs(["login", provider, ...flags])).toEqual({
 				kind: "login",
-				provider: undefined,
-				apiKey: false,
-				oauth: false,
-				deviceCode: false,
-				noBrowser: false,
-			});
-		});
-
-		it("parses a provider positional plus flags", () => {
-			expect(parseAuthArgs(["login", "openai-codex", "--oauth", "--device-code", "--no-browser"])).toEqual({
-				kind: "login",
-				provider: "openai-codex",
-				apiKey: false,
-				oauth: true,
-				deviceCode: true,
-				noBrowser: true,
-			});
-		});
-
-		it("parses --api-key", () => {
-			expect(parseAuthArgs(["login", "anthropic", "--api-key"])).toEqual({
-				kind: "login",
-				provider: "anthropic",
-				apiKey: true,
-				oauth: false,
-				deviceCode: false,
-				noBrowser: false,
+				provider,
+				...flagExpectations,
 			});
 		});
 
@@ -74,24 +64,9 @@ describe("parseAuthArgs", () => {
 				message: "--api-key and --oauth are mutually exclusive",
 			});
 		});
-
-		it("rejects an unknown option", () => {
-			expect(parseAuthArgs(["login", "--bogus"])).toEqual({ kind: "error", message: "Unknown option: --bogus" });
-		});
-
-		it("rejects more than one positional argument", () => {
-			expect(parseAuthArgs(["login", "anthropic", "extra"])).toEqual({
-				kind: "error",
-				message: "Unexpected argument: extra",
-			});
-		});
 	});
 
 	describe("logout", () => {
-		it("parses with no arguments", () => {
-			expect(parseAuthArgs(["logout"])).toEqual({ kind: "logout", provider: undefined, yes: false });
-		});
-
 		it("parses a provider positional plus --yes", () => {
 			expect(parseAuthArgs(["logout", "anthropic", "--yes"])).toEqual({
 				kind: "logout",
@@ -103,16 +78,12 @@ describe("parseAuthArgs", () => {
 		it("accepts -y as a short form of --yes", () => {
 			expect(parseAuthArgs(["logout", "-y"])).toEqual({ kind: "logout", provider: undefined, yes: true });
 		});
+	});
 
-		it("rejects an unknown option", () => {
-			expect(parseAuthArgs(["logout", "--bogus"])).toEqual({ kind: "error", message: "Unknown option: --bogus" });
-		});
-
-		it("rejects more than one positional argument", () => {
-			expect(parseAuthArgs(["logout", "anthropic", "extra"])).toEqual({
-				kind: "error",
-				message: "Unexpected argument: extra",
-			});
+	it.each(["login", "logout"] as const)("rejects more than one positional argument for %s", (subcommand) => {
+		expect(parseAuthArgs([subcommand, "anthropic", "extra"])).toEqual({
+			kind: "error",
+			message: "Unexpected argument: extra",
 		});
 	});
 });
@@ -152,11 +123,15 @@ describe("runAuth", () => {
 		};
 	}
 
-	it("exits 1 on a usage error", async () => {
+	it("exits 1 on a usage error, as a BootstrapExitError", async () => {
 		const io = fakeIo();
-		await expect(runAuth(["node", "pipiclaw", "auth", "bogus"], io, paths)).rejects.toMatchObject({
-			code: 1,
-		});
+		try {
+			await runAuth(["node", "pipiclaw", "auth", "bogus"], io, paths);
+			expect.unreachable();
+		} catch (error) {
+			expect(error).toBeInstanceOf(BootstrapExitError);
+			expect(error).toMatchObject({ code: 1 });
+		}
 		expect(io.errors.join("\n")).toContain("Unknown subcommand");
 	});
 
@@ -175,16 +150,6 @@ describe("runAuth", () => {
 			expect(io.errors.join("\n")).toContain("interactive terminal");
 		} finally {
 			Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
-		}
-	});
-
-	it("BootstrapExitError carries the exit code runAuth throws", async () => {
-		const io = fakeIo();
-		try {
-			await runAuth(["node", "pipiclaw", "auth", "bogus"], io, paths);
-			expect.unreachable();
-		} catch (error) {
-			expect(error).toBeInstanceOf(BootstrapExitError);
 		}
 	});
 });

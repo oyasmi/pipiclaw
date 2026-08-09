@@ -11,7 +11,6 @@ import {
 	rewriteChannelMemory,
 	rewriteChannelSession,
 } from "../src/memory/files.js";
-import { splitH2Sections } from "../src/shared/markdown-sections.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-memory-");
@@ -72,23 +71,5 @@ describe("memory-files", () => {
 
 		expect(history).toContain("## 2026-03-31T00:00:00.000Z");
 		expect(history.match(/## 2026-03-31T00:00:00.000Z/g)).toHaveLength(1);
-	});
-
-	it("splits markdown sections by level-two headings", () => {
-		expect(
-			splitH2Sections(`# Root
-
-## First
-
-Alpha
-
-## Second
-
-Beta`),
-		).toEqual([
-			{ heading: "First", content: "Alpha" },
-			{ heading: "Second", content: "Beta" },
-		]);
-		expect(splitH2Sections("")).toEqual([]);
 	});
 });

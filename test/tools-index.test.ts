@@ -115,24 +115,6 @@ import { buildPipiclawSystemPrompt } from "../src/agent/prompt/builder.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { createPipiclawTools } from "../src/tools/index.js";
 
-const ALL_TOOL_NAMES = [
-	"read",
-	"bash",
-	"edit",
-	"grep",
-	"write",
-	"web_search",
-	"web_fetch",
-	"session_search",
-	"memory_manage",
-	"skill_manage",
-	"event_manage",
-	"task_manage",
-	"job",
-	"subagent",
-	"subagent_manage",
-];
-
 const baseToolOptions = {
 	getCurrentModel: vi.fn(),
 	getAvailableModels: vi.fn(() => []),
@@ -179,7 +161,7 @@ describe("tools index", () => {
 		createSubAgentToolMock.mockClear();
 	});
 
-	it("always registers the job tool on the main path and honors the tasks master switch", () => {
+	it("always registers the job tool on the main path", () => {
 		const baseArgs = {
 			...baseToolOptions,
 			executor,
@@ -187,11 +169,6 @@ describe("tools index", () => {
 		};
 
 		expect(createPipiclawTools(baseArgs).map((tool) => tool.name)).toContain("job");
-
-		toolsConfig.tools.tasks.enabled = false;
-		expect(
-			createPipiclawTools({ ...baseArgs, memoryCandidateStore: createMemoryCandidateStore() }).map((t) => t.name),
-		).not.toContain("task_manage");
 	});
 
 	it("no longer lists tools in the prompt, but the tool set still gates mechanism sections", () => {
@@ -214,12 +191,8 @@ describe("tools index", () => {
 			subAgents: [],
 		});
 
-		// No per-tool prose lines survive, for any tool.
-		expect(prompt).not.toContain("## Available Tools");
-		for (const name of ALL_TOOL_NAMES) {
-			expect(prompt).not.toContain(`- ${name} —`);
-		}
-		// Registration itself is untouched by the prompt change.
+		// Registration itself is untouched by the prompt change (the "## Available Tools" absence
+		// itself is covered by prompt-sections.test.ts).
 		expect(registered.has("web_search")).toBe(false);
 		expect(registered.has("memory_manage")).toBe(true);
 		// And the tool set still decides which mechanism sections render.

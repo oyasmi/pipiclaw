@@ -110,52 +110,37 @@ describe("manageEvent create", () => {
 		expect(await listEventFiles()).toEqual([]);
 	});
 
-	it("rejects immediate events", async () => {
-		await expect(
-			manageEvent(opts(), {
-				action: "create",
-				name: "imm",
-				definition: JSON.stringify({ type: "immediate", text: "go" }),
-			}),
-		).rejects.toThrow(/immediate/);
-		expect(await listEventFiles()).toEqual([]);
-	});
-
-	it("rejects one-shot scheduled sooner than 2 minutes out", async () => {
-		await expect(
-			manageEvent(opts(), {
-				action: "create",
-				name: "soon",
-				definition: JSON.stringify({ type: "one-shot", text: "x", at: futureIso(1) }),
-			}),
-		).rejects.toThrow(/2 minutes/);
-	});
-
-	it("rejects one-shot beyond the Node timer limit before writing it", async () => {
-		await expect(
-			manageEvent(opts(), {
-				action: "create",
-				name: "too-far",
-				definition: JSON.stringify({ type: "one-shot", text: "x", at: futureIso(36_000) }),
-			}),
-		).rejects.toThrow(/24\.8 days/);
-		expect(await listEventFiles()).toEqual([]);
-	});
-
-	it("rejects a periodic cron firing more often than every 30 minutes", async () => {
-		await expect(
-			manageEvent(opts(), {
-				action: "create",
-				name: "toofast",
-				definition: JSON.stringify({
-					type: "periodic",
-					text: "x",
-					schedule: "* * * * *",
-					timezone: "Asia/Shanghai",
-				}),
-			}),
-		).rejects.toThrow(/30 minutes/);
-	});
+	// These boundaries (immediate, 2-min one-shot lead, 24.8-day ceiling, 30-min periodic floor,
+	// invalid cron) are already exercised exhaustively against the shared `validateScheduledEvent`
+	// at the watcher layer in events.test.ts. Here we only need one representative case per
+	// boundary to prove the tool delegates to that validator and never writes a file on rejection.
+	it.each([
+		["immediate events", { type: "immediate", text: "go" }, /immediate/],
+		[
+			"a one-shot scheduled sooner than 2 minutes out",
+			{ type: "one-shot", text: "x", at: futureIso(1) },
+			/2 minutes/,
+		],
+		["a one-shot beyond the Node timer limit", { type: "one-shot", text: "x", at: futureIso(36_000) }, /24\.8 days/],
+		[
+			"a periodic cron firing more often than every 30 minutes",
+			{ type: "periodic", text: "x", schedule: "* * * * *", timezone: "Asia/Shanghai" },
+			/30 minutes/,
+		],
+		[
+			"an invalid cron schedule",
+			{ type: "periodic", text: "x", schedule: "not a cron", timezone: "Asia/Shanghai" },
+			/cron/i,
+		],
+	] as const)(
+		"delegates create-time rejection of %s to the shared validator",
+		async (_label, definition, expectedError) => {
+			await expect(
+				manageEvent(opts(), { action: "create", name: "rejected", definition: JSON.stringify(definition) }),
+			).rejects.toThrow(expectedError);
+			expect(await listEventFiles()).toEqual([]);
+		},
+	);
 
 	it("allows a sub-30-minute periodic cron when it carries a preAction gate", async () => {
 		const result = await manageEvent(opts(), {
@@ -187,21 +172,6 @@ describe("manageEvent create", () => {
 				}),
 			}),
 		).rejects.toThrow(/5 minutes/);
-	});
-
-	it("rejects an invalid cron schedule", async () => {
-		await expect(
-			manageEvent(opts(), {
-				action: "create",
-				name: "badcron",
-				definition: JSON.stringify({
-					type: "periodic",
-					text: "x",
-					schedule: "not a cron",
-					timezone: "Asia/Shanghai",
-				}),
-			}),
-		).rejects.toThrow(/cron/i);
 	});
 
 	it("tolerates a legacy timezone field and drops it from the persisted event", async () => {

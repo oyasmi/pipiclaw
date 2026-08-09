@@ -314,23 +314,31 @@ describe("memory recall", () => {
 		expect(result.items.map((item) => item.id)).toEqual(["m-gray01"]);
 	});
 
-	it("emits Chinese trigrams so compounds survive greedy dictionary segmentation", () => {
-		const tokens = tokenizeRecallText("包管理器");
+	it.each([
+		{
+			label: "emits Chinese trigrams so compounds survive greedy dictionary segmentation",
+			input: "包管理器",
+			expected: ["包管理", "管理器"],
+			notExpected: [],
+		},
+		{
+			label: "captures overlapping Chinese dictionary terms without keeping covered bigram noise",
+			input: "当前状态管理优化方案",
+			expected: ["当前状态", "状态管理", "管理", "优化方案"],
+			notExpected: ["前状", "态管", "理优", "化方"],
+		},
+		{
+			label: "keeps meaningful uncovered single Chinese characters while filtering stop chars",
+			input: "库表锁了",
+			expected: ["库表", "表锁", "库", "表", "锁"],
+			notExpected: ["了"],
+		},
+	])("$label", ({ input, expected, notExpected }) => {
+		const tokens = tokenizeRecallText(input);
 
-		expect(tokens).toEqual(expect.arrayContaining(["包管理", "管理器"]));
-	});
-
-	it("captures overlapping Chinese dictionary terms without keeping covered bigram noise", () => {
-		const tokens = tokenizeRecallText("当前状态管理优化方案");
-
-		expect(tokens).toEqual(expect.arrayContaining(["当前状态", "状态管理", "管理", "优化方案"]));
-		expect(tokens).not.toEqual(expect.arrayContaining(["前状", "态管", "理优", "化方"]));
-	});
-
-	it("keeps meaningful uncovered single Chinese characters while filtering stop chars", () => {
-		const tokens = tokenizeRecallText("库表锁了");
-
-		expect(tokens).toEqual(expect.arrayContaining(["库表", "表锁", "库", "表", "锁"]));
-		expect(tokens).not.toContain("了");
+		expect(tokens).toEqual(expect.arrayContaining(expected));
+		for (const token of notExpected) {
+			expect(tokens).not.toContain(token);
+		}
 	});
 });

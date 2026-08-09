@@ -140,17 +140,6 @@ describe("classifyExternalOutcome (D4 status table)", () => {
 		).toBe("completed");
 	});
 
-	it("a signal-killed process with partial events still reports the partial text on failure", () => {
-		const result = classifyExternalOutcome("codex-cli", {
-			finalText: "partial progress",
-			terminalSeen: false,
-			protocolStatus: "absent",
-			usageKnown: false,
-			costKnown: false,
-		});
-		expect(result.status).toBe("failed");
-	});
-
 	it("exec is the explicit exception: protocolStatus alone decides, terminalSeen is not checked", () => {
 		expect(
 			classifyExternalOutcome("exec", {

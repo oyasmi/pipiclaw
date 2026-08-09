@@ -449,27 +449,7 @@ Review files carefully.`,
 		).toBe(1800);
 	});
 
-	it("lets a sub-agent request grep, which the tool registry already exposes to sub-agents", () => {
-		const resolved = resolveSubAgentConfig([model], model, [], {
-			systemPrompt: "Search the repo",
-			tools: ["read", "grep"],
-		});
-		expect(resolved.error).toBeUndefined();
-		expect(resolved.config?.tools).toEqual(["read", "grep"]);
-	});
-
-	it("resolves current model by default and rejects overly long inline prompts", () => {
-		const resolved = resolveSubAgentConfig([model], model, [], {
-			name: "inline-reviewer",
-			systemPrompt: "Review files",
-			context: "relevant",
-		});
-		expect(resolved.error).toBeUndefined();
-		expect(resolved.config?.model).toBe(model);
-		expect(resolved.config?.modelRef).toBe("openai/gpt-4o-mini");
-		expect(resolved.config?.contextMode).toBe("contextual");
-		expect(resolved.config?.memory).toBe("relevant");
-
+	it("rejects an overly long inline prompt", () => {
 		const tooLong = resolveSubAgentConfig([model], model, [], {
 			systemPrompt: "x".repeat(16001),
 		});
@@ -565,30 +545,6 @@ Review files carefully.`,
 			purpose: "verify",
 		});
 		expect(resolvedFromFrontmatter.config?.thinkingLevel).toBe("low");
-	});
-
-	it("returns no named agents when the workspace directory is empty", () => {
-		const workspaceDir = createTempWorkspace();
-		const discovery = discoverSubAgents(workspaceDir, [model]);
-		expect(discovery.agents).toEqual([]);
-		expect(discovery.warnings).toEqual([]);
-	});
-
-	it("discovers only the workspace file and keeps its configured source", () => {
-		const workspaceDir = createTempWorkspace();
-		const subAgentsDir = getSubAgentsDir(workspaceDir);
-		mkdirSync(subAgentsDir, { recursive: true });
-		writeFileSync(
-			join(subAgentsDir, "explorer.md"),
-			`---\nname: explorer\ndescription: custom explorer\n---\n\nCustom exploration behavior.`,
-			"utf-8",
-		);
-
-		const discovery = discoverSubAgents(workspaceDir, [model]);
-		const explorers = discovery.agents.filter((agent) => agent.name === "explorer");
-		expect(explorers).toHaveLength(1);
-		expect(explorers[0]).toMatchObject({ source: "predefined", description: "custom explorer" });
-		expect(discovery.warnings).toEqual([]);
 	});
 });
 

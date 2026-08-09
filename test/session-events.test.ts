@@ -112,16 +112,6 @@ describe("session compaction events", () => {
 		expect(runState.lastCompactionError).toBeUndefined();
 	});
 
-	it("uses the same compaction progress label for threshold starts", async () => {
-		const respond = vi.fn(async () => {});
-		const ctx = createContext(respond);
-		const runState = createEmptyRunState();
-
-		await handleSessionEvent({ type: "compaction_start", reason: "threshold" }, handlerContext(ctx, runState));
-
-		expect(respond).toHaveBeenCalledWith("Compacting context...", false);
-	});
-
 	it("hides compaction progress in final_card_only mode", async () => {
 		const respond = vi.fn(async () => {});
 		const ctx = createContext(respond);

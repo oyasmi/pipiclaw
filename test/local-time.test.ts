@@ -23,13 +23,6 @@ describe("parseLocalTime", () => {
 		expect(parseLocalTime("2026-07-27T07:30:00")).toBe(new Date("2026-07-26T23:30:00.000Z").getTime());
 	});
 
-	it("interprets a bare date-only string as local midnight, not UTC midnight", () => {
-		// This is the ECMAScript trap this module exists to avoid: new Date("2026-07-27")
-		// resolves to UTC midnight, silently landing on the wrong local calendar day.
-		const localMidnight = new Date(2026, 6, 27).getTime();
-		expect(parseLocalTime("2026-07-27T00:00:00")).toBe(localMidnight);
-	});
-
 	it("still resolves a legacy UTC 'Z' value to the correct absolute instant", () => {
 		expect(parseLocalTime("2026-07-27T23:30:00.000Z")).toBe(new Date("2026-07-27T23:30:00.000Z").getTime());
 	});
@@ -43,11 +36,13 @@ describe("parseLocalTime", () => {
 		expect(parseLocalTime("not-a-date")).toBeUndefined();
 	});
 
-	it("interprets a bare date with no time component as local midnight, not UTC midnight (H-2)", () => {
-		// Regression: the regex-miss fallback used to hand a date-only string straight to
-		// `new Date(...)`, which ECMAScript parses as UTC midnight — the exact trap this
-		// module's own header comment says it exists to avoid.
+	it("interprets a bare date, with or without a time component, as local midnight — not UTC midnight (H-2)", () => {
+		// This is the ECMAScript trap this module exists to avoid: new Date("2026-07-27")
+		// resolves to UTC midnight, silently landing on the wrong local calendar day. Regression:
+		// the regex-miss fallback used to hand a date-only string straight to `new Date(...)`,
+		// hitting the same trap.
 		const localMidnight = new Date(2026, 6, 27).getTime();
+		expect(parseLocalTime("2026-07-27T00:00:00")).toBe(localMidnight);
 		expect(parseLocalTime("2026-07-27")).toBe(localMidnight);
 		expect(parseLocalTime("2026-07-27")).not.toBe(new Date("2026-07-27").getTime());
 	});

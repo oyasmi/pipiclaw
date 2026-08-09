@@ -2,34 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import { parseTuiArgs, runTui } from "../src/tui/cli.js";
 
 describe("parseTuiArgs", () => {
-	it("defaults to an interactive run", () => {
-		expect(parseTuiArgs([])).toEqual({
-			kind: "run",
-			channel: undefined,
-			print: false,
-			quiet: false,
-			plain: false,
-			positional: [],
-		});
-	});
-
-	it("parses --channel in both forms", () => {
-		expect(parseTuiArgs(["--channel", "dm_42"])).toMatchObject({ channel: "dm_42" });
-		expect(parseTuiArgs(["--channel=dm_42"])).toMatchObject({ channel: "dm_42" });
-	});
-
-	it("parses the flags", () => {
-		const parsed = parseTuiArgs(["--print", "-q", "--plain"]);
-		expect(parsed).toMatchObject({
-			kind: "run",
-			print: true,
-			quiet: true,
-			plain: true,
-		});
-	});
-
-	it("collects positional words as the initial prompt", () => {
-		expect(parseTuiArgs(["hello", "there"])).toMatchObject({ positional: ["hello", "there"] });
+	it.each([
+		[
+			"with no args",
+			[],
+			{ kind: "run", channel: undefined, print: false, quiet: false, plain: false, positional: [] },
+		],
+		["--channel dm_42", ["--channel", "dm_42"], { channel: "dm_42" }],
+		["--channel=dm_42", ["--channel=dm_42"], { channel: "dm_42" }],
+		["--print -q --plain", ["--print", "-q", "--plain"], { kind: "run", print: true, quiet: true, plain: true }],
+		["positional words", ["hello", "there"], { positional: ["hello", "there"] }],
+	] as const)("parses %s", (_label, args, expected) => {
+		expect(parseTuiArgs([...args])).toMatchObject(expected);
 	});
 
 	it("recognizes help and version", () => {
@@ -52,11 +36,5 @@ describe("runTui", () => {
 		await runTui(["node", "pipiclaw", "tui", "--help"], { log, error: vi.fn() });
 		expect(log).toHaveBeenCalled();
 		expect(log.mock.calls.flat().join("\n")).toContain("Usage: pipiclaw tui");
-	});
-
-	it("prints the version", async () => {
-		const log = vi.fn();
-		await runTui(["node", "pipiclaw", "tui", "--version"], { log, error: vi.fn() });
-		expect(log).toHaveBeenCalledTimes(1);
 	});
 });

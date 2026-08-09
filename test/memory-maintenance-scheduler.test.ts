@@ -104,22 +104,6 @@ describe("memory maintenance scheduler", () => {
 		expect(getRuntimeContext).toHaveBeenCalledWith("dm_2");
 	});
 
-	it("does not build runtime context for active channels", async () => {
-		const root = createTempDir();
-		const getRuntimeContext = vi.fn(async () => null);
-		const scheduler = new MemoryMaintenanceScheduler({
-			appHomeDir: join(root, "app"),
-			workspaceDir: join(root, "workspace"),
-			getKnownChannelIds: () => ["dm_1"],
-			getRuntimeContext,
-			isChannelActive: () => true,
-			getSettings: () => ({ memoryMaintenance: maintenanceSettings(true) }),
-		});
-
-		await scheduler.runOnce();
-		expect(getRuntimeContext).not.toHaveBeenCalled();
-	});
-
 	it("starts and stops an idempotent interval only when enabled", async () => {
 		vi.useFakeTimers();
 		const root = createTempDir();

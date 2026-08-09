@@ -42,23 +42,17 @@ describe("maybeOptimizeCommand", () => {
 		expect(exec.calls.map((c) => c.command)).toEqual(["command -v rtk"]);
 	});
 
-	it("falls back when rtk has no equivalent (empty output, exit 1)", async () => {
-		const exec = executor({ available: true, rewrite: () => REWRITE_NONE });
-
-		expect(await maybeOptimizeCommand("echo hello", exec)).toBe("echo hello");
-	});
-
-	it("falls back when rtk prints only whitespace", async () => {
-		const exec = executor({ available: true, rewrite: () => REWRITE_OK("   \n") });
-
-		expect(await maybeOptimizeCommand("cat foo.txt", exec)).toBe("cat foo.txt");
-	});
-
-	it("falls back when the rewrite invocation throws", async () => {
-		const exec = new RecordingExecutor((command) => {
-			if (command === "command -v rtk") return OK("/usr/bin/rtk");
-			throw new Error("boom");
-		});
+	it.each([
+		["has no equivalent (empty output, exit 1)", () => REWRITE_NONE],
+		["prints only whitespace", () => REWRITE_OK("   \n")],
+		[
+			"the rewrite invocation throws",
+			() => {
+				throw new Error("boom");
+			},
+		],
+	] as const)("falls back to the original command when rtk %s", async (_label, rewrite) => {
+		const exec = executor({ available: true, rewrite });
 
 		expect(await maybeOptimizeCommand("git status", exec)).toBe("git status");
 	});

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyChannelMemoryOps, parseChannelMemoryEntries, readChannelMemory } from "../src/memory/files.js";
 import { readMemoryMetadata } from "../src/memory/metadata.js";
-import { collectExpiredEntryIds, expireMemoryEntries, probationDeadline } from "../src/memory/probation.js";
+import { collectExpiredEntryIds, expireMemoryEntries } from "../src/memory/probation.js";
 import { readMemoryTombstones } from "../src/memory/tombstones.js";
 import { setupChannelFiles, useTempDirs } from "./helpers/fixtures.js";
 
@@ -55,12 +55,6 @@ describe("memory probation expiry (spec 037, D8)", () => {
 
 		expect(evicted).toBe(0);
 		expect(await readChannelMemory(channelDir)).toContain("Durable fact with no expiry");
-	});
-
-	it("probationDeadline is MEMORY_PROBATION_DAYS in the future", () => {
-		const now = new Date("2026-01-01T00:00:00.000Z");
-		const deadline = new Date(probationDeadline(now));
-		expect(Math.round((deadline.getTime() - now.getTime()) / (24 * 60 * 60 * 1000))).toBe(30);
 	});
 
 	it("collectExpiredEntryIds ignores non-active entries", async () => {

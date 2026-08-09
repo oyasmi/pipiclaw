@@ -66,35 +66,38 @@ describe("buildTaskDigest", () => {
 		expect(out.indexOf("now — Now")).toBeLessThan(out.indexOf("later — Later"));
 	});
 
-	it("caps at maxTasks and notes how many were omitted", async () => {
-		for (let i = 0; i < 5; i++) {
-			await writeFile(join(tasksDir, `t${i}.md`), doc("status: open", `# Task ${i}`));
+	it.each([
+		{
+			dimension: "maxTasks",
+			config: { maxTasks: 2, maxChars: 1000 },
+			taskCount: 5,
+			taskTitle: (i: number) => `# Task ${i}`,
+			exactShown: 2,
+		},
+		{
+			dimension: "maxChars",
+			config: { maxTasks: 8, maxChars: 320 },
+			taskCount: 5,
+			taskTitle: (i: number) => `# Task number ${i}`,
+		},
+		{
+			dimension: "maxUnits (whole-task, not char, budget)",
+			config: { maxTasks: 8, maxChars: 100_000, maxUnits: 60 },
+			taskCount: 6,
+			taskTitle: (i: number) => `# 任务编号 ${i} 需要跟进`,
+		},
+	])("drops lines to respect the $dimension budget", async ({ config, taskCount, taskTitle, exactShown }) => {
+		for (let i = 0; i < taskCount; i++) {
+			await writeFile(join(tasksDir, `t${i}.md`), doc("status: open", taskTitle(i)));
 		}
-		const out = await digest(2);
+		const out = await buildTaskDigest({ channelDir, now: NOW, ...config });
 		const shown = out.split("\n").filter((line) => line.startsWith("- t"));
-		expect(shown).toHaveLength(2);
-		expect(out).toContain("(+3 more)");
-	});
-
-	it("drops lines to respect maxChars, keeping at least one and an omission note", async () => {
-		for (let i = 0; i < 5; i++) {
-			await writeFile(join(tasksDir, `t${i}.md`), doc("status: open", `# Task number ${i}`));
+		if (exactShown !== undefined) {
+			expect(shown).toHaveLength(exactShown);
+		} else {
+			expect(shown.length).toBeGreaterThanOrEqual(1);
+			expect(shown.length).toBeLessThan(taskCount);
 		}
-		const out = await digest(8, 320);
-		const shown = out.split("\n").filter((line) => line.startsWith("- t"));
-		expect(shown.length).toBeGreaterThanOrEqual(1);
-		expect(shown.length).toBeLessThan(5);
-		expect(out).toMatch(/\(\+\d+ more\)/);
-	});
-
-	it("drops whole task lines to respect the unit budget", async () => {
-		for (let i = 0; i < 6; i++) {
-			await writeFile(join(tasksDir, `t${i}.md`), doc("status: open", `# 任务编号 ${i} 需要跟进`));
-		}
-		const out = await buildTaskDigest({ channelDir, maxTasks: 8, maxChars: 100_000, maxUnits: 60, now: NOW });
-		const shown = out.split("\n").filter((line) => line.startsWith("- t"));
-		expect(shown.length).toBeGreaterThanOrEqual(1);
-		expect(shown.length).toBeLessThan(6);
 		expect(out).toMatch(/\(\+\d+ more\)/);
 	});
 

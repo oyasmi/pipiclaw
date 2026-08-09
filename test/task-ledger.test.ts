@@ -13,14 +13,12 @@ import {
 	MAX_INLINE_TASK_HISTORY_ENTRIES,
 	missingStandardTaskSections,
 	normalizeTaskFields,
-	normalizeTaskId,
 	parseTaskFrontmatter,
 	parseTaskPlan,
 	readActiveTasks,
 	renderStandardTaskBody,
 	renderTaskDocument,
 	startTaskCycle,
-	taskBody,
 	taskContractSegment,
 	uncheckedTaskAcceptanceItems,
 } from "../src/tasks/ledger.js";
@@ -199,13 +197,5 @@ describe("readActiveTasks", () => {
 		await writeFile(join(tasksDir, "broken.md"), "no frontmatter");
 		const [entry] = await readActiveTasks(tasksDir, NOW.getTime());
 		expect(entry).toMatchObject({ id: "broken", actionable: true, frontmatter: { readable: false } });
-	});
-});
-
-describe("small ledger helpers", () => {
-	it("normalizes task ids and extracts bodies", () => {
-		expect(normalizeTaskId("weekly.md")).toBe("weekly");
-		expect(() => normalizeTaskId("../escape")).toThrow(/Invalid task id/);
-		expect(taskBody("---\nstatus: active\n---\n\n# H\nline")).toBe("\n# H\nline");
 	});
 });

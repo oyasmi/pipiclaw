@@ -151,9 +151,11 @@ describe("channel memory write ops", () => {
 		expect(parseChannelMemoryEntries(memory)[0].hasExplicitId).toBe(true);
 	});
 
-	it("backs up the file before a mutating op and keeps at most five backups", async () => {
+	it("backs up only on a mutating op, before it applies, and keeps at most five backups", async () => {
 		const channelDir = createTempDir();
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Base fact" }]);
+		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Second" }]);
+		expect(existsSync(join(channelDir, ".memory-backups"))).toBe(false);
 
 		for (let i = 0; i < 7; i++) {
 			const [entry] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
@@ -164,13 +166,6 @@ describe("channel memory write ops", () => {
 		expect(existsSync(backupDir)).toBe(true);
 		const backups = readdirSync(backupDir).filter((f) => f.startsWith("MEMORY-"));
 		expect(backups.length).toBeLessThanOrEqual(5);
-	});
-
-	it("does not back up on pure add ops", async () => {
-		const channelDir = createTempDir();
-		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "First" }]);
-		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Second" }]);
-		expect(existsSync(join(channelDir, ".memory-backups"))).toBe(false);
 	});
 
 	it("archives raw history blocks", async () => {

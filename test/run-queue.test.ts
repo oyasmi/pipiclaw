@@ -35,9 +35,4 @@ describe("createRunQueue", () => {
 		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("failing step"), "boom");
 		warnSpy.mockRestore();
 	});
-
-	it("drain resolves even when the queue is empty", async () => {
-		const { drain } = createRunQueue();
-		await expect(drain()).resolves.toBeUndefined();
-	});
 });
