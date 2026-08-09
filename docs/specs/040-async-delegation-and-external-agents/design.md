@@ -208,7 +208,7 @@ export interface ExternalOutcome {
 
 **`exec` 是上表的显式例外**：它没有协议终态，若照搬第三行会被判成永远失败。其 `parseOutcome` 直接由退出码给出 `protocolStatus`（`0` → `completed`，非 0 → `failed`），同时 `terminalSeen` 恒为 `false`、`usageKnown`/`costKnown` 恒为 `false`。也就是说 `terminalSeen` 只对结构化 harness 具有"完成证据"的含义；`exec` 的完成证据只有退出码这一层，比结构化 harness 弱，如实标注，并据此禁止它承担 `purpose=verify`（D9）。
 
-**进程启动**：`spawn(executable, args, { detached: true, cwd, stdio: ['pipe', fd(events.jsonl), fd(stderr.log)] })` 后 `unref()`。不用 shell，因而没有 `exit` 文件；结局判定用"pid 存活探针 + `events.jsonl` 的协议终态"，这比退出码信息量更大，正好与上表一致。角色可显式声明 `shell: true`，此时整条 `command` 交给 `/bin/sh -lc` 执行（`-l` 是为了拿到用户 profile 里的 `PATH`，这正是 agentmux `defaults.shell: /bin/bash -lc` 的用途）。这条路径重新引入引号风险，因此只在迁移需要时使用，且该声明进审计记录。
+**进程启动**：`spawn(executable, args, { detached: true, cwd, stdio: ['pipe', fd(events.jsonl), fd(stderr.log)] })` 后 `unref()`。不用 shell，因而没有 `exit` 文件；结局判定用"pid 存活探针 + `events.jsonl` 的协议终态"，这比退出码信息量更大，正好与上表一致。`shell: true` 只允许用于没有协议 argv 的通用 `exec` harness，此时整条 `command` 交给 `/bin/sh -lc` 执行。claude-code / codex-cli 若走 shell 会绕过 model、thinking、system prompt、输出协议与 resume 的 harness 组装，因此 discovery 直接驳回；需要登录 shell 环境时应把环境初始化封装成脚本，并将该脚本作为普通 `command`。
 
 **用户 `command` 字符串的处理**：按 shell 词法**分词**（尊重引号），但不交给 shell 执行。首 token 是 `executable`，其余进 `args`。
 
@@ -222,7 +222,7 @@ export interface ExternalOutcome {
 
 | harness | 追加 | resume | 最终文本来源 |
 |---|---|---|---|
-| `claude-code` | `-p --output-format stream-json --verbose --session-id <uuid> [--model M] [--append-system-prompt-file F]` | `--resume <session_id>`（替代 `--session-id`） | `result` 事件的 `result` 字段 |
+| `claude-code` | `-p --output-format stream-json --verbose --session-id <uuid> [--model M] [--effort L] [--append-system-prompt-file F]` | `--resume <session_id>`（替代 `--session-id`） | `result` 事件的 `result` 字段 |
 | `codex-cli` | `--json - [-m M] [-c model_reasoning_effort=L]` | `<父级 args> resume <thread_id> --json -` | 最后一条 `item.completed` 且 `item.type == "agent_message"` |
 | `exec` | 无（原样执行，prompt 走 stdin） | 不支持 | stdout（按回传预算截断） |
 
@@ -574,7 +574,7 @@ A sub-agent starts blank: state goal, scope, paths, constraints and acceptance c
 | `system_prompt` | 正文 | — |
 | （无对应） | `mutates` | **必须新增**：agentmux 没有这个概念，迁移时按角色实际行为填 `read`/`write`（`planner`/`reviewer`/`scout` → `read`，`builder`/`documenter` → `write`） |
 | `cwd` | 不迁移 | 工作目录改为每次委派由调用方传 `workingDirectory`（D5） |
-| `defaults.shell` | `shell: true` + 角色 `command` | 需显式声明，进审计 |
+| `defaults.shell` | `exec` 可用 `shell: true`；结构化 harness 改为包装脚本 | 结构化 harness 必须保留 runtime 的协议 argv 组装 |
 | `defaults.env` | `env:` | — |
 | `prompt` | 不迁移 | 首轮任务由调用方给 |
 | `defaults.tmux` / `defaults.capture` / `defaults.status` / `max_instances` | 不迁移 | 属 tmux 路径或已由 runtime 承担 |

@@ -511,7 +511,7 @@ mutates: read
 
 - `command` 最终启动什么可执行文件，是否带目标 CLI 的 sandbox / approval 参数
 - `mutates` 是否如实声明 `read` 或 `write`
-- `shell: true` 是否真的必要；它会把整条命令交给 `/bin/sh -lc`，重新引入 shell 展开风险
+- 通用 `exec` 角色的 `shell: true` 是否真的必要；它会把整条命令交给 `/bin/sh -lc`，重新引入 shell 展开风险（结构化 harness 会直接驳回该组合）
 - `env` 是否注入了不应交给该角色的凭据或配置
 - 正文是否明确允许的副作用、停止条件、验证方式和交付物
 

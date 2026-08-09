@@ -36,6 +36,17 @@ describe("codex-cli harness: buildInvocation", () => {
 		expect(result.args).not.toContain("gpt-5.6-luna");
 	});
 
+	it("recognizes model values supplied through Codex config without injecting -m", () => {
+		for (const argv of [
+			["codex", "exec", "--config", "model=already-set"],
+			["codex", "exec", "--config=model=already-set"],
+		]) {
+			const result = codexCliHarness.buildInvocation({ ...baseInvocation, argv, model: "gpt-5.6-luna" });
+			expect(result.args).not.toContain("-m");
+			expect(result.args).not.toContain("gpt-5.6-luna");
+		}
+	});
+
 	it("does not inject -c model_reasoning_effort= when the command already specifies it", () => {
 		const result = codexCliHarness.buildInvocation({
 			...baseInvocation,
@@ -43,6 +54,17 @@ describe("codex-cli harness: buildInvocation", () => {
 			thinkingLevel: "xhigh",
 		});
 		expect(result.args.filter((token) => token === "-c")).toHaveLength(1);
+	});
+
+	it("recognizes long and equals config spellings without injecting a duplicate effort", () => {
+		for (const argv of [
+			["codex", "exec", "--config", "model_reasoning_effort=low"],
+			["codex", "exec", "--config=model_reasoning_effort=low"],
+			["codex", "exec", "-c=model_reasoning_effort=low"],
+		]) {
+			const result = codexCliHarness.buildInvocation({ ...baseInvocation, argv, thinkingLevel: "high" });
+			expect(result.args).not.toContain("model_reasoning_effort=high");
+		}
 	});
 
 	it("expands $MODEL/$EFFORT/$PROMPT_FILE placeholders in place instead of appending", () => {

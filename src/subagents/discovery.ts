@@ -108,7 +108,7 @@ export interface SubAgentConfig {
 	/** External only: the raw, unvalidated command line. Tokenized by the harness at invocation
 	 *  time (D4), never by discovery — discovery only checks that it is non-empty. */
 	command?: string;
-	/** External only: run `command` through `/bin/sh -lc` instead of argv-direct spawn (D4). */
+	/** exec harness only: run `command` through `/bin/sh -lc` instead of argv-direct spawn (D4). */
 	shell?: boolean;
 	/** External only: env vars appended to (and overriding) the inherited environment (D8.2). */
 	env?: Record<string, string>;
@@ -618,6 +618,11 @@ function parseExternalAgent(
 
 	const shell = parseBooleanField(frontmatter.shell, "shell");
 	if (shell.error) return { warning: `${entryName}: ${shell.error}` };
+	if (shell.value && harness.value !== "exec") {
+		return {
+			warning: `${entryName}: "shell: true" is only supported with harness: exec; structured harnesses must assemble their own argv`,
+		};
+	}
 
 	const env = parseEnvMap(frontmatter.env);
 	if (env.error) return { warning: `${entryName}: ${env.error}` };

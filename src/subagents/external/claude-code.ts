@@ -49,8 +49,6 @@ export const claudeCodeHarness: ExternalHarness = {
 		}
 		const [executable, ...rest] = input.argv;
 		const existing = detectExistingFlags(rest);
-		// D4's addendum table lists no auto-appended effort flag for claude-code — only $EFFORT
-		// expansion for a role author whose wrapper accepts one.
 		const effort = toClaudeEffort(input.thinkingLevel);
 
 		const { argv: expandedRest, used } = expandPlaceholders(rest, {
@@ -63,6 +61,9 @@ export const claudeCodeHarness: ExternalHarness = {
 		const args = [...expandedRest, "-p", "--output-format", "stream-json", "--verbose"];
 		if (!existing.model && input.model && !used.has("$MODEL")) {
 			args.push("--model", input.model);
+		}
+		if (!existing.effort && effort && !used.has("$EFFORT")) {
+			args.push("--effort", effort);
 		}
 		if (!used.has("$SYSTEM_PROMPT_FILE")) {
 			args.push("--append-system-prompt-file", input.systemPromptFile);

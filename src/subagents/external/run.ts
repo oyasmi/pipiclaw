@@ -82,6 +82,11 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	if (!harness) {
 		throw new Error(`Unknown external harness "${input.harness}".`);
 	}
+	if (input.shell && harness.id !== "exec") {
+		throw new Error(
+			`External harness "${harness.id}" cannot use shell mode because it would bypass protocol argv assembly. Use a wrapper script as command, or use harness: exec.`,
+		);
+	}
 
 	// `tool.ts` already creates the artifact dir for a fresh run; `follow_up` (subagent-manage.ts)
 	// mints a new runId/artifactDir on the spot, so this is the one place that must be reliable

@@ -166,12 +166,12 @@ maxWallTimeSec: 3600
 |------|------|--------|------|
 | `name` / `description` | 是 | - | 同上 |
 | `harness` | 是 | - | `claude-code`、`codex-cli` 或 `exec` |
-| `command` | 是 | - | 目标 CLI 的命令行，按 shell 词法分词后直接 argv 调用，**不经过 shell**（除非显式声明 `shell: true`） |
+| `command` | 是 | - | 目标 CLI 的命令行，按 shell 词法分词后直接 argv 调用，**不经过 shell** |
 | `mutates` | 是 | - | `read` 或 `write`，无默认值——这是一次显式声明，决定是否取 workspace 写锁、是否可用于 `purpose=verify` |
 | `model` | 否 | - | 目标 harness 自己的模型字符串（如 `sonnet`），**原样透传，不经过 `models.json` 校验** |
-| `thinkingLevel` | 否 | 同内置词表 | 由 runtime 翻译成各 harness 的实际写法（见下） |
+| `thinkingLevel` | 否 | 同内置词表 | 由结构化 harness 翻译成目标 CLI 的推理参数（见下） |
 | `workload` | 否 | `heavy` | 同内置 |
-| `shell` | 否 | `false` | `true` 时整条 `command` 交给 `/bin/sh -lc` 执行，重新引入引号风险，只在确有需要时使用，会进审计记录 |
+| `shell` | 否 | `false` | 仅 `exec` 可设为 `true`，此时整条 `command` 交给 `/bin/sh -lc`；结构化 harness 使用时会被 discovery 驳回，因为它会绕过协议 argv 组装 |
 | `env` | 否 | 空 | 追加或覆盖继承自 pipiclaw 进程的环境变量 |
 | `maxWallTimeSec` | 否 | `1800` | 外部角色只有这一个执行预算——没有轮数/工具调用次数上限，因为那些概念对外部 CLI 不适用 |
 | `tools` / `maxTurns` / `maxToolCalls` / `bashTimeoutSec` / `cwd` | 驳回 | - | 对外部进程无意义或工作目录不允许写死在角色里 |
@@ -318,7 +318,15 @@ my-gateway/gpt-4.1
 - 多来源综合、代码审查、改动分组和独立验收：通常使用 `medium`。
 - 只有任务确实需要更深推理且预算允许时才使用 `high` 或 `xhigh`。
 
-外部角色使用同一词表，由 runtime 翻译成各 harness 的实际写法（例如 codex-cli 的 `-c model_reasoning_effort=`）；某些档位在某个 harness 上没有更低等价物时会被夹取到最接近的档位。`/subagents show <runId>` 能看到实际生成的 argv，供核实翻译结果。
+外部角色使用同一词表，由结构化 harness 自动翻译：claude-code 追加 `--effort <level>`，codex-cli 追加 `-c model_reasoning_effort=<level>`。角色的 `command` 只负责选择可执行文件、权限模式和用户自定义的固定参数，不应重复编码 model 或 thinkingLevel。某些档位在目标 CLI 没有更低等价物时会夹取到最接近的档位。`/subagents show <runId>` 能看到实际生成的 argv，供核实结果。通用 `exec` harness 不知道目标脚本的参数协议，因此不自动追加 model 或 thinking 参数。
+
+结构化 harness 对角色字段和协议参数的组装如下；这些都由 runtime 负责，不需要写进 `command`：
+
+| harness | `model` | `thinkingLevel` | system prompt / task | 续接与输出协议 |
+|---|---|---|---|---|
+| `claude-code` | `--model <model>` | `--effort <level>` | system prompt 使用 `--append-system-prompt-file`，task 走 stdin | `--session-id` / `--resume`，`-p --output-format stream-json --verbose` |
+| `codex-cli` | `-m <model>` | `-c model_reasoning_effort=<level>` | system prompt 与 task 合并后走 stdin | `resume <thread-id>`，`--json -` |
+| `exec` | 不自动追加 | 不自动追加 | system prompt 与 task 合并后走 stdin | 不支持续接，无结构化终态协议 |
 
 ### `mutates`（写权限声明）
 
@@ -388,7 +396,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 | `system_prompt` | 正文 | - |
 | （新增） | `mutates` | agentmux 没有这个概念，按角色实际行为填：`planner`/`reviewer`/`scout` 类通常是 `read`，`builder`/`documenter` 类通常是 `write` |
 | `cwd` | 不迁移 | 工作目录改为每次委派通过 `workingDirectory` 参数传入 |
-| `defaults.shell` | `shell: true` | 需要显式声明，会进审计 |
+| `defaults.shell` | 仅 `exec` 可迁移为 `shell: true` | claude-code / codex-cli 请改用包装脚本作为 `command`，否则会绕过 harness 的协议参数 |
 | `defaults.env` | `env:` | - |
 
 `harness_type: pi-rpc` 或基于 tmux 的 claude-code 配置不在迁移范围内——discovery 会产生 warning 并在 `/subagents list` 尾部列出，不会静默丢失。tmux/人工 attach 场景仍可以继续用独立的 `agentmux`，两者不冲突；pipiclaw 只是不再依赖它作为默认路径。
@@ -419,22 +427,22 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 **Planner / Builder / Builder-hard**（外部，claude-code）—— 方案收敛与跨多文件的重型实现：
 
-- `harness: claude-code`，`mutates: write`，`workload: heavy`
-- `model` 原样透传（`opus` / `sonnet`），用 `thinkingLevel` 区分强度档位（high / medium / xhigh）
-- `maxWallTimeSec` 给足（3600～5400）——它们是重活，不指望在同步宽限窗口内返回
-- 并行派发必须为每个 run 指定不同的 `workingDirectory`，否则第二个会被工作区写锁拒绝
+- 三者均为 `workload: heavy`。planner 使用 `--permission-mode plan` + `mutates: read`；builder / builder-hard 才使用 `--dangerously-skip-permissions` + `mutates: write`
+- `model` 原样透传（`opus` / `sonnet`）；claude-code harness 自动把 `model` 和 `thinkingLevel` 翻译为 `--model` 与 `--effort`
+- `maxWallTimeSec` 按职责给足（2400～5400）——它们是重活，不指望在同步宽限窗口内返回
+- 两个写角色并行派发时必须使用不同的 `workingDirectory`，否则第二个会被工作区写锁拒绝
 
 **Scout**（外部，codex-cli，只读）—— 单点事实查询：
 
 - `command` 用 `codex exec --sandbox read-only`，让 `mutates: read` 是被 CLI 强制的声明而不只是一句话
 - 只读角色不参与工作区写锁，可以与 builder 并行
 
-**Reviewer / Verifier / Worker / Documenter**（外部，codex-cli，可写）—— 独立挑错、运行取证、通用分析、文档与交付：
+**Reviewer / Verifier / Worker / Documenter**（外部，codex-cli）—— 独立挑错、运行取证、通用分析、文档：
 
-- 四者均声明 `mutates: write`。`reviewer` 使用 `--sandbox workspace-write`，只把评审报告写入工作区；`verifier`、`worker`、`documenter` 使用 `--sandbox danger-full-access --ask-for-approval never`，因为它们的职责可能需要写 `.git/` 或访问工作区外资源。后三个角色没有 CLI 沙箱保护，必须在使用前按你的宿主账号和任务边界重新审阅
-- `reviewer` 会落盘评审报告，`verifier` 会写构建产物、夹具和报告，因此两者都**不能**用于 `purpose=verify`——如实声明为 `write` 的角色会被 runtime 拒绝承担验收。示例目录里没有可承担外部验收的角色；需要外部 `purpose=verify` 时，自行配置一个 `--sandbox read-only` + `mutates: read` 的评审角色
-- `reviewer` 取工作区写锁，不能再与 builder 并发指向同一棵工作树；并行评审请先 `git worktree add`
-- `documenter` 可按任务创建 commit；push 需要单独授权
+- reviewer 使用 `--sandbox read-only` + `mutates: read`；完整输出由 runtime 自动保存到 run 的 `output.md`，无需为评审报告授予写权限。它也可承担外部 `purpose=verify`，但 attestation 强度仍是 `advisory`
+- verifier / worker / documenter 使用 `--sandbox workspace-write` + `mutates: write`，可以生成工作区产物，但模板不允许它们修改 Git 历史或外部系统
+- verifier 因运行测试可能写构建产物，不能承担要求只读的 `purpose=verify`；需要只读终验时用 reviewer，并按风险补充主代理抽查
+- 提交统一交给内置 git-committer；只有用户明确要求时才 push
 
 ## 常见错误（Common Mistakes）
 

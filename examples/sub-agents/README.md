@@ -39,29 +39,30 @@ planner（需求 / 方案 / 验收 / 拆解）
   → builder（代码 + 单元测试）      ← 卡住时换 builder-hard
   → reviewer（实现评审）
   → verifier（实际运行取证）
-  → documenter（文档 / 变更记录 / 交付，随任务顺带提交）
+  → documenter（文档 / 变更记录）
+  → git-committer（用户明确要求时提交）
 ```
 
 reviewer 发现的问题回流给产出角色；verifier 失败回流给 builder，不在验证环节就地修复。闭环之外：worker 承接通用多步分析与产出，scout 只做单点事实查询。
 
 | 角色 | harness | `mutates` | `thinkingLevel` | 用途 |
 |---|---|---|---|---|
-| `planner` | claude-code (opus) | `write` | high | 需求收敛、方案设计、验收定义、任务拆解 |
+| `planner` | claude-code (opus) | `read` | high | 只读需求收敛、方案设计、验收定义、任务拆解 |
 | `builder` | claude-code (sonnet) | `write` | medium | 边界清晰、验收已定义的实现 + 单元测试 |
 | `builder-hard` | claude-code (opus) | `write` | xhigh | builder 已失败、根因难定位或多契约耦合的实现 |
-| `reviewer` | codex-cli | `write` | high | 与产出者分离的方案 / 代码 / 文档挑错，并落盘评审报告 |
-| `verifier` | codex-cli（无沙箱） | `write` | medium | 实际运行系统、复现、冒烟、回归、取证 |
+| `reviewer` | codex-cli（只读沙箱） | `read` | high | 与产出者分离的方案 / 代码 / 文档挑错，也可承担只读 `purpose=verify` |
+| `verifier` | codex-cli（工作区写沙箱） | `write` | medium | 实际运行系统、复现、冒烟、回归、取证 |
 | `scout` | codex-cli（只读沙箱） | `read` | low | 大仓库里的单点事实查询 |
-| `worker` | codex-cli（无沙箱） | `write` | medium | 闭环外的数据对比、指标计算、批量处理、专项报告 |
-| `documenter` | codex-cli（无沙箱） | `write` | medium | 文档、变更记录，随文档任务顺带 commit 与最终交付；独立提交任务用 `git-committer` |
+| `worker` | codex-cli（工作区写沙箱） | `write` | medium | 闭环外的数据对比、指标计算、批量处理、专项报告 |
+| `documenter` | codex-cli（工作区写沙箱） | `write` | medium | 文档、变更记录和迁移说明；提交统一用 `git-committer` |
 
-`scout` 用 `--sandbox read-only` 启动 codex，因此它的 `mutates: read` 是被目标 CLI 真正强制的，而不只是一个声明——这也是它不参与工作区写锁、可以与 builder 并行的原因。
+`planner` 用 Claude 的 `--permission-mode plan`，`reviewer` / `scout` 用 Codex 的 `--sandbox read-only`；三者的 `mutates: read` 都有目标 CLI 的权限模式支撑，而不只是提示词声明。它们不占工作区写锁，但评审仍应针对稳定的 diff / commit，不要一边让 builder 改同一工作树、一边评审移动中的目标。
 
-`reviewer` 需要落盘评审报告，因此用 `--sandbox workspace-write` 并如实声明 `mutates: write`：它的正文约束「只写报告、不改被评对象」，但那是提示词纪律而非沙箱边界。代价有两处——它会取工作区写锁（不能与 builder / verifier 并发指向同一棵工作树，并行评审请先 `git worktree add`），并且不能承担 `purpose=verify`。
+`reviewer` 的完整输出由 runtime 自动保存在 run 的 `output.md`，无需为了“落盘报告”给它工作区写权限。它可以承担 `purpose=verify`；runtime 会追加验收协议并检查工作区 subject 未变化。不过外部 attestation 仍是 `advisory`，而且只读沙箱会阻止产生工作区构建产物的测试，主代理需要按风险补充抽查或另派 verifier。
 
-`purpose=verify` 只接受 `mutates: read` 的外部角色，本目录里没有这样的验收角色（`scout` 的定位是单点查询，不适合终验）。需要外部独立验收时，自行复制一份 `reviewer` 改成 `--sandbox read-only` + `mutates: read` 并去掉报告落盘；外部验收的 attestation 强度是 `advisory`，主代理仍需按风险抽查。
+`verifier`、`worker`、`documenter` 使用 `--sandbox workspace-write`：足以在 checkout 和系统临时目录中生成测试或文档产物，同时不授予任意宿主文件访问。模板不让这些角色操作 Git 历史或外部系统；如任务确实需要网络、额外可写目录或更高权限，请复制角色后按目标 CLI 的能力最小化放宽，而不是把通用模板整体改成无沙箱。
 
-`documenter`、`verifier`、`worker` 用 `--sandbox danger-full-access --ask-for-approval never`，即完全不沙箱化，而不是 `workspace-write`。原因：Codex 的 `workspace-write` 沙箱把 `.git/` 强制设为只读（这是 Codex 自身的安全策略，与 pipiclaw 无关），`git add` 需要创建 `.git/index.lock` 会直接失败，`git commit` 还需要写 `objects`、`refs`、`logs`。三者的正文都把「任务明确授权时执行 git commit / push」列为职责的一部分，`workspace-write` 会让这个职责始终不可用，所以只能退到 `danger-full-access`；这意味着目标 CLI 对文件系统和网络完全不设限，唯一的边界回到正文纪律和派发时给出的授权范围。`reviewer` 正文明确「不改配置、依赖和 git 历史」，从不需要提交，因此仍用 `--sandbox workspace-write`，不做这个放宽。
+`builder` / `builder-hard` 仍用 Claude 的 `--dangerously-skip-permissions`，因为它们需要非交互地完成实现；这是本目录权限最高的默认配置。务必在可信 checkout、最小权限宿主账号中使用。角色文件只声明 `model` 和 `thinkingLevel`，具体的 `--model` / `--effort` 参数由 claude-code harness 自动拼接，不应重复写进 `command`。
 
 ## 使用原则
 
@@ -72,15 +73,15 @@ reviewer 发现的问题回流给产出角色；verifier 失败回流给 builder
 - 内置角色的 `tools`、上下文模式和四个数值预算在模板中显式配置，方便审查和按成本调整。这四个数值只在 frontmatter 里精确设置——调用时主代理只能选 `effort` 的 quick/standard/deep 三档，传了就整组替换这里的数值。
 - `tools` 只是工具白名单，不等同于只读沙箱。拥有 `bash` 的内置角色仍须遵守正文和应用级 `security.json` 的限制。
 - 外部角色**没有** `tools` 字段（写了会被驳回）。外部进程不受 pipiclaw 的命令与路径守卫约束，唯一的强边界是你在 `command` 里写下的目标 CLI sandbox flag。
-- `git-committer` 和 `documenter` 只有在任务明确转述用户要求 push 时才能推送；创建了 commit 不代表自动获得 push 授权。
-- `documenter` 和 `git-committer` 的提交职责按任务性质分：任务同时要求文档/变更记录与提交时派 `documenter`，commit 是文档交付的收尾；与文档无关的独立提交任务派 `git-committer`。
+- 所有 Git 提交统一交给 `git-committer`；它只有在任务明确转述用户要求 push 时才可推送。创建 commit 不会自动获得 push 授权。
 
 Pipiclaw 只加载工作区 `sub-agents/` 中实际存在且有效的 Markdown 文件。空目录是合法配置；没有合适的预定义角色时仍可使用 inline `systemPrompt`。`purpose: verify` 的验收约束由 runtime 执行，不要求配置文件必须名为 `verifier`。
 
 ## 需要按本机调整的地方
 
 - **`command` 用的是裸命令**（`claude` / `codex`），它们必须在 pipiclaw 进程的 `PATH` 上。如果你本机用的是包装脚本（换 base URL、换额度账号、注入环境变量），把 `command` 换成那个脚本即可——pipiclaw 只做 shell 词法分词，不解释命令内容。找不到可执行文件时角色不会消失，而是标为 `unavailable` 并在调用时给出安装提示。
-- **`model` 原样透传给目标 CLI，pipiclaw 不校验**。claude 角色用了 `opus` / `sonnet`；codex 角色**没有写 `model`**，交给 CLI 自身的默认配置——请按你的账号可用模型自行填写。
-- **`--dangerously-skip-permissions`** 是 claude-code 自身的权限跳过标记，pipiclaw 不解释、不校验，原样传给目标 CLI。这样写是因为 pipiclaw 本身不沙箱化外部进程（见 [../../docs/sub-agents.md](../../docs/sub-agents.md) 的「授权与安全边界」一节）。如果不接受这个权衡，改成该 CLI 自己的确认模式或只读 flag，或者只用 `mutates: read` 的角色。
+- **`model` 原样透传给目标 CLI，pipiclaw 不校验**。Claude 角色用了 `opus` / `sonnet`；Codex 角色**没有写 `model`**，交给 CLI 自身的默认配置——请按你的账号可用模型自行填写。
+- **目标 CLI 参数会变化**。模板按当前 Claude Code / Codex CLI 维护；升级 CLI 后先用 `claude --help`、`codex exec --help` 核对命令。Pipiclaw 只分词和追加协议参数，不会替你校验 flag 是否仍受支持。
+- **`--dangerously-skip-permissions`** 是 Claude Code 自身的权限跳过标记，Pipiclaw 原样传入。若不接受这个边界，只使用只读角色，或为写角色换成你已验证可在非交互模式工作的更严格权限配置。
 - **`maxWallTimeSec` 是墙钟上限**，超时会杀进程组但仍解析并回传已产生的输出。按仓库规模和任务量级调整，不要把示例值当成固定答案。
 - 第三种 harness `exec`（任意脚本，无协议终态）本目录不提供示例：它没有完成事件，`usageKnown` / `costKnown` 恒为 false，且不能承担 `purpose=verify`。需要接入其他 CLI 时再参考 [../../docs/sub-agents.md](../../docs/sub-agents.md)。

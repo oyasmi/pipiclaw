@@ -54,6 +54,34 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		configureSubAgentRuntime({});
 	});
 
+	it("rejects shell mode for structured harnesses before spawning", async () => {
+		const workspaceDir = createTempWorkspace();
+		const { spawnFn, spawnFnForInput } = makeFakeSpawn();
+
+		await expect(
+			launchExternalRun({
+				runId: "run-shell-structured",
+				channelId: "dm_shell_structured",
+				label: "invalid shell run",
+				agent: "builder",
+				source: "predefined",
+				harness: "claude-code",
+				command: "claude",
+				shell: true,
+				maxWallTimeSec: 60,
+				systemPrompt: "Build things.",
+				task: "Build the thing.",
+				workingDirectory: workspaceDir,
+				artifactDir: join(workspaceDir, "artifacts"),
+				purpose: "work",
+				workspaceDir,
+				securityConfig: DEFAULT_SECURITY_CONFIG,
+				spawnFn: spawnFnForInput,
+			}),
+		).rejects.toThrow("cannot use shell mode because it would bypass protocol argv assembly");
+		expect(spawnFn).not.toHaveBeenCalled();
+	});
+
 	it("spawns codex-cli, persists the pid, and settles completed once turn.completed arrives", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_ext");

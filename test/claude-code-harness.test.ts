@@ -44,6 +44,18 @@ describe("claude-code harness: buildInvocation", () => {
 		expect(result.args).toEqual(expect.arrayContaining(["--model", "sonnet"]));
 	});
 
+	it("translates thinkingLevel and injects --effort when the command does not specify it", () => {
+		const result = claudeCodeHarness.buildInvocation({ ...baseInvocation, thinkingLevel: "high" });
+		expect(result.args).toEqual(expect.arrayContaining(["--effort", "high"]));
+	});
+
+	it("clamps unsupported low-end thinking levels to Claude's lowest effort", () => {
+		for (const thinkingLevel of ["off", "minimal"] as const) {
+			const result = claudeCodeHarness.buildInvocation({ ...baseInvocation, thinkingLevel });
+			expect(result.args).toEqual(expect.arrayContaining(["--effort", "low"]));
+		}
+	});
+
 	it("does not inject --model when the command already specifies -m or --model", () => {
 		const result = claudeCodeHarness.buildInvocation({
 			...baseInvocation,
@@ -53,6 +65,17 @@ describe("claude-code harness: buildInvocation", () => {
 		expect(result.args.filter((token) => token === "--model")).toHaveLength(1);
 		expect(result.args).toContain("opus");
 		expect(result.args).not.toContain("sonnet");
+	});
+
+	it("does not inject --effort when the command already specifies it", () => {
+		for (const argv of [
+			["claude", "--effort", "low"],
+			["claude", "--effort=low"],
+		]) {
+			const result = claudeCodeHarness.buildInvocation({ ...baseInvocation, argv, thinkingLevel: "xhigh" });
+			expect(result.args.filter((token) => token === "--effort")).toHaveLength(argv.includes("--effort") ? 1 : 0);
+			expect(result.args).not.toContain("xhigh");
+		}
 	});
 
 	it("does not append --append-system-prompt-file when $SYSTEM_PROMPT_FILE is already used in the command", () => {

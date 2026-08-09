@@ -119,7 +119,8 @@ export interface ExistingFlags {
 
 const MODEL_FLAG_PATTERN = /^(--model|-m)$/;
 const EFFORT_FLAG_PATTERN = /^(--effort|--thinking)$/;
-const CODEX_EFFORT_FLAG_PATTERN = /^-c$/;
+const CODEX_CONFIG_FLAG_PATTERN = /^(-c|--config)$/;
+const CODEX_MODEL_VALUE_PREFIX = "model=";
 const CODEX_EFFORT_VALUE_PREFIX = "model_reasoning_effort=";
 
 /** Which flags the user's own `command` already spells out, so a harness never injects a duplicate (D4). */
@@ -130,8 +131,18 @@ export function detectExistingFlags(argv: string[]): ExistingFlags {
 		const token = argv[i];
 		if (MODEL_FLAG_PATTERN.test(token)) model = true;
 		if (EFFORT_FLAG_PATTERN.test(token)) effort = true;
-		if (CODEX_EFFORT_FLAG_PATTERN.test(token) && argv[i + 1]?.startsWith(CODEX_EFFORT_VALUE_PREFIX)) effort = true;
+		if (CODEX_CONFIG_FLAG_PATTERN.test(token)) {
+			const value = argv[i + 1];
+			if (value?.startsWith(CODEX_MODEL_VALUE_PREFIX)) model = true;
+			if (value?.startsWith(CODEX_EFFORT_VALUE_PREFIX)) effort = true;
+		}
 		if (token.startsWith("--model=") || token.startsWith("-m=")) model = true;
+		if (token.startsWith("--effort=") || token.startsWith("--thinking=")) effort = true;
+		if (token.startsWith("-c=") || token.startsWith("--config=")) {
+			const value = token.slice(token.indexOf("=") + 1);
+			if (value.startsWith(CODEX_MODEL_VALUE_PREFIX)) model = true;
+			if (value.startsWith(CODEX_EFFORT_VALUE_PREFIX)) effort = true;
+		}
 	}
 	return { model, effort };
 }

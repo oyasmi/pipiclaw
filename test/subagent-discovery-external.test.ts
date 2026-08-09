@@ -156,6 +156,48 @@ Body.
 		);
 	});
 
+	it("rejects shell mode for structured harnesses because it would bypass protocol argv assembly", () => {
+		const workspaceDir = createTempWorkspace();
+		writeRole(
+			workspaceDir,
+			"shell-claude.md",
+			`---
+name: shell-claude
+description: invalid structured shell role
+runtime: external
+harness: claude-code
+command: claude
+shell: true
+mutates: read
+---
+
+Body.
+`,
+		);
+		writeRole(
+			workspaceDir,
+			"shell-exec.md",
+			`---
+name: shell-exec
+description: valid generic shell role
+runtime: external
+harness: exec
+command: printf done
+shell: true
+mutates: read
+---
+
+Body.
+`,
+		);
+
+		const result = discover(workspaceDir);
+		expect(result.agents.map((agent) => agent.name)).toEqual(["shell-exec"]);
+		expect(result.warnings).toContain(
+			'shell-claude.md: "shell: true" is only supported with harness: exec; structured harnesses must assemble their own argv',
+		);
+	});
+
 	it("rejects cwd in frontmatter for both runtimes — working directory is a per-call decision", () => {
 		const workspaceDir = createTempWorkspace();
 		writeRole(
