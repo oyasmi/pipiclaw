@@ -57,19 +57,6 @@ describe("memory probation expiry (spec 037, D8)", () => {
 		expect(await readChannelMemory(channelDir)).toContain("Durable fact with no expiry");
 	});
 
-	it("also evicts an entry whose expiresAt was reached, even without probationUntil", async () => {
-		const channelDir = makeChannel();
-		setupChannelFiles(channelDir, { memory: "# Channel Memory\n" });
-		await applyChannelMemoryOps(channelDir, [
-			{ op: "add", content: "Temporary access grant", metadata: { expiresAt: "2026-01-01T00:00:00.000Z" } },
-		]);
-
-		const evicted = await expireMemoryEntries(channelDir, new Date("2026-02-01T00:00:00.000Z"));
-
-		expect(evicted).toBe(1);
-		expect(await readChannelMemory(channelDir)).not.toContain("Temporary access grant");
-	});
-
 	it("probationDeadline is MEMORY_PROBATION_DAYS in the future", () => {
 		const now = new Date("2026-01-01T00:00:00.000Z");
 		const deadline = new Date(probationDeadline(now));

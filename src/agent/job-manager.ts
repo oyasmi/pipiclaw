@@ -10,6 +10,7 @@ import { createSerialQueue } from "../shared/serial-queue.js";
 import { shellEscape } from "../shared/shell-escape.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
+import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
 
 /**
  * Per-channel manager for background bash jobs. A long command that ran synchronously would hold
@@ -518,18 +519,10 @@ export class ChannelJobManager {
 		return this.wakeQueue.run(id, async () => {
 			const record = this.jobs.get(id);
 			const expected = `job:${this.channelId}:${id}:done`;
-			if (
-				!record ||
-				record.status === "running" ||
-				record.contract.taskId !== taskId ||
-				dispatchId !== expected ||
-				record.wakeConsumedAt ||
-				(record.wakeClaimDispatchId && record.wakeClaimDispatchId !== dispatchId)
-			) {
-				return false;
-			}
+			if (!record) return false;
+			const eligible = record.status !== "running" && record.contract.taskId === taskId && dispatchId === expected;
 			const previousClaim = record.wakeClaimDispatchId;
-			record.wakeClaimDispatchId = dispatchId;
+			if (!beginWakeClaim(record, eligible, dispatchId)) return false;
 			try {
 				await this.persist(record, true);
 			} catch (error) {
@@ -543,8 +536,7 @@ export class ChannelJobManager {
 	async finishWakeConsumption(id: string, dispatchId: string): Promise<void> {
 		await this.wakeQueue.run(id, async () => {
 			const record = this.jobs.get(id);
-			if (!record || record.wakeClaimDispatchId !== dispatchId || record.wakeConsumedAt) return;
-			record.wakeConsumedAt = Date.now();
+			if (!record || !finishWakeClaim(record, dispatchId)) return;
 			try {
 				await this.persist(record, true);
 			} catch (error) {

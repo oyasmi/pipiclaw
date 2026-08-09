@@ -1,4 +1,4 @@
-import type { BootstrapIO } from "../runtime/bootstrap.js";
+import type { BootstrapIO } from "../runtime/app-home.js";
 import type { MediaSender, MediaSendResult, OutboundMedia } from "../runtime/channel-context.js";
 
 /**

@@ -19,21 +19,14 @@ function isPast(value: string | undefined, nowMs: number): boolean {
 	return ms !== undefined && ms <= nowMs;
 }
 
-/**
- * Active entries whose probation lapsed, or whose (otherwise unconsumed) `expiresAt` was
- * reached. Both are "this entry's time is up" — they share one eviction path even though their
- * semantics differ: `probationUntil` is cancelled by use, `expiresAt` is unconditional.
- */
+/** Active entries whose probation lapsed. */
 export function collectExpiredEntryIds(
 	metadata: Awaited<ReturnType<typeof readMemoryMetadata>>,
 	now: Date = new Date(),
 ): string[] {
 	const nowMs = now.getTime();
 	return Object.values(metadata.entries)
-		.filter(
-			(entry) =>
-				entry.status === "active" && (isPast(entry.probationUntil, nowMs) || isPast(entry.expiresAt, nowMs)),
-		)
+		.filter((entry) => entry.status === "active" && isPast(entry.probationUntil, nowMs))
 		.map((entry) => entry.id);
 }
 

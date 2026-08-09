@@ -147,7 +147,6 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 					metadata: {
 						kind: normalizeMemoryKind(kind),
 						sourceType: "user",
-						trust: "explicit",
 						probationUntil: null,
 					},
 				},

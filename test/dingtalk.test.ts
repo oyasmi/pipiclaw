@@ -97,12 +97,7 @@ function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandle
 		isRunning: vi.fn(() => false),
 		handleEvent: vi.fn(async () => {}),
 		handleStop: vi.fn(async () => ({})),
-		handleEventsCommand: vi.fn(async () => {}),
-		handleTasksCommand: vi.fn(async () => {}),
-		handleStatusCommand: vi.fn(async () => {}),
-		handleUsageCommand: vi.fn(async () => {}),
-		handleContextCommand: vi.fn(async () => {}),
-		handleSubagentsCommand: vi.fn(async () => {}),
+		runRuntimeCommand: vi.fn(async () => ""),
 		handleBusyMessage: vi.fn(async () => ({ kind: "handled" as const })),
 		...overrides,
 	};
@@ -390,9 +385,9 @@ describe("dingtalk", () => {
 			conversationId: "conv_1",
 			conversationType: "1",
 		});
-		expect(handler.handleEventsCommand).toHaveBeenCalledWith(
+		expect(handler.runRuntimeCommand).toHaveBeenCalledWith(
 			expect.objectContaining({ channelId: "dm_staff_1" }),
-			bot,
+			"events",
 			"list",
 		);
 
@@ -403,9 +398,10 @@ describe("dingtalk", () => {
 			conversationId: "conv_1",
 			conversationType: "1",
 		});
-		expect(handler.handleStatusCommand).toHaveBeenCalledWith(
+		expect(handler.runRuntimeCommand).toHaveBeenCalledWith(
 			expect.objectContaining({ channelId: "dm_staff_1" }),
-			bot,
+			"status",
+			"",
 		);
 
 		await privateApi.onStreamMessage({
@@ -439,9 +435,9 @@ describe("dingtalk", () => {
 		});
 
 		// Read-only accounting: no reason to make the user wait for the turn to finish.
-		expect(handler.handleContextCommand).toHaveBeenCalledWith(
+		expect(handler.runRuntimeCommand).toHaveBeenCalledWith(
 			expect.objectContaining({ text: "/context detail" }),
-			bot,
+			"context",
 			"detail",
 		);
 	});

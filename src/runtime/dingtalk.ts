@@ -11,7 +11,12 @@ import axios from "axios";
 import { DWClient, type DWClientDownStream, TOPIC_ROBOT } from "dingtalk-stream";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { formatBusyCommandList, parseBuiltInCommand, renderBuiltInHelp } from "../agent/commands.js";
+import {
+	formatBusyCommandList,
+	parseBuiltInCommand,
+	type RuntimeCommandName,
+	renderBuiltInHelp,
+} from "../agent/commands.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
@@ -160,12 +165,12 @@ export interface DingTalkHandler {
 	reserveEvent?(event: DingTalkEvent): void;
 	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
 	handleStop(channelId: string, bot: DingTalkBot): Promise<StopOutcome>;
-	handleEventsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
-	handleTasksCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
-	handleStatusCommand(event: DingTalkEvent, bot: DingTalkBot): Promise<void>;
-	handleUsageCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
-	handleContextCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
-	handleSubagentsCommand(event: DingTalkEvent, bot: DingTalkBot, args: string): Promise<void>;
+	/**
+	 * Render one of the stateless report commands (events/tasks/status/usage/context/subagents) to
+	 * text. Single dispatch point shared by the busy-turn switch below and bootstrap's idle-turn
+	 * switch — both used to hand-copy the same six-case table.
+	 */
+	runRuntimeCommand(event: DingTalkEvent, name: RuntimeCommandName, args: string): Promise<string>;
 	handleBusyMessage(
 		event: DingTalkEvent,
 		bot: DingTalkBot,
@@ -1394,23 +1399,19 @@ export class DingTalkBot implements MediaSender {
 						return;
 					}
 					case "events":
-						await this.handler.handleEventsCommand(event, this, builtInCommand.args);
-						return;
 					case "tasks":
-						await this.handler.handleTasksCommand(event, this, builtInCommand.args);
-						return;
 					case "status":
-						await this.handler.handleStatusCommand(event, this);
-						return;
 					case "usage":
-						await this.handler.handleUsageCommand(event, this, builtInCommand.args);
-						return;
 					case "context":
-						await this.handler.handleContextCommand(event, this, builtInCommand.args);
+					case "subagents": {
+						const response = await this.handler.runRuntimeCommand(
+							event,
+							builtInCommand.name,
+							builtInCommand.args,
+						);
+						await this.sendPlain(channelId, response);
 						return;
-					case "subagents":
-						await this.handler.handleSubagentsCommand(event, this, builtInCommand.args);
-						return;
+					}
 				}
 			}
 

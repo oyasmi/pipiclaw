@@ -7,19 +7,11 @@ import { createSerialQueue } from "../shared/serial-queue.js";
 
 export type MemoryEntryKind = "fact" | "preference" | "decision" | "constraint" | "open-loop" | "lesson";
 export type MemorySourceType = "user" | "agent" | "repo" | "tool" | "web" | "legacy";
-export type MemoryTrust = "explicit" | "verified" | "inferred" | "untrusted";
-export type MemorySensitivity = "normal" | "personal" | "secret";
 export type MemoryEntryStatus = "active" | "superseded" | "invalidated" | "forgotten";
 
 export interface MemoryWriteMetadataInput {
 	kind?: MemoryEntryKind;
-	subjectId?: string;
-	ownerId?: string;
 	sourceType?: MemorySourceType;
-	trust?: MemoryTrust;
-	validFrom?: string;
-	expiresAt?: string;
-	sensitivity?: MemorySensitivity;
 	sourceCorrelationId?: string;
 	/**
 	 * Probationary write deadline (spec 037, D6/D7): `undefined` leaves any existing value alone,
@@ -33,19 +25,12 @@ export interface MemoryWriteMetadataInput {
 export interface MemoryEntryMetadata {
 	id: string;
 	kind: MemoryEntryKind;
-	scope: "channel";
-	subjectId?: string;
-	ownerId?: string;
 	sourceEntryIds: string[];
 	sourceCorrelationIds: string[];
 	sourceType: MemorySourceType;
-	trust: MemoryTrust;
 	createdAt: string;
 	updatedAt: string;
-	validFrom?: string;
-	expiresAt?: string;
 	status: MemoryEntryStatus;
-	sensitivity: MemorySensitivity;
 	sectionHeading: string;
 	contentHash: string;
 	recallCount: number;
@@ -133,9 +118,6 @@ export async function syncMemoryMetadata(
 			entries[entry.id] = {
 				id: entry.id,
 				kind: hint?.kind ?? previous?.kind ?? inferKind(entry.sectionHeading),
-				scope: "channel",
-				subjectId: hint?.subjectId ?? previous?.subjectId,
-				ownerId: hint?.ownerId ?? previous?.ownerId,
 				sourceEntryIds: Array.from(
 					new Set([...(previous?.sourceEntryIds ?? []), ...(update?.sourceEntryIds ?? [])]),
 				),
@@ -146,13 +128,9 @@ export async function syncMemoryMetadata(
 					]),
 				),
 				sourceType: hint?.sourceType ?? previous?.sourceType ?? "legacy",
-				trust: hint?.trust ?? previous?.trust ?? "inferred",
 				createdAt: previous?.createdAt ?? entry.timestamp ?? timestamp,
 				updatedAt: update || previous?.contentHash !== contentHash(entry.content) ? timestamp : previous.updatedAt,
-				validFrom: hint?.validFrom ?? previous?.validFrom,
-				expiresAt: hint?.expiresAt ?? previous?.expiresAt,
 				status: "active",
-				sensitivity: hint?.sensitivity ?? previous?.sensitivity ?? "normal",
 				sectionHeading: entry.sectionHeading,
 				contentHash: contentHash(entry.content),
 				recallCount: previous?.recallCount ?? 0,

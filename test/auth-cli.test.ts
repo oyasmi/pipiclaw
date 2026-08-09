@@ -3,8 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseAuthArgs, runAuth } from "../src/models/auth-cli.js";
-import type { BootstrapPaths } from "../src/runtime/bootstrap.js";
-import { BootstrapExitError } from "../src/runtime/bootstrap.js";
+import { BootstrapExitError, type BootstrapPaths } from "../src/runtime/app-home.js";
 
 describe("parseAuthArgs", () => {
 	it("rejects a missing subcommand", () => {

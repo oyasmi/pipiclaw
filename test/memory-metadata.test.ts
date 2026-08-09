@@ -8,7 +8,7 @@ import { setupChannelFiles, useTempDirs } from "./helpers/fixtures.js";
 const makeChannel = useTempDirs("pipiclaw-memory-metadata-");
 
 describe("memory entry metadata", () => {
-	it("persists source, trust, time, status, sensitivity, and recall statistics", async () => {
+	it("persists source, time, status, and recall statistics", async () => {
 		const channelDir = makeChannel();
 		setupChannelFiles(channelDir, { memory: "# Channel Memory\n" });
 		await applyChannelMemoryOps(
@@ -20,10 +20,7 @@ describe("memory entry metadata", () => {
 					sourceEntryIds: ["session-entry-42"],
 					metadata: {
 						kind: "preference",
-						subjectId: "user-7",
 						sourceType: "user",
-						trust: "explicit",
-						sensitivity: "personal",
 						sourceCorrelationId: "window-42",
 					},
 				},
@@ -50,15 +47,11 @@ describe("memory entry metadata", () => {
 		expect(metadata).toMatchObject({
 			id: entry.id,
 			kind: "preference",
-			scope: "channel",
-			subjectId: "user-7",
 			sourceEntryIds: ["session-entry-42"],
 			sourceCorrelationIds: ["window-42"],
 			sourceType: "user",
-			trust: "explicit",
 			createdAt: "2026-07-01T00:00:00.000Z",
 			status: "active",
-			sensitivity: "personal",
 			recallCount: 2,
 			lastRecalledAt: "2026-07-03T00:00:00.000Z",
 			recallByDay: { "2026-07-02": 1, "2026-07-03": 1 },

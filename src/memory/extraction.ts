@@ -175,7 +175,6 @@ export function toMemoryOp(
 	const metadata = {
 		kind: candidate.kind,
 		sourceType: "agent" as const,
-		trust: "inferred" as const,
 		sourceCorrelationId: provenance.correlationId,
 		probationUntil: tier === "probationary" ? probationDeadline() : null,
 	};

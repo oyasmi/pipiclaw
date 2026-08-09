@@ -48,7 +48,7 @@ export interface StructuralMaintenanceMaterial {
 	historyFoldingNeeded: boolean;
 	hasMemoryContent: boolean;
 	hasHistoryContent: boolean;
-	/** Active entries whose probation lapsed or `expiresAt` was reached (spec 037, D8). */
+	/** Active entries whose probation lapsed (spec 037, D8). */
 	expiredEntryCount: number;
 }
 

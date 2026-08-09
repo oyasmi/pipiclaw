@@ -13,12 +13,6 @@ const bundledPlaybooksDir = fileURLToPath(new URL("./playbooks", import.meta.url
 const checkoutPlaybooksDir = fileURLToPath(new URL("../src/playbooks", import.meta.url));
 /** Prefer live source docs in a checkout; installed packages fall back to dist/playbooks. */
 export const PLAYBOOKS_DIR = existsSync(checkoutPlaybooksDir) ? checkoutPlaybooksDir : bundledPlaybooksDir;
-/**
- * Legacy default app home used before the `~/.pipiclaw` default (introduced in
- * 0.8.x). Kept only so bootstrap can migrate an existing install to the new
- * default. FIXME(0.9.0): drop this together with the migration in bootstrap.ts.
- */
-export const LEGACY_APP_HOME_DIR = join(homedir(), ".pi", APP_NAME);
 /** The built-in default app home, independent of any `PIPICLAW_HOME` override. */
 export const DEFAULT_APP_HOME_DIR = join(homedir(), `.${APP_NAME}`);
 export const APP_HOME_DIR = process.env.PIPICLAW_HOME ?? DEFAULT_APP_HOME_DIR;

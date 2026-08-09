@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,18 +7,14 @@ import {
 	BootstrapExitError,
 	type BootstrapIO,
 	type BootstrapPaths,
-	bootstrap,
 	bootstrapAppHome,
-	isTrustedInternalWake,
-	isVerifiedDelegationWake,
-	isVerifiedJobWake,
 	loadConfig,
-	migrateLegacyAppHome,
 	parseArgs,
-	prepareAppServices,
-} from "../src/runtime/bootstrap.js";
+} from "../src/runtime/app-home.js";
+import { bootstrap, prepareAppServices } from "../src/runtime/bootstrap.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { ChannelStore } from "../src/runtime/store.js";
+import { isTrustedInternalWake, isVerifiedDelegationWake, isVerifiedJobWake } from "../src/runtime/task-wake.js";
 import type { RunRecord } from "../src/subagents/runs.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -72,13 +68,14 @@ describe("parseArgs", () => {
 		expect(io.error).toHaveBeenCalledWith("Unknown option: --bogus");
 	});
 
-	it("lists both commands in --help", () => {
+	it("lists all commands in --help", () => {
 		const paths = createBootstrapPaths();
 		const io = createIO();
 		expect(() => parseArgs(["node", "pipiclaw", "--help"], paths, io)).toThrow(BootstrapExitError);
 		const help = io.log.mock.calls.flat().join("\n");
 		expect(help).toContain("run");
 		expect(help).toContain("tui");
+		expect(help).toContain("auth");
 	});
 });
 
@@ -184,33 +181,6 @@ describe("bootstrap", () => {
 		expect(io.error).toHaveBeenCalledWith(
 			'  - Invalid `busyMessageDefault`: expected "steer", "followUp", or "followup".',
 		);
-	});
-
-	// FIXME(0.9.0): remove with the legacy `~/.pi/pipiclaw` -> `~/.pipiclaw` migration.
-	it("moves a legacy app home to the new default when the target is missing", () => {
-		const legacyDir = createTempDir();
-		const targetDir = join(createTempDir(), "new-home");
-		writeFileSync(join(legacyDir, "channel.json"), '{"clientId":"legacy"}');
-		const io = createIO();
-
-		expect(migrateLegacyAppHome(targetDir, legacyDir, io)).toBe(true);
-		expect(existsSync(legacyDir)).toBe(false);
-		expect(readFileSync(join(targetDir, "channel.json"), "utf-8")).toContain("legacy");
-		expect(io.log).toHaveBeenCalledWith(expect.stringContaining("Migrated existing data"));
-	});
-
-	it("does not migrate when the new home already exists or no legacy home is present", () => {
-		const existingTarget = createTempDir();
-		const legacyDir = createTempDir();
-		writeFileSync(join(legacyDir, "channel.json"), "{}");
-		// Target already exists -> no move, legacy left untouched.
-		expect(migrateLegacyAppHome(existingTarget, legacyDir, createIO())).toBe(false);
-		expect(existsSync(join(legacyDir, "channel.json"))).toBe(true);
-
-		// No legacy dir -> nothing to move.
-		const freshTarget = join(createTempDir(), "fresh");
-		mkdirSync(freshTarget, { recursive: true });
-		expect(migrateLegacyAppHome(join(freshTarget, "sub"), join(freshTarget, "absent"), createIO())).toBe(false);
 	});
 
 	it("bootstraps without starting services when requested", async () => {

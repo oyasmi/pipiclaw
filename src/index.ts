@@ -21,14 +21,8 @@ export {
 	TOOLS_CONFIG_PATH,
 	WORKSPACE_DIR,
 } from "./paths.js";
-export {
-	type AppContext,
-	type BootstrapOptions,
-	type BootstrapPaths,
-	type BootstrapResult,
-	bootstrap,
-	isBootstrapExitError,
-} from "./runtime/bootstrap.js";
+export { type BootstrapPaths, type BootstrapResult, isBootstrapExitError } from "./runtime/app-home.js";
+export { type AppContext, type BootstrapOptions, bootstrap } from "./runtime/bootstrap.js";
 export type { ChannelContext, FinalDelivery, ProgressStyle } from "./runtime/channel-context.js";
 export {
 	DingTalkBot,

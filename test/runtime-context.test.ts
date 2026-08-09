@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type BootstrapPaths, bootstrapAppHome, createRuntimeContext } from "../src/runtime/bootstrap.js";
+import { type BootstrapPaths, bootstrapAppHome } from "../src/runtime/app-home.js";
+import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import type { DingTalkBot, DingTalkConfig, DingTalkHandler } from "../src/runtime/dingtalk.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 

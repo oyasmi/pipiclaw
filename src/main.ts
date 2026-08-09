@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { runAuth } from "./models/auth-cli.js";
-import { bootstrap, isBootstrapExitError } from "./runtime/bootstrap.js";
+import { isBootstrapExitError } from "./runtime/app-home.js";
+import { bootstrap } from "./runtime/bootstrap.js";
 import { runTui } from "./tui/cli.js";
 
 function handleError(error: unknown): never {

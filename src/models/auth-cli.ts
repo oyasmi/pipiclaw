@@ -15,10 +15,10 @@ import {
 	type BootstrapPaths,
 	bootstrapAppHome,
 	DEFAULT_BOOTSTRAP_PATHS,
-	prepareAppServices,
 	printBootstrapSummary,
 	readCliVersion,
-} from "../runtime/bootstrap.js";
+} from "../runtime/app-home.js";
+import { prepareAppServices } from "../runtime/bootstrap.js";
 import { ReadlineLoginUi } from "./login-ui.js";
 import {
 	LoginCancelledError,
@@ -387,7 +387,7 @@ export async function runAuth(
 		throw new BootstrapExitError(1);
 	}
 
-	printBootstrapSummary(bootstrapAppHome(paths, io), io, paths);
+	printBootstrapSummary(bootstrapAppHome(paths), io, paths);
 	prepareAppServices(paths);
 	const runtime = await createModelRuntime({
 		authConfigPath: paths.authConfigPath,

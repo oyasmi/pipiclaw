@@ -13,6 +13,13 @@ export type BuiltInCommandName =
 /** The four transport commands handled by `ChannelRunner.handleBuiltinCommand`. */
 export type RunnerBuiltInCommandName = "help" | "stop" | "steer" | "followup" | "context";
 
+/**
+ * The commands with no mid-turn state to touch: each renders a text report from disk/in-memory
+ * state and is dispatched the same way whether a turn is running or the channel is idle. Derived
+ * from `BuiltInCommandName` rather than hand-listed, so it can never drift from the source table.
+ */
+export type RuntimeCommandName = Exclude<BuiltInCommandName, "help" | "steer" | "followup" | "stop">;
+
 export interface BuiltInCommand {
 	name: BuiltInCommandName;
 	args: string;

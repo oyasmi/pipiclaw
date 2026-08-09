@@ -10,6 +10,7 @@ import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
+import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { classifyExternalOutcome } from "./external/harness.js";
 import { getExternalHarness } from "./external/registry.js";
@@ -416,18 +417,11 @@ export class SubAgentRunManager {
 	async beginWakeConsumption(runId: string, taskId: string, dispatchId: string): Promise<boolean> {
 		return this.queue.run(runId, async () => {
 			const record = this.runs.get(runId);
-			const expected = `subagent:${record?.channelId}:${runId}:done`;
-			if (
-				!record?.settledAt ||
-				record.taskId !== taskId ||
-				dispatchId !== expected ||
-				record.wakeConsumedAt ||
-				(record.wakeClaimDispatchId && record.wakeClaimDispatchId !== dispatchId)
-			) {
-				return false;
-			}
+			if (!record) return false;
+			const expected = `subagent:${record.channelId}:${runId}:done`;
+			const eligible = record.settledAt !== undefined && record.taskId === taskId && dispatchId === expected;
 			const previousClaim = record.wakeClaimDispatchId;
-			record.wakeClaimDispatchId = dispatchId;
+			if (!beginWakeClaim(record, eligible, dispatchId)) return false;
 			try {
 				await this.persist(record, true);
 			} catch (error) {
@@ -441,8 +435,7 @@ export class SubAgentRunManager {
 	async finishWakeConsumption(runId: string, dispatchId: string): Promise<void> {
 		await this.queue.run(runId, async () => {
 			const record = this.runs.get(runId);
-			if (!record || record.wakeClaimDispatchId !== dispatchId || record.wakeConsumedAt) return;
-			record.wakeConsumedAt = Date.now();
+			if (!record || !finishWakeClaim(record, dispatchId)) return;
 			try {
 				await this.persist(record, true);
 			} catch (error) {

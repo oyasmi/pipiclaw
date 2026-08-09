@@ -532,154 +532,19 @@ export class ChannelRunner implements AgentRunner {
 				fields: { error: this.runState.errorMessage },
 			});
 		} finally {
-			this.setPhase(ownTurn, "finishing");
-			// Debug dump (PIPICLAW_DEBUG=1). Written after the run so `systemPrompt` is the
-			// string the provider actually received — base sections, pi's tail, and the boundary
-			// footer the prompt extension appends at before_agent_start.
-			if (process.env.PIPICLAW_DEBUG) {
-				const debugContext = {
-					systemPrompt: this.lastFinalPrompt ?? this.agent.state.systemPrompt,
-					promptManifest: this.lastPromptBuild
-						? buildPromptManifest(this.lastPromptBuild, this.lastFinalPrompt)
-						: undefined,
-					messages: this.session.messages,
-					durableMemoryBootstrap: durableMemoryBootstrapText || undefined,
-					taskDigest: taskDigestText || undefined,
-					recalledContext: recalledContextText || undefined,
-					newUserMessage: promptText,
-				};
-				await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
-					(error: unknown) =>
-						log.logWarning(`[${this.channelId}] Failed to write last_prompt.json`, errorMessage(error)),
-				);
-			}
-			if (!promptSubmitted) {
-				const discarded = this.session.clearQueue();
-				const discardedCount = discarded.steering.length + discarded.followUp.length;
-				if (discardedCount > 0) {
-					log.logWarning(
-						`[${this.channelId}] Discarded ${discardedCount} queued busy message(s) after run setup failed`,
-					);
-				}
-			}
-			await runQueue.drain();
-			const finalOutcome = this.runState.finalOutcome;
-			const finalOutcomeText = getFinalOutcomeText(finalOutcome);
-
-			try {
-				if (
-					this.runState.stopReason === "error" &&
-					this.runState.errorMessage &&
-					!this.runState.finalResponseDelivered
-				) {
-					try {
-						const baseErrorSummary =
-							this.runState.errorMessage.length > 240
-								? `${this.runState.errorMessage.slice(0, 237)}...`
-								: this.runState.errorMessage;
-						const compactionSummary =
-							this.runState.lastCompactionError &&
-							this.runState.lastCompactionError !== this.runState.errorMessage
-								? this.runState.lastCompactionError.length > 240
-									? `${this.runState.lastCompactionError.slice(0, 237)}...`
-									: this.runState.lastCompactionError
-								: undefined;
-						const detailLines = [`\`${baseErrorSummary}\``];
-						if (compactionSummary) {
-							detailLines.push(`恢复尝试：\`${compactionSummary}\``);
-						}
-						if (fallbackAttempted && fallbackTargetRef) {
-							detailLines.push(`已切换备用模型 \`${fallbackTargetRef}\` 重试，仍失败。`);
-						}
-						await ctx.replaceMessage(`_抱歉，出错了。_\n\n${detailLines.join("\n\n")}`);
-					} catch (err) {
-						const errMsg = errorMessage(err);
-						log.logWarning("Failed to post error message", errMsg);
-					}
-				} else if (isSilentOutcome(finalOutcome)) {
-					try {
-						await ctx.deleteMessage();
-						log.logInfo("Silent response - deleted message");
-					} catch (err) {
-						const errMsg = errorMessage(err);
-						log.logWarning("Failed to delete message for silent response", errMsg);
-					}
-				} else if (this.runState.stopReason === "aborted" && !this.runState.finalResponseDelivered) {
-					try {
-						await ctx.deleteMessage();
-						log.logInfo("Aborted response - discarded active delivery state");
-					} catch (err) {
-						const errMsg = errorMessage(err);
-						log.logWarning("Failed to discard active delivery state after abort", errMsg);
-					}
-				} else if (finalOutcomeText && !this.runState.finalResponseDelivered) {
-					try {
-						await ctx.replaceMessage(finalOutcomeText);
-					} catch (err) {
-						const errMsg = errorMessage(err);
-						log.logWarning("Failed to replace message with final text", errMsg);
-					}
-				}
-
-				await ctx.flush();
-			} finally {
-				await ctx.close();
-			}
-
-			// Log usage summary. Gated on tokens as well as cost: a local (or pricing-less) model
-			// bills nothing, and skipping it here left both the log and the ledger empty.
-			if (this.runState.totalUsage.cost.total > 0 || this.runState.totalUsage.total > 0) {
-				const lastAssistantMessage = getLastAssistantUsage(this.session.messages);
-
-				const contextTokens = lastAssistantMessage
-					? lastAssistantMessage.usage.input +
-						lastAssistantMessage.usage.output +
-						lastAssistantMessage.usage.cacheRead +
-						lastAssistantMessage.usage.cacheWrite
-					: 0;
-				const currentRunModel = this.session.model ?? this.activeModel;
-				const contextWindow = currentRunModel.contextWindow || 200000;
-
-				log.logUsageSummary(this.runState.logCtx!, this.runState.totalUsage, contextTokens, contextWindow);
-				const responseModel = lastAssistantMessage?.responseModel;
-				// Ledger turn entry: assistant-only usage (sub-agents recorded separately),
-				// keeping Σ(entries) == real spend with no double counting.
-				this.ledger.record({
-					channelId: this.channelId,
-					kind: "turn",
-					model: responseModel ?? formatModelReference(currentRunModel),
-					usage: {
-						input: this.runState.assistantUsage.input,
-						output: this.runState.assistantUsage.output,
-						cacheRead: this.runState.assistantUsage.cacheRead,
-						cacheWrite: this.runState.assistantUsage.cacheWrite,
-						total: this.runState.assistantUsage.total,
-					},
-					cost: { ...this.runState.assistantUsage.cost },
-				});
-				if (
-					responseModel &&
-					responseModel !== formatModelReference(currentRunModel) &&
-					responseModel !== currentRunModel.id
-				) {
-					log.logInfo(
-						`[${this.channelId}] Actual model: ${responseModel} (configured: ${formatModelReference(currentRunModel)})`,
-					);
-				}
-			}
-
-			// The turn is over, so the channel is about to look idle to the maintenance gates —
-			// which is exactly when this state has to be on disk. Everything buffered during the
-			// turn lands here in one write.
-			await this.flushMemoryActivity();
-
-			// Clear run state
-			this.runState.ctx = null;
-			this.runState.logCtx = null;
-			this.runState.queue = null;
-			if (implicitTurn) {
-				this.endTurn();
-			}
+			await this.finishTurn({
+				ctx,
+				ownTurn,
+				implicitTurn,
+				promptSubmitted,
+				runQueue,
+				fallbackAttempted,
+				fallbackTargetRef,
+				promptText,
+				durableMemoryBootstrapText,
+				taskDigestText,
+				recalledContextText,
+			});
 		}
 
 		return {
@@ -690,6 +555,176 @@ export class ChannelRunner implements AgentRunner {
 			durationMs: Date.now() - startedAt,
 			silent: this.runState.finalOutcome.kind === "silent",
 		};
+	}
+
+	/**
+	 * The epilogue shared by every exit path out of `run()`'s try/catch: debug dump, delivery of
+	 * whatever final message the turn settled on, usage/ledger accounting, the end-of-turn memory
+	 * flush, and clearing run state. Pulled out of `run()` itself only to keep that method's main
+	 * line (prepare → prompt with fallback) readable; every input here is `run()`-local, not
+	 * instance state, so it is threaded through explicitly rather than promoted to a field.
+	 */
+	private async finishTurn(input: {
+		ctx: ChannelContext;
+		ownTurn: { phase: TurnPhase };
+		implicitTurn: boolean;
+		promptSubmitted: boolean;
+		runQueue: ReturnType<typeof createRunQueue>;
+		fallbackAttempted: boolean;
+		fallbackTargetRef: string | undefined;
+		promptText: string;
+		durableMemoryBootstrapText: string;
+		taskDigestText: string;
+		recalledContextText: string;
+	}): Promise<void> {
+		const { ctx, ownTurn, implicitTurn, promptSubmitted, runQueue, fallbackAttempted, fallbackTargetRef } = input;
+		this.setPhase(ownTurn, "finishing");
+		// Debug dump (PIPICLAW_DEBUG=1). Written after the run so `systemPrompt` is the
+		// string the provider actually received — base sections, pi's tail, and the boundary
+		// footer the prompt extension appends at before_agent_start.
+		if (process.env.PIPICLAW_DEBUG) {
+			const debugContext = {
+				systemPrompt: this.lastFinalPrompt ?? this.agent.state.systemPrompt,
+				promptManifest: this.lastPromptBuild
+					? buildPromptManifest(this.lastPromptBuild, this.lastFinalPrompt)
+					: undefined,
+				messages: this.session.messages,
+				durableMemoryBootstrap: input.durableMemoryBootstrapText || undefined,
+				taskDigest: input.taskDigestText || undefined,
+				recalledContext: input.recalledContextText || undefined,
+				newUserMessage: input.promptText,
+			};
+			await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
+				(error: unknown) =>
+					log.logWarning(`[${this.channelId}] Failed to write last_prompt.json`, errorMessage(error)),
+			);
+		}
+		if (!promptSubmitted) {
+			const discarded = this.session.clearQueue();
+			const discardedCount = discarded.steering.length + discarded.followUp.length;
+			if (discardedCount > 0) {
+				log.logWarning(
+					`[${this.channelId}] Discarded ${discardedCount} queued busy message(s) after run setup failed`,
+				);
+			}
+		}
+		await runQueue.drain();
+		const finalOutcome = this.runState.finalOutcome;
+		const finalOutcomeText = getFinalOutcomeText(finalOutcome);
+
+		try {
+			if (
+				this.runState.stopReason === "error" &&
+				this.runState.errorMessage &&
+				!this.runState.finalResponseDelivered
+			) {
+				try {
+					const baseErrorSummary =
+						this.runState.errorMessage.length > 240
+							? `${this.runState.errorMessage.slice(0, 237)}...`
+							: this.runState.errorMessage;
+					const compactionSummary =
+						this.runState.lastCompactionError && this.runState.lastCompactionError !== this.runState.errorMessage
+							? this.runState.lastCompactionError.length > 240
+								? `${this.runState.lastCompactionError.slice(0, 237)}...`
+								: this.runState.lastCompactionError
+							: undefined;
+					const detailLines = [`\`${baseErrorSummary}\``];
+					if (compactionSummary) {
+						detailLines.push(`恢复尝试：\`${compactionSummary}\``);
+					}
+					if (fallbackAttempted && fallbackTargetRef) {
+						detailLines.push(`已切换备用模型 \`${fallbackTargetRef}\` 重试，仍失败。`);
+					}
+					await ctx.replaceMessage(`_抱歉，出错了。_\n\n${detailLines.join("\n\n")}`);
+				} catch (err) {
+					const errMsg = errorMessage(err);
+					log.logWarning("Failed to post error message", errMsg);
+				}
+			} else if (isSilentOutcome(finalOutcome)) {
+				try {
+					await ctx.deleteMessage();
+					log.logInfo("Silent response - deleted message");
+				} catch (err) {
+					const errMsg = errorMessage(err);
+					log.logWarning("Failed to delete message for silent response", errMsg);
+				}
+			} else if (this.runState.stopReason === "aborted" && !this.runState.finalResponseDelivered) {
+				try {
+					await ctx.deleteMessage();
+					log.logInfo("Aborted response - discarded active delivery state");
+				} catch (err) {
+					const errMsg = errorMessage(err);
+					log.logWarning("Failed to discard active delivery state after abort", errMsg);
+				}
+			} else if (finalOutcomeText && !this.runState.finalResponseDelivered) {
+				try {
+					await ctx.replaceMessage(finalOutcomeText);
+				} catch (err) {
+					const errMsg = errorMessage(err);
+					log.logWarning("Failed to replace message with final text", errMsg);
+				}
+			}
+
+			await ctx.flush();
+		} finally {
+			await ctx.close();
+		}
+
+		// Log usage summary. Gated on tokens as well as cost: a local (or pricing-less) model
+		// bills nothing, and skipping it here left both the log and the ledger empty.
+		if (this.runState.totalUsage.cost.total > 0 || this.runState.totalUsage.total > 0) {
+			const lastAssistantMessage = getLastAssistantUsage(this.session.messages);
+
+			const contextTokens = lastAssistantMessage
+				? lastAssistantMessage.usage.input +
+					lastAssistantMessage.usage.output +
+					lastAssistantMessage.usage.cacheRead +
+					lastAssistantMessage.usage.cacheWrite
+				: 0;
+			const currentRunModel = this.session.model ?? this.activeModel;
+			const contextWindow = currentRunModel.contextWindow || 200000;
+
+			log.logUsageSummary(this.runState.logCtx!, this.runState.totalUsage, contextTokens, contextWindow);
+			const responseModel = lastAssistantMessage?.responseModel;
+			// Ledger turn entry: assistant-only usage (sub-agents recorded separately),
+			// keeping Σ(entries) == real spend with no double counting.
+			this.ledger.record({
+				channelId: this.channelId,
+				kind: "turn",
+				model: responseModel ?? formatModelReference(currentRunModel),
+				usage: {
+					input: this.runState.assistantUsage.input,
+					output: this.runState.assistantUsage.output,
+					cacheRead: this.runState.assistantUsage.cacheRead,
+					cacheWrite: this.runState.assistantUsage.cacheWrite,
+					total: this.runState.assistantUsage.total,
+				},
+				cost: { ...this.runState.assistantUsage.cost },
+			});
+			if (
+				responseModel &&
+				responseModel !== formatModelReference(currentRunModel) &&
+				responseModel !== currentRunModel.id
+			) {
+				log.logInfo(
+					`[${this.channelId}] Actual model: ${responseModel} (configured: ${formatModelReference(currentRunModel)})`,
+				);
+			}
+		}
+
+		// The turn is over, so the channel is about to look idle to the maintenance gates —
+		// which is exactly when this state has to be on disk. Everything buffered during the
+		// turn lands here in one write.
+		await this.flushMemoryActivity();
+
+		// Clear run state
+		this.runState.ctx = null;
+		this.runState.logCtx = null;
+		this.runState.queue = null;
+		if (implicitTurn) {
+			this.endTurn();
+		}
 	}
 
 	async handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void> {

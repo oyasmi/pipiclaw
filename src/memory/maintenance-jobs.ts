@@ -366,9 +366,8 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 		try {
 			const correlationId = `structural-maintenance:${formatLocalTime(now)}`;
 			const options = makeRunOptions(input, correlationId);
-			// Probation/expiresAt eviction runs first, deterministically, before the LLM cleanup
-			// pass sees the file — no point spending a cleanup prompt on entries about to be
-			// invalidated (spec 037, D8).
+			// Probation eviction runs first, deterministically, before the LLM cleanup pass sees the
+			// file — no point spending a cleanup prompt on entries about to be invalidated (spec 037, D8).
 			const expiredCount = decision.runProbationExpiry ? await expireMemoryEntries(input.channelDir, now) : 0;
 			const [cachedMemory, currentHistory] = await loadFiles();
 			// `loadFiles`'s cached read predates the expiry write above, so a fresh read is needed

@@ -18,10 +18,10 @@ import {
 	type BootstrapPaths,
 	bootstrapAppHome,
 	DEFAULT_BOOTSTRAP_PATHS,
-	prepareAppServices,
 	printBootstrapSummary,
 	readCliVersion,
-} from "../runtime/bootstrap.js";
+} from "../runtime/app-home.js";
+import { prepareAppServices } from "../runtime/bootstrap.js";
 import { ensureChannelDir } from "../runtime/channel-paths.js";
 import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
 import { handleEventsCommand } from "../runtime/event-commands.js";
@@ -103,7 +103,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	// Transport-neutral init. Unlike the DingTalk path, the TUI ignores
 	// channelTemplateCreated (it needs no channel.json) and shares app services
 	// (settings, diagnostics) with bootstrap via prepareAppServices.
-	printBootstrapSummary(bootstrapAppHome(paths, io), io, paths);
+	printBootstrapSummary(bootstrapAppHome(paths), io, paths);
 	const { settingsManager } = prepareAppServices(paths);
 	log.configureLogging(settingsManager.getLoggingSettings());
 	log.logStartup(paths.workspaceDir);

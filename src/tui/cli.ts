@@ -2,7 +2,7 @@
  * `pipiclaw tui` CLI: argument parsing and entry. Parsing is a pure function
  * (`parseTuiArgs`) so it can be unit-tested; `runTui` wires it to `runTuiApp`.
  */
-import { BootstrapExitError, type BootstrapIO, readCliVersion } from "../runtime/bootstrap.js";
+import { BootstrapExitError, type BootstrapIO, readCliVersion } from "../runtime/app-home.js";
 import { runTuiApp } from "./app.js";
 
 export type ParsedTui =
