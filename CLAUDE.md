@@ -28,9 +28,9 @@ Node `>= 22.19.0`.
 Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent` SDK (a fork of `@mariozechner/pi-coding-agent`) and drives it from DingTalk. The layers below are traversed on every message.
 
 **Transport → agent → delivery flow**
-1. `src/runtime/bootstrap.ts` loads config, constructs the `DingTalkBot`, memory scheduler, and events watcher, and wires them together. `src/main.ts` is intentionally a thin entrypoint that just calls `bootstrap`.
+1. `src/runtime/bootstrap.ts` loads config and wires the bot, durable dispatch, task/event/memory services, background jobs, and sub-agent run persistence. `src/main.ts` is intentionally a thin entrypoint that just calls `bootstrap`.
 2. `src/runtime/dingtalk.ts` receives Stream-mode events; `src/runtime/delivery.ts` builds the `ChannelContext` (the transport-neutral delivery contract in `src/runtime/channel-context.ts`: `respond`, `respondInThread`, AI Card streaming). The terminal TUI (`src/tui/`) is a second implementation of the same contract.
-3. Each channel gets one `ChannelRunner` (`src/agent/channel-runner.ts`), cached by `src/agent/runner-factory.ts`. This is the orchestrator: it assembles the SDK `Agent`/`AgentSession`, the tool set, memory, sub-agents, and prompt, then runs a turn and streams progress back through the `DingTalkContext`.
+3. Each channel gets one `ChannelRunner` (`src/agent/channel-runner.ts`), cached by `src/agent/runner-factory.ts`. It assembles the SDK session, tools, memory, roles, and prompt, then streams the turn through the transport-neutral `ChannelContext`.
 4. `src/agent/session-events.ts` translates SDK session events into progress/AI-Card updates.
 
 **Concurrency model (important, spans several files)**
@@ -38,12 +38,14 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 - Memory writes are serialized by **per-channel serial queues** built on `src/shared/serial-queue.ts`. `src/memory/channel-maintenance-queue.ts` exposes a *shared singleton* queue so `lifecycle` and `maintenance-jobs` never race on the same channel's files — do not inline it.
 - Config/state files are written via `src/shared/atomic-file.ts` (write-temp-then-rename).
 
+**Delegation (`src/subagents/`)** — workspace roles select internal execution or an external `claude-code` / `codex-cli` / `exec` harness. `SubAgentRunManager` alone owns settlement, usage, leases, persistence, and completion wake; preserve its idempotency flags. External runs are async/detached and daemon-reconciled; TUI has no durable wake/re-adoption. `mutates: write` leases overlapping working directories, and `/stop` does not cancel runs.
+
 **Memory subsystem (`src/memory/`)** — layered, do not flatten:
 - Working files per channel: `SESSION.md` (current state), `MEMORY.md` (durable), `HISTORY.md` (summarized older history); `log.jsonl`/`context.jsonl` are cold storage.
 - `lifecycle.ts` orchestrates a channel's memory; `recall.ts` retrieves relevant memory for a turn; `consolidation.ts` folds/cleans; `scheduler.ts` + `maintenance-jobs.ts` + `maintenance-gates.ts` + `maintenance-state.ts` form a *gated, scheduled* maintenance pipeline (gates decide whether each job may run given idle/interval/threshold state). Each of these has dedicated tests — keep them as separate, single-responsibility units.
 - `sidecar-worker.ts` runs LLM-backed memory work off the main turn.
 
-**Tools (`src/tools/`)** are the capabilities handed to the coding agent (`bash`, `read`, `write`, `edit`, `web_search`/`web_fetch`, skill + config tools). Every filesystem/command/network tool goes through `src/security/` guards: `command-guard.ts`, `path-guard.ts`, `network.ts`, with blocked actions written to the audit logger. `write.ts` is a thin tool wrapper over the shared `write-content.ts` (also used by the sub-agent tool) — that split is deliberate.
+**Tools (`src/tools/`)** are the capabilities handed to the main agent and internal sub-agents (`bash`, files, web, memory, skills, tasks, events, jobs, delegation). Pipiclaw-owned filesystem/command/network tools go through `src/security/` guards, with blocked actions written to the audit logger. External agents are separate host processes and bypass those guards: their role command, CLI sandbox, host account, and environment are the real boundary; `mutates` is not a permission control. `write.ts` remains a thin wrapper over shared `write-content.ts`.
 
 **Config & state live outside the repo**, under `APP_HOME_DIR` (`~/.pipiclaw`, overridable via `PIPICLAW_HOME`). Paths are centralized in `src/paths.ts` (`channel.json`, `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`, plus `workspace/` and `state/`). `src/index.ts` is the public library barrel, deliberately minimal (spec 035): it supports embedding the daemon (`bootstrap`, `DingTalkBot`, `ChannelContext`, path constants, `PipiclawSettings`) and nothing else. Keep those names stable; do not add to it — every export there is also a knip blind spot, since it is a knip entry point.
 
@@ -51,4 +53,4 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 
 ## Docs
 
-`docs/` holds the configuration/deployment/security guides and `docs/specs/NNN-*` design specs (one per feature, e.g. `010-memory-maintenance-scheduler`) — the spec for a subsystem is the best context before changing it. `docs/architecture.md` describes the as-implemented architecture (runtime topology, message lifecycle, the full concurrency table).
+`docs/README.md` is the user-documentation map. Top-level guides and `docs/architecture.md` describe current behavior; `docs/specs/NNN-*` are historical design records that explain earlier decisions but may contain retired paths or contracts. For behavior changes, verify code and tests first, update the relevant top-level guide, and preserve specs as history unless writing a new design record.

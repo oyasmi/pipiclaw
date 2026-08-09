@@ -2,15 +2,14 @@
 
 ## Project
 
-Pipiclaw is a DingTalk-first AI coding assistant runtime built on top of `@earendil-works/pi-coding-agent`.
-It adds the runtime pieces needed for long-lived team usage: DingTalk transport, AI Card streaming, sub-agents, layered memory, scheduled events, and per-channel workspaces.
+Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-works/pi-coding-agent`. It adds AI Card streaming, layered memory, scheduled work, per-channel workspaces, and unified delegation to internal agents or external Claude Code, Codex CLI, and custom executors.
 
 ## Core Structure
 
 - `src/runtime/`: DingTalk transport and runtime wiring (`bootstrap`, `dingtalk`, `delivery`, `events`, `store`)
 - `src/agent/`: main agent orchestration and session event handling
 - `src/memory/`: channel memory lifecycle, consolidation, recall, session memory, and file helpers
-- `src/subagents/`: workspace-configured sub-agent discovery and the sub-agent tool
+- `src/subagents/`: role discovery, internal/external execution, run lifecycle, harnesses, workspace leases, and delegation tools
 - `src/tools/`: tool implementations exposed to the coding agent
 - `src/security/`: command, path, and network guard configuration and enforcement helpers
 - `src/web/`: web search/fetch client, extraction, formatting, and provider implementations
@@ -23,7 +22,7 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 
 - App-level files: `channel.json`, `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`
 - Workspace-level files: `SOUL.md`, `AGENTS.md`, `MEMORY.md`, `ENVIRONMENT.md`, `skills/`, `events/`, `sub-agents/`
-- Channel-level files: `SESSION.md`, `MEMORY.md`, `HISTORY.md`, `log.jsonl`, `context.jsonl`
+- Channel-level files: `SESSION.md`, `MEMORY.md`, `HISTORY.md`, tasks, delegation records/artifacts, `log.jsonl`, `context.jsonl`
 - `SESSION.md` is the current working state
 - `MEMORY.md` is durable channel memory
 - `HISTORY.md` is summarized older history
@@ -43,13 +42,15 @@ Use `npm run typecheck` and `npm run test` as the minimum validation after non-t
 
 - Preserve the domain boundaries above; prefer moving code into the right module over adding compatibility aliases
 - Keep `src/main.ts` thin; startup assembly belongs in runtime bootstrap code
-- Keep runtime behavior reliable: queueing, reconnection, persistence, and memory maintenance are higher priority than cosmetic refactors
+- Keep runtime behavior reliable: queueing, reconnection, persistence, memory maintenance, and delegation settlement are higher priority than cosmetic refactors
 - Prefer explicit types over `as any`
 - Do not treat tests as optional; runtime, memory, and DingTalk behavior should be covered when changed
 - Avoid creating barrel files or re-export shims unless they materially reduce coupling
 - Every tool error or truncation output must carry a next-step instruction the model can act on directly (e.g. "Use offset=N to continue", "use the grep tool instead") — errors steer the model rather than just reporting failure
 - Reject a bad tool call with `RecoverableToolError` (`src/shared/recoverable-error.ts`) when the model can fix it alone — a missing field, an unknown id, an illegal transition. Throw a plain `Error` only when the user must act or know: a guard refusal, an approval gate, corrupt state, a real fault. Only plain errors reach the user's chat, so the test is "can the model resolve this alone?", not "how severe is it?"
 - A tool result's `details` is the runtime's channel (the model reads `content`). `buildToolSet` stamps `kind` from the registration name and that stamp is authoritative — a `kind` written inside a tool is redundant and cannot override it, so the discriminator can never drift from the tool it names. New tools need only return their own fields
+- Keep `SubAgentRunManager` the sole owner of settlement, usage, leases, and completion wake; preserve its idempotency markers
+- External agents bypass Pipiclaw's guards. Their role command, CLI sandbox, host account, and environment are the permission boundary; `mutates` is not a sandbox
 
 ## Practical Notes
 
@@ -59,3 +60,4 @@ Use `npm run typecheck` and `npm run test` as the minimum validation after non-t
 - The package version lives in `package.json` and the top-level package entry in `package-lock.json`
 - Web tools are configured through app-level `tools.json`; security policy is configured through app-level `security.json`
 - Workspace skills live only under `workspace/skills/`; do not add channel-scoped skill directories
+- The daemon owns durable external-run wake/recovery; TUI does not. `/stop` never cancels dispatched runs
