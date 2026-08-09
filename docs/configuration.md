@@ -44,7 +44,7 @@ POSIX 环境；Windows 请使用 WSL2。
 | 调安全策略 | `security.json` | `commandGuard`、`pathGuard`、`networkGuard`、`audit` |
 | 改助手风格 | `workspace/SOUL.md` | 身份、语气、默认语言 |
 | 改工作规则 | `workspace/AGENTS.md` | 团队规则、安全边界、项目工作流 |
-| 加可复用角色 | `workspace/sub-agents/*.md` | 子代理 frontmatter + system prompt |
+| 加可复用角色 | `workspace/sub-agents/*.md` | `runtime: internal` 或 `external`、用途描述、权限声明与 system prompt |
 | 加可复用流程 | `workspace/skills/` | 通过 `skill_manage` 创建/维护 workspace skill |
 | 让 LLM 请求走代理 | 环境变量 `PIPICLAW_PROXY` | 见下方「LLM 请求走代理」 |
 
@@ -137,8 +137,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 部分 provider 用订阅账号登录而不是 API key（`openai-codex` = ChatGPT Plus/Pro、`anthropic` = Claude
 Pro/Max，以及 `github-copilot`、`kimi-coding`、`xai`、`openrouter` 等，取决于 SDK 内置的 provider
-目录）。这类登录只在独立命令 `pipiclaw auth` 里做——钉钉端不提供任何登录入口，TUI 本期也不内嵌
-（详见 `docs/specs/039-provider-login-cli/design.md`）。
+目录）。这类登录只在独立命令 `pipiclaw auth` 里做——钉钉端不提供登录入口，TUI 也不内嵌登录流程。
 
 ```bash
 pipiclaw auth status                 # 列出每个 provider 的配置状态、凭据类型、来源
@@ -191,6 +190,8 @@ Codex 对话流量的代理注意事项：`openai-codex-responses` 默认走 Web
 
 恒开、无 `tools.json` 开关的核心工具包括：`read`、`write`、`edit`、`grep`、`bash`、`job`、`session_search`、`memory_manage`、`skill_manage`、`event_manage`。`send_media` 由传输层能力决定。
 
+`subagent` 和 `subagent_manage` 也恒开，只提供给主智能体。角色是否存在、能否使用由 `workspace/sub-agents/*.md` 决定；外部角色还要求目标 CLI 在 daemon 的 `PATH` 中可用。角色字段、推荐模板和安全边界见 [sub-agents.md](./sub-agents.md)。
+
 启用 web 工具：
 
 ```json
@@ -225,7 +226,7 @@ SearXNG 也必须打开总开关：
 
 ## LLM 请求走代理
 
-`tools.json` 里的 `tools.web.proxy` 只管 `web_search`/`web_fetch` 这两个工具的出站请求。**主 Agent、子 Agent、记忆维护 sidecar 发往模型 API 的请求（含 OAuth 刷新、模型目录拉取）默认直连，不受 `tools.web.proxy` 影响**——Node 内置的 `fetch` 不读任何 `*_PROXY` 环境变量，Anthropic/OpenAI/Mistral 等 SDK 也都基于它。要让这部分请求走代理，用环境变量：
+`tools.json` 里的 `tools.web.proxy` 只管 `web_search`/`web_fetch` 这两个工具的出站请求。**主智能体、内置子智能体和记忆维护 sidecar 发往模型 API 的请求（含 OAuth 刷新、模型目录拉取）默认直连，不受 `tools.web.proxy` 影响**——Node 内置的 `fetch` 不读任何 `*_PROXY` 环境变量，Anthropic/OpenAI/Mistral 等 SDK 也都基于它。要让这部分请求走代理，用环境变量：
 
 ```bash
 export PIPICLAW_PROXY=http://127.0.0.1:7890
@@ -235,9 +236,11 @@ export PIPICLAW_NO_PROXY=internal.example.com,10.0.0.0/8
 
 只支持 `http://`/`https://` 代理 URL，**不支持 `socks5://`**：配了 SOCKS 地址会在启动日志里警告，并保持直连，不会静默失败。
 
+外部 Claude Code / Codex / exec 进程不走 Pipiclaw 的模型客户端。它们继承 daemon 环境，但是否识别 `PIPICLAW_PROXY`、标准代理变量或自己的配置文件由目标 CLI 决定；不要因为主智能体已能联网就假设外部角色也已配置完成。
+
 ### 和标准 `HTTP_PROXY`/`HTTPS_PROXY` 的关系
 
-| 设置 | LLM 请求（主/子 Agent、记忆 sidecar） | 钉钉 HTTP API（发消息、卡片流式） | 钉钉 WebSocket 长连接 |
+| 设置 | LLM 请求（主智能体、内置子智能体、记忆 sidecar） | 钉钉 HTTP API（发消息、卡片流式） | 钉钉 WebSocket 长连接 |
 |---|---|---|---|
 | 只设 `PIPICLAW_PROXY` | 走代理 | 直连 | 直连 |
 | 只设标准 `HTTP_PROXY`/`HTTPS_PROXY` | 走代理 | 走代理（axios 自己也读这两个变量） | 直连（`ws` 不读代理变量） |
@@ -296,5 +299,8 @@ export PIPICLAW_NO_PROXY=internal.example.com,10.0.0.0/8
 - 完整字段：[configuration-reference.md](./configuration-reference.md)
 - 运行机制：[runtime-mechanisms.md](./runtime-mechanisms.md)
 - 工具清单：[tools.md](./tools.md)
+- 交互入口与命令：[interaction-and-commands.md](./interaction-and-commands.md)
+- 智能体角色与外部 CLI：[sub-agents.md](./sub-agents.md)
+- Workspace skills：[skills.md](./skills.md)
 - 安全策略：[security.md](./security.md)
 - 部署运维：[deployment-and-operations.md](./deployment-and-operations.md)

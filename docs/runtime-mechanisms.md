@@ -72,14 +72,26 @@ TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据�
 
 周期任务只靠 task frontmatter 的 `schedule`。complete 后文件留在原地并进入 `sleeping`，到点后 runtime 确定性打开新周期，不需要 `.schedule` event，也没有单独的开周期工具动作。
 
-## 子代理与验收
+## 智能体委派与验收
 
-`workspace/sub-agents/*.md` 只加载实际存在的配置。没有配置文件也能通过 `subagent` 工具传 inline `systemPrompt` 委派。子代理不能再创建子代理；文件系统与主代理共享，`bash` 工具不是结构性只读沙箱。
+`workspace/sub-agents/*.md` 只加载实际存在的配置，不自动注入默认角色。角色分为两种 runtime：
 
-独立验收使用 `purpose: verify` + `taskId`。verifier 无 write/edit，必须以 `VERDICT: PASS` 或 `VERDICT: FAIL` 结束。`task_manage verify` 导入 attestation；`complete` 会重新校验任务契约 hash 和 Git artifact subject，防止验收后内容变化。
+- `internal` 在 Pipiclaw 进程内创建隔离上下文，使用 Pipiclaw 模型、工具白名单和安全守卫。没有角色文件时仍可通过 inline `systemPrompt` 临时创建内置角色。
+- `external` 启动一次性的 Claude Code、Codex CLI 或任意脚本进程，使用目标 CLI 自己的认证、模型、工具和 sandbox。外部角色必须通过工作区角色文件配置，不能临时内联命令。
+
+两者共用 `SubAgentRunManager`：注册 run、保存产出、结算状态、记录用量、释放工作区写锁，并通过 durable dispatch 唤醒所属频道。内置 run 最多同步等待 `min(maxWallTimeSec, 120s)`；没有在窗口内完成就转为后台工作。外部 run 的同步宽限恒为 0，派发后立即返回 `runId`。
+
+`/stop` 只停止主回合，不影响独立 run。模型使用 `subagent_manage` 查看、取消或续接，用户使用 `/subagents` 直接控制。DingTalk daemon 会持久化 run 并投递完成唤醒；外部 detached 进程在 daemon 重启时通过 pid 和产物协议重新对账，内置 run 无法跨进程存活，重启后标为 `lost` 并通知频道。TUI 当前不装配这套持久化与 wake delivery，不能作为长时间外部 run 的可靠宿主。
+
+独立验收使用 `purpose: verify` + `taskId`，并要求最后一行是 `VERDICT: PASS` 或 `VERDICT: FAIL`：
+
+- 内置 verifier 会被结构性移除 write/edit，验收强度为 `enforced`。
+- 外部 verifier 只能依赖目标 CLI sandbox 和前后工作区 subject 哈希，验收强度为 `advisory`；声明 `mutates: write` 或使用 `exec` harness 的角色不能承担验收。
+
+`task_manage verify` 导入 attestation；`complete` 会重新校验任务契约 hash 和 Git artifact subject，防止验收之后需求或产物发生变化。
 
 ## 日志与账本
 
-结构化运行日志写到 `state/logs/runtime.jsonl`，用量账本按月写到 `state/usage/usage-YYYY-MM.jsonl`。`/usage` 聚合 turn、subagent、sidecar 三类 LLM 消耗；缺价格元数据时成本显示为 unavailable/0，但 token 仍记账。
+结构化运行日志写到 `state/logs/runtime.jsonl`，用量账本按月写到 `state/usage/usage-YYYY-MM.jsonl`。`/usage` 聚合 turn、subagent、sidecar 三类 LLM 消耗。缺价格元数据时 token 仍记账、成本标为 unknown；Codex CLI 不报告成本，`exec` 连 token 也无法报告，不能把 unknown 当成 0 或免费。
 
 `PIPICLAW_DEBUG=1` 会在对应 channel 目录写出 `last_prompt.json`，用于检查实际发送给模型的 prompt。

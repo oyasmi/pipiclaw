@@ -1,44 +1,53 @@
 # Pipiclaw 文档
 
-Pipiclaw 是一个钉钉优先、可长期运行的 AI coding assistant runtime，个人和团队都可以使用。
+这里是 Pipiclaw 的完整用户与开发文档。第一次使用请先从[项目 README](../README.md)完成终端体验或钉钉接入；之后按你现在要解决的问题选择入口，不需要从头通读。
 
-从 [项目 README](../README.md) 完成安装与首次启动；这里是之后的全部文档。按你的角色选起点：
+## 我想先把它用起来
 
-## 我是使用者：想用好它
-
-| 文档 | 回答什么 |
+| 目标 | 从这里开始 |
 |---|---|
-| [design-philosophy.md](./design-philosophy.md) | Pipiclaw 为什么这样设计？后续能力应遵守哪些原则？ |
-| [tools.md](./tools.md) | 它能干什么？某个能力为什么没出现？ |
-| [memory.md](./memory.md) | 它记得什么？怎么让它记住或忘掉？ |
-| [events-and-tasks.md](./events-and-tasks.md) | 怎么让它定时做事、怎么让它带着进度本干长活？ |
-| [sub-agents.md](./sub-agents.md) | 怎么把工作委派出去、怎么做独立验收？ |
+| 在终端或钉钉中完成第一次对话 | [项目 README：快速开始](../README.md#快速开始) |
+| 理解私聊、群聊、AI Card、忙时消息和斜杠命令 | [交互与命令](./interaction-and-commands.md) |
+| 配置钉钉、模型、Web 工具或代理 | [配置速查](./configuration.md) |
+| 查某个配置字段的准确取值和默认值 | [配置字段参考](./configuration-reference.md) |
 
-## 我是管理员：要配置和长期运行它
+## 我想让它完成实际工作
 
-| 文档 | 回答什么 |
+| 目标 | 从这里开始 |
 |---|---|
-| [configuration.md](./configuration.md) | 配置速查：现在该改哪个文件 |
-| [configuration-reference.md](./configuration-reference.md) | 字段参考：钉钉、模型、settings、tools、TUI、工作区文件 |
-| [runtime-mechanisms.md](./runtime-mechanisms.md) | 机制说明：fallback、记忆维护、事件、后台作业、任务 driver |
-| [security.md](./security.md) | 默认拦截什么、怎么放行、边界在哪 |
-| [deployment-and-operations.md](./deployment-and-operations.md) | 常驻运行、日志、升级、备份、排障 |
-| [scaling-and-concurrency.md](./scaling-and-concurrency.md) | 并发模型、容量边界、什么时候该拆实例 |
+| 把工作委派给内置子智能体、Claude Code 或 Codex CLI | [智能体委派](./sub-agents.md) |
+| 了解它能读写什么、能调用哪些能力 | [工具总览](./tools.md) |
+| 让它记住约定、找回历史或忘掉旧信息 | [记忆](./memory.md) |
+| 建立提醒、周期检查或跨会话长期任务 | [事件与任务](./events-and-tasks.md) |
+| 把团队流程沉淀成可复用 skill | [Workspace Skills](./skills.md) |
 
-## 我要改它的代码
+## 我要长期运行和治理它
 
-| 文档 | 回答什么 |
+| 目标 | 从这里开始 |
 |---|---|
-| [architecture.md](./architecture.md) | 代码现在是什么样：运行时拓扑、消息生命周期、并发表、磁盘布局 |
-| [design-and-implementation-review-2026-08-06.md](./design-and-implementation-review-2026-08-06.md) | 当前设计与实现的风险、证据和优化路线 |
-| [runtime-playbooks.md](./runtime-playbooks.md) | 知识分层模型，以及怎么写给 agent 读的 playbook |
-| [specs/](./specs/) | 历史设计记录与取舍（`NNN-*`，按实现顺序编号）；当前行为以 README、`docs/` 顶层手册和代码为准 |
-| [../AGENTS.md](../AGENTS.md) | 域边界与工程规则 |
+| 决定文件、命令、网络和外部智能体能碰什么 | [安全指南](./security.md) |
+| 部署常驻进程、看日志、升级、备份或排障 | [部署与运维](./deployment-and-operations.md) |
+| 理解 fallback、记忆维护、后台作业、委派和任务 driver | [运行机制](./runtime-mechanisms.md) |
+| 评估并发、资源占用和拆分实例的时机 | [并发与容量](./scaling-and-concurrency.md) |
 
-## 两套文档，两个受众
+## 我要理解或修改源码
 
-`docs/` 面向**人**：可跳读、可穷举、有示例。
+| 文档 | 内容 |
+|---|---|
+| [架构](./architecture.md) | 当前实现的源码地图、运行时拓扑、消息生命周期、并发表和磁盘布局 |
+| [设计哲学](./design-philosophy.md) | 长期运行、状态、边界、记忆与可验证性的设计原则 |
+| [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
+| [历史设计记录](./specs/README.md) | specs 的阅读方法、主题分组和当前行为的判断顺序 |
+| [../AGENTS.md](../AGENTS.md) | 代码域边界、工程规则和验证要求 |
 
-`src/playbooks/` 面向 **agent 自己**：随包发布的只读手册，模型每回合只看到一行触发描述，需要时才加载正文。它们不是本目录的副本，两者的取舍原则见 [runtime-playbooks.md](./runtime-playbooks.md)。
+## 文档的责任边界
 
-> 不要把 playbook 内容抄进 workspace 的 `AGENTS.md` 或 skill——升级会更新内置机制，副本不会跟着变。
+- `README.md` 负责产品定位、适用场景和成功主路径。
+- `configuration.md` 负责“该改哪个文件、常见场景怎么配”。
+- `configuration-reference.md` 负责字段、默认值和解析优先级。
+- `runtime-mechanisms.md` 负责解释配置背后的运行行为。
+- `architecture.md` 负责解释代码位置和组件关系。
+- `sub-agents.md` 是智能体委派的用户级权威文档。
+- `security.md` 是权限、隔离与授权边界的用户级权威文档。
+
+`docs/` 面向人，允许跳读、示例和完整参考；`src/playbooks/` 面向 agent，只有小型目录常驻系统提示，正文按需读取。不要把 runtime playbook 复制进 workspace 的 `AGENTS.md` 或 skill：升级会更新内置机制，副本不会同步。

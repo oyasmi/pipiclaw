@@ -4,7 +4,7 @@
 > **前置**：能跑起来项目；域边界与工程规则见 [../AGENTS.md](../AGENTS.md)。
 > **读完你能**：定位任一子系统的代码位置，并说清一条消息从收到到回复经过了什么。
 >
-> 本文基于 v0.8.x 的实际实现整理，描述"代码现在是什么样"，而非设计愿景。各子系统的设计动机见 `docs/specs/NNN-*`；配置细节见 [configuration.md](./configuration.md)。
+> 本文基于 v0.9.0 beta 当前实现整理，描述“代码现在是什么样”，而非设计愿景。各子系统的历史取舍见 `docs/specs/NNN-*`；配置细节见 [configuration.md](./configuration.md)。版本行为变化后应同步更新本文，不能把历史 spec 当作当前架构说明。
 
 ## 1. 定位与总体形态
 
@@ -92,6 +92,7 @@ flowchart TB
 - **`DingTalkBot`** 负责连接稳定性（心跳 ping/pong、90s 超时强制重连、指数退避、双层消息去重、`allowFrom` 白名单）和 AI Card 的 HTTP 调用（创建、流式更新、finalize，均带 15s 超时）。
 - **合成事件不直接进内存队列**：EventsWatcher 和 TaskDriver 产生的事件先写入 `DurableDispatchService`（`state/dispatch/*.json` 文件外发箱，15 分钟租约，30s 重扫），保证进程崩溃后 at-least-once 重放，然后才 `bot.enqueueEvent`。
 - **ChannelRunner 按 `(appHomeDir, channelDir, channelId)` 缓存**（`runner-factory.ts` 中的进程级 Map），一个频道全程复用同一个 SDK 会话。
+- **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到频道目录；完成后同样先经过 durable dispatch 再唤醒频道。
 
 ## 4. 一条消息的生命周期
 
@@ -271,7 +272,7 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 
 ## 9. 安全层（`src/security/`）
 
-所有文件/命令/网络工具在执行前都过守卫；拦截写入审计日志（`security/logger.ts`）。事件 `preAction` 与 bash 工具共用同一 command-guard。
+Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦截写入审计日志（`security/logger.ts`）。事件 `preAction` 与 bash 工具共用同一 command-guard。
 
 | 守卫 | 默认 | 机制 |
 |---|---|---|
@@ -280,6 +281,8 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 | `network-guard` | 关 | web 工具的 SSRF 防护：DNS 解析后校验，拦截 localhost/链路本地/私网 CIDR/云 metadata，重定向逐跳复查 |
 
 其它硬化：六个可能含密钥的配置文件（`channel/auth/models/settings/tools/security.json`）创建即 0600，启动时对已存在的宽权限文件收紧；系统提示词层面还有"任务 scope 内的外部动作须遵守能力配置、幂等与审计"等常驻不变量（`agent/prompt/sections.ts`）。
+
+外部智能体不使用上述工具实现，因此 command/path/network guard 不覆盖它。角色文件是授权面；`external/run.ts` 在 spawn 前严格写入 `external-agent` 审计事件，目标 CLI 的 sandbox 和宿主运行账号才是强隔离边界。`workspace/sub-agents/` 对模型的 write/edit 工具拒写，避免模型自行创建高权限角色，但通用 bash 仍是已知逃逸面。
 
 ## 10. 模型与用量
 
@@ -304,10 +307,14 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 │   └── <channelId>/               # dm_* / group_*，每频道一目录
 │       ├── SESSION.md  MEMORY.md  HISTORY.md
 │       ├── log.jsonl  context.jsonl  .channel-meta.json
+│       ├── subagent-runs.jsonl     # 委派执行摘要
+│       ├── subagent-artifacts/<runId>/ # output.md；外部 run 另含 prompt/events/stderr
 │       └── tasks/<id>.md
 └── state/
     ├── dispatch/                  # durable-dispatch 外发箱
     ├── events/history.jsonl       # 事件审计
+    ├── jobs/<channelId>/          # 后台作业状态与输出索引
+    ├── subagent-runs/<channelId>/ # 委派权威状态、pid、argv、幂等标记
     ├── memory/<channelId>.json    # 记忆维护打点状态
     ├── logs/runtime.jsonl         # 结构化运行日志
     └── usage/                     # 用量账本
@@ -331,7 +338,7 @@ runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(
 - **prompt units 预算**：预算以 `countPromptUnits`（`shared/prompt-units.ts`：CJK 每字 1、非 CJK 单词 1、标点空白 0）度量。runtime-authored 段合计目标 ≤ 700 units、硬上限 1,200 units（`builder.ts`），超标分别 warning/error。已删除旧的 32k 全局字符池与「依次收缩 subagents/playbooks/AGENTS/SOUL」策略，用户文件不再因总量竞争被裁。`HARD_TOTAL_BUDGET_CHARS`/`SOFT_TOTAL_BUDGET_CHARS` 公共导出随之移除（beta API 变更）。
 - **SOUL / AGENTS 独立预算**：两者互不挤压，各有 units + chars 双上限（SOUL 3,000 units / 24,000 chars，AGENTS 6,000 units / 48,000 chars，见 `prompt/resources.ts`）。只有真正超大的文件才 head/tail 截断；正文裁剪发生在 resources 层，section 层只保证 wrapper 完整。
 - **缓存稳定**：system prompt 里没有 channelId、channel 路径、时间戳。同一 workspace 下不同频道、连续多轮的 prompt 字节一致，provider 前缀缓存才能命中。频道事实改由每回合的 `<runtime_turn_context>` 胶囊携带（`channel-runner.ts`）。
-- **工具门控**：关闭 `task_manage` 时，任务段、任务 playbook 一并消失；关闭 `subagent` 时子代理目录消失。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
+- **工具门控**：关闭 `task_manage` 时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
 - **skills 完全交给 pi（spec 026 §9）**：`skillsOverride` 保留 ResourceLoader 中的 skills，`<available_skills>` 索引与 `/skill:name` 命令同源；Pipiclaw 只负责合并策略与诊断（workspace 覆盖同名 skill），不设 skills 预算、不产生超限 warning。`/context` 只观测 skills 体量（`estimateSkillsPromptChars` 现位于 `prompt/manifest.ts`）。
 - **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`runtime/events.ts`），普通对话不再长期携带。TASK_DRIVER 的准确 task 文件与 playbook 路径继续由 `runtime/task-driver.ts` 的 trigger 给出。
 - **自动 turn context 单位上限（spec 026 §5.3）**：recall（1,800 units）、task agenda（600 units）、first-turn bootstrap（400 units）各有独立 unit 上限，与 settings 的 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`memory/recall.ts`、`memory/task-digest.ts`、`memory/bootstrap.ts`）。
@@ -352,7 +359,7 @@ flowchart LR
 
 关机 flush 用比平时更宽松的 gate：只要有未固化的持久活动（哪怕没有完整 assistant 轮）就做最后一次固化——这是最后的持久化机会。
 
-**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/models/auth-cli.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器或频道目录——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端永不提供登录入口，TUI 本期也不内嵌，详见 `docs/specs/039-provider-login-cli/design.md`。
+**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/models/auth-cli.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器或频道目录——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端不提供登录入口，TUI 当前也不内嵌登录流程，详见 `docs/specs/039-provider-login-cli/design.md`。
 
 ## 12.1 公共 API 面（`src/index.ts`，spec 035）
 

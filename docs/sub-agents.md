@@ -1,35 +1,69 @@
-# 工作区配置子代理（Sub-Agents）
+# 智能体委派（Sub-Agents）
 
-> **读者**：想把 reviewer / researcher 这类角色，或 claude-code / codex-cli 这类重型外部 Agent，沉淀成可复用能力的使用者。
+> **读者**：想把 reviewer / researcher 这类轻量角色，或 Claude Code / Codex CLI 这类重型外部智能体，接入同一套工作流的使用者与管理员。
 > **前置**：已完成 [README](../README.md) 的安装与配置。
-> **读完你能**：写出一个工作区子代理文件（内置或外部），知道何时该用它、异步返回时该怎么处理，以及不该用它做什么。
+> **读完你能**：启用一个现成角色，理解内置与外部委派的差异，查看和控制异步 run，并按真实权限边界编写自己的角色。
 
-子代理是 Pipiclaw 的**委派**能力：把某类任务从主代理手里交给一个更聚焦、工具更窄的角色去做。它和[事件与任务](./events-and-tasks.md)是正交的两条能力——事件与任务解决"何时唤醒、在途状态如何"，子代理解决"这一步该不该换一个专门的角色来做"。
+智能体委派让主智能体把某一步工作交给更合适的执行者：轻量检索可以交给进程内的隔离角色，跨文件实现和独立评审可以交给真实的外部 coding agent。主智能体仍然负责选择角色、提供完整任务、接收结果并向用户交付。
+
+它和[事件与任务](./events-and-tasks.md)是正交能力：事件与任务解决“什么时候继续、在途状态保存在哪里”，委派解决“这一步由谁来做”。当前回合中的一次临时委派不需要创建 task；需要跨时间恢复、记录目标和验收时，再用 task 承载长期状态。
 
 从 spec 040 起，子代理有两种 **runtime**：
 
-- **`internal`**（默认）：在 pipiclaw 进程内运行的隔离上下文子代理，本文档大部分内容都在讲它。
-- **`external`**：一次性调用一个真实的外部 coding agent CLI（`claude-code` / `codex-cli`），或任意脚本（`exec`）。同一个 `subagent` 工具、同一套调用参数、同一套产物与台账契约——不同的只是谁在执行、执行强度多大、能不能查看实际 argv。
+- **`internal`**（默认）：在 Pipiclaw 进程内运行的隔离上下文子智能体。它使用 Pipiclaw 的模型、工具和安全守卫，启动快，适合检索、筛查和窄范围分析。
+- **`external`**：一次委派启动一个真实的 Claude Code、Codex CLI 或任意脚本进程。它适合长时间、跨文件、需要自行测试迭代的工作，并使用目标 CLI 自己的认证、模型和 sandbox。
 
-两者共用一个目录（`workspace/sub-agents/`）、一个调用面（`subagent` 工具）、一套控制面（`subagent_manage` 工具 / `/subagents` 命令）。选哪个不取决于"内置还是外部"这件事本身，而取决于角色目录里标出的 `workload`（light/heavy）和 `mutates`（read/write）。
+两者共用一个角色目录（`workspace/sub-agents/`）、一个调用面（`subagent` 工具）、一套 run 生命周期和控制面（`subagent_manage` 工具 / `/subagents` 命令）。角色目录会同时展示 runtime、工作量和是否写入，主智能体据此选择最合适的执行者。
 
 在独立验收（verifier）场景里，子代理会和任务台账咬合（`purpose: verify` + `taskId`）；这些接缝会在下面点明，并链接回 [events-and-tasks.md](./events-and-tasks.md)。
 
-## 它是什么（What It Is）
+## 五分钟启用一个外部角色
+
+外部角色的前提是：目标 CLI 已经安装在**运行 Pipiclaw 的同一账号**下，能从该进程的 `PATH` 找到，并已完成登录。先在 shell 中自行验证 `claude` 或 `codex` 能运行。
+
+全局 npm 安装会把推荐角色一起安装。以下示例复制一个 Claude Code builder 和一个 Codex reviewer：
+
+```bash
+mkdir -p ~/.pipiclaw/workspace/sub-agents
+PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
+  ~/.pipiclaw/workspace/sub-agents/
+```
+
+如果你正在源码 checkout 中开发，也可以从仓库的 `examples/sub-agents/` 复制。设置了 `PIPICLAW_HOME` 时，把目标目录改成 `$PIPICLAW_HOME/workspace/sub-agents/`。
+
+不必重启 daemon；角色目录会在资源刷新时重新发现。先发送：
+
+```text
+/subagents roles
+/subagents roles builder
+```
+
+确认角色显示为可用后，直接给主智能体目标、范围和验收方法：
+
+```text
+请把这次跨模块实现交给 builder，工作目录是 /srv/project；完成后让 reviewer 检查当前 diff，并把结论和剩余风险交付给我。
+```
+
+外部委派会立刻返回 `runId`，完成时自动唤醒原频道。过程中可用 `/subagents` 查看，用 `/subagents cancel <runId>` 终止。不要为了等结果反复轮询或重复派发。
+
+> **运行入口边界**：完成唤醒、`state/subagent-runs/` 持久化和 daemon 重启对账由钉钉常驻 runtime 装配。TUI 可以发现和启动角色，但当前不会主动显示外部 run 的完成通知，也不会在退出后重新认领它；长时间外部委派请使用 daemon。
+
+## 它是什么
 
 工作区配置子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。Pipiclaw 只加载这个目录中实际存在且有效的文件；不会自动注入任何默认角色。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
 
-仓库提供了可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)，既有内置角色也有外部角色。例如：
+仓库及 npm 包提供了可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)，既有内置角色也有外部角色。在源码 checkout 中可以直接使用：
 
 ```bash
 # 内置角色（无需额外安装）：
 cp examples/sub-agents/{explorer,log-sifter,git-committer}.md ~/.pipiclaw/workspace/sub-agents/
-# 外部角色（需要先在宿主机安装对应 CLI 并完成登录）：
+# 外部角色（需要在宿主机安装对应 CLI 并完成登录）：
 cp examples/sub-agents/{planner,builder,builder-hard}.md ~/.pipiclaw/workspace/sub-agents/                # 需要 claude
 cp examples/sub-agents/{reviewer,verifier,scout,worker,documenter}.md ~/.pipiclaw/workspace/sub-agents/   # 需要 codex
 ```
 
-八个外部角色构成一个可直接使用的开发闭环（planner → reviewer → builder → reviewer → verifier → documenter，闭环外由 worker 和 scout 承接），细节见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。
+八个外部角色构成一个可直接改造的开发闭环（planner → reviewer → builder → reviewer → verifier → documenter，闭环外由 worker 和 scout 承接），细节见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。模板中的模型、sandbox 和授权取舍不是普适默认值，使用前必须按本机账号和风险边界审阅。
 
 不复制模板也完全可以使用 inline `systemPrompt` 委派——但 inline 委派永远是 `runtime: internal`，外部角色必须以配置文件的形式存在（需要 `harness`/`command`，无法通过调用参数临时拼出）。`purpose: verify` 的验收约束由 runtime 执行，不要求一定配置名为 `verifier` 的文件。
 
@@ -325,7 +359,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 ## 并发与重启
 
 - **Workspace 写锁**（纯排他，无读写区分）：见上文"`mutates`"一节。
-- **并发上限**：每频道与全局各有一个代码常量级别的在途 run 数上限，防止失控派发；触发时错误会给出可执行的下一步（等待、取消一个在跑的 run）。
+- **并发上限**：每个频道最多 6 个、单个 Pipiclaw 实例最多 20 个在途 run，防止失控派发；触发时错误会给出可执行的下一步（等待，或取消一个在跑的 run）。
 - **daemon 重启**：外部 run 是 `detached` 进程，重启后依然存活，runtime 会按持久化的 pid 做存活探针，进程已退出则解析产物目录里的 `events.jsonl` 补判终态、补发迟到的完成唤醒。内置 run 随 daemon 一起消失，重启后会被判定为结局未知（`lost`）并唤醒频道说明情况，不会留下一条永远"running"的孤儿记录。
 
 ## 从 agentmux 迁移
@@ -387,7 +421,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 **Reviewer / Verifier / Worker / Documenter**（外部，codex-cli，可写）—— 独立挑错、运行取证、通用分析、文档与交付：
 
-- `command` 用 `codex exec --sandbox workspace-write`，`mutates: write`
+- 四者均声明 `mutates: write`。`reviewer` 使用 `--sandbox workspace-write`，只把评审报告写入工作区；`verifier`、`worker`、`documenter` 使用 `--sandbox danger-full-access --ask-for-approval never`，因为它们的职责可能需要写 `.git/` 或访问工作区外资源。后三个角色没有 CLI 沙箱保护，必须在使用前按你的宿主账号和任务边界重新审阅
 - `reviewer` 会落盘评审报告，`verifier` 会写构建产物、夹具和报告，因此两者都**不能**用于 `purpose=verify`——如实声明为 `write` 的角色会被 runtime 拒绝承担验收。示例目录里没有可承担外部验收的角色；需要外部 `purpose=verify` 时，自行配置一个 `--sandbox read-only` + `mutates: read` 的评审角色
 - `reviewer` 取工作区写锁，不能再与 builder 并发指向同一棵工作树；并行评审请先 `git worktree add`
 - `documenter` 可按任务创建 commit；push 需要单独授权

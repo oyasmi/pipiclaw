@@ -38,16 +38,27 @@ Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的
 - 记忆维护调度器：本地闸门通过后才做 LLM 整理，每 tick 最多处理 1 个通道（内置常量；整体可用 `memoryMaintenance.enabled` 关闭）；
 - 内建 task driver：扫描本身零 token，只对到点的任务入队唤醒，每 tick 最多派发 4 个通道，有进展续跑冷却与停滞退避两层节流（均为内置常量；整体由 `tools.tasks.enabled` 控制）；
 - 后台作业（`bash async`）：每通道最多 5 个并发子进程，不占运行队列。
+- 委派 run：内置子智能体超过 120 秒后可跨回合存活，外部智能体从派发开始即独立于主回合；每频道最多 6 个、整台主机最多 20 个运行中 run。
+
+委派 run 完成后通过 durable dispatch 唤醒所属频道。`/stop` 只停止主回合；委派必须用 `/subagents cancel` 单独终止。
+
+### 委派写锁
+
+`mutates: write` 的委派会按 `workingDirectory` 的真实路径获取排他写锁。同一目录以及互为父子的目录视为冲突，第二个写 run 会被立即拒绝并返回持锁 runId，不会排队等待。`mutates: read` 不取锁，也不会被写锁阻塞。
+
+需要并行实现时，先为每个写 run 创建独立 `git worktree`，再分别传入不同的 `workingDirectory`。写锁只避免 Pipiclaw 自己同时派发两个声明写入的角色；外部进程、其他用户或未如实声明的角色仍可能在同一目录写入。
 
 ## 资源占用与已知瓶颈（Footprint and Known Bottlenecks）
 
-**真正的约束是 LLM API，不是硬件。** 一个活跃通道的一轮对话平均产生 2–5 次 LLM 请求（含记忆维护与压缩）。Pipiclaw 没有全局 LLM 限流，多个通道同时活跃时可能触发模型提供方的速率限制。CPU、磁盘 I/O 在个人与小团队规模下都不构成瓶颈；内存上每个通道常驻约几 MB 到几十 MB，随对话长度增长。成本可随时用 `/usage` 查看（见[配置手册](./configuration.md)的成本账本）。
+**通常最先遇到的约束是模型 API 和外部 CLI 配额。** 一个活跃通道的一轮对话可能产生多次模型请求；多个频道、内置子智能体和记忆 sidecar 同时活跃时容易触发 provider rate limit。外部 Claude Code / Codex CLI 使用各自账号和限额，Pipiclaw 的主模型限流不会替它们做统一配额管理。
+
+CPU、磁盘 I/O 在个人与小团队规模下通常不是主瓶颈；内存上每个通道常驻约几 MB 到几十 MB，随对话长度增长。重型外部角色会额外启动完整 coding-agent 进程，其 CPU、内存、子进程和网络占用由目标 CLI 决定。成本可用 `/usage` 查看，但 Codex CLI 不报告成本、`exec` 不报告 token 或成本，报告中的 unknown 不能当成 0。
 
 **通道 Runner 不会自动释放。** Runner 对象创建后常驻内存直到进程重启，没有空闲驱逐。累计交互过的通道很多时内存会缓慢上升；定期重启进程即可释放，持久化记忆（`MEMORY.md`、`HISTORY.md` 等）不受影响。
 
 **单 WebSocket 连接是单点。** 所有通道共享一条钉钉连接，断开时全部通道暂停收发直到重连完成。运行时自己接管重连：重连前清理旧 socket，对长时间无响应的连接强制终止后按退避重试，降低复杂网络下僵尸连接叠加的风险。日志里频繁出现 reconnect / forced termination 时优先排查网络或代理层。
 
-**子进程无池化。** 每次 `bash` 调用 spawn 新进程，极端并发下会同时存在多个子进程，通常不构成问题。
+**子进程无池化。** 每次 `bash` 调用和每个外部委派都会启动新进程。频道/主机 run 上限只约束委派，不会把后台 job、外部 CLI 自己派生的子进程和其他系统进程纳入同一个总量预算。
 
 ## 部署与监控建议（Recommendations）
 
@@ -60,5 +71,7 @@ Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的
 | Node.js RSS | `ps aux` 或进程管理器 | 接近可用内存 80% |
 | API 报错 | 进程日志、`state/logs/runtime.jsonl` | rate limit / timeout 频繁出现 |
 | LLM 成本 | `/usage`、`state/usage/usage-YYYY-MM.jsonl` | 后台维护与任务驱动的额外消耗 |
+| 委派 run | `/subagents`、`state/subagent-runs/` | 长时间运行、失败、lost、unknown usage、写锁冲突 |
+| 外部进程 | 进程管理器、`ps`、角色产物目录 | Claude/Codex 的 CPU、内存、派生进程和 stderr |
 | WebSocket 重连 | 日志中的 reconnect / forced termination | 频繁出现时排查网络、代理、防火墙 |
 | 磁盘 | `du -sh ~/.pipiclaw/workspace/` | 长期运行后清理旧通道目录 |

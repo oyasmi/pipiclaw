@@ -26,13 +26,16 @@
 | `skill_manage` | 管理 `workspace/skills/` 下的可复用流程 | 恒开 | — | 否 |
 | `event_manage` | 创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
 | `task_manage` | 创建、推进、验收、关闭长程任务 | 开 | `tools.tasks.enabled` | 否 |
-| `subagent` | 委派聚焦工作或独立验收 | 开 | — | 否（不可嵌套） |
+| `subagent` | 把工作委派给内置或外部智能体 | 开 | — | 否（不可嵌套） |
+| `subagent_manage` | 查看、取消或续接委派 run | 开 | — | 否 |
 
-**"子代理可用"那一列不是权限疏漏，而是设计**：子代理是一次性的、无台账的执行体。台账、记忆、调度和对用户的出站投递都归主 agent 所有，这样"谁为交付负责"始终只有一个答案。详见 [sub-agents.md](./sub-agents.md)。
+**“子代理可用”那一列不是权限疏漏，而是所有权设计**：任务台账、记忆、调度、委派控制和对用户的出站投递都归主智能体所有。每次委派都有独立 run 记录和产物，但被委派的执行者不能再调用 `subagent`、`task_manage` 或 `subagent_manage` 把责任继续向下转移。外部 CLI 自己是否会创建下级智能体不受 Pipiclaw 控制，详见 [sub-agents.md](./sub-agents.md)。
 
 ## 文件与命令类
 
-`read` / `write` / `edit` / `grep` / `bash` 是基础能力，**全部经过 [security.md](./security.md) 描述的守卫**：路径经 path guard，命令经 command guard，被拦截的动作写入审计日志。放宽或收紧范围都在 `security.json`，不在 `tools.json`。
+`read` / `write` / `edit` / `grep` / `bash` 是 Pipiclaw 主智能体和内置子智能体的基础能力，**全部经过 [security.md](./security.md) 描述的守卫**：路径经 path guard，命令经 command guard，被拦截的动作写入审计日志。放宽或收紧范围都在 `security.json`，不在 `tools.json`。
+
+外部智能体是独立宿主机进程，不使用这套工具实现，也不经过这些守卫。它的真实边界来自角色 `command` 中目标 CLI 的 sandbox 参数、运行账号和宿主环境。
 
 `grep` 优于 `bash` 里的 `grep`：结果分组、分页、有 token 上限，不会因为一次宽泛匹配把上下文冲爆。
 
@@ -51,7 +54,7 @@
 
 ## 网页工具（`web_search` / `web_fetch`）
 
-默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（brave / tavily / jina / searxng / duckduckgo）。抓取有字符数、响应体积、超时等上限，长页面通过 offset 分页续读。完整字段见 [configuration.md](./configuration.md#内建工具配置文件-toolsjsontoolsjson)。
+默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（brave / tavily / jina / searxng / duckduckgo）。抓取有字符数、响应体积、超时等上限，长页面通过 offset 分页续读。完整字段见 [configuration-reference.md](./configuration-reference.md#内建工具配置文件-toolsjsontoolsjson)。
 
 出站网络同样受 `security.json` 的网络守卫约束。首次初始化生成的 `security.json` 模板里 `networkGuard.enabled` 为 `false`；若删除该字段或自行从内置默认开始，则 network guard 默认开启。
 
@@ -82,9 +85,18 @@
 
 `tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉 `task_manage` 工具、内建 task driver 和每回合的任务摘要注入。
 
-## 委派（`subagent`）
+## 智能体委派（`subagent` / `subagent_manage`）
 
-把聚焦的实现工作或**独立验收**交给一个全新的子代理。子代理看不到主对话，因此委派描述必须自带目标、范围、路径、约束和验收方法。见 [sub-agents.md](./sub-agents.md)。
+`subagent` 把一项聚焦工作交给新的隔离执行者：
+
+- **内置角色**使用 Pipiclaw 的模型和工具，通常在 120 秒同步宽限内直接返回；超时后转为后台 run。
+- **外部角色**启动 Claude Code、Codex CLI 或 `exec`，恒为异步，派发后立即返回 `runId`；DingTalk daemon 会在完成时唤醒频道。TUI 不持久化或重新认领外部 run。
+
+委派执行者看不到主对话，因此任务描述必须自带目标、范围、工作目录、约束、验收方法和交付格式。
+
+`subagent_manage` 是模型侧控制面：`list` 查看 run，`cancel` 终止 run，`follow_up` 在支持续接的已结束 Claude Code / Codex run 上开启新一轮。用户侧不必经过模型，可直接使用 `/subagents` 命令。
+
+完整角色格式、并发、产物、验收和安全边界见 [sub-agents.md](./sub-agents.md)。
 
 ## 相关文档
 

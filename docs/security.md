@@ -8,7 +8,7 @@
 
 ## 总览（Overview）
 
-Pipiclaw 的安全控制目前主要分成三层：
+Pipiclaw 的安全控制分成四个需要分别理解的部分：
 
 1. 命令防护（command guard）
    作用于 `bash` 工具，拦截明显高风险的命令
@@ -19,7 +19,10 @@ Pipiclaw 的安全控制目前主要分成三层：
 3. 网络防护（network guard）
    作用于 web 工具的出站请求与重定向，避免访问 localhost、云元数据服务和私网地址
 
-这套防护的目标不是把 Pipiclaw 变成强隔离沙箱，而是在保留日常可用性的前提下，把最常见、最危险的误操作和越权访问挡在工具层外面，而不是只靠 prompt 提示。
+4. 外部智能体授权
+   作用于 `workspace/sub-agents/` 中声明为 `runtime: external` 的角色；角色文件决定允许启动哪个 CLI、使用什么 sandbox 和是否声明写入
+
+前三项是 Pipiclaw 自己的工具层守卫。外部智能体不使用这些工具实现，因此不会经过 command/path/network guard；它的强边界来自目标 CLI 自身的 sandbox、运行账号和宿主环境。两类边界不能混为一谈。
 
 ## 配置文件位置（Security Config Path）
 
@@ -494,6 +497,36 @@ $PIPICLAW_HOME/security.json
 - 如果这台机器上还有其他高价值目录，继续补 deny
 - 如果你已经用独立账号或 Docker 跑 Pipiclaw，这套模板仍然有价值，但可以适度放宽
 
+## 外部智能体的授权边界
+
+外部智能体没有单独的 `security.json` 配置段。把下面三项写进一个角色文件，本身就是一份持续有效、可版本管理的授权：
+
+```yaml
+runtime: external
+command: codex exec --sandbox read-only --skip-git-repo-check
+mutates: read
+```
+
+这份授权表示主智能体可以在角色适用时直接启动对应命令，不会再弹出第二道 Pipiclaw 确认。管理员应像审查部署脚本一样审查每个外部角色，重点检查：
+
+- `command` 最终启动什么可执行文件，是否带目标 CLI 的 sandbox / approval 参数
+- `mutates` 是否如实声明 `read` 或 `write`
+- `shell: true` 是否真的必要；它会把整条命令交给 `/bin/sh -lc`，重新引入 shell 展开风险
+- `env` 是否注入了不应交给该角色的凭据或配置
+- 正文是否明确允许的副作用、停止条件、验证方式和交付物
+
+必须了解以下事实：
+
+1. **Pipiclaw 不沙箱化外部进程。** `workingDirectory` 只决定启动目录，不是文件系统边界；`mutates` 只用于审计、验收准入和写锁，也不是权限控制。
+2. **目标 CLI 的 sandbox 才是强边界。** 例如 Codex 的 `--sandbox read-only` 能让只读声明落到执行层；只在提示词里写“不要修改”属于行为约束，不是强制隔离。
+3. **外部进程继承 Pipiclaw 环境。** 它需要用自己的认证，也可能看到 daemon 已有的环境变量。长期部署应使用最小权限账号和最小化环境。
+4. **仓库内容对外部智能体是不可信输入。** 外部 CLI 会自行读取目标仓库的 `AGENTS.md`、`CLAUDE.md` 等文件；它的最终声明和自我验收不能替代主智能体或独立 verifier 的检查。
+5. **每次派发先审计、后 spawn。** 审计包含 runId、角色、harness、完整 argv、工作目录、`mutates` 和模型；严格审计写入失败时外部进程不会启动。
+
+Pipiclaw 的 `write` / `edit` 工具禁止修改 `workspace/sub-agents/`，避免模型自行创建高权限外部角色再调用。但拥有 `bash` 的智能体仍可能通过通用 shell 改写该目录；这是工具层安全模型的已知边界。建议把角色目录纳入版本控制或至少纳入定期备份和变更审查。
+
+并发写角色还受 workspace 排他写锁约束：同一工作目录或互为父子的目录不能同时运行两个 `mutates: write` run。写锁防止意外并发覆盖，不替代权限隔离。
+
 ## 已知边界（Known Limits）
 
 当前实现有几个需要明确知道的边界：
@@ -502,11 +535,12 @@ $PIPICLAW_HOME/security.json
 
 Pipiclaw 的安全层是工具层硬约束，不是内核级隔离。
 
-更强的隔离仍然依赖（都是把整个 Pipiclaw 进程放进受限环境，而不是 Pipiclaw 自带的能力）：
+更强的隔离仍然依赖：
 
 - 在容器中运行整个 Pipiclaw 进程
 - 独立运行账号
 - 主机级权限管理
+- 外部智能体各自提供的 sandbox / approval 模式
 
 ### 2. `bash` 防护不是完整 shell parser
 

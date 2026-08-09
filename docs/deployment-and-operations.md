@@ -19,6 +19,7 @@
 | AI Card | 建议配置完成，便于观察执行过程 |
 | 模型 | 已通过 `/model` 验证可见模型和默认模型，必要时可用唯一片段切换模型 |
 | Web 工具 | 如需 `web_search` / `web_fetch`，已检查 `tools.json` 与代理设置 |
+| 外部智能体 | 目标 CLI 已安装并登录；从服务账号的 `PATH` 可找到；角色的 sandbox 与 `mutates` 已审查 |
 | 灰度范围 | 初期建议先配 `allowFrom` 控制测试人群 |
 | 工作目录 | 确认 `~/.pipiclaw/` 所在磁盘可长期持久化 |
 
@@ -51,7 +52,7 @@ Type=simple
 ExecStart=/usr/bin/env pipiclaw
 Restart=always
 RestartSec=5
-Environment=ANTHROPIC_API_KEY=sk-ant-...
+EnvironmentFile=-/home/pipiclaw/.config/pipiclaw/runtime.env
 Environment=PIPICLAW_DEBUG=0
 WorkingDirectory=/home/pipiclaw
 StandardOutput=journal
@@ -60,6 +61,8 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 ```
+
+把模型凭据和代理变量写进仅服务账号可读的 `runtime.env`，不要把真实 key 直接提交到 unit 文件。外部智能体还依赖服务进程的 `PATH`、HOME 和自身认证文件；在交互 shell 可用不代表 systemd 环境也能找到，部署后应使用相同账号和环境执行一次 `command -v claude` / `command -v codex`。
 
 常用命令：
 
@@ -149,6 +152,9 @@ supervisorctl tail -f pipiclaw
 - `/tasks stats [id]` —— 任务的 attempt、token、成本与验收统计
 - `/tasks doctor` —— 任务台账与事件一致性的只读体检，每条问题附下一步建议
 - `/tasks set <id> <字段> <值>` —— 直接改 wake / next / priority / attempts / deadline，不花一个 LLM 回合
+- `/subagents` —— 运行中的委派、最近结果和角色可用性摘要
+- `/subagents show <runId>` / `output <runId>` —— 实际 argv、工作目录、stderr 与文本产出
+- `/subagents cancel <runId|all>` —— 不经过模型，直接终止委派
 
 ### 结构化日志与成本账本（Structured Logs and Cost Ledger）
 
@@ -181,12 +187,15 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 | `<channel>/log.jsonl` | 原始运行日志 |
 | `<channel>/context.jsonl` | 会话事件冷存储 |
 | `<channel>/subagent-runs.jsonl` | 子代理执行摘要 |
+| `<channel>/subagent-artifacts/<runId>/` | 每次委派的完整输出；外部 run 还包含 prompt、system prompt、协议事件和 stderr |
 | `<channel>/SESSION.md` | 当前工作态 |
 | `<channel>/MEMORY.md` | 会话通道级持久记忆 |
 | `<channel>/HISTORY.md` | 更早上下文摘要 |
 | `<channel>/memory-review.jsonl` | 自动记忆写回、suggestion 和 skipped 决策审计 |
 | `<channel>/.memory/entries.json` | MEMORY 条目的来源、状态与召回统计（可重建） |
 | `<channel>/.memory/tombstones.jsonl` | 遗忘防复活 id/hash，不含原文 |
+
+委派的权威运行状态另存于 `${PIPICLAW_HOME:-~/.pipiclaw}/state/subagent-runs/<channelId>/<runId>.json`。频道内的 `subagent-runs.jsonl` 是便于检索的执行摘要，不能替代状态文件做取消或重启恢复。
 
 运行时记忆分层：
 
@@ -274,6 +283,7 @@ npm install -g @oyasmi/pipiclaw@latest
 - `workspace/`
 - `state/events/history.jsonl`（可选，事件调度审计记录）
 - `state/dispatch/`（待处理的 synthetic event / task-driver wake；运行完成后删除，崩溃恢复时会重放 lease 已过期的记录）
+- `state/subagent-runs/`（委派 run 的状态、pid、实际 argv、结算与唤醒幂等标记；外部 run 重启对账需要）
 - `state/usage/`（可选，LLM 成本账本）与 `state/logs/`（可选，结构化日志）
 
 其中 `workspace/` 最关键，因为它包含：
@@ -283,10 +293,13 @@ npm install -g @oyasmi/pipiclaw@latest
 - `events/`
 - `sub-agents/`
 - 每个会话通道目录下的历史、记忆和日志
+- 每个会话通道的 `subagent-artifacts/`，其中包含委派完整产出和外部 harness 诊断文件
 
 workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `skill_manage` 调用创建或更新，后台记忆管线不会自动写 skill。
 
-恢复时，通常只需要把这些文件恢复到原路径，再重启 Pipiclaw。
+为了得到一致快照，应在 daemon 仍运行时先用 `/subagents list running` 检查外部委派，等待需要保留的 run 完成，或显式取消不再需要的 run，然后再停止 daemon 并备份。外部 run 是 detached 进程，单独停止 daemon 不会终止它。同一主机上的 daemon 重启可以按 pid 和产物重新对账；**在途外部 run 不能迁移到另一台主机**，因为持久化 pid 只对原主机有意义。跨主机迁移前必须先把所有 run 结算到终态。
+
+恢复时把文件放回相同的 app home，再启动 Pipiclaw，并依次检查 `/status`、`/model`、`/tasks doctor` 和 `/subagents`。
 
 ## 灰度与正式上线建议（Rollout Recommendations）
 
@@ -336,14 +349,29 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 - 上一轮是否没有留下任何台账变化——driver 会对无变化的任务退避（默认 60 分钟）再重试，重启进程会清空退避、下一次扫描重新接起
 - `tools.json` 的 `tools.tasks.enabled`（自主长程任务总开关）是否被关闭
 
-### 子代理没有被正常使用
+### 智能体角色没有被正常使用
 
 通常先检查：
 
 - 文件是否放在 `workspace/sub-agents/`
 - frontmatter 是否缺少 `name` 或 `description`
-- `model` 是否写成了不可精确匹配的引用
 - 正文是否为空
+- `/subagents roles [name]` 是否显示 discovery warning 或 `unavailable`
+- 内置角色的 `model` 是否能在 Pipiclaw 模型目录中精确解析
+- 外部角色是否错误填写了 `tools`、`cwd`、`maxTurns` 等只适用于内置角色的字段
+- 外部角色的目标二进制是否在 daemon 的 `PATH` 上，而不只是你的交互 shell 中可用
+
+### 外部委派一直运行、失败或没有唤醒
+
+按下面顺序检查：
+
+1. `/subagents show <runId>`：确认状态、实际 argv、工作目录、pid、stderr 尾部和失败原因。
+2. `/subagents output <runId>`：确认是否已经产生部分文本结果。
+3. 查看 `<channel>/subagent-artifacts/<runId>/events.jsonl` 与 `stderr.log`。`claude-code` / `codex-cli` 这类结构化 harness 必须产生可识别的终态事件，只有退出码为 0 但没有终态事件仍会判失败；通用 `exec` 没有事件协议，正常运行时只按退出码判断，因此不能承担 `purpose=verify`。
+4. 检查角色的 `maxWallTimeSec`、目标 CLI 登录状态、模型名和 sandbox 参数。
+5. daemon 重启后，外部进程仍可能存活；runtime 会探测 pid 并在进程结束后从产物补判。内置 run 无法跨进程恢复，会标为 `lost`。
+
+如果只是当前工作已经不再需要，使用 `/subagents cancel <runId>`。`/stop` 不会终止委派。
 
 ## 生产环境建议（Production Recommendations）
 
@@ -353,9 +381,11 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 - 定期备份 `~/.pipiclaw/`
 - 升级前先看 `CHANGELOG.md` / `CHANGELOG.zh-CN.md`
 - 修改 `events/` 和 `sub-agents/` 时保留版本管理记录
+- 高权限外部角色尽量使用独立 worktree、最小权限账号和目标 CLI 的 sandbox
 
 ## 相关文档（Related Docs）
 
 - 配置项说明：[configuration.md](./configuration.md)
 - 事件、任务台账与 `/tasks` 命令：[events-and-tasks.md](./events-and-tasks.md)
 - 并发模型与容量边界：[scaling-and-concurrency.md](./scaling-and-concurrency.md)
+- 智能体委派、产物与安全边界：[sub-agents.md](./sub-agents.md)

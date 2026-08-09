@@ -1,6 +1,6 @@
-# 工作区子代理示例
+# 工作区智能体角色示例
 
-这里的文件既是配置示例，也是按生产使用标准维护的推荐模板。Pipiclaw 不会自动加载它们；请只复制实际需要的角色到工作区，并根据团队规则调整：
+这里的文件既是配置示例，也是按生产使用标准维护的推荐模板。Pipiclaw 不会自动加载它们；请只复制实际需要的角色到工作区，并根据账号、sandbox 和团队规则逐项审查。下面的命令适用于源码 checkout：
 
 ```bash
 # 内置角色（无需额外安装）：
@@ -9,6 +9,14 @@ cp examples/sub-agents/{explorer,log-sifter,git-committer}.md ~/.pipiclaw/worksp
 # 外部角色（需要先在宿主机安装并登录对应 CLI）：
 cp examples/sub-agents/{planner,builder,builder-hard}.md ~/.pipiclaw/workspace/sub-agents/          # 需要 claude
 cp examples/sub-agents/{reviewer,verifier,scout,worker,documenter}.md ~/.pipiclaw/workspace/sub-agents/  # 需要 codex
+```
+
+通过 npm 全局安装时，模板位于包目录：
+
+```bash
+PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
+  ~/.pipiclaw/workspace/sub-agents/
 ```
 
 ## 内置角色（`runtime: internal`）

@@ -8,8 +8,10 @@
 
 补充文档：
 
+- 交互方式与命令：[interaction-and-commands.md](./interaction-and-commands.md)
 - 事件与任务使用指南：[events-and-tasks.md](./events-and-tasks.md)
-- 子代理使用指南：[sub-agents.md](./sub-agents.md)
+- 智能体委派指南：[sub-agents.md](./sub-agents.md)
+- Workspace skills：[skills.md](./skills.md)
 - 部署与运维指南：[deployment-and-operations.md](./deployment-and-operations.md)
 - 安全文档：[security.md](./security.md)
 
@@ -144,24 +146,25 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 - 冷却时长（5 分钟）是内部常量；fallback **不修改**你用 `/model` 选定的首选模型，进程重启后回到主模型。手动 `/model` 切换会立即清除 fallback 状态。
 - fallback 生效期间 `/status` 会多出一行 `Fallback: active（primary <主模型> 冷却至 HH:MM）`；每次切换都会给用户一条提示，并写入结构化日志的 `model_fallback` 事件，成本账本按实际成交模型归因。
 
-## 子代理默认模型（Sub-Agent Model，`settings.json`）
+## 内置子智能体默认模型（Sub-Agent Model，`settings.json`）
 
-给没有指定模型的子代理委派一个默认模型,避免默认继承父当前模型(往往是最贵的那个)去跑一个本可以用便宜模型完成的窄任务:
+给没有指定模型的**内置**子智能体一个默认模型，避免默认继承主智能体当前模型去跑可以由较轻模型完成的窄任务：
 
 ```json
 "subagentModel": "openai/gpt-4o-mini"
 ```
 
-- 不配置(或填空串)＝功能关闭,行为与不带该设置时逐字节一致。
-- 值是 `provider/model` 引用,须能在已有的 `auth.json` / `models.json` 里解析到；解析失败会返回明确错误,不会静默回退到父模型。
-- 优先级(高到低):`subagent` 工具调用的 `model` 参数 > 工作区子代理 frontmatter 的 `model` > 这里的 `subagentModel` > 父代理当前模型。
+- 不配置或填空串时不指定默认值。
+- 值是 `provider/model` 引用，须能在 `auth.json` / `models.json` 中解析；解析失败会返回明确错误，不会静默回退。
+- 优先级从高到低：`subagent` 调用的 `model` 参数 > 内置角色 frontmatter 的 `model` > `subagentModel` > 主智能体当前模型。
+- 外部角色的 `model` 是目标 harness 自己的模型字符串，只能写在角色文件中，由 Pipiclaw 原样透传；不经过这里，也不由 `models.json` 校验。
 
 ## 可观测性：结构化日志与成本账本（Observability: Structured Logging & Cost Ledger）
 
 作为长期运行的守护进程，Pipiclaw 除了彩色 console 输出外，还会把结构化日志与 LLM 成本落盘到 `STATE_DIR`（默认 `~/.pipiclaw/state`，随 `PIPICLAW_HOME` 变化）。console 输出保持不变；这些文件是额外产物。
 
 - **结构化日志**：`state/logs/runtime.jsonl`，每行一条 JSON 记录（`ts`/`level`/`event`/`channelId`/`message`/`fields` 等），按大小轮转（默认 5MB × 3）。文件权限 `0600`（含用户消息片段，与 `log.jsonl` 同威胁模型）。
-- **成本账本**：`state/usage/usage-YYYY-MM.jsonl`，按月分文件。每条记录一次开销，分三类 `kind`：`turn`（主轮 assistant，不含子代理）、`subagent`（每次子代理运行）、`sidecar`（每次记忆后台任务）。三类金额可直接加总、无重复计数。只要消耗了 token 就落盘，本地/缺价格元数据的模型也一样（成本记 0，token 照记）——否则 `/usage` 会显示成空、任何基于账本的支出闸门都会 fail-open；只有 token 与成本双零的空条目才丢弃。
+- **成本账本**：`state/usage/usage-YYYY-MM.jsonl`，按月分文件。记录分三类 `kind`：`turn`（主轮 assistant）、`subagent`（内置与外部委派）、`sidecar`（记忆后台任务），结算和记账具有幂等保护。条目用 `usageKnown` / `costKnown` 区分真实的 0 与未知：本地或缺价格元数据的模型仍记录 token；Codex CLI 不报告成本，`exec` 不报告 token 或成本，`/usage` 会披露 unknown，而不是把它算成免费。
 - **查询**：在任意频道发送 `/usage`（今日 + 本月）、`/usage 7d`、`/usage month`，按本频道与全局聚合展示成本、`kind` 分解与 top 模型；busy/idle 均可用，不占用运行队列。
 
 `settings.json` 中的 `logging` 段（均可选，缺省即默认）：
@@ -244,6 +247,12 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - runtime sweeper 约每 30 秒检查一次后台作业；作业完成后会自动唤醒对应 channel 并带上输出尾部，不需要再排 check-in event。
 - 只发给主 agent；子代理不能起后台作业，也不能使用 `job` 工具。
 
+### 智能体委派（`subagent` + `subagent_manage`，恒开）
+
+两项工具只发给主智能体，没有 `tools.json` 开关。`subagent` 调用内置或外部角色；`subagent_manage` 查看、取消以及续接已结束的 Claude Code / Codex CLI run。角色由 `workspace/sub-agents/*.md` 配置，空目录不会关闭 inline 内置委派。
+
+外部角色不是 `bash async` 的别名：它有统一 run 状态、产物、工作区写锁、并发准入、完成唤醒、用量标记和重启对账。角色字段、调用参数与授权边界统一见 [sub-agents.md](./sub-agents.md)，不在本字段参考中维护第二份副本。
+
 ### bash 拦截器（`tools.bashInterceptor`）
 
 拦截少数"有更好工具"的裸 shell 形态（整文件 `cat`、递归 `grep`、`sed -i`），报错把模型导向 `read`/`grep`/`edit`。默认开启。
@@ -292,7 +301,7 @@ DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描�
 
 行为（供理解，非配置项）：
 
-- driver 不固定每分钟轮询：它睡到下一个已知的感兴趣时刻（最近的 `wake`、退避到期、deadline），封顶 15 分钟。上一轮确实修改台账后，最早 5 分钟后续跑。
+- driver 不固定每分钟轮询：它睡到下一个已知的感兴趣时刻（最近的 `wake`、退避到期、deadline），封顶 15 分钟。上一轮产生真实 effect 时可在回合结束 nudge 后快速接续；只有台账变化但没有 effect 时使用 5 分钟档。
 - 入队后台账没有任何变化时退避 60 分钟，防止坏任务形成 token 热循环。
 - 单次扫描全局最多派发 4 个。driver 按 channel 轮转，避免排序靠后的 channel 饥饿；同一 channel 每 tick 最多唤醒一个任务，运行中的 channel 会跳过。回合结束会立即 nudge 重扫，15 分钟的睡眠上限也是绕过 runtime 的手工编辑被接起的延迟上界。
 - daemon 重启会清空内存退避，使遗留 actionable task 在下一次扫描重新进入恢复路径。`tui_local` 之类纯 TUI channel 会保留台账和摘要，但关闭的 TUI 没有常驻 transport，不能自行唤醒。
@@ -407,86 +416,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 - `busyMessageDefault` 写成 `"followUp"` 或 `"followup"` 都会启用 follow-up 默认模式；其他显式值会在启动时报错
 - `responseMode` 只接受矩阵中的三个取值；其他显式值会在启动时报错
 
-### 推荐配置（Recommended Configurations）
-
-#### 1. 推荐方案：启用 AI Card（Recommended: Enable AI Card）
-
-```json
-{
-  "clientId": "your-dingtalk-client-id",
-  "clientSecret": "your-dingtalk-client-secret",
-  "robotCode": "",
-  "cardTemplateId": "your-card-template-id",
-  "cardTemplateKey": "content",
-  "allowFrom": []
-}
-```
-
-适合：
-
-- 日常正式使用
-- 希望在钉钉里看到过程更新
-- 需要更容易排查执行过程
-
-#### 2. 首次接通，先排查链路（First Bring-up, Troubleshooting Path）
-
-```json
-{
-  "clientId": "your-dingtalk-client-id",
-  "clientSecret": "your-dingtalk-client-secret",
-  "robotCode": "",
-  "cardTemplateId": "",
-  "cardTemplateKey": "content",
-  "allowFrom": []
-}
-```
-
-适合：
-
-- 第一次验证接入链路
-- 先确认机器人能收到并回复消息
-- 先不排查 AI Card 模板问题
-- 确认可用后尽快补上 AI Card
-
-#### 3. 小范围灰度，限制访问（Internal Pilot, Restricted Access）
-
-```json
-{
-  "clientId": "your-dingtalk-client-id",
-  "clientSecret": "your-dingtalk-client-secret",
-  "robotCode": "",
-  "cardTemplateId": "your-card-template-id",
-  "cardTemplateKey": "content",
-  "allowFrom": ["staff_id_1", "staff_id_2"]
-}
-```
-
-适合：
-
-- 机器人还在灰度期
-- 只允许少量测试人员使用
-- 希望同时观察执行过程与 AI Card 展示效果
-
-#### 4. 答疑机器人，普通消息排队（Q&A Bot, Queue Plain Messages）
-
-```json
-{
-  "clientId": "your-dingtalk-client-id",
-  "clientSecret": "your-dingtalk-client-secret",
-  "robotCode": "",
-  "cardTemplateId": "your-card-template-id",
-  "cardTemplateKey": "content",
-  "allowFrom": [],
-  "busyMessageDefault": "followUp",
-  "responseMode": "rolling_progress_then_plain_final"
-}
-```
-
-适合：
-
-- 多个用户可能在同一群里连续提问
-- 希望每个普通消息按新任务排队处理
-- 仍允许用户通过 `/steer <message>` 主动插入当前任务
+常见接入、灰度和排队配置保留在 [configuration.md](./configuration.md)；本参考不再维护第二套场景示例。
 
 ### 常见错误（Common Mistakes）
 
@@ -804,11 +734,11 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 以下场景通常不能只靠 `models.json`：
 
-- 需要 OAuth / SSO 登录流程
+- 需要 SDK 已支持 provider 的 OAuth / device-code 登录：使用 `pipiclaw auth login`，凭据写入 `auth.json`
 - 目标模型提供方不是 OpenAI / Anthropic / Google 兼容 API
 - 需要自定义 streaming implementation
 
-这时应使用 pi-mono 的扩展 / 自定义模型提供方机制（extension / custom provider）。Pipiclaw 本身复用了这套能力，但不是通过简单 JSON 就能完成。
+第一类使用 Pipiclaw 自带的 provider 登录 CLI，见 [configuration.md](./configuration.md#订阅登录oauth-provider)。后两类才需要评估 pi-mono 的扩展 / 自定义模型提供方机制；它们不是通过简单 JSON 就能完成的用户配置。
 
 上游参考：
 
@@ -1154,7 +1084,7 @@ web 工具的代理顺序是：
 
 ## 子代理目录 `workspace/sub-agents/`（`workspace/sub-agents/`）
 
-放工作区配置子代理（sub-agent）。适合把 reviewer、planner、builder 之类角色固化下来。运行时只加载这个目录中实际存在的配置；Pipiclaw 不内置默认 sub-agent。仓库中的 [`examples/sub-agents/`](../examples/sub-agents/) 提供可复制的成品模板：内置的 explorer、log-sifter、git-committer，以及外部（`runtime: external`）的 planner、builder、builder-hard、reviewer、verifier、scout、worker、documenter。
+放工作区智能体角色。适合把 explorer、planner、builder、reviewer 等执行者固化下来。运行时只加载这个目录中实际存在且有效的配置，不自动启用默认角色。仓库和 npm 包中的 [`examples/sub-agents/`](../examples/sub-agents/) 提供可复制模板：内置的 explorer、log-sifter、git-committer，以及外部的 planner、builder、builder-hard、reviewer、verifier、scout、worker、documenter。
 
 详细字段、示例和推荐写法见 [sub-agents.md](./sub-agents.md)。
 
@@ -1207,6 +1137,7 @@ web 工具的代理顺序是：
 | `.memory/entries.json` | entry metadata、来源、状态与召回统计；可从 `MEMORY.md` 重建 |
 | `.memory/tombstones.jsonl` | 遗忘防复活记录，只保存 entry id/content hash，不保存原文 |
 | `subagent-runs.jsonl` | 子代理运行摘要 |
+| `subagent-artifacts/<runId>/` | 委派完整产出；外部 run 还含 prompt、协议事件与 stderr |
 
 记忆分层：
 
@@ -1216,87 +1147,7 @@ web 工具的代理顺序是：
 - `HISTORY.md`：compaction、`/new`、shutdown 等边界上的旧阶段摘要；后台 durable consolidation 默认不写它。
 - `context.jsonl` / `log.jsonl` / `log.jsonl.1`：冷存储，只通过 `session_search` 显式检索，不进入普通 turn-time recall。
 - `${PIPICLAW_HOME}/state/memory/<channelId>.json`：内置 scheduler 的 hidden state，只记录 dirty、阈值计数、上次运行时间和 backoff，不作为 recall 来源。
-
-## 按场景推荐的配置路径（Recommended Configuration Paths by Scenario）
-
-### 场景 A：先跑通第一条消息（Scenario A: First Successful Bring-up）
-
-目标：
-
-- 先让机器人回第一条消息
-
-建议：
-
-1. `channel.json` 只保留最小字段
-2. 最好一并准备 AI Card；如果只是排查链路，才临时把 `cardTemplateId` 留空
-3. 直接使用 Anthropic 默认模型
-4. 设置 `ANTHROPIC_API_KEY`
-5. 启动后先发送 `/model`，确认当前模型和可见模型列表；切换时可使用精确的 `provider/modelId`、精确的 `modelId`，或能唯一命中的片段字符串
-
-### 场景 B：已有 OpenAI-Compatible 网关（Scenario B: Existing OpenAI-Compatible Gateway）
-
-目标：
-
-- 接入已有公司网关或第三方聚合层
-
-建议：
-
-1. 在 `models.json` 里创建自定义模型提供方
-2. 优先使用 `openai-completions`
-3. 先加上常见 `compat` 配置
-4. 用 `settings.json` 固定默认模型
-5. 用 `/model` 验证模型列表；如果要切换模型，可以直接尝试唯一片段，例如 `/model qwen` 或 `/model turbo`
-
-### 场景 C：Anthropic 通过企业代理接入（Scenario C: Anthropic Through Enterprise Proxy）
-
-目标：
-
-- 保留 Anthropic 模型列表，但统一改走公司代理
-
-建议：
-
-1. 在 `models.json` 覆盖 `anthropic.baseUrl`
-2. 凭据仍使用 Anthropic 方式提供
-3. 如果出现额外 header 需求，再考虑上游 custom provider 机制
-
-### 场景 D：本地模型（Scenario D: Local Models）
-
-目标：
-
-- 用 Ollama 或其他本地 OpenAI-compatible 服务跑 Pipiclaw
-
-建议：
-
-1. 在 `models.json` 新建本地模型提供方
-2. `api` 设为 `openai-completions`
-3. `apiKey` 可以填占位值，例如 `ollama`
-4. 打开常见 `compat`
-5. 先选一个文本模型验证，再逐步补 image / reasoning 元信息
-
-### 场景 E：小范围严格灰度（Scenario E: Strict Pilot in a Small Group）
-
-目标：
-
-- 只让少量同事使用
-
-建议：
-
-1. `allowFrom` 只写测试人员 staff ID
-2. 建议同时配置 AI Card，方便灰度期间观察执行过程
-3. 固定一个稳定默认模型
-4. 打开 `PIPICLAW_DEBUG` 排查问题
-
-### 场景 F：OAuth / SSO / 非标准模型提供方（Scenario F: OAuth / SSO / Non-Standard Provider）
-
-目标：
-
-- 接入需要登录流程或非标准 API 的模型提供方
-
-建议：
-
-1. 不要只靠 `models.json`
-2. 直接评估 pi-mono extension / custom provider 方案
-3. 先参考上游 custom-provider 文档和示例
+- `${PIPICLAW_HOME}/state/subagent-runs/<channelId>/<runId>.json`：委派权威状态、pid、argv 和结算/唤醒幂等标记；频道内 `subagent-runs.jsonl` 只是摘要。
 
 ## 常见问题（Frequently Asked Questions）
 

@@ -5,7 +5,7 @@
 - **定时事件（events）** 回答**"什么时候唤醒 agent"**——一个无状态的时间原语。
 - **任务台账（tasks）** 回答**"有哪些在途工作、进展到哪、验收标准是什么"**——事件缺失的那块持久记忆。
 
-两者由**内建 task driver** 绑在一起：driver 依据任务的 `wake` 时间恢复工作、并按任务的 `schedule` cron 开启新周期；事件则承载与任务无关的独立提醒和外部传感器。
+两者由 runtime 协调，但各自独立：**内建 task driver** 依据任务的 `wake` 时间恢复工作、并按任务的 `schedule` cron 开启新周期；事件 watcher 负责与任务无关的提醒和外部传感器。任务不需要配套事件才能继续。
 
 > 一句话记忆：**event 无记忆，只管定时；task 会积累手艺、自带节奏；driver 按 wake / schedule 驱动任务。**
 
@@ -17,11 +17,11 @@
 
 | 你想做什么 | 从哪读起 |
 |---|---|
-| 用 `/events`、`/tasks` 查看和管理已有的事件与任务 | [`/events` 命令](#events-命令人用只读--删除)、[`/tasks` 命令](#tasks-命令给人看零-llm-成本) |
+| 用 `/events`、`/tasks` 查看和管理已有的事件与任务 | [`/events` 命令](#events-命令人用只读--删除)、[任务可见性与命令](#可见性与命令) |
 | 手写一个事件 JSON，或看懂 agent 建的那个 | [支持的事件类型](#支持的事件类型supported-event-types)、[通用字段](#通用字段common-fields) |
-| 看懂任务文件的格式与 frontmatter 契约 | [任务模型](#任务模型)、[Frontmatter 契约](#frontmatter-契约单一事实源) |
-| 排查"没有按时触发 / 任务没被推进" | [调度历史记录](#调度历史记录event-history)、[异常兜底](#异常兜底)、[deployment-and-operations.md](./deployment-and-operations.md#常见运维问题common-operational-issues) |
-| 理解 driver 的调度与治理机制 | [内建 task driver](#内建-task-driver)、[受治理 control](#受治理-control) |
+| 看懂任务文件的格式与 frontmatter 契约 | [任务模型](#任务模型)、[Frontmatter 契约](#frontmatter-契约) |
+| 排查“没有按时触发 / 任务没被推进” | [调度历史记录](#调度历史记录event-history)、[异常恢复](#异常恢复)、[部署排障](./deployment-and-operations.md#常见运维问题common-operational-issues) |
+| 理解 driver 的调度与治理机制 | [内建 task driver](#内建-task-driver-与-governor)、[Control 与恢复事实](#control-与恢复事实) |
 
 agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook 里，见 [runtime-playbooks.md](./runtime-playbooks.md)。
 
@@ -250,7 +250,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 |------|------|------|
 | `label` | 是 | 一句话说明这次调度改动（展示给用户） |
 | `action` | 是 | `create` / `update` / `delete` |
-| `name` | 是 | 事件名（不含 `.json`）。任务派生事件请用 `task.<channelId>.<taskId>.<用途>` 命名（见[事件命名约定](#事件命名约定)） |
+| `name` | 是 | 事件名（不含 `.json`）。只允许字母、数字、`.`、`_`、`-`；任务不再创建配套事件 |
 | `definition` | create/update 必填 | 完整事件 JSON（字符串）。`channelId` 可省略，默认填当前 channel |
 
 **写入时校验（工具的核心价值）。** 裸用 `write` 写事件 JSON 有个隐患：格式错误的文件会被 watcher **静默删除**，agent 以为安排好了回访，实际什么都没留下。`event_manage` 在**落盘前**就把问题拦下并大声报错：
@@ -288,7 +288,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 }
 ```
 
-任务派生事件的命名约定、以及 agent 何时该调用这个工具，见下方[任务台账](#第二部分任务台账tasks)部分。注意：任务的继续、等待、异常恢复**以及周期节奏**都已由内建 task driver 根据任务文件驱动（`wake` + `schedule` frontmatter），**不再需要**为任务创建任何配套事件——`.schedule` 命名约定已退役。event 层只剩非 task 提醒与外部传感器两种场景。
+任务的继续、等待、异常恢复**以及周期节奏**都由内建 task driver 根据任务文件驱动（`wake` + `schedule` frontmatter），**不要**再为任务创建配套事件；旧的任务事件与 `.schedule` 命名约定已经退役。event 层只负责与 task 无关的提醒和外部传感器，任务模型见下方[任务台账](#第二部分任务台账tasks)。
 
 ## 推荐场景（Recommended Patterns）
 
@@ -530,7 +530,11 @@ list
 
 ## 外部委派
 
-使用 `bash async` 启动长任务并把 `taskId` 绑定到后台 job，任务等待时写 `waitingFor: job`、无 wake；job 完成只恢复对应 task。用户反馈使用 `waitingFor: user`；独立验收使用 `waitingFor: verification`。委派工具、目标、目录、预期产物、验收方法和幂等恢复方式写进任务正文。
+智能体工作使用 `subagent` 委派，并把 `taskId` 绑定到 run。内置角色超过同步宽限后会转为后台 run；外部 Claude Code / Codex / exec 角色从一开始就是异步 run。任务等待时写 `waitingFor: external-signal`、不设 wake；run 完成后，runtime 通过带结构化来源的 durable wake 只激活所属 task，再把结果和产物路径交还频道。
+
+普通长命令使用 `bash async` 并绑定 `taskId`，对应 `waitingFor: job`。不要为了等待智能体再在外层包一层 `bash async`、event 或轮询；那会失去统一的 run 状态、取消、完成唤醒、用量和重启对账。
+
+无论哪种异步工作，都应在任务正文或 Current Cycle 记录：使用的角色或工具、工作目录、runId/job id、预期产物、验收方法和幂等恢复方式。用户反馈使用 `waitingFor: user`；独立验收使用 `waitingFor: verification`。
 
 ## 完整周报流程
 
