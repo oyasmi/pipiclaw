@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import { TOOL_NAMES } from "../tools/registry.js";
 
-const DEFAULT_PRIORITY = 100;
+const DEFAULT_ORDER = 100;
 /** A catalog entry is a single trigger, not a summary; longer descriptions are clipped in the prompt (spec 026 §10.5). */
 export const MAX_PLAYBOOK_DESCRIPTION_CHARS = 100;
 
@@ -18,8 +18,8 @@ export interface RuntimePlaybookMetadata {
 	 * (Prompt sections gate the other way: see `requiresAllTools` in agent/prompt/types.ts.)
 	 */
 	requiresAnyTool: string[];
-	/** Ascending; ties break on filename. */
-	priority: number;
+	/** Ascending catalog position. Values must be unique non-negative integers. */
+	order: number;
 }
 
 function parseList(value: string | undefined): string[] {
@@ -64,25 +64,42 @@ function parseFrontmatter(content: string, filename: string): Omit<RuntimePlaybo
 		}
 	}
 
-	const priorityField = fields.get("priority");
-	const priority = priorityField ? Number(priorityField) : DEFAULT_PRIORITY;
-	if (!Number.isFinite(priority)) {
-		throw new Error(`Runtime playbook ${filename} has a non-numeric priority "${priorityField}".`);
+	if (fields.has("priority")) {
+		throw new Error(`Runtime playbook ${filename} uses unsupported metadata "priority"; rename it to "order".`);
+	}
+	const orderField = fields.get("order");
+	const order = orderField === undefined ? DEFAULT_ORDER : orderField === "" ? Number.NaN : Number(orderField);
+	if (!Number.isInteger(order) || order < 0) {
+		throw new Error(
+			`Runtime playbook ${filename} order must be a non-negative integer; received "${orderField ?? DEFAULT_ORDER}".`,
+		);
 	}
 
-	return { name, description, requiresAnyTool, priority };
+	return { name, description, requiresAnyTool, order };
 }
 
 /** Load the small always-on catalog; playbook bodies remain on disk until the agent reads one. */
 export function loadRuntimePlaybookCatalog(directory = PLAYBOOKS_DIR): RuntimePlaybookMetadata[] {
-	return readdirSync(directory)
+	const catalog = readdirSync(directory)
 		.filter((filename) => filename.endsWith(".md"))
 		.sort()
 		.map((filename) => {
 			const path = join(directory, filename);
 			return { ...parseFrontmatter(readFileSync(path, "utf-8"), filename), filename, path };
-		})
-		.sort((a, b) => a.priority - b.priority || a.filename.localeCompare(b.filename));
+		});
+
+	const orderOwners = new Map<number, string>();
+	for (const playbook of catalog) {
+		const owner = orderOwners.get(playbook.order);
+		if (owner) {
+			throw new Error(
+				`Runtime playbooks ${owner} and ${playbook.filename} use duplicate order ${playbook.order}; assign each playbook a unique order.`,
+			);
+		}
+		orderOwners.set(playbook.order, playbook.filename);
+	}
+
+	return catalog.sort((a, b) => a.order - b.order || a.filename.localeCompare(b.filename));
 }
 
 /**

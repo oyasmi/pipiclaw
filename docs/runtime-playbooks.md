@@ -29,7 +29,7 @@ Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开�
 name: task-driving
 description: 被 TASK_DRIVER 唤醒推进任务、留检查点，或任务停滞、被治理器暂停、元数据损坏时。
 requires-tools: task_manage
-priority: 41
+order: 41
 ---
 ```
 
@@ -40,7 +40,7 @@ runtime 从 metadata 自动生成系统提示中的目录。四个字段各有�
 | `name` | 必须等于文件名（去掉 `.md`），加载时校验 |
 | `description` | **唯一进入系统提示的正文之外的内容**，上限 100 字符，超出会被截断 |
 | `requires-tools` | any-of 门控：列出的工具**一个都没注册**时，该 playbook 不出现在目录里 |
-| `priority` | 目录排序，升序；同值按文件名 |
+| `order` | 目录排序，必须是唯一的非负整数，按数值升序 |
 
 description 同时说明内容和触发场景；完整正文留在包内，只有匹配当前任务时才通过 read 加载。这与 workspace skill 的"metadata 触发、正文按需加载"原则一致。
 
@@ -50,7 +50,7 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 
 ## 当前目录
 
-按 `priority` 排序，即目录在系统提示中呈现的顺序。此表由 `test/playbooks.test.ts` 与 `src/playbooks/` 的实际 frontmatter 对账，新增或删除 playbook 时测试会失败，提醒同步这里。
+按 `order` 排序，即目录在系统提示中呈现的顺序。此表由 `test/playbooks.test.ts` 与 `src/playbooks/` 的实际 frontmatter 对账，新增或删除 playbook 时测试会失败，提醒同步这里。
 
 | Playbook | 门控工具 | 读取场景 |
 |---|---|---|
@@ -80,7 +80,7 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 
 Pipiclaw 可以通过 bash、subagent、event preAction 与用户安装的工具协作，但不会捆绑某个第三方工具的命令、状态协议或检测脚本。
 
-例如 agentmux 的启动、inspect/capture 语义和完成态检测属于用户安装的 agentmux skill/可执行文件。`agent-delegation.md` 只说明通用纪律：记录委派标识和产物、优先把工具自带的阻塞等待包成 `bash async` 作业（由 runtime 保证完成唤醒与跨重启认领），没有阻塞等待时才降级为 preAction 门控或定时回访，然后按用户 skill 取回、review、验证、清理。这样第三方工具可以独立升级，也不会污染 Pipiclaw 的产品知识层。
+内部 subagent 与配置成 workspace 委派角色的外部 AI Agent 都通过 `subagent` / `subagent_manage` 驱动；异步 run 结束时会自行唤醒所属 channel，不要再用 `bash async`、event 或轮询包裹等待。未配置成委派角色的第三方工具，其命令、状态协议和完成态检测仍属于用户安装的 skill/可执行文件；需要长跑命令时使用 background job，需要条件探测时使用 event preAction。这样第三方工具可以独立升级，也不会污染 Pipiclaw 的产品知识层。
 
 ## 面向 workspace 的迁移
 

@@ -1,7 +1,7 @@
 ---
 name: runtime-orientation
 description: 定位 app / workspace / channel / task 的配置与状态文件，或判断机制、团队规则和工具知识该归哪一层。
-priority: 10
+order: 10
 ---
 
 # Pipiclaw 运行时导航

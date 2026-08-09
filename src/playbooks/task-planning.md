@@ -2,7 +2,7 @@
 name: task-planning
 description: 创建或重构长程任务（task）、选择 task 与事件（event），或设定周期节奏（schedule）。
 requires-tools: task_manage
-priority: 40
+order: 40
 ---
 
 # 长程任务（task）规划与建档

@@ -18,7 +18,7 @@ Phase 1–3 已落地，代码入口 `src/agent/prompt/`：
 
 - `systemPromptOverride` 接管基础 prompt，pi 默认身份段/文档索引/`(none)` 工具段不再发送；`appendSystemPromptOverride` 与 `agentsFilesOverride` 清空，SOUL/AGENTS 由 Pipiclaw 作为 section 注入。
 - section 流水线：`types.ts`（authority/cacheClass/requiresTools/预算/溢出）、`sections.ts`（order 100–800）、`builder.ts`（过滤→排序→预算→fingerprint）、`resources.ts`（SOUL/AGENTS 预算与默认模板识别）、`manifest.ts`（`/context` 与 manifest）。
-- Resource Map 常驻全文删除、task core 压缩、playbook frontmatter 增加 `requires-tools`（any-of）/`priority`，关闭 `task_manage` 时任务段与任务 playbook 一并消失。
+- Resource Map 常驻全文删除、task core 压缩、playbook frontmatter 增加 `requires-tools`（any-of）/`order`，关闭 `task_manage` 时任务段与任务 playbook 一并消失。
 - Cache：system prompt 不含 channelId/channel 路径/时间戳；频道事实改由每回合 `<runtime_turn_context>` 胶囊携带（并已加入 `memory/transcript.ts` 的剥离规则）。
 - Final boundary 通过 `before_agent_start` extension 追加在 pi tail（skills/date/cwd）之后；`last_prompt.json` 记录实际发出的 prompt 与 manifest。
 - skills 仍由 pi 渲染（`/skill:name` 不受影响）；workspace skill diagnostics 现在会上报，同名 skill 由 workspace 覆盖并给出 collision 诊断。
@@ -537,7 +537,7 @@ name: task-driving
 description: Read whenever TASK_DRIVER resumes work or before checkpointing an active task.
 requires-tools: task_manage
 modes: task-driver,normal
-priority: 100
+order: 100
 ---
 ```
 
@@ -548,7 +548,7 @@ priority: 100
 - event playbook 仅在 `event_manage` 或 job 回访能力存在时列；
 - memory playbook 仅在相关 memory/skill 工具存在时列；
 - `runtime-orientation` 始终列出；
-- 固定按 priority、filename 排序；
+- `order` 必须是唯一的非负整数，固定按 order 升序排序；
 - description 注入上限 180 字符。
 
 playbook body 继续保持只读、按需加载。

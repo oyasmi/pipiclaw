@@ -2,7 +2,7 @@
 name: task-driving
 description: 被 TASK_DRIVER 唤醒推进任务，或处理任务等待、验收（verify）、闭环、停滞、停用及元数据损坏时。
 requires-tools: task_manage
-priority: 41
+order: 41
 ---
 
 # 任务推进、验收、闭环与修复

@@ -2,7 +2,7 @@
 name: event-scheduling
 description: 创建、调整或退役提醒、定时调度（cron）、preAction 传感器门控，或跨回合的回访事件（event）。
 requires-tools: event_manage
-priority: 30
+order: 30
 ---
 
 # 事件与调度

@@ -38,8 +38,8 @@ export type RunMutates = "read" | "write";
  */
 export const SYNC_GRACE_MS = 120_000;
 
-/** D10.2: per-channel cap on concurrently running delegation runs, mirrors job-manager's MAX_RUNNING_JOBS. */
-export const MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL = 5;
+/** D10.2: per-channel cap on concurrently running delegation runs. */
+export const MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL = 6;
 /** D10.2: host-wide cap across every channel. Bounds unbounded process/worker growth only —
  *  not the full cross-subsystem (task/job/sidecar) admission scheme the design doc leaves open. */
 export const MAX_RUNNING_SUBAGENT_RUNS_PER_HOST = 20;

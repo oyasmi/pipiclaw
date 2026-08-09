@@ -2,7 +2,7 @@
 name: background-jobs
 description: 用 bash async 启动长跑命令、轮询后台作业（job），或作业跨回合仍未完成时。
 requires-tools: job
-priority: 35
+order: 35
 ---
 
 # 后台作业（background jobs）

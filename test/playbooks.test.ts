@@ -12,7 +12,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { guardPath } from "../src/security/path-guard.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
-// Catalog order is priority-then-filename: orientation first, then memory, delivery,
+// Catalog order is the unique frontmatter order: orientation first, then memory, delivery,
 // scheduling, background work, and finally the task lifecycle in the order it is walked.
 const EXPECTED_PLAYBOOKS = [
 	"runtime-orientation.md",
@@ -85,6 +85,31 @@ describe("runtime playbook catalog", () => {
 
 		writeFileSync(join(dir, "broken.md"), "---\nname: other\ndescription: a useful trigger\n---\n# Broken\n");
 		expect(() => loadRuntimePlaybookCatalog(dir)).toThrow('must be "broken"');
+	});
+
+	it("requires unique non-negative integer order metadata", () => {
+		const invalidDir = makeTempDir();
+		const playbook = (name: string, order: string) =>
+			`---\nname: ${name}\ndescription: a useful trigger for ${name}\norder: ${order}\n---\n# ${name}\n`;
+
+		writeFileSync(join(invalidDir, "negative.md"), playbook("negative", "-1"));
+		expect(() => loadRuntimePlaybookCatalog(invalidDir)).toThrow("order must be a non-negative integer");
+		writeFileSync(join(invalidDir, "negative.md"), playbook("negative", "1.5"));
+		expect(() => loadRuntimePlaybookCatalog(invalidDir)).toThrow("order must be a non-negative integer");
+
+		const duplicateDir = makeTempDir();
+		writeFileSync(join(duplicateDir, "first.md"), playbook("first", "7"));
+		writeFileSync(join(duplicateDir, "second.md"), playbook("second", "7"));
+		expect(() => loadRuntimePlaybookCatalog(duplicateDir)).toThrow("use duplicate order 7");
+	});
+
+	it("rejects the removed priority metadata", () => {
+		const dir = makeTempDir();
+		writeFileSync(
+			join(dir, "legacy.md"),
+			"---\nname: legacy\ndescription: a useful trigger for a legacy guide\npriority: 10\n---\n# Legacy\n",
+		);
+		expect(() => loadRuntimePlaybookCatalog(dir)).toThrow('unsupported metadata "priority"');
 	});
 
 	it("renders a compact index without loading playbook bodies into the prompt", () => {
