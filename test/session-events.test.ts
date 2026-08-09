@@ -92,7 +92,7 @@ describe("session compaction events", () => {
 		);
 
 		expect(runState.lastCompactionError).toBe("Context overflow recovery failed: summarization failed");
-		expect(respond).toHaveBeenCalledWith("✖ Context overflow recovery failed: summarization failed", false);
+		expect(respond).toHaveBeenCalledWith("✕ Context overflow recovery failed: summarization failed", false);
 	});
 
 	it("clears stale compaction diagnostics after a successful compaction", async () => {
