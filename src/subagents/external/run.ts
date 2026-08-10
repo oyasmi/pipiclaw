@@ -1,20 +1,23 @@
 import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../../log.js";
 import { logSecurityEvent } from "../../security/logger.js";
 import type { SecurityConfig } from "../../security/types.js";
-import { killProcessGroup, readProcessStartTime } from "../../shared/host-process.js";
-import { formatLocalTime } from "../../shared/local-time.js";
+import {
+	killProcessGroup,
+	probeCliVersion,
+	readProcessStartTime,
+	reapProcessGroup,
+} from "../../shared/host-process.js";
 import { splitShellWords } from "../../shared/shell-words.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
-import { parseVerificationVerdict, writeVerificationAttestation } from "../../tasks/verification.js";
 import type { SubAgentThinkingLevel } from "../discovery.js";
 import { getSubAgentRunManager, type RunMutates, type SettleInput } from "../runs.js";
-import { classifyExternalOutcome } from "./harness.js";
 import { getExternalHarness } from "./registry.js";
+import { finalizeExternalRun } from "./settlement.js";
 
 /**
  * The external-run orchestrator (spec 040, D1/D3/D4). One prompt, one short-lived, argv-direct,
@@ -55,6 +58,9 @@ export interface LaunchExternalRunInput {
 	resumeSessionId?: string;
 	/** The role's own `mutates` declaration, carried through to the dispatch audit event (D8.1). */
 	mutates?: RunMutates;
+	/** Spec 042 D7: fingerprint of the role's `command`/`externalModelRef`/`shell`, persisted so a
+	 *  later `follow_up` can detect a hot-edited role before resuming under it. */
+	roleFingerprint?: string;
 	/** Where the audit trail lives (`<workspaceDir>/.pipiclaw/security.log` by default) and whether
 	 *  it is enabled — every external dispatch writes an `external-agent` audit event (D8.1), since
 	 *  external processes never pass through command-guard and this is the only record of what
@@ -65,7 +71,23 @@ export interface LaunchExternalRunInput {
 	spawnFn?: typeof nodeSpawn;
 }
 
-const WAKE_OUTPUT_TAIL_CHARS = 2_000;
+/**
+ * Spec 042 D2: a pre-run failure (file open, spawn, or a cancel that lands before the process
+ * exists) used to settle the run and return `void`, leaving the caller no way to tell the model
+ * anything went wrong in this same turn — it would see "[Dispatched] ... running" and then, for
+ * two of the three cases, never be woken at all. `missing-binary` (spawn `ENOENT`/`EACCES`) needs
+ * a human to install the CLI or fix `command`, so callers should surface it as a plain `Error`
+ * (AGENTS.md's "can the model resolve this alone?" test says no); the other two are model-fixable
+ * (retry the dispatch, or accept that a race cancelled it) and should be a `RecoverableToolError`.
+ */
+export type ExternalLaunchResult =
+	| { ok: true }
+	| { ok: false; kind: "missing-binary" | "launch-failed" | "cancelled"; reason: string };
+
+function classifySpawnError(error: Error): "missing-binary" | "launch-failed" {
+	const code = (error as NodeJS.ErrnoException).code;
+	return code === "ENOENT" || code === "EACCES" ? "missing-binary" : "launch-failed";
+}
 
 function buildStdinContent(harnessId: string, systemPrompt: string, task: string): string {
 	// claude-code has a real system-prompt flag (--append-system-prompt-file, D4); every other
@@ -75,9 +97,10 @@ function buildStdinContent(harnessId: string, systemPrompt: string, task: string
 	return `${systemPrompt.trim()}\n\n---\n\n${task.trim()}\n`;
 }
 
-/** Launches an external run. Returns once the process is confirmed spawned (or fails fast if it
- *  never starts); the wait-for-exit-and-settle work continues in the background afterward. */
-export async function launchExternalRun(input: LaunchExternalRunInput): Promise<void> {
+/** Launches an external run. Resolves once the process is confirmed spawned (or fails fast if it
+ *  never starts, spec 042 D2); the wait-for-exit-and-settle work continues in the background
+ *  afterward. */
+export async function launchExternalRun(input: LaunchExternalRunInput): Promise<ExternalLaunchResult> {
 	const harness = getExternalHarness(input.harness);
 	if (!harness) {
 		throw new Error(`Unknown external harness "${input.harness}".`);
@@ -118,22 +141,11 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			});
 	const spawnedArgv = [invocation.executable, ...invocation.args];
 
-	// Security gate: the final executable/argv/cwd/capability record must be durable before a
-	// process can exist. `external-agent` uses the strict appender path and rejects on queue or I/O
-	// failure; callers then release any admission lease without an unaudited child ever starting.
-	await logSecurityEvent(input.workspaceDir, input.securityConfig, {
-		type: "external-agent",
-		tool: "subagent",
-		channelId: input.channelId,
-		runId: input.runId,
-		agent: input.agent,
-		harness: harness.id,
-		argv: spawnedArgv,
-		workingDirectory: input.workingDirectory,
-		mutates: input.mutates ?? "read",
-		model: input.externalModelRef,
-	});
-
+	// Spec 042 D11: admission (inside register(), including the concurrency-limit checks) happens
+	// *before* the audit write, not after — previously a run rejected for being over the per-channel
+	// or host-wide cap still left behind an `external-agent` audit record claiming a process that
+	// never existed. `external-agent` records what was *executed* (D8.1), so the record must not
+	// precede the point where this run is actually admitted to run.
 	const runManager = getSubAgentRunManager(input.channelId);
 	await runManager.register({
 		runId: input.runId,
@@ -152,17 +164,38 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		leaseKey: input.leaseKey,
 	});
 
+	// The final executable/argv/cwd/capability record must be durable before a process can exist.
+	// `external-agent` uses the strict appender path and rejects on queue or I/O failure; a failure
+	// here settles the run instead of leaving it an orphaned "running" record (spec 042 D2) — the
+	// same reasoning as every other pre-spawn failure below: this is a real fault requiring human
+	// attention (disk full, permissions), not something a retry would fix on its own.
+	try {
+		await logSecurityEvent(input.workspaceDir, input.securityConfig, {
+			type: "external-agent",
+			tool: "subagent",
+			channelId: input.channelId,
+			runId: input.runId,
+			agent: input.agent,
+			harness: harness.id,
+			argv: spawnedArgv,
+			workingDirectory: input.workingDirectory,
+			mutates: input.mutates ?? "read",
+			model: input.externalModelRef,
+		});
+	} catch (error) {
+		const reason = `Failed to write the mandatory dispatch audit record: ${errorMessage(error)}`;
+		await runManager.settle(input.runId, failedSettleInput(reason), { announce: false });
+		return { ok: false, kind: "launch-failed", reason };
+	}
+
 	let cancelledBeforeSpawn = false;
 	const launchClaimed = await runManager.claimExternalLaunch(input.runId, () => {
 		cancelledBeforeSpawn = true;
 	});
 	if (!launchClaimed) {
-		await runManager.settle(
-			input.runId,
-			{ ...failedSettleInput("Cancelled before the external process was spawned."), status: "cancelled" },
-			{ announce: false },
-		);
-		return;
+		const reason = "Cancelled before the external process was spawned.";
+		await runManager.settle(input.runId, { ...failedSettleInput(reason), status: "cancelled" }, { announce: false });
+		return { ok: false, kind: "cancelled", reason };
 	}
 
 	const eventsPath = join(input.artifactDir, "events.jsonl");
@@ -173,10 +206,12 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		eventsFd = openSync(eventsPath, "a");
 		stderrFd = openSync(stderrPath, "a");
 	} catch (error) {
-		await runManager.settle(input.runId, failedSettleInput(`Failed to open output files: ${errorMessage(error)}`), {
-			announce: true,
-		});
-		return;
+		const reason = `Failed to open output files: ${errorMessage(error)}`;
+		// Spec 042 D2: `announce: false` — this failure happened inside the same tool call that is
+		// still on the stack; the caller reports it directly instead of waking the channel for a
+		// result it can hand back right now.
+		await runManager.settle(input.runId, failedSettleInput(reason), { announce: false });
+		return { ok: false, kind: "launch-failed", reason };
 	}
 
 	const spawnFn = input.spawnFn ?? nodeSpawn;
@@ -193,10 +228,13 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	} catch (error) {
 		closeSync(eventsFd);
 		closeSync(stderrFd);
-		await runManager.settle(input.runId, failedSettleInput(`Failed to launch: ${errorMessage(error)}`), {
-			announce: true,
-		});
-		return;
+		const reason = `Failed to launch: ${errorMessage(error)}`;
+		await runManager.settle(input.runId, failedSettleInput(reason), { announce: false });
+		return {
+			ok: false,
+			kind: classifySpawnError(error instanceof Error ? error : new Error(String(error))),
+			reason,
+		};
 	}
 	// The child has its own duped copy of both fds now; ours would otherwise leak across the
 	// lifetime of a long-running daemon dispatching many external runs.
@@ -208,12 +246,13 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		child.once("spawn", () => resolve(undefined));
 	});
 	if (spawnFailure || !child.pid) {
-		await runManager.settle(
-			input.runId,
-			failedSettleInput(`Failed to launch: ${spawnFailure ? errorMessage(spawnFailure) : "no pid"}`),
-			{ announce: true },
-		);
-		return;
+		const reason = `Failed to launch: ${spawnFailure ? errorMessage(spawnFailure) : "no pid"}`;
+		await runManager.settle(input.runId, failedSettleInput(reason), { announce: false });
+		return {
+			ok: false,
+			kind: spawnFailure ? classifySpawnError(spawnFailure) : "launch-failed",
+			reason,
+		};
 	}
 
 	const pid = child.pid;
@@ -227,18 +266,19 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	});
 	if (cancelledBeforeSpawn) {
 		void killProcessGroup(pid);
-		await runManager.settle(
-			input.runId,
-			{ ...failedSettleInput("Cancelled while the external process was spawning."), status: "cancelled" },
-			{ announce: false },
-		);
-		return;
+		const reason = "Cancelled while the external process was spawning.";
+		await runManager.settle(input.runId, { ...failedSettleInput(reason), status: "cancelled" }, { announce: false });
+		return { ok: false, kind: "cancelled", reason };
 	}
 
 	// The OS-verifiable identity check (D10.3): a restart tells this pid apart from an unrelated
 	// process that later reuses the same number. `undefined` when `ps` itself is unavailable —
-	// restore()/sweep() then fall back to trusting `isProcessAlive` alone.
-	const pidStartedAt = await readProcessStartTime(pid);
+	// restore()/sweep() then fall back to trusting `isProcessAlive` alone. Run alongside the D12
+	// CLI-version probe — neither depends on the other, and both are best-effort/bounded.
+	const [pidStartedAt, cliVersion] = await Promise.all([
+		readProcessStartTime(pid),
+		probeCliVersion(invocation.executable),
+	]);
 	const deadlineAt = processStartedAt + input.maxWallTimeSec * 1000;
 	await runManager.setLaunched(input.runId, {
 		pid,
@@ -246,6 +286,18 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		argv: spawnedArgv,
 		deadlineAt,
 		sessionId: invocation.presetSessionId,
+		// Spec 042 D1: persisted so a restart reconciliation has the same inputs the live watcher
+		// below would — without these, a run that finishes after the daemon disappears would settle
+		// with an inaccurate timeout message, no verify attestation, and an unestimatable duration.
+		verifySubjectBefore,
+		maxWallTimeSec: input.maxWallTimeSec,
+		processStartedAt,
+		channelDir: input.channelDir,
+		invocationWarnings: invocation.warnings,
+		// Spec 042 D12: distinguishes "the target CLI's schema drifted" from "the agent failed".
+		parserVersion: harness.parserVersion,
+		cliVersion,
+		roleFingerprint: input.roleFingerprint,
 	});
 
 	if (child.stdin) {
@@ -274,111 +326,43 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	void closePromise.then(async (exitCode) => {
 		clearTimeout(wallClockTimer);
 		runManager.clearCancelHandle(input.runId);
-		// The leader can exit before a detached descendant it spawned (e.g. a shell that forked and
-		// returned); `-pid` still reaches the whole group as long as the group itself is still
-		// around, so reap it unconditionally rather than only on an explicit cancel/timeout.
-		await killProcessGroup(pid);
+		// Spec 042 D8: this fires on every exit (normal, cancelled, or timed out) as a backup reap —
+		// a cancel/timeout already killed the group via its own call site above. The common case
+		// (nothing left) returns immediately with no signal and no wait; only a genuinely lingering
+		// descendant (the leader exited before it did) pays the TERM-then-KILL sequence.
+		await reapProcessGroup(pid);
 
 		const durationMs = Date.now() - processStartedAt;
 		const terminationReason = runManager.get(input.runId)?.terminationReason;
-		if (terminationReason === "cancelled") {
-			await runManager
-				.settle(
-					input.runId,
-					{ ...failedSettleInput("Cancelled by request."), status: "cancelled", durationMs },
-					{ announce: false },
-				)
-				.catch((error) => {
-					log.logWarning(`Failed to settle external run ${input.runId}`, errorMessage(error));
-				});
-			return;
-		}
-		if (terminationReason === "timeout") {
-			// A distinct failure reason from "no protocol terminal event" (P1-1): the process was
-			// killed on purpose, not just silent — even if a CLI happened to emit a success terminal
-			// right before SIGTERM landed, the budget is what ended this run.
-			await runManager
-				.settle(
-					input.runId,
-					{
-						...failedSettleInput(`Wall time budget exceeded (${input.maxWallTimeSec}s)`),
-						durationMs,
-					},
-					{ announce: true },
-				)
-				.catch((error) => {
-					log.logWarning(`Failed to settle external run ${input.runId}`, errorMessage(error));
-				});
-			return;
-		}
-
-		const eventsText = await readFile(eventsPath, "utf-8").catch(() => "");
-		const stderrTail = (await readFile(stderrPath, "utf-8").catch(() => "")).slice(-WAKE_OUTPUT_TAIL_CHARS);
-		const outcome = harness.parseOutcome({ eventsText, exitCode, stderrTail });
-		const classification = classifyExternalOutcome(harness.id, outcome);
-
-		// D9: the verdict is a fact the run reported, independent of whether the run itself
-		// "succeeded" — a verifier that cleanly concludes VERDICT: FAIL is still a completed run.
-		let verificationVerdict: "pass" | "fail" | undefined;
-		if (input.purpose === "verify" && input.taskId && input.channelDir && classification.status === "completed") {
-			const subjectAfter = await workspaceSubjectHash(input.workingDirectory);
-			const workspaceChanged =
-				verifySubjectBefore !== undefined && subjectAfter !== undefined && verifySubjectBefore !== subjectAfter;
-			const declaredVerdict = parseVerificationVerdict(outcome.finalText);
-			verificationVerdict = declaredVerdict === "pass" && !workspaceChanged ? "pass" : "fail";
-			const evidence = workspaceChanged
-				? "Verifier's workspace subject changed; the attestation is invalid."
-				: !declaredVerdict
-					? "Verifier did not emit the required final VERDICT marker."
-					: outcome.finalText.trim().slice(0, 8_000);
-			await writeVerificationAttestation(input.channelDir, {
+		// Spec 042 D1: parse whatever the process actually wrote *before* applying a cancel/timeout
+		// override, instead of returning early on those two reasons. A run killed for wall-time
+		// budget or cancelled by request may still have produced useful output, usage, and a
+		// resumable session id — `finalizeExternalRun` keeps all of that; only `status` and
+		// `failureReason` get overridden by `terminationReason` (P1-1).
+		await finalizeExternalRun(
+			{
 				runId: input.runId,
+				channelId: input.channelId,
+				channelDir: input.channelDir,
+				harnessId: harness.id,
+				purpose: input.purpose,
 				taskId: input.taskId,
-				verdict: verificationVerdict,
-				checkedAt: formatLocalTime(),
-				evidence,
-				workspaceChanged,
-				subjectHash: workspaceChanged ? undefined : subjectAfter,
-				subjectDir: input.workingDirectory,
-				// External verifiers cannot have their tools structurally removed the way an
-				// internal verifier's are — the sandbox flag lives in the role's own `command`,
-				// unverifiable by pipiclaw. Advisory, not enforced (D9).
-				verificationStrength: "advisory",
-			}).catch((error) => {
-				log.logWarning(`Failed to write verification attestation for run ${input.runId}`, errorMessage(error));
-			});
-		}
-
-		await runManager
-			.settle(
-				input.runId,
-				{
-					status: classification.status,
-					failureReason: classification.failureReason,
-					usage: {
-						input: outcome.usage?.input ?? 0,
-						output: outcome.usage?.output ?? 0,
-						cacheRead: outcome.usage?.cacheRead ?? 0,
-						cacheWrite: outcome.usage?.cacheWrite ?? 0,
-						total: outcome.usage?.total ?? 0,
-						cost: outcome.usage?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-					usageKnown: outcome.usageKnown,
-					costKnown: outcome.costKnown,
-					turns: 0,
-					toolCalls: 0,
-					durationMs,
-					outputText: outcome.finalText,
-					sessionId: outcome.sessionId,
-					verificationVerdict,
-					verificationStrength: verificationVerdict ? "advisory" : undefined,
-				},
-				{ announce: true },
-			)
-			.catch((error) => {
-				log.logWarning(`Failed to settle external run ${input.runId}`, errorMessage(error));
-			});
+				workingDirectory: input.workingDirectory,
+				artifactDir: input.artifactDir,
+				exitCode,
+				durationMs,
+				terminationReason,
+				maxWallTimeSec: input.maxWallTimeSec,
+				verifySubjectBefore,
+			},
+			(settleInput, options) => runManager.settle(input.runId, settleInput, options),
+			{ announce: terminationReason !== "cancelled" },
+		).catch((error) => {
+			log.logWarning(`Failed to settle external run ${input.runId}`, errorMessage(error));
+		});
 	});
+
+	return { ok: true };
 
 	function failedSettleInput(reason: string): SettleInput {
 		return {

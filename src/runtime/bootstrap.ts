@@ -685,7 +685,6 @@ export async function createRuntimeContext(
 		jobsStateDir: join(options.paths.appHomeDir, "state", "jobs"),
 		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 	});
-	void restoreChannelJobs(executor);
 	// Delegation runs get the same treatment (spec 040, D1/D7): persistence root, wake delivery,
 	// and the usage/archive authority, wired before any turn can start a run.
 	configureSubAgentRuntime({
@@ -694,9 +693,13 @@ export async function createRuntimeContext(
 		ledger: getUsageLedger(),
 		store,
 	});
-	// Admission (bot.start() below) must not open until every persisted run is back in memory
-	// (P0-1): a message arriving mid-restore would see partial running-count/short-id/lease state,
+	// Admission (bot.start() below) must not open until every persisted job and run is back in
+	// memory: a message arriving mid-restore would see partial running-count/short-id/lease state,
 	// and durableDispatch's redelivery of a pending completion wake would find no record to claim.
+	// Spec 042 D11: `restoreChannelJobs` used to be a bare `void` while `restoreAllSubAgentRuns`
+	// was already awaited — the same admission race P0-1 closed for delegation runs was still open
+	// for background jobs.
+	await restoreChannelJobs(executor);
 	await restoreAllSubAgentRuns();
 	const eventsWatcher = options.createEventsWatcher
 		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)

@@ -30,7 +30,7 @@ describe("workspace lease (spec 040, D10.1)", () => {
 			expect(message).toContain("git worktree add");
 		}
 
-		releaseWorkspaceLease(first.ok ? first.leaseKey : undefined);
+		releaseWorkspaceLease(first.ok ? first.leaseKey : undefined, "run-1");
 	});
 
 	it("a parent/child directory pair conflicts — they are the same resource, not two", () => {
@@ -44,7 +44,7 @@ describe("workspace lease (spec 040, D10.1)", () => {
 		const inner = acquireWorkspaceLease({ runId: "run-child", channelId: "dm_1", workingDirectory: child });
 		expect(inner.ok).toBe(false);
 
-		releaseWorkspaceLease(outer.ok ? outer.leaseKey : undefined);
+		releaseWorkspaceLease(outer.ok ? outer.leaseKey : undefined, "run-parent");
 
 		// And the reverse direction: child held first, parent conflicts too.
 		const innerFirst = acquireWorkspaceLease({ runId: "run-child-2", channelId: "dm_1", workingDirectory: child });
@@ -52,18 +52,18 @@ describe("workspace lease (spec 040, D10.1)", () => {
 		const outerSecond = acquireWorkspaceLease({ runId: "run-parent-2", channelId: "dm_1", workingDirectory: parent });
 		expect(outerSecond.ok).toBe(false);
 
-		releaseWorkspaceLease(innerFirst.ok ? innerFirst.leaseKey : undefined);
+		releaseWorkspaceLease(innerFirst.ok ? innerFirst.leaseKey : undefined, "run-child-2");
 	});
 
 	it("release frees the directory for the next writer", () => {
 		const dir = createTempDir();
 		const first = acquireWorkspaceLease({ runId: "run-1", channelId: "dm_1", workingDirectory: dir });
 		expect(first.ok).toBe(true);
-		releaseWorkspaceLease(first.ok ? first.leaseKey : undefined);
+		releaseWorkspaceLease(first.ok ? first.leaseKey : undefined, "run-1");
 
 		const second = acquireWorkspaceLease({ runId: "run-2", channelId: "dm_1", workingDirectory: dir });
 		expect(second.ok).toBe(true);
-		releaseWorkspaceLease(second.ok ? second.leaseKey : undefined);
+		releaseWorkspaceLease(second.ok ? second.leaseKey : undefined, "run-2");
 	});
 
 	it("resolves symlinked working directories to the same realpath, so a symlink cannot dodge a conflict", () => {
@@ -72,7 +72,7 @@ describe("workspace lease (spec 040, D10.1)", () => {
 		const first = acquireWorkspaceLease({ runId: "run-1", channelId: "dm_1", workingDirectory: dir });
 		expect(first.ok).toBe(true);
 		if (first.ok) expect(first.leaseKey).toBe(resolved);
-		releaseWorkspaceLease(first.ok ? first.leaseKey : undefined);
+		releaseWorkspaceLease(first.ok ? first.leaseKey : undefined, "run-1");
 	});
 
 	it("findWorkspaceLeaseHolder is read-only: it never itself takes a lease", () => {
@@ -85,7 +85,26 @@ describe("workspace lease (spec 040, D10.1)", () => {
 		// A read run can still be admitted freely — this check does not itself register anything.
 		expect(findWorkspaceLeaseHolder(dir)?.runId).toBe("run-1");
 
-		releaseWorkspaceLease(held.ok ? held.leaseKey : undefined);
+		releaseWorkspaceLease(held.ok ? held.leaseKey : undefined, "run-1");
+		expect(findWorkspaceLeaseHolder(dir)).toBeUndefined();
+	});
+
+	// Spec 042, D5: a blind `leases.delete(key)` let a caller release someone else's lease — e.g. a
+	// restart whose lease-rebuild failed (or, before this fix, any stale/duplicate release call)
+	// could delete a *different* run's lease for the same key. `releaseWorkspaceLease` must verify
+	// the caller is the current holder before deleting anything.
+	it("release is a no-op when the caller does not currently hold the lease", () => {
+		const dir = createTempDir();
+		const holder = acquireWorkspaceLease({ runId: "real-holder", channelId: "dm_1", workingDirectory: dir });
+		expect(holder.ok).toBe(true);
+
+		// A caller that never actually held this lease (wrong runId, or a stale/duplicate release)
+		// must not be able to delete the real holder's lease.
+		releaseWorkspaceLease(holder.ok ? holder.leaseKey : undefined, "not-the-holder");
+		expect(findWorkspaceLeaseHolder(dir)?.runId).toBe("real-holder");
+
+		// The real holder can still release it.
+		releaseWorkspaceLease(holder.ok ? holder.leaseKey : undefined, "real-holder");
 		expect(findWorkspaceLeaseHolder(dir)).toBeUndefined();
 	});
 });

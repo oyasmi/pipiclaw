@@ -1,11 +1,28 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
+import { verificationAttestationPath } from "../src/tasks/verification.js";
 import { useTempDirs } from "./helpers/fixtures.js";
+
+/** Spawns a process that exits immediately and resolves its pid once it has been reaped, so a
+ *  reconciliation test can exercise the "pid is gone" branch without waiting on a real deadline. */
+function spawnAndWaitExit(): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
+		child.once("error", reject);
+		child.once("close", () => {
+			if (child.pid === undefined) {
+				reject(new Error("child never got a pid"));
+				return;
+			}
+			resolve(child.pid);
+		});
+	});
+}
 
 /**
  * Spec 040, D10.3 (P0-1): a restart must genuinely re-adopt a still-running external run, not
@@ -80,7 +97,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		// Simulate the restart: the lease map is process-local (workspace-lease.ts persists
 		// nothing), so a fresh process starts holding none — this is exactly what restore() must
 		// rebuild from the persisted record alone.
-		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined);
+		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined, "run-adopt");
 
 		const secondDaemon = new SubAgentRunManager(channelId, { stateDir });
 		const restoredCount = await secondDaemon.restore();
@@ -91,9 +108,12 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const competing = acquireWorkspaceLease({ runId: "competing", channelId, workingDirectory: workspaceDir });
 		expect(competing.ok).toBe(false);
 
-		// A third "daemon" (or the same one's periodic sweep tick) with `now` pushed past any
-		// deadline this run could have — this must kill the real process and settle it as a
-		// timeout failure, without ever falling back to the "no protocol terminal" guess.
+		// A third "daemon" with `now` pushed past any deadline this run could have — this must kill
+		// the real process and settle it as a timeout failure, without ever falling back to the "no
+		// protocol terminal" guess. Simulated the same way as the first→second transition: release
+		// the second daemon's lease first, since a real third restart means the second daemon's
+		// process (and its process-local lease map) is gone too.
+		releaseWorkspaceLease(secondDaemon.get("run-adopt")?.leaseKey, "run-adopt");
 		const dispatched: unknown[] = [];
 		const swept = new SubAgentRunManager(channelId, {
 			stateDir,
@@ -120,6 +140,142 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		// The lease was released once the run went terminal.
 		const afterLease = acquireWorkspaceLease({ runId: "after", channelId, workingDirectory: workspaceDir });
 		expect(afterLease.ok).toBe(true);
-		if (afterLease.ok) releaseWorkspaceLease(afterLease.leaseKey);
+		if (afterLease.ok) releaseWorkspaceLease(afterLease.leaseKey, "after");
 	}, 15_000);
+
+	// Spec 042, D1: before this fix, restart reconciliation settled a run using whatever zeroed
+	// `record.usage` register() had left behind, while still reporting `usageKnown: true` — a run
+	// that finished after the daemon disappeared showed up as "0 tokens, $0.00, known" instead of
+	// carrying the usage the process actually reported. `finalizeExternalRun` (shared with the live
+	// post-exit path) closes that by parsing `events.jsonl` on the reconciliation path too.
+	it("reconciles a completed run's usage, output, and session id across a restart instead of a false 'known zero'", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_usage_restart";
+		const stateDir = join(workspaceDir, "state");
+		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-usage");
+		mkdirSync(artifactDir, { recursive: true });
+
+		// The process has already exited by the time reconciliation runs; events.jsonl already
+		// holds what a live codex-cli process would have written before it died.
+		const pid = await spawnAndWaitExit();
+		writeFileSync(
+			join(artifactDir, "events.jsonl"),
+			`${[
+				JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "All checks pass." } }),
+				JSON.stringify({
+					type: "turn.completed",
+					thread_id: "th_restart",
+					usage: { input_tokens: 120, output_tokens: 45 },
+				}),
+			].join("\n")}\n`,
+		);
+
+		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
+		await firstDaemon.register({
+			runId: "run-usage",
+			channelId,
+			runtime: "external",
+			harness: "codex-cli",
+			agent: "worker",
+			label: "usage across restart",
+			source: "inline",
+			tools: [],
+			purpose: "work",
+			workingDirectory: workspaceDir,
+			artifactDir,
+		});
+		await firstDaemon.setLaunched("run-usage", {
+			pid,
+			argv: [process.execPath],
+			deadlineAt: Date.now() + 60_000,
+			maxWallTimeSec: 60,
+			processStartedAt: Date.now(),
+		});
+
+		const dispatched: unknown[] = [];
+		const secondDaemon = new SubAgentRunManager(channelId, {
+			stateDir,
+			dispatch: (event) => {
+				dispatched.push(event);
+				return true;
+			},
+		});
+		await secondDaemon.restore();
+
+		const record = secondDaemon.get("run-usage");
+		expect(record?.status).toBe("completed");
+		expect(record?.usage.input).toBe(120);
+		expect(record?.usage.output).toBe(45);
+		expect(record?.usageKnown).toBe(true);
+		expect(record?.sessionId).toBe("th_restart");
+		// The reconciled duration is an estimate (from events.jsonl's mtime), not a measured
+		// process lifetime — it must be flagged as such rather than presented as precise.
+		expect(record?.durationEstimated).toBe(true);
+		expect(dispatched).toHaveLength(1);
+	});
+
+	// Spec 042, D1: the same defect as above, for `purpose=verify` — before this fix, restart
+	// reconciliation never wrote a verify attestation at all (it had no path to `writeVerificationAttestation`
+	// and no persisted `verifySubjectBefore`/`channelDir` to call it with), so a verify run that
+	// completed after a restart silently lost its verdict.
+	it("writes a verify attestation for a purpose=verify run that completes across a restart", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_verify_restart";
+		const channelDir = join(workspaceDir, channelId);
+		const stateDir = join(workspaceDir, "state");
+		const artifactDir = join(channelDir, "subagent-artifacts", "run-verify");
+		mkdirSync(artifactDir, { recursive: true });
+		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		writeFileSync(join(channelDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
+
+		const pid = await spawnAndWaitExit();
+		writeFileSync(
+			join(artifactDir, "events.jsonl"),
+			`${[
+				JSON.stringify({
+					type: "item.completed",
+					item: { type: "agent_message", text: "Checked everything.\nVERDICT: PASS" },
+				}),
+				JSON.stringify({ type: "turn.completed", thread_id: "th_verify" }),
+			].join("\n")}\n`,
+		);
+
+		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
+		await firstDaemon.register({
+			runId: "run-verify",
+			channelId,
+			runtime: "external",
+			harness: "codex-cli",
+			agent: "checker",
+			label: "verify across restart",
+			source: "inline",
+			tools: [],
+			purpose: "verify",
+			taskId: "ship",
+			// Not a git repo: workspaceSubjectHash resolves to undefined on both sides, so
+			// workspaceChanged falls back to false rather than blocking on an unrelated setup gap.
+			workingDirectory: workspaceDir,
+			artifactDir,
+		});
+		await firstDaemon.setLaunched("run-verify", {
+			pid,
+			argv: [process.execPath],
+			deadlineAt: Date.now() + 60_000,
+			maxWallTimeSec: 60,
+			processStartedAt: Date.now(),
+			channelDir,
+		});
+
+		const secondDaemon = new SubAgentRunManager(channelId, { stateDir });
+		await secondDaemon.restore();
+
+		const record = secondDaemon.get("run-verify");
+		expect(record?.status).toBe("completed");
+		expect(record?.verificationVerdict).toBe("pass");
+		expect(record?.verificationStrength).toBe("advisory");
+
+		const attestation = JSON.parse(readFileSync(verificationAttestationPath(channelDir, "run-verify"), "utf-8"));
+		expect(attestation.verdict).toBe("pass");
+		expect(attestation.verificationStrength).toBe("advisory");
+	});
 });

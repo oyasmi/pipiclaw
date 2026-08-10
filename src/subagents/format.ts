@@ -17,6 +17,14 @@ export function elapsedMs(record: RunRecord, now = Date.now()): number {
 	return (record.finishedAt ?? now) - record.startedAt;
 }
 
+/** Spec 042 D1: a restart-reconciled run's duration is an estimate (from the artifact file's mtime
+ *  or a wall-clock fallback), not a measured process lifetime — prefix it so a reader does not
+ *  mistake it for a precise figure. */
+export function formatRunDuration(record: RunRecord, now = Date.now()): string {
+	const text = formatDuration(elapsedMs(record, now));
+	return record.durationEstimated ? `≈${text}` : text;
+}
+
 export function harnessLabel(record: RunRecord): string {
 	return record.harness ? `${record.runtime}/${record.harness}` : record.runtime;
 }

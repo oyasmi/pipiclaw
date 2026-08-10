@@ -105,6 +105,12 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 				getSubAgentDiscovery: options.getSubAgentDiscovery,
 				workspaceDir: options.workspaceDir,
 				securityConfig,
+				// Spec 042 D7: follow_up builds its envelope through the same buildContextualBlocks
+				// the initial dispatch uses, which needs these to resolve a memory: relevant recall.
+				getCurrentModel: options.getCurrentModel,
+				resolveApiKey: options.resolveApiKey,
+				getMemoryRecallSettings: options.getMemoryRecallSettings,
+				memoryCandidateStore: options.memoryCandidateStore,
 			}),
 			"subagent_manage",
 		),

@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import type { DingTalkEvent } from "../runtime/dingtalk.js";
@@ -12,8 +12,7 @@ import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
 import type { UsageLedger } from "../usage/ledger.js";
-import { classifyExternalOutcome } from "./external/harness.js";
-import { getExternalHarness } from "./external/registry.js";
+import { finalizeExternalRun } from "./external/settlement.js";
 import { acquireWorkspaceLease, formatWorkspaceLeaseConflict, releaseWorkspaceLease } from "./workspace-lease.js";
 
 /**
@@ -135,6 +134,39 @@ export interface RunRecord extends RunUsage {
 	sessionId?: string;
 	leaseKey?: string;
 	mutates?: RunMutates;
+	/** Spec 042 D1: persisted at launch so restart reconciliation has the same inputs a live
+	 *  watcher would — the workspace subject hash taken just before an external verify run
+	 *  started, so a restart can still write its attestation instead of silently skipping it. */
+	verifySubjectBefore?: string;
+	/** Spec 042 D1: the role's wall-time budget, persisted so restart reconciliation can report an
+	 *  accurate "budget exceeded (Ns)" reason instead of reverse-engineering it from `deadlineAt`. */
+	maxWallTimeSec?: number;
+	/** Spec 042 D1: the real process start time (`setLaunched` time), as opposed to `startedAt`
+	 *  (registration time) — restart reconciliation's duration estimate is measured from here. */
+	processStartedAt?: number;
+	/** Spec 042 D1: needed only to write a verify attestation from restart reconciliation, which
+	 *  has no other way to reach the channel directory. */
+	channelDir?: string;
+	/** True when `durationMs` is a restart-reconciliation estimate rather than a measured process
+	 *  lifetime (spec 042 D1) — display surfaces prefix it with "≈". */
+	durationEstimated?: boolean;
+	/** Spec 042 D10: non-fatal argv-assembly warnings (e.g. a dropped placeholder token) recorded
+	 *  at launch, shown by `/subagents show`. */
+	invocationWarnings?: string[];
+	/** Spec 042 D7: fingerprint of the role's `command`/`externalModelRef`/`shell` at launch time
+	 *  (external only) — `follow_up` refuses to resume under a role that has since changed one of
+	 *  these instead of silently reinterpreting the old session under a new harness invocation. */
+	roleFingerprint?: string;
+	/** Spec 042 D9: set once the 24h auxiliary-artifact cleanup has run for this record, so a later
+	 *  sweep tick does not repeat the (harmless but pointless) unlink attempts every 30s. */
+	auxiliaryArtifactsCleaned?: boolean;
+	/** Spec 042 D12: the harness adapter's own schema version at launch — lets `/subagents show`
+	 *  distinguish "the target CLI's own protocol changed under an adapter that hasn't caught up"
+	 *  from "the agent itself failed". */
+	parserVersion?: number;
+	/** Spec 042 D12: best-effort `<executable> --version` output captured at launch (1s timeout,
+	 *  `undefined` if the probe failed or timed out) — the other half of the same diagnosis. */
+	cliVersion?: string;
 }
 
 export interface RegisterRunInput {
@@ -164,6 +196,9 @@ export interface SettleInput {
 	turns: number;
 	toolCalls: number;
 	durationMs: number;
+	/** True when `durationMs` is a restart-reconciliation estimate rather than a measured process
+	 *  lifetime (spec 042 D1) — display surfaces prefix it with "≈". */
+	durationEstimated?: boolean;
 	/** Full reply text. Settlement saves it to `output.md`; only its tail goes in the wake. */
 	outputText: string;
 	verificationVerdict?: "pass" | "fail";
@@ -187,6 +222,13 @@ const hostAdmissionQueue = createSerialQueue<"host">();
 
 /** Bytes of the reply text carried inline in the completion wake, matching job-manager's tail budget. */
 const WAKE_OUTPUT_TAIL_CHARS = 2_000;
+
+/** Spec 042 D9: two-tier retention for a settled run. Auxiliary artifacts are large and rarely
+ *  needed once a run is old; the run record and `output.md` are the actual deliverable/audit
+ *  trail and outlive them, matching the design doc's originally-promised 24h/7d split. */
+const AUXILIARY_ARTIFACT_RETENTION_MS = 24 * 60 * 60_000;
+const RUN_RECORD_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const AUXILIARY_ARTIFACT_FILENAMES = ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log"] as const;
 
 function isTerminal(status: RunStatus): boolean {
 	return status !== "running";
@@ -398,7 +440,30 @@ export class SubAgentRunManager {
 	 */
 	async setLaunched(
 		runId: string,
-		info: { pid: number; pidStartedAt?: string; argv: string[]; deadlineAt: number; sessionId?: string },
+		info: {
+			pid: number;
+			pidStartedAt?: string;
+			argv: string[];
+			deadlineAt: number;
+			sessionId?: string;
+			/** Spec 042 D1: everything a restart reconciliation might need if this daemon disappears
+			 *  before the process exits — restore/sweep must have the same inputs a live watcher
+			 *  would, not a thinner subset. */
+			verifySubjectBefore?: string;
+			maxWallTimeSec?: number;
+			processStartedAt?: number;
+			channelDir?: string;
+			/** Spec 042 D10: non-fatal invocation warnings from argv assembly (e.g. a dropped
+			 *  placeholder token), so they survive on the run rather than only ever hitting a log line. */
+			invocationWarnings?: string[];
+			/** Spec 042 D7: the role's `command`/`externalModelRef`/`shell` fingerprint at launch. */
+			roleFingerprint?: string;
+			/** Spec 042 D12: the harness adapter's schema version and a best-effort `--version` probe
+			 *  of the target CLI, so a later failure can be diagnosed as "adapter is stale" vs. "the
+			 *  agent itself failed" instead of looking identical. */
+			parserVersion?: number;
+			cliVersion?: string;
+		},
 	): Promise<void> {
 		const record = this.runs.get(runId);
 		if (!record) return;
@@ -409,6 +474,14 @@ export class SubAgentRunManager {
 		// claude-code pre-assigns its session id before running (D4); persisting it here, not just
 		// at settle(), means a run that crashes before any output is still resumable.
 		if (info.sessionId) record.sessionId = info.sessionId;
+		record.verifySubjectBefore = info.verifySubjectBefore;
+		record.maxWallTimeSec = info.maxWallTimeSec;
+		record.processStartedAt = info.processStartedAt;
+		record.channelDir = info.channelDir;
+		record.invocationWarnings = info.invocationWarnings;
+		record.roleFingerprint = info.roleFingerprint;
+		record.parserVersion = info.parserVersion;
+		record.cliVersion = info.cliVersion;
 		await this.persist(record, true);
 	}
 
@@ -491,6 +564,7 @@ export class SubAgentRunManager {
 			record.turns = input.turns;
 			record.toolCalls = input.toolCalls;
 			record.durationMs = input.durationMs;
+			record.durationEstimated = input.durationEstimated;
 			record.verificationVerdict = input.verificationVerdict;
 			record.verificationStrength = input.verificationStrength;
 			if (input.sessionId) record.sessionId = input.sessionId;
@@ -504,7 +578,7 @@ export class SubAgentRunManager {
 			}
 
 			const outputSaved = await this.writeOutputFile(record, input.outputText);
-			releaseWorkspaceLease(record.leaseKey);
+			releaseWorkspaceLease(record.leaseKey, record.runId);
 			record.leaseKey = undefined; // Terminal records never display as "lease held" (P1-4).
 			this.cancelHandles.delete(runId);
 			this.externalLaunches.delete(runId);
@@ -593,7 +667,7 @@ export class SubAgentRunManager {
 			userName: "SUBAGENT",
 			text:
 				`[SUBAGENT:${record.runId}] Delegation "${record.label}" -> ${record.agent} (${harnessLabel}) finished: ` +
-				`${record.status} (${formatDuration(record.durationMs ?? 0)}).${belongsTo}${verdictLine}\n` +
+				`${record.status} (${record.durationEstimated ? "≈" : ""}${formatDuration(record.durationMs ?? 0)}).${belongsTo}${verdictLine}\n` +
 				`Result:\n${tail || "(no output)"}\n` +
 				// A run that produced no text has no output.md; pointing at it would send the model
 				// after a file that does not exist. The artifact dir still holds the run's evidence
@@ -666,7 +740,7 @@ export class SubAgentRunManager {
 				record.finishedAt = Date.now();
 				record.settledAt = record.finishedAt;
 				record.wakeEnqueued = true;
-				releaseWorkspaceLease(record.leaseKey);
+				releaseWorkspaceLease(record.leaseKey, record.runId);
 				record.leaseKey = undefined;
 				await this.persist(record);
 				return record.status;
@@ -737,11 +811,26 @@ export class SubAgentRunManager {
 						channelId: record.channelId,
 						workingDirectory: record.workingDirectory,
 					});
-					if (!rebuilt.ok) {
+					if (rebuilt.ok) {
+						// Spec 042 D5: persist what was *actually* acquired, not just trust the old
+						// value — a symlink swap or a checkout replaced at the same path can make the
+						// realpath drift between restarts.
+						record.leaseKey = rebuilt.leaseKey;
+						await this.persist(record).catch((error) => {
+							log.logWarning(`Failed to persist rebuilt lease for run ${record.runId}`, errorMessage(error));
+						});
+					} else {
 						log.logWarning(
 							`Could not rebuild workspace lease for adopted run ${record.runId}`,
 							formatWorkspaceLeaseConflict(rebuilt.heldBy),
 						);
+						// This run does not actually hold a lease anymore — record that honestly
+						// (spec 042 D5) so a later settle() cannot delete a different holder's lease
+						// for the same key, and so displays stop claiming this run still holds it.
+						record.leaseKey = undefined;
+						await this.persist(record).catch((error) => {
+							log.logWarning(`Failed to persist cleared lease for run ${record.runId}`, errorMessage(error));
+						});
 					}
 				}
 				await this.reconcileExternalRun(record).catch((error) => {
@@ -786,9 +875,10 @@ export class SubAgentRunManager {
 	 *   ever started, so it is judged `lost` the same as an internal run (D1).
 	 * - `pid` alive under the same identity: genuinely still running. Left alone.
 	 * - `pid` gone (or reused by an unrelated process): the process finished, died, or was killed
-	 *   while the daemon was down. A `terminationReason` set before the kill (P1-1) takes priority
-	 *   over guessing from output; absent that, `events.jsonl` drives the same D4 status table the
-	 *   live post-exit path uses.
+	 *   while the daemon was down. `finalizeExternalRun` (spec 042 D1) parses whatever the process
+	 *   actually wrote before applying `terminationReason` — the same sequence the live post-exit
+	 *   path uses, so a reconciled run never loses usage, output, session id, or its verify verdict
+	 *   just because the daemon happened to be down when the run finished.
 	 */
 	private async reconcileExternalRun(record: RunRecord): Promise<void> {
 		if (!record.pid) {
@@ -803,6 +893,7 @@ export class SubAgentRunManager {
 					turns: record.turns ?? 0,
 					toolCalls: record.toolCalls ?? 0,
 					durationMs: Date.now() - record.startedAt,
+					durationEstimated: true,
 					outputText: "",
 				},
 				{ announce: true },
@@ -812,103 +903,119 @@ export class SubAgentRunManager {
 		if (isProcessAlive(record.pid) && (await this.isSameProcess(record))) {
 			return; // Still genuinely running; nothing to reconcile yet.
 		}
-		const durationMs = Date.now() - record.startedAt;
-		if (record.terminationReason === "cancelled") {
-			await this.settle(
-				record.runId,
-				{
-					status: "cancelled",
-					failureReason: "Cancelled by request.",
-					usage: record.usage,
-					usageKnown: record.usageKnown,
-					costKnown: record.costKnown,
-					turns: record.turns ?? 0,
-					toolCalls: record.toolCalls ?? 0,
-					durationMs,
-					outputText: "",
-				},
-				{ announce: false },
-			);
-			return;
-		}
-		if (record.terminationReason === "timeout") {
-			const budgetSec = record.deadlineAt ? Math.round((record.deadlineAt - record.startedAt) / 1000) : undefined;
+		if (!record.harness) {
+			// Defensive only: external runs always get a harness at register() time (spec 040 D1).
 			await this.settle(
 				record.runId,
 				{
 					status: "failed",
-					failureReason: `Wall time budget exceeded${budgetSec ? ` (${budgetSec}s)` : ""}`,
+					failureReason: "Run has no recorded harness; cannot judge it.",
 					usage: record.usage,
 					usageKnown: record.usageKnown,
 					costKnown: record.costKnown,
 					turns: record.turns ?? 0,
 					toolCalls: record.toolCalls ?? 0,
-					durationMs,
+					durationMs: Date.now() - record.startedAt,
+					durationEstimated: true,
 					outputText: "",
 				},
 				{ announce: true },
 			);
 			return;
 		}
-		const harness = record.harness ? getExternalHarness(record.harness) : undefined;
-		const eventsText = await readFile(join(record.artifactDir, "events.jsonl"), "utf-8").catch(() => "");
-		const stderrTail = (await readFile(join(record.artifactDir, "stderr.log"), "utf-8").catch(() => "")).slice(
-			-2_000,
-		);
-		const outcome = harness?.parseOutcome({ eventsText, exitCode: undefined, stderrTail }) ?? {
-			finalText: "",
-			terminalSeen: false,
-			protocolStatus: "unparsable" as const,
-			usageKnown: false,
-			costKnown: false,
-			stderrTail,
-		};
-		const classification = harness
-			? classifyExternalOutcome(harness.id, outcome)
-			: { status: "failed" as const, failureReason: `Unknown harness "${record.harness}"; cannot judge this run.` };
-		await this.settle(
-			record.runId,
+
+		// Duration can only be estimated post-restart: the artifact file's own mtime is the closest
+		// proxy for "when the process last wrote something" (D1); wall clock from the last known
+		// process start is the fallback when the file is missing (e.g. already GC'd).
+		const processStartedAt = record.processStartedAt ?? record.startedAt;
+		let durationMs = Date.now() - processStartedAt;
+		try {
+			const eventsStat = await stat(join(record.artifactDir, "events.jsonl"));
+			durationMs = eventsStat.mtimeMs - processStartedAt;
+		} catch {
+			// No events file (or already GC'd) — fall back to the wall-clock estimate above.
+		}
+
+		const maxWallTimeSec =
+			record.maxWallTimeSec ??
+			(record.deadlineAt ? Math.round((record.deadlineAt - record.startedAt) / 1000) : undefined);
+
+		await finalizeExternalRun(
 			{
-				status: classification.status,
-				failureReason: classification.failureReason,
-				usage: record.usage,
-				usageKnown: outcome.usageKnown,
-				costKnown: outcome.costKnown,
-				turns: record.turns ?? 0,
-				toolCalls: record.toolCalls ?? 0,
-				durationMs,
-				outputText: outcome.finalText,
-				sessionId: outcome.sessionId,
+				runId: record.runId,
+				channelId: record.channelId,
+				channelDir: record.channelDir,
+				harnessId: record.harness,
+				purpose: record.purpose,
+				taskId: record.taskId,
+				workingDirectory: record.workingDirectory,
+				artifactDir: record.artifactDir,
+				exitCode: undefined,
+				durationMs: Math.max(0, durationMs),
+				durationEstimated: true,
+				terminationReason: record.terminationReason,
+				maxWallTimeSec,
+				verifySubjectBefore: record.verifySubjectBefore,
 			},
-			{ announce: true },
+			(settleInput, options) => this.settle(record.runId, settleInput, options),
+			{ announce: record.terminationReason !== "cancelled" },
 		);
 	}
 
 	/**
-	 * Periodic host-wide check for external runs (spec 040, D10.3): kills anything past its
-	 * deadline, and reconciles anything a `close` event will never fire for — a run adopted from a
+	 * Periodic host-wide check (spec 040, D10.3; GC folded in by spec 042, D9): kills anything past
+	 * its deadline, reconciles anything a `close` event will never fire for — a run adopted from a
 	 * previous daemon via `restore()`, or (rarely) one whose local watcher already unwound without
-	 * settling it. `reconcileExternalRun` no-ops on a genuinely still-running, still-watched run,
-	 * so sweeping one this process itself launched is harmless, not just adopted ones.
+	 * settling it — and garbage-collects terminal records past their retention window. Before D9
+	 * this GC only ran inside `restore()`, so a long-lived daemon that never restarted accumulated
+	 * terminal records and artifacts without bound; the periodic sweep is the other place every
+	 * record is reliably revisited. `reconcileExternalRun` no-ops on a genuinely still-running,
+	 * still-watched run, so sweeping one this process itself launched is harmless, not just adopted ones.
 	 */
 	async sweep(now = Date.now()): Promise<void> {
 		for (const record of Array.from(this.runs.values())) {
-			if (record.status !== "running" || record.runtime !== "external" || !record.pid) continue;
-			if (record.deadlineAt && now >= record.deadlineAt && record.terminationReason !== "timeout") {
-				await this.markTerminationReason(record.runId, "timeout");
-				await killProcessGroup(record.pid).catch(() => undefined);
+			if (record.status === "running") {
+				if (record.runtime !== "external" || !record.pid) continue;
+				if (record.deadlineAt && now >= record.deadlineAt && record.terminationReason !== "timeout") {
+					await this.markTerminationReason(record.runId, "timeout");
+					await killProcessGroup(record.pid).catch(() => undefined);
+				}
+				await this.reconcileExternalRun(record).catch((error) => {
+					log.logWarning(`Failed to sweep external run ${record.runId}`, errorMessage(error));
+				});
+				continue;
 			}
-			await this.reconcileExternalRun(record).catch((error) => {
-				log.logWarning(`Failed to sweep external run ${record.runId}`, errorMessage(error));
+			await this.collectGarbageIfExpired(record, now).catch((error) => {
+				log.logWarning(`Failed to garbage-collect sub-agent run ${record.runId}`, errorMessage(error));
 			});
 		}
 	}
 
-	/** Drop a settled record once its retention window has passed, mirroring job-manager's GC. */
+	/**
+	 * Two-tier retention (spec 042 D9). Auxiliary artifacts (`events.jsonl`, `stderr.log`,
+	 * `prompt.txt`, `system-prompt.txt`) are large and rarely needed once a run is old, so they are
+	 * cleaned after 24h; `output.md` (the actual deliverable) and the run record itself (the audit
+	 * trail) are kept for 7 days, matching the design doc's originally-promised — but until now
+	 * unimplemented — cleanup window.
+	 */
 	private async collectGarbageIfExpired(record: RunRecord, now = Date.now()): Promise<void> {
-		const RETENTION_MS = 24 * 60 * 60_000;
-		if (record.settledAt && now - record.settledAt >= RETENTION_MS) {
+		if (!record.settledAt) return;
+		const age = now - record.settledAt;
+		if (age >= RUN_RECORD_RETENTION_MS) {
 			await this.forget(record);
+			return;
+		}
+		if (age >= AUXILIARY_ARTIFACT_RETENTION_MS && !record.auxiliaryArtifactsCleaned) {
+			await Promise.all(
+				AUXILIARY_ARTIFACT_FILENAMES.map((name) => unlink(join(record.artifactDir, name)).catch(() => undefined)),
+			);
+			record.auxiliaryArtifactsCleaned = true;
+			await this.persist(record).catch((error) => {
+				log.logWarning(
+					`Failed to persist auxiliary-artifact cleanup marker for run ${record.runId}`,
+					errorMessage(error),
+				);
+			});
 		}
 	}
 }

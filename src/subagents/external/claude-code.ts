@@ -6,6 +6,7 @@ import {
 	type ExternalInvocationInput,
 	type ExternalOutcome,
 	expandPlaceholders,
+	formatDroppedPlaceholderWarnings,
 	type ParseOutcomeInput,
 } from "./harness.js";
 
@@ -42,6 +43,7 @@ function toClaudeEffort(level: string | undefined): string | undefined {
 
 export const claudeCodeHarness: ExternalHarness = {
 	id: "claude-code",
+	parserVersion: 1,
 
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult {
 		if (input.argv.length === 0) {
@@ -51,7 +53,11 @@ export const claudeCodeHarness: ExternalHarness = {
 		const existing = detectExistingFlags(rest);
 		const effort = toClaudeEffort(input.thinkingLevel);
 
-		const { argv: expandedRest, used } = expandPlaceholders(rest, {
+		const {
+			argv: expandedRest,
+			used,
+			dropped,
+		} = expandPlaceholders(rest, {
 			$MODEL: input.model,
 			$EFFORT: effort,
 			$PROMPT_FILE: input.promptFile,
@@ -77,7 +83,13 @@ export const claudeCodeHarness: ExternalHarness = {
 			args.push("--session-id", presetSessionId);
 		}
 
-		return { executable, args, resumable: true, presetSessionId };
+		return {
+			executable,
+			args,
+			resumable: true,
+			presetSessionId,
+			warnings: dropped.length > 0 ? formatDroppedPlaceholderWarnings(dropped) : undefined,
+		};
 	},
 
 	parseOutcome(input: ParseOutcomeInput): ExternalOutcome {

@@ -86,6 +86,22 @@ describe("claude-code harness: buildInvocation", () => {
 		expect(result.args.filter((token) => token === "--append-system-prompt-file")).toHaveLength(0);
 		expect(result.args).toContain(baseInvocation.systemPromptFile);
 	});
+
+	// Spec 042, D10: before this fix, an unresolved $MODEL reached argv as the literal string
+	// "$MODEL" — a config-only bug that made the CLI misbehave silently rather than fail loudly.
+	// The sibling "--model" flag is left orphaned (a separate argv token, untouched by placeholder
+	// expansion) — the discovery-time check in discovery.ts is what catches that combination before
+	// a role is ever dispatched; `warnings` here is the runtime-visible half of that same fix.
+	it("drops an argv token referencing $MODEL when no model is configured, and reports a warning", () => {
+		const result = claudeCodeHarness.buildInvocation({
+			...baseInvocation,
+			argv: ["claude", "--model", "$MODEL"],
+			// model intentionally omitted
+		});
+		expect(result.args).not.toContain("$MODEL");
+		expect(result.warnings).toBeDefined();
+		expect(result.warnings?.[0]).toContain("$MODEL");
+	});
 });
 
 function streamJson(...records: unknown[]): string {

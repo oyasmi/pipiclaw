@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync as existsSyncFs } from "node:fs";
 import { join as joinPath, delimiter as pathDelimiter } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -326,19 +327,26 @@ function parseContextChoice(raw: unknown): {
 	return { value: { contextMode: "contextual", memory: normalized as SubAgentMemoryMode } };
 }
 
+/**
+ * `defaultValue` is computed per call site rather than derived from `contextMode` inside this
+ * function (spec 042 D4): internal keeps following `contextMode` (`contextual` → `relevant`),
+ * but an external role's default is always `none` regardless of `contextMode` — a role that
+ * merely wants `paths` injected (via `contextMode: contextual`) should not also silently start
+ * sending session/memory content to a third-party process.
+ */
 function parseMemoryMode(
 	raw: unknown,
-	contextMode: SubAgentContextMode,
+	defaultValue: SubAgentMemoryMode,
 ): { value: SubAgentMemoryMode; error?: string } {
 	const normalized = readOptionalTrimmedString(raw);
 	if (!normalized) {
-		return { value: contextMode === "contextual" ? "relevant" : "none" };
+		return { value: defaultValue };
 	}
 	if (ALLOWED_MEMORY_MODES.includes(normalized as SubAgentMemoryMode)) {
 		return { value: normalized as SubAgentMemoryMode };
 	}
 	return {
-		value: contextMode === "contextual" ? "relevant" : "none",
+		value: defaultValue,
 		error: `Unknown memory "${normalized}". Allowed values: ${ALLOWED_MEMORY_MODES.join(", ")}`,
 	};
 }
@@ -486,13 +494,32 @@ function isExecutableAvailable(token: string): boolean {
 	return pathEnv.split(pathDelimiter).some((dir) => dir && existsSyncFs(joinPath(dir, token)));
 }
 
-/** Fields that only mean something for one runtime; present under the other, they are rejected
- *  outright rather than silently ignored (spec 040, D5 — "对某种 runtime 无意义的字段一律驳回"). */
-const FIELDS_REJECTED_FOR_INTERNAL = ["harness", "command"] as const;
-const FIELDS_REJECTED_FOR_EXTERNAL = ["tools", "maxTurns", "maxToolCalls", "bashTimeoutSec"] as const;
+type FieldSupport = "supported" | "rejected";
 
-function rejectedFieldNames(frontmatter: Record<string, unknown>, names: readonly string[]): string[] {
-	return names.filter((name) => frontmatter[name] !== undefined);
+/**
+ * Which role-file fields mean something under which runtime (spec 040 D5's "对某种 runtime 无意义
+ * 的字段一律驳回", made into data per spec 042 D3/F3). A field present under a runtime marked
+ * `"rejected"` here is rejected outright, not silently ignored — silently ignoring one is a
+ * defect, not a leniency (the review that produced spec 042 found `shell`/`env` on an internal
+ * role doing exactly that before this table existed). `cwd` is deliberately absent: it is rejected
+ * for *both* runtimes with a different message ("not a role field at all"), handled separately in
+ * `loadAgentsFromDir` rather than as a per-runtime mismatch.
+ */
+export const ROLE_FIELD_MATRIX: Record<string, Record<SubAgentRuntime, FieldSupport>> = {
+	harness: { internal: "rejected", external: "supported" },
+	command: { internal: "rejected", external: "supported" },
+	shell: { internal: "rejected", external: "supported" },
+	env: { internal: "rejected", external: "supported" },
+	tools: { internal: "supported", external: "rejected" },
+	maxTurns: { internal: "supported", external: "rejected" },
+	maxToolCalls: { internal: "supported", external: "rejected" },
+	bashTimeoutSec: { internal: "supported", external: "rejected" },
+};
+
+function rejectedFieldNames(frontmatter: Record<string, unknown>, runtime: SubAgentRuntime): string[] {
+	return Object.keys(ROLE_FIELD_MATRIX).filter(
+		(field) => frontmatter[field] !== undefined && ROLE_FIELD_MATRIX[field][runtime] === "rejected",
+	);
 }
 
 function inferMutatesFromTools(tools: SubAgentToolName[]): SubAgentMutates {
@@ -518,7 +545,7 @@ function parseInternalAgent(
 	description: string,
 	availableModels: Model<Api>[],
 ): ParsedAgent {
-	const rejected = rejectedFieldNames(frontmatter, FIELDS_REJECTED_FOR_INTERNAL);
+	const rejected = rejectedFieldNames(frontmatter, "internal");
 	if (rejected.length > 0) {
 		return { warning: `${entryName}: field(s) ${rejected.join(", ")} are only valid for runtime: external` };
 	}
@@ -529,7 +556,7 @@ function parseInternalAgent(
 	const contextMode = parseContextMode(frontmatter.contextMode);
 	if (contextMode.error) return { warning: `${entryName}: ${contextMode.error}` };
 
-	const memoryMode = parseMemoryMode(frontmatter.memory, contextMode.value);
+	const memoryMode = parseMemoryMode(frontmatter.memory, contextMode.value === "contextual" ? "relevant" : "none");
 	if (memoryMode.error) return { warning: `${entryName}: ${memoryMode.error}` };
 
 	const parsedPaths = parseStringList(frontmatter.paths, "paths");
@@ -566,8 +593,18 @@ function parseInternalAgent(
 	const promptLengthError = validateSubAgentSystemPrompt(trimmedBody, "Sub-agent system prompt");
 	if (promptLengthError) return { warning: `${entryName}: ${promptLengthError}` };
 
+	// Spec 042 D6: `bash` can write regardless of what `tools` otherwise implies, and the default
+	// tool set (`read,bash`) is inferred "read" — a role that actually writes through bash and never
+	// says so does not take the workspace write lease. Not rejected (`bash` is normal and common for
+	// read-only inspection too) — just surfaced so the declaration is a conscious choice.
+	const bashWithoutMutatesWarning =
+		toolParse.tools.includes("bash") && mutates.value === undefined
+			? 'tools include bash but "mutates" is not declared; if this role writes to the workspace, declare mutates: write so it participates in the workspace write lease'
+			: undefined;
+	const combinedWarningBody = [numericWarning, bashWithoutMutatesWarning].filter(Boolean).join("; ");
+
 	return {
-		warning: numericWarning ? `${entryName}: ${numericWarning}` : undefined,
+		warning: combinedWarningBody ? `${entryName}: ${combinedWarningBody}` : undefined,
 		agent: {
 			name,
 			description,
@@ -600,7 +637,7 @@ function parseExternalAgent(
 	name: string,
 	description: string,
 ): ParsedAgent {
-	const rejected = rejectedFieldNames(frontmatter, FIELDS_REJECTED_FOR_EXTERNAL);
+	const rejected = rejectedFieldNames(frontmatter, "external");
 	if (rejected.length > 0) {
 		return { warning: `${entryName}: field(s) ${rejected.join(", ")} are not valid for runtime: external` };
 	}
@@ -639,8 +676,16 @@ function parseExternalAgent(
 	const contextMode = parseContextMode(frontmatter.contextMode);
 	if (contextMode.error) return { warning: `${entryName}: ${contextMode.error}` };
 
-	const memoryMode = parseMemoryMode(frontmatter.memory, contextMode.value);
+	// Spec 042 D4: external default is always "none", never following contextMode the way internal
+	// does — a role that only wants `paths` injected (contextMode: contextual) should not also
+	// silently start sending session/memory content to a third-party process. Explicitly declaring
+	// `memory: session|relevant` is a real, informed choice; it gets a disclosure warning below.
+	const memoryMode = parseMemoryMode(frontmatter.memory, "none");
 	if (memoryMode.error) return { warning: `${entryName}: ${memoryMode.error}` };
+	const memoryDisclosureWarning =
+		memoryMode.value !== "none"
+			? `${entryName}: memory: ${memoryMode.value} sends channel session state / recalled memory content to this external process`
+			: undefined;
 
 	const maxWallTimeSec = parsePositiveInteger(frontmatter.maxWallTimeSec, DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC);
 
@@ -658,14 +703,31 @@ function parseExternalAgent(
 			? `executable "${executable}" was not found on PATH; install it or fix "command" in ${filePath}`
 			: undefined;
 
+	const externalModelRef = readOptionalTrimmedString(frontmatter.model);
+	// Spec 042 D10: a role's `model:` can only ever come from its own frontmatter (external `model`
+	// is never taken from the invocation) — so if `command` references `$MODEL` and none is
+	// configured here, every dispatch of this role will silently drop that argv token. Surface it
+	// at discovery time, where the fix (add `model:`) is obvious, instead of only as a per-run
+	// warning after the fact. `$EFFORT` gets no equivalent check: `thinkingLevel` can be supplied
+	// per invocation, so an unset frontmatter value does not mean "no value ever".
+	const modelPlaceholderWarning =
+		command.includes("$MODEL") && !externalModelRef
+			? `${entryName}: command references $MODEL but no "model" is configured; that argv token will be dropped on every dispatch`
+			: undefined;
+
+	// Both are non-fatal (the role still loads); joined rather than picking one so an unlucky
+	// combination never silently loses one of them.
+	const combinedWarning = [memoryDisclosureWarning, modelPlaceholderWarning].filter(Boolean).join("; ") || undefined;
+
 	return {
+		warning: combinedWarning,
 		agent: {
 			name,
 			description,
 			systemPrompt: trimmedBody,
 			tools: [],
 			modelRef: undefined,
-			externalModelRef: readOptionalTrimmedString(frontmatter.model),
+			externalModelRef,
 			maxTurns: DEFAULT_MAX_TURNS,
 			maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
 			maxWallTimeSec: maxWallTimeSec.value,
@@ -795,6 +857,28 @@ export function resolveSubAgentConfig(
 		return { error: 'Provide either "agent" or "systemPrompt" to define the sub-agent.' };
 	}
 
+	const effectiveRuntime = baseConfig?.runtime ?? "internal";
+
+	// Spec 042 D3: the invocation-side counterpart to the role-file field matrix (`ROLE_FIELD_MATRIX`
+	// above) — a field only meaningful for one runtime is rejected outright when the resolved role
+	// is the other, not silently ignored. `tools` and `model` were previously accepted and either
+	// dropped on the floor or — for `model` — resolved against `models.json` and made to fail a
+	// dispatch for a reason that has nothing to do with the external role actually named.
+	if (effectiveRuntime === "external" && overrides.tools !== undefined) {
+		return {
+			error:
+				`Sub-agent "${baseConfig?.name}" is external; its tool boundary comes from its own ` +
+				'command (e.g. "--sandbox read-only"), not the "tools" invocation parameter, which has no effect on external roles.',
+		};
+	}
+	if (effectiveRuntime === "external" && overrides.model?.trim()) {
+		return {
+			error:
+				`Sub-agent "${baseConfig?.name}" is external; its model can only be set in the role file's ` +
+				'"model" frontmatter. The "model" invocation parameter has no effect on external roles and is never resolved against models.json.',
+		};
+	}
+
 	const tools = overrides.tools
 		? validateToolNames(overrides.tools)
 		: { tools: baseConfig?.tools ?? [...DEFAULT_SUB_AGENT_TOOLS] };
@@ -804,7 +888,7 @@ export function resolveSubAgentConfig(
 
 	let model = baseConfig?.model;
 	let modelRef = baseConfig?.modelRef;
-	if (overrides.model?.trim()) {
+	if (effectiveRuntime !== "external" && overrides.model?.trim()) {
 		const resolved = resolveModelReference(overrides.model.trim(), availableModels);
 		if (!resolved.model) {
 			return { error: resolved.error };
@@ -824,7 +908,6 @@ export function resolveSubAgentConfig(
 	if (effortOverride.error) {
 		return { error: effortOverride.error };
 	}
-	const effectiveRuntime = baseConfig?.runtime ?? "internal";
 	// An explicit `effort` replaces the whole budget tuple rather than merging field by
 	// field, so a preset never produces a combination no preset describes. External is a
 	// separate branch (P1-3): it has no turn/tool-call budget, and effort's wall-time numbers
@@ -929,4 +1012,22 @@ export function formatSubAgentList(agents: SubAgentConfig[], maxItems: number = 
 	}
 
 	return `${listed.join("\n")}\n- ... and ${agents.length - maxItems} more`;
+}
+
+/**
+ * Spec 042 D7: a fingerprint of the parts of an external role that decide *how a launched process
+ * is built* — `command`, `externalModelRef`, `shell`. Persisted on a run at launch and compared
+ * against the role's current config on `follow_up`: a mismatch means the role was hot-edited in a
+ * way that would resume under a harness or executable it never actually wrote, so `follow_up`
+ * refuses rather than silently reinterpreting the old session with the new config.
+ *
+ * Deliberately narrow — `systemPrompt` and `maxWallTimeSec` are excluded on purpose. A resumed
+ * session already carries its own context, and folding prompt edits in would mean "fix a typo in
+ * the role" breaks every in-flight follow-up; a full invocation snapshot was considered and
+ * rejected for the same reason (spec 042 design doc, "已驳回的方案").
+ */
+export function externalRoleFingerprint(role: Pick<SubAgentConfig, "command" | "externalModelRef" | "shell">): string {
+	return createHash("sha256")
+		.update(JSON.stringify([role.command ?? "", role.externalModelRef ?? "", Boolean(role.shell)]))
+		.digest("hex");
 }

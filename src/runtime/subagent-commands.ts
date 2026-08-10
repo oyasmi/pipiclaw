@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentConfig, SubAgentDiscoveryResult } from "../subagents/discovery.js";
-import { elapsedMs, formatCost, formatDuration, harnessLabel } from "../subagents/format.js";
+import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
 import { getSubAgentRunManager, type RunRecord, type RunResolution } from "../subagents/runs.js";
 
 /**
@@ -96,7 +96,7 @@ function statusLabel(status: RunRecord["status"]): string {
 }
 
 function formatRunLine(record: RunRecord): string {
-	const bits = [harnessLabel(record), formatDuration(elapsedMs(record))];
+	const bits = [harnessLabel(record), formatRunDuration(record)];
 	if (record.taskId) bits.push(`task ${record.taskId}`);
 	if (record.leaseKey) bits.push("持有写锁");
 	const cost = formatCost(record);
@@ -131,6 +131,18 @@ function formatRolesTail(discovery: SubAgentDiscoveryResult): string {
 }
 
 const DEFAULT_LIST_COMPLETED_LIMIT = 5;
+/** Spec 042 D9: `running`/`failed`/`all` had no cap at all — a long-lived channel with thousands
+ *  of historical runs (GC now reclaims them after 7 days, but that is still a lot in a busy week)
+ *  would otherwise dump an unbounded list into a single reply. */
+const LIST_FILTER_CAP = 50;
+
+function capListForDisplay<T>(records: T[]): { shown: T[]; truncatedNote?: string } {
+	if (records.length <= LIST_FILTER_CAP) return { shown: records };
+	return {
+		shown: records.slice(0, LIST_FILTER_CAP),
+		truncatedNote: `显示最近 ${LIST_FILTER_CAP} 条，共 ${records.length} 条——用更具体的筛选缩小范围。`,
+	};
+}
 
 async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilter): Promise<string> {
 	const records = getSubAgentRunManager(options.channelId).list();
@@ -144,17 +156,22 @@ async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilt
 	const sections: string[] = [];
 
 	if (filter === "running") {
-		sections.push(running.length === 0 ? "没有正在运行的 run。" : running.map(formatRunLine).join("\n"));
-		return `# 委派 Run — 运行中\n\n${sections.join("\n")}`;
+		const { shown, truncatedNote } = capListForDisplay(running);
+		sections.push(shown.length === 0 ? "没有正在运行的 run。" : shown.map(formatRunLine).join("\n"));
+		if (truncatedNote) sections.push(truncatedNote);
+		return `# 委派 Run — 运行中\n\n${sections.join("\n\n")}`;
 	}
 	if (filter === "failed") {
-		const failed = terminal.filter((record) => record.status === "failed");
-		sections.push(failed.length === 0 ? "没有失败的 run。" : failed.map(formatRunLine).join("\n"));
-		return `# 委派 Run — 失败\n\n${sections.join("\n")}`;
+		const { shown, truncatedNote } = capListForDisplay(terminal.filter((record) => record.status === "failed"));
+		sections.push(shown.length === 0 ? "没有失败的 run。" : shown.map(formatRunLine).join("\n"));
+		if (truncatedNote) sections.push(truncatedNote);
+		return `# 委派 Run — 失败\n\n${sections.join("\n\n")}`;
 	}
 	if (filter === "all") {
-		sections.push([...running, ...terminal].map(formatRunLine).join("\n"));
-		return `# 委派 Run — 全部（${records.length}）\n\n${sections.join("\n")}`;
+		const { shown, truncatedNote } = capListForDisplay([...running, ...terminal]);
+		sections.push(shown.map(formatRunLine).join("\n"));
+		if (truncatedNote) sections.push(truncatedNote);
+		return `# 委派 Run — 全部（${records.length}）\n\n${sections.join("\n\n")}`;
 	}
 
 	// default: an overview — every running run, plus a capped tail of recent completions.
@@ -199,7 +216,7 @@ async function showRun(channelId: string, ref: string): Promise<string> {
 		"",
 		`角色：${record.agent} (${harnessLabel(record)}, ${record.source})`,
 		`标签：${record.label}`,
-		`状态：${statusLabel(record.status)}（耗时 ${formatDuration(elapsedMs(record))}）`,
+		`状态：${statusLabel(record.status)}（耗时 ${formatRunDuration(record)}）`,
 	];
 	if (record.failureReason) lines.push(`失败原因：${record.failureReason}`);
 	if (record.verificationVerdict) {
@@ -222,6 +239,17 @@ async function showRun(channelId: string, ref: string): Promise<string> {
 		`usage：input=${record.usage.input} output=${record.usage.output}${cost ? ` cost=${cost}` : record.costKnown ? "" : "（cost 未知）"}`,
 	);
 	if (record.argv) lines.push("", "实际 argv：", "```", JSON.stringify(record.argv), "```");
+	if (record.parserVersion !== undefined || record.cliVersion) {
+		// Spec 042 D12: lets a human tell "the target CLI's own protocol drifted out from under this
+		// adapter" apart from "the agent itself failed" — the two look identical from status alone.
+		const parts = [];
+		if (record.parserVersion !== undefined) parts.push(`parserVersion=${record.parserVersion}`);
+		parts.push(`cliVersion=${record.cliVersion ?? "(未知)"}`);
+		lines.push(`适配器/CLI：${parts.join("，")}`);
+	}
+	if (record.invocationWarnings?.length) {
+		lines.push("", "⚠ 派发时的警告：", ...record.invocationWarnings.map((warning) => `- ${warning}`));
+	}
 	if (record.sessionId) lines.push(`sessionId：\`${record.sessionId}\`（可用于 subagent_manage op=follow_up）`);
 
 	if (record.runtime === "external") {
@@ -303,6 +331,12 @@ function formatRoleDetail(agent: SubAgentConfig): string {
 			`maxWallTimeSec：${agent.maxWallTimeSec}`,
 		);
 		if (agent.externalModelRef) lines.push(`模型：${agent.externalModelRef}`);
+		// spec 042 D4: contextMode/memory are effective for external roles too (memory 默认 none，
+		// 显式声明 session/relevant 才会把频道会话状态发给外部进程) — 显示出来而不是只在内置分支里说明。
+		lines.push(`contextMode：${agent.contextMode}，memory：${agent.memory}`);
+		if (agent.memory !== "none") {
+			lines.push(`⚠ 该角色会把频道会话状态/记忆片段发送给外部进程（memory: ${agent.memory}）`);
+		}
 	}
 	if (agent.paths.length > 0) lines.push(`paths：${agent.paths.join(", ")}`);
 	lines.push("", "system prompt：", "```", agent.systemPrompt, "```");

@@ -111,6 +111,66 @@ describe("handleSubagentsCommand", () => {
 		expect(all).toContain("run-running");
 	});
 
+	// Spec 042, D9: `list all`/`list running`/`list failed` used to have no cap at all — a channel
+	// with many historical runs would dump an unbounded list into a single reply.
+	it("list all caps a long history with a truncation note, without dropping running runs", async () => {
+		configureSubAgentRuntime({});
+		const channelId = `dm_cmd_cap_${Date.now()}`;
+		const manager = getSubAgentRunManager(channelId);
+		for (let i = 0; i < 55; i++) {
+			const runId = `run-terminal-${i}`;
+			await manager.register({
+				runId,
+				channelId,
+				runtime: "internal",
+				agent: "explorer",
+				label: "explore",
+				source: "predefined",
+				tools: ["read"],
+				purpose: "work",
+				workingDirectory: "/tmp",
+				artifactDir: `/tmp/artifacts/${runId}`,
+			});
+			await manager.settle(
+				runId,
+				{
+					status: "completed",
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						total: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					usageKnown: true,
+					costKnown: true,
+					turns: 0,
+					toolCalls: 0,
+					durationMs: 0,
+					outputText: "",
+				},
+				{ announce: false },
+			);
+		}
+		await manager.register({
+			runId: "run-still-going",
+			channelId,
+			runtime: "internal",
+			agent: "explorer",
+			label: "explore",
+			source: "predefined",
+			tools: ["read"],
+			purpose: "work",
+			workingDirectory: "/tmp",
+			artifactDir: "/tmp/artifacts/run-still-going",
+		});
+
+		const all = await handleSubagentsCommand({ args: "list all", channelId });
+		expect(all).toContain("run-still-going"); // running run always shown
+		expect(all).toContain("显示最近 50 条，共 56 条");
+	});
+
 	it("show returns a structured record, including a stderr tail for an external run", async () => {
 		configureSubAgentRuntime({});
 		const channelId = `dm_cmd_show_${Date.now()}`;

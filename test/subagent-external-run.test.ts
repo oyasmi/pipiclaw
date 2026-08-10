@@ -126,6 +126,10 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		await waitFor(() => manager.get("run-ext-1")?.pid !== undefined);
 		expect(manager.get("run-ext-1")?.status).toBe("running");
 		expect(manager.get("run-ext-1")?.pid).toBe(5150);
+		// Spec 042, D12: persisted at launch so a later failure is diagnosable as "adapter is stale"
+		// vs. "the agent failed". `cliVersion` is best-effort (the fake "codex" executable does not
+		// really exist in the test environment) — only that the probe does not crash the dispatch.
+		expect(manager.get("run-ext-1")?.parserVersion).toBe(1);
 
 		// D8.1/T5: the dispatch is audited once argv/cwd/role/mutates/model/runId are all final,
 		// unconditionally (not gated on `audit.logBlocked`).
@@ -239,7 +243,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const { spawnFnForInput } = makeFakeSpawn({
 			failToSpawn: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
 		});
-		await launchExternalRun({
+		const result = await launchExternalRun({
 			runId: "run-ext-3",
 			channelId: "dm_ext3",
 			label: "broken command",
@@ -259,10 +263,13 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		});
 
 		const manager = getSubAgentRunManager("dm_ext3");
-		await waitFor(() => manager.get("run-ext-3")?.status !== "running");
 		expect(manager.get("run-ext-3")?.status).toBe("failed");
 		expect(manager.get("run-ext-3")?.failureReason).toContain("Failed to launch");
-		expect(dispatched).toHaveLength(1);
+		// Spec 042 D2: a pre-spawn failure is reported in the same call instead of a wake — the
+		// caller (tool.ts) surfaces `result` in this same turn, so there is nothing to wait for here.
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.kind).toBe("missing-binary");
+		expect(dispatched).toHaveLength(0);
 	});
 
 	it("captures a real short-lived child that closes before launchExternalRun returns", async () => {
@@ -367,7 +374,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(existsSync(marker)).toBe(false);
 		const nextLease = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory: workspaceDir });
 		expect(nextLease.ok).toBe(true);
-		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey);
+		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next");
 	});
 
 	it.each(["cancel", "timeout"] as const)(
@@ -416,42 +423,135 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			expect(manager.get(runId)?.status).toBe(mode === "cancel" ? "cancelled" : "failed");
 			const nextLease = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory: workspaceDir });
 			expect(nextLease.ok).toBe(true);
-			if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey);
+			if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next");
 		},
 	);
 
-	it("rejects dispatch before spawn when the mandatory audit record cannot be written", async () => {
-		const workspaceDir = createTempWorkspace();
-		const artifactDir = join(workspaceDir, "dm_audit_fail", "subagent-artifacts", "run-audit-fail");
-		const auditDirectory = join(workspaceDir, "audit-is-a-directory");
-		mkdirSync(auditDirectory, { recursive: true });
-		const { spawnFn, spawnFnForInput } = makeFakeSpawn();
+	// Spec 042, D1: before this fix, the cancel/timeout branches settled immediately without ever
+	// reading `events.jsonl` — a run that had already produced real output, usage, and a resumable
+	// session id lost all three the moment it was cancelled or hit its wall-time budget. Status and
+	// failureReason still get overridden by the termination reason; nothing else does.
+	it.each(["cancel", "timeout"] as const)(
+		"keeps parsed output, usage, and session id on %s instead of discarding them",
+		async (mode) => {
+			const workspaceDir = createTempWorkspace();
+			const channelId = `dm_partial_${mode}`;
+			const runId = `run-partial-${mode}`;
+			const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", runId);
+			mkdirSync(artifactDir, { recursive: true });
 
-		await expect(
-			launchExternalRun({
-				runId: "run-audit-fail",
-				channelId: "dm_audit_fail",
-				label: "must be audited",
-				agent: "builder",
-				source: "predefined",
-				harness: "exec",
-				command: "printf unsafe",
-				maxWallTimeSec: 10,
+			const dispatched: DingTalkEvent[] = [];
+			configureSubAgentRuntime({
+				dispatch: (event) => {
+					dispatched.push(event);
+					return true;
+				},
+			});
+
+			const { spawnFnForInput, child } = makeFakeSpawn({ pid: mode === "cancel" ? 7171 : 7172 });
+			await launchExternalRun({
+				runId,
+				channelId,
+				label: mode,
+				agent: "worker",
+				source: "inline",
+				harness: "codex-cli",
+				command: "codex exec",
+				maxWallTimeSec: mode === "timeout" ? 0.05 : 60,
 				systemPrompt: "System.",
 				task: "Task.",
 				workingDirectory: workspaceDir,
 				artifactDir,
 				purpose: "work",
 				workspaceDir,
-				securityConfig: {
-					...DEFAULT_SECURITY_CONFIG,
-					audit: { ...DEFAULT_SECURITY_CONFIG.audit, logFile: auditDirectory },
-				},
+				securityConfig: DEFAULT_SECURITY_CONFIG,
 				spawnFn: spawnFnForInput,
-			}),
-		).rejects.toThrow();
+			});
+
+			const manager = getSubAgentRunManager(channelId);
+			await waitFor(() => manager.get(runId)?.pid !== undefined);
+
+			// Simulate the process having produced full output right before it was killed.
+			appendFileSync(
+				join(artifactDir, "events.jsonl"),
+				`${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "Partial but real work." } })}\n` +
+					`${JSON.stringify({
+						type: "turn.completed",
+						thread_id: "th_partial",
+						usage: { input_tokens: 30, output_tokens: 12 },
+					})}\n`,
+			);
+
+			if (mode === "cancel") {
+				await manager.cancel(runId);
+			} else {
+				await waitFor(() => manager.get(runId)?.terminationReason === "timeout");
+			}
+			child.emit("close", undefined); // killed by signal, no exit code.
+
+			// `status` flips (and persists) before settle() finishes writing output.md, recording
+			// usage, and (for timeout) dispatching the wake — wait for the last thing that happens
+			// in each mode, not just the status, so nothing below races settle()'s own tail.
+			if (mode === "cancel") {
+				await waitFor(() => existsSync(join(artifactDir, "output.md")));
+			} else {
+				await waitFor(() => dispatched.length > 0);
+			}
+			const record = manager.get(runId);
+			if (mode === "cancel") {
+				expect(record?.status).toBe("cancelled");
+				expect(record?.failureReason).toBe("Cancelled by request.");
+				expect(dispatched).toHaveLength(0); // cancel is the model's own decision — no wake.
+			} else {
+				expect(record?.status).toBe("failed");
+				expect(record?.failureReason).toContain("Wall time budget exceeded");
+				expect(dispatched).toHaveLength(1);
+			}
+			expect(record?.usage.input).toBe(30);
+			expect(record?.usage.output).toBe(12);
+			expect(record?.usageKnown).toBe(true);
+			expect(record?.sessionId).toBe("th_partial");
+			expect(readFileSync(join(artifactDir, "output.md"), "utf-8")).toBe("Partial but real work.");
+		},
+	);
+
+	it("settles failed (without spawning) when the mandatory audit record cannot be written", async () => {
+		const workspaceDir = createTempWorkspace();
+		const artifactDir = join(workspaceDir, "dm_audit_fail", "subagent-artifacts", "run-audit-fail");
+		const auditDirectory = join(workspaceDir, "audit-is-a-directory");
+		mkdirSync(auditDirectory, { recursive: true });
+		const { spawnFn, spawnFnForInput } = makeFakeSpawn();
+
+		const result = await launchExternalRun({
+			runId: "run-audit-fail",
+			channelId: "dm_audit_fail",
+			label: "must be audited",
+			agent: "builder",
+			source: "predefined",
+			harness: "exec",
+			command: "printf unsafe",
+			maxWallTimeSec: 10,
+			systemPrompt: "System.",
+			task: "Task.",
+			workingDirectory: workspaceDir,
+			artifactDir,
+			purpose: "work",
+			workspaceDir,
+			securityConfig: {
+				...DEFAULT_SECURITY_CONFIG,
+				audit: { ...DEFAULT_SECURITY_CONFIG.audit, logFile: auditDirectory },
+			},
+			spawnFn: spawnFnForInput,
+		});
+
+		// Spec 042 D11: admission (register()) now happens before the audit write, so a capacity
+		// rejection never leaves behind an audit record for a process that never existed. An audit
+		// write failure past that point settles the run as failed rather than leaving an orphaned
+		// "running" record — and (spec 042 D2) is reported in this same call, not thrown.
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.kind).toBe("launch-failed");
 		expect(spawnFn).not.toHaveBeenCalled();
-		expect(getSubAgentRunManager("dm_audit_fail").get("run-audit-fail")).toBeUndefined();
+		expect(getSubAgentRunManager("dm_audit_fail").get("run-audit-fail")?.status).toBe("failed");
 	});
 
 	it("rejects an unknown harness before ever spawning", async () => {

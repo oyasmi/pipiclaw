@@ -250,6 +250,179 @@ Body.
 		expect(result.agents.find((agent) => agent.name === "reader")?.mutates).toBe("read");
 	});
 
+	// Spec 042, D6: `bash` can write regardless of what `tools` otherwise implies, so a role with
+	// `bash` and no explicit `mutates` is a real gap in the write-lease's coverage (`inferMutatesFromTools`
+	// only looks at write/edit). This is a warning, not a rejection — the role still loads and its
+	// behavior (inferred `mutates: read`, no lease taken) is unchanged; it just becomes visible.
+	it("warns when tools include bash and mutates is not declared, without changing behavior", () => {
+		const workspaceDir = createTempWorkspace();
+		writeRole(
+			workspaceDir,
+			"bash-no-mutates.md",
+			`---
+name: bash-no-mutates
+description: default tools, no mutates declared
+---
+
+Body.
+`,
+		);
+		writeRole(
+			workspaceDir,
+			"bash-with-mutates.md",
+			`---
+name: bash-with-mutates
+description: default tools, mutates declared explicitly
+mutates: write
+---
+
+Body.
+`,
+		);
+		writeRole(
+			workspaceDir,
+			"no-bash.md",
+			`---
+name: no-bash
+description: read-only tools, no bash
+tools: read,grep
+---
+
+Body.
+`,
+		);
+
+		const result = discover(workspaceDir);
+		expect(result.agents.find((a) => a.name === "bash-no-mutates")?.mutates).toBe("read"); // unchanged
+		expect(result.warnings).toEqual(
+			expect.arrayContaining([
+				expect.stringContaining('bash-no-mutates.md: tools include bash but "mutates" is not declared'),
+			]),
+		);
+		expect(result.warnings.some((w) => w.startsWith("bash-with-mutates.md"))).toBe(false);
+		expect(result.warnings.some((w) => w.startsWith("no-bash.md"))).toBe(false);
+	});
+
+	// Spec 042, D10: a role's model can only ever come from its own frontmatter, so a command that
+	// references $MODEL without a "model:" would silently drop that argv token on every dispatch.
+	// The role still loads (this is a warning, not a rejection) — the model just runs without it.
+	it("warns, without rejecting the role, when command references $MODEL but no model is configured", () => {
+		const workspaceDir = createTempWorkspace();
+		writeRole(
+			workspaceDir,
+			"unconfigured-model.md",
+			`---
+name: unconfigured-model
+description: references $MODEL without a model
+runtime: external
+harness: claude-code
+command: claude --model $MODEL
+mutates: read
+---
+
+Body.
+`,
+		);
+
+		const result = discover(workspaceDir, []);
+		const agent = result.agents.find((candidate) => candidate.name === "unconfigured-model");
+		expect(agent).toBeDefined(); // listed, not dropped
+		expect(agent?.externalModelRef).toBeUndefined();
+		expect(result.warnings).toEqual(
+			expect.arrayContaining([expect.stringContaining('references $MODEL but no "model" is configured')]),
+		);
+	});
+
+	it("does not warn about $MODEL when a model is configured", () => {
+		const workspaceDir = createTempWorkspace();
+		writeRole(
+			workspaceDir,
+			"configured-model.md",
+			`---
+name: configured-model
+description: references $MODEL with a model set
+runtime: external
+harness: claude-code
+command: claude --model $MODEL
+model: sonnet
+mutates: read
+---
+
+Body.
+`,
+		);
+
+		const result = discover(workspaceDir, []);
+		expect(result.warnings).toEqual([]);
+	});
+
+	// Spec 042, D4: external memory default is always "none", never following contextMode the way
+	// internal does — a role that only wants `paths` injected should not also silently start
+	// sending session/memory content to a third-party process.
+	it("defaults external memory to none even with contextMode: contextual, unlike internal", () => {
+		const workspaceDir = createTempWorkspace();
+		writeRole(
+			workspaceDir,
+			"external-contextual.md",
+			`---
+name: external-contextual
+description: external role, contextual but no memory declared
+runtime: external
+harness: exec
+command: echo hi
+mutates: read
+contextMode: contextual
+---
+
+Body.
+`,
+		);
+		writeRole(
+			workspaceDir,
+			"internal-contextual.md",
+			`---
+name: internal-contextual
+description: internal role, contextual
+tools: read
+contextMode: contextual
+---
+
+Body.
+`,
+		);
+
+		const result = discover(workspaceDir);
+		expect(result.agents.find((a) => a.name === "external-contextual")?.memory).toBe("none");
+		expect(result.agents.find((a) => a.name === "internal-contextual")?.memory).toBe("relevant");
+		expect(result.warnings).toEqual([]);
+	});
+
+	it("warns (without rejecting) when an external role explicitly declares memory: relevant", () => {
+		const workspaceDir = createTempWorkspace();
+		writeRole(
+			workspaceDir,
+			"memory-declared.md",
+			`---
+name: memory-declared
+description: external role explicitly opting into memory
+runtime: external
+harness: exec
+command: echo hi
+mutates: read
+memory: relevant
+---
+
+Body.
+`,
+		);
+
+		const result = discover(workspaceDir);
+		const agent = result.agents.find((a) => a.name === "memory-declared");
+		expect(agent).toBeDefined();
+		expect(agent?.memory).toBe("relevant");
+		expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining("sends channel session state")]));
+	});
+
 	it("ignores a README in the role directory instead of warning about its missing frontmatter", () => {
 		const workspaceDir = createTempWorkspace();
 		writeRole(workspaceDir, "README.md", "# Roles in this directory\n\nCopy what you need.\n");

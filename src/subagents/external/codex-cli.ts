@@ -5,6 +5,7 @@ import {
 	type ExternalInvocationInput,
 	type ExternalOutcome,
 	expandPlaceholders,
+	formatDroppedPlaceholderWarnings,
 	type ParseOutcomeInput,
 } from "./harness.js";
 
@@ -39,6 +40,7 @@ function toCodexEffort(level: string | undefined): string | undefined {
 
 export const codexCliHarness: ExternalHarness = {
 	id: "codex-cli",
+	parserVersion: 1,
 
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult {
 		if (input.argv.length === 0) {
@@ -48,7 +50,11 @@ export const codexCliHarness: ExternalHarness = {
 		const existing = detectExistingFlags(rest);
 		const effort = toCodexEffort(input.thinkingLevel);
 
-		const { argv: expandedRest, used } = expandPlaceholders(rest, {
+		const {
+			argv: expandedRest,
+			used,
+			dropped,
+		} = expandPlaceholders(rest, {
 			$MODEL: input.model,
 			$EFFORT: effort,
 			$PROMPT_FILE: input.promptFile,
@@ -69,7 +75,12 @@ export const codexCliHarness: ExternalHarness = {
 			? [...baseArgs, "resume", input.resumeSessionId, "--json", "-"]
 			: [...baseArgs, "--json", "-"];
 
-		return { executable, args, resumable: true };
+		return {
+			executable,
+			args,
+			resumable: true,
+			warnings: dropped.length > 0 ? formatDroppedPlaceholderWarnings(dropped) : undefined,
+		};
 	},
 
 	parseOutcome(input: ParseOutcomeInput): ExternalOutcome {

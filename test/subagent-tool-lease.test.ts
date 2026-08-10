@@ -97,7 +97,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 	function expectWorkspaceAvailable(workspaceDir: string, channelId: string) {
 		const next = acquireWorkspaceLease({ runId: "next-writer", channelId, workingDirectory: workspaceDir });
 		expect(next.ok).toBe(true);
-		releaseWorkspaceLease(next.ok ? next.leaseKey : undefined);
+		releaseWorkspaceLease(next.ok ? next.leaseKey : undefined, "next-writer");
 	}
 
 	it("releases the lease when resolveApiKey rejects before registration", async () => {
@@ -243,7 +243,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 				}),
 			).rejects.toThrow(/other-run/);
 		} finally {
-			releaseWorkspaceLease(held.ok ? held.leaseKey : undefined);
+			releaseWorkspaceLease(held.ok ? held.leaseKey : undefined, "other-run");
 		}
 	});
 
@@ -270,7 +270,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			});
 			expect(result.details.failed).toBe(false);
 		} finally {
-			releaseWorkspaceLease(held.ok ? held.leaseKey : undefined);
+			releaseWorkspaceLease(held.ok ? held.leaseKey : undefined, "other-run");
 		}
 	});
 
@@ -292,7 +292,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		// The lease is gone: a fresh write acquire on the same directory now succeeds.
 		const after = acquireWorkspaceLease({ runId: "next-run", channelId: "dm_lease", workingDirectory: workspaceDir });
 		expect(after.ok).toBe(true);
-		releaseWorkspaceLease(after.ok ? after.leaseKey : undefined);
+		releaseWorkspaceLease(after.ok ? after.leaseKey : undefined, "next-run");
 	});
 });
 

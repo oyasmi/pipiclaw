@@ -67,8 +67,21 @@ export function acquireWorkspaceLease(holder: WorkspaceLeaseHolder): AcquireWork
 	return { ok: true, leaseKey };
 }
 
-export function releaseWorkspaceLease(leaseKey: string | undefined): void {
-	if (leaseKey) leases.delete(leaseKey);
+/**
+ * Spec 042 D5: release only the caller's own lease. A blind `leases.delete(key)` let a restore
+ * whose lease-rebuild failed (a real path — `realpath` can drift under a symlink swap) still
+ * `settle()` and delete the *new* holder's lease for the same key, and a caller could otherwise
+ * double-release harmlessly-in-appearance but incorrectly-in-general. `runId` must match the
+ * current holder for the delete to happen; anything else (already released, held by someone else)
+ * is a no-op rather than an assertion failure — callers already treat "did I ever hold it" as
+ * something they cannot always know for certain (e.g. a settle() racing a lease rebuild).
+ */
+export function releaseWorkspaceLease(leaseKey: string | undefined, runId: string): void {
+	if (!leaseKey) return;
+	const holder = leases.get(leaseKey);
+	if (holder && holder.runId === runId) {
+		leases.delete(leaseKey);
+	}
 }
 
 /** Read-only check for a pre-flight gate (e.g. `purpose=verify`, D9) that must not itself take a lease. */

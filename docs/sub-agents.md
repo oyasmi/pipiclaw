@@ -157,8 +157,8 @@ maxWallTimeSec: 3600
 | `maxWallTimeSec` | 否 | `300` | 最大总执行时长，秒；超过 120s 的部分会异步化，见下文"同步宽限窗口" |
 | `bashTimeoutSec` | 否 | `120` | 子代理内 bash 命令默认超时，秒 |
 | `workload` | 否 | `light` | `light` 或 `heavy`，只影响系统提示里的目录分组展示 |
-| `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁、能否用于 `purpose=verify` |
-| `harness` / `command` / `cwd` | 驳回 | - | 只对外部角色有意义 |
+| `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁、能否用于 `purpose=verify`。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见 |
+| `harness` / `command` / `shell` / `env` / `cwd` | 驳回 | - | 只对外部角色有意义（`cwd` 对两种 runtime 都驳回，见下） |
 
 ### 外部（`runtime: external`）
 
@@ -174,6 +174,9 @@ maxWallTimeSec: 3600
 | `shell` | 否 | `false` | 仅 `exec` 可设为 `true`，此时整条 `command` 交给 `/bin/sh -lc`；结构化 harness 使用时会被 discovery 驳回，因为它会绕过协议 argv 组装 |
 | `env` | 否 | 空 | 追加或覆盖继承自 pipiclaw 进程的环境变量 |
 | `maxWallTimeSec` | 否 | `1800` | 外部角色只有这一个执行预算——没有轮数/工具调用次数上限，因为那些概念对外部 CLI 不适用 |
+| `contextMode` | 否 | `isolated` | 同内置词表，见下文"`contextMode` 与 `memory`" |
+| `memory` | 否 | **`none`，不跟随 `contextMode`** | 与内置不同：内置的 `contextual` 隐含 `relevant`，外部永远默认 `none`，必须显式声明才会把会话/记忆内容发给外部进程 |
+| `paths` | 否 | 空 | 同内置 |
 | `tools` / `maxTurns` / `maxToolCalls` / `bashTimeoutSec` / `cwd` | 驳回 | - | 对外部进程无意义或工作目录不允许写死在角色里 |
 
 **工作目录永远不写在角色文件里**，无论内置还是外部——它是每次委派时通过调用参数 `workingDirectory` 现场决定的，见下文"调用参数"。
@@ -182,7 +185,7 @@ maxWallTimeSec: 3600
 
 ## 调用参数（Invocation Parameters）
 
-上面的 frontmatter 是**人**的配置面：你在配置文件里精确设定角色的模型、工具（内置）或命令（外部）和执行预算。下面是**主代理**每次委派时能填的参数，刻意比 frontmatter 窄——执行策略应当来自配置和台账，而不是模型每次调用时的临场判断。内置和外部角色共用同一份调用 schema，不因 runtime 而增减字段。
+上面的 frontmatter 是**人**的配置面：你在配置文件里精确设定角色的模型、工具（内置）或命令（外部）和执行预算。下面是**主代理**每次委派时能填的参数，刻意比 frontmatter 窄——执行策略应当来自配置和台账，而不是模型每次调用时的临场判断。内置和外部角色共用同一份调用 schema，不因 runtime 而增减字段；但字段对某个 runtime 是否**生效**并不对称——见每行说明。**对外部角色无效的字段会被直接驳回（`RecoverableToolError`），不是静默忽略。**
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -191,16 +194,16 @@ maxWallTimeSec: 3600
 | `agent` | - | 使用 `workspace/sub-agents/` 里某个已配置角色（内置或外部） |
 | `systemPrompt` | - | 不使用配置角色时，用它定义一个临时**内置**子代理；与 `agent` 二选一。外部角色没有 inline 形式 |
 | `name` | `dynamic-subagent` | inline 子代理的显示名，进入运行记录 |
-| `tools` | 角色配置或 `read,bash` | 工具白名单（仅内置） |
-| `model` | 见[模型解析顺序](./configuration.md) | 精确模型引用（仅内置；外部角色的模型只能在角色文件里配） |
+| `tools` | 角色配置或 `read,bash` | 工具白名单（仅内置）。**对外部角色传入会被驳回**：外部智能体的能力边界由它自己的命令决定，这个参数对它没有意义 |
+| `model` | 见[模型解析顺序](./configuration.md) | 精确模型引用（仅内置）。**对外部角色传入会被驳回**：外部角色的模型只能在角色文件里配，且从不按 `models.json` 校验 |
 | `effort` | `standard` | 执行预算档位：`quick`、`standard`、`deep`。内置替换四个数值预算；外部只有 `maxWallTimeSec` 一个维度，`quick`/`deep` 按外部量级取值，`standard`/不传沿用角色自身的 `maxWallTimeSec` |
-| `context` | `none` | 上下文注入：`none`、`session`、`relevant`（仅内置） |
-| `paths` | 角色配置 | 建议优先关注的路径 |
+| `context` | `none` | 上下文注入：`none`、`session`、`relevant`。对内外角色都生效——这是模型每次委派的显式决定，与角色文件里的 `memory` 默认值是两回事（见下文 `contextMode` 与 `memory`） |
+| `paths` | 角色配置 | 建议优先关注的路径；对内外角色都生效 |
 | `workingDirectory` | runtime 自身工作目录 | **每次委派都应显式传**；必须是已存在目录。并行写入的分片必须各自 `git worktree add` 后指向不同 checkout |
 | `thinkingLevel` | `off`（`verify` 为 `medium`） | 推理强度；外部角色由 runtime 翻译成对应 harness 的写法 |
 | `purpose` | `work` | `verify` 进入独立验收协议，需同时传 `taskId` |
 | `taskId` | - | 绑定任务台账；`purpose: verify` 要求它 |
-| `returns` | `text` | `artifact` 要求子代理把主产出写成文件并以 `ARTIFACT: <filename>` 结尾（仅内置；外部角色的产出固定落在 `output.md`） |
+| `returns` | `text` | `artifact` 要求子代理把主产出写成文件并以 `ARTIFACT: <filename>` 结尾（仅内置）。**对外部角色传入会被驳回**：`artifact` 协议假定产物在 `artifactDir` 内，而外部角色的真实产出在它自己的工作目录里，两者语义不同；外部角色的完整产出始终落在 `output.md`，需要指定产物位置时把要求写进 `task` |
 
 ### `effort` 与 frontmatter 数值的关系
 
@@ -224,9 +227,9 @@ maxWallTimeSec: 3600
 | `standard` | 角色自身 `maxWallTimeSec`（未设置时 1800） |
 | `deep` | 5400 |
 
-### `context` 与 frontmatter 的关系（仅内置）
+### `context` 与 frontmatter 的关系
 
-`context` 是 `contextMode` + `memory` 的调用侧写法：`none` → `isolated`/`none`，`session` → `contextual`/`session`，`relevant` → `contextual`/`relevant`。frontmatter 仍可单独设置这两个字段，包括 `contextual` + `memory: none`（只注入 `paths`）这种调用面无法表达的组合。
+`context` 是 `contextMode` + `memory` 的调用侧写法：`none` → `isolated`/`none`，`session` → `contextual`/`session`，`relevant` → `contextual`/`relevant`。对内外角色都生效——传 `context: relevant` 会让外部角色也拿到会话/记忆上下文，这是模型每次委派的显式决定，不是角色文件里被遗忘的默认值。frontmatter 仍可单独设置这两个字段，包括 `contextual` + `memory: none`（只注入 `paths`）这种调用面无法表达的组合。
 
 ## 同步宽限窗口：一次调用，两种返回（Sync Grace Window）
 
@@ -250,6 +253,10 @@ maxWallTimeSec: 3600
 | `list` | 本频道 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况 |
 | `cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
 | `follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
+
+`follow_up` 派发时走的是与首次派发**同一套信封构造**：运行时上下文（含这次续接自己新分配的产物目录）、`paths`/会话/记忆上下文块、以及 `purpose=verify` 时的验收协议，而不是一段只把原始指令转发过去的手写文本。verify 的准入检查（`mutates: write` 角色不能验收、`exec` 不能验收）也在 `follow_up` 上重新核对一遍——角色如果在原始 run 之后被改成 `mutates: write`，续接会被拒绝,不会因为"上次派发时它还是只读"就放行。
+
+**角色改过之后还能续接吗**：能否续接取决于改了什么。pipiclaw 在首次派发时会记下角色的 `command`/`model`/`shell` 指纹；`follow_up` 时如果这三者中任何一个变了（换了 CLI 参数、换了模型、切换了 shell 模式），续接会被拒绝并提示改派新任务——旧会话不应该被一套它从未写过的调用方式重新解读。**只改系统提示词正文不受影响**，续接照常进行，因为一次续接本来就带着旧会话的上下文，修一个措辞或错别字不该打断所有在途续接。
 
 **人侧**——运行时命令，不经过模型：
 
@@ -275,9 +282,9 @@ maxWallTimeSec: 3600
 
 外部角色没有 `tools` 概念——它的能力边界由目标 CLI 自己的命令行决定（例如 `codex exec --sandbox read-only`），pipiclaw 不在配置层假装能限制它。
 
-### `contextMode` 与 `memory`（仅内置）
+### `contextMode` 与 `memory`
 
-这两个字段一起决定子代理"看得到多少背景"。
+这两个字段一起决定子代理"看得到多少背景"。**内外角色都可以设置**，但默认值不同——外部角色的默认更保守，见下。
 
 | `contextMode` | 含义 |
 |----|------|
@@ -290,12 +297,16 @@ maxWallTimeSec: 3600
 | `session` | 注入会话工作态摘要 |
 | `relevant` | 注入筛选后的相关记忆与上下文 |
 
+**默认值按 runtime 不同**：内置角色里 `contextMode: contextual` 隐含 `memory: relevant`；**外部角色的 `memory` 默认永远是 `none`，不跟随 `contextMode`**——一个只想要 `paths` 注入（`contextMode: contextual`，未写 `memory`）的外部角色不会因此意外开始把频道会话状态发给第三方进程。
+
+**这是一条真实的数据外发路径，如实说明**：显式声明 `memory: session` 或 `memory: relevant` 的外部角色，会把 `SESSION.md` 摘要（`session`）或召回的 `MEMORY.md`/`HISTORY.md` 片段（`relevant`）写进发给外部进程的 stdin，交给第三方 CLI 及其背后的 API。这是一次显式、知情的选择，声明后 discovery 会给出一条提示级 warning 提醒这件事，`/subagents roles <name>` 也会展示当前生效的 `contextMode`/`memory` 并在非 `none` 时标出这条提示。
+
 推荐搭配：
 
-- 必须继承会话决策或团队背景的审查、研究任务：`contextMode: contextual` + `memory: relevant`。
-- 任务描述已经自包含、强调独立判断或无需会话背景的角色：`contextMode: isolated` + `memory: none`。
+- 必须继承会话决策或团队背景的审查、研究任务：`contextMode: contextual` + `memory: relevant`（外部角色需显式声明 `memory`，不能只靠 `contextMode`）。
+- 任务描述已经自包含、强调独立判断或无需会话背景的角色：`contextMode: isolated` + `memory: none`（外部角色的默认值本就如此）。
 
-外部角色没有这两个字段——它自己会读取目标仓库的 `CLAUDE.md` / `AGENTS.md` 建立上下文，见下文"明确不可控的部分"。
+外部角色自己也会读取目标仓库的 `CLAUDE.md` / `AGENTS.md` 建立上下文，这条路径不受 pipiclaw 的 `memory` 设置影响，见下文"明确不可控的部分"。
 
 ### `model`
 
@@ -338,6 +349,8 @@ my-gateway/gpt-4.1
 
 内置角色不填时按 `tools` 是否含 `write`/`edit` 自动推定；外部角色必须显式声明。
 
+**如实说明它的可信度**：内置角色的 `mutates` 是**推定**（且只看 `write`/`edit`，不看 `bash`——`bash` 能做的事不受工具白名单约束，这是已知盲区），外部角色的 `mutates` 是角色作者的**自述**，两者 pipiclaw 都无法从 runtime 层面核实。写锁保证的是"**声明了写的委派之间**不会并发写同一棵树"，不是"这棵树上只有一个写入者"——一个含 `bash` 却未声明 `mutates: write` 的角色，或谎报 `mutates: read` 的外部角色，都不受这把锁保护。含 `bash` 且未声明 `mutates` 时，discovery 会给出提示级 warning，但不阻止角色加载，也不改变它的行为。
+
 ## 正文怎么写（System Prompt Body）
 
 frontmatter 后面的正文就是子代理的系统提示词。它应该明确说明：角色职责、工作边界、判断和证据标准、停止条件、输出契约，以及不该做什么。
@@ -373,6 +386,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 每次外部派发都会写一条审计事件（runId、角色、harness、完整 argv、工作目录、`mutates`、model），不受"只记录被拦截的动作"这个开关影响。
 - 外部进程继承 pipiclaw 自身的环境变量（它需要自己的认证，如 `ANTHROPIC_API_KEY`）；角色 `env:` 可以在此基础上追加或覆盖。
 - 外部 agent 本身是完整 coding agent，能否 spawn 自己的子代理、递归到多深，pipiclaw 不保证也不限制。
+- 显式声明 `memory: session` 或 `memory: relevant` 的外部角色会把频道会话状态/召回的记忆片段写进发给外部进程的 stdin——这与继承环境变量属于同一类如实声明的暴露面，不是隐藏行为（默认值是 `none`，见上文"`contextMode` 与 `memory`"）。
 
 ## 并发与重启
 
@@ -449,15 +463,18 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 缺少 `name` 或 `description`。
 - 同一个目录里定义了重复的 `name`。
 - `tools` 写了不支持的工具名（仅内置）。
-- `contextMode` 或 `memory` 写了不支持的值（仅内置）。
+- `contextMode` 或 `memory` 写了不支持的值。
 - 正文为空，只有 frontmatter。
 - `model` 只写了模糊名字，结果无法精确匹配（内置角色；外部角色的 `model` 不做校验）。
 - 只在正文描述使用时机，导致主代理无法从目录中的 `description` 正确选择角色。
-- 把 `read,bash` 误认为 runtime 强制只读，未约束 bash 的写命令。
+- 把 `read,bash` 误认为 runtime 强制只读，未约束 bash 的写命令；含 `bash` 却没声明 `mutates` 时 discovery 会提示，别忽略它。
 - 在任务 Goal 未覆盖目标仓库或 ref 时让 Git 子代理自动 push。
-- 给外部角色写 `cwd`、`tools`、`maxTurns` 等只对内置有意义的字段——会被直接驳回，不是被忽略。
-- 把 `mutates: write` 的外部角色用于 `purpose=verify`——会被直接拒绝派发。
+- 给外部角色写 `cwd`、`tools`、`maxTurns` 等只对内置有意义的字段，或给内置角色写 `harness`、`command`、`shell`、`env`——都会被直接驳回，不是被忽略。
+- 在调用面对外部角色传 `tools`、`model` 或 `returns: "artifact"`——这些参数对外部角色无效，会被直接驳回而不是静默忽略。
+- 把 `mutates: write` 的外部角色用于 `purpose=verify`——会被直接拒绝派发（`follow_up` 上同样会被拒绝，不只是首次派发）。
 - 以为 `mutates: read` 或工具白名单是安全边界——外部进程不受它们约束，真正的边界只有目标 CLI 自己的 sandbox flag。
+- 给外部角色写 `memory: relevant` 却没意识到这会把频道会话/记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
+- 改了外部角色的 `command`/`model`/`shell` 之后还指望 `follow_up` 能续接旧会话——指纹不匹配会被拒绝，需要改派新任务。
 
 ## 该看哪份文档
 

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
@@ -427,5 +427,103 @@ describe("SubAgentRunManager run id minting and resolution (spec 041)", () => {
 	it("resolveRef reports not_found for an unknown id or prefix", () => {
 		const manager = new SubAgentRunManager("dm_resolve_missing", {});
 		expect(manager.resolveRef("nope").kind).toBe("not_found");
+	});
+});
+
+// Spec 042, D9: GC used to run only inside restore() — a long-lived daemon that never restarted
+// accumulated terminal records and artifacts without bound. It is now folded into the periodic
+// sweep, with a two-tier retention: auxiliary artifacts at 24h, the run record + output.md at 7d.
+describe("SubAgentRunManager sweep-based GC (spec 042, D9)", () => {
+	const createTempWorkspace = useTempDirs("pipiclaw-subagent-runs-gc-");
+
+	it("cleans auxiliary artifacts after 24h but keeps output.md and the record, then drops both after 7d", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_gc";
+		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-gc");
+		mkdirSync(artifactDir, { recursive: true });
+		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log", "output.md"]) {
+			writeFileSync(join(artifactDir, name), `${name} content`, "utf-8");
+		}
+
+		const manager = new SubAgentRunManager(channelId, {});
+		await manager.register({
+			runId: "run-gc",
+			channelId,
+			runtime: "external",
+			harness: "exec",
+			agent: "worker",
+			label: "gc me",
+			source: "inline",
+			tools: [],
+			purpose: "work",
+			workingDirectory: workspaceDir,
+			artifactDir,
+		});
+		await manager.settle(
+			"run-gc",
+			{ ...baseSettleInput(), outputText: "" }, // empty outputText: settle() must not touch output.md itself
+			{ announce: false },
+		);
+		const settledAt = manager.get("run-gc")?.settledAt;
+		expect(settledAt).toBeDefined();
+		if (!settledAt) throw new Error("unreachable");
+
+		// Just under 24h: nothing cleaned yet.
+		await manager.sweep(settledAt + 23 * 60 * 60_000);
+		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log", "output.md"]) {
+			expect(existsSync(join(artifactDir, name))).toBe(true);
+		}
+		expect(manager.get("run-gc")).toBeDefined();
+
+		// Just past 24h: auxiliary artifacts gone, output.md and the record survive.
+		await manager.sweep(settledAt + 25 * 60 * 60_000);
+		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log"]) {
+			expect(existsSync(join(artifactDir, name))).toBe(false);
+		}
+		expect(existsSync(join(artifactDir, "output.md"))).toBe(true);
+		expect(manager.get("run-gc")).toBeDefined();
+
+		// Just under 7d: record still present (guards against an off-by-window regression).
+		await manager.sweep(settledAt + 6 * 24 * 60 * 60_000 + 60_000);
+		expect(manager.get("run-gc")).toBeDefined();
+
+		// Past 7d: the record itself is forgotten.
+		await manager.sweep(settledAt + 7 * 24 * 60 * 60_000 + 60_000);
+		expect(manager.get("run-gc")).toBeUndefined();
+	});
+
+	it("does not re-attempt auxiliary cleanup on every sweep tick once already cleaned", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_gc_once";
+		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-gc-once");
+		mkdirSync(artifactDir, { recursive: true });
+		writeFileSync(join(artifactDir, "events.jsonl"), "x", "utf-8");
+
+		const manager = new SubAgentRunManager(channelId, {});
+		await manager.register({
+			runId: "run-gc-once",
+			channelId,
+			runtime: "external",
+			harness: "exec",
+			agent: "worker",
+			label: "gc me once",
+			source: "inline",
+			tools: [],
+			purpose: "work",
+			workingDirectory: workspaceDir,
+			artifactDir,
+		});
+		await manager.settle("run-gc-once", { ...baseSettleInput(), outputText: "" }, { announce: false });
+		const settledAt = manager.get("run-gc-once")?.settledAt;
+		if (!settledAt) throw new Error("unreachable");
+
+		await manager.sweep(settledAt + 25 * 60 * 60_000);
+		expect(manager.get("run-gc-once")?.auxiliaryArtifactsCleaned).toBe(true);
+
+		// Recreate the file (simulating nothing in particular — just proving a second sweep tick
+		// does not try to unlink it again because the marker is already set) and sweep again.
+		writeFileSync(join(artifactDir, "events.jsonl"), "recreated", "utf-8");
+		await manager.sweep(settledAt + 26 * 60 * 60_000);
+		expect(existsSync(join(artifactDir, "events.jsonl"))).toBe(true);
 	});
 });

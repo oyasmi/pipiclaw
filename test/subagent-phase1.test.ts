@@ -292,6 +292,7 @@ description: review code
 tools:
   - read
   - bash
+mutates: read
 maxTurns: 7
 maxToolCalls: 9
 maxWallTimeSec: 60
@@ -332,6 +333,7 @@ name: reviewer
 description: review code
 contextMode: contextual
 memory: session
+mutates: read
 paths:
   - src/core.ts
   - test/core.test.ts

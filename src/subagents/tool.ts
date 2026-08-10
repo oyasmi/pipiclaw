@@ -28,10 +28,11 @@ import { clipText, errorMessage, extractAssistantText, extractLabelFromArgs } fr
 import type { UsageTotals } from "../shared/types.js";
 import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
 import { readStoredTask } from "../tasks/store.js";
-import { parseVerificationVerdict, writeVerificationAttestation } from "../tasks/verification.js";
+import { writeVerificationAttestation } from "../tasks/verification.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
 import { buildToolSet } from "../tools/registry.js";
 import {
+	externalRoleFingerprint,
 	formatSubAgentList,
 	type ResolvedSubAgentConfig,
 	resolveSubAgentConfig,
@@ -40,8 +41,9 @@ import {
 	validateSubAgentTask,
 	withSubAgentsDirWriteDeny,
 } from "./discovery.js";
-import { launchExternalRun } from "./external/run.js";
+import { type ExternalLaunchResult, launchExternalRun } from "./external/run.js";
 import { getSubAgentRunManager, type SettleInput, SYNC_GRACE_MS } from "./runs.js";
+import { resolveVerificationOutcome } from "./verification-outcome.js";
 import {
 	acquireWorkspaceLease,
 	findWorkspaceLeaseHolder,
@@ -220,7 +222,9 @@ const CONVERGENCE_WALL_CLOCK_MS = 60_000;
 const CONVERGENCE_PROMPT =
 	"Your turn/tool-call/wall-time budget for this task is exhausted. Based only on the work you have already completed, respond now with your conclusions: confirmed facts, what remains unfinished, and suggested next steps. Do not call any more tools.";
 
-interface SubAgentRunContext {
+/** Exported for `subagent_manage op=follow_up` (spec 042 D7), which constructs one of these for
+ *  its own new run rather than a hand-rolled envelope. */
+export interface SubAgentRunContext {
 	runId: string;
 	purpose: "work" | "verify";
 	taskId?: string;
@@ -482,9 +486,46 @@ export function buildVerificationProtocol(taskPath: string): string {
 	].join("\n");
 }
 
-function buildSubAgentTask(
+/**
+ * D9 verify admission — a role that admits it writes cannot also be the checker, `exec` has no
+ * protocol terminal to prove it even ran to completion, and a target with an active write lease
+ * is refused up front (cheaper than explaining afterward why the attestation would be worthless).
+ * Spec 042 D7: exported so `subagent_manage op=follow_up` runs the exact same checks the initial
+ * dispatch does — before this function existed, follow_up on a role that had since been hot-edited
+ * to `mutates: write` would silently take the write lease and dispatch instead of refusing.
+ */
+export function assertVerifyAdmissible(
+	config: Pick<ResolvedSubAgentConfig, "name" | "mutates" | "runtime" | "harness">,
+	purpose: "work" | "verify",
+	workingDirectory: string,
+): void {
+	if (purpose !== "verify") return;
+	if (config.mutates === "write") {
+		throw new RecoverableToolError(
+			`Sub-agent "${config.name}" declares mutates: write and cannot be used for purpose=verify.`,
+		);
+	}
+	if (config.runtime === "external" && config.harness === "exec") {
+		throw new RecoverableToolError(
+			`Sub-agent "${config.name}" uses the exec harness, which has no protocol terminal and cannot be used for purpose=verify.`,
+		);
+	}
+	const holder = findWorkspaceLeaseHolder(workingDirectory);
+	if (holder) {
+		throw new RecoverableToolError(`Cannot verify "${workingDirectory}": ${formatWorkspaceLeaseConflict(holder)}`);
+	}
+}
+
+/**
+ * Exported for `subagent_manage op=follow_up` (spec 042 D7), which builds a follow-up run's task
+ * envelope the same way the initial dispatch does rather than a hand-rolled approximation.
+ * `config` is deliberately narrowed to `{ name }` — the only field this function reads — so a
+ * caller with a raw (unresolved) `SubAgentConfig` from discovery does not need to fabricate a
+ * `model`/`modelRef`/`thinkingLevel` just to satisfy a wider type it never touches.
+ */
+export function buildSubAgentTask(
 	task: string,
-	config: ResolvedSubAgentConfig,
+	config: Pick<SubAgentConfig, "name">,
 	runtimeContext: SubAgentToolOptions["runtimeContext"],
 	contextBlocks: string[],
 	runContext: SubAgentRunContext,
@@ -558,10 +599,24 @@ function stripRuntimeContextWrapper(renderedText: string): string {
 		.trim();
 }
 
-async function buildContextualBlocks(
+/** Exported for `subagent_manage op=follow_up` (spec 042 D7) — same reason as `buildSubAgentTask`. */
+/** The slice of `SubAgentToolOptions` `buildContextualBlocks` actually reads — narrowed (spec 042
+ *  D7) so `subagent_manage op=follow_up` only needs to wire these six fields, not the full tool
+ *  option surface (executor, discovery, web config, etc. that a context-block build never touches). */
+export type ContextualBlocksOptions = Pick<
+	SubAgentToolOptions,
+	| "channelDir"
+	| "getMemoryRecallSettings"
+	| "runtimeContext"
+	| "workspaceDir"
+	| "resolveApiKey"
+	| "memoryCandidateStore"
+>;
+
+export async function buildContextualBlocks(
 	task: string,
-	config: ResolvedSubAgentConfig,
-	options: SubAgentToolOptions,
+	config: Pick<SubAgentConfig, "contextMode" | "paths" | "memory" | "description">,
+	options: ContextualBlocksOptions,
 	currentModel: Model<Api>,
 ): Promise<string[]> {
 	if (config.contextMode !== "contextual") {
@@ -712,34 +767,27 @@ export function createSubAgentTool(
 
 			const config = invocation.config;
 			const returns = params.returns ?? "text";
+			// Spec 042 D3: `returns: "artifact"` has no external equivalent — the marker protocol
+			// scopes a produced file to `artifactDir`, but an external agent's real output lives in
+			// its working directory. Implementing it would build a same-named, different-meaning
+			// protocol; rejecting it is honest about the mismatch. An external run's full output
+			// always lands in `output.md` regardless (spec 032 D4), so this loses nothing — a caller
+			// that needs a specific artifact location says so in the task text.
+			if (config.runtime === "external" && returns === "artifact") {
+				throw new RecoverableToolError(
+					`Sub-agent "${config.name}" is external; returns: "artifact" has no effect on external roles ` +
+						"(their full output always lands in output.md). State the desired output file in the task text instead.",
+				);
+			}
 			const runManager = (options.getRunManager ?? getSubAgentRunManager)(options.runtimeContext.channelId);
 			// A short, human-typeable id (spec 041) — never the dispatching tool call's own id, which
 			// on some providers is a long `call_<id>|fc_<id>` composite unreadable in a chat UI.
 			const runContext = await prepareRunContext(runManager.mintRunId(), params, options);
 
-			// D9: an independent verifier checks against a target that isn't moving under it. It
-			// never takes a lease itself, but a target with an active write lease is refused up
-			// front — cheaper than explaining afterward why the attestation is worthless.
-			if (runContext.purpose === "verify") {
-				// A role that admits it writes cannot also be the checker, and `exec` has no protocol
-				// terminal to prove it even ran to completion — both are hard "no"s, not advisories.
-				if (config.mutates === "write") {
-					throw new RecoverableToolError(
-						`Sub-agent "${config.name}" declares mutates: write and cannot be used for purpose=verify.`,
-					);
-				}
-				if (config.runtime === "external" && config.harness === "exec") {
-					throw new RecoverableToolError(
-						`Sub-agent "${config.name}" uses the exec harness, which has no protocol terminal and cannot be used for purpose=verify.`,
-					);
-				}
-				const holder = findWorkspaceLeaseHolder(runContext.workingDirectory);
-				if (holder) {
-					throw new RecoverableToolError(
-						`Cannot verify "${runContext.workingDirectory}": ${formatWorkspaceLeaseConflict(holder)}`,
-					);
-				}
-			}
+			// D9: an independent verifier checks against a target that isn't moving under it — shared
+			// with `subagent_manage op=follow_up` (spec 042 D7) so a verify run's admission rules
+			// cannot drift between the two dispatch paths.
+			assertVerifyAdmissible(config, runContext.purpose, runContext.workingDirectory);
 
 			// Admission: a write-mutating run takes an exclusive workspace lease before it is even
 			// registered (spec 040, D10.1) — a rejected delegation should never count as "started".
@@ -759,13 +807,18 @@ export function createSubAgentTool(
 
 			if (config.runtime === "external") {
 				if (!config.harness) {
-					releaseWorkspaceLease(leaseKey);
+					releaseWorkspaceLease(leaseKey, runContext.runId);
 					throw new Error(`Sub-agent "${config.name}" has runtime: external but no harness configured.`);
 				}
+				let launchResult: ExternalLaunchResult;
 				try {
 					// D9/T5: external roles get the same task envelope internal workers do — runtime
 					// paths, injected context blocks, and (for purpose=verify) the verification
 					// protocol — rather than the raw task text (spec 040 gap closed post-review).
+					// Spec 042 D3: `returns: "artifact"` is rejected for external above, so this is
+					// always "text" here — passed literally rather than the `returns` variable so the
+					// ARTIFACT marker protocol is never injected into an external envelope, which no
+					// external result parser has ever read.
 					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel);
 					const envelopedTask = buildSubAgentTask(
 						params.task,
@@ -773,9 +826,9 @@ export function createSubAgentTool(
 						options.runtimeContext,
 						contextualBlocks,
 						runContext,
-						returns,
+						"text",
 					);
-					await launchExternalRun({
+					launchResult = await launchExternalRun({
 						runId: runContext.runId,
 						channelId: options.runtimeContext.channelId,
 						channelDir: options.channelDir,
@@ -797,12 +850,29 @@ export function createSubAgentTool(
 						taskId: runContext.taskId,
 						leaseKey,
 						mutates: config.mutates,
+						roleFingerprint: externalRoleFingerprint(config),
 						workspaceDir: options.workspaceDir,
 						securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
 					});
 				} catch (error) {
-					releaseWorkspaceLease(leaseKey);
+					// Only a pre-register() throw (unknown harness, shell-mode misuse) reaches here —
+					// every failure past that point settles the run itself and already released this
+					// lease (spec 042 D2/D5), so this catch must not release it a second time.
+					releaseWorkspaceLease(leaseKey, runContext.runId);
 					throw error;
+				}
+				// Spec 042 D2: a pre-spawn failure is reported in this same turn instead of a
+				// "[Dispatched]" placeholder the model would wait on forever — two of the three
+				// failure kinds never used to announce at all. `settle()` already released the lease.
+				if (!launchResult.ok) {
+					if (launchResult.kind === "missing-binary") {
+						throw new Error(
+							`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} Install the CLI or fix "command" in its role file; the run was not dispatched.`,
+						);
+					}
+					throw new RecoverableToolError(
+						`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} The run was not dispatched.`,
+					);
 				}
 				// D2: external's sync grace window is always 0 — always the dispatched placeholder,
 				// never an inline wait. The run keeps going in the background and wakes the channel.
@@ -842,7 +912,7 @@ export function createSubAgentTool(
 			try {
 				apiKey = await options.resolveApiKey(config.model);
 			} catch (error) {
-				releaseWorkspaceLease(leaseKey);
+				releaseWorkspaceLease(leaseKey, runContext.runId);
 				throw error;
 			}
 			const startedAt = Date.now();
@@ -877,7 +947,7 @@ export function createSubAgentTool(
 			} catch (error) {
 				// Until the durable running record exists, setup still owns the lease. A channel/host
 				// admission rejection or required persist failure must leave no invisible writer lock.
-				releaseWorkspaceLease(leaseKey);
+				releaseWorkspaceLease(leaseKey, runContext.runId);
 				throw error;
 			}
 
@@ -1091,34 +1161,32 @@ export function createSubAgentTool(
 					runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
 				const verifierSubjectAfter =
 					runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
-				const workspaceChanged =
-					runContext.purpose === "verify" &&
-					(verifierSubjectBefore !== undefined && verifierSubjectAfter !== undefined
-						? verifierSubjectBefore !== verifierSubjectAfter
-						: verifierGitStateBefore !== undefined &&
-							verifierGitStateAfter !== undefined &&
-							verifierGitStateBefore !== verifierGitStateAfter);
-				const declaredVerdict = runContext.purpose === "verify" ? parseVerificationVerdict(finalText) : undefined;
-				const verificationVerdict: "pass" | "fail" | undefined =
+				// Spec 042 D1: the pass/fail judgment rule is shared with the external verify path
+				// (`resolveVerificationOutcome`) so there is exactly one place deciding what a verify
+				// run's own output does and does not prove. Only the attestation write (and its
+				// "enforced" strength) stays here, since only the internal path structurally removes
+				// write/edit from the verifier's tool set.
+				const verification =
 					runContext.purpose === "verify"
-						? declaredVerdict === "pass" && !effectiveFailureReason && !workspaceChanged
-							? "pass"
-							: "fail"
+						? resolveVerificationOutcome({
+								subjectBefore: verifierSubjectBefore,
+								subjectAfter: verifierSubjectAfter,
+								gitStateBefore: verifierGitStateBefore,
+								gitStateAfter: verifierGitStateAfter,
+								finalText,
+								runFailed: Boolean(effectiveFailureReason),
+							})
 						: undefined;
-				if (runContext.purpose === "verify" && runContext.taskId && verificationVerdict) {
-					const evidence = workspaceChanged
-						? "Verifier changed tracked workspace files; the attestation is invalid."
-						: !declaredVerdict
-							? "Verifier did not emit the required final VERDICT marker."
-							: finalText.trim().slice(0, 8_000);
+				const verificationVerdict = verification?.verdict;
+				if (runContext.purpose === "verify" && runContext.taskId && verification) {
 					await writeVerificationAttestation(options.channelDir, {
 						runId: runContext.runId,
 						taskId: runContext.taskId,
-						verdict: verificationVerdict,
+						verdict: verification.verdict,
 						checkedAt: formatLocalTime(),
-						evidence,
-						workspaceChanged: Boolean(workspaceChanged),
-						subjectHash: workspaceChanged ? undefined : verifierSubjectAfter,
+						evidence: verification.evidence,
+						workspaceChanged: verification.workspaceChanged,
+						subjectHash: verification.workspaceChanged ? undefined : verifierSubjectAfter,
 						subjectDir: runContext.workingDirectory,
 						// Internal verify always keeps write/edit structurally removed from the
 						// verifier's tool set (buildSubagentTools above) — a real, enforced gate.

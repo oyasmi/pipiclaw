@@ -1,14 +1,22 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
+import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
-import { launchExternalRun } from "../subagents/external/run.js";
-import { elapsedMs, formatCost, formatDuration, harnessLabel } from "../subagents/format.js";
+import { externalRoleFingerprint, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
+import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
 import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
-import { buildVerificationProtocol } from "../subagents/tool.js";
+import {
+	assertVerifyAdmissible,
+	buildContextualBlocks,
+	buildSubAgentTask,
+	type SubAgentRunContext,
+} from "../subagents/tool.js";
 import {
 	acquireWorkspaceLease,
 	formatWorkspaceLeaseConflict,
@@ -28,14 +36,25 @@ const subagentManageSchema = Type.Object({
 
 export interface SubAgentManageToolOptions {
 	channelId: string;
-	/** Needed only for `follow_up` on a `purpose=verify` run: where the attestation is written. */
-	channelDir?: string;
+	/**
+	 * Spec 042 D7: required, not defaulted. `follow_up` dispatches a new external process through
+	 * the same envelope and audit path the initial dispatch uses (D9's verify task path, D8.1's
+	 * audit log, D7's `buildSubAgentTask`) — all of which need the real value. The previous
+	 * `options.workspaceDir ?? ""` silently pointed the audit log at the daemon's own cwd and
+	 * malformed the verify task path; production has always supplied both, so making them required
+	 * only tightens what was already true rather than changing production behavior.
+	 */
+	workspaceDir: string;
+	channelDir: string;
 	/** Needed only for `follow_up`: re-resolves the role's current config by name. */
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
-	/** Needed only for `follow_up`, which dispatches a new external process and must audit it
-	 *  exactly like the initial dispatch (D8.1/T5). */
-	workspaceDir?: string;
 	securityConfig?: SecurityConfig;
+	/** Spec 042 D7: `follow_up` builds its envelope through the same `buildContextualBlocks` the
+	 *  initial dispatch uses — these three are what that function needs beyond `channelDir`/`workspaceDir`. */
+	getCurrentModel?: () => Model<Api>;
+	resolveApiKey?: (model: Model<Api>) => Promise<string>;
+	getMemoryRecallSettings?: () => PipiclawMemoryRecallSettings;
+	memoryCandidateStore?: MemoryCandidateStore;
 }
 
 interface SubAgentManageArgs {
@@ -44,12 +63,15 @@ interface SubAgentManageArgs {
 	task?: string;
 }
 
+/** Spec 042 D9: cap on `op=list`'s output — see the call site for why running runs are exempt. */
+const LIST_CAP = 50;
+
 function formatRunLine(record: RunRecord): string {
 	const task = record.taskId ? `, task ${record.taskId}` : "";
 	const lease = record.leaseKey ? ", lease held" : "";
 	const cost = formatCost(record);
 	const costPart = cost ? `, ${cost}` : "";
-	const header = `- [${record.runId}] ${record.agent} (${harnessLabel(record)}) — "${record.label}" — ${record.status} (${formatDuration(elapsedMs(record))}${task}${lease}${costPart})`;
+	const header = `- [${record.runId}] ${record.agent} (${harnessLabel(record)}) — "${record.label}" — ${record.status} (${formatRunDuration(record)}${task}${lease}${costPart})`;
 	if (record.status === "failed" && record.failureReason) {
 		return `${header}\n  failed: ${record.failureReason}`;
 	}
@@ -78,9 +100,27 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 		parameters: subagentManageSchema,
 		execute: async (_toolCallId: string, { op, runId, task }: SubAgentManageArgs) => {
 			if (op === "list") {
-				const runs = manager().list();
-				const text = runs.length === 0 ? "No delegation runs." : runs.map(formatRunLine).join("\n");
-				return { content: [{ type: "text", text }], details: { kind: "subagent_manage", op, runs } };
+				// Spec 042 D9: this used to return every run on the channel, unbounded, in both the
+				// text and `details.runs` — a long-lived channel could dump thousands of historical
+				// records into a single tool result. Running runs (the ones a decision might depend
+				// on) are never dropped; only the terminal tail is capped, newest first.
+				const allRuns = manager().list();
+				const running = allRuns.filter((record) => record.status === "running");
+				const terminal = allRuns
+					.filter((record) => record.status !== "running")
+					.sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt));
+				const shownTerminal = terminal.slice(0, Math.max(0, LIST_CAP - running.length));
+				const runs = [...running, ...shownTerminal];
+				const lines = runs.length === 0 ? ["No delegation runs."] : runs.map(formatRunLine);
+				if (runs.length < allRuns.length) {
+					lines.push(
+						`… showing ${runs.length} of ${allRuns.length} runs (all running + most recently finished). Ask about a specific runId if you need an older one not shown here.`,
+					);
+				}
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					details: { kind: "subagent_manage", op, runs },
+				};
 			}
 
 			if (!runId) {
@@ -155,6 +195,23 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 				);
 			}
 
+			// Spec 042 D7: verify admission is re-checked against the *current* role config, shared
+			// with the initial dispatch — a role hot-edited to mutates: write since the original run
+			// must not silently take the write lease and dispatch just because it once was read-only.
+			assertVerifyAdmissible(role, record.purpose, record.workingDirectory);
+
+			// Spec 042 D7: a role hot-edited since the original dispatch (different command, model,
+			// or shell mode) would resume the old session under a harness invocation it never wrote.
+			// Only enforced when the original run actually recorded a fingerprint — an older record
+			// predating this field cannot be checked, so it is let through rather than made
+			// permanently unresumable.
+			const currentFingerprint = externalRoleFingerprint(role);
+			if (record.roleFingerprint !== undefined && record.roleFingerprint !== currentFingerprint) {
+				throw new RecoverableToolError(
+					`Role "${record.agent}" has changed (command, model, or shell mode) since run "${resolvedRunId}" was dispatched; resuming under the new config could reinterpret the old session incorrectly. Delegate a new run instead.`,
+				);
+			}
+
 			// A short, human-typeable id (spec 041) — the follow-up gets a fresh identity, not the
 			// dispatching tool call's own id.
 			const newRunId = manager().mintRunId();
@@ -172,17 +229,56 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 				leaseKey = lease.leaseKey;
 			}
 
-			// The initial dispatch envelopes verify runs with the protocol (tool.ts); a follow-up
-			// on a verify run must carry the same protocol, not just the bare instruction (D9).
-			const envelopedTask =
-				record.purpose === "verify" && record.taskId
-					? `${task.trim()}\n\n${buildVerificationProtocol(
-							join(options.workspaceDir ?? "", options.channelId, "tasks", `${record.taskId}.md`),
-						)}`
-					: task;
+			// Spec 042 D7: the same `<subagent-artifacts>/<runId>` layout the initial dispatch uses,
+			// computed with a real path join rather than a regex substitution that assumed the old
+			// runId was the last path segment with no separators of its own.
+			const artifactDir = join(dirname(record.artifactDir), newRunId);
+			const runContext: SubAgentRunContext = {
+				runId: newRunId,
+				purpose: record.purpose,
+				taskId: record.taskId,
+				workingDirectory: record.workingDirectory,
+				artifactDir,
+			};
 
+			// Spec 042 D7: the same envelope construction the initial dispatch uses — runtime context
+			// (including this run's own artifact directory), paths/session/memory context blocks, and
+			// (for a verify run) the verification protocol — not a hand-rolled "task + maybe verify
+			// protocol" that left the external agent unaware of its own working/artifact directories.
+			// `getCurrentModel`/`resolveApiKey` are only needed for the `memory: relevant` recall path
+			// inside `buildContextualBlocks` — optional here so a caller that only ever exercises
+			// list/cancel is not forced to wire an LLM-backed dependency it will never use. Absent
+			// either, context blocks degrade to none rather than guessing at a model or key.
+			const contextualBlocks =
+				options.getCurrentModel && options.resolveApiKey
+					? await buildContextualBlocks(
+							task,
+							role,
+							{
+								channelDir: options.channelDir,
+								workspaceDir: options.workspaceDir,
+								runtimeContext: { workspaceDir: options.workspaceDir, channelId: options.channelId },
+								getMemoryRecallSettings: options.getMemoryRecallSettings,
+								resolveApiKey: options.resolveApiKey,
+								memoryCandidateStore: options.memoryCandidateStore,
+							},
+							options.getCurrentModel(),
+						)
+					: [];
+			const envelopedTask = buildSubAgentTask(
+				task,
+				role,
+				{ workspaceDir: options.workspaceDir, channelId: options.channelId },
+				contextualBlocks,
+				runContext,
+				// returns: "artifact" has no external equivalent (spec 042 D3) and follow_up never
+				// requests it — always "text", matching the initial external dispatch.
+				"text",
+			);
+
+			let launchResult: ExternalLaunchResult;
 			try {
-				await launchExternalRun({
+				launchResult = await launchExternalRun({
 					runId: newRunId,
 					channelId: options.channelId,
 					channelDir: options.channelDir,
@@ -199,21 +295,34 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 					systemPrompt: role.systemPrompt,
 					task: envelopedTask,
 					workingDirectory: record.workingDirectory,
-					artifactDir: record.artifactDir.replace(/[^/\\]+$/, newRunId),
+					artifactDir,
 					purpose: record.purpose,
 					taskId: record.taskId,
 					leaseKey,
 					resumeSessionId: record.sessionId,
 					mutates: role.mutates,
-					workspaceDir: options.workspaceDir ?? "",
+					roleFingerprint: currentFingerprint,
+					workspaceDir: options.workspaceDir,
 					securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
 				});
 			} catch (error) {
 				// Until launchExternalRun has durably registered the run, no settlement authority owns
 				// this lease. Releasing here mirrors the initial subagent dispatch path and covers prompt,
 				// artifact, audit, invocation, and pre-spawn failures in follow_up.
-				releaseWorkspaceLease(leaseKey);
+				releaseWorkspaceLease(leaseKey, newRunId);
 				throw error;
+			}
+			// Spec 042 D2: a pre-spawn failure is reported in this same turn — settle() already
+			// released the lease, so there is nothing left to clean up here.
+			if (!launchResult.ok) {
+				if (launchResult.kind === "missing-binary") {
+					throw new Error(
+						`Follow-up on run "${resolvedRunId}" failed to launch: ${launchResult.reason} Install the CLI or fix "command" in its role file; the follow-up was not dispatched.`,
+					);
+				}
+				throw new RecoverableToolError(
+					`Follow-up on run "${resolvedRunId}" failed to launch: ${launchResult.reason} The follow-up was not dispatched.`,
+				);
 			}
 
 			return {

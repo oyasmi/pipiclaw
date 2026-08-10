@@ -36,6 +36,10 @@ export interface BuildInvocationResult {
 	 * not just at settlement.
 	 */
 	presetSessionId?: string;
+	/** Spec 042 D10: non-fatal invocation-time warnings (e.g. an argv token dropped because its
+	 *  placeholder had no value) — persisted onto the run record so `/subagents show` can surface
+	 *  them, since a silently-dropped flag can otherwise look identical to a role that never wanted it. */
+	warnings?: string[];
 }
 
 export type ExternalProtocolStatus = "completed" | "failed" | "absent" | "unparsable";
@@ -67,6 +71,13 @@ export interface ParseOutcomeInput {
 
 export interface ExternalHarness {
 	readonly id: "claude-code" | "codex-cli" | "exec";
+	/**
+	 * Spec 042 D12: bumped by hand whenever this adapter's `parseOutcome` schema assumptions
+	 * change. Persisted on the run and shown by `/subagents show`, so a failure caused by upstream
+	 * CLI schema drift is distinguishable from a failure the target CLI itself reported — "the
+	 * adapter is stale" and "the agent failed" look identical from a run's status alone otherwise.
+	 */
+	readonly parserVersion: number;
 	/** Assemble argv. The command line is never joined into a single shell string (D4). */
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult;
 	/** Parse stdout into a unified outcome. Must never throw — a parse failure degrades to
@@ -155,13 +166,22 @@ export type Placeholder = (typeof PLACEHOLDERS)[number];
  * (D4). Returns which placeholders were actually found, so a harness knows whether it still needs
  * to *append* the corresponding flag (a placeholder present ⇒ never append; absent ⇒ append per
  * the harness's own rule).
+ *
+ * Spec 042 D10: a token that still references a placeholder after substitution (its value was
+ * `undefined`, e.g. `--model $MODEL` on a role with no `model:` configured) is dropped from argv
+ * entirely rather than reaching the process as a literal `"$MODEL"` string — that literal-string
+ * failure is exactly what D4's "argv, not a shell string" design exists to prevent, just arriving
+ * through a different door (a missing value instead of a shell-quoting bug). `dropped` carries the
+ * original tokens so the caller can turn them into a run-visible warning.
  */
 export function expandPlaceholders(
 	argv: string[],
 	values: Partial<Record<Placeholder, string>>,
-): { argv: string[]; used: Set<Placeholder> } {
+): { argv: string[]; used: Set<Placeholder>; dropped: string[] } {
 	const used = new Set<Placeholder>();
-	const expanded = argv.map((token) => {
+	const dropped: string[] = [];
+	const expanded: string[] = [];
+	for (const token of argv) {
 		let result = token;
 		for (const placeholder of PLACEHOLDERS) {
 			const value = values[placeholder];
@@ -170,7 +190,20 @@ export function expandPlaceholders(
 				result = result.split(placeholder).join(value);
 			}
 		}
-		return result;
-	});
-	return { argv: expanded, used };
+		if (PLACEHOLDERS.some((placeholder) => result.includes(placeholder))) {
+			dropped.push(token);
+			continue;
+		}
+		expanded.push(result);
+	}
+	return { argv: expanded, used, dropped };
+}
+
+/** Turn `expandPlaceholders`'s `dropped` tokens into run-visible warning strings (spec 042 D10),
+ *  shared so every structured harness reports the same wording. */
+export function formatDroppedPlaceholderWarnings(dropped: string[]): string[] {
+	return dropped.map(
+		(token) =>
+			`Dropped argv token "${token}": it references a placeholder with no value configured for this run (e.g. no "model:" set for $MODEL).`,
+	);
 }

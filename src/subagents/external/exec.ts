@@ -22,6 +22,7 @@ const MAX_OUTPUT_CHARS = 16_000;
 
 export const execHarness: ExternalHarness = {
 	id: "exec",
+	parserVersion: 1,
 
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult {
 		if (input.argv.length === 0) {
