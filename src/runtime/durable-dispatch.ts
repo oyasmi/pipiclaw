@@ -133,9 +133,11 @@ export class DurableDispatchService {
 			};
 			await this.write(record);
 		});
-		await this.drainOnce();
+		// Only this record needs draining here — a full directory scan would pay for every other
+		// channel's outstanding record just to learn the outcome of the one just written.
+		await this.drainRecord(id, Date.now());
 		// The record is gone (delivered+completed already) or no longer "pending"
-		// (drainOnce only reverts to "pending" when bot.enqueueEvent rejected it).
+		// (drainRecord only reverts to "pending" when bot.enqueueEvent rejected it).
 		const after = await this.read(id);
 		return after?.status !== "pending";
 	}
@@ -210,31 +212,41 @@ export class DurableDispatchService {
 		}
 		for (const filename of filenames) {
 			const id = filename.slice(0, -".json".length);
-			await this.queue.run(id, async () => {
-				const record = await this.read(id);
-				if (!record) return;
-				// The turn is still running in this process: renew its lease rather than treating a
-				// long turn as a lost one and redelivering the wake underneath it (D2).
-				if (record.status === "running" && this.running.has(id)) {
+			await this.drainRecord(id, now);
+		}
+	}
+
+	private async drainRecord(id: string, now: number): Promise<void> {
+		await this.queue.run(id, async () => {
+			const record = await this.read(id);
+			if (!record) return;
+			// The turn is still running in this process: renew its lease rather than treating a
+			// long turn as a lost one and redelivering the wake underneath it (D2).
+			if (record.status === "running" && this.running.has(id)) {
+				const currentLeaseMs = record.leaseExpiresAt ? new Date(record.leaseExpiresAt).getTime() : 0;
+				// Only persist the renewal once the lease is more than halfway to expiry, instead of
+				// on every drain tick — a live holder gets rediscovered by the next tick regardless,
+				// so there is no correctness reason to fsync a rename this often.
+				if (currentLeaseMs - now < this.leaseMs / 2) {
 					record.leaseExpiresAt = new Date(now + this.leaseMs).toISOString();
 					await this.write(record);
-					return;
 				}
-				const leaseMs = record.leaseExpiresAt ? new Date(record.leaseExpiresAt).getTime() : undefined;
-				if ((record.status === "queued" || record.status === "running") && leaseMs && leaseMs > now) return;
-				record.status = "queued";
-				record.deliveries++;
-				record.leaseExpiresAt = new Date(now + this.leaseMs).toISOString();
-				await this.write(record);
-				const accepted = this.options.bot.enqueueEvent(
-					withRedeliveryNotice({ ...record.event, dispatchId: record.id }, record.deliveries),
-				);
-				if (accepted) return;
-				record.status = "pending";
-				record.leaseExpiresAt = undefined;
-				await this.write(record);
-			});
-		}
+				return;
+			}
+			const leaseMs = record.leaseExpiresAt ? new Date(record.leaseExpiresAt).getTime() : undefined;
+			if ((record.status === "queued" || record.status === "running") && leaseMs && leaseMs > now) return;
+			record.status = "queued";
+			record.deliveries++;
+			record.leaseExpiresAt = new Date(now + this.leaseMs).toISOString();
+			await this.write(record);
+			const accepted = this.options.bot.enqueueEvent(
+				withRedeliveryNotice({ ...record.event, dispatchId: record.id }, record.deliveries),
+			);
+			if (accepted) return;
+			record.status = "pending";
+			record.leaseExpiresAt = undefined;
+			await this.write(record);
+		});
 	}
 
 	private async read(id: string): Promise<DurableDispatchRecord | undefined> {

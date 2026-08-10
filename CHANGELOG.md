@@ -4,6 +4,20 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.0-beta.8] - 2026-08-11
+
+### Changed
+
+- Unified external sub-agent settlement and verification across live, cancelled, timed-out, and restart-reconciled runs. Partial output, usage, session ids, verification attestations, and estimated durations now survive every settlement path, while launch failures are reported in the dispatching turn with actionable diagnostics.
+- Refined bundled sub-agent roles and external harness argument assembly. Claude Code receives the mapped effort level, Codex CLI recognizes existing model and reasoning config in every supported spelling, structured harnesses reject shell mode, and role permission/resource declarations now match their documented responsibilities.
+- Replaced the frequent host-wide run sweeper with a daily seven-day retention pass that removes run records and runtime-managed artifacts together. Restart recovery now probes adopted processes immediately, reconciles persisted cancellation, and schedules deadline checks without polling.
+- Reduced idle runtime I/O: memory maintenance filters channels through cheap due-time gates before constructing runtime context, reacts to enablement changes without restart, and deduplicates gate-skip logs per job; durable dispatch drains newly created records directly and persists running-lease renewal only after half the lease has elapsed.
+
+### Fixed
+
+- Hardened delegation consistency around invocation-field validation, external memory disclosure defaults, follow-up role fingerprints and context envelopes, workspace lease ownership, process-tree cleanup, and completion/verification reporting.
+- Aligned progress-entry glyphs with tool-call counting and delivery status markers.
+
 ## [0.9.0-beta.2] - 2026-08-08
 
 ### Added

@@ -739,6 +739,7 @@ export async function createRuntimeContext(
 					runtimeSettingsManager.reload();
 					return {
 						memoryMaintenance: runtimeSettingsManager.getMemoryMaintenanceSettings(),
+						sessionMemory: runtimeSettingsManager.getSessionMemorySettings(),
 					};
 				},
 				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,

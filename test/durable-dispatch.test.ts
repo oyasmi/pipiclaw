@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import { claimVerifiedDelegationWake } from "../src/runtime/task-wake.js";
@@ -12,6 +12,10 @@ import { readStoredTask } from "../src/tasks/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const tempDir = useTempDirs("pipiclaw-dispatch-");
+
+afterEach(() => {
+	vi.useRealTimers();
+});
 
 function event(): DingTalkEvent {
 	return {
@@ -227,6 +231,44 @@ describe("DurableDispatchService", () => {
 
 		await service.markCompleted(id);
 		expect(existsSync(join(stateDir, `${id}.json`))).toBe(false);
+	});
+
+	it("only persists a running lease renewal once past the half-life threshold", async () => {
+		vi.useFakeTimers();
+		const start = new Date("2026-01-01T00:00:00.000Z");
+		vi.setSystemTime(start);
+
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const delivered: DingTalkEvent[] = [];
+		const leaseMs = 100_000;
+		const service = new DurableDispatchService({
+			stateDir,
+			leaseMs,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(event());
+		const id = delivered[0]?.dispatchId;
+		await service.markStarted(id);
+		const path = join(stateDir, `${id}.json`);
+		const leaseAfterStart = JSON.parse(readFileSync(path, "utf-8")).leaseExpiresAt;
+
+		// Well before the half-life (50s into a 100s lease): drain must not touch the file.
+		vi.setSystemTime(new Date(start.getTime() + 10_000));
+		await service.drainOnce(Date.now());
+		expect(JSON.parse(readFileSync(path, "utf-8")).leaseExpiresAt).toBe(leaseAfterStart);
+
+		// Past the half-life: drain renews and persists the new expiry.
+		vi.setSystemTime(new Date(start.getTime() + 60_000));
+		await service.drainOnce(Date.now());
+		const leaseAfterRenewal = JSON.parse(readFileSync(path, "utf-8")).leaseExpiresAt;
+		expect(leaseAfterRenewal).not.toBe(leaseAfterStart);
+
+		await service.markCompleted(id);
 	});
 
 	it("redelivers a running record once the process no longer holds it (spec 031, D2)", async () => {

@@ -1,7 +1,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
 import { discoverMemoryMaintenanceChannels, MemoryMaintenanceScheduler } from "../src/memory/scheduler.js";
+import { formatLocalTime } from "../src/shared/local-time.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-maintenance-scheduler-");
@@ -18,6 +20,17 @@ function maintenanceSettings(enabled = true) {
 		failureBackoffMinutes: 30,
 		cleanupShrinkGuardMinRatio: 0.4,
 		cleanupShrinkGuardMinChars: 2_000,
+	};
+}
+
+function sessionMemorySettings() {
+	return {
+		enabled: true,
+		minTurnsBetweenUpdate: 2,
+		minToolCallsBetweenUpdate: 4,
+		timeoutMs: 30_000,
+		forceRefreshBeforeCompact: true,
+		forceRefreshBeforeNewSession: true,
 	};
 }
 
@@ -54,7 +67,7 @@ describe("memory maintenance scheduler", () => {
 			getKnownChannelIds: () => ["dm_1"],
 			getRuntimeContext,
 			isChannelActive: () => false,
-			getSettings: () => ({ memoryMaintenance: maintenanceSettings(false) }),
+			getSettings: () => ({ memoryMaintenance: maintenanceSettings(false), sessionMemory: sessionMemorySettings() }),
 		});
 
 		await scheduler.runOnce();
@@ -75,6 +88,7 @@ describe("memory maintenance scheduler", () => {
 					...maintenanceSettings(true),
 					maxConcurrentChannels: 1,
 				},
+				sessionMemory: sessionMemorySettings(),
 			}),
 		});
 
@@ -96,6 +110,7 @@ describe("memory maintenance scheduler", () => {
 					...maintenanceSettings(true),
 					maxConcurrentChannels: 1,
 				},
+				sessionMemory: sessionMemorySettings(),
 			}),
 		});
 
@@ -104,7 +119,41 @@ describe("memory maintenance scheduler", () => {
 		expect(getRuntimeContext).toHaveBeenCalledWith("dm_2");
 	});
 
-	it("starts and stops an idempotent interval only when enabled", async () => {
+	it("skips channels with nothing due without requesting runtime context", async () => {
+		const root = createTempDir();
+		const appHomeDir = join(root, "app");
+		const now = new Date("2026-04-19T12:00:00.000Z");
+
+		// dm_1 has already had every job run within its interval and is clean: no job could
+		// possibly be due, so the cheap pre-check should skip it without touching the runtime.
+		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
+			...state,
+			dirty: false,
+			lastSessionRefreshAt: formatLocalTime(now),
+			lastCheckpointAt: formatLocalTime(now),
+			lastStructuralMaintenanceAt: formatLocalTime(now),
+		}));
+		// dm_2 has no state on disk (never maintained), so it is always a candidate.
+
+		const getRuntimeContext = vi.fn(async () => null);
+		const scheduler = new MemoryMaintenanceScheduler({
+			appHomeDir,
+			workspaceDir: join(root, "workspace"),
+			getKnownChannelIds: () => ["dm_1", "dm_2"],
+			getRuntimeContext,
+			isChannelActive: () => false,
+			getSettings: () => ({
+				memoryMaintenance: { ...maintenanceSettings(true), maxConcurrentChannels: 1 },
+				sessionMemory: sessionMemorySettings(),
+			}),
+		});
+
+		await scheduler.runOnce(now);
+		expect(getRuntimeContext).toHaveBeenCalledTimes(1);
+		expect(getRuntimeContext).toHaveBeenCalledWith("dm_2");
+	});
+
+	it("starts and stops an idempotent interval regardless of the enabled setting", async () => {
 		vi.useFakeTimers();
 		const root = createTempDir();
 		let enabled = false;
@@ -115,24 +164,28 @@ describe("memory maintenance scheduler", () => {
 			getKnownChannelIds: () => ["dm_1"],
 			getRuntimeContext,
 			isChannelActive: () => false,
-			getSettings: () => ({ memoryMaintenance: maintenanceSettings(enabled) }),
+			getSettings: () => ({
+				memoryMaintenance: maintenanceSettings(enabled),
+				sessionMemory: sessionMemorySettings(),
+			}),
 			intervalMs: 1000,
 		});
 		const runOnce = vi.spyOn(scheduler, "runOnce").mockResolvedValue(undefined);
 
-		scheduler.start();
-		await vi.advanceTimersByTimeAsync(1000);
-		expect(runOnce).not.toHaveBeenCalled();
-
-		enabled = true;
-		scheduler.start();
+		// Starting while disabled now still arms the timer; runOnce itself is the enabled gate.
 		scheduler.start();
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(runOnce).toHaveBeenCalledTimes(1);
+
+		// Flipping the setting on at runtime (no restart) takes effect on the next tick.
+		enabled = true;
+		scheduler.start();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(runOnce).toHaveBeenCalledTimes(2);
 
 		scheduler.stop();
 		await vi.advanceTimersByTimeAsync(1000);
-		expect(runOnce).toHaveBeenCalledTimes(1);
+		expect(runOnce).toHaveBeenCalledTimes(2);
 		scheduler.stop();
 	});
 });

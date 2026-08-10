@@ -10,8 +10,13 @@ import { discoverWorkspaceChannelIds } from "../runtime/channel-index.js";
 import { isChannelId } from "../runtime/channel-paths.js";
 import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
+import {
+	shouldRunMemoryCheckpoint,
+	shouldRunSessionRefresh,
+	shouldRunStructuralMaintenance,
+} from "./maintenance-gates.js";
 import { runMemoryCheckpointJob, runSessionRefreshJob, runStructuralMaintenanceJob } from "./maintenance-jobs.js";
-import { getMemoryMaintenanceStateDir } from "./maintenance-state.js";
+import { getMemoryMaintenanceStateDir, readMemoryMaintenanceState } from "./maintenance-state.js";
 
 export interface MemoryMaintenanceRuntimeContext {
 	channelId: string;
@@ -39,11 +44,69 @@ export interface MemoryMaintenanceSchedulerOptions {
 	isChannelActive: (channelId: string) => boolean;
 	getSettings: () => {
 		memoryMaintenance: PipiclawMemoryMaintenanceSettings;
+		sessionMemory: PipiclawSessionMemorySettings;
 	};
 	intervalMs?: number;
 }
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
+
+/**
+ * Cheap due-time predicate, evaluated before `getRuntimeContext` (transcript access, model
+ * resolution, settings reload) is paid for.
+ *
+ * Reuses the real gates with optimistic material (transcript-derived checks always pass), so the
+ * only work here is one state-file read plus timestamp arithmetic. A gate's material checks are
+ * purely additive restrictions on top of the cheap checks (interval/backoff/idle/dirty), so
+ * optimistic material can only ever make this predicate *more* permissive than the real job would
+ * be — it never wrongly skips a channel that a job would actually run for.
+ */
+async function mightAnyMaintenanceJobBeDue(input: {
+	appHomeDir: string;
+	channelId: string;
+	settings: {
+		sessionMemory: PipiclawSessionMemorySettings;
+		memoryMaintenance: PipiclawMemoryMaintenanceSettings;
+	};
+	now: Date;
+}): Promise<boolean> {
+	const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
+
+	const sessionRefresh = shouldRunSessionRefresh({
+		now: input.now,
+		state,
+		sessionMemory: input.settings.sessionMemory,
+		maintenance: input.settings.memoryMaintenance,
+		channelActive: false,
+		hasNewSessionEntry: () => true,
+		hasMeaningfulMaterial: () => true,
+	});
+	if (sessionRefresh.allowed) return true;
+
+	const checkpoint = shouldRunMemoryCheckpoint({
+		now: input.now,
+		state,
+		maintenance: input.settings.memoryMaintenance,
+		channelActive: false,
+		material: () => ({ hasNewEntry: true, hasMeaningfulExchange: true, batchSize: Number.MAX_SAFE_INTEGER }),
+	});
+	if (checkpoint.allowed) return true;
+
+	const structural = await shouldRunStructuralMaintenance({
+		now: input.now,
+		state,
+		maintenance: input.settings.memoryMaintenance,
+		channelActive: false,
+		material: async () => ({
+			memoryCleanupNeeded: true,
+			historyFoldingNeeded: true,
+			hasMemoryContent: true,
+			hasHistoryContent: true,
+			expiredEntryCount: 1,
+		}),
+	});
+	return structural.allowed;
+}
 
 async function listStateChannels(appHomeDir: string): Promise<string[]> {
 	try {
@@ -89,9 +152,12 @@ export class MemoryMaintenanceScheduler {
 	constructor(private readonly options: MemoryMaintenanceSchedulerOptions) {}
 
 	start(): void {
-		if (this.timer || !this.options.getSettings().memoryMaintenance.enabled) {
+		if (this.timer) {
 			return;
 		}
+		// `enabled` is re-checked on every tick inside `runOnce`, which is nearly free when
+		// disabled (one cached settings read, no channel scan). Gating `start()` on it too would
+		// mean flipping `memoryMaintenance.enabled` on at runtime never actually starts the timer.
 		this.timer = setInterval(() => {
 			void this.runOnce().catch((error) => {
 				log.logWarning("Memory maintenance scheduler tick failed", errorMessage(error));
@@ -109,8 +175,8 @@ export class MemoryMaintenanceScheduler {
 	}
 
 	async runOnce(now = new Date()): Promise<void> {
-		const settings = this.options.getSettings().memoryMaintenance;
-		if (!settings.enabled || this.running) {
+		const settings = this.options.getSettings();
+		if (!settings.memoryMaintenance.enabled || this.running) {
 			return;
 		}
 
@@ -121,7 +187,7 @@ export class MemoryMaintenanceScheduler {
 				workspaceDir: this.options.workspaceDir,
 				knownChannelIds: this.options.getKnownChannelIds?.(),
 			});
-			const maxConcurrent = normalizeMaxConcurrentChannels(settings.maxConcurrentChannels);
+			const maxConcurrent = normalizeMaxConcurrentChannels(settings.memoryMaintenance.maxConcurrentChannels);
 			if (channelIds.length === 0) {
 				return;
 			}
@@ -130,7 +196,16 @@ export class MemoryMaintenanceScheduler {
 			let index = this.nextChannelIndex % channelIds.length;
 			while (scanned < channelIds.length && selected.length < maxConcurrent) {
 				const channelId = channelIds[index];
-				if (channelId && !this.options.isChannelActive(channelId)) {
+				if (
+					channelId &&
+					!this.options.isChannelActive(channelId) &&
+					(await mightAnyMaintenanceJobBeDue({
+						appHomeDir: this.options.appHomeDir,
+						channelId,
+						settings,
+						now,
+					}))
+				) {
 					selected.push(channelId);
 				}
 				index = (index + 1) % channelIds.length;
