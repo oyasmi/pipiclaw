@@ -26,7 +26,7 @@ function spawnAndWaitExit(): Promise<number> {
 
 /**
  * Spec 040, D10.3 (P0-1): a restart must genuinely re-adopt a still-running external run, not
- * just probe it once — rebuild its write lease, keep enforcing its deadline via the sweeper, and
+ * just probe it once — rebuild its write lease, keep enforcing its persisted deadline, and
  * settle it exactly once when it actually ends. Three independent `SubAgentRunManager` instances
  * sharing the same on-disk state simulate three daemon lifetimes; a real detached OS process is
  * used throughout since the point under test is process identity and process-group behavior,
@@ -48,7 +48,7 @@ function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000):
 }
 
 describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
-	it("rebuilds the write lease for a still-alive adopted run, enforces its deadline via sweep, and settles it exactly once", async () => {
+	it("rebuilds the write lease for a still-alive adopted run, enforces its deadline once, and settles exactly once", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_adopt";
 		const stateDir = join(workspaceDir, "state");
@@ -108,12 +108,15 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const competing = acquireWorkspaceLease({ runId: "competing", channelId, workingDirectory: workspaceDir });
 		expect(competing.ok).toBe(false);
 
-		// A third "daemon" with `now` pushed past any deadline this run could have — this must kill
-		// the real process and settle it as a timeout failure, without ever falling back to the "no
-		// protocol terminal" guess. Simulated the same way as the first→second transition: release
-		// the second daemon's lease first, since a real third restart means the second daemon's
-		// process (and its process-local lease map) is gone too.
+		// A third "daemon" adopts the run shortly before its persisted deadline. It must install one
+		// deadline check, kill the real process, and settle it as a timeout failure without a periodic
+		// poller or falling back to the "no protocol terminal" guess. Simulated the same way as the
+		// first→second transition: release the second daemon's process-local lease first.
 		releaseWorkspaceLease(secondDaemon.get("run-adopt")?.leaseKey, "run-adopt");
+		const recordPath = join(stateDir, channelId, "run-adopt.json");
+		const persisted = JSON.parse(readFileSync(recordPath, "utf-8"));
+		persisted.deadlineAt = Date.now() + 100;
+		writeFileSync(recordPath, `${JSON.stringify(persisted)}\n`, "utf-8");
 		const dispatched: unknown[] = [];
 		const swept = new SubAgentRunManager(channelId, {
 			stateDir,
@@ -123,18 +126,22 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			},
 		});
 		await swept.restore();
-		await waitFor(async () => {
-			await swept.sweep(Date.now() + 999_999);
-			return swept.get("run-adopt")?.status !== "running";
-		});
+		await waitFor(() => swept.get("run-adopt")?.status !== "running" && dispatched.length === 1, 10_000);
 
 		expect(swept.get("run-adopt")?.status).toBe("failed");
 		expect(swept.get("run-adopt")?.failureReason).toContain("Wall time budget exceeded");
 		expect(existsSync(marker)).toBe(false); // killed before it could write
 		expect(dispatched).toHaveLength(1);
 
-		// A later sweep tick (production runs one every 30s) must not double-kill or re-announce.
-		await swept.sweep();
+		// Another restart must not double-kill or re-announce the already-settled run.
+		const repeated = new SubAgentRunManager(channelId, {
+			stateDir,
+			dispatch: (event) => {
+				dispatched.push(event);
+				return true;
+			},
+		});
+		await repeated.restore();
 		expect(dispatched).toHaveLength(1);
 
 		// The lease was released once the run went terminal.

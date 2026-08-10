@@ -24,7 +24,7 @@ import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { fileStamp } from "../shared/file-stamp.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
-import { configureSubAgentRuntime, restoreAllSubAgentRuns, stopSubAgentSweeper } from "../subagents/runs.js";
+import { configureSubAgentRuntime, restoreAllSubAgentRuns, stopSubAgentGarbageCollector } from "../subagents/runs.js";
 import { readActiveTasks } from "../tasks/ledger.js";
 import { finishTaskAttempt, type WakeTaskTransitionHooks } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
@@ -786,7 +786,7 @@ export async function createRuntimeContext(
 			durableDispatch?.stop();
 			memoryMaintenanceScheduler.stop();
 			eventsWatcher.stop();
-			stopSubAgentSweeper();
+			stopSubAgentGarbageCollector();
 			await bot.stop();
 
 			const runningTasks = Array.from(activeTasks);

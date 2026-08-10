@@ -314,8 +314,8 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	if (runManager.get(input.runId)?.terminationReason === "cancelled") {
 		void killProcessGroup(pid);
 	}
-	// Prompt, same-process enforcement (the sweeper is the cross-restart backstop for this
-	// deadline, at coarser granularity — see SWEEP_INTERVAL_MS in runs.ts).
+	// Prompt, same-process enforcement. Restart recovery persists this same deadline and installs
+	// one replacement check only when it actually adopts a still-running process.
 	const wallClockTimer = setTimeout(() => {
 		void runManager.markTerminationReason(input.runId, "timeout").then(() => killProcessGroup(pid));
 	}, input.maxWallTimeSec * 1000);

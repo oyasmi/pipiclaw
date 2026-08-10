@@ -127,7 +127,7 @@ export interface RunRecord extends RunUsage {
 	 *  enforcing it — an in-process timer dies with the process that set it. */
 	deadlineAt?: number;
 	/** Set before the kill signal is sent, so whichever code path eventually settles this run (the
-	 *  live in-process watcher or the cross-restart sweeper) reports why, instead of guessing from
+	 *  live in-process watcher or the cross-restart deadline check) reports why, instead of guessing from
 	 *  protocol output alone (P1-1). */
 	terminationReason?: "timeout" | "cancelled";
 	argv?: string[];
@@ -157,9 +157,6 @@ export interface RunRecord extends RunUsage {
 	 *  (external only) — `follow_up` refuses to resume under a role that has since changed one of
 	 *  these instead of silently reinterpreting the old session under a new harness invocation. */
 	roleFingerprint?: string;
-	/** Spec 042 D9: set once the 24h auxiliary-artifact cleanup has run for this record, so a later
-	 *  sweep tick does not repeat the (harmless but pointless) unlink attempts every 30s. */
-	auxiliaryArtifactsCleaned?: boolean;
 	/** Spec 042 D12: the harness adapter's own schema version at launch — lets `/subagents show`
 	 *  distinguish "the target CLI's own protocol changed under an adapter that hasn't caught up"
 	 *  from "the agent itself failed". */
@@ -223,12 +220,18 @@ const hostAdmissionQueue = createSerialQueue<"host">();
 /** Bytes of the reply text carried inline in the completion wake, matching job-manager's tail budget. */
 const WAKE_OUTPUT_TAIL_CHARS = 2_000;
 
-/** Spec 042 D9: two-tier retention for a settled run. Auxiliary artifacts are large and rarely
- *  needed once a run is old; the run record and `output.md` are the actual deliverable/audit
- *  trail and outlive them, matching the design doc's originally-promised 24h/7d split. */
-const AUXILIARY_ARTIFACT_RETENTION_MS = 24 * 60 * 60_000;
-const RUN_RECORD_RETENTION_MS = 7 * 24 * 60 * 60_000;
-const AUXILIARY_ARTIFACT_FILENAMES = ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log"] as const;
+/** Settled runs and every runtime-managed artifact are retained together for one week. GC runs
+ *  daily, so an item can remain for up to one additional sweep interval after this age. */
+const RUN_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const RUN_ARTIFACT_FILENAMES = ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log", "output.md"] as const;
+
+async function unlinkIfPresent(path: string): Promise<void> {
+	try {
+		await unlink(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+}
 
 function isTerminal(status: RunStatus): boolean {
 	return status !== "running";
@@ -273,6 +276,9 @@ export class SubAgentRunManager {
 	/** External launch intents exist before a safe live child handle does. A cancel in that window
 	 * is remembered here and consumed before spawn, rather than spawning a process nothing can cancel. */
 	private readonly externalLaunches = new Map<string, { cancelRequested: boolean }>();
+	/** One-shot deadline checks for external processes adopted during restore. Unlike a child this
+	 *  daemon spawned itself, an adopted process cannot emit a `close` event to this process. */
+	private readonly externalRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly queue = createSerialQueue<string>();
 
 	constructor(
@@ -314,11 +320,15 @@ export class SubAgentRunManager {
 	}
 
 	private async forget(record: RunRecord): Promise<void> {
+		// Delete artifacts before the durable record. If a real filesystem error occurs, retaining
+		// the record keeps the run eligible for a later daily retry instead of orphaning its files.
+		await Promise.all(RUN_ARTIFACT_FILENAMES.map((name) => unlinkIfPresent(join(record.artifactDir, name))));
+		const path = this.recordPath(record.runId);
+		if (path) await unlinkIfPresent(path);
 		this.runs.delete(record.runId);
 		this.cancelHandles.delete(record.runId);
 		this.externalLaunches.delete(record.runId);
-		const path = this.recordPath(record.runId);
-		if (path) await unlink(path).catch(() => undefined);
+		this.clearExternalRecoveryTimer(record.runId);
 	}
 
 	get(runId: string): RunRecord | undefined {
@@ -447,7 +457,7 @@ export class SubAgentRunManager {
 			deadlineAt: number;
 			sessionId?: string;
 			/** Spec 042 D1: everything a restart reconciliation might need if this daemon disappears
-			 *  before the process exits — restore/sweep must have the same inputs a live watcher
+			 *  before the process exits — restore/deadline recovery must have the same inputs a live watcher
 			 *  would, not a thinner subset. */
 			verifySubjectBefore?: string;
 			maxWallTimeSec?: number;
@@ -582,6 +592,7 @@ export class SubAgentRunManager {
 			record.leaseKey = undefined; // Terminal records never display as "lease held" (P1-4).
 			this.cancelHandles.delete(runId);
 			this.externalLaunches.delete(runId);
+			this.clearExternalRecoveryTimer(runId);
 			await this.persist(record);
 
 			if (!record.usageRecorded) {
@@ -703,7 +714,8 @@ export class SubAgentRunManager {
 
 	/** Explicit cancel (`subagent_manage op=cancel`, spec 040 D6). Does not wake — it is the model's own decision. */
 	async cancel(runId: string): Promise<RunStatus | "not_found"> {
-		return this.queue.run(runId, async () => {
+		let adoptedRecord: RunRecord | undefined;
+		const status = await this.queue.run(runId, async () => {
 			const record = this.runs.get(runId);
 			if (!record) return "not_found";
 			if (record.status !== "running") return record.status;
@@ -711,9 +723,8 @@ export class SubAgentRunManager {
 			this.cancelHandles.delete(runId);
 			if (cancelHandle) {
 				// External: mark the reason before the handle kills the process, so whichever code
-				// path settles this run (the live watcher below, or the sweeper if that watcher's
-				// process disappears mid-kill) reports "cancelled" instead of guessing from
-				// whatever the process happened to print before it died (P1-1). This also covers
+				// path settles this run reports "cancelled" instead of guessing from whatever the
+				// process happened to print before it died (P1-1). This also covers
 				// the pre-spawn placeholder handle `claimExternalLaunch` installs: a cancel that
 				// lands in that narrow window durably marks the intent even though the placeholder
 				// itself does nothing else.
@@ -728,11 +739,12 @@ export class SubAgentRunManager {
 				this.externalLaunches.get(runId)!.cancelRequested = true;
 			} else if (record.runtime === "external" && record.pid) {
 				// Adopted from a previous daemon (spec 040, D10.3): no live in-process watcher, but
-				// the run is genuinely still running and the sweeper is observing it. Kill it now
-				// rather than relabeling a live process "lost" without touching it.
+				// the run is genuinely still running. Kill and reconcile it directly rather than
+				// waiting for its one-shot deadline check.
 				record.terminationReason = "cancelled";
 				await this.persist(record).catch(() => undefined);
 				await killProcessGroup(record.pid).catch(() => undefined);
+				adoptedRecord = record;
 			} else {
 				// Truly unreachable (e.g. an internal run this process did not launch): mark it lost
 				// rather than pretend a cancel we could not perform happened.
@@ -745,8 +757,14 @@ export class SubAgentRunManager {
 				await this.persist(record);
 				return record.status;
 			}
-			return "running"; // The handle, or the sweeper once the process exits, drives the settle() call.
+			return "running"; // A live handle or the adopted-run reconciliation below drives settlement.
 		});
+		if (!adoptedRecord) return status;
+		this.clearExternalRecoveryTimer(runId);
+		await this.reconcileExternalRun(adoptedRecord).catch((error) => {
+			log.logWarning(`Failed to reconcile cancelled adopted run ${runId}`, errorMessage(error));
+		});
+		return this.runs.get(runId)?.status ?? status;
 	}
 
 	/**
@@ -833,9 +851,10 @@ export class SubAgentRunManager {
 						});
 					}
 				}
-				await this.reconcileExternalRun(record).catch((error) => {
+				await this.reconcileExternalRunAtDeadline(record, Date.now()).catch((error) => {
 					log.logWarning(`Failed to reconcile external run ${record?.runId}`, errorMessage(error));
 				});
+				if (record.status === "running") this.scheduleExternalRecovery(record);
 			}
 			if (isTerminal(record.status) && record.settledAt) {
 				// A settled-but-unwoken record means the wake was lost between settlement and
@@ -848,7 +867,6 @@ export class SubAgentRunManager {
 						log.logWarning(`Failed to re-announce sub-agent run ${record?.runId}`, errorMessage(error));
 					});
 				}
-				await this.collectGarbageIfExpired(record);
 			}
 		}
 		return restored;
@@ -962,59 +980,66 @@ export class SubAgentRunManager {
 		);
 	}
 
-	/**
-	 * Periodic host-wide check (spec 040, D10.3; GC folded in by spec 042, D9): kills anything past
-	 * its deadline, reconciles anything a `close` event will never fire for — a run adopted from a
-	 * previous daemon via `restore()`, or (rarely) one whose local watcher already unwound without
-	 * settling it — and garbage-collects terminal records past their retention window. Before D9
-	 * this GC only ran inside `restore()`, so a long-lived daemon that never restarted accumulated
-	 * terminal records and artifacts without bound; the periodic sweep is the other place every
-	 * record is reliably revisited. `reconcileExternalRun` no-ops on a genuinely still-running,
-	 * still-watched run, so sweeping one this process itself launched is harmless, not just adopted ones.
-	 */
-	async sweep(now = Date.now()): Promise<void> {
-		for (const record of Array.from(this.runs.values())) {
-			if (record.status === "running") {
-				if (record.runtime !== "external" || !record.pid) continue;
-				if (record.deadlineAt && now >= record.deadlineAt && record.terminationReason !== "timeout") {
-					await this.markTerminationReason(record.runId, "timeout");
-					await killProcessGroup(record.pid).catch(() => undefined);
-				}
-				await this.reconcileExternalRun(record).catch((error) => {
-					log.logWarning(`Failed to sweep external run ${record.runId}`, errorMessage(error));
-				});
-				continue;
-			}
-			await this.collectGarbageIfExpired(record, now).catch((error) => {
-				log.logWarning(`Failed to garbage-collect sub-agent run ${record.runId}`, errorMessage(error));
-			});
+	/** Reconcile an adopted process once at restore and once at its persisted deadline. Probing
+	 *  liveness before assigning a timeout lets a process that finished just before the deadline be
+	 *  settled from its artifacts as a normal completion. */
+	private async reconcileExternalRunAtDeadline(record: RunRecord, now = Date.now()): Promise<void> {
+		if (
+			record.pid &&
+			record.deadlineAt &&
+			now >= record.deadlineAt &&
+			record.terminationReason !== "timeout" &&
+			isProcessAlive(record.pid) &&
+			(await this.isSameProcess(record))
+		) {
+			await this.markTerminationReason(record.runId, "timeout");
+			await killProcessGroup(record.pid).catch(() => undefined);
 		}
+		await this.reconcileExternalRun(record);
+	}
+
+	private clearExternalRecoveryTimer(runId: string): void {
+		const timer = this.externalRecoveryTimers.get(runId);
+		if (!timer) return;
+		clearTimeout(timer);
+		this.externalRecoveryTimers.delete(runId);
+	}
+
+	private scheduleExternalRecovery(record: RunRecord): void {
+		if (!record.deadlineAt) return;
+		this.clearExternalRecoveryTimer(record.runId);
+		const timer = setTimeout(
+			() => {
+				this.externalRecoveryTimers.delete(record.runId);
+				const current = this.runs.get(record.runId);
+				if (!current || current.status !== "running") return;
+				void this.reconcileExternalRunAtDeadline(current).catch((error) => {
+					log.logWarning(`Failed to reconcile adopted external run ${current.runId}`, errorMessage(error));
+				});
+			},
+			Math.max(0, record.deadlineAt - Date.now()),
+		);
+		timer.unref?.();
+		this.externalRecoveryTimers.set(record.runId, timer);
 	}
 
 	/**
-	 * Two-tier retention (spec 042 D9). Auxiliary artifacts (`events.jsonl`, `stderr.log`,
-	 * `prompt.txt`, `system-prompt.txt`) are large and rarely needed once a run is old, so they are
-	 * cleaned after 24h; `output.md` (the actual deliverable) and the run record itself (the audit
-	 * trail) are kept for 7 days, matching the design doc's originally-promised — but until now
-	 * unimplemented — cleanup window.
+	 * Daily retention GC. A settled run and all runtime-managed artifacts are deleted together once
+	 * they are at least seven days old. Other files deliberately created by the delegated task are
+	 * not recursively removed from the artifact directory.
 	 */
 	private async collectGarbageIfExpired(record: RunRecord, now = Date.now()): Promise<void> {
 		if (!record.settledAt) return;
-		const age = now - record.settledAt;
-		if (age >= RUN_RECORD_RETENTION_MS) {
+		if (now - record.settledAt >= RUN_RETENTION_MS) {
 			await this.forget(record);
-			return;
 		}
-		if (age >= AUXILIARY_ARTIFACT_RETENTION_MS && !record.auxiliaryArtifactsCleaned) {
-			await Promise.all(
-				AUXILIARY_ARTIFACT_FILENAMES.map((name) => unlink(join(record.artifactDir, name)).catch(() => undefined)),
-			);
-			record.auxiliaryArtifactsCleaned = true;
-			await this.persist(record).catch((error) => {
-				log.logWarning(
-					`Failed to persist auxiliary-artifact cleanup marker for run ${record.runId}`,
-					errorMessage(error),
-				);
+	}
+
+	async collectGarbage(now = Date.now()): Promise<void> {
+		for (const record of Array.from(this.runs.values())) {
+			if (!isTerminal(record.status)) continue;
+			await this.collectGarbageIfExpired(record, now).catch((error) => {
+				log.logWarning(`Failed to garbage-collect sub-agent run ${record.runId}`, errorMessage(error));
 			});
 		}
 	}
@@ -1044,38 +1069,43 @@ function totalRunningSubAgentRuns(): number {
 
 let runtimeConfig: RunManagerOptions = {};
 
-/** How often the host-wide sweep checks external runs for an overdue deadline or a process that
- *  exited while nobody was watching it (D10.3). A code constant per CLAUDE.md's rule for numeric
- *  thresholds — deliberately coarse (budgets are in the 300-1800s range) since it exists to
- *  guarantee eventual enforcement across a restart, not to replace the live in-process watcher's
- *  prompt one. */
-const SWEEP_INTERVAL_MS = 30_000;
-let sweepTimer: ReturnType<typeof setInterval> | undefined;
+const GARBAGE_COLLECTION_INTERVAL_MS = 24 * 60 * 60_000;
+let garbageCollectionTimer: ReturnType<typeof setInterval> | undefined;
+let collectingGarbage = false;
 
-async function sweepAllChannels(): Promise<void> {
-	for (const manager of managers.values()) {
-		await manager.sweep().catch((error) => log.logWarning("Sub-agent sweep failed", errorMessage(error)));
+async function collectGarbageAllChannels(): Promise<void> {
+	if (collectingGarbage) return;
+	collectingGarbage = true;
+	try {
+		for (const manager of managers.values()) {
+			await manager
+				.collectGarbage()
+				.catch((error) => log.logWarning("Sub-agent garbage collection failed", errorMessage(error)));
+		}
+	} finally {
+		collectingGarbage = false;
 	}
 }
 
-function startSubAgentSweeper(): void {
-	if (sweepTimer) clearInterval(sweepTimer);
-	sweepTimer = setInterval(() => void sweepAllChannels(), SWEEP_INTERVAL_MS);
-	sweepTimer.unref?.();
+function startSubAgentGarbageCollector(): void {
+	if (garbageCollectionTimer) clearInterval(garbageCollectionTimer);
+	garbageCollectionTimer = setInterval(() => void collectGarbageAllChannels(), GARBAGE_COLLECTION_INTERVAL_MS);
+	garbageCollectionTimer.unref?.();
 }
 
-/** Test seam: stop the background sweeper so it doesn't outlive a test's own fake timers or run. */
-export function stopSubAgentSweeper(): void {
-	if (sweepTimer) {
-		clearInterval(sweepTimer);
-		sweepTimer = undefined;
+/** Stop the host-wide daily garbage collector during shutdown or test teardown. */
+export function stopSubAgentGarbageCollector(): void {
+	if (garbageCollectionTimer) {
+		clearInterval(garbageCollectionTimer);
+		garbageCollectionTimer = undefined;
 	}
 }
 
 /** Give runs their persistence root, wake delivery, ledger, and archive. Called once from bootstrap. */
 export function configureSubAgentRuntime(config: RunManagerOptions): void {
 	runtimeConfig = config;
-	startSubAgentSweeper();
+	stopSubAgentGarbageCollector();
+	startSubAgentGarbageCollector();
 }
 
 export function getSubAgentRunManager(channelId: string): SubAgentRunManager {
@@ -1115,6 +1145,8 @@ export async function restoreAllSubAgentRuns(): Promise<number> {
 	for (const channelId of channelIds) {
 		restored += await getSubAgentRunManager(channelId).restore();
 	}
+	// Reclaim stale runs once as a host-wide startup batch; subsequent batches run daily.
+	await collectGarbageAllChannels();
 	if (restored > 0) {
 		log.logInfo(`Restored ${restored} sub-agent run record(s)`);
 	}

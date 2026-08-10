@@ -430,22 +430,23 @@ describe("SubAgentRunManager run id minting and resolution (spec 041)", () => {
 	});
 });
 
-// Spec 042, D9: GC used to run only inside restore() — a long-lived daemon that never restarted
-// accumulated terminal records and artifacts without bound. It is now folded into the periodic
-// sweep, with a two-tier retention: auxiliary artifacts at 24h, the run record + output.md at 7d.
-describe("SubAgentRunManager sweep-based GC (spec 042, D9)", () => {
+// Retention GC is independent of the process-reconciliation sweep: one daily host-wide pass drops
+// a settled run and all runtime-managed artifacts together after seven days.
+describe("SubAgentRunManager daily GC", () => {
 	const createTempWorkspace = useTempDirs("pipiclaw-subagent-runs-gc-");
 
-	it("cleans auxiliary artifacts after 24h but keeps output.md and the record, then drops both after 7d", async () => {
+	it("keeps every managed artifact for seven days, then drops the artifacts and durable record together", async () => {
 		const workspaceDir = createTempWorkspace();
+		const stateDir = join(workspaceDir, "state");
 		const channelId = "dm_gc";
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-gc");
 		mkdirSync(artifactDir, { recursive: true });
 		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log", "output.md"]) {
 			writeFileSync(join(artifactDir, name), `${name} content`, "utf-8");
 		}
+		writeFileSync(join(artifactDir, "task-created.txt"), "keep me", "utf-8");
 
-		const manager = new SubAgentRunManager(channelId, {});
+		const manager = new SubAgentRunManager(channelId, { stateDir });
 		await manager.register({
 			runId: "run-gc",
 			channelId,
@@ -468,40 +469,38 @@ describe("SubAgentRunManager sweep-based GC (spec 042, D9)", () => {
 		expect(settledAt).toBeDefined();
 		if (!settledAt) throw new Error("unreachable");
 
-		// Just under 24h: nothing cleaned yet.
-		await manager.sweep(settledAt + 23 * 60 * 60_000);
+		// The old 24h boundary no longer has any cleanup behavior.
+		await manager.collectGarbage(settledAt + 25 * 60 * 60_000);
 		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log", "output.md"]) {
 			expect(existsSync(join(artifactDir, name))).toBe(true);
 		}
 		expect(manager.get("run-gc")).toBeDefined();
 
-		// Just past 24h: auxiliary artifacts gone, output.md and the record survive.
-		await manager.sweep(settledAt + 25 * 60 * 60_000);
-		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log"]) {
+		// Just under 7d: record still present (guards against an off-by-window regression).
+		await manager.collectGarbage(settledAt + 7 * 24 * 60 * 60_000 - 1);
+		expect(manager.get("run-gc")).toBeDefined();
+
+		// Past 7d: managed artifacts and both in-memory/durable records are gone. A delegated task's
+		// own files are not recursively deleted merely because they share the artifact directory.
+		await manager.collectGarbage(settledAt + 7 * 24 * 60 * 60_000);
+		for (const name of ["prompt.txt", "system-prompt.txt", "events.jsonl", "stderr.log", "output.md"]) {
 			expect(existsSync(join(artifactDir, name))).toBe(false);
 		}
-		expect(existsSync(join(artifactDir, "output.md"))).toBe(true);
-		expect(manager.get("run-gc")).toBeDefined();
-
-		// Just under 7d: record still present (guards against an off-by-window regression).
-		await manager.sweep(settledAt + 6 * 24 * 60 * 60_000 + 60_000);
-		expect(manager.get("run-gc")).toBeDefined();
-
-		// Past 7d: the record itself is forgotten.
-		await manager.sweep(settledAt + 7 * 24 * 60 * 60_000 + 60_000);
+		expect(existsSync(join(artifactDir, "task-created.txt"))).toBe(true);
+		expect(existsSync(join(stateDir, channelId, "run-gc.json"))).toBe(false);
 		expect(manager.get("run-gc")).toBeUndefined();
 	});
 
-	it("does not re-attempt auxiliary cleanup on every sweep tick once already cleaned", async () => {
+	it("retains the run for a later retry when artifact deletion fails", async () => {
 		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_gc_once";
-		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-gc-once");
-		mkdirSync(artifactDir, { recursive: true });
-		writeFileSync(join(artifactDir, "events.jsonl"), "x", "utf-8");
+		const stateDir = join(workspaceDir, "state");
+		const channelId = "dm_gc_retry";
+		const artifactDir = join(workspaceDir, "not-a-directory");
+		writeFileSync(artifactDir, "blocks child unlinks", "utf-8");
 
-		const manager = new SubAgentRunManager(channelId, {});
+		const manager = new SubAgentRunManager(channelId, { stateDir });
 		await manager.register({
-			runId: "run-gc-once",
+			runId: "run-gc-retry",
 			channelId,
 			runtime: "external",
 			harness: "exec",
@@ -513,17 +512,12 @@ describe("SubAgentRunManager sweep-based GC (spec 042, D9)", () => {
 			workingDirectory: workspaceDir,
 			artifactDir,
 		});
-		await manager.settle("run-gc-once", { ...baseSettleInput(), outputText: "" }, { announce: false });
-		const settledAt = manager.get("run-gc-once")?.settledAt;
+		await manager.settle("run-gc-retry", { ...baseSettleInput(), outputText: "" }, { announce: false });
+		const settledAt = manager.get("run-gc-retry")?.settledAt;
 		if (!settledAt) throw new Error("unreachable");
 
-		await manager.sweep(settledAt + 25 * 60 * 60_000);
-		expect(manager.get("run-gc-once")?.auxiliaryArtifactsCleaned).toBe(true);
-
-		// Recreate the file (simulating nothing in particular — just proving a second sweep tick
-		// does not try to unlink it again because the marker is already set) and sweep again.
-		writeFileSync(join(artifactDir, "events.jsonl"), "recreated", "utf-8");
-		await manager.sweep(settledAt + 26 * 60 * 60_000);
-		expect(existsSync(join(artifactDir, "events.jsonl"))).toBe(true);
+		await manager.collectGarbage(settledAt + 7 * 24 * 60 * 60_000);
+		expect(manager.get("run-gc-retry")).toBeDefined();
+		expect(existsSync(join(stateDir, channelId, "run-gc-retry.json"))).toBe(true);
 	});
 });

@@ -228,16 +228,16 @@ export async function reapProcessGroup(pid: number): Promise<void>;
 export async function killProcessGroup(pid: number, graceMs?: number): Promise<void>;
 ```
 
-- **取消 / 超时** → `killProcessGroup(pid, 5_000)`。代码常量，落在 sweep 的 30s 窗口内，不影响时序。
+- **取消 / 超时** → `killProcessGroup(pid, 5_000)`。代码常量；同进程 run 由精确 wall-clock timer 驱动，跨重启接管的 run 在持久化 deadline 做一次恢复检查。
 - **正常退出后的清理** → `reapProcessGroup(pid)`：先 `isProcessGroupAlive`，组空立即返回。用 `kill(-pid, 0)` 探**进程组**而不是 `isProcessAlive(pid)` 探 leader，正好精确回答现有注释担心的那个问题（"leader 先退、后代还在"），而且不必为此给每个 run 付 300ms。
 
-### D9 GC 挂进 sweep，产物有保留窗口
+### D9 GC 独立于运行态 sweep，产物统一保留 7 天
 
 `collectGarbageIfExpired` 今天只在 `restore()` 内被调用，因此长期在线的 daemon 里终态记录只增不减（内存 + `state/subagent-runs/`），两个列表面（都没有条数上限，`subagent_manage op=list` 还把完整 `RunRecord[]` 放进 `details`）随之无界增长。040 的偏差表也已承认 `subagent-artifacts/` 下的辅助产物无限期保留。
 
-- GC 移入既有的 30s `sweep()`，遍历扩成两段（running/external 的对账 + terminal 的回收）。
-- 保留策略分层：**辅助产物 24 小时**（`prompt.txt`、`system-prompt.txt`、`events.jsonl`、`stderr.log`），**run 记录与 `output.md` 7 天**，attestation 随任务台账不动。
-- `RETENTION_MS` 从 24h 扩到 7d 是有意的：对一个异步委派系统，"昨天那个 run 查不到了"太短，而磁盘大头是 `events.jsonl`，它按 24h 清就够了。
+- GC 使用独立的 host-wide 每日定时器，一次遍历所有 terminal run；不再保留 running/external 的周期轮询。
+- `prompt.txt`、`system-prompt.txt`、`events.jsonl`、`stderr.log`、`output.md` 与 run 记录统一保留 **7 天**后删除，attestation 随任务台账不动。
+- 对一个异步委派系统，"昨天那个 run 查不到了"太短；统一窗口也避免同一 run 分阶段清理和额外持久化 marker。
 - 两个列表面加条数上限（50）与尾注"还有 N 条，用 `list all` / filter 收窄"。
 
 ### D10 占位符：展开后仍未定义的 token 整个丢弃
@@ -295,7 +295,7 @@ export async function killProcessGroup(pid: number, graceMs?: number): Promise<v
 | 外部派发失败 | **有变化**：从"[Dispatched] + 稍后唤醒（或永不唤醒）"变为同一回合报错 |
 | 超时 / 取消的结算内容 | **有变化**：不再是空产出。会带回已解析的助手文本、usage 与 sessionId（因此超时的 codex run 从此可以 `follow_up`） |
 | 跨重启结算的 run | **有变化**：usage 不再为零、verify 会写 attestation、时长带 `≈` |
-| 记录与产物保留 | **有变化**：run 记录 24h → 7d；辅助产物新增 24h 清理 |
+| 记录与产物保留 | **有变化**：run 记录与所有 runtime-managed 产物统一保留 7 天，由每日 GC 批量清理 |
 | 取消 / 超时的 kill 宽限 | **有变化**：300ms → 5s |
 | `follow_up` | **有变化**：角色的 `command`/`model`/`shell` 变更后拒绝续接（fingerprint 不匹配） |
 | `subagent` 调用 schema | **不变**。一个字段都不增减（040 D6 的承诺继续成立） |
@@ -322,7 +322,7 @@ export async function killProcessGroup(pid: number, graceMs?: number): Promise<v
 - **D6**：`tools` 含 `bash` 且无 `mutates` 的角色产生 warning 且**行为不变**（不取锁）。
 - **D7**：`follow_up` 的 `prompt.txt` 含 runtime context 与新 artifact 目录；verify 准入在 follow_up 上同样生效；`command` 变更后拒绝续接、正文变更后仍允许。
 - **D8**：正常退出后不发送任何信号且不等待宽限；取消时等满 5s 宽限。
-- **D9**：sweep 回收过期终态记录并删除辅助产物、保留 `output.md`；列表面超上限时给出尾注。
+- **D9**：独立的每日 GC 回收超过 7 天的终态记录及全部 runtime-managed 产物；列表面超上限时给出尾注。
 - **D10**：`$MODEL` 未定义时该 token 被丢弃且 run 记录带 warning（当前所有占位符用例都提供了值）；discovery 对"引用 `$MODEL` 但未配 `model:`"产生 warning。
 - **D11**：并发上限拒绝时**不写** `external-agent` 审计事件；坏文件不再吃掉同名的合法角色；`/usage` 对重复 `runId` 的 subagent 条目只计一次。
 - **D12**：opt-in 冒烟按 env 跳过时不影响 `npm run test`；`/subagents show` 展示 `parserVersion`。
@@ -331,7 +331,7 @@ export async function killProcessGroup(pid: number, graceMs?: number): Promise<v
 
 1. **第二阶段的驳回是破坏性的。** 内置角色误写 `shell`/`env` 会让角色从目录消失；模型习惯于对外部角色传 `model` 的话会开始收到错误。这是 F3 的必然代价——静默忽略的存量必须被暴露一次才能清掉。缓解：warning 文案给出确切的修正动作，`/subagents roles` 能看到，发布说明点名。
 2. **`memory` 缺省收缩会改变已有外部角色的行为。** 一个依赖会话上下文的外部 reviewer 会突然"失忆"。缓解：discovery 对显式声明产生提示、文档给出一行迁移说明、`examples/` 里需要上下文的角色显式补 `memory:`。
-3. **7 天保留会让 `state/subagent-runs/` 与 `output.md` 占用上升。** 相对于 24h 清掉的 `events.jsonl`（真正的大头），净效应应为下降，但没有实测数据。缓解：先发，观察一个真实周期再定是否调整。
+3. **统一保留 7 天会增加辅助产物的磁盘占用。** 缓解：每日 GC 保证长期有界，并应观察真实运行周期中的 artifact 总量再决定是否调整窗口。
 4. **`roleFingerprint` 可能误伤。** 用户为修一个 `command` 里的拼写错误而改角色，会切断所有在途续接。这是有意选择的方向（宁可让模型新开一个 run），但如果实践中触发频繁，正确的下一步是把 fingerprint 收窄到 `harness` + `executable`，而不是放弃校验。
 5. **D12 的真实冒烟依赖本机装了对应 CLI 且已登录**，因此它永远不是门禁，只是一次可主动触发的确认。CLI schema 漂移仍然是 040 就已接受的长期维护成本，本 spec 只是把发现它的时机从"用户报障"提前到"跑一次冒烟"。
 6. **本 spec 修的是一致性，不增加任何能力。** 它对用户可见的净收益主要是"跨重启不再丢账和丢验收"与"失败不再假装成功"。如果按能力密度评估，它看起来性价比低；按"下一轮审查的起点"评估则相反——这一点需要在决定做不做的时候明说。
@@ -342,6 +342,6 @@ export async function killProcessGroup(pid: number, graceMs?: number): Promise<v
 
 - **第一阶段**（D1、D2、D5、D10、D11）：新增 `src/subagents/external/settlement.ts`（`buildExternalSettleInput`/`finalizeExternalRun`，内外结算唯一入口）与 `src/subagents/verification-outcome.ts`（`resolveVerificationOutcome`，内外共用判定规则）；`RunRecord` 新增 `verifySubjectBefore`/`maxWallTimeSec`/`processStartedAt`/`channelDir`/`durationEstimated`/`invocationWarnings` 字段，均在 `setLaunched()` 落盘；`launchExternalRun` 返回 `ExternalLaunchResult` 而非 `void`；`releaseWorkspaceLease` 增加 `runId` 归属校验；`restoreChannelJobs` 改 `await`；`expandPlaceholders` 丢弃未解析占位符的整个 token 并通过 discovery 产出前置提示。
 - **第二阶段**（D3、D4、D6、D7）：`discovery.ts` 新增 `ROLE_FIELD_MATRIX` 数据表驱动角色字段合法性；`resolveSubAgentConfig` 对外部角色的 `tools`/`model` invocation override 直接驳回；`tool.ts` 对外部角色的 `returns: "artifact"` 驳回并从外部信封移除 ARTIFACT 协议；外部角色 `memory` 默认值改为 `"none"`（不再跟随 `contextMode`），显式声明产生提示；`bash` 未声明 `mutates` 产生提示；`tool.ts` 导出 `buildSubAgentTask`/`buildContextualBlocks`/`assertVerifyAdmissible`/`SubAgentRunContext`（`buildContextualBlocks` 的 `options` 参数收窄为 `ContextualBlocksOptions`，仅六个字段，供 `follow_up` 复用而不必接入完整 `SubAgentToolOptions`）；`follow_up` 改为构造真实 `SubAgentRunContext` 并复用上述函数；新增 `externalRoleFingerprint()`（覆盖 `command`/`externalModelRef`/`shell`，不含正文），持久化并在 `follow_up` 校验；`SubAgentManageToolOptions` 的 `workspaceDir`/`channelDir` 改为必填。
-- **第三阶段**（D8、D9、D12）：`host-process.ts` 拆分为 `isProcessGroupAlive`/`reapProcessGroup`/`killProcessGroup`（默认宽限 300ms→5s，`reapProcessGroup` 探测为空立即返回）；`sweep()` 纳入两层 GC（辅助产物 24h、run 记录与 `output.md` 7 天）；`subagent_manage op=list` 与 `/subagents list` 增加 50 条上限与截断提示（运行中的 run 永不截断）；`ExternalHarness` 新增 `parserVersion`（三个 harness 均为 `1`），新增 `probeCliVersion()`（`--version` 探测，1s 超时、失败静默降级），随 `setLaunched()` 落盘并在 `/subagents show` 展示；新增 `test/e2e/subagent-external-smoke.test.ts`，由 `PIPICLAW_E2E_HARNESS=claude-code,codex-cli` 开启，默认 skip。
+- **第三阶段**（D8、D9、D12）：`host-process.ts` 拆分为 `isProcessGroupAlive`/`reapProcessGroup`/`killProcessGroup`（默认宽限 300ms→5s，`reapProcessGroup` 探测为空立即返回）；`subagent_manage op=list` 与 `/subagents list` 增加 50 条上限与截断提示（运行中的 run 永不截断）；`ExternalHarness` 新增 `parserVersion`（三个 harness 均为 `1`），新增 `probeCliVersion()`（`--version` 探测，1s 超时、失败静默降级），随 `setLaunched()` 落盘并在 `/subagents show` 展示；新增 `test/e2e/subagent-external-smoke.test.ts`，由 `PIPICLAW_E2E_HARNESS=claude-code,codex-cli` 开启，默认 skip。D9 后续调整为独立的每日批量 GC，全部 runtime-managed 产物与 run 记录统一保留 7 天。
 
 **验证**：每个 D 项落地后单独 `npm run check`；三个阶段各自额外跑过一次完整 `npm run check`；最终态 `npm run check` 通过（lint + typecheck + knip + 全部测试）。新增测试覆盖每个 D 项在设计文档"测试"一节列出的断言。

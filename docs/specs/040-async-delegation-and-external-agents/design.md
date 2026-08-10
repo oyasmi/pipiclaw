@@ -98,7 +98,7 @@ state/subagent-runs/<channelId>/<runId>.json     # run 记录，重启对账用�
 └── run.json           # pid / fingerprint / argv，供重启探针
 ```
 
-`prompt.txt` / `system-prompt.txt` / `events.jsonl` / `stderr.log` 与后台作业的 spill 文件同级别，保留 24 小时后清理；`output.md`、`run.json` 和 verify attestation 是交付物或对账依据，随 run 记录一同保留。
+`prompt.txt` / `system-prompt.txt` / `events.jsonl` / `stderr.log` / `output.md` 与 run 记录统一保留 7 天，由独立的每日 GC 批量清理；verify attestation 随任务台账保留。
 
 **记录管理器**：新增 `src/subagents/runs.ts`，per-channel 单例，形态对齐 `ChannelJobManager`。**不复用 `ChannelJobManager` 本身**：委派的终态判定不等于进程退出（还要看协议终态事件，D4），状态机确实不同。真正相同的只有那几十行无状态的宿主进程操作（探针、进程组 kill），抽到 `src/shared/host-process.ts` 共用。
 
@@ -611,8 +611,8 @@ A sub-agent starts blank: state goal, scope, paths, constraints and acceptance c
 2026-08-09 一轮审查（`docs/subagent-chain-review-2026-08-09.md`）核实并修复了本文档承诺、但实现当时尚未兑现的几处生命周期缺口（重启后不重新接管外部进程、结算副作用顺序、外部路径缺任务信封等）；这些已收敛，不再是偏差。以下三处是仍然存在、有意保留的偏差：
 
 1. **`effort` 的外部语义与本文档不同**。本文档设想外部 `effort` 用 `600/1800/5400s`；修复前的实现把内置的 `120/300/900s` 元组直接套用到外部角色（`deep` 反而比外部默认墙钟更短）。现已改为：外部角色的 `effort` 只移动 `maxWallTimeSec`，取值为 `quick=600s`/`deep=5400s`，`standard` 或不传沿用角色自身配置（`docs/sub-agents.md` 已同步）。
-2. **`fingerprint` 被 `pidStartedAt` 取代**。本文档与早期实现设想的随机 `fingerprint` 从未被消费、对 PID 复用零防护；现改为持久化 `ps` 的 `lstart` 输出，重启和周期性 sweep 都据此核实一个 pid 是否仍是原来那个进程，而不是已被复用的另一个。
-3. **本文档设想的 24 小时辅助产物清理未实现**。`SubAgentRunManager` 的 GC 只清理终态 run 记录本身（`collectGarbageIfExpired`），不清理 `subagent-artifacts/` 下的 `events.jsonl`/`stderr.log`/`output.md` 等文件；这些产物目前无限期保留，需要人工清理磁盘空间。
+2. **`fingerprint` 被 `pidStartedAt` 取代**。本文档与早期实现设想的随机 `fingerprint` 从未被消费、对 PID 复用零防护；现改为持久化 `ps` 的 `lstart` 输出，重启恢复与持久化 deadline 的一次性检查都据此核实一个 pid 是否仍是原来那个进程，而不是已被复用的另一个。
+3. **产物回收已在后续实现中补齐并调整策略**。`SubAgentRunManager` 通过独立的每日 GC，在 run 终态满 7 天后一起删除 run 记录及 `prompt.txt`/`system-prompt.txt`/`events.jsonl`/`stderr.log`/`output.md`。
 
 ## 风险
 
