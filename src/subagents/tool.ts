@@ -25,7 +25,7 @@ import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText, errorMessage, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
-import type { UsageTotals } from "../shared/types.js";
+import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
 import { readStoredTask } from "../tasks/store.js";
 import { writeVerificationAttestation } from "../tasks/verification.js";
@@ -119,8 +119,11 @@ const subagentSchema = Type.Object({
 	),
 });
 
-export interface SubAgentToolDetails {
-	kind: "subagent";
+/**
+ * Fields the `subagent` tool itself constructs. `kind` is not among them: `withToolDetails`
+ * stamps it from the registration name when the tool set is built (see `tools/tool-details.ts`).
+ */
+export interface SubAgentToolFields {
 	agent: string;
 	source: "predefined" | "inline";
 	model: string;
@@ -148,6 +151,9 @@ export interface SubAgentToolDetails {
 	 */
 	dispatched?: boolean;
 }
+
+/** The shape consumers read post-wrap, once `withToolDetails` has stamped `kind`. */
+export type SubAgentToolDetails = SubAgentToolFields & { kind: "subagent" };
 
 export interface SubAgentToolOptions {
 	executor: Executor;
@@ -306,17 +312,6 @@ async function prepareRunContext(
 async function gitWorkspaceState(executor: Executor): Promise<string | undefined> {
 	const result = await executor.exec("git status --porcelain=v1 --untracked-files=all", { timeout: 30 });
 	return result.code === 0 ? result.stdout : undefined;
-}
-
-function createEmptyUsageTotals(): UsageTotals {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		total: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
 }
 
 function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
@@ -689,9 +684,8 @@ function createDetails(
 	failureReason?: string,
 	verificationVerdict?: "pass" | "fail",
 	extras?: { artifactPath?: string; resultTruncated?: boolean },
-): SubAgentToolDetails {
+): SubAgentToolFields {
 	return {
-		kind: "subagent",
 		agent: config.name,
 		source: config.source,
 		model: formatModelReference(config.model),
@@ -728,9 +722,7 @@ function sleep(ms: number): Promise<void> {
 	});
 }
 
-export function createSubAgentTool(
-	options: SubAgentToolOptions,
-): AgentTool<typeof subagentSchema, SubAgentToolDetails> {
+export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<typeof subagentSchema, SubAgentToolFields> {
 	return {
 		name: "subagent",
 		label: "subagent",
@@ -887,7 +879,6 @@ export function createSubAgentTool(
 						},
 					],
 					details: {
-						kind: "subagent",
 						agent: config.name,
 						source: config.source,
 						model: config.externalModelRef ?? "unknown",
@@ -1101,7 +1092,7 @@ export function createSubAgentTool(
 			 * abort or explicit cancel, is a normal (if failed) result.
 			 */
 			async function runToCompletion(): Promise<{
-				toolResult: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolDetails };
+				toolResult: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields };
 				settleInput: SettleInput;
 			}> {
 				try {
@@ -1332,7 +1323,6 @@ export function createSubAgentTool(
 					},
 				],
 				details: {
-					kind: "subagent",
 					agent: config.name,
 					source: config.source,
 					model: formatModelReference(config.model),

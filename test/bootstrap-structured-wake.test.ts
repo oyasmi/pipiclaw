@@ -15,11 +15,11 @@ import { readStoredTask } from "../src/tasks/store.js";
 import { createFakeTurnState } from "./helpers/fake-turn-state.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
-const { getOrCreateRunnerMock } = vi.hoisted(() => ({ getOrCreateRunnerMock: vi.fn() }));
+const { createRunnerMock } = vi.hoisted(() => ({ createRunnerMock: vi.fn() }));
 
 vi.mock("../src/agent/index.js", async () => {
 	const actual = await vi.importActual("../src/agent/index.js");
-	return { ...actual, getOrCreateRunner: getOrCreateRunnerMock };
+	return { ...actual, createRunner: createRunnerMock };
 });
 
 const tempDir = useTempDirs("pipiclaw-bootstrap-wake-");
@@ -72,6 +72,7 @@ function runner(): AgentRunner {
 		isKnownSlashCommand: vi.fn(() => false),
 		queueSteer: vi.fn(async () => {}),
 		flushMemoryForShutdown: vi.fn(async () => {}),
+		dispose: vi.fn(async () => {}),
 		getMemoryMaintenanceContext: vi.fn(async () => {
 			throw new Error("not used");
 		}),
@@ -112,7 +113,7 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 	const channelId = `dm_${name}`;
 	mkdirSync(join(runtimePaths.workspaceDir, channelId, "tasks", "archive"), { recursive: true });
 	const fakeRunner = runner();
-	getOrCreateRunnerMock.mockReturnValue(fakeRunner);
+	createRunnerMock.mockReturnValue(fakeRunner);
 	const bot = new WakeBot();
 	const runtime = await createRuntimeContext({
 		paths: runtimePaths,
@@ -187,7 +188,7 @@ async function createWake(
 }
 
 afterEach(() => {
-	getOrCreateRunnerMock.mockReset();
+	createRunnerMock.mockReset();
 	vi.restoreAllMocks();
 });
 

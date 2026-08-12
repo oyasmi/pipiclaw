@@ -1,2 +1,2 @@
-export { getOrCreateRunner } from "./runner-factory.js";
+export { createRunner } from "./runner-factory.js";
 export type { AgentRunner } from "./types.js";

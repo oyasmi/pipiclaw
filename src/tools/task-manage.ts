@@ -75,10 +75,7 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 			});
 			return {
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-				details: {
-					kind: "task_manage",
-					...result,
-				},
+				details: { ...result },
 			};
 		},
 	};

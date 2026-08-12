@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleTasksCommand } from "../src/runtime/task-commands.js";
 import { formatLocalTime } from "../src/shared/local-time.js";
-import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
+import { nextTaskWake } from "../src/tasks/task-schedule.js";
 
 const CHANNEL_ID = "dm_1";
 const FUTURE = "2026-08-05T18:00:00+08:00";

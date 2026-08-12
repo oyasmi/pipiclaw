@@ -7,15 +7,15 @@ import type { DingTalkBot, DingTalkConfig } from "../src/runtime/dingtalk.js";
 import { createFakeTurnState } from "./helpers/fake-turn-state.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
-const { getOrCreateRunnerMock } = vi.hoisted(() => ({
-	getOrCreateRunnerMock: vi.fn(),
+const { createRunnerMock } = vi.hoisted(() => ({
+	createRunnerMock: vi.fn(),
 }));
 
 vi.mock("../src/agent/index.js", async () => {
 	const actual = await vi.importActual("../src/agent/index.js");
 	return {
 		...actual,
-		getOrCreateRunner: getOrCreateRunnerMock,
+		createRunner: createRunnerMock,
 	};
 });
 
@@ -80,7 +80,7 @@ class FakeTestBot {
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	getOrCreateRunnerMock.mockReset();
+	createRunnerMock.mockReset();
 });
 
 describe("runtime stop handling", () => {
@@ -105,6 +105,7 @@ describe("runtime stop handling", () => {
 			isKnownSlashCommand: vi.fn(() => false),
 			queueSteer: vi.fn(async () => {}),
 			flushMemoryForShutdown: vi.fn(async () => {}),
+			dispose: vi.fn(async () => {}),
 			getMemoryMaintenanceContext: vi.fn(async () => {
 				throw new Error("not used");
 			}),
@@ -119,7 +120,7 @@ describe("runtime stop handling", () => {
 			}),
 			...createFakeTurnState(),
 		};
-		getOrCreateRunnerMock.mockReturnValue(runner);
+		createRunnerMock.mockReturnValue(runner);
 
 		const { createRuntimeContext } = await import("../src/runtime/bootstrap.js");
 		const paths = createBootstrapPaths();
@@ -187,6 +188,7 @@ describe("runtime stop handling", () => {
 			isKnownSlashCommand: vi.fn(() => false),
 			queueSteer: vi.fn(async () => {}),
 			flushMemoryForShutdown: vi.fn(async () => {}),
+			dispose: vi.fn(async () => {}),
 			getMemoryMaintenanceContext: vi.fn(async () => {
 				throw new Error("not used");
 			}),
@@ -201,7 +203,7 @@ describe("runtime stop handling", () => {
 			}),
 			...createFakeTurnState(),
 		};
-		getOrCreateRunnerMock.mockReturnValue(runner);
+		createRunnerMock.mockReturnValue(runner);
 
 		const { createRuntimeContext } = await import("../src/runtime/bootstrap.js");
 		const paths = createBootstrapPaths();
@@ -275,6 +277,7 @@ describe("runtime stop handling", () => {
 			isKnownSlashCommand: vi.fn(() => false),
 			queueSteer: vi.fn(async () => {}),
 			flushMemoryForShutdown: vi.fn(async () => {}),
+			dispose: vi.fn(async () => {}),
 			getMemoryMaintenanceContext: vi.fn(async () => {
 				throw new Error("not used");
 			}),
@@ -287,7 +290,7 @@ describe("runtime stop handling", () => {
 			abort: vi.fn(async () => {}),
 			...createFakeTurnState(),
 		};
-		getOrCreateRunnerMock.mockReturnValue(runner);
+		createRunnerMock.mockReturnValue(runner);
 
 		const { createRuntimeContext } = await import("../src/runtime/bootstrap.js");
 		const paths = createBootstrapPaths();

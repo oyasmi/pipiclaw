@@ -132,7 +132,7 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		if (containsSecret(trimmed)) {
 			return textResult(
 				"This content looks like a credential or secret, so it was not saved. Store the secret in an approved secret manager and remember only its location.",
-				{ kind: "memory_manage", op: "save", saved: false, blockedReason: "secret" },
+				{ op: "save", saved: false, blockedReason: "secret" },
 			);
 		}
 		// Serialize through the shared channel memory queue so this never races with background
@@ -158,7 +158,6 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 				? `Saved to channel memory${kind ? ` (${kind})` : ""}.`
 				: "That memory is already present; no duplicate was added.";
 		return textResult(message, {
-			kind: "memory_manage",
 			op: "save",
 			saved: result.added > 0 || result.skippedDuplicate > 0,
 		});
@@ -190,14 +189,13 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		if (items.length === 0) {
 			return textResult(
 				`No stored memory matched "${trimmed}". Try a broader query, or the fact may not be saved yet.`,
-				{ kind: "memory_manage", op: "search", resultCount: 0 },
+				{ op: "search", resultCount: 0 },
 			);
 		}
 		const rendered = items
 			.map((item, index) => `${index + 1}. [${item.source}/${item.title}] ${item.content}`)
 			.join("\n");
 		return textResult(`Found ${items.length} stored memory entr${items.length === 1 ? "y" : "ies"}:\n\n${rendered}`, {
-			kind: "memory_manage",
 			op: "search",
 			resultCount: items.length,
 		});
@@ -217,7 +215,6 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		);
 		if (matches.length === 0) {
 			return textResult(`No stored memory entry matched "${trimmed}"; nothing was removed.`, {
-				kind: "memory_manage",
 				op: "forget",
 				forgotten: false,
 			});
@@ -246,7 +243,7 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		});
 		return textResult(
 			"Removed the entry from active channel memory. Its exact content and source transcript window are tombstoned against automatic replay; if the fact is stated again later, it may be learned as new. Original session history and retention backups are unchanged.",
-			{ kind: "memory_manage", op: "forget", forgotten: true, entryId: removed.id },
+			{ op: "forget", forgotten: true, entryId: removed.id },
 		);
 	}
 

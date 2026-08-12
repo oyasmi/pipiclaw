@@ -82,7 +82,6 @@ export function createSessionSearchTool(options: SessionSearchToolOptions): Agen
 					},
 				],
 				details: {
-					kind: "session_search",
 					resultCount: response.results.length,
 					searchedDocuments: response.searchedDocuments,
 				},

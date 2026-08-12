@@ -3,8 +3,8 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { nextTaskWake } from "../shared/task-schedule.js";
 import { createDefaultTaskControl, parseTaskControl, type TaskControl, taskPriorityRank } from "./control.js";
+import { nextTaskWake } from "./task-schedule.js";
 import { normalizeStoredStatus, wasLegacyEscalated } from "./transitions.js";
 
 export type TaskArchiveOutcome = "completed" | "cancelled";

@@ -24,6 +24,7 @@ import { isRecord } from "../shared/type-guards.js";
 // and live in channel-context.ts. Only the traits are used here, to map the
 // DingTalk-config `ResponseMode` onto them (progressStyleOf/finalDeliveryOf).
 import type { FinalDelivery, MediaSender, MediaSendResult, OutboundMedia, ProgressStyle } from "./channel-context.js";
+import type { ChannelEvent } from "./channel-event.js";
 import type { ChannelObservation } from "./channel-index.js";
 import { getChannelDir } from "./channel-paths.js";
 // Turn serialization is runtime policy; the queue lives in its own module and
@@ -107,37 +108,14 @@ export interface DingTalkConfig {
 	cardAutoLayout?: boolean;
 }
 
-export interface DingTalkEvent {
-	type: "dm" | "group";
-	channelId: string; // dm_{staffId} or group_{conversationId}
-	ts: string;
-	user: string; // sender staff id
-	userName: string; // sender nickname
-	text: string;
-	conversationId: string;
-	conversationType: string; // "1" = DM, "2" = group
-	/**
-	 * Human-readable channel name: the group title, or the peer's nickname for a DM. Absent on
-	 * synthetic events (scheduled events, task-driver wakes), which carry no conversation payload.
-	 */
-	channelName?: string;
-	/** Runtime-owned durable-dispatch record, absent for normal inbound messages. */
-	dispatchId?: string;
-	/** Structured wake provenance created only by in-process producers. DingTalk inbound parsing
-	 * never copies arbitrary payload fields into this event, so user text cannot manufacture it. */
-	internalWake?: {
-		kind: "job" | "subagent";
-		resourceId: string;
-		taskId: string;
-		dispatchId: string;
-	};
-	/**
-	 * The `attemptGeneration` this event's claim recorded, for `[TASK_DRIVER:id]` events only.
-	 * Carried through durable dispatch so `finishTaskAttempt` can tell a stale, superseded claim's
-	 * turn from the current one, even when redelivery or claim races reorder completions.
-	 */
-	taskAttemptGeneration?: number;
-}
+/**
+ * `DingTalkEvent` is kept as the public name (spec 035 D4: `src/index.ts`'s barrel is a
+ * compatibility promise, so exported names there stay stable). Internally the type now lives in
+ * `channel-event.ts` as `ChannelEvent`: most producers of this shape are not DingTalk at all
+ * (job-manager, task-driver, events, subagents/runs all synthesize wakes), so `ChannelEvent` is
+ * what the rest of the runtime imports.
+ */
+export type DingTalkEvent = ChannelEvent;
 
 export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: string };
 

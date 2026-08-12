@@ -64,6 +64,9 @@ class FakeRunner implements AgentRunner {
 	async flushMemoryForShutdown(): Promise<void> {
 		this.flushCount++;
 	}
+	async dispose(): Promise<void> {
+		this.flushCount++;
+	}
 	async getMemoryMaintenanceContext(): Promise<never> {
 		throw new Error("unused");
 	}

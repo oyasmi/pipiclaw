@@ -2,12 +2,12 @@ import { mkdir, readdir, readFile, rename, stat, unlink } from "node:fs/promises
 import { join } from "node:path";
 import * as log from "../log.js";
 import { formatLocalTime } from "../shared/local-time.js";
-import { parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { createDefaultTaskControl } from "../tasks/control.js";
 import { appendCurrentCycleNote, parseTaskFrontmatter } from "../tasks/ledger.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
 import { readStoredTask, updateStoredTask, writeStoredTask } from "../tasks/store.js";
+import { parseTaskEventName, taskEventPrefix } from "../tasks/task-events.js";
 import { parseScheduledEventContent } from "./events.js";
 import { discoverTaskChannels } from "./task-driver.js";
 

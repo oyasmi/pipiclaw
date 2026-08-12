@@ -4,7 +4,6 @@ import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
 import { parseLocalTime } from "../shared/local-time.js";
-import { nextTaskWake } from "../shared/task-schedule.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { taskBudgetViolation } from "../tasks/control.js";
 import {
@@ -21,17 +20,18 @@ import {
 	releaseTaskAttemptClaim,
 	updateStoredTask,
 } from "../tasks/store.js";
+import { nextTaskWake } from "../tasks/task-schedule.js";
+import type { ChannelEvent } from "./channel-event.js";
 import { discoverWorkspaceChannelIds } from "./channel-index.js";
 import { isChannelId } from "./channel-paths.js";
-import type { DingTalkEvent } from "./dingtalk.js";
 
 export interface TaskDriverOptions {
 	workspaceDir: string;
 	getKnownChannelIds?: () => Iterable<string>;
 	isChannelActive: (channelId: string) => boolean;
-	dispatch: (event: DingTalkEvent) => boolean | Promise<boolean>;
+	dispatch: (event: ChannelEvent) => boolean | Promise<boolean>;
 	/** Optional observability hook. It runs after every production dispatch attempt. */
-	onDispatch?: (event: DingTalkEvent, accepted: boolean) => void;
+	onDispatch?: (event: ChannelEvent, accepted: boolean) => void;
 	getSettings: () => PipiclawTaskDriverSettings;
 	/**
 	 * Externally visible effects produced by this task's own turns so far (spec 031, D7).
@@ -43,7 +43,7 @@ export interface TaskDriverOptions {
 	/** Test-only override for the idle-sleep cap; production uses `settings.maxSleepMinutes`. */
 	intervalMs?: number;
 	/** Direct, non-LLM receipt for deterministic governor stops. */
-	notify?: (event: DingTalkEvent) => boolean | Promise<boolean>;
+	notify?: (event: ChannelEvent) => boolean | Promise<boolean>;
 }
 
 interface DispatchAttempt {
@@ -179,7 +179,7 @@ export function createTaskDriverEvent(
 	entry: TaskLedgerEntry,
 	nowMs: number,
 	attemptGeneration?: number,
-): DingTalkEvent {
+): ChannelEvent {
 	const repairOnly = !entry.frontmatter.readable || entry.frontmatter.controlReadable === false;
 	const repair = repairOnly
 		? ` Task metadata is not readable; repair only the frontmatter/control in tasks/${entry.id}.md, then stop. ` +
@@ -214,7 +214,6 @@ export function createTaskDriverEvent(
 			"For a recurring occurrence intentionally not run because it is duplicate or already satisfied, call task_manage skip with the reason, then respond with exactly [SILENT]. " +
 			"If no task state or tool action is needed and this wake produces no user-visible result, respond with exactly [SILENT].",
 		ts: String(nowMs),
-		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
 		dispatchId: taskDispatchId(channelId, entry, nowMs),
 		taskAttemptGeneration: attemptGeneration,
@@ -222,7 +221,7 @@ export function createTaskDriverEvent(
 }
 
 /** Durable checker wake created by request-verification; it is a normal main-agent turn. */
-export function createTaskVerificationEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): DingTalkEvent {
+export function createTaskVerificationEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): ChannelEvent {
 	const control = entry.frontmatter.control;
 	return {
 		type: channelId.startsWith("group_") ? "group" : "dm",
@@ -235,7 +234,6 @@ export function createTaskVerificationEvent(channelId: string, entry: TaskLedger
 			`subagent with purpose=verify. Import its attestation with task_manage verify using the returned run id. ` +
 			`Do not modify the workspace or task contract; if verification fails, record the failure and leave the task recoverable.`,
 		ts: String(nowMs),
-		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
 		dispatchId: `task:${channelId}:${entry.id}:verification:${control?.cycleId ?? `t${nowMs}`}`,
 	};
@@ -262,7 +260,7 @@ export function taskGovernorReceipt(
 	entry: TaskLedgerEntry,
 	reason: string,
 	nowMs: number,
-): DingTalkEvent {
+): ChannelEvent {
 	return {
 		type: channelId.startsWith("group_") ? "group" : "dm",
 		channelId,
@@ -273,7 +271,6 @@ export function taskGovernorReceipt(
 			`当前阶段：${entry.frontmatter.status ?? "active"}${entry.frontmatter.control?.cycleId ? `；周期：${entry.frontmatter.control.cycleId}` : ""}\n` +
 			`继续：/tasks resume ${entry.id}\n立即执行：/tasks run ${entry.id}\n不再需要：让 Agent cancel 该任务。`,
 		ts: String(nowMs),
-		conversationId: "",
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
 		// Keyed on the cause, not the moment: re-detecting the same violation before the user has
 		// acted must not queue a second identical escalation, while a different cause still does.
@@ -310,7 +307,7 @@ export class TaskDriver {
 
 	constructor(private readonly options: TaskDriverOptions) {}
 
-	private observeDispatch(event: DingTalkEvent, accepted: boolean): void {
+	private observeDispatch(event: ChannelEvent, accepted: boolean): void {
 		try {
 			this.options.onDispatch?.(event, accepted);
 		} catch (error) {

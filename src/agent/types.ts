@@ -1,7 +1,7 @@
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
-import type { UsageTotals } from "../shared/types.js";
+import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import type { RunnerBuiltInCommand } from "./commands.js";
 
@@ -81,6 +81,14 @@ export interface AgentRunner {
 	/** Mark the current turn as user-stopped (no-op when idle). */
 	requestStop(): void;
 	getTurnStatus(): TurnStatus;
+	/**
+	 * Release this runner's resources: flush pending memory, unsubscribe from session events, and
+	 * dispose the underlying SDK session. A no-op (memory still flushed) while `isBusy()` — disposing
+	 * the SDK session aborts in-flight work, so a caller must never call this on a busy runner and
+	 * expect the turn to survive. The owning cache (daemon runtime map, TUI's single runner) must
+	 * drop its own reference after calling this; a disposed runner is not reusable.
+	 */
+	dispose(): Promise<void>;
 }
 
 export type FinalOutcome = { kind: "none" } | { kind: "silent" } | { kind: "final"; text: string };
@@ -127,22 +135,8 @@ export function createEmptyRunState(): RunState {
 		store: null,
 		queue: null,
 		pendingTools: new Map(),
-		totalUsage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			total: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		assistantUsage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			total: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
+		totalUsage: createEmptyUsageTotals(),
+		assistantUsage: createEmptyUsageTotals(),
 		costKnown: true,
 		usageSources: 0,
 		stopReason: "stop",

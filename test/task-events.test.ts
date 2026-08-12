@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseTaskEventName } from "../src/shared/task-events.js";
+import { parseTaskEventName } from "../src/tasks/task-events.js";
 
 describe("task event naming helpers", () => {
 	it("parses task-owned event names for the current channel only", () => {

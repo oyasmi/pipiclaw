@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
-import type { DingTalkEvent } from "../runtime/dingtalk.js";
+import type { ChannelEvent } from "../runtime/channel-event.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { isProcessAlive, killProcessGroup, readProcessStartTime } from "../shared/host-process.js";
@@ -9,7 +9,7 @@ import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-import type { UsageTotals } from "../shared/types.js";
+import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { finalizeExternalRun } from "./external/settlement.js";
@@ -207,7 +207,7 @@ export interface SettleInput {
 export interface RunManagerOptions {
 	/** Root of the per-channel record directories (`<stateDir>/<channelId>/`). Omit to skip persistence. */
 	stateDir?: string;
-	dispatch?: (event: DingTalkEvent) => boolean | Promise<boolean>;
+	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	ledger?: UsageLedger;
 	store?: ChannelStore;
 }
@@ -407,7 +407,7 @@ export class SubAgentRunManager {
 					...input,
 					status: "running",
 					startedAt: Date.now(),
-					usage: emptyUsage(),
+					usage: createEmptyUsageTotals(),
 					usageKnown: true,
 					costKnown: true,
 				};
@@ -671,7 +671,7 @@ export class SubAgentRunManager {
 			record.verificationVerdict !== undefined
 				? `\nVerdict: ${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}${record.verificationStrength === "advisory" ? " (advisory)" : ""}`
 				: "";
-		const event: DingTalkEvent = {
+		const event: ChannelEvent = {
 			type: record.channelId.startsWith("group_") ? "group" : "dm",
 			channelId: record.channelId,
 			user: "SUBAGENT",
@@ -688,7 +688,6 @@ export class SubAgentRunManager {
 					: `No text output was produced. Run artifacts: ${record.artifactDir}\n`) +
 				"Continue whatever was waiting on this delegation. If it needs no follow-up, respond with exactly [SILENT].",
 			ts: String(Date.now()),
-			conversationId: "",
 			conversationType: record.channelId.startsWith("group_") ? "2" : "1",
 			dispatchId: `subagent:${record.channelId}:${record.runId}:done`,
 			...(record.taskId
@@ -1043,17 +1042,6 @@ export class SubAgentRunManager {
 			});
 		}
 	}
-}
-
-function emptyUsage(): UsageTotals {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		total: 0,
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-	};
 }
 
 const managers = new Map<string, SubAgentRunManager>();

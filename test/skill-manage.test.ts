@@ -143,7 +143,7 @@ describe("skill manage", () => {
 
 		const tool = createSkillManageTool({ workspaceDir });
 		const result = await tool.execute("call", { label: "list", action: "list" });
-		expect(result.details).toMatchObject({ kind: "skill_manage", action: "list", count: 1 });
+		expect(result.details).toMatchObject({ action: "list", count: 1 });
 	});
 
 	it("views a skill's contents via the merged tool", async () => {

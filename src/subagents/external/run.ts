@@ -13,6 +13,7 @@ import {
 } from "../../shared/host-process.js";
 import { splitShellWords } from "../../shared/shell-words.js";
 import { errorMessage } from "../../shared/text-utils.js";
+import { createEmptyUsageTotals } from "../../shared/types.js";
 import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import type { SubAgentThinkingLevel } from "../discovery.js";
 import { getSubAgentRunManager, type RunMutates, type SettleInput } from "../runs.js";
@@ -368,14 +369,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		return {
 			status: "failed",
 			failureReason: reason,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				total: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
+			usage: createEmptyUsageTotals(),
 			usageKnown: false,
 			costKnown: false,
 			turns: 0,

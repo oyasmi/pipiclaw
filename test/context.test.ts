@@ -48,8 +48,6 @@ describe("PipiclawSettingsManager", () => {
 			forceRefreshBeforeNewSession: true,
 		});
 		expect(manager.getDefaultThinkingLevel()).toBeUndefined();
-		expect(manager.getSteeringMode()).toBe("one-at-a-time");
-		expect(manager.getFollowUpMode()).toBe("one-at-a-time");
 	});
 
 	it("persists updated settings to settings.json", () => {
@@ -104,7 +102,6 @@ describe("PipiclawSettingsManager", () => {
 			reserveTokens: 16384,
 			keepRecentTokens: 20000,
 		});
-		expect(manager.getBranchSummarySettings()).toEqual({ reserveTokens: 16384 });
 		expect(manager.getRetrySettings()).toEqual({ enabled: false, maxRetries: 3, baseDelayMs: 2000 });
 		expect(manager.getMemoryRecallSettings()).toMatchObject({ rerankWithModel: false, maxInjected: 5 });
 		expect(manager.getSessionMemorySettings().minTurnsBetweenUpdate).toBe(2);
@@ -169,19 +166,15 @@ describe("PipiclawSettingsManager", () => {
 		expect(manager.getDefaultModel()).toBe("claude-sonnet-4-5");
 	});
 
-	it("tolerates invalid JSON settings files and exposes compatibility stubs", async () => {
+	it("tolerates invalid JSON settings files and falls back to defaults", () => {
 		const baseDir = createTempDir();
 		const settingsPath = join(baseDir, "settings.json");
 		writeFileSync(settingsPath, "{invalid", "utf-8");
 
 		const manager = new PipiclawSettingsManager(baseDir);
 		expect(manager.getCompactionEnabled()).toBe(true);
-		expect(manager.getHookPaths()).toEqual([]);
-		expect(manager.getPackages()).toEqual([]);
 		expect(manager.getMemoryRecallSettings().enabled).toBe(true);
 		expect(manager.getSessionMemorySettings().enabled).toBe(true);
-		expect(manager.getTheme()).toBeUndefined();
-		await expect(manager.flush()).resolves.toBeUndefined();
 		expect(manager.drainErrors()).toEqual([
 			expect.objectContaining({
 				scope: "global",

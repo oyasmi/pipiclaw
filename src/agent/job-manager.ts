@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Executor } from "../executor.js";
 import * as log from "../log.js";
-import type { DingTalkEvent } from "../runtime/dingtalk.js";
+import type { ChannelEvent } from "../runtime/channel-event.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { shellEscape } from "../shared/shell-escape.js";
@@ -75,7 +75,7 @@ export interface JobManagerOptions {
 	/** Directory for this channel's persisted job records. Omit to run without persistence. */
 	stateDir?: string;
 	/** Delivers the completion wake. Omit to disable waking (sub-agent and test paths). */
-	dispatch?: (event: DingTalkEvent) => boolean | Promise<boolean>;
+	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	sweepIntervalMs?: number;
 }
 
@@ -466,7 +466,7 @@ export class ChannelJobManager {
 		const exit = record.exitCode !== undefined ? `exit ${record.exitCode}` : record.status;
 		const seconds = Math.round(record.durationMs / 1000);
 		const belongsTo = record.contract.taskId ? ` It belongs to task ${record.contract.taskId}.` : "";
-		const event: DingTalkEvent = {
+		const event: ChannelEvent = {
 			type: this.channelId.startsWith("group_") ? "group" : "dm",
 			channelId: this.channelId,
 			user: "JOB",
@@ -478,7 +478,6 @@ export class ChannelJobManager {
 				`Full output: ${record.spillFile}\n` +
 				"Continue whatever was waiting on this job. If it needs no follow-up, respond with exactly [SILENT].",
 			ts: String(Date.now()),
-			conversationId: "",
 			conversationType: this.channelId.startsWith("group_") ? "2" : "1",
 			dispatchId: `job:${this.channelId}:${record.id}:done`,
 			...(record.contract.taskId
@@ -666,7 +665,7 @@ const managers = new Map<string, ChannelJobManager>();
 interface JobRuntimeConfig {
 	/** Root of the per-channel record directories (`<jobsStateDir>/<channelId>/`). */
 	jobsStateDir?: string;
-	dispatch?: (event: DingTalkEvent) => boolean | Promise<boolean>;
+	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 }
 
 let runtimeConfig: JobRuntimeConfig = {};

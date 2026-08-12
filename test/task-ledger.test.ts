@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { formatLocalTime } from "../src/shared/local-time.js";
-import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import {
 	appendCurrentCycleNote,
@@ -22,6 +21,7 @@ import {
 	taskContractSegment,
 	uncheckedTaskAcceptanceItems,
 } from "../src/tasks/ledger.js";
+import { nextTaskWake } from "../src/tasks/task-schedule.js";
 
 const NOW = new Date("2026-08-04T12:00:00+08:00");
 const PAST = "2026-08-04T09:00:00+08:00";

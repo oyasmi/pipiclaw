@@ -8,10 +8,9 @@ import {
 	slashCommandName,
 } from "../agent/commands.js";
 import { channelEffectCount, noteTaskEffects, taskEffectCount } from "../agent/effect-ledger.js";
-import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
+import { type AgentRunner, createRunner } from "../agent/index.js";
 import { configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
-import { resetRunner } from "../agent/runner-factory.js";
 import { renderStatus } from "../agent/status-render.js";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
@@ -41,6 +40,7 @@ import {
 	printBootstrapSummary,
 	readCliVersion,
 } from "./app-home.js";
+import type { ChannelEvent } from "./channel-event.js";
 import { type ChannelIndex, createChannelIndex } from "./channel-index.js";
 import { ensureChannelDir, getChannelDir } from "./channel-paths.js";
 import { createDingTalkContext } from "./delivery.js";
@@ -49,7 +49,6 @@ import {
 	type BusyMessageResult,
 	DingTalkBot,
 	type DingTalkConfig,
-	type DingTalkEvent,
 	type DingTalkHandler,
 	type StopOutcome,
 } from "./dingtalk.js";
@@ -116,19 +115,30 @@ function waitForTasks(tasks: Promise<void>[], timeoutMs: number): Promise<boolea
 	});
 }
 
-function flushInactiveChannelMemory(channelRunners: Map<string, AgentRunner>): Promise<void>[] {
-	const flushes: Promise<void>[] = [];
+/**
+ * Ceiling on cached runners per daemon process. A long-lived daemon otherwise accumulates one
+ * `ChannelRunner` (session, subscriptions, memory state) per distinct channel it has ever heard
+ * from, unbounded, for the life of the process. Eviction below only ever touches idle runners —
+ * a busy one is left cached past the cap rather than mid-turn disposed.
+ */
+const MAX_CACHED_RUNNERS = 50;
+
+/**
+ * Drop the least-recently-used *idle* runners until the cache is back at the cap, disposing each
+ * one (flush memory, unsubscribe, release the SDK session) before dropping it. `channelRunners`
+ * is a `Map`, so insertion order is iteration order; `getRunner` below re-inserts on every cache
+ * hit to keep that order equal to recency of use — the standard "LRU via Map" idiom.
+ */
+async function evictIdleRunnersOverCap(channelRunners: Map<string, AgentRunner>): Promise<void> {
+	if (channelRunners.size <= MAX_CACHED_RUNNERS) return;
 	for (const [channelId, runner] of channelRunners) {
-		if (runner.isBusy()) {
-			continue;
-		}
-		flushes.push(
-			runner.flushMemoryForShutdown().catch((err) => {
-				log.logWarning(`[${channelId}] Failed to flush memory during shutdown`, errorMessage(err));
-			}),
-		);
+		if (channelRunners.size <= MAX_CACHED_RUNNERS) break;
+		if (runner.isBusy()) continue;
+		channelRunners.delete(channelId);
+		await runner.dispose().catch((err) => {
+			log.logWarning(`[${channelId}] Failed to dispose evicted runner`, errorMessage(err));
+		});
 	}
-	return flushes;
 }
 
 function isNoRunningTaskQueueError(err: unknown): boolean {
@@ -206,13 +216,20 @@ interface RuntimeContextOptions {
 	/** Receives raw SDK session events after subscription, without changing runtime handling. */
 	observer?: (event: unknown, channelId: string) => void;
 	/** Receives TaskDriver dispatch outcomes; used only by isolated evaluation workers. */
-	onTaskDriverDispatch?: (event: DingTalkEvent, accepted: boolean) => void;
+	onTaskDriverDispatch?: (event: ChannelEvent, accepted: boolean) => void;
 	startServices?: boolean;
 	registerSignalHandlers?: boolean;
 	/** Test-only fault seams for the atomic structured-wake task transition. */
 	wakeTransitionHooks?: Partial<Record<"job" | "subagent", WakeTaskTransitionHooks>>;
 	/** Override the `/stop` watchdog's grace window (tests use a short one). */
 	stopForceEndGraceMs?: number;
+	/**
+	 * The app-level settings manager, shared by every channel's runner (see
+	 * `agent/runner-factory.ts`'s `RunnerFactoryPaths.settingsManager`). `bootstrap()` passes the
+	 * same instance `prepareAppServices()` already constructed and diagnosed; a caller that skips
+	 * `prepareAppServices()` (tests) gets one built here instead.
+	 */
+	settingsManager?: PipiclawSettingsManager;
 }
 
 export async function createRuntimeContext(
@@ -221,7 +238,7 @@ export async function createRuntimeContext(
 	const startServices = options.startServices ?? true;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
-	const runtimeSettingsManager = new PipiclawSettingsManager(options.paths.appHomeDir);
+	const runtimeSettingsManager = options.settingsManager ?? new PipiclawSettingsManager(options.paths.appHomeDir);
 	log.configureLogging(runtimeSettingsManager.getLoggingSettings());
 	const startedAt = Date.now();
 	const cliVersion = readCliVersion();
@@ -258,29 +275,37 @@ export async function createRuntimeContext(
 	};
 
 	const getRunner = (channelId: string): AgentRunner => {
-		let runner = channelRunners.get(channelId);
-		if (!runner) {
-			const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
-			ensureChannelMemoryFilesSync(channelDir);
-			runner = getOrCreateRunner(channelId, channelDir, {
-				appHomeDir: options.paths.appHomeDir,
-				authConfigPath: options.paths.authConfigPath,
-				modelsConfigPath: options.paths.modelsConfigPath,
-				onSessionEvent: options.observer,
-				// The DingTalk bot is the media sender for this transport; enables `send_media`.
-				// `bot` is defined below in this same scope and initialized before any message
-				// (and thus any getRunner call) can arrive.
-				mediaSender: bot,
-				dispatchVerification: async (taskId) => {
-					const entries = await readActiveTasks(join(channelDir, "tasks"));
-					const entry = entries.find((candidate) => candidate.id === taskId);
-					if (!entry) return false;
-					const verificationEvent = createTaskVerificationEvent(channelId, entry, Date.now());
-					return (await durableDispatch?.dispatch(verificationEvent)) ?? false;
-				},
-			});
-			channelRunners.set(channelId, runner);
+		const existing = channelRunners.get(channelId);
+		if (existing) {
+			// Re-insert to move this channel to the end (most-recently-used) of the Map's
+			// iteration order, which evictIdleRunnersOverCap relies on.
+			channelRunners.delete(channelId);
+			channelRunners.set(channelId, existing);
+			return existing;
 		}
+
+		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
+		ensureChannelMemoryFilesSync(channelDir);
+		const runner = createRunner(channelId, channelDir, {
+			appHomeDir: options.paths.appHomeDir,
+			authConfigPath: options.paths.authConfigPath,
+			modelsConfigPath: options.paths.modelsConfigPath,
+			settingsManager: runtimeSettingsManager,
+			onSessionEvent: options.observer,
+			// The DingTalk bot is the media sender for this transport; enables `send_media`.
+			// `bot` is defined below in this same scope and initialized before any message
+			// (and thus any getRunner call) can arrive.
+			mediaSender: bot,
+			dispatchVerification: async (taskId: string) => {
+				const entries = await readActiveTasks(join(channelDir, "tasks"));
+				const entry = entries.find((candidate) => candidate.id === taskId);
+				if (!entry) return false;
+				const verificationEvent = createTaskVerificationEvent(channelId, entry, Date.now());
+				return (await durableDispatch?.dispatch(verificationEvent)) ?? false;
+			},
+		});
+		channelRunners.set(channelId, runner);
+		void evictIdleRunnersOverCap(channelRunners);
 		return runner;
 	};
 
@@ -349,7 +374,7 @@ export async function createRuntimeContext(
 			return { pausedTaskId };
 		},
 
-		async runRuntimeCommand(event: DingTalkEvent, name: RuntimeCommandName, args: string): Promise<string> {
+		async runRuntimeCommand(event: ChannelEvent, name: RuntimeCommandName, args: string): Promise<string> {
 			switch (name) {
 				case "events":
 					return runEventsCommand({
@@ -413,7 +438,7 @@ export async function createRuntimeContext(
 		},
 
 		async handleBusyMessage(
-			event: DingTalkEvent,
+			event: ChannelEvent,
 			bot: DingTalkBot,
 			mode: BusyMessageMode,
 			queueText: string,
@@ -478,13 +503,13 @@ export async function createRuntimeContext(
 			}
 		},
 
-		reserveEvent(event: DingTalkEvent): void {
+		reserveEvent(event: ChannelEvent): void {
 			// This must remain synchronous. DingTalkBot calls it before awaiting the queued
 			// handler, making the busy state observable to another message in the same tick.
 			getRunner(event.channelId).beginTurn(event.text);
 		},
 
-		async handleEvent(event: DingTalkEvent, bot: DingTalkBot, _isEvent?: boolean): Promise<void> {
+		async handleEvent(event: ChannelEvent, bot: DingTalkBot, _isEvent?: boolean): Promise<void> {
 			if (shuttingDown) {
 				log.logInfo(`[${event.channelId}] Ignoring event during shutdown`);
 				return;
@@ -820,28 +845,26 @@ export async function createRuntimeContext(
 				}
 			}
 
-			const flushes = flushInactiveChannelMemory(channelRunners);
-			if (flushes.length > 0) {
-				log.logInfo(`Flushing memory for ${flushes.length} inactive channel(s) before shutdown`);
-				const flushed = await waitForTasks(flushes, SHUTDOWN_FLUSH_WAIT_MS);
-				if (!flushed) {
-					log.logWarning(`Shutdown memory flush exceeded ${SHUTDOWN_FLUSH_WAIT_MS}ms`);
-				}
-			}
-
-			for (const channelId of channelRunners.keys()) {
-				const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
-				resetRunner(
-					channelId,
-					{
-						appHomeDir: options.paths.appHomeDir,
-						authConfigPath: options.paths.authConfigPath,
-						modelsConfigPath: options.paths.modelsConfigPath,
-						onSessionEvent: options.observer,
-					},
-					channelDir,
+			// Idle runners are disposed (flush memory, unsubscribe, release the SDK session); a
+			// still-busy one — its turn already aborted above — is just dropped from the cache and
+			// left to unwind on its own as the process exits.
+			const disposals: Promise<void>[] = [];
+			for (const [channelId, runner] of channelRunners) {
+				if (runner.isBusy()) continue;
+				disposals.push(
+					runner.dispose().catch((err) => {
+						log.logWarning(`[${channelId}] Failed to dispose runner during shutdown`, errorMessage(err));
+					}),
 				);
 			}
+			if (disposals.length > 0) {
+				log.logInfo(`Disposing ${disposals.length} idle channel runner(s) before shutdown`);
+				const disposed = await waitForTasks(disposals, SHUTDOWN_FLUSH_WAIT_MS);
+				if (!disposed) {
+					log.logWarning(`Shutdown runner disposal exceeded ${SHUTDOWN_FLUSH_WAIT_MS}ms`);
+				}
+			}
+			channelRunners.clear();
 
 			const storageFlushes = [
 				store.close(),
@@ -967,7 +990,7 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 
 	const dingtalkConfig = loadConfig(paths, io);
 	dingtalkConfig.stateDir = paths.workspaceDir;
-	prepareAppServices(paths);
+	const { settingsManager } = prepareAppServices(paths);
 
 	log.logStartup(paths.workspaceDir);
 	const runtime = await createRuntimeContext({
@@ -975,6 +998,7 @@ export async function bootstrap(argv: string[], options: BootstrapOptions = {}):
 		dingtalkConfig,
 		registerSignalHandlers,
 		startServices,
+		settingsManager,
 	});
 
 	return {

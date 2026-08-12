@@ -3,8 +3,6 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { channelJobTaskIds } from "../agent/job-manager.js";
 import { formatLocalTime, parseLocalTime, parseWakeInput } from "../shared/local-time.js";
-import { parseTaskEventName, taskEventPrefix } from "../shared/task-events.js";
-import { nextTaskWake, validateTaskSchedule } from "../shared/task-schedule.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { channelDelegationTaskIds } from "../subagents/runs.js";
@@ -35,6 +33,8 @@ import {
 	taskBodyHash,
 	writeStoredTask,
 } from "../tasks/store.js";
+import { parseTaskEventName, taskEventPrefix } from "../tasks/task-events.js";
+import { nextTaskWake, validateTaskSchedule } from "../tasks/task-schedule.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../tasks/transitions.js";
 import { readVerificationAttestation } from "../tasks/verification.js";
 import { parseScheduledEventContent, type ScheduledEvent } from "./events.js";

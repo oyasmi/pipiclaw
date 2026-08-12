@@ -107,7 +107,7 @@ describe("bash tool", () => {
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
 		expect(text).toContain("Background job");
 		expect(text).toContain("install deps");
-		expect(result.details).toMatchObject({ kind: "bash", async: { state: "running" } });
+		expect(result.details).toMatchObject({ async: { state: "running" } });
 		expect(jobManager.runningCount()).toBe(1);
 	});
 

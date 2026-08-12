@@ -18,10 +18,11 @@ import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
-import { taskEventPrefix } from "../shared/task-events.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { parseTaskFrontmatter } from "../tasks/ledger.js";
-import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
+import { taskEventPrefix } from "../tasks/task-events.js";
+import type { ChannelEvent } from "./channel-event.js";
+import type { DingTalkBot } from "./dingtalk.js";
 import { MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./event-validation.js";
 
 // ============================================================================
@@ -103,7 +104,7 @@ export interface EventHistoryRecord {
 export interface EventsWatcherOptions {
 	historyPath?: string;
 	/** Persist synthetic work before it enters the in-memory channel queue. */
-	dispatch?: (event: DingTalkEvent) => boolean | Promise<boolean>;
+	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 }
 
 // ============================================================================
@@ -755,15 +756,14 @@ export class EventsWatcher {
 				: "";
 		const message = `[EVENT:${filename}:${event.type}:${scheduleInfo}] ${event.text}${periodicContract}`;
 
-		// Create synthetic DingTalkEvent
-		const syntheticEvent: DingTalkEvent = {
+		// Create synthetic ChannelEvent
+		const syntheticEvent: ChannelEvent = {
 			type: "dm",
 			channelId: event.channelId,
 			user: "EVENT",
 			userName: "EVENT",
 			text: message,
 			ts: Date.now().toString(),
-			conversationId: "",
 			conversationType: "1",
 			dispatchId: eventDispatchId(filename, event, occurrence),
 		};

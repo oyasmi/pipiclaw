@@ -43,7 +43,7 @@ describe("memory_manage tool", () => {
 			kind: "preference",
 		});
 
-		expect(result.details).toMatchObject({ kind: "memory_manage", op: "save", saved: true });
+		expect(result.details).toMatchObject({ op: "save", saved: true });
 		expect(invalidateSpy).toHaveBeenCalledWith(join(channelDir, "MEMORY.md"));
 		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
 		expect(entries).toHaveLength(1);

@@ -119,7 +119,7 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 				}
 				return {
 					content: [{ type: "text", text: lines.join("\n") }],
-					details: { kind: "subagent_manage", op, runs },
+					details: { op, runs },
 				};
 			}
 
@@ -141,7 +141,7 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 				const status = await manager().cancel(resolvedRunId);
 				return {
 					content: [{ type: "text", text: `Cancel requested for run ${resolvedRunId}: ${status}` }],
-					details: { kind: "subagent_manage", op, runId: resolvedRunId, status },
+					details: { op, runId: resolvedRunId, status },
 				};
 			}
 
@@ -332,7 +332,7 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 						text: `Follow-up dispatched as runId=${newRunId} (resuming ${resolvedRunId}). This channel will be woken when it finishes.`,
 					},
 				],
-				details: { kind: "subagent_manage", op, runId: newRunId, resumedFrom: resolvedRunId },
+				details: { op, runId: newRunId, resumedFrom: resolvedRunId },
 			};
 		},
 	};

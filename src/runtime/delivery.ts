@@ -1,7 +1,8 @@
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { ChannelContext, ProgressStyle } from "./channel-context.js";
-import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
+import type { ChannelEvent } from "./channel-event.js";
+import type { DingTalkBot } from "./dingtalk.js";
 import type { ChannelStore } from "./store.js";
 
 const MIN_UPDATE_INTERVAL_MS = 800;
@@ -43,7 +44,7 @@ class ChannelDeliveryController {
 	private finalReplacementText = "";
 
 	constructor(
-		private event: DingTalkEvent,
+		private event: ChannelEvent,
 		private bot: DingTalkBot,
 		private store: ChannelStore,
 		/** Per-turn override of the channel's configured progress style; see `createDingTalkContext`. */
@@ -475,7 +476,7 @@ class ChannelDeliveryController {
  * background turn that has something to say still says it.
  */
 export function createDingTalkContext(
-	event: DingTalkEvent,
+	event: ChannelEvent,
 	bot: DingTalkBot,
 	store: ChannelStore,
 	progressStyleOverride?: ProgressStyle,

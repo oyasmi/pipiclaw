@@ -227,7 +227,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 									: "It runs off-turn and will NOT wake you when it finishes; check it with the job tool (op:poll/list)."),
 						},
 					],
-					details: { kind: "bash", async: { state: "running", jobId: job.id } },
+					details: { async: { state: "running", jobId: job.id } },
 				};
 			}
 

@@ -14,8 +14,8 @@ import {
 	type WakeTaskHandoffInput,
 	type WakeTaskTransitionHooks,
 } from "../tasks/store.js";
+import type { ChannelEvent } from "./channel-event.js";
 import { getChannelDir } from "./channel-paths.js";
-import type { DingTalkEvent } from "./dingtalk.js";
 
 /**
  * Whether a `[JOB:<jobId>] ... belongs to task <taskId>.` wake actually names a job that: exists
@@ -44,11 +44,11 @@ export function isVerifiedDelegationWake(record: RunRecord | undefined, taskId: 
  * and its exact durable dispatch id may enter task activation; normal DingTalk inbound events do
  * not populate `internalWake`, so copying a real wake's text is insufficient. */
 export function isTrustedInternalWake(
-	event: DingTalkEvent,
+	event: ChannelEvent,
 	kind: "job" | "subagent",
 	resourceId: string,
 	taskId: string,
-): event is DingTalkEvent & { dispatchId: string } {
+): event is ChannelEvent & { dispatchId: string } {
 	const wake = event.internalWake;
 	return (
 		wake?.kind === kind &&
@@ -71,7 +71,7 @@ export interface ClaimedDelegationWake {
  * final marker separate lets transports such as TUI mark it consumed only after they have accepted
  * the corresponding turn; a rejected submit remains replayable in the same or next process. */
 export async function claimVerifiedDelegationWake(
-	event: DingTalkEvent,
+	event: ChannelEvent,
 	workspaceDir: string,
 	hooks?: WakeTaskTransitionHooks,
 ): Promise<ClaimedDelegationWake | undefined> {
@@ -123,7 +123,7 @@ export interface ClaimedJobWake {
  * <taskId>.` completion wake. A background job has no handoff/rollback bookkeeping — its wake
  * activation is a single unconditional step — so `ClaimedJobWake` omits `rollback`. */
 export async function claimVerifiedJobWake(
-	event: DingTalkEvent,
+	event: ChannelEvent,
 	workspaceDir: string,
 	executor: Executor,
 	hooks?: WakeTaskTransitionHooks,

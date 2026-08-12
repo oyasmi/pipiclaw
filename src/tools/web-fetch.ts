@@ -60,7 +60,6 @@ function windowResult(body: string, offset: number, maxChars: number, url: strin
 	return {
 		content: [{ type: "text" as const, text }],
 		details: {
-			kind: "web_fetch",
 			url,
 			offset: start,
 			shownChars: slice.length,

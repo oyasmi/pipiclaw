@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { isRecord } from "../shared/type-guards.js";
-import type { DingTalkBot, DingTalkEvent } from "./dingtalk.js";
+import type { ChannelEvent } from "./channel-event.js";
+import type { DingTalkBot } from "./dingtalk.js";
 
 type DispatchStatus = "pending" | "queued" | "running";
 
@@ -13,7 +14,7 @@ interface DurableDispatchRecord {
 	id: string;
 	createdAt: string;
 	status: DispatchStatus;
-	event: DingTalkEvent;
+	event: ChannelEvent;
 	deliveries: number;
 	leaseExpiresAt?: string;
 }
@@ -41,7 +42,7 @@ function recordPath(stateDir: string, id: string): string {
  * prior side effects before repeating them. The stored record keeps the original text, so the
  * dispatch id is unaffected.
  */
-function withRedeliveryNotice(event: DingTalkEvent, deliveries: number): DingTalkEvent {
+function withRedeliveryNotice(event: ChannelEvent, deliveries: number): ChannelEvent {
 	if (deliveries <= 1) return event;
 	return {
 		...event,
@@ -52,7 +53,7 @@ function withRedeliveryNotice(event: DingTalkEvent, deliveries: number): DingTal
 	};
 }
 
-function dispatchId(event: DingTalkEvent): string {
+function dispatchId(event: ChannelEvent): string {
 	return createHash("sha256")
 		.update(JSON.stringify([event.channelId, event.user, event.ts, event.text, event.conversationId]))
 		.digest("hex");
@@ -118,7 +119,7 @@ export class DurableDispatchService {
 		this.timer = null;
 	}
 
-	async dispatch(event: DingTalkEvent): Promise<boolean> {
+	async dispatch(event: ChannelEvent): Promise<boolean> {
 		const id = event.dispatchId ?? dispatchId(event);
 		await this.queue.run(id, async () => {
 			const existing = await this.read(id);

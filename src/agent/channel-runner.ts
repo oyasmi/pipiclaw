@@ -51,7 +51,7 @@ import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks
 import type { ChannelContext, MediaSender } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
-import { PipiclawSettingsManager } from "../settings.js";
+import type { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { formatLocalTime, localStampForFilename } from "../shared/local-time.js";
 import { countPromptUnits } from "../shared/prompt-units.js";
@@ -223,7 +223,7 @@ export class ChannelRunner implements AgentRunner {
 		// Create session manager
 		const contextFile = join(channelDir, "context.jsonl");
 		this.sessionManager = SessionManager.open(contextFile, channelDir);
-		this.settingsManager = new PipiclawSettingsManager(this.appHomeDir);
+		this.settingsManager = paths.settingsManager;
 		this.reportSettingsDiagnostics();
 		this.memoryCandidateStore = createMemoryCandidateStore();
 		this.memoryActivityRecorder = createMemoryActivityRecorder({
@@ -790,6 +790,26 @@ export class ChannelRunner implements AgentRunner {
 	async flushMemoryForShutdown(): Promise<void> {
 		await this.flushMemoryActivity();
 		await this.memoryLifecycle.flushForShutdown();
+	}
+
+	async dispose(): Promise<void> {
+		await this.flushMemoryForShutdown();
+		if (this.isBusy()) {
+			// `session.dispose()` aborts in-flight work; a busy runner keeps its session and
+			// subscription until whoever holds it calls dispose() again once idle.
+			log.logWarning(`[${this.channelId}] dispose() called while busy; session left intact`, "");
+			return;
+		}
+		// Guards a dispose() racing construction: initializeSession assigns `this.session`
+		// asynchronously, so a runner disposed the instant after creation may not have one yet.
+		await this.sessionReady;
+		this.sessionUnsubscribe?.();
+		this.sessionUnsubscribe = undefined;
+		try {
+			this.session.dispose();
+		} catch (error) {
+			log.logWarning(`[${this.channelId}] Session dispose failed`, errorMessage(error));
+		}
 	}
 
 	async getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext> {

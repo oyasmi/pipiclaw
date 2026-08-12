@@ -8,8 +8,7 @@
  */
 import { userInfo } from "node:os";
 import { renderBuiltInHelp } from "../agent/commands.js";
-import { type AgentRunner, getOrCreateRunner } from "../agent/index.js";
-import { resetRunner } from "../agent/runner-factory.js";
+import { type AgentRunner, createRunner } from "../agent/index.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import {
@@ -111,10 +110,11 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
 	ensureChannelMemoryFilesSync(channelDir);
 	const store = new ChannelStore({ workingDir: paths.workspaceDir });
-	const runner: AgentRunner = getOrCreateRunner(channelId, channelDir, {
+	const runner: AgentRunner = createRunner(channelId, channelDir, {
 		appHomeDir: paths.appHomeDir,
 		authConfigPath: paths.authConfigPath,
 		modelsConfigPath: paths.modelsConfigPath,
+		settingsManager,
 		mediaSender: createTerminalMediaSender(io),
 	});
 
@@ -163,7 +163,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 			await controller.startInteractive(options.initialPrompt);
 		}
 	} finally {
-		resetRunner(channelId);
+		await runner.dispose();
 		await waitForStorageFlush(
 			Promise.allSettled([store.close(), getUsageLedger().flush?.() ?? Promise.resolve(), flushSecurityLogs()]),
 		);

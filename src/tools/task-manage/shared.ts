@@ -4,8 +4,6 @@ import { join } from "node:path";
 import * as log from "../../log.js";
 import { parseScheduledEventContent } from "../../runtime/events.js";
 import { formatLocalTime, parseWakeInput } from "../../shared/local-time.js";
-import { taskEventPrefix } from "../../shared/task-events.js";
-import { nextTaskWake, validateTaskSchedule } from "../../shared/task-schedule.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { applyTaskControlPatch, createDefaultTaskControl } from "../../tasks/control.js";
 import {
@@ -16,6 +14,8 @@ import {
 	taskBody,
 	upsertCurrentCycleCompletionEvidence,
 } from "../../tasks/ledger.js";
+import { taskEventPrefix } from "../../tasks/task-events.js";
+import { nextTaskWake, validateTaskSchedule } from "../../tasks/task-schedule.js";
 import { isSettableTaskStatus } from "../../tasks/transitions.js";
 import { RecoverableToolError } from "../tool-details.js";
 import { SETTABLE_STATUSES } from "./schema.js";

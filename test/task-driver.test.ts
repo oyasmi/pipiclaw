@@ -11,9 +11,9 @@ import {
 } from "../src/runtime/task-driver.js";
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
 import { formatLocalTime } from "../src/shared/local-time.js";
-import { nextTaskWake } from "../src/shared/task-schedule.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
+import { nextTaskWake } from "../src/tasks/task-schedule.js";
 
 const NOW = new Date("2026-08-04T12:00:00+08:00");
 const SETTINGS: PipiclawTaskDriverSettings = {

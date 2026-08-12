@@ -255,7 +255,7 @@ async function viewWorkspaceSkill(options: SkillManageToolOptions, name: string,
 	}
 	return {
 		content: [{ type: "text" as const, text: `Skill: ${name}\nPath: ${targetPath}\n\n${body}` }],
-		details: { kind: "skill_manage", action: "view", name, path: targetPath, truncated: truncation.truncated },
+		details: { action: "view", name, path: targetPath, truncated: truncation.truncated },
 	};
 }
 
@@ -283,7 +283,7 @@ export function createSkillManageTool(options: SkillManageToolOptions): AgentToo
 				const skills = await listWorkspaceSkills(options);
 				return {
 					content: [{ type: "text", text: JSON.stringify({ skills }) }],
-					details: { kind: "skill_manage", action: "list", count: skills.length },
+					details: { action: "list", count: skills.length },
 				};
 			}
 
@@ -305,7 +305,7 @@ export function createSkillManageTool(options: SkillManageToolOptions): AgentToo
 			});
 			return {
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-				details: { kind: "skill_manage", ...result },
+				details: { ...result },
 			};
 		},
 	};

@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import { errorMessage } from "./text-utils.js";
+import { errorMessage } from "../shared/text-utils.js";
 
 /**
  * The cron cadence of a recurring task lives in its `schedule` frontmatter key.

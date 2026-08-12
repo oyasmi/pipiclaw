@@ -262,7 +262,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 							text: `No matches found in ${scope}. Try a broader pattern, drop the glob, or widen the path.`,
 						},
 					],
-					details: { kind: "grep", matchCount: 0, fileCount: 0 },
+					details: { matchCount: 0, fileCount: 0 },
 				};
 			}
 
@@ -280,7 +280,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 							text: `No more matching files (skip=${startOffset} is past the last of ${files.length}).`,
 						},
 					],
-					details: { kind: "grep", matchCount: 0, fileCount: files.length },
+					details: { matchCount: 0, fileCount: files.length },
 				};
 			}
 
@@ -318,7 +318,6 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			return {
 				content: [{ type: "text", text: outputText }],
 				details: {
-					kind: "grep",
 					matchCount: shownMatchCount,
 					fileCount: files.length,
 					shownFileCount: page.length,

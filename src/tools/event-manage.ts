@@ -233,10 +233,7 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 			});
 			return {
 				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-				details: {
-					kind: "event_manage",
-					...result,
-				},
+				details: { ...result },
 			};
 		},
 	};

@@ -73,7 +73,7 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 				const text = outcomes.map((outcome) => `- [${outcome.id}] ${outcome.status}`).join("\n");
 				return {
 					content: [{ type: "text", text: `Cancel results:\n${text}` }],
-					details: { kind: "job", op: "cancel", outcomes },
+					details: { op: "cancel", outcomes },
 				};
 			}
 
@@ -82,12 +82,12 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 				if (jobs.length === 0) {
 					return {
 						content: [{ type: "text", text: "No background jobs." }],
-						details: { kind: "job", op: "list", jobs },
+						details: { op: "list", jobs },
 					};
 				}
 				return {
 					content: [{ type: "text", text: jobs.map(formatJobLine).join("\n") }],
-					details: { kind: "job", op: "list", jobs },
+					details: { op: "list", jobs },
 				};
 			}
 
@@ -96,7 +96,7 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 			if (jobs.length === 0) {
 				return {
 					content: [{ type: "text", text: "No matching running jobs to wait for." }],
-					details: { kind: "job", op: "poll", jobs },
+					details: { op: "poll", jobs },
 				};
 			}
 			const finished = jobs.filter((job) => job.status !== "running");
@@ -111,7 +111,7 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 			}
 			return {
 				content: [{ type: "text", text: parts.join("\n\n") }],
-				details: { kind: "job", op: "poll", jobs },
+				details: { op: "poll", jobs },
 			};
 		},
 	};
