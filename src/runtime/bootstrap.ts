@@ -9,7 +9,7 @@ import {
 } from "../agent/commands.js";
 import { channelEffectCount, noteTaskEffects, taskEffectCount } from "../agent/effect-ledger.js";
 import { type AgentRunner, createRunner } from "../agent/index.js";
-import { configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
+import { channelRunningJobLines, configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { renderStatus } from "../agent/status-render.js";
 import { createExecutor, type Executor } from "../executor.js";
@@ -23,7 +23,12 @@ import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { fileStamp } from "../shared/file-stamp.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
-import { configureSubAgentRuntime, restoreAllSubAgentRuns, stopSubAgentGarbageCollector } from "../subagents/runs.js";
+import {
+	configureSubAgentRuntime,
+	getSubAgentRunManager,
+	restoreAllSubAgentRuns,
+	stopSubAgentGarbageCollector,
+} from "../subagents/runs.js";
 import { readActiveTasks } from "../tasks/ledger.js";
 import { finishTaskAttempt, type WakeTaskTransitionHooks } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
@@ -55,6 +60,7 @@ import {
 import { DurableDispatchService } from "./durable-dispatch.js";
 import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
+import { handleProjectCommand as runProjectCommand } from "./project-commands.js";
 import { installLlmProxy } from "./proxy.js";
 import { ChannelStore } from "./store.js";
 import { handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
@@ -150,7 +156,7 @@ function isNoRunningTaskQueueError(err: unknown): boolean {
  * idle answers it through the runner's ChannelContext-aware command path (thread-reply, delete
  * semantics) instead, so it is not part of this stateless-report dispatch here.
  */
-const IDLE_RUNTIME_COMMAND_NAMES = new Set<string>(["events", "tasks", "status", "usage", "subagents"]);
+const IDLE_RUNTIME_COMMAND_NAMES = new Set<string>(["events", "tasks", "status", "usage", "subagents", "project"]);
 
 function isIdleRuntimeCommandName(name: string): name is Exclude<RuntimeCommandName, "context"> {
 	return IDLE_RUNTIME_COMMAND_NAMES.has(name);
@@ -433,6 +439,34 @@ export async function createRuntimeContext(
 								authConfigPath: options.paths.authConfigPath,
 								modelsConfigPath: options.paths.modelsConfigPath,
 							}),
+					});
+				case "project":
+					return runProjectCommand({
+						args,
+						channelId: event.channelId,
+						channelDir: getChannelDir(options.paths.workspaceDir, event.channelId),
+						appHomeDir: options.paths.appHomeDir,
+						actor: "dingtalk-command",
+						isBusy: () => channelRunners.get(event.channelId)?.isBusy() ?? false,
+						listActiveBlockers: () => [
+							...getSubAgentRunManager(event.channelId)
+								.list()
+								.filter((record) => record.status === "running")
+								.map((record) => `subagent run \`${record.runId}\` (${record.agent})`),
+							...channelRunningJobLines(event.channelId),
+						],
+						// D4.2: dispose the cached runner so the next access rebuilds it under the new scope.
+						// The active-session ref is untouched — same session, new project root.
+						onScopeChanged: async () => {
+							const runner = channelRunners.get(event.channelId);
+							channelRunners.delete(event.channelId);
+							await runner?.dispose().catch((err) => {
+								log.logWarning(
+									`[${event.channelId}] Failed to dispose runner after /project`,
+									errorMessage(err),
+								);
+							});
+						},
 					});
 			}
 		},

@@ -50,8 +50,11 @@ import {
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks/catalog.js";
 import { commitActiveSessionRef, resolveActiveSessionFile } from "../runtime/active-session-store.js";
 import type { ChannelContext, MediaSender } from "../runtime/channel-context.js";
+import { resolveProjectScope } from "../runtime/project-scope-store.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
+import type { ProjectScope } from "../security/project-scope.js";
+import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import type { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { formatLocalTime, localStampForFilename } from "../shared/local-time.js";
@@ -153,6 +156,13 @@ export class ChannelRunner implements AgentRunner {
 	private readonly mediaSender?: MediaSender;
 	private readonly dispatchVerification?: (taskId: string) => Promise<boolean>;
 	private readonly workspaceDir: string;
+	/**
+	 * Frozen for the lifetime of this runner generation (spec 043, D4.2): AgentSession, the
+	 * ResourceLoader, and every tool closure built in this constructor and in `createSessionRuntime`
+	 * (session-topology rebuilds only rebind the session, never the scope) all read this same value.
+	 * Changing project is a dispose-and-rebuild of the whole runner, not a field mutation.
+	 */
+	private readonly projectScope: ProjectScope;
 	private session!: AgentSession;
 	private agent: Agent;
 	private sessionManager: SessionManager;
@@ -216,6 +226,20 @@ export class ChannelRunner implements AgentRunner {
 		const executor = createExecutor();
 		this.executor = executor;
 		this.workspaceDir = resolve(dirname(channelDir));
+
+		// Resolve and freeze this generation's ProjectScope (spec 043, D2/D3/D4.2). A channel with
+		// no persisted selection gets the app default, materialized as its first selection right
+		// here. A selection that no longer resolves safely (deleted directory, re-pointed symlink,
+		// or a since-tightened allowlist) fails the whole runner closed rather than silently
+		// falling back to a different root (P7) — the fix is `/project set`/`reset` from a plain
+		// runtime command path, not a degraded-but-running channel; see project-scope-store.ts.
+		const securityConfigForScope = loadSecurityConfigWithDiagnostics(this.appHomeDir);
+		const projectAccessResolution = resolveProjectAccessPolicy(securityConfigForScope.config, process.cwd());
+		const scopeOutcome = resolveProjectScope(channelDir, projectAccessResolution);
+		if (scopeOutcome.kind === "blocked") {
+			throw new Error(`[${channelId}] Cannot start channel: ${scopeOutcome.reason}`);
+		}
+		this.projectScope = scopeOutcome.scope;
 
 		// Initial skill summaries
 		const initialSkills = loadPipiclawSkills(channelDir);
@@ -1095,7 +1119,7 @@ export class ChannelRunner implements AgentRunner {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
-			cwd: process.cwd(),
+			cwd: this.projectScope.projectRoot,
 			modelRuntime: this.modelRuntime,
 			resourceLoader: initialResourceLoader,
 			baseToolsOverride,
@@ -1258,7 +1282,7 @@ export class ChannelRunner implements AgentRunner {
 		this.lastWorkspaceResources = resources;
 		const build = buildPipiclawSystemPrompt({
 			mode: "normal",
-			cwd: process.cwd(),
+			cwd: this.projectScope.projectRoot,
 			workspaceDir: this.workspaceDir,
 			tools: this.currentTools.map((tool) => ({
 				name: tool.name,
@@ -1295,7 +1319,7 @@ export class ChannelRunner implements AgentRunner {
 
 	private createResourceLoader(): ResourceLoader {
 		return new DefaultResourceLoader({
-			cwd: process.cwd(),
+			cwd: this.projectScope.projectRoot,
 			agentDir: this.appHomeDir,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			extensionFactories: [
@@ -1354,7 +1378,7 @@ export class ChannelRunner implements AgentRunner {
 
 	private createAgentSessionServices(resourceLoader: ResourceLoader): AgentSessionServices {
 		return {
-			cwd: process.cwd(),
+			cwd: this.projectScope.projectRoot,
 			agentDir: this.appHomeDir,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
 			modelRuntime: this.modelRuntime,
@@ -1413,7 +1437,7 @@ export class ChannelRunner implements AgentRunner {
 			agent,
 			sessionManager,
 			settingsManager: asSdkSettingsManager(this.settingsManager),
-			cwd: process.cwd(),
+			cwd: this.projectScope.projectRoot,
 			modelRuntime: this.modelRuntime,
 			resourceLoader,
 			baseToolsOverride: Object.fromEntries(tools.map((tool) => [tool.name, tool])),
@@ -1434,6 +1458,7 @@ export class ChannelRunner implements AgentRunner {
 			getAvailableModels: () => this.modelRegistry.getAvailable(),
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			workspaceDir: this.workspaceDir,
+			projectScope: this.projectScope,
 			channelDir: this.channelDir,
 			channelId: this.channelId,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,

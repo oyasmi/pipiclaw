@@ -8,7 +8,8 @@ export type BuiltInCommandName =
 	| "status"
 	| "usage"
 	| "context"
-	| "subagents";
+	| "subagents"
+	| "project";
 
 /** The four transport commands handled by `ChannelRunner.handleBuiltinCommand`. */
 export type RunnerBuiltInCommandName = "help" | "stop" | "steer" | "followup" | "context";
@@ -144,6 +145,15 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 		],
 		// A human control path independent of the model (spec 040, D6): /stop no longer kills a
 		// dispatched delegation, so cancel must work even when the model/turn is unavailable.
+		availableWhileBusy: true,
+	},
+	{
+		name: "project",
+		argumentHint: "[set <absolute-path>|reset]",
+		description: "查看或切换本频道的项目目录（文件工具/shell 的工作面）；set/reset 需频道空闲",
+		examples: ["/project", "/project set /home/me/projects/foo", "/project reset"],
+		// The read form answers like /status; set/reset validate idleness themselves and reply
+		// with a plain error instead of blocking the built-in-command dispatch path.
 		availableWhileBusy: true,
 	},
 ];

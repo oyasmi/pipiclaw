@@ -10,6 +10,7 @@ function deps(overrides: Partial<DispatchDeps> = {}): DispatchDeps {
 		runEvents: async (args) => `EVENTS:${args}`,
 		runTasks: async (args) => `TASKS:${args}`,
 		runSubagents: async (args) => `SUBAGENTS:${args}`,
+		runProject: async (args) => `PROJECT:${args}`,
 		...overrides,
 	};
 }

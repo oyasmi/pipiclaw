@@ -39,6 +39,7 @@ export interface DispatchDeps {
 	runEvents(args: string): Promise<string>;
 	runTasks(args: string): Promise<string>;
 	runSubagents(args: string): Promise<string>;
+	runProject(args: string): Promise<string>;
 }
 
 export async function dispatch(input: string, deps: DispatchDeps): Promise<DispatchOutcome> {
@@ -69,6 +70,8 @@ export async function dispatch(input: string, deps: DispatchDeps): Promise<Dispa
 			return { kind: "reply", text: await deps.runTasks(command.args) };
 		case "subagents":
 			return { kind: "reply", text: await deps.runSubagents(command.args) };
+		case "project":
+			return { kind: "reply", text: await deps.runProject(command.args) };
 		case "stop":
 			return { kind: "stop" };
 		case "steer":

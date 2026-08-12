@@ -159,6 +159,8 @@ export interface SubAgentToolOptions {
 	executor: Executor;
 	/** Host checkout used as the sub-agent's cwd. Defaults to process.cwd(). */
 	workingDirectory?: string;
+	/** Mirrors the parent channel's ProjectScope.boundary onto the sub-agent's own tool set (spec 043, D6.2). */
+	projectBoundary?: "project" | "unbounded";
 	getCurrentModel: () => Model<Api>;
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
@@ -286,6 +288,11 @@ function resolveRunWorkingDirectory(requested: string | undefined, options: SubA
 	const target = resolve(base, trimmed);
 	if (!existsSync(target) || !statSync(target).isDirectory()) {
 		throw new RecoverableToolError(`workingDirectory "${requested}" is not an existing directory.`);
+	}
+	// D6.2: under `boundary: "project"`, an explicit workingDirectory must stay within the parent's
+	// ProjectRoot — `resolve(base, trimmed)` alone lets an absolute `trimmed` escape `base` entirely.
+	if (options.projectBoundary === "project" && target !== base && !target.startsWith(`${base}/`)) {
+		throw new RecoverableToolError(`workingDirectory "${requested}" must be inside the project root (${base}).`);
 	}
 	return target;
 }
@@ -458,6 +465,7 @@ function buildSubagentTools(
 			securityContext: {
 				agentWorkspaceDir: options.workspaceDir,
 				projectRoot: runContext.workingDirectory,
+				boundary: options.projectBoundary,
 			},
 			channelId: options.runtimeContext.channelId,
 			channelDir: options.channelDir,

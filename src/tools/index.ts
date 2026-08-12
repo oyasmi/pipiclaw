@@ -6,6 +6,7 @@ import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { APP_HOME_DIR } from "../paths.js";
 import type { MediaSender } from "../runtime/channel-context.js";
 import { loadSecurityConfig } from "../security/config.js";
+import type { ProjectScope } from "../security/project-scope.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings, PipiclawSessionSearchSettings } from "../settings.js";
 import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
@@ -22,6 +23,8 @@ export interface CreatePipiclawToolsOptions {
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	workspaceDir: string;
+	/** Frozen for this runner generation; bounds generic file tools and sets the shell/subagent cwd (spec 043, D4.2). */
+	projectScope: ProjectScope;
 	channelDir: string;
 	channelId: string;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
@@ -47,7 +50,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	const toolsConfig = options.toolsConfig ?? loadToolsConfig(APP_HOME_DIR);
 	const securityContext = {
 		agentWorkspaceDir: options.workspaceDir,
-		projectRoot: process.cwd(),
+		projectRoot: options.projectScope.projectRoot,
+		boundary: options.projectScope.boundary,
 	};
 	// The leaf tools (files, web, memory, skills) come from the single declarative
 	// registry so this set, the sub-agent set, and the prompt hints share one source.
@@ -83,6 +87,10 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 				getAvailableModels: options.getAvailableModels,
 				resolveApiKey: options.resolveApiKey,
 				workspaceDir: options.workspaceDir,
+				// D6.2: an internal sub-agent defaults to the parent's ProjectRoot; a model-requested
+				// explicit workingDirectory is validated (in subagents/tool.ts) to stay within it.
+				workingDirectory: options.projectScope.projectRoot,
+				projectBoundary: options.projectScope.boundary,
 				channelDir: options.channelDir,
 				getSubAgentDiscovery: options.getSubAgentDiscovery,
 				getMemoryRecallSettings: options.getMemoryRecallSettings,

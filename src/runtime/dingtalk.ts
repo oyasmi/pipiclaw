@@ -1381,7 +1381,8 @@ export class DingTalkBot implements MediaSender {
 					case "status":
 					case "usage":
 					case "context":
-					case "subagents": {
+					case "subagents":
+					case "project": {
 						const response = await this.handler.runRuntimeCommand(
 							event,
 							builtInCommand.name,

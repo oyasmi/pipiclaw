@@ -1220,4 +1220,53 @@ describe("sub-agent working directory", () => {
 			}),
 		).rejects.toThrow(/is not an existing directory/);
 	});
+
+	it("boundary=project: rejects a requested workingDirectory outside the project root (D6.2)", async () => {
+		const root = createTempWorkspace();
+		const workspaceDir = join(root, "agent-workspace");
+		const channelDir = join(workspaceDir, "dm_123");
+		const projectRoot = join(root, "project");
+		const outsideDir = join(root, "elsewhere");
+		mkdirSync(channelDir, { recursive: true });
+		mkdirSync(join(projectRoot, "nested"), { recursive: true });
+		mkdirSync(outsideDir, { recursive: true });
+		const tool = createSubAgentTool({
+			executor: fakeExecutor,
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			workingDirectory: projectRoot,
+			projectBoundary: "project",
+			channelDir,
+			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			createWorker: () =>
+				new FakeWorker((_input, worker) => {
+					const message = createAssistantMessage("Done.");
+					worker.state.messages = [message];
+					worker.emit({ type: "message_end", message });
+				}),
+		});
+
+		await expect(
+			tool.execute("wd-call-3", {
+				label: "explore",
+				name: "explorer",
+				systemPrompt: "Explore.",
+				task: "Look around.",
+				workingDirectory: outsideDir,
+			}),
+		).rejects.toThrow(/must be inside the project root/);
+
+		// A subdirectory of the project root is still fine.
+		await expect(
+			tool.execute("wd-call-4", {
+				label: "explore",
+				name: "explorer",
+				systemPrompt: "Explore.",
+				task: "Look around.",
+				workingDirectory: join(projectRoot, "nested"),
+			}),
+		).resolves.toBeDefined();
+	});
 });

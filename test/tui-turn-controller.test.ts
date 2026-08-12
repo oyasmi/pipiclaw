@@ -130,6 +130,7 @@ function setup({ start = false, now = () => 0 }: { start?: boolean; now?: () => 
 		runEvents: async () => "EVENTS",
 		runTasks: async () => "TASKS",
 		runSubagents: async () => "SUBAGENTS",
+		runProject: async () => "PROJECT",
 		statusInfo: { version: "1", startedAt: 0 },
 		now,
 	});

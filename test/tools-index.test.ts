@@ -120,6 +120,11 @@ const baseToolOptions = {
 	getAvailableModels: vi.fn(() => []),
 	resolveApiKey: vi.fn(),
 	workspaceDir: "/repo",
+	projectScope: {
+		projectRoot: process.cwd(),
+		boundary: "unbounded" as const,
+		sandbox: { level: "application" as const, provider: "pipiclaw-path-guard", summary: "" },
+	},
 	channelDir: "/repo/dm_42",
 	channelId: "dm_42",
 	getSubAgentDiscovery: vi.fn(),
@@ -237,6 +242,7 @@ describe("tools index", () => {
 			securityContext: {
 				agentWorkspaceDir: "/repo",
 				projectRoot: process.cwd(),
+				boundary: "unbounded",
 			},
 			channelId: "dm_42",
 		});
@@ -245,6 +251,7 @@ describe("tools index", () => {
 			securityContext: {
 				agentWorkspaceDir: "/repo",
 				projectRoot: process.cwd(),
+				boundary: "unbounded",
 			},
 			channelId: "dm_42",
 			rtkEnabled: false,
@@ -270,6 +277,8 @@ describe("tools index", () => {
 			getAvailableModels: options.getAvailableModels,
 			resolveApiKey: options.resolveApiKey,
 			workspaceDir: "/repo",
+			workingDirectory: process.cwd(),
+			projectBoundary: "unbounded",
 			channelDir: "/repo/dm_42",
 			getSubAgentDiscovery: options.getSubAgentDiscovery,
 			getMemoryRecallSettings: options.getMemoryRecallSettings,

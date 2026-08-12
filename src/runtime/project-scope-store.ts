@@ -24,7 +24,7 @@ export function getProjectSelectionPath(channelDir: string): string {
 	return join(channelDir, SELECTION_FILENAME);
 }
 
-function readProjectSelection(channelDir: string): PersistedProjectSelectionV1 | undefined {
+export function readProjectSelection(channelDir: string): PersistedProjectSelectionV1 | undefined {
 	const path = getProjectSelectionPath(channelDir);
 	if (!existsSync(path)) {
 		return undefined;

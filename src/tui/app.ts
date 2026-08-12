@@ -9,6 +9,7 @@
 import { userInfo } from "node:os";
 import { renderBuiltInHelp } from "../agent/commands.js";
 import { type AgentRunner, createRunner } from "../agent/index.js";
+import { channelRunningJobLines } from "../agent/job-manager.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import {
@@ -24,10 +25,12 @@ import { prepareAppServices } from "../runtime/bootstrap.js";
 import { ensureChannelDir } from "../runtime/channel-paths.js";
 import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
 import { handleEventsCommand } from "../runtime/event-commands.js";
+import { handleProjectCommand } from "../runtime/project-commands.js";
 import { ChannelStore } from "../runtime/store.js";
 import { handleSubagentsCommand } from "../runtime/subagent-commands.js";
 import { handleTasksCommand } from "../runtime/task-commands.js";
 import { flushSecurityLogs } from "../security/logger.js";
+import { getSubAgentRunManager } from "../subagents/runs.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import { TUI_SLASH_COMMANDS } from "./commands.js";
@@ -71,6 +74,29 @@ export interface TuiAppOptions {
 	paths?: BootstrapPaths;
 }
 
+/**
+ * A replaceable `AgentRunner` reference (spec 043, D4.2): `TurnController` holds a single
+ * `AgentRunner` for the process's lifetime, but `/project set|reset` needs to dispose the runner
+ * built under the old scope and hand the next turn a fresh one built under the new scope. The
+ * proxy forwards every call to whichever runner is current, so `TurnController` never needs to
+ * know the reference changed.
+ */
+function createRunnerSlot(initial: AgentRunner): { runner: AgentRunner; replace(next: AgentRunner): void } {
+	let current = initial;
+	const runner = new Proxy({} as AgentRunner, {
+		get(_target, prop, _receiver) {
+			const value = Reflect.get(current as object, prop);
+			return typeof value === "function" ? value.bind(current) : value;
+		},
+	});
+	return {
+		runner,
+		replace(next) {
+			current = next;
+		},
+	};
+}
+
 export function resolveChannelId(raw: string | undefined, io: BootstrapIO = console): string {
 	const channel = raw?.trim() || DEFAULT_CHANNEL_ID;
 	if (!CHANNEL_ID_PATTERN.test(channel)) {
@@ -110,13 +136,16 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
 	ensureChannelMemoryFilesSync(channelDir);
 	const store = new ChannelStore({ workingDir: paths.workspaceDir });
-	const runner: AgentRunner = createRunner(channelId, channelDir, {
-		appHomeDir: paths.appHomeDir,
-		authConfigPath: paths.authConfigPath,
-		modelsConfigPath: paths.modelsConfigPath,
-		settingsManager,
-		mediaSender: createTerminalMediaSender(io),
-	});
+	const buildRunner = (): AgentRunner =>
+		createRunner(channelId, channelDir, {
+			appHomeDir: paths.appHomeDir,
+			authConfigPath: paths.authConfigPath,
+			modelsConfigPath: paths.modelsConfigPath,
+			settingsManager,
+			mediaSender: createTerminalMediaSender(io),
+		});
+	const runnerSlot = createRunnerSlot(buildRunner());
+	const runner = runnerSlot.runner;
 
 	const tuiSettings = settingsManager.getTuiSettings();
 	const traits: DeliveryTraits = {
@@ -153,6 +182,26 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 			}),
 		runSubagents: (args) =>
 			handleSubagentsCommand({ args, channelId, discovery: runner.getSubAgentDiscoverySnapshot() }),
+		runProject: (args) =>
+			handleProjectCommand({
+				args,
+				channelId,
+				channelDir,
+				appHomeDir: paths.appHomeDir,
+				actor: "tui-command",
+				isBusy: () => runner.isBusy(),
+				listActiveBlockers: () => [
+					...getSubAgentRunManager(channelId)
+						.list()
+						.filter((record) => record.status === "running")
+						.map((record) => `subagent run \`${record.runId}\` (${record.agent})`),
+					...channelRunningJobLines(channelId),
+				],
+				onScopeChanged: async () => {
+					await runner.dispose();
+					runnerSlot.replace(buildRunner());
+				},
+			}),
 		statusInfo: { version: readCliVersion(), startedAt: Date.now() },
 	});
 

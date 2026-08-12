@@ -253,6 +253,10 @@ export class ChannelJobManager {
 		return Array.from(this.jobs.values()).filter((job) => job.status === "running").length;
 	}
 
+	listRunning(): JobRecord[] {
+		return Array.from(this.jobs.values()).filter((job) => job.status === "running");
+	}
+
 	/** Task ids that a still-running job on this channel promises to wake. See `channelJobTaskIds`. */
 	runningTaskIds(): Set<string> {
 		const ids = new Set<string>();
@@ -688,6 +692,17 @@ export function configureJobRuntime(config: JobRuntimeConfig): void {
  */
 export function channelJobTaskIds(channelId: string): Set<string> {
 	return managers.get(channelId)?.runningTaskIds() ?? new Set<string>();
+}
+
+/**
+ * Human-readable lines naming this channel's currently running background jobs, for the `/project
+ * set|reset` blocker check (spec 043, D4.3) — mirrors `channelJobTaskIds`'s "no manager means no
+ * jobs" reasoning, so it needs no `Executor` either.
+ */
+export function channelRunningJobLines(channelId: string): string[] {
+	const manager = managers.get(channelId);
+	if (!manager) return [];
+	return manager.listRunning().map((job) => `job \`${job.id}\`: ${job.command.slice(0, 80)}`);
 }
 
 export function getChannelJobManager(channelId: string, executor: Executor): ChannelJobManager {
