@@ -12,10 +12,12 @@ import { type AgentRunner, createRunner } from "../agent/index.js";
 import { channelRunningJobLines, configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { renderStatus } from "../agent/status-render.js";
+import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
+import { defaultModel } from "../models/utils.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { PipiclawSettingsManager } from "../settings.js";
@@ -760,6 +762,29 @@ export async function createRuntimeContext(
 	// for background jobs.
 	await restoreChannelJobs(executor);
 	await restoreAllSubAgentRuns();
+	// Spec 043, D10 point 1: repair any turn interrupted by the last shutdown/crash before opening
+	// admission — a message routed to a still-dangling session would 400 against the provider on
+	// every attempt (F3) until a human ran /new. Runs before bot.start() for the same reason as
+	// the job/run restores above: admission must see a structurally legal session, not a partial one.
+	const recoveryReport = await scanWorkspaceForInterruptedTurns(options.paths.workspaceDir, {
+		api: defaultModel.api,
+		provider: defaultModel.provider,
+		model: defaultModel.id,
+	});
+	if (recoveryReport.repaired.length > 0) {
+		log.logWarning(
+			"Repaired interrupted turns on restart",
+			`${recoveryReport.repaired.length}/${recoveryReport.scanned} channel(s): ${recoveryReport.repaired
+				.map((r) => r.channelDir)
+				.join(", ")}`,
+		);
+	}
+	if (recoveryReport.blocked.length > 0) {
+		log.logWarning(
+			"Some channels have an unrecoverable session and will refuse new turns",
+			recoveryReport.blocked.map((b) => `${b.channelDir}: ${b.reason}`).join("; "),
+		);
+	}
 	const eventsWatcher = options.createEventsWatcher
 		? options.createEventsWatcher(options.paths.workspaceDir, bot, executor, options.paths.eventHistoryPath)
 		: createEventsWatcher(

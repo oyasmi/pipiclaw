@@ -93,6 +93,7 @@ import { createRunQueue } from "./run-queue.js";
 import type { RunnerFactoryPaths } from "./runner-factory.js";
 import { handleSessionEvent } from "./session-events.js";
 import { SessionResourceGate } from "./session-resource-gate.js";
+import { recoverInterruptedTurn } from "./turn-recovery.js";
 import { getLastAssistantUsage } from "./type-guards.js";
 import {
 	type AgentRunner,
@@ -250,6 +251,30 @@ export class ChannelRunner implements AgentRunner {
 		// (spec 043, D1).
 		const activeSessionFile = resolveActiveSessionFile(channelDir);
 		this.sessionManager = SessionManager.open(join(channelDir, activeSessionFile), channelDir);
+
+		// Per-runner recovery barrier (spec 043, D10 point 2): repairs must run against this exact
+		// SessionManager instance, before anything else touches it — a second `open()` of the same
+		// file would mutate a branch this instance never sees, silently desyncing the two. The
+		// daemon's own startup scan (bootstrap.ts) covers channels with no live runner yet; this
+		// covers lazy channels, the TUI, and a channel whose file was fixed by hand after the scan
+		// already ran and reported it blocked.
+		const recoveryOutcome = recoverInterruptedTurn(this.sessionManager, {
+			api: defaultModel.api,
+			provider: defaultModel.provider,
+			model: defaultModel.id,
+		});
+		if (recoveryOutcome.kind === "blocked") {
+			throw new Error(
+				`[${channelId}] Cannot start channel: session left in an unrecoverable state after a restart (${recoveryOutcome.reason}). ` +
+					`Back up ${join(channelDir, activeSessionFile)} on the host, move it aside, then use /new to start a fresh session.`,
+			);
+		}
+		if (recoveryOutcome.kind === "repaired") {
+			log.logWarning(
+				`[${channelId}] Repaired an interrupted turn on restart`,
+				`toolResults=${recoveryOutcome.appendedToolResults} abortedAssistant=${recoveryOutcome.appendedAbortedAssistant}`,
+			);
+		}
 		this.settingsManager = paths.settingsManager;
 		this.reportSettingsDiagnostics();
 		this.memoryCandidateStore = createMemoryCandidateStore();
