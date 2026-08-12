@@ -118,8 +118,8 @@ function formatPathBlockMessage(resolvedPath: string | undefined, category?: str
 export function createReadTool(executor: Executor, options: ReadToolOptions = {}): AgentTool<typeof readSchema> {
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
-		workspaceDir: process.cwd(),
-		cwd: process.cwd(),
+		agentWorkspaceDir: process.cwd(),
+		projectRoot: process.cwd(),
 	};
 
 	return {
@@ -135,7 +135,7 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
 				const guardResult = guardPath(path, "read", { ...securityContext, config: securityConfig.pathGuard });
 				if (!guardResult.allowed) {
-					await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+					await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
 						type: "path",
 						tool: "read",
 						channelId: options.channelId,

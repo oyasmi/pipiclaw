@@ -225,7 +225,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				workspaceDir: ctx.workspaceDir,
 				channelDir: ctx.channelDir,
 				channelId: ctx.channelId,
-				workingDirectory: ctx.securityContext.cwd,
+				workingDirectory: ctx.securityContext.projectRoot,
 				dispatchVerification: ctx.dispatchVerification,
 			}),
 	},

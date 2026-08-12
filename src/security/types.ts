@@ -27,8 +27,8 @@ export interface SecurityConfig {
 }
 
 export interface SecurityRuntimeContext {
-	workspaceDir: string;
-	cwd?: string;
+	agentWorkspaceDir: string;
+	projectRoot?: string;
 	homeDir?: string;
 }
 

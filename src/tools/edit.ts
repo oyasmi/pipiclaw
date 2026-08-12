@@ -139,8 +139,8 @@ function clampDiffForEcho(diff: string): string {
 export function createEditTool(executor: Executor, options: EditToolOptions = {}): AgentTool<typeof editSchema> {
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
-		workspaceDir: process.cwd(),
-		cwd: process.cwd(),
+		agentWorkspaceDir: process.cwd(),
+		projectRoot: process.cwd(),
 	};
 
 	// Per-tool-instance counter of consecutive byte-identical no-op edits, keyed by the exact
@@ -168,7 +168,7 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
 				const readGuard = guardPath(path, "read", { ...securityContext, config: securityConfig.pathGuard });
 				if (!readGuard.allowed) {
-					await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+					await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
 						type: "path",
 						tool: "edit",
 						channelId: options.channelId,

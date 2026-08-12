@@ -27,9 +27,9 @@ describe("security path guard", () => {
 	it("allows workspace, home, and temp paths", () => {
 		const fixture = createFixture();
 		const ctx = {
-			workspaceDir: fixture.workspaceDir,
+			agentWorkspaceDir: fixture.workspaceDir,
 			homeDir: fixture.homeDir,
-			cwd: fixture.workspaceDir,
+			projectRoot: fixture.workspaceDir,
 			config: DEFAULT_SECURITY_CONFIG.pathGuard,
 		};
 
@@ -44,9 +44,9 @@ describe("security path guard", () => {
 		const linkPath = join(fixture.workspaceDir, "ssh-link");
 		symlinkSync(join(fixture.homeDir, ".ssh", "id_rsa"), linkPath);
 		const ctx = {
-			workspaceDir: fixture.workspaceDir,
+			agentWorkspaceDir: fixture.workspaceDir,
 			homeDir: fixture.homeDir,
-			cwd: fixture.workspaceDir,
+			projectRoot: fixture.workspaceDir,
 			config: DEFAULT_SECURITY_CONFIG.pathGuard,
 		};
 
@@ -65,9 +65,9 @@ describe("security path guard", () => {
 		const linkPath = join(fixture.workspaceDir, "passwd-link");
 		symlinkSync("/etc/passwd", linkPath);
 		const ctx = {
-			workspaceDir: fixture.workspaceDir,
+			agentWorkspaceDir: fixture.workspaceDir,
 			homeDir: fixture.homeDir,
-			cwd: fixture.workspaceDir,
+			projectRoot: fixture.workspaceDir,
 			config: DEFAULT_SECURITY_CONFIG.pathGuard,
 		};
 
@@ -93,9 +93,9 @@ describe("security path guard", () => {
 		symlinkSync(realRoot, aliasRoot, "dir");
 		const aliasedTarget = join(aliasRoot, "canary.txt");
 		const ctx = {
-			workspaceDir: fixture.workspaceDir,
+			agentWorkspaceDir: fixture.workspaceDir,
 			homeDir: fixture.homeDir,
-			cwd: fixture.workspaceDir,
+			projectRoot: fixture.workspaceDir,
 			config: { ...DEFAULT_SECURITY_CONFIG.pathGuard, writeDeny: [aliasedTarget] },
 		};
 

@@ -235,16 +235,16 @@ describe("tools index", () => {
 		expect(createReadToolMock).toHaveBeenCalledWith(executor, {
 			securityConfig: expectedSecurityConfig,
 			securityContext: {
-				workspaceDir: "/repo",
-				cwd: process.cwd(),
+				agentWorkspaceDir: "/repo",
+				projectRoot: process.cwd(),
 			},
 			channelId: "dm_42",
 		});
 		expect(createBashToolMock).toHaveBeenCalledWith(executor, {
 			securityConfig: expectedSecurityConfig,
 			securityContext: {
-				workspaceDir: "/repo",
-				cwd: process.cwd(),
+				agentWorkspaceDir: "/repo",
+				projectRoot: process.cwd(),
 			},
 			channelId: "dm_42",
 			rtkEnabled: false,

@@ -19,7 +19,7 @@ describe("withSubAgentsDirWriteDeny", () => {
 		const workspaceDir = makeTempDir();
 		mkdirSync(join(workspaceDir, "sub-agents"), { recursive: true });
 		const config = withSubAgentsDirWriteDeny(DEFAULT_SECURITY_CONFIG, workspaceDir);
-		const ctx = { workspaceDir, cwd: workspaceDir, config: config.pathGuard };
+		const ctx = { agentWorkspaceDir: workspaceDir, projectRoot: workspaceDir, config: config.pathGuard };
 
 		const denied = guardPath(join(workspaceDir, "sub-agents", "builder.md"), "write", ctx);
 		expect(denied.allowed).toBe(false);

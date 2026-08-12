@@ -144,8 +144,8 @@ function formatCommandBlockMessage(command: string, category?: string, reason?: 
 export function createBashTool(executor: Executor, options: BashToolOptions = {}): AgentTool<typeof bashSchema> {
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
-		workspaceDir: process.cwd(),
-		cwd: process.cwd(),
+		agentWorkspaceDir: process.cwd(),
+		projectRoot: process.cwd(),
 	};
 
 	return {
@@ -168,7 +168,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			if (securityConfig.enabled && securityConfig.commandGuard.enabled) {
 				const guardResult = guardCommand(command, securityConfig.commandGuard);
 				if (!guardResult.allowed) {
-					await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+					await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
 						type: "command",
 						tool: "bash",
 						channelId: options.channelId,

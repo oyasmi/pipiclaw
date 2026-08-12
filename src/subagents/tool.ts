@@ -456,8 +456,8 @@ function buildSubagentTools(
 			executor,
 			securityConfig,
 			securityContext: {
-				workspaceDir: options.workspaceDir,
-				cwd: runContext.workingDirectory,
+				agentWorkspaceDir: options.workspaceDir,
+				projectRoot: runContext.workingDirectory,
 			},
 			channelId: options.runtimeContext.channelId,
 			channelDir: options.channelDir,

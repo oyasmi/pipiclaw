@@ -46,8 +46,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	);
 	const toolsConfig = options.toolsConfig ?? loadToolsConfig(APP_HOME_DIR);
 	const securityContext = {
-		workspaceDir: options.workspaceDir,
-		cwd: process.cwd(),
+		agentWorkspaceDir: options.workspaceDir,
+		projectRoot: process.cwd(),
 	};
 	// The leaf tools (files, web, memory, skills) come from the single declarative
 	// registry so this set, the sub-agent set, and the prompt hints share one source.

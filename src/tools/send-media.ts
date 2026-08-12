@@ -49,7 +49,7 @@ export function createSendMediaTool(
 	options: SendMediaToolOptions,
 ): AgentTool<typeof sendMediaSchema> {
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
-	const securityContext = options.securityContext ?? { workspaceDir: process.cwd(), cwd: process.cwd() };
+	const securityContext = options.securityContext ?? { agentWorkspaceDir: process.cwd(), projectRoot: process.cwd() };
 
 	return {
 		name: "send_media",
@@ -67,7 +67,7 @@ export function createSendMediaTool(
 			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
 				const guardResult = guardPath(path, "read", { ...securityContext, config: securityConfig.pathGuard });
 				if (!guardResult.allowed) {
-					await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+					await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
 						type: "path",
 						tool: "send_media",
 						channelId: options.channelId,

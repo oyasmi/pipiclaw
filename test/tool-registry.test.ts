@@ -13,7 +13,7 @@ function makeContext(overrides: Partial<ToolBuildContext> = {}): ToolBuildContex
 	return {
 		executor,
 		securityConfig: DEFAULT_SECURITY_CONFIG,
-		securityContext: { workspaceDir: "/repo", cwd: "/repo" },
+		securityContext: { agentWorkspaceDir: "/repo", projectRoot: "/repo" },
 		channelId: "dm_1",
 		channelDir: "/repo/dm_1",
 		workspaceDir: "/repo",

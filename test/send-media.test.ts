@@ -121,7 +121,7 @@ describe("send_media tool", () => {
 			channelId: "dm_alice",
 			// Guard enabled with default config; an absolute system path escapes the workspace.
 			securityConfig: DEFAULT_SECURITY_CONFIG,
-			securityContext: { workspaceDir: "/home/agent/workspace", cwd: "/home/agent/workspace" },
+			securityContext: { agentWorkspaceDir: "/home/agent/workspace", projectRoot: "/home/agent/workspace" },
 		});
 
 		await expect(tool.execute("call", { label: "send", path: "/etc/passwd" })).rejects.toThrow(/blocked/i);

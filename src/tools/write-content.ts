@@ -32,14 +32,14 @@ export async function writeContent(
 	const createParentDir = options?.createParentDir ?? false;
 	const securityConfig = options?.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options?.securityContext ?? {
-		workspaceDir: process.cwd(),
-		cwd: process.cwd(),
+		agentWorkspaceDir: process.cwd(),
+		projectRoot: process.cwd(),
 	};
 
 	if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
 		const guardResult = guardPath(path, "write", { ...securityContext, config: securityConfig.pathGuard });
 		if (!guardResult.allowed) {
-			await logSecurityEvent(securityContext.workspaceDir, securityConfig, {
+			await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
 				type: "path",
 				tool: options?.toolName ?? "write",
 				channelId: options?.channelId,

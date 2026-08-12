@@ -84,12 +84,12 @@ function resolveConfiguredPath(rawPath: string, ctx: PathGuardContext): string {
 	if (isAbsolute(expanded)) {
 		return normalize(expanded);
 	}
-	return resolve(ctx.workspaceDir, expanded);
+	return resolve(ctx.agentWorkspaceDir, expanded);
 }
 
 function resolveTargetPath(rawPath: string, ctx: PathGuardContext): string {
 	const homeDir = ctx.homeDir ?? homedir();
-	const cwd = ctx.cwd ?? process.cwd();
+	const cwd = ctx.projectRoot ?? process.cwd();
 	const normalized = stripNullAndNormalize(rawPath);
 	const expanded = maybeExpandHome(normalized, homeDir);
 	if (isAbsolute(expanded)) {
@@ -244,8 +244,8 @@ function isWithinHome(path: string, homeDir: string): boolean {
 	return startsWithPathPrefix(path, normalize(homeDir));
 }
 
-function isWithinWorkspace(path: string, workspaceDir: string): boolean {
-	return startsWithPathPrefix(path, normalize(workspaceDir));
+function isWithinAgentWorkspace(path: string, agentWorkspaceDir: string): boolean {
+	return startsWithPathPrefix(path, normalize(agentWorkspaceDir));
 }
 
 function isDeniedSystemPath(path: string): boolean {
@@ -267,7 +267,7 @@ function matchesConfiguredPath(path: string, entries: string[], ctx: PathGuardCo
 
 function pathAllowedByDefaults(path: string, ctx: PathGuardContext): boolean {
 	const homeDir = ctx.homeDir ?? homedir();
-	return isWithinWorkspace(path, ctx.workspaceDir) || isWithinTemp(path) || isWithinHome(path, homeDir);
+	return isWithinAgentWorkspace(path, ctx.agentWorkspaceDir) || isWithinTemp(path) || isWithinHome(path, homeDir);
 }
 
 /** The runtime's own bundled playbooks are readable regardless of where the package is installed. */
@@ -300,7 +300,7 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 	const homeDir = ctx.homeDir ?? homedir();
 	const effectiveCtx: PathGuardContext = {
 		...ctx,
-		workspaceDir: resolveRootForGuard(ctx.workspaceDir, ctx),
+		agentWorkspaceDir: resolveRootForGuard(ctx.agentWorkspaceDir, ctx),
 		homeDir: resolveRootForGuard(homeDir, ctx),
 	};
 	const resolvedTarget = resolveTargetPath(rawPath, ctx);
