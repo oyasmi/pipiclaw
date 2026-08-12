@@ -105,3 +105,96 @@ describe("security path guard", () => {
 		});
 	});
 });
+
+describe('security path guard: boundary="project"', () => {
+	function createProjectFixture() {
+		const root = makeTempDir();
+		const homeDir = join(root, "home");
+		const agentWorkspaceDir = join(homeDir, "agent-workspace");
+		mkdirSync(join(agentWorkspaceDir, "skills", "demo"), { recursive: true });
+		writeFileSync(join(agentWorkspaceDir, "skills", "demo", "SKILL.md"), "skill", "utf-8");
+		writeFileSync(join(agentWorkspaceDir, "MEMORY.md"), "memory", "utf-8");
+		const projectRoot = join(homeDir, "project");
+		mkdirSync(projectRoot, { recursive: true });
+		writeFileSync(join(projectRoot, "file.txt"), "project", "utf-8");
+		return { root, homeDir, agentWorkspaceDir, projectRoot };
+	}
+
+	it("allows reads/writes within projectRoot", () => {
+		const fixture = createProjectFixture();
+		const ctx = {
+			agentWorkspaceDir: fixture.agentWorkspaceDir,
+			homeDir: fixture.homeDir,
+			projectRoot: fixture.projectRoot,
+			boundary: "project" as const,
+			config: DEFAULT_SECURITY_CONFIG.pathGuard,
+		};
+
+		expect(guardPath(join(fixture.projectRoot, "file.txt"), "read", ctx)).toMatchObject({ allowed: true });
+		expect(guardPath(join(fixture.projectRoot, "sub", "out.txt"), "write", ctx)).toMatchObject({ allowed: true });
+	});
+
+	it("blocks reads/writes to the AgentWorkspace outside projectRoot", () => {
+		const fixture = createProjectFixture();
+		const ctx = {
+			agentWorkspaceDir: fixture.agentWorkspaceDir,
+			homeDir: fixture.homeDir,
+			projectRoot: fixture.projectRoot,
+			boundary: "project" as const,
+			config: DEFAULT_SECURITY_CONFIG.pathGuard,
+		};
+
+		expect(guardPath(join(fixture.agentWorkspaceDir, "MEMORY.md"), "read", ctx)).toMatchObject({ allowed: false });
+		expect(guardPath(join(fixture.agentWorkspaceDir, "MEMORY.md"), "write", ctx)).toMatchObject({ allowed: false });
+	});
+
+	it("still allows read-only access to AgentWorkspace skills/", () => {
+		const fixture = createProjectFixture();
+		const ctx = {
+			agentWorkspaceDir: fixture.agentWorkspaceDir,
+			homeDir: fixture.homeDir,
+			projectRoot: fixture.projectRoot,
+			boundary: "project" as const,
+			config: DEFAULT_SECURITY_CONFIG.pathGuard,
+		};
+
+		expect(guardPath(join(fixture.agentWorkspaceDir, "skills", "demo", "SKILL.md"), "read", ctx)).toMatchObject({
+			allowed: true,
+		});
+		expect(guardPath(join(fixture.agentWorkspaceDir, "skills", "demo", "SKILL.md"), "write", ctx)).toMatchObject({
+			allowed: false,
+		});
+	});
+
+	it("does not let a configured readAllow/writeAllow entry widen past projectRoot", () => {
+		const fixture = createProjectFixture();
+		const outsideDir = join(fixture.homeDir, "other");
+		mkdirSync(outsideDir, { recursive: true });
+		writeFileSync(join(outsideDir, "secret.txt"), "x", "utf-8");
+		const ctx = {
+			agentWorkspaceDir: fixture.agentWorkspaceDir,
+			homeDir: fixture.homeDir,
+			projectRoot: fixture.projectRoot,
+			boundary: "project" as const,
+			config: { ...DEFAULT_SECURITY_CONFIG.pathGuard, readAllow: [outsideDir], writeAllow: [outsideDir] },
+		};
+
+		expect(guardPath(join(outsideDir, "secret.txt"), "read", ctx)).toMatchObject({ allowed: false });
+		expect(guardPath(join(outsideDir, "secret.txt"), "write", ctx)).toMatchObject({ allowed: false });
+	});
+
+	it('blocks home and temp paths that boundary="unbounded" would allow', () => {
+		const fixture = createProjectFixture();
+		const ctx = {
+			agentWorkspaceDir: fixture.agentWorkspaceDir,
+			homeDir: fixture.homeDir,
+			projectRoot: fixture.projectRoot,
+			boundary: "project" as const,
+			config: DEFAULT_SECURITY_CONFIG.pathGuard,
+		};
+
+		expect(guardPath(join(fixture.homeDir, "outside-project.txt"), "write", ctx)).toMatchObject({
+			allowed: false,
+		});
+	});
+});

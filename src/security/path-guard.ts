@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, normalize, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PathGuardContext, PathGuardResult } from "./types.js";
 
@@ -248,6 +248,24 @@ function isWithinAgentWorkspace(path: string, agentWorkspaceDir: string): boolea
 	return startsWithPathPrefix(path, normalize(agentWorkspaceDir));
 }
 
+function isWithinProjectRoot(path: string, ctx: PathGuardContext): boolean {
+	const root = ctx.projectRoot;
+	if (!root) {
+		return false;
+	}
+	return startsWithPathPrefix(path, normalize(root));
+}
+
+/** Runtime-owned, read-only exception: the AgentWorkspace's `skills/` tree stays readable under
+ * `boundary: "project"` so the model can load a skill's playbook regardless of which project it
+ * has selected (spec 043, D6.2). Never a write exception. */
+function isAgentWorkspaceSkillsRead(path: string, operation: "read" | "write", ctx: PathGuardContext): boolean {
+	if (operation !== "read") {
+		return false;
+	}
+	return startsWithPathPrefix(path, normalize(join(ctx.agentWorkspaceDir, "skills")));
+}
+
 function isDeniedSystemPath(path: string): boolean {
 	if (isWithinTemp(path)) {
 		return false;
@@ -266,6 +284,9 @@ function matchesConfiguredPath(path: string, entries: string[], ctx: PathGuardCo
 }
 
 function pathAllowedByDefaults(path: string, ctx: PathGuardContext): boolean {
+	if (ctx.boundary === "project") {
+		return isWithinProjectRoot(path, ctx);
+	}
 	const homeDir = ctx.homeDir ?? homedir();
 	return isWithinAgentWorkspace(path, ctx.agentWorkspaceDir) || isWithinTemp(path) || isWithinHome(path, homeDir);
 }
@@ -302,6 +323,7 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		...ctx,
 		agentWorkspaceDir: resolveRootForGuard(ctx.agentWorkspaceDir, ctx),
 		homeDir: resolveRootForGuard(homeDir, ctx),
+		projectRoot: ctx.projectRoot ? resolveRootForGuard(ctx.projectRoot, ctx) : ctx.projectRoot,
 	};
 	const resolvedTarget = resolveTargetPath(rawPath, ctx);
 	const guardedPath = resolveForGuard(resolvedTarget, ctx);
@@ -363,12 +385,19 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 			guardedPath,
 			operation === "read" ? effectiveCtx.config.readAllow : effectiveCtx.config.writeAllow,
 			effectiveCtx,
-		)
+		) &&
+		// D6.2: `boundary: "project"` is pathGuard's outer bound — a configured allow entry can
+		// narrow within the project but never widen a generic tool past it.
+		(effectiveCtx.boundary !== "project" || isWithinProjectRoot(guardedPath, effectiveCtx))
 	) {
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };
 	}
 
-	if (pathAllowedByDefaults(guardedPath, effectiveCtx) || isBundledPlaybookRead(guardedPath, operation)) {
+	if (
+		pathAllowedByDefaults(guardedPath, effectiveCtx) ||
+		isBundledPlaybookRead(guardedPath, operation) ||
+		isAgentWorkspaceSkillsRead(guardedPath, operation, effectiveCtx)
+	) {
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };
 	}
 

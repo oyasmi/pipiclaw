@@ -24,11 +24,29 @@ export interface SecurityConfig {
 		logBlocked: boolean;
 		logFile?: string;
 	};
+	/**
+	 * Absent (no `projectAccess` key in `security.json` at all) is a distinct, meaningful state
+	 * from present-with-omitted-fields: absent is the upgrade-compat path (`ProjectScope.boundary`
+	 * stays `"unbounded"`, `/project set` is disabled); present means the operator has opted into
+	 * project boundaries (spec 043, D3.2). See `src/security/project-scope.ts` for the resolved,
+	 * canonicalized policy this raw section feeds into.
+	 */
+	projectAccess?: {
+		defaultRoot?: string;
+		allowedRoots?: string[];
+	};
 }
 
 export interface SecurityRuntimeContext {
 	agentWorkspaceDir: string;
 	projectRoot?: string;
+	/**
+	 * `"project"`: generic file tools are bounded to `projectRoot`; `security.json`'s configured
+	 * `readAllow`/`writeAllow` can narrow within it but never widen past it (spec 043, D6.2).
+	 * `"unbounded"` (the default when omitted, for backward compat): today's global pathGuard
+	 * defaults — `agentWorkspaceDir` + temp + `homeDir`.
+	 */
+	boundary?: "project" | "unbounded";
 	homeDir?: string;
 }
 
