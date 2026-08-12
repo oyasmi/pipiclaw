@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	commitProjectSelection,
 	getProjectSelectionPath,
+	readProjectSelection,
 	resolveProjectScope,
 } from "../src/runtime/project-scope-store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -98,5 +99,44 @@ describe("resolveProjectScope", () => {
 		});
 
 		expect(outcome.kind).toBe("blocked");
+	});
+
+	it("blocks (fail closed) on a malformed project.json instead of silently re-migrating to the default", () => {
+		const channelDir = makeTempDir();
+		const defaultRoot = makeTempDir();
+		writeFileSync(getProjectSelectionPath(channelDir), "not json");
+
+		const outcome = resolveProjectScope(channelDir, policyFor(defaultRoot));
+
+		expect(outcome.kind).toBe("blocked");
+		if (outcome.kind !== "blocked") throw new Error("unreachable");
+		expect(outcome.reason).toContain("project.json");
+		// Must not have overwritten the corrupt file with a fresh migration.
+		expect(readFileSync(getProjectSelectionPath(channelDir), "utf-8")).toBe("not json");
+	});
+
+	it("blocks (fail closed) on a project.json with the wrong schema", () => {
+		const channelDir = makeTempDir();
+		const defaultRoot = makeTempDir();
+		writeFileSync(getProjectSelectionPath(channelDir), JSON.stringify({ version: 1 }));
+
+		const outcome = resolveProjectScope(channelDir, policyFor(defaultRoot));
+
+		expect(outcome.kind).toBe("blocked");
+	});
+});
+
+describe("readProjectSelection", () => {
+	it("throws on an existing-but-malformed project.json rather than returning undefined", () => {
+		const channelDir = makeTempDir();
+		writeFileSync(getProjectSelectionPath(channelDir), "not json");
+
+		expect(() => readProjectSelection(channelDir)).toThrow(/project\.json/);
+	});
+
+	it("returns undefined when project.json does not exist", () => {
+		const channelDir = makeTempDir();
+
+		expect(readProjectSelection(channelDir)).toBeUndefined();
 	});
 });

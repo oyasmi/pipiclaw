@@ -248,8 +248,16 @@ export class ChannelRunner implements AgentRunner {
 
 		// Create session manager, opening whichever session this channel's active-session ref
 		// (or the context.jsonl default, for a channel that has never run a topology op) names
-		// (spec 043, D1).
-		const activeSessionFile = resolveActiveSessionFile(channelDir);
+		// (spec 043, D1). An existing-but-invalid ref throws rather than silently falling back to
+		// context.jsonl (P7) — fail the whole runner closed, same as an invalid ProjectScope above.
+		let activeSessionFile: string;
+		try {
+			activeSessionFile = resolveActiveSessionFile(channelDir);
+		} catch (error) {
+			throw new Error(
+				`[${channelId}] Cannot start channel: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 		this.sessionManager = SessionManager.open(join(channelDir, activeSessionFile), channelDir);
 
 		// Per-runner recovery barrier (spec 043, D10 point 2): repairs must run against this exact

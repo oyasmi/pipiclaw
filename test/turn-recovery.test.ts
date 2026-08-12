@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import {
 	recoverInterruptedTurn,
 	scanWorkspaceForInterruptedTurns,
 } from "../src/agent/turn-recovery.js";
+import { getActiveSessionRefPath } from "../src/runtime/active-session-store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-turn-recovery-");
@@ -272,6 +273,21 @@ describe("scanWorkspaceForInterruptedTurns", () => {
 		expect(report.repaired).toHaveLength(0);
 		expect(report.blocked).toHaveLength(1);
 		expect(report.blocked[0].channelDir).toBe(blockedDir);
+	});
+
+	it("reports a channel with a malformed active-session.json as blocked instead of silently opening context.jsonl", async () => {
+		const workspaceDir = makeTempDir();
+		const channelDir = join(workspaceDir, "dm_scan_bad_ref");
+		mkdirSync(channelDir, { recursive: true });
+		writeFileSync(getActiveSessionRefPath(channelDir), "not json");
+
+		const report = await scanWorkspaceForInterruptedTurns(workspaceDir, fallbackModel);
+
+		expect(report.scanned).toBe(1);
+		expect(report.repaired).toHaveLength(0);
+		expect(report.blocked).toHaveLength(1);
+		expect(report.blocked[0].channelDir).toBe(channelDir);
+		expect(report.blocked[0].reason).toContain("损坏");
 	});
 
 	it("returns an empty report for a workspace directory that doesn't exist", async () => {

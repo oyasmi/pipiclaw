@@ -44,16 +44,29 @@ export function isValidSessionRefBasename(file: string): boolean {
 	);
 }
 
-function readActiveSessionRef(channelDir: string): ActiveSessionRefV1 | undefined {
+type ActiveSessionRefReadResult =
+	| { kind: "missing" }
+	| { kind: "invalid"; reason: string }
+	| { kind: "valid"; ref: ActiveSessionRefV1 };
+
+/**
+ * A missing ref and an existing-but-invalid ref are not the same thing (spec 043, P7): the former
+ * means "never ran a topology op" and defaults to `context.jsonl`; the latter means the pointer is
+ * unreadable and must block rather than silently guess which session to open.
+ */
+function readActiveSessionRef(channelDir: string): ActiveSessionRefReadResult {
 	const refPath = getActiveSessionRefPath(channelDir);
 	if (!existsSync(refPath)) {
-		return undefined;
+		return { kind: "missing" };
 	}
 	let raw: unknown;
 	try {
 		raw = JSON.parse(readFileSync(refPath, "utf-8"));
-	} catch {
-		return undefined;
+	} catch (error) {
+		return {
+			kind: "invalid",
+			reason: `不是合法 JSON（${error instanceof Error ? error.message : String(error)}）`,
+		};
 	}
 	if (
 		!raw ||
@@ -63,10 +76,13 @@ function readActiveSessionRef(channelDir: string): ActiveSessionRefV1 | undefine
 		typeof (raw as { sessionId?: unknown }).sessionId !== "string" ||
 		typeof (raw as { updatedAt?: unknown }).updatedAt !== "string"
 	) {
-		return undefined;
+		return { kind: "invalid", reason: "缺少必要字段或字段类型错误" };
 	}
 	const ref = raw as ActiveSessionRefV1;
-	return isValidSessionRefBasename(ref.file) ? ref : undefined;
+	if (!isValidSessionRefBasename(ref.file)) {
+		return { kind: "invalid", reason: `file 字段非法：${JSON.stringify(ref.file)}` };
+	}
+	return { kind: "valid", ref };
 }
 
 /**
@@ -86,10 +102,20 @@ function materializeSessionFile(channelDir: string, file: string): void {
  * Resolves which session file a channel should open (runner construction / restart), migrating a
  * channel with no ref to `context.jsonl` and materializing that file. Never writes the ref
  * itself — a missing ref stays missing until a session-topology operation commits one.
+ *
+ * An existing-but-invalid ref throws instead of falling back to `context.jsonl` (spec 043, P7):
+ * silently reinterpreting it could open a session other than the one the channel actually last
+ * used. Callers must fail the runner/recovery flow closed rather than swallow this.
  */
 export function resolveActiveSessionFile(channelDir: string): string {
-	const ref = readActiveSessionRef(channelDir);
-	const file = ref?.file ?? DEFAULT_SESSION_FILENAME;
+	const result = readActiveSessionRef(channelDir);
+	if (result.kind === "invalid") {
+		throw new Error(
+			`${getActiveSessionRefPath(channelDir)} 已损坏或包含非法内容（${result.reason}），拒绝启动以避免打开错误会话。` +
+				`请检查/修复或备份后删除该文件（缺失时会安全地重新迁移到 ${DEFAULT_SESSION_FILENAME}）。`,
+		);
+	}
+	const file = result.kind === "valid" ? result.ref.file : DEFAULT_SESSION_FILENAME;
 	materializeSessionFile(channelDir, file);
 	return file;
 }

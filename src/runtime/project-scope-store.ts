@@ -24,6 +24,12 @@ export function getProjectSelectionPath(channelDir: string): string {
 	return join(channelDir, SELECTION_FILENAME);
 }
 
+/**
+ * A missing selection file and an existing-but-invalid one are not the same thing (spec 043, P7):
+ * the former means "never selected" and is migrated to the app default; the latter must block
+ * instead of being silently treated as "never selected" and re-migrated over. Throws on an
+ * existing-but-invalid file so callers cannot mistake it for "missing".
+ */
 export function readProjectSelection(channelDir: string): PersistedProjectSelectionV1 | undefined {
 	const path = getProjectSelectionPath(channelDir);
 	if (!existsSync(path)) {
@@ -32,8 +38,8 @@ export function readProjectSelection(channelDir: string): PersistedProjectSelect
 	let raw: unknown;
 	try {
 		raw = JSON.parse(readFileSync(path, "utf-8"));
-	} catch {
-		return undefined;
+	} catch (error) {
+		throw new Error(`${path} 不是合法 JSON（${error instanceof Error ? error.message : String(error)}）`);
 	}
 	if (
 		!raw ||
@@ -43,7 +49,7 @@ export function readProjectSelection(channelDir: string): PersistedProjectSelect
 		typeof (raw as { updatedAt?: unknown }).updatedAt !== "string" ||
 		typeof (raw as { updatedBy?: unknown }).updatedBy !== "string"
 	) {
-		return undefined;
+		throw new Error(`${path} 缺少必要字段或字段类型错误`);
 	}
 	return raw as PersistedProjectSelectionV1;
 }
@@ -91,7 +97,15 @@ export function resolveProjectScope(
 ): ProjectScopeOutcome {
 	const sandbox = currentProjectSandboxStatus();
 	const boundary: ProjectScope["boundary"] = resolution.configured ? "project" : "unbounded";
-	const existing = readProjectSelection(channelDir);
+	let existing: PersistedProjectSelectionV1 | undefined;
+	try {
+		existing = readProjectSelection(channelDir);
+	} catch (error) {
+		return {
+			kind: "blocked",
+			reason: `${error instanceof Error ? error.message : String(error)}。请在频道空闲时执行 /project set <path> 或 /project reset 重新写入。`,
+		};
+	}
 
 	if (!existing) {
 		const selection: PersistedProjectSelectionV1 = {

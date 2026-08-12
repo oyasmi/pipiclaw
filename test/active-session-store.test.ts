@@ -56,11 +56,18 @@ describe("resolveActiveSessionFile", () => {
 		expect(existsSync(join(channelDir, "20260101_abc.jsonl"))).toBe(true);
 	});
 
-	it("falls back to context.jsonl for a malformed ref instead of throwing", () => {
+	it("blocks (fail closed) on a malformed ref instead of silently falling back to context.jsonl", () => {
 		const channelDir = makeTempDir();
 		writeFileSync(getActiveSessionRefPath(channelDir), "not json");
 
-		expect(resolveActiveSessionFile(channelDir)).toBe("context.jsonl");
+		expect(() => resolveActiveSessionFile(channelDir)).toThrow(/损坏/);
+	});
+
+	it("blocks (fail closed) on a ref with the wrong schema", () => {
+		const channelDir = makeTempDir();
+		writeFileSync(getActiveSessionRefPath(channelDir), JSON.stringify({ version: 1, file: "x.jsonl" }));
+
+		expect(() => resolveActiveSessionFile(channelDir)).toThrow(/损坏/);
 	});
 
 	it.each([
@@ -68,14 +75,14 @@ describe("resolveActiveSessionFile", () => {
 		["parent traversal", "../outside.jsonl"],
 		["nested separator", "sub/dir.jsonl"],
 		["wrong extension", "context.txt"],
-	])("rejects a ref with %s and falls back to context.jsonl", (_label, file) => {
+	])("blocks (fail closed) on a ref with %s instead of falling back to context.jsonl", (_label, file) => {
 		const channelDir = makeTempDir();
 		writeFileSync(
 			getActiveSessionRefPath(channelDir),
 			JSON.stringify({ version: 1, file, sessionId: "x", updatedAt: new Date().toISOString() }),
 		);
 
-		expect(resolveActiveSessionFile(channelDir)).toBe("context.jsonl");
+		expect(() => resolveActiveSessionFile(channelDir)).toThrow(/损坏/);
 	});
 });
 
