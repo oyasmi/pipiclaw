@@ -185,7 +185,12 @@ describe("path guard access to bundled playbooks", () => {
 		const homeDir = join(root, "home");
 		const workspaceDir = join(homeDir, "workspace");
 		mkdirSync(workspaceDir, { recursive: true });
-		return { agentWorkspaceDir: workspaceDir, homeDir, projectRoot: workspaceDir, config: DEFAULT_SECURITY_CONFIG.pathGuard };
+		return {
+			agentWorkspaceDir: workspaceDir,
+			homeDir,
+			projectRoot: workspaceDir,
+			config: DEFAULT_SECURITY_CONFIG.pathGuard,
+		};
 	}
 
 	it("allows reading playbooks outside workspace/home/temp but never writing them", () => {

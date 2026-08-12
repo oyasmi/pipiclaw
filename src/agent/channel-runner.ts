@@ -48,6 +48,7 @@ import {
 	wrapModelRegistry,
 } from "../models/utils.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks/catalog.js";
+import { commitActiveSessionRef, resolveActiveSessionFile } from "../runtime/active-session-store.js";
 import type { ChannelContext, MediaSender } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
@@ -220,9 +221,11 @@ export class ChannelRunner implements AgentRunner {
 		const initialSkills = loadPipiclawSkills(channelDir);
 		this.currentSkills = initialSkills;
 
-		// Create session manager
-		const contextFile = join(channelDir, "context.jsonl");
-		this.sessionManager = SessionManager.open(contextFile, channelDir);
+		// Create session manager, opening whichever session this channel's active-session ref
+		// (or the context.jsonl default, for a channel that has never run a topology op) names
+		// (spec 043, D1).
+		const activeSessionFile = resolveActiveSessionFile(channelDir);
+		this.sessionManager = SessionManager.open(join(channelDir, activeSessionFile), channelDir);
 		this.settingsManager = paths.settingsManager;
 		this.reportSettingsDiagnostics();
 		this.memoryCandidateStore = createMemoryCandidateStore();
@@ -1101,6 +1104,12 @@ export class ChannelRunner implements AgentRunner {
 			this.session,
 			this.createAgentSessionServices(initialResourceLoader),
 			async ({ sessionManager, sessionStartEvent }) => {
+				// `/new`, fork, and switch already wrote the target session's durable header by
+				// this point (the SDK does it synchronously before invoking this callback); commit
+				// the pointer before we rebuild and rebind to it, so a crash between "SDK created
+				// session" and "we finished rebinding" leaves the old ref (and old session)
+				// authoritative rather than an orphaned new file (spec 043, D1.3).
+				await commitActiveSessionRef(this.channelDir, sessionManager);
 				const next = this.createSessionRuntime(sessionManager, sessionStartEvent);
 				return {
 					session: next.session,
