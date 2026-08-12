@@ -4,6 +4,17 @@
 
 ## [未发布]
 
+## [0.9.0-beta.9] - 2026-08-12
+
+### 变更
+
+- 收敛运行时所有权，让每个长生命周期对象都只有一个权威来源。`prepareAppServices()` 现在持有唯一的 app 级 `PipiclawSettingsManager`，并注入到 runtime context 和每个 `ChannelRunner`，而不再由各自自行构造；`runner-factory` 移除了冗余的进程级 runner 缓存，改由 daemon 的 runtime map 作为唯一缓存，并由真正的 `AgentRunner.dispose()` 与有界 LRU 淘汰（`MAX_CACHED_RUNNERS=50`）支撑。
+- 引入传输无关的 `ChannelEvent`（`runtime/channel-event.ts`）；`DingTalkEvent` 变为它的 `type` 别名，合成唤醒的生产者不再伪造空的 `conversationId`（该字段现在是真正的可选字段）。`DingTalkEvent` 导出对嵌入方保持稳定。
+- 删除约 300 行 `settings.ts` 中失效的兼容 stub——空操作的 `AgentSession` 方法，以及未被使用的 `PackageSource`/`ThinkingBudgetsSettings`/`Settings`/`TransportSetting` 类型。
+- 通过 `shared/types.ts` 中的单一 `createEmptyUsageTotals()` 统一空 `UsageTotals` 的构造，取代各处重复的字面量与辅助函数。
+- 使 `withToolDetails` 成为唯一给工具结果打 `kind` 标记的位置（遵循 AGENTS.md）；各工具中手写的 `kind` 字段全部移除，`SubAgentToolDetails` 拆分为构造期字段与包装后消费方类型。
+- 将 `task-events.ts` 与 `task-schedule.ts` 从 `shared/` 移入 `tasks/`，匹配其唯一消费方所在域，并修正依赖方向。
+
 ## [0.9.0-beta.8] - 2026-08-11
 
 ### 变更

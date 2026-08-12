@@ -4,6 +4,17 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.0-beta.9] - 2026-08-12
+
+### Changed
+
+- Consolidated runtime ownership so there is one authority for each long-lived object. `prepareAppServices()` now owns the single app-level `PipiclawSettingsManager`, which is injected into the runtime context and every `ChannelRunner` instead of each constructing its own; `runner-factory` dropped its redundant process-level runner cache in favor of the daemon's runtime map, which is now the sole cache and backed by a real `AgentRunner.dispose()` plus bounded LRU eviction (`MAX_CACHED_RUNNERS=50`).
+- Introduced a transport-neutral `ChannelEvent` (`runtime/channel-event.ts`); `DingTalkEvent` becomes a `type` alias of it and synthetic-wake producers no longer fake an empty `conversationId` (the field is genuinely optional now). The `DingTalkEvent` export stays stable for embedders.
+- Removed roughly 300 lines of dead `settings.ts` compatibility stubs — no-op `AgentSession` methods and the unused `PackageSource`/`ThinkingBudgetsSettings`/`Settings`/`TransportSetting` types.
+- Unified empty `UsageTotals` construction through a single `createEmptyUsageTotals()` in `shared/types.ts`, replacing duplicated literals and helpers.
+- Made `withToolDetails` the sole place that stamps a tool result's `kind` (per AGENTS.md); hand-written `kind` fields are stripped from every tool, and `SubAgentToolDetails` is split into construction-time fields plus a post-wrap consumer type.
+- Moved `task-events.ts` and `task-schedule.ts` from `shared/` into `tasks/` to match their sole consumer domain and fix the dependency direction.
+
 ## [0.9.0-beta.8] - 2026-08-11
 
 ### Changed
