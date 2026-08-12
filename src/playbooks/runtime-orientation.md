@@ -39,6 +39,11 @@ Workspace 根目录：
 - `sub-agents/`：工作区配置的子代理；只加载实际存在的 Markdown 文件。
 - `events/`：全 workspace 的调度事件。
 
+项目目录（ProjectRoot）：
+
+- 与上面的 workspace 根目录是两个不同的东西。`read` / `write` / `edit` / `grep` / `bash` 等通用文件工具和 shell 的 cwd 都以**项目目录**为准，不是 workspace 根目录——workspace 根目录下的文件（`SOUL.md`/`AGENTS.md`/`skills/` 等）要用各自的专用工具（`skill_manage` 等）或只读注入访问，不能假设通用文件工具能直接读写到那里。
+- 频道配置了项目边界（`security.json` 的 `projectAccess`）时，通用文件工具与 sub-agent 默认工作目录都被限制在这个目录内，越界会被直接拒绝；未配置时沿用旧的全局文件权限。人可以用 `/project` 查看或切换当前项目目录，这是运行时命令，不经过模型。
+
 当前 channel 目录：
 
 - `SESSION.md`：当前工作状态，runtime 维护。
