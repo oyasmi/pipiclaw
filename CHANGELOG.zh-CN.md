@@ -4,6 +4,21 @@
 
 ## [未发布]
 
+## [0.9.0-beta.10] - 2026-08-12
+
+### 新增
+
+- 新增频道级持久化活动会话指针，使 `/new`、fork 与 switch 选择在 daemon 重启后仍能恢复。活动引用提交前会先实体化 session 文件，因此首条用户消息也能立即持久化。
+- 新增可选的频道级项目作用域，通过 `security.json` 的 `projectAccess` 策略以及 `/project`、`/project set`、`/project reset` 管理。选定根目录在一个 runner generation 内冻结，并统一用于 prompt、内置工具、后台 job、子代理和审计记录；回合或委派工作仍在运行时拒绝切换项目。
+
+### 变更
+
+- 配置 `projectAccess` 后，项目感知的路径守卫会把 Pipiclaw 文件工具约束在当前项目根目录内。如果持久化目录消失、symlink 目标改变，或根目录超出 operator 更新后的允许列表，系统会 fail closed；界面同时明确区分应用级路径约束与宿主提供的系统级沙箱。
+
+### 修复
+
+- 修复 daemon 在 assistant 响应或工具结果持久化前重启导致 session 无法继续的问题。启动恢复会追加明确的 aborted/error 记录，在不重放可能已经生效的副作用前提下恢复合法的 provider transcript；无法确定的 session 结构仍会阻断并留待人工检查。
+
 ## [0.9.0-beta.9] - 2026-08-12
 
 ### 变更

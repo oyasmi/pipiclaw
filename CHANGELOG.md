@@ -4,6 +4,21 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.0-beta.10] - 2026-08-12
+
+### Added
+
+- Added a durable per-channel active-session reference so `/new`, fork, and switch selections survive daemon restarts. Session files are materialized before the reference is committed, making the first user entry durable as well.
+- Added optional per-channel project scopes through `security.json` `projectAccess` policy and `/project`, `/project set`, and `/project reset`. The selected root is frozen for a runner generation and consistently feeds prompts, built-in tools, jobs, sub-agents, and audit records; project changes are rejected while turns or delegated work are active.
+
+### Changed
+
+- Project-aware path guards now confine Pipiclaw file tools to the selected project root when `projectAccess` is configured. Persisted selections fail closed if their directory disappears, a symlink target changes, or the root falls outside the operator's updated allowlist; the UI distinguishes application-level path enforcement from a host-provided system sandbox.
+
+### Fixed
+
+- Repaired sessions interrupted by a daemon restart before an assistant response or tool result was durably recorded. Startup appends explicit aborted/error records to restore a valid provider transcript without replaying potentially completed side effects, while ambiguous session shapes remain blocked for manual inspection.
+
 ## [0.9.0-beta.9] - 2026-08-12
 
 ### Changed
