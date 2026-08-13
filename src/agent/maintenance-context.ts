@@ -27,11 +27,6 @@ interface CachedTranscript {
 // channels. Keyed by channelDir, replaced whenever the file changes.
 const transcriptCache = new Map<string, CachedTranscript>();
 
-/** Test hook: drop cached transcripts so a fresh read is forced. */
-export function clearDetachedMaintenanceCache(): void {
-	transcriptCache.clear();
-}
-
 /**
  * Build a MemoryMaintenanceRuntimeContext for a channel with no live runner,
  * straight from disk. This is deliberately much lighter than a ChannelRunner:

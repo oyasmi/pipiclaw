@@ -126,7 +126,13 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			},
 		});
 		await swept.restore();
-		await waitFor(() => swept.get("run-adopt")?.status !== "running" && dispatched.length === 1, 10_000);
+		// Settlement marks the in-memory record terminal before dispatching and only persists
+		// wakeEnqueued after dispatch returns. Wait for that durable protocol boundary; restarting
+		// as soon as the dispatch callback fires races the persistence this test is meant to verify.
+		await waitFor(
+			() => JSON.parse(readFileSync(recordPath, "utf-8")).wakeEnqueued === true && dispatched.length === 1,
+			10_000,
+		);
 
 		expect(swept.get("run-adopt")?.status).toBe("failed");
 		expect(swept.get("run-adopt")?.failureReason).toContain("Wall time budget exceeded");
