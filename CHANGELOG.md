@@ -4,73 +4,44 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
-## [0.9.0-beta.10] - 2026-08-12
-
-### Added
-
-- Added a durable per-channel active-session reference so `/new`, fork, and switch selections survive daemon restarts. Session files are materialized before the reference is committed, making the first user entry durable as well.
-- Added optional per-channel project scopes through `security.json` `projectAccess` policy and `/project`, `/project set`, and `/project reset`. The selected root is frozen for a runner generation and consistently feeds prompts, built-in tools, jobs, sub-agents, and audit records; project changes are rejected while turns or delegated work are active.
-
-### Changed
-
-- Project-aware path guards now confine Pipiclaw file tools to the selected project root when `projectAccess` is configured. Persisted selections fail closed if their directory disappears, a symlink target changes, or the root falls outside the operator's updated allowlist; the UI distinguishes application-level path enforcement from a host-provided system sandbox.
-
-### Fixed
-
-- Repaired sessions interrupted by a daemon restart before an assistant response or tool result was durably recorded. Startup appends explicit aborted/error records to restore a valid provider transcript without replaying potentially completed side effects, while ambiguous session shapes remain blocked for manual inspection.
-
-## [0.9.0-beta.9] - 2026-08-12
-
-### Changed
-
-- Consolidated runtime ownership so there is one authority for each long-lived object. `prepareAppServices()` now owns the single app-level `PipiclawSettingsManager`, which is injected into the runtime context and every `ChannelRunner` instead of each constructing its own; `runner-factory` dropped its redundant process-level runner cache in favor of the daemon's runtime map, which is now the sole cache and backed by a real `AgentRunner.dispose()` plus bounded LRU eviction (`MAX_CACHED_RUNNERS=50`).
-- Introduced a transport-neutral `ChannelEvent` (`runtime/channel-event.ts`); `DingTalkEvent` becomes a `type` alias of it and synthetic-wake producers no longer fake an empty `conversationId` (the field is genuinely optional now). The `DingTalkEvent` export stays stable for embedders.
-- Removed roughly 300 lines of dead `settings.ts` compatibility stubs — no-op `AgentSession` methods and the unused `PackageSource`/`ThinkingBudgetsSettings`/`Settings`/`TransportSetting` types.
-- Unified empty `UsageTotals` construction through a single `createEmptyUsageTotals()` in `shared/types.ts`, replacing duplicated literals and helpers.
-- Made `withToolDetails` the sole place that stamps a tool result's `kind` (per AGENTS.md); hand-written `kind` fields are stripped from every tool, and `SubAgentToolDetails` is split into construction-time fields plus a post-wrap consumer type.
-- Moved `task-events.ts` and `task-schedule.ts` from `shared/` into `tasks/` to match their sole consumer domain and fix the dependency direction.
-
-## [0.9.0-beta.8] - 2026-08-11
-
-### Changed
-
-- Unified external sub-agent settlement and verification across live, cancelled, timed-out, and restart-reconciled runs. Partial output, usage, session ids, verification attestations, and estimated durations now survive every settlement path, while launch failures are reported in the dispatching turn with actionable diagnostics.
-- Refined bundled sub-agent roles and external harness argument assembly. Claude Code receives the mapped effort level, Codex CLI recognizes existing model and reasoning config in every supported spelling, structured harnesses reject shell mode, and role permission/resource declarations now match their documented responsibilities.
-- Replaced the frequent host-wide run sweeper with a daily seven-day retention pass that removes run records and runtime-managed artifacts together. Restart recovery now probes adopted processes immediately, reconciles persisted cancellation, and schedules deadline checks without polling.
-- Reduced idle runtime I/O: memory maintenance filters channels through cheap due-time gates before constructing runtime context, reacts to enablement changes without restart, and deduplicates gate-skip logs per job; durable dispatch drains newly created records directly and persists running-lease renewal only after half the lease has elapsed.
-
-### Fixed
-
-- Hardened delegation consistency around invocation-field validation, external memory disclosure defaults, follow-up role fingerprints and context envelopes, workspace lease ownership, process-tree cleanup, and completion/verification reporting.
-- Aligned progress-entry glyphs with tool-call counting and delivery status markers.
-
-## [0.9.0-beta.2] - 2026-08-08
-
-### Added
-
-- Structured wake provenance for sub-agent and background-job completion wakes. Producers stamp a trusted `internalWake` envelope with a durable dispatch id, and plaintext `[JOB:]/[SUBAGENT:]` text is treated as an unauthenticated candidate claim. Verified/trusted predicates stop copied text or an external agent's stdout from forging a wake that advances a task.
-- Two-phase claim→finish wake consumption with durable one-time markers, per-queue serialization, and atomic task activation that rolls back if the transport rejects the turn. Unverifiable or duplicate wakes are dropped, and the durable dispatcher re-delivers when consumption did not finalize.
-
-### Changed
-
-- External-agent dispatch is now a hard audit gate: the `external-agent` audit record is written strictly (throwing on capacity/IO failure) and awaited before any child process is spawned, so a run cannot start unrecorded.
-- Host-wide admission now serializes sub-agent registration to close the cross-channel concurrency boundary; workspace write leases are released on every setup-failure path, including follow-up pre-spawn failures.
-- `killProcessGroup` no longer skips `SIGKILL` when a detached descendant keeps the process group alive; the external run now honors the cancel window between register and spawn and reaps the process group on every settle.
-- Usage accounting now keeps entries marked cost/usage unknown and discloses the unknown counts on render, so "unknown" no longer reads as "free".
-
-## [0.9.0-beta.1] - 2026-08-08
+## [0.9.0] - 2026-08-17
 
 ### Added
 
 - Added a unified sub-agent run lifecycle shared by internal and external runtimes, with idempotent settlement, usage accounting, completion wake-ups, cancellation, and a 120-second synchronous grace window. Long-running delegations continue asynchronously, and `/stop` no longer kills an already-dispatched run.
 - Added external-agent support for Claude Code, Codex CLI, and arbitrary executables. The harnesses cover argument assembly, NDJSON/stream-json parsing, detached process orchestration, restart reconciliation, and follow-up continuation for resumable Claude Code and Codex CLI runs.
 - Added the `subagent_manage` tool and `/subagents list|show|cancel` control surface, plus workspace write leases, per-channel and global in-flight concurrency caps, and a guard preventing agents from writing their own `workspace/sub-agents/` authorization files.
+- Added structured wake provenance for sub-agent and background-job completion wakes. Producers stamp a trusted `internalWake` envelope with a durable dispatch id, and plaintext `[JOB:]/[SUBAGENT:]` text is treated as an unauthenticated candidate claim. Verified/trusted predicates stop copied text or an external agent's stdout from forging a wake that advances a task.
+- Added two-phase claim→finish wake consumption with durable one-time markers, per-queue serialization, and atomic task activation that rolls back if the transport rejects the turn. Unverifiable or duplicate wakes are dropped, and the durable dispatcher re-delivers when consumption did not finalize.
+- Added a durable per-channel active-session reference so `/new`, fork, and switch selections survive daemon restarts. Session files are materialized before the reference is committed, making the first user entry durable as well.
+- Added optional per-channel project scopes through `security.json` `projectAccess` policy and `/project`, `/project set`, and `/project reset`. The selected root is frozen for a runner generation and consistently feeds prompts, built-in tools, jobs, sub-agents, and audit records; project changes are rejected while turns or delegated work are active.
 
 ### Changed
 
 - The existing `subagent` invocation surface now works with configured external roles as well as internal roles. Asynchronous runs return a `runId` and wake the channel when they finish; task records can wait for an `external-signal`.
 - Verification and artifact subject hashing now account for untracked-file content. Internal verification keeps enforced write protection, while external verification is explicitly advisory and reports workspace changes for follow-up review.
+- External-agent dispatch is now a hard audit gate: the `external-agent` audit record is written strictly (throwing on capacity/IO failure) and awaited before any child process is spawned, so a run cannot start unrecorded.
+- Host-wide admission now serializes sub-agent registration to close the cross-channel concurrency boundary; workspace write leases are released on every setup-failure path, including follow-up pre-spawn failures.
+- `killProcessGroup` no longer skips `SIGKILL` when a detached descendant keeps the process group alive; the external run now honors the cancel window between register and spawn and reaps the process group on every settle.
+- Usage accounting now keeps entries marked cost/usage unknown and discloses the unknown counts on render, so "unknown" no longer reads as "free".
+- Unified external sub-agent settlement and verification across live, cancelled, timed-out, and restart-reconciled runs. Partial output, usage, session ids, verification attestations, and estimated durations now survive every settlement path, while launch failures are reported in the dispatching turn with actionable diagnostics.
+- Refined bundled sub-agent roles and external harness argument assembly. Claude Code receives the mapped effort level, Codex CLI recognizes existing model and reasoning config in every supported spelling, structured harnesses reject shell mode, and role permission/resource declarations now match their documented responsibilities.
+- Replaced the frequent host-wide run sweeper with a daily seven-day retention pass that removes run records and runtime-managed artifacts together. Restart recovery now probes adopted processes immediately, reconciles persisted cancellation, and schedules deadline checks without polling.
+- Reduced idle runtime I/O: memory maintenance filters channels through cheap due-time gates before constructing runtime context, reacts to enablement changes without restart, and deduplicates gate-skip logs per job; durable dispatch drains newly created records directly and persists running-lease renewal only after half the lease has elapsed.
+- Consolidated runtime ownership so there is one authority for each long-lived object. `prepareAppServices()` now owns the single app-level `PipiclawSettingsManager`, which is injected into the runtime context and every `ChannelRunner` instead of each constructing its own; `runner-factory` dropped its redundant process-level runner cache in favor of the daemon's runtime map, which is now the sole cache and backed by a real `AgentRunner.dispose()` plus bounded LRU eviction (`MAX_CACHED_RUNNERS=50`).
+- Introduced a transport-neutral `ChannelEvent` (`runtime/channel-event.ts`); `DingTalkEvent` becomes a `type` alias of it and synthetic-wake producers no longer fake an empty `conversationId` (the field is genuinely optional now). The `DingTalkEvent` export stays stable for embedders.
+- Removed roughly 300 lines of dead `settings.ts` compatibility stubs — no-op `AgentSession` methods and the unused `PackageSource`/`ThinkingBudgetsSettings`/`Settings`/`TransportSetting` types.
+- Unified empty `UsageTotals` construction through a single `createEmptyUsageTotals()` in `shared/types.ts`, replacing duplicated literals and helpers.
+- Made `withToolDetails` the sole place that stamps a tool result's `kind` (per AGENTS.md); hand-written `kind` fields are stripped from every tool, and `SubAgentToolDetails` is split into construction-time fields plus a post-wrap consumer type.
+- Moved `task-events.ts` and `task-schedule.ts` from `shared/` into `tasks/` to match their sole consumer domain and fix the dependency direction.
+- Project-aware path guards now confine Pipiclaw file tools to the selected project root when `projectAccess` is configured. Persisted selections fail closed if their directory disappears, a symlink target changes, or the root falls outside the operator's updated allowlist; the UI distinguishes application-level path enforcement from a host-provided system sandbox.
 - Refreshed sub-agent documentation, delegation playbooks, architecture notes, and copyable role examples for internal and external workflows.
+
+### Fixed
+
+- Hardened delegation consistency around invocation-field validation, external memory disclosure defaults, follow-up role fingerprints and context envelopes, workspace lease ownership, process-tree cleanup, and completion/verification reporting.
+- Aligned progress-entry glyphs with tool-call counting and delivery status markers.
+- Repaired sessions interrupted by a daemon restart before an assistant response or tool result was durably recorded. Startup appends explicit aborted/error records to restore a valid provider transcript without replaying potentially completed side effects, while ambiguous session shapes remain blocked for manual inspection.
 
 ### Tests and release
 

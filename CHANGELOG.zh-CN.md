@@ -4,73 +4,44 @@
 
 ## [未发布]
 
-## [0.9.0-beta.10] - 2026-08-12
-
-### 新增
-
-- 新增频道级持久化活动会话指针，使 `/new`、fork 与 switch 选择在 daemon 重启后仍能恢复。活动引用提交前会先实体化 session 文件，因此首条用户消息也能立即持久化。
-- 新增可选的频道级项目作用域，通过 `security.json` 的 `projectAccess` 策略以及 `/project`、`/project set`、`/project reset` 管理。选定根目录在一个 runner generation 内冻结，并统一用于 prompt、内置工具、后台 job、子代理和审计记录；回合或委派工作仍在运行时拒绝切换项目。
-
-### 变更
-
-- 配置 `projectAccess` 后，项目感知的路径守卫会把 Pipiclaw 文件工具约束在当前项目根目录内。如果持久化目录消失、symlink 目标改变，或根目录超出 operator 更新后的允许列表，系统会 fail closed；界面同时明确区分应用级路径约束与宿主提供的系统级沙箱。
-
-### 修复
-
-- 修复 daemon 在 assistant 响应或工具结果持久化前重启导致 session 无法继续的问题。启动恢复会追加明确的 aborted/error 记录，在不重放可能已经生效的副作用前提下恢复合法的 provider transcript；无法确定的 session 结构仍会阻断并留待人工检查。
-
-## [0.9.0-beta.9] - 2026-08-12
-
-### 变更
-
-- 收敛运行时所有权，让每个长生命周期对象都只有一个权威来源。`prepareAppServices()` 现在持有唯一的 app 级 `PipiclawSettingsManager`，并注入到 runtime context 和每个 `ChannelRunner`，而不再由各自自行构造；`runner-factory` 移除了冗余的进程级 runner 缓存，改由 daemon 的 runtime map 作为唯一缓存，并由真正的 `AgentRunner.dispose()` 与有界 LRU 淘汰（`MAX_CACHED_RUNNERS=50`）支撑。
-- 引入传输无关的 `ChannelEvent`（`runtime/channel-event.ts`）；`DingTalkEvent` 变为它的 `type` 别名，合成唤醒的生产者不再伪造空的 `conversationId`（该字段现在是真正的可选字段）。`DingTalkEvent` 导出对嵌入方保持稳定。
-- 删除约 300 行 `settings.ts` 中失效的兼容 stub——空操作的 `AgentSession` 方法，以及未被使用的 `PackageSource`/`ThinkingBudgetsSettings`/`Settings`/`TransportSetting` 类型。
-- 通过 `shared/types.ts` 中的单一 `createEmptyUsageTotals()` 统一空 `UsageTotals` 的构造，取代各处重复的字面量与辅助函数。
-- 使 `withToolDetails` 成为唯一给工具结果打 `kind` 标记的位置（遵循 AGENTS.md）；各工具中手写的 `kind` 字段全部移除，`SubAgentToolDetails` 拆分为构造期字段与包装后消费方类型。
-- 将 `task-events.ts` 与 `task-schedule.ts` 从 `shared/` 移入 `tasks/`，匹配其唯一消费方所在域，并修正依赖方向。
-
-## [0.9.0-beta.8] - 2026-08-11
-
-### 变更
-
-- 统一外部子代理在正常运行、取消、超时和重启对账场景下的结算与验收路径。部分输出、用量、会话 ID、验收证明和估算时长现在会在所有结算路径中保留；派发启动失败则在当前回合直接返回，并附带可执行的诊断建议。
-- 调整内置子代理角色与外部 harness 的参数组装：Claude Code 会收到映射后的 effort，Codex CLI 可识别各种受支持写法中已有的模型与推理配置，结构化 harness 拒绝 shell 模式，角色的权限与资源声明也与其文档职责保持一致。
-- 以每日一次、保留七天的清理流程替代高频 host 级 run 扫描，并将 run 记录与 runtime 管理的产物一并删除。重启恢复现在会立即探测已接管进程、对账已持久化的取消状态，并通过 deadline 定时检查取代轮询。
-- 降低空闲 runtime 的 I/O：记忆维护会先用轻量到期 gate 过滤频道，再构造 runtime context；启用状态可在不重启的情况下生效，gate-skip 日志按作业去重。durable dispatch 会直接派发新建记录，并只在租约过半后持久化续租。
-
-### 修复
-
-- 加固委派链路在调用字段校验、外部记忆披露默认值、follow-up 角色指纹与上下文信封、workspace 写锁归属、进程树回收，以及完成/验收结果报告方面的一致性。
-- 统一进度条目图标、工具调用计数和投递状态标记。
-
-## [0.9.0-beta.2] - 2026-08-08
-
-### 新增
-
-- 为子代理与后台任务的完成唤醒引入结构化来源校验。生产者在事件上盖戳可信的 `internalWake` 信封并携带可持久化的 dispatch id，明文 `[JOB:]/[SUBAGENT:]` 文本降级为未认证候选声明。校验/可信谓词可阻止复制文本或外部 agent 的 stdout 伪造唤醒来推进任务。
-- 引入两阶段「claim→finish」唤醒消费协议，配合可持久化的一次性标记、按队列串行化，以及任务激活在传输层拒绝时回滚的原子写入。不可验证或重复的唤醒会被丢弃，durable 派发器在消费未完成时会重新投递。
-
-### 变更
-
-- 外部 Agent 派发改为硬审计门禁：`external-agent` 审计记录以严格模式（容量/IO 失败即抛）在 spawn 前同步写入，确保不会出现未被记录即启动的 run。
-- 子代理注册改为按 host 级串行化，消除跨频道并发边界竞态；workspace 写锁在所有 setup 失败路径（含 follow-up 在 spawn 前的失败）下都会释放。
-- `killProcessGroup` 不再在「脱离的子进程仍占用进程组」时跳过 `SIGKILL`；外部 run 现在尊重 register 与 spawn 之间的取消窗口，并在每次结算时回收进程组。
-- 用量记账现在会保留标记为成本/用量未知的条目，并在渲染时披露未知计数，避免把「未知」误读为「免费」。
-
-## [0.9.0-beta.1] - 2026-08-08
+## [0.9.0] - 2026-08-17
 
 ### 新增
 
 - 引入统一的子代理 run 生命周期，统一支持内置与外部 runtime 的注册、结算、用量记账、完成唤醒和取消；结算、记账与唤醒均具备幂等保护，并提供 120 秒同步宽限窗口。长时间委派会继续异步运行，`/stop` 不再连带终止已经派发的 run。
 - 新增 Claude Code、Codex CLI 和任意可执行程序的外部 Agent 支持。对应 harness 覆盖参数组装、NDJSON/stream-json 解析、脱离主进程的进程编排、重启恢复，以及可续接的 Claude Code/Codex CLI run 的 follow-up。
 - 新增 `subagent_manage` 工具和 `/subagents list|show|cancel` 控制面，并加入 workspace 写锁、频道级与全局在途并发上限，以及禁止代理写入自己的 `workspace/sub-agents/` 授权配置的防护。
+- 为子代理与后台任务的完成唤醒引入结构化来源校验。生产者在事件上盖戳可信的 `internalWake` 信封并携带可持久化的 dispatch id，明文 `[JOB:]/[SUBAGENT:]` 文本降级为未认证候选声明。校验/可信谓词可阻止复制文本或外部 agent 的 stdout 伪造唤醒来推进任务。
+- 引入两阶段「claim→finish」唤醒消费协议，配合可持久化的一次性标记、按队列串行化，以及任务激活在传输层拒绝时回滚的原子写入。不可验证或重复的唤醒会被丢弃，durable 派发器在消费未完成时会重新投递。
+- 新增频道级持久化活动会话指针，使 `/new`、fork 与 switch 选择在 daemon 重启后仍能恢复。活动引用提交前会先实体化 session 文件，因此首条用户消息也能立即持久化。
+- 新增可选的频道级项目作用域，通过 `security.json` 的 `projectAccess` 策略以及 `/project`、`/project set`、`/project reset` 管理。选定根目录在一个 runner generation 内冻结，并统一用于 prompt、内置工具、后台 job、子代理和审计记录；回合或委派工作仍在运行时拒绝切换项目。
 
 ### 变更
 
 - 现有 `subagent` 调用面同时支持配置好的外部角色和内置角色。异步 run 会返回 `runId`，完成后自动唤醒频道；任务台账可以等待 `external-signal`。
 - 产物 subject 哈希和验收现在会纳入未跟踪文件内容。内置验收仍具备强制写保护；外部验收明确标记为 advisory，并报告验收期间的工作区变化，供后续复核。
+- 外部 Agent 派发改为硬审计门禁：`external-agent` 审计记录以严格模式（容量/IO 失败即抛）在 spawn 前同步写入，确保不会出现未被记录即启动的 run。
+- 子代理注册改为按 host 级串行化，消除跨频道并发边界竞态；workspace 写锁在所有 setup 失败路径（含 follow-up 在 spawn 前的失败）下都会释放。
+- `killProcessGroup` 不再在「脱离的子进程仍占用进程组」时跳过 `SIGKILL`；外部 run 现在尊重 register 与 spawn 之间的取消窗口，并在每次结算时回收进程组。
+- 用量记账现在会保留标记为成本/用量未知的条目，并在渲染时披露未知计数，避免把「未知」误读为「免费」。
+- 统一外部子代理在正常运行、取消、超时和重启对账场景下的结算与验收路径。部分输出、用量、会话 ID、验收证明和估算时长现在会在所有结算路径中保留；派发启动失败则在当前回合直接返回，并附带可执行的诊断建议。
+- 调整内置子代理角色与外部 harness 的参数组装：Claude Code 会收到映射后的 effort，Codex CLI 可识别各种受支持写法中已有的模型与推理配置，结构化 harness 拒绝 shell 模式，角色的权限与资源声明也与其文档职责保持一致。
+- 以每日一次、保留七天的清理流程替代高频 host 级 run 扫描，并将 run 记录与 runtime 管理的产物一并删除。重启恢复现在会立即探测已接管进程、对账已持久化的取消状态，并通过 deadline 定时检查取代轮询。
+- 降低空闲 runtime 的 I/O：记忆维护会先用轻量到期 gate 过滤频道，再构造 runtime context；启用状态可在不重启的情况下生效，gate-skip 日志按作业去重。durable dispatch 会直接派发新建记录，并只在租约过半后持久化续租。
+- 收敛运行时所有权，让每个长生命周期对象都只有一个权威来源。`prepareAppServices()` 现在持有唯一的 app 级 `PipiclawSettingsManager`，并注入到 runtime context 和每个 `ChannelRunner`，而不再由各自自行构造；`runner-factory` 移除了冗余的进程级 runner 缓存，改由 daemon 的 runtime map 作为唯一缓存，并由真正的 `AgentRunner.dispose()` 与有界 LRU 淘汰（`MAX_CACHED_RUNNERS=50`）支撑。
+- 引入传输无关的 `ChannelEvent`（`runtime/channel-event.ts`）；`DingTalkEvent` 变为它的 `type` 别名，合成唤醒的生产者不再伪造空的 `conversationId`（该字段现在是真正的可选字段）。`DingTalkEvent` 导出对嵌入方保持稳定。
+- 删除约 300 行 `settings.ts` 中失效的兼容 stub——空操作的 `AgentSession` 方法，以及未被使用的 `PackageSource`/`ThinkingBudgetsSettings`/`Settings`/`TransportSetting` 类型。
+- 通过 `shared/types.ts` 中的单一 `createEmptyUsageTotals()` 统一空 `UsageTotals` 的构造，取代各处重复的字面量与辅助函数。
+- 使 `withToolDetails` 成为唯一给工具结果打 `kind` 标记的位置（遵循 AGENTS.md）；各工具中手写的 `kind` 字段全部移除，`SubAgentToolDetails` 拆分为构造期字段与包装后消费方类型。
+- 将 `task-events.ts` 与 `task-schedule.ts` 从 `shared/` 移入 `tasks/`，匹配其唯一消费方所在域，并修正依赖方向。
+- 配置 `projectAccess` 后，项目感知的路径守卫会把 Pipiclaw 文件工具约束在当前项目根目录内。如果持久化目录消失、symlink 目标改变，或根目录超出 operator 更新后的允许列表，系统会 fail closed；界面同时明确区分应用级路径约束与宿主提供的系统级沙箱。
 - 更新子代理文档、委派 playbook、架构说明，以及面向内置和外部工作流的可复制角色示例。
+
+### 修复
+
+- 加固委派链路在调用字段校验、外部记忆披露默认值、follow-up 角色指纹与上下文信封、workspace 写锁归属、进程树回收，以及完成/验收结果报告方面的一致性。
+- 统一进度条目图标、工具调用计数和投递状态标记。
+- 修复 daemon 在 assistant 响应或工具结果持久化前重启导致 session 无法继续的问题。启动恢复会追加明确的 aborted/error 记录，在不重放可能已经生效的副作用前提下恢复合法的 provider transcript；无法确定的 session 结构仍会阻断并留待人工检查。
 
 ### 测试与发布
 
