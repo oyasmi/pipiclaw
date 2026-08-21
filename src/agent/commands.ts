@@ -191,6 +191,7 @@ export const SESSION_COMMANDS: readonly CommandSpec[] = [
 		name: "new",
 		description: "开启新会话",
 		examples: ["/new"],
+		availableWhileBusy: true,
 	},
 	{
 		name: "compact",
@@ -225,7 +226,8 @@ export function isRunnerBuiltInCommand(command: BuiltInCommand): command is Runn
 
 /** Comma-separated list of commands usable while a task is streaming (names only). */
 export function formatBusyCommandList(): string {
-	return BUILT_IN_COMMANDS.filter((command) => command.availableWhileBusy)
+	return [...BUILT_IN_COMMANDS, ...SESSION_COMMANDS]
+		.filter((command) => command.availableWhileBusy)
 		.map((command) => `\`/${command.name}\``)
 		.join(", ");
 }

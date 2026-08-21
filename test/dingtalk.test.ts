@@ -97,6 +97,7 @@ function createHandler(overrides: Partial<DingTalkHandler> = {}): DingTalkHandle
 		isRunning: vi.fn(() => false),
 		handleEvent: vi.fn(async () => {}),
 		handleStop: vi.fn(async () => ({})),
+		handleNewSession: vi.fn(async () => {}),
 		runRuntimeCommand: vi.fn(async () => ""),
 		handleBusyMessage: vi.fn(async () => ({ kind: "handled" as const })),
 		...overrides,
@@ -450,6 +451,27 @@ describe("dingtalk", () => {
 		expect(reply).toContain("当前已有回合在运行");
 		expect(reply).toContain("`/status`");
 		expect(reply).toContain("`/model`");
+	});
+
+	it("routes /new around a busy turn instead of rejecting or queueing it", async () => {
+		const handleNewSession = vi.fn(async () => {});
+		const { bot, handler } = createBot({
+			isRunning: vi.fn(() => true),
+			handleNewSession,
+		});
+		const privateApi = getPrivateApi(bot);
+
+		await privateApi.onStreamMessage({
+			text: { content: "/new" },
+			senderStaffId: "staff_1",
+			senderNick: "Alice",
+			conversationId: "conv_1",
+			conversationType: "1",
+		});
+
+		expect(handleNewSession).toHaveBeenCalledWith(expect.objectContaining({ text: "/new" }), bot);
+		expect(handler.handleBusyMessage).not.toHaveBeenCalled();
+		expect(handler.handleEvent).not.toHaveBeenCalled();
 	});
 
 	it("requeues a busy plain message as normal work when the busy window has closed", async () => {

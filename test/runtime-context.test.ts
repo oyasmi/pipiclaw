@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getActiveSessionRefPath } from "../src/runtime/active-session-store.js";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/runtime/app-home.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import type { DingTalkBot, DingTalkConfig, DingTalkHandler } from "../src/runtime/dingtalk.js";
@@ -59,6 +60,10 @@ class FakeTestBot {
 	discardCard = vi.fn((channelId: string) => {
 		this.deliveries.push({ method: "discardCard", args: [channelId] });
 	});
+	resetChannelQueue = vi.fn((channelId: string) => {
+		this.deliveries.push({ method: "resetChannelQueue", args: [channelId] });
+		return 0;
+	});
 }
 
 function createDmEvent(text: string, ts: string) {
@@ -79,6 +84,34 @@ afterEach(() => {
 });
 
 describe("createRuntimeContext", () => {
+	it("creates /new out of band and commits an empty active session", async () => {
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+		const bot = new FakeTestBot();
+		const runtime = await createRuntimeContext({
+			paths,
+			dingtalkConfig: {
+				clientId: "client-id",
+				clientSecret: "client-secret",
+				stateDir: paths.workspaceDir,
+			},
+			registerSignalHandlers: false,
+			startServices: false,
+			createBot: () => bot as unknown as DingTalkBot,
+			createEventsWatcher: () => ({ start() {}, stop() {} }),
+		});
+
+		await runtime.handler.handleNewSession(createDmEvent("/new", "1000"), bot as unknown as DingTalkBot);
+
+		const refPath = getActiveSessionRefPath(join(paths.workspaceDir, "dm_tester"));
+		const ref = JSON.parse(readFileSync(refPath, "utf-8"));
+		expect(ref).toMatchObject({ version: 1, sessionId: expect.any(String), file: expect.stringMatching(/\.jsonl$/) });
+		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dm_tester");
+		expect(bot.sendPlain).toHaveBeenCalledWith("dm_tester", expect.stringContaining(ref.sessionId));
+
+		await runtime.shutdown();
+	});
+
 	it("creates a reusable handler with a real store and processes built-in commands", async () => {
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);

@@ -208,6 +208,8 @@ export class ChannelRunner implements AgentRunner {
 	 * whichever turn started in the meantime.
 	 */
 	private abandonedTurns = 0;
+	/** Set once transport-level `/new` replaces this generation. A retired runner is never reused. */
+	private retired = false;
 	/** When the primary model last failed and we switched to the backup. null = on primary. */
 	private primaryFailedAt: number | null = null;
 
@@ -903,6 +905,41 @@ export class ChannelRunner implements AgentRunner {
 
 	async abort(): Promise<void> {
 		await this.session.abort();
+	}
+
+	isCompacting(): boolean {
+		return this.session?.isCompacting ?? false;
+	}
+
+	interruptCompaction(): boolean {
+		if (!this.session?.isCompacting) return false;
+		this.session.abortCompaction();
+		return true;
+	}
+
+	retireForNewSession(): void {
+		if (this.retired) return;
+		this.retired = true;
+		if (this.session) {
+			this.memoryLifecycle.noteNewSessionBoundary();
+		}
+		// close() marks the delivery context closed synchronously before awaiting its drain,
+		// so late events from the old provider cannot overwrite the new session's response.
+		void this.runState.ctx?.close().catch(() => undefined);
+		this.forceEndTurn("superseded by /new");
+
+		const retireLiveSession = (): void => {
+			this.sessionUnsubscribe?.();
+			this.sessionUnsubscribe = undefined;
+			this.session.dispose();
+		};
+		if (this.session) {
+			retireLiveSession();
+		} else {
+			// A second message can issue `/new` while this generation is still initializing.
+			// Let construction settle in the background, then immediately tear it down.
+			void this.sessionReady.then(retireLiveSession, () => undefined);
+		}
 	}
 
 	/**

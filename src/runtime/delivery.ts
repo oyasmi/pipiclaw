@@ -73,7 +73,7 @@ class ChannelDeliveryController {
 			respondPlain: async (text: string, shouldLog = true) => this.sendFinal(text, shouldLog),
 			replaceMessage: async (text: string) => this.replaceWithFinal(text),
 			respondInThread: async (text: string) => {
-				if (!text.trim()) {
+				if (this.closed || !text.trim()) {
 					return;
 				}
 				const delivered = await this.bot.sendPlain(this.event.channelId, text);

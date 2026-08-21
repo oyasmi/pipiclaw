@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type ActiveSessionRefV1,
 	commitActiveSessionRef,
+	createFreshActiveSession,
 	getActiveSessionRefPath,
 	resolveActiveSessionFile,
 } from "../src/runtime/active-session-store.js";
@@ -80,6 +81,19 @@ describe("resolveActiveSessionFile", () => {
 });
 
 describe("commitActiveSessionRef", () => {
+	it("creates a header-backed fresh session before switching the active ref", async () => {
+		const channelDir = makeTempDir();
+
+		const result = await createFreshActiveSession(channelDir, channelDir);
+
+		const ref = readRef(channelDir);
+		expect(ref.sessionId).toBe(result.sessionId);
+		const sessionFile = join(channelDir, ref.file);
+		expect(existsSync(sessionFile)).toBe(true);
+		const header = JSON.parse(readFileSync(sessionFile, "utf-8").split("\n")[0] as string);
+		expect(header).toMatchObject({ type: "session", id: result.sessionId });
+	});
+
 	it("writes a ref pointing at the session's own file, atomically", async () => {
 		const channelDir = makeTempDir();
 		const manager = SessionManager.open(join(channelDir, "next.jsonl"), channelDir);

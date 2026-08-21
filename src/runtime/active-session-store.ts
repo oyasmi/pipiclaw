@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 
 /**
@@ -128,4 +129,30 @@ export async function commitActiveSessionRef(channelDir: string, session: Sessio
 		updatedAt: new Date().toISOString(),
 	};
 	await writeFileAtomically(getActiveSessionRefPath(channelDir), `${JSON.stringify(ref, null, 2)}\n`);
+}
+
+/**
+ * Create a durable empty session and atomically make it active for a channel.
+ *
+ * This deliberately does not touch a live AgentSession. It is the transport-level `/new`
+ * primitive: a wedged provider request or compaction in the old runner cannot delay the
+ * commit. Materializing and reopening the file makes the SDK write the session header before
+ * the active ref points at it, preserving the same file-before-pointer ordering as normal SDK
+ * topology changes.
+ */
+export async function createFreshActiveSession(channelDir: string, cwd: string): Promise<{ sessionId: string }> {
+	const provisional = SessionManager.create(cwd, channelDir);
+	const sessionFile = provisional.getSessionFile();
+	if (!sessionFile) {
+		throw new Error("Cannot create a new session: the SDK did not allocate a backing file.");
+	}
+	const resolvedDir = resolve(channelDir);
+	const resolvedFile = resolve(sessionFile);
+	if (dirname(resolvedFile) !== resolvedDir) {
+		throw new Error(`New session file must live directly under the channel directory: ${sessionFile}`);
+	}
+	materializeSessionFile(channelDir, basename(resolvedFile));
+	const durable = SessionManager.open(resolvedFile, channelDir, cwd);
+	await commitActiveSessionRef(channelDir, durable);
+	return { sessionId: durable.getSessionId() };
 }

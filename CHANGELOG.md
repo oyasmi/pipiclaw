@@ -4,6 +4,22 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.1-beta.1] - 2026-08-21
+
+### Changed
+
+- Made compaction subordinate to new user work. A message arriving while context summarization is running now cancels compaction and is retained as the next normal turn instead of steering a disconnected agent loop or recursively starting another compaction.
+- Made DingTalk `/new` an out-of-band session boundary. It bypasses the busy check, the old SDK session, and the old channel queue; creates and commits a header-backed empty session atomically; then retires the previous runner, queue, delivery context, and card without waiting for the old provider request. Consecutive resets are serialized per channel, while outgoing-session memory consolidation continues in the background.
+
+### Fixed
+
+- Bounded standalone compaction-summary input according to the model context window, with conservative unit and character ceilings and head/tail retention. Oversized middle content is omitted only after durable channel memory has been refreshed, preventing provider `Prompt too long` failures from repeatedly wedging the channel.
+- Prevented late delivery from a retired turn from overwriting the response of a newly created session. If the new session cannot be committed, the active pointer and old runner remain authoritative and `/new` returns an actionable retry message.
+
+### Tests and release
+
+- Added regression coverage for oversized compaction input, interrupting compaction with new work, busy-time `/new`, atomic fresh-session persistence, and detaching a wedged runner and its pending queue.
+
 ## [0.9.0] - 2026-08-17
 
 ### Added

@@ -76,6 +76,10 @@ class FakeTestBot {
 		this.deliveries.push({ method: "clearPendingMessages", args: [channelId] });
 		return 0;
 	});
+	resetChannelQueue = vi.fn((channelId: string) => {
+		this.deliveries.push({ method: "resetChannelQueue", args: [channelId] });
+		return 0;
+	});
 }
 
 afterEach(() => {
@@ -84,6 +88,76 @@ afterEach(() => {
 });
 
 describe("runtime stop handling", () => {
+	it("interrupts compaction for new work and lets /new detach the busy generation immediately", async () => {
+		const retireForNewSession = vi.fn();
+		const interruptCompaction = vi.fn(() => true);
+		const runner: AgentRunner = {
+			renderContextReport: () => "CONTEXT",
+			getSubAgentDiscoverySnapshot: () => ({ directory: "", agents: [], warnings: [] }),
+			run: vi.fn(async () => ({ stopReason: "stop" })),
+			handleBuiltinCommand: vi.fn(async () => {}),
+			isKnownSlashCommand: vi.fn(() => false),
+			queueSteer: vi.fn(async () => {}),
+			flushMemoryForShutdown: vi.fn(async () => {}),
+			dispose: vi.fn(async () => {}),
+			getMemoryMaintenanceContext: vi.fn(async () => {
+				throw new Error("not used");
+			}),
+			getStatusSnapshot: vi.fn(() => ({
+				model: "test/model",
+				contextTokens: 180_000,
+				contextWindow: 200_000,
+				thinkingLevel: "off",
+			})),
+			abort: vi.fn(async () => {}),
+			interruptCompaction,
+			retireForNewSession,
+			...createFakeTurnState(),
+		};
+		createRunnerMock.mockReturnValue(runner);
+
+		const { createRuntimeContext } = await import("../src/runtime/bootstrap.js");
+		const paths = createBootstrapPaths();
+		bootstrapAppHome(paths);
+		const bot = new FakeTestBot();
+		const runtime = await createRuntimeContext({
+			paths,
+			dingtalkConfig: {
+				clientId: "client-id",
+				clientSecret: "client-secret",
+				stateDir: paths.workspaceDir,
+			},
+			registerSignalHandlers: false,
+			startServices: false,
+			createBot: () => bot as unknown as DingTalkBot,
+			createEventsWatcher: () => ({ start() {}, stop() {} }),
+		});
+		const event = {
+			type: "dm",
+			channelId: "dm_tester",
+			ts: "1000",
+			user: "tester",
+			userName: "Tester",
+			text: "new work",
+			conversationId: "conv_1",
+			conversationType: "1",
+		} as const;
+		runtime.handler.reserveEvent?.(event);
+
+		await expect(
+			runtime.handler.handleBusyMessage(event, bot as unknown as DingTalkBot, "steer", event.text),
+		).resolves.toEqual({ kind: "requeue", text: "new work" });
+		expect(interruptCompaction).toHaveBeenCalledOnce();
+		expect(runner.queueSteer).not.toHaveBeenCalled();
+
+		await runtime.handler.handleNewSession({ ...event, text: "/new" }, bot as unknown as DingTalkBot);
+		expect(retireForNewSession).toHaveBeenCalledOnce();
+		expect(runtime.handler.isRunning("dm_tester")).toBe(false);
+		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dm_tester");
+
+		await runtime.shutdown();
+	});
+
 	it("discards the active card when a running task is stopped", async () => {
 		let releaseRun!: () => void;
 		let signalRunStarted!: () => void;

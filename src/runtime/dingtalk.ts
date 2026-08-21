@@ -16,6 +16,7 @@ import {
 	parseBuiltInCommand,
 	type RuntimeCommandName,
 	renderBuiltInHelp,
+	slashCommandName,
 } from "../agent/commands.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -143,6 +144,8 @@ export interface DingTalkHandler {
 	reserveEvent?(event: DingTalkEvent): void;
 	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
 	handleStop(channelId: string, bot: DingTalkBot): Promise<StopOutcome>;
+	/** `/new` bypasses the old per-channel queue and live SDK session. */
+	handleNewSession(event: DingTalkEvent, bot: DingTalkBot): Promise<void>;
 	/**
 	 * Render one of the stateless report commands (events/tasks/status/usage/context/subagents) to
 	 * text. Single dispatch point shared by the busy-turn switch below and bootstrap's idle-turn
@@ -1349,6 +1352,14 @@ export class DingTalkBot implements MediaSender {
 		const builtInCommand = parseBuiltInCommand(content);
 		const isSlashCommand = content.trim().startsWith("/");
 
+		// `/new` is an emergency boundary as well as a session command. Route it before
+		// busy checking and before the old channel queue, so a wedged compaction/provider
+		// request cannot prevent recovery.
+		if (slashCommandName(content) === "new") {
+			await this.handler.handleNewSession(event, this);
+			return;
+		}
+
 		// Check if busy
 		if (this.handler.isRunning(channelId)) {
 			// All built-in transport commands are usable while a task streams.
@@ -1394,12 +1405,12 @@ export class DingTalkBot implements MediaSender {
 				}
 			}
 
-			// Session commands (/model, /new, …) and unknown slash commands cannot
+			// Other session commands (/model, /compact, …) and unknown slash commands cannot
 			// run mid-turn: they would need the idle session layer.
 			if (isSlashCommand) {
 				await this.sendPlain(
 					channelId,
-					`当前已有回合在运行。运行中可用：${formatBusyCommandList()}。会话命令（\`/model\`、\`/new\`、\`/compact\`、\`/session\`）需要等空闲后再用。`,
+					`当前已有回合在运行。运行中可用：${formatBusyCommandList()}。会话命令（\`/model\`、\`/compact\`、\`/session\`）需要等空闲后再用。`,
 				);
 				return;
 			}
@@ -1422,6 +1433,19 @@ export class DingTalkBot implements MediaSender {
 	clearPendingMessages(channelId: string): number {
 		const queue = this.queues.get(channelId);
 		return queue ? queue.clearPending() : 0;
+	}
+
+	/**
+	 * Detach all queued work from the previous session generation. The in-flight callback may
+	 * still unwind on its old queue object, while subsequent messages get a fresh queue.
+	 */
+	resetChannelQueue(channelId: string): number {
+		const queue = this.queues.get(channelId);
+		const dropped = queue?.clearPending() ?? 0;
+		queue?.stop();
+		this.queues.delete(channelId);
+		this.discardCard(channelId);
+		return dropped;
 	}
 
 	private getQueue(channelId: string): ChannelQueue {

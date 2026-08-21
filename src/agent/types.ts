@@ -60,6 +60,12 @@ export interface AgentRunner {
 	 *  already discovered, without forcing a rescan. */
 	getSubAgentDiscoverySnapshot(): SubAgentDiscoveryResult;
 	abort(): Promise<void>;
+	/** True when the SDK is currently summarizing context. */
+	isCompacting?(): boolean;
+	/** Cancel context summarization synchronously; returns whether one was active. */
+	interruptCompaction?(): boolean;
+	/** Permanently retire this runner generation after an out-of-band `/new`. */
+	retireForNewSession?(): void;
 	/**
 	 * Synchronously reserve the turn for a message. Transports MUST call this in
 	 * the same tick they dequeue the message, before any await, so a concurrent

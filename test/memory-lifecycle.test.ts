@@ -20,7 +20,7 @@ vi.mock("../src/memory/review-log.js", () => ({
 }));
 
 import { runInlineConsolidation } from "../src/memory/consolidation.js";
-import { MemoryLifecycle } from "../src/memory/lifecycle.js";
+import { boundCompactionMessages, MemoryLifecycle } from "../src/memory/lifecycle.js";
 import { updateChannelSessionMemory } from "../src/memory/session.js";
 
 afterEach(() => {
@@ -92,6 +92,25 @@ function createSettings(
 }
 
 describe("MemoryLifecycle", () => {
+	it("bounds an oversized compaction request while retaining its head and tail", () => {
+		const head = "ORIGINAL_GOAL ";
+		const middle = "中".repeat(20_000);
+		const tail = " CURRENT_STATE";
+		const result = boundCompactionMessages(
+			[{ role: "user", content: `${head}${middle}${tail}`, timestamp: Date.now() }] as never[],
+			16_000,
+			4_000,
+		);
+
+		expect(result.truncated).toBe(true);
+		expect(result.boundedChars).toBeLessThan(result.originalChars);
+		expect(result.messages).toHaveLength(1);
+		const boundedText = (result.messages[0] as { content: Array<{ text: string }> }).content[0]?.text ?? "";
+		expect(boundedText).toContain("ORIGINAL_GOAL");
+		expect(boundedText).toContain("CURRENT_STATE");
+		expect(boundedText).toContain("middle omitted");
+	});
+
 	it("waits for the forced compaction refresh before running inline consolidation", async () => {
 		let resolveUpdate: (() => void) | undefined;
 		vi.mocked(updateChannelSessionMemory).mockImplementation(

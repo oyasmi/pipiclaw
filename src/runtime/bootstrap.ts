@@ -20,6 +20,7 @@ import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import { defaultModel } from "../models/utils.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { flushSecurityLogs } from "../security/logger.js";
+import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import { PipiclawSettingsManager } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { fileStamp } from "../shared/file-stamp.js";
@@ -36,6 +37,7 @@ import { finishTaskAttempt, type WakeTaskTransitionHooks } from "../tasks/store.
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
+import { createFreshActiveSession } from "./active-session-store.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -63,6 +65,7 @@ import { DurableDispatchService } from "./durable-dispatch.js";
 import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
 import { handleProjectCommand as runProjectCommand } from "./project-commands.js";
+import { resolveProjectScope } from "./project-scope-store.js";
 import { installLlmProxy } from "./proxy.js";
 import { ChannelStore } from "./store.js";
 import { handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
@@ -251,6 +254,7 @@ export async function createRuntimeContext(
 	const startedAt = Date.now();
 	const cliVersion = readCliVersion();
 	const channelRunners = new Map<string, AgentRunner>();
+	const sessionResetChains = new Map<string, Promise<void>>();
 	const activeTasks = new Set<Promise<void>>();
 	/** Channels with a `/stop` watchdog in flight, so a burst of `/stop` starts only one. */
 	const stopWatchdogs = new Set<string>();
@@ -382,6 +386,80 @@ export async function createRuntimeContext(
 			return { pausedTaskId };
 		},
 
+		async handleNewSession(event: ChannelEvent, _bot: DingTalkBot): Promise<void> {
+			if (shuttingDown) return;
+			const previous = sessionResetChains.get(event.channelId) ?? Promise.resolve();
+			const reset = previous
+				.catch(() => undefined)
+				.then(async () => {
+					try {
+						const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
+						ensureChannelMemoryFilesSync(channelDir);
+						const access = resolveProjectAccessPolicy(
+							loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config,
+							process.cwd(),
+						);
+						const scope = resolveProjectScope(channelDir, access);
+						if (scope.kind === "blocked") {
+							throw new Error(scope.reason);
+						}
+
+						// The empty session file and active pointer are committed before the old
+						// generation is touched. A filesystem failure therefore leaves the live
+						// session authoritative and retryable.
+						const result = await createFreshActiveSession(channelDir, scope.scope.projectRoot);
+						const oldRunner = channelRunners.get(event.channelId);
+						if (oldRunner) {
+							channelRunners.delete(event.channelId);
+							try {
+								oldRunner.retireForNewSession?.();
+							} catch (error) {
+								// The active pointer already names the new session. Retirement is
+								// best-effort cleanup and must not misreport the committed reset as failed.
+								log.logWarning(
+									`[${event.channelId}] Old runner retirement failed after /new`,
+									errorMessage(error),
+								);
+							}
+						}
+						const dropped = _bot.resetChannelQueue(event.channelId);
+						if (dropped > 0) {
+							log.logInfo(`[${event.channelId}] /new discarded ${dropped} queued old-session message(s)`);
+						}
+						await _bot.sendPlain(event.channelId, `已开启新会话。\n\nSession ID: \`${result.sessionId}\``);
+						void archiveIncomingMessage(
+							event.channelId,
+							{
+								date: new Date().toISOString(),
+								ts: event.ts,
+								user: event.user,
+								userName: event.userName,
+								text: event.text,
+								isBot: false,
+							},
+							"/new command",
+						);
+					} catch (error) {
+						const message = errorMessage(error);
+						log.logWarning(`[${event.channelId}] Failed to create a fresh session`, message);
+						await _bot.sendPlain(
+							event.channelId,
+							`新会话创建失败：${message}\n\n旧会话仍保持不变；请重试 \`/new\`。`,
+						);
+					}
+				});
+			sessionResetChains.set(event.channelId, reset);
+			activeTasks.add(reset);
+			try {
+				await reset;
+			} finally {
+				activeTasks.delete(reset);
+				if (sessionResetChains.get(event.channelId) === reset) {
+					sessionResetChains.delete(event.channelId);
+				}
+			}
+		},
+
 		async runRuntimeCommand(event: ChannelEvent, name: RuntimeCommandName, args: string): Promise<string> {
 			switch (name) {
 				case "events":
@@ -490,6 +568,14 @@ export async function createRuntimeContext(
 				const commandName = mode === "followUp" ? "followup" : "steer";
 				await bot.sendPlain(event.channelId, `无法排队：/${commandName} 需要带上消息内容。`);
 				return { kind: "handled" };
+			}
+
+			// Compaction is maintenance, not user work. A new message cancels it and is
+			// kept as a normal queued turn instead of trying to steer an agent loop that
+			// is currently disconnected for summarization.
+			if (runner.interruptCompaction?.()) {
+				log.logInfo(`[${event.channelId}] Interrupted compaction for a new user message`);
+				return { kind: "requeue", text: trimmedQueueText };
 			}
 
 			if (mode === "followUp") {

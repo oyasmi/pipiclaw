@@ -8,9 +8,11 @@ import type {
 	SessionEntry,
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 import * as log from "../log.js";
 import type { PipiclawSessionMemorySettings } from "../settings.js";
 import { formatLocalTime } from "../shared/local-time.js";
+import { clipTextByPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import {
@@ -32,6 +34,61 @@ import {
 } from "./source-window.js";
 
 export type ConsolidationReason = "compaction" | "new-session" | "idle" | "shutdown";
+
+const COMPACTION_INPUT_MAX_UNITS = 48_000;
+const COMPACTION_INPUT_MIN_UNITS = 4_000;
+const COMPACTION_INPUT_CHARS_PER_TOKEN = 3;
+const COMPACTION_INPUT_HEAD_RATIO = 0.35;
+
+/**
+ * Bound one standalone summarization request. Provider limits can be lower than a model's
+ * advertised context window; sending the whole pre-compaction transcript is therefore not safe.
+ * The head preserves the original goal and the larger tail preserves current work. Durable
+ * memory is refreshed before this runs, so the omitted middle is still available outside the
+ * provider request.
+ */
+export function boundCompactionMessages(
+	messages: AgentMessage[],
+	contextWindow: number,
+	reserveTokens: number,
+): { messages: AgentMessage[]; truncated: boolean; originalChars: number; boundedChars: number } {
+	if (messages.length === 0) {
+		return { messages, truncated: false, originalChars: 0, boundedChars: 0 };
+	}
+	const safeWindow = Number.isFinite(contextWindow) && contextWindow > 0 ? Math.floor(contextWindow) : 128_000;
+	const safeReserve = Number.isFinite(reserveTokens) && reserveTokens > 0 ? Math.floor(reserveTokens) : 16_384;
+	const maxUnits = Math.min(
+		COMPACTION_INPUT_MAX_UNITS,
+		Math.max(COMPACTION_INPUT_MIN_UNITS, safeWindow - safeReserve - 8_192),
+	);
+	const serialized = serializeConversation(convertToLlm(messages));
+	const clipped = clipTextByPromptUnits(serialized, maxUnits, {
+		headRatio: COMPACTION_INPUT_HEAD_RATIO,
+		maxChars: maxUnits * COMPACTION_INPUT_CHARS_PER_TOKEN,
+		marker:
+			"\n\n[... middle omitted from this compaction request; durable channel memory was refreshed before compaction ...]\n\n",
+	});
+	if (!clipped.truncated) {
+		return {
+			messages,
+			truncated: false,
+			originalChars: serialized.length,
+			boundedChars: serialized.length,
+		};
+	}
+	return {
+		messages: [
+			{
+				role: "user",
+				content: [{ type: "text", text: clipped.text }],
+				timestamp: Date.now(),
+			},
+		],
+		truncated: true,
+		originalChars: serialized.length,
+		boundedChars: clipped.text.length,
+	};
+}
 
 export interface MemoryLifecycleOptions {
 	channelId: string;
@@ -359,6 +416,21 @@ export class MemoryLifecycle {
 			this.options.getSessionEntries(),
 			event.preparation.firstKeptEntryId,
 		);
+
+		const model = this.options.getModel();
+		for (const key of ["messagesToSummarize", "turnPrefixMessages"] as const) {
+			const bounded = boundCompactionMessages(
+				event.preparation[key] ?? [],
+				model.contextWindow,
+				event.preparation.settings?.reserveTokens ?? 16_384,
+			);
+			if (!bounded.truncated) continue;
+			event.preparation[key] = bounded.messages;
+			log.logWarning(
+				`[${this.options.channelId}] Bounded oversized compaction input (${key})`,
+				`${bounded.originalChars} -> ${bounded.boundedChars} chars; model=${model.provider}/${model.id}`,
+			);
+		}
 	}
 
 	private handleSessionCompact(_event: SessionCompactEvent): void {
@@ -369,7 +441,11 @@ export class MemoryLifecycle {
 		if (event.reason !== "new") {
 			return;
 		}
+		this.noteNewSessionBoundary();
+	}
 
+	/** Snapshot the outgoing state for an out-of-band `/new` before its runner is retired. */
+	noteNewSessionBoundary(): void {
 		// Snapshot the outgoing session synchronously: the switch has not happened
 		// yet, so getMessages()/getSessionEntries() still reference the session that
 		// is about to be replaced. Once we yield, this.session is rebound to the new
@@ -389,6 +465,7 @@ export class MemoryLifecycle {
 			const message = errorMessage(error);
 			log.logWarning(`[${this.options.channelId}] Background new-session consolidation rejected`, message);
 		});
+		this.recordActivity("boundary");
 	}
 
 	/** Await any in-flight detached new-session consolidation (shutdown/tests). */
