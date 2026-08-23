@@ -373,7 +373,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`，主代理用返回的 runId 调 `task_manage verify` 导入；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 - **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
 
-> `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合 `request-verification` / `complete`——见 [events-and-tasks.md](./events-and-tasks.md#control-与恢复事实)。
+> `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合派发、停泊与 `complete`——见 [events-and-tasks.md](./events-and-tasks.md#verification)。
 
 ## 授权与安全边界（外部角色）
 

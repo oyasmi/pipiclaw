@@ -148,10 +148,9 @@ supervisorctl tail -f pipiclaw
 排障不必先"问 agent"。下面这些命令由传输层直接读文件渲染，不触发 LLM 回合，忙碌时也可用：
 
 - `/status` —— 执行状态、当前模型、上下文用量、运行时长、版本
-- `/usage [7d|month]` —— 本通道与全局的 LLM 成本与 token，按类型和 Top 模型拆分（本地模型成本为 0，但 token 仍然记账）
-- `/tasks stats [id]` —— 任务的 attempt、token、成本与验收统计
+- `/usage [7d|month]` —— 本通道与全局的 LLM 成本与 token，按类型和 Top 模型拆分（本地模型成本为 0，但 token 仍然记账）；账本里每条记录还带 `taskId`，任务本身不再记账目
 - `/tasks doctor` —— 任务台账与事件一致性的只读体检，每条问题附下一步建议
-- `/tasks set <id> <字段> <值>` —— 直接改 wake / next / priority / attempts / deadline，不花一个 LLM 回合
+- `/tasks set <id> <字段> <值>` —— 直接改 wake / next / deadline，不花一个 LLM 回合
 - `/subagents` —— 运行中的委派、最近结果和角色可用性摘要
 - `/subagents show <runId>` / `output <runId>` —— 实际 argv、工作目录、stderr 与文本产出
 - `/subagents cancel <runId|all>` —— 不经过模型，直接终止委派

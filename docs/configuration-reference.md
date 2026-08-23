@@ -218,7 +218,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 自主长程任务总开关（`tools.tasks`）
 
-`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：`task_manage` 工具（agent 维护[任务台账](./events-and-tasks.md)：create/progress/set/request-verification/verify/complete/skip/cancel/list）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
+`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：`task_manage` 工具（agent 维护[任务台账](./events-and-tasks.md)：create/progress/set/verify/complete/skip/cancel/list）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
 
 ```jsonc
 {

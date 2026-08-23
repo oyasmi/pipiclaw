@@ -81,8 +81,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 /tasks pause <id>
 /tasks resume <id>
 /tasks run <id>
-/tasks set <id> <wake|next|priority|attempts|deadline> <值>
-/tasks stats [id]
+/tasks set <id> <wake|next|deadline> <值>
 /tasks doctor
 ```
 

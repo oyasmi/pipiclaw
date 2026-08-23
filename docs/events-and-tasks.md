@@ -341,7 +341,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 事件解决“什么时候唤醒”，任务台账保存“为什么做、做到哪、下一步是什么”。Task 创建即持续委托：只要任务仍在活动目录且 enabled=true，runtime 会按任务状态和 wake 继续推进。外部动作不产生额外的人工作业流；模型必须遵守任务 Goal、能力配置、真实状态查询和幂等约束。
 
-本节以 Task v2 为准，取代早期任务设计；旧文件由 reader 保守读取，成功写入后统一输出 v2。
+本节以 Task v3 为准。reader 只认当前契约——`control.version` 必须是 3，其他值一律 `controlReadable: false`（fail-open，交给 `/tasks doctor` 引导修复）。旧格式的兼容解析只存在于启动迁移里：daemon 每次启动都会扫描活动目录，把还停在旧 `control.version` 或旧 `status` 词表上的任务文件原地升级，不依赖一次性标记文件——所以即使是手改回旧格式的文件，也会在下一次启动时自愈。
 
 ## 任务模型
 
@@ -365,8 +365,7 @@ status: waiting
 enabled: true
 wake: 2026-08-04T14:00:00+08:00
 schedule: 0 9 * * 1
-recurrence: 每周一
-control: {"version":2,"priority":"high","waitingFor":"time","budget":{"maxAttempts":12},"usage":{"attempts":2,"tokens":18420,"costUsd":0.42,"costKnown":true,"wallTimeMinutes":16.3},"verification":{"required":true,"status":"pending"},"attemptGeneration":2,"lastOutcome":"progress","nextAction":"检查草稿反馈"}
+control: {"version":3,"waitingFor":"time","verification":{"required":true,"status":"pending"},"nextAction":"检查草稿反馈"}
 ---
 
 # 周报编写与发布
@@ -395,23 +394,25 @@ Independent verification: required
 
 ### Frontmatter 契约
 
-- `status` 必须是 `active`、`waiting` 或 `sleeping`。旧版本字段只在 reader/migration 中识别，不会成为新的写入值。
+- `status` 必须是 `active`、`waiting` 或 `sleeping`；reader 对其他值一律 fail-open 为 `active`，不再像旧版本那样把 `blocked`/`awaiting-user`/`done` 等 v1 词汇当场翻译成对应状态——那套翻译表只存在于启动迁移里，负责把文件原地升级，读路径本身不再猜测。
 - `enabled` 缺省按 `true` 读取。false 时 driver 永不 dispatch；`control.stop` 保存 actor、reason、at。
 - `wake` 是本地时间或带偏移时间。active 写入 future wake 会规范成 waiting + `waitingFor: time`；waiting 无 wake 是 signal parked，driver 不轮询。
 - `schedule` 是按主机时区解释的五字段 cron，存在时任务是 recurring；sleeping 必须同时有合法 schedule 和作为下一 occurrence 的 wake。
-- `recurrence` 只是给人看的注释。
-- `control` 是单行 JSON，v2 字段包括 priority、deadline、nextAction、blockedReason、waitingFor、budget、usage、verification、attemptGeneration、lastOutcome、lastStartedAt、lastFinishedAt、cycleId、stop 和 provenance。
+- `control` 是单行 JSON，`version` 必须是 `3`；其余字段只有 `deadline`、`nextAction`、`waitingFor`、`verification`、`cycleId`、`stop` 六个。
 - 归档 frontmatter 只需 `outcome: completed|cancelled` 与 `closedAt`；活动任务不写 archive outcome。
 
 ### Control 与恢复事实
 
-`lastOutcome` 是 runtime telemetry，不是第三台状态机。真正的恢复事实是 status、enabled、wake、cycleId、verification 与 stop。
+v3 的 `control` 只剩 11 个叶子字段，且都是恢复要用的事实，没有旁路账目：
 
-- priority/deadline 控制调度顺序和截止治理。
-- budget 只按 active attempt 计数；waiting 和 sleeping 不消耗 attempt，sleeping 不受当前周期 deadline 处罚。
-- verification 是独立事实：required、pending/passed/failed、runId、evidence、contract body hash、checkedAt 和 artifact subject hash。
-- waitingFor 只标识恢复源：time、user、job、verification 或 external-signal，不改变生命周期。
-- stop 只在 disabled 时存在；enabled=true 时写路径会清除它。
+- `deadline` 是唯一的调度/治理硬约束，用户真实意图，不需要模型估算。
+- `nextAction` 是下一条可执行动作，也是等待时"等什么、条件、下一步"的记录位置——没有单独的 blockedReason 字段。
+- `verification` 是独立事实：`required`、`pending`/`passed`/`failed`、`runId`。`status` 只是展示缓存，从不作为门禁；真正的权威永远是按 `runId` 重新读盘的 attestation 文件（校验 `taskId`、verdict、contract body hash 新鲜度、artifact subject hash 新鲜度）。
+- `waitingFor` 只是记录性展示——`time`、`user`、`job` 或 `external-signal`，不改变生命周期，也不决定能否恢复（见下方[Waiting 与真实恢复源](#waiting-与真实恢复源)）。
+- `cycleId` 标记当前或最近一次闭环的 recurring occurrence。
+- `stop` 只在 disabled 时存在；enabled=true 时写路径会清除它。
+
+没有按任务计数的 attempt 预算、usage 账目或 generation 守卫——那类"模型自己也估不准的数字"已经从 control 里拿掉了。真实的成本可见性来自 `UsageLedger`（按 `taskId` 聚合，见 `/usage`），失控兜底来自 deadline 加上 driver 进程内存里的一次性唤醒计数与连续无 effect 唤醒计数，两者都不落盘、不进 control、模型也看不到。
 
 ## 状态与生命周期
 
@@ -420,8 +421,7 @@ Independent verification: required
 | create one-shot | none | active |
 | create recurring | none | sleeping + next wake |
 | progress | active/waiting | active 或 waiting |
-| request-verification | active | waiting + waitingFor=verification |
-| verify | waiting | active，写入 verdict |
+| verify | active/waiting | active，写入 verdict |
 | complete one-shot | active | archive/completed |
 | complete recurring | active | sleeping + next occurrence |
 | skip | active/waiting，recurring | sleeping + next occurrence |
@@ -432,7 +432,9 @@ Independent verification: required
 | run | sleeping | 提前打开新 cycle + dispatch |
 | wait-due | waiting + due wake | 原子改 active、清 wake，再 dispatch |
 | cycle-due | sleeping + due wake | 原子打开 cycle、改 active，再 dispatch |
-| governor-stop | active，或 deadline 违规的 current waiting | status 不变，enabled=false |
+| governor-stop | 任一 live status | status 不变，enabled=false |
+
+没有独立的 `request-verification` 动作：验收就是一次普通委派，见下方[Verification](#verification)。`verify` 不再要求任务必须处于 `waiting`——它认的是 attestation 文件里的 `taskId`，不是任务当时的生命周期状态，所以无论调用发生在完成唤醒之前还是之后都合法。
 
 一次性任务不使用 sleeping。complete 原则上从 active 发生；等待中的任务先由真实恢复源转 active。cancel 可以从任一 live status 归档。
 
@@ -443,8 +445,8 @@ Independent verification: required
 1. 确认 sleeping、enabled、合法 schedule 和 due wake。
 2. cycleId 绑定 schedule occurrence，例如 `cycle-2026-08-04`。
 3. 首轮只初始化 Current Cycle，不把创建占位写进 History；后续轮次才折叠上一轮 Current Cycle。
-4. 重置本周期 usage、verification、DoD/Plan checkbox 和 stop。
-5. 清 wake，写 active，claim attempt，再派发普通 `[TASK_DRIVER]`。
+4. 重置本周期 verification、DoD/Plan checkbox 和 stop。
+5. 清 wake，写 active，再派发普通 `[TASK_DRIVER]`。
 
 complete 会写 summary/evidence、清理 task-owned events、计算下一 occurrence 并回到 sleeping。skip 只记录原因，不伪造 DoD 或 completion evidence。active/waiting 未闭环时，driver 不并发开启新 cycle；doctor 会报告错过 occurrence。
 
@@ -452,11 +454,10 @@ complete 会写 summary/evidence、清理 task-owned events、计算下一 occur
 
 `waiting + wake` 是定时等待，`waiting + no wake` 是信号等待。driver 只处理前者到点恢复，绝不周期性唤醒后者。
 
-恢复源只有真实信号：
+恢复源只有真实信号，`waitingFor` 写了什么不参与判断：
 
 - wake 到点：runtime 先落盘 active + clear wake，再 dispatch。
-- background job 完成：只激活所属 task 并派发所属 channel 的回合。
-- verifier 完成：导入 attestation、写 verdict、激活所属 task。
+- background job / 委派（含 `purpose: verify` sub-agent）完成：runtime 校验这个已 settle 的 run/job 记录里的 `taskId` 确实指向本任务，再激活所属 task 并派发所属 channel 的回合——这个绑定来自 runtime 自己写的 run 记录，不是任务文件里 `waitingFor` 那个模型可写的字符串。
 - `/tasks run <id>`：明确的人工强制推进。
 - 相关用户消息：Agent 判断相关后用 progress 把任务恢复 active；普通闲聊不批量唤醒 waiting tasks。
 
@@ -464,12 +465,12 @@ complete 会写 summary/evidence、清理 task-owned events、计算下一 occur
 
 ## Verification
 
-需要独立验收的任务显式设置 `control.verificationRequired: true`：
+需要独立验收的任务显式设置 `control.verificationRequired: true`。验收不是一个独立的生命周期分支，而是一次普通委派：
 
-1. 完成 DoD checklist 后调用 `task_manage request-verification`。
-2. 任务进入 waiting/verification，runtime 直接入队 checker durable dispatch。
-3. checker 以 `subagent purpose=verify` 只读检查并写 attestation。
-4. Agent 调用 `task_manage verify` 导入 runId；PASS/FAIL 都恢复 active。
+1. 完成 DoD checklist 后，像任何其他委派一样派发一个 `subagent purpose=verify`、带 `taskId` 的 sub-agent。
+2. 用 `task_manage progress` 把任务停泊为 `waiting`（不设 wake），和其他委派完全同一套停泊/唤醒机制——没有单独的 `request-verification` 动作，也没有 `waiting + waitingFor: verification` 这个特殊状态。
+3. checker 只读检查并写 attestation；完成后 runtime 通过完成唤醒恢复所属 task。
+4. Agent 调用 `task_manage verify` 导入 runId；PASS/FAIL 都恢复 active。`verify` 认的是 attestation 文件里的 `taskId`，不是任务当时的状态字符串。
 5. complete 重新检查 attestation、contract hash 和 artifact subject。普通 progress/Plan 改动不应破坏 PASS；Goal/DoD/Manual/Verification 或产物变更必须重验。
 
 无 verification requirement 的任务不会产生额外 checker turn。
@@ -479,12 +480,12 @@ complete 会写 summary/evidence、清理 task-owned events、计算下一 occur
 driver 是自适应 timer + nudge 的零 token 扫描，不固定轮询：
 
 - enabled=false、archive outcome、waiting 无 wake 永不 dispatch。
-- waiting due 和 sleeping due 在 dispatch 前先完成原子状态转换。
+- waiting due 和 sleeping due 在 dispatch 前先完成原子状态转换；这个转换是幂等的——一旦任务不再是 `waiting`，重复或重放的唤醒都是安全的 no-op，不需要额外的 claim/handoff 簿记来判重。
 - sleeping 缺 wake 时按 schedule 零 token 自愈；schedule 缺失或非法则写 governor stop、保持 sleeping 并通知 doctor/用户。
-- channel 正在运行时不重复入队；按 priority/deadline 和 channel round-robin 选择任务。
+- channel 正在运行时不重复入队；按 deadline/wake 和 channel round-robin 选择任务。
 - 有真实 effect 的回合快速接续；只有台账变化使用普通延迟；无变化走 stalled retry。
-- 连续 3 次 active attempt 无 visible progress：写 enabled=false + stop(by=governor)，status 保持 active，并由 runtime 直接发送 deterministic receipt，不开启额外诊断回合。
-- attempt budget/deadline 是明确 stop-loss；每次真实 active dispatch 才 claim attempt，token/cost/wall-time 写回 control。
+- 连续 3 次唤醒没有真实可见 effect：写 enabled=false + stop(by=governor)，status 保持 active，并由 runtime 直接发送 deterministic receipt，不开启额外诊断回合。这个计数只存在于 driver 的进程内存里，不落盘、不进 control，重启的代价至多是多一轮耐心。
+- deadline 是唯一持久化的硬性 stop-loss；同一 recurring cycle 内的单周期唤醒次数上限是另一层失控兜底，同样只在进程内存里。
 
 所有任务执行必须保持 at-least-once 可重放安全：外部动作前查询真实状态，使用稳定 request/message id，并把结果和证据写入 Current Cycle 或 completion evidence。
 
@@ -499,12 +500,11 @@ driver 是自适应 timer + nudge 的零 token 扫描，不固定轮询：
 /tasks pause <id>
 /tasks resume <id>
 /tasks run <id>
-/tasks set <id> <wake|next|priority|attempts|deadline> <value>
-/tasks stats [id]
+/tasks set <id> <wake|next|deadline> <value>
 /tasks doctor
 ```
 
-展示至少包含 status、enabled/stop reason、wake、waitingFor、schedule/next occurrence、current/last cycle、verification、attempts、deadline、priority 和 nextAction。pause/resume 不改变 status、wake 或 schedule。旧命令按 unknown action 返回 usage，不做隐式替代。
+展示至少包含 status、enabled/stop reason、wake、waitingFor、schedule/next occurrence、current/last cycle、verification、deadline 和 nextAction。pause/resume 不改变 status、wake 或 schedule。旧命令按 unknown action 返回 usage，不做隐式替代。成本可见性不再由任务文件承担——按 `taskId` 聚合的花费查 `/usage`。
 
 `task_manage` action 只有：
 
@@ -512,7 +512,6 @@ driver 是自适应 timer + nudge 的零 token 扫描，不固定轮询：
 create
 progress
 set
-request-verification
 verify
 complete
 skip
@@ -523,18 +522,19 @@ list
 - create：标准 Goal/DoD/Manual/Verification/Current Cycle/History；recurring 初始 sleeping。
 - progress：原子追加 Current Cycle，并更新状态、wake、control。
 - set：修复 metadata/control，不代替日常 checkpoint。
+- verify：导入独立验收 sub-agent 的 attestation。
 - complete/skip/cancel：分别闭环、跳过 occurrence、归档放弃。
-- list：返回活动任务和完整 v2 control。
+- list：返回活动任务和完整 control。
 
 每回合注入 `<task_agenda>`，包含活动目录中的 active/waiting/sleeping 任务，也显示 disabled、wake、waitingFor、cycle 和 verification；它是背景参考，不是新指令。
 
 ## 外部委派
 
-智能体工作使用 `subagent` 委派，并把 `taskId` 绑定到 run。内置角色超过同步宽限后会转为后台 run；外部 Claude Code / Codex / exec 角色从一开始就是异步 run。任务等待时写 `waitingFor: external-signal`、不设 wake；run 完成后，runtime 通过带结构化来源的 durable wake 只激活所属 task，再把结果和产物路径交还频道。
+智能体工作使用 `subagent` 委派，并把 `taskId` 绑定到 run。内置角色超过同步宽限后会转为后台 run；外部 Claude Code / Codex / exec 角色从一开始就是异步 run。任务等待时写 `waitingFor: external-signal`、不设 wake；run 完成后，runtime 校验这个已 settle 的 run 记录里的 `taskId` 确实指向本任务，再激活所属 task，把结果和产物路径交还频道——独立验收的 `purpose: verify` sub-agent走的是同一条通道，没有特殊路径。
 
 普通长命令使用 `bash async` 并绑定 `taskId`，对应 `waitingFor: job`。不要为了等待智能体再在外层包一层 `bash async`、event 或轮询；那会失去统一的 run 状态、取消、完成唤醒、用量和重启对账。
 
-无论哪种异步工作，都应在任务正文或 Current Cycle 记录：使用的角色或工具、工作目录、runId/job id、预期产物、验收方法和幂等恢复方式。用户反馈使用 `waitingFor: user`；独立验收使用 `waitingFor: verification`。
+无论哪种异步工作，都应在任务正文或 Current Cycle 记录：使用的角色或工具、工作目录、runId/job id、预期产物、验收方法和幂等恢复方式。用户反馈使用 `waitingFor: user`。
 
 ## 完整周报流程
 
@@ -542,16 +542,16 @@ list
 2. occurrence 到点，runtime open cycle 后派发普通 task wake。
 3. Agent 收集素材、起草、查询真实发布状态，使用 progress 写 evidence 和 nextAction。
 4. 需要反馈就 waiting/user 或 waiting + wake；不要轮询 parked task。
-5. 需要独立检查时 request-verification，checker PASS 后 verify，再 active。
+5. 需要独立检查时派发 `purpose=verify` sub-agent 并停泊为 waiting，checker PASS 后调用 verify，再 active。
 6. 发布前再次查询真实目标，使用稳定幂等 id；成功结果写入 Current Cycle。
 7. complete 后任务 sleeping，等待下一 occurrence；不再需要则 cancel 归档。
 
 ## 异常恢复
 
-- /tasks doctor 检查 unreadable frontmatter、坏 control、future wake 藏在 active、waitingFor/wake 组合、sleeping schedule/wake、enabled/stop 一致性、missed occurrence、attestation 漂移和 retired keys。
+- /tasks doctor 检查 unreadable frontmatter、不可解析的 control（旧版本会直接判为不可读）、future wake 藏在 active、waiting parked 是否有真实可恢复来源（有效 wake，或一条正在跑、`taskId` 指向本任务的 job/委派记录——不看 `waitingFor` 写了什么）、sleeping schedule/wake、enabled/stop 一致性、missed occurrence 和 attestation 漂移。
 - repair 只写 metadata/body，不自动执行外部动作。
 - daemon restart 不会补跑多个 occurrence；至多按当前 schedule 补一次，at-least-once 下仍须查询真实状态并幂等。
-- governor stop 之后用 /tasks resume 保留原阶段，或先调整预算/deadline；cancel 用于不再需要的任务。
+- governor stop 之后用 /tasks resume 保留原阶段，或先调整 deadline；cancel 用于不再需要的任务。
 
 ## 相关文档
 
