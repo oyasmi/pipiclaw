@@ -70,7 +70,7 @@ import { installLlmProxy } from "./proxy.js";
 import { ChannelStore } from "./store.js";
 import { handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
-import { createTaskDriverEvent, createTaskVerificationEvent, TaskDriver } from "./task-driver.js";
+import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";
 import { migrateLegacyTaskScheduleEvents, migrateLegacyTaskState } from "./task-migration.js";
 import { claimVerifiedDelegationWake, claimVerifiedJobWake } from "./task-wake.js";
 
@@ -308,13 +308,6 @@ export async function createRuntimeContext(
 			// `bot` is defined below in this same scope and initialized before any message
 			// (and thus any getRunner call) can arrive.
 			mediaSender: bot,
-			dispatchVerification: async (taskId: string) => {
-				const entries = await readActiveTasks(join(channelDir, "tasks"));
-				const entry = entries.find((candidate) => candidate.id === taskId);
-				if (!entry) return false;
-				const verificationEvent = createTaskVerificationEvent(channelId, entry, Date.now());
-				return (await durableDispatch?.dispatch(verificationEvent)) ?? false;
-			},
 		});
 		channelRunners.set(channelId, runner);
 		void evictIdleRunnersOverCap(channelRunners);

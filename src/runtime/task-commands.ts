@@ -484,28 +484,24 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					),
 				);
 			}
-			if (status !== "sleeping" && control.verification.status === "passed" && control.verification.bodyHash) {
-				if (storedTask && taskBodyHash(storedTask.body) !== control.verification.bodyHash) {
+			if (status !== "sleeping" && control.verification.status === "passed") {
+				const attestationOk = control.verification.runId
+					? await readVerificationAttestation(options.channelDir, control.verification.runId)
+							.then(
+								(attestation) =>
+									attestation.taskId === entry.id &&
+									attestation.verdict === "pass" &&
+									(!storedTask || attestation.bodyHash === taskBodyHash(storedTask.body)),
+							)
+							.catch(() => false)
+					: false;
+				if (!attestationOk) {
 					issues.push(
 						issue(
-							`tasks/${entry.id}.md changed after its recorded independent PASS.`,
-							`Run a fresh purpose=verify sub-agent and import its attestation before completion.`,
+							`tasks/${entry.id}.md records an independent PASS with no matching, fresh verifier attestation on disk.`,
+							`Run a fresh purpose=verify sub-agent and import its attestation with task_manage verify before completion.`,
 						),
 					);
-				} else if (control.verification.required) {
-					const attestationOk = control.verification.runId
-						? await readVerificationAttestation(options.channelDir, control.verification.runId)
-								.then((attestation) => attestation.taskId === entry.id && attestation.verdict === "pass")
-								.catch(() => false)
-						: false;
-					if (!attestationOk) {
-						issues.push(
-							issue(
-								`tasks/${entry.id}.md records an independent PASS with no matching verifier attestation on disk.`,
-								`Run a fresh purpose=verify sub-agent and import its attestation with task_manage verify before completion.`,
-							),
-						);
-					}
 				}
 			}
 			if (entry.frontmatter.enabled === false && !control.stop) {

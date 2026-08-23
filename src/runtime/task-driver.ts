@@ -215,25 +215,6 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 	};
 }
 
-/** Durable checker wake created by request-verification; it is a normal main-agent turn. */
-export function createTaskVerificationEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): ChannelEvent {
-	const control = entry.frontmatter.control;
-	return {
-		type: channelId.startsWith("group_") ? "group" : "dm",
-		channelId,
-		user: "TASK_VERIFIER",
-		userName: "TASK_VERIFIER",
-		text:
-			`[TASK_VERIFY:${entry.id}] Verify task ${entry.id} independently. ` +
-			`Read tasks/${entry.id}.md and the workspace verification instructions, then run a read-only ` +
-			`subagent with purpose=verify. Import its attestation with task_manage verify using the returned run id. ` +
-			`Do not modify the workspace or task contract; if verification fails, record the failure and leave the task recoverable.`,
-		ts: String(nowMs),
-		conversationType: channelId.startsWith("group_") ? "2" : "1",
-		dispatchId: `task:${channelId}:${entry.id}:verification:${control?.cycleId ?? `t${nowMs}`}`,
-	};
-}
-
 /** sleeping + a schedule cadence + a valid wake that is due → time to open the next cycle. */
 function isCycleStartReady(entry: TaskLedgerEntry, nowMs: number): boolean {
 	return (

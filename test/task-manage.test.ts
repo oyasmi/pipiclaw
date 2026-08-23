@@ -121,46 +121,14 @@ describe("task_manage v2", () => {
 		expect(stored?.fields.control?.waitingFor).toBe("time");
 	});
 
-	it("requests verification through a durable callback and parks on a verification signal", async () => {
-		await createOneShot("verify-me", { verificationRequired: true });
-		const dispatched: string[] = [];
-		const result = await manageTask(
-			{
-				...options,
-				dispatchVerification: async (id) => {
-					dispatched.push(id);
-					return true;
-				},
-			},
-			{ action: "request-verification", id: "verify-me", note: "All acceptance checks are complete." },
-		);
-		expect(result).toMatchObject({ action: "request-verification", status: "waiting" });
-		expect(dispatched).toEqual(["verify-me"]);
-		const stored = await readStoredTask(channelDir, "verify-me");
-		expect(stored?.fields).toMatchObject({ status: "waiting", wake: undefined });
-		expect(stored?.fields.control).toMatchObject({ waitingFor: "verification", verification: { status: "pending" } });
-	});
-
-	it("rolls verification back to active when the checker cannot be enqueued", async () => {
-		await createOneShot("retry-verification", { verificationRequired: true });
-		await expect(
-			manageTask(
-				{ ...options, dispatchVerification: async () => false },
-				{ action: "request-verification", id: "retry-verification", note: "Request review." },
-			),
-		).rejects.toThrow(/restored to active/);
-		const stored = await readStoredTask(channelDir, "retry-verification");
-		expect(stored?.fields.status).toBe("active");
-		expect(stored?.fields.control?.waitingFor).toBeUndefined();
-	});
-
 	it("imports a real verifier attestation and then completes without approval", async () => {
 		await createOneShot("verified", { verificationRequired: true });
-		const withVerifier = { ...options, dispatchVerification: async () => true };
-		await manageTask(withVerifier, {
-			action: "request-verification",
+		// Parked the same way any other delegation parks — no special "verification" status.
+		await manageTask(options, {
+			action: "progress",
 			id: "verified",
-			note: "Ready for independent verification.",
+			note: "Dispatched an independent purpose=verify sub-agent.",
+			status: "waiting",
 		});
 		const attestation = await writeVerificationAttestation(channelDir, {
 			runId: "run-1",
@@ -171,7 +139,7 @@ describe("task_manage v2", () => {
 			workspaceChanged: false,
 			verificationStrength: "enforced",
 		});
-		const verified = await manageTask(withVerifier, {
+		const verified = await manageTask(options, {
 			action: "verify",
 			id: "verified",
 			verifierRunId: attestation.runId,
@@ -191,7 +159,7 @@ describe("task_manage v2", () => {
 		expect(archived).not.toContain("status:");
 	});
 
-	it("anchors completion subject freshness to the durable attestation", async () => {
+	it("anchors completion subject freshness to the attestation, with no mirrored field to drift", async () => {
 		subjectDir = await mkdtemp(join(tmpdir(), "task-manage-subject-"));
 		execFileSync("git", ["-C", subjectDir, "init", "-q"], { stdio: "pipe" });
 		execFileSync("git", ["-C", subjectDir, "config", "user.email", "test@example.com"], { stdio: "pipe" });
@@ -201,15 +169,12 @@ describe("task_manage v2", () => {
 		execFileSync("git", ["-C", subjectDir, "commit", "-q", "-m", "init"], { stdio: "pipe" });
 
 		await createOneShot("subject-drift", { verificationRequired: true });
-		const withVerifier = {
-			...options,
-			workingDirectory: subjectDir,
-			dispatchVerification: async () => true,
-		};
-		await manageTask(withVerifier, {
-			action: "request-verification",
+		const withSubject = { ...options, workingDirectory: subjectDir };
+		await manageTask(withSubject, {
+			action: "progress",
 			id: "subject-drift",
-			note: "Ready for independent verification.",
+			note: "Dispatched an independent purpose=verify sub-agent.",
+			status: "waiting",
 		});
 		const subjectHash = await workspaceSubjectHash(subjectDir);
 		expect(subjectHash).toBeDefined();
@@ -224,25 +189,19 @@ describe("task_manage v2", () => {
 			subjectDir,
 			verificationStrength: "enforced",
 		});
-		await manageTask(withVerifier, {
+		await manageTask(withSubject, {
 			action: "verify",
 			id: "subject-drift",
 			verifierRunId: attestation.runId,
 		});
 
+		// The artifact drifts after verify. There is no mirrored subjectHash left in control to
+		// tamper with — freshness is checked straight off the attestation file every time.
 		await writeFile(join(subjectDir, "artifact.txt"), "after\n");
 		const taskPath = join(tasksDir, "subject-drift.md");
-		const stored = await readFile(taskPath, "utf-8");
-		const controlLine = stored.match(/^control: (.+)$/m);
-		expect(controlLine?.[1]).toBeDefined();
-		const control = JSON.parse(controlLine?.[1] ?? "{}") as {
-			verification?: { subjectHash?: string };
-		};
-		delete control.verification?.subjectHash;
-		await writeFile(taskPath, stored.replace(/^control: .+$/m, `control: ${JSON.stringify(control)}`));
 
 		await expect(
-			manageTask(withVerifier, {
+			manageTask(withSubject, {
 				action: "complete",
 				id: "subject-drift",
 				summary: "Result is complete.",

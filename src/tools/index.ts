@@ -36,8 +36,6 @@ export interface CreatePipiclawToolsOptions {
 	toolsConfig?: PipiclawToolsConfig;
 	/** Transport-provided attachment port; when present, enables the `send_media` tool. */
 	mediaSender?: MediaSender;
-	/** Runtime-provided durable verifier dispatch. */
-	dispatchVerification?: (taskId: string) => Promise<boolean>;
 }
 
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {
@@ -74,7 +72,6 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		getSessionSearchSettings: options.getSessionSearchSettings,
 		memoryCandidateStore: options.memoryCandidateStore,
 		mediaSender: options.mediaSender,
-		dispatchVerification: options.dispatchVerification,
 	});
 	return [
 		...leafTools,

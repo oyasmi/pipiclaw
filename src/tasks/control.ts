@@ -5,16 +5,15 @@ export type TaskPriority = "low" | "normal" | "high" | "critical";
 export type TaskVerificationStatus = "pending" | "passed" | "failed";
 export type TaskWaitingFor = "time" | "user" | "job" | "verification" | "external-signal";
 
+/**
+ * `status` is a display cache only; it never gates `complete` or doctor. Every field that used to
+ * mirror the attestation (evidence/bodyHash/checkedAt/subjectHash) is gone — `runId` is enough to
+ * re-read the attestation file, which is the sole authority on whether a PASS is real and fresh.
+ */
 export interface TaskVerification {
 	required: boolean;
 	status: TaskVerificationStatus;
 	runId?: string;
-	evidence?: string;
-	/** Hash of the task contract segment inspected by the verifier. */
-	bodyHash?: string;
-	checkedAt?: string;
-	/** Git view of the artifacts the verifier inspected. */
-	subjectHash?: string;
 }
 
 export interface TaskStop {
@@ -170,10 +169,6 @@ export function parseTaskControl(raw: string): TaskControl {
 			required: parseVerificationRequired(verification),
 			status: enumValue(verification.status, VERIFICATION_STATUSES, "pending"),
 			runId: optionalString(verification.runId),
-			evidence: optionalString(verification.evidence),
-			bodyHash: optionalString(verification.bodyHash),
-			checkedAt: optionalString(verification.checkedAt),
-			subjectHash: optionalString(verification.subjectHash),
 		},
 		cycleId: optionalString(value.cycleId),
 		stop,

@@ -155,7 +155,6 @@ export class ChannelRunner implements AgentRunner {
 	private readonly modelsConfigPath: string;
 	private readonly onSessionEvent?: (event: unknown, channelId: string) => void;
 	private readonly mediaSender?: MediaSender;
-	private readonly dispatchVerification?: (taskId: string) => Promise<boolean>;
 	private readonly workspaceDir: string;
 	/**
 	 * Frozen for the lifetime of this runner generation (spec 043, D4.2): AgentSession, the
@@ -224,7 +223,6 @@ export class ChannelRunner implements AgentRunner {
 		this.modelsConfigPath = paths.modelsConfigPath;
 		this.onSessionEvent = paths.onSessionEvent;
 		this.mediaSender = paths.mediaSender;
-		this.dispatchVerification = paths.dispatchVerification;
 
 		const executor = createExecutor();
 		this.executor = executor;
@@ -1531,7 +1529,6 @@ export class ChannelRunner implements AgentRunner {
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
 			mediaSender: this.mediaSender,
-			dispatchVerification: this.dispatchVerification,
 		});
 		this.currentTools = tools;
 		// Tool schemas are billed with the system prompt and, unlike it, nothing trims them.

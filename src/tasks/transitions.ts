@@ -11,7 +11,6 @@ export type SettableTaskStatus = (typeof SETTABLE_TASK_STATUSES)[number];
 export type TaskLifecycleAction =
 	| "create"
 	| "progress"
-	| "request-verification"
 	| "verify"
 	| "complete"
 	| "skip"
@@ -36,8 +35,11 @@ const WORKABLE = ["active", "waiting"] as const;
 const TRANSITIONS: Record<TaskLifecycleAction, TransitionRule> = {
 	create: { from: [], to: "active" },
 	progress: { from: WORKABLE, to: "caller" },
-	"request-verification": { from: ["active"], to: "waiting" },
-	verify: { from: ["waiting"], to: "active" },
+	// Not gated on a specific waitingFor value: the wake that reactivates a task parked for a
+	// purpose=verify sub-agent already flips it to active before this runs (the same as any other
+	// delegation wake), but `verify` also accepts waiting so it is not sensitive to exactly when
+	// that reactivation lands relative to the model's own turn.
+	verify: { from: WORKABLE, to: "active" },
 	complete: { from: ["active"], to: "caller" },
 	skip: { from: WORKABLE, to: "sleeping" },
 	cancel: { from: LIVE, to: "caller" },

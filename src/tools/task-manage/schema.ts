@@ -17,16 +17,9 @@ const taskControlSchema = Type.Object({
 	),
 	nextAction: Type.Optional(Type.String({ description: "Concrete next executable step; empty string clears it." })),
 	waitingFor: Type.Optional(
-		Type.Union(
-			[
-				Type.Literal("time"),
-				Type.Literal("user"),
-				Type.Literal("job"),
-				Type.Literal("verification"),
-				Type.Literal("external-signal"),
-			],
-			{ description: "Diagnostic recovery source; it does not create a new lifecycle status." },
-		),
+		Type.Union([Type.Literal("time"), Type.Literal("user"), Type.Literal("job"), Type.Literal("external-signal")], {
+			description: "Diagnostic recovery source; it does not create a new lifecycle status.",
+		}),
 	),
 	verificationRequired: Type.Optional(
 		Type.Boolean({
@@ -43,7 +36,6 @@ export const taskManageSchema = Type.Object({
 			Type.Literal("create"),
 			Type.Literal("progress"),
 			Type.Literal("set"),
-			Type.Literal("request-verification"),
 			Type.Literal("verify"),
 			Type.Literal("complete"),
 			Type.Literal("skip"),
@@ -52,7 +44,7 @@ export const taskManageSchema = Type.Object({
 		],
 		{
 			description:
-				'"create" writes a persistent task; "progress" checkpoints work; "request-verification" parks active work and schedules an independent checker; "set" repairs metadata; "verify" imports an attestation; "complete" closes a task; "skip" closes one recurring occurrence without claiming completion; "cancel" archives abandoned work; "list" returns tasks. Recurring tasks sleep between occurrences.',
+				'"create" writes a persistent task; "progress" checkpoints work — to wait on an independent verifier, dispatch a purpose=verify sub-agent with taskId and park like any other delegation (status=waiting, waitingFor=external-signal); "set" repairs metadata; "verify" imports the verifier\'s attestation by run id; "complete" closes a task; "skip" closes one recurring occurrence without claiming completion; "cancel" archives abandoned work; "list" returns tasks. Recurring tasks sleep between occurrences.',
 		},
 	),
 	id: Type.Optional(
@@ -152,7 +144,6 @@ export function parseAction(action: string): TaskManageAction {
 	if (
 		action === "create" ||
 		action === "progress" ||
-		action === "request-verification" ||
 		action === "set" ||
 		action === "verify" ||
 		action === "complete" ||
@@ -163,6 +154,6 @@ export function parseAction(action: string): TaskManageAction {
 		return action;
 	}
 	throw new RecoverableToolError(
-		"Unsupported task action. Next step: use create, progress, request-verification, set, verify, complete, skip, cancel, or list.",
+		"Unsupported task action. Next step: use create, progress, set, verify, complete, skip, cancel, or list.",
 	);
 }

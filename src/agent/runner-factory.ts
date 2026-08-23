@@ -20,8 +20,6 @@ export interface RunnerFactoryPaths {
 	 * Present enables the `send_media` tool; absent, the tool is not built.
 	 */
 	mediaSender?: MediaSender;
-	/** Runtime callback that durably enqueues an independent task verifier. */
-	dispatchVerification?: (taskId: string) => Promise<boolean>;
 }
 
 /**

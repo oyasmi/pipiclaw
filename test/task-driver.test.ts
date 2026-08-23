@@ -3,12 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
-import {
-	createTaskDriverEvent,
-	createTaskVerificationEvent,
-	TaskDriver,
-	taskGovernorReceipt,
-} from "../src/runtime/task-driver.js";
+import { createTaskDriverEvent, TaskDriver, taskGovernorReceipt } from "../src/runtime/task-driver.js";
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
 import { formatLocalTime } from "../src/shared/local-time.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
@@ -256,9 +251,6 @@ describe("task driver events", () => {
 		const event = createTaskDriverEvent("dm_1", entry, NOW.getTime());
 		expect(event.text).toContain("[TASK_DRIVER:task-1]");
 		expect(event.text).not.toMatch(/approval|verifying|sideEffects|externalApproval/i);
-		const verification = createTaskVerificationEvent("dm_1", entry, NOW.getTime());
-		expect(verification.text).toContain("purpose=verify");
-		expect(verification.text).toContain("task_manage verify");
 		const repair = createTaskDriverEvent(
 			"dm_1",
 			{ id: "broken", title: "Broken", frontmatter: { readable: false, enabled: true }, actionable: true },

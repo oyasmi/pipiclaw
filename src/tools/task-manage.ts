@@ -5,7 +5,7 @@ import { createTask } from "./task-manage/create.js";
 import { cancelTask, completeTask, listTasks, progressTask, setTask, skipTask } from "./task-manage/lifecycle.js";
 import { parseAction, taskManageSchema } from "./task-manage/schema.js";
 import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./task-manage/types.js";
-import { requestVerificationTask, verifyTask } from "./task-manage/verification.js";
+import { verifyTask } from "./task-manage/verification.js";
 
 export type {
 	TaskManageAction,
@@ -16,7 +16,7 @@ export type {
 
 /**
  * The `task_manage` dispatcher. Each action lives in a focused module — `create`,
- * `lifecycle` (progress/set/complete/skip/cancel/list) and `verification` (request-verification/verify) — over a
+ * `lifecycle` (progress/set/complete/skip/cancel/list) and `verification` (verify) — over a
  * shared helper layer, with the status transition table in `src/tasks/transitions.ts` (spec
  * 029, D7). This entry only routes and wraps the tool.
  */
@@ -39,8 +39,6 @@ function dispatchTaskMutation(
 			return createTask(options, request);
 		case "progress":
 			return progressTask(options, request);
-		case "request-verification":
-			return requestVerificationTask(options, request);
 		case "set":
 			return setTask(options, request);
 		case "verify":

@@ -107,19 +107,19 @@ export async function completeTask(
 	}
 	if (fields.control?.verification.required) {
 		const verification = fields.control.verification;
-		if (verification.status !== "passed" || !verification.bodyHash || !verification.runId) {
+		if (verification.status !== "passed" || !verification.runId) {
 			throw new RecoverableToolError(
-				`Task "${id}" requires an independent PASS. Request verification, then task_manage verify with its run id.`,
+				`Task "${id}" requires an independent PASS. Dispatch a purpose=verify sub-agent, then task_manage verify with its run id.`,
 			);
 		}
-		if (verification.bodyHash !== taskBodyHash(body)) {
-			throw new RecoverableToolError(
-				`Task "${id}" changed after its independent PASS; request verification again before complete.`,
-			);
-		}
-		const attestation = await assertVerificationAttestationMatches(options.channelDir, id, verification);
-		// The attestation is the durable source of the artifact subject. The mirrored control
-		// field is writable task metadata, so it must not decide whether freshness is checked.
+		// The attestation file is the sole authority — for the verdict, the body-hash freshness
+		// check, and the artifact subject. The task Markdown is agent-writable and proves nothing.
+		const attestation = await assertVerificationAttestationMatches(
+			options.channelDir,
+			id,
+			verification.runId,
+			taskBodyHash(body),
+		);
 		if (attestation.subjectHash) {
 			const subjectDir = attestation.subjectDir ?? options.workingDirectory ?? process.cwd();
 			const currentSubject = await workspaceSubjectHash(subjectDir);

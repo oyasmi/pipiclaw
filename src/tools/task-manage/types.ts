@@ -47,8 +47,6 @@ export interface TaskManageToolOptions {
 	channelId: string;
 	/** Project checkout whose artifact state an independent verifier binds to. */
 	workingDirectory?: string;
-	/** Durable checker dispatch supplied by the long-lived runtime. */
-	dispatchVerification?: (taskId: string) => Promise<boolean>;
 }
 
 export interface TaskFields {

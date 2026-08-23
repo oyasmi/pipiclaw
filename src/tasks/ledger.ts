@@ -503,7 +503,7 @@ export function missingStandardTaskSections(content: string): string[] {
  * Without the "no checklist items" case, a DoD written as prose or a numbered
  * list (no `- [ ]` anywhere) makes this function return an empty array —
  * indistinguishable from "everything is checked" — which would silently let
- * `task_manage request-verification`/`complete` through with nothing ever actually verified.
+ * `task_manage complete` through with nothing ever actually verified.
  */
 export function uncheckedTaskAcceptanceItems(content: string): string[] {
 	const unchecked: string[] = [];
