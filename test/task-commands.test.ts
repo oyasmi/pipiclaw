@@ -114,12 +114,11 @@ describe("/tasks v2 commands", () => {
 
 	it("lists state dimensions without effects or approval", async () => {
 		const control = createDefaultTaskControl(true);
-		control.usage.attempts = 3;
 		control.verification.status = "passed";
 		await writeFile(join(tasksDir, "measured.md"), renderTaskDocument({ status: "active", control }, BODY));
 		const list = await run("");
 		expect(list).toContain("status: active");
-		expect(list).toContain("attempts: 3/12");
+		expect(list).toContain("verify: required/passed");
 		expect(list).not.toMatch(/approval|sideEffects|effects/i);
 	});
 

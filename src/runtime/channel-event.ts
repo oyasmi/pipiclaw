@@ -32,10 +32,4 @@ export interface ChannelEvent {
 		taskId: string;
 		dispatchId: string;
 	};
-	/**
-	 * The `attemptGeneration` this event's claim recorded, for `[TASK_DRIVER:id]` events only.
-	 * Carried through durable dispatch so `finishTaskAttempt` can tell a stale, superseded claim's
-	 * turn from the current one, even when redelivery or claim races reorder completions.
-	 */
-	taskAttemptGeneration?: number;
 }

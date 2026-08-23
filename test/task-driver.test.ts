@@ -187,16 +187,15 @@ describe("TaskDriver v2", () => {
 		expect(await readFile(path, "utf-8")).not.toContain('"cycleId":"cycle-2026-08-04"');
 	});
 
-	it("governs budget exhaustion without changing active into a terminal state", async () => {
+	it("governs deadline exhaustion without changing active into a terminal state", async () => {
 		const control = createDefaultTaskControl();
-		control.budget.maxAttempts = 2;
-		control.usage.attempts = 2;
-		const path = await writeTask("dm_a", "spent", taskDoc("active", { control }));
+		control.deadline = "2026-08-03T00:00:00+08:00";
+		const path = await writeTask("dm_a", "overdue", taskDoc("active", { control }));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		const notify = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch, { notify }).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
-		expect(notify.mock.calls[0]?.[0].text).toContain("attempt budget exhausted");
+		expect(notify.mock.calls[0]?.[0].text).toContain("deadline exceeded");
 		const after = await readFile(path, "utf-8");
 		expect(after).toContain("status: active");
 		expect(after).toContain("enabled: false");
@@ -220,7 +219,7 @@ describe("TaskDriver v2", () => {
 		expect(after).toContain('"by":"governor"');
 	});
 
-	it("does not count model-written nextAction or blockedReason as progress", async () => {
+	it("does not count model-written nextAction as progress", async () => {
 		const control = createDefaultTaskControl();
 		const path = await writeTask("dm_a", "model-churn", taskDoc("active", { control }));
 		let dispatchCount = 0;
@@ -231,7 +230,6 @@ describe("TaskDriver v2", () => {
 			if (!controlLine?.[1]) throw new Error("test task control missing");
 			const nextControl = JSON.parse(controlLine[1]) as ReturnType<typeof createDefaultTaskControl>;
 			nextControl.nextAction = `model note ${dispatchCount}`;
-			nextControl.blockedReason = `model explanation ${dispatchCount}`;
 			await writeFile(path, stored.replace(/^control: .+$/m, `control: ${JSON.stringify(nextControl)}`));
 			return true;
 		});
@@ -255,10 +253,9 @@ describe("task driver events", () => {
 			frontmatter: { readable: true, enabled: true, status: "active", control: createDefaultTaskControl() },
 			actionable: true,
 		};
-		const event = createTaskDriverEvent("dm_1", entry, NOW.getTime(), 2);
+		const event = createTaskDriverEvent("dm_1", entry, NOW.getTime());
 		expect(event.text).toContain("[TASK_DRIVER:task-1]");
 		expect(event.text).not.toMatch(/approval|verifying|sideEffects|externalApproval/i);
-		expect(event.taskAttemptGeneration).toBe(2);
 		const verification = createTaskVerificationEvent("dm_1", entry, NOW.getTime());
 		expect(verification.text).toContain("purpose=verify");
 		expect(verification.text).toContain("task_manage verify");

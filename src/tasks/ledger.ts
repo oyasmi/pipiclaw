@@ -418,9 +418,7 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 			if (frontmatter.control && !frontmatter.control.stop) {
 				frontmatter.control.stop = {
 					by: wasLegacyEscalated(rawStatus) ? "governor" : "user",
-					reason:
-						frontmatter.control.blockedReason ??
-						`Task stopped by ${wasLegacyEscalated(rawStatus) ? "governor" : "user"}.`,
+					reason: `Task stopped by ${wasLegacyEscalated(rawStatus) ? "governor" : "user"}.`,
 					at: formatLocalTime(),
 				};
 			}

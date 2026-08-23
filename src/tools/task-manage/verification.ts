@@ -39,7 +39,6 @@ export async function requestVerificationTask(
 	const originalFields = structuredClone(fields);
 	const control = fields.control ?? createDefaultTaskControl(true);
 	control.verification = { required: true, status: "pending" };
-	control.blockedReason = undefined;
 	control.waitingFor = "verification";
 	control.nextAction = "Wait for the durable checker, then import its attestation.";
 	const waitingFields = { ...fields, status: "waiting" as const, wake: undefined, control };
@@ -125,8 +124,7 @@ export async function verifyTask(
 		subjectHash: attestation.subjectHash,
 		checkedAt: attestation.checkedAt,
 	};
-	// The verdict lives in `control.verification`; `lastOutcome` stays runtime-owned telemetry.
-	control.blockedReason = attestation.verdict === "fail" ? attestation.evidence : undefined;
+	// The verdict lives in `control.verification`; nothing else needs updating on failure.
 	control.waitingFor = undefined;
 	control.nextAction = undefined;
 	task.fields.control = control;

@@ -114,8 +114,6 @@ export async function migrateLegacyTaskState(workspaceDir: string): Promise<void
 						!document.fields.control.waitingFor
 					) {
 						document.fields.control.waitingFor = "external-signal";
-						document.fields.control.blockedReason ??=
-							"Legacy waiting task requires review after the autonomy state upgrade.";
 						document.body = appendCurrentCycleNote(
 							document.body,
 							"Migration note: this task remains waiting after the autonomy state upgrade; review its external condition before resuming.",

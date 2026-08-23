@@ -71,7 +71,6 @@ export async function progressTask(
 	if (nextFields.control) {
 		if (nextFields.status === "active") {
 			nextFields.control.waitingFor = undefined;
-			nextFields.control.blockedReason = undefined;
 		} else if (!nextFields.control.waitingFor) {
 			nextFields.control.waitingFor = nextFields.wake ? "time" : "external-signal";
 		}
@@ -139,7 +138,6 @@ export async function completeTask(
 
 	const bodyWithEvidence = appendCompletionEvidence(body, request);
 	if (fields.control) {
-		fields.control.blockedReason = undefined;
 		fields.control.waitingFor = undefined;
 	}
 	const recurring = Boolean(fields.schedule);
@@ -195,7 +193,6 @@ export async function skipTask(options: TaskManageToolOptions, request: TaskMana
 	}
 	const skippedBody = appendCurrentCycleNote(body, `Skipped: ${reason}`);
 	if (fields.control) {
-		fields.control.blockedReason = undefined;
 		fields.control.waitingFor = undefined;
 		fields.control.verification = { required: fields.control.verification.required, status: "pending" };
 	}

@@ -5,17 +5,6 @@ export type TaskPriority = "low" | "normal" | "high" | "critical";
 export type TaskVerificationStatus = "pending" | "passed" | "failed";
 export type TaskWaitingFor = "time" | "user" | "job" | "verification" | "external-signal";
 
-/** How the last agent run ended. This is telemetry, not a lifecycle state. */
-export type TaskOutcome = "pending" | "running" | "progress" | "blocked" | "failed";
-
-export interface TaskBudget {
-	maxAttempts: number;
-}
-
-export interface TaskUsage {
-	attempts: number;
-}
-
 export interface TaskVerification {
 	required: boolean;
 	status: TaskVerificationStatus;
@@ -34,58 +23,31 @@ export interface TaskStop {
 	at: string;
 }
 
-/** Durable ownership marker for the interval between a structured completion wake activating a
- * task and its transport accepting the corresponding turn. */
-export interface TaskWakeHandoff {
-	kind: "subagent";
-	resourceId: string;
-	dispatchId: string;
-	generation: number;
-	previousLastOutcome: TaskOutcome;
-	previousBlockedReason?: string;
-	previousLastStartedAt?: string;
-}
-
 /** The v2 persisted control block. Execution authority comes from capability and scope. */
 export interface TaskControl {
 	version: 2;
 	priority: TaskPriority;
 	deadline?: string;
 	nextAction?: string;
-	blockedReason?: string;
 	waitingFor?: TaskWaitingFor;
-	budget: TaskBudget;
-	usage: TaskUsage;
 	verification: TaskVerification;
-	attemptGeneration: number;
-	lastOutcome: TaskOutcome;
-	lastStartedAt?: string;
-	lastFinishedAt?: string;
 	/** Current or most recently closed recurring occurrence. */
 	cycleId?: string;
 	/** Present only while the task is disabled. */
 	stop?: TaskStop;
-	wakeHandoff?: TaskWakeHandoff;
 }
 
 export interface TaskControlPatch {
 	priority?: TaskPriority;
 	deadline?: string;
 	nextAction?: string;
-	blockedReason?: string;
 	waitingFor?: TaskWaitingFor;
-	maxAttempts?: number;
 	verificationRequired?: boolean;
 }
 
 export const TASK_PRIORITIES: readonly TaskPriority[] = ["low", "normal", "high", "critical"];
 const WAITING_FOR: readonly TaskWaitingFor[] = ["time", "user", "job", "verification", "external-signal"];
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
-const OUTCOMES: readonly TaskOutcome[] = ["pending", "running", "progress", "blocked", "failed"];
-
-function normalizeLegacyOutcome(value: unknown): unknown {
-	return value === "verified" || value === "skipped" ? "progress" : value;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -95,34 +57,6 @@ function optionalString(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	return trimmed || undefined;
-}
-
-function finiteNonNegative(value: unknown, fallback = 0): number {
-	if (value === undefined) return fallback;
-	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-		throw new Error("control usage values must be finite non-negative numbers");
-	}
-	return value;
-}
-
-function parseTaskUsage(value: Record<string, unknown>): TaskUsage {
-	return { attempts: Math.floor(finiteNonNegative(value.attempts)) };
-}
-
-function nonNegativeInteger(value: unknown, fallback = 0): number {
-	if (value === undefined) return fallback;
-	if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-		throw new Error("control.attemptGeneration must be a non-negative integer; remove it to rebuild from 0.");
-	}
-	return value;
-}
-
-function optionalPositive(value: unknown): number | undefined {
-	if (value === undefined) return undefined;
-	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-		throw new Error("control budget values must be finite positive numbers");
-	}
-	return value;
 }
 
 function enumValue<T extends string>(value: unknown, values: readonly T[], fallback: T): T {
@@ -149,23 +83,6 @@ function parseStop(value: unknown): TaskStop | undefined {
 		throw new Error("control.stop requires a reason and valid at timestamp");
 	}
 	return { by, reason, at: formatLocalTime(new Date(parseLocalTime(at)!)) };
-}
-
-function parseWakeHandoff(value: unknown): TaskWakeHandoff | undefined {
-	if (value === undefined) return undefined;
-	if (!isRecord(value)) throw new Error("control.wakeHandoff must be an object");
-	if (value.kind !== "subagent" || typeof value.resourceId !== "string" || typeof value.dispatchId !== "string") {
-		throw new Error("control.wakeHandoff requires kind=subagent, resourceId, and dispatchId");
-	}
-	return {
-		kind: "subagent",
-		resourceId: value.resourceId,
-		dispatchId: value.dispatchId,
-		generation: nonNegativeInteger(value.generation),
-		previousLastOutcome: enumValue(normalizeLegacyOutcome(value.previousLastOutcome), OUTCOMES, "pending"),
-		previousBlockedReason: optionalString(value.previousBlockedReason),
-		previousLastStartedAt: optionalString(value.previousLastStartedAt),
-	};
 }
 
 /**
@@ -204,11 +121,7 @@ export function createDefaultTaskControl(requiresVerification = false): TaskCont
 	return {
 		version: 2,
 		priority: "normal",
-		budget: { maxAttempts: 12 },
-		usage: { attempts: 0 },
 		verification: { required: requiresVerification, status: "pending" },
-		attemptGeneration: 0,
-		lastOutcome: "pending",
 	};
 }
 
@@ -227,14 +140,7 @@ export function parseTaskControl(raw: string): TaskControl {
 		throw new Error("control must be a version 1 or version 2 JSON object; repair it with task_manage set.");
 	}
 
-	const budget = isRecord(value.budget) ? value.budget : {};
-	const usage = isRecord(value.usage) ? value.usage : {};
-	const parsedUsage = parseTaskUsage(usage);
 	const verification = isRecord(value.verification) ? value.verification : {};
-	const maxAttempts = optionalPositive(budget.maxAttempts);
-	if (!maxAttempts || !Number.isInteger(maxAttempts)) {
-		throw new Error("control.budget.maxAttempts must be a positive integer");
-	}
 	const deadline = optionalString(value.deadline);
 	if (deadline && parseLocalTime(deadline) === undefined) {
 		throw new Error("control.deadline must be a valid local time");
@@ -259,10 +165,7 @@ export function parseTaskControl(raw: string): TaskControl {
 		priority: enumValue(value.priority, TASK_PRIORITIES, "normal"),
 		deadline,
 		nextAction: optionalString(value.nextAction),
-		blockedReason: optionalString(value.blockedReason),
 		waitingFor,
-		budget: { maxAttempts: Math.max(1, Math.floor(maxAttempts)) },
-		usage: parsedUsage,
 		verification: {
 			required: parseVerificationRequired(verification),
 			status: enumValue(verification.status, VERIFICATION_STATUSES, "pending"),
@@ -272,18 +175,9 @@ export function parseTaskControl(raw: string): TaskControl {
 			checkedAt: optionalString(verification.checkedAt),
 			subjectHash: optionalString(verification.subjectHash),
 		},
-		attemptGeneration: nonNegativeInteger(value.attemptGeneration),
-		lastOutcome: enumValue(normalizeLegacyOutcome(value.lastOutcome), OUTCOMES, "pending"),
-		lastStartedAt: optionalString(value.lastStartedAt),
-		lastFinishedAt: optionalString(value.lastFinishedAt),
 		cycleId: optionalString(value.cycleId),
 		stop,
-		wakeHandoff: parseWakeHandoff(value.wakeHandoff),
 	};
-}
-
-function zeroUsage(): TaskUsage {
-	return { attempts: 0 };
 }
 
 /** Reset state that is meaningful only within one recurring task cycle. */
@@ -293,16 +187,10 @@ export function resetTaskControlForCycle(control: TaskControl, cycleId: string):
 	return {
 		...structuredClone(control),
 		nextAction: undefined,
-		lastOutcome: "pending",
-		blockedReason: undefined,
 		waitingFor: undefined,
-		usage: zeroUsage(),
 		verification: { required: control.verification.required, status: "pending" },
-		lastStartedAt: undefined,
-		lastFinishedAt: undefined,
 		cycleId: normalizedCycleId,
 		stop: undefined,
-		wakeHandoff: undefined,
 	};
 }
 
@@ -322,14 +210,7 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 	}
 	next.deadline = patchOptionalString(next.deadline, normalizedDeadlinePatch);
 	next.nextAction = patchOptionalString(next.nextAction, patch.nextAction);
-	next.blockedReason = patchOptionalString(next.blockedReason, patch.blockedReason);
 	if (patch.waitingFor !== undefined) next.waitingFor = patch.waitingFor;
-	if (patch.maxAttempts !== undefined) {
-		if (!Number.isInteger(patch.maxAttempts) || patch.maxAttempts < 1) {
-			throw new Error("maxAttempts must be a positive integer.");
-		}
-		next.budget.maxAttempts = patch.maxAttempts;
-	}
 	if (patch.verificationRequired !== undefined && patch.verificationRequired !== next.verification.required) {
 		next.verification = { required: patch.verificationRequired, status: "pending" };
 	}
@@ -342,8 +223,8 @@ export function taskPriorityRank(priority: TaskPriority): number {
 
 /**
  * Return a deterministic governance violation for a live task. Sleeping tasks have no current
- * work, so neither a deadline nor an attempt budget may stop them. Waiting tasks are subject to
- * their deadline but do not spend attempt budget while parked.
+ * work, so a deadline cannot stop them; waiting and active tasks are both subject to it — a
+ * deadline is the user's own intent, not something a task can dodge by parking.
  */
 export function taskBudgetViolation(
 	control: TaskControl,
@@ -354,9 +235,6 @@ export function taskBudgetViolation(
 	if (control.deadline) {
 		const deadlineMs = parseLocalTime(control.deadline);
 		if (deadlineMs !== undefined && deadlineMs < nowMs) return `deadline exceeded (${control.deadline})`;
-	}
-	if (status === "active" && control.usage.attempts >= control.budget.maxAttempts) {
-		return `attempt budget exhausted (${control.usage.attempts}/${control.budget.maxAttempts})`;
 	}
 	return undefined;
 }

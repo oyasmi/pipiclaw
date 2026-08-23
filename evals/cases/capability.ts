@@ -223,7 +223,6 @@ export const capabilityCases: EvalCase[] = [
 					"## DoD\n" +
 					"- [ ] report.md contains ITEM-01 through ITEM-12 in order\n" +
 					"- [ ] Item 7's line uses the current data (RECOVERED-7), not the retired ledger\n",
-				control: { budget: { maxAttempts: 24 } },
 			});
 		},
 		script: Array.from({ length: 16 }, (_, index) => ({ kind: "runTaskDriver", at: driverTick(index) }) as const),

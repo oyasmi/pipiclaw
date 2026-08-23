@@ -16,7 +16,6 @@ const taskControlSchema = Type.Object({
 		}),
 	),
 	nextAction: Type.Optional(Type.String({ description: "Concrete next executable step; empty string clears it." })),
-	blockedReason: Type.Optional(Type.String({ description: "Why work cannot currently proceed; empty clears it." })),
 	waitingFor: Type.Optional(
 		Type.Union(
 			[
@@ -28,13 +27,6 @@ const taskControlSchema = Type.Object({
 			],
 			{ description: "Diagnostic recovery source; it does not create a new lifecycle status." },
 		),
-	),
-	maxAttempts: Type.Optional(
-		Type.Integer({
-			minimum: 1,
-			description:
-				"Attempt stop-loss; the only per-task budget. Default 12, spent over the whole task (recurring: per cycle) — raise it on create for long multi-step work.",
-		}),
 	),
 	verificationRequired: Type.Optional(
 		Type.Boolean({

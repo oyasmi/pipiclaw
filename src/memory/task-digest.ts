@@ -47,7 +47,6 @@ function renderLine(entry: TaskLedgerEntry, now: number): string {
 	const control = entry.frontmatter.control;
 	if (control) {
 		parts.push(`priority ${control.priority}`);
-		parts.push(`attempt ${control.usage.attempts}/${control.budget.maxAttempts}`);
 		if (control.verification.required) parts.push(`verify required/${control.verification.status}`);
 		if (control.waitingFor) parts.push(`waiting for ${control.waitingFor}`);
 		if (control.stop) parts.push(`stop ${control.stop.by}: ${control.stop.reason}`);

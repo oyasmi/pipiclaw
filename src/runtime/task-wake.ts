@@ -7,13 +7,7 @@
 import { getChannelJobManager, type JobSnapshot } from "../agent/job-manager.js";
 import type { Executor } from "../executor.js";
 import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
-import {
-	activateWaitingTaskAndClaimAttempt,
-	finishWakeTaskActivation,
-	rollbackWakeTaskActivation,
-	type WakeTaskHandoffInput,
-	type WakeTaskTransitionHooks,
-} from "../tasks/store.js";
+import { activateWaitingTask, rollbackWaitingTask, type WakeTaskTransitionHooks } from "../tasks/store.js";
 import type { ChannelEvent } from "./channel-event.js";
 import { getChannelDir } from "./channel-paths.js";
 
@@ -61,7 +55,6 @@ export function isTrustedInternalWake(
 
 export interface ClaimedDelegationWake {
 	taskId: string;
-	generation?: number;
 	activated: boolean;
 	finish(): Promise<void>;
 	rollback(): Promise<void>;
@@ -87,40 +80,25 @@ export async function claimVerifiedDelegationWake(
 		return undefined;
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
-	const handoff: WakeTaskHandoffInput = {
-		kind: "subagent",
-		resourceId: wake.resourceId,
-		dispatchId: event.dispatchId,
-	};
-	const activated = await activateWaitingTaskAndClaimAttempt(
-		channelDir,
-		wake.taskId,
-		"external-signal",
-		new Date(),
-		hooks,
-		handoff,
-	);
+	const activated = await activateWaitingTask(channelDir, wake.taskId, "external-signal", hooks);
 	return {
 		taskId: wake.taskId,
-		generation: activated?.generation,
 		activated: activated !== undefined,
 		finish: async () => {
 			await runManager.finishWakeConsumption(wake.resourceId, event.dispatchId);
-			await finishWakeTaskActivation(channelDir, wake.taskId, handoff);
 		},
-		rollback: () => rollbackWakeTaskActivation(channelDir, wake.taskId, handoff),
+		rollback: () => rollbackWaitingTask(channelDir, wake.taskId, "external-signal"),
 	};
 }
 
 export interface ClaimedJobWake {
 	taskId: string;
-	generation?: number;
 	activated: boolean;
 	finish(): Promise<void>;
 }
 
 /** Same shape as `claimVerifiedDelegationWake`, for a `[JOB:<jobId>] ... belongs to task
- * <taskId>.` completion wake. A background job has no handoff/rollback bookkeeping — its wake
+ * <taskId>.` completion wake. A background job has no rollback bookkeeping — its wake
  * activation is a single unconditional step — so `ClaimedJobWake` omits `rollback`. */
 export async function claimVerifiedJobWake(
 	event: ChannelEvent,
@@ -140,10 +118,9 @@ export async function claimVerifiedJobWake(
 		return undefined;
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
-	const activated = await activateWaitingTaskAndClaimAttempt(channelDir, wake.taskId, "job", new Date(), hooks);
+	const activated = await activateWaitingTask(channelDir, wake.taskId, "job", hooks);
 	return {
 		taskId: wake.taskId,
-		generation: activated?.generation,
 		activated: activated !== undefined,
 		finish: async () => {
 			await jobManager.finishWakeConsumption(wake.resourceId, event.dispatchId);

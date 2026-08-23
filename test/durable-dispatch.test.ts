@@ -197,14 +197,16 @@ describe("DurableDispatchService", () => {
 
 		const claimed = await claimVerifiedDelegationWake(delivered[1]!, workspaceDir);
 		expect(claimed?.activated).toBe(true);
-		expect(claimed?.generation).toBe(1);
 		await claimed?.finish();
 		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.status).toBe("active");
 
 		await service.drainOnce(Date.now() + 22);
 		expect(delivered[2]?.text).toContain("[REDELIVERY:3]");
+		// The task is already active, so a further claim on the same wake is a no-op — the run
+		// manager's dispatchId-scoped wake claim is what makes this idempotent, not any per-task
+		// attempt counter (that mechanism was retired).
 		await expect(claimVerifiedDelegationWake(delivered[2]!, workspaceDir)).resolves.toBeUndefined();
-		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.control?.attemptGeneration).toBe(1);
+		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.status).toBe("active");
 	});
 
 	it("renews the lease of a turn this process is still running (spec 031, D2)", async () => {

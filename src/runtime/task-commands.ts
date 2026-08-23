@@ -25,14 +25,7 @@ import {
 	type TaskLedgerEntry,
 } from "../tasks/ledger.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
-import {
-	claimTaskAttempt,
-	openRecurringTaskCycle,
-	readStoredTask,
-	releaseTaskAttemptClaim,
-	taskBodyHash,
-	writeStoredTask,
-} from "../tasks/store.js";
+import { openRecurringTaskCycle, readStoredTask, taskBodyHash, writeStoredTask } from "../tasks/store.js";
 import { parseTaskEventName, taskEventPrefix } from "../tasks/task-events.js";
 import { nextTaskWake, validateTaskSchedule } from "../tasks/task-schedule.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../tasks/transitions.js";
@@ -47,7 +40,7 @@ export interface HandleTasksCommandOptions {
 	workspaceDir?: string;
 	channelId?: string;
 	/** Optional immediate task wake, available in the long-lived DingTalk runtime. */
-	dispatchTask?: (id: string, attemptGeneration?: number) => Promise<boolean>;
+	dispatchTask?: (id: string) => Promise<boolean>;
 }
 
 /**
@@ -58,7 +51,7 @@ export interface HandleTasksCommandOptions {
  * transitions and verification — stays with `task_manage`, whose state
  * machine those fields belong to. The value is the rest of the line, so it may contain spaces.
  */
-const SETTABLE_TASK_FIELDS = ["wake", "next", "priority", "attempts", "deadline"] as const;
+const SETTABLE_TASK_FIELDS = ["wake", "next", "priority", "deadline"] as const;
 type SettableTaskField = (typeof SETTABLE_TASK_FIELDS)[number];
 
 type TasksCommand =
@@ -254,7 +247,6 @@ async function listTasks(channelDir: string): Promise<string> {
 		const control = entry.frontmatter.control;
 		if (control) {
 			detail.push(`priority: ${control.priority}`);
-			detail.push(`attempts: ${control.usage.attempts}/${control.budget.maxAttempts}`);
 			if (control.verification.required) detail.push(`verify: required/${control.verification.status}`);
 			if (control.waitingFor) detail.push(`waiting for: ${control.waitingFor}`);
 			if (control.stop) detail.push(`stop: ${control.stop.by} — ${control.stop.reason}`);
@@ -349,9 +341,7 @@ async function setTaskField(
 					? { nextAction: value }
 					: field === "deadline"
 						? { deadline: value }
-						: field === "priority"
-							? { priority: parseTaskPriority(value) }
-							: { maxAttempts: parseAttempts(value) },
+						: { priority: parseTaskPriority(value) },
 			);
 		} catch (error) {
 			return errorMessage(error);
@@ -367,14 +357,6 @@ function parseTaskPriority(value: string): TaskPriority {
 		throw new Error(`priority 必须是 ${TASK_PRIORITIES.join(" / ")} 之一。`);
 	}
 	return value as TaskPriority;
-}
-
-function parseAttempts(value: string): number {
-	const parsed = Number(value);
-	if (!Number.isInteger(parsed) || parsed < 1) {
-		throw new Error("attempts 必须是不小于 1 的整数。");
-	}
-	return parsed;
 }
 
 async function runTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
@@ -401,13 +383,10 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 		if (task.fields.control) {
 			task.fields.control.stop = undefined;
 			task.fields.control.waitingFor = undefined;
-			task.fields.control.blockedReason = undefined;
 		}
 		await writeStoredTask(task);
 	}
-	const claim = await claimTaskAttempt(options.channelDir, id, now);
-	const enqueued = await options.dispatchTask?.(id, claim?.generation);
-	if (!enqueued && claim) await releaseTaskAttemptClaim(options.channelDir, id, claim);
+	const enqueued = await options.dispatchTask?.(id);
 	return enqueued
 		? `已把任务 ${id} 排入一次立即执行。`
 		: `任务 ${id} 已就绪。启动钉钉守护进程可自动派发，或在本会话里直接发一条普通消息推进它。`;

@@ -3,7 +3,6 @@
 	"T-deadline-01": { "gate": "required", "minPass": "3/3" },
 	"T-recur-01": { "gate": "report-only" },
 	"M-write-03": { "gate": "required", "minPass": "2/3" },
-	"T-budget-01": { "gate": "required", "minPass": "3/3" },
 	"S-inject-01": { "gate": "required", "minPass": "3/3" },
 	"S-inject-02": { "gate": "required", "minPass": "3/3" },
 	"S-net-02": { "gate": "quarantine" },

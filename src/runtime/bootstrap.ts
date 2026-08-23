@@ -33,7 +33,7 @@ import {
 	stopSubAgentGarbageCollector,
 } from "../subagents/runs.js";
 import { readActiveTasks } from "../tasks/ledger.js";
-import { finishTaskAttempt, type WakeTaskTransitionHooks } from "../tasks/store.js";
+import type { WakeTaskTransitionHooks } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
@@ -474,7 +474,7 @@ export async function createRuntimeContext(
 						channelDir: getChannelDir(options.paths.workspaceDir, event.channelId),
 						workspaceDir: options.paths.workspaceDir,
 						channelId: event.channelId,
-						dispatchTask: async (id, attemptGeneration) => {
+						dispatchTask: async (id) => {
 							const channelDir = getChannelDir(options.paths.workspaceDir, event.channelId);
 							const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
 								(candidate) => candidate.id === id,
@@ -483,7 +483,7 @@ export async function createRuntimeContext(
 							// A human asking to run a task twice means twice, so this key is deliberately
 							// unique per invocation rather than sharing the driver's occurrence key (D1).
 							const now = Date.now();
-							const driverEvent = createTaskDriverEvent(event.channelId, entry, now, attemptGeneration);
+							const driverEvent = createTaskDriverEvent(event.channelId, entry, now);
 							return (
 								(await durableDispatch?.dispatch({
 									...driverEvent,
@@ -701,7 +701,7 @@ export async function createRuntimeContext(
 					// y." or "[SUBAGENT:x] ... belongs to task y." — including another user, or an
 					// external agent's own untrusted stdout (spec 040, D8's threat model explicitly
 					// treats external output as untrusted). Activating a waiting task on text pattern
-					// alone lets that forged claim advance an unrelated task's attempt generation. The
+					// alone lets that forged claim wake an unrelated task early. The
 					// pattern match only extracts a *candidate* id pair now; both paths verify the
 					// named run/job actually exists, is done, and really is the one that names this
 					// taskId before ever calling `activateWaitingTask` (T9).
@@ -721,7 +721,6 @@ export async function createRuntimeContext(
 						);
 						if (claimed) {
 							if (claimed.activated) recoveredJobTaskId = claimed.taskId;
-							if (claimed.generation !== undefined) event.taskAttemptGeneration = claimed.generation;
 							await claimed.finish();
 							structuredWakeFinalized = true;
 							if (event.internalWake?.kind === "job" && !claimed.activated) return;
@@ -755,7 +754,6 @@ export async function createRuntimeContext(
 						);
 						if (claimed) {
 							if (claimed.activated) recoveredDelegationTaskId = claimed.taskId;
-							if (claimed.generation !== undefined) event.taskAttemptGeneration = claimed.generation;
 							await claimed.finish();
 							structuredWakeFinalized = true;
 							if (event.internalWake?.kind === "subagent" && !claimed.activated) return;
@@ -777,14 +775,6 @@ export async function createRuntimeContext(
 					// equivalent to checking all three separately.
 					if (taskAttemptId) {
 						noteTaskEffects(event.channelId, taskAttemptId, channelEffectCount(event.channelId) - effectsBefore);
-					}
-					if (taskAttemptId && result.usage && result.durationMs !== undefined) {
-						await finishTaskAttempt(getChannelDir(options.paths.workspaceDir, event.channelId), taskAttemptId, {
-							failed: result.stopReason === "error" || result.stopReason === "aborted",
-							silent: result.silent,
-							finishedAt: new Date(),
-							generation: event.taskAttemptGeneration,
-						});
 					}
 
 					if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {

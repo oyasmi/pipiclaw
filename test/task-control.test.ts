@@ -11,7 +11,7 @@ import {
 	taskBudgetViolation,
 } from "../src/tasks/control.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
-import { activateWaitingTask, claimTaskAttempt, finishTaskAttempt, readStoredTask } from "../src/tasks/store.js";
+import { activateWaitingTask, readStoredTask } from "../src/tasks/store.js";
 import { parseVerificationVerdict } from "../src/tasks/verification.js";
 
 describe("TaskControl v2", () => {
@@ -20,7 +20,6 @@ describe("TaskControl v2", () => {
 		expect(control).toMatchObject({
 			version: 2,
 			priority: "normal",
-			budget: { maxAttempts: 12 },
 			verification: { required: true, status: "pending" },
 		});
 		for (const key of [
@@ -30,6 +29,11 @@ describe("TaskControl v2", () => {
 			"approvedAt",
 			"approvalBodyHash",
 			"provenance",
+			"budget",
+			"usage",
+			"attemptGeneration",
+			"lastOutcome",
+			"wakeHandoff",
 		]) {
 			expect(control).not.toHaveProperty(key);
 		}
@@ -40,7 +44,7 @@ describe("TaskControl v2", () => {
 			version: 1,
 			priority: "high",
 			pausedBy: "governor",
-			blockedReason: "attempt budget exhausted",
+			blockedReason: "legacy stop reason",
 			sideEffects: "external",
 			externalApproval: "granted",
 			approvalBy: "Alice",
@@ -54,12 +58,13 @@ describe("TaskControl v2", () => {
 		expect(parsed).toMatchObject({
 			version: 2,
 			priority: "high",
-			budget: { maxAttempts: 4 },
 			verification: { required: true, status: "pending" },
-			stop: { by: "governor", reason: "attempt budget exhausted" },
+			stop: { by: "governor", reason: "legacy stop reason" },
 		});
 		expect(parsed).not.toHaveProperty("sideEffects");
 		expect(parsed).not.toHaveProperty("externalApproval");
+		expect(parsed).not.toHaveProperty("budget");
+		expect(parsed).not.toHaveProperty("usage");
 		expect(retiredTaskControlKeys(raw)).toEqual(
 			expect.arrayContaining([
 				"sideEffects",
@@ -79,12 +84,10 @@ describe("TaskControl v2", () => {
 			nextAction: "Wait for the build job",
 			waitingFor: "job",
 			verificationRequired: true,
-			maxAttempts: 20,
 		});
 		expect(control).toMatchObject({
 			priority: "critical",
 			waitingFor: "job",
-			budget: { maxAttempts: 20 },
 			verification: { required: true, status: "pending" },
 		});
 		expect(control).not.toHaveProperty("externalApproval");
@@ -92,31 +95,29 @@ describe("TaskControl v2", () => {
 
 	it("resets only per-cycle facts", () => {
 		const control = createDefaultTaskControl(true);
-		control.usage = { attempts: 3 };
 		control.waitingFor = "verification";
 		control.stop = { by: "governor", reason: "old cycle", at: "2026-08-03T09:00:00+08:00" };
 		control.verification = { required: true, status: "passed", runId: "old" };
 		const reset = resetTaskControlForCycle(control, "cycle-2026-08-04");
 		expect(reset).toMatchObject({
 			cycleId: "cycle-2026-08-04",
-			lastOutcome: "pending",
-			usage: { attempts: 0 },
 			verification: { required: true, status: "pending" },
 		});
 		expect(reset.stop).toBeUndefined();
 		expect(reset.waitingFor).toBeUndefined();
 	});
 
-	it("governs active work but not parked or sleeping work", () => {
+	it("governs work by deadline only, and not while sleeping", () => {
 		const control = createDefaultTaskControl();
-		control.usage.attempts = control.budget.maxAttempts;
-		expect(taskBudgetViolation(control, 0, "active")).toContain("attempt budget exhausted");
-		expect(taskBudgetViolation(control, 0, "waiting")).toBeUndefined();
-		expect(taskBudgetViolation(control, 0, "sleeping")).toBeUndefined();
 		control.deadline = "2026-08-03T00:00:00+08:00";
+		expect(taskBudgetViolation(control, Date.parse("2026-08-04T00:00:00+08:00"), "active")).toContain(
+			"deadline exceeded",
+		);
 		expect(taskBudgetViolation(control, Date.parse("2026-08-04T00:00:00+08:00"), "waiting")).toContain(
 			"deadline exceeded",
 		);
+		expect(taskBudgetViolation(control, Date.parse("2026-08-04T00:00:00+08:00"), "sleeping")).toBeUndefined();
+		expect(taskBudgetViolation(control, Date.parse("2026-08-02T00:00:00+08:00"), "active")).toBeUndefined();
 	});
 
 	it("rejects invalid v2 values with a repair-oriented error", () => {
@@ -127,7 +128,7 @@ describe("TaskControl v2", () => {
 	});
 });
 
-describe("task attempt accounting", () => {
+describe("waiting task activation", () => {
 	let root: string;
 	let channelDir: string;
 
@@ -139,45 +140,6 @@ describe("task attempt accounting", () => {
 
 	afterEach(async () => {
 		await rm(root, { recursive: true, force: true });
-	});
-
-	it("claims an active attempt and records runtime telemetry", async () => {
-		const path = join(channelDir, "tasks", "work.md");
-		await writeFile(
-			path,
-			renderTaskDocument(
-				{ status: "active", control: createDefaultTaskControl() },
-				"# Work\n\n## Current Cycle\n- start\n",
-			),
-		);
-		const claim = await claimTaskAttempt(channelDir, "work", new Date("2026-08-04T09:00:00+08:00"));
-		expect(claim?.generation).toBe(1);
-		await finishTaskAttempt(channelDir, "work", {
-			failed: false,
-			finishedAt: new Date("2026-08-04T09:03:00+08:00"),
-			generation: claim?.generation,
-		});
-		const stored = await readStoredTask(channelDir, "work");
-		expect(stored?.fields.control).toMatchObject({
-			attemptGeneration: 1,
-			lastOutcome: "progress",
-			usage: { attempts: 1 },
-		});
-	});
-
-	it("does not charge a silent turn while retaining its spend audit", async () => {
-		const path = join(channelDir, "tasks", "quiet.md");
-		await writeFile(path, renderTaskDocument({ status: "active", control: createDefaultTaskControl() }, "# Quiet\n"));
-		const claim = await claimTaskAttempt(channelDir, "quiet", new Date("2026-08-04T09:00:00+08:00"));
-		await finishTaskAttempt(channelDir, "quiet", {
-			failed: false,
-			silent: true,
-			finishedAt: new Date("2026-08-04T09:01:00+08:00"),
-			generation: claim?.generation,
-		});
-		const stored = await readStoredTask(channelDir, "quiet");
-		expect(stored?.fields.control?.usage).toMatchObject({ attempts: 0 });
-		expect(stored?.fields.control?.lastOutcome).toBe("pending");
 	});
 
 	it("does not let a job completion wake a task waiting for another source", async () => {
@@ -195,12 +157,12 @@ describe("task attempt accounting", () => {
 		expect((await readStoredTask(channelDir, "source"))?.fields.status).toBe("active");
 	});
 
-	it("creates a v2 control block when a legacy active task is first claimed", async () => {
+	it("activates any waiting task when no expected source is given", async () => {
 		const path = join(channelDir, "tasks", "legacy.md");
-		await writeFile(path, renderTaskDocument({ status: "active" }, "# Legacy\n"));
-		const claim = await claimTaskAttempt(channelDir, "legacy", new Date("2026-08-04T09:00:00+08:00"));
-		expect(claim?.control.version).toBe(2);
-		expect((await readStoredTask(channelDir, "legacy"))?.fields.control?.usage.attempts).toBe(1);
+		await writeFile(path, renderTaskDocument({ status: "waiting" }, "# Legacy\n"));
+		const activated = await activateWaitingTask(channelDir, "legacy");
+		expect(activated?.fields.control?.version).toBe(2);
+		expect((await readStoredTask(channelDir, "legacy"))?.fields.status).toBe("active");
 	});
 });
 

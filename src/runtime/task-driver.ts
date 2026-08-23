@@ -12,14 +12,7 @@ import {
 	recurringTaskMissedOccurrence,
 	type TaskLedgerEntry,
 } from "../tasks/ledger.js";
-import {
-	activateWaitingTask,
-	claimTaskAttempt,
-	escalateTask,
-	openRecurringTaskCycle,
-	releaseTaskAttemptClaim,
-	updateStoredTask,
-} from "../tasks/store.js";
+import { activateWaitingTask, escalateTask, openRecurringTaskCycle, updateStoredTask } from "../tasks/store.js";
 import { nextTaskWake } from "../tasks/task-schedule.js";
 import type { ChannelEvent } from "./channel-event.js";
 import { discoverWorkspaceChannelIds } from "./channel-index.js";
@@ -54,6 +47,13 @@ interface DispatchAttempt {
 	effects: number;
 	/** Consecutive accepted wakes that ended with the ledger fingerprint unchanged (spec 029, D5). */
 	futileCount: number;
+	/** Wakes dispatched to this task in its current cycle, process memory only. Unlike
+	 * futileCount this counts even genuine progress — a blunt runaway backstop for tasks that
+	 * never stall but also never converge, replacing the retired per-task attempt budget. Reset
+	 * on cycle change (a new `cycleId`) or process restart; that reset is an acceptable tradeoff,
+	 * matching futileCount's own reset-on-restart behavior. */
+	wakeCount: number;
+	cycleId?: string;
 }
 
 /** Short debounce so a burst of nudges collapses into a single rescan. */
@@ -62,6 +62,10 @@ const NUDGE_DEBOUNCE_MS = 50;
 const MIN_SLEEP_MS = 250;
 /** Consecutive no-progress wakes before the governor pauses a task (spec 029, D5). */
 const FUTILE_WAKE_LIMIT = 3;
+/** Wakes-per-cycle ceiling: a deliberately generous circuit breaker, not a normal governance
+ * path (deadline and futileCount are). Guards only against a task that keeps "progressing"
+ * without ever converging or hitting its deadline. */
+const MAX_WAKES_PER_CYCLE = 500;
 
 export async function discoverTaskChannels(
 	workspaceDir: string,
@@ -84,9 +88,8 @@ function attemptKey(channelId: string, taskId: string): string {
 /**
  * What "this task moved" means to the driver.
  *
- * Do not use mtime/size here. Runtime usage accounting deliberately rewrites task control after
- * every attempt; treating that bookkeeping as progress made governed tasks retry at the short
- * continuation interval forever.
+ * Do not use mtime/size here: routine frontmatter rewrites (status/note churn) must not read as
+ * progress, or governed tasks would retry at the short continuation interval forever.
  *
  * `latestNote` is deliberately absent (spec 031, D7): it is the model's own account of its work,
  * so including it let a wake that did nothing but append a note reset the futile counter forever,
@@ -99,9 +102,9 @@ function attemptKey(channelId: string, taskId: string): string {
  * checkbox would reset the futile counter and buy the short retry tier — a governor bypass this
  * driver must not offer. The Plan is a capsule/agenda display concern only.
  *
- * nextAction and blockedReason are also model-written explanations, not evidence of an effect.
- * Including either lets a progress/set call reset the futile counter without changing the task's
- * externally observable work.
+ * nextAction is also a model-written explanation, not evidence of an effect. Including it would
+ * let a progress/set call reset the futile counter without changing the task's externally
+ * observable work.
  */
 function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
 	const control = entry.frontmatter.control;
@@ -132,9 +135,9 @@ function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
  * - the ledger changed with no effect (status/note churn) ⇒ the ordinary continuation delay;
  * - nothing changed ⇒ the long stalled-retry backoff, and the futile counter keeps running.
  *
- * Nothing here relaxes the stop-losses: the fast tier still costs one attempt against
- * `budget.maxAttempts`, so a task that spins productively-looking still hits the governor — just
- * sooner in wall time instead of an hour per step.
+ * Nothing here relaxes the stop-losses: the fast tier still counts toward `MAX_WAKES_PER_CYCLE`
+ * and the futile-wake limit, so a task that spins productively-looking still hits the governor —
+ * just sooner in wall time instead of an hour per step.
  */
 function attemptDelayMs(
 	attempt: DispatchAttempt,
@@ -173,12 +176,7 @@ function taskDispatchId(channelId: string, entry: TaskLedgerEntry, nowMs: number
 	return `task:${channelId}:${entry.id}:${occurrence}`;
 }
 
-export function createTaskDriverEvent(
-	channelId: string,
-	entry: TaskLedgerEntry,
-	nowMs: number,
-	attemptGeneration?: number,
-): ChannelEvent {
+export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): ChannelEvent {
 	const repairOnly = !entry.frontmatter.readable || entry.frontmatter.controlReadable === false;
 	const repair = repairOnly
 		? ` Task metadata is not readable; repair only the frontmatter/control in tasks/${entry.id}.md, then stop. ` +
@@ -194,7 +192,6 @@ export function createTaskDriverEvent(
 			: "",
 		entry.latestNote ? `latest=${entry.latestNote};` : "",
 		control?.nextAction ? `next=${control.nextAction};` : "",
-		control ? `budget=${control.usage.attempts}/${control.budget.maxAttempts} attempts;` : "",
 	]
 		.filter(Boolean)
 		.join(" ");
@@ -215,7 +212,6 @@ export function createTaskDriverEvent(
 		ts: String(nowMs),
 		conversationType: channelId.startsWith("group_") ? "2" : "1",
 		dispatchId: taskDispatchId(channelId, entry, nowMs),
-		taskAttemptGeneration: attemptGeneration,
 	};
 }
 
@@ -614,15 +610,28 @@ export class TaskDriver {
 					continue;
 				}
 
-				// Claiming an attempt only touches usage bookkeeping, which the fingerprint
-				// deliberately excludes, so there is nothing to recompute here.
-				const claim = repairOnly ? undefined : await claimTaskAttempt(channelDir, entry.id, now);
-				if (claim) entry.frontmatter.control = claim.control;
-				const event = createTaskDriverEvent(channelId, entry, nowMs, claim?.generation);
+				const cycleId = entry.frontmatter.control?.cycleId;
+				const wakeCount = !repairOnly && previous && previous.cycleId === cycleId ? previous.wakeCount + 1 : 1;
+				if (wakeCount > MAX_WAKES_PER_CYCLE) {
+					const reason = `task exceeded ${MAX_WAKES_PER_CYCLE} wakes in this cycle (runaway failsafe)`;
+					if (await escalateTask(channelDir, entry.id, reason)) {
+						const receipt = taskGovernorReceipt(channelId, entry, reason, nowMs);
+						try {
+							await this.options.notify?.(receipt);
+						} catch (error) {
+							log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
+						}
+						this.attempts.delete(key);
+						this.lastDispatchedTaskId.set(channelId, entry.id);
+						log.logWarning(`[${channelId}] Task driver disabled ${entry.id} (governor)`, reason);
+					}
+					continue;
+				}
+
+				const event = createTaskDriverEvent(channelId, entry, nowMs);
 				const accepted = await this.options.dispatch(event);
 				this.observeDispatch(event, accepted);
-				if (!accepted && claim) await releaseTaskAttemptClaim(channelDir, entry.id, claim);
-				this.attempts.set(key, { fingerprint, atMs: nowMs, accepted, effects, futileCount });
+				this.attempts.set(key, { fingerprint, atMs: nowMs, accepted, effects, futileCount, wakeCount, cycleId });
 				this.lastDispatchedTaskId.set(channelId, entry.id);
 				if (accepted) {
 					dispatched++;

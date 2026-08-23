@@ -203,7 +203,7 @@ describe("runtime structured wake delivery", () => {
 
 			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
 			expect(harness.fakeRunner.run).toHaveBeenCalledTimes(1);
-			expect((await readStoredTask(channelDir, taskId))?.fields.control?.usage.attempts).toBe(1);
+			expect((await readStoredTask(channelDir, taskId))?.fields.status).toBe("active");
 
 			await harness.runtime.handler.handleEvent(
 				{ ...wake, text: `[REDELIVERY:2] ${wake.text}` },
@@ -211,7 +211,7 @@ describe("runtime structured wake delivery", () => {
 				true,
 			);
 			expect(harness.fakeRunner.run).toHaveBeenCalledTimes(1);
-			expect((await readStoredTask(channelDir, taskId))?.fields.control?.usage.attempts).toBe(1);
+			expect((await readStoredTask(channelDir, taskId))?.fields.status).toBe("active");
 			await harness.runtime.shutdown();
 		},
 	);
@@ -235,35 +235,31 @@ describe("runtime structured wake delivery", () => {
 		await harness.runtime.shutdown();
 	});
 
-	it.each([
-		["job", "activation"],
-		["job", "attempt"],
-		["subagent", "activation"],
-		["subagent", "attempt"],
-	] as const)("keeps a %s wake durable after a retryable %s failure", async (kind, stage) => {
-		let fail = true;
-		const fault = () => {
-			if (fail) throw new Error(`${stage} persist rejected`);
-		};
-		const harness = await createHarness(`retry_${kind}_${stage}`, {
-			[kind]: stage === "activation" ? { beforeActivation: fault } : { beforeAttemptClaim: fault },
-		});
-		const taskId = `T-retry-${kind}-${stage}`;
-		const channelDir = await waitingTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId, kind);
-		const wake = await createWake(harness, kind, taskId);
-		const dispatchPath = join(harness.runtimePaths.appHomeDir, "state", "dispatch", `${wake.dispatchId}.json`);
+	it.each(["job", "subagent"] as const)(
+		"keeps a %s wake durable after a retryable activation failure",
+		async (kind) => {
+			let fail = true;
+			const fault = () => {
+				if (fail) throw new Error("activation persist rejected");
+			};
+			const harness = await createHarness(`retry_${kind}`, { [kind]: { beforeActivation: fault } });
+			const taskId = `T-retry-${kind}`;
+			const channelDir = await waitingTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId, kind);
+			const wake = await createWake(harness, kind, taskId);
+			const dispatchPath = join(harness.runtimePaths.appHomeDir, "state", "dispatch", `${wake.dispatchId}.json`);
 
-		await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
-		expect(harness.fakeRunner.run).not.toHaveBeenCalled();
-		expect(existsSync(dispatchPath)).toBe(true);
-		expect(JSON.parse(readFileSync(dispatchPath, "utf-8"))).toMatchObject({ status: "pending" });
-		expect((await readStoredTask(channelDir, taskId))?.fields.control?.usage.attempts).toBe(0);
+			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
+			expect(harness.fakeRunner.run).not.toHaveBeenCalled();
+			expect(existsSync(dispatchPath)).toBe(true);
+			expect(JSON.parse(readFileSync(dispatchPath, "utf-8"))).toMatchObject({ status: "pending" });
+			expect((await readStoredTask(channelDir, taskId))?.fields.status).toBe("waiting");
 
-		fail = false;
-		await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
-		expect(harness.fakeRunner.run).toHaveBeenCalledOnce();
-		expect(existsSync(dispatchPath)).toBe(false);
-		expect((await readStoredTask(channelDir, taskId))?.fields.control?.usage.attempts).toBe(1);
-		await harness.runtime.shutdown();
-	});
+			fail = false;
+			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
+			expect(harness.fakeRunner.run).toHaveBeenCalledOnce();
+			expect(existsSync(dispatchPath)).toBe(false);
+			expect((await readStoredTask(channelDir, taskId))?.fields.status).toBe("active");
+			await harness.runtime.shutdown();
+		},
+	);
 });
