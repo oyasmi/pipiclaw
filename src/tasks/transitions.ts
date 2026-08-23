@@ -52,32 +52,9 @@ const TRANSITIONS: Record<TaskLifecycleAction, TransitionRule> = {
 	"cycle-due": { from: ["sleeping"], to: "active" },
 };
 
-/** Map legacy on-disk values to the v2 reader vocabulary. */
-export function normalizeStoredStatus(raw: string | undefined, recurring = false): TaskStatus {
-	switch (raw) {
-		case undefined:
-		case "":
-		case "open":
-		case "in-progress":
-		case "verifying":
-			return "active";
-		case "awaiting-user":
-		case "blocked":
-			return "waiting";
-		case "paused":
-		case "escalated":
-			return "active";
-		case "done":
-			return recurring ? "sleeping" : "active";
-		case "cancelled":
-			return "active";
-		default:
-			return (TASK_STATUSES as readonly string[]).includes(raw) ? (raw as TaskStatus) : "active";
-	}
-}
-
-export function wasLegacyEscalated(raw: string | undefined): boolean {
-	return raw === "escalated";
+/** Canonicalize a stored status value, fail-open to `active` for anything not in the current vocabulary. */
+export function normalizeStoredStatus(raw: string | undefined): TaskStatus {
+	return raw !== undefined && (TASK_STATUSES as readonly string[]).includes(raw) ? (raw as TaskStatus) : "active";
 }
 
 export function isSettableTaskStatus(value: string): value is SettableTaskStatus {

@@ -32,7 +32,7 @@ export async function setTask(options: TaskManageToolOptions, request: TaskManag
 	const id = normalizeTaskId(request.id);
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id, request.control !== undefined);
-	const fromStatus = normalizeStoredStatus(fields.status, Boolean(fields.schedule));
+	const fromStatus = normalizeStoredStatus(fields.status);
 	resolveTaskTransition("set", id, fromStatus, request.status);
 	const nextFields = applySet(fields, request);
 	if (nextFields.status === "sleeping" && !nextFields.schedule) {
@@ -57,7 +57,7 @@ export async function progressTask(
 	const note = requiredField(request.note, "note", "progress");
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	const from = normalizeStoredStatus(fields.status, Boolean(fields.schedule));
+	const from = normalizeStoredStatus(fields.status);
 	resolveTaskTransition("progress", id, from, request.status);
 	if (from === "sleeping") {
 		throw new RecoverableToolError(`Task "${id}" is sleeping; wait for its occurrence or use /tasks run ${id}.`);
@@ -98,7 +98,7 @@ export async function completeTask(
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	resolveTaskTransition("complete", id, normalizeStoredStatus(fields.status, Boolean(fields.schedule)));
+	resolveTaskTransition("complete", id, normalizeStoredStatus(fields.status));
 	const uncheckedAcceptance = uncheckedTaskAcceptanceItems(body);
 	if (uncheckedAcceptance.length > 0) {
 		throw new RecoverableToolError(
@@ -185,7 +185,7 @@ export async function skipTask(options: TaskManageToolOptions, request: TaskMana
 	const reason = requiredField(request.reason, "reason", "skip");
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	resolveTaskTransition("skip", id, normalizeStoredStatus(fields.status, Boolean(fields.schedule)));
+	resolveTaskTransition("skip", id, normalizeStoredStatus(fields.status));
 	if (!fields.schedule) {
 		throw new RecoverableToolError(
 			`Task "${id}" is not recurring; use complete after satisfying its DoD or cancel it.`,
@@ -222,7 +222,7 @@ export async function cancelTask(
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
-	resolveTaskTransition("cancel", id, normalizeStoredStatus(fields.status, Boolean(fields.schedule)));
+	resolveTaskTransition("cancel", id, normalizeStoredStatus(fields.status));
 	const cancelledBody = `${body.replace(/\n+$/, "\n")}\n## Cancellation\n\n- Reason: ${markdownValue(reason)}\n`;
 	const archiveDir = join(dir, "archive");
 	await mkdir(archiveDir, { recursive: true });

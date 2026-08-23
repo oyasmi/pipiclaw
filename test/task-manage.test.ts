@@ -26,7 +26,7 @@ function doc(front: string, body = STANDARD_BODY): string {
 	return `---\n${front}\n---\n\n${body}`;
 }
 
-describe("task_manage v2", () => {
+describe("task_manage v3", () => {
 	let workspaceDir: string;
 	let channelDir: string;
 	let tasksDir: string;
@@ -60,19 +60,19 @@ describe("task_manage v2", () => {
 		});
 	}
 
-	it("creates one-shot active work with a v2 control and no approval surface", async () => {
+	it("creates one-shot active work with a v3 control and no approval surface", async () => {
 		const result = await manageTask(options, {
 			action: "create",
 			id: "work",
 			title: "Work",
 			goal: "Do the work.",
 			dod: "- [ ] Result is ready",
-			control: { verificationRequired: false, priority: "high" },
+			control: { verificationRequired: false },
 		});
 		expect(result).toMatchObject({ action: "create", status: "active" });
 		const stored = await readFile(join(tasksDir, "work.md"), "utf-8");
 		expect(stored).toContain("status: active");
-		expect(stored).toContain('"version":2');
+		expect(stored).toContain('"version":3');
 		expect(stored).not.toMatch(/sideEffects|externalApproval|approvalBy|approvedAt|approvalBodyHash|provenance/);
 	});
 

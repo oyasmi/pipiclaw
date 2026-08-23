@@ -126,7 +126,7 @@ describe("migrateLegacyTaskState", () => {
 		await migrateLegacyTaskState(workspaceDir);
 
 		const pausedFrontmatter = parseTaskFrontmatter(await readFile(paused, "utf-8"));
-		expect(pausedFrontmatter).toMatchObject({ status: "active", enabled: false, control: { version: 2 } });
+		expect(pausedFrontmatter).toMatchObject({ status: "active", enabled: false, control: { version: 3 } });
 		expect(pausedFrontmatter.control).not.toHaveProperty("externalApproval");
 		const recurringFrontmatter = parseTaskFrontmatter(await readFile(recurring, "utf-8"));
 		expect(recurringFrontmatter).toMatchObject({ status: "sleeping", enabled: true, schedule: "0 9 * * 1" });

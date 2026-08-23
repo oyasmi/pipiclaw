@@ -49,7 +49,7 @@ order: 36
 一次委派的返回只有两种：结果已经在手，或者一个 `runId` 加"稍后会叫醒你"。后一种情况下：
 
 1. **不要轮询，也不要用后台作业包一层等待。** 委派结束时 runtime 会唤醒本频道，带回状态、耗时、结果尾部和产物路径。这是 runtime 保证。
-2. **立即结束当前回合。** 属于某个 task 时，派发就带上 `taskId`，并用 `task_manage progress` 置 `waiting` + `waitingFor=external-signal`——唤醒事件会据此恢复该任务。
+2. **立即结束当前回合。** 属于某个 task 时，派发就带上 `taskId`，并用 `task_manage progress` 停泊为 `waiting`（`waitingFor` 随手记一个 external-signal/job 之类的展示值即可）——runtime 按 run 记录里的 `taskId` 认领并恢复该任务，不看 `waitingFor` 写了什么。
 3. 想看进度用 `subagent_manage op=list`（人可用 `/subagents list`），不要靠反复调用委派工具来"检查"。
 4. 每个频道最多 6 个同时在跑的委派（宿主全局 20 个）。被上限拒绝时先等一个结束或 `cancel` 一个，不要改小任务再试。
 5. daemon 重启时外部 run 继续跑，内置 run 会被判 `lost` 并唤醒说明。收到 `lost` 就是"结局未知"：先查真实产物，再决定重派，不要假设它已经做完。

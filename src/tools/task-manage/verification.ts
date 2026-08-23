@@ -25,7 +25,7 @@ export async function verifyTask(
 	const runId = requiredField(request.verifierRunId, "verifierRunId", "verify");
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) throw new RecoverableToolError(`Task "${id}" does not exist; create it before verification.`);
-	resolveTaskTransition("verify", id, normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule)));
+	resolveTaskTransition("verify", id, normalizeStoredStatus(task.fields.status));
 	const attestation = await readVerificationAttestation(options.channelDir, runId);
 	if (attestation.taskId !== id) {
 		throw new RecoverableToolError(

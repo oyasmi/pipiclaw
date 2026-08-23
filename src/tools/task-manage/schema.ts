@@ -6,9 +6,6 @@ import type { TaskManageAction } from "./types.js";
 export const SETTABLE_STATUSES = SETTABLE_TASK_STATUSES;
 
 const taskControlSchema = Type.Object({
-	priority: Type.Optional(
-		Type.Union([Type.Literal("low"), Type.Literal("normal"), Type.Literal("high"), Type.Literal("critical")]),
-	),
 	deadline: Type.Optional(
 		Type.String({
 			description:

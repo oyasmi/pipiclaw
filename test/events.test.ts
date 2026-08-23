@@ -485,7 +485,9 @@ describe("EventsWatcher", () => {
 		it("retires itself when the owning task reached a terminal status", async () => {
 			const dir = join(createTempDir(), "events");
 			mkdirSync(dir, { recursive: true });
-			writeOwningTask(dir, "dm_1", "report", "cancelled");
+			const tasksDir = join(dirname(dir), "dm_1", "tasks");
+			mkdirSync(tasksDir, { recursive: true });
+			writeFileSync(join(tasksDir, "report.md"), "---\noutcome: cancelled\n---\n# Task\n");
 			const filename = "task.dm_1.report.checkin.json";
 			writeFileSync(join(dir, filename), "{}");
 			const bot = new FakeBot(true);

@@ -98,7 +98,7 @@ export async function updateStoredTask(
  */
 export async function escalateTask(channelDir: string, id: string, reason: string): Promise<boolean> {
 	const document = await updateStoredTask(channelDir, id, (task) => {
-		const status = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+		const status = normalizeStoredStatus(task.fields.status);
 		resolveTaskTransition("governor-stop", id, status);
 		task.fields.enabled = false;
 		task.fields.control ??= createDefaultTaskControl();
@@ -129,7 +129,7 @@ export async function activateWaitingTask(
 ): Promise<StoredTaskDocument | undefined> {
 	let activated = false;
 	const document = await updateStoredTask(channelDir, id, (task) => {
-		const status = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+		const status = normalizeStoredStatus(task.fields.status);
 		if (status !== "waiting" || task.fields.enabled === false) return;
 		hooks?.beforeActivation?.();
 		activated = true;
@@ -178,7 +178,7 @@ export async function openRecurringTaskCycle(
 ): Promise<{ document: StoredTaskDocument; cycleId: string } | undefined> {
 	let cycleId: string | undefined;
 	const document = await updateStoredTask(channelDir, id, (task) => {
-		const status = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+		const status = normalizeStoredStatus(task.fields.status);
 		if (status !== "sleeping" || !task.fields.schedule) return;
 		const wakeMs = task.fields.wake ? parseLocalTime(task.fields.wake) : undefined;
 		if (!force && (task.fields.enabled === false || wakeMs === undefined || wakeMs > now.getTime())) return;

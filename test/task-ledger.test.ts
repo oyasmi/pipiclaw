@@ -31,24 +31,24 @@ function doc(front: string, body = "# Title\n\nbody"): string {
 	return `---\n${front}\n---\n\n${body}`;
 }
 
-describe("v2 frontmatter and actionable contract", () => {
-	it("canonicalizes legacy statuses without exposing terminal live states", () => {
+describe("v3 frontmatter and actionable contract", () => {
+	it("fails open to active for any status outside the current vocabulary (legacy mapping is migration-only)", () => {
 		expect(parseTaskFrontmatter(doc("status: in-progress"))).toMatchObject({
 			readable: true,
 			status: "active",
 			enabled: true,
 			rawStatus: "in-progress",
 		});
-		expect(parseTaskFrontmatter(doc("status: awaiting-user"))).toMatchObject({ status: "waiting" });
-		expect(parseTaskFrontmatter(doc("status: done"))).toMatchObject({
-			status: "active",
-			archiveOutcome: "completed",
-		});
-		expect(parseTaskFrontmatter(doc("status: done\nschedule: 0 9 * * 1"))).toMatchObject({ status: "sleeping" });
+		// Old v1 values that used to canonicalize to something meaningful (waiting, sleeping, a
+		// stop receipt) now just fail open to active — `migrateLegacyTaskState` is the only place
+		// that still understands the legacy vocabulary, and it rewrites the file durably.
+		expect(parseTaskFrontmatter(doc("status: awaiting-user"))).toMatchObject({ status: "active" });
+		expect(parseTaskFrontmatter(doc("status: done"))).toMatchObject({ status: "active" });
+		expect(parseTaskFrontmatter(doc("status: done\nschedule: 0 9 * * 1"))).toMatchObject({ status: "active" });
 
 		const paused = parseTaskFrontmatter(doc("status: paused"));
-		expect(paused).toMatchObject({ status: "active", enabled: false });
-		expect(paused.control).toMatchObject({ stop: { by: "user" } });
+		expect(paused).toMatchObject({ status: "active", enabled: true });
+		expect(paused.control).toBeUndefined();
 	});
 
 	it("fails open only for unreadable metadata and parks signal waits", () => {

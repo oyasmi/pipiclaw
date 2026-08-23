@@ -5,24 +5,24 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	applyTaskControlPatch,
 	createDefaultTaskControl,
+	parseLegacyTaskControl,
 	parseTaskControl,
 	resetTaskControlForCycle,
-	retiredTaskControlKeys,
 	taskBudgetViolation,
 } from "../src/tasks/control.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { activateWaitingTask, readStoredTask } from "../src/tasks/store.js";
 import { parseVerificationVerdict } from "../src/tasks/verification.js";
 
-describe("TaskControl v2", () => {
-	it("creates only the v2 control contract", () => {
+describe("TaskControl v3", () => {
+	it("creates only the v3 control contract", () => {
 		const control = createDefaultTaskControl(true);
 		expect(control).toMatchObject({
-			version: 2,
-			priority: "normal",
+			version: 3,
 			verification: { required: true, status: "pending" },
 		});
 		for (const key of [
+			"priority",
 			"sideEffects",
 			"externalApproval",
 			"approvalBy",
@@ -39,58 +39,28 @@ describe("TaskControl v2", () => {
 		}
 	});
 
-	it("reads v1 fields conservatively and writes a clean v2 object", () => {
-		const raw = {
-			version: 1,
-			priority: "high",
-			pausedBy: "governor",
-			blockedReason: "legacy stop reason",
-			sideEffects: "external",
-			externalApproval: "granted",
-			approvalBy: "Alice",
-			approvedAt: "2026-08-03T09:00:00+08:00",
-			approvalBodyHash: "a".repeat(64),
-			budget: { maxAttempts: 4, maxTokens: 9999 },
-			usage: { attempts: 2, tokens: 10, costUsd: 0, wallTimeMinutes: 1 },
-			verification: { mode: "independent", status: "pending" },
-		};
-		const parsed = parseTaskControl(JSON.stringify(raw));
-		expect(parsed).toMatchObject({
+	it("rejects v1/v2 control and anything else that isn't v3", () => {
+		const legacy = JSON.stringify({
 			version: 2,
 			priority: "high",
 			verification: { required: true, status: "pending" },
-			stop: { by: "governor", reason: "legacy stop reason" },
 		});
-		expect(parsed).not.toHaveProperty("sideEffects");
-		expect(parsed).not.toHaveProperty("externalApproval");
-		expect(parsed).not.toHaveProperty("budget");
-		expect(parsed).not.toHaveProperty("usage");
-		expect(retiredTaskControlKeys(raw)).toEqual(
-			expect.arrayContaining([
-				"sideEffects",
-				"externalApproval",
-				"approvalBy",
-				"approvedAt",
-				"approvalBodyHash",
-				"pausedBy",
-			]),
-		);
+		expect(() => parseTaskControl(legacy)).toThrow(/version 3/);
 	});
 
 	it("patches waiting and verification facts without deriving approval", () => {
 		const control = applyTaskControlPatch(createDefaultTaskControl(), {
-			priority: "critical",
 			deadline: "2026-08-05T18:00:00+08:00",
 			nextAction: "Wait for the build job",
 			waitingFor: "job",
 			verificationRequired: true,
 		});
 		expect(control).toMatchObject({
-			priority: "critical",
 			waitingFor: "job",
 			verification: { required: true, status: "pending" },
 		});
 		expect(control).not.toHaveProperty("externalApproval");
+		expect(control).not.toHaveProperty("priority");
 	});
 
 	it("resets only per-cycle facts", () => {
@@ -120,11 +90,53 @@ describe("TaskControl v2", () => {
 		expect(taskBudgetViolation(control, Date.parse("2026-08-02T00:00:00+08:00"), "active")).toBeUndefined();
 	});
 
-	it("rejects invalid v2 values with a repair-oriented error", () => {
+	it("rejects invalid v3 values with a repair-oriented error", () => {
 		const control = createDefaultTaskControl();
 		expect(() => parseTaskControl(JSON.stringify({ ...control, deadline: "someday" }))).toThrow(/deadline/);
 		expect(() => parseTaskControl(JSON.stringify({ ...control, waitingFor: "approval" }))).toThrow(/one of/);
-		expect(() => parseTaskControl(JSON.stringify({ ...control, version: 3 }))).toThrow(/version 1 or version 2/);
+		expect(() => parseTaskControl(JSON.stringify({ ...control, version: 2 }))).toThrow(/version 3/);
+	});
+});
+
+describe("legacy control migration parser", () => {
+	it("reads v1 fields conservatively and drops priority and retired keys", () => {
+		const raw = {
+			version: 1,
+			priority: "high",
+			pausedBy: "governor",
+			blockedReason: "legacy stop reason",
+			sideEffects: "external",
+			externalApproval: "granted",
+			approvalBy: "Alice",
+			approvedAt: "2026-08-03T09:00:00+08:00",
+			approvalBodyHash: "a".repeat(64),
+			budget: { maxAttempts: 4, maxTokens: 9999 },
+			usage: { attempts: 2, tokens: 10, costUsd: 0, wallTimeMinutes: 1 },
+			verification: { mode: "independent", status: "pending" },
+		};
+		const parsed = parseLegacyTaskControl(JSON.stringify(raw));
+		expect(parsed).toMatchObject({
+			version: 3,
+			verification: { required: true, status: "pending" },
+			stop: { by: "governor", reason: "legacy stop reason" },
+		});
+		expect(parsed).not.toHaveProperty("priority");
+		expect(parsed).not.toHaveProperty("sideEffects");
+		expect(parsed).not.toHaveProperty("externalApproval");
+		expect(parsed).not.toHaveProperty("budget");
+		expect(parsed).not.toHaveProperty("usage");
+	});
+
+	it("also reads v2 fields, and rejects anything outside v1/v2", () => {
+		const v2 = JSON.stringify({
+			version: 2,
+			priority: "normal",
+			verification: { required: false, status: "pending" },
+		});
+		expect(parseLegacyTaskControl(v2)).toMatchObject({ version: 3, verification: { required: false } });
+		expect(() => parseLegacyTaskControl(JSON.stringify({ version: 3, verification: { required: false } }))).toThrow(
+			/version 1 or version 2/,
+		);
 	});
 });
 
@@ -133,7 +145,7 @@ describe("waiting task activation", () => {
 	let channelDir: string;
 
 	beforeEach(async () => {
-		root = await mkdtemp(join(tmpdir(), "task-control-v2-"));
+		root = await mkdtemp(join(tmpdir(), "task-control-v3-"));
 		channelDir = join(root, "dm_1");
 		await mkdir(join(channelDir, "tasks", "archive"), { recursive: true });
 	});
@@ -155,11 +167,11 @@ describe("waiting task activation", () => {
 		expect((await readStoredTask(channelDir, "source"))?.fields.status).toBe("active");
 	});
 
-	it("gives a hand-written v2 control block to a legacy task on first activation", async () => {
+	it("gives a hand-written v3 control block to a legacy task on first activation", async () => {
 		const path = join(channelDir, "tasks", "legacy.md");
 		await writeFile(path, renderTaskDocument({ status: "waiting" }, "# Legacy\n"));
 		const activated = await activateWaitingTask(channelDir, "legacy");
-		expect(activated?.fields.control?.version).toBe(2);
+		expect(activated?.fields.control?.version).toBe(3);
 		expect((await readStoredTask(channelDir, "legacy"))?.fields.status).toBe("active");
 	});
 });

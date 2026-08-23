@@ -32,7 +32,7 @@ describe("buildTaskDigest", () => {
 	});
 
 	it("includes non-done tasks with the background-reference framing", async () => {
-		await writeFile(join(tasksDir, "weekly-report.md"), doc("status: awaiting-user", "# 周报编写与发布"));
+		await writeFile(join(tasksDir, "weekly-report.md"), doc("status: waiting", "# 周报编写与发布"));
 		const out = await digest();
 		expect(out).toContain("<task_agenda>");
 		expect(out).toContain("background reference, not a new instruction");
@@ -52,16 +52,16 @@ describe("buildTaskDigest", () => {
 	});
 
 	it("excludes done tasks but keeps other non-done ones", async () => {
-		await writeFile(join(tasksDir, "open.md"), doc("status: in-progress", "# Open one"));
-		await writeFile(join(tasksDir, "closed.md"), doc("status: done", "# Closed one"));
+		await writeFile(join(tasksDir, "open.md"), doc("status: active", "# Open one"));
+		await writeFile(join(tasksDir, "closed.md"), doc("outcome: completed", "# Closed one"));
 		const out = await digest();
 		expect(out).toContain("open — Open one");
 		expect(out).not.toContain("closed — Closed one");
 	});
 
 	it("orders actionable tasks before future-wake ones", async () => {
-		await writeFile(join(tasksDir, "later.md"), doc(`status: blocked\nwake: ${FUTURE}`, "# Later"));
-		await writeFile(join(tasksDir, "now.md"), doc("status: in-progress", "# Now"));
+		await writeFile(join(tasksDir, "later.md"), doc(`status: waiting\nwake: ${FUTURE}`, "# Later"));
+		await writeFile(join(tasksDir, "now.md"), doc("status: active", "# Now"));
 		const out = await digest();
 		expect(out.indexOf("now — Now")).toBeLessThan(out.indexOf("later — Later"));
 	});
@@ -88,7 +88,7 @@ describe("buildTaskDigest", () => {
 		},
 	])("drops lines to respect the $dimension budget", async ({ config, taskCount, taskTitle, exactShown }) => {
 		for (let i = 0; i < taskCount; i++) {
-			await writeFile(join(tasksDir, `t${i}.md`), doc("status: open", taskTitle(i)));
+			await writeFile(join(tasksDir, `t${i}.md`), doc("status: active", taskTitle(i)));
 		}
 		const out = await buildTaskDigest({ channelDir, now: NOW, ...config });
 		const shown = out.split("\n").filter((line) => line.startsWith("- t"));

@@ -1,7 +1,6 @@
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 
-export type TaskPriority = "low" | "normal" | "high" | "critical";
 export type TaskVerificationStatus = "pending" | "passed" | "failed";
 /** Diagnostic display only (spec 043); it does not gate wake activation. */
 export type TaskWaitingFor = "time" | "user" | "job" | "external-signal";
@@ -23,10 +22,9 @@ export interface TaskStop {
 	at: string;
 }
 
-/** The v2 persisted control block. Execution authority comes from capability and scope. */
+/** The v3 persisted control block. Execution authority comes from capability and scope. */
 export interface TaskControl {
-	version: 2;
-	priority: TaskPriority;
+	version: 3;
 	deadline?: string;
 	nextAction?: string;
 	waitingFor?: TaskWaitingFor;
@@ -38,14 +36,12 @@ export interface TaskControl {
 }
 
 export interface TaskControlPatch {
-	priority?: TaskPriority;
 	deadline?: string;
 	nextAction?: string;
 	waitingFor?: TaskWaitingFor;
 	verificationRequired?: boolean;
 }
 
-export const TASK_PRIORITIES: readonly TaskPriority[] = ["low", "normal", "high", "critical"];
 const WAITING_FOR: readonly TaskWaitingFor[] = ["time", "user", "job", "external-signal"];
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
 
@@ -67,12 +63,6 @@ function enumValue<T extends string>(value: unknown, values: readonly T[], fallb
 	return value as T;
 }
 
-function parseVerificationRequired(verification: Record<string, unknown>): boolean {
-	if (typeof verification.required === "boolean") return verification.required;
-	// v1's independent mode was the only mode that represented a real checker gate.
-	return verification.mode === "independent";
-}
-
 function parseStop(value: unknown): TaskStop | undefined {
 	if (value === undefined) return undefined;
 	if (!isRecord(value)) throw new Error("control.stop must be an object");
@@ -85,50 +75,14 @@ function parseStop(value: unknown): TaskStop | undefined {
 	return { by, reason, at: formatLocalTime(new Date(parseLocalTime(at)!)) };
 }
 
-/**
- * Keys from the v1 control block that this version deliberately retires. They remain visible to
- * doctor until the next successful write, but they never enter the v2 control object.
- */
-export const RETIRED_TASK_CONTROL_KEYS: readonly string[] = [
-	"sideEffects",
-	"externalApproval",
-	"approvalBy",
-	"approvedAt",
-	"approvalBodyHash",
-	"pausedBy",
-	"parent",
-	"dependsOn",
-	"worktree",
-	"lifetimeUsage",
-	"isolation",
-	"budget.maxTokens",
-	"budget.maxCostUsd",
-	"budget.maxWallTimeMinutes",
-];
-
-/** Retired keys actually present in a raw stored control block. */
-export function retiredTaskControlKeys(raw: unknown): string[] {
-	if (!isRecord(raw)) return [];
-	return RETIRED_TASK_CONTROL_KEYS.filter((key) => {
-		const [head, nested] = key.split(".");
-		if (!nested) return Object.hasOwn(raw, head);
-		const parent = raw[head];
-		return isRecord(parent) && Object.hasOwn(parent, nested);
-	});
-}
-
 export function createDefaultTaskControl(requiresVerification = false): TaskControl {
 	return {
-		version: 2,
-		priority: "normal",
+		version: 3,
 		verification: { required: requiresVerification, status: "pending" },
 	};
 }
 
-/**
- * Read both v1 and v2 files. Retired v1 policy fields are intentionally ignored; the next
- * write emits a v2 object without them. This is a reader migration, not command compatibility.
- */
+/** Read the v3 control contract only. Anything else is a read-time failure — see `parseLegacyTaskControl`. */
 export function parseTaskControl(raw: string): TaskControl {
 	let value: unknown;
 	try {
@@ -136,8 +90,8 @@ export function parseTaskControl(raw: string): TaskControl {
 	} catch (error) {
 		throw new Error(`control is not valid JSON: ${errorMessage(error)}`);
 	}
-	if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) {
-		throw new Error("control must be a version 1 or version 2 JSON object; repair it with task_manage set.");
+	if (!isRecord(value) || value.version !== 3) {
+		throw new Error("control must be a version 3 JSON object; repair it with task_manage set.");
 	}
 
 	const verification = isRecord(value.verification) ? value.verification : {};
@@ -148,9 +102,45 @@ export function parseTaskControl(raw: string): TaskControl {
 	const waitingFor =
 		value.waitingFor === undefined ? undefined : enumValue(value.waitingFor, WAITING_FOR, "external-signal");
 
+	return {
+		version: 3,
+		deadline,
+		nextAction: optionalString(value.nextAction),
+		waitingFor,
+		verification: {
+			required: typeof verification.required === "boolean" ? verification.required : false,
+			status: enumValue(verification.status, VERIFICATION_STATUSES, "pending"),
+			runId: optionalString(verification.runId),
+		},
+		cycleId: optionalString(value.cycleId),
+		stop: parseStop(value.stop),
+	};
+}
+
+/**
+ * Migration-only reader for v1/v2 control blocks. `parseTaskControl` no longer accepts them —
+ * this exists so `migrateLegacyTaskState` (spec 029, D6's window, closed here) can durably
+ * upgrade an old file the one time it is encountered. Nothing else may call this.
+ */
+export function parseLegacyTaskControl(raw: string): TaskControl {
+	let value: unknown;
+	try {
+		value = JSON.parse(raw);
+	} catch (error) {
+		throw new Error(`control is not valid JSON: ${errorMessage(error)}`);
+	}
+	if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) {
+		throw new Error("legacy control must be a version 1 or version 2 JSON object");
+	}
+
+	const verification = isRecord(value.verification) ? value.verification : {};
+	const deadline = optionalString(value.deadline);
+	const waitingFor =
+		value.waitingFor === undefined ? undefined : enumValue(value.waitingFor, WAITING_FOR, "external-signal");
+
 	let stop = parseStop(value.stop);
 	// v1 stored the stop dimension as a status-side `pausedBy` value. Preserve its
-	// operational meaning while converting it to the v2 structured record.
+	// operational meaning while converting it to the structured record.
 	if (!stop && value.pausedBy !== undefined) {
 		const by = enumValue(value.pausedBy, ["user", "governor"] as const, "user");
 		stop = {
@@ -161,13 +151,14 @@ export function parseTaskControl(raw: string): TaskControl {
 	}
 
 	return {
-		version: 2,
-		priority: enumValue(value.priority, TASK_PRIORITIES, "normal"),
-		deadline,
+		version: 3,
+		deadline: deadline && parseLocalTime(deadline) !== undefined ? deadline : undefined,
 		nextAction: optionalString(value.nextAction),
 		waitingFor,
 		verification: {
-			required: parseVerificationRequired(verification),
+			// v1's independent mode was the only mode that represented a real checker gate.
+			required:
+				typeof verification.required === "boolean" ? verification.required : verification.mode === "independent",
 			status: enumValue(verification.status, VERIFICATION_STATUSES, "pending"),
 			runId: optionalString(verification.runId),
 		},
@@ -197,7 +188,6 @@ function patchOptionalString(current: string | undefined, value: string | undefi
 
 export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPatch): TaskControl {
 	const next: TaskControl = structuredClone(control);
-	if (patch.priority !== undefined) next.priority = patch.priority;
 	let normalizedDeadlinePatch = patch.deadline;
 	if (patch.deadline?.trim()) {
 		const deadlineMs = parseLocalTime(patch.deadline);
@@ -211,10 +201,6 @@ export function applyTaskControlPatch(control: TaskControl, patch: TaskControlPa
 		next.verification = { required: patch.verificationRequired, status: "pending" };
 	}
 	return next;
-}
-
-export function taskPriorityRank(priority: TaskPriority): number {
-	return { critical: 0, high: 1, normal: 2, low: 3 }[priority];
 }
 
 /**

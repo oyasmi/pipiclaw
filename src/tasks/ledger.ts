@@ -3,9 +3,9 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { createDefaultTaskControl, parseTaskControl, type TaskControl, taskPriorityRank } from "./control.js";
+import { parseTaskControl, type TaskControl } from "./control.js";
 import { nextTaskWake } from "./task-schedule.js";
-import { normalizeStoredStatus, wasLegacyEscalated } from "./transitions.js";
+import { normalizeStoredStatus } from "./transitions.js";
 
 export type TaskArchiveOutcome = "completed" | "cancelled";
 
@@ -26,7 +26,7 @@ export interface TaskFrontmatter {
 	/** false => frontmatter could not be read (fail-open: the task is treated as actionable). */
 	readable: boolean;
 	status?: string;
-	/** Raw status before the v1 reader migration, for deterministic startup migration/doctor. */
+	/** The unnormalized on-disk status value; startup migration is its only consumer. */
 	rawStatus?: string;
 	/** True when a legacy terminal file in the active directory needs archiving. */
 	archiveOutcome?: TaskArchiveOutcome;
@@ -36,14 +36,10 @@ export interface TaskFrontmatter {
 	/** Five-field cron cadence (host timezone). Present ⇒ this is a recurring task. */
 	schedule?: string;
 	control?: TaskControl;
-	/** false only when a control field exists but cannot be parsed/validated. */
+	/** false only when a control field exists but cannot be parsed/validated as v3. */
 	controlReadable?: boolean;
-	/**
-	 * The control block exactly as stored, before `parseTaskControl` drops retired keys.
-	 * `/tasks doctor` needs this to report what an older build wrote (spec 036, D8) — the
-	 * parsed `control` above cannot show a key whose whole point is that it is now ignored.
-	 */
-	rawControl?: unknown;
+	/** The unparsed `control:` value; startup migration re-parses this with the legacy reader. */
+	controlRaw?: string;
 }
 
 export interface TaskLedgerEntry {
@@ -380,11 +376,7 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 				if (!value) {
 					frontmatter.controlReadable = false;
 				} else {
-					try {
-						frontmatter.rawControl = JSON.parse(value);
-					} catch {
-						// Leave rawControl unset; the parse below reports the real problem.
-					}
+					frontmatter.controlRaw = value;
 					try {
 						frontmatter.control = parseTaskControl(value);
 						frontmatter.controlReadable = true;
@@ -403,26 +395,13 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 			}
 		}
 	}
-	// Canonicalise the possibly legacy status on read. Terminal v1 values are marked as archive
-	// outcomes so an active-directory scan can never execute them before startup migration moves
-	// them. A legacy recurring terminal is the v2 sleeping state.
+	// Legacy status vocabulary is a startup-migration concern (`migrateLegacyTaskState`), not a
+	// read-time one: any value outside the current three fails open to "active" here, same as an
+	// unreadable control block fails open to "actionable" rather than being silently reinterpreted.
 	const rawStatus = frontmatter.status;
 	frontmatter.rawStatus = rawStatus;
 	if (frontmatter.readable) {
-		if (rawStatus === "done" && !frontmatter.schedule) frontmatter.archiveOutcome = "completed";
-		if (rawStatus === "cancelled") frontmatter.archiveOutcome = "cancelled";
-		frontmatter.status = normalizeStoredStatus(rawStatus, Boolean(frontmatter.schedule));
-		if (rawStatus === "paused" || wasLegacyEscalated(rawStatus)) {
-			frontmatter.enabled = false;
-			frontmatter.control ??= createDefaultTaskControl();
-			if (frontmatter.control && !frontmatter.control.stop) {
-				frontmatter.control.stop = {
-					by: wasLegacyEscalated(rawStatus) ? "governor" : "user",
-					reason: `Task stopped by ${wasLegacyEscalated(rawStatus) ? "governor" : "user"}.`,
-					at: formatLocalTime(),
-				};
-			}
-		}
+		frontmatter.status = normalizeStoredStatus(rawStatus);
 	}
 	return frontmatter;
 }
@@ -625,14 +604,14 @@ export interface TaskDocumentFields {
 }
 
 /**
- * Enforce the v2 write-path invariants. Runtime due transitions are intentionally separate: a
+ * Enforce the v3 write-path invariants. Runtime due transitions are intentionally separate: a
  * waiting task is first written active, and a sleeping task is first opened into a cycle, before
  * the driver dispatches anything.
  */
 export function normalizeTaskFields(fields: TaskDocumentFields, now: Date = new Date()): TaskDocumentFields {
 	const next: TaskDocumentFields = {
 		...fields,
-		status: normalizeStoredStatus(fields.status, Boolean(fields.schedule)),
+		status: normalizeStoredStatus(fields.status),
 		enabled: fields.enabled !== false,
 	};
 	if (next.outcome) {
@@ -1104,14 +1083,11 @@ function parseWakeMs(frontmatter: TaskFrontmatter): number | undefined {
 	return parseLocalTime(frontmatter.wake);
 }
 
-/** Actionable first; then earliest wake first (unset wake sorts as "ready now"); then id. */
+/** Actionable first; then earliest deadline/wake first (unset sorts as "ready now"); then id. */
 export function compareTaskEntries(a: TaskLedgerEntry, b: TaskLedgerEntry): number {
 	if (a.actionable !== b.actionable) return a.actionable ? -1 : 1;
 	if (a.frontmatter.enabled !== b.frontmatter.enabled) return a.frontmatter.enabled ? -1 : 1;
 	if (a.actionable && b.actionable) {
-		const ap = taskPriorityRank(a.frontmatter.control?.priority ?? "normal");
-		const bp = taskPriorityRank(b.frontmatter.control?.priority ?? "normal");
-		if (ap !== bp) return ap - bp;
 		const ad = a.frontmatter.control?.deadline
 			? (parseLocalTime(a.frontmatter.control.deadline) ?? Number.POSITIVE_INFINITY)
 			: Number.POSITIVE_INFINITY;

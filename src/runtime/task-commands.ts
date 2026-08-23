@@ -4,16 +4,8 @@ import { join, resolve, sep } from "node:path";
 import { channelJobTaskIds } from "../agent/job-manager.js";
 import { formatLocalTime, parseLocalTime, parseWakeInput } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
 import { channelDelegationTaskIds } from "../subagents/runs.js";
-import {
-	applyTaskControlPatch,
-	createDefaultTaskControl,
-	retiredTaskControlKeys,
-	TASK_PRIORITIES,
-	type TaskPriority,
-	taskBudgetViolation,
-} from "../tasks/control.js";
+import { applyTaskControlPatch, createDefaultTaskControl, taskBudgetViolation } from "../tasks/control.js";
 import {
 	countTaskDodItems,
 	extractTaskTitle,
@@ -50,7 +42,7 @@ export interface HandleTasksCommandOptions {
  * transitions and verification — stays with `task_manage`, whose state
  * machine those fields belong to. The value is the rest of the line, so it may contain spaces.
  */
-const SETTABLE_TASK_FIELDS = ["wake", "next", "priority", "deadline"] as const;
+const SETTABLE_TASK_FIELDS = ["wake", "next", "deadline"] as const;
 type SettableTaskField = (typeof SETTABLE_TASK_FIELDS)[number];
 
 type TasksCommand =
@@ -206,24 +198,6 @@ function issue(problem: string, nextStep: string): string {
 	return `- ${problem}\n  Next step: ${nextStep}`;
 }
 
-/**
- * Render the ordering edges a stored task still declares, e.g. `child → parent, a → b`.
- * Empty when the task carries no retired relation keys (spec 036, D8).
- */
-function describeDroppedTaskRelations(id: string, rawControl: unknown): string {
-	if (!isRecord(rawControl)) return "";
-	const edges: string[] = [];
-	const parent = rawControl.parent;
-	if (typeof parent === "string" && parent.trim()) edges.push(`${id} → ${parent.trim()}`);
-	const dependsOn = rawControl.dependsOn;
-	if (Array.isArray(dependsOn)) {
-		for (const dependency of dependsOn) {
-			if (typeof dependency === "string" && dependency.trim()) edges.push(`${id} → ${dependency.trim()}`);
-		}
-	}
-	return edges.join(", ");
-}
-
 async function readActiveTaskContent(channelDir: string, id: string): Promise<string | undefined> {
 	try {
 		return await readFile(join(tasksDir(channelDir), `${id}.md`), "utf-8");
@@ -245,7 +219,6 @@ async function listTasks(channelDir: string): Promise<string> {
 		const detail = [`  status: ${status}`, `next wake: ${relativeWake(entry.wakeMs, now)}`];
 		const control = entry.frontmatter.control;
 		if (control) {
-			detail.push(`priority: ${control.priority}`);
 			if (control.verification.required) detail.push(`verify: required/${control.verification.status}`);
 			if (control.waitingFor) detail.push(`waiting for: ${control.waitingFor}`);
 			if (control.stop) detail.push(`stop: ${control.stop.by} — ${control.stop.reason}`);
@@ -272,7 +245,7 @@ export async function pauseTask(options: HandleTasksCommandOptions, idInput: str
 async function pauseTaskLocked(options: HandleTasksCommandOptions, id: string): Promise<string> {
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `找不到任务：${id}`;
-	const from = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+	const from = normalizeStoredStatus(task.fields.status);
 	try {
 		resolveTaskTransition("pause", id, from);
 	} catch (error) {
@@ -291,7 +264,7 @@ export async function resumeTask(options: HandleTasksCommandOptions, idInput: st
 	const id = normalizeTaskId(idInput);
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) return `找不到任务：${id}`;
-	const from = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
+	const from = normalizeStoredStatus(task.fields.status);
 	if (task.fields.enabled !== false) return `任务 ${id} 已启用。`;
 	resolveTaskTransition("resume", id, from);
 	task.fields.enabled = true;
@@ -336,11 +309,7 @@ async function setTaskField(
 		try {
 			task.fields.control = applyTaskControlPatch(
 				control,
-				field === "next"
-					? { nextAction: value }
-					: field === "deadline"
-						? { deadline: value }
-						: { priority: parseTaskPriority(value) },
+				field === "next" ? { nextAction: value } : { deadline: value },
 			);
 		} catch (error) {
 			return errorMessage(error);
@@ -349,13 +318,6 @@ async function setTaskField(
 
 	await writeStoredTask(task);
 	return `已更新任务 ${id}：${field} = ${value || "（已清除）"}`;
-}
-
-function parseTaskPriority(value: string): TaskPriority {
-	if (!TASK_PRIORITIES.includes(value as TaskPriority)) {
-		throw new Error(`priority 必须是 ${TASK_PRIORITIES.join(" / ")} 之一。`);
-	}
-	return value as TaskPriority;
 }
 
 async function runTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
@@ -467,7 +429,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (!control && entry.frontmatter.enabled === false) {
 			issues.push(
 				issue(
-					`tasks/${entry.id}.md is disabled but has no v2 control.stop receipt.`,
+					`tasks/${entry.id}.md is disabled but has no control.stop receipt.`,
 					`Use task_manage set to repair control metadata, then /tasks resume ${entry.id} when it is safe to continue.`,
 				),
 			);
@@ -670,23 +632,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				}
 			}
 		}
-	}
-
-	// Spec 036 D8: retired control keys are ignored on read, which keeps stored tasks readable
-	// but silently discards whatever `parent`/`dependsOn` once expressed. Report the loss —
-	// naming the dropped edges, not just the key — so the user can restate any real ordering.
-	for (const entry of entries) {
-		const retired = retiredTaskControlKeys(entry.frontmatter.rawControl);
-		if (retired.length === 0) continue;
-		const edges = describeDroppedTaskRelations(entry.id, entry.frontmatter.rawControl);
-		issues.push(
-			issue(
-				`tasks/${entry.id}.md still carries retired control keys: ${retired.join(", ")}.${edges ? ` Dropped ordering: ${edges}.` : ""}`,
-				edges
-					? `These no longer constrain execution. Restate any real ordering in the task body or with wake, then remove the keys (any task_manage write drops them).`
-					: `They are ignored; any task_manage write drops them.`,
-			),
-		);
 	}
 
 	for (const event of events) {

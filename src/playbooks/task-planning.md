@@ -32,11 +32,9 @@ Task 创建即持续委托；是否触达外部系统由可用工具、security 
 
 ## Control 决策
 
-- `priority` / `deadline`：表达调度重要性和硬期限，不用 `wake` 冒充 deadline。
-- `nextAction`：下一条可执行动作，避免抽象愿望。
-- `maxAttempts`：唯一按任务计数的 attempt stop-loss，默认 12；周期任务每次开新 cycle 清零。
-- `waitingFor`：记录恢复源：time、user、job、verification 或 external-signal。
-- `blockedReason`：写清楚等待的对象、条件和下一步。
+- `deadline`：硬期限，表达真实用户意图；不用 `wake` 冒充 deadline。
+- `nextAction`：下一条可执行动作，避免抽象愿望；也是等待时记录"等什么、条件、下一步"的地方——不再有单独的 blockedReason 字段。
+- `waitingFor`：记录性展示，说明恢复源大致是 time、user、job 还是 external-signal；driver 是否恢复只看真实的 wake 或 run/job 记录，`waitingFor` 本身不影响恢复。
 - `wake`：最早回访时间；future wake 会使任务规范为 waiting。
 - `schedule`：五字段 cron；存在即 recurring。
 

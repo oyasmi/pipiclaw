@@ -3,11 +3,12 @@ import { join } from "node:path";
 import * as log from "../log.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { createDefaultTaskControl } from "../tasks/control.js";
-import { appendCurrentCycleNote, parseTaskFrontmatter } from "../tasks/ledger.js";
+import { createDefaultTaskControl, parseLegacyTaskControl, type TaskControl } from "../tasks/control.js";
+import { appendCurrentCycleNote, parseTaskFrontmatter, type TaskFrontmatter } from "../tasks/ledger.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
 import { readStoredTask, updateStoredTask, writeStoredTask } from "../tasks/store.js";
 import { parseTaskEventName, taskEventPrefix } from "../tasks/task-events.js";
+import { TASK_STATUSES, type TaskStatus } from "../tasks/transitions.js";
 import { parseScheduledEventContent } from "./events.js";
 import { discoverTaskChannels } from "./task-driver.js";
 
@@ -72,13 +73,72 @@ export async function migrateLegacyTaskScheduleEvents(workspaceDir: string): Pro
 	}
 }
 
+/** Legacy v1 status vocabulary, mapped to the current status/archive/stop model. Migration-only. */
+interface LegacyStatusMigration {
+	status: TaskStatus;
+	archiveOutcome?: "completed" | "cancelled";
+	stopActor?: "user" | "governor";
+}
+
+function legacyStatusMigration(rawStatus: string | undefined, recurring: boolean): LegacyStatusMigration {
+	switch (rawStatus) {
+		case "done":
+			return recurring ? { status: "sleeping" } : { status: "active", archiveOutcome: "completed" };
+		case "cancelled":
+			return { status: "active", archiveOutcome: "cancelled" };
+		case "paused":
+			return { status: "active", stopActor: "user" };
+		case "escalated":
+			return { status: "active", stopActor: "governor" };
+		case "awaiting-user":
+		case "blocked":
+			return { status: "waiting" };
+		default:
+			return {
+				status:
+					rawStatus !== undefined && (TASK_STATUSES as readonly string[]).includes(rawStatus)
+						? (rawStatus as TaskStatus)
+						: "active",
+			};
+	}
+}
+
+/** Whether the control block needs a durable upgrade: absent, or not strict-v3-parseable. */
+function needsControlMigration(frontmatter: TaskFrontmatter): boolean {
+	return frontmatter.controlReadable === false || !frontmatter.control;
+}
+
+/** Whether the raw on-disk status needs a durable rewrite into the current vocabulary. */
+function needsStatusMigration(frontmatter: TaskFrontmatter): boolean {
+	const raw = frontmatter.rawStatus;
+	return raw !== undefined && !(TASK_STATUSES as readonly string[]).includes(raw);
+}
+
 /**
- * Deterministically upgrade active-directory v1 task files to the v2 state vocabulary.
- *
- * The reader already maps old values while a process is running; this pass makes that mapping
- * durable at startup. It only rewrites task metadata/history notes and archives stale terminal
- * files. It never dispatches a task or performs an external action, and every file is protected
- * by the same per-task mutation lock as normal lifecycle writes.
+ * Reconstruct a v3 control block for a file the strict reader rejected. Returns `undefined` only
+ * when the stored control is genuinely unparseable (neither v3, nor legacy v1/v2) — that file is
+ * left untouched for `/tasks doctor` to report, exactly like before this migration ran.
+ */
+function resolveMigratedControl(frontmatter: TaskFrontmatter): TaskControl | undefined {
+	if (frontmatter.controlReadable === false) {
+		if (!frontmatter.controlRaw) return createDefaultTaskControl();
+		try {
+			return parseLegacyTaskControl(frontmatter.controlRaw);
+		} catch {
+			return undefined;
+		}
+	}
+	return createDefaultTaskControl();
+}
+
+/**
+ * Deterministically upgrade every active task file to the current (v3) control contract and
+ * status vocabulary (spec 043, phase 5). Unlike the earlier marker-gated pass, this scans and
+ * self-heals on every startup: each file is judged independently by what it actually contains
+ * (`control.version` and the raw `status` value), not by whether a one-time marker was written.
+ * A hand-edited or freshly-restored legacy file is repaired the next time the daemon starts, no
+ * matter how it got there. It never dispatches a task or performs an external action, and every
+ * file is protected by the same per-task mutation lock as normal lifecycle writes.
  */
 export async function migrateLegacyTaskState(workspaceDir: string): Promise<void> {
 	const channels = await discoverTaskChannels(workspaceDir);
@@ -99,16 +159,38 @@ export async function migrateLegacyTaskState(workspaceDir: string): Promise<void
 					const raw = await readFile(activePath, "utf-8");
 					const frontmatter = parseTaskFrontmatter(raw);
 					if (!frontmatter.readable) return;
-					if (frontmatter.controlReadable === false) return;
+
+					const controlNeedsMigration = needsControlMigration(frontmatter);
+					if (!controlNeedsMigration && !needsStatusMigration(frontmatter)) return; // already v3
+
+					let migratedControl = frontmatter.control;
+					if (controlNeedsMigration) {
+						migratedControl = resolveMigratedControl(frontmatter);
+						if (!migratedControl) return; // genuinely corrupt; leave for doctor
+					}
+
 					const document = await readStoredTask(channelDir, id, false, true);
 					if (!document) return;
-					// Very old hand-written tasks may have no control block at all. Give them the
-					// v2 default before any active driver wake can spend work without governance.
-					document.fields.control ??= createDefaultTaskControl();
+					document.fields.control = migratedControl;
 
-					const legacyStatus = frontmatter.rawStatus;
+					const legacy = legacyStatusMigration(frontmatter.rawStatus, Boolean(frontmatter.schedule));
+					document.fields.status = legacy.status;
+					if (legacy.archiveOutcome) document.fields.outcome = legacy.archiveOutcome;
+					if (legacy.stopActor) {
+						document.fields.enabled = false;
+						if (document.fields.control && !document.fields.control.stop) {
+							document.fields.control.stop = {
+								by: legacy.stopActor,
+								reason: `Task stopped by ${legacy.stopActor}.`,
+								at: formatLocalTime(),
+							};
+						}
+					}
+
+					// Very old hand-written tasks may have parked without ever recording a wake. Give the
+					// waiting state an explicit note before any active driver wake can act on it silently.
 					if (
-						(legacyStatus === "waiting" || legacyStatus === "awaiting-user" || legacyStatus === "blocked") &&
+						legacy.status === "waiting" &&
 						!document.fields.wake &&
 						document.fields.control &&
 						!document.fields.control.waitingFor
@@ -132,9 +214,7 @@ export async function migrateLegacyTaskState(workspaceDir: string): Promise<void
 					}
 
 					await writeStoredTask(document);
-					if (legacyStatus || frontmatter.rawControl !== undefined || frontmatter.enabled === false) {
-						log.logInfo(`Migrated task ${id} to TaskControl v2`, channelId);
-					}
+					log.logInfo(`Migrated task ${id} to TaskControl v3`, channelId);
 				});
 			} catch (error) {
 				log.logWarning(

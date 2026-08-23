@@ -1,4 +1,3 @@
-import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import {
 	formatUnknownCommandMessage,
@@ -1023,24 +1022,15 @@ export async function createRuntimeContext(
 	}
 
 	if (startServices) {
-		// One-time close of the 027/038 migration windows: fold any residual legacy `.schedule`
-		// events into task frontmatter, and upgrade v1 task status vocabulary, before the driver
-		// relies on the v2 contract alone. Both scan every channel's tasks/events, so they are
-		// gated on a marker file rather than repeated on every restart once a home has migrated.
-		const taskMigrationMarkerPath = join(options.paths.appHomeDir, "state", "task-migration.done");
-		if (!existsSync(taskMigrationMarkerPath)) {
-			void Promise.all([
-				migrateLegacyTaskScheduleEvents(options.paths.workspaceDir),
-				migrateLegacyTaskState(options.paths.workspaceDir),
-			]).then(() => {
-				try {
-					mkdirSync(join(options.paths.appHomeDir, "state"), { recursive: true });
-					writeFileSync(taskMigrationMarkerPath, `${new Date().toISOString()}\n`);
-				} catch (error) {
-					log.logWarning("Failed to write task migration marker", errorMessage(error));
-				}
-			});
-		}
+		// Close the 027/038 migration windows: fold any residual legacy `.schedule` events into task
+		// frontmatter, and upgrade any task still on the legacy control/status vocabulary, before the
+		// driver relies on the current contract alone. Version-gated, not marker-gated (spec 043,
+		// phase 5): each file is judged by what it actually contains, so this is safe and cheap to run
+		// on every startup — a hand-edited or freshly-restored legacy file self-heals on the next boot.
+		void Promise.all([
+			migrateLegacyTaskScheduleEvents(options.paths.workspaceDir),
+			migrateLegacyTaskState(options.paths.workspaceDir),
+		]);
 		eventsWatcher.start();
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();

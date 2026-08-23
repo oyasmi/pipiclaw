@@ -9,24 +9,23 @@ order: 41
 
 ## 等待与恢复
 
-本页是 task waiting 两种形态的唯一真相源：`waiting + wake` 是定时等待；`waiting` 无 wake 是停泊信号等待，普通 driver 不会轮询。
+本页是 task waiting 两种形态的唯一真相源：`waiting + wake` 是定时等待；`waiting` 无 wake 是停泊信号等待，普通 driver 不会轮询。`waitingFor` 只是记录性展示——真正决定能否恢复的，是一个真实的 wake，或者 runtime 里一条 `taskId` 指向本任务、已经 settle 的 run/job 记录，不是 `waitingFor` 写的字符串本身。
 
-- 等外部 job、用户或 verifier：不设 wake，分别写 `waitingFor: job`、`user` 或 `verification`；后台作业结束时 runtime 只恢复所属 task。
-- 等外部信号：不设 wake，写 `waitingFor: external-signal`，由可靠回调或 task-owned sensor 恢复。
-- 只有状态查询：设置合理 wake，写 `waitingFor: time`，并在 blockedReason 记录回访对象、条件和下一步。
+- 等外部 job、用户或委派（含 verify sub-agent）：不设 wake，写 `waitingFor: job`、`user` 或 `external-signal`；后台作业或委派结束时 runtime 只恢复所属 task。独立验收就是按这条路径委派 `purpose: verify` sub-agent，没有单独的等待语义。
+- 只有状态查询：设置合理 wake，写 `waitingFor: time`，并在 `nextAction` 记录回访对象、条件和下一步。
 
 后台作业的启动与完成唤醒见 `background-jobs.md`；外部 AI Agent 的等待、纠偏和验收见 `agent-delegation.md`。
 
 ## 每次唤醒先恢复真相
 
 1. 打开消息指定的 `tasks/<id>.md`，不要只依赖唤醒文本、旧对话或记忆。
-2. 核对 status、enabled/stop、Current Cycle、`nextAction`、wake、deadline、attempt budget、waitingFor 和 verification。
+2. 核对 status、enabled/stop、Current Cycle、`nextAction`、wake、deadline、waitingFor 和 verification。
 3. 检查上一步产物是否已经存在。派发是 at-least-once，重放可能让同一步再次到达。
 4. 只推进一个清晰的下一阶段；外部动作前先查询真实状态，避免重复发送、发布或部署。
 
 ## 回合结束必须留下状态
 
-仍需继续时，用 `task_manage progress` 原子记录发生了什么、证据、下一步、status/wake；Plan 变化放在同一次 `planSteps` 中。生命周期动作 `request-verification`、`complete`、`skip`、`cancel` 本身就是 checkpoint。
+仍需继续时，用 `task_manage progress` 原子记录发生了什么、证据、下一步、status/wake；Plan 变化放在同一次 `planSteps` 中。生命周期动作 `complete`、`skip`、`cancel` 本身就是 checkpoint。
 
 - 当前可继续：`active`，清除 wake。
 - 等待真实条件：按“等待与恢复”设置 `waiting`、wake 和 waitingFor。
@@ -47,8 +46,8 @@ Task 创建即持续委托；能力边界和 task scope 是 authority。不要�
 ## 独立验收
 
 1. 只有证据成立后才勾选 DoD/Verification checklist。
-2. 调用 `task_manage request-verification`；任务进入 `waiting + waitingFor: verification`，runtime 直接入队 checker。
-3. checker 使用 `purpose: verify`、`taskId`，只读检查，结尾返回 `VERDICT: PASS` 或 `VERDICT: FAIL`。
+2. 像任何其他委派一样，派发一个 `purpose: verify`、带 `taskId` 的 sub-agent，然后用 `task_manage progress` 把任务停泊为 `waiting`（不设 wake，`waitingFor: external-signal`）——没有单独的 `request-verification` 动作或 `waiting + waitingFor: verification` 状态。
+3. checker 只读检查，结尾返回 `VERDICT: PASS` 或 `VERDICT: FAIL`；完成后 runtime 通过完成唤醒恢复所属 task，恢复的依据是 run 记录里的 `taskId`，不是 `waitingFor` 写的值。
 4. 主回合用 `task_manage verify` 导入 runId；attestation 必须属于当前 task、未改变 workspace，且 contract body hash 与 artifact subject 新鲜。
 5. PASS/FAIL 都恢复 active；PASS 后 complete 仍会重新校验 attestation、contract hash 和 artifact subject。
 
@@ -70,7 +69,7 @@ driver 只派发 enabled 且 active 的任务。waiting 到 wake 时 runtime 先
 
 ## 治理器停止
 
-deadline、active attempt budget 或连续三次 active wake 没有可见进展时，runtime 写：
+deadline 超期，或连续三次 wake 没有可见 effect 时，runtime 写：
 
 ```text
 enabled: false
@@ -79,18 +78,17 @@ control.stop.by: governor
 control.stop.reason: <确定性原因>
 ```
 
-治理器直接发送确定性 receipt，不开启诊断回合。先检查 Current Cycle、真实产物和 `/tasks stats <id>`；修正范围、deadline 或 budget 后用 `/tasks resume <id>` 保留原阶段，或让 Agent cancel。
+治理器直接发送确定性 receipt，不开启诊断回合。先检查 Current Cycle 和真实产物；修正范围或 deadline 后用 `/tasks resume <id>` 保留原阶段，或让 Agent cancel。
 
 ## Doctor 与损坏文件
 
 `/tasks doctor` 的每条问题都带 Next step。重点检查：
 
 - active 隐藏 future wake；
-- waitingFor 与 wake 组合；
-- waiting parked 是否有明确 user/job/verification 来源；
+- waiting parked 是否有真实、可恢复的来源（有效 wake，或一条正在跑、`taskId` 指向本任务的 job/委派记录）——不看 `waitingFor` 写了什么；
 - sleeping 的 schedule、wake 和 occurrence；
 - enabled 与 stop 是否一致；
 - required verification 的 attestation、contract hash、artifact subject；
-- retired control keys 和不可读 frontmatter。
+- 不可读 frontmatter 或不可解析的 control（旧版本 control 会直接判为不可读，用 task_manage set 重写）。
 
 修复 metadata 不执行外部动作。坏 frontmatter 会 fail-open 让问题显现；坏 control 先修 JSON，再用 task_manage set。daemon restart 后按任务文件重新恢复，仍须遵守幂等检查。
