@@ -4,6 +4,28 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.1-beta.2] - 2026-08-24
+
+### Added
+
+- Added `subagent_manage op=show`, the model-facing counterpart to `/subagents show`, so a failed external run can be self-diagnosed instead of guessed at. Completion wakes now also report how many sibling runs for the same task are still running, so a fan-out of K runs no longer needs a separate `op=list` poll per wake.
+
+### Changed
+
+- **Task control v3 (task-mechanism subtraction).** Task control frontmatter was slimmed to the fields that actually carry authority. Dead provenance (`createdBy`/`sourceMessageId`/`createdAt`) and the annotation-only `recurrence` field are gone, and per-task `usage` counters plus the `/tasks stats` command are removed — the `/usage` ledger is the authoritative account, and its entries now carry an optional `taskId` with per-task aggregation. The attempt-budget/generation machinery (`budget.maxAttempts`, `usage.attempts`, claim/finish bookkeeping, `wakeHandoff`, `blockedReason`) is deleted: `taskBudgetViolation` now checks only the deadline (real user intent rather than a guessed number), wake activation is idempotent by construction, and a process-memory wake-count ceiling (`MAX_WAKES_PER_CYCLE`) replaces the attempt budget as the runaway backstop. Task control version bumped to 3 with strict parsing; an unparseable control block fails open to `controlReadable: false` and is left to `/tasks doctor` repair, while legacy migration is version-gated and self-heals on every startup (the `task-migration.done` marker and its bootstrap plumbing are gone).
+- **Task verification converged to a single path.** `request-verification` is deleted, eliminating the P0 deadlock where a task parked with `waitingFor: "verification"` could never be reactivated by the completion wake, which only matched `"external-signal"`. Dispatching a `purpose=verify` sub-agent now parks the task exactly like any other delegation; the same completion wake reactivates it and `task_manage verify` imports the attestation — no special lifecycle status, no durable-checker callback. `verify`'s gate is the attestation's own `taskId` binding rather than model-written frontmatter, `TaskVerification` shrinks from seven fields to three, and `complete` compares the attestation directly against the task's current body hash. `waitingFor` is now purely diagnostic display text, and `/tasks doctor`'s parked-task rules collapse into one uniform check.
+
+### Fixed
+
+- Hardened delegation security. Working-directory boundary checks compare realpaths, so a symlink inside the project root can no longer point an internal agent's `projectRoot` — or an external process's cwd, which bypasses the path guard entirely — outside the project; `subagent_manage follow_up` re-checks the current boundary (since `/project` can move it after dispatch) and re-validates task length. `verificationStrength` now reflects the run's actual tool set (the default set still includes `bash`, which writes files just as well) and is surfaced at `verify` and `complete`. Workspace-unchanged checks fail closed when neither a subject hash nor a git-state pair can be compared, instead of letting a PASS through with zero evidence. A delegated agent's own output is fenced and labeled as untrusted data in the completion wake.
+- External sub-agent processes no longer inherit likely-credential environment variables (`*_API_KEY`/`_SECRET`/`_TOKEN`/`_PASSWORD`, `DINGTALK_*`) by default; a role can restore any variable via `env:`.
+- A settled run's now-empty artifact directory is cleaned up instead of lingering forever.
+
+### Tests and release
+
+- Added regression coverage for the full `purpose=verify` chain through the real wake path (register/settle → claim → verify → complete), verification outcomes, `subagent_manage`, and restart adoption.
+- Refreshed the task and delegation docs, and recorded the two driving review reports (`docs/reviews/2026-08-23-*.md`) as history.
+
 ## [0.9.1-beta.1] - 2026-08-21
 
 ### Changed

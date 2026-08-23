@@ -4,6 +4,28 @@
 
 ## [未发布]
 
+## [0.9.1-beta.2] - 2026-08-24
+
+### 新增
+
+- 新增 `subagent_manage op=show`，作为 `/subagents show` 的模型侧对应入口，外部 run 失败后可自查而非猜测。完成唤醒现在同时报告同一任务仍在运行的兄弟 run 数量，K 路 fan-out 不必每次唤醒都单独调用 `op=list` 轮询。
+
+### 变更
+
+- **任务控制 v3（任务机制减法）。** 任务控制 frontmatter 收敛到真正具有权威性的字段。删除从未写入/读取的 provenance（`createdBy`/`sourceMessageId`/`createdAt`）与仅作标注的 `recurrence` 字段；移除任务级 `usage` 计数及只为其存在的 `/tasks stats` 命令——`/usage` 账本是唯一的用量权威，其条目现在携带可选 `taskId` 并支持按任务聚合。删除 attempt 预算/代数机制（`budget.maxAttempts`、`usage.attempts`、claim/finish 记账、`wakeHandoff`、`blockedReason`）：`taskBudgetViolation` 现在只检查 deadline（真实用户意图而非猜测数字），唤醒激活按构造幂等，并以进程内的唤醒次数上限（`MAX_WAKES_PER_CYCLE`）取代 attempt 预算作为失控兜底。任务控制版本升至 3 并采用严格解析；无法解析的控制块 fail-open 为 `controlReadable: false`，交给 `/tasks doctor` 修复；旧格式迁移改为按版本门控并在每次启动时自愈（`task-migration.done` 标记文件及其 bootstrap 管道移除）。
+- **任务验收收敛为单一路径。** 删除 `request-verification`，消除 P0 级验收唤醒死锁：以 `waitingFor: "verification"` 停泊的任务永远无法被只匹配 `"external-signal"` 的完成唤醒重新激活。派发 `purpose=verify` 子代理现在与普通委派完全一样地停泊，由同一个完成唤醒激活，再由 `task_manage verify` 导入 attestation——没有专属生命周期状态，也没有 durable-checker 回调。`verify` 的门禁改为 attestation 自身的 `taskId` 绑定而非模型写入的 frontmatter；`TaskVerification` 从七个字段缩减到三个；`complete` 直接将 attestation 与任务当前 body hash 比对。`waitingFor` 现在纯粹是诊断展示文本，`/tasks doctor` 的停泊任务规则合并为一条统一检查。
+
+### 修复
+
+- 加固委派安全。工作目录边界检查改为比较 realpath，项目根内的 symlink 不再把内部 agent 的 `projectRoot`——或完全绕过路径守卫的外部进程 cwd——指向项目之外；`subagent_manage follow_up` 按当前边界重新校验（`/project` 可能在派发后移动边界）并重新校验任务长度。`verificationStrength` 现在反映 run 的实际工具集（默认工具集仍含 `bash`，同样能写文件），并在 `verify` 和 `complete` 时呈现。工作区无变化的判定在 subject hash 与 git 状态均无法比较时 fail closed，不再让 PASS 零证据通过。委派 agent 自己的输出在完成唤醒中被围栏并标注为不可信数据。
+- 外部子代理进程默认不再继承疑似凭据的环境变量（`*_API_KEY`/`_SECRET`/`_TOKEN`/`_PASSWORD`、`DINGTALK_*`）；角色可通过 `env:` 恢复任意变量。
+- 已结算 run 留下的空产物目录现在会被清理，不再永久残留。
+
+### 测试与发布
+
+- 新增回归测试：`purpose=verify` 全链路走真实唤醒路径（register/settle → claim → verify → complete）、verification outcome、`subagent_manage`，以及重启接管。
+- 同步任务与委派文档，并在 `docs/reviews/2026-08-23-*.md` 归档两份驱动本次改造的审查报告。
+
 ## [0.9.1-beta.1] - 2026-08-21
 
 ### 变更
