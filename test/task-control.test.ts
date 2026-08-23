@@ -95,7 +95,7 @@ describe("TaskControl v2", () => {
 
 	it("resets only per-cycle facts", () => {
 		const control = createDefaultTaskControl(true);
-		control.waitingFor = "verification";
+		control.waitingFor = "external-signal";
 		control.stop = { by: "governor", reason: "old cycle", at: "2026-08-03T09:00:00+08:00" };
 		control.verification = { required: true, status: "passed", runId: "old" };
 		const reset = resetTaskControlForCycle(control, "cycle-2026-08-04");
@@ -142,7 +142,7 @@ describe("waiting task activation", () => {
 		await rm(root, { recursive: true, force: true });
 	});
 
-	it("does not let a job completion wake a task waiting for another source", async () => {
+	it("activates a waiting task regardless of its waitingFor value (display-only, not a gate)", async () => {
 		const path = join(channelDir, "tasks", "source.md");
 		await writeFile(
 			path,
@@ -151,13 +151,11 @@ describe("waiting task activation", () => {
 				"# Source\n",
 			),
 		);
-		expect(await activateWaitingTask(channelDir, "source", "job")).toBeUndefined();
-		expect((await readStoredTask(channelDir, "source"))?.fields.status).toBe("waiting");
-		expect(await activateWaitingTask(channelDir, "source", "user")).toBeDefined();
+		expect(await activateWaitingTask(channelDir, "source")).toBeDefined();
 		expect((await readStoredTask(channelDir, "source"))?.fields.status).toBe("active");
 	});
 
-	it("activates any waiting task when no expected source is given", async () => {
+	it("gives a hand-written v2 control block to a legacy task on first activation", async () => {
 		const path = join(channelDir, "tasks", "legacy.md");
 		await writeFile(path, renderTaskDocument({ status: "waiting" }, "# Legacy\n"));
 		const activated = await activateWaitingTask(channelDir, "legacy");

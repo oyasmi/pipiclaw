@@ -125,11 +125,21 @@ describe("/tasks v2 commands", () => {
 	it("doctor diagnoses invalid state combinations with direct next steps", async () => {
 		await writeTask(
 			"bad",
-			`status: waiting\nwake: ${FUTURE}\ncontrol: ${JSON.stringify({ ...createDefaultTaskControl(), waitingFor: "job" })}`,
+			`status: active\nwake: 2099-01-01T00:00:00+08:00\ncontrol: ${JSON.stringify(createDefaultTaskControl())}`,
 		);
 		const out = await run("doctor");
-		expect(out).toContain("waitingFor=job");
+		expect(out).toContain("active but its wake is in the future");
 		expect(out).toContain("Next step:");
+	});
+
+	it("doctor does not gate resumability on waitingFor's cosmetic value", async () => {
+		// A future wake alone is a durable resumption source; waitingFor is display-only and
+		// no longer part of this check (spec 043).
+		await writeTask(
+			"future-wait",
+			`status: waiting\nwake: ${FUTURE}\ncontrol: ${JSON.stringify({ ...createDefaultTaskControl(), waitingFor: "job" })}`,
+		);
+		expect(await run("doctor")).toContain("未发现任务台账问题");
 	});
 
 	it("doctor recognizes a clean parked user wait and reports forgotten external waits", async () => {
@@ -138,7 +148,7 @@ describe("/tasks v2 commands", () => {
 			`status: waiting\ncontrol: ${JSON.stringify({ ...createDefaultTaskControl(), waitingFor: "external-signal" })}`,
 		);
 		const out = await run("doctor");
-		expect(out).toContain("parked (waiting, no wake)");
+		expect(out).toContain("waiting with no durable way to resume");
 		expect(out).toContain("/tasks run parked");
 	});
 

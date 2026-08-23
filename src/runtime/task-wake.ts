@@ -1,7 +1,7 @@
 /**
  * Verifying and claiming a background job's or delegation run's completion wake before it may
- * activate a task parked with `waitingFor` (spec 040, D7/T9). Split out of `bootstrap.ts`: these
- * are pure functions over an explicit `event`/`workspaceDir`/`executor`, with no dependency on
+ * activate a parked task (spec 040, D7/T9). Split out of `bootstrap.ts`: these are pure functions
+ * over an explicit `event`/`workspaceDir`/`executor`, with no dependency on
  * `createRuntimeContext`'s closures.
  */
 import { getChannelJobManager, type JobSnapshot } from "../agent/job-manager.js";
@@ -80,7 +80,7 @@ export async function claimVerifiedDelegationWake(
 		return undefined;
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
-	const activated = await activateWaitingTask(channelDir, wake.taskId, "external-signal", hooks);
+	const activated = await activateWaitingTask(channelDir, wake.taskId, hooks);
 	return {
 		taskId: wake.taskId,
 		activated: activated !== undefined,
@@ -118,7 +118,7 @@ export async function claimVerifiedJobWake(
 		return undefined;
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
-	const activated = await activateWaitingTask(channelDir, wake.taskId, "job", hooks);
+	const activated = await activateWaitingTask(channelDir, wake.taskId, hooks);
 	return {
 		taskId: wake.taskId,
 		activated: activated !== undefined,

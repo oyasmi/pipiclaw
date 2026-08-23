@@ -116,18 +116,21 @@ export interface WakeTaskTransitionHooks {
  * Atomically convert a due/completion-woken task to active. Idempotent by construction: once a
  * task is no longer `waiting`, a redelivered wake or retry finds `status !== "waiting"` and is a
  * safe no-op, so no separate claim/handoff bookkeeping is needed to detect a duplicate activation.
+ *
+ * Wake legitimacy is entirely the caller's responsibility (spec 043's `waitingFor`
+ * de-authorization): a completion wake reaches here only after the caller has verified an
+ * actually-settled run/job whose own recorded `taskId` names this task (`task-wake.ts`'s
+ * `isVerified*Wake`). `waitingFor` itself is display-only and never gates activation.
  */
 export async function activateWaitingTask(
 	channelDir: string,
 	id: string,
-	expectedWaitingFor?: TaskWaitingFor,
 	hooks?: WakeTaskTransitionHooks,
 ): Promise<StoredTaskDocument | undefined> {
 	let activated = false;
 	const document = await updateStoredTask(channelDir, id, (task) => {
 		const status = normalizeStoredStatus(task.fields.status, Boolean(task.fields.schedule));
 		if (status !== "waiting" || task.fields.enabled === false) return;
-		if (expectedWaitingFor && task.fields.control?.waitingFor !== expectedWaitingFor) return;
 		hooks?.beforeActivation?.();
 		activated = true;
 		task.fields.control ??= createDefaultTaskControl();

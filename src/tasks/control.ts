@@ -3,7 +3,8 @@ import { errorMessage } from "../shared/text-utils.js";
 
 export type TaskPriority = "low" | "normal" | "high" | "critical";
 export type TaskVerificationStatus = "pending" | "passed" | "failed";
-export type TaskWaitingFor = "time" | "user" | "job" | "verification" | "external-signal";
+/** Diagnostic display only (spec 043); it does not gate wake activation. */
+export type TaskWaitingFor = "time" | "user" | "job" | "external-signal";
 
 /**
  * `status` is a display cache only; it never gates `complete` or doctor. Every field that used to
@@ -45,7 +46,7 @@ export interface TaskControlPatch {
 }
 
 export const TASK_PRIORITIES: readonly TaskPriority[] = ["low", "normal", "high", "critical"];
-const WAITING_FOR: readonly TaskWaitingFor[] = ["time", "user", "job", "verification", "external-signal"];
+const WAITING_FOR: readonly TaskWaitingFor[] = ["time", "user", "job", "external-signal"];
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {

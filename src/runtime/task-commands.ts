@@ -17,7 +17,6 @@ import {
 import {
 	countTaskDodItems,
 	extractTaskTitle,
-	isTaskParked,
 	missingStandardTaskSections,
 	normalizeTaskId,
 	readActiveTasks,
@@ -564,35 +563,6 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				),
 			);
 		}
-		if (status === "waiting" && entry.frontmatter.wake && !control?.waitingFor) {
-			issues.push(
-				issue(
-					`tasks/${entry.id}.md is waiting on a timed wake but has no waitingFor marker.`,
-					`Run task_manage set with control.waitingFor=time or progress the task to normalize the wait.`,
-				),
-			);
-		}
-		if (
-			status === "waiting" &&
-			entry.frontmatter.wake &&
-			control?.waitingFor &&
-			!["time", "external-signal"].includes(control.waitingFor)
-		) {
-			issues.push(
-				issue(
-					`tasks/${entry.id}.md is waiting on a wake but waitingFor=${control.waitingFor} is not a timed source.`,
-					`Set control.waitingFor to time, or clear wake and record the real signal source before resuming ${entry.id}.`,
-				),
-			);
-		}
-		if (status === "waiting" && !entry.frontmatter.wake && control?.waitingFor === "time") {
-			issues.push(
-				issue(
-					`tasks/${entry.id}.md is parked but waitingFor=time has no wake.`,
-					`Set a valid wake or change waitingFor to the actual recovery source.`,
-				),
-			);
-		}
 		if (recurringTaskMissedOccurrence({ status, schedule: entry.frontmatter.schedule, control }, new Date(now))) {
 			issues.push(
 				issue(
@@ -653,22 +623,23 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			}
 		}
 
-		// A parked task is waiting for someone to call it: a finished background job, a user
-		// message, or `/tasks run`. The driver deliberately will not (see `isTaskParked`), so with
-		// no running job carrying this id, whether it ever resumes is entirely up to the user.
-		// That is legitimate when it is waiting on an answer — and indistinguishable, on disk,
-		// from a task everyone has forgotten. Report the fact and name every way out.
-		const hasDurableWaitingSource =
-			control?.waitingFor === "verification" ||
-			(control?.waitingFor === "job" && runningJobTaskIds.has(entry.id)) ||
-			(control?.waitingFor === "external-signal" && runningDelegationTaskIds.has(entry.id));
-		if (isTaskParked(entry.frontmatter) && !hasDurableWaitingSource) {
-			issues.push(
-				issue(
-					`tasks/${entry.id}.md is parked (waiting, no wake) and no running background job will wake it.`,
-					`It resumes only when you reply to it, run /tasks run ${entry.id}, or give it a wake with /tasks set ${entry.id} wake <local time or +2h>; cancel it if what it waits for is gone.`,
-				),
-			);
+		// A waiting task resumes only via a real durable source: a valid wake (the driver's timed
+		// reactivation) or an actually-running background job/delegation recorded against this
+		// id — never by what `waitingFor` merely claims, which is model-written display text and
+		// no longer gates anything. With neither, resumption is entirely up to the user —
+		// legitimate when waiting on an answer, and indistinguishable, on disk, from a task
+		// everyone has forgotten. Report the fact and name every way out.
+		if (status === "waiting") {
+			const hasDurableWake = Boolean(entry.frontmatter.wake) && validWakeMs(entry) !== undefined;
+			const hasRunningSource = runningJobTaskIds.has(entry.id) || runningDelegationTaskIds.has(entry.id);
+			if (!hasDurableWake && !hasRunningSource) {
+				issues.push(
+					issue(
+						`tasks/${entry.id}.md is waiting with no durable way to resume (no valid wake, no running job/delegation recorded against it).`,
+						`It resumes only when you reply to it, run /tasks run ${entry.id}, or give it a wake with /tasks set ${entry.id} wake <local time or +2h>; cancel it if what it waits for is gone.`,
+					),
+				);
+			}
 		}
 
 		if (entry.frontmatter.wake && validWakeMs(entry) === undefined) {
