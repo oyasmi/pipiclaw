@@ -52,7 +52,8 @@ order: 36
 2. **立即结束当前回合。** 属于某个 task 时，派发就带上 `taskId`，并用 `task_manage progress` 停泊为 `waiting`（`waitingFor` 随手记一个 external-signal/job 之类的展示值即可）——runtime 按 run 记录里的 `taskId` 认领并恢复该任务，不看 `waitingFor` 写了什么。
 3. 想看进度用 `subagent_manage op=list`（人可用 `/subagents list`），不要靠反复调用委派工具来"检查"。
 4. 每个频道最多 6 个同时在跑的委派（宿主全局 20 个）。被上限拒绝时先等一个结束或 `cancel` 一个，不要改小任务再试。
-5. daemon 重启时外部 run 继续跑，内置 run 会被判 `lost` 并唤醒说明。收到 `lost` 就是"结局未知"：先查真实产物，再决定重派，不要假设它已经做完。
+5. daemon 重启时外部 run 通常继续跑，内置 run 会被判 `lost` 并唤醒说明；但外部 run 若在进程 pid 真正落盘之前就重启，也会被判 `lost`，不是外部 run 的例外。收到 `lost` 就是"结局未知"：先查真实产物，再决定重派，不要假设它已经做完。重连恢复出的耗时前面会带 `≈`，那是从产物文件估算出来的，不是实测值，别当精确数字用。
+6. `subagent_manage op=show <runId>` 给出一次派发的完整机器可读细节（实际 argv、派发警告、适配器/CLI 版本、外部 run 的 stderr 尾部）——外部 run 失败但看不出原因时，先用它自诊断，不要凭猜测重派。
 
 ## 五、纠偏与续接
 

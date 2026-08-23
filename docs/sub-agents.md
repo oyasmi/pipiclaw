@@ -246,11 +246,12 @@ maxWallTimeSec: 3600
 
 `subagent` 工具的调用 schema 完全不变；内外差异全部封装在角色配置和 runtime 内部。查看/控制在途或历史 run 用另一个工具/命令：
 
-**模型侧**——`subagent_manage` 工具，三个 op：
+**模型侧**——`subagent_manage` 工具，四个 op：
 
 | op | 语义 |
 |---|---|
 | `list` | 本频道 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况 |
+| `show` | 单个 run 的完整机器可读细节：实际 argv、派发时的警告（如 `$MODEL` 占位符被丢弃）、适配器/CLI 版本、外部 run 的 stderr 尾部。一个失败的外部 run 想自诊断而不是凭空重派时用这个 |
 | `cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
 | `follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
 
@@ -369,7 +370,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 子代理没有 `subagent` 工具，**不能继续创建下一级代理**——但这只约束内置子代理。外部 agent 本身是完整的 coding agent，它能不能 spawn 自己的子代理，pipiclaw 拦不住，见下文"明确不可控的部分"。
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。**外部角色完全没有这层工具白名单**——它能触及其自身权限所及的任何地方，`mutates`/`workingDirectory` 都不是隔离机制，只是审计与并发控制信息。
 - 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，`task_manage verify` / `complete` 在同一目录复算 artifact subject。
-- `purpose: verify` + `taskId`：进入独立验收协议。内置验证器会被结构性移除 write/edit 工具（`verificationStrength: enforced`）；外部验证器做不到这一点，只能依赖它自己的 sandbox flag 和事后的 workspace 哈希比对（`verificationStrength: advisory`）。两者都会检测 verifier 期间的 git workspace 变化（含未跟踪文件的**内容**变化，不只是路径出现/消失），并要求最后一行明确 `VERDICT: PASS|FAIL`。`advisory` 结论仍会被记录、展示，并要求主代理按风险抽查，不是自动失败。
+- `purpose: verify` + `taskId`：进入独立验收协议。内置验证器结构性移除了 write/edit 工具，但默认工具集仍含 `bash`——它同样能写文件，所以 `verificationStrength` 只在角色的 `tools` 里也不含 `bash` 时才是 `enforced`，否则如实标成 `advisory`；外部验证器永远做不到结构性移除，恒为 `advisory`。两者都靠事后 workspace 哈希比对判定是否被改动（含未跟踪文件的**内容**变化，不只是路径出现/消失）；哈希算不出来（不是 Git 检出，或 `git status` 失败）时**直接判 FAIL**，不会把"测不出来"当成"没改动"。verifier 还必须在最后一行明确 `VERDICT: PASS|FAIL`。`advisory` 结论仍会被记录、展示，并要求主代理按风险抽查，不是自动失败。
 - verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`，主代理用返回的 runId 调 `task_manage verify` 导入；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 - **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
 
@@ -384,7 +385,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - **pipiclaw 不沙箱化外部智能体。** 唯一的强边界是你在 `command` 里写下的目标 CLI 自身的 sandbox flag（如 `codex exec --sandbox read-only`）。`workingDirectory` 决定进程从哪里开始，不构成隔离。
 - **`workspace/sub-agents/` 目录本身对模型的 `write`/`edit` 工具关闭**（主代理和子代理都一样）——防的是模型自己写一份外部角色文件、再调用它，从而绕过命令守卫执行任意宿主命令。这条防线拦不住 `bash` 直接改这个目录（与既有的记忆文件写入拒绝同一个已知缺口），角色目录建议纳入版本控制作为兜底：任何变更都可见、可回滚。
 - 每次外部派发都会写一条审计事件（runId、角色、harness、完整 argv、工作目录、`mutates`、model），不受"只记录被拦截的动作"这个开关影响。
-- 外部进程继承 pipiclaw 自身的环境变量（它需要自己的认证，如 `ANTHROPIC_API_KEY`）；角色 `env:` 可以在此基础上追加或覆盖。
+- 外部进程继承 pipiclaw 自身的环境变量，但默认剔除看起来像凭据的键（`*_API_KEY`/`*_SECRET`/`*_TOKEN`/`*_PASSWORD`，以及 `DINGTALK_*`）——目标仓库的 `CLAUDE.md`/prompt 能操纵外部 agent 的行为，不该顺带继承 pipiclaw 自己的模型 provider key 或钉钉凭据。角色需要某个凭据时用 `env:` 显式加回。
 - 外部 agent 本身是完整 coding agent，能否 spawn 自己的子代理、递归到多深，pipiclaw 不保证也不限制。
 - 显式声明 `memory: session` 或 `memory: relevant` 的外部角色会把频道会话状态/召回的记忆片段写进发给外部进程的 stdin——这与继承环境变量属于同一类如实声明的暴露面，不是隐藏行为（默认值是 `none`，见上文"`contextMode` 与 `memory`"）。
 
