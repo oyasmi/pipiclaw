@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -7,12 +8,13 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { externalRoleFingerprint, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { externalRoleFingerprint, type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
 import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
 import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
 import {
 	assertVerifyAdmissible,
+	assertWithinProjectBoundary,
 	buildContextualBlocks,
 	buildSubAgentTask,
 	type SubAgentRunContext,
@@ -25,12 +27,13 @@ import {
 
 const subagentManageSchema = Type.Object({
 	label: Type.String({ description: "Brief description of what you're checking (shown to user)" }),
-	op: Type.Union([Type.Literal("list"), Type.Literal("cancel"), Type.Literal("follow_up")], {
+	op: Type.Union([Type.Literal("list"), Type.Literal("cancel"), Type.Literal("follow_up"), Type.Literal("show")], {
 		description:
-			'"list" a snapshot of this channel\'s delegation runs, "cancel" a running one by runId, or ' +
-			'"follow_up" to continue a resumable run with a new instruction (produces a new runId).',
+			'"list" a snapshot of this channel\'s delegation runs, "cancel" a running one by runId, ' +
+			'"follow_up" to continue a resumable run with a new instruction (produces a new runId), or ' +
+			'"show" the full detail on one run by runId (argv, dispatch warnings, stderr tail) for self-diagnosis of a failed run.',
 	}),
-	runId: Type.Optional(Type.String({ description: "Required for cancel and follow_up." })),
+	runId: Type.Optional(Type.String({ description: "Required for cancel, follow_up, and show." })),
 	task: Type.Optional(Type.String({ description: "Follow-up instruction. Required for op=follow_up." })),
 });
 
@@ -46,6 +49,13 @@ export interface SubAgentManageToolOptions {
 	 */
 	workspaceDir: string;
 	channelDir: string;
+	/**
+	 * The current project scope, so `follow_up` can re-check a resumed run's `workingDirectory`
+	 * against the boundary in effect *now* rather than trusting the one recorded at dispatch time
+	 * (review 2026-08-23 §3.1) — `/project` can move `workingDirectory` between the two.
+	 */
+	workingDirectory?: string;
+	projectBoundary?: "project" | "unbounded";
 	/** Needed only for `follow_up`: re-resolves the role's current config by name. */
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	securityConfig?: SecurityConfig;
@@ -58,13 +68,16 @@ export interface SubAgentManageToolOptions {
 }
 
 interface SubAgentManageArgs {
-	op: "list" | "cancel" | "follow_up";
+	op: "list" | "cancel" | "follow_up" | "show";
 	runId?: string;
 	task?: string;
 }
 
 /** Spec 042 D9: cap on `op=list`'s output — see the call site for why running runs are exempt. */
 const LIST_CAP = 50;
+/** Matches `/subagents show`'s own cap (`runtime/subagent-commands.ts`) — enough to diagnose a
+ *  failure without dumping an unbounded log into the model's context. */
+const STDERR_TAIL_CHARS = 2_000;
 
 function formatRunLine(record: RunRecord): string {
 	const task = record.taskId ? `, task ${record.taskId}` : "";
@@ -76,6 +89,48 @@ function formatRunLine(record: RunRecord): string {
 		return `${header}\n  failed: ${record.failureReason}`;
 	}
 	return header;
+}
+
+/**
+ * The machine-readable subset of `/subagents show` (`runtime/subagent-commands.ts`'s `showRun`):
+ * argv, dispatch-time warnings, and the adapter/CLI version pair the model previously had no way
+ * to see at all — it could only guess at a failed external run's cause or re-dispatch blindly
+ * (review 2026-08-23 §3.4).
+ */
+async function formatRunShow(record: RunRecord): Promise<string> {
+	const lines = [
+		`Run ${record.runId}: ${record.agent} (${harnessLabel(record)}, ${record.source}) — ${record.status} (${formatRunDuration(record)})`,
+		`purpose=${record.purpose}, workingDirectory=${record.workingDirectory}, artifactDir=${record.artifactDir}`,
+	];
+	if (record.failureReason) lines.push(`failureReason: ${record.failureReason}`);
+	if (record.verificationVerdict) {
+		lines.push(
+			`verification: ${record.verificationVerdict.toUpperCase()}${record.verificationStrength === "advisory" ? " (advisory)" : ""}`,
+		);
+	}
+	if (record.taskId) lines.push(`taskId: ${record.taskId}`);
+	if (record.leaseKey) lines.push("holds write lease: yes");
+	if (record.model) lines.push(`model: ${record.model}`);
+	const cost = formatCost(record);
+	lines.push(`usage: input=${record.usage.input} output=${record.usage.output}${cost ? ` cost=${cost}` : ""}`);
+	if (record.argv) lines.push(`argv: ${JSON.stringify(record.argv)}`);
+	if (record.parserVersion !== undefined || record.cliVersion) {
+		const parts: string[] = [];
+		if (record.parserVersion !== undefined) parts.push(`parserVersion=${record.parserVersion}`);
+		parts.push(`cliVersion=${record.cliVersion ?? "(unknown)"}`);
+		lines.push(`adapter/CLI: ${parts.join(", ")}`);
+	}
+	if (record.invocationWarnings?.length) {
+		lines.push("dispatch warnings:", ...record.invocationWarnings.map((warning) => `- ${warning}`));
+	}
+	if (record.sessionId) lines.push(`sessionId: ${record.sessionId} (usable with subagent_manage op=follow_up)`);
+	if (record.runtime === "external") {
+		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")
+			.then((text) => text.slice(-STDERR_TAIL_CHARS))
+			.catch(() => undefined);
+		if (stderrTail?.trim()) lines.push("", "stderr (tail):", stderrTail);
+	}
+	return lines.join("\n");
 }
 
 /** Resumable harnesses only: `claude-code`/`codex-cli`. `exec` has no session concept, and internal
@@ -95,7 +150,8 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 			"Inspect and control delegation runs (internal sub-agents and, once configured, external agents): " +
 			"op=list shows a snapshot of this channel's runs; op=cancel stops a running one by runId without " +
 			"waking the channel (that is your own decision, not a failure); op=follow_up continues a resumable " +
-			"run with a new instruction, producing a new runId. A run finishing wakes this channel by itself, " +
+			"run with a new instruction, producing a new runId; op=show gives full detail on one run (argv, " +
+			"dispatch warnings, stderr tail) for self-diagnosis. A run finishing wakes this channel by itself, " +
 			"so never poll here waiting for one — end the turn instead.",
 		parameters: subagentManageSchema,
 		execute: async (_toolCallId: string, { op, runId, task }: SubAgentManageArgs) => {
@@ -137,6 +193,14 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 			}
 			const resolvedRunId = resolution.record.runId;
 
+			if (op === "show") {
+				const text = await formatRunShow(resolution.record);
+				return {
+					content: [{ type: "text", text }],
+					details: { op, runId: resolvedRunId },
+				};
+			}
+
 			if (op === "cancel") {
 				const status = await manager().cancel(resolvedRunId);
 				return {
@@ -149,7 +213,17 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 			if (!task || !task.trim()) {
 				throw new RecoverableToolError("follow_up requires task.");
 			}
+			const taskLengthError = validateSubAgentTask(task);
+			if (taskLengthError) {
+				throw new RecoverableToolError(taskLengthError);
+			}
 			const record = resolution.record;
+			// The initial dispatch validated `record.workingDirectory` against the project boundary
+			// in effect at the time (spec 043, D6.2); `/project` can move that boundary afterward, and
+			// this re-checks the *current* one before resuming a process there (review 2026-08-23 §3.1).
+			if (options.projectBoundary === "project" && options.workingDirectory) {
+				assertWithinProjectBoundary(record.workingDirectory, options.workingDirectory, record.workingDirectory);
+			}
 			const harness = resumableHarnessOf(record);
 			if (!harness) {
 				// Internal runs have no persisted transcript to resume — the isolated-context design

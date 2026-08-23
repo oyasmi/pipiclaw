@@ -1,10 +1,11 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
+import { workspaceSubjectHash } from "../src/tasks/artifact-subject.js";
 import { verificationAttestationPath } from "../src/tasks/verification.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -235,6 +236,23 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		mkdirSync(join(channelDir, "tasks"), { recursive: true });
 		writeFileSync(join(channelDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
 
+		// The verified checkout is a separate directory from the daemon's own state/artifacts
+		// (channelDir/stateDir live under workspaceDir) — otherwise the daemon's own bookkeeping
+		// writes would themselves register as "workspace changed" against the checkout being judged.
+		// A real Git repo with a committed baseline, unchanged before the "after" hash is taken below:
+		// `resolveVerificationOutcome` now fails closed when it cannot compare a before/after subject
+		// at all (review 2026-08-23 §2.2), so a real comparable pair is required to exercise the pass
+		// path end-to-end rather than relying on the old "can't tell, so assume unchanged" gap.
+		const projectDir = join(workspaceDir, "project");
+		mkdirSync(projectDir, { recursive: true });
+		execFileSync("git", ["init"], { cwd: projectDir });
+		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: projectDir });
+		execFileSync("git", ["config", "user.name", "Test"], { cwd: projectDir });
+		writeFileSync(join(projectDir, "README.md"), "checkout\n");
+		execFileSync("git", ["add", "."], { cwd: projectDir });
+		execFileSync("git", ["commit", "-m", "baseline"], { cwd: projectDir });
+		const verifySubjectBefore = await workspaceSubjectHash(projectDir);
+
 		const pid = await spawnAndWaitExit();
 		writeFileSync(
 			join(artifactDir, "events.jsonl"),
@@ -259,9 +277,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			tools: [],
 			purpose: "verify",
 			taskId: "ship",
-			// Not a git repo: workspaceSubjectHash resolves to undefined on both sides, so
-			// workspaceChanged falls back to false rather than blocking on an unrelated setup gap.
-			workingDirectory: workspaceDir,
+			workingDirectory: projectDir,
 			artifactDir,
 		});
 		await firstDaemon.setLaunched("run-verify", {
@@ -271,6 +287,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			maxWallTimeSec: 60,
 			processStartedAt: Date.now(),
 			channelDir,
+			verifySubjectBefore,
 		});
 
 		const secondDaemon = new SubAgentRunManager(channelId, { stateDir });

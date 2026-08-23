@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
@@ -281,6 +281,31 @@ async function prepareArtifactDir(channelDir: string, runId: string): Promise<st
  * parameter. Path guards are unaffected: they judge the *resolved absolute* target, so a cwd
  * outside the allowed roots makes relative paths fail exactly as an absolute one there would.
  */
+function realpathOrSelf(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
+}
+
+/**
+ * D6.2's boundary check, hardened against symlinks (review 2026-08-23 §2.3): a plain
+ * `resolve()` + string-prefix comparison only judges the *requested* path, so `<projectRoot
+ * >/link -> /somewhere/else` passes the check and then everything downstream — the internal
+ * agent's own `securityContext.projectRoot`, an external process's `cwd` (which bypasses the
+ * path guard entirely) — trusts that escaped target. Comparing realpaths closes it, matching
+ * `project-scope.ts` and `workspaceLeaseKey`, the two other places in the tree that already do
+ * this.
+ */
+export function assertWithinProjectBoundary(target: string, base: string, requested: string): void {
+	const realBase = realpathOrSelf(base);
+	const realTarget = realpathOrSelf(target);
+	if (realTarget !== realBase && !realTarget.startsWith(`${realBase}/`)) {
+		throw new RecoverableToolError(`workingDirectory "${requested}" must be inside the project root (${base}).`);
+	}
+}
+
 function resolveRunWorkingDirectory(requested: string | undefined, options: SubAgentToolOptions): string {
 	const base = resolve(options.workingDirectory ?? process.cwd());
 	const trimmed = requested?.trim();
@@ -289,10 +314,8 @@ function resolveRunWorkingDirectory(requested: string | undefined, options: SubA
 	if (!existsSync(target) || !statSync(target).isDirectory()) {
 		throw new RecoverableToolError(`workingDirectory "${requested}" is not an existing directory.`);
 	}
-	// D6.2: under `boundary: "project"`, an explicit workingDirectory must stay within the parent's
-	// ProjectRoot — `resolve(base, trimmed)` alone lets an absolute `trimmed` escape `base` entirely.
-	if (options.projectBoundary === "project" && target !== base && !target.startsWith(`${base}/`)) {
-		throw new RecoverableToolError(`workingDirectory "${requested}" must be inside the project root (${base}).`);
+	if (options.projectBoundary === "project") {
+		assertWithinProjectBoundary(target, base, requested ?? trimmed);
 	}
 	return target;
 }
@@ -1188,8 +1211,11 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 						subjectHash: verification.workspaceChanged ? undefined : verifierSubjectAfter,
 						subjectDir: runContext.workingDirectory,
 						// Internal verify always keeps write/edit structurally removed from the
-						// verifier's tool set (buildSubagentTools above) — a real, enforced gate.
-						verificationStrength: "enforced",
+						// verifier's tool set (buildSubagentTools above), but `bash` stays available by
+						// default and can write files just as well — labeling that "enforced" would be
+						// dishonest (review 2026-08-23 §2.2). Only a role that dropped `bash` from its
+						// declared tool list earns the stronger label.
+						verificationStrength: config.tools.includes("bash") ? "advisory" : "enforced",
 					});
 				}
 

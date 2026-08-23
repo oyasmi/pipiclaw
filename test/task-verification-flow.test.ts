@@ -142,4 +142,46 @@ describe("independent verification via a normal delegation wake", () => {
 		});
 		expect(completed).toMatchObject({ action: "complete", archived: true });
 	});
+
+	// Review 2026-08-23 §2.1: `verificationStrength` was computed and attested but never reached
+	// anything a human/model actually reads — surface it at verify and complete time instead.
+	it("surfaces an advisory verification strength at verify and complete time", async () => {
+		const taskId = "verify-flow-advisory";
+		await manageTask(options, {
+			action: "create",
+			id: taskId,
+			title: "Work",
+			goal: "Do the work.",
+			dod: "- [x] Result is ready",
+			control: { verificationRequired: true },
+		});
+		await manageTask(options, { action: "progress", id: taskId, note: "Dispatched.", status: "waiting" });
+
+		const runId = "run-verify-advisory";
+		const attestation = await writeVerificationAttestation(channelDir, {
+			runId,
+			taskId,
+			verdict: "pass",
+			checkedAt: "2026-08-04T12:00:00+08:00",
+			evidence: "External verifier reported PASS.",
+			workspaceChanged: false,
+			verificationStrength: "advisory",
+		});
+		expect(attestation.verificationStrength).toBe("advisory");
+
+		const verified = await manageTask(options, {
+			action: "verify",
+			id: taskId,
+			verifierRunId: runId,
+		});
+		expect(verified.notice).toMatch(/advisory/i);
+
+		const completed = await manageTask(options, {
+			action: "complete",
+			id: taskId,
+			summary: "Result is complete.",
+			evidence: `Independent verifier ${runId} passed.`,
+		});
+		expect(completed.notice).toMatch(/advisory/i);
+	});
 });

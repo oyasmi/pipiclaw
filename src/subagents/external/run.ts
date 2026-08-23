@@ -21,6 +21,24 @@ import { getExternalHarness } from "./registry.js";
 import { finalizeExternalRun } from "./settlement.js";
 
 /**
+ * Env vars the daemon's own credentials tend to live in — dropped by default from an external
+ * process's environment. A target repo's `CLAUDE.md`/prompt can steer an external agent's actions
+ * (it is a separate, untrusted host process, not sandboxed by pipiclaw's own guards), so it should
+ * not inherit pipiclaw's own provider keys or DingTalk credentials just because it inherits the
+ * daemon's shell (review 2026-08-23 §2.4). A role can add any of these back explicitly via `env:`.
+ */
+const SENSITIVE_ENV_PATTERN = /(?:_API_KEY|_SECRET|_TOKEN|_PASSWORD)$/i;
+
+function filterSensitiveEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const filtered: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(env)) {
+		if (SENSITIVE_ENV_PATTERN.test(key) || key.startsWith("DINGTALK_")) continue;
+		filtered[key] = value;
+	}
+	return filtered;
+}
+
+/**
  * The external-run orchestrator (spec 040, D1/D3/D4). One prompt, one short-lived, argv-direct,
  * detached process. The launch order matters (D1): admission and the lease are the caller's job
  * (tool.ts, shared with internal runs); this module owns everything from "persist launch intent"
@@ -221,7 +239,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		child = spawnFn(invocation.executable, invocation.args, {
 			detached: true,
 			cwd: input.workingDirectory,
-			env: input.env ? { ...process.env, ...input.env } : process.env,
+			env: { ...filterSensitiveEnv(process.env), ...input.env },
 			// stdout/stderr point straight at the artifact files (P0-1): the child writes them
 			// itself, so they land on disk even if this daemon disappears before it exits.
 			stdio: ["pipe", eventsFd, stderrFd],

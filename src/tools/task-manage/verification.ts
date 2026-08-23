@@ -72,7 +72,7 @@ export async function verifyTask(
 		id,
 		path: task.path,
 		status: "active",
-		notice: `任务 \`${id}\` 独立验收结果：${attestation.verdict.toUpperCase()}（run: ${runId}）。`,
+		notice: `任务 \`${id}\` 独立验收结果：${attestation.verdict.toUpperCase()}${attestation.verificationStrength === "advisory" ? "（advisory）" : ""}（run: ${runId}）。`,
 	};
 }
 

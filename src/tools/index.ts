@@ -109,6 +109,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 				channelDir: options.channelDir,
 				getSubAgentDiscovery: options.getSubAgentDiscovery,
 				workspaceDir: options.workspaceDir,
+				workingDirectory: options.projectScope.projectRoot,
+				projectBoundary: options.projectScope.boundary,
 				securityConfig,
 				// Spec 042 D7: follow_up builds its envelope through the same buildContextualBlocks
 				// the initial dispatch uses, which needs these to resolve a memory: relevant recall.

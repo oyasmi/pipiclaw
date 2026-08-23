@@ -105,6 +105,7 @@ export async function completeTask(
 			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before complete.`,
 		);
 	}
+	let verificationNote = "";
 	if (fields.control?.verification.required) {
 		const verification = fields.control.verification;
 		if (verification.status !== "passed" || !verification.runId) {
@@ -133,6 +134,13 @@ export async function completeTask(
 					`Task "${id}" artifacts changed after its independent PASS; request verification again.`,
 				);
 			}
+		}
+		// advisory means runtime could not structurally prove the verifier left artifacts alone
+		// (external harness, or bash left in an internal verifier's tool set) — surface it at the
+		// one moment completion is actually decided, not just in a file nobody re-reads (review
+		// 2026-08-23 §2.1).
+		if (attestation.verificationStrength === "advisory") {
+			verificationNote = " ⚠️ 验收结论为 advisory：runtime 无法证明验收者未改动产物，请自行抽查 diff 与测试结果。";
 		}
 	}
 
@@ -175,7 +183,7 @@ export async function completeTask(
 		status: recurring ? "sleeping" : undefined,
 		archived,
 		deletedEvents: deleted,
-		notice: `任务 \`${id}\` 已完成（${archived ? "已归档" : "已进入 sleeping，等待下一 occurrence"}${cleanup}）。`,
+		notice: `任务 \`${id}\` 已完成（${archived ? "已归档" : "已进入 sleeping，等待下一 occurrence"}${cleanup}）。${verificationNote}`,
 	};
 }
 

@@ -29,19 +29,25 @@ export interface VerificationOutcome {
 }
 
 export function resolveVerificationOutcome(input: ResolveVerificationOutcomeInput): VerificationOutcome {
-	const workspaceChanged =
-		input.subjectBefore !== undefined && input.subjectAfter !== undefined
-			? input.subjectBefore !== input.subjectAfter
-			: input.gitStateBefore !== undefined &&
-				input.gitStateAfter !== undefined &&
-				input.gitStateBefore !== input.gitStateAfter;
+	const subjectComparable = input.subjectBefore !== undefined && input.subjectAfter !== undefined;
+	const gitComparable = input.gitStateBefore !== undefined && input.gitStateAfter !== undefined;
+	// Neither pair could be computed — a non-Git checkout, or `git status` itself failing — means
+	// there is no evidence either way that the verifier left the workspace untouched. Fail closed
+	// rather than trusting the verifier's own say-so (review 2026-08-23 §2.2): the weakest evidence
+	// must not carry the same verdict as the strongest.
+	const comparable = subjectComparable || gitComparable;
+	const workspaceChanged = subjectComparable
+		? input.subjectBefore !== input.subjectAfter
+		: gitComparable && input.gitStateBefore !== input.gitStateAfter;
 	const declaredVerdict = parseVerificationVerdict(input.finalText);
 	const verdict: "pass" | "fail" =
-		declaredVerdict === "pass" && !input.runFailed && !workspaceChanged ? "pass" : "fail";
-	const evidence = workspaceChanged
-		? "Verifier changed tracked workspace files; the attestation is invalid."
-		: !declaredVerdict
-			? "Verifier did not emit the required final VERDICT marker."
-			: input.finalText.trim().slice(0, 8_000);
+		comparable && declaredVerdict === "pass" && !input.runFailed && !workspaceChanged ? "pass" : "fail";
+	const evidence = !comparable
+		? "Could not determine whether the workspace changed (not a Git checkout, or `git status` failed); refusing to record a PASS without that evidence."
+		: workspaceChanged
+			? "Verifier changed tracked workspace files; the attestation is invalid."
+			: !declaredVerdict
+				? "Verifier did not emit the required final VERDICT marker."
+				: input.finalText.trim().slice(0, 8_000);
 	return { verdict, workspaceChanged, evidence };
 }
