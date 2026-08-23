@@ -69,8 +69,7 @@ type TasksCommand =
 	| { action: "pause"; id: string }
 	| { action: "resume"; id: string }
 	| { action: "run"; id: string }
-	| { action: "set"; id: string; field: SettableTaskField; value: string }
-	| { action: "stats"; id?: string };
+	| { action: "set"; id: string; field: SettableTaskField; value: string };
 
 function usage(): string {
 	return `# 任务
@@ -84,7 +83,6 @@ function usage(): string {
 - \`/tasks resume <id>\` — 重新启用该任务，按当前阶段继续
 - \`/tasks run <id>\` — 恢复并立即排入一次执行（需要运行时可用）
 - \`/tasks set <id> <${SETTABLE_TASK_FIELDS.join("|")}> <值>\` — 直接改一个字段，不花一个 LLM 回合
-- \`/tasks stats [id]\` — 查看任务级的尝试次数、token、花费与验收结果
 - \`/tasks doctor\` — 只读检查任务/事件一致性`;
 }
 
@@ -133,11 +131,6 @@ function parseTasksCommand(args: string): TasksCommand {
 			field: field as SettableTaskField,
 			value: match[3].trim(),
 		};
-	}
-	if (action === "stats") {
-		const id = parts[1];
-		if (parts.length > 2) throw new Error("用法：/tasks stats [id]");
-		return { action: "stats", id };
 	}
 	throw new Error(`未知的 /tasks 动作：${action}`);
 }
@@ -272,7 +265,6 @@ async function listTasks(channelDir: string): Promise<string> {
 			}
 		}
 		if (entry.frontmatter.enabled === false) detail.push("enabled: false");
-		if (entry.frontmatter.recurrence) detail.push(`recurrence: ${entry.frontmatter.recurrence}`);
 		if (entry.frontmatter.schedule) {
 			detail.push(`schedule timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone} (host)`);
 		}
@@ -421,70 +413,6 @@ async function runTask(options: HandleTasksCommandOptions, idInput: string): Pro
 		: `任务 ${id} 已就绪。启动钉钉守护进程可自动派发，或在本会话里直接发一条普通消息推进它。`;
 }
 
-function renderUsageLine(entry: TaskLedgerEntry): string {
-	const control = entry.frontmatter.control;
-	if (!control) return `- ${entry.id}：旧格式任务（没有受治理的用量记录）`;
-	const verification = control.verification;
-	const cycleCost = control.usage.costKnown ? `$${control.usage.costUsd.toFixed(4)}` : "unavailable";
-	return [
-		`- ${entry.id} — ${entry.title}`,
-		`  this cycle: ${control.usage.attempts}/${control.budget.maxAttempts} attempts, ${control.usage.tokens} tokens, ${cycleCost}, ${control.usage.wallTimeMinutes.toFixed(1)}m`,
-		`  last run: ${control.lastOutcome}`,
-		`  verification: ${verification.required ? "required" : "not required"}/${verification.status}`,
-	].join("\n");
-}
-
-async function taskStats(options: HandleTasksCommandOptions, idInput?: string): Promise<string> {
-	if (idInput) {
-		const id = normalizeTaskId(idInput);
-		const task = await readStoredTask(options.channelDir, id, true, true);
-		if (!task) return `找不到任务：${id}`;
-		const entry: TaskLedgerEntry = {
-			id,
-			title: extractTaskTitle(task.body, id),
-			frontmatter: {
-				readable: true,
-				status: task.fields.status,
-				enabled: task.fields.enabled !== false,
-				wake: task.fields.wake,
-				schedule: task.fields.schedule,
-				recurrence: task.fields.recurrence,
-				control: task.fields.control,
-			},
-			actionable: false,
-		};
-		return `# 任务用量\n\n${renderUsageLine(entry)}`;
-	}
-	const entries = (await readActiveTasks(tasksDir(options.channelDir))).filter(
-		(entry) => !entry.frontmatter.archiveOutcome,
-	);
-	const governed = entries.filter((entry) => entry.frontmatter.control);
-	const totals = governed.reduce(
-		(total, entry) => {
-			const usage = entry.frontmatter.control!.usage;
-			total.attempts += usage.attempts;
-			total.tokens += usage.tokens;
-			total.costUsd += usage.costUsd;
-			total.costKnown &&= usage.costKnown;
-			total.wallTimeMinutes += usage.wallTimeMinutes;
-			return total;
-		},
-		{ attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 },
-	);
-	const verified = governed.filter((entry) => entry.frontmatter.control?.verification.status === "passed").length;
-	const stalled = governed.filter((entry) => entry.frontmatter.control?.lastOutcome === "failed").length;
-	return [
-		"# 任务用量",
-		"",
-		`governed tasks: ${governed.length}/${entries.length}`,
-		`this cycle: ${totals.attempts} attempts, ${totals.tokens} tokens, ${totals.costKnown ? `$${totals.costUsd.toFixed(4)}` : "cost unavailable"}, ${totals.wallTimeMinutes.toFixed(1)}m`,
-		`verification PASS: ${verified}`,
-		`last-run failures: ${stalled}`,
-		"",
-		...governed.map(renderUsageLine),
-	].join("\n");
-}
-
 async function showTask(channelDir: string, id: string): Promise<string> {
 	const dir = tasksDir(channelDir);
 	const taskId = normalizeTaskId(id);
@@ -542,7 +470,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md has unreadable frontmatter; wake/status cannot be trusted.`,
-					`Fix tasks/${entry.id}.md so it starts with readable status/wake/recurrence frontmatter.`,
+					`Fix tasks/${entry.id}.md so it starts with readable status/wake/schedule frontmatter.`,
 				),
 			);
 			continue;
@@ -869,7 +797,7 @@ export async function handleTasksCommand(options: HandleTasksCommandOptions): Pr
 	}
 
 	try {
-		if ("id" in command && command.id && !["show", "stats"].includes(command.action)) {
+		if ("id" in command && command.id && command.action !== "show") {
 			return await withTaskMutation(options.channelDir, command.id, () => dispatchTasksCommand(options, command));
 		}
 		return await dispatchTasksCommand(options, command);
@@ -895,8 +823,6 @@ async function dispatchTasksCommand(options: HandleTasksCommandOptions, command:
 			return await runTask(options, command.id);
 		case "set":
 			return await setTaskField(options, command.id, command.field, command.value);
-		case "stats":
-			return await taskStats(options, command.id);
 		case "doctor":
 			return await doctor(options);
 	}

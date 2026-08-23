@@ -603,6 +603,7 @@ export class SubAgentRunManager {
 					model: record.model ?? "unknown",
 					label: record.label,
 					runId: record.runId,
+					taskId: record.taskId,
 					usage: {
 						input: input.usage.input,
 						output: input.usage.output,

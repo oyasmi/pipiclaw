@@ -72,7 +72,6 @@ export async function readStoredTask(
 			enabled: frontmatter.enabled,
 			wake: frontmatter.wake,
 			schedule: frontmatter.schedule,
-			recurrence: frontmatter.recurrence,
 			control: frontmatter.control,
 			outcome: frontmatter.archiveOutcome,
 			closedAt: frontmatter.closedAt,
@@ -149,10 +148,6 @@ export async function finishTaskAttempt(
 	channelDir: string,
 	id: string,
 	result: {
-		tokens: number;
-		costUsd: number;
-		costKnown: boolean;
-		wallTimeMinutes: number;
 		failed: boolean;
 		silent?: boolean;
 		finishedAt: Date;
@@ -173,10 +168,6 @@ export async function finishTaskAttempt(
 		(task) => {
 			const control = task.fields.control;
 			if (!control) return;
-			control.usage.tokens += Math.max(0, Math.floor(result.tokens));
-			control.usage.costUsd += Math.max(0, result.costUsd);
-			control.usage.costKnown &&= result.costKnown;
-			control.usage.wallTimeMinutes += Math.max(0, result.wallTimeMinutes);
 			if (result.generation !== undefined && control.attemptGeneration !== result.generation) return;
 			control.lastFinishedAt = formatLocalTime(result.finishedAt);
 			if (result.silent) {

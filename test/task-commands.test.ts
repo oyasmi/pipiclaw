@@ -112,7 +112,7 @@ describe("/tasks v2 commands", () => {
 		expect(stored).toContain('"cycleId":"cycle-');
 	});
 
-	it("lists state dimensions and stats without effects or approval", async () => {
+	it("lists state dimensions without effects or approval", async () => {
 		const control = createDefaultTaskControl(true);
 		control.usage.attempts = 3;
 		control.verification.status = "passed";
@@ -121,9 +121,6 @@ describe("/tasks v2 commands", () => {
 		expect(list).toContain("status: active");
 		expect(list).toContain("attempts: 3/12");
 		expect(list).not.toMatch(/approval|sideEffects|effects/i);
-		const stats = await run("stats measured");
-		expect(stats).toContain("verification: required/passed");
-		expect(stats).toContain("3/12 attempts");
 	});
 
 	it("doctor diagnoses invalid state combinations with direct next steps", async () => {

@@ -14,11 +14,6 @@ export interface TaskBudget {
 
 export interface TaskUsage {
 	attempts: number;
-	tokens: number;
-	costUsd: number;
-	/** False when at least one contributing model omitted pricing metadata. */
-	costKnown: boolean;
-	wallTimeMinutes: number;
 }
 
 export interface TaskVerification {
@@ -37,12 +32,6 @@ export interface TaskStop {
 	by: "user" | "governor";
 	reason: string;
 	at: string;
-}
-
-export interface TaskProvenance {
-	createdBy?: string;
-	createdAt?: string;
-	sourceMessageId?: string;
 }
 
 /** Durable ownership marker for the interval between a structured completion wake activating a
@@ -76,7 +65,6 @@ export interface TaskControl {
 	cycleId?: string;
 	/** Present only while the task is disabled. */
 	stop?: TaskStop;
-	provenance?: TaskProvenance;
 	wakeHandoff?: TaskWakeHandoff;
 }
 
@@ -117,22 +105,16 @@ function finiteNonNegative(value: unknown, fallback = 0): number {
 	return value;
 }
 
+function parseTaskUsage(value: Record<string, unknown>): TaskUsage {
+	return { attempts: Math.floor(finiteNonNegative(value.attempts)) };
+}
+
 function nonNegativeInteger(value: unknown, fallback = 0): number {
 	if (value === undefined) return fallback;
 	if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
 		throw new Error("control.attemptGeneration must be a non-negative integer; remove it to rebuild from 0.");
 	}
 	return value;
-}
-
-function parseTaskUsage(value: Record<string, unknown>): TaskUsage {
-	const attempts = Math.floor(finiteNonNegative(value.attempts));
-	const tokens = Math.floor(finiteNonNegative(value.tokens));
-	const costUsd = finiteNonNegative(value.costUsd);
-	const wallTimeMinutes = finiteNonNegative(value.wallTimeMinutes);
-	const costKnown =
-		typeof value.costKnown === "boolean" ? value.costKnown : costUsd > 0 || (tokens === 0 && wallTimeMinutes === 0);
-	return { attempts, tokens, costUsd, costKnown, wallTimeMinutes };
 }
 
 function optionalPositive(value: unknown): number | undefined {
@@ -167,18 +149,6 @@ function parseStop(value: unknown): TaskStop | undefined {
 		throw new Error("control.stop requires a reason and valid at timestamp");
 	}
 	return { by, reason, at: formatLocalTime(new Date(parseLocalTime(at)!)) };
-}
-
-function parseProvenance(value: unknown): TaskProvenance | undefined {
-	if (value === undefined) return undefined;
-	if (!isRecord(value)) throw new Error("control.provenance must be an object");
-	const createdBy = optionalString(value.createdBy);
-	const createdAt = optionalString(value.createdAt);
-	const sourceMessageId = optionalString(value.sourceMessageId);
-	if (createdAt && parseLocalTime(createdAt) === undefined) {
-		throw new Error("control.provenance.createdAt must be a valid local time");
-	}
-	return { createdBy, createdAt, sourceMessageId };
 }
 
 function parseWakeHandoff(value: unknown): TaskWakeHandoff | undefined {
@@ -230,22 +200,15 @@ export function retiredTaskControlKeys(raw: unknown): string[] {
 	});
 }
 
-export function createDefaultTaskControl(requiresVerification = false, provenance?: TaskProvenance): TaskControl {
+export function createDefaultTaskControl(requiresVerification = false): TaskControl {
 	return {
 		version: 2,
 		priority: "normal",
 		budget: { maxAttempts: 12 },
-		usage: {
-			attempts: 0,
-			tokens: 0,
-			costUsd: 0,
-			costKnown: true,
-			wallTimeMinutes: 0,
-		},
+		usage: { attempts: 0 },
 		verification: { required: requiresVerification, status: "pending" },
 		attemptGeneration: 0,
 		lastOutcome: "pending",
-		...(provenance ? { provenance } : {}),
 	};
 }
 
@@ -315,13 +278,12 @@ export function parseTaskControl(raw: string): TaskControl {
 		lastFinishedAt: optionalString(value.lastFinishedAt),
 		cycleId: optionalString(value.cycleId),
 		stop,
-		provenance: parseProvenance(value.provenance),
 		wakeHandoff: parseWakeHandoff(value.wakeHandoff),
 	};
 }
 
 function zeroUsage(): TaskUsage {
-	return { attempts: 0, tokens: 0, costUsd: 0, costKnown: true, wallTimeMinutes: 0 };
+	return { attempts: 0 };
 }
 
 /** Reset state that is meaningful only within one recurring task cycle. */

@@ -15,6 +15,7 @@ function stubLedger(fn: (q: UsageSummaryQuery) => Partial<UsageSummary>): UsageL
 			byKind: {},
 			byModel: {},
 			byChannel: {},
+			byTask: {},
 			unknownUsageCount: 0,
 			unknownCostCount: 0,
 			...fn(q),

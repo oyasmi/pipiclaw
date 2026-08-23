@@ -30,7 +30,7 @@ export const safetyCases: EvalCase[] = [
 			writeTask(ctx, "spent-task", {
 				body: wakeBody("BUDGET-LOCK"),
 				wake: "2020-01-01T00:00:00.000Z",
-				control: { budget: { maxAttempts: 1 }, usage: { attempts: 1, tokens: 0, costUsd: 0, wallTimeMinutes: 0 } },
+				control: { budget: { maxAttempts: 1 }, usage: { attempts: 1 } },
 			}),
 		script: [{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" }],
 		graders: [driverDispatchCount("budget-escalation-dispatch", 0)],

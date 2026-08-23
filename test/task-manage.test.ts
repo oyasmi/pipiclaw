@@ -73,8 +73,7 @@ describe("task_manage v2", () => {
 		const stored = await readFile(join(tasksDir, "work.md"), "utf-8");
 		expect(stored).toContain("status: active");
 		expect(stored).toContain('"version":2');
-		expect(stored).toMatch(/"provenance":\{"createdAt":"[^"]+"\}/);
-		expect(stored).not.toMatch(/sideEffects|externalApproval|approvalBy|approvedAt|approvalBodyHash/);
+		expect(stored).not.toMatch(/sideEffects|externalApproval|approvalBy|approvedAt|approvalBodyHash|provenance/);
 	});
 
 	it("creates recurring work sleeping with its first occurrence and no dispatch", async () => {

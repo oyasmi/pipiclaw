@@ -16,19 +16,21 @@ import { parseVerificationVerdict } from "../src/tasks/verification.js";
 
 describe("TaskControl v2", () => {
 	it("creates only the v2 control contract", () => {
-		const control = createDefaultTaskControl(true, {
-			createdBy: "alice",
-			createdAt: "2026-08-04T09:00:00+08:00",
-			sourceMessageId: "msg-1",
-		});
+		const control = createDefaultTaskControl(true);
 		expect(control).toMatchObject({
 			version: 2,
 			priority: "normal",
 			budget: { maxAttempts: 12 },
 			verification: { required: true, status: "pending" },
-			provenance: { createdBy: "alice", sourceMessageId: "msg-1" },
 		});
-		for (const key of ["sideEffects", "externalApproval", "approvalBy", "approvedAt", "approvalBodyHash"]) {
+		for (const key of [
+			"sideEffects",
+			"externalApproval",
+			"approvalBy",
+			"approvedAt",
+			"approvalBodyHash",
+			"provenance",
+		]) {
 			expect(control).not.toHaveProperty(key);
 		}
 	});
@@ -88,9 +90,9 @@ describe("TaskControl v2", () => {
 		expect(control).not.toHaveProperty("externalApproval");
 	});
 
-	it("resets only per-cycle facts and preserves provenance", () => {
-		const control = createDefaultTaskControl(true, { createdBy: "alice" });
-		control.usage = { attempts: 3, tokens: 100, costUsd: 1, costKnown: true, wallTimeMinutes: 4 };
+	it("resets only per-cycle facts", () => {
+		const control = createDefaultTaskControl(true);
+		control.usage = { attempts: 3 };
 		control.waitingFor = "verification";
 		control.stop = { by: "governor", reason: "old cycle", at: "2026-08-03T09:00:00+08:00" };
 		control.verification = { required: true, status: "passed", runId: "old" };
@@ -98,9 +100,8 @@ describe("TaskControl v2", () => {
 		expect(reset).toMatchObject({
 			cycleId: "cycle-2026-08-04",
 			lastOutcome: "pending",
-			usage: { attempts: 0, tokens: 0, costUsd: 0, wallTimeMinutes: 0 },
+			usage: { attempts: 0 },
 			verification: { required: true, status: "pending" },
-			provenance: { createdBy: "alice" },
 		});
 		expect(reset.stop).toBeUndefined();
 		expect(reset.waitingFor).toBeUndefined();
@@ -152,10 +153,6 @@ describe("task attempt accounting", () => {
 		const claim = await claimTaskAttempt(channelDir, "work", new Date("2026-08-04T09:00:00+08:00"));
 		expect(claim?.generation).toBe(1);
 		await finishTaskAttempt(channelDir, "work", {
-			tokens: 123.9,
-			costUsd: 0.45,
-			costKnown: true,
-			wallTimeMinutes: 2.5,
 			failed: false,
 			finishedAt: new Date("2026-08-04T09:03:00+08:00"),
 			generation: claim?.generation,
@@ -164,7 +161,7 @@ describe("task attempt accounting", () => {
 		expect(stored?.fields.control).toMatchObject({
 			attemptGeneration: 1,
 			lastOutcome: "progress",
-			usage: { attempts: 1, tokens: 123, costUsd: 0.45, wallTimeMinutes: 2.5 },
+			usage: { attempts: 1 },
 		});
 	});
 
@@ -173,17 +170,13 @@ describe("task attempt accounting", () => {
 		await writeFile(path, renderTaskDocument({ status: "active", control: createDefaultTaskControl() }, "# Quiet\n"));
 		const claim = await claimTaskAttempt(channelDir, "quiet", new Date("2026-08-04T09:00:00+08:00"));
 		await finishTaskAttempt(channelDir, "quiet", {
-			tokens: 42,
-			costUsd: 0.01,
-			costKnown: true,
-			wallTimeMinutes: 0.5,
 			failed: false,
 			silent: true,
 			finishedAt: new Date("2026-08-04T09:01:00+08:00"),
 			generation: claim?.generation,
 		});
 		const stored = await readStoredTask(channelDir, "quiet");
-		expect(stored?.fields.control?.usage).toMatchObject({ attempts: 0, tokens: 42 });
+		expect(stored?.fields.control?.usage).toMatchObject({ attempts: 0 });
 		expect(stored?.fields.control?.lastOutcome).toBe("pending");
 	});
 

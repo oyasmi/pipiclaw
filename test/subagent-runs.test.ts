@@ -55,6 +55,7 @@ function makeLedger() {
 				byKind: {},
 				byModel: {},
 				byChannel: {},
+				byTask: {},
 				unknownUsageCount: 0,
 				unknownCostCount: 0,
 			}),

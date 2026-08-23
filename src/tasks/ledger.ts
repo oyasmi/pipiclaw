@@ -35,7 +35,6 @@ export interface TaskFrontmatter {
 	wake?: string;
 	/** Five-field cron cadence (host timezone). Present ⇒ this is a recurring task. */
 	schedule?: string;
-	recurrence?: string;
 	control?: TaskControl;
 	/** false only when a control field exists but cannot be parsed/validated. */
 	controlReadable?: boolean;
@@ -74,16 +73,7 @@ export interface TaskSkeletonInput {
 	plan?: string;
 }
 
-const FRONTMATTER_FIELDS = [
-	"status",
-	"enabled",
-	"wake",
-	"schedule",
-	"recurrence",
-	"outcome",
-	"closedAt",
-	"control",
-] as const;
+const FRONTMATTER_FIELDS = ["status", "enabled", "wake", "schedule", "outcome", "closedAt", "control"] as const;
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export const DEFAULT_TASK_MANUAL =
@@ -408,7 +398,7 @@ export function parseTaskFrontmatter(content: string): TaskFrontmatter {
 				if (value === "completed" || value === "cancelled") frontmatter.archiveOutcome = value;
 			} else if (key === "closedAt") {
 				frontmatter.closedAt = value || undefined;
-			} else if (key === "status" || key === "wake" || key === "schedule" || key === "recurrence") {
+			} else if (key === "status" || key === "wake" || key === "schedule") {
 				frontmatter[key] = value || undefined;
 			}
 		}
@@ -631,7 +621,6 @@ export interface TaskDocumentFields {
 	enabled?: boolean;
 	wake?: string;
 	schedule?: string;
-	recurrence?: string;
 	control?: TaskControl;
 	outcome?: TaskArchiveOutcome;
 	closedAt?: string;
@@ -731,7 +720,6 @@ export function renderTaskDocument(fields: TaskDocumentFields, rawBody: string):
 	}
 	if (document.wake) lines.push(`wake: ${document.wake}`);
 	if (document.schedule) lines.push(`schedule: ${document.schedule}`);
-	if (document.recurrence) lines.push(`recurrence: ${document.recurrence}`);
 	if (document.control) lines.push(`control: ${JSON.stringify(document.control)}`);
 	lines.push("---");
 	return `${lines.join("\n")}\n${rawBody}`;

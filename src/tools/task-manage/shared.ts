@@ -77,7 +77,7 @@ export function renderTaskSkeleton(request: TaskManageRequest): {
 	const dod = requiredField(request.dod, "dod", "create");
 	// Independent verification is opt-in: it is a quality fact, not an external-action policy.
 	const control = applyTaskControlPatch(
-		createDefaultTaskControl(request.control?.verificationRequired ?? false, { createdAt: formatLocalTime() }),
+		createDefaultTaskControl(request.control?.verificationRequired ?? false),
 		request.control ?? {},
 	);
 	const fields = applySet({ status: normalizeCreateStatus(request.status), enabled: true, control }, request);
@@ -137,7 +137,6 @@ export async function readTaskDocument(
 			enabled: frontmatter.enabled,
 			wake: frontmatter.wake,
 			schedule: frontmatter.schedule,
-			recurrence: frontmatter.recurrence,
 			// A successful task_manage write upgrades a hand-written/v0 task to the v2
 			// control contract instead of preserving an ungoverned task indefinitely.
 			control: frontmatter.control ?? createDefaultTaskControl(),
@@ -208,10 +207,6 @@ export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFi
 				if (nextWake) next.wake = formatLocalTime(nextWake);
 			}
 		}
-	}
-	if (request.recurrence !== undefined) {
-		const trimmed = request.recurrence.trim();
-		next.recurrence = trimmed === "" ? undefined : trimmed;
 	}
 	if (request.control !== undefined) {
 		next.control = applyTaskControlPatch(next.control ?? createDefaultTaskControl(), request.control);

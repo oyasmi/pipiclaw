@@ -132,9 +132,6 @@ export const taskManageSchema = Type.Object({
 				"same call also sets wake explicitly. Recurring creation starts in sleeping and opens cycles at occurrences. Min every 30 minutes.",
 		}),
 	),
-	recurrence: Type.Optional(
-		Type.String({ description: "Human annotation only (e.g. 每周一); empty string clears it." }),
-	),
 	note: Type.Optional(
 		Type.String({
 			description:

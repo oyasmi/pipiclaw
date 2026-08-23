@@ -110,7 +110,6 @@ function taskFingerprint(entry: TaskLedgerEntry, effects: number): string {
 		entry.frontmatter.status ?? "",
 		entry.frontmatter.wake ?? "",
 		entry.frontmatter.schedule ?? "",
-		entry.frontmatter.recurrence ?? "",
 		control?.verification.status ?? "",
 		control?.waitingFor ?? "",
 		entry.frontmatter.enabled === false ? "disabled" : "enabled",

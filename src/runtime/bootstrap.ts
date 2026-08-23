@@ -780,10 +780,6 @@ export async function createRuntimeContext(
 					}
 					if (taskAttemptId && result.usage && result.durationMs !== undefined) {
 						await finishTaskAttempt(getChannelDir(options.paths.workspaceDir, event.channelId), taskAttemptId, {
-							tokens: result.usage.total,
-							costUsd: result.usage.cost.total,
-							costKnown: result.costKnown === true,
-							wallTimeMinutes: result.durationMs / 60_000,
 							failed: result.stopReason === "error" || result.stopReason === "aborted",
 							silent: result.silent,
 							finishedAt: new Date(),

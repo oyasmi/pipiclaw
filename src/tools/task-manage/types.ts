@@ -56,7 +56,6 @@ export interface TaskFields {
 	enabled?: boolean;
 	wake?: string;
 	schedule?: string;
-	recurrence?: string;
 	control?: TaskControl;
 	outcome?: "completed" | "cancelled";
 	closedAt?: string;

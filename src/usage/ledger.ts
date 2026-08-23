@@ -33,6 +33,8 @@ export interface UsageLedgerEntry {
 	correlationId?: string;
 	/** Idempotency key for a delegation run's usage entry (spec 040, D7); absent for turn/sidecar kinds. */
 	runId?: string;
+	/** Task this spend is attributable to, when known. Lets `/usage` answer "what did this task cost". */
+	taskId?: string;
 	usage: UsageTokens;
 	cost: UsageCost;
 	/** False only when the harness cannot report tokens at all (external `exec`). Display as "unknown", not 0. */
@@ -49,6 +51,8 @@ export interface UsageSummary {
 	byKind: Record<string, number>;
 	byModel: Record<string, number>;
 	byChannel: Record<string, number>;
+	/** Only populated for entries carrying a `taskId`; unattributed spend is absent, not bucketed. */
+	byTask: Record<string, number>;
 	/** Entries with `usageKnown === false` (e.g. the `exec` harness never reports tokens at all).
 	 *  Their `usage.total` is always 0 and never contributes to `totalTokens` — display this count
 	 *  rather than let those runs silently read as "0 tokens used". */
@@ -176,6 +180,7 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 				byKind: {},
 				byModel: {},
 				byChannel: {},
+				byTask: {},
 				unknownUsageCount: 0,
 				unknownCostCount: 0,
 			};
@@ -192,6 +197,7 @@ export function createUsageLedger(options: CreateUsageLedgerOptions = {}): Usage
 					summary.byKind[entry.kind] = (summary.byKind[entry.kind] ?? 0) + cost;
 					summary.byModel[entry.model] = (summary.byModel[entry.model] ?? 0) + cost;
 					summary.byChannel[entry.channelId] = (summary.byChannel[entry.channelId] ?? 0) + cost;
+					if (entry.taskId) summary.byTask[entry.taskId] = (summary.byTask[entry.taskId] ?? 0) + cost;
 					// `undefined` (every entry recorded before this field existed) counts as known —
 					// backward compatibility for a ledger that predates this distinction.
 					if (entry.usageKnown === false) summary.unknownUsageCount += 1;
