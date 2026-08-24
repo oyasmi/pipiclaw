@@ -52,6 +52,17 @@ Use `npm run typecheck` and `npm run test` as the minimum validation after non-t
 - Keep `SubAgentRunManager` the sole owner of settlement, usage, leases, and completion wake; preserve its idempotency markers
 - External agents bypass Pipiclaw's guards. Their role command, CLI sandbox, host account, and environment are the permission boundary; `mutates` is not a sandbox
 
+## Command Reply Conventions
+
+Slash-command output (`src/agent/commands.ts`, `src/runtime/*-commands.ts`, `src/memory/commands.ts`, `src/agent/command-extension.ts`, `src/agent/status-render.ts`, `src/usage/render.ts`) follows six rules, established by the 2026-08-24 command-subsystem review to keep replies readable in DingTalk's markdown subset (which does not preserve indentation or run-together whitespace):
+
+1. A command reply is one of three shapes: a confirmation (one sentence), a report (a bold headline plus blocks), or an error (one reason + one next step; usage text only on a bad argument).
+2. Narrate in Chinese; keep only identifiers in English — command names, ids, field names (`wake`, `status`), model refs, and file paths.
+3. No `#` headings; use a `**bold**` first line as the headline.
+4. Only one flat level of `- ` bullets. Never use a 2-space continuation line as a sub-field, never align columns with spaces, never paste a long file/prompt verbatim into a reply.
+5. Every report has a length budget (DingTalk target: ≤ 20 lines / 1,500 chars). Over budget, say what command to run next — do not just show more content.
+6. Empty state uses one shape: `暂无 X。` plus a one-line "how to start".
+
 ## Practical Notes
 
 - Node.js target is `>= 22.19.0`

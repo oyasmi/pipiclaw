@@ -196,7 +196,7 @@ describe("handleSubagentsCommand", () => {
 		const response = await handleSubagentsCommand({ args: "show run-2", channelId });
 		expect(response).toContain("run-2");
 		expect(response).toContain("builder");
-		expect(response).toContain("stderr (tail)");
+		expect(response).toContain("stderr（尾部）");
 		expect(response).toContain("warning: something noisy");
 	});
 
@@ -381,6 +381,6 @@ describe("handleSubagentsCommand", () => {
 		const channelId = `dm_cmd_bad_${Date.now()}`;
 		const response = await handleSubagentsCommand({ args: "frobnicate", channelId });
 		expect(response).toContain("未知的 /subagents 子命令");
-		expect(response).toContain("用法");
+		expect(response).toContain("/subagents list [running|failed|all]");
 	});
 });

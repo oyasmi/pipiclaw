@@ -1,3 +1,5 @@
+import { renderSubcommandUsage } from "../agent/commands.js";
+import { capReply } from "../agent/reply-limits.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { localDayKey, parseLocalTime } from "../shared/local-time.js";
 import { clipText } from "../shared/text-utils.js";
@@ -58,7 +60,7 @@ async function readRecentMemoryActions(channelDir: string, sinceMs: number): Pro
 }
 
 function renderUsage(): string {
-	return "Use `/memory status`, `/memory list`, `/memory show <entry-id>`, or `/memory recent`.";
+	return renderSubcommandUsage("memory");
 }
 
 export async function handleMemoryCommand(options: MemoryCommandOptions): Promise<string> {
@@ -103,53 +105,55 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 			.reverse()
 			.find((line) => line.includes('"error"'));
 		return [
-			"# Memory Status",
+			"**记忆状态**",
 			"",
-			`- Active entries: \`${entries.length}\``,
-			`- Metadata records: \`${records.length}\``,
-			`- Probationary: \`${probationary.length}\`${probationary.length > 0 ? ` (earliest expiry \`${probationary[0].probationUntil}\`)` : ""}`,
-			`- Last 7d: +${written} written / -${dropped} dropped / -${expired} expired`,
-			`- Tombstones: \`${tombstones.length}\``,
-			`- Total recalls: \`${active.reduce((sum, entry) => sum + entry.recallCount, 0)}\``,
-			`- Recalls (30d): \`${recalls30d}\``,
-			`- Query diversity: \`${new Set(active.flatMap((entry) => entry.queryFingerprints)).size}\``,
-			`- Last recalled: \`${
+			`- 生效条目：\`${entries.length}\``,
+			`- 元数据记录：\`${records.length}\``,
+			`- 观察期：\`${probationary.length}\`${probationary.length > 0 ? `（最早到期 \`${probationary[0].probationUntil}\`）` : ""}`,
+			`- 最近 7 天：+${written} 写入 / -${dropped} 丢弃 / -${expired} 过期`,
+			`- 墓碑：\`${tombstones.length}\``,
+			`- 累计召回：\`${active.reduce((sum, entry) => sum + entry.recallCount, 0)}\``,
+			`- 召回（30 天）：\`${recalls30d}\``,
+			`- 查询多样性：\`${new Set(active.flatMap((entry) => entry.queryFingerprints)).size}\``,
+			`- 最近一次召回：\`${
 				active
 					.map((entry) => entry.lastRecalledAt)
 					.filter(Boolean)
 					.sort()
-					.at(-1) ?? "never"
+					.at(-1) ?? "从未"
 			}\``,
-			`- Recent failure: ${lastFailure ? "yes; inspect memory-review.jsonl" : "none"}`,
-			`- Active file: \`${getChannelMemoryPath(options.channelDir)}\``,
+			`- 近期失败：${lastFailure ? "有，查看 memory-review.jsonl" : "无"}`,
+			`- 生效文件：\`${getChannelMemoryPath(options.channelDir)}\``,
 		].join("\n");
 	}
 
 	if (action === "list") {
-		if (entries.length === 0) return "# Memory Entries\n\nNo active channel memory entries.";
+		if (entries.length === 0) return "**记忆条目**\n\n暂无生效的频道记忆条目。";
 		const visible = entries.slice(0, 50);
 		const lines = visible.map((entry) => {
 			const record = metadata.entries[entry.id];
-			const probation = record?.probationUntil ? ` (probation until \`${record.probationUntil}\`)` : "";
+			const probation = record?.probationUntil ? `（观察期至 \`${record.probationUntil}\`）` : "";
 			return `- \`${entry.id}\` [${record?.kind ?? "fact"}]${probation} ${clipText(entry.content, 180, { headRatio: 1 })}`;
 		});
 		if (entries.length > visible.length) {
 			lines.push(
-				`- ${entries.length - visible.length} more omitted; use \`/memory show <entry-id>\` after narrowing the file.`,
+				`- 另有 ${entries.length - visible.length} 条已省略；缩小范围后用 \`/memory show <entry-id>\` 查看。`,
 			);
 		}
-		return `# Memory Entries\n\n${lines.join("\n")}`;
+		return capReply(`**记忆条目**\n\n${lines.join("\n")}`, {
+			nextStepHint: "用 `/memory show <entry-id>` 查看单条记忆",
+		}).text;
 	}
 
 	if (action === "show") {
-		if (!argument) return `Missing entry id. ${renderUsage()}`;
+		if (!argument) return `缺少 entry id。${renderUsage()}`;
 		const entry = entries.find((candidate) => candidate.id === argument);
 		const record = metadata.entries[argument];
-		if (!entry && !record) return `Memory entry \`${argument}\` was not found. Use \`/memory list\` to see ids.`;
+		if (!entry && !record) return `未找到记忆条目 \`${argument}\`。用 \`/memory list\` 查看 id。`;
 		return [
-			`# Memory ${argument}`,
+			`**记忆 ${argument}**`,
 			"",
-			entry?.content ?? "(not active in MEMORY.md)",
+			entry?.content ?? "（未在 MEMORY.md 中生效）",
 			"",
 			"```json",
 			JSON.stringify(record ?? { id: argument, status: "unknown" }, null, 2),
@@ -161,25 +165,25 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 		const last7d = new Date();
 		last7d.setDate(last7d.getDate() - 7);
 		const recent = (await readRecentMemoryActions(options.channelDir, last7d.getTime())).slice(-30).reverse();
-		if (recent.length === 0) return "# Recent Memory Activity\n\nNo memory activity in the last 7 days.";
+		if (recent.length === 0) return "**近期记忆活动**\n\n最近 7 天没有记忆活动。";
 		return [
-			"# Recent Memory Activity",
+			"**近期记忆活动**",
 			"",
 			...recent.map((item) => {
-				const when = item.timestamp ? `(${item.timestamp}) ` : "";
-				if (item.entryId) return `- ${when}forget \`${item.entryId}\` [${item.reason}]`;
+				const when = item.timestamp ? `（${item.timestamp}）` : "";
+				if (item.entryId) return `- ${when}遗忘 \`${item.entryId}\`（${item.reason}）`;
 				const detail =
 					item.action === "append"
-						? `append ${item.entries ?? 0} entr${(item.entries ?? 0) === 1 ? "y" : "ies"}`
+						? `新增 ${item.entries ?? 0} 条`
 						: item.action === "rewrite"
-							? `rewrite${item.droppedEntryIds?.length ? ` (dropped ${item.droppedEntryIds.join(", ")})` : ""}`
+							? `重写${item.droppedEntryIds?.length ? `（丢弃 ${item.droppedEntryIds.join(", ")}）` : ""}`
 							: item.action === "expire"
-								? `expire ${item.entries ?? 0} entr${(item.entries ?? 0) === 1 ? "y" : "ies"}`
+								? `过期 ${item.entries ?? 0} 条`
 								: (item.action ?? "unknown");
-				return `- ${when}${item.target ?? "?"}: ${detail} [${item.reason}]`;
+				return `- ${when}${item.target ?? "?"}：${detail}（${item.reason}）`;
 			}),
 		].join("\n");
 	}
 
-	return `Unknown memory command \`${action}\`. ${renderUsage()}`;
+	return `未知的 memory 命令 \`${action}\`。${renderUsage()}`;
 }

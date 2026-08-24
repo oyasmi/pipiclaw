@@ -916,17 +916,23 @@ export class DingTalkBot implements MediaSender {
 	 *
 	 * Only the message shape is decided here; the DM-vs-group routing and the POST itself belong to
 	 * `sendRobotMessage`, which every other outbound message type already goes through.
+	 *
+	 * `opts` lets a caller that already knows what it produced (a command reply) state the format
+	 * and a real title instead of the regex guess below, which exists only for callers — free-form
+	 * notices, `replaceWithFinal` — that do not know their own content ahead of time (review
+	 * 2026-08-24 §1.3c).
 	 */
-	async sendPlain(channelId: string, text: string): Promise<boolean> {
+	async sendPlain(channelId: string, text: string, opts?: { title?: string; markdown?: boolean }): Promise<boolean> {
 		const meta = this.getConversationMeta(channelId);
 		if (!meta) {
 			log.logWarning(`No conversation metadata for ${channelId}, cannot send plain message`);
 			return false;
 		}
 
-		const hasMarkdown = /^#{1,6}\s|^\s*[-*]\s|\*\*.*\*\*|```|`[^`]+`|\[.*?\]\(.*?\)/m.test(text);
+		const hasMarkdown = opts?.markdown ?? /^#{1,6}\s|^\s*[-*]\s|\*\*.*\*\*|```|`[^`]+`|\[.*?\]\(.*?\)/m.test(text);
+		const title = opts?.title ?? "Bot";
 		const msgKey = hasMarkdown ? "sampleMarkdown" : "sampleText";
-		const msgParam = hasMarkdown ? JSON.stringify({ text, title: "Bot" }) : JSON.stringify({ content: text });
+		const msgParam = hasMarkdown ? JSON.stringify({ text, title }) : JSON.stringify({ content: text });
 
 		return this.sendRobotMessage(meta, msgKey, msgParam);
 	}
@@ -1366,7 +1372,10 @@ export class DingTalkBot implements MediaSender {
 			if (builtInCommand) {
 				switch (builtInCommand.name) {
 					case "help":
-						await this.sendPlain(channelId, renderBuiltInHelp());
+						await this.sendPlain(channelId, renderBuiltInHelp(builtInCommand.args), {
+							title: "/help",
+							markdown: true,
+						});
 						return;
 					case "stop": {
 						const outcome = await this.handler.handleStop(channelId, this);
@@ -1375,6 +1384,7 @@ export class DingTalkBot implements MediaSender {
 							outcome.pausedTaskId
 								? `已停止当前回合。任务 \`${outcome.pausedTaskId}\` 已暂停，用 \`/tasks resume ${outcome.pausedTaskId}\` 继续。`
 								: "已停止当前回合。",
+							{ title: "/stop", markdown: true },
 						);
 						return;
 					}
@@ -1387,19 +1397,27 @@ export class DingTalkBot implements MediaSender {
 						}
 						return;
 					}
-					case "events":
-					case "tasks":
-					case "status":
-					case "usage":
-					case "context":
-					case "subagents":
-					case "project": {
+					default: {
+						// Every remaining BuiltInCommandName is a stateless report (events/tasks/status/usage/
+						// context/subagents/project), narrowed to RuntimeCommandName by TS after the four
+						// cases above. Busy has no sendCommandReply-style retry semantics, so `/context` is
+						// answered here like the rest instead of the runner-handled path idle uses for it
+						// (see the IDLE_RUNTIME_COMMAND_NAMES comment in bootstrap.ts).
 						const response = await this.handler.runRuntimeCommand(
 							event,
 							builtInCommand.name,
 							builtInCommand.args,
 						);
-						await this.sendPlain(channelId, response);
+						const delivered = await this.sendPlain(channelId, response, {
+							title: `/${builtInCommand.name}`,
+							markdown: true,
+						});
+						if (!delivered) {
+							log.logWarning(
+								`[${channelId}] Failed to deliver /${builtInCommand.name} reply`,
+								`${response.length} chars`,
+							);
+						}
 						return;
 					}
 				}

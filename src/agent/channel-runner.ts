@@ -784,29 +784,31 @@ export class ChannelRunner implements AgentRunner {
 		try {
 			switch (command.name) {
 				case "help":
-					await this.sendCommandReply(ctx, renderBuiltInHelp());
+					await this.sendCommandReply(ctx, this.renderHelpWithDiscovery(command.args), "help");
 					return;
 				case "context":
-					await this.sendCommandReply(ctx, this.renderContextReport(command.args));
+					await this.sendCommandReply(ctx, this.renderContextReport(command.args), "context");
 					return;
 				case "stop":
-					await this.sendCommandReply(ctx, "当前没有运行中的回合，`/stop` 只在回合进行中有意义。");
+					await this.sendCommandReply(ctx, "当前没有运行中的回合，`/stop` 只在回合进行中有意义。", "stop");
 					return;
 				case "steer":
 					this.requireQueuedMessage(command.args, "steer");
-					await this.sendCommandReply(ctx, "当前没有运行中的回合，直接发消息即可，不用 `/steer`。");
+					await this.sendCommandReply(ctx, "当前没有运行中的回合，直接发消息即可，不用 `/steer`。", "steer");
 					return;
 				case "followup":
 					this.requireQueuedMessage(command.args, "followup");
 					await this.sendCommandReply(
 						ctx,
 						"当前没有运行中的回合，直接发消息即可；`/followup` 用于回合进行中排队。",
+						"followup",
 					);
 					return;
 				default: {
-					// The four session/query commands (events/tasks/status/usage) are
-					// routed to their own handlers upstream and never reach here; the
-					// narrowed parameter type makes that a compile-time guarantee.
+					// The stateless report commands (events/tasks/status/usage/subagents/project — see
+					// `BUILT_IN_COMMANDS`'s `runnerHandled: false` entries) are routed to their own
+					// handlers upstream and never reach here; the narrowed parameter type makes that a
+					// compile-time guarantee.
 					const _exhaustive: never = command.name;
 					throw new Error(`Unhandled built-in command: ${String(_exhaustive)}`);
 				}
@@ -814,7 +816,7 @@ export class ChannelRunner implements AgentRunner {
 		} catch (err) {
 			const errMsg = errorMessage(err);
 			log.logWarning(`[${this.channelId}] Built-in command failed`, errMsg);
-			await this.sendCommandReply(ctx, `命令执行失败：${errMsg}`);
+			await this.sendCommandReply(ctx, `命令执行失败：${errMsg}`, command.name);
 		}
 	}
 
@@ -830,7 +832,12 @@ export class ChannelRunner implements AgentRunner {
 		if (!name) {
 			return false;
 		}
-		if (isKnownCommandName(name)) {
+		if (
+			isKnownCommandName(
+				name,
+				this.currentSkills.skills.map((skill) => skill.name.toLowerCase()),
+			)
+		) {
 			return true;
 		}
 		return this.session.promptTemplates.some((template) => template.name.toLowerCase() === name);
@@ -961,6 +968,35 @@ export class ChannelRunner implements AgentRunner {
 		});
 	}
 
+	/**
+	 * `/help` — the static per-command listing from `commands.ts`, plus (top-level only) the
+	 * workspace skills and prompt templates this session can actually invoke via `/skill:name` and
+	 * `/<template-name>`. Neither list is knowable to `renderBuiltInHelp` itself (it is a pure
+	 * function with no session state), so the runner appends it here (review 2026-08-24 §1.9).
+	 */
+	private renderHelpWithDiscovery(args: string): string {
+		const help = renderBuiltInHelp(args);
+		if (args.trim()) {
+			return help;
+		}
+		const sections: string[] = [help];
+		if (this.currentSkills.skills.length > 0) {
+			sections.push(
+				`**Workspace skills** · 用 \`/skill:<名称>\` 调用\n\n${this.currentSkills.skills
+					.map((skill) => `- \`/skill:${skill.name}\` — ${skill.description}`)
+					.join("\n")}`,
+			);
+		}
+		if (this.session.promptTemplates.length > 0) {
+			sections.push(
+				`**Prompt templates**\n\n${this.session.promptTemplates
+					.map((template) => `- \`/${template.name}\``)
+					.join("\n")}`,
+			);
+		}
+		return sections.join("\n\n");
+	}
+
 	/** `/subagents list`'s role-directory health tail — whatever this runner already discovered. */
 	getSubAgentDiscoverySnapshot(): SubAgentDiscoveryResult {
 		return this.subAgentDiscovery;
@@ -982,8 +1018,11 @@ export class ChannelRunner implements AgentRunner {
 		].join("\n");
 	}
 
-	private async sendCommandReply(ctx: ChannelContext, text: string): Promise<void> {
-		const delivered = await ctx.respondPlain(text);
+	private async sendCommandReply(ctx: ChannelContext, text: string, commandName?: string): Promise<void> {
+		// Command echoes are ephemeral control-plane traffic, not conversation: keep them out of
+		// log.jsonl so they are never re-consumed as memory-extraction input (review 2026-08-24 §1.2).
+		const title = commandName ? `/${commandName}` : undefined;
+		const delivered = await ctx.respondPlain(text, false, title);
 		if (!delivered) {
 			await ctx.replaceMessage(text);
 			await ctx.flush();

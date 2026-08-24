@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
+import { renderSubcommandUsage } from "../agent/commands.js";
 import { channelJobTaskIds } from "../agent/job-manager.js";
+import { capReply } from "../agent/reply-limits.js";
 import { formatLocalTime, parseLocalTime, parseWakeInput } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { channelDelegationTaskIds } from "../subagents/runs.js";
@@ -43,6 +45,9 @@ export interface HandleTasksCommandOptions {
  * machine those fields belong to. The value is the rest of the line, so it may contain spaces.
  */
 const SETTABLE_TASK_FIELDS = ["wake", "next", "deadline"] as const;
+
+/** `/tasks show <id>` head-snippet cap; the full file is always readable at its own path. */
+const TASK_SHOW_MAX_CHARS = 4_000;
 type SettableTaskField = (typeof SETTABLE_TASK_FIELDS)[number];
 
 type TasksCommand =
@@ -55,22 +60,14 @@ type TasksCommand =
 	| { action: "run"; id: string }
 	| { action: "set"; id: string; field: SettableTaskField; value: string };
 
+// Broadcast (subcommand names, args, descriptions, examples) lives once in commands.ts's
+// `BUILT_IN_COMMANDS` entry for "tasks"; this just renders it (review 2026-08-24 §3.1).
 function usage(): string {
-	return `# 任务
-
-用法：
-
-- \`/tasks\` — 列出本频道进行中的任务
-- \`/tasks show <id>\` — 查看单个任务文件（进行中或已归档）
-- \`/tasks archive\` — 列出已归档（已关闭）的任务
-- \`/tasks pause <id>\` — 停止该任务的自动执行（保留当前阶段与 wake）
-- \`/tasks resume <id>\` — 重新启用该任务，按当前阶段继续
-- \`/tasks run <id>\` — 恢复并立即排入一次执行（需要运行时可用）
-- \`/tasks set <id> <${SETTABLE_TASK_FIELDS.join("|")}> <值>\` — 直接改一个字段，不花一个 LLM 回合
-- \`/tasks doctor\` — 只读检查任务/事件一致性`;
+	return renderSubcommandUsage("tasks");
 }
 
-function parseTasksCommand(args: string): TasksCommand {
+/** Exported so `test/commands-subcommands.test.ts` can feed every broadcast example back through it. */
+export function parseTasksCommand(args: string): TasksCommand {
 	const trimmed = args.trim();
 	const parts = trimmed.split(/\s+/).filter(Boolean);
 	const action = parts[0];
@@ -135,14 +132,44 @@ function resolveTaskPath(dir: string, id: string, subdir?: string): string {
 }
 
 function relativeWake(wakeMs: number | undefined, now: number): string {
-	if (wakeMs === undefined) return "—";
+	if (wakeMs === undefined) return "无唤醒时间";
 	const local = formatLocalTime(new Date(wakeMs));
 	const diffMs = wakeMs - now;
-	if (diffMs <= 0) return `${local} (due)`;
+	if (diffMs <= 0) return `${local}（已到期）`;
 	const minutes = Math.round(diffMs / 60000);
 	const rel =
-		minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`;
-	return `${local} (${rel})`;
+		minutes < 60
+			? `${minutes}分钟后`
+			: minutes < 1440
+				? `${Math.round(minutes / 60)}小时后`
+				: `${Math.round(minutes / 1440)}天后`;
+	return `${local}（${rel}）`;
+}
+
+function taskStatusLabel(status: string): string {
+	switch (status) {
+		case "active":
+			return "进行中";
+		case "waiting":
+			return "等待中";
+		case "sleeping":
+			return "睡眠中";
+		default:
+			return status;
+	}
+}
+
+function verificationStatusLabel(status: string): string {
+	switch (status) {
+		case "pending":
+			return "待验收";
+		case "passed":
+			return "已通过";
+		case "failed":
+			return "未通过";
+		default:
+			return status;
+	}
 }
 
 interface TaskEventInfo {
@@ -195,7 +222,7 @@ function validWakeMs(entry: TaskLedgerEntry): number | undefined {
 }
 
 function issue(problem: string, nextStep: string): string {
-	return `- ${problem}\n  Next step: ${nextStep}`;
+	return `- ${problem}（下一步：${nextStep}）`;
 }
 
 async function readActiveTaskContent(channelDir: string, id: string): Promise<string | undefined> {
@@ -211,30 +238,37 @@ async function listTasks(channelDir: string): Promise<string> {
 	const now = Date.now();
 	const entries = (await readActiveTasks(dir, now)).filter((entry) => !entry.frontmatter.archiveOutcome);
 	if (entries.length === 0) {
-		return "# 任务\n\n当前没有进行中的任务。";
+		return "**任务**\n\n暂无进行中的任务。用 `/tasks archive` 查看已归档任务。";
 	}
 
 	const blocks = entries.map((entry) => {
-		const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "active") : "⚠ unreadable frontmatter";
-		const detail = [`  status: ${status}`, `next wake: ${relativeWake(entry.wakeMs, now)}`];
+		if (!entry.frontmatter.readable) {
+			return `**${entry.id}** — ${entry.title}\n- ⚠ frontmatter 无法读取，status/wake 不可信`;
+		}
+		const status = entry.frontmatter.status ?? "active";
+		const lines = [
+			`**${entry.id}** — ${entry.title}`,
+			`- 状态：${taskStatusLabel(status)} · 下次唤醒 ${relativeWake(entry.wakeMs, now)}`,
+		];
 		const control = entry.frontmatter.control;
 		if (control) {
-			if (control.verification.required) detail.push(`verify: required/${control.verification.status}`);
-			if (control.waitingFor) detail.push(`waiting for: ${control.waitingFor}`);
-			if (control.stop) detail.push(`stop: ${control.stop.by} — ${control.stop.reason}`);
-			if (control.deadline) detail.push(`deadline: ${control.deadline}`);
-			if (control.nextAction) detail.push(`next: ${control.nextAction}`);
-			if (control.cycleId) {
-				detail.push(`${status === "sleeping" ? "last" : "current"} cycle: ${control.cycleId}`);
-			}
+			if (control.verification.required)
+				lines.push(`- 验收：需要验收，${verificationStatusLabel(control.verification.status)}`);
+			if (control.waitingFor) lines.push(`- 等待：${control.waitingFor}`);
+			if (control.stop) lines.push(`- 已停用：${control.stop.by} — ${control.stop.reason}`);
+			if (control.deadline) lines.push(`- 截止：${control.deadline}`);
+			if (control.nextAction) lines.push(`- 下一步：${control.nextAction}`);
+			if (control.cycleId) lines.push(`- ${status === "sleeping" ? "上一周期" : "当前周期"}：${control.cycleId}`);
 		}
-		if (entry.frontmatter.enabled === false) detail.push("enabled: false");
+		if (entry.frontmatter.enabled === false) lines.push("- 已停用（enabled: false）");
 		if (entry.frontmatter.schedule) {
-			detail.push(`schedule timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone} (host)`);
+			lines.push(`- 调度时区：${Intl.DateTimeFormat().resolvedOptions().timeZone}（本机）`);
 		}
-		return `- ${entry.id} — ${entry.title}\n${detail.join("   ")}`;
+		return lines.join("\n");
 	});
-	return `# 任务：${entries.length} 个活动任务\n\n${blocks.join("\n")}`;
+	const footer = "详情 `/tasks show <id>`，体检 `/tasks doctor`";
+	const body = `**任务** · ${entries.length} 个进行中\n\n${blocks.join("\n\n")}\n\n${footer}`;
+	return capReply(body, { nextStepHint: "用 `/tasks show <id>` 查看单个任务的完整状态" }).text;
 }
 
 export async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
@@ -363,19 +397,28 @@ async function showTask(channelDir: string, id: string): Promise<string> {
 	if (!path) {
 		return `找不到任务：${taskId}`;
 	}
-	const location = path === archivePath ? "（已归档）" : "";
+	const location = path === archivePath ? "(已归档)" : "";
+	const header = `**任务 ${taskId}**${location}`;
 	const content = await readFile(path, "utf-8");
-	return `# 任务：${taskId}${location}\n\n\`\`\`markdown\n${content}\n\`\`\``;
+	// The file already lives on disk at `path`; a huge task file (long Plan/DoD history) is shown
+	// as a head snippet with a pointer to that existing path instead of dumping it whole (review
+	// 2026-08-24 §2.4/§3.2) — no separate copy needs to be written.
+	if (content.length <= TASK_SHOW_MAX_CHARS) {
+		return `${header}\n\n\`\`\`markdown\n${content}\n\`\`\``;
+	}
+	const lastNewline = content.lastIndexOf("\n", TASK_SHOW_MAX_CHARS);
+	const head = content.slice(0, lastNewline > 0 ? lastNewline : TASK_SHOW_MAX_CHARS).trimEnd();
+	return `${header}\n\n\`\`\`markdown\n${head}\n\`\`\`\n\n（内容过长已截断；完整内容见 \`${path}\`）`;
 }
 
 async function listArchive(channelDir: string): Promise<string> {
 	const dir = join(tasksDir(channelDir), "archive");
 	if (!existsSync(dir)) {
-		return "# 已归档任务\n\n暂无已归档任务。";
+		return "**已归档任务**\n\n暂无已归档任务。";
 	}
 	const filenames = (await readdir(dir)).filter((filename) => filename.endsWith(".md")).sort();
 	if (filenames.length === 0) {
-		return "# 已归档任务\n\n暂无已归档任务。";
+		return "**已归档任务**\n\n暂无已归档任务。";
 	}
 	const blocks: string[] = [];
 	for (const filename of filenames) {
@@ -387,12 +430,13 @@ async function listArchive(channelDir: string): Promise<string> {
 			blocks.push(`- ${id}`);
 		}
 	}
-	return `# 已归档任务：${blocks.length}\n\n${blocks.join("\n")}`;
+	const body = `**已归档任务** · ${blocks.length} 个\n\n${blocks.join("\n")}`;
+	return capReply(body, { nextStepHint: "用 `/tasks show <id>` 查看单个已归档任务" }).text;
 }
 
 async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 	if (!options.workspaceDir || !options.channelId) {
-		return "# 任务体检\n\n不可用：需要 workspaceDir 与 channelId。";
+		return "**任务体检**\n\n不可用：需要 workspaceDir 与 channelId。";
 	}
 
 	const now = Date.now();
@@ -409,8 +453,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (!entry.frontmatter.readable) {
 			issues.push(
 				issue(
-					`tasks/${entry.id}.md has unreadable frontmatter; wake/status cannot be trusted.`,
-					`Fix tasks/${entry.id}.md so it starts with readable status/wake/schedule frontmatter.`,
+					`tasks/${entry.id}.md 的 frontmatter 无法读取，wake/status 不可信`,
+					`修复 tasks/${entry.id}.md，让它以可读的 status/wake/schedule frontmatter 开头`,
 				),
 			);
 			continue;
@@ -418,8 +462,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (entry.frontmatter.controlReadable === false) {
 			issues.push(
 				issue(
-					`tasks/${entry.id}.md has invalid control metadata; governance is fail-open but cannot be enforced.`,
-					`Use task_manage set or repair the one-line control JSON before allowing the task to run.`,
+					`tasks/${entry.id}.md 的 control 元数据无效；治理机制 fail-open，但无法生效`,
+					`用 task_manage set 或直接修复那一行 control JSON，然后再允许任务运行`,
 				),
 			);
 			continue;
@@ -429,8 +473,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (!control && entry.frontmatter.enabled === false) {
 			issues.push(
 				issue(
-					`tasks/${entry.id}.md is disabled but has no control.stop receipt.`,
-					`Use task_manage set to repair control metadata, then /tasks resume ${entry.id} when it is safe to continue.`,
+					`tasks/${entry.id}.md 已停用，但完全没有 control.stop 回执`,
+					`用 task_manage set 修复 control 元数据，确认可以继续后再 /tasks resume ${entry.id}`,
 				),
 			);
 		}
@@ -440,8 +484,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			if (violation) {
 				issues.push(
 					issue(
-						`tasks/${entry.id}.md exceeds its control limit: ${violation}.`,
-						`Review the task, then explicitly raise its budget/deadline or cancel it; the driver will escalate it.`,
+						`tasks/${entry.id}.md 超出了它的 control 限额：${violation}`,
+						`检查这个任务，明确提高 budget/deadline 或取消它；否则 driver 会升级处理`,
 					),
 				);
 			}
@@ -459,8 +503,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				if (!attestationOk) {
 					issues.push(
 						issue(
-							`tasks/${entry.id}.md records an independent PASS with no matching, fresh verifier attestation on disk.`,
-							`Run a fresh purpose=verify sub-agent and import its attestation with task_manage verify before completion.`,
+							`tasks/${entry.id}.md 记录了一次独立 PASS，但磁盘上没有匹配且新鲜的验证 attestation`,
+							`跑一次新的 purpose=verify 子代理，并用 task_manage verify 导入它的 attestation 后再完成`,
 						),
 					);
 				}
@@ -468,16 +512,16 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			if (entry.frontmatter.enabled === false && !control.stop) {
 				issues.push(
 					issue(
-						`tasks/${entry.id}.md is disabled without a control.stop receipt.`,
-						`Use /tasks resume ${entry.id} after deciding who stopped it, or write a valid stop record with task_manage set.`,
+						`tasks/${entry.id}.md 已停用，但 control 里没有 stop 回执`,
+						`先弄清是谁停用的，再 /tasks resume ${entry.id}；或者用 task_manage set 写一条合法的 stop 记录`,
 					),
 				);
 			}
 			if (entry.frontmatter.enabled !== false && control.stop) {
 				issues.push(
 					issue(
-						`tasks/${entry.id}.md has a stop receipt but enabled is true.`,
-						`Run /tasks resume ${entry.id} to clear the stale stop receipt, or disable the task explicitly.`,
+						`tasks/${entry.id}.md 有 stop 回执，但 enabled 是 true`,
+						`跑 /tasks resume ${entry.id} 清掉过期的 stop 回执，或者显式停用这个任务`,
 					),
 				);
 			}
@@ -487,8 +531,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (status === "sleeping" && !recurring) {
 			issues.push(
 				issue(
-					`tasks/${entry.id}.md is sleeping without a recurring schedule.`,
-					`Use task_manage complete/cancel for a one-shot task, or add a valid schedule before sleeping it.`,
+					`tasks/${entry.id}.md 处于 sleeping，但没有 recurring schedule`,
+					`一次性任务用 task_manage complete/cancel 结束；要保留 sleeping 需要先加一个合法的 schedule`,
 				),
 			);
 		}
@@ -498,16 +542,16 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			} catch (error) {
 				issues.push(
 					issue(
-						`tasks/${entry.id}.md has an invalid schedule: ${errorMessage(error)}`,
-						`Repair or clear schedule for ${entry.id}; the driver will keep this task disabled until repaired.`,
+						`tasks/${entry.id}.md 的 schedule 无效：${errorMessage(error)}`,
+						`修复或清空 ${entry.id} 的 schedule；修复前 driver 会让这个任务保持停用`,
 					),
 				);
 			}
 			if (status === "sleeping" && !entry.frontmatter.wake) {
 				issues.push(
 					issue(
-						`tasks/${entry.id}.md is sleeping but has no wake.`,
-						`Repair the schedule and wake, then run /tasks resume ${entry.id} after review.`,
+						`tasks/${entry.id}.md 处于 sleeping，但没有 wake`,
+						`修复 schedule 和 wake，确认无误后 /tasks resume ${entry.id}`,
 					),
 				);
 			}
@@ -520,16 +564,16 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		) {
 			issues.push(
 				issue(
-					`tasks/${entry.id}.md is active but its wake is in the future.`,
-					`Use task_manage set/progress to make it waiting with waitingFor=time, or clear wake to continue now.`,
+					`tasks/${entry.id}.md 处于 active，但它的 wake 在未来`,
+					`用 task_manage set/progress 把它改成 waiting 且 waitingFor=time，或者清空 wake 让它现在继续`,
 				),
 			);
 		}
 		if (recurringTaskMissedOccurrence({ status, schedule: entry.frontmatter.schedule, control }, new Date(now))) {
 			issues.push(
 				issue(
-					`tasks/${entry.id}.md has an open ${status} cycle past its next recurring occurrence; no concurrent cycle was opened.`,
-					`Finish, skip, or cancel the current cycle for ${entry.id}; then let the driver compute the next occurrence.`,
+					`tasks/${entry.id}.md 有一个已过下次 recurring 时点、仍处于 ${status} 的周期，且没有并行开启新周期`,
+					`完成、跳过或取消 ${entry.id} 当前周期，之后让 driver 计算下一次时点`,
 				),
 			);
 		}
@@ -537,18 +581,15 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		const content = await readActiveTaskContent(options.channelDir, entry.id);
 		if (content === undefined) {
 			issues.push(
-				issue(
-					`tasks/${entry.id}.md could not be read during doctor checks.`,
-					`Open tasks/${entry.id}.md manually and repair permissions or file contents.`,
-				),
+				issue(`tasks/${entry.id}.md 在体检时读取失败`, `手动打开 tasks/${entry.id}.md，修复权限或文件内容`),
 			);
 		} else {
 			const missing = missingStandardTaskSections(content);
 			if (missing.length > 0) {
 				issues.push(
 					issue(
-						`tasks/${entry.id}.md is missing standard section(s): ${missing.join(", ")}.`,
-						`Ask the agent to normalize tasks/${entry.id}.md to the standard task skeleton.`,
+						`tasks/${entry.id}.md 缺少标准分节：${missing.join(", ")}`,
+						`让 agent 把 tasks/${entry.id}.md 规范化成标准任务骨架`,
 					),
 				);
 			}
@@ -563,8 +604,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				if (invalidRefs.length > 0) {
 					issues.push(
 						issue(
-							`tasks/${entry.id}.md Plan references DoD item(s) that do not exist: ${invalidRefs.join(", ")}.`,
-							`Fix the "→ dod:N" reference(s) in the Plan, or renumber them if the DoD list changed.`,
+							`tasks/${entry.id}.md 的 Plan 引用了不存在的 DoD 项：${invalidRefs.join(", ")}`,
+							`修正 Plan 里的 "→ dod:N" 引用；如果 DoD 列表变了就重新编号`,
 						),
 					);
 				}
@@ -577,8 +618,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				if (dodCount > 0 && uncovered.length > 0) {
 					issues.push(
 						issue(
-							`tasks/${entry.id}.md has DoD item(s) with no Plan step covering them: dod:${uncovered.join(",")}.`,
-							`Add or update a Plan step's "→ dod:${uncovered[0]}" reference, or confirm those DoD items need no dedicated step.`,
+							`tasks/${entry.id}.md 有 DoD 项没有 Plan 步骤覆盖：dod:${uncovered.join(",")}`,
+							`给某个 Plan 步骤加上或更新 "→ dod:${uncovered[0]}" 引用，或者确认这些 DoD 项确实不需要专门的步骤`,
 						),
 					);
 				}
@@ -597,8 +638,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			if (!hasDurableWake && !hasRunningSource) {
 				issues.push(
 					issue(
-						`tasks/${entry.id}.md is waiting with no durable way to resume (no valid wake, no running job/delegation recorded against it).`,
-						`It resumes only when you reply to it, run /tasks run ${entry.id}, or give it a wake with /tasks set ${entry.id} wake <local time or +2h>; cancel it if what it waits for is gone.`,
+						`tasks/${entry.id}.md 处于 waiting，且没有可靠的恢复方式（没有合法 wake，也没有记录在案的运行中 job/委派）`,
+						`它只能靠你回复、跑 /tasks run ${entry.id}，或者用 /tasks set ${entry.id} wake <本地时间或 +2h> 给它一个 wake 才能恢复；如果等待的东西已经不存在了就取消它`,
 					),
 				);
 			}
@@ -607,8 +648,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (entry.frontmatter.wake && validWakeMs(entry) === undefined) {
 			issues.push(
 				issue(
-					`tasks/${entry.id}.md has an invalid wake value (${entry.frontmatter.wake}); the native driver will treat it as due.`,
-					`Use task_manage set or progress to replace wake with a valid local time, or clear it if the task should continue now.`,
+					`tasks/${entry.id}.md 的 wake 值无效（${entry.frontmatter.wake}）；原生 driver 会把它当成已到期处理`,
+					`用 task_manage set 或 progress 把 wake 换成合法本地时间，或者清空它让任务直接继续`,
 				),
 			);
 		}
@@ -625,8 +666,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				if (priorOccurrence?.getTime() !== wakeMs) {
 					issues.push(
 						issue(
-							`tasks/${entry.id}.md wake (${formatLocalTime(new Date(wakeMs))}) is not an occurrence of its schedule "${schedule}".`,
-							`Run task_manage set schedule="${schedule}" (unchanged) to recompute wake from the cron, or set wake explicitly.`,
+							`tasks/${entry.id}.md 的 wake（${formatLocalTime(new Date(wakeMs))}）不是它 schedule "${schedule}" 的一个合法时点`,
+							`跑 task_manage set schedule="${schedule}"（不变）用 cron 重新计算 wake，或者手动明确设置 wake`,
 						),
 					);
 				}
@@ -638,8 +679,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (!event.id || !event.use) {
 			issues.push(
 				issue(
-					`events/${event.filename} does not follow task.<channelId>.<taskId>.<use>.json.`,
-					"Rename the event to the task-owned naming convention or manage it as a normal event.",
+					`events/${event.filename} 不符合 task.<channelId>.<taskId>.<use>.json 命名`,
+					"把这个事件改名为任务专用命名约定，或者当作普通事件管理",
 				),
 			);
 			continue;
@@ -647,8 +688,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (event.error) {
 			issues.push(
 				issue(
-					`events/${event.filename} is not parseable: ${event.error}`,
-					`Fix or delete events/${event.filename}; invalid task-owned events cannot be trusted.`,
+					`events/${event.filename} 无法解析：${event.error}`,
+					`修复或删除 events/${event.filename}；无效的任务专属事件不可信`,
 				),
 			);
 			continue;
@@ -656,8 +697,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (!activeIds.has(event.id) && !archivedIds.has(event.id)) {
 			issues.push(
 				issue(
-					`events/${event.filename} points to missing task ${event.id}.`,
-					`Delete events/${event.filename}, or recreate tasks/${event.id}.md if that task still exists conceptually.`,
+					`events/${event.filename} 指向了不存在的任务 ${event.id}`,
+					`删除 events/${event.filename}；如果那个任务在概念上还存在，就重新创建 tasks/${event.id}.md`,
 				),
 			);
 			continue;
@@ -665,17 +706,18 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (archivedIds.has(event.id)) {
 			issues.push(
 				issue(
-					`events/${event.filename} points to archived task ${event.id}; closed tasks should have no live events.`,
-					`Delete events/${event.filename}; archived tasks should not wake the agent.`,
+					`events/${event.filename} 指向了已归档任务 ${event.id}；已关闭的任务不应该还有存活的事件`,
+					`删除 events/${event.filename}；已归档任务不应该唤醒 agent`,
 				),
 			);
 		}
 	}
 
 	if (issues.length === 0) {
-		return "# 任务体检\n\n未发现任务台账问题。";
+		return "**任务体检**\n\n未发现任务台账问题。";
 	}
-	return `# 任务体检\n\n发现 ${issues.length} 个问题：\n\n${issues.join("\n")}`;
+	const body = `**任务体检** · 发现 ${issues.length} 个问题\n\n${issues.join("\n")}`;
+	return capReply(body, { nextStepHint: "先处理靠前的问题，再重新运行 `/tasks doctor`" }).text;
 }
 
 export async function handleTasksCommand(options: HandleTasksCommandOptions): Promise<string> {

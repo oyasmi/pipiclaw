@@ -35,41 +35,41 @@ export function formatUptime(ms: number): string {
 
 export function renderStatus(options: RenderStatusOptions): string {
 	const { runner, version, uptimeMs } = options;
-	const lines = ["# Status"];
 
+	let runState: string;
 	if (runner?.isBusy()) {
 		const task = runner.getTurnStatus().taskText?.trim();
-		const preview = task ? `: ${task.length > 80 ? `${task.slice(0, 79)}…` : task}` : "";
-		lines.push(`- Run state: running${preview}`);
+		const preview = task ? `：${task.length > 80 ? `${task.slice(0, 79)}…` : task}` : "";
+		runState = `运行中${preview}`;
 	} else {
-		lines.push("- Run state: idle");
+		runState = "空闲";
 	}
+	const lines = [`**状态** · ${runState}`];
 
 	if (runner) {
 		try {
 			const snapshot = runner.getStatusSnapshot();
-			lines.push(`- Model: ${snapshot.model}`);
-			lines.push(`- Thinking: ${snapshot.thinkingLevel}`);
+			let modelLine = `- 模型：\`${snapshot.model}\`（thinking \`${snapshot.thinkingLevel}\`）`;
 			if (snapshot.fallback) {
 				const until = new Date(snapshot.fallback.cooldownUntilMs);
 				const hh = String(until.getHours()).padStart(2, "0");
 				const mm = String(until.getMinutes()).padStart(2, "0");
-				lines.push(`- Fallback: active（primary ${snapshot.fallback.primary} 冷却至 ${hh}:${mm}）`);
+				modelLine += ` · fallback 生效中（primary ${snapshot.fallback.primary} 冷却至 ${hh}:${mm}）`;
 			}
+			lines.push(modelLine);
 			if (snapshot.contextTokens !== undefined && snapshot.contextWindow > 0) {
 				const percent = ((snapshot.contextTokens / snapshot.contextWindow) * 100).toFixed(1);
 				lines.push(
-					`- Context: ${formatTokenCount(snapshot.contextTokens)} / ${formatTokenCount(snapshot.contextWindow)} (${percent}%)`,
+					`- 上下文：${formatTokenCount(snapshot.contextTokens)} / ${formatTokenCount(snapshot.contextWindow)}（${percent}%）`,
 				);
 			}
 		} catch (err) {
-			lines.push(`- Model: unavailable (${errorMessage(err)})`);
+			lines.push(`- 模型：不可用（${errorMessage(err)}）`);
 		}
 	} else {
-		lines.push("- Model: no session started for this channel yet");
+		lines.push("- 模型：本频道尚未开始过会话");
 	}
 
-	lines.push(`- Uptime: ${formatUptime(uptimeMs)}`);
-	lines.push(`- Version: ${version}`);
+	lines.push(`- 已运行 ${formatUptime(uptimeMs)} · 版本 \`${version}\``);
 	return lines.join("\n");
 }

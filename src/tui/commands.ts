@@ -32,7 +32,7 @@ export type DispatchOutcome =
 	| { kind: "noop"; text?: string };
 
 export interface DispatchDeps {
-	renderHelp(): string;
+	renderHelp(args?: string): string;
 	renderStatus(): string;
 	renderContext(args: string): string;
 	renderUsage(args: string): Promise<string>;
@@ -57,7 +57,7 @@ export async function dispatch(input: string, deps: DispatchDeps): Promise<Dispa
 
 	switch (command.name) {
 		case "help":
-			return { kind: "reply", text: deps.renderHelp() };
+			return { kind: "reply", text: deps.renderHelp(command.args) };
 		case "status":
 			return { kind: "reply", text: deps.renderStatus() };
 		case "context":

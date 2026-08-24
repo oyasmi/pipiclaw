@@ -40,19 +40,16 @@ function buildSessionText(
 			? ` (actual: \`${lastResponseModel}\`)`
 			: "";
 	const sessionFile = stats.sessionFile ? `\`${basename(stats.sessionFile)}\`` : "(none)";
-	return `# Session
+	return `**会话**
 
-- Session ID: \`${stats.sessionId}\`
-- Session file: ${sessionFile}
-- Model: ${modelText}${actualText}
-- Thinking level: \`${thinkingLevel}\`
-- User messages: \`${stats.userMessages}\`
-- Assistant messages: \`${stats.assistantMessages}\`
-- Tool calls: \`${stats.toolCalls}\`
-- Tool results: \`${stats.toolResults}\`
-- Total messages: \`${stats.totalMessages}\`
-- Tokens: \`${stats.tokens.total}\` (input \`${stats.tokens.input}\`, output \`${stats.tokens.output}\`, cache read \`${stats.tokens.cacheRead}\`, cache write \`${stats.tokens.cacheWrite}\`)
-- Cost: \`$${stats.cost.toFixed(4)}\``;
+- Session ID：\`${stats.sessionId}\`
+- Session file：${sessionFile}
+- 模型：${modelText}${actualText}
+- Thinking level：\`${thinkingLevel}\`
+- 消息：用户 \`${stats.userMessages}\` · 助手 \`${stats.assistantMessages}\` · 共 \`${stats.totalMessages}\`
+- 工具调用：\`${stats.toolCalls}\` · 工具结果：\`${stats.toolResults}\`
+- Tokens：\`${stats.tokens.total}\`（input \`${stats.tokens.input}\`，output \`${stats.tokens.output}\`，cache read \`${stats.tokens.cacheRead}\`，cache write \`${stats.tokens.cacheWrite}\`）
+- Cost：\`$${stats.cost.toFixed(4)}\``;
 }
 
 async function runCompact(
@@ -84,12 +81,12 @@ function sendCommandResult(sender: CommandMessageSender, text: string): void | P
 }
 
 function buildThinkingText(current: ThinkingLevel, available: ThinkingLevel[]): string {
-	return `# Thinking
+	return `**Thinking**
 
-Current level: \`${current}\`
-Available levels: ${available.map((level) => `\`${level}\``).join(", ")}
+- 当前档位：\`${current}\`
+- 可用档位：${available.map((level) => `\`${level}\``).join(", ")}
 
-Use \`/thinking <level>\` to set a level, or \`/thinking cycle\` to select the next supported level.`;
+用 \`/thinking <level>\` 设置档位，或 \`/thinking cycle\` 切到下一个支持的档位。`;
 }
 
 export function createCommandExtension(options: PipiclawCommandExtensionOptions): ExtensionFactory {
@@ -165,13 +162,13 @@ export function createCommandExtension(options: PipiclawCommandExtensionOptions)
 						availableModels.length > 0 ? formatModelList(availableModels, currentModel) : "- (none)";
 					sendCommandResult(
 						pi,
-						`# Model
+						`**模型**
 
-Current model: ${current}
+当前模型：${current}
 
-Use \`/model <provider/modelId>\`, \`/model <modelId>\`, or any uniquely matching substring to switch.
+用 \`/model <provider/modelId>\`、\`/model <modelId>\` 或任意能唯一匹配的子串切换。
 
-Available models:
+可用模型：
 ${available}`,
 					);
 					return;
@@ -183,7 +180,7 @@ ${available}`,
 
 				if (match.match) {
 					await options.switchModel(match.match);
-					sendCommandResult(pi, `已切换模型到 \`${formatModelReference(match.match)}\`.`);
+					sendCommandResult(pi, `已切换模型到 \`${formatModelReference(match.match)}\``);
 					return;
 				}
 
@@ -192,7 +189,7 @@ ${available}`,
 						pi,
 						`未切换模型：\`${args.trim()}\` 匹配到多个模型。请提供更精确的 \`provider/modelId\`、\`modelId\` 或更长的片段。
 
-Available models:
+可用模型：
 ${available}`,
 					);
 					return;
@@ -202,7 +199,7 @@ ${available}`,
 					pi,
 					`未找到模型 \`${args.trim()}\`。请使用精确的 \`provider/modelId\`、唯一的 \`modelId\`，或能唯一命中的片段字符串。
 
-Available models:
+可用模型：
 ${available}`,
 				);
 			},
@@ -218,7 +215,7 @@ ${available}`,
 						await options.refreshSessionResources();
 						await sendCommandResult(
 							nextCtx,
-							`已开启新会话。\n\nSession ID: \`${nextCtx.sessionManager.getSessionId()}\``,
+							`已开启新会话。\n\nSession ID：\`${nextCtx.sessionManager.getSessionId()}\``,
 						);
 					},
 				});
@@ -226,7 +223,7 @@ ${available}`,
 					sendCommandResult(pi, "新会话已取消。");
 				} else if (!sentFromReplacement) {
 					await options.refreshSessionResources();
-					sendCommandResult(pi, `已开启新会话。\n\nSession ID: \`${ctx.sessionManager.getSessionId()}\``);
+					sendCommandResult(pi, `已开启新会话。\n\nSession ID：\`${ctx.sessionManager.getSessionId()}\``);
 				}
 			},
 		});
@@ -240,8 +237,8 @@ ${available}`,
 					pi,
 					`已压缩当前会话上下文。
 
-- Tokens before compaction: \`${result.tokensBefore}\`
-- Summary:
+- 压缩前 tokens：\`${result.tokensBefore}\`
+- 摘要：
 
 \`\`\`text
 ${result.summary}

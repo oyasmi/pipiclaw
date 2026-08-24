@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { renderSubcommandUsage } from "../agent/commands.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentConfig, SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
@@ -32,21 +33,11 @@ type SubagentsCommand =
 	| { action: "roles"; name?: string };
 
 function usage(): string {
-	return `# 委派 Run
-
-用法：
-
-- \`/subagents\` — 运行中的 run + 最近完成的几条 + 角色目录摘要
-- \`/subagents list [running|failed|all]\` — 按状态筛选
-- \`/subagents show <runId>\` — 单个 run 的完整详情（含实际 argv、stderr 尾部）
-- \`/subagents output <runId>\` — 该 run 的文本产出（output.md 尾部）
-- \`/subagents cancel <runId|all>\` — 直接终止，不经过模型
-- \`/subagents roles [name]\` — 角色目录；带 name 时查看单个角色的详情
-
-\`runId\` 支持不带 \`run_\` 前缀的简写，只要能唯一匹配即可，例如 \`show a1b2c3\`。`;
+	return `${renderSubcommandUsage("subagents")}\n\n\`runId\` 支持不带 \`run_\` 前缀的简写，只要能唯一匹配即可，例如 \`show a1b2c3\`。`;
 }
 
-function parseSubagentsCommand(args: string): SubagentsCommand {
+/** Exported so `test/commands-subcommands.test.ts` can feed every broadcast example back through it. */
+export function parseSubagentsCommand(args: string): SubagentsCommand {
 	const parts = args.trim().split(/\s+/).filter(Boolean);
 	const action = parts[0];
 
@@ -103,7 +94,7 @@ function formatRunLine(record: RunRecord): string {
 	if (cost) bits.push(cost);
 	const header = `- \`${record.runId}\` ${record.agent} (${bits.join(", ")}) — ${statusLabel(record.status)} — "${record.label}"`;
 	if (record.status === "failed" && record.failureReason) {
-		return `${header}\n  失败原因：${record.failureReason}`;
+		return `${header}（失败原因：${record.failureReason}）`;
 	}
 	return header;
 }
@@ -146,7 +137,7 @@ function capListForDisplay<T>(records: T[]): { shown: T[]; truncatedNote?: strin
 
 async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilter): Promise<string> {
 	const records = getSubAgentRunManager(options.channelId).list();
-	if (records.length === 0) return "# 委派 Run\n\n没有委派记录。";
+	if (records.length === 0) return "**委派 Run**\n\n没有委派记录。";
 
 	const running = records.filter((record) => record.status === "running").sort((a, b) => b.startedAt - a.startedAt);
 	const terminal = records
@@ -159,30 +150,30 @@ async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilt
 		const { shown, truncatedNote } = capListForDisplay(running);
 		sections.push(shown.length === 0 ? "没有正在运行的 run。" : shown.map(formatRunLine).join("\n"));
 		if (truncatedNote) sections.push(truncatedNote);
-		return `# 委派 Run — 运行中\n\n${sections.join("\n\n")}`;
+		return `**委派 Run** · 运行中\n\n${sections.join("\n\n")}`;
 	}
 	if (filter === "failed") {
 		const { shown, truncatedNote } = capListForDisplay(terminal.filter((record) => record.status === "failed"));
 		sections.push(shown.length === 0 ? "没有失败的 run。" : shown.map(formatRunLine).join("\n"));
 		if (truncatedNote) sections.push(truncatedNote);
-		return `# 委派 Run — 失败\n\n${sections.join("\n\n")}`;
+		return `**委派 Run** · 失败\n\n${sections.join("\n\n")}`;
 	}
 	if (filter === "all") {
 		const { shown, truncatedNote } = capListForDisplay([...running, ...terminal]);
 		sections.push(shown.map(formatRunLine).join("\n"));
 		if (truncatedNote) sections.push(truncatedNote);
-		return `# 委派 Run — 全部（${records.length}）\n\n${sections.join("\n\n")}`;
+		return `**委派 Run** · 全部（${records.length}）\n\n${sections.join("\n\n")}`;
 	}
 
 	// default: an overview — every running run, plus a capped tail of recent completions.
 	if (running.length > 0) {
-		sections.push(`## 运行中 (${running.length})\n${running.map(formatRunLine).join("\n")}`);
+		sections.push(`**运行中**（${running.length}）\n${running.map(formatRunLine).join("\n")}`);
 	}
 	const shown = terminal.slice(0, DEFAULT_LIST_COMPLETED_LIMIT);
 	if (shown.length > 0) {
 		const countNote =
 			terminal.length > shown.length ? `显示 ${shown.length} / 共 ${terminal.length}` : `${shown.length}`;
-		sections.push(`## 最近完成 (${countNote})\n${shown.map(formatRunLine).join("\n")}`);
+		sections.push(`**最近完成**（${countNote}）\n${shown.map(formatRunLine).join("\n")}`);
 	}
 	if (sections.length === 0) sections.push("没有委派记录。");
 
@@ -190,7 +181,7 @@ async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilt
 	if (discovery) sections.push(formatRolesTail(discovery));
 	sections.push("用 `/subagents show <runId>` 看详情，`/subagents output <runId>` 看产出。");
 
-	return `# 委派 Run\n\n${sections.join("\n\n")}`;
+	return `**委派 Run**\n\n${sections.join("\n\n")}`;
 }
 
 const STDERR_TAIL_CHARS = 2_000;
@@ -212,31 +203,30 @@ async function showRun(channelId: string, ref: string): Promise<string> {
 	const record = resolution.record;
 
 	const lines = [
-		`# Run \`${record.runId}\``,
-		"",
-		`角色：${record.agent} (${harnessLabel(record)}, ${record.source})`,
-		`标签：${record.label}`,
-		`状态：${statusLabel(record.status)}（耗时 ${formatRunDuration(record)}）`,
+		`**Run \`${record.runId}\`**`,
+		`- 角色：${record.agent} (${harnessLabel(record)}, ${record.source})`,
+		`- 标签：${record.label}`,
+		`- 状态：${statusLabel(record.status)}（耗时 ${formatRunDuration(record)}）`,
 	];
-	if (record.failureReason) lines.push(`失败原因：${record.failureReason}`);
+	if (record.failureReason) lines.push(`- 失败原因：${record.failureReason}`);
 	if (record.verificationVerdict) {
 		lines.push(
-			`验收结论：${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}${record.verificationStrength === "advisory" ? "（advisory）" : ""}`,
+			`- 验收结论：${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}${record.verificationStrength === "advisory" ? "（advisory）" : ""}`,
 		);
 	}
-	lines.push(`开始：${new Date(record.startedAt).toLocaleString()}`);
-	if (record.finishedAt) lines.push(`结束：${new Date(record.finishedAt).toLocaleString()}`);
+	lines.push(`- 开始：${new Date(record.startedAt).toLocaleString()}`);
+	if (record.finishedAt) lines.push(`- 结束：${new Date(record.finishedAt).toLocaleString()}`);
 	lines.push(
-		`purpose：${record.purpose}`,
-		`工作目录：\`${record.workingDirectory}\``,
-		`产物目录：\`${record.artifactDir}\``,
+		`- purpose：${record.purpose}`,
+		`- 工作目录：\`${record.workingDirectory}\``,
+		`- 产物目录：\`${record.artifactDir}\``,
 	);
-	if (record.taskId) lines.push(`所属任务：${record.taskId}`);
-	if (record.leaseKey) lines.push("持有写锁：是");
-	if (record.model) lines.push(`模型：${record.model}`);
+	if (record.taskId) lines.push(`- 所属任务：${record.taskId}`);
+	if (record.leaseKey) lines.push("- 持有写锁：是");
+	if (record.model) lines.push(`- 模型：${record.model}`);
 	const cost = formatCost(record);
 	lines.push(
-		`usage：input=${record.usage.input} output=${record.usage.output}${cost ? ` cost=${cost}` : record.costKnown ? "" : "（cost 未知）"}`,
+		`- usage：input=${record.usage.input} output=${record.usage.output}${cost ? ` cost=${cost}` : record.costKnown ? "" : "（cost 未知）"}`,
 	);
 	if (record.argv) lines.push("", "实际 argv：", "```", JSON.stringify(record.argv), "```");
 	if (record.parserVersion !== undefined || record.cliVersion) {
@@ -245,19 +235,19 @@ async function showRun(channelId: string, ref: string): Promise<string> {
 		const parts = [];
 		if (record.parserVersion !== undefined) parts.push(`parserVersion=${record.parserVersion}`);
 		parts.push(`cliVersion=${record.cliVersion ?? "(未知)"}`);
-		lines.push(`适配器/CLI：${parts.join("，")}`);
+		lines.push(`- 适配器/CLI：${parts.join("，")}`);
 	}
 	if (record.invocationWarnings?.length) {
 		lines.push("", "⚠ 派发时的警告：", ...record.invocationWarnings.map((warning) => `- ${warning}`));
 	}
-	if (record.sessionId) lines.push(`sessionId：\`${record.sessionId}\`（可用于 subagent_manage op=follow_up）`);
+	if (record.sessionId) lines.push(`- sessionId：\`${record.sessionId}\`（可用于 subagent_manage op=follow_up）`);
 
 	if (record.runtime === "external") {
 		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")
 			.then((text) => text.slice(-STDERR_TAIL_CHARS))
 			.catch(() => undefined);
 		if (stderrTail?.trim()) {
-			lines.push("", "## stderr (tail)", "```", stderrTail, "```");
+			lines.push("", "**stderr（尾部）**", "```", stderrTail, "```");
 		}
 	}
 	return lines.join("\n");
@@ -272,12 +262,12 @@ async function showOutput(channelId: string, ref: string): Promise<string> {
 	const outputText = await readFile(join(record.artifactDir, "output.md"), "utf-8").catch(() => undefined);
 	if (!outputText?.trim()) {
 		const runningNote = record.status === "running" ? "该 run 仍在运行，可能还没有产出。" : "该 run 没有文本产出。";
-		return `# Run \`${record.runId}\` 的产出\n\n${runningNote}产物目录：\`${record.artifactDir}\``;
+		return `**Run \`${record.runId}\` 的产出**\n\n${runningNote}产物目录：\`${record.artifactDir}\``;
 	}
 	const tail = outputText.slice(-OUTPUT_TAIL_CHARS);
 	const truncatedNote =
 		outputText.length > tail.length ? `（只显示末尾 ${OUTPUT_TAIL_CHARS} 字符，完整内容见上方产物目录）\n\n` : "";
-	return `# Run \`${record.runId}\` 的产出\n\n${truncatedNote}\`\`\`\n${tail}\n\`\`\``;
+	return `**Run \`${record.runId}\` 的产出**\n\n${truncatedNote}\`\`\`\n${tail}\n\`\`\``;
 }
 
 async function cancelRun(channelId: string, ref: string): Promise<string> {
@@ -291,7 +281,7 @@ async function cancelRun(channelId: string, ref: string): Promise<string> {
 				return `- \`${record.runId}\` (${record.agent})：${status}`;
 			}),
 		);
-		return `# 已请求终止 ${running.length} 个 run\n\n${results.join("\n")}`;
+		return `**已请求终止 ${running.length} 个 run**\n\n${results.join("\n")}`;
 	}
 	const resolution = manager.resolveRef(ref);
 	const error = formatRunResolution(resolution, ref);
@@ -310,37 +300,52 @@ function formatRoleSummaryLine(agent: SubAgentConfig): string {
 function formatRoleDetail(agent: SubAgentConfig): string {
 	const kind = agent.runtime === "external" ? `外部/${agent.harness}` : "内置";
 	const lines = [
-		`# 角色 \`${agent.name}\``,
-		"",
-		`runtime：${kind}`,
-		`来源：${agent.source} (${agent.filePath ?? "inline"})`,
-		`说明：${agent.description}`,
+		`**角色 \`${agent.name}\`**`,
+		`- runtime：${kind}`,
+		`- 来源：${agent.source} (${agent.filePath ?? "inline"})`,
+		`- 说明：${agent.description}`,
 	];
-	if (agent.unavailable) lines.push(`⚠ 不可用：${agent.unavailable}`);
-	lines.push(`mutates：${agent.mutates ?? "(未声明，由 tools 推断)"}`);
+	if (agent.unavailable) lines.push(`- ⚠ 不可用：${agent.unavailable}`);
+	lines.push(`- mutates：${agent.mutates ?? "(未声明，由 tools 推断)"}`);
 	if (agent.runtime === "internal") {
 		lines.push(
-			`模型：${agent.modelRef ?? "(默认)"}`,
-			`tools：${agent.tools.join(", ") || "(none)"}`,
-			`预算：maxTurns=${agent.maxTurns} maxToolCalls=${agent.maxToolCalls} maxWallTimeSec=${agent.maxWallTimeSec} bashTimeoutSec=${agent.bashTimeoutSec}`,
-			`contextMode：${agent.contextMode}，memory：${agent.memory}`,
+			`- 模型：${agent.modelRef ?? "(默认)"}`,
+			`- tools：${agent.tools.join(", ") || "(none)"}`,
+			`- 预算：maxTurns=${agent.maxTurns} maxToolCalls=${agent.maxToolCalls} maxWallTimeSec=${agent.maxWallTimeSec} bashTimeoutSec=${agent.bashTimeoutSec}`,
+			`- contextMode：${agent.contextMode}，memory：${agent.memory}`,
 		);
 	} else {
 		lines.push(
-			`command：\`${agent.command ?? ""}\`${agent.shell ? "（通过 shell 执行）" : ""}`,
-			`maxWallTimeSec：${agent.maxWallTimeSec}`,
+			`- command：\`${agent.command ?? ""}\`${agent.shell ? "（通过 shell 执行）" : ""}`,
+			`- maxWallTimeSec：${agent.maxWallTimeSec}`,
 		);
-		if (agent.externalModelRef) lines.push(`模型：${agent.externalModelRef}`);
+		if (agent.externalModelRef) lines.push(`- 模型：${agent.externalModelRef}`);
 		// spec 042 D4: contextMode/memory are effective for external roles too (memory 默认 none，
 		// 显式声明 session/relevant 才会把频道会话状态发给外部进程) — 显示出来而不是只在内置分支里说明。
-		lines.push(`contextMode：${agent.contextMode}，memory：${agent.memory}`);
+		lines.push(`- contextMode：${agent.contextMode}，memory：${agent.memory}`);
 		if (agent.memory !== "none") {
-			lines.push(`⚠ 该角色会把频道会话状态/记忆片段发送给外部进程（memory: ${agent.memory}）`);
+			lines.push(`- ⚠ 该角色会把频道会话状态/记忆片段发送给外部进程（memory: ${agent.memory}）`);
 		}
 	}
-	if (agent.paths.length > 0) lines.push(`paths：${agent.paths.join(", ")}`);
-	lines.push("", "system prompt：", "```", agent.systemPrompt, "```");
+	if (agent.paths.length > 0) lines.push(`- paths：${agent.paths.join(", ")}`);
+	// A full system prompt can be several KB; a role backed by a file is shown as a head snippet
+	// with a pointer to that file instead (review 2026-08-24 §2.4/§3.2). Inline roles have no file
+	// to point to, so they get a plain truncation note instead.
+	lines.push("", "system prompt：", renderCappedPromptBlock(agent));
 	return lines.join("\n");
+}
+
+const SYSTEM_PROMPT_SHOW_MAX_CHARS = 4_000;
+
+function renderCappedPromptBlock(agent: SubAgentConfig): string {
+	const prompt = agent.systemPrompt;
+	if (prompt.length <= SYSTEM_PROMPT_SHOW_MAX_CHARS) {
+		return `\`\`\`\n${prompt}\n\`\`\``;
+	}
+	const lastNewline = prompt.lastIndexOf("\n", SYSTEM_PROMPT_SHOW_MAX_CHARS);
+	const head = prompt.slice(0, lastNewline > 0 ? lastNewline : SYSTEM_PROMPT_SHOW_MAX_CHARS).trimEnd();
+	const nextStep = agent.filePath ? `完整内容见 \`${agent.filePath}\`` : "该角色内联定义，无文件可查看完整内容";
+	return `\`\`\`\n${head}\n\`\`\`\n\n（内容过长已截断；${nextStep}）`;
 }
 
 async function showRoles(options: HandleSubagentsCommandOptions, name?: string): Promise<string> {
@@ -359,9 +364,9 @@ async function showRoles(options: HandleSubagentsCommandOptions, name?: string):
 
 	const internal = discovery.agents.filter((agent) => agent.runtime === "internal");
 	const external = discovery.agents.filter((agent) => agent.runtime === "external");
-	const sections = [`# 角色目录\n\n目录：\`${discovery.directory}\``];
-	if (external.length > 0) sections.push(`## 外部\n${external.map(formatRoleSummaryLine).join("\n")}`);
-	if (internal.length > 0) sections.push(`## 内置\n${internal.map(formatRoleSummaryLine).join("\n")}`);
+	const sections = [`**角色目录**\n\n目录：\`${discovery.directory}\``];
+	if (external.length > 0) sections.push(`**外部**\n${external.map(formatRoleSummaryLine).join("\n")}`);
+	if (internal.length > 0) sections.push(`**内置**\n${internal.map(formatRoleSummaryLine).join("\n")}`);
 	if (discovery.agents.length === 0) sections.push("目录为空。");
 	for (const warning of discovery.warnings) sections.push(`⚠ discovery: ${warning}`);
 	sections.push("用 `/subagents roles <name>` 看单个角色的详情。");

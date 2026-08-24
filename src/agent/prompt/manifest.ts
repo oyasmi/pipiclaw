@@ -149,14 +149,10 @@ function formatNumber(value: number): string {
 	return value.toLocaleString("en-US");
 }
 
-function pad(text: string, width: number): string {
-	return text.length >= width ? text : text + " ".repeat(width - text.length);
-}
-
 function renderWorkspaceResourceLine(label: string, resource: LoadedPromptResource | undefined): string | undefined {
 	if (!resource || resource.isDefaultTemplate) return undefined;
 	const state = resource.truncated ? "truncated" : "complete";
-	return `- ${pad(label, 10)}${formatNumber(resource.injectedUnits)} / ${formatNumber(resource.budgetUnits)} units, ${state}`;
+	return `- ${label}: ${formatNumber(resource.injectedUnits)} / ${formatNumber(resource.budgetUnits)} units, ${state}`;
 }
 
 export function renderContextReport(input: PromptContextReportInput): string {
@@ -178,12 +174,14 @@ export function renderContextReport(input: PromptContextReportInput): string {
 	lines.push(`Fingerprint (Pipiclaw sections): sha256:${build.fingerprint.slice(0, 16)}`);
 	lines.push("");
 
-	const width = Math.max(...build.sections.map((section) => section.id.length), 12) + 2;
+	// Space-padded column alignment relies on a monospace font: DingTalk's proportional rendering
+	// collapses it back into unaligned runs, so each field is punctuation-delimited instead of
+	// column-aligned (review 2026-08-24 §1.3a).
 	for (const section of build.sections) {
 		const flags: string[] = [section.cacheClass];
 		if (section.truncated) flags.push(`truncated from ${formatNumber(section.rawUnits)} units`);
 		lines.push(
-			`- ${pad(section.id, width)}${formatNumber(section.injectedUnits).padStart(6)} units  ${formatNumber(section.injectedChars).padStart(7)} chars  ${flags.join(", ")}`,
+			`- ${section.id}: ${formatNumber(section.injectedUnits)} units, ${formatNumber(section.injectedChars)} chars, ${flags.join(", ")}`,
 		);
 	}
 

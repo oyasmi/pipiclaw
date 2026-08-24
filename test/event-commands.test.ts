@@ -47,14 +47,14 @@ describe("event commands", () => {
 
 		const result = await runCommand(workspaceDir, historyPath, "list");
 
-		expect(result).toContain("# Events");
-		expect(result).toContain("- weekly-review");
-		expect(result).toContain("type: periodic");
-		expect(result).toContain("schedule: 0 9 * * 1");
-		expect(result).toContain("- release-check");
-		expect(result).toContain("at: 2026-07-05T18:00:00+08:00");
-		expect(result).toContain("- broken");
-		expect(result).toContain("invalid:");
+		expect(result).toContain("**定时事件**");
+		expect(result).toContain("**weekly-review**");
+		expect(result).toContain("类型：periodic");
+		expect(result).toContain("schedule：0 9 * * 1");
+		expect(result).toContain("**release-check**");
+		expect(result).toContain("触发时间：2026-07-05T18:00:00+08:00");
+		expect(result).toContain("**broken**");
+		expect(result).toContain("⚠ 无效：");
 	});
 
 	it("shows formatted event JSON", async () => {
@@ -66,7 +66,7 @@ describe("event commands", () => {
 
 		const result = await runCommand(workspaceDir, historyPath, "show now");
 
-		expect(result).toContain("# Event: now");
+		expect(result).toContain("**事件 now**");
 		expect(result).toContain('"type": "immediate"');
 		expect(result).toContain('"channelId": "dm_123"');
 	});
@@ -76,11 +76,34 @@ describe("event commands", () => {
 		const eventPath = join(eventsDir, "old.json");
 		writeFileSync(eventPath, JSON.stringify({ type: "immediate", channelId: "dm_123", text: "Run now." }));
 
-		expect(await runCommand(workspaceDir, historyPath, "delete old.json")).toBe("Deleted event: old");
+		// "immediate" events are no longer a parseable ScheduledEvent, so deleteEvent falls back
+		// to the plain confirmation instead of echoing a summary.
+		const deleted = await runCommand(workspaceDir, historyPath, "delete old.json");
+		expect(deleted).toBe("已删除事件：old");
 		expect(existsSync(eventPath)).toBe(false);
 
 		const rejected = await runCommand(workspaceDir, historyPath, "delete ../old");
 		expect(rejected).toContain("Invalid event name");
+	});
+
+	it("echoes the deleted event's content when it parses (review 2026-08-24 §3.4)", async () => {
+		const { workspaceDir, eventsDir, historyPath } = createWorkspace();
+		const eventPath = join(eventsDir, "release-check.json");
+		writeFileSync(
+			eventPath,
+			JSON.stringify({
+				type: "one-shot",
+				channelId: "group_456",
+				text: "Check release result.",
+				at: "2026-07-05T18:00:00+08:00",
+			}),
+		);
+
+		const deleted = await runCommand(workspaceDir, historyPath, "delete release-check");
+		expect(deleted).toContain("已删除事件");
+		expect(deleted).toContain("**release-check**");
+		expect(deleted).toContain("触发时间：2026-07-05T18:00:00+08:00");
+		expect(existsSync(eventPath)).toBe(false);
 	});
 
 	it("shows recent event history and filters by event name", async () => {
@@ -113,13 +136,13 @@ describe("event commands", () => {
 		);
 
 		const allHistory = await runCommand(workspaceDir, historyPath, "history");
-		expect(allHistory).toContain("other deleted ok");
-		expect(allHistory).toContain("weekly-review triggered ok");
+		expect(allHistory).toContain("other** deleted · ok");
+		expect(allHistory).toContain("weekly-review** triggered · ok");
 
 		const filtered = await runCommand(workspaceDir, historyPath, "history weekly-review");
-		expect(filtered).toContain("# Event History: weekly-review");
-		expect(filtered).toContain("weekly-review triggered ok");
-		expect(filtered).not.toContain("other deleted ok");
+		expect(filtered).toContain("**事件历史** · weekly-review");
+		expect(filtered).toContain("weekly-review** triggered · ok");
+		expect(filtered).not.toContain("other** deleted · ok");
 	});
 
 	it("returns usage for invalid events subcommands", async () => {
@@ -127,7 +150,7 @@ describe("event commands", () => {
 
 		const result = await runCommand(workspaceDir, historyPath, "create foo {}");
 
-		expect(result).toContain("Unknown /events action: create");
+		expect(result).toContain("未知的 /events 动作：create");
 		expect(result).toContain("/events list");
 	});
 });

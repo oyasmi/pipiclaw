@@ -69,7 +69,8 @@ export interface ChannelContext {
 	};
 	channelName?: string;
 	respond: (text: string, shouldLog?: boolean) => Promise<void>;
-	respondPlain: (text: string, shouldLog?: boolean) => Promise<boolean>;
+	/** `title` names the reply in transports that show one (e.g. DingTalk's conversation list); ignored where there isn't one. */
+	respondPlain: (text: string, shouldLog?: boolean, title?: string) => Promise<boolean>;
 	replaceMessage: (text: string) => Promise<void>;
 	respondInThread: (text: string) => Promise<void>;
 	setTyping: (isTyping: boolean) => Promise<void>;

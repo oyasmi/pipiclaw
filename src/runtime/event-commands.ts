@@ -1,6 +1,8 @@
 import { existsSync } from "fs";
 import { readdir, readFile, unlink } from "fs/promises";
 import { join, resolve, sep } from "path";
+import { renderSubcommandUsage } from "../agent/commands.js";
+import { capReply } from "../agent/reply-limits.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { type EventHistoryRecord, parseScheduledEventContent, type ScheduledEvent } from "./events.js";
 
@@ -21,48 +23,44 @@ type EventsCommand =
 	| { action: "history"; name?: string };
 
 function usage(): string {
-	return `# Events
-
-Usage:
-
-- \`/events list\`
-- \`/events show <name>\`
-- \`/events delete <name>\`
-- \`/events history [name]\``;
+	return renderSubcommandUsage("events");
 }
 
-function parseEventsCommand(args: string): EventsCommand {
+/** Exported so `test/commands-subcommands.test.ts` can feed every broadcast example back through it. */
+export function parseEventsCommand(args: string): EventsCommand {
 	const parts = args.trim().split(/\s+/).filter(Boolean);
 	const action = parts[0];
 	const name = parts[1];
 
 	if (!action || action === "list") {
-		if (parts.length > 1) throw new Error("Usage: /events list");
+		if (parts.length > 1) throw new Error("用法：/events list");
 		return { action: "list" };
 	}
 
 	if (action === "show") {
-		if (!name || parts.length > 2) throw new Error("Usage: /events show <name>");
+		if (!name || parts.length > 2) throw new Error("用法：/events show <name>");
 		return { action, name };
 	}
 
 	if (action === "delete") {
-		if (!name || parts.length > 2) throw new Error("Usage: /events delete <name>");
+		if (!name || parts.length > 2) throw new Error("用法：/events delete <name>");
 		return { action, name };
 	}
 
 	if (action === "history") {
-		if (parts.length > 2) throw new Error("Usage: /events history [name]");
+		if (parts.length > 2) throw new Error("用法：/events history [name]");
 		return name ? { action, name } : { action };
 	}
 
-	throw new Error(`Unknown /events action: ${action}`);
+	throw new Error(`未知的 /events 动作：${action}`);
 }
 
 function eventsDir(workspaceDir: string): string {
 	return join(workspaceDir, "events");
 }
 
+// English on purpose: shared with the model-facing `event_manage` tool (src/tools/event-manage.ts),
+// which follows the tool-error convention elsewhere in the codebase, not the command-reply one.
 export function normalizeEventName(name: string): string {
 	const trimmed = name.trim();
 	const normalized = trimmed.endsWith(".json") ? trimmed.slice(0, -".json".length) : trimmed;
@@ -88,26 +86,26 @@ function clipText(text: string, maxChars = TEXT_PREVIEW_MAX_CHARS): string {
 }
 
 function formatEventSummary(name: string, event: ScheduledEvent): string {
-	const lines = [`- ${name}`, `  type: ${event.type}`, `  channelId: ${event.channelId}`];
+	const lines = [`**${name}**`, `- 类型：${event.type}`, `- channelId：${event.channelId}`];
 	if (event.type === "one-shot") {
-		lines.push(`  at: ${event.at}`);
+		lines.push(`- 触发时间：${event.at}`);
 	}
 	if (event.type === "periodic") {
-		lines.push(`  schedule: ${event.schedule}`);
+		lines.push(`- schedule：${event.schedule}`);
 	}
-	lines.push(`  text: ${clipText(event.text)}`);
+	lines.push(`- 内容：${clipText(event.text)}`);
 	return lines.join("\n");
 }
 
 async function listEvents(workspaceDir: string): Promise<string> {
 	const dir = eventsDir(workspaceDir);
 	if (!existsSync(dir)) {
-		return "# Events\n\nNo events directory found.";
+		return "**定时事件**\n\n没有找到 events 目录。";
 	}
 
 	const filenames = (await readdir(dir)).filter((filename) => filename.endsWith(".json")).sort();
 	if (filenames.length === 0) {
-		return "# Events\n\nNo event files found.";
+		return "**定时事件**\n\n暂无事件文件。";
 	}
 
 	const blocks: string[] = [];
@@ -119,22 +117,24 @@ async function listEvents(workspaceDir: string): Promise<string> {
 			blocks.push(formatEventSummary(name, event));
 		} catch (error) {
 			const message = errorMessage(error);
-			blocks.push(`- ${name}\n  invalid: ${message}`);
+			blocks.push(`**${name}**\n- ⚠ 无效：${message}`);
 		}
 	}
 
-	return `# Events\n\n${blocks.join("\n\n")}`;
+	return capReply(`**定时事件**\n\n${blocks.join("\n\n")}`, {
+		nextStepHint: "用 `/events show <name>` 查看单个事件",
+	}).text;
 }
 
 async function showEvent(workspaceDir: string, name: string): Promise<string> {
 	const { eventName, eventPath } = resolveEventPath(workspaceDir, name);
 	if (!existsSync(eventPath)) {
-		return `Event not found: ${eventName}`;
+		return `找不到事件：${eventName}`;
 	}
 
 	const raw = await readFile(eventPath, "utf-8");
 	const parsed = JSON.parse(raw);
-	return `# Event: ${eventName}
+	return `**事件 ${eventName}**
 
 \`\`\`json
 ${JSON.stringify(parsed, null, 2)}
@@ -144,11 +144,21 @@ ${JSON.stringify(parsed, null, 2)}
 async function deleteEvent(workspaceDir: string, name: string): Promise<string> {
 	const { eventName, eventPath } = resolveEventPath(workspaceDir, name);
 	if (!existsSync(eventPath)) {
-		return `Event not found: ${eventName}`;
+		return `找不到事件：${eventName}`;
+	}
+
+	// Read before deleting so the reply carries what was removed (review 2026-08-24 §3.4):
+	// an accidental delete stays recoverable from chat history instead of a bare confirmation.
+	let summary: string | undefined;
+	try {
+		const event = parseScheduledEventContent(await readFile(eventPath, "utf-8"), `${eventName}.json`);
+		summary = formatEventSummary(eventName, event);
+	} catch {
+		// Unparseable content is still safe to delete; just skip the summary.
 	}
 
 	await unlink(eventPath);
-	return `Deleted event: ${eventName}`;
+	return summary ? `已删除事件：\n\n${summary}` : `已删除事件：${eventName}`;
 }
 
 function parseHistoryLine(line: string): EventHistoryRecord | null {
@@ -165,20 +175,20 @@ function parseHistoryLine(line: string): EventHistoryRecord | null {
 
 function formatHistoryRecord(record: EventHistoryRecord): string {
 	const details: string[] = [];
-	if (record.channelId) details.push(`  channelId: ${record.channelId}`);
-	if (record.schedule) details.push(`  schedule: ${record.schedule}`);
-	if (record.at) details.push(`  at: ${record.at}`);
-	if (record.nextRunAt) details.push(`  nextRunAt: ${record.nextRunAt}`);
-	if (record.reason) details.push(`  reason: ${record.reason}`);
-	if (record.textPreview) details.push(`  text: ${clipText(record.textPreview)}`);
-	const header = `- ${record.ts} ${record.eventName} ${record.action} ${record.result}`;
+	if (record.channelId) details.push(`- channelId：${record.channelId}`);
+	if (record.schedule) details.push(`- schedule：${record.schedule}`);
+	if (record.at) details.push(`- 触发时间：${record.at}`);
+	if (record.nextRunAt) details.push(`- 下次运行：${record.nextRunAt}`);
+	if (record.reason) details.push(`- 原因：${record.reason}`);
+	if (record.textPreview) details.push(`- 内容：${clipText(record.textPreview)}`);
+	const header = `**${record.ts} ${record.eventName}** ${record.action} · ${record.result}`;
 	return details.length > 0 ? `${header}\n${details.join("\n")}` : header;
 }
 
 async function showHistory(historyPath: string, name?: string): Promise<string> {
 	const eventName = name ? normalizeEventName(name) : undefined;
 	if (!existsSync(historyPath)) {
-		return "# Event History\n\nNo event history found.";
+		return "**事件历史**\n\n暂无事件历史。";
 	}
 
 	const raw = await readFile(historyPath, "utf-8");
@@ -193,13 +203,11 @@ async function showHistory(historyPath: string, name?: string): Promise<string> 
 		.reverse();
 
 	if (records.length === 0) {
-		return eventName
-			? `# Event History\n\nNo history found for event: ${eventName}`
-			: "# Event History\n\nNo history found.";
+		return eventName ? `**事件历史**\n\n未找到事件 ${eventName} 的历史。` : "**事件历史**\n\n暂无事件历史。";
 	}
 
-	const suffix = eventName ? `: ${eventName}` : "";
-	return `# Event History${suffix}\n\n${records.map(formatHistoryRecord).join("\n\n")}`;
+	const suffix = eventName ? ` · ${eventName}` : "";
+	return `**事件历史**${suffix}\n\n${records.map(formatHistoryRecord).join("\n\n")}`;
 }
 
 export async function handleEventsCommand(options: HandleEventsCommandOptions): Promise<string> {
@@ -224,6 +232,6 @@ export async function handleEventsCommand(options: HandleEventsCommandOptions): 
 		}
 	} catch (error) {
 		const message = errorMessage(error);
-		return `Could not ${command.action} events: ${message}`;
+		return `执行 /events ${command.action} 失败：${message}`;
 	}
 }

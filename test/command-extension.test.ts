@@ -96,8 +96,8 @@ describe("command-extension", () => {
 
 		await api.registeredCommands.get("model")?.handler("", createCommandContext());
 
-		expect(getLastCommandResult(api).content).toContain("Current model");
-		expect(getLastCommandResult(api).content).toContain("Available models");
+		expect(getLastCommandResult(api).content).toContain("当前模型");
+		expect(getLastCommandResult(api).content).toContain("可用模型");
 		expect(getLastCommandResult(api).content).toContain("claude-sonnet-4-5");
 	});
 
@@ -107,7 +107,7 @@ describe("command-extension", () => {
 		createCommandExtension(options)(api as never);
 
 		await api.registeredCommands.get("thinking")?.handler("", createCommandContext());
-		expect(getLastCommandResult(api).content).toContain("Current level: `off`");
+		expect(getLastCommandResult(api).content).toContain("当前档位：`off`");
 
 		await api.registeredCommands.get("thinking")?.handler("high", createCommandContext());
 		expect(options.setThinkingLevel).toHaveBeenCalledWith("high");
@@ -180,7 +180,7 @@ describe("command-extension", () => {
 		await api.registeredCommands.get("compact")?.handler("keep recent errors", ctx as never);
 
 		expect(ctx.compact).toHaveBeenCalledTimes(1);
-		expect(getLastCommandResult(api).content).toContain("Tokens before compaction");
+		expect(getLastCommandResult(api).content).toContain("压缩前 tokens");
 		expect(getLastCommandResult(api).content).toContain("summary:keep recent errors");
 	});
 });

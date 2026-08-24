@@ -67,7 +67,7 @@ describe("renderUsageReport", () => {
 		expect(report).toContain("本频道：$0.3000 · 12k tokens");
 		expect(report).toContain("turn $0.2000 · sidecar $0.1000");
 		expect(report).toContain("全局：$1.5000 · 2.4M tokens，覆盖 2 个频道");
-		expect(report).toContain("用量最高的模型：anthropic/opus $1.0000，anthropic/haiku $0.5000");
+		expect(report).toContain("用量最高：anthropic/opus $1.0000，anthropic/haiku $0.5000");
 	});
 
 	it("reports empty windows plainly", async () => {

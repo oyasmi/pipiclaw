@@ -169,7 +169,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		traits,
 		channelId,
 		userName: safeUserName(),
-		renderHelp: () => renderBuiltInHelp(),
+		renderHelp: (args) => renderBuiltInHelp(args),
 		renderUsage: async (args) => renderUsageReport(getUsageLedger(), channelId, parseUsageMode(args), new Date()),
 		runEvents: (args) =>
 			handleEventsCommand({ args, workspaceDir: paths.workspaceDir, historyPath: paths.eventHistoryPath }),

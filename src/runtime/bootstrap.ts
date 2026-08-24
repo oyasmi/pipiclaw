@@ -1,5 +1,6 @@
 import { join } from "path";
 import {
+	BUILT_IN_COMMANDS,
 	formatUnknownCommandMessage,
 	isRunnerBuiltInCommand,
 	parseBuiltInCommand,
@@ -156,11 +157,16 @@ function isNoRunningTaskQueueError(err: unknown): boolean {
 }
 
 /**
- * The `runRuntimeCommand` names usable on the idle-turn path. `context` is deliberately excluded:
- * idle answers it through the runner's ChannelContext-aware command path (thread-reply, delete
- * semantics) instead, so it is not part of this stateless-report dispatch here.
+ * The `runRuntimeCommand` names usable on the idle-turn path — every `BUILT_IN_COMMANDS` entry
+ * *not* marked `runnerHandled`, i.e. every stateless report. `context` is the one deliberate
+ * exception even though it isn't runner-handled while busy (see the busy-path switch in
+ * `dingtalk.ts`): idle answers it through the runner's ChannelContext-aware command path
+ * (thread-reply, delete semantics) instead, so it is routed like the runner-handled built-ins
+ * here and excluded from this stateless-report set.
  */
-const IDLE_RUNTIME_COMMAND_NAMES = new Set<string>(["events", "tasks", "status", "usage", "subagents", "project"]);
+const IDLE_RUNTIME_COMMAND_NAMES = new Set<string>(
+	BUILT_IN_COMMANDS.filter((command) => !command.runnerHandled).map((command) => command.name),
+);
 
 function isIdleRuntimeCommandName(name: string): name is Exclude<RuntimeCommandName, "context"> {
 	return IDLE_RUNTIME_COMMAND_NAMES.has(name);
@@ -634,6 +640,10 @@ export async function createRuntimeContext(
 			let structuredWakeFinalized = event.internalWake === undefined;
 			const task = (async () => {
 				try {
+					// Computed before archiving so a command's own text can be excluded from
+					// memory-extraction input (review 2026-08-24 §1.2): it is control-plane
+					// traffic, not conversation, and the history stays queryable via session_search.
+					const builtInCommand = parseBuiltInCommand(event.text);
 					await archiveIncomingMessage(
 						event.channelId,
 						{
@@ -643,6 +653,7 @@ export async function createRuntimeContext(
 							userName: event.userName,
 							text: event.text,
 							isBot: false,
+							skipContextSync: Boolean(builtInCommand),
 						},
 						"user message",
 					);
@@ -650,20 +661,48 @@ export async function createRuntimeContext(
 					// Background wakes deliver their result, not their process: no progress card,
 					// no thinking stream, nothing to delete when the check-in ends `[SILENT]`.
 					const ctx = createDingTalkContext(event, bot, store, _isEvent ? "none" : undefined);
-					const builtInCommand = parseBuiltInCommand(event.text);
 
 					if (builtInCommand) {
+						const commandStartedAt = Date.now();
+						const logCtx = { channelId: event.channelId, userName: event.userName };
 						log.logEvent("info", "runtime.command.started", "Executing command", {
-							ctx: { channelId: event.channelId, userName: event.userName },
+							ctx: logCtx,
 							fields: { command: builtInCommand.name },
 						});
-						if (isIdleRuntimeCommandName(builtInCommand.name)) {
-							const response = await handler.runRuntimeCommand(event, builtInCommand.name, builtInCommand.args);
-							await bot.sendPlain(event.channelId, response);
-							return;
-						}
-						if (isRunnerBuiltInCommand(builtInCommand)) {
-							await runner.handleBuiltinCommand(ctx, builtInCommand);
+						try {
+							if (isIdleRuntimeCommandName(builtInCommand.name)) {
+								const response = await handler.runRuntimeCommand(
+									event,
+									builtInCommand.name,
+									builtInCommand.args,
+								);
+								const delivered = await bot.sendPlain(event.channelId, response, {
+									title: `/${builtInCommand.name}`,
+									markdown: true,
+								});
+								if (!delivered) {
+									log.logWarning(
+										`[${event.channelId}] Failed to deliver /${builtInCommand.name} reply`,
+										`${response.length} chars`,
+									);
+								}
+							} else if (isRunnerBuiltInCommand(builtInCommand)) {
+								await runner.handleBuiltinCommand(ctx, builtInCommand);
+							}
+							log.logEvent("info", "runtime.command.completed", "Command completed", {
+								ctx: logCtx,
+								fields: { command: builtInCommand.name, durationMs: Date.now() - commandStartedAt },
+							});
+						} catch (err) {
+							log.logEvent("warn", "runtime.command.failed", "Command failed", {
+								ctx: logCtx,
+								fields: {
+									command: builtInCommand.name,
+									durationMs: Date.now() - commandStartedAt,
+									error: errorMessage(err),
+								},
+							});
+							throw err;
 						}
 						return;
 					}

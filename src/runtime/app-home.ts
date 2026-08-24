@@ -400,6 +400,19 @@ export function loadConfig(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS, io: 
 	return parsed;
 }
 
+/**
+ * The one place that lists `pipiclaw`'s top-level subcommands. `parseArgs`'s own `--help` uses it;
+ * `main.ts`'s unknown-subcommand branch used to hand-copy the same three lines separately (review
+ * 2026-08-24 §1.10) — it now calls this instead, so the two can't drift apart again.
+ */
+export function formatCliCommandsHelp(appName: string): string[] {
+	return [
+		`  ${appName} [run] [options]         Run the DingTalk daemon (default)`,
+		`  ${appName} tui [options] [prompt]   Chat with the agent in the terminal`,
+		`  ${appName} auth status|login|logout Manage provider credentials`,
+	];
+}
+
 export function parseArgs(
 	argv: string[],
 	paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS,
@@ -414,12 +427,8 @@ export function parseArgs(
 			continue;
 		}
 		if (arg === "--help" || arg === "-h") {
-			io.log(`Usage: ${paths.appName} [command] [options]`);
-			io.log("");
-			io.log("Commands:");
-			io.log("  run                         Run the long-lived DingTalk daemon (default)");
-			io.log("  tui [prompt]                Chat with the agent in the terminal");
-			io.log("  auth status|login|logout    Manage provider credentials");
+			io.log(`Usage:`);
+			for (const line of formatCliCommandsHelp(paths.appName)) io.log(line);
 			io.log("");
 			io.log("Options:");
 			io.log("  --version                   Print the current version and exit");

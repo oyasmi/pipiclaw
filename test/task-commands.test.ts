@@ -117,8 +117,8 @@ describe("/tasks v2 commands", () => {
 		control.verification.status = "passed";
 		await writeFile(join(tasksDir, "measured.md"), renderTaskDocument({ status: "active", control }, BODY));
 		const list = await run("");
-		expect(list).toContain("status: active");
-		expect(list).toContain("verify: required/passed");
+		expect(list).toContain("状态：进行中");
+		expect(list).toContain("验收：需要验收，已通过");
 		expect(list).not.toMatch(/approval|sideEffects|effects/i);
 	});
 
@@ -128,8 +128,8 @@ describe("/tasks v2 commands", () => {
 			`status: active\nwake: 2099-01-01T00:00:00+08:00\ncontrol: ${JSON.stringify(createDefaultTaskControl())}`,
 		);
 		const out = await run("doctor");
-		expect(out).toContain("active but its wake is in the future");
-		expect(out).toContain("Next step:");
+		expect(out).toContain("处于 active，但它的 wake 在未来");
+		expect(out).toContain("下一步：");
 	});
 
 	it("doctor does not gate resumability on waitingFor's cosmetic value", async () => {
@@ -148,7 +148,7 @@ describe("/tasks v2 commands", () => {
 			`status: waiting\ncontrol: ${JSON.stringify({ ...createDefaultTaskControl(), waitingFor: "external-signal" })}`,
 		);
 		const out = await run("doctor");
-		expect(out).toContain("waiting with no durable way to resume");
+		expect(out).toContain("没有可靠的恢复方式");
 		expect(out).toContain("/tasks run parked");
 	});
 
@@ -160,6 +160,16 @@ describe("/tasks v2 commands", () => {
 		expect(await run("archive")).toContain("old — Old");
 		expect(await run("show old")).toContain("outcome: cancelled");
 		expect(await run("show ../../secret")).toMatch(/Invalid task id/);
+	});
+
+	it("truncates a huge task file to a head snippet with a pointer to the real file", async () => {
+		// Review 2026-08-24 §2.4/§3.2: `/tasks show` used to dump the whole file with no cap.
+		const hugeBody = renderStandardTaskBody({ title: "Big", goal: "x".repeat(10_000), dod: "- [ ] todo" });
+		await writeTask("huge", "status: active", hugeBody);
+		const shown = await run("show huge");
+		expect(shown.length).toBeLessThan(hugeBody.length);
+		expect(shown).toContain("内容过长已截断");
+		expect(shown).toContain(join(tasksDir, "huge.md"));
 	});
 
 	it("keeps a valid recurring schedule without requiring a separate event", async () => {

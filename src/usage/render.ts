@@ -81,7 +81,7 @@ async function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId:
 		ledger.summarize({ since: window.since, until: window.until, channelId }),
 	]);
 
-	const lines: string[] = [`## ${window.title}`];
+	const lines: string[] = [`**${window.title}**`];
 	if (global.entryCount === 0) {
 		lines.push("暂无用量记录。");
 		return lines.join("\n");
@@ -89,26 +89,28 @@ async function renderWindow(window: UsageWindow, ledger: UsageLedger, channelId:
 
 	// Tokens are reported next to cost because a local or pricing-less model bills nothing while
 	// still consuming context — "$0.0000" alone would read as "nothing happened".
-	lines.push(`本频道：${money(channel.totalCost)} · ${tokens(channel.totalTokens)}`);
+	let channelLine = `- 本频道：${money(channel.totalCost)} · ${tokens(channel.totalTokens)}`;
 	const channelKinds = renderKindBreakdown(channel);
 	if (channelKinds) {
-		lines.push(`  ${channelKinds}`);
+		channelLine += ` · ${channelKinds}`;
 	}
 	const channelUnknown = unknownNote(channel);
 	if (channelUnknown) {
-		lines.push(`  ${channelUnknown}`);
+		channelLine += channelUnknown;
 	}
+	lines.push(channelLine);
 
 	const channelCount = Object.keys(global.byChannel).length;
-	lines.push(`全局：${money(global.totalCost)} · ${tokens(global.totalTokens)}，覆盖 ${channelCount} 个频道`);
+	let globalLine = `- 全局：${money(global.totalCost)} · ${tokens(global.totalTokens)}，覆盖 ${channelCount} 个频道`;
 	const topModels = topEntries(global.byModel, 3);
 	if (topModels.length > 0) {
-		lines.push(`  用量最高的模型：${topModels.map(([model, cost]) => `${model} ${money(cost)}`).join("，")}`);
+		globalLine += ` · 用量最高：${topModels.map(([model, cost]) => `${model} ${money(cost)}`).join("，")}`;
 	}
 	const globalUnknown = unknownNote(global);
 	if (globalUnknown) {
-		lines.push(`  ${globalUnknown}`);
+		globalLine += globalUnknown;
 	}
+	lines.push(globalLine);
 	return lines.join("\n");
 }
 
@@ -120,5 +122,5 @@ export async function renderUsageReport(
 ): Promise<string> {
 	const windows = usageWindows(mode, now);
 	const rendered = await Promise.all(windows.map((window) => renderWindow(window, ledger, channelId)));
-	return `# 用量\n\n${rendered.join("\n\n")}`;
+	return `**用量**\n\n${rendered.join("\n\n")}`;
 }

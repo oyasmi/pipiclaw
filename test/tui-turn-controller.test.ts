@@ -160,6 +160,28 @@ describe("TurnController", () => {
 		expect(runner.steers).toContain("adjust course");
 	});
 
+	it("rejects a session command (e.g. /model) while busy instead of steering it into the running turn", async () => {
+		// Review 2026-08-24 §1.6: `/model opus` mid-turn used to fall through to queueSteer and get
+		// injected as literal steer text for the model to interpret, instead of a clean refusal.
+		const { runner, frontend, cb } = setup({ start: true });
+		runner.knownSlashCommands.add("/model opus");
+		cb().onSubmit("first");
+		await tick();
+		cb().onSubmit("/model opus");
+		await tick();
+		expect(runner.steers).not.toContain("/model opus");
+		expect(runner.runCount).toBe(1);
+		expect(frontend.finals.at(-1)).toContain("会话命令");
+	});
+
+	it("still routes a session command through the runner when idle", async () => {
+		const { runner, cb } = setup({ start: true });
+		runner.knownSlashCommands.add("/model opus");
+		cb().onSubmit("/model opus");
+		await tick();
+		expect(runner.runCount).toBe(1);
+	});
+
 	it("queues a follow-up to run after the current turn", async () => {
 		const { runner, cb } = setup({ start: true });
 		cb().onSubmit("first");

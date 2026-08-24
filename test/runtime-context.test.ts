@@ -247,7 +247,11 @@ describe("createRuntimeContext", () => {
 
 		await runtime.handler.handleEvent(createDmEvent("/events list", "1000"), bot as unknown as DingTalkBot);
 
-		expect(bot.sendPlain).toHaveBeenCalledWith("dm_tester", expect.stringContaining("weekly-review"));
+		expect(bot.sendPlain).toHaveBeenCalledWith(
+			"dm_tester",
+			expect.stringContaining("weekly-review"),
+			expect.objectContaining({ title: "/events" }),
+		);
 		await runtime.shutdown();
 	});
 });

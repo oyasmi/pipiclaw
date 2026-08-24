@@ -116,6 +116,6 @@ describe("handleProjectCommand", () => {
 		const options = baseOptions({ args: "bogus" });
 		const text = await handleProjectCommand(options);
 		expect(text).toContain("未知的 /project 子命令");
-		expect(text).toContain("用法");
+		expect(text).toContain("/project set <absolute-path>");
 	});
 });

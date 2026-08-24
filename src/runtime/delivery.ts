@@ -70,7 +70,7 @@ class ChannelDeliveryController {
 			// synthetic event (which carries no conversation payload) still names its channel.
 			channelName: this.event.channelName ?? this.event.channelId,
 			respond: async (text: string, shouldLog = true) => this.appendProgress(text, shouldLog),
-			respondPlain: async (text: string, shouldLog = true) => this.sendFinal(text, shouldLog),
+			respondPlain: async (text: string, shouldLog = true, title?: string) => this.sendFinal(text, shouldLog, title),
 			replaceMessage: async (text: string) => this.replaceWithFinal(text),
 			respondInThread: async (text: string) => {
 				if (this.closed || !text.trim()) {
@@ -172,12 +172,16 @@ class ChannelDeliveryController {
 		this.bumpRevision(false);
 	}
 
-	private async sendFinal(text: string, shouldLog: boolean): Promise<boolean> {
+	private async sendFinal(text: string, shouldLog: boolean, title?: string): Promise<boolean> {
 		if (this.closed || this.finalResponseDelivered) return this.finalResponseDelivered;
 
 		this.clearCardWarmup();
 
-		const delivered = await this.bot.sendPlain(this.event.channelId, text);
+		const delivered = await this.bot.sendPlain(
+			this.event.channelId,
+			text,
+			title ? { title, markdown: true } : undefined,
+		);
 		if (!delivered) {
 			// Do not archive a response we failed to deliver: the conversation log
 			// must not claim we answered when the user never received it.

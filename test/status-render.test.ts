@@ -38,9 +38,9 @@ describe("formatUptime", () => {
 describe("renderStatus", () => {
 	it("shows idle + no-session when there is no runner", () => {
 		const out = renderStatus({ runner: undefined, version: "1.2.3", uptimeMs: 0 });
-		expect(out).toContain("- Run state: idle");
-		expect(out).toContain("- Model: no session started for this channel yet");
-		expect(out).toContain("- Version: 1.2.3");
+		expect(out).toContain("**状态** · 空闲");
+		expect(out).toContain("- 模型：本频道尚未开始过会话");
+		expect(out).toContain("版本 `1.2.3`");
 	});
 
 	it("renders running state with model, thinking and context", () => {
@@ -55,10 +55,9 @@ describe("renderStatus", () => {
 			version: "1.0.0",
 			uptimeMs: 0,
 		});
-		expect(out).toContain("- Run state: running: do the thing");
-		expect(out).toContain("- Model: anthropic/claude-opus-4-8");
-		expect(out).toContain("- Thinking: high");
-		expect(out).toContain("- Context: 50k / 200k (25.0%)");
+		expect(out).toContain("**状态** · 运行中：do the thing");
+		expect(out).toContain("- 模型：`anthropic/claude-opus-4-8`（thinking `high`）");
+		expect(out).toContain("- 上下文：50k / 200k（25.0%）");
 	});
 
 	it("renders the fallback line when a backup model is active", () => {
@@ -69,7 +68,7 @@ describe("renderStatus", () => {
 			fallback: { primary: "primary/model", cooldownUntilMs: new Date(2026, 0, 1, 9, 5).getTime() },
 		};
 		const out = renderStatus({ runner: runnerWith(snapshot), version: "1", uptimeMs: 0 });
-		expect(out).toContain("- Fallback: active（primary primary/model 冷却至 09:05）");
+		expect(out).toContain("fallback 生效中（primary primary/model 冷却至 09:05）");
 	});
 
 	it("degrades gracefully when the snapshot throws", () => {
@@ -80,6 +79,6 @@ describe("renderStatus", () => {
 			version: "1",
 			uptimeMs: 0,
 		});
-		expect(out).toContain("- Model: unavailable (no session)");
+		expect(out).toContain("- 模型：不可用（no session）");
 	});
 });

@@ -205,6 +205,12 @@ function parseLogEntry(
 		return null;
 	}
 
+	// Command traffic (help/status/tasks/... echoes) is marked skipContextSync at write time
+	// (runtime/bootstrap.ts) so it never comes back as memory-extraction input.
+	if (value.skipContextSync === true) {
+		return null;
+	}
+
 	const isBot = value.isBot === true;
 	const text = getStringField(value, "text") ?? "";
 	const role = isBot ? "assistant" : "user";

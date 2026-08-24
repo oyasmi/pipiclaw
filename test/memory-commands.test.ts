@@ -16,7 +16,7 @@ describe("memory commands", () => {
 		const status = await handleMemoryCommand({ channelDir, args: "status" });
 		const list = await handleMemoryCommand({ channelDir, args: "list" });
 
-		expect(status).toContain("Active entries: `1`");
+		expect(status).toContain("生效条目：`1`");
 		expect(status).toContain(join(channelDir, "MEMORY.md"));
 		expect(list).toContain("`m-concise01` [preference] Prefer concise updates.");
 	});
@@ -54,10 +54,10 @@ describe("memory commands", () => {
 
 		expect(show).toContain("Production is in CN.");
 		expect(show).toContain('"status": "active"');
-		expect(recent).toContain("append 2 entries");
-		expect(recent).toContain("rewrite (dropped m-old01, m-old02)");
-		expect(recent).toContain("expire 1 entry");
-		expect(status).toContain("Last 7d: +2 written / -2 dropped / -1 expired");
+		expect(recent).toContain("新增 2 条");
+		expect(recent).toContain("重写（丢弃 m-old01, m-old02）");
+		expect(recent).toContain("过期 1 条");
+		expect(status).toContain("最近 7 天：+2 写入 / -2 丢弃 / -1 过期");
 	});
 
 	it("returns actionable guidance for invalid input", async () => {

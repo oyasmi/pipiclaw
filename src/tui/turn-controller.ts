@@ -7,7 +7,12 @@
  * unit-tested with fakes and a fake clock. `app.ts` builds the real ones.
  */
 
-import { formatUnknownCommandMessage, slashCommandName } from "../agent/commands.js";
+import {
+	formatBusyCommandList,
+	formatUnknownCommandMessage,
+	isSessionCommandName,
+	slashCommandName,
+} from "../agent/commands.js";
 import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
 import * as log from "../log.js";
@@ -32,7 +37,7 @@ export interface TurnControllerDeps {
 	channelId: string;
 	userName: string;
 	/** Info commands that do not depend on run state. */
-	renderHelp: () => string;
+	renderHelp: (args?: string) => string;
 	renderUsage: (args: string) => Promise<string>;
 	runEvents: (args: string) => Promise<string>;
 	runTasks: (args: string) => Promise<string>;
@@ -150,15 +155,27 @@ export class TurnController {
 			case "steer":
 				await this.applyText(outcome.text);
 				return;
-			case "run":
+			case "run": {
 				// Reject an unknown slash command rather than steering/running its raw
 				// text. Session commands, skills, and prompt templates pass through.
-				if (outcome.text.trim().startsWith("/") && !this.deps.runner.isKnownSlashCommand(outcome.text)) {
-					this.deps.frontend.showFinal(formatUnknownCommandMessage(slashCommandName(outcome.text) ?? ""));
+				const name = outcome.text.trim().startsWith("/") ? slashCommandName(outcome.text) : null;
+				if (name && !this.deps.runner.isKnownSlashCommand(outcome.text)) {
+					this.deps.frontend.showFinal(formatUnknownCommandMessage(name));
+					return;
+				}
+				// Session commands (`/model`, `/compact`, …) run inside the SDK command extension
+				// and need the idle session layer — mid-turn they must be rejected outright, not
+				// steered into the running turn as literal text (review 2026-08-24 §1.6; matches
+				// the DingTalk busy refusal in dingtalk.ts).
+				if (name && isSessionCommandName(name) && this.deps.runner.isBusy()) {
+					this.deps.frontend.showFinal(
+						`当前已有回合在运行。运行中可用：${formatBusyCommandList()}。会话命令（\`/model\`、\`/compact\`、\`/session\`）需要等空闲后再用。`,
+					);
 					return;
 				}
 				await this.applyText(outcome.text);
 				return;
+			}
 		}
 	}
 

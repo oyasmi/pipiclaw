@@ -337,7 +337,7 @@ describe("dingtalk", () => {
 			conversationType: "1",
 		});
 		expect(handler.handleStop).toHaveBeenCalledWith("dm_staff_1", bot);
-		expect(bot.sendPlain).toHaveBeenCalledWith("dm_staff_1", "已停止当前回合。");
+		expect(bot.sendPlain).toHaveBeenCalledWith("dm_staff_1", "已停止当前回合。", { title: "/stop", markdown: true });
 
 		await privateApi.onStreamMessage({
 			text: { content: "/steer focus src" },

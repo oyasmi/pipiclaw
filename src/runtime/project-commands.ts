@@ -1,3 +1,4 @@
+import { renderSubcommandUsage } from "../agent/commands.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import {
 	currentProjectSandboxStatus,
@@ -33,16 +34,11 @@ export interface HandleProjectCommandOptions {
 }
 
 function usage(): string {
-	return `# 项目作用域
-
-用法：
-
-- \`/project\` — 查看当前频道的项目目录与访问边界
-- \`/project set <absolute-path>\` — 切换项目目录（需频道空闲，且目录在允许的可选根内）
-- \`/project reset\` — 切回 app 默认项目目录`;
+	return renderSubcommandUsage("project");
 }
 
-function parseProjectCommand(args: string): ProjectCommand {
+/** Exported so `test/commands-subcommands.test.ts` can feed every broadcast example back through it. */
+export function parseProjectCommand(args: string): ProjectCommand {
 	const trimmed = args.trim();
 	if (!trimmed) return { action: "show" };
 	const parts = trimmed.split(/\s+/);
@@ -63,29 +59,28 @@ function formatShow(options: HandleProjectCommandOptions): string {
 	const sandbox = currentProjectSandboxStatus();
 	const selection = readProjectSelection(options.channelDir);
 
-	const lines = ["# 项目作用域", ""];
+	const lines = ["**项目作用域**"];
 	if (!selection) {
-		lines.push(`项目目录：\`${resolution.policy.defaultRoot}\`（尚未选择过，将在下次准入时采用 app 默认值）`);
+		lines.push(`- 项目目录：\`${resolution.policy.defaultRoot}\`（尚未选择过，将在下次准入时采用 app 默认值）`);
 	} else {
-		lines.push(`项目目录：\`${selection.projectRoot}\`（${selection.updatedBy}，更新于 ${selection.updatedAt}）`);
+		lines.push(`- 项目目录：\`${selection.projectRoot}\`（${selection.updatedBy}，更新于 ${selection.updatedAt}）`);
 	}
 	lines.push(
-		`边界：${resolution.configured ? "project（文件工具被约束在此目录内）" : "unbounded（沿用旧的全局文件权限）"}`,
+		`- 边界：${resolution.configured ? "project（文件工具被约束在此目录内）" : "unbounded（沿用旧的全局文件权限）"}`,
 	);
-	lines.push(`Enforcement：${sandbox.level}（${sandbox.summary}）`);
+	lines.push(`- Enforcement：${sandbox.level}（${sandbox.summary}）`);
 
 	if (!resolution.configured) {
 		lines.push(
-			"",
-			`未配置 projectAccess：\`/project set\` 不可用。在 \`security.json\` 写入 projectAccess 段后即可使用。`,
+			`- 未配置 projectAccess：\`/project set\` 不可用。在 \`security.json\` 写入 projectAccess 段后即可使用。`,
 		);
 	} else if (!resolution.mutable) {
-		lines.push("", "projectAccess.defaultRoot 配置有误，项目切换已被禁用，见启动诊断。");
+		lines.push("- projectAccess.defaultRoot 配置有误，项目切换已被禁用，见启动诊断。");
 	} else {
-		lines.push("", `可选根：${resolution.policy.allowedRoots.map((root) => `\`${root}\``).join("、")}`);
+		lines.push(`- 可选根：${resolution.policy.allowedRoots.map((root) => `\`${root}\``).join("、")}`);
 	}
 	for (const diagnostic of resolution.diagnostics) {
-		lines.push(`⚠ ${diagnostic.message}`);
+		lines.push(`- ⚠ ${diagnostic.message}`);
 	}
 	return lines.join("\n");
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { runAuth } from "./models/auth-cli.js";
-import { isBootstrapExitError } from "./runtime/app-home.js";
+import { formatCliCommandsHelp, isBootstrapExitError } from "./runtime/app-home.js";
 import { bootstrap } from "./runtime/bootstrap.js";
 import { runTui } from "./tui/cli.js";
 
@@ -32,9 +32,7 @@ if (command === "tui") {
 	bootstrap(process.argv).catch(handleError);
 } else {
 	console.error(`Unknown command: ${command}`);
-	console.error("Usage: pipiclaw [run] [options]         Run the DingTalk daemon (default)");
-	console.error("       pipiclaw tui [options] [prompt]   Chat with the agent in the terminal");
-	console.error("       pipiclaw auth status|login|logout Manage provider credentials");
+	for (const line of formatCliCommandsHelp("pipiclaw")) console.error(line);
 	console.error("Run `pipiclaw --help` for options.");
 	process.exit(1);
 }
