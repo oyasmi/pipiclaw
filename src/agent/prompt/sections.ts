@@ -68,6 +68,7 @@ export const EXECUTION_SECTION: PromptSectionDefinition = {
 			"## Working Contract",
 			"- For actionable requests, continue until the requested outcome exists or you are genuinely blocked. Inspect before changing and verify material results.",
 			"- State what remains unverified. Tool definitions are the source of truth for available capabilities and parameters.",
+			"- Background jobs and delegations wake this channel when they finish: end the turn instead of polling, scheduling a check-in, or looping to wait.",
 			"- Before non-trivial use of a Pipiclaw mechanism or workspace procedure, read the matching runtime guide or skill.",
 		].join("\n"),
 };

@@ -266,6 +266,29 @@ function isAgentWorkspaceSkillsRead(path: string, operation: "read" | "write", c
 	return startsWithPathPrefix(path, normalize(join(ctx.agentWorkspaceDir, "skills")));
 }
 
+/**
+ * Runtime-owned exception for the channel's own directory, in the same spirit as `skills/`: spec
+ * 043's D5 puts `SESSION.md`, channel `MEMORY.md`, `HISTORY.md` and `tasks/` in the AgentWorkspace
+ * precisely so a channel keeps its continuity across project switches — but D6.2's project bound
+ * then put them outside every allowed root, so a task wake could tell the model to open
+ * `tasks/<id>.md` and the guard would refuse.
+ *
+ * Reads are allowed throughout. Writes are allowed only under `tasks/`: the three memory files are
+ * runtime-maintained and go through `memory_manage` (a file write there races the maintenance
+ * queue), while a task's body is model-authored prose that `task_manage` cannot rewrite — `set`
+ * replaces frontmatter and keeps the body verbatim, so revising a task contract needs `edit`.
+ */
+function isChannelDirAccess(path: string, operation: "read" | "write", ctx: PathGuardContext): boolean {
+	if (!ctx.channelDir) {
+		return false;
+	}
+	const channelDir = normalize(ctx.channelDir);
+	if (!startsWithPathPrefix(path, channelDir)) {
+		return false;
+	}
+	return operation === "read" || startsWithPathPrefix(path, normalize(join(channelDir, "tasks")));
+}
+
 function isDeniedSystemPath(path: string): boolean {
 	if (isWithinTemp(path)) {
 		return false;
@@ -324,6 +347,7 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		agentWorkspaceDir: resolveRootForGuard(ctx.agentWorkspaceDir, ctx),
 		homeDir: resolveRootForGuard(homeDir, ctx),
 		projectRoot: ctx.projectRoot ? resolveRootForGuard(ctx.projectRoot, ctx) : ctx.projectRoot,
+		channelDir: ctx.channelDir ? resolveRootForGuard(ctx.channelDir, ctx) : ctx.channelDir,
 	};
 	const resolvedTarget = resolveTargetPath(rawPath, ctx);
 	const guardedPath = resolveForGuard(resolvedTarget, ctx);
@@ -396,7 +420,8 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 	if (
 		pathAllowedByDefaults(guardedPath, effectiveCtx) ||
 		isBundledPlaybookRead(guardedPath, operation) ||
-		isAgentWorkspaceSkillsRead(guardedPath, operation, effectiveCtx)
+		isAgentWorkspaceSkillsRead(guardedPath, operation, effectiveCtx) ||
+		isChannelDirAccess(guardedPath, operation, effectiveCtx)
 	) {
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };
 	}
@@ -411,11 +436,18 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 		);
 	}
 
+	// The reason names the roots that are actually in effect. Under `boundary: "project"` the
+	// generic wording ("outside workspace, home, and temp") is worse than unhelpful: workspace and
+	// home are themselves out of bounds there, so a model taking it at face value retries against a
+	// path that can never be allowed.
+	const verb = operation === "read" ? "Reading" : "Writing";
 	return formatBlockedResult(
 		operation,
 		rawPath,
 		guardedPath,
 		"outside-allowed-roots",
-		`${operation === "read" ? "Reading" : "Writing"} outside workspace, home, and temp paths is not allowed`,
+		effectiveCtx.boundary === "project"
+			? `${verb} outside the current project root (${effectiveCtx.projectRoot ?? "unset"}) is not allowed`
+			: `${verb} outside workspace, home, and temp paths is not allowed`,
 	);
 }

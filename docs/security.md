@@ -91,6 +91,18 @@ $PIPICLAW_HOME/security.json
 - 密钥、凭据、认证配置、浏览器资料、keychain 等敏感位置
 - 高风险系统目录和系统敏感文件
 
+`security.json` 里配置了 `projectAccess` 之后，上面这份默认允许清单会被**收窄成当前项目目录**：文件工具的相对路径以项目目录为准，workspace、主目录和临时目录都在界外，`readAllow` / `writeAllow` 只能在项目目录内部再收窄，不能反过来放宽。人可以用 `/project` 查看或切换当前项目目录。
+
+项目边界之外只保留三个运行时例外。它们由 runtime 授予，不需要也不能通过 `readAllow` 配置；`readDeny` / `writeDeny` 和上面的敏感路径拒绝仍然优先于它们：
+
+| 位置 | 读 | 写 | 为什么 |
+|---|---|---|---|
+| 内置 playbook 目录 | 允许 | 拒绝 | agent 要能读自己这一版的运行机制，与装在哪儿无关 |
+| workspace `skills/` | 允许 | 拒绝 | 选了哪个项目都要能加载 skill；写入走 `skill_manage` |
+| 当前 channel 目录 | 允许 | 仅 `tasks/` | 频道的记忆与任务台账不随项目切换失联；`SESSION.md` / `MEMORY.md` / `HISTORY.md` 由后台维护队列持有，写入走 `memory_manage`，而任务正文是 agent 自己写的契约，需要 `edit` 修订 |
+
+这个例外按**当前频道**授予：一个频道读不到另一个频道的目录。子智能体不带这个例外——它通过注入的上下文块拿频道状态，而不是去读频道文件。
+
 ### 3. 默认拒绝的典型敏感位置
 
 包括但不限于：

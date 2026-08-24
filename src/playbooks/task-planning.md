@@ -1,19 +1,19 @@
 ---
 name: task-planning
-description: 创建或重构长程任务（task）、选择 task 与事件（event），或设定周期节奏（schedule）。
+description: 判断该建长程任务（task）还是事件（event）、写任务契约，或设定周期节奏（schedule）。
 requires-tools: task_manage
-order: 40
+order: 70
 ---
 
 # 长程任务（task）规划与建档
 
 ## 什么时候创建 task
 
-只有工作需要跨回合恢复时才建：多步骤目标、等待人或外部系统、委派工作、周期性产出。当前回合能完成的简单请求不要建台账；纯提醒或外部条件探测用 event。
+只有工作需要跨回合恢复时才建：多步骤目标、等待人或外部系统、委派工作、周期性产出。当前回合能完成的请求不建台账；纯提醒或外部条件探测用 event（见 `event-scheduling.md`）；只在当前回合委派 subagent 或外部 Agent 也不需要建 task，通用委派纪律见 `agent-delegation.md`。
 
-## 拆分与委派
+## 拆分
 
-只把可独立推进、可独立验收的长期工作拆成多个 task。任务之间没有依赖字段；先后条件写进后继任务的 Goal/Manual，或用 wake 错开。仅在当前回合委派 subagent 或外部 Agent 不需要建 task；通用委派纪律见 `agent-delegation.md`。
+只把可独立推进、可独立验收的长期工作拆成多个 task。**任务之间没有依赖字段**：先后条件写进后继任务的 Goal/Manual，或者用 wake 错开。
 
 ## 创建内容
 
@@ -26,19 +26,19 @@ order: 40
 - `manual`：可复用的执行步骤、预检、幂等方法和返工教训。
 - `verificationPlan`：独立验收者能执行的确定性检查。
 
-Task 创建即持续委托；是否触达外部系统由可用工具、security 配置、任务 Goal 和幂等检查共同约束。不存在按动作逐次授权字段。
-
 有代码、配置或可复现产物时，显式设置 `control.verificationRequired: true`；纯提醒、沟通和主观写作通常保持默认 false。
+
+Goal / DoD / Manual / Verification 描述**最终结果和检查方法**，不写成行动记录，也不把"查不到状态"写成已完成。
+
+Task 创建即持续委托：能触达什么由可用工具、security 配置和任务 Goal 共同约束，没有按动作逐次授权的字段。所以 Goal 的边界就是授权的边界，宁可写窄。
 
 ## Control 决策
 
-- `deadline`：硬期限，表达真实用户意图；不用 `wake` 冒充 deadline。
-- `nextAction`：下一条可执行动作，避免抽象愿望；也是等待时记录"等什么、条件、下一步"的地方——不再有单独的 blockedReason 字段。
-- `waitingFor`：记录性展示，说明恢复源大致是 time、user、job 还是 external-signal；driver 是否恢复只看真实的 wake 或 run/job 记录，`waitingFor` 本身不影响恢复。
-- `wake`：最早回访时间；future wake 会使任务规范为 waiting。
-- `schedule`：五字段 cron；存在即 recurring。
-
-Goal/DoD/Manual/Verification 描述最终结果和检查方法，不把“查不到状态”写成已完成。外部动作必须先查询真实状态，携带稳定 request/message id，成功后把结果写入 Current Cycle 或 completion evidence。
+- `deadline`：硬期限，表达真实用户意图。不用 `wake` 冒充 deadline。
+- `nextAction`：下一条可执行动作，避免抽象愿望；等待时"等什么、条件、下一步"也写在这里，没有单独的 blockedReason 字段。
+- `waitingFor`：等待来源的记录性展示（`time` / `user` / `job` / `external-signal`）。它不决定任务能否恢复，语义见 `task-driving.md`。
+- `wake`：最早回访时间。带 future wake 的任务应当是 `waiting`；`active` 配 future wake 是非法组合，会被任务体检报出来。
+- `schedule`：五字段 cron，存在即 recurring，最小间隔 30 分钟。
 
 ## Plan：手段层
 
@@ -47,12 +47,12 @@ Goal/DoD/Manual/Verification 描述最终结果和检查方法，不把“查不
 ## 三态与周期
 
 - `active`：当前有具体工作可推进。
-- `waiting`：等待真实条件；有 wake 是定时回访，无 wake 是 signal parked，driver 不轮询。
-- `sleeping`：recurring occurrence 已闭环，等待 schedule 的下一次 wake。
+- `waiting`：等待真实条件，两种形态见 `task-driving.md`。
+- `sleeping`：recurring occurrence 已闭环，等 schedule 的下一次 wake。一次性任务不能 sleeping，闭环后归档。
 - `enabled: false`：正交停用，保留 status、wake、schedule；恢复只改回 true。
 
-recurring create 始终写 `sleeping + enabled: true + next wake`，创建不派发首轮。首轮和续轮都由 runtime 的 cycle-open 操作初始化 Current Cycle；首轮不把占位内容写进 History。一次性任务不能 sleeping，闭环后归档。
+带 `schedule` 创建时，runtime 强制写成 `sleeping + enabled: true + 下一次 wake`，**创建本身不派发首轮**。首轮和续轮都由 runtime 的 cycle-open 操作初始化 Current Cycle。
 
 ## 建档后自检
 
-创建后读取落盘文件，确认 Goal、DoD、Manual、Verification、status、enabled、wake 和 control 与真实意图一致。后续推进、等待、验收和闭环都按 `task-driving.md`。
+创建后读取落盘文件，确认 Goal、DoD、Manual、Verification、status、enabled、wake 和 control 与真实意图一致；正文要改用 `edit`，`task_manage set` 只动 frontmatter。后续推进、等待、验收和闭环都按 `task-driving.md`。

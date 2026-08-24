@@ -243,6 +243,9 @@ describe("tools index", () => {
 				agentWorkspaceDir: "/repo",
 				projectRoot: process.cwd(),
 				boundary: "unbounded",
+				// Channel-bound leaf tools carry the channel directory so its files stay reachable
+				// under `boundary: "project"` (spec 043, D5).
+				channelDir: "/repo/dm_42",
 			},
 			channelId: "dm_42",
 		});
@@ -252,6 +255,9 @@ describe("tools index", () => {
 				agentWorkspaceDir: "/repo",
 				projectRoot: process.cwd(),
 				boundary: "unbounded",
+				// Channel-bound leaf tools carry the channel directory so its files stay reachable
+				// under `boundary: "project"` (spec 043, D5).
+				channelDir: "/repo/dm_42",
 			},
 			channelId: "dm_42",
 			rtkEnabled: false,

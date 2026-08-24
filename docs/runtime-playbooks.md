@@ -27,9 +27,9 @@ Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开�
 ```yaml
 ---
 name: task-driving
-description: 被 TASK_DRIVER 唤醒推进任务、留检查点，或任务停滞、被治理器暂停、元数据损坏时。
+description: 被 TASK_DRIVER 唤醒推进任务，或处理任务等待、验收（verify）、闭环、停滞、停用及元数据损坏时。
 requires-tools: task_manage
-order: 41
+order: 80
 ---
 ```
 
@@ -40,7 +40,7 @@ runtime 从 metadata 自动生成系统提示中的目录。四个字段各有�
 | `name` | 必须等于文件名（去掉 `.md`），加载时校验 |
 | `description` | **唯一进入系统提示的正文之外的内容**，上限 100 字符，超出会被截断 |
 | `requires-tools` | any-of 门控：列出的工具**一个都没注册**时，该 playbook 不出现在目录里 |
-| `order` | 目录排序，必须是唯一的非负整数，按数值升序 |
+| `order` | 目录排序，必须是唯一的非负整数，按数值升序；按 10 的倍数分配，好在两份之间插新的 |
 
 description 同时说明内容和触发场景；完整正文留在包内，只有匹配当前任务时才通过 read 加载。这与 workspace skill 的"metadata 触发、正文按需加载"原则一致。
 
@@ -52,18 +52,20 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 
 按 `order` 排序，即目录在系统提示中呈现的顺序。此表由 `test/playbooks.test.ts` 与 `src/playbooks/` 的实际 frontmatter 对账，新增或删除 playbook 时测试会失败，提醒同步这里。
 
-| Playbook | 门控工具 | 读取场景 |
-|---|---|---|
-| `runtime-orientation.md` | 恒在 | 判断知识归属、理解 workspace/channel 文件和读取顺序 |
-| `memory-and-learning.md` | `memory_manage` / `skill_manage` | 记住与忘记、选择记忆层、维护 ENVIRONMENT、沉淀 workspace skill |
-| `outbound-media.md` | `send_media` | 把报表、截图、导出文件作为附件交付给用户 |
-| `event-scheduling.md` | `event_manage` | 提醒、one-shot、periodic、preAction 传感器、跨回合回访 |
-| `background-jobs.md` | `job` | `bash async` 启停、poll 纪律、并发上限、跨回合等待 |
-| `agent-delegation.md` | 恒在 | 内部 subagent 与外部 AI Agent 的任务指令、并行隔离、等待、纠偏和验收 |
-| `task-planning.md` | `task_manage` | 是否建 task、Goal/DoD/Manual/Verification、control 与预算、周期 `schedule` |
-| `task-driving.md` | `task_manage` | driver 恢复、checkpoint、等待、验收、闭环、治理器停用及坏 frontmatter 修复 |
+| Playbook | order | 门控工具 | 读取场景 |
+|---|---|---|---|
+| `runtime-orientation.md` | 10 | 恒在 | 判断知识归属、理解每回合注入了什么、workspace/channel 文件的位置与入口 |
+| `memory-and-learning.md` | 20 | `memory_manage` / `skill_manage` | 记住与忘记、选择记忆层、试用期、维护 ENVIRONMENT、沉淀 workspace skill |
+| `outbound-media.md` | 30 | `send_media` | 把报表、截图、导出文件作为附件交付给用户，以及 receipt 的证据边界 |
+| `event-scheduling.md` | 40 | `event_manage` | 提醒、one-shot、periodic、preAction 传感器、跨回合回访 |
+| `background-jobs.md` | 50 | `job` | 长跑命令的启停、poll 纪律、并发上限、跨回合等待 |
+| `agent-delegation.md` | 60 | 恒在 | 选执行者（含 inline）、任务契约、并行隔离、等待、纠偏和验收强度 |
+| `task-planning.md` | 70 | `task_manage` | 是否建 task、Goal/DoD/Manual/Verification、control、周期 `schedule` |
+| `task-driving.md` | 80 | `task_manage` | driver 恢复、checkpoint、等待、验收、闭环、治理器停用及坏元数据修复 |
 
 任务机制只占两份：`task-planning.md` 负责是否建档和任务契约，`task-driving.md` 负责建档后的推进、等待、验收、闭环与修复。Agent 委派不是 task 专属机制，因此独立为通用 playbook：当前回合的临时委派无需创建 task，需要跨回合恢复时才由 task 记录状态。
+
+`runtime-orientation.md` 和 `agent-delegation.md` 不设 `requires-tools`：前者描述的分层与文件位置在任何工具组合下都成立，后者的委派能力也可能来自用户提供的 skill，门控掉反而会让它在最需要的实例上消失。
 
 ## Playbook 编写原则
 
@@ -71,10 +73,12 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 2. **一个决策时刻一份文件**：宁可一份稍长，也不要让模型为了完成一件事读两份。反过来，两个不会同时发生的场景不要塞进一份。
 3. **默认模型已有通用能力**：只写 Pipiclaw 特有、容易出错或跨工具的知识。
 4. **按脆弱程度决定自由度**：hash/verification/幂等 request id 等窄桥给精确顺序；开放的规划问题给判断条件。
-5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。契约 hash 绑定语义只在 `task-driving.md` 定义即是一例。
-6. **错误可恢复**：解释门禁为什么拒绝，并给可以执行的下一步。
-7. **控制长度**：正文以 80 行为软上限，多数应在 50 行以内。超出通常意味着混进了两个决策时刻，或抄了工具 schema 已有的内容——先检查这两条，再考虑是否真的需要更长。`task-planning.md` 与 `task-driving.md` 是刻意最长的两份：前者覆盖建档与周期，后者集中建档后的推进、等待、验收、闭环与修复。
-8. **与代码共同验证**：metadata/catalog、prompt 不加载正文、path guard、本文目录表与实际文件的对账都有测试；构建产物（`dist/playbooks/` 只含 `.md`）按 build 脚本保证，发版前人工核对。
+5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。已经定好归属的几条：等待/停泊语义与幂等闭环在 `task-driving.md`，委派与验收强度在 `agent-delegation.md`，文件位置与访问入口在 `runtime-orientation.md`，"异步结束会自动唤醒你"这条跨机制纪律在 system prompt。别处只留一句路由。
+6. **错误可恢复**：解释门禁为什么拒绝，并给可以执行的下一步；引用真实报错时按原文抄，模型才能把 playbook 和它看到的报错对上。
+7. **写清谁是施动者**：playbook 是写给模型的。斜杠命令由 transport 拦截、不经过模型，凡是要人去敲的一律写成"用户命令：`/tasks resume <id>`"，不要混进模型的动作序列。
+8. **展示的数据形状必须能落盘**：代码块里的 frontmatter、JSON、control 片段会被当成可以照抄的样本。写之前对着序列化代码核一遍字段名、嵌套层级和必填项——一个少了必填字段的示例，会直接教出一份需要修复的坏文件。
+9. **控制长度**：正文（不含空行）以 60 行为软上限，多数应在 40 行以内。超出通常意味着混进了两个决策时刻，或抄了工具 schema 已有的内容——先检查这两条，再考虑是否真的需要更长。`task-driving.md` 与 `agent-delegation.md` 是刻意最长的两份：前者集中建档后的推进、等待、验收、闭环与修复，后者覆盖委派的完整生命周期。
+10. **与代码共同验证**：metadata/catalog、prompt 不加载正文、path guard、本文目录表与实际文件的对账都有测试；构建产物（`dist/playbooks/` 只含 `.md`）按 build 脚本保证，发版前人工核对。数值上限、字段名和报错文案要回到代码里核对，不要沿用上一版的记忆。
 
 ## 第三方工具边界
 

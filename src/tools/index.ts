@@ -50,6 +50,10 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		agentWorkspaceDir: options.workspaceDir,
 		projectRoot: options.projectScope.projectRoot,
 		boundary: options.projectScope.boundary,
+		// The main agent is channel-bound, so its own SESSION/MEMORY/HISTORY/tasks stay reachable
+		// even when `boundary: "project"` puts the rest of the workspace out of bounds — a task wake
+		// names `tasks/<id>.md` and expects the model to be able to open it (spec 043, D5).
+		channelDir: options.channelDir,
 	};
 	// The leaf tools (files, web, memory, skills) come from the single declarative
 	// registry so this set, the sub-agent set, and the prompt hints share one source.

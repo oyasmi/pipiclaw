@@ -37,11 +37,13 @@ export interface VerificationAttestation {
 	 */
 	subjectDir?: string;
 	/**
-	 * `enforced` — a built-in verifier, whose write/edit tools are structurally removed before it
-	 * runs (a real gate). `advisory` — an external verifier (spec 040, D9): the tools cannot be
-	 * removed, so the verdict rests on the target CLI's own sandbox flag plus the workspace hash,
-	 * neither of which pipiclaw can prove. Defaults to `enforced` for attestations written before
-	 * this field existed — every verifier was built-in then.
+	 * `enforced` — a built-in verifier that could not write at all: write/edit are structurally
+	 * removed before it runs, and its role declared no `bash` either (a real gate). `advisory` —
+	 * every other shape: an external verifier (spec 040, D9), whose tools cannot be removed so the
+	 * verdict rests on the target CLI's own sandbox flag plus the workspace hash, and a built-in
+	 * verifier that kept `bash`, which can write files just as well as `write` can. Defaults to
+	 * `enforced` for attestations written before this field existed — every verifier was built-in
+	 * and this distinction did not exist then.
 	 */
 	verificationStrength: "enforced" | "advisory";
 }

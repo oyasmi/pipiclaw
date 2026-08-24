@@ -496,6 +496,9 @@ function buildSubagentTools(
 			executor,
 			securityConfig,
 			securityContext: {
+				// No `channelDir`: a sub-agent receives channel state through its injected context
+				// blocks, not by reading the channel's own files, so it does not inherit the parent's
+				// channel-directory exception (see security/types.ts).
 				agentWorkspaceDir: options.workspaceDir,
 				projectRoot: runContext.workingDirectory,
 				boundary: options.projectBoundary,
@@ -1231,8 +1234,8 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 					runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
 				// Spec 042 D1: the pass/fail judgment rule is shared with the external verify path
 				// (`resolveVerificationOutcome`) so there is exactly one place deciding what a verify
-				// run's own output does and does not prove. Only the attestation write (and its
-				// "enforced" strength) stays here, since only the internal path structurally removes
+				// run's own output does and does not prove. Only the attestation write and the
+				// strength label stay here, since only the internal path can structurally remove
 				// write/edit from the verifier's tool set.
 				const verification =
 					runContext.purpose === "verify"
@@ -1246,6 +1249,15 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 							})
 						: undefined;
 				const verificationVerdict = verification?.verdict;
+				// Internal verify always keeps write/edit structurally removed from the verifier's
+				// tool set (buildSubagentTools above), but `bash` stays available by default and can
+				// write files just as well — labeling that "enforced" would be dishonest (review
+				// 2026-08-23 §2.2). Only a role that dropped `bash` from its declared tool list earns
+				// the stronger label. Computed once so the attestation and the run record — the
+				// latter is what the completion wake and `subagent_manage` display — cannot disagree.
+				const internalVerificationStrength = config.tools.includes("bash")
+					? ("advisory" as const)
+					: ("enforced" as const);
 				if (runContext.purpose === "verify" && runContext.taskId && verification) {
 					await writeVerificationAttestation(options.channelDir, {
 						runId: runContext.runId,
@@ -1256,12 +1268,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 						workspaceChanged: verification.workspaceChanged,
 						subjectHash: verification.workspaceChanged ? undefined : verifierSubjectAfter,
 						subjectDir: runContext.workingDirectory,
-						// Internal verify always keeps write/edit structurally removed from the
-						// verifier's tool set (buildSubagentTools above), but `bash` stays available by
-						// default and can write files just as well — labeling that "enforced" would be
-						// dishonest (review 2026-08-23 §2.2). Only a role that dropped `bash` from its
-						// declared tool list earns the stronger label.
-						verificationStrength: config.tools.includes("bash") ? "advisory" : "enforced",
+						verificationStrength: internalVerificationStrength,
 					});
 				}
 
@@ -1277,7 +1284,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 					toolCalls,
 					durationMs,
 					verificationVerdict,
-					verificationStrength: runContext.purpose === "verify" ? ("enforced" as const) : undefined,
+					verificationStrength: runContext.purpose === "verify" ? internalVerificationStrength : undefined,
 				};
 
 				if (effectiveFailureReason) {

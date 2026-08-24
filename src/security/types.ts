@@ -47,6 +47,15 @@ export interface SecurityRuntimeContext {
 	 * defaults — `agentWorkspaceDir` + temp + `homeDir`.
 	 */
 	boundary?: "project" | "unbounded";
+	/**
+	 * The channel's own directory (`<agentWorkspaceDir>/<channelId>`), when the caller is bound to
+	 * one. It lives under `agentWorkspaceDir`, so it only matters under `boundary: "project"`,
+	 * where it carries the channel's continuity across project switches (spec 043, D5) and would
+	 * otherwise fall outside every allowed root. Omit it for callers that are not channel-bound —
+	 * a sub-agent, for one, gets channel state through its injected context blocks, not by reading
+	 * the channel's files.
+	 */
+	channelDir?: string;
 	homeDir?: string;
 }
 
