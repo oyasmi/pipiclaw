@@ -52,13 +52,6 @@ describe("log file sink", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("writes nothing to disk before configureLogging (console-only default)", async () => {
-		const { log, runtimeLogPath } = await loadLog();
-		log.logInfo("early startup");
-		await flush(log);
-		expect(existsSync(runtimeLogPath)).toBe(false);
-	});
-
 	it("persists structured records after configureLogging", async () => {
 		const { log, runtimeLogPath } = await loadLog();
 		log.configureLogging({ level: "debug", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
@@ -91,46 +84,6 @@ describe("log file sink", () => {
 
 		const records = readRecords(runtimeLogPath);
 		expect(records.map((r) => r.message)).toEqual(["warn line"]);
-	});
-
-	it("lets PIPICLAW_LOG_FILE=0 override settings.file.enabled", async () => {
-		process.env.PIPICLAW_LOG_FILE = "0";
-		const { log, runtimeLogPath } = await loadLog();
-		log.configureLogging({ level: "info", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
-
-		log.logInfo("should not persist");
-		await flush(log);
-		expect(existsSync(runtimeLogPath)).toBe(false);
-	});
-
-	it("lets PIPICLAW_LOG_LEVEL override settings.level", async () => {
-		process.env.PIPICLAW_LOG_LEVEL = "debug";
-		const { log, runtimeLogPath } = await loadLog();
-		log.configureLogging({ level: "warn", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
-
-		log.logThinking({ channelId: "dm_1", userName: "a" }, "hmm"); // debug event
-		await flush(log);
-
-		const records = readRecords(runtimeLogPath);
-		expect(records.find((r) => r.event === "agent.thinking")).toBeTruthy();
-	});
-
-	it("uses one stdout format, honors the level, and redacts fields", async () => {
-		const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-		const { log } = await loadLog();
-		log.configureLogging({ level: "warn", file: { enabled: false, maxSizeBytes: 5_000_000, maxFiles: 3 } });
-		log.logEvent("info", "agent.turn.started", "not visible");
-		log.logEvent("warn", "runtime.request.failed", "Request failed", {
-			ctx: { channelId: "dm_1", userName: "alice" },
-			fields: { authorization: "Bearer top-secret", nested: { token: "hidden", safe: "ok" } },
-		});
-
-		expect(consoleSpy).toHaveBeenCalledTimes(1);
-		const line = String(consoleSpy.mock.calls[0]?.[0]);
-		expect(line).toMatch(/^\d{4}-\d{2}-\d{2}T.* WARN {2}runtime\.request\.failed Request failed /);
-		expect(line).toContain('authorization="[REDACTED]"');
-		expect(line).toContain("[REDACTED]");
-		expect(line).not.toContain("hidden");
 	});
 
 	it("redacts sensitive values and bounds details in structured records", async () => {

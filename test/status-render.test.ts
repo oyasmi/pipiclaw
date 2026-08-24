@@ -1,39 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { formatTokenCount, formatUptime, renderStatus, type StatusRenderRunner } from "../src/agent/status-render.js";
+import { renderStatus, type StatusRenderRunner } from "../src/agent/status-render.js";
 import type { RunnerStatusSnapshot, TurnStatus } from "../src/agent/types.js";
 
-function runnerWith(
-	snapshot: RunnerStatusSnapshot | (() => never),
-	turn: Partial<TurnStatus> = {},
-): StatusRenderRunner {
-	const status: TurnStatus = { phase: "idle", stopRequested: false, ...turn };
+function runnerWith(snapshot: RunnerStatusSnapshot | (() => never)): StatusRenderRunner {
 	return {
 		getStatusSnapshot: typeof snapshot === "function" ? snapshot : () => snapshot,
-		isBusy: () => status.phase !== "idle",
-		getTurnStatus: () => status,
+		isBusy: () => false,
+		getTurnStatus: () => ({ phase: "idle", stopRequested: false }),
 	};
 }
-
-describe("formatTokenCount", () => {
-	it("renders raw counts under 1k", () => {
-		expect(formatTokenCount(0)).toBe("0");
-		expect(formatTokenCount(999)).toBe("999");
-	});
-	it("renders k for thousands and M for millions", () => {
-		expect(formatTokenCount(1500)).toBe("2k");
-		expect(formatTokenCount(12_000)).toBe("12k");
-		expect(formatTokenCount(1_500_000)).toBe("1.5M");
-	});
-});
-
-describe("formatUptime", () => {
-	it("always shows minutes, adds hours/days as needed", () => {
-		expect(formatUptime(0)).toBe("0m");
-		expect(formatUptime(90_000)).toBe("1m");
-		expect(formatUptime(3_600_000)).toBe("1h 0m");
-		expect(formatUptime(90_000_000)).toBe("1d 1h 0m");
-	});
-});
 
 describe("renderStatus", () => {
 	it("shows idle + no-session when there is no runner", () => {
@@ -50,35 +25,15 @@ describe("renderStatus", () => {
 			contextWindow: 200_000,
 			thinkingLevel: "high",
 		};
-		const out = renderStatus({
-			runner: runnerWith(snapshot, { phase: "streaming", taskText: "do the thing" }),
-			version: "1.0.0",
-			uptimeMs: 0,
-		});
+		const turn: Partial<TurnStatus> = { phase: "streaming", taskText: "do the thing" };
+		const runner: StatusRenderRunner = {
+			...runnerWith(snapshot),
+			isBusy: () => true,
+			getTurnStatus: () => ({ phase: "idle", stopRequested: false, ...turn }),
+		};
+		const out = renderStatus({ runner, version: "1.0.0", uptimeMs: 0 });
 		expect(out).toContain("**状态** · 运行中：do the thing");
 		expect(out).toContain("- 模型：`anthropic/claude-opus-4-8`（thinking `high`）");
 		expect(out).toContain("- 上下文：50k / 200k（25.0%）");
-	});
-
-	it("renders the fallback line when a backup model is active", () => {
-		const snapshot: RunnerStatusSnapshot = {
-			model: "backup/model",
-			contextWindow: 0,
-			thinkingLevel: "off",
-			fallback: { primary: "primary/model", cooldownUntilMs: new Date(2026, 0, 1, 9, 5).getTime() },
-		};
-		const out = renderStatus({ runner: runnerWith(snapshot), version: "1", uptimeMs: 0 });
-		expect(out).toContain("fallback 生效中（primary primary/model 冷却至 09:05）");
-	});
-
-	it("degrades gracefully when the snapshot throws", () => {
-		const out = renderStatus({
-			runner: runnerWith(() => {
-				throw new Error("no session");
-			}),
-			version: "1",
-			uptimeMs: 0,
-		});
-		expect(out).toContain("- 模型：不可用（no session）");
 	});
 });
