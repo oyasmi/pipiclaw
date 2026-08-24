@@ -45,30 +45,28 @@ const externalRole: SubAgentConfig = {
 };
 
 describe("resolveSubAgentConfig invocation-side matrix (spec 042, D3)", () => {
-	it("rejects a tools override on an external role instead of silently ignoring it", () => {
-		const result = resolveSubAgentConfig([model], model, [externalRole], {
+	it("rejects tools and model overrides on an external role instead of silently ignoring them", () => {
+		const tools = resolveSubAgentConfig([model], model, [externalRole], {
 			agent: "reviewer",
 			tools: ["read", "bash"],
 		});
-		expect(result.config).toBeUndefined();
-		expect(result.error).toContain("tools");
-		expect(result.error).toContain("external");
-	});
+		expect(tools.config).toBeUndefined();
+		expect(tools.error).toContain("tools");
+		expect(tools.error).toContain("external");
 
-	it("rejects a model override on an external role without resolving it against models.json", () => {
 		// Empty availableModels: if this ever fell through to resolution, "totally-bogus-model"
 		// would fail with "not found among available models" — asserting the error does NOT say
 		// that distinguishes "rejected because external" from "rejected because resolution failed".
-		const result = resolveSubAgentConfig([], model, [externalRole], {
+		const mdl = resolveSubAgentConfig([], model, [externalRole], {
 			agent: "reviewer",
 			model: "totally-bogus-model",
 		});
-		expect(result.config).toBeUndefined();
-		expect(result.error).toContain("model");
-		expect(result.error).not.toContain("not found among available models");
+		expect(mdl.config).toBeUndefined();
+		expect(mdl.error).toContain("model");
+		expect(mdl.error).not.toContain("not found among available models");
 	});
 
-	it("still resolves an internal role's model override normally", () => {
+	it("resolves an internal role's model override normally, and an external role with no overrides cleanly", () => {
 		const internalRole: SubAgentConfig = {
 			...externalRole,
 			runtime: "internal",
@@ -82,12 +80,10 @@ describe("resolveSubAgentConfig invocation-side matrix (spec 042, D3)", () => {
 		});
 		expect(result.error).toBeUndefined();
 		expect(result.config).toBeDefined();
-	});
 
-	it("an unset tools/model override on an external role resolves without error", () => {
-		const result = resolveSubAgentConfig([], model, [externalRole], { agent: "reviewer" });
-		expect(result.error).toBeUndefined();
-		expect(result.config?.runtime).toBe("external");
+		const untouched = resolveSubAgentConfig([], model, [externalRole], { agent: "reviewer" });
+		expect(untouched.error).toBeUndefined();
+		expect(untouched.config?.runtime).toBe("external");
 	});
 });
 
@@ -105,44 +101,35 @@ const externalWorkRole: SubAgentConfig = {
 };
 
 describe("thinkingLevel resolution matrix", () => {
-	it("internal, unspecified: defaults to medium", () => {
-		const result = resolveSubAgentConfig([model], model, [], { name: "inline", systemPrompt: "Do it" });
-		expect(result.config?.thinkingLevel).toBe("medium");
-	});
+	it("defaults by runtime x purpose (unspecified) and lets an explicit thinkingLevel win everywhere", () => {
+		const internal = resolveSubAgentConfig([model], model, [], { name: "inline", systemPrompt: "Do it" });
+		expect(internal.config?.thinkingLevel).toBe("medium");
 
-	it("external work, unspecified: stays undefined -- no effort flag added by the caller", () => {
-		const result = resolveSubAgentConfig([model], model, [externalWorkRole], { agent: "external-worker" });
-		expect(result.config?.thinkingLevel).toBeUndefined();
-	});
+		// External work: stays undefined — no effort flag added by the caller.
+		const externalWork = resolveSubAgentConfig([model], model, [externalWorkRole], { agent: "external-worker" });
+		expect(externalWork.config?.thinkingLevel).toBeUndefined();
 
-	it("external verify, unspecified: defaults to medium", () => {
-		const result = resolveSubAgentConfig([model], model, [externalWorkRole], {
-			agent: "external-worker",
-			purpose: "verify",
-		});
-		expect(result.config?.thinkingLevel).toBe("medium");
-	});
-
-	it("explicit thinkingLevel wins for all three cases above", () => {
-		const internal = resolveSubAgentConfig([model], model, [], {
-			name: "inline",
-			systemPrompt: "Do it",
-			thinkingLevel: "high",
-		});
-		expect(internal.config?.thinkingLevel).toBe("high");
-
-		const externalWork = resolveSubAgentConfig([model], model, [externalWorkRole], {
-			agent: "external-worker",
-			thinkingLevel: "low",
-		});
-		expect(externalWork.config?.thinkingLevel).toBe("low");
-
+		// External verify: defaults to medium.
 		const externalVerify = resolveSubAgentConfig([model], model, [externalWorkRole], {
 			agent: "external-worker",
 			purpose: "verify",
-			thinkingLevel: "xhigh",
 		});
-		expect(externalVerify.config?.thinkingLevel).toBe("xhigh");
+		expect(externalVerify.config?.thinkingLevel).toBe("medium");
+
+		for (const [resolved, expected] of [
+			[resolveSubAgentConfig([model], model, [], { name: "inline", systemPrompt: "Do it", thinkingLevel: "high" }), "high"],
+			[resolveSubAgentConfig([model], model, [externalWorkRole], { agent: "external-worker", thinkingLevel: "low" }), "low"],
+			[
+				resolveSubAgentConfig([model], model, [externalWorkRole], {
+					agent: "external-worker",
+					purpose: "verify",
+					thinkingLevel: "xhigh",
+				}),
+				"xhigh",
+			],
+		] as const) {
+			expect(resolved.config?.thinkingLevel).toBe(expected);
+		}
 	});
 });
 

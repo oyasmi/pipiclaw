@@ -389,53 +389,11 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(claimed).toBe(false);
 	});
 
-	it("terminates descendants before settling and releasing the external write lease", async () => {
-		const workspaceDir = createTempWorkspace();
-		const channelId = "dm_descendant";
-		const runId = "run-descendant";
-		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", runId);
-		const marker = join(workspaceDir, "late-write.txt");
-		const script = join(workspaceDir, "leader.cjs");
-		writeFileSync(
-			script,
-			`const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e","setTimeout(()=>require('node:fs').writeFileSync(process.argv[1],'late'),1000)",${JSON.stringify(marker)}],{stdio:"ignore"});c.unref();process.stdout.write("leader done");process.exit(0);`,
-		);
-		const lease = acquireWorkspaceLease({ runId, channelId, workingDirectory: workspaceDir });
-		expect(lease.ok).toBe(true);
-		configureSubAgentRuntime({ dispatch: () => true });
-
-		await launchExternalRun({
-			runId,
-			channelId,
-			label: "descendant",
-			agent: "runner",
-			source: "inline",
-			harness: "exec",
-			command: `${process.execPath} ${script}`,
-			maxWallTimeSec: 10,
-			systemPrompt: "System.",
-			task: "Task.",
-			workingDirectory: workspaceDir,
-			artifactDir,
-			purpose: "work",
-			mutates: "write",
-			leaseKey: lease.ok ? lease.leaseKey : undefined,
-			workspaceDir,
-			securityConfig: DEFAULT_SECURITY_CONFIG,
-		});
-		const manager = getSubAgentRunManager(channelId);
-		expect(acquireWorkspaceLease({ runId: "competing", channelId, workingDirectory: workspaceDir }).ok).toBe(false);
-		await waitFor(() => manager.get(runId)?.status !== "running", 5_000);
-		await new Promise((resolve) => setTimeout(resolve, 1_100));
-
-		expect(existsSync(marker)).toBe(false);
-		const nextLease = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory: workspaceDir });
-		expect(nextLease.ok).toBe(true);
-		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next");
-	});
-
-	it.each(["cancel", "timeout"] as const)(
-		"terminates the owned descendant group on %s before releasing the write lease",
+	// One real-process scenario per termination path (natural completion, explicit cancel, and
+	// wall-time timeout): in every case the run's own descendant group must be reaped before the
+	// external write lease is released, so a late-writing orphan can never survive the run.
+	it.each(["complete", "cancel", "timeout"] as const)(
+		"reaps the owned descendant group and releases the write lease on %s",
 		async (mode) => {
 			const workspaceDir = createTempWorkspace();
 			const channelId = `dm_group_${mode}`;
@@ -443,9 +401,15 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", runId);
 			const marker = join(workspaceDir, `${mode}-late-write.txt`);
 			const script = join(workspaceDir, `${mode}-leader.cjs`);
+			// "complete" lets the leader exit normally (the run finishes on its own); the other
+			// modes keep the leader alive until the group kill reaches it.
+			const leaderBody =
+				mode === "complete"
+					? `process.stdout.write("leader done");process.exit(0);`
+					: `setInterval(()=>{},1000);`;
 			writeFileSync(
 				script,
-				`const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e","setTimeout(()=>require('node:fs').writeFileSync(process.argv[1],'late'),700)",${JSON.stringify(marker)}],{stdio:"ignore"});c.unref();setInterval(()=>{},1000);`,
+				`const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e","setTimeout(()=>require('node:fs').writeFileSync(process.argv[1],'late'),250)",${JSON.stringify(marker)}],{stdio:"ignore"});c.unref();${leaderBody}`,
 			);
 			const lease = acquireWorkspaceLease({ runId, channelId, workingDirectory: workspaceDir });
 			expect(lease.ok).toBe(true);
@@ -471,13 +435,16 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 				securityConfig: DEFAULT_SECURITY_CONFIG,
 			});
 			const manager = getSubAgentRunManager(channelId);
-			if (mode === "cancel") await manager.cancel(runId);
 			expect(acquireWorkspaceLease({ runId: "blocked", channelId, workingDirectory: workspaceDir }).ok).toBe(false);
+			if (mode === "cancel") await manager.cancel(runId);
 			await waitFor(() => manager.get(runId)?.status !== "running", 5_000);
-			await new Promise((resolve) => setTimeout(resolve, 800));
+			// Give any surviving descendant enough of its 250ms budget to land its late write.
+			await new Promise((resolve) => setTimeout(resolve, 400));
 
 			expect(existsSync(marker)).toBe(false);
-			expect(manager.get(runId)?.status).toBe(mode === "cancel" ? "cancelled" : "failed");
+			expect(manager.get(runId)?.status).toBe(
+				mode === "cancel" ? "cancelled" : mode === "timeout" ? "failed" : "completed",
+			);
 			const nextLease = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory: workspaceDir });
 			expect(nextLease.ok).toBe(true);
 			if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next");

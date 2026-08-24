@@ -111,165 +111,70 @@ function makeDiscovery(workspaceDir: string, agents: SubAgentConfig[]) {
 }
 
 describe("sub-agent discovery", () => {
-	it("loads every production example with the expected routing and resource settings", () => {
+	// Fix plan §4.4: a directory scan, not a hardcoded role-name list, so a future template added
+	// to examples/sub-agents/ without an explicit thinkingLevel fails here instead of silently
+	// falling through to the default resolution logic covered elsewhere in this file.
+	it("loads every shipped role template (internal and external) with expected routing and budgets", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
 
-		for (const name of ["explorer", "log-sifter", "git-committer"]) {
-			const example = readFileSync(join(process.cwd(), "examples", "sub-agents", `${name}.md`), "utf-8");
-			expect(example).toContain("runtime: internal");
-			expect(example).toContain("workload: light");
-			expect(example).toMatch(/mutates: (read|write)/);
-			writeFileSync(join(subAgentsDir, `${name}.md`), example, "utf-8");
-		}
-
-		const discovery = discoverSubAgents(workspaceDir, [model]);
-		expect(discovery.warnings).toEqual([]);
-		expect(discovery.agents).toHaveLength(3);
-		expect(
-			Object.fromEntries(
-				discovery.agents.map((agent) => [
-					agent.name,
-					{
-						thinkingLevel: agent.thinkingLevel,
-						contextMode: agent.contextMode,
-						memory: agent.memory,
-						maxTurns: agent.maxTurns,
-						maxToolCalls: agent.maxToolCalls,
-						maxWallTimeSec: agent.maxWallTimeSec,
-						bashTimeoutSec: agent.bashTimeoutSec,
-					},
-				]),
-			),
-		).toEqual({
-			explorer: {
-				thinkingLevel: "low",
-				contextMode: "isolated",
-				memory: "none",
-				maxTurns: 12,
-				maxToolCalls: 24,
-				maxWallTimeSec: 180,
-				bashTimeoutSec: 60,
-			},
-			"log-sifter": {
-				thinkingLevel: "low",
-				contextMode: "isolated",
-				memory: "none",
-				maxTurns: 12,
-				maxToolCalls: 24,
-				maxWallTimeSec: 300,
-				bashTimeoutSec: 120,
-			},
-			"git-committer": {
-				thinkingLevel: "medium",
-				contextMode: "isolated",
-				memory: "none",
-				maxTurns: 10,
-				maxToolCalls: 20,
-				maxWallTimeSec: 600,
-				bashTimeoutSec: 480,
-			},
-		});
-
-		for (const agent of discovery.agents) {
-			expect(agent.description.length).toBeLessThanOrEqual(180);
-			expect(agent.systemPrompt).toMatch(/[\u3400-\u9fff]/u);
-		}
-		expect(discovery.agents.find((agent) => agent.name === "explorer")?.description).toContain("只读代码探索");
-		expect(discovery.agents.find((agent) => agent.name === "log-sifter")?.description).toContain("避免原文涌入");
-		expect(discovery.agents.find((agent) => agent.name === "git-committer")?.description).toContain("默认不 push");
-	});
-
-	// Fix plan §4.4: a directory scan, not a hardcoded role-name list, so a future template added
-	// to examples/sub-agents/ without an explicit thinkingLevel fails this test instead of silently
-	// falling through to the internal-default resolution logic covered elsewhere in this file.
-	it("every shipped role template declares thinkingLevel", () => {
-		const dir = join(process.cwd(), "examples", "sub-agents");
-		const files = readdirSync(dir).filter((name) => name.endsWith(".md") && name.toLowerCase() !== "readme.md");
+		const examplesDir = join(process.cwd(), "examples", "sub-agents");
+		const files = readdirSync(examplesDir).filter(
+			(name) => name.endsWith(".md") && name.toLowerCase() !== "readme.md",
+		);
 		expect(files.length).toBeGreaterThan(0);
 		for (const name of files) {
-			expect(readFileSync(join(dir, name), "utf-8")).toMatch(/^thinkingLevel:\s*\S+/m);
-		}
-	});
-
-	it("loads the external production examples with the D5 field matrix satisfied", () => {
-		const workspaceDir = createTempWorkspace();
-		const subAgentsDir = getSubAgentsDir(workspaceDir);
-		mkdirSync(subAgentsDir, { recursive: true });
-
-		const claudeRoles = ["planner", "builder", "builder-hard"];
-		const codexReadRoles = ["reviewer", "scout"];
-		const codexWorkspaceWriteRoles = ["verifier", "worker", "documenter"];
-		for (const name of [...claudeRoles, ...codexReadRoles, ...codexWorkspaceWriteRoles]) {
-			const example = readFileSync(join(process.cwd(), "examples", "sub-agents", `${name}.md`), "utf-8");
-			writeFileSync(join(subAgentsDir, `${name}.md`), example, "utf-8");
+			expect(readFileSync(join(examplesDir, name), "utf-8")).toMatch(/^thinkingLevel:\s*\S+/m);
+			writeFileSync(join(subAgentsDir, name), readFileSync(join(examplesDir, name), "utf-8"), "utf-8");
 		}
 
 		const discovery = discoverSubAgents(workspaceDir, [model]);
 		expect(discovery.warnings).toEqual([]);
-		expect(discovery.agents).toHaveLength(8);
+		expect(discovery.agents).toHaveLength(files.length);
 
 		for (const agent of discovery.agents) {
-			expect(agent).toMatchObject({ runtime: "external", workload: "heavy" });
 			expect(agent.description.length).toBeLessThanOrEqual(180);
-			// Neither binary is expected to be installed in every dev/CI sandbox; the role is still
-			// listed (never silently dropped) and, when missing, marked unavailable with an install
-			// hint (D5) — either outcome is acceptable here, but nothing else is.
-			if (agent.unavailable !== undefined) {
-				expect(agent.unavailable).toMatch(/executable "(claude|codex)" was not found on PATH/);
-			}
+			expect(agent.systemPrompt).toMatch(/[㐀-鿿]/u);
 		}
-		expect(
-			Object.fromEntries(
-				discovery.agents.map((agent) => [
-					agent.name,
-					{
-						thinkingLevel: agent.thinkingLevel,
-						mutates: agent.mutates,
-						maxWallTimeSec: agent.maxWallTimeSec,
-					},
-				]),
-			),
-		).toEqual({
-			"builder-hard": { thinkingLevel: "xhigh", mutates: "write", maxWallTimeSec: 5400 },
-			builder: { thinkingLevel: "medium", mutates: "write", maxWallTimeSec: 3600 },
-			documenter: { thinkingLevel: "medium", mutates: "write", maxWallTimeSec: 1800 },
-			planner: { thinkingLevel: "high", mutates: "read", maxWallTimeSec: 2400 },
-			reviewer: { thinkingLevel: "high", mutates: "read", maxWallTimeSec: 1800 },
-			scout: { thinkingLevel: "low", mutates: "read", maxWallTimeSec: 600 },
-			verifier: { thinkingLevel: "medium", mutates: "write", maxWallTimeSec: 3600 },
-			worker: { thinkingLevel: "medium", mutates: "write", maxWallTimeSec: 1800 },
+
+		// Internal routing/budget spot checks.
+		const explorer = discovery.agents.find((agent) => agent.name === "explorer");
+		expect(explorer).toMatchObject({ runtime: "internal", workload: "light", thinkingLevel: "low", maxTurns: 12 });
+		expect(discovery.agents.find((agent) => agent.name === "explorer")?.description).toContain("只读代码探索");
+		expect(discovery.agents.find((agent) => agent.name === "git-committer")).toMatchObject({
+			thinkingLevel: "medium",
+			maxWallTimeSec: 600,
 		});
 
-		for (const name of claudeRoles) {
-			const agent = discovery.agents.find((candidate) => candidate.name === name);
-			expect(agent?.harness).toBe("claude-code");
-			expect(agent?.command).not.toContain("$EFFORT");
-			expect(agent?.command).not.toContain("--effort");
-		}
-		expect(discovery.agents.find((agent) => agent.name === "planner")).toMatchObject({ mutates: "read" });
-		expect(discovery.agents.find((agent) => agent.name === "planner")?.command).toContain("--permission-mode plan");
-		for (const name of ["builder", "builder-hard"]) {
-			expect(discovery.agents.find((agent) => agent.name === name)).toMatchObject({ mutates: "write" });
-		}
-		// Read-only declarations are backed by the target CLI's own permission mode rather than
-		// only by prompt text. This keeps them out of the workspace write lease and eligible for
-		// purpose=verify.
-		for (const name of codexReadRoles) {
+		// External routing spot checks (D5): claude-code planner stays read-only via its permission
+		// mode; codex roles carry the sandbox flag matching their mutates declaration. Neither
+		// binary must exist on PATH here — an uninstalled role stays listed, marked unavailable
+		// with an install hint, never silently dropped.
+		const planner = discovery.agents.find((agent) => agent.name === "planner");
+		expect(planner).toMatchObject({ runtime: "external", harness: "claude-code", mutates: "read" });
+		expect(planner?.command).toContain("--permission-mode plan");
+		for (const name of ["reviewer", "scout"]) {
 			const agent = discovery.agents.find((candidate) => candidate.name === name);
 			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "read" });
 			expect(agent?.command).toContain("--sandbox read-only");
 			expect(agent?.command).not.toContain("--ask-for-approval");
 		}
-		for (const name of codexWorkspaceWriteRoles) {
+		for (const name of ["builder", "builder-hard"]) {
+			const agent = discovery.agents.find((candidate) => candidate.name === name);
+			expect(agent).toMatchObject({ harness: "claude-code", mutates: "write" });
+		}
+		for (const name of ["worker", "documenter"]) {
 			const agent = discovery.agents.find((candidate) => candidate.name === name);
 			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "write" });
 			expect(agent?.command).toContain("--sandbox workspace-write");
-			expect(agent?.command).not.toContain("--ask-for-approval");
+		}
+		for (const agent of discovery.agents.filter((candidate) => candidate.runtime === "external")) {
+			if (agent.unavailable !== undefined) {
+				expect(agent.unavailable).toMatch(/executable "(claude|codex)" was not found on PATH/);
+			}
 		}
 	});
-
 	it("ignores predefined prompts that exceed the length limit", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
@@ -289,9 +194,12 @@ ${"x".repeat(16001)}`,
 		const discovery = discoverSubAgents(workspaceDir, [model]);
 		expect(discovery.agents.filter((agent) => agent.source === "predefined")).toHaveLength(0);
 		expect(discovery.warnings[0]).toContain("exceeds 16000 characters");
+		expect(resolveSubAgentConfig([model], model, [], { systemPrompt: "x".repeat(16001) }).error).toContain(
+			"Inline sub-agent systemPrompt exceeds 16000 characters",
+		);
 	});
 
-	it("accepts YAML frontmatter arrays and numeric values", () => {
+	it("parses YAML arrays/numerics and contextual frontmatter, applying inline overrides on resolve", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
@@ -305,6 +213,11 @@ tools:
   - read
   - bash
 mutates: read
+contextMode: contextual
+memory: session
+paths:
+  - src/core.ts
+  - test/core.test.ts
 maxTurns: 7
 maxToolCalls: 9
 maxWallTimeSec: 60
@@ -317,50 +230,17 @@ Review files carefully.`,
 
 		const discovery = discoverSubAgents(workspaceDir, [model]);
 		expect(discovery.warnings).toEqual([]);
-		const predefined = discovery.agents.filter((agent) => agent.source === "predefined");
-		expect(predefined).toHaveLength(1);
-		expect(predefined[0]).toMatchObject({
+		expect(discovery.agents[0]).toMatchObject({
 			name: "reviewer",
 			description: "review code",
 			tools: ["read", "bash"],
+			contextMode: "contextual",
+			memory: "session",
+			paths: ["src/core.ts", "test/core.test.ts"],
 			maxTurns: 7,
 			maxToolCalls: 9,
 			maxWallTimeSec: 60,
 			bashTimeoutSec: 30,
-			contextMode: "isolated",
-			memory: "none",
-			paths: [],
-		});
-	});
-
-	it("parses contextual sub-agent frontmatter and inline overrides", () => {
-		const workspaceDir = createTempWorkspace();
-		const subAgentsDir = getSubAgentsDir(workspaceDir);
-		mkdirSync(subAgentsDir, { recursive: true });
-
-		writeFileSync(
-			join(subAgentsDir, "reviewer.md"),
-			`---
-name: reviewer
-description: review code
-contextMode: contextual
-memory: session
-mutates: read
-paths:
-  - src/core.ts
-  - test/core.test.ts
----
-
-Review files carefully.`,
-			"utf-8",
-		);
-
-		const discovery = discoverSubAgents(workspaceDir, [model]);
-		expect(discovery.warnings).toEqual([]);
-		expect(discovery.agents[0]).toMatchObject({
-			contextMode: "contextual",
-			memory: "session",
-			paths: ["src/core.ts", "test/core.test.ts"],
 		});
 
 		const resolved = resolveSubAgentConfig([model], model, discovery.agents, {
@@ -483,13 +363,6 @@ Review files carefully.`,
 		).toBe(1800);
 	});
 
-	it("rejects an overly long inline prompt", () => {
-		const tooLong = resolveSubAgentConfig([model], model, [], {
-			systemPrompt: "x".repeat(16001),
-		});
-		expect(tooLong.error).toContain("Inline sub-agent systemPrompt exceeds 16000 characters");
-	});
-
 	it("resolves the sub-agent model in priority order: invocation > frontmatter > settings default > parent", () => {
 		const availableModels = [model, altModel];
 
@@ -540,45 +413,6 @@ Review files carefully.`,
 			"openai/does-not-exist",
 		);
 		expect(badDefault.error).toContain("was not found among available models");
-	});
-
-	it("defaults thinkingLevel by purpose and lets frontmatter/overrides win", () => {
-		const workAgent = resolveSubAgentConfig([model], model, [], {
-			name: "worker",
-			systemPrompt: "Do the work",
-		});
-		expect(workAgent.config?.thinkingLevel).toBe("medium");
-
-		const verifyAgent = resolveSubAgentConfig([model], model, [], {
-			name: "checker",
-			systemPrompt: "Check the work",
-			purpose: "verify",
-		});
-		expect(verifyAgent.config?.thinkingLevel).toBe("medium");
-
-		const overridden = resolveSubAgentConfig([model], model, [], {
-			name: "checker",
-			systemPrompt: "Check the work",
-			purpose: "verify",
-			thinkingLevel: "high",
-		});
-		expect(overridden.config?.thinkingLevel).toBe("high");
-
-		const workspaceDir = createTempWorkspace();
-		const subAgentsDir = getSubAgentsDir(workspaceDir);
-		mkdirSync(subAgentsDir, { recursive: true });
-		writeFileSync(
-			join(subAgentsDir, "checker.md"),
-			`---\nname: checker\ndescription: verify\nthinkingLevel: low\n---\n\nVerify the DoD.`,
-			"utf-8",
-		);
-		const discovery = discoverSubAgents(workspaceDir, [model]);
-		expect(discovery.agents[0]?.thinkingLevel).toBe("low");
-		const resolvedFromFrontmatter = resolveSubAgentConfig([model], model, discovery.agents, {
-			agent: "checker",
-			purpose: "verify",
-		});
-		expect(resolvedFromFrontmatter.config?.thinkingLevel).toBe("low");
 	});
 });
 

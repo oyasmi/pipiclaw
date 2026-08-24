@@ -102,7 +102,7 @@ describe("subagent_manage tool", () => {
 		expect(details.runs.some((run) => run.runId === "run-still-going")).toBe(true);
 	});
 
-	it("cancel with no registered handle marks the run lost and reports it", async () => {
+	it("tool-level cancel reports a handle-less run as lost and rejects unknown ids recoverably", async () => {
 		configureSubAgentRuntime({});
 		const channelId = `dm_manage_cancel_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
@@ -124,61 +124,48 @@ describe("subagent_manage tool", () => {
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		expect(text).toContain("lost");
 		expect(manager.get("run-2")?.status).toBe("lost");
-	});
 
-	it("cancel on an unknown runId is a recoverable rejection, not a crash", async () => {
-		configureSubAgentRuntime({});
-		const channelId = `dm_manage_unknown_${Date.now()}`;
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
 		await expect(tool.execute("call-3", { label: "stop it", op: "cancel", runId: "no-such-run" })).rejects.toThrow(
 			"was not found",
 		);
 	});
 
-	it("follow_up on an internal run is rejected without suggesting a silent fallback", async () => {
+	it("follow_up is rejected for an internal run and for a still-running codex-cli run", async () => {
 		configureSubAgentRuntime({});
 		const channelId = `dm_manage_followup_${Date.now()}`;
 		const manager = getSubAgentRunManager(channelId);
-		await manager.register({
-			runId: "run-3",
+		const base = {
 			channelId,
+			source: "predefined" as const,
+			purpose: "work" as const,
+			workingDirectory: "/tmp",
+		};
+		await manager.register({
+			...base,
+			runId: "run-internal",
 			runtime: "internal",
 			agent: "explorer",
 			label: "explore",
-			source: "predefined",
 			tools: ["read"],
-			purpose: "work",
-			workingDirectory: "/tmp",
-			artifactDir: "/tmp/artifacts/run-3",
+			artifactDir: "/tmp/artifacts/run-internal",
 		});
-
-		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
-		await expect(
-			tool.execute("call-4", { label: "continue", op: "follow_up", runId: "run-3", task: "keep going" }),
-		).rejects.toThrow("does not support follow_up yet");
-	});
-
-	it("follow_up on a still-running codex-cli run is rejected", async () => {
-		configureSubAgentRuntime({});
-		const channelId = `dm_manage_followup_running_${Date.now()}`;
-		const manager = getSubAgentRunManager(channelId);
 		await manager.register({
-			runId: "run-4",
-			channelId,
+			...base,
+			runId: "run-running",
 			runtime: "external",
 			harness: "codex-cli",
 			agent: "builder",
 			label: "build",
-			source: "predefined",
 			tools: [],
-			purpose: "work",
-			workingDirectory: "/tmp",
-			artifactDir: "/tmp/artifacts/run-4",
+			artifactDir: "/tmp/artifacts/run-running",
 		});
 
 		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
 		await expect(
-			tool.execute("call-5", { label: "continue", op: "follow_up", runId: "run-4", task: "keep going" }),
+			tool.execute("call-4", { label: "continue", op: "follow_up", runId: "run-internal", task: "keep going" }),
+		).rejects.toThrow("does not support follow_up yet");
+		await expect(
+			tool.execute("call-5", { label: "continue", op: "follow_up", runId: "run-running", task: "keep going" }),
 		).rejects.toThrow("still running");
 	});
 

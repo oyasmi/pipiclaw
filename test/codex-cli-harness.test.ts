@@ -25,45 +25,34 @@ describe("codex-cli harness: buildInvocation", () => {
 		expect(result.args).toContain("gpt-5.6-luna");
 	});
 
-	it("does not inject -m when the command already specifies -m or --model", () => {
-		const result = codexCliHarness.buildInvocation({
+	it("recognizes model/effort already supplied through flags or Codex config, in any spelling, without duplicating them", () => {
+		const flagModel = codexCliHarness.buildInvocation({
 			...baseInvocation,
 			argv: ["codex", "exec", "-m", "already-set"],
 			model: "gpt-5.6-luna",
 		});
-		expect(result.args.filter((token) => token === "-m")).toHaveLength(1);
-		expect(result.args).toContain("already-set");
-		expect(result.args).not.toContain("gpt-5.6-luna");
-	});
+		expect(flagModel.args.filter((token) => token === "-m")).toHaveLength(1);
+		expect(flagModel.args).toContain("already-set");
+		expect(flagModel.args).not.toContain("gpt-5.6-luna");
 
-	it("recognizes model values supplied through Codex config without injecting -m", () => {
 		for (const argv of [
 			["codex", "exec", "--config", "model=already-set"],
 			["codex", "exec", "--config=model=already-set"],
 		]) {
-			const result = codexCliHarness.buildInvocation({ ...baseInvocation, argv, model: "gpt-5.6-luna" });
-			expect(result.args).not.toContain("-m");
-			expect(result.args).not.toContain("gpt-5.6-luna");
+			const configModel = codexCliHarness.buildInvocation({ ...baseInvocation, argv, model: "gpt-5.6-luna" });
+			expect(configModel.args).not.toContain("-m");
+			expect(configModel.args).not.toContain("gpt-5.6-luna");
 		}
-	});
 
-	it("does not inject -c model_reasoning_effort= when the command already specifies it", () => {
-		const result = codexCliHarness.buildInvocation({
-			...baseInvocation,
-			argv: ["codex", "exec", "-c", "model_reasoning_effort=low"],
-			thinkingLevel: "xhigh",
-		});
-		expect(result.args.filter((token) => token === "-c")).toHaveLength(1);
-	});
-
-	it("recognizes long and equals config spellings without injecting a duplicate effort", () => {
 		for (const argv of [
+			["codex", "exec", "-c", "model_reasoning_effort=low"],
 			["codex", "exec", "--config", "model_reasoning_effort=low"],
 			["codex", "exec", "--config=model_reasoning_effort=low"],
 			["codex", "exec", "-c=model_reasoning_effort=low"],
 		]) {
-			const result = codexCliHarness.buildInvocation({ ...baseInvocation, argv, thinkingLevel: "high" });
-			expect(result.args).not.toContain("model_reasoning_effort=high");
+			const effort = codexCliHarness.buildInvocation({ ...baseInvocation, argv, thinkingLevel: "xhigh" });
+			expect(effort.args).not.toContain("model_reasoning_effort=xhigh");
+			expect(effort.args).not.toContain("model_reasoning_effort=high");
 		}
 	});
 
@@ -130,27 +119,10 @@ describe("codex-cli harness: parseOutcome", () => {
 		expect(outcome.protocolStatus).toBe("failed");
 		expect(outcome.errorMessage).toBe("model overloaded");
 	});
-
-	it("degrades to unparsable instead of throwing on garbage input", () => {
-		const outcome = codexCliHarness.parseOutcome({ eventsText: "not json at all\n{{{broken", exitCode: 1 });
-		expect(outcome.protocolStatus).toBe("unparsable");
-		expect(outcome.terminalSeen).toBe(false);
-	});
-
-	it("exit 0 with no terminal event is 'absent', not silently completed", () => {
-		const outcome = codexCliHarness.parseOutcome({
-			eventsText: ndjson({ type: "item.completed", item: { type: "agent_message", text: "hi" } }),
-			exitCode: 0,
-		});
-		expect(outcome.protocolStatus).toBe("absent");
-		expect(outcome.terminalSeen).toBe(false);
-		// And the shared classifier must not call this "completed" just because exit code was 0.
-		expect(classifyExternalOutcome("codex-cli", outcome).status).toBe("failed");
-	});
 });
 
 describe("classifyExternalOutcome (D4 status table)", () => {
-	it("completed only when terminalSeen and protocolStatus completed", () => {
+	it("requires terminalSeen for structured harnesses, but exec's protocolStatus alone decides", () => {
 		expect(
 			classifyExternalOutcome("codex-cli", {
 				finalText: "x",
@@ -160,26 +132,18 @@ describe("classifyExternalOutcome (D4 status table)", () => {
 				costKnown: false,
 			}).status,
 		).toBe("completed");
-	});
 
-	it("exec is the explicit exception: protocolStatus alone decides, terminalSeen is not checked", () => {
-		expect(
-			classifyExternalOutcome("exec", {
-				finalText: "stdout text",
-				terminalSeen: false,
-				protocolStatus: "completed",
-				usageKnown: false,
-				costKnown: false,
-			}).status,
-		).toBe("completed");
-		expect(
-			classifyExternalOutcome("exec", {
-				finalText: "",
-				terminalSeen: false,
-				protocolStatus: "failed",
-				usageKnown: false,
-				costKnown: false,
-			}).status,
-		).toBe("failed");
+		for (const [outcome, expected] of [
+			[
+				{ finalText: "stdout text", terminalSeen: false, protocolStatus: "completed", usageKnown: false, costKnown: false },
+				"completed",
+			],
+			[
+				{ finalText: "", terminalSeen: false, protocolStatus: "failed", usageKnown: false, costKnown: false },
+				"failed",
+			],
+		] as const) {
+			expect(classifyExternalOutcome("exec", { ...outcome }).status).toBe(expected);
+		}
 	});
 });

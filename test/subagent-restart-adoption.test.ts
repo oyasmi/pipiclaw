@@ -149,7 +149,9 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const afterLease = acquireWorkspaceLease({ runId: "after", channelId, workingDirectory: workspaceDir });
 		expect(afterLease.ok).toBe(true);
 		if (afterLease.ok) releaseWorkspaceLease(afterLease.leaseKey, "after");
-	}, 15_000);
+		// killProcessGroup's spec-042-D8 flush grace (5s) dominates this test's wall time; the
+		// generous per-test budget keeps it stable when the whole suite runs in parallel.
+	}, 30_000);
 
 	// Spec 042, D1: before this fix, restart reconciliation settled a run using whatever zeroed
 	// `record.usage` register() had left behind, while still reporting `usageKnown: true` — a run

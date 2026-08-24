@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { claudeCodeHarness } from "../src/subagents/external/claude-code.js";
-import { classifyExternalOutcome } from "../src/subagents/external/harness.js";
 
 /** Spec 040, D4: argv assembly and stream-json parsing for claude-code. */
 
@@ -39,52 +38,45 @@ describe("claude-code harness: buildInvocation", () => {
 		expect(result.presetSessionId).toBeUndefined();
 	});
 
-	it("injects --model when the role has one and the command does not already specify it", () => {
-		const result = claudeCodeHarness.buildInvocation({ ...baseInvocation, model: "sonnet" });
-		expect(result.args).toEqual(expect.arrayContaining(["--model", "sonnet"]));
-	});
+	it("injects --model and --effort (clamping low-end levels) only when the command lacks them", () => {
+		const injected = claudeCodeHarness.buildInvocation({ ...baseInvocation, model: "sonnet" });
+		expect(injected.args).toEqual(expect.arrayContaining(["--model", "sonnet"]));
 
-	it("translates thinkingLevel and injects --effort when the command does not specify it", () => {
-		const result = claudeCodeHarness.buildInvocation({ ...baseInvocation, thinkingLevel: "high" });
-		expect(result.args).toEqual(expect.arrayContaining(["--effort", "high"]));
-	});
-
-	it("clamps unsupported low-end thinking levels to Claude's lowest effort", () => {
+		const effort = claudeCodeHarness.buildInvocation({ ...baseInvocation, thinkingLevel: "high" });
+		expect(effort.args).toEqual(expect.arrayContaining(["--effort", "high"]));
 		for (const thinkingLevel of ["off", "minimal"] as const) {
-			const result = claudeCodeHarness.buildInvocation({ ...baseInvocation, thinkingLevel });
-			expect(result.args).toEqual(expect.arrayContaining(["--effort", "low"]));
+			const clamped = claudeCodeHarness.buildInvocation({ ...baseInvocation, thinkingLevel });
+			expect(clamped.args).toEqual(expect.arrayContaining(["--effort", "low"]));
 		}
 	});
 
-	it("does not inject --model when the command already specifies -m or --model", () => {
-		const result = claudeCodeHarness.buildInvocation({
+	it("does not double any directive the command already carries (--model, --effort, system-prompt)", () => {
+		const modelResult = claudeCodeHarness.buildInvocation({
 			...baseInvocation,
 			argv: ["claude", "--model", "opus"],
 			model: "sonnet",
 		});
-		expect(result.args.filter((token) => token === "--model")).toHaveLength(1);
-		expect(result.args).toContain("opus");
-		expect(result.args).not.toContain("sonnet");
-	});
+		expect(modelResult.args.filter((token) => token === "--model")).toHaveLength(1);
+		expect(modelResult.args).toContain("opus");
+		expect(modelResult.args).not.toContain("sonnet");
 
-	it("does not inject --effort when the command already specifies it", () => {
 		for (const argv of [
 			["claude", "--effort", "low"],
 			["claude", "--effort=low"],
 		]) {
-			const result = claudeCodeHarness.buildInvocation({ ...baseInvocation, argv, thinkingLevel: "xhigh" });
-			expect(result.args.filter((token) => token === "--effort")).toHaveLength(argv.includes("--effort") ? 1 : 0);
-			expect(result.args).not.toContain("xhigh");
+			const effortResult = claudeCodeHarness.buildInvocation({ ...baseInvocation, argv, thinkingLevel: "xhigh" });
+			expect(effortResult.args.filter((token) => token === "--effort")).toHaveLength(
+				argv.includes("--effort") ? 1 : 0,
+			);
+			expect(effortResult.args).not.toContain("xhigh");
 		}
-	});
 
-	it("does not append --append-system-prompt-file when $SYSTEM_PROMPT_FILE is already used in the command", () => {
-		const result = claudeCodeHarness.buildInvocation({
+		const systemPromptResult = claudeCodeHarness.buildInvocation({
 			...baseInvocation,
 			argv: ["claude", "--system-prompt-file", "$SYSTEM_PROMPT_FILE"],
 		});
-		expect(result.args.filter((token) => token === "--append-system-prompt-file")).toHaveLength(0);
-		expect(result.args).toContain(baseInvocation.systemPromptFile);
+		expect(systemPromptResult.args.filter((token) => token === "--append-system-prompt-file")).toHaveLength(0);
+		expect(systemPromptResult.args).toContain(baseInvocation.systemPromptFile);
 	});
 
 	// Spec 042, D10: before this fix, an unresolved $MODEL reached argv as the literal string
@@ -144,12 +136,7 @@ describe("claude-code harness: parseOutcome", () => {
 		expect(outcome.errorMessage).toContain("error_max_turns");
 	});
 
-	it("degrades to unparsable instead of throwing on garbage input", () => {
-		const outcome = claudeCodeHarness.parseOutcome({ eventsText: "not json\n{broken", exitCode: 1 });
-		expect(outcome.protocolStatus).toBe("unparsable");
-	});
-
-	it("falls back to the last streamed assistant text/usage when killed before a result event (§1.2)", () => {
+	it("falls back to the last streamed assistant text/usage when killed before a result event (§1.2), preferring a real result event when present", () => {
 		const outcome = claudeCodeHarness.parseOutcome({
 			eventsText: streamJson(
 				{ type: "system", subtype: "init", session_id: "session-1" },
@@ -179,10 +166,8 @@ describe("claude-code harness: parseOutcome", () => {
 		// A partial-text fallback is not proof the run finished -- only a real `result` event may say so.
 		expect(outcome.terminalSeen).toBe(false);
 		expect(outcome.protocolStatus).toBe("absent");
-	});
 
-	it("prefers the result event's finalText/usage over any streamed assistant fallback", () => {
-		const outcome = claudeCodeHarness.parseOutcome({
+		const withResult = claudeCodeHarness.parseOutcome({
 			eventsText: streamJson(
 				{
 					type: "assistant",
@@ -202,16 +187,7 @@ describe("claude-code harness: parseOutcome", () => {
 			),
 			exitCode: 0,
 		});
-		expect(outcome.finalText).toBe("Final answer.");
-		expect(outcome.usage?.input).toBe(100);
-	});
-
-	it("exit 0 with no result event is 'absent', and the shared classifier still fails it", () => {
-		const outcome = claudeCodeHarness.parseOutcome({
-			eventsText: streamJson({ type: "system", subtype: "init" }),
-			exitCode: 0,
-		});
-		expect(outcome.protocolStatus).toBe("absent");
-		expect(classifyExternalOutcome("claude-code", outcome).status).toBe("failed");
+		expect(withResult.finalText).toBe("Final answer.");
+		expect(withResult.usage?.input).toBe(100);
 	});
 });

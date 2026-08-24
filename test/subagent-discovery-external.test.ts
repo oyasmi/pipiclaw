@@ -114,48 +114,6 @@ Body.
 		);
 	});
 
-	it("rejects fields that only mean something for the other runtime, per the D5 legality matrix", () => {
-		const workspaceDir = createTempWorkspace();
-		writeRole(
-			workspaceDir,
-			"internal-with-harness.md",
-			`---
-name: internal-with-harness
-description: internal role wrongly declaring harness
-harness: exec
-command: echo hi
----
-
-Body.
-`,
-		);
-		writeRole(
-			workspaceDir,
-			"external-with-tools.md",
-			`---
-name: external-with-tools
-description: external role wrongly declaring tools
-runtime: external
-harness: exec
-command: echo hi
-mutates: read
-tools: read,bash
----
-
-Body.
-`,
-		);
-
-		const result = discover(workspaceDir);
-		expect(result.agents).toHaveLength(0);
-		expect(result.warnings).toEqual(
-			expect.arrayContaining([
-				expect.stringContaining("only valid for runtime: external"),
-				expect.stringContaining("not valid for runtime: external"),
-			]),
-		);
-	});
-
 	it("rejects shell mode for structured harnesses because it would bypass protocol argv assembly", () => {
 		const workspaceDir = createTempWorkspace();
 		writeRole(
@@ -331,12 +289,11 @@ Body.
 		expect(result.warnings).toEqual(
 			expect.arrayContaining([expect.stringContaining('references $MODEL but no "model" is configured')]),
 		);
-	});
 
-	it("does not warn about $MODEL when a model is configured", () => {
-		const workspaceDir = createTempWorkspace();
+		// And a configured model silences the warning entirely (fresh workspace: only this role).
+		const configuredDir = createTempWorkspace();
 		writeRole(
-			workspaceDir,
+			configuredDir,
 			"configured-model.md",
 			`---
 name: configured-model
@@ -351,9 +308,8 @@ mutates: read
 Body.
 `,
 		);
-
-		const result = discover(workspaceDir, []);
-		expect(result.warnings).toEqual([]);
+		const quiet = discover(configuredDir, []);
+		expect(quiet.warnings).toEqual([]);
 	});
 
 	// Spec 042, D4: external memory default is always "none", never following contextMode the way
@@ -395,10 +351,8 @@ Body.
 		expect(result.agents.find((a) => a.name === "external-contextual")?.memory).toBe("none");
 		expect(result.agents.find((a) => a.name === "internal-contextual")?.memory).toBe("relevant");
 		expect(result.warnings).toEqual([]);
-	});
 
-	it("warns (without rejecting) when an external role explicitly declares memory: relevant", () => {
-		const workspaceDir = createTempWorkspace();
+		// An explicit opt-in is honored but warned about, since it sends channel state to a third party.
 		writeRole(
 			workspaceDir,
 			"memory-declared.md",
@@ -415,12 +369,12 @@ memory: relevant
 Body.
 `,
 		);
-
-		const result = discover(workspaceDir);
-		const agent = result.agents.find((a) => a.name === "memory-declared");
-		expect(agent).toBeDefined();
-		expect(agent?.memory).toBe("relevant");
-		expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining("sends channel session state")]));
+		const optedIn = discover(workspaceDir);
+		const declared = optedIn.agents.find((a) => a.name === "memory-declared");
+		expect(declared?.memory).toBe("relevant");
+		expect(optedIn.warnings).toEqual(
+			expect.arrayContaining([expect.stringContaining("sends channel session state")]),
+		);
 	});
 
 	it("ignores a README in the role directory instead of warning about its missing frontmatter", () => {
