@@ -7,7 +7,9 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { shellEscape } from "../shared/shell-escape.js";
+import { formatSize, MAX_INLINE_BINARY_BYTES } from "./truncate.js";
 
 /** Extensions delivered as inline images; everything else goes as a file attachment. */
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
@@ -83,11 +85,25 @@ export function createSendMediaTool(
 				}
 			}
 
-			// Confirm the target is a readable regular file before reading it, so the
-			// agent gets "not a file" rather than a confusing base64 error.
-			const stat = await executor.exec(`test -f ${shellEscape(path)} && echo OK || echo NO`, { signal });
-			if (stat.stdout.trim() !== "OK") {
-				throw new Error(`Cannot send ${path}: not a regular file (does it exist?).`);
+			// Confirm the target is a readable regular file and get its size before base64-encoding
+			// it, in one exec. Size matters because base64 inflates to 4/3 and the executor caps
+			// captured stdout at 10MB -- above the inline limit, base64 would be silently truncated
+			// mid-encoding into a buffer that still decodes: a corrupt file "successfully" sent to
+			// the user with no error at all (fix plan §2.3).
+			const stat = await executor.exec(
+				`if [ -f ${shellEscape(path)} ]; then wc -c < ${shellEscape(path)}; else echo NO; fi`,
+				{ signal },
+			);
+			const statOutput = stat.stdout.trim();
+			if (statOutput === "NO") {
+				throw new RecoverableToolError(`Cannot send ${path}: not a regular file (does it exist?).`);
+			}
+			const sizeBytes = Number.parseInt(statOutput, 10);
+			if (Number.isFinite(sizeBytes) && sizeBytes > MAX_INLINE_BINARY_BYTES) {
+				throw new RecoverableToolError(
+					`Cannot send ${path}: it is ${formatSize(sizeBytes)}, over the ${formatSize(MAX_INLINE_BINARY_BYTES)} send limit. ` +
+						"Compress it first, or provide the path so the user can be told where to find it.",
+				);
 			}
 
 			const encoded = await executor.exec(`base64 < ${shellEscape(path)}`, { signal });
@@ -96,7 +112,7 @@ export function createSendMediaTool(
 			}
 			const data = Buffer.from(encoded.stdout.replace(/\s/g, ""), "base64");
 			if (data.length === 0) {
-				throw new Error(`Cannot send ${path}: the file is empty.`);
+				throw new RecoverableToolError(`Cannot send ${path}: the file is empty.`);
 			}
 
 			const name = fileName?.trim() || basename(path);

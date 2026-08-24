@@ -87,7 +87,7 @@ export function resolveSkillPath(workspaceDir: string, name: string): string {
 	}
 	const skillsDir = resolve(workspaceDir, "skills");
 	const skillDir = resolve(skillsDir, name);
-	if (skillDir !== resolve(skillsDir, name) || !skillDir.startsWith(`${skillsDir}/`)) {
+	if (!skillDir.startsWith(`${skillsDir}/`)) {
 		throw new Error("Resolved skill path escaped workspace skills directory.");
 	}
 	return skillDir;

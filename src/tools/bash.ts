@@ -3,11 +3,12 @@ import { writeFile } from "node:fs/promises";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager } from "../agent/job-manager.js";
-import type { Executor } from "../executor.js";
+import { CommandTerminatedError, type Executor } from "../executor.js";
 import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { maybeOptimizeCommand } from "./command-optimizer.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
@@ -64,6 +65,8 @@ interface BashToolDetails {
 	exitCode?: number;
 	/** Whether the command wrote anything to stdout/stderr. */
 	producedOutput?: boolean;
+	/** Set instead of `exitCode` when the command was cut short by timeout or abort. */
+	timedOut?: boolean;
 }
 
 export interface BashToolOptions {
@@ -189,7 +192,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			if (options.interceptorEnabled) {
 				const intercepted = checkBashInterception(command);
 				if (intercepted) {
-					throw new Error(intercepted);
+					throw new RecoverableToolError(intercepted);
 				}
 			}
 
@@ -205,7 +208,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			// (the main path supplies a jobManager; the sub-agent path never does).
 			if (runAsync) {
 				if (!options.jobManager) {
-					throw new Error(
+					throw new RecoverableToolError(
 						"Background execution is not available here (enable tools.jobs.enabled, and note it is off for sub-agents). Run the command without async, or shorten it.",
 					);
 				}
@@ -231,73 +234,93 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				};
 			}
 
-			const result = await executor.exec(effectiveCommand, { timeout: effectiveTimeout, signal });
-			let output = "";
-			if (result.stdout) output += result.stdout;
-			if (result.stderr) {
-				if (output) output += "\n";
-				output += result.stderr;
-			}
-
-			const totalBytes = Buffer.byteLength(output, "utf-8");
-
-			// Spill the full output to a temp file when it exceeds the inline limit, so the model
-			// can page through the rest with `read`. Written straight to disk rather than piped
-			// through a second `sh -c 'cat > file'`: that spawned a process and copied the whole
-			// (up to 10MB) buffer over a pipe to reach the same local filesystem the executor
-			// already runs on. Best-effort: on failure we simply omit the path hint.
-			let tempFilePath: string | undefined;
-			if (totalBytes > DEFAULT_MAX_BYTES) {
-				const candidatePath = getSpillFilePath();
-				try {
-					await writeFile(candidatePath, output, { mode: 0o600 });
-					tempFilePath = candidatePath;
-				} catch {
-					// Ignore spill failures; the truncated output is still returned.
+			// Spill + tail-truncate a combined stdout/stderr blob, sharing the same path for a normal
+			// result and one cut short by timeout/abort (fix plan §2.2): a timed-out `npm test` used
+			// to reject with up to 10MB of raw output stuffed straight into the tool-call error
+			// message, which the pi SDK puts into the model's context verbatim and unbounded.
+			const buildOutputText = async (
+				stdout: string,
+				stderr: string,
+			): Promise<{ text: string; details: BashToolDetails }> => {
+				let output = "";
+				if (stdout) output += stdout;
+				if (stderr) {
+					if (output) output += "\n";
+					output += stderr;
 				}
-			}
 
-			// Apply tail truncation
-			const truncation = truncateTail(output);
-			let outputText = truncation.content || "(no output)";
+				const totalBytes = Buffer.byteLength(output, "utf-8");
 
-			// Build details with truncation info
-			let details: BashToolDetails | undefined;
-
-			if (truncation.truncated) {
-				details = {
-					truncation,
-					fullOutputPath: tempFilePath,
-				};
-
-				// Build actionable notice
-				const startLine = truncation.totalLines - truncation.outputLines + 1;
-				const endLine = truncation.totalLines;
-				const fullOutputHint = tempFilePath ? ` Full output: ${tempFilePath}` : "";
-
-				if (truncation.lastLinePartial) {
-					// Edge case: last line alone > 50KB
-					const lastLineSize = formatSize(Buffer.byteLength(output.split("\n").pop() || "", "utf-8"));
-					outputText += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}).${fullOutputHint}]`;
-				} else if (truncation.truncatedBy === "lines") {
-					outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}.${fullOutputHint}]`;
-				} else {
-					outputText += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit).${fullOutputHint}]`;
+				// Spill the full output to a temp file when it exceeds the inline limit, so the model
+				// can page through the rest with `read`. Written straight to disk rather than piped
+				// through a second `sh -c 'cat > file'`: that spawned a process and copied the whole
+				// (up to 10MB) buffer over a pipe to reach the same local filesystem the executor
+				// already runs on. Best-effort: on failure we simply omit the path hint.
+				let tempFilePath: string | undefined;
+				if (totalBytes > DEFAULT_MAX_BYTES) {
+					const candidatePath = getSpillFilePath();
+					try {
+						await writeFile(candidatePath, output, { mode: 0o600 });
+						tempFilePath = candidatePath;
+					} catch {
+						// Ignore spill failures; the truncated output is still returned.
+					}
 				}
-			}
 
-			// A non-zero exit code is a normal result, not a tool failure: commands like
-			// `grep` (no match), `diff` (differences), and `test` use exit codes as data.
-			// Report the code inline so the model can react without treating it as an error.
-			if (result.code !== 0) {
-				outputText += `\n\nExit code: ${result.code}`;
-			}
-			// Recorded unconditionally (not only on failure) because the task governor judges a
-			// wake's productivity from it: a command that ran clean and returned something is the
-			// evidence that a turn spent driving an external tool was not idle.
-			details = { ...details, exitCode: result.code, producedOutput: output.trim().length > 0 };
+				const truncation = truncateTail(output);
+				let text = truncation.content || "(no output)";
+				let details: BashToolDetails | undefined;
 
-			return { content: [{ type: "text", text: outputText }], details };
+				if (truncation.truncated) {
+					details = { truncation, fullOutputPath: tempFilePath };
+
+					const startLine = truncation.totalLines - truncation.outputLines + 1;
+					const endLine = truncation.totalLines;
+					const fullOutputHint = tempFilePath ? ` Full output: ${tempFilePath}` : "";
+
+					if (truncation.lastLinePartial) {
+						const lastLineSize = formatSize(Buffer.byteLength(output.split("\n").pop() || "", "utf-8"));
+						text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}).${fullOutputHint}]`;
+					} else if (truncation.truncatedBy === "lines") {
+						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}.${fullOutputHint}]`;
+					} else {
+						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit).${fullOutputHint}]`;
+					}
+				}
+
+				return { text, details: { ...details, producedOutput: output.trim().length > 0 } };
+			};
+
+			try {
+				const result = await executor.exec(effectiveCommand, { timeout: effectiveTimeout, signal });
+				const built = await buildOutputText(result.stdout, result.stderr);
+				let outputText = built.text;
+
+				// A non-zero exit code is a normal result, not a tool failure: commands like
+				// `grep` (no match), `diff` (differences), and `test` use exit codes as data.
+				// Report the code inline so the model can react without treating it as an error.
+				if (result.code !== 0) {
+					outputText += `\n\nExit code: ${result.code}`;
+				}
+				// Recorded unconditionally (not only on failure) because the task governor judges a
+				// wake's productivity from it: a command that ran clean and returned something is the
+				// evidence that a turn spent driving an external tool was not idle.
+				const details: BashToolDetails = { ...built.details, exitCode: result.code };
+
+				return { content: [{ type: "text", text: outputText }], details };
+			} catch (error) {
+				if (!(error instanceof CommandTerminatedError)) {
+					throw error;
+				}
+				const built = await buildOutputText(error.stdout, error.stderr);
+				const nextStep =
+					error.reason === "timeout"
+						? `Retry with a larger \`timeout\` (currently ${error.timeoutSeconds}s), or pass \`async: true\` to run it in the background and be woken when it finishes.`
+						: "The command was stopped (e.g. by /stop or a run cancellation); partial output above.";
+				const outputText = `${built.text}\n\n[${error.message}; partial output above. ${nextStep}]`;
+				const details: BashToolDetails = { ...built.details, timedOut: true };
+				return { content: [{ type: "text", text: outputText }], details };
+			}
 		},
 	};
 }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { createAtomicTempPath, writeFileAtomically } from "../shared/atomic-file.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import {
 	resolveSkillPath,
 	resolveSkillSupportingFile,
@@ -143,33 +144,33 @@ function parseWriteAction(action: string): SkillWriteAction {
 	if (action === "create" || action === "patch" || action === "write_file") {
 		return action;
 	}
-	throw new Error('Unsupported skill action. Use "list", "view", "create", "patch", or "write_file".');
+	throw new RecoverableToolError('Unsupported skill action. Use "list", "view", "create", "patch", or "write_file".');
 }
 
 function ensureSkillMarkdownSafe(content: string, name: string): void {
 	const validation = validateSkillMarkdown(content, name);
 	if (!validation.ok) {
-		throw new Error(validation.error);
+		throw new RecoverableToolError(validation.error ?? "Skill content failed validation.");
 	}
 }
 
 function ensureSupportingFileSafe(content: string): void {
 	const validation = scanSkillContent(content);
 	if (!validation.ok) {
-		throw new Error(validation.error);
+		throw new RecoverableToolError(validation.error ?? "Skill content failed validation.");
 	}
 }
 
 function applyUniquePatch(content: string, find: string, replace: string): string {
 	if (!find) {
-		throw new Error("Patch requires a non-empty find string.");
+		throw new RecoverableToolError("Patch requires a non-empty find string.");
 	}
 	const first = content.indexOf(find);
 	if (first < 0) {
-		throw new Error("Patch find string was not found.");
+		throw new RecoverableToolError("Patch find string was not found.");
 	}
 	if (content.indexOf(find, first + find.length) >= 0) {
-		throw new Error("Patch find string matched multiple locations.");
+		throw new RecoverableToolError("Patch find string matched multiple locations.");
 	}
 	return `${content.slice(0, first)}${replace}${content.slice(first + find.length)}`;
 }
@@ -183,7 +184,7 @@ export async function manageWorkspaceSkill(
 
 	if (request.action === "create") {
 		if (existsSync(skillPath)) {
-			throw new Error(`Workspace skill "${request.name}" already exists.`);
+			throw new RecoverableToolError(`Workspace skill "${request.name}" already exists.`);
 		}
 		const content = request.content ?? "";
 		ensureSkillMarkdownSafe(content, request.name);
@@ -199,12 +200,12 @@ export async function manageWorkspaceSkill(
 	}
 
 	if (!existsSync(skillPath)) {
-		throw new Error(`Workspace skill "${request.name}" does not exist.`);
+		throw new RecoverableToolError(`Workspace skill "${request.name}" does not exist.`);
 	}
 
 	if (request.action === "write_file") {
 		if (!request.filePath) {
-			throw new Error("write_file requires filePath.");
+			throw new RecoverableToolError("write_file requires filePath.");
 		}
 		const content = request.content ?? "";
 		const targetPath = resolveSkillSupportingFile(skillDir, request.filePath);
@@ -288,7 +289,7 @@ export function createSkillManageTool(options: SkillManageToolOptions): AgentToo
 			}
 
 			if (!args.name) {
-				throw new Error(`Action "${args.action}" requires a skill name.`);
+				throw new RecoverableToolError(`Action "${args.action}" requires a skill name.`);
 			}
 
 			if (args.action === "view") {
@@ -304,7 +305,7 @@ export function createSkillManageTool(options: SkillManageToolOptions): AgentToo
 				replace: args.replace,
 			});
 			return {
-				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				content: [{ type: "text", text: JSON.stringify(result) }],
 				details: { ...result },
 			};
 		},

@@ -40,7 +40,7 @@ order: 36
 
 - **并行的写入分片各自显式传 `workingDirectory`（`git worktree add` 后指向不同 checkout）**，不要依赖默认值让它们自动分开——它们不会。
 - 频道配置了项目边界时，`workingDirectory` 必须落在当前项目目录内；传一个目录外的路径会被直接拒绝（`workingDirectory "..." must be inside the project root`），不是先派发再核实。
-- runtime 只在**委派之间**保证排他写锁：`mutates: write` 的 run 会占住目标目录，第二个写入者被拒时错误会点名持有者 runId。锁触发说明分片设计已经出错，它是兜底而不是免于思考的理由。**这把锁只保护声明了 `mutates: write` 的委派**——内置角色的 `mutates` 是按 `tools` 推定（只看 `write`/`edit`，不看 `bash`），外部角色是自述，两者都可能与角色实际行为不符，写清楚 `mutates` 是你的责任，不是 runtime 能替你核实的事。
+- runtime 只在**委派之间**保证排他写锁：`mutates: write` 的 run 会占住目标目录，第二个写入者被拒时错误会点名持有者 runId。锁触发说明分片设计已经出错，它是兜底而不是免于思考的理由。**这把锁只保护声明了 `mutates: write` 的委派**——内置角色的 `mutates` 是按 `tools` 推定（只看 `write`/`edit`，不看 `bash`），外部角色是自述，两者都可能与角色实际行为不符。写清楚 `mutates` 是你的责任：对配置好的角色，改它的角色文件；对 inline 委派（没有角色文件可改），在 `subagent` 调用上直接传 `mutates: "write"`——这个参数就是为此存在的，不要指望 `tools` 推定替你做对。
 - **你自己的 `write` / `edit` / `bash` 不受这把锁保护。** 一个目录上有活跃写委派时，不要同时自己去改它——先等它结束，或者换一棵 worktree。
 - **创建的 worktree 在使用结束后要记得关闭**
 

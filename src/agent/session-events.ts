@@ -6,7 +6,7 @@ import { extractLabelFromArgs, truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import type { SubAgentToolDetails } from "../subagents/tool.js";
-import { type ToolDetails, toolResultDetails } from "../tools/tool-details.js";
+import { isRecoverableRejection, type ToolDetails, toolResultDetails } from "../tools/tool-details.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { isEffectfulTool, noteChannelEffect } from "./effect-ledger.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
@@ -182,7 +182,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		// still diagnosable, but never rendered to the user — a red bubble would report a failure
 		// that never happened and make the assistant look broken mid-turn. Rejections the *user*
 		// must resolve (a security guard refusal or an external decision) stay plain errors and remain visible.
-		const rejected = details?.recoverable === true;
+		const rejected = isRecoverableRejection(event.result);
 		const treatAsError = event.isError || Boolean(subAgentDetails?.failed);
 		if (treatAsError) {
 			log.logToolError(logCtx, event.toolName, durationMs, resultStr);

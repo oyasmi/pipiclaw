@@ -21,21 +21,74 @@ import { getExternalHarness } from "./registry.js";
 import { finalizeExternalRun } from "./settlement.js";
 
 /**
- * Env vars the daemon's own credentials tend to live in — dropped by default from an external
+ * Env vars pipiclaw's own credentials tend to live in — dropped by default from an external
  * process's environment. A target repo's `CLAUDE.md`/prompt can steer an external agent's actions
  * (it is a separate, untrusted host process, not sandboxed by pipiclaw's own guards), so it should
- * not inherit pipiclaw's own provider keys or DingTalk credentials just because it inherits the
- * daemon's shell (review 2026-08-23 §2.4). A role can add any of these back explicitly via `env:`.
+ * not inherit pipiclaw's own LLM provider keys or DingTalk credentials just because it inherits
+ * the daemon's shell (review 2026-08-23 §2.4). A role can add any of these back explicitly via
+ * `env:`.
+ *
+ * An explicit name list, not a suffix pattern (fix plan §4.3): a `_API_KEY`/`_SECRET`/`_TOKEN`/
+ * `_PASSWORD` suffix regex both over-blocks (a role that shells out to `gh`/`npm` loses
+ * `GITHUB_TOKEN`/`NPM_TOKEN` with zero explanation) and under-blocks (`AWS_SECRET_ACCESS_KEY`,
+ * `GOOGLE_APPLICATION_CREDENTIALS`, `SSH_AUTH_SOCK` do not match the suffix at all). This list is
+ * therefore deliberately narrow: only the env vars pipiclaw's own LLM calls and DingTalk transport
+ * read (`src/models/api-keys.ts`, the `pi-ai` provider registry). It is a courtesy against
+ * accidental inheritance, not a security boundary — the real boundary is the role's own command,
+ * CLI sandbox, and host account (AGENTS.md).
  */
-const SENSITIVE_ENV_PATTERN = /(?:_API_KEY|_SECRET|_TOKEN|_PASSWORD)$/i;
+const SENSITIVE_ENV_VAR_NAMES = new Set([
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_AUTH_TOKEN",
+	"ANTHROPIC_OAUTH_TOKEN",
+	"OPENAI_API_KEY",
+	"GOOGLE_API_KEY",
+	"GEMINI_API_KEY",
+	"GOOGLE_CLOUD_API_KEY",
+	"AZURE_OPENAI_API_KEY",
+	"MISTRAL_API_KEY",
+	"GROQ_API_KEY",
+	"CEREBRAS_API_KEY",
+	"DEEPSEEK_API_KEY",
+	"XAI_API_KEY",
+	"OPENROUTER_API_KEY",
+	"TOGETHER_API_KEY",
+	"FIREWORKS_API_KEY",
+	"MOONSHOT_API_KEY",
+	"MINIMAX_API_KEY",
+	"MINIMAX_CN_API_KEY",
+	"KIMI_API_KEY",
+	"ZAI_API_KEY",
+	"QWEN_TOKEN_PLAN_API_KEY",
+	"QWEN_TOKEN_PLAN_CN_API_KEY",
+	"NVIDIA_API_KEY",
+	"OPENCODE_API_KEY",
+	"CLOUDFLARE_API_KEY",
+	"AI_GATEWAY_API_KEY",
+]);
 
-function filterSensitiveEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/** Filters an external process's inherited env, returning the keys it actually dropped so the
+ *  caller can surface them in `invocationWarnings` — silently dropping `GITHUB_TOKEN` or
+ *  similar with zero trace is exactly what made this hard to diagnose before (fix plan §4.3). */
+function filterSensitiveEnv(env: NodeJS.ProcessEnv): { filtered: NodeJS.ProcessEnv; dropped: string[] } {
 	const filtered: NodeJS.ProcessEnv = {};
+	const dropped: string[] = [];
 	for (const [key, value] of Object.entries(env)) {
-		if (SENSITIVE_ENV_PATTERN.test(key) || key.startsWith("DINGTALK_")) continue;
+		if (SENSITIVE_ENV_VAR_NAMES.has(key) || key.startsWith("DINGTALK_")) {
+			dropped.push(key);
+			continue;
+		}
 		filtered[key] = value;
 	}
-	return filtered;
+	return { filtered, dropped };
+}
+
+/** Only set when at least one credential was actually present and dropped -- a role that never
+ *  had `GITHUB_TOKEN` set in the first place gets no noise about it. */
+function mergeInvocationWarnings(warnings: string[] | undefined, droppedEnvVars: string[]): string[] | undefined {
+	if (droppedEnvVars.length === 0) return warnings;
+	const envWarning = `Dropped from this process's environment (add back via the role's env: if needed): ${droppedEnvVars.join(", ")}`;
+	return warnings ? [...warnings, envWarning] : [envWarning];
 }
 
 /**
@@ -233,13 +286,14 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		return { ok: false, kind: "launch-failed", reason };
 	}
 
+	const envFilterResult = filterSensitiveEnv(process.env);
 	const spawnFn = input.spawnFn ?? nodeSpawn;
 	let child: ChildProcess;
 	try {
 		child = spawnFn(invocation.executable, invocation.args, {
 			detached: true,
 			cwd: input.workingDirectory,
-			env: { ...filterSensitiveEnv(process.env), ...input.env },
+			env: { ...envFilterResult.filtered, ...input.env },
 			// stdout/stderr point straight at the artifact files (P0-1): the child writes them
 			// itself, so they land on disk even if this daemon disappears before it exits.
 			stdio: ["pipe", eventsFd, stderrFd],
@@ -312,7 +366,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		maxWallTimeSec: input.maxWallTimeSec,
 		processStartedAt,
 		channelDir: input.channelDir,
-		invocationWarnings: invocation.warnings,
+		invocationWarnings: mergeInvocationWarnings(invocation.warnings, envFilterResult.dropped),
 		// Spec 042 D12: distinguishes "the target CLI's schema drifted" from "the agent failed".
 		parserVersion: harness.parserVersion,
 		cliVersion,

@@ -20,18 +20,32 @@ class ScriptedExecutor implements Executor {
 
 describe("read tool", () => {
 	it("returns image payloads for supported image files", async () => {
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "YWJjZA==\n", stderr: "" }]);
+		const executor = new ScriptedExecutor([
+			{ code: 0, stdout: "4\n", stderr: "" },
+			{ code: 0, stdout: "YWJjZA==\n", stderr: "" },
+		]);
 		const tool = createReadTool(executor);
 
 		const result = await tool.execute("call", { label: "read image", path: "photo.png" });
 
-		expect(executor.calls).toHaveLength(1);
-		expect(executor.calls[0].command).toContain("base64 < 'photo.png'");
+		expect(executor.calls).toHaveLength(2);
+		expect(executor.calls[0].command).toContain("wc -c < 'photo.png'");
+		expect(executor.calls[1].command).toContain("base64 < 'photo.png'");
 		expect(result.details).toBeUndefined();
 		expect(result.content).toEqual([
 			{ type: "text", text: "Read image file [image/png]" },
 			{ type: "image", data: "YWJjZA==", mimeType: "image/png" },
 		]);
+	});
+
+	it("rejects an image over the inline size limit before base64-encoding it", async () => {
+		const executor = new ScriptedExecutor([{ code: 0, stdout: `${6 * 1024 * 1024}\n`, stderr: "" }]);
+		const tool = createReadTool(executor);
+
+		await expect(tool.execute("call", { label: "read image", path: "huge.png" })).rejects.toThrow(
+			/over the .* inline limit/,
+		);
+		expect(executor.calls).toHaveLength(1);
 	});
 
 	it("reads text with offset and limit and reports remaining lines", async () => {

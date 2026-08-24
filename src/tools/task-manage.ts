@@ -72,7 +72,7 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 				action: parseAction(request.action),
 			});
 			return {
-				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				content: [{ type: "text", text: JSON.stringify(result) }],
 				details: { ...result },
 			};
 		},

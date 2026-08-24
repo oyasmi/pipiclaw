@@ -1,6 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { SecurityConfig } from "../security/types.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { resolveWebFetchRequest } from "../web/config.js";
 import { runWebFetch } from "../web/fetch.js";
 import { formatFetchedText, UNTRUSTED_WEB_CONTENT_BANNER } from "../web/format.js";
@@ -93,8 +94,17 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 			const startOffset = offset && offset > 0 ? offset : 0;
 
 			// Cache is per-channel; when no channelDir is available (e.g. sub-agent path) fall back to a
-			// plain single-shot fetch with the requested maxChars.
+			// plain single-shot fetch with the requested maxChars. An `offset` here would otherwise be
+			// silently dropped -- the caller gets the first screen back with no way to tell "reached
+			// the end" from "pagination just doesn't work here" (fix plan §4.5), and can spin retrying
+			// the same offset forever.
 			if (!options.channelDir) {
+				if (startOffset > 0) {
+					throw new RecoverableToolError(
+						"This context does not support web_fetch pagination (no per-channel cache available); " +
+							"offset is ignored here. Increase maxChars instead, or have the main agent fetch the page.",
+					);
+				}
 				return runWebFetch(
 					{
 						webConfig: options.webConfig,

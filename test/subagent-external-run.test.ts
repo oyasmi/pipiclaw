@@ -177,6 +177,63 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(dispatched[0]?.text).toContain(`Full output: ${outputPath}`);
 	});
 
+	it("drops only pipiclaw's own LLM/DingTalk env vars, keeps others, and records what was dropped (fix plan §4.3)", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelDir = join(workspaceDir, "dm_ext");
+		const artifactDir = join(channelDir, "subagent-artifacts", "run-ext-env");
+		mkdirSync(artifactDir, { recursive: true });
+
+		const { spawnFn, spawnFnForInput, child } = makeFakeSpawn({ pid: 5151 });
+
+		const originalAnthropic = process.env.ANTHROPIC_API_KEY;
+		const originalDingtalk = process.env.DINGTALK_APP_KEY;
+		process.env.ANTHROPIC_API_KEY = "sk-should-not-leak";
+		process.env.DINGTALK_APP_KEY = "dt-should-not-leak";
+		process.env.GITHUB_TOKEN = "gh-should-be-kept";
+		try {
+			await launchExternalRun({
+				runId: "run-ext-env",
+				channelId: "dm_ext",
+				label: "build",
+				agent: "builder",
+				source: "predefined",
+				harness: "codex-cli",
+				command: "codex exec",
+				maxWallTimeSec: 60,
+				systemPrompt: "You are a builder.",
+				task: "Implement the thing.",
+				workingDirectory: workspaceDir,
+				artifactDir,
+				purpose: "work",
+				mutates: "write",
+				workspaceDir,
+				securityConfig: DEFAULT_SECURITY_CONFIG,
+				spawnFn: spawnFnForInput,
+			});
+		} finally {
+			if (originalAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+			else process.env.ANTHROPIC_API_KEY = originalAnthropic;
+			if (originalDingtalk === undefined) delete process.env.DINGTALK_APP_KEY;
+			else process.env.DINGTALK_APP_KEY = originalDingtalk;
+			delete process.env.GITHUB_TOKEN;
+		}
+
+		expect(spawnFn).toHaveBeenCalledTimes(1);
+		const spawnOptions = spawnFn.mock.calls[0]?.[2] as { env?: Record<string, string | undefined> };
+		expect(spawnOptions.env?.ANTHROPIC_API_KEY).toBeUndefined();
+		expect(spawnOptions.env?.DINGTALK_APP_KEY).toBeUndefined();
+		expect(spawnOptions.env?.GITHUB_TOKEN).toBe("gh-should-be-kept");
+
+		const manager = getSubAgentRunManager("dm_ext");
+		await waitFor(() => manager.get("run-ext-env")?.pid !== undefined);
+		const warnings = manager.get("run-ext-env")?.invocationWarnings ?? [];
+		expect(warnings.some((w) => w.includes("ANTHROPIC_API_KEY"))).toBe(true);
+		expect(warnings.some((w) => w.includes("DINGTALK_APP_KEY"))).toBe(true);
+		expect(warnings.some((w) => w.includes("GITHUB_TOKEN"))).toBe(false);
+
+		child.emit("close", 0);
+	});
+
 	it("settles failed when the process exits 0 but no protocol terminal event was observed", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_ext2");

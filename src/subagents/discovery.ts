@@ -125,10 +125,9 @@ export interface SubAgentConfig {
 	unavailable?: string;
 }
 
-export interface ResolvedSubAgentConfig extends Omit<SubAgentConfig, "model" | "modelRef" | "thinkingLevel"> {
+export interface ResolvedSubAgentConfig extends Omit<SubAgentConfig, "model" | "modelRef"> {
 	model: Model<Api>;
 	modelRef: string;
-	thinkingLevel: SubAgentThinkingLevel;
 }
 
 export interface SubAgentDiscoveryResult {
@@ -151,11 +150,13 @@ export interface SubAgentInvocationOverrides {
 	thinkingLevel?: string;
 	/** Drives the thinkingLevel default: "verify" defaults on, everything else stays off. */
 	purpose?: string;
+	mutates?: string;
 }
 
-/** verify is the last unattended gate before an attestation is trusted; give it real reasoning by default. */
-const DEFAULT_VERIFY_THINKING_LEVEL: SubAgentThinkingLevel = "medium";
-const DEFAULT_WORK_THINKING_LEVEL: SubAgentThinkingLevel = "off";
+/** Internal work/verify default, aligned with the main agent's DEFAULT_MAIN_THINKING_LEVEL
+ *  (channel-runner.ts). External work leaves thinkingLevel unset instead (see resolveSubAgentConfig):
+ *  pipiclaw has no standing to pick a reasoning effort for another CLI's own configuration. */
+export const DEFAULT_THINKING_LEVEL: SubAgentThinkingLevel = "medium";
 
 function validateTextLength(value: string, maxChars: number, label: string): string | undefined {
 	if (value.length <= maxChars) {
@@ -842,7 +843,7 @@ export function resolveSubAgentConfig(
 	 * caller (tool.ts) already normalizes that, this function just treats undefined as absent.
 	 */
 	subagentDefaultModelRef?: string,
-): { config?: ResolvedSubAgentConfig; error?: string } {
+): { config?: ResolvedSubAgentConfig; error?: string; warning?: string } {
 	const baseConfig = overrides.agent ? predefinedAgents.find((agent) => agent.name === overrides.agent) : undefined;
 	if (overrides.agent && !baseConfig) {
 		const available = predefinedAgents.length > 0 ? predefinedAgents.map((agent) => agent.name).join(", ") : "none";
@@ -876,6 +877,13 @@ export function resolveSubAgentConfig(
 			error:
 				`Sub-agent "${baseConfig?.name}" is external; its model can only be set in the role file's ` +
 				'"model" frontmatter. The "model" invocation parameter has no effect on external roles and is never resolved against models.json.',
+		};
+	}
+	// External `mutates` is the role file's own self-declaration (checked against its harness/command),
+	// same reasoning as `model` above — the caller cannot override what the external role attests about itself.
+	if (effectiveRuntime === "external" && overrides.mutates !== undefined) {
+		return {
+			error: `Sub-agent "${baseConfig?.name}" is external; "mutates" comes from its role file, not the invocation parameter.`,
 		};
 	}
 
@@ -951,10 +959,27 @@ export function resolveSubAgentConfig(
 		return { error: thinkingLevelOverride.error };
 	}
 	const purpose = overrides.purpose === "verify" ? "verify" : "work";
+	const explicitThinkingLevel = thinkingLevelOverride?.value ?? baseConfig?.thinkingLevel;
+	// External work is not defaulted: pipiclaw has no standing to pick a reasoning effort for
+	// another CLI's own configuration. External verify still defaults — it is the last unattended
+	// gate before an attestation is trusted, and "whatever that machine happens to have configured"
+	// is not an acceptable substitute for real reasoning.
 	const thinkingLevel =
-		thinkingLevelOverride?.value ??
-		baseConfig?.thinkingLevel ??
-		(purpose === "verify" ? DEFAULT_VERIFY_THINKING_LEVEL : DEFAULT_WORK_THINKING_LEVEL);
+		explicitThinkingLevel ??
+		(effectiveRuntime === "external" && purpose !== "verify" ? undefined : DEFAULT_THINKING_LEVEL);
+
+	const mutatesOverride = parseMutates(overrides.mutates);
+	if (mutatesOverride.error) {
+		return { error: mutatesOverride.error };
+	}
+	const mutates = mutatesOverride.value ?? baseConfig?.mutates ?? inferMutatesFromTools(tools.tools);
+	// Same rationale as the predefined-role bashWithoutMutatesWarning above (D6): `bash` can write
+	// regardless of what `tools` otherwise implies. Inline roles have no frontmatter to declare it
+	// in, so the warning goes back to the model in the result text instead of a discovery-time log.
+	const bashWithoutMutatesWarning =
+		!baseConfig && tools.tools.includes("bash") && mutatesOverride.value === undefined
+			? 'tools include bash but "mutates" is not declared; if this task writes to the workspace, pass mutates: "write" so it takes the exclusive workspace write lease'
+			: undefined;
 
 	const systemPrompt = overrides.systemPrompt?.trim() || baseConfig?.systemPrompt || "";
 	if (!systemPrompt) {
@@ -971,6 +996,7 @@ export function resolveSubAgentConfig(
 	}
 
 	return {
+		warning: bashWithoutMutatesWarning,
 		config: {
 			name: overrides.name?.trim() || baseConfig?.name || "dynamic-subagent",
 			description: baseConfig?.description || "Inline sub-agent",
@@ -994,7 +1020,7 @@ export function resolveSubAgentConfig(
 			shell: baseConfig?.shell,
 			env: baseConfig?.env,
 			workload: baseConfig?.workload,
-			mutates: baseConfig?.mutates ?? inferMutatesFromTools(tools.tools),
+			mutates,
 			externalModelRef: baseConfig?.externalModelRef,
 			unavailable: baseConfig?.unavailable,
 		},

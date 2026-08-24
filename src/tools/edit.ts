@@ -6,6 +6,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { shellEscape } from "../shared/shell-escape.js";
 import { writeContent } from "./write-content.js";
 
@@ -185,14 +186,14 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 			// Read the file
 			const readResult = await executor.exec(`cat ${shellEscape(path)}`, { signal });
 			if (readResult.code !== 0) {
-				throw new Error(readResult.stderr || `File not found: ${path}`);
+				throw new RecoverableToolError(readResult.stderr || `File not found: ${path}`);
 			}
 
 			const content = readResult.stdout;
 
 			// Check if old text exists
 			if (!content.includes(oldText)) {
-				throw new Error(
+				throw new RecoverableToolError(
 					`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
 				);
 			}
@@ -201,7 +202,7 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 			const occurrences = content.split(oldText).length - 1;
 
 			if (occurrences > 1 && !replaceAll) {
-				throw new Error(
+				throw new RecoverableToolError(
 					`Found ${occurrences} occurrences of the text in ${path}. The text must be unique, or pass replaceAll: true to replace all of them. Please provide more context to make it unique.`,
 				);
 			}
@@ -226,13 +227,28 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 							`Do NOT widen oldText or add lines to force a match.`,
 					);
 				}
-				throw new Error(
+				throw new RecoverableToolError(
 					`No changes made to ${path}: oldText and newText are byte-identical at the match, so the replacement produced no change. ` +
 						`Re-read the file to confirm what actually needs changing before editing again.`,
 				);
 			}
 			// A real edit breaks any no-op streak.
 			noopCounts.clear();
+
+			// Re-read immediately before writing back and compare against what was read at the top of
+			// this call (fix plan §2.4/§4.2): a background job, an external agent, or a concurrent
+			// `bash`/`edit` call (none of which the workspace write lease protects for the caller's own
+			// tool calls -- only inter-delegation writes) can change the file in between. Without this,
+			// the write below would silently clobber whatever changed it, keeping only this call's
+			// edit and discarding the other writer's. This narrows the race to the read-compare-write
+			// gap itself rather than closing it -- cheap insurance, not a lock.
+			const recheck = await executor.exec(`cat ${shellEscape(path)}`, { signal });
+			if (recheck.code === 0 && recheck.stdout !== content) {
+				throw new RecoverableToolError(
+					`${path} changed during this edit (likely a background job or another agent writing concurrently). ` +
+						"Re-read the file and re-apply the edit against its current content.",
+				);
+			}
 
 			// Write the file back
 			await writeContent(executor, path, newContent, signal, {

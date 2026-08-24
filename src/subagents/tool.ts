@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
-import { streamSimple } from "@earendil-works/pi-ai/compat";
+import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { ExecOptions, ExecResult, Executor } from "../executor.js";
@@ -32,6 +32,7 @@ import { writeVerificationAttestation } from "../tasks/verification.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
 import { buildToolSet } from "../tools/registry.js";
 import {
+	DEFAULT_THINKING_LEVEL,
 	externalRoleFingerprint,
 	formatSubAgentList,
 	type ResolvedSubAgentConfig,
@@ -113,9 +114,18 @@ const subagentSchema = Type.Object({
 			],
 			{
 				description:
-					'Optional reasoning effort for the sub-agent. Defaults to "medium" for purpose=verify, "off" otherwise.',
+					'Optional reasoning effort for the sub-agent. Defaults to "medium" for internal delegations and for external purpose=verify; ' +
+					"an external purpose=work delegation with no explicit value leaves this unset, so the target CLI's own configuration decides.",
 			},
 		),
+	),
+	mutates: Type.Optional(
+		Type.Union([Type.Literal("read"), Type.Literal("write")], {
+			description:
+				'Whether this delegation will modify the working directory. Declare "write" whenever the sub-agent may write ' +
+				"files (including through bash) so it takes the exclusive workspace write lease. Defaults to inference from " +
+				"`tools` (write/edit only), which does not see bash.",
+		}),
 	),
 });
 
@@ -714,13 +724,21 @@ function createDetails(
 	failed: boolean,
 	failureReason?: string,
 	verificationVerdict?: "pass" | "fail",
-	extras?: { artifactPath?: string; resultTruncated?: boolean },
+	extras?: {
+		artifactPath?: string;
+		resultTruncated?: boolean;
+		/** Set for the "[Dispatched]" placeholder returned instead of waiting on the run (D2). */
+		dispatched?: boolean;
+		/** External roles report their harness's own model string, never `formatModelReference`. */
+		modelOverride?: string;
+		toolsOverride?: string[];
+	},
 ): SubAgentToolFields {
 	return {
 		agent: config.name,
 		source: config.source,
-		model: formatModelReference(config.model),
-		tools: [...config.tools],
+		model: extras?.modelOverride ?? formatModelReference(config.model),
+		tools: extras?.toolsOverride ?? [...config.tools],
 		turns,
 		toolCalls,
 		durationMs,
@@ -737,6 +755,7 @@ function createDetails(
 		artifactDir: runContext.artifactDir,
 		artifactPath: extras?.artifactPath,
 		resultTruncated: extras?.resultTruncated ?? false,
+		dispatched: extras?.dispatched,
 	};
 }
 
@@ -789,6 +808,9 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 			}
 
 			const config = invocation.config;
+			// Only ever set for an inline (internal) delegation with `bash` in `tools` and no explicit
+			// `mutates` — surfaced to the model, not just a log, since it has no role file to fix.
+			const mutatesNote = invocation.warning ? `Note: ${invocation.warning}\n\n` : "";
 			const returns = params.returns ?? "text";
 			// Spec 042 D3: `returns: "artifact"` has no external equivalent — the marker protocol
 			// scopes a produced file to `artifactDir`, but an external agent's real output lives in
@@ -842,7 +864,17 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 					// always "text" here — passed literally rather than the `returns` variable so the
 					// ARTIFACT marker protocol is never injected into an external envelope, which no
 					// external result parser has ever read.
-					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel);
+					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel).catch(
+						(error) => {
+							// Context injection is an enhancement, not a precondition -- degrading to no context blocks
+							// beats failing a dispatch that would otherwise have run fine.
+							log.logWarning(
+								`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
+								errorMessage(error),
+							);
+							return [] as string[];
+						},
+					);
 					const envelopedTask = buildSubAgentTask(
 						params.task,
 						config,
@@ -909,23 +941,22 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 								"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_manage.",
 						},
 					],
-					details: {
-						agent: config.name,
-						source: config.source,
-						model: config.externalModelRef ?? "unknown",
-						tools: [],
-						turns: 0,
-						toolCalls: 0,
-						durationMs: 0,
-						failed: false,
-						usage: createEmptyUsageTotals(),
-						runId: runContext.runId,
-						purpose: runContext.purpose,
-						taskId: runContext.taskId,
-						artifactDir: runContext.artifactDir,
-						resultTruncated: false,
-						dispatched: true,
-					},
+					details: createDetails(
+						config,
+						runContext,
+						createEmptyUsageTotals(),
+						0,
+						0,
+						0,
+						false,
+						undefined,
+						undefined,
+						{
+							dispatched: true,
+							modelOverride: config.externalModelRef ?? "unknown",
+							toolsOverride: [],
+						},
+					),
 				};
 			}
 
@@ -1024,7 +1055,12 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 						initialState: {
 							systemPrompt: config.systemPrompt,
 							model: config.model,
-							thinkingLevel: config.thinkingLevel,
+							// Same clamp the main agent applies (channel-runner.ts) before setting a model's
+							// thinkingLevel: a model with `reasoning: false` gets "off", an unsupported tier
+							// snaps to the nearest one, instead of a raw unsupported value reaching the provider.
+							// The internal path's resolved config always fills thinkingLevel; the fallback
+							// here only closes the type.
+							thinkingLevel: clampThinkingLevel(config.model, config.thinkingLevel ?? DEFAULT_THINKING_LEVEL),
 							tools: filterToolsByName(availableTools, config.tools),
 						},
 						convertToLlm,
@@ -1127,7 +1163,17 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 				settleInput: SettleInput;
 			}> {
 				try {
-					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel);
+					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel).catch(
+						(error) => {
+							// Context injection is an enhancement, not a precondition -- degrading to no context blocks
+							// beats failing a dispatch that would otherwise have run fine.
+							log.logWarning(
+								`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
+								errorMessage(error),
+							);
+							return [] as string[];
+						},
+					);
 					await activeWorker.prompt(
 						buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks, runContext, returns),
 					);
@@ -1244,7 +1290,10 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 					return {
 						toolResult: {
 							content: [
-								{ type: "text", text: buildStoppedText(config, effectiveFailureReason, finalized.replyText) },
+								{
+									type: "text",
+									text: mutatesNote + buildStoppedText(config, effectiveFailureReason, finalized.replyText),
+								},
 							],
 							details: createDetails(
 								config,
@@ -1276,7 +1325,9 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 						content: [
 							{
 								type: "text",
-								text: finalized.replyText || `(Sub-agent ${config.name} completed with no text output)`,
+								text:
+									mutatesNote +
+									(finalized.replyText || `(Sub-agent ${config.name} completed with no text output)`),
 							},
 						],
 						details: createDetails(
@@ -1351,28 +1402,24 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 					{
 						type: "text",
 						text:
+							mutatesNote +
 							`[Dispatched] runId=${runContext.runId}, agent ${config.name} (internal, async), working directory ${runContext.workingDirectory}.\n` +
 							"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
 							"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_manage.",
 					},
 				],
-				details: {
-					agent: config.name,
-					source: config.source,
-					model: formatModelReference(config.model),
-					tools: [...config.tools],
-					turns: assistantTurns,
+				details: createDetails(
+					config,
+					runContext,
+					usage,
+					assistantTurns,
 					toolCalls,
-					durationMs: Date.now() - startedAt,
-					failed: false,
-					usage: { ...usage, cost: { ...usage.cost } },
-					runId: runContext.runId,
-					purpose: runContext.purpose,
-					taskId: runContext.taskId,
-					artifactDir: runContext.artifactDir,
-					resultTruncated: false,
-					dispatched: true,
-				},
+					Date.now() - startedAt,
+					false,
+					undefined,
+					undefined,
+					{ dispatched: true },
+				),
 			};
 		},
 	};

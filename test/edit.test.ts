@@ -21,6 +21,7 @@ describe("edit tool", () => {
 	it("replaces unique text and returns a diff", async () => {
 		const executor = new ScriptedExecutor([
 			{ code: 0, stdout: "alpha\nbeta\ngamma\n", stderr: "" },
+			{ code: 0, stdout: "alpha\nbeta\ngamma\n", stderr: "" }, // pre-write recheck read
 			{ code: 0, stdout: "", stderr: "" },
 		]);
 		const tool = createEditTool(executor);
@@ -33,9 +34,8 @@ describe("edit tool", () => {
 		});
 
 		expect(executor.calls[0].command).toContain("cat 'notes.txt'");
-		expect(executor.calls[1].command).toContain("cat > 'notes.txt'");
-		expect(executor.calls[1].command).toContain("> 'notes.txt'");
-		expect(executor.calls[1].options?.stdin).toBe("alpha\ndelta\ngamma\n");
+		expect(executor.calls[2].command).toContain("mv -f \"$tmp\" 'notes.txt'");
+		expect(executor.calls[2].options?.stdin).toBe("alpha\ndelta\ngamma\n");
 		expect(result.content[0].type).toBe("text");
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
 		expect(text).toContain("Successfully replaced text in notes.txt. Changed 4 characters to 5 characters.");
@@ -53,6 +53,7 @@ describe("edit tool", () => {
 	it("replaces every occurrence when replaceAll is set", async () => {
 		const executor = new ScriptedExecutor([
 			{ code: 0, stdout: "a\nfoo\nfoo\nb\n", stderr: "" },
+			{ code: 0, stdout: "a\nfoo\nfoo\nb\n", stderr: "" }, // pre-write recheck read
 			{ code: 0, stdout: "", stderr: "" },
 		]);
 		const tool = createEditTool(executor);
@@ -65,7 +66,7 @@ describe("edit tool", () => {
 			replaceAll: true,
 		});
 
-		expect(executor.calls[1].options?.stdin).toBe("a\nbar\nbar\nb\n");
+		expect(executor.calls[2].options?.stdin).toBe("a\nbar\nbar\nb\n");
 		expect(result.content[0].type).toBe("text");
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
 		expect(text).toContain("Replaced 2 occurrences in notes.txt.");
@@ -132,6 +133,7 @@ describe("edit tool", () => {
 			{ code: 0, stdout: "beta\n", stderr: "" }, // no-op #1
 			{ code: 0, stdout: "beta\n", stderr: "" }, // no-op #2
 			{ code: 0, stdout: "alpha\n", stderr: "" }, // real edit read
+			{ code: 0, stdout: "alpha\n", stderr: "" }, // real edit pre-write recheck read
 			{ code: 0, stdout: "", stderr: "" }, // real edit write
 			{ code: 0, stdout: "beta\n", stderr: "" }, // no-op after reset
 		]);
@@ -141,5 +143,19 @@ describe("edit tool", () => {
 		await edit.execute("c3", { label: "edit", path: "notes.txt", oldText: "alpha", newText: "omega" });
 		// Streak was cleared by the successful edit: this is soft again, not the hard stop.
 		await expect(edit.execute("c4", noop)).rejects.toThrow(/No changes made/);
+	});
+
+	it("rejects the write when the file changed between the read and the pre-write recheck", async () => {
+		const executor = new ScriptedExecutor([
+			{ code: 0, stdout: "alpha\nbeta\ngamma\n", stderr: "" }, // initial read
+			{ code: 0, stdout: "alpha\nCHANGED\ngamma\n", stderr: "" }, // recheck sees a different file
+		]);
+		const tool = createEditTool(executor);
+
+		await expect(
+			tool.execute("call", { label: "edit file", path: "notes.txt", oldText: "beta", newText: "delta" }),
+		).rejects.toThrow(/changed during this edit/);
+		// No write was attempted.
+		expect(executor.calls).toHaveLength(2);
 	});
 });

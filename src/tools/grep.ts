@@ -5,6 +5,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { shellEscape } from "../shared/shell-escape.js";
 import { DEFAULT_MAX_BYTES, truncateHead } from "./truncate.js";
 
@@ -195,7 +196,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			signal?: AbortSignal,
 		) => {
 			if (!pattern.trim()) {
-				throw new Error("Pattern must not be empty.");
+				throw new RecoverableToolError("Pattern must not be empty.");
 			}
 
 			const searchPath = path?.trim() || ".";
@@ -229,7 +230,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			// grep exit code 1 = no matches (normal), 0 = matches, >=2 = error.
 			if (result.code >= 2) {
 				const stderr = result.stderr.trim();
-				throw new Error(
+				throw new RecoverableToolError(
 					`grep failed: ${stderr || `exit code ${result.code}`}. Check the regex (ERE syntax) and that the path exists.`,
 				);
 			}

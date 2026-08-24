@@ -151,13 +151,13 @@ maxWallTimeSec: 3600
 | `contextMode` | 否 | `isolated` | `isolated` 或 `contextual` |
 | `memory` | 否 | `isolated` 时为 `none`，`contextual` 时为 `relevant` | `none`、`session`、`relevant` |
 | `paths` | 否 | 空 | 建议优先关注的文件或目录 |
-| `thinkingLevel` | 否 | 普通委派为 `off`，`purpose=verify` 为 `medium` | `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` |
+| `thinkingLevel` | 否 | `medium`（与主代理默认推理档一致） | `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；内置路径会按模型能力 clamp 到最近的可用档 |
 | `maxTurns` | 否 | `24` | 最大 assistant 轮数 |
 | `maxToolCalls` | 否 | `48` | 最大工具调用次数 |
 | `maxWallTimeSec` | 否 | `300` | 最大总执行时长，秒；超过 120s 的部分会异步化，见下文"同步宽限窗口" |
 | `bashTimeoutSec` | 否 | `120` | 子代理内 bash 命令默认超时，秒 |
 | `workload` | 否 | `light` | `light` 或 `heavy`，只影响系统提示里的目录分组展示 |
-| `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁、能否用于 `purpose=verify`。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见 |
+| `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁、能否用于 `purpose=verify`。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见。inline 委派没有角色文件可写，因此 `subagent` 调用参数上也接受同名 `mutates`（见下文"调用参数"），显式声明时优先于推定 |
 | `harness` / `command` / `shell` / `env` / `cwd` | 驳回 | - | 只对外部角色有意义（`cwd` 对两种 runtime 都驳回，见下） |
 
 ### 外部（`runtime: external`）
@@ -169,7 +169,7 @@ maxWallTimeSec: 3600
 | `command` | 是 | - | 目标 CLI 的命令行，按 shell 词法分词后直接 argv 调用，**不经过 shell** |
 | `mutates` | 是 | - | `read` 或 `write`，无默认值——这是一次显式声明，决定是否取 workspace 写锁、是否可用于 `purpose=verify` |
 | `model` | 否 | - | 目标 harness 自己的模型字符串（如 `sonnet`），**原样透传，不经过 `models.json` 校验** |
-| `thinkingLevel` | 否 | 同内置词表 | 由结构化 harness 翻译成目标 CLI 的推理参数（见下） |
+| `thinkingLevel` | 否 | `purpose=verify` 为 `medium`；普通 work 委派**不兜底**，未声明就不追加任何推理参数，沿用目标 CLI 自己的配置 | 由结构化 harness 翻译成目标 CLI 的推理参数（见下） |
 | `workload` | 否 | `heavy` | 同内置 |
 | `shell` | 否 | `false` | 仅 `exec` 可设为 `true`，此时整条 `command` 交给 `/bin/sh -lc`；结构化 harness 使用时会被 discovery 驳回，因为它会绕过协议 argv 组装 |
 | `env` | 否 | 空 | 追加或覆盖继承自 pipiclaw 进程的环境变量 |
@@ -200,7 +200,8 @@ maxWallTimeSec: 3600
 | `context` | `none` | 上下文注入：`none`、`session`、`relevant`。对内外角色都生效——这是模型每次委派的显式决定，与角色文件里的 `memory` 默认值是两回事（见下文 `contextMode` 与 `memory`） |
 | `paths` | 角色配置 | 建议优先关注的路径；对内外角色都生效 |
 | `workingDirectory` | runtime 自身工作目录 | **每次委派都应显式传**；必须是已存在目录。并行写入的分片必须各自 `git worktree add` 后指向不同 checkout |
-| `thinkingLevel` | `off`（`verify` 为 `medium`） | 推理强度；外部角色由 runtime 翻译成对应 harness 的写法 |
+| `thinkingLevel` | 内置为 `medium`；外部 `purpose=verify` 为 `medium`，外部普通 work **不兜底**（未声明就不追加任何推理参数） | 推理强度；外部角色由 runtime 翻译成对应 harness 的写法 |
+| `mutates` | 角色配置或按 `tools` 推定（仅内置） | `read` 或 `write`；inline 委派没有角色文件，用它显式声明是否取工作区写锁。**对外部角色传入会被驳回**：外部角色的 `mutates` 是角色文件的自述，调用方不能覆盖 |
 | `purpose` | `work` | `verify` 进入独立验收协议，需同时传 `taskId` |
 | `taskId` | - | 绑定任务台账；`purpose: verify` 要求它 |
 | `returns` | `text` | `artifact` 要求子代理把主产出写成文件并以 `ARTIFACT: <filename>` 结尾（仅内置）。**对外部角色传入会被驳回**：`artifact` 协议假定产物在 `artifactDir` 内，而外部角色的真实产出在它自己的工作目录里，两者语义不同；外部角色的完整产出始终落在 `output.md`，需要指定产物位置时把要求写进 `task` |
@@ -324,13 +325,22 @@ my-gateway/gpt-4.1
 
 ### `thinkingLevel`
 
-`thinkingLevel` 控制子代理的推理强度。运行时为了控制普通委派成本，默认将 work 子代理设为 `off`；独立验收默认使用 `medium`。可复用的生产配置建议显式填写，避免角色行为依赖隐藏默认值：
+`thinkingLevel` 控制子代理的推理强度。解析规则按场景分四种，未显式指定时才落到默认值：
+
+| 场景 | 未指定时的默认值 |
+|---|---|
+| 内置（含 inline） | `medium`——与主代理自己的默认推理档对齐；不支持推理的模型会被 clamp 到 `off`，不支持该档位的模型会被 clamp 到最接近的可用档 |
+| 外部 · `purpose=work` | **不兜底**，保持未指定——runtime 无权替另一个 CLI 决定推理档位，不追加任何 effort 参数，沿用目标 CLI 自己的配置（如 `~/.claude/settings.json` / `~/.codex/config.toml`） |
+| 外部 · `purpose=verify` | `medium`——独立验收是产物被信任前最后一道无人值守的闸门，宁可显式要求推理 |
+| 任意场景 · 显式指定 | 该值（调用参数 > 角色 frontmatter），内置路径同样会按模型能力 clamp |
+
+可复用的生产配置建议显式填写，避免角色行为依赖隐藏默认值：
 
 - 机械性定位、明确范围内的信息提取：通常使用 `low`。
 - 多来源综合、代码审查、改动分组和独立验收：通常使用 `medium`。
 - 只有任务确实需要更深推理且预算允许时才使用 `high` 或 `xhigh`。
 
-外部角色使用同一词表，由结构化 harness 自动翻译：claude-code 追加 `--effort <level>`，codex-cli 追加 `-c model_reasoning_effort=<level>`。角色的 `command` 只负责选择可执行文件、权限模式和用户自定义的固定参数，不应重复编码 model 或 thinkingLevel。某些档位在目标 CLI 没有更低等价物时会夹取到最接近的档位。`/subagents show <runId>` 能看到实际生成的 argv，供核实结果。通用 `exec` harness 不知道目标脚本的参数协议，因此不自动追加 model 或 thinking 参数。
+外部角色使用同一词表，由结构化 harness 自动翻译：claude-code 追加 `--effort <level>`，codex-cli 追加 `-c model_reasoning_effort=<level>`——但仅当 `thinkingLevel` 实际有值时才追加；未声明的外部 work 角色不会看到这个 flag。角色的 `command` 只负责选择可执行文件、权限模式和用户自定义的固定参数，不应重复编码 model 或 thinkingLevel。某些档位在目标 CLI 没有更低等价物时会夹取到最接近的档位。`/subagents show <runId>` 能看到实际生成的 argv，供核实结果——未声明 `thinkingLevel` 的外部 work 角色，argv 里不应出现 `--effort` / `model_reasoning_effort`。通用 `exec` harness 不知道目标脚本的参数协议，因此不自动追加 model 或 thinking 参数。
 
 结构化 harness 对角色字段和协议参数的组装如下；这些都由 runtime 负责，不需要写进 `command`：
 
@@ -385,7 +395,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - **pipiclaw 不沙箱化外部智能体。** 唯一的强边界是你在 `command` 里写下的目标 CLI 自身的 sandbox flag（如 `codex exec --sandbox read-only`）。`workingDirectory` 决定进程从哪里开始，不构成隔离。
 - **`workspace/sub-agents/` 目录本身对模型的 `write`/`edit` 工具关闭**（主代理和子代理都一样）——防的是模型自己写一份外部角色文件、再调用它，从而绕过命令守卫执行任意宿主命令。这条防线拦不住 `bash` 直接改这个目录（与既有的记忆文件写入拒绝同一个已知缺口），角色目录建议纳入版本控制作为兜底：任何变更都可见、可回滚。
 - 每次外部派发都会写一条审计事件（runId、角色、harness、完整 argv、工作目录、`mutates`、model），不受"只记录被拦截的动作"这个开关影响。
-- 外部进程继承 pipiclaw 自身的环境变量，但默认剔除看起来像凭据的键（`*_API_KEY`/`*_SECRET`/`*_TOKEN`/`*_PASSWORD`，以及 `DINGTALK_*`）——目标仓库的 `CLAUDE.md`/prompt 能操纵外部 agent 的行为，不该顺带继承 pipiclaw 自己的模型 provider key 或钉钉凭据。角色需要某个凭据时用 `env:` 显式加回。
+- 外部进程继承 pipiclaw 自身的环境变量，但默认剔除 pipiclaw 自己会用到的凭据变量——一份明确的变量名清单（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY` 等 LLM provider key，以及 `DINGTALK_*`），不是通配的后缀正则。目标仓库的 `CLAUDE.md`/prompt 能操纵外部 agent 的行为，不该顺带继承 pipiclaw 自己的模型 provider key 或钉钉凭据。**这是一层减少误继承的礼貌措施，不是安全边界**——真正的权限边界是角色的命令、CLI 自身的沙箱和宿主账号。需要 `gh`/`npm` 等工具的角色，它们所需的 `GITHUB_TOKEN`/`NPM_TOKEN` 等凭据不在这份清单里，会照常继承；如果确实被过滤掉了（清单之外的变量默认不受影响），用 `env:` 显式加回即可。本次派发实际丢弃的变量名会写进 `invocationWarnings`，`subagent_manage op=show` 能看到。
 - 外部 agent 本身是完整 coding agent，能否 spawn 自己的子代理、递归到多深，pipiclaw 不保证也不限制。
 - 显式声明 `memory: session` 或 `memory: relevant` 的外部角色会把频道会话状态/召回的记忆片段写进发给外部进程的 stdin——这与继承环境变量属于同一类如实声明的暴露面，不是隐藏行为（默认值是 `none`，见上文"`contextMode` 与 `memory`"）。
 

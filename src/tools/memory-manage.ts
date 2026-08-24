@@ -222,7 +222,7 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		if (matches.length > 1) {
 			// Never guess which entry to delete; make the model disambiguate.
 			const candidates = matches.map((entry, index) => `${index + 1}. ${entry.content}`).join("\n");
-			throw new Error(
+			throw new RecoverableToolError(
 				`"${trimmed}" matched ${matches.length} entries; be more specific so only one is removed:\n${candidates}`,
 			);
 		}
@@ -264,7 +264,7 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 				case "forget":
 					return forget(args);
 				default:
-					throw new Error('Unsupported memory op. Use "save", "search", or "forget".');
+					throw new RecoverableToolError('Unsupported memory op. Use "save", "search", or "forget".');
 			}
 		},
 	};

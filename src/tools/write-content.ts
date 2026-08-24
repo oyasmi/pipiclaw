@@ -62,7 +62,19 @@ export async function writeContent(
 
 	const dirPrefix = createParentDir ? `mkdir -p ${shellEscape(getDir(path))} && ` : "";
 
-	const result = await executor.exec(`${dirPrefix}cat > ${shellEscape(path)}`, {
+	// Atomic write via a same-directory temp file + rename (fix plan §4.1): `cat > path` truncates
+	// before writing, so a process death or full disk mid-write leaves a corrupted file. `cp -p`
+	// copies the existing file's permission bits onto the temp file first -- `mv` onto an existing
+	// path otherwise keeps the *destination's* inode and mode, but a fresh temp file created by the
+	// shell has its own default mode, and simply overwriting via a new inode would silently strip
+	// an executable file's permission bit on its very next edit.
+	const tempPath = `${path}.pipiclaw-tmp`;
+	const script =
+		`${dirPrefix}tmp=${shellEscape(tempPath)}; ` +
+		`[ -f ${shellEscape(path)} ] && cp -p ${shellEscape(path)} "$tmp" 2>/dev/null; ` +
+		`cat > "$tmp" && mv -f "$tmp" ${shellEscape(path)}`;
+
+	const result = await executor.exec(script, {
 		signal,
 		stdin: content,
 	});

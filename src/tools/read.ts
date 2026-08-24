@@ -7,8 +7,16 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import { guardPath } from "../security/path-guard.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { shellEscape } from "../shared/shell-escape.js";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
+import {
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	formatSize,
+	MAX_INLINE_BINARY_BYTES,
+	type TruncationResult,
+	truncateHead,
+} from "./truncate.js";
 
 /**
  * Map of file extensions to MIME types for common image formats
@@ -154,10 +162,28 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			const mimeType = isImageFile(path);
 
 			if (mimeType) {
+				// Guard the file size before `base64`: base64 inflates to 4/3, and the executor caps
+				// captured stdout at 10MB, so a file above MAX_INLINE_BINARY_BYTES would be silently
+				// truncated mid-encoding into a buffer that still decodes -- a corrupt image handed to
+				// the model with no error (fix plan §2.3).
+				const sizeCheck = await executor.exec(`wc -c < ${shellEscape(path)} 2>&1 || echo __SIZE_FAILED__`, {
+					signal,
+				});
+				const sizeBytes = Number.parseInt(sizeCheck.stdout.trim(), 10);
+				if (Number.isFinite(sizeBytes) && sizeBytes > MAX_INLINE_BINARY_BYTES) {
+					throw new RecoverableToolError(
+						`Image ${path} is ${formatSize(sizeBytes)}, over the ${formatSize(MAX_INLINE_BINARY_BYTES)} inline limit. ` +
+							"Compress or resize it first with bash (e.g. sips/convert/ffmpeg), or read it as text to inspect metadata only.",
+					);
+				}
+
 				// Read as image (binary) - use base64
 				const result = await executor.exec(`base64 < ${shellEscape(path)}`, { signal });
 				if (result.code !== 0) {
-					throw new Error(result.stderr || `Failed to read file: ${path}`);
+					throw new RecoverableToolError(
+						result.stderr ||
+							`Failed to read file: ${path}. Check the path — try \`read\` on its parent directory to confirm it exists.`,
+					);
 				}
 				const base64 = result.stdout.replace(/\s/g, ""); // Remove whitespace from base64
 
@@ -202,7 +228,10 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 					{ signal },
 				);
 				if (countResult.code !== 0) {
-					throw new Error(countResult.stderr || `Failed to read file: ${path}`);
+					throw new RecoverableToolError(
+						countResult.stderr ||
+							`Failed to read file: ${path}. Check the path — try \`read\` on its parent directory to confirm it exists.`,
+					);
 				}
 				if (countResult.stdout.trim() === "__DIR__") {
 					const listing = await executor.exec(
@@ -236,7 +265,9 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 					totalFileLines > 0
 						? `Use offset=${totalFileLines} to read the last line, or omit offset to read from the start.`
 						: "The file is empty; omit offset.";
-				throw new Error(`Offset ${offset} is beyond end of file (${totalFileLines} lines total). ${guidance}`);
+				throw new RecoverableToolError(
+					`Offset ${offset} is beyond end of file (${totalFileLines} lines total). ${guidance}`,
+				);
 			}
 
 			// Read content from the offset. PDF text is already in memory; files stream from disk.
@@ -263,7 +294,10 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 				// the pipe early is the point, not a failure.
 				const result = await executor.exec(`${source} | head -c ${readWindowBytes}`, { signal });
 				if (result.code !== 0) {
-					throw new Error(result.stderr || `Failed to read file: ${path}`);
+					throw new RecoverableToolError(
+						result.stderr ||
+							`Failed to read file: ${path}. Check the path — try \`read\` on its parent directory to confirm it exists.`,
+					);
 				}
 				selectedContent = result.stdout;
 			}

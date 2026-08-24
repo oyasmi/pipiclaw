@@ -722,6 +722,12 @@ export class SubAgentRunManager {
 					}
 				: {}),
 		};
+		// The `boolean` return value (queue-full/backpressure -> `false`) is deliberately not
+		// checked here, unlike the thrown-error case above: `DurableDispatchService.enqueueEvent`
+		// puts a rejected record back into `pending` rather than dropping it, and the 30s periodic
+		// drain retries it from there -- so marking `wakeEnqueued` on a `false` return is still safe,
+		// not a lost wake (fix plan §1.7 / review 2026-08-24 §1.7). Re-verify this against
+		// `durable-dispatch.ts` before changing either side.
 		try {
 			await this.options.dispatch(event);
 		} catch (error) {

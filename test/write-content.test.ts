@@ -26,7 +26,10 @@ describe("write-content", () => {
 
 		expect(executor.calls).toEqual([
 			{
-				command: "mkdir -p 'nested' && cat > 'nested/file.txt'",
+				command:
+					"mkdir -p 'nested' && tmp='nested/file.txt.pipiclaw-tmp'; " +
+					"[ -f 'nested/file.txt' ] && cp -p 'nested/file.txt' \"$tmp\" 2>/dev/null; " +
+					'cat > "$tmp" && mv -f "$tmp" \'nested/file.txt\'',
 				options: { signal: undefined, stdin: "hello" },
 			},
 		]);
@@ -40,11 +43,22 @@ describe("write-content", () => {
 
 		expect(executor.calls).toEqual([
 			{
-				command: "cat > 'special.txt'",
+				command:
+					"tmp='special.txt.pipiclaw-tmp'; [ -f 'special.txt' ] && cp -p 'special.txt' \"$tmp\" 2>/dev/null; " +
+					'cat > "$tmp" && mv -f "$tmp" \'special.txt\'',
 				options: { signal: undefined, stdin: content },
 			},
 		]);
 		expect(executor.calls[0]?.command).not.toContain("dangerous");
+	});
+
+	it("copies the existing file's permission bits onto the temp file before overwriting it", async () => {
+		const executor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);
+
+		await writeContent(executor, "script.sh", "#!/bin/sh\necho hi\n", undefined);
+
+		expect(executor.calls[0]?.command).toContain("cp -p 'script.sh'");
+		expect(executor.calls[0]?.command).toMatch(/^tmp=.*mv -f "\$tmp" 'script\.sh'$/);
 	});
 
 	it("throws when writes fail and write tool wraps successful writes", async () => {

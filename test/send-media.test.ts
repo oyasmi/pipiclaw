@@ -24,10 +24,10 @@ class RecordingSender implements MediaSender {
 	}
 }
 
-// stat probe ("OK") followed by base64 of the given bytes.
+// size probe (byte count) followed by base64 of the given bytes.
 function fileReads(bytes: Buffer): ExecResult[] {
 	return [
-		{ code: 0, stdout: "OK\n", stderr: "" },
+		{ code: 0, stdout: `${bytes.length}\n`, stderr: "" },
 		{ code: 0, stdout: bytes.toString("base64"), stderr: "" },
 	];
 }
@@ -99,7 +99,7 @@ describe("send_media tool", () => {
 
 	it("rejects an empty file", async () => {
 		const executor = new ScriptedExecutor([
-			{ code: 0, stdout: "OK\n", stderr: "" },
+			{ code: 0, stdout: "0\n", stderr: "" },
 			{ code: 0, stdout: "", stderr: "" },
 		]);
 		const sender = new RecordingSender();
@@ -110,6 +110,20 @@ describe("send_media tool", () => {
 		});
 
 		await expect(tool.execute("call", { label: "send", path: "empty.png" })).rejects.toThrow("empty");
+		expect(sender.sent).toHaveLength(0);
+	});
+
+	it("rejects a file over the send size limit before base64-encoding it", async () => {
+		const executor = new ScriptedExecutor([{ code: 0, stdout: `${6 * 1024 * 1024}\n`, stderr: "" }]);
+		const sender = new RecordingSender();
+		const tool = createSendMediaTool(executor, {
+			mediaSender: sender,
+			channelId: "dm_alice",
+			securityConfig: disabledSecurity,
+		});
+
+		await expect(tool.execute("call", { label: "send", path: "huge.zip" })).rejects.toThrow(/over the .* send limit/);
+		expect(executor.calls).toHaveLength(1);
 		expect(sender.sent).toHaveLength(0);
 	});
 

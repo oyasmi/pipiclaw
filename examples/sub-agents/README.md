@@ -64,6 +64,8 @@ reviewer 发现的问题回流给产出角色；verifier 失败回流给 builder
 
 `builder` / `builder-hard` 仍用 Claude 的 `--dangerously-skip-permissions`，因为它们需要非交互地完成实现；这是本目录权限最高的默认配置。务必在可信 checkout、最小权限宿主账号中使用。角色文件只声明 `model` 和 `thinkingLevel`，具体的 `--model` / `--effort` 参数由 claude-code harness 自动拼接，不应重复写进 `command`。
 
+**每个角色都应显式写 `thinkingLevel`**（本目录全部 11 个模板均已如此，见上表），不要依赖隐藏默认值——内置委派未声明时默认 `medium`，但外部 work 角色未声明时**不追加任何推理参数**，沿用该 CLI 自己的配置（`~/.claude/settings.json` / `~/.codex/config.toml` 等）；只有 `purpose=verify` 的外部角色仍会兜底 `medium`。可复用的角色请显式写，让行为不随宿主机的本地配置漂移。
+
 ## 使用原则
 
 - `description` 会进入主代理的子代理目录，必须写清楚「何时使用、何时不用、调用前提、是否修改状态、大概多重」。这是路由的主要依据。

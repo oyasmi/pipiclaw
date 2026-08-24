@@ -41,9 +41,16 @@ function toClaudeEffort(level: string | undefined): string | undefined {
 	return THINKING_LEVEL_TO_CLAUDE_EFFORT[level] ?? level;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
 export const claudeCodeHarness: ExternalHarness = {
 	id: "claude-code",
-	parserVersion: 1,
+	// 2: parseOutcome now falls back to the last streamed `assistant` message's text/usage when a
+	// `result` event never arrives (timeout/cancel kill the process before claude-code emits one) —
+	// `op=show` can use this to distinguish "adapter is stale" from "the agent itself crashed".
+	parserVersion: 2,
 
 	buildInvocation(input: ExternalInvocationInput): BuildInvocationResult {
 		if (input.argv.length === 0) {
@@ -103,6 +110,12 @@ export const claudeCodeHarness: ExternalHarness = {
 		let costKnown = false;
 		let costTotal: number | undefined;
 		let parsedAnyLine = false;
+		// Fallback only: a run killed by timeout/cancel never gets a `result` event, so without this
+		// a fully productive 90-minute run reports empty text and zero usage (D-review §1.2). Neither
+		// of these ever sets `terminalSeen`/`protocolStatus` — only a real `result` event may do that;
+		// streamed text is not proof the run finished.
+		let lastAssistantText = "";
+		let streamedUsage: { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined;
 
 		for (const line of input.eventsText.split("\n")) {
 			const trimmed = line.trim();
@@ -157,14 +170,47 @@ export const claudeCodeHarness: ExternalHarness = {
 					usageKnown = true;
 				}
 			}
+
+			if (record.type === "assistant") {
+				const message = record.message;
+				if (isRecord(message)) {
+					const parts = Array.isArray(message.content) ? message.content : [];
+					const text = parts
+						.filter(
+							(part): part is { type: "text"; text: string } =>
+								isRecord(part) && part.type === "text" && typeof part.text === "string",
+						)
+						.map((part) => part.text)
+						.join("");
+					if (text.trim()) lastAssistantText = text;
+
+					const rawUsage = message.usage;
+					if (isRecord(rawUsage)) {
+						streamedUsage = {
+							input: Number(rawUsage.input_tokens ?? 0) || 0,
+							output: Number(rawUsage.output_tokens ?? 0) || 0,
+							cacheRead: Number(rawUsage.cache_read_input_tokens ?? 0) || 0,
+							cacheWrite: Number(rawUsage.cache_creation_input_tokens ?? 0) || 0,
+						};
+					}
+				}
+			}
 		}
 
 		if (!parsedAnyLine && input.eventsText.trim()) {
 			protocolStatus = "unparsable";
 		}
 
+		if (!terminalSeen && !usageKnown && streamedUsage) {
+			usage = {
+				...streamedUsage,
+				total: streamedUsage.input + streamedUsage.output + streamedUsage.cacheRead + streamedUsage.cacheWrite,
+			};
+			usageKnown = true;
+		}
+
 		return {
-			finalText,
+			finalText: finalText || lastAssistantText,
 			terminalSeen,
 			protocolStatus,
 			exitCode: input.exitCode,

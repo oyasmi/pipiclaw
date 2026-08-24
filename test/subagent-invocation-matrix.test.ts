@@ -90,3 +90,108 @@ describe("resolveSubAgentConfig invocation-side matrix (spec 042, D3)", () => {
 		expect(result.config?.runtime).toBe("external");
 	});
 });
+
+/**
+ * Fix plan §1.1/§1.4 (docs/reviews/2026-08-24-subagents-and-tools-fix-plan.md): the resolved
+ * thinkingLevel/mutates matrix across runtime x purpose x explicit-vs-default, so a future change
+ * to `resolveSubAgentConfig` cannot silently re-introduce "external work gets force-clamped to the
+ * lowest reasoning effort" or "inline delegations can't declare mutates".
+ */
+const externalWorkRole: SubAgentConfig = {
+	...externalRole,
+	name: "external-worker",
+	description: "external work role",
+	systemPrompt: "Do the work.",
+};
+
+describe("thinkingLevel resolution matrix", () => {
+	it("internal, unspecified: defaults to medium", () => {
+		const result = resolveSubAgentConfig([model], model, [], { name: "inline", systemPrompt: "Do it" });
+		expect(result.config?.thinkingLevel).toBe("medium");
+	});
+
+	it("external work, unspecified: stays undefined -- no effort flag added by the caller", () => {
+		const result = resolveSubAgentConfig([model], model, [externalWorkRole], { agent: "external-worker" });
+		expect(result.config?.thinkingLevel).toBeUndefined();
+	});
+
+	it("external verify, unspecified: defaults to medium", () => {
+		const result = resolveSubAgentConfig([model], model, [externalWorkRole], {
+			agent: "external-worker",
+			purpose: "verify",
+		});
+		expect(result.config?.thinkingLevel).toBe("medium");
+	});
+
+	it("explicit thinkingLevel wins for all three cases above", () => {
+		const internal = resolveSubAgentConfig([model], model, [], {
+			name: "inline",
+			systemPrompt: "Do it",
+			thinkingLevel: "high",
+		});
+		expect(internal.config?.thinkingLevel).toBe("high");
+
+		const externalWork = resolveSubAgentConfig([model], model, [externalWorkRole], {
+			agent: "external-worker",
+			thinkingLevel: "low",
+		});
+		expect(externalWork.config?.thinkingLevel).toBe("low");
+
+		const externalVerify = resolveSubAgentConfig([model], model, [externalWorkRole], {
+			agent: "external-worker",
+			purpose: "verify",
+			thinkingLevel: "xhigh",
+		});
+		expect(externalVerify.config?.thinkingLevel).toBe("xhigh");
+	});
+});
+
+describe("mutates invocation parameter", () => {
+	it("an inline delegation can declare mutates: write via the invocation", () => {
+		const result = resolveSubAgentConfig([model], model, [], {
+			name: "inline",
+			systemPrompt: "Do it",
+			tools: ["read"],
+			mutates: "write",
+		});
+		expect(result.config?.mutates).toBe("write");
+	});
+
+	it("without an explicit mutates, inline still infers from tools (write/edit only)", () => {
+		const result = resolveSubAgentConfig([model], model, [], {
+			name: "inline",
+			systemPrompt: "Do it",
+			tools: ["read", "edit"],
+		});
+		expect(result.config?.mutates).toBe("write");
+	});
+
+	it("an external role rejects a caller-supplied mutates -- it comes from the role file", () => {
+		const result = resolveSubAgentConfig([model], model, [externalWorkRole], {
+			agent: "external-worker",
+			mutates: "write",
+		});
+		expect(result.config).toBeUndefined();
+		expect(result.error).toContain("mutates");
+	});
+
+	it("an inline delegation with bash and no explicit mutates gets a warning back for the model", () => {
+		const result = resolveSubAgentConfig([model], model, [], {
+			name: "inline",
+			systemPrompt: "Do it",
+			tools: ["read", "bash"],
+		});
+		expect(result.config?.mutates).toBe("read");
+		expect(result.warning).toContain("mutates");
+	});
+
+	it("an inline delegation that declares mutates explicitly gets no warning", () => {
+		const result = resolveSubAgentConfig([model], model, [], {
+			name: "inline",
+			systemPrompt: "Do it",
+			tools: ["read", "bash"],
+			mutates: "write",
+		});
+		expect(result.warning).toBeUndefined();
+	});
+});

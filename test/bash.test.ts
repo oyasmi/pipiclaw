@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelJobManager } from "../src/agent/job-manager.js";
+import { CommandTerminatedError } from "../src/executor.js";
 import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
 import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
 import { RecordingExecutor } from "./helpers/recording-executor.js";
@@ -192,5 +193,50 @@ describe("bash tool", () => {
 			type: "text",
 			text: expect.not.stringContaining("Full output:"),
 		});
+	});
+
+	// Fix plan §2.2: a timeout/abort must come back as a normal (non-throwing) tool result that
+	// goes through the same spill+truncate path as any other output, with an actionable next step
+	// -- not a rejection whose message the pi SDK would put verbatim into the model's context.
+	it("returns a normal result with the partial output and a retry hint when the command times out", async () => {
+		const executor = new RecordingExecutor(async () => {
+			throw new CommandTerminatedError("timeout", "partial stdout", "partial stderr", 5);
+		});
+		const tool = createBashTool(executor);
+
+		const result = await tool.execute("call", { label: "run", command: "sleep 100" });
+		const details = result.details as { timedOut?: boolean; exitCode?: number };
+
+		expect(details.timedOut).toBe(true);
+		expect(details.exitCode).toBeUndefined();
+		expect(result.content[0]).toMatchObject({
+			type: "text",
+			text: expect.stringContaining("partial stdout"),
+		});
+		expect(result.content[0]).toMatchObject({
+			type: "text",
+			text: expect.stringContaining("timed out after 5 seconds"),
+		});
+		expect(result.content[0]).toMatchObject({
+			type: "text",
+			text: expect.stringContaining("async: true"),
+		});
+	});
+
+	it("still spills to a temp file when a timed-out command's partial output is large", async () => {
+		const output = Array.from(
+			{ length: DEFAULT_MAX_LINES + 15 },
+			(_, index) => `line ${index + 1} ${"x".repeat(400)}`,
+		).join("\n");
+		const executor = new RecordingExecutor(async () => {
+			throw new CommandTerminatedError("timeout", output, "", 5);
+		});
+		const tool = createBashTool(executor);
+
+		const result = await tool.execute("call", { label: "run", command: "sleep 100" });
+		const details = result.details as { fullOutputPath?: string; timedOut?: boolean };
+
+		expect(details.timedOut).toBe(true);
+		expect(details.fullOutputPath).toMatch(/^\/tmp\/pipiclaw-bash-[0-9a-f]+\.log$/);
 	});
 });

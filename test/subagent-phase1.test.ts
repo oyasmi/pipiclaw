@@ -1,7 +1,7 @@
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
@@ -179,6 +179,18 @@ describe("sub-agent discovery", () => {
 		expect(discovery.agents.find((agent) => agent.name === "explorer")?.description).toContain("只读代码探索");
 		expect(discovery.agents.find((agent) => agent.name === "log-sifter")?.description).toContain("避免原文涌入");
 		expect(discovery.agents.find((agent) => agent.name === "git-committer")?.description).toContain("默认不 push");
+	});
+
+	// Fix plan §4.4: a directory scan, not a hardcoded role-name list, so a future template added
+	// to examples/sub-agents/ without an explicit thinkingLevel fails this test instead of silently
+	// falling through to the internal-default resolution logic covered elsewhere in this file.
+	it("every shipped role template declares thinkingLevel", () => {
+		const dir = join(process.cwd(), "examples", "sub-agents");
+		const files = readdirSync(dir).filter((name) => name.endsWith(".md") && name.toLowerCase() !== "readme.md");
+		expect(files.length).toBeGreaterThan(0);
+		for (const name of files) {
+			expect(readFileSync(join(dir, name), "utf-8")).toMatch(/^thinkingLevel:\s*\S+/m);
+		}
 	});
 
 	it("loads the external production examples with the D5 field matrix satisfied", () => {
@@ -535,7 +547,7 @@ Review files carefully.`,
 			name: "worker",
 			systemPrompt: "Do the work",
 		});
-		expect(workAgent.config?.thinkingLevel).toBe("off");
+		expect(workAgent.config?.thinkingLevel).toBe("medium");
 
 		const verifyAgent = resolveSubAgentConfig([model], model, [], {
 			name: "checker",

@@ -149,6 +149,63 @@ describe("claude-code harness: parseOutcome", () => {
 		expect(outcome.protocolStatus).toBe("unparsable");
 	});
 
+	it("falls back to the last streamed assistant text/usage when killed before a result event (§1.2)", () => {
+		const outcome = claudeCodeHarness.parseOutcome({
+			eventsText: streamJson(
+				{ type: "system", subtype: "init", session_id: "session-1" },
+				{
+					type: "assistant",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "Working on it..." }],
+						usage: { input_tokens: 50, output_tokens: 10 },
+					},
+				},
+				{
+					type: "assistant",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "Partial progress before the kill." }],
+						usage: { input_tokens: 80, output_tokens: 25 },
+					},
+				},
+			),
+			exitCode: undefined,
+		});
+		expect(outcome.finalText).toBe("Partial progress before the kill.");
+		expect(outcome.usageKnown).toBe(true);
+		expect(outcome.usage?.input).toBe(80);
+		expect(outcome.usage?.output).toBe(25);
+		// A partial-text fallback is not proof the run finished -- only a real `result` event may say so.
+		expect(outcome.terminalSeen).toBe(false);
+		expect(outcome.protocolStatus).toBe("absent");
+	});
+
+	it("prefers the result event's finalText/usage over any streamed assistant fallback", () => {
+		const outcome = claudeCodeHarness.parseOutcome({
+			eventsText: streamJson(
+				{
+					type: "assistant",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "Draft." }],
+						usage: { input_tokens: 10, output_tokens: 5 },
+					},
+				},
+				{
+					type: "result",
+					subtype: "success",
+					is_error: false,
+					result: "Final answer.",
+					usage: { input_tokens: 100, output_tokens: 20 },
+				},
+			),
+			exitCode: 0,
+		});
+		expect(outcome.finalText).toBe("Final answer.");
+		expect(outcome.usage?.input).toBe(100);
+	});
+
 	it("exit 0 with no result event is 'absent', and the shared classifier still fails it", () => {
 		const outcome = claudeCodeHarness.parseOutcome({
 			eventsText: streamJson({ type: "system", subtype: "init" }),

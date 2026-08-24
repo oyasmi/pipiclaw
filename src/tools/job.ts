@@ -1,6 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager, JobSnapshot } from "../agent/job-manager.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { truncateTail } from "./truncate.js";
 
 const jobSchema = Type.Object({
@@ -67,7 +68,7 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 		execute: async (_toolCallId: string, { op, ids }: JobToolArgs, signal?: AbortSignal) => {
 			if (op === "cancel") {
 				if (!ids || ids.length === 0) {
-					throw new Error("cancel requires at least one job id.");
+					throw new RecoverableToolError("cancel requires at least one job id.");
 				}
 				const outcomes = await jobManager.cancel(ids, signal);
 				const text = outcomes.map((outcome) => `- [${outcome.id}] ${outcome.status}`).join("\n");
