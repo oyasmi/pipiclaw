@@ -1,9 +1,18 @@
 {
 	"$schema": "https://unpkg.com/knip@6/schema.json",
-	"entry": ["src/main.ts", "src/index.ts"],
-	"project": ["src/**/*.ts"],
+	"entry": [
+		"src/main.ts",
+		"src/index.ts"
+	],
+	"project": [
+		"src/**/*.ts"
+	],
 	"ignoreExportsUsedInFile": true,
 	"vitest": {
-		"config": ["vitest.config.ts", "vitest.config.e2e.ts"]
+		"config": [
+			"vitest.config.ts",
+			"vitest.config.e2e.ts",
+			"vitest.config.evals.ts"
+		]
 	}
 }

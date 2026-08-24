@@ -38,7 +38,8 @@
 		"eval:promote": "npm run eval:build && node dist-evals/evals/harness/promote.js",
 		"test:coverage": "vitest --run --coverage",
 		"check": "npm run lint && npm run typecheck && npm run deadcode && npm run test",
-		"prepublishOnly": "npm run clean && npm run build && npm run check"
+		"prepublishOnly": "npm run clean && npm run build && npm run check",
+		"test:evals": "vitest --run --config vitest.config.evals.ts"
 	},
 	"dependencies": {
 		"@earendil-works/pi-agent-core": "0.83.0",

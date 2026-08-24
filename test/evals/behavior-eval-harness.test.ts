@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { seedChannelHistory, seedChannelMemory } from "../evals/cases/helpers.js";
-import { caseHash, validateCases } from "../evals/harness/cases.js";
-import { renderDiff } from "../evals/harness/diff.js";
-import { lastDeliveryMatches, noDeliveriesAfterStep, recallQuiz } from "../evals/harness/graders.js";
-import { promoteRun } from "../evals/harness/promote.js";
-import { rerenderReport } from "../evals/harness/report.js";
+import { seedChannelHistory, seedChannelMemory } from "../../evals/cases/helpers.js";
+import { caseHash, validateCases } from "../../evals/harness/cases.js";
+import { renderDiff } from "../../evals/harness/diff.js";
+import { lastDeliveryMatches, noDeliveriesAfterStep, recallQuiz } from "../../evals/harness/graders.js";
+import { promoteRun } from "../../evals/harness/promote.js";
+import { rerenderReport } from "../../evals/harness/report.js";
 import {
 	archiveEvidence,
 	evaluateExit,
@@ -19,7 +19,7 @@ import {
 	runWorkerSegment,
 	segmentScript,
 	summarize,
-} from "../evals/harness/run.js";
+} from "../../evals/harness/run.js";
 import type {
 	CaseSummary,
 	EvalCase,
@@ -28,8 +28,8 @@ import type {
 	RunManifest,
 	TrialContext,
 	TrialRecord,
-} from "../evals/harness/schema.js";
-import { containsCredential, credentialMatches, fallbackCostUsd } from "../evals/harness/util.js";
+} from "../../evals/harness/schema.js";
+import { containsCredential, credentialMatches, fallbackCostUsd } from "../../evals/harness/util.js";
 
 const temporary: string[] = [];
 afterEach(() => {
@@ -248,7 +248,7 @@ describe("behavior eval multi-turn graders", () => {
 		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "error" });
 	});
 
-	it("seeds durable memory under an H2 section so production parsers can manage it", async () => {
+	it("seeds durable memory and history in parser-manageable shapes", async () => {
 		const root = temp();
 		const channelDir = join(root, "workspace", "dm_eval");
 		await seedChannelMemory(
@@ -264,11 +264,7 @@ describe("behavior eval multi-turn graders", () => {
 		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf8")).toMatch(
 			/^# Channel Memory[\s\S]*^## Seeded Facts[\s\S]*^- Durable preference: cobalt\.$/m,
 		);
-	});
 
-	it("seeds history with a caller-controlled heading so a Folded History section stays a recall candidate", async () => {
-		const root = temp();
-		const channelDir = join(root, "workspace", "dm_eval");
 		await seedChannelHistory(
 			{
 				homeDir: root,
@@ -279,6 +275,7 @@ describe("behavior eval multi-turn graders", () => {
 			},
 			"## Folded History Through 2026-01-01T00:00:00.000Z\n\n- Old value: cobalt.",
 		);
+		// A caller-controlled heading keeps a Folded History section a recall candidate.
 		expect(readFileSync(join(channelDir, "HISTORY.md"), "utf8")).toMatch(
 			/^# Channel History[\s\S]*^## Folded History Through 2026-01-01T00:00:00\.000Z[\s\S]*Old value: cobalt\.$/m,
 		);
@@ -523,68 +520,49 @@ describe("behavior eval artifacts", () => {
 		expect(credentialMatches(root)).toEqual(["trace.jsonl"]);
 	});
 
-	it("promotes only frozen summaries and cannot modify gates.json", () => {
+	it("promotes only frozen summaries without touching gates.json, and refuses a run that misses a required gate", () => {
 		const root = temp();
 		const source = join(root, "evals/results/run-1");
 		mkdirSync(source, { recursive: true });
 		mkdirSync(join(root, "evals"), { recursive: true });
 		writeFileSync(join(root, "evals/gates.json"), '{"T-test-01":{"gate":"required"}}\n');
 		for (const file of ["manifest.json", "cases.json"]) writeFileSync(join(source, file), "{}\n");
-		writeFileSync(
-			join(source, "summary.json"),
-			`${JSON.stringify({
-				schemaVersion: 1,
-				cases: [
-					{
-						caseId: "T-test-01",
-						suite: "regression",
-						gate: "required",
-						passed: 1,
-						valid: 1,
-						invalid: 0,
-						medianCostUsd: 0,
-						medianWallMs: 1,
-						medianToolCalls: 0,
-					},
-				],
-			})}\n`,
-		);
+
+		const passingSummary = `${JSON.stringify({
+			schemaVersion: 1,
+			cases: [
+				{
+					caseId: "T-test-01",
+					suite: "regression",
+					gate: "required",
+					passed: 1,
+					valid: 1,
+					invalid: 0,
+					medianCostUsd: 0,
+					medianWallMs: 1,
+					medianToolCalls: 0,
+				},
+			],
+		})}\n`;
+		writeFileSync(join(source, "summary.json"), passingSummary);
 		writeFileSync(join(source, "report.md"), "report\n");
 		writeFileSync(join(source, "trials.jsonl"), "secret trial data not promoted\n");
 		const gatesBefore = readFileSync(join(root, "evals/gates.json"), "utf8");
 		const target = promoteRun(root, "run-1");
 		expect(readFileSync(join(root, "evals/gates.json"), "utf8")).toBe(gatesBefore);
 		expect(() => readFileSync(join(target, "trials.jsonl"), "utf8")).toThrow();
-	});
 
-	it("refuses to promote a run that misses a required gate", () => {
-		const root = temp();
-		const source = join(root, "evals/results/run-1");
-		mkdirSync(source, { recursive: true });
-		writeFileSync(join(root, "evals/gates.json"), '{"T-test-01":{"gate":"required"}}\n');
-		writeFileSync(join(source, "manifest.json"), "{}\n");
-		writeFileSync(join(source, "cases.json"), "{}\n");
-		writeFileSync(join(source, "report.md"), "failed report\n");
-		writeFileSync(
-			join(source, "summary.json"),
-			`${JSON.stringify({
-				schemaVersion: 1,
-				cases: [
-					{
-						caseId: "T-test-01",
-						suite: "regression",
-						gate: "required",
-						passed: 0,
-						valid: 1,
-						invalid: 0,
-						medianCostUsd: 0,
-						medianWallMs: 1,
-						medianToolCalls: 0,
-					},
-				],
-			})}\n`,
-		);
-		expect(() => promoteRun(root, "run-1")).toThrow(/misses required gate/);
+		// The same run shape with passed: 0 must not promote at all (fresh root: the first
+		// promotion created an immutable baseline under this one).
+		const failingRoot = temp();
+		const failingSource = join(failingRoot, "evals/results/run-1");
+		mkdirSync(failingSource, { recursive: true });
+		writeFileSync(join(failingRoot, "evals/gates.json"), '{"T-test-01":{"gate":"required"}}\n');
+		writeFileSync(join(failingSource, "manifest.json"), "{}\n");
+		writeFileSync(join(failingSource, "cases.json"), "{}\n");
+		writeFileSync(join(failingSource, "report.md"), "failed report\n");
+		writeFileSync(join(failingSource, "summary.json"), passingSummary.replace('"passed":1', '"passed":0'));
+		expect(() => promoteRun(failingRoot, "run-1")).toThrow(/misses required gate/);
 	});
 
 	it("renders quarantine, invariant failures, condition comparability, and deltas", () => {
