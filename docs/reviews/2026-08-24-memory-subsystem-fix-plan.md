@@ -7,56 +7,9 @@
 
 ---
 
-## 0. 先说五件必须先知道的事
+## 0. 先说四件必须先知道的事
 
-### 0.0 `src/memory/review-log.ts` 里有一个裸 NUL 字节，git 把它当二进制文件
-
-写方案时验证出来的，评审里没有：
-
-```
-$ python3 -c "d=open('src/memory/review-log.ts','rb').read(); print([i for i,b in enumerate(d) if b==0])"
-[1121]
-
-$ printf '\n' >> src/memory/review-log.ts && git diff --stat -- src/memory/review-log.ts
- src/memory/review-log.ts | Bin 3065 -> 3066 bytes
- 1 file changed, 0 insertions(+), 0 deletions(-)
-```
-
-位置在 `gateSkipKey`：
-
-```ts
-function gateSkipKey(path: string, reason: MemoryReviewReason): string {
-	return `${path}<NUL>${reason}`;   // 源码里是裸字节 0x00，不是 \0 / \x00 转义
-}
-```
-
-**运行时行为没问题**（NUL 是合法的 JS 字符串字符，作分隔符甚至比空格更安全），但工具链全线失效：
-
-| 工具 | 后果 |
-|---|---|
-| `git diff` / PR review | 永远显示 `Binary files ... differ`，**这个文件的任何改动都无法被 code review** |
-| `rg` / `grep -r` | 默认跳过二进制文件——**全仓库搜索静默漏掉这个文件** |
-| `file(1)` | 报告 `data` |
-
-全仓库扫描确认**只有这一个文件**中招（`git ls-files` 全量扫描，1 处）。
-
-这解释了评审 §1.5 的死字段为什么能活这么久：记忆子系统的**审计日志写入器**恰好是全仓库唯一一个既不能 diff、又搜不到的文件。
-
-**修法**（必须最先做，否则本批后续对该文件的改动都无法审查）——把裸字节换成**转义序列**，而不是换成空格：
-
-```ts
-return `${path}\u0000${reason}`;
-```
-
-用 `\u0000` 而不是空格，是因为它**逐字节保持运行时行为不变**（生成的字符串完全相同，只是源码不再含裸 NUL），而空格作分隔符理论上会与含空格的路径碰撞。缓存键变了会让重启后的第一条 gate-skip 审计多写一行，无关痛痒，但没必要为一次格式修复顺手改语义。
-
-**写这份方案时它已经传染了一次**：上面这个代码块的初稿是从源码复制的，把裸 NUL 一并带进了本文件，于是连这份修复方案本身也一度变成 git 眼中的二进制文件。落地时请直接手敲 `\u0000`，不要从旧源码复制。
-
-**验收**：`git diff` 对该文件恢复正常文本 diff；`rg "candidates" src/memory/review-log.ts` 能命中（今天搜不到）；`python3` NUL 扫描全仓库为空。
-
----
-
-### 0.1 P0 的正确修法是**删除**，不是收窄——因为工具输出根本进不了提炼输入
+### 0.0 P0 的正确修法是**删除**，不是收窄——因为工具输出根本进不了提炼输入
 
 评审 §1.1 建议里我写的是"删掉这个条件"，这里补上判断依据，因为这是本批唯一一处会被质疑"是不是在拆安全机制"的改动。
 
@@ -80,13 +33,13 @@ buildStandardMessages(messages).filter((message) => message.role !== "toolResult
 
 **这条不变量的真正护栏**是 `memory-transcript.test.ts:76`，比布尔量更强也更可测。在 `extraction.ts` 的 `runMemoryExtraction` 上方加一行注释指向它，让下一个人知道"为什么这里不需要额外过滤"。
 
-### 0.2 召回打分是"绝对证据制"，这决定了 query 扩展可以**免费**做
+### 0.1 召回打分是"绝对证据制"，这决定了 query 扩展可以**免费**做
 
 `scoreCandidate` 用的是 `evidence.mass`（命中 token 的特异性加权累加），**不按 query 长度归一**（`recall.ts:95-101` 有长注释解释为什么）。
 
 推论：**往 query 里追加 token 只能增加某些候选的分数，不可能降低任何候选的分数。** 所以第二批的 query 扩展不存在"稀释"风险，唯一的风险是引入本轮不相关的匹配。这个风险用一个判据就能消掉——**只在当前 query 自己不可能过线时才扩展**（见 §2.1）。如果打分是覆盖率制，这个方案就不成立。
 
-### 0.3 第二批之前必须先有召回门禁，这是 spec 037 自己定的规矩
+### 0.2 第二批之前必须先有召回门禁，这是 spec 037 自己定的规矩
 
 spec 037 D10 明确写着：`recallCount` 参与排序这一类改动"影响面更大、会改变既有 durable 条目的命运，需要 recall eval（路线图 0.2）先建成硬门槛才能判断是升是降"。
 
@@ -94,7 +47,7 @@ spec 037 D10 明确写着：`recallCount` 参与排序这一类改动"影响面�
 
 **第二批的第 0 项就是把它建起来**，否则后面三项打分改动全是盲改。
 
-### 0.4 优先"接上"已经算出来的东西，而不是新增采集
+### 0.3 优先"接上"已经算出来的东西，而不是新增采集
 
 第一批和第二批里有相当一部分工作量是"把已经存在的值接到消费者上"，不是新增字段：
 
@@ -112,10 +65,6 @@ spec 037 D10 明确写着：`recallCount` 参与排序这一类改动"影响面�
 ## 1. 第一批：解封与可见性
 
 改动集中在 5 个文件，不引入任何新概念，不改任何打分逻辑。
-
-### 1.0 修掉 NUL 字节
-
-见 §0.0。一个字符的改动，但必须排在最前面。
 
 ### 1.1 删除 `hasExternalToolContent` 写入封杀（P0）
 
@@ -647,7 +596,7 @@ supersedes: Type.Optional(Type.String({
 
 | 批次 | 额外验收 |
 |---|---|
-| 一 | `git diff src/memory/review-log.ts` 是文本 diff；全仓库 NUL 扫描为空；`M-write-04` 三次试跑至少 2 次绿；手工跑一个用了 `read` 的真实频道，`memory-review.jsonl` 里能看到 `durableCandidates` 与 `entries` 两个数 |
+| 一 | `M-write-04` 三次试跑至少 2 次绿；手工跑一个用了 `read` 的真实频道，`memory-review.jsonl` 里能看到 `durableCandidates` 与 `entries` 两个数 |
 | 二 | `M-recall-04` 不低于第 2.0 步记录的基线；`M-recall-05` 从红转绿并提为 `required`；`/usage` 的 sidecar 行包含超时的 rerank 调用 |
 | 三 | `M-write-03` 仍然绿（冲突检测未误触发，见 §3.1）；`M-recall-04` 的 precision 分量不下降 |
 | 四 | 独立 spec 定义 |
