@@ -404,9 +404,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			// "complete" lets the leader exit normally (the run finishes on its own); the other
 			// modes keep the leader alive until the group kill reaches it.
 			const leaderBody =
-				mode === "complete"
-					? `process.stdout.write("leader done");process.exit(0);`
-					: `setInterval(()=>{},1000);`;
+				mode === "complete" ? `process.stdout.write("leader done");process.exit(0);` : `setInterval(()=>{},1000);`;
 			writeFileSync(
 				script,
 				`const {spawn}=require("node:child_process");const c=spawn(process.execPath,["-e","setTimeout(()=>require('node:fs').writeFileSync(process.argv[1],'late'),250)",${JSON.stringify(marker)}],{stdio:"ignore"});c.unref();${leaderBody}`,

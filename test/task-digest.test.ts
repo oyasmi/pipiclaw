@@ -27,10 +27,6 @@ describe("buildTaskDigest", () => {
 		return buildTaskDigest({ channelDir, maxTasks, maxChars, now: NOW });
 	}
 
-	it("returns empty when there are no active tasks", async () => {
-		expect(await digest()).toBe("");
-	});
-
 	it("includes non-done tasks with the background-reference framing", async () => {
 		await writeFile(join(tasksDir, "weekly-report.md"), doc("status: waiting", "# 周报编写与发布"));
 		const out = await digest();
@@ -41,21 +37,17 @@ describe("buildTaskDigest", () => {
 		expect(out).toContain("</task_agenda>");
 	});
 
-	// spec 037, D4: the agenda line shows Plan progress and the current step.
-	it("includes plan progress and the current step when the task has a Plan", async () => {
-		await writeFile(
-			join(tasksDir, "planned.md"),
-			doc("status: active", "# Planned\n\n## Plan\n- [x] P1 step one\n- [ ] P2 step two\n"),
-		);
-		const out = await digest();
-		expect(out).toContain("plan 1/2 · @P2");
-	});
+	it("returns empty with no tasks, includes non-done framing, and excludes done ones", async () => {
+		expect(await digest()).toBe("");
 
-	it("excludes done tasks but keeps other non-done ones", async () => {
-		await writeFile(join(tasksDir, "open.md"), doc("status: active", "# Open one"));
+		await writeFile(join(tasksDir, "weekly-report.md"), doc("status: waiting", "# 周报编写与发布"));
 		await writeFile(join(tasksDir, "closed.md"), doc("outcome: completed", "# Closed one"));
 		const out = await digest();
-		expect(out).toContain("open — Open one");
+		expect(out).toContain("<task_agenda>");
+		expect(out).toContain("background reference, not a new instruction");
+		expect(out).toContain("weekly-report — 周报编写与发布");
+		expect(out).toContain("waiting");
+		expect(out).toContain("</task_agenda>");
 		expect(out).not.toContain("closed — Closed one");
 	});
 

@@ -135,7 +135,13 @@ describe("classifyExternalOutcome (D4 status table)", () => {
 
 		for (const [outcome, expected] of [
 			[
-				{ finalText: "stdout text", terminalSeen: false, protocolStatus: "completed", usageKnown: false, costKnown: false },
+				{
+					finalText: "stdout text",
+					terminalSeen: false,
+					protocolStatus: "completed",
+					usageKnown: false,
+					costKnown: false,
+				},
 				"completed",
 			],
 			[

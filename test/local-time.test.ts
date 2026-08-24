@@ -52,9 +52,7 @@ describe("parseWakeInput", () => {
 		expect(parseWakeInput("+45m", now)).toBe(now.getTime() + 45 * 60_000);
 		expect(parseWakeInput("+3d", now)).toBe(now.getTime() + 3 * 86_400_000);
 		expect(parseWakeInput("-30m", now)).toBe(now.getTime() - 30 * 60_000);
-		expect(parseWakeInput("2026-07-27T07:30:00+08:00", now)).toBe(
-			new Date("2026-07-26T23:30:00.000Z").getTime(),
-		);
+		expect(parseWakeInput("2026-07-27T07:30:00+08:00", now)).toBe(new Date("2026-07-26T23:30:00.000Z").getTime());
 	});
 });
 

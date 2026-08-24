@@ -34,7 +34,16 @@ describe("validateNetworkTarget", () => {
 	});
 
 	it("blocks every private IPv4 range", async () => {
-		for (const ip of ["127.0.0.1", "0.5.5.5", "169.254.1.1", "10.1.2.3", "172.20.0.5", "192.168.1.1", "100.64.0.1", "198.18.0.1"]) {
+		for (const ip of [
+			"127.0.0.1",
+			"0.5.5.5",
+			"169.254.1.1",
+			"10.1.2.3",
+			"172.20.0.5",
+			"192.168.1.1",
+			"100.64.0.1",
+			"198.18.0.1",
+		]) {
 			await expect(validateNetworkTarget(`http://${ip}/`, context())).rejects.toMatchObject({
 				category: "private-address",
 			});

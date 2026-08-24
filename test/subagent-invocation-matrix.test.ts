@@ -117,8 +117,17 @@ describe("thinkingLevel resolution matrix", () => {
 		expect(externalVerify.config?.thinkingLevel).toBe("medium");
 
 		for (const [resolved, expected] of [
-			[resolveSubAgentConfig([model], model, [], { name: "inline", systemPrompt: "Do it", thinkingLevel: "high" }), "high"],
-			[resolveSubAgentConfig([model], model, [externalWorkRole], { agent: "external-worker", thinkingLevel: "low" }), "low"],
+			[
+				resolveSubAgentConfig([model], model, [], { name: "inline", systemPrompt: "Do it", thinkingLevel: "high" }),
+				"high",
+			],
+			[
+				resolveSubAgentConfig([model], model, [externalWorkRole], {
+					agent: "external-worker",
+					thinkingLevel: "low",
+				}),
+				"low",
+			],
 			[
 				resolveSubAgentConfig([model], model, [externalWorkRole], {
 					agent: "external-worker",

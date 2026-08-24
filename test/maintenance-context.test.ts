@@ -43,11 +43,13 @@ describe("loadDetachedMaintenanceContext", () => {
 		};
 	}
 
-	it("returns null when the channel has no persisted transcript", async () => {
+	it("returns null when there is no persisted or unreadable transcript", async () => {
 		const appHomeDir = makeTempDir();
-		const channelDir = makeTempDir();
+		await expect(loadDetachedMaintenanceContext(makeOptions(appHomeDir, makeTempDir()))).resolves.toBeNull();
 
-		await expect(loadDetachedMaintenanceContext(makeOptions(appHomeDir, channelDir))).resolves.toBeNull();
+		const corruptDir = makeTempDir();
+		writeFileSync(join(corruptDir, "context.jsonl"), "not json at all\n{", "utf-8");
+		await expect(loadDetachedMaintenanceContext(makeOptions(appHomeDir, corruptDir))).resolves.toBeNull();
 	});
 
 	it("builds a full maintenance context from disk without a runner", async () => {
@@ -83,13 +85,5 @@ describe("loadDetachedMaintenanceContext", () => {
 		manager.appendMessage({ role: "user", content: "再补一句", timestamp: Date.now() } as never);
 		const third = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, channelDir));
 		expect(third?.sessionEntries().length).toBeGreaterThan(first?.sessionEntries().length ?? 0);
-	});
-
-	it("returns null for an unreadable transcript", async () => {
-		const appHomeDir = makeTempDir();
-		const channelDir = makeTempDir();
-		writeFileSync(join(channelDir, "context.jsonl"), "not json at all\n{", "utf-8");
-
-		await expect(loadDetachedMaintenanceContext(makeOptions(appHomeDir, channelDir))).resolves.toBeNull();
 	});
 });

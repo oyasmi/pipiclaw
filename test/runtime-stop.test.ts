@@ -156,7 +156,9 @@ describe("runtime stop handling", () => {
 		expect(bot.resetChannelQueue).toHaveBeenCalledWith("dm_tester");
 
 		await runtime.shutdown();
-	});
+		// The in-test dynamic import of the bootstrap graph pays its one-time vite transform
+		// cost (~5s) inside this case alone — keep well clear of the default 5s timeout.
+	}, 30_000);
 
 	it("discards the active card when a running task is stopped", async () => {
 		let releaseRun!: () => void;

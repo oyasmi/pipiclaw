@@ -13,20 +13,23 @@ const STRUCTURED_HARNESSES: Array<{ harness: ExternalHarness; garbage: string }>
 	{ harness: codexCliHarness, garbage: "not json at all\n{{{broken" },
 ];
 
-describe.each(STRUCTURED_HARNESSES)("$harness.id harness: shared structured-protocol contract", ({ harness, garbage }) => {
-	it("degrades to unparsable instead of throwing on garbage input", () => {
-		const outcome = harness.parseOutcome({ eventsText: garbage, exitCode: 1 });
-		expect(outcome.protocolStatus).toBe("unparsable");
-		expect(outcome.terminalSeen).toBe(false);
-	});
+describe.each(STRUCTURED_HARNESSES)(
+	"$harness.id harness: shared structured-protocol contract",
+	({ harness, garbage }) => {
+		it("degrades to unparsable instead of throwing on garbage input", () => {
+			const outcome = harness.parseOutcome({ eventsText: garbage, exitCode: 1 });
+			expect(outcome.protocolStatus).toBe("unparsable");
+			expect(outcome.terminalSeen).toBe(false);
+		});
 
-	// Exit code alone is not completion evidence for a structured harness: without the protocol's
-	// terminal event the run is "absent", and the shared classifier must fail it rather than let
-	// a killed-but-exited process count as done.
-	it("treats exit 0 without a terminal event as 'absent', which the classifier still fails", () => {
-		const outcome = harness.parseOutcome({ eventsText: "", exitCode: 0 });
-		expect(outcome.protocolStatus).toBe("absent");
-		expect(outcome.terminalSeen).toBe(false);
-		expect(classifyExternalOutcome(harness.id, outcome).status).toBe("failed");
-	});
-});
+		// Exit code alone is not completion evidence for a structured harness: without the protocol's
+		// terminal event the run is "absent", and the shared classifier must fail it rather than let
+		// a killed-but-exited process count as done.
+		it("treats exit 0 without a terminal event as 'absent', which the classifier still fails", () => {
+			const outcome = harness.parseOutcome({ eventsText: "", exitCode: 0 });
+			expect(outcome.protocolStatus).toBe("absent");
+			expect(outcome.terminalSeen).toBe(false);
+			expect(classifyExternalOutcome(harness.id, outcome).status).toBe("failed");
+		});
+	},
+);
