@@ -9,20 +9,18 @@ const entries = [
 ] as never[];
 
 describe("memory source windows", () => {
-	it("uses the cursor for both entries and worker messages", () => {
-		const window = buildIncrementalMemorySourceWindow({
+	it("windows entries and worker messages by cursor, intersecting a compaction boundary with the durable cursor", () => {
+		const incremental = buildIncrementalMemorySourceWindow({
 			entries,
 			lastEntryId: "e2",
 			sourceKind: "idle",
 		});
-		expect(window.entries.map((entry) => entry.id)).toEqual(["e3", "e4"]);
-		expect(JSON.stringify(window.messages)).toContain("new request");
-		expect(JSON.stringify(window.messages)).not.toContain("old request");
-		expect(window.throughEntryId).toBe("e4");
-	});
+		expect(incremental.entries.map((entry) => entry.id)).toEqual(["e3", "e4"]);
+		expect(JSON.stringify(incremental.messages)).toContain("new request");
+		expect(JSON.stringify(incremental.messages)).not.toContain("old request");
+		expect(incremental.throughEntryId).toBe("e4");
 
-	it("intersects a compaction boundary with the durable cursor", () => {
-		const window = buildCompactionMemorySourceWindow({
+		const compaction = buildCompactionMemorySourceWindow({
 			entries,
 			messagesToSummarize: [
 				{ role: "user", content: "old request" },
@@ -32,8 +30,8 @@ describe("memory source windows", () => {
 			firstKeptEntryId: "e4",
 			lastEntryId: "e2",
 		});
-		expect(window.entries.map((entry) => entry.id)).toEqual(["e3"]);
-		expect(JSON.stringify(window.messages)).toContain("new request");
-		expect(JSON.stringify(window.messages)).not.toContain("old request");
+		expect(compaction.entries.map((entry) => entry.id)).toEqual(["e3"]);
+		expect(JSON.stringify(compaction.messages)).toContain("new request");
+		expect(JSON.stringify(compaction.messages)).not.toContain("old request");
 	});
 });

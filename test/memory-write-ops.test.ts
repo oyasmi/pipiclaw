@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe("channel memory write ops", () => {
-	it("add ops append entries with generated ids", async () => {
+	it("generates explicit ids for adds and targets legacy id-less entries by synthesized id", async () => {
 		const channelDir = createTempDir();
 		const result = await applyChannelMemoryOps(channelDir, [
 			{ op: "add", content: "User prefers dark mode" },
@@ -38,32 +38,43 @@ describe("channel memory write ops", () => {
 		expect(entries).toHaveLength(2);
 		expect(entries.every((entry) => entry.hasExplicitId)).toBe(true);
 		expect(new Set(entries.map((entry) => entry.id)).size).toBe(2);
+
+		// A legacy entry written without an id comment is still addressable by its synthesized
+		// id, and superseding it upgrades the entry to an explicit one.
+		const legacyDir = createTempDir();
+		await rewriteChannelMemory(legacyDir, "## Preferences\n\n- Legacy fact without id");
+		const [legacy] = parseChannelMemoryEntries(await readChannelMemory(legacyDir));
+		expect(legacy.hasExplicitId).toBe(false);
+
+		const migrated = await applyChannelMemoryOps(legacyDir, [
+			{ op: "supersede", targetId: legacy.id, content: "Migrated fact with id" },
+		]);
+		expect(migrated.superseded).toBe(1);
+		const legacyMemory = await readChannelMemory(legacyDir);
+		expect(legacyMemory).toContain("Migrated fact with id");
+		expect(legacyMemory).not.toContain("Legacy fact without id");
+		expect(parseChannelMemoryEntries(legacyMemory)[0].hasExplicitId).toBe(true);
 	});
 
-	it("treats normalized duplicate adds as idempotent", async () => {
+	it("treats normalized duplicate adds as idempotent across batches and within one batch", async () => {
 		const channelDir = createTempDir();
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "User prefers dark mode" }]);
 
-		const result = await applyChannelMemoryOps(channelDir, [
+		const replayed = await applyChannelMemoryOps(channelDir, [
 			{ op: "add", content: "  user   PREFERS dark mode  " },
 			{ op: "add", content: "USER PREFERS DARK MODE" },
 		]);
-
-		expect(result.added).toBe(0);
-		expect(result.skippedDuplicate).toBe(2);
+		expect(replayed.added).toBe(0);
+		expect(replayed.skippedDuplicate).toBe(2);
 		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(1);
-	});
 
-	it("deduplicates repeated adds within one operation batch", async () => {
-		const channelDir = createTempDir();
-		const result = await applyChannelMemoryOps(channelDir, [
+		const batched = await applyChannelMemoryOps(channelDir, [
 			{ op: "add", content: "Default deploy is blue-green" },
 			{ op: "add", content: "default deploy is blue-green" },
 		]);
-
-		expect(result.added).toBe(1);
-		expect(result.skippedDuplicate).toBe(1);
-		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(1);
+		expect(batched.added).toBe(1);
+		expect(batched.skippedDuplicate).toBe(1);
+		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(2);
 	});
 
 	it("treats a repeated consolidation window as idempotent even when wording changes", async () => {
@@ -168,36 +179,27 @@ describe("channel memory write ops", () => {
 		expect(backups.length).toBeLessThanOrEqual(10);
 	});
 
-	it("archives raw history blocks", async () => {
+	it("archives history blocks, keeps successive ones, and rotates into a .1 generation past the size threshold", async () => {
 		const channelDir = createTempDir();
 		await appendChannelHistoryArchive(channelDir, {
 			timestamp: "2026-07-01T00:00:00.000Z",
 			content: "## 2026-06-01\n\nOriginal detailed block",
 		});
-		const archive = readFileSync(getChannelHistoryArchivePath(channelDir), "utf-8");
+		let archive = readFileSync(getChannelHistoryArchivePath(channelDir), "utf-8");
 		expect(archive).toContain("Original detailed block");
 		expect(archive).toContain("Archived 2026-07-01T00:00:00.000Z");
-	});
 
-	it("appends successive archive blocks without losing earlier ones", async () => {
-		const channelDir = createTempDir();
-		await appendChannelHistoryArchive(channelDir, { timestamp: "2026-07-01T00:00:00.000Z", content: "First block" });
 		await appendChannelHistoryArchive(channelDir, { timestamp: "2026-07-02T00:00:00.000Z", content: "Second block" });
 		await appendChannelHistoryArchive(channelDir, { timestamp: "2026-07-03T00:00:00.000Z", content: "Third block" });
-
-		const archive = readFileSync(getChannelHistoryArchivePath(channelDir), "utf-8");
-		expect(archive).toContain("First block");
+		archive = readFileSync(getChannelHistoryArchivePath(channelDir), "utf-8");
 		expect(archive).toContain("Second block");
 		expect(archive).toContain("Third block");
 		expect(archive.startsWith("# Channel History Archive")).toBe(true);
-	});
 
-	it("rotates the archive into a .1 generation once it crosses the size threshold", async () => {
-		const channelDir = createTempDir();
 		const bigBlock = "x".repeat(4 * 1024 * 1024);
-		await appendChannelHistoryArchive(channelDir, { timestamp: "2026-07-01T00:00:00.000Z", content: bigBlock });
+		await appendChannelHistoryArchive(channelDir, { timestamp: "2026-07-04T00:00:00.000Z", content: bigBlock });
 		await appendChannelHistoryArchive(channelDir, {
-			timestamp: "2026-07-02T00:00:00.000Z",
+			timestamp: "2026-07-05T00:00:00.000Z",
 			content: "Block after rotation",
 		});
 
@@ -211,7 +213,7 @@ describe("channel memory write ops", () => {
 		expect(current).not.toContain(bigBlock);
 	});
 
-	it("records a forget tombstone and blocks automatic resurrection", async () => {
+	it("records a forget tombstone blocking both exact resurrection and paraphrased replays from the same source window", async () => {
 		const channelDir = createTempDir();
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "User prefers cobalt blue" }]);
 		const [entry] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
@@ -223,29 +225,27 @@ describe("channel memory write ops", () => {
 		const resurrected = await applyChannelMemoryOps(channelDir, [{ op: "add", content: "User prefers cobalt blue" }]);
 		expect(resurrected.blockedByTombstone).toBe(1);
 		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(0);
-	});
 
-	it("blocks a paraphrased replay from the forgotten entry's source window", async () => {
-		const channelDir = createTempDir();
-		await applyChannelMemoryOps(channelDir, [
+		// A paraphrase replaying from the forgotten entry's source window is blocked too.
+		const sourcedDir = createTempDir();
+		await applyChannelMemoryOps(sourcedDir, [
 			{
 				op: "add",
 				content: "User prefers cobalt blue",
 				sourceEntryIds: ["session-entry-42"],
 			},
 		]);
-		const [entry] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
-		await applyChannelMemoryOps(channelDir, [{ op: "forget", targetId: entry.id }]);
+		const [sourced] = parseChannelMemoryEntries(await readChannelMemory(sourcedDir));
+		await applyChannelMemoryOps(sourcedDir, [{ op: "forget", targetId: sourced.id }]);
 
-		const replayed = await applyChannelMemoryOps(channelDir, [
+		const replayed = await applyChannelMemoryOps(sourcedDir, [
 			{
 				op: "add",
 				content: "Cobalt blue is the user's preferred color",
 				sourceEntryIds: ["session-entry-42"],
 			},
 		]);
-
 		expect(replayed.blockedByTombstone).toBe(1);
-		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(0);
+		expect(parseChannelMemoryEntries(await readChannelMemory(sourcedDir))).toHaveLength(0);
 	});
 });

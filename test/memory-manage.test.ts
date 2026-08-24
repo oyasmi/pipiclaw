@@ -50,19 +50,16 @@ describe("memory_manage tool", () => {
 		expect(entries[0].content).toBe("User prefers responses in Chinese");
 	});
 
-	it("rejects save on empty content instead of reporting a quiet no-op", async () => {
+	it("rejects saves without usable content, naming the arguments that did arrive when content is missing entirely", async () => {
 		const channelDir = createTempChannel();
 		await expect(makeTool(channelDir).execute("call", { label: "x", op: "save", content: "   " })).rejects.toThrow(
 			/requires a non-empty "content"/,
 		);
 		expect(await readChannelMemory(channelDir)).not.toContain("x");
-	});
 
-	// The signature of an argument dropped in transit: everything but the payload arrives.
-	// The rejection must name the keys that did arrive, otherwise the model reads its own
-	// content-less call back from history and replays it forever.
-	it("names the arguments that did arrive when content is missing entirely", async () => {
-		const channelDir = createTempChannel();
+		// The signature of an argument dropped in transit: everything but the payload arrives.
+		// The rejection must name the keys that did arrive, otherwise the model reads its own
+		// content-less call back from history and replays it forever.
 		await expect(
 			makeTool(channelDir).execute("call", { label: "remember", op: "save", kind: "fact" }),
 		).rejects.toThrow(/label, op, kind/);
@@ -95,7 +92,7 @@ describe("memory_manage tool", () => {
 		expect(seenChannelIds).toEqual(["dm_9"]);
 	});
 
-	it("searches stored memory and returns matching entries", async () => {
+	it("searches stored memory, returns matching entries, and hints when nothing matched", async () => {
 		const channelDir = createTempChannel();
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "User prefers dark mode in the dashboard" }]);
 		const result = await makeTool(channelDir).execute("call", {
@@ -107,12 +104,9 @@ describe("memory_manage tool", () => {
 		expect(text).toContain("dark mode");
 		expect(result.details).toMatchObject({ op: "search" });
 		expect((result.details as { resultCount: number }).resultCount).toBeGreaterThanOrEqual(1);
-	});
 
-	it("reports an empty search with a widening hint", async () => {
-		const channelDir = createTempChannel();
-		const text = await runText(makeTool(channelDir), { op: "search", query: "nonexistent topic xyz" });
-		expect(text).toContain("No stored memory matched");
+		const emptyText = await runText(makeTool(createTempChannel()), { op: "search", query: "nonexistent topic xyz" });
+		expect(emptyText).toContain("No stored memory matched");
 	});
 
 	it("forgets a uniquely matched entry through the serial queue", async () => {
@@ -154,13 +148,15 @@ describe("memory_manage tool", () => {
 		);
 	});
 
-	it("flags a similar existing entry instead of saving a second, possibly-contradictory fact", async () => {
+	it("guards similar-entry conflicts: flags them by default, allows them with supersedes none, replaces in place when given the id", async () => {
 		const channelDir = createTempChannel();
 		await applyChannelMemoryOps(channelDir, [
 			{ op: "add", content: "The team default package manager for installs is npm" },
 		]);
 		const [existing] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
 
+		// The default save flags a similar entry instead of writing a second,
+		// possibly-contradictory fact.
 		await expect(
 			makeTool(channelDir).execute("call", {
 				label: "remember",
@@ -168,47 +164,33 @@ describe("memory_manage tool", () => {
 				content: "The team default package manager for installs is now pnpm",
 			}),
 		).rejects.toThrow(new RegExp(`supersedes.*${existing.id}|${existing.id}`));
+		expect(parseChannelMemoryEntries(await readChannelMemory(channelDir))).toHaveLength(1);
 
-		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
-		expect(entries).toHaveLength(1);
-	});
-
-	it('saves without conflict when "supersedes" is set to "none"', async () => {
-		const channelDir = createTempChannel();
-		await applyChannelMemoryOps(channelDir, [
-			{ op: "add", content: "The team default package manager for installs is npm" },
-		]);
-
-		const result = await makeTool(channelDir).execute("call", {
-			label: "remember",
-			op: "save",
-			content: "The team default package manager for installs is now pnpm",
-			supersedes: "none",
-		});
-		expect(result.details).toMatchObject({ op: "save", saved: true });
-
-		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
-		expect(entries).toHaveLength(2);
-	});
-
-	it("replaces the flagged entry in place when supersedes names its id", async () => {
-		const channelDir = createTempChannel();
-		await applyChannelMemoryOps(channelDir, [
-			{ op: "add", content: "The team default package manager for installs is npm" },
-		]);
-		const [existing] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
-
-		const result = await makeTool(channelDir).execute("call", {
+		// Naming the flagged id replaces that entry in place.
+		const replaced = await makeTool(channelDir).execute("call", {
 			label: "remember",
 			op: "save",
 			content: "The team default package manager for installs is now pnpm",
 			supersedes: existing.id,
 		});
-		expect(result.details).toMatchObject({ op: "save", saved: true });
-
+		expect(replaced.details).toMatchObject({ op: "save", saved: true });
 		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
 		expect(entries).toHaveLength(1);
 		expect(entries[0].content).toContain("pnpm");
+
+		// Waiving the conflict stores both entries side by side.
+		const waivedDir = createTempChannel();
+		await applyChannelMemoryOps(waivedDir, [
+			{ op: "add", content: "The team default package manager for installs is npm" },
+		]);
+		const waived = await makeTool(waivedDir).execute("call", {
+			label: "remember",
+			op: "save",
+			content: "The team default package manager for installs is now pnpm",
+			supersedes: "none",
+		});
+		expect(waived.details).toMatchObject({ op: "save", saved: true });
+		expect(parseChannelMemoryEntries(await readChannelMemory(waivedDir))).toHaveLength(2);
 	});
 
 	it("reports when forget finds no match", async () => {

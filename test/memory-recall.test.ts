@@ -1,7 +1,12 @@
 import { writeFile } from "node:fs/promises";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../src/memory/sidecar-worker.js", () => ({
+	runSidecarTask: vi.fn(),
+}));
+
 import { buildMemoryCandidates, createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { parseChannelMemoryEntries } from "../src/memory/files.js";
 import {
@@ -11,10 +16,16 @@ import {
 	syncMemoryMetadata,
 } from "../src/memory/metadata.js";
 import { findPreviousUserText, recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
+import { runSidecarTask } from "../src/memory/sidecar-worker.js";
 import { countPromptUnits } from "../src/shared/prompt-units.js";
-import { useTempDirs } from "./helpers/fixtures.js";
+import { setupChannelFiles, useTempDirs } from "./helpers/fixtures.js";
 
 const makeWorkspace = useTempDirs("pipiclaw-recall-");
+const TEST_MODEL = { provider: "test", id: "noop" } as never;
+
+afterEach(() => {
+	vi.clearAllMocks();
+});
 
 function createTempWorkspace(): { workspaceDir: string; channelDir: string } {
 	const workspaceDir = makeWorkspace();
@@ -54,7 +65,7 @@ describe("memory candidates", () => {
 		expect(candidates.some((candidate) => candidate.title === "Current State")).toBe(true);
 	});
 
-	it("reuses unchanged candidates and refreshes files whose fingerprints change", async () => {
+	it("reuses unchanged candidates between runs and refreshes only files whose fingerprints change", async () => {
 		const { workspaceDir, channelDir } = createTempWorkspace();
 		const store = createMemoryCandidateStore();
 		writeFileSync(
@@ -62,17 +73,34 @@ describe("memory candidates", () => {
 			"# Workspace Memory\n\n## Shared Context\n\n- First value.\n",
 			"utf-8",
 		);
+		writeFileSync(
+			join(channelDir, "SESSION.md"),
+			"# Session Title\n\nCurrent task\n\n# Current State\n\n- First state.\n",
+			"utf-8",
+		);
 
 		const initial = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
 		const repeated = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
+		expect(repeated).toEqual(initial);
+		expect(initial.some((candidate) => candidate.content.includes("First state."))).toBe(true);
+
+		// Changing one file refreshes its candidates while the untouched file's content persists.
+		writeFileSync(
+			join(channelDir, "SESSION.md"),
+			"# Session Title\n\nCurrent task\n\n# Current State\n\n- Updated state.\n",
+			"utf-8",
+		);
+		const updated = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
+		expect(updated.some((candidate) => candidate.content.includes("Updated state."))).toBe(true);
+		expect(updated.some((candidate) => candidate.content.includes("First value."))).toBe(true);
+
+		// Once the file changes, its stale content is gone from the refreshed candidates.
 		writeFileSync(
 			join(workspaceDir, "MEMORY.md"),
 			"# Workspace Memory\n\n## Shared Context\n\n- Second value.\n",
 			"utf-8",
 		);
 		const refreshed = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
-
-		expect(repeated).toEqual(initial);
 		expect(refreshed.some((candidate) => candidate.content.includes("Second value."))).toBe(true);
 		expect(refreshed.some((candidate) => candidate.content.includes("First value."))).toBe(false);
 	});
@@ -130,33 +158,6 @@ describe("memory candidates", () => {
 		expect(candidates.every((candidate) => candidate.entryId === candidate.id)).toBe(true);
 	});
 
-	it("refreshes only the files whose fingerprints changed", async () => {
-		const { workspaceDir, channelDir } = createTempWorkspace();
-		const store = createMemoryCandidateStore();
-		writeFileSync(
-			join(workspaceDir, "MEMORY.md"),
-			"# Workspace Memory\n\n## Shared Context\n\n- Shared install policy.\n",
-			"utf-8",
-		);
-		writeFileSync(
-			join(channelDir, "SESSION.md"),
-			"# Session Title\n\nCurrent task\n\n# Current State\n\n- First state.\n",
-			"utf-8",
-		);
-
-		const initial = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
-		writeFileSync(
-			join(channelDir, "SESSION.md"),
-			"# Session Title\n\nCurrent task\n\n# Current State\n\n- Updated state.\n",
-			"utf-8",
-		);
-
-		const updated = await buildMemoryCandidates({ workspaceDir, channelDir }, store);
-		expect(updated.some((candidate) => candidate.content.includes("Updated state."))).toBe(true);
-		expect(updated.some((candidate) => candidate.content.includes("Shared install policy."))).toBe(true);
-		expect(initial.some((candidate) => candidate.content.includes("First state."))).toBe(true);
-	});
-
 	it("limits large history files to folded blocks plus recent entries", async () => {
 		const { workspaceDir, channelDir } = createTempWorkspace();
 		const history = [
@@ -205,39 +206,30 @@ describe("memory recall: contextQuery fallback for weak queries", () => {
 		const { workspaceDir, channelDir } = createTempWorkspace();
 		seedThursdayGate(channelDir);
 
-		const withoutContext = await recallRelevantMemory({
+		// A weak query recalls nothing on its own...
+		const weakRequest = {
 			query: "代号是什么来着？",
 			workspaceDir,
 			channelDir,
 			maxCandidates: 8,
 			maxInjected: 3,
 			maxChars: 2_000,
-			rerankWithModel: false,
+			rerankWithModel: false as const,
 			model: { provider: "test", id: "noop" } as never,
 			resolveApiKey: async () => "",
-		});
-		expect(withoutContext.items.map((item) => item.id)).not.toContain("m-thursday");
+		};
+		const weakWithoutContext = await recallRelevantMemory(weakRequest);
+		expect(weakWithoutContext.items.map((item) => item.id)).not.toContain("m-thursday");
 
-		const withContext = await recallRelevantMemory({
-			query: "代号是什么来着？",
+		// ...but clears the bar once the previous user turn is borrowed.
+		const weakWithContext = await recallRelevantMemory({
+			...weakRequest,
 			contextQuery: "我们发布现在固定在周四晚上，代号叫 THURSDAY-GATE。",
-			workspaceDir,
-			channelDir,
-			maxCandidates: 8,
-			maxInjected: 3,
-			maxChars: 2_000,
-			rerankWithModel: false,
-			model: { provider: "test", id: "noop" } as never,
-			resolveApiKey: async () => "",
 		});
-		expect(withContext.items.map((item) => item.id)).toContain("m-thursday");
-	});
+		expect(weakWithContext.items.map((item) => item.id)).toContain("m-thursday");
 
-	it("has no effect when the current query already clears the evidence bar on its own", async () => {
-		const { workspaceDir, channelDir } = createTempWorkspace();
-		seedThursdayGate(channelDir);
-
-		const request = {
+		// A query that already clears the evidence bar is unaffected by the borrowed turn.
+		const strongRequest = {
 			query: "发布窗口代号是什么？只回答代号本身。",
 			workspaceDir,
 			channelDir,
@@ -248,10 +240,13 @@ describe("memory recall: contextQuery fallback for weak queries", () => {
 			model: { provider: "test", id: "noop" } as never,
 			resolveApiKey: async () => "",
 		};
-		const withoutContext = await recallRelevantMemory(request);
-		const withContext = await recallRelevantMemory({ ...request, contextQuery: "完全不相关的上一轮消息内容。" });
-		expect(withContext.items.map((item) => item.id)).toEqual(withoutContext.items.map((item) => item.id));
-		expect(withContext.renderedText).toEqual(withoutContext.renderedText);
+		const strongWithoutContext = await recallRelevantMemory(strongRequest);
+		const strongWithContext = await recallRelevantMemory({
+			...strongRequest,
+			contextQuery: "完全不相关的上一轮消息内容。",
+		});
+		expect(strongWithContext.items.map((item) => item.id)).toEqual(strongWithoutContext.items.map((item) => item.id));
+		expect(strongWithContext.renderedText).toEqual(strongWithoutContext.renderedText);
 	});
 
 	it("findPreviousUserText strips injected runtime-context wrappers so they can't leak into contextQuery", () => {
@@ -303,7 +298,8 @@ describe("memory recall", () => {
 		expect((await readMemoryMetadata(channelDir)).entries["m-moonstone"]?.recallCount).toBe(1);
 	});
 
-	it("ranks a frequently-recalled entry above an equally-matched one that has never been recalled", async () => {
+	it("breaks lexical ties with engagement metadata: frequent recency ranks first and a user-saved entry is exempt from the staleness penalty", async () => {
+		// Ten distinct past recalls lift m-popular above the equally-matched, never-recalled m-quiet.
 		const { workspaceDir, channelDir } = createTempWorkspace();
 		const memoryText = [
 			"# Channel Memory",
@@ -316,12 +312,11 @@ describe("memory recall", () => {
 		writeFileSync(join(channelDir, "MEMORY.md"), memoryText);
 		const entries = parseChannelMemoryEntries(memoryText);
 		await syncMemoryMetadata(channelDir, entries);
-		// Simulate ten distinct past recalls for m-popular; m-quiet stays untouched.
 		for (let index = 0; index < 10; index++) {
 			await recordMemoryRecall(channelDir, ["m-popular"], `distinct query phrasing number ${index}`);
 		}
 
-		const result = await recallRelevantMemory({
+		const frequencyResult = await recallRelevantMemory({
 			query: "deploy pipeline notes",
 			workspaceDir,
 			channelDir,
@@ -332,13 +327,12 @@ describe("memory recall", () => {
 			model: { provider: "test", id: "noop" } as never,
 			resolveApiKey: async () => "",
 		});
+		expect(frequencyResult.items.map((item) => item.id)).toEqual(["m-popular", "m-quiet"]);
 
-		expect(result.items.map((item) => item.id)).toEqual(["m-popular", "m-quiet"]);
-	});
-
-	it("does not penalize a stale user-saved entry the way it penalizes a stale agent-learned one", async () => {
-		const { workspaceDir, channelDir } = createTempWorkspace();
-		const memoryText = [
+		// Equal lexical evidence again but stale this time; only the user-saved entry avoids the
+		// staleness penalty, so it ranks first (or ties, never behind the agent-sourced one).
+		const stale = createTempWorkspace();
+		const staleMemoryText = [
 			"# Channel Memory",
 			"",
 			"## Facts",
@@ -346,27 +340,27 @@ describe("memory recall", () => {
 			"- Onboarding checklist alpha entry. <!--id:m-userstale-->",
 			"- Onboarding checklist beta entry. <!--id:m-agentstale-->",
 		].join("\n");
-		writeFileSync(join(channelDir, "MEMORY.md"), memoryText);
-		const entries = parseChannelMemoryEntries(memoryText);
+		writeFileSync(join(stale.channelDir, "MEMORY.md"), staleMemoryText);
+		const staleEntries = parseChannelMemoryEntries(staleMemoryText);
 		await syncMemoryMetadata(
-			channelDir,
-			entries,
-			entries.map((entry) => ({
+			stale.channelDir,
+			staleEntries,
+			staleEntries.map((entry) => ({
 				id: entry.id,
 				metadata: { sourceType: entry.id === "m-userstale" ? "user" : "agent" },
 			})),
 		);
 		const staleTimestamp = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
-		const metadata = await readMemoryMetadata(channelDir);
+		const metadata = await readMemoryMetadata(stale.channelDir);
 		for (const id of ["m-userstale", "m-agentstale"]) {
 			metadata.entries[id] = { ...metadata.entries[id], lastRecalledAt: staleTimestamp, createdAt: staleTimestamp };
 		}
-		await writeFile(getMemoryMetadataPath(channelDir), `${JSON.stringify(metadata, null, 2)}\n`);
+		await writeFile(getMemoryMetadataPath(stale.channelDir), `${JSON.stringify(metadata, null, 2)}\n`);
 
-		const result = await recallRelevantMemory({
+		const staleResult = await recallRelevantMemory({
 			query: "onboarding checklist",
-			workspaceDir,
-			channelDir,
+			workspaceDir: stale.workspaceDir,
+			channelDir: stale.channelDir,
 			maxCandidates: 8,
 			maxInjected: 2,
 			maxChars: 2_000,
@@ -374,10 +368,7 @@ describe("memory recall", () => {
 			model: { provider: "test", id: "noop" } as never,
 			resolveApiKey: async () => "",
 		});
-
-		// Equal lexical evidence; only the user-saved one should avoid the staleness penalty, so it
-		// ranks first (or ties, never behind the agent-sourced one).
-		expect(result.items[0]?.id).toBe("m-userstale");
+		expect(staleResult.items[0]?.id).toBe("m-userstale");
 	});
 
 	it("clips recalled memory to the unit budget and points at the search tools", async () => {
@@ -510,5 +501,302 @@ describe("memory recall", () => {
 		for (const token of notExpected) {
 			expect(tokens).not.toContain(token);
 		}
+	});
+});
+
+describe("memory recall: source priority and model rerank", () => {
+	it("selects across sources: session outranks durable memory, relevant history outranks unrelated session state, and maxInjected caps the result", async () => {
+		// Session state beats durable memory when the same query matches both.
+		const sessionFirst = createTempWorkspace();
+		writeFileSync(
+			join(sessionFirst.workspaceDir, "MEMORY.md"),
+			"# Workspace Memory\n\n## Shared Context\n\n- Use pnpm.\n",
+			"utf-8",
+		);
+		setupChannelFiles(sessionFirst.channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"Fix login regression",
+				"",
+				"# Current State",
+				"",
+				"- Investigating oauth callback validation in src/auth.ts.",
+				"",
+				"# Next Steps",
+				"",
+				"- Patch callback verification after reproducing the bug.",
+			].join("\n"),
+			memory:
+				"# Channel Memory\n\n## Constraints\n\n- OAuth callback verification must remain backwards-compatible.\n",
+			history: "# Channel History\n\n## 2026-04-01T00:00:00.000Z\n\nShipped the earlier auth flow.\n",
+		});
+
+		const sessionResult = await recallRelevantMemory({
+			query: "What is the current oauth callback work?",
+			workspaceDir: sessionFirst.workspaceDir,
+			channelDir: sessionFirst.channelDir,
+			maxCandidates: 8,
+			maxInjected: 2,
+			maxChars: 2000,
+			rerankWithModel: false as const,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(sessionResult.items).toHaveLength(2);
+		expect(sessionResult.items[0]?.source).toBe("channel-session");
+		expect(sessionResult.renderedText).toContain("Current State");
+
+		// Highly relevant history beats unrelated session state.
+		const historyFirst = createTempWorkspace();
+		setupChannelFiles(historyFirst.channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"Triage metrics dashboard",
+				"",
+				"# Current State",
+				"",
+				"- Reviewing dashboard rendering latency.",
+				"",
+				"# Next Steps",
+				"",
+				"- Compare the latest latency snapshots.",
+			].join("\n"),
+			memory: "# Channel Memory\n\n## Constraints\n\n- Keep dashboard charts stable.\n",
+			history: [
+				"# Channel History",
+				"",
+				"## 2026-04-01T00:00:00.000Z",
+				"",
+				"- Fixed the oauth callback regression by tightening callback verification.",
+			].join("\n"),
+		});
+
+		const historyResult = await recallRelevantMemory({
+			query: "What happened in the earlier oauth callback regression fix?",
+			workspaceDir: historyFirst.workspaceDir,
+			channelDir: historyFirst.channelDir,
+			maxCandidates: 8,
+			maxInjected: 1,
+			maxChars: 2000,
+			rerankWithModel: false as const,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(historyResult.items).toHaveLength(1);
+		expect(historyResult.items[0]?.source).toBe("channel-history");
+		expect(historyResult.items[0]?.content).toContain("oauth callback regression");
+
+		// maxInjected caps how many matching candidates are injected.
+		const capped = createTempWorkspace();
+		setupChannelFiles(capped.channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"Fix login regression",
+				"",
+				"# Current State",
+				"",
+				"- Investigating oauth callback validation.",
+				"",
+				"# Next Steps",
+				"",
+				"- Patch callback verification.",
+				"",
+				"# Errors & Corrections",
+				"",
+				"- Retry loop masked the real callback error.",
+			].join("\n"),
+			memory: "# Channel Memory\n\n## Constraints\n\n- Keep callback verification backwards-compatible.\n",
+		});
+
+		const cappedResult = await recallRelevantMemory({
+			query: "callback verification error",
+			workspaceDir: capped.workspaceDir,
+			channelDir: capped.channelDir,
+			maxCandidates: 8,
+			maxInjected: 1,
+			maxChars: 2000,
+			rerankWithModel: false as const,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(cappedResult.items).toHaveLength(1);
+		expect(cappedResult.renderedText.match(/\[.*?\/.*?\]/g)?.length ?? 0).toBe(1);
+	});
+
+	it("uses model rerank when enabled: honors the selected ids, falls back to lexical scoring on failure, and floors an empty selection at local top-1", async () => {
+		const reranked = createTempWorkspace();
+		setupChannelFiles(reranked.channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"Fix login regression",
+				"",
+				"# Current State",
+				"",
+				"- Investigating oauth callback validation.",
+				"",
+				"# Next Steps",
+				"",
+				"- Patch callback verification.",
+			].join("\n"),
+			memory:
+				"# Channel Memory\n\n## Constraints\n\n- Callback verification must stay backwards-compatible. <!--id:m-callback01-->\n",
+		});
+		vi.mocked(runSidecarTask).mockResolvedValue({
+			rawText: '{"selectedIds":["m-callback01"]}',
+			output: ["m-callback01"],
+		});
+
+		const rerankResult = await recallRelevantMemory({
+			query: "callback verification",
+			workspaceDir: reranked.workspaceDir,
+			channelDir: reranked.channelDir,
+			maxCandidates: 8,
+			maxInjected: 1,
+			maxChars: 2000,
+			rerankWithModel: true,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(runSidecarTask).toHaveBeenCalledTimes(1);
+		expect(rerankResult.items).toHaveLength(1);
+		expect(rerankResult.items[0]?.source).toBe("channel-memory");
+		expect(rerankResult.items[0]?.title).toBe("Constraints");
+		vi.mocked(runSidecarTask).mockClear();
+
+		// A failed rerank degrades to lexical scoring instead of losing recall entirely.
+		vi.mocked(runSidecarTask).mockRejectedValue(new Error("rerank timeout"));
+		const fallback = createTempWorkspace();
+		setupChannelFiles(fallback.channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"Fix login regression",
+				"",
+				"# Current State",
+				"",
+				"- Investigating oauth callback validation.",
+				"",
+				"# Next Steps",
+				"",
+				"- Patch callback verification.",
+			].join("\n"),
+			memory: "# Channel Memory\n\n## Constraints\n\n- Callback verification must stay backwards-compatible.\n",
+		});
+
+		const fallbackResult = await recallRelevantMemory({
+			query: "callback verification",
+			workspaceDir: fallback.workspaceDir,
+			channelDir: fallback.channelDir,
+			maxCandidates: 8,
+			maxInjected: 1,
+			maxChars: 2000,
+			rerankWithModel: true,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(runSidecarTask).toHaveBeenCalledTimes(1);
+		expect(fallbackResult.items).toHaveLength(1);
+		expect(fallbackResult.items[0]?.source).toBe("channel-session");
+		vi.mocked(runSidecarTask).mockClear();
+
+		// "Nothing is relevant" from the reranker is not trusted at face value: both candidates
+		// already cleared MIN_MATCH_EVIDENCE, so the worst acceptable outcome is one item, not zero.
+		vi.mocked(runSidecarTask).mockResolvedValue({ rawText: '{"selectedIds":[]}', output: [] });
+		const floored = createTempWorkspace();
+		setupChannelFiles(floored.channelDir, {
+			session: "# Current State\n\n- Investigating oauth callback verification failures.",
+			memory: "# Channel Memory\n\n## Constraints\n\n- Callback verification stays compatible.",
+		});
+
+		const flooredResult = await recallRelevantMemory({
+			query: "callback verification",
+			workspaceDir: floored.workspaceDir,
+			channelDir: floored.channelDir,
+			maxCandidates: 8,
+			maxInjected: 1,
+			maxChars: 2000,
+			rerankWithModel: true,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(runSidecarTask).toHaveBeenCalledTimes(1);
+		expect(flooredResult.items).toHaveLength(1);
+		expect(flooredResult.renderedText).not.toBe("");
+	});
+
+	it("uses section intent plus session title context for Chinese queries without seeding history from intent alone", async () => {
+		// A Chinese next-step query surfaces the Next Steps section via section intent
+		// plus the session title context.
+		const chinese = createTempWorkspace();
+		setupChannelFiles(chinese.channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"修复登录异常",
+				"",
+				"# Current State",
+				"",
+				"- 正在排查认证回调异常。",
+				"",
+				"# Next Steps",
+				"",
+				"- 先复现问题，再检查回调状态。",
+			].join("\n"),
+			memory: "# Channel Memory\n\n## Constraints\n\n- 不要变更 token 存储。\n",
+			history: "# Channel History\n",
+		});
+
+		const chineseResult = await recallRelevantMemory({
+			query: "登录失败了，下一步该查什么？",
+			workspaceDir: chinese.workspaceDir,
+			channelDir: chinese.channelDir,
+			maxCandidates: 8,
+			maxInjected: 2,
+			maxChars: 2000,
+			rerankWithModel: false as const,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(chineseResult.items.some((item) => item.title === "Next Steps")).toBe(true);
+		expect(chineseResult.renderedText).toContain("先复现问题");
+
+		// Zero lexical overlap means intent alone never seeds a history candidate.
+		const noOverlap = createTempWorkspace();
+		setupChannelFiles(noOverlap.channelDir, {
+			session: [
+				"# Session Title",
+				"",
+				"Fix login regression",
+				"",
+				"# Current State",
+				"",
+				"- Investigating oauth callback validation.",
+			].join("\n"),
+			memory: "# Channel Memory\n\n## Constraints\n\n- Keep callback verification backwards-compatible.\n",
+			history: [
+				"# Channel History",
+				"",
+				"## 2026-04-01T00:00:00.000Z",
+				"",
+				"- Patched background job retries in an unrelated worker.",
+			].join("\n"),
+		});
+
+		const noOverlapResult = await recallRelevantMemory({
+			query: "what happened earlier?",
+			workspaceDir: noOverlap.workspaceDir,
+			channelDir: noOverlap.channelDir,
+			maxCandidates: 8,
+			maxInjected: 2,
+			maxChars: 2000,
+			rerankWithModel: false as const,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+		expect(noOverlapResult.items.some((item) => item.source === "channel-history")).toBe(false);
 	});
 });

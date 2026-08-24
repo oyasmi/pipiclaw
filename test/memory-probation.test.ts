@@ -8,53 +8,56 @@ import { setupChannelFiles, useTempDirs } from "./helpers/fixtures.js";
 const makeChannel = useTempDirs("pipiclaw-memory-probation-");
 
 describe("memory probation expiry (spec 037, D8)", () => {
-	it("evicts an entry whose probation lapsed, via invalidate — not forget", async () => {
-		const channelDir = makeChannel();
-		setupChannelFiles(channelDir, { memory: "# Channel Memory\n" });
-		await applyChannelMemoryOps(channelDir, [
-			{
-				op: "add",
-				content: "Release channel defaults to Thursday cuts",
-				metadata: { probationUntil: "2026-01-01T00:00:00.000Z" },
-			},
-		]);
-		const [entry] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+	interface ExpiryScenario {
+		content: string;
+		probationUntil?: string;
+		now: string;
+		expectEviction: boolean;
+	}
 
-		const evicted = await expireMemoryEntries(channelDir, new Date("2026-02-01T00:00:00.000Z"));
+	const expiryScenarios: ExpiryScenario[] = [
+		{
+			content: "Release channel defaults to Thursday cuts",
+			probationUntil: "2026-01-01T00:00:00.000Z",
+			now: "2026-02-01T00:00:00.000Z",
+			expectEviction: true,
+		},
+		{
+			content: "Future probation entry",
+			probationUntil: "2026-06-01T00:00:00.000Z",
+			now: "2026-02-01T00:00:00.000Z",
+			expectEviction: false,
+		},
+		// A durable entry (no probationUntil) is untouched regardless of age.
+		{ content: "Durable fact with no expiry", now: "2030-01-01T00:00:00.000Z", expectEviction: false },
+	];
 
-		expect(evicted).toBe(1);
-		expect(await readChannelMemory(channelDir)).not.toContain("Release channel defaults to Thursday cuts");
-		expect((await readMemoryMetadata(channelDir)).entries[entry.id]?.status).toBe("invalidated");
-		// Not a tombstone: the same fact must be re-learnable later.
-		expect(await readMemoryTombstones(channelDir)).toHaveLength(0);
-	});
+	it("expires only entries whose probation lapsed, via invalidate — not forget", async () => {
+		for (const scenario of expiryScenarios) {
+			const channelDir = makeChannel();
+			setupChannelFiles(channelDir, { memory: "# Channel Memory\n" });
+			await applyChannelMemoryOps(channelDir, [
+				{
+					op: "add",
+					content: scenario.content,
+					metadata: scenario.probationUntil ? { probationUntil: scenario.probationUntil } : undefined,
+				},
+			]);
+			const [entry] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
 
-	it("leaves an entry whose probation has not yet lapsed untouched", async () => {
-		const channelDir = makeChannel();
-		setupChannelFiles(channelDir, { memory: "# Channel Memory\n" });
-		await applyChannelMemoryOps(channelDir, [
-			{
-				op: "add",
-				content: "Release channel defaults to Thursday cuts",
-				metadata: { probationUntil: "2026-06-01T00:00:00.000Z" },
-			},
-		]);
+			const evicted = await expireMemoryEntries(channelDir, new Date(scenario.now));
 
-		const evicted = await expireMemoryEntries(channelDir, new Date("2026-02-01T00:00:00.000Z"));
-
-		expect(evicted).toBe(0);
-		expect(await readChannelMemory(channelDir)).toContain("Release channel defaults to Thursday cuts");
-	});
-
-	it("leaves a durable entry (no probationUntil) untouched regardless of age", async () => {
-		const channelDir = makeChannel();
-		setupChannelFiles(channelDir, { memory: "# Channel Memory\n" });
-		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Durable fact with no expiry" }]);
-
-		const evicted = await expireMemoryEntries(channelDir, new Date("2030-01-01T00:00:00.000Z"));
-
-		expect(evicted).toBe(0);
-		expect(await readChannelMemory(channelDir)).toContain("Durable fact with no expiry");
+			if (scenario.expectEviction) {
+				expect(evicted).toBe(1);
+				expect(await readChannelMemory(channelDir)).not.toContain(scenario.content);
+				expect((await readMemoryMetadata(channelDir)).entries[entry.id]?.status).toBe("invalidated");
+				// Not a tombstone: the same fact must be re-learnable later.
+				expect(await readMemoryTombstones(channelDir)).toHaveLength(0);
+			} else {
+				expect(evicted).toBe(0);
+				expect(await readChannelMemory(channelDir)).toContain(scenario.content);
+			}
+		}
 	});
 
 	it("collectExpiredEntryIds ignores non-active entries", async () => {

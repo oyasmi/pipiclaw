@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildFirstTurnMemoryBootstrap, buildFirstTurnMemoryBootstrapResult } from "../src/memory/bootstrap.js";
 
 describe("first-turn memory bootstrap", () => {
-	it("renders channel and workspace durable memory together", () => {
+	it("renders channel and workspace durable memory together, and nothing when both are empty", () => {
 		const rendered = buildFirstTurnMemoryBootstrap({
 			channelMemory: "# Channel Memory\n\n## Constraints\n\n- Keep callback verification backwards-compatible.\n",
 			workspaceMemory: "# Workspace Memory\n\n## Shared Context\n\n- Default package manager is pnpm.\n",
@@ -14,24 +14,25 @@ describe("first-turn memory bootstrap", () => {
 		expect(rendered).toContain("[Workspace MEMORY.md]");
 		expect(rendered).toContain("Default package manager is pnpm.");
 		expect(rendered).toContain("</durable_memory_snapshot>");
+
+		expect(buildFirstTurnMemoryBootstrap({ channelMemory: "  ", workspaceMemory: "\n" })).toBe("");
 	});
 
-	it("prefers channel memory when both memories exceed the shared budget", () => {
+	it("trims over-budget memories while keeping both sources, the newest Update, and structured sections", () => {
+		// Both sources survive, trimmed to fit the shared char budget.
 		const channelLine = "频道记忆非常重要。\n";
 		const workspaceLine = "工作区记忆作为补充背景。\n";
-		const rendered = buildFirstTurnMemoryBootstrap({
+		const shared = buildFirstTurnMemoryBootstrap({
 			channelMemory: channelLine.repeat(300),
 			workspaceMemory: workspaceLine.repeat(300),
 			maxChars: 3000,
 		});
+		expect(shared).toContain("[Channel MEMORY.md]");
+		expect(shared).toContain("[Workspace MEMORY.md]");
+		expect(shared.indexOf(channelLine.trim())).toBeGreaterThan(0);
+		expect(shared.indexOf(workspaceLine.trim())).toBeGreaterThan(0);
 
-		expect(rendered).toContain("[Channel MEMORY.md]");
-		expect(rendered).toContain("[Workspace MEMORY.md]");
-		expect(rendered.indexOf(channelLine.trim())).toBeGreaterThan(0);
-		expect(rendered.indexOf(workspaceLine.trim())).toBeGreaterThan(0);
-	});
-
-	it("keeps the newest Update block and structured sections when channel memory exceeds budget", () => {
+		// Over the char budget, the newest Update block and structured sections beat old filler.
 		const filler = "旧的更新内容，需要被裁掉以腾出预算。".repeat(40);
 		const channelMemory = [
 			"# Channel Memory",
@@ -48,51 +49,31 @@ describe("first-turn memory bootstrap", () => {
 			"",
 			"- Newest decision: switch deploy to blue-green.",
 		].join("\n");
+		const newestKept = buildFirstTurnMemoryBootstrap({ channelMemory, workspaceMemory: "", maxChars: 800 });
+		expect(newestKept).toContain("Newest decision: switch deploy to blue-green.");
+		expect(newestKept).toContain("Production must stay online.");
+		expect(newestKept).not.toContain(filler);
 
-		const rendered = buildFirstTurnMemoryBootstrap({
-			channelMemory,
-			workspaceMemory: "",
-			maxChars: 800,
-		});
-
-		expect(rendered).toContain("Newest decision: switch deploy to blue-green.");
-		expect(rendered).toContain("Production must stay online.");
-		expect(rendered).not.toContain(filler);
-	});
-
-	it("drops whole channel sections to respect the unit budget", () => {
+		// With a generous char budget, whole oversized sections still drop to respect the unit cap.
 		const bigSection = "这是一段很长的历史记录，需要被裁掉。".repeat(30);
-		const channelMemory = [
-			"# Channel Memory",
-			"",
-			"## Constraints",
-			"",
-			"- 生产环境必须保持在线。",
-			"",
-			"## Update 2026-07-01T00:00:00.000Z",
-			"",
-			`- ${bigSection}`,
-		].join("\n");
-
-		const rendered = buildFirstTurnMemoryBootstrap({
-			channelMemory,
+		const unitTrimmed = buildFirstTurnMemoryBootstrap({
+			channelMemory: [
+				"# Channel Memory",
+				"",
+				"## Constraints",
+				"",
+				"- 生产环境必须保持在线。",
+				"",
+				"## Update 2026-07-01T00:00:00.000Z",
+				"",
+				`- ${bigSection}`,
+			].join("\n"),
 			workspaceMemory: "",
-			// Generous char budget so only the unit cap can bind.
 			maxChars: 100_000,
 			maxUnits: 80,
 		});
-
-		expect(rendered).toContain("生产环境必须保持在线。");
-		expect(rendered).not.toContain(bigSection);
-	});
-
-	it("returns an empty string when both memory files are empty", () => {
-		expect(
-			buildFirstTurnMemoryBootstrap({
-				channelMemory: "  ",
-				workspaceMemory: "\n",
-			}),
-		).toBe("");
+		expect(unitTrimmed).toContain("生产环境必须保持在线。");
+		expect(unitTrimmed).not.toContain(bigSection);
 	});
 
 	it("reports entry ids included in the first-turn snapshot for recall deduplication", () => {
