@@ -4,7 +4,24 @@
 
 ## [未发布]
 
-## [0.9.1-beta.3] - 2026-08-24
+## [0.9.1] - 2026-08-25
+
+### 新增
+
+- 新增 `subagent_manage op=show`，作为 `/subagents show` 的模型侧对应入口，外部 run 失败后可自查而非猜测。完成唤醒现在同时报告同一任务仍在运行的兄弟 run 数量，K 路 fan-out 不必每次唤醒都单独调用 `op=list` 轮询。
+
+### 变更
+
+- `/memory pending` 替换为 `/memory recent`：展示最近 7 天从 review log 中读到的真实 `MEMORY.md` 写入/重写/过期/遗忘动作（旧命令展示的是模型建议但从未真正实现写入的"待确认建议"，这个字段从未有过写入方）。`/memory status` 的 "Pending suggestions" 行相应替换为 "Last 7d: +N written / -N dropped / -N expired" 汇总。
+- 记忆召回现在会在当前这句话自己的 token 打不到词法证据门槛时，借用上一轮用户消息作为打分上下文——纯指代型追问（"上次说的那个安排，代号是什么来着？"）以前必定召回失败，因为这句话本身没有任何有信息量的实词。只在当前提问自己一个候选都选不出来时才会这样做；能自己命中的提问不受任何影响。既不会进入注入 prompt 的文本，也不会进入召回查询指纹。
+- 召回的结构分现在会把一条记忆实际被召回的次数与问法多样性（`recallCount`/去重后的 query 指纹数）、以及提炼时打的 `necessity` 标签计入排序，对 90 天以上没被召回过的、非用户主动保存的（agent 学到的）条目施加小幅惩罚。整体封顶在打分乘数的 ±10% 以内——词法证据依然决定谁能入围，这只决定入围后谁排在前面。
+- 记忆召回的每轮读取路径不再对 `.memory/entries.json` 做全量 reconcile（此前会拿一份可能滞后的候选快照去重建它）——reconcile 现在完全是写路径（`applyChannelMemoryOps`、`rewriteChannelMemory`、`/memory` 命令）的职责，消除了读路径与并发写路径竞态导致 metadata 指向已变更文件的那个来源。`syncMemoryMetadata` 在计算结果与磁盘已有内容字节完全相同时，现在会跳过磁盘写入。
+- 命令回复统一遵循一套回复约定（写入 `AGENTS.md`）：不用 `#` 标题和 2 空格续行，界面文案统一中文，`sendPlain` 改为显式标题/markdown，命令回复不再在钉钉会话列表里显示为 "Bot"。`CommandSpec.subcommands` 成为 `/help` 与各模块 usage 文本的唯一来源；列表输出（`/tasks`、`/events`、`/memory`、`/tasks doctor`）统一经过共享的长度上限（按行边界截断、强制给出下一步提示）；`/tasks show` 与 `/subagents roles <name>` 改为展示文件头部片段而非整文件转储。新增运行时 `command.completed`/`command.failed` 事件日志。
+- **八份运行时 playbook 全部按代码实况重写。** 治理器 `control` 示例改为真实序列化形状（单行 JSON、含必填的 `at`）；advisory/enforced 验收强度按实际规则表述；文件地图遵守项目边界，被 transport 拦截的命令标注为用户命令而非模型动作。跨机制规则（`waitingFor` 语义、幂等闭环、不要抄进 workspace）各只定义一次、其余路由，"异步完成会唤醒本频道——结束回合而非轮询"上提到 system prompt 的 Working Contract。补齐缺口：inline 委派、`send_media` 的真实约束、`memory_manage` 的 `supersedes` 协议、以及每回合注入的四个上下文块（读取顺序第 0 步）。
+- **任务控制 v3（任务机制减法）。** 任务控制 frontmatter 收敛到真正具有权威性的字段。删除从未写入/读取的 provenance（`createdBy`/`sourceMessageId`/`createdAt`）与仅作标注的 `recurrence` 字段；移除任务级 `usage` 计数及只为其存在的 `/tasks stats` 命令——`/usage` 账本是唯一的用量权威，其条目现在携带可选 `taskId` 并支持按任务聚合。删除 attempt 预算/代数机制（`budget.maxAttempts`、`usage.attempts`、claim/finish 记账、`wakeHandoff`、`blockedReason`）：`taskBudgetViolation` 现在只检查 deadline（真实用户意图而非猜测数字），唤醒激活按构造幂等，并以进程内的唤醒次数上限（`MAX_WAKES_PER_CYCLE`）取代 attempt 预算作为失控兜底。任务控制版本升至 3 并采用严格解析；无法解析的控制块 fail-open 为 `controlReadable: false`，交给 `/tasks doctor` 修复；旧格式迁移改为按版本门控并在每次启动时自愈（`task-migration.done` 标记文件及其 bootstrap 管道移除）。
+- **任务验收收敛为单一路径。** 删除 `request-verification`，消除 P0 级验收唤醒死锁：以 `waitingFor: "verification"` 停泊的任务永远无法被只匹配 `"external-signal"` 的完成唤醒重新激活。派发 `purpose=verify` 子代理现在与普通委派完全一样地停泊，由同一个完成唤醒激活，再由 `task_manage verify` 导入 attestation——没有专属生命周期状态，也没有 durable-checker 回调。`verify` 的门禁改为 attestation 自身的 `taskId` 绑定而非模型写入的 frontmatter；`TaskVerification` 从七个字段缩减到三个；`complete` 直接将 attestation 与任务当前 body hash 比对。`waitingFor` 现在纯粹是诊断展示文本，`/tasks doctor` 的停泊任务规则合并为一条统一检查。
+- 将压缩降级为让位于新用户工作的维护动作。上下文摘要进行中收到新消息时，现在会取消压缩并把消息保留为下一个正常回合，不再向已断开 agent loop 的 session 发送 steer，也不会递归触发另一轮压缩。
+- 将钉钉 `/new` 改为带外会话边界：绕过 busy 检查、旧 SDK session 和旧频道队列，原子创建并提交带有效 header 的空 session，随后废弃旧 runner、队列、投递上下文和卡片，不等待旧 provider 请求返回。连续重置按频道串行提交，旧会话的记忆固化仍在后台继续。
 
 ### 修复
 
@@ -22,51 +39,16 @@
 - `boundary: "project"` 下，频道自己的目录（`SESSION.md`/`MEMORY.md`/`HISTORY.md`/`tasks/`）落在所有允许根之外，任务唤醒让模型打开 `tasks/<id>.md` 会被路径守卫拒绝。新增运行时授予的频道目录例外（整目录可读，仅 `tasks/` 可写），按当前频道生效且不被子代理继承；守卫的拒绝理由现在会点名实际生效的根，不再引导一次永远不可能成功的重试。
 - 命令子系统审查修复：斜杠命令回显与命令文本归档标记 `skipContextSync`，从记忆提炼中过滤，不再被当成用户说过的话记下来；回合运行中在 TUI 敲入的会话命令（`/model` 等）按 steering 处理，不再作为字面文本注入进行中的回合；`/skill` 按实时 skill 名册校验目标；`/events delete` 回显实际删除的内容；`sendPlain` 失败会记日志；删除 `/tasks stats` 的幽灵入口。
 
-### 变更
-
-- `/memory pending` 替换为 `/memory recent`：展示最近 7 天从 review log 中读到的真实 `MEMORY.md` 写入/重写/过期/遗忘动作（旧命令展示的是模型建议但从未真正实现写入的"待确认建议"，这个字段从未有过写入方）。`/memory status` 的 "Pending suggestions" 行相应替换为 "Last 7d: +N written / -N dropped / -N expired" 汇总。
-- 记忆召回现在会在当前这句话自己的 token 打不到词法证据门槛时，借用上一轮用户消息作为打分上下文——纯指代型追问（"上次说的那个安排，代号是什么来着？"）以前必定召回失败，因为这句话本身没有任何有信息量的实词。只在当前提问自己一个候选都选不出来时才会这样做；能自己命中的提问不受任何影响。既不会进入注入 prompt 的文本，也不会进入召回查询指纹。
-- 召回的结构分现在会把一条记忆实际被召回的次数与问法多样性（`recallCount`/去重后的 query 指纹数）、以及提炼时打的 `necessity` 标签计入排序，对 90 天以上没被召回过的、非用户主动保存的（agent 学到的）条目施加小幅惩罚。整体封顶在打分乘数的 ±10% 以内——词法证据依然决定谁能入围，这只决定入围后谁排在前面。
-- 记忆召回的每轮读取路径不再对 `.memory/entries.json` 做全量 reconcile（此前会拿一份可能滞后的候选快照去重建它）——reconcile 现在完全是写路径（`applyChannelMemoryOps`、`rewriteChannelMemory`、`/memory` 命令）的职责，消除了读路径与并发写路径竞态导致 metadata 指向已变更文件的那个来源。`syncMemoryMetadata` 在计算结果与磁盘已有内容字节完全相同时，现在会跳过磁盘写入。
-- 命令回复统一遵循一套回复约定（写入 `AGENTS.md`）：不用 `#` 标题和 2 空格续行，界面文案统一中文，`sendPlain` 改为显式标题/markdown，命令回复不再在钉钉会话列表里显示为 "Bot"。`CommandSpec.subcommands` 成为 `/help` 与各模块 usage 文本的唯一来源；列表输出（`/tasks`、`/events`、`/memory`、`/tasks doctor`）统一经过共享的长度上限（按行边界截断、强制给出下一步提示）；`/tasks show` 与 `/subagents roles <name>` 改为展示文件头部片段而非整文件转储。新增运行时 `command.completed`/`command.failed` 事件日志。
-- **八份运行时 playbook 全部按代码实况重写。** 治理器 `control` 示例改为真实序列化形状（单行 JSON、含必填的 `at`）；advisory/enforced 验收强度按实际规则表述；文件地图遵守项目边界，被 transport 拦截的命令标注为用户命令而非模型动作。跨机制规则（`waitingFor` 语义、幂等闭环、不要抄进 workspace）各只定义一次、其余路由，"异步完成会唤醒本频道——结束回合而非轮询"上提到 system prompt 的 Working Contract。补齐缺口：inline 委派、`send_media` 的真实约束、`memory_manage` 的 `supersedes` 协议、以及每回合注入的四个上下文块（读取顺序第 0 步）。
-
-## [0.9.1-beta.2] - 2026-08-24
-
-### 新增
-
-- 新增 `subagent_manage op=show`，作为 `/subagents show` 的模型侧对应入口，外部 run 失败后可自查而非猜测。完成唤醒现在同时报告同一任务仍在运行的兄弟 run 数量，K 路 fan-out 不必每次唤醒都单独调用 `op=list` 轮询。
-
-### 变更
-
-- **任务控制 v3（任务机制减法）。** 任务控制 frontmatter 收敛到真正具有权威性的字段。删除从未写入/读取的 provenance（`createdBy`/`sourceMessageId`/`createdAt`）与仅作标注的 `recurrence` 字段；移除任务级 `usage` 计数及只为其存在的 `/tasks stats` 命令——`/usage` 账本是唯一的用量权威，其条目现在携带可选 `taskId` 并支持按任务聚合。删除 attempt 预算/代数机制（`budget.maxAttempts`、`usage.attempts`、claim/finish 记账、`wakeHandoff`、`blockedReason`）：`taskBudgetViolation` 现在只检查 deadline（真实用户意图而非猜测数字），唤醒激活按构造幂等，并以进程内的唤醒次数上限（`MAX_WAKES_PER_CYCLE`）取代 attempt 预算作为失控兜底。任务控制版本升至 3 并采用严格解析；无法解析的控制块 fail-open 为 `controlReadable: false`，交给 `/tasks doctor` 修复；旧格式迁移改为按版本门控并在每次启动时自愈（`task-migration.done` 标记文件及其 bootstrap 管道移除）。
-- **任务验收收敛为单一路径。** 删除 `request-verification`，消除 P0 级验收唤醒死锁：以 `waitingFor: "verification"` 停泊的任务永远无法被只匹配 `"external-signal"` 的完成唤醒重新激活。派发 `purpose=verify` 子代理现在与普通委派完全一样地停泊，由同一个完成唤醒激活，再由 `task_manage verify` 导入 attestation——没有专属生命周期状态，也没有 durable-checker 回调。`verify` 的门禁改为 attestation 自身的 `taskId` 绑定而非模型写入的 frontmatter；`TaskVerification` 从七个字段缩减到三个；`complete` 直接将 attestation 与任务当前 body hash 比对。`waitingFor` 现在纯粹是诊断展示文本，`/tasks doctor` 的停泊任务规则合并为一条统一检查。
-
-### 修复
-
 - 加固委派安全。工作目录边界检查改为比较 realpath，项目根内的 symlink 不再把内部 agent 的 `projectRoot`——或完全绕过路径守卫的外部进程 cwd——指向项目之外；`subagent_manage follow_up` 按当前边界重新校验（`/project` 可能在派发后移动边界）并重新校验任务长度。`verificationStrength` 现在反映 run 的实际工具集（默认工具集仍含 `bash`，同样能写文件），并在 `verify` 和 `complete` 时呈现。工作区无变化的判定在 subject hash 与 git 状态均无法比较时 fail closed，不再让 PASS 零证据通过。委派 agent 自己的输出在完成唤醒中被围栏并标注为不可信数据。
 - 外部子代理进程默认不再继承疑似凭据的环境变量（`*_API_KEY`/`_SECRET`/`_TOKEN`/`_PASSWORD`、`DINGTALK_*`）；角色可通过 `env:` 恢复任意变量。
 - 已结算 run 留下的空产物目录现在会被清理，不再永久残留。
-
-### 测试与发布
-
-- 新增回归测试：`purpose=verify` 全链路走真实唤醒路径（register/settle → claim → verify → complete）、verification outcome、`subagent_manage`，以及重启接管。
-- 同步任务与委派文档，并在 `docs/reviews/2026-08-23-*.md` 归档两份驱动本次改造的审查报告。
-
-## [0.9.1-beta.1] - 2026-08-21
-
-### 变更
-
-- 将压缩降级为让位于新用户工作的维护动作。上下文摘要进行中收到新消息时，现在会取消压缩并把消息保留为下一个正常回合，不再向已断开 agent loop 的 session 发送 steer，也不会递归触发另一轮压缩。
-- 将钉钉 `/new` 改为带外会话边界：绕过 busy 检查、旧 SDK session 和旧频道队列，原子创建并提交带有效 header 的空 session，随后废弃旧 runner、队列、投递上下文和卡片，不等待旧 provider 请求返回。连续重置按频道串行提交，旧会话的记忆固化仍在后台继续。
-
-### 修复
-
 - 按模型上下文窗口限制独立压缩摘要的输入，采用保守的 unit/字符双上限并保留首尾；只有在 durable 频道记忆刷新后才省略超长中段，避免 provider 的 `Prompt 超长` 错误反复卡死频道。
 - 阻止已废弃回合的迟到投递覆盖新会话回复。如果新 session 无法提交，活动指针和旧 runner 保持权威，`/new` 会返回可直接重试的提示。
 
 ### 测试与发布
 
+- 新增回归测试：`purpose=verify` 全链路走真实唤醒路径（register/settle → claim → verify → complete）、verification outcome、`subagent_manage`，以及重启接管。
+- 同步任务与委派文档，并在 `docs/reviews/2026-08-23-*.md` 归档两份驱动本次改造的审查报告。
 - 新增超长压缩输入、用新消息中断压缩、busy 状态执行 `/new`、新 session 原子持久化，以及脱离卡死 runner 和待处理队列的回归测试。
 
 ## [0.9.0] - 2026-08-17
