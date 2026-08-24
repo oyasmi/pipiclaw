@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.9.1-beta.3] - 2026-08-24
+
 ### 修复
 
 - **只要对话窗口里出现过一次工具调用（`read`、`bash` 等），该窗口的全部长期记忆写入就会被静默丢弃。** 窗口级 `hasExternalToolContent` 开关本意是防止不可信的工具输出污染长期记忆，但提炼 prompt 在更早的一层（`sanitizeMessagesForMemory`）已经剥除了全部 `toolResult` 消息——这道开关却按"整个窗口"生效，于是只要窗口里出现过一次工具调用，连模型自己写下的、完全可信的正文也一并被封杀。实际效果是自动记忆只在完全不调用工具的对话里生效，这正是用户反复反馈"读完文件之后说的话记不住"的根因。该开关已删除；新增必过 eval（`M-write-04`）与回归测试钉住此修复。
@@ -18,6 +20,9 @@
 - 记忆提炼 prompt 里"现有条目"这部分，频道条目数超过 40 条后改成相似度过滤视图（与当前对话最相关的 top-20，加上全部用户主动保存的条目，不受相关性影响），不再永远渲染全量列表、任由 8000 字符裁剪静默丢掉尾部。条目数 ≤40 时行为不变。
 - `memory_manage save` 写入前现在会先检查是否已有相似条目（例如已存了"用 npm"，又来一句"现在用 pnpm"），复用 `search` op 本就在用的召回管道；命中高置信度相似条目就不写入，转而要求模型带上 `supersedes`（冲突条目 id，或 `"none"` 表示两件事同时成立）重新调用。此前唯一能避免两条互相矛盾的记忆并存的办法，是用户主动说"忘掉旧的"。
 - `evals/harness/worker.ts` 构建失败（`createRuntimeContext` 在同一天的另一次无关重构中改成了异步，但这处调用没跟着补 `await`），导致整套行为评测（behavior eval）基础设施完全跑不起来。已补上缺失的 `await`。
+- 内部验收 run 的记录里 `verificationStrength` 硬编码为 `"enforced"`，而同一 run 的 attestation 可能写着 `"advisory"`——完成唤醒和 `subagent_manage` 展示的强度与 attestation 自相矛盾。两处现在共用同一个计算结果：内置验收者只有在其角色同时去掉了 `bash` 时才是 `enforced`。
+- `boundary: "project"` 下，频道自己的目录（`SESSION.md`/`MEMORY.md`/`HISTORY.md`/`tasks/`）落在所有允许根之外，任务唤醒让模型打开 `tasks/<id>.md` 会被路径守卫拒绝。新增运行时授予的频道目录例外（整目录可读，仅 `tasks/` 可写），按当前频道生效且不被子代理继承；守卫的拒绝理由现在会点名实际生效的根，不再引导一次永远不可能成功的重试。
+- 命令子系统审查修复：斜杠命令回显与命令文本归档标记 `skipContextSync`，从记忆提炼中过滤，不再被当成用户说过的话记下来；回合运行中在 TUI 敲入的会话命令（`/model` 等）按 steering 处理，不再作为字面文本注入进行中的回合；`/skill` 按实时 skill 名册校验目标；`/events delete` 回显实际删除的内容；`sendPlain` 失败会记日志；删除 `/tasks stats` 的幽灵入口。
 
 ### 变更
 
@@ -25,6 +30,8 @@
 - 记忆召回现在会在当前这句话自己的 token 打不到词法证据门槛时，借用上一轮用户消息作为打分上下文——纯指代型追问（"上次说的那个安排，代号是什么来着？"）以前必定召回失败，因为这句话本身没有任何有信息量的实词。只在当前提问自己一个候选都选不出来时才会这样做；能自己命中的提问不受任何影响。既不会进入注入 prompt 的文本，也不会进入召回查询指纹。
 - 召回的结构分现在会把一条记忆实际被召回的次数与问法多样性（`recallCount`/去重后的 query 指纹数）、以及提炼时打的 `necessity` 标签计入排序，对 90 天以上没被召回过的、非用户主动保存的（agent 学到的）条目施加小幅惩罚。整体封顶在打分乘数的 ±10% 以内——词法证据依然决定谁能入围，这只决定入围后谁排在前面。
 - 记忆召回的每轮读取路径不再对 `.memory/entries.json` 做全量 reconcile（此前会拿一份可能滞后的候选快照去重建它）——reconcile 现在完全是写路径（`applyChannelMemoryOps`、`rewriteChannelMemory`、`/memory` 命令）的职责，消除了读路径与并发写路径竞态导致 metadata 指向已变更文件的那个来源。`syncMemoryMetadata` 在计算结果与磁盘已有内容字节完全相同时，现在会跳过磁盘写入。
+- 命令回复统一遵循一套回复约定（写入 `AGENTS.md`）：不用 `#` 标题和 2 空格续行，界面文案统一中文，`sendPlain` 改为显式标题/markdown，命令回复不再在钉钉会话列表里显示为 "Bot"。`CommandSpec.subcommands` 成为 `/help` 与各模块 usage 文本的唯一来源；列表输出（`/tasks`、`/events`、`/memory`、`/tasks doctor`）统一经过共享的长度上限（按行边界截断、强制给出下一步提示）；`/tasks show` 与 `/subagents roles <name>` 改为展示文件头部片段而非整文件转储。新增运行时 `command.completed`/`command.failed` 事件日志。
+- **八份运行时 playbook 全部按代码实况重写。** 治理器 `control` 示例改为真实序列化形状（单行 JSON、含必填的 `at`）；advisory/enforced 验收强度按实际规则表述；文件地图遵守项目边界，被 transport 拦截的命令标注为用户命令而非模型动作。跨机制规则（`waitingFor` 语义、幂等闭环、不要抄进 workspace）各只定义一次、其余路由，"异步完成会唤醒本频道——结束回合而非轮询"上提到 system prompt 的 Working Contract。补齐缺口：inline 委派、`send_media` 的真实约束、`memory_manage` 的 `supersedes` 协议、以及每回合注入的四个上下文块（读取顺序第 0 步）。
 
 ## [0.9.1-beta.2] - 2026-08-24
 
