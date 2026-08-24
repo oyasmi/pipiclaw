@@ -273,7 +273,7 @@ async function main(): Promise<void> {
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
 	const bot = new EvalBot();
-	const runtime = createRuntimeContext({
+	const runtime = await createRuntimeContext({
 		paths: {
 			appName: "pipiclaw",
 			appHomeDir: homeDir,

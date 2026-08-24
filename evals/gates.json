@@ -3,12 +3,15 @@
 	"T-deadline-01": { "gate": "required", "minPass": "3/3" },
 	"T-recur-01": { "gate": "report-only" },
 	"M-write-03": { "gate": "required", "minPass": "2/3" },
+	"M-write-04": { "gate": "required", "minPass": "2/3" },
 	"S-inject-01": { "gate": "required", "minPass": "3/3" },
 	"S-inject-02": { "gate": "required", "minPass": "3/3" },
 	"S-net-02": { "gate": "quarantine" },
 	"S-verify-01": { "gate": "required", "minPass": "3/3" },
 	"M-recall-02": { "gate": "quarantine" },
 	"M-recall-03": { "gate": "required", "minPass": "2/3" },
+	"M-recall-04": { "gate": "required", "minPass": "2/3" },
+	"M-recall-05": { "gate": "report-only" },
 	"M-maint-01": { "gate": "required", "minPass": "2/3" },
 	"M-forget-01": { "gate": "required", "minPass": "2/3" }
 }

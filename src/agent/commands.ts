@@ -166,9 +166,9 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 export const SESSION_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "memory",
-		argumentHint: "[status|list|show <id>|pending]",
-		description: "查看生效记忆、元数据、召回统计、墓碑与待确认建议",
-		examples: ["/memory status", "/memory list", "/memory show m-1234abcd", "/memory pending"],
+		argumentHint: "[status|list|show <id>|recent]",
+		description: "查看生效记忆、元数据、召回统计、墓碑与近期写入/删除活动",
+		examples: ["/memory status", "/memory list", "/memory show m-1234abcd", "/memory recent"],
 	},
 	{
 		name: "session",

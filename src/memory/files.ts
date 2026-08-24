@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "crypto";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
-import { copyFile, readdir, rm } from "fs/promises";
+import { appendFile, copyFile, readdir, rename, rm, stat } from "fs/promises";
 import { basename, join } from "path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
@@ -69,7 +69,10 @@ const DEFAULT_CHANNEL_SESSION = `# Session Title
 `;
 
 const MEMORY_BACKUP_DIR = ".memory-backups";
-const MEMORY_BACKUP_KEEP = 5;
+// Backups are the last line of defense against a bad cleanup/rewrite (§1.3 tightened the guards
+// in front of them, but the backups themselves are what a human falls back to). At the default
+// 6-hour structural-maintenance cadence, 5 backups covered only ~30 hours of history.
+const MEMORY_BACKUP_KEEP = 10;
 const ENTRY_ID_COMMENT = /<!--\s*id:(m-[a-z0-9]+)\s*-->/i;
 const ENTRY_ID_COMMENT_TRAILING = /\s*<!--\s*id:m-[a-z0-9]+\s*-->\s*$/i;
 
@@ -462,6 +465,11 @@ export function getChannelHistoryArchivePath(channelDir: string): string {
 }
 
 /** Append raw history blocks to a never-rewritten archive before lossy folding. */
+// First-generation LLM summaries live only here (not in context.jsonl), so this file is never
+// deleted, only rotated: at 4MB the whole file becomes `.1` (overwriting any older `.1`) and a
+// fresh file starts, capping retention at two generations instead of growing unbounded.
+const HISTORY_ARCHIVE_ROTATE_AT_BYTES = 4 * 1024 * 1024;
+
 export async function appendChannelHistoryArchive(channelDir: string, block: HistoryBlock): Promise<void> {
 	const trimmedContent = block.content.trim();
 	if (!trimmedContent) {
@@ -469,10 +477,23 @@ export async function appendChannelHistoryArchive(channelDir: string, block: His
 	}
 	await ensureChannelMemoryFiles(channelDir);
 	const path = getChannelHistoryArchivePath(channelDir);
-	const existing = await readOptionalTextFile(path);
-	const header = existing.trim() ? existing : "# Channel History Archive\n";
 	const renderedBlock = [`## Archived ${block.timestamp}`, trimmedContent].join("\n\n");
-	await writeFileAtomically(path, `${ensureTrailingNewlines(header)}${renderedBlock}\n`);
+
+	const currentSize = await stat(path)
+		.then((info) => info.size)
+		.catch(() => 0);
+	if (currentSize === 0) {
+		await writeFileAtomically(path, `${ensureTrailingNewlines("# Channel History Archive\n")}${renderedBlock}\n`);
+		return;
+	}
+	if (currentSize >= HISTORY_ARCHIVE_ROTATE_AT_BYTES) {
+		await rename(path, `${path}.1`).catch(() => {});
+		await writeFileAtomically(path, `${ensureTrailingNewlines("# Channel History Archive\n")}${renderedBlock}\n`);
+		return;
+	}
+	// Append-only: this file only ever grows through this function, so a full read-modify-write
+	// on every fold (previously O(n) per call, O(n^2) over the file's lifetime) is unnecessary.
+	await appendFile(path, `\n${renderedBlock}\n`, "utf-8");
 }
 
 export async function appendChannelHistoryBlock(channelDir: string, block: HistoryBlock): Promise<void> {

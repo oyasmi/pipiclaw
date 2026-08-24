@@ -34,7 +34,7 @@ import {
 	type MemoryActivityEvent,
 	type MemoryActivityRecorder,
 } from "../memory/maintenance-state.js";
-import { MEMORY_RECALL_MAX_UNITS, recallRelevantMemory } from "../memory/recall.js";
+import { findPreviousUserText, MEMORY_RECALL_MAX_UNITS, recallRelevantMemory } from "../memory/recall.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "../memory/task-digest.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
@@ -462,6 +462,7 @@ export class ChannelRunner implements AgentRunner {
 				if (recallSettings.enabled) {
 					const recall = await recallRelevantMemory({
 						query: clippedInput,
+						contextQuery: findPreviousUserText(this.session.messages),
 						channelId: this.channelId,
 						workspaceDir: this.workspaceDir,
 						channelDir: this.channelDir,

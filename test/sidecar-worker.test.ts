@@ -123,6 +123,44 @@ describe("sidecar-worker", () => {
 		);
 	});
 
+	it("records usage for an aborted task before throwing", async () => {
+		stateMessages = [
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "" }],
+				stopReason: "aborted",
+				errorMessage: "sidecar timed out",
+				usage: {
+					input: 10,
+					output: 0,
+					total: 10,
+					cost: { input: 0.01, output: 0, total: 0.01 },
+				},
+			},
+		];
+
+		await expect(
+			runSidecarTask({
+				name: "memory-recall-rerank",
+				model: { provider: "test", id: "noop" } as never,
+				resolveApiKey: async () => "",
+				systemPrompt: "System",
+				prompt: "Prompt",
+				parse: (text) => text,
+				usageContext: { channelId: "dm_1" },
+			}),
+		).rejects.toThrow("sidecar timed out");
+
+		expect(recordUsage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				channelId: "dm_1",
+				kind: "sidecar",
+				label: "memory-recall-rerank",
+				cost: expect.objectContaining({ total: 0.01 }),
+			}),
+		);
+	});
+
 	it("retries once after a transient sidecar failure", async () => {
 		vi.useFakeTimers();
 		promptImpl = vi

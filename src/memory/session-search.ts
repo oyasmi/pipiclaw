@@ -117,6 +117,15 @@ function scoreDocument(document: SessionSearchDocument, lowerQuery: string, quer
 		}
 	}
 
+	// `recall.ts` deliberately dropped a coverage-ratio term (`matched / queryTokens.length`) in
+	// favor of absolute specificity-weighted evidence, because normalizing by query length made
+	// detailed messages score worse the more context they gave (see the long comment on
+	// `MIN_MATCH_EVIDENCE` there). This scorer still uses coverage, kept as a small, capped (0-2)
+	// tiebreaker behind the dominant `matchedTokens * 1.4` term rather than removed outright:
+	// `session_search` is an explicit on-demand query over raw transcript chunks, not the passive
+	// per-turn injection recall.ts drives, so it has no eval pinning its current ranking and no
+	// reported failure mode from this term. Changing it blind, without that guardrail, risks
+	// swapping one unverified scoring bias for another.
 	const coverage = queryTokens.length > 0 ? matchedTokens / queryTokens.length : 0;
 	const exactBoost = lowerQuery && lowerText.includes(lowerQuery) ? 1 : 0;
 	const score = matchedTokens * 1.4 + coverage * 2 + exactBoost + computeRecencyBoost(document.timestamp);

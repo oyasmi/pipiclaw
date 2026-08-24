@@ -172,6 +172,10 @@ export async function runSidecarTask<T>(task: SidecarTask<T>): Promise<SidecarRe
 		}
 
 		if (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted") {
+			// Record before throwing: a timed-out or aborted rerank still consumed provider tokens.
+			// Skipping it made every timeout invisible spend — `/usage`'s sidecar line was
+			// systematically low by exactly the calls we were paying for and discarding.
+			recordSidecarUsage(task, lastMessage);
 			throw new Error(lastMessage.errorMessage || `Sidecar task "${task.name}" failed`);
 		}
 

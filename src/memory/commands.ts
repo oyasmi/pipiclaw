@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
-import { localDayKey } from "../shared/local-time.js";
+import { localDayKey, parseLocalTime } from "../shared/local-time.js";
 import { clipText } from "../shared/text-utils.js";
 import { getChannelMemoryPath, parseChannelMemoryEntries, readChannelMemory } from "./files.js";
 import { syncMemoryMetadata } from "./metadata.js";
-import { getMemoryReviewLogPath } from "./review-log.js";
+import { getMemoryReviewLogPath, type MemoryReviewReason } from "./review-log.js";
 import { readMemoryTombstones } from "./tombstones.js";
 
 interface MemoryCommandOptions {
@@ -12,10 +11,14 @@ interface MemoryCommandOptions {
 	args: string;
 }
 
-interface PendingSuggestion {
-	id: string;
+interface RecentMemoryAction {
 	timestamp?: string;
-	value: unknown;
+	reason: MemoryReviewReason;
+	target?: string;
+	action?: string;
+	entries?: number;
+	droppedEntryIds?: string[];
+	entryId?: string;
 }
 
 async function reconcile(options: MemoryCommandOptions) {
@@ -24,26 +27,38 @@ async function reconcile(options: MemoryCommandOptions) {
 	return { entries, metadata };
 }
 
-async function readPendingSuggestions(channelDir: string): Promise<PendingSuggestion[]> {
+/**
+ * Flattens `memory-review.jsonl` action entries for `/memory recent` and the `status` summary —
+ * the only consumers of the review log's write history. `user-forget` actions carry `entryId`
+ * instead of `target`/`action`; both shapes are tolerated here.
+ */
+async function readRecentMemoryActions(channelDir: string, sinceMs: number): Promise<RecentMemoryAction[]> {
 	const raw = await readOptionalTextFile(getMemoryReviewLogPath(channelDir));
-	const suggestions: PendingSuggestion[] = [];
+	const actions: RecentMemoryAction[] = [];
 	for (const line of raw.split("\n")) {
 		if (!line.trim()) continue;
 		try {
-			const entry = JSON.parse(line) as { timestamp?: string; suggestions?: unknown[] };
-			for (const value of entry.suggestions ?? []) {
-				const id = `p-${createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 8)}`;
-				suggestions.push({ id, timestamp: entry.timestamp, value });
+			const entry = JSON.parse(line) as {
+				timestamp?: string;
+				reason: MemoryReviewReason;
+				actions?: unknown[];
+			};
+			const entryMs = entry.timestamp ? (parseLocalTime(entry.timestamp) ?? 0) : 0;
+			if (entryMs < sinceMs) continue;
+			for (const value of entry.actions ?? []) {
+				if (value && typeof value === "object") {
+					actions.push({ timestamp: entry.timestamp, reason: entry.reason, ...(value as object) });
+				}
 			}
 		} catch {
 			// A torn audit line should not break the management surface.
 		}
 	}
-	return suggestions.slice(-50);
+	return actions;
 }
 
 function renderUsage(): string {
-	return "Use `/memory status`, `/memory list`, `/memory show <entry-id>`, or `/memory pending`.";
+	return "Use `/memory status`, `/memory list`, `/memory show <entry-id>`, or `/memory recent`.";
 }
 
 export async function handleMemoryCommand(options: MemoryCommandOptions): Promise<string> {
@@ -51,7 +66,6 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 	const { entries, metadata } = await reconcile(options);
 
 	if (action === "status") {
-		const pending = await readPendingSuggestions(options.channelDir);
 		const tombstones = await readMemoryTombstones(options.channelDir);
 		const records = Object.values(metadata.entries);
 		const active = records.filter((entry) => entry.status === "active");
@@ -70,6 +84,20 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 				),
 			0,
 		);
+		const last7d = new Date();
+		last7d.setDate(last7d.getDate() - 7);
+		const recent = await readRecentMemoryActions(options.channelDir, last7d.getTime());
+		const written = recent
+			.filter((item) => item.target === "MEMORY.md" && item.action === "append")
+			.reduce((sum, item) => sum + (item.entries ?? 0), 0);
+		const dropped = recent.reduce((sum, item) => {
+			if (item.entryId) return sum + 1;
+			if (item.target === "MEMORY.md" && item.action === "rewrite") return sum + (item.droppedEntryIds?.length ?? 0);
+			return sum;
+		}, 0);
+		const expired = recent
+			.filter((item) => item.target === "MEMORY.md" && item.action === "expire")
+			.reduce((sum, item) => sum + (item.entries ?? 0), 0);
 		const lastFailure = (await readOptionalTextFile(getMemoryReviewLogPath(options.channelDir)))
 			.split("\n")
 			.reverse()
@@ -80,7 +108,7 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 			`- Active entries: \`${entries.length}\``,
 			`- Metadata records: \`${records.length}\``,
 			`- Probationary: \`${probationary.length}\`${probationary.length > 0 ? ` (earliest expiry \`${probationary[0].probationUntil}\`)` : ""}`,
-			`- Pending suggestions: \`${pending.length}\``,
+			`- Last 7d: +${written} written / -${dropped} dropped / -${expired} expired`,
 			`- Tombstones: \`${tombstones.length}\``,
 			`- Total recalls: \`${active.reduce((sum, entry) => sum + entry.recallCount, 0)}\``,
 			`- Recalls (30d): \`${recalls30d}\``,
@@ -129,16 +157,27 @@ export async function handleMemoryCommand(options: MemoryCommandOptions): Promis
 		].join("\n");
 	}
 
-	if (action === "pending") {
-		const pending = await readPendingSuggestions(options.channelDir);
-		if (pending.length === 0) return "# Pending Memory Suggestions\n\nNo pending suggestions.";
+	if (action === "recent") {
+		const last7d = new Date();
+		last7d.setDate(last7d.getDate() - 7);
+		const recent = (await readRecentMemoryActions(options.channelDir, last7d.getTime())).slice(-30).reverse();
+		if (recent.length === 0) return "# Recent Memory Activity\n\nNo memory activity in the last 7 days.";
 		return [
-			"# Pending Memory Suggestions",
+			"# Recent Memory Activity",
 			"",
-			...pending.map(
-				(item) =>
-					`- \`${item.id}\`${item.timestamp ? ` (${item.timestamp})` : ""}: ${clipText(JSON.stringify(item.value), 300)}`,
-			),
+			...recent.map((item) => {
+				const when = item.timestamp ? `(${item.timestamp}) ` : "";
+				if (item.entryId) return `- ${when}forget \`${item.entryId}\` [${item.reason}]`;
+				const detail =
+					item.action === "append"
+						? `append ${item.entries ?? 0} entr${(item.entries ?? 0) === 1 ? "y" : "ies"}`
+						: item.action === "rewrite"
+							? `rewrite${item.droppedEntryIds?.length ? ` (dropped ${item.droppedEntryIds.join(", ")})` : ""}`
+							: item.action === "expire"
+								? `expire ${item.entries ?? 0} entr${(item.entries ?? 0) === 1 ? "y" : "ies"}`
+								: (item.action ?? "unknown");
+				return `- ${when}${item.target ?? "?"}: ${detail} [${item.reason}]`;
+			}),
 		].join("\n");
 	}
 

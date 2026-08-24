@@ -185,7 +185,7 @@ describe("recall scoring integration", () => {
 		expect(result.items[0]?.source).toBe("channel-session");
 	});
 
-	it("honors an empty rerank selection as abstention", async () => {
+	it("floors an empty rerank selection at the local top-1 instead of returning nothing", async () => {
 		const { workspaceDir, channelDir } = createWorkspace();
 		setupChannelFiles(channelDir, {
 			// Both candidates have to clear the evidence bar, otherwise the shortlist fits
@@ -206,8 +206,10 @@ describe("recall scoring integration", () => {
 			resolveApiKey: async () => "",
 		});
 		expect(runSidecarTask).toHaveBeenCalledTimes(1);
-		expect(result.items).toEqual([]);
-		expect(result.renderedText).toBe("");
+		// "Nothing is relevant" from the reranker is not trusted at face value: the shortlist
+		// already cleared MIN_MATCH_EVIDENCE, so the worst acceptable outcome is one item, not zero.
+		expect(result.items).toHaveLength(1);
+		expect(result.renderedText).not.toBe("");
 	});
 
 	it("prefers highly relevant history over unrelated session state", async () => {

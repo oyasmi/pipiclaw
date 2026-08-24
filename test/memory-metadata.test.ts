@@ -1,8 +1,13 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyChannelMemoryOps, parseChannelMemoryEntries, readChannelMemory } from "../src/memory/files.js";
-import { readMemoryMetadata, recordMemoryRecall } from "../src/memory/metadata.js";
+import {
+	getMemoryMetadataPath,
+	readMemoryMetadata,
+	recordMemoryRecall,
+	syncMemoryMetadata,
+} from "../src/memory/metadata.js";
 import { setupChannelFiles, useTempDirs } from "./helpers/fixtures.js";
 
 const makeChannel = useTempDirs("pipiclaw-memory-metadata-");
@@ -171,5 +176,21 @@ describe("memory entry metadata", () => {
 		]);
 
 		expect((await readMemoryMetadata(channelDir)).entries["m-relchan01"]?.probationUntil).toBeUndefined();
+	});
+
+	it("does not rewrite entries.json when a syncMemoryMetadata call produces no net change", async () => {
+		const channelDir = makeChannel();
+		setupChannelFiles(channelDir, {
+			memory: "# Channel Memory\n\n## Facts\n\n- Production must stay online. <!--id:m-uptime01-->\n",
+		});
+		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+		await syncMemoryMetadata(channelDir, entries);
+
+		const metadataPath = getMemoryMetadataPath(channelDir);
+		const mtimeBefore = statSync(metadataPath).mtimeMs;
+		await syncMemoryMetadata(channelDir, entries);
+		const mtimeAfter = statSync(metadataPath).mtimeMs;
+
+		expect(mtimeAfter).toBe(mtimeBefore);
 	});
 });

@@ -12,7 +12,7 @@ import {
 	runInlineConsolidation,
 } from "../src/memory/consolidation.js";
 import { applyChannelMemoryOps, parseChannelMemoryEntries, readChannelMemory } from "../src/memory/files.js";
-import { readMemoryMetadata } from "../src/memory/metadata.js";
+import { readMemoryMetadata, syncMemoryMetadata } from "../src/memory/metadata.js";
 import { runRetriedSidecarTask, runSidecarTask } from "../src/memory/sidecar-worker.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -66,7 +66,6 @@ describe("runInlineConsolidation with ops", () => {
 				entries: [{ id: "session-42" }] as never[],
 				messages,
 				windowId: "window-deploy-42",
-				hasExternalToolContent: false,
 			},
 			mode: "boundary",
 		});
@@ -79,6 +78,53 @@ describe("runInlineConsolidation with ops", () => {
 			sourceEntryIds: ["session-42"],
 			sourceCorrelationIds: ["window-deploy-42"],
 		});
+	});
+
+	it("writes durable memory from a window that contains tool results", async () => {
+		const channelDir = createTempChannel();
+		vi.mocked(runRetriedSidecarTask).mockImplementation(async (task) => {
+			const json = JSON.stringify({
+				memoryOps: [
+					{
+						op: "add",
+						content: "Releases now ship on Thursday evenings",
+						kind: "constraint",
+						confidence: 0.95,
+						necessity: "high",
+						reason: "ops mandated a fixed release window",
+					},
+				],
+				historyBlock: "- Release window fixed to Thursday evenings.",
+			});
+			return { rawText: json, output: task.parse(json) } as never;
+		});
+
+		const windowMessages = [
+			{ role: "user", content: "check the release notes" },
+			{ role: "toolResult", content: [{ type: "text", text: "release-window.md: Thursday evenings" }] },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "Releases now ship on Thursday evenings, per ops." }],
+			},
+		] as never[];
+
+		const result = await runInlineConsolidation({
+			channelDir,
+			model: fakeModel,
+			resolveApiKey,
+			messages: windowMessages,
+			sourceWindow: {
+				sourceKind: "idle",
+				entries: [{ id: "session-99" }] as never[],
+				messages: windowMessages,
+				windowId: "window-tool-99",
+			},
+			mode: "boundary",
+		});
+
+		expect(result.skipped).toBe(false);
+		const memory = await readChannelMemory(channelDir);
+		expect(memory).toContain("Thursday evenings");
 	});
 
 	it("holds consolidation to the same durable bar as the growth review", async () => {
@@ -220,7 +266,52 @@ describe("cleanupChannelMemory shrink guard", () => {
 		if (expected === "rejected") {
 			await expect(cleanup).rejects.toBeInstanceOf(MemoryCleanupRejectedError);
 		} else {
-			await expect(cleanup).resolves.toBe(true);
+			await expect(cleanup).resolves.toMatchObject({ rewritten: true });
 		}
+	});
+
+	it("rejects a cleanup that collapses many short entries even under the char-size guard floor", async () => {
+		const channelDir = createTempChannel();
+		// Four short "Update" blocks is the shape that trips `shouldCleanupChannelMemory` via the
+		// section-count branch (not the char-length branch) while staying under
+		// `cleanupShrinkGuardMinChars` — exactly the input the entry-count guard now protects.
+		const smallMemory = `# Channel Memory\n\n${Array.from(
+			{ length: 4 },
+			(_, i) => `## Update ${i}\n\n- Short preference ${i}.\n- Another short preference ${i}.`,
+		).join("\n\n")}`;
+		const output = `# Channel Memory\n\n## Update 0\n\n- Short preference 0.\n\n## Update 1\n\n- Short preference 1.`;
+		vi.mocked(runSidecarTask).mockResolvedValue({ output } as never);
+
+		const cleanup = cleanupChannelMemory({ channelDir, model: fakeModel, resolveApiKey, messages: [] }, smallMemory, {
+			cleanupShrinkGuardMinRatio: 0.4,
+			cleanupShrinkGuardMinChars: 2_000,
+		});
+
+		await expect(cleanup).rejects.toBeInstanceOf(MemoryCleanupRejectedError);
+	});
+
+	it("rejects a cleanup that drops a user-saved entry", async () => {
+		const channelDir = createTempChannel();
+		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Always deploy on Thursday" }]);
+		const baseMemory = await readChannelMemory(channelDir);
+		const [entry] = parseChannelMemoryEntries(baseMemory);
+		await syncMemoryMetadata(
+			channelDir,
+			[{ id: entry.id, content: entry.content, sectionHeading: entry.sectionHeading }],
+			[{ id: entry.id, metadata: { sourceType: "user" } }],
+		);
+		// Pad past MEMORY_CLEANUP_LENGTH_THRESHOLD so the trigger fires regardless of section count.
+		const currentMemory = `${baseMemory}\n${"padding ".repeat(700)}`;
+
+		const droppedOutput = "# Channel Memory\n\n## Preferences\n\n";
+		vi.mocked(runSidecarTask).mockResolvedValue({ output: droppedOutput } as never);
+
+		const cleanup = cleanupChannelMemory(
+			{ channelDir, model: fakeModel, resolveApiKey, messages: [] },
+			currentMemory,
+			{ cleanupShrinkGuardMinRatio: 0, cleanupShrinkGuardMinChars: 0 },
+		);
+
+		await expect(cleanup).rejects.toThrow(new RegExp(entry.id));
 	});
 });

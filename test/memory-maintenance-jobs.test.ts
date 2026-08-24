@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -28,6 +29,7 @@ import {
 	runStructuralMaintenanceJob,
 } from "../src/memory/maintenance-jobs.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
+import { getMemoryReviewLogPath } from "../src/memory/review-log.js";
 import { updateChannelSessionMemory } from "../src/memory/session.js";
 import { runSidecarTask } from "../src/memory/sidecar-worker.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -173,6 +175,38 @@ describe("memory maintenance jobs", () => {
 				}),
 			}),
 		);
+	});
+
+	it("records durable/probationary candidate counts in the review log even when writes were deduped away", async () => {
+		const { appHomeDir, channelDir } = await harness();
+		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
+			...state,
+			dirty: true,
+			eligibleAfter: "2026-01-01T00:00:00.000Z",
+		}));
+		vi.mocked(runInlineConsolidation).mockResolvedValue({
+			skipped: false,
+			appendedMemoryEntries: 0,
+			appendedDurableEntries: 3,
+			appendedProbationaryEntries: 1,
+			appendedHistoryBlock: false,
+			rejectedMemoryOps: [],
+		});
+		await runMemoryCheckpointJob({
+			appHomeDir,
+			channelId: "dm_1",
+			channelDir,
+			channelActive: false,
+			settings: settings(),
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+			messages: () => messages,
+			sessionEntries: () => sessionEntries,
+		});
+		const lines = readFileSync(getMemoryReviewLogPath(channelDir), "utf-8").trim().split("\n");
+		const entry = JSON.parse(lines.at(-1) ?? "{}");
+		const action = entry.actions?.[0];
+		expect(action).toMatchObject({ entries: 0, durableCandidates: 3, probationaryCandidates: 1 });
 	});
 
 	it("keeps the checkpoint cursor and sets backoff when consolidation fails", async () => {

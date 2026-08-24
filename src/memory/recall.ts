@@ -1,8 +1,11 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import * as log from "../log.js";
 import { parseJsonObject } from "../shared/llm-json.js";
+import { parseLocalTime } from "../shared/local-time.js";
 import { countPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage, HAN_REGEX } from "../shared/text-utils.js";
+import { buildStandardMessages } from "../shared/type-guards.js";
 import {
 	buildMemoryCandidates,
 	createMemoryCandidateStore,
@@ -10,8 +13,9 @@ import {
 	type MemoryCandidateStore,
 } from "./candidates.js";
 import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
-import { recordMemoryRecall, syncMemoryMetadata } from "./metadata.js";
+import { type MemoryEntryMetadata, readMemoryMetadata, recordMemoryRecall } from "./metadata.js";
 import { runSidecarTask } from "./sidecar-worker.js";
+import { stripInjectedMemoryContext } from "./transcript.js";
 
 export interface RecallRequest {
 	query: string;
@@ -33,6 +37,12 @@ export interface RecallRequest {
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	candidateStore?: MemoryCandidateStore;
+	/**
+	 * The previous user turn, offered as scoring-only fallback context for a deictic follow-up
+	 * ("那个方案后来怎么定的？") whose own tokens cannot clear the evidence bar. Never enters the
+	 * prompt or the recall query fingerprint — only `query` does.
+	 */
+	contextQuery?: string;
 }
 
 export interface RecalledMemory {
@@ -97,6 +107,27 @@ const CLOSE_SCORE_DELTA = 3;
  * absolute instead — one rare token match counts the same however long the message is.
  */
 const MIN_MATCH_EVIDENCE = 2.5;
+
+function extractUserMessageText(message: Message & { role: "user" }): string {
+	if (typeof message.content === "string") return message.content;
+	return message.content
+		.filter((part): part is { type: "text"; text: string } => part.type === "text")
+		.map((part) => part.text)
+		.join("\n");
+}
+
+/** The most recent user turn, with injected memory/context wrappers stripped (see `transcript.ts`). */
+export function findPreviousUserText(messages: AgentMessage[]): string | undefined {
+	const standard = buildStandardMessages(messages);
+	for (let index = standard.length - 1; index >= 0; index--) {
+		const message = standard[index];
+		if (message?.role === "user") {
+			const text = stripInjectedMemoryContext(extractUserMessageText(message));
+			return text.length > 0 ? text : undefined;
+		}
+	}
+	return undefined;
+}
 /** Field the strongest match for a token was found in; a token scores once, at its best field. */
 const FIELD_WEIGHTS = { title: 1.4, content: 1, path: 0.7 } as const;
 const MAX_HAN_WORD_LENGTH = Array.from(COMMON_CHINESE_WORDS).reduce((max, word) => Math.max(max, word.length), 2);
@@ -518,6 +549,44 @@ function compareScoredCandidates(a: ScoredCandidate, b: ScoredCandidate): number
 	);
 }
 
+const USAGE_BOOST_MAX = 6;
+const STALE_PENALTY = 2;
+const STALE_AFTER_DAYS = 90;
+const NECESSITY_BOOST: Record<"low" | "medium" | "high", number> = { high: 4, medium: 1, low: 0 };
+
+function isOlderThanDays(timestamp: string | undefined, days: number, nowMs: number): boolean {
+	if (!timestamp) return false;
+	const ms = parseLocalTime(timestamp);
+	if (ms === undefined) return false;
+	return nowMs - ms > days * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * A small, capped tiebreaker on top of lexical evidence — never the reason a candidate enters
+ * the shortlist, only a nudge in how the shortlist is ordered (see `scoreCandidate`'s `1 +
+ * structuralScore / 100` multiplier, currently ~4-34 without this term; this adds at most +10%).
+ * Kept deliberately small: `recallCount` measures "was injected into a prompt", not "was actually
+ * used" — a strong signal would let a handful of noisy queries entrench one entry at the top of
+ * every future recall.
+ */
+function computeMemoryUsageBoost(record: MemoryEntryMetadata | undefined, nowMs: number): number {
+	if (!record) return 0;
+	// Distinct query fingerprints matter more than raw count: one person asking the same thing
+	// twenty times is one recurring need, twenty different phrasings is a fact the channel keeps
+	// bumping into from different directions.
+	const used = Math.min(
+		USAGE_BOOST_MAX,
+		1.5 * Math.log2(1 + record.recallCount) + 1.5 * Math.log2(1 + record.queryFingerprints.length),
+	);
+	// A user-saved fact that nobody has asked about yet is not stale — it just hasn't come up.
+	const stale =
+		record.sourceType === "agent" &&
+		isOlderThanDays(record.lastRecalledAt ?? record.createdAt, STALE_AFTER_DAYS, nowMs)
+			? STALE_PENALTY
+			: 0;
+	return used - stale + (NECESSITY_BOOST[record.necessity ?? "low"] ?? 0);
+}
+
 function scoreCandidate(
 	exactMatchQuery: string,
 	queryTokens: string[],
@@ -525,6 +594,8 @@ function scoreCandidate(
 	candidate: MemoryCandidate,
 	documentFrequencies: Map<string, number>,
 	totalCandidates: number,
+	metadataFor: (entryId: string | undefined) => MemoryEntryMetadata | undefined,
+	nowMs: number,
 ): ScoredCandidate | null {
 	const evidence = computeMatchEvidence(queryTokens, candidate, documentFrequencies, totalCandidates);
 	const totalEvidence = evidence.mass + computeExactMatchBoost(exactMatchQuery, candidate);
@@ -533,7 +604,8 @@ function scoreCandidate(
 	}
 
 	const intentBoost = computeSectionIntentBoost(intents, candidate);
-	const structuralScore = candidate.priority + intentBoost + computeRecencyBoost(candidate.timestamp);
+	const usageBoost = computeMemoryUsageBoost(metadataFor(candidate.entryId), nowMs);
+	const structuralScore = candidate.priority + intentBoost + usageBoost + computeRecencyBoost(candidate.timestamp);
 	return {
 		candidate,
 		score: totalEvidence * (1 + structuralScore / 100),
@@ -640,7 +712,15 @@ async function rerankCandidates(request: RecallRequest, candidates: ScoredCandid
 
 		const selectedIds = new Set(result.output);
 		if (selectedIds.size === 0) {
-			return [];
+			// The reranker only ever runs on a shortlist that already cleared MIN_MATCH_EVIDENCE,
+			// so "nothing is relevant" is a judgement call over candidates with real lexical
+			// evidence behind them. Injecting one extra item costs a few hundred units; injecting
+			// nothing costs the turn its memory — and "it forgot what I told it" is this
+			// subsystem's most common complaint. Floor at the local top pick.
+			log.logEvent("debug", "memory.recall.rerank.empty", "Reranker selected nothing; keeping local top-1", {
+				fields: { shortlist: candidates.length },
+			});
+			return candidates.slice(0, 1);
 		}
 
 		const selected = candidates.filter(({ candidate }) => selectedIds.has(candidate.id));
@@ -751,17 +831,53 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 		return { items: [], renderedText: "" };
 	}
 
-	const queryTokens = tokenize(query);
-	const queryIntents = detectQueryIntents(query);
 	const exactMatchQuery = normalizeExactMatchQuery(query);
 	const documentFrequencies = buildDocumentFrequency(eligibleCandidates);
 	const totalCandidates = eligibleCandidates.length;
-	const scored = eligibleCandidates
-		.map((candidate) =>
-			scoreCandidate(exactMatchQuery, queryTokens, queryIntents, candidate, documentFrequencies, totalCandidates),
-		)
-		.filter((candidate): candidate is ScoredCandidate => candidate !== null)
-		.sort(compareScoredCandidates);
+	const memoryMetadata = await readMemoryMetadata(request.channelDir);
+	const metadataFor = (entryId: string | undefined): MemoryEntryMetadata | undefined =>
+		entryId ? memoryMetadata.entries[entryId] : undefined;
+	const nowMs = Date.now();
+	const scoreAll = (tokens: string[], intents: Set<QueryIntent>): ScoredCandidate[] =>
+		eligibleCandidates
+			.map((candidate) =>
+				scoreCandidate(
+					exactMatchQuery,
+					tokens,
+					intents,
+					candidate,
+					documentFrequencies,
+					totalCandidates,
+					metadataFor,
+					nowMs,
+				),
+			)
+			.filter((candidate): candidate is ScoredCandidate => candidate !== null)
+			.sort(compareScoredCandidates);
+
+	let queryTokens = tokenize(query);
+	let queryIntents = detectQueryIntents(query);
+	let scored = scoreAll(queryTokens, queryIntents);
+
+	// A deictic follow-up ("那个方案后来怎么定的") cannot clear MIN_MATCH_EVIDENCE against any
+	// candidate on its own — the query's own tokens produced an empty shortlist. Only then is it
+	// worth borrowing the previous user turn for scoring. When the current message *can* clear
+	// the bar by itself this branch never runs, so expansion is invisible except exactly where
+	// recall would otherwise return empty — scoring is absolute evidence mass, not
+	// query-length-normalized coverage, so appending tokens can only ever add candidates, never
+	// drop ones the own query already found.
+	const contextQuery = scored.length === 0 ? request.contextQuery?.trim() : undefined;
+	if (contextQuery) {
+		const scoringQuery = `${query} ${contextQuery}`;
+		const combinedTokens = tokenize(scoringQuery);
+		const combinedIntents = detectQueryIntents(scoringQuery);
+		const combinedScored = scoreAll(combinedTokens, combinedIntents);
+		if (combinedScored.length > 0) {
+			queryTokens = combinedTokens;
+			queryIntents = combinedIntents;
+			scored = combinedScored;
+		}
+	}
 
 	const shortlist = seedIntentCandidates(
 		request,
@@ -791,15 +907,10 @@ export async function recallRelevantMemory(request: RecallRequest): Promise<Reca
 	}));
 	const recalledEntryIds = items.flatMap((item) => (item.entryId ? [item.entryId] : []));
 	if (recalledEntryIds.length > 0) {
-		const metadataEntries = candidates
-			.filter((candidate) => candidate.source === "channel-memory" && candidate.entryId)
-			.map((candidate) => ({
-				id: candidate.entryId as string,
-				content: candidate.content,
-				sectionHeading: candidate.title,
-				timestamp: candidate.timestamp,
-			}));
-		await syncMemoryMetadata(request.channelDir, metadataEntries);
+		// Recall is a read path: reconciling metadata against a possibly-stale
+		// `MemoryCandidateStore` snapshot here was the one source of the metadata/MEMORY.md drift
+		// race (every write path already reconciles: `applyChannelMemoryOps`, `rewriteChannelMemory`,
+		// and the `/memory` commands). `recordMemoryRecall` already no-ops on ids it doesn't know.
 		await recordMemoryRecall(request.channelDir, recalledEntryIds, query);
 	}
 

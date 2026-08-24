@@ -151,13 +151,13 @@ describe("channel memory write ops", () => {
 		expect(parseChannelMemoryEntries(memory)[0].hasExplicitId).toBe(true);
 	});
 
-	it("backs up only on a mutating op, before it applies, and keeps at most five backups", async () => {
+	it("backs up only on a mutating op, before it applies, and keeps at most ten backups", async () => {
 		const channelDir = createTempDir();
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Base fact" }]);
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Second" }]);
 		expect(existsSync(join(channelDir, ".memory-backups"))).toBe(false);
 
-		for (let i = 0; i < 7; i++) {
+		for (let i = 0; i < 13; i++) {
 			const [entry] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
 			await applyChannelMemoryOps(channelDir, [{ op: "supersede", targetId: entry.id, content: `Fact v${i}` }]);
 		}
@@ -165,7 +165,7 @@ describe("channel memory write ops", () => {
 		const backupDir = join(channelDir, ".memory-backups");
 		expect(existsSync(backupDir)).toBe(true);
 		const backups = readdirSync(backupDir).filter((f) => f.startsWith("MEMORY-"));
-		expect(backups.length).toBeLessThanOrEqual(5);
+		expect(backups.length).toBeLessThanOrEqual(10);
 	});
 
 	it("archives raw history blocks", async () => {
@@ -177,6 +177,38 @@ describe("channel memory write ops", () => {
 		const archive = readFileSync(getChannelHistoryArchivePath(channelDir), "utf-8");
 		expect(archive).toContain("Original detailed block");
 		expect(archive).toContain("Archived 2026-07-01T00:00:00.000Z");
+	});
+
+	it("appends successive archive blocks without losing earlier ones", async () => {
+		const channelDir = createTempDir();
+		await appendChannelHistoryArchive(channelDir, { timestamp: "2026-07-01T00:00:00.000Z", content: "First block" });
+		await appendChannelHistoryArchive(channelDir, { timestamp: "2026-07-02T00:00:00.000Z", content: "Second block" });
+		await appendChannelHistoryArchive(channelDir, { timestamp: "2026-07-03T00:00:00.000Z", content: "Third block" });
+
+		const archive = readFileSync(getChannelHistoryArchivePath(channelDir), "utf-8");
+		expect(archive).toContain("First block");
+		expect(archive).toContain("Second block");
+		expect(archive).toContain("Third block");
+		expect(archive.startsWith("# Channel History Archive")).toBe(true);
+	});
+
+	it("rotates the archive into a .1 generation once it crosses the size threshold", async () => {
+		const channelDir = createTempDir();
+		const bigBlock = "x".repeat(4 * 1024 * 1024);
+		await appendChannelHistoryArchive(channelDir, { timestamp: "2026-07-01T00:00:00.000Z", content: bigBlock });
+		await appendChannelHistoryArchive(channelDir, {
+			timestamp: "2026-07-02T00:00:00.000Z",
+			content: "Block after rotation",
+		});
+
+		const archivePath = getChannelHistoryArchivePath(channelDir);
+		const rotatedPath = `${archivePath}.1`;
+		expect(existsSync(rotatedPath)).toBe(true);
+		expect(readFileSync(rotatedPath, "utf-8")).toContain(bigBlock);
+
+		const current = readFileSync(archivePath, "utf-8");
+		expect(current).toContain("Block after rotation");
+		expect(current).not.toContain(bigBlock);
 	});
 
 	it("records a forget tombstone and blocks automatic resurrection", async () => {

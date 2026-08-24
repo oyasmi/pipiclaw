@@ -272,7 +272,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 `memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从活动 MEMORY.md 移除，并写入不含原文的 tombstone 防止后台复活，不走裸 edit）。`forget` 不清理原始 session/log、retention backup 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。核心能力，无开关、始终注册，只发给主 agent。`session_search`（冷存储检索）与 `skill_manage`（workspace skills 维护）同理恒开。
 
-用户可用 `/memory status` 查看条目数、pending 数、tombstone、召回总数/近 30 天计数、query diversity 和最近失败；`/memory list` 按 entry id 列出活动记忆；`/memory show <entry-id>` 展示正文与 metadata；`/memory pending` 查看尚未自动写入的 review 建议。metadata 写在频道的 `.memory/entries.json`，包含 kind、subject/owner、source entry ids、来源类型、trust、时间、状态、敏感等级、source correlation ids，以及 recall count、last recalled、每日计数和查询指纹（仅保存 hash，不保存查询原文）。correlation id 可与 usage ledger/review log 联结，统计维护 job 的成本、有效条目和后续召回。该文件是可重建 sidecar，不替代 `MEMORY.md` 事实源。
+用户可用 `/memory status` 查看条目数、近 7 天写入/删除/过期统计、tombstone、召回总数/近 30 天计数、query diversity 和最近失败；`/memory list` 按 entry id 列出活动记忆；`/memory show <entry-id>` 展示正文与 metadata；`/memory recent` 查看最近 7 天的 MEMORY.md 写入/删除/过期动作。metadata 写在频道的 `.memory/entries.json`，包含 kind、subject/owner、source entry ids、来源类型、trust、时间、状态、敏感等级、source correlation ids，以及 recall count、last recalled、每日计数和查询指纹（仅保存 hash，不保存查询原文）。correlation id 可与 usage ledger/review log 联结，统计维护 job 的成本、有效条目和后续召回。该文件是可重建 sidecar，不替代 `MEMORY.md` 事实源。
 
 ### 出站附件工具（`send_media`，随渠道自动启用）
 

@@ -5,6 +5,7 @@ import * as log from "../log.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory/channel-maintenance-queue.js";
 import { applyChannelMemoryOps, getChannelMemoryPath, parseChannelMemoryEntries } from "../memory/files.js";
+import type { MemoryEntryKind } from "../memory/metadata.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
 import { containsSecret } from "../memory/secret-redaction.js";
@@ -45,6 +46,13 @@ const memoryManageSchema = Type.Object({
 			{ description: "For save: what kind of durable memory this is." },
 		),
 	),
+	supersedes: Type.Optional(
+		Type.String({
+			description:
+				"For save, only after this tool reported a similar existing entry: the entry id being replaced, " +
+				'or "none" to keep both.',
+		}),
+	),
 });
 
 export interface MemoryManageToolOptions {
@@ -64,9 +72,20 @@ interface MemoryManageArgs {
 	query?: string;
 	target?: string;
 	kind?: string;
+	supersedes?: string;
 }
 
-function normalizeMemoryKind(kind: string | undefined) {
+/**
+ * Above this recall score, an existing entry is similar enough that saving alongside it — rather
+ * than superseding it — risks two contradictory durable facts competing at recall time. Set high
+ * on purpose: a false positive interrupts every plain save, a false negative just means the old
+ * conflict-resolution instruction ("say 'forget the old one'") still applies. Starts at the same
+ * value `recall.ts` uses to gate its own model rerank (`HIGH_CONFIDENCE_SCORE`) — a score that
+ * strong elsewhere in the pipeline is a reasonable place to start being strict here too.
+ */
+const SAVE_CONFLICT_SCORE = 8;
+
+function normalizeMemoryKind(kind: string | undefined): MemoryEntryKind {
 	return kind === "preference" ||
 		kind === "decision" ||
 		kind === "constraint" ||
@@ -124,7 +143,7 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 	const queue = options.channelMemoryQueue ?? getDefaultChannelMemoryQueue();
 
 	async function save(args: MemoryManageArgs) {
-		const { content, kind } = args;
+		const { content, kind, supersedes } = args;
 		const trimmed = (content ?? "").trim();
 		if (!trimmed) {
 			rejectMissingArgument("save", "content", args);
@@ -135,31 +154,58 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 				{ op: "save", saved: false, blockedReason: "secret" },
 			);
 		}
+		if (!supersedes) {
+			// Reuse the recall scoring pipeline (already the point-query path for `search`) as a
+			// deterministic, no-cost conflict check before writing a second fact that might
+			// contradict one already stored.
+			const model = options.getCurrentModel();
+			const { items } = await recallRelevantMemory({
+				query: trimmed,
+				channelId: options.channelId,
+				workspaceDir: options.workspaceDir,
+				channelDir: options.channelDir,
+				allowedSources: ["channel-memory"],
+				maxCandidates: 3,
+				maxInjected: 3,
+				maxChars: 1200,
+				rerankWithModel: false,
+				model,
+				resolveApiKey: options.resolveApiKey,
+				candidateStore: options.memoryCandidateStore,
+			});
+			const similar = items.filter((item) => item.entryId && item.score >= SAVE_CONFLICT_SCORE);
+			if (similar.length > 0) {
+				throw new RecoverableToolError(
+					`Nothing was saved yet. This channel already stores ${similar.length} similar entr${similar.length === 1 ? "y" : "ies"}:\n` +
+						similar.map((item) => `- ${item.entryId}: ${item.content}`).join("\n") +
+						'\nRe-issue the save with "supersedes" set to the entry id this replaces, or to "none" if both facts are true at the same time.',
+				);
+			}
+		}
+		const metadata = {
+			kind: normalizeMemoryKind(kind),
+			sourceType: "user" as const,
+			probationUntil: null,
+		};
 		// Serialize through the shared channel memory queue so this never races with background
 		// consolidation/maintenance on the same channel's files.
 		const result = await queue.run(options.channelId, () =>
 			applyChannelMemoryOps(options.channelDir, [
-				{
-					op: "add",
-					content: trimmed,
-					// A user explicitly saying "remember this" is never probationary, and restating a
-					// fact the runtime had already put on probation promotes it (spec 037, D7).
-					metadata: {
-						kind: normalizeMemoryKind(kind),
-						sourceType: "user",
-						probationUntil: null,
-					},
-				},
+				supersedes && supersedes !== "none"
+					? { op: "supersede", targetId: supersedes, content: trimmed, metadata }
+					: // A user explicitly saying "remember this" is never probationary, and restating a
+						// fact the runtime had already put on probation promotes it (spec 037, D7).
+						{ op: "add", content: trimmed, metadata },
 			]),
 		);
 		options.memoryCandidateStore.invalidate(getChannelMemoryPath(options.channelDir));
 		const message =
-			result.added > 0
+			result.added > 0 || result.superseded > 0
 				? `Saved to channel memory${kind ? ` (${kind})` : ""}.`
 				: "That memory is already present; no duplicate was added.";
 		return textResult(message, {
 			op: "save",
-			saved: result.added > 0 || result.skippedDuplicate > 0,
+			saved: result.added > 0 || result.superseded > 0 || result.skippedDuplicate > 0,
 		});
 	}
 

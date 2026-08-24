@@ -36,15 +36,4 @@ describe("memory source windows", () => {
 		expect(JSON.stringify(window.messages)).toContain("new request");
 		expect(JSON.stringify(window.messages)).not.toContain("old request");
 	});
-
-	it("marks windows containing tool results as externally sourced", () => {
-		const window = buildIncrementalMemorySourceWindow({
-			entries: [
-				{ id: "e1", type: "message", message: { role: "user", content: "inspect" } },
-				{ id: "e2", type: "message", message: { role: "toolResult", content: [{ type: "text", text: "data" }] } },
-			] as never[],
-			sourceKind: "idle",
-		});
-		expect(window.hasExternalToolContent).toBe(true);
-	});
 });

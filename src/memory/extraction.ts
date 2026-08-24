@@ -11,10 +11,11 @@ import {
 	readChannelMemory,
 	readChannelSession,
 } from "./files.js";
-import type { MemoryEntryKind } from "./metadata.js";
+import { type MemoryEntryKind, readMemoryMetadata } from "./metadata.js";
 import { probationDeadline } from "./probation.js";
 import type { MemoryPromotionCandidate, MemoryWriteTier } from "./promotion.js";
 import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
+import { tokenizeRecallText } from "./recall.js";
 import { runRetriedSidecarTask } from "./sidecar-worker.js";
 import { sanitizeMessagesForMemory } from "./transcript.js";
 
@@ -175,6 +176,7 @@ export function toMemoryOp(
 	const metadata = {
 		kind: candidate.kind,
 		sourceType: "agent" as const,
+		necessity: candidate.necessity,
 		sourceCorrelationId: provenance.correlationId,
 		probationUntil: tier === "probationary" ? probationDeadline() : null,
 	};
@@ -195,13 +197,55 @@ export function toMemoryOp(
 	};
 }
 
-/** Entries rendered as `id — content` so supersede/invalidate can reference real ids. */
-function renderMemoryEntriesForPrompt(rawMemory: string): string {
+/**
+ * Above this many entries, a full-corpus render stops being useful: MEMORY_ENTRIES clips at 8000
+ * chars anyway, so the model never sees enough of the tail to consider superseding it. Past the
+ * threshold, render only the entries most lexically similar to this window's transcript, plus
+ * every user-saved entry regardless of similarity (a user's explicit fact must always be a
+ * candidate for supersede, never silently excluded by relevance ranking).
+ */
+const MEMORY_ENTRIES_SIMILARITY_THRESHOLD = 40;
+const MEMORY_ENTRIES_SIMILARITY_TOP_N = 20;
+
+/**
+ * Entries rendered as `id — content` so supersede/invalidate can reference real ids.
+ *
+ * A lightweight local token-overlap score, not the full recall pipeline — extraction only has a
+ * `channelDir`, and reusing `recallRelevantMemory` here would mean threading `workspaceDir`
+ * through every consolidation call site just to rank entries already loaded in memory.
+ */
+async function renderSimilarMemoryEntriesForPrompt(
+	channelDir: string,
+	rawMemory: string,
+	transcript: string,
+): Promise<string> {
 	const entries = parseChannelMemoryEntries(rawMemory);
 	if (entries.length === 0) {
 		return "";
 	}
-	return entries.map((entry) => `${entry.id} — ${entry.content}`).join("\n");
+	if (entries.length <= MEMORY_ENTRIES_SIMILARITY_THRESHOLD) {
+		return entries.map((entry) => `${entry.id} — ${entry.content}`).join("\n");
+	}
+
+	const transcriptTokens = new Set(tokenizeRecallText(transcript));
+	const scored = entries
+		.map((entry) => {
+			const entryTokens = tokenizeRecallText(entry.content);
+			const overlap = entryTokens.filter((token) => transcriptTokens.has(token)).length;
+			return { entry, overlap };
+		})
+		.sort((a, b) => b.overlap - a.overlap);
+
+	const metadata = await readMemoryMetadata(channelDir);
+	const mustKeepIds = new Set(
+		entries.filter((entry) => metadata.entries[entry.id]?.sourceType === "user").map((entry) => entry.id),
+	);
+	const selectedIds = new Set(scored.slice(0, MEMORY_ENTRIES_SIMILARITY_TOP_N).map(({ entry }) => entry.id));
+	for (const id of mustKeepIds) selectedIds.add(id);
+
+	const selected = entries.filter((entry) => selectedIds.has(entry.id));
+	const note = `[showing ${selected.length} of ${entries.length} entries most relevant to this conversation — not the full file]`;
+	return `${note}\n${selected.map((entry) => `${entry.id} — ${entry.content}`).join("\n")}`;
 }
 
 export interface MemoryExtractionRequest extends MemoryExtractionPromptOptions {
@@ -216,6 +260,13 @@ export interface MemoryExtractionRequest extends MemoryExtractionPromptOptions {
 	usageContext?: { channelId: string; correlationId?: string };
 }
 
+/**
+ * Tool output never reaches this prompt: `sanitizeMessagesForMemory` drops every `toolResult`
+ * message before serialization (`transcript.ts`), an invariant pinned by
+ * `test/memory-transcript.test.ts` ("drops tool results ... before memory workers see them").
+ * That is why no additional untrusted-content filter is applied here — a window-level one used to
+ * exist and silently discarded every durable write from any tool-using conversation.
+ */
 export async function runMemoryExtraction(request: MemoryExtractionRequest): Promise<MemoryExtractionResult> {
 	const [currentSession, rawMemory, currentHistory] = await Promise.all([
 		readChannelSession(request.channelDir),
@@ -227,7 +278,11 @@ export async function runMemoryExtraction(request: MemoryExtractionRequest): Pro
 		request.transcriptMaxChars,
 		{ headRatio: 0.35 },
 	);
-	const currentMemory = clipText(renderMemoryEntriesForPrompt(rawMemory), 8_000, { headRatio: 0.35 });
+	const currentMemory = clipText(
+		await renderSimilarMemoryEntriesForPrompt(request.channelDir, rawMemory, transcript),
+		8_000,
+		{ headRatio: 0.35 },
+	);
 
 	const promptSections = [
 		`Current SESSION.md:\n${clipText(currentSession, 8_000, { headRatio: 0.35 }) || "(empty)"}`,

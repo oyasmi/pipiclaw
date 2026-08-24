@@ -302,7 +302,15 @@ export async function runMemoryCheckpointJob(input: MemoryCheckpointJobInput): P
 							correlationId: sourceWindow.windowId,
 						}
 					: {
-							actions: [{ target: "MEMORY.md", action: "append", entries: result.appendedMemoryEntries }],
+							actions: [
+								{
+									target: "MEMORY.md",
+									action: "append",
+									entries: result.appendedMemoryEntries,
+									durableCandidates: result.appendedDurableEntries,
+									probationaryCandidates: result.appendedProbationaryEntries,
+								},
+							],
 							skipped: (result.rejectedMemoryOps ?? []).map((candidate) => ({
 								target: "MEMORY.md",
 								candidate,
@@ -373,12 +381,12 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 			// `loadFiles`'s cached read predates the expiry write above, so a fresh read is needed
 			// whenever expiry actually changed the file; otherwise the cache is still accurate.
 			const currentMemory = expiredCount > 0 ? await readChannelMemory(input.channelDir) : cachedMemory;
-			const cleanedMemory = decision.runMemoryCleanup
+			const cleanup = decision.runMemoryCleanup
 				? await cleanupChannelMemory(options, currentMemory, {
 						cleanupShrinkGuardMinRatio: input.settings.memoryMaintenance.cleanupShrinkGuardMinRatio,
 						cleanupShrinkGuardMinChars: input.settings.memoryMaintenance.cleanupShrinkGuardMinChars,
 					})
-				: false;
+				: null;
 			const foldedHistory = decision.runHistoryFolding ? await foldChannelHistory(options, currentHistory) : false;
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
@@ -393,7 +401,9 @@ export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJo
 					correlationId,
 					actions: [
 						...(expiredCount > 0 ? [{ target: "MEMORY.md", action: "expire", entries: expiredCount }] : []),
-						...(cleanedMemory ? [{ target: "MEMORY.md", action: "rewrite" }] : []),
+						...(cleanup?.rewritten
+							? [{ target: "MEMORY.md", action: "rewrite", droppedEntryIds: cleanup.droppedEntryIds }]
+							: []),
 						...(foldedHistory ? [{ target: "HISTORY.md", action: "rewrite" }] : []),
 					],
 				},

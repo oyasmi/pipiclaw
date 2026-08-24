@@ -11,7 +11,6 @@ export interface MemorySourceWindow {
 	entries: SessionEntry[];
 	messages: AgentMessage[];
 	windowId: string;
-	hasExternalToolContent: boolean;
 }
 
 function isMessageEntry(entry: SessionEntry): entry is SessionMessageEntry {
@@ -20,13 +19,6 @@ function isMessageEntry(entry: SessionEntry): entry is SessionMessageEntry {
 
 function messagesFromEntries(entries: SessionEntry[]): AgentMessage[] {
 	return entries.filter(isMessageEntry).map((entry) => entry.message);
-}
-
-function hasToolResult(messages: AgentMessage[]): boolean {
-	return messages.some(
-		(message) =>
-			typeof message === "object" && message !== null && "role" in message && message.role === "toolResult",
-	);
 }
 
 function createWindowId(
@@ -73,7 +65,6 @@ export function buildIncrementalMemorySourceWindow(options: {
 		entries,
 		messages,
 		windowId: createWindowId(options.sourceKind, options.lastEntryId, throughEntryId, messages),
-		hasExternalToolContent: hasToolResult(messages),
 	};
 }
 
@@ -101,6 +92,5 @@ export function buildCompactionMemorySourceWindow(options: {
 		entries: incrementalEntries,
 		messages,
 		windowId: createWindowId("compaction", options.lastEntryId, throughEntryId, messages),
-		hasExternalToolContent: hasToolResult(messages),
 	};
 }

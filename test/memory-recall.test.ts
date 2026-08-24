@@ -1,9 +1,16 @@
+import { writeFile } from "node:fs/promises";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { buildMemoryCandidates, createMemoryCandidateStore } from "../src/memory/candidates.js";
-import { readMemoryMetadata } from "../src/memory/metadata.js";
-import { recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
+import { parseChannelMemoryEntries } from "../src/memory/files.js";
+import {
+	getMemoryMetadataPath,
+	readMemoryMetadata,
+	recordMemoryRecall,
+	syncMemoryMetadata,
+} from "../src/memory/metadata.js";
+import { findPreviousUserText, recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
 import { countPromptUnits } from "../src/shared/prompt-units.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -180,6 +187,88 @@ describe("memory candidates", () => {
 	});
 });
 
+describe("memory recall: contextQuery fallback for weak queries", () => {
+	const seedThursdayGate = (channelDir: string) =>
+		writeFileSync(
+			join(channelDir, "MEMORY.md"),
+			[
+				"# Channel Memory",
+				"",
+				"## Decisions",
+				"",
+				"- 发布窗口固定在每周四晚上 22:00，代号叫 THURSDAY-GATE。 <!--id:m-thursday-->",
+			].join("\n"),
+			"utf-8",
+		);
+
+	it("borrows the previous user turn only when the current query cannot clear the evidence bar alone", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		seedThursdayGate(channelDir);
+
+		const withoutContext = await recallRelevantMemory({
+			query: "代号是什么来着？",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 3,
+			maxChars: 2_000,
+			rerankWithModel: false,
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		});
+		expect(withoutContext.items.map((item) => item.id)).not.toContain("m-thursday");
+
+		const withContext = await recallRelevantMemory({
+			query: "代号是什么来着？",
+			contextQuery: "我们发布现在固定在周四晚上，代号叫 THURSDAY-GATE。",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 3,
+			maxChars: 2_000,
+			rerankWithModel: false,
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		});
+		expect(withContext.items.map((item) => item.id)).toContain("m-thursday");
+	});
+
+	it("has no effect when the current query already clears the evidence bar on its own", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		seedThursdayGate(channelDir);
+
+		const request = {
+			query: "发布窗口代号是什么？只回答代号本身。",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 3,
+			maxChars: 2_000,
+			rerankWithModel: false as const,
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		};
+		const withoutContext = await recallRelevantMemory(request);
+		const withContext = await recallRelevantMemory({ ...request, contextQuery: "完全不相关的上一轮消息内容。" });
+		expect(withContext.items.map((item) => item.id)).toEqual(withoutContext.items.map((item) => item.id));
+		expect(withContext.renderedText).toEqual(withoutContext.renderedText);
+	});
+
+	it("findPreviousUserText strips injected runtime-context wrappers so they can't leak into contextQuery", () => {
+		// The wrapped runtime_context block names THURSDAY-GATE; if it survived unstripped, a
+		// caller feeding this straight into recall's contextQuery would trivially "recall" the
+		// injected block's own echo of the answer rather than anything from genuine expansion.
+		const messages = [
+			{
+				role: "user",
+				content:
+					"<runtime_context>发布窗口 THURSDAY-GATE 已注入</runtime_context>\n<user_message>\n随便问问\n</user_message>",
+			},
+		] as never[];
+		expect(findPreviousUserText(messages)).toBe("随便问问");
+	});
+});
+
 describe("memory recall", () => {
 	it("injects only the matching bullet from a large section and records its recall", async () => {
 		const { workspaceDir, channelDir } = createTempWorkspace();
@@ -188,7 +277,11 @@ describe("memory recall", () => {
 				? "- Release codename is moonstone. <!--id:m-moonstone-->"
 				: `- Unrelated durable item number ${index}. <!--id:m-item${index}-->`,
 		);
-		writeFileSync(join(channelDir, "MEMORY.md"), ["# Channel Memory", "", "## Facts", "", ...entries].join("\n"));
+		const memoryText = ["# Channel Memory", "", "## Facts", "", ...entries].join("\n");
+		writeFileSync(join(channelDir, "MEMORY.md"), memoryText);
+		// Recall no longer reconciles metadata itself (that's a write-path responsibility); seed it
+		// the way a real write path would so `recordMemoryRecall` has an active record to update.
+		await syncMemoryMetadata(channelDir, parseChannelMemoryEntries(memoryText));
 
 		const result = await recallRelevantMemory({
 			query: "release codename moonstone",
@@ -208,6 +301,83 @@ describe("memory recall", () => {
 		expect(result.renderedText).toContain("Release codename is moonstone.");
 		expect(result.renderedText).not.toContain("Unrelated durable item");
 		expect((await readMemoryMetadata(channelDir)).entries["m-moonstone"]?.recallCount).toBe(1);
+	});
+
+	it("ranks a frequently-recalled entry above an equally-matched one that has never been recalled", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		const memoryText = [
+			"# Channel Memory",
+			"",
+			"## Facts",
+			"",
+			"- Deploy pipeline notes alpha entry. <!--id:m-popular-->",
+			"- Deploy pipeline notes beta entry. <!--id:m-quiet-->",
+		].join("\n");
+		writeFileSync(join(channelDir, "MEMORY.md"), memoryText);
+		const entries = parseChannelMemoryEntries(memoryText);
+		await syncMemoryMetadata(channelDir, entries);
+		// Simulate ten distinct past recalls for m-popular; m-quiet stays untouched.
+		for (let index = 0; index < 10; index++) {
+			await recordMemoryRecall(channelDir, ["m-popular"], `distinct query phrasing number ${index}`);
+		}
+
+		const result = await recallRelevantMemory({
+			query: "deploy pipeline notes",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 2,
+			maxChars: 2_000,
+			rerankWithModel: false,
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		});
+
+		expect(result.items.map((item) => item.id)).toEqual(["m-popular", "m-quiet"]);
+	});
+
+	it("does not penalize a stale user-saved entry the way it penalizes a stale agent-learned one", async () => {
+		const { workspaceDir, channelDir } = createTempWorkspace();
+		const memoryText = [
+			"# Channel Memory",
+			"",
+			"## Facts",
+			"",
+			"- Onboarding checklist alpha entry. <!--id:m-userstale-->",
+			"- Onboarding checklist beta entry. <!--id:m-agentstale-->",
+		].join("\n");
+		writeFileSync(join(channelDir, "MEMORY.md"), memoryText);
+		const entries = parseChannelMemoryEntries(memoryText);
+		await syncMemoryMetadata(
+			channelDir,
+			entries,
+			entries.map((entry) => ({
+				id: entry.id,
+				metadata: { sourceType: entry.id === "m-userstale" ? "user" : "agent" },
+			})),
+		);
+		const staleTimestamp = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
+		const metadata = await readMemoryMetadata(channelDir);
+		for (const id of ["m-userstale", "m-agentstale"]) {
+			metadata.entries[id] = { ...metadata.entries[id], lastRecalledAt: staleTimestamp, createdAt: staleTimestamp };
+		}
+		await writeFile(getMemoryMetadataPath(channelDir), `${JSON.stringify(metadata, null, 2)}\n`);
+
+		const result = await recallRelevantMemory({
+			query: "onboarding checklist",
+			workspaceDir,
+			channelDir,
+			maxCandidates: 8,
+			maxInjected: 2,
+			maxChars: 2_000,
+			rerankWithModel: false,
+			model: { provider: "test", id: "noop" } as never,
+			resolveApiKey: async () => "",
+		});
+
+		// Equal lexical evidence; only the user-saved one should avoid the staleness penalty, so it
+		// ranks first (or ties, never behind the agent-sourced one).
+		expect(result.items[0]?.id).toBe("m-userstale");
 	});
 
 	it("clips recalled memory to the unit budget and points at the search tools", async () => {

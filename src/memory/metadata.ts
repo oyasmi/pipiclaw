@@ -8,11 +8,13 @@ import { createSerialQueue } from "../shared/serial-queue.js";
 export type MemoryEntryKind = "fact" | "preference" | "decision" | "constraint" | "open-loop" | "lesson";
 export type MemorySourceType = "user" | "agent" | "repo" | "tool" | "web" | "legacy";
 export type MemoryEntryStatus = "active" | "superseded" | "invalidated" | "forgotten";
+export type MemoryEntryNecessity = "low" | "medium" | "high";
 
 export interface MemoryWriteMetadataInput {
 	kind?: MemoryEntryKind;
 	sourceType?: MemorySourceType;
 	sourceCorrelationId?: string;
+	necessity?: MemoryEntryNecessity;
 	/**
 	 * Probationary write deadline (spec 037, D6/D7): `undefined` leaves any existing value alone,
 	 * a string sets/renews it, `null` explicitly clears it (promotion to durable). Distinct from
@@ -28,6 +30,7 @@ export interface MemoryEntryMetadata {
 	sourceEntryIds: string[];
 	sourceCorrelationIds: string[];
 	sourceType: MemorySourceType;
+	necessity?: MemoryEntryNecessity;
 	createdAt: string;
 	updatedAt: string;
 	status: MemoryEntryStatus;
@@ -128,6 +131,7 @@ export async function syncMemoryMetadata(
 					]),
 				),
 				sourceType: hint?.sourceType ?? previous?.sourceType ?? "legacy",
+				necessity: hint?.necessity ?? previous?.necessity,
 				createdAt: previous?.createdAt ?? entry.timestamp ?? timestamp,
 				updatedAt: update || previous?.contentHash !== contentHash(entry.content) ? timestamp : previous.updatedAt,
 				status: "active",
@@ -152,6 +156,13 @@ export async function syncMemoryMetadata(
 			if (entry.status === "active" && !activeIds.has(id) && !updatesById.has(id)) {
 				entries[id] = { ...entry, status: "invalidated", updatedAt: timestamp };
 			}
+		}
+
+		// `updatedAt` is per-entry and only advances when a field actually changes (see above), so
+		// a byte-identical `entries` map means this call had nothing new to record — a bare
+		// reconcile pass over an unchanged file should not cost an atomic write every turn.
+		if (JSON.stringify(entries) === JSON.stringify(current.entries)) {
+			return current;
 		}
 
 		const next: MemoryMetadataFile = { schemaVersion: 1, updatedAt: timestamp, entries };

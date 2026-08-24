@@ -101,6 +101,6 @@ describe("command metadata helpers", () => {
 		expect(help).toContain("responseMode");
 		expect(help).toContain("/model [provider/modelId|modelId]");
 		expect(help).toContain("/thinking [off|minimal|low|medium|high|xhigh|max|cycle]");
-		expect(help).toContain("/memory [status|list|show <id>|pending]");
+		expect(help).toContain("/memory [status|list|show <id>|recent]");
 	});
 });

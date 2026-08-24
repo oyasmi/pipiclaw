@@ -21,25 +21,43 @@ describe("memory commands", () => {
 		expect(list).toContain("`m-concise01` [preference] Prefer concise updates.");
 	});
 
-	it("shows active metadata and pending review suggestions", async () => {
+	it("shows active metadata and recent memory activity", async () => {
 		const channelDir = makeChannel();
 		setupChannelFiles(channelDir, {
 			memory: "# Channel Memory\n\n## Facts\n\n- Production is in CN. <!--id:m-region01-->\n",
 		});
+		const now = new Date().toISOString();
 		await appendMemoryReviewLog(channelDir, {
-			timestamp: "2026-07-01T00:00:00.000Z",
+			timestamp: now,
 			channelId: "dm_123",
 			reason: "memory-checkpoint-job",
-			suggestions: [{ target: "channel-memory", content: "Maybe prefer weekly summaries." }],
+			actions: [
+				{ target: "MEMORY.md", action: "append", entries: 2, durableCandidates: 2, probationaryCandidates: 0 },
+			],
+		});
+		await appendMemoryReviewLog(channelDir, {
+			timestamp: now,
+			channelId: "dm_123",
+			reason: "structural-maintenance-job",
+			actions: [{ target: "MEMORY.md", action: "rewrite", droppedEntryIds: ["m-old01", "m-old02"] }],
+		});
+		await appendMemoryReviewLog(channelDir, {
+			timestamp: now,
+			channelId: "dm_123",
+			reason: "structural-maintenance-job",
+			actions: [{ target: "MEMORY.md", action: "expire", entries: 1 }],
 		});
 
 		const show = await handleMemoryCommand({ channelDir, args: "show m-region01" });
-		const pending = await handleMemoryCommand({ channelDir, args: "pending" });
+		const recent = await handleMemoryCommand({ channelDir, args: "recent" });
+		const status = await handleMemoryCommand({ channelDir, args: "status" });
 
 		expect(show).toContain("Production is in CN.");
 		expect(show).toContain('"status": "active"');
-		expect(pending).toContain("Maybe prefer weekly summaries.");
-		expect(pending).toMatch(/`p-[a-f0-9]{8}`/);
+		expect(recent).toContain("append 2 entries");
+		expect(recent).toContain("rewrite (dropped m-old01, m-old02)");
+		expect(recent).toContain("expire 1 entry");
+		expect(status).toContain("Last 7d: +2 written / -2 dropped / -1 expired");
 	});
 
 	it("returns actionable guidance for invalid input", async () => {

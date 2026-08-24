@@ -154,6 +154,63 @@ describe("memory_manage tool", () => {
 		);
 	});
 
+	it("flags a similar existing entry instead of saving a second, possibly-contradictory fact", async () => {
+		const channelDir = createTempChannel();
+		await applyChannelMemoryOps(channelDir, [
+			{ op: "add", content: "The team default package manager for installs is npm" },
+		]);
+		const [existing] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+
+		await expect(
+			makeTool(channelDir).execute("call", {
+				label: "remember",
+				op: "save",
+				content: "The team default package manager for installs is now pnpm",
+			}),
+		).rejects.toThrow(new RegExp(`supersedes.*${existing.id}|${existing.id}`));
+
+		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+		expect(entries).toHaveLength(1);
+	});
+
+	it('saves without conflict when "supersedes" is set to "none"', async () => {
+		const channelDir = createTempChannel();
+		await applyChannelMemoryOps(channelDir, [
+			{ op: "add", content: "The team default package manager for installs is npm" },
+		]);
+
+		const result = await makeTool(channelDir).execute("call", {
+			label: "remember",
+			op: "save",
+			content: "The team default package manager for installs is now pnpm",
+			supersedes: "none",
+		});
+		expect(result.details).toMatchObject({ op: "save", saved: true });
+
+		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+		expect(entries).toHaveLength(2);
+	});
+
+	it("replaces the flagged entry in place when supersedes names its id", async () => {
+		const channelDir = createTempChannel();
+		await applyChannelMemoryOps(channelDir, [
+			{ op: "add", content: "The team default package manager for installs is npm" },
+		]);
+		const [existing] = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+
+		const result = await makeTool(channelDir).execute("call", {
+			label: "remember",
+			op: "save",
+			content: "The team default package manager for installs is now pnpm",
+			supersedes: existing.id,
+		});
+		expect(result.details).toMatchObject({ op: "save", saved: true });
+
+		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
+		expect(entries).toHaveLength(1);
+		expect(entries[0].content).toContain("pnpm");
+	});
+
 	it("reports when forget finds no match", async () => {
 		const channelDir = createTempChannel();
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Something durable" }]);

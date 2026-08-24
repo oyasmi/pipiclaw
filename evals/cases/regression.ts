@@ -19,6 +19,7 @@ import {
 } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
 import {
+	copyFixture,
 	hasStatus,
 	longNonAsciiValue,
 	seedChannelMemory,
@@ -166,6 +167,39 @@ export const regressionCases: EvalCase[] = [
 		],
 	},
 	{
+		id: "M-write-04",
+		suite: "regression",
+		source:
+			"2026-08-24 memory review §1.1: any window containing a toolResult silently discarded every durable memory op",
+		description:
+			"A hard constraint stated in the same window as a real tool call reaches MEMORY.md through background " +
+			"consolidation. Every pre-existing memory case ran on tool-free warmup turns, which is why a blanket " +
+			"suppression of tool-bearing windows went unnoticed. The turn is phrased so the model has no reason to " +
+			"call memory_manage — the write has to come from the consolidation path, not the explicit one.",
+		definitionFile,
+		fixtures: ["memory/release-window.md"],
+		setup: async (ctx) => copyFixture(ctx, "memory/release-window.md", "dm_eval/notes/release-window.md"),
+		trials: 3,
+		budget: { maxWallMs: 300_000, maxTurns: 12 },
+		script: [
+			{
+				kind: "user",
+				text: "帮我看下 notes/release-window.md 写了什么，两句话总结就行。另外提一句，我们所有发布现在必须放在周四晚上，这是运维那边卡死的硬性规定。",
+			},
+			...warmupTurns(1),
+			{ kind: "runMemoryMaintenance" },
+		],
+		graders: [
+			tracePredicate(
+				"tool-was-actually-used",
+				(ctx) => ctx.trace.some((event) => event.kind === "tool-call" && event.tool === "read"),
+				"the window must contain a real toolResult for this probe to mean anything",
+			),
+			toolCallCount("no-explicit-save", "memory_manage", 0),
+			fileContains("durable-write-survived-tool-window", "MEMORY.md", /周四/),
+		],
+	},
+	{
 		id: "M-recall-03",
 		suite: "regression",
 		source: "2026-07-25 review: every memory case was a cold single turn",
@@ -187,6 +221,27 @@ export const regressionCases: EvalCase[] = [
 			{ kind: "user", text: "我们的发布窗口代号是什么？只回答代号本身。" },
 		],
 		graders: [lastDeliveryMatches("warm-recall", /^\s*THURSDAY-GATE[。.!]?\s*$/i)],
+	},
+	{
+		id: "M-recall-05",
+		suite: "regression",
+		source: "2026-08-24 memory review §2.1: deictic follow-ups have no lexical evidence of their own",
+		description:
+			"A follow-up phrased as a pure pronoun reference ('上次说的那个...代号是什么来着？') carries no informative " +
+			"tokens of its own — every noun is a deictic placeholder. Recall can only succeed by borrowing the " +
+			"previous user turn as scoring context. report-only until §2.1 lands in production and this is observed " +
+			"to actually flip green; not a required gate yet.",
+		definitionFile,
+		budget: { maxWallMs: 300_000, maxTurns: 20 },
+		script: [
+			{
+				kind: "user",
+				text: "我们发布现在固定在周四晚上，代号叫 THURSDAY-GATE。",
+			},
+			...warmupTurns(3),
+			{ kind: "user", text: "上次说的那个发布安排，代号是什么来着？只回答代号。" },
+		],
+		graders: [lastDeliveryMatches("deictic-follow-up-recall", /^\s*THURSDAY-GATE[。.!]?\s*$/i)],
 	},
 	{
 		id: "M-maint-01",

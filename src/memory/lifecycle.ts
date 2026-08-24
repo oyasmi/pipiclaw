@@ -308,8 +308,15 @@ export class MemoryLifecycle {
 
 		const actions: unknown[] = [];
 		const skipped: unknown[] = [];
-		if (result.appendedMemoryEntries > 0) {
-			actions.push({ target: "MEMORY.md", action: "append", entries: result.appendedMemoryEntries });
+		const candidateCount = result.appendedDurableEntries + result.appendedProbationaryEntries;
+		if (candidateCount > 0 || result.appendedMemoryEntries > 0) {
+			actions.push({
+				target: "MEMORY.md",
+				action: "append",
+				entries: result.appendedMemoryEntries,
+				durableCandidates: result.appendedDurableEntries,
+				probationaryCandidates: result.appendedProbationaryEntries,
+			});
 		}
 		if (result.appendedHistoryBlock) {
 			actions.push({ target: "HISTORY.md", action: "append" });

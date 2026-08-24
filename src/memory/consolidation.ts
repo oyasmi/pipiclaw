@@ -4,6 +4,7 @@ import { getLatestCompactionEntry, type SessionEntry, type SessionMessageEntry }
 import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { splitH2Sections } from "../shared/markdown-sections.js";
+import { clipText } from "../shared/text-utils.js";
 import { runMemoryExtraction, toMemoryOp } from "./extraction.js";
 import {
 	appendChannelHistoryArchive,
@@ -13,6 +14,7 @@ import {
 	rewriteChannelHistory,
 	rewriteChannelMemory,
 } from "./files.js";
+import { readMemoryMetadata } from "./metadata.js";
 import {
 	classifyMemoryWrite,
 	DEFAULT_MEMORY_AUTO_WRITE_CONFIDENCE,
@@ -32,6 +34,7 @@ const HISTORY_BLOCK_THRESHOLD = 5;
 const HISTORY_RECENT_BLOCKS_TO_KEEP = 3;
 const INLINE_CONSOLIDATION_TIMEOUT_MS = 20_000;
 const MEMORY_CLEANUP_TIMEOUT_MS = 120_000;
+const MEMORY_CLEANUP_INPUT_MAX_CHARS = 24_000;
 const HISTORY_FOLDING_TIMEOUT_MS = 120_000;
 
 export type ConsolidationMode = "idle" | "boundary";
@@ -271,10 +274,7 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 	rejectedMemoryOps.push(...probationaryCandidates.slice(MAX_PROBATION_WRITES_PER_RUN));
 
 	let appliedMemoryOps = 0;
-	if (
-		(durableCandidates.length > 0 || acceptedProbationary.length > 0) &&
-		!options.sourceWindow?.hasExternalToolContent
-	) {
+	if (durableCandidates.length > 0 || acceptedProbationary.length > 0) {
 		const sourceEntryIds = options.sourceWindow?.entries.map((entry) => entry.id) ?? [];
 		const ops = [
 			...durableCandidates.map((candidate) => toMemoryOp(candidate, { sourceEntryIds, correlationId }, "durable")),
@@ -324,14 +324,16 @@ function isCleanupResultTooSmall(currentMemory: string, nextMemory: string, guar
 	const beforeEntries = parseChannelMemoryEntries(before).length;
 	const afterEntries = parseChannelMemoryEntries(after).length;
 	if (beforeEntries > 0 && afterEntries === 0) return true;
+	// Entry-count guard applies at every file size. The char threshold below exists so a tiny
+	// file is not judged on byte ratio, but "four short Update blocks" is exactly the shape
+	// cleanup fires on and it sits under that threshold — letting the char escape short-circuit
+	// the entry guard left the most common cleanup input completely unprotected.
+	if (beforeEntries >= 4 && afterEntries * 2 < beforeEntries) return true;
 	if (before.length < Math.max(0, guard.cleanupShrinkGuardMinChars)) return false;
-	if (after.length < before.length * Math.max(0, Math.min(1, guard.cleanupShrinkGuardMinRatio))) {
-		return true;
-	}
-	return beforeEntries > 0 && afterEntries * 2 < beforeEntries;
+	return after.length < before.length * Math.max(0, Math.min(1, guard.cleanupShrinkGuardMinRatio));
 }
 
-function validateCleanupSchema(currentMemory: string, nextMemory: string): string | null {
+function validateCleanupSchema(currentMemory: string, nextMemory: string, mustKeepIds: string[]): string | null {
 	if (!/^# Channel Memory(?:\s|$)/.test(nextMemory.trimStart())) {
 		return 'cleanup output must start with "# Channel Memory"';
 	}
@@ -343,20 +345,39 @@ function validateCleanupSchema(currentMemory: string, nextMemory: string): strin
 		if (ids.has(entry.id)) return `cleanup output duplicated entry id ${entry.id}`;
 		ids.add(entry.id);
 	}
+	const missing = mustKeepIds.filter((id) => !ids.has(id));
+	if (missing.length > 0) return `cleanup output dropped user-saved entries: ${missing.join(", ")}`;
 	return null;
+}
+
+export interface MemoryCleanupResult {
+	rewritten: boolean;
+	droppedEntryIds: string[];
 }
 
 export async function cleanupChannelMemory(
 	options: ConsolidationRunOptions,
 	currentMemory: string,
 	guard?: MemoryCleanupShrinkGuard,
-): Promise<boolean> {
+): Promise<MemoryCleanupResult> {
 	if (!shouldCleanupChannelMemory(currentMemory)) {
-		return false;
+		return { rewritten: false, droppedEntryIds: [] };
 	}
 
-	const prompt = `Current MEMORY.md:
-${currentMemory}`;
+	const metadata = await readMemoryMetadata(options.channelDir);
+	const beforeEntries = parseChannelMemoryEntries(currentMemory);
+	const mustKeepIds = beforeEntries
+		.map((entry) => entry.id)
+		.filter((id) => metadata.entries[id]?.sourceType === "user");
+
+	const prompt = [
+		mustKeepIds.length > 0
+			? `These entries were saved on the user's explicit instruction and MUST appear verbatim in the output: ${mustKeepIds.join(", ")}`
+			: "",
+		`Current MEMORY.md:\n${clipText(currentMemory, MEMORY_CLEANUP_INPUT_MAX_CHARS, { headRatio: 0.5 })}`,
+	]
+		.filter(Boolean)
+		.join("\n\n");
 	const nextMemory = await runWorkerPrompt(
 		"memory-cleanup",
 		options.model,
@@ -366,7 +387,7 @@ ${currentMemory}`;
 		MEMORY_CLEANUP_TIMEOUT_MS,
 		usageContextFor(options.channelId, options.usageCorrelationId),
 	);
-	const schemaError = validateCleanupSchema(currentMemory, nextMemory);
+	const schemaError = validateCleanupSchema(currentMemory, nextMemory, mustKeepIds);
 	if (schemaError) {
 		throw new MemoryCleanupRejectedError(
 			`${schemaError}. Retry cleanup while preserving the MEMORY.md schema and ids.`,
@@ -375,8 +396,10 @@ ${currentMemory}`;
 	if (guard && isCleanupResultTooSmall(currentMemory, nextMemory, guard)) {
 		throw new MemoryCleanupRejectedError("cleanup result shrank below the configured guard threshold");
 	}
+	const afterIds = new Set(parseChannelMemoryEntries(nextMemory).map((entry) => entry.id));
+	const droppedEntryIds = beforeEntries.map((entry) => entry.id).filter((id) => !afterIds.has(id));
 	await rewriteChannelMemory(options.channelDir, nextMemory);
-	return true;
+	return { rewritten: true, droppedEntryIds };
 }
 
 export async function foldChannelHistory(options: ConsolidationRunOptions, currentHistory: string): Promise<boolean> {

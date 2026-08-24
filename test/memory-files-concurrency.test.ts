@@ -54,9 +54,12 @@ describe("memory-files concurrency", () => {
 	it("uses unique temp file names for concurrent rewrites of the same file", async () => {
 		const { rewriteChannelMemory } = await import("../src/memory/files.js");
 
+		// Metadata sync now skips its own write when the computed entries are byte-identical to
+		// what's already on disk (§2.3), so each concurrent rewrite needs a genuinely different
+		// entry set for both temp files to actually get created.
 		await Promise.all([
-			rewriteChannelMemory("/tmp/channel", "# first"),
-			rewriteChannelMemory("/tmp/channel", "# second"),
+			rewriteChannelMemory("/tmp/channel", "# Channel Memory\n\n## Facts\n\n- First entry."),
+			rewriteChannelMemory("/tmp/channel", "# Channel Memory\n\n## Facts\n\n- Second entry."),
 		]);
 
 		const allTempPaths = fsMocks.open.mock.calls

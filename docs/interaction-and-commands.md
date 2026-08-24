@@ -102,7 +102,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 | 命令 | 作用 |
 |---|---|
-| `/memory [status\|list\|show <id>\|pending]` | 查看生效记忆、元数据、召回统计、墓碑和建议 |
+| `/memory [status\|list\|show <id>\|recent]` | 查看生效记忆、元数据、召回统计、墓碑和近期写入/删除活动 |
 | `/session` | 查看当前会话、消息、token 和模型状态 |
 | `/thinking [level\|cycle]` | 查看或切换当前模型的推理强度 |
 | `/model [provider/modelId]` | 查看或切换模型；唯一子串也可匹配 |

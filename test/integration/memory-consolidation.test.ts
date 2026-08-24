@@ -253,10 +253,10 @@ describe("memory-consolidation integration", () => {
 			resolveApiKey: async () => "",
 			messages: [],
 		};
-		const cleanedMemory = await cleanupChannelMemory(options, await readChannelMemory(channelDir));
+		const cleanup = await cleanupChannelMemory(options, await readChannelMemory(channelDir));
 		const foldedHistory = await foldChannelHistory(options, await readChannelHistory(channelDir));
 
-		expect({ cleanedMemory, foldedHistory }).toEqual({ cleanedMemory: true, foldedHistory: true });
+		expect({ cleanedMemory: cleanup.rewritten, foldedHistory }).toEqual({ cleanedMemory: true, foldedHistory: true });
 		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf-8")).toContain("Fact 1");
 
 		const nextHistory = readFileSync(join(channelDir, "HISTORY.md"), "utf-8");
