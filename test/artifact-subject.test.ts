@@ -38,38 +38,30 @@ describe("workspaceSubjectHash", () => {
 		expect(first).toBe(second);
 	});
 
-	it("changes when an unstaged edit is made to a tracked file", async () => {
+	it("changes when a tracked file is edited — unstaged or staged", async () => {
 		const before = await workspaceSubjectHash(dir);
 		writeFileSync(join(dir, "a.txt"), "one\ntwo\n");
-		const after = await workspaceSubjectHash(dir);
-		expect(after).not.toBe(before);
-	});
+		const unstaged = await workspaceSubjectHash(dir);
+		expect(unstaged).not.toBe(before);
 
-	it("changes when a change is staged (not just committed)", async () => {
-		const before = await workspaceSubjectHash(dir);
-		writeFileSync(join(dir, "a.txt"), "one\ntwo\n");
 		git("add", "a.txt");
-		const after = await workspaceSubjectHash(dir);
-		expect(after).not.toBe(before);
-	});
-
-	it("changes when a new untracked file appears", async () => {
-		const before = await workspaceSubjectHash(dir);
-		writeFileSync(join(dir, "b.txt"), "new file\n");
-		const after = await workspaceSubjectHash(dir);
-		expect(after).not.toBe(before);
+		const staged = await workspaceSubjectHash(dir);
+		expect(staged).not.toBe(unstaged);
 	});
 
 	// Spec 040, D9: `git status --porcelain` only reports an untracked file's path and status —
 	// two different untracked files with the same name are indistinguishable to it. Before this
 	// fix, an external verifier that edited an already-untracked file's *content* (or reverted it
 	// after inspection) left the hash unchanged, so the attestation would not detect the change.
-	it("changes when an already-untracked file's content changes, not just its presence", async () => {
-		writeFileSync(join(dir, "scratch.txt"), "original\n");
+	it("changes when untracked files appear or change content, not just in presence", async () => {
 		const before = await workspaceSubjectHash(dir);
-		writeFileSync(join(dir, "scratch.txt"), "tampered\n");
-		const after = await workspaceSubjectHash(dir);
-		expect(after).not.toBe(before);
+		writeFileSync(join(dir, "b.txt"), "new file\n");
+		const afterNewFile = await workspaceSubjectHash(dir);
+		expect(afterNewFile).not.toBe(before);
+
+		writeFileSync(join(dir, "b.txt"), "tampered\n");
+		const afterEdit = await workspaceSubjectHash(dir);
+		expect(afterEdit).not.toBe(afterNewFile);
 	});
 
 	it("changes across commits even with an otherwise-clean tree", async () => {

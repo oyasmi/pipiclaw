@@ -87,7 +87,7 @@ describe("sidecar-worker", () => {
 		} satisfies Partial<SidecarParseError>);
 	});
 
-	it("records the memory correlation id with sidecar cost", async () => {
+	it("records sidecar cost with the memory correlation id, and still records it when the task aborts before throwing", async () => {
 		stateMessages = [
 			{
 				role: "assistant",
@@ -121,9 +121,7 @@ describe("sidecar-worker", () => {
 				cost: expect.objectContaining({ total: 0.03 }),
 			}),
 		);
-	});
 
-	it("records usage for an aborted task before throwing", async () => {
 		stateMessages = [
 			{
 				role: "assistant",
@@ -139,6 +137,7 @@ describe("sidecar-worker", () => {
 			},
 		];
 
+		recordUsage.mockClear();
 		await expect(
 			runSidecarTask({
 				name: "memory-recall-rerank",
@@ -242,7 +241,7 @@ describe("sidecar-worker", () => {
 		vi.useRealTimers();
 	});
 
-	it("repairs a parse failure once when a repair hint is supplied", async () => {
+	it("applies a repair hint exactly once — succeeding when the model corrects, failing after a single attempt otherwise", async () => {
 		vi.useFakeTimers();
 		const seenPrompts: string[] = [];
 		promptImpl = vi.fn<(input: string) => Promise<void>>(async (input) => {
@@ -283,29 +282,31 @@ describe("sidecar-worker", () => {
 		expect(seenPrompts).toHaveLength(2);
 		expect(seenPrompts[0]).toBe("Prompt");
 		expect(seenPrompts[1]).toBe("Prompt\n\nReturn a JSON object with a 'rationale' key.");
-		vi.useRealTimers();
-	});
 
-	it("does not apply a repair hint more than once", async () => {
-		vi.useFakeTimers();
+		// Now the model never corrects: the hint is applied once and the task still fails.
+		vi.clearAllMocks();
+		seenPrompts.length = 0;
+		promptImpl = vi.fn<(input: string) => Promise<void>>(async (input) => {
+			seenPrompts.push(input);
+		});
 		stateMessages = [{ role: "assistant", content: [{ type: "text", text: "bad" }], stopReason: "stop" }];
-		let parseCalls = 0;
+		let stubbornParseCalls = 0;
 
-		const taskPromise = runRetriedSidecarTask({
+		const stubbornPromise = runRetriedSidecarTask({
 			name: "repair-once-task",
 			model: { provider: "test", id: "noop" } as never,
 			resolveApiKey: async () => "",
 			systemPrompt: "System",
 			prompt: "Prompt",
 			parse: () => {
-				parseCalls += 1;
+				stubbornParseCalls += 1;
 				throw new Error("always bad");
 			},
 			repair: () => "fix it",
 		});
 		// Attach a handler synchronously: the second attempt rejects during the
 		// fake-timer flush, before `expect().rejects` would otherwise attach one.
-		const outcome = taskPromise.then(
+		const outcome = stubbornPromise.then(
 			(result) => ({ ok: true as const, result }),
 			(error: unknown) => ({ ok: false as const, error }),
 		);
@@ -314,7 +315,8 @@ describe("sidecar-worker", () => {
 		const result = await outcome;
 		if (result.ok) throw new Error("expected the task to fail after a single repair attempt");
 		expect(result.error).toBeInstanceOf(Error);
-		expect(parseCalls).toBe(2);
+		expect(stubbornParseCalls).toBe(2);
+		expect(seenPrompts.filter((prompt) => prompt.includes("fix it"))).toHaveLength(1);
 		vi.useRealTimers();
 	});
 });

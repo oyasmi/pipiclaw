@@ -48,7 +48,7 @@ describe("read tool", () => {
 		expect(executor.calls).toHaveLength(1);
 	});
 
-	it("reads text with offset and limit and reports remaining lines", async () => {
+	it("reads text with offset and limit, reports remaining lines, and rejects an offset past EOF", async () => {
 		const executor = new ScriptedExecutor([
 			{ code: 0, stdout: "5\n", stderr: "" },
 			{ code: 0, stdout: "line2\nline3\nline4\nline5\n", stderr: "" },
@@ -67,15 +67,11 @@ describe("read tool", () => {
 				text: "line2\nline3\n\n[2 more lines in file. Use offset=4 to continue]",
 			},
 		]);
-	});
 
-	it("rejects offsets beyond end of file", async () => {
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "2\n", stderr: "" }]);
-		const tool = createReadTool(executor);
-
-		await expect(tool.execute("call", { label: "read text", path: "notes.txt", offset: 5 })).rejects.toThrow(
-			"Offset 5 is beyond end of file (2 lines total)",
-		);
+		const beyond = new ScriptedExecutor([{ code: 0, stdout: "2\n", stderr: "" }]);
+		await expect(
+			createReadTool(beyond).execute("call", { label: "read text", path: "notes.txt", offset: 5 }),
+		).rejects.toThrow("Offset 5 is beyond end of file (2 lines total)");
 	});
 
 	it("reads empty files without inventing a line", async () => {
@@ -91,35 +87,29 @@ describe("read tool", () => {
 		expect(result.content).toEqual([{ type: "text", text: "" }]);
 	});
 
-	it("reports oversized first lines with a bash hint", async () => {
+	it("truncates oversized reads and reports how to continue (byte-limited line, next offset)", async () => {
 		const firstLine = "x".repeat(DEFAULT_MAX_BYTES + 256);
-		const executor = new ScriptedExecutor([
+		const oversized = new ScriptedExecutor([
 			{ code: 0, stdout: "0\n", stderr: "" },
 			{ code: 0, stdout: `${firstLine}\n`, stderr: "" },
 		]);
-		const tool = createReadTool(executor);
+		const hugeResult = await createReadTool(oversized).execute("call", { label: "read text", path: "huge.txt" });
 
-		const result = await tool.execute("call", { label: "read text", path: "huge.txt" });
-
-		expect(result.details?.truncation?.firstLineExceedsLimit).toBe(true);
-		expect(result.content[0]).toMatchObject({
+		expect(hugeResult.details?.truncation?.firstLineExceedsLimit).toBe(true);
+		expect(hugeResult.content[0]).toMatchObject({
 			type: "text",
 			text: expect.stringContaining("Use bash: sed -n '1p' huge.txt | head -c"),
 		});
-	});
 
-	it("truncates long files and reports the next offset", async () => {
 		const longContent = Array.from({ length: DEFAULT_MAX_LINES + 10 }, (_, index) => `line ${index + 1}`).join("\n");
-		const executor = new ScriptedExecutor([
+		const longExecutor = new ScriptedExecutor([
 			{ code: 0, stdout: `${DEFAULT_MAX_LINES + 10}\n`, stderr: "" },
 			{ code: 0, stdout: longContent, stderr: "" },
 		]);
-		const tool = createReadTool(executor);
+		const longResult = await createReadTool(longExecutor).execute("call", { label: "read text", path: "long.txt" });
 
-		const result = await tool.execute("call", { label: "read text", path: "long.txt" });
-
-		expect(result.details?.truncation?.truncated).toBe(true);
-		expect(result.content[0]).toMatchObject({
+		expect(longResult.details?.truncation?.truncated).toBe(true);
+		expect(longResult.content[0]).toMatchObject({
 			type: "text",
 			text: expect.stringContaining(`Use offset=${DEFAULT_MAX_LINES + 1} to continue`),
 		});
@@ -164,7 +154,7 @@ describe("read tool", () => {
 		expect(text).toContain("(empty directory)");
 	});
 
-	it("converts a PDF to text and applies offset/limit", async () => {
+	it("converts a PDF to text and applies offset/limit, surfacing pdftotext failures as hints", async () => {
 		const executor = new ScriptedExecutor([{ code: 0, stdout: "page one\npage two\npage three\n", stderr: "" }]);
 		const tool = createReadTool(executor);
 
@@ -175,20 +165,14 @@ describe("read tool", () => {
 		expect(text).toContain("page one");
 		expect(text).toContain("page two");
 		expect(text).toContain("Use offset=3 to continue");
-	});
 
-	it("reports a missing pdftotext with an install hint", async () => {
-		const executor = new ScriptedExecutor([{ code: 127, stdout: "", stderr: "" }]);
-		const tool = createReadTool(executor);
-		await expect(tool.execute("call", { label: "read pdf", path: "doc.pdf" })).rejects.toThrow(
+		const missing = new ScriptedExecutor([{ code: 127, stdout: "", stderr: "" }]);
+		await expect(createReadTool(missing).execute("call", { label: "read pdf", path: "doc.pdf" })).rejects.toThrow(
 			/pdftotext is not installed/,
 		);
-	});
 
-	it("degrades gracefully when a PDF yields no text", async () => {
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "   \n", stderr: "" }]);
-		const tool = createReadTool(executor);
-		await expect(tool.execute("call", { label: "read pdf", path: "scan.pdf" })).rejects.toThrow(
+		const scanned = new ScriptedExecutor([{ code: 0, stdout: "   \n", stderr: "" }]);
+		await expect(createReadTool(scanned).execute("call", { label: "read pdf", path: "scan.pdf" })).rejects.toThrow(
 			/scanned\/image-based/,
 		);
 	});

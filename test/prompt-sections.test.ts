@@ -67,7 +67,7 @@ function context(overrides: Partial<PromptBuildContext> = {}): PromptBuildContex
 }
 
 describe("system prompt structure", () => {
-	it("carries no trace of pi's default base prompt", () => {
+	it("carries no trace of pi's default base prompt or the periodic-silence protocol", () => {
 		const { text, footer } = buildPipiclawSystemPrompt(context());
 		const full = `${text}\n${footer}`;
 
@@ -75,6 +75,8 @@ describe("system prompt structure", () => {
 		expect(full).not.toContain("Pi documentation");
 		expect(full).not.toContain("Available tools:\n(none)");
 		expect(full).toContain("## Pipiclaw");
+		expect(text).not.toContain("[SILENT]");
+		expect(footer).not.toContain("[SILENT]");
 	});
 
 	it("uses unique, deterministically ordered section ids (no standalone tools section)", () => {
@@ -106,12 +108,25 @@ describe("system prompt structure", () => {
 		expect(first.text).not.toMatch(/\d{4}-\d{2}-\d{2}/);
 	});
 
-	it("keeps the runtime-authored prompt well under its unit budget", () => {
+	it("keeps runtime-authored sections inside their unit and char budgets, with no error diagnostics even over catalogs it does not own", () => {
 		const build = buildPipiclawSystemPrompt(context());
 
 		expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(800);
 		expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(RUNTIME_PROMPT_HARD_UNITS);
 		expect(build.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toEqual([]);
+		for (const definition of MAIN_PROMPT_SECTIONS) {
+			const resolved = build.sections.find((section) => section.id === definition.id);
+			if (resolved) expect(resolved.injectedChars).toBeLessThanOrEqual(definition.maxChars);
+		}
+
+		// Skills are pi's to render (spec 026 §9): no Pipiclaw budget warning, no error.
+		const skills = Array.from({ length: 100 }, (_, index) => ({
+			name: `skill-${index}`,
+			description: "d".repeat(200),
+		}));
+		const overCatalog = buildPipiclawSystemPrompt(context({ skills }));
+		expect(overCatalog.diagnostics.filter((diagnostic) => diagnostic.sectionId === "skills")).toEqual([]);
+		expect(overCatalog.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toEqual([]);
 	});
 
 	it("no longer repeats the tool catalog, while every tool still rides the build context", () => {
@@ -137,23 +152,6 @@ describe("system prompt structure", () => {
 	it("gates the memory_manage invariant on the tool being registered", () => {
 		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_manage` in the same turn");
 		expect(buildPipiclawSystemPrompt(context({ tools: tools(["read"]) })).text).not.toContain("`memory_manage`");
-	});
-
-	it("does not carry the periodic silence protocol in the normal prompt", () => {
-		const build = buildPipiclawSystemPrompt(context());
-		expect(build.text).not.toContain("[SILENT]");
-		expect(build.footer).not.toContain("[SILENT]");
-	});
-
-	it("keeps every runtime-authored section inside its char budget", () => {
-		const build = buildPipiclawSystemPrompt(context());
-		const errors = build.diagnostics.filter((diagnostic) => diagnostic.level === "error");
-
-		expect(errors).toEqual([]);
-		for (const definition of MAIN_PROMPT_SECTIONS) {
-			const resolved = build.sections.find((section) => section.id === definition.id);
-			if (resolved) expect(resolved.injectedChars).toBeLessThanOrEqual(definition.maxChars);
-		}
 	});
 
 	it("restates the runtime boundary in a short footer appended after pi's tail", () => {
@@ -193,20 +191,17 @@ describe("tool schema budget", () => {
 		expect(measured.units).toBeGreaterThan(0);
 	});
 
-	it("reports the schemas against their target and stays quiet under it", () => {
-		const out = report({ chars: 20_000, units: TOOL_SCHEMA_TARGET_UNITS });
+	it("reports the schemas against their target — quiet under it, a warning once over", () => {
+		const under = report({ chars: 20_000, units: TOOL_SCHEMA_TARGET_UNITS });
 
-		expect(out).toContain(`${TOOL_SCHEMA_TARGET_UNITS.toLocaleString("en-US")} units`);
-		expect(out).not.toContain("over target");
-		expect(out).not.toContain("[warning] tools:");
-	});
+		expect(under).toContain(`${TOOL_SCHEMA_TARGET_UNITS.toLocaleString("en-US")} units`);
+		expect(under).not.toContain("over target");
+		expect(under).not.toContain("[warning] tools:");
 
-	it("raises a diagnostic once the schemas pass the target", () => {
-		const out = report({ chars: 40_000, units: TOOL_SCHEMA_TARGET_UNITS + 1 });
-
-		expect(out).toContain("over target");
-		expect(out).toContain("[warning] tools:");
-		expect(out).toContain("unregister a tool");
+		const over = report({ chars: 40_000, units: TOOL_SCHEMA_TARGET_UNITS + 1 });
+		expect(over).toContain("over target");
+		expect(over).toContain("[warning] tools:");
+		expect(over).toContain("unregister a tool");
 	});
 });
 
@@ -228,17 +223,14 @@ describe("runtime guide catalog", () => {
 });
 
 describe("configured sub-agents section", () => {
-	it("renders inline-usage guidance instead of disappearing when no sub-agent is defined", () => {
-		const build = buildPipiclawSystemPrompt(context({ subAgents: [] }));
-		expect(build.text).not.toContain("## Configured Sub-Agents");
-		expect(build.text).toContain("## Sub-Agents");
-		expect(build.text).toContain("inline `systemPrompt`");
-		const section = build.sections.find((section) => section.id === "subagents");
-		expect(section).toBeDefined();
-	});
+	it("renders inline guidance when no sub-agent is defined, and the configured catalog once one exists", () => {
+		const empty = buildPipiclawSystemPrompt(context({ subAgents: [] }));
+		expect(empty.text).not.toContain("## Configured Sub-Agents");
+		expect(empty.text).toContain("## Sub-Agents");
+		expect(empty.text).toContain("inline `systemPrompt`");
+		expect(empty.sections.find((section) => section.id === "subagents")).toBeDefined();
 
-	it("appears when at least one sub-agent is defined and the tool is on", () => {
-		const build = buildPipiclawSystemPrompt(
+		const populated = buildPipiclawSystemPrompt(
 			context({
 				subAgents: [
 					{
@@ -251,8 +243,8 @@ describe("configured sub-agents section", () => {
 				],
 			}),
 		);
-		expect(build.text).toContain("## Configured Sub-Agents");
-		expect(build.text).toContain("- reviewer — Reviews a diff");
+		expect(populated.text).toContain("## Configured Sub-Agents");
+		expect(populated.text).toContain("- reviewer — Reviews a diff");
 	});
 
 	it("groups the catalog by runtime · workload · mutates, external-heavy first, and marks unavailable roles (spec 040, D11)", () => {
@@ -337,40 +329,36 @@ describe("workspace resources in the prompt", () => {
 		expect(build.text.match(/<workspace_instructions/g)).toHaveLength(1);
 	});
 
-	it.each([
-		{ label: "SOUL", file: "SOUL.md", field: "soul" as const, budget: SOUL_BUDGET_UNITS },
-		{ label: "AGENTS", file: "AGENTS.md", field: "agents" as const, budget: AGENTS_BUDGET_UNITS },
-	])("injects $label whole under its unit budget and clips only just over it", ({ file, field, budget }) => {
-		const workspaceDir = makeTempDir();
+	it("injects SOUL and AGENTS whole under their unit budgets, clips only just over, and never lets one shrink the other", () => {
+		for (const [file, field, budget] of [
+			["SOUL.md", "soul", SOUL_BUDGET_UNITS],
+			["AGENTS.md", "agents", AGENTS_BUDGET_UNITS],
+		] as const) {
+			const workspaceDir = makeTempDir();
 
-		writeFileSync(join(workspaceDir, file), "字".repeat(budget - 1));
-		const under = loadWorkspacePromptResources(workspaceDir)[field];
-		expect(under?.truncated).toBe(false);
-		expect(under?.injectedUnits).toBe(budget - 1);
+			writeFileSync(join(workspaceDir, file), "字".repeat(budget - 1));
+			const under = loadWorkspacePromptResources(workspaceDir)[field];
+			expect(under?.truncated).toBe(false);
+			expect(under?.injectedUnits).toBe(budget - 1);
 
-		writeFileSync(join(workspaceDir, file), "字".repeat(budget + 1));
-		const over = loadWorkspacePromptResources(workspaceDir)[field];
-		expect(over?.truncated).toBe(true);
-		expect(over?.injectedUnits).toBeLessThanOrEqual(budget);
+			writeFileSync(join(workspaceDir, file), "字".repeat(budget + 1));
+			const over = loadWorkspacePromptResources(workspaceDir)[field];
+			expect(over?.truncated).toBe(true);
+			expect(over?.injectedUnits).toBeLessThanOrEqual(budget);
+
+			// A huge version of this resource must not push its sibling over budget.
+			const shared = makeTempDir();
+			const siblingField = field === "soul" ? ("agents" as const) : ("soul" as const);
+			writeFileSync(join(shared, file), "字".repeat(budget + 5_000));
+			writeFileSync(join(shared, field === "soul" ? "AGENTS.md" : "SOUL.md"), "Always run the tests.");
+			const resources = loadWorkspacePromptResources(shared);
+			expect(resources[field]?.truncated).toBe(true);
+			expect(resources[siblingField]?.truncated).toBe(false);
+		}
 	});
 
-	it("does not let a huge SOUL shrink AGENTS, or a huge AGENTS shrink SOUL", () => {
-		const workspaceDir = makeTempDir();
-		writeFileSync(join(workspaceDir, "SOUL.md"), "字".repeat(SOUL_BUDGET_UNITS + 5_000));
-		writeFileSync(join(workspaceDir, "AGENTS.md"), "Always run the tests.");
-		let resources = loadWorkspacePromptResources(workspaceDir);
-		expect(resources.soul?.truncated).toBe(true);
-		expect(resources.agents?.truncated).toBe(false);
-
-		writeFileSync(join(workspaceDir, "SOUL.md"), "Answer in Chinese.");
-		writeFileSync(join(workspaceDir, "AGENTS.md"), "字".repeat(AGENTS_BUDGET_UNITS + 5_000));
-		resources = loadWorkspacePromptResources(workspaceDir);
-		expect(resources.soul?.truncated).toBe(false);
-		expect(resources.agents?.truncated).toBe(true);
-	});
-
-	it("keeps user content from breaking out of its wrapper", () => {
-		const build = buildPipiclawSystemPrompt(
+	it("keeps user content from breaking out of its wrapper or pushing a runtime-authored section into truncation", () => {
+		const escaped = buildPipiclawSystemPrompt(
 			context({
 				soul: resource(
 					"/workspace/root/SOUL.md",
@@ -379,31 +367,17 @@ describe("workspace resources in the prompt", () => {
 			}),
 		);
 
-		expect(build.text).toContain("<\\/workspace_identity>");
-		expect(build.text.match(/<\/workspace_identity>/g)).toHaveLength(1);
-	});
+		expect(escaped.text).toContain("<\\/workspace_identity>");
+		expect(escaped.text.match(/<\/workspace_identity>/g)).toHaveLength(1);
 
-	it("does not warn or shrink over a large skills catalog it cannot trim", () => {
-		const skills = Array.from({ length: 100 }, (_, index) => ({
-			name: `skill-${index}`,
-			description: "d".repeat(200),
-		}));
-		const build = buildPipiclawSystemPrompt(context({ skills }));
-
-		// Skills are pi's to render (spec 026 §9): no Pipiclaw budget warning, no error.
-		expect(build.diagnostics.filter((diagnostic) => diagnostic.sectionId === "skills")).toEqual([]);
-		expect(build.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toEqual([]);
-	});
-
-	it("never lets user content push a runtime-authored section into truncation", () => {
-		const build = buildPipiclawSystemPrompt(
+		const atBudget = buildPipiclawSystemPrompt(
 			context({
 				soul: resource("/w/SOUL.md", "字".repeat(SOUL_BUDGET_UNITS)),
 				agents: resource("/w/AGENTS.md", "字".repeat(AGENTS_BUDGET_UNITS)),
 			}),
 		);
 
-		expect(build.sections.find((section) => section.id === "runtime.invariants")?.truncated).toBe(false);
-		expect(build.sections.find((section) => section.id === "runtime.boundary")?.truncated).toBe(false);
+		expect(atBudget.sections.find((section) => section.id === "runtime.invariants")?.truncated).toBe(false);
+		expect(atBudget.sections.find((section) => section.id === "runtime.boundary")?.truncated).toBe(false);
 	});
 });

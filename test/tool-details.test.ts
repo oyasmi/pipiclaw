@@ -43,30 +43,23 @@ async function run(inner: AgentTool<typeof schema>["execute"]) {
 }
 
 describe("details contract", () => {
-	it("stamps the registered kind onto a result that carries none", async () => {
-		const result = await run(async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }));
+	it("stamps the registered kind onto every result shape it wraps", async () => {
+		const unstamped = await run(async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }));
+		expect(toolResultDetails(unstamped)).toEqual({ kind: "task_manage" });
 
-		expect(toolResultDetails(result)).toEqual({ kind: "task_manage" });
-	});
-
-	it("preserves tool-specific detail fields while stamping kind", async () => {
-		const result = await run(async () => ({
+		const withFields = await run(async () => ({
 			content: [{ type: "text", text: "ok" }],
 			details: { op: "list", count: 3 },
 		}));
+		expect(withFields.details).toEqual({ op: "list", count: 3, kind: "task_manage" });
 
-		expect(result.details).toEqual({ op: "list", count: 3, kind: "task_manage" });
-	});
-
-	it("makes the registered name authoritative over a kind the tool set itself", async () => {
 		// Guards the drift this contract exists to prevent: a hand-written kind can no longer
 		// disagree with the name the tool is registered under.
-		const result = await run(async () => ({
+		const staleKind = await run(async () => ({
 			content: [{ type: "text", text: "ok" }],
 			details: { kind: "something_stale" },
 		}));
-
-		expect(toolResultDetails(result)?.kind).toBe("task_manage");
+		expect(toolResultDetails(staleKind)?.kind).toBe("task_manage");
 	});
 
 	it("reads no details off a malformed or absent result", () => {
@@ -78,14 +71,17 @@ describe("details contract", () => {
 });
 
 describe("recoverable rejection", () => {
-	it("returns a RecoverableToolError as a normal result the model can read", async () => {
-		const result = await run(async () => {
+	it("returns a RecoverableToolError as a normal result the model can read, without mislabeling ordinary results", async () => {
+		const rejected = await run(async () => {
 			throw new RecoverableToolError('action "create" requires an id.');
 		});
 
-		expect(result.content[0]).toEqual({ type: "text", text: 'Rejected: action "create" requires an id.' });
-		expect(isRecoverableRejection(result)).toBe(true);
-		expect(toolResultDetails(result)?.kind).toBe("task_manage");
+		expect(rejected.content[0]).toEqual({ type: "text", text: 'Rejected: action "create" requires an id.' });
+		expect(isRecoverableRejection(rejected)).toBe(true);
+		expect(toolResultDetails(rejected)?.kind).toBe("task_manage");
+
+		const ordinary = await run(async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }));
+		expect(isRecoverableRejection(ordinary)).toBe(false);
 	});
 
 	it("still throws a genuine failure, so the user keeps seeing it", async () => {
@@ -94,12 +90,6 @@ describe("recoverable rejection", () => {
 				throw new Error("Command blocked [network]");
 			}),
 		).rejects.toThrow("Command blocked [network]");
-	});
-
-	it("does not mark ordinary results as rejections", async () => {
-		const result = await run(async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }));
-
-		expect(isRecoverableRejection(result)).toBe(false);
 	});
 });
 
@@ -166,28 +156,24 @@ describe("rejections stay out of the user's chat", () => {
 		expect(respond).not.toHaveBeenCalled();
 	});
 
-	it("still shows an error bubble for a real tool failure", async () => {
+	it("still shows an error bubble for a real tool failure or a user-only scope decision", async () => {
 		const respond = vi.fn(async (_text: string, _final?: boolean) => {});
-		const ctx = createContext(respond);
+		const failureCtx = createContext(respond);
 
 		await endEvent(
-			ctx,
+			failureCtx,
 			{ content: [{ type: "text", text: "Command blocked [network]" }], details: { kind: "bash" } },
 			true,
 		);
 
 		expect(respond).toHaveBeenCalledTimes(1);
 		expect(String(respond.mock.calls[0][0])).toContain("Command blocked");
-	});
 
-	it("still shows an error bubble for a scope decision only the user can clear", async () => {
 		// A user-only scope decision is thrown as a plain Error, so it arrives with isError and
 		// must remain visible instead of being treated as model-fixable tool validation.
-		const respond = vi.fn(async (_text: string, _final?: boolean) => {});
-		const ctx = createContext(respond);
-
+		const scopeCtx = createContext(vi.fn(async (_text: string, _final?: boolean) => {}));
 		await endEvent(
-			ctx,
+			scopeCtx,
 			{
 				content: [{ type: "text", text: 'Task "x" requires a user decision outside its current scope' }],
 				details: { kind: "task_manage" },
@@ -195,8 +181,10 @@ describe("rejections stay out of the user's chat", () => {
 			true,
 		);
 
-		expect(respond).toHaveBeenCalledTimes(1);
-		expect(String(respond.mock.calls[0][0])).toContain("user decision outside its current scope");
+		expect(scopeCtx.respond).toHaveBeenCalledTimes(1);
+		expect(String((scopeCtx.respond as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain(
+			"user decision outside its current scope",
+		);
 	});
 });
 

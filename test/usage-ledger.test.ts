@@ -78,13 +78,20 @@ describe("usage ledger", () => {
 		expect(typeof sub?.ts).toBe("string");
 	});
 
-	it("keeps a zero-cost entry that still burned tokens, and its tokens are summarized", async () => {
+	it("keeps a zero-cost entry that still burned tokens, and skips one with neither tokens nor cost", async () => {
 		const ledger = createUsageLedger({ baseDir: dir });
 		recordAt(ledger, "2026-07-04T00:00:00Z", {
 			channelId: "c1",
 			kind: "turn",
 			model: "local",
 			usage: tokens,
+			cost: cost(0),
+		});
+		recordAt(ledger, "2026-07-04T00:00:00Z", {
+			channelId: "c1",
+			kind: "turn",
+			model: "silent",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			cost: cost(0),
 		});
 		await flush(ledger);
@@ -99,20 +106,7 @@ describe("usage ledger", () => {
 		expect(summary.entryCount).toBe(1);
 	});
 
-	it("skips an entry with neither tokens nor cost", async () => {
-		const ledger = createUsageLedger({ baseDir: dir });
-		recordAt(ledger, "2026-07-04T00:00:00Z", {
-			channelId: "c1",
-			kind: "turn",
-			model: "local",
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			cost: cost(0),
-		});
-		await flush(ledger);
-		expect(readMonth("2026-07")).toEqual([]);
-	});
-
-	it("keeps a zero/zero entry when usage or cost is explicitly unknown, rather than dropping it as noise (spec 040, T7)", async () => {
+	it("keeps zero/zero entries when usage or cost is explicitly unknown rather than dropping them as noise, and treats pre-T7 entries as known (spec 040, T7)", async () => {
 		const ledger = createUsageLedger({ baseDir: dir });
 		// `exec`: neither tokens nor cost is ever known.
 		recordAt(ledger, "2026-07-04T00:00:00Z", {
@@ -153,25 +147,24 @@ describe("usage ledger", () => {
 		// "these runs were free".
 		expect(summary.totalCost).toBe(0);
 		expect(summary.totalTokens).toBe(tokens.total);
-	});
 
-	it("treats a pre-T7 entry with no usageKnown/costKnown field as known, not unknown (backward compatibility)", async () => {
-		const ledger = createUsageLedger({ baseDir: dir });
-		recordAt(ledger, "2026-07-04T00:00:00Z", {
+		// Backward compatibility: an entry with no usageKnown/costKnown fields at all counts as known.
+		// (Own baseDir, so the unknown-flag records above stay out of this summary.)
+		const legacy = createUsageLedger({ baseDir: join(dir, "legacy") });
+		recordAt(legacy, "2026-07-04T00:00:00Z", {
 			channelId: "c1",
 			kind: "turn",
 			model: "m/a",
 			usage: tokens,
 			cost: cost(0.1),
 		});
-		await flush(ledger);
-
-		const summary = await ledger.summarize({
+		await flush(legacy);
+		const legacySummary = await legacy.summarize({
 			since: new Date("2026-07-01T00:00:00Z"),
 			until: new Date("2026-07-31T00:00:00Z"),
 		});
-		expect(summary.unknownCostCount).toBe(0);
-		expect(summary.unknownUsageCount).toBe(0);
+		expect(legacySummary.unknownCostCount).toBe(0);
+		expect(legacySummary.unknownUsageCount).toBe(0);
 	});
 
 	it("records missing channelId as (untracked) and warns", async () => {
@@ -191,7 +184,7 @@ describe("usage ledger", () => {
 		expect(warnSpy).toHaveBeenCalled();
 	});
 
-	it("aggregates by kind/model/channel and honors channel + time filters", async () => {
+	it("aggregates by kind/model/channel, honors channel + time filters, and crosses month boundaries", async () => {
 		const ledger = createUsageLedger({ baseDir: dir });
 		recordAt(ledger, "2026-07-10T00:00:00Z", {
 			channelId: "c1",
@@ -227,10 +220,8 @@ describe("usage ledger", () => {
 		const c1 = await ledger.summarize({ ...window, channelId: "c1" });
 		expect(c1.totalCost).toBeCloseTo(0.3);
 		expect(c1.byModel["m/b"]).toBeUndefined();
-	});
 
-	it("summarizes across a month boundary", async () => {
-		const ledger = createUsageLedger({ baseDir: dir });
+		// A window spanning June and July reads both monthly files.
 		recordAt(ledger, "2026-06-30T12:00:00Z", {
 			channelId: "c1",
 			kind: "turn",
@@ -239,20 +230,11 @@ describe("usage ledger", () => {
 			cost: cost(0.1),
 		});
 		await flush(ledger);
-		recordAt(ledger, "2026-07-01T12:00:00Z", {
-			channelId: "c1",
-			kind: "turn",
-			model: "m/a",
-			usage: tokens,
-			cost: cost(0.3),
-		});
-		await flush(ledger);
-
-		const summary = await ledger.summarize({
+		const spanning = await ledger.summarize({
 			since: new Date("2026-06-29T00:00:00Z"),
 			until: new Date("2026-07-02T00:00:00Z"),
 		});
-		expect(summary.totalCost).toBeCloseTo(0.4);
-		expect(summary.entryCount).toBe(2);
+		expect(spanning.totalCost).toBeCloseTo(0.1);
+		expect(spanning.entryCount).toBe(1);
 	});
 });

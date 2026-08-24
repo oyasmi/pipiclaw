@@ -17,6 +17,7 @@ import {
 } from "../src/memory/metadata.js";
 import { findPreviousUserText, recallRelevantMemory, tokenizeRecallText } from "../src/memory/recall.js";
 import { runSidecarTask } from "../src/memory/sidecar-worker.js";
+import { splitH2Sections } from "../src/shared/markdown-sections.js";
 import { countPromptUnits } from "../src/shared/prompt-units.js";
 import { setupChannelFiles, useTempDirs } from "./helpers/fixtures.js";
 
@@ -798,5 +799,27 @@ describe("memory recall: source priority and model rerank", () => {
 			resolveApiKey: async () => "",
 		});
 		expect(noOverlapResult.items.some((item) => item.source === "channel-history")).toBe(false);
+	});
+});
+
+// Moved from the former test/markdown-sections.test.ts: this is the shared splitter the memory
+// candidates and consolidation passes above are built on.
+describe("splitH2Sections", () => {
+	it("splits markdown sections by level-two headings", () => {
+		expect(
+			splitH2Sections(`# Root
+
+## First
+
+Alpha
+
+## Second
+
+Beta`),
+		).toEqual([
+			{ heading: "First", content: "Alpha" },
+			{ heading: "Second", content: "Beta" },
+		]);
+		expect(splitH2Sections("")).toEqual([]);
 	});
 });

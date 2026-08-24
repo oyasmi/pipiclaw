@@ -14,18 +14,18 @@ describe.skipIf(process.platform !== "linux")("host-process (Linux process-group
 		const leader = spawn("/bin/sh", ["-c", "sleep 2 & exit 0"], { detached: true });
 		const pgid = leader.pid!;
 		await new Promise((resolve) => leader.once("exit", resolve));
-		await sleep(100);
+		await sleep(30);
 		expect(isProcessGroupAlive(pgid)).toBe(true); // the descendant is still running
 
 		await killProcessGroup(pgid, 50);
-		await sleep(100);
+		await sleep(30);
 		expect(isProcessGroupAlive(pgid)).toBe(false);
 	}, 10_000);
 
 	it("killProcessGroup on an already-gone group is a harmless no-op", async () => {
 		const child = spawn("true", [], { detached: true });
 		await new Promise((resolve) => child.once("exit", resolve));
-		await sleep(50);
+		await sleep(10);
 		await expect(killProcessGroup(child.pid!, 10)).resolves.toBeUndefined();
 	});
 
@@ -35,7 +35,7 @@ describe.skipIf(process.platform !== "linux")("host-process (Linux process-group
 	it("reapProcessGroup on an already-empty group returns immediately, without waiting out a grace period", async () => {
 		const child = spawn("true", [], { detached: true });
 		await new Promise((resolve) => child.once("exit", resolve));
-		await sleep(50);
+		await sleep(10);
 		expect(isProcessGroupAlive(child.pid!)).toBe(false);
 
 		const start = Date.now();
@@ -51,11 +51,11 @@ describe.skipIf(process.platform !== "linux")("host-process (Linux process-group
 		const leader = spawn("/bin/sh", ["-c", "sleep 2 & exit 0"], { detached: true });
 		const pgid = leader.pid!;
 		await new Promise((resolve) => leader.once("exit", resolve));
-		await sleep(100);
+		await sleep(30);
 		expect(isProcessGroupAlive(pgid)).toBe(true);
 
-		await reapProcessGroup(pgid);
-		await sleep(400); // reapProcessGroup's own grace on this branch is 300ms
+		await reapProcessGroup(pgid); // resolves only after its own 300ms grace on this branch
+		await sleep(30);
 		expect(isProcessGroupAlive(pgid)).toBe(false);
 	}, 10_000);
 });

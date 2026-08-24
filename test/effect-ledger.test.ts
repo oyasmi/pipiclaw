@@ -40,13 +40,10 @@ describe("effect ledger (spec 031, D7)", () => {
 		expect(taskEffectCount("dm_1", "alpha")).toBe(0);
 	});
 
-	it("treats world-changing tools as effects", () => {
+	it("classifies tools: world-changers count, read-only and self-reporting tools do not", () => {
 		for (const tool of ["write", "edit", "send_media", "subagent"]) {
 			expect(isEffectfulTool(tool, undefined)).toBe(true);
 		}
-	});
-
-	it("does not treat read-only or self-reporting tools as effects", () => {
 		// task_manage and memory_manage are the model's own account of its work; counting them
 		// would restore exactly the bypass D7 exists to close.
 		for (const tool of [
@@ -62,14 +59,12 @@ describe("effect ledger (spec 031, D7)", () => {
 		}
 	});
 
-	it("counts a background launch, and a synchronous command that ran clean and returned output", () => {
+	it("scores bash outcomes: a background launch or a clean command with output counts; failures and silence do not", () => {
 		expect(isEffectfulTool("bash", { kind: "bash", async: { state: "running", jobId: "abc" } })).toBe(true);
 		// The shape this matters for: a turn that drives an external coding agent synchronously
 		// touches no file the runtime can see, and used to score zero.
 		expect(isEffectfulTool("bash", { kind: "bash", exitCode: 0, producedOutput: true })).toBe(true);
-	});
 
-	it("does not count a synchronous command that failed or returned nothing", () => {
 		expect(isEffectfulTool("bash", { kind: "bash", exitCode: 1, producedOutput: true })).toBe(false);
 		expect(isEffectfulTool("bash", { kind: "bash", exitCode: 0, producedOutput: false })).toBe(false);
 		// A result carrying no outcome at all (older shape, or a rejection) claims nothing.

@@ -2,13 +2,11 @@ import { describe, expect, it } from "vitest";
 import { formatSize, truncateHead, truncateTail } from "../src/tools/truncate.js";
 
 describe("truncate utilities", () => {
-	it("formats sizes in bytes, kilobytes, and megabytes", () => {
+	it("formats sizes and truncates from the head by line count and byte limit", () => {
 		expect(formatSize(999)).toBe("999B");
 		expect(formatSize(1536)).toBe("1.5KB");
 		expect(formatSize(2 * 1024 * 1024)).toBe("2.0MB");
-	});
 
-	it("truncates from the head by line count and byte limit", () => {
 		const byLines = truncateHead("a\nb\nc", { maxLines: 2, maxBytes: 100 });
 		expect(byLines).toMatchObject({
 			content: "a\nb",
@@ -24,11 +22,9 @@ describe("truncate utilities", () => {
 			truncatedBy: "bytes",
 			firstLineExceedsLimit: false,
 		});
-	});
 
-	it("reports when the first line exceeds the byte limit", () => {
-		const result = truncateHead("abcdefghij", { maxBytes: 5 });
-		expect(result).toMatchObject({
+		const oversizedFirstLine = truncateHead("abcdefghij", { maxBytes: 5 });
+		expect(oversizedFirstLine).toMatchObject({
 			content: "",
 			truncated: true,
 			truncatedBy: "bytes",

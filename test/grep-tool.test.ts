@@ -64,31 +64,23 @@ describe("grep tool", () => {
 		expect(text).toContain("capped at 20 matches");
 	});
 
-	it("paginates files and reports the next skip offset", async () => {
+	it("paginates files, reports the next skip offset, and honors it on the next call", async () => {
 		const lines: string[] = [];
 		for (let f = 0; f < 25; f++) {
 			lines.push(`f${String(f).padStart(2, "0")}.txt:1:hit`);
 		}
 		const { tool } = makeTool(lines.join("\n"));
-		const text = await run(tool, { pattern: "hit" });
+		const firstPage = await run(tool, { pattern: "hit" });
 
-		expect(text).toContain("== f00.txt ==");
-		expect(text).toContain("== f19.txt ==");
-		expect(text).not.toContain("== f20.txt ==");
-		expect(text).toContain("Use skip=20 for the next page");
-	});
+		expect(firstPage).toContain("== f00.txt ==");
+		expect(firstPage).toContain("== f19.txt ==");
+		expect(firstPage).not.toContain("== f20.txt ==");
+		expect(firstPage).toContain("Use skip=20 for the next page");
 
-	it("honors the skip offset", async () => {
-		const lines: string[] = [];
-		for (let f = 0; f < 25; f++) {
-			lines.push(`f${String(f).padStart(2, "0")}.txt:1:hit`);
-		}
-		const { tool } = makeTool(lines.join("\n"));
-		const text = await run(tool, { pattern: "hit", skip: 20 });
-
-		expect(text).toContain("== f20.txt ==");
-		expect(text).toContain("== f24.txt ==");
-		expect(text).not.toContain("== f19.txt ==");
+		const secondPage = await run(tool, { pattern: "hit", skip: 20 });
+		expect(secondPage).toContain("== f20.txt ==");
+		expect(secondPage).toContain("== f24.txt ==");
+		expect(secondPage).not.toContain("== f19.txt ==");
 	});
 
 	it("filters files by glob on the basename", async () => {
@@ -110,24 +102,20 @@ describe("grep tool", () => {
 		expect(text).not.toContain("node_modules");
 	});
 
-	it("reports no matches with a widening suggestion when grep exits 1", async () => {
-		const { tool } = makeTool("", 1);
-		const text = await run(tool, { pattern: "hit" });
+	it("reports no matches with a widening suggestion on exit 1, and throws a helpful error on exit >= 2", async () => {
+		const noMatches = makeTool("", 1);
+		const text = await run(noMatches.tool, { pattern: "hit" });
 		expect(text).toContain("No matches found");
 		expect(text).toContain("Try a broader pattern");
+
+		const failed = makeTool("", 2, "grep: invalid option");
+		await expect(run(failed.tool, { pattern: "[" })).rejects.toThrow(/grep failed/);
 	});
 
-	it("throws a helpful error when grep fails (exit >= 2)", async () => {
-		const { tool } = makeTool("", 2, "grep: invalid option");
-		await expect(run(tool, { pattern: "[" })).rejects.toThrow(/grep failed/);
-	});
+	it("validates the pattern and passes ERE plus the pattern safely to grep", async () => {
+		const empty = makeTool("");
+		await expect(run(empty.tool, { pattern: "   " })).rejects.toThrow(/must not be empty/);
 
-	it("rejects an empty pattern", async () => {
-		const { tool } = makeTool("");
-		await expect(run(tool, { pattern: "   " })).rejects.toThrow(/must not be empty/);
-	});
-
-	it("passes ERE and the pattern safely to grep", async () => {
 		const { tool, commands } = makeTool("a.txt:1:hit");
 		await run(tool, { pattern: "foo|bar", caseSensitive: false });
 		expect(commands[0]).toContain("-E");

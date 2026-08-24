@@ -83,16 +83,14 @@ describe("bash tool", () => {
 		expect(executor.calls.map((c) => c.command)).toEqual(["cat notes.txt"]);
 	});
 
-	it("rejects async execution when no job manager is available", async () => {
-		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
-		const tool = createBashTool(executor);
+	it("requires a job manager for async runs, and starts a background job when one is available", async () => {
+		const plainExecutor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
+		const bare = createBashTool(plainExecutor);
 
-		await expect(tool.execute("call", { label: "long", command: "sleep 100", async: true })).rejects.toThrow(
+		await expect(bare.execute("call", { label: "long", command: "sleep 100", async: true })).rejects.toThrow(
 			/Background execution is not available/,
 		);
-	});
 
-	it("starts a background job and returns immediately when async with a job manager", async () => {
 		const executor = new RecordingExecutor(async (command) => {
 			// The launch wrapper backgrounds the command and echoes the nohup PID.
 			if (command.includes("nohup")) {
@@ -154,7 +152,7 @@ describe("bash tool", () => {
 		expect(result.details).toMatchObject({ exitCode: 7 });
 	});
 
-	it("truncates long output and spills the full log to a temp file", async () => {
+	it("spills long output to a temp file, and still returns truncated output when the spill write fails", async () => {
 		const output = Array.from(
 			{ length: DEFAULT_MAX_LINES + 15 },
 			(_, index) => `line ${index + 1} ${"x".repeat(400)}`,
@@ -174,22 +172,14 @@ describe("bash tool", () => {
 		// One local write; no second process and no 10MB copy back through a pipe.
 		expect(executor.calls).toHaveLength(1);
 		expect(writeFileMock).toHaveBeenCalledWith(details.fullOutputPath, output, { mode: 0o600 });
-	});
 
-	it("still returns truncated output when the spill write fails", async () => {
-		const output = Array.from(
-			{ length: DEFAULT_MAX_LINES + 15 },
-			(_, index) => `line ${index + 1} ${"x".repeat(400)}`,
-		).join("\n");
+		// A failing spill degrades to the truncated text only — no path, no "Full output:" pointer.
 		writeFileMock.mockRejectedValueOnce(new Error("disk full") as never);
-		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: output, stderr: "" }));
-		const tool = createBashTool(executor);
+		const failed = await tool.execute("call", { label: "run", command: "printf ..." });
+		const failedDetails = failed.details as { fullOutputPath?: string };
 
-		const result = await tool.execute("call", { label: "run", command: "printf ..." });
-		const details = result.details as { fullOutputPath?: string };
-
-		expect(details.fullOutputPath).toBeUndefined();
-		expect(result.content[0]).toMatchObject({
+		expect(failedDetails.fullOutputPath).toBeUndefined();
+		expect(failed.content[0]).toMatchObject({
 			type: "text",
 			text: expect.not.stringContaining("Full output:"),
 		});
@@ -221,22 +211,19 @@ describe("bash tool", () => {
 			type: "text",
 			text: expect.stringContaining("async: true"),
 		});
-	});
 
-	it("still spills to a temp file when a timed-out command's partial output is large", async () => {
-		const output = Array.from(
+		// The same timeout path still spills when the partial output alone exceeds the limits.
+		const largeOutput = Array.from(
 			{ length: DEFAULT_MAX_LINES + 15 },
 			(_, index) => `line ${index + 1} ${"x".repeat(400)}`,
 		).join("\n");
-		const executor = new RecordingExecutor(async () => {
-			throw new CommandTerminatedError("timeout", output, "", 5);
+		const spillingExecutor = new RecordingExecutor(async () => {
+			throw new CommandTerminatedError("timeout", largeOutput, "", 5);
 		});
-		const tool = createBashTool(executor);
+		const spilled = await createBashTool(spillingExecutor).execute("call", { label: "run", command: "sleep 100" });
+		const spilledDetails = spilled.details as { fullOutputPath?: string; timedOut?: boolean };
 
-		const result = await tool.execute("call", { label: "run", command: "sleep 100" });
-		const details = result.details as { fullOutputPath?: string; timedOut?: boolean };
-
-		expect(details.timedOut).toBe(true);
-		expect(details.fullOutputPath).toMatch(/^\/tmp\/pipiclaw-bash-[0-9a-f]+\.log$/);
+		expect(spilledDetails.timedOut).toBe(true);
+		expect(spilledDetails.fullOutputPath).toMatch(/^\/tmp\/pipiclaw-bash-[0-9a-f]+\.log$/);
 	});
 });

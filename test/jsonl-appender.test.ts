@@ -23,25 +23,19 @@ describe("jsonl-appender", () => {
 			.map((line) => JSON.parse(line));
 	}
 
-	it("appends records as newline-delimited JSON, lazily creating the directory", async () => {
+	it("appends newline-delimited JSON, lazily creating the directory, without interleaving concurrent appends", async () => {
 		const path = join(dir, "nested", "runtime.jsonl");
 		const appender = createJsonlAppender({ path });
 
 		await appender.append({ a: 1 });
 		await appender.append({ b: "two" });
-
 		expect(readLines(path)).toEqual([{ a: 1 }, { b: "two" }]);
-	});
-
-	it("serializes concurrent appends without interleaving", async () => {
-		const path = join(dir, "runtime.jsonl");
-		const appender = createJsonlAppender({ path });
 
 		await Promise.all(Array.from({ length: 50 }, (_, i) => appender.append({ i })));
-
 		const lines = readLines(path) as { i: number }[];
-		expect(lines).toHaveLength(50);
-		expect(new Set(lines.map((l) => l.i)).size).toBe(50);
+		expect(lines).toHaveLength(52);
+		// Every concurrent append landed whole: 50 records, each `i` exactly once.
+		expect(new Set(lines.slice(2).map((l) => l.i)).size).toBe(50);
 	});
 
 	it("rotates on size limit and keeps maxRotations backups", async () => {
@@ -60,43 +54,36 @@ describe("jsonl-appender", () => {
 		expect(existsSync(`${path}.3`)).toBe(false);
 	});
 
-	it("routes appends to monthly files via pathFor", async () => {
-		const appender = createJsonlAppender({
+	it("routes appends via pathFor and degrades safely on I/O failure instead of throwing", async () => {
+		const routed = createJsonlAppender({
 			pathFor: (now) => join(dir, `usage-${now.getUTCFullYear()}-${now.getUTCMonth() + 1}.jsonl`),
 		});
-
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-01-15T00:00:00Z"));
-		await appender.append({ month: "jan" });
+		await routed.append({ month: "jan" });
 		vi.setSystemTime(new Date("2026-02-15T00:00:00Z"));
-		await appender.append({ month: "feb" });
+		await routed.append({ month: "feb" });
 		vi.useRealTimers();
-
 		expect(readLines(join(dir, "usage-2026-1.jsonl"))).toEqual([{ month: "jan" }]);
 		expect(readLines(join(dir, "usage-2026-2.jsonl"))).toEqual([{ month: "feb" }]);
-	});
 
-	it("never throws on write failure and logs one safe fallback warning", async () => {
+		// A soft append never throws and logs one safe fallback warning.
 		const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		// Point at a path whose parent is a file, so mkdir/append fails.
 		const filePath = join(dir, "blocker");
-		const appender = createJsonlAppender({ path: filePath });
-		await appender.append({ ok: true }); // creates the file "blocker"
-
+		const blocking = createJsonlAppender({ path: filePath });
+		await blocking.append({ ok: true }); // creates the file "blocker"
 		const bad = createJsonlAppender({ path: join(filePath, "child.jsonl") });
 		await expect(bad.append({ x: 1 })).resolves.toBeUndefined();
 		await expect(bad.append({ x: 2 })).resolves.toBeUndefined();
-
 		expect(writeSpy).toHaveBeenCalledTimes(1);
 		expect(String(writeSpy.mock.calls[0]?.[0])).toContain("runtime.log_sink.failed");
-	});
 
-	it("strict append rejects capacity and I/O failures", async () => {
+		// A strict append still rejects capacity and I/O failures.
 		const directoryTarget = join(dir, "not-a-file");
 		mkdirSync(directoryTarget);
 		const broken = createJsonlAppender({ path: directoryTarget });
 		await expect(broken.appendStrict({ security: true })).rejects.toThrow();
-
 		const full = createJsonlAppender({ path: join(dir, "full.jsonl"), maxPendingRecords: 0 });
 		await expect(full.appendStrict({ security: true })).rejects.toThrow("queue limit");
 	});
