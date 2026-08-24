@@ -14,23 +14,7 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe("run queue drain deadline", () => {
-	it("releases the caller when an enqueued job stalls past the deadline", async () => {
-		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
-		const { queue, drain } = createRunQueue();
-		const stalled = createDeferred();
-		queue.enqueue(() => stalled.promise, "stalled delivery");
-
-		await drain(20);
-
-		expect(warnSpy).toHaveBeenCalledWith(
-			expect.stringContaining("drain deadline exceeded"),
-			expect.stringContaining("timed out"),
-		);
-		stalled.resolve();
-		warnSpy.mockRestore();
-	});
-
-	it("still waits for work that finishes inside the deadline", async () => {
+	it("waits for work that finishes in time and releases the caller when a job stalls past the deadline", async () => {
 		const { queue, drain } = createRunQueue();
 		let done = false;
 		queue.enqueue(async () => {
@@ -40,6 +24,20 @@ describe("run queue drain deadline", () => {
 
 		await drain(5_000);
 		expect(done).toBe(true);
+
+		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const stalledQueue = createRunQueue();
+		const stalled = createDeferred();
+		stalledQueue.queue.enqueue(() => stalled.promise, "stalled delivery");
+
+		await stalledQueue.drain(20);
+
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining("drain deadline exceeded"),
+			expect.stringContaining("timed out"),
+		);
+		stalled.resolve();
+		warnSpy.mockRestore();
 	});
 });
 
@@ -112,42 +110,44 @@ describe("SessionResourceGate refresh detachment", () => {
 });
 
 describe("forceEndStuckTurnAfterStop", () => {
-	it("force-releases a turn that never ends, and notifies the channel", async () => {
+	it("force-releases a turn that never ends, but does nothing when it ends within the grace window", async () => {
 		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
-		const turn = createFakeTurnState();
-		turn.beginTurn("stuck work");
+
+		// Ends in time: no force, no notification.
+		const timely = createFakeTurnState();
+		timely.beginTurn("normal work");
+		setTimeout(() => timely.endTurn(), 10);
+		const silentNotify = vi.fn(async () => {});
+
+		expect(
+			await forceEndStuckTurnAfterStop({
+				channelId: "dm_tester",
+				runner: timely as never,
+				graceMs: 500,
+				pollMs: 5,
+				notify: silentNotify,
+			}),
+		).toBe(false);
+		expect(silentNotify).not.toHaveBeenCalled();
+
+		// Stuck past the grace window: force-released and the channel notified.
+		const stuck = createFakeTurnState();
+		stuck.beginTurn("stuck work");
 		const notify = vi.fn(async () => {});
 
-		const forced = await forceEndStuckTurnAfterStop({
-			channelId: "dm_tester",
-			runner: turn as never,
-			graceMs: 30,
-			pollMs: 5,
-			notify,
-		});
-
-		expect(forced).toBe(true);
-		expect(turn.isBusy()).toBe(false);
+		expect(
+			await forceEndStuckTurnAfterStop({
+				channelId: "dm_tester",
+				runner: stuck as never,
+				graceMs: 30,
+				pollMs: 5,
+				notify,
+			}),
+		).toBe(true);
+		expect(stuck.isBusy()).toBe(false);
 		expect(notify).toHaveBeenCalledTimes(1);
+
 		warnSpy.mockRestore();
-	});
-
-	it("does nothing when the turn ends within the grace window", async () => {
-		const turn = createFakeTurnState();
-		turn.beginTurn("normal work");
-		setTimeout(() => turn.endTurn(), 10);
-		const notify = vi.fn(async () => {});
-
-		const forced = await forceEndStuckTurnAfterStop({
-			channelId: "dm_tester",
-			runner: turn as never,
-			graceMs: 500,
-			pollMs: 5,
-			notify,
-		});
-
-		expect(forced).toBe(false);
-		expect(notify).not.toHaveBeenCalled();
 	});
 
 	it("ignores the stuck turn's own late release so the next turn keeps its busy state", async () => {

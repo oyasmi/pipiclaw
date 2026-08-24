@@ -49,14 +49,18 @@ afterEach(() => {
 });
 
 describe("parseArgs", () => {
-	it("accepts a bare invocation and an explicit `run` token", () => {
+	it("routes CLI arguments: bare/run invocations, --help listing, and unknown-option rejection", () => {
 		const paths = createBootstrapPaths();
 		expect(() => parseArgs(["node", "pipiclaw"], paths, createIO())).not.toThrow();
 		expect(() => parseArgs(["node", "pipiclaw", "run"], paths, createIO())).not.toThrow();
-	});
 
-	it("rejects an unknown option with a non-zero exit", () => {
-		const paths = createBootstrapPaths();
+		const helpIo = createIO();
+		expect(() => parseArgs(["node", "pipiclaw", "--help"], paths, helpIo)).toThrow(BootstrapExitError);
+		const help = helpIo.log.mock.calls.flat().join("\n");
+		expect(help).toContain("run");
+		expect(help).toContain("tui");
+		expect(help).toContain("auth");
+
 		const io = createIO();
 		try {
 			parseArgs(["node", "pipiclaw", "--bogus"], paths, io);
@@ -66,16 +70,6 @@ describe("parseArgs", () => {
 			expect((err as BootstrapExitError).code).toBe(1);
 		}
 		expect(io.error).toHaveBeenCalledWith("Unknown option: --bogus");
-	});
-
-	it("lists all commands in --help", () => {
-		const paths = createBootstrapPaths();
-		const io = createIO();
-		expect(() => parseArgs(["node", "pipiclaw", "--help"], paths, io)).toThrow(BootstrapExitError);
-		const help = io.log.mock.calls.flat().join("\n");
-		expect(help).toContain("run");
-		expect(help).toContain("tui");
-		expect(help).toContain("auth");
 	});
 });
 
@@ -260,19 +254,13 @@ describe("isVerifiedJobWake", () => {
 		};
 	}
 
-	it("accepts a finished job whose own contract names the claimed task", () => {
+	it("accepts a finished job whose own contract names the claimed task, and nothing else", () => {
 		expect(isVerifiedJobWake([job()], "job-1", "T-1")).toBe(true);
-	});
-
-	it("rejects a job id that does not exist on this channel (a forged claim)", () => {
+		// A forged job id that does not exist on this channel.
 		expect(isVerifiedJobWake([job()], "job-does-not-exist", "T-1")).toBe(false);
-	});
-
-	it("rejects when the named job's own taskId does not match the claimed one", () => {
+		// The named job's own taskId must match the claimed one.
 		expect(isVerifiedJobWake([job({ taskId: "T-other" })], "job-1", "T-1")).toBe(false);
-	});
-
-	it("rejects a job that is still running — it cannot have produced a completion wake yet", () => {
+		// A still-running job cannot have produced a completion wake yet.
 		expect(isVerifiedJobWake([job({ status: "running" })], "job-1", "T-1")).toBe(false);
 	});
 });
@@ -308,19 +296,13 @@ describe("isVerifiedDelegationWake", () => {
 		};
 	}
 
-	it("accepts a settled run whose own record names the claimed task", () => {
+	it("accepts a settled run whose own record names the claimed task, and nothing else", () => {
 		expect(isVerifiedDelegationWake(record(), "T-1")).toBe(true);
-	});
-
-	it("rejects an unknown runId (a forged claim)", () => {
+		// An unknown runId is a forged claim.
 		expect(isVerifiedDelegationWake(undefined, "T-1")).toBe(false);
-	});
-
-	it("rejects when the named run's own taskId does not match the claimed one", () => {
+		// The named run's own taskId must match the claimed one.
 		expect(isVerifiedDelegationWake(record({ taskId: "T-other" }), "T-1")).toBe(false);
-	});
-
-	it("rejects a run that has not settled yet — it cannot have produced a completion wake", () => {
+		// A run that has not settled cannot have produced a completion wake.
 		expect(isVerifiedDelegationWake(record({ settledAt: undefined }), "T-1")).toBe(false);
 	});
 });

@@ -209,33 +209,7 @@ describe("DurableDispatchService", () => {
 		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.status).toBe("active");
 	});
 
-	it("renews the lease of a turn this process is still running (spec 031, D2)", async () => {
-		const stateDir = join(tempDir(), "state", "dispatch");
-		const delivered: DingTalkEvent[] = [];
-		const service = new DurableDispatchService({
-			stateDir,
-			leaseMs: 100,
-			bot: {
-				enqueueEvent(next) {
-					delivered.push(next);
-					return true;
-				},
-			},
-		});
-		await service.dispatch(event());
-		const id = delivered[0]?.dispatchId;
-		await service.markStarted(id);
-
-		// A turn far longer than the lease must not redeliver its own wake underneath itself.
-		await service.drainOnce(Date.now() + 10_000);
-		await service.drainOnce(Date.now() + 20_000);
-		expect(delivered).toHaveLength(1);
-
-		await service.markCompleted(id);
-		expect(existsSync(join(stateDir, `${id}.json`))).toBe(false);
-	});
-
-	it("only persists a running lease renewal once past the half-life threshold", async () => {
+	it("renews a running turn's lease — persisting only past the half-life — so it never redelivers itself (spec 031, D2)", async () => {
 		vi.useFakeTimers();
 		const start = new Date("2026-01-01T00:00:00.000Z");
 		vi.setSystemTime(start);
@@ -270,10 +244,18 @@ describe("DurableDispatchService", () => {
 		const leaseAfterRenewal = JSON.parse(readFileSync(path, "utf-8")).leaseExpiresAt;
 		expect(leaseAfterRenewal).not.toBe(leaseAfterStart);
 
+		// A turn far longer than its lease must not redeliver its own wake underneath itself.
+		vi.setSystemTime(new Date(start.getTime() + 200_000));
+		await service.drainOnce(Date.now());
+		vi.setSystemTime(new Date(start.getTime() + 300_000));
+		await service.drainOnce(Date.now());
+		expect(delivered).toHaveLength(1);
+
 		await service.markCompleted(id);
+		expect(existsSync(path)).toBe(false);
 	});
 
-	it("redelivers a running record once the process no longer holds it (spec 031, D2)", async () => {
+	it("redelivers a started record once this process no longer holds its liveness claim (spec 031, D2)", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const delivered: DingTalkEvent[] = [];
 		const service = new DurableDispatchService({
@@ -302,6 +284,15 @@ describe("DurableDispatchService", () => {
 		});
 		await restarted.drainOnce(Date.now() + 101);
 		expect(delivered).toHaveLength(2);
+
+		// The same holds in-process after /stop: cancelChannel drops the liveness claim, so the
+		// renew branch no longer keeps the stopped turn's record alive forever.
+		await service.dispatch(event());
+		await service.markStarted(delivered.at(-1)?.dispatchId);
+		expect(await service.cancelChannel("dm_1")).toBe(1);
+
+		await service.drainOnce();
+		expect(delivered).toHaveLength(3);
 	});
 
 	it("cancelChannel clears an in-flight lease so the next drain retries immediately", async () => {
@@ -331,29 +322,5 @@ describe("DurableDispatchService", () => {
 		expect(delivered).toHaveLength(2);
 
 		expect(await service.cancelChannel("some-other-channel")).toBe(0);
-	});
-
-	it("cancelChannel drops the liveness claim of a running turn (spec 031, D2)", async () => {
-		const stateDir = join(tempDir(), "state", "dispatch");
-		const delivered: DingTalkEvent[] = [];
-		const service = new DurableDispatchService({
-			stateDir,
-			leaseMs: 15 * 60_000,
-			bot: {
-				enqueueEvent(next) {
-					delivered.push(next);
-					return true;
-				},
-			},
-		});
-		await service.dispatch(event());
-		await service.markStarted(delivered[0]?.dispatchId);
-
-		expect(await service.cancelChannel("dm_1")).toBe(1);
-
-		// Without dropping the claim, the renew branch would keep this record alive forever
-		// and the stopped turn would never be redelivered.
-		await service.drainOnce();
-		expect(delivered).toHaveLength(2);
 	});
 });

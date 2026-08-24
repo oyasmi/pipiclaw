@@ -248,7 +248,7 @@ describe("dingtalk", () => {
 		});
 	});
 
-	it("names a channel from the group title, falling back to the sender nickname for a DM", async () => {
+	it("names channels from group titles or nicknames, records busy-path activity, and ignores unauthorized senders", async () => {
 		const noteChannelActivity = vi.fn();
 		const { bot, handler } = createBot({ noteChannelActivity });
 		const privateApi = getPrivateApi(bot);
@@ -284,18 +284,18 @@ describe("dingtalk", () => {
 		expect(noteChannelActivity).toHaveBeenLastCalledWith(
 			expect.objectContaining({ channelId: "dm_staff_2", name: "Bob" }),
 		);
-	});
 
-	it("records channel activity for a busy-path message too, but ignores an unauthorized sender entirely", async () => {
-		const noteChannelActivity = vi.fn();
-		const { bot, handler } = createBot(
-			{ noteChannelActivity, isRunning: vi.fn(() => true) },
+		// The hook sits before busy/command routing, so a steer still counts as human activity,
+		// while an unauthorized sender is ignored entirely.
+		const guardedActivity = vi.fn();
+		const guarded = createBot(
+			{ noteChannelActivity: guardedActivity, isRunning: vi.fn(() => true) },
 			{ allowFrom: ["staff_ok"] },
 		);
-		bot.sendPlain = vi.fn(async () => true);
-		const privateApi = getPrivateApi(bot);
+		guarded.bot.sendPlain = vi.fn(async () => true);
+		const guardedApi = getPrivateApi(guarded.bot);
 
-		await privateApi.onStreamMessage({
+		await guardedApi.onStreamMessage({
 			text: { content: "blocked" },
 			senderStaffId: "staff_nope",
 			senderNick: "Mallory",
@@ -304,11 +304,10 @@ describe("dingtalk", () => {
 			conversationTitle: "投资理财",
 		});
 		await flushMicrotasks();
-		expect(noteChannelActivity).not.toHaveBeenCalled();
-		expect(handler.handleEvent).not.toHaveBeenCalled();
+		expect(guardedActivity).not.toHaveBeenCalled();
+		expect(guarded.handler.handleEvent).not.toHaveBeenCalled();
 
-		// The hook sits before busy/command routing, so a steer still counts as human activity.
-		await privateApi.onStreamMessage({
+		await guardedApi.onStreamMessage({
 			text: { content: "keep going" },
 			senderStaffId: "staff_ok",
 			senderNick: "Alice",
@@ -317,7 +316,7 @@ describe("dingtalk", () => {
 			conversationTitle: "投资理财",
 		});
 		await flushMicrotasks();
-		expect(noteChannelActivity).toHaveBeenCalledWith(
+		expect(guardedActivity).toHaveBeenCalledWith(
 			expect.objectContaining({ channelId: "group_conv_group", name: "投资理财" }),
 		);
 	});
@@ -406,15 +405,9 @@ describe("dingtalk", () => {
 			"steer",
 			"plain busy text",
 		);
-	});
 
-	it("answers /context while a turn is streaming", async () => {
-		const { bot, handler } = createBot({
-			isRunning: vi.fn(() => true),
-		});
-		bot.sendPlain = vi.fn(async () => true);
-		const privateApi = getPrivateApi(bot);
-
+		// Read-only runtime commands like /context answer while a turn is streaming too —
+		// no reason to make the user wait for the turn to finish.
 		await privateApi.onStreamMessage({
 			text: { content: "/context detail" },
 			senderStaffId: "staff_1",
@@ -422,8 +415,6 @@ describe("dingtalk", () => {
 			conversationId: "conv_1",
 			conversationType: "1",
 		});
-
-		// Read-only accounting: no reason to make the user wait for the turn to finish.
 		expect(handler.runRuntimeCommand).toHaveBeenCalledWith(
 			expect.objectContaining({ text: "/context detail" }),
 			"context",
@@ -553,7 +544,7 @@ describe("dingtalk", () => {
 		expect(axiosMock.post).toHaveBeenCalledTimes(2);
 	});
 
-	it("persists and reloads conversation metadata from disk", () => {
+	it("persists and reloads conversation metadata from disk, then reclaims idle per-channel caches", () => {
 		const { bot } = createBot();
 		const privateApi = getPrivateApi(bot);
 
@@ -570,11 +561,7 @@ describe("dingtalk", () => {
 			conversationType: "1",
 			senderId: "staff_1",
 		});
-	});
 
-	it("reclaims idle per-channel caches after the retention window", () => {
-		const { bot } = createBot();
-		const privateApi = getPrivateApi(bot);
 		privateApi.setConversationMeta("dm_staff_1", {
 			conversationId: "conv_1",
 			conversationType: "1",

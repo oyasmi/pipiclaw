@@ -71,23 +71,18 @@ describe("event commands", () => {
 		expect(result).toContain('"channelId": "dm_123"');
 	});
 
-	it("deletes only normalized event files inside workspace events", async () => {
+	it("deletes only normalized event files inside workspace events, echoing content when it parses", async () => {
 		const { workspaceDir, eventsDir, historyPath } = createWorkspace();
-		const eventPath = join(eventsDir, "old.json");
-		writeFileSync(eventPath, JSON.stringify({ type: "immediate", channelId: "dm_123", text: "Run now." }));
 
 		// "immediate" events are no longer a parseable ScheduledEvent, so deleteEvent falls back
 		// to the plain confirmation instead of echoing a summary.
+		const legacyPath = join(eventsDir, "old.json");
+		writeFileSync(legacyPath, JSON.stringify({ type: "immediate", channelId: "dm_123", text: "Run now." }));
 		const deleted = await runCommand(workspaceDir, historyPath, "delete old.json");
 		expect(deleted).toBe("已删除事件：old");
-		expect(existsSync(eventPath)).toBe(false);
+		expect(existsSync(legacyPath)).toBe(false);
 
-		const rejected = await runCommand(workspaceDir, historyPath, "delete ../old");
-		expect(rejected).toContain("Invalid event name");
-	});
-
-	it("echoes the deleted event's content when it parses (review 2026-08-24 §3.4)", async () => {
-		const { workspaceDir, eventsDir, historyPath } = createWorkspace();
+		// A parseable event echoes its content (review 2026-08-24 §3.4).
 		const eventPath = join(eventsDir, "release-check.json");
 		writeFileSync(
 			eventPath,
@@ -98,12 +93,15 @@ describe("event commands", () => {
 				at: "2026-07-05T18:00:00+08:00",
 			}),
 		);
-
-		const deleted = await runCommand(workspaceDir, historyPath, "delete release-check");
-		expect(deleted).toContain("已删除事件");
-		expect(deleted).toContain("**release-check**");
-		expect(deleted).toContain("触发时间：2026-07-05T18:00:00+08:00");
+		const echoed = await runCommand(workspaceDir, historyPath, "delete release-check");
+		expect(echoed).toContain("已删除事件");
+		expect(echoed).toContain("**release-check**");
+		expect(echoed).toContain("触发时间：2026-07-05T18:00:00+08:00");
 		expect(existsSync(eventPath)).toBe(false);
+
+		// Path confinement: deletion cannot escape the events dir.
+		const rejected = await runCommand(workspaceDir, historyPath, "delete ../old");
+		expect(rejected).toContain("Invalid event name");
 	});
 
 	it("shows recent event history and filters by event name", async () => {

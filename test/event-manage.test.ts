@@ -49,7 +49,7 @@ const validPeriodic = JSON.stringify({
 });
 
 describe("manageEvent create", () => {
-	it("writes a valid periodic event that the watcher parser can load back", async () => {
+	it("writes valid periodic and one-shot events that the watcher parser can load back", async () => {
 		const result = await manageEvent(opts(), {
 			action: "create",
 			name: "task.dm_1.weekly-report.schedule",
@@ -62,16 +62,14 @@ describe("manageEvent create", () => {
 		const parsed = parseScheduledEventContent(onDisk, "x.json");
 		expect(parsed.type).toBe("periodic");
 		expect(parsed.channelId).toBe("dm_1");
-	});
 
-	it("writes a valid one-shot event", async () => {
-		const result = await manageEvent(opts(), {
+		const oneShot = await manageEvent(opts(), {
 			action: "create",
 			name: "task.dm_1.weekly-report.checkin",
 			definition: JSON.stringify({ type: "one-shot", text: "回访", at: futureIso(30) }),
 		});
-		expect(result.eventType).toBe("one-shot");
-		expect(result.channelId).toBe("dm_1");
+		expect(oneShot.eventType).toBe("one-shot");
+		expect(oneShot.channelId).toBe("dm_1");
 	});
 
 	it("normalizes .json suffix (foo === foo.json)", async () => {
@@ -96,14 +94,10 @@ describe("manageEvent create", () => {
 		expect(files.every((f) => f.endsWith(".json"))).toBe(true);
 	});
 
-	it("rejects invalid JSON without writing a file", async () => {
+	it("rejects malformed definitions without writing a file", async () => {
 		await expect(manageEvent(opts(), { action: "create", name: "bad", definition: "{ not json" })).rejects.toThrow(
 			/not valid JSON/,
 		);
-		expect(await listEventFiles()).toEqual([]);
-	});
-
-	it("rejects a definition missing required fields", async () => {
 		await expect(
 			manageEvent(opts(), { action: "create", name: "bad", definition: JSON.stringify({ type: "periodic" }) }),
 		).rejects.toThrow();
@@ -114,33 +108,38 @@ describe("manageEvent create", () => {
 	// invalid cron) are already exercised exhaustively against the shared `validateScheduledEvent`
 	// at the watcher layer in events.test.ts. Here we only need one representative case per
 	// boundary to prove the tool delegates to that validator and never writes a file on rejection.
-	it.each([
-		["immediate events", { type: "immediate", text: "go" }, /immediate/],
-		[
-			"a one-shot scheduled sooner than 2 minutes out",
-			{ type: "one-shot", text: "x", at: futureIso(1) },
-			/2 minutes/,
-		],
-		["a one-shot beyond the Node timer limit", { type: "one-shot", text: "x", at: futureIso(36_000) }, /24\.8 days/],
-		[
-			"a periodic cron firing more often than every 30 minutes",
-			{ type: "periodic", text: "x", schedule: "* * * * *", timezone: "Asia/Shanghai" },
-			/30 minutes/,
-		],
-		[
-			"an invalid cron schedule",
-			{ type: "periodic", text: "x", schedule: "not a cron", timezone: "Asia/Shanghai" },
-			/cron/i,
-		],
-	] as const)(
-		"delegates create-time rejection of %s to the shared validator",
-		async (_label, definition, expectedError) => {
+	it("delegates create-time rejection of every validator boundary to the shared validator", async () => {
+		const boundaries = [
+			["immediate events", { type: "immediate", text: "go" }, /immediate/],
+			[
+				"a one-shot scheduled sooner than 2 minutes out",
+				{ type: "one-shot", text: "x", at: futureIso(1) },
+				/2 minutes/,
+			],
+			[
+				"a one-shot beyond the Node timer limit",
+				{ type: "one-shot", text: "x", at: futureIso(36_000) },
+				/24\.8 days/,
+			],
+			[
+				"a periodic cron firing more often than every 30 minutes",
+				{ type: "periodic", text: "x", schedule: "* * * * *", timezone: "Asia/Shanghai" },
+				/30 minutes/,
+			],
+			[
+				"an invalid cron schedule",
+				{ type: "periodic", text: "x", schedule: "not a cron", timezone: "Asia/Shanghai" },
+				/cron/i,
+			],
+		] as const;
+		for (const [label, definition, expectedError] of boundaries) {
 			await expect(
 				manageEvent(opts(), { action: "create", name: "rejected", definition: JSON.stringify(definition) }),
+				label,
 			).rejects.toThrow(expectedError);
 			expect(await listEventFiles()).toEqual([]);
-		},
-	);
+		}
+	});
 
 	it("allows a sub-30-minute periodic cron when it carries a preAction gate", async () => {
 		const result = await manageEvent(opts(), {
@@ -297,16 +296,12 @@ describe("manageEvent update", () => {
 });
 
 describe("manageEvent delete", () => {
-	it("deletes an owned event", async () => {
+	it("deletes an owned event and is a no-op for a non-existent one", async () => {
 		await manageEvent(opts(), { action: "create", name: "gone", definition: validPeriodic });
 		const result = await manageEvent(opts(), { action: "delete", name: "gone" });
 		expect(result.deleted).toBe(true);
 		expect(await listEventFiles()).toEqual([]);
-	});
-
-	it("is a no-op for a non-existent event", async () => {
-		const result = await manageEvent(opts(), { action: "delete", name: "never" });
-		expect(result.deleted).toBe(false);
+		expect((await manageEvent(opts(), { action: "delete", name: "never" })).deleted).toBe(false);
 	});
 
 	it("refuses to delete an event owned by another channel", async () => {

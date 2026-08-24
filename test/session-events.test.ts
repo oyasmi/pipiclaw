@@ -113,7 +113,7 @@ describe("session compaction events", () => {
 		expect(runState.lastCompactionError).toBeUndefined();
 	});
 
-	it("hides compaction progress in final_card_only mode", async () => {
+	it("hides compaction progress and intermediate assistant text in final_card_only mode", async () => {
 		const respond = vi.fn(async () => {});
 		const ctx = createContext(respond);
 		ctx.progressStyle = "none";
@@ -123,14 +123,6 @@ describe("session compaction events", () => {
 		await handleSessionEvent({ type: "compaction_start", reason: "threshold" }, handlerContext(ctx, runState));
 
 		expect(respond).not.toHaveBeenCalled();
-	});
-
-	it("does not push intermediate assistant text as progress in final_card_only mode", async () => {
-		const respond = vi.fn(async () => {});
-		const ctx = createContext(respond);
-		ctx.progressStyle = "none";
-		ctx.finalDelivery = "card";
-		const runState = createEmptyRunState();
 
 		await handleSessionEvent(
 			{

@@ -35,27 +35,29 @@ function commandsWithSubcommands(): Array<{ name: string; subcommands: CommandSu
 describe("command subcommand examples round-trip through their parser", () => {
 	const makeChannel = useTempDirs("pipiclaw-commands-subcommands-");
 
+	// One case per module; each module's case loops over every broadcast example so an
+	// unparseable example still fails CI with the offending invocation in the message.
 	for (const { name, subcommands } of commandsWithSubcommands()) {
-		for (const sub of subcommands) {
-			const example = sub.example;
-			if (!example) continue;
+		it(`/${name} subcommand examples are accepted by their parser`, async () => {
+			const parser = PARSERS[name];
+			for (const sub of subcommands) {
+				const example = sub.example;
+				if (!example) continue;
 
-			it(`/${name} ${sub.name}: "${example}" is accepted by its parser`, async () => {
 				const args = argsAfterCommandName(example, name);
-				const parser = PARSERS[name];
 				if (parser) {
-					expect(() => parser(args)).not.toThrow(/未知|Unknown/i);
-					return;
+					expect(() => parser(args), example).not.toThrow(/未知|Unknown/i);
+					continue;
 				}
 				if (name === "memory") {
 					const channelDir = makeChannel();
 					setupChannelFiles(channelDir, { memory: "# Channel Memory\n" });
 					const result = await handleMemoryCommand({ channelDir, args });
-					expect(result).not.toMatch(/未知的 memory 命令/);
-					return;
+					expect(result, example).not.toMatch(/未知的 memory 命令/);
+					continue;
 				}
 				throw new Error(`No parser wired up in this test for /${name} — add one alongside its subcommands`);
-			});
-		}
+			}
+		});
 	}
 });

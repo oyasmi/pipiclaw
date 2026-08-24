@@ -28,38 +28,29 @@ function baseOptions(overrides: Partial<Parameters<typeof handleProjectCommand>[
 }
 
 describe("handleProjectCommand", () => {
-	it("show: reports the unconfigured-compat state when projectAccess is absent", async () => {
+	it("show/set report the unconfigured-compat state when projectAccess is absent", async () => {
 		const options = baseOptions();
 		const text = await handleProjectCommand(options);
 		expect(text).toContain("unbounded");
 		expect(text).toContain("未配置 projectAccess");
+
+		const setText = await handleProjectCommand({ ...options, args: `set ${createTempDir()}` });
+		expect(setText).toContain("无法切换项目");
+		expect(setText).toContain("未配置 projectAccess");
 	});
 
-	it("set: rejected when projectAccess is not configured", async () => {
-		const options = baseOptions({ args: `set ${createTempDir()}` });
-		const text = await handleProjectCommand(options);
-		expect(text).toContain("无法切换项目");
-		expect(text).toContain("未配置 projectAccess");
-	});
-
-	it("set: rejects a target outside the allowed roots", async () => {
+	it("set: rejects targets outside the allowed roots or nonexistent, committing nothing", async () => {
 		const options = baseOptions();
 		const allowedRoot = createTempDir();
 		writeSecurityConfig(options.appHomeDir, { defaultRoot: allowedRoot, allowedRoots: [allowedRoot] });
 		const outside = createTempDir();
 
-		const text = await handleProjectCommand({ ...options, args: `set ${outside}` });
-		expect(text).toContain("不在允许的可选根内");
+		const outsideText = await handleProjectCommand({ ...options, args: `set ${outside}` });
+		expect(outsideText).toContain("不在允许的可选根内");
 		expect(readProjectSelection(options.channelDir)).toBeUndefined();
-	});
 
-	it("set: rejects a target that does not exist", async () => {
-		const options = baseOptions();
-		const allowedRoot = createTempDir();
-		writeSecurityConfig(options.appHomeDir, { defaultRoot: allowedRoot, allowedRoots: [allowedRoot] });
-
-		const text = await handleProjectCommand({ ...options, args: `set ${join(allowedRoot, "nope")}` });
-		expect(text).toContain("不是一个存在的绝对目录");
+		const missingText = await handleProjectCommand({ ...options, args: `set ${join(allowedRoot, "nope")}` });
+		expect(missingText).toContain("不是一个存在的绝对目录");
 	});
 
 	it("set: commits the selection and calls onScopeChanged when valid and idle", async () => {
@@ -80,24 +71,20 @@ describe("handleProjectCommand", () => {
 		});
 	});
 
-	it("set: blocked while the channel is busy, and nothing is committed", async () => {
-		const options = baseOptions({ isBusy: () => true });
+	it("set: blocked while busy or by a running job/subagent, listing the blocker and committing nothing", async () => {
+		const busyOptions = baseOptions({ isBusy: () => true });
 		const allowedRoot = createTempDir();
-		writeSecurityConfig(options.appHomeDir, { defaultRoot: allowedRoot, allowedRoots: [allowedRoot] });
+		writeSecurityConfig(busyOptions.appHomeDir, { defaultRoot: allowedRoot, allowedRoots: [allowedRoot] });
 
-		const text = await handleProjectCommand({ ...options, args: `set ${allowedRoot}` });
-		expect(text).toContain("回合正在进行");
-		expect(readProjectSelection(options.channelDir)).toBeUndefined();
-	});
+		const busyText = await handleProjectCommand({ ...busyOptions, args: `set ${allowedRoot}` });
+		expect(busyText).toContain("回合正在进行");
+		expect(readProjectSelection(busyOptions.channelDir)).toBeUndefined();
 
-	it("set: blocked by a running job/subagent, listing the specific blocker", async () => {
-		const options = baseOptions({ listActiveBlockers: () => ["subagent run `run_abc` (builder)"] });
-		const allowedRoot = createTempDir();
-		writeSecurityConfig(options.appHomeDir, { defaultRoot: allowedRoot, allowedRoots: [allowedRoot] });
-
-		const text = await handleProjectCommand({ ...options, args: `set ${allowedRoot}` });
-		expect(text).toContain("run_abc");
-		expect(readProjectSelection(options.channelDir)).toBeUndefined();
+		const blockedOptions = baseOptions({ listActiveBlockers: () => ["subagent run `run_abc` (builder)"] });
+		writeSecurityConfig(blockedOptions.appHomeDir, { defaultRoot: allowedRoot, allowedRoots: [allowedRoot] });
+		const blockedText = await handleProjectCommand({ ...blockedOptions, args: `set ${allowedRoot}` });
+		expect(blockedText).toContain("run_abc");
+		expect(readProjectSelection(blockedOptions.channelDir)).toBeUndefined();
 	});
 
 	it("reset: switches to the configured defaultRoot", async () => {

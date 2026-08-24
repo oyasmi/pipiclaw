@@ -448,79 +448,60 @@ describe("EventsWatcher", () => {
 			return { type: "periodic" as const, channelId, text: "check the task", schedule: "0 * * * *" };
 		}
 
-		it("fires while the owning task is still live", async () => {
-			const dir = join(createTempDir(), "events");
-			mkdirSync(dir, { recursive: true });
-			writeOwningTask(dir, "dm_1", "report", "active");
-			const filename = "task.dm_1.report.checkin.json";
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
+		it("fires while the owning task is still live, parsing dotted channel ids too", async () => {
+			for (const channelId of ["dm_1", "dm_a.b.c"]) {
+				const dir = join(createTempDir(), `events-${channelId.replace(/\./g, "-")}`);
+				mkdirSync(dir, { recursive: true });
+				writeOwningTask(dir, channelId, "report", "active");
+				const filename = `task.${channelId}.report.checkin.json`;
+				writeFileSync(join(dir, filename), "{}");
+				const bot = new FakeBot(true);
+				const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
 
-			await privateApi.execute(filename, taskEventFixture("dm_1"), false);
+				await privateApi.execute(filename, taskEventFixture(channelId), false);
 
-			expect(bot.events).toHaveLength(1);
-			expect(existsSync(join(dir, filename))).toBe(true);
+				expect(bot.events).toHaveLength(1);
+				expect(existsSync(join(dir, filename))).toBe(true);
+			}
 		});
 
-		it("retires itself when the owning task is gone", async () => {
-			const dir = join(createTempDir(), "events");
-			mkdirSync(dir, { recursive: true });
-			const filename = "task.dm_1.report.checkin.json";
-			writeFileSync(join(dir, filename), "{}");
-			const historyPath = join(createTempDir(), "history.jsonl");
-			const bot = new FakeBot(true);
-			const watcher = createWatcher(dir, bot, createMockExecutor(), undefined, historyPath);
+		it("retires itself when the owning task is gone or has reached a terminal status", async () => {
+			for (const variant of [
+				{ label: "gone", taskBody: undefined as string | undefined },
+				{ label: "terminal", taskBody: "---\noutcome: cancelled\n---\n# Task\n" },
+			]) {
+				const dir = join(createTempDir(), `events-${variant.label}`);
+				mkdirSync(dir, { recursive: true });
+				if (variant.taskBody) {
+					const tasksDir = join(dirname(dir), "dm_1", "tasks");
+					mkdirSync(tasksDir, { recursive: true });
+					writeFileSync(join(tasksDir, "report.md"), variant.taskBody);
+				}
+				const filename = "task.dm_1.report.checkin.json";
+				writeFileSync(join(dir, filename), "{}");
+				const historyPath = join(createTempDir(), `history-${variant.label}.jsonl`);
+				const bot = new FakeBot(true);
+				const watcher = createWatcher(dir, bot, createMockExecutor(), undefined, historyPath);
 
-			await getEventsWatcherPrivateApi(watcher).execute(filename, taskEventFixture("dm_1"), false);
-			await watcher.flush();
+				await getEventsWatcherPrivateApi(watcher).execute(filename, taskEventFixture("dm_1"), false);
+				await watcher.flush();
 
-			expect(bot.events).toHaveLength(0);
-			expect(existsSync(join(dir, filename))).toBe(false);
-			expect(readHistory(historyPath)).toContainEqual(
-				expect.objectContaining({ action: "skipped", reason: "owning task report no longer exists" }),
-			);
-		});
-
-		it("retires itself when the owning task reached a terminal status", async () => {
-			const dir = join(createTempDir(), "events");
-			mkdirSync(dir, { recursive: true });
-			const tasksDir = join(dirname(dir), "dm_1", "tasks");
-			mkdirSync(tasksDir, { recursive: true });
-			writeFileSync(join(tasksDir, "report.md"), "---\noutcome: cancelled\n---\n# Task\n");
-			const filename = "task.dm_1.report.checkin.json";
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
-
-			await privateApi.execute(filename, taskEventFixture("dm_1"), false);
-
-			expect(bot.events).toHaveLength(0);
-			expect(existsSync(join(dir, filename))).toBe(false);
-		});
-
-		it("parses the task id correctly when the channel id contains dots", async () => {
-			const dir = join(createTempDir(), "events");
-			mkdirSync(dir, { recursive: true });
-			writeOwningTask(dir, "dm_a.b.c", "report", "active");
-			const filename = "task.dm_a.b.c.report.checkin.json";
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
-
-			await privateApi.execute(filename, taskEventFixture("dm_a.b.c"), false);
-
-			expect(bot.events).toHaveLength(1);
+				expect(bot.events).toHaveLength(0);
+				expect(existsSync(join(dir, filename))).toBe(false);
+				if (!variant.taskBody) {
+					expect(readHistory(historyPath)).toContainEqual(
+						expect.objectContaining({ action: "skipped", reason: "owning task report no longer exists" }),
+					);
+				}
+			}
 		});
 	});
 
 	describe("stable dispatch ids (spec 031, D1)", () => {
-		it("keys a one-shot on its own `at`, so re-execution reuses the same identity", async () => {
+		it("keys a one-shot on its own `at` and a periodic on the occurrence", async () => {
 			const dir = createTempDir();
-			const filename = "reminder.json";
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
+			const reminderBot = new FakeBot(true);
+			const reminderApi = getEventsWatcherPrivateApi(createWatcher(dir, reminderBot, createMockExecutor()));
 			const definition = {
 				type: "one-shot" as const,
 				channelId: "dm_9",
@@ -528,26 +509,22 @@ describe("EventsWatcher", () => {
 				at: "2026-07-20T09:00:00+08:00",
 			};
 
-			await privateApi.execute(filename, definition, false);
-			await privateApi.execute(filename, definition, false);
+			// Re-execution of a one-shot reuses the same identity.
+			writeFileSync(join(dir, "reminder.json"), "{}");
+			await reminderApi.execute("reminder.json", definition, false);
+			await reminderApi.execute("reminder.json", definition, false);
+			expect(reminderBot.events[0]?.dispatchId).toBe("event:reminder:2026-07-20T09:00:00+08:00");
+			expect(reminderBot.events[1]?.dispatchId).toBe(reminderBot.events[0]?.dispatchId);
 
-			expect(bot.events[0]?.dispatchId).toBe("event:reminder:2026-07-20T09:00:00+08:00");
-			expect(bot.events[1]?.dispatchId).toBe(bot.events[0]?.dispatchId);
-		});
-
-		it("keys a periodic on the occurrence, so occurrences stay distinct", async () => {
-			const dir = createTempDir();
-			const filename = "sweep.json";
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
-			const definition = { type: "periodic" as const, channelId: "dm_9", text: "sweep", schedule: "0 * * * *" };
-
-			await privateApi.execute(filename, definition, false, new Date("2026-07-20T09:00:00Z"));
-			await privateApi.execute(filename, definition, false, new Date("2026-07-20T10:00:00Z"));
-
-			expect(bot.events[0]?.dispatchId).toBe("event:sweep:2026-07-20T09:00:00.000Z");
-			expect(bot.events[1]?.dispatchId).toBe("event:sweep:2026-07-20T10:00:00.000Z");
+			// Periodics instead key on the occurrence, so occurrences stay distinct.
+			const sweepBot = new FakeBot(true);
+			const sweepApi = getEventsWatcherPrivateApi(createWatcher(dir, sweepBot, createMockExecutor()));
+			const periodic = { type: "periodic" as const, channelId: "dm_9", text: "sweep", schedule: "0 * * * *" };
+			writeFileSync(join(dir, "sweep.json"), "{}");
+			await sweepApi.execute("sweep.json", periodic, false, new Date("2026-07-20T09:00:00Z"));
+			await sweepApi.execute("sweep.json", periodic, false, new Date("2026-07-20T10:00:00Z"));
+			expect(sweepBot.events[0]?.dispatchId).toBe("event:sweep:2026-07-20T09:00:00.000Z");
+			expect(sweepBot.events[1]?.dispatchId).toBe("event:sweep:2026-07-20T10:00:00.000Z");
 		});
 
 		it("delivers one occurrence once across both the outbox retry and restart recovery paths", async () => {
@@ -665,65 +642,63 @@ describe("EventsWatcher", () => {
 		watcher.stop();
 	});
 
-	it("preserves a one-shot event and writes an error marker when the queue is full", async () => {
-		const dir = createTempDir();
-		const filename = "dropped.json";
-		const filePath = join(dir, filename);
-		writeFileSync(filePath, "{}");
-		const bot = new FakeBot(false);
-		const watcher = createWatcher(dir, bot);
-		const privateApi = getEventsWatcherPrivateApi(watcher);
+	it("survives a transient full queue without losing either event kind", async () => {
+		for (const variant of [
+			{
+				label: "one-shot",
+				filename: "dropped.json",
+				definition: {
+					type: "one-shot" as const,
+					channelId: "dm_1",
+					text: "must not vanish",
+					at: "2030-01-01T00:00:00.000Z",
+				},
+				deleteAfter: true,
+				errorMarkerExpected: true,
+			},
+			{
+				label: "periodic",
+				filename: "recurring.json",
+				definition: { type: "periodic" as const, channelId: "dm_1", text: "tick", schedule: "0 3 * * 0" },
+				deleteAfter: false,
+				errorMarkerExpected: false,
+			},
+		]) {
+			const dir = createTempDir();
+			const filePath = join(dir, variant.filename);
+			writeFileSync(filePath, "{}");
+			const bot = new FakeBot(false);
+			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot));
 
-		await privateApi.execute(
-			filename,
-			{ type: "one-shot", channelId: "dm_1", text: "must not vanish", at: "2030-01-01T00:00:00.000Z" },
-			true,
-		);
+			await privateApi.execute(variant.filename, variant.definition, variant.deleteAfter);
 
-		// File survives and the loss is recorded rather than silently dropped.
-		expect(existsSync(filePath)).toBe(true);
-		expect(existsSync(join(dir, "dropped.json.error.txt"))).toBe(true);
-	});
-
-	it("does not mark periodic events invalid on a transient full queue", async () => {
-		const dir = createTempDir();
-		const filename = "recurring.json";
-		const filePath = join(dir, filename);
-		writeFileSync(filePath, "{}");
-		const bot = new FakeBot(false);
-		const watcher = createWatcher(dir, bot);
-		const privateApi = getEventsWatcherPrivateApi(watcher);
-
-		await privateApi.execute(
-			filename,
-			{ type: "periodic", channelId: "dm_1", text: "tick", schedule: "0 3 * * 0" },
-			false,
-		);
-
-		expect(existsSync(filePath)).toBe(true);
-		expect(existsSync(join(dir, "recurring.json.error.txt"))).toBe(false);
+			// Files survive; a dropped one-shot records the loss rather than vanishing silently.
+			expect(existsSync(filePath)).toBe(true);
+			expect(existsSync(`${filePath}.error.txt`)).toBe(variant.errorMarkerExpected);
+		}
 	});
 
 	describe("action gate", () => {
-		it.each([
-			["exits with code 0", { type: "bash" as const, command: "true" }, "should pass"],
-			["is not specified (regression)", undefined, "no action"],
-		] as const)("enqueues event when action %s", async (_label, preAction, text) => {
-			const dir = createTempDir();
-			const filename = "gated.json";
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const watcher = createWatcher(dir, bot);
-			const privateApi = getEventsWatcherPrivateApi(watcher);
+		it("enqueues the event when the action exits 0 or is not specified", async () => {
+			for (const [preAction, text] of [
+				[{ type: "bash" as const, command: "true" }, "should pass"],
+				[undefined, "no action"],
+			] as const) {
+				const dir = createTempDir();
+				const filename = "gated.json";
+				writeFileSync(join(dir, filename), "{}");
+				const bot = new FakeBot(true);
+				const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot));
 
-			await privateApi.execute(
-				filename,
-				{ type: "one-shot", at: "2030-01-01T00:00:00.000Z", channelId: "dm_1", text, preAction },
-				false,
-			);
+				await privateApi.execute(
+					filename,
+					{ type: "one-shot", at: "2030-01-01T00:00:00.000Z", channelId: "dm_1", text, preAction },
+					false,
+				);
 
-			expect(bot.events).toHaveLength(1);
-			expect(bot.events[0].text).toContain(text);
+				expect(bot.events).toHaveLength(1);
+				expect(bot.events[0].text).toContain(text);
+			}
 		});
 
 		it("blocks event when action exits with non-zero code", async () => {
@@ -783,30 +758,31 @@ describe("EventsWatcher", () => {
 			expect(existsSync(filePath)).toBe(false);
 		});
 
-		it.each([
-			["times out", { type: "bash" as const, command: "sleep 30", timeout: 100 }],
-			["the command does not exist", { type: "bash" as const, command: "/nonexistent/binary/xyz" }],
-		] as const)("blocks event when action %s", async (_label, preAction) => {
-			const dir = createTempDir();
-			const filename = "blocked-action.json";
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const watcher = createWatcher(dir, bot);
-			const privateApi = getEventsWatcherPrivateApi(watcher);
+		it("blocks the event when the action times out or the command does not exist", async () => {
+			for (const preAction of [
+				{ type: "bash" as const, command: "sleep 30", timeout: 100 },
+				{ type: "bash" as const, command: "/nonexistent/binary/xyz" },
+			]) {
+				const dir = createTempDir();
+				const filename = "blocked-action.json";
+				writeFileSync(join(dir, filename), "{}");
+				const bot = new FakeBot(true);
+				const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot));
 
-			await privateApi.execute(
-				filename,
-				{
-					type: "one-shot",
-					at: "2030-01-01T00:00:00.000Z",
-					channelId: "dm_1",
-					text: "should not pass",
-					preAction,
-				},
-				false,
-			);
+				await privateApi.execute(
+					filename,
+					{
+						type: "one-shot",
+						at: "2030-01-01T00:00:00.000Z",
+						channelId: "dm_1",
+						text: "should not pass",
+						preAction,
+					},
+					false,
+				);
 
-			expect(bot.events).toHaveLength(0);
+				expect(bot.events).toHaveLength(0);
+			}
 		});
 
 		it("blocks event when guardCommand rejects the command", async () => {
@@ -873,23 +849,25 @@ describe("EventsWatcher", () => {
 			).toThrow("Missing or empty 'preAction.command'");
 		});
 
-		it.each([0, -1])("rejects action with non-positive timeout %s in parseEvent", (timeout) => {
+		it("rejects action with non-positive timeout in parseEvent", () => {
 			const dir = createTempDir();
 			const watcher = createWatcher(dir);
 			const privateApi = getEventsWatcherPrivateApi(watcher);
 
-			expect(() =>
-				privateApi.parseEvent(
-					JSON.stringify({
-						type: "one-shot",
-						at: "2030-01-01T00:00:00.000Z",
-						channelId: "dm_1",
-						text: "hello",
-						preAction: { type: "bash", command: "true", timeout },
-					}),
-					"invalid-timeout.json",
-				),
-			).toThrow("Invalid 'preAction.timeout'");
+			for (const timeout of [0, -1]) {
+				expect(() =>
+					privateApi.parseEvent(
+						JSON.stringify({
+							type: "one-shot",
+							at: "2030-01-01T00:00:00.000Z",
+							channelId: "dm_1",
+							text: "hello",
+							preAction: { type: "bash", command: "true", timeout },
+						}),
+						"invalid-timeout.json",
+					),
+				).toThrow("Invalid 'preAction.timeout'");
+			}
 		});
 	});
 });

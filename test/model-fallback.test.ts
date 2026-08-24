@@ -21,24 +21,22 @@ const userMsg = { role: "user", content: "hi" };
 const assistantError = { role: "assistant", stopReason: "error", errorMessage: "429 Too Many Requests", content: [] };
 
 describe("shouldFallback", () => {
-	it.each([
-		["429 rate limit exceeded", true],
-		["503 Service Unavailable", true],
-		[undefined, true],
-	])("returns %s → %s for provider errors", (message, expected) => {
-		expect(shouldFallback(message as string | undefined)).toBe(expected);
-	});
-
-	it.each([
-		"prompt is too long: 213462 tokens > 200000 maximum",
-		"This model's maximum prompt length is 131072 but the request contains 537812 tokens",
-		"input token count (1196265) exceeds the maximum number of tokens allowed (1048575)",
-	])("returns false for context overflow: %s", (message) => {
-		expect(shouldFallback(message)).toBe(false);
-	});
-
-	it("treats a rate-limit worded 'too many tokens' as fallback, not overflow", () => {
+	it("falls back on provider errors, missing errors, and rate-limit wordings (never misread as overflow)", () => {
+		for (const message of ["429 rate limit exceeded", "503 Service Unavailable", undefined]) {
+			expect(shouldFallback(message)).toBe(true);
+		}
+		// A rate-limit worded 'too many requests' must count as fallback, not overflow.
 		expect(shouldFallback("ThrottlingException: Too many requests, please wait")).toBe(true);
+	});
+
+	it("returns false for context overflow messages in any provider wording", () => {
+		for (const message of [
+			"prompt is too long: 213462 tokens > 200000 maximum",
+			"This model's maximum prompt length is 131072 but the request contains 537812 tokens",
+			"input token count (1196265) exceeds the maximum number of tokens allowed (1048575)",
+		]) {
+			expect(shouldFallback(message)).toBe(false);
+		}
 	});
 });
 
@@ -49,30 +47,20 @@ describe("takeFailedTurn", () => {
 		expect(result).toEqual([{ role: "assistant", stopReason: "stop" }]);
 	});
 
-	it("returns null for any non-[user, assistant(error)] tail", () => {
+	it("returns null for any non-[user, assistant(error)] tail or fewer than two messages", () => {
 		expect(takeFailedTurn([userMsg, { role: "assistant", stopReason: "stop" }])).toBeNull();
 		const toolResult = { role: "toolResult" };
 		expect(takeFailedTurn([userMsg, toolResult, assistantError])).toBeNull();
-	});
-
-	it("returns null for fewer than two messages", () => {
 		expect(takeFailedTurn([assistantError])).toBeNull();
 		expect(takeFailedTurn([])).toBeNull();
 	});
 });
 
 describe("shouldRestorePrimary", () => {
-	it("returns true when never failed", () => {
-		expect(shouldRestorePrimary(null, Date.now())).toBe(true);
-	});
-
-	it("returns false within the cooldown window", () => {
+	it("restores immediately when never failed, otherwise only after the cooldown elapses", () => {
 		const now = 1_000_000;
+		expect(shouldRestorePrimary(null, now)).toBe(true);
 		expect(shouldRestorePrimary(now - PRIMARY_COOLDOWN_MS + 1, now)).toBe(false);
-	});
-
-	it("returns true after the cooldown elapses", () => {
-		const now = 1_000_000;
 		expect(shouldRestorePrimary(now - PRIMARY_COOLDOWN_MS - 1, now)).toBe(true);
 	});
 });

@@ -241,7 +241,7 @@ describe("TaskDriver v2", () => {
 });
 
 describe("task driver events", () => {
-	it("contains no retired approval or verifier lifecycle status", () => {
+	it("renders dispatch, repair, and governor receipts on the v3 surface with no retired lifecycle status", () => {
 		const entry = {
 			id: "task-1",
 			title: "Task",
@@ -258,17 +258,10 @@ describe("task driver events", () => {
 		);
 		expect(repair.text).toContain("repair only");
 		expect(repair.text).toContain("Do not execute the task goal");
-	});
 
-	it("uses deterministic governor receipt content", () => {
-		const entry = {
-			id: "task-1",
-			title: "Task",
-			frontmatter: { readable: true, enabled: false, status: "active", control: createDefaultTaskControl() },
-			actionable: false,
-		};
-		const first = taskGovernorReceipt("dm_1", entry, "attempt budget exhausted", NOW.getTime());
-		const second = taskGovernorReceipt("dm_1", entry, "attempt budget exhausted", NOW.getTime() + 1000);
+		const disabledEntry = { ...entry, frontmatter: { ...entry.frontmatter, enabled: false }, actionable: false };
+		const first = taskGovernorReceipt("dm_1", disabledEntry, "attempt budget exhausted", NOW.getTime());
+		const second = taskGovernorReceipt("dm_1", disabledEntry, "attempt budget exhausted", NOW.getTime() + 1000);
 		expect(first.text).toContain("/tasks resume task-1");
 		expect(first.dispatchId).toBe(second.dispatchId);
 	});

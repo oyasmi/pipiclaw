@@ -9,7 +9,7 @@ import {
 } from "../src/agent/commands.js";
 
 describe("commands", () => {
-	it("parses built-in commands with trimmed arguments", () => {
+	it("parses built-in commands: trimming, any-whitespace splits, and case-insensitive names", () => {
 		expect(parseBuiltInCommand("  /help  ")).toEqual({
 			name: "help",
 			args: "",
@@ -35,43 +35,35 @@ describe("commands", () => {
 			args: "show weekly-review",
 			rawText: "/events show weekly-review",
 		});
-	});
-
-	it("returns null for non-built-in inputs", () => {
-		expect(parseBuiltInCommand("hello")).toBeNull();
-		expect(parseBuiltInCommand("/session")).toBeNull();
-		expect(parseBuiltInCommand("/unknown something")).toBeNull();
-	});
-
-	it("never exposes /login — provider login is a CLI-only operation (spec 039 §3.1)", () => {
-		expect(parseBuiltInCommand("/login")).toBeNull();
-		expect(isKnownCommandName("login")).toBe(false);
-	});
-
-	it("splits on any whitespace so a newline after the command still parses", () => {
+		// Any whitespace separates the command from its args, including newlines and tabs...
 		expect(parseBuiltInCommand("/steer\n修复这个")).toEqual({
 			name: "steer",
 			args: "修复这个",
 			rawText: "/steer\n修复这个",
 		});
 		expect(parseBuiltInCommand("/usage\t7d")).toMatchObject({ name: "usage", args: "7d" });
-	});
-
-	it("matches the command name case-insensitively", () => {
+		// ...and the command name itself matches case-insensitively.
 		expect(parseBuiltInCommand("/Help")).toMatchObject({ name: "help" });
 		expect(parseBuiltInCommand("/STATUS")).toMatchObject({ name: "status" });
+	});
+
+	it("returns null for anything outside the roster, including CLI-only /login", () => {
+		expect(parseBuiltInCommand("hello")).toBeNull();
+		expect(parseBuiltInCommand("/session")).toBeNull();
+		expect(parseBuiltInCommand("/unknown something")).toBeNull();
+		// Provider login is a CLI-only operation (spec 039 §3.1).
+		expect(parseBuiltInCommand("/login")).toBeNull();
+		expect(isKnownCommandName("login")).toBe(false);
 	});
 });
 
 describe("command metadata helpers", () => {
-	it("recognizes built-in and session commands as known", () => {
+	it("recognizes roster names as known and gates skill invocations on the roster (review 2026-08-24 §1.9)", () => {
 		expect(isKnownCommandName("help")).toBe(true);
 		expect(isKnownCommandName("model")).toBe(true);
 		expect(isKnownCommandName("memory")).toBe(true);
 		expect(isKnownCommandName("modle")).toBe(false);
-	});
-
-	it("only recognizes a skill invocation whose name is in the roster (review 2026-08-24 §1.9)", () => {
+		// A skill invocation is only recognized when its name is in the provided skill roster.
 		expect(isKnownCommandName("skill:foo")).toBe(false);
 		expect(isKnownCommandName("skill:foo", [])).toBe(false);
 		expect(isKnownCommandName("skill:foo", ["bar"])).toBe(false);
@@ -113,15 +105,13 @@ describe("command metadata helpers", () => {
 		expect(help).not.toContain("/model [provider/modelId|modelId]");
 	});
 
-	it("renders /help <name> as that command's argument syntax, subcommands, and examples", () => {
+	it("renders /help <name> per command and falls back to the top-level listing for unknown names", () => {
 		expect(renderBuiltInHelp("tasks")).toContain("/tasks set <id> <wake|next|deadline> <值>");
 		expect(renderBuiltInHelp("tasks")).toContain("/tasks doctor");
 		expect(renderBuiltInHelp("steer")).toContain("/steer <消息>");
 		expect(renderBuiltInHelp("steer")).toContain("示例：");
 		expect(renderBuiltInHelp("model")).toContain("/model [provider/modelId|modelId]");
-	});
 
-	it("falls back to the top-level listing for an unknown /help <name>", () => {
 		const help = renderBuiltInHelp("bogus");
 		expect(help).toContain("未找到命令 `/bogus`");
 		expect(help).toContain("**斜杠命令**");

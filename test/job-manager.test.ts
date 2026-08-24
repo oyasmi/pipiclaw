@@ -117,24 +117,23 @@ describe("ChannelJobManager", () => {
 		await expect(manager.start("sleep 100", "one too many", 300)).rejects.toThrow(/Too many background jobs/);
 	});
 
-	it.each([
-		{ probeResult: "EXIT:0", expectedStatus: "completed", expectedExitCode: 0 },
-		{ probeResult: "EXIT:2", expectedStatus: "failed", expectedExitCode: 2 },
-		{ probeResult: "GONE", expectedStatus: "lost", expectedExitCode: undefined },
-	])(
-		"marks a job $expectedStatus when the probe reports $probeResult",
-		async ({ probeResult, expectedStatus, expectedExitCode }) => {
+	it("marks a job completed, failed, or lost according to what the probe reports", async () => {
+		for (const { probeResult, expectedStatus, expectedExitCode } of [
+			{ probeResult: "EXIT:0", expectedStatus: "completed", expectedExitCode: 0 },
+			{ probeResult: "EXIT:2", expectedStatus: "failed", expectedExitCode: 2 },
+			{ probeResult: "GONE", expectedStatus: "lost", expectedExitCode: undefined },
+		]) {
 			const executor = new FakeJobExecutor();
 			const manager = new ChannelJobManager("dm_1", executor);
 			const job = await manager.start("cmd", "job", 300);
 			executor.probeResult = probeResult;
 
 			const [snapshot] = await manager.list();
-			expect(snapshot.id).toBe(job.id);
-			expect(snapshot.status).toBe(expectedStatus);
-			if (expectedExitCode !== undefined) expect(snapshot.exitCode).toBe(expectedExitCode);
-		},
-	);
+			expect(snapshot.id, probeResult).toBe(job.id);
+			expect(snapshot.status, probeResult).toBe(expectedStatus);
+			if (expectedExitCode !== undefined) expect(snapshot.exitCode, probeResult).toBe(expectedExitCode);
+		}
+	});
 
 	it("kills and fails a job that overruns its timeout", async () => {
 		const executor = new FakeJobExecutor();
@@ -180,23 +179,17 @@ describe("ChannelJobManager", () => {
 		expect(manager.runningTaskIds()).toEqual(new Set());
 	});
 
-	it("poll returns immediately for an already-finished job", async () => {
+	it("poll returns immediately for an already-finished job or an already-aborted signal", async () => {
 		const executor = new FakeJobExecutor();
 		const manager = new ChannelJobManager("dm_1", executor);
-		const job = await manager.start("true", "quick", 300);
+
+		const finished = await manager.start("true", "quick", 300);
 		executor.probeResult = "EXIT:0";
+		expect((await manager.poll([finished.id]))[0].status).toBe("completed");
 
-		const snapshots = await manager.poll([job.id]);
-		expect(snapshots[0].status).toBe("completed");
-	});
-
-	it("poll returns promptly when the abort signal is already aborted", async () => {
-		const executor = new FakeJobExecutor();
-		const manager = new ChannelJobManager("dm_1", executor);
-		const job = await manager.start("sleep 100", "run", 300);
+		const running = await manager.start("sleep 100", "run", 300);
 		executor.probeResult = "ALIVE";
-
-		const snapshots = await manager.poll([job.id], AbortSignal.abort());
+		const snapshots = await manager.poll([running.id], AbortSignal.abort());
 		expect(snapshots[0].status).toBe("running");
 	});
 
@@ -296,7 +289,7 @@ describe("ChannelJobManager persistence and completion wakes (spec 031, D6)", ()
 		expect(events[0]?.text).toContain("exit 1");
 	});
 
-	it("honors notify:false and never wakes for an explicit cancel", async () => {
+	it("never wakes for suppressed jobs: notify:false, explicit cancels, and inline polls", async () => {
 		const { events, dispatch } = collectingDispatch();
 		const executor = new FakeJobExecutor();
 		const manager = new ChannelJobManager("dm_1", executor, { stateDir: tempDir(), dispatch });
@@ -311,19 +304,14 @@ describe("ChannelJobManager persistence and completion wakes (spec 031, D6)", ()
 		await manager.cancel([cancelled.id]);
 		expect(events).toHaveLength(0);
 		expect(quiet.id).not.toBe(cancelled.id);
-	});
 
-	it("does not wake the channel for a result poll already handed back inline", async () => {
-		const { events, dispatch } = collectingDispatch();
-		const executor = new FakeJobExecutor();
-		const manager = new ChannelJobManager("dm_1", executor, { stateDir: tempDir(), dispatch });
+		// A result already handed back inline by poll() must not wake later either.
 		await manager.start("make", "build", 300);
-
 		executor.probeResult = "EXIT:0";
 		await manager.poll(undefined);
 		expect(events).toHaveLength(0);
 
-		// A later reconcile must not resurrect the suppressed wake either.
+		// A later reconcile must not resurrect the suppressed wake.
 		await manager.list();
 		expect(events).toHaveLength(0);
 	});

@@ -40,15 +40,6 @@ describe("/tasks v2 commands", () => {
 		await writeFile(join(tasksDir, `${id}.md`), doc(front, body));
 	}
 
-	it("removes approve from the parser and returns current usage without writing", async () => {
-		await writeTask("publish", "status: active");
-		const before = await readFile(join(tasksDir, "publish.md"), "utf-8");
-		const result = await run("approve publish");
-		expect(result).toContain("未知的 /tasks 动作：approve");
-		expect(result).toContain("/tasks pause <id>");
-		expect(await readFile(join(tasksDir, "publish.md"), "utf-8")).toBe(before);
-	});
-
 	it("pause/resume changes only enabled and stop, preserving stage and wake", async () => {
 		const control = createDefaultTaskControl();
 		await writeFile(
@@ -112,7 +103,7 @@ describe("/tasks v2 commands", () => {
 		expect(stored).toContain('"cycleId":"cycle-');
 	});
 
-	it("lists state dimensions without effects or approval", async () => {
+	it("lists state dimensions without effects or approval and rejects retired actions without writing", async () => {
 		const control = createDefaultTaskControl(true);
 		control.verification.status = "passed";
 		await writeFile(join(tasksDir, "measured.md"), renderTaskDocument({ status: "active", control }, BODY));
@@ -120,6 +111,12 @@ describe("/tasks v2 commands", () => {
 		expect(list).toContain("状态：进行中");
 		expect(list).toContain("验收：需要验收，已通过");
 		expect(list).not.toMatch(/approval|sideEffects|effects/i);
+
+		const before = await readFile(join(tasksDir, "measured.md"), "utf-8");
+		const unknown = await run("approve measured");
+		expect(unknown).toContain("未知的 /tasks 动作：approve");
+		expect(unknown).toContain("/tasks pause <id>");
+		expect(await readFile(join(tasksDir, "measured.md"), "utf-8")).toBe(before);
 	});
 
 	it("doctor diagnoses invalid state combinations with direct next steps", async () => {

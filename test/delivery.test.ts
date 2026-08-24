@@ -36,10 +36,16 @@ describe("delivery", () => {
 		expect(bot.calls).toEqual([]);
 	});
 
-	it("accumulates progress text and flushes one throttled card update", async () => {
+	it("accumulates progress text, ignores blanks, and flushes one throttled card update", async () => {
 		const bot = new FakeDingTalkBot();
 		const store = new FakeChannelStore();
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never);
+
+		await ctx.respond("   ");
+		await vi.runAllTimersAsync();
+		await ctx.flush();
+		expect(bot.calls).toEqual([]);
+		expect(store.logged).toEqual([]);
 
 		await ctx.respond("A");
 		await ctx.respond("B");
@@ -108,33 +114,6 @@ describe("delivery", () => {
 		expect(finalCall?.args[1]).toMatch(/^完成 · 2 步 · \d+s$/);
 		expect(finalCall?.args[1]).not.toContain("➜");
 		expect(finalCall?.args[2]).toBe(true);
-	});
-
-	it("preserves replacement text for rolling finalize fallback", async () => {
-		const bot = new FakeDingTalkBot();
-		bot.responseMode = "rolling_progress_then_plain_final";
-		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
-
-		await ctx.respond("➜ collect context");
-		await vi.advanceTimersByTimeAsync(800);
-		await ctx.flush();
-		await ctx.replaceMessage("final fallback text");
-		await ctx.flush();
-
-		expect(bot.calls.at(-1)).toEqual({ method: "finalizeCard", args: ["dm_123", "final fallback text"] });
-	});
-
-	it("ignores blank progress updates", async () => {
-		const bot = new FakeDingTalkBot();
-		const store = new FakeChannelStore();
-		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never);
-
-		await ctx.respond("   ");
-		await vi.runAllTimersAsync();
-		await ctx.flush();
-
-		expect(bot.calls).toEqual([]);
-		expect(store.logged).toEqual([]);
 	});
 
 	it("sends final plain responses and blocks later progress", async () => {
@@ -207,7 +186,7 @@ describe("delivery", () => {
 		]);
 	});
 
-	it("supports finalize-with-fallback and silent modes", async () => {
+	it("supports finalize-with-fallback and silent modes in both response modes", async () => {
 		const bot = new FakeDingTalkBot();
 		const ctx = createDingTalkContext(createFakeEvent(), bot as never, new FakeChannelStore() as never);
 
@@ -220,6 +199,18 @@ describe("delivery", () => {
 			{ method: "finalizeCard", args: ["dm_123", "replacement"] },
 			{ method: "discardCard", args: ["dm_123"] },
 		]);
+
+		// Rolling mode preserves the replacement text as the finalize fallback too.
+		const rollingBot = new FakeDingTalkBot();
+		rollingBot.responseMode = "rolling_progress_then_plain_final";
+		const rollingCtx = createDingTalkContext(createFakeEvent(), rollingBot as never, new FakeChannelStore() as never);
+		await rollingCtx.respond("➜ collect context");
+		await vi.advanceTimersByTimeAsync(800);
+		await rollingCtx.flush();
+		await rollingCtx.replaceMessage("final fallback text");
+		await rollingCtx.flush();
+
+		expect(rollingBot.calls.at(-1)).toEqual({ method: "finalizeCard", args: ["dm_123", "final fallback text"] });
 	});
 
 	it("waits for in-flight delivery and becomes inert after close", async () => {
@@ -267,19 +258,19 @@ describe("delivery", () => {
 		]);
 	});
 
-	it("does not archive a final response that failed to deliver", async () => {
-		const bot = new FakeDingTalkBot();
-		bot.configure("sendPlain", false);
-		const store = new FakeChannelStore();
-		const ctx = createDingTalkContext(createFakeEvent(), bot as never, store as never);
+	it("keeps archiving honest in both failure directions: undelivered finals and failing stores", async () => {
+		// A final response that failed to deliver is never archived.
+		const failedBot = new FakeDingTalkBot();
+		failedBot.configure("sendPlain", false);
+		const failedStore = new FakeChannelStore();
+		const failedCtx = createDingTalkContext(createFakeEvent(), failedBot as never, failedStore as never);
 
-		await expect(ctx.respondPlain("undelivered")).resolves.toBe(false);
+		await expect(failedCtx.respondPlain("undelivered")).resolves.toBe(false);
 
-		expect(bot.calls).toEqual([{ method: "sendPlain", args: ["dm_123", "undelivered"] }]);
-		expect(store.logged).toHaveLength(0);
-	});
+		expect(failedBot.calls).toEqual([{ method: "sendPlain", args: ["dm_123", "undelivered"] }]);
+		expect(failedStore.logged).toHaveLength(0);
 
-	it("continues delivering when bot response archiving fails", async () => {
+		// Conversely, a failing archive must not break delivery itself.
 		const bot = new FakeDingTalkBot();
 		const store = new FakeChannelStore();
 		store.logBotResponse = vi.fn(async () => {

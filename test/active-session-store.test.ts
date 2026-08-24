@@ -57,26 +57,22 @@ describe("resolveActiveSessionFile", () => {
 		expect(existsSync(join(channelDir, "20260101_abc.jsonl"))).toBe(true);
 	});
 
-	it("falls back to context.jsonl for a malformed ref instead of throwing", () => {
-		const channelDir = makeTempDir();
-		writeFileSync(getActiveSessionRefPath(channelDir), "not json");
-
-		expect(resolveActiveSessionFile(channelDir)).toBe("context.jsonl");
-	});
-
-	it.each([
-		["absolute path", "/etc/passwd.jsonl"],
-		["parent traversal", "../outside.jsonl"],
-		["nested separator", "sub/dir.jsonl"],
-		["wrong extension", "context.txt"],
-	])("rejects a ref with %s and falls back to context.jsonl", (_label, file) => {
-		const channelDir = makeTempDir();
-		writeFileSync(
-			getActiveSessionRefPath(channelDir),
-			JSON.stringify({ version: 1, file, sessionId: "x", updatedAt: new Date().toISOString() }),
-		);
-
-		expect(resolveActiveSessionFile(channelDir)).toBe("context.jsonl");
+	it("falls back to context.jsonl for any unusable ref instead of throwing", () => {
+		const updatedAt = new Date().toISOString();
+		for (const ref of [
+			// Malformed JSON...
+			"not json",
+			// ...and parseable refs whose file is unsafe: absolute path, parent traversal,
+			// nested separator, or wrong extension.
+			JSON.stringify({ version: 1, file: "/etc/passwd.jsonl", sessionId: "x", updatedAt }),
+			JSON.stringify({ version: 1, file: "../outside.jsonl", sessionId: "x", updatedAt }),
+			JSON.stringify({ version: 1, file: "sub/dir.jsonl", sessionId: "x", updatedAt }),
+			JSON.stringify({ version: 1, file: "context.txt", sessionId: "x", updatedAt }),
+		]) {
+			const channelDir = makeTempDir();
+			writeFileSync(getActiveSessionRefPath(channelDir), ref);
+			expect(resolveActiveSessionFile(channelDir), ref).toBe("context.jsonl");
+		}
 	});
 });
 
@@ -105,20 +101,17 @@ describe("commitActiveSessionRef", () => {
 		expect(typeof ref.updatedAt).toBe("string");
 	});
 
-	it("rejects a session file outside the channel directory and writes nothing", async () => {
+	it("rejects an unusable session (outside the channel dir or with no backing file) and writes nothing", async () => {
 		const channelDir = makeTempDir();
 		const outsideDir = makeTempDir();
 		const manager = SessionManager.open(join(outsideDir, "other.jsonl"), outsideDir);
 
 		await expect(commitActiveSessionRef(channelDir, manager)).rejects.toThrow(/channel directory/);
-		expect(existsSync(getActiveSessionRefPath(channelDir))).toBe(false);
-	});
 
-	it("rejects a session with no backing file", async () => {
-		const channelDir = makeTempDir();
 		const handle = { getSessionFile: () => undefined, getSessionId: () => "x" };
-
 		await expect(commitActiveSessionRef(channelDir, handle)).rejects.toThrow(/no backing file/);
+
+		expect(existsSync(getActiveSessionRefPath(channelDir))).toBe(false);
 	});
 
 	it("round-trips through resolveActiveSessionFile after commit", async () => {

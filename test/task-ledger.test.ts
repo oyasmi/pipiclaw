@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { formatLocalTime } from "../src/shared/local-time.js";
-import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { createDefaultTaskControl, parseTaskControl } from "../src/tasks/control.js";
 import {
 	appendCurrentCycleNote,
 	applyTaskPlanPatch,
@@ -32,7 +32,7 @@ function doc(front: string, body = "# Title\n\nbody"): string {
 }
 
 describe("v3 frontmatter and actionable contract", () => {
-	it("fails open to active for any status outside the current vocabulary (legacy mapping is migration-only)", () => {
+	it("carries only the v3 surface: retired v1/v2 statuses fail open and retired approval keys exist nowhere", () => {
 		expect(parseTaskFrontmatter(doc("status: in-progress"))).toMatchObject({
 			readable: true,
 			status: "active",
@@ -49,6 +49,30 @@ describe("v3 frontmatter and actionable contract", () => {
 		const paused = parseTaskFrontmatter(doc("status: paused"));
 		expect(paused).toMatchObject({ status: "active", enabled: true });
 		expect(paused.control).toBeUndefined();
+
+		// The same retirement discipline holds for the control block: v3 is the only version, and
+		// none of the v1/v2 approval/priority/budget keys survive — not in defaults, not on disk.
+		const control = createDefaultTaskControl();
+		for (const key of [
+			"priority",
+			"sideEffects",
+			"externalApproval",
+			"approvalBy",
+			"approvedAt",
+			"approvalBodyHash",
+			"provenance",
+			"budget",
+			"usage",
+			"attemptGeneration",
+			"lastOutcome",
+			"wakeHandoff",
+		]) {
+			expect(control).not.toHaveProperty(key);
+		}
+		expect(() => parseTaskControl(JSON.stringify({ ...control, version: 2 }))).toThrow(/version 3/);
+		const rendered = renderTaskDocument({ status: "active", control }, "# Title\n");
+		expect(rendered).toContain('"version":3');
+		expect(rendered).not.toMatch(/sideEffects|externalApproval|approvalBy|approvedAt|approvalBodyHash|provenance/);
 	});
 
 	it("fails open only for unreadable metadata and parks signal waits", () => {

@@ -15,39 +15,6 @@ import { activateWaitingTask, readStoredTask } from "../src/tasks/store.js";
 import { parseVerificationVerdict } from "../src/tasks/verification.js";
 
 describe("TaskControl v3", () => {
-	it("creates only the v3 control contract", () => {
-		const control = createDefaultTaskControl(true);
-		expect(control).toMatchObject({
-			version: 3,
-			verification: { required: true, status: "pending" },
-		});
-		for (const key of [
-			"priority",
-			"sideEffects",
-			"externalApproval",
-			"approvalBy",
-			"approvedAt",
-			"approvalBodyHash",
-			"provenance",
-			"budget",
-			"usage",
-			"attemptGeneration",
-			"lastOutcome",
-			"wakeHandoff",
-		]) {
-			expect(control).not.toHaveProperty(key);
-		}
-	});
-
-	it("rejects v1/v2 control and anything else that isn't v3", () => {
-		const legacy = JSON.stringify({
-			version: 2,
-			priority: "high",
-			verification: { required: true, status: "pending" },
-		});
-		expect(() => parseTaskControl(legacy)).toThrow(/version 3/);
-	});
-
 	it("patches waiting and verification facts without deriving approval", () => {
 		const control = applyTaskControlPatch(createDefaultTaskControl(), {
 			deadline: "2026-08-05T18:00:00+08:00",

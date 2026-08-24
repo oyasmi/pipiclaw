@@ -58,11 +58,9 @@ function appendToolResult(manager: SessionManager, toolCallId: string, toolName 
 }
 
 describe("planTurnRecovery", () => {
-	it("empty branch: none", () => {
+	it("empty branch or a complete assistant reply with no tool call: none", () => {
 		expect(planTurnRecovery([])).toEqual({ kind: "none" });
-	});
 
-	it("complete assistant reply with no tool call: none", () => {
 		const m = openSession();
 		appendUser(m);
 		appendAssistant(m, [{ type: "text", text: "done" }]);
@@ -112,32 +110,28 @@ describe("planTurnRecovery", () => {
 		expect(plan.calls[0].name).toBe("write");
 	});
 
-	it("duplicate tool result for the same call: blocked", () => {
-		const m = openSession();
-		appendUser(m);
-		appendAssistant(m, [{ type: "toolCall", id: "tc1", name: "bash", arguments: {} }], "toolUse");
-		appendToolResult(m, "tc1");
-		appendToolResult(m, "tc1");
-		const plan = planTurnRecovery(m.getBranch());
-		expect(plan.kind).toBe("blocked");
-	});
+	it("blocks repair for ambiguous branches instead of guessing", () => {
+		// Duplicate tool result for the same call.
+		const duplicated = openSession();
+		appendUser(duplicated);
+		appendAssistant(duplicated, [{ type: "toolCall", id: "tc1", name: "bash", arguments: {} }], "toolUse");
+		appendToolResult(duplicated, "tc1");
+		appendToolResult(duplicated, "tc1");
+		expect(planTurnRecovery(duplicated.getBranch()).kind).toBe("blocked");
 
-	it("a new user message after a missing tool call: blocked, not silently repaired", () => {
-		const m = openSession();
-		appendUser(m);
-		appendAssistant(m, [{ type: "toolCall", id: "tc1", name: "bash", arguments: {} }], "toolUse");
-		appendUser(m, "actually never mind");
-		const plan = planTurnRecovery(m.getBranch());
-		expect(plan.kind).toBe("blocked");
-	});
+		// A new user message after a missing tool call is not silently repaired.
+		const superseded = openSession();
+		appendUser(superseded);
+		appendAssistant(superseded, [{ type: "toolCall", id: "tc1", name: "bash", arguments: {} }], "toolUse");
+		appendUser(superseded, "actually never mind");
+		expect(planTurnRecovery(superseded.getBranch()).kind).toBe("blocked");
 
-	it("an unrelated assistant message after a missing tool call: blocked", () => {
-		const m = openSession();
-		appendUser(m);
-		appendAssistant(m, [{ type: "toolCall", id: "tc1", name: "bash", arguments: {} }], "toolUse");
-		appendAssistant(m, [{ type: "text", text: "unrelated" }]);
-		const plan = planTurnRecovery(m.getBranch());
-		expect(plan.kind).toBe("blocked");
+		// An unrelated assistant message after a missing tool call is equally ambiguous.
+		const derailed = openSession();
+		appendUser(derailed);
+		appendAssistant(derailed, [{ type: "toolCall", id: "tc1", name: "bash", arguments: {} }], "toolUse");
+		appendAssistant(derailed, [{ type: "text", text: "unrelated" }]);
+		expect(planTurnRecovery(derailed.getBranch()).kind).toBe("blocked");
 	});
 });
 
@@ -187,29 +181,27 @@ describe("recoverInterruptedTurn", () => {
 		expect(second).toEqual({ kind: "clean" });
 	});
 
-	it("copies api/provider/model from the most recent real assistant message, not the fallback", () => {
-		const m = openSession();
-		appendUser(m);
-		appendAssistant(m, [{ type: "text", text: "first reply" }]);
-		appendUser(m, "second request");
-		recoverInterruptedTurn(m, fallbackModel);
+	it("copies api/provider/model from the most recent real assistant, using the fallback identity only when none exists", () => {
+		const withHistory = openSession();
+		appendUser(withHistory);
+		appendAssistant(withHistory, [{ type: "text", text: "first reply" }]);
+		appendUser(withHistory, "second request");
+		recoverInterruptedTurn(withHistory, fallbackModel);
 
-		const branch = m.getBranch();
-		const result = branch.at(-1);
-		if (result?.type !== "message" || result.message.role !== "assistant") throw new Error("unexpected shape");
-		expect(result.message.model).toBe("claude-sonnet-4-5");
-		expect(result.message.model).not.toBe(fallbackModel.model);
-	});
+		const last = withHistory.getBranch().at(-1);
+		if (last?.type !== "message" || last.message.role !== "assistant") throw new Error("unexpected shape");
+		expect(last.message.model).toBe("claude-sonnet-4-5");
+		expect(last.message.model).not.toBe(fallbackModel.model);
 
-	it("uses the fallback identity when the branch has no prior assistant message at all", () => {
-		const m = openSession();
-		appendUser(m);
-		recoverInterruptedTurn(m, fallbackModel);
+		const withoutHistory = openSession();
+		appendUser(withoutHistory);
+		recoverInterruptedTurn(withoutHistory, fallbackModel);
 
-		const branch = m.getBranch();
-		const result = branch.at(-1);
-		if (result?.type !== "message" || result.message.role !== "assistant") throw new Error("unexpected shape");
-		expect(result.message.model).toBe(fallbackModel.model);
+		const fallbackResult = withoutHistory.getBranch().at(-1);
+		if (fallbackResult?.type !== "message" || fallbackResult.message.role !== "assistant") {
+			throw new Error("unexpected shape");
+		}
+		expect(fallbackResult.message.model).toBe(fallbackModel.model);
 	});
 
 	it("blocked outcome touches nothing", () => {

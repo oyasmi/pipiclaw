@@ -193,16 +193,15 @@ afterEach(() => {
 });
 
 describe("runtime structured wake delivery", () => {
-	it.each(["job", "subagent"] as const)(
-		"does not run the model for an already-consumed duplicate %s wake",
-		async (kind) => {
+	it("does not run the model for an already-consumed duplicate job or subagent wake", async () => {
+		for (const kind of ["job", "subagent"] as const) {
 			const harness = await createHarness(`duplicate_${kind}`);
 			const taskId = `T-duplicate-${kind}`;
 			const channelDir = await waitingTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId, kind);
 			const wake = await createWake(harness, kind, taskId);
 
 			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
-			expect(harness.fakeRunner.run).toHaveBeenCalledTimes(1);
+			expect(harness.fakeRunner.run, kind).toHaveBeenCalledTimes(1);
 			expect((await readStoredTask(channelDir, taskId))?.fields.status).toBe("active");
 
 			await harness.runtime.handler.handleEvent(
@@ -210,11 +209,11 @@ describe("runtime structured wake delivery", () => {
 				harness.bot as unknown as DingTalkBot,
 				true,
 			);
-			expect(harness.fakeRunner.run).toHaveBeenCalledTimes(1);
+			expect(harness.fakeRunner.run, `${kind} redelivery`).toHaveBeenCalledTimes(1);
 			expect((await readStoredTask(channelDir, taskId))?.fields.status).toBe("active");
 			await harness.runtime.shutdown();
-		},
-	);
+		}
+	});
 
 	it("still sends ordinary text without internalWake through runner.run", async () => {
 		const harness = await createHarness("ordinary_text");
@@ -235,9 +234,8 @@ describe("runtime structured wake delivery", () => {
 		await harness.runtime.shutdown();
 	});
 
-	it.each(["job", "subagent"] as const)(
-		"keeps a %s wake durable after a retryable activation failure",
-		async (kind) => {
+	it("keeps a job or subagent wake durable after a retryable activation failure", async () => {
+		for (const kind of ["job", "subagent"] as const) {
 			let fail = true;
 			const fault = () => {
 				if (fail) throw new Error("activation persist rejected");
@@ -249,17 +247,17 @@ describe("runtime structured wake delivery", () => {
 			const dispatchPath = join(harness.runtimePaths.appHomeDir, "state", "dispatch", `${wake.dispatchId}.json`);
 
 			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
-			expect(harness.fakeRunner.run).not.toHaveBeenCalled();
+			expect(harness.fakeRunner.run, kind).not.toHaveBeenCalled();
 			expect(existsSync(dispatchPath)).toBe(true);
-			expect(JSON.parse(readFileSync(dispatchPath, "utf-8"))).toMatchObject({ status: "pending" });
+			expect(JSON.parse(readFileSync(dispatchPath, "utf-8")), kind).toMatchObject({ status: "pending" });
 			expect((await readStoredTask(channelDir, taskId))?.fields.status).toBe("waiting");
 
 			fail = false;
 			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
-			expect(harness.fakeRunner.run).toHaveBeenCalledOnce();
+			expect(harness.fakeRunner.run, `${kind} retry`).toHaveBeenCalledOnce();
 			expect(existsSync(dispatchPath)).toBe(false);
 			expect((await readStoredTask(channelDir, taskId))?.fields.status).toBe("active");
 			await harness.runtime.shutdown();
-		},
-	);
+		}
+	});
 });
