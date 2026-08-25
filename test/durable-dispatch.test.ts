@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
-import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
+import { type DurableDispatchRecord, DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import { claimVerifiedDelegationWake } from "../src/runtime/task-wake.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
@@ -322,5 +322,89 @@ describe("DurableDispatchService", () => {
 		expect(delivered).toHaveLength(2);
 
 		expect(await service.cancelChannel("some-other-channel")).toBe(0);
+	});
+
+	it("backs off a markRetryable failure instead of redelivering on the very next tick", async () => {
+		vi.useFakeTimers();
+		const start = new Date("2026-01-01T00:00:00.000Z");
+		vi.setSystemTime(start);
+
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(event());
+		expect(delivered).toHaveLength(1);
+		const id = delivered[0]?.dispatchId;
+
+		// The handler claimed the turn, then failed structurally (not a queue race) — markRetryable
+		// must not make it eligible for redelivery on the very next 30s drain tick.
+		await service.markStarted(id);
+		await service.markRetryable(id);
+
+		vi.setSystemTime(new Date(start.getTime() + 5_000));
+		await service.drainOnce(Date.now());
+		expect(delivered).toHaveLength(1);
+
+		vi.setSystemTime(new Date(start.getTime() + 31_000));
+		await service.drainOnce(Date.now());
+		expect(delivered).toHaveLength(2);
+	});
+
+	it("gives up after repeated markRetryable failures and notifies onExhausted exactly once", async () => {
+		vi.useFakeTimers();
+		let now = new Date("2026-01-01T00:00:00.000Z");
+		vi.setSystemTime(now);
+
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const delivered: DingTalkEvent[] = [];
+		const exhausted: DurableDispatchRecord[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+			onExhausted: (record) => {
+				exhausted.push(record);
+			},
+		});
+		await service.dispatch(event());
+		const id = delivered[0]?.dispatchId;
+
+		// A structural failure (disk full, permissions) that repeats on every delivery must
+		// eventually stop retrying instead of looping every 30s forever.
+		for (let i = 0; i < 12 && exhausted.length === 0; i++) {
+			await service.markStarted(id);
+			await service.markRetryable(id);
+			now = new Date(now.getTime() + 20 * 60_000); // well past the capped backoff
+			vi.setSystemTime(now);
+			await service.drainOnce(Date.now());
+		}
+
+		expect(exhausted).toHaveLength(1);
+		expect(exhausted[0]?.id).toBe(id);
+		const deliveredCount = delivered.length;
+		expect(deliveredCount).toBeGreaterThan(1);
+		expect(deliveredCount).toBeLessThan(12);
+
+		const stored = JSON.parse(readFileSync(join(stateDir, `${id}.json`), "utf-8"));
+		expect(stored.status).toBe("exhausted");
+
+		// The poison-pilled record is neither redelivered nor re-notified.
+		now = new Date(now.getTime() + 20 * 60_000);
+		vi.setSystemTime(now);
+		await service.drainOnce(Date.now());
+		expect(delivered).toHaveLength(deliveredCount);
+		expect(exhausted).toHaveLength(1);
 	});
 });

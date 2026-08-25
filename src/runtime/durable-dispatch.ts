@@ -1,15 +1,17 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
+import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { ChannelEvent } from "./channel-event.js";
 import type { DingTalkBot } from "./dingtalk.js";
 
-type DispatchStatus = "pending" | "queued" | "running";
+type DispatchStatus = "pending" | "queued" | "running" | "exhausted";
 
-interface DurableDispatchRecord {
+export interface DurableDispatchRecord {
 	version: 1;
 	id: string;
 	createdAt: string;
@@ -17,6 +19,9 @@ interface DurableDispatchRecord {
 	event: ChannelEvent;
 	deliveries: number;
 	leaseExpiresAt?: string;
+	/** Set by `markRetryable` to back off a repeatedly-failing structured wake instead of
+	 * redelivering on the very next drain tick (spec 031's redelivery has no such gate). */
+	nextAttemptAt?: string;
 }
 
 export interface DurableDispatchOptions {
@@ -24,10 +29,20 @@ export interface DurableDispatchOptions {
 	bot: Pick<DingTalkBot, "enqueueEvent">;
 	leaseMs?: number;
 	intervalMs?: number;
+	/** Called once, at most, when a dispatch id hits `MAX_DELIVERIES` without ever completing —
+	 * e.g. a structured wake whose claim/finish step fails deterministically (disk full,
+	 * permissions). The record is left on disk (not deleted) so the failure is inspectable; the
+	 * caller is expected to notify the channel. */
+	onExhausted?: (record: DurableDispatchRecord) => void | Promise<void>;
 }
 
 const DEFAULT_LEASE_MS = 15 * 60_000;
 const DEFAULT_INTERVAL_MS = 30_000;
+/** Total delivery attempts (crash-lease redelivery and `markRetryable` failures combined) before
+ * a dispatch id is given up on as a poison pill rather than retried forever. */
+const MAX_DELIVERIES = 8;
+const MIN_RETRY_BACKOFF_MS = 30_000;
+const MAX_RETRY_BACKOFF_MS = 10 * 60_000;
 
 function recordPath(stateDir: string, id: string): string {
 	return join(stateDir, `${id}.json`);
@@ -67,11 +82,15 @@ function parseRecord(raw: string): DurableDispatchRecord | undefined {
 			value.version !== 1 ||
 			typeof value.id !== "string" ||
 			typeof value.createdAt !== "string" ||
-			(value.status !== "pending" && value.status !== "queued" && value.status !== "running") ||
+			(value.status !== "pending" &&
+				value.status !== "queued" &&
+				value.status !== "running" &&
+				value.status !== "exhausted") ||
 			!isRecord(value.event) ||
 			typeof value.event.channelId !== "string" ||
 			typeof value.event.text !== "string" ||
-			typeof value.deliveries !== "number"
+			typeof value.deliveries !== "number" ||
+			(value.nextAttemptAt !== undefined && typeof value.nextAttemptAt !== "string")
 		) {
 			return undefined;
 		}
@@ -138,9 +157,12 @@ export class DurableDispatchService {
 		// channel's outstanding record just to learn the outcome of the one just written.
 		await this.drainRecord(id, Date.now());
 		// The record is gone (delivered+completed already) or no longer "pending"
-		// (drainRecord only reverts to "pending" when bot.enqueueEvent rejected it).
+		// (drainRecord only reverts to "pending" when bot.enqueueEvent rejected it). "exhausted"
+		// is reported as not-accepted too: the poison pill is durably recorded and its owner
+		// notified via onExhausted, but this dispatch id will never be delivered again.
 		const after = await this.read(id);
-		return after?.status !== "pending";
+		if (!after) return true;
+		return after.status !== "pending" && after.status !== "exhausted";
 	}
 
 	/** Reset any in-flight records for a channel so a stop/abort can redeliver on the next tick, not after the lease expires. */
@@ -191,15 +213,26 @@ export class DurableDispatchService {
 
 	/** Release a failed handler's in-process claim without deleting its durable record. Structured
 	 * wake activation uses this for transient task/job/run persistence failures so the next drain
-	 * can retry the same dispatch id instead of losing the only completion signal. */
+	 * can retry the same dispatch id instead of losing the only completion signal.
+	 *
+	 * A failure here means the handler itself is broken for this wake (a claim or finish step
+	 * threw), not that the outbox lost a race — redelivering on the very next 30s tick would just
+	 * repeat the same failure forever. Back off exponentially by delivery count instead; `deliveries`
+	 * doubles as the poison-pill counter in `drainRecord`, so a wake that keeps failing here still
+	 * eventually hits `MAX_DELIVERIES` and stops. */
 	async markRetryable(id: string | undefined): Promise<void> {
 		if (!id) return;
 		this.running.delete(id);
 		await this.queue.run(id, async () => {
 			const record = await this.read(id);
 			if (!record) return;
+			const backoffMs = Math.min(
+				MIN_RETRY_BACKOFF_MS * 2 ** Math.max(0, record.deliveries - 1),
+				MAX_RETRY_BACKOFF_MS,
+			);
 			record.status = "pending";
 			record.leaseExpiresAt = undefined;
+			record.nextAttemptAt = new Date(Date.now() + backoffMs).toISOString();
 			await this.write(record);
 		});
 	}
@@ -221,6 +254,9 @@ export class DurableDispatchService {
 		await this.queue.run(id, async () => {
 			const record = await this.read(id);
 			if (!record) return;
+			// A poison pill: give up on redelivery for good, once. Left on disk (not deleted) so
+			// `onExhausted`'s notice stays inspectable and the record is available for manual retry.
+			if (record.status === "exhausted") return;
 			// The turn is still running in this process: renew its lease rather than treating a
 			// long turn as a lost one and redelivering the wake underneath it (D2).
 			if (record.status === "running" && this.running.has(id)) {
@@ -236,9 +272,26 @@ export class DurableDispatchService {
 			}
 			const leaseMs = record.leaseExpiresAt ? new Date(record.leaseExpiresAt).getTime() : undefined;
 			if ((record.status === "queued" || record.status === "running") && leaseMs && leaseMs > now) return;
+			// markRetryable's backoff window; a plain enqueueEvent-rejected "pending" (no
+			// nextAttemptAt) still retries on the very next tick, as before.
+			const nextAttemptMs = record.nextAttemptAt ? new Date(record.nextAttemptAt).getTime() : undefined;
+			if (record.status === "pending" && nextAttemptMs && nextAttemptMs > now) return;
+			if (record.deliveries >= MAX_DELIVERIES) {
+				record.status = "exhausted";
+				record.leaseExpiresAt = undefined;
+				record.nextAttemptAt = undefined;
+				await this.write(record);
+				try {
+					await this.options.onExhausted?.(record);
+				} catch (err) {
+					log.logWarning(`Dispatch onExhausted handler failed for ${id}`, errorMessage(err));
+				}
+				return;
+			}
 			record.status = "queued";
 			record.deliveries++;
 			record.leaseExpiresAt = new Date(now + this.leaseMs).toISOString();
+			record.nextAttemptAt = undefined;
 			await this.write(record);
 			const accepted = this.options.bot.enqueueEvent(
 				withRedeliveryNotice({ ...record.event, dispatchId: record.id }, record.deliveries),

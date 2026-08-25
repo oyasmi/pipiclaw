@@ -841,6 +841,22 @@ export async function createRuntimeContext(
 	durableDispatch = new DurableDispatchService({
 		stateDir: join(options.paths.appHomeDir, "state", "dispatch"),
 		bot,
+		// A structured wake (job/subagent completion, task-driver) that keeps failing before it can
+		// ever mark itself complete would otherwise redeliver forever (30s tick, no backoff prior to
+		// this notice). Surface it once instead of looping silently; the record stays on disk for
+		// inspection until a human clears it.
+		onExhausted: async (record) => {
+			log.logWarning(
+				`[${record.event.channelId}] Dispatch ${record.id} exhausted after ${record.deliveries} deliveries`,
+				record.event.text.slice(0, 500),
+			);
+			await bot.sendPlain(
+				record.event.channelId,
+				`一个后台唤醒（${record.event.user}）连续 ${record.deliveries} 次投递均未能完成，已停止自动重试：\n` +
+					`${record.event.text.slice(0, 300)}\n` +
+					`记录文件：state/dispatch/${record.id}.json（已保留，供排查）。`,
+			);
+		},
 	});
 	const executor = createExecutor();
 	// Background jobs get their persistence root and their way to wake a channel before any turn
