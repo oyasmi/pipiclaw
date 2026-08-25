@@ -14,7 +14,7 @@ import {
 	taskBody,
 	upsertCurrentCycleCompletionEvidence,
 } from "../../tasks/ledger.js";
-import { taskEventPrefix } from "../../tasks/task-events.js";
+import { parseTaskEventName } from "../../tasks/task-events.js";
 import { nextTaskWake, validateTaskSchedule } from "../../tasks/task-schedule.js";
 import { isSettableTaskStatus } from "../../tasks/transitions.js";
 import { RecoverableToolError } from "../tool-details.js";
@@ -221,16 +221,22 @@ export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFi
  * recurring task needs no surviving `.schedule` event — the driver reopens each cycle from
  * frontmatter. Any remaining task-owned events are temporary sensors/check-ins that a closed
  * task should not keep alive. A file that cannot be parsed is left for `/events` to handle.
+ *
+ * Matching is done by parsing each candidate name and comparing the full task id, not by
+ * prefix — a prefix match on `task.<channel>.<id>.` would also match a *different* task whose
+ * id happens to start with this one plus a dot (e.g. closing "v1" must not delete events owned
+ * by "v1.2-release").
  */
 export async function cleanupTaskEvents(options: TaskManageToolOptions, id: string): Promise<{ deleted: string[] }> {
 	const dir = eventsDir(options);
 	if (!existsSync(dir)) return { deleted: [] };
 
-	const prefix = taskEventPrefix(options.channelId, id);
 	const deleted: string[] = [];
 
 	for (const filename of (await readdir(dir)).sort()) {
-		if (!filename.endsWith(".json") || !filename.startsWith(prefix)) continue;
+		if (!filename.endsWith(".json")) continue;
+		const parsed = parseTaskEventName(filename.slice(0, -".json".length), options.channelId);
+		if (parsed?.id !== id) continue;
 		const eventPath = join(dir, filename);
 		let content: string;
 		try {

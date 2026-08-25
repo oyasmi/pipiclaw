@@ -11,4 +11,11 @@ describe("task event naming helpers", () => {
 		expect(parseTaskEventName("task.dm_2.weekly.checkin", "dm_1")).toBeUndefined();
 		expect(parseTaskEventName("task.dm_1.bad", "dm_1")).toBeUndefined();
 	});
+
+	it("keeps a dotted task id whole by splitting on the last dot", () => {
+		expect(parseTaskEventName("task.dm_1.v1.2-release.checkin", "dm_1")).toEqual({
+			id: "v1.2-release",
+			use: "checkin",
+		});
+	});
 });

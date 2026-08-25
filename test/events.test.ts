@@ -465,6 +465,24 @@ describe("EventsWatcher", () => {
 			}
 		});
 
+		it("fires while the owning task is still live for a dotted task id", async () => {
+			// Task ids allow dots (TASK_ID_PATTERN), so the owner lookup must parse the id with the
+			// same last-dot rule as parseTaskEventName — not cut it at the first dot.
+			const channelId = "dm_1";
+			const dir = join(createTempDir(), "events-dotted-task-id");
+			mkdirSync(dir, { recursive: true });
+			writeOwningTask(dir, channelId, "v1.2-release", "active");
+			const filename = `task.${channelId}.v1.2-release.checkin.json`;
+			writeFileSync(join(dir, filename), "{}");
+			const bot = new FakeBot(true);
+			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
+
+			await privateApi.execute(filename, taskEventFixture(channelId), false);
+
+			expect(bot.events).toHaveLength(1);
+			expect(existsSync(join(dir, filename))).toBe(true);
+		});
+
 		it("retires itself when the owning task is gone or has reached a terminal status", async () => {
 			for (const variant of [
 				{ label: "gone", taskBody: undefined as string | undefined },

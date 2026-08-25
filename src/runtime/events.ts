@@ -20,7 +20,7 @@ import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appende
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { parseTaskFrontmatter } from "../tasks/ledger.js";
-import { taskEventPrefix } from "../tasks/task-events.js";
+import { parseTaskEventName } from "../tasks/task-events.js";
 import type { ChannelEvent } from "./channel-event.js";
 import type { DingTalkBot } from "./dingtalk.js";
 import { MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./event-validation.js";
@@ -654,15 +654,15 @@ export class EventsWatcher {
 	 * by hand, and then wakes the channel forever about work that no longer exists. Checking the
 	 * owner at trigger time turns that permanent noise into self-healing (spec 031, D5).
 	 *
-	 * The name alone is ambiguous (a channelId may contain dots), so the owning channel is taken
-	 * from the event definition and only the task id is parsed out of the remainder.
+	 * The name alone is ambiguous (a channelId may contain dots, and so may a task id), so the
+	 * owning channel is taken from the event definition and the id is parsed with the same
+	 * last-dot rule the rest of the task-event code uses (`parseTaskEventName`), not a hand-rolled
+	 * split that would cut a dotted task id short.
 	 */
 	private async orphanedOwnerReason(filename: string, event: ScheduledEvent): Promise<string | undefined> {
-		const prefix = taskEventPrefix(event.channelId);
-		const name = eventNameFromFilename(filename);
-		if (!name.startsWith(prefix)) return undefined;
-		const taskId = name.slice(prefix.length).split(".")[0];
-		if (!taskId) return undefined;
+		const parsed = parseTaskEventName(eventNameFromFilename(filename), event.channelId);
+		if (!parsed) return undefined;
+		const taskId = parsed.id;
 
 		const taskPath = join(dirname(this.eventsDir), event.channelId, "tasks", `${taskId}.md`);
 		let content: string;

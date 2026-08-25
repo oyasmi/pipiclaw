@@ -208,6 +208,35 @@ describe("task_manage v3", () => {
 		expect(await readFile(join(tasksDir, "archive", "done.md"), "utf-8")).toContain("outcome: completed");
 	});
 
+	it("deletes only the closed task's own events, not a sibling task whose id is a dotted extension of it", async () => {
+		// "v1" is a string-prefix of "v1.2-release"; task ids may contain dots (TASK_ID_PATTERN),
+		// so cleanup must match the parsed id exactly, not `startsWith("task.<channel>.v1.")`.
+		await createOneShot("v1");
+		await writeTask("v1.2-release", "status: active");
+		const eventsDir = join(workspaceDir, "events");
+		await mkdir(eventsDir, { recursive: true });
+		const ownEvent = join(eventsDir, "task.dm_1.v1.checkin.json");
+		const siblingEvent = join(eventsDir, "task.dm_1.v1.2-release.checkin.json");
+		const eventBody = JSON.stringify({
+			type: "periodic",
+			channelId: CHANNEL_ID,
+			text: "check",
+			schedule: "0 * * * *",
+		});
+		await writeFile(ownEvent, eventBody);
+		await writeFile(siblingEvent, eventBody);
+
+		await manageTask(options, {
+			action: "complete",
+			id: "v1",
+			summary: "Finished.",
+			evidence: "The checked DoD item is present.",
+		});
+
+		expect(existsSync(ownEvent)).toBe(false);
+		expect(existsSync(siblingEvent)).toBe(true);
+	});
+
 	it("closes recurring complete and skip as sleeping, not as live terminal states", async () => {
 		await writeTask("complete-cycle", "status: active\nschedule: 0 9 * * 1");
 		const completed = await manageTask(options, {
