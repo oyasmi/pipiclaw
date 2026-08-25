@@ -5,6 +5,11 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
+/** Like {@link isRecord}, but false for arrays — for parsing JSON where an array is not a valid shape. */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function isStandardAgentMessage(message: AgentMessage): message is Message {
 	return (
 		typeof message === "object" &&

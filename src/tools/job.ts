@@ -1,6 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager, JobSnapshot } from "../agent/job-manager.js";
+import { formatDuration } from "../shared/duration.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { truncateTail } from "./truncate.js";
 
@@ -25,14 +26,6 @@ interface JobToolArgs {
 	label: string;
 	op: "list" | "poll" | "cancel";
 	ids?: string[];
-}
-
-function formatDuration(ms: number): string {
-	const seconds = Math.round(ms / 1000);
-	if (seconds < 60) {
-		return `${seconds}s`;
-	}
-	return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
 }
 
 function formatJobLine(job: JobSnapshot): string {

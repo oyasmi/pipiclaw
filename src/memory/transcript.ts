@@ -60,3 +60,39 @@ export function sanitizeMessagesForMemory(messages: AgentMessage[]): Message[] {
 			return message;
 		});
 }
+
+/** The displayable text of one user/assistant `Message`, or `""` for a role with no text content. */
+export function messageText(message: Message): string {
+	if (message.role === "user") {
+		return typeof message.content === "string"
+			? message.content
+			: message.content.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
+	}
+	if (message.role === "assistant") {
+		return message.content
+			.map((part) => (part.type === "text" ? part.text : ""))
+			.filter(Boolean)
+			.join("\n");
+	}
+	return "";
+}
+
+/**
+ * True once the transcript contains a real back-and-forth — at least one user turn and one
+ * assistant turn that both carry non-empty text — rather than just a one-sided ping or a run of
+ * tool-only turns. This is the single bar for "worth running memory consolidation on"; it used to
+ * be answered two different ways in two different maintenance paths, which could reach opposite
+ * conclusions on the same short, hand-authored transcript.
+ */
+export function hasMeaningfulExchange(messages: Message[]): boolean {
+	let userSeen = false;
+	let assistantSeen = false;
+	for (const message of messages) {
+		if (message.role !== "user" && message.role !== "assistant") continue;
+		if (!messageText(message).trim()) continue;
+		if (message.role === "user") userSeen = true;
+		if (message.role === "assistant") assistantSeen = true;
+		if (userSeen && assistantSeen) return true;
+	}
+	return false;
+}

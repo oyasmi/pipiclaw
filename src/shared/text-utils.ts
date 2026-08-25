@@ -1,7 +1,13 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
-export function clipText(text: string, maxChars: number, opts: { headRatio?: number; omitHint?: string } = {}): string {
-	const normalized = text.replace(/\s+\n/g, "\n").replace(/\r/g, "").trim();
+export function clipText(
+	text: string,
+	maxChars: number,
+	opts: { headRatio?: number; omitHint?: string; collapseWhitespace?: boolean } = {},
+): string {
+	const normalized = opts.collapseWhitespace
+		? text.replace(/\s+/g, " ").trim()
+		: text.replace(/\s+\n/g, "\n").replace(/\r/g, "").trim();
 	if (normalized.length <= maxChars) {
 		return normalized;
 	}

@@ -58,7 +58,7 @@ import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import type { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
-import { formatLocalTime, localStampForFilename } from "../shared/local-time.js";
+import { formatLocalTime, localStampForFilename, parseLocalTime } from "../shared/local-time.js";
 import { countPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
@@ -1039,10 +1039,13 @@ export class ChannelRunner implements AgentRunner {
 	 */
 	private recordMemoryActivity(event: MemoryActivityEvent): void {
 		const maintenanceSettings = this.settingsManager.getMemoryMaintenanceSettings();
-		const eventTime = Date.parse(event.timestamp);
-		const eligibleAfter = Number.isFinite(eventTime)
-			? new Date(eventTime + Math.max(0, maintenanceSettings.minIdleMinutesBeforeLlmWork) * 60_000).toISOString()
-			: undefined;
+		const eventTime = parseLocalTime(event.timestamp);
+		const eligibleAfter =
+			eventTime !== undefined
+				? formatLocalTime(
+						new Date(eventTime + Math.max(0, maintenanceSettings.minIdleMinutesBeforeLlmWork) * 60_000),
+					)
+				: undefined;
 		this.memoryActivityRecorder.record({ ...event, eligibleAfter });
 	}
 

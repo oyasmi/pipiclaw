@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from "crypto";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { appendFile, copyFile, readdir, rename, rm, stat } from "fs/promises";
 import { basename, join } from "path";
-import { writeFileAtomically } from "../shared/atomic-file.js";
+import { writeFileAtomically, writeFileAtomicallySync } from "../shared/atomic-file.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
-import { formatLocalTime, localStampForFilename } from "../shared/local-time.js";
+import { formatLocalTime, localStampForFilename, parseLocalTime } from "../shared/local-time.js";
 import { type MemoryMetadataUpdate, type MemoryWriteMetadataInput, syncMemoryMetadata } from "./metadata.js";
 import { containsSecret, REDACTED_SECRET } from "./secret-redaction.js";
 import { appendMemoryTombstone, hashMemoryContent, readMemoryTombstones } from "./tombstones.js";
@@ -101,7 +101,7 @@ export function parseUpdateHeadingTimestamp(heading: string): string | undefined
 		return undefined;
 	}
 	const timestamp = match[1].trim();
-	return Number.isFinite(Date.parse(timestamp)) ? timestamp : undefined;
+	return parseLocalTime(timestamp) !== undefined ? timestamp : undefined;
 }
 
 export interface ParsedMemoryEntry {
@@ -415,13 +415,13 @@ export function ensureChannelMemoryFilesSync(channelDir: string): void {
 	mkdirSync(channelDir, { recursive: true });
 
 	if (!existsSync(memoryPath)) {
-		writeFileSync(memoryPath, DEFAULT_CHANNEL_MEMORY, "utf-8");
+		writeFileAtomicallySync(memoryPath, DEFAULT_CHANNEL_MEMORY);
 	}
 	if (!existsSync(historyPath)) {
-		writeFileSync(historyPath, DEFAULT_CHANNEL_HISTORY, "utf-8");
+		writeFileAtomicallySync(historyPath, DEFAULT_CHANNEL_HISTORY);
 	}
 	if (!existsSync(sessionPath)) {
-		writeFileSync(sessionPath, DEFAULT_CHANNEL_SESSION, "utf-8");
+		writeFileAtomicallySync(sessionPath, DEFAULT_CHANNEL_SESSION);
 	}
 }
 

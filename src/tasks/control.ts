@@ -1,5 +1,6 @@
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { isPlainObject } from "../shared/type-guards.js";
 
 export type TaskVerificationStatus = "pending" | "passed" | "failed";
 /** Diagnostic display only (spec 043); it does not gate wake activation. */
@@ -45,10 +46,6 @@ export interface TaskControlPatch {
 const WAITING_FOR: readonly TaskWaitingFor[] = ["time", "user", "job", "external-signal"];
 const VERIFICATION_STATUSES: readonly TaskVerificationStatus[] = ["pending", "passed", "failed"];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function optionalString(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
@@ -65,7 +62,7 @@ function enumValue<T extends string>(value: unknown, values: readonly T[], fallb
 
 function parseStop(value: unknown): TaskStop | undefined {
 	if (value === undefined) return undefined;
-	if (!isRecord(value)) throw new Error("control.stop must be an object");
+	if (!isPlainObject(value)) throw new Error("control.stop must be an object");
 	const by = enumValue(value.by, ["user", "governor"] as const, "user");
 	const reason = optionalString(value.reason);
 	const at = optionalString(value.at);
@@ -90,11 +87,11 @@ export function parseTaskControl(raw: string): TaskControl {
 	} catch (error) {
 		throw new Error(`control is not valid JSON: ${errorMessage(error)}`);
 	}
-	if (!isRecord(value) || value.version !== 3) {
+	if (!isPlainObject(value) || value.version !== 3) {
 		throw new Error("control must be a version 3 JSON object; repair it with task_manage set.");
 	}
 
-	const verification = isRecord(value.verification) ? value.verification : {};
+	const verification = isPlainObject(value.verification) ? value.verification : {};
 	const deadline = optionalString(value.deadline);
 	if (deadline && parseLocalTime(deadline) === undefined) {
 		throw new Error("control.deadline must be a valid local time");
@@ -129,11 +126,11 @@ export function parseLegacyTaskControl(raw: string): TaskControl {
 	} catch (error) {
 		throw new Error(`control is not valid JSON: ${errorMessage(error)}`);
 	}
-	if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) {
+	if (!isPlainObject(value) || (value.version !== 1 && value.version !== 2)) {
 		throw new Error("legacy control must be a version 1 or version 2 JSON object");
 	}
 
-	const verification = isRecord(value.verification) ? value.verification : {};
+	const verification = isPlainObject(value.verification) ? value.verification : {};
 	const deadline = optionalString(value.deadline);
 	const waitingFor =
 		value.waitingFor === undefined ? undefined : enumValue(value.waitingFor, WAITING_FOR, "external-signal");

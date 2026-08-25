@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { getLatestCompactionEntry, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
 import { formatLocalTime } from "../shared/local-time.js";
@@ -24,7 +24,7 @@ import {
 import { MEMORY_INPUT_SAFETY_RULES } from "./prompt-safety.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 import type { MemorySourceWindow } from "./source-window.js";
-import { sanitizeMessagesForMemory } from "./transcript.js";
+import { hasMeaningfulExchange, sanitizeMessagesForMemory } from "./transcript.js";
 
 const INLINE_TRANSCRIPT_MAX_CHARS = 28_000;
 const MEMORY_CLEANUP_LENGTH_THRESHOLD = 5_000;
@@ -138,31 +138,6 @@ function extractMessagesFromSessionEntries(entries: SessionEntry[]): AgentMessag
 	return entries.filter(isMessage).map((entry) => entry.message);
 }
 
-function hasMeaningfulMessages(messages: Message[]): boolean {
-	let meaningfulCount = 0;
-	for (const message of messages) {
-		if (message.role === "user") {
-			const text =
-				typeof message.content === "string"
-					? message.content
-					: message.content.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
-			if (text.trim()) meaningfulCount++;
-		} else if (message.role === "assistant") {
-			const text = message.content
-				.filter(
-					(part): part is Extract<AssistantMessage["content"][number], { type: "text" }> => part.type === "text",
-				)
-				.map((part) => part.text)
-				.join("\n");
-			if (text.trim()) meaningfulCount++;
-		}
-		if (meaningfulCount >= 2) {
-			return true;
-		}
-	}
-	return false;
-}
-
 function countMatchingSectionHeadings(content: string, prefix: string): number {
 	return splitH2Sections(content).filter((section) => section.heading.startsWith(prefix)).length;
 }
@@ -224,7 +199,7 @@ export async function runInlineConsolidation(options: ConsolidationRunOptions): 
 		options.sourceWindow?.messages ??
 		(sourceEntries.length > 0 ? extractMessagesFromSessionEntries(sourceEntries) : options.messages);
 
-	if (!hasMeaningfulMessages(sanitizeMessagesForMemory(relevantMessages))) {
+	if (!hasMeaningfulExchange(sanitizeMessagesForMemory(relevantMessages))) {
 		return {
 			skipped: true,
 			appendedMemoryEntries: 0,

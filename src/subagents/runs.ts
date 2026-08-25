@@ -4,6 +4,7 @@ import * as log from "../log.js";
 import type { ChannelEvent } from "../runtime/channel-event.js";
 import type { ChannelStore } from "../runtime/store.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
+import { formatDuration } from "../shared/duration.js";
 import { isProcessAlive, killProcessGroup, readProcessStartTime } from "../shared/host-process.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
@@ -253,12 +254,6 @@ function parseRunRecord(raw: string): RunRecord | undefined {
 		return undefined;
 	}
 	return value as unknown as RunRecord;
-}
-
-function formatDuration(ms: number): string {
-	const seconds = Math.round(ms / 1000);
-	if (seconds < 60) return `${seconds}s`;
-	return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
 }
 
 /**

@@ -488,17 +488,29 @@ function normalizeExactMatchQuery(query: string): string {
 	return normalizedQuery.length >= minLength ? normalizedQuery : "";
 }
 
-function computeRecencyBoost(timestamp: string | undefined): number {
+/**
+ * Age-bucketed recency boost (≤1 day / ≤7 days / ≤30 days / older), scaled by `weights` — the
+ * bucket shape is shared with `session-search.ts`'s scoring, but the two scoring systems live on
+ * different magnitudes, so each caller supplies its own weights rather than sharing a fixed scale.
+ */
+export function recencyBoostByAge(
+	timestamp: string | undefined,
+	weights: { day: number; week: number; month: number },
+): number {
 	if (!timestamp) return 0;
-	const timestampMs = Date.parse(timestamp);
-	if (!Number.isFinite(timestampMs)) return 0;
+	const timestampMs = parseLocalTime(timestamp);
+	if (timestampMs === undefined) return 0;
 
 	const ageMs = Date.now() - timestampMs;
 	const dayMs = 24 * 60 * 60 * 1000;
-	if (ageMs <= dayMs) return 6;
-	if (ageMs <= 7 * dayMs) return 4;
-	if (ageMs <= 30 * dayMs) return 2;
+	if (ageMs <= dayMs) return weights.day;
+	if (ageMs <= 7 * dayMs) return weights.week;
+	if (ageMs <= 30 * dayMs) return weights.month;
 	return 0;
+}
+
+function computeRecencyBoost(timestamp: string | undefined): number {
+	return recencyBoostByAge(timestamp, { day: 6, week: 4, month: 2 });
 }
 
 function detectQueryIntents(query: string): Set<QueryIntent> {

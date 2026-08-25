@@ -3,6 +3,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { normalizeSafeId } from "../shared/safe-id.js";
 import { parseTaskControl, type TaskControl } from "./control.js";
 import { nextTaskWake } from "./task-schedule.js";
 import { normalizeStoredStatus } from "./transitions.js";
@@ -102,12 +103,7 @@ const HISTORY_TRUNCATION_NOTE =
 
 /** Validate/normalize a task id (filename without `.md`), rejecting path traversal. */
 export function normalizeTaskId(id: string): string {
-	const trimmed = id.trim();
-	const normalized = trimmed.endsWith(".md") ? trimmed.slice(0, -".md".length) : trimmed;
-	if (!normalized || normalized === "." || normalized === ".." || !TASK_ID_PATTERN.test(normalized)) {
-		throw new Error(`Invalid task id: ${id}`);
-	}
-	return normalized;
+	return normalizeSafeId(id, { suffix: ".md", pattern: TASK_ID_PATTERN, label: "task id" });
 }
 
 /** The document body after the leading frontmatter block, or the whole content when there is none. */

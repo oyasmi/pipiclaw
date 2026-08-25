@@ -8,7 +8,7 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import * as log from "./log.js";
 import {
@@ -17,6 +17,7 @@ import {
 	type MemoryMaintenanceTuning,
 } from "./memory/maintenance-tuning.js";
 import type { ResponseMode } from "./runtime/dingtalk.js";
+import { writeFileAtomicallySync } from "./shared/atomic-file.js";
 import type { ConfigDiagnostic } from "./shared/config-diagnostic.js";
 import { fileStamp } from "./shared/file-stamp.js";
 
@@ -343,7 +344,7 @@ export class PipiclawSettingsManager {
 			if (!existsSync(dir)) {
 				mkdirSync(dir, { recursive: true });
 			}
-			writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2), "utf-8");
+			writeFileAtomicallySync(this.settingsPath, JSON.stringify(this.settings, null, 2));
 		} catch (error) {
 			log.logWarning(`Could not save settings file`, `${this.settingsPath}\n${String(error)}`);
 		}

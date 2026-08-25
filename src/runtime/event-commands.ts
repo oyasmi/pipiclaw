@@ -1,9 +1,10 @@
 import { existsSync } from "fs";
 import { readdir, readFile, unlink } from "fs/promises";
-import { join, resolve, sep } from "path";
+import { join } from "path";
 import { renderSubcommandUsage } from "../agent/commands.js";
 import { capReply } from "../agent/reply-limits.js";
-import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
+import { normalizeSafeId, resolveSafeIdPath } from "../shared/safe-id.js";
+import { errorMessage, eventNameFromFilename, clipText as sharedClipText } from "../shared/text-utils.js";
 import { type EventHistoryRecord, parseScheduledEventContent, type ScheduledEvent } from "./events.js";
 
 const EVENT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -59,30 +60,21 @@ function eventsDir(workspaceDir: string): string {
 	return join(workspaceDir, "events");
 }
 
+const SAFE_ID_OPTIONS = { suffix: ".json", pattern: EVENT_NAME_PATTERN, label: "event name" };
+
 // English on purpose: shared with the model-facing `event_manage` tool (src/tools/event-manage.ts),
 // which follows the tool-error convention elsewhere in the codebase, not the command-reply one.
 export function normalizeEventName(name: string): string {
-	const trimmed = name.trim();
-	const normalized = trimmed.endsWith(".json") ? trimmed.slice(0, -".json".length) : trimmed;
-	if (!normalized || normalized === "." || normalized === ".." || !EVENT_NAME_PATTERN.test(normalized)) {
-		throw new Error(`Invalid event name: ${name}`);
-	}
-	return normalized;
+	return normalizeSafeId(name, SAFE_ID_OPTIONS);
 }
 
 export function resolveEventPath(workspaceDir: string, name: string): { eventName: string; eventPath: string } {
-	const eventName = normalizeEventName(name);
-	const dir = resolve(eventsDir(workspaceDir));
-	const eventPath = resolve(dir, `${eventName}.json`);
-	if (eventPath !== join(dir, `${eventName}.json`) || !eventPath.startsWith(`${dir}${sep}`)) {
-		throw new Error(`Invalid event name: ${name}`);
-	}
+	const { id: eventName, path: eventPath } = resolveSafeIdPath(eventsDir(workspaceDir), name, SAFE_ID_OPTIONS);
 	return { eventName, eventPath };
 }
 
 function clipText(text: string, maxChars = TEXT_PREVIEW_MAX_CHARS): string {
-	const normalized = text.replace(/\s+/g, " ").trim();
-	return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 1)}...` : normalized;
+	return sharedClipText(text, maxChars, { headRatio: 1, omitHint: "...", collapseWhitespace: true });
 }
 
 function formatEventSummary(name: string, event: ScheduledEvent): string {

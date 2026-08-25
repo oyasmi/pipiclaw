@@ -16,9 +16,11 @@ import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
+import { writeFileAtomicallySync } from "../shared/atomic-file.js";
 import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appender.js";
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
-import { errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
+import { clipText, errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
+import { isPlainObject } from "../shared/type-guards.js";
 import { parseTaskFrontmatter } from "../tasks/ledger.js";
 import { parseTaskEventName } from "../tasks/task-events.js";
 import type { ChannelEvent } from "./channel-event.js";
@@ -119,14 +121,7 @@ const DEFAULT_PRE_ACTION_TIMEOUT_MS = 10_000;
 const TEXT_PREVIEW_MAX_CHARS = 160;
 
 function truncateTextPreview(text: string): string {
-	const normalized = text.replace(/\s+/g, " ").trim();
-	return normalized.length > TEXT_PREVIEW_MAX_CHARS
-		? `${normalized.slice(0, TEXT_PREVIEW_MAX_CHARS - 1)}…`
-		: normalized;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+	return clipText(text, TEXT_PREVIEW_MAX_CHARS, { headRatio: 1, omitHint: "…", collapseWhitespace: true });
 }
 
 function readRequiredString(data: Record<string, unknown>, field: string, filename: string): string {
@@ -139,7 +134,7 @@ function readRequiredString(data: Record<string, unknown>, field: string, filena
 
 function parsePreAction(data: Record<string, unknown>, filename: string): EventAction | undefined {
 	if (!data.preAction) return undefined;
-	if (!isRecord(data.preAction)) {
+	if (!isPlainObject(data.preAction)) {
 		throw new Error(`Invalid 'preAction' field in ${filename}, expected an object`);
 	}
 
@@ -165,7 +160,7 @@ function parsePreAction(data: Record<string, unknown>, filename: string): EventA
 
 export function parseScheduledEventContent(content: string, filename: string): ScheduledEvent {
 	const data = JSON.parse(content);
-	if (!isRecord(data)) {
+	if (!isPlainObject(data)) {
 		throw new Error(`Missing required fields (type, channelId, text) in ${filename}`);
 	}
 
@@ -856,10 +851,9 @@ export class EventsWatcher {
 
 	private markInvalid(filename: string, message: string): void {
 		try {
-			writeFileSync(
+			writeFileAtomicallySync(
 				this.getInvalidMarkerPath(filename),
-				[`timestamp: ${new Date().toISOString()}`, `file: ${filename}`, "", message.trim()].join("\n"),
-				"utf-8",
+				[`timestamp: ${formatLocalTime()}`, `file: ${filename}`, "", message.trim()].join("\n"),
 			);
 		} catch (err) {
 			log.logWarning(`Failed to write event error marker: ${filename}`, String(err));

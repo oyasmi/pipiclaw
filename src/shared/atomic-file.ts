@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, open, rename, stat, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -64,6 +65,31 @@ export async function writeFileAtomically(
 			.catch(() => undefined);
 	} catch (error) {
 		await unlink(tempPath).catch(() => undefined);
+		throw error;
+	}
+}
+
+/**
+ * Synchronous counterpart to {@link writeFileAtomically} for the handful of call sites that
+ * cannot go async (a settings-manager `save(): void` and a per-message conversation-meta write
+ * called from a sync event handler) — write-temp-then-rename still beats a direct
+ * `writeFileSync`, since a crash mid-write can no longer truncate the target in place.
+ */
+export function writeFileAtomicallySync(path: string, content: string | Buffer, tempPath?: string): void {
+	const resolvedTempPath = tempPath ?? createAtomicTempPath(path);
+	const dir = dirname(path);
+	mkdirSync(dir, { recursive: true });
+	try {
+		if (typeof content === "string") {
+			writeFileSync(resolvedTempPath, content, "utf-8");
+		} else {
+			writeFileSync(resolvedTempPath, content);
+		}
+		renameSync(resolvedTempPath, path);
+	} catch (error) {
+		try {
+			unlinkSync(resolvedTempPath);
+		} catch {}
 		throw error;
 	}
 }

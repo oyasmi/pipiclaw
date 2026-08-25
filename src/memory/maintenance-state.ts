@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
+import { parseLocalTime } from "../shared/local-time.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 
@@ -87,7 +88,7 @@ function normalizeCounter(value: unknown): number {
 function laterTimestamp(a: string | undefined, b: string | undefined): string | undefined {
 	if (!a) return b;
 	if (!b) return a;
-	return Date.parse(a) >= Date.parse(b) ? a : b;
+	return (parseLocalTime(a) ?? -Infinity) >= (parseLocalTime(b) ?? -Infinity) ? a : b;
 }
 
 function normalizeState(channelId: string, value: unknown): MemoryMaintenanceState {

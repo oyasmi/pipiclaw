@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Message, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
 import { formatLocalTime } from "../shared/local-time.js";
@@ -25,7 +25,7 @@ import { collectExpiredEntryIds, expireMemoryEntries } from "./probation.js";
 import { appendMemoryReviewLog, type MemoryReviewReason } from "./review-log.js";
 import { updateChannelSessionMemory } from "./session.js";
 import { buildIncrementalMemorySourceWindow } from "./source-window.js";
-import { sanitizeMessagesForMemory } from "./transcript.js";
+import { hasMeaningfulExchange, sanitizeMessagesForMemory } from "./transcript.js";
 
 export interface MaintenanceJobSettings {
 	sessionMemory: PipiclawSessionMemorySettings;
@@ -74,41 +74,8 @@ function latestEntryId(entries: SessionEntry[]): string | undefined {
 	return entries.at(-1)?.id;
 }
 
-function messageToText(message: Message): string {
-	if (message.role === "user") {
-		return typeof message.content === "string"
-			? message.content
-			: message.content.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
-	}
-	if (message.role === "assistant") {
-		return message.content
-			.map((part) => (part.type === "text" ? part.text : ""))
-			.filter(Boolean)
-			.join("\n");
-	}
-	return "";
-}
-
 function hasMeaningfulMessages(messages: AgentMessage[]): boolean {
-	const standardMessages = sanitizeMessagesForMemory(messages);
-	let userSeen = false;
-	let assistantSeen = false;
-	for (const message of standardMessages) {
-		const text = messageToText(message).trim();
-		if (!text) {
-			continue;
-		}
-		if (message.role === "user") {
-			userSeen = true;
-		}
-		if (message.role === "assistant") {
-			assistantSeen = true;
-		}
-		if (userSeen && assistantSeen) {
-			return true;
-		}
-	}
-	return false;
+	return hasMeaningfulExchange(sanitizeMessagesForMemory(messages));
 }
 
 function makeRunOptions(input: BaseMaintenanceJobInput, usageCorrelationId?: string): ConsolidationRunOptions {

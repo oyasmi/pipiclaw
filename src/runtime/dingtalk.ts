@@ -9,7 +9,7 @@
  */
 import axios from "axios";
 import { DWClient, type DWClientDownStream, TOPIC_ROBOT } from "dingtalk-stream";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import {
 	formatBusyCommandList,
@@ -19,6 +19,7 @@ import {
 	slashCommandName,
 } from "../agent/commands.js";
 import * as log from "../log.js";
+import { writeFileAtomicallySync } from "../shared/atomic-file.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 // The delivery contract (`ChannelContext`) and its traits are transport-neutral
@@ -1514,7 +1515,7 @@ export class DingTalkBot implements MediaSender {
 
 		try {
 			mkdirSync(dirname(metaPath), { recursive: true });
-			writeFileSync(metaPath, JSON.stringify(meta, null, 2), "utf-8");
+			writeFileAtomicallySync(metaPath, JSON.stringify(meta, null, 2));
 		} catch (err) {
 			log.logWarning(`Failed to persist conversation metadata for ${channelId}`, errorMessage(err));
 		}

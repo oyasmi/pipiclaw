@@ -4,6 +4,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager } from "../agent/job-manager.js";
 import { CommandTerminatedError, type Executor } from "../executor.js";
+import { formatBlockMessage } from "../security/block-message.js";
 import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
@@ -129,19 +130,10 @@ function checkBashInterception(command: string): string | null {
 }
 
 function formatCommandBlockMessage(command: string, category?: string, reason?: string, matchedText?: string): string {
-	const lines = [`Command blocked${category ? ` [${category}]` : ""}`];
-	if (reason) {
-		lines.push(`Reason: ${reason}`);
-	}
-	if (matchedText) {
-		lines.push(`Matched: ${matchedText}`);
-	} else {
-		lines.push(`Command: ${command}`);
-	}
-	lines.push(
-		"If this operation is genuinely needed, explain the intent to the user so they can adjust security.json.",
-	);
-	return lines.join("\n");
+	const details = [];
+	if (reason) details.push({ label: "Reason", value: reason });
+	details.push(matchedText ? { label: "Matched", value: matchedText } : { label: "Command", value: command });
+	return `${formatBlockMessage("Command", category, details)}\nIf this operation is genuinely needed, explain the intent to the user so they can adjust security.json.`;
 }
 
 export function createBashTool(executor: Executor, options: BashToolOptions = {}): AgentTool<typeof bashSchema> {

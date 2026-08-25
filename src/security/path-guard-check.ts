@@ -1,3 +1,4 @@
+import { formatBlockMessage } from "./block-message.js";
 import { logSecurityEvent } from "./logger.js";
 import { guardPath } from "./path-guard.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "./types.js";
@@ -8,14 +9,10 @@ export interface PathGuardCheckOptions {
 }
 
 function formatPathBlockMessage(resolvedPath: string | undefined, category?: string, reason?: string): string {
-	const lines = [`Path blocked${category ? ` [${category}]` : ""}`];
-	if (reason) {
-		lines.push(`Reason: ${reason}`);
-	}
-	if (resolvedPath) {
-		lines.push(`Resolved path: ${resolvedPath}`);
-	}
-	return lines.join("\n");
+	const details = [];
+	if (reason) details.push({ label: "Reason", value: reason });
+	if (resolvedPath) details.push({ label: "Resolved path", value: resolvedPath });
+	return formatBlockMessage("Path", category, details);
 }
 
 /**

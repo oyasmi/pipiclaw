@@ -70,17 +70,20 @@ export interface UsageSummaryQuery {
 
 export const UNTRACKED_CHANNEL_ID = "(untracked)";
 
+// Bucketed by the host's local calendar month, matching `ts: formatLocalTime()` below — entries
+// are written and queried on local wall-clock time, so a UTC month boundary here would file an
+// entry into the wrong month's ledger file near midnight in any timezone offset from UTC.
 function monthKey(date: Date): string {
-	return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function monthKeysBetween(since: Date, until: Date): string[] {
 	const keys: string[] = [];
-	const cursor = new Date(Date.UTC(since.getUTCFullYear(), since.getUTCMonth(), 1));
-	const end = new Date(Date.UTC(until.getUTCFullYear(), until.getUTCMonth(), 1));
+	const cursor = new Date(since.getFullYear(), since.getMonth(), 1);
+	const end = new Date(until.getFullYear(), until.getMonth(), 1);
 	while (cursor <= end) {
 		keys.push(monthKey(cursor));
-		cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+		cursor.setMonth(cursor.getMonth() + 1);
 	}
 	return keys;
 }

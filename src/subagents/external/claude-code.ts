@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isRecord } from "../../shared/type-guards.js";
 import {
 	type BuildInvocationResult,
 	detectExistingFlags,
@@ -39,10 +40,6 @@ const THINKING_LEVEL_TO_CLAUDE_EFFORT: Record<string, string> = {
 function toClaudeEffort(level: string | undefined): string | undefined {
 	if (!level) return undefined;
 	return THINKING_LEVEL_TO_CLAUDE_EFFORT[level] ?? level;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
 }
 
 export const claudeCodeHarness: ExternalHarness = {

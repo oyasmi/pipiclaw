@@ -1,7 +1,8 @@
 import { relative } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { parseLocalTime } from "../shared/local-time.js";
 import { clipText } from "../shared/text-utils.js";
-import { tokenizeRecallText } from "./recall.js";
+import { recencyBoostByAge, tokenizeRecallText } from "./recall.js";
 import { buildSessionCorpus, type SessionSearchDocument, type SessionSearchRole } from "./session-corpus.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 
@@ -65,24 +66,7 @@ function normalizeRoleFilter(roleFilter: string[] | undefined): Set<string> {
 }
 
 function computeRecencyBoost(timestamp: string | undefined): number {
-	if (!timestamp) {
-		return 0;
-	}
-	const ms = Date.parse(timestamp);
-	if (!Number.isFinite(ms)) {
-		return 0;
-	}
-	const ageDays = Math.max(0, (Date.now() - ms) / 86_400_000);
-	if (ageDays <= 1) {
-		return 0.5;
-	}
-	if (ageDays <= 7) {
-		return 0.25;
-	}
-	if (ageDays <= 30) {
-		return 0.1;
-	}
-	return 0;
+	return recencyBoostByAge(timestamp, { day: 0.5, week: 0.25, month: 0.1 });
 }
 
 /**
@@ -138,9 +122,9 @@ function scoreDocument(document: SessionSearchDocument, lowerQuery: string, quer
 }
 
 function sortRecentDocuments(a: SessionSearchDocument, b: SessionSearchDocument): number {
-	const aTime = a.timestamp ? Date.parse(a.timestamp) : 0;
-	const bTime = b.timestamp ? Date.parse(b.timestamp) : 0;
-	return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+	const aTime = (a.timestamp ? parseLocalTime(a.timestamp) : undefined) ?? 0;
+	const bTime = (b.timestamp ? parseLocalTime(b.timestamp) : undefined) ?? 0;
+	return bTime - aTime;
 }
 
 async function summarizeHit(
