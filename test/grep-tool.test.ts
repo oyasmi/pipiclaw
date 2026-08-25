@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { Executor } from "../src/executor.js";
+import type { ExecOptions, Executor } from "../src/executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createGrepTool } from "../src/tools/grep.js";
 
-function fakeExecutor(stdout: string, code = 0, stderr = ""): { executor: Executor; commands: string[] } {
+function fakeExecutor(
+	stdout: string,
+	code = 0,
+	stderr = "",
+	stdoutTruncated = false,
+): { executor: Executor; commands: string[] } {
 	const commands: string[] = [];
 	const executor: Executor = {
 		exec: async (command: string) => {
 			commands.push(command);
-			return { stdout, stderr, code };
+			return { stdout, stderr, code, ...(stdoutTruncated ? { stdoutTruncated: true } : {}) };
 		},
 	};
 	return { executor, commands };
@@ -17,9 +22,22 @@ function fakeExecutor(stdout: string, code = 0, stderr = ""): { executor: Execut
 // Security is exercised elsewhere; disable it here so the tests focus on parsing/shaping.
 const securityConfig = { ...DEFAULT_SECURITY_CONFIG, enabled: false };
 
-function makeTool(stdout: string, code = 0, stderr = "") {
-	const { executor, commands } = fakeExecutor(stdout, code, stderr);
+function makeTool(stdout: string, code = 0, stderr = "", stdoutTruncated = false) {
+	const { executor, commands } = fakeExecutor(stdout, code, stderr, stdoutTruncated);
 	return { tool: createGrepTool(executor, { securityConfig }), commands };
+}
+
+function makeToolTrackingCalls(stdout: string) {
+	const calls: Array<{ command: string; options?: ExecOptions }> = [];
+	const commands: string[] = [];
+	const executor: Executor = {
+		exec: async (command: string, options?: ExecOptions) => {
+			calls.push({ command, options });
+			commands.push(command);
+			return { stdout, stderr: "", code: 0 };
+		},
+	};
+	return { tool: createGrepTool(executor, { securityConfig }), commands, calls };
 }
 
 async function run(tool: ReturnType<typeof createGrepTool>, args: Record<string, unknown>): Promise<string> {
@@ -121,5 +139,29 @@ describe("grep tool", () => {
 		expect(commands[0]).toContain("-E");
 		expect(commands[0]).toContain("-i");
 		expect(commands[0]).toContain("'foo|bar'");
+	});
+
+	it("pushes ignored-dir and glob filters down into grep itself, and bounds capture by bytes not the executor's default (D5.1/D5.2)", async () => {
+		const { tool, commands, calls } = makeToolTrackingCalls("a.ts:1:hit");
+		await run(tool, { pattern: "hit", glob: "*.ts" });
+
+		expect(commands[0]).toContain("--exclude-dir=node_modules");
+		expect(commands[0]).toContain("--exclude-dir=.git");
+		expect(commands[0]).toContain("--include=*.ts");
+		// Not piped through `head` -- that would mask grep's own exit code behind `head`'s (always 0).
+		expect(commands[0]).not.toContain("| head");
+		expect(calls[0].options?.maxCaptureBytes).toBeGreaterThan(0);
+	});
+
+	it("reports a distinct truncation message instead of 'no matches' when the capture cap was hit before filtering kept anything (D5.3)", async () => {
+		// Every line falls inside an ignored directory, so everything is filtered away in JS -- but
+		// the executor reports the raw capture was truncated regardless.
+		const lines = Array.from({ length: 50 }, (_, i) => `node_modules/x/f${i}.js:1:hit`);
+		const { tool } = makeTool(lines.join("\n"), 0, "", true);
+		const text = await run(tool, { pattern: "hit" });
+
+		expect(text).toContain("hit the");
+		expect(text).toContain("result cap");
+		expect(text).not.toContain("Try a broader pattern");
 	});
 });

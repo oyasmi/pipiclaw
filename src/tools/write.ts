@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import type { Executor } from "../executor.js";
+import type { FileStore } from "../file-store.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { writeContent } from "./write-content.js";
 
@@ -16,7 +16,7 @@ export interface WriteToolOptions {
 	channelId?: string;
 }
 
-export function createWriteTool(executor: Executor, options: WriteToolOptions = {}): AgentTool<typeof writeSchema> {
+export function createWriteTool(fileStore: FileStore, options: WriteToolOptions = {}): AgentTool<typeof writeSchema> {
 	return {
 		name: "write",
 		label: "write",
@@ -28,7 +28,7 @@ export function createWriteTool(executor: Executor, options: WriteToolOptions = 
 			{ path, content }: { label: string; path: string; content: string },
 			signal?: AbortSignal,
 		) => {
-			await writeContent(executor, path, content, signal, {
+			await writeContent(fileStore, path, content, signal, {
 				createParentDir: true,
 				securityConfig: options.securityConfig,
 				securityContext: options.securityContext,

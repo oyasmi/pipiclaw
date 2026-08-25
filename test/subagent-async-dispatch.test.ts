@@ -4,6 +4,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
+import { createFileStore } from "../src/file-store.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { createSubAgentTool, type SubAgentToolDetails } from "../src/subagents/tool.js";
@@ -45,6 +46,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		let releasePrompt: (() => void) | undefined;
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",

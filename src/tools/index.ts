@@ -2,6 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getChannelJobManager } from "../agent/job-manager.js";
 import type { Executor } from "../executor.js";
+import type { FileStore } from "../file-store.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { APP_HOME_DIR } from "../paths.js";
 import type { MediaSender } from "../runtime/channel-context.js";
@@ -19,6 +20,8 @@ import { withToolDetails } from "./tool-details.js";
 
 export interface CreatePipiclawToolsOptions {
 	executor: Executor;
+	/** File-content port for the generic file tools (spec 044, D1); `Executor` stays command-only. */
+	fileStore: FileStore;
 	getCurrentModel: () => Model<Api>;
 	getAvailableModels: () => Model<Api>[];
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
@@ -61,6 +64,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	// and keeping it out of the registry avoids a registry ↔ subagents/tool import cycle.
 	const leafTools = buildToolSet({
 		executor: options.executor,
+		fileStore: options.fileStore,
 		securityConfig,
 		securityContext,
 		channelId: options.channelId,
@@ -84,6 +88,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		withToolDetails(
 			createSubAgentTool({
 				executor: options.executor,
+				fileStore: options.fileStore,
 				getCurrentModel: options.getCurrentModel,
 				getAvailableModels: options.getAvailableModels,
 				resolveApiKey: options.resolveApiKey,

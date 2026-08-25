@@ -2,6 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { Executor } from "../executor.js";
+import type { FileStore } from "../file-store.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import type { MediaSender } from "../runtime/channel-context.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
@@ -34,6 +35,8 @@ import { createWriteTool } from "./write.js";
  */
 export interface ToolBuildContext {
 	executor: Executor;
+	/** File-content port for the generic file tools (spec 044, D1); `Executor` stays command-only. */
+	fileStore: FileStore;
 	securityConfig: SecurityConfig;
 	securityContext: SecurityRuntimeContext;
 	channelId: string;
@@ -103,7 +106,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "read",
 		availableToSubagents: true,
-		create: (ctx) => createReadTool(ctx.executor, fileToolOptions(ctx)),
+		create: (ctx) => createReadTool(ctx.executor, ctx.fileStore, fileToolOptions(ctx)),
 	},
 	{
 		name: "bash",
@@ -122,7 +125,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "edit",
 		availableToSubagents: true,
-		create: (ctx) => createEditTool(ctx.executor, fileToolOptions(ctx)),
+		create: (ctx) => createEditTool(ctx.fileStore, fileToolOptions(ctx)),
 	},
 	{
 		name: "grep",
@@ -132,7 +135,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "write",
 		availableToSubagents: true,
-		create: (ctx) => createWriteTool(ctx.executor, fileToolOptions(ctx)),
+		create: (ctx) => createWriteTool(ctx.fileStore, fileToolOptions(ctx)),
 	},
 	{
 		name: "web_search",
@@ -166,7 +169,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		// bot, or the terminal). Absent it, the tool is not built or advertised.
 		enabledBy: (ctx) => ctx.mediaSender != null,
 		create: (ctx) =>
-			createSendMediaTool(ctx.executor, {
+			createSendMediaTool(ctx.fileStore, {
 				mediaSender: req(ctx.mediaSender, "mediaSender"),
 				channelId: ctx.channelId,
 				securityConfig: ctx.securityConfig,

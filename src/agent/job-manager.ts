@@ -3,6 +3,7 @@ import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Executor } from "../executor.js";
+import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
 import type { ChannelEvent } from "../runtime/channel-event.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
@@ -77,6 +78,8 @@ export interface JobManagerOptions {
 	/** Delivers the completion wake. Omit to disable waking (sub-agent and test paths). */
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	sweepIntervalMs?: number;
+	/** File-content port for reading a job's spill file (spec 044, D8). Defaults to `createFileStore()`. */
+	fileStore?: FileStore;
 }
 
 /** Cap on concurrently running jobs per channel, so a runaway model can't spawn unbounded processes. */
@@ -100,6 +103,8 @@ export const SWEEP_INTERVAL_MS = 10_000;
 export const FINISHED_JOB_RETENTION_MS = 24 * 60 * 60_000;
 /** Bytes of captured output carried inline in the completion wake. */
 const WAKE_OUTPUT_TAIL_BYTES = 2_000;
+/** Upper bound on how much of a spill file's tail `readOutput` reads (spec 044, D8). */
+const JOB_OUTPUT_READ_MAX_BYTES = 512 * 1024;
 
 function jobSpillPath(id: string): string {
 	return join(tmpdir(), `pipiclaw-job-${id}.log`);
@@ -163,6 +168,7 @@ export class ChannelJobManager {
 
 	private readonly options: JobManagerOptions;
 	private readonly sweepIntervalMs: number;
+	private readonly fileStore: FileStore;
 
 	constructor(
 		private readonly channelId: string,
@@ -172,6 +178,7 @@ export class ChannelJobManager {
 		// A bare number keeps the original `sweepIntervalMs` positional form working for tests.
 		this.options = typeof options === "number" ? { sweepIntervalMs: options } : options;
 		this.sweepIntervalMs = this.options.sweepIntervalMs ?? SWEEP_INTERVAL_MS;
+		this.fileStore = this.options.fileStore ?? createFileStore();
 	}
 
 	private recordPath(id: string): string | undefined {
@@ -657,8 +664,19 @@ export class ChannelJobManager {
 		if (!record) {
 			return undefined;
 		}
-		const result = await this.executor.exec(`cat ${shellEscape(record.spillFile)} 2>/dev/null || true`, { signal });
-		return { spillFile: record.spillFile, text: result.stdout };
+		// Both callers (the completion wake and the `job` tool) only ever want the *tail* of a job's
+		// output, so read it via `FileStore` straight from the end of the file rather than shelling
+		// out to `cat` (spec 044, D8) -- no 10MB shell-capture cap silently eating the head of a long
+		// job's output before the tail-truncation logic even runs, and no subprocess for what's a
+		// plain local-file read.
+		const stat = await this.fileStore.stat(record.spillFile);
+		if (!stat) {
+			return { spillFile: record.spillFile, text: "" };
+		}
+		const start = Math.max(0, stat.size - JOB_OUTPUT_READ_MAX_BYTES);
+		const { data } = await this.fileStore.readBytes(record.spillFile, { start, signal });
+		const text = start > 0 ? `[...output truncated...]\n${data.toString("utf-8")}` : data.toString("utf-8");
+		return { spillFile: record.spillFile, text };
 	}
 }
 

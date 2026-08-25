@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { unlink } from "node:fs/promises";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager } from "../agent/job-manager.js";
@@ -238,9 +238,16 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			// result and one cut short by timeout/abort (fix plan §2.2): a timed-out `npm test` used
 			// to reject with up to 10MB of raw output stuffed straight into the tool-call error
 			// message, which the pi SDK puts into the model's context verbatim and unbounded.
+			//
+			// `spillPath` was written by the executor as stdout/stderr arrived (`ExecOptions.spillTo`,
+			// spec 044 D6.3) -- unlike the in-memory `stdout`/`stderr` here, it is never capped at
+			// the 10MB capture bound, so it is the one place that can honestly be called "full
+			// output" for a command whose real output exceeds that cap. It is deleted below when it
+			// turns out not to be needed.
 			const buildOutputText = async (
 				stdout: string,
 				stderr: string,
+				spillPath: string,
 			): Promise<{ text: string; details: BashToolDetails }> => {
 				let output = "";
 				if (stdout) output += stdout;
@@ -249,34 +256,16 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 					output += stderr;
 				}
 
-				const totalBytes = Buffer.byteLength(output, "utf-8");
-
-				// Spill the full output to a temp file when it exceeds the inline limit, so the model
-				// can page through the rest with `read`. Written straight to disk rather than piped
-				// through a second `sh -c 'cat > file'`: that spawned a process and copied the whole
-				// (up to 10MB) buffer over a pipe to reach the same local filesystem the executor
-				// already runs on. Best-effort: on failure we simply omit the path hint.
-				let tempFilePath: string | undefined;
-				if (totalBytes > DEFAULT_MAX_BYTES) {
-					const candidatePath = getSpillFilePath();
-					try {
-						await writeFile(candidatePath, output, { mode: 0o600 });
-						tempFilePath = candidatePath;
-					} catch {
-						// Ignore spill failures; the truncated output is still returned.
-					}
-				}
-
 				const truncation = truncateTail(output);
 				let text = truncation.content || "(no output)";
 				let details: BashToolDetails | undefined;
 
 				if (truncation.truncated) {
-					details = { truncation, fullOutputPath: tempFilePath };
+					details = { truncation, fullOutputPath: spillPath };
 
 					const startLine = truncation.totalLines - truncation.outputLines + 1;
 					const endLine = truncation.totalLines;
-					const fullOutputHint = tempFilePath ? ` Full output: ${tempFilePath}` : "";
+					const fullOutputHint = ` Full output: ${spillPath}`;
 
 					if (truncation.lastLinePartial) {
 						const lastLineSize = formatSize(Buffer.byteLength(output.split("\n").pop() || "", "utf-8"));
@@ -286,14 +275,24 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 					} else {
 						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit).${fullOutputHint}]`;
 					}
+				} else {
+					// No truncation happened after all -- the spill file was insurance against the
+					// in-memory capture cap, not a promised artifact; clean it up rather than leaving
+					// tmp clutter behind on every single bash call.
+					await unlink(spillPath).catch(() => undefined);
 				}
 
 				return { text, details: { ...details, producedOutput: output.trim().length > 0 } };
 			};
 
+			const spillPath = getSpillFilePath();
 			try {
-				const result = await executor.exec(effectiveCommand, { timeout: effectiveTimeout, signal });
-				const built = await buildOutputText(result.stdout, result.stderr);
+				const result = await executor.exec(effectiveCommand, {
+					timeout: effectiveTimeout,
+					signal,
+					spillTo: spillPath,
+				});
+				const built = await buildOutputText(result.stdout, result.stderr, spillPath);
 				let outputText = built.text;
 
 				// A non-zero exit code is a normal result, not a tool failure: commands like
@@ -312,7 +311,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				if (!(error instanceof CommandTerminatedError)) {
 					throw error;
 				}
-				const built = await buildOutputText(error.stdout, error.stderr);
+				const built = await buildOutputText(error.stdout, error.stderr, spillPath);
 				const nextStep =
 					error.reason === "timeout"
 						? `Retry with a larger \`timeout\` (currently ${error.timeoutSeconds}s), or pass \`async: true\` to run it in the background and be woken when it finishes.`

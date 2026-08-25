@@ -19,6 +19,7 @@ import {
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import { createExecutor, type Executor } from "../executor.js";
+import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
 import {
 	buildFirstTurnMemoryBootstrapResult,
@@ -148,6 +149,7 @@ const SESSION_RELOAD_TIMEOUT_MS = 30_000;
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
 	private readonly executor: Executor;
+	private readonly fileStore: FileStore;
 	private readonly channelId: string;
 	private readonly channelDir: string;
 	private readonly appHomeDir: string;
@@ -226,6 +228,7 @@ export class ChannelRunner implements AgentRunner {
 
 		const executor = createExecutor();
 		this.executor = executor;
+		this.fileStore = createFileStore();
 		this.workspaceDir = resolve(dirname(channelDir));
 
 		// Resolve and freeze this generation's ProjectScope (spec 043, D2/D3/D4.2). A channel with
@@ -1554,6 +1557,7 @@ export class ChannelRunner implements AgentRunner {
 
 		const tools = createPipiclawTools({
 			executor: this.executor,
+			fileStore: this.fileStore,
 			getCurrentModel: () => this.activeModel,
 			getAvailableModels: () => this.modelRegistry.getAvailable(),
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),

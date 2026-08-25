@@ -12,11 +12,11 @@ export const DEFAULT_MAX_LINES = 2000;
 export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
 
 /**
- * Upper bound for a file read/sent as base64 in one `sh -c` (fix plan §2.3). `base64` inflates a
- * file to 4/3 of its size, and the executor caps captured stdout at 10MB -- above this threshold
- * the encoded output would be silently cut mid-stream, producing a buffer that still decodes (so
- * failure is invisible) but is corrupt. 5MB leaves headroom for the 4/3 blow-up plus protocol
- * overhead. A code constant, not a settings.json key, per CLAUDE.md's rule for numeric thresholds.
+ * Upper bound for a file read or sent inline as base64 (`read`'s image branch, `send_media`).
+ * `read`/`send_media` go through `FileStore.readBytes` (spec 044, D7), which has no capture cap of
+ * its own to worry about -- this is now purely a product limit: what's reasonable to inflate 4/3
+ * via base64 and hand to the model or a chat transport in one message. A code constant, not a
+ * settings.json key, per CLAUDE.md's rule for numeric thresholds.
  */
 export const MAX_INLINE_BINARY_BYTES = 5 * 1024 * 1024;
 

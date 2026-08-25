@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Executor } from "../src/executor.js";
+import { createFileStore } from "../src/file-store.js";
 import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 
 const {
@@ -148,6 +149,7 @@ const baseToolOptions = {
 const executor: Executor = {
 	exec: async () => ({ stdout: "", stderr: "", code: 0 }),
 };
+const fileStore = createFileStore();
 
 describe("tools index", () => {
 	beforeEach(() => {
@@ -170,6 +172,7 @@ describe("tools index", () => {
 		const baseArgs = {
 			...baseToolOptions,
 			executor,
+			fileStore,
 			memoryCandidateStore: createMemoryCandidateStore(),
 		};
 
@@ -183,6 +186,7 @@ describe("tools index", () => {
 		const tools = createPipiclawTools({
 			...baseToolOptions,
 			executor,
+			fileStore,
 			memoryCandidateStore: createMemoryCandidateStore(),
 		});
 		const registered = new Set(tools.map((tool) => tool.name));
@@ -209,6 +213,7 @@ describe("tools index", () => {
 		const options = {
 			...baseToolOptions,
 			executor,
+			fileStore,
 			memoryCandidateStore: createMemoryCandidateStore(),
 		};
 
@@ -237,7 +242,7 @@ describe("tools index", () => {
 			"subagent",
 			"subagent_manage",
 		]);
-		expect(createReadToolMock).toHaveBeenCalledWith(executor, {
+		expect(createReadToolMock).toHaveBeenCalledWith(executor, fileStore, {
 			securityConfig: expectedSecurityConfig,
 			securityContext: {
 				agentWorkspaceDir: "/repo",
@@ -279,6 +284,7 @@ describe("tools index", () => {
 		});
 		expect(createSubAgentToolMock).toHaveBeenCalledWith({
 			executor,
+			fileStore,
 			getCurrentModel: options.getCurrentModel,
 			getAvailableModels: options.getAvailableModels,
 			resolveApiKey: options.resolveApiKey,

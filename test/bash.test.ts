@@ -5,17 +5,20 @@ import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.
 import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
 import { RecordingExecutor } from "./helpers/recording-executor.js";
 
-// The spill file is written straight to the local filesystem, so the test observes that write
-// instead of a `cat > file` command on the executor.
-const writeFileMock = vi.hoisted(() => vi.fn(async () => {}));
+// The spill file is now written by the executor itself as output streams in (`ExecOptions.spillTo`,
+// spec 044 D6.3), and bash.ts deletes it via `unlink` when it turns out not to be needed. The test
+// observes the `unlink` call instead of a `cat > file` command or a direct `writeFile`.
+const unlinkMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("node:fs/promises", async (importOriginal) => ({
 	...(await importOriginal<typeof import("node:fs/promises")>()),
-	writeFile: writeFileMock,
+	unlink: unlinkMock,
 }));
+
+const SPILL_PATH_PATTERN = /^\/tmp\/pipiclaw-bash-[0-9a-f]+\.log$/;
 
 describe("bash tool", () => {
 	beforeEach(() => {
-		writeFileMock.mockClear();
+		unlinkMock.mockClear();
 	});
 
 	it("uses the caller-provided default timeout and returns empty output markers", async () => {
@@ -24,12 +27,20 @@ describe("bash tool", () => {
 
 		const result = await tool.execute("call", { label: "run", command: "true" });
 
-		expect(executor.calls).toEqual([{ command: "true", options: { timeout: 45, signal: undefined } }]);
+		expect(executor.calls).toEqual([
+			{
+				command: "true",
+				options: { timeout: 45, signal: undefined, spillTo: expect.stringMatching(SPILL_PATH_PATTERN) },
+			},
+		]);
 		expect(result).toEqual({
 			content: [{ type: "text", text: "(no output)" }],
 			// A clean run that returned nothing: recorded, but not an effect (see effect-ledger).
 			details: { exitCode: 0, producedOutput: false },
 		});
+		// Output was tiny and never truncated -- the spill file (insurance, not a promised artifact)
+		// gets cleaned up rather than left as tmp clutter.
+		expect(unlinkMock).toHaveBeenCalledWith(expect.stringMatching(SPILL_PATH_PATTERN));
 	});
 
 	it("falls back to the built-in default timeout when none is supplied", async () => {
@@ -152,7 +163,7 @@ describe("bash tool", () => {
 		expect(result.details).toMatchObject({ exitCode: 7 });
 	});
 
-	it("spills long output to a temp file, and still returns truncated output when the spill write fails", async () => {
+	it("spills long output to a temp file the executor itself streams to, and keeps it when truncated", async () => {
 		const output = Array.from(
 			{ length: DEFAULT_MAX_LINES + 15 },
 			(_, index) => `line ${index + 1} ${"x".repeat(400)}`,
@@ -169,20 +180,12 @@ describe("bash tool", () => {
 			type: "text",
 			text: expect.stringContaining("Full output:"),
 		});
-		// One local write; no second process and no 10MB copy back through a pipe.
+		// One exec call: the executor streams the spill file itself as output arrives -- no second
+		// process and no separate write step for bash.ts to drive.
 		expect(executor.calls).toHaveLength(1);
-		expect(writeFileMock).toHaveBeenCalledWith(details.fullOutputPath, output, { mode: 0o600 });
-
-		// A failing spill degrades to the truncated text only — no path, no "Full output:" pointer.
-		writeFileMock.mockRejectedValueOnce(new Error("disk full") as never);
-		const failed = await tool.execute("call", { label: "run", command: "printf ..." });
-		const failedDetails = failed.details as { fullOutputPath?: string };
-
-		expect(failedDetails.fullOutputPath).toBeUndefined();
-		expect(failed.content[0]).toMatchObject({
-			type: "text",
-			text: expect.not.stringContaining("Full output:"),
-		});
+		expect(executor.calls[0].options?.spillTo).toBe(details.fullOutputPath);
+		// Truncated: the spill file is the one artifact that actually matters here, so it is kept.
+		expect(unlinkMock).not.toHaveBeenCalled();
 	});
 
 	// Fix plan §2.2: a timeout/abort must come back as a normal (non-throwing) tool result that

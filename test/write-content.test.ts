@@ -1,77 +1,80 @@
-import { describe, expect, it } from "vitest";
-import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { createFileStore } from "../src/file-store.js";
 import { createWriteTool } from "../src/tools/write.js";
 import { writeContent } from "../src/tools/write-content.js";
 
-class ScriptedExecutor implements Executor {
-	public readonly calls: Array<{ command: string; options?: ExecOptions }> = [];
+const fileStore = createFileStore();
+const disabledSecurity = { enabled: false } as never;
 
-	constructor(private readonly results: Array<ExecResult>) {}
+const dirs: string[] = [];
+afterEach(() => {
+	dirs.length = 0;
+});
 
-	async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
-		this.calls.push({ command, options });
-		const result = this.results.shift();
-		if (!result) {
-			throw new Error(`Unexpected command: ${command}`);
-		}
-		return result;
-	}
+function tempDir(): string {
+	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-write-test-"));
+	dirs.push(dir);
+	return dir;
 }
 
 describe("write-content", () => {
-	it("streams content over stdin and can create parent directories", async () => {
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);
+	it("writes content and can create parent directories", async () => {
+		const dir = tempDir();
+		const target = join(dir, "nested", "file.txt");
 
-		await writeContent(executor, "nested/file.txt", "hello", undefined, { createParentDir: true });
+		await writeContent(fileStore, target, "hello", undefined, {
+			createParentDir: true,
+			securityConfig: disabledSecurity,
+		});
 
-		expect(executor.calls).toEqual([
-			{
-				command:
-					"mkdir -p 'nested' && tmp='nested/file.txt.pipiclaw-tmp'; " +
-					"[ -f 'nested/file.txt' ] && cp -p 'nested/file.txt' \"$tmp\" 2>/dev/null; " +
-					'cat > "$tmp" && mv -f "$tmp" \'nested/file.txt\'',
-				options: { signal: undefined, stdin: "hello" },
-			},
-		]);
+		expect(readFileSync(target, "utf-8")).toBe("hello");
 	});
 
-	it("preserves special characters by sending content through stdin instead of the shell", async () => {
-		const content = "line 1\nit's `dangerous` $(rm -rf /)\nbackslash\\\\done";
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);
+	it("writes content containing shell metacharacters byte-for-byte", async () => {
+		const dir = tempDir();
+		const target = join(dir, "special.txt");
+		const content = "line 1\nit's `dangerous` $(rm -rf /)\nbackslash\\done";
 
-		await writeContent(executor, "special.txt", content, undefined);
+		await writeContent(fileStore, target, content, undefined, { securityConfig: disabledSecurity });
 
-		expect(executor.calls).toEqual([
-			{
-				command:
-					"tmp='special.txt.pipiclaw-tmp'; [ -f 'special.txt' ] && cp -p 'special.txt' \"$tmp\" 2>/dev/null; " +
-					'cat > "$tmp" && mv -f "$tmp" \'special.txt\'',
-				options: { signal: undefined, stdin: content },
-			},
-		]);
-		expect(executor.calls[0]?.command).not.toContain("dangerous");
+		expect(readFileSync(target, "utf-8")).toBe(content);
 	});
 
-	it("copies the existing file's permission bits onto the temp file before overwriting it", async () => {
-		const executor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);
+	it("preserves the existing file's permission bits across an overwrite", async () => {
+		const dir = tempDir();
+		const target = join(dir, "script.sh");
+		writeFileSync(target, "#!/bin/sh\necho hi\n");
+		chmodSync(target, 0o755);
 
-		await writeContent(executor, "script.sh", "#!/bin/sh\necho hi\n", undefined);
+		await writeContent(fileStore, target, "#!/bin/sh\necho bye\n", undefined, { securityConfig: disabledSecurity });
 
-		expect(executor.calls[0]?.command).toContain("cp -p 'script.sh'");
-		expect(executor.calls[0]?.command).toMatch(/^tmp=.*mv -f "\$tmp" 'script\.sh'$/);
+		expect(statSync(target).mode & 0o777).toBe(0o755);
+		expect(readFileSync(target, "utf-8")).toBe("#!/bin/sh\necho bye\n");
 	});
 
-	it("throws when writes fail and write tool wraps successful writes", async () => {
-		const failingExecutor = new ScriptedExecutor([{ code: 1, stdout: "", stderr: "disk full" }]);
-		await expect(writeContent(failingExecutor, "broken.txt", "hello", undefined)).rejects.toThrow("disk full");
+	it("preserves multi-byte UTF-8 content exactly", async () => {
+		const dir = tempDir();
+		const target = join(dir, "unicode.txt");
+		const content = "你好，世界！🎉 emoji and 汉字混合内容";
 
-		const toolExecutor = new ScriptedExecutor([{ code: 0, stdout: "", stderr: "" }]);
-		const tool = createWriteTool(toolExecutor);
-		const result = await tool.execute("call", { label: "write", path: "dir/out.txt", content: "hello界" });
+		await writeContent(fileStore, target, content, undefined, { securityConfig: disabledSecurity });
 
-		expect(toolExecutor.calls[0].command).toContain("mkdir -p 'dir'");
+		expect(readFileSync(target, "utf-8")).toBe(content);
+	});
+
+	it("write tool reports bytes written and creates parent directories", async () => {
+		const dir = tempDir();
+		const target = join(dir, "sub", "out.txt");
+		const tool = createWriteTool(fileStore, { securityConfig: disabledSecurity });
+
+		const result = await tool.execute("call", { label: "write", path: target, content: "hello界" });
+
+		expect(readFileSync(target, "utf-8")).toBe("hello界");
 		expect(result).toEqual({
-			content: [{ type: "text", text: "Successfully wrote 8 bytes to dir/out.txt" }],
+			content: [{ type: "text", text: `Successfully wrote 8 bytes to ${target}` }],
 			details: undefined,
 		});
 	});

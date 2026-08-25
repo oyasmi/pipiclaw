@@ -1,29 +1,34 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import * as Diff from "diff";
 import { Type } from "typebox";
-import type { Executor } from "../executor.js";
+import { type FileStat, type FileStore, fingerprintOf, fingerprintsEqual } from "../file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
-import { logSecurityEvent } from "../security/logger.js";
-import { guardPath } from "../security/path-guard.js";
+import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { shellEscape } from "../shared/shell-escape.js";
-import { writeContent } from "./write-content.js";
 
 /**
- * Generate a unified diff string with line numbers and context
+ * Generate a unified diff string with line numbers and context. `startLineOld`/`startLineNew` let
+ * a caller render a *window* of a larger file (spec 044, D2.3) while still printing the file's real
+ * absolute line numbers instead of restarting at 1.
  */
-function generateDiffString(oldContent: string, newContent: string, contextLines = 4): string {
+function generateDiffString(
+	oldContent: string,
+	newContent: string,
+	contextLines = 4,
+	startLineOld = 1,
+	startLineNew = 1,
+): string {
 	const parts = Diff.diffLines(oldContent, newContent);
 	const output: string[] = [];
 
 	const oldLines = oldContent.split("\n");
 	const newLines = newContent.split("\n");
-	const maxLineNum = Math.max(oldLines.length, newLines.length);
+	const maxLineNum = Math.max(startLineOld + oldLines.length, startLineNew + newLines.length);
 	const lineNumWidth = String(maxLineNum).length;
 
-	let oldLineNum = 1;
-	let newLineNum = 1;
+	let oldLineNum = startLineOld;
+	let newLineNum = startLineNew;
 	let lastWasChange = false;
 
 	for (let i = 0; i < parts.length; i++) {
@@ -112,21 +117,26 @@ export interface EditToolOptions {
 	channelId?: string;
 }
 
-function formatPathBlockMessage(resolvedPath: string | undefined, category?: string, reason?: string): string {
-	const lines = [`Path blocked${category ? ` [${category}]` : ""}`];
-	if (reason) {
-		lines.push(`Reason: ${reason}`);
-	}
-	if (resolvedPath) {
-		lines.push(`Resolved path: ${resolvedPath}`);
-	}
-	return lines.join("\n");
-}
-
 /** Max diff lines echoed back to the model in the success result before eliding the rest. */
 const DIFF_ECHO_MAX_LINES = 40;
 /** Consecutive byte-identical no-ops of the same payload before the soft error escalates to a hard stop. */
 const NOOP_HARD_LIMIT = 3;
+/** Above this, `edit` switches from "read whole file into memory" to the streaming two-pass path (D2.2). */
+const EDIT_INLINE_MAX_BYTES = 8 * 1024 * 1024;
+/** Bytes scanned from the head of the file for the binary guard (D2.5). */
+const BINARY_SNIFF_BYTES = 8 * 1024;
+/**
+ * Hard cap on how many `replaceAll` match offsets the streaming path records in memory (D2.2). A
+ * file with more occurrences than this is almost certainly the wrong target for a text edit (e.g.
+ * a needle that matches on every line of a huge generated file); failing loudly with a narrowing
+ * suggestion is one of the sanctioned "bounded" outcomes (spec 044, design principle P2), not a
+ * silent truncation.
+ */
+const MAX_REPLACE_ALL_OFFSETS = 200_000;
+/** Bytes of file context shown around each match in the streaming path's local diff (D2.3). */
+const DIFF_WINDOW_BYTES = 2000;
+/** How many of a `replaceAll` match's diffs get rendered on the streaming path. */
+const MAX_DIFF_WINDOWS = 5;
 
 function clampDiffForEcho(diff: string): string {
 	const lines = diff.split("\n");
@@ -137,7 +147,162 @@ function clampDiffForEcho(diff: string): string {
 	return `${shown}\n[diff truncated, ${lines.length - DIFF_ECHO_MAX_LINES} more lines]`;
 }
 
-export function createEditTool(executor: Executor, options: EditToolOptions = {}): AgentTool<typeof editSchema> {
+/** All non-overlapping byte offsets of `needle` in `haystack`, left to right (mirrors `String.split`). */
+function findAllOffsets(haystack: Buffer, needle: Buffer): number[] {
+	const offsets: number[] = [];
+	let from = 0;
+	while (true) {
+		const idx = haystack.indexOf(needle, from);
+		if (idx === -1) break;
+		offsets.push(idx);
+		from = idx + needle.length;
+	}
+	return offsets;
+}
+
+/** Byte-level splice: replace `needle` at every offset in `offsets` (ascending) with `replacement`. */
+function spliceBuffer(source: Buffer, needle: Buffer, replacement: Buffer, offsets: number[]): Buffer {
+	const parts: Buffer[] = [];
+	let cursor = 0;
+	for (const offset of offsets) {
+		parts.push(source.subarray(cursor, offset));
+		parts.push(replacement);
+		cursor = offset + needle.length;
+	}
+	parts.push(source.subarray(cursor));
+	return Buffer.concat(parts);
+}
+
+/**
+ * A streaming scan for every non-overlapping occurrence of `needle`, safe against a match that
+ * straddles a chunk boundary (D2.2). Carries the last `needle.length - 1` bytes of each window into
+ * the next iteration so a split match is still found, without ever holding more than one window in
+ * memory. Also tracks the 1-indexed line number of each match (from a running newline count) and
+ * sniffs the first `BINARY_SNIFF_BYTES` for a NUL byte (D2.5).
+ */
+async function scanOccurrences(
+	stream: AsyncIterable<Buffer>,
+	needle: Buffer,
+	maxOffsets: number,
+): Promise<{
+	count: number;
+	offsets: number[] | undefined;
+	lineNumbers: Map<number, number>;
+	looksBinary: boolean;
+	totalBytes: number;
+}> {
+	const overlapLen = needle.length - 1;
+	let carry: Buffer = Buffer.alloc(0);
+	let windowBaseOffset = 0;
+	let newlinesBeforeWindow = 0;
+	let count = 0;
+	let offsets: number[] | undefined = [];
+	const lineNumbers = new Map<number, number>();
+	let looksBinary = false;
+	let sniffed = 0;
+	let totalBytes = 0;
+
+	for await (const chunk of stream) {
+		totalBytes += chunk.length;
+		if (sniffed < BINARY_SNIFF_BYTES) {
+			const take = chunk.subarray(0, BINARY_SNIFF_BYTES - sniffed);
+			if (take.includes(0)) looksBinary = true;
+			sniffed += take.length;
+		}
+
+		const window = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
+		let from = 0;
+		while (true) {
+			const idx = window.indexOf(needle, from);
+			if (idx === -1) break;
+			count++;
+			if (offsets && offsets.length < maxOffsets) {
+				const absoluteOffset = windowBaseOffset + idx;
+				offsets.push(absoluteOffset);
+				const lineNumber = newlinesBeforeWindow + countNewlines(window, 0, idx) + 1;
+				lineNumbers.set(absoluteOffset, lineNumber);
+			} else if (offsets) {
+				offsets = undefined; // Overflowed: stop tracking, caller must fail closed if it needed them.
+			}
+			from = idx + needle.length;
+		}
+
+		const retiredLen = Math.max(0, window.length - overlapLen);
+		newlinesBeforeWindow += countNewlines(window, 0, retiredLen);
+		windowBaseOffset += retiredLen;
+		carry = window.subarray(retiredLen);
+	}
+
+	return { count, offsets, lineNumbers, looksBinary, totalBytes };
+}
+
+function countNewlines(buf: Buffer, start: number, end: number): number {
+	let n = 0;
+	for (let i = start; i < end; i++) {
+		if (buf[i] === 0x0a) n++;
+	}
+	return n;
+}
+
+async function* readStreamChunks(store: FileStore, path: string, signal?: AbortSignal): AsyncGenerator<Buffer> {
+	for await (const chunk of store.openRead(path)) {
+		if (signal?.aborted) throw new Error("Aborted");
+		yield chunk as Buffer;
+	}
+}
+
+/** Copy `[start, end)` of `path` onto `out`, with simple backpressure handling. */
+function copyRange(
+	store: FileStore,
+	path: string,
+	start: number,
+	end: number,
+	out: NodeJS.WritableStream,
+): Promise<void> {
+	if (end <= start) return Promise.resolve();
+	return new Promise((resolveCopy, reject) => {
+		const src = store.openRead(path, { start, end: end - 1 });
+		src.on("data", (chunk: Buffer) => {
+			if (!out.write(chunk)) {
+				src.pause();
+				out.once("drain", () => src.resume());
+			}
+		});
+		src.on("end", () => resolveCopy());
+		src.on("error", reject);
+	});
+}
+
+/** Expand a byte window to the nearest line boundaries so the rendered diff never starts/ends mid-line. */
+function expandToLineBoundaries(
+	bytes: Buffer,
+	start: number,
+	end: number,
+	fileSize: number,
+): { start: number; end: number } {
+	let s = start;
+	while (s > 0 && bytes[s - 1] !== undefined && bytes[s - 1] !== 0x0a) s--;
+	let e = end;
+	while (e < fileSize && bytes[e] !== undefined && bytes[e] !== 0x0a) e++;
+	return { start: s, end: e };
+}
+
+async function checkFingerprintUnchanged(
+	fileStore: FileStore,
+	target: string,
+	path: string,
+	before: FileStat,
+): Promise<void> {
+	const after = await fileStore.stat(target);
+	if (!after || !fingerprintsEqual(fingerprintOf(before), fingerprintOf(after))) {
+		throw new RecoverableToolError(
+			`${path} changed during this edit (likely a background job or another agent writing concurrently). ` +
+				"Re-read the file and re-apply the edit against its current content.",
+		);
+	}
+}
+
+export function createEditTool(fileStore: FileStore, options: EditToolOptions = {}): AgentTool<typeof editSchema> {
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: process.cwd(),
@@ -166,57 +331,25 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 			}: { label: string; path: string; oldText: string; newText: string; replaceAll?: boolean },
 			signal?: AbortSignal,
 		) => {
-			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
-				const readGuard = guardPath(path, "read", { ...securityContext, config: securityConfig.pathGuard });
-				if (!readGuard.allowed) {
-					await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
-						type: "path",
-						tool: "edit",
-						channelId: options.channelId,
-						rawPath: path,
-						operation: "read",
-						resolvedPath: readGuard.resolvedPath,
-						category: readGuard.category,
-						reason: readGuard.reason,
-					});
-					throw new Error(formatPathBlockMessage(readGuard.resolvedPath, readGuard.category, readGuard.reason));
-				}
+			if (oldText.length === 0) {
+				throw new RecoverableToolError("oldText must not be empty.");
 			}
 
-			// Read the file
-			const readResult = await executor.exec(`cat ${shellEscape(path)}`, { signal });
-			if (readResult.code !== 0) {
-				throw new RecoverableToolError(readResult.stderr || `File not found: ${path}`);
+			const target = await checkPathGuard(path, "read", securityConfig, securityContext, {
+				tool: "edit",
+				channelId: options.channelId,
+			});
+
+			const before = await fileStore.stat(target);
+			if (!before || !before.isFile) {
+				throw new RecoverableToolError(`File not found: ${path}`);
 			}
 
-			const content = readResult.stdout;
+			const needle = Buffer.from(oldText, "utf-8");
+			const replacement = Buffer.from(newText, "utf-8");
+			const isNoopPayload = needle.equals(replacement);
 
-			// Check if old text exists
-			if (!content.includes(oldText)) {
-				throw new RecoverableToolError(
-					`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-				);
-			}
-
-			// Count occurrences
-			const occurrences = content.split(oldText).length - 1;
-
-			if (occurrences > 1 && !replaceAll) {
-				throw new RecoverableToolError(
-					`Found ${occurrences} occurrences of the text in ${path}. The text must be unique, or pass replaceAll: true to replace all of them. Please provide more context to make it unique.`,
-				);
-			}
-
-			// Perform replacement
-			let newContent: string;
-			if (replaceAll) {
-				newContent = content.split(oldText).join(newText);
-			} else {
-				const index = content.indexOf(oldText);
-				newContent = content.substring(0, index) + newText + content.substring(index + oldText.length);
-			}
-
-			if (content === newContent) {
+			const applyNoop = () => {
 				const noopKey = `${path}\x00${oldText}\x00${newText}`;
 				const streak = (noopCounts.get(noopKey) ?? 0) + 1;
 				noopCounts.set(noopKey, streak);
@@ -231,49 +364,206 @@ export function createEditTool(executor: Executor, options: EditToolOptions = {}
 					`No changes made to ${path}: oldText and newText are byte-identical at the match, so the replacement produced no change. ` +
 						`Re-read the file to confirm what actually needs changing before editing again.`,
 				);
+			};
+
+			let result: { text: string; diff: string; patch: string; occurrences: number };
+			if (before.size <= EDIT_INLINE_MAX_BYTES) {
+				result = await editInline(
+					fileStore,
+					target,
+					path,
+					before,
+					needle,
+					replacement,
+					replaceAll === true,
+					signal,
+				);
+			} else {
+				result = await editStreaming(
+					fileStore,
+					target,
+					path,
+					before,
+					needle,
+					replacement,
+					replaceAll === true,
+					isNoopPayload,
+					signal,
+				);
+			}
+
+			if (isNoopPayload) {
+				applyNoop();
 			}
 			// A real edit breaks any no-op streak.
 			noopCounts.clear();
 
-			// Re-read immediately before writing back and compare against what was read at the top of
-			// this call (fix plan §2.4/§4.2): a background job, an external agent, or a concurrent
-			// `bash`/`edit` call (none of which the workspace write lease protects for the caller's own
-			// tool calls -- only inter-delegation writes) can change the file in between. Without this,
-			// the write below would silently clobber whatever changed it, keeping only this call's
-			// edit and discarding the other writer's. This narrows the race to the read-compare-write
-			// gap itself rather than closing it -- cheap insurance, not a lock.
-			const recheck = await executor.exec(`cat ${shellEscape(path)}`, { signal });
-			if (recheck.code === 0 && recheck.stdout !== content) {
-				throw new RecoverableToolError(
-					`${path} changed during this edit (likely a background job or another agent writing concurrently). ` +
-						"Re-read the file and re-apply the edit against its current content.",
-				);
-			}
-
-			// Write the file back
-			await writeContent(executor, path, newContent, signal, {
-				securityConfig,
-				securityContext,
-				channelId: options.channelId,
-				toolName: "edit",
-			});
-
 			const replacementSummary = replaceAll
-				? `Replaced ${occurrences} occurrence${occurrences === 1 ? "" : "s"} in ${path}.`
+				? `Replaced ${result.occurrences} occurrence${result.occurrences === 1 ? "" : "s"} in ${path}.`
 				: `Successfully replaced text in ${path}. Changed ${oldText.length} characters to ${newText.length} characters.`;
 
-			const diff = generateDiffString(content, newContent);
-			// Echo the diff into the model-visible text so it can confirm the change landed where it
-			// intended without a follow-up read; `details.diff` stays the full diff for the UI.
-			const echoedDiff = diff.trim() ? `\n\n${clampDiffForEcho(diff)}` : "";
+			const echoedDiff = result.diff.trim() ? `\n\n${clampDiffForEcho(result.diff)}` : "";
 
 			return {
 				content: [{ type: "text", text: `${replacementSummary}${echoedDiff}` }],
 				details: {
-					diff,
-					patch: Diff.createPatch(path, content, newContent),
+					diff: result.diff,
+					patch: result.patch,
 				},
 			};
 		},
 	};
+}
+
+/** D2.1: small file path -- read whole, splice in memory, write atomically. */
+async function editInline(
+	fileStore: FileStore,
+	target: string,
+	path: string,
+	before: FileStat,
+	needle: Buffer,
+	replacement: Buffer,
+	replaceAll: boolean,
+	signal: AbortSignal | undefined,
+): Promise<{ text: string; diff: string; patch: string; occurrences: number }> {
+	const { data } = await fileStore.readBytes(target, { signal });
+	if (data.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
+		throw new RecoverableToolError(
+			`${path} looks like a binary file (a NUL byte appears in the first ${BINARY_SNIFF_BYTES} bytes). ` +
+				"Use bash for binary edits — edit is for text.",
+		);
+	}
+
+	const offsets = findAllOffsets(data, needle);
+	if (offsets.length === 0) {
+		throw new RecoverableToolError(
+			`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
+		);
+	}
+	if (offsets.length > 1 && !replaceAll) {
+		throw new RecoverableToolError(
+			`Found ${offsets.length} occurrences of the text in ${path}. The text must be unique, or pass replaceAll: true to replace all of them. Please provide more context to make it unique.`,
+		);
+	}
+
+	const useOffsets = replaceAll ? offsets : [offsets[0]];
+	const newData = spliceBuffer(data, needle, replacement, useOffsets);
+
+	if (newData.equals(data)) {
+		// Byte-identical payload -- caller (createEditTool) turns this into the no-op error/hard-stop.
+		return { text: "", diff: "", patch: "", occurrences: useOffsets.length };
+	}
+
+	await checkFingerprintUnchanged(fileStore, target, path, before);
+	await fileStore.writeAtomic(target, newData, { preserveMode: true, signal });
+
+	const oldText = data.toString("utf-8");
+	const newText = newData.toString("utf-8");
+	const diff = generateDiffString(oldText, newText);
+	const patch = Diff.createPatch(path, oldText, newText);
+
+	return { text: "", diff, patch, occurrences: useOffsets.length };
+}
+
+/** D2.2: streaming two-pass path for files over EDIT_INLINE_MAX_BYTES. */
+async function editStreaming(
+	fileStore: FileStore,
+	target: string,
+	path: string,
+	before: FileStat,
+	needle: Buffer,
+	replacement: Buffer,
+	replaceAll: boolean,
+	isNoopPayload: boolean,
+	signal: AbortSignal | undefined,
+): Promise<{ text: string; diff: string; patch: string; occurrences: number }> {
+	// Pass 1: scan for occurrences, line numbers, and a binary sniff -- no writes yet, so the
+	// uniqueness/existence judgment is made before anything touches disk.
+	const scan = await scanOccurrences(readStreamChunks(fileStore, target, signal), needle, MAX_REPLACE_ALL_OFFSETS);
+
+	if (scan.looksBinary) {
+		throw new RecoverableToolError(
+			`${path} looks like a binary file (a NUL byte appears in the first ${BINARY_SNIFF_BYTES} bytes). ` +
+				"Use bash for binary edits — edit is for text.",
+		);
+	}
+	if (scan.count === 0) {
+		throw new RecoverableToolError(
+			`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
+		);
+	}
+	if (scan.count > 1 && !replaceAll) {
+		throw new RecoverableToolError(
+			`Found ${scan.count} occurrences of the text in ${path}. The text must be unique, or pass replaceAll: true to replace all of them. Please provide more context to make it unique.`,
+		);
+	}
+	if (!scan.offsets) {
+		throw new RecoverableToolError(
+			`${path} has more than ${MAX_REPLACE_ALL_OFFSETS} occurrences of the text -- too many to replace in one call on a file this large. ` +
+				"Narrow the pattern (add more context) so it matches far fewer places.",
+		);
+	}
+
+	const matchOffsets = replaceAll ? scan.offsets : [scan.offsets[0]];
+	const occurrences = matchOffsets.length;
+
+	if (isNoopPayload) {
+		// The caller turns this into the no-op error/hard-stop; no point writing an identical file.
+		return { text: "", diff: "", patch: "", occurrences };
+	}
+
+	// Local diff windows, read from the *original* file before pass 2 rewrites it.
+	const diffParts: string[] = [];
+	const patchParts: string[] = [];
+	const shown = Math.min(matchOffsets.length, MAX_DIFF_WINDOWS);
+	for (let i = 0; i < shown; i++) {
+		const offset = matchOffsets[i];
+		const rawStart = Math.max(0, offset - DIFF_WINDOW_BYTES);
+		const rawEnd = Math.min(before.size, offset + needle.length + DIFF_WINDOW_BYTES);
+		const { data: windowBytes } = await fileStore.readBytes(target, {
+			start: rawStart,
+			maxBytes: rawEnd - rawStart,
+			signal,
+		});
+		const { start, end } = expandToLineBoundaries(
+			windowBytes,
+			offset - rawStart,
+			offset - rawStart + needle.length,
+			windowBytes.length,
+		);
+		const oldWindow = windowBytes.subarray(start, end).toString("utf-8");
+		const newWindow =
+			windowBytes.subarray(start, offset - rawStart).toString("utf-8") +
+			replacement.toString("utf-8") +
+			windowBytes.subarray(offset - rawStart + needle.length, end).toString("utf-8");
+		const startLine = scan.lineNumbers.get(offset) ?? 1;
+		// The window itself may start mid-file above `offset`'s line, so back up the printed line
+		// number by however many newlines are in the window before the expanded start.
+		const linesBeforeWindowStart = countNewlines(windowBytes, 0, start);
+		const linesBeforeMatch = countNewlines(windowBytes, 0, offset - rawStart);
+		const windowStartLine = startLine - (linesBeforeMatch - linesBeforeWindowStart);
+		diffParts.push(generateDiffString(oldWindow, newWindow, 4, windowStartLine, windowStartLine));
+		patchParts.push(Diff.createPatch(path, oldWindow, newWindow));
+	}
+	if (matchOffsets.length > shown) {
+		diffParts.push(`[+${matchOffsets.length - shown} more occurrence(s) replaced, diff not shown]`);
+	}
+
+	// Pass 2: apply. Stream-copy the file, splicing in `replacement` at each recorded offset.
+	await checkFingerprintUnchanged(fileStore, target, path, before);
+	await fileStore.replaceViaTemp(
+		target,
+		async (out) => {
+			let cursor = 0;
+			for (const offset of matchOffsets) {
+				await copyRange(fileStore, target, cursor, offset, out);
+				out.write(replacement);
+				cursor = offset + needle.length;
+			}
+			await copyRange(fileStore, target, cursor, before.size, out);
+		},
+		{ preserveMode: true, signal },
+	);
+
+	return { text: "", diff: diffParts.join("\n\n"), patch: patchParts.join("\n"), occurrences };
 }

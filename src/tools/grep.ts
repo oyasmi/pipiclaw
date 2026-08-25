@@ -2,12 +2,11 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { Executor } from "../executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
-import { logSecurityEvent } from "../security/logger.js";
-import { guardPath } from "../security/path-guard.js";
+import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { shellEscape } from "../shared/shell-escape.js";
-import { DEFAULT_MAX_BYTES, truncateHead } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 /**
  * Structured content search over the filesystem. The execution layer is deliberately thin — one
@@ -25,8 +24,21 @@ const SINGLE_FILE_MATCHES = 200;
 /** Files shown per page; `skip` pages through the rest. */
 const FILE_PAGE_LIMIT = 20;
 const SEARCH_TIMEOUT_SECONDS = 30;
-/** Directories never worth scanning; filtered in JS since busybox grep lacks --exclude-dir. */
+/**
+ * Directories never worth scanning. Pushed down to `grep --exclude-dir=` (spec 044, D5.1) so a huge
+ * `node_modules` never gets scanned (and never fills the result capture cap below) in the first
+ * place; kept as a JS-side post-filter too, as a backstop for a grep implementation whose
+ * `--exclude-dir` semantics differ slightly.
+ */
 const IGNORED_DIR_SEGMENTS = new Set(["node_modules", ".git", ".hg", ".svn", "dist", "build", ".next", ".cache"]);
+/**
+ * Raw `grep` stdout capture cap (spec 044, D5.2). Bounded well under the executor's 10MB default so
+ * a broad search can never flood memory, and `ExecResult.stdoutTruncated` (D6.2) says honestly
+ * whether the cap was hit -- unlike piping through `head -n`, this leaves `result.code` as grep's
+ * own exit status, so a real `grep` error (bad regex, missing path) still surfaces as one instead
+ * of being masked by `head` exiting 0 regardless of what fed it.
+ */
+const MAX_RAW_RESULT_BYTES = 768 * 1024;
 
 const grepSchema = Type.Object({
 	label: Type.String({ description: "Brief description of what you're searching for and why (shown to user)" }),
@@ -53,17 +65,6 @@ interface MatchEntry {
 	line: number;
 	text: string;
 	isMatch: boolean;
-}
-
-function formatPathBlockMessage(resolvedPath: string | undefined, category?: string, reason?: string): string {
-	const lines = [`Path blocked${category ? ` [${category}]` : ""}`];
-	if (reason) {
-		lines.push(`Reason: ${reason}`);
-	}
-	if (resolvedPath) {
-		lines.push(`Resolved path: ${resolvedPath}`);
-	}
-	return lines.join("\n");
 }
 
 /** Convert a simple `*`/`?` glob into an anchored regex matched against a basename. */
@@ -200,32 +201,40 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			}
 
 			const searchPath = path?.trim() || ".";
-			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
-				const guardResult = guardPath(searchPath, "read", { ...securityContext, config: securityConfig.pathGuard });
-				if (!guardResult.allowed) {
-					await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
-						type: "path",
-						tool: "grep",
-						channelId: options.channelId,
-						rawPath: searchPath,
-						operation: "read",
-						resolvedPath: guardResult.resolvedPath,
-						category: guardResult.category,
-						reason: guardResult.reason,
-					});
-					throw new Error(
-						formatPathBlockMessage(guardResult.resolvedPath, guardResult.category, guardResult.reason),
-					);
-				}
-			}
+			// Resolved once, then used for both the guard's judgment and the actual `grep` target
+			// (spec 044, D1.1): no separate `cwd` needed on the executor call, so there is no chance of
+			// the guard resolving against `projectRoot` while the shell actually runs against the
+			// daemon's own cwd (F6).
+			const target = await checkPathGuard(searchPath, "read", securityConfig, securityContext, {
+				tool: "grep",
+				channelId: options.channelId,
+			});
 
 			const flags = ["-rnH", "-E", `-B${CONTEXT_BEFORE}`, `-A${CONTEXT_AFTER}`];
 			if (caseSensitive === false) {
 				flags.push("-i");
 			}
-			// `--` terminates flags so a pattern beginning with `-` is not read as one.
-			const command = `grep ${flags.join(" ")} -- ${shellEscape(pattern)} ${shellEscape(searchPath)}`;
-			const result = await executor.exec(command, { timeout: SEARCH_TIMEOUT_SECONDS, signal });
+			// Push directory and glob filters down into `grep` itself (D5.1) so a huge `node_modules`
+			// is never scanned in the first place, rather than being scanned, capped, and then
+			// filtered away in JS after it already ate the whole result budget (F7). The JS-side
+			// `isIgnoredPath`/`globRegExp` filtering below stays as a backstop for a `grep` whose
+			// `--exclude-dir` semantics differ.
+			for (const segment of IGNORED_DIR_SEGMENTS) {
+				flags.push(`--exclude-dir=${segment}`);
+			}
+			if (glob) {
+				flags.push(`--include=${glob}`);
+			}
+			// `--` terminates flags so a pattern beginning with `-` is not read as one. Bounded via
+			// `maxCaptureBytes` (D5.2) rather than a `| head -n` pipe: piping through `head` would
+			// have `sh -c` (no pipefail) report `head`'s exit status instead of grep's, silently
+			// masking a real grep error (bad regex, missing path) behind `head`'s always-0 exit.
+			const command = `grep ${flags.join(" ")} -- ${shellEscape(pattern)} ${shellEscape(target)}`;
+			const result = await executor.exec(command, {
+				timeout: SEARCH_TIMEOUT_SECONDS,
+				signal,
+				maxCaptureBytes: MAX_RAW_RESULT_BYTES,
+			});
 
 			// grep exit code 1 = no matches (normal), 0 = matches, >=2 = error.
 			if (result.code >= 2) {
@@ -235,8 +244,13 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 				);
 			}
 
+			const rawTruncated = result.stdoutTruncated === true;
+			// A truncated capture may end mid-line; drop that dangling partial line rather than feed
+			// it to the parser, which expects each line to be a complete match or context line.
+			const boundedStdout = rawTruncated ? result.stdout.slice(0, result.stdout.lastIndexOf("\n")) : result.stdout;
+
 			const globRegExp = glob ? globToRegExp(glob) : undefined;
-			const parsed = parseGrepOutput(result.stdout);
+			const parsed = parseGrepOutput(boundedStdout);
 
 			// Filter ignored dirs and (for directory scopes) the optional glob, on the basename.
 			const files: Array<[string, MatchEntry[]]> = [];
@@ -256,13 +270,16 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 
 			if (files.length === 0) {
 				const scope = glob ? `${searchPath} (glob ${glob})` : searchPath;
+				// D5.3: a result set that hit the raw-line cap but still filtered down to nothing must
+				// not be reported as "no matches" -- that tells the model to try a *broader* search,
+				// which is exactly backwards when the real problem is that the cap was hit before
+				// filtering ever got a chance to keep anything.
+				const text = rawTruncated
+					? `Search hit the ${formatSize(MAX_RAW_RESULT_BYTES)} raw result cap before any match survived filtering in ${scope}. ` +
+						"Narrow the path or pattern so fewer raw hits are needed."
+					: `No matches found in ${scope}. Try a broader pattern, drop the glob, or widen the path.`;
 				return {
-					content: [
-						{
-							type: "text",
-							text: `No matches found in ${scope}. Try a broader pattern, drop the glob, or widen the path.`,
-						},
-					],
+					content: [{ type: "text", text }],
 					details: { matchCount: 0, fileCount: 0 },
 				};
 			}
@@ -305,6 +322,11 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			if (moreFiles > 0) {
 				footerLines.push(
 					`[${moreFiles} more matching file(s). Use skip=${startOffset + page.length} for the next page.]`,
+				);
+			}
+			if (rawTruncated) {
+				footerLines.push(
+					`[Search hit the ${formatSize(MAX_RAW_RESULT_BYTES)} raw result cap; there may be matches beyond what's shown above. Narrow the path or pattern to see them.]`,
 				);
 			}
 

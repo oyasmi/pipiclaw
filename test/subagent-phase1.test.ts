@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
+import { createFileStore } from "../src/file-store.js";
 import {
 	discoverSubAgents,
 	getSubAgentsDir,
@@ -425,6 +426,7 @@ describe("sub-agent tool", () => {
 		let delegatedTask = "";
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -473,6 +475,7 @@ describe("sub-agent tool", () => {
 
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -575,6 +578,7 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 		let delegatedTask = "";
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -632,6 +636,7 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 		let usedModel: Model<Api> | undefined;
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model, altModel],
 			resolveApiKey: async () => "test-key",
@@ -668,6 +673,7 @@ describe("sub-agent artifact contract (D4)", () => {
 	) {
 		return createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -796,6 +802,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		const seenInputs: string[] = [];
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -845,6 +852,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		let callCount = 0;
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -895,6 +903,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		const controller = new AbortController();
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -951,6 +960,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		let started = false;
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -987,6 +997,7 @@ describe("sub-agent working directory", () => {
 	function makeTool(workspaceDir: string, channelDir: string, executor: Executor) {
 		return createSubAgentTool({
 			executor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -1018,6 +1029,7 @@ describe("sub-agent working directory", () => {
 		let delegatedTask = "";
 		const tool = createSubAgentTool({
 			executor: recording,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -1078,6 +1090,7 @@ describe("sub-agent working directory", () => {
 		mkdirSync(outsideDir, { recursive: true });
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",

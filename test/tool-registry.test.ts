@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
+import { createFileStore } from "../src/file-store.js";
 import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
@@ -12,6 +13,7 @@ const executor: Executor = {
 function makeContext(overrides: Partial<ToolBuildContext> = {}): ToolBuildContext {
 	return {
 		executor,
+		fileStore: createFileStore(),
 		securityConfig: DEFAULT_SECURITY_CONFIG,
 		securityContext: { agentWorkspaceDir: "/repo", projectRoot: "/repo" },
 		channelId: "dm_1",

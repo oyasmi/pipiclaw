@@ -3,12 +3,13 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { extname } from "path";
 import { Type } from "typebox";
 import type { Executor } from "../executor.js";
+import type { DirectoryEntry, FileStore } from "../file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
-import { logSecurityEvent } from "../security/logger.js";
-import { guardPath } from "../security/path-guard.js";
+import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { shellEscape } from "../shared/shell-escape.js";
+import { resolveLineOffset } from "./line-index.js";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -42,31 +43,22 @@ const DIR_MAX_DEPTH = 2;
 const DIR_PER_DIR_LIMIT = 12;
 
 /**
- * Render a depth-2 directory tree from a newline-separated list of paths (directories carry a
- * trailing `/`, produced by the shell). Kept deliberately portable — no sizes or mtimes, since
- * `find -printf` / `stat` formats differ across BSD, GNU, and busybox; the structure is the value.
+ * Render a depth-2 directory tree from `FileStore.listDirectory` entries. Kept deliberately
+ * portable — no sizes or mtimes, since formats differ across platforms; the structure is the value.
  */
-function renderDirectoryTree(rootPath: string, rawPaths: string): string {
-	const rootPrefix = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
-	const entries = rawPaths
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0 && line !== rootPath && line !== rootPrefix)
-		.map((line) => (line.startsWith(rootPrefix) ? line.slice(rootPrefix.length) : line))
-		.sort((a, b) => a.replace(/\/$/, "").localeCompare(b.replace(/\/$/, "")));
-
+function renderDirectoryTree(entries: DirectoryEntry[]): string {
 	if (entries.length === 0) {
 		return "(empty directory)";
 	}
+
+	const sorted = [...entries].sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 
 	// Group by immediate parent so we can cap children per directory.
 	const perParentCount = new Map<string, number>();
 	const lines: string[] = [];
 	const elided = new Map<string, number>();
-	for (const entry of entries) {
-		const isDir = entry.endsWith("/");
-		const rel = isDir ? entry.slice(0, -1) : entry;
-		const segments = rel.split("/");
+	for (const entry of sorted) {
+		const segments = entry.relativePath.split("/");
 		const depth = segments.length - 1;
 		const parent = depth === 0 ? "" : segments.slice(0, -1).join("/");
 		const count = (perParentCount.get(parent) ?? 0) + 1;
@@ -75,7 +67,7 @@ function renderDirectoryTree(rootPath: string, rawPaths: string): string {
 			elided.set(parent, (elided.get(parent) ?? 0) + 1);
 			continue;
 		}
-		lines.push(`${"  ".repeat(depth)}${segments[segments.length - 1]}${isDir ? "/" : ""}`);
+		lines.push(`${"  ".repeat(depth)}${entry.name}${entry.isDirectory ? "/" : ""}`);
 	}
 	for (const [, count] of elided) {
 		lines.push(`  [+${count} more]`);
@@ -108,22 +100,11 @@ function countSplitLines(content: string, lines: string[]): number {
 	return content.endsWith("\n") ? lines.length - 1 : lines.length;
 }
 
-function countTextLines(content: string): number {
-	return countSplitLines(content, content.split("\n"));
-}
-
-function formatPathBlockMessage(resolvedPath: string | undefined, category?: string, reason?: string): string {
-	const lines = [`Path blocked${category ? ` [${category}]` : ""}`];
-	if (reason) {
-		lines.push(`Reason: ${reason}`);
-	}
-	if (resolvedPath) {
-		lines.push(`Resolved path: ${resolvedPath}`);
-	}
-	return lines.join("\n");
-}
-
-export function createReadTool(executor: Executor, options: ReadToolOptions = {}): AgentTool<typeof readSchema> {
+export function createReadTool(
+	executor: Executor,
+	fileStore: FileStore,
+	options: ReadToolOptions = {},
+): AgentTool<typeof readSchema> {
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: process.cwd(),
@@ -140,68 +121,46 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 			{ path, offset, limit }: { label: string; path: string; offset?: number; limit?: number },
 			signal?: AbortSignal,
 		): Promise<{ content: (TextContent | ImageContent)[]; details: ReadToolDetails | undefined }> => {
-			if (securityConfig.enabled && securityConfig.pathGuard.enabled) {
-				const guardResult = guardPath(path, "read", { ...securityContext, config: securityConfig.pathGuard });
-				if (!guardResult.allowed) {
-					await logSecurityEvent(securityContext.agentWorkspaceDir, securityConfig, {
-						type: "path",
-						tool: "read",
-						channelId: options.channelId,
-						rawPath: path,
-						operation: "read",
-						resolvedPath: guardResult.resolvedPath,
-						category: guardResult.category,
-						reason: guardResult.reason,
-					});
-					throw new Error(
-						formatPathBlockMessage(guardResult.resolvedPath, guardResult.category, guardResult.reason),
-					);
-				}
-			}
+			const target = await checkPathGuard(path, "read", securityConfig, securityContext, {
+				tool: "read",
+				channelId: options.channelId,
+			});
 
 			const mimeType = isImageFile(path);
 
 			if (mimeType) {
-				// Guard the file size before `base64`: base64 inflates to 4/3, and the executor caps
-				// captured stdout at 10MB, so a file above MAX_INLINE_BINARY_BYTES would be silently
-				// truncated mid-encoding into a buffer that still decodes -- a corrupt image handed to
-				// the model with no error (fix plan §2.3).
-				const sizeCheck = await executor.exec(`wc -c < ${shellEscape(path)} 2>&1 || echo __SIZE_FAILED__`, {
-					signal,
-				});
-				const sizeBytes = Number.parseInt(sizeCheck.stdout.trim(), 10);
-				if (Number.isFinite(sizeBytes) && sizeBytes > MAX_INLINE_BINARY_BYTES) {
+				// Stat before reading: base64-encoding a file over the inline limit is pointless work,
+				// and doing it via `FileStore.readBytes` rather than shelling out to `base64` (spec 044,
+				// D7) means there is no 4/3 blow-up through a captured stdout string to worry about.
+				const stat = await fileStore.stat(target);
+				if (!stat || !stat.isFile) {
 					throw new RecoverableToolError(
-						`Image ${path} is ${formatSize(sizeBytes)}, over the ${formatSize(MAX_INLINE_BINARY_BYTES)} inline limit. ` +
+						`Failed to read file: ${path}. Check the path — try \`read\` on its parent directory to confirm it exists.`,
+					);
+				}
+				if (stat.size > MAX_INLINE_BINARY_BYTES) {
+					throw new RecoverableToolError(
+						`Image ${path} is ${formatSize(stat.size)}, over the ${formatSize(MAX_INLINE_BINARY_BYTES)} inline limit. ` +
 							"Compress or resize it first with bash (e.g. sips/convert/ffmpeg), or read it as text to inspect metadata only.",
 					);
 				}
-
-				// Read as image (binary) - use base64
-				const result = await executor.exec(`base64 < ${shellEscape(path)}`, { signal });
-				if (result.code !== 0) {
-					throw new RecoverableToolError(
-						result.stderr ||
-							`Failed to read file: ${path}. Check the path — try \`read\` on its parent directory to confirm it exists.`,
-					);
-				}
-				const base64 = result.stdout.replace(/\s/g, ""); // Remove whitespace from base64
-
+				const { data } = await fileStore.readBytes(target, { signal });
 				return {
 					content: [
 						{ type: "text", text: `Read image file [${mimeType}]` },
-						{ type: "image", data: base64, mimeType },
+						{ type: "image", data: data.toString("base64"), mimeType },
 					],
 					details: undefined,
 				};
 			}
 
 			// PDF documents are converted to text with pdftotext, then run through the same
-			// offset/limit/truncation pipeline as any text file.
+			// offset/limit/truncation pipeline as any text file. That's a command, not a file read, so
+			// it still goes through `Executor`.
 			const isPdf = extname(path).toLowerCase() === ".pdf";
 			let pdfText = "";
 			if (isPdf) {
-				const converted = await executor.exec(`pdftotext -layout ${shellEscape(path)} - 2>&1`, { signal });
+				const converted = await executor.exec(`pdftotext -layout ${shellEscape(target)} - 2>&1`, { signal });
 				if (converted.code === 127) {
 					throw new Error(
 						`Cannot read ${path}: pdftotext is not installed. Install poppler-utils, or ask the user to send a text version.`,
@@ -216,91 +175,90 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 				pdfText = converted.stdout;
 			}
 
-			// Get total line count. For non-PDF paths this same command also detects a directory
-			// (`cat`/`awk` on a directory would fail), so a directory read is a shallow tree rather
-			// than a confusing error — all in one exec to keep the call sequence unchanged.
-			let totalFileLines: number;
-			if (isPdf) {
-				totalFileLines = countTextLines(pdfText);
-			} else {
-				const countResult = await executor.exec(
-					`if [ -d ${shellEscape(path)} ]; then echo __DIR__; else awk 'END { print NR }' ${shellEscape(path)}; fi`,
-					{ signal },
+			const stat = isPdf ? undefined : await fileStore.stat(target);
+			if (!isPdf && !stat) {
+				throw new RecoverableToolError(
+					`Failed to read file: ${path}. Check the path — try \`read\` on its parent directory to confirm it exists.`,
 				);
-				if (countResult.code !== 0) {
-					throw new RecoverableToolError(
-						countResult.stderr ||
-							`Failed to read file: ${path}. Check the path — try \`read\` on its parent directory to confirm it exists.`,
-					);
-				}
-				if (countResult.stdout.trim() === "__DIR__") {
-					const listing = await executor.exec(
-						`{ find ${shellEscape(path)} -maxdepth ${DIR_MAX_DEPTH} -type d | sed 's,$,/,'; ` +
-							`find ${shellEscape(path)} -maxdepth ${DIR_MAX_DEPTH} ! -type d; }`,
-						{ signal },
-					);
-					if (listing.code !== 0) {
-						throw new Error(listing.stderr || `Failed to list directory: ${path}`);
-					}
-					return {
-						content: [
-							{ type: "text", text: `Directory: ${path}\n\n${renderDirectoryTree(path, listing.stdout)}` },
-						],
-						details: undefined,
-					};
-				}
-				totalFileLines = Number.parseInt(countResult.stdout.trim(), 10);
+			}
+			if (stat?.isDirectory) {
+				const entries = await fileStore.listDirectory(target, { maxDepth: DIR_MAX_DEPTH });
+				return {
+					content: [{ type: "text", text: `Directory: ${path}\n\n${renderDirectoryTree(entries)}` }],
+					details: undefined,
+				};
 			}
 
-			// Apply offset if specified (1-indexed)
 			const startLine = offset ? Math.max(1, offset) : 1;
 			const startLineDisplay = startLine;
 
-			// Check if offset is out of bounds
-			if (
-				(totalFileLines === 0 && offset !== undefined && startLine > 1) ||
-				(totalFileLines > 0 && startLine > totalFileLines)
-			) {
-				const guidance =
-					totalFileLines > 0
-						? `Use offset=${totalFileLines} to read the last line, or omit offset to read from the start.`
-						: "The file is empty; omit offset.";
-				throw new RecoverableToolError(
-					`Offset ${offset} is beyond end of file (${totalFileLines} lines total). ${guidance}`,
-				);
-			}
-
-			// Read content from the offset. PDF text is already in memory; files stream from disk.
+			// Resolve the byte offset of `startLine` via the incremental line index (D4.2). PDF text is
+			// small and already fully in memory, so it just splits directly. For a real file, the index
+			// scans forward from wherever it last left off; reaching EOF without finding `startLine`
+			// means the offset is out of bounds -- decided from what the scan actually observed (D4.3),
+			// never from a separate precomputed total.
 			let selectedContent: string;
+			let windowEof: boolean;
+			let linesBeforeWindow: number;
+
 			if (isPdf) {
-				selectedContent =
-					startLine === 1
-						? pdfText
-						: pdfText
-								.split("\n")
-								.slice(startLine - 1)
-								.join("\n");
-			} else {
-				// Bounded at the source. The output is capped below at min(DEFAULT_MAX_LINES,
-				// DEFAULT_MAX_BYTES) anyway, so piping a multi-hundred-megabyte log through the
-				// executor and materializing it as a JS string first only bought a second full read
-				// of the file and the peak memory to hold it. Reading twice the byte cap always
-				// leaves `truncateHead` enough to apply whichever limit binds first — the byte cap
-				// is half the window, and however short the lines are, DEFAULT_MAX_LINES of them
-				// are either within the window or already past the byte cap.
-				const readWindowBytes = DEFAULT_MAX_BYTES * 2;
-				const source = startLine === 1 ? `cat ${shellEscape(path)}` : `tail -n +${startLine} ${shellEscape(path)}`;
-				// `sh -c` runs without pipefail, so the pipeline reports head's status; head closing
-				// the pipe early is the point, not a failure.
-				const result = await executor.exec(`${source} | head -c ${readWindowBytes}`, { signal });
-				if (result.code !== 0) {
+				const pdfLines = pdfText.split("\n");
+				const totalPdfLines = countSplitLines(pdfText, pdfLines);
+				if (startLine > Math.max(totalPdfLines, 1)) {
 					throw new RecoverableToolError(
-						result.stderr ||
-							`Failed to read file: ${path}. Check the path — try \`read\` on its parent directory to confirm it exists.`,
+						`Offset ${offset} is beyond end of file (${totalPdfLines} lines total). ` +
+							(totalPdfLines > 0
+								? `Use offset=${totalPdfLines} to read the last line, or omit offset to read from the start.`
+								: "The file is empty; omit offset."),
 					);
 				}
-				selectedContent = result.stdout;
+				selectedContent = startLine === 1 ? pdfText : pdfLines.slice(startLine - 1).join("\n");
+				windowEof = true;
+				linesBeforeWindow = startLine - 1;
+			} else {
+				const fileStat = stat!;
+				if (fileStat.size === 0) {
+					if (offset !== undefined && startLine > 1) {
+						throw new RecoverableToolError(
+							`Offset ${offset} is beyond end of file (0 lines total). The file is empty; omit offset.`,
+						);
+					}
+					selectedContent = "";
+					windowEof = true;
+					linesBeforeWindow = 0;
+				} else {
+					const located = await resolveLineOffset(fileStore, target, fileStat, startLine, signal);
+					if (located.offset === undefined) {
+						const guidance =
+							located.knownLines > 0
+								? `Use offset=${located.knownLines} to read the last line, or omit offset to read from the start.`
+								: "The file is empty; omit offset.";
+						throw new RecoverableToolError(
+							`Offset ${offset} is beyond end of file (${located.knownLines} lines total). ${guidance}`,
+						);
+					}
+					// Bounded at the source: read at most twice the byte cap, which always leaves
+					// `truncateHead` enough to apply whichever limit binds first (line or byte), however
+					// short the lines are.
+					const readWindowBytes = DEFAULT_MAX_BYTES * 2;
+					const { data, eof } = await fileStore.readBytes(target, {
+						start: located.offset,
+						maxBytes: readWindowBytes,
+						signal,
+					});
+					selectedContent = data.toString("utf-8");
+					windowEof = eof;
+					linesBeforeWindow = startLine - 1;
+				}
 			}
+
+			// Total lines known so far, from the *whole* read window before any user `limit` slices
+			// it down: exact when the window reached the real EOF, a lower bound otherwise (D4.3) --
+			// never a number nobody actually counted.
+			const linesInWindow = countSplitLines(selectedContent, selectedContent.split("\n"));
+			const knownTotalLines = linesBeforeWindow + linesInWindow;
+			const totalIsExact = windowEof;
+
 			let userLimitedLines: number | undefined;
 
 			// Apply user limit if specified
@@ -326,24 +284,25 @@ export function createReadTool(executor: Executor, options: ReadToolOptions = {}
 				// Truncation occurred - build actionable notice
 				const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
 				const nextOffset = endLineDisplay + 1;
+				const totalLabel = totalIsExact ? `${knownTotalLines}` : `>=${knownTotalLines}`;
 
 				outputText = truncation.content;
 
 				if (truncation.truncatedBy === "lines") {
-					outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue]`;
+					outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalLabel}. Use offset=${nextOffset} to continue]`;
 				} else {
-					outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue]`;
+					outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalLabel} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue]`;
 				}
 				details = { truncation };
 			} else if (userLimitedLines !== undefined) {
 				// User specified limit, check if there's more content
 				const linesFromStart = startLine - 1 + userLimitedLines;
-				if (linesFromStart < totalFileLines) {
-					const remaining = totalFileLines - linesFromStart;
+				const moreAvailable = !windowEof || linesFromStart < knownTotalLines;
+				if (moreAvailable) {
 					const nextOffset = startLine + userLimitedLines;
-
 					outputText = truncation.content;
-					outputText += `\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue]`;
+					const remainingLabel = windowEof ? `${knownTotalLines - linesFromStart}` : "more";
+					outputText += `\n\n[${remainingLabel} more lines in file. Use offset=${nextOffset} to continue]`;
 				} else {
 					outputText = truncation.content;
 				}

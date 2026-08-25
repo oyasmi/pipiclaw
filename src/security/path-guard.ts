@@ -144,9 +144,24 @@ function resolveForGuard(path: string, ctx: PathGuardContext): string {
 		return realpathSync(normalized);
 	}
 
-	const parentDir = dirname(normalized);
-	const parentRealPath = resolveExistingAncestor(parentDir);
-	return resolve(parentRealPath, basename(normalized));
+	// Walk up to the nearest existing ancestor, remembering every missing path segment along the
+	// way, then reattach them onto that ancestor's realpath (spec 044: a file tool's real write
+	// target is now this resolved path, not a raw `mkdir -p`'d one, so this has to be exact). A
+	// naive "existing ancestor + basename" only handles a single missing directory level -- writing
+	// `a/b/c.txt` where neither `a` nor `a/b` exist yet used to silently drop the `a/b` segment and
+	// resolve to `<ancestor>/c.txt` instead of `<ancestor>/a/b/c.txt`.
+	const missingSegments: string[] = [];
+	let current = normalized;
+	while (!existsSync(current)) {
+		missingSegments.unshift(basename(current));
+		const parent = dirname(current);
+		if (parent === current) {
+			break;
+		}
+		current = parent;
+	}
+	const ancestorRealPath = existsSync(current) ? realpathSync(current) : current;
+	return resolve(ancestorRealPath, ...missingSegments);
 }
 
 function matchesAnyPath(path: string, exactPaths: string[], prefixes: string[]): boolean {
@@ -338,7 +353,10 @@ function formatBlockedResult(
 
 export function guardPath(rawPath: string, operation: "read" | "write", ctx: PathGuardContext): PathGuardResult {
 	if (!ctx.config.enabled) {
-		return { allowed: true, operation, rawPath };
+		// Resolution is normalization, not policy, so `resolvedPath` stays populated even with the
+		// guard off (spec 044, D1.1): callers rely on it being the one path every file tool actually
+		// opens, and a guard-disabled deployment must not be the one case that breaks that invariant.
+		return { allowed: true, operation, rawPath, resolvedPath: resolveForGuard(resolveTargetPath(rawPath, ctx), ctx) };
 	}
 
 	const homeDir = ctx.homeDir ?? homedir();

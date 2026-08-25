@@ -7,6 +7,7 @@ import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { ExecOptions, ExecResult, Executor } from "../executor.js";
+import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import {
@@ -167,6 +168,7 @@ export type SubAgentToolDetails = SubAgentToolFields & { kind: "subagent" };
 
 export interface SubAgentToolOptions {
 	executor: Executor;
+	fileStore: FileStore;
 	/** Host checkout used as the sub-agent's cwd. Defaults to process.cwd(). */
 	workingDirectory?: string;
 	/** Mirrors the parent channel's ProjectScope.boundary onto the sub-agent's own tool set (spec 043, D6.2). */
@@ -494,6 +496,7 @@ function buildSubagentTools(
 	return buildToolSet(
 		{
 			executor,
+			fileStore: options.fileStore,
 			securityConfig,
 			securityContext: {
 				// No `channelDir`: a sub-agent receives channel state through its injected context

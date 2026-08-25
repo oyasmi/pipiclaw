@@ -270,6 +270,8 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 
 `write.ts` 是共享 `write-content.ts` 的薄包装（子代理工具也复用后者）——这个拆分是有意的。
 
+**`FileStore`（`src/file-store.ts`，spec 044）与 `Executor` 并列**：文件内容工具（`read`/`edit`/`write`/`send_media`）走 `FileStore`，直接在 `node:fs` 流上读写；`Executor` 只服务真正的命令工具（`bash`/`grep`/`pdftotext`）。两者共享同一条 `guardPath` 解出的 `resolvedPath`——路径只解析一次，守卫判定的和实际打开的必然是同一个值。`edit` 在这条路径上做字节级 splice（不解码整份文件，大文件走两趟流式扫描+应用），从根本上避免了文件内容穿过 shell 捕获缓冲导致的截断/编码损坏。
+
 **子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 字段区分 `internal`（默认，进程内隔离上下文子代理）与 `external`（一次性调用 claude-code / codex-cli / exec，argv 直连、不经过 shell），也支持调用时内联定义一个 internal 角色；Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置硬约束：工具白名单仅 `read/grep/bash/edit/write/web_search/web_fetch`（默认 `read+bash`），默认限额 24 turns / 48 tool calls / 300s 墙钟；外部角色没有轮数/工具调用概念，只有 `maxWallTimeSec`（默认 1800s）。调用面（`subagent` 工具）内外共用同一 schema。
 
 `subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_manage`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器结构性移除 write/edit（`verificationStrength: enforced`），外部验证器做不到，只能靠事后 `workspaceSubjectHash`（现已把未跟踪文件的内容也纳入哈希）比对（`verificationStrength: advisory`）。

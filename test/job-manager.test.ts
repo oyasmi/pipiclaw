@@ -20,6 +20,14 @@ class FakeJobExecutor implements Executor {
 	async exec(command: string, _options?: ExecOptions): Promise<ExecResult> {
 		this.commands.push(command);
 		if (command.includes("nohup")) {
+			// `readOutput` now reads the spill file straight off disk via `FileStore` (spec 044, D8)
+			// instead of shelling out to `cat`, so this fake has to actually put `this.output` on
+			// disk at the spill path the real launch command names -- extracted from the command
+			// string itself, the same path the manager will later read from.
+			const spillMatch = command.match(/> '([^']*)' 2>&1/);
+			if (spillMatch) {
+				writeFileSync(spillMatch[1], this.output);
+			}
 			return { code: 0, stdout: `${this.nextPid++}\n`, stderr: "" };
 		}
 		if (command.includes("kill -0")) {
@@ -29,9 +37,6 @@ class FakeJobExecutor implements Executor {
 		}
 		if (command.startsWith("kill ")) {
 			return { code: 0, stdout: "", stderr: "" };
-		}
-		if (command.startsWith("cat ")) {
-			return { code: 0, stdout: this.output, stderr: "" };
 		}
 		return { code: 0, stdout: "", stderr: "" };
 	}

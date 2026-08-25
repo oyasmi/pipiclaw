@@ -5,6 +5,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
+import { createFileStore } from "../src/file-store.js";
 import {
 	configureSubAgentRuntime,
 	getSubAgentRunManager,
@@ -67,6 +68,7 @@ function createAssistantMessage(text: string): AssistantMessage {
 function makeTool(workspaceDir: string, channelDir: string, channelId = "dm_lease") {
 	return createSubAgentTool({
 		executor: fakeExecutor,
+		fileStore: createFileStore(),
 		getCurrentModel: () => model,
 		getAvailableModels: () => [model],
 		resolveApiKey: async () => "test-key",
@@ -108,6 +110,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		const manager = new SubAgentRunManager(channelId, {});
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => {
@@ -146,6 +149,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		}
 		const rejectingTool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -204,6 +208,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		const manager = new SubAgentRunManager(channelId, { stateDir: blockedStateDir });
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -311,6 +316,7 @@ describe("subagent tool: purpose=verify guards against external roles that canno
 		const { discoverSubAgents } = await import("../src/subagents/discovery.js");
 		return createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",

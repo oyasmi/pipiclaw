@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it, vi } from "vitest";
 import type { Executor } from "../src/executor.js";
+import { createFileStore } from "../src/file-store.js";
 import type { SubAgentConfig } from "../src/subagents/discovery.js";
 import { configureSubAgentRuntime } from "../src/subagents/runs.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
@@ -61,6 +62,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -115,6 +117,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -164,6 +167,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -198,6 +202,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -235,6 +240,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",
@@ -273,6 +279,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
+			fileStore: createFileStore(),
 			getCurrentModel: () => model,
 			getAvailableModels: () => [model],
 			resolveApiKey: async () => "test-key",

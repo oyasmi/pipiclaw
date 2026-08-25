@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { handleSessionEvent, type SessionEventHandlerContext } from "../src/agent/session-events.js";
 import { createEmptyRunState, type RunQueue, type RunState } from "../src/agent/types.js";
+import { createFileStore } from "../src/file-store.js";
 import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 import type { ChannelContext } from "../src/runtime/channel-context.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
@@ -15,6 +16,7 @@ import { isRecoverableRejection, toolResultDetails, withToolDetails } from "../s
 function registryContext(): ToolBuildContext {
 	return {
 		executor: { exec: async () => ({ stdout: "", stderr: "", code: 1 }) },
+		fileStore: createFileStore(),
 		securityConfig: DEFAULT_SECURITY_CONFIG,
 		securityContext: { agentWorkspaceDir: "/tmp/ws", projectRoot: "/tmp/ws" },
 		channelId: "dm_1",
@@ -218,6 +220,7 @@ describe("registry wiring", () => {
 		const tool = withToolDetails(
 			createSubAgentTool({
 				executor: { exec: async () => ({ stdout: "", stderr: "", code: 0 }) },
+				fileStore: createFileStore(),
 				getCurrentModel: () => ({}) as never,
 				getAvailableModels: () => [],
 				resolveApiKey: async () => "key",

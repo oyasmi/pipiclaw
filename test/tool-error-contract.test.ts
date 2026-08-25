@@ -1,6 +1,9 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ChannelJobManager } from "../src/agent/job-manager.js";
 import type { Executor } from "../src/executor.js";
+import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createBashTool } from "../src/tools/bash.js";
 import { createEditTool } from "../src/tools/edit.js";
@@ -9,6 +12,7 @@ import { createJobTool } from "../src/tools/job.js";
 import { createReadTool } from "../src/tools/read.js";
 import { createSkillManageTool } from "../src/tools/skill-manage.js";
 import { withToolDetails } from "../src/tools/tool-details.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
  * Fix plan §3.1/§3.2 (docs/reviews/2026-08-24-subagents-and-tools-fix-plan.md): AGENTS.md requires
@@ -32,15 +36,18 @@ const cleanExecutor: Executor = {
 };
 
 describe("tool error contract: recoverable failures never throw past withToolDetails", () => {
+	const tempDir = useTempDirs("pipiclaw-tool-error-contract-");
+	const fileStore = createFileStore();
+
 	it("read: an out-of-bounds offset is recoverable", async () => {
-		const executor: Executor = {
-			async exec(command: string) {
-				if (command.includes("awk")) return { stdout: "3\n", stderr: "", code: 0 };
-				return { stdout: "", stderr: "", code: 0 };
-			},
-		};
-		const tool = withToolDetails(createReadTool(executor, { securityConfig: disabledSecurity }), "read");
-		const result = await tool.execute("call", { label: "x", path: "notes.txt", offset: 999 }, undefined, undefined);
+		const dir = tempDir();
+		const filePath = join(dir, "notes.txt");
+		writeFileSync(filePath, "line1\nline2\nline3\n");
+		const tool = withToolDetails(
+			createReadTool(cleanExecutor, fileStore, { securityConfig: disabledSecurity }),
+			"read",
+		);
+		const result = await tool.execute("call", { label: "x", path: filePath, offset: 999 }, undefined, undefined);
 		expect((result.details as { recoverable?: true }).recoverable).toBe(true);
 		expect((result.content[0] as { text: string }).text).toMatch(/^Rejected: /);
 	});
@@ -53,15 +60,13 @@ describe("tool error contract: recoverable failures never throw past withToolDet
 	});
 
 	it("edit: an anchor that does not match is recoverable", async () => {
-		const executor: Executor = {
-			async exec() {
-				return { stdout: "the actual file contents\n", stderr: "", code: 0 };
-			},
-		};
-		const tool = withToolDetails(createEditTool(executor, { securityConfig: disabledSecurity }), "edit");
+		const dir = tempDir();
+		const filePath = join(dir, "a.txt");
+		writeFileSync(filePath, "the actual file contents\n");
+		const tool = withToolDetails(createEditTool(fileStore, { securityConfig: disabledSecurity }), "edit");
 		const result = await tool.execute(
 			"call",
-			{ label: "x", path: "a.txt", oldText: "nope", newText: "y" },
+			{ label: "x", path: filePath, oldText: "nope", newText: "y" },
 			undefined,
 			undefined,
 		);
