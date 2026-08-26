@@ -64,7 +64,7 @@ export interface PipiclawMemoryRecallSettings {
 }
 
 // Whether the autonomous task mechanism runs at all is governed by the single
-// `tools.tasks.enabled` switch in tools.json (task_manage tool + TaskDriver +
+// `tools.tasks.enabled` switch in tools.json (task_* tools + TaskDriver +
 // task digest together). Cadence and size are fixed constants.
 export interface PipiclawTaskDigestSettings {
 	maxTasks: number;

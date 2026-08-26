@@ -10,12 +10,14 @@ export type SettableTaskStatus = (typeof SETTABLE_TASK_STATUSES)[number];
 
 export type TaskLifecycleAction =
 	| "create"
-	| "progress"
+	/** task_update with a `note` — a checkpoint on an open cycle. */
+	| "checkpoint"
 	| "verify"
 	| "complete"
 	| "skip"
 	| "cancel"
-	| "set"
+	/** task_update with no `note` — a metadata-only edit (spec 046, D3.2). */
+	| "metadata"
 	| "pause"
 	| "resume"
 	| "run"
@@ -34,7 +36,7 @@ const WORKABLE = ["active", "waiting"] as const;
 
 const TRANSITIONS: Record<TaskLifecycleAction, TransitionRule> = {
 	create: { from: [], to: "active" },
-	progress: { from: WORKABLE, to: "caller" },
+	checkpoint: { from: WORKABLE, to: "caller" },
 	// Not gated on a specific waitingFor value: the wake that reactivates a task parked for a
 	// purpose=verify sub-agent already flips it to active before this runs (the same as any other
 	// delegation wake), but `verify` also accepts waiting so it is not sensitive to exactly when
@@ -43,7 +45,7 @@ const TRANSITIONS: Record<TaskLifecycleAction, TransitionRule> = {
 	complete: { from: ["active"], to: "caller" },
 	skip: { from: WORKABLE, to: "sleeping" },
 	cancel: { from: LIVE, to: "caller" },
-	set: { from: LIVE, to: "caller" },
+	metadata: { from: LIVE, to: "caller" },
 	pause: { from: LIVE, to: "caller" },
 	resume: { from: LIVE, to: "caller" },
 	run: { from: LIVE, to: "active" },

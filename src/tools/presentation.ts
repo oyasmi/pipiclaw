@@ -81,11 +81,19 @@ const DESCRIBERS: Record<string, Describer> = {
 		return action === "read" ? `加载 skill ${name ?? "?"}` : "列出 skills";
 	},
 	event_manage: (args) => `事件 ${str(args, "action") ?? "?"} ${str(args, "name") ?? ""}`.trim(),
-	task_manage: (args) => `任务 ${str(args, "action") ?? "?"}${str(args, "id") ? ` ${str(args, "id")}` : ""}`,
+	task_list: () => "列出任务",
+	task_create: (args) => `创建任务 ${str(args, "id") ?? "?"}`,
+	task_update: (args) => `更新任务 ${str(args, "id") ?? "?"}`,
+	task_close: (args) => `关闭任务 ${str(args, "id") ?? "?"}（${str(args, "outcome") ?? "?"}）`,
+	task_verify: (args) => `导入验收 ${str(args, "id") ?? "?"}`,
 	subagent: (args) => {
-		const who = str(args, "agent") ?? str(args, "name") ?? "内联智能体";
+		const who = str(args, "agent") ?? "?";
 		const task = str(args, "task");
 		return `委派 ${who}${task ? `：${firstLine(task, 40)}` : ""}`;
+	},
+	subagent_inline: (args) => {
+		const task = str(args, "task");
+		return `内联委派${task ? `：${firstLine(task, 40)}` : ""}`;
 	},
 	subagent_manage: (args) => {
 		const op = str(args, "op") ?? "?";

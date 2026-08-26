@@ -24,77 +24,73 @@ import {
 	requiredField,
 	tasksDir,
 } from "./shared.js";
-import type { TaskFields, TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
+import type {
+	TaskCloseRequest,
+	TaskFields,
+	TaskManageResult,
+	TaskManageToolOptions,
+	TaskUpdateRequest,
+} from "./types.js";
 import { assertVerificationAttestationMatches } from "./verification.js";
 
-export async function setTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
-	if (!request.id) throw new RecoverableToolError('action "set" requires an id.');
+/**
+ * `task_update` merges the old `progress`/`set` actions into one, branching on whether `note` is
+ * present (spec 046, D3.2): a note means "checkpoint an open cycle" (active/waiting only, and
+ * never repairs a bad control line in the same call); no note means "metadata-only edit" (also
+ * allowed on sleeping, and the only path that can repair an unparsable control line).
+ */
+export async function updateTask(
+	options: TaskManageToolOptions,
+	request: TaskUpdateRequest,
+): Promise<TaskManageResult> {
 	const id = normalizeTaskId(request.id);
+	const hasNote = request.note !== undefined;
 	const taskPath = join(tasksDir(options), `${id}.md`);
-	const { fields, body } = await readTaskDocument(taskPath, id, request.control !== undefined);
-	const fromStatus = normalizeStoredStatus(fields.status);
-	resolveTaskTransition("set", id, fromStatus, request.status);
+	const { fields, body } = await readTaskDocument(taskPath, id, !hasNote && request.control !== undefined);
+	const from = normalizeStoredStatus(fields.status);
+	resolveTaskTransition(hasNote ? "checkpoint" : "metadata", id, from, request.status);
 	const nextFields = applySet(fields, request);
 	if (nextFields.status === "sleeping" && !nextFields.schedule) {
 		throw new RecoverableToolError(`Task "${id}" is one-shot; sleeping is valid only for recurring tasks.`);
 	}
-	await writeFileAtomically(taskPath, renderTaskFile(nextFields, body));
-	return {
-		action: "set",
-		id,
-		path: taskPath,
-		status: nextFields.status,
-		notice: `已更新任务 \`${id}\`（${describeTaskSchedule(nextFields)}）。`,
-	};
-}
-
-export async function progressTask(
-	options: TaskManageToolOptions,
-	request: TaskManageRequest,
-): Promise<TaskManageResult> {
-	if (!request.id) throw new RecoverableToolError('action "progress" requires an id.');
-	const id = normalizeTaskId(request.id);
-	const note = requiredField(request.note, "note", "progress");
-	const taskPath = join(tasksDir(options), `${id}.md`);
-	const { fields, body } = await readTaskDocument(taskPath, id);
-	const from = normalizeStoredStatus(fields.status);
-	resolveTaskTransition("progress", id, from, request.status);
-	if (from === "sleeping") {
-		throw new RecoverableToolError(`Task "${id}" is sleeping; wait for its occurrence or use /tasks run ${id}.`);
-	}
-	const nextFields = applySet(fields, request);
-	if (nextFields.status === "sleeping") {
+	if (hasNote && nextFields.status === "sleeping") {
 		throw new RecoverableToolError(
 			`Progress cannot open a recurring cycle; use /tasks run ${id} or wait for its wake.`,
 		);
 	}
-	if (nextFields.control) {
+	if (hasNote && nextFields.control) {
 		if (nextFields.status === "active") {
 			nextFields.control.waitingFor = undefined;
 		} else if (!nextFields.control.waitingFor) {
 			nextFields.control.waitingFor = nextFields.wake ? "time" : "external-signal";
 		}
 	}
-	const { body: bodyWithPlan, summary: planSummary } = request.planSteps?.length
-		? applyTaskPlanPatch(body, request.planSteps)
-		: { body, summary: "" };
-	const nextBody = appendCurrentCycleNote(bodyWithPlan, planSummary ? `${note} ${planSummary}` : note);
+	let nextBody = body;
+	if (request.planSteps?.length) {
+		const patched = applyTaskPlanPatch(body, request.planSteps);
+		nextBody = hasNote
+			? appendCurrentCycleNote(patched.body, patched.summary ? `${request.note} ${patched.summary}` : request.note!)
+			: patched.body;
+	} else if (hasNote) {
+		nextBody = appendCurrentCycleNote(body, request.note!);
+	}
 	await writeFileAtomically(taskPath, renderTaskFile(nextFields, nextBody));
 	return {
-		action: "progress",
+		action: "update",
 		id,
 		path: taskPath,
 		status: nextFields.status,
-		notice: `已记录任务 \`${id}\` 的进展（${describeTaskSchedule(nextFields)}）。`,
+		notice: hasNote
+			? `已记录任务 \`${id}\` 的进展（${describeTaskSchedule(nextFields)}）。`
+			: `已更新任务 \`${id}\`（${describeTaskSchedule(nextFields)}）。`,
 	};
 }
 
-export async function completeTask(
+async function closeAsComplete(
 	options: TaskManageToolOptions,
-	request: TaskManageRequest,
+	id: string,
+	request: TaskCloseRequest,
 ): Promise<TaskManageResult> {
-	if (!request.id) throw new RecoverableToolError('action "complete" requires an id.');
-	const id = normalizeTaskId(request.id);
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
@@ -102,7 +98,7 @@ export async function completeTask(
 	const uncheckedAcceptance = uncheckedTaskAcceptanceItems(body);
 	if (uncheckedAcceptance.length > 0) {
 		throw new RecoverableToolError(
-			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before complete.`,
+			`Task "${id}" still has unchecked acceptance items: ${uncheckedAcceptance.join("; ")}. Check them with evidence before task_close.`,
 		);
 	}
 	let verificationNote = "";
@@ -110,7 +106,7 @@ export async function completeTask(
 		const verification = fields.control.verification;
 		if (verification.status !== "passed" || !verification.runId) {
 			throw new RecoverableToolError(
-				`Task "${id}" requires an independent PASS. Dispatch a purpose=verify sub-agent, then task_manage verify with its run id.`,
+				`Task "${id}" requires an independent PASS. Dispatch a purpose=verify sub-agent, then task_verify with its run id.`,
 			);
 		}
 		// The attestation file is the sole authority — for the verdict, the body-hash freshness
@@ -177,7 +173,7 @@ export async function completeTask(
 	const { deleted } = await cleanupTaskEvents(options, id);
 	const cleanup = deleted.length > 0 ? `，清理事件 ${deleted.join(", ")}` : "";
 	return {
-		action: "complete",
+		action: "close",
 		id,
 		path: finalPath,
 		status: recurring ? "sleeping" : undefined,
@@ -187,16 +183,18 @@ export async function completeTask(
 	};
 }
 
-export async function skipTask(options: TaskManageToolOptions, request: TaskManageRequest): Promise<TaskManageResult> {
-	if (!request.id) throw new RecoverableToolError('action "skip" requires an id.');
-	const id = normalizeTaskId(request.id);
-	const reason = requiredField(request.reason, "reason", "skip");
+async function closeAsSkip(
+	options: TaskManageToolOptions,
+	id: string,
+	request: TaskCloseRequest,
+): Promise<TaskManageResult> {
+	const reason = requiredField(request.reason, "reason", "task_close outcome=skip");
 	const taskPath = join(tasksDir(options), `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
 	resolveTaskTransition("skip", id, normalizeStoredStatus(fields.status));
 	if (!fields.schedule) {
 		throw new RecoverableToolError(
-			`Task "${id}" is not recurring; use complete after satisfying its DoD or cancel it.`,
+			`Task "${id}" is not recurring; use task_close outcome=complete after satisfying its DoD, or outcome=cancel.`,
 		);
 	}
 	const skippedBody = appendCurrentCycleNote(body, `Skipped: ${reason}`);
@@ -210,7 +208,7 @@ export async function skipTask(options: TaskManageToolOptions, request: TaskMana
 	);
 	const { deleted } = await cleanupTaskEvents(options, id);
 	return {
-		action: "skip",
+		action: "close",
 		id,
 		path: taskPath,
 		status: "sleeping",
@@ -220,13 +218,12 @@ export async function skipTask(options: TaskManageToolOptions, request: TaskMana
 	};
 }
 
-export async function cancelTask(
+async function closeAsCancel(
 	options: TaskManageToolOptions,
-	request: TaskManageRequest,
+	id: string,
+	request: TaskCloseRequest,
 ): Promise<TaskManageResult> {
-	if (!request.id) throw new RecoverableToolError('action "cancel" requires an id.');
-	const id = normalizeTaskId(request.id);
-	const reason = requiredField(request.reason, "reason", "cancel");
+	const reason = requiredField(request.reason, "reason", "task_close outcome=cancel");
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
 	const { fields, body } = await readTaskDocument(taskPath, id);
@@ -245,7 +242,7 @@ export async function cancelTask(
 	const finalPath = join(archiveDir, `${id}.md`);
 	await rename(taskPath, finalPath);
 	return {
-		action: "cancel",
+		action: "close",
 		id,
 		path: finalPath,
 		status: undefined,
@@ -253,6 +250,18 @@ export async function cancelTask(
 		deletedEvents: deleted,
 		notice: `任务 \`${id}\` 已取消并归档${deleted.length ? `，清理事件 ${deleted.join(", ")}` : ""}。`,
 	};
+}
+
+export async function closeTask(options: TaskManageToolOptions, request: TaskCloseRequest): Promise<TaskManageResult> {
+	const id = normalizeTaskId(request.id);
+	switch (request.outcome) {
+		case "complete":
+			return closeAsComplete(options, id, request);
+		case "skip":
+			return closeAsSkip(options, id, request);
+		case "cancel":
+			return closeAsCancel(options, id, request);
+	}
 }
 
 export async function listTasks(options: TaskManageToolOptions): Promise<TaskManageResult> {

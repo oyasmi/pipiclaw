@@ -104,7 +104,7 @@ export function loadRuntimePlaybookCatalog(directory = PLAYBOOKS_DIR): RuntimePl
 
 /**
  * Drop playbooks whose mechanism is unreachable with the current tool set: the task
- * playbooks are pure noise for a runtime with `task_manage` switched off.
+ * playbooks are pure noise for a runtime with the task_* tools switched off.
  */
 export function selectRuntimePlaybooks(
 	catalog: RuntimePlaybookMetadata[],

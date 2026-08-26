@@ -26,11 +26,16 @@
 | `memory_manage` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
 | `skill` | 只读列出/加载 `workspace/skills/` 下的可复用流程 | 恒开 | — | 否 |
 | `event_manage` | 创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
-| `task_manage` | 创建、推进、验收、关闭长程任务 | 开 | `tools.tasks.enabled` | 否 |
-| `subagent` | 把工作委派给内置或外部智能体 | 开 | — | 否（不可嵌套） |
+| `task_list` | 列出台账里的活跃任务 | 开 | `tools.tasks.enabled` | 否 |
+| `task_create` | 创建长程任务 | 开 | `tools.tasks.enabled` | 否 |
+| `task_update` | checkpoint 进展（带 note）或元数据编辑（不带 note） | 开 | `tools.tasks.enabled` | 否 |
+| `task_close` | 完成/跳过/取消任务 | 开 | `tools.tasks.enabled` | 否 |
+| `task_verify` | 导入独立验收者的 attestation | 开 | `tools.tasks.enabled` | 否 |
+| `subagent` | 把工作委派给已配置的角色 | 开 | — | 否（不可嵌套） |
+| `subagent_inline` | 没有合适角色时定义一次性内联执行者 | 开 | `tools.subagentInline.enabled` | 否（不可嵌套） |
 | `subagent_manage` | 查看、取消或续接委派 run | 开 | — | 否 |
 
-**“子代理可用”那一列不是权限疏漏，而是所有权设计**：任务台账、记忆、调度、委派控制和对用户的出站投递都归主智能体所有。每次委派都有独立 run 记录和产物，但被委派的执行者不能再调用 `subagent`、`task_manage` 或 `subagent_manage` 把责任继续向下转移。外部 CLI 自己是否会创建下级智能体不受 Pipiclaw 控制，详见 [sub-agents.md](./sub-agents.md)。
+**“子代理可用”那一列不是权限疏漏，而是所有权设计**：任务台账、记忆、调度、委派控制和对用户的出站投递都归主智能体所有。每次委派都有独立 run 记录和产物，但被委派的执行者不能再调用 `subagent`/`subagent_inline`、`task_*` 或 `subagent_manage` 把责任继续向下转移。外部 CLI 自己是否会创建下级智能体不受 Pipiclaw 控制，详见 [sub-agents.md](./sub-agents.md)。
 
 ## 文件与命令类
 
@@ -84,13 +89,13 @@
 
 ## 调度与长程类
 
-`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`task_manage` 管长程任务台账（目标、DoD、手册、验收、周期）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
+`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`task_create`/`task_update`/`task_close`/`task_verify`/`task_list` 管长程任务台账（目标、DoD、手册、验收、周期）——按 payload 形状拆分的五个工具，而不是一个按 action 分支的工具（spec 046）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
 
-`tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉 `task_manage` 工具、内建 task driver 和每回合的任务摘要注入。
+`tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉全部 task_* 工具、内建 task driver 和每回合的任务摘要注入。
 
 ## 智能体委派（`subagent` / `subagent_manage`）
 
-`subagent` 把一项聚焦工作交给新的隔离执行者：
+`subagent`（角色优先）把一项聚焦工作交给一个**已配置**的角色，只传 `agent`/`task` 加上可选的 `workingDirectory`/`purpose`/`taskId`——工具、模型、预算、上下文策略全部来自角色文件，调用侧不能覆盖。`subagent_inline` 是没有合适角色时的一次性执行者，携带 `systemPrompt` 及 `tools`/`model`/`effort`/`context`/`thinkingLevel`/`mutates` 等覆盖字段；可以用 `tools.subagentInline.enabled: false` 整体关掉（默认开）。
 
 - **内置角色**使用 Pipiclaw 的模型和工具，通常在 120 秒同步宽限内直接返回；超时后转为后台 run。
 - **外部角色**启动 Claude Code、Codex CLI 或 `exec`，恒为异步，派发后立即返回 `runId`；DingTalk daemon 会在完成时唤醒频道。TUI 不持久化或重新认领外部 run。

@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
@@ -38,7 +38,8 @@ import {
 	externalRoleFingerprint,
 	formatSubAgentList,
 	type ResolvedSubAgentConfig,
-	resolveSubAgentConfig,
+	resolveConfiguredRole,
+	resolveInlineAgent,
 	type SubAgentConfig,
 	type SubAgentDiscoveryResult,
 	validateSubAgentTask,
@@ -54,15 +55,40 @@ import {
 	releaseWorkspaceLease,
 } from "./workspace-lease.js";
 
+/** Shared by both invocation surfaces (spec 046, D2.1). */
+const workingDirectoryField = Type.Optional(
+	Type.String({
+		description:
+			"Optional existing directory to run the sub-agent in (its shell cwd and relative-path root). Use it to work on another checkout — e.g. a `git worktree add`ed one. Defaults to this runtime's own working directory.",
+	}),
+);
+const purposeField = Type.Optional(
+	Type.Union([Type.Literal("work"), Type.Literal("verify")], {
+		description: 'Use "verify" for an independent, read-only task acceptance check.',
+	}),
+);
+const taskIdField = Type.Optional(Type.String({ description: "Persistent task id, required when purpose=verify." }));
+
+/**
+ * Role-based delegation (spec 046, D2.1): the common path. No override fields beyond routing
+ * ones — tools, model, effort, context, thinkingLevel and mutates all live in the role file, so
+ * a call naming an external role cannot pass any of them (there is nowhere for it to put them).
+ */
 const subagentSchema = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Name of a configured sub-agent from workspaceDir/sub-agents/" })),
-	name: Type.Optional(Type.String({ description: "Optional display name for an inline sub-agent" })),
+	agent: Type.String({ description: "Name of a configured sub-agent from workspaceDir/sub-agents/" }),
 	task: Type.String({ description: "Complete task description for the sub-agent" }),
-	systemPrompt: Type.Optional(
-		Type.String({
-			description: "Optional inline system prompt for a temporary sub-agent. Use when no configured agent fits.",
-		}),
-	),
+	workingDirectory: workingDirectoryField,
+	purpose: purposeField,
+	taskId: taskIdField,
+});
+
+/**
+ * Inline delegation (spec 046, D2.1): a one-off executor for when no configured role fits.
+ * Carries every field a role file would otherwise supply.
+ */
+const subagentInlineSchema = Type.Object({
+	task: Type.String({ description: "Complete task description for the sub-agent" }),
+	systemPrompt: Type.String({ description: "System prompt defining this one-off sub-agent's identity and task." }),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tool whitelist for the sub-agent" })),
 	model: Type.Optional(
 		Type.String({ description: "Optional exact model reference. Defaults to the parent's current model." }),
@@ -79,29 +105,6 @@ const subagentSchema = Type.Object({
 				'What context to inject. "none" (default) runs fully isolated; "session" adds current session state; "relevant" adds session state plus recalled memory.',
 		}),
 	),
-	paths: Type.Optional(
-		Type.Array(Type.String(), {
-			description: "Optional preferred file or directory paths for the sub-agent to focus on.",
-		}),
-	),
-	workingDirectory: Type.Optional(
-		Type.String({
-			description:
-				"Optional existing directory to run the sub-agent in (its shell cwd and relative-path root). Use it to work on another checkout — e.g. a `git worktree add`ed one. Defaults to this runtime's own working directory.",
-		}),
-	),
-	purpose: Type.Optional(
-		Type.Union([Type.Literal("work"), Type.Literal("verify")], {
-			description: 'Use "verify" for an independent, read-only task acceptance check.',
-		}),
-	),
-	taskId: Type.Optional(Type.String({ description: "Persistent task id, required when purpose=verify." })),
-	returns: Type.Optional(
-		Type.Union([Type.Literal("text"), Type.Literal("artifact")], {
-			description:
-				'"text" (default) returns the response directly; "artifact" makes the sub-agent write its primary output to a file and end with an ARTIFACT: <filename> marker. The full output is saved to disk either way.',
-		}),
-	),
 	thinkingLevel: Type.Optional(
 		Type.Union(
 			[
@@ -114,9 +117,7 @@ const subagentSchema = Type.Object({
 				Type.Literal("max"),
 			],
 			{
-				description:
-					'Optional reasoning effort for the sub-agent. Defaults to "medium" for internal delegations and for external purpose=verify; ' +
-					"an external purpose=work delegation with no explicit value leaves this unset, so the target CLI's own configuration decides.",
+				description: "Optional reasoning effort for the sub-agent.",
 			},
 		),
 	),
@@ -124,10 +125,12 @@ const subagentSchema = Type.Object({
 		Type.Union([Type.Literal("read"), Type.Literal("write")], {
 			description:
 				'Whether this delegation will modify the working directory. Declare "write" whenever the sub-agent may write ' +
-				"files (including through bash) so it takes the exclusive workspace write lease. Defaults to inference from " +
-				"`tools` (write/edit only), which does not see bash.",
+				"files (including through bash) so it takes the exclusive workspace write lease.",
 		}),
 	),
+	workingDirectory: workingDirectoryField,
+	purpose: purposeField,
+	taskId: taskIdField,
 });
 
 /**
@@ -149,10 +152,8 @@ export interface SubAgentToolFields {
 	purpose: "work" | "verify";
 	taskId?: string;
 	verificationVerdict?: "pass" | "fail";
-	/** Always populated (spec 032 D4): the full output is saved to `${artifactDir}/output.md` regardless of `returns`. */
+	/** Always populated (spec 032 D4): the full output is saved to `${artifactDir}/output.md`. */
 	artifactDir: string;
-	/** Set only when `returns: "artifact"` and the sub-agent emitted a valid ARTIFACT: marker. */
-	artifactPath?: string;
 	/** True when the reply text was truncated against MAX_SUBAGENT_RESULT_UNITS; the full text is still on disk. */
 	resultTruncated: boolean;
 	/**
@@ -164,7 +165,7 @@ export interface SubAgentToolFields {
 }
 
 /** The shape consumers read post-wrap, once `withToolDetails` has stamped `kind`. */
-export type SubAgentToolDetails = SubAgentToolFields & { kind: "subagent" };
+export type SubAgentToolDetails = SubAgentToolFields & { kind: "subagent" | "subagent_inline" };
 
 export interface SubAgentToolOptions {
 	executor: Executor;
@@ -232,7 +233,7 @@ const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
  * only caps what gets echoed into the parent's context.
  */
 export const MAX_SUBAGENT_RESULT_UNITS = 1_200;
-const ARTIFACT_TRUNCATION_HEAD_RATIO = 1;
+const RESULT_TRUNCATION_HEAD_RATIO = 1;
 /**
  * Spec 032 D6: when a turn/tool/wall-time budget is hit, the sub-agent gets one more,
  * tool-free turn to summarize what it already found instead of having its work discarded.
@@ -343,7 +344,7 @@ async function prepareRunContext(
 	if (taskId && !TASK_ID_PATTERN.test(taskId)) throw new RecoverableToolError(`Invalid taskId: ${taskId}`);
 	if (taskId && !(await readStoredTask(options.channelDir, taskId))) {
 		throw new RecoverableToolError(
-			`Task ${taskId} does not exist. Create it with task_manage before delegating task-owned work.`,
+			`Task ${taskId} does not exist. Create it with task_create before delegating task-owned work.`,
 		);
 	}
 	const artifactDir = await prepareArtifactDir(options.channelDir, runId);
@@ -390,57 +391,37 @@ function buildStoppedText(config: SubAgentConfig, reason: string, finalText: str
 	return `[Sub-agent ${config.name} stopped: ${reason}]\n\n${trimmedFinalText}`;
 }
 
-const ARTIFACT_MARKER_PATTERN = /(?:^|\n)ARTIFACT:\s*(\S+)\s*$/i;
-
-function parseArtifactMarker(output: string): string | undefined {
-	return ARTIFACT_MARKER_PATTERN.exec(output.trim())?.[1];
-}
-
 interface FinalizedSubAgentOutput {
-	artifactPath?: string;
 	replyText: string;
 	truncated: boolean;
 }
 
 /**
- * Spec 032 D4: the full text always lands on disk, independent of `returns` mode and of
- * whether it fits the reply budget. What comes back to the parent is capped at
- * MAX_SUBAGENT_RESULT_UNITS; a reply over budget is truncated with a pointer to the file
- * a chatty sub-agent can no longer blow out the parent's context.
+ * Spec 032 D4: the full text always lands on disk, independent of whether it fits the reply
+ * budget. What comes back to the parent is capped at MAX_SUBAGENT_RESULT_UNITS; a reply over
+ * budget is truncated with a pointer to the file a chatty sub-agent can no longer blow out the
+ * parent's context.
  *
  * The file itself is written by `SubAgentRunManager.settle()` — the one settlement point both
  * runtimes share (spec 040 D1) — which always runs before this call's reply reaches the parent.
  * This function only needs the path, to point at it.
+ *
+ * Spec 046 D2.2 removed `returns: "artifact"` and the ARTIFACT marker protocol: a caller that
+ * needs a specific output file states the path in the task text instead, the path external roles
+ * already had to follow.
  */
-function finalizeSubAgentOutput(
-	runContext: SubAgentRunContext,
-	finalText: string,
-	returns: "text" | "artifact",
-): FinalizedSubAgentOutput {
-	const trimmed = finalText.trim();
+function finalizeSubAgentOutput(runContext: SubAgentRunContext, finalText: string): FinalizedSubAgentOutput {
 	const outputPath = join(runContext.artifactDir, "output.md");
 
-	let artifactPath: string | undefined;
-	if (returns === "artifact" && trimmed) {
-		const filename = parseArtifactMarker(trimmed);
-		if (filename) {
-			const candidate = resolve(runContext.artifactDir, filename);
-			const rel = relative(runContext.artifactDir, candidate);
-			if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
-				artifactPath = candidate;
-			}
-		}
-	}
-
 	if (countPromptUnits(finalText) <= MAX_SUBAGENT_RESULT_UNITS) {
-		return { artifactPath, replyText: finalText, truncated: false };
+		return { replyText: finalText, truncated: false };
 	}
 
 	const clipped = clipTextByPromptUnits(finalText, MAX_SUBAGENT_RESULT_UNITS, {
-		headRatio: ARTIFACT_TRUNCATION_HEAD_RATIO,
+		headRatio: RESULT_TRUNCATION_HEAD_RATIO,
 		marker: `\n\n[... truncated; full output saved at ${outputPath} ...]\n\n`,
 	});
-	return { artifactPath, replyText: clipped.text, truncated: true };
+	return { replyText: clipped.text, truncated: true };
 }
 
 /**
@@ -571,7 +552,6 @@ export function buildSubAgentTask(
 	runtimeContext: SubAgentToolOptions["runtimeContext"],
 	contextBlocks: string[],
 	runContext: SubAgentRunContext,
-	returns: "text" | "artifact",
 ): string {
 	const taskText = task.trim();
 	const lines = [
@@ -595,13 +575,6 @@ export function buildSubAgentTask(
 	if (runContext.purpose === "verify") {
 		const taskPath = join(runtimeContext.workspaceDir, runtimeContext.channelId, "tasks", `${runContext.taskId}.md`);
 		lines.push("", buildVerificationProtocol(taskPath));
-	} else if (returns === "artifact") {
-		lines.push(
-			"",
-			"Output protocol:",
-			`- Write your primary output as a file under the artifact directory above.`,
-			"- End the response with exactly one final line: ARTIFACT: <filename>",
-		);
 	}
 	return lines.join("\n");
 }
@@ -731,7 +704,6 @@ function createDetails(
 	failureReason?: string,
 	verificationVerdict?: "pass" | "fail",
 	extras?: {
-		artifactPath?: string;
 		resultTruncated?: boolean;
 		/** Set for the "[Dispatched]" placeholder returned instead of waiting on the run (D2). */
 		dispatched?: boolean;
@@ -759,7 +731,6 @@ function createDetails(
 		taskId: runContext.taskId,
 		verificationVerdict,
 		artifactDir: runContext.artifactDir,
-		artifactPath: extras?.artifactPath,
 		resultTruncated: extras?.resultTruncated ?? false,
 		dispatched: extras?.dispatched,
 	};
@@ -778,12 +749,618 @@ function sleep(ms: number): Promise<void> {
 	});
 }
 
+/**
+ * Shared dispatch path for both `subagent` and `subagent_inline` (spec 046, D2.5): everything
+ * after a role has been resolved into a `ResolvedSubAgentConfig` — workspace lease admission,
+ * the internal/external fork, budget/turn/tool-call enforcement, verification attestation, and
+ * the sync-grace/detached-placeholder split — is identical regardless of which schema the model
+ * called through.
+ */
+async function dispatchSubAgentRun(
+	options: SubAgentToolOptions,
+	currentModel: Model<Api>,
+	config: ResolvedSubAgentConfig,
+	warning: string | undefined,
+	params: { task: string; workingDirectory?: string; purpose?: "work" | "verify"; taskId?: string },
+	onUpdate?: (update: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }) => void,
+): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
+	// Derived rather than model-supplied (spec 045): `${agent}: ${task's first line}`, the
+	// same shape `subagent_manage op=follow_up` already builds by hand.
+	const runLabel = `${config.name}: ${params.task.split("\n")[0]?.slice(0, 80) ?? ""}`;
+	// Only ever set for an inline (internal) delegation with `bash` in `tools` and no explicit
+	// `mutates` — surfaced to the model, not just a log, since it has no role file to fix.
+	const mutatesNote = warning ? `Note: ${warning}\n\n` : "";
+	const runManager = (options.getRunManager ?? getSubAgentRunManager)(options.runtimeContext.channelId);
+	// A short, human-typeable id (spec 041) — never the dispatching tool call's own id, which
+	// on some providers is a long `call_<id>|fc_<id>` composite unreadable in a chat UI.
+	const runContext = await prepareRunContext(runManager.mintRunId(), params, options);
+
+	// D9: an independent verifier checks against a target that isn't moving under it — shared
+	// with `subagent_manage op=follow_up` (spec 042 D7) so a verify run's admission rules
+	// cannot drift between the two dispatch paths.
+	assertVerifyAdmissible(config, runContext.purpose, runContext.workingDirectory);
+
+	// Admission: a write-mutating run takes an exclusive workspace lease before it is even
+	// registered (spec 040, D10.1) — a rejected delegation should never count as "started".
+	// Read runs and purpose=verify never take one. Shared by both runtimes.
+	let leaseKey: string | undefined;
+	if (config.mutates === "write" && runContext.purpose !== "verify") {
+		const lease = acquireWorkspaceLease({
+			runId: runContext.runId,
+			channelId: options.runtimeContext.channelId,
+			workingDirectory: runContext.workingDirectory,
+		});
+		if (!lease.ok) {
+			throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
+		}
+		leaseKey = lease.leaseKey;
+	}
+
+	if (config.runtime === "external") {
+		if (!config.harness) {
+			releaseWorkspaceLease(leaseKey, runContext.runId);
+			throw new Error(`Sub-agent "${config.name}" has runtime: external but no harness configured.`);
+		}
+		let launchResult: ExternalLaunchResult;
+		try {
+			// D9/T5: external roles get the same task envelope internal workers do — runtime
+			// paths, injected context blocks, and (for purpose=verify) the verification
+			// protocol — rather than the raw task text (spec 040 gap closed post-review).
+			const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel).catch(
+				(error) => {
+					// Context injection is an enhancement, not a precondition -- degrading to no context blocks
+					// beats failing a dispatch that would otherwise have run fine.
+					log.logWarning(
+						`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
+						errorMessage(error),
+					);
+					return [] as string[];
+				},
+			);
+			const envelopedTask = buildSubAgentTask(
+				params.task,
+				config,
+				options.runtimeContext,
+				contextualBlocks,
+				runContext,
+			);
+			launchResult = await launchExternalRun({
+				runId: runContext.runId,
+				channelId: options.runtimeContext.channelId,
+				channelDir: options.channelDir,
+				label: runLabel,
+				agent: config.name,
+				source: config.source,
+				harness: config.harness,
+				command: config.command ?? "",
+				shell: config.shell,
+				env: config.env,
+				externalModelRef: config.externalModelRef,
+				thinkingLevel: config.thinkingLevel,
+				maxWallTimeSec: config.maxWallTimeSec,
+				systemPrompt: config.systemPrompt,
+				task: envelopedTask,
+				workingDirectory: runContext.workingDirectory,
+				artifactDir: runContext.artifactDir,
+				purpose: runContext.purpose,
+				taskId: runContext.taskId,
+				leaseKey,
+				mutates: config.mutates,
+				roleFingerprint: externalRoleFingerprint(config),
+				workspaceDir: options.workspaceDir,
+				securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
+			});
+		} catch (error) {
+			// Only a pre-register() throw (unknown harness, shell-mode misuse) reaches here —
+			// every failure past that point settles the run itself and already released this
+			// lease (spec 042 D2/D5), so this catch must not release it a second time.
+			releaseWorkspaceLease(leaseKey, runContext.runId);
+			throw error;
+		}
+		// Spec 042 D2: a pre-spawn failure is reported in this same turn instead of a
+		// "[Dispatched]" placeholder the model would wait on forever — two of the three
+		// failure kinds never used to announce at all. `settle()` already released the lease.
+		if (!launchResult.ok) {
+			if (launchResult.kind === "missing-binary") {
+				throw new Error(
+					`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} Install the CLI or fix "command" in its role file; the run was not dispatched.`,
+				);
+			}
+			throw new RecoverableToolError(
+				`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} The run was not dispatched.`,
+			);
+		}
+		// D2: external's sync grace window is always 0 — always the dispatched placeholder,
+		// never an inline wait. The run keeps going in the background and wakes the channel.
+		return {
+			content: [
+				{
+					type: "text",
+					text:
+						`[Dispatched] runId=${runContext.runId}, agent ${config.name} (external, ${config.harness}), working directory ${runContext.workingDirectory}.\n` +
+						"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
+						"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_update.",
+				},
+			],
+			details: createDetails(config, runContext, createEmptyUsageTotals(), 0, 0, 0, false, undefined, undefined, {
+				dispatched: true,
+				modelOverride: config.externalModelRef ?? "unknown",
+				toolsOverride: [],
+			}),
+		};
+	}
+
+	const scopedExecutor = new DirectoryExecutor(options.executor, runContext.workingDirectory);
+	let apiKey: string;
+	try {
+		apiKey = await options.resolveApiKey(config.model);
+	} catch (error) {
+		releaseWorkspaceLease(leaseKey, runContext.runId);
+		throw error;
+	}
+	const startedAt = Date.now();
+	const usage = createEmptyUsageTotals();
+	let assistantTurns = 0;
+	let toolCalls = 0;
+	let failureReason: string | undefined;
+	/** Set alongside failureReason only for the three self-inflicted budget aborts, distinct from an explicit cancel. */
+	let budgetExceeded = false;
+	/** Set only by the `subagent_manage op=cancel` handle registered below — a real stop, unlike a budget abort. */
+	let externallyCancelled = false;
+	/** True once the sync grace window has elapsed and a "still running" placeholder has been returned. */
+	let detached = false;
+	let lastUpdateText = "";
+
+	try {
+		await runManager.register({
+			runId: runContext.runId,
+			channelId: options.runtimeContext.channelId,
+			runtime: "internal",
+			agent: config.name,
+			label: runLabel,
+			source: config.source,
+			tools: [...config.tools],
+			model: formatModelReference(config.model),
+			purpose: runContext.purpose,
+			taskId: runContext.taskId,
+			workingDirectory: runContext.workingDirectory,
+			artifactDir: runContext.artifactDir,
+			leaseKey,
+		});
+	} catch (error) {
+		// Until the durable running record exists, setup still owns the lease. A channel/host
+		// admission rejection or required persist failure must leave no invisible writer lock.
+		releaseWorkspaceLease(leaseKey, runContext.runId);
+		throw error;
+	}
+
+	const emitUpdate = (text: string) => {
+		// Once detached, execute() has already returned to the SDK; nothing is listening
+		// for further progress on this (from its view, finished) tool call.
+		if (detached) return;
+		const nextText = text.trim();
+		if (!nextText || nextText === lastUpdateText) {
+			return;
+		}
+		lastUpdateText = nextText;
+		onUpdate?.({
+			content: [{ type: "text", text: nextText }],
+			details: createDetails(
+				config,
+				runContext,
+				usage,
+				assistantTurns,
+				toolCalls,
+				Date.now() - startedAt,
+				Boolean(failureReason),
+				failureReason,
+			),
+		});
+	};
+
+	let worker: SubAgentWorker | undefined;
+	let wallClockTimer: ReturnType<typeof setTimeout> | undefined;
+	let unsubscribe: (() => void) | undefined;
+	let verifierGitStateBefore: string | undefined;
+	let verifierSubjectBefore: string | undefined;
+	try {
+		const availableTools = (options.buildTools ?? buildSubagentTools)(
+			scopedExecutor,
+			config.bashTimeoutSec,
+			options,
+			runContext,
+		);
+		verifierGitStateBefore = runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
+		verifierSubjectBefore =
+			runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
+
+		worker =
+			options.createWorker?.({
+				subAgent: config,
+				apiKey,
+				tools: filterToolsByName(availableTools, config.tools),
+			}) ??
+			new Agent({
+				initialState: {
+					systemPrompt: config.systemPrompt,
+					model: config.model,
+					// Same clamp the main agent applies (channel-runner.ts) before setting a model's
+					// thinkingLevel: a model with `reasoning: false` gets "off", an unsupported tier
+					// snaps to the nearest one, instead of a raw unsupported value reaching the provider.
+					// The internal path's resolved config always fills thinkingLevel; the fallback
+					// here only closes the type.
+					thinkingLevel: clampThinkingLevel(config.model, config.thinkingLevel ?? DEFAULT_THINKING_LEVEL),
+					tools: filterToolsByName(availableTools, config.tools),
+				},
+				convertToLlm,
+				getApiKey: async () => apiKey,
+				streamFn: streamSimple,
+			});
+
+		runManager.registerCancelHandle(runContext.runId, () => {
+			externallyCancelled = true;
+			worker?.abort();
+		});
+
+		wallClockTimer = setTimeout(() => {
+			failureReason = `Wall time budget exceeded (${config.maxWallTimeSec}s)`;
+			budgetExceeded = true;
+			worker?.abort();
+		}, config.maxWallTimeSec * 1000);
+
+		unsubscribe = worker.subscribe((event: AgentEvent) => {
+			if (event.type === "message_end" && isAssistantMessage(event.message)) {
+				assistantTurns++;
+				const messageUsage = event.message.usage;
+				usage.input += messageUsage.input;
+				usage.output += messageUsage.output;
+				usage.cacheRead += messageUsage.cacheRead;
+				usage.cacheWrite += messageUsage.cacheWrite;
+				usage.total += messageUsage.totalTokens;
+				usage.cost.input += messageUsage.cost.input;
+				usage.cost.output += messageUsage.cost.output;
+				usage.cost.cacheRead += messageUsage.cost.cacheRead;
+				usage.cost.cacheWrite += messageUsage.cost.cacheWrite;
+				usage.cost.total += messageUsage.cost.total;
+			}
+
+			if (event.type === "tool_execution_start") {
+				toolCalls++;
+				const label = describeToolCall(event.toolName, event.args);
+				emitUpdate(formatStatus(config.name, label));
+				if (toolCalls > config.maxToolCalls) {
+					failureReason = `Tool call budget exceeded (${config.maxToolCalls})`;
+					budgetExceeded = true;
+					emitUpdate(formatStatus(config.name, "tool budget reached"));
+					worker?.abort();
+				}
+			}
+
+			if (
+				event.type === "turn_end" &&
+				isAssistantMessage(event.message) &&
+				event.toolResults.length > 0 &&
+				assistantTurns >= config.maxTurns
+			) {
+				failureReason = `Turn budget exceeded (${config.maxTurns})`;
+				budgetExceeded = true;
+				emitUpdate(formatStatus(config.name, "turn budget reached"));
+				worker?.abort();
+			}
+		});
+
+		emitUpdate(formatStatus(config.name, "started"));
+	} catch (error) {
+		unsubscribe?.();
+		if (wallClockTimer) clearTimeout(wallClockTimer);
+		runManager.clearCancelHandle(runContext.runId);
+		try {
+			worker?.abort();
+		} catch {
+			// Preserve the setup error; settlement below is the lifecycle authority.
+		}
+		const setupError = error instanceof Error ? error : new Error(String(error));
+		await runManager.settle(
+			runContext.runId,
+			{
+				status: "failed",
+				failureReason: setupError.message,
+				usage,
+				usageKnown: true,
+				costKnown: true,
+				turns: assistantTurns,
+				toolCalls,
+				durationMs: Date.now() - startedAt,
+				outputText: "",
+			},
+			{ announce: false },
+		);
+		throw setupError;
+	}
+	const activeWorker = worker!;
+	const activeUnsubscribe = unsubscribe!;
+	const activeWallClockTimer = wallClockTimer!;
+
+	/**
+	 * Runs the worker to completion, including the D6 convergence turn, and returns the
+	 * tool result plus the data `runs.ts` needs to settle. Rejects only for the single
+	 * fatal case (no assistant message at all) — every other outcome, including a budget
+	 * abort or explicit cancel, is a normal (if failed) result.
+	 */
+	async function runToCompletion(): Promise<{
+		toolResult: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields };
+		settleInput: SettleInput;
+	}> {
+		try {
+			const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel).catch(
+				(error) => {
+					// Context injection is an enhancement, not a precondition -- degrading to no context blocks
+					// beats failing a dispatch that would otherwise have run fine.
+					log.logWarning(
+						`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
+						errorMessage(error),
+					);
+					return [] as string[];
+				},
+			);
+			await activeWorker.prompt(
+				buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks, runContext),
+			);
+			await activeWorker.waitForIdle();
+
+			// D6: a self-inflicted budget abort gets one tool-free turn to converge on a
+			// conclusion instead of discarding the work outright. An explicit cancel skips
+			// this — the model asked this run to stop now, not to wrap up.
+			if (budgetExceeded && !externallyCancelled) {
+				clearTimeout(activeWallClockTimer);
+				emitUpdate(formatStatus(config.name, "converging on budget exhaustion"));
+				const preConvergenceMessageCount = activeWorker.state.messages.length;
+				activeWorker.state.tools = [];
+				let convergenceTimedOut = false;
+				const convergenceTimer = setTimeout(() => {
+					convergenceTimedOut = true;
+					activeWorker.abort();
+				}, options.convergenceWallClockMs ?? CONVERGENCE_WALL_CLOCK_MS);
+				try {
+					await activeWorker.prompt(CONVERGENCE_PROMPT);
+					await activeWorker.waitForIdle();
+				} catch {
+					// Best effort: fall through to whatever worker.state.messages holds.
+				} finally {
+					clearTimeout(convergenceTimer);
+				}
+				if (convergenceTimedOut) {
+					// Revert to the pre-D6 behavior: drop the (aborted, possibly partial)
+					// convergence turn and fall back to whatever came before it.
+					activeWorker.state.messages = activeWorker.state.messages.slice(0, preConvergenceMessageCount);
+				}
+			}
+		} finally {
+			activeUnsubscribe();
+			clearTimeout(activeWallClockTimer);
+		}
+
+		const lastAssistantMessage = getLastAssistantMessage(activeWorker.state.messages);
+		const durationMs = Date.now() - startedAt;
+		if (!lastAssistantMessage) {
+			failureReason = failureReason || "Sub-agent returned no assistant message";
+			emitUpdate(formatStatus(config.name, "failed"));
+			throw new Error(`Sub-agent ${config.name} failed: ${failureReason}`);
+		}
+
+		const finalText = extractAssistantText(lastAssistantMessage);
+		const effectiveFailureReason =
+			failureReason ||
+			(lastAssistantMessage.stopReason === "error" || lastAssistantMessage.stopReason === "aborted"
+				? lastAssistantMessage.errorMessage || `Sub-agent stopped with ${lastAssistantMessage.stopReason}`
+				: undefined);
+		const verifierGitStateAfter =
+			runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
+		const verifierSubjectAfter =
+			runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
+		// Spec 042 D1: the pass/fail judgment rule is shared with the external verify path
+		// (`resolveVerificationOutcome`) so there is exactly one place deciding what a verify
+		// run's own output does and does not prove. Only the attestation write and the
+		// strength label stay here, since only the internal path can structurally remove
+		// write/edit from the verifier's tool set.
+		const verification =
+			runContext.purpose === "verify"
+				? resolveVerificationOutcome({
+						subjectBefore: verifierSubjectBefore,
+						subjectAfter: verifierSubjectAfter,
+						gitStateBefore: verifierGitStateBefore,
+						gitStateAfter: verifierGitStateAfter,
+						finalText,
+						runFailed: Boolean(effectiveFailureReason),
+					})
+				: undefined;
+		const verificationVerdict = verification?.verdict;
+		// Internal verify always keeps write/edit structurally removed from the verifier's
+		// tool set (buildSubagentTools above), but `bash` stays available by default and can
+		// write files just as well — labeling that "enforced" would be dishonest (review
+		// 2026-08-23 §2.2). Only a role that dropped `bash` from its declared tool list earns
+		// the stronger label. Computed once so the attestation and the run record — the
+		// latter is what the completion wake and `subagent_manage` display — cannot disagree.
+		const internalVerificationStrength = config.tools.includes("bash")
+			? ("advisory" as const)
+			: ("enforced" as const);
+		if (runContext.purpose === "verify" && runContext.taskId && verification) {
+			await writeVerificationAttestation(options.channelDir, {
+				runId: runContext.runId,
+				taskId: runContext.taskId,
+				verdict: verification.verdict,
+				checkedAt: formatLocalTime(),
+				evidence: verification.evidence,
+				workspaceChanged: verification.workspaceChanged,
+				subjectHash: verification.workspaceChanged ? undefined : verifierSubjectAfter,
+				subjectDir: runContext.workingDirectory,
+				verificationStrength: internalVerificationStrength,
+			});
+		}
+
+		// Internal runs always report full usage; cost is "unknown" only for the shape a
+		// free/local model produces (tokens spent, nothing billed) — external harnesses
+		// override both explicitly once they land (D4/D9).
+		const costKnown = usage.cost.total > 0 || usage.total === 0;
+		const baseSettleInput = {
+			usage,
+			usageKnown: true,
+			costKnown,
+			turns: assistantTurns,
+			toolCalls,
+			durationMs,
+			verificationVerdict,
+			verificationStrength: runContext.purpose === "verify" ? internalVerificationStrength : undefined,
+		};
+
+		if (effectiveFailureReason) {
+			if (!finalText.trim()) {
+				emitUpdate(formatStatus(config.name, "failed"));
+				throw new Error(buildFailureText(config, effectiveFailureReason, finalText));
+			}
+			emitUpdate(formatStatus(config.name, "stopped"));
+			const finalized = finalizeSubAgentOutput(runContext, finalText);
+			return {
+				toolResult: {
+					content: [
+						{
+							type: "text",
+							text: mutatesNote + buildStoppedText(config, effectiveFailureReason, finalized.replyText),
+						},
+					],
+					details: createDetails(
+						config,
+						runContext,
+						usage,
+						assistantTurns,
+						toolCalls,
+						durationMs,
+						true,
+						effectiveFailureReason,
+						verificationVerdict,
+						{ resultTruncated: finalized.truncated },
+					),
+				},
+				settleInput: {
+					...baseSettleInput,
+					// An explicit cancel is not a failure (P1-1) — the model asked this run to
+					// stop, and it did.
+					status: externallyCancelled ? "cancelled" : "failed",
+					failureReason: effectiveFailureReason,
+					outputText: finalText,
+				},
+			};
+		}
+
+		const finalized = finalizeSubAgentOutput(runContext, finalText);
+		return {
+			toolResult: {
+				content: [
+					{
+						type: "text",
+						text:
+							mutatesNote + (finalized.replyText || `(Sub-agent ${config.name} completed with no text output)`),
+					},
+				],
+				details: createDetails(
+					config,
+					runContext,
+					usage,
+					assistantTurns,
+					toolCalls,
+					durationMs,
+					false,
+					undefined,
+					verificationVerdict,
+					{ resultTruncated: finalized.truncated },
+				),
+			},
+			settleInput: { ...baseSettleInput, status: "completed", outputText: finalText },
+		};
+	}
+
+	/** Best-effort settle input for the one fatal path that rejects instead of resolving. */
+	function fatalSettleInput(error: Error): SettleInput {
+		return {
+			status: externallyCancelled ? "cancelled" : "failed",
+			failureReason: failureReason || error.message,
+			usage,
+			usageKnown: true,
+			costKnown: usage.cost.total > 0 || usage.total === 0,
+			turns: assistantTurns,
+			toolCalls,
+			durationMs: Date.now() - startedAt,
+			outputText: "",
+		};
+	}
+
+	// D2: the tool call waits at most SYNC_GRACE_MS (never longer than the run's own wall
+	// clock budget) before degrading to a "still running" placeholder. The run itself keeps
+	// executing either way — only the *return* differs.
+	const graceMs = Math.min(config.maxWallTimeSec * 1000, options.syncGraceMs ?? SYNC_GRACE_MS);
+	const outcomePromise = runToCompletion().then(
+		(value) => ({ ok: true as const, value }),
+		(error: unknown) => ({
+			ok: false as const,
+			error: error instanceof Error ? error : new Error(String(error)),
+		}),
+	);
+	const raceResult = await Promise.race([outcomePromise, sleep(graceMs).then(() => "timed-out" as const)]);
+
+	if (raceResult !== "timed-out") {
+		runManager.clearCancelHandle(runContext.runId);
+		if (!raceResult.ok) {
+			await runManager.settle(runContext.runId, fatalSettleInput(raceResult.error), { announce: false });
+			throw raceResult.error;
+		}
+		await runManager.settle(runContext.runId, raceResult.value.settleInput, { announce: false });
+		return raceResult.value.toolResult;
+	}
+
+	// Grace window elapsed: hand back a placeholder now and let the run keep going in the
+	// background. It settles and, this time, announces itself with a completion wake (D2/D7)
+	// — the same "runtime guarantees completion" contract background jobs already keep.
+	detached = true;
+	void outcomePromise.then(async (outcome) => {
+		runManager.clearCancelHandle(runContext.runId);
+		const settleInput = outcome.ok ? outcome.value.settleInput : fatalSettleInput(outcome.error);
+		await runManager.settle(runContext.runId, settleInput, { announce: true }).catch((error) => {
+			log.logWarning(`Failed to settle detached sub-agent run ${runContext.runId}`, errorMessage(error));
+		});
+	});
+
+	return {
+		content: [
+			{
+				type: "text",
+				text:
+					mutatesNote +
+					`[Dispatched] runId=${runContext.runId}, agent ${config.name} (internal, async), working directory ${runContext.workingDirectory}.\n` +
+					"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
+					"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_update.",
+			},
+		],
+		details: createDetails(
+			config,
+			runContext,
+			usage,
+			assistantTurns,
+			toolCalls,
+			Date.now() - startedAt,
+			false,
+			undefined,
+			undefined,
+			{ dispatched: true },
+		),
+	};
+}
+
 export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<typeof subagentSchema, SubAgentToolFields> {
 	return {
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate a task to a sub-agent with an isolated context. Default path: pass an inline systemPrompt (plus optional tools/model) to define a temporary sub-agent — no configured agent is required. You may instead name a configured sub-agent via `agent`; workspaceDir/sub-agents/ may be empty on a given install, which does not block inline delegation. Execution budgets come from `effort` presets and context injection from `context`; both have safe defaults, so state the task well and leave them alone unless you have a reason. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
+			"Delegate a task to a configured sub-agent (see the Sub-Agents directory in the system prompt). Prefer this over `subagent_inline` whenever a role fits — its tools, model, budget and context policy all come from the role file. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
 		parameters: subagentSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			if (signal?.aborted) {
@@ -800,11 +1377,11 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 			if (taskLengthError) {
 				throw new RecoverableToolError(taskLengthError);
 			}
-			const invocation = resolveSubAgentConfig(
+			const invocation = resolveConfiguredRole(
 				availableModels,
 				currentModel,
 				discovery.agents,
-				params,
+				{ agent: params.agent, purpose: params.purpose },
 				options.getSubAgentModelReference?.() ?? undefined,
 			);
 			if (!invocation.config) {
@@ -812,628 +1389,49 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 					`${invocation.error}\n\nAvailable configured sub-agents:\n${formatSubAgentList(discovery.agents)}`,
 				);
 			}
+			return dispatchSubAgentRun(options, currentModel, invocation.config, undefined, params, onUpdate);
+		},
+	};
+}
 
-			const config = invocation.config;
-			// Derived rather than model-supplied (spec 045): `${agent}: ${task's first line}`, the
-			// same shape `subagent_manage op=follow_up` already builds by hand.
-			const runLabel = `${config.name}: ${params.task.split("\n")[0]?.slice(0, 80) ?? ""}`;
-			// Only ever set for an inline (internal) delegation with `bash` in `tools` and no explicit
-			// `mutates` — surfaced to the model, not just a log, since it has no role file to fix.
-			const mutatesNote = invocation.warning ? `Note: ${invocation.warning}\n\n` : "";
-			const returns = params.returns ?? "text";
-			// Spec 042 D3: `returns: "artifact"` has no external equivalent — the marker protocol
-			// scopes a produced file to `artifactDir`, but an external agent's real output lives in
-			// its working directory. Implementing it would build a same-named, different-meaning
-			// protocol; rejecting it is honest about the mismatch. An external run's full output
-			// always lands in `output.md` regardless (spec 032 D4), so this loses nothing — a caller
-			// that needs a specific artifact location says so in the task text.
-			if (config.runtime === "external" && returns === "artifact") {
-				throw new RecoverableToolError(
-					`Sub-agent "${config.name}" is external; returns: "artifact" has no effect on external roles ` +
-						"(their full output always lands in output.md). State the desired output file in the task text instead.",
-				);
+export function createSubAgentInlineTool(
+	options: SubAgentToolOptions,
+): AgentTool<typeof subagentInlineSchema, SubAgentToolFields> {
+	return {
+		name: "subagent_inline",
+		label: "subagent_inline",
+		description:
+			"Delegate a task to a one-off inline sub-agent when no configured role fits — define its systemPrompt (plus optional tools/model) here instead of a role file. Prefer `subagent` with a configured `agent` when one already covers this work. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
+		parameters: subagentInlineSchema,
+		execute: async (_toolCallId, params, signal, onUpdate) => {
+			if (signal?.aborted) {
+				throw new Error("Sub-agent aborted");
 			}
-			const runManager = (options.getRunManager ?? getSubAgentRunManager)(options.runtimeContext.channelId);
-			// A short, human-typeable id (spec 041) — never the dispatching tool call's own id, which
-			// on some providers is a long `call_<id>|fc_<id>` composite unreadable in a chat UI.
-			const runContext = await prepareRunContext(runManager.mintRunId(), params, options);
-
-			// D9: an independent verifier checks against a target that isn't moving under it — shared
-			// with `subagent_manage op=follow_up` (spec 042 D7) so a verify run's admission rules
-			// cannot drift between the two dispatch paths.
-			assertVerifyAdmissible(config, runContext.purpose, runContext.workingDirectory);
-
-			// Admission: a write-mutating run takes an exclusive workspace lease before it is even
-			// registered (spec 040, D10.1) — a rejected delegation should never count as "started".
-			// Read runs and purpose=verify never take one. Shared by both runtimes.
-			let leaseKey: string | undefined;
-			if (config.mutates === "write" && runContext.purpose !== "verify") {
-				const lease = acquireWorkspaceLease({
-					runId: runContext.runId,
-					channelId: options.runtimeContext.channelId,
-					workingDirectory: runContext.workingDirectory,
-				});
-				if (!lease.ok) {
-					throw new RecoverableToolError(formatWorkspaceLeaseConflict(lease.heldBy));
-				}
-				leaseKey = lease.leaseKey;
+			const availableModels = options.getAvailableModels();
+			const currentModel = options.getCurrentModel();
+			const taskLengthError = validateSubAgentTask(params.task);
+			if (taskLengthError) {
+				throw new RecoverableToolError(taskLengthError);
 			}
-
-			if (config.runtime === "external") {
-				if (!config.harness) {
-					releaseWorkspaceLease(leaseKey, runContext.runId);
-					throw new Error(`Sub-agent "${config.name}" has runtime: external but no harness configured.`);
-				}
-				let launchResult: ExternalLaunchResult;
-				try {
-					// D9/T5: external roles get the same task envelope internal workers do — runtime
-					// paths, injected context blocks, and (for purpose=verify) the verification
-					// protocol — rather than the raw task text (spec 040 gap closed post-review).
-					// Spec 042 D3: `returns: "artifact"` is rejected for external above, so this is
-					// always "text" here — passed literally rather than the `returns` variable so the
-					// ARTIFACT marker protocol is never injected into an external envelope, which no
-					// external result parser has ever read.
-					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel).catch(
-						(error) => {
-							// Context injection is an enhancement, not a precondition -- degrading to no context blocks
-							// beats failing a dispatch that would otherwise have run fine.
-							log.logWarning(
-								`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
-								errorMessage(error),
-							);
-							return [] as string[];
-						},
-					);
-					const envelopedTask = buildSubAgentTask(
-						params.task,
-						config,
-						options.runtimeContext,
-						contextualBlocks,
-						runContext,
-						"text",
-					);
-					launchResult = await launchExternalRun({
-						runId: runContext.runId,
-						channelId: options.runtimeContext.channelId,
-						channelDir: options.channelDir,
-						label: runLabel,
-						agent: config.name,
-						source: config.source,
-						harness: config.harness,
-						command: config.command ?? "",
-						shell: config.shell,
-						env: config.env,
-						externalModelRef: config.externalModelRef,
-						thinkingLevel: config.thinkingLevel,
-						maxWallTimeSec: config.maxWallTimeSec,
-						systemPrompt: config.systemPrompt,
-						task: envelopedTask,
-						workingDirectory: runContext.workingDirectory,
-						artifactDir: runContext.artifactDir,
-						purpose: runContext.purpose,
-						taskId: runContext.taskId,
-						leaseKey,
-						mutates: config.mutates,
-						roleFingerprint: externalRoleFingerprint(config),
-						workspaceDir: options.workspaceDir,
-						securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
-					});
-				} catch (error) {
-					// Only a pre-register() throw (unknown harness, shell-mode misuse) reaches here —
-					// every failure past that point settles the run itself and already released this
-					// lease (spec 042 D2/D5), so this catch must not release it a second time.
-					releaseWorkspaceLease(leaseKey, runContext.runId);
-					throw error;
-				}
-				// Spec 042 D2: a pre-spawn failure is reported in this same turn instead of a
-				// "[Dispatched]" placeholder the model would wait on forever — two of the three
-				// failure kinds never used to announce at all. `settle()` already released the lease.
-				if (!launchResult.ok) {
-					if (launchResult.kind === "missing-binary") {
-						throw new Error(
-							`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} Install the CLI or fix "command" in its role file; the run was not dispatched.`,
-						);
-					}
-					throw new RecoverableToolError(
-						`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} The run was not dispatched.`,
-					);
-				}
-				// D2: external's sync grace window is always 0 — always the dispatched placeholder,
-				// never an inline wait. The run keeps going in the background and wakes the channel.
-				return {
-					content: [
-						{
-							type: "text",
-							text:
-								`[Dispatched] runId=${runContext.runId}, agent ${config.name} (external, ${config.harness}), working directory ${runContext.workingDirectory}.\n` +
-								"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
-								"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_manage.",
-						},
-					],
-					details: createDetails(
-						config,
-						runContext,
-						createEmptyUsageTotals(),
-						0,
-						0,
-						0,
-						false,
-						undefined,
-						undefined,
-						{
-							dispatched: true,
-							modelOverride: config.externalModelRef ?? "unknown",
-							toolsOverride: [],
-						},
-					),
-				};
-			}
-
-			const scopedExecutor = new DirectoryExecutor(options.executor, runContext.workingDirectory);
-			let apiKey: string;
-			try {
-				apiKey = await options.resolveApiKey(config.model);
-			} catch (error) {
-				releaseWorkspaceLease(leaseKey, runContext.runId);
-				throw error;
-			}
-			const startedAt = Date.now();
-			const usage = createEmptyUsageTotals();
-			let assistantTurns = 0;
-			let toolCalls = 0;
-			let failureReason: string | undefined;
-			/** Set alongside failureReason only for the three self-inflicted budget aborts, distinct from an explicit cancel. */
-			let budgetExceeded = false;
-			/** Set only by the `subagent_manage op=cancel` handle registered below — a real stop, unlike a budget abort. */
-			let externallyCancelled = false;
-			/** True once the sync grace window has elapsed and a "still running" placeholder has been returned. */
-			let detached = false;
-			let lastUpdateText = "";
-
-			try {
-				await runManager.register({
-					runId: runContext.runId,
-					channelId: options.runtimeContext.channelId,
-					runtime: "internal",
-					agent: config.name,
-					label: runLabel,
-					source: config.source,
-					tools: [...config.tools],
-					model: formatModelReference(config.model),
-					purpose: runContext.purpose,
-					taskId: runContext.taskId,
-					workingDirectory: runContext.workingDirectory,
-					artifactDir: runContext.artifactDir,
-					leaseKey,
-				});
-			} catch (error) {
-				// Until the durable running record exists, setup still owns the lease. A channel/host
-				// admission rejection or required persist failure must leave no invisible writer lock.
-				releaseWorkspaceLease(leaseKey, runContext.runId);
-				throw error;
-			}
-
-			const emitUpdate = (text: string) => {
-				// Once detached, execute() has already returned to the SDK; nothing is listening
-				// for further progress on this (from its view, finished) tool call.
-				if (detached) return;
-				const nextText = text.trim();
-				if (!nextText || nextText === lastUpdateText) {
-					return;
-				}
-				lastUpdateText = nextText;
-				onUpdate?.({
-					content: [{ type: "text", text: nextText }],
-					details: createDetails(
-						config,
-						runContext,
-						usage,
-						assistantTurns,
-						toolCalls,
-						Date.now() - startedAt,
-						Boolean(failureReason),
-						failureReason,
-					),
-				});
-			};
-
-			let worker: SubAgentWorker | undefined;
-			let wallClockTimer: ReturnType<typeof setTimeout> | undefined;
-			let unsubscribe: (() => void) | undefined;
-			let verifierGitStateBefore: string | undefined;
-			let verifierSubjectBefore: string | undefined;
-			try {
-				const availableTools = (options.buildTools ?? buildSubagentTools)(
-					scopedExecutor,
-					config.bashTimeoutSec,
-					options,
-					runContext,
-				);
-				verifierGitStateBefore =
-					runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
-				verifierSubjectBefore =
-					runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
-
-				worker =
-					options.createWorker?.({
-						subAgent: config,
-						apiKey,
-						tools: filterToolsByName(availableTools, config.tools),
-					}) ??
-					new Agent({
-						initialState: {
-							systemPrompt: config.systemPrompt,
-							model: config.model,
-							// Same clamp the main agent applies (channel-runner.ts) before setting a model's
-							// thinkingLevel: a model with `reasoning: false` gets "off", an unsupported tier
-							// snaps to the nearest one, instead of a raw unsupported value reaching the provider.
-							// The internal path's resolved config always fills thinkingLevel; the fallback
-							// here only closes the type.
-							thinkingLevel: clampThinkingLevel(config.model, config.thinkingLevel ?? DEFAULT_THINKING_LEVEL),
-							tools: filterToolsByName(availableTools, config.tools),
-						},
-						convertToLlm,
-						getApiKey: async () => apiKey,
-						streamFn: streamSimple,
-					});
-
-				runManager.registerCancelHandle(runContext.runId, () => {
-					externallyCancelled = true;
-					worker?.abort();
-				});
-
-				wallClockTimer = setTimeout(() => {
-					failureReason = `Wall time budget exceeded (${config.maxWallTimeSec}s)`;
-					budgetExceeded = true;
-					worker?.abort();
-				}, config.maxWallTimeSec * 1000);
-
-				unsubscribe = worker.subscribe((event: AgentEvent) => {
-					if (event.type === "message_end" && isAssistantMessage(event.message)) {
-						assistantTurns++;
-						const messageUsage = event.message.usage;
-						usage.input += messageUsage.input;
-						usage.output += messageUsage.output;
-						usage.cacheRead += messageUsage.cacheRead;
-						usage.cacheWrite += messageUsage.cacheWrite;
-						usage.total += messageUsage.totalTokens;
-						usage.cost.input += messageUsage.cost.input;
-						usage.cost.output += messageUsage.cost.output;
-						usage.cost.cacheRead += messageUsage.cost.cacheRead;
-						usage.cost.cacheWrite += messageUsage.cost.cacheWrite;
-						usage.cost.total += messageUsage.cost.total;
-					}
-
-					if (event.type === "tool_execution_start") {
-						toolCalls++;
-						const label = describeToolCall(event.toolName, event.args);
-						emitUpdate(formatStatus(config.name, label));
-						if (toolCalls > config.maxToolCalls) {
-							failureReason = `Tool call budget exceeded (${config.maxToolCalls})`;
-							budgetExceeded = true;
-							emitUpdate(formatStatus(config.name, "tool budget reached"));
-							worker?.abort();
-						}
-					}
-
-					if (
-						event.type === "turn_end" &&
-						isAssistantMessage(event.message) &&
-						event.toolResults.length > 0 &&
-						assistantTurns >= config.maxTurns
-					) {
-						failureReason = `Turn budget exceeded (${config.maxTurns})`;
-						budgetExceeded = true;
-						emitUpdate(formatStatus(config.name, "turn budget reached"));
-						worker?.abort();
-					}
-				});
-
-				emitUpdate(formatStatus(config.name, "started"));
-			} catch (error) {
-				unsubscribe?.();
-				if (wallClockTimer) clearTimeout(wallClockTimer);
-				runManager.clearCancelHandle(runContext.runId);
-				try {
-					worker?.abort();
-				} catch {
-					// Preserve the setup error; settlement below is the lifecycle authority.
-				}
-				const setupError = error instanceof Error ? error : new Error(String(error));
-				await runManager.settle(
-					runContext.runId,
-					{
-						status: "failed",
-						failureReason: setupError.message,
-						usage,
-						usageKnown: true,
-						costKnown: true,
-						turns: assistantTurns,
-						toolCalls,
-						durationMs: Date.now() - startedAt,
-						outputText: "",
-					},
-					{ announce: false },
-				);
-				throw setupError;
-			}
-			const activeWorker = worker!;
-			const activeUnsubscribe = unsubscribe!;
-			const activeWallClockTimer = wallClockTimer!;
-
-			/**
-			 * Runs the worker to completion, including the D6 convergence turn, and returns the
-			 * tool result plus the data `runs.ts` needs to settle. Rejects only for the single
-			 * fatal case (no assistant message at all) — every other outcome, including a budget
-			 * abort or explicit cancel, is a normal (if failed) result.
-			 */
-			async function runToCompletion(): Promise<{
-				toolResult: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields };
-				settleInput: SettleInput;
-			}> {
-				try {
-					const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel).catch(
-						(error) => {
-							// Context injection is an enhancement, not a precondition -- degrading to no context blocks
-							// beats failing a dispatch that would otherwise have run fine.
-							log.logWarning(
-								`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
-								errorMessage(error),
-							);
-							return [] as string[];
-						},
-					);
-					await activeWorker.prompt(
-						buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks, runContext, returns),
-					);
-					await activeWorker.waitForIdle();
-
-					// D6: a self-inflicted budget abort gets one tool-free turn to converge on a
-					// conclusion instead of discarding the work outright. An explicit cancel skips
-					// this — the model asked this run to stop now, not to wrap up.
-					if (budgetExceeded && !externallyCancelled) {
-						clearTimeout(activeWallClockTimer);
-						emitUpdate(formatStatus(config.name, "converging on budget exhaustion"));
-						const preConvergenceMessageCount = activeWorker.state.messages.length;
-						activeWorker.state.tools = [];
-						let convergenceTimedOut = false;
-						const convergenceTimer = setTimeout(() => {
-							convergenceTimedOut = true;
-							activeWorker.abort();
-						}, options.convergenceWallClockMs ?? CONVERGENCE_WALL_CLOCK_MS);
-						try {
-							await activeWorker.prompt(CONVERGENCE_PROMPT);
-							await activeWorker.waitForIdle();
-						} catch {
-							// Best effort: fall through to whatever worker.state.messages holds.
-						} finally {
-							clearTimeout(convergenceTimer);
-						}
-						if (convergenceTimedOut) {
-							// Revert to the pre-D6 behavior: drop the (aborted, possibly partial)
-							// convergence turn and fall back to whatever came before it.
-							activeWorker.state.messages = activeWorker.state.messages.slice(0, preConvergenceMessageCount);
-						}
-					}
-				} finally {
-					activeUnsubscribe();
-					clearTimeout(activeWallClockTimer);
-				}
-
-				const lastAssistantMessage = getLastAssistantMessage(activeWorker.state.messages);
-				const durationMs = Date.now() - startedAt;
-				if (!lastAssistantMessage) {
-					failureReason = failureReason || "Sub-agent returned no assistant message";
-					emitUpdate(formatStatus(config.name, "failed"));
-					throw new Error(`Sub-agent ${config.name} failed: ${failureReason}`);
-				}
-
-				const finalText = extractAssistantText(lastAssistantMessage);
-				const effectiveFailureReason =
-					failureReason ||
-					(lastAssistantMessage.stopReason === "error" || lastAssistantMessage.stopReason === "aborted"
-						? lastAssistantMessage.errorMessage || `Sub-agent stopped with ${lastAssistantMessage.stopReason}`
-						: undefined);
-				const verifierGitStateAfter =
-					runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
-				const verifierSubjectAfter =
-					runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
-				// Spec 042 D1: the pass/fail judgment rule is shared with the external verify path
-				// (`resolveVerificationOutcome`) so there is exactly one place deciding what a verify
-				// run's own output does and does not prove. Only the attestation write and the
-				// strength label stay here, since only the internal path can structurally remove
-				// write/edit from the verifier's tool set.
-				const verification =
-					runContext.purpose === "verify"
-						? resolveVerificationOutcome({
-								subjectBefore: verifierSubjectBefore,
-								subjectAfter: verifierSubjectAfter,
-								gitStateBefore: verifierGitStateBefore,
-								gitStateAfter: verifierGitStateAfter,
-								finalText,
-								runFailed: Boolean(effectiveFailureReason),
-							})
-						: undefined;
-				const verificationVerdict = verification?.verdict;
-				// Internal verify always keeps write/edit structurally removed from the verifier's
-				// tool set (buildSubagentTools above), but `bash` stays available by default and can
-				// write files just as well — labeling that "enforced" would be dishonest (review
-				// 2026-08-23 §2.2). Only a role that dropped `bash` from its declared tool list earns
-				// the stronger label. Computed once so the attestation and the run record — the
-				// latter is what the completion wake and `subagent_manage` display — cannot disagree.
-				const internalVerificationStrength = config.tools.includes("bash")
-					? ("advisory" as const)
-					: ("enforced" as const);
-				if (runContext.purpose === "verify" && runContext.taskId && verification) {
-					await writeVerificationAttestation(options.channelDir, {
-						runId: runContext.runId,
-						taskId: runContext.taskId,
-						verdict: verification.verdict,
-						checkedAt: formatLocalTime(),
-						evidence: verification.evidence,
-						workspaceChanged: verification.workspaceChanged,
-						subjectHash: verification.workspaceChanged ? undefined : verifierSubjectAfter,
-						subjectDir: runContext.workingDirectory,
-						verificationStrength: internalVerificationStrength,
-					});
-				}
-
-				// Internal runs always report full usage; cost is "unknown" only for the shape a
-				// free/local model produces (tokens spent, nothing billed) — external harnesses
-				// override both explicitly once they land (D4/D9).
-				const costKnown = usage.cost.total > 0 || usage.total === 0;
-				const baseSettleInput = {
-					usage,
-					usageKnown: true,
-					costKnown,
-					turns: assistantTurns,
-					toolCalls,
-					durationMs,
-					verificationVerdict,
-					verificationStrength: runContext.purpose === "verify" ? internalVerificationStrength : undefined,
-				};
-
-				if (effectiveFailureReason) {
-					if (!finalText.trim()) {
-						emitUpdate(formatStatus(config.name, "failed"));
-						throw new Error(buildFailureText(config, effectiveFailureReason, finalText));
-					}
-					emitUpdate(formatStatus(config.name, "stopped"));
-					const finalized = finalizeSubAgentOutput(runContext, finalText, returns);
-					return {
-						toolResult: {
-							content: [
-								{
-									type: "text",
-									text: mutatesNote + buildStoppedText(config, effectiveFailureReason, finalized.replyText),
-								},
-							],
-							details: createDetails(
-								config,
-								runContext,
-								usage,
-								assistantTurns,
-								toolCalls,
-								durationMs,
-								true,
-								effectiveFailureReason,
-								verificationVerdict,
-								{ artifactPath: finalized.artifactPath, resultTruncated: finalized.truncated },
-							),
-						},
-						settleInput: {
-							...baseSettleInput,
-							// An explicit cancel is not a failure (P1-1) — the model asked this run to
-							// stop, and it did.
-							status: externallyCancelled ? "cancelled" : "failed",
-							failureReason: effectiveFailureReason,
-							outputText: finalText,
-						},
-					};
-				}
-
-				const finalized = finalizeSubAgentOutput(runContext, finalText, returns);
-				return {
-					toolResult: {
-						content: [
-							{
-								type: "text",
-								text:
-									mutatesNote +
-									(finalized.replyText || `(Sub-agent ${config.name} completed with no text output)`),
-							},
-						],
-						details: createDetails(
-							config,
-							runContext,
-							usage,
-							assistantTurns,
-							toolCalls,
-							durationMs,
-							false,
-							undefined,
-							verificationVerdict,
-							{ artifactPath: finalized.artifactPath, resultTruncated: finalized.truncated },
-						),
-					},
-					settleInput: { ...baseSettleInput, status: "completed", outputText: finalText },
-				};
-			}
-
-			/** Best-effort settle input for the one fatal path that rejects instead of resolving. */
-			function fatalSettleInput(error: Error): SettleInput {
-				return {
-					status: externallyCancelled ? "cancelled" : "failed",
-					failureReason: failureReason || error.message,
-					usage,
-					usageKnown: true,
-					costKnown: usage.cost.total > 0 || usage.total === 0,
-					turns: assistantTurns,
-					toolCalls,
-					durationMs: Date.now() - startedAt,
-					outputText: "",
-				};
-			}
-
-			// D2: the tool call waits at most SYNC_GRACE_MS (never longer than the run's own wall
-			// clock budget) before degrading to a "still running" placeholder. The run itself keeps
-			// executing either way — only the *return* differs.
-			const graceMs = Math.min(config.maxWallTimeSec * 1000, options.syncGraceMs ?? SYNC_GRACE_MS);
-			const outcomePromise = runToCompletion().then(
-				(value) => ({ ok: true as const, value }),
-				(error: unknown) => ({
-					ok: false as const,
-					error: error instanceof Error ? error : new Error(String(error)),
-				}),
+			const invocation = resolveInlineAgent(
+				availableModels,
+				currentModel,
+				{
+					systemPrompt: params.systemPrompt,
+					tools: params.tools,
+					model: params.model,
+					effort: params.effort,
+					context: params.context,
+					thinkingLevel: params.thinkingLevel,
+					mutates: params.mutates,
+					purpose: params.purpose,
+				},
+				options.getSubAgentModelReference?.() ?? undefined,
 			);
-			const raceResult = await Promise.race([outcomePromise, sleep(graceMs).then(() => "timed-out" as const)]);
-
-			if (raceResult !== "timed-out") {
-				runManager.clearCancelHandle(runContext.runId);
-				if (!raceResult.ok) {
-					await runManager.settle(runContext.runId, fatalSettleInput(raceResult.error), { announce: false });
-					throw raceResult.error;
-				}
-				await runManager.settle(runContext.runId, raceResult.value.settleInput, { announce: false });
-				return raceResult.value.toolResult;
+			if (!invocation.config) {
+				throw new RecoverableToolError(invocation.error ?? "Unable to resolve inline sub-agent.");
 			}
-
-			// Grace window elapsed: hand back a placeholder now and let the run keep going in the
-			// background. It settles and, this time, announces itself with a completion wake (D2/D7)
-			// — the same "runtime guarantees completion" contract background jobs already keep.
-			detached = true;
-			void outcomePromise.then(async (outcome) => {
-				runManager.clearCancelHandle(runContext.runId);
-				const settleInput = outcome.ok ? outcome.value.settleInput : fatalSettleInput(outcome.error);
-				await runManager.settle(runContext.runId, settleInput, { announce: true }).catch((error) => {
-					log.logWarning(`Failed to settle detached sub-agent run ${runContext.runId}`, errorMessage(error));
-				});
-			});
-
-			return {
-				content: [
-					{
-						type: "text",
-						text:
-							mutatesNote +
-							`[Dispatched] runId=${runContext.runId}, agent ${config.name} (internal, async), working directory ${runContext.workingDirectory}.\n` +
-							"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
-							"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_manage.",
-					},
-				],
-				details: createDetails(
-					config,
-					runContext,
-					usage,
-					assistantTurns,
-					toolCalls,
-					Date.now() - startedAt,
-					false,
-					undefined,
-					undefined,
-					{ dispatched: true },
-				),
-			};
+			return dispatchSubAgentRun(options, currentModel, invocation.config, invocation.warning, params, onUpdate);
 		},
 	};
 }

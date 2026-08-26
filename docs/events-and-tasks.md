@@ -29,7 +29,7 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 
 | 层 | 载体 | 持有什么 | 谁维护 |
 |----|------|----------|--------|
-| **tasks** | `workspace/<channelId>/tasks/*.md` | 意图、DoD、手册、状态、周期日志、下一次 `wake`、周期 `schedule` | 主 agent 经 `task_manage` 维护 |
+| **tasks** | `workspace/<channelId>/tasks/*.md` | 意图、DoD、手册、状态、周期日志、下一次 `wake`、周期 `schedule` | 主 agent 经 `task_create`/`task_update`/`task_close`/`task_verify` 维护 |
 | **task driver** | runtime 确定性扫描 | 找出已到点 / 可继续 / 该开新周期的任务并唤醒对应 channel | Pipiclaw runtime，扫描本身零 token |
 | **events** | `workspace/events/*.json` | 非 task 的独立提醒、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`）维护 |
 
@@ -468,9 +468,9 @@ complete 会写 summary/evidence、清理 task-owned events、计算下一 occur
 需要独立验收的任务显式设置 `control.verificationRequired: true`。验收不是一个独立的生命周期分支，而是一次普通委派：
 
 1. 完成 DoD checklist 后，像任何其他委派一样派发一个 `subagent purpose=verify`、带 `taskId` 的 sub-agent。
-2. 用 `task_manage progress` 把任务停泊为 `waiting`（不设 wake），和其他委派完全同一套停泊/唤醒机制——没有单独的 `request-verification` 动作，也没有 `waiting + waitingFor: verification` 这个特殊状态。
+2. 用带 `note` 的 `task_update` 把任务停泊为 `waiting`（不设 wake），和其他委派完全同一套停泊/唤醒机制——没有单独的 `request-verification` 动作，也没有 `waiting + waitingFor: verification` 这个特殊状态。
 3. checker 只读检查并写 attestation；完成后 runtime 通过完成唤醒恢复所属 task。
-4. Agent 调用 `task_manage verify` 导入 runId；PASS/FAIL 都恢复 active。`verify` 认的是 attestation 文件里的 `taskId`，不是任务当时的状态字符串。
+4. Agent 调用 `task_verify` 导入 runId；PASS/FAIL 都恢复 active。`task_verify` 认的是 attestation 文件里的 `taskId`，不是任务当时的状态字符串。
 5. complete 重新检查 attestation、contract hash 和 artifact subject。普通 progress/Plan 改动不应破坏 PASS；Goal/DoD/Manual/Verification 或产物变更必须重验。
 
 无 verification requirement 的任务不会产生额外 checker turn。
@@ -506,25 +506,21 @@ driver 是自适应 timer + nudge 的零 token 扫描，不固定轮询：
 
 展示至少包含 status、enabled/stop reason、wake、waitingFor、schedule/next occurrence、current/last cycle、verification、deadline 和 nextAction。pause/resume 不改变 status、wake 或 schedule。旧命令按 unknown action 返回 usage，不做隐式替代。成本可见性不再由任务文件承担——按 `taskId` 聚合的花费查 `/usage`。
 
-`task_manage` action 只有：
+长程任务由五个工具组成，按 payload 形状切分（spec 046），而不是一个按 action 分支的工具：
 
 ```text
-create
-progress
-set
-verify
-complete
-skip
-cancel
-list
+task_list
+task_create
+task_update
+task_close
+task_verify
 ```
 
-- create：标准 Goal/DoD/Manual/Verification/Current Cycle/History；recurring 初始 sleeping。
-- progress：原子追加 Current Cycle，并更新状态、wake、control。
-- set：修复 metadata/control，不代替日常 checkpoint。
-- verify：导入独立验收 sub-agent 的 attestation。
-- complete/skip/cancel：分别闭环、跳过 occurrence、归档放弃。
-- list：返回活动任务和完整 control。
+- `task_list`：返回活动任务和完整 control。
+- `task_create`：标准 Goal/DoD/Manual/Verification/Current Cycle/History；recurring 初始 sleeping。
+- `task_update`：带 `note` 时原子追加 Current Cycle 并更新状态/wake/control（checkpoint，仅 active/waiting）；不带 `note` 时是纯 metadata 修复，也是唯一能修复不可解析 control 行的路径，sleeping 也可用。
+- `task_close`：`outcome` 为 complete/skip/cancel，分别闭环、跳过 occurrence、归档放弃。
+- `task_verify`：导入独立验收 sub-agent 的 attestation。
 
 每回合注入 `<task_agenda>`，包含活动目录中的 active/waiting/sleeping 任务，也显示 disabled、wake、waitingFor、cycle 和 verification；它是背景参考，不是新指令。
 

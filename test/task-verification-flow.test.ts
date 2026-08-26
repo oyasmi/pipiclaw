@@ -6,7 +6,10 @@ import { claimVerifiedDelegationWake } from "../src/runtime/task-wake.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
-import { manageTask, type TaskManageToolOptions } from "../src/tools/task-manage.js";
+import { createTask } from "../src/tools/task-manage/create.js";
+import { closeTask, updateTask } from "../src/tools/task-manage/lifecycle.js";
+import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
+import { verifyTask } from "../src/tools/task-manage/verification.js";
 import { createFakeEvent } from "./helpers/fixtures.js";
 
 /**
@@ -37,19 +40,17 @@ describe("independent verification via a normal delegation wake", () => {
 
 	it("dispatches a verify sub-agent, parks, wakes, verifies, and completes", async () => {
 		const taskId = "verify-flow";
-		await manageTask(options, {
-			action: "create",
+		await createTask(options, {
 			id: taskId,
 			title: "Work",
 			goal: "Do the work.",
 			dod: "- [x] Result is ready",
-			control: { verificationRequired: true },
+			verificationRequired: true,
 		});
 
 		// Step 1: the model dispatched a purpose=verify sub-agent and parked exactly like any
 		// other delegation — no special "verification" lifecycle status.
-		const parked = await manageTask(options, {
-			action: "progress",
+		const parked = await updateTask(options, {
 			id: taskId,
 			note: "Dispatched an independent purpose=verify sub-agent; waiting for its completion wake.",
 			status: "waiting",
@@ -124,38 +125,33 @@ describe("independent verification via a normal delegation wake", () => {
 			workspaceChanged: false,
 			verificationStrength: "enforced",
 		});
-		const verified = await manageTask(options, {
-			action: "verify",
-			id: taskId,
-			verifierRunId: attestation.runId,
-		});
+		const verified = await verifyTask(options, { id: taskId, verifierRunId: attestation.runId });
 		expect(verified.status).toBe("active");
 		const verifiedStored = await readStoredTask(channelDir, taskId);
 		expect(verifiedStored?.fields.control?.verification).toMatchObject({ required: true, status: "passed", runId });
 
 		// Step 4: complete re-checks the attestation directly against the current body hash.
-		const completed = await manageTask(options, {
-			action: "complete",
+		const completed = await closeTask(options, {
 			id: taskId,
+			outcome: "complete",
 			summary: "Result is complete.",
 			evidence: `Independent verifier ${runId} passed.`,
 		});
-		expect(completed).toMatchObject({ action: "complete", archived: true });
+		expect(completed).toMatchObject({ action: "close", archived: true });
 	});
 
 	// Review 2026-08-23 §2.1: `verificationStrength` was computed and attested but never reached
 	// anything a human/model actually reads — surface it at verify and complete time instead.
 	it("surfaces an advisory verification strength at verify and complete time", async () => {
 		const taskId = "verify-flow-advisory";
-		await manageTask(options, {
-			action: "create",
+		await createTask(options, {
 			id: taskId,
 			title: "Work",
 			goal: "Do the work.",
 			dod: "- [x] Result is ready",
-			control: { verificationRequired: true },
+			verificationRequired: true,
 		});
-		await manageTask(options, { action: "progress", id: taskId, note: "Dispatched.", status: "waiting" });
+		await updateTask(options, { id: taskId, note: "Dispatched.", status: "waiting" });
 
 		const runId = "run-verify-advisory";
 		const attestation = await writeVerificationAttestation(channelDir, {
@@ -169,16 +165,12 @@ describe("independent verification via a normal delegation wake", () => {
 		});
 		expect(attestation.verificationStrength).toBe("advisory");
 
-		const verified = await manageTask(options, {
-			action: "verify",
-			id: taskId,
-			verifierRunId: runId,
-		});
+		const verified = await verifyTask(options, { id: taskId, verifierRunId: runId });
 		expect(verified.notice).toMatch(/advisory/i);
 
-		const completed = await manageTask(options, {
-			action: "complete",
+		const completed = await closeTask(options, {
 			id: taskId,
+			outcome: "complete",
 			summary: "Result is complete.",
 			evidence: `Independent verifier ${runId} passed.`,
 		});

@@ -206,8 +206,8 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 			(repairOnly
 				? "After the metadata is repaired, leave task work for a later wake. "
 				: "Advance the next concrete step under the task's current goal, control, acceptance, and verification state. ") +
-			`If complete or waiting, use the matching task_manage lifecycle/checkpoint action from the playbook. ` +
-			"For a recurring occurrence intentionally not run because it is duplicate or already satisfied, call task_manage skip with the reason, then respond with exactly [SILENT]. " +
+			`If complete or waiting, use the matching task_close/task_update action from the playbook. ` +
+			"For a recurring occurrence intentionally not run because it is duplicate or already satisfied, call task_close outcome=skip with the reason, then respond with exactly [SILENT]. " +
 			"If no task state or tool action is needed and this wake produces no user-visible result, respond with exactly [SILENT].",
 		ts: String(nowMs),
 		conversationType: channelId.startsWith("group_") ? "2" : "1",

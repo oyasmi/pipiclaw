@@ -209,6 +209,20 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - **尽力而为**：pipiclaw 会在 host 的 PATH 上探测一次 `rtk` 是否可用。装了就用，没装则静默跳过——开启 rtk 永远不会让 `bash` 命令失败。
 - rtk 只重塑语义等价的只读命令，安全校验始终针对**原始命令**执行，改写不会绕过 `command-guard`。
 
+### 内联委派开关（`tools.subagentInline`）
+
+`subagent_inline`（没有配置角色时的一次性执行者，见 [sub-agents.md](./sub-agents.md)）由 `tools.subagentInline.enabled` 单独门控，默认开：
+
+```jsonc
+{
+  "tools": {
+    "subagentInline": { "enabled": true }
+  }
+}
+```
+
+关掉后工具集里不再出现 `subagent_inline`——不是调用被拒绝，而是这次调用没有工具可用。`subagent`（选一个已配置角色）不受这个开关影响。角色目录已经覆盖到日常委派后，可以关掉这个开关收紧调用面。
+
 ### 事件自调度工具（`event_manage`，恒开）
 
 `event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据 `wake` 和 task frontmatter 里的 `schedule` 驱动；event 主要用于与任务无关的独立提醒和外部传感器。核心能力，无开关、始终注册。
@@ -218,7 +232,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 自主长程任务总开关（`tools.tasks`）
 
-`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：`task_manage` 工具（agent 维护[任务台账](./events-and-tasks.md)：create/progress/set/verify/complete/skip/cancel/list）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
+`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：全部 task_* 工具（agent 维护[任务台账](./events-and-tasks.md)：`task_list`/`task_create`/`task_update`/`task_close`/`task_verify`）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
 
 ```jsonc
 {
@@ -929,7 +943,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
     "Set tools.web.enable to true to register web_search and web_fetch.",
     "Replace tools.web.search.apiKey with your Brave API key before enabling web tools.",
     "If needed, copy _examples.proxy to tools.web.proxy.",
-    "tools.tasks.enabled is the master switch for autonomous long-running tasks (task_manage tool + task driver + task digest)."
+    "tools.tasks.enabled is the master switch for autonomous long-running tasks (task_* tools + task driver + task digest)."
   ]
 }
 ```
@@ -983,7 +997,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `enabled` | `true` | 自主长程任务总开关：同时门控 `task_manage` 工具、内建 TaskDriver 与每回合任务摘要注入 |
+| `enabled` | `true` | 自主长程任务总开关：同时门控全部 task_* 工具、内建 TaskDriver 与每回合任务摘要注入 |
 
 > 记忆/技能/事件/搜索/后台作业工具（`memory_manage`、`session_search`、`skill`、`event_manage`、`grep`、`glob`、`job`）为核心能力，恒开、无配置项。
 

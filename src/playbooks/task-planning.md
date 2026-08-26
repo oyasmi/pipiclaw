@@ -1,7 +1,7 @@
 ---
 name: task-planning
 description: 判断该建长程任务（task）还是事件（event）、写任务契约，或设定周期节奏（schedule）。
-requires-tools: task_manage
+requires-tools: task_create, task_update
 order: 70
 ---
 
@@ -17,7 +17,7 @@ order: 70
 
 ## 创建内容
 
-调用 `task_manage create`：
+调用 `task_create`：
 
 - `id`：稳定的 kebab-case。
 - `title`：一句话标题。
@@ -38,11 +38,11 @@ Task 创建即持续委托：能触达什么由可用工具、security 配置和
 - `nextAction`：下一条可执行动作，避免抽象愿望；等待时"等什么、条件、下一步"也写在这里，没有单独的 blockedReason 字段。
 - `waitingFor`：等待来源的记录性展示（`time` / `user` / `job` / `external-signal`）。它不决定任务能否恢复，语义见 `task-driving.md`。
 - `wake`：最早回访时间。带 future wake 的任务应当是 `waiting`；`active` 配 future wake 是非法组合，会被任务体检报出来。
-- `schedule`：五字段 cron，存在即 recurring，最小间隔 30 分钟。
+- `schedule`：五字段 cron，存在即 recurring，最小间隔 30 分钟。改动已有任务的 `schedule` 会把 `wake` 重算到新节奏的下一次时间点，除非同一次调用也显式设置了 `wake`。
 
 ## Plan：手段层
 
-预计需要多次唤醒时，用 `plan` 创建步骤，或用 `task_manage progress` 的 `planSteps` 更新。Plan 是手段，不是第二份 DoD；每步写可验证产出，可选 `→ dod:1,2` 引用。四态为 `[ ]` todo、`[x]` done、`[!]` blocked、`[~]` dropped。当前步骤由 runtime 从文档顺序推导。
+预计需要多次唤醒时，用 `plan` 创建步骤，或用 `task_update` 的 `planSteps` 更新。`planSteps` 要求任务已有 `## Plan` 小节——首次调用即创建它。Plan 是手段，不是第二份 DoD；每步写可验证产出，可选 `→ dod:1,2` 引用。四态为 `[ ]` todo、`[x]` done、`[!]` blocked、`[~]` dropped。当前步骤由 runtime 从文档顺序推导。
 
 ## 三态与周期
 
@@ -55,4 +55,4 @@ Task 创建即持续委托：能触达什么由可用工具、security 配置和
 
 ## 建档后自检
 
-创建后读取落盘文件，确认 Goal、DoD、Manual、Verification、status、enabled、wake 和 control 与真实意图一致；正文要改用 `edit`，`task_manage set` 只动 frontmatter。后续推进、等待、验收和闭环都按 `task-driving.md`。
+创建后读取落盘文件，确认 Goal、DoD、Manual、Verification、status、enabled、wake 和 control 与真实意图一致；正文要改用 `edit`，不带 `note` 的 `task_update` 只动 frontmatter。后续推进、等待、验收和闭环都按 `task-driving.md`。

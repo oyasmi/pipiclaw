@@ -131,7 +131,11 @@ export function isAutoRetryStartEvent(value: unknown): value is AutoRetryStartEv
 }
 
 export function isSubAgentToolDetails(value: unknown): value is SubAgentToolDetails {
-	if (!value || typeof value !== "object" || !("kind" in value) || (value as { kind?: unknown }).kind !== "subagent") {
+	if (!value || typeof value !== "object" || !("kind" in value)) {
+		return false;
+	}
+	const kind = (value as { kind?: unknown }).kind;
+	if (kind !== "subagent" && kind !== "subagent_inline") {
 		return false;
 	}
 

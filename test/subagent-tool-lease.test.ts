@@ -13,7 +13,7 @@ import {
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
 	SubAgentRunManager,
 } from "../src/subagents/runs.js";
-import { createSubAgentTool } from "../src/subagents/tool.js";
+import { createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -66,7 +66,7 @@ function createAssistantMessage(text: string): AssistantMessage {
 }
 
 function makeTool(workspaceDir: string, channelDir: string, channelId = "dm_lease") {
-	return createSubAgentTool({
+	return createSubAgentInlineTool({
 		executor: fakeExecutor,
 		fileStore: createFileStore(),
 		getCurrentModel: () => model,
@@ -88,7 +88,6 @@ function makeTool(workspaceDir: string, channelDir: string, channelId = "dm_leas
 describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 	function writeParams() {
 		return {
-			name: "writer",
 			systemPrompt: "Edit things.",
 			tools: ["read", "edit"],
 			task: "Change a file.",
@@ -107,7 +106,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		const channelDir = join(workspaceDir, channelId);
 		mkdirSync(channelDir, { recursive: true });
 		const manager = new SubAgentRunManager(channelId, {});
-		const tool = createSubAgentTool({
+		const tool = createSubAgentInlineTool({
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -146,7 +145,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 				artifactDir: join(workspaceDir, "artifacts", `existing-${index}`),
 			});
 		}
-		const rejectingTool = createSubAgentTool({
+		const rejectingTool = createSubAgentInlineTool({
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -205,7 +204,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		const blockedStateDir = join(workspaceDir, "state-file");
 		writeFileSync(blockedStateDir, "not a directory");
 		const manager = new SubAgentRunManager(channelId, { stateDir: blockedStateDir });
-		const tool = createSubAgentTool({
+		const tool = createSubAgentInlineTool({
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -239,7 +238,6 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			const tool = makeTool(workspaceDir, channelDir);
 			await expect(
 				tool.execute("lease-call-1", {
-					name: "writer",
 					systemPrompt: "Edit things.",
 					tools: ["read", "edit"],
 					task: "Change a file.",
@@ -265,7 +263,6 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		try {
 			const tool = makeTool(workspaceDir, channelDir);
 			const result = await tool.execute("lease-call-2", {
-				name: "reader",
 				systemPrompt: "Read things.",
 				tools: ["read"],
 				task: "Look at a file.",
@@ -283,7 +280,6 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 		const tool = makeTool(workspaceDir, channelDir);
 		const result = await tool.execute("lease-call-3", {
-			name: "writer",
 			systemPrompt: "Edit things.",
 			tools: ["read", "edit"],
 			task: "Change a file.",

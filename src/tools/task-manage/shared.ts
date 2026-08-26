@@ -19,7 +19,13 @@ import { nextTaskWake, validateTaskSchedule } from "../../tasks/task-schedule.js
 import { isSettableTaskStatus } from "../../tasks/transitions.js";
 import { RecoverableToolError } from "../tool-details.js";
 import { SETTABLE_STATUSES } from "./schema.js";
-import type { TaskFields, TaskManageRequest, TaskManageToolOptions } from "./types.js";
+import type {
+	TaskCloseRequest,
+	TaskCreateRequest,
+	TaskFields,
+	TaskManageToolOptions,
+	TaskUpdateRequest,
+} from "./types.js";
 
 export function tasksDir(options: TaskManageToolOptions): string {
 	return join(options.channelDir, "tasks");
@@ -36,13 +42,13 @@ export function renderTaskFile(fields: TaskFields, body: string): string {
 export function requiredField(value: string | undefined, field: string, action: string): string {
 	const trimmed = value?.trim();
 	if (!trimmed) {
-		throw new RecoverableToolError(`action "${action}" requires ${field}.`);
+		throw new RecoverableToolError(`${action} requires ${field}.`);
 	}
 	return trimmed;
 }
 
 export function requireNonEmpty(value: string | undefined, field: string): string {
-	return requiredField(value, field, "complete");
+	return requiredField(value, field, "task_close outcome=complete");
 }
 
 export function markdownValue(value: string): string {
@@ -51,7 +57,7 @@ export function markdownValue(value: string): string {
 	return lines.map((line, index) => (index === 0 ? line : `  ${line}`)).join("\n");
 }
 
-export function appendCompletionEvidence(body: string, request: TaskManageRequest): string {
+export function appendCompletionEvidence(body: string, request: TaskCloseRequest): string {
 	const summary = requireNonEmpty(request.summary, "summary");
 	const evidence = requireNonEmpty(request.evidence, "evidence");
 	const lines = [`- Summary: ${markdownValue(summary)}`, `- Evidence: ${markdownValue(evidence)}`];
@@ -68,19 +74,21 @@ function normalizeCreateStatus(status: string | undefined): (typeof SETTABLE_STA
 	throw new RecoverableToolError(`Invalid status "${status}". Use one of ${SETTABLE_STATUSES.join(", ")}.`);
 }
 
-export function renderTaskSkeleton(request: TaskManageRequest): {
+export function renderTaskSkeleton(request: TaskCreateRequest): {
 	fields: TaskFields;
 	body: string;
 } {
-	const title = requiredField(request.title, "title", "create");
-	const goal = requiredField(request.goal, "goal", "create");
-	const dod = requiredField(request.dod, "dod", "create");
 	// Independent verification is opt-in: it is a quality fact, not an external-action policy.
-	const control = applyTaskControlPatch(
-		createDefaultTaskControl(request.control?.verificationRequired ?? false),
-		request.control ?? {},
+	// `deadline`/`verificationRequired` are flattened onto task_create (spec 046, D3.1) — creation
+	// has no `nextAction`/`waitingFor` to set, so there is nothing a nested `control` would add.
+	const control = applyTaskControlPatch(createDefaultTaskControl(request.verificationRequired ?? false), {
+		deadline: request.deadline,
+		verificationRequired: request.verificationRequired,
+	});
+	const fields = applySet(
+		{ status: normalizeCreateStatus(request.status), enabled: true, control },
+		{ status: request.status, wake: request.wake, schedule: request.schedule },
 	);
-	const fields = applySet({ status: normalizeCreateStatus(request.status), enabled: true, control }, request);
 	if (!fields.schedule && fields.status === "sleeping") {
 		throw new RecoverableToolError('A one-shot task cannot use status "sleeping"; create it as active or waiting.');
 	}
@@ -95,9 +103,9 @@ export function renderTaskSkeleton(request: TaskManageRequest): {
 		fields.wake = next ? formatLocalTime(next) : undefined;
 	}
 	const body = renderStandardTaskBody({
-		title,
-		goal,
-		dod,
+		title: request.title,
+		goal: request.goal,
+		dod: request.dod,
 		manual: request.manual,
 		verificationPlan: request.verificationPlan,
 		verificationRequired: control.verification.required,
@@ -109,7 +117,7 @@ export function renderTaskSkeleton(request: TaskManageRequest): {
 /**
  * Read a task file and split it into validated frontmatter and a verbatim body.
  * Fail-closed: an unreadable frontmatter block is rejected (fix it with edit first)
- * rather than guessed at, so task_manage never silently mangles a body.
+ * rather than guessed at, so these tools never silently mangle a body.
  */
 export async function readTaskDocument(
 	taskPath: string,
@@ -117,18 +125,18 @@ export async function readTaskDocument(
 	allowControlRepair = false,
 ): Promise<{ fields: TaskFields; body: string }> {
 	if (!existsSync(taskPath)) {
-		throw new RecoverableToolError(`Task "${id}" does not exist; create it with task_manage action "create" first.`);
+		throw new RecoverableToolError(`Task "${id}" does not exist; create it with task_create first.`);
 	}
 	const content = await readFile(taskPath, "utf-8");
 	const frontmatter = parseTaskFrontmatter(content);
 	if (!frontmatter.readable) {
 		throw new RecoverableToolError(
-			`Task "${id}" has no readable frontmatter; fix it with edit before using task_manage.`,
+			`Task "${id}" has no readable frontmatter; fix it with edit before using task_update.`,
 		);
 	}
 	if (frontmatter.controlReadable === false && !allowControlRepair) {
 		throw new RecoverableToolError(
-			`Task "${id}" has invalid control metadata; repair it with task_manage action "set" and an explicit control patch first.`,
+			`Task "${id}" has invalid control metadata; repair it with task_update (no note) and an explicit control patch first.`,
 		);
 	}
 	return {
@@ -137,8 +145,8 @@ export async function readTaskDocument(
 			enabled: frontmatter.enabled,
 			wake: frontmatter.wake,
 			schedule: frontmatter.schedule,
-			// A successful task_manage write upgrades a hand-written/v0 task to the v2
-			// control contract instead of preserving an ungoverned task indefinitely.
+			// A successful write upgrades a hand-written/v0 task to the v2 control contract
+			// instead of preserving an ungoverned task indefinitely.
 			control: frontmatter.control ?? createDefaultTaskControl(),
 			outcome: frontmatter.archiveOutcome,
 			closedAt: frontmatter.closedAt,
@@ -164,13 +172,16 @@ export function describeTaskSchedule(fields: TaskFields): string {
 	return `status: ${fields.status}${fields.wake ? `, wake: ${fields.wake}` : ""}`;
 }
 
-/** Apply a `set` request's optional fields onto the existing frontmatter. */
-export function applySet(fields: TaskFields, request: TaskManageRequest): TaskFields {
+/** Apply a metadata patch (status/wake/schedule/control) onto the existing frontmatter. */
+export function applySet(
+	fields: TaskFields,
+	request: Pick<TaskUpdateRequest, "status" | "wake" | "schedule" | "control">,
+): TaskFields {
 	const next: TaskFields = { ...fields };
 	if (request.status !== undefined) {
 		if (!isSettableTaskStatus(request.status)) {
 			throw new RecoverableToolError(
-				`Invalid status "${request.status}". Use one of ${SETTABLE_STATUSES.join(", ")}, or action "complete".`,
+				`Invalid status "${request.status}". Use one of ${SETTABLE_STATUSES.join(", ")}, or task_close.`,
 			);
 		}
 		next.status = request.status;

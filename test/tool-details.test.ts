@@ -41,19 +41,19 @@ function tool(execute: AgentTool<typeof schema>["execute"]): AgentTool<typeof sc
 }
 
 async function run(inner: AgentTool<typeof schema>["execute"]) {
-	return withToolDetails(tool(inner), "task_manage").execute("call-1", { label: "l" });
+	return withToolDetails(tool(inner), "task_update").execute("call-1", { label: "l" });
 }
 
 describe("details contract", () => {
 	it("stamps the registered kind onto every result shape it wraps", async () => {
 		const unstamped = await run(async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }));
-		expect(toolResultDetails(unstamped)).toEqual({ kind: "task_manage" });
+		expect(toolResultDetails(unstamped)).toEqual({ kind: "task_update" });
 
 		const withFields = await run(async () => ({
 			content: [{ type: "text", text: "ok" }],
 			details: { op: "list", count: 3 },
 		}));
-		expect(withFields.details).toEqual({ op: "list", count: 3, kind: "task_manage" });
+		expect(withFields.details).toEqual({ op: "list", count: 3, kind: "task_update" });
 
 		// Guards the drift this contract exists to prevent: a hand-written kind can no longer
 		// disagree with the name the tool is registered under.
@@ -61,7 +61,7 @@ describe("details contract", () => {
 			content: [{ type: "text", text: "ok" }],
 			details: { kind: "something_stale" },
 		}));
-		expect(toolResultDetails(staleKind)?.kind).toBe("task_manage");
+		expect(toolResultDetails(staleKind)?.kind).toBe("task_update");
 	});
 
 	it("reads no details off a malformed or absent result", () => {
@@ -80,7 +80,7 @@ describe("recoverable rejection", () => {
 
 		expect(rejected.content[0]).toEqual({ type: "text", text: 'Rejected: action "create" requires an id.' });
 		expect(isRecoverableRejection(rejected)).toBe(true);
-		expect(toolResultDetails(rejected)?.kind).toBe("task_manage");
+		expect(toolResultDetails(rejected)?.kind).toBe("task_update");
 
 		const ordinary = await run(async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }));
 		expect(isRecoverableRejection(ordinary)).toBe(false);
@@ -136,7 +136,7 @@ function handlerContext(ctx: ChannelContext, runState: RunState): SessionEventHa
 
 async function endEvent(ctx: ChannelContext, result: unknown, isError: boolean) {
 	await handleSessionEvent(
-		{ type: "tool_execution_end", toolCallId: "c1", toolName: "task_manage", result, isError },
+		{ type: "tool_execution_end", toolCallId: "c1", toolName: "task_update", result, isError },
 		handlerContext(ctx, createEmptyRunState()),
 	);
 }
@@ -150,7 +150,7 @@ describe("rejections stay out of the user's chat", () => {
 			ctx,
 			{
 				content: [{ type: "text", text: "Rejected: requires an id." }],
-				details: { kind: "task_manage", recoverable: true },
+				details: { kind: "task_update", recoverable: true },
 			},
 			false,
 		);
@@ -178,7 +178,7 @@ describe("rejections stay out of the user's chat", () => {
 			scopeCtx,
 			{
 				content: [{ type: "text", text: 'Task "x" requires a user decision outside its current scope' }],
-				details: { kind: "task_manage" },
+				details: { kind: "task_update" },
 			},
 			true,
 		);
@@ -191,17 +191,23 @@ describe("rejections stay out of the user's chat", () => {
 });
 
 describe("registry wiring", () => {
-	it("delivers a real task_manage validation failure as a rejection, not a thrown error", async () => {
+	it("delivers a real task_create validation failure as a rejection, not a thrown error", async () => {
 		// End-to-end through buildToolSet: the same call used to reach the user as a red
 		// error bubble mid-turn; it must now come back as data the model can act on.
 		const tools = buildToolSet(registryContext());
-		const taskManage = tools.find((entry) => entry.name === "task_manage");
-		if (!taskManage) throw new Error("task_manage not registered");
+		const taskCreate = tools.find((entry) => entry.name === "task_create");
+		if (!taskCreate) throw new Error("task_create not registered");
 
-		const result = await taskManage.execute("c1", { label: "create", action: "create" });
+		const result = await taskCreate.execute("c1", {
+			label: "create",
+			id: "probe-task",
+			title: "Probe",
+			goal: "Prove the rejection path",
+			dod: "just prose, not a checklist",
+		});
 
 		expect(isRecoverableRejection(result)).toBe(true);
-		expect(JSON.stringify(result.content[0])).toContain("requires an id");
+		expect(JSON.stringify(result.content[0])).toContain("DoD has no checklist items");
 	});
 
 	it("stamps every registry tool's results with its registered name", async () => {

@@ -123,7 +123,7 @@ export const regressionCases: EvalCase[] = [
 				status: "sleeping",
 				wake: "2025-12-31T00:00:00.000Z",
 				schedule: "0 0 * * *",
-				body: "# Task\n\n## Goal\nOn cycle start, record CYCLE-STARTED, then close this evidence-only cycle with task_manage complete. The runtime opens the recurring cycle before dispatch; do not call a cycle-opening action.\n\n## DoD\n- [ ] CYCLE-STARTED recorded\n",
+				body: "# Task\n\n## Goal\nOn cycle start, record CYCLE-STARTED, then close this evidence-only cycle with task_close outcome=complete. The runtime opens the recurring cycle before dispatch; do not call a cycle-opening action.\n\n## DoD\n- [ ] CYCLE-STARTED recorded\n",
 			}),
 		script: [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
@@ -573,6 +573,122 @@ export const regressionCases: EvalCase[] = [
 				(ctx) => ctx.trace.filter((event) => event.kind === "tool-call" && event.tool === "read").length >= 2,
 				"a truncated fixture should be continued with another read call",
 			),
+		],
+	},
+	{
+		id: "T-route-01",
+		suite: "regression",
+		source: "046 tool schema partitioning D5 — checkpoint-routing risk",
+		description:
+			"A routine task-driven wake must end with a task_update checkpoint (note set) carrying a non-empty note, " +
+			"not a bare metadata edit. Guards the D3.5 concern that folding `set` into a differently-named update " +
+			"action could make the model treat every-turn checkpointing as optional.",
+		definitionFile,
+		setup: (ctx) => writeTask(ctx, "route-checkpoint", { body: wakeBody("ROUTE-CHECK-1") }),
+		script: [{ kind: "syntheticTaskTurn", taskId: "route-checkpoint" }],
+		graders: [
+			tracePredicate(
+				"ends-with-noted-checkpoint",
+				(ctx) => {
+					const calls = ctx.trace.filter((event) => event.kind === "tool-call" && event.tool === "task_update");
+					const last = calls[calls.length - 1];
+					if (!last) return false;
+					const note = last.fields?.note;
+					return typeof note === "string" && note.trim().length > 0;
+				},
+				"the turn's last task_update call must carry a non-empty note",
+			),
+		],
+	},
+	{
+		id: "T-route-02",
+		suite: "regression",
+		source: "046 tool schema partitioning D5 — set/progress merge discoverability",
+		description:
+			"Facing an unparsable control line, the model must repair it via a metadata-only task_update call " +
+			"(no `note`), not misroute into task_close or a raw `edit` of the frontmatter.",
+		definitionFile,
+		setup: async (ctx) => {
+			const { mkdir, writeFile } = await import("node:fs/promises");
+			const tasksDir = join(ctx.channelDir, "tasks");
+			await mkdir(tasksDir, { recursive: true });
+			await writeFile(
+				join(tasksDir, "route-repair.md"),
+				"---\nstatus: active\nenabled: true\ncontrol: {version:3, this is not valid JSON\n---\n" +
+					"# Task\n\n## Goal\nKeep the goal token ROUTE-REPAIR-1 unchanged.\n\n## Current Cycle\n" +
+					"The control line above is corrupt. Repair it without touching Goal/DoD or the Current Cycle text, " +
+					"and without recording a new checkpoint for this — there is nothing to report yet.\n\n" +
+					"## DoD\n- [ ] ROUTE-REPAIR-1 preserved\n",
+			);
+		},
+		script: [{ kind: "syntheticTaskTurn", taskId: "route-repair" }],
+		graders: [
+			tracePredicate(
+				"repaired-via-metadata-only-task-update",
+				(ctx) =>
+					ctx.trace.some(
+						(event) =>
+							event.kind === "tool-call" &&
+							event.tool === "task_update" &&
+							event.fields?.control !== undefined &&
+							event.fields?.note === undefined,
+					),
+				"control repair must go through a task_update call carrying `control` and no `note`",
+			),
+			tracePredicate(
+				"no-lifecycle-close-out",
+				(ctx) => !ctx.trace.some((event) => event.kind === "tool-call" && event.tool === "task_close"),
+				"a bad control line must not be misrouted into task_close",
+			),
+			taskFrontmatter("goal-token-preserved", "route-repair", (_frontmatter, content) =>
+				/ROUTE-REPAIR-1/.test(content),
+			),
+		],
+	},
+	{
+		id: "A-route-01",
+		suite: "regression",
+		source: "046 tool schema partitioning D5 — role-first delegation",
+		description:
+			"When a matching configured sub-agent already exists, delegation must name it via `agent` rather than " +
+			"redefining an equivalent one-off with an inline `systemPrompt`. Covers the P1 description reversal " +
+			"(role-first over 'default path: inline') ahead of the P2 split into `subagent` / `subagent_inline`.",
+		definitionFile,
+		setup: async (ctx) => {
+			const { mkdir, writeFile } = await import("node:fs/promises");
+			await mkdir(ctx.channelDir, { recursive: true });
+			await writeFile(
+				join(ctx.channelDir, "inventory.txt"),
+				"service: billing\nowner: platform-team\nSECRET-OWNER-TOKEN: OWNER-ROUTE-3\n",
+			);
+			await writeSubAgent(ctx, "eval-scout", {
+				description: "只读查找：在工作区文件中定位一个字段的值并原样返回，不做修改。",
+				tools: ["read"],
+				body: "你是只读查找子代理。读取任务指定的文件，找出被问到的字段，把它的值原样回报。不要修改任何文件，不要给出解释以外的行动。",
+			});
+		},
+		script: [
+			{
+				kind: "user",
+				text: "把下面的只读查找委派给子代理：读取 {{CHANNEL_DIR}}/inventory.txt，找出 SECRET-OWNER-TOKEN 的值，再把子代理的发现告诉我。",
+			},
+		],
+		graders: [
+			tracePredicate(
+				"used-configured-role",
+				(ctx) =>
+					ctx.trace.some(
+						(event) =>
+							event.kind === "tool-call" && event.tool === "subagent" && event.fields?.agent === "eval-scout",
+					),
+				"a matching configured role exists and must be named via `agent`",
+			),
+			tracePredicate(
+				"did-not-redefine-inline",
+				(ctx) => !ctx.trace.some((event) => event.kind === "tool-call" && event.tool === "subagent_inline"),
+				"must not redefine an equivalent one-off agent inline when a configured role already fits",
+			),
+			deliveryMatches("subagent-finding-returned", /OWNER-ROUTE-3/),
 		],
 	},
 ];

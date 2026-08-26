@@ -41,7 +41,7 @@ export interface HandleTasksCommandOptions {
  *
  * Deliberately a small, flat set: the ones a user already knows they want to change (when it
  * should wake, what it should do next, how much rope it has). Everything structural — status
- * transitions and verification — stays with `task_manage`, whose state
+ * transitions and verification — stays with `task_update`/`task_close`/`task_verify`, whose state
  * machine those fields belong to. The value is the rest of the line, so it may contain spaces.
  */
 const SETTABLE_TASK_FIELDS = ["wake", "next", "deadline"] as const;
@@ -315,7 +315,7 @@ export async function resumeTask(options: HandleTasksCommandOptions, idInput: st
  * The alternative — telling the model "change wake to tomorrow 9am" — costs a whole turn and its
  * tokens to reach the same one-line write. Validation is not re-implemented here: `wake` reuses
  * the shared local-time parser (accepting a local timestamp or a relative offset like `+2h`) and
- * everything else goes through `applyTaskControlPatch`, the same function `task_manage set` uses,
+ * everything else goes through `applyTaskControlPatch`, the same function `task_update` (no note) uses,
  * so the two entry points cannot drift apart.
  */
 async function setTaskField(
@@ -463,7 +463,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md 的 control 元数据无效；治理机制 fail-open，但无法生效`,
-					`用 task_manage set 或直接修复那一行 control JSON，然后再允许任务运行`,
+					`用 task_update（不带 note）或直接修复那一行 control JSON，然后再允许任务运行`,
 				),
 			);
 			continue;
@@ -474,7 +474,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md 已停用，但完全没有 control.stop 回执`,
-					`用 task_manage set 修复 control 元数据，确认可以继续后再 /tasks resume ${entry.id}`,
+					`用 task_update（不带 note）修复 control 元数据，确认可以继续后再 /tasks resume ${entry.id}`,
 				),
 			);
 		}
@@ -504,7 +504,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					issues.push(
 						issue(
 							`tasks/${entry.id}.md 记录了一次独立 PASS，但磁盘上没有匹配且新鲜的验证 attestation`,
-							`跑一次新的 purpose=verify 子代理，并用 task_manage verify 导入它的 attestation 后再完成`,
+							`跑一次新的 purpose=verify 子代理，并用 task_verify 导入它的 attestation 后再完成`,
 						),
 					);
 				}
@@ -513,7 +513,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				issues.push(
 					issue(
 						`tasks/${entry.id}.md 已停用，但 control 里没有 stop 回执`,
-						`先弄清是谁停用的，再 /tasks resume ${entry.id}；或者用 task_manage set 写一条合法的 stop 记录`,
+						`先弄清是谁停用的，再 /tasks resume ${entry.id}；或者用 task_update（不带 note）写一条合法的 stop 记录`,
 					),
 				);
 			}
@@ -532,7 +532,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md 处于 sleeping，但没有 recurring schedule`,
-					`一次性任务用 task_manage complete/cancel 结束；要保留 sleeping 需要先加一个合法的 schedule`,
+					`一次性任务用 task_close outcome=complete/cancel 结束；要保留 sleeping 需要先加一个合法的 schedule`,
 				),
 			);
 		}
@@ -565,7 +565,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md 处于 active，但它的 wake 在未来`,
-					`用 task_manage set/progress 把它改成 waiting 且 waitingFor=time，或者清空 wake 让它现在继续`,
+					`用 task_update 把它改成 waiting 且 waitingFor=time，或者清空 wake 让它现在继续`,
 				),
 			);
 		}
@@ -649,7 +649,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 			issues.push(
 				issue(
 					`tasks/${entry.id}.md 的 wake 值无效（${entry.frontmatter.wake}）；原生 driver 会把它当成已到期处理`,
-					`用 task_manage set 或 progress 把 wake 换成合法本地时间，或者清空它让任务直接继续`,
+					`用 task_update 把 wake 换成合法本地时间，或者清空它让任务直接继续`,
 				),
 			);
 		}
@@ -667,7 +667,7 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 					issues.push(
 						issue(
 							`tasks/${entry.id}.md 的 wake（${formatLocalTime(new Date(wakeMs))}）不是它 schedule "${schedule}" 的一个合法时点`,
-							`跑 task_manage set schedule="${schedule}"（不变）用 cron 重新计算 wake，或者手动明确设置 wake`,
+							`跑 task_update schedule="${schedule}"（不变）用 cron 重新计算 wake，或者手动明确设置 wake`,
 						),
 					);
 				}

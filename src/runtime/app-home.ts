@@ -130,7 +130,7 @@ const TOOLS_CONFIG_TEMPLATE = {
 		"Set tools.web.enable to true to register web_search and web_fetch.",
 		"Replace tools.web.search.apiKey with your Brave API key before enabling web tools.",
 		"If needed, copy _examples.proxy to tools.web.proxy.",
-		"tools.tasks.enabled is the master switch for autonomous long-running tasks (task_manage tool + task driver + task digest).",
+		"tools.tasks.enabled is the master switch for autonomous long-running tasks (task_* tools + task driver + task digest).",
 	],
 };
 

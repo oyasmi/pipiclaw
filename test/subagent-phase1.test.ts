@@ -9,12 +9,12 @@ import { createFileStore } from "../src/file-store.js";
 import {
 	discoverSubAgents,
 	getSubAgentsDir,
-	resolveSubAgentConfig,
+	resolveConfiguredRole,
+	resolveInlineAgent,
 	SUB_AGENT_EFFORT_PRESETS,
-	SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC,
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
-import { createSubAgentTool } from "../src/subagents/tool.js";
+import { createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
 import { readVerificationAttestation } from "../src/tasks/verification.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -195,12 +195,12 @@ ${"x".repeat(16001)}`,
 		const discovery = discoverSubAgents(workspaceDir, [model]);
 		expect(discovery.agents.filter((agent) => agent.source === "predefined")).toHaveLength(0);
 		expect(discovery.warnings[0]).toContain("exceeds 16000 characters");
-		expect(resolveSubAgentConfig([model], model, [], { systemPrompt: "x".repeat(16001) }).error).toContain(
+		expect(resolveInlineAgent([model], model, { systemPrompt: "x".repeat(16001) }).error).toContain(
 			"Inline sub-agent systemPrompt exceeds 16000 characters",
 		);
 	});
 
-	it("parses YAML arrays/numerics and contextual frontmatter, applying inline overrides on resolve", () => {
+	it("parses YAML arrays/numerics and contextual frontmatter, carried through to a resolved role unmodified", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
@@ -244,76 +244,69 @@ Review files carefully.`,
 			bashTimeoutSec: 30,
 		});
 
-		const resolved = resolveSubAgentConfig([model], model, discovery.agents, {
-			agent: "reviewer",
-			context: "relevant",
-			paths: ["src/extra.ts"],
-		});
+		// Spec 046, D2.1: `subagent` (role-based) has no context/paths override at all — a resolved
+		// configured role carries its role file's own contextMode/memory/paths through unmodified.
+		const resolved = resolveConfiguredRole([model], model, discovery.agents, { agent: "reviewer" });
 		expect(resolved.error).toBeUndefined();
 		expect(resolved.config).toMatchObject({
 			contextMode: "contextual",
-			memory: "relevant",
-			paths: ["src/extra.ts"],
+			memory: "session",
+			paths: ["src/core.ts", "test/core.test.ts"],
 		});
 	});
 
-	it("maps each context choice onto the frontmatter contextMode/memory pair", () => {
+	it("maps each context choice onto the frontmatter contextMode/memory pair (inline)", () => {
 		const cases = [
 			{ context: "none", contextMode: "isolated", memory: "none" },
 			{ context: "session", contextMode: "contextual", memory: "session" },
 			{ context: "relevant", contextMode: "contextual", memory: "relevant" },
 		] as const;
 		for (const { context, contextMode, memory } of cases) {
-			const resolved = resolveSubAgentConfig([model], model, [], {
-				systemPrompt: "Work",
-				context,
-			});
+			const resolved = resolveInlineAgent([model], model, { systemPrompt: "Work", context });
 			expect(resolved.config).toMatchObject({ contextMode, memory });
 		}
 
-		// An unset context leaves a predefined agent's frontmatter pair untouched.
-		const inherited = resolveSubAgentConfig(
+		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", context: "everything" }).error).toContain(
+			'Unknown context "everything"',
+		);
+	});
+
+	it("a configured role's context/memory pair is always its own frontmatter — there is no override", () => {
+		const inherited = resolveConfiguredRole(
 			[model],
 			model,
 			[makeSubAgentConfig({ contextMode: "contextual", memory: "session" })],
 			{ agent: "reviewer" },
 		);
 		expect(inherited.config).toMatchObject({ contextMode: "contextual", memory: "session" });
-
-		expect(
-			resolveSubAgentConfig([model], model, [], { systemPrompt: "Work", context: "everything" }).error,
-		).toContain('Unknown context "everything"');
 	});
 
-	it("applies effort presets as whole tuples, overriding frontmatter budgets", () => {
-		const budgeted = makeSubAgentConfig({ maxTurns: 5, maxToolCalls: 6, maxWallTimeSec: 7, bashTimeoutSec: 8 });
+	it("applies effort presets as whole tuples for an inline delegation", () => {
+		// standard is byte-identical to the built-in defaults an unconfigured inline agent gets.
+		const inlineDefault = resolveInlineAgent([model], model, { systemPrompt: "Work" }).config;
+		expect(inlineDefault).toMatchObject(SUB_AGENT_EFFORT_PRESETS.standard);
 
-		// No effort: the frontmatter numbers survive untouched.
-		expect(resolveSubAgentConfig([model], model, [budgeted], { agent: "reviewer" }).config).toMatchObject({
+		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", effort: "quick" }).config).toMatchObject(
+			SUB_AGENT_EFFORT_PRESETS.quick,
+		);
+		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", effort: "deep" }).config).toMatchObject(
+			SUB_AGENT_EFFORT_PRESETS.deep,
+		);
+
+		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", effort: "extreme" }).error).toContain(
+			'Unknown effort "extreme"',
+		);
+	});
+
+	it("a configured role's budget is always its own frontmatter numbers — there is no effort override", () => {
+		const budgeted = makeSubAgentConfig({ maxTurns: 5, maxToolCalls: 6, maxWallTimeSec: 7, bashTimeoutSec: 8 });
+		expect(resolveConfiguredRole([model], model, [budgeted], { agent: "reviewer" }).config).toMatchObject({
 			maxTurns: 5,
 			maxToolCalls: 6,
 			maxWallTimeSec: 7,
 			bashTimeoutSec: 8,
 		});
 
-		// An explicit effort replaces every budget field, not just the ones it happens to differ on.
-		expect(
-			resolveSubAgentConfig([model], model, [budgeted], { agent: "reviewer", effort: "quick" }).config,
-		).toMatchObject(SUB_AGENT_EFFORT_PRESETS.quick);
-		expect(
-			resolveSubAgentConfig([model], model, [budgeted], { agent: "reviewer", effort: "deep" }).config,
-		).toMatchObject(SUB_AGENT_EFFORT_PRESETS.deep);
-
-		// standard is byte-identical to the built-in defaults an unconfigured inline agent gets.
-		const inlineDefault = resolveSubAgentConfig([model], model, [], { systemPrompt: "Work" }).config;
-		expect(inlineDefault).toMatchObject(SUB_AGENT_EFFORT_PRESETS.standard);
-
-		expect(resolveSubAgentConfig([model], model, [], { systemPrompt: "Work", effort: "extreme" }).error).toContain(
-			'Unknown effort "extreme"',
-		);
-	});
-
-	it("external effort only moves maxWallTimeSec, at external scale, not the internal tuple (P1-3)", () => {
 		const externalRole: SubAgentConfig = {
 			name: "builder",
 			description: "build things",
@@ -332,61 +325,53 @@ Review files carefully.`,
 			command: "codex exec",
 			mutates: "read",
 		};
-
-		// No effort: the role's own maxWallTimeSec survives untouched.
-		expect(resolveSubAgentConfig([model], model, [externalRole], { agent: "builder" }).config).toMatchObject({
+		expect(resolveConfiguredRole([model], model, [externalRole], { agent: "builder" }).config).toMatchObject({
 			maxWallTimeSec: 1800,
-		});
-
-		// quick/deep move only maxWallTimeSec, to external-scale numbers -- not
-		// SUB_AGENT_EFFORT_PRESETS.deep's 900s, which used to leak onto external roles and was
-		// actually *shorter* than the external default.
-		expect(
-			resolveSubAgentConfig([model], model, [externalRole], { agent: "builder", effort: "quick" }).config,
-		).toMatchObject({
-			maxWallTimeSec: SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC.quick,
 			maxTurns: 24,
 			maxToolCalls: 48,
 			bashTimeoutSec: 120,
 		});
-		expect(
-			resolveSubAgentConfig([model], model, [externalRole], { agent: "builder", effort: "deep" }).config
-				?.maxWallTimeSec,
-		).toBe(SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC.deep);
-		expect(SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC.deep).toBeGreaterThan(
-			SUB_AGENT_EFFORT_PRESETS.deep.maxWallTimeSec,
-		);
-
-		// standard keeps the role's own maxWallTimeSec, same as no effort at all.
-		expect(
-			resolveSubAgentConfig([model], model, [externalRole], { agent: "builder", effort: "standard" }).config
-				?.maxWallTimeSec,
-		).toBe(1800);
 	});
 
-	it("resolves the sub-agent model in priority order: invocation > frontmatter > settings default > parent", () => {
+	it("inline: resolves the model in priority order: invocation > settings default > parent", () => {
 		const availableModels = [model, altModel];
 
-		// No invocation model, no frontmatter model, no settings default: falls back to the parent's model.
-		const parentFallback = resolveSubAgentConfig(availableModels, model, [], {
-			name: "worker",
-			systemPrompt: "Do the work",
-		});
+		// No invocation model, no settings default: falls back to the parent's model.
+		const parentFallback = resolveInlineAgent(availableModels, model, { systemPrompt: "Do the work" });
 		expect(parentFallback.config?.model).toBe(model);
 
 		// settings.subagentModel wins over the parent when nothing more specific is set.
-		const settingsDefault = resolveSubAgentConfig(
+		const settingsDefault = resolveInlineAgent(
 			availableModels,
 			model,
-			[],
-			{ name: "worker", systemPrompt: "Do the work" },
+			{ systemPrompt: "Do the work" },
 			"openai/gpt-4o",
 		);
 		expect(settingsDefault.config?.model).toBe(altModel);
 
-		// A predefined agent's frontmatter model wins over the settings default.
+		// The invocation's own `model` param wins over everything else.
+		const invocationWins = resolveInlineAgent(
+			availableModels,
+			model,
+			{ systemPrompt: "Do the work", model: "openai/gpt-4o" },
+			"openai/gpt-4o",
+		);
+		expect(invocationWins.config?.model).toBe(altModel);
+
+		// A settings default that doesn't resolve is a clear error, not a silent fallback.
+		const badDefault = resolveInlineAgent(
+			availableModels,
+			model,
+			{ systemPrompt: "Do the work" },
+			"openai/does-not-exist",
+		);
+		expect(badDefault.error).toContain("was not found among available models");
+	});
+
+	it("configured role: the role file's own model wins over the settings default; there is no invocation override", () => {
+		const availableModels = [model, altModel];
 		const withFrontmatterModel = makeSubAgentConfig();
-		const frontmatterWins = resolveSubAgentConfig(
+		const frontmatterWins = resolveConfiguredRole(
 			availableModels,
 			altModel,
 			[withFrontmatterModel],
@@ -394,26 +379,6 @@ Review files carefully.`,
 			"openai/gpt-4o",
 		);
 		expect(frontmatterWins.config?.model).toBe(model);
-
-		// The invocation's own `model` param wins over everything else.
-		const invocationWins = resolveSubAgentConfig(
-			availableModels,
-			model,
-			[withFrontmatterModel],
-			{ agent: "reviewer", model: "openai/gpt-4o" },
-			"openai/gpt-4o",
-		);
-		expect(invocationWins.config?.model).toBe(altModel);
-
-		// A settings default that doesn't resolve is a clear error, not a silent fallback.
-		const badDefault = resolveSubAgentConfig(
-			availableModels,
-			model,
-			[],
-			{ name: "worker", systemPrompt: "Do the work" },
-			"openai/does-not-exist",
-		);
-		expect(badDefault.error).toContain("was not found among available models");
 	});
 });
 
@@ -424,7 +389,7 @@ describe("sub-agent tool", () => {
 		mkdirSync(join(channelDir, "tasks"), { recursive: true });
 		writeFileSync(join(channelDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
 		let delegatedTask = "";
-		const tool = createSubAgentTool({
+		const tool = createSubAgentInlineTool({
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -443,7 +408,6 @@ describe("sub-agent tool", () => {
 		});
 
 		const result = await tool.execute("verify-call-1", {
-			name: "independent-verifier",
 			systemPrompt: "Verify evidence independently.",
 			tools: ["read", "bash"],
 			task: "Run the acceptance plan.",
@@ -631,7 +595,7 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 		const channelDir = join(workspaceDir, "dm_123");
 		mkdirSync(channelDir, { recursive: true });
 		let usedModel: Model<Api> | undefined;
-		const tool = createSubAgentTool({
+		const tool = createSubAgentInlineTool({
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -652,7 +616,6 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 		});
 
 		await tool.execute("call-3", {
-			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Find the entrypoint.",
 		});
@@ -667,7 +630,7 @@ describe("sub-agent artifact contract (D4)", () => {
 		channelDir: string,
 		respond: (input: string, worker: FakeWorker) => Promise<void> | void,
 	) {
-		return createSubAgentTool({
+		return createSubAgentInlineTool({
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -693,7 +656,6 @@ describe("sub-agent artifact contract (D4)", () => {
 		});
 
 		const result = await tool.execute("artifact-call-1", {
-			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Find the entrypoint.",
 		});
@@ -705,51 +667,9 @@ describe("sub-agent artifact contract (D4)", () => {
 		expect(result.details.resultTruncated).toBe(false);
 	});
 
-	it("parses the ARTIFACT: marker when returns=artifact", async () => {
-		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
-		let delegatedTask = "";
-		const tool = makeTool(workspaceDir, channelDir, (input, worker) => {
-			delegatedTask = input;
-			const message = createAssistantMessage("Findings written.\nARTIFACT: findings.md");
-			worker.state.messages = [message];
-			worker.emit({ type: "message_end", message });
-		});
-
-		const result = await tool.execute("artifact-call-2", {
-			name: "explorer",
-			systemPrompt: "Explore the codebase.",
-			task: "Find the entrypoint.",
-			returns: "artifact",
-		});
-
-		expect(delegatedTask).toContain("ARTIFACT: <filename>");
-		expect(result.details.artifactPath).toBe(join(result.details.artifactDir, "findings.md"));
-	});
-
-	it("downgrades to plain text when returns=artifact but the marker is missing", async () => {
-		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_123");
-		mkdirSync(channelDir, { recursive: true });
-		const tool = makeTool(workspaceDir, channelDir, (_input, worker) => {
-			const message = createAssistantMessage("Findings written, but I forgot the marker.");
-			worker.state.messages = [message];
-			worker.emit({ type: "message_end", message });
-		});
-
-		const result = await tool.execute("artifact-call-3", {
-			name: "explorer",
-			systemPrompt: "Explore the codebase.",
-			task: "Find the entrypoint.",
-			returns: "artifact",
-		});
-
-		expect(result.details.artifactPath).toBeUndefined();
-		expect(result.content[0] && "text" in result.content[0] ? result.content[0].text : "").toContain(
-			"Findings written, but I forgot the marker.",
-		);
-	});
+	// Spec 046, D2.2: `returns: "artifact"` and the ARTIFACT: marker protocol are gone — a caller
+	// that needs a specific output file states the path in the task text instead. `output.md`
+	// (spec 032 D4) still unconditionally captures the full output, covered above and below.
 
 	it("truncates an over-budget reply but keeps the full text on disk", async () => {
 		const workspaceDir = createTempWorkspace();
@@ -763,7 +683,6 @@ describe("sub-agent artifact contract (D4)", () => {
 		});
 
 		const result = await tool.execute("artifact-call-4", {
-			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Summarize the whole repo.",
 		});
@@ -980,7 +899,7 @@ describe("sub-agent convergence turn (D6)", () => {
  */
 describe("sub-agent working directory", () => {
 	function makeTool(workspaceDir: string, channelDir: string, executor: Executor) {
-		return createSubAgentTool({
+		return createSubAgentInlineTool({
 			executor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -1012,7 +931,7 @@ describe("sub-agent working directory", () => {
 			},
 		};
 		let delegatedTask = "";
-		const tool = createSubAgentTool({
+		const tool = createSubAgentInlineTool({
 			executor: recording,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -1035,7 +954,6 @@ describe("sub-agent working directory", () => {
 		});
 
 		await tool.execute("wd-call-1", {
-			name: "explorer",
 			systemPrompt: "Explore.",
 			task: "Look around.",
 			workingDirectory: checkout,
@@ -1054,7 +972,6 @@ describe("sub-agent working directory", () => {
 
 		await expect(
 			tool.execute("wd-call-2", {
-				name: "explorer",
 				systemPrompt: "Explore.",
 				task: "Look around.",
 				workingDirectory: join(workspaceDir, "nope"),
@@ -1071,7 +988,7 @@ describe("sub-agent working directory", () => {
 		mkdirSync(channelDir, { recursive: true });
 		mkdirSync(join(projectRoot, "nested"), { recursive: true });
 		mkdirSync(outsideDir, { recursive: true });
-		const tool = createSubAgentTool({
+		const tool = createSubAgentInlineTool({
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -1092,7 +1009,6 @@ describe("sub-agent working directory", () => {
 
 		await expect(
 			tool.execute("wd-call-3", {
-				name: "explorer",
 				systemPrompt: "Explore.",
 				task: "Look around.",
 				workingDirectory: outsideDir,
@@ -1102,7 +1018,6 @@ describe("sub-agent working directory", () => {
 		// A subdirectory of the project root is still fine.
 		await expect(
 			tool.execute("wd-call-4", {
-				name: "explorer",
 				systemPrompt: "Explore.",
 				task: "Look around.",
 				workingDirectory: join(projectRoot, "nested"),

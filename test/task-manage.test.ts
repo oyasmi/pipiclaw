@@ -11,8 +11,10 @@ import { renderStandardTaskBody } from "../src/tasks/ledger.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { nextTaskWake } from "../src/tasks/task-schedule.js";
 import { writeVerificationAttestation } from "../src/tasks/verification.js";
-import { parseAction } from "../src/tools/task-manage/schema.js";
-import { manageTask, type TaskManageRequest, type TaskManageToolOptions } from "../src/tools/task-manage.js";
+import { createTask } from "../src/tools/task-manage/create.js";
+import { closeTask, updateTask } from "../src/tools/task-manage/lifecycle.js";
+import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
+import { verifyTask } from "../src/tools/task-manage/verification.js";
 
 const CHANNEL_ID = "dm_1";
 const STANDARD_BODY = renderStandardTaskBody({
@@ -26,7 +28,7 @@ function doc(front: string, body = STANDARD_BODY): string {
 	return `---\n${front}\n---\n\n${body}`;
 }
 
-describe("task_manage v3", () => {
+describe("task_create/task_update/task_close/task_verify (spec 046, D3)", () => {
 	let workspaceDir: string;
 	let channelDir: string;
 	let tasksDir: string;
@@ -49,20 +51,18 @@ describe("task_manage v3", () => {
 		await writeFile(join(tasksDir, `${id}.md`), doc(front, body));
 	}
 
-	async function createOneShot(id = "work", control?: TaskManageRequest["control"]): Promise<void> {
-		await manageTask(options, {
-			action: "create",
+	async function createOneShot(id = "work", verificationRequired?: boolean): Promise<void> {
+		await createTask(options, {
 			id,
 			title: "Work",
 			goal: "Do the work.",
 			dod: "- [x] Result is ready",
-			control,
+			verificationRequired,
 		});
 	}
 
 	it("creates recurring work sleeping with its first occurrence and no dispatch", async () => {
-		const result = await manageTask(options, {
-			action: "create",
+		const result = await createTask(options, {
 			id: "weekly",
 			title: "Weekly",
 			goal: "Run weekly.",
@@ -76,25 +76,16 @@ describe("task_manage v3", () => {
 		expect(stored).not.toContain('"cycleId"');
 	});
 
-	it("rejects sleeping for a one-shot task and rejects retired action names", async () => {
+	it("rejects sleeping for a one-shot task", async () => {
 		await expect(
-			manageTask(options, {
-				action: "create",
-				id: "bad",
-				title: "Bad",
-				goal: "G",
-				dod: "- [ ] D",
-				status: "sleeping",
-			}),
+			createTask(options, { id: "bad", title: "Bad", goal: "G", dod: "- [ ] D", status: "sleeping" }),
 		).rejects.toThrow(/one-shot/);
-		expect(() => parseAction("approve")).toThrow(/Unsupported task action/);
 	});
 
-	it("progresses active work and normalizes a future wake to waiting", async () => {
+	it("checkpoints active work (task_update with note) and normalizes a future wake to waiting", async () => {
 		await createOneShot("progress");
 		const futureWake = formatLocalTime(new Date(Date.now() + 24 * 60 * 60 * 1000));
-		const result = await manageTask(options, {
-			action: "progress",
+		const result = await updateTask(options, {
 			id: "progress",
 			note: "Build complete; wait for the scheduled check.",
 			wake: futureWake,
@@ -106,10 +97,9 @@ describe("task_manage v3", () => {
 	});
 
 	it("imports a real verifier attestation and then completes without approval", async () => {
-		await createOneShot("verified", { verificationRequired: true });
+		await createOneShot("verified", true);
 		// Parked the same way any other delegation parks — no special "verification" status.
-		await manageTask(options, {
-			action: "progress",
+		await updateTask(options, {
 			id: "verified",
 			note: "Dispatched an independent purpose=verify sub-agent.",
 			status: "waiting",
@@ -123,19 +113,15 @@ describe("task_manage v3", () => {
 			workspaceChanged: false,
 			verificationStrength: "enforced",
 		});
-		const verified = await manageTask(options, {
-			action: "verify",
-			id: "verified",
-			verifierRunId: attestation.runId,
-		});
+		const verified = await verifyTask(options, { id: "verified", verifierRunId: attestation.runId });
 		expect(verified.status).toBe("active");
-		const completed = await manageTask(options, {
-			action: "complete",
+		const completed = await closeTask(options, {
 			id: "verified",
+			outcome: "complete",
 			summary: "Result is complete.",
 			evidence: "Independent verifier run-1 passed.",
 		});
-		expect(completed).toMatchObject({ action: "complete", archived: true });
+		expect(completed).toMatchObject({ action: "close", archived: true });
 		const archive = join(tasksDir, "archive", "verified.md");
 		expect(existsSync(archive)).toBe(true);
 		const archived = await readFile(archive, "utf-8");
@@ -152,10 +138,9 @@ describe("task_manage v3", () => {
 		execFileSync("git", ["-C", subjectDir, "add", "artifact.txt"], { stdio: "pipe" });
 		execFileSync("git", ["-C", subjectDir, "commit", "-q", "-m", "init"], { stdio: "pipe" });
 
-		await createOneShot("subject-drift", { verificationRequired: true });
+		await createOneShot("subject-drift", true);
 		const withSubject = { ...options, workingDirectory: subjectDir };
-		await manageTask(withSubject, {
-			action: "progress",
+		await updateTask(withSubject, {
 			id: "subject-drift",
 			note: "Dispatched an independent purpose=verify sub-agent.",
 			status: "waiting",
@@ -173,11 +158,7 @@ describe("task_manage v3", () => {
 			subjectDir,
 			verificationStrength: "enforced",
 		});
-		await manageTask(withSubject, {
-			action: "verify",
-			id: "subject-drift",
-			verifierRunId: attestation.runId,
-		});
+		await verifyTask(withSubject, { id: "subject-drift", verifierRunId: attestation.runId });
 
 		// The artifact drifts after verify. There is no mirrored subjectHash left in control to
 		// tamper with — freshness is checked straight off the attestation file every time.
@@ -185,9 +166,9 @@ describe("task_manage v3", () => {
 		const taskPath = join(tasksDir, "subject-drift.md");
 
 		await expect(
-			manageTask(withSubject, {
-				action: "complete",
+			closeTask(withSubject, {
 				id: "subject-drift",
+				outcome: "complete",
 				summary: "Result is complete.",
 				evidence: "Independent verifier passed before the subject drifted.",
 			}),
@@ -197,9 +178,9 @@ describe("task_manage v3", () => {
 
 	it("completes one-shot work directly into the archive", async () => {
 		await createOneShot("done");
-		const result = await manageTask(options, {
-			action: "complete",
+		const result = await closeTask(options, {
 			id: "done",
+			outcome: "complete",
 			summary: "Finished.",
 			evidence: "The checked DoD item is present.",
 		});
@@ -226,9 +207,9 @@ describe("task_manage v3", () => {
 		await writeFile(ownEvent, eventBody);
 		await writeFile(siblingEvent, eventBody);
 
-		await manageTask(options, {
-			action: "complete",
+		await closeTask(options, {
 			id: "v1",
+			outcome: "complete",
 			summary: "Finished.",
 			evidence: "The checked DoD item is present.",
 		});
@@ -239,9 +220,9 @@ describe("task_manage v3", () => {
 
 	it("closes recurring complete and skip as sleeping, not as live terminal states", async () => {
 		await writeTask("complete-cycle", "status: active\nschedule: 0 9 * * 1");
-		const completed = await manageTask(options, {
-			action: "complete",
+		const completed = await closeTask(options, {
 			id: "complete-cycle",
+			outcome: "complete",
 			summary: "Cycle complete.",
 			evidence: "All checks passed.",
 		});
@@ -254,9 +235,9 @@ describe("task_manage v3", () => {
 			"skip-cycle",
 			`status: active\nschedule: 0 9 * * 1\ncontrol: ${JSON.stringify(createDefaultTaskControl())}`,
 		);
-		const skipped = await manageTask(options, {
-			action: "skip",
+		const skipped = await closeTask(options, {
 			id: "skip-cycle",
+			outcome: "skip",
 			reason: "The source report was not produced.",
 		});
 		expect(skipped).toMatchObject({ status: "sleeping", archived: false });
@@ -267,17 +248,17 @@ describe("task_manage v3", () => {
 
 	it("cancels a sleeping recurring task into a cancelled archive", async () => {
 		await writeTask("cancel-cycle", "status: sleeping\nschedule: 0 9 * * 1\nwake: 2026-08-10T09:00:00+08:00");
-		const result = await manageTask(options, { action: "cancel", id: "cancel-cycle", reason: "No longer needed." });
+		const result = await closeTask(options, { id: "cancel-cycle", outcome: "cancel", reason: "No longer needed." });
 		expect(result).toMatchObject({ archived: true });
 		expect(await readFile(join(tasksDir, "archive", "cancel-cycle.md"), "utf-8")).toContain("outcome: cancelled");
 	});
 
 	it("keeps task ids and document sections strict", async () => {
-		await expect(
-			manageTask(options, { action: "create", id: "bad/id", title: "Bad", goal: "G", dod: "- [ ] D" }),
-		).rejects.toThrow(/Invalid task id/);
-		await expect(
-			manageTask(options, { action: "create", id: "no-dod", title: "No DoD", goal: "G", dod: "prose" }),
-		).rejects.toThrow(/no checklist items/);
+		await expect(createTask(options, { id: "bad/id", title: "Bad", goal: "G", dod: "- [ ] D" })).rejects.toThrow(
+			/Invalid task id/,
+		);
+		await expect(createTask(options, { id: "no-dod", title: "No DoD", goal: "G", dod: "prose" })).rejects.toThrow(
+			/no checklist items/,
+		);
 	});
 });

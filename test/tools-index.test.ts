@@ -16,8 +16,13 @@ const {
 	createMemoryManageToolMock,
 	createSkillToolMock,
 	createEventManageToolMock,
-	createTaskManageToolMock,
+	createTaskListToolMock,
+	createTaskCreateToolMock,
+	createTaskUpdateToolMock,
+	createTaskCloseToolMock,
+	createTaskVerifyToolMock,
 	createSubAgentToolMock,
+	createSubAgentInlineToolMock,
 	createSubAgentManageToolMock,
 } = vi.hoisted(() => ({
 	createReadToolMock: vi.fn(() => ({ name: "read" })),
@@ -32,8 +37,13 @@ const {
 	createMemoryManageToolMock: vi.fn(() => ({ name: "memory_manage" })),
 	createSkillToolMock: vi.fn(() => ({ name: "skill" })),
 	createEventManageToolMock: vi.fn(() => ({ name: "event_manage" })),
-	createTaskManageToolMock: vi.fn(() => ({ name: "task_manage" })),
+	createTaskListToolMock: vi.fn(() => ({ name: "task_list" })),
+	createTaskCreateToolMock: vi.fn(() => ({ name: "task_create" })),
+	createTaskUpdateToolMock: vi.fn(() => ({ name: "task_update" })),
+	createTaskCloseToolMock: vi.fn(() => ({ name: "task_close" })),
+	createTaskVerifyToolMock: vi.fn(() => ({ name: "task_verify" })),
 	createSubAgentToolMock: vi.fn(() => ({ name: "subagent" })),
+	createSubAgentInlineToolMock: vi.fn(() => ({ name: "subagent_inline" })),
 	createSubAgentManageToolMock: vi.fn(() => ({ name: "subagent_manage" })),
 }));
 
@@ -94,6 +104,9 @@ const toolsConfig = {
 		rtk: {
 			enabled: false,
 		},
+		subagentInline: {
+			enabled: true,
+		},
 	},
 };
 
@@ -109,8 +122,17 @@ vi.mock("../src/tools/session-search.js", () => ({ createSessionSearchTool: crea
 vi.mock("../src/tools/memory-manage.js", () => ({ createMemoryManageTool: createMemoryManageToolMock }));
 vi.mock("../src/tools/skill.js", () => ({ createSkillTool: createSkillToolMock }));
 vi.mock("../src/tools/event-manage.js", () => ({ createEventManageTool: createEventManageToolMock }));
-vi.mock("../src/tools/task-manage.js", () => ({ createTaskManageTool: createTaskManageToolMock }));
-vi.mock("../src/subagents/tool.js", () => ({ createSubAgentTool: createSubAgentToolMock }));
+vi.mock("../src/tools/task-manage.js", () => ({
+	createTaskListTool: createTaskListToolMock,
+	createTaskCreateTool: createTaskCreateToolMock,
+	createTaskUpdateTool: createTaskUpdateToolMock,
+	createTaskCloseTool: createTaskCloseToolMock,
+	createTaskVerifyTool: createTaskVerifyToolMock,
+}));
+vi.mock("../src/subagents/tool.js", () => ({
+	createSubAgentTool: createSubAgentToolMock,
+	createSubAgentInlineTool: createSubAgentInlineToolMock,
+}));
 vi.mock("../src/tools/subagent-manage.js", () => ({ createSubAgentManageTool: createSubAgentManageToolMock }));
 vi.mock("../src/security/config.js", () => ({ loadSecurityConfig: vi.fn(() => securityConfig) }));
 vi.mock("../src/tools/config.js", () => ({ loadToolsConfig: vi.fn(() => toolsConfig) }));
@@ -242,9 +264,14 @@ describe("tools index", () => {
 			"memory_manage",
 			"skill",
 			"event_manage",
-			"task_manage",
+			"task_list",
+			"task_create",
+			"task_update",
+			"task_close",
+			"task_verify",
 			"job",
 			"subagent",
+			"subagent_inline",
 			"subagent_manage",
 		]);
 		expect(createReadToolMock).toHaveBeenCalledWith(executor, fileStore, {

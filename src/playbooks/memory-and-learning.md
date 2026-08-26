@@ -13,7 +13,7 @@ order: 20
 |---|---|---|
 | 当前回合断点、眼下计划 | channel `SESSION.md` | runtime 自动维护，不手工编辑 |
 | 稳定事实、偏好、约束、决定 | channel `MEMORY.md` | `memory_manage save` / `forget` |
-| 单个长程工作的状态和证据 | `tasks/<id>.md` | `task_manage`，正文大改才用 `edit` |
+| 单个长程工作的状态和证据 | `tasks/<id>.md` | `task_create`/`task_update`/`task_close`，正文大改才用 `edit` |
 | 机器依赖、安装、配置位置 | workspace `ENVIRONMENT.md` | `read` / `edit`，受项目边界约束 |
 | 跨任务可复用的操作流程 | workspace `skills/` | `write`/`edit` 创建或修改，`skill` 只读列出/加载 |
 | Pipiclaw 自身机制 | runtime playbook | 只读 |

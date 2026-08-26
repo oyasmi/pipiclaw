@@ -344,9 +344,6 @@ export function createSubAgentManageTool(options: SubAgentManageToolOptions): Ag
 				{ workspaceDir: options.workspaceDir, channelId: options.channelId },
 				contextualBlocks,
 				runContext,
-				// returns: "artifact" has no external equivalent (spec 042 D3) and follow_up never
-				// requests it — always "text", matching the initial external dispatch.
-				"text",
 			);
 
 			let launchResult: ExternalLaunchResult;

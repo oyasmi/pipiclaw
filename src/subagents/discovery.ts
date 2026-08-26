@@ -58,18 +58,6 @@ export const SUB_AGENT_EFFORT_PRESETS = {
 	deep: { maxTurns: 48, maxToolCalls: 96, maxWallTimeSec: 900, bashTimeoutSec: 180 },
 } as const;
 
-/**
- * External runs have no turn/tool-call budget (D5) — `effort` only ever moves wall time, and at
- * external scale, not the internal tuple above (P1-3: those numbers previously leaked onto
- * external roles unchanged, where `deep` at 900s was *shorter* than the external default).
- * `standard` and an unset `effort` both keep the role's own `maxWallTimeSec` (or the external
- * default), so this only has entries for the two presets that actually override it.
- */
-export const SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC: Partial<Record<keyof typeof SUB_AGENT_EFFORT_PRESETS, number>> = {
-	quick: 600,
-	deep: 5400,
-};
-
 export type SubAgentEffort = keyof typeof SUB_AGENT_EFFORT_PRESETS;
 
 const ALLOWED_EFFORTS = Object.keys(SUB_AGENT_EFFORT_PRESETS) as SubAgentEffort[];
@@ -136,17 +124,31 @@ export interface SubAgentDiscoveryResult {
 	warnings: string[];
 }
 
-export interface SubAgentInvocationOverrides {
-	agent?: string;
-	name?: string;
-	systemPrompt?: string;
+/**
+ * `subagent` (role-based) invocation surface (spec 046, D2.1). Deliberately has no override
+ * fields beyond `purpose`: everything else a configured role could vary — tools, model, effort,
+ * context, thinkingLevel, mutates — lives in the role file, which is the deployer's decision, not
+ * a per-call one. This is what makes "external role + tools/model/mutates" unrepresentable at the
+ * type level instead of rejected at runtime (spec 042 D3's three checks are now dead by construction).
+ */
+export interface ConfiguredRoleOverrides {
+	agent: string;
+	/** Drives the thinkingLevel default: "verify" defaults on, everything else stays off. */
+	purpose?: string;
+}
+
+/**
+ * `subagent_inline` invocation surface (spec 046, D2.1) — a one-off executor with no role file,
+ * so every field a role file would otherwise supply is a call-time override here instead.
+ */
+export interface InlineAgentOverrides {
+	systemPrompt: string;
 	tools?: string[];
 	model?: string;
 	/** Named budget preset; wins over frontmatter numbers as a whole tuple, never field by field. */
 	effort?: string;
 	/** Collapsed `contextMode` + `memory`; see SubAgentContextChoice. */
 	context?: string;
-	paths?: string[];
 	thinkingLevel?: string;
 	/** Drives the thinkingLevel default: "verify" defaults on, everything else stays off. */
 	purpose?: string;
@@ -832,78 +834,108 @@ export function discoverSubAgents(workspaceDir: string, availableModels: Model<A
 	return { directory, agents: result.agents, warnings: result.warnings };
 }
 
-export function resolveSubAgentConfig(
+/**
+ * Resolve a `subagent` (role-based) invocation (spec 046, D2.1).
+ *
+ * Everything the old combined resolver used to override for a configured role — `tools`,
+ * `model`, `effort`, `context`, `mutates` — now has nowhere to come from but the role file
+ * itself, so this is a lookup plus the two facts a role file cannot pin down: the default model
+ * (parent's current model, or `settings.subagentModel`) and the purpose-driven thinkingLevel
+ * default. Spec 042 D3's three "external + override" rejections no longer apply: `ConfiguredRoleOverrides`
+ * has no `tools`/`model`/`mutates` field to reject in the first place.
+ */
+export function resolveConfiguredRole(
 	availableModels: Model<Api>[],
 	currentModel: Model<Api>,
 	predefinedAgents: SubAgentConfig[],
-	overrides: SubAgentInvocationOverrides,
+	overrides: ConfiguredRoleOverrides,
 	/**
-	 * `settings.subagentModel` (spec 032 D5): used only when neither the invocation nor the
-	 * predefined agent's frontmatter names a model. Unset/blank is "not configured" — the
-	 * caller (tool.ts) already normalizes that, this function just treats undefined as absent.
+	 * `settings.subagentModel` (spec 032 D5): used only when neither the role file's frontmatter
+	 * nor this call names a model (it cannot — there is no override field for it).
 	 */
 	subagentDefaultModelRef?: string,
-): { config?: ResolvedSubAgentConfig; error?: string; warning?: string } {
-	const baseConfig = overrides.agent ? predefinedAgents.find((agent) => agent.name === overrides.agent) : undefined;
-	if (overrides.agent && !baseConfig) {
+): { config?: ResolvedSubAgentConfig; error?: string } {
+	const baseConfig = predefinedAgents.find((agent) => agent.name === overrides.agent);
+	if (!baseConfig) {
 		const available = predefinedAgents.length > 0 ? predefinedAgents.map((agent) => agent.name).join(", ") : "none";
 		return { error: `Unknown sub-agent "${overrides.agent}". Available sub-agents: ${available}.` };
 	}
 	// Listed, never dropped (spec 040, D5) — but refused here with the reason, not a fallback.
-	if (baseConfig?.unavailable) {
+	if (baseConfig.unavailable) {
 		return { error: `Sub-agent "${baseConfig.name}" is currently unavailable: ${baseConfig.unavailable}` };
 	}
 
-	if (!baseConfig && (!overrides.systemPrompt || !overrides.systemPrompt.trim())) {
-		return { error: 'Provide either "agent" or "systemPrompt" to define the sub-agent.' };
+	let model = baseConfig.model;
+	let modelRef = baseConfig.modelRef;
+	if (!model && subagentDefaultModelRef) {
+		const resolved = resolveModelReference(subagentDefaultModelRef, availableModels);
+		if (!resolved.model) {
+			return { error: resolved.error };
+		}
+		model = resolved.model;
+		modelRef = formatModelReference(resolved.model);
 	}
 
-	const effectiveRuntime = baseConfig?.runtime ?? "internal";
+	const purpose = overrides.purpose === "verify" ? "verify" : "work";
+	// External work is not defaulted: pipiclaw has no standing to pick a reasoning effort for
+	// another CLI's own configuration. External verify still defaults — it is the last unattended
+	// gate before an attestation is trusted, and "whatever that machine happens to have configured"
+	// is not an acceptable substitute for real reasoning.
+	const thinkingLevel =
+		baseConfig.thinkingLevel ??
+		(baseConfig.runtime === "external" && purpose !== "verify" ? undefined : DEFAULT_THINKING_LEVEL);
+	const mutates = baseConfig.mutates ?? inferMutatesFromTools(baseConfig.tools);
 
-	// Spec 042 D3: the invocation-side counterpart to the role-file field matrix (`ROLE_FIELD_MATRIX`
-	// above) — a field only meaningful for one runtime is rejected outright when the resolved role
-	// is the other, not silently ignored. `tools` and `model` were previously accepted and either
-	// dropped on the floor or — for `model` — resolved against `models.json` and made to fail a
-	// dispatch for a reason that has nothing to do with the external role actually named.
-	if (effectiveRuntime === "external" && overrides.tools !== undefined) {
-		return {
-			error:
-				`Sub-agent "${baseConfig?.name}" is external; its tool boundary comes from its own ` +
-				'command (e.g. "--sandbox read-only"), not the "tools" invocation parameter, which has no effect on external roles.',
-		};
+	return {
+		config: {
+			...baseConfig,
+			model: model ?? currentModel,
+			modelRef: modelRef ?? formatModelReference(model ?? currentModel),
+			thinkingLevel,
+			source: "predefined",
+			mutates,
+		},
+	};
+}
+
+/**
+ * Resolve a `subagent_inline` invocation (spec 046, D2.1) — a one-off executor with no role
+ * file. `runtime` is always `"internal"` here: only a configured role file can name `external`,
+ * and `InlineAgentOverrides` has no field for it, so the old function's external branches
+ * (budget table, unset-by-default thinkingLevel, model/tools/mutates rejections) simply do not
+ * apply to this path and are not reproduced here.
+ */
+export function resolveInlineAgent(
+	availableModels: Model<Api>[],
+	currentModel: Model<Api>,
+	overrides: InlineAgentOverrides,
+	/** `settings.subagentModel` (spec 032 D5): used only when this call does not name a model. */
+	subagentDefaultModelRef?: string,
+): { config?: ResolvedSubAgentConfig; error?: string; warning?: string } {
+	const systemPrompt = overrides.systemPrompt.trim();
+	if (!systemPrompt) {
+		return { error: "Sub-agent system prompt cannot be empty." };
 	}
-	if (effectiveRuntime === "external" && overrides.model?.trim()) {
-		return {
-			error:
-				`Sub-agent "${baseConfig?.name}" is external; its model can only be set in the role file's ` +
-				'"model" frontmatter. The "model" invocation parameter has no effect on external roles and is never resolved against models.json.',
-		};
-	}
-	// External `mutates` is the role file's own self-declaration (checked against its harness/command),
-	// same reasoning as `model` above — the caller cannot override what the external role attests about itself.
-	if (effectiveRuntime === "external" && overrides.mutates !== undefined) {
-		return {
-			error: `Sub-agent "${baseConfig?.name}" is external; "mutates" comes from its role file, not the invocation parameter.`,
-		};
+	const promptLengthError = validateSubAgentSystemPrompt(systemPrompt, "Inline sub-agent systemPrompt");
+	if (promptLengthError) {
+		return { error: promptLengthError };
 	}
 
-	const tools = overrides.tools
-		? validateToolNames(overrides.tools)
-		: { tools: baseConfig?.tools ?? [...DEFAULT_SUB_AGENT_TOOLS] };
+	const tools = overrides.tools ? validateToolNames(overrides.tools) : { tools: [...DEFAULT_SUB_AGENT_TOOLS] };
 	if (tools.error) {
 		return { error: tools.error };
 	}
 
-	let model = baseConfig?.model;
-	let modelRef = baseConfig?.modelRef;
-	if (effectiveRuntime !== "external" && overrides.model?.trim()) {
+	let model: Model<Api> | undefined;
+	let modelRef: string | undefined;
+	if (overrides.model?.trim()) {
 		const resolved = resolveModelReference(overrides.model.trim(), availableModels);
 		if (!resolved.model) {
 			return { error: resolved.error };
 		}
 		model = resolved.model;
 		modelRef = formatModelReference(resolved.model);
-	} else if (!model && subagentDefaultModelRef) {
+	} else if (subagentDefaultModelRef) {
 		const resolved = resolveModelReference(subagentDefaultModelRef, availableModels);
 		if (!resolved.model) {
 			return { error: resolved.error };
@@ -916,90 +948,45 @@ export function resolveSubAgentConfig(
 	if (effortOverride.error) {
 		return { error: effortOverride.error };
 	}
-	// An explicit `effort` replaces the whole budget tuple rather than merging field by
-	// field, so a preset never produces a combination no preset describes. External is a
-	// separate branch (P1-3): it has no turn/tool-call budget, and effort's wall-time numbers
-	// are at external scale, not the internal tuple.
-	const budget =
-		effectiveRuntime === "external"
-			? {
-					maxTurns: DEFAULT_MAX_TURNS,
-					maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
-					maxWallTimeSec:
-						(effortOverride.value && SUB_AGENT_EXTERNAL_EFFORT_WALL_TIME_SEC[effortOverride.value]) ??
-						baseConfig?.maxWallTimeSec ??
-						DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC,
-					bashTimeoutSec: DEFAULT_BASH_TIMEOUT_SEC,
-				}
-			: effortOverride.value
-				? SUB_AGENT_EFFORT_PRESETS[effortOverride.value]
-				: {
-						maxTurns: baseConfig?.maxTurns ?? DEFAULT_MAX_TURNS,
-						maxToolCalls: baseConfig?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS,
-						maxWallTimeSec: baseConfig?.maxWallTimeSec ?? DEFAULT_MAX_WALL_TIME_SEC,
-						bashTimeoutSec: baseConfig?.bashTimeoutSec ?? DEFAULT_BASH_TIMEOUT_SEC,
-					};
+	const budget = effortOverride.value
+		? SUB_AGENT_EFFORT_PRESETS[effortOverride.value]
+		: {
+				maxTurns: DEFAULT_MAX_TURNS,
+				maxToolCalls: DEFAULT_MAX_TOOL_CALLS,
+				maxWallTimeSec: DEFAULT_MAX_WALL_TIME_SEC,
+				bashTimeoutSec: DEFAULT_BASH_TIMEOUT_SEC,
+			};
 
 	const contextOverride = parseContextChoice(overrides.context);
 	if (contextOverride.error) {
 		return { error: contextOverride.error };
 	}
-	const contextMode = contextOverride.value?.contextMode ?? baseConfig?.contextMode ?? "isolated";
-	const memory =
-		contextOverride.value?.memory ?? baseConfig?.memory ?? (contextMode === "contextual" ? "relevant" : "none");
-
-	const pathsOverride = overrides.paths ? parseStringList(overrides.paths, "paths") : undefined;
-	if (pathsOverride?.error) {
-		return { error: pathsOverride.error };
-	}
-	const paths = pathsOverride?.values ?? baseConfig?.paths ?? [];
+	const contextMode = contextOverride.value?.contextMode ?? "isolated";
+	const memory = contextOverride.value?.memory ?? (contextMode === "contextual" ? "relevant" : "none");
 
 	const thinkingLevelOverride = overrides.thinkingLevel ? parseThinkingLevel(overrides.thinkingLevel) : undefined;
 	if (thinkingLevelOverride?.error) {
 		return { error: thinkingLevelOverride.error };
 	}
-	const purpose = overrides.purpose === "verify" ? "verify" : "work";
-	const explicitThinkingLevel = thinkingLevelOverride?.value ?? baseConfig?.thinkingLevel;
-	// External work is not defaulted: pipiclaw has no standing to pick a reasoning effort for
-	// another CLI's own configuration. External verify still defaults — it is the last unattended
-	// gate before an attestation is trusted, and "whatever that machine happens to have configured"
-	// is not an acceptable substitute for real reasoning.
-	const thinkingLevel =
-		explicitThinkingLevel ??
-		(effectiveRuntime === "external" && purpose !== "verify" ? undefined : DEFAULT_THINKING_LEVEL);
+	const thinkingLevel = thinkingLevelOverride?.value ?? DEFAULT_THINKING_LEVEL;
 
 	const mutatesOverride = parseMutates(overrides.mutates);
 	if (mutatesOverride.error) {
 		return { error: mutatesOverride.error };
 	}
-	const mutates = mutatesOverride.value ?? baseConfig?.mutates ?? inferMutatesFromTools(tools.tools);
-	// Same rationale as the predefined-role bashWithoutMutatesWarning above (D6): `bash` can write
-	// regardless of what `tools` otherwise implies. Inline roles have no frontmatter to declare it
-	// in, so the warning goes back to the model in the result text instead of a discovery-time log.
+	const mutates = mutatesOverride.value ?? inferMutatesFromTools(tools.tools);
+	// Inline roles have no frontmatter to declare `mutates` in, so this warning goes back to the
+	// model in the result text instead of a discovery-time log (D6 in the pre-split resolver).
 	const bashWithoutMutatesWarning =
-		!baseConfig && tools.tools.includes("bash") && mutatesOverride.value === undefined
+		tools.tools.includes("bash") && mutatesOverride.value === undefined
 			? 'tools include bash but "mutates" is not declared; if this task writes to the workspace, pass mutates: "write" so it takes the exclusive workspace write lease'
 			: undefined;
-
-	const systemPrompt = overrides.systemPrompt?.trim() || baseConfig?.systemPrompt || "";
-	if (!systemPrompt) {
-		return { error: "Sub-agent system prompt cannot be empty." };
-	}
-	if (overrides.systemPrompt?.trim()) {
-		const promptLengthError = validateSubAgentSystemPrompt(
-			overrides.systemPrompt.trim(),
-			"Inline sub-agent systemPrompt",
-		);
-		if (promptLengthError) {
-			return { error: promptLengthError };
-		}
-	}
 
 	return {
 		warning: bashWithoutMutatesWarning,
 		config: {
-			name: overrides.name?.trim() || baseConfig?.name || "dynamic-subagent",
-			description: baseConfig?.description || "Inline sub-agent",
+			name: "dynamic-subagent",
+			description: "Inline sub-agent",
 			systemPrompt,
 			tools: tools.tools,
 			model: model ?? currentModel,
@@ -1010,19 +997,11 @@ export function resolveSubAgentConfig(
 			bashTimeoutSec: budget.bashTimeoutSec,
 			contextMode,
 			memory,
-			paths,
+			paths: [],
 			thinkingLevel,
-			filePath: baseConfig?.filePath,
-			source: baseConfig ? "predefined" : "inline",
-			runtime: baseConfig?.runtime ?? "internal",
-			harness: baseConfig?.harness,
-			command: baseConfig?.command,
-			shell: baseConfig?.shell,
-			env: baseConfig?.env,
-			workload: baseConfig?.workload,
+			source: "inline",
+			runtime: "internal",
 			mutates,
-			externalModelRef: baseConfig?.externalModelRef,
-			unavailable: baseConfig?.unavailable,
 		},
 	};
 }

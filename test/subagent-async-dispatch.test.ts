@@ -7,7 +7,7 @@ import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
-import { createSubAgentTool, type SubAgentToolDetails } from "../src/subagents/tool.js";
+import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/subagents/tool.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
@@ -44,7 +44,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		});
 
 		let releasePrompt: (() => void) | undefined;
-		const tool = createSubAgentTool({
+		const tool = createSubAgentInlineTool({
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -93,7 +93,6 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		});
 
 		const resultPromise = tool.execute("dispatch-call-1", {
-			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Find where the entrypoint is.",
 		});

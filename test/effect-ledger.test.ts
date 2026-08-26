@@ -41,7 +41,7 @@ describe("effect ledger (spec 031, D7)", () => {
 	});
 
 	it("classifies tools: world-changers count, read-only and self-reporting tools do not", () => {
-		for (const tool of ["write", "edit", "send_media", "subagent"]) {
+		for (const tool of ["write", "edit", "send_media", "subagent", "subagent_inline"]) {
 			expect(isEffectfulTool(tool, undefined)).toBe(true);
 		}
 		// task_manage and memory_manage are the model's own account of its work; counting them

@@ -10,7 +10,7 @@ import { isRecord } from "../shared/type-guards.js";
  *
  * Effects are counted here instead, and only for things that change the world outside the task
  * ledger: writes, outbound media, sub-agent runs, background job launches, and a user-visible
- * reply. Self-report tools (`task_manage`, `memory_manage`) and read-only tools deliberately do
+ * reply. Self-report tools (`task_create`/`task_update`/`task_close`/`task_verify`, `memory_manage`) and read-only tools deliberately do
  * not count — a claim of progress is not evidence of it.
  *
  * The tally lives in process memory, exactly like the driver's futile counter it feeds; a restart
@@ -24,7 +24,7 @@ const counts = new Map<string, number>();
 const taskCounts = new Map<string, number>();
 
 /** Tools whose successful completion is, by itself, a visible change to the world. */
-const EFFECT_TOOLS = new Set(["write", "edit", "send_media", "subagent"]);
+const EFFECT_TOOLS = new Set(["write", "edit", "send_media", "subagent", "subagent_inline"]);
 
 export function noteChannelEffect(channelId: string): void {
 	counts.set(channelId, (counts.get(channelId) ?? 0) + 1);

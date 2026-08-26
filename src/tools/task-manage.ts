@@ -2,78 +2,106 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { normalizeTaskId } from "../tasks/ledger.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
 import { createTask } from "./task-manage/create.js";
-import { cancelTask, completeTask, listTasks, progressTask, setTask, skipTask } from "./task-manage/lifecycle.js";
-import { parseAction, taskManageSchema } from "./task-manage/schema.js";
-import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./task-manage/types.js";
+import { closeTask, listTasks, updateTask } from "./task-manage/lifecycle.js";
+import {
+	taskCloseSchema,
+	taskCreateSchema,
+	taskListSchema,
+	taskUpdateSchema,
+	taskVerifySchema,
+} from "./task-manage/schema.js";
+import type {
+	TaskCloseRequest,
+	TaskCreateRequest,
+	TaskManageToolOptions,
+	TaskUpdateRequest,
+	TaskVerifyRequest,
+} from "./task-manage/types.js";
 import { verifyTask } from "./task-manage/verification.js";
 
 export type {
-	TaskManageAction,
-	TaskManageRequest,
+	TaskCloseRequest,
+	TaskCreateRequest,
 	TaskManageResult,
 	TaskManageToolOptions,
+	TaskUpdateRequest,
+	TaskVerifyRequest,
 } from "./task-manage/types.js";
 
 /**
- * The `task_manage` dispatcher. Each action lives in a focused module — `create`,
- * `lifecycle` (progress/set/complete/skip/cancel/list) and `verification` (verify) — over a
- * shared helper layer, with the status transition table in `src/tasks/transitions.ts` (spec
- * 029, D7). This entry only routes and wraps the tool.
+ * Five tools, one per payload shape (spec 046, D3.1) — replaces the single `task_manage`
+ * dispatcher. Each factory only wires its own schema and, for the four that carry an `id`, the
+ * same per-task serial lock `manageTask` used to apply centrally (spec 029, D7): a task file
+ * write must never race another write to the same task, and that guarantee has to travel with
+ * the split, not get silently dropped in the split (spec 046, D3.4).
  */
-export async function manageTask(
-	options: TaskManageToolOptions,
-	request: TaskManageRequest,
-): Promise<TaskManageResult> {
-	if (request.action === "list") return listTasks(options);
-	if (!request.id) return dispatchTaskMutation(options, request);
-	const id = normalizeTaskId(request.id);
-	return withTaskMutation(options.channelDir, id, () => dispatchTaskMutation(options, request));
+
+async function withLock<T>(options: TaskManageToolOptions, id: string, mutate: () => Promise<T>): Promise<T> {
+	return withTaskMutation(options.channelDir, normalizeTaskId(id), mutate);
 }
 
-function dispatchTaskMutation(
-	options: TaskManageToolOptions,
-	request: Exclude<TaskManageRequest, { action: "list" }> | TaskManageRequest,
-): Promise<TaskManageResult> {
-	switch (request.action) {
-		case "create":
-			return createTask(options, request);
-		case "progress":
-			return progressTask(options, request);
-		case "set":
-			return setTask(options, request);
-		case "verify":
-			return verifyTask(options, request);
-		case "complete":
-			return completeTask(options, request);
-		case "skip":
-			return skipTask(options, request);
-		case "cancel":
-			return cancelTask(options, request);
-		case "list":
-			return listTasks(options);
-	}
-}
-
-export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<typeof taskManageSchema> {
+export function createTaskListTool(options: TaskManageToolOptions): AgentTool<typeof taskListSchema> {
 	return {
-		name: "task_manage",
-		label: "task_manage",
+		name: "task_list",
+		label: "task_list",
+		description: "List persistent tasks in this channel's active directory.",
+		parameters: taskListSchema,
+		execute: async () => {
+			const result = await listTasks(options);
+			return { content: [{ type: "text", text: JSON.stringify(result) }], details: { ...result } };
+		},
+	};
+}
+
+export function createTaskCreateTool(options: TaskManageToolOptions): AgentTool<typeof taskCreateSchema> {
+	return {
+		name: "task_create",
+		label: "task_create",
+		description: "Create a persistent task: goal, DoD, and optional plan, manual, verification plan, and schedule.",
+		parameters: taskCreateSchema,
+		execute: async (_toolCallId, args: TaskCreateRequest) => {
+			const result = await withLock(options, args.id, () => createTask(options, args));
+			return { content: [{ type: "text", text: JSON.stringify(result) }], details: { ...result } };
+		},
+	};
+}
+
+export function createTaskUpdateTool(options: TaskManageToolOptions): AgentTool<typeof taskUpdateSchema> {
+	return {
+		name: "task_update",
+		label: "task_update",
 		description:
-			"Manage persistent tasks: create, atomically checkpoint progress/control state, request/import independent " +
-			"verification, complete work, skip one recurring occurrence, cancel abandoned work, or list tasks. Use progress for routine " +
-			"end-of-turn checkpoints; use write/edit only for substantial Goal/DoD/Manual/Verification changes.",
-		parameters: taskManageSchema,
-		// `args` is typed from `taskManageSchema`, and so is `TaskManageRequest`: no third
-		// hand-written copy to drift.
-		execute: async (_toolCallId, args) => {
-			const result = await manageTask(options, {
-				...args,
-				action: parseAction(args.action),
-			});
-			return {
-				content: [{ type: "text", text: JSON.stringify(result) }],
-				details: { ...result },
-			};
+			"With `note`: checkpoint an open task cycle. Without: metadata-only edit (status/wake/schedule/planSteps/control), also the only path that repairs a bad control line.",
+		parameters: taskUpdateSchema,
+		execute: async (_toolCallId, args: TaskUpdateRequest) => {
+			const result = await withLock(options, args.id, () => updateTask(options, args));
+			return { content: [{ type: "text", text: JSON.stringify(result) }], details: { ...result } };
+		},
+	};
+}
+
+export function createTaskCloseTool(options: TaskManageToolOptions): AgentTool<typeof taskCloseSchema> {
+	return {
+		name: "task_close",
+		label: "task_close",
+		description: "Close a task: outcome complete, skip (one recurring occurrence), or cancel.",
+		parameters: taskCloseSchema,
+		execute: async (_toolCallId, args: TaskCloseRequest) => {
+			const result = await withLock(options, args.id, () => closeTask(options, args));
+			return { content: [{ type: "text", text: JSON.stringify(result) }], details: { ...result } };
+		},
+	};
+}
+
+export function createTaskVerifyTool(options: TaskManageToolOptions): AgentTool<typeof taskVerifySchema> {
+	return {
+		name: "task_verify",
+		label: "task_verify",
+		description: "Import a purpose=verify sub-agent's attestation by run id.",
+		parameters: taskVerifySchema,
+		execute: async (_toolCallId, args: TaskVerifyRequest) => {
+			const result = await withLock(options, args.id, () => verifyTask(options, args));
+			return { content: [{ type: "text", text: JSON.stringify(result) }], details: { ...result } };
 		},
 	};
 }

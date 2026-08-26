@@ -37,9 +37,14 @@ export type ToolDetailsKind =
 	| "memory_manage"
 	| "skill"
 	| "event_manage"
-	| "task_manage"
+	| "task_list"
+	| "task_create"
+	| "task_update"
+	| "task_close"
+	| "task_verify"
 	| "job"
 	| "subagent"
+	| "subagent_inline"
 	| "subagent_manage";
 
 /** The fields every tool result's `details` carries. Tool-specific fields extend this. */

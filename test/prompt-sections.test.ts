@@ -9,27 +9,15 @@ import type { LoadedPromptResource, PromptBuildContext, ToolDescriptor } from ".
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { DEFAULT_AGENTS, DEFAULT_SOUL } from "../src/runtime/workspace-templates.js";
 import { countPromptUnits } from "../src/shared/prompt-units.js";
+import { TOOL_NAMES } from "../src/tools/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-prompt-");
 
-const FULL_TOOL_NAMES = [
-	"read",
-	"bash",
-	"edit",
-	"grep",
-	"write",
-	"web_search",
-	"web_fetch",
-	"send_media",
-	"session_search",
-	"memory_manage",
-	"skill_manage",
-	"event_manage",
-	"task_manage",
-	"job",
-	"subagent",
-];
+// Derived from the registry (not hand-maintained) so this fixture cannot drift from the real
+// tool set — a renamed or retired tool here would otherwise leave `requiresAllTools` gating
+// silently untested (spec 046 D6).
+const FULL_TOOL_NAMES = Array.from(TOOL_NAMES);
 
 function tools(names: string[]): ToolDescriptor[] {
 	return names.map((name) => ({ name, description: `${name} description` }));
@@ -149,6 +137,14 @@ describe("system prompt structure", () => {
 		expect(build.text).toContain("runtime-orientation.md");
 	});
 
+	it("renders a mechanism's section when its gating tool is registered (spec 046 D6)", () => {
+		const build = buildPipiclawSystemPrompt(context());
+		expect(build.text).toContain("## Persistent Work");
+
+		const noConfiguredAgents = buildPipiclawSystemPrompt(context({ subAgents: [] }));
+		expect(noConfiguredAgents.text).toContain("## Sub-Agents");
+	});
+
 	it("gates the memory_manage invariant on the tool being registered", () => {
 		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_manage` in the same turn");
 		expect(buildPipiclawSystemPrompt(context({ tools: tools(["read"]) })).text).not.toContain("`memory_manage`");
@@ -227,7 +223,7 @@ describe("configured sub-agents section", () => {
 		const empty = buildPipiclawSystemPrompt(context({ subAgents: [] }));
 		expect(empty.text).not.toContain("## Configured Sub-Agents");
 		expect(empty.text).toContain("## Sub-Agents");
-		expect(empty.text).toContain("inline `systemPrompt`");
+		expect(empty.text).toContain("subagent_inline");
 		expect(empty.sections.find((section) => section.id === "subagents")).toBeDefined();
 
 		const populated = buildPipiclawSystemPrompt(

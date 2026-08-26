@@ -88,7 +88,7 @@ export function parseTaskControl(raw: string): TaskControl {
 		throw new Error(`control is not valid JSON: ${errorMessage(error)}`);
 	}
 	if (!isPlainObject(value) || value.version !== 3) {
-		throw new Error("control must be a version 3 JSON object; repair it with task_manage set.");
+		throw new Error("control must be a version 3 JSON object; repair it with task_update (no note).");
 	}
 
 	const verification = isPlainObject(value.verification) ? value.verification : {};

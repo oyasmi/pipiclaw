@@ -13,5 +13,8 @@
 	"M-recall-04": { "gate": "required", "minPass": "2/3" },
 	"M-recall-05": { "gate": "report-only" },
 	"M-maint-01": { "gate": "required", "minPass": "2/3" },
-	"M-forget-01": { "gate": "required", "minPass": "2/3" }
+	"M-forget-01": { "gate": "required", "minPass": "2/3" },
+	"T-route-01": { "gate": "report-only" },
+	"T-route-02": { "gate": "report-only" },
+	"A-route-01": { "gate": "report-only" }
 }

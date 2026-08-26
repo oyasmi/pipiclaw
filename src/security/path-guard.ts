@@ -290,7 +290,7 @@ function isAgentWorkspaceSkillsAccess(path: string, ctx: PathGuardContext): bool
  *
  * Reads are allowed throughout. Writes are allowed only under `tasks/`: the three memory files are
  * runtime-maintained and go through `memory_manage` (a file write there races the maintenance
- * queue), while a task's body is model-authored prose that `task_manage` cannot rewrite — `set`
+ * queue), while a task's body is model-authored prose that `task_update` cannot rewrite — it
  * replaces frontmatter and keeps the body verbatim, so revising a task contract needs `edit`.
  */
 function isChannelDirAccess(path: string, operation: "read" | "write", ctx: PathGuardContext): boolean {

@@ -37,7 +37,7 @@ export interface PipiclawToolsConfig {
 		web: PipiclawWebToolsConfig;
 		/**
 		 * Master switch for the autonomous long-running task mechanism: gates the
-		 * `task_manage` tool, the native TaskDriver, and the per-turn task digest
+		 * task_* tools, the native TaskDriver, and the per-turn task digest
 		 * together. Core capabilities (read/bash/edit/write/grep, memory, skills,
 		 * events, background jobs) are always on and have no switches.
 		 */
@@ -48,6 +48,11 @@ export interface PipiclawToolsConfig {
 			enabled: boolean;
 		};
 		rtk: {
+			enabled: boolean;
+		};
+		/** Gates the `subagent_inline` tool (spec 046, D2.3). Default true; the role directory
+		 *  covers most delegation, so a deployment can turn this off once it does. */
+		subagentInline: {
 			enabled: boolean;
 		};
 	};
@@ -90,6 +95,9 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 		},
 		rtk: {
 			enabled: false,
+		},
+		subagentInline: {
+			enabled: true,
 		},
 	},
 };
@@ -148,6 +156,7 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 	const tasks = isRecord(tools.tasks) ? tools.tasks : {};
 	const bashInterceptor = isRecord(tools.bashInterceptor) ? tools.bashInterceptor : {};
 	const rtk = isRecord(tools.rtk) ? tools.rtk : {};
+	const subagentInline = isRecord(tools.subagentInline) ? tools.subagentInline : {};
 	const search = isRecord(web.search) ? web.search : {};
 	const fetch = isRecord(web.fetch) ? web.fetch : {};
 
@@ -275,6 +284,12 @@ function mergeToolsConfig(source: unknown, configPath: string, diagnostics: Conf
 			},
 			rtk: {
 				enabled: typeof rtk.enabled === "boolean" ? rtk.enabled : DEFAULT_TOOLS_CONFIG.tools.rtk.enabled,
+			},
+			subagentInline: {
+				enabled:
+					typeof subagentInline.enabled === "boolean"
+						? subagentInline.enabled
+						: DEFAULT_TOOLS_CONFIG.tools.subagentInline.enabled,
 			},
 		},
 	};

@@ -13,7 +13,7 @@
 - **`internal`**（默认）：在 Pipiclaw 进程内运行的隔离上下文子智能体。它使用 Pipiclaw 的模型、工具和安全守卫，启动快，适合检索、筛查和窄范围分析。
 - **`external`**：一次委派启动一个真实的 Claude Code、Codex CLI 或任意脚本进程。它适合长时间、跨文件、需要自行测试迭代的工作，并使用目标 CLI 自己的认证、模型和 sandbox。
 
-两者共用一个角色目录（`workspace/sub-agents/`）、一个调用面（`subagent` 工具）、一套 run 生命周期和控制面（`subagent_manage` 工具 / `/subagents` 命令）。角色目录会同时展示 runtime、工作量和是否写入，主智能体据此选择最合适的执行者。
+两者共用一个角色目录（`workspace/sub-agents/`）、一套 run 生命周期和控制面（`subagent_manage` 工具 / `/subagents` 命令）。调用面按形状分两个工具：`subagent` 选一个已配置角色（内置或外部都走它），`subagent_inline` 是没有合适角色时的一次性内置执行者。角色目录会同时展示 runtime、工作量和是否写入，主智能体据此选择最合适的执行者。
 
 在独立验收（verifier）场景里，子代理会和任务台账咬合（`purpose: verify` + `taskId`）；这些接缝会在下面点明，并链接回 [events-and-tasks.md](./events-and-tasks.md)。
 
@@ -185,26 +185,35 @@ maxWallTimeSec: 3600
 
 ## 调用参数（Invocation Parameters）
 
-上面的 frontmatter 是**人**的配置面：你在配置文件里精确设定角色的模型、工具（内置）或命令（外部）和执行预算。下面是**主代理**每次委派时能填的参数，刻意比 frontmatter 窄——执行策略应当来自配置和台账，而不是模型每次调用时的临场判断。内置和外部角色共用同一份调用 schema，不因 runtime 而增减字段；但字段对某个 runtime 是否**生效**并不对称——见每行说明。**对外部角色无效的字段会被直接驳回（`RecoverableToolError`），不是静默忽略。**
+上面的 frontmatter 是**人**的配置面：你在配置文件里精确设定角色的模型、工具（内置）或命令（外部）和执行预算。委派分两个工具，按调用形状而非动词切分（spec 046）——角色优先，内联是没有角色匹配时的显式高级模式：
+
+**`subagent`（角色优先，常规路径）**——选一个已配置的角色，只有路由字段，没有任何覆盖字段：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `label` | - | 必填。展示给用户的进度标签 |
+| `agent` | - | 必填。`workspace/sub-agents/` 里某个已配置角色的名字（内置或外部） |
 | `task` | - | 必填。完整任务描述；子代理看不到主对话，目标/范围/路径/约束/验收方法都要写进来 |
-| `agent` | - | 使用 `workspace/sub-agents/` 里某个已配置角色（内置或外部） |
-| `systemPrompt` | - | 不使用配置角色时，用它定义一个临时**内置**子代理；与 `agent` 二选一。外部角色没有 inline 形式 |
-| `name` | `dynamic-subagent` | inline 子代理的显示名，进入运行记录 |
-| `tools` | 角色配置或 `read,bash` | 工具白名单（仅内置）。**对外部角色传入会被驳回**：外部智能体的能力边界由它自己的命令决定，这个参数对它没有意义 |
-| `model` | 见[模型解析顺序](./configuration.md) | 精确模型引用（仅内置）。**对外部角色传入会被驳回**：外部角色的模型只能在角色文件里配，且从不按 `models.json` 校验 |
-| `effort` | `standard` | 执行预算档位：`quick`、`standard`、`deep`。内置替换四个数值预算；外部只有 `maxWallTimeSec` 一个维度，`quick`/`deep` 按外部量级取值，`standard`/不传沿用角色自身的 `maxWallTimeSec` |
-| `context` | `none` | 上下文注入：`none`、`session`、`relevant`。对内外角色都生效——这是模型每次委派的显式决定，与角色文件里的 `memory` 默认值是两回事（见下文 `contextMode` 与 `memory`） |
-| `paths` | 角色配置 | 建议优先关注的路径；对内外角色都生效 |
 | `workingDirectory` | runtime 自身工作目录 | **每次委派都应显式传**；必须是已存在目录。并行写入的分片必须各自 `git worktree add` 后指向不同 checkout |
-| `thinkingLevel` | 内置为 `medium`；外部 `purpose=verify` 为 `medium`，外部普通 work **不兜底**（未声明就不追加任何推理参数） | 推理强度；外部角色由 runtime 翻译成对应 harness 的写法 |
-| `mutates` | 角色配置或按 `tools` 推定（仅内置） | `read` 或 `write`；inline 委派没有角色文件，用它显式声明是否取工作区写锁。**对外部角色传入会被驳回**：外部角色的 `mutates` 是角色文件的自述，调用方不能覆盖 |
 | `purpose` | `work` | `verify` 进入独立验收协议，需同时传 `taskId` |
 | `taskId` | - | 绑定任务台账；`purpose: verify` 要求它 |
-| `returns` | `text` | `artifact` 要求子代理把主产出写成文件并以 `ARTIFACT: <filename>` 结尾（仅内置）。**对外部角色传入会被驳回**：`artifact` 协议假定产物在 `artifactDir` 内，而外部角色的真实产出在它自己的工作目录里，两者语义不同；外部角色的完整产出始终落在 `output.md`，需要指定产物位置时把要求写进 `task` |
+
+工具、模型、执行预算、上下文策略、`mutates` 一律来自角色文件，调用侧**无法覆盖**——这不是权限收紧，是把"这些是部署方的决定"落到类型层：命名一个外部角色再传 `tools`/`model`/`mutates` 不再是"被驳回"，而是这个调用形状根本没有这些字段。
+
+**`subagent_inline`（没有合适角色时的一次性执行者）**：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `task` | - | 必填 |
+| `systemPrompt` | - | 必填。定义这个临时**内置**子代理（内联委派恒为内置，没有外部形式） |
+| `tools` | `read,bash` | 工具白名单 |
+| `model` | 见[模型解析顺序](./configuration.md) | 精确模型引用 |
+| `effort` | `standard` | 执行预算档位：`quick`、`standard`、`deep`，整组替换四个数值预算（见下） |
+| `context` | `none` | 上下文注入：`none`、`session`、`relevant` |
+| `thinkingLevel` | `medium` | 推理强度 |
+| `mutates` | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；显式声明覆盖推定，`bash` 不参与推定 |
+| `workingDirectory` / `purpose` / `taskId` | 同上 | 同 `subagent` |
+
+`tools.subagentInline.enabled`（`tools.json`，默认开）整体开关这个工具；关掉后角色目录覆盖不到的工作没有委派出口，模型只能自己动手或请用户先配一个角色。
 
 ### `effort` 与 frontmatter 数值的关系
 
@@ -220,21 +229,15 @@ maxWallTimeSec: 3600
 
 `standard` 与内置默认值完全一致，所以不传 `effort` 时行为不变。
 
-外部（没有轮次/工具调用预算，`effort` 只移动 `maxWallTimeSec`，数值是外部量级，不是内置表格里的秒数）：
-
-| `effort` | maxWallTimeSec |
-|---|---|
-| `quick` | 600 |
-| `standard` | 角色自身 `maxWallTimeSec`（未设置时 1800） |
-| `deep` | 5400 |
+`effort` 只出现在 `subagent_inline` 上，而内联委派恒为内置——外部角色只能由角色文件配 `maxWallTimeSec`，调用侧没有覆盖它的字段。
 
 ### `context` 与 frontmatter 的关系
 
-`context` 是 `contextMode` + `memory` 的调用侧写法：`none` → `isolated`/`none`，`session` → `contextual`/`session`，`relevant` → `contextual`/`relevant`。对内外角色都生效——传 `context: relevant` 会让外部角色也拿到会话/记忆上下文，这是模型每次委派的显式决定，不是角色文件里被遗忘的默认值。frontmatter 仍可单独设置这两个字段，包括 `contextual` + `memory: none`（只注入 `paths`）这种调用面无法表达的组合。
+`context` 是 `contextMode` + `memory` 的调用侧写法：`none` → `isolated`/`none`，`session` → `contextual`/`session`，`relevant` → `contextual`/`relevant`。只出现在 `subagent_inline` 上；配置角色（内置或外部）的上下文策略一律来自角色文件的 `contextMode`/`memory`，调用侧没有覆盖字段——包括 `contextual` + `memory: none`（只注入 `paths`）这种只有 frontmatter 能表达的组合。
 
 ## 同步宽限窗口：一次调用，两种返回（Sync Grace Window）
 
-无论内置还是外部，`subagent` 工具调用只是**可选地等待**结果：
+无论内置还是外部，`subagent`/`subagent_inline` 的调用只是**可选地等待**结果：
 
 - 在 `min(角色的 maxWallTimeSec, 120s)` 内结算完成 → 直接把结果内联返回，和今天完全一样。内置角色的 `quick`/`standard` 档基本总是落在这个窗口内。
 - 超过这个窗口仍未结算 → 返回 `{ runId, status: "running" }` 和一句"完成时会唤醒你"，委派本身继续在后台跑。这不是失败，是降级。**外部角色的宽限窗口恒为 0**——它们是重型工作，一律走异步。
@@ -379,9 +382,9 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 - 子代理没有 `subagent` 工具，**不能继续创建下一级代理**——但这只约束内置子代理。外部 agent 本身是完整的 coding agent，它能不能 spawn 自己的子代理，pipiclaw 拦不住，见下文"明确不可控的部分"。
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。**外部角色完全没有这层工具白名单**——它能触及其自身权限所及的任何地方，`mutates`/`workingDirectory` 都不是隔离机制，只是审计与并发控制信息。
-- 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，`task_manage verify` / `complete` 在同一目录复算 artifact subject。
+- 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，`task_verify` / `task_close` 在同一目录复算 artifact subject。
 - `purpose: verify` + `taskId`：进入独立验收协议。内置验证器结构性移除了 write/edit 工具，但默认工具集仍含 `bash`——它同样能写文件，所以 `verificationStrength` 只在角色的 `tools` 里也不含 `bash` 时才是 `enforced`，否则如实标成 `advisory`；外部验证器永远做不到结构性移除，恒为 `advisory`。两者都靠事后 workspace 哈希比对判定是否被改动（含未跟踪文件的**内容**变化，不只是路径出现/消失）；哈希算不出来（不是 Git 检出，或 `git status` 失败）时**直接判 FAIL**，不会把"测不出来"当成"没改动"。verifier 还必须在最后一行明确 `VERDICT: PASS|FAIL`。`advisory` 结论仍会被记录、展示，并要求主代理按风险抽查，不是自动失败。
-- verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`，主代理用返回的 runId 调 `task_manage verify` 导入；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
+- verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`，主代理用返回的 runId 调 `task_verify` 导入；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 - **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
 
 > `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合派发、停泊与 `complete`——见 [events-and-tasks.md](./events-and-tasks.md#verification)。
@@ -481,7 +484,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 把 `read,bash` 误认为 runtime 强制只读，未约束 bash 的写命令；含 `bash` 却没声明 `mutates` 时 discovery 会提示，别忽略它。
 - 在任务 Goal 未覆盖目标仓库或 ref 时让 Git 子代理自动 push。
 - 给外部角色写 `cwd`、`tools`、`maxTurns` 等只对内置有意义的字段，或给内置角色写 `harness`、`command`、`shell`、`env`——都会被直接驳回，不是被忽略。
-- 在调用面对外部角色传 `tools`、`model` 或 `returns: "artifact"`——这些参数对外部角色无效，会被直接驳回而不是静默忽略。
+- 期待 `subagent`（角色优先）接受 `tools`/`model`/`mutates`/`returns` 之类的覆盖——这几个字段已经不在这个工具的 schema 里；需要覆盖就说明该用 `subagent_inline`，或者该改角色文件本身。
 - 把 `mutates: write` 的外部角色用于 `purpose=verify`——会被直接拒绝派发（`follow_up` 上同样会被拒绝，不只是首次派发）。
 - 以为 `mutates: read` 或工具白名单是安全边界——外部进程不受它们约束，真正的边界只有目标 CLI 自己的 sandbox flag。
 - 给外部角色写 `memory: relevant` 却没意识到这会把频道会话/记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。

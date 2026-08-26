@@ -6,23 +6,22 @@ import { readStoredTask, taskBodyHash } from "../../tasks/store.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../../tasks/transitions.js";
 import { readVerificationAttestation, type VerificationAttestation } from "../../tasks/verification.js";
 import { RecoverableToolError } from "../tool-details.js";
-import { renderTaskFile, requiredField } from "./shared.js";
-import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
+import { renderTaskFile } from "./shared.js";
+import type { TaskManageResult, TaskManageToolOptions, TaskVerifyRequest } from "./types.js";
 
 /**
  * Import a verifier's attestation. The task's own lifecycle status is not the authorization
  * check — a real, matching, on-disk attestation for this task id is (spec 040's threat model:
- * the task Markdown is agent-writable and proves nothing). `verify` works whether the task is
- * still `waiting` (e.g. called right after its completion wake reactivated it) or already
+ * the task Markdown is agent-writable and proves nothing). `task_verify` works whether the task
+ * is still `waiting` (e.g. called right after its completion wake reactivated it) or already
  * `active`.
  */
 export async function verifyTask(
 	options: TaskManageToolOptions,
-	request: TaskManageRequest,
+	request: TaskVerifyRequest,
 ): Promise<TaskManageResult> {
-	if (!request.id) throw new RecoverableToolError('action "verify" requires an id.');
 	const id = normalizeTaskId(request.id);
-	const runId = requiredField(request.verifierRunId, "verifierRunId", "verify");
+	const runId = request.verifierRunId;
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) throw new RecoverableToolError(`Task "${id}" does not exist; create it before verification.`);
 	resolveTaskTransition("verify", id, normalizeStoredStatus(task.fields.status));
@@ -91,9 +90,7 @@ export async function assertVerificationAttestationMatches(
 	currentBodyHash: string,
 ): Promise<VerificationAttestation> {
 	if (!runId) {
-		throw new RecoverableToolError(
-			`Task "${id}" has no verification run id; rerun task_manage verify before complete.`,
-		);
+		throw new RecoverableToolError(`Task "${id}" has no verification run id; rerun task_verify before task_close.`);
 	}
 	const attestation = await readVerificationAttestation(channelDir, runId);
 	if (attestation.taskId !== id) {
@@ -105,9 +102,7 @@ export async function assertVerificationAttestationMatches(
 		throw new RecoverableToolError(`Verification run "${runId}" recorded a FAIL, not a PASS; rerun verification.`);
 	}
 	if (attestation.bodyHash !== currentBodyHash) {
-		throw new RecoverableToolError(
-			`Task "${id}" changed since verification run "${runId}"; rerun task_manage verify.`,
-		);
+		throw new RecoverableToolError(`Task "${id}" changed since verification run "${runId}"; rerun task_verify.`);
 	}
 	return attestation;
 }

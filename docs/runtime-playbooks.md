@@ -28,7 +28,7 @@ Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开�
 ---
 name: task-driving
 description: 被 TASK_DRIVER 唤醒推进任务，或处理任务等待、验收（verify）、闭环、停滞、停用及元数据损坏时。
-requires-tools: task_manage
+requires-tools: task_create, task_update
 order: 80
 ---
 ```
@@ -60,8 +60,8 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 | `event-scheduling.md` | 40 | `event_manage` | 提醒、one-shot、periodic、preAction 传感器、跨回合回访 |
 | `background-jobs.md` | 50 | `job` | 长跑命令的启停、poll 纪律、并发上限、跨回合等待 |
 | `agent-delegation.md` | 60 | 恒在 | 选执行者（含 inline）、任务契约、并行隔离、等待、纠偏和验收强度 |
-| `task-planning.md` | 70 | `task_manage` | 是否建 task、Goal/DoD/Manual/Verification、control、周期 `schedule` |
-| `task-driving.md` | 80 | `task_manage` | driver 恢复、checkpoint、等待、验收、闭环、治理器停用及坏元数据修复 |
+| `task-planning.md` | 70 | `task_create`, `task_update` | 是否建 task、Goal/DoD/Manual/Verification、control、周期 `schedule` |
+| `task-driving.md` | 80 | `task_update`, `task_close`, `task_verify` | driver 恢复、checkpoint、等待、验收、闭环、治理器停用及坏元数据修复 |
 
 任务机制只占两份：`task-planning.md` 负责是否建档和任务契约，`task-driving.md` 负责建档后的推进、等待、验收、闭环与修复。Agent 委派不是 task 专属机制，因此独立为通用 playbook：当前回合的临时委派无需创建 task，需要跨回合恢复时才由 task 记录状态。
 

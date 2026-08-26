@@ -42,6 +42,7 @@ describe("tools config", () => {
 				tasks: DEFAULT_TOOLS_CONFIG.tools.tasks,
 				bashInterceptor: DEFAULT_TOOLS_CONFIG.tools.bashInterceptor,
 				rtk: DEFAULT_TOOLS_CONFIG.tools.rtk,
+				subagentInline: DEFAULT_TOOLS_CONFIG.tools.subagentInline,
 				web: {
 					...DEFAULT_TOOLS_CONFIG.tools.web,
 					enable: false,
@@ -90,6 +91,26 @@ describe("tools config", () => {
 
 		writeFileSync(join(appHomeDir, "tools.json"), JSON.stringify({ tools: { rtk: { enabled: "yes" } } }), "utf-8");
 		expect(loadToolsConfig(appHomeDir).tools.rtk.enabled).toBe(false);
+	});
+
+	it("defaults tools.subagentInline.enabled to true and honors an explicit opt-out (spec 046, D2.3)", () => {
+		const appHomeDir = makeTempDir();
+
+		expect(loadToolsConfig(appHomeDir).tools.subagentInline.enabled).toBe(true);
+
+		writeFileSync(
+			join(appHomeDir, "tools.json"),
+			JSON.stringify({ tools: { subagentInline: { enabled: false } } }),
+			"utf-8",
+		);
+		expect(loadToolsConfig(appHomeDir).tools.subagentInline.enabled).toBe(false);
+
+		writeFileSync(
+			join(appHomeDir, "tools.json"),
+			JSON.stringify({ tools: { subagentInline: { enabled: "no" } } }),
+			"utf-8",
+		);
+		expect(loadToolsConfig(appHomeDir).tools.subagentInline.enabled).toBe(true);
 	});
 
 	it("falls back to defaults for invalid values", () => {

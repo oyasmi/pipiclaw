@@ -11,7 +11,7 @@ import type { ProjectScope } from "../security/project-scope.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawMemoryRecallSettings, PipiclawSessionSearchSettings } from "../settings.js";
 import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
-import { createSubAgentTool } from "../subagents/tool.js";
+import { createSubAgentInlineTool, createSubAgentTool } from "../subagents/tool.js";
 import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
 import { buildToolSet } from "./registry.js";
@@ -81,37 +81,40 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		memoryCandidateStore: options.memoryCandidateStore,
 		mediaSender: options.mediaSender,
 	});
+	const subAgentToolOptions = {
+		executor: options.executor,
+		fileStore: options.fileStore,
+		getCurrentModel: options.getCurrentModel,
+		getAvailableModels: options.getAvailableModels,
+		resolveApiKey: options.resolveApiKey,
+		workspaceDir: options.workspaceDir,
+		// D6.2: an internal sub-agent defaults to the parent's ProjectRoot; a model-requested
+		// explicit workingDirectory is validated (in subagents/tool.ts) to stay within it.
+		workingDirectory: options.projectScope.projectRoot,
+		projectBoundary: options.projectScope.boundary,
+		channelDir: options.channelDir,
+		getSubAgentDiscovery: options.getSubAgentDiscovery,
+		getMemoryRecallSettings: options.getMemoryRecallSettings,
+		getSubAgentModelReference: options.getSubAgentModelReference,
+		memoryCandidateStore: options.memoryCandidateStore,
+		securityConfig,
+		webConfig: toolsConfig.tools.web,
+		rtkEnabled: toolsConfig.tools.rtk.enabled,
+		runtimeContext: {
+			workspaceDir: options.workspaceDir,
+			channelId: options.channelId,
+		},
+	};
 	return [
 		...leafTools,
 		// Bound to the same `details` contract as the registry's tools; it is registered here
 		// rather than in TOOL_REGISTRY only to avoid a registry ↔ subagents/tool import cycle.
-		withToolDetails(
-			createSubAgentTool({
-				executor: options.executor,
-				fileStore: options.fileStore,
-				getCurrentModel: options.getCurrentModel,
-				getAvailableModels: options.getAvailableModels,
-				resolveApiKey: options.resolveApiKey,
-				workspaceDir: options.workspaceDir,
-				// D6.2: an internal sub-agent defaults to the parent's ProjectRoot; a model-requested
-				// explicit workingDirectory is validated (in subagents/tool.ts) to stay within it.
-				workingDirectory: options.projectScope.projectRoot,
-				projectBoundary: options.projectScope.boundary,
-				channelDir: options.channelDir,
-				getSubAgentDiscovery: options.getSubAgentDiscovery,
-				getMemoryRecallSettings: options.getMemoryRecallSettings,
-				getSubAgentModelReference: options.getSubAgentModelReference,
-				memoryCandidateStore: options.memoryCandidateStore,
-				securityConfig,
-				webConfig: toolsConfig.tools.web,
-				rtkEnabled: toolsConfig.tools.rtk.enabled,
-				runtimeContext: {
-					workspaceDir: options.workspaceDir,
-					channelId: options.channelId,
-				},
-			}),
-			"subagent",
-		),
+		withToolDetails(createSubAgentTool(subAgentToolOptions), "subagent"),
+		// Spec 046, D2.3: gated by `tools.json` (deployer decision, not a model-visible field) —
+		// omitted from the tool set entirely when off, not merely rejected at call time.
+		...(toolsConfig.tools.subagentInline.enabled
+			? [withToolDetails(createSubAgentInlineTool(subAgentToolOptions), "subagent_inline")]
+			: []),
 		withToolDetails(
 			createSubAgentManageTool({
 				channelId: options.channelId,

@@ -58,21 +58,15 @@ const TOOL_FIELDS: Record<string, string[]> = {
 	web_search: ["query"],
 	send_media: ["path", "fileName"],
 	event_manage: ["action", "name", "definition"],
-	task_manage: [
-		"action",
-		"id",
-		"status",
-		"enabled",
-		"wake",
-		"waitingFor",
-		"nextAction",
-		"blockedReason",
-		"verificationRequired",
-		"verifierRunId",
-	],
+	task_list: [],
+	task_create: ["id", "status", "wake", "schedule", "deadline", "verificationRequired"],
+	task_update: ["id", "note", "status", "wake", "schedule", "control"],
+	task_close: ["id", "outcome", "reason"],
+	task_verify: ["id", "verifierRunId"],
 	memory_manage: ["op", "label", "kind", "target", "query", "content"],
 	session_search: ["query", "offset", "limit"],
-	subagent: ["agent", "label", "purpose", "returns"],
+	subagent: ["agent", "label", "purpose"],
+	subagent_inline: ["label", "purpose", "systemPrompt", "model", "mutates"],
 };
 
 /**

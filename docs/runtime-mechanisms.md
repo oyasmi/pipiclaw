@@ -64,7 +64,7 @@
 
 ## 长程任务
 
-任务文件位于 `workspace/<channelId>/tasks/<id>.md`。`tools.tasks.enabled` 同时门控三件事：`task_manage` 工具、内建 TaskDriver、每回合任务摘要注入。
+任务文件位于 `workspace/<channelId>/tasks/<id>.md`。`tools.tasks.enabled` 同时门控三件事：全部 task_* 工具、内建 TaskDriver、每回合任务摘要注入。
 
 当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进任务正文或用 `wake` 错开；每个任务只按自己的 Goal、DoD、Manual、Verification 和 control 收口。旧任务里残留的 retired control keys 会被读取层忽略，并由 `/tasks doctor` 报告。
 
@@ -88,7 +88,7 @@ TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据�
 - 内置 verifier 会被结构性移除 write/edit，验收强度为 `enforced`。
 - 外部 verifier 只能依赖目标 CLI sandbox 和前后工作区 subject 哈希，验收强度为 `advisory`；声明 `mutates: write` 或使用 `exec` harness 的角色不能承担验收。
 
-`task_manage verify` 导入 attestation；`complete` 会重新校验任务契约 hash 和 Git artifact subject，防止验收之后需求或产物发生变化。
+`task_verify` 导入 attestation；`task_close`（outcome=complete）会重新校验任务契约 hash 和 Git artifact subject，防止验收之后需求或产物发生变化。
 
 ## 日志与账本
 

@@ -218,7 +218,7 @@ export const capabilityCases: EvalCase[] = [
 					"pointer. If a pointed-to file says it is retired or superseded, do not use its content as the " +
 					"token; follow its instruction to the next file instead. Record in this task's Current Cycle which " +
 					"item required a redirect and what the redirect said, so the reason survives a future wake.\n\n" +
-					"Advance a few items at a time, checkpoint with task_manage progress between batches, and do not " +
+					"Advance a few items at a time, checkpoint with task_update (note set) between batches, and do not " +
 					"mark done until all 12 lines are present in report.md.\n\n" +
 					"## DoD\n" +
 					"- [ ] report.md contains ITEM-01 through ITEM-12 in order\n" +

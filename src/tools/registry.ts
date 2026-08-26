@@ -19,7 +19,13 @@ import { createReadTool } from "./read.js";
 import { createSendMediaTool } from "./send-media.js";
 import { createSessionSearchTool } from "./session-search.js";
 import { createSkillTool } from "./skill.js";
-import { createTaskManageTool } from "./task-manage.js";
+import {
+	createTaskCloseTool,
+	createTaskCreateTool,
+	createTaskListTool,
+	createTaskUpdateTool,
+	createTaskVerifyTool,
+} from "./task-manage.js";
 import { type ToolDetailsKind, withToolDetails } from "./tool-details.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { createWebSearchTool } from "./web-search.js";
@@ -45,7 +51,7 @@ export interface ToolBuildContext {
 	workspaceDir: string;
 	/** Main set: `toolsConfig.tools.web`; sub-agent set: the sub-agent's own webConfig. */
 	webConfig?: PipiclawWebToolsConfig;
-	/** Present only on the main path; gates task_manage and the bash interceptor. */
+	/** Present only on the main path; gates the task_* tools and the bash interceptor. */
 	toolsConfig?: PipiclawToolsConfig;
 	/** Sub-agent set passes its per-invocation bash timeout; the main set relies on the built-in default. */
 	bashDefaultTimeoutSeconds?: number;
@@ -222,14 +228,63 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				commandGuardConfig: ctx.securityConfig.commandGuard,
 			}),
 	},
+	// tools.tasks is the master switch for the whole autonomous long-running task mechanism;
+	// the TaskDriver and per-turn task digest honor the same flag. Five tools, one per payload
+	// shape (spec 046, D3.1) — all share it, since none is meaningful without the others.
 	{
-		name: "task_manage",
+		name: "task_list",
 		availableToSubagents: false,
-		// tools.tasks is the master switch for the whole autonomous long-running task
-		// mechanism; the TaskDriver and per-turn task digest honor the same flag.
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
 		create: (ctx) =>
-			createTaskManageTool({
+			createTaskListTool({
+				workspaceDir: ctx.workspaceDir,
+				channelDir: ctx.channelDir,
+				channelId: ctx.channelId,
+				workingDirectory: ctx.securityContext.projectRoot,
+			}),
+	},
+	{
+		name: "task_create",
+		availableToSubagents: false,
+		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
+		create: (ctx) =>
+			createTaskCreateTool({
+				workspaceDir: ctx.workspaceDir,
+				channelDir: ctx.channelDir,
+				channelId: ctx.channelId,
+				workingDirectory: ctx.securityContext.projectRoot,
+			}),
+	},
+	{
+		name: "task_update",
+		availableToSubagents: false,
+		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
+		create: (ctx) =>
+			createTaskUpdateTool({
+				workspaceDir: ctx.workspaceDir,
+				channelDir: ctx.channelDir,
+				channelId: ctx.channelId,
+				workingDirectory: ctx.securityContext.projectRoot,
+			}),
+	},
+	{
+		name: "task_close",
+		availableToSubagents: false,
+		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
+		create: (ctx) =>
+			createTaskCloseTool({
+				workspaceDir: ctx.workspaceDir,
+				channelDir: ctx.channelDir,
+				channelId: ctx.channelId,
+				workingDirectory: ctx.securityContext.projectRoot,
+			}),
+	},
+	{
+		name: "task_verify",
+		availableToSubagents: false,
+		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
+		create: (ctx) =>
+			createTaskVerifyTool({
 				workspaceDir: ctx.workspaceDir,
 				channelDir: ctx.channelDir,
 				channelId: ctx.channelId,
@@ -260,6 +315,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 export const TOOL_NAMES: ReadonlySet<string> = new Set<string>([
 	...TOOL_REGISTRY.map((registration) => registration.name),
 	"subagent",
+	"subagent_inline",
 	"subagent_manage",
 ]);
 

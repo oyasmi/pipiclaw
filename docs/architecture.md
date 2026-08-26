@@ -247,10 +247,10 @@ flowchart LR
 | 驱动者 | `EventsWatcher`：fs.watch + 防抖，cron 到点触发 | `TaskDriver`：自适应 timer + nudge 扫描台账，每频道每 tick 至多唤醒 1 个可行动任务 |
 | 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | `wake` 时刻、fingerprint 未变化时按 stalled 间隔退避 |
 | 治理 | 事件历史 `state/events/history.jsonl` | 确定性 governor：active attempt budget / deadline 或连续无进展 → `enabled=false` + `stop(by=governor)`，直接通知 |
-| Agent 侧工具 | `event_manage` | `task_manage`（创建/checkpoint/验证/关闭），配合 `task-planning` / `task-driving` playbook |
+| Agent 侧工具 | `event_manage` | `task_create`/`task_update`/`task_close`/`task_verify`/`task_list`，配合 `task-planning` / `task-driving` playbook |
 | 用户命令 | `/events` | `/tasks`（pause/resume/run/set/doctor 等零 LLM 成本控制） |
 
-TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`（带任务胶囊摘要），走与用户消息完全相同的串行轮次管道；轮次结束后把 usage/耗时回写任务控制块（`finishTaskAttempt`）。整套任务机制（`task_manage` 工具、TaskDriver、任务摘要注入）由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
+TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`（带任务胶囊摘要），走与用户消息完全相同的串行轮次管道；轮次结束后把 usage/耗时回写任务控制块（`finishTaskAttempt`）。整套任务机制（全部 task_* 工具、TaskDriver、任务摘要注入）由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
 
 任务正文可选携带一段 `## Plan`（spec 037）：介于 Goal/DoD 契约与只增的 Current Cycle 日志之间的手段层，四态 checkbox（`[ ]`/`[x]`/`[!]`/`[~]`），当前步骤由 runtime 从文档顺序推导、不由模型自报，唤醒胶囊与任务摘要都会显示进度和当前步骤。契约段哈希的边界因此改为「Plan 与 Current Cycle 中先出现的那个」，使 Plan 步骤状态变化永不影响已记录的验证 PASS。Plan 状态刻意不进入 TaskDriver 的停滞 fingerprint——勾一个复选框不能重置连续无进展计数、买到快速重试档。
 
@@ -263,7 +263,7 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 | `read` / `bash` / `edit` / `write` / `grep` | ✅ | 恒开，无开关 |
 | `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；Brave 搜索 + Readability 正文提取，支持代理） |
 | `session_search` / `memory_manage` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
-| `task_manage` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要 |
+| `task_list`/`task_create`/`task_update`/`task_close`/`task_verify` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要 |
 | `subagent` / `subagent_manage` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
 
 增强类开关：`tools.rtk`（token 优化改写，默认关）、`tools.bashInterceptor`（把裸 `cat`/递归 grep/`sed -i` 导向专用工具，默认开）。
@@ -333,7 +333,7 @@ system prompt 由 Pipiclaw 自己拥有：`channel-runner.ts` 通过 pi 的 `sys
 组装顺序：
 
 ```text
-runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(需 task_manage)
+runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(需 task_create/task_update/task_close)
 → playbooks(按工具过滤) → subagents(需 subagent 且有条目) → SOUL.md → AGENTS.md
 → [pi 追加] <available_skills> + 当前日期 + cwd
 → [before_agent_start 追加] runtime.boundary footer
@@ -344,7 +344,7 @@ runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(
 - **prompt units 预算**：预算以 `countPromptUnits`（`shared/prompt-units.ts`：CJK 每字 1、非 CJK 单词 1、标点空白 0）度量。runtime-authored 段合计目标 ≤ 700 units、硬上限 1,200 units（`builder.ts`），超标分别 warning/error。已删除旧的 32k 全局字符池与「依次收缩 subagents/playbooks/AGENTS/SOUL」策略，用户文件不再因总量竞争被裁。`HARD_TOTAL_BUDGET_CHARS`/`SOFT_TOTAL_BUDGET_CHARS` 公共导出随之移除（beta API 变更）。
 - **SOUL / AGENTS 独立预算**：两者互不挤压，各有 units + chars 双上限（SOUL 3,000 units / 24,000 chars，AGENTS 6,000 units / 48,000 chars，见 `prompt/resources.ts`）。只有真正超大的文件才 head/tail 截断；正文裁剪发生在 resources 层，section 层只保证 wrapper 完整。
 - **缓存稳定**：system prompt 里没有 channelId、channel 路径、时间戳。同一 workspace 下不同频道、连续多轮的 prompt 字节一致，provider 前缀缓存才能命中。频道事实改由每回合的 `<runtime_turn_context>` 胶囊携带（`channel-runner.ts`）。
-- **工具门控**：关闭 `task_manage` 时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
+- **工具门控**：关闭 task_* 工具时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
 - **skills 完全交给 pi（spec 026 §9）**：`skillsOverride` 保留 ResourceLoader 中的 skills，`<available_skills>` 索引与 `/skill:name` 命令同源；Pipiclaw 只负责合并策略与诊断（workspace 覆盖同名 skill），不设 skills 预算、不产生超限 warning。`/context` 只观测 skills 体量（`estimateSkillsPromptChars` 现位于 `prompt/manifest.ts`）。
 - **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`runtime/events.ts`），普通对话不再长期携带。TASK_DRIVER 的准确 task 文件与 playbook 路径继续由 `runtime/task-driver.ts` 的 trigger 给出。
 - **自动 turn context 单位上限（spec 026 §5.3）**：recall（1,800 units）、task agenda（600 units）、first-turn bootstrap（400 units）各有独立 unit 上限，与 settings 的 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`memory/recall.ts`、`memory/task-digest.ts`、`memory/bootstrap.ts`）。

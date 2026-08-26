@@ -10,6 +10,7 @@ import {
 } from "../src/playbooks/catalog.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { guardPath } from "../src/security/path-guard.js";
+import { TOOL_NAMES } from "../src/tools/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 // Catalog order is the unique frontmatter order: orientation first, then memory, delivery,
@@ -25,16 +26,12 @@ const EXPECTED_PLAYBOOKS = [
 	"task-driving.md",
 ];
 
-const ALL_TOOLS = [
-	"read",
-	"memory_manage",
-	"skill_manage",
-	"send_media",
-	"event_manage",
-	"job",
-	"task_manage",
-	"subagent",
-];
+// Derived from the registry (spec 046 D6's fix, generalized): a hand-maintained list drifts
+// silently — it previously still listed the retired `skill_manage` and the pre-split
+// `task_manage` — and a stale fixture here would make selectRuntimePlaybooks's gating "pass"
+// against tool names that no longer exist.
+const ALL_TOOLS = Array.from(TOOL_NAMES);
+const TASK_TOOLS = ["task_list", "task_create", "task_update", "task_close", "task_verify"];
 
 const makeTempDir = useTempDirs("pipiclaw-playbooks-");
 
@@ -55,7 +52,7 @@ describe("runtime playbook catalog", () => {
 
 		const withoutTasks = selectRuntimePlaybooks(
 			catalog,
-			ALL_TOOLS.filter((tool) => tool !== "task_manage" && tool !== "subagent"),
+			ALL_TOOLS.filter((tool) => !TASK_TOOLS.includes(tool) && tool !== "subagent" && tool !== "subagent_inline"),
 		).map((item) => item.filename);
 		expect(withoutTasks).toContain("runtime-orientation.md");
 		expect(withoutTasks.filter((name) => name.startsWith("task-"))).toEqual([]);

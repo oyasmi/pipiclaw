@@ -1,12 +1,18 @@
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
-import { ROLE_FIELD_MATRIX, resolveSubAgentConfig, type SubAgentConfig } from "../src/subagents/discovery.js";
+import {
+	ROLE_FIELD_MATRIX,
+	resolveConfiguredRole,
+	resolveInlineAgent,
+	type SubAgentConfig,
+} from "../src/subagents/discovery.js";
 
 /**
  * Spec 042, D3: the field legality matrix is data, not scattered `if`s, so a field added later
  * cannot silently land as "supported" by omission — this test iterates the table itself rather
  * than re-asserting each field's message (that per-field behavior is covered end-to-end in
- * subagent-discovery-external.test.ts).
+ * subagent-discovery-external.test.ts). Unaffected by spec 046's invocation-surface split: this
+ * table governs role-*file* frontmatter, not the call-time overrides.
  */
 describe("ROLE_FIELD_MATRIX (spec 042, D3)", () => {
 	it("every listed field is rejected for exactly one runtime and supported for the other", () => {
@@ -44,29 +50,22 @@ const externalRole: SubAgentConfig = {
 	mutates: "read",
 };
 
-describe("resolveSubAgentConfig invocation-side matrix (spec 042, D3)", () => {
-	it("rejects tools and model overrides on an external role instead of silently ignoring them", () => {
-		const tools = resolveSubAgentConfig([model], model, [externalRole], {
-			agent: "reviewer",
-			tools: ["read", "bash"],
-		});
-		expect(tools.config).toBeUndefined();
-		expect(tools.error).toContain("tools");
-		expect(tools.error).toContain("external");
-
-		// Empty availableModels: if this ever fell through to resolution, "totally-bogus-model"
-		// would fail with "not found among available models" — asserting the error does NOT say
-		// that distinguishes "rejected because external" from "rejected because resolution failed".
-		const mdl = resolveSubAgentConfig([], model, [externalRole], {
-			agent: "reviewer",
-			model: "totally-bogus-model",
-		});
-		expect(mdl.config).toBeUndefined();
-		expect(mdl.error).toContain("model");
-		expect(mdl.error).not.toContain("not found among available models");
+/**
+ * Spec 046, D2.1/D4: the three "external role + tools/model/mutates" rejections spec 042 D3 added
+ * to the combined resolver (`discovery.ts:868-888` in the pre-split code) are gone because
+ * `ConfiguredRoleOverrides` — the `subagent` tool's own invocation type — has no `tools`, `model`,
+ * or `mutates` field to reject in the first place. There is no runtime test for "rejects tools on
+ * an external role" any more because there is no code path that could accept one; the guarantee
+ * moved from a unit test to the type checker.
+ */
+describe("resolveConfiguredRole (spec 046, D2.1)", () => {
+	it("resolves an external role with no overrides cleanly", () => {
+		const result = resolveConfiguredRole([], model, [externalRole], { agent: "reviewer" });
+		expect(result.error).toBeUndefined();
+		expect(result.config?.runtime).toBe("external");
 	});
 
-	it("resolves an internal role's model override normally, and an external role with no overrides cleanly", () => {
+	it("resolves an internal role cleanly, falling back to the parent's current model", () => {
 		const internalRole: SubAgentConfig = {
 			...externalRole,
 			runtime: "internal",
@@ -74,24 +73,26 @@ describe("resolveSubAgentConfig invocation-side matrix (spec 042, D3)", () => {
 			command: undefined,
 			externalModelRef: undefined,
 		};
-		const result = resolveSubAgentConfig([model], model, [internalRole], {
-			agent: "reviewer",
-			model: "openai/gpt-4o-mini",
-		});
+		const result = resolveConfiguredRole([model], model, [internalRole], { agent: "reviewer" });
 		expect(result.error).toBeUndefined();
 		expect(result.config).toBeDefined();
+	});
 
-		const untouched = resolveSubAgentConfig([], model, [externalRole], { agent: "reviewer" });
-		expect(untouched.error).toBeUndefined();
-		expect(untouched.config?.runtime).toBe("external");
+	it("reports unknown agent names with the available list", () => {
+		const result = resolveConfiguredRole([model], model, [externalRole], { agent: "ghost" });
+		expect(result.config).toBeUndefined();
+		expect(result.error).toContain("Unknown sub-agent");
+		expect(result.error).toContain("reviewer");
 	});
 });
 
 /**
  * Fix plan §1.1/§1.4 (docs/reviews/2026-08-24-subagents-and-tools-fix-plan.md): the resolved
  * thinkingLevel/mutates matrix across runtime x purpose x explicit-vs-default, so a future change
- * to `resolveSubAgentConfig` cannot silently re-introduce "external work gets force-clamped to the
- * lowest reasoning effort" or "inline delegations can't declare mutates".
+ * cannot silently re-introduce "external work gets force-clamped to the lowest reasoning effort"
+ * or "inline delegations can't declare mutates". Split per spec 046: a configured role only ever
+ * gets an explicit thinkingLevel from its own role file (no invocation override exists), so the
+ * "explicit override wins" half of this matrix now applies to `resolveInlineAgent` only.
  */
 const externalWorkRole: SubAgentConfig = {
 	...externalRole,
@@ -101,89 +102,47 @@ const externalWorkRole: SubAgentConfig = {
 };
 
 describe("thinkingLevel resolution matrix", () => {
-	it("defaults by runtime x purpose (unspecified) and lets an explicit thinkingLevel win everywhere", () => {
-		const internal = resolveSubAgentConfig([model], model, [], { name: "inline", systemPrompt: "Do it" });
-		expect(internal.config?.thinkingLevel).toBe("medium");
-
+	it("configured roles default by runtime x purpose from the role file alone", () => {
 		// External work: stays undefined — no effort flag added by the caller.
-		const externalWork = resolveSubAgentConfig([model], model, [externalWorkRole], { agent: "external-worker" });
+		const externalWork = resolveConfiguredRole([model], model, [externalWorkRole], { agent: "external-worker" });
 		expect(externalWork.config?.thinkingLevel).toBeUndefined();
 
 		// External verify: defaults to medium.
-		const externalVerify = resolveSubAgentConfig([model], model, [externalWorkRole], {
+		const externalVerify = resolveConfiguredRole([model], model, [externalWorkRole], {
 			agent: "external-worker",
 			purpose: "verify",
 		});
 		expect(externalVerify.config?.thinkingLevel).toBe("medium");
+	});
 
-		for (const [resolved, expected] of [
-			[
-				resolveSubAgentConfig([model], model, [], { name: "inline", systemPrompt: "Do it", thinkingLevel: "high" }),
-				"high",
-			],
-			[
-				resolveSubAgentConfig([model], model, [externalWorkRole], {
-					agent: "external-worker",
-					thinkingLevel: "low",
-				}),
-				"low",
-			],
-			[
-				resolveSubAgentConfig([model], model, [externalWorkRole], {
-					agent: "external-worker",
-					purpose: "verify",
-					thinkingLevel: "xhigh",
-				}),
-				"xhigh",
-			],
-		] as const) {
-			expect(resolved.config?.thinkingLevel).toBe(expected);
-		}
+	it("inline delegations default to medium and let an explicit thinkingLevel win", () => {
+		const inline = resolveInlineAgent([model], model, { systemPrompt: "Do it" });
+		expect(inline.config?.thinkingLevel).toBe("medium");
+
+		const explicit = resolveInlineAgent([model], model, { systemPrompt: "Do it", thinkingLevel: "high" });
+		expect(explicit.config?.thinkingLevel).toBe("high");
 	});
 });
 
-describe("mutates invocation parameter", () => {
+describe("mutates invocation parameter (spec 046, D2.1: inline-only)", () => {
 	it("an inline delegation can declare mutates: write via the invocation", () => {
-		const result = resolveSubAgentConfig([model], model, [], {
-			name: "inline",
-			systemPrompt: "Do it",
-			tools: ["read"],
-			mutates: "write",
-		});
+		const result = resolveInlineAgent([model], model, { systemPrompt: "Do it", tools: ["read"], mutates: "write" });
 		expect(result.config?.mutates).toBe("write");
 	});
 
 	it("without an explicit mutates, inline still infers from tools (write/edit only)", () => {
-		const result = resolveSubAgentConfig([model], model, [], {
-			name: "inline",
-			systemPrompt: "Do it",
-			tools: ["read", "edit"],
-		});
+		const result = resolveInlineAgent([model], model, { systemPrompt: "Do it", tools: ["read", "edit"] });
 		expect(result.config?.mutates).toBe("write");
 	});
 
-	it("an external role rejects a caller-supplied mutates -- it comes from the role file", () => {
-		const result = resolveSubAgentConfig([model], model, [externalWorkRole], {
-			agent: "external-worker",
-			mutates: "write",
-		});
-		expect(result.config).toBeUndefined();
-		expect(result.error).toContain("mutates");
-	});
-
 	it("an inline delegation with bash and no explicit mutates gets a warning back for the model", () => {
-		const result = resolveSubAgentConfig([model], model, [], {
-			name: "inline",
-			systemPrompt: "Do it",
-			tools: ["read", "bash"],
-		});
+		const result = resolveInlineAgent([model], model, { systemPrompt: "Do it", tools: ["read", "bash"] });
 		expect(result.config?.mutates).toBe("read");
 		expect(result.warning).toContain("mutates");
 	});
 
 	it("an inline delegation that declares mutates explicitly gets no warning", () => {
-		const result = resolveSubAgentConfig([model], model, [], {
-			name: "inline",
+		const result = resolveInlineAgent([model], model, {
 			systemPrompt: "Do it",
 			tools: ["read", "bash"],
 			mutates: "write",

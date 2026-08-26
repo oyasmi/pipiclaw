@@ -102,39 +102,11 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		expect(input.roleFingerprint).toBeDefined();
 	});
 
-	// Spec 042, D3: "returns: artifact" scopes a produced file to `artifactDir`, but an external
-	// role's real output lives in its own working directory — implementing it would build a
-	// same-named, different-meaning protocol. Rejecting it outright is the honest option.
-	it("rejects returns: artifact on an external role instead of silently ignoring it", async () => {
-		configureSubAgentRuntime({});
-		launchExternalRunMock.mockClear();
-		const workspaceDir = createTempWorkspace();
-		const channelDir = join(workspaceDir, "dm_ext_envelope_artifact");
-		mkdirSync(channelDir, { recursive: true });
-
-		const role: SubAgentConfig = { ...baseRole, name: "builder", contextMode: "isolated", memory: "none", paths: [] };
-
-		const tool = createSubAgentTool({
-			executor: fakeExecutor,
-			fileStore: createFileStore(),
-			getCurrentModel: () => model,
-			getAvailableModels: () => [model],
-			resolveApiKey: async () => "test-key",
-			workspaceDir,
-			channelDir,
-			getSubAgentDiscovery: () => ({ directory: `${workspaceDir}/sub-agents`, agents: [role], warnings: [] }),
-			runtimeContext: { workspaceDir, channelId: "dm_ext_envelope_artifact" },
-		});
-
-		await expect(
-			tool.execute("call-artifact", {
-				agent: "builder",
-				task: "Build the thing.",
-				returns: "artifact",
-			}),
-		).rejects.toThrow(/returns: "artifact"/);
-		expect(launchExternalRunMock).not.toHaveBeenCalled();
-	});
+	// Spec 046, D2.2 removed `returns: "artifact"` and the ARTIFACT marker protocol entirely (for
+	// both internal and external roles) — a caller that needs a specific output file states the
+	// path in the task text instead, which is what this rejection test used to steer external
+	// callers toward. `subagentSchema`/`subagentInlineSchema` have no `returns` field any more, so
+	// the rejection this test asserted is now a compile-time impossibility, not a runtime one.
 
 	function writeSession(channelDir: string): void {
 		writeFileSync(
@@ -217,10 +189,11 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		expect(input.task).toContain("Relevant session state:");
 	});
 
-	// Spec 042, D4: the role-file default changes, but the invocation-side `context` override stays
-	// in effect for external roles — it is the model's own explicit per-dispatch decision, not a
-	// forgotten role default.
-	it("still honors an invocation-side context: session override on an external role", async () => {
+	// Spec 046, D2.1: `subagent` (role-based) no longer has a `context` override at all — a
+	// configured role's contextMode/memory come from its own role file exclusively. The old
+	// "invocation-side override wins" behavior this test asserted is gone; an isolated role stays
+	// isolated no matter what the call says, because there is no field to say it with.
+	it("an external role's context always comes from its own frontmatter — no invocation override exists", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
@@ -248,14 +221,10 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			runtimeContext: { workspaceDir, channelId: "dm_ext_invocation_context" },
 		});
 
-		await tool.execute("call-invocation-context", {
-			agent: "scout",
-			task: "Look around.",
-			context: "session",
-		});
+		await tool.execute("call-invocation-context", { agent: "scout", task: "Look around." });
 
 		const input = launchExternalRunMock.mock.calls[0]?.[0] as { task: string };
-		expect(input.task).toContain("Refactoring the memory pipeline.");
+		expect(input.task).not.toContain("Refactoring the memory pipeline.");
 	});
 
 	it("carries the verification protocol into a purpose=verify external run", async () => {

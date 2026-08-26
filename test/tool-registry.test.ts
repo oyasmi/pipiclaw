@@ -70,7 +70,11 @@ describe("tool registry", () => {
 			"memory_manage",
 			"skill",
 			"event_manage",
-			"task_manage",
+			"task_list",
+			"task_create",
+			"task_update",
+			"task_close",
+			"task_verify",
 		]);
 	});
 
@@ -104,7 +108,11 @@ describe("tool registry", () => {
 		const tools = buildToolSet(makeContext({ toolsConfig, webConfig: toolsConfig.tools.web }));
 		const names = tools.map((tool) => tool.name);
 		expect(names).not.toContain("web_search");
-		expect(names).not.toContain("task_manage");
+		expect(names).not.toContain("task_list");
+		expect(names).not.toContain("task_create");
+		expect(names).not.toContain("task_update");
+		expect(names).not.toContain("task_close");
+		expect(names).not.toContain("task_verify");
 		// Core capabilities have no switches: always registered.
 		expect(names).toContain("session_search");
 		expect(names).toContain("skill");

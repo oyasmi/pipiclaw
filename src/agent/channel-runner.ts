@@ -1655,7 +1655,7 @@ export class ChannelRunner implements AgentRunner {
 		});
 	}
 
-	/** Gated by the same master autonomy switch as task_manage and the TaskDriver. */
+	/** Gated by the same master autonomy switch as the task_* tools and the TaskDriver. */
 	private buildTaskDigestForTurn(): Promise<string> {
 		const taskDigestSettings = this.settingsManager.getTaskDigestSettings();
 		return buildTaskDigest({

@@ -101,13 +101,13 @@ export const TASK_CORE_SECTION: PromptSectionDefinition = {
 	source: "runtime/tasks",
 	authority: "runtime-hard",
 	cacheClass: "runtime-stable",
-	requiresAllTools: ["task_manage"],
+	requiresAllTools: ["task_create", "task_update", "task_close"],
 	maxChars: 600,
 	overflow: "error",
 	render: () =>
 		[
 			"## Persistent Work",
-			"Use a task only when work must survive this turn. Follow the exact task file and runtime guide named by a task wake; use `task_manage` for lifecycle state and never expand the task's stated scope or bypass its verification gate.",
+			"Use a task only when work must survive this turn. Follow the exact task file and runtime guide named by a task wake; use `task_update`/`task_close` for lifecycle state and never expand the task's stated scope or bypass its verification gate.",
 		].join("\n"),
 };
 
@@ -143,9 +143,12 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 		// (it does not count toward the 700/1200 unit budget — see builder.ts's
 		// RUNTIME_AUTHORED_SECTION_IDS — so it must not be padded just because it is "free").
 		if (context.subAgents.length === 0) {
+			const hasInline = context.tools.some((tool) => tool.name === "subagent_inline");
 			return [
 				"## Sub-Agents",
-				"Delegate with `subagent`: pass an inline `systemPrompt` (no configured agent is required).",
+				hasInline
+					? "No configured agent exists yet: delegate with `subagent_inline`, passing a `systemPrompt` (no configured agent is required)."
+					: "No configured agent exists and `subagent_inline` is off; ask the deployer to add a role or enable it.",
 				"A sub-agent starts blank — state goal, scope, paths, constraints, acceptance criteria in `task`.",
 				"Read agent-delegation.md before non-trivial delegation.",
 			].join("\n");

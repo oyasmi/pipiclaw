@@ -20,7 +20,7 @@ export type TaskArchiveOutcome = "completed" | "cancelled";
  * has a single owner. The parsing stays deliberately literal (flat `key: value` fields,
  * live-vs-archived, wake gating, fail-open on unreadable frontmatter) because task files
  * are hand-editable and must degrade toward "wake me up so I can be fixed".
- * `/tasks`, the task digest, and `task_manage list` all read through here.
+ * `/tasks`, the task digest, and `task_list` all read through here.
  */
 
 export interface TaskFrontmatter {
@@ -478,7 +478,7 @@ export function missingStandardTaskSections(content: string): string[] {
  * Without the "no checklist items" case, a DoD written as prose or a numbered
  * list (no `- [ ]` anywhere) makes this function return an empty array —
  * indistinguishable from "everything is checked" — which would silently let
- * `task_manage complete` through with nothing ever actually verified.
+ * `task_close outcome=complete` through with nothing ever actually verified.
  */
 export function uncheckedTaskAcceptanceItems(content: string): string[] {
 	const unchecked: string[] = [];

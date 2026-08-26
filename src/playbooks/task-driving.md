@@ -1,7 +1,7 @@
 ---
 name: task-driving
 description: 被 TASK_DRIVER 唤醒推进任务，或处理任务等待、验收（verify）、闭环、停滞、停用及元数据损坏时。
-requires-tools: task_manage
+requires-tools: task_update, task_close, task_verify
 order: 80
 ---
 
@@ -25,7 +25,7 @@ order: 80
 
 ## 回合结束必须留下状态
 
-仍需继续时，用 `task_manage progress` 原子记录发生了什么、证据、下一步、status/wake；Plan 变化放在同一次 `planSteps` 里。生命周期动作 `complete`、`skip`、`cancel` 本身就是 checkpoint。
+仍需继续时，用带 `note` 的 `task_update` 原子记录发生了什么、证据、下一步、status/wake；Plan 变化放在同一次 `planSteps` 里。`task_close`（complete/skip/cancel）本身就是 checkpoint。
 
 - 当前可继续：`active`，清除 wake。
 - 等待真实条件：按上一节设置 `waiting`、wake 和 waitingFor。
@@ -46,9 +46,9 @@ task scope 就是 authority：不要扩大目标、渠道、环境或对象范�
 ## 独立验收
 
 1. 只有证据成立后才勾选 DoD / Verification checklist。
-2. 像任何其他委派一样，派发一个 `purpose: verify`、带 `taskId` 的 sub-agent，然后用 `task_manage progress` 把任务停泊为 `waiting`（不设 wake，`waitingFor: external-signal`）——没有单独的 `request-verification` 动作，也没有 `waiting + waitingFor: verification` 这种状态。
+2. 像任何其他委派一样，派发一个 `purpose: verify`、带 `taskId` 的 sub-agent，然后用带 `note` 的 `task_update` 把任务停泊为 `waiting`（不设 wake，`waitingFor: external-signal`）——没有单独的 `request-verification` 动作，也没有 `waiting + waitingFor: verification` 这种状态。
 3. checker 只读检查，结尾返回 `VERDICT: PASS` 或 `VERDICT: FAIL`；完成后 runtime 通过完成唤醒恢复所属 task，依据是 run 记录里的 `taskId`。
-4. 主回合用 `task_manage verify` 导入 runId；attestation 必须属于当前 task、未改变 workspace，且 contract body hash 与 artifact subject 新鲜。
+4. 主回合用 `task_verify` 导入 runId；attestation 必须属于当前 task、未改变 workspace，且 contract body hash 与 artifact subject 新鲜。
 5. PASS/FAIL 都恢复 active；PASS 后 complete 仍会重新校验 attestation、contract hash 和 artifact subject。
 6. attestation 标 `advisory` 时（带 `bash` 的内置验收者，以及所有外部验收者），结论只是参考而非结构性保证，仍要按风险抽查；判定强度的来源见 `agent-delegation.md`。
 
@@ -89,4 +89,4 @@ control: {"version":3,...,"stop":{"by":"governor","reason":"<确定性原因>","
 - required verification 的 attestation、contract hash、artifact subject；
 - 不可读 frontmatter 或不可解析的 control（旧版本的 control 直接判为不可读）。
 
-修 metadata 不执行外部动作。坏 frontmatter 会 fail-open 让问题显现；坏 control 用 `task_manage set` 传结构化的 `control` 重写，不要手工拼 JSON 字符串。要改的是正文契约（Goal/DoD/Manual/Verification）时才用 `edit`——`set` 原样保留正文，改完记得重新验收。daemon 重启后按任务文件重新恢复，仍须遵守幂等检查。
+修 metadata 不执行外部动作。坏 frontmatter 会 fail-open 让问题显现；坏 control 用不带 `note` 的 `task_update` 传结构化的 `control` 重写，不要手工拼 JSON 字符串。要改的是正文契约（Goal/DoD/Manual/Verification）时才用 `edit`——不带 `note` 的 `task_update` 原样保留正文，改完记得重新验收。daemon 重启后按任务文件重新恢复，仍须遵守幂等检查。

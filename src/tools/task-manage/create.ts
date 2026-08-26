@@ -5,19 +5,18 @@ import { writeFileAtomically } from "../../shared/atomic-file.js";
 import { normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../tasks/ledger.js";
 import { RecoverableToolError } from "../tool-details.js";
 import { renderTaskFile, renderTaskSkeleton, tasksDir } from "./shared.js";
-import type { TaskManageRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
+import type { TaskCreateRequest, TaskManageResult, TaskManageToolOptions } from "./types.js";
 
 export async function createTask(
 	options: TaskManageToolOptions,
-	request: TaskManageRequest,
+	request: TaskCreateRequest,
 ): Promise<TaskManageResult> {
-	if (!request.id) throw new RecoverableToolError('action "create" requires an id.');
 	const id = normalizeTaskId(request.id);
 	const dir = tasksDir(options);
 	const taskPath = join(dir, `${id}.md`);
 	const archivePath = join(dir, "archive", `${id}.md`);
 	if (existsSync(taskPath)) {
-		throw new RecoverableToolError(`Task "${id}" already exists; use action "set" or edit the body instead.`);
+		throw new RecoverableToolError(`Task "${id}" already exists; use task_update or edit the body instead.`);
 	}
 	if (existsSync(archivePath)) {
 		throw new RecoverableToolError(
