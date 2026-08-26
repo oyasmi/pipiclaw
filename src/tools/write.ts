@@ -5,7 +5,6 @@ import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.j
 import { writeContent } from "./write-content.js";
 
 const writeSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're writing (shown to user)" }),
 	path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
 	content: Type.String({ description: "Content to write to the file" }),
 });
@@ -25,10 +24,10 @@ export function createWriteTool(fileStore: FileStore, options: WriteToolOptions 
 		parameters: writeSchema,
 		execute: async (
 			_toolCallId: string,
-			{ path, content }: { label: string; path: string; content: string },
+			{ path, content }: { path: string; content: string },
 			signal?: AbortSignal,
 		) => {
-			await writeContent(fileStore, path, content, signal, {
+			const target = await writeContent(fileStore, path, content, signal, {
 				createParentDir: true,
 				securityConfig: options.securityConfig,
 				securityContext: options.securityContext,
@@ -39,7 +38,7 @@ export function createWriteTool(fileStore: FileStore, options: WriteToolOptions 
 
 			return {
 				content: [{ type: "text", text: `Successfully wrote ${bytesWritten} bytes to ${path}` }],
-				details: undefined,
+				details: { path: target },
 			};
 		},
 	};

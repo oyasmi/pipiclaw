@@ -6,6 +6,7 @@ import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { shellEscape } from "../shared/shell-escape.js";
+import { IGNORED_DIR_SEGMENTS } from "./ignore-dirs.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 /**
@@ -25,13 +26,6 @@ const SINGLE_FILE_MATCHES = 200;
 const FILE_PAGE_LIMIT = 20;
 const SEARCH_TIMEOUT_SECONDS = 30;
 /**
- * Directories never worth scanning. Pushed down to `grep --exclude-dir=` (spec 044, D5.1) so a huge
- * `node_modules` never gets scanned (and never fills the result capture cap below) in the first
- * place; kept as a JS-side post-filter too, as a backstop for a grep implementation whose
- * `--exclude-dir` semantics differ slightly.
- */
-const IGNORED_DIR_SEGMENTS = new Set(["node_modules", ".git", ".hg", ".svn", "dist", "build", ".next", ".cache"]);
-/**
  * Raw `grep` stdout capture cap (spec 044, D5.2). Bounded well under the executor's 10MB default so
  * a broad search can never flood memory, and `ExecResult.stdoutTruncated` (D6.2) says honestly
  * whether the cap was hit -- unlike piping through `head -n`, this leaves `result.code` as grep's
@@ -41,7 +35,6 @@ const IGNORED_DIR_SEGMENTS = new Set(["node_modules", ".git", ".hg", ".svn", "di
 const MAX_RAW_RESULT_BYTES = 768 * 1024;
 
 const grepSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're searching for and why (shown to user)" }),
 	pattern: Type.String({ description: "Extended regular expression (ERE) to search for in file contents." }),
 	path: Type.Optional(Type.String({ description: "File or directory to search. Defaults to the workspace root." })),
 	glob: Type.Optional(
@@ -193,7 +186,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 				glob,
 				caseSensitive,
 				skip,
-			}: { label: string; pattern: string; path?: string; glob?: string; caseSensitive?: boolean; skip?: number },
+			}: { pattern: string; path?: string; glob?: string; caseSensitive?: boolean; skip?: number },
 			signal?: AbortSignal,
 		) => {
 			if (!pattern.trim()) {

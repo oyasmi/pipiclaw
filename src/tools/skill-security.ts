@@ -7,7 +7,6 @@ export interface SkillValidationResult {
 
 const SKILL_NAME_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const FRONTMATTER_REGEX = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
-const ALLOWED_SUPPORTING_DIRS = new Set(["references", "templates", "scripts", "assets"]);
 const BLOCKED_CONTENT_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
 	{ pattern: /ignore\s+(all\s+)?(previous|prior)\s+instructions/i, message: "contains prompt-injection wording" },
 	{
@@ -93,24 +92,6 @@ export function resolveSkillPath(workspaceDir: string, name: string): string {
 	return skillDir;
 }
 
-export function resolveSkillSupportingFile(skillDir: string, filePath: string): string {
-	const normalized = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
-	if (!normalized || normalized.includes("..")) {
-		throw new Error("Supporting file path must not be empty or contain '..'.");
-	}
-	const [topLevel] = normalized.split("/");
-	if (!topLevel || !ALLOWED_SUPPORTING_DIRS.has(topLevel)) {
-		throw new Error("Supporting files must live under references/, templates/, scripts/, or assets/.");
-	}
-
-	const base = resolve(skillDir);
-	const resolved = resolve(base, normalized);
-	if (!resolved.startsWith(`${base}/`)) {
-		throw new Error("Supporting file path escaped the skill directory.");
-	}
-	return resolved;
-}
-
 export function scanSkillContent(content: string): SkillValidationResult {
 	for (const { pattern, message } of BLOCKED_CONTENT_PATTERNS) {
 		if (pattern.test(content)) {
@@ -118,12 +99,4 @@ export function scanSkillContent(content: string): SkillValidationResult {
 		}
 	}
 	return ok();
-}
-
-export function validateSkillMarkdown(content: string, expectedName: string): SkillValidationResult {
-	const frontmatter = validateSkillFrontmatter(content, expectedName);
-	if (!frontmatter.ok) {
-		return frontmatter;
-	}
-	return scanSkillContent(content);
 }

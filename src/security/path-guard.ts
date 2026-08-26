@@ -271,13 +271,13 @@ function isWithinProjectRoot(path: string, ctx: PathGuardContext): boolean {
 	return startsWithPathPrefix(path, normalize(root));
 }
 
-/** Runtime-owned, read-only exception: the AgentWorkspace's `skills/` tree stays readable under
- * `boundary: "project"` so the model can load a skill's playbook regardless of which project it
- * has selected (spec 043, D6.2). Never a write exception. */
-function isAgentWorkspaceSkillsRead(path: string, operation: "read" | "write", ctx: PathGuardContext): boolean {
-	if (operation !== "read") {
-		return false;
-	}
+/** Runtime-owned exception: the AgentWorkspace's `skills/` tree stays reachable under
+ * `boundary: "project"` regardless of which project is selected (spec 043, D6.2) -- reads so the
+ * model can load a skill's playbook, and writes so `write`/`edit` can author one (the `skill` tool
+ * itself is read-only; authoring goes through the generic file tools). The symlink-write check
+ * above this call in `guardPath` still applies, so a skill file that is itself a symlink cannot be
+ * written through even inside this exception. */
+function isAgentWorkspaceSkillsAccess(path: string, ctx: PathGuardContext): boolean {
 	return startsWithPathPrefix(path, normalize(join(ctx.agentWorkspaceDir, "skills")));
 }
 
@@ -438,7 +438,7 @@ export function guardPath(rawPath: string, operation: "read" | "write", ctx: Pat
 	if (
 		pathAllowedByDefaults(guardedPath, effectiveCtx) ||
 		isBundledPlaybookRead(guardedPath, operation) ||
-		isAgentWorkspaceSkillsRead(guardedPath, operation, effectiveCtx) ||
+		isAgentWorkspaceSkillsAccess(guardedPath, effectiveCtx) ||
 		isChannelDirAccess(guardedPath, operation, effectiveCtx)
 	) {
 		return { allowed: true, operation, rawPath, resolvedPath: guardedPath };

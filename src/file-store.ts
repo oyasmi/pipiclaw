@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, type Dirent } from "node:fs";
 import { stat as fsStat, mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { type Readable, Writable } from "node:stream";
@@ -73,6 +73,21 @@ export interface ReplaceViaTempOptions {
 	signal?: AbortSignal;
 }
 
+export interface WalkFilesOptions {
+	/** Stop once this many file paths have been collected; the walk short-circuits, `truncated` says so. */
+	maxEntries: number;
+	/** Called with a directory's basename; returning true skips descending into it (never dereferenced). */
+	prune?: (dirName: string) => boolean;
+	signal?: AbortSignal;
+}
+
+export interface WalkFilesResult {
+	/** Regular-file paths only (never directories or symlinks), `/`-joined and relative to the walked root. */
+	files: string[];
+	/** True when `maxEntries` was hit before the walk finished -- the result is a partial, not the complete tree. */
+	truncated: boolean;
+}
+
 export interface FileStore {
 	/** ENOENT resolves to `undefined` rather than throwing. */
 	stat(path: string): Promise<FileStat | undefined>;
@@ -91,6 +106,14 @@ export interface FileStore {
 
 	/** Depth-bounded directory listing, replacing the `find -maxdepth` shell-out. */
 	listDirectory(path: string, opts: { maxDepth: number }): Promise<DirectoryEntry[]>;
+
+	/**
+	 * Unbounded-depth file discovery for `glob`, replacing the `find` shell-out. Directories are
+	 * pruned by `opts.prune` before being entered (so a huge `node_modules` is never walked at all,
+	 * mirroring `grep`'s `--exclude-dir` push-down); symlinks (file or directory) are never followed,
+	 * since `Dirent.isFile()`/`isDirectory()` reflect the link itself, not its target.
+	 */
+	walkFiles(path: string, opts: WalkFilesOptions): Promise<WalkFilesResult>;
 }
 
 export function createFileStore(): FileStore {
@@ -246,5 +269,42 @@ class HostFileStore implements FileStore {
 		};
 		await walk(path, "", 1);
 		return results;
+	}
+
+	async walkFiles(path: string, opts: WalkFilesOptions): Promise<WalkFilesResult> {
+		const files: string[] = [];
+		let truncated = false;
+		const walk = async (currentDir: string, relPrefix: string): Promise<void> => {
+			if (truncated) return;
+			throwIfAborted(opts.signal);
+			let entries: Dirent<string>[];
+			try {
+				entries = await readdir(currentDir, { withFileTypes: true });
+			} catch {
+				// An unreadable directory (permission, or removed mid-walk) is skipped rather than
+				// failing the whole discovery -- one bad subtree must not blank out every other match.
+				return;
+			}
+			for (const entry of entries) {
+				if (truncated) return;
+				const relativePath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+				if (entry.isDirectory()) {
+					if (opts.prune?.(entry.name)) continue;
+					await walk(join(currentDir, entry.name), relativePath);
+					continue;
+				}
+				// Symlinks (to files or directories) report false from both checks and are skipped: a
+				// glob result must never resolve outside the guarded root through a link the walk never
+				// asked permission to follow.
+				if (!entry.isFile()) continue;
+				files.push(relativePath);
+				if (files.length >= opts.maxEntries) {
+					truncated = true;
+					return;
+				}
+			}
+		};
+		await walk(path, "");
+		return { files, truncated };
 	}
 }

@@ -38,14 +38,6 @@ export function eventNameFromFilename(filename: string): string {
 	return filename.endsWith(".json") ? filename.slice(0, -".json".length) : filename;
 }
 
-export function extractLabelFromArgs(args: unknown): string | null {
-	if (!args || typeof args !== "object" || !("label" in args)) {
-		return null;
-	}
-	const label = (args as { label?: unknown }).label;
-	return typeof label === "string" && label.trim() ? label.trim() : null;
-}
-
 export function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }

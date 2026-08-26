@@ -55,7 +55,7 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 | Playbook | order | 门控工具 | 读取场景 |
 |---|---|---|---|
 | `runtime-orientation.md` | 10 | 恒在 | 判断知识归属、理解每回合注入了什么、workspace/channel 文件的位置与入口 |
-| `memory-and-learning.md` | 20 | `memory_manage` / `skill_manage` | 记住与忘记、选择记忆层、试用期、维护 ENVIRONMENT、沉淀 workspace skill |
+| `memory-and-learning.md` | 20 | `memory_manage` / `skill` | 记住与忘记、选择记忆层、试用期、维护 ENVIRONMENT、沉淀 workspace skill |
 | `outbound-media.md` | 30 | `send_media` | 把报表、截图、导出文件作为附件交付给用户，以及 receipt 的证据边界 |
 | `event-scheduling.md` | 40 | `event_manage` | 提醒、one-shot、periodic、preAction 传感器、跨回合回访 |
 | `background-jobs.md` | 50 | `job` | 长跑命令的启停、poll 纪律、并发上限、跨回合等待 |

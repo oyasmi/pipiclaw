@@ -25,7 +25,7 @@ describe("bash tool", () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
 		const tool = createBashTool(executor, { defaultTimeoutSeconds: 45 });
 
-		const result = await tool.execute("call", { label: "run", command: "true" });
+		const result = await tool.execute("call", { command: "true" });
 
 		expect(executor.calls).toEqual([
 			{
@@ -47,7 +47,7 @@ describe("bash tool", () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
 		const tool = createBashTool(executor);
 
-		await tool.execute("call", { label: "run", command: "true" });
+		await tool.execute("call", { command: "true" });
 
 		expect(executor.calls[0].options?.timeout).toBe(DEFAULT_BASH_TIMEOUT_SECONDS);
 	});
@@ -56,7 +56,7 @@ describe("bash tool", () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
 		const tool = createBashTool(executor);
 
-		await tool.execute("call", { label: "run", command: "git status" });
+		await tool.execute("call", { command: "git status" });
 
 		expect(executor.calls.map((c) => c.command)).toEqual(["git status"]);
 	});
@@ -65,21 +65,15 @@ describe("bash tool", () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
 		const gated = createBashTool(executor, { interceptorEnabled: true });
 
-		await expect(gated.execute("call", { label: "x", command: "cat notes.txt" })).rejects.toThrow(
-			/use the read tool/,
-		);
-		await expect(gated.execute("call", { label: "x", command: "grep -rn foo ." })).rejects.toThrow(
-			/use the grep tool/,
-		);
-		await expect(gated.execute("call", { label: "x", command: "sed -i 's/a/b/' f" })).rejects.toThrow(
-			/use the edit tool/,
-		);
+		await expect(gated.execute("call", { command: "cat notes.txt" })).rejects.toThrow(/use the read tool/);
+		await expect(gated.execute("call", { command: "grep -rn foo ." })).rejects.toThrow(/use the grep tool/);
+		await expect(gated.execute("call", { command: "sed -i 's/a/b/' f" })).rejects.toThrow(/use the edit tool/);
 
 		// Compound / piped forms are legitimate and must pass through — including a piped recursive
 		// grep, which is a common valid use (`grep -rn foo . | wc -l`) and must not be over-blocked.
-		await gated.execute("call", { label: "x", command: "cat notes.txt | jq ." });
-		await gated.execute("call", { label: "x", command: "grep foo file.txt" });
-		await gated.execute("call", { label: "x", command: "grep -rn foo . | wc -l" });
+		await gated.execute("call", { command: "cat notes.txt | jq ." });
+		await gated.execute("call", { command: "grep foo file.txt" });
+		await gated.execute("call", { command: "grep -rn foo . | wc -l" });
 		expect(executor.calls.map((c) => c.command)).toEqual([
 			"cat notes.txt | jq .",
 			"grep foo file.txt",
@@ -90,7 +84,7 @@ describe("bash tool", () => {
 	it("does not intercept when the interceptor is disabled (default)", async () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
 		const tool = createBashTool(executor);
-		await tool.execute("call", { label: "x", command: "cat notes.txt" });
+		await tool.execute("call", { command: "cat notes.txt" });
 		expect(executor.calls.map((c) => c.command)).toEqual(["cat notes.txt"]);
 	});
 
@@ -98,7 +92,7 @@ describe("bash tool", () => {
 		const plainExecutor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
 		const bare = createBashTool(plainExecutor);
 
-		await expect(bare.execute("call", { label: "long", command: "sleep 100", async: true })).rejects.toThrow(
+		await expect(bare.execute("call", { command: "sleep 100", async: true })).rejects.toThrow(
 			/Background execution is not available/,
 		);
 
@@ -112,11 +106,11 @@ describe("bash tool", () => {
 		const jobManager = new ChannelJobManager("dm_1", executor);
 		const tool = createBashTool(executor, { jobManager });
 
-		const result = await tool.execute("call", { label: "install deps", command: "npm install", async: true });
+		const result = await tool.execute("call", { command: "npm install", async: true });
 
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
 		expect(text).toContain("Background job");
-		expect(text).toContain("install deps");
+		expect(text).toContain("npm install");
 		expect(result.details).toMatchObject({ async: { state: "running" } });
 		expect(jobManager.runningCount()).toBe(1);
 	});
@@ -130,7 +124,7 @@ describe("bash tool", () => {
 		});
 		const tool = createBashTool(executor, { rtkEnabled: true });
 
-		const result = await tool.execute("call", { label: "run", command: "git status" });
+		const result = await tool.execute("call", { command: "git status" });
 
 		// Probe, rewrite, then execute the rewritten form — not the original.
 		expect(executor.calls.map((c) => c.command)).toEqual([
@@ -148,7 +142,7 @@ describe("bash tool", () => {
 		});
 		const tool = createBashTool(executor, { rtkEnabled: true });
 
-		await tool.execute("call", { label: "run", command: "git status" });
+		await tool.execute("call", { command: "git status" });
 
 		expect(executor.calls.map((c) => c.command)).toEqual(["command -v rtk", "git status"]);
 	});
@@ -157,7 +151,7 @@ describe("bash tool", () => {
 		const executor = new RecordingExecutor(async () => ({ code: 7, stdout: "partial", stderr: "boom" }));
 		const tool = createBashTool(executor);
 
-		const result = await tool.execute("call", { label: "run", command: "false" });
+		const result = await tool.execute("call", { command: "false" });
 
 		expect(result.content[0]).toMatchObject({ type: "text", text: "partial\nboom\n\nExit code: 7" });
 		expect(result.details).toMatchObject({ exitCode: 7 });
@@ -171,7 +165,7 @@ describe("bash tool", () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: output, stderr: "" }));
 		const tool = createBashTool(executor);
 
-		const result = await tool.execute("call", { label: "run", command: "printf ..." });
+		const result = await tool.execute("call", { command: "printf ..." });
 		const details = result.details as { fullOutputPath?: string; truncation?: { truncated?: boolean } };
 
 		expect(details.truncation?.truncated).toBe(true);
@@ -197,7 +191,7 @@ describe("bash tool", () => {
 		});
 		const tool = createBashTool(executor);
 
-		const result = await tool.execute("call", { label: "run", command: "sleep 100" });
+		const result = await tool.execute("call", { command: "sleep 100" });
 		const details = result.details as { timedOut?: boolean; exitCode?: number };
 
 		expect(details.timedOut).toBe(true);
@@ -223,7 +217,7 @@ describe("bash tool", () => {
 		const spillingExecutor = new RecordingExecutor(async () => {
 			throw new CommandTerminatedError("timeout", largeOutput, "", 5);
 		});
-		const spilled = await createBashTool(spillingExecutor).execute("call", { label: "run", command: "sleep 100" });
+		const spilled = await createBashTool(spillingExecutor).execute("call", { command: "sleep 100" });
 		const spilledDetails = spilled.details as { fullOutputPath?: string; timedOut?: boolean };
 
 		expect(spilledDetails.timedOut).toBe(true);

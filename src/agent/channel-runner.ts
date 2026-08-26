@@ -1648,6 +1648,7 @@ export class ChannelRunner implements AgentRunner {
 				refreshSessionResources: async () => {
 					await this.refreshSessionResources();
 				},
+				skillsDir: join(this.workspaceDir, "skills"),
 			}).catch((err) => {
 				log.logWarning(`[${this.channelId}] session event handler failed`, errorMessage(err));
 			});

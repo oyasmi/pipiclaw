@@ -93,7 +93,6 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 		});
 
 		const resultPromise = tool.execute("dispatch-call-1", {
-			label: "explore the repo",
 			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Find where the entrypoint is.",

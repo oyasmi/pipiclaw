@@ -6,6 +6,8 @@ import type {
 	ReadBytesOptions,
 	ReadBytesResult,
 	ReplaceViaTempOptions,
+	WalkFilesOptions,
+	WalkFilesResult,
 	WriteAtomicOptions,
 } from "../../src/file-store.js";
 
@@ -49,5 +51,10 @@ export class RecordingFileStore implements FileStore {
 	async listDirectory(path: string): Promise<DirectoryEntry[]> {
 		this.calls.push(`listDirectory:${path}`);
 		throw new Error(`RecordingFileStore.listDirectory unexpectedly called for ${path}`);
+	}
+
+	async walkFiles(path: string, _opts: WalkFilesOptions): Promise<WalkFilesResult> {
+		this.calls.push(`walkFiles:${path}`);
+		throw new Error(`RecordingFileStore.walkFiles unexpectedly called for ${path}`);
 	}
 }

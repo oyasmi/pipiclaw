@@ -88,7 +88,6 @@ function makeTool(workspaceDir: string, channelDir: string, channelId = "dm_leas
 describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 	function writeParams() {
 		return {
-			label: "edit files",
 			name: "writer",
 			systemPrompt: "Edit things.",
 			tools: ["read", "edit"],
@@ -240,7 +239,6 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			const tool = makeTool(workspaceDir, channelDir);
 			await expect(
 				tool.execute("lease-call-1", {
-					label: "edit files",
 					name: "writer",
 					systemPrompt: "Edit things.",
 					tools: ["read", "edit"],
@@ -267,7 +265,6 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		try {
 			const tool = makeTool(workspaceDir, channelDir);
 			const result = await tool.execute("lease-call-2", {
-				label: "read files",
 				name: "reader",
 				systemPrompt: "Read things.",
 				tools: ["read"],
@@ -286,7 +283,6 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 
 		const tool = makeTool(workspaceDir, channelDir);
 		const result = await tool.execute("lease-call-3", {
-			label: "edit files",
 			name: "writer",
 			systemPrompt: "Edit things.",
 			tools: ["read", "edit"],
@@ -341,7 +337,6 @@ Build things.
 `);
 		await expect(
 			tool.execute("ext-verify-1", {
-				label: "verify",
 				agent: "builder",
 				task: "Check it.",
 				purpose: "verify",
@@ -364,7 +359,6 @@ Check things.
 `);
 		await expect(
 			tool.execute("ext-verify-2", {
-				label: "verify",
 				agent: "builder",
 				task: "Check it.",
 				purpose: "verify",

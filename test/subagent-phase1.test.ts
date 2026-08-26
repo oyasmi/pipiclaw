@@ -443,7 +443,6 @@ describe("sub-agent tool", () => {
 		});
 
 		const result = await tool.execute("verify-call-1", {
-			label: "verify ship",
 			name: "independent-verifier",
 			systemPrompt: "Verify evidence independently.",
 			tools: ["read", "bash"],
@@ -499,7 +498,6 @@ describe("sub-agent tool", () => {
 		});
 
 		const result = await tool.execute("call-1", {
-			label: "review current changes",
 			agent: "reviewer",
 			task: "Inspect the current workspace and summarize the main risks.",
 		});
@@ -612,7 +610,6 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 		});
 
 		await tool.execute("call-2", {
-			label: "review memory refactor",
 			agent: "reviewer",
 			task: "Review src/core.ts for regressions and missing tests.",
 		});
@@ -655,7 +652,6 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 		});
 
 		await tool.execute("call-3", {
-			label: "explore",
 			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Find the entrypoint.",
@@ -697,7 +693,6 @@ describe("sub-agent artifact contract (D4)", () => {
 		});
 
 		const result = await tool.execute("artifact-call-1", {
-			label: "explore",
 			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Find the entrypoint.",
@@ -723,7 +718,6 @@ describe("sub-agent artifact contract (D4)", () => {
 		});
 
 		const result = await tool.execute("artifact-call-2", {
-			label: "explore",
 			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Find the entrypoint.",
@@ -745,7 +739,6 @@ describe("sub-agent artifact contract (D4)", () => {
 		});
 
 		const result = await tool.execute("artifact-call-3", {
-			label: "explore",
 			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Find the entrypoint.",
@@ -770,7 +763,6 @@ describe("sub-agent artifact contract (D4)", () => {
 		});
 
 		const result = await tool.execute("artifact-call-4", {
-			label: "explore",
 			name: "explorer",
 			systemPrompt: "Explore the codebase.",
 			task: "Summarize the whole repo.",
@@ -832,7 +824,6 @@ describe("sub-agent convergence turn (D6)", () => {
 		});
 
 		const result = await tool.execute("converge-call-1", {
-			label: "explore",
 			agent: "explorer",
 			task: "Map the whole repo.",
 		});
@@ -883,7 +874,6 @@ describe("sub-agent convergence turn (D6)", () => {
 		});
 
 		const result = await tool.execute("converge-call-2", {
-			label: "explore",
 			agent: "explorer",
 			task: "Map the whole repo.",
 		});
@@ -935,7 +925,6 @@ describe("sub-agent convergence turn (D6)", () => {
 		const result = await tool.execute(
 			"converge-call-3",
 			{
-				label: "explore",
 				agent: "explorer",
 				task: "Map the whole repo.",
 			},
@@ -978,11 +967,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		});
 
 		await expect(
-			tool.execute(
-				"converge-call-4",
-				{ label: "explore", agent: "explorer", task: "Map the whole repo." },
-				controller.signal,
-			),
+			tool.execute("converge-call-4", { agent: "explorer", task: "Map the whole repo." }, controller.signal),
 		).rejects.toThrow("Sub-agent aborted");
 		expect(started).toBe(false);
 	});
@@ -1040,7 +1025,7 @@ describe("sub-agent working directory", () => {
 				const worker = new FakeWorker(async (input, self) => {
 					delegatedTask = input;
 					const bash = config.tools.find((tool) => tool.name === "bash");
-					await bash?.execute("t1", { label: "check", command: "git status" });
+					await bash?.execute("t1", { command: "git status" });
 					const message = createAssistantMessage("Done.");
 					self.state.messages = [message];
 					self.emit({ type: "message_end", message });
@@ -1050,7 +1035,6 @@ describe("sub-agent working directory", () => {
 		});
 
 		await tool.execute("wd-call-1", {
-			label: "explore",
 			name: "explorer",
 			systemPrompt: "Explore.",
 			task: "Look around.",
@@ -1070,7 +1054,6 @@ describe("sub-agent working directory", () => {
 
 		await expect(
 			tool.execute("wd-call-2", {
-				label: "explore",
 				name: "explorer",
 				systemPrompt: "Explore.",
 				task: "Look around.",
@@ -1109,7 +1092,6 @@ describe("sub-agent working directory", () => {
 
 		await expect(
 			tool.execute("wd-call-3", {
-				label: "explore",
 				name: "explorer",
 				systemPrompt: "Explore.",
 				task: "Look around.",
@@ -1120,7 +1102,6 @@ describe("sub-agent working directory", () => {
 		// A subdirectory of the project root is still fine.
 		await expect(
 			tool.execute("wd-call-4", {
-				label: "explore",
 				name: "explorer",
 				systemPrompt: "Explore.",
 				task: "Look around.",

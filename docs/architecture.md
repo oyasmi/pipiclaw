@@ -262,7 +262,7 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 |---|---|---|
 | `read` / `bash` / `edit` / `write` / `grep` | ✅ | 恒开，无开关 |
 | `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；Brave 搜索 + Readability 正文提取，支持代理） |
-| `session_search` / `memory_manage` / `skill_manage` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
+| `session_search` / `memory_manage` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
 | `task_manage` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要 |
 | `subagent` / `subagent_manage` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
 

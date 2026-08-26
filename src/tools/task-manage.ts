@@ -63,13 +63,12 @@ export function createTaskManageTool(options: TaskManageToolOptions): AgentTool<
 			"verification, complete work, skip one recurring occurrence, cancel abandoned work, or list tasks. Use progress for routine " +
 			"end-of-turn checkpoints; use write/edit only for substantial Goal/DoD/Manual/Verification changes.",
 		parameters: taskManageSchema,
-		// `args` is typed from `taskManageSchema`, and so is `TaskManageRequest`: the request is
-		// the validated arguments minus `label`, with no third hand-written copy to drift.
+		// `args` is typed from `taskManageSchema`, and so is `TaskManageRequest`: no third
+		// hand-written copy to drift.
 		execute: async (_toolCallId, args) => {
-			const { label: _label, ...request } = args;
 			const result = await manageTask(options, {
-				...request,
-				action: parseAction(request.action),
+				...args,
+				action: parseAction(args.action),
 			});
 			return {
 				content: [{ type: "text", text: JSON.stringify(result) }],

@@ -13,7 +13,6 @@ import { readWebCache, webCacheKey, writeWebCache } from "./web-cache.js";
 const FULL_FETCH_MAX_CHARS = 2_000_000;
 
 const webFetchSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're fetching and why (shown to user)" }),
 	url: Type.String({ description: "HTTP or HTTPS URL to fetch" }),
 	extractMode: Type.Optional(
 		Type.Union([Type.Literal("markdown"), Type.Literal("text")], {
@@ -86,7 +85,7 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 				extractMode,
 				maxChars,
 				offset,
-			}: { label: string; url: string; extractMode?: "markdown" | "text"; maxChars?: number; offset?: number },
+			}: { url: string; extractMode?: "markdown" | "text"; maxChars?: number; offset?: number },
 			signal?: AbortSignal,
 		) => {
 			const request = resolveWebFetchRequest(options.webConfig.fetch, url, extractMode, maxChars);

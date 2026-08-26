@@ -25,7 +25,7 @@ async function runText(
 	tool: ReturnType<typeof createMemoryManageTool>,
 	args: Record<string, unknown>,
 ): Promise<string> {
-	const result = await tool.execute("call", { label: "memory", ...args } as never);
+	const result = await tool.execute("call", { ...args } as never);
 	return result.content[0].type === "text" ? result.content[0].text : "";
 }
 
@@ -37,7 +37,6 @@ describe("memory_manage tool", () => {
 		const tool = makeTool(channelDir, { memoryCandidateStore: store });
 
 		const result = await tool.execute("call", {
-			label: "remember",
 			op: "save",
 			content: "User prefers responses in Chinese",
 			kind: "preference",
@@ -52,7 +51,7 @@ describe("memory_manage tool", () => {
 
 	it("rejects saves without usable content, naming the arguments that did arrive when content is missing entirely", async () => {
 		const channelDir = createTempChannel();
-		await expect(makeTool(channelDir).execute("call", { label: "x", op: "save", content: "   " })).rejects.toThrow(
+		await expect(makeTool(channelDir).execute("call", { op: "save", content: "   " })).rejects.toThrow(
 			/requires a non-empty "content"/,
 		);
 		expect(await readChannelMemory(channelDir)).not.toContain("x");
@@ -60,17 +59,15 @@ describe("memory_manage tool", () => {
 		// The signature of an argument dropped in transit: everything but the payload arrives.
 		// The rejection must name the keys that did arrive, otherwise the model reads its own
 		// content-less call back from history and replays it forever.
-		await expect(
-			makeTool(channelDir).execute("call", { label: "remember", op: "save", kind: "fact" }),
-		).rejects.toThrow(/label, op, kind/);
+		await expect(makeTool(channelDir).execute("call", { op: "save", kind: "fact" })).rejects.toThrow(/op, kind/);
 	});
 
 	it("rejects search without a query and forget without a target", async () => {
 		const channelDir = createTempChannel();
-		await expect(makeTool(channelDir).execute("call", { label: "x", op: "search" })).rejects.toThrow(
+		await expect(makeTool(channelDir).execute("call", { op: "search" })).rejects.toThrow(
 			/requires a non-empty "query"/,
 		);
-		await expect(makeTool(channelDir).execute("call", { label: "x", op: "forget" })).rejects.toThrow(
+		await expect(makeTool(channelDir).execute("call", { op: "forget" })).rejects.toThrow(
 			/requires a non-empty "target"/,
 		);
 	});
@@ -88,7 +85,7 @@ describe("memory_manage tool", () => {
 			},
 		});
 
-		await tool.execute("call", { label: "x", op: "save", content: "Durable fact" });
+		await tool.execute("call", { op: "save", content: "Durable fact" });
 		expect(seenChannelIds).toEqual(["dm_9"]);
 	});
 
@@ -96,7 +93,6 @@ describe("memory_manage tool", () => {
 		const channelDir = createTempChannel();
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "User prefers dark mode in the dashboard" }]);
 		const result = await makeTool(channelDir).execute("call", {
-			label: "search",
 			op: "search",
 			query: "dark mode preference",
 		});
@@ -122,7 +118,7 @@ describe("memory_manage tool", () => {
 			},
 		});
 
-		const result = await tool.execute("call", { label: "forget", op: "forget", target: "home address" });
+		const result = await tool.execute("call", { op: "forget", target: "home address" });
 		expect(result.details).toMatchObject({ op: "forget", forgotten: true });
 		expect(seenChannelIds).toEqual(["dm_1"]);
 		const entries = parseChannelMemoryEntries(await readChannelMemory(channelDir));
@@ -143,9 +139,7 @@ describe("memory_manage tool", () => {
 			{ op: "add", content: "User likes tea after lunch" },
 		]);
 		const tool = makeTool(channelDir);
-		await expect(tool.execute("call", { label: "forget", op: "forget", target: "likes tea" })).rejects.toThrow(
-			/matched 2 entries/,
-		);
+		await expect(tool.execute("call", { op: "forget", target: "likes tea" })).rejects.toThrow(/matched 2 entries/);
 	});
 
 	it("guards similar-entry conflicts: flags them by default, allows them with supersedes none, replaces in place when given the id", async () => {
@@ -159,7 +153,6 @@ describe("memory_manage tool", () => {
 		// possibly-contradictory fact.
 		await expect(
 			makeTool(channelDir).execute("call", {
-				label: "remember",
 				op: "save",
 				content: "The team default package manager for installs is now pnpm",
 			}),
@@ -168,7 +161,6 @@ describe("memory_manage tool", () => {
 
 		// Naming the flagged id replaces that entry in place.
 		const replaced = await makeTool(channelDir).execute("call", {
-			label: "remember",
 			op: "save",
 			content: "The team default package manager for installs is now pnpm",
 			supersedes: existing.id,
@@ -184,7 +176,6 @@ describe("memory_manage tool", () => {
 			{ op: "add", content: "The team default package manager for installs is npm" },
 		]);
 		const waived = await makeTool(waivedDir).execute("call", {
-			label: "remember",
 			op: "save",
 			content: "The team default package manager for installs is now pnpm",
 			supersedes: "none",
@@ -197,7 +188,6 @@ describe("memory_manage tool", () => {
 		const channelDir = createTempChannel();
 		await applyChannelMemoryOps(channelDir, [{ op: "add", content: "Something durable" }]);
 		const result = await makeTool(channelDir).execute("call", {
-			label: "forget",
 			op: "forget",
 			target: "does not exist",
 		});

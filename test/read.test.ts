@@ -53,7 +53,7 @@ describe("read tool", () => {
 		const path = tempFile(Buffer.from("abcd"), "photo.png");
 		const tool = makeTool();
 
-		const result = await tool.execute("call", { label: "read image", path });
+		const result = await tool.execute("call", { path });
 
 		expect(result.details).toBeUndefined();
 		expect(result.content).toEqual([
@@ -66,14 +66,14 @@ describe("read tool", () => {
 		const path = tempFile(Buffer.alloc(6 * 1024 * 1024), "huge.png");
 		const tool = makeTool();
 
-		await expect(tool.execute("call", { label: "read image", path })).rejects.toThrow(/over the .* inline limit/);
+		await expect(tool.execute("call", { path })).rejects.toThrow(/over the .* inline limit/);
 	});
 
 	it("reads text with offset and limit, reports remaining lines, and rejects an offset past EOF", async () => {
 		const path = tempFile("line1\nline2\nline3\nline4\nline5\n");
 		const tool = makeTool();
 
-		const result = await tool.execute("call", { label: "read text", path, offset: 2, limit: 2 });
+		const result = await tool.execute("call", { path, offset: 2, limit: 2 });
 
 		expect(result.details).toBeUndefined();
 		expect(result.content).toEqual([
@@ -81,7 +81,7 @@ describe("read tool", () => {
 		]);
 
 		const shortPath = tempFile("only\ntwo\n");
-		await expect(makeTool().execute("call", { label: "read text", path: shortPath, offset: 5 })).rejects.toThrow(
+		await expect(makeTool().execute("call", { path: shortPath, offset: 5 })).rejects.toThrow(
 			"Offset 5 is beyond end of file (2 lines total)",
 		);
 	});
@@ -90,7 +90,7 @@ describe("read tool", () => {
 		const path = tempFile("", "empty.txt");
 		const tool = makeTool();
 
-		const result = await tool.execute("call", { label: "read empty", path });
+		const result = await tool.execute("call", { path });
 
 		expect(result.details).toBeUndefined();
 		expect(result.content).toEqual([{ type: "text", text: "" }]);
@@ -99,7 +99,7 @@ describe("read tool", () => {
 	it("truncates oversized reads and reports how to continue (byte-limited line, next offset)", async () => {
 		const firstLine = "x".repeat(DEFAULT_MAX_BYTES + 256);
 		const hugePath = tempFile(`${firstLine}\n`, "huge.txt");
-		const hugeResult = await makeTool().execute("call", { label: "read text", path: hugePath });
+		const hugeResult = await makeTool().execute("call", { path: hugePath });
 
 		expect(hugeResult.details?.truncation?.firstLineExceedsLimit).toBe(true);
 		expect(hugeResult.content[0]).toMatchObject({
@@ -109,7 +109,7 @@ describe("read tool", () => {
 
 		const longContent = Array.from({ length: DEFAULT_MAX_LINES + 10 }, (_, index) => `line ${index + 1}`).join("\n");
 		const longPath = tempFile(longContent, "long.txt");
-		const longResult = await makeTool().execute("call", { label: "read text", path: longPath });
+		const longResult = await makeTool().execute("call", { path: longPath });
 
 		expect(longResult.details?.truncation?.truncated).toBe(true);
 		expect(longResult.content[0]).toMatchObject({
@@ -122,7 +122,7 @@ describe("read tool", () => {
 		const dir = tempDir();
 		const tool = makeTool();
 
-		await expect(tool.execute("call", { label: "read text", path: join(dir, "does-not-exist.txt") })).rejects.toThrow(
+		await expect(tool.execute("call", { path: join(dir, "does-not-exist.txt") })).rejects.toThrow(
 			"Failed to read file",
 		);
 	});
@@ -135,7 +135,7 @@ describe("read tool", () => {
 		writeFileSync(join(dir, "util", "b.ts"), "b");
 		const tool = makeTool();
 
-		const result = await tool.execute("call", { label: "list", path: dir });
+		const result = await tool.execute("call", { path: dir });
 		expect(result.details).toBeUndefined();
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
 		expect(text).toContain(`Directory: ${dir}`);
@@ -151,7 +151,7 @@ describe("read tool", () => {
 		const emptyDir = join(dir, "empty");
 		mkdirSync(emptyDir);
 		const tool = makeTool();
-		const result = await tool.execute("call", { label: "list", path: emptyDir });
+		const result = await tool.execute("call", { path: emptyDir });
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
 		expect(text).toContain("(empty directory)");
 	});
@@ -163,7 +163,7 @@ describe("read tool", () => {
 		const executor = new ScriptedExecutor([{ code: 0, stdout: "page one\npage two\npage three\n", stderr: "" }]);
 		const tool = makeTool(executor);
 
-		const result = await tool.execute("call", { label: "read pdf", path, limit: 2 });
+		const result = await tool.execute("call", { path, limit: 2 });
 		expect(executor.calls).toHaveLength(1);
 		expect(executor.calls[0].command).toContain(`pdftotext -layout '${path}'`);
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
@@ -172,10 +172,10 @@ describe("read tool", () => {
 		expect(text).toContain("Use offset=3 to continue");
 
 		const missing = makeTool(new ScriptedExecutor([{ code: 127, stdout: "", stderr: "" }]));
-		await expect(missing.execute("call", { label: "read pdf", path })).rejects.toThrow(/pdftotext is not installed/);
+		await expect(missing.execute("call", { path })).rejects.toThrow(/pdftotext is not installed/);
 
 		const scanned = makeTool(new ScriptedExecutor([{ code: 0, stdout: "   \n", stderr: "" }]));
-		await expect(scanned.execute("call", { label: "read pdf", path })).rejects.toThrow(/scanned\/image-based/);
+		await expect(scanned.execute("call", { path })).rejects.toThrow(/scanned\/image-based/);
 	});
 
 	describe("large files (line-index sequential paging)", () => {
@@ -185,13 +185,13 @@ describe("read tool", () => {
 			const path = tempFile(`${lines.join("\n")}\n`, "big.txt");
 			const tool = makeTool();
 
-			const page1 = await tool.execute("call", { label: "read", path, offset: 1, limit: 500 });
+			const page1 = await tool.execute("call", { path, offset: 1, limit: 500 });
 			const text1 = page1.content[0].type === "text" ? page1.content[0].text : "";
 			expect(text1).toContain("line-1\n");
 			expect(text1).toContain("line-500");
 			expect(text1).toContain("Use offset=501 to continue");
 
-			const page2 = await tool.execute("call", { label: "read", path, offset: 501, limit: 500 });
+			const page2 = await tool.execute("call", { path, offset: 501, limit: 500 });
 			const text2 = page2.content[0].type === "text" ? page2.content[0].text : "";
 			expect(text2).toContain("line-501");
 			expect(text2).toContain("line-1000");
@@ -205,7 +205,7 @@ describe("read tool", () => {
 			const path = tempFile(manyLines, "notexact.txt");
 			const tool = makeTool();
 
-			const result = await tool.execute("call", { label: "read", path, offset: 1 });
+			const result = await tool.execute("call", { path, offset: 1 });
 			const text = result.content[0].type === "text" ? result.content[0].text : "";
 			expect(text).toMatch(/of >=\d+/);
 		});

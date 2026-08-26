@@ -27,7 +27,6 @@ const taskControlSchema = Type.Object({
 });
 
 export const taskManageSchema = Type.Object({
-	label: Type.String({ description: "Brief description of the ledger change (shown to the user)" }),
 	action: Type.Union(
 		[
 			Type.Literal("create"),

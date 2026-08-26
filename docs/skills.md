@@ -41,13 +41,15 @@ Pipiclaw 只支持工作区级 skills，不存在频道级 skill 目录。同一
 
 ## 创建和维护
 
-主智能体拥有 `skill_manage` 工具，可以在对话中创建、读取、更新和删除 workspace skill。最简单的方式是直接提出目标：
+主智能体拥有 `skill` 工具，但它只读（`list` / `read`）——创建和修改直接用通用的 `write` / `edit` 工具在 `workspace/skills/<name>/SKILL.md` 上操作，和改任何其他工作区文件一样，走同一套 path guard。最简单的方式是直接提出目标：
 
 ```text
 把我们刚才确认的发布流程整理成一个 workspace skill。触发场景是“准备发布 npm 版本”，必须包含版本一致性、测试、tag 和回滚检查。
 ```
 
-创建后可以让它列出或检查已有 skills，也可以直接查看 `workspace/skills/`。Skill 目录属于用户工作区，升级 Pipiclaw 不会覆盖。
+`SKILL.md` 的 frontmatter 必须包含非空的 `name`（需与目录名一致，`[a-z0-9]+(-[a-z0-9]+)*`）和 `description`。创建后可以用 `skill list` 列出或检查已有 skills，也可以直接查看 `workspace/skills/`。Skill 目录属于用户工作区，升级 Pipiclaw 不会覆盖。
+
+Skill 正文在进入系统提示前会经过一次内容安全扫描（prompt-injection 措辞、外泄/破坏性命令等启发式规则）；没通过的 skill 不会出现在 `<available_skills>` 目录或 `skill list` 里，原因体现在 `skill list` 的 warning 字段中。这是一层防御层，不是权限边界——真实权限仍由工具 schema、`security.json` 和运行账号决定。
 
 维护时遵循三条原则：
 
@@ -63,7 +65,7 @@ Skill 的错误或截断结果会提供下一步，例如缩小读取范围或�
 
 - 用户直接发送 `/skill:<名称>`。
 - 用户用自然语言提出与触发描述匹配的任务，主智能体按需读取。
-- 主智能体在完成一次流程后，经用户意图或明确判断使用 `skill_manage` 沉淀或更新。
+- 主智能体在完成一次流程后，经用户意图或明确判断用 `write`/`edit` 沉淀或更新。
 
 调用 skill 不会创建新的智能体。需要上下文隔离、不同模型、并行工作或外部 Claude/Codex CLI 时，应由 skill 中的流程指导主智能体使用 `subagent`，或者直接配置工作区角色。
 
@@ -76,7 +78,7 @@ Skill 的错误或截断结果会提供下一步，例如缩小读取范围或�
 
 ## 相关文档
 
-- 工具能力与 `skill_manage`：[tools.md](./tools.md)
+- 工具能力与 `skill`：[tools.md](./tools.md)
 - 规则、记忆和工作区文件：[configuration-reference.md](./configuration-reference.md)
 - 智能体角色与委派：[sub-agents.md](./sub-agents.md)
 - Runtime playbook 的知识边界：[runtime-playbooks.md](./runtime-playbooks.md)

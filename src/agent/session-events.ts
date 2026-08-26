@@ -2,10 +2,11 @@ import * as log from "../log.js";
 import type { MemoryLifecycle } from "../memory/lifecycle.js";
 import type { ChannelContext } from "../runtime/channel-context.js";
 import type { ChannelStore } from "../runtime/store.js";
-import { extractLabelFromArgs, truncate } from "../shared/text-utils.js";
+import { truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import type { SubAgentToolDetails } from "../subagents/tool.js";
+import { describeToolCall } from "../tools/presentation.js";
 import { isRecoverableRejection, type ToolDetails, toolResultDetails } from "../tools/tool-details.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { isEffectfulTool, noteChannelEffect } from "./effect-ledger.js";
@@ -39,14 +40,28 @@ export interface SessionEventHandlerContext {
 	ledger: UsageLedger;
 	isModelCostKnown?: (modelReference: string) => boolean;
 	refreshSessionResources?: () => Promise<void>;
+	/** Absolute path to `<workspaceDir>/skills` — see `isWorkspaceSkillWrite`. */
+	skillsDir?: string;
 }
 
-function isSkillManageDetails(value: unknown): value is ToolDetails & {
-	kind: "skill_manage";
-	requiresResourceRefresh?: boolean;
-	notice?: string;
-} {
-	return isRecord(value) && value.kind === "skill_manage";
+/**
+ * A `write`/`edit` result whose resolved target landed inside the workspace `skills/` tree. The
+ * `skill` tool is read-only (spec 045); authoring a workspace skill goes through the generic file
+ * tools, so this is the only way the runtime learns "the skill catalog may have changed" — no
+ * per-tool `requiresResourceRefresh` flag to keep in sync any more.
+ */
+function isWorkspaceSkillWrite(
+	toolName: string,
+	details: unknown,
+	skillsDir: string,
+): details is ToolDetails & { path: string } {
+	if (toolName !== "write" && toolName !== "edit") {
+		return false;
+	}
+	if (!isRecord(details) || typeof details.path !== "string") {
+		return false;
+	}
+	return details.path === skillsDir || details.path.startsWith(`${skillsDir}/`);
 }
 
 function mergeSubAgentUsage(totalUsage: UsageTotals, details: SubAgentToolDetails): void {
@@ -110,7 +125,7 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 	const finalToCard = ctx.finalDelivery === "card";
 
 	if (isToolExecutionStartEvent(event)) {
-		const label = extractLabelFromArgs(event.args) || event.toolName;
+		const label = describeToolCall(event.toolName, event.args);
 
 		pendingTools.set(event.toolCallId, {
 			toolName: event.toolName,
@@ -168,13 +183,13 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		}
 
 		const details = toolResultDetails(event.result);
-		if (isSkillManageDetails(details)) {
-			if (details.requiresResourceRefresh && context.refreshSessionResources) {
-				queue.enqueue(() => context.refreshSessionResources?.() ?? Promise.resolve(), "refresh skills");
-			}
-			if (details.notice) {
-				queue.enqueue(() => ctx.respondInThread(details.notice ?? ""), "skill notice");
-			}
+		if (
+			context.skillsDir &&
+			context.refreshSessionResources &&
+			isWorkspaceSkillWrite(event.toolName, details, context.skillsDir)
+		) {
+			queue.enqueue(() => context.refreshSessionResources?.() ?? Promise.resolve(), "refresh skills");
+			queue.enqueue(() => ctx.respondInThread("已沉淀：workspace skill 已更新，下一轮生效。"), "skill notice");
 		}
 
 		// A recoverable rejection (bad arguments, unmet precondition the model can fix) is not a

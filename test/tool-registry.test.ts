@@ -62,12 +62,13 @@ describe("tool registry", () => {
 			"bash",
 			"edit",
 			"grep",
+			"glob",
 			"write",
 			"web_search",
 			"web_fetch",
 			"session_search",
 			"memory_manage",
-			"skill_manage",
+			"skill",
 			"event_manage",
 			"task_manage",
 		]);
@@ -80,6 +81,7 @@ describe("tool registry", () => {
 			"bash",
 			"edit",
 			"grep",
+			"glob",
 			"write",
 			"web_search",
 			"web_fetch",
@@ -88,7 +90,7 @@ describe("tool registry", () => {
 
 	it("omits web tools for sub-agents when no web config is present", () => {
 		const tools = buildToolSet(makeContext({ webConfig: undefined }), { forSubagent: true });
-		expect(tools.map((tool) => tool.name)).toEqual(["read", "bash", "edit", "grep", "write"]);
+		expect(tools.map((tool) => tool.name)).toEqual(["read", "bash", "edit", "grep", "glob", "write"]);
 	});
 
 	it("honors config gates on the main path", () => {
@@ -105,7 +107,7 @@ describe("tool registry", () => {
 		expect(names).not.toContain("task_manage");
 		// Core capabilities have no switches: always registered.
 		expect(names).toContain("session_search");
-		expect(names).toContain("skill_manage");
+		expect(names).toContain("skill");
 		expect(names).toContain("event_manage");
 		expect(names).toContain("memory_manage");
 	});

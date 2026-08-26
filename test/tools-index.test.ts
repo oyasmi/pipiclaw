@@ -8,12 +8,13 @@ const {
 	createBashToolMock,
 	createEditToolMock,
 	createGrepToolMock,
+	createGlobToolMock,
 	createWriteToolMock,
 	createWebSearchToolMock,
 	createWebFetchToolMock,
 	createSessionSearchToolMock,
 	createMemoryManageToolMock,
-	createSkillManageToolMock,
+	createSkillToolMock,
 	createEventManageToolMock,
 	createTaskManageToolMock,
 	createSubAgentToolMock,
@@ -23,12 +24,13 @@ const {
 	createBashToolMock: vi.fn(() => ({ name: "bash" })),
 	createEditToolMock: vi.fn(() => ({ name: "edit" })),
 	createGrepToolMock: vi.fn(() => ({ name: "grep" })),
+	createGlobToolMock: vi.fn(() => ({ name: "glob" })),
 	createWriteToolMock: vi.fn(() => ({ name: "write" })),
 	createWebSearchToolMock: vi.fn(() => ({ name: "web_search" })),
 	createWebFetchToolMock: vi.fn(() => ({ name: "web_fetch" })),
 	createSessionSearchToolMock: vi.fn(() => ({ name: "session_search" })),
 	createMemoryManageToolMock: vi.fn(() => ({ name: "memory_manage" })),
-	createSkillManageToolMock: vi.fn(() => ({ name: "skill_manage" })),
+	createSkillToolMock: vi.fn(() => ({ name: "skill" })),
 	createEventManageToolMock: vi.fn(() => ({ name: "event_manage" })),
 	createTaskManageToolMock: vi.fn(() => ({ name: "task_manage" })),
 	createSubAgentToolMock: vi.fn(() => ({ name: "subagent" })),
@@ -99,12 +101,13 @@ vi.mock("../src/tools/read.js", () => ({ createReadTool: createReadToolMock }));
 vi.mock("../src/tools/bash.js", () => ({ createBashTool: createBashToolMock }));
 vi.mock("../src/tools/edit.js", () => ({ createEditTool: createEditToolMock }));
 vi.mock("../src/tools/grep.js", () => ({ createGrepTool: createGrepToolMock }));
+vi.mock("../src/tools/glob.js", () => ({ createGlobTool: createGlobToolMock }));
 vi.mock("../src/tools/write.js", () => ({ createWriteTool: createWriteToolMock }));
 vi.mock("../src/tools/web-search.js", () => ({ createWebSearchTool: createWebSearchToolMock }));
 vi.mock("../src/tools/web-fetch.js", () => ({ createWebFetchTool: createWebFetchToolMock }));
 vi.mock("../src/tools/session-search.js", () => ({ createSessionSearchTool: createSessionSearchToolMock }));
 vi.mock("../src/tools/memory-manage.js", () => ({ createMemoryManageTool: createMemoryManageToolMock }));
-vi.mock("../src/tools/skill-manage.js", () => ({ createSkillManageTool: createSkillManageToolMock }));
+vi.mock("../src/tools/skill.js", () => ({ createSkillTool: createSkillToolMock }));
 vi.mock("../src/tools/event-manage.js", () => ({ createEventManageTool: createEventManageToolMock }));
 vi.mock("../src/tools/task-manage.js", () => ({ createTaskManageTool: createTaskManageToolMock }));
 vi.mock("../src/subagents/tool.js", () => ({ createSubAgentTool: createSubAgentToolMock }));
@@ -159,12 +162,13 @@ describe("tools index", () => {
 		createBashToolMock.mockClear();
 		createEditToolMock.mockClear();
 		createGrepToolMock.mockClear();
+		createGlobToolMock.mockClear();
 		createWriteToolMock.mockClear();
 		createWebSearchToolMock.mockClear();
 		createWebFetchToolMock.mockClear();
 		createSessionSearchToolMock.mockClear();
 		createMemoryManageToolMock.mockClear();
-		createSkillManageToolMock.mockClear();
+		createSkillToolMock.mockClear();
 		createSubAgentToolMock.mockClear();
 	});
 
@@ -230,12 +234,13 @@ describe("tools index", () => {
 			"bash",
 			"edit",
 			"grep",
+			"glob",
 			"write",
 			"web_search",
 			"web_fetch",
 			"session_search",
 			"memory_manage",
-			"skill_manage",
+			"skill",
 			"event_manage",
 			"task_manage",
 			"job",

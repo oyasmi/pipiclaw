@@ -31,7 +31,7 @@ describe("subagent_manage tool", () => {
 		});
 
 		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
-		const result = await tool.execute("call-1", { label: "check", op: "list" });
+		const result = await tool.execute("call-1", { op: "list" });
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		expect(text).toContain("run-1");
 		expect(text).toContain("explorer");
@@ -93,7 +93,7 @@ describe("subagent_manage tool", () => {
 		});
 
 		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
-		const result = await tool.execute("call-cap", { label: "check", op: "list" });
+		const result = await tool.execute("call-cap", { op: "list" });
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		const details = result.details as { runs: Array<{ runId: string }> };
 		expect(text).toContain("run-still-going");
@@ -120,14 +120,12 @@ describe("subagent_manage tool", () => {
 		});
 
 		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
-		const result = await tool.execute("call-2", { label: "stop it", op: "cancel", runId: "run-2" });
+		const result = await tool.execute("call-2", { op: "cancel", runId: "run-2" });
 		const text = result.content[0] && "text" in result.content[0] ? result.content[0].text : "";
 		expect(text).toContain("lost");
 		expect(manager.get("run-2")?.status).toBe("lost");
 
-		await expect(tool.execute("call-3", { label: "stop it", op: "cancel", runId: "no-such-run" })).rejects.toThrow(
-			"was not found",
-		);
+		await expect(tool.execute("call-3", { op: "cancel", runId: "no-such-run" })).rejects.toThrow("was not found");
 	});
 
 	it("follow_up is rejected for an internal run and for a still-running codex-cli run", async () => {
@@ -162,10 +160,10 @@ describe("subagent_manage tool", () => {
 
 		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
 		await expect(
-			tool.execute("call-4", { label: "continue", op: "follow_up", runId: "run-internal", task: "keep going" }),
+			tool.execute("call-4", { op: "follow_up", runId: "run-internal", task: "keep going" }),
 		).rejects.toThrow("does not support follow_up yet");
 		await expect(
-			tool.execute("call-5", { label: "continue", op: "follow_up", runId: "run-running", task: "keep going" }),
+			tool.execute("call-5", { op: "follow_up", runId: "run-running", task: "keep going" }),
 		).rejects.toThrow("still running");
 	});
 
@@ -210,9 +208,9 @@ describe("subagent_manage tool", () => {
 		);
 
 		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/tmp", channelDir: "/tmp/channel" });
-		await expect(
-			tool.execute("call-6", { label: "continue", op: "follow_up", runId: "run-5", task: "keep going" }),
-		).rejects.toThrow("cannot be resumed");
+		await expect(tool.execute("call-6", { op: "follow_up", runId: "run-5", task: "keep going" })).rejects.toThrow(
+			"cannot be resumed",
+		);
 	});
 
 	it("follow_up on a completed codex-cli run with a session id launches a resumed run", async () => {
@@ -287,7 +285,6 @@ describe("subagent_manage tool", () => {
 		});
 
 		const result = await tool.execute("call-7", {
-			label: "continue",
 			op: "follow_up",
 			runId: "run-6",
 			task: "keep going",
@@ -391,7 +388,6 @@ describe("subagent_manage tool", () => {
 
 		await expect(
 			tool.execute("call-boundary", {
-				label: "continue",
 				op: "follow_up",
 				runId: "run-boundary",
 				task: "keep going",
@@ -442,7 +438,6 @@ describe("subagent_manage tool", () => {
 		const tool = createSubAgentManageTool({ channelId, workspaceDir: "/workspace", channelDir: "/workspace/dm" });
 		await expect(
 			tool.execute("call-toolong", {
-				label: "continue",
 				op: "follow_up",
 				runId: "run-toolong",
 				task: "x".repeat(12001),
@@ -524,7 +519,6 @@ describe("subagent_manage tool", () => {
 
 		await expect(
 			tool.execute("call-harness-mismatch", {
-				label: "continue",
 				op: "follow_up",
 				runId: "run-harness",
 				task: "keep going",
@@ -607,7 +601,6 @@ describe("subagent_manage tool", () => {
 
 		await expect(
 			tool.execute("call-shell-mismatch", {
-				label: "continue",
 				op: "follow_up",
 				runId: "run-shell",
 				task: "keep going",
@@ -689,7 +682,6 @@ describe("subagent_manage tool", () => {
 
 		await expect(
 			tool.execute("call-followup-fail", {
-				label: "continue",
 				op: "follow_up",
 				runId: "run-parent",
 				task: "continue",
@@ -778,7 +770,6 @@ describe("subagent_manage tool", () => {
 
 		await expect(
 			tool.execute("call-verify-mutated", {
-				label: "continue",
 				op: "follow_up",
 				runId: "run-verify",
 				task: "re-check",
@@ -877,7 +868,6 @@ describe("subagent_manage tool", () => {
 
 			await expect(
 				tool.execute("call-fp-command", {
-					label: "continue",
 					op: "follow_up",
 					runId: "run-fp",
 					task: "keep going",
@@ -893,7 +883,6 @@ describe("subagent_manage tool", () => {
 			const tool = makeTool(channelId, "codex exec", "You build things, carefully now (typo fixed).");
 
 			const result = await tool.execute("call-fp-prompt", {
-				label: "continue",
 				op: "follow_up",
 				runId: "run-fp",
 				task: "keep going",

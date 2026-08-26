@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { clipText, extractAssistantText, extractLabelFromArgs } from "../../src/shared/text-utils.js";
+import { clipText, extractAssistantText } from "../../src/shared/text-utils.js";
 
 function createAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
 	return {
@@ -41,13 +41,6 @@ describe("shared/text-utils", () => {
 		["unchanged text when clipping is unnecessary", "  hello  ", 10, undefined, "hello"],
 	] as const)("clips with %s", (_label, text, limit, options, expected) => {
 		expect(clipText(text, limit, options)).toBe(expected);
-	});
-
-	it("extracts trimmed labels from tool args", () => {
-		expect(extractLabelFromArgs({ label: "  review changes  " })).toBe("review changes");
-		expect(extractLabelFromArgs({ label: "" })).toBeNull();
-		expect(extractLabelFromArgs({})).toBeNull();
-		expect(extractLabelFromArgs(null)).toBeNull();
 	});
 
 	it("extracts assistant text content and ignores non-text parts", () => {

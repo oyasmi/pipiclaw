@@ -44,7 +44,7 @@ Workspace 根目录——**靠专用工具或只读注入访问**，项目边界
 
 - `SOUL.md`（身份与表达风格）、`AGENTS.md`（用户/团队工作原则）：每回合注入 system prompt。
 - `MEMORY.md`：管理员维护的共享背景，随首轮快照和召回进入上下文。
-- `skills/`：workspace 级程序性知识，用 `skill_manage` 管理；读取始终放行。
+- `skills/`：workspace 级程序性知识；`skill` 工具只读列出/加载，创建或修改直接用 `write`/`edit`。读写都始终放行（项目边界的例外）。
 - `sub-agents/`：委派角色定义，目录呈现在 system prompt 里。
 - `events/`：全 workspace 的调度事件，用 `event_manage` 管理。
 - `ENVIRONMENT.md`（机器环境事实和重要变更）和 `CHANNELS.md`（runtime 维护的频道索引：频道 ID / 名称 / 最近消息 / 主题；「主题」一列可以补写，其余三列会被重写覆盖）**只能用 `read` / `edit` 打开**。项目边界把它们挡在外面时不要猜内容，把你需要它这件事告诉用户。

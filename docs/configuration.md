@@ -45,7 +45,7 @@ POSIX 环境；Windows 请使用 WSL2。
 | 改助手风格 | `workspace/SOUL.md` | 身份、语气、默认语言 |
 | 改工作规则 | `workspace/AGENTS.md` | 团队规则、安全边界、项目工作流 |
 | 加可复用角色 | `workspace/sub-agents/*.md` | `runtime: internal` 或 `external`、用途描述、权限声明与 system prompt |
-| 加可复用流程 | `workspace/skills/` | 通过 `skill_manage` 创建/维护 workspace skill |
+| 加可复用流程 | `workspace/skills/` | 通过 `write`/`edit` 创建/维护 workspace skill，`skill` 工具只读列出/加载 |
 | 让 LLM 请求走代理 | 环境变量 `PIPICLAW_PROXY` | 见下方「LLM 请求走代理」 |
 
 ## 钉钉最小配置
@@ -188,7 +188,7 @@ Codex 对话流量的代理注意事项：`openai-codex-responses` 默认走 Web
 }
 ```
 
-恒开、无 `tools.json` 开关的核心工具包括：`read`、`write`、`edit`、`grep`、`bash`、`job`、`session_search`、`memory_manage`、`skill_manage`、`event_manage`。`send_media` 由传输层能力决定。
+恒开、无 `tools.json` 开关的核心工具包括：`read`、`write`、`edit`、`grep`、`glob`、`bash`、`job`、`session_search`、`memory_manage`、`skill`、`event_manage`。`send_media` 由传输层能力决定。
 
 `subagent` 和 `subagent_manage` 也恒开，只提供给主智能体。角色是否存在、能否使用由 `workspace/sub-agents/*.md` 决定；外部角色还要求目标 CLI 在 daemon 的 `PATH` 中可用。角色字段、推荐模板和安全边界见 [sub-agents.md](./sub-agents.md)。
 

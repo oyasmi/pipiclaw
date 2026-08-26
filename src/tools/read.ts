@@ -76,7 +76,6 @@ function renderDirectoryTree(entries: DirectoryEntry[]): string {
 }
 
 const readSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're reading and why (shown to user)" }),
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
 	offset: Type.Optional(Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" })),
 	limit: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum number of lines to read" })),
@@ -118,7 +117,7 @@ export function createReadTool(
 		parameters: readSchema,
 		execute: async (
 			_toolCallId: string,
-			{ path, offset, limit }: { label: string; path: string; offset?: number; limit?: number },
+			{ path, offset, limit }: { path: string; offset?: number; limit?: number },
 			signal?: AbortSignal,
 		): Promise<{ content: (TextContent | ImageContent)[]; details: ReadToolDetails | undefined }> => {
 			const target = await checkPathGuard(path, "read", securityConfig, securityContext, {

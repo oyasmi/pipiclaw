@@ -294,7 +294,7 @@ npm install -g @oyasmi/pipiclaw@latest
 - 每个会话通道目录下的历史、记忆和日志
 - 每个会话通道的 `subagent-artifacts/`，其中包含委派完整产出和外部 harness 诊断文件
 
-workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `skill_manage` 调用创建或更新，后台记忆管线不会自动写 skill。
+workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `write`/`edit` 调用创建或更新（`skill` 工具本身只读），后台记忆管线不会自动写 skill。
 
 为了得到一致快照，应在 daemon 仍运行时先用 `/subagents list running` 检查外部委派，等待需要保留的 run 完成，或显式取消不再需要的 run，然后再停止 daemon 并备份。外部 run 是 detached 进程，单独停止 daemon 不会终止它。同一主机上的 daemon 重启可以按 pid 和产物重新对账；**在途外部 run 不能迁移到另一台主机**，因为持久化 pid 只对原主机有意义。跨主机迁移前必须先把所有 run 结算到终态。
 

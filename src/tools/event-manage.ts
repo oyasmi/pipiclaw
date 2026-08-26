@@ -13,7 +13,6 @@ import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 
 const eventManageSchema = Type.Object({
-	label: Type.String({ description: "Brief description of the scheduling change (shown to the user)" }),
 	action: Type.Union([Type.Literal("create"), Type.Literal("update"), Type.Literal("delete")], {
 		description: 'The event management action to perform: "create", "update", or "delete".',
 	}),
@@ -220,7 +219,6 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 		execute: async (
 			_toolCallId: string,
 			args: {
-				label: string;
 				action: string;
 				name: string;
 				definition?: string;

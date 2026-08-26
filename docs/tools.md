@@ -16,6 +16,7 @@
 | `write` | 创建或覆盖文件 | 恒开 | — | 是 |
 | `edit` | 精准局部改写 | 恒开 | — | 是 |
 | `grep` | 正则搜索文件内容，分组分页、有 token 上限 | 恒开 | — | 是 |
+| `glob` | 按 glob 模式发现文件路径，按修改时间排序、有条数上限 | 恒开 | — | 是 |
 | `bash` | 执行 shell 命令与外部程序 | 恒开 | — | 是 |
 | `web_search` | 搜索公网，返回标题/URL/摘要 | **关** | `tools.web.enable` | 是 |
 | `web_fetch` | 抓取 URL 并提取正文 | **关** | `tools.web.enable` | 是 |
@@ -23,7 +24,7 @@
 | `job` | 查看/等待/取消 `bash async` 后台作业 | 恒开 | — | 否 |
 | `session_search` | 检索本频道的冷存储历史对话 | 恒开 | — | 否 |
 | `memory_manage` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
-| `skill_manage` | 管理 `workspace/skills/` 下的可复用流程 | 恒开 | — | 否 |
+| `skill` | 只读列出/加载 `workspace/skills/` 下的可复用流程 | 恒开 | — | 否 |
 | `event_manage` | 创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
 | `task_manage` | 创建、推进、验收、关闭长程任务 | 开 | `tools.tasks.enabled` | 否 |
 | `subagent` | 把工作委派给内置或外部智能体 | 开 | — | 否（不可嵌套） |
@@ -38,6 +39,8 @@
 外部智能体是独立宿主机进程，不使用这套工具实现，也不经过这些守卫。它的真实边界来自角色 `command` 中目标 CLI 的 sandbox 参数、运行账号和宿主环境。
 
 `grep` 优于 `bash` 里的 `grep`：结果分组、分页、有 token 上限，不会因为一次宽泛匹配把上下文冲爆。
+
+`glob` 优于 `bash find`/`ls -R`：按 glob 模式做路径发现（不读文件内容，这是它和 `grep` 的分工），排除 VCS/构建目录，命中数在阈值内时按修改时间从新到旧排序，超出条数上限时给出下一步提示。裸 `find … -name …` 和 `ls -R` 会被 bash 拦截器引导到这个工具。
 
 `bash` 有两个可选增强，都在 `tools.json`：
 
@@ -74,7 +77,7 @@
 | 工具 | 写到哪 | 什么时候用 |
 |---|---|---|
 | `memory_manage` | 频道 `MEMORY.md` | 用户说"记住/以后默认/别再这样/忘掉"时立即写 |
-| `skill_manage` | `workspace/skills/` | 某个流程跨任务可复用时沉淀 |
+| `skill` (只读) + `write`/`edit` | `workspace/skills/` | 某个流程跨任务可复用时沉淀 |
 | `session_search` | 只读 `log.jsonl` / `context.jsonl` | 用户引用较早的对话、而工作记忆里没有时 |
 
 分层原理和"什么该记、什么不该记"见 [memory.md](./memory.md)。

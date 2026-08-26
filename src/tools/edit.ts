@@ -99,7 +99,6 @@ function generateDiffString(
 }
 
 const editSchema = Type.Object({
-	label: Type.String({ description: "Brief description of the edit you're making (shown to user)" }),
 	path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
 	oldText: Type.String({ description: "Exact text to find and replace (must match exactly)" }),
 	newText: Type.String({ description: "New text to replace the old text with" }),
@@ -328,7 +327,7 @@ export function createEditTool(fileStore: FileStore, options: EditToolOptions = 
 				oldText,
 				newText,
 				replaceAll,
-			}: { label: string; path: string; oldText: string; newText: string; replaceAll?: boolean },
+			}: { path: string; oldText: string; newText: string; replaceAll?: boolean },
 			signal?: AbortSignal,
 		) => {
 			if (oldText.length === 0) {
@@ -407,6 +406,7 @@ export function createEditTool(fileStore: FileStore, options: EditToolOptions = 
 			return {
 				content: [{ type: "text", text: `${replacementSummary}${echoedDiff}` }],
 				details: {
+					path: target,
 					diff: result.diff,
 					patch: result.patch,
 				},

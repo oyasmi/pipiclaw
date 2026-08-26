@@ -15,7 +15,7 @@ export async function writeContent(
 		channelId?: string;
 		toolName?: string;
 	},
-): Promise<void> {
+): Promise<string> {
 	const createParentDir = options?.createParentDir ?? false;
 	const securityConfig = options?.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options?.securityContext ?? {
@@ -34,4 +34,5 @@ export async function writeContent(
 	// instead of a stdin pipe into `sh -c` -- it never exists in memory twice, and there is no
 	// shell script to escape or an EPIPE to swallow.
 	await fileStore.writeAtomic(target, content, { createParentDir, preserveMode: true, signal });
+	return target;
 }

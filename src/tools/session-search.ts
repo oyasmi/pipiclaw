@@ -5,7 +5,6 @@ import { searchChannelSessions } from "../memory/session-search.js";
 import type { PipiclawSessionSearchSettings } from "../settings.js";
 
 const sessionSearchSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're searching for and why (shown to user)" }),
 	query: Type.Optional(
 		Type.String({
 			description: "Search query for current-channel transcript cold storage. Empty query returns recent entries.",
@@ -50,7 +49,7 @@ export function createSessionSearchTool(options: SessionSearchToolOptions): Agen
 		parameters: sessionSearchSchema,
 		execute: async (
 			_toolCallId: string,
-			{ query, limit, roleFilter }: { label: string; query?: string; limit?: number; roleFilter?: string[] },
+			{ query, limit, roleFilter }: { query?: string; limit?: number; roleFilter?: string[] },
 		) => {
 			const settings = options.getSessionSearchSettings();
 			const model = options.getCurrentModel();

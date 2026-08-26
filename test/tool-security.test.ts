@@ -22,7 +22,7 @@ describe("tool security (guard runs before the executor)", () => {
 			securityContext: { agentWorkspaceDir: workspaceDir, homeDir: workspaceDir, projectRoot: workspaceDir },
 		});
 
-		await expect(tool.execute("call", { label: "danger", command: "rm -rf /" })).rejects.toThrow("Command blocked");
+		await expect(tool.execute("call", { command: "rm -rf /" })).rejects.toThrow("Command blocked");
 		expect(executor.calls).toEqual([]);
 	});
 
@@ -41,9 +41,7 @@ describe("tool security (guard runs before the executor)", () => {
 			securityContext: { agentWorkspaceDir: workspaceDir, homeDir, projectRoot: workspaceDir },
 		});
 
-		await expect(
-			tool.execute("call", { label: "read secret", path: join(homeDir, ".ssh", "id_rsa") }),
-		).rejects.toThrow("Path blocked");
+		await expect(tool.execute("call", { path: join(homeDir, ".ssh", "id_rsa") })).rejects.toThrow("Path blocked");
 		expect(executor.calls).toEqual([]);
 		expect(fileStore.calls).toEqual([]);
 	});

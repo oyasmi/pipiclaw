@@ -70,12 +70,12 @@ describe("write-content", () => {
 		const target = join(dir, "sub", "out.txt");
 		const tool = createWriteTool(fileStore, { securityConfig: disabledSecurity });
 
-		const result = await tool.execute("call", { label: "write", path: target, content: "hello界" });
+		const result = await tool.execute("call", { path: target, content: "hello界" });
 
 		expect(readFileSync(target, "utf-8")).toBe("hello界");
 		expect(result).toEqual({
 			content: [{ type: "text", text: `Successfully wrote 8 bytes to ${target}` }],
-			details: undefined,
+			details: { path: target },
 		});
 	});
 });

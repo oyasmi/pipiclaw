@@ -13,7 +13,6 @@ import { formatSize, MAX_INLINE_BINARY_BYTES } from "./truncate.js";
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
 
 const sendMediaSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're sending and why (shown to the user)" }),
 	path: Type.String({ description: "Path to the local file to send (relative to the workspace, or absolute)" }),
 	fileName: Type.Optional(
 		Type.String({ description: "Display name for the recipient; defaults to the file's own name" }),
@@ -55,7 +54,7 @@ export function createSendMediaTool(
 		parameters: sendMediaSchema,
 		execute: async (
 			_toolCallId: string,
-			{ path, fileName }: { label: string; path: string; fileName?: string },
+			{ path, fileName }: { path: string; fileName?: string },
 			signal?: AbortSignal,
 		): Promise<{ content: { type: "text"; text: string }[]; details: undefined }> => {
 			const target = await checkPathGuard(path, "read", securityConfig, securityContext, {

@@ -10,7 +10,7 @@ import { createEditTool } from "../src/tools/edit.js";
 import { createGrepTool } from "../src/tools/grep.js";
 import { createJobTool } from "../src/tools/job.js";
 import { createReadTool } from "../src/tools/read.js";
-import { createSkillManageTool } from "../src/tools/skill-manage.js";
+import { createSkillTool } from "../src/tools/skill.js";
 import { withToolDetails } from "../src/tools/tool-details.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -89,9 +89,9 @@ describe("tool error contract: recoverable failures never throw past withToolDet
 		expect((result.content[0] as { text: string }).text).toMatch(/^Rejected: /);
 	});
 
-	it("skill_manage: a missing skill name is recoverable", async () => {
-		const tool = withToolDetails(createSkillManageTool({ workspaceDir: "/tmp/does-not-matter" }), "skill_manage");
-		const result = await tool.execute("call", { label: "x", action: "view" }, undefined, undefined);
+	it("skill: a missing skill name on read is recoverable", async () => {
+		const tool = withToolDetails(createSkillTool({ workspaceDir: "/tmp/does-not-matter" }), "skill");
+		const result = await tool.execute("call", { label: "x", action: "read" }, undefined, undefined);
 		expect((result.details as { recoverable?: true }).recoverable).toBe(true);
 		expect((result.content[0] as { text: string }).text).toMatch(/^Rejected: /);
 	});

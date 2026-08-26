@@ -26,7 +26,6 @@ import {
 } from "../subagents/workspace-lease.js";
 
 const subagentManageSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're checking (shown to user)" }),
 	op: Type.Union([Type.Literal("list"), Type.Literal("cancel"), Type.Literal("follow_up"), Type.Literal("show")], {
 		description:
 			'"list" a snapshot of this channel\'s delegation runs, "cancel" a running one by runId, ' +

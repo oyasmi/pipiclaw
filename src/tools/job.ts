@@ -6,7 +6,6 @@ import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { truncateTail } from "./truncate.js";
 
 const jobSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what you're checking (shown to user)" }),
 	op: Type.Union([Type.Literal("list"), Type.Literal("poll"), Type.Literal("cancel")], {
 		description:
 			'"list" a snapshot of background jobs, "poll" to wait (briefly) for one to finish, or "cancel" jobs by id.',
@@ -23,7 +22,6 @@ export interface JobToolOptions {
 }
 
 interface JobToolArgs {
-	label: string;
 	op: "list" | "poll" | "cancel";
 	ids?: string[];
 }

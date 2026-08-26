@@ -15,7 +15,6 @@ import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 
 const memoryManageSchema = Type.Object({
-	label: Type.String({ description: "Brief description of the memory change (shown to user)" }),
 	op: Type.Union([Type.Literal("save"), Type.Literal("search"), Type.Literal("forget")], {
 		description:
 			'"save" a durable fact, "search" this channel\'s stored memory on demand, or "forget" a stored entry the user asked you to drop.',
@@ -66,7 +65,6 @@ export interface MemoryManageToolOptions {
 }
 
 interface MemoryManageArgs {
-	label: string;
 	op: "save" | "search" | "forget";
 	content?: string;
 	query?: string;

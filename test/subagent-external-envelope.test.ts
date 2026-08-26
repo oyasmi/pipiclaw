@@ -77,7 +77,6 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		});
 
 		const result = await tool.execute("call-1", {
-			label: "research",
 			agent: "researcher",
 			task: "Investigate the bug.",
 		});
@@ -129,7 +128,6 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		await expect(
 			tool.execute("call-artifact", {
-				label: "build",
 				agent: "builder",
 				task: "Build the thing.",
 				returns: "artifact",
@@ -177,7 +175,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			runtimeContext: { workspaceDir, channelId: "dm_ext_no_memory" },
 		});
 
-		await tool.execute("call-no-memory", { label: "scout", agent: "scout", task: "Look around." });
+		await tool.execute("call-no-memory", { agent: "scout", task: "Look around." });
 
 		const input = launchExternalRunMock.mock.calls[0]?.[0] as { task: string };
 		expect(input.task).not.toContain("Refactoring the memory pipeline.");
@@ -212,7 +210,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 			runtimeContext: { workspaceDir, channelId: "dm_ext_with_memory" },
 		});
 
-		await tool.execute("call-with-memory", { label: "scout", agent: "scout", task: "Look around." });
+		await tool.execute("call-with-memory", { agent: "scout", task: "Look around." });
 
 		const input = launchExternalRunMock.mock.calls[0]?.[0] as { task: string };
 		expect(input.task).toContain("Refactoring the memory pipeline.");
@@ -251,7 +249,6 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		});
 
 		await tool.execute("call-invocation-context", {
-			label: "scout",
 			agent: "scout",
 			task: "Look around.",
 			context: "session",
@@ -290,7 +287,6 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		});
 
 		await tool.execute("call-2", {
-			label: "verify ship",
 			agent: "checker",
 			task: "Run the acceptance plan.",
 			purpose: "verify",

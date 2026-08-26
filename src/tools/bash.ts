@@ -10,6 +10,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { logSecurityEvent } from "../security/logger.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
+import { clipText } from "../shared/text-utils.js";
 import { maybeOptimizeCommand } from "./command-optimizer.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
@@ -32,7 +33,6 @@ function getSpillFilePath(): string {
 }
 
 const bashSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what this command does (shown to user)" }),
 	command: Type.String({ description: "Bash command to execute" }),
 	timeout: Type.Optional(
 		Type.Integer({
@@ -114,6 +114,16 @@ const BASH_INTERCEPTOR_RULES: Array<{ test: RegExp; tool: string; why: string }>
 	},
 	{ test: /^\s*rg\b[^|&;]*$/, tool: "grep", why: "it groups, paginates, and bounds output" },
 	{
+		test: /^\s*find\s+[^|&;<>`$()]*-name\b[^|&;<>`$()]*$/,
+		tool: "glob",
+		why: "it discovers paths by pattern without a platform-dependent find dialect, and bounds/sorts the result",
+	},
+	{
+		test: /^\s*ls\s+-[A-Za-z]*R[A-Za-z]*\b[^|&;<>]*$/,
+		tool: "glob",
+		why: "it discovers file paths without listing directories, and bounds/sorts the result",
+	},
+	{
 		test: /\b(?:sed|perl)\b[^|&;]*\s-i\b/,
 		tool: "edit",
 		why: "it verifies a unique match and echoes a diff of the change",
@@ -151,13 +161,12 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 		execute: async (
 			_toolCallId: string,
 			{
-				label,
 				command,
 				timeout,
 				async: runAsync,
 				notify,
 				taskId,
-			}: { label: string; command: string; timeout?: number; async?: boolean; notify?: boolean; taskId?: string },
+			}: { command: string; timeout?: number; async?: boolean; notify?: boolean; taskId?: string },
 			signal?: AbortSignal,
 		) => {
 			if (securityConfig.enabled && securityConfig.commandGuard.enabled) {
@@ -205,7 +214,8 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 					);
 				}
 				const willNotify = notify ?? true;
-				const job = await options.jobManager.start(effectiveCommand, label, effectiveTimeout, {
+				const jobLabel = clipText(effectiveCommand, 60, { collapseWhitespace: true });
+				const job = await options.jobManager.start(effectiveCommand, jobLabel, effectiveTimeout, {
 					signal,
 					notify: willNotify,
 					...(taskId ? { taskId } : {}),
@@ -215,7 +225,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 						{
 							type: "text",
 							text:
-								`Background job ${job.id} started: ${label}\n` +
+								`Background job ${job.id} started: ${jobLabel}\n` +
 								(willNotify
 									? "It runs off-turn; end your turn now. You will be woken automatically when it finishes, " +
 										"with its exit code and output — do not schedule a check-in for it."

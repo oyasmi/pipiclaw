@@ -11,13 +11,14 @@ import { createBashTool } from "./bash.js";
 import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
 import { createEventManageTool } from "./event-manage.js";
+import { createGlobTool } from "./glob.js";
 import { createGrepTool } from "./grep.js";
 import { createJobTool } from "./job.js";
 import { createMemoryManageTool } from "./memory-manage.js";
 import { createReadTool } from "./read.js";
 import { createSendMediaTool } from "./send-media.js";
 import { createSessionSearchTool } from "./session-search.js";
-import { createSkillManageTool } from "./skill-manage.js";
+import { createSkillTool } from "./skill.js";
 import { createTaskManageTool } from "./task-manage.js";
 import { type ToolDetailsKind, withToolDetails } from "./tool-details.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -133,6 +134,11 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 		create: (ctx) => createGrepTool(ctx.executor, fileToolOptions(ctx)),
 	},
 	{
+		name: "glob",
+		availableToSubagents: true,
+		create: (ctx) => createGlobTool(ctx.fileStore, fileToolOptions(ctx)),
+	},
+	{
 		name: "write",
 		availableToSubagents: true,
 		create: (ctx) => createWriteTool(ctx.fileStore, fileToolOptions(ctx)),
@@ -202,9 +208,9 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 			}),
 	},
 	{
-		name: "skill_manage",
+		name: "skill",
 		availableToSubagents: false,
-		create: (ctx) => createSkillManageTool({ workspaceDir: ctx.workspaceDir }),
+		create: (ctx) => createSkillTool({ workspaceDir: ctx.workspaceDir, ...fileToolOptions(ctx) }),
 	},
 	{
 		name: "event_manage",

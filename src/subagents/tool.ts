@@ -25,12 +25,13 @@ import { formatLocalTime } from "../shared/local-time.js";
 import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { clipText, errorMessage, extractAssistantText, extractLabelFromArgs } from "../shared/text-utils.js";
+import { clipText, errorMessage, extractAssistantText } from "../shared/text-utils.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
 import { readStoredTask } from "../tasks/store.js";
 import { writeVerificationAttestation } from "../tasks/verification.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
+import { describeToolCall } from "../tools/presentation.js";
 import { buildToolSet } from "../tools/registry.js";
 import {
 	DEFAULT_THINKING_LEVEL,
@@ -54,7 +55,6 @@ import {
 } from "./workspace-lease.js";
 
 const subagentSchema = Type.Object({
-	label: Type.String({ description: "Brief description of what this sub-agent task does (shown to user)" }),
 	agent: Type.Optional(Type.String({ description: "Name of a configured sub-agent from workspaceDir/sub-agents/" })),
 	name: Type.Optional(Type.String({ description: "Optional display name for an inline sub-agent" })),
 	task: Type.String({ description: "Complete task description for the sub-agent" }),
@@ -814,6 +814,9 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 			}
 
 			const config = invocation.config;
+			// Derived rather than model-supplied (spec 045): `${agent}: ${task's first line}`, the
+			// same shape `subagent_manage op=follow_up` already builds by hand.
+			const runLabel = `${config.name}: ${params.task.split("\n")[0]?.slice(0, 80) ?? ""}`;
 			// Only ever set for an inline (internal) delegation with `bash` in `tools` and no explicit
 			// `mutates` — surfaced to the model, not just a log, since it has no role file to fix.
 			const mutatesNote = invocation.warning ? `Note: ${invocation.warning}\n\n` : "";
@@ -893,7 +896,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 						runId: runContext.runId,
 						channelId: options.runtimeContext.channelId,
 						channelDir: options.channelDir,
-						label: params.label,
+						label: runLabel,
 						agent: config.name,
 						source: config.source,
 						harness: config.harness,
@@ -993,7 +996,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 					channelId: options.runtimeContext.channelId,
 					runtime: "internal",
 					agent: config.name,
-					label: params.label,
+					label: runLabel,
 					source: config.source,
 					tools: [...config.tools],
 					model: formatModelReference(config.model),
@@ -1103,7 +1106,7 @@ export function createSubAgentTool(options: SubAgentToolOptions): AgentTool<type
 
 					if (event.type === "tool_execution_start") {
 						toolCalls++;
-						const label = extractLabelFromArgs(event.args) || event.toolName;
+						const label = describeToolCall(event.toolName, event.args);
 						emitUpdate(formatStatus(config.name, label));
 						if (toolCalls > config.maxToolCalls) {
 							failureReason = `Tool call budget exceeded (${config.maxToolCalls})`;

@@ -31,7 +31,6 @@ describe("edit tool", () => {
 		const tool = makeTool();
 
 		const result = await tool.execute("call", {
-			label: "edit file",
 			path,
 			oldText: "beta",
 			newText: "delta",
@@ -52,7 +51,6 @@ describe("edit tool", () => {
 		const tool = makeTool();
 
 		const result = await tool.execute("call", {
-			label: "edit file",
 			path,
 			oldText: "foo",
 			newText: "bar",
@@ -71,7 +69,6 @@ describe("edit tool", () => {
 
 		await expect(
 			tool.execute("call", {
-				label: "edit file",
 				path: join(dir, "missing.txt"),
 				oldText: "beta",
 				newText: "delta",
@@ -84,7 +81,6 @@ describe("edit tool", () => {
 
 		await expect(
 			tool.execute("call", {
-				label: "edit file",
 				path: tempFile("a.txt", "alpha\nbeta\n"),
 				oldText: "omega",
 				newText: "delta",
@@ -93,7 +89,6 @@ describe("edit tool", () => {
 
 		await expect(
 			tool.execute("call", {
-				label: "edit file",
 				path: tempFile("b.txt", "beta\nbeta\n"),
 				oldText: "beta",
 				newText: "delta",
@@ -102,7 +97,6 @@ describe("edit tool", () => {
 
 		await expect(
 			tool.execute("call", {
-				label: "edit file",
 				path: tempFile("c.txt", "beta\n"),
 				oldText: "beta",
 				newText: "beta",
@@ -113,7 +107,7 @@ describe("edit tool", () => {
 	it("escalates a repeated byte-identical no-op to a hard stop, then resets after a real edit", async () => {
 		const tool = makeTool();
 		const path = tempFile("notes.txt", "beta\n");
-		const noop = { label: "edit", path, oldText: "beta", newText: "beta" };
+		const noop = { path, oldText: "beta", newText: "beta" };
 
 		await expect(tool.execute("c1", noop)).rejects.toThrow(/No changes made/);
 		await expect(tool.execute("c2", noop)).rejects.toThrow(/No changes made/);
@@ -121,15 +115,15 @@ describe("edit tool", () => {
 
 		// A successful edit clears the streak so a later no-op starts soft again.
 		const path2 = tempFile("notes2.txt", "beta\n");
-		const noop2 = { label: "edit", path: path2, oldText: "beta", newText: "beta" };
+		const noop2 = { path: path2, oldText: "beta", newText: "beta" };
 		await expect(tool.execute("c1", noop2)).rejects.toThrow(/No changes made/);
 		await expect(tool.execute("c2", noop2)).rejects.toThrow(/No changes made/);
-		await tool.execute("c3", { label: "edit", path: path2, oldText: "beta", newText: "omega" });
+		await tool.execute("c3", { path: path2, oldText: "beta", newText: "omega" });
 		expect(readFileSync(path2, "utf-8")).toBe("omega\n");
 		// Streak was cleared by the successful edit: this is soft again, not the hard stop.
-		await expect(
-			tool.execute("c4", { label: "edit", path: path2, oldText: "omega", newText: "omega" }),
-		).rejects.toThrow(/No changes made/);
+		await expect(tool.execute("c4", { path: path2, oldText: "omega", newText: "omega" })).rejects.toThrow(
+			/No changes made/,
+		);
 	});
 
 	it("rejects the write when the file changed between the read and the pre-write recheck", async () => {
@@ -148,12 +142,13 @@ describe("edit tool", () => {
 			writeAtomic: (...args) => fileStore.writeAtomic(...args),
 			replaceViaTemp: (...args) => fileStore.replaceViaTemp(...args),
 			listDirectory: (...args) => fileStore.listDirectory(...args),
+			walkFiles: (...args) => fileStore.walkFiles(...args),
 		};
 		const tool = createEditTool(flakyFileStore, { securityConfig: disabledSecurity });
 
-		await expect(
-			tool.execute("call", { label: "edit file", path, oldText: "beta", newText: "delta" }),
-		).rejects.toThrow(/changed during this edit/);
+		await expect(tool.execute("call", { path, oldText: "beta", newText: "delta" })).rejects.toThrow(
+			/changed during this edit/,
+		);
 		// No write was attempted.
 		expect(readFileSync(path, "utf-8")).toBe("alpha\nbeta\ngamma\n");
 	});
@@ -163,7 +158,7 @@ describe("edit tool", () => {
 		chmodSync(path, 0o755);
 		const tool = makeTool();
 
-		await tool.execute("call", { label: "edit", path, oldText: "echo hi", newText: "echo bye" });
+		await tool.execute("call", { path, oldText: "echo hi", newText: "echo bye" });
 
 		expect(statSync(path).mode & 0o777).toBe(0o755);
 		expect(readFileSync(path, "utf-8")).toBe("#!/bin/sh\necho bye\n");
@@ -173,17 +168,15 @@ describe("edit tool", () => {
 		const path = tempFile("bin.dat", Buffer.from([0, 1, 2, 3, 0, 5]));
 		const tool = makeTool();
 
-		await expect(
-			tool.execute("call", { label: "edit", path, oldText: String.fromCharCode(1), newText: "x" }),
-		).rejects.toThrow(/looks like a binary file/);
+		await expect(tool.execute("call", { path, oldText: String.fromCharCode(1), newText: "x" })).rejects.toThrow(
+			/looks like a binary file/,
+		);
 	});
 
 	it("rejects an empty oldText", async () => {
 		const path = tempFile("notes.txt", "content\n");
 		const tool = makeTool();
-		await expect(tool.execute("call", { label: "edit", path, oldText: "", newText: "x" })).rejects.toThrow(
-			/must not be empty/,
-		);
+		await expect(tool.execute("call", { path, oldText: "", newText: "x" })).rejects.toThrow(/must not be empty/);
 	});
 
 	describe("streaming path (files over the inline threshold)", () => {
@@ -203,7 +196,6 @@ describe("edit tool", () => {
 
 			const tool = makeTool();
 			const result = await tool.execute("call", {
-				label: "edit",
 				path,
 				oldText: marker,
 				newText: "REPLACED_MARKER_AT_START",
@@ -235,7 +227,7 @@ describe("edit tool", () => {
 			writeFileSync(path, lines.join("\n"), "utf-8");
 
 			const tool = makeTool();
-			await tool.execute("call", { label: "edit", path, oldText: "MARKER_LINE_HERE", newText: "REPLACED_LINE" });
+			await tool.execute("call", { path, oldText: "MARKER_LINE_HERE", newText: "REPLACED_LINE" });
 
 			const content = readFileSync(path, "utf-8");
 			expect(content).toContain("REPLACED_LINE");
@@ -252,7 +244,6 @@ describe("edit tool", () => {
 
 			const tool = makeTool();
 			const result = await tool.execute("call", {
-				label: "edit",
 				path,
 				oldText: "NEEDLE",
 				newText: "FOUND",

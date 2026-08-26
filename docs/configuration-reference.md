@@ -270,7 +270,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 记忆管理工具（`memory_manage`，恒开）
 
-`memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从活动 MEMORY.md 移除，并写入不含原文的 tombstone 防止后台复活，不走裸 edit）。`forget` 不清理原始 session/log、retention backup 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。核心能力，无开关、始终注册，只发给主 agent。`session_search`（冷存储检索）与 `skill_manage`（workspace skills 维护）同理恒开。
+`memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从活动 MEMORY.md 移除，并写入不含原文的 tombstone 防止后台复活，不走裸 edit）。`forget` 不清理原始 session/log、retention backup 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。核心能力，无开关、始终注册，只发给主 agent。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
 
 用户可用 `/memory status` 查看条目数、近 7 天写入/删除/过期统计、tombstone、召回总数/近 30 天计数、query diversity 和最近失败；`/memory list` 按 entry id 列出活动记忆；`/memory show <entry-id>` 展示正文与 metadata；`/memory recent` 查看最近 7 天的 MEMORY.md 写入/删除/过期动作。metadata 写在频道的 `.memory/entries.json`，包含 kind、subject/owner、source entry ids、来源类型、trust、时间、状态、敏感等级、source correlation ids，以及 recall count、last recalled、每日计数和查询指纹（仅保存 hash，不保存查询原文）。correlation id 可与 usage ledger/review log 联结，统计维护 job 的成本、有效条目和后续召回。该文件是可重建 sidecar，不替代 `MEMORY.md` 事实源。
 
@@ -899,7 +899,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 - durable 写入有一道固定的置信度闸门（`0.85`），**前台边界固化与后台 checkpoint 共用**同一条提炼路径和同一道闸门。被拒绝的候选会记进 `memory-review.jsonl` 的 `skipped`，素材本身仍保留在 `HISTORY.md` 和冷存储里。
 - `MEMORY.md` cleanup 有缩水保护：原文超过 2000 字符时，结果若缩到原文 40% 以下则拒绝写入，防止一次坏结果覆盖掉整份记忆。
 - `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
-- workspace skill 只能通过显式的 `skill_manage` 工具创建/更新，后台记忆管线不会自动写 skill。
+- workspace skill 只能通过显式的 `write`/`edit` 调用创建/更新（`skill` 工具本身只读），后台记忆管线不会自动写 skill。
 
 ## 内建工具配置文件 `tools.json`（`tools.json`）
 
@@ -985,7 +985,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 |------|--------|------|
 | `enabled` | `true` | 自主长程任务总开关：同时门控 `task_manage` 工具、内建 TaskDriver 与每回合任务摘要注入 |
 
-> 记忆/技能/事件/搜索/后台作业工具（`memory_manage`、`session_search`、`skill_manage`、`event_manage`、`grep`、`job`）为核心能力，恒开、无配置项。
+> 记忆/技能/事件/搜索/后台作业工具（`memory_manage`、`session_search`、`skill`、`event_manage`、`grep`、`glob`、`job`）为核心能力，恒开、无配置项。
 
 ### 常见示例（Common Examples）
 
@@ -1106,13 +1106,10 @@ web 工具的代理顺序是：
 
 相关工具：
 
-- `skill_manage list`：列出 workspace skills
-- `skill_manage view`：查看 `SKILL.md` 或允许的支持文件
-- `skill_manage create`：创建新的 workspace skill
-- `skill_manage patch`：patch `SKILL.md` 或允许的支持文件
-- `skill_manage write_file`：写入允许的支持文件
+- `skill list`：列出 workspace skills（含加载失败的原因）
+- `skill read`：读取一个 skill 的 `SKILL.md` 全文，带路径解析框架
 
-`skill_manage` 会限制路径只能落在 `workspace/skills/<name>/` 下，支持文件只能在 `references/`、`templates/`、`scripts/`、`assets/` 内。workspace skill 只会由显式的 `skill_manage` 调用创建或更新，后台记忆管线不会自动写 skill。
+创建或修改直接用 `write`/`edit` 在 `workspace/skills/<name>/SKILL.md` 上操作，frontmatter 需要非空的 `name`（与目录名一致）和 `description`；支持文件放在 `references/`、`templates/`、`scripts/`、`assets/` 下，按需用 `read` 加载。skill 内容在加载进系统提示前会跑一次安全扫描，未通过的 skill 不会出现在目录里，原因体现在 `skill list` 的 warning 字段中。
 
 ## 会话通道级运行时文件（Channel-Level Runtime Files）
 

@@ -23,7 +23,7 @@ export const AUTOMATIC_TURN_CONTEXT_BUDGET_UNITS = 3_000;
  * Tool schemas are the larger half of the fixed per-turn cost and were the only part of it with
  * no budget at all: the runtime-authored prompt is capped at 700 units while the schemas beside it
  * run several thousand. They sit in the provider's cache prefix, so the steady-state price is low —
- * but every `rebuildSessionTools` (a `skill_manage` write, `/reload`, any resource reload) swaps
+ * but every `rebuildSessionTools` (a workspace skill write, `/reload`, any resource reload) swaps
  * that prefix and pays for all of it again.
  *
  * There is no hard cap on purpose. A schema cannot be auto-trimmed the way a prompt section can:

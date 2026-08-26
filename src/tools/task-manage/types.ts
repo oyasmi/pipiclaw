@@ -31,13 +31,13 @@ export interface TaskManageResult {
  * `verificationMode`, all three silently dropped on write, while the one field that turns on
  * independent acceptance — `verificationRequired` — was read by the implementation and absent
  * from the schema, so no model could ever ask for it. Deriving the request type makes that class
- * of drift a compile error. `label` is the tool's UI affordance, not part of the request.
+ * of drift a compile error.
  *
  * `status` stays a plain string: it is validated in code against the transition table so a legacy
  * or closing legacy value gets a fixable error naming the right action, rather than a
  * bare schema rejection.
  */
-export type TaskManageRequest = Omit<Static<typeof taskManageSchema>, "label" | "status"> & {
+export type TaskManageRequest = Omit<Static<typeof taskManageSchema>, "status"> & {
 	status?: string;
 };
 
