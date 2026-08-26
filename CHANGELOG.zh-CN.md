@@ -4,6 +4,24 @@
 
 ## [未发布]
 
+## [0.9.2-beta.1] - 2026-08-27
+
+### 新增
+
+- 新增 `glob` 工具（子代理可用），基于新的 `FileStore.walkFiles` 实现：不跟随 symlink，支持 basename/`**`/`{a,b}` 语义，按 mtime 排序并带 stat 成本上限，扫描条目数封顶并诚实提示「结果可能不完整」。bash 拦截器现在会把裸 `find`/`ls -R` 导向它。
+- 实现 spec 044 原生文件 I/O：以原生 Node 文件系统代码取代 shell 脚本式文件操作，文件工具不再依赖子进程文本捕获来保证正确性。新增 `FileStore` 端口（`src/file-store.ts`）作为 `Executor` 在文件系统侧的对应物；文件工具经 `guardPath` 一次性解析路径，且实际打开的正是那个解析结果。`edit` 改为字节级拼接（小文件走内存路径，大文件走两遍流式路径，带基于指纹的并发检查），正确性不再依赖文件解码；`write` 改用 `writeAtomic`（fsync、保留权限）取代 `cat > tmp && mv` 脚本；`read` 改用 stat/readBytes/listDirectory，新增 `line-index.ts` 提供 O(n) 顺序翻页，EOF 处诚实显示 `of >=N`；`grep` 把 exclude/include 直接下推给 grep 本身并配 grep 专属的捕获上限，不再用掩盖 grep 退出码的 `head` 管道；`send_media` 与 job-manager 改为经 FileStore 直接读取图片字节和 spill 文件尾部。executor 新增字节精确的 Buffer 捕获（关闭时一次性解码，修复分块边界处的 UTF-8 损坏）、`stdoutTruncated`/`stderrTruncated` 标记和完整落盘输出的 spill 能力；路径守卫现在总是填充 `resolvedPath`（即使守卫被禁用），且不再把多层缺失的目录路径折叠成 `<ancestor>/basename`。
+
+### 变更
+
+- **工具 schema 分区（spec 046）。** 一个工具的参数集现在就是它唯一调用形态所需的字段，非法字段组合从「运行时拒绝」变为「根本无法表达」。`task_manage` 拆分为五个独立工具——`task_list`/`task_create`/`task_update`/`task_close`/`task_verify`（`progress` 与 `set` 并入 `task_update`，按是否携带 `note` 分支；每个带 id 的工具保持 dispatcher 此前集中施加的按任务串行化）。委派拆分为 `subagent`（配置好的角色，无覆盖字段）与 `subagent_inline`（一次性执行器，携带本应由角色文件提供的全部字段），由 `tools.subagentInline.enabled` 门控（默认开启）；移除 `paths`/`name`/`returns` 及 `ARTIFACT:` 标记协议。流程知识从 schema 描述移入本就覆盖它们的 playbook。旧名称的所有下游消费方同步更新：注册表/呈现/details、effect 台账、prompt 段落门控、task-commands 诊断、task-driver 唤醒文本、playbook、评测 harness 及用户文档。
+- `skill_manage` 变为只读的 `skill` 工具（`list`/`read`）；编写改走 `write`/`edit`。skill 读取现在经过 `checkPathGuard`（修复 symlink 逃逸缺口），路径守卫的 `skills/` 例外覆盖写入；`scanSkillContent` 从写入时移到目录加载时，因此损坏的 skill 不会进入 `<available_skills>` 或 skill 列表。全部 16 个工具 schema 中的 `label` 字段移除，改为运行时确定性推导（新增 `presentation.ts` 的 `describeToolCall`），供 session 事件与子代理进度使用；持久化的标签（bash 异步作业、子代理 run）改由命令/任务文本推导，不再由模型提供。
+- 机械化加固一轮：`settings.json`、`.channel-meta.json`、记忆脚手架文件与事件 invalid-marker 现在统一走 `writeFileAtomically`，写入中途崩溃不再可能把原文件截断。反复出现的重复辅助函数各自收敛为唯一实现（`formatDuration`、`clipText`、`isRecord` 与排除数组的 `isPlainObject` 拆分、`hasMeaningfulExchange`——此前两个版本可能对同一份短 transcript 得出相反结论、`recencyBoostByAge`、`formatBlockMessage`、`normalizeSafeId`/`resolveSafeIdPath`）。本地时间词汇表扩展覆盖 channel-runner 的 `eligibleAfter`、用量台账的按月分桶（UTC 改为本地日历月，与其自身 `formatLocalTime` 戳记的条目一致）及多处裸 `Date.parse` 调用点。
+
+### 修复
+
+- 任务专属事件 id 改为按最后一个点解析。`TASK_ID_PATTERN` 允许任务 id 含点，但孤儿检测 watcher 与 `cleanupTaskEvents` 都自行切分：对形如 `v1.2-release` 的任务 id，watcher 会把 id 误读为 `v1`、找不到对应任务文件，并在首次触发时静默删除仍被持有的周期事件；`cleanupTaskEvents` 存在镜像 bug——关闭任务 `v1` 会顺带删除任何 id 恰以 `v1.` 开头的兄弟任务的事件。
+- 结构化唤醒的 durable 派发重试现在有上限和退避。`markRetryable`（在 job/子代理完成唤醒的 claim 或 finish 步骤抛错时使用——例如磁盘满、权限问题）此前把记录直接打回 "pending" 且无退避，30 秒一次的 drain 循环会永远重试同一个确定性失败，而 `archiveIncomingMessage` 在每次重投时都让频道日志无限增长。现在记录按投递次数做指数退避（30s 起、封顶 10m），并与租约过期路径共享 `MAX_DELIVERIES` 毒丸上限：超过上限的记录标记为 "exhausted"、保留在磁盘供检查，并只通知频道一次，而不是继续重试。
+
 ## [0.9.1] - 2026-08-25
 
 ### 新增
