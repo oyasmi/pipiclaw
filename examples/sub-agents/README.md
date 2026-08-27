@@ -82,7 +82,7 @@ Pipiclaw 只加载工作区 `sub-agents/` 中实际存在且有效的 Markdown �
 ## 需要按本机调整的地方
 
 - **`command` 用的是裸命令**（`claude` / `codex`），它们必须在 pipiclaw 进程的 `PATH` 上。如果你本机用的是包装脚本（换 base URL、换额度账号、注入环境变量），把 `command` 换成那个脚本即可——pipiclaw 只做 shell 词法分词，不解释命令内容。找不到可执行文件时角色不会消失，而是标为 `unavailable` 并在调用时给出安装提示。
-- **`model` 原样透传给目标 CLI，pipiclaw 不校验**。Claude 角色用了 `opus` / `sonnet`；Codex 角色**没有写 `model`**，交给 CLI 自身的默认配置——请按你的账号可用模型自行填写。
+- **`model` 原样透传给目标 CLI，pipiclaw 不校验**。Claude 角色使用 `opus` / `sonnet`；Codex 角色使用 `gpt-5.6-sol` 或 `gpt-5.6-luna`。如果本机账号不可用，请按目标 CLI 支持的模型替换。
 - **目标 CLI 参数会变化**。模板按当前 Claude Code / Codex CLI 维护；升级 CLI 后先用 `claude --help`、`codex exec --help` 核对命令。Pipiclaw 只分词和追加协议参数，不会替你校验 flag 是否仍受支持。
 - **`--dangerously-skip-permissions`** 是 Claude Code 自身的权限跳过标记，Pipiclaw 原样传入。若不接受这个边界，只使用只读角色，或为写角色换成你已验证可在非交互模式工作的更严格权限配置。
 - **`maxWallTimeSec` 是墙钟上限**，超时会杀进程组但仍解析并回传已产生的输出。按仓库规模和任务量级调整，不要把示例值当成固定答案。

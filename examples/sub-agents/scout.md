@@ -5,7 +5,8 @@ description: >-
 runtime: external
 harness: codex-cli
 command: codex exec --sandbox read-only --skip-git-repo-check
-thinkingLevel: low
+model: gpt-5.6-luna
+thinkingLevel: medium
 workload: heavy
 mutates: read
 maxWallTimeSec: 600

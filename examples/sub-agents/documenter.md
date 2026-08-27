@@ -5,7 +5,8 @@ description: >-
 runtime: external
 harness: codex-cli
 command: codex exec --sandbox workspace-write --skip-git-repo-check
-thinkingLevel: medium
+model: gpt-5.6-luna
+thinkingLevel: high
 workload: heavy
 mutates: write
 maxWallTimeSec: 1800
