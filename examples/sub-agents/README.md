@@ -45,16 +45,16 @@ planner（需求 / 方案 / 验收 / 拆解）
 
 reviewer 发现的问题回流给产出角色；verifier 失败回流给 builder，不在验证环节就地修复。闭环之外：worker 承接通用多步分析与产出，scout 只做单点事实查询。
 
-| 角色 | harness | `mutates` | `thinkingLevel` | 用途 |
-|---|---|---|---|---|
-| `planner` | claude-code (opus) | `read` | high | 只读需求收敛、方案设计、验收定义、任务拆解 |
-| `builder` | claude-code (sonnet) | `write` | medium | 边界清晰、验收已定义的实现 + 单元测试 |
-| `builder-hard` | claude-code (opus) | `write` | xhigh | builder 已失败、根因难定位或多契约耦合的实现 |
-| `reviewer` | codex-cli（只读沙箱） | `read` | high | 与产出者分离的方案 / 代码 / 文档挑错，也可承担只读 `purpose=verify` |
-| `verifier` | codex-cli（工作区写沙箱） | `write` | medium | 实际运行系统、复现、冒烟、回归、取证 |
-| `scout` | codex-cli（只读沙箱） | `read` | low | 大仓库里的单点事实查询 |
-| `worker` | codex-cli（工作区写沙箱） | `write` | medium | 闭环外的数据对比、指标计算、批量处理、专项报告 |
-| `documenter` | codex-cli（工作区写沙箱） | `write` | medium | 文档、变更记录和迁移说明；提交统一用 `git-committer` |
+| 角色 | harness | `model` | `mutates` | `thinkingLevel` | 用途 |
+|---|---|---|---|---|---|
+| `planner` | claude-code | `opus` | `read` | high | 只读需求收敛、方案设计、验收定义、任务拆解 |
+| `builder` | claude-code | `sonnet` | `write` | medium | 边界清晰、验收已定义的实现 + 单元测试 |
+| `builder-hard` | claude-code | `opus` | `write` | xhigh | builder 已失败、根因难定位或多契约耦合的实现 |
+| `reviewer` | codex-cli | `gpt-5.6-sol` | `read` | high | 与产出者分离的方案 / 代码 / 文档挑错，也可承担只读 `purpose=verify` |
+| `verifier` | codex-cli | `gpt-5.6-luna` | `write` | high | 实际运行系统、复现、冒烟、回归、取证 |
+| `scout` | codex-cli | `gpt-5.6-luna` | `read` | medium | 大仓库里的单点事实查询 |
+| `worker` | codex-cli | `gpt-5.6-luna` | `write` | max | 闭环外的数据对比、指标计算、批量处理、专项报告 |
+| `documenter` | codex-cli | `gpt-5.6-luna` | `write` | high | 文档、变更记录和迁移说明；提交统一用 `git-committer` |
 
 `planner` 用 Claude 的 `--permission-mode plan`，`reviewer` / `scout` 用 Codex 的 `--sandbox read-only`；三者的 `mutates: read` 都有目标 CLI 的权限模式支撑，而不只是提示词声明。它们不占工作区写锁，但评审仍应针对稳定的 diff / commit，不要一边让 builder 改同一工作树、一边评审移动中的目标。
 
