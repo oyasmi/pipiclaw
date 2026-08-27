@@ -2,7 +2,27 @@ import { describe, expect, it, vi } from "vitest";
 import { externalRoleFingerprint } from "../src/subagents/discovery.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
-import { createSubAgentManageTool } from "../src/tools/subagent-manage.js";
+import {
+	createSubAgentListTool,
+	createSubAgentRunTool,
+	type SubAgentManageToolOptions,
+} from "../src/tools/subagent-manage.js";
+
+/**
+ * Spec 047 P3 split `subagent_manage` into `subagent_list` + `subagent_run`. This helper
+ * dispatches by `op` so the existing behavior cases keep exercising one call shape; the
+ * two-tool routing itself is covered by `subagent_list` returning the snapshot and
+ * `subagent_run` requiring `runId` at the schema layer.
+ */
+function createSubAgentManageTool(options: SubAgentManageToolOptions) {
+	const list = createSubAgentListTool(options);
+	const run = createSubAgentRunTool(options);
+	return {
+		...run,
+		execute: (id: string, args: { op: string; runId?: string; task?: string }) =>
+			args.op === "list" ? list.execute(id, {} as never) : run.execute(id, args as never),
+	};
+}
 
 const { launchExternalRunMock } = vi.hoisted(() => ({
 	launchExternalRunMock: vi.fn(async (..._args: unknown[]) => ({ ok: true }) as const),

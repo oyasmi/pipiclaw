@@ -14,7 +14,7 @@ import { createEventManageTool } from "./event-manage.js";
 import { createGlobTool } from "./glob.js";
 import { createGrepTool } from "./grep.js";
 import { createJobTool } from "./job.js";
-import { createMemoryManageTool } from "./memory-manage.js";
+import { createMemoryForgetTool, createMemorySaveTool, createMemorySearchTool } from "./memory-manage.js";
 import { createReadTool } from "./read.js";
 import { createSendMediaTool } from "./send-media.js";
 import { createSessionSearchTool } from "./session-search.js";
@@ -96,6 +96,17 @@ function fileToolOptions(ctx: ToolBuildContext) {
 		securityConfig: ctx.securityConfig,
 		securityContext: ctx.securityContext,
 		channelId: ctx.channelId,
+	};
+}
+
+function memoryToolOptions(ctx: ToolBuildContext) {
+	return {
+		channelId: ctx.channelId,
+		channelDir: ctx.channelDir,
+		workspaceDir: ctx.workspaceDir,
+		memoryCandidateStore: req(ctx.memoryCandidateStore, "memoryCandidateStore"),
+		getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
+		resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),
 	};
 }
 
@@ -200,18 +211,21 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				getSessionSearchSettings: req(ctx.getSessionSearchSettings, "getSessionSearchSettings"),
 			}),
 	},
+	// Spec 047, P4: one tool per payload shape. All three share the same build options.
 	{
-		name: "memory_manage",
+		name: "memory_save",
 		availableToSubagents: false,
-		create: (ctx) =>
-			createMemoryManageTool({
-				channelId: ctx.channelId,
-				channelDir: ctx.channelDir,
-				workspaceDir: ctx.workspaceDir,
-				memoryCandidateStore: req(ctx.memoryCandidateStore, "memoryCandidateStore"),
-				getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
-				resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),
-			}),
+		create: (ctx) => createMemorySaveTool(memoryToolOptions(ctx)),
+	},
+	{
+		name: "memory_search",
+		availableToSubagents: false,
+		create: (ctx) => createMemorySearchTool(memoryToolOptions(ctx)),
+	},
+	{
+		name: "memory_forget",
+		availableToSubagents: false,
+		create: (ctx) => createMemoryForgetTool(memoryToolOptions(ctx)),
 	},
 	{
 		name: "skill",
@@ -316,7 +330,8 @@ export const TOOL_NAMES: ReadonlySet<string> = new Set<string>([
 	...TOOL_REGISTRY.map((registration) => registration.name),
 	"subagent",
 	"subagent_inline",
-	"subagent_manage",
+	"subagent_list",
+	"subagent_run",
 ]);
 
 export interface BuildToolSetOptions {

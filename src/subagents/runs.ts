@@ -391,7 +391,7 @@ export class SubAgentRunManager {
 				if (this.runningCount() >= MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL) {
 					throw new RecoverableToolError(
 						`Too many delegation runs already running on this channel (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL}). ` +
-							"Wait for one to finish, or cancel one with subagent_manage first.",
+							"Wait for one to finish, or cancel one with subagent_run op=cancel first.",
 					);
 				}
 				if (totalRunningSubAgentRuns() >= MAX_RUNNING_SUBAGENT_RUNS_PER_HOST) {
@@ -668,7 +668,7 @@ export class SubAgentRunManager {
 		const tail = outputText.slice(-WAKE_OUTPUT_TAIL_CHARS).trim();
 		const harnessLabel = record.harness ? `${record.runtime}/${record.harness}` : record.runtime;
 		// K parallel fan-out runs otherwise produce K wake turns, each re-asking "is this the only
-		// one?" via a fresh subagent_manage op=list call — this answers it inline (review 2026-08-23
+		// one?" via a fresh subagent_list call — this answers it inline (review 2026-08-23
 		// §3.3), so the model can reliably reply [SILENT] to every wake but the last.
 		const siblingCount = record.taskId
 			? Array.from(this.runs.values()).filter(
@@ -733,7 +733,7 @@ export class SubAgentRunManager {
 		await this.persist(record);
 	}
 
-	/** Explicit cancel (`subagent_manage op=cancel`, spec 040 D6). Does not wake — it is the model's own decision. */
+	/** Explicit cancel (`subagent_run op=cancel`, spec 040 D6). Does not wake — it is the model's own decision. */
 	async cancel(runId: string): Promise<RunStatus | "not_found"> {
 		let adoptedRecord: RunRecord | undefined;
 		const status = await this.queue.run(runId, async () => {

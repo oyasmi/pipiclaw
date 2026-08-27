@@ -399,7 +399,7 @@ describe("memory recall", () => {
 		const bodyCount = (text: string): number => (text.match(/Deploy runbook step/g) ?? []).length;
 		expect(bodyCount(generous.renderedText)).toBeGreaterThan(1);
 		expect(bodyCount(tight.renderedText)).toBeLessThan(bodyCount(generous.renderedText));
-		expect(tight.renderedText).toContain("memory_manage search");
+		expect(tight.renderedText).toContain("memory_search");
 		// The tight render is a small fraction of the generous one, in units.
 		expect(countPromptUnits(tight.renderedText)).toBeLessThan(countPromptUnits(generous.renderedText));
 	});

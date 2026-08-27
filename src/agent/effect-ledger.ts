@@ -10,7 +10,7 @@ import { isRecord } from "../shared/type-guards.js";
  *
  * Effects are counted here instead, and only for things that change the world outside the task
  * ledger: writes, outbound media, sub-agent runs, background job launches, and a user-visible
- * reply. Self-report tools (`task_create`/`task_update`/`task_close`/`task_verify`, `memory_manage`) and read-only tools deliberately do
+ * reply. Self-report tools (`task_create`/`task_update`/`task_close`/`task_verify`, `memory_save`/`memory_search`/`memory_forget`) and read-only tools deliberately do
  * not count — a claim of progress is not evidence of it.
  *
  * The tally lives in process memory, exactly like the driver's futile counter it feeds; a restart
@@ -80,6 +80,13 @@ export function resetChannelEffects(): void {
  * claims to look. What "futile" now means is the honest thing: a wake that executed nothing at all.
  */
 export function isEffectfulTool(toolName: string, details: unknown): boolean {
+	if (toolName === "subagent_run") {
+		// Spec 047, F6/D3.2: op=follow_up dispatches a new external run — as much a visible change
+		// to the world as `subagent` itself. show/cancel are not. The discriminator is `resumedFrom`
+		// in `details` rather than `op`, because only a successful dispatch sets it: every follow_up
+		// failure path throws or returns a RecoverableToolError, so a rejection can never count.
+		return isRecord(details) && typeof details.resumedFrom === "string";
+	}
 	if (toolName === "bash") {
 		if (!isRecord(details)) return false;
 		if (details.async !== undefined) return true;

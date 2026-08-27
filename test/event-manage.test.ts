@@ -320,4 +320,48 @@ describe("manageEvent delete", () => {
 		await expect(manageEvent(opts(), { action: "delete", name: "foreign" })).rejects.toThrow(/another channel/);
 		expect(await listEventFiles()).toEqual(["foreign.json"]);
 	});
+
+	// Spec 047, P1/D1.
+	describe("action: list", () => {
+		it("returns an empty notice when the channel has no events", async () => {
+			const result = await manageEvent(opts(), { action: "list" });
+			expect(result).toMatchObject({ action: "list", count: 0, names: [] });
+			expect(result.notice).toContain("暂无");
+		});
+
+		it("lists only this channel's events, one line each", async () => {
+			await manageEvent(opts(), { action: "create", name: "mine-periodic", definition: validPeriodic });
+			await manageEvent(opts(), {
+				action: "create",
+				name: "mine-oneshot",
+				definition: JSON.stringify({ type: "one-shot", channelId: "dm_1", text: "回访", at: futureIso(60) }),
+			});
+			const { mkdir } = await import("node:fs/promises");
+			await mkdir(eventsDir, { recursive: true });
+			await writeFile(
+				join(eventsDir, "foreign.json"),
+				JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
+			);
+
+			const result = await manageEvent(opts(), { action: "list" });
+			expect(result.count).toBe(2);
+			expect(result.names?.sort()).toEqual(["mine-oneshot", "mine-periodic"]);
+			expect(result.notice).toContain("mine-periodic [periodic]");
+			expect(result.notice).toContain("mine-oneshot [one-shot]");
+			expect(result.notice).not.toContain("foreign");
+			expect(result.notice).not.toContain("dm_other");
+		});
+
+		it("lists an unparseable file and flags it instead of failing the whole call", async () => {
+			const { mkdir } = await import("node:fs/promises");
+			await mkdir(eventsDir, { recursive: true });
+			await writeFile(join(eventsDir, "broken.json"), "{ not json");
+			await manageEvent(opts(), { action: "create", name: "ok-one", definition: validPeriodic });
+
+			const result = await manageEvent(opts(), { action: "list" });
+			expect(result.notice).toContain("broken ⚠ 无法解析");
+			expect(result.notice).toContain("ok-one [periodic]");
+			expect(result.names).toContain("broken");
+		});
+	});
 });

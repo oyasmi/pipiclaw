@@ -93,6 +93,6 @@ export function formatWorkspaceLeaseConflict(heldBy: WorkspaceLeaseHolder): stri
 	return (
 		`Workspace "${heldBy.workingDirectory}" is already held by a running write delegation ` +
 		`(runId ${heldBy.runId}, channel ${heldBy.channelId}). Wait for it to finish, cancel it with ` +
-		"subagent_manage, or use a separate `git worktree add` checkout via workingDirectory."
+		"subagent_run op=cancel, or use a separate `git worktree add` checkout via workingDirectory."
 	);
 }

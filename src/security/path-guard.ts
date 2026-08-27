@@ -289,7 +289,7 @@ function isAgentWorkspaceSkillsAccess(path: string, ctx: PathGuardContext): bool
  * `tasks/<id>.md` and the guard would refuse.
  *
  * Reads are allowed throughout. Writes are allowed only under `tasks/`: the three memory files are
- * runtime-maintained and go through `memory_manage` (a file write there races the maintenance
+ * runtime-maintained and go through the memory tools (a file write there races the maintenance
  * queue), while a task's body is model-authored prose that `task_update` cannot rewrite — it
  * replaces frontmatter and keeps the body verbatim, so revising a task contract needs `edit`.
  */

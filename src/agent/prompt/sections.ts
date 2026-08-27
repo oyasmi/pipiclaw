@@ -82,8 +82,8 @@ export const INVARIANTS_SECTION: PromptSectionDefinition = {
 	maxChars: 900,
 	overflow: "error",
 	render: (context) => {
-		const memoryLine = hasTool(context, "memory_manage")
-			? "- SESSION.md, MEMORY.md and HISTORY.md are runtime-managed; do not edit them with file tools. Use `memory_manage` in the same turn when the user explicitly asks to remember or forget something."
+		const memoryLine = hasTool(context, "memory_save")
+			? "- SESSION.md, MEMORY.md and HISTORY.md are runtime-managed; do not edit them with file tools. Use `memory_save` / `memory_forget` in the same turn when the user explicitly asks to remember or forget something."
 			: "- SESSION.md, MEMORY.md and HISTORY.md are runtime-managed; do not edit them with file tools.";
 		return [
 			"## Runtime Boundaries",

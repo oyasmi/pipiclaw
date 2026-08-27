@@ -20,7 +20,7 @@ export interface ExternalInvocationInput {
 	/** Path to the role's system-prompt file (`<artifactDir>/system-prompt.txt`), for harnesses
 	 *  that reference it by flag (e.g. claude-code's `--append-system-prompt-file`). */
 	systemPromptFile: string;
-	/** Set when this invocation continues an earlier run (`subagent_manage op=follow_up`, D6). */
+	/** Set when this invocation continues an earlier run (`subagent_run op=follow_up`, D6). */
 	resumeSessionId?: string;
 }
 

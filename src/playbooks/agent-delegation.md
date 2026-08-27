@@ -55,15 +55,15 @@ order: 60
 
 1. **不要轮询，也不要用后台作业包一层等待。** 委派结束时 runtime 会唤醒本频道，带回状态、耗时、结果尾部和产物路径。这是 runtime 保证。
 2. **立即结束当前回合。** 属于某个 task 时，派发就带上 `taskId`，并按 `task-driving.md` 把任务停泊为 `waiting`——runtime 按 run 记录里的 `taskId` 认领并恢复该任务。
-3. 想看进度用 `subagent_manage op=list`（用户命令：`/subagents list`），不要靠反复调用委派工具来"检查"。
+3. 想看进度用 `subagent_list`（用户命令：`/subagents list`），不要靠反复调用委派工具来"检查"。
 4. 每个频道最多 6 个同时在跑的委派（宿主全局 20 个）。被上限拒绝时先等一个结束或 `cancel` 一个，不要改小任务再试。
 5. daemon 重启时外部 run 通常继续跑，内置 run 会被判 `lost` 并唤醒说明；外部 run 若在进程 pid 真正落盘之前就重启，同样判 `lost`。`lost` 的含义是"结局未知"：先查真实产物，再决定重派。重连恢复出的耗时前面带 `≈`，那是从产物文件估算的，不是实测值。
-6. 外部 run 失败又看不出原因时，用 `subagent_manage op=show <runId>` 自诊断：实际 argv、派发警告、适配器/CLI 版本、stderr 尾部都在里面，不要凭猜测重派。
+6. 外部 run 失败又看不出原因时，用 `subagent_run op=show <runId>` 自诊断：实际 argv、派发警告、适配器/CLI 版本、stderr 尾部都在里面，不要凭猜测重派。
 
 ## 五、纠偏与续接
 
-- `subagent_manage op=cancel <runId>`：提前终止。取消不产生唤醒，因为那是你自己的决定。用户的 `/stop` 也**不会**连带停止已派发的委派——停止一个正在写工作区的进程永远需要一次显式决定。
-- `subagent_manage op=follow_up <runId>`：在一个**已结束**的可续接外部 run（claude-code / codex-cli）上追加一轮，省掉重新交代上下文。它产生新的 `runId`，同样异步唤醒，走与首次派发相同的信封（运行时上下文、上下文块、verify 协议）。内置 run 和 `exec` 不支持续接，改为带着上一轮产出开一个新委派。角色的 `command`/`model`/`shell` 在两次派发之间变过时续接会被拒绝——把变化当作"开新任务"。
+- `subagent_run op=cancel <runId>`：提前终止。取消不产生唤醒，因为那是你自己的决定。用户的 `/stop` 也**不会**连带停止已派发的委派——停止一个正在写工作区的进程永远需要一次显式决定。
+- `subagent_run op=follow_up <runId>`：在一个**已结束**的可续接外部 run（claude-code / codex-cli）上追加一轮，省掉重新交代上下文。它产生新的 `runId`，同样异步唤醒，走与首次派发相同的信封（运行时上下文、上下文块、verify 协议）。内置 run 和 `exec` 不支持续接，改为带着上一轮产出开一个新委派。角色的 `command`/`model`/`shell` 在两次派发之间变过时续接会被拒绝——把变化当作"开新任务"。
 - 只在明确阻塞、循环、崩溃、需要纠偏或用户要求时才取消；耗时长本身不是理由。
 
 ## 六、产物与验收

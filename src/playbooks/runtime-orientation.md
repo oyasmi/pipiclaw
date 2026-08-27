@@ -51,7 +51,7 @@ Workspace 根目录——**靠专用工具或只读注入访问**，项目边界
 
 当前 channel 目录（路径在 `<runtime_turn_context>` 里）——runtime 维护，项目边界下始终可读：
 
-- `SESSION.md`（当前工作状态）、`MEMORY.md`（稳定事实、偏好、决策与中期 open loop）、`HISTORY.md`（更旧的摘要历史）：可以 `read`，但**只用 `memory_manage` 写**——它们由后台维护队列共同持有，文件工具的写入会和后台相撞（项目边界下 path guard 会直接拒绝）。
+- `SESSION.md`（当前工作状态）、`MEMORY.md`（稳定事实、偏好、决策与中期 open loop）、`HISTORY.md`（更旧的摘要历史）：可以 `read`，但**只用 `memory_save`/`memory_forget` 写**——它们由后台维护队列共同持有，文件工具的写入会和后台相撞（项目边界下 path guard 会直接拒绝）。
 - `tasks/`：长程任务台账。状态和生命周期用 `task_create`/`task_update`/`task_close`/`task_verify`，正文（Goal/DoD/Manual/Verification）大改用 `edit`——不带 `note` 的 `task_update` 只重写 frontmatter，原样保留正文。
 - `log.jsonl` / `context.jsonl`：冷存储，用 `session_search` 检索。
 

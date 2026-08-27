@@ -9,41 +9,51 @@ import { parseScheduledEventContent, type ScheduledEvent } from "../runtime/even
 import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { errorMessage } from "../shared/text-utils.js";
+import { clipText, errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 
 const eventManageSchema = Type.Object({
-	action: Type.Union([Type.Literal("create"), Type.Literal("update"), Type.Literal("delete")], {
-		description: 'The event management action to perform: "create", "update", or "delete".',
+	action: Type.Union([Type.Literal("list"), Type.Literal("create"), Type.Literal("update"), Type.Literal("delete")], {
+		description: '"list" this channel\'s events, or "create" / "update" / "delete" one by name.',
 	}),
-	name: Type.String({
-		description:
-			"Event name (filename without .json). For task-owned events use `task.<channelId>.<taskId>.<use>`, e.g. `task.dm_123.weekly-report.checkin`.",
-	}),
+	name: Type.Optional(
+		Type.String({
+			description:
+				"Event name (filename without .json); required for create/update/delete, ignored for list. Task-owned events: `task.<channelId>.<taskId>.<use>`.",
+		}),
+	),
 	definition: Type.Optional(
 		Type.String({
 			description:
-				"Full event JSON (required for create/update). one-shot / periodic only; one-shots must be 2 minutes to about 24.8 days out. immediate is rejected. channelId defaults to the current channel.",
+				"Full event JSON (required for create/update). one-shot / periodic only; one-shots 2 minutes to about 24.8 days out. channelId defaults to the current channel.",
 		}),
 	),
 });
 
-export type EventManageAction = "create" | "update" | "delete";
+export type EventManageAction = "list" | "create" | "update" | "delete";
+
+export interface EventManageListEntry {
+	name: string;
+	line: string;
+	parsed: boolean;
+}
 
 export interface EventManageResult {
 	action: EventManageAction;
-	name: string;
-	path: string;
+	name?: string;
+	path?: string;
 	eventType?: ScheduledEvent["type"];
 	channelId?: string;
 	bytesWritten?: number;
 	deleted?: boolean;
+	count?: number;
+	names?: string[];
 	notice: string;
 }
 
 export interface EventManageRequest {
 	action: EventManageAction;
-	name: string;
+	name?: string;
 	definition?: string;
 }
 
@@ -54,10 +64,34 @@ export interface EventManageToolOptions {
 }
 
 function parseAction(action: string): EventManageAction {
-	if (action === "create" || action === "update" || action === "delete") {
+	if (action === "list" || action === "create" || action === "update" || action === "delete") {
 		return action;
 	}
-	throw new RecoverableToolError('Unsupported event action. Use "create", "update", or "delete".');
+	throw new RecoverableToolError('Unsupported event action. Use "list", "create", "update", or "delete".');
+}
+
+/** One line per event; unparseable files are listed and flagged so the model can still clean them up. */
+async function listOwnedEvents(options: EventManageToolOptions): Promise<EventManageListEntry[]> {
+	const dir = join(options.workspaceDir, "events");
+	if (!existsSync(dir)) return [];
+	const filenames = (await readdir(dir)).filter((filename) => filename.endsWith(".json")).sort();
+	const entries: EventManageListEntry[] = [];
+	for (const filename of filenames) {
+		const name = filename.slice(0, -".json".length);
+		let event: ScheduledEvent;
+		try {
+			event = parseScheduledEventContent(await readFile(join(dir, filename), "utf-8"), filename);
+		} catch (error) {
+			entries.push({ name, parsed: false, line: `- ${name} ⚠ 无法解析：${errorMessage(error)}` });
+			continue;
+		}
+		if (event.channelId !== options.channelId) continue;
+		const when = event.type === "one-shot" ? `at ${event.at}` : event.schedule;
+		const pre = event.preAction ? " (preAction)" : "";
+		const text = clipText(event.text, 80, { collapseWhitespace: true });
+		entries.push({ name, parsed: true, line: `- ${name} [${event.type}] ${when}${pre} — ${text}` });
+	}
+	return entries;
 }
 
 /**
@@ -138,6 +172,20 @@ export async function manageEvent(
 	options: EventManageToolOptions,
 	request: EventManageRequest,
 ): Promise<EventManageResult> {
+	if (request.action === "list") {
+		const entries = await listOwnedEvents(options);
+		const notice = entries.length === 0 ? "本频道暂无定时事件。" : entries.map((entry) => entry.line).join("\n");
+		return {
+			action: "list",
+			count: entries.length,
+			names: entries.map((entry) => entry.name),
+			notice,
+		};
+	}
+
+	if (!request.name || request.name.trim().length === 0) {
+		throw new RecoverableToolError(`${request.action} requires a non-empty event name.`);
+	}
 	const { eventName, eventPath } = resolveEventPath(options.workspaceDir, request.name);
 	const eventsDir = join(options.workspaceDir, "events");
 
@@ -212,15 +260,14 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 		name: "event_manage",
 		label: "event_manage",
 		description:
-			"Create, update, or delete scheduled events (one-shot check-ins and periodic cadences) that wake this " +
-			"channel later. Use for task self-scheduling: arrange a follow-up after delegating, reschedule while " +
-			"blocked, clean up on close. immediate events are rejected; do that work in the current turn.",
+			"List, create, update, or delete scheduled events that wake this channel later (one-shot check-ins and periodic " +
+			"cadences). List to recover real event names before a reschedule or close-out. immediate events are rejected.",
 		parameters: eventManageSchema,
 		execute: async (
 			_toolCallId: string,
 			args: {
 				action: string;
-				name: string;
+				name?: string;
 				definition?: string;
 			},
 		) => {
@@ -229,8 +276,9 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 				name: args.name,
 				definition: args.definition,
 			});
+			const text = result.action === "list" ? result.notice : JSON.stringify(result, null, 2);
 			return {
-				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				content: [{ type: "text", text }],
 				details: { ...result },
 			};
 		},

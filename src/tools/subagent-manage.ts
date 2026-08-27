@@ -25,15 +25,17 @@ import {
 	releaseWorkspaceLease,
 } from "../subagents/workspace-lease.js";
 
-const subagentManageSchema = Type.Object({
-	op: Type.Union([Type.Literal("list"), Type.Literal("cancel"), Type.Literal("follow_up"), Type.Literal("show")], {
-		description:
-			'"list" a snapshot of this channel\'s delegation runs, "cancel" a running one by runId, ' +
-			'"follow_up" to continue a resumable run with a new instruction (produces a new runId), or ' +
-			'"show" the full detail on one run by runId (argv, dispatch warnings, stderr tail) for self-diagnosis of a failed run.',
+// Spec 047, P3: `subagent_list` is zero-argument and shape-independent (like `task_list`); the
+// other three ops all take `runId`, so they stay together in `subagent_run` rather than being
+// split per-verb (`cancel` and `show` have identical parameter sets).
+const subagentListSchema = Type.Object({});
+
+const subagentRunSchema = Type.Object({
+	op: Type.Union([Type.Literal("show"), Type.Literal("cancel"), Type.Literal("follow_up")], {
+		description: '"show" full detail for self-diagnosis, "cancel" a running one, or "follow_up" a resumable run.',
 	}),
-	runId: Type.Optional(Type.String({ description: "Required for cancel, follow_up, and show." })),
-	task: Type.Optional(Type.String({ description: "Follow-up instruction. Required for op=follow_up." })),
+	runId: Type.String({ description: "The run id to operate on." }),
+	task: Type.Optional(Type.String({ description: "New instruction. Required for op=follow_up." })),
 });
 
 export interface SubAgentManageToolOptions {
@@ -66,9 +68,9 @@ export interface SubAgentManageToolOptions {
 	memoryCandidateStore?: MemoryCandidateStore;
 }
 
-interface SubAgentManageArgs {
-	op: "list" | "cancel" | "follow_up" | "show";
-	runId?: string;
+interface SubAgentRunArgs {
+	op: "cancel" | "follow_up" | "show";
+	runId: string;
 	task?: string;
 }
 
@@ -122,7 +124,7 @@ async function formatRunShow(record: RunRecord): Promise<string> {
 	if (record.invocationWarnings?.length) {
 		lines.push("dispatch warnings:", ...record.invocationWarnings.map((warning) => `- ${warning}`));
 	}
-	if (record.sessionId) lines.push(`sessionId: ${record.sessionId} (usable with subagent_manage op=follow_up)`);
+	if (record.sessionId) lines.push(`sessionId: ${record.sessionId} (usable with subagent_run op=follow_up)`);
 	if (record.runtime === "external") {
 		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")
 			.then((text) => text.slice(-STDERR_TAIL_CHARS))
@@ -139,48 +141,51 @@ function resumableHarnessOf(record: RunRecord): "codex-cli" | "claude-code" | un
 	return record.harness === "codex-cli" || record.harness === "claude-code" ? record.harness : undefined;
 }
 
-export function createSubAgentManageTool(options: SubAgentManageToolOptions): AgentTool<typeof subagentManageSchema> {
+export function createSubAgentListTool(options: SubAgentManageToolOptions): AgentTool<typeof subagentListSchema> {
+	const manager = () => getSubAgentRunManager(options.channelId);
+	return {
+		name: "subagent_list",
+		label: "subagent_list",
+		description:
+			"Snapshot of this channel's delegation runs. A finished run wakes this channel itself — never poll here, end the turn.",
+		parameters: subagentListSchema,
+		execute: async () => {
+			// Spec 042 D9: this used to return every run on the channel, unbounded, in both the
+			// text and `details.runs` — a long-lived channel could dump thousands of historical
+			// records into a single tool result. Running runs (the ones a decision might depend
+			// on) are never dropped; only the terminal tail is capped, newest first.
+			const allRuns = manager().list();
+			const running = allRuns.filter((record) => record.status === "running");
+			const terminal = allRuns
+				.filter((record) => record.status !== "running")
+				.sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt));
+			const shownTerminal = terminal.slice(0, Math.max(0, LIST_CAP - running.length));
+			const runs = [...running, ...shownTerminal];
+			const lines = runs.length === 0 ? ["No delegation runs."] : runs.map(formatRunLine);
+			if (runs.length < allRuns.length) {
+				lines.push(
+					`… showing ${runs.length} of ${allRuns.length} runs (all running + most recently finished). Ask about a specific runId if you need an older one not shown here.`,
+				);
+			}
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: { op: "list", runs },
+			};
+		},
+	};
+}
+
+export function createSubAgentRunTool(options: SubAgentManageToolOptions): AgentTool<typeof subagentRunSchema> {
 	const manager = () => getSubAgentRunManager(options.channelId);
 
 	return {
-		name: "subagent_manage",
-		label: "subagent_manage",
+		name: "subagent_run",
+		label: "subagent_run",
 		description:
-			"Inspect and control delegation runs (internal sub-agents and, once configured, external agents): " +
-			"op=list shows a snapshot of this channel's runs; op=cancel stops a running one by runId without " +
-			"waking the channel (that is your own decision, not a failure); op=follow_up continues a resumable " +
-			"run with a new instruction, producing a new runId; op=show gives full detail on one run (argv, " +
-			"dispatch warnings, stderr tail) for self-diagnosis. A run finishing wakes this channel by itself, " +
-			"so never poll here waiting for one — end the turn instead.",
-		parameters: subagentManageSchema,
-		execute: async (_toolCallId: string, { op, runId, task }: SubAgentManageArgs) => {
-			if (op === "list") {
-				// Spec 042 D9: this used to return every run on the channel, unbounded, in both the
-				// text and `details.runs` — a long-lived channel could dump thousands of historical
-				// records into a single tool result. Running runs (the ones a decision might depend
-				// on) are never dropped; only the terminal tail is capped, newest first.
-				const allRuns = manager().list();
-				const running = allRuns.filter((record) => record.status === "running");
-				const terminal = allRuns
-					.filter((record) => record.status !== "running")
-					.sort((a, b) => (b.finishedAt ?? b.startedAt) - (a.finishedAt ?? a.startedAt));
-				const shownTerminal = terminal.slice(0, Math.max(0, LIST_CAP - running.length));
-				const runs = [...running, ...shownTerminal];
-				const lines = runs.length === 0 ? ["No delegation runs."] : runs.map(formatRunLine);
-				if (runs.length < allRuns.length) {
-					lines.push(
-						`… showing ${runs.length} of ${allRuns.length} runs (all running + most recently finished). Ask about a specific runId if you need an older one not shown here.`,
-					);
-				}
-				return {
-					content: [{ type: "text", text: lines.join("\n") }],
-					details: { op, runs },
-				};
-			}
-
-			if (!runId) {
-				throw new RecoverableToolError(`${op} requires runId.`);
-			}
+			"Operate on one delegation run by runId. show: full detail for self-diagnosis. cancel: stop a running one " +
+			"(no wake — your decision, not a failure). follow_up: continue a resumable run with a new instruction (new runId).",
+		parameters: subagentRunSchema,
+		execute: async (_toolCallId: string, { op, runId, task }: SubAgentRunArgs) => {
 			const resolution = manager().resolveRef(runId);
 			if (resolution.kind === "ambiguous") {
 				throw new RecoverableToolError(

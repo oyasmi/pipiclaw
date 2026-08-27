@@ -165,6 +165,19 @@ describe("recoverInterruptedTurn", () => {
 		expect(second).toEqual({ kind: "clean" });
 	});
 
+	// Spec 047, D3.3: the recovery guidance must name the post-split tools, not `subagent_manage`.
+	it("points a dangling subagent_run call at the split tool names", () => {
+		const m = openSession();
+		appendUser(m);
+		appendAssistant(m, [{ type: "toolCall", id: "tc1", name: "subagent_run", arguments: {} }], "toolUse");
+		recoverInterruptedTurn(m, fallbackModel);
+		const result = m.getBranch().at(-1);
+		if (result?.type !== "message" || result.message.role !== "toolResult") throw new Error("unexpected shape");
+		const text = result.message.content[0]?.type === "text" ? result.message.content[0].text : "";
+		expect(text).toContain("subagent_list");
+		expect(text).not.toContain("subagent_manage");
+	});
+
 	it("appends a runtime-authored aborted assistant when the branch ends on a user message", () => {
 		const m = openSession();
 		appendUser(m);

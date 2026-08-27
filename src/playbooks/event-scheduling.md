@@ -44,4 +44,6 @@ preAction 的 bash 命令退出 0 才唤醒 agent，非 0 静默跳过。它用�
 
 ## 维护纪律
 
+闭环或改期之前先 `event_manage action=list` 确认本频道事件的真实名字，不要凭 `task.<channelId>.<taskId>.<use>` 约定拼。`list` 只返回当前 channel 的事件，无法解析的文件也会列出并标记，便于清理。名字确定时直接 create / update / delete，不必每次先 list。
+
 更新事件时整体替换 definition，不再需要就及时删除。周期事件跑完没有新结果时按唤醒文本的要求回复 `[SILENT]`，不发空状态卡。排查触发与 gate 结果要看事件历史（用户命令：`/events history`）。

@@ -34,7 +34,9 @@ export type ToolDetailsKind =
 	| "web_fetch"
 	| "send_media"
 	| "session_search"
-	| "memory_manage"
+	| "memory_save"
+	| "memory_search"
+	| "memory_forget"
 	| "skill"
 	| "event_manage"
 	| "task_list"
@@ -45,7 +47,8 @@ export type ToolDetailsKind =
 	| "job"
 	| "subagent"
 	| "subagent_inline"
-	| "subagent_manage";
+	| "subagent_list"
+	| "subagent_run";
 
 /** The fields every tool result's `details` carries. Tool-specific fields extend this. */
 export interface ToolDetails {
@@ -70,6 +73,31 @@ export function toolResultDetails(result: unknown): ToolDetails | null {
 /** True when the result is a rejection the model can resolve on its own. */
 export function isRecoverableRejection(result: unknown): boolean {
 	return toolResultDetails(result)?.recoverable === true;
+}
+
+/**
+ * True when a tool result is the SDK's own argument-validation failure (spec 047, D4.2).
+ *
+ * pi validates tool arguments against the schema *before* `execute` runs (`agent-loop.js`'s
+ * `validateToolArguments` → `createErrorToolResult`), so this rejection never passes through
+ * `withToolDetails`: it carries no `details.kind`, and its text begins with a fixed prefix.
+ * A schema-invalid call is by definition something the model can fix by re-issuing correct
+ * arguments — the same class as a `RecoverableToolError` — so the runtime treats it as a
+ * recoverable rejection rather than a user-visible tool error.
+ *
+ * This is a deliberate coupling to a string the SDK emits; `test/tool-error-contract.test.ts`
+ * drives a real schema-invalid call through the SDK and asserts this still matches, so a
+ * wording change upstream fails loudly there rather than silently regressing progress-card
+ * behavior.
+ */
+export function isArgumentValidationFailure(result: unknown, isError: boolean): boolean {
+	if (!isError || toolResultDetails(result) !== null || !isRecord(result)) {
+		return false;
+	}
+	const text = Array.isArray(result.content)
+		? result.content.map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : "")).join("")
+		: "";
+	return text.startsWith('Validation failed for tool "');
 }
 
 /**

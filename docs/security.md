@@ -99,7 +99,7 @@ $PIPICLAW_HOME/security.json
 |---|---|---|---|
 | 内置 playbook 目录 | 允许 | 拒绝 | agent 要能读自己这一版的运行机制，与装在哪儿无关 |
 | workspace `skills/` | 允许 | 允许 | 选了哪个项目都要能加载 skill；写入走通用 `write`/`edit`（`skill` 工具本身只读） |
-| 当前 channel 目录 | 允许 | 仅 `tasks/` | 频道的记忆与任务台账不随项目切换失联；`SESSION.md` / `MEMORY.md` / `HISTORY.md` 由后台维护队列持有，写入走 `memory_manage`，而任务正文是 agent 自己写的契约，需要 `edit` 修订 |
+| 当前 channel 目录 | 允许 | 仅 `tasks/` | 频道的记忆与任务台账不随项目切换失联；`SESSION.md` / `MEMORY.md` / `HISTORY.md` 由后台维护队列持有，写入走 `memory_save` / `memory_forget`，而任务正文是 agent 自己写的契约，需要 `edit` 修订 |
 
 这个例外按**当前频道**授予：一个频道读不到另一个频道的目录。子智能体不带这个例外——它通过注入的上下文块拿频道状态，而不是去读频道文件。
 

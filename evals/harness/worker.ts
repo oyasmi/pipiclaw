@@ -45,9 +45,9 @@ function stringField(value: unknown): string | undefined {
  * Grader-visible arguments per tool, in cleartext. Everything else is only hashed.
  *
  * These names must track the real tool schemas: a stale entry degrades silently into "the field
- * was absent", which is indistinguishable from "the model never passed it". `memory_manage` was
- * exactly that — it listed a non-existent `action` while the schema's discriminator is `op`
- * (`src/tools/memory-manage.ts`), so no grader could tell a save from a forget.
+ * was absent", which is indistinguishable from "the model never passed it". The old `memory_manage`
+ * was exactly that — it listed a non-existent `action` while the schema's discriminator was `op`;
+ * spec 047 split it into `memory_save` / `memory_search` / `memory_forget`, each with its own fields.
  */
 const TOOL_FIELDS: Record<string, string[]> = {
 	read: ["path", "file_path", "offset", "limit"],
@@ -63,10 +63,14 @@ const TOOL_FIELDS: Record<string, string[]> = {
 	task_update: ["id", "note", "status", "wake", "schedule", "control"],
 	task_close: ["id", "outcome", "reason"],
 	task_verify: ["id", "verifierRunId"],
-	memory_manage: ["op", "label", "kind", "target", "query", "content"],
+	memory_save: ["content", "supersedes"],
+	memory_search: ["query"],
+	memory_forget: ["target"],
 	session_search: ["query", "offset", "limit"],
 	subagent: ["agent", "label", "purpose"],
 	subagent_inline: ["label", "purpose", "systemPrompt", "model", "mutates"],
+	subagent_list: [],
+	subagent_run: ["op", "runId", "task"],
 };
 
 /**

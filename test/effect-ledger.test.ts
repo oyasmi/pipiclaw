@@ -53,10 +53,25 @@ describe("effect ledger (spec 031, D7)", () => {
 			"web_fetch",
 			"session_search",
 			"task_manage",
-			"memory_manage",
+			"memory_save",
+			"memory_search",
+			"memory_forget",
+			"subagent_list",
 		]) {
 			expect(isEffectfulTool(tool, undefined)).toBe(false);
 		}
+	});
+
+	// Spec 047, F6/D3.2: subagent_run only counts when op=follow_up actually dispatched a new
+	// external run — the successful return is the only path that sets details.resumedFrom.
+	it("scores subagent_run: a successful follow_up dispatch counts; show/cancel and failed follow_up do not", () => {
+		expect(isEffectfulTool("subagent_run", { kind: "subagent_run", op: "follow_up", resumedFrom: "run-7" })).toBe(
+			true,
+		);
+		expect(isEffectfulTool("subagent_run", { kind: "subagent_run", op: "follow_up" })).toBe(false);
+		expect(isEffectfulTool("subagent_run", { kind: "subagent_run", op: "cancel", runId: "run-7" })).toBe(false);
+		expect(isEffectfulTool("subagent_run", { kind: "subagent_run", op: "show", runId: "run-7" })).toBe(false);
+		expect(isEffectfulTool("subagent_run", undefined)).toBe(false);
 	});
 
 	it("scores bash outcomes: a background launch or a clean command with output counts; failures and silence do not", () => {

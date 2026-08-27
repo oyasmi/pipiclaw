@@ -240,7 +240,7 @@ async function showRun(channelId: string, ref: string): Promise<string> {
 	if (record.invocationWarnings?.length) {
 		lines.push("", "⚠ 派发时的警告：", ...record.invocationWarnings.map((warning) => `- ${warning}`));
 	}
-	if (record.sessionId) lines.push(`- sessionId：\`${record.sessionId}\`（可用于 subagent_manage op=follow_up）`);
+	if (record.sessionId) lines.push(`- sessionId：\`${record.sessionId}\`（可用于 subagent_run op=follow_up）`);
 
 	if (record.runtime === "external") {
 		const stderrTail = await readFile(join(record.artifactDir, "stderr.log"), "utf-8")

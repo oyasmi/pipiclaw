@@ -142,14 +142,15 @@ export const regressionCases: EvalCase[] = [
 	{
 		id: "M-write-03",
 		suite: "regression",
-		source: "reported 2026-07-24; memory_manage content dropped in transit on long non-ASCII values",
+		source:
+			"reported 2026-07-24; memory_manage (now memory_save) content dropped in transit on long non-ASCII values",
 		description:
 			"A long non-ASCII durable fact (the transport-prone shape: streamed JSON tail truncation drops the trailing `content` key) is saved in the same turn, in one clean call. Covers both halves of the 2026-07-25 fix: the end state must be right, and the retry path must not have been needed to get there.",
 		definitionFile,
 		script: [
 			{
 				kind: "user",
-				text: "请用 memory_manage 工具（op=save）把下面这条长期事实记下来，方便以后关键词检索：张三的全部工作项目都放在 ~/projects 目录下，一共五个 git 仓库，分别叫 pipiclaw、frobulator、widgets-api、data-pipeline 和 docs-site，主力语言是 TypeScript，统一部署在阿里云。",
+				text: "请用 memory_save 工具把下面这条长期事实记下来，方便以后关键词检索：张三的全部工作项目都放在 ~/projects 目录下，一共五个 git 仓库，分别叫 pipiclaw、frobulator、widgets-api、data-pipeline 和 docs-site，主力语言是 TypeScript，统一部署在阿里云。",
 			},
 		],
 		trials: 3,
@@ -162,8 +163,8 @@ export const regressionCases: EvalCase[] = [
 			// anyway. These two make the truncation itself visible — and keep the required gate at
 			// 2/3 so an occasional provider-side drop is reported rather than treated as a product
 			// regression, while losing the retry path (all three trials) still turns the gate red.
-			toolCallCount("single-shot-save", "memory_manage", 1, ["op", /save/]),
-			noFailedToolResult("no-dropped-argument", "memory_manage"),
+			toolCallCount("single-shot-save", "memory_save", 1),
+			noFailedToolResult("no-dropped-argument", "memory_save"),
 		],
 	},
 	{
@@ -175,7 +176,7 @@ export const regressionCases: EvalCase[] = [
 			"A hard constraint stated in the same window as a real tool call reaches MEMORY.md through background " +
 			"consolidation. Every pre-existing memory case ran on tool-free warmup turns, which is why a blanket " +
 			"suppression of tool-bearing windows went unnoticed. The turn is phrased so the model has no reason to " +
-			"call memory_manage — the write has to come from the consolidation path, not the explicit one.",
+			"call memory_save — the write has to come from the consolidation path, not the explicit one.",
 		definitionFile,
 		fixtures: ["memory/release-window.md"],
 		setup: async (ctx) => copyFixture(ctx, "memory/release-window.md", "dm_eval/notes/release-window.md"),
@@ -195,7 +196,7 @@ export const regressionCases: EvalCase[] = [
 				(ctx) => ctx.trace.some((event) => event.kind === "tool-call" && event.tool === "read"),
 				"the window must contain a real toolResult for this probe to mean anything",
 			),
-			toolCallCount("no-explicit-save", "memory_manage", 0),
+			toolCallCount("no-explicit-save", "memory_save", 0),
 			fileContains("durable-write-survived-tool-window", "MEMORY.md", /周四/),
 		],
 	},

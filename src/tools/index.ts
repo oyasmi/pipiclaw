@@ -15,7 +15,7 @@ import { createSubAgentInlineTool, createSubAgentTool } from "../subagents/tool.
 import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
 import { buildToolSet } from "./registry.js";
-import { createSubAgentManageTool } from "./subagent-manage.js";
+import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage.js";
 import { withToolDetails } from "./tool-details.js";
 
 export interface CreatePipiclawToolsOptions {
@@ -105,6 +105,21 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 			channelId: options.channelId,
 		},
 	};
+	const subAgentManageOptions = {
+		channelId: options.channelId,
+		channelDir: options.channelDir,
+		getSubAgentDiscovery: options.getSubAgentDiscovery,
+		workspaceDir: options.workspaceDir,
+		workingDirectory: options.projectScope.projectRoot,
+		projectBoundary: options.projectScope.boundary,
+		securityConfig,
+		// Spec 042 D7: follow_up builds its envelope through the same buildContextualBlocks
+		// the initial dispatch uses, which needs these to resolve a memory: relevant recall.
+		getCurrentModel: options.getCurrentModel,
+		resolveApiKey: options.resolveApiKey,
+		getMemoryRecallSettings: options.getMemoryRecallSettings,
+		memoryCandidateStore: options.memoryCandidateStore,
+	};
 	return [
 		...leafTools,
 		// Bound to the same `details` contract as the registry's tools; it is registered here
@@ -115,23 +130,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		...(toolsConfig.tools.subagentInline.enabled
 			? [withToolDetails(createSubAgentInlineTool(subAgentToolOptions), "subagent_inline")]
 			: []),
-		withToolDetails(
-			createSubAgentManageTool({
-				channelId: options.channelId,
-				channelDir: options.channelDir,
-				getSubAgentDiscovery: options.getSubAgentDiscovery,
-				workspaceDir: options.workspaceDir,
-				workingDirectory: options.projectScope.projectRoot,
-				projectBoundary: options.projectScope.boundary,
-				securityConfig,
-				// Spec 042 D7: follow_up builds its envelope through the same buildContextualBlocks
-				// the initial dispatch uses, which needs these to resolve a memory: relevant recall.
-				getCurrentModel: options.getCurrentModel,
-				resolveApiKey: options.resolveApiKey,
-				getMemoryRecallSettings: options.getMemoryRecallSettings,
-				memoryCandidateStore: options.memoryCandidateStore,
-			}),
-			"subagent_manage",
-		),
+		withToolDetails(createSubAgentListTool(subAgentManageOptions), "subagent_list"),
+		withToolDetails(createSubAgentRunTool(subAgentManageOptions), "subagent_run"),
 	];
 }

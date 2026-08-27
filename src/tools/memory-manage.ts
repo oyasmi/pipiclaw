@@ -5,7 +5,6 @@ import * as log from "../log.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory/channel-maintenance-queue.js";
 import { applyChannelMemoryOps, getChannelMemoryPath, parseChannelMemoryEntries } from "../memory/files.js";
-import type { MemoryEntryKind } from "../memory/metadata.js";
 import { recallRelevantMemory } from "../memory/recall.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
 import { containsSecret } from "../memory/secret-redaction.js";
@@ -14,44 +13,39 @@ import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
 
-const memoryManageSchema = Type.Object({
-	op: Type.Union([Type.Literal("save"), Type.Literal("search"), Type.Literal("forget")], {
+/**
+ * Spec 047, P4: the old single `memory_manage` routed three fully disjoint payloads through an
+ * `op` enum. Splitting into one tool per payload shape drops the `op` routing prose and the
+ * "Required for save:" prefixes, and lets each op's one required field be schema-required
+ * instead of `Type.Optional` + a hand-rolled `rejectMissingArgument`. The streamed-argument
+ * truncation that `rejectMissingArgument` guarded against (M-write-03) is now caught by the SDK
+ * validator before `execute`; spec 047 D4.2 makes that rejection surface as a recoverable
+ * rejection rather than a user-visible error.
+ */
+
+const memorySaveSchema = Type.Object({
+	content: Type.String({
 		description:
-			'"save" a durable fact, "search" this channel\'s stored memory on demand, or "forget" a stored entry the user asked you to drop.',
+			"The durable fact as a single self-contained, keyword-rich sentence on one line, written so future keyword search can find it.",
 	}),
-	content: Type.Optional(
-		Type.String({
-			description:
-				"Required for save: the durable fact as a single self-contained, keyword-rich sentence on one line, written so future keyword search can find it. A save without it is rejected and stores nothing.",
-		}),
-	),
-	query: Type.Optional(Type.String({ description: "For search: what to look for in stored memory." })),
-	target: Type.Optional(
-		Type.String({
-			description:
-				"For forget: text identifying the stored entry to remove. Must match exactly one entry; use search first to confirm the wording.",
-		}),
-	),
-	kind: Type.Optional(
-		Type.Union(
-			[
-				Type.Literal("preference"),
-				Type.Literal("fact"),
-				Type.Literal("decision"),
-				Type.Literal("constraint"),
-				Type.Literal("open-loop"),
-				Type.Literal("lesson"),
-			],
-			{ description: "For save: what kind of durable memory this is." },
-		),
-	),
 	supersedes: Type.Optional(
 		Type.String({
 			description:
-				"For save, only after this tool reported a similar existing entry: the entry id being replaced, " +
+				"Only after this tool reported a similar existing entry: the entry id being replaced, " +
 				'or "none" to keep both.',
 		}),
 	),
+});
+
+const memorySearchSchema = Type.Object({
+	query: Type.String({ description: "What to look for in this channel's stored memory." }),
+});
+
+const memoryForgetSchema = Type.Object({
+	target: Type.String({
+		description:
+			"Text identifying the stored entry to remove. Must match exactly one entry; use memory_search first to confirm the wording.",
+	}),
 });
 
 export interface MemoryManageToolOptions {
@@ -64,15 +58,6 @@ export interface MemoryManageToolOptions {
 	channelMemoryQueue?: ChannelMemoryQueue;
 }
 
-interface MemoryManageArgs {
-	op: "save" | "search" | "forget";
-	content?: string;
-	query?: string;
-	target?: string;
-	kind?: string;
-	supersedes?: string;
-}
-
 /**
  * Above this recall score, an existing entry is similar enough that saving alongside it — rather
  * than superseding it — risks two contradictory durable facts competing at recall time. Set high
@@ -83,68 +68,23 @@ interface MemoryManageArgs {
  */
 const SAVE_CONFLICT_SCORE = 8;
 
-function normalizeMemoryKind(kind: string | undefined): MemoryEntryKind {
-	return kind === "preference" ||
-		kind === "decision" ||
-		kind === "constraint" ||
-		kind === "open-loop" ||
-		kind === "lesson"
-		? kind
-		: "fact";
-}
-
 function textResult(text: string, details: Record<string, unknown>) {
 	return { content: [{ type: "text" as const, text }], details };
 }
 
-/**
- * Reject a call whose op-specific payload never arrived.
- *
- * These arguments are `Type.Optional` because each one belongs to exactly one op, so the
- * schema cannot express "required for save, absent for search" — which means the SDK
- * validator lets a payload-less call straight through. Two failure modes reach here and both
- * used to end in a calm `textResult` that read like a completed no-op:
- *
- *   1. The model genuinely omitted the argument.
- *   2. The argument was *lost in transit*. Streamed tool-call arguments are accumulated as
- *      text and parsed leniently (`parseStreamingJson`): if the provider truncates or
- *      malforms the tail of the JSON — the common shape with OpenAI-compatible Chinese
- *      providers on long non-ASCII values — the trailing key is silently dropped and the
- *      call still executes. The assistant message is then persisted with the *parsed*
- *      arguments, so on the next turn the model reads back its own call with `content`
- *      already missing, copies it, and loops forever.
- *
- * A soft result makes (2) unrecoverable, so reject loudly instead: a `RecoverableToolError`
- * surfaces to the model as an error it must fix rather than a saved memory, names the keys
- * that actually arrived so a dropped argument is visible rather than inferred, and tells the
- * model not to replay the previous call. The warning log is the operator-side evidence —
- * `agent.tool.started` carries the raw args but only at debug level.
- */
-function rejectMissingArgument(op: string, parameter: string, args: MemoryManageArgs): never {
-	const received = Object.entries(args)
-		.filter(([, value]) => value !== undefined && value !== "")
-		.map(([key]) => key);
-	log.logWarning(
-		`memory_manage ${op} called without "${parameter}"`,
-		`received arguments: ${received.join(", ") || "(none)"}`,
-	);
-	throw new RecoverableToolError(
-		`memory_manage op="${op}" requires a non-empty "${parameter}", but the call arrived with only: ${
-			received.join(", ") || "(no arguments)"
-		}. Nothing was ${op === "forget" ? "removed" : op === "save" ? "saved" : "searched"}. Do not repeat the previous ` +
-			`call as written — if an earlier call in this conversation is also missing "${parameter}", it was dropped in ` +
-			`transit, so re-issue it with "${parameter}" set explicitly and keep the value short and on one line.`,
-	);
+interface MemoryToolClosures {
+	save: (args: { content: string; supersedes?: string }) => Promise<ReturnType<typeof textResult>>;
+	search: (args: { query: string }) => Promise<ReturnType<typeof textResult>>;
+	forget: (args: { target: string }) => Promise<ReturnType<typeof textResult>>;
 }
 
-export function createMemoryManageTool(options: MemoryManageToolOptions): AgentTool<typeof memoryManageSchema> {
+function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosures {
 	const queue = options.channelMemoryQueue ?? getDefaultChannelMemoryQueue();
 
-	async function save(args: MemoryManageArgs) {
-		const { content, kind, supersedes } = args;
-		const trimmed = (content ?? "").trim();
+	async function save({ content, supersedes }: { content: string; supersedes?: string }) {
+		const trimmed = content.trim();
 		if (!trimmed) {
-			rejectMissingArgument("save", "content", args);
+			throw new RecoverableToolError("memory_save requires a non-empty content; nothing was saved.");
 		}
 		if (containsSecret(trimmed)) {
 			return textResult(
@@ -180,8 +120,10 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 				);
 			}
 		}
+		// The model no longer classifies explicit saves (spec 047, P2): background consolidation
+		// (`extraction.ts`) still writes real kinds; a model save is recorded as `fact`.
 		const metadata = {
-			kind: normalizeMemoryKind(kind),
+			kind: "fact" as const,
 			sourceType: "user" as const,
 			probationUntil: null,
 		};
@@ -199,7 +141,7 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		options.memoryCandidateStore.invalidate(getChannelMemoryPath(options.channelDir));
 		const message =
 			result.added > 0 || result.superseded > 0
-				? `Saved to channel memory${kind ? ` (${kind})` : ""}.`
+				? "Saved to channel memory."
 				: "That memory is already present; no duplicate was added.";
 		return textResult(message, {
 			op: "save",
@@ -207,10 +149,10 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		});
 	}
 
-	async function search(args: MemoryManageArgs) {
-		const trimmed = (args.query ?? "").trim();
+	async function search({ query }: { query: string }) {
+		const trimmed = query.trim();
 		if (!trimmed) {
-			rejectMissingArgument("search", "query", args);
+			throw new RecoverableToolError("memory_search requires a non-empty query.");
 		}
 		// Reuse the recall scoring pipeline (single source of scoring truth) but scoped to the
 		// distilled durable files and with model rerank off, so this stays a cheap deterministic
@@ -245,10 +187,10 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		});
 	}
 
-	async function forget(args: MemoryManageArgs) {
-		const trimmed = (args.target ?? "").trim();
+	async function forget({ target }: { target: string }) {
+		const trimmed = target.trim();
 		if (!trimmed) {
-			rejectMissingArgument("forget", "target", args);
+			throw new RecoverableToolError("memory_forget requires a non-empty target.");
 		}
 		const memoryPath = getChannelMemoryPath(options.channelDir);
 		const existing = await readOptionalTextFile(memoryPath);
@@ -291,25 +233,41 @@ export function createMemoryManageTool(options: MemoryManageToolOptions): AgentT
 		);
 	}
 
+	return { save, search, forget };
+}
+
+export function createMemorySaveTool(options: MemoryManageToolOptions): AgentTool<typeof memorySaveSchema> {
+	const { save } = buildMemoryClosures(options);
 	return {
-		name: "memory_manage",
-		label: "memory_manage",
+		name: "memory_save",
+		label: "memory_save",
 		description:
-			"Manage this channel's durable MEMORY.md: save a durable fact the user asks you to remember, search stored " +
-			"memory on demand mid-task, or forget an entry the user asks you to drop. Prefer this over editing MEMORY.md " +
-			"directly — it serializes with background consolidation and keeps memory recallable. Not for transient task state.",
-		parameters: memoryManageSchema,
-		execute: async (_toolCallId: string, args: MemoryManageArgs) => {
-			switch (args.op) {
-				case "save":
-					return save(args);
-				case "search":
-					return search(args);
-				case "forget":
-					return forget(args);
-				default:
-					throw new RecoverableToolError('Unsupported memory op. Use "save", "search", or "forget".');
-			}
-		},
+			"Save a durable fact into this channel's MEMORY.md when the user asks you to remember it. Prefer this over editing " +
+			"MEMORY.md directly. Not for transient task state.",
+		parameters: memorySaveSchema,
+		execute: async (_toolCallId: string, args: { content: string; supersedes?: string }) => save(args),
+	};
+}
+
+export function createMemorySearchTool(options: MemoryManageToolOptions): AgentTool<typeof memorySearchSchema> {
+	const { search } = buildMemoryClosures(options);
+	return {
+		name: "memory_search",
+		label: "memory_search",
+		description: "Search this channel's stored durable memory on demand mid-task.",
+		parameters: memorySearchSchema,
+		execute: async (_toolCallId: string, args: { query: string }) => search(args),
+	};
+}
+
+export function createMemoryForgetTool(options: MemoryManageToolOptions): AgentTool<typeof memoryForgetSchema> {
+	const { forget } = buildMemoryClosures(options);
+	return {
+		name: "memory_forget",
+		label: "memory_forget",
+		description:
+			"Forget a stored memory entry the user explicitly asked you to drop. Tombstones it against automatic replay.",
+		parameters: memoryForgetSchema,
+		execute: async (_toolCallId: string, args: { target: string }) => forget(args),
 	};
 }

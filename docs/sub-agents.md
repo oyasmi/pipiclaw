@@ -13,7 +13,7 @@
 - **`internal`**（默认）：在 Pipiclaw 进程内运行的隔离上下文子智能体。它使用 Pipiclaw 的模型、工具和安全守卫，启动快，适合检索、筛查和窄范围分析。
 - **`external`**：一次委派启动一个真实的 Claude Code、Codex CLI 或任意脚本进程。它适合长时间、跨文件、需要自行测试迭代的工作，并使用目标 CLI 自己的认证、模型和 sandbox。
 
-两者共用一个角色目录（`workspace/sub-agents/`）、一套 run 生命周期和控制面（`subagent_manage` 工具 / `/subagents` 命令）。调用面按形状分两个工具：`subagent` 选一个已配置角色（内置或外部都走它），`subagent_inline` 是没有合适角色时的一次性内置执行者。角色目录会同时展示 runtime、工作量和是否写入，主智能体据此选择最合适的执行者。
+两者共用一个角色目录（`workspace/sub-agents/`）、一套 run 生命周期和控制面（`subagent_list` / `subagent_run` 工具 / `/subagents` 命令）。调用面按形状分两个工具：`subagent` 选一个已配置角色（内置或外部都走它），`subagent_inline` 是没有合适角色时的一次性内置执行者。角色目录会同时展示 runtime、工作量和是否写入，主智能体据此选择最合适的执行者。
 
 在独立验收（verifier）场景里，子代理会和任务台账咬合（`purpose: verify` + `taskId`）；这些接缝会在下面点明，并链接回 [events-and-tasks.md](./events-and-tasks.md)。
 
@@ -242,22 +242,22 @@ maxWallTimeSec: 3600
 - 在 `min(角色的 maxWallTimeSec, 120s)` 内结算完成 → 直接把结果内联返回，和今天完全一样。内置角色的 `quick`/`standard` 档基本总是落在这个窗口内。
 - 超过这个窗口仍未结算 → 返回 `{ runId, status: "running" }` 和一句"完成时会唤醒你"，委派本身继续在后台跑。这不是失败，是降级。**外部角色的宽限窗口恒为 0**——它们是重型工作，一律走异步。
 
-收到 "still running" 占位结果后：**不要轮询、不要重复派发，结束当前回合**；委派完成时 runtime 会自己唤醒本频道，带回结果与产物路径。想主动看进度用 `subagent_manage op=list` 或 `/subagents list`，不要用委派工具本身当轮询手段。
+收到 "still running" 占位结果后：**不要轮询、不要重复派发，结束当前回合**；委派完成时 runtime 会自己唤醒本频道，带回结果与产物路径。想主动看进度用 `subagent_list` 或 `/subagents list`，不要用委派工具本身当轮询手段。
 
-**`/stop` 不再连带杀掉已派发的委派**（有意变更）。停止一个正在跑的委派永远需要显式调用 `subagent_manage op=cancel` 或运行时命令 `/subagents cancel <runId>`；后者不经过模型，在模型不可用或回合卡死时依然能用。
+**`/stop` 不再连带杀掉已派发的委派**（有意变更）。停止一个正在跑的委派永远需要显式调用 `subagent_run op=cancel` 或运行时命令 `/subagents cancel <runId>`；后者不经过模型，在模型不可用或回合卡死时依然能用。
 
-## 控制面：`subagent_manage` 与 `/subagents`
+## 控制面：`subagent_list` / `subagent_run` 与 `/subagents`
 
 `subagent` 工具的调用 schema 完全不变；内外差异全部封装在角色配置和 runtime 内部。查看/控制在途或历史 run 用另一个工具/命令：
 
-**模型侧**——`subagent_manage` 工具，四个 op：
+**模型侧**——`subagent_list`（零参数快照）与 `subagent_run`（`op` = show / cancel / follow_up，均按 `runId`）：
 
-| op | 语义 |
+| 工具 / op | 语义 |
 |---|---|
-| `list` | 本频道 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况 |
-| `show` | 单个 run 的完整机器可读细节：实际 argv、派发时的警告（如 `$MODEL` 占位符被丢弃）、适配器/CLI 版本、外部 run 的 stderr 尾部。一个失败的外部 run 想自诊断而不是凭空重派时用这个 |
-| `cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
-| `follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
+| `subagent_list` | 本频道 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况（零参数） |
+| `subagent_run op=show` | 单个 run 的完整机器可读细节：实际 argv、派发时的警告（如 `$MODEL` 占位符被丢弃）、适配器/CLI 版本、外部 run 的 stderr 尾部。一个失败的外部 run 想自诊断而不是凭空重派时用这个 |
+| `subagent_run op=cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
+| `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落。`op=follow_up` 成功派发会计入 effect ledger（spec 047），治理器据此判断进度 |
 
 `follow_up` 派发时走的是与首次派发**同一套信封构造**：运行时上下文（含这次续接自己新分配的产物目录）、`paths`/会话/记忆上下文块、以及 `purpose=verify` 时的验收协议，而不是一段只把原始指令转发过去的手写文本。verify 的准入检查（`mutates: write` 角色不能验收、`exec` 不能验收）也在 `follow_up` 上重新核对一遍——角色如果在原始 run 之后被改成 `mutates: write`，续接会被拒绝,不会因为"上次派发时它还是只读"就放行。
 
@@ -398,7 +398,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - **pipiclaw 不沙箱化外部智能体。** 唯一的强边界是你在 `command` 里写下的目标 CLI 自身的 sandbox flag（如 `codex exec --sandbox read-only`）。`workingDirectory` 决定进程从哪里开始，不构成隔离。
 - **`workspace/sub-agents/` 目录本身对模型的 `write`/`edit` 工具关闭**（主代理和子代理都一样）——防的是模型自己写一份外部角色文件、再调用它，从而绕过命令守卫执行任意宿主命令。这条防线拦不住 `bash` 直接改这个目录（与既有的记忆文件写入拒绝同一个已知缺口），角色目录建议纳入版本控制作为兜底：任何变更都可见、可回滚。
 - 每次外部派发都会写一条审计事件（runId、角色、harness、完整 argv、工作目录、`mutates`、model），不受"只记录被拦截的动作"这个开关影响。
-- 外部进程继承 pipiclaw 自身的环境变量，但默认剔除 pipiclaw 自己会用到的凭据变量——一份明确的变量名清单（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY` 等 LLM provider key，以及 `DINGTALK_*`），不是通配的后缀正则。目标仓库的 `CLAUDE.md`/prompt 能操纵外部 agent 的行为，不该顺带继承 pipiclaw 自己的模型 provider key 或钉钉凭据。**这是一层减少误继承的礼貌措施，不是安全边界**——真正的权限边界是角色的命令、CLI 自身的沙箱和宿主账号。需要 `gh`/`npm` 等工具的角色，它们所需的 `GITHUB_TOKEN`/`NPM_TOKEN` 等凭据不在这份清单里，会照常继承；如果确实被过滤掉了（清单之外的变量默认不受影响），用 `env:` 显式加回即可。本次派发实际丢弃的变量名会写进 `invocationWarnings`，`subagent_manage op=show` 能看到。
+- 外部进程继承 pipiclaw 自身的环境变量，但默认剔除 pipiclaw 自己会用到的凭据变量——一份明确的变量名清单（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY` 等 LLM provider key，以及 `DINGTALK_*`），不是通配的后缀正则。目标仓库的 `CLAUDE.md`/prompt 能操纵外部 agent 的行为，不该顺带继承 pipiclaw 自己的模型 provider key 或钉钉凭据。**这是一层减少误继承的礼貌措施，不是安全边界**——真正的权限边界是角色的命令、CLI 自身的沙箱和宿主账号。需要 `gh`/`npm` 等工具的角色，它们所需的 `GITHUB_TOKEN`/`NPM_TOKEN` 等凭据不在这份清单里，会照常继承；如果确实被过滤掉了（清单之外的变量默认不受影响），用 `env:` 显式加回即可。本次派发实际丢弃的变量名会写进 `invocationWarnings`，`subagent_run op=show` 能看到。
 - 外部 agent 本身是完整 coding agent，能否 spawn 自己的子代理、递归到多深，pipiclaw 不保证也不限制。
 - 显式声明 `memory: session` 或 `memory: relevant` 的外部角色会把频道会话状态/召回的记忆片段写进发给外部进程的 stdin——这与继承环境变量属于同一类如实声明的暴露面，不是隐藏行为（默认值是 `none`，见上文"`contextMode` 与 `memory`"）。
 

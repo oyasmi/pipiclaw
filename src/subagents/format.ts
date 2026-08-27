@@ -3,7 +3,7 @@ import type { RunRecord } from "./runs.js";
 
 /**
  * Shared display primitives for delegation runs (spec 041), used by both the model-facing
- * `subagent_manage` tool and the human-facing `/subagents` runtime command. Only the pieces that
+ * `subagent_list`/`subagent_run` tools and the human-facing `/subagents` runtime command. Only the pieces that
  * are genuinely language/audience-neutral live here — duration math, the harness label, and the
  * cost guard — not full line templates, since the two surfaces render in different languages.
  */

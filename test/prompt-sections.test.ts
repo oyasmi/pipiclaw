@@ -145,9 +145,9 @@ describe("system prompt structure", () => {
 		expect(noConfiguredAgents.text).toContain("## Sub-Agents");
 	});
 
-	it("gates the memory_manage invariant on the tool being registered", () => {
-		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_manage` in the same turn");
-		expect(buildPipiclawSystemPrompt(context({ tools: tools(["read"]) })).text).not.toContain("`memory_manage`");
+	it("gates the memory invariant on the tool being registered", () => {
+		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_save` / `memory_forget` in the same turn");
+		expect(buildPipiclawSystemPrompt(context({ tools: tools(["read"]) })).text).not.toContain("`memory_save`");
 	});
 
 	it("restates the runtime boundary in a short footer appended after pi's tail", () => {

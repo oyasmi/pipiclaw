@@ -7,7 +7,12 @@ import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import type { SubAgentToolDetails } from "../subagents/tool.js";
 import { describeToolCall } from "../tools/presentation.js";
-import { isRecoverableRejection, type ToolDetails, toolResultDetails } from "../tools/tool-details.js";
+import {
+	isArgumentValidationFailure,
+	isRecoverableRejection,
+	type ToolDetails,
+	toolResultDetails,
+} from "../tools/tool-details.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { isEffectfulTool, noteChannelEffect } from "./effect-ledger.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
@@ -197,8 +202,13 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 		// still diagnosable, but never rendered to the user — a red bubble would report a failure
 		// that never happened and make the assistant look broken mid-turn. Rejections the *user*
 		// must resolve (a security guard refusal or an external decision) stay plain errors and remain visible.
-		const rejected = isRecoverableRejection(event.result);
-		const treatAsError = event.isError || Boolean(subAgentDetails?.failed);
+		// Spec 047, D4.2: a schema-validation failure is rejected by the SDK before `execute`, so it
+		// never passes through `withToolDetails` and carries no `recoverable` flag — but it is still
+		// something the model fixes by re-issuing correct arguments, so it must not surface as a
+		// user-visible error. `event.isError` is true for it, so it has to win over `treatAsError`.
+		const rejected =
+			isRecoverableRejection(event.result) || isArgumentValidationFailure(event.result, event.isError === true);
+		const treatAsError = (event.isError || Boolean(subAgentDetails?.failed)) && !rejected;
 		if (treatAsError) {
 			log.logToolError(logCtx, event.toolName, durationMs, resultStr);
 		} else if (rejected) {

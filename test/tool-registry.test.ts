@@ -67,7 +67,9 @@ describe("tool registry", () => {
 			"web_search",
 			"web_fetch",
 			"session_search",
-			"memory_manage",
+			"memory_save",
+			"memory_search",
+			"memory_forget",
 			"skill",
 			"event_manage",
 			"task_list",
@@ -117,6 +119,6 @@ describe("tool registry", () => {
 		expect(names).toContain("session_search");
 		expect(names).toContain("skill");
 		expect(names).toContain("event_manage");
-		expect(names).toContain("memory_manage");
+		expect(names).toContain("memory_save");
 	});
 });

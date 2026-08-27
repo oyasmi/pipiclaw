@@ -225,7 +225,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 |------|------|----------|
 | 手工编辑 `*.json` | 人 | 任意增改；最终仍由 watcher 装载校验 |
 | `/events` 命令 | 人（钉钉侧） | list / show / delete / history —— 只读 + 删除 |
-| `event_manage` 工具 | 主 agent | create / update / delete —— 带写入时校验和防自激励闸门 |
+| `event_manage` 工具 | 主 agent | list / create / update / delete —— 带写入时校验和防自激励闸门 |
 
 ### `/events` 命令（人用，只读 + 删除）
 
@@ -242,15 +242,15 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 ### `event_manage` 工具（agent 自调度）
 
-`event_manage` 是给**主 agent** 的一等工具，让它能创建、修改、删除周期节奏、独立提醒和外部传感器。它与 `/events`、手工编辑操作**同一个**目录。
+`event_manage` 是给**主 agent** 的一等工具，让它能列出、创建、修改、删除周期节奏、独立提醒和外部传感器。`action=list` 只返回当前 channel 的事件（每条一行，含无法解析的文件），用于在闭环或改期前核对真实事件名。它与 `/events`、手工编辑操作**同一个**目录。
 
 **参数：**
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `label` | 是 | 一句话说明这次调度改动（展示给用户） |
-| `action` | 是 | `create` / `update` / `delete` |
-| `name` | 是 | 事件名（不含 `.json`）。只允许字母、数字、`.`、`_`、`-`；任务不再创建配套事件 |
+| `action` | 是 | `list` / `create` / `update` / `delete` |
+| `name` | create/update/delete 必填 | 事件名（不含 `.json`），`list` 忽略。只允许字母、数字、`.`、`_`、`-`；任务不再创建配套事件 |
 | `definition` | create/update 必填 | 完整事件 JSON（字符串）。`channelId` 可省略，默认填当前 channel |
 
 **写入时校验（工具的核心价值）。** 裸用 `write` 写事件 JSON 有个隐患：格式错误的文件会被 watcher **静默删除**，agent 以为安排好了回访，实际什么都没留下。`event_manage` 在**落盘前**就把问题拦下并大声报错：

@@ -188,9 +188,9 @@ Codex 对话流量的代理注意事项：`openai-codex-responses` 默认走 Web
 }
 ```
 
-恒开、无 `tools.json` 开关的核心工具包括：`read`、`write`、`edit`、`grep`、`glob`、`bash`、`job`、`session_search`、`memory_manage`、`skill`、`event_manage`。`send_media` 由传输层能力决定。
+恒开、无 `tools.json` 开关的核心工具包括：`read`、`write`、`edit`、`grep`、`glob`、`bash`、`job`、`session_search`、`memory_save`、`memory_search`、`memory_forget`、`skill`、`event_manage`。`send_media` 由传输层能力决定。
 
-`subagent` 和 `subagent_manage` 也恒开，只提供给主智能体。角色是否存在、能否使用由 `workspace/sub-agents/*.md` 决定；外部角色还要求目标 CLI 在 daemon 的 `PATH` 中可用。角色字段、推荐模板和安全边界见 [sub-agents.md](./sub-agents.md)。
+`subagent`、`subagent_list` 和 `subagent_run` 也恒开，只提供给主智能体。角色是否存在、能否使用由 `workspace/sub-agents/*.md` 决定；外部角色还要求目标 CLI 在 daemon 的 `PATH` 中可用。角色字段、推荐模板和安全边界见 [sub-agents.md](./sub-agents.md)。
 
 启用 web 工具：
 

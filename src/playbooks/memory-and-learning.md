@@ -1,7 +1,7 @@
 ---
 name: memory-and-learning
 description: 记住或忘记事实（memory）、在记忆文件之间取舍，或把经验沉淀成技能（skill）。
-requires-tools: memory_manage, skill
+requires-tools: memory_save, memory_search, memory_forget, skill
 order: 20
 ---
 
@@ -12,24 +12,24 @@ order: 20
 | 信息 | 目标位置 | 入口 |
 |---|---|---|
 | 当前回合断点、眼下计划 | channel `SESSION.md` | runtime 自动维护，不手工编辑 |
-| 稳定事实、偏好、约束、决定 | channel `MEMORY.md` | `memory_manage save` / `forget` |
+| 稳定事实、偏好、约束、决定 | channel `MEMORY.md` | `memory_save` / `memory_forget` |
 | 单个长程工作的状态和证据 | `tasks/<id>.md` | `task_create`/`task_update`/`task_close`，正文大改才用 `edit` |
 | 机器依赖、安装、配置位置 | workspace `ENVIRONMENT.md` | `read` / `edit`，受项目边界约束 |
 | 跨任务可复用的操作流程 | workspace `skills/` | `write`/`edit` 创建或修改，`skill` 只读列出/加载 |
 | Pipiclaw 自身机制 | runtime playbook | 只读 |
 | 原始对话 | `log.jsonl` / `context.jsonl` | `session_search` |
 
-channel 的 `SESSION.md`、`MEMORY.md`、`HISTORY.md` 由 runtime 和后台维护队列共同持有：可以 `read`，但写入一律走 `memory_manage`，用文件工具改会与后台写入相撞（项目边界下 path guard 会直接拒绝）。各文件的位置和访问入口见 `runtime-orientation.md`。
+channel 的 `SESSION.md`、`MEMORY.md`、`HISTORY.md` 由 runtime 和后台维护队列共同持有：可以 `read`，但写入一律走 `memory_save`/`memory_forget`，用文件工具改会与后台写入相撞（项目边界下 path guard 会直接拒绝）。各文件的位置和访问入口见 `runtime-orientation.md`。
 
 ## 什么时候立即写 durable memory
 
-用户明确说"记住、以后默认、偏好、不要再做、忘掉"时，当回合就调用 `memory_manage`，不等后台 consolidation。这条路径写入的记忆立即永久，不受下面的试用期约束。
+用户明确说"记住、以后默认、偏好、不要再做、忘掉"时，当回合就调用 `memory_save`，不等后台 consolidation。这条路径写入的记忆立即永久，不受下面的试用期约束。
 
 只保存未来仍有用的事实；一次性进度、猜测、临时计划放 task 或留在当前会话。
 
 `save` 撞到相似的已有条目时，工具会先拒绝并列出它们，要一个决定：`supersedes: <entry id>` 替换旧条目，或 `supersedes: "none"` 保留两条。**同一条规则出了新版本就替换**——两个版本并存之后召回哪一条全看运气；只有两个事实同时成立才保留两条。整条规则不再成立时用 `forget`。
 
-查找先用具体关键词（`memory_manage search`）。
+查找先用具体关键词（`memory_search`）。
 
 ## 后台自动写入与试用期
 

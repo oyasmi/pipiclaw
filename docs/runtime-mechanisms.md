@@ -81,7 +81,7 @@ TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据�
 
 两者共用 `SubAgentRunManager`：注册 run、保存产出、结算状态、记录用量、释放工作区写锁，并通过 durable dispatch 唤醒所属频道。内置 run 最多同步等待 `min(maxWallTimeSec, 120s)`；没有在窗口内完成就转为后台工作。外部 run 的同步宽限恒为 0，派发后立即返回 `runId`。
 
-`/stop` 只停止主回合，不影响独立 run。模型使用 `subagent_manage` 查看、取消或续接，用户使用 `/subagents` 直接控制。DingTalk daemon 会持久化 run 并投递完成唤醒；外部 detached 进程在 daemon 重启时通过 pid 和产物协议重新对账，内置 run 无法跨进程存活，重启后标为 `lost` 并通知频道。TUI 当前不装配这套持久化与 wake delivery，不能作为长时间外部 run 的可靠宿主。
+`/stop` 只停止主回合，不影响独立 run。模型使用 `subagent_list` 查看、`subagent_run` 取消或续接，用户使用 `/subagents` 直接控制。DingTalk daemon 会持久化 run 并投递完成唤醒；外部 detached 进程在 daemon 重启时通过 pid 和产物协议重新对账，内置 run 无法跨进程存活，重启后标为 `lost` 并通知频道。TUI 当前不装配这套持久化与 wake delivery，不能作为长时间外部 run 的可靠宿主。
 
 独立验收使用 `purpose: verify` + `taskId`，并要求最后一行是 `VERDICT: PASS` 或 `VERDICT: FAIL`：
 

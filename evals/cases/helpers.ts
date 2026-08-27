@@ -47,7 +47,7 @@ export async function writeTask(
 export async function seedChannelMemory(ctx: TrialSetup, content: string): Promise<void> {
 	await mkdir(ctx.channelDir, { recursive: true });
 	// `parseChannelMemoryEntries` deliberately ignores H1-level bullets because the real template
-	// uses them as explanatory prose. Seed eval facts under an H2 so memory_manage, recall, and
+	// uses them as explanatory prose. Seed eval facts under an H2 so the memory tools, recall, and
 	// maintenance see the same durable-entry shape they encounter in production.
 	await writeFile(join(ctx.channelDir, "MEMORY.md"), `# Channel Memory\n\n## Seeded Facts\n\n${content.trim()}\n`);
 }

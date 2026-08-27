@@ -243,7 +243,7 @@ const CONVERGENCE_WALL_CLOCK_MS = 60_000;
 const CONVERGENCE_PROMPT =
 	"Your turn/tool-call/wall-time budget for this task is exhausted. Based only on the work you have already completed, respond now with your conclusions: confirmed facts, what remains unfinished, and suggested next steps. Do not call any more tools.";
 
-/** Exported for `subagent_manage op=follow_up` (spec 042 D7), which constructs one of these for
+/** Exported for `subagent_run op=follow_up` (spec 042 D7), which constructs one of these for
  *  its own new run rather than a hand-rolled envelope. */
 export interface SubAgentRunContext {
 	runId: string;
@@ -427,7 +427,7 @@ function finalizeSubAgentOutput(runContext: SubAgentRunContext, finalText: strin
 /**
  * Sub-agents share the main agent's `write`/`edit` tools but only receive the runtime
  * context (task text), never the "don't touch MEMORY.md/HISTORY.md/SESSION.md, use
- * memory_manage instead" rule the main agent gets in its system prompt (memory_manage
+ * memory_save instead" rule the main agent gets in its system prompt (the memory tools
  * itself is withheld from sub-agents). Denying these paths at the path-guard level closes
  * that gap structurally instead of relying on a sub-agent to infer an instruction it never
  * received — a stray write/edit here would race the shared memory serial queue
@@ -498,7 +498,7 @@ function buildSubagentTools(
 	).filter((tool) => runContext.purpose !== "verify" || (tool.name !== "write" && tool.name !== "edit"));
 }
 
-/** Shared by both runtimes' task envelopes and `subagent_manage`'s verify follow-up (spec 040, D9). */
+/** Shared by both runtimes' task envelopes and `subagent_run`'s verify follow-up (spec 040, D9). */
 export function buildVerificationProtocol(taskPath: string): string {
 	return [
 		"Verification protocol:",
@@ -513,7 +513,7 @@ export function buildVerificationProtocol(taskPath: string): string {
  * D9 verify admission — a role that admits it writes cannot also be the checker, `exec` has no
  * protocol terminal to prove it even ran to completion, and a target with an active write lease
  * is refused up front (cheaper than explaining afterward why the attestation would be worthless).
- * Spec 042 D7: exported so `subagent_manage op=follow_up` runs the exact same checks the initial
+ * Spec 042 D7: exported so `subagent_run op=follow_up` runs the exact same checks the initial
  * dispatch does — before this function existed, follow_up on a role that had since been hot-edited
  * to `mutates: write` would silently take the write lease and dispatch instead of refusing.
  */
@@ -540,7 +540,7 @@ export function assertVerifyAdmissible(
 }
 
 /**
- * Exported for `subagent_manage op=follow_up` (spec 042 D7), which builds a follow-up run's task
+ * Exported for `subagent_run op=follow_up` (spec 042 D7), which builds a follow-up run's task
  * envelope the same way the initial dispatch does rather than a hand-rolled approximation.
  * `config` is deliberately narrowed to `{ name }` — the only field this function reads — so a
  * caller with a raw (unresolved) `SubAgentConfig` from discovery does not need to fabricate a
@@ -614,9 +614,9 @@ function stripRuntimeContextWrapper(renderedText: string): string {
 		.trim();
 }
 
-/** Exported for `subagent_manage op=follow_up` (spec 042 D7) — same reason as `buildSubAgentTask`. */
+/** Exported for `subagent_run op=follow_up` (spec 042 D7) — same reason as `buildSubAgentTask`. */
 /** The slice of `SubAgentToolOptions` `buildContextualBlocks` actually reads — narrowed (spec 042
- *  D7) so `subagent_manage op=follow_up` only needs to wire these six fields, not the full tool
+ *  D7) so `subagent_run op=follow_up` only needs to wire these six fields, not the full tool
  *  option surface (executor, discovery, web config, etc. that a context-block build never touches). */
 export type ContextualBlocksOptions = Pick<
 	SubAgentToolOptions,
@@ -739,7 +739,7 @@ function createDetails(
 /**
  * A run's lifecycle is deliberately unlinked from the tool call's `AbortSignal` (spec 040, D2):
  * `/stop` ends the current turn but no longer kills an in-flight delegation, matching background
- * jobs. Stopping a run is now an explicit decision (`subagent_manage op=cancel`), not a side
+ * jobs. Stopping a run is now an explicit decision (`subagent_run op=cancel`), not a side
  * effect of stopping something else.
  */
 function sleep(ms: number): Promise<void> {
@@ -765,7 +765,7 @@ async function dispatchSubAgentRun(
 	onUpdate?: (update: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }) => void,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
 	// Derived rather than model-supplied (spec 045): `${agent}: ${task's first line}`, the
-	// same shape `subagent_manage op=follow_up` already builds by hand.
+	// same shape `subagent_run op=follow_up` already builds by hand.
 	const runLabel = `${config.name}: ${params.task.split("\n")[0]?.slice(0, 80) ?? ""}`;
 	// Only ever set for an inline (internal) delegation with `bash` in `tools` and no explicit
 	// `mutates` — surfaced to the model, not just a log, since it has no role file to fix.
@@ -776,7 +776,7 @@ async function dispatchSubAgentRun(
 	const runContext = await prepareRunContext(runManager.mintRunId(), params, options);
 
 	// D9: an independent verifier checks against a target that isn't moving under it — shared
-	// with `subagent_manage op=follow_up` (spec 042 D7) so a verify run's admission rules
+	// with `subagent_run op=follow_up` (spec 042 D7) so a verify run's admission rules
 	// cannot drift between the two dispatch paths.
 	assertVerifyAdmissible(config, runContext.purpose, runContext.workingDirectory);
 
@@ -905,7 +905,7 @@ async function dispatchSubAgentRun(
 	let failureReason: string | undefined;
 	/** Set alongside failureReason only for the three self-inflicted budget aborts, distinct from an explicit cancel. */
 	let budgetExceeded = false;
-	/** Set only by the `subagent_manage op=cancel` handle registered below — a real stop, unlike a budget abort. */
+	/** Set only by the `subagent_run op=cancel` handle registered below — a real stop, unlike a budget abort. */
 	let externallyCancelled = false;
 	/** True once the sync grace window has elapsed and a "still running" placeholder has been returned. */
 	let detached = false;
@@ -1180,7 +1180,7 @@ async function dispatchSubAgentRun(
 		// write files just as well — labeling that "enforced" would be dishonest (review
 		// 2026-08-23 §2.2). Only a role that dropped `bash` from its declared tool list earns
 		// the stronger label. Computed once so the attestation and the run record — the
-		// latter is what the completion wake and `subagent_manage` display — cannot disagree.
+		// latter is what the completion wake and `subagent_list` display — cannot disagree.
 		const internalVerificationStrength = config.tools.includes("bash")
 			? ("advisory" as const)
 			: ("enforced" as const);

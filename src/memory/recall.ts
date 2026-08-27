@@ -814,7 +814,7 @@ function renderRecallResult(items: RecalledMemory[], maxChars: number, maxUnits:
 	if (omittedCount > 0) {
 		clippedLines.push(
 			"",
-			`[- ${omittedCount} more item(s) omitted for length; use memory_manage search or session_search to look them up.]`,
+			`[- ${omittedCount} more item(s) omitted for length; use memory_search or session_search to look them up.]`,
 		);
 	}
 	clippedLines.push(closing);

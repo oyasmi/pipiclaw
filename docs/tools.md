@@ -23,7 +23,7 @@
 | `send_media` | 把本地文件作为附件发进当前会话 | 随渠道 | 传输层是否支持（钉钉/TUI 都支持） | 否 |
 | `job` | 查看/等待/取消 `bash async` 后台作业 | 恒开 | — | 否 |
 | `session_search` | 检索本频道的冷存储历史对话 | 恒开 | — | 否 |
-| `memory_manage` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
+| `memory_save` / `memory_search` / `memory_forget` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
 | `skill` | 只读列出/加载 `workspace/skills/` 下的可复用流程 | 恒开 | — | 否 |
 | `event_manage` | 创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
 | `task_list` | 列出台账里的活跃任务 | 开 | `tools.tasks.enabled` | 否 |
@@ -33,9 +33,9 @@
 | `task_verify` | 导入独立验收者的 attestation | 开 | `tools.tasks.enabled` | 否 |
 | `subagent` | 把工作委派给已配置的角色 | 开 | — | 否（不可嵌套） |
 | `subagent_inline` | 没有合适角色时定义一次性内联执行者 | 开 | `tools.subagentInline.enabled` | 否（不可嵌套） |
-| `subagent_manage` | 查看、取消或续接委派 run | 开 | — | 否 |
+| `subagent_list` / `subagent_run` | 查看委派 run；对单个 run show/cancel/follow_up | 开 | — | 否 |
 
-**“子代理可用”那一列不是权限疏漏，而是所有权设计**：任务台账、记忆、调度、委派控制和对用户的出站投递都归主智能体所有。每次委派都有独立 run 记录和产物，但被委派的执行者不能再调用 `subagent`/`subagent_inline`、`task_*` 或 `subagent_manage` 把责任继续向下转移。外部 CLI 自己是否会创建下级智能体不受 Pipiclaw 控制，详见 [sub-agents.md](./sub-agents.md)。
+**“子代理可用”那一列不是权限疏漏，而是所有权设计**：任务台账、记忆、调度、委派控制和对用户的出站投递都归主智能体所有。每次委派都有独立 run 记录和产物，但被委派的执行者不能再调用 `subagent`/`subagent_inline`、`task_*` 或 `subagent_list`/`subagent_run` 把责任继续向下转移。外部 CLI 自己是否会创建下级智能体不受 Pipiclaw 控制，详见 [sub-agents.md](./sub-agents.md)。
 
 ## 文件与命令类
 
@@ -81,7 +81,7 @@
 
 | 工具 | 写到哪 | 什么时候用 |
 |---|---|---|
-| `memory_manage` | 频道 `MEMORY.md` | 用户说"记住/以后默认/别再这样/忘掉"时立即写 |
+| `memory_save` / `memory_forget` | 频道 `MEMORY.md` | 用户说"记住/以后默认/别再这样/忘掉"时立即写 |
 | `skill` (只读) + `write`/`edit` | `workspace/skills/` | 某个流程跨任务可复用时沉淀 |
 | `session_search` | 只读 `log.jsonl` / `context.jsonl` | 用户引用较早的对话、而工作记忆里没有时 |
 
@@ -93,7 +93,7 @@
 
 `tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉全部 task_* 工具、内建 task driver 和每回合的任务摘要注入。
 
-## 智能体委派（`subagent` / `subagent_manage`）
+## 智能体委派（`subagent` / `subagent_list` / `subagent_run`）
 
 `subagent`（角色优先）把一项聚焦工作交给一个**已配置**的角色，只传 `agent`/`task` 加上可选的 `workingDirectory`/`purpose`/`taskId`——工具、模型、预算、上下文策略全部来自角色文件，调用侧不能覆盖。`subagent_inline` 是没有合适角色时的一次性执行者，携带 `systemPrompt` 及 `tools`/`model`/`effort`/`context`/`thinkingLevel`/`mutates` 等覆盖字段；可以用 `tools.subagentInline.enabled: false` 整体关掉（默认开）。
 
@@ -102,7 +102,7 @@
 
 委派执行者看不到主对话，因此任务描述必须自带目标、范围、工作目录、约束、验收方法和交付格式。
 
-`subagent_manage` 是模型侧控制面：`list` 查看 run，`cancel` 终止 run，`follow_up` 在支持续接的已结束 Claude Code / Codex run 上开启新一轮。用户侧不必经过模型，可直接使用 `/subagents` 命令。
+`subagent_list` 给出本频道委派 run 的快照；`subagent_run` 对单个 run 执行 `show`（自诊断）/`cancel`（终止）/`follow_up`（在支持续接的已结束 Claude Code / Codex run 上开启新一轮）。用户侧不必经过模型，可直接使用 `/subagents` 命令。
 
 完整角色格式、并发、产物、验收和安全边界见 [sub-agents.md](./sub-agents.md)。
 

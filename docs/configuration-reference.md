@@ -261,9 +261,9 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - runtime sweeper 约每 30 秒检查一次后台作业；作业完成后会自动唤醒对应 channel 并带上输出尾部，不需要再排 check-in event。
 - 只发给主 agent；子代理不能起后台作业，也不能使用 `job` 工具。
 
-### 智能体委派（`subagent` + `subagent_manage`，恒开）
+### 智能体委派（`subagent` + `subagent_list` + `subagent_run`，恒开）
 
-两项工具只发给主智能体，没有 `tools.json` 开关。`subagent` 调用内置或外部角色；`subagent_manage` 查看、取消以及续接已结束的 Claude Code / Codex CLI run。角色由 `workspace/sub-agents/*.md` 配置，空目录不会关闭 inline 内置委派。
+两项工具只发给主智能体，没有 `tools.json` 开关。`subagent` 调用内置或外部角色；`subagent_list` 查看 run，`subagent_run` 对单个 run 执行 show/cancel/follow_up（续接已结束的 Claude Code / Codex CLI run）。角色由 `workspace/sub-agents/*.md` 配置，空目录不会关闭 inline 内置委派。
 
 外部角色不是 `bash async` 的别名：它有统一 run 状态、产物、工作区写锁、并发准入、完成唤醒、用量标记和重启对账。角色字段、调用参数与授权边界统一见 [sub-agents.md](./sub-agents.md)，不在本字段参考中维护第二份副本。
 
@@ -282,9 +282,9 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 - 只拦最明确的裸形态；带管道/重定向的复合命令（如 `cat x | jq`）一律放行。
 - 运行在 `command-guard` 之后、`rtk` 之前，只影响"用哪个工具"，不放行任何 guard 会拦的东西（递归 grep 被拦后由恒开的 `grep` 工具承接）。
 
-### 记忆管理工具（`memory_manage`，恒开）
+### 记忆管理工具（`memory_save` / `memory_search` / `memory_forget`，恒开）
 
-`memory_manage` 让主 agent 按需 `save`（存一条持久事实）、`search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`forget`（用户要求删除时，经共享串行队列从活动 MEMORY.md 移除，并写入不含原文的 tombstone 防止后台复活，不走裸 edit）。`forget` 不清理原始 session/log、retention backup 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。核心能力，无开关、始终注册，只发给主 agent。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
+三个工具让主 agent 按需 `memory_save`（存一条持久事实）、`memory_search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`memory_forget`（用户要求删除时，经共享串行队列从活动 MEMORY.md 移除，并写入不含原文的 tombstone 防止后台复活，不走裸 edit）。`forget` 不清理原始 session/log、retention backup 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。核心能力，无开关、始终注册，只发给主 agent。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
 
 用户可用 `/memory status` 查看条目数、近 7 天写入/删除/过期统计、tombstone、召回总数/近 30 天计数、query diversity 和最近失败；`/memory list` 按 entry id 列出活动记忆；`/memory show <entry-id>` 展示正文与 metadata；`/memory recent` 查看最近 7 天的 MEMORY.md 写入/删除/过期动作。metadata 写在频道的 `.memory/entries.json`，包含 kind、subject/owner、source entry ids、来源类型、trust、时间、状态、敏感等级、source correlation ids，以及 recall count、last recalled、每日计数和查询指纹（仅保存 hash，不保存查询原文）。correlation id 可与 usage ledger/review log 联结，统计维护 job 的成本、有效条目和后续召回。该文件是可重建 sidecar，不替代 `MEMORY.md` 事实源。
 
@@ -802,7 +802,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | `logging.file.enabled` | `true` | 结构化日志是否落盘 |
 | `tui.responseMode` | `"full_progress_then_plain_final"` | 终端 TUI 的输出形态，详见上文 TUI 一节 |
 
-`session_search` 工具本身恒开，与 `grep`、`memory_manage`、`event_manage` 一致，没有开关。
+`session_search` 工具本身恒开，与 `grep`、`memory_save`、`event_manage` 一致，没有开关。
 
 ### 已退役的字段（Retired Fields）
 
@@ -999,7 +999,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 |------|--------|------|
 | `enabled` | `true` | 自主长程任务总开关：同时门控全部 task_* 工具、内建 TaskDriver 与每回合任务摘要注入 |
 
-> 记忆/技能/事件/搜索/后台作业工具（`memory_manage`、`session_search`、`skill`、`event_manage`、`grep`、`glob`、`job`）为核心能力，恒开、无配置项。
+> 记忆/技能/事件/搜索/后台作业工具（`memory_save`/`memory_search`/`memory_forget`、`session_search`、`skill`、`event_manage`、`grep`、`glob`、`job`）为核心能力，恒开、无配置项。
 
 ### 常见示例（Common Examples）
 

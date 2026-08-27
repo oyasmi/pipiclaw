@@ -13,7 +13,9 @@ const {
 	createWebSearchToolMock,
 	createWebFetchToolMock,
 	createSessionSearchToolMock,
-	createMemoryManageToolMock,
+	createMemorySaveToolMock,
+	createMemorySearchToolMock,
+	createMemoryForgetToolMock,
 	createSkillToolMock,
 	createEventManageToolMock,
 	createTaskListToolMock,
@@ -23,7 +25,8 @@ const {
 	createTaskVerifyToolMock,
 	createSubAgentToolMock,
 	createSubAgentInlineToolMock,
-	createSubAgentManageToolMock,
+	createSubAgentListToolMock,
+	createSubAgentRunToolMock,
 } = vi.hoisted(() => ({
 	createReadToolMock: vi.fn(() => ({ name: "read" })),
 	createBashToolMock: vi.fn(() => ({ name: "bash" })),
@@ -34,7 +37,9 @@ const {
 	createWebSearchToolMock: vi.fn(() => ({ name: "web_search" })),
 	createWebFetchToolMock: vi.fn(() => ({ name: "web_fetch" })),
 	createSessionSearchToolMock: vi.fn(() => ({ name: "session_search" })),
-	createMemoryManageToolMock: vi.fn(() => ({ name: "memory_manage" })),
+	createMemorySaveToolMock: vi.fn(() => ({ name: "memory_save" })),
+	createMemorySearchToolMock: vi.fn(() => ({ name: "memory_search" })),
+	createMemoryForgetToolMock: vi.fn(() => ({ name: "memory_forget" })),
 	createSkillToolMock: vi.fn(() => ({ name: "skill" })),
 	createEventManageToolMock: vi.fn(() => ({ name: "event_manage" })),
 	createTaskListToolMock: vi.fn(() => ({ name: "task_list" })),
@@ -44,7 +49,8 @@ const {
 	createTaskVerifyToolMock: vi.fn(() => ({ name: "task_verify" })),
 	createSubAgentToolMock: vi.fn(() => ({ name: "subagent" })),
 	createSubAgentInlineToolMock: vi.fn(() => ({ name: "subagent_inline" })),
-	createSubAgentManageToolMock: vi.fn(() => ({ name: "subagent_manage" })),
+	createSubAgentListToolMock: vi.fn(() => ({ name: "subagent_list" })),
+	createSubAgentRunToolMock: vi.fn(() => ({ name: "subagent_run" })),
 }));
 
 const securityConfig = {
@@ -119,7 +125,11 @@ vi.mock("../src/tools/write.js", () => ({ createWriteTool: createWriteToolMock }
 vi.mock("../src/tools/web-search.js", () => ({ createWebSearchTool: createWebSearchToolMock }));
 vi.mock("../src/tools/web-fetch.js", () => ({ createWebFetchTool: createWebFetchToolMock }));
 vi.mock("../src/tools/session-search.js", () => ({ createSessionSearchTool: createSessionSearchToolMock }));
-vi.mock("../src/tools/memory-manage.js", () => ({ createMemoryManageTool: createMemoryManageToolMock }));
+vi.mock("../src/tools/memory-manage.js", () => ({
+	createMemorySaveTool: createMemorySaveToolMock,
+	createMemorySearchTool: createMemorySearchToolMock,
+	createMemoryForgetTool: createMemoryForgetToolMock,
+}));
 vi.mock("../src/tools/skill.js", () => ({ createSkillTool: createSkillToolMock }));
 vi.mock("../src/tools/event-manage.js", () => ({ createEventManageTool: createEventManageToolMock }));
 vi.mock("../src/tools/task-manage.js", () => ({
@@ -133,7 +143,10 @@ vi.mock("../src/subagents/tool.js", () => ({
 	createSubAgentTool: createSubAgentToolMock,
 	createSubAgentInlineTool: createSubAgentInlineToolMock,
 }));
-vi.mock("../src/tools/subagent-manage.js", () => ({ createSubAgentManageTool: createSubAgentManageToolMock }));
+vi.mock("../src/tools/subagent-manage.js", () => ({
+	createSubAgentListTool: createSubAgentListToolMock,
+	createSubAgentRunTool: createSubAgentRunToolMock,
+}));
 vi.mock("../src/security/config.js", () => ({ loadSecurityConfig: vi.fn(() => securityConfig) }));
 vi.mock("../src/tools/config.js", () => ({ loadToolsConfig: vi.fn(() => toolsConfig) }));
 
@@ -189,7 +202,7 @@ describe("tools index", () => {
 		createWebSearchToolMock.mockClear();
 		createWebFetchToolMock.mockClear();
 		createSessionSearchToolMock.mockClear();
-		createMemoryManageToolMock.mockClear();
+		createMemorySaveToolMock.mockClear();
 		createSkillToolMock.mockClear();
 		createSubAgentToolMock.mockClear();
 	});
@@ -229,9 +242,9 @@ describe("tools index", () => {
 		// Registration itself is untouched by the prompt change (the "## Available Tools" absence
 		// itself is covered by prompt-sections.test.ts).
 		expect(registered.has("web_search")).toBe(false);
-		expect(registered.has("memory_manage")).toBe(true);
+		expect(registered.has("memory_save")).toBe(true);
 		// And the tool set still decides which mechanism sections render.
-		expect(prompt).toContain("`memory_manage` in the same turn");
+		expect(prompt).toContain("`memory_save` / `memory_forget` in the same turn");
 		toolsConfig.tools.web.enable = true;
 	});
 
@@ -261,7 +274,9 @@ describe("tools index", () => {
 			"web_search",
 			"web_fetch",
 			"session_search",
-			"memory_manage",
+			"memory_save",
+			"memory_search",
+			"memory_forget",
 			"skill",
 			"event_manage",
 			"task_list",
@@ -272,7 +287,8 @@ describe("tools index", () => {
 			"job",
 			"subagent",
 			"subagent_inline",
-			"subagent_manage",
+			"subagent_list",
+			"subagent_run",
 		]);
 		expect(createReadToolMock).toHaveBeenCalledWith(executor, fileStore, {
 			securityConfig: expectedSecurityConfig,

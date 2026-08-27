@@ -170,7 +170,7 @@ sequenceDiagram
 
 另外两个互斥点：`SessionResourceGate`（`agent/session-resource-gate.ts`）让"资源热重载"与"prompt 进行中"互斥；`DingTalkBot` 内卡片创建和 access token 刷新都做了 singleflight 合并；`subagents/workspace-lease.ts` 是进程级的排他写锁（不是队列，没有等待语义），只有 `mutates: write` 的委派 run 会取它，key 是工作目录的 realpath，父子目录也算冲突——第二个写入者直接被拒绝，不是排队。
 
-**委派 run 的生命周期不受 `ChannelQueue`/轮次状态机约束**：内置子代理超过 120s（或外部委派一开始）就从"这一轮的一部分"变成"跨轮存活的后台工作"，由 `SubAgentRunManager` 统一管理，通过 `DurableDispatchService` 完成时唤醒频道——与后台 job 是同一条唤醒管线，`/stop` 不再连带终止它（需要 `subagent_manage op=cancel` 或 `/subagents cancel`）。
+**委派 run 的生命周期不受 `ChannelQueue`/轮次状态机约束**：内置子代理超过 120s（或外部委派一开始）就从"这一轮的一部分"变成"跨轮存活的后台工作"，由 `SubAgentRunManager` 统一管理，通过 `DurableDispatchService` 完成时唤醒频道——与后台 job 是同一条唤醒管线，`/stop` 不再连带终止它（需要 `subagent_run op=cancel` 或 `/subagents cancel`）。
 
 **忙态的单一所有者是 Runner 的轮次状态机**（`agent/types.ts` 的 `TurnPhase`：`idle → dispatching → preparing → streaming → finishing`）。传输层在派发消息的同一 tick 内同步调用 `runner.beginTurn()`、结束后 `endTurn()`；钉钉的忙时路由、TUI 的轮次控制、调度器的 `isChannelActive`、`/status` 全部从 `runner.isBusy()/getTurnStatus()` 派生，不再各持一份 flag。steer 窗口判断也单点化在 runner 的 `assertBusyWindowOpen`。
 
@@ -187,10 +187,10 @@ sequenceDiagram
 | `HISTORY.md` | 折叠后的较旧历史摘要块 | 固化流程追加/折叠 | 否 |
 | `log.jsonl` / `context.jsonl` | 冷存储：完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 工具检索 |
 | `.memory/entries.json` | MEMORY 条目 metadata、来源 entry ids、状态与召回统计 | files/recall | 否，可从 `MEMORY.md` 重建 |
-| `.memory/tombstones.jsonl` | 已遗忘条目的 id/hash（不含原文），防止自动复活 | memory_manage/files | 否 |
+| `.memory/tombstones.jsonl` | 已遗忘条目的 id/hash（不含原文），防止自动复活 | memory_forget/files | 否 |
 | `.memory-backups/` | 记忆文件最近 5 份备份 | files.ts | — |
 
-工作区级还有管理员维护的 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。系统提示词明确禁止 agent 用文件工具直接编辑频道 SESSION/MEMORY/HISTORY——只能走运行时串行化的维护路径或 `memory_manage` 工具。
+工作区级还有管理员维护的 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。系统提示词明确禁止 agent 用文件工具直接编辑频道 SESSION/MEMORY/HISTORY——只能走运行时串行化的维护路径或 `memory_save` / `memory_forget` 工具。
 
 ### 6.2 记忆的进与出
 
@@ -229,7 +229,7 @@ flowchart LR
 - **弱查询借用上一轮**（`findPreviousUserText` + `RecallRequest.contextQuery`）：纯指代型追问（"上次说的那个安排，代号是什么来着？"）自身的 token 打不到任何候选的证据门槛。只有当当前 query 自己一个候选都选不出来时，才会把上一轮用户消息（经 `stripInjectedMemoryContext` 剥离注入的 `<runtime_context>`/`<user_message>` 包装，避免召回自己召回过的内容）拼进去重新打分一次；只影响打分，不进 prompt 也不进召回指纹。当前 query 自己就能命中时这条路径完全不触发，零副作用。
 - **召回统计影响排序，但只是决胜局裁判**：`recallCount`/`queryFingerprints`（去重后的不同问法数，比原始次数更能代表"这事被反复问到"）、`necessity`（沿用提炼时打的 high/medium/low 标签，落盘进 `.memory/entries.json`）叠加成一个上限 +6 的小幅加成，agent 学到但超过 90 天没被召回过的条目再扣 2 分（用户明说要记的条目不受此惩罚）。整体只占结构分乘数的 10% 上限——词法证据仍然决定谁能入围，这只决定入围之后谁排前面。
 - **出口（写）**：固化只发生在明确边界——压缩前、`/new` 前（后台异步、快照先行）、关机 flush、以及后台维护 job。每次固化写 `review-log`（可审计）。
-- **`memory_manage save` 的冲突检测**：写入前复用 `search` op 同一条召回管道（`rerankWithModel: false`，确定性点查）查一遍频道已有记忆；命中一条分数达到高置信阈值的相似条目就不写入，转而报一个 `RecoverableToolError` 列出冲突条目 id，要求模型带上 `supersedes`（目标 id 或 `"none"`）重新调用。第二次调用必定执行，不会死循环。这把"改主意时先说'忘掉旧的'"从用户操作规程收窄成模型自己就能处理的纠正回路。
+- **`memory_save` 的冲突检测**：写入前复用 `memory_search` 同一条召回管道（`rerankWithModel: false`，确定性点查）查一遍频道已有记忆；命中一条分数达到高置信阈值的相似条目就不写入，转而报一个 `RecoverableToolError` 列出冲突条目 id，要求模型带上 `supersedes`（目标 id 或 `"none"`）重新调用。第二次调用必定执行，不会死循环。这把"改主意时先说'忘掉旧的'"从用户操作规程收窄成模型自己就能处理的纠正回路。
 - **只有一条提炼路径**（`extraction.ts`）：边界固化与空闲 checkpoint 共用同一个 prompt、同一份 JSON schema、同一套两档置信度闸门（`classifyMemoryWrite`，spec 037 D6）。此前多条路径各写各的 prompt，其中有的完全不设置信度门槛，于是 `MEMORY.md` 的质量由最不严谨的那条决定。调用方仍各自负责副作用：只有边界写 `HISTORY.md`。被闸门拒绝的候选不会静默消失——写进 `memory-review.jsonl` 的 `skipped`，且素材本身仍留在 `HISTORY.md` 与冷存储中。工具输出在 `sanitizeMessagesForMemory`（`transcript.ts`）就被剥离，是提炼输入的可信边界——`runMemoryExtraction` 看到的转写永远不含 `toolResult` 消息，因此不需要在窗口层再叠加一道"是否含工具输出"的过滤（2026-08-24 修复：曾经的窗口级过滤会连带封杀同窗口内 assistant 自己写下的可信内容，导致含工具调用的对话全部无法写入长期记忆）。
 - **提炼 prompt 里的现有条目列表按频道大小分流**：条目数 ≤40 时照旧全量渲染；超过 40 条时改成本地词法重叠打分（复用 `recall.ts` 的分词器，不拉起整条 recall 管道），只渲染与本次对话最相关的 top-20，加上全部 `sourceType: "user"` 的条目（用户明说要记的事实必须始终是 supersede 候选，不受相关性排序影响），并在 prompt 里注明"仅展示部分条目"。条目一多，供模型判断该 supersede 谁的输入本来就会被 8000 字符的裁剪吃掉尾部，相关性优先渲染让模型至少看到的是与本轮相关的那部分。
 - **两档写入 + 试用期**（spec 037）：`necessity: high` 且 `confidence ≥ 0.85` 永久写入（与此前一致）；`necessity: medium` 且 `confidence ≥ 0.9` 以 30 天试用期写入（`metadata.probationUntil`，每次固化最多 5 条），只对 `add` 生效——`supersede`/`invalidate` 永远要求永久档，避免覆盖/删除操作本身过期后复活旧内容。试用期条目在被召回一次（`recordMemoryRecall`）、被重复 add 命中（`applyChannelMemoryOps` 的 `skippedDuplicate` 分支）、或被永久 supersede 替换时转正；从未转正的条目由 `structural-maintenance` job 里的确定性前置步骤（`probation.ts`）用 `invalidate`（不是 `forget`）清理——不留墓碑，同一事实之后仍可被重新学到。
@@ -262,9 +262,11 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 |---|---|---|
 | `read` / `bash` / `edit` / `write` / `grep` | ✅ | 恒开，无开关 |
 | `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；Brave 搜索 + Readability 正文提取，支持代理） |
-| `session_search` / `memory_manage` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
+| `session_search` / `memory_save` / `memory_search` / `memory_forget` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
 | `task_list`/`task_create`/`task_update`/`task_close`/`task_verify` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要 |
-| `subagent` / `subagent_manage` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
+| `subagent` / `subagent_list` / `subagent_run` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
+
+工具的调用面按 payload 形状切分：**形状不同就拆，形状相同就合**（spec 046/047）。`op` 枚举的路由散文把每条分支各讲一遍，是真正的 token 成本——所以任务族是五个工具而非一个 `action` 分发工具，记忆是 `memory_save` / `memory_search` / `memory_forget`，委派控制是 `subagent_list` + `subagent_run`；而 `event_manage` 的 `create` / `update` 参数集完全相同，合在一个工具里。
 
 增强类开关：`tools.rtk`（token 优化改写，默认关）、`tools.bashInterceptor`（把裸 `cat`/递归 grep/`sed -i` 导向专用工具，默认开）。
 
@@ -274,7 +276,7 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 
 **子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 字段区分 `internal`（默认，进程内隔离上下文子代理）与 `external`（一次性调用 claude-code / codex-cli / exec，argv 直连、不经过 shell），也支持调用时内联定义一个 internal 角色；Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置硬约束：工具白名单仅 `read/grep/bash/edit/write/web_search/web_fetch`（默认 `read+bash`），默认限额 24 turns / 48 tool calls / 300s 墙钟；外部角色没有轮数/工具调用概念，只有 `maxWallTimeSec`（默认 1800s）。调用面（`subagent` 工具）内外共用同一 schema。
 
-`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_manage`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器结构性移除 write/edit（`verificationStrength: enforced`），外部验证器做不到，只能靠事后 `workspaceSubjectHash`（现已把未跟踪文件的内容也纳入哈希）比对（`verificationStrength: advisory`）。
+`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器结构性移除 write/edit（`verificationStrength: enforced`），外部验证器做不到，只能靠事后 `workspaceSubjectHash`（现已把未跟踪文件的内容也纳入哈希）比对（`verificationStrength: advisory`）。
 
 ## 9. 安全层（`src/security/`）
 

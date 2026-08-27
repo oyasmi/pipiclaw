@@ -74,7 +74,9 @@ const DESCRIBERS: Record<string, Describer> = {
 		return `后台作业 ${op}${ids ? ` (${ids})` : ""}`;
 	},
 	session_search: (args) => `检索历史 "${clipText(str(args, "query") ?? "?", 40, { collapseWhitespace: true })}"`,
-	memory_manage: (args) => `记忆 ${str(args, "op") ?? "?"}`,
+	memory_save: (args) => `记忆保存${str(args, "content") ? `：${firstLine(str(args, "content") ?? "", 30)}` : ""}`,
+	memory_search: (args) => `记忆检索 "${clipText(str(args, "query") ?? "?", 40, { collapseWhitespace: true })}"`,
+	memory_forget: (args) => `记忆删除 "${clipText(str(args, "target") ?? "?", 40, { collapseWhitespace: true })}"`,
 	skill: (args) => {
 		const action = str(args, "action") ?? "?";
 		const name = str(args, "name");
@@ -95,7 +97,8 @@ const DESCRIBERS: Record<string, Describer> = {
 		const task = str(args, "task");
 		return `内联委派${task ? `：${firstLine(task, 40)}` : ""}`;
 	},
-	subagent_manage: (args) => {
+	subagent_list: () => "委派列表",
+	subagent_run: (args) => {
 		const op = str(args, "op") ?? "?";
 		const runId = str(args, "runId");
 		return `委派 ${op}${runId ? ` ${runId}` : ""}`;
