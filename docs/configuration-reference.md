@@ -798,6 +798,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | `sessionMemory.enabled` | `true` | 启用 `SESSION.md` 刷新流程 |
 | `memoryMaintenance.enabled` | `true` | 启用内置后台 memory maintenance scheduler（session refresh / memory checkpoint / structural maintenance 三个 job） |
 | `sessionSearch.summarizeWithModel` | `false` | 是否用模型对 `session_search` 命中做 focused summary。同样**会额外发起 LLM 调用** |
+| `delegation.notices` | `"live"` | 委派 run（`subagents/`）与后台 job 的旁路播报量：`"off"` 不播报；`"settled"` 只播报结算回执（一句话，run 结束后几秒内到达，独立于唤醒回合的 LLM 延迟）；`"live"` 在此基础上为长时间运行的外部 run 追加稀疏的进度提示 |
 | `logging.level` | `"info"` | `debug` \| `info` \| `warn` \| `error`，详见上文可观测性一节 |
 | `logging.file.enabled` | `true` | 结构化日志是否落盘 |
 | `tui.responseMode` | `"full_progress_then_plain_final"` | 终端 TUI 的输出形态，详见上文 TUI 一节 |

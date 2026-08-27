@@ -68,7 +68,7 @@ import { handleProjectCommand as runProjectCommand } from "./project-commands.js
 import { resolveProjectScope } from "./project-scope-store.js";
 import { installLlmProxy } from "./proxy.js";
 import { ChannelStore } from "./store.js";
-import { handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
+import { renderRunNotice, handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
 import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";
 import { migrateLegacyTaskScheduleEvents, migrateLegacyTaskState } from "./task-migration.js";
@@ -658,9 +658,12 @@ export async function createRuntimeContext(
 						"user message",
 					);
 
-					// Background wakes deliver their result, not their process: no progress card,
-					// no thinking stream, nothing to delete when the check-in ends `[SILENT]`.
-					const ctx = createDingTalkContext(event, bot, store, _isEvent ? "none" : undefined);
+					// Background wakes deliver their result, not their process: no progress card, no
+					// thinking stream, nothing to delete when the check-in ends `[SILENT]`. An "awaited"
+					// wake (a delegation or job finishing) is the opposite — a human is actually waiting
+					// on it — so it renders progress the same way a normal message does (P0-2).
+					const backgroundOnly = Boolean(_isEvent) && event.presentation !== "awaited";
+					const ctx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
 
 					if (builtInCommand) {
 						const commandStartedAt = Date.now();
@@ -720,7 +723,7 @@ export async function createRuntimeContext(
 						ctx: { channelId: event.channelId, userName: event.userName },
 						fields: { messageLength: event.text.length, source: _isEvent ? "event" : "message" },
 					});
-					if (!_isEvent) {
+					if (!backgroundOnly) {
 						ctx.primeCard(350);
 					}
 					// Effects are tallied per channel; the governor needs them per task, so one
@@ -754,7 +757,11 @@ export async function createRuntimeContext(
 							if (claimed.activated) recoveredJobTaskId = claimed.taskId;
 							await claimed.finish();
 							structuredWakeFinalized = true;
-							if (event.internalWake?.kind === "job" && !claimed.activated) return;
+							// Drop without a turn only when something else is still driving this task (a
+							// sibling wake in the same fan-out already activated it); every other case —
+							// the task is done, archived, disabled, or gone — has nobody left to see this
+							// result if it is dropped here, so it must still reach a normal turn (P3-1).
+							if (event.internalWake?.kind === "job" && !claimed.activated && claimed.taskStillDriven) return;
 						} else {
 							log.logWarning(
 								`[${event.channelId}] Ignored an unverifiable [JOB:${jobId}] wake claiming task ${jobTaskId}`,
@@ -787,7 +794,10 @@ export async function createRuntimeContext(
 							if (claimed.activated) recoveredDelegationTaskId = claimed.taskId;
 							await claimed.finish();
 							structuredWakeFinalized = true;
-							if (event.internalWake?.kind === "subagent" && !claimed.activated) return;
+							// See the JOB branch above (P3-1): only skip the turn when the task is still
+							// driven by something else.
+							if (event.internalWake?.kind === "subagent" && !claimed.activated && claimed.taskStillDriven)
+								return;
 						} else {
 							log.logWarning(
 								`[${event.channelId}] Ignored an unverifiable [SUBAGENT:${runId}] wake claiming task ${delegationTaskId}`,
@@ -870,6 +880,16 @@ export async function createRuntimeContext(
 	configureSubAgentRuntime({
 		stateDir: join(options.paths.appHomeDir, "state", "subagent-runs"),
 		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
+		// P0-1/P1a: a best-effort out-of-band notice, independent of the completion wake — it reaches
+		// the channel in roughly the time the run itself takes, not the wake turn's own LLM latency
+		// on top of that. `notices: "off"` (settings.json) restores today's silent behavior.
+		notify: (channelId, notice) => {
+			const level = runtimeSettingsManager.getDelegationSettings().notices;
+			if (level === "off") return;
+			if (level === "settled" && notice.kind !== "settled") return;
+			const text = renderRunNotice(notice);
+			if (text) void bot.sendPlain(channelId, text);
+		},
 		ledger: getUsageLedger(),
 		store,
 	});

@@ -191,3 +191,29 @@ describe("claude-code harness: parseOutcome", () => {
 		expect(withResult.usage?.input).toBe(100);
 	});
 });
+
+describe("claude-code harness: toProgressLabel (P1a)", () => {
+	it("labels the first tool_use block in a streamed assistant message with its tool name", () => {
+		const line = JSON.stringify({
+			type: "assistant",
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "Let me check." },
+					{ type: "tool_use", id: "call_1", name: "Bash", input: { command: "npm test" } },
+				],
+			},
+		});
+		expect(claudeCodeHarness.toProgressLabel?.(line)).toBe("Bash");
+	});
+
+	it("returns undefined for a text-only assistant message, garbage, and non-assistant events", () => {
+		const textOnly = JSON.stringify({
+			type: "assistant",
+			message: { role: "assistant", content: [{ type: "text", text: "Thinking..." }] },
+		});
+		expect(claudeCodeHarness.toProgressLabel?.(textOnly)).toBeUndefined();
+		expect(claudeCodeHarness.toProgressLabel?.("not json")).toBeUndefined();
+		expect(claudeCodeHarness.toProgressLabel?.(JSON.stringify({ type: "result" }))).toBeUndefined();
+	});
+});

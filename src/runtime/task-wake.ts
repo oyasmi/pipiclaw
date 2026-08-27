@@ -7,9 +7,32 @@
 import { getChannelJobManager, type JobSnapshot } from "../agent/job-manager.js";
 import type { Executor } from "../executor.js";
 import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
-import { activateWaitingTask, rollbackWaitingTask, type WakeTaskTransitionHooks } from "../tasks/store.js";
+import {
+	activateWaitingTask,
+	readStoredTask,
+	rollbackWaitingTask,
+	type WakeTaskTransitionHooks,
+} from "../tasks/store.js";
+import { normalizeStoredStatus } from "../tasks/transitions.js";
 import type { ChannelEvent } from "./channel-event.js";
 import { getChannelDir } from "./channel-paths.js";
+
+/**
+ * True when `taskId` is currently `active` and enabled — i.e. the task driver already owns
+ * advancing it. A completion wake that could not activate the task (because it was not
+ * `waiting`) is safe to drop without spending an agent turn only in this case: some other wake in
+ * the same fan-out already activated it, and the driver will pick up the result. Every other case
+ * — `done`, archived, disabled, or the task missing entirely — has nobody left to look at the
+ * wake's result if it is dropped here, so the caller must still route it to a normal turn.
+ */
+async function isTaskActivelyDriven(channelDir: string, taskId: string): Promise<boolean> {
+	const document = await readStoredTask(channelDir, taskId, false, true).catch(() => undefined);
+	return (
+		document !== undefined &&
+		normalizeStoredStatus(document.fields.status) === "active" &&
+		document.fields.enabled !== false
+	);
+}
 
 /**
  * Whether a `[JOB:<jobId>] ... belongs to task <taskId>.` wake actually names a job that: exists
@@ -56,6 +79,9 @@ export function isTrustedInternalWake(
 export interface ClaimedDelegationWake {
 	taskId: string;
 	activated: boolean;
+	/** True when it is safe to drop this wake without a turn even though it did not activate the
+	 *  task itself — see `isTaskActivelyDriven`. Always true when `activated` is true. */
+	taskStillDriven: boolean;
 	finish(): Promise<void>;
 	rollback(): Promise<void>;
 }
@@ -81,9 +107,11 @@ export async function claimVerifiedDelegationWake(
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
 	const activated = await activateWaitingTask(channelDir, wake.taskId, hooks);
+	const taskStillDriven = activated !== undefined || (await isTaskActivelyDriven(channelDir, wake.taskId));
 	return {
 		taskId: wake.taskId,
 		activated: activated !== undefined,
+		taskStillDriven,
 		finish: async () => {
 			await runManager.finishWakeConsumption(wake.resourceId, event.dispatchId);
 		},
@@ -94,6 +122,8 @@ export async function claimVerifiedDelegationWake(
 export interface ClaimedJobWake {
 	taskId: string;
 	activated: boolean;
+	/** See `ClaimedDelegationWake.taskStillDriven`. */
+	taskStillDriven: boolean;
 	finish(): Promise<void>;
 }
 
@@ -119,9 +149,11 @@ export async function claimVerifiedJobWake(
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
 	const activated = await activateWaitingTask(channelDir, wake.taskId, hooks);
+	const taskStillDriven = activated !== undefined || (await isTaskActivelyDriven(channelDir, wake.taskId));
 	return {
 		taskId: wake.taskId,
 		activated: activated !== undefined,
+		taskStillDriven,
 		finish: async () => {
 			await jobManager.finishWakeConsumption(wake.resourceId, event.dispatchId);
 		},

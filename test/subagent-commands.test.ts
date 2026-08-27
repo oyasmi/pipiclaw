@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { handleSubagentsCommand } from "../src/runtime/subagent-commands.js";
+import { handleSubagentsCommand, renderRunNotice } from "../src/runtime/subagent-commands.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -358,5 +358,28 @@ describe("handleSubagentsCommand", () => {
 		const response = await handleSubagentsCommand({ args: "frobnicate", channelId });
 		expect(response).toContain("未知的 /subagents 子命令");
 		expect(response).toContain("/subagents list [running|failed|all]");
+	});
+});
+
+describe("renderRunNotice (P0-1/P1a)", () => {
+	it("renders a settled notice by status", () => {
+		expect(
+			renderRunNotice({ kind: "settled", runId: "run-1", agent: "worker", status: "completed", durationMs: 65_000 }),
+		).toBe("✅ worker 完成 · 1m5s");
+		expect(
+			renderRunNotice({ kind: "settled", runId: "run-1", agent: "worker", status: "failed", durationMs: 3_000 }),
+		).toBe("⚠️ worker 失败 · 3s");
+		expect(
+			renderRunNotice({ kind: "settled", runId: "run-1", agent: "worker", status: "cancelled", durationMs: 3_000 }),
+		).toBe("🛑 worker 已取消 · 3s");
+	});
+
+	it("renders a progress notice as a step line, and undefined when there is no step", () => {
+		expect(
+			renderRunNotice({ kind: "progress", runId: "run-1", agent: "worker", durationMs: 60_000, step: "npm test" }),
+		).toBe("⏳ worker · npm test");
+		expect(
+			renderRunNotice({ kind: "progress", runId: "run-1", agent: "worker", durationMs: 60_000 }),
+		).toBeUndefined();
 	});
 });

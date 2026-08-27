@@ -31,5 +31,13 @@ describe.each(STRUCTURED_HARNESSES)(
 			expect(outcome.terminalSeen).toBe(false);
 			expect(classifyExternalOutcome(harness.id, outcome).status).toBe("failed");
 		});
+
+		// P1a: every structured harness implements progress labeling, and it degrades the same way
+		// parseOutcome does — never throws, undefined for garbage.
+		it("implements toProgressLabel and degrades to undefined on garbage input", () => {
+			expect(harness.toProgressLabel).toBeDefined();
+			expect(() => harness.toProgressLabel?.(garbage)).not.toThrow();
+			expect(harness.toProgressLabel?.(garbage)).toBeUndefined();
+		});
 	},
 );

@@ -267,6 +267,30 @@ async function readGitStatus(workingDirectory: string, nulSeparated = false): Pr
 	return stdout;
 }
 
+/**
+ * P2-2: a plain-language "what changed" line for a completion wake, so the agent that reads it
+ * does not have to spend its own first tool call finding out. `git status --porcelain` only — not
+ * a full subject hash — since this is a convenience for the reader, not a verification input.
+ * Returns `undefined` on any failure (not a git repo, `git` unavailable) or when nothing changed;
+ * a caller with nothing to show should simply omit the line.
+ */
+export async function changedPathsSummary(workingDirectory: string, limit = 20): Promise<string | undefined> {
+	let statusOutput: string;
+	try {
+		statusOutput = await readGitStatus(workingDirectory);
+	} catch {
+		return undefined;
+	}
+	const lines = statusOutput
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	if (lines.length === 0) return undefined;
+	const shown = lines.slice(0, limit).join(", ");
+	const overflow = lines.length > limit ? ` (+${lines.length - limit} more)` : "";
+	return `${shown}${overflow}`;
+}
+
 /** Git status deliberately omits ignored paths. Enumerate them separately so an ignored product
  * file cannot disappear from the subject merely because it matches `.gitignore`. */
 async function readGitIgnoredPaths(workingDirectory: string): Promise<string[]> {

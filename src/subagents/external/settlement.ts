@@ -3,9 +3,9 @@ import { join } from "node:path";
 import * as log from "../../log.js";
 import { formatLocalTime } from "../../shared/local-time.js";
 import { errorMessage } from "../../shared/text-utils.js";
-import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
+import { changedPathsSummary, workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import { writeVerificationAttestation } from "../../tasks/verification.js";
-import type { RunHarness, SettleInput } from "../runs.js";
+import type { RunHarness, RunMutates, SettleInput } from "../runs.js";
 import { resolveVerificationOutcome } from "../verification-outcome.js";
 import { classifyExternalOutcome, type ExternalOutcome } from "./harness.js";
 import { getExternalHarness } from "./registry.js";
@@ -93,6 +93,9 @@ export interface FinalizeExternalRunInput {
 	/** Fixed verification base and initial untracked manifest, persisted for restart reconciliation. */
 	verifyBaseCommit?: string;
 	verifyBaselineUntrackedPaths?: string[];
+	/** P2-2: only a `write` run's completion pays for a `git status` summary — a `read` run cannot
+	 *  have changed anything, and this must never become a hidden cost on the common read-only path. */
+	mutates?: RunMutates;
 }
 
 /**
@@ -123,7 +126,7 @@ export async function finalizeExternalRun(
 				errorMessage: `Unknown harness "${input.harnessId}"; cannot judge this run.`,
 			};
 
-	const settleInput = buildExternalSettleInput({
+	let settleInput = buildExternalSettleInput({
 		harnessId: input.harnessId,
 		outcome,
 		durationMs: input.durationMs,
@@ -131,6 +134,13 @@ export async function finalizeExternalRun(
 		terminationReason: input.terminationReason,
 		maxWallTimeSec: input.maxWallTimeSec,
 	});
+
+	// P2-2: only for a run that actually could have changed the working directory, and only once it
+	// is known to have finished cleanly — best-effort, never blocks or fails settlement.
+	if (input.mutates === "write" && settleInput.status === "completed") {
+		const workspaceSummary = await changedPathsSummary(input.workingDirectory).catch(() => undefined);
+		if (workspaceSummary) settleInput = { ...settleInput, workspaceSummary };
+	}
 
 	const shouldVerify =
 		input.purpose === "verify" &&

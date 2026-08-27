@@ -184,6 +184,79 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(events[0]?.text).toContain("It belongs to task T-7.");
 		expect(events[0]?.text).toContain("Found the bug in src/index.ts.");
 		expect(events[0]?.text).toContain("[SILENT]");
+		// P0-2: an "awaited" wake renders the resulting turn's progress instead of the "none" style
+		// autonomous check-ins get.
+		expect(events[0]?.presentation).toBe("awaited");
+	});
+
+	it("emits a settled notice (P0-1) whenever announce:true would dispatch a wake, and none otherwise", async () => {
+		const { ledger } = makeLedger();
+		const { store } = makeStore();
+		const { dispatch } = makeDispatch();
+		const notices: Array<{ channelId: string; notice: unknown }> = [];
+		const manager = new SubAgentRunManager("dm_123", {
+			ledger,
+			store,
+			dispatch,
+			notify: (channelId, notice) => {
+				notices.push({ channelId, notice });
+			},
+		});
+		await register(manager, { runId: "run-announced" });
+		await manager.settle("run-announced", baseSettleInput(), { announce: true });
+
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toMatchObject({
+			channelId: "dm_123",
+			notice: { kind: "settled", runId: "run-announced", agent: "explorer", status: "completed" },
+		});
+
+		await register(manager, { runId: "run-inline" });
+		await manager.settle("run-inline", baseSettleInput(), { announce: false });
+		expect(notices).toHaveLength(1); // Inline (already-held-by-the-model) results stay silent.
+	});
+
+	it("does not let a throwing notifier affect settlement", async () => {
+		const { ledger, records } = makeLedger();
+		const { store, archived } = makeStore();
+		const { dispatch, events } = makeDispatch();
+		const manager = new SubAgentRunManager("dm_123", {
+			ledger,
+			store,
+			dispatch,
+			notify: () => {
+				throw new Error("notifier is down");
+			},
+		});
+		await register(manager);
+
+		await manager.settle("run-1", baseSettleInput(), { announce: true });
+
+		expect(events).toHaveLength(1);
+		expect(records).toHaveLength(1);
+		expect(archived).toHaveLength(1);
+		expect(manager.get("run-1")?.settledAt).toBeDefined();
+	});
+
+	it("truncates a long wake body with a note, and carries workspaceSummary as its own line (P2)", async () => {
+		const { ledger } = makeLedger();
+		const { store } = makeStore();
+		const { dispatch, events } = makeDispatch();
+		const manager = new SubAgentRunManager("dm_123", { ledger, store, dispatch });
+		await register(manager);
+
+		const longOutput = `PREFIX-${"x".repeat(7_000)}-SUFFIX`;
+		await manager.settle(
+			"run-1",
+			baseSettleInput({ outputText: longOutput, workspaceSummary: "M src/a.ts, ?? src/b.ts" }),
+			{ announce: true },
+		);
+
+		const text = events[0]?.text ?? "";
+		expect(text).toContain("truncated:");
+		expect(text).toContain("SUFFIX");
+		expect(text).not.toContain("PREFIX-x"); // The truncated head is gone.
+		expect(text).toContain("Workspace after the run (git status --porcelain): M src/a.ts, ?? src/b.ts");
 	});
 
 	it("settle is idempotent: a second call for the same run neither re-bills nor re-announces", async () => {

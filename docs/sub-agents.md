@@ -244,6 +244,8 @@ maxWallTimeSec: 3600
 
 收到 "still running" 占位结果后：**不要轮询、不要重复派发，结束当前回合**；委派完成时 runtime 会自己唤醒本频道，带回结果与产物路径。想主动看进度用 `subagent_list` 或 `/subagents list`，不要用委派工具本身当轮询手段。
 
+在这个唤醒回合的 LLM 延迟之外，runtime 还会发一条独立的旁路播报（`settings.json` 的 `delegation.notices`，默认 `"live"`）：run 结算后几秒内一句"✅/⚠️ 完成"的确认，长时间运行的外部 run 中途还会有稀疏的进度提示（如当前在跑哪个命令）。这只是给人看的文本消息，不占用模型上下文，也不改变上面这条"不要轮询"的规则。
+
 **`/stop` 不再连带杀掉已派发的委派**（有意变更）。停止一个正在跑的委派永远需要显式调用 `subagent_run op=cancel` 或运行时命令 `/subagents cancel <runId>`；后者不经过模型，在模型不可用或回合卡死时依然能用。
 
 ## 控制面：`subagent_list` / `subagent_run` 与 `/subagents`

@@ -491,6 +491,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 				verifySubjectBefore,
 				verifyBaseCommit,
 				verifyBaselineUntrackedPaths,
+				mutates: input.mutates,
 			},
 			(settleInput, options) => runManager.settle(input.runId, settleInput, options),
 			{ announce: terminationReason !== "cancelled" },

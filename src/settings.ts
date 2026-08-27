@@ -113,6 +113,17 @@ export interface PipiclawSessionSearchSettings {
 }
 
 /**
+ * How much out-of-band commentary a delegation run (`src/subagents/`) or background job produces
+ * outside of its own completion wake — plain text, not an LLM turn, so it reaches the channel in
+ * roughly the time the run itself takes rather than waiting on a wake turn's latency.
+ * `"off"` is today's behavior; `"settled"` adds only the one-line completion receipt; `"live"`
+ * also adds a sparse trickle of running-progress notices for long external runs.
+ */
+export interface PipiclawDelegationSettings {
+	notices: "off" | "settled" | "live";
+}
+
+/**
  * Everything `settings.json` may contain (spec 035 D1).
  *
  * The rule: a key earns a place here only if it expresses product intent —
@@ -148,6 +159,7 @@ export interface PipiclawSettings {
 	};
 	logging?: { level?: PipiclawLoggingSettings["level"]; file?: { enabled?: boolean } };
 	tui?: Partial<PipiclawTuiSettings>;
+	delegation?: Partial<PipiclawDelegationSettings>;
 }
 
 export interface PipiclawTuiSettings {
@@ -163,6 +175,10 @@ export interface PipiclawTuiSettings {
 
 const DEFAULT_TUI: PipiclawTuiSettings = {
 	responseMode: "full_progress_then_plain_final",
+};
+
+const DEFAULT_DELEGATION: PipiclawDelegationSettings = {
+	notices: "live",
 };
 
 const DEFAULT_COMPACTION: PipiclawCompactionSettings = {
@@ -462,6 +478,13 @@ export class PipiclawSettingsManager {
 
 	getTuiSettings(): PipiclawTuiSettings {
 		return { ...DEFAULT_TUI, ...this.settings.tui };
+	}
+
+	getDelegationSettings(): PipiclawDelegationSettings {
+		return {
+			...DEFAULT_DELEGATION,
+			notices: this.settings.delegation?.notices ?? DEFAULT_DELEGATION.notices,
+		};
 	}
 
 	getRetryEnabled(): boolean {

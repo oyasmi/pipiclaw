@@ -83,6 +83,14 @@ export interface ExternalHarness {
 	/** Parse stdout into a unified outcome. Must never throw — a parse failure degrades to
 	 *  `protocolStatus: "unparsable"`, not an exception (D4). */
 	parseOutcome(input: ParseOutcomeInput): ExternalOutcome;
+	/**
+	 * P1a: map one raw output line, still mid-run, to a short human-readable step label — e.g. the
+	 * command a coding CLI just started, or a todo-list progress count. Same contract as
+	 * `parseOutcome`: must never throw, and returns `undefined` for a line that carries no
+	 * progress-worthy information (most lines). Optional — `exec` has no structured protocol to
+	 * read mid-run, so it omits this entirely rather than implement a no-op.
+	 */
+	toProgressLabel?(line: string): string | undefined;
 }
 
 /**

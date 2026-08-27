@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { renderSubcommandUsage } from "../agent/commands.js";
+import { formatDuration } from "../shared/duration.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentConfig, SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
-import { getSubAgentRunManager, type RunRecord, type RunResolution } from "../subagents/runs.js";
+import { getSubAgentRunManager, type RunNotice, type RunRecord, type RunResolution } from "../subagents/runs.js";
 
 /**
  * `/subagents` — the human control path that does not depend on the model (spec 040 D6, polished
@@ -402,5 +403,26 @@ export async function handleSubagentsCommand(options: HandleSubagentsCommandOpti
 		}
 	} catch (error) {
 		return `执行 /subagents ${command.action} 失败：${errorMessage(error)}`;
+	}
+}
+
+/**
+ * Render a `RunNotice` (P0-1/P1a) as a one-line reply — a confirmation, per the command reply
+ * conventions. `notices: "off"` is enforced by the caller not invoking this at all; a `"settled"`
+ * caller filters `kind: "progress"` out before calling. Returns `undefined` for a notice with
+ * nothing worth showing (a progress step that never resolved to a label).
+ */
+export function renderRunNotice(notice: RunNotice): string | undefined {
+	if (notice.kind === "progress") {
+		return notice.step ? `⏳ ${notice.agent} · ${notice.step}` : undefined;
+	}
+	const durationText = formatDuration(notice.durationMs);
+	switch (notice.status) {
+		case "completed":
+			return `✅ ${notice.agent} 完成 · ${durationText}`;
+		case "cancelled":
+			return `🛑 ${notice.agent} 已取消 · ${durationText}`;
+		default:
+			return `⚠️ ${notice.agent} 失败 · ${durationText}`;
 	}
 }

@@ -153,3 +153,46 @@ describe("classifyExternalOutcome (D4 status table)", () => {
 		}
 	});
 });
+
+describe("codex-cli harness: toProgressLabel (P1a)", () => {
+	it("labels a started command_execution item with its first line, clipped to 80 chars", () => {
+		const line = JSON.stringify({
+			type: "item.started",
+			item: { id: "item_2", type: "command_execution", command: "npm run check\nsed -n '1,10p' file.ts" },
+		});
+		expect(codexCliHarness.toProgressLabel?.(line)).toBe("npm run check");
+
+		const longCommand = `x`.repeat(120);
+		const clipped = JSON.stringify({
+			type: "item.started",
+			item: { id: "item_3", type: "command_execution", command: longCommand },
+		});
+		expect(codexCliHarness.toProgressLabel?.(clipped)).toBe(longCommand.slice(0, 80));
+	});
+
+	it("labels a todo_list update as done/total", () => {
+		const line = JSON.stringify({
+			type: "item.updated",
+			item: {
+				id: "item_1",
+				type: "todo_list",
+				items: [
+					{ text: "a", completed: true },
+					{ text: "b", completed: true },
+					{ text: "c", completed: false },
+				],
+			},
+		});
+		expect(codexCliHarness.toProgressLabel?.(line)).toBe("待办 2/3");
+	});
+
+	it("returns undefined for agent_message items, garbage, and unrelated event types", () => {
+		expect(
+			codexCliHarness.toProgressLabel?.(
+				JSON.stringify({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "hi" } }),
+			),
+		).toBeUndefined();
+		expect(codexCliHarness.toProgressLabel?.("not json")).toBeUndefined();
+		expect(codexCliHarness.toProgressLabel?.(JSON.stringify({ type: "turn.completed" }))).toBeUndefined();
+	});
+});

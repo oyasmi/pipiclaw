@@ -1,3 +1,4 @@
+import { isRecord } from "../../shared/type-guards.js";
 import {
 	type BuildInvocationResult,
 	detectExistingFlags,
@@ -154,5 +155,33 @@ export const codexCliHarness: ExternalHarness = {
 			stderrTail: input.stderrTail,
 			errorMessage,
 		};
+	},
+
+	// P1a: the two item types worth surfacing mid-run — the shell command a step is currently
+	// running, and todo-list progress. `agent_message`/everything else has nothing to show before
+	// the run is over.
+	toProgressLabel(line: string): string | undefined {
+		let event: unknown;
+		try {
+			event = JSON.parse(line.trim());
+		} catch {
+			return undefined;
+		}
+		if (typeof event !== "object" || event === null) return undefined;
+		const record = event as Record<string, unknown>;
+		if (record.type !== "item.started" && record.type !== "item.updated") return undefined;
+		const item = record.item as Record<string, unknown> | undefined;
+		if (!item) return undefined;
+		if (item.type === "command_execution" && typeof item.command === "string") {
+			const firstLine = item.command.split("\n")[0]?.trim();
+			return firstLine ? firstLine.slice(0, 80) : undefined;
+		}
+		if (item.type === "todo_list" && Array.isArray(item.items)) {
+			const total = item.items.length;
+			if (total === 0) return undefined;
+			const done = item.items.filter((entry) => isRecord(entry) && entry.completed === true).length;
+			return `待办 ${done}/${total}`;
+		}
+		return undefined;
 	},
 };

@@ -32,4 +32,12 @@ export interface ChannelEvent {
 		taskId: string;
 		dispatchId: string;
 	};
+	/**
+	 * Purely a display hint: `"awaited"` marks a synthetic wake a human is actually waiting on (a
+	 * delegation or background job finishing), as opposed to an autonomous check-in (task-driver
+	 * polling, a scheduled event) that normally has nothing to say. The runtime uses it to decide
+	 * whether the resulting turn renders progress or stays silent until a final answer — it must
+	 * never gate task activation or any other trust decision; that stays on `internalWake` alone.
+	 */
+	presentation?: "awaited";
 }

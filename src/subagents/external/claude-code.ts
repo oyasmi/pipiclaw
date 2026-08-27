@@ -219,4 +219,23 @@ export const claudeCodeHarness: ExternalHarness = {
 			errorMessage,
 		};
 	},
+
+	// P1a: the first tool_use block in a streamed assistant message names the step currently
+	// running. Text-only assistant messages (reasoning, the final answer) have nothing to show.
+	toProgressLabel(line: string): string | undefined {
+		let event: unknown;
+		try {
+			event = JSON.parse(line.trim());
+		} catch {
+			return undefined;
+		}
+		if (!isRecord(event) || event.type !== "assistant" || !isRecord(event.message)) return undefined;
+		const parts = Array.isArray(event.message.content) ? event.message.content : [];
+		for (const part of parts) {
+			if (isRecord(part) && part.type === "tool_use" && typeof part.name === "string") {
+				return part.name;
+			}
+		}
+		return undefined;
+	},
 };

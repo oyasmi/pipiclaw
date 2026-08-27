@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import { getChannelJobManager } from "../src/agent/job-manager.js";
 import type { AgentRunner } from "../src/agent/types.js";
 import type { Executor } from "../src/executor.js";
@@ -100,6 +100,27 @@ async function waitingTask(workspaceDir: string, channelId: string, taskId: stri
 					...createDefaultTaskControl(),
 					waitingFor: kind === "job" ? "job" : "external-signal",
 				},
+			},
+			`# ${taskId}\n`,
+		),
+	);
+	return channelDir;
+}
+
+/** P3-1: a task that finished and was archived before its delegation's wake arrived — nobody but
+ *  this wake's own turn will ever look at the result. `readStoredTask` (non-archive-including,
+ *  the same call `isTaskActivelyDriven` makes) cannot see it here, same as a task that never
+ *  existed at all. */
+async function doneTask(workspaceDir: string, channelId: string, taskId: string) {
+	const channelDir = join(workspaceDir, channelId);
+	await writeFile(
+		join(channelDir, "tasks", "archive", `${taskId}.md`),
+		renderTaskDocument(
+			{
+				status: "active",
+				control: createDefaultTaskControl(),
+				outcome: "completed",
+				closedAt: "2026-01-01T00:00:00+08:00",
 			},
 			`# ${taskId}\n`,
 		),
@@ -259,5 +280,69 @@ describe("runtime structured wake delivery", () => {
 			expect((await readStoredTask(channelDir, taskId))?.fields.status).toBe("active");
 			await harness.runtime.shutdown();
 		}
+	});
+
+	it("still runs a normal turn for a job/subagent wake whose task already finished (P3-1)", async () => {
+		for (const kind of ["job", "subagent"] as const) {
+			const harness = await createHarness(`done_${kind}`);
+			const taskId = `T-done-${kind}`;
+			await doneTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId);
+			const wake = await createWake(harness, kind, taskId);
+
+			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
+			// The task could not be activated (it isn't `waiting`) and nothing else is driving it
+			// (it isn't `active` either) — dropping this wake would lose the result for good, so it
+			// must still reach a normal turn instead of the old unconditional early return.
+			expect(harness.fakeRunner.run, kind).toHaveBeenCalledOnce();
+			await harness.runtime.shutdown();
+		}
+	});
+
+	it("drops a job/subagent wake without a turn when the task is already active (a sibling wake got there first)", async () => {
+		for (const kind of ["job", "subagent"] as const) {
+			const harness = await createHarness(`active_${kind}`);
+			const taskId = `T-active-${kind}`;
+			const channelDir = await waitingTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId, kind);
+			// Simulate a sibling wake (K-way fan-out) already having activated the task.
+			await writeFile(
+				join(channelDir, "tasks", `${taskId}.md`),
+				renderTaskDocument({ status: "active", control: createDefaultTaskControl() }, `# ${taskId}\n`),
+			);
+			const wake = await createWake(harness, kind, taskId);
+
+			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
+			expect(harness.fakeRunner.run, kind).not.toHaveBeenCalled();
+			await harness.runtime.shutdown();
+		}
+	});
+
+	it("renders progress for an 'awaited' synthetic wake, and stays silent for an ordinary background one (P0-2)", async () => {
+		const harness = await createHarness("presentation");
+		const awaited: DingTalkEvent = {
+			type: "dm",
+			channelId: harness.channelId,
+			user: "SUBAGENT",
+			userName: "SUBAGENT",
+			text: "[SUBAGENT:run-x] Delegation finished: completed (1s).",
+			ts: "1",
+			conversationType: "1",
+			dispatchId: "subagent:presentation:run-x:done",
+			presentation: "awaited",
+		};
+		await harness.runtime.handler.handleEvent(awaited, harness.bot as unknown as DingTalkBot, true);
+		expect(harness.fakeRunner.run).toHaveBeenCalledOnce();
+		const runMock = harness.fakeRunner.run as unknown as Mock;
+		expect(runMock.mock.calls[0]?.[0]?.progressStyle).not.toBe("none");
+
+		const background: DingTalkEvent = {
+			...awaited,
+			text: "background check-in",
+			dispatchId: "task-driver:presentation:check",
+			presentation: undefined,
+		};
+		await harness.runtime.handler.handleEvent(background, harness.bot as unknown as DingTalkBot, true);
+		expect(harness.fakeRunner.run).toHaveBeenCalledTimes(2);
+		expect(runMock.mock.calls[1]?.[0]?.progressStyle).toBe("none");
+		await harness.runtime.shutdown();
 	});
 });
