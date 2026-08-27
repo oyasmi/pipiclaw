@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.9.2-beta.2] - 2026-08-27
+
 ### 变更
 
 - 将 pi 依赖组（`pi-ai`、`pi-agent-core`、`pi-coding-agent`、`pi-tui`）升级至 `0.84.3`。TUI 改用 `TuiMainScreen`，并显式关闭 LaTeX 渲染以保持旧显示语义；模型切换在 fallback 与会话重建场景下保持 pi 0.83 的 thinking 语义。
