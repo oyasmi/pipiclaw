@@ -22,7 +22,8 @@ import {
 	ProcessTerminal,
 	type SlashCommand,
 	Text,
-	TUI,
+	type TUI,
+	TuiMainScreen,
 } from "@earendil-works/pi-tui";
 import { bold, cyan, dim, gray, italic, red, strikethrough, underline, yellow } from "./colors.js";
 import type { Frontend, FrontendCallbacks } from "./renderer.js";
@@ -75,7 +76,7 @@ export class PiTuiFrontend implements Frontend {
 	private spinnerShown = false;
 
 	constructor(options: PiTuiFrontendOptions = {}) {
-		this.ui = new TUI(new ProcessTerminal(), true);
+		this.ui = new TuiMainScreen(new ProcessTerminal(), true);
 		this.editor = new Editor(this.ui, EDITOR_THEME, { paddingX: 1 });
 		this.loader = new Loader(
 			this.ui,
@@ -140,7 +141,7 @@ export class PiTuiFrontend implements Frontend {
 	}
 
 	showFinal(markdown: string): void {
-		this.transcript.addChild(new Markdown(markdown, 1, 1, MARKDOWN_THEME));
+		this.transcript.addChild(new Markdown(markdown, 1, 1, MARKDOWN_THEME, undefined, { renderLatex: false }));
 		// The turn's progress becomes permanent scrollback; stop tracking it so a
 		// later clearProgress cannot retract it.
 		this.turnProgress = [];

@@ -4,6 +4,10 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- Upgraded the pi dependency group (`pi-ai`, `pi-agent-core`, `pi-coding-agent`, and `pi-tui`) to `0.84.3`. The TUI now uses `TuiMainScreen` and explicitly disables LaTeX rendering to preserve the previous display behavior. Model switches retain pi 0.83 thinking semantics across fallback and session rebuilds.
+
 ## [0.9.2-beta.1] - 2026-08-27
 
 ### Added

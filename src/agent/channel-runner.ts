@@ -128,13 +128,68 @@ function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsMana
 	return SDKSettingsManager.inMemory({
 		defaultProvider: manager.getDefaultProvider(),
 		defaultModel: manager.getDefaultModel(),
-		defaultThinkingLevel: manager.getDefaultThinkingLevel(),
+		defaultThinkingLevel: manager.getDefaultThinkingLevel() ?? DEFAULT_MAIN_THINKING_LEVEL,
 		compaction: manager.getCompactionSettings(),
 		retry: manager.getRetrySettings(),
 	});
 }
 
 const DEFAULT_MAIN_THINKING_LEVEL: ThinkingLevel = "medium";
+
+/** Apply the pi 0.83 source-model thinking compatibility branch to one real AgentSession. */
+export async function setModelWithThinkingPreservation(
+	session: AgentSession,
+	manager: SDKSettingsManager,
+	model: Model<Api>,
+): Promise<void> {
+	const source = session.model;
+	if (!source?.reasoning) {
+		await session.setModel(model);
+		return;
+	}
+	const previousDefault = manager.getDefaultThinkingLevel();
+	manager.setDefaultThinkingLevel(session.thinkingLevel);
+	try {
+		await session.setModel(model);
+	} finally {
+		manager.setDefaultThinkingLevel(previousDefault ?? DEFAULT_MAIN_THINKING_LEVEL);
+	}
+}
+
+export function setThinkingLevelWithConditionalPersist(session: AgentSession, level: ThinkingLevel): void {
+	const before = session.thinkingLevel;
+	session.setThinkingLevel(level);
+	const effective = session.thinkingLevel;
+	if (effective === before) return;
+	if (!session.model?.reasoning && effective === "off") return;
+	session.setThinkingLevel(effective, { persist: true });
+}
+
+export function cycleThinkingLevelWithConditionalPersist(session: AgentSession): ThinkingLevel | undefined {
+	const before = session.thinkingLevel;
+	const next = session.cycleThinkingLevel();
+	const effective = session.thinkingLevel;
+	if (next && effective !== before && (session.model?.reasoning || effective !== "off")) {
+		session.setThinkingLevel(effective, { persist: true });
+	}
+	return next;
+}
+
+export function initializeThinkingLevelCompat(
+	agent: Agent,
+	model: Model<Api>,
+	sessionManager: SessionManager,
+	configuredDefault: ThinkingLevel | undefined,
+): ThinkingLevel {
+	const branch = sessionManager.getBranch();
+	const hasThinkingEntry = branch.some((entry) => entry.type === "thinking_level_change");
+	const historical = sessionManager.buildSessionContext().thinkingLevel as ThinkingLevel;
+	const requested = hasThinkingEntry ? historical : (configuredDefault ?? DEFAULT_MAIN_THINKING_LEVEL);
+	const effective = clampThinkingLevel(model, requested);
+	agent.state.thinkingLevel = effective;
+	if (!hasThinkingEntry) sessionManager.appendThinkingLevelChange(effective);
+	return effective;
+}
 
 /**
  * Ceilings for the two awaited steps of a session-resource reload. Both reach
@@ -166,6 +221,8 @@ export class ChannelRunner implements AgentRunner {
 	 */
 	private readonly projectScope: ProjectScope;
 	private session!: AgentSession;
+	/** Settings manager owned by the currently bound AgentSession. */
+	private sessionSettingsManager!: SDKSettingsManager;
 	private agent: Agent;
 	private sessionManager: SessionManager;
 	private readonly settingsManager: PipiclawSettingsManager;
@@ -558,7 +615,7 @@ export class ChannelRunner implements AgentRunner {
 				getCurrentModelRef: () => formatModelReference(this.session.model ?? this.activeModel),
 				resolveFallbackModel: () => this.resolveFallbackModel(),
 				setModel: async (model) => {
-					await this.session.setModel(model);
+					await this.setModelWithThinkingPreservation(model);
 				},
 				notifySwitch: (from, to, errorSummary) => {
 					fallbackTargetRef = to;
@@ -1168,12 +1225,24 @@ export class ChannelRunner implements AgentRunner {
 			return;
 		}
 		try {
-			await this.session.setModel(this.activeModel);
+			await this.setModelWithThinkingPreservation(this.activeModel);
 			this.primaryFailedAt = null;
 			log.logInfo(`[${this.channelId}] Restored primary model ${formatModelReference(this.activeModel)}`);
 		} catch (err) {
 			log.logWarning(`[${this.channelId}] Failed to restore primary model`, errorMessage(err));
 		}
+	}
+
+	private async setModelWithThinkingPreservation(model: Model<Api>): Promise<void> {
+		await setModelWithThinkingPreservation(this.session, this.sessionSettingsManager, model);
+	}
+
+	private setThinkingLevelCompat(level: ThinkingLevel): void {
+		setThinkingLevelWithConditionalPersist(this.session, level);
+	}
+
+	private cycleThinkingLevelCompat(): ThinkingLevel | undefined {
+		return cycleThinkingLevelWithConditionalPersist(this.session);
 	}
 
 	/**
@@ -1221,10 +1290,11 @@ export class ChannelRunner implements AgentRunner {
 
 		const initialResourceLoader = this.createResourceLoader();
 		const baseToolsOverride = Object.fromEntries(this.currentTools.map((tool) => [tool.name, tool]));
+		this.sessionSettingsManager = asSdkSettingsManager(this.settingsManager);
 		this.session = new AgentSession({
 			agent: this.agent,
 			sessionManager: this.sessionManager,
-			settingsManager: asSdkSettingsManager(this.settingsManager),
+			settingsManager: this.sessionSettingsManager,
 			cwd: this.projectScope.projectRoot,
 			modelRuntime: this.modelRuntime,
 			resourceLoader: initialResourceLoader,
@@ -1445,11 +1515,11 @@ export class ChannelRunner implements AgentRunner {
 					getSessionStats: () => this.session.getSessionStats(),
 					getThinkingLevel: () => this.session.thinkingLevel,
 					getAvailableThinkingLevels: () => this.session.getAvailableThinkingLevels(),
-					setThinkingLevel: (level) => this.session.setThinkingLevel(level),
-					cycleThinkingLevel: () => this.session.cycleThinkingLevel(),
+					setThinkingLevel: (level) => this.setThinkingLevelCompat(level),
+					cycleThinkingLevel: () => this.cycleThinkingLevelCompat(),
 					getLastResponseModel: () => getLastAssistantUsage(this.session.messages)?.responseModel,
 					switchModel: async (model) => {
-						await this.session.setModel(model);
+						await this.setModelWithThinkingPreservation(model);
 						this.activeModel = model;
 						// Manual /model switch redefines the preferred model and clears fallback state.
 						this.primaryFailedAt = null;
@@ -1507,18 +1577,7 @@ export class ChannelRunner implements AgentRunner {
 	 * clamped to the selected model before the session starts.
 	 */
 	private initializeThinkingLevel(agent: Agent, model: Model<Api>, sessionManager: SessionManager): void {
-		const branch = sessionManager.getBranch();
-		const hasThinkingEntry = branch.some((entry) => entry.type === "thinking_level_change");
-		const sessionThinkingLevel = sessionManager.buildSessionContext().thinkingLevel as ThinkingLevel;
-		const requestedLevel = hasThinkingEntry
-			? sessionThinkingLevel
-			: (this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_MAIN_THINKING_LEVEL);
-		const effectiveLevel = clampThinkingLevel(model, requestedLevel);
-
-		agent.state.thinkingLevel = effectiveLevel;
-		if (!hasThinkingEntry) {
-			sessionManager.appendThinkingLevelChange(effectiveLevel);
-		}
+		initializeThinkingLevelCompat(agent, model, sessionManager, this.settingsManager.getDefaultThinkingLevel());
 	}
 
 	private createSessionRuntime(
@@ -1539,16 +1598,18 @@ export class ChannelRunner implements AgentRunner {
 		});
 		this.initializeThinkingLevel(agent, this.activeModel, sessionManager);
 		const resourceLoader = this.createResourceLoader();
+		const sessionSettingsManager = asSdkSettingsManager(this.settingsManager);
 		const session = new AgentSession({
 			agent,
 			sessionManager,
-			settingsManager: asSdkSettingsManager(this.settingsManager),
+			settingsManager: sessionSettingsManager,
 			cwd: this.projectScope.projectRoot,
 			modelRuntime: this.modelRuntime,
 			resourceLoader,
 			baseToolsOverride: Object.fromEntries(tools.map((tool) => [tool.name, tool])),
 			sessionStartEvent,
 		});
+		this.sessionSettingsManager = sessionSettingsManager;
 		return { agent, session, resourceLoader };
 	}
 
