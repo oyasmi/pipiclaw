@@ -294,7 +294,11 @@ function formatRoleSummaryLine(agent: SubAgentConfig): string {
 	const kind = agent.runtime === "external" ? `外部/${agent.harness}` : "内置";
 	const mutates = agent.mutates ?? (agent.tools.includes("write") || agent.tools.includes("edit") ? "write" : "read");
 	const unavailable = agent.unavailable ? ` — ⚠ 不可用：${agent.unavailable}` : "";
-	return `- \`${agent.name}\` (${kind}, ${mutates}) — ${agent.description}${unavailable}`;
+	const modelLabel =
+		agent.runtime === "external" ? (agent.externalModelRef ?? "CLI 决定") : (agent.modelRef ?? "默认");
+	const thinkingLabel = agent.thinkingLevel ?? (agent.runtime === "external" ? "未设置" : "默认 medium");
+	// Keyless by design: the four positions are fixed — runtime, mutates, model, thinking.
+	return `- \`${agent.name}\` (${kind}, ${mutates}, ${modelLabel}, ${thinkingLabel}) — ${agent.description}${unavailable}`;
 }
 
 function formatRoleDetail(agent: SubAgentConfig): string {
@@ -309,7 +313,8 @@ function formatRoleDetail(agent: SubAgentConfig): string {
 	lines.push(`- mutates：${agent.mutates ?? "(未声明，由 tools 推断)"}`);
 	if (agent.runtime === "internal") {
 		lines.push(
-			`- 模型：${agent.modelRef ?? "(默认)"}`,
+			`- model：${agent.modelRef ?? "默认"}`,
+			`- thinking：${agent.thinkingLevel ?? "默认 medium"}`,
 			`- tools：${agent.tools.join(", ") || "(none)"}`,
 			`- 预算：maxTurns=${agent.maxTurns} maxToolCalls=${agent.maxToolCalls} maxWallTimeSec=${agent.maxWallTimeSec} bashTimeoutSec=${agent.bashTimeoutSec}`,
 			`- contextMode：${agent.contextMode}，memory：${agent.memory}`,
@@ -319,7 +324,8 @@ function formatRoleDetail(agent: SubAgentConfig): string {
 			`- command：\`${agent.command ?? ""}\`${agent.shell ? "（通过 shell 执行）" : ""}`,
 			`- maxWallTimeSec：${agent.maxWallTimeSec}`,
 		);
-		if (agent.externalModelRef) lines.push(`- 模型：${agent.externalModelRef}`);
+		lines.push(`- model：${agent.externalModelRef ?? "CLI 决定"}`);
+		lines.push(`- thinking：${agent.thinkingLevel ?? "未设置（verify 派发默认 medium）"}`);
 		// spec 042 D4: contextMode/memory are effective for external roles too (memory 默认 none，
 		// 显式声明 session/relevant 才会把频道会话状态发给外部进程) — 显示出来而不是只在内置分支里说明。
 		lines.push(`- contextMode：${agent.contextMode}，memory：${agent.memory}`);

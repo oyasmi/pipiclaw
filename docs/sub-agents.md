@@ -271,8 +271,17 @@ maxWallTimeSec: 3600
 /subagents show <runId>         # 完整记录、实际 argv、stderr 尾部
 /subagents output <runId>       # 该 run 的文本产出（output.md 尾部）
 /subagents cancel <runId|all>   # 直接杀进程组 / abort，不经过模型；all 终止本频道所有在途 run
-/subagents roles [name]         # 角色目录；带 name 查看单个角色详情（tools、预算、system prompt……）
+/subagents roles [name]         # 角色目录；带 name 查看单个角色详情（runtime、mutates、model、thinking、tools、预算、system prompt……）
 ```
+
+`/subagents roles` 的列表行中，括号内固定按 `runtime`、`mutates`、`model`、`thinking` 四个位置显示值，不带键名。未声明时，内置角色的 `model` 使用 `默认`、`thinking` 使用 `默认 medium`；外部角色的 `model` 使用 `CLI 决定`、`thinking` 使用 `未设置`。例如：
+
+```text
+- `builder` (外部/codex-cli, write, gpt-5.5, high) — 高强度疑难实现…
+- `explorer` (内置, read, openai-codex/gpt-5.4, 默认 medium) — 轻量只读探索
+```
+
+`/subagents roles <name>` 详情视图始终渲染 `model` 与 `thinking` 两行，内置和外部角色都遵循上述占位词。外部角色未声明 `thinkingLevel` 时，详情中的 `thinking` 行显示 `未设置（verify 派发默认 medium）`：普通 `work` 委派不由 runtime 代设推理强度，只有 `purpose=verify` 才落到 `medium`；列表视图仍只显示 `未设置`。
 
 `runId` 是短小可读的 `run_` + 6 位字符（例如 `run_a1b2c3`），不再是派发它的那次工具调用自身的 id（后者在某些 provider 上是一长串 `call_…|fc_…` 复合 id）。命令支持不带 `run_` 前缀的简写，只要能唯一匹配即可，例如 `/subagents show a1b2c3`。
 

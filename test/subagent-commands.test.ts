@@ -29,8 +29,30 @@ const builderRole = {
 	runtime: "external" as const,
 	harness: "codex-cli" as const,
 	command: "codex exec",
+	externalModelRef: "gpt-5.5",
+	thinkingLevel: "high" as const,
 	mutates: "write" as const,
 	unavailable: 'executable "codex" was not found on PATH',
+};
+
+const internalRoleWithModel = {
+	...builderRole,
+	name: "internal-with-model",
+	runtime: "internal" as const,
+	harness: undefined,
+	command: undefined,
+	externalModelRef: undefined,
+	thinkingLevel: undefined,
+	modelRef: "openai-codex/gpt-5.4",
+	tools: ["read" as const],
+	mutates: "read" as const,
+	unavailable: undefined,
+};
+
+const internalRoleWithoutModel = {
+	...internalRoleWithModel,
+	name: "internal-without-model",
+	modelRef: undefined,
 };
 
 describe("handleSubagentsCommand", () => {
@@ -258,6 +280,7 @@ describe("handleSubagentsCommand", () => {
 		});
 		expect(response).toContain("外部");
 		expect(response).toContain("builder");
+		expect(response).toContain("(外部/codex-cli, write, gpt-5.5, high)");
 		expect(response).toContain("不可用");
 	});
 
@@ -270,7 +293,41 @@ describe("handleSubagentsCommand", () => {
 			discovery: { directory: "/workspace/sub-agents", warnings: [], agents: [builderRole] },
 		});
 		expect(response).toContain("codex exec");
+		expect(response).toContain("- model：gpt-5.5");
+		expect(response).toContain("- thinking：high");
 		expect(response).toContain("system prompt");
+	});
+
+	it("roles lists model and thinking defaults for internal roles", async () => {
+		configureSubAgentRuntime({});
+		const channelId = `dm_cmd_roles_internal_${Date.now()}`;
+		const response = await handleSubagentsCommand({
+			args: "roles",
+			channelId,
+			discovery: {
+				directory: "/workspace/sub-agents",
+				warnings: [],
+				agents: [internalRoleWithModel, internalRoleWithoutModel],
+			},
+		});
+		expect(response).toContain("openai-codex/gpt-5.4, 默认 medium");
+		expect(response).toContain("默认, 默认 medium");
+	});
+
+	it("roles <name> shows model and thinking defaults for an internal role's detail", async () => {
+		configureSubAgentRuntime({});
+		const channelId = `dm_cmd_role_detail_internal_${Date.now()}`;
+		const response = await handleSubagentsCommand({
+			args: "roles internal-with-model",
+			channelId,
+			discovery: {
+				directory: "/workspace/sub-agents",
+				warnings: [],
+				agents: [internalRoleWithModel],
+			},
+		});
+		expect(response).toContain("- model：openai-codex/gpt-5.4");
+		expect(response).toContain("- thinking：默认 medium");
 	});
 
 	it("roles falls back to a detached discovery loader when no runner is active", async () => {

@@ -4,6 +4,10 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- `/subagents roles` now shows each role's `model` and `thinkingLevel` in both list and detail views. List rows use four fixed unlabeled positions—`runtime`, `mutates`, `model`, and `thinking`—with raw values or self-explanatory placeholders (`default`, `CLI decides`, `default medium`, `not set`) as applicable. The external role model line in the detail view is now always rendered instead of only when declared: a declared value is shown as-is, while `CLI decides` identifies the CLI as the source when it is omitted. Internal roles show the effective `medium` default when `thinkingLevel` is omitted, while external `work` dispatches remain unset and only `verify` falls back to `medium`.
+
 ## [0.9.2-beta.2] - 2026-08-27
 
 ### Changed

@@ -4,6 +4,10 @@
 
 ## [未发布]
 
+### 变更
+
+- `/subagents roles` 的列表和详情现在都会显示角色的 `model` 与 `thinkingLevel`。列表行的括号内固定按 `runtime`、`mutates`、`model`、`thinking` 四个无键位置显示原始值或自解释占位词（内置 `默认`/`默认 medium`，外部 `CLI 决定`/`未设置`）；详情视图的外部角色 `model` 行从仅在声明时显示改为始终显示，已声明时显示原值，未声明时显示 `CLI 决定` 以表明由 CLI 决定。内置角色未声明 `thinkingLevel` 时显示实际生效的 `medium`；外部 `work` 委派保持不设置，只有 `verify` 派发使用 `medium`。
+
 ## [0.9.2-beta.2] - 2026-08-27
 
 ### 变更
