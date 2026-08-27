@@ -72,7 +72,7 @@ order: 60
 
 取回后核对**真实文件、diff 和测试结果**。执行者的完成声明和自验只是第一层证据，代替不了你的独立检查——外部 Agent 尤其如此，它判定"完成"和"通过"的标准不受本 runtime 约束。
 
-`purpose=verify` 的验收者必须是 `mutates: read` 的角色；声明 `mutates: write` 的角色和 `exec` harness 会被 runtime 直接拒绝，不用自己判断。但**过了这道门不等于结论有结构性保证**：attestation 只有在内置角色、且它的 `tools` 里没有 `bash` 时才标 `enforced`（`write`/`edit` 被结构性移除）；带 `bash` 的内置角色和所有外部角色都标 `advisory`——`bash` 一样能写文件。看到 `advisory` 就按风险抽查，不要看见 `Verdict: PASS` 就放行。
+`purpose=verify` 的验收者可以声明 `mutates: write`，这样它会在验证期间持有目标工作区的独占 lease，并允许运行可能生成临时产物的测试/构建；但这类 attestation 是 `advisory`，不是完全只读证明。`exec` harness 仍因没有协议终态而被 runtime 直接拒绝。**过了准入门也不等于结论有结构性保证**：内置角色只有在声明 `mutates: read` 且 `tools` 里没有 `bash` 时才标 `enforced`（`write`/`edit` 被结构性移除）；带 `bash` 的内置角色、写 verifier 和所有外部角色都标 `advisory`——`bash` 一样能写文件。看到 `advisory` 就按风险抽查，不要看见 `Verdict: PASS` 就放行。协议禁止 verifier 修改被验收实现或为了通过测试而修代码。
 
 让验收者只判断、不顺手改产物；改了就得重新验收（细则见 `task-driving.md`）。
 

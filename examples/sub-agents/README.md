@@ -58,9 +58,9 @@ reviewer 发现的问题回流给产出角色；verifier 失败回流给 builder
 
 `planner` 用 Claude 的 `--permission-mode plan`，`reviewer` / `scout` 用 Codex 的 `--sandbox read-only`；三者的 `mutates: read` 都有目标 CLI 的权限模式支撑，而不只是提示词声明。它们不占工作区写锁，但评审仍应针对稳定的 diff / commit，不要一边让 builder 改同一工作树、一边评审移动中的目标。
 
-`reviewer` 的完整输出由 runtime 自动保存在 run 的 `output.md`，无需为了“落盘报告”给它工作区写权限。它可以承担 `purpose=verify`；runtime 会追加验收协议并检查工作区 subject 未变化。不过外部 attestation 仍是 `advisory`，而且只读沙箱会阻止产生工作区构建产物的测试，主代理需要按风险补充抽查或另派 verifier。
+`reviewer` 的完整输出由 runtime 自动保存在 run 的 `output.md`，无需为了“落盘报告”给它工作区写权限。它可以承担不产生工作区写入的 `purpose=verify` 检查；runtime 会追加验收协议并检查工作区 subject 未变化。需要运行会生成产物的测试或构建时，应另派 `verifier`；外部 attestation 仍是 `advisory`，主代理需要按风险补充抽查。
 
-`verifier`、`worker`、`documenter` 使用 `--sandbox workspace-write`：足以在 checkout 和系统临时目录中生成测试或文档产物，同时不授予任意宿主文件访问。模板不让这些角色操作 Git 历史或外部系统；如任务确实需要网络、额外可写目录或更高权限，请复制角色后按目标 CLI 的能力最小化放宽，而不是把通用模板整体改成无沙箱。
+`verifier`、`worker`、`documenter` 使用 `--sandbox workspace-write`：足以在 checkout 和系统临时目录中生成测试或文档产物，同时不授予任意宿主文件访问。`verifier` 用于 `purpose=verify` 时会持有目标工作区排他写锁，且 attestation 明确是 `advisory`；它可以生成 `.run/`、`coverage/`、`build/`、`dist/` 等约定临时产物，但不得修改被验收实现或既有 untracked 产品文件。模板不让这些角色操作 Git 历史或外部系统；如任务确实需要网络、额外可写目录或更高权限，请复制角色后按目标 CLI 的能力最小化放宽，而不是把通用模板整体改成无沙箱。
 
 `builder` / `builder-hard` 仍用 Claude 的 `--dangerously-skip-permissions`，因为它们需要非交互地完成实现；这是本目录权限最高的默认配置。务必在可信 checkout、最小权限宿主账号中使用。角色文件只声明 `model` 和 `thinkingLevel`，具体的 `--model` / `--effort` 参数由 claude-code harness 自动拼接，不应重复写进 `command`。
 

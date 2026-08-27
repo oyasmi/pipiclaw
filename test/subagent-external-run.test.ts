@@ -1,4 +1,4 @@
-import type { ChildProcess, spawn as nodeSpawn } from "node:child_process";
+import { type ChildProcess, execFileSync, type spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { launchExternalRun } from "../src/subagents/external/run.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
+import { readVerificationAttestation } from "../src/tasks/verification.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spec 040, D1/D3/D4: the external-run orchestrator, driven with a fake `spawn` so the test
@@ -175,6 +176,135 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const outputPath = join(artifactDir, "output.md");
 		expect(readFileSync(outputPath, "utf-8")).toBe("All done.");
 		expect(dispatched[0]?.text).toContain(`Full output: ${outputPath}`);
+	});
+
+	it("persists the pid before post-spawn probes finish", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_ext_launch_handshake";
+		const stateDir = join(workspaceDir, "state");
+		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-ext-handshake");
+		mkdirSync(artifactDir, { recursive: true });
+		configureSubAgentRuntime({ stateDir });
+
+		let probeStartedResolve!: () => void;
+		const probeStarted = new Promise<void>((resolve) => {
+			probeStartedResolve = resolve;
+		});
+		let releaseProbe!: () => void;
+		const probeGate = new Promise<void>((resolve) => {
+			releaseProbe = resolve;
+		});
+		const { spawnFnForInput, child } = makeFakeSpawn({ pid: 73737 });
+		const launchPromise = launchExternalRun({
+			runId: "run-ext-handshake",
+			channelId,
+			label: "persist before probe",
+			agent: "runner",
+			source: "inline",
+			harness: "codex-cli",
+			command: "codex exec",
+			maxWallTimeSec: 60,
+			systemPrompt: "System.",
+			task: "Task.",
+			workingDirectory: workspaceDir,
+			artifactDir,
+			purpose: "work",
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
+			spawnFn: spawnFnForInput,
+			probeCliVersionFn: async () => {
+				probeStartedResolve();
+				await probeGate;
+				return undefined;
+			},
+		});
+
+		await probeStarted;
+		const recordPath = join(stateDir, channelId, "run-ext-handshake.json");
+		await waitFor(() => existsSync(recordPath));
+		const persisted = JSON.parse(readFileSync(recordPath, "utf-8")) as {
+			status?: string;
+			pid?: number;
+		};
+		expect(persisted).toMatchObject({ status: "running", pid: 73737 });
+
+		releaseProbe();
+		await launchPromise;
+		child.emit("close", 0);
+		await waitFor(() => getSubAgentRunManager(channelId).get("run-ext-handshake")?.status !== "running");
+	});
+
+	it("runs a write-capable purpose=verify under the lease and records a commit-stable advisory subject", async () => {
+		const workspaceDir = createTempWorkspace();
+		const projectDir = join(workspaceDir, "project");
+		const channelId = "dm_ext_verify_write";
+		const channelDir = join(workspaceDir, channelId);
+		const runId = "run-ext-verify-write";
+		const artifactDir = join(channelDir, "subagent-artifacts", runId);
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		writeFileSync(
+			join(channelDir, "tasks", "ship.md"),
+			"---\nstatus: active\n---\n# Ship\n\n## DoD\n- checks pass\n",
+		);
+		execFileSync("git", ["-C", projectDir, "init", "-q"], { stdio: "pipe" });
+		execFileSync("git", ["-C", projectDir, "config", "user.email", "test@example.com"], { stdio: "pipe" });
+		execFileSync("git", ["-C", projectDir, "config", "user.name", "Test"], { stdio: "pipe" });
+		writeFileSync(join(projectDir, "README.md"), "checkout\n");
+		execFileSync("git", ["-C", projectDir, "add", "README.md"], { stdio: "pipe" });
+		execFileSync("git", ["-C", projectDir, "commit", "-q", "-m", "baseline"], { stdio: "pipe" });
+
+		const lease = acquireWorkspaceLease({ runId, channelId, workingDirectory: projectDir });
+		expect(lease.ok).toBe(true);
+		const { spawnFnForInput, child } = makeFakeSpawn({ pid: 8181 });
+		configureSubAgentRuntime({ dispatch: () => true });
+		await launchExternalRun({
+			runId,
+			channelId,
+			channelDir,
+			label: "verify build outputs",
+			agent: "verifier",
+			source: "predefined",
+			harness: "codex-cli",
+			command: "codex exec",
+			maxWallTimeSec: 60,
+			systemPrompt: "Verify the result.",
+			task: "Run npm test and npm run build.",
+			workingDirectory: projectDir,
+			artifactDir,
+			purpose: "verify",
+			taskId: "ship",
+			mutates: "write",
+			leaseKey: lease.ok ? lease.leaseKey : undefined,
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
+			spawnFn: spawnFnForInput,
+		});
+
+		const manager = getSubAgentRunManager(channelId);
+		expect(manager.get(runId)?.mutates).toBe("write");
+		expect(acquireWorkspaceLease({ runId: "blocked", channelId, workingDirectory: projectDir }).ok).toBe(false);
+		appendFileSync(
+			join(artifactDir, "events.jsonl"),
+			`${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "Checks passed.\nVERDICT: PASS" } })}\n` +
+				`${JSON.stringify({ type: "turn.completed", thread_id: "thread-verify-write" })}\n`,
+		);
+		child.emit("close", 0);
+		// Observe the terminal transition rather than waiting for the whole settlement promise: the
+		// lease must already be free at the first point a completed run is externally visible.
+		await waitFor(() => manager.get(runId)?.status !== "running");
+
+		const attestation = await readVerificationAttestation(channelDir, runId);
+		expect(attestation).toMatchObject({
+			verdict: "pass",
+			verificationStrength: "advisory",
+			subjectMode: "base-relative",
+		});
+		expect(attestation.subjectBaseCommit).toMatch(/^[a-f0-9]{40,64}$/);
+		expect(attestation.subjectBaselineUntrackedPaths).toEqual([]);
+		const nextLease = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory: projectDir });
+		expect(nextLease.ok).toBe(true);
+		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next");
 	});
 
 	it("drops only pipiclaw's own LLM/DingTalk env vars, keeps others, and records what was dropped (fix plan §4.3)", async () => {

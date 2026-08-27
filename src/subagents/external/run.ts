@@ -14,7 +14,7 @@ import {
 import { splitShellWords } from "../../shared/shell-words.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { createEmptyUsageTotals } from "../../shared/types.js";
-import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
+import { workspaceSubjectSnapshot } from "../../tasks/artifact-subject.js";
 import type { SubAgentThinkingLevel } from "../discovery.js";
 import { getSubAgentRunManager, type RunMutates, type SettleInput } from "../runs.js";
 import { getExternalHarness } from "./registry.js";
@@ -91,6 +91,17 @@ function mergeInvocationWarnings(warnings: string[] | undefined, droppedEnvVars:
 	return warnings ? [...warnings, envWarning] : [envWarning];
 }
 
+/** Close one of the parent-side descriptors without masking the launch error that triggered cleanup. */
+function closeFd(fd: number | undefined): void {
+	if (fd === undefined) return;
+	try {
+		closeSync(fd);
+	} catch {
+		// The child owns duplicated descriptors now; a parent-side close failure must not skip run
+		// settlement or lease release.
+	}
+}
+
 /**
  * The external-run orchestrator (spec 040, D1/D3/D4). One prompt, one short-lived, argv-direct,
  * detached process. The launch order matters (D1): admission and the lease are the caller's job
@@ -141,6 +152,11 @@ export interface LaunchExternalRunInput {
 	securityConfig: SecurityConfig;
 	/** Test seam: inject a fake `child_process.spawn`. */
 	spawnFn?: typeof nodeSpawn;
+	/** Test seam: delay or replace the post-spawn process identity probe. The pid is persisted before
+	 * this probe starts, so a daemon restart cannot mistake a live child for an intent-only run. */
+	readProcessStartTimeFn?: typeof readProcessStartTime;
+	/** Test seam: delay or replace the best-effort CLI version probe. */
+	probeCliVersionFn?: typeof probeCliVersion;
 }
 
 /**
@@ -195,9 +211,13 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 
 	// D9: an external verifier's advisory attestation needs a before/after subject snapshot the
 	// same way the internal path does — taken here, before the process starts, since this is the
-	// earliest point at which the run is committed to running against this workingDirectory.
-	const verifySubjectBefore =
-		input.purpose === "verify" ? await workspaceSubjectHash(input.workingDirectory) : undefined;
+	// earliest point at which the run is committed to running against this workingDirectory. The
+	// fixed base and initial untracked manifest survive a later normal Git commit.
+	const verifySubjectSnapshot =
+		input.purpose === "verify" ? await workspaceSubjectSnapshot(input.workingDirectory) : undefined;
+	const verifySubjectBefore = verifySubjectSnapshot?.hash;
+	const verifyBaseCommit = verifySubjectSnapshot?.baseCommit;
+	const verifyBaselineUntrackedPaths = verifySubjectSnapshot?.baselineUntrackedPaths;
 
 	const argv = input.shell ? [] : splitShellWords(input.command);
 	const invocation = input.shell
@@ -234,6 +254,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		workingDirectory: input.workingDirectory,
 		artifactDir: input.artifactDir,
 		leaseKey: input.leaseKey,
+		mutates: input.mutates,
 	});
 
 	// The final executable/argv/cwd/capability record must be durable before a process can exist.
@@ -272,12 +293,14 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 
 	const eventsPath = join(input.artifactDir, "events.jsonl");
 	const stderrPath = join(input.artifactDir, "stderr.log");
-	let eventsFd: number;
-	let stderrFd: number;
+	let eventsFd: number | undefined;
+	let stderrFd: number | undefined;
 	try {
 		eventsFd = openSync(eventsPath, "a");
 		stderrFd = openSync(stderrPath, "a");
 	} catch (error) {
+		closeFd(eventsFd);
+		closeFd(stderrFd);
 		const reason = `Failed to open output files: ${errorMessage(error)}`;
 		// Spec 042 D2: `announce: false` — this failure happened inside the same tool call that is
 		// still on the stack; the caller reports it directly instead of waking the channel for a
@@ -299,8 +322,8 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			stdio: ["pipe", eventsFd, stderrFd],
 		});
 	} catch (error) {
-		closeSync(eventsFd);
-		closeSync(stderrFd);
+		closeFd(eventsFd);
+		closeFd(stderrFd);
 		const reason = `Failed to launch: ${errorMessage(error)}`;
 		await runManager.settle(input.runId, failedSettleInput(reason), { announce: false });
 		return {
@@ -311,8 +334,8 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	}
 	// The child has its own duped copy of both fds now; ours would otherwise leak across the
 	// lifetime of a long-running daemon dispatching many external runs.
-	closeSync(eventsFd);
-	closeSync(stderrFd);
+	closeFd(eventsFd);
+	closeFd(stderrFd);
 
 	const spawnFailure = await new Promise<Error | undefined>((resolve) => {
 		child.once("error", (error) => resolve(error));
@@ -334,71 +357,110 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	// `printf`) can exit and fire "close" before a listener registered after an async gap ever
 	// gets attached — `EventEmitter` does not replay missed events, so that gap would hang this
 	// run in `running` forever.
+	let childClosed = false;
 	const closePromise = new Promise<number | undefined>((resolve) => {
-		child.once("close", (code) => resolve(code ?? undefined));
+		child.once("close", (code) => {
+			childClosed = true;
+			resolve(code ?? undefined);
+		});
 	});
-	if (cancelledBeforeSpawn) {
+	const deadlineAt = processStartedAt + input.maxWallTimeSec * 1000;
+	// Persist the pid and every recovery input immediately after the spawn handshake. In particular,
+	// do not wait for `ps` or `<cli> --version`: either probe can be slow while the child is already
+	// writing the checkout. The probe results are useful diagnostics, not the launch safety gate.
+	try {
+		await runManager.setLaunched(input.runId, {
+			pid,
+			argv: spawnedArgv,
+			deadlineAt,
+			sessionId: invocation.presetSessionId,
+			// Spec 042 D1: persisted so a restart reconciliation has the same inputs the live watcher
+			// below would — without these, a run that finishes after the daemon disappears would settle
+			// with an inaccurate timeout message, no verify attestation, and an unestimatable duration.
+			verifySubjectBefore,
+			verifyBaseCommit,
+			verifyBaselineUntrackedPaths,
+			maxWallTimeSec: input.maxWallTimeSec,
+			processStartedAt,
+			channelDir: input.channelDir,
+			invocationWarnings: mergeInvocationWarnings(invocation.warnings, envFilterResult.dropped),
+			// Spec 042 D12: distinguishes "the target CLI's schema drifted" from "the agent failed".
+			parserVersion: harness.parserVersion,
+			roleFingerprint: input.roleFingerprint,
+		});
+	} catch (error) {
+		// The child already exists, but its pid could not be made durable. Stop it before
+		// releasing the lease; otherwise a write verifier could continue mutating the checkout
+		// after the caller has observed a launch failure and another writer has entered.
+		await killProcessGroup(pid).catch(() => undefined);
+		await closePromise;
+		const reason = `Failed to persist external launch state: ${errorMessage(error)}`;
+		await runManager.settle(input.runId, failedSettleInput(reason), { announce: false }).catch((settleError) => {
+			log.logWarning(
+				`Failed to settle external run ${input.runId} after launch persistence failed`,
+				errorMessage(settleError),
+			);
+		});
+		throw error;
+	}
+
+	// From this point on cancellation has a real process-group handle. Install it before the
+	// best-effort probes and before the pre-spawn cancellation branch, so a cancel cannot release
+	// the verifier's lease while this child is still able to write.
+	runManager.registerCancelHandle(input.runId, () => {
 		void killProcessGroup(pid);
+	});
+	if (child.stdin) {
+		child.stdin.on("error", () => {}); // EPIPE if the process already exited; harmless.
+		child.stdin.end(stdinContent);
+	}
+	const wallClockTimer = setTimeout(() => {
+		if (childClosed) return;
+		void runManager.markTerminationReason(input.runId, "timeout").then(() => killProcessGroup(pid));
+	}, input.maxWallTimeSec * 1000);
+	wallClockTimer.unref?.();
+
+	if (cancelledBeforeSpawn) {
+		clearTimeout(wallClockTimer);
+		// Do not release the write lease until the spawned child group has received its terminal
+		// signal and emitted close. The placeholder cancellation handle can race the spawn
+		// confirmation; settling first would admit another writer while this verifier was still able
+		// to write.
+		await killProcessGroup(pid);
+		await closePromise;
 		const reason = "Cancelled while the external process was spawning.";
 		await runManager.settle(input.runId, { ...failedSettleInput(reason), status: "cancelled" }, { announce: false });
 		return { ok: false, kind: "cancelled", reason };
 	}
 
 	// The OS-verifiable identity check (D10.3): a restart tells this pid apart from an unrelated
-	// process that later reuses the same number. `undefined` when `ps` itself is unavailable —
-	// restore()/sweep() then fall back to trusting `isProcessAlive` alone. Run alongside the D12
-	// CLI-version probe — neither depends on the other, and both are best-effort/bounded.
-	const [pidStartedAt, cliVersion] = await Promise.all([
-		readProcessStartTime(pid),
-		probeCliVersion(invocation.executable),
-	]);
-	const deadlineAt = processStartedAt + input.maxWallTimeSec * 1000;
-	await runManager.setLaunched(input.runId, {
-		pid,
-		pidStartedAt,
-		argv: spawnedArgv,
-		deadlineAt,
-		sessionId: invocation.presetSessionId,
-		// Spec 042 D1: persisted so a restart reconciliation has the same inputs the live watcher
-		// below would — without these, a run that finishes after the daemon disappears would settle
-		// with an inaccurate timeout message, no verify attestation, and an unestimatable duration.
-		verifySubjectBefore,
-		maxWallTimeSec: input.maxWallTimeSec,
-		processStartedAt,
-		channelDir: input.channelDir,
-		invocationWarnings: mergeInvocationWarnings(invocation.warnings, envFilterResult.dropped),
-		// Spec 042 D12: distinguishes "the target CLI's schema drifted" from "the agent failed".
-		parserVersion: harness.parserVersion,
-		cliVersion,
-		roleFingerprint: input.roleFingerprint,
-	});
+	// process that later reuses the same number. `undefined` when `ps` is unavailable — restore()
+	// treats a conflict as unsafe to signal, while ordinary adoption remains conservative. Run
+	// alongside the D12 CLI-version probe — neither depends on the other, and both are best-effort.
+	const launchMetadataPromise: Promise<void> = Promise.all([
+		Promise.resolve().then(() => (input.readProcessStartTimeFn ?? readProcessStartTime)(pid)),
+		Promise.resolve().then(() => (input.probeCliVersionFn ?? probeCliVersion)(invocation.executable)),
+	])
+		.then(async ([pidStartedAt, cliVersion]) => {
+			await runManager
+				.updateLaunchMetadata(input.runId, { pidStartedAt, cliVersion })
+				.catch((error) =>
+					log.logWarning(`Failed to persist launch probes for run ${input.runId}`, errorMessage(error)),
+				);
+		})
+		.catch((error) => {
+			// The production probes are already best-effort; keep the same property for test seams or
+			// a future host implementation and never leave a spawned child unobserved because metadata
+			// collection failed.
+			log.logWarning(`Failed to collect launch probes for run ${input.runId}`, errorMessage(error));
+		});
 
-	if (child.stdin) {
-		child.stdin.on("error", () => {}); // EPIPE if the process already exited; harmless.
-		child.stdin.end(stdinContent);
-	}
-
-	runManager.registerCancelHandle(input.runId, () => {
-		void killProcessGroup(pid);
-	});
-	// The narrow window between the pre-spawn placeholder handle (claimExternalLaunch) and the
-	// real one just above: a cancel arriving there durably marked `terminationReason` (P1-1) but
-	// had no live process to kill yet. Act on it now.
-	if (runManager.get(input.runId)?.terminationReason === "cancelled") {
-		void killProcessGroup(pid);
-	}
-	// Prompt, same-process enforcement. Restart recovery persists this same deadline and installs
-	// one replacement check only when it actually adopts a still-running process.
-	const wallClockTimer = setTimeout(() => {
-		void runManager.markTerminationReason(input.runId, "timeout").then(() => killProcessGroup(pid));
-	}, input.maxWallTimeSec * 1000);
-	wallClockTimer.unref?.();
-
-	// Deliberately not awaited by the caller (D2: external's sync grace window is 0) — this
-	// continues in the background and settles the run itself once the process exits.
+	// Deliberately attach the close watcher before waiting for probe metadata. A fast child can exit
+	// during that wait; the promise is already listening, and finalization waits for the launch
+	// metadata promise so terminal publication still follows the same safe order.
 	void closePromise.then(async (exitCode) => {
+		await launchMetadataPromise;
 		clearTimeout(wallClockTimer);
-		runManager.clearCancelHandle(input.runId);
 		// Spec 042 D8: this fires on every exit (normal, cancelled, or timed out) as a backup reap —
 		// a cancel/timeout already killed the group via its own call site above. The common case
 		// (nothing left) returns immediately with no signal and no wait; only a genuinely lingering
@@ -408,10 +470,10 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		const durationMs = Date.now() - processStartedAt;
 		const terminationReason = runManager.get(input.runId)?.terminationReason;
 		// Spec 042 D1: parse whatever the process actually wrote *before* applying a cancel/timeout
-		// override, instead of returning early on those two reasons. A run killed for wall-time
-		// budget or cancelled by request may still have produced useful output, usage, and a
-		// resumable session id — `finalizeExternalRun` keeps all of that; only `status` and
-		// `failureReason` get overridden by `terminationReason` (P1-1).
+		// override, instead of returning early on those two reasons. A run killed for wall-time budget
+		// or cancelled by request may still have produced useful output, usage, and a resumable session
+		// id — `finalizeExternalRun` keeps all of that; only `status` and `failureReason` get overridden
+		// by `terminationReason` (P1-1).
 		await finalizeExternalRun(
 			{
 				runId: input.runId,
@@ -427,6 +489,8 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 				terminationReason,
 				maxWallTimeSec: input.maxWallTimeSec,
 				verifySubjectBefore,
+				verifyBaseCommit,
+				verifyBaselineUntrackedPaths,
 			},
 			(settleInput, options) => runManager.settle(input.runId, settleInput, options),
 			{ announce: terminationReason !== "cancelled" },
@@ -434,6 +498,13 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			log.logWarning(`Failed to settle external run ${input.runId}`, errorMessage(error));
 		});
 	});
+	await launchMetadataPromise;
+	// The narrow window between the pre-spawn placeholder handle (claimExternalLaunch) and the
+	// real one just above: a cancel arriving there durably marked `terminationReason` (P1-1) but
+	// had no live process to kill yet. Act on it now.
+	if (runManager.get(input.runId)?.terminationReason === "cancelled") {
+		void killProcessGroup(pid);
+	}
 
 	return { ok: true };
 

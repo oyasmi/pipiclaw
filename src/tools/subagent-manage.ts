@@ -273,9 +273,9 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 				);
 			}
 
-			// Spec 042 D7: verify admission is re-checked against the *current* role config, shared
-			// with the initial dispatch — a role hot-edited to mutates: write since the original run
-			// must not silently take the write lease and dispatch just because it once was read-only.
+			// Verify admission is re-checked against the *current* role config, shared with the initial
+			// dispatch. A write-capable verify follow-up takes the same exclusive lease as any writer;
+			// `exec` remains barred because it has no verification protocol terminal.
 			assertVerifyAdmissible(role, record.purpose, record.workingDirectory);
 
 			// Spec 042 D7: a role hot-edited since the original dispatch (different command, model,
@@ -327,32 +327,31 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			// inside `buildContextualBlocks` — optional here so a caller that only ever exercises
 			// list/cancel is not forced to wire an LLM-backed dependency it will never use. Absent
 			// either, context blocks degrade to none rather than guessing at a model or key.
-			const contextualBlocks =
-				options.getCurrentModel && options.resolveApiKey
-					? await buildContextualBlocks(
-							task,
-							role,
-							{
-								channelDir: options.channelDir,
-								workspaceDir: options.workspaceDir,
-								runtimeContext: { workspaceDir: options.workspaceDir, channelId: options.channelId },
-								getMemoryRecallSettings: options.getMemoryRecallSettings,
-								resolveApiKey: options.resolveApiKey,
-								memoryCandidateStore: options.memoryCandidateStore,
-							},
-							options.getCurrentModel(),
-						)
-					: [];
-			const envelopedTask = buildSubAgentTask(
-				task,
-				role,
-				{ workspaceDir: options.workspaceDir, channelId: options.channelId },
-				contextualBlocks,
-				runContext,
-			);
-
 			let launchResult: ExternalLaunchResult;
 			try {
+				const contextualBlocks =
+					options.getCurrentModel && options.resolveApiKey
+						? await buildContextualBlocks(
+								task,
+								role,
+								{
+									channelDir: options.channelDir,
+									workspaceDir: options.workspaceDir,
+									runtimeContext: { workspaceDir: options.workspaceDir, channelId: options.channelId },
+									getMemoryRecallSettings: options.getMemoryRecallSettings,
+									resolveApiKey: options.resolveApiKey,
+									memoryCandidateStore: options.memoryCandidateStore,
+								},
+								options.getCurrentModel(),
+							)
+						: [];
+				const envelopedTask = buildSubAgentTask(
+					task,
+					role,
+					{ workspaceDir: options.workspaceDir, channelId: options.channelId },
+					contextualBlocks,
+					runContext,
+				);
 				launchResult = await launchExternalRun({
 					runId: newRunId,
 					channelId: options.channelId,

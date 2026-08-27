@@ -27,8 +27,8 @@ export function isVerifiedJobWake(jobs: JobSnapshot[], jobId: string, taskId: st
 /**
  * Same check as `isVerifiedJobWake`, for a `[SUBAGENT:<runId>] ... belongs to task <taskId>.`
  * delegation wake. `settledAt` (rather than `status !== "running"`) is the terminal marker here
- * because it is the one field `SubAgentRunManager.settle()` sets unconditionally and first, before
- * usage/archive/wake side effects — the same idempotency guard the manager itself relies on.
+ * because it is published with the terminal record before usage/archive/wake side effects — the
+ * same idempotency guard the manager itself relies on. A pending settlement intent leaves it unset.
  */
 export function isVerifiedDelegationWake(record: RunRecord | undefined, taskId: string): boolean {
 	return record !== undefined && record.settledAt !== undefined && record.taskId === taskId;

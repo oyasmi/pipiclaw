@@ -13,7 +13,7 @@ import {
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
 	SubAgentRunManager,
 } from "../src/subagents/runs.js";
-import { createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
+import { assertVerifyAdmissible, createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -291,9 +291,76 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		expect(after.ok).toBe(true);
 		releaseWorkspaceLease(after.ok ? after.leaseKey : undefined, "next-run");
 	});
+
+	it("allows a write-capable verifier, holds its lease during execution, and releases it on settlement", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_verify_write_lease";
+		const channelDir = join(workspaceDir, channelId);
+		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		writeFileSync(
+			join(channelDir, "tasks", "ship.md"),
+			"---\nstatus: active\n---\n# Ship\n\n## DoD\n- checks pass\n",
+		);
+		const manager = new SubAgentRunManager(channelId, {});
+		let releasePrompt: (() => void) | undefined;
+		const tool = createSubAgentInlineTool({
+			executor: fakeExecutor,
+			fileStore: createFileStore(),
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			workingDirectory: workspaceDir,
+			channelDir,
+			runtimeContext: { workspaceDir, channelId },
+			getRunManager: () => manager,
+			createWorker: () =>
+				new FakeWorker(
+					(_input, worker) =>
+						new Promise<void>((resolve) => {
+							releasePrompt = () => {
+								const message = createAssistantMessage("Checks passed.\nVERDICT: PASS");
+								worker.state.messages = [message];
+								worker.emit({ type: "message_end", message });
+								resolve();
+							};
+						}),
+				),
+		});
+
+		const resultPromise = tool.execute("verify-write-lease", {
+			systemPrompt: "Run checks.",
+			tools: ["read", "bash"],
+			mutates: "write",
+			task: "Run the acceptance checks.",
+			purpose: "verify",
+			taskId: "ship",
+		});
+		for (let attempt = 0; attempt < 100 && !releasePrompt; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		expect(releasePrompt).toBeDefined();
+		const runningLease = acquireWorkspaceLease({
+			runId: "competing-verify",
+			channelId: "dm_other",
+			workingDirectory: workspaceDir,
+		});
+		expect(runningLease.ok).toBe(false);
+		releasePrompt?.();
+
+		const result = await resultPromise;
+		expect(manager.get(result.details.runId)?.verificationStrength).toBe("advisory");
+		const nextLease = acquireWorkspaceLease({
+			runId: "next-verify",
+			channelId,
+			workingDirectory: workspaceDir,
+		});
+		expect(nextLease.ok).toBe(true);
+		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next-verify");
+	});
 });
 
-describe("subagent tool: purpose=verify guards against external roles that cannot honestly verify (spec 040, D9)", () => {
+describe("subagent tool: purpose=verify admission (D9)", () => {
 	async function makeExternalTool(role: string) {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_lease");
@@ -319,26 +386,15 @@ describe("subagent tool: purpose=verify guards against external roles that canno
 		});
 	}
 
-	it("rejects purpose=verify for a role that declares mutates: write", async () => {
-		const tool = await makeExternalTool(`---
-name: builder
-description: external builder
-runtime: external
-harness: claude-code
-command: claude --dangerously-skip-permissions
-mutates: write
----
-
-Build things.
-`);
-		await expect(
-			tool.execute("ext-verify-1", {
-				agent: "builder",
-				task: "Check it.",
-				purpose: "verify",
-				taskId: "ship",
-			}),
-		).rejects.toThrow(/mutates: write/);
+	it("admits purpose=verify for a role that declares mutates: write", () => {
+		const workspaceDir = createTempWorkspace();
+		expect(() =>
+			assertVerifyAdmissible(
+				{ name: "verifier", mutates: "write", runtime: "external", harness: "claude-code" },
+				"verify",
+				workspaceDir,
+			),
+		).not.toThrow();
 	});
 
 	it("rejects purpose=verify for an exec-harness role even when it declares mutates: read", async () => {

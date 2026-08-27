@@ -47,10 +47,10 @@ task scope 就是 authority：不要扩大目标、渠道、环境或对象范�
 
 1. 只有证据成立后才勾选 DoD / Verification checklist。
 2. 像任何其他委派一样，派发一个 `purpose: verify`、带 `taskId` 的 sub-agent，然后用带 `note` 的 `task_update` 把任务停泊为 `waiting`（不设 wake，`waitingFor: external-signal`）——没有单独的 `request-verification` 动作，也没有 `waiting + waitingFor: verification` 这种状态。
-3. checker 只读检查，结尾返回 `VERDICT: PASS` 或 `VERDICT: FAIL`；完成后 runtime 通过完成唤醒恢复所属 task，依据是 run 记录里的 `taskId`。
-4. 主回合用 `task_verify` 导入 runId；attestation 必须属于当前 task、未改变 workspace，且 contract body hash 与 artifact subject 新鲜。
+3. checker 只判断、不修复被验收实现，结尾返回 `VERDICT: PASS` 或 `VERDICT: FAIL`；需要运行测试/构建时可以使用声明 `mutates: write` 的 verifier，但它会占用目标工作区独占 lease，并以 `advisory` 强度运行。完成后 runtime 通过完成唤醒恢复所属 task，依据是 run 记录里的 `taskId`。
+4. 主回合用 `task_verify` 导入 runId；attestation 必须属于当前 task、未改变受保护 workspace 内容，且 contract body hash 与 artifact subject 新鲜。新 subject 以验证开始时的 `baseCommit` 为基准：正常提交已验收内容不算变化；明确临时产物范围外的新源文件，以及验证开始前已存在的 untracked 产品文件变化，仍会使验收失败。
 5. PASS/FAIL 都恢复 active；PASS 后 complete 仍会重新校验 attestation、contract hash 和 artifact subject。
-6. attestation 标 `advisory` 时（带 `bash` 的内置验收者，以及所有外部验收者），结论只是参考而非结构性保证，仍要按风险抽查；判定强度的来源见 `agent-delegation.md`。
+6. attestation 标 `advisory` 时（带 `bash` 的内置验收者、声明 `mutates: write` 的 verifier，以及所有外部验收者），结论只是参考而非结构性保证，仍要按风险抽查；判定强度的来源见 `agent-delegation.md`。
 
 PASS 绑定 Goal/DoD/Manual/Verification 这段 contract，不绑定 Plan、Current Cycle 或 History。改动 contract 或被验收产物后必须重新验收；不要让 verifier 顺手修实现。
 

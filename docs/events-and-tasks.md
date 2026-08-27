@@ -469,9 +469,9 @@ complete 会写 summary/evidence、清理 task-owned events、计算下一 occur
 
 1. 完成 DoD checklist 后，像任何其他委派一样派发一个 `subagent purpose=verify`、带 `taskId` 的 sub-agent。
 2. 用带 `note` 的 `task_update` 把任务停泊为 `waiting`（不设 wake），和其他委派完全同一套停泊/唤醒机制——没有单独的 `request-verification` 动作，也没有 `waiting + waitingFor: verification` 这个特殊状态。
-3. checker 只读检查并写 attestation；完成后 runtime 通过完成唤醒恢复所属 task。
+3. checker 只判断、不修复被验收实现并写 attestation；需要运行会生成临时产物的测试/构建时，可使用声明 `mutates: write` 的 verifier，它会持有目标工作区独占 lease，结论为 `advisory`。完成后 runtime 通过完成唤醒恢复所属 task。
 4. Agent 调用 `task_verify` 导入 runId；PASS/FAIL 都恢复 active。`task_verify` 认的是 attestation 文件里的 `taskId`，不是任务当时的状态字符串。
-5. complete 重新检查 attestation、contract hash 和 artifact subject。普通 progress/Plan 改动不应破坏 PASS；Goal/DoD/Manual/Verification 或产物变更必须重验。
+5. complete 重新检查 attestation、contract hash 和 artifact subject。新 subject 固定验证开始时的 `baseCommit`，所以提交同一份已验收内容不应破坏 PASS；Goal/DoD/Manual/Verification、tracked 内容、既有 untracked 产品文件或范围外新文件变更必须重验。
 
 无 verification requirement 的任务不会产生额外 checker turn。
 

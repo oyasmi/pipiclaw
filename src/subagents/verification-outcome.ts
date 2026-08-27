@@ -45,7 +45,7 @@ export function resolveVerificationOutcome(input: ResolveVerificationOutcomeInpu
 	const evidence = !comparable
 		? "Could not determine whether the workspace changed (not a Git checkout, or `git status` failed); refusing to record a PASS without that evidence."
 		: workspaceChanged
-			? "Verifier changed tracked workspace files; the attestation is invalid."
+			? "Verifier changed protected workspace content; the attestation is invalid."
 			: !declaredVerdict
 				? "Verifier did not emit the required final VERDICT marker."
 				: input.finalText.trim().slice(0, 8_000);

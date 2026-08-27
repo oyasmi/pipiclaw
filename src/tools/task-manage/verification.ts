@@ -1,10 +1,15 @@
 import { writeFileAtomically } from "../../shared/atomic-file.js";
+import { getSubAgentRunManager } from "../../subagents/runs.js";
 import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import { createDefaultTaskControl } from "../../tasks/control.js";
 import { normalizeTaskId } from "../../tasks/ledger.js";
 import { readStoredTask, taskBodyHash } from "../../tasks/store.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../../tasks/transitions.js";
-import { readVerificationAttestation, type VerificationAttestation } from "../../tasks/verification.js";
+import {
+	getVerificationSubjectHashOptions,
+	readVerificationAttestation,
+	type VerificationAttestation,
+} from "../../tasks/verification.js";
 import { RecoverableToolError } from "../tool-details.js";
 import { renderTaskFile } from "./shared.js";
 import type { TaskManageResult, TaskManageToolOptions, TaskVerifyRequest } from "./types.js";
@@ -25,14 +30,19 @@ export async function verifyTask(
 	const task = await readStoredTask(options.channelDir, id);
 	if (!task) throw new RecoverableToolError(`Task "${id}" does not exist; create it before verification.`);
 	resolveTaskTransition("verify", id, normalizeStoredStatus(task.fields.status));
-	const attestation = await readVerificationAttestation(options.channelDir, runId);
+	const trustedWorkingDirectory = getSubAgentRunManager(options.channelId).get(runId)?.workingDirectory;
+	const attestation = await readVerificationAttestation(options.channelDir, runId, {
+		trustedWorkingDirectory,
+	});
 	if (attestation.taskId !== id) {
 		throw new RecoverableToolError(
 			`Verification run "${runId}" belongs to task "${attestation.taskId}", not "${id}".`,
 		);
 	}
 	if (attestation.workspaceChanged) {
-		throw new RecoverableToolError(`Verification run "${runId}" changed the workspace; rerun a read-only verifier.`);
+		throw new RecoverableToolError(
+			`Verification run "${runId}" changed protected workspace content; rerun the verifier on the current content. Test/build outputs under the documented transient artifact scope are allowed, but implementation changes are not.`,
+		);
 	}
 	if (attestation.bodyHash !== taskBodyHash(task.body)) {
 		throw new RecoverableToolError(
@@ -40,9 +50,8 @@ export async function verifyTask(
 		);
 	}
 	if (attestation.subjectHash) {
-		const currentSubject = await workspaceSubjectHash(
-			attestation.subjectDir ?? options.workingDirectory ?? process.cwd(),
-		);
+		const subjectDir = attestation.subjectDir ?? trustedWorkingDirectory ?? options.workingDirectory ?? process.cwd();
+		const currentSubject = await workspaceSubjectHash(subjectDir, getVerificationSubjectHashOptions(attestation));
 		if (!currentSubject) {
 			throw new RecoverableToolError(
 				`Verification run "${runId}" is bound to a Git artifact subject, but the current checkout cannot be read. Rerun verification from the project checkout.`,
@@ -50,7 +59,7 @@ export async function verifyTask(
 		}
 		if (currentSubject !== attestation.subjectHash) {
 			throw new RecoverableToolError(
-				`Task "${id}" artifacts changed after verification run "${runId}"; rerun the verifier.`,
+				`Task "${id}" artifacts changed after verification run "${runId}"; rerun the verifier. Legacy attestations without a base commit are HEAD-sensitive and may also require re-verification after a normal Git commit.`,
 			);
 		}
 	}
@@ -88,11 +97,12 @@ export async function assertVerificationAttestationMatches(
 	id: string,
 	runId: string | undefined,
 	currentBodyHash: string,
+	trustedWorkingDirectory?: string,
 ): Promise<VerificationAttestation> {
 	if (!runId) {
 		throw new RecoverableToolError(`Task "${id}" has no verification run id; rerun task_verify before task_close.`);
 	}
-	const attestation = await readVerificationAttestation(channelDir, runId);
+	const attestation = await readVerificationAttestation(channelDir, runId, { trustedWorkingDirectory });
 	if (attestation.taskId !== id) {
 		throw new RecoverableToolError(
 			`Verification run "${runId}" belongs to task "${attestation.taskId}", not "${id}"; rerun verification.`,

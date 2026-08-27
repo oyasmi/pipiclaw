@@ -2,6 +2,7 @@ import { mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../../shared/atomic-file.js";
 import { formatLocalTime } from "../../shared/local-time.js";
+import { getSubAgentRunManager } from "../../subagents/runs.js";
 import { workspaceSubjectHash } from "../../tasks/artifact-subject.js";
 import {
 	appendCurrentCycleNote,
@@ -12,6 +13,7 @@ import {
 } from "../../tasks/ledger.js";
 import { taskBodyHash } from "../../tasks/store.js";
 import { normalizeStoredStatus, resolveTaskTransition } from "../../tasks/transitions.js";
+import { getVerificationSubjectHashOptions } from "../../tasks/verification.js";
 import { RecoverableToolError } from "../tool-details.js";
 import {
 	appendCompletionEvidence,
@@ -111,15 +113,20 @@ async function closeAsComplete(
 		}
 		// The attestation file is the sole authority — for the verdict, the body-hash freshness
 		// check, and the artifact subject. The task Markdown is agent-writable and proves nothing.
+		const trustedWorkingDirectory = getSubAgentRunManager(options.channelId).get(
+			verification.runId,
+		)?.workingDirectory;
 		const attestation = await assertVerificationAttestationMatches(
 			options.channelDir,
 			id,
 			verification.runId,
 			taskBodyHash(body),
+			trustedWorkingDirectory,
 		);
 		if (attestation.subjectHash) {
-			const subjectDir = attestation.subjectDir ?? options.workingDirectory ?? process.cwd();
-			const currentSubject = await workspaceSubjectHash(subjectDir);
+			const subjectDir =
+				attestation.subjectDir ?? trustedWorkingDirectory ?? options.workingDirectory ?? process.cwd();
+			const currentSubject = await workspaceSubjectHash(subjectDir, getVerificationSubjectHashOptions(attestation));
 			if (!currentSubject) {
 				throw new RecoverableToolError(
 					`Task "${id}" has an independent PASS bound to ${subjectDir}, but that checkout cannot be read. Restore it or request verification again.`,
@@ -127,7 +134,7 @@ async function closeAsComplete(
 			}
 			if (currentSubject !== attestation.subjectHash) {
 				throw new RecoverableToolError(
-					`Task "${id}" artifacts changed after its independent PASS; request verification again.`,
+					`Task "${id}" artifacts changed after its independent PASS; request verification again. If this is a legacy attestation without a base commit, a normal Git commit can also require re-verification.`,
 				);
 			}
 		}

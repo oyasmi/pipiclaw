@@ -90,6 +90,9 @@ export interface FinalizeExternalRunInput {
 	/** The workspace subject hash taken just before this run started (D9's before/after pair for
 	 *  external verify) — persisted at launch so restart reconciliation has it too. */
 	verifySubjectBefore?: string;
+	/** Fixed verification base and initial untracked manifest, persisted for restart reconciliation. */
+	verifyBaseCommit?: string;
+	verifyBaselineUntrackedPaths?: string[];
 }
 
 /**
@@ -141,15 +144,31 @@ export async function finalizeExternalRun(
 	}
 
 	// D9: an external verifier's tools cannot be structurally removed, so a before/after subject
-	// hash is the only after-the-fact check available. `subjectBefore` came from the launch-time
-	// snapshot (persisted so restart reconciliation has it too, spec 042 D1).
-	const subjectAfter = await workspaceSubjectHash(input.workingDirectory);
+	// hash is the only after-the-fact check available. The base and untracked baseline came from the
+	// launch-time snapshot (persisted so restart reconciliation has it too).
+	const baseSubjectAvailable =
+		input.verifyBaseCommit !== undefined && input.verifyBaselineUntrackedPaths !== undefined;
+	const partialBaseSubject = input.verifyBaseCommit !== undefined && input.verifyBaselineUntrackedPaths === undefined;
+	const subjectAfter = partialBaseSubject
+		? undefined
+		: await workspaceSubjectHash(
+				input.workingDirectory,
+				baseSubjectAvailable
+					? {
+							baseCommit: input.verifyBaseCommit,
+							baselineUntrackedPaths: input.verifyBaselineUntrackedPaths,
+						}
+					: {},
+			);
 	const verification = resolveVerificationOutcome({
 		subjectBefore: input.verifySubjectBefore,
 		subjectAfter,
 		finalText: outcome.finalText,
 		runFailed: false, // shouldVerify already gates on settleInput.status === "completed".
 	});
+	const legacySubjectAvailable = input.verifyBaseCommit === undefined && input.verifySubjectBefore !== undefined;
+	const subjectAvailable =
+		!verification.workspaceChanged && subjectAfter !== undefined && (baseSubjectAvailable || legacySubjectAvailable);
 	await writeVerificationAttestation(input.channelDir as string, {
 		runId: input.runId,
 		taskId: input.taskId as string,
@@ -157,8 +176,12 @@ export async function finalizeExternalRun(
 		checkedAt: formatLocalTime(),
 		evidence: verification.evidence,
 		workspaceChanged: verification.workspaceChanged,
-		subjectHash: verification.workspaceChanged ? undefined : subjectAfter,
-		subjectDir: input.workingDirectory,
+		subjectHash: subjectAvailable ? subjectAfter : undefined,
+		subjectDir: subjectAvailable ? input.workingDirectory : undefined,
+		subjectMode: subjectAvailable ? (baseSubjectAvailable ? "base-relative" : "legacy-head") : undefined,
+		subjectBaseCommit: subjectAvailable && baseSubjectAvailable ? input.verifyBaseCommit : undefined,
+		subjectBaselineUntrackedPaths:
+			subjectAvailable && baseSubjectAvailable ? input.verifyBaselineUntrackedPaths : undefined,
 		// External verifiers cannot have their tools structurally removed the way an internal
 		// verifier's are — advisory, not enforced (D9).
 		verificationStrength: "advisory",

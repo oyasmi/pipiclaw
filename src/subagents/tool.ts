@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
@@ -27,7 +27,7 @@ import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText, errorMessage, extractAssistantText } from "../shared/text-utils.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
-import { workspaceSubjectHash } from "../tasks/artifact-subject.js";
+import { workspaceSubjectHash, workspaceSubjectSnapshot } from "../tasks/artifact-subject.js";
 import { readStoredTask } from "../tasks/store.js";
 import { writeVerificationAttestation } from "../tasks/verification.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
@@ -64,7 +64,8 @@ const workingDirectoryField = Type.Optional(
 );
 const purposeField = Type.Optional(
 	Type.Union([Type.Literal("work"), Type.Literal("verify")], {
-		description: 'Use "verify" for an independent, read-only task acceptance check.',
+		description:
+			'Use "verify" for an independent task acceptance check. A write-capable verifier may run tests/builds; its attestation is advisory.',
 	}),
 );
 const taskIdField = Type.Optional(Type.String({ description: "Persistent task id, required when purpose=verify." }));
@@ -322,15 +323,22 @@ export function assertWithinProjectBoundary(target: string, base: string, reques
 function resolveRunWorkingDirectory(requested: string | undefined, options: SubAgentToolOptions): string {
 	const base = resolve(options.workingDirectory ?? process.cwd());
 	const trimmed = requested?.trim();
-	if (!trimmed) return base;
-	const target = resolve(base, trimmed);
-	if (!existsSync(target) || !statSync(target).isDirectory()) {
+	// Resolve the project root once as well. Returning an alias here would leave the later lease,
+	// executor, subject hash, and external cwd exposed to a symlink swap after admission.
+	const canonicalBase = realpathOrSelf(base);
+	if (!trimmed) return canonicalBase;
+	const target = resolve(canonicalBase, trimmed);
+	let canonicalTarget: string;
+	try {
+		canonicalTarget = realpathSync(target);
+		if (!statSync(canonicalTarget).isDirectory()) throw new Error("not a directory");
+	} catch {
 		throw new RecoverableToolError(`workingDirectory "${requested}" is not an existing directory.`);
 	}
 	if (options.projectBoundary === "project") {
-		assertWithinProjectBoundary(target, base, requested ?? trimmed);
+		assertWithinProjectBoundary(canonicalTarget, canonicalBase, requested ?? trimmed);
 	}
-	return target;
+	return canonicalTarget;
 }
 
 async function prepareRunContext(
@@ -503,19 +511,20 @@ export function buildVerificationProtocol(taskPath: string): string {
 	return [
 		"Verification protocol:",
 		`- Independently inspect ${taskPath} and verify every DoD/Verification item against concrete evidence.`,
-		"- You are the checker, not the maker. Do not edit files or fix failures; report them.",
+		"- You are the checker, not the maker. Do not modify the implementation or fix failures to make a check pass; report them.",
+		"- You may run npm tests/builds and other deterministic checks. Newly created outputs under recognized transient artifact paths (for example .run/, coverage/, build/, dist/ or caches) are allowed, but do not change tracked files or pre-existing untracked product files.",
+		"- This verification is advisory when the verifier can write or use bash: runtime cannot structurally prove that every write was harmless. Review the diff and evidence before trusting PASS.",
 		"- Run deterministic checks when available and distinguish observed evidence from assumptions.",
 		"- End the response with exactly one final line: VERDICT: PASS or VERDICT: FAIL.",
 	].join("\n");
 }
 
 /**
- * D9 verify admission — a role that admits it writes cannot also be the checker, `exec` has no
- * protocol terminal to prove it even ran to completion, and a target with an active write lease
- * is refused up front (cheaper than explaining afterward why the attestation would be worthless).
+ * D9 verify admission — `exec` has no protocol terminal to prove it even ran to completion, and a
+ * target with an active write lease is refused up front. A write-capable verifier is allowed: it
+ * takes the same exclusive lease as a work writer and receives an advisory attestation.
  * Spec 042 D7: exported so `subagent_run op=follow_up` runs the exact same checks the initial
- * dispatch does — before this function existed, follow_up on a role that had since been hot-edited
- * to `mutates: write` would silently take the write lease and dispatch instead of refusing.
+ * dispatch does, including the remaining `exec` restriction.
  */
 export function assertVerifyAdmissible(
 	config: Pick<ResolvedSubAgentConfig, "name" | "mutates" | "runtime" | "harness">,
@@ -523,11 +532,6 @@ export function assertVerifyAdmissible(
 	workingDirectory: string,
 ): void {
 	if (purpose !== "verify") return;
-	if (config.mutates === "write") {
-		throw new RecoverableToolError(
-			`Sub-agent "${config.name}" declares mutates: write and cannot be used for purpose=verify.`,
-		);
-	}
 	if (config.runtime === "external" && config.harness === "exec") {
 		throw new RecoverableToolError(
 			`Sub-agent "${config.name}" uses the exec harness, which has no protocol terminal and cannot be used for purpose=verify.`,
@@ -780,11 +784,11 @@ async function dispatchSubAgentRun(
 	// cannot drift between the two dispatch paths.
 	assertVerifyAdmissible(config, runContext.purpose, runContext.workingDirectory);
 
-	// Admission: a write-mutating run takes an exclusive workspace lease before it is even
-	// registered (spec 040, D10.1) — a rejected delegation should never count as "started".
-	// Read runs and purpose=verify never take one. Shared by both runtimes.
+	// Admission: every write-mutating run, including a write-capable verifier, takes an exclusive
+	// workspace lease before it is even registered (spec 040, D10.1). A rejected delegation should
+	// never count as "started"; the lease is handed to SubAgentRunManager as the settlement owner.
 	let leaseKey: string | undefined;
-	if (config.mutates === "write" && runContext.purpose !== "verify") {
+	if (config.mutates === "write") {
 		const lease = acquireWorkspaceLease({
 			runId: runContext.runId,
 			channelId: options.runtimeContext.channelId,
@@ -905,12 +909,13 @@ async function dispatchSubAgentRun(
 	let failureReason: string | undefined;
 	/** Set alongside failureReason only for the three self-inflicted budget aborts, distinct from an explicit cancel. */
 	let budgetExceeded = false;
-	/** Set only by the `subagent_run op=cancel` handle registered below — a real stop, unlike a budget abort. */
+	/** Set only by the `subagent_run op=cancel` handle registered as soon as the run is durable. */
 	let externallyCancelled = false;
 	/** True once the sync grace window has elapsed and a "still running" placeholder has been returned. */
 	let detached = false;
 	let lastUpdateText = "";
 
+	let worker: SubAgentWorker | undefined;
 	try {
 		await runManager.register({
 			runId: runContext.runId,
@@ -926,6 +931,7 @@ async function dispatchSubAgentRun(
 			workingDirectory: runContext.workingDirectory,
 			artifactDir: runContext.artifactDir,
 			leaseKey,
+			mutates: config.mutates,
 		});
 	} catch (error) {
 		// Until the durable running record exists, setup still owns the lease. A channel/host
@@ -933,6 +939,14 @@ async function dispatchSubAgentRun(
 		releaseWorkspaceLease(leaseKey, runContext.runId);
 		throw error;
 	}
+	// Install the cancel handle before any setup I/O (tool construction, Git snapshots, worker
+	// creation) can yield. Without this provisional handle, a cancel in that window was treated as
+	// an unreachable run: the manager released the lease and settled it while the worker could still
+	// start writing after the supposed cancellation (especially dangerous for a write verifier).
+	runManager.registerCancelHandle(runContext.runId, () => {
+		externallyCancelled = true;
+		worker?.abort();
+	});
 
 	const emitUpdate = (text: string) => {
 		// Once detached, execute() has already returned to the SDK; nothing is listening
@@ -958,11 +972,12 @@ async function dispatchSubAgentRun(
 		});
 	};
 
-	let worker: SubAgentWorker | undefined;
 	let wallClockTimer: ReturnType<typeof setTimeout> | undefined;
 	let unsubscribe: (() => void) | undefined;
 	let verifierGitStateBefore: string | undefined;
 	let verifierSubjectBefore: string | undefined;
+	let verifierSubjectBaseCommit: string | undefined;
+	let verifierSubjectBaselineUntrackedPaths: string[] | undefined;
 	try {
 		const availableTools = (options.buildTools ?? buildSubagentTools)(
 			scopedExecutor,
@@ -971,8 +986,12 @@ async function dispatchSubAgentRun(
 			runContext,
 		);
 		verifierGitStateBefore = runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
-		verifierSubjectBefore =
-			runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
+		if (runContext.purpose === "verify") {
+			const subjectSnapshot = await workspaceSubjectSnapshot(runContext.workingDirectory);
+			verifierSubjectBefore = subjectSnapshot?.hash;
+			verifierSubjectBaseCommit = subjectSnapshot?.baseCommit;
+			verifierSubjectBaselineUntrackedPaths = subjectSnapshot?.baselineUntrackedPaths;
+		}
 
 		worker =
 			options.createWorker?.({
@@ -996,11 +1015,6 @@ async function dispatchSubAgentRun(
 				getApiKey: async () => apiKey,
 				streamFn: streamSimple,
 			});
-
-		runManager.registerCancelHandle(runContext.runId, () => {
-			externallyCancelled = true;
-			worker?.abort();
-		});
 
 		wallClockTimer = setTimeout(() => {
 			failureReason = `Wall time budget exceeded (${config.maxWallTimeSec}s)`;
@@ -1103,10 +1117,14 @@ async function dispatchSubAgentRun(
 					return [] as string[];
 				},
 			);
-			await activeWorker.prompt(
-				buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks, runContext),
-			);
-			await activeWorker.waitForIdle();
+			if (externallyCancelled) {
+				failureReason = failureReason || "Cancelled by request.";
+			} else {
+				await activeWorker.prompt(
+					buildSubAgentTask(params.task, config, options.runtimeContext, contextualBlocks, runContext),
+				);
+				await activeWorker.waitForIdle();
+			}
 
 			// D6: a self-inflicted budget abort gets one tool-free turn to converge on a
 			// conclusion instead of discarding the work outright. An explicit cancel skips
@@ -1157,7 +1175,17 @@ async function dispatchSubAgentRun(
 		const verifierGitStateAfter =
 			runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
 		const verifierSubjectAfter =
-			runContext.purpose === "verify" ? await workspaceSubjectHash(runContext.workingDirectory) : undefined;
+			runContext.purpose === "verify"
+				? await workspaceSubjectHash(
+						runContext.workingDirectory,
+						verifierSubjectBaseCommit
+							? {
+									baseCommit: verifierSubjectBaseCommit,
+									baselineUntrackedPaths: verifierSubjectBaselineUntrackedPaths,
+								}
+							: {},
+					)
+				: undefined;
 		// Spec 042 D1: the pass/fail judgment rule is shared with the external verify path
 		// (`resolveVerificationOutcome`) so there is exactly one place deciding what a verify
 		// run's own output does and does not prove. Only the attestation write and the
@@ -1177,14 +1205,17 @@ async function dispatchSubAgentRun(
 		const verificationVerdict = verification?.verdict;
 		// Internal verify always keeps write/edit structurally removed from the verifier's
 		// tool set (buildSubagentTools above), but `bash` stays available by default and can
-		// write files just as well — labeling that "enforced" would be dishonest (review
-		// 2026-08-23 §2.2). Only a role that dropped `bash` from its declared tool list earns
-		// the stronger label. Computed once so the attestation and the run record — the
+		// write files just as well. A role that declares mutates: write is advisory even when
+		// its effective tool list happens not to contain bash: the declaration says this run is
+		// not structurally read-only. Computed once so the attestation and run record — the
 		// latter is what the completion wake and `subagent_list` display — cannot disagree.
-		const internalVerificationStrength = config.tools.includes("bash")
-			? ("advisory" as const)
-			: ("enforced" as const);
+		const internalVerificationStrength =
+			config.mutates === "write" || config.tools.includes("bash") ? ("advisory" as const) : ("enforced" as const);
 		if (runContext.purpose === "verify" && runContext.taskId && verification) {
+			const baseSubjectAvailable =
+				verifierSubjectBaseCommit !== undefined && verifierSubjectBaselineUntrackedPaths !== undefined;
+			const subjectAvailable =
+				!verification.workspaceChanged && verifierSubjectAfter !== undefined && baseSubjectAvailable;
 			await writeVerificationAttestation(options.channelDir, {
 				runId: runContext.runId,
 				taskId: runContext.taskId,
@@ -1192,8 +1223,11 @@ async function dispatchSubAgentRun(
 				checkedAt: formatLocalTime(),
 				evidence: verification.evidence,
 				workspaceChanged: verification.workspaceChanged,
-				subjectHash: verification.workspaceChanged ? undefined : verifierSubjectAfter,
-				subjectDir: runContext.workingDirectory,
+				subjectHash: subjectAvailable ? verifierSubjectAfter : undefined,
+				subjectDir: subjectAvailable ? runContext.workingDirectory : undefined,
+				subjectMode: subjectAvailable ? "base-relative" : undefined,
+				subjectBaseCommit: subjectAvailable ? verifierSubjectBaseCommit : undefined,
+				subjectBaselineUntrackedPaths: subjectAvailable ? verifierSubjectBaselineUntrackedPaths : undefined,
 				verificationStrength: internalVerificationStrength,
 			});
 		}

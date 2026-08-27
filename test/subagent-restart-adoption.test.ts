@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
-import { workspaceSubjectHash } from "../src/tasks/artifact-subject.js";
-import { verificationAttestationPath } from "../src/tasks/verification.js";
+import { workspaceSubjectSnapshot } from "../src/tasks/artifact-subject.js";
+import { readVerificationAttestation, verificationAttestationPath } from "../src/tasks/verification.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spawns a process that exits immediately and resolves its pid once it has been reaped, so a
@@ -153,6 +153,137 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		// generous per-test budget keeps it stable when the whole suite runs in parallel.
 	}, 30_000);
 
+	it("settles an adopted write run when its lease cannot be rebuilt, without releasing another holder", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_adopt_lease_conflict";
+		const stateDir = join(workspaceDir, "state");
+		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-conflict");
+		mkdirSync(artifactDir, { recursive: true });
+
+		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
+		const originalLease = acquireWorkspaceLease({ runId: "run-conflict", channelId, workingDirectory: workspaceDir });
+		expect(originalLease.ok).toBe(true);
+		await firstDaemon.register({
+			runId: "run-conflict",
+			channelId,
+			runtime: "external",
+			harness: "codex-cli",
+			agent: "builder",
+			label: "conflicted adoption",
+			source: "inline",
+			tools: [],
+			purpose: "work",
+			workingDirectory: workspaceDir,
+			artifactDir,
+			leaseKey: originalLease.ok ? originalLease.leaseKey : undefined,
+			mutates: "write",
+		});
+		await firstDaemon.setLaunched("run-conflict", {
+			pid: 999_999,
+			argv: [process.execPath],
+			deadlineAt: Date.now() + 60_000,
+		});
+		releaseWorkspaceLease(originalLease.ok ? originalLease.leaseKey : undefined, "run-conflict");
+
+		const otherLease = acquireWorkspaceLease({
+			runId: "other-writer",
+			channelId: "other",
+			workingDirectory: workspaceDir,
+		});
+		expect(otherLease.ok).toBe(true);
+		const secondDaemon = new SubAgentRunManager(channelId, { stateDir });
+		await secondDaemon.restore();
+
+		expect(secondDaemon.get("run-conflict")?.status).toBe("lost");
+		expect(secondDaemon.get("run-conflict")?.leaseKey).toBeUndefined();
+		expect(secondDaemon.get("run-conflict")?.failureReason).toContain("could not be confirmed");
+		expect(
+			acquireWorkspaceLease({ runId: "third-writer", channelId: "third", workingDirectory: workspaceDir }).ok,
+		).toBe(false);
+		releaseWorkspaceLease(otherLease.ok ? otherLease.leaseKey : undefined, "other-writer");
+	});
+
+	it("does not signal a reused pid when a conflicting lease prevents adoption", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelId = "dm_adopt_pid_mismatch";
+		const stateDir = join(workspaceDir, "state");
+		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-pid-mismatch");
+		mkdirSync(artifactDir, { recursive: true });
+		const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+			detached: true,
+			stdio: "ignore",
+		});
+		child.unref();
+		await waitFor(() => child.pid !== undefined);
+		const pid = child.pid!;
+
+		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
+		const originalLease = acquireWorkspaceLease({
+			runId: "run-pid-mismatch",
+			channelId,
+			workingDirectory: workspaceDir,
+		});
+		expect(originalLease.ok).toBe(true);
+		try {
+			await firstDaemon.register({
+				runId: "run-pid-mismatch",
+				channelId,
+				runtime: "external",
+				harness: "codex-cli",
+				agent: "builder",
+				label: "pid mismatch",
+				source: "inline",
+				tools: [],
+				purpose: "work",
+				workingDirectory: workspaceDir,
+				artifactDir,
+				leaseKey: originalLease.ok ? originalLease.leaseKey : undefined,
+				mutates: "write",
+			});
+			await firstDaemon.setLaunched("run-pid-mismatch", {
+				pid,
+				pidStartedAt: "not-the-current-process-start-time",
+				argv: [process.execPath],
+				deadlineAt: Date.now() + 60_000,
+			});
+			releaseWorkspaceLease(originalLease.ok ? originalLease.leaseKey : undefined, "run-pid-mismatch");
+
+			const otherLease = acquireWorkspaceLease({
+				runId: "other-writer-mismatch",
+				channelId: "other-mismatch",
+				workingDirectory: workspaceDir,
+			});
+			expect(otherLease.ok).toBe(true);
+			try {
+				const secondDaemon = new SubAgentRunManager(channelId, { stateDir });
+				await secondDaemon.restore();
+
+				const record = secondDaemon.get("run-pid-mismatch");
+				expect(record?.status).toBe("lost");
+				expect(record?.failureReason).toContain("identity did not match");
+				// A pid now belonging to another process is evidence that the original child is gone;
+				// restore must not signal the live replacement while resolving the lease conflict.
+				expect(() => process.kill(pid, 0)).not.toThrow();
+				expect(
+					acquireWorkspaceLease({
+						runId: "third-writer-mismatch",
+						channelId: "third-mismatch",
+						workingDirectory: workspaceDir,
+					}).ok,
+				).toBe(false);
+			} finally {
+				releaseWorkspaceLease(otherLease.ok ? otherLease.leaseKey : undefined, "other-writer-mismatch");
+			}
+		} finally {
+			try {
+				process.kill(-pid, "SIGKILL");
+			} catch {
+				// The child may already have been terminated by a failing assertion.
+			}
+			releaseWorkspaceLease(originalLease.ok ? originalLease.leaseKey : undefined, "run-pid-mismatch");
+		}
+	});
+
 	// Spec 042, D1: before this fix, restart reconciliation settled a run using whatever zeroed
 	// `record.usage` register() had left behind, while still reporting `usageKnown: true` — a run
 	// that finished after the daemon disappeared showed up as "0 tokens, $0.00, known" instead of
@@ -253,7 +384,9 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		writeFileSync(join(projectDir, "README.md"), "checkout\n");
 		execFileSync("git", ["add", "."], { cwd: projectDir });
 		execFileSync("git", ["commit", "-m", "baseline"], { cwd: projectDir });
-		const verifySubjectBefore = await workspaceSubjectHash(projectDir);
+		const verifySubjectSnapshot = await workspaceSubjectSnapshot(projectDir);
+		expect(verifySubjectSnapshot).toBeDefined();
+		if (!verifySubjectSnapshot) return;
 
 		const pid = await spawnAndWaitExit();
 		writeFileSync(
@@ -268,6 +401,8 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		);
 
 		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
+		const lease = acquireWorkspaceLease({ runId: "run-verify", channelId, workingDirectory: projectDir });
+		expect(lease.ok).toBe(true);
 		await firstDaemon.register({
 			runId: "run-verify",
 			channelId,
@@ -281,6 +416,8 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			taskId: "ship",
 			workingDirectory: projectDir,
 			artifactDir,
+			leaseKey: lease.ok ? lease.leaseKey : undefined,
+			mutates: "write",
 		});
 		await firstDaemon.setLaunched("run-verify", {
 			pid,
@@ -289,9 +426,12 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			maxWallTimeSec: 60,
 			processStartedAt: Date.now(),
 			channelDir,
-			verifySubjectBefore,
+			verifySubjectBefore: verifySubjectSnapshot.hash,
+			verifyBaseCommit: verifySubjectSnapshot.baseCommit,
+			verifyBaselineUntrackedPaths: verifySubjectSnapshot.baselineUntrackedPaths,
 		});
 
+		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined, "run-verify");
 		const secondDaemon = new SubAgentRunManager(channelId, { stateDir });
 		await secondDaemon.restore();
 
@@ -303,5 +443,10 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const attestation = JSON.parse(readFileSync(verificationAttestationPath(channelDir, "run-verify"), "utf-8"));
 		expect(attestation.verdict).toBe("pass");
 		expect(attestation.verificationStrength).toBe("advisory");
+		await expect(
+			readVerificationAttestation(channelDir, "run-verify", {
+				trustedWorkingDirectory: record?.workingDirectory,
+			}),
+		).resolves.toMatchObject({ subjectDir: projectDir });
 	});
 });

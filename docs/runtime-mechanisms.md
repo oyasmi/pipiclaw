@@ -85,8 +85,10 @@ TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据�
 
 独立验收使用 `purpose: verify` + `taskId`，并要求最后一行是 `VERDICT: PASS` 或 `VERDICT: FAIL`：
 
-- 内置 verifier 会被结构性移除 write/edit，验收强度为 `enforced`。
-- 外部 verifier 只能依赖目标 CLI sandbox 和前后工作区 subject 哈希，验收强度为 `advisory`；声明 `mutates: write` 或使用 `exec` harness 的角色不能承担验收。
+- 内置 verifier 会被结构性移除 write/edit；只有同时声明 `mutates: read` 且工具集中不含 `bash` 时，验收强度才是 `enforced`。默认含 `bash` 的内置 verifier 仍可能写宿主机，因此标为 `advisory`。
+- 声明 `mutates: write` 的 verifier 可以运行测试和构建，但验证期间会取得目标工作区（含父子目录冲突）的独占 lease，验收强度为 `advisory`；lease 只负责委派间互斥，不是证明完全只读的沙箱。
+- 外部 verifier 只能依赖目标 CLI sandbox 和前后工作区 subject 哈希，验收强度为 `advisory`；`exec` harness 仍不能承担验收，因为它没有协议终态。
+- 新 subject 以验证开始时的 `baseCommit` 为基准，并保存当时已有的 untracked 路径以及范围外的 ignored 路径。正常提交已验收内容不会使它失效；新出现的 untracked 文件仅在 checkout 根目录下明确的临时产物目录/文件范围内排除（Cypress 仅 `cypress/screenshots/`、`cypress/videos/`），其他新源文件、既有 untracked 产品文件和 ignored 非临时文件的变化仍会使验收失败。旧的无 `baseCommit` attestation 继续使用 HEAD-sensitive 兼容算法。本节覆盖历史 `docs/specs/040` 中已过时的 verify 准入描述。
 
 `task_verify` 导入 attestation；`task_close`（outcome=complete）会重新校验任务契约 hash 和 Git artifact subject，防止验收之后需求或产物发生变化。
 

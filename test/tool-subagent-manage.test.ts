@@ -712,11 +712,9 @@ describe("subagent_manage tool", () => {
 		if (next.ok) releaseWorkspaceLease(next.leaseKey, "next");
 	});
 
-	// Spec 042, D7: verify admission (a `mutates: write` role cannot verify, `exec` cannot verify)
-	// must apply to follow_up too — before this fix, a role hot-edited to `mutates: write` after the
-	// original verify run would silently take the write lease and dispatch on follow-up, while the
-	// initial dispatch path would have refused the exact same role outright.
-	it("rejects follow_up on a purpose=verify run when the role has since become mutates: write", async () => {
+	// A write-capable verifier is admitted on follow_up too and receives the same exclusive lease as
+	// an initial dispatch. `exec` remains the only verify-admission rejection covered above.
+	it("allows follow_up on a purpose=verify run when the current role declares mutates: write", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const channelId = `dm_manage_followup_verify_mutated_${Date.now()}`;
@@ -788,14 +786,25 @@ describe("subagent_manage tool", () => {
 			}),
 		});
 
-		await expect(
-			tool.execute("call-verify-mutated", {
-				op: "follow_up",
-				runId: "run-verify",
-				task: "re-check",
-			}),
-		).rejects.toThrow("cannot be used for purpose=verify");
-		expect(launchExternalRunMock).not.toHaveBeenCalled();
+		const result = await tool.execute("call-verify-mutated", {
+			op: "follow_up",
+			runId: "run-verify",
+			task: "re-check",
+		});
+		expect(result.content[0]).toMatchObject({ type: "text" });
+		expect(launchExternalRunMock).toHaveBeenCalledTimes(1);
+		const launchInput = launchExternalRunMock.mock.calls[0]?.[0] as {
+			leaseKey?: string;
+			mutates?: string;
+			runId: string;
+			workingDirectory: string;
+		};
+		expect(launchInput.mutates).toBe("write");
+		expect(launchInput.leaseKey).toBeDefined();
+		expect(acquireWorkspaceLease({ runId: "competing", channelId, workingDirectory: "/tmp/checkout" }).ok).toBe(
+			false,
+		);
+		releaseWorkspaceLease(launchInput.leaseKey, launchInput.runId);
 	});
 
 	// Spec 042, D7: `roleFingerprint` covers command/model/shell (what decides how the process is

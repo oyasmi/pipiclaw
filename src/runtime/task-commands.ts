@@ -6,7 +6,7 @@ import { channelJobTaskIds } from "../agent/job-manager.js";
 import { capReply } from "../agent/reply-limits.js";
 import { formatLocalTime, parseLocalTime, parseWakeInput } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { channelDelegationTaskIds } from "../subagents/runs.js";
+import { channelDelegationTaskIds, getSubAgentRunManager } from "../subagents/runs.js";
 import { applyTaskControlPatch, createDefaultTaskControl, taskBudgetViolation } from "../tasks/control.js";
 import {
 	countTaskDodItems,
@@ -490,8 +490,14 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 				);
 			}
 			if (status !== "sleeping" && control.verification.status === "passed") {
+				const verificationRun =
+					control.verification.runId && options.channelId
+						? getSubAgentRunManager(options.channelId).get(control.verification.runId)
+						: undefined;
 				const attestationOk = control.verification.runId
-					? await readVerificationAttestation(options.channelDir, control.verification.runId)
+					? await readVerificationAttestation(options.channelDir, control.verification.runId, {
+							trustedWorkingDirectory: verificationRun?.workingDirectory,
+						})
 							.then(
 								(attestation) =>
 									attestation.taskId === entry.id &&

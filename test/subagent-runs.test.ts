@@ -10,6 +10,7 @@ import {
 	type SettleInput,
 	SubAgentRunManager,
 } from "../src/subagents/runs.js";
+import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import type { UsageLedgerEntry } from "../src/usage/ledger.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -226,6 +227,9 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(cancelled).toBe(true);
 		expect(status).toBe("running"); // the caller's own settle() (triggered by its abort) drives the terminal status
 		expect(events).toHaveLength(0);
+		// A worker may observe abort asynchronously. Until settle() owns cleanup, a repeated cancel
+		// must not turn the still-active run into a lost writer and release its workspace lease.
+		await expect(manager.cancel("run-1")).resolves.toBe("running");
 	});
 
 	it("cancel with no live handle marks the run lost without dispatching", async () => {
@@ -301,6 +305,69 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 		expect(events).toHaveLength(0);
 		expect(restored.get("run-done")?.status).toBe("completed");
+	});
+
+	it("finishes a persisted settlement intent after restart without releasing another writer's lease", async () => {
+		const stateDir = createTempDir();
+		const workspaceDir = createTempDir();
+		const artifactDir = join(workspaceDir, "artifacts", "run-pending");
+		mkdirSync(join(stateDir, "dm_123"), { recursive: true });
+		mkdirSync(artifactDir, { recursive: true });
+		const writer = new SubAgentRunManager("dm_123", { stateDir });
+		const lease = acquireWorkspaceLease({
+			runId: "run-pending",
+			channelId: "dm_123",
+			workingDirectory: workspaceDir,
+		});
+		expect(lease.ok).toBe(true);
+		await writer.register({
+			runId: "run-pending",
+			channelId: "dm_123",
+			runtime: "internal",
+			agent: "explorer",
+			label: "pending settlement",
+			source: "predefined",
+			tools: [],
+			purpose: "work",
+			workingDirectory: workspaceDir,
+			artifactDir,
+			leaseKey: lease.ok ? lease.leaseKey : undefined,
+			mutates: "write",
+		});
+		const recordPath = join(stateDir, "dm_123", "run-pending.json");
+		const persisted = JSON.parse(readFileSync(recordPath, "utf-8"));
+		persisted.settlementPending = {
+			status: "completed",
+			usage: emptyUsage(),
+			usageKnown: true,
+			costKnown: true,
+			turns: 1,
+			toolCalls: 0,
+			durationMs: 500,
+			finishedAt: Date.now(),
+			announce: false,
+		};
+		writeFileSync(recordPath, `${JSON.stringify(persisted)}\n`);
+		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined, "run-pending");
+		const otherLease = acquireWorkspaceLease({
+			runId: "other-writer",
+			channelId: "other",
+			workingDirectory: workspaceDir,
+		});
+		expect(otherLease.ok).toBe(true);
+
+		const restored = new SubAgentRunManager("dm_123", { stateDir });
+		await restored.restore();
+
+		expect(restored.get("run-pending")).toMatchObject({
+			status: "completed",
+			leaseKey: undefined,
+			settlementPending: undefined,
+		});
+		expect(
+			acquireWorkspaceLease({ runId: "third-writer", channelId: "third", workingDirectory: workspaceDir }).ok,
+		).toBe(false);
+		releaseWorkspaceLease(otherLease.ok ? otherLease.leaseKey : undefined, "other-writer");
 	});
 
 	it("an archive write failure does not swallow the completion wake (P0-2)", async () => {

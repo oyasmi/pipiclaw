@@ -1,7 +1,16 @@
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
@@ -962,6 +971,64 @@ describe("sub-agent working directory", () => {
 		// The real child cwd, not a `cd <dir> &&` prefix the guard never saw.
 		expect(seen).toContainEqual({ command: "git status", cwd: checkout });
 		expect(delegatedTask).toContain(`Working directory: ${checkout}`);
+	});
+
+	it("uses the canonical checkout after admitting an in-project symlink", async () => {
+		const root = createTempWorkspace();
+		const workspaceDir = join(root, "agent-workspace");
+		const channelDir = join(workspaceDir, "dm_123");
+		const projectRoot = join(root, "project");
+		const nested = join(projectRoot, "nested");
+		const outside = join(root, "outside");
+		const alias = join(projectRoot, "alias");
+		mkdirSync(channelDir, { recursive: true });
+		mkdirSync(nested, { recursive: true });
+		mkdirSync(outside, { recursive: true });
+		symlinkSync(nested, alias, "dir");
+		const canonicalNested = realpathSync(nested);
+		const seen: Array<{ command: string; cwd?: string }> = [];
+		const recording: Executor = {
+			async exec(command, options) {
+				seen.push({ command, cwd: options?.cwd });
+				return { stdout: "", stderr: "", code: 0 };
+			},
+		};
+		let delegatedTask = "";
+		const tool = createSubAgentInlineTool({
+			executor: recording,
+			fileStore: createFileStore(),
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			workingDirectory: projectRoot,
+			projectBoundary: "project",
+			channelDir,
+			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			createWorker: (config) => {
+				// Simulate a symlink swap after admission. The worker must still receive the canonical
+				// directory captured before this callback, not the now-escaping alias.
+				unlinkSync(alias);
+				symlinkSync(outside, alias, "dir");
+				return new FakeWorker(async (input, self) => {
+					delegatedTask = input;
+					const bash = config.tools.find((tool) => tool.name === "bash");
+					await bash?.execute("t1", { command: "git status" });
+					const message = createAssistantMessage("Done.");
+					self.state.messages = [message];
+					self.emit({ type: "message_end", message });
+				});
+			},
+		});
+
+		await tool.execute("wd-call-canonical", {
+			systemPrompt: "Explore.",
+			task: "Look around.",
+			workingDirectory: alias,
+		});
+
+		expect(seen).toContainEqual({ command: "git status", cwd: canonicalNested });
+		expect(delegatedTask).toContain(`Working directory: ${canonicalNested}`);
 	});
 
 	it("rejects a working directory that does not exist", async () => {

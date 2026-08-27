@@ -107,10 +107,16 @@ export interface RunRecord extends RunUsage {
 	turns?: number;
 	toolCalls?: number;
 	verificationVerdict?: "pass" | "fail";
-	/** `enforced` for a built-in verifier (tools structurally removed); `advisory` for external (D9). */
+	/** `enforced` only for a structurally read-only verifier; write-capable/external runs are advisory. */
 	verificationStrength?: "enforced" | "advisory";
 	/** Set once settlement (write output, free resources) has happened; guards against replay. */
 	settledAt?: number;
+	/**
+	 * Durable settlement intent. While this exists the public status remains `running` and the
+	 * lease is still held; it lets a restart finish a settlement that crashed after the intent was
+	 * recorded but before the terminal record was published.
+	 */
+	settlementPending?: PendingSettlement;
 	/** Set once this run's usage has been written to the ledger; guards against double billing. */
 	usageRecorded?: boolean;
 	/** Set once the completion wake has been hallmarked for delivery; guards against a duplicate wake. */
@@ -135,10 +141,11 @@ export interface RunRecord extends RunUsage {
 	sessionId?: string;
 	leaseKey?: string;
 	mutates?: RunMutates;
-	/** Spec 042 D1: persisted at launch so restart reconciliation has the same inputs a live
-	 *  watcher would — the workspace subject hash taken just before an external verify run
-	 *  started, so a restart can still write its attestation instead of silently skipping it. */
+	/** Persisted at launch so restart reconciliation has the same inputs as a live verifier. */
 	verifySubjectBefore?: string;
+	/** Fixed commit and initial untracked manifest for the base-relative verification subject. */
+	verifyBaseCommit?: string;
+	verifyBaselineUntrackedPaths?: string[];
 	/** Spec 042 D1: the role's wall-time budget, persisted so restart reconciliation can report an
 	 *  accurate "budget exceeded (Ns)" reason instead of reverse-engineering it from `deadlineAt`. */
 	maxWallTimeSec?: number;
@@ -183,7 +190,27 @@ export interface RegisterRunInput {
 	artifactDir: string;
 	/** Set only when the caller already holds a workspace write lease for this run (D10.1). */
 	leaseKey?: string;
+	mutates?: RunMutates;
 }
+
+interface PendingSettlement {
+	status: SettleInput["status"];
+	failureReason?: string;
+	usage: UsageTotals;
+	usageKnown: boolean;
+	costKnown: boolean;
+	turns: number;
+	toolCalls: number;
+	durationMs: number;
+	durationEstimated?: boolean;
+	verificationVerdict?: "pass" | "fail";
+	verificationStrength?: "enforced" | "advisory";
+	sessionId?: string;
+	finishedAt: number;
+	announce: boolean;
+}
+
+type ProcessIdentity = "same" | "different" | "unknown";
 
 export interface SettleInput {
 	status: "completed" | "failed" | "cancelled" | "lost";
@@ -238,6 +265,43 @@ function isTerminal(status: RunStatus): boolean {
 	return status !== "running";
 }
 
+function createPendingSettlement(input: SettleInput, finishedAt: number, announce: boolean): PendingSettlement {
+	return {
+		status: input.status,
+		failureReason: input.failureReason,
+		usage: input.usage,
+		usageKnown: input.usageKnown,
+		costKnown: input.costKnown,
+		turns: input.turns,
+		toolCalls: input.toolCalls,
+		durationMs: input.durationMs,
+		durationEstimated: input.durationEstimated,
+		verificationVerdict: input.verificationVerdict,
+		verificationStrength: input.verificationStrength,
+		sessionId: input.sessionId,
+		finishedAt,
+		announce,
+	};
+}
+
+function applyPendingSettlement(record: RunRecord, pending: PendingSettlement): void {
+	record.status = pending.status;
+	record.failureReason = pending.failureReason;
+	record.usage = pending.usage;
+	record.usageKnown = pending.usageKnown;
+	record.costKnown = pending.costKnown;
+	record.turns = pending.turns;
+	record.toolCalls = pending.toolCalls;
+	record.durationMs = pending.durationMs;
+	record.durationEstimated = pending.durationEstimated;
+	record.verificationVerdict = pending.verificationVerdict;
+	record.verificationStrength = pending.verificationStrength;
+	if (pending.sessionId) record.sessionId = pending.sessionId;
+	record.finishedAt = pending.finishedAt;
+	record.settledAt = pending.finishedAt;
+	record.settlementPending = undefined;
+}
+
 function parseRunRecord(raw: string): RunRecord | undefined {
 	const value: unknown = JSON.parse(raw);
 	if (
@@ -264,9 +328,9 @@ function parseRunRecord(raw: string): RunRecord | undefined {
  */
 export class SubAgentRunManager {
 	private readonly runs = new Map<string, RunRecord>();
-	/** In-memory cancel handles for runs alive in *this* process (internal runs; external process
-	 *  kill goes through pid, not this map, once phase 2/3 lands). Never persisted: a restart loses
-	 *  the only thing that could reach an in-process worker anyway (D10.3). */
+	/** In-memory cancel handles for runs alive in *this* process (internal worker abort or live
+	 * external process-group kill). Never persisted: a restart cannot reach an in-process worker,
+	 * while adopted external runs are cancelled through their persisted pid (D10.3). */
 	private readonly cancelHandles = new Map<string, () => void>();
 	/** External launch intents exist before a safe live child handle does. A cancel in that window
 	 * is remembered here and consumed before spawn, rather than spawning a process nothing can cancel. */
@@ -460,6 +524,8 @@ export class SubAgentRunManager {
 			 *  before the process exits — restore/deadline recovery must have the same inputs a live watcher
 			 *  would, not a thinner subset. */
 			verifySubjectBefore?: string;
+			verifyBaseCommit?: string;
+			verifyBaselineUntrackedPaths?: string[];
 			maxWallTimeSec?: number;
 			processStartedAt?: number;
 			channelDir?: string;
@@ -475,24 +541,40 @@ export class SubAgentRunManager {
 			cliVersion?: string;
 		},
 	): Promise<void> {
-		const record = this.runs.get(runId);
-		if (!record) return;
-		record.pid = info.pid;
-		record.pidStartedAt = info.pidStartedAt;
-		record.argv = info.argv;
-		record.deadlineAt = info.deadlineAt;
-		// claude-code pre-assigns its session id before running (D4); persisting it here, not just
-		// at settle(), means a run that crashes before any output is still resumable.
-		if (info.sessionId) record.sessionId = info.sessionId;
-		record.verifySubjectBefore = info.verifySubjectBefore;
-		record.maxWallTimeSec = info.maxWallTimeSec;
-		record.processStartedAt = info.processStartedAt;
-		record.channelDir = info.channelDir;
-		record.invocationWarnings = info.invocationWarnings;
-		record.roleFingerprint = info.roleFingerprint;
-		record.parserVersion = info.parserVersion;
-		record.cliVersion = info.cliVersion;
-		await this.persist(record, true);
+		await this.queue.run(runId, async () => {
+			const record = this.runs.get(runId);
+			if (!record || record.status !== "running") return;
+			record.pid = info.pid;
+			record.pidStartedAt = info.pidStartedAt;
+			record.argv = info.argv;
+			record.deadlineAt = info.deadlineAt;
+			// claude-code pre-assigns its session id before running (D4); persisting it here, not just
+			// at settle(), means a run that crashes before any output is still resumable.
+			if (info.sessionId) record.sessionId = info.sessionId;
+			record.verifySubjectBefore = info.verifySubjectBefore;
+			record.verifyBaseCommit = info.verifyBaseCommit;
+			record.verifyBaselineUntrackedPaths = info.verifyBaselineUntrackedPaths;
+			record.maxWallTimeSec = info.maxWallTimeSec;
+			record.processStartedAt = info.processStartedAt;
+			record.channelDir = info.channelDir;
+			record.invocationWarnings = info.invocationWarnings;
+			record.roleFingerprint = info.roleFingerprint;
+			record.parserVersion = info.parserVersion;
+			record.cliVersion = info.cliVersion;
+			await this.persist(record, true);
+		});
+	}
+
+	/** Persist best-effort probe results after the pid/launch recovery record is already durable.
+	 * A slow or unavailable `ps`/`--version` probe must never reopen the post-spawn recovery window. */
+	async updateLaunchMetadata(runId: string, info: { pidStartedAt?: string; cliVersion?: string }): Promise<void> {
+		await this.queue.run(runId, async () => {
+			const record = this.runs.get(runId);
+			if (!record || record.status !== "running" || !record.pid) return;
+			if (info.pidStartedAt !== undefined) record.pidStartedAt = info.pidStartedAt;
+			if (info.cliVersion !== undefined) record.cliVersion = info.cliVersion;
+			await this.persist(record);
+		});
 	}
 
 	/** Reserve a task wake exactly once. A replay of the same durable dispatch may resume an
@@ -562,38 +644,35 @@ export class SubAgentRunManager {
 			const record = this.runs.get(runId);
 			if (!record || record.settledAt) return; // Idempotent: already settled, never replay.
 
-			// The terminal fields are persisted, required, before any side effect runs (P0-2): a
-			// failed persist here rolls the record back to `running` so a restart replays settlement
-			// from scratch instead of applying side effects the disk never recorded.
+			// Keep the externally visible record `running` while the settlement intent is made durable.
+			// This preserves restart recovery without publishing a terminal status before its lease is
+			// released: the caller reaches settle() only after its worker/process has finished.
 			const snapshot = { ...record };
-			record.status = input.status;
-			record.failureReason = input.failureReason;
-			record.usage = input.usage;
-			record.usageKnown = input.usageKnown;
-			record.costKnown = input.costKnown;
-			record.turns = input.turns;
-			record.toolCalls = input.toolCalls;
-			record.durationMs = input.durationMs;
-			record.durationEstimated = input.durationEstimated;
-			record.verificationVerdict = input.verificationVerdict;
-			record.verificationStrength = input.verificationStrength;
-			if (input.sessionId) record.sessionId = input.sessionId;
-			record.finishedAt = Date.now();
-			record.settledAt = record.finishedAt;
-			try {
-				await this.persist(record, true);
-			} catch (error) {
-				Object.assign(record, snapshot);
-				throw error;
+			const pending = record.settlementPending ?? createPendingSettlement(input, Date.now(), options.announce);
+			if (!record.settlementPending) {
+				record.settlementPending = pending;
+				try {
+					await this.persist(record, true);
+				} catch (error) {
+					Object.assign(record, snapshot);
+					throw error;
+				}
 			}
 
 			const outputSaved = await this.writeOutputFile(record, input.outputText);
+			// This is the commit point for the observable state transition. Both operations are
+			// synchronous and adjacent: no observer can see a terminal record while this run still
+			// owns the lease. The durable intent above covers a crash before this point.
 			releaseWorkspaceLease(record.leaseKey, record.runId);
-			record.leaseKey = undefined; // Terminal records never display as "lease held" (P1-4).
+			record.leaseKey = undefined;
+			applyPendingSettlement(record, pending);
+			// Terminal records never display as "lease held" (P1-4). The terminal write is best-effort:
+			// the durable intent above remains available for restart recovery if this publish fails,
+			// and the lease must not be reacquired after the process has finished.
+			await this.persist(record);
 			this.cancelHandles.delete(runId);
 			this.externalLaunches.delete(runId);
 			this.clearExternalRecoveryTimer(runId);
-			await this.persist(record);
 
 			if (!record.usageRecorded) {
 				record.usageRecorded = true;
@@ -637,7 +716,7 @@ export class SubAgentRunManager {
 						runId: record.runId,
 						runtime: record.runtime,
 						harness: record.harness,
-						status: record.status,
+						status: pending.status,
 						taskId: record.taskId,
 						artifactDir: record.artifactDir,
 					})
@@ -741,8 +820,10 @@ export class SubAgentRunManager {
 			if (!record) return "not_found";
 			if (record.status !== "running") return record.status;
 			const cancelHandle = this.cancelHandles.get(runId);
-			this.cancelHandles.delete(runId);
 			if (cancelHandle) {
+				// Keep the handle until settle() owns terminal cleanup. A worker may need an async turn to
+				// observe abort(); deleting it here would let a second cancel mark an active writer lost,
+				// release its lease, and admit another writer while the first worker can still run.
 				// External: mark the reason before the handle kills the process, so whichever code
 				// path settles this run reports "cancelled" instead of guessing from whatever the
 				// process happened to print before it died (P1-1). This also covers
@@ -792,7 +873,9 @@ export class SubAgentRunManager {
 	 * Rebuild in-memory state after a restart. Internal runs cannot survive a restart by
 	 * construction (D10.3): the worker lived in the process that just disappeared, so any record
 	 * still `running` is settled as `lost` and the channel is woken to say so. External runs are
-	 * left alone here — the harness-specific probe (spec 040 phase 2/3) reconciles those.
+	 * left for the harness-specific probe (spec 040 phase 2/3), except an adopted write run whose
+	 * lease cannot be rebuilt: it is killed and settled as `lost` rather than allowed to continue
+	 * without mutual exclusion.
 	 */
 	async restore(): Promise<number> {
 		const stateDir = this.options.stateDir;
@@ -821,6 +904,37 @@ export class SubAgentRunManager {
 			}
 			this.runs.set(record.runId, record);
 			restored++;
+			if (record.settlementPending && !record.settledAt) {
+				// A previous process reached the settlement intent after its worker/process had
+				// finished, but crashed before publishing the terminal record. The old lease key is
+				// process-local and cannot be trusted after restart; clear it before retrying so this
+				// recovery cannot release a different run's lease.
+				const pending = record.settlementPending;
+				record.leaseKey = undefined;
+				const outputText = await readFile(join(record.artifactDir, "output.md"), "utf-8").catch(() => "");
+				await this.settle(
+					record.runId,
+					{
+						status: pending.status,
+						failureReason: pending.failureReason,
+						usage: pending.usage,
+						usageKnown: pending.usageKnown,
+						costKnown: pending.costKnown,
+						turns: pending.turns,
+						toolCalls: pending.toolCalls,
+						durationMs: pending.durationMs,
+						durationEstimated: pending.durationEstimated,
+						outputText,
+						verificationVerdict: pending.verificationVerdict,
+						verificationStrength: pending.verificationStrength,
+						sessionId: pending.sessionId,
+					},
+					{ announce: pending.announce },
+				).catch((error) => {
+					log.logWarning(`Failed to finish pending sub-agent settlement ${record?.runId}`, errorMessage(error));
+				});
+				continue;
+			}
 			if (record.runtime === "internal" && record.status === "running") {
 				await this.settle(
 					record.runId,
@@ -863,13 +977,50 @@ export class SubAgentRunManager {
 							`Could not rebuild workspace lease for adopted run ${record.runId}`,
 							formatWorkspaceLeaseConflict(rebuilt.heldBy),
 						);
-						// This run does not actually hold a lease anymore — record that honestly
-						// (spec 042 D5) so a later settle() cannot delete a different holder's lease
-						// for the same key, and so displays stop claiming this run still holds it.
+						// This run cannot safely continue without its lease: it could write concurrently
+						// with the holder that won the restart race. Kill the adopted process only after
+						// confirming its persisted pid identity; a reused pid must never receive a signal.
+						// Either an identity mismatch or an unavailable probe is settled as lost with the
+						// uncertainty recorded, instead of silently degrading to an unprotected writer
+						// (D10.1/D10.3).
+						const processIdentity = record.pid ? await this.processIdentity(record) : "unknown";
+						let processSafetyNote: string;
+						if (processIdentity === "same") {
+							await killProcessGroup(record.pid!).catch(() => undefined);
+							processSafetyNote = " The adopted process identity matched and its process group was signalled.";
+						} else if (processIdentity === "different") {
+							processSafetyNote =
+								" The persisted pid identity did not match the current process; no signal was sent.";
+						} else {
+							processSafetyNote =
+								" The adopted process identity could not be confirmed; no signal was sent, so its result remains unknown.";
+						}
+						// Clear the stale key first so settlement cannot delete the other run's lease.
 						record.leaseKey = undefined;
 						await this.persist(record).catch((error) => {
 							log.logWarning(`Failed to persist cleared lease for run ${record.runId}`, errorMessage(error));
 						});
+						await this.settle(
+							record.runId,
+							{
+								status: "lost",
+								failureReason:
+									"The daemon restarted while this write delegation's workspace lease was held by another run; its result is unknown." +
+									processSafetyNote,
+								usage: record.usage,
+								usageKnown: record.usageKnown,
+								costKnown: record.costKnown,
+								turns: record.turns ?? 0,
+								toolCalls: record.toolCalls ?? 0,
+								durationMs: Date.now() - (record.processStartedAt ?? record.startedAt),
+								durationEstimated: true,
+								outputText: "",
+							},
+							{ announce: true },
+						).catch((error) => {
+							log.logWarning(`Failed to settle lease-conflicted run ${record?.runId}`, errorMessage(error));
+						});
+						continue;
 					}
 				}
 				await this.reconcileExternalRunAtDeadline(record, Date.now()).catch((error) => {
@@ -902,6 +1053,13 @@ export class SubAgentRunManager {
 		if (!record.pidStartedAt) return true;
 		const current = await readProcessStartTime(record.pid);
 		return current === record.pidStartedAt;
+	}
+
+	private async processIdentity(record: RunRecord): Promise<ProcessIdentity> {
+		if (!record.pid || !record.pidStartedAt) return "unknown";
+		const current = await readProcessStartTime(record.pid);
+		if (!current) return "unknown";
+		return current === record.pidStartedAt ? "same" : "different";
 	}
 
 	/**
@@ -995,6 +1153,8 @@ export class SubAgentRunManager {
 				terminationReason: record.terminationReason,
 				maxWallTimeSec,
 				verifySubjectBefore: record.verifySubjectBefore,
+				verifyBaseCommit: record.verifyBaseCommit,
+				verifyBaselineUntrackedPaths: record.verifyBaselineUntrackedPaths,
 			},
 			(settleInput, options) => this.settle(record.runId, settleInput, options),
 			{ announce: record.terminationReason !== "cancelled" },

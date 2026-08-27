@@ -1,16 +1,21 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { formatLocalTime } from "../src/shared/local-time.js";
-import { workspaceSubjectHash } from "../src/tasks/artifact-subject.js";
+import { getSubAgentRunManager } from "../src/subagents/runs.js";
+import { workspaceSubjectHash, workspaceSubjectSnapshot } from "../src/tasks/artifact-subject.js";
 import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { renderStandardTaskBody } from "../src/tasks/ledger.js";
-import { readStoredTask } from "../src/tasks/store.js";
+import { readStoredTask, taskBodyHash } from "../src/tasks/store.js";
 import { nextTaskWake } from "../src/tasks/task-schedule.js";
-import { writeVerificationAttestation } from "../src/tasks/verification.js";
+import {
+	readVerificationAttestation,
+	verificationAttestationPath,
+	writeVerificationAttestation,
+} from "../src/tasks/verification.js";
 import { createTask } from "../src/tools/task-manage/create.js";
 import { closeTask, updateTask } from "../src/tools/task-manage/lifecycle.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
@@ -59,6 +64,51 @@ describe("task_create/task_update/task_close/task_verify (spec 046, D3)", () => 
 			dod: "- [x] Result is ready",
 			verificationRequired,
 		});
+	}
+
+	async function registerSettledVerificationRun(
+		runId: string,
+		taskId: string,
+		workingDirectory: string,
+	): Promise<void> {
+		const artifactDir = join(channelDir, "subagent-artifacts", runId);
+		await mkdir(artifactDir, { recursive: true });
+		const manager = getSubAgentRunManager(CHANNEL_ID);
+		await manager.register({
+			runId,
+			channelId: CHANNEL_ID,
+			runtime: "internal",
+			agent: "verifier",
+			label: "verify",
+			source: "inline",
+			tools: ["bash"],
+			purpose: "verify",
+			taskId,
+			workingDirectory,
+			artifactDir,
+			mutates: "write",
+		});
+		await manager.settle(
+			runId,
+			{
+				status: "completed",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				usageKnown: true,
+				costKnown: true,
+				turns: 0,
+				toolCalls: 0,
+				durationMs: 1,
+				outputText: "VERDICT: PASS",
+			},
+			{ announce: false },
+		);
 	}
 
 	it("creates recurring work sleeping with its first occurrence and no dispatch", async () => {
@@ -129,6 +179,155 @@ describe("task_create/task_update/task_close/task_verify (spec 046, D3)", () => 
 		expect(archived).not.toContain("status:");
 	});
 
+	it("reads a legacy fieldless subject attestation with explicit HEAD-sensitive compatibility", async () => {
+		const taskId = "legacy-attestation";
+		await createOneShot(taskId, true);
+		const task = await readStoredTask(channelDir, taskId);
+		expect(task).toBeDefined();
+		if (!task) return;
+		const runId = "legacy-run";
+		await mkdir(join(channelDir, "tasks", ".verifications"), { recursive: true });
+		await writeFile(
+			verificationAttestationPath(channelDir, runId),
+			`${JSON.stringify({
+				version: 1,
+				runId,
+				taskId,
+				verdict: "pass",
+				checkedAt: "2026-08-04T12:00:00+08:00",
+				bodyHash: taskBodyHash(task.body),
+				evidence: "Legacy verifier evidence.",
+				workspaceChanged: false,
+				subjectHash: "a".repeat(64),
+			})}\n`,
+			"utf-8",
+		);
+
+		const attestation = await readVerificationAttestation(channelDir, runId);
+		expect(attestation.subjectMode).toBe("legacy-head");
+		expect(attestation.subjectBaseCommit).toBeUndefined();
+		expect(attestation.verificationStrength).toBe("enforced");
+	});
+
+	it("rejects an attestation subjectDir that does not match the persisted run checkout", async () => {
+		const trustedDir = join(workspaceDir, "trusted-checkout");
+		const otherDir = join(workspaceDir, "other-checkout");
+		await mkdir(trustedDir, { recursive: true });
+		await mkdir(otherDir, { recursive: true });
+		const taskId = "subject-binding";
+		await createOneShot(taskId, true);
+		await updateTask(
+			{ ...options, workingDirectory: trustedDir },
+			{ id: taskId, note: "Dispatched an independent purpose=verify sub-agent.", status: "waiting" },
+		);
+		await registerSettledVerificationRun("subject-binding-run", taskId, trustedDir);
+		const attestation = await writeVerificationAttestation(channelDir, {
+			runId: "subject-binding-run",
+			taskId,
+			verdict: "pass",
+			checkedAt: "2026-08-04T12:00:00+08:00",
+			evidence: "The checked result exists.",
+			workspaceChanged: false,
+			subjectHash: "a".repeat(64),
+			subjectDir: otherDir,
+			verificationStrength: "advisory",
+		});
+
+		await expect(
+			verifyTask({ ...options, workingDirectory: trustedDir }, { id: taskId, verifierRunId: attestation.runId }),
+		).rejects.toThrow(/subjectDir does not match its persisted workingDirectory/);
+	});
+
+	it("fails closed for a subject-bearing attestation whose run record is unavailable", async () => {
+		const taskId = "subject-missing-run";
+		const checkout = join(workspaceDir, "checkout");
+		await mkdir(checkout, { recursive: true });
+		await createOneShot(taskId, true);
+		const attestation = await writeVerificationAttestation(channelDir, {
+			runId: "subject-missing-run-record",
+			taskId,
+			verdict: "pass",
+			checkedAt: "2026-08-04T12:00:00+08:00",
+			evidence: "The checked result exists.",
+			workspaceChanged: false,
+			subjectHash: "b".repeat(64),
+			subjectDir: checkout,
+			verificationStrength: "advisory",
+		});
+
+		await expect(
+			readVerificationAttestation(channelDir, attestation.runId, { trustedWorkingDirectory: undefined }),
+		).rejects.toThrow(/no persisted workingDirectory is available/);
+	});
+
+	it("canonicalizes a valid subject alias against a settled run record", async () => {
+		const checkout = join(workspaceDir, "settled-checkout");
+		const alias = join(workspaceDir, "settled-alias");
+		await mkdir(checkout, { recursive: true });
+		symlinkSync(checkout, alias, "dir");
+		const taskId = "subject-alias";
+		await createOneShot(taskId, true);
+		await registerSettledVerificationRun("subject-alias-run", taskId, checkout);
+		const attestation = await writeVerificationAttestation(channelDir, {
+			runId: "subject-alias-run",
+			taskId,
+			verdict: "pass",
+			checkedAt: "2026-08-04T12:00:00+08:00",
+			evidence: "The checked result exists.",
+			workspaceChanged: false,
+			subjectHash: "c".repeat(64),
+			subjectDir: alias,
+			verificationStrength: "advisory",
+		});
+		const run = getSubAgentRunManager(CHANNEL_ID).get(attestation.runId);
+		const bound = await readVerificationAttestation(channelDir, attestation.runId, {
+			trustedWorkingDirectory: run?.workingDirectory,
+		});
+
+		expect(bound.subjectDir).toBe(realpathSync(checkout));
+	});
+
+	it("rechecks the attestation subject binding during task_close", async () => {
+		const trustedDir = join(workspaceDir, "close-trusted-checkout");
+		const otherDir = join(workspaceDir, "close-other-checkout");
+		await mkdir(trustedDir, { recursive: true });
+		await mkdir(otherDir, { recursive: true });
+		const taskId = "close-subject-binding";
+		await createOneShot(taskId, true);
+		const withSubject = { ...options, workingDirectory: trustedDir };
+		await updateTask(withSubject, {
+			id: taskId,
+			note: "Dispatched an independent purpose=verify sub-agent.",
+			status: "waiting",
+		});
+		await registerSettledVerificationRun("close-subject-binding-run", taskId, trustedDir);
+		const attestation = await writeVerificationAttestation(channelDir, {
+			runId: "close-subject-binding-run",
+			taskId,
+			verdict: "pass",
+			checkedAt: "2026-08-04T12:00:00+08:00",
+			evidence: "The checked result exists.",
+			workspaceChanged: false,
+			verificationStrength: "advisory",
+		});
+		await verifyTask(withSubject, { id: taskId, verifierRunId: attestation.runId });
+
+		const attestationPath = verificationAttestationPath(channelDir, attestation.runId);
+		const tampered = JSON.parse(await readFile(attestationPath, "utf-8")) as Record<string, unknown>;
+		tampered.subjectHash = "d".repeat(64);
+		tampered.subjectDir = otherDir;
+		await writeFile(attestationPath, `${JSON.stringify(tampered)}\n`, "utf-8");
+
+		await expect(
+			closeTask(withSubject, {
+				id: taskId,
+				outcome: "complete",
+				summary: "Result is complete.",
+				evidence: "Independent verifier passed.",
+			}),
+		).rejects.toThrow(/subjectDir does not match its persisted workingDirectory/);
+	});
+
 	it("anchors completion subject freshness to the attestation, with no mirrored field to drift", async () => {
 		subjectDir = await mkdtemp(join(tmpdir(), "task-manage-subject-"));
 		execFileSync("git", ["-C", subjectDir, "init", "-q"], { stdio: "pipe" });
@@ -137,6 +336,8 @@ describe("task_create/task_update/task_close/task_verify (spec 046, D3)", () => 
 		await writeFile(join(subjectDir, "artifact.txt"), "before\n");
 		execFileSync("git", ["-C", subjectDir, "add", "artifact.txt"], { stdio: "pipe" });
 		execFileSync("git", ["-C", subjectDir, "commit", "-q", "-m", "init"], { stdio: "pipe" });
+		const subjectAlias = join(workspaceDir, "subject-alias");
+		symlinkSync(subjectDir, subjectAlias, "dir");
 
 		await createOneShot("subject-drift", true);
 		const withSubject = { ...options, workingDirectory: subjectDir };
@@ -145,6 +346,7 @@ describe("task_create/task_update/task_close/task_verify (spec 046, D3)", () => 
 			note: "Dispatched an independent purpose=verify sub-agent.",
 			status: "waiting",
 		});
+		await registerSettledVerificationRun("subject-run", "subject-drift", subjectDir);
 		const subjectHash = await workspaceSubjectHash(subjectDir);
 		expect(subjectHash).toBeDefined();
 		const attestation = await writeVerificationAttestation(channelDir, {
@@ -155,7 +357,7 @@ describe("task_create/task_update/task_close/task_verify (spec 046, D3)", () => 
 			evidence: "The checked result exists.",
 			workspaceChanged: false,
 			subjectHash,
-			subjectDir,
+			subjectDir: subjectAlias,
 			verificationStrength: "enforced",
 		});
 		await verifyTask(withSubject, { id: "subject-drift", verifierRunId: attestation.runId });
@@ -174,6 +376,52 @@ describe("task_create/task_update/task_close/task_verify (spec 046, D3)", () => 
 			}),
 		).rejects.toThrow(/artifacts changed/);
 		expect(existsSync(taskPath)).toBe(true);
+	});
+
+	it("lets task_close accept a normal commit of content already checked by a base-relative attestation", async () => {
+		subjectDir = await mkdtemp(join(tmpdir(), "task-manage-base-subject-"));
+		execFileSync("git", ["-C", subjectDir, "init", "-q"], { stdio: "pipe" });
+		execFileSync("git", ["-C", subjectDir, "config", "user.email", "test@example.com"], { stdio: "pipe" });
+		execFileSync("git", ["-C", subjectDir, "config", "user.name", "Test"], { stdio: "pipe" });
+		await writeFile(join(subjectDir, "artifact.txt"), "before\n");
+		execFileSync("git", ["-C", subjectDir, "add", "artifact.txt"], { stdio: "pipe" });
+		execFileSync("git", ["-C", subjectDir, "commit", "-q", "-m", "init"], { stdio: "pipe" });
+
+		await writeFile(join(subjectDir, "artifact.txt"), "verified\n");
+		const snapshot = await workspaceSubjectSnapshot(subjectDir);
+		expect(snapshot).toBeDefined();
+		if (!snapshot) return;
+
+		await createOneShot("subject-commit", true);
+		const withSubject = { ...options, workingDirectory: subjectDir };
+		await updateTask(withSubject, { id: "subject-commit", note: "Dispatched verifier.", status: "waiting" });
+		await registerSettledVerificationRun("subject-base-run", "subject-commit", subjectDir);
+		const attestation = await writeVerificationAttestation(channelDir, {
+			runId: "subject-base-run",
+			taskId: "subject-commit",
+			verdict: "pass",
+			checkedAt: "2026-08-04T12:00:00+08:00",
+			evidence: "The implementation and checks passed.",
+			workspaceChanged: false,
+			subjectHash: snapshot.hash,
+			subjectDir,
+			subjectMode: "base-relative",
+			subjectBaseCommit: snapshot.baseCommit,
+			subjectBaselineUntrackedPaths: snapshot.baselineUntrackedPaths,
+			verificationStrength: "advisory",
+		});
+		await verifyTask(withSubject, { id: "subject-commit", verifierRunId: attestation.runId });
+
+		execFileSync("git", ["-C", subjectDir, "add", "artifact.txt"], { stdio: "pipe" });
+		execFileSync("git", ["-C", subjectDir, "commit", "-q", "-m", "ship verified content"], { stdio: "pipe" });
+		await expect(
+			closeTask(withSubject, {
+				id: "subject-commit",
+				outcome: "complete",
+				summary: "Result is complete.",
+				evidence: "Independent verifier passed before the normal commit.",
+			}),
+		).resolves.toMatchObject({ action: "close", archived: true });
 	});
 
 	it("completes one-shot work directly into the archive", async () => {

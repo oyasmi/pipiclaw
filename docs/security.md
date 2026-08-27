@@ -539,6 +539,8 @@ Pipiclaw 的 `write` / `edit` 工具禁止修改 `workspace/sub-agents/`，避�
 
 并发写角色还受 workspace 排他写锁约束：同一工作目录或互为父子的目录不能同时运行两个 `mutates: write` run。写锁防止意外并发覆盖，不替代权限隔离。
 
+这也适用于声明 `mutates: write` 的 `purpose=verify` verifier：它必须先取得同一把独占 lease，直到 run 结算才释放，因此不会与已有写 run 并发；但 lease 只是并发保护，不是“完全只读”证明。运行测试/构建产生的临时 untracked 文件只在 artifact subject 规定的明确范围内排除，验证开始前已存在的 untracked 文件和范围外的新源文件仍受 subject 检查保护。此类验证的 attestation 标为 `advisory`，仍需人工抽查 diff 和证据。
+
 ## 已知边界（Known Limits）
 
 当前实现有几个需要明确知道的边界：

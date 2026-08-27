@@ -157,7 +157,7 @@ maxWallTimeSec: 3600
 | `maxWallTimeSec` | 否 | `300` | 最大总执行时长，秒；超过 120s 的部分会异步化，见下文"同步宽限窗口" |
 | `bashTimeoutSec` | 否 | `120` | 子代理内 bash 命令默认超时，秒 |
 | `workload` | 否 | `light` | `light` 或 `heavy`，只影响系统提示里的目录分组展示 |
-| `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁、能否用于 `purpose=verify`。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见。inline 委派没有角色文件可写，因此 `subagent` 调用参数上也接受同名 `mutates`（见下文"调用参数"），显式声明时优先于推定 |
+| `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁。`purpose=verify` 允许 `write`，但这类验证会取独占写锁并将 attestation 标为 `advisory`。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见。inline 委派没有角色文件可写，因此 `subagent` 调用参数上也接受同名 `mutates`（见下文"调用参数"），显式声明时优先于推定 |
 | `harness` / `command` / `shell` / `env` / `cwd` | 驳回 | - | 只对外部角色有意义（`cwd` 对两种 runtime 都驳回，见下） |
 
 ### 外部（`runtime: external`）
@@ -167,7 +167,7 @@ maxWallTimeSec: 3600
 | `name` / `description` | 是 | - | 同上 |
 | `harness` | 是 | - | `claude-code`、`codex-cli` 或 `exec` |
 | `command` | 是 | - | 目标 CLI 的命令行，按 shell 词法分词后直接 argv 调用，**不经过 shell** |
-| `mutates` | 是 | - | `read` 或 `write`，无默认值——这是一次显式声明，决定是否取 workspace 写锁、是否可用于 `purpose=verify` |
+| `mutates` | 是 | - | `read` 或 `write`，无默认值——这是一次显式声明，决定是否取 workspace 写锁；`purpose=verify` 允许 `write`，但验证强度为 `advisory` |
 | `model` | 否 | - | 目标 harness 自己的模型字符串（如 `sonnet`），**原样透传，不经过 `models.json` 校验** |
 | `thinkingLevel` | 否 | `purpose=verify` 为 `medium`；普通 work 委派**不兜底**，未声明就不追加任何推理参数，沿用目标 CLI 自己的配置 | 由结构化 harness 翻译成目标 CLI 的推理参数（见下） |
 | `workload` | 否 | `heavy` | 同内置 |
@@ -259,7 +259,7 @@ maxWallTimeSec: 3600
 | `subagent_run op=cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
 | `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落。`op=follow_up` 成功派发会计入 effect ledger（spec 047），治理器据此判断进度 |
 
-`follow_up` 派发时走的是与首次派发**同一套信封构造**：运行时上下文（含这次续接自己新分配的产物目录）、`paths`/会话/记忆上下文块、以及 `purpose=verify` 时的验收协议，而不是一段只把原始指令转发过去的手写文本。verify 的准入检查（`mutates: write` 角色不能验收、`exec` 不能验收）也在 `follow_up` 上重新核对一遍——角色如果在原始 run 之后被改成 `mutates: write`，续接会被拒绝,不会因为"上次派发时它还是只读"就放行。
+`follow_up` 派发时走的是与首次派发**同一套信封构造**：运行时上下文（含这次续接自己新分配的产物目录）、`paths`/会话/记忆上下文块、以及 `purpose=verify` 时的验收协议，而不是一段只把原始指令转发过去的手写文本。verify 的准入检查（`exec` 不能验收）也在 `follow_up` 上重新核对一遍；当前角色若声明 `mutates: write`，续接会像首次派发一样先取得目标工作区独占 lease，并以 `advisory` 强度运行。
 
 **角色改过之后还能续接吗**：能否续接取决于改了什么。pipiclaw 在首次派发时会记下角色的 `command`/`model`/`shell` 指纹；`follow_up` 时如果这三者中任何一个变了（换了 CLI 参数、换了模型、切换了 shell 模式），续接会被拒绝并提示改派新任务——旧会话不应该被一套它从未写过的调用方式重新解读。**只改系统提示词正文不受影响**，续接照常进行，因为一次续接本来就带着旧会话的上下文，修一个措辞或错别字不该打断所有在途续接。
 
@@ -358,7 +358,7 @@ my-gateway/gpt-4.1
 `mutates` 承担的是"这个角色会不会改动宿主机"这一件事，三处消费：
 
 1. **Workspace 写锁**：只有 `mutates: write` 的 run 会在其 `workingDirectory` 上取一把排他写锁，直到结算才释放；同一目录（含父子目录）上第二个写角色会被直接拒绝，错误会点名持有者的 runId 与工作目录。`mutates: read` 的 run 不取锁，也不会被写锁阻塞。
-2. **`purpose=verify` 准入**：声明 `mutates: write` 的角色不能同时用作验收者；`exec` harness 因为没有可验证的完成协议，一律不能用于验收，无论 `mutates` 怎么写。
+2. **`purpose=verify` 准入**：声明 `mutates: write` 的角色可以用作验收者，但必须像其他写 run 一样先取得目标工作区（同目录及父子目录冲突）独占 lease，并将结论标为 `advisory`；`exec` harness 因为没有可验证的完成协议，一律不能用于验收，无论 `mutates` 怎么写。
 3. **审计**：外部角色每次派发都会记一条包含 `mutates` 的审计事件。
 
 内置角色不填时按 `tools` 是否含 `write`/`edit` 自动推定；外部角色必须显式声明。
@@ -383,7 +383,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 子代理没有 `subagent` 工具，**不能继续创建下一级代理**——但这只约束内置子代理。外部 agent 本身是完整的 coding agent，它能不能 spawn 自己的子代理，pipiclaw 拦不住，见下文"明确不可控的部分"。
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。**外部角色完全没有这层工具白名单**——它能触及其自身权限所及的任何地方，`mutates`/`workingDirectory` 都不是隔离机制，只是审计与并发控制信息。
 - 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，`task_verify` / `task_close` 在同一目录复算 artifact subject。
-- `purpose: verify` + `taskId`：进入独立验收协议。内置验证器结构性移除了 write/edit 工具，但默认工具集仍含 `bash`——它同样能写文件，所以 `verificationStrength` 只在角色的 `tools` 里也不含 `bash` 时才是 `enforced`，否则如实标成 `advisory`；外部验证器永远做不到结构性移除，恒为 `advisory`。两者都靠事后 workspace 哈希比对判定是否被改动（含未跟踪文件的**内容**变化，不只是路径出现/消失）；哈希算不出来（不是 Git 检出，或 `git status` 失败）时**直接判 FAIL**，不会把"测不出来"当成"没改动"。verifier 还必须在最后一行明确 `VERDICT: PASS|FAIL`。`advisory` 结论仍会被记录、展示，并要求主代理按风险抽查，不是自动失败。
+- `purpose: verify` + `taskId`：进入独立验收协议。内置验证器结构性移除了 write/edit 工具，但默认工具集仍含 `bash`——它同样能写文件，所以 `verificationStrength` 只在角色声明 `mutates: read` 且 `tools` 里也不含 `bash` 时才是 `enforced`，否则如实标成 `advisory`；外部验证器永远做不到结构性移除，恒为 `advisory`。所有写能力的 verifier 都先持有目标工作区独占 lease。新 attestation 记录验证开始时的 `baseCommit`、既有 untracked 路径和范围外的 ignored 路径：之后正常提交已验收内容不会改变 subject；新建文件只有落在 checkout 根目录下明确的临时产物范围（如 `.run/`、`coverage/`、`build/`、`dist/`、缓存或测试报告目录；Cypress 仅 `cypress/screenshots/`、`cypress/videos/`）时才不计入 subject，开始前已存在的 untracked 文件、ignored 非临时产品文件始终受保护，其他新源文件仍会使验收失败。两者优先靠事后 workspace subject 比对判定是否被改动；没有可比较的 subject/status 前后证据时**直接判 FAIL**，不会把"测不出来"当成"没改动"。verifier 还必须在最后一行明确 `VERDICT: PASS|FAIL`。`advisory` 结论仍会被记录、展示，并要求主代理按风险抽查，不是自动失败。
 - verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`，主代理用返回的 runId 调 `task_verify` 导入；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 - **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
 
@@ -467,9 +467,9 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 **Reviewer / Verifier / Worker / Documenter**（外部，codex-cli）—— 独立挑错、运行取证、通用分析、文档：
 
-- reviewer 使用 `--sandbox read-only` + `mutates: read`；完整输出由 runtime 自动保存到 run 的 `output.md`，无需为评审报告授予写权限。它也可承担外部 `purpose=verify`，但 attestation 强度仍是 `advisory`
+- reviewer 使用 `--sandbox read-only` + `mutates: read`；完整输出由 runtime 自动保存到 run 的 `output.md`，无需为评审报告授予写权限。它也可承担不需要写入工作区的外部 `purpose=verify`，但 attestation 强度仍是 `advisory`
 - verifier / worker / documenter 使用 `--sandbox workspace-write` + `mutates: write`，可以生成工作区产物，但模板不允许它们修改 Git 历史或外部系统
-- verifier 因运行测试可能写构建产物，不能承担要求只读的 `purpose=verify`；需要只读终验时用 reviewer，并按风险补充主代理抽查
+- verifier 因运行测试可能写构建产物，承担 `purpose=verify` 时会取得目标工作区独占 lease，并以 `advisory` 强度验收；协议允许临时产物，但禁止修改被验收实现或既有 untracked 产品文件。需要静态只读终验时用 reviewer，并按风险补充主代理抽查
 - 提交统一交给内置 git-committer；只有用户明确要求时才 push
 
 ## 常见错误（Common Mistakes）
@@ -485,7 +485,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 在任务 Goal 未覆盖目标仓库或 ref 时让 Git 子代理自动 push。
 - 给外部角色写 `cwd`、`tools`、`maxTurns` 等只对内置有意义的字段，或给内置角色写 `harness`、`command`、`shell`、`env`——都会被直接驳回，不是被忽略。
 - 期待 `subagent`（角色优先）接受 `tools`/`model`/`mutates`/`returns` 之类的覆盖——这几个字段已经不在这个工具的 schema 里；需要覆盖就说明该用 `subagent_inline`，或者该改角色文件本身。
-- 把 `mutates: write` 的外部角色用于 `purpose=verify`——会被直接拒绝派发（`follow_up` 上同样会被拒绝，不只是首次派发）。
+- 把 `mutates: write` 的 verifier 当成结构性只读证据——它可以承担 `purpose=verify`，但会取写 lease 且 attestation 只有 `advisory` 强度；不得修改被验收实现或为了通过测试而修代码。
 - 以为 `mutates: read` 或工具白名单是安全边界——外部进程不受它们约束，真正的边界只有目标 CLI 自己的 sandbox flag。
 - 给外部角色写 `memory: relevant` 却没意识到这会把频道会话/记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
 - 改了外部角色的 `command`/`model`/`shell` 之后还指望 `follow_up` 能续接旧会话——指纹不匹配会被拒绝，需要改派新任务。
