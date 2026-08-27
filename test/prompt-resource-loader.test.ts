@@ -65,6 +65,19 @@ async function loadResources(workspaceDir: string, channelDir: string) {
 }
 
 describe("pi resource-loader seam", () => {
+	it("returns diagnostics for malformed skills and ignores README/AGENTS reference Markdown", () => {
+		const { workspaceDir, channelDir } = createWorkspace();
+		writeFileSync(join(workspaceDir, "skills", "README.md"), "Reference notes without frontmatter\n");
+		const brokenDir = join(workspaceDir, "skills", "broken");
+		mkdirSync(brokenDir, { recursive: true });
+		writeFileSync(join(brokenDir, "SKILL.md"), "---\nname: [broken\ndescription: invalid\n---\n");
+
+		const result = loadPipiclawSkills(channelDir);
+		expect(result.skills.map((skill) => skill.name)).toEqual(["release-notes"]);
+		expect(result.diagnostics.length).toBeGreaterThan(0);
+		expect(result.diagnostics.some((diagnostic) => diagnostic.path?.endsWith("broken/SKILL.md"))).toBe(true);
+	});
+
 	it("hands pi a custom prompt, no append, and no context files", async () => {
 		const { workspaceDir, channelDir } = createWorkspace();
 		const { build, loader } = await loadResources(workspaceDir, channelDir);
