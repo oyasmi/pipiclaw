@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ExecOptions, Executor } from "../src/executor.js";
+import { createExecutor, type ExecOptions, type Executor } from "../src/executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createGrepTool } from "../src/tools/grep.js";
 
@@ -147,7 +147,9 @@ describe("grep tool", () => {
 
 		expect(commands[0]).toContain("--exclude-dir=node_modules");
 		expect(commands[0]).toContain("--exclude-dir=.git");
-		expect(commands[0]).toContain("--include=*.ts");
+		// The glob is model-controlled and the executor runs the command via `sh -c`, so it must be
+		// shell-escaped like the pattern and path.
+		expect(commands[0]).toContain("--include='*.ts'");
 		// Not piped through `head` -- that would mask grep's own exit code behind `head`'s (always 0).
 		expect(commands[0]).not.toContain("| head");
 		expect(calls[0].options?.maxCaptureBytes).toBeGreaterThan(0);
@@ -163,5 +165,85 @@ describe("grep tool", () => {
 		expect(text).toContain("hit the");
 		expect(text).toContain("result cap");
 		expect(text).not.toContain("Try a broader pattern");
+	});
+});
+
+// Real-shell regression: the executor runs commands via `sh -c`, and the glob used to reach that
+// command unescaped, so a model-controlled glob could append arbitrary shell commands.
+describe("grep tool against a real shell (glob injection)", () => {
+	function makeRealShellTool(tmpDir: string) {
+		return createGrepTool(createExecutor(), {
+			securityConfig: { ...DEFAULT_SECURITY_CONFIG, enabled: false },
+			securityContext: { agentWorkspaceDir: tmpDir, projectRoot: tmpDir },
+		});
+	}
+
+	async function runReal(
+		tool: ReturnType<typeof createGrepTool>,
+		args: Record<string, unknown>,
+	): Promise<{ text: string; matchCount: number }> {
+		const result = await tool.execute("call", { label: "search", pattern: "hit", ...args } as never);
+		return {
+			text: result.content[0].type === "text" ? result.content[0].text : "",
+			matchCount: (result.details as { matchCount: number }).matchCount,
+		};
+	}
+
+	it("does not execute shell commands appended to a malicious glob, while a legal glob still filters normally", async () => {
+		const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const dir = mkdtempSync(join(tmpdir(), "pipiclaw-grep-glob-"));
+		try {
+			writeFileSync(join(dir, "a.ts"), "hit\n");
+			writeFileSync(join(dir, "b.js"), "hit\n");
+			// The payload a hostile glob must NOT be able to run.
+			const canary = join(dir, "pwned-marker");
+			const maliciousGlob = `*.ts; touch ${canary}`;
+			const commandInjectionGlob = `*.ts\`touch ${canary}\``;
+
+			const tool = makeRealShellTool(dir);
+
+			// The injected commands may make grep see odd arguments, but they must never run: no
+			// marker file may appear. Exit >= 2 (a grep usage error) is fine -- execution of the
+			// extra command is what this test forbids.
+			const malicious = await runReal(tool, { glob: maliciousGlob });
+			const maliciousBacktick = await runReal(tool, { glob: commandInjectionGlob });
+			expect(existsSync(canary)).toBe(false);
+			expect(malicious.text).not.toContain("== a.ts =="); // nothing legitimate was matched by `*.ts; ...`
+			expect(maliciousBacktick.text).not.toContain("== a.ts ==");
+			expect(malicious.matchCount).toBe(0);
+			expect(maliciousBacktick.matchCount).toBe(0);
+
+			// A legal glob still works end to end through the real shell. The search path is resolved
+			// to an absolute one by the path guard, so the group header carries the full path.
+			const legal = await runReal(tool, { glob: "*.ts" });
+			expect(legal.text).toMatch(/== .*\/a\.ts ==/);
+			expect(legal.text).not.toContain("b.js");
+			expect(legal.matchCount).toBe(1);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("escapes glob single quotes so a quote-bearing glob cannot break out of its quoting", async () => {
+		const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const dir = mkdtempSync(join(tmpdir(), "pipiclaw-grep-glob-quote-"));
+		try {
+			writeFileSync(join(dir, "a.ts"), "hit\n");
+			const canary = join(dir, "pwned-marker");
+			const tool = makeRealShellTool(dir);
+
+			// A leading `'` closes the quoting shellEscape opens, so an unescaped glob would leave
+			// the trailing `; touch ...` outside any quotes and run it. Escaped, the whole glob --
+			// quotes included -- stays one literal argument and matches nothing.
+			const result = await runReal(tool, { glob: `'*'; touch ${canary}` });
+			expect(existsSync(canary)).toBe(false);
+			expect(result.matchCount).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

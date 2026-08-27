@@ -216,7 +216,10 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 				flags.push(`--exclude-dir=${segment}`);
 			}
 			if (glob) {
-				flags.push(`--include=${glob}`);
+				// Model-controlled, so it must be shell-escaped like the pattern and path below -- the
+				// executor runs the command via `sh -c`, and an unescaped glob such as `*.ts; rm -rf x`
+				// would otherwise run as an extra command instead of matching nothing.
+				flags.push(`--include=${shellEscape(glob)}`);
 			}
 			// `--` terminates flags so a pattern beginning with `-` is not read as one. Bounded via
 			// `maxCaptureBytes` (D5.2) rather than a `| head -n` pipe: piping through `head` would
