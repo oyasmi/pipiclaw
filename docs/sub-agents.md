@@ -157,7 +157,7 @@ maxWallTimeSec: 3600
 | `maxWallTimeSec` | 否 | `300` | 最大总执行时长，秒；超过 120s 的部分会异步化，见下文"同步宽限窗口" |
 | `bashTimeoutSec` | 否 | `120` | 子代理内 bash 命令默认超时，秒 |
 | `workload` | 否 | `light` | `light` 或 `heavy`，只影响系统提示里的目录分组展示 |
-| `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁。`purpose=verify` 允许 `write`，但这类验证会取独占写锁并将 attestation 标为 `advisory`。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见。inline 委派没有角色文件可写，因此 `subagent` 调用参数上也接受同名 `mutates`（见下文"调用参数"），显式声明时优先于推定 |
+| `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁。`purpose=verify` 允许 `write`，但这类验证会取独占写锁并将 attestation 标为 `advisory`。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见。inline 委派没有角色文件可写，因此 `subagent_inline` 调用参数上也接受同名 `mutates`（见下文"调用参数"），显式声明时优先于推定 |
 | `harness` / `command` / `shell` / `env` / `cwd` | 驳回 | - | 只对外部角色有意义（`cwd` 对两种 runtime 都驳回，见下） |
 
 ### 外部（`runtime: external`）

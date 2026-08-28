@@ -224,6 +224,8 @@ describe("configured sub-agents section", () => {
 		expect(empty.text).not.toContain("## Configured Sub-Agents");
 		expect(empty.text).toContain("## Sub-Agents");
 		expect(empty.text).toContain("subagent_inline");
+		expect(empty.text).toContain("only as the fallback");
+		expect(empty.text).toContain("complete valid payload");
 		expect(empty.sections.find((section) => section.id === "subagents")).toBeDefined();
 
 		const populated = buildPipiclawSystemPrompt(

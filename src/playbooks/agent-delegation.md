@@ -15,7 +15,7 @@ order: 60
 两条路径，按有没有合适的现成角色分：
 
 - **系统提示的目录里有合适角色**：看活的轻重挑。只读定位、单点事实、小范围检查交给 `light`；跨多文件实现、需要自测、要跑几十分钟的重活交给 `heavy`。目录已经按 `light`/`heavy` 和 `read`/`write` 分好组，`description` 说明各自适用面。按角色能做什么挑，**不按底层 harness（claude-code / codex-cli / exec）挑**——harness 只决定调用细节，比如命令怎么拼。
-- **没有合适角色**：直接传 inline `systemPrompt` 起一个临时子代理。这是委派工具的默认路径，不需要先去配角色文件。`systemPrompt` 写执行者**稳定的**身份、纪律和产出格式，`task` 写这一次的终点和证据；需要时用 `tools` 收窄工具面、用 `model` 换模型。
+- **没有合适角色**：才使用 `subagent_inline`，直接传 `systemPrompt` 起一个临时子代理。这是少数需要临时自定义执行面的高级场景，不是默认路径；如果有任何合适的已配置角色，优先调用 `subagent`，不要把 inline 当作它的简写。inline 没有角色文件替你提供工具、模型、预算和上下文策略，调用时要自行组装完整合法的 `task`、`systemPrompt` 和适用控制参数。
 
 `light` 通常是内置角色，同回合就返回（超 120 秒自动转异步，这是交互方式优化，不是失败）；`heavy` 通常是外部角色，一律异步。标了 `write` 的角色会改宿主文件，工作目录要单独想清楚（第三节）。
 
@@ -46,7 +46,7 @@ order: 60
 - **并行的写入分片必须各自显式传 `workingDirectory`**（`git worktree add` 后指向不同 checkout）。默认值不会让它们自动分开，两个 run 会悄悄落到同一棵树上。创建的 worktree 用完记得关闭。
 - 频道配置了项目边界时，`workingDirectory` 必须落在项目目录内，否则派发前就被拒：`workingDirectory "..." must be inside the project root`。
 - runtime 只在**委派之间**保证排他写锁：`mutates: write` 的 run 占住目标目录，第二个写入者被拒时错误会点名持有者 runId。锁触发说明分片设计已经出错，它是兜底而不是免于思考的理由。
-- **写清 `mutates` 是你的责任。** 这把锁只保护声明了 `mutates: write` 的委派。内置角色的 `mutates` 由 `tools` 推定（只看 `write`/`edit`，看不到 `bash`），外部角色是自述，两者都可能与实际行为不符。配置好的角色改它的角色文件；inline 委派没有角色文件可改，就在 `subagent` 调用上直接传 `mutates: "write"`。
+- **写清 `mutates` 是你的责任。** 这把锁只保护声明了 `mutates: write` 的委派。内置角色的 `mutates` 由 `tools` 推定（只看 `write`/`edit`，看不到 `bash`），外部角色是自述，两者都可能与实际行为不符。配置好的角色改它的角色文件；inline 委派没有角色文件可改，就在 `subagent_inline` 调用上直接传 `mutates: "write"`。
 - **你自己的 `write` / `edit` / `bash` 不受这把锁保护。** 一个目录上有活跃写委派时，先等它结束，或者换一棵 worktree。
 
 ## 四、派发之后：结束回合，等唤醒

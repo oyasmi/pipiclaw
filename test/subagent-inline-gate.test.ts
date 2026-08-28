@@ -64,6 +64,32 @@ describe("subagent_inline tool gate (spec 046, D2.3)", () => {
 		expect(names).toContain("subagent_inline");
 	});
 
+	it("describes inline as an advanced fallback with a complete independent control surface", () => {
+		const inline = createPipiclawTools(makeOptions(true)).find((tool) => tool.name === "subagent_inline");
+		if (!inline) throw new Error("subagent_inline not registered");
+
+		expect(inline.description).toContain("Advanced fallback only, not the default");
+		expect(inline.description).toContain("use `subagent` first");
+		expect(inline.description).toContain("only when no configured role is suitable");
+		expect(inline.description).toContain("raw one-shot meta-executor");
+		expect(inline.description).toContain("not a shorthand for `subagent`");
+		for (const field of [
+			"task",
+			"systemPrompt",
+			"tools",
+			"model",
+			"effort",
+			"context",
+			"thinkingLevel",
+			"mutates",
+			"workingDirectory",
+			"purpose",
+			"taskId",
+		]) {
+			expect(inline.description).toContain(`\`${field}\``);
+		}
+	});
+
 	it("omits subagent_inline entirely when the gate is off, while subagent stays available", () => {
 		const names = createPipiclawTools(makeOptions(false)).map((tool) => tool.name);
 		expect(names).toContain("subagent");

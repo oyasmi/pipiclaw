@@ -147,7 +147,7 @@ export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 			return [
 				"## Sub-Agents",
 				hasInline
-					? "No configured agent exists yet: delegate with `subagent_inline`, passing a `systemPrompt` (no configured agent is required)."
+					? "No configured role is available, so use `subagent_inline` only as the fallback; provide a complete valid payload with required `task` and `systemPrompt`."
 					: "No configured agent exists and `subagent_inline` is off; ask the deployer to add a role or enable it.",
 				"A sub-agent starts blank — state goal, scope, paths, constraints, acceptance criteria in `task`.",
 				"Read agent-delegation.md before non-trivial delegation.",

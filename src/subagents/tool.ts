@@ -1435,7 +1435,7 @@ export function createSubAgentInlineTool(
 		name: "subagent_inline",
 		label: "subagent_inline",
 		description:
-			"Delegate a task to a one-off inline sub-agent when no configured role fits — define its systemPrompt (plus optional tools/model) here instead of a role file. Prefer `subagent` with a configured `agent` when one already covers this work. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
+			"Advanced fallback only, not the default: use `subagent` first whenever any configured role in the workspace `sub-agents/` can do the work. `subagent` is the normal role-based path: pass its `agent` and complete `task`; the role file supplies the tools, model, budget and context policy. Use `subagent_inline` only when no configured role is suitable. It is a raw one-shot meta-executor, not a shorthand for `subagent`: there is no role file to supply those settings. Build a complete valid inline call yourself — `task` and `systemPrompt` are required; choose valid values for any needed `tools`, `model`, `effort`, `context`, `thinkingLevel`, `mutates`, `workingDirectory`, `purpose` and `taskId` fields. Do not send a partial role-style payload or choose this tool just because it is available. Sub-agents never receive the subagent tool, so they cannot create nested agents.",
 		parameters: subagentInlineSchema,
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			if (signal?.aborted) {
