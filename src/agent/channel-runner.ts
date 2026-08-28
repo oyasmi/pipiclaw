@@ -18,8 +18,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
-import { createExecutor, type Executor } from "../executor.js";
-import { createFileStore, type FileStore } from "../file-store.js";
+import type { Executor } from "../executor.js";
+import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
 import {
 	buildFirstTurnMemoryBootstrapResult,
@@ -53,13 +53,12 @@ import { commitActiveSessionRef, resolveActiveSessionFile } from "../runtime/act
 import type { ChannelContext, MediaSender } from "../runtime/channel-context.js";
 import { resolveProjectScope } from "../runtime/project-scope-store.js";
 import type { ChannelStore } from "../runtime/store.js";
-import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
+import type { LoadedSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import type { PipiclawSettingsManager } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { formatLocalTime, localStampForFilename, parseLocalTime } from "../shared/local-time.js";
-import { countPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
@@ -91,10 +90,12 @@ import {
 import { loadWorkspacePromptResources, type WorkspacePromptResources } from "./prompt/resources.js";
 import type { PromptBuildResult } from "./prompt/types.js";
 import { createRunQueue } from "./run-queue.js";
-import type { RunnerFactoryPaths } from "./runner-factory.js";
+import type { RunnerDeps, RunnerFactoryPaths } from "./runner-factory.js";
 import { handleSessionEvent } from "./session-events.js";
 import { SessionResourceGate } from "./session-resource-gate.js";
+import { assembleTurnPrompt } from "./turn-prompt.js";
 import { recoverInterruptedTurn } from "./turn-recovery.js";
+import { type TurnHandle, TurnStateMachine } from "./turn-state.js";
 import { getLastAssistantUsage } from "./type-guards.js";
 import {
 	type AgentRunner,
@@ -103,7 +104,6 @@ import {
 	MAX_USER_MESSAGE_CHARS,
 	type RunnerStatusSnapshot,
 	type RunState,
-	type TurnPhase,
 	type TurnStatus,
 } from "./types.js";
 import { loadPipiclawSkills, type PipiclawSkillsResult, resolvePipiclawSkills } from "./workspace-resources.js";
@@ -220,6 +220,8 @@ export class ChannelRunner implements AgentRunner {
 	 * Changing project is a dispose-and-rebuild of the whole runner, not a field mutation.
 	 */
 	private readonly projectScope: ProjectScope;
+	/** Re-read per use, not captured once: an edited security.json takes effect without a restart. */
+	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
 	private session!: AgentSession;
 	/** Settings manager owned by the currently bound AgentSession. */
 	private sessionSettingsManager!: SDKSettingsManager;
@@ -255,17 +257,10 @@ export class ChannelRunner implements AgentRunner {
 	private firstTurnMemoryBootstrapPending = true;
 	/** Mirror of `tools.tasks.enabled` from the last tools-config load (see buildRuntimeTools). */
 	private tasksEnabled = true;
-	/** Single owner of turn state; see TurnPhase in types.ts. */
-	private turn: { phase: TurnPhase; stopRequested: boolean; taskText?: string } = {
-		phase: "idle",
-		stopRequested: false,
-	};
-	/**
-	 * Turns released by `forceEndTurn` whose owner has not called `endTurn` yet.
-	 * That late release must be swallowed, or it would clear the busy state of
-	 * whichever turn started in the meantime.
-	 */
-	private abandonedTurns = 0;
+	/** Single owner of turn state; see TurnPhase in types.ts and TurnStateMachine in turn-state.ts. */
+	private readonly turnState = new TurnStateMachine((message, detail) =>
+		log.logWarning(`[${this.channelId}] ${message}`, detail),
+	);
 	/** Set once transport-level `/new` replaces this generation. A retired runner is never reused. */
 	private retired = false;
 	/** When the primary model last failed and we switched to the backup. null = on primary. */
@@ -274,7 +269,7 @@ export class ChannelRunner implements AgentRunner {
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
 
-	constructor(channelId: string, channelDir: string, paths: RunnerFactoryPaths) {
+	constructor(channelId: string, channelDir: string, paths: RunnerFactoryPaths, deps: RunnerDeps) {
 		this.channelId = channelId;
 		this.channelDir = channelDir;
 		this.appHomeDir = paths.appHomeDir;
@@ -283,9 +278,9 @@ export class ChannelRunner implements AgentRunner {
 		this.onSessionEvent = paths.onSessionEvent;
 		this.mediaSender = paths.mediaSender;
 
-		const executor = createExecutor();
-		this.executor = executor;
-		this.fileStore = createFileStore();
+		this.executor = deps.executor;
+		this.fileStore = deps.fileStore;
+		this.loadSecurityConfig = deps.loadSecurityConfig;
 		this.workspaceDir = resolve(dirname(channelDir));
 
 		// Resolve and freeze this generation's ProjectScope (spec 043, D2/D3/D4.2). A channel with
@@ -294,7 +289,7 @@ export class ChannelRunner implements AgentRunner {
 		// or a since-tightened allowlist) fails the whole runner closed rather than silently
 		// falling back to a different root (P7) — the fix is `/project set`/`reset` from a plain
 		// runtime command path, not a degraded-but-running channel; see project-scope-store.ts.
-		const securityConfigForScope = loadSecurityConfigWithDiagnostics(this.appHomeDir);
+		const securityConfigForScope = this.loadSecurityConfig();
 		const projectAccessResolution = resolveProjectAccessPolicy(securityConfigForScope.config, process.cwd());
 		const scopeOutcome = resolveProjectScope(channelDir, projectAccessResolution);
 		if (scopeOutcome.kind === "blocked") {
@@ -383,54 +378,27 @@ export class ChannelRunner implements AgentRunner {
 	// === Public API ===
 
 	beginTurn(taskText: string): void {
-		if (this.turn.phase !== "idle") {
-			log.logWarning(`[${this.channelId}] beginTurn while phase=${this.turn.phase}; turns must be serialized`);
-		}
-		this.turn = { phase: "dispatching", stopRequested: false, taskText };
+		this.turnState.begin(taskText);
 	}
 
 	endTurn(): void {
-		// A turn that `forceEndTurn` already released no longer owns this state.
-		if (this.abandonedTurns > 0) {
-			this.abandonedTurns--;
-			return;
-		}
-		this.turn = { phase: "idle", stopRequested: false };
+		this.turnState.end();
 	}
 
 	forceEndTurn(reason: string): boolean {
-		if (this.turn.phase === "idle") {
-			return false;
-		}
-		log.logWarning(
-			`[${this.channelId}] Force-ending a stuck turn (phase=${this.turn.phase})`,
-			`${reason}; its own teardown is still running and will be ignored when it finishes`,
-		);
-		this.abandonedTurns++;
-		this.turn = { phase: "idle", stopRequested: false };
-		return true;
+		return this.turnState.forceEnd(reason);
 	}
 
 	isBusy(): boolean {
-		return this.turn.phase !== "idle";
-	}
-
-	/** Advance a turn's phase, unless that turn has since been released. */
-	private setPhase(turn: { phase: TurnPhase }, phase: TurnPhase): void {
-		if (this.turn !== turn) {
-			return;
-		}
-		this.turn.phase = phase;
+		return this.turnState.isBusy();
 	}
 
 	requestStop(): void {
-		if (this.turn.phase !== "idle") {
-			this.turn.stopRequested = true;
-		}
+		this.turnState.requestStop();
 	}
 
 	getTurnStatus(): TurnStatus {
-		return { ...this.turn };
+		return this.turnState.status();
 	}
 
 	async run(
@@ -448,14 +416,14 @@ export class ChannelRunner implements AgentRunner {
 		this.resetRunState(ctx, store);
 		// Direct callers (tests) may skip the transport's beginTurn/endTurn wrapper;
 		// then run() owns the whole turn itself.
-		const implicitTurn = this.turn.phase === "idle";
+		const implicitTurn = !this.turnState.isBusy();
 		if (implicitTurn) {
 			this.beginTurn(ctx.message.text);
 		}
 		// Every later phase write goes through this reference: once `forceEndTurn`
-		// has released this turn, `this.turn` may already belong to the next one.
-		const ownTurn = this.turn;
-		this.setPhase(ownTurn, "preparing");
+		// has released this turn, the machine's current turn may already belong to the next one.
+		const ownTurn = this.turnState.current();
+		this.turnState.setPhase(ownTurn, "preparing");
 
 		const runQueue = createRunQueue();
 		this.runState.queue = runQueue.queue;
@@ -492,13 +460,10 @@ export class ChannelRunner implements AgentRunner {
 			// Ensure channel directory exists
 			await mkdir(this.channelDir, { recursive: true });
 
-			promptText = preserveRawInput ? clippedInput : userMessage;
-
 			if (!preserveRawInput) {
 				// Channel facts are turn-dynamic by design (spec 025 §7.3): keeping them out of the
 				// system prompt is what lets every channel in a workspace share one cached prefix.
 				channelCapsuleText = this.renderChannelTurnContext();
-				promptText = `${channelCapsuleText}\n\n<user_message>\n${promptText}\n</user_message>`;
 
 				// The task digest reads the whole tasks/ directory and depends on nothing the memory
 				// work below produces, so it runs alongside the bootstrap and recall rather than
@@ -546,7 +511,6 @@ export class ChannelRunner implements AgentRunner {
 
 					if (recall.renderedText) {
 						recalledContextText = recall.renderedText;
-						promptText = `${recall.renderedText}\n\n${promptText}`;
 					}
 				}
 
@@ -555,30 +519,25 @@ export class ChannelRunner implements AgentRunner {
 					throw taskDigestResult.error;
 				}
 				taskDigestText = taskDigestResult.text ?? "";
-				if (taskDigestText) {
-					promptText = `${taskDigestText}\n\n${promptText}`;
-				}
-
-				if (durableMemoryBootstrapText) {
-					promptText = `${durableMemoryBootstrapText}\n\n${promptText}`;
-				}
 			}
 
+			const assembled = assembleTurnPrompt({
+				clippedInput,
+				userMessage,
+				preserveRawInput,
+				channelCapsule: channelCapsuleText,
+				durableMemoryBootstrap: durableMemoryBootstrapText,
+				taskDigest: taskDigestText,
+				recalledMemory: recalledContextText,
+			});
+			promptText = assembled.text;
+
 			// Estimated against the fully assembled prompt (recall + task digest + bootstrap all
-			// prepended above), not just the bare user message — those pieces can add thousands of
+			// included above), not just the bare user message — those pieces can add thousands of
 			// characters and must count against the projected context usage this guard is checking.
 			await this.maybeRunPreventiveCompactionForIncomingText(promptText);
 
-			this.lastTurnContextStats = {
-				durableMemoryChars: durableMemoryBootstrapText.length,
-				durableMemoryUnits: countPromptUnits(durableMemoryBootstrapText),
-				taskDigestChars: taskDigestText.length,
-				taskDigestUnits: countPromptUnits(taskDigestText),
-				recalledMemoryChars: recalledContextText.length,
-				recalledMemoryUnits: countPromptUnits(recalledContextText),
-				channelCapsuleUnits: countPromptUnits(channelCapsuleText),
-				userMessageChars: clippedInput.length,
-			};
+			this.lastTurnContextStats = assembled.stats;
 
 			const fallbackDeps: FallbackRunDeps = {
 				prompt: async (text) => {
@@ -679,7 +638,7 @@ export class ChannelRunner implements AgentRunner {
 	 */
 	private async finishTurn(input: {
 		ctx: ChannelContext;
-		ownTurn: { phase: TurnPhase };
+		ownTurn: TurnHandle;
 		implicitTurn: boolean;
 		promptSubmitted: boolean;
 		runQueue: ReturnType<typeof createRunQueue>;
@@ -691,7 +650,7 @@ export class ChannelRunner implements AgentRunner {
 		recalledContextText: string;
 	}): Promise<void> {
 		const { ctx, ownTurn, implicitTurn, promptSubmitted, runQueue, fallbackAttempted, fallbackTargetRef } = input;
-		this.setPhase(ownTurn, "finishing");
+		this.turnState.setPhase(ownTurn, "finishing");
 		// Debug dump (PIPICLAW_DEBUG=1). Written after the run so `systemPrompt` is the
 		// string the provider actually received — base sections, pi's tail, and the boundary
 		// footer the prompt extension appends at before_agent_start.
@@ -1156,10 +1115,10 @@ export class ChannelRunner implements AgentRunner {
 	 * while this call was suspended.
 	 */
 	private assertBusyWindowOpen(): void {
-		if (this.turn.phase === "preparing") {
+		if (this.turnState.phase() === "preparing") {
 			return;
 		}
-		if (this.turn.phase === "streaming" && this.session.isStreaming) {
+		if (this.turnState.phase() === "streaming" && this.session.isStreaming) {
 			return;
 		}
 		throw new Error("No task is currently running.");
@@ -1608,7 +1567,7 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	private buildRuntimeTools(): AgentTool<any>[] {
-		const securityLoad = loadSecurityConfigWithDiagnostics(this.appHomeDir);
+		const securityLoad = this.loadSecurityConfig();
 		const toolsLoad = loadToolsConfigWithDiagnostics(this.appHomeDir);
 		this.reportConfigDiagnostics([...securityLoad.diagnostics, ...toolsLoad.diagnostics]);
 		this.tasksEnabled = toolsLoad.config.tools.tasks.enabled;
@@ -1677,8 +1636,8 @@ export class ChannelRunner implements AgentRunner {
 			} catch (err) {
 				log.logWarning(`[${this.channelId}] session observer failed`, errorMessage(err));
 			}
-			if (isRecord(event) && event.type === "message_start" && this.turn.phase === "preparing") {
-				this.turn.phase = "streaming";
+			if (isRecord(event) && event.type === "message_start") {
+				this.turnState.markStreaming();
 			}
 			if (isRecord(event) && "reason" in event && event.reason === "new") {
 				this.firstTurnMemoryBootstrapPending = true;
