@@ -12,8 +12,8 @@ memory: none
 thinkingLevel: low
 workload: light
 mutates: read
-maxTurns: 12
-maxToolCalls: 24
+maxTurns: 24
+maxToolCalls: 64
 maxWallTimeSec: 300
 bashTimeoutSec: 120
 ---

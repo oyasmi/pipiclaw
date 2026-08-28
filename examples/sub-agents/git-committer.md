@@ -11,8 +11,8 @@ memory: none
 thinkingLevel: medium
 workload: light
 mutates: write
-maxTurns: 10
-maxToolCalls: 20
+maxTurns: 24
+maxToolCalls: 64
 maxWallTimeSec: 600
 bashTimeoutSec: 480
 ---
@@ -35,6 +35,7 @@ bashTimeoutSec: 480
 - 正常提交并让仓库 hooks 运行。hook 失败就报告，不用 `--no-verify`，也不改代码绕过失败。
 - 提交后用 `git show --stat --oneline HEAD` 核对内容并取交付所需的 hash 与路径；hook 改过文件的话再看一眼 `git status`，但不自行修复或补充暂存。
 - 不 amend、rebase、merge、reset、切分支、操作 tag 或改写历史，除非任务逐项明确授权。
+- 不在提交消息中添加类似 'Co-Authored-By:' 这样的签名
 
 ## Push 需单独授权
 

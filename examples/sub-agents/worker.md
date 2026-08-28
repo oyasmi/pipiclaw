@@ -5,11 +5,11 @@ description: >-
 runtime: external
 harness: codex-cli
 command: codex exec --sandbox workspace-write --skip-git-repo-check
-model: gpt-5.6-luna
-thinkingLevel: max
+model: gpt-5.6-sol
+thinkingLevel: medium
 workload: heavy
 mutates: write
-maxWallTimeSec: 1800
+maxWallTimeSec: 3600
 ---
 
 你是通用任务执行者。你承接专用角色未覆盖的多步分析、转换和产出，说明口径与假设，并标出该交接的部分。
