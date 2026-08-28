@@ -4,6 +4,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.2-beta.3] - 2026-08-28
+
 ### Added
 
 - Delegation runs and background jobs now emit a best-effort, out-of-band notice independent of the completion wake: a one-line "✅/⚠️ done" receipt lands within seconds of a run settling instead of waiting on the wake turn's own LLM latency, and a long external run also gets a sparse trickle of in-progress notices (its current step, polled from the harness's own streamed output). Controlled by the new `settings.json` key `delegation.notices` (`"off"` | `"settled"` | `"live"`, default `"live"`).
@@ -14,6 +16,10 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 - A completion wake whose task could not be activated (not `waiting`) now still reaches a normal turn unless the task is already `active` and therefore driven by something else (e.g. a sibling wake in the same fan-out) — previously it was dropped unconditionally, which could lose the result for good once the task had finished, been archived, or been disabled.
 - A delegation's completion wake carries up to 6,000 chars of the reply (up from 2,000), says so when it still had to truncate, and — for a `mutates: "write"` run — includes a `git status --porcelain` summary of what changed, so the reader does not have to spend its own first tool call finding out.
 - `/subagents roles` now shows each role's `model` and `thinkingLevel` in both list and detail views. List rows use four fixed unlabeled positions—`runtime`, `mutates`, `model`, and `thinking`—with raw values or self-explanatory placeholders (`default`, `CLI decides`, `default medium`, `not set`) as applicable. The external role model line in the detail view is now always rendered instead of only when declared: a declared value is shown as-is, while `CLI decides` identifies the CLI as the source when it is omitted. Internal roles show the effective `medium` default when `thinkingLevel` is omitted, while external `work` dispatches remain unset and only `verify` falls back to `medium`.
+
+### Fixed
+
+- The grep tool's `glob` parameter is now shell-escaped before being passed to `grep --include`, matching the pattern and path. The executor runs commands through `sh -c`, so a model-supplied glob containing shell metacharacters (e.g. `*.ts; rm -rf x`) would previously have executed as an extra command instead of simply matching nothing.
 
 ## [0.9.2-beta.2] - 2026-08-27
 
