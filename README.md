@@ -26,6 +26,8 @@ Pipiclaw 同时支持两类委派：内置子智能体在进程内完成检索�
 
 Pipiclaw 使用钉钉 Stream Mode，不需要自建消息中转服务或公网 IP。AI Card 可以持续显示思考、工具执行和状态更新；任务进行中仍可用 `/steer` 调整方向、`/followup` 排队下一件事、`/stop` 中止当前回合。生成的报表、截图和导出文件可以作为钉钉原生附件直接交付。
 
+同一个机器人实例可以同时服务多个私聊和群聊：私聊按用户、群聊按群分别建立 channel，不同 channel 的模型回合可以并行推进；同一 channel 内则串行执行，避免一段对话的上下文被多个回合同时修改。需要注意的是，会话隔离不等于代码目录隔离；如果多个 channel 指向同一个项目目录，仍应避免让主智能体同时修改同一批文件，或为并行实现准备独立的 Git worktree。完整边界见[并发与容量](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md)。
+
 ### 能自主，也能随时接管
 
 定时事件适合提醒、周期检查和零 token 的条件传感器；任务台账适合跨小时、跨会话的长期工作。运行状态、模型用量、任务、记忆和委派 run 都有不经过 LLM 的控制命令，即使模型不可用或当前回合卡住，你仍能查看和干预。
@@ -229,6 +231,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
 | 记忆、定时事件和长期任务 | [记忆](https://github.com/oyasmi/pipiclaw/blob/main/docs/memory.md) · [事件与任务](https://github.com/oyasmi/pipiclaw/blob/main/docs/events-and-tasks.md) |
 | 默认安全边界和外部智能体授权 | [安全指南](https://github.com/oyasmi/pipiclaw/blob/main/docs/security.md) |
 | 部署、升级、备份和排障 | [部署与运维](https://github.com/oyasmi/pipiclaw/blob/main/docs/deployment-and-operations.md) |
+| 多群、多私聊的并发模型与容量边界 | [并发与容量](https://github.com/oyasmi/pipiclaw/blob/main/docs/scaling-and-concurrency.md) |
 
 ## 开发
 

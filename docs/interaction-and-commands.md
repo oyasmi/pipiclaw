@@ -32,6 +32,8 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 每个频道拥有自己的会话、`SESSION.md`、`MEMORY.md`、`HISTORY.md`、任务台账、委派记录和冷存储历史。`workspace/MEMORY.md`、`ENVIRONMENT.md`、`AGENTS.md`、skills 和角色目录是工作区级共享配置。
 
+同一个 daemon 可以并行推进多个频道：不同用户的私聊、不同群聊不会因为另一个频道正在等待模型而排成一条全局队列。同一频道内仍只有一个主回合；同一个群里的所有成员共享这条会话线。频道隔离也不等于项目文件隔离——多个频道指向同一个 checkout 时，主智能体的写操作仍可能冲突。部署和共享目录边界见[并发与容量](./scaling-and-concurrency.md)。
+
 ## 钉钉中的输出形态
 
 `channel.json.responseMode` 控制钉钉如何展示一次回复：
@@ -98,7 +100,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 ## 会话命令
 
-下面的命令由 agent 会话层处理，需要在频道空闲时使用：
+除 `/new` 外，下面的命令由 agent 会话层处理，需要在频道空闲时使用：
 
 | 命令 | 作用 |
 |---|---|
@@ -106,7 +108,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | `/session` | 查看当前会话、消息、token 和模型状态 |
 | `/thinking [level\|cycle]` | 查看或切换当前模型的推理强度 |
 | `/model [provider/modelId]` | 查看或切换模型；唯一子串也可匹配 |
-| `/new` | 开启新会话，并在边界上固化必要记忆 |
+| `/new` | 开启新会话，并在边界上固化必要记忆；忙碌时也可使用，会绕过旧队列立即建立新会话边界 |
 | `/compact [要求]` | 手动压缩当前上下文 |
 
 Workspace skill 还可以通过 `/skill:<名称>` 直接调用。未知斜杠命令会被拒绝并提示 `/help`，不会因为拼写错误开启一个模型回合。
@@ -129,4 +131,5 @@ Workspace skill 还可以通过 `/skill:<名称>` 直接调用。未知斜杠命
 - 频道记忆：[memory.md](./memory.md)
 - 定时事件与任务命令：[events-and-tasks.md](./events-and-tasks.md)
 - 委派命令与角色：[sub-agents.md](./sub-agents.md)
+- 多频道并发与容量边界：[scaling-and-concurrency.md](./scaling-and-concurrency.md)
 - 输出模式和字段：[configuration-reference.md](./configuration-reference.md)
