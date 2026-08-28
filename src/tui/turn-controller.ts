@@ -43,6 +43,7 @@ export interface TurnControllerDeps {
 	runTasks: (args: string) => Promise<string>;
 	runSubagents: (args: string) => Promise<string>;
 	runProject: (args: string) => Promise<string>;
+	runSkills: (args: string) => Promise<string>;
 	/** Static bits the status renderer needs alongside the live run state. */
 	statusInfo: { version: string; startedAt: number };
 	/** Injectable clock for deterministic Ctrl-C timing in tests. */
@@ -74,6 +75,7 @@ export class TurnController {
 			runTasks: deps.runTasks,
 			runSubagents: deps.runSubagents,
 			runProject: deps.runProject,
+			runSkills: deps.runSkills,
 			renderContext: (args) => this.deps.runner.renderContextReport(args),
 			renderStatus: () =>
 				renderStatus({

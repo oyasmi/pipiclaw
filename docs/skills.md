@@ -47,7 +47,7 @@ Pipiclaw 只支持工作区级 skills，不存在频道级 skill 目录。同一
 把我们刚才确认的发布流程整理成一个 workspace skill。触发场景是“准备发布 npm 版本”，必须包含版本一致性、测试、tag 和回滚检查。
 ```
 
-`SKILL.md` 的 frontmatter 必须包含非空的 `name`（需与目录名一致，`[a-z0-9]+(-[a-z0-9]+)*`）和 `description`。创建后可以用 `skill list` 列出或检查已有 skills，也可以直接查看 `workspace/skills/`。Skill 目录属于用户工作区，升级 Pipiclaw 不会覆盖。
+`SKILL.md` 的 frontmatter 必须包含非空的 `name`（需与目录名一致，`[a-z0-9]+(-[a-z0-9]+)*`）和 `description`。创建后可以用 `skill list` 列出或检查已有 skills，也可以直接查看 `workspace/skills/`。钉钉或 TUI 里用 `/skills`（或 `/skills show <name>`）查看同样的目录，无需开启一个模型回合；它按磁盘现状扫描，能看到被内容扫描拒绝、因此没有进入 `<available_skills>` 目录的 skill 及原因。Skill 目录属于用户工作区，升级 Pipiclaw 不会覆盖。
 
 Skill 正文在进入系统提示前会经过一次内容安全扫描（prompt-injection 措辞、外泄/破坏性命令等启发式规则）；没通过的 skill 不会出现在 `<available_skills>` 目录或 `skill list` 里，原因体现在 `skill list` 的 warning 字段中。这是一层防御层，不是权限边界——真实权限仍由工具 schema、`security.json` 和运行账号决定。
 
@@ -63,7 +63,7 @@ Skill 的错误或截断结果会提供下一步，例如缩小读取范围或�
 
 有三种常见入口：
 
-- 用户直接发送 `/skill:<名称>`。
+- 用户直接发送 `/skill:<名称>`，或先用 `/skills` 看一眼目录再决定用哪个。
 - 用户用自然语言提出与触发描述匹配的任务，主智能体按需读取。
 - 主智能体在完成一次流程后，经用户意图或明确判断用 `write`/`edit` 沉淀或更新。
 

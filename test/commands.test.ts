@@ -85,6 +85,7 @@ describe("command metadata helpers", () => {
 		const list = formatBusyCommandList();
 		expect(list).toContain("`/stop`");
 		expect(list).toContain("`/status`");
+		expect(list).toContain("`/skills`");
 		expect(list).not.toContain("/model");
 	});
 
@@ -100,6 +101,7 @@ describe("command metadata helpers", () => {
 		expect(help).toContain("`/model`");
 		expect(help).toContain("`/thinking`");
 		expect(help).toContain("`/memory`");
+		expect(help).toContain("`/skills`");
 		// argument syntax and examples are per-command detail now, not in the top-level listing
 		expect(help).not.toContain("/followup <消息>");
 		expect(help).not.toContain("/model [provider/modelId|modelId]");

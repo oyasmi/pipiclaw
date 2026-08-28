@@ -67,6 +67,7 @@ import { createEventsWatcher } from "./events.js";
 import { handleProjectCommand as runProjectCommand } from "./project-commands.js";
 import { resolveProjectScope } from "./project-scope-store.js";
 import { installLlmProxy } from "./proxy.js";
+import { handleSkillsCommand as runSkillsCommand } from "./skill-commands.js";
 import { ChannelStore } from "./store.js";
 import { renderRunNotice, handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
@@ -545,6 +546,13 @@ export async function createRuntimeContext(
 								);
 							});
 						},
+					});
+				case "skills":
+					return runSkillsCommand({
+						args,
+						workspaceDir: options.paths.workspaceDir,
+						appHomeDir: options.paths.appHomeDir,
+						channelId: event.channelId,
 					});
 			}
 		},

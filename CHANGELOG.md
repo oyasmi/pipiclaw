@@ -4,6 +4,10 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+### Added
+
+- New runtime command `/skills` (list, and `/skills show <name>`) for browsing the workspace skill catalog directly from DingTalk or the TUI, no LLM turn required. Unlike `/help`'s skill listing (now removed), it scans disk directly, so it also surfaces skills that failed the content/frontmatter scan and were silently excluded from `<available_skills>`, along with why.
+
 ## [0.9.2-beta.3] - 2026-08-28
 
 ### Added

@@ -106,7 +106,22 @@ export async function listWorkspaceSkills(options: { workspaceDir: string }): Pr
 	return summaries;
 }
 
-async function readWorkspaceSkill(options: SkillToolOptions, name: string) {
+export interface WorkspaceSkillFile {
+	name: string;
+	/** The guard-resolved path actually opened — never the raw pre-guard path. */
+	path: string;
+	content: string;
+	truncated: boolean;
+}
+
+/**
+ * Load one skill's `SKILL.md` bytes through the same path-guard every other file read goes
+ * through. Shared by the `skill` tool's `read` action and the `/skills show` runtime command
+ * (`src/runtime/skill-commands.ts`) — a `SKILL.md` that is itself a symlink pointing outside
+ * `workspace/skills/` (planted via `bash ln -s`, not via `name` -- `resolveSkillPath` already
+ * confines that) is caught here in both callers instead of being read verbatim.
+ */
+export async function loadWorkspaceSkillFile(options: SkillToolOptions, name: string): Promise<WorkspaceSkillFile> {
 	const nameValidation = validateSkillName(name);
 	if (!nameValidation.ok) {
 		throw new RecoverableToolError(nameValidation.error ?? `Invalid skill name "${name}".`);
@@ -119,9 +134,6 @@ async function readWorkspaceSkill(options: SkillToolOptions, name: string) {
 		);
 	}
 
-	// Runs the same path-guard every other read goes through: a `SKILL.md` that is itself a
-	// symlink pointing outside `workspace/skills/` (planted via `bash ln -s`, not via `name` --
-	// `resolveSkillPath` already confines that) is caught here instead of being read verbatim.
 	const securityConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
 	const securityContext = options.securityContext ?? {
 		agentWorkspaceDir: options.workspaceDir,
@@ -139,18 +151,24 @@ async function readWorkspaceSkill(options: SkillToolOptions, name: string) {
 		body += `\n\n[Truncated at ${formatSize(DEFAULT_MAX_BYTES)}. Use the read tool on ${target} to page through the rest.]`;
 	}
 
+	return { name, path: target, content: body, truncated: truncation.truncated };
+}
+
+async function readWorkspaceSkill(options: SkillToolOptions, name: string) {
+	const file = await loadWorkspaceSkillFile(options, name);
+
 	// Mirrors the framing pi's own skill loader gives a model-invoked skill: the location and the
 	// relative-path rule are what let the model correctly `read` a skill's references/templates
 	// afterward, and are the whole reason `skill read` is worth more than a plain `read` call.
 	const envelope =
-		`<skill name="${name}" location="${target}">\n` +
-		`References are relative to ${dirname(target)}.\n\n` +
-		`${body}\n` +
+		`<skill name="${file.name}" location="${file.path}">\n` +
+		`References are relative to ${dirname(file.path)}.\n\n` +
+		`${file.content}\n` +
 		`</skill>`;
 
 	return {
 		content: [{ type: "text" as const, text: envelope }],
-		details: { action: "read", name, path: target, truncated: truncation.truncated },
+		details: { action: "read", name: file.name, path: file.path, truncated: file.truncated },
 	};
 }
 

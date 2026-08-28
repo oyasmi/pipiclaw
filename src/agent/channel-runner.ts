@@ -1030,9 +1030,10 @@ export class ChannelRunner implements AgentRunner {
 
 	/**
 	 * `/help` — the static per-command listing from `commands.ts`, plus (top-level only) the
-	 * workspace skills and prompt templates this session can actually invoke via `/skill:name` and
-	 * `/<template-name>`. Neither list is knowable to `renderBuiltInHelp` itself (it is a pure
-	 * function with no session state), so the runner appends it here (review 2026-08-24 §1.9).
+	 * prompt templates this session can actually invoke via `/<template-name>`. Workspace skills
+	 * have their own dedicated command (`/skills`) and are deliberately not duplicated here.
+	 * Prompt templates aren't knowable to `renderBuiltInHelp` itself (it is a pure function with
+	 * no session state), so the runner appends them here (review 2026-08-24 §1.9).
 	 */
 	private renderHelpWithDiscovery(args: string): string {
 		const help = renderBuiltInHelp(args);
@@ -1040,13 +1041,6 @@ export class ChannelRunner implements AgentRunner {
 			return help;
 		}
 		const sections: string[] = [help];
-		if (this.currentSkills.skills.length > 0) {
-			sections.push(
-				`**Workspace skills** · 用 \`/skill:<名称>\` 调用\n\n${this.currentSkills.skills
-					.map((skill) => `- \`/skill:${skill.name}\` — ${skill.description}`)
-					.join("\n")}`,
-			);
-		}
 		if (this.session.promptTemplates.length > 0) {
 			sections.push(
 				`**Prompt templates**\n\n${this.session.promptTemplates

@@ -64,7 +64,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 | 命令 | 作用 |
 |---|---|
-| `/help` | 列出所有命令（一行一个）；`/help <命令名>` 查看该命令的参数、子命令和示例；空闲时还会列出当前可用的 workspace skills 与 prompt templates |
+| `/help` | 列出所有命令（一行一个）；`/help <命令名>` 查看该命令的参数、子命令和示例；空闲时还会列出当前可用的 prompt templates |
 | `/stop` | 停止当前回合；必要时暂停任务 |
 | `/steer <消息>` | 调整当前回合 |
 | `/followup <消息>` | 排队下一条请求 |
@@ -74,6 +74,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | `/usage [7d\|month]` | 查看频道与全局用量、成本和未知用量条目 |
 | `/context [detail]` | 查看 system prompt 分段、工具 schema 和动态上下文体量 |
 | `/subagents ...` | 查看、控制委派 run 和角色目录 |
+| `/skills [list\|show <name>]` | 列出工作区 skills（含未通过内容扫描而未加载的，附原因），或查看单个 skill 的完整正文 |
 
 常用任务命令：
 
@@ -111,7 +112,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | `/new` | 开启新会话，并在边界上固化必要记忆；忙碌时也可使用，会绕过旧队列立即建立新会话边界 |
 | `/compact [要求]` | 手动压缩当前上下文 |
 
-Workspace skill 还可以通过 `/skill:<名称>` 直接调用。未知斜杠命令会被拒绝并提示 `/help`，不会因为拼写错误开启一个模型回合。
+Workspace skill 用 `/skills` 查看目录、用 `/skills show <name>` 查看正文，用 `/skill:<名称>` 直接调用。未知斜杠命令会被拒绝并提示 `/help`，不会因为拼写错误开启一个模型回合。
 
 ## 附件交付
 

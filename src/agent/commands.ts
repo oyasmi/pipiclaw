@@ -9,7 +9,8 @@ export type BuiltInCommandName =
 	| "usage"
 	| "context"
 	| "subagents"
-	| "project";
+	| "project"
+	| "skills";
 
 /** The four transport commands handled by `ChannelRunner.handleBuiltinCommand`. */
 export type RunnerBuiltInCommandName = "help" | "stop" | "steer" | "followup" | "context";
@@ -249,6 +250,21 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 				example: "/project set /home/me/projects/foo",
 			},
 			{ name: "reset", description: "切回 app 默认项目目录", example: "/project reset" },
+		],
+	},
+	{
+		name: "skills",
+		argumentHint: "[list|show <name>]",
+		description: "列出工作区 skills（含未加载及原因），或查看单个 skill 的完整正文",
+		availableWhileBusy: true,
+		subcommands: [
+			{ name: "list", description: "列出工作区 skills（默认动作，可省略）", example: "/skills" },
+			{
+				name: "show",
+				args: "<name>",
+				description: "查看单个 skill 的元信息与正文",
+				example: "/skills show release-checklist",
+			},
 		],
 	},
 ];

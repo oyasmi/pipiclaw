@@ -3,6 +3,7 @@ import { BUILT_IN_COMMANDS, type CommandSubSpec, SESSION_COMMANDS } from "../src
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { parseEventsCommand } from "../src/runtime/event-commands.js";
 import { parseProjectCommand } from "../src/runtime/project-commands.js";
+import { parseSkillsCommand } from "../src/runtime/skill-commands.js";
 import { parseSubagentsCommand } from "../src/runtime/subagent-commands.js";
 import { parseTasksCommand } from "../src/runtime/task-commands.js";
 import { setupChannelFiles, useTempDirs } from "./helpers/fixtures.js";
@@ -20,6 +21,7 @@ const PARSERS: Partial<Record<string, (args: string) => unknown>> = {
 	events: parseEventsCommand,
 	subagents: parseSubagentsCommand,
 	project: parseProjectCommand,
+	skills: parseSkillsCommand,
 };
 
 function argsAfterCommandName(example: string, commandName: string): string {
