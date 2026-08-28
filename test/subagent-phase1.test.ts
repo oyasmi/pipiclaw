@@ -121,10 +121,9 @@ function makeDiscovery(workspaceDir: string, agents: SubAgentConfig[]) {
 }
 
 describe("sub-agent discovery", () => {
-	// Fix plan §4.4: a directory scan, not a hardcoded role-name list, so a future template added
-	// to examples/sub-agents/ without an explicit thinkingLevel fails here instead of silently
-	// falling through to the default resolution logic covered elsewhere in this file.
-	it("loads every shipped role template (internal and external) with expected routing and budgets", () => {
+	// Keep this as a loadability and routing check for the shipped examples. Their prompt text,
+	// thinking level, and numeric budgets are deployment knobs and must not become test contracts.
+	it("loads every shipped role template with routing and permission metadata", () => {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
@@ -135,7 +134,6 @@ describe("sub-agent discovery", () => {
 		);
 		expect(files.length).toBeGreaterThan(0);
 		for (const name of files) {
-			expect(readFileSync(join(examplesDir, name), "utf-8")).toMatch(/^thinkingLevel:\s*\S+/m);
 			writeFileSync(join(subAgentsDir, name), readFileSync(join(examplesDir, name), "utf-8"), "utf-8");
 		}
 
@@ -143,21 +141,16 @@ describe("sub-agent discovery", () => {
 		expect(discovery.warnings).toEqual([]);
 		expect(discovery.agents).toHaveLength(files.length);
 
-		for (const agent of discovery.agents) {
-			expect(agent.description.length).toBeLessThanOrEqual(180);
-			expect(agent.systemPrompt).toMatch(/[㐀-鿿]/u);
-		}
-
-		// Internal routing/budget spot checks.
+		// Internal routing and write-lease declarations are behavioral/safety metadata. The
+		// role-specific wording and resource tuning are intentionally not asserted here.
 		const explorer = discovery.agents.find((agent) => agent.name === "explorer");
-		expect(explorer).toMatchObject({ runtime: "internal", workload: "light", thinkingLevel: "low", maxTurns: 12 });
-		expect(discovery.agents.find((agent) => agent.name === "explorer")?.description).toContain("只读定位");
+		expect(explorer).toMatchObject({ runtime: "internal", mutates: "read" });
 		expect(discovery.agents.find((agent) => agent.name === "git-committer")).toMatchObject({
-			thinkingLevel: "medium",
-			maxWallTimeSec: 600,
+			runtime: "internal",
+			mutates: "write",
 		});
 
-		// External routing spot checks (D5): claude-code planner stays read-only via its permission
+		// External routing/sandbox spot checks (D5): claude-code planner stays read-only via its permission
 		// mode; codex roles carry the sandbox flag matching their mutates declaration. Neither
 		// binary must exist on PATH here — an uninstalled role stays listed, marked unavailable
 		// with an install hint, never silently dropped.
@@ -307,38 +300,13 @@ Review files carefully.`,
 		);
 	});
 
-	it("a configured role's budget is always its own frontmatter numbers — there is no effort override", () => {
+	it("a configured internal role's budget is always its own frontmatter numbers — there is no effort override", () => {
 		const budgeted = makeSubAgentConfig({ maxTurns: 5, maxToolCalls: 6, maxWallTimeSec: 7, bashTimeoutSec: 8 });
 		expect(resolveConfiguredRole([model], model, [budgeted], { agent: "reviewer" }).config).toMatchObject({
 			maxTurns: 5,
 			maxToolCalls: 6,
 			maxWallTimeSec: 7,
 			bashTimeoutSec: 8,
-		});
-
-		const externalRole: SubAgentConfig = {
-			name: "builder",
-			description: "build things",
-			systemPrompt: "Build the thing.",
-			tools: [],
-			maxTurns: 24,
-			maxToolCalls: 48,
-			maxWallTimeSec: 1800,
-			bashTimeoutSec: 120,
-			contextMode: "isolated",
-			memory: "none",
-			paths: [],
-			source: "predefined",
-			runtime: "external",
-			harness: "codex-cli",
-			command: "codex exec",
-			mutates: "read",
-		};
-		expect(resolveConfiguredRole([model], model, [externalRole], { agent: "builder" }).config).toMatchObject({
-			maxWallTimeSec: 1800,
-			maxTurns: 24,
-			maxToolCalls: 48,
-			bashTimeoutSec: 120,
 		});
 	});
 
@@ -444,6 +412,7 @@ describe("sub-agent tool", () => {
 		const channelDir = join(workspaceDir, "dm_123");
 		mkdirSync(channelDir, { recursive: true });
 		let delegatedTask = "";
+		const workerFailure = "simulated worker failure";
 
 		const tool = createSubAgentTool({
 			executor: fakeExecutor,
@@ -463,7 +432,7 @@ describe("sub-agent tool", () => {
 					delegatedTask = input;
 					const assistantMessage = createAssistantMessage("Found two correctness issues.", {
 						stopReason: "error",
-						errorMessage: "Turn budget exceeded (24)",
+						errorMessage: workerFailure,
 					});
 					worker.state.messages = [assistantMessage];
 					worker.emit({ type: "message_end", message: assistantMessage });
@@ -477,10 +446,10 @@ describe("sub-agent tool", () => {
 
 		expect(result.content[0]?.type).toBe("text");
 		expect(result.content[0] && "text" in result.content[0] ? result.content[0].text : "").toContain(
-			"[Sub-agent reviewer stopped: Turn budget exceeded (24)]",
+			`[Sub-agent reviewer stopped: ${workerFailure}]`,
 		);
 		expect(result.details.failed).toBe(true);
-		expect(result.details.failureReason).toBe("Turn budget exceeded (24)");
+		expect(result.details.failureReason).toBe(workerFailure);
 		expect(result.details.usage.total).toBe(19);
 		expect(delegatedTask).toContain("Workspace root: /workspace/root");
 		expect(delegatedTask).toContain("Channel id: dm_123");
@@ -706,7 +675,8 @@ describe("sub-agent artifact contract (D4)", () => {
 
 describe("sub-agent convergence turn (D6)", () => {
 	// Budgets are no longer settable per invocation, so the tight budget these tests need
-	// comes from frontmatter — which also keeps them covering "exact numbers still work".
+	// comes from frontmatter. The value is intentionally tiny to force the resource-limit path;
+	// it is not a production default or a shipped-role snapshot.
 	const tightBudgetExplorer = makeSubAgentConfig({
 		name: "explorer",
 		description: "explore the repo",

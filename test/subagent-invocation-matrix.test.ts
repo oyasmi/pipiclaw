@@ -1,30 +1,74 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
 import {
-	ROLE_FIELD_MATRIX,
+	discoverSubAgents,
+	getSubAgentsDir,
 	resolveConfiguredRole,
 	resolveInlineAgent,
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
- * Spec 042, D3: the field legality matrix is data, not scattered `if`s, so a field added later
- * cannot silently land as "supported" by omission — this test iterates the table itself rather
- * than re-asserting each field's message (that per-field behavior is covered end-to-end in
- * subagent-discovery-external.test.ts). Unaffected by spec 046's invocation-surface split: this
- * table governs role-*file* frontmatter, not the call-time overrides.
+ * Spec 042, D3: role-file fields that only make sense for the other runtime are rejected rather
+ * than silently ignored. Test this through public discovery behavior; the representation of the
+ * legality table is an implementation detail.
  */
-describe("ROLE_FIELD_MATRIX (spec 042, D3)", () => {
-	it("every listed field is rejected for exactly one runtime and supported for the other", () => {
-		for (const support of Object.values(ROLE_FIELD_MATRIX)) {
-			const runtimes = Object.keys(support).sort();
-			expect(runtimes).toEqual(["external", "internal"]);
-			const rejectedCount = (["external", "internal"] as const).filter(
-				(runtime) => support[runtime] === "rejected",
-			).length;
-			// A field with no runtime distinction (rejected for both, or neither) does not belong in
-			// this table — the matrix exists specifically to answer "which runtime is this for".
-			expect(rejectedCount).toBe(1);
+
+const createTempWorkspace = useTempDirs("pipiclaw-subagent-invocation-matrix-");
+
+describe("role-file field legality (spec 042, D3)", () => {
+	it("rejects fields that only apply to the other runtime", () => {
+		const workspaceDir = createTempWorkspace();
+		const subAgentsDir = getSubAgentsDir(workspaceDir);
+		mkdirSync(subAgentsDir, { recursive: true });
+		writeFileSync(
+			join(subAgentsDir, "internal-with-external-fields.md"),
+			`---
+name: internal-with-external-fields
+description: internal role with external-only fields
+harness: exec
+command: echo hi
+shell: true
+env:
+  FOO: bar
+---
+
+Body.
+`,
+			"utf-8",
+		);
+		writeFileSync(
+			join(subAgentsDir, "external-with-internal-fields.md"),
+			`---
+name: external-with-internal-fields
+description: external role with internal-only fields
+runtime: external
+harness: exec
+command: echo hi
+mutates: read
+tools: read
+maxTurns: 1
+maxToolCalls: 1
+bashTimeoutSec: 1
+---
+
+Body.
+`,
+			"utf-8",
+		);
+
+		const result = discoverSubAgents(workspaceDir, [model]);
+		expect(result.agents).toHaveLength(0);
+		const internalWarning = result.warnings.find((warning) => warning.startsWith("internal-with-external-fields.md"));
+		const externalWarning = result.warnings.find((warning) => warning.startsWith("external-with-internal-fields.md"));
+		for (const field of ["harness", "command", "shell", "env"]) {
+			expect(internalWarning).toContain(field);
+		}
+		for (const field of ["tools", "maxTurns", "maxToolCalls", "bashTimeoutSec"]) {
+			expect(externalWarning).toContain(field);
 		}
 	});
 });
