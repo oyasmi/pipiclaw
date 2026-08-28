@@ -8,8 +8,8 @@ import {
 	discoverWorkspaceChannelIds,
 	parseChannelIndex,
 	renderChannelIndex,
-} from "../src/runtime/channel-index.js";
-import { getChannelDirName } from "../src/runtime/channel-paths.js";
+} from "../src/channel/channel-index.js";
+import { getChannelDirName } from "../src/channel/channel-paths.js";
 
 /** A real DingTalk group id: base64, so it contains characters no id pattern would allow. */
 const GROUP_ID = "group_cidYDhGqxhJOzS7VDv/eDInUw==";

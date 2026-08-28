@@ -1,4 +1,5 @@
-import { renderSubcommandUsage } from "../agent/commands.js";
+import { commitProjectSelection, readProjectSelection } from "../channel/project-scope-store.js";
+import { renderSubcommandUsage } from "../commands/catalog.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import {
 	currentProjectSandboxStatus,
@@ -7,7 +8,6 @@ import {
 	resolveProjectAccessPolicy,
 } from "../security/project-scope.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { commitProjectSelection, readProjectSelection } from "./project-scope-store.js";
 
 /**
  * `/project` — the human control path for a channel's project scope (spec 043, D7). Mirrors

@@ -1,9 +1,9 @@
+import type { ChannelContext, ProgressStyle } from "../channel/channel-context.js";
+import type { ChannelEvent } from "../channel/channel-event.js";
+import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
-import type { ChannelContext, ProgressStyle } from "./channel-context.js";
-import type { ChannelEvent } from "./channel-event.js";
 import type { DingTalkBot } from "./dingtalk.js";
-import type { ChannelStore } from "./store.js";
 
 const MIN_UPDATE_INTERVAL_MS = 800;
 const ROLLING_WINDOW_SIZE = 3;

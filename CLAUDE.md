@@ -34,7 +34,7 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 
 **Transport → agent → delivery flow**
 1. `src/runtime/bootstrap.ts` loads config and wires the bot, durable dispatch, task/event/memory services, background jobs, and sub-agent run persistence. `src/main.ts` is intentionally a thin entrypoint that just calls `bootstrap`.
-2. `src/runtime/dingtalk.ts` receives Stream-mode events; `src/runtime/delivery.ts` builds the `ChannelContext` (the transport-neutral delivery contract in `src/runtime/channel-context.ts`: `respond`, `respondInThread`, AI Card streaming). The terminal TUI (`src/tui/`) is a second implementation of the same contract.
+2. `src/runtime/dingtalk.ts` receives Stream-mode events; `src/runtime/delivery.ts` builds the `ChannelContext` (the transport-neutral delivery contract in `src/channel/channel-context.ts`: `respond`, `respondInThread`, AI Card streaming). The terminal TUI (`src/tui/`) is a second implementation of the same contract.
 3. Each channel gets one `ChannelRunner` (`src/agent/channel-runner.ts`), cached by `src/agent/runner-factory.ts`. It assembles the SDK session, tools, memory, roles, and prompt, then streams the turn through the transport-neutral `ChannelContext`.
 4. `src/agent/session-events.ts` translates SDK session events into progress/AI-Card updates.
 

@@ -3,11 +3,11 @@ import { basename } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import * as log from "../log.js";
 // The channel index is a runtime-owned workspace artifact; the scheduler is one of its two
 // read-only consumers (see `discoverWorkspaceChannelIds`).
-import { discoverWorkspaceChannelIds } from "../runtime/channel-index.js";
-import { isChannelId } from "../runtime/channel-paths.js";
+import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
+import { isChannelId } from "../channel/channel-paths.js";
+import * as log from "../log.js";
 import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
 import {

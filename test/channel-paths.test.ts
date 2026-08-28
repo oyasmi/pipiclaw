@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getChannelDirName, isChannelId } from "../src/runtime/channel-paths.js";
+import { getChannelDirName, isChannelId } from "../src/channel/channel-paths.js";
 
 describe("channel-paths", () => {
 	it("maps slashes in channel ids to double underscores", () => {

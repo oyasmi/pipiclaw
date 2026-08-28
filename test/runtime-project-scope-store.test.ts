@@ -5,7 +5,7 @@ import {
 	commitProjectSelection,
 	getProjectSelectionPath,
 	resolveProjectScope,
-} from "../src/runtime/project-scope-store.js";
+} from "../src/channel/project-scope-store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-project-scope-store-");

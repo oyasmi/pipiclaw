@@ -9,8 +9,8 @@
  *   - `respond` / `respondPlain` archive when `shouldLog` is set;
  *   - `replaceMessage` / `deleteMessage` do not archive (they only re-render).
  */
-import type { ChannelContext, FinalDelivery, ProgressStyle } from "../runtime/channel-context.js";
-import type { ChannelStore } from "../runtime/store.js";
+import type { ChannelContext, FinalDelivery, ProgressStyle } from "../channel/channel-context.js";
+import type { ChannelStore } from "../channel/store.js";
 import type { TranscriptRenderer } from "./renderer.js";
 
 /** The minimal per-turn input the terminal context needs (no DingTalk types). */

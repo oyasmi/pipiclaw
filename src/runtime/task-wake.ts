@@ -5,6 +5,8 @@
  * `createRuntimeContext`'s closures.
  */
 import { getChannelJobManager, type JobSnapshot } from "../agent/job-manager.js";
+import type { ChannelEvent } from "../channel/channel-event.js";
+import { getChannelDir } from "../channel/channel-paths.js";
 import type { Executor } from "../executor.js";
 import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
 import {
@@ -14,8 +16,6 @@ import {
 	type WakeTaskTransitionHooks,
 } from "../tasks/store.js";
 import { normalizeStoredStatus } from "../tasks/transitions.js";
-import type { ChannelEvent } from "./channel-event.js";
-import { getChannelDir } from "./channel-paths.js";
 
 /**
  * True when `taskId` is currently `active` and enabled — i.e. the task driver already owns

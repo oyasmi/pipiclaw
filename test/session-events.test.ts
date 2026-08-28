@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleSessionEvent, type SessionEventHandlerContext } from "../src/agent/session-events.js";
 import { createEmptyRunState, type RunQueue, type RunState } from "../src/agent/types.js";
-import type { ChannelContext } from "../src/runtime/channel-context.js";
+import type { ChannelContext } from "../src/channel/channel-context.js";
 import type { UsageLedger, UsageLedgerEntry } from "../src/usage/ledger.js";
 
 function createQueue(): RunQueue {

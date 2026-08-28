@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUILT_IN_COMMANDS, type CommandSubSpec, SESSION_COMMANDS } from "../src/agent/commands.js";
+import { BUILT_IN_COMMANDS, type CommandSubSpec, SESSION_COMMANDS } from "../src/commands/catalog.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { parseEventsCommand } from "../src/runtime/event-commands.js";
 import { parseProjectCommand } from "../src/runtime/project-commands.js";

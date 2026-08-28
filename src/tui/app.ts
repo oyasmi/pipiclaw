@@ -7,9 +7,11 @@
  * preparation shares `prepareAppServices` with the DingTalk path.
  */
 import { userInfo } from "node:os";
-import { renderBuiltInHelp } from "../agent/commands.js";
 import { type AgentRunner, createRunner } from "../agent/index.js";
 import { channelRunningJobLines } from "../agent/job-manager.js";
+import { ensureChannelDir } from "../channel/channel-paths.js";
+import { ChannelStore } from "../channel/store.js";
+import { renderBuiltInHelp } from "../commands/catalog.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import {
@@ -22,12 +24,10 @@ import {
 	readCliVersion,
 } from "../runtime/app-home.js";
 import { prepareAppServices } from "../runtime/bootstrap.js";
-import { ensureChannelDir } from "../runtime/channel-paths.js";
 import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
 import { handleEventsCommand } from "../runtime/event-commands.js";
 import { handleProjectCommand } from "../runtime/project-commands.js";
 import { handleSkillsCommand } from "../runtime/skill-commands.js";
-import { ChannelStore } from "../runtime/store.js";
 import { handleSubagentsCommand } from "../runtime/subagent-commands.js";
 import { handleTasksCommand } from "../runtime/task-commands.js";
 import { flushSecurityLogs } from "../security/logger.js";

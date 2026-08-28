@@ -1,3 +1,19 @@
+/**
+ * The product-wide slash-command catalog: every command's name, description, subcommands and
+ * examples, plus the parsing and usage/help rendering built on top of them.
+ *
+ * It lives in its own domain, not in `src/agent/`, because the catalog describes commands handled
+ * in three different layers — the runtime (`/tasks`, `/events`, `/subagents`, `/project`,
+ * `/skills`), the agent session (`/model`, `/compact`, `/new`) and memory (`/memory`) — and is read
+ * by all of them plus the TUI. Only the catalog and the reply shape are shared: each *handler*
+ * still lives in the layer that owns the state it touches (`runtime/*-commands.ts`,
+ * `memory/commands.ts`, `agent/command-extension.ts`). This file has no imports at all, so nothing
+ * here can drag a layer into another one.
+ *
+ * The six reply conventions these commands follow are recorded in AGENTS.md; `reply-limits.ts`
+ * next to this file enforces rule 5 (the length budget).
+ */
+
 export type BuiltInCommandName =
 	| "help"
 	| "steer"

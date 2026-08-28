@@ -1,8 +1,8 @@
 import { mkdir, readdir, readFile, rmdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import type { ChannelEvent } from "../channel/channel-event.js";
+import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
-import type { ChannelEvent } from "../runtime/channel-event.js";
-import type { ChannelStore } from "../runtime/store.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { formatDuration } from "../shared/duration.js";
 import { isProcessAlive, killProcessGroup, readProcessStartTime } from "../shared/host-process.js";

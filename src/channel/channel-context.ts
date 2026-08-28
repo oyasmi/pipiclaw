@@ -9,8 +9,12 @@
  * transport.
  *
  * These declarations previously lived in `runtime/dingtalk.ts` under the name
- * `DingTalkContext`; they were lifted here (and renamed) so a second transport
- * can implement the contract without importing anything DingTalk-specific.
+ * `DingTalkContext`; they were lifted out (and renamed) so a second transport
+ * can implement the contract without importing anything DingTalk-specific. They
+ * live in `src/channel/` rather than `src/runtime/` because a port belongs with
+ * the domain it describes, not with one of its adapters: `agent`, `tools` and
+ * `tui` all depend on this file, and none of them should be reading anything out
+ * of the DingTalk transport's directory to get it.
  */
 
 /**

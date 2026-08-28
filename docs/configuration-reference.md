@@ -63,7 +63,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 
 那么 Pipiclaw 会改为从这个目录读取和写入所有全局配置与 `workspace/`。
 
-> **从旧版本升级：** 默认根目录已从 `~/.pi/pipiclaw/` 迁移到 `~/.pipiclaw/`。若你使用默认路径（未设置 `PIPICLAW_HOME`）且新目录尚不存在、旧目录仍在，启动时会自动把旧目录整体移动到新位置，无需手动操作。设置了自定义 `PIPICLAW_HOME` 的用户不受影响。该自动迁移是临时兼容，将在 0.9.0 移除。
+> **从旧版本升级：** 默认根目录已从 `~/.pi/pipiclaw/` 迁移到 `~/.pipiclaw/`。启动时的自动迁移是临时兼容，**已在 0.9.0 移除**：当前版本只解析 `PIPICLAW_HOME ?? ~/.pipiclaw`，不再探测旧目录。仍在用旧目录的部署，手动把整个目录移到 `~/.pipiclaw/`，或设 `PIPICLAW_HOME=~/.pi/pipiclaw` 继续用原位置。
 
 ### 主要文件（Main Files）
 

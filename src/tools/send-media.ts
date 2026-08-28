@@ -1,8 +1,8 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { basename, extname } from "path";
 import { Type } from "typebox";
+import type { MediaSender } from "../channel/channel-context.js";
 import type { FileStore } from "../file-store.js";
-import type { MediaSender } from "../runtime/channel-context.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";

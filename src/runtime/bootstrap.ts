@@ -1,4 +1,16 @@
 import { join } from "path";
+import { channelEffectCount, noteTaskEffects, taskEffectCount } from "../agent/effect-ledger.js";
+import { type AgentRunner, createRunner } from "../agent/index.js";
+import { channelRunningJobLines, configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
+import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
+import { renderStatus } from "../agent/status-render.js";
+import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
+import { createFreshActiveSession } from "../channel/active-session-store.js";
+import type { ChannelEvent } from "../channel/channel-event.js";
+import { type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
+import { ensureChannelDir, getChannelDir } from "../channel/channel-paths.js";
+import { resolveProjectScope } from "../channel/project-scope-store.js";
+import { ChannelStore } from "../channel/store.js";
 import {
 	BUILT_IN_COMMANDS,
 	formatUnknownCommandMessage,
@@ -6,13 +18,7 @@ import {
 	parseBuiltInCommand,
 	type RuntimeCommandName,
 	slashCommandName,
-} from "../agent/commands.js";
-import { channelEffectCount, noteTaskEffects, taskEffectCount } from "../agent/effect-ledger.js";
-import { type AgentRunner, createRunner } from "../agent/index.js";
-import { channelRunningJobLines, configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
-import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
-import { renderStatus } from "../agent/status-render.js";
-import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
+} from "../commands/catalog.js";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
 import { ensureChannelMemoryFilesSync } from "../memory/files.js";
@@ -37,7 +43,6 @@ import type { WakeTaskTransitionHooks } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
-import { createFreshActiveSession } from "./active-session-store.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -49,9 +54,6 @@ import {
 	printBootstrapSummary,
 	readCliVersion,
 } from "./app-home.js";
-import type { ChannelEvent } from "./channel-event.js";
-import { type ChannelIndex, createChannelIndex } from "./channel-index.js";
-import { ensureChannelDir, getChannelDir } from "./channel-paths.js";
 import { createDingTalkContext } from "./delivery.js";
 import {
 	type BusyMessageMode,
@@ -65,10 +67,8 @@ import { DurableDispatchService } from "./durable-dispatch.js";
 import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
 import { handleProjectCommand as runProjectCommand } from "./project-commands.js";
-import { resolveProjectScope } from "./project-scope-store.js";
 import { installLlmProxy } from "./proxy.js";
 import { handleSkillsCommand as runSkillsCommand } from "./skill-commands.js";
-import { ChannelStore } from "./store.js";
 import { renderRunNotice, handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
 import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";

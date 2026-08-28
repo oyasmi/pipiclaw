@@ -12,6 +12,7 @@ import {
 } from "fs";
 import { readFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
+import type { ChannelEvent } from "../channel/channel-event.js";
 import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
 import { guardCommand } from "../security/command-guard.js";
@@ -23,7 +24,6 @@ import { clipText, errorMessage, eventNameFromFilename } from "../shared/text-ut
 import { isPlainObject } from "../shared/type-guards.js";
 import { parseTaskFrontmatter } from "../tasks/ledger.js";
 import { parseTaskEventName } from "../tasks/task-events.js";
-import type { ChannelEvent } from "./channel-event.js";
 import type { DingTalkBot } from "./dingtalk.js";
 import { MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./event-validation.js";
 

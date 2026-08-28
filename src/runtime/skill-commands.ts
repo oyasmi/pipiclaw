@@ -1,5 +1,5 @@
-import { renderSubcommandUsage } from "../agent/commands.js";
-import { capReply } from "../agent/reply-limits.js";
+import { renderSubcommandUsage } from "../commands/catalog.js";
+import { capReply } from "../commands/reply-limits.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { listWorkspaceSkills, loadWorkspaceSkillFile } from "../tools/skill.js";

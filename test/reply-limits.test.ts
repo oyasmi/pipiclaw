@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capReply } from "../src/agent/reply-limits.js";
+import { capReply } from "../src/commands/reply-limits.js";
 
 describe("capReply", () => {
 	it("passes short text through and cuts long text on a whole line with the next-step hint appended", () => {

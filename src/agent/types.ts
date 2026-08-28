@@ -1,9 +1,9 @@
+import type { ChannelContext } from "../channel/channel-context.js";
+import type { ChannelStore } from "../channel/store.js";
+import type { RunnerBuiltInCommand } from "../commands/catalog.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
-import type { ChannelContext } from "../runtime/channel-context.js";
-import type { ChannelStore } from "../runtime/store.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
-import type { RunnerBuiltInCommand } from "./commands.js";
 
 export interface RunnerStatusSnapshot {
 	model: string;

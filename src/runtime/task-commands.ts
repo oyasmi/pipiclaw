@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { renderSubcommandUsage } from "../agent/commands.js";
 import { channelJobTaskIds } from "../agent/job-manager.js";
-import { capReply } from "../agent/reply-limits.js";
+import { renderSubcommandUsage } from "../commands/catalog.js";
+import { capReply } from "../commands/reply-limits.js";
 import { formatLocalTime, parseLocalTime, parseWakeInput } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { channelDelegationTaskIds, getSubAgentRunManager } from "../subagents/runs.js";

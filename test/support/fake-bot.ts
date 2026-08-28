@@ -1,4 +1,4 @@
-import type { FinalDelivery, ProgressStyle } from "../../src/runtime/channel-context.js";
+import type { FinalDelivery, ProgressStyle } from "../../src/channel/channel-context.js";
 import { finalDeliveryOf, progressStyleOf, type ResponseMode } from "../../src/runtime/dingtalk.js";
 
 export interface CapturedDelivery {

@@ -8,7 +8,7 @@ import {
 	createFreshActiveSession,
 	getActiveSessionRefPath,
 	resolveActiveSessionFile,
-} from "../src/runtime/active-session-store.js";
+} from "../src/channel/active-session-store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-active-session-");

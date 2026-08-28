@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getChannelDirName } from "../src/runtime/channel-paths.js";
-import { ChannelStore, type LoggedSubAgentRun } from "../src/runtime/store.js";
+import { getChannelDirName } from "../src/channel/channel-paths.js";
+import { ChannelStore, type LoggedSubAgentRun } from "../src/channel/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-store-");

@@ -3,6 +3,7 @@ import { join } from "path";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobSnapshot } from "../src/agent/job-manager.js";
+import { ChannelStore } from "../src/channel/store.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -13,7 +14,6 @@ import {
 } from "../src/runtime/app-home.js";
 import { bootstrap, prepareAppServices } from "../src/runtime/bootstrap.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
-import { ChannelStore } from "../src/runtime/store.js";
 import { isTrustedInternalWake, isVerifiedDelegationWake, isVerifiedJobWake } from "../src/runtime/task-wake.js";
 import type { RunRecord } from "../src/subagents/runs.js";
 import { useTempDirs } from "./helpers/fixtures.js";

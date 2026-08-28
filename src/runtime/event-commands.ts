@@ -1,8 +1,8 @@
 import { existsSync } from "fs";
 import { readdir, readFile, unlink } from "fs/promises";
 import { join } from "path";
-import { renderSubcommandUsage } from "../agent/commands.js";
-import { capReply } from "../agent/reply-limits.js";
+import { renderSubcommandUsage } from "../commands/catalog.js";
+import { capReply } from "../commands/reply-limits.js";
 import { normalizeSafeId, resolveSafeIdPath } from "../shared/safe-id.js";
 import { errorMessage, eventNameFromFilename, clipText as sharedClipText } from "../shared/text-utils.js";
 import { type EventHistoryRecord, parseScheduledEventContent, type ScheduledEvent } from "./events.js";

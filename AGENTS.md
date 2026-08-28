@@ -6,8 +6,10 @@ Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-wor
 
 ## Core Structure
 
-- `src/runtime/`: DingTalk transport and runtime wiring (`bootstrap`, `dingtalk`, `delivery`, `events`, `store`)
+- `src/runtime/`: DingTalk transport, background services, and the composition root (`bootstrap`, `dingtalk`, `delivery`, `events`, `task-driver`)
+- `src/channel/`: the transport-neutral channel domain — its two I/O contracts (`channel-context` outbound, `channel-event` inbound), identity (`channel-paths`, `channel-index`) and persisted state (`store`, `active-session-store`, `project-scope-store`). Depends on no transport; this is what `agent`, `memory`, `tools` and `tui` mean when they say "channel"
 - `src/agent/`: main agent orchestration and session event handling
+- `src/commands/`: the product-wide slash-command catalog (`catalog.ts`) and the shared reply length budget (`reply-limits.ts`). Imports nothing; handlers stay in the layer that owns their state
 - `src/memory/`: channel memory lifecycle, consolidation, recall, session memory, and file helpers
 - `src/subagents/`: role discovery, internal/external execution, run lifecycle, harnesses, workspace leases, and delegation tools
 - `src/tools/`: tool implementations exposed to the coding agent
@@ -55,7 +57,7 @@ Use `npm run typecheck` and `npm run test` as the minimum validation after non-t
 
 ## Command Reply Conventions
 
-Slash-command output (`src/agent/commands.ts`, `src/runtime/*-commands.ts`, `src/memory/commands.ts`, `src/agent/command-extension.ts`, `src/agent/status-render.ts`, `src/usage/render.ts`) follows six rules, established by the 2026-08-24 command-subsystem review to keep replies readable in DingTalk's markdown subset (which does not preserve indentation or run-together whitespace):
+Slash-command output (`src/commands/catalog.ts`, `src/runtime/*-commands.ts`, `src/memory/commands.ts`, `src/agent/command-extension.ts`, `src/agent/status-render.ts`, `src/usage/render.ts`) follows six rules, established by the 2026-08-24 command-subsystem review to keep replies readable in DingTalk's markdown subset (which does not preserve indentation or run-together whitespace):
 
 1. A command reply is one of three shapes: a confirmation (one sentence), a report (a bold headline plus blocks), or an error (one reason + one next step; usage text only on a bad argument).
 2. Narrate in Chinese; keep only identifiers in English — command names, ids, field names (`wake`, `status`), model refs, and file paths.

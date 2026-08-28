@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import type { ChannelEvent } from "../channel/channel-event.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-import type { ChannelEvent } from "./channel-event.js";
 import type { DingTalkBot } from "./dingtalk.js";
 
 type DispatchStatus = "pending" | "queued" | "running" | "exhausted";

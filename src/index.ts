@@ -10,6 +10,7 @@
  * because `src/index.ts` is a knip entry point.
  */
 
+export type { ChannelContext, FinalDelivery, ProgressStyle } from "./channel/channel-context.js";
 export {
 	APP_HOME_DIR,
 	APP_NAME,
@@ -23,7 +24,6 @@ export {
 } from "./paths.js";
 export { type BootstrapPaths, type BootstrapResult, isBootstrapExitError } from "./runtime/app-home.js";
 export { type AppContext, type BootstrapOptions, bootstrap } from "./runtime/bootstrap.js";
-export type { ChannelContext, FinalDelivery, ProgressStyle } from "./runtime/channel-context.js";
 export {
 	DingTalkBot,
 	type DingTalkConfig,

@@ -1,6 +1,6 @@
+import type { MediaSender } from "../channel/channel-context.js";
 import { createExecutor, type Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
-import type { MediaSender } from "../runtime/channel-context.js";
 import { type LoadedSecurityConfig, loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import type { PipiclawSettingsManager } from "../settings.js";
 import { ChannelRunner } from "./channel-runner.js";

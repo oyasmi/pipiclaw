@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { LoggedSubAgentRun } from "../src/channel/store.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
-import type { LoggedSubAgentRun } from "../src/runtime/store.js";
 import {
 	configureSubAgentRuntime,
 	getSubAgentRunManager,
@@ -72,7 +72,7 @@ function makeStore() {
 			logSubAgentRun: async (channelId: string, run: LoggedSubAgentRun) => {
 				archived.push({ channelId, run });
 			},
-		} as unknown as import("../src/runtime/store.js").ChannelStore,
+		} as unknown as import("../src/channel/store.js").ChannelStore,
 	};
 }
 
@@ -429,7 +429,7 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 			logSubAgentRun: async () => {
 				throw new Error("Sub-agent archive queue is full.");
 			},
-		} as unknown as import("../src/runtime/store.js").ChannelStore;
+		} as unknown as import("../src/channel/store.js").ChannelStore;
 		const manager = new SubAgentRunManager("dm_123", { ledger, store: failingStore, dispatch });
 		await register(manager);
 

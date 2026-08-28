@@ -8,8 +8,8 @@ import type {
 	SessionStats,
 } from "@earendil-works/pi-coding-agent";
 import { basename } from "path";
+import { sessionCommandDescription } from "../commands/catalog.js";
 import { findModelReferenceMatch, formatModelList, formatModelReference } from "../models/utils.js";
-import { sessionCommandDescription } from "./commands.js";
 
 export const COMMAND_RESULT_CUSTOM_TYPE = "pipiclaw.command_result";
 

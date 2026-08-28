@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import type { ChannelEvent } from "../channel/channel-event.js";
+import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
+import { isChannelId } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
@@ -14,9 +17,6 @@ import {
 } from "../tasks/ledger.js";
 import { activateWaitingTask, escalateTask, openRecurringTaskCycle, updateStoredTask } from "../tasks/store.js";
 import { nextTaskWake } from "../tasks/task-schedule.js";
-import type { ChannelEvent } from "./channel-event.js";
-import { discoverWorkspaceChannelIds } from "./channel-index.js";
-import { isChannelId } from "./channel-paths.js";
 
 export interface TaskDriverOptions {
 	workspaceDir: string;

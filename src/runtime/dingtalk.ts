@@ -11,24 +11,30 @@ import axios from "axios";
 import { DWClient, type DWClientDownStream, TOPIC_ROBOT } from "dingtalk-stream";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
+// The delivery contract (`ChannelContext`) and its traits are transport-neutral
+// and live in channel-context.ts. Only the traits are used here, to map the
+// DingTalk-config `ResponseMode` onto them (progressStyleOf/finalDeliveryOf).
+import type {
+	FinalDelivery,
+	MediaSender,
+	MediaSendResult,
+	OutboundMedia,
+	ProgressStyle,
+} from "../channel/channel-context.js";
+import type { ChannelEvent } from "../channel/channel-event.js";
+import type { ChannelObservation } from "../channel/channel-index.js";
+import { getChannelDir } from "../channel/channel-paths.js";
 import {
 	formatBusyCommandList,
 	parseBuiltInCommand,
 	type RuntimeCommandName,
 	renderBuiltInHelp,
 	slashCommandName,
-} from "../agent/commands.js";
+} from "../commands/catalog.js";
 import * as log from "../log.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-// The delivery contract (`ChannelContext`) and its traits are transport-neutral
-// and live in channel-context.ts. Only the traits are used here, to map the
-// DingTalk-config `ResponseMode` onto them (progressStyleOf/finalDeliveryOf).
-import type { FinalDelivery, MediaSender, MediaSendResult, OutboundMedia, ProgressStyle } from "./channel-context.js";
-import type { ChannelEvent } from "./channel-event.js";
-import type { ChannelObservation } from "./channel-index.js";
-import { getChannelDir } from "./channel-paths.js";
 // Turn serialization is runtime policy; the queue lives in its own module and
 // this transport only consumes it.
 import { ChannelQueue } from "./channel-queue.js";

@@ -18,6 +18,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
+import { commitActiveSessionRef, resolveActiveSessionFile } from "../channel/active-session-store.js";
+import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
+import { resolveProjectScope } from "../channel/project-scope-store.js";
+import type { ChannelStore } from "../channel/store.js";
+import {
+	isKnownCommandName,
+	type RunnerBuiltInCommand,
+	renderBuiltInHelp,
+	slashCommandName,
+} from "../commands/catalog.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
@@ -49,10 +59,6 @@ import {
 	wrapModelRegistry,
 } from "../models/utils.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks/catalog.js";
-import { commitActiveSessionRef, resolveActiveSessionFile } from "../runtime/active-session-store.js";
-import type { ChannelContext, MediaSender } from "../runtime/channel-context.js";
-import { resolveProjectScope } from "../runtime/project-scope-store.js";
-import type { ChannelStore } from "../runtime/store.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
@@ -68,7 +74,6 @@ import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { createCommandExtension } from "./command-extension.js";
-import { isKnownCommandName, type RunnerBuiltInCommand, renderBuiltInHelp, slashCommandName } from "./commands.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
 import {
 	type FallbackRunDeps,

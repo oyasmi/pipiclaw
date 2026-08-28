@@ -7,16 +7,16 @@
  * unit-tested with fakes and a fake clock. `app.ts` builds the real ones.
  */
 
+import { renderStatus } from "../agent/status-render.js";
+import type { AgentRunner } from "../agent/types.js";
+import type { ChannelStore } from "../channel/store.js";
 import {
 	formatBusyCommandList,
 	formatUnknownCommandMessage,
 	isSessionCommandName,
 	slashCommandName,
-} from "../agent/commands.js";
-import { renderStatus } from "../agent/status-render.js";
-import type { AgentRunner } from "../agent/types.js";
+} from "../commands/catalog.js";
 import * as log from "../log.js";
-import type { ChannelStore } from "../runtime/store.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { bold, dim } from "./colors.js";

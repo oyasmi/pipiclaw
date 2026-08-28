@@ -2,7 +2,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { AssistantMessage, StopReason } from "@earendil-works/pi-ai";
 import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
-import { resolveActiveSessionFile } from "../runtime/active-session-store.js";
+import { resolveActiveSessionFile } from "../channel/active-session-store.js";
 
 /**
  * Repairs a session branch left with a declared-but-unfulfilled tool call by a process that

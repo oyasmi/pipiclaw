@@ -1,7 +1,7 @@
+import type { ChannelContext } from "../channel/channel-context.js";
+import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import type { MemoryLifecycle } from "../memory/lifecycle.js";
-import type { ChannelContext } from "../runtime/channel-context.js";
-import type { ChannelStore } from "../runtime/store.js";
 import { truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";

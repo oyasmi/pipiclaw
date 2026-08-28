@@ -13,7 +13,7 @@
  * depend on whether a turn is running, which only the app knows — so those come
  * back as intents rather than being applied here.
  */
-import { BUILT_IN_COMMANDS, type CommandSpec, parseBuiltInCommand, SESSION_COMMANDS } from "../agent/commands.js";
+import { BUILT_IN_COMMANDS, type CommandSpec, parseBuiltInCommand, SESSION_COMMANDS } from "../commands/catalog.js";
 
 export type DispatchOutcome =
 	/** Text to show the user immediately (help/status/usage/events output, or a hint). */

@@ -1,5 +1,5 @@
-import { renderSubcommandUsage } from "../agent/commands.js";
-import { capReply } from "../agent/reply-limits.js";
+import { renderSubcommandUsage } from "../commands/catalog.js";
+import { capReply } from "../commands/reply-limits.js";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { localDayKey, parseLocalTime } from "../shared/local-time.js";
 import { clipText } from "../shared/text-utils.js";

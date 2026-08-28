@@ -1,11 +1,11 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getChannelJobManager } from "../agent/job-manager.js";
+import type { MediaSender } from "../channel/channel-context.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { APP_HOME_DIR } from "../paths.js";
-import type { MediaSender } from "../runtime/channel-context.js";
 import { loadSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import type { SecurityConfig } from "../security/types.js";
