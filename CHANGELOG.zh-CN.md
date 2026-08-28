@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.9.2-beta.4] - 2026-08-28
+
 ### 新增
 
 - 新增运行时命令 `/skills`（`/skills` 列表，`/skills show <name>` 查看正文），可在钉钉或 TUI 中直接浏览工作区 skill 目录，不占用一次 LLM 回合。与已移除的 `/help` skill 列表不同，它直接扫描磁盘，因此也能看到因内容/frontmatter 扫描未通过、被静默排除在 `<available_skills>` 之外的 skill 及其原因。
