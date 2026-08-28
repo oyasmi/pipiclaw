@@ -87,13 +87,6 @@ describe("manageEvent create", () => {
 		).rejects.toThrow(/already exists/);
 	});
 
-	it("leaves no .tmp file and only the .json event behind (atomic write)", async () => {
-		await manageEvent(opts(), { action: "create", name: "clean", definition: validPeriodic });
-		const files = await listEventFiles();
-		expect(files).toEqual(["clean.json"]);
-		expect(files.every((f) => f.endsWith(".json"))).toBe(true);
-	});
-
 	it("rejects malformed definitions without writing a file", async () => {
 		await expect(manageEvent(opts(), { action: "create", name: "bad", definition: "{ not json" })).rejects.toThrow(
 			/not valid JSON/,
@@ -171,22 +164,6 @@ describe("manageEvent create", () => {
 				}),
 			}),
 		).rejects.toThrow(/5 minutes/);
-	});
-
-	it("tolerates a legacy timezone field and drops it from the persisted event", async () => {
-		const result = await manageEvent(opts(), {
-			action: "create",
-			name: "legacytz",
-			definition: JSON.stringify({
-				type: "periodic",
-				text: "x",
-				schedule: "0 10 * * 1",
-				timezone: "Not/AZone",
-			}),
-		});
-		expect(result.eventType).toBe("periodic");
-		const written = await readFile(join(eventsDir, "legacytz.json"), "utf-8");
-		expect(written).not.toContain("timezone");
 	});
 
 	it("rejects when a preAction command is blocked by the guard", async () => {

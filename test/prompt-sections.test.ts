@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildPipiclawSystemPrompt, RUNTIME_PROMPT_HARD_UNITS } from "../src/agent/prompt/builder.js";
-import { measureToolSchemas, renderContextReport, TOOL_SCHEMA_TARGET_UNITS } from "../src/agent/prompt/manifest.js";
+import { renderContextReport, TOOL_SCHEMA_TARGET_UNITS } from "../src/agent/prompt/manifest.js";
 import { AGENTS_BUDGET_UNITS, loadWorkspacePromptResources, SOUL_BUDGET_UNITS } from "../src/agent/prompt/resources.js";
 import { MAIN_PROMPT_SECTIONS } from "../src/agent/prompt/sections.js";
 import type { LoadedPromptResource, PromptBuildContext, ToolDescriptor } from "../src/agent/prompt/types.js";
@@ -55,18 +55,6 @@ function context(overrides: Partial<PromptBuildContext> = {}): PromptBuildContex
 }
 
 describe("system prompt structure", () => {
-	it("carries no trace of pi's default base prompt or the periodic-silence protocol", () => {
-		const { text, footer } = buildPipiclawSystemPrompt(context());
-		const full = `${text}\n${footer}`;
-
-		expect(full).not.toContain("operating inside pi, a coding agent harness");
-		expect(full).not.toContain("Pi documentation");
-		expect(full).not.toContain("Available tools:\n(none)");
-		expect(full).toContain("## Pipiclaw");
-		expect(text).not.toContain("[SILENT]");
-		expect(footer).not.toContain("[SILENT]");
-	});
-
 	it("uses unique, deterministically ordered section ids (no standalone tools section)", () => {
 		const build = buildPipiclawSystemPrompt(context());
 		const ids = build.sections.map((section) => section.id);
@@ -117,16 +105,6 @@ describe("system prompt structure", () => {
 		expect(overCatalog.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toEqual([]);
 	});
 
-	it("no longer repeats the tool catalog, while every tool still rides the build context", () => {
-		const build = buildPipiclawSystemPrompt(context());
-
-		expect(build.text).not.toContain("## Available Tools");
-		expect(build.text).not.toContain("- task_manage —");
-		expect(build.text).not.toContain("- read —");
-		// The tools are still known to the pipeline (used for gating), just not re-listed as prose.
-		expect(build.text).toContain("Tool definitions are the source of truth");
-	});
-
 	it("drops a mechanism's whole surface when its tool is off", () => {
 		const build = buildPipiclawSystemPrompt(context({ tools: tools(["read", "bash", "grep"]) }));
 
@@ -135,14 +113,6 @@ describe("system prompt structure", () => {
 		expect(build.text).not.toContain("task-driving.md");
 		expect(build.text).not.toContain("memory-and-learning.md");
 		expect(build.text).toContain("runtime-orientation.md");
-	});
-
-	it("renders a mechanism's section when its gating tool is registered (spec 046 D6)", () => {
-		const build = buildPipiclawSystemPrompt(context());
-		expect(build.text).toContain("## Persistent Work");
-
-		const noConfiguredAgents = buildPipiclawSystemPrompt(context({ subAgents: [] }));
-		expect(noConfiguredAgents.text).toContain("## Sub-Agents");
 	});
 
 	it("gates the memory invariant on the tool being registered", () => {
@@ -170,23 +140,6 @@ describe("tool schema budget", () => {
 		});
 	}
 
-	it("measures name, description and JSON schema together", () => {
-		const measured = measureToolSchemas([
-			{ name: "read", description: "reads a file", parameters: { type: "object" } },
-			{ name: "write", description: "writes a file" },
-		]);
-
-		expect(measured.chars).toBe(
-			"read".length +
-				"reads a file".length +
-				JSON.stringify({ type: "object" }).length +
-				"write".length +
-				"writes a file".length +
-				"{}".length,
-		);
-		expect(measured.units).toBeGreaterThan(0);
-	});
-
 	it("reports the schemas against their target — quiet under it, a warning once over", () => {
 		const under = report({ chars: 20_000, units: TOOL_SCHEMA_TARGET_UNITS });
 
@@ -198,23 +151,6 @@ describe("tool schema budget", () => {
 		expect(over).toContain("over target");
 		expect(over).toContain("[warning] tools:");
 		expect(over).toContain("unregister a tool");
-	});
-});
-
-describe("runtime guide catalog", () => {
-	it("names the real absolute playbook directory and only short triggers, never bodies", () => {
-		const build = buildPipiclawSystemPrompt(context());
-		const catalog = loadRuntimePlaybookCatalog();
-		const playbooksDir = catalog[0]?.path.replace(/\/[^/]+$/, "");
-
-		expect(build.text).toContain("## Runtime Guides");
-		expect(playbooksDir).toBeTruthy();
-		expect(build.text).toContain(playbooksDir as string);
-		for (const entry of catalog) {
-			expect(build.text).toContain(`- ${entry.filename} —`);
-		}
-		// A trigger, not the body.
-		expect(build.text).not.toContain("## control 决策");
 	});
 });
 

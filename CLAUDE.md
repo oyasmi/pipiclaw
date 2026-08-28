@@ -18,6 +18,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Node `>= 22.19.0`.
 
+## Tests
+
+- Every test must earn its place by covering something that can actually break: branching logic, edge cases, boundaries, concurrency, contracts, security guards, regressions. Do **not** add obvious low-value tests — asserting the literal substrings of a rendered help/status/label string, `new X() instanceof X` smoke checks, echoing a constant back, or re-testing a one-line pure formatter with no branches. If a change to the code under test could only ever break the test by also being an intentional edit to that same text, the test is a change-detector, not a safety net.
+- When touching runtime, memory, or DingTalk behavior, cover the behavior change — but with a test that would fail on a real regression, not one that pins cosmetic output.
+
 ## Git
 
 - Write good commit messages: a concise imperative subject line (e.g. `feat: add proxy routing for LLM requests`), optionally followed by a blank line and a body that explains *why* the change was made. Match the existing conventional-commit style (`feat:`, `fix:`, `chore:`, `ci:`, `docs:`, etc.).

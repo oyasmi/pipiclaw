@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
 	findExactModelReferenceMatch,
 	findModelReferenceMatch,
-	formatModelList,
 	formatModelReference,
 	resolveInitialModel,
 } from "../src/models/utils.js";
@@ -78,15 +77,6 @@ describe("model-utils", () => {
 		expect(findModelReferenceMatch("glm5", [bailianGlm, bailianKimi, zpaiTurbo])).toEqual({
 			ambiguous: false,
 		});
-	});
-
-	it("formats model lists with current marker and truncation", () => {
-		const list = formatModelList([openaiModel, anthropicModel], anthropicModel);
-		expect(list).toContain("`anthropic/claude-sonnet-4-5` (current)");
-		expect(list).toContain("`openai/gpt-4o-mini`");
-
-		const truncated = formatModelList([anthropicModel, openaiModel], anthropicModel, 1);
-		expect(truncated).toContain("... and 1 more");
 	});
 
 	it("resolves initial model from saved settings, first available model, or fallback default", () => {

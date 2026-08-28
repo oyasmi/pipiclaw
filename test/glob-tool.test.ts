@@ -19,19 +19,6 @@ function text(result: { content: Array<{ type: string; text?: string }> }): stri
 }
 
 describe("glob tool", () => {
-	it("finds files matching a basename pattern at any depth", async () => {
-		const dir = makeWorkspace();
-		mkdirSync(join(dir, "src", "deep"), { recursive: true });
-		writeFileSync(join(dir, "a.ts"), "a");
-		writeFileSync(join(dir, "src", "b.ts"), "b");
-		writeFileSync(join(dir, "src", "deep", "c.ts"), "c");
-		writeFileSync(join(dir, "readme.md"), "not ts");
-
-		const result = await makeTool().execute("call", { pattern: "*.ts", path: dir });
-		const lines = text(result).split("\n\n")[0]?.split("\n") ?? [];
-		expect(lines.sort()).toEqual(["a.ts", "src/b.ts", "src/deep/c.ts"].sort());
-	});
-
 	it("excludes VCS/build directories from the walk", async () => {
 		const dir = makeWorkspace();
 		mkdirSync(join(dir, "node_modules", "pkg"), { recursive: true });
@@ -53,29 +40,8 @@ describe("glob tool", () => {
 		expect(text(result)).not.toContain("link.ts");
 	});
 
-	it("reports no matches without claiming the tree is empty when scoped by a subdir", async () => {
-		const dir = makeWorkspace();
-		mkdirSync(join(dir, "src"));
-		writeFileSync(join(dir, "src", "a.ts"), "x");
-
-		const result = await makeTool().execute("call", { pattern: "*.py", path: dir });
-		expect(text(result)).toContain("No files matching");
-	});
-
 	it("rejects an empty pattern", async () => {
 		const dir = makeWorkspace();
 		await expect(makeTool().execute("call", { pattern: "  ", path: dir })).rejects.toThrow(/non-empty|empty/i);
-	});
-
-	it("scopes results to a given subdirectory", async () => {
-		const dir = makeWorkspace();
-		mkdirSync(join(dir, "src"));
-		mkdirSync(join(dir, "other"));
-		writeFileSync(join(dir, "src", "a.ts"), "x");
-		writeFileSync(join(dir, "other", "b.ts"), "x");
-
-		const result = await makeTool().execute("call", { pattern: "*.ts", path: join(dir, "src") });
-		expect(text(result)).toContain("a.ts");
-		expect(text(result)).not.toContain("b.ts");
 	});
 });

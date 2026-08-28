@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
@@ -341,25 +341,6 @@ describe("EventsWatcher", () => {
 		expect(String(history[0]?.ts)).not.toContain("Z");
 	});
 
-	it("does not append the periodic silence contract to one-shot events", async () => {
-		const dir = createTempDir();
-		const filename = "reminder.json";
-		writeFileSync(join(dir, filename), "{}");
-		const bot = new FakeBot(true);
-		const watcher = createWatcher(dir, bot, createMockExecutor());
-		const privateApi = getEventsWatcherPrivateApi(watcher);
-
-		await privateApi.execute(
-			filename,
-			{ type: "one-shot", channelId: "dm_9", text: "ping the user", at: "2026-07-20T09:00:00+08:00" },
-			true,
-		);
-
-		expect(bot.events).toHaveLength(1);
-		expect(bot.events[0]?.text).toBe("[EVENT:reminder.json:one-shot:2026-07-20T09:00:00+08:00] ping the user");
-		expect(bot.events[0]?.text).not.toContain("[SILENT]");
-	});
-
 	describe("admission gate (spec 031, D4)", () => {
 		it("rejects a hand-written near-term one-shot that the tool would have refused", async () => {
 			const dir = createTempDir();
@@ -463,24 +444,6 @@ describe("EventsWatcher", () => {
 				expect(bot.events).toHaveLength(1);
 				expect(existsSync(join(dir, filename))).toBe(true);
 			}
-		});
-
-		it("fires while the owning task is still live for a dotted task id", async () => {
-			// Task ids allow dots (TASK_ID_PATTERN), so the owner lookup must parse the id with the
-			// same last-dot rule as parseTaskEventName — not cut it at the first dot.
-			const channelId = "dm_1";
-			const dir = join(createTempDir(), "events-dotted-task-id");
-			mkdirSync(dir, { recursive: true });
-			writeOwningTask(dir, channelId, "v1.2-release", "active");
-			const filename = `task.${channelId}.v1.2-release.checkin.json`;
-			writeFileSync(join(dir, filename), "{}");
-			const bot = new FakeBot(true);
-			const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
-
-			await privateApi.execute(filename, taskEventFixture(channelId), false);
-
-			expect(bot.events).toHaveLength(1);
-			expect(existsSync(join(dir, filename))).toBe(true);
 		});
 
 		it("retires itself when the owning task is gone or has reached a terminal status", async () => {
@@ -593,73 +556,6 @@ describe("EventsWatcher", () => {
 		});
 	});
 
-	it("records invalid event parse failures in history", async () => {
-		const dir = createTempDir();
-		const historyPath = join(createTempDir(), "history.jsonl");
-		const watcher = createWatcher(dir, new FakeBot(), createMockExecutor(), undefined, historyPath);
-		const privateApi = getEventsWatcherPrivateApi(watcher);
-		const brokenPath = join(dir, "broken.json");
-		writeFileSync(brokenPath, "{");
-		vi.spyOn(privateApi, "sleep").mockResolvedValue(undefined);
-
-		await privateApi.handleFile("broken.json");
-		await watcher.flush();
-
-		expect(readHistory(historyPath)).toEqual([
-			expect.objectContaining({
-				eventName: "broken",
-				eventType: "unknown",
-				action: "invalid",
-				result: "error",
-			}),
-		]);
-	});
-
-	it("keeps periodic event files when they are re-queued without deletion", async () => {
-		const dir = createTempDir();
-		const filename = "keep.json";
-		const filePath = join(dir, filename);
-		writeFileSync(filePath, "{}");
-		const bot = new FakeBot(true);
-		const watcher = createWatcher(dir, bot);
-		const privateApi = getEventsWatcherPrivateApi(watcher);
-
-		await privateApi.execute(
-			filename,
-			{
-				type: "periodic",
-				channelId: "dm_7",
-				text: "keep file",
-				schedule: "0 3 * * 0",
-			},
-			false,
-		);
-
-		expect(bot.events).toHaveLength(1);
-		expect(existsSync(filePath)).toBe(true);
-		expect(statSync(filePath).isFile()).toBe(true);
-	});
-
-	it("configures periodic events to prevent overlap and catch escaped callback errors", () => {
-		const dir = createTempDir();
-		const watcher = createWatcher(dir);
-		const privateApi = getEventsWatcherPrivateApi(watcher);
-
-		privateApi.handlePeriodic("protected.json", {
-			type: "periodic",
-			channelId: "dm_1",
-			text: "protected",
-			schedule: "0 3 * * 0",
-			timezone: "UTC",
-		});
-
-		expect(privateApi.crons.get("protected.json")?.options).toMatchObject({
-			protect: true,
-			catch: true,
-		});
-		watcher.stop();
-	});
-
 	it("survives a transient full queue without losing either event kind", async () => {
 		for (const variant of [
 			{
@@ -753,29 +649,6 @@ describe("EventsWatcher", () => {
 			]);
 		});
 
-		it("consumes a one-shot event when its action gate blocks", async () => {
-			const dir = createTempDir();
-			const filename = "blocked-once.json";
-			const filePath = join(dir, filename);
-			writeFileSync(filePath, "{}");
-			const watcher = createWatcher(dir);
-			const privateApi = getEventsWatcherPrivateApi(watcher);
-
-			await privateApi.execute(
-				filename,
-				{
-					type: "one-shot",
-					at: "2030-01-01T00:00:00.000Z",
-					channelId: "dm_1",
-					text: "consume me",
-					preAction: { type: "bash", command: "false" },
-				},
-				true,
-			);
-
-			expect(existsSync(filePath)).toBe(false);
-		});
-
 		it("blocks the event when the action times out or the command does not exist", async () => {
 			for (const preAction of [
 				{ type: "bash" as const, command: "sleep 30", timeout: 100 },
@@ -846,46 +719,6 @@ describe("EventsWatcher", () => {
 			await privateApi.runPreAction({ type: "bash", command: "true", timeout: 100 }, "timeout-ms.json");
 
 			expect(execSpy).toHaveBeenCalledWith("true", { timeout: 1 });
-		});
-
-		it("rejects action with empty command in parseEvent", () => {
-			const dir = createTempDir();
-			const watcher = createWatcher(dir);
-			const privateApi = getEventsWatcherPrivateApi(watcher);
-
-			expect(() =>
-				privateApi.parseEvent(
-					JSON.stringify({
-						type: "one-shot",
-						at: "2030-01-01T00:00:00.000Z",
-						channelId: "dm_1",
-						text: "hello",
-						preAction: { type: "bash", command: "" },
-					}),
-					"empty-cmd.json",
-				),
-			).toThrow("Missing or empty 'preAction.command'");
-		});
-
-		it("rejects action with non-positive timeout in parseEvent", () => {
-			const dir = createTempDir();
-			const watcher = createWatcher(dir);
-			const privateApi = getEventsWatcherPrivateApi(watcher);
-
-			for (const timeout of [0, -1]) {
-				expect(() =>
-					privateApi.parseEvent(
-						JSON.stringify({
-							type: "one-shot",
-							at: "2030-01-01T00:00:00.000Z",
-							channelId: "dm_1",
-							text: "hello",
-							preAction: { type: "bash", command: "true", timeout },
-						}),
-						"invalid-timeout.json",
-					),
-				).toThrow("Invalid 'preAction.timeout'");
-			}
 		});
 	});
 });

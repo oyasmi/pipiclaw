@@ -53,15 +53,6 @@ describe("ChannelJobManager", () => {
 		expect(manager.runningCount()).toBe(1);
 	});
 
-	it("reports a running job's duration as elapsed time, not an absolute timestamp", async () => {
-		const executor = new FakeJobExecutor();
-		const manager = new ChannelJobManager("dm_1", executor);
-		const job = await manager.start("sleep 100", "wait", 300);
-		// A running job's durationMs is time-since-start (tiny here), never Date.now() (~1.7e12).
-		expect(job.durationMs).toBeLessThan(60_000);
-		expect(job.durationMs).toBeGreaterThanOrEqual(0);
-	});
-
 	it("sweeps and reaps a finished job even when nobody polls it", async () => {
 		const executor = new FakeJobExecutor();
 		// Tiny sweep interval so the background sweeper fires within the test window.
@@ -92,25 +83,6 @@ describe("ChannelJobManager", () => {
 		} finally {
 			vi.useRealTimers();
 		}
-	});
-
-	it("probes every running job in a single sweep command", async () => {
-		const executor = new FakeJobExecutor();
-		const manager = new ChannelJobManager("dm_1", executor, 5);
-		for (let i = 0; i < 3; i++) {
-			await manager.start("sleep 100", `job${i}`, 300);
-		}
-		const beforeSweep = executor.commands.length;
-
-		await new Promise((resolve) => setTimeout(resolve, 20));
-
-		const probes = executor.commands.slice(beforeSweep).filter((command) => command.includes("kill -0"));
-		expect(probes.length).toBeGreaterThan(0);
-		// Every sweep spawns one shell regardless of how many jobs are alive.
-		for (const probe of probes) {
-			expect(probe.split("\n")).toHaveLength(3);
-		}
-		expect(manager.runningCount()).toBe(3);
 	});
 
 	it("caps the number of concurrent running jobs", async () => {

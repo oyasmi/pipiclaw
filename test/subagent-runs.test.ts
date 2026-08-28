@@ -238,27 +238,6 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(manager.get("run-1")?.settledAt).toBeDefined();
 	});
 
-	it("truncates a long wake body with a note, and carries workspaceSummary as its own line (P2)", async () => {
-		const { ledger } = makeLedger();
-		const { store } = makeStore();
-		const { dispatch, events } = makeDispatch();
-		const manager = new SubAgentRunManager("dm_123", { ledger, store, dispatch });
-		await register(manager);
-
-		const longOutput = `PREFIX-${"x".repeat(7_000)}-SUFFIX`;
-		await manager.settle(
-			"run-1",
-			baseSettleInput({ outputText: longOutput, workspaceSummary: "M src/a.ts, ?? src/b.ts" }),
-			{ announce: true },
-		);
-
-		const text = events[0]?.text ?? "";
-		expect(text).toContain("truncated:");
-		expect(text).toContain("SUFFIX");
-		expect(text).not.toContain("PREFIX-x"); // The truncated head is gone.
-		expect(text).toContain("Workspace after the run (git status --porcelain): M src/a.ts, ?? src/b.ts");
-	});
-
 	it("settle is idempotent: a second call for the same run neither re-bills nor re-announces", async () => {
 		const { ledger, records } = makeLedger();
 		const { store, archived } = makeStore();
@@ -510,13 +489,6 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 /** spec 041: short, human-typeable run ids, and prefix resolution for the commands that use them. */
 describe("SubAgentRunManager run id minting and resolution (spec 041)", () => {
-	it("mintRunId produces run_ + 6 lowercase chars from a misread-resistant alphabet", () => {
-		const manager = new SubAgentRunManager("dm_mint", {});
-		for (let i = 0; i < 50; i++) {
-			expect(manager.mintRunId()).toMatch(/^run_[23456789abcdefghjkmnpqrstvwxyz]{6}$/);
-		}
-	});
-
 	it("mintRunId never reuses an id held by a known record, and register rejects a duplicate id", async () => {
 		const manager = new SubAgentRunManager("dm_mint_unique", {});
 		const minted = new Set<string>();

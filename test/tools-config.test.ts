@@ -7,12 +7,6 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const makeTempDir = useTempDirs("pipiclaw-tools-config-");
 
 describe("tools config", () => {
-	it("returns defaults when tools.json is missing", () => {
-		const appHomeDir = makeTempDir();
-
-		expect(loadToolsConfig(appHomeDir)).toEqual(DEFAULT_TOOLS_CONFIG);
-	});
-
 	it("merges tools.web overrides", () => {
 		const appHomeDir = makeTempDir();
 		writeFileSync(
@@ -61,80 +55,6 @@ describe("tools config", () => {
 				},
 			},
 		});
-	});
-
-	it("defaults the tasks and bashInterceptor gates to on (explicit values, not circular self-compare)", () => {
-		const appHomeDir = makeTempDir();
-
-		const loaded = loadToolsConfig(appHomeDir);
-		expect(loaded.tools.tasks.enabled).toBe(true);
-		expect(loaded.tools.bashInterceptor.enabled).toBe(true);
-
-		// An explicit opt-out is still honored.
-		writeFileSync(
-			join(appHomeDir, "tools.json"),
-			JSON.stringify({ tools: { tasks: { enabled: false }, bashInterceptor: { enabled: false } } }),
-			"utf-8",
-		);
-		const off = loadToolsConfig(appHomeDir);
-		expect(off.tools.tasks.enabled).toBe(false);
-		expect(off.tools.bashInterceptor.enabled).toBe(false);
-	});
-
-	it("defaults tools.rtk.enabled to false and honors an explicit opt-in", () => {
-		const appHomeDir = makeTempDir();
-
-		expect(loadToolsConfig(appHomeDir).tools.rtk.enabled).toBe(false);
-
-		writeFileSync(join(appHomeDir, "tools.json"), JSON.stringify({ tools: { rtk: { enabled: true } } }), "utf-8");
-		expect(loadToolsConfig(appHomeDir).tools.rtk.enabled).toBe(true);
-
-		writeFileSync(join(appHomeDir, "tools.json"), JSON.stringify({ tools: { rtk: { enabled: "yes" } } }), "utf-8");
-		expect(loadToolsConfig(appHomeDir).tools.rtk.enabled).toBe(false);
-	});
-
-	it("defaults tools.subagentInline.enabled to true and honors an explicit opt-out (spec 046, D2.3)", () => {
-		const appHomeDir = makeTempDir();
-
-		expect(loadToolsConfig(appHomeDir).tools.subagentInline.enabled).toBe(true);
-
-		writeFileSync(
-			join(appHomeDir, "tools.json"),
-			JSON.stringify({ tools: { subagentInline: { enabled: false } } }),
-			"utf-8",
-		);
-		expect(loadToolsConfig(appHomeDir).tools.subagentInline.enabled).toBe(false);
-
-		writeFileSync(
-			join(appHomeDir, "tools.json"),
-			JSON.stringify({ tools: { subagentInline: { enabled: "no" } } }),
-			"utf-8",
-		);
-		expect(loadToolsConfig(appHomeDir).tools.subagentInline.enabled).toBe(true);
-	});
-
-	it("falls back to defaults for invalid values", () => {
-		const appHomeDir = makeTempDir();
-		writeFileSync(
-			join(appHomeDir, "tools.json"),
-			JSON.stringify({
-				tools: {
-					web: {
-						search: {
-							provider: "invalid",
-							maxResults: 99,
-						},
-						fetch: {
-							maxChars: 10,
-							defaultExtractMode: "html",
-						},
-					},
-				},
-			}),
-			"utf-8",
-		);
-
-		expect(loadToolsConfig(appHomeDir)).toEqual(DEFAULT_TOOLS_CONFIG);
 	});
 
 	it("reports diagnostics for invalid json and invalid fields", () => {

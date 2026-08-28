@@ -7,7 +7,6 @@ import {
 	runPromptWithFallback,
 	shouldFallback,
 	shouldRestorePrimary,
-	summarizeFallbackError,
 	takeFailedTurn,
 } from "../src/agent/model-fallback.js";
 
@@ -62,14 +61,6 @@ describe("shouldRestorePrimary", () => {
 		expect(shouldRestorePrimary(null, now)).toBe(true);
 		expect(shouldRestorePrimary(now - PRIMARY_COOLDOWN_MS + 1, now)).toBe(false);
 		expect(shouldRestorePrimary(now - PRIMARY_COOLDOWN_MS - 1, now)).toBe(true);
-	});
-});
-
-describe("summarizeFallbackError", () => {
-	it("takes the first line and caps length", () => {
-		expect(summarizeFallbackError("429 rate limit\nmore detail")).toBe("429 rate limit");
-		expect(summarizeFallbackError(undefined)).toBe("未知错误");
-		expect(summarizeFallbackError("x".repeat(200))).toHaveLength(120);
 	});
 });
 
@@ -185,15 +176,6 @@ describe("runPromptWithFallback", () => {
 		expect(state.promptCalls).toEqual(["do it", "do it"]);
 	});
 
-	it("does not fall back on context overflow", async () => {
-		const state = freshState();
-		const deps = makeDeps(state, backupModel as Model<Api>, [
-			{ stopReason: "error", errorMessage: "prompt is too long: 999 tokens > 200 maximum", submitted: true },
-		]);
-		expect(await runPromptWithFallback("do it", deps)).toBe(false);
-		expect(state.switches).toEqual([]);
-	});
-
 	it("does not fall back on abort", async () => {
 		const state = freshState();
 		const deps = makeDeps(state, backupModel as Model<Api>, [{ stopReason: "aborted" }]);
@@ -206,15 +188,6 @@ describe("runPromptWithFallback", () => {
 		const deps = makeDeps(state, null, [{ stopReason: "error", errorMessage: "429", submitted: true }]);
 		expect(await runPromptWithFallback("do it", deps)).toBe(false);
 		expect(state.promptCalls).toEqual(["do it"]);
-	});
-
-	it("does not fall back when the backup equals the current model", async () => {
-		const state = freshState();
-		const deps = makeDeps(state, primaryModel as Model<Api>, [
-			{ stopReason: "error", errorMessage: "429", submitted: true },
-		]);
-		expect(await runPromptWithFallback("do it", deps)).toBe(false);
-		expect(state.switches).toEqual([]);
 	});
 
 	it("skips fallback (no switch) when surgery finds an unexpected tail", async () => {

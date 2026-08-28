@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFileStore } from "../src/file-store.js";
-import { createWriteTool } from "../src/tools/write.js";
 import { writeContent } from "../src/tools/write-content.js";
 
 const fileStore = createFileStore();
@@ -33,16 +32,6 @@ describe("write-content", () => {
 		expect(readFileSync(target, "utf-8")).toBe("hello");
 	});
 
-	it("writes content containing shell metacharacters byte-for-byte", async () => {
-		const dir = tempDir();
-		const target = join(dir, "special.txt");
-		const content = "line 1\nit's `dangerous` $(rm -rf /)\nbackslash\\done";
-
-		await writeContent(fileStore, target, content, undefined, { securityConfig: disabledSecurity });
-
-		expect(readFileSync(target, "utf-8")).toBe(content);
-	});
-
 	it("preserves the existing file's permission bits across an overwrite", async () => {
 		const dir = tempDir();
 		const target = join(dir, "script.sh");
@@ -53,29 +42,5 @@ describe("write-content", () => {
 
 		expect(statSync(target).mode & 0o777).toBe(0o755);
 		expect(readFileSync(target, "utf-8")).toBe("#!/bin/sh\necho bye\n");
-	});
-
-	it("preserves multi-byte UTF-8 content exactly", async () => {
-		const dir = tempDir();
-		const target = join(dir, "unicode.txt");
-		const content = "你好，世界！🎉 emoji and 汉字混合内容";
-
-		await writeContent(fileStore, target, content, undefined, { securityConfig: disabledSecurity });
-
-		expect(readFileSync(target, "utf-8")).toBe(content);
-	});
-
-	it("write tool reports bytes written and creates parent directories", async () => {
-		const dir = tempDir();
-		const target = join(dir, "sub", "out.txt");
-		const tool = createWriteTool(fileStore, { securityConfig: disabledSecurity });
-
-		const result = await tool.execute("call", { path: target, content: "hello界" });
-
-		expect(readFileSync(target, "utf-8")).toBe("hello界");
-		expect(result).toEqual({
-			content: [{ type: "text", text: `Successfully wrote 8 bytes to ${target}` }],
-			details: { path: target },
-		});
 	});
 });

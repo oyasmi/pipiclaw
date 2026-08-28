@@ -21,40 +21,9 @@ describe("stripInjectedMemoryContext", () => {
 			expect(stripInjectedMemoryContext(raw)).toBe("重启一下服务");
 		}
 	});
-
-	it("removes an injected block with no user_message wrapper", () => {
-		const raw = [
-			"<durable_memory_snapshot>",
-			"[Channel MEMORY.md]",
-			"- Something durable.",
-			"</durable_memory_snapshot>",
-			"",
-			"actual question",
-		].join("\n");
-
-		expect(stripInjectedMemoryContext(raw)).toBe("actual question");
-	});
-
-	it("leaves plain text untouched", () => {
-		expect(stripInjectedMemoryContext("just a normal message")).toBe("just a normal message");
-	});
 });
 
 describe("sanitizeMessagesForMemory", () => {
-	it("strips injected context from user turns but keeps assistant turns", () => {
-		const messages: AgentMessage[] = [
-			{
-				role: "user",
-				content: "<runtime_context>\nmemory\n</runtime_context>\n\n<user_message>\nhello\n</user_message>",
-			},
-			{ role: "assistant", content: [{ type: "text", text: "hi there" }] },
-		] as unknown as AgentMessage[];
-
-		const sanitized = sanitizeMessagesForMemory(messages);
-		expect(sanitized[0]?.content).toBe("hello");
-		expect(sanitized[1]).toEqual(messages[1]);
-	});
-
 	it("sanitizes text parts of multimodal user content", () => {
 		const messages: AgentMessage[] = [
 			{

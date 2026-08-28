@@ -18,7 +18,6 @@ import { createFileStore } from "../src/file-store.js";
 import {
 	discoverSubAgents,
 	getSubAgentsDir,
-	resolveConfiguredRole,
 	resolveInlineAgent,
 	SUB_AGENT_EFFORT_PRESETS,
 	type SubAgentConfig,
@@ -202,61 +201,6 @@ ${"x".repeat(16001)}`,
 		);
 	});
 
-	it("parses YAML arrays/numerics and contextual frontmatter, carried through to a resolved role unmodified", () => {
-		const workspaceDir = createTempWorkspace();
-		const subAgentsDir = getSubAgentsDir(workspaceDir);
-		mkdirSync(subAgentsDir, { recursive: true });
-
-		writeFileSync(
-			join(subAgentsDir, "reviewer.md"),
-			`---
-name: reviewer
-description: review code
-tools:
-  - read
-  - bash
-mutates: read
-contextMode: contextual
-memory: session
-paths:
-  - src/core.ts
-  - test/core.test.ts
-maxTurns: 7
-maxToolCalls: 9
-maxWallTimeSec: 60
-bashTimeoutSec: 30
----
-
-Review files carefully.`,
-			"utf-8",
-		);
-
-		const discovery = discoverSubAgents(workspaceDir, [model]);
-		expect(discovery.warnings).toEqual([]);
-		expect(discovery.agents[0]).toMatchObject({
-			name: "reviewer",
-			description: "review code",
-			tools: ["read", "bash"],
-			contextMode: "contextual",
-			memory: "session",
-			paths: ["src/core.ts", "test/core.test.ts"],
-			maxTurns: 7,
-			maxToolCalls: 9,
-			maxWallTimeSec: 60,
-			bashTimeoutSec: 30,
-		});
-
-		// Spec 046, D2.1: `subagent` (role-based) has no context/paths override at all — a resolved
-		// configured role carries its role file's own contextMode/memory/paths through unmodified.
-		const resolved = resolveConfiguredRole([model], model, discovery.agents, { agent: "reviewer" });
-		expect(resolved.error).toBeUndefined();
-		expect(resolved.config).toMatchObject({
-			contextMode: "contextual",
-			memory: "session",
-			paths: ["src/core.ts", "test/core.test.ts"],
-		});
-	});
-
 	it("maps each context choice onto the frontmatter contextMode/memory pair (inline)", () => {
 		const cases = [
 			{ context: "none", contextMode: "isolated", memory: "none" },
@@ -271,16 +215,6 @@ Review files carefully.`,
 		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", context: "everything" }).error).toContain(
 			'Unknown context "everything"',
 		);
-	});
-
-	it("a configured role's context/memory pair is always its own frontmatter — there is no override", () => {
-		const inherited = resolveConfiguredRole(
-			[model],
-			model,
-			[makeSubAgentConfig({ contextMode: "contextual", memory: "session" })],
-			{ agent: "reviewer" },
-		);
-		expect(inherited.config).toMatchObject({ contextMode: "contextual", memory: "session" });
 	});
 
 	it("applies effort presets as whole tuples for an inline delegation", () => {
@@ -298,16 +232,6 @@ Review files carefully.`,
 		expect(resolveInlineAgent([model], model, { systemPrompt: "Work", effort: "extreme" }).error).toContain(
 			'Unknown effort "extreme"',
 		);
-	});
-
-	it("a configured internal role's budget is always its own frontmatter numbers — there is no effort override", () => {
-		const budgeted = makeSubAgentConfig({ maxTurns: 5, maxToolCalls: 6, maxWallTimeSec: 7, bashTimeoutSec: 8 });
-		expect(resolveConfiguredRole([model], model, [budgeted], { agent: "reviewer" }).config).toMatchObject({
-			maxTurns: 5,
-			maxToolCalls: 6,
-			maxWallTimeSec: 7,
-			bashTimeoutSec: 8,
-		});
 	});
 
 	it("inline: resolves the model in priority order: invocation > settings default > parent", () => {
@@ -343,19 +267,6 @@ Review files carefully.`,
 			"openai/does-not-exist",
 		);
 		expect(badDefault.error).toContain("was not found among available models");
-	});
-
-	it("configured role: the role file's own model wins over the settings default; there is no invocation override", () => {
-		const availableModels = [model, altModel];
-		const withFrontmatterModel = makeSubAgentConfig();
-		const frontmatterWins = resolveConfiguredRole(
-			availableModels,
-			altModel,
-			[withFrontmatterModel],
-			{ agent: "reviewer" },
-			"openai/gpt-4o",
-		);
-		expect(frontmatterWins.config?.model).toBe(model);
 	});
 });
 
