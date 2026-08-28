@@ -76,6 +76,7 @@ reviewer 发现的问题回流给产出角色；verifier 失败回流给 builder
 - `tools` 只是工具白名单，不等同于只读沙箱。拥有 `bash` 的内置角色仍须遵守正文和应用级 `security.json` 的限制。
 - 外部角色**没有** `tools` 字段（写了会被驳回）。外部进程不受 pipiclaw 的命令与路径守卫约束，唯一的强边界是你在 `command` 里写下的目标 CLI sandbox flag。
 - 所有 Git 提交统一交给 `git-committer`；它只有在任务明确转述用户要求 push 时才可推送。创建 commit 不会自动获得 push 授权。
+- 委派运行和完成时，频道会收到一条独立于唤醒的状态提醒（`⏳ 进度` / `✅ 完成`，见 `settings.json` 的 `delegation.notices`）；这只是"活着/结束了"的信号，不含内容——角色最终消息的结论仍要由主代理读到并转述给用户，不能假设用户已经看到了。
 
 Pipiclaw 只加载工作区 `sub-agents/` 中实际存在且有效的 Markdown 文件。空目录是合法配置；没有合适的预定义角色时仍可使用 inline `systemPrompt`。`purpose: verify` 的验收约束由 runtime 执行，不要求配置文件必须名为 `verifier`。
 

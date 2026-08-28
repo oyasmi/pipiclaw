@@ -151,7 +151,7 @@ describe("sub-agent discovery", () => {
 		// Internal routing/budget spot checks.
 		const explorer = discovery.agents.find((agent) => agent.name === "explorer");
 		expect(explorer).toMatchObject({ runtime: "internal", workload: "light", thinkingLevel: "low", maxTurns: 12 });
-		expect(discovery.agents.find((agent) => agent.name === "explorer")?.description).toContain("只读代码探索");
+		expect(discovery.agents.find((agent) => agent.name === "explorer")?.description).toContain("只读定位");
 		expect(discovery.agents.find((agent) => agent.name === "git-committer")).toMatchObject({
 			thinkingLevel: "medium",
 			maxWallTimeSec: 600,
