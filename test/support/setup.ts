@@ -1,8 +1,29 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 
 const REAL_PIPICLAW_HOME = join(homedir(), ".pipiclaw");
+
+/**
+ * The e2e (live) layer follows the machine's own `settings.json` provider/model
+ * rather than hard-coding `anthropic`. Copying `auth.json` while forcing an
+ * unrelated default is exactly how F4 (spec 048) happened: `resolveInitialModel`
+ * silently fell back and the suite tested a model nobody declared.
+ */
+function readLocalModelDefaults(): { defaultProvider?: string; defaultModel?: string } {
+	try {
+		const raw = JSON.parse(readFileSync(join(REAL_PIPICLAW_HOME, "settings.json"), "utf-8")) as Record<
+			string,
+			unknown
+		>;
+		return {
+			defaultProvider: typeof raw.defaultProvider === "string" ? raw.defaultProvider : undefined,
+			defaultModel: typeof raw.defaultModel === "string" ? raw.defaultModel : undefined,
+		};
+	} catch {
+		return {};
+	}
+}
 
 export interface E2ETestHome {
 	homeDir: string;
@@ -87,9 +108,27 @@ export function createE2ETestHome(overrides?: {
 	// interval gates forbid, so tests opt into the fast tuning instead.
 	process.env.PIPICLAW_TEST_FAST_MAINTENANCE = "1";
 
+	const localDefaults = readLocalModelDefaults();
+	const resolvedProvider =
+		overrides?.defaultProvider ??
+		process.env.PIPICLAW_E2E_PROVIDER ??
+		localDefaults.defaultProvider ??
+		(process.env.ANTHROPIC_API_KEY ? "anthropic" : undefined);
+	const resolvedModel =
+		overrides?.defaultModel ??
+		process.env.PIPICLAW_E2E_MODEL ??
+		localDefaults.defaultModel ??
+		(process.env.ANTHROPIC_API_KEY ? "claude-sonnet-4-5" : undefined);
+	if (!resolvedProvider || !resolvedModel) {
+		throw new Error(
+			"E2E: cannot resolve a provider/model. Set PIPICLAW_E2E_PROVIDER / PIPICLAW_E2E_MODEL, " +
+				"or a defaultProvider/defaultModel in ~/.pipiclaw/settings.json, or ANTHROPIC_API_KEY.",
+		);
+	}
+
 	writeJson(join(homeDir, "settings.json"), {
-		defaultProvider: overrides?.defaultProvider ?? process.env.PIPICLAW_E2E_PROVIDER ?? "anthropic",
-		defaultModel: overrides?.defaultModel ?? process.env.PIPICLAW_E2E_MODEL ?? "claude-sonnet-4-5",
+		defaultProvider: resolvedProvider,
+		defaultModel: resolvedModel,
 		memoryRecall: {
 			enabled: true,
 			rerankWithModel: true,

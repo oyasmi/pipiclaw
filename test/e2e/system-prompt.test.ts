@@ -34,9 +34,16 @@ describeE2E("E2E: system prompt ownership", () => {
 		expect(dump.systemPrompt).not.toContain("operating inside pi, a coding agent harness");
 		expect(dump.systemPrompt).not.toContain("Pi documentation");
 		expect(dump.systemPrompt).not.toContain("(none)");
-		// pi's tail is still there, and the runtime boundary is the last thing the model reads.
-		expect(dump.systemPrompt).toContain("Current working directory:");
-		expect(dump.systemPrompt.trimEnd().endsWith("explicit user authority.")).toBe(true);
+		// pi's tail is still there, and the runtime boundary is appended *after* it — the
+		// last thing the model reads is runtime-authored, not workspace/retrieved text
+		// (spec 025 §6.11). Asserting the ordering, not the exact footer sentence, which
+		// is cosmetic and drifts (spec 048 F1).
+		const cwdAt = dump.systemPrompt.indexOf("Current working directory:");
+		const boundaryAt = dump.systemPrompt.lastIndexOf("## Runtime Boundary");
+		expect(cwdAt).toBeGreaterThan(-1);
+		expect(boundaryAt).toBeGreaterThan(cwdAt);
+		// Nothing of substance after the boundary block — it really is the last section.
+		expect(dump.systemPrompt.trimEnd().length - boundaryAt).toBeLessThan(400);
 		// No channel id or channel directory in the system prompt: those ride the turn.
 		expect(dump.systemPrompt).not.toContain(harness.channelId);
 		expect(dump.promptManifest?.diagnostics).toEqual([]);

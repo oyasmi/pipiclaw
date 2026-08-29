@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { parseTaskFrontmatter } from "../../src/tasks/ledger.js";
+import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
+import { parseTaskFrontmatter, readActiveTasks } from "../../src/tasks/ledger.js";
 import { createRuntimeHarness, type E2ERuntimeHarness } from "../support/runtime-harness.js";
 import { canRunE2E, getE2ESkipReason } from "../support/setup.js";
 
@@ -9,10 +10,11 @@ const describeE2E = canRunE2E() ? describe : describe.skip;
 
 // The task ledger is the load-bearing mechanism for autonomous long-running
 // work (docs/tasks.md): a real model must (1) turn a natural-language request
-// into a governed task file via task_manage, and (2) correctly resume that
-// task from a driver-style wake prompt — the exact text the native task
-// driver sends in production (src/runtime/task-driver.ts,
-// createTaskDriverEvent). No prior e2e spec exercised this at all; the DoD
+// into a governed task file via the task_create / task_update / task_close tools
+// (spec 046 split the old single `task_manage` tool), and (2) correctly resume
+// that task from the *real* driver wake prompt built by createTaskDriverEvent
+// (src/runtime/task-driver.ts) — not a hand-copied paraphrase, which cannot
+// catch drift in the very text it is meant to guard (spec 048 F3). The DoD
 // deliberately avoids anything that would trigger the (slow, multi-tool-call)
 // independent verifier lane, which is out of scope for this spec.
 describeE2E("E2E: task lifecycle", () => {
@@ -59,13 +61,11 @@ describeE2E("E2E: task lifecycle", () => {
 	it("resumes the task from a driver-style wake prompt and checkpoints progress", async () => {
 		const before = readFileSync(activeTaskPath(), "utf-8");
 
-		// Mirrors createTaskDriverEvent's real production text (src/runtime/task-driver.ts)
-		// closely enough to exercise the same SOP a live driver wake would trigger.
-		await harness.sendUserMessage(
-			`[TASK_DRIVER:${taskId}] Resume task ${taskId}. Open tasks/${taskId}.md, advance the next concrete step, ` +
-				"and atomically record what changed with task_manage progress (or task_manage complete if the DoD is fully " +
-				"satisfied). If no user-visible update is needed, respond with [SILENT].",
-		);
+		// Use the exact wake text production sends, derived from the task file on disk.
+		const entry = (await readActiveTasks(join(harness.channelDir, "tasks"))).find((e) => e.id === taskId);
+		expect(entry, "task must exist before it can be resumed").toBeDefined();
+		const driverEvent = createTaskDriverEvent(harness.channelId, entry!, Date.now());
+		await harness.sendUserMessage(driverEvent.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
 
 		// The DoD is trivially satisfiable in one turn, so the model may
 		// legitimately drive straight through progress -> complete -> archive, not just

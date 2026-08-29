@@ -11,6 +11,13 @@ export interface E2ERuntimeHarness {
 	channelDir: string;
 	deliveries: CapturedDelivery[];
 	sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
+	/**
+	 * Reads back the model the runner actually resolved (via `/status`) and throws
+	 * if it does not match `expectedModelId`. Guards F4 (spec 048): a "tests the real
+	 * model" suite that silently ran a different model than it declared. Call it after
+	 * at least one real turn so the session runtime has settled.
+	 */
+	assertResolvedModel(expectedModelId: string): Promise<void>;
 	shutdown(): Promise<void>;
 }
 
@@ -80,6 +87,27 @@ export async function createRuntimeHarness(options?: {
 				},
 				fakeBot as unknown as DingTalkBot,
 			);
+		},
+		async assertResolvedModel(expectedModelId: string): Promise<void> {
+			const status = await runtime.handler.runRuntimeCommand(
+				{
+					type: "dm",
+					channelId,
+					ts: Date.now().toString(),
+					user: "e2e_user",
+					userName: "E2E Tester",
+					text: "/status",
+					conversationId: "conv_e2e",
+					conversationType: "1",
+				},
+				"status",
+				"",
+			);
+			if (!status.includes(expectedModelId)) {
+				throw new Error(
+					`E2E model mismatch: settings.json declares "${expectedModelId}" but the runner resolved a different model.\n${status}`,
+				);
+			}
 		},
 		async shutdown(): Promise<void> {
 			await runtime.shutdown("manual");

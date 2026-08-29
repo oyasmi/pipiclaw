@@ -69,10 +69,13 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 	// Regression: `runOnce()` (the --print path) used to call beginTurn() directly,
 	// skipping dispatch() entirely, so a built-in slash command like /tasks was sent
 	// to the model as plain text instead of resolving zero-LLM through the same
-	// transport-layer handler the DingTalk runtime and interactive TUI use. Asserting
-	// on the exact deterministic renderer string (not just "looks task-related") is
-	// what actually proves the model was never invoked — a paraphrased model reply
-	// would not reliably reproduce it verbatim.
+	// transport-layer handler the DingTalk runtime and interactive TUI use.
+	// The output is asserted by report *shape* (bold headline, empty-state phrasing),
+	// not by a verbatim renderer string — pinning the literal string is what let an
+	// intentional copy edit turn this suite red for 5 days (spec 048 F1). The proper
+	// zero-LLM proof (model request count == 0) arrives with the mock provider (048 P1).
+	// Mutation check: make runOnce call beginTurn() directly again and this goes red
+	// with a model paraphrase of "/tasks" instead of the report headline.
 	it("resolves a built-in slash command under --print without invoking the model", async () => {
 		const { runTuiApp } = await import("../../src/tui/app.js");
 
@@ -95,6 +98,8 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 			stdoutSpy.mockRestore();
 		}
 
-		expect(chunks.join("").trim(), getE2ESkipReason() ?? undefined).toBe("# 任务\n\n当前没有进行中的任务。");
+		const out = chunks.join("").trim();
+		expect(out, getE2ESkipReason() ?? undefined).toMatch(/^\*\*任务\*\*/);
+		expect(out).toContain("暂无");
 	});
 });

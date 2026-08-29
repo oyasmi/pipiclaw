@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRuntimeHarness, type E2ERuntimeHarness, getChannelFile } from "../support/runtime-harness.js";
 import { canRunE2E, getE2ESkipReason } from "../support/setup.js";
@@ -28,6 +29,13 @@ describeE2E("E2E: basic conversation", () => {
 					delivery.method === "finalizeExistingCard",
 			);
 		expect(finalDelivery?.text?.trim().length ?? 0, getE2ESkipReason() ?? undefined).toBeGreaterThan(0);
+
+		// F4 guard: the runner must have resolved the model settings.json declares,
+		// not silently fallen back to whatever auth.json happened to carry.
+		const declared = JSON.parse(readFileSync(join(harness.homeDir, "settings.json"), "utf-8")) as {
+			defaultModel: string;
+		};
+		await harness.assertResolvedModel(declared.defaultModel);
 
 		const logPath = getChannelFile(harness, "log.jsonl");
 		const contextPath = getChannelFile(harness, "context.jsonl");
