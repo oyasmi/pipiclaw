@@ -65,7 +65,9 @@ export interface PipiclawMemoryRecallSettings {
 
 // Whether the autonomous task mechanism runs at all is governed by the single
 // `tools.tasks.enabled` switch in tools.json (task_* tools + TaskDriver +
-// task digest together). Cadence and size are fixed constants.
+// task digest together). Cadence and size are fixed constants — settings.json has no field for
+// either, so these two are plain exported constants (`TASK_DIGEST_SETTINGS`/`TASK_DRIVER_SETTINGS`
+// below), not `PipiclawSettingsManager` getters like every settings.json-backed shape here.
 export interface PipiclawTaskDigestSettings {
 	maxTasks: number;
 	maxChars: number;
@@ -203,7 +205,7 @@ const DEFAULT_MEMORY_RECALL: PipiclawMemoryRecallSettings = {
 
 // Cheap and high-value: reading a handful of task frontmatters and always surfacing
 // the in-flight agenda is worth more than the tokens it costs, so it defaults on.
-const DEFAULT_TASK_DIGEST: PipiclawTaskDigestSettings = {
+export const TASK_DIGEST_SETTINGS: PipiclawTaskDigestSettings = {
 	maxTasks: 8,
 	maxChars: 1000,
 };
@@ -211,7 +213,7 @@ const DEFAULT_TASK_DIGEST: PipiclawTaskDigestSettings = {
 // The driver makes `wake` an executable task property rather than a convention
 // that requires users to install a heartbeat event and sensor script. A changed
 // task can continue promptly; an unchanged task backs off to avoid token loops.
-const DEFAULT_TASK_DRIVER: PipiclawTaskDriverSettings = {
+export const TASK_DRIVER_SETTINGS: PipiclawTaskDriverSettings = {
 	continuationDelayMinutes: 5,
 	stalledRetryMinutes: 60,
 	maxDispatchesPerTick: 4,
@@ -293,6 +295,16 @@ const RETIRED_SETTINGS_KEYS: readonly string[] = [
 	"taskDriver.maxDispatchesPerTick",
 	"taskDriver.maxSleepMinutes",
 ];
+
+/** Shared by `getFallbackModelReference`/`getSubAgentModelReference`: empty or whitespace-only
+ * counts as unset, same as the field being absent. */
+function normalizeOptionalModelReference(raw: unknown): string | null {
+	if (typeof raw !== "string") {
+		return null;
+	}
+	const trimmed = raw.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
 
 function hasNestedKey(root: unknown, dottedPath: string): boolean {
 	let node = root;
@@ -504,14 +516,6 @@ export class PipiclawSettingsManager {
 		};
 	}
 
-	getTaskDigestSettings(): PipiclawTaskDigestSettings {
-		return { ...DEFAULT_TASK_DIGEST };
-	}
-
-	getTaskDriverSettings(): PipiclawTaskDriverSettings {
-		return { ...DEFAULT_TASK_DRIVER };
-	}
-
 	getSessionMemorySettings(): PipiclawSessionMemorySettings {
 		return {
 			...DEFAULT_SESSION_MEMORY,
@@ -571,12 +575,7 @@ export class PipiclawSettingsManager {
 	 * Empty / whitespace-only values are treated as unset (fallback disabled).
 	 */
 	getFallbackModelReference(): string | null {
-		const raw = this.settings.fallbackModel;
-		if (typeof raw !== "string") {
-			return null;
-		}
-		const trimmed = raw.trim();
-		return trimmed.length > 0 ? trimmed : null;
+		return normalizeOptionalModelReference(this.settings.fallbackModel);
 	}
 
 	/**
@@ -584,12 +583,7 @@ export class PipiclawSettingsManager {
 	 * Empty / whitespace-only values are treated as unset (spec 032 D5).
 	 */
 	getSubAgentModelReference(): string | null {
-		const raw = this.settings.subagentModel;
-		if (typeof raw !== "string") {
-			return null;
-		}
-		const trimmed = raw.trim();
-		return trimmed.length > 0 ? trimmed : null;
+		return normalizeOptionalModelReference(this.settings.subagentModel);
 	}
 
 	getDefaultModel(): string | undefined {

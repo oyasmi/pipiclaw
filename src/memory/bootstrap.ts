@@ -1,5 +1,6 @@
 import { splitH2Sections } from "../shared/markdown-sections.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
+import { stripCrAndTrim } from "../shared/text-utils.js";
 import { buildMemoryCandidateId } from "./candidates.js";
 import { parseChannelMemoryEntries } from "./files.js";
 
@@ -19,10 +20,6 @@ interface Budget {
 }
 
 const ZERO_BUDGET: Budget = { chars: 0, units: 0 };
-
-function normalizeContent(content: string): string {
-	return content.replace(/\r/g, "").trim();
-}
 
 function hasVisibleContent(content: string): boolean {
 	return content.replace(/<!--[\s\S]*?-->/g, "").trim().length > 0;
@@ -127,8 +124,8 @@ export function buildFirstTurnMemoryBootstrapResult(
 		chars: options.maxChars ?? FIRST_TURN_MEMORY_SNAPSHOT_MAX_CHARS,
 		units: options.maxUnits ?? FIRST_TURN_BOOTSTRAP_MAX_UNITS,
 	};
-	const channelMemory = normalizeContent(options.channelMemory);
-	const workspaceMemory = normalizeContent(options.workspaceMemory);
+	const channelMemory = stripCrAndTrim(options.channelMemory);
+	const workspaceMemory = stripCrAndTrim(options.workspaceMemory);
 
 	if (!channelMemory && !workspaceMemory) {
 		return { renderedText: "", includedCandidateIds: [] };

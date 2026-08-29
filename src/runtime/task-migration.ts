@@ -14,6 +14,18 @@ import { parseScheduledEventContent } from "./events.js";
 import { discoverTaskChannels } from "./task-driver.js";
 
 /**
+ * RETIRE AT v0.9.3 (code review 2026-08-30): both migrations in this file are startup self-heal
+ * passes for on-disk state written by pre-0.9 betas (the pre-spec-029 `.schedule` event format,
+ * and pre-spec-043 v1/v2 task control blocks and status vocabulary). Every 0.9.2-beta install is
+ * a small, actively-developed fleet; by the 0.9.3 stable cut every install will have booted at
+ * least once on a version that already runs these passes, so there is no longer any on-disk
+ * state left for them to find. At 0.9.3: delete both exported functions here, their call sites
+ * in `bootstrap.ts`, `parseLegacyTaskControl` in `../tasks/control.js` (this file's only caller),
+ * and the paired legacy-state fold in `../memory/maintenance-state.js` (same rationale, unrelated
+ * subsystem). Confirm first that no currently-supported version predates the pass being removed.
+ */
+
+/**
  * One-time migration closing the 027 window (spec 029, D6).
  *
  * Recurrence cadence now lives solely in a task's `schedule` frontmatter; the driver no

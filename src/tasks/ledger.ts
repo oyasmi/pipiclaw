@@ -91,6 +91,7 @@ export const STANDARD_TASK_SECTIONS = [
  * task or any pre-existing task simply has no Plan.
  */
 const PLAN_SECTION_NAMES = ["Plan", "计划"] as const;
+const CURRENT_CYCLE_SECTION_NAMES = ["Current Cycle", "当前周期"] as const;
 
 /** Recurring task files are working context, not an unbounded audit log. */
 export const MAX_INLINE_TASK_HISTORY_ENTRIES = 8;
@@ -137,7 +138,7 @@ export function taskContractSegment(body: string): string {
 		if (
 			match &&
 			(matchesTaskSectionTitle(match[1] ?? "", PLAN_SECTION_NAMES) ||
-				matchesTaskSectionTitle(match[1] ?? "", ["Current Cycle", "当前周期"]))
+				matchesTaskSectionTitle(match[1] ?? "", CURRENT_CYCLE_SECTION_NAMES))
 		) {
 			return lines.slice(0, index).join("\n").replace(/\s+$/, "");
 		}
@@ -213,29 +214,12 @@ function parsePlanStepLine(line: string, lineIndex: number, fallbackId: string):
  */
 export function parseTaskPlan(content: string): TaskPlanSummary | undefined {
 	const lines = content.split("\n");
-	let sectionStart = -1;
-	let sectionLevel = 0;
-	for (let index = 0; index < lines.length; index++) {
-		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (!match || !matchesTaskSectionTitle(match[2] ?? "", PLAN_SECTION_NAMES)) continue;
-		sectionStart = index;
-		sectionLevel = match[1]?.length ?? 0;
-		break;
-	}
-	if (sectionStart === -1) return undefined;
-
-	let sectionEnd = lines.length;
-	for (let index = sectionStart + 1; index < lines.length; index++) {
-		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
-		if (match && (match[1]?.length ?? 7) <= sectionLevel) {
-			sectionEnd = index;
-			break;
-		}
-	}
+	const bounds = findTaskSectionBounds(lines, PLAN_SECTION_NAMES);
+	if (!bounds) return undefined;
 
 	const steps: TaskPlanStep[] = [];
 	let position = 0;
-	for (let index = sectionStart + 1; index < sectionEnd; index++) {
+	for (let index = bounds.headingIndex + 1; index < bounds.end; index++) {
 		const line = lines[index] ?? "";
 		if (!/^\s*[-*]\s+\[/.test(line)) continue;
 		position++;
@@ -276,7 +260,7 @@ function insertEmptyPlanSection(body: string): string {
 	const lines = body.split("\n");
 	for (let index = 0; index < lines.length; index++) {
 		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (match && matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) {
+		if (match && matchesTaskSectionTitle(match[2] ?? "", CURRENT_CYCLE_SECTION_NAMES)) {
 			lines.splice(index, 0, "## Plan", "");
 			return lines.join("\n");
 		}
@@ -327,25 +311,10 @@ export function applyTaskPlanPatch(body: string, patches: readonly TaskPlanStepP
 		}
 		const id = trimmedId.toUpperCase();
 		const lines = working.split("\n");
-		let sectionStart = -1;
-		let sectionLevel = 0;
-		for (let index = 0; index < lines.length; index++) {
-			const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-			if (match && matchesTaskSectionTitle(match[2] ?? "", PLAN_SECTION_NAMES)) {
-				sectionStart = index;
-				sectionLevel = match[1]?.length ?? 0;
-				break;
-			}
-		}
-		let insertAt = lines.length;
-		for (let index = sectionStart + 1; index < lines.length; index++) {
-			const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
-			if (match && (match[1]?.length ?? 7) <= sectionLevel) {
-				insertAt = index;
-				break;
-			}
-		}
-		while (insertAt > sectionStart + 1 && (lines[insertAt - 1] ?? "").trim() === "") insertAt--;
+		const bounds = findTaskSectionBounds(lines, PLAN_SECTION_NAMES);
+		let insertAt = bounds?.end ?? lines.length;
+		const afterHeading = (bounds?.headingIndex ?? -1) + 1;
+		while (insertAt > afterHeading && (lines[insertAt - 1] ?? "").trim() === "") insertAt--;
 		lines.splice(insertAt, 0, renderPlanStepLine(id, patch.status ?? "todo", text));
 		working = lines.join("\n");
 		deltas.push(`+${id} ${text}`);
@@ -458,6 +427,70 @@ function matchesTaskSectionTitle(title: string, names: readonly string[]): boole
 	});
 }
 
+interface TaskSectionBounds {
+	/** Line index of the heading line itself. */
+	headingIndex: number;
+	/** Heading level, 1–6. */
+	level: number;
+	/** Exclusive end: the next heading at the same or a shallower level, or `lines.length`. */
+	end: number;
+}
+
+/**
+ * Find the first heading matching one of `names` and the exclusive end of its body — the next
+ * heading at the same or a shallower level, or end of document. Every task-document section scan
+ * (Plan, Current Cycle, DoD, Verification) shares this exact rule; only what a caller does with
+ * the bounds differs.
+ */
+function findTaskSectionBounds(lines: readonly string[], names: readonly string[]): TaskSectionBounds | undefined {
+	for (let index = 0; index < lines.length; index++) {
+		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (!match || !matchesTaskSectionTitle(match[2] ?? "", names)) continue;
+		const level = match[1]?.length ?? 0;
+		let end = lines.length;
+		for (let cursor = index + 1; cursor < lines.length; cursor++) {
+			const headingMatch = /^(#{1,6})\s+/.exec(lines[cursor] ?? "");
+			if (headingMatch && (headingMatch[1]?.length ?? 7) <= level) {
+				end = cursor;
+				break;
+			}
+		}
+		return { headingIndex: index, level, end };
+	}
+	return undefined;
+}
+
+/**
+ * For every line, which of `sections` (each a label plus its heading aliases) it falls under,
+ * using the same heading-scoping rule as {@link findTaskSectionBounds}. A heading line itself is
+ * never "in" a section. Shared by the per-line DoD/Verification scans below so the scoping rule
+ * lives in exactly one place.
+ */
+function classifyTaskSectionLines<L extends string>(
+	lines: readonly string[],
+	sections: readonly { label: L; names: readonly string[] }[],
+): (L | undefined)[] {
+	const result: (L | undefined)[] = new Array(lines.length);
+	let current: L | undefined;
+	let currentLevel = 0;
+	for (let index = 0; index < lines.length; index++) {
+		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
+		if (heading) {
+			const level = heading[1]?.length ?? 7;
+			const match = sections.find((section) => matchesTaskSectionTitle(heading[2] ?? "", section.names));
+			if (match) {
+				current = match.label;
+				currentLevel = level;
+			} else if (current && level <= currentLevel) {
+				current = undefined;
+			}
+			continue;
+		}
+		result[index] = current;
+	}
+	return result;
+}
+
 export function hasTaskHeading(content: string, names: readonly string[]): boolean {
 	return content.split("\n").some((line) => {
 		const match = /^#{1,6}\s+(.+?)\s*$/.exec(line);
@@ -480,28 +513,21 @@ export function missingStandardTaskSections(content: string): string[] {
  * indistinguishable from "everything is checked" — which would silently let
  * `task_close outcome=complete` through with nothing ever actually verified.
  */
+const DOD_VERIFICATION_SECTIONS = [
+	{ label: "DoD" as const, names: ["DoD"] },
+	{ label: "Verification" as const, names: ["Verification", "验收"] },
+];
+
 export function uncheckedTaskAcceptanceItems(content: string): string[] {
 	const unchecked: string[] = [];
-	let section: "DoD" | "Verification" | undefined;
-	let sectionLevel = 0;
+	const lines = content.split("\n");
+	const sectionOf = classifyTaskSectionLines(lines, DOD_VERIFICATION_SECTIONS);
 	let dodHasContent = false;
 	let dodHasCheckbox = false;
-	for (const line of content.split("\n")) {
-		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
-		if (heading) {
-			const level = heading[1]?.length ?? 7;
-			if (matchesTaskSectionTitle(heading[2] ?? "", ["DoD"])) {
-				section = "DoD";
-				sectionLevel = level;
-			} else if (matchesTaskSectionTitle(heading[2] ?? "", ["Verification", "验收"])) {
-				section = "Verification";
-				sectionLevel = level;
-			} else if (section && level <= sectionLevel) {
-				section = undefined;
-			}
-			continue;
-		}
+	for (let index = 0; index < lines.length; index++) {
+		const section = sectionOf[index];
 		if (!section) continue;
+		const line = lines[index] ?? "";
 		if (section === "DoD" && line.trim()) dodHasContent = true;
 		const checkbox = /^\s*[-*]\s+\[([ xX])\]\s*(.+?)\s*$/.exec(line);
 		if (checkbox) {
@@ -522,22 +548,11 @@ export function uncheckedTaskAcceptanceItems(content: string): string[] {
  * step's `→ dod:N` refs (spec 037, D4 — `/tasks doctor`'s drift checks).
  */
 export function countTaskDodItems(content: string): number {
-	let inDod = false;
-	let sectionLevel = 0;
+	const lines = content.split("\n");
+	const sectionOf = classifyTaskSectionLines(lines, [{ label: "DoD" as const, names: ["DoD"] }]);
 	let count = 0;
-	for (const line of content.split("\n")) {
-		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
-		if (heading) {
-			const level = heading[1]?.length ?? 7;
-			if (matchesTaskSectionTitle(heading[2] ?? "", ["DoD"])) {
-				inDod = true;
-				sectionLevel = level;
-			} else if (inDod && level <= sectionLevel) {
-				inDod = false;
-			}
-			continue;
-		}
-		if (inDod && /^\s*[-*]\s+\[[ xX]\]/.test(line)) count++;
+	for (let index = 0; index < lines.length; index++) {
+		if (sectionOf[index] === "DoD" && /^\s*[-*]\s+\[[ xX]\]/.test(lines[index] ?? "")) count++;
 	}
 	return count;
 }
@@ -706,29 +721,13 @@ export function appendCurrentCycleNote(content: string, note: string): string {
 	}
 
 	const lines = content.split("\n");
-	let sectionStart = -1;
-	let sectionLevel = 0;
-	for (let index = 0; index < lines.length; index++) {
-		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (!match || !matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) continue;
-		sectionStart = index;
-		sectionLevel = match[1]?.length ?? 0;
-		break;
-	}
-	if (sectionStart === -1) {
+	const bounds = findTaskSectionBounds(lines, CURRENT_CYCLE_SECTION_NAMES);
+	if (!bounds) {
 		throw new Error('Task body has no "Current Cycle" section; normalize the task skeleton first.');
 	}
 
-	let insertAt = lines.length;
-	for (let index = sectionStart + 1; index < lines.length; index++) {
-		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
-		if (match && (match[1]?.length ?? 7) <= sectionLevel) {
-			insertAt = index;
-			break;
-		}
-	}
-
-	while (insertAt > sectionStart + 1 && (lines[insertAt - 1] ?? "").trim() === "") {
+	let insertAt = bounds.end;
+	while (insertAt > bounds.headingIndex + 1 && (lines[insertAt - 1] ?? "").trim() === "") {
 		insertAt--;
 	}
 	lines.splice(insertAt, 0, `- ${trimmedNote}`);
@@ -744,31 +743,17 @@ export function appendCurrentCycleNote(content: string, note: string): string {
  */
 export function upsertCurrentCycleCompletionEvidence(content: string, evidenceLines: readonly string[]): string {
 	const lines = content.split("\n");
-	let currentStart = -1;
-	let currentLevel = 0;
-	for (let index = 0; index < lines.length; index++) {
-		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (!match || !matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) continue;
-		currentStart = index;
-		currentLevel = match[1]?.length ?? 0;
-		break;
-	}
-	if (currentStart === -1 || currentLevel >= 6) {
+	const currentBounds = findTaskSectionBounds(lines, CURRENT_CYCLE_SECTION_NAMES);
+	if (!currentBounds || currentBounds.level >= 6) {
 		// Legacy/non-standard one-shot tasks were historically completable without the
 		// canonical skeleton. Keep that compatibility, but upsert one bounded top-level
 		// block instead of returning to the old append-only behavior.
 		const stripped = stripLegacyCompletionEvidence(content).content.replace(/\n+$/, "");
 		return `${stripped}\n\n## Completion Evidence\n\n${evidenceLines.join("\n")}\n`;
 	}
-
-	let currentEnd = lines.length;
-	for (let index = currentStart + 1; index < lines.length; index++) {
-		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
-		if (match && (match[1]?.length ?? 7) <= currentLevel) {
-			currentEnd = index;
-			break;
-		}
-	}
+	const currentStart = currentBounds.headingIndex;
+	const currentLevel = currentBounds.level;
+	let currentEnd = currentBounds.end;
 
 	const evidenceLevel = currentLevel + 1;
 	let evidenceStart = -1;
@@ -924,7 +909,7 @@ export function startTaskCycle(content: string, cycleId: string, archivePrevious
 		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
 		if (!match) continue;
 		const level = match[1]?.length ?? 0;
-		if (matchesTaskSectionTitle(match[2] ?? "", ["Current Cycle", "当前周期"])) {
+		if (matchesTaskSectionTitle(match[2] ?? "", CURRENT_CYCLE_SECTION_NAMES)) {
 			currentStart = index;
 			currentLevel = level;
 		}
@@ -991,26 +976,10 @@ export function startTaskCycle(content: string, cycleId: string, archivePrevious
  */
 function resetTaskAcceptanceCheckboxes(content: string): string {
 	const lines = content.split("\n");
-	let section: "DoD" | "Verification" | undefined;
-	let sectionLevel = 0;
+	const sectionOf = classifyTaskSectionLines(lines, DOD_VERIFICATION_SECTIONS);
 	for (let index = 0; index < lines.length; index++) {
-		const line = lines[index] ?? "";
-		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
-		if (heading) {
-			const level = heading[1]?.length ?? 7;
-			if (matchesTaskSectionTitle(heading[2] ?? "", ["DoD"])) {
-				section = "DoD";
-				sectionLevel = level;
-			} else if (matchesTaskSectionTitle(heading[2] ?? "", ["Verification", "验收"])) {
-				section = "Verification";
-				sectionLevel = level;
-			} else if (section && level <= sectionLevel) {
-				section = undefined;
-			}
-			continue;
-		}
-		if (!section) continue;
-		const checkbox = /^(\s*[-*]\s+)\[[xX]\](\s*.*)$/.exec(line);
+		if (!sectionOf[index]) continue;
+		const checkbox = /^(\s*[-*]\s+)\[[xX]\](\s*.*)$/.exec(lines[index] ?? "");
 		if (checkbox) lines[index] = `${checkbox[1]}[ ]${checkbox[2]}`;
 	}
 	return lines.join("\n");
@@ -1024,27 +993,10 @@ function resetTaskAcceptanceCheckboxes(content: string): string {
  */
 function resetPlanStepCheckboxes(content: string): string {
 	const lines = content.split("\n");
-	let sectionStart = -1;
-	let sectionLevel = 0;
-	for (let index = 0; index < lines.length; index++) {
-		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (!match || !matchesTaskSectionTitle(match[2] ?? "", PLAN_SECTION_NAMES)) continue;
-		sectionStart = index;
-		sectionLevel = match[1]?.length ?? 0;
-		break;
-	}
-	if (sectionStart === -1) return content;
+	const bounds = findTaskSectionBounds(lines, PLAN_SECTION_NAMES);
+	if (!bounds) return content;
 
-	let sectionEnd = lines.length;
-	for (let index = sectionStart + 1; index < lines.length; index++) {
-		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
-		if (match && (match[1]?.length ?? 7) <= sectionLevel) {
-			sectionEnd = index;
-			break;
-		}
-	}
-
-	for (let index = sectionStart + 1; index < sectionEnd; index++) {
+	for (let index = bounds.headingIndex + 1; index < bounds.end; index++) {
 		const checkbox = /^(\s*[-*]\s+)\[[xX!]\](\s*.*)$/.exec(lines[index] ?? "");
 		if (checkbox) lines[index] = `${checkbox[1]}[ ]${checkbox[2]}`;
 	}
@@ -1061,7 +1013,7 @@ function extractLatestNote(content: string): string | undefined {
 		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
 		if (heading) {
 			if (inSection && (heading[1]?.length ?? 7) <= sectionLevel) break;
-			if (!inSection && matchesTaskSectionTitle(heading[2] ?? "", ["Current Cycle", "当前周期"])) {
+			if (!inSection && matchesTaskSectionTitle(heading[2] ?? "", CURRENT_CYCLE_SECTION_NAMES)) {
 				inSection = true;
 				sectionLevel = heading[1]?.length ?? 0;
 			}

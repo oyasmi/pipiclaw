@@ -2,6 +2,7 @@ import { realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import type { ConfigDiagnostic } from "../shared/config-diagnostic.js";
+import { withTrailingSlash } from "../shared/text-utils.js";
 import type { SecurityConfig } from "./types.js";
 
 /** Spec 043, D6.3: the runtime must never claim `system` without an explicit bootstrap-injected
@@ -125,10 +126,6 @@ export function resolveProjectAccessPolicy(config: SecurityConfig, startupCwd: s
 		configured: true,
 		diagnostics,
 	};
-}
-
-function withTrailingSlash(path: string): string {
-	return path.endsWith("/") ? path : `${path}/`;
 }
 
 /** Prefix match with a path-separator boundary, so `/repo-ab` is not treated as within `/repo-a`. */

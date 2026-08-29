@@ -74,6 +74,10 @@ export function getMemoryMaintenanceStatePath(appHomeDir: string, channelId: str
  * `/`, and only matters until the next write moves the state to its canonical path — but the
  * state carries maintenance cadence and transcript cursors, so dropping it would silently
  * re-run structural maintenance and re-scan the transcript for every affected group.
+ *
+ * RETIRE AT v0.9.3, same rationale as the header comment in `../runtime/task-migration.js`:
+ * by the stable cut, every still-running group channel with a `/` in its id will have had its
+ * state folded onto the canonical path at least once, so this fallback read finds nothing.
  */
 function legacyStatePath(appHomeDir: string, channelId: string): string | undefined {
 	return getChannelDirName(channelId) === channelId

@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { isNodeError } from "../shared/fs-utils.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { resolveSkillPath, scanSkillContent, validateSkillFrontmatter, validateSkillName } from "./skill-security.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
@@ -36,10 +37,6 @@ export interface SkillToolOptions {
 	securityConfig?: SecurityConfig;
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-	return error instanceof Error && "code" in error;
 }
 
 function extractDescription(content: string): string {

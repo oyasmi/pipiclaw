@@ -62,7 +62,7 @@ import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
-import type { PipiclawSettingsManager } from "../settings.js";
+import { type PipiclawSettingsManager, TASK_DIGEST_SETTINGS } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { formatLocalTime, localStampForFilename, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -1695,11 +1695,10 @@ export class ChannelRunner implements AgentRunner {
 
 	/** Gated by the same master autonomy switch as the task_* tools and the TaskDriver. */
 	private buildTaskDigestForTurn(): Promise<string> {
-		const taskDigestSettings = this.settingsManager.getTaskDigestSettings();
 		return buildTaskDigest({
 			channelDir: this.channelDir,
-			maxTasks: taskDigestSettings.maxTasks,
-			maxChars: taskDigestSettings.maxChars,
+			maxTasks: TASK_DIGEST_SETTINGS.maxTasks,
+			maxChars: TASK_DIGEST_SETTINGS.maxChars,
 			maxUnits: TASK_AGENDA_MAX_UNITS,
 		});
 	}

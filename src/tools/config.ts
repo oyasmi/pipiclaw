@@ -1,8 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_HOME_DIR } from "../paths.js";
-import type { ConfigDiagnostic } from "../shared/config-diagnostic.js";
-import { errorMessage } from "../shared/text-utils.js";
+import { type ConfigDiagnostic, loadJsonConfig, pushConfigWarning } from "../shared/config-diagnostic.js";
+import { clampInteger } from "../shared/numeric.js";
 import { isRecord } from "../shared/type-guards.js";
 
 export type WebSearchProvider = "brave" | "tavily" | "jina" | "searxng" | "duckduckgo";
@@ -102,20 +101,6 @@ export const DEFAULT_TOOLS_CONFIG: PipiclawToolsConfig = {
 	},
 };
 
-function clampInteger(value: unknown, fallback: number, minimum: number, maximum?: number): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) {
-		return fallback;
-	}
-	const normalized = Math.floor(value);
-	if (normalized < minimum) {
-		return fallback;
-	}
-	if (maximum !== undefined && normalized > maximum) {
-		return fallback;
-	}
-	return normalized;
-}
-
 function asTrimmedString(value: unknown, fallback = ""): string {
 	return typeof value === "string" ? value.trim() : fallback;
 }
@@ -137,12 +122,7 @@ function pushInvalidValueDiagnostic(
 	field: string,
 	message: string,
 ): void {
-	diagnostics.push({
-		source: "tools",
-		path: configPath,
-		severity: "warning",
-		message: `${field}: ${message}`,
-	});
+	pushConfigWarning(diagnostics, "tools", configPath, field, message);
 }
 
 function mergeToolsConfig(source: unknown, configPath: string, diagnostics: ConfigDiagnostic[]): PipiclawToolsConfig {
@@ -300,31 +280,12 @@ export function getToolsConfigPath(appHomeDir = APP_HOME_DIR): string {
 }
 
 export function loadToolsConfigWithDiagnostics(appHomeDir = APP_HOME_DIR): LoadedToolsConfig {
-	const configPath = getToolsConfigPath(appHomeDir);
-	if (!existsSync(configPath)) {
-		return { config: DEFAULT_TOOLS_CONFIG, diagnostics: [] };
-	}
-
-	try {
-		const raw = JSON.parse(readFileSync(configPath, "utf-8"));
-		const diagnostics: ConfigDiagnostic[] = [];
-		return {
-			config: mergeToolsConfig(raw, configPath, diagnostics),
-			diagnostics,
-		};
-	} catch (error) {
-		return {
-			config: DEFAULT_TOOLS_CONFIG,
-			diagnostics: [
-				{
-					source: "tools",
-					path: configPath,
-					severity: "error",
-					message: errorMessage(error),
-				},
-			],
-		};
-	}
+	return loadJsonConfig({
+		source: "tools",
+		path: getToolsConfigPath(appHomeDir),
+		defaults: DEFAULT_TOOLS_CONFIG,
+		merge: mergeToolsConfig,
+	});
 }
 
 export function loadToolsConfig(appHomeDir = APP_HOME_DIR): PipiclawToolsConfig {

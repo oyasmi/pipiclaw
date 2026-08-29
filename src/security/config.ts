@@ -1,7 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_HOME_DIR } from "../paths.js";
-import type { ConfigDiagnostic } from "../shared/config-diagnostic.js";
+import { type ConfigDiagnostic, loadJsonConfig, pushConfigWarning } from "../shared/config-diagnostic.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { SecurityConfig } from "./types.js";
@@ -77,12 +76,7 @@ function pushInvalidSecurityDiagnostic(
 	field: string,
 	message: string,
 ): void {
-	diagnostics.push({
-		source: "security",
-		path: configPath,
-		severity: "warning",
-		message: `${field}: ${message}`,
-	});
+	pushConfigWarning(diagnostics, "security", configPath, field, message);
 }
 
 function mergeSecurityConfig(source: unknown, configPath: string, diagnostics: ConfigDiagnostic[]): SecurityConfig {
@@ -177,31 +171,12 @@ export function getSecurityConfigPath(appHomeDir = APP_HOME_DIR): string {
 }
 
 export function loadSecurityConfigWithDiagnostics(appHomeDir = APP_HOME_DIR): LoadedSecurityConfig {
-	const configPath = getSecurityConfigPath(appHomeDir);
-	if (!existsSync(configPath)) {
-		return { config: DEFAULT_SECURITY_CONFIG, diagnostics: [] };
-	}
-
-	try {
-		const raw = JSON.parse(readFileSync(configPath, "utf-8"));
-		const diagnostics: ConfigDiagnostic[] = [];
-		return {
-			config: mergeSecurityConfig(raw, configPath, diagnostics),
-			diagnostics,
-		};
-	} catch (error) {
-		return {
-			config: DEFAULT_SECURITY_CONFIG,
-			diagnostics: [
-				{
-					source: "security",
-					path: configPath,
-					severity: "error",
-					message: errorMessage(error),
-				},
-			],
-		};
-	}
+	return loadJsonConfig({
+		source: "security",
+		path: getSecurityConfigPath(appHomeDir),
+		defaults: DEFAULT_SECURITY_CONFIG,
+		merge: mergeSecurityConfig,
+	});
 }
 
 export function loadSecurityConfig(appHomeDir = APP_HOME_DIR): SecurityConfig {

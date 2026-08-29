@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { withTrailingSlash } from "../shared/text-utils.js";
 
 /**
  * A process-wide, exclusive *write* lease on a checkout (spec 040, D10.1).
@@ -24,10 +25,6 @@ export interface WorkspaceLeaseHolder {
 }
 
 const leases = new Map<string, WorkspaceLeaseHolder>();
-
-function withTrailingSlash(path: string): string {
-	return path.endsWith("/") ? path : `${path}/`;
-}
 
 function pathsConflict(a: string, b: string): boolean {
 	return (

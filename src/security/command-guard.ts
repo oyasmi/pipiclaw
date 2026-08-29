@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { stripNullAndNormalize } from "../shared/text-utils.js";
 import type { CommandGuardResult, SecurityConfig } from "./types.js";
 
 interface ParsedCommand {
@@ -15,10 +16,6 @@ interface CommandRuleMatch {
 }
 
 const WHITESPACE = /\s+/;
-
-function stripNullAndNormalize(text: string): string {
-	return text.replace(/\0/g, "").normalize("NFKC");
-}
 
 function stripComments(command: string): string {
 	let result = "";

@@ -35,6 +35,7 @@ import * as log from "../log.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
+import { sleepUnref } from "../shared/with-timeout.js";
 // Turn serialization is runtime policy; the queue lives in its own module and
 // this transport only consumes it.
 import { ChannelQueue } from "./channel-queue.js";
@@ -427,13 +428,6 @@ export class DingTalkBot implements MediaSender {
 		this.clearReconnectDelay();
 	}
 
-	private async sleep(delayMs: number): Promise<void> {
-		await new Promise<void>((resolve) => {
-			const timer = setTimeout(resolve, delayMs);
-			timer.unref?.();
-		});
-	}
-
 	private async waitForDelay(delayMs: number): Promise<void> {
 		await new Promise<void>((resolve) => {
 			this.reconnectDelayResolve = resolve;
@@ -452,7 +446,7 @@ export class DingTalkBot implements MediaSender {
 	): Promise<boolean> {
 		const deadline = Date.now() + timeoutMs;
 		while ((socket.readyState ?? SOCKET_STATE_CLOSED) !== expectedState && Date.now() < deadline) {
-			await this.sleep(25);
+			await sleepUnref(25);
 		}
 		return (socket.readyState ?? SOCKET_STATE_CLOSED) === expectedState;
 	}
@@ -845,26 +839,7 @@ export class DingTalkBot implements MediaSender {
 		finalize: boolean = false,
 		failed: boolean = false,
 	): Promise<boolean> {
-		let card = this.activeCards.get(channelId);
-		if ((!card || card.finished) && this.config.cardTemplateId && (content.trim() || !finalize || failed)) {
-			await this.ensureCard(channelId);
-			card = this.activeCards.get(channelId);
-		}
-		if (!card || card.finished) {
-			if (finalize && content.trim()) {
-				return this.sendPlain(channelId, content);
-			}
-			return false;
-		}
-		const streamed = await this.streamCard(card, content, {
-			append: false,
-			finalize,
-			failed,
-		});
-		if (!streamed || finalize || failed) {
-			this.activeCards.delete(channelId);
-		}
-		return streamed;
+		return this.writeCard(channelId, content, { append: false, finalize, failed });
 	}
 
 	/**
@@ -876,12 +851,31 @@ export class DingTalkBot implements MediaSender {
 		finalize: boolean = false,
 		failed: boolean = false,
 	): Promise<boolean> {
-		if (!content && !finalize && !failed) {
+		return this.writeCard(channelId, content, { append: true, finalize, failed });
+	}
+
+	/**
+	 * Shared body of `replaceCard`/`appendToCard`: whether to open a fresh card differs between the
+	 * two (a full-snapshot replace opens one for a finalize/failed close too; a delta append only
+	 * opens one for genuinely new content), so that predicate stays keyed on `append` rather than
+	 * being collapsed away — everything after it (stream, then drop the card on finalize/failed/a
+	 * failed stream) is identical either way.
+	 */
+	private async writeCard(
+		channelId: string,
+		content: string,
+		options: { append: boolean; finalize: boolean; failed: boolean },
+	): Promise<boolean> {
+		const { append, finalize, failed } = options;
+		if (append && !content && !finalize && !failed) {
 			return true;
 		}
 
 		let card = this.activeCards.get(channelId);
-		if ((!card || card.finished) && !finalize && !failed && this.config.cardTemplateId && content.trim()) {
+		const shouldEnsure = append
+			? !finalize && !failed && content.trim().length > 0
+			: content.trim().length > 0 || !finalize || failed;
+		if ((!card || card.finished) && this.config.cardTemplateId && shouldEnsure) {
 			await this.ensureCard(channelId);
 			card = this.activeCards.get(channelId);
 		}
@@ -892,11 +886,7 @@ export class DingTalkBot implements MediaSender {
 			return false;
 		}
 
-		const streamed = await this.streamCard(card, content, {
-			append: true,
-			finalize,
-			failed,
-		});
+		const streamed = await this.streamCard(card, content, { append, finalize, failed });
 		if (!streamed || finalize || failed) {
 			this.activeCards.delete(channelId);
 		}

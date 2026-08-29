@@ -28,7 +28,7 @@ export type BuiltInCommandName =
 	| "project"
 	| "skills";
 
-/** The four transport commands handled by `ChannelRunner.handleBuiltinCommand`. */
+/** The five transport commands handled by `ChannelRunner.handleBuiltinCommand`. */
 export type RunnerBuiltInCommandName = "help" | "stop" | "steer" | "followup" | "context";
 
 /**

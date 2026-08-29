@@ -374,6 +374,29 @@ export class TaskDriver {
 		}
 	}
 
+	/**
+	 * Escalate one task to the governor and best-effort notify, returning whether it actually
+	 * escalated (a caller only needs to react — reset attempt state, log — when it did). The
+	 * notify failure itself is never fatal to the escalation: `escalateTask` already made the
+	 * durable disable; a delivery hiccup is logged and swallowed, not retried here.
+	 */
+	private async escalateAndNotify(
+		channelDir: string,
+		channelId: string,
+		entry: TaskLedgerEntry,
+		reason: string,
+		nowMs: number,
+	): Promise<boolean> {
+		if (!(await escalateTask(channelDir, entry.id, reason))) return false;
+		const receipt = taskGovernorReceipt(channelId, entry, reason, nowMs);
+		try {
+			await this.options.notify?.(receipt);
+		} catch (error) {
+			log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
+		}
+		return true;
+	}
+
 	async runOnce(now = new Date()): Promise<void> {
 		if (this.options.isEnabled?.() === false || this.running) return;
 		const settings = this.options.getSettings();
@@ -425,28 +448,24 @@ export class TaskDriver {
 				for (const entry of entries) {
 					if (entry.frontmatter.status !== "sleeping" || entry.frontmatter.enabled === false) continue;
 					if (!entry.frontmatter.schedule) {
-						const reason = "sleeping recurring task has no schedule";
-						if (await escalateTask(channelDir, entry.id, reason)) {
-							const receipt = taskGovernorReceipt(channelId, entry, reason, nowMs);
-							try {
-								await this.options.notify?.(receipt);
-							} catch (error) {
-								log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
-							}
-						}
+						await this.escalateAndNotify(
+							channelDir,
+							channelId,
+							entry,
+							"sleeping recurring task has no schedule",
+							nowMs,
+						);
 						continue;
 					}
 					const scheduleWake = nextTaskWake(entry.frontmatter.schedule, now);
 					if (!scheduleWake) {
-						const reason = `sleeping task has invalid schedule: ${entry.frontmatter.schedule}`;
-						if (await escalateTask(channelDir, entry.id, reason)) {
-							const receipt = taskGovernorReceipt(channelId, entry, reason, nowMs);
-							try {
-								await this.options.notify?.(receipt);
-							} catch (error) {
-								log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
-							}
-						}
+						await this.escalateAndNotify(
+							channelDir,
+							channelId,
+							entry,
+							`sleeping task has invalid schedule: ${entry.frontmatter.schedule}`,
+							nowMs,
+						);
 						continue;
 					}
 					if (!needsWakeHeal(entry)) continue;
@@ -479,13 +498,7 @@ export class TaskDriver {
 					);
 					if (!escalationReason) continue;
 					governanceHandled = true;
-					if (await escalateTask(channelDir, candidate.id, escalationReason)) {
-						const receipt = taskGovernorReceipt(channelId, candidate, escalationReason, nowMs);
-						try {
-							await this.options.notify?.(receipt);
-						} catch (error) {
-							log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
-						}
+					if (await this.escalateAndNotify(channelDir, channelId, candidate, escalationReason, nowMs)) {
 						log.logWarning(`[${channelId}] Task driver disabled ${candidate.id} (governor)`, escalationReason);
 					}
 					break;
@@ -579,13 +592,7 @@ export class TaskDriver {
 					!repairOnly && previous?.accepted && previous.fingerprint === fingerprint ? previous.futileCount + 1 : 0;
 				if (futileCount >= FUTILE_WAKE_LIMIT) {
 					const reason = `task made no visible progress in ${FUTILE_WAKE_LIMIT} consecutive wakes`;
-					if (await escalateTask(channelDir, entry.id, reason)) {
-						const receipt = taskGovernorReceipt(channelId, entry, reason, nowMs);
-						try {
-							await this.options.notify?.(receipt);
-						} catch (error) {
-							log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
-						}
+					if (await this.escalateAndNotify(channelDir, channelId, entry, reason, nowMs)) {
 						this.attempts.delete(key);
 						this.lastDispatchedTaskId.set(channelId, entry.id);
 						log.logWarning(`[${channelId}] Task driver disabled ${entry.id} (governor)`, reason);
@@ -597,13 +604,7 @@ export class TaskDriver {
 				const wakeCount = !repairOnly && previous && previous.cycleId === cycleId ? previous.wakeCount + 1 : 1;
 				if (wakeCount > MAX_WAKES_PER_CYCLE) {
 					const reason = `task exceeded ${MAX_WAKES_PER_CYCLE} wakes in this cycle (runaway failsafe)`;
-					if (await escalateTask(channelDir, entry.id, reason)) {
-						const receipt = taskGovernorReceipt(channelId, entry, reason, nowMs);
-						try {
-							await this.options.notify?.(receipt);
-						} catch (error) {
-							log.logWarning(`[${channelId}] Task governor receipt failed`, errorMessage(error));
-						}
+					if (await this.escalateAndNotify(channelDir, channelId, entry, reason, nowMs)) {
 						this.attempts.delete(key);
 						this.lastDispatchedTaskId.set(channelId, entry.id);
 						log.logWarning(`[${channelId}] Task driver disabled ${entry.id} (governor)`, reason);

@@ -17,8 +17,8 @@ import { useTempDirs } from "./helpers/fixtures.js";
 
 const { createRunnerMock } = vi.hoisted(() => ({ createRunnerMock: vi.fn() }));
 
-vi.mock("../src/agent/index.js", async () => {
-	const actual = await vi.importActual("../src/agent/index.js");
+vi.mock("../src/agent/runner-factory.js", async () => {
+	const actual = await vi.importActual("../src/agent/runner-factory.js");
 	return { ...actual, createRunner: createRunnerMock };
 });
 

@@ -22,7 +22,7 @@ vi.mock("../src/memory/sidecar-worker.js", () => ({
 }));
 
 import { runInlineConsolidation } from "../src/memory/consolidation.js";
-import { ensureChannelMemoryFiles } from "../src/memory/files.js";
+import { ensureChannelMemoryFilesSync } from "../src/memory/files.js";
 import {
 	runMemoryCheckpointJob,
 	runSessionRefreshJob,
@@ -74,7 +74,7 @@ async function harness() {
 	const workspaceDir = makeTempDir();
 	const appHomeDir = join(workspaceDir, ".app");
 	const channelDir = join(workspaceDir, "dm_1");
-	await ensureChannelMemoryFiles(channelDir);
+	ensureChannelMemoryFilesSync(channelDir);
 	return { appHomeDir, channelDir, workspaceDir };
 }
 

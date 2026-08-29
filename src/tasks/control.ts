@@ -118,6 +118,8 @@ export function parseTaskControl(raw: string): TaskControl {
  * Migration-only reader for v1/v2 control blocks. `parseTaskControl` no longer accepts them —
  * this exists so `migrateLegacyTaskState` (spec 029, D6's window, closed here) can durably
  * upgrade an old file the one time it is encountered. Nothing else may call this.
+ *
+ * RETIRE AT v0.9.3 — see the header comment in `../runtime/task-migration.js`.
  */
 export function parseLegacyTaskControl(raw: string): TaskControl {
 	let value: unknown;

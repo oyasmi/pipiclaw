@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readProjectSelection } from "../../../src/channel/project-scope-store.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 import { waitFor } from "../helpers/wait.js";
 
@@ -52,8 +53,13 @@ describe("E2E deterministic: path guard & /project", () => {
 		await harness.sendUserMessageNoWait("LONG 任务开始");
 		await waitFor("turn running", () => harness.mainTurnRequests().length >= 1, { intervalMs: 20 });
 
-		const reply1 = await harness.runCommand("project", `set ${harness.projectRootB}`);
-		expect(reply1).toContain("回合正在进行");
+		// Mechanism, not wording (AGENTS.md e2e rule #2): the busy-turn guard must actually block
+		// the change, not just word a warning around one that went through anyway — assert the
+		// persisted selection never moved to root B while the turn was running. Mutation check
+		// (review 2026-08-30): short-circuiting `project-commands.ts`'s `options.isBusy()` check
+		// turns this red (the selection moves to root B).
+		await harness.runCommand("project", `set ${harness.projectRootB}`);
+		expect(readProjectSelection(harness.channelDir)?.projectRoot).not.toBe(harness.projectRootB);
 
 		gate.release();
 		await harness.waitForIdle();

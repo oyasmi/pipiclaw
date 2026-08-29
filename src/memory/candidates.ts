@@ -2,6 +2,7 @@ import { stat } from "fs/promises";
 import { join } from "path";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { splitH1Sections, splitH2Sections } from "../shared/markdown-sections.js";
+import { stripCrAndTrim } from "../shared/text-utils.js";
 import {
 	getChannelHistoryPath,
 	getChannelMemoryPath,
@@ -40,12 +41,8 @@ interface CachedCandidateFile {
 	candidates: MemoryCandidate[];
 }
 
-function normalizeContent(content: string): string {
-	return content.replace(/\r/g, "").trim();
-}
-
 async function readOptionalFile(path: string): Promise<string> {
-	return normalizeContent(await readOptionalTextFile(path));
+	return stripCrAndTrim(await readOptionalTextFile(path));
 }
 
 function slugify(value: string): string {

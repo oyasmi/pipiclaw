@@ -7,8 +7,9 @@
  * preparation shares `prepareAppServices` with the DingTalk path.
  */
 import { userInfo } from "node:os";
-import { type AgentRunner, createRunner } from "../agent/index.js";
 import { channelRunningJobLines } from "../agent/job-manager.js";
+import { createRunner } from "../agent/runner-factory.js";
+import type { AgentRunner } from "../agent/types.js";
 import { ensureChannelDir } from "../channel/channel-paths.js";
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";

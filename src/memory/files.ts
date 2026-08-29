@@ -200,7 +200,7 @@ export async function applyChannelMemoryOps(
 		return result;
 	}
 
-	await ensureChannelMemoryFiles(channelDir);
+	ensureChannelMemoryFilesSync(channelDir);
 	const path = getChannelMemoryPath(channelDir);
 	const existing = await readOptionalTextFile(path);
 	const lines = existing.replace(/\r/g, "").split("\n");
@@ -403,10 +403,6 @@ export function getChannelSessionPath(channelDir: string): string {
 	return join(channelDir, "SESSION.md");
 }
 
-export async function ensureChannelMemoryFiles(channelDir: string): Promise<void> {
-	ensureChannelMemoryFilesSync(channelDir);
-}
-
 export function ensureChannelMemoryFilesSync(channelDir: string): void {
 	const memoryPath = getChannelMemoryPath(channelDir);
 	const historyPath = getChannelHistoryPath(channelDir);
@@ -438,7 +434,7 @@ export async function readChannelSession(channelDir: string): Promise<string> {
 }
 
 export async function rewriteChannelMemory(channelDir: string, content: string): Promise<void> {
-	await ensureChannelMemoryFiles(channelDir);
+	ensureChannelMemoryFilesSync(channelDir);
 	const path = getChannelMemoryPath(channelDir);
 	await backupBeforeRewrite(channelDir, path);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_MEMORY;
@@ -447,7 +443,7 @@ export async function rewriteChannelMemory(channelDir: string, content: string):
 }
 
 export async function rewriteChannelHistory(channelDir: string, content: string): Promise<void> {
-	await ensureChannelMemoryFiles(channelDir);
+	ensureChannelMemoryFilesSync(channelDir);
 	const path = getChannelHistoryPath(channelDir);
 	await backupBeforeRewrite(channelDir, path);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_HISTORY;
@@ -455,7 +451,7 @@ export async function rewriteChannelHistory(channelDir: string, content: string)
 }
 
 export async function rewriteChannelSession(channelDir: string, content: string): Promise<void> {
-	await ensureChannelMemoryFiles(channelDir);
+	ensureChannelMemoryFilesSync(channelDir);
 	const nextContent = normalizeContent(content) || DEFAULT_CHANNEL_SESSION;
 	await writeFileAtomically(getChannelSessionPath(channelDir), nextContent);
 }
@@ -475,7 +471,7 @@ export async function appendChannelHistoryArchive(channelDir: string, block: His
 	if (!trimmedContent) {
 		return;
 	}
-	await ensureChannelMemoryFiles(channelDir);
+	ensureChannelMemoryFilesSync(channelDir);
 	const path = getChannelHistoryArchivePath(channelDir);
 	const renderedBlock = [`## Archived ${block.timestamp}`, trimmedContent].join("\n\n");
 
@@ -502,7 +498,7 @@ export async function appendChannelHistoryBlock(channelDir: string, block: Histo
 		return;
 	}
 
-	await ensureChannelMemoryFiles(channelDir);
+	ensureChannelMemoryFilesSync(channelDir);
 	const path = getChannelHistoryPath(channelDir);
 	const existing = await readOptionalTextFile(path);
 	const renderedBlock = [`## ${block.timestamp}`, trimmedContent].join("\n\n");

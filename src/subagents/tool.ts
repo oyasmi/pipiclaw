@@ -27,7 +27,8 @@ import { splitH1Sections } from "../shared/markdown-sections.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText, errorMessage, extractAssistantText } from "../shared/text-utils.js";
-import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
+import { addUsage, createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
+import { sleepUnref } from "../shared/with-timeout.js";
 import { workspaceSubjectHash, workspaceSubjectSnapshot } from "../tasks/artifact-subject.js";
 import { readStoredTask } from "../tasks/store.js";
 import { writeVerificationAttestation } from "../tasks/verification.js";
@@ -47,7 +48,7 @@ import {
 	withSubAgentsDirWriteDeny,
 } from "./discovery.js";
 import { type ExternalLaunchResult, launchExternalRun } from "./external/run.js";
-import { getSubAgentRunManager, resolveSyncGraceMs, type SettleInput } from "./runs.js";
+import { getSubAgentRunManager, resolveSyncGraceMs, type SettleInput, type SubAgentRunManager } from "./runs.js";
 import { resolveVerificationOutcome } from "./verification-outcome.js";
 import {
 	acquireWorkspaceLease,
@@ -384,6 +385,41 @@ function formatStatus(agentName: string, text: string): string {
 	return `Subagent ${agentName}: ${text}`;
 }
 
+/**
+ * The "still running, don't wait or re-dispatch" reply shared by every dispatch path that hands
+ * back a placeholder instead of the run's own result: external always takes this path (D2); an
+ * internal run takes it once the sync grace window elapses (D2/D7). Only the runtime label
+ * (`external, <harness>` vs `internal, async`) differs between the two.
+ */
+function buildDispatchedText(runId: string, agentName: string, runtimeLabel: string, workingDirectory: string): string {
+	return (
+		`[Dispatched] runId=${runId}, agent ${agentName} (${runtimeLabel}), working directory ${workingDirectory}.\n` +
+		"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
+		"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_update."
+	);
+}
+
+/**
+ * `buildContextualBlocks` shared by the external dispatch path and `runToCompletion`'s internal
+ * one (spec 040 gap closed post-review): context injection is an enhancement, not a
+ * precondition, so a failure here degrades to no context blocks rather than failing a dispatch
+ * that would otherwise have run fine.
+ */
+async function resolveContextualBlocks(
+	task: string,
+	config: ResolvedSubAgentConfig,
+	options: SubAgentToolOptions,
+	currentModel: Model<Api>,
+): Promise<string[]> {
+	return buildContextualBlocks(task, config, options, currentModel).catch((error) => {
+		log.logWarning(
+			`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
+			errorMessage(error),
+		);
+		return [] as string[];
+	});
+}
+
 function buildFailureText(config: SubAgentConfig, reason: string, lastAssistantText: string): string {
 	const trimmedLastText = lastAssistantText.trim();
 	if (!trimmedLastText) {
@@ -702,46 +738,44 @@ function filterToolsByName(allTools: AgentTool<any>[], names: string[]): AgentTo
 	return allTools.filter((tool) => allowed.has(tool.name));
 }
 
-function createDetails(
-	config: ResolvedSubAgentConfig,
-	runContext: SubAgentRunContext,
-	usage: UsageTotals,
-	turns: number,
-	toolCalls: number,
-	durationMs: number,
-	failed: boolean,
-	failureReason?: string,
-	verificationVerdict?: "pass" | "fail",
-	extras?: {
-		resultTruncated?: boolean;
-		/** Set for the "[Dispatched]" placeholder returned instead of waiting on the run (D2). */
-		dispatched?: boolean;
-		/** External roles report their harness's own model string, never `formatModelReference`. */
-		modelOverride?: string;
-		toolsOverride?: string[];
-	},
-): SubAgentToolFields {
+function createDetails(input: {
+	config: ResolvedSubAgentConfig;
+	runContext: SubAgentRunContext;
+	usage: UsageTotals;
+	turns: number;
+	toolCalls: number;
+	durationMs: number;
+	failed?: boolean;
+	failureReason?: string;
+	verificationVerdict?: "pass" | "fail";
+	resultTruncated?: boolean;
+	/** Set for the "[Dispatched]" placeholder returned instead of waiting on the run (D2). */
+	dispatched?: boolean;
+	/** External roles report their harness's own model string, never `formatModelReference`. */
+	modelOverride?: string;
+	toolsOverride?: string[];
+}): SubAgentToolFields {
 	return {
-		agent: config.name,
-		source: config.source,
-		model: extras?.modelOverride ?? formatModelReference(config.model),
-		tools: extras?.toolsOverride ?? [...config.tools],
-		turns,
-		toolCalls,
-		durationMs,
-		failed,
-		failureReason,
+		agent: input.config.name,
+		source: input.config.source,
+		model: input.modelOverride ?? formatModelReference(input.config.model),
+		tools: input.toolsOverride ?? [...input.config.tools],
+		turns: input.turns,
+		toolCalls: input.toolCalls,
+		durationMs: input.durationMs,
+		failed: input.failed ?? false,
+		failureReason: input.failureReason,
 		usage: {
-			...usage,
-			cost: { ...usage.cost },
+			...input.usage,
+			cost: { ...input.usage.cost },
 		},
-		runId: runContext.runId,
-		purpose: runContext.purpose,
-		taskId: runContext.taskId,
-		verificationVerdict,
-		artifactDir: runContext.artifactDir,
-		resultTruncated: extras?.resultTruncated ?? false,
-		dispatched: extras?.dispatched,
+		runId: input.runContext.runId,
+		purpose: input.runContext.purpose,
+		taskId: input.runContext.taskId,
+		verificationVerdict: input.verificationVerdict,
+		artifactDir: input.runContext.artifactDir,
+		resultTruncated: input.resultTruncated ?? false,
+		dispatched: input.dispatched,
 	};
 }
 
@@ -751,13 +785,6 @@ function createDetails(
  * jobs. Stopping a run is now an explicit decision (`subagent_run op=cancel`), not a side
  * effect of stopping something else.
  */
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		const timer = setTimeout(resolve, ms);
-		timer.unref?.();
-	});
-}
-
 /**
  * Shared dispatch path for both `subagent` and `subagent_inline` (spec 046, D2.5): everything
  * after a role has been resolved into a `ResolvedSubAgentConfig` — workspace lease admission,
@@ -806,99 +833,149 @@ async function dispatchSubAgentRun(
 	}
 
 	if (config.runtime === "external") {
-		if (!config.harness) {
-			releaseWorkspaceLease(leaseKey, runContext.runId);
-			throw new Error(`Sub-agent "${config.name}" has runtime: external but no harness configured.`);
-		}
-		let launchResult: ExternalLaunchResult;
-		try {
-			// D9/T5: external roles get the same task envelope internal workers do — runtime
-			// paths, injected context blocks, and (for purpose=verify) the verification
-			// protocol — rather than the raw task text (spec 040 gap closed post-review).
-			const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel).catch(
-				(error) => {
-					// Context injection is an enhancement, not a precondition -- degrading to no context blocks
-					// beats failing a dispatch that would otherwise have run fine.
-					log.logWarning(
-						`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
-						errorMessage(error),
-					);
-					return [] as string[];
-				},
-			);
-			const envelopedTask = buildSubAgentTask(
-				params.task,
-				config,
-				options.runtimeContext,
-				contextualBlocks,
-				runContext,
-			);
-			launchResult = await launchExternalRun({
-				runId: runContext.runId,
-				channelId: options.runtimeContext.channelId,
-				channelDir: options.channelDir,
-				label: runLabel,
-				agent: config.name,
-				source: config.source,
-				harness: config.harness,
-				command: config.command ?? "",
-				shell: config.shell,
-				env: config.env,
-				externalModelRef: config.externalModelRef,
-				thinkingLevel: config.thinkingLevel,
-				maxWallTimeSec: config.maxWallTimeSec,
-				systemPrompt: config.systemPrompt,
-				task: envelopedTask,
-				workingDirectory: runContext.workingDirectory,
-				artifactDir: runContext.artifactDir,
-				purpose: runContext.purpose,
-				taskId: runContext.taskId,
-				leaseKey,
-				mutates: config.mutates,
-				roleFingerprint: externalRoleFingerprint(config),
-				workspaceDir: options.workspaceDir,
-				securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
-			});
-		} catch (error) {
-			// Only a pre-register() throw (unknown harness, shell-mode misuse) reaches here —
-			// every failure past that point settles the run itself and already released this
-			// lease (spec 042 D2/D5), so this catch must not release it a second time.
-			releaseWorkspaceLease(leaseKey, runContext.runId);
-			throw error;
-		}
-		// Spec 042 D2: a pre-spawn failure is reported in this same turn instead of a
-		// "[Dispatched]" placeholder the model would wait on forever — two of the three
-		// failure kinds never used to announce at all. `settle()` already released the lease.
-		if (!launchResult.ok) {
-			if (launchResult.kind === "missing-binary") {
-				throw new Error(
-					`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} Install the CLI or fix "command" in its role file; the run was not dispatched.`,
-				);
-			}
-			throw new RecoverableToolError(
-				`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} The run was not dispatched.`,
-			);
-		}
-		// D2: external's sync grace window is always 0 — always the dispatched placeholder,
-		// never an inline wait. The run keeps going in the background and wakes the channel.
-		return {
-			content: [
-				{
-					type: "text",
-					text:
-						`[Dispatched] runId=${runContext.runId}, agent ${config.name} (external, ${config.harness}), working directory ${runContext.workingDirectory}.\n` +
-						"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
-						"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_update.",
-				},
-			],
-			details: createDetails(config, runContext, createEmptyUsageTotals(), 0, 0, 0, false, undefined, undefined, {
-				dispatched: true,
-				modelOverride: config.externalModelRef ?? "unknown",
-				toolsOverride: [],
-			}),
-		};
+		return dispatchExternalRun({ options, currentModel, config, runLabel, runContext, leaseKey, params });
 	}
 
+	return dispatchInternalRun({
+		options,
+		currentModel,
+		config,
+		runLabel,
+		mutatesNote,
+		runContext,
+		leaseKey,
+		params,
+		onUpdate,
+		runManager,
+	});
+}
+
+/**
+ * The `runtime: external` half of `dispatchSubAgentRun` (spec 046, D2.5): launches the harness
+ * process and always returns the "[Dispatched]" placeholder — external's sync grace window is
+ * always 0, so there is no inline-wait branch to share with the internal path.
+ */
+async function dispatchExternalRun(input: {
+	options: SubAgentToolOptions;
+	currentModel: Model<Api>;
+	config: ResolvedSubAgentConfig;
+	runLabel: string;
+	runContext: SubAgentRunContext;
+	leaseKey: string | undefined;
+	params: { task: string; workingDirectory?: string; purpose?: "work" | "verify"; taskId?: string };
+}): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
+	const { options, currentModel, config, runLabel, runContext, leaseKey, params } = input;
+	if (!config.harness) {
+		releaseWorkspaceLease(leaseKey, runContext.runId);
+		throw new Error(`Sub-agent "${config.name}" has runtime: external but no harness configured.`);
+	}
+	let launchResult: ExternalLaunchResult;
+	try {
+		// D9/T5: external roles get the same task envelope internal workers do — runtime
+		// paths, injected context blocks, and (for purpose=verify) the verification
+		// protocol — rather than the raw task text (spec 040 gap closed post-review).
+		const contextualBlocks = await resolveContextualBlocks(params.task, config, options, currentModel);
+		const envelopedTask = buildSubAgentTask(
+			params.task,
+			config,
+			options.runtimeContext,
+			contextualBlocks,
+			runContext,
+		);
+		launchResult = await launchExternalRun({
+			runId: runContext.runId,
+			channelId: options.runtimeContext.channelId,
+			channelDir: options.channelDir,
+			label: runLabel,
+			agent: config.name,
+			source: config.source,
+			harness: config.harness,
+			command: config.command ?? "",
+			shell: config.shell,
+			env: config.env,
+			externalModelRef: config.externalModelRef,
+			thinkingLevel: config.thinkingLevel,
+			maxWallTimeSec: config.maxWallTimeSec,
+			systemPrompt: config.systemPrompt,
+			task: envelopedTask,
+			workingDirectory: runContext.workingDirectory,
+			artifactDir: runContext.artifactDir,
+			purpose: runContext.purpose,
+			taskId: runContext.taskId,
+			leaseKey,
+			mutates: config.mutates,
+			roleFingerprint: externalRoleFingerprint(config),
+			workspaceDir: options.workspaceDir,
+			securityConfig: options.securityConfig ?? DEFAULT_SECURITY_CONFIG,
+		});
+	} catch (error) {
+		// Only a pre-register() throw (unknown harness, shell-mode misuse) reaches here —
+		// every failure past that point settles the run itself and already released this
+		// lease (spec 042 D2/D5), so this catch must not release it a second time.
+		releaseWorkspaceLease(leaseKey, runContext.runId);
+		throw error;
+	}
+	// Spec 042 D2: a pre-spawn failure is reported in this same turn instead of a
+	// "[Dispatched]" placeholder the model would wait on forever — two of the three
+	// failure kinds never used to announce at all. `settle()` already released the lease.
+	if (!launchResult.ok) {
+		if (launchResult.kind === "missing-binary") {
+			throw new Error(
+				`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} Install the CLI or fix "command" in its role file; the run was not dispatched.`,
+			);
+		}
+		throw new RecoverableToolError(
+			`Sub-agent "${config.name}" failed to launch: ${launchResult.reason} The run was not dispatched.`,
+		);
+	}
+	// D2: external's sync grace window is always 0 — always the dispatched placeholder,
+	// never an inline wait. The run keeps going in the background and wakes the channel.
+	return {
+		content: [
+			{
+				type: "text",
+				text: buildDispatchedText(
+					runContext.runId,
+					config.name,
+					`external, ${config.harness}`,
+					runContext.workingDirectory,
+				),
+			},
+		],
+		details: createDetails({
+			config,
+			runContext,
+			usage: createEmptyUsageTotals(),
+			turns: 0,
+			toolCalls: 0,
+			durationMs: 0,
+			dispatched: true,
+			modelOverride: config.externalModelRef ?? "unknown",
+			toolsOverride: [],
+		}),
+	};
+}
+
+/**
+ * The `runtime: internal` half of `dispatchSubAgentRun` (spec 046, D2.5): registers the durable
+ * run record, runs the worker (with budget enforcement and the D6 convergence turn), settles it,
+ * and returns either its real result or — once the sync grace window elapses — a "[Dispatched]"
+ * placeholder while the run keeps going in the background.
+ */
+async function dispatchInternalRun(input: {
+	options: SubAgentToolOptions;
+	currentModel: Model<Api>;
+	config: ResolvedSubAgentConfig;
+	runLabel: string;
+	mutatesNote: string;
+	runContext: SubAgentRunContext;
+	leaseKey: string | undefined;
+	params: { task: string; workingDirectory?: string; purpose?: "work" | "verify"; taskId?: string };
+	onUpdate?: (update: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }) => void;
+	runManager: SubAgentRunManager;
+}): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
+	const { options, currentModel, config, runLabel, mutatesNote, runContext, leaseKey, params, onUpdate, runManager } =
+		input;
 	const scopedExecutor = new DirectoryExecutor(options.executor, runContext.workingDirectory);
 	let apiKey: string;
 	try {
@@ -964,16 +1041,16 @@ async function dispatchSubAgentRun(
 		lastUpdateText = nextText;
 		onUpdate?.({
 			content: [{ type: "text", text: nextText }],
-			details: createDetails(
+			details: createDetails({
 				config,
 				runContext,
 				usage,
-				assistantTurns,
+				turns: assistantTurns,
 				toolCalls,
-				Date.now() - startedAt,
-				Boolean(failureReason),
+				durationMs: Date.now() - startedAt,
+				failed: Boolean(failureReason),
 				failureReason,
-			),
+			}),
 		});
 	};
 
@@ -1030,17 +1107,7 @@ async function dispatchSubAgentRun(
 		unsubscribe = worker.subscribe((event: AgentEvent) => {
 			if (event.type === "message_end" && isAssistantMessage(event.message)) {
 				assistantTurns++;
-				const messageUsage = event.message.usage;
-				usage.input += messageUsage.input;
-				usage.output += messageUsage.output;
-				usage.cacheRead += messageUsage.cacheRead;
-				usage.cacheWrite += messageUsage.cacheWrite;
-				usage.total += messageUsage.totalTokens;
-				usage.cost.input += messageUsage.cost.input;
-				usage.cost.output += messageUsage.cost.output;
-				usage.cost.cacheRead += messageUsage.cost.cacheRead;
-				usage.cost.cacheWrite += messageUsage.cost.cacheWrite;
-				usage.cost.total += messageUsage.cost.total;
+				addUsage(usage, event.message.usage);
 			}
 
 			if (event.type === "tool_execution_start") {
@@ -1111,17 +1178,7 @@ async function dispatchSubAgentRun(
 		settleInput: SettleInput;
 	}> {
 		try {
-			const contextualBlocks = await buildContextualBlocks(params.task, config, options, currentModel).catch(
-				(error) => {
-					// Context injection is an enhancement, not a precondition -- degrading to no context blocks
-					// beats failing a dispatch that would otherwise have run fine.
-					log.logWarning(
-						`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
-						errorMessage(error),
-					);
-					return [] as string[];
-				},
-			);
+			const contextualBlocks = await resolveContextualBlocks(params.task, config, options, currentModel);
 			if (externallyCancelled) {
 				failureReason = failureReason || "Cancelled by request.";
 			} else {
@@ -1267,18 +1324,18 @@ async function dispatchSubAgentRun(
 							text: mutatesNote + buildStoppedText(config, effectiveFailureReason, finalized.replyText),
 						},
 					],
-					details: createDetails(
+					details: createDetails({
 						config,
 						runContext,
 						usage,
-						assistantTurns,
+						turns: assistantTurns,
 						toolCalls,
 						durationMs,
-						true,
-						effectiveFailureReason,
+						failed: true,
+						failureReason: effectiveFailureReason,
 						verificationVerdict,
-						{ resultTruncated: finalized.truncated },
-					),
+						resultTruncated: finalized.truncated,
+					}),
 				},
 				settleInput: {
 					...baseSettleInput,
@@ -1301,18 +1358,16 @@ async function dispatchSubAgentRun(
 							mutatesNote + (finalized.replyText || `(Sub-agent ${config.name} completed with no text output)`),
 					},
 				],
-				details: createDetails(
+				details: createDetails({
 					config,
 					runContext,
 					usage,
-					assistantTurns,
+					turns: assistantTurns,
 					toolCalls,
 					durationMs,
-					false,
-					undefined,
 					verificationVerdict,
-					{ resultTruncated: finalized.truncated },
-				),
+					resultTruncated: finalized.truncated,
+				}),
 			},
 			settleInput: { ...baseSettleInput, status: "completed", outputText: finalText },
 		};
@@ -1344,7 +1399,7 @@ async function dispatchSubAgentRun(
 			error: error instanceof Error ? error : new Error(String(error)),
 		}),
 	);
-	const raceResult = await Promise.race([outcomePromise, sleep(graceMs).then(() => "timed-out" as const)]);
+	const raceResult = await Promise.race([outcomePromise, sleepUnref(graceMs).then(() => "timed-out" as const)]);
 
 	if (raceResult !== "timed-out") {
 		runManager.clearCancelHandle(runContext.runId);
@@ -1374,23 +1429,18 @@ async function dispatchSubAgentRun(
 				type: "text",
 				text:
 					mutatesNote +
-					`[Dispatched] runId=${runContext.runId}, agent ${config.name} (internal, async), working directory ${runContext.workingDirectory}.\n` +
-					"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
-					"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_update.",
+					buildDispatchedText(runContext.runId, config.name, "internal, async", runContext.workingDirectory),
 			},
 		],
-		details: createDetails(
+		details: createDetails({
 			config,
 			runContext,
 			usage,
-			assistantTurns,
+			turns: assistantTurns,
 			toolCalls,
-			Date.now() - startedAt,
-			false,
-			undefined,
-			undefined,
-			{ dispatched: true },
-		),
+			durationMs: Date.now() - startedAt,
+			dispatched: true,
+		}),
 	};
 }
 

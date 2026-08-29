@@ -1,10 +1,11 @@
 import { join } from "path";
 import { channelEffectCount, noteTaskEffects, taskEffectCount } from "../agent/effect-ledger.js";
-import { type AgentRunner, createRunner } from "../agent/index.js";
 import { channelRunningJobLines, configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
+import { createRunner } from "../agent/runner-factory.js";
 import { renderStatus } from "../agent/status-render.js";
 import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
+import type { AgentRunner } from "../agent/types.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
 import type { ChannelEvent } from "../channel/channel-event.js";
 import { type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
@@ -27,10 +28,11 @@ import { defaultModel } from "../models/utils.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
-import { PipiclawSettingsManager } from "../settings.js";
+import { PipiclawSettingsManager, TASK_DRIVER_SETTINGS } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { fileStamp } from "../shared/file-stamp.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { sleepUnref } from "../shared/with-timeout.js";
 import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
 import {
 	configureSubAgentRuntime,
@@ -182,13 +184,6 @@ function isIdleRuntimeCommandName(name: string): name is Exclude<RuntimeCommandN
 const STOP_FORCE_END_GRACE_MS = 15_000;
 const STOP_FORCE_END_POLL_MS = 250;
 
-function sleepUnref(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		const timer = setTimeout(resolve, ms);
-		timer.unref?.();
-	});
-}
-
 /**
  * Watchdog for `/stop`: release the channel if the stopped turn has not ended
  * once the grace window elapses. Returns true when it had to force the release.
@@ -217,6 +212,10 @@ export async function forceEndStuckTurnAfterStop(input: {
 	return true;
 }
 
+/** The real `TaskDriver` class, or the minimal test-injectable shape `createTaskDriver` may
+ * supply instead — `taskDriver.nudge?.()` is the only member either side needs to guarantee. */
+type TaskDriverLike = TaskDriver | { start(): void; stop(): void; nudge?(): void };
+
 interface RuntimeContextOptions {
 	paths: BootstrapPaths;
 	dingtalkConfig: DingTalkConfig;
@@ -231,7 +230,7 @@ interface RuntimeContextOptions {
 	memoryMaintenanceSchedulerIntervalMs?: number;
 	/** Background-job sweep cadence override (tests use a short one for timely completion wakes). */
 	jobSweepIntervalMs?: number;
-	createTaskDriver?: () => { start(): void; stop(): void; nudge?(): void };
+	createTaskDriver?: () => TaskDriverLike;
 	/** Receives raw SDK session events after subscription, without changing runtime handling. */
 	observer?: (event: unknown, channelId: string) => void;
 	/** Receives TaskDriver dispatch outcomes; used only by isolated evaluation workers. */
@@ -251,29 +250,24 @@ interface RuntimeContextOptions {
 	settingsManager?: PipiclawSettingsManager;
 }
 
-export async function createRuntimeContext(
-	options: RuntimeContextOptions,
-): Promise<RuntimeContext & { bot: DingTalkBot }> {
-	const startServices = options.startServices ?? true;
-	const registerSignalHandlers = options.registerSignalHandlers ?? true;
-	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
-	const runtimeSettingsManager = options.settingsManager ?? new PipiclawSettingsManager(options.paths.appHomeDir);
-	log.configureLogging(runtimeSettingsManager.getLoggingSettings());
-	const startedAt = Date.now();
-	const cliVersion = readCliVersion();
-	const channelRunners = new Map<string, AgentRunner>();
-	const sessionResetChains = new Map<string, Promise<void>>();
-	const activeTasks = new Set<Promise<void>>();
-	/** Channels with a `/stop` watchdog in flight, so a burst of `/stop` starts only one. */
-	const stopWatchdogs = new Set<string>();
-	// `workspace/CHANNELS.md`: names every channel id so the workspace, the logs and the agent
-	// stop dealing in `group_cid...`. Writes are debounced internally (see channel-index.ts).
-	const channelIndex: ChannelIndex = createChannelIndex({ workspaceDir: options.paths.workspaceDir });
-	let durableDispatch: DurableDispatchService | undefined;
-	let shuttingDown = false;
-	let shutdownPromise: Promise<void> | null = null;
-
-	const archiveIncomingMessage = async (
+/**
+ * Everything the `DingTalkHandler` needs from `createRuntimeContext`'s scope (review 2026-08-30):
+ * pulled out so the handler's dependencies are a reviewable, typed list instead of "however many
+ * closures happen to be in scope" in an 850-line inline object literal. The four `get*`/`is*`
+ * accessors exist only for state this function's own scope assigns *after* the handler is built
+ * (`durableDispatch`, `executor`, `taskDriver`) or mutates later (`shuttingDown`) — a handler
+ * method only ever runs long after all of them are set, but a plain value captured at
+ * construction time would freeze a stale snapshot instead of observing the real one.
+ */
+interface DingTalkHandlerDeps {
+	options: RuntimeContextOptions;
+	store: ChannelStore;
+	channelRunners: Map<string, AgentRunner>;
+	sessionResetChains: Map<string, Promise<void>>;
+	activeTasks: Set<Promise<void>>;
+	stopWatchdogs: Set<string>;
+	channelIndex: ChannelIndex;
+	archiveIncomingMessage: (
 		channelId: string,
 		message: {
 			date: string;
@@ -286,49 +280,41 @@ export async function createRuntimeContext(
 			skipContextSync?: boolean;
 		},
 		contextLabel: string,
-	): Promise<void> => {
-		try {
-			await store.logMessage(channelId, message);
-		} catch (err) {
-			log.logWarning(`[${channelId}] Failed to archive ${contextLabel}`, errorMessage(err));
-		}
-	};
+	) => Promise<void>;
+	getRunner: (channelId: string) => AgentRunner;
+	cliVersion: string;
+	startedAt: number;
+	isShuttingDown: () => boolean;
+	getDurableDispatch: () => DurableDispatchService | undefined;
+	getExecutor: () => Executor;
+	getTaskDriver: () => TaskDriverLike;
+}
 
-	const getRunner = (channelId: string): AgentRunner => {
-		const existing = channelRunners.get(channelId);
-		if (existing) {
-			// Re-insert to move this channel to the end (most-recently-used) of the Map's
-			// iteration order, which evictIdleRunnersOverCap relies on.
-			channelRunners.delete(channelId);
-			channelRunners.set(channelId, existing);
-			return existing;
-		}
-
-		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
-		ensureChannelMemoryFilesSync(channelDir);
-		const runner = createRunner(channelId, channelDir, {
-			appHomeDir: options.paths.appHomeDir,
-			authConfigPath: options.paths.authConfigPath,
-			modelsConfigPath: options.paths.modelsConfigPath,
-			settingsManager: runtimeSettingsManager,
-			onSessionEvent: options.observer,
-			// The DingTalk bot is the media sender for this transport; enables `send_media`.
-			// `bot` is defined below in this same scope and initialized before any message
-			// (and thus any getRunner call) can arrive.
-			mediaSender: bot,
-		});
-		channelRunners.set(channelId, runner);
-		void evictIdleRunnersOverCap(channelRunners);
-		return runner;
-	};
-
+function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
+	const {
+		options,
+		store,
+		channelRunners,
+		sessionResetChains,
+		activeTasks,
+		stopWatchdogs,
+		channelIndex,
+		archiveIncomingMessage,
+		getRunner,
+		cliVersion,
+		startedAt,
+		isShuttingDown,
+		getDurableDispatch,
+		getExecutor,
+		getTaskDriver,
+	} = deps;
 	const handler: DingTalkHandler = {
 		isRunning(channelId: string): boolean {
 			return channelRunners.get(channelId)?.isBusy() ?? false;
 		},
 
 		noteChannelActivity(observation): void {
-			if (shuttingDown) return;
+			if (isShuttingDown()) return;
 			channelIndex.note(observation);
 		},
 
@@ -359,7 +345,7 @@ export async function createRuntimeContext(
 				void runner.abort().catch((err) => {
 					log.logWarning(`[${channelId}] Failed to abort run`, errorMessage(err));
 				});
-				void durableDispatch
+				void getDurableDispatch()
 					?.cancelChannel(channelId)
 					.then((canceled) => {
 						if (canceled) log.logInfo(`[${channelId}] Reset ${canceled} durable-dispatch lease(s) on stop`);
@@ -388,7 +374,7 @@ export async function createRuntimeContext(
 		},
 
 		async handleNewSession(event: ChannelEvent, _bot: DingTalkBot): Promise<void> {
-			if (shuttingDown) return;
+			if (isShuttingDown()) return;
 			const previous = sessionResetChains.get(event.channelId) ?? Promise.resolve();
 			const reset = previous
 				.catch(() => undefined)
@@ -486,7 +472,7 @@ export async function createRuntimeContext(
 							const now = Date.now();
 							const driverEvent = createTaskDriverEvent(event.channelId, entry, now);
 							return (
-								(await durableDispatch?.dispatch({
+								(await getDurableDispatch()?.dispatch({
 									...driverEvent,
 									dispatchId: `task:${event.channelId}:${entry.id}:manual:${new Date(now).toISOString()}`,
 								})) ?? false
@@ -565,7 +551,7 @@ export async function createRuntimeContext(
 			mode: BusyMessageMode,
 			queueText: string,
 		): Promise<BusyMessageResult> {
-			if (shuttingDown) {
+			if (isShuttingDown()) {
 				return { kind: "handled" };
 			}
 
@@ -640,13 +626,13 @@ export async function createRuntimeContext(
 		},
 
 		async handleEvent(event: ChannelEvent, bot: DingTalkBot, _isEvent?: boolean): Promise<void> {
-			if (shuttingDown) {
+			if (isShuttingDown()) {
 				log.logInfo(`[${event.channelId}] Ignoring event during shutdown`);
 				return;
 			}
 
 			const runner = getRunner(event.channelId);
-			await durableDispatch?.markStarted(event.dispatchId);
+			await getDurableDispatch()?.markStarted(event.dispatchId);
 			let structuredWakeFinalized = event.internalWake === undefined;
 			const task = (async () => {
 				try {
@@ -760,7 +746,7 @@ export async function createRuntimeContext(
 						const claimed = await claimVerifiedJobWake(
 							event,
 							options.paths.workspaceDir,
-							executor,
+							getExecutor(),
 							options.wakeTransitionHooks?.job,
 						);
 						if (claimed) {
@@ -837,12 +823,12 @@ export async function createRuntimeContext(
 						fields: { error: errorMessage(err) },
 					});
 				} finally {
-					if (structuredWakeFinalized) await durableDispatch?.markCompleted(event.dispatchId);
-					else await durableDispatch?.markRetryable(event.dispatchId);
+					if (structuredWakeFinalized) await getDurableDispatch()?.markCompleted(event.dispatchId);
+					else await getDurableDispatch()?.markRetryable(event.dispatchId);
 					runner.endTurn();
 					// A finished turn may have written task files (progress/complete/set); rescan
 					// now so a continuing task chain advances immediately instead of after a full sleep.
-					taskDriver.nudge?.();
+					getTaskDriver().nudge?.();
 				}
 			})();
 
@@ -854,6 +840,106 @@ export async function createRuntimeContext(
 			}
 		},
 	};
+	return handler;
+}
+
+export async function createRuntimeContext(
+	options: RuntimeContextOptions,
+): Promise<RuntimeContext & { bot: DingTalkBot }> {
+	const startServices = options.startServices ?? true;
+	const registerSignalHandlers = options.registerSignalHandlers ?? true;
+	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
+	const runtimeSettingsManager = options.settingsManager ?? new PipiclawSettingsManager(options.paths.appHomeDir);
+	log.configureLogging(runtimeSettingsManager.getLoggingSettings());
+	const startedAt = Date.now();
+	const cliVersion = readCliVersion();
+	const channelRunners = new Map<string, AgentRunner>();
+	const sessionResetChains = new Map<string, Promise<void>>();
+	const activeTasks = new Set<Promise<void>>();
+	/** Channels with a `/stop` watchdog in flight, so a burst of `/stop` starts only one. */
+	const stopWatchdogs = new Set<string>();
+	// `workspace/CHANNELS.md`: names every channel id so the workspace, the logs and the agent
+	// stop dealing in `group_cid...`. Writes are debounced internally (see channel-index.ts).
+	const channelIndex: ChannelIndex = createChannelIndex({ workspaceDir: options.paths.workspaceDir });
+	let durableDispatch: DurableDispatchService | undefined;
+	let shuttingDown = false;
+	let shutdownPromise: Promise<void> | null = null;
+
+	const archiveIncomingMessage = async (
+		channelId: string,
+		message: {
+			date: string;
+			ts: string;
+			user: string;
+			userName?: string;
+			text: string;
+			isBot: boolean;
+			deliveryMode?: "steer" | "followUp";
+			skipContextSync?: boolean;
+		},
+		contextLabel: string,
+	): Promise<void> => {
+		try {
+			await store.logMessage(channelId, message);
+		} catch (err) {
+			log.logWarning(`[${channelId}] Failed to archive ${contextLabel}`, errorMessage(err));
+		}
+	};
+
+	const getRunner = (channelId: string): AgentRunner => {
+		const existing = channelRunners.get(channelId);
+		if (existing) {
+			// Re-insert to move this channel to the end (most-recently-used) of the Map's
+			// iteration order, which evictIdleRunnersOverCap relies on.
+			channelRunners.delete(channelId);
+			channelRunners.set(channelId, existing);
+			return existing;
+		}
+
+		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
+		ensureChannelMemoryFilesSync(channelDir);
+		const runner = createRunner(channelId, channelDir, {
+			appHomeDir: options.paths.appHomeDir,
+			authConfigPath: options.paths.authConfigPath,
+			modelsConfigPath: options.paths.modelsConfigPath,
+			settingsManager: runtimeSettingsManager,
+			onSessionEvent: options.observer,
+			// The DingTalk bot is the media sender for this transport; enables `send_media`.
+			// `bot` is defined below in this same scope and initialized before any message
+			// (and thus any getRunner call) can arrive.
+			mediaSender: bot,
+		});
+		channelRunners.set(channelId, runner);
+		void evictIdleRunnersOverCap(channelRunners);
+		return runner;
+	};
+
+	const isShuttingDown = (): boolean => shuttingDown;
+	const getDurableDispatch = (): DurableDispatchService | undefined => durableDispatch;
+	// `executor`/`taskDriver` are declared further down this function (after `bot`, which the
+	// task driver's own `notify` needs) — these two closures resolve them lazily, the same way
+	// `getRunner` above already resolves `bot` before its own declaration: nothing here calls
+	// through them until long after the whole function has finished setting up.
+	const getExecutor = (): Executor => executor;
+	const getTaskDriver = (): TaskDriverLike => taskDriver;
+
+	const handler = createDingTalkHandler({
+		options,
+		store,
+		channelRunners,
+		sessionResetChains,
+		activeTasks,
+		stopWatchdogs,
+		channelIndex,
+		archiveIncomingMessage,
+		getRunner,
+		cliVersion,
+		startedAt,
+		isShuttingDown,
+		getDurableDispatch,
+		getExecutor,
+		getTaskDriver,
+	});
 
 	const bot = options.createBot
 		? options.createBot(handler, options.dingtalkConfig)
@@ -1003,7 +1089,7 @@ export async function createRuntimeContext(
 				notify: (receipt) => bot.sendPlain(receipt.channelId, receipt.text),
 				getSettings: () => {
 					runtimeSettingsManager.reload();
-					return runtimeSettingsManager.getTaskDriverSettings();
+					return TASK_DRIVER_SETTINGS;
 				},
 				isEnabled: tasksToolEnabled,
 			});

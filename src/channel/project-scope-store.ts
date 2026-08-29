@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
 	currentProjectSandboxStatus,
@@ -7,7 +6,7 @@ import {
 	type ProjectAccessPolicy,
 	type ProjectScope,
 } from "../security/project-scope.js";
-import { writeFileAtomically } from "../shared/atomic-file.js";
+import { writeFileAtomically, writeFileAtomicallySync } from "../shared/atomic-file.js";
 
 /** A channel's persisted project selection (D3.3). Never holds messages, only the choice itself. */
 export interface PersistedProjectSelectionV1 {
@@ -48,15 +47,11 @@ export function readProjectSelection(channelDir: string): PersistedProjectSelect
 	return raw as PersistedProjectSelectionV1;
 }
 
-/** Same durability tradeoff as every other atomic writer in this codebase (temp + rename), minus
- * the fsync `writeFileAtomically` does — used only for the one-time, in-constructor migration
- * write (D3.3); every explicit mutation (`/project set|reset`) goes through the fsync'd async
- * `writeFileAtomically` in `commitProjectSelection` instead. */
+/** Used only for the one-time, in-constructor migration write (D3.3); every explicit mutation
+ * (`/project set|reset`) goes through the async `writeFileAtomically` in `commitProjectSelection`
+ * instead — that one is on a mutation path that can already afford to await. */
 function writeProjectSelectionSync(channelDir: string, selection: PersistedProjectSelectionV1): void {
-	const path = getProjectSelectionPath(channelDir);
-	const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
-	writeFileSync(tempPath, `${JSON.stringify(selection, null, 2)}\n`, "utf-8");
-	renameSync(tempPath, path);
+	writeFileAtomicallySync(getProjectSelectionPath(channelDir), `${JSON.stringify(selection, null, 2)}\n`);
 }
 
 export async function commitProjectSelection(

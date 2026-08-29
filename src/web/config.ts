@@ -1,3 +1,4 @@
+import { clampInteger } from "../shared/numeric.js";
 import type { PipiclawWebFetchConfig, PipiclawWebSearchConfig } from "../tools/config.js";
 
 export interface ResolvedWebSearchRequest {
@@ -24,7 +25,7 @@ export function resolveWebSearchRequest(
 ): ResolvedWebSearchRequest {
 	return {
 		query: query.trim(),
-		count: clamp(count, config.maxResults, 1, 10),
+		count: clampInteger(count, config.maxResults, 1, 10),
 		timeoutMs: config.timeoutMs,
 	};
 }
@@ -39,25 +40,11 @@ export function resolveWebFetchRequest(
 		url: url.trim(),
 		extractMode:
 			extractMode === "text" ? "text" : extractMode === "markdown" ? "markdown" : config.defaultExtractMode,
-		maxChars: clamp(maxChars, config.maxChars, 100),
+		maxChars: clampInteger(maxChars, config.maxChars, 100),
 		timeoutMs: config.timeoutMs,
 		maxImageBytes: config.maxImageBytes,
 		maxResponseBytes: config.maxResponseBytes,
 		preferJina: config.preferJina,
 		enableJinaFallback: config.enableJinaFallback,
 	};
-}
-
-function clamp(value: number | undefined, fallback: number, minimum: number, maximum?: number): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) {
-		return fallback;
-	}
-	const normalized = Math.floor(value);
-	if (normalized < minimum) {
-		return fallback;
-	}
-	if (maximum !== undefined && normalized > maximum) {
-		return fallback;
-	}
-	return normalized;
 }

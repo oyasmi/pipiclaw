@@ -273,42 +273,42 @@ function parseStringList(raw: unknown, label: string): { values: string[]; error
 	return { values: [], error: `Invalid "${label}" frontmatter: expected a string or string[]` };
 }
 
-function parseContextMode(raw: unknown): { value: SubAgentContextMode; error?: string } {
+/**
+ * Shared shape for every frontmatter/override field whose only validation is "one of a fixed
+ * allow-list, else report an error and fall back": `contextMode`, `thinkingLevel`, `effort`,
+ * `runtime`, `harness`, `workload`, `mutates` all had their own byte-identical copy of this
+ * before (review 2026-08-29) — only the label, allow-list and fallback ever differed.
+ */
+function parseEnumField<T extends string>(
+	raw: unknown,
+	label: string,
+	allowed: readonly T[],
+	fallback?: T,
+): { value?: T; error?: string } {
 	const normalized = readOptionalTrimmedString(raw);
 	if (!normalized) {
-		return { value: "isolated" };
+		return { value: fallback };
 	}
-	if (ALLOWED_CONTEXT_MODES.includes(normalized as SubAgentContextMode)) {
-		return { value: normalized as SubAgentContextMode };
+	if (allowed.includes(normalized as T)) {
+		return { value: normalized as T };
 	}
 	return {
-		value: "isolated",
-		error: `Unknown contextMode "${normalized}". Allowed values: ${ALLOWED_CONTEXT_MODES.join(", ")}`,
+		value: fallback,
+		error: `Unknown ${label} "${normalized}". Allowed values: ${allowed.join(", ")}`,
 	};
+}
+
+function parseContextMode(raw: unknown): { value: SubAgentContextMode; error?: string } {
+	const result = parseEnumField(raw, "contextMode", ALLOWED_CONTEXT_MODES, "isolated");
+	return { value: result.value ?? "isolated", error: result.error };
 }
 
 function parseThinkingLevel(raw: unknown): { value?: SubAgentThinkingLevel; error?: string } {
-	const normalized = readOptionalTrimmedString(raw);
-	if (!normalized) {
-		return {};
-	}
-	if (ALLOWED_THINKING_LEVELS.includes(normalized as SubAgentThinkingLevel)) {
-		return { value: normalized as SubAgentThinkingLevel };
-	}
-	return {
-		error: `Unknown thinkingLevel "${normalized}". Allowed values: ${ALLOWED_THINKING_LEVELS.join(", ")}`,
-	};
+	return parseEnumField(raw, "thinkingLevel", ALLOWED_THINKING_LEVELS);
 }
 
 function parseEffort(raw: unknown): { value?: SubAgentEffort; error?: string } {
-	const normalized = readOptionalTrimmedString(raw);
-	if (!normalized) {
-		return {};
-	}
-	if (ALLOWED_EFFORTS.includes(normalized as SubAgentEffort)) {
-		return { value: normalized as SubAgentEffort };
-	}
-	return { error: `Unknown effort "${normalized}". Allowed values: ${ALLOWED_EFFORTS.join(", ")}` };
+	return parseEnumField(raw, "effort", ALLOWED_EFFORTS);
 }
 
 function parseContextChoice(raw: unknown): {
@@ -422,42 +422,20 @@ function resolveModelReference(
 }
 
 function parseRuntime(raw: unknown): { value: SubAgentRuntime; error?: string } {
-	const normalized = readOptionalTrimmedString(raw);
-	if (!normalized) return { value: "internal" };
-	if (ALLOWED_RUNTIMES.includes(normalized as SubAgentRuntime)) {
-		return { value: normalized as SubAgentRuntime };
-	}
-	return {
-		value: "internal",
-		error: `Unknown runtime "${normalized}". Allowed values: ${ALLOWED_RUNTIMES.join(", ")}`,
-	};
+	const result = parseEnumField(raw, "runtime", ALLOWED_RUNTIMES, "internal");
+	return { value: result.value ?? "internal", error: result.error };
 }
 
 function parseHarness(raw: unknown): { value?: SubAgentHarness; error?: string } {
-	const normalized = readOptionalTrimmedString(raw);
-	if (!normalized) return {};
-	if (ALLOWED_HARNESSES.includes(normalized as SubAgentHarness)) {
-		return { value: normalized as SubAgentHarness };
-	}
-	return { error: `Unknown harness "${normalized}". Allowed values: ${ALLOWED_HARNESSES.join(", ")}` };
+	return parseEnumField(raw, "harness", ALLOWED_HARNESSES);
 }
 
 function parseWorkload(raw: unknown): { value?: SubAgentWorkload; error?: string } {
-	const normalized = readOptionalTrimmedString(raw);
-	if (!normalized) return {};
-	if (ALLOWED_WORKLOADS.includes(normalized as SubAgentWorkload)) {
-		return { value: normalized as SubAgentWorkload };
-	}
-	return { error: `Unknown workload "${normalized}". Allowed values: ${ALLOWED_WORKLOADS.join(", ")}` };
+	return parseEnumField(raw, "workload", ALLOWED_WORKLOADS);
 }
 
 function parseMutates(raw: unknown): { value?: SubAgentMutates; error?: string } {
-	const normalized = readOptionalTrimmedString(raw);
-	if (!normalized) return {};
-	if (ALLOWED_MUTATES.includes(normalized as SubAgentMutates)) {
-		return { value: normalized as SubAgentMutates };
-	}
-	return { error: `Unknown mutates "${normalized}". Allowed values: ${ALLOWED_MUTATES.join(", ")}` };
+	return parseEnumField(raw, "mutates", ALLOWED_MUTATES);
 }
 
 function parseBooleanField(raw: unknown, label: string): { value?: boolean; error?: string } {

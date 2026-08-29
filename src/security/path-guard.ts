@@ -2,6 +2,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
+import { stripNullAndNormalize, withTrailingSlash } from "../shared/text-utils.js";
 import type { PathGuardContext, PathGuardResult } from "./types.js";
 
 const PRIVATE_KEY_EXTENSIONS = new Set([".pem", ".key", ".p12", ".pfx"]);
@@ -50,14 +51,6 @@ const SYSTEM_DENY_PREFIXES = [
 	"/Library/",
 	"/var/",
 ];
-
-function stripNullAndNormalize(text: string): string {
-	return text.replace(/\0/g, "").normalize("NFKC");
-}
-
-function withTrailingSlash(path: string): string {
-	return path.endsWith("/") ? path : `${path}/`;
-}
 
 function startsWithPathPrefix(path: string, prefix: string): boolean {
 	return path === prefix || path.startsWith(withTrailingSlash(prefix));

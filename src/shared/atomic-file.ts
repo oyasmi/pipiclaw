@@ -8,7 +8,6 @@ export function createAtomicTempPath(path: string): string {
 }
 
 export interface WriteFileAtomicallyOptions {
-	tempPath?: string;
 	/**
 	 * `fchmod` the temp file to the existing target's permission bits before renaming over it, so
 	 * an atomic overwrite of an executable file does not silently strip its `x` bit (spec 044,
@@ -28,11 +27,9 @@ async function existingMode(path: string): Promise<number | undefined> {
 export async function writeFileAtomically(
 	path: string,
 	content: string | Buffer,
-	optionsOrTempPath: WriteFileAtomicallyOptions | string = {},
+	options: WriteFileAtomicallyOptions = {},
 ): Promise<void> {
-	const options: WriteFileAtomicallyOptions =
-		typeof optionsOrTempPath === "string" ? { tempPath: optionsOrTempPath } : optionsOrTempPath;
-	const tempPath = options.tempPath ?? createAtomicTempPath(path);
+	const tempPath = createAtomicTempPath(path);
 	const dir = dirname(path);
 	await mkdir(dir, { recursive: true });
 	try {
@@ -75,20 +72,20 @@ export async function writeFileAtomically(
  * called from a sync event handler) — write-temp-then-rename still beats a direct
  * `writeFileSync`, since a crash mid-write can no longer truncate the target in place.
  */
-export function writeFileAtomicallySync(path: string, content: string | Buffer, tempPath?: string): void {
-	const resolvedTempPath = tempPath ?? createAtomicTempPath(path);
+export function writeFileAtomicallySync(path: string, content: string | Buffer): void {
+	const tempPath = createAtomicTempPath(path);
 	const dir = dirname(path);
 	mkdirSync(dir, { recursive: true });
 	try {
 		if (typeof content === "string") {
-			writeFileSync(resolvedTempPath, content, "utf-8");
+			writeFileSync(tempPath, content, "utf-8");
 		} else {
-			writeFileSync(resolvedTempPath, content);
+			writeFileSync(tempPath, content);
 		}
-		renameSync(resolvedTempPath, path);
+		renameSync(tempPath, path);
 	} catch (error) {
 		try {
-			unlinkSync(resolvedTempPath);
+			unlinkSync(tempPath);
 		} catch {}
 		throw error;
 	}

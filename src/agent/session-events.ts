@@ -4,7 +4,7 @@ import * as log from "../log.js";
 import type { MemoryLifecycle } from "../memory/lifecycle.js";
 import { truncate } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
-import type { UsageTotals } from "../shared/types.js";
+import { addUsage, type UsageTotals } from "../shared/types.js";
 import type { SubAgentToolDetails } from "../subagents/tool.js";
 import { describeToolCall } from "../tools/presentation.js";
 import {
@@ -32,7 +32,7 @@ import {
 	isToolExecutionUpdateEvent,
 	isTurnEndEvent,
 } from "./type-guards.js";
-import type { PendingTool, RunLogContext, RunQueue, RunState } from "./types.js";
+import type { AssistantUsage, PendingTool, RunLogContext, RunQueue, RunState } from "./types.js";
 
 export interface SessionEventHandlerContext {
 	ctx: ChannelContext;
@@ -70,54 +70,10 @@ function isWorkspaceSkillWrite(
 }
 
 function mergeSubAgentUsage(totalUsage: UsageTotals, details: SubAgentToolDetails): void {
-	totalUsage.input += details.usage.input;
-	totalUsage.output += details.usage.output;
-	totalUsage.cacheRead += details.usage.cacheRead;
-	totalUsage.cacheWrite += details.usage.cacheWrite;
-	totalUsage.total += details.usage.total;
-	totalUsage.cost.input += details.usage.cost.input;
-	totalUsage.cost.output += details.usage.cost.output;
-	totalUsage.cost.cacheRead += details.usage.cost.cacheRead;
-	totalUsage.cost.cacheWrite += details.usage.cost.cacheWrite;
-	totalUsage.cost.total += details.usage.cost.total;
+	addUsage(totalUsage, details.usage);
 }
 
-function addUsage(
-	target: UsageTotals,
-	usage: {
-		input: number;
-		output: number;
-		cacheRead: number;
-		cacheWrite: number;
-		total?: number;
-		totalTokens?: number;
-		cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-	},
-): void {
-	target.input += usage.input;
-	target.output += usage.output;
-	target.cacheRead += usage.cacheRead;
-	target.cacheWrite += usage.cacheWrite;
-	target.total += usage.total ?? usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-	target.cost.input += usage.cost.input;
-	target.cost.output += usage.cost.output;
-	target.cost.cacheRead += usage.cost.cacheRead;
-	target.cost.cacheWrite += usage.cost.cacheWrite;
-	target.cost.total += usage.cost.total;
-}
-
-function mergeAssistantUsage(
-	runState: RunState,
-	usage: NonNullable<Extract<unknown, unknown>> & {
-		input: number;
-		output: number;
-		cacheRead: number;
-		cacheWrite: number;
-		total?: number;
-		totalTokens?: number;
-		cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-	},
-): void {
+function mergeAssistantUsage(runState: RunState, usage: AssistantUsage): void {
 	// totalUsage stays the console-summary tally (assistant + sub-agents).
 	// assistantUsage is the ledger's assistant-only "turn" tally.
 	addUsage(runState.totalUsage, usage);

@@ -18,6 +18,15 @@ export class OperationTimeoutError extends Error {
 	}
 }
 
+/** A delay that never keeps the process alive on its own — every background-loop backoff and
+ * budget wait in the codebase wants this, not a bare `setTimeout` promise. */
+export function sleepUnref(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, ms);
+		timer.unref?.();
+	});
+}
+
 export async function withTimeout<T>(operation: string, timeoutMs: number, run: () => Promise<T>): Promise<T> {
 	if (!(timeoutMs > 0)) {
 		return run();
