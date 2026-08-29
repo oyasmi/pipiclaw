@@ -14,12 +14,12 @@ import { errorMessage } from "../shared/text-utils.js";
 
 const ALLOWED_SUB_AGENT_TOOLS = ["read", "grep", "bash", "edit", "write", "web_search", "web_fetch"] as const;
 const DEFAULT_SUB_AGENT_TOOLS = ["read", "bash"] as const;
-const DEFAULT_MAX_TURNS = 24;
-const DEFAULT_MAX_TOOL_CALLS = 48;
-const DEFAULT_MAX_WALL_TIME_SEC = 300;
+const DEFAULT_MAX_TURNS = 32;
+const DEFAULT_MAX_TOOL_CALLS = 96;
+const DEFAULT_MAX_WALL_TIME_SEC = 600;
 const DEFAULT_BASH_TIMEOUT_SEC = 120;
 /** External runs have no turn/tool-call budget (D5); wall time is their only lever. */
-const DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC = 1800;
+const DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC = 3600;
 const MAX_SUB_AGENT_TASK_CHARS = 12000;
 const MAX_SUB_AGENT_SYSTEM_PROMPT_CHARS = 16000;
 const ALLOWED_CONTEXT_MODES = ["isolated", "contextual"] as const;
@@ -55,7 +55,7 @@ export const SUB_AGENT_EFFORT_PRESETS = {
 		maxWallTimeSec: DEFAULT_MAX_WALL_TIME_SEC,
 		bashTimeoutSec: DEFAULT_BASH_TIMEOUT_SEC,
 	},
-	deep: { maxTurns: 48, maxToolCalls: 96, maxWallTimeSec: 900, bashTimeoutSec: 180 },
+	deep: { maxTurns: 64, maxToolCalls: 160, maxWallTimeSec: 1800, bashTimeoutSec: 300 },
 } as const;
 
 export type SubAgentEffort = keyof typeof SUB_AGENT_EFFORT_PRESETS;

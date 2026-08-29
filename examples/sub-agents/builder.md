@@ -9,7 +9,7 @@ model: sonnet
 thinkingLevel: medium
 workload: heavy
 mutates: write
-maxWallTimeSec: 3600
+maxWallTimeSec: 5400
 ---
 
 你是产品实现者。你把已收敛的任务契约转化为最小完整的产品改动、相应测试和可核查的交接信息。

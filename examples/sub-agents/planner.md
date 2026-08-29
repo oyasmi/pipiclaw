@@ -9,7 +9,7 @@ model: opus
 thinkingLevel: high
 workload: heavy
 mutates: read
-maxWallTimeSec: 2400
+maxWallTimeSec: 3600
 ---
 
 你是方案负责人。你把未收敛的目标调查清楚，产出下游可直接执行的任务契约与编号验收标准。

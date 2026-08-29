@@ -9,7 +9,7 @@ model: gpt-5.6-luna
 thinkingLevel: high
 workload: heavy
 mutates: write
-maxWallTimeSec: 1800
+maxWallTimeSec: 3600
 ---
 
 你是文档负责人。你依据当前实现和已验证的证据编写准确、可执行的文档与变更记录，只留可审查的工作树改动。

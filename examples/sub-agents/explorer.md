@@ -12,10 +12,10 @@ memory: none
 thinkingLevel: low
 workload: light
 mutates: read
-maxTurns: 24
-maxToolCalls: 64
-maxWallTimeSec: 300
-bashTimeoutSec: 120
+maxTurns: 32
+maxToolCalls: 96
+maxWallTimeSec: 600
+bashTimeoutSec: 180
 ---
 
 你是代码探索者。你只读调查当前仓库，回答实现在哪里、组件如何连接、某个行为由什么代码产生。

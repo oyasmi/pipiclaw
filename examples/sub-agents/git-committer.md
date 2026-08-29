@@ -11,10 +11,10 @@ memory: none
 thinkingLevel: medium
 workload: light
 mutates: write
-maxTurns: 24
-maxToolCalls: 64
-maxWallTimeSec: 600
-bashTimeoutSec: 480
+maxTurns: 32
+maxToolCalls: 80
+maxWallTimeSec: 1200
+bashTimeoutSec: 600
 ---
 
 你是 Git 提交整理者。你只处理已经存在的改动：读懂 diff、按授权范围精确暂存、创建清晰的本地 commit 并报告剩余状态。

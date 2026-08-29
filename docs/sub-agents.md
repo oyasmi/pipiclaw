@@ -106,10 +106,10 @@ thinkingLevel: medium
 paths:
   - src/
   - test/
-maxTurns: 24
-maxToolCalls: 48
-maxWallTimeSec: 300
-bashTimeoutSec: 120
+maxTurns: 32
+maxToolCalls: 96
+maxWallTimeSec: 600
+bashTimeoutSec: 180
 ---
 
 你是专注于正确性和回归风险的代码审查子代理。
@@ -130,7 +130,7 @@ model: sonnet
 thinkingLevel: medium
 workload: heavy
 mutates: write
-maxWallTimeSec: 3600
+maxWallTimeSec: 5400
 ---
 
 （正文即 system prompt，通过 `--append-system-prompt-file` 传入 claude）
@@ -152,9 +152,9 @@ maxWallTimeSec: 3600
 | `memory` | 否 | `isolated` 时为 `none`，`contextual` 时为 `relevant` | `none`、`session`、`relevant` |
 | `paths` | 否 | 空 | 建议优先关注的文件或目录 |
 | `thinkingLevel` | 否 | `medium`（与主代理默认推理档一致） | `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；内置路径会按模型能力 clamp 到最近的可用档 |
-| `maxTurns` | 否 | `24` | 最大 assistant 轮数 |
-| `maxToolCalls` | 否 | `48` | 最大工具调用次数 |
-| `maxWallTimeSec` | 否 | `300` | 最大总执行时长，秒；超过 120s 的部分会异步化，见下文"同步宽限窗口" |
+| `maxTurns` | 否 | `32` | 最大 assistant 轮数 |
+| `maxToolCalls` | 否 | `96` | 最大工具调用次数。上限受子代理自身上下文约束——内置路径没有压缩机制，单次工具输出上限 50KB，调得过高会把"预算触顶仍有收敛回合"的软失败换成上下文溢出的硬失败 |
+| `maxWallTimeSec` | 否 | `600` | 最大总执行时长，秒；超过 120s 的部分会异步化，见下文"同步宽限窗口" |
 | `bashTimeoutSec` | 否 | `120` | 子代理内 bash 命令默认超时，秒 |
 | `workload` | 否 | `light` | `light` 或 `heavy`，只影响系统提示里的目录分组展示 |
 | `mutates` | 否 | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；决定是否参与 workspace 写锁。`purpose=verify` 允许 `write`，但这类验证会取独占写锁并将 attestation 标为 `advisory`。推定只看 `write`/`edit`，**不看 `bash`**——含 `bash` 却未显式声明 `mutates` 的角色会在 discovery 里收到一条提示（该角色可通过 bash 写入但未声明 mutates），角色仍会加载，行为不变，只是可见。inline 委派没有角色文件可写，因此 `subagent_inline` 调用参数上也接受同名 `mutates`（见下文"调用参数"），显式声明时优先于推定 |
@@ -173,7 +173,7 @@ maxWallTimeSec: 3600
 | `workload` | 否 | `heavy` | 同内置 |
 | `shell` | 否 | `false` | 仅 `exec` 可设为 `true`，此时整条 `command` 交给 `/bin/sh -lc`；结构化 harness 使用时会被 discovery 驳回，因为它会绕过协议 argv 组装 |
 | `env` | 否 | 空 | 追加或覆盖继承自 pipiclaw 进程的环境变量 |
-| `maxWallTimeSec` | 否 | `1800` | 外部角色只有这一个执行预算——没有轮数/工具调用次数上限，因为那些概念对外部 CLI 不适用 |
+| `maxWallTimeSec` | 否 | `3600` | 外部角色只有这一个执行预算——没有轮数/工具调用次数上限，因为那些概念对外部 CLI 不适用 |
 | `contextMode` | 否 | `isolated` | 同内置词表，见下文"`contextMode` 与 `memory`" |
 | `memory` | 否 | **`none`，不跟随 `contextMode`** | 与内置不同：内置的 `contextual` 隐含 `relevant`，外部永远默认 `none`，必须显式声明才会把会话/记忆内容发给外部进程 |
 | `paths` | 否 | 空 | 同内置 |
@@ -224,8 +224,8 @@ maxWallTimeSec: 3600
 | `effort` | maxTurns | maxToolCalls | maxWallTimeSec | bashTimeoutSec |
 |---|---|---|---|---|
 | `quick` | 8 | 16 | 120 | 60 |
-| `standard` | 24 | 48 | 300 | 120 |
-| `deep` | 48 | 96 | 900 | 180 |
+| `standard` | 32 | 96 | 600 | 120 |
+| `deep` | 64 | 160 | 1800 | 300 |
 
 `standard` 与内置默认值完全一致，所以不传 `effort` 时行为不变。
 
@@ -468,7 +468,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 - 三者均为 `workload: heavy`。planner 使用 `--permission-mode plan` + `mutates: read`；builder / builder-hard 才使用 `--dangerously-skip-permissions` + `mutates: write`
 - `model` 原样透传（`opus` / `sonnet`）；claude-code harness 自动把 `model` 和 `thinkingLevel` 翻译为 `--model` 与 `--effort`
-- `maxWallTimeSec` 按职责给足（2400～5400）——它们是重活，不指望在同步宽限窗口内返回
+- `maxWallTimeSec` 按职责给足（3600～5400）——它们是重活，不指望在同步宽限窗口内返回
 - 两个写角色并行派发时必须使用不同的 `workingDirectory`，否则第二个会被工作区写锁拒绝
 
 **Scout**（外部，codex-cli，只读）—— 单点事实查询：

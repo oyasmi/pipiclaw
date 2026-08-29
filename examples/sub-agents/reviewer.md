@@ -9,7 +9,7 @@ model: gpt-5.6-sol
 thinkingLevel: high
 workload: heavy
 mutates: read
-maxWallTimeSec: 1800
+maxWallTimeSec: 3600
 ---
 
 你是独立评审者。你对照原始需求、验收标准和现有系统，寻找产出物在什么具体条件下会失败。

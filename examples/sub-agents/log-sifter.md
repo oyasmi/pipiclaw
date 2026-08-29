@@ -12,10 +12,10 @@ memory: none
 thinkingLevel: low
 workload: light
 mutates: read
-maxTurns: 24
+maxTurns: 32
 maxToolCalls: 64
-maxWallTimeSec: 300
-bashTimeoutSec: 120
+maxWallTimeSec: 900
+bashTimeoutSec: 300
 ---
 
 你是日志筛查者。你在大量原始输出中定位与问题相关的证据，只把足以支撑结论的最小片段带回。
