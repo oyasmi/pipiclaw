@@ -159,13 +159,21 @@ export function createE2ETestHome(overrides?: {
  * `auth.json` is copied — there is no credential concept in this layer, so it runs
  * on any machine, offline. `mock-fallback` exists for the 429→fallback case (A22).
  */
-export function createDeterministicHome(opts: { mockBaseUrl: string; homeDir?: string }): E2ETestHome {
+export function createDeterministicHome(opts: {
+	mockBaseUrl: string;
+	homeDir?: string;
+	/** Written to `security.json`; omitted entirely when not provided (guard uses its defaults). */
+	securityJson?: unknown;
+}): E2ETestHome {
 	const homeDir = opts.homeDir ?? mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
 	mkdirSync(homeDir, { recursive: true });
 	const workspaceDir = join(homeDir, "workspace");
 	const channelConfigPath = join(homeDir, "channel.json");
 	writeDefaultWorkspace(workspaceDir);
 
+	if (opts.securityJson !== undefined) {
+		writeJson(join(homeDir, "security.json"), opts.securityJson);
+	}
 	writeJson(join(homeDir, "auth.json"), {});
 	writeJson(join(homeDir, "models.json"), {
 		providers: {

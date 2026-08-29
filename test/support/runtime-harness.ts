@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { dirname, join } from "path";
 import type { DingTalkBot, DingTalkEvent } from "../../src/runtime/dingtalk.js";
 import { waitFor } from "../e2e/helpers/wait.js";
@@ -137,6 +138,8 @@ export interface DeterministicHarness {
 	sendUserMessageNoWait(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
 	/** Deliver an internal wake (task driver / job / delegation), not a user message. */
 	sendWake(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
+	/** Run an idle runtime command directly (`/project`, `/tasks` …), the TUI/busy path. */
+	runCommand(name: string, args?: string): Promise<string>;
 	/** Wait until no channel queue has pending/in-flight work and the runner is idle. */
 	waitForIdle(): Promise<void>;
 	/** Wait for a captured delivery matching `predicate`. */
@@ -151,6 +154,11 @@ export interface DeterministicHarness {
 	lastMainTurnRequest(): CapturedRequest | undefined;
 	/** Throws if the provider saw a request no route matched. Call in `afterEach`. */
 	assertNoUnmatchedRequests(): void;
+	/** When `projectAccess` was requested: two real dirs registered as allowed project roots. */
+	projectRootA?: string;
+	projectRootB?: string;
+	/** Contents of the security audit log, or "" if it does not exist yet. */
+	readAuditLog(): string;
 	shutdown(): Promise<void>;
 }
 
@@ -165,9 +173,26 @@ export async function createDeterministicHarness(options?: {
 	registerSidecarDefaults?: boolean;
 	/** Transport default for a plain message that arrives mid-turn. Default: "followup". */
 	busyMessageDefault?: "steer" | "followup";
+	/** Configure `security.json` projectAccess with two allowed roots (A19 / `/project`). */
+	projectAccess?: boolean;
 }): Promise<DeterministicHarness> {
 	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
-	const home = createDeterministicHome({ mockBaseUrl: model.baseUrl });
+	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
+	let projectRootA: string | undefined;
+	let projectRootB: string | undefined;
+	let securityJson: unknown;
+	if (options?.projectAccess) {
+		projectRootA = realpathSync(mkdtempSync(join(preHome, "proj-a-")));
+		projectRootB = realpathSync(mkdtempSync(join(preHome, "proj-b-")));
+		securityJson = {
+			pathGuard: { enabled: true },
+			commandGuard: { enabled: true },
+			networkGuard: { enabled: false },
+			audit: { logBlocked: true },
+			projectAccess: { defaultRoot: projectRootA, allowedRoots: [projectRootA, projectRootB] },
+		};
+	}
+	const home = createDeterministicHome({ mockBaseUrl: model.baseUrl, homeDir: preHome, securityJson });
 	const channelId = options?.channelId ?? "dm_e2e_user";
 	const channelDir = join(home.workspaceDir, getChannelDirName(channelId));
 	const deliveries: CapturedDelivery[] = [];
@@ -254,6 +279,11 @@ export async function createDeterministicHarness(options?: {
 			await runtime.handler.handleEvent(buildEvent(text, overrides), bot as never, true);
 			await waitForIdle();
 		},
+		async runCommand(name, args = ""): Promise<string> {
+			// The direct idle-runtime-command path the TUI and the busy DingTalk switch use
+			// (`handler.runRuntimeCommand`) — no turn is reserved for it.
+			return runtime.handler.runRuntimeCommand(buildEvent(`/${name} ${args}`) as never, name as never, args);
+		},
 		waitForIdle,
 		waitForDelivery: (predicate) =>
 			waitFor("delivery", () => deliveries.find(predicate) ?? null, { timeoutMs: 30_000, intervalMs: 25 }),
@@ -264,6 +294,12 @@ export async function createDeterministicHarness(options?: {
 		modelRequestCount: () => model.requests.length,
 		mainTurnRequests: () => model.requests.filter((r) => r.isMainTurn),
 		lastMainTurnRequest: () => [...model.requests].reverse().find((r) => r.isMainTurn),
+		projectRootA,
+		projectRootB,
+		readAuditLog(): string {
+			const path = join(home.workspaceDir, ".pipiclaw", "security.log");
+			return existsSync(path) ? readFileSync(path, "utf-8") : "";
+		},
 		assertNoUnmatchedRequests(): void {
 			const bad = model.unmatched();
 			if (bad.length > 0) {

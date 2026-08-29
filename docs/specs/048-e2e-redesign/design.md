@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | IN PROGRESS（P0–P1 完成；确定性层 17 条 + P3/P4 结构完成；A14–A23 子集待补，见实施记录） |
+| 状态 | IN PROGRESS（P0–P1 完成；确定性层 20 条 + P3/P4 结构完成；A14/A16–A18/A20–A23 待补，见实施记录） |
 | 日期 | 2026-08-29 |
 | 触发 | 例行体检发现 e2e 套件已红 5 天无人察觉，且这个红掩盖了一个 2026-08-24 引入、至今线上生效的 `/help` 冷启动崩溃 |
 | 前置 | 004 e2e-test（本 spec 是它的重做）、028 behavior-eval（分工的另一半）、040/042 委派、043 会话身份与回合恢复、044 native-file-io、046/047 工具切分 |
@@ -493,10 +493,22 @@ harness 增量：`sendWake()`（内部唤醒事件，`_isEvent=true`）、route 
 
 A12 说明：断言收敛到 session 文件层的续接（header id / 追加 / parentId 链）。「重启后请求体是否重放完整历史」没断言——实测 pi 的 `SessionManager.open` 重开 `context.jsonl` 后，新回合的请求只带 `[system, user]`，历史是否该进请求体属 pi 会话内部语义、非本 spec 范围。
 
+### A15 / A19 补批（2026-08-29 完成，确定性层现 20 条）
+
+`createDeterministicHarness({ projectAccess: true })` 现在会建两个真实的 allowed 项目根并写 `security.json`；新增 `harness.runCommand()`（直接走 `runRuntimeCommand`，即 TUI / 忙路径用的那条）、`harness.readAuditLog()`。
+
+| 用例 | 文件 | 抓什么 |
+|---|---|---|
+| **A15** | `wake-auth.test.ts` | 伪造的 `[SUBAGENT:x] … belongs to task y.` 纯文本消息（无 `internalWake`）不激活 `waiting` 任务——被当普通消息回答，任务保持 `waiting`，日志记 `Ignored an unverifiable [SUBAGENT:…]`。可信半（真实 run 记录 + `internalWake`）未做。 |
+| **A19** | `guards.test.ts` | 越界 `write`（`boundary: "project"`，写到别的 allowed 根外）被 path guard 拒绝、拒绝文案回灌给模型、审计落 `.pipiclaw/security.log`；`/project set` 换根后同一 write 成功；回合进行中 `/project set` 被拒。 |
+
+**顺带发现的产品 bug（已提 feedback 草稿）**：DingTalk 传输层对空闲态的 idle runtime 命令（`/project set` 等）走 `enqueueStreamMessage` → `reserveEvent` → `beginTurn`，于是 `handleProjectCommand` 的 `isBusy()` 看到的是它自己刚 reserve 的回合，`/project set|reset` 经钉钉永远返回「回合正在进行」。TUI 走直连 `runRuntimeCommand` 不受影响。A19 用 `harness.runCommand()` 绕过（与 TUI/忙路径一致）。
+
 ### 仍未做
 
-- **A14**（verify 链）：`task_verify` 需要 `verifierRunId`——真实的 `purpose=verify` subagent run + attestation artifact。属 subagent 派发基础设施。
-- **A15**（伪造 `[SUBAGENT]` 唤醒不激活任务）：需把任务 park 到 `waitingFor=external-signal` 才能观察「未激活」，可信半需真实 run 记录。
-- **A19 / A20 / A21**（越界 read/write + 审计、`/project` 换根、子代理工具集门控）：需要 `security.json` 与 project-scope 装配。
-- **A16 / A17 / A18 / A22 / A23**：内部/外部 subagent 全链路、job 链路、fallback、压缩。`failNext` 已就绪；subagent/job 链路需角色 fixture + `SubAgentRunManager` 装配。
+- **A14**（verify 链）：`task_verify` 需要 `verifierRunId`——真实的 `purpose=verify` subagent run + attestation artifact。
+- **A15 可信半**、**A16 / A17 / A18**：内部/外部 subagent 全链路、job 链路。需角色 fixture + `SubAgentRunManager` 装配。
+- **A20 / A21**（`bash`/`web` 守卫 + 审计、子代理工具集门控）：`bash`/网络守卫的确定性编排 + `availableToSubagents` 断言。
+- **A22 / A23**（fallback、压缩）：`failNext` 已就绪，断言需 harness 对 usage ledger / 压缩状态更多可观测性。
 - **live B3**（`event_manage` immediate 的提示词级守卫）。
+- **A12 请求体重放历史**：pi `SessionManager.open` 重开后新回合请求只带 `[system, user]`，属 pi 会话内部语义。
