@@ -4,6 +4,16 @@ import { canRunE2E } from "../support/setup.js";
 
 const describeE2E = canRunE2E() ? describe : describe.skip;
 
+// Built-in slash commands (/help, /tasks, unknown /xxx) resolve entirely in the
+// transport + runner layers and never reach the model, so these assertions are
+// already deterministic. They exist to lock two things spec 048 flagged:
+//   F2  — /help as the very first message for a fresh channel used to crash
+//         (`this.session` undefined while initializeSession was still running).
+//   F1  — the old assertions pinned literal renderer strings, so an intentional
+//         copy edit turned the suite red and masked the F2 crash for 5 days.
+// Mutation check (F2): revert channel-runner's `await this.ensureSessionReady()`
+// in handleBuiltinCommand and the first `/help` case goes red with
+// "命令执行失败：Cannot read properties of undefined (reading 'promptTemplates')".
 describeE2E("E2E: built-in commands", () => {
 	let harness: E2ERuntimeHarness;
 
@@ -15,24 +25,34 @@ describeE2E("E2E: built-in commands", () => {
 		await harness.shutdown();
 	});
 
-	it("handles /help via the runtime layer", async () => {
+	it("answers /help sent as the very first message without crashing (F2 regression)", async () => {
 		await harness.sendUserMessage("/help");
 
-		const finalText =
-			[...harness.deliveries].reverse().find((delivery) => delivery.method === "sendPlain")?.text ?? "";
-		expect(finalText).toContain("斜杠命令");
-		expect(finalText).toContain("/steer <消息>");
+		const reply = [...harness.deliveries].reverse().find((delivery) => delivery.method === "sendPlain")?.text ?? "";
+		expect(reply.length).toBeGreaterThan(0);
+		expect(reply).not.toContain("命令执行失败");
 	});
 
-	// Parity check with the TUI --print regression in tui.test.ts: /tasks resolves
-	// zero-LLM on the DingTalk transport too. The exact deterministic renderer
-	// string is the signal that this never reached the model.
-	it("handles /tasks via the runtime layer without invoking the model", async () => {
-		const deliveriesBefore = harness.deliveries.length;
+	it("rejects an unknown slash command as the first message without invoking the model", async () => {
+		const before = harness.deliveries.length;
+		await harness.sendUserMessage("/modle");
+
+		const created = harness.deliveries.slice(before);
+		expect(created).toHaveLength(1);
+		expect(created[0]?.method).toBe("sendPlain");
+		expect(created[0]?.text ?? "").not.toContain("命令执行失败");
+	});
+
+	it("resolves /tasks in the runner layer with a single deterministic reply", async () => {
+		const before = harness.deliveries.length;
 		await harness.sendUserMessage("/tasks");
 
-		const newDeliveries = harness.deliveries.slice(deliveriesBefore);
-		expect(newDeliveries).toHaveLength(1);
-		expect(newDeliveries[0]).toMatchObject({ method: "sendPlain", text: "# 任务\n\n当前没有进行中的任务。" });
+		const created = harness.deliveries.slice(before);
+		expect(created).toHaveLength(1);
+		expect(created[0]).toMatchObject({ method: "sendPlain" });
+		// Report shape, not a copy of the string: an empty-state report leads with the
+		// bold headline (AGENTS.md "Command Reply Conventions" §3/§6). A model paraphrase
+		// of "/tasks" would not.
+		expect(created[0]?.text?.startsWith("**任务**")).toBe(true);
 	});
 });

@@ -244,6 +244,13 @@ export class ChannelRunner implements AgentRunner {
 	private readonly memoryActivityRecorder: MemoryActivityRecorder;
 	private readonly sessionResourceGate: SessionResourceGate;
 	private readonly sessionReady: Promise<void>;
+	/**
+	 * Flips true only once `initializeSession` has fully assigned `this.session`
+	 * and loaded its resources. Synchronous dispatch-path callers (`isKnownSlashCommand`)
+	 * must not touch `this.session` before this — the model runtime takes hundreds
+	 * of ms to build and the first message can arrive first (spec 048 F2).
+	 */
+	private sessionInitialized = false;
 	private sessionRuntime!: AgentSessionRuntime;
 	private sessionUnsubscribe?: () => void;
 	private subAgentDiscovery!: SubAgentDiscoveryResult;
@@ -806,6 +813,10 @@ export class ChannelRunner implements AgentRunner {
 
 	async handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void> {
 		try {
+			// `/help` and `/context` read `this.session` (prompt templates, active model).
+			// The session runtime is built asynchronously after construction, so a command
+			// that lands before it is ready would otherwise hit a TypeError (spec 048 F2).
+			await this.ensureSessionReady();
 			switch (command.name) {
 				case "help":
 					await this.sendCommandReply(ctx, this.renderHelpWithDiscovery(command.args), "help");
@@ -863,6 +874,13 @@ export class ChannelRunner implements AgentRunner {
 			)
 		) {
 			return true;
+		}
+		// Synchronous dispatch-path call: before the session runtime finishes building,
+		// fall back to the static catalog + skills only. Misclassifying a prompt template
+		// as "unknown" for the first few hundred ms after a runner is created is far
+		// cheaper than throwing on the dispatch main path (spec 048 F2/D7).
+		if (!this.sessionInitialized) {
+			return false;
 		}
 		return this.session.promptTemplates.some((template) => template.name.toLowerCase() === name);
 	}
@@ -1290,6 +1308,7 @@ export class ChannelRunner implements AgentRunner {
 
 		await this.reloadSessionResources();
 		await this.bindSessionExtensions();
+		this.sessionInitialized = true;
 	}
 
 	private async reloadSessionResources(): Promise<void> {
