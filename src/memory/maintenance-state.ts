@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, rmdir, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { getChannelDirName } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { parseLocalTime } from "../shared/local-time.js";
@@ -56,8 +57,28 @@ export function getMemoryMaintenanceStateDir(appHomeDir: string): string {
 	return join(appHomeDir, "state", "memory");
 }
 
+/**
+ * One flat file per channel, named by the same escaped form directories use.
+ *
+ * The id goes into a filename here, and a DingTalk group id routinely contains `/`, so writing
+ * it raw put the file in a subdirectory of the state dir — `group_a/b==.json`. Reads and writes
+ * agreed, so nothing was lost, but {@link getMemoryMaintenanceStateDir}'s only listing walks the
+ * top level: every such channel was invisible to the scheduler's state-derived discovery.
+ */
 export function getMemoryMaintenanceStatePath(appHomeDir: string, channelId: string): string {
-	return join(getMemoryMaintenanceStateDir(appHomeDir), `${channelId}.json`);
+	return join(getMemoryMaintenanceStateDir(appHomeDir), `${getChannelDirName(channelId)}.json`);
+}
+
+/**
+ * Where a pre-escaping runtime put the same channel's state. Only differs for ids containing
+ * `/`, and only matters until the next write moves the state to its canonical path — but the
+ * state carries maintenance cadence and transcript cursors, so dropping it would silently
+ * re-run structural maintenance and re-scan the transcript for every affected group.
+ */
+function legacyStatePath(appHomeDir: string, channelId: string): string | undefined {
+	return getChannelDirName(channelId) === channelId
+		? undefined
+		: join(getMemoryMaintenanceStateDir(appHomeDir), `${channelId}.json`);
 }
 
 function createDefaultState(channelId: string): MemoryMaintenanceState {
@@ -133,11 +154,22 @@ export async function readMemoryMaintenanceState(
 		return normalizeState(channelId, JSON.parse(raw) as unknown);
 	} catch (error) {
 		if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-			return createDefaultState(channelId);
+			const legacy = await readLegacyState(appHomeDir, channelId);
+			return legacy ?? createDefaultState(channelId);
 		}
 		const message = errorMessage(error);
 		log.logWarning(`[${channelId}] Failed to read memory maintenance state; rebuilding defaults`, message);
 		return createDefaultState(channelId);
+	}
+}
+
+async function readLegacyState(appHomeDir: string, channelId: string): Promise<MemoryMaintenanceState | undefined> {
+	const path = legacyStatePath(appHomeDir, channelId);
+	if (!path) return undefined;
+	try {
+		return normalizeState(channelId, JSON.parse(await readFile(path, "utf-8")) as unknown);
+	} catch {
+		return undefined; // absent or unreadable ⇒ the caller falls back to defaults, as before
 	}
 }
 
@@ -151,6 +183,16 @@ export async function updateMemoryMaintenanceState(
 		const current = await readMemoryMaintenanceState(appHomeDir, channelId);
 		const next = normalizeState(channelId, update(current));
 		await writeFileAtomically(path, `${JSON.stringify(next, null, 2)}\n`);
+		// The canonical file now holds everything the legacy one did; leaving it would keep a
+		// stale copy around forever, since reads only fall back when the canonical file is gone.
+		const legacy = legacyStatePath(appHomeDir, channelId);
+		if (legacy) {
+			await unlink(legacy).catch(() => {});
+			// ...along with the directory the raw id created, which `rmdir` leaves alone if
+			// another channel's state still lives there. Tidying only; failure changes nothing.
+			const strayDir = dirname(legacy);
+			if (strayDir !== getMemoryMaintenanceStateDir(appHomeDir)) await rmdir(strayDir).catch(() => {});
+		}
 		return next;
 	});
 }

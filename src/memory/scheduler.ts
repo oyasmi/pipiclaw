@@ -6,7 +6,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 // The channel index is a runtime-owned workspace artifact; the scheduler is one of its two
 // read-only consumers (see `discoverWorkspaceChannelIds`).
 import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
-import { isChannelId } from "../channel/channel-paths.js";
+import { dedupeChannelIdsByDirectory, isChannelId } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -108,6 +108,11 @@ async function mightAnyMaintenanceJobBeDue(input: {
 	return structural.allowed;
 }
 
+/**
+ * Channels with a maintenance state file — the ones nobody has spoken to since this process
+ * started and which have no workspace directory yet. Like a directory listing, these names are
+ * the escaped form of the id, so they are the least authoritative of the three sources below.
+ */
 async function listStateChannels(appHomeDir: string): Promise<string[]> {
 	try {
 		const entries = await readdir(getMemoryMaintenanceStateDir(appHomeDir), { withFileTypes: true });
@@ -120,24 +125,22 @@ async function listStateChannels(appHomeDir: string): Promise<string[]> {
 	}
 }
 
+/**
+ * Every channel maintenance should visit, most authoritative source first: the live runner map
+ * holds real ids, `CHANNELS.md` does too, and the two directory listings can only offer escaped
+ * names. Deduplicating by directory keeps one entry per channel, so a group whose id contains
+ * `/` is maintained once — under an id the rest of the runtime can act on — rather than twice.
+ */
 export async function discoverMemoryMaintenanceChannels(input: {
 	appHomeDir: string;
 	workspaceDir: string;
 	knownChannelIds?: Iterable<string>;
 }): Promise<string[]> {
-	const channels = new Set<string>();
-	for (const channelId of input.knownChannelIds ?? []) {
-		if (isChannelId(channelId)) {
-			channels.add(channelId);
-		}
-	}
-	for (const channelId of await discoverWorkspaceChannelIds(input.workspaceDir)) {
-		channels.add(channelId);
-	}
-	for (const channelId of await listStateChannels(input.appHomeDir)) {
-		channels.add(channelId);
-	}
-	return Array.from(channels).sort();
+	return dedupeChannelIdsByDirectory([
+		...[...(input.knownChannelIds ?? [])].filter(isChannelId),
+		...(await discoverWorkspaceChannelIds(input.workspaceDir)),
+		...(await listStateChannels(input.appHomeDir)),
+	]);
 }
 
 function normalizeMaxConcurrentChannels(value: number): number {

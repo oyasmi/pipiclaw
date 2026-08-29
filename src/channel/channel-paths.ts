@@ -30,6 +30,26 @@ export function getChannelDir(baseDir: string, channelId: string): string {
 	return join(baseDir, getChannelDirName(channelId));
 }
 
+/**
+ * Collapse ids that name the same channel directory, keeping the first spelling offered.
+ *
+ * Background workers assemble their channel list from several sources, and only some of them
+ * store a real id: `CHANNELS.md` and the live runner map do, while a directory listing (of the
+ * workspace, or of the maintenance state dir) can only report the *escaped* name, which cannot
+ * be turned back into the id it came from. Left alone, one channel then appears twice — once
+ * under its real id and once under a spelling no transport can deliver to — and every unit of
+ * work for it runs twice. Callers pass their sources most-authoritative-first; this keeps that
+ * spelling and drops the rest.
+ */
+export function dedupeChannelIdsByDirectory(channelIds: Iterable<string>): string[] {
+	const byDirectory = new Map<string, string>();
+	for (const channelId of channelIds) {
+		const dirName = getChannelDirName(channelId);
+		if (!byDirectory.has(dirName)) byDirectory.set(dirName, channelId);
+	}
+	return Array.from(byDirectory.values()).sort();
+}
+
 export function ensureChannelDir(baseDir: string, channelId: string): string {
 	const channelDir = getChannelDir(baseDir, channelId);
 	mkdirSync(channelDir, { recursive: true });

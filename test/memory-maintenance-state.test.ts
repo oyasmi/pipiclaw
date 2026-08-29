@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createChannelMemoryQueue } from "../src/memory/channel-maintenance-queue.js";
@@ -134,6 +135,53 @@ describe("memory maintenance state", () => {
 		await expect(readMemoryMaintenanceState(appHomeDir, "dm_1")).resolves.toMatchObject({
 			lastCheckpointAt: "2026-04-19T00:40:00.000Z",
 			lastCheckpointEntryId: "entry-7",
+		});
+	});
+
+	it("keeps a slash-bearing channel's state in one flat, listable file", async () => {
+		const appHomeDir = createTempDir();
+		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+
+		await updateMemoryMaintenanceState(appHomeDir, channelId, (state) => ({ ...state, dirty: true }));
+
+		// Written raw, the id turned into a subdirectory (`group_.../eDInUw==.json`), which the
+		// scheduler's top-level listing of this directory never saw.
+		const stateDir = join(appHomeDir, "state", "memory");
+		expect(await readdir(stateDir)).toEqual(["group_cidYDhGqxhJOzS7VDv__eDInUw==.json"]);
+		expect(getMemoryMaintenanceStatePath(appHomeDir, channelId)).toBe(
+			join(stateDir, "group_cidYDhGqxhJOzS7VDv__eDInUw==.json"),
+		);
+	});
+
+	it("adopts state left at the pre-escaping path instead of restarting the cadence", async () => {
+		const appHomeDir = createTempDir();
+		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+		const legacyPath = join(appHomeDir, "state", "memory", `${channelId}.json`);
+		await mkdir(join(legacyPath, ".."), { recursive: true });
+		await writeFile(
+			legacyPath,
+			JSON.stringify({
+				channelId,
+				dirty: true,
+				lastStructuralMaintenanceAt: "2026-04-19T00:40:00.000Z",
+				lastSessionRefreshedEntryId: "entry-9",
+			}),
+			"utf-8",
+		);
+
+		// Losing this would re-run the heaviest LLM maintenance and re-scan the transcript.
+		await expect(readMemoryMaintenanceState(appHomeDir, channelId)).resolves.toMatchObject({
+			lastStructuralMaintenanceAt: "2026-04-19T00:40:00.000Z",
+			lastSessionRefreshedEntryId: "entry-9",
+		});
+
+		await updateMemoryMaintenanceState(appHomeDir, channelId, (state) => ({ ...state, dirty: false }));
+
+		expect(existsSync(getMemoryMaintenanceStatePath(appHomeDir, channelId))).toBe(true);
+		expect(existsSync(legacyPath)).toBe(false); // migrated, not duplicated
+		expect(existsSync(join(legacyPath, ".."))).toBe(false); // and no stray channel-shaped dir
+		await expect(readMemoryMaintenanceState(appHomeDir, channelId)).resolves.toMatchObject({
+			lastStructuralMaintenanceAt: "2026-04-19T00:40:00.000Z",
 		});
 	});
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
 import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
-import { getChannelDir, getChannelDirName, isChannelId } from "../channel/channel-paths.js";
+import { dedupeChannelIdsByDirectory, getChannelDir, isChannelId } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
@@ -68,28 +68,17 @@ const FUTILE_WAKE_LIMIT = 3;
 const MAX_WAKES_PER_CYCLE = 500;
 
 /**
- * Channels this driver should scan, keyed by the directory they actually live in.
- *
- * A directory name is the escaped form of an id (`/` → `__`) and cannot be turned back into
- * one, so workspace discovery reports an unindexed directory under its escaped name. When the
- * same channel is also known by its raw id — from the runner cache, or from `CHANNELS.md` —
- * both spellings would otherwise survive and every task in that directory would be dispatched
- * twice, once under an id no transport can deliver to. Known ids win because they are the real
- * identity; a discovered directory only stands in for a channel nothing else has named.
+ * Channels this driver should scan. Live ids come first so a channel discovered on disk under
+ * its escaped directory name never displaces the real id the runner map already knows.
  */
 export async function discoverTaskChannels(
 	workspaceDir: string,
 	knownChannelIds: Iterable<string> = [],
 ): Promise<string[]> {
-	const byDirectory = new Map<string, string>();
-	for (const channelId of knownChannelIds) {
-		if (isChannelId(channelId)) byDirectory.set(getChannelDirName(channelId), channelId);
-	}
-	for (const channelId of await discoverWorkspaceChannelIds(workspaceDir)) {
-		const dirName = getChannelDirName(channelId);
-		if (!byDirectory.has(dirName)) byDirectory.set(dirName, channelId);
-	}
-	return Array.from(byDirectory.values()).sort();
+	return dedupeChannelIdsByDirectory([
+		...[...knownChannelIds].filter(isChannelId),
+		...(await discoverWorkspaceChannelIds(workspaceDir)),
+	]);
 }
 
 function attemptKey(channelId: string, taskId: string): string {

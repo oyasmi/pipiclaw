@@ -58,6 +58,24 @@ describe("memory maintenance scheduler", () => {
 		).resolves.toEqual(["dm_known", "dm_workspace", "group_state"]);
 	});
 
+	it("visits a slash-bearing group once, under the id the runtime can act on", async () => {
+		// The same channel is reachable three ways, and two of them can only name it by its
+		// escaped directory form. Without collapsing them, maintenance ran up to three times per
+		// tick on one channel — twice under an id no transport or runner map can resolve.
+		const root = createTempDir();
+		const workspaceDir = join(root, "workspace");
+		const appHomeDir = join(root, "app");
+		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+		const escaped = "group_cidYDhGqxhJOzS7VDv__eDInUw==";
+		mkdirSync(join(workspaceDir, escaped), { recursive: true });
+		mkdirSync(join(appHomeDir, "state", "memory"), { recursive: true });
+		writeFileSync(join(appHomeDir, "state", "memory", `${escaped}.json`), "{}\n", "utf-8");
+
+		await expect(
+			discoverMemoryMaintenanceChannels({ appHomeDir, workspaceDir, knownChannelIds: [channelId] }),
+		).resolves.toEqual([channelId]);
+	});
+
 	it("does not request runtime context when disabled", async () => {
 		const root = createTempDir();
 		const getRuntimeContext = vi.fn(async () => null);
