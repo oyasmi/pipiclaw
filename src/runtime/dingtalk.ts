@@ -1362,6 +1362,17 @@ export class DingTalkBot implements MediaSender {
 			...(channelName ? { channelName } : {}),
 		};
 
+		await this.routeInboundEvent(event);
+	}
+
+	/**
+	 * Command / busy / `/new` routing for one inbound event, ending in `enqueueStreamMessage`
+	 * for a normal message. Split out of `onStreamMessage` so the deterministic e2e harness
+	 * (spec 048) can exercise the real transport queue and busy semantics without a socket.
+	 */
+	async routeInboundEvent(event: DingTalkEvent): Promise<void> {
+		const { channelId } = event;
+		const content = event.text;
 		const builtInCommand = parseBuiltInCommand(content);
 		const isSlashCommand = content.trim().startsWith("/");
 
@@ -1471,6 +1482,14 @@ export class DingTalkBot implements MediaSender {
 		this.queues.delete(channelId);
 		this.discardCard(channelId);
 		return dropped;
+	}
+
+	/** Test seam (spec 048): true when no channel queue has pending or in-flight work. */
+	allChannelQueuesIdle(): boolean {
+		for (const queue of this.queues.values()) {
+			if (!queue.isIdle()) return false;
+		}
+		return true;
 	}
 
 	private getQueue(channelId: string): ChannelQueue {

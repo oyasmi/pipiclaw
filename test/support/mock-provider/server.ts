@@ -60,10 +60,14 @@ export async function startMockProvider(options?: { registerDefaults?: boolean }
 
 		const body = await readJsonBody(req);
 		const view = parseRequest(url, body);
+		// Record arrival immediately so a held request is still observable to the test
+		// (matchedRoute is filled in once it resolves).
+		const record: CapturedRequest = { ...view, matchedRoute: null, at: Date.now() };
+		requests.push(record);
 
 		const failure = script.takeFailure();
 		if (failure) {
-			requests.push({ ...view, matchedRoute: `__fail_${failure.status}`, at: Date.now() });
+			record.matchedRoute = `__fail_${failure.status}`;
 			writeError(res, failure.status, {
 				error: {
 					message: `mock provider injected failure (${failure.status})`,
@@ -78,7 +82,7 @@ export async function startMockProvider(options?: { registerDefaults?: boolean }
 		await script.waitForHolds(view);
 
 		const resolved = script.resolve(view);
-		requests.push({ ...view, matchedRoute: resolved?.route ?? null, at: Date.now() });
+		record.matchedRoute = resolved?.route ?? "__unmatched";
 
 		if (!resolved) {
 			const summary = (view.isMainTurn ? view.lastUserText : view.systemPrompt).slice(0, 200);
@@ -115,7 +119,7 @@ export async function startMockProvider(options?: { registerDefaults?: boolean }
 		port,
 		requests,
 		script,
-		unmatched: () => requests.filter((r) => r.matchedRoute === null),
+		unmatched: () => requests.filter((r) => r.matchedRoute === "__unmatched"),
 		close: () =>
 			new Promise<void>((resolve, reject) => {
 				server.closeAllConnections?.();

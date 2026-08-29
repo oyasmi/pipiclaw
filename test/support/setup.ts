@@ -184,7 +184,7 @@ export function createDeterministicHome(opts: { mockBaseUrl: string; homeDir?: s
 	writeJson(join(homeDir, "settings.json"), {
 		defaultProvider: "e2e-mock",
 		defaultModel: "mock-main",
-		memoryRecall: { enabled: true, rerankWithModel: true },
+		memoryRecall: { enabled: true, rerankWithModel: false },
 		sessionMemory: { enabled: true },
 		memoryMaintenance: { enabled: true },
 	});
