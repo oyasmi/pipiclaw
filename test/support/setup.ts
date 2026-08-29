@@ -164,6 +164,8 @@ export function createDeterministicHome(opts: {
 	homeDir?: string;
 	/** Written to `security.json`; omitted entirely when not provided (guard uses its defaults). */
 	securityJson?: unknown;
+	/** Written to `tools.json`; omitted when not provided. */
+	toolsJson?: unknown;
 }): E2ETestHome {
 	const homeDir = opts.homeDir ?? mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
 	mkdirSync(homeDir, { recursive: true });
@@ -173,6 +175,9 @@ export function createDeterministicHome(opts: {
 
 	if (opts.securityJson !== undefined) {
 		writeJson(join(homeDir, "security.json"), opts.securityJson);
+	}
+	if (opts.toolsJson !== undefined) {
+		writeJson(join(homeDir, "tools.json"), opts.toolsJson);
 	}
 	writeJson(join(homeDir, "auth.json"), {});
 	writeJson(join(homeDir, "models.json"), {

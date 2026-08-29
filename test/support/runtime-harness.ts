@@ -175,12 +175,15 @@ export async function createDeterministicHarness(options?: {
 	busyMessageDefault?: "steer" | "followup";
 	/** Configure `security.json` projectAccess with two allowed roots (A19 / `/project`). */
 	projectAccess?: boolean;
+	/** Enable the network guard and the `web_*` tools (A20). */
+	web?: boolean;
 }): Promise<DeterministicHarness> {
 	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
 	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
 	let projectRootA: string | undefined;
 	let projectRootB: string | undefined;
-	let securityJson: unknown;
+	let securityJson: Record<string, unknown> | undefined;
+	let toolsJson: unknown;
 	if (options?.projectAccess) {
 		projectRootA = realpathSync(mkdtempSync(join(preHome, "proj-a-")));
 		projectRootB = realpathSync(mkdtempSync(join(preHome, "proj-b-")));
@@ -192,7 +195,17 @@ export async function createDeterministicHarness(options?: {
 			projectAccess: { defaultRoot: projectRootA, allowedRoots: [projectRootA, projectRootB] },
 		};
 	}
-	const home = createDeterministicHome({ mockBaseUrl: model.baseUrl, homeDir: preHome, securityJson });
+	if (options?.web) {
+		securityJson = {
+			pathGuard: { enabled: true },
+			commandGuard: { enabled: true },
+			networkGuard: { enabled: true, allowedHosts: [], allowedCidrs: [] },
+			audit: { logBlocked: true },
+			...securityJson,
+		};
+		toolsJson = { tools: { web: { enable: true } } };
+	}
+	const home = createDeterministicHome({ mockBaseUrl: model.baseUrl, homeDir: preHome, securityJson, toolsJson });
 	const channelId = options?.channelId ?? "dm_e2e_user";
 	const channelDir = join(home.workspaceDir, getChannelDirName(channelId));
 	const deliveries: CapturedDelivery[] = [];

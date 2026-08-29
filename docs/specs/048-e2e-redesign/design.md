@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | IN PROGRESS（P0–P1 完成；确定性层 20 条 + P3/P4 结构完成；A14/A16–A18/A20–A23 待补，见实施记录） |
+| 状态 | IN PROGRESS（P0–P1 完成；确定性层 23 条 + P3/P4 结构完成；A14/A16–A18/A22–A23 待补，见实施记录） |
 | 日期 | 2026-08-29 |
 | 触发 | 例行体检发现 e2e 套件已红 5 天无人察觉，且这个红掩盖了一个 2026-08-24 引入、至今线上生效的 `/help` 冷启动崩溃 |
 | 前置 | 004 e2e-test（本 spec 是它的重做）、028 behavior-eval（分工的另一半）、040/042 委派、043 会话身份与回合恢复、044 native-file-io、046/047 工具切分 |
@@ -504,11 +504,19 @@ A12 说明：断言收敛到 session 文件层的续接（header id / 追加 / p
 
 **顺带发现的产品 bug（已提 feedback 草稿）**：DingTalk 传输层对空闲态的 idle runtime 命令（`/project set` 等）走 `enqueueStreamMessage` → `reserveEvent` → `beginTurn`，于是 `handleProjectCommand` 的 `isBusy()` 看到的是它自己刚 reserve 的回合，`/project set|reset` 经钉钉永远返回「回合正在进行」。TUI 走直连 `runRuntimeCommand` 不受影响。A19 用 `harness.runCommand()` 绕过（与 TUI/忙路径一致）。
 
+### A20 / A21 补批（2026-08-29 完成，确定性层现 23 条）
+
+harness 新增 `createDeterministicHarness({ web: true })`（写 `tools.json` 开 `web_*` + `security.json` 开 networkGuard）；`createDeterministicHome` 支持 `toolsJson`。
+
+| 用例 | 文件 | 抓什么 |
+|---|---|---|
+| **A20** | `command-web-guards.test.ts` | `bash rm -rf` 命中命令守卫（`destructive-file-op`）→ 拒绝回灌 + 审计落盘、目录未删；`web_fetch http://169.254.169.254/…` 命中网络守卫（`blocked-host`）→ 拒绝 + 审计；`grep` 的 `glob: "*.ts; touch pwned"` 经 `shellEscape` → `touch` 不执行、grep 正常返回（beta.3 修复全栈锁） |
+| **A21** | `subagent-toolset.test.ts` | `subagent_inline` 派发的内部子代理，其回合请求的 `tools` 数组不含 `send_media` / `job` / `subagent` / `subagent_inline`（直接在 mock 收到的请求体上断言）。顺带证明 harness 能派发内部子代理。 |
+
 ### 仍未做
 
 - **A14**（verify 链）：`task_verify` 需要 `verifierRunId`——真实的 `purpose=verify` subagent run + attestation artifact。
-- **A15 可信半**、**A16 / A17 / A18**：内部/外部 subagent 全链路、job 链路。需角色 fixture + `SubAgentRunManager` 装配。
-- **A20 / A21**（`bash`/`web` 守卫 + 审计、子代理工具集门控）：`bash`/网络守卫的确定性编排 + `availableToSubagents` 断言。
+- **A15 可信半**、**A16 / A17 / A18**：外部 subagent 全链路、job 链路、内部 subagent 结算/带外通知/lease。内部派发 harness 已就绪（见 A21），剩下的是结算与通知断言 + 外部 `exec` harness。
 - **A22 / A23**（fallback、压缩）：`failNext` 已就绪，断言需 harness 对 usage ledger / 压缩状态更多可观测性。
 - **live B3**（`event_manage` immediate 的提示词级守卫）。
 - **A12 请求体重放历史**：pi `SessionManager.open` 重开后新回合请求只带 `[system, user]`，属 pi 会话内部语义。
