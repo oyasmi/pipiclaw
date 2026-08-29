@@ -20,6 +20,7 @@
 | 让它记住约定、找回历史或忘掉旧信息 | [记忆](./memory.md) |
 | 建立提醒、周期检查或跨会话长期任务 | [事件与任务](./events-and-tasks.md) |
 | 把团队流程沉淀成可复用 skill | [Workspace Skills](./skills.md) |
+| 想让它持续产出、而不是每次等你动一下 | [使用杠杆](./leverage/README.md) |
 
 ## 我要长期运行和治理它
 
@@ -48,6 +49,7 @@
 - `runtime-mechanisms.md` 负责解释配置背后的运行行为。
 - `architecture.md` 负责解释代码位置和组件关系。
 - `sub-agents.md` 是智能体委派的用户级权威文档。
+- `leverage/` 负责“会用之后怎么用出更大产出”的观点与实践，不定义行为契约。
 - `security.md` 是权限、隔离与授权边界的用户级权威文档。
 
 `docs/` 面向人，允许跳读、示例和完整参考；`src/playbooks/` 面向 agent，只有小型目录常驻系统提示，正文按需读取。不要把 runtime playbook 复制进 workspace 的 `AGENTS.md` 或 skill：升级会更新内置机制，副本不会同步。
