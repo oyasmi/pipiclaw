@@ -4,6 +4,16 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
 ## [Unreleased]
 
+## [0.9.2-beta.6] - 2026-08-30
+
+### Added
+
+- Inbound image support for DingTalk messages (spec 049), closing both failure shapes of the 2026-08-30 incident: a `richText` image+text message used to drop the image with no log line at all (so the model truthfully answered "I received no image"), and a pure `picture` message was discarded with an `empty message` warn. Images now travel the full path: the transport exchanges each `downloadCode` through the two-step `messageFiles/download` API, sniffs the MIME type from magic bytes, and persists the file under `<channelDir>/inbox/`; the runner base64-encodes it into the turn as a native SDK image part (the same `prompt`/`steer` pathway `read` already used for local files), gated on the resolved model's declared input capability — re-checked after a model-fallback switch, so a vision turn that falls back to a text-only model gets a visible "image excluded" notice carrying the on-disk path instead of the provider's silent `"(see attached image)"` substitution. Downloads run on a per-channel ingest queue outside turns, so a slow download cannot be overtaken in delivery order by a later text-only message, and a busy channel queues the image rather than rejecting it as empty. Text keeps `[图片N]` markers where each image sat. No failure is silent: download failure, unrecognized format, or the 5MB cap (deliberately the same ceiling `read` applies to on-disk images) all leave a graceful marker plus the persisted file for later inspection. `inbox/` intentionally has no cleanup job — retention over cleanup; a slash command combined with an image in one richText payload remains out of scope.
+
+### Changed
+
+- Structure-preserving quality pass (net +839/−825, tests untouched in behavior). Seven families of duplicated implementations collapsed into single shared ones (enum parsers in subagent discovery, markdown section scans, config loaders, small utilities moved to `src/shared`, usage accumulators). The two longest functions were split: `dispatchSubAgentRun` (628 lines) into external/internal halves with a shared prelude, and the 533-line inline `DingTalkHandler` literal inside `createRuntimeContext` into `createDingTalkHandler(deps)`, with late-declared mutable closures passed as getters so no stale snapshot is captured. Fake config layers removed: `getTaskDigestSettings`/`getTaskDriverSettings` replaced by direct constants, dead `atomic-file` params dropped, empty wrappers removed, the `agent/index.ts` barrel deleted. Legacy task migration (#17) is marked for retirement at v0.9.3 — header note and pointers only, no code deleted yet.
+
 ## [0.9.2-beta.5] - 2026-08-29
 
 ### Changed

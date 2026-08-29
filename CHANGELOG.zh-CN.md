@@ -4,6 +4,16 @@
 
 ## [未发布]
 
+## [0.9.2-beta.6] - 2026-08-30
+
+### 新增
+
+- 钉钉消息的入站图片支持（spec 049），关闭 2026-08-30 事故的两种失败形态：`richText` 图文混排消息此前会把图片静默丢弃（连一行日志都没有，于是模型如实回答"没有收到图片"）；纯 `picture` 消息则整条被丢弃，只留一行 `empty message` 警告。现在图片走完整链路：传输层用两步 `messageFiles/download` API 兑换每个 `downloadCode`，按魔数嗅探 MIME 类型，把文件落盘到 `<channelDir>/inbox/`；runner 将其 base64 编码后作为原生 SDK image part 送入回合（与 `read` 读取本地图片所用的 `prompt`/`steer` 通路相同），并以解析出的模型声明的能力为门禁——模型 fallback 切换后会重新检查，因此视觉回合回退到纯文本模型时会收到一条可见的"图片已排除"提示并附上落盘路径，而不是 provider 层静默替换成 `"(see attached image)"`。下载在回合外的每 channel 摄取队列上执行，慢下载不会被后到的纯文本消息在投递顺序上反超，忙碌中的 channel 会排队图片而不是当作空消息拒绝。文字在每张图片的原位保留 `[图片N]` 标记。任何失败都不静默：下载失败、无法识别的格式、或 5MB 上限（刻意与 `read` 对本地图片的内联上限同值）都会留下优雅的标记和已落盘的文件供事后查验。`inbox/` 有意不设清理任务——保留优先于清理；斜杠命令与图片同发于一条 richText 的组合仍在范围之外。
+
+### 变更
+
+- 保持结构等价的质量整理（净 +839/−825，测试行为不变）。七族重复实现收敛为单一共享实现（子代理发现中的枚举解析、markdown 章节扫描、配置加载器、迁入 `src/shared` 的小工具、用量累加器）。拆分了两个最长的函数：`dispatchSubAgentRun`（628 行）拆为外置/内置两半并共享前置逻辑；`createRuntimeContext` 内 533 行的内联 `DingTalkHandler` 字面量拆为 `createDingTalkHandler(deps)`，晚声明的可变闭包以 getter 传入，不会捕获过期快照。删除伪配置层：`getTaskDigestSettings`/`getTaskDriverSettings` 由直接常量取代，去掉 `atomic-file` 的死参数，移除空封装，删除 `agent/index.ts` barrel。遗留任务迁移（#17）标记为 v0.9.3 退役——只加了头部说明和指引，暂不删代码。
+
 ## [0.9.2-beta.5] - 2026-08-29
 
 ### 变更
