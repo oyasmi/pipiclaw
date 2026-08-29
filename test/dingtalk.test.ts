@@ -3,14 +3,17 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent, DingTalkHandler } from "../src/runtime/dingtalk.js";
+import { parseInboundMessage } from "../src/runtime/inbound-media.js";
 
 const { axiosMock, fakeClientState } = vi.hoisted(() => {
 	const post = vi.fn();
 	const put = vi.fn();
+	const get = vi.fn();
 	const defaults = { proxy: true };
 	const instance = {
 		post,
 		put,
+		get,
 		defaults,
 		isAxiosError: (error: unknown) => Boolean((error as { isAxiosError?: boolean })?.isAxiosError),
 	};
@@ -126,8 +129,8 @@ function createBot(
 }
 
 type PrivateBotApi = {
-	extractContent(data: Record<string, unknown>): string;
 	onStreamMessage(data: Record<string, unknown>): Promise<void>;
+	downloadMessageFile(downloadCode: string): Promise<{ data: Buffer } | null>;
 	getAccessToken(): Promise<string | null>;
 	setConversationMeta(
 		channelId: string,
@@ -172,6 +175,7 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	axiosMock.post.mockReset();
 	axiosMock.put.mockReset();
+	axiosMock.get.mockReset();
 	axiosMock.defaults.proxy = true;
 	fakeClientState.connectImpl = null;
 	fakeClientState.disconnectImpl = null;
@@ -184,19 +188,19 @@ afterEach(() => {
 });
 
 describe("dingtalk", () => {
+	// `parseInboundMessage` itself (text/picture/richText shapes, marker placement) is covered by
+	// its own unit tests in test/inbound-media.test.ts (spec 049) — this only checks the transport
+	// still wires plain text and richText-without-images through unchanged.
 	it("extracts plain text and richText content", () => {
-		const { bot } = createBot();
-		const privateApi = getPrivateApi(bot);
-
-		expect(privateApi.extractContent({ text: { content: " hello " } })).toBe("hello");
+		expect(parseInboundMessage({ text: { content: " hello " } })).toEqual({ text: "hello", downloadCodes: [] });
 		expect(
-			privateApi.extractContent({
+			parseInboundMessage({
 				content: {
 					richText: [{ text: "Hello" }, { text: " " }, { text: "World" }],
 				},
 			}),
-		).toBe("Hello World");
-		expect(privateApi.extractContent({ msgtype: "empty" })).toBe("");
+		).toEqual({ text: "Hello World", downloadCodes: [] });
+		expect(parseInboundMessage({ msgtype: "empty" })).toEqual({ text: "", downloadCodes: [] });
 	});
 
 	it("routes authorized messages to DM and group channels and persists metadata", async () => {
@@ -542,6 +546,218 @@ describe("dingtalk", () => {
 		await expect(first).resolves.toBe("token-2");
 		await expect(second).resolves.toBe("token-2");
 		expect(axiosMock.post).toHaveBeenCalledTimes(2);
+	});
+
+	// spec 049: inbound image download + persistence. `parseInboundMessage`'s own shape/marker
+	// coverage lives in test/inbound-media.test.ts; these exercise the network round-trip and the
+	// per-channel serialization the transport wraps around it.
+	describe("inbound image attachments", () => {
+		const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+
+		function setCachedToken(bot: DingTalkBot): void {
+			(bot as unknown as { accessToken: string | null; tokenExpiry: number }).accessToken = "cached-token";
+			(bot as unknown as { accessToken: string | null; tokenExpiry: number }).tokenExpiry = Date.now() / 1000 + 3600;
+		}
+
+		function mockDownload(fileBytes: Buffer): void {
+			axiosMock.post.mockResolvedValueOnce({ data: { downloadUrl: "https://example.invalid/file" } });
+			axiosMock.get.mockResolvedValueOnce({ data: fileBytes });
+		}
+
+		it("downloads a picture message, persists it, and attaches it to the event", async () => {
+			const persistInboundImage = vi.fn(
+				async (_channelId: string, image: { data: Buffer; mimeType: string | null }) => ({
+					path: "/workspace/dm_staff_1/inbox/image-1.jpg",
+					mimeType: image.mimeType ?? "application/octet-stream",
+					byteSize: image.data.byteLength,
+				}),
+			);
+			const { bot, handler } = createBot({ persistInboundImage });
+			setCachedToken(bot);
+			mockDownload(JPEG_BYTES);
+			const privateApi = getPrivateApi(bot);
+
+			await privateApi.onStreamMessage({
+				msgtype: "picture",
+				senderStaffId: "staff_1",
+				senderNick: "Alice",
+				conversationId: "conv_dm",
+				conversationType: "1",
+				content: { downloadCode: "code-1" },
+			});
+			await flushMicrotasks();
+
+			expect(persistInboundImage).toHaveBeenCalledWith("dm_staff_1", {
+				data: expect.any(Buffer),
+				mimeType: "image/jpeg",
+			});
+			expect(handler.handleEvent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					text: "[图片1]",
+					images: [expect.objectContaining({ mimeType: "image/jpeg" })],
+				}),
+				bot,
+			);
+			// The credential exchange must name the message's own downloadCode, not a stray value.
+			expect(axiosMock.post).toHaveBeenCalledWith(
+				expect.stringContaining("/v1.0/robot/messageFiles/download"),
+				expect.objectContaining({ downloadCode: "code-1" }),
+				expect.anything(),
+			);
+		});
+
+		it("keeps the rest of the message when one image fails to download", async () => {
+			const { bot, handler } = createBot();
+			setCachedToken(bot);
+			axiosMock.post.mockResolvedValueOnce({ data: { downloadUrl: "https://example.invalid/file" } });
+			axiosMock.get.mockRejectedValueOnce(new Error("network down"));
+			const privateApi = getPrivateApi(bot);
+
+			await privateApi.onStreamMessage({
+				msgtype: "picture",
+				senderStaffId: "staff_1",
+				senderNick: "Alice",
+				conversationId: "conv_dm",
+				conversationType: "1",
+				content: { downloadCode: "code-1" },
+			});
+			await flushMicrotasks();
+
+			expect(handler.handleEvent).toHaveBeenCalledWith(expect.objectContaining({ text: "[图片1：接收失败]" }), bot);
+			const sentEvent = vi.mocked(handler.handleEvent).mock.calls[0]?.[0];
+			expect(sentEvent && "images" in sentEvent).toBe(false);
+		});
+
+		it("persists an unrecognized format but excludes it from the model-facing images list", async () => {
+			const persistInboundImage = vi.fn(
+				async (_channelId: string, image: { data: Buffer; mimeType: string | null }) => ({
+					path: "/workspace/dm_staff_1/inbox/image-1.bin",
+					mimeType: "application/octet-stream",
+					byteSize: image.data.byteLength,
+					unsupportedFormat: true,
+				}),
+			);
+			const { bot, handler } = createBot({ persistInboundImage });
+			setCachedToken(bot);
+			mockDownload(Buffer.from("this is not an image"));
+			const privateApi = getPrivateApi(bot);
+
+			await privateApi.onStreamMessage({
+				msgtype: "picture",
+				senderStaffId: "staff_1",
+				senderNick: "Alice",
+				conversationId: "conv_dm",
+				conversationType: "1",
+				content: { downloadCode: "code-1" },
+			});
+			await flushMicrotasks();
+
+			expect(persistInboundImage).toHaveBeenCalledWith("dm_staff_1", { data: expect.any(Buffer), mimeType: null });
+			expect(handler.handleEvent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					text: "[图片1：格式不支持，已保存]",
+					images: [expect.objectContaining({ unsupportedFormat: true })],
+				}),
+				bot,
+			);
+		});
+
+		it("never overtakes a download in the channel's delivery order (spec 049 D3)", async () => {
+			const persistInboundImage = vi.fn(
+				async (_channelId: string, image: { data: Buffer; mimeType: string | null }) => ({
+					path: "/workspace/dm_staff_1/inbox/image-1.jpg",
+					mimeType: image.mimeType ?? "application/octet-stream",
+					byteSize: image.data.byteLength,
+				}),
+			);
+			const { bot, handler } = createBot({ persistInboundImage });
+			setCachedToken(bot);
+			const privateApi = getPrivateApi(bot);
+
+			// The first message's file download hangs until released below; a second, download-free
+			// message on the *same* channel arrives while it is still in flight.
+			const download: { release?: () => void } = {};
+			axiosMock.post.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						download.release = () => resolve({ data: { downloadUrl: "https://example.invalid/file" } });
+					}),
+			);
+			axiosMock.get.mockResolvedValueOnce({ data: JPEG_BYTES });
+
+			const firstMessage = privateApi.onStreamMessage({
+				msgtype: "picture",
+				senderStaffId: "staff_1",
+				senderNick: "Alice",
+				conversationId: "conv_dm",
+				conversationType: "1",
+				content: { downloadCode: "code-1" },
+			});
+			await flushMicrotasks();
+			expect(handler.handleEvent).not.toHaveBeenCalled();
+
+			// Fire-and-forget, exactly like the production socket callback (`handleRawMessage`
+			// never awaits `onStreamMessage`) — the second message's own ingestion job is chained
+			// behind the first's on the same channel, so awaiting it here would itself hang until
+			// the first message's download is released below.
+			const secondMessage = privateApi.onStreamMessage({
+				text: { content: "second, no image" },
+				senderStaffId: "staff_1",
+				senderNick: "Alice",
+				conversationId: "conv_dm",
+				conversationType: "1",
+			});
+			await flushMicrotasks();
+
+			// Without the per-channel ingestion queue (spec 049 D3), the second message — which
+			// needs no download — would already have reached handleEvent here.
+			expect(handler.handleEvent).not.toHaveBeenCalled();
+
+			download.release?.();
+			await firstMessage;
+			await secondMessage;
+			await flushMicrotasks();
+
+			expect(handler.handleEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({ text: "[图片1]" }), bot);
+			expect(handler.handleEvent).toHaveBeenNthCalledWith(
+				2,
+				expect.objectContaining({ text: "second, no image" }),
+				bot,
+			);
+		});
+
+		it("reflects in-flight downloads in allChannelQueuesIdle()", async () => {
+			const { bot } = createBot();
+			setCachedToken(bot);
+			const privateApi = getPrivateApi(bot);
+
+			const download: { release?: () => void } = {};
+			axiosMock.post.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						download.release = () => resolve({ data: { downloadUrl: "https://example.invalid/file" } });
+					}),
+			);
+			axiosMock.get.mockResolvedValueOnce({ data: JPEG_BYTES });
+
+			const pending = privateApi.onStreamMessage({
+				msgtype: "picture",
+				senderStaffId: "staff_1",
+				senderNick: "Alice",
+				conversationId: "conv_dm",
+				conversationType: "1",
+				content: { downloadCode: "code-1" },
+			});
+			await flushMicrotasks();
+
+			expect(bot.allChannelQueuesIdle()).toBe(false);
+
+			download.release?.();
+			await pending;
+			await flushMicrotasks();
+
+			expect(bot.allChannelQueuesIdle()).toBe(true);
+		});
 	});
 
 	it("persists and reloads conversation metadata from disk, then reclaims idle per-channel caches", () => {
