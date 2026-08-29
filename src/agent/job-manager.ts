@@ -696,6 +696,8 @@ interface JobRuntimeConfig {
 	/** Root of the per-channel record directories (`<jobsStateDir>/<channelId>/`). */
 	jobsStateDir?: string;
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
+	/** Sweep cadence override for the lazily-built channel managers (tests). */
+	sweepIntervalMs?: number;
 }
 
 let runtimeConfig: JobRuntimeConfig = {};
@@ -737,6 +739,7 @@ export function getChannelJobManager(channelId: string, executor: Executor): Cha
 		manager = new ChannelJobManager(channelId, executor, {
 			...(runtimeConfig.jobsStateDir ? { stateDir: join(runtimeConfig.jobsStateDir, channelId) } : {}),
 			...(runtimeConfig.dispatch ? { dispatch: runtimeConfig.dispatch } : {}),
+			...(runtimeConfig.sweepIntervalMs ? { sweepIntervalMs: runtimeConfig.sweepIntervalMs } : {}),
 		});
 		managers.set(channelId, manager);
 	}

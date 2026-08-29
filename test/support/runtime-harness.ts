@@ -177,6 +177,8 @@ export async function createDeterministicHarness(options?: {
 	projectAccess?: boolean;
 	/** Enable the network guard and the `web_*` tools (A20). */
 	web?: boolean;
+	/** Start background services (durable dispatch, task driver, job sweep) — A16/A17. */
+	services?: boolean;
 }): Promise<DeterministicHarness> {
 	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
 	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
@@ -241,12 +243,13 @@ export async function createDeterministicHarness(options?: {
 			paths,
 			dingtalkConfig,
 			registerSignalHandlers: false,
-			startServices: false,
+			startServices: options?.services ?? false,
+			jobSweepIntervalMs: options?.services ? 150 : undefined,
+			createEventsWatcher: () => ({ start() {}, stop() {} }),
 			createBot: (handler) => {
 				bot = new HarnessDingTalkBot(handler, dingtalkConfig as never, deliveries);
 				return bot as unknown as import("../../src/runtime/dingtalk.js").DingTalkBot;
 			},
-			createEventsWatcher: () => ({ start() {}, stop() {} }),
 		});
 	}
 	await boot();

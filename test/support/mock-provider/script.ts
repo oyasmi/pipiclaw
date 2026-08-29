@@ -135,8 +135,14 @@ export class Script {
 		};
 	}
 
-	failNext(def: { status: number; code?: string }): void {
-		this.failures.push(def);
+	/**
+	 * Queue `times` HTTP failures for the next matching requests. Pi retries a 429 up to
+	 * 3 times on its own, so a fallback test needs `times: 3` to exhaust that first.
+	 */
+	failNext(def: { status: number; code?: string; times?: number }): void {
+		for (let i = 0; i < (def.times ?? 1); i++) {
+			this.failures.push({ status: def.status, code: def.code });
+		}
 	}
 
 	/** Internal: block until every matching hold has been released. */

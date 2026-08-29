@@ -229,6 +229,8 @@ interface RuntimeContextOptions {
 	) => { start(): void; stop(): void; flush?(): Promise<void> };
 	createMemoryMaintenanceScheduler?: () => { start(): void; stop(): void };
 	memoryMaintenanceSchedulerIntervalMs?: number;
+	/** Background-job sweep cadence override (tests use a short one for timely completion wakes). */
+	jobSweepIntervalMs?: number;
 	createTaskDriver?: () => { start(): void; stop(): void; nudge?(): void };
 	/** Receives raw SDK session events after subscription, without changing runtime handling. */
 	observer?: (event: unknown, channelId: string) => void;
@@ -882,6 +884,7 @@ export async function createRuntimeContext(
 	configureJobRuntime({
 		jobsStateDir: join(options.paths.appHomeDir, "state", "jobs"),
 		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
+		...(options.jobSweepIntervalMs ? { sweepIntervalMs: options.jobSweepIntervalMs } : {}),
 	});
 	// Delegation runs get the same treatment (spec 040, D1/D7): persistence root, wake delivery,
 	// and the usage/archive authority, wired before any turn can start a run.

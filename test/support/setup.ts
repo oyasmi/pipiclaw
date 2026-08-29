@@ -197,6 +197,10 @@ export function createDeterministicHome(opts: {
 	writeJson(join(homeDir, "settings.json"), {
 		defaultProvider: "e2e-mock",
 		defaultModel: "mock-main",
+		fallbackModel: "e2e-mock/mock-fallback",
+		// No provider-retry backoff: an injected failure should surface immediately so
+		// timing stays deterministic and the suite stays fast (fallback still engages).
+		retry: { enabled: false },
 		memoryRecall: { enabled: true, rerankWithModel: false },
 		sessionMemory: { enabled: true },
 		memoryMaintenance: { enabled: true },

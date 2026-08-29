@@ -23,6 +23,9 @@ export class HarnessDingTalkBot extends DingTalkBot {
 		this.deliveries.push({ method, channelId, text, ts: Date.now() });
 	}
 
+	/** No socket in the deterministic harness. */
+	override async start(): Promise<void> {}
+
 	override async sendPlain(channelId: string, text: string): Promise<boolean> {
 		this.capture("sendPlain", channelId, text);
 		return true;

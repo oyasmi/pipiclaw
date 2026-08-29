@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | IN PROGRESS（P0–P1 完成；确定性层 23 条 + P3/P4 结构完成；A14/A16–A18/A22–A23 待补，见实施记录） |
+| 状态 | IN PROGRESS（P0–P1 完成；确定性层 27 条 + P3/P4 结构完成；A14/A15 可信半/A23 待补，见实施记录） |
 | 日期 | 2026-08-29 |
 | 触发 | 例行体检发现 e2e 套件已红 5 天无人察觉，且这个红掩盖了一个 2026-08-24 引入、至今线上生效的 `/help` 冷启动崩溃 |
 | 前置 | 004 e2e-test（本 spec 是它的重做）、028 behavior-eval（分工的另一半）、040/042 委派、043 会话身份与回合恢复、044 native-file-io、046/047 工具切分 |
@@ -513,10 +513,22 @@ harness 新增 `createDeterministicHarness({ web: true })`（写 `tools.json` �
 | **A20** | `command-web-guards.test.ts` | `bash rm -rf` 命中命令守卫（`destructive-file-op`）→ 拒绝回灌 + 审计落盘、目录未删；`web_fetch http://169.254.169.254/…` 命中网络守卫（`blocked-host`）→ 拒绝 + 审计；`grep` 的 `glob: "*.ts; touch pwned"` 经 `shellEscape` → `touch` 不执行、grep 正常返回（beta.3 修复全栈锁） |
 | **A21** | `subagent-toolset.test.ts` | `subagent_inline` 派发的内部子代理，其回合请求的 `tools` 数组不含 `send_media` / `job` / `subagent` / `subagent_inline`（直接在 mock 收到的请求体上断言）。顺带证明 harness 能派发内部子代理。 |
 
+### A16–A18 / A22 / B3 补批（2026-08-29 完成，确定性层现 27 条）
+
+harness 新增：`createDeterministicHarness({ services: true })`（起后台服务 + 把 job sweep 提速到 150ms，经新的 `jobSweepIntervalMs` bootstrap 选项 / `JobRuntimeConfig.sweepIntervalMs`）、`HarnessDingTalkBot.start()` no-op、`failNext({ times })`、det home 写 `fallbackModel` + `retry: { enabled: false }`（注入的失败立即冒头，不做 backoff）。
+
+| 用例 | 文件 | 抓什么 |
+|---|---|---|
+| **A16** | `subagent-chain.test.ts` | 内部写委派：run 记录落盘（`runtime: internal`、`status: completed`、`settledAt`）+ 工作区写 lease 释放（第二个写委派能跑） |
+| **A17** | `job-chain.test.ts` | `bash async` 分离执行 → 完成 → 唤醒频道，唤醒回合的请求体带 job 内联输出 |
+| **A18** | `external-run.test.ts` | `exec` harness 外部 run 分离持久化（`runtime: external`）→ daemon 重启后 `restoreAllSubAgentRuns` 重认领并收敛到终态（无需装 claude/codex） |
+| **A22** | `fallback.test.ts` | 主模型 429 → 切 `mock-fallback` → 回合仍完成（`__fail_429` on mock-main + mock-fallback 请求都在） |
+| **B3** | `live/event-guard.test.ts` | 真实模型被直接要求建 immediate 事件，最终没有 event 落盘 |
+
 ### 仍未做
 
 - **A14**（verify 链）：`task_verify` 需要 `verifierRunId`——真实的 `purpose=verify` subagent run + attestation artifact。
-- **A15 可信半**、**A16 / A17 / A18**：外部 subagent 全链路、job 链路、内部 subagent 结算/带外通知/lease。内部派发 harness 已就绪（见 A21），剩下的是结算与通知断言 + 外部 `exec` harness。
-- **A22 / A23**（fallback、压缩）：`failNext` 已就绪，断言需 harness 对 usage ledger / 压缩状态更多可观测性。
-- **live B3**（`event_manage` immediate 的提示词级守卫）。
+- **A15 可信半**：需 settled 的 `SubAgentRunManager` 记录 + `internalWake`。
+- **A16 带外 settled 通知 / 完成唤醒**：`subagent_inline` 阻塞式，通知在父回合还在等时被抑制；触发异步路径需要 hold 子回合超过 `DISPATCH_SETTLE_WAIT`（~40s），太慢。
+- **A23**（压缩）：pi 的 auto-compaction 只在 `_lastAssistantMessage` 上触发；mock 立即 400 走的是「error 事件」而非「errored assistant message_end」，不进 `_checkCompaction`。要复现得让 mock 发一个「流中途 error」并产生 errored assistant 消息——需要逆向 pi agent-core 的流处理。
 - **A12 请求体重放历史**：pi `SessionManager.open` 重开后新回合请求只带 `[system, user]`，属 pi 会话内部语义。
