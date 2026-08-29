@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunner } from "../src/agent/types.js";
+import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/runtime/app-home.js";
 import type { DingTalkBot, DingTalkConfig } from "../src/runtime/dingtalk.js";
 import { createFakeTurnState } from "./helpers/fake-turn-state.js";
@@ -116,7 +117,6 @@ describe("runtime stop handling", () => {
 		};
 		createRunnerMock.mockReturnValue(runner);
 
-		const { createRuntimeContext } = await import("../src/runtime/bootstrap.js");
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
 		const bot = new FakeTestBot();
@@ -198,7 +198,6 @@ describe("runtime stop handling", () => {
 		};
 		createRunnerMock.mockReturnValue(runner);
 
-		const { createRuntimeContext } = await import("../src/runtime/bootstrap.js");
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
 
@@ -281,7 +280,6 @@ describe("runtime stop handling", () => {
 		};
 		createRunnerMock.mockReturnValue(runner);
 
-		const { createRuntimeContext } = await import("../src/runtime/bootstrap.js");
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
 		const taskPath = join(paths.workspaceDir, "dm_tester", "tasks", "long-run.md");
@@ -368,7 +366,6 @@ describe("runtime stop handling", () => {
 		};
 		createRunnerMock.mockReturnValue(runner);
 
-		const { createRuntimeContext } = await import("../src/runtime/bootstrap.js");
 		const paths = createBootstrapPaths();
 		bootstrapAppHome(paths);
 

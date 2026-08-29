@@ -127,7 +127,17 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			},
 		});
 		await swept.restore();
-		await waitFor(() => swept.get("run-adopt")?.status !== "running" && dispatched.length === 1, 10_000);
+		await waitFor(
+			() => {
+				if (swept.get("run-adopt")?.status === "running" || dispatched.length !== 1) return false;
+				try {
+					return JSON.parse(readFileSync(recordPath, "utf-8")).wakeEnqueued === true;
+				} catch {
+					return false;
+				}
+			},
+			10_000,
+		);
 
 		expect(swept.get("run-adopt")?.status).toBe("failed");
 		expect(swept.get("run-adopt")?.failureReason).toContain("Wall time budget exceeded");

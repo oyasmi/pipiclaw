@@ -3,6 +3,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		environment: "node",
+		// Some tests exercise real child processes, Git repositories, fsync-backed writes, and
+		// network-shaped timers; keep enough headroom for those operations without disabling
+		// timeout protection.
+		testTimeout: 30_000,
 		// Pinned so local-time formatting/parsing assertions are deterministic regardless of
 		// the host running the suite (spec 037: everything time-related is host-local, not UTC).
 		env: { TZ: "Asia/Shanghai" },

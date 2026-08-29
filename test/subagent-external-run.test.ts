@@ -641,11 +641,12 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			}
 			child.emit("close", undefined); // killed by signal, no exit code.
 
-			// `status` flips (and persists) before settle() finishes writing output.md, recording
-			// usage, and (for timeout) dispatching the wake — wait for the last thing that happens
-			// in each mode, not just the status, so nothing below races settle()'s own tail.
+			// Wait for the terminal state and its artifact. Waiting only for output.md is racy:
+			// settle() writes that file before publishing the terminal record.
 			if (mode === "cancel") {
-				await waitFor(() => existsSync(join(artifactDir, "output.md")));
+				await waitFor(
+					() => manager.get(runId)?.status === "cancelled" && existsSync(join(artifactDir, "output.md")),
+				);
 			} else {
 				await waitFor(() => dispatched.length > 0);
 			}
