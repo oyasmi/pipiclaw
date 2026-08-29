@@ -35,10 +35,31 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 - `npm run typecheck`
 - `npm run test`
 - `npm run test:coverage`
+- `npm run test:e2e` — deterministic full-stack layer (scripted mock provider, no network, no API cost; runs in well under 90s)
+- `npm run test:e2e:live` — the 5-ish real-model smoke cases (follows `~/.pipiclaw/settings.json`; manual / nightly)
 - `npm run build`
 - `npm run check`
 
-Use `npm run typecheck` and `npm run test` as the minimum validation after non-trivial changes.
+Use `npm run typecheck` and `npm run test` as the minimum validation after non-trivial changes. **Also run `npm run test:e2e` when you change the runtime, memory, delegation, or command plane** — that layer is the only coverage for `runner ↔ session ↔ tools ↔ memory ↔ delivery`, the transport queue, and process/restart behaviour (spec 048).
+
+## Test Layering
+
+Three layers, each with a distinct job. Putting an assertion in the wrong layer is a review defect.
+
+| Layer | Proves | Assertion style | Runs in |
+|---|---|---|---|
+| unit | one module's branches, edges, contracts | anything fakeable belongs here | `npm run check` |
+| e2e (deterministic) | full-stack **mechanism**: cross-module timing, persisted side effects, process/restart, delivery sequencing, guard wiring | observable side effects — disk state, the request body sent to the provider, delivery count/order, audit records, run state. Never the model's wording. | `npm run test:e2e` |
+| evals | real-model **behaviour quality** | grader / baseline / gate | `npm run eval` (not a gate) |
+
+e2e hard rules:
+
+1. **Mechanism only.** No assertion on whether the model answered *well* — that is an evals concern. To prove a path never reached the model, assert the model request count is 0.
+2. **Assert side effects, not rendered text.** Pinning a literal help/status/reply string makes the test a change-detector; an intentional copy edit then turns the suite red and hides real failures (this is exactly how spec 048 happened).
+3. **Timing is test-controlled.** Use the mock provider's `hold`/`release` to build deterministic concurrency windows. No `sleep`, no polling for an event you can control precisely.
+4. **Every case names the failure it catches** in a comment — which commit or class of regression. A case that cannot name one is not accepted.
+5. **Cheap enough to run every time.** The deterministic layer must pass offline with no credentials; a case that needs the network is in the wrong layer.
+6. **Mutation check on the way in.** Before a new deterministic case merges, break the code it guards once, confirm the case goes red, and record that in the case's comment. A case that stays green when its target is broken is not a safety net.
 
 ## Engineering Rules
 

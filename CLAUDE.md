@@ -10,7 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run test` — unit/integration tests (Vitest). Excludes `test/e2e/**`.
 - Single test file: `npx vitest run test/memory-lifecycle.test.ts`
 - Single test by name: `npx vitest run -t "creates a distinct session id"`
-- `npm run test:e2e` — end-to-end suite (`vitest.config.e2e.ts`); slower, runs a real bootstrap.
+- `npm run test:e2e` — deterministic full-stack layer (`test/e2e/deterministic/`): real bootstrap, real memory/queue/delivery, but the model is an in-process scripted mock. Zero network, zero API cost, well under 90s. Run it when you touch runtime / memory / delegation / the command plane (spec 048).
+- `npm run test:e2e:live` — the real-model smoke cases (`test/e2e/live/`): follows `~/.pipiclaw/settings.json`, costs tokens, manual / nightly.
 - `npm run typecheck` — `tsc --noEmit` against `tsconfig.json` (the config with `noUnusedLocals`/`noUnusedParameters`; `tsconfig.build.json` is emit-only).
 - `npm run lint` — Biome (format + lint); autofix with `npx biome check --write .`.
 - `npm run deadcode` — knip. Configured with `ignoreExportsUsedInFile`, so an `export` used only inside its own file is not flagged; a *genuinely* unused export must be deleted or its `export` dropped, not suppressed.

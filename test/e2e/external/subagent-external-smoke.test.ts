@@ -1,10 +1,10 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SECURITY_CONFIG } from "../../src/security/config.js";
-import { launchExternalRun } from "../../src/subagents/external/run.js";
-import { configureSubAgentRuntime, getSubAgentRunManager, type RunHarness } from "../../src/subagents/runs.js";
-import { useTempDirs } from "../helpers/fixtures.js";
+import { DEFAULT_SECURITY_CONFIG } from "../../../src/security/config.js";
+import { launchExternalRun } from "../../../src/subagents/external/run.js";
+import { configureSubAgentRuntime, getSubAgentRunManager, type RunHarness } from "../../../src/subagents/runs.js";
+import { useTempDirs } from "../../helpers/fixtures.js";
 
 /**
  * Spec 042, D12: a real, non-mocked smoke test against the actual `claude`/`codex` CLIs on this

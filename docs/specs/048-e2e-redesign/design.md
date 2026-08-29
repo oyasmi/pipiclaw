@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | IN PROGRESS（P0 + P1 已完成；P2–P4 待做） |
+| 状态 | IN PROGRESS（P0–P1 完成；P2 8/10 + P3/P4 结构完成；部分用例待补，见实施记录） |
 | 日期 | 2026-08-29 |
 | 触发 | 例行体检发现 e2e 套件已红 5 天无人察觉，且这个红掩盖了一个 2026-08-24 引入、至今线上生效的 `/help` 冷启动崩溃 |
 | 前置 | 004 e2e-test（本 spec 是它的重做）、028 behavior-eval（分工的另一半）、040/042 委派、043 会话身份与回合恢复、044 native-file-io、046/047 工具切分 |
@@ -457,6 +457,31 @@ A11 / A14 / A17 / A20 / A21 / A23；AGENTS.md 增加测试分层规则与 e2e �
 - **`package.json`** 新增 `test:e2e:deterministic`（`test:e2e` 暂仍跑全量，待 P3 live 收敛后再拆）。
 - **DoD 达成**：pilot 在网络命名空间（仅 loopback）下整套通过；未匹配请求让 `afterEach` 以可读信息失败；`npm run check` 全绿（900 tests）。
 
-### P2–P4 待做
+### P2 + P3/P4 结构（2026-08-29 完成）
 
-P0 用例组（A1/A3/A4/A5/A7/A9/A10/A15/A19）、P1 用例组、现有文件迁移、live 层收敛到 5 条、AGENTS.md 分层规则、反证清单——均未开始。
+**transport-faithful harness**：`src/runtime/dingtalk.ts` 抽出 `routeInboundEvent(event)` 测试缝（从 `onStreamMessage` 拆出命令/忙/`/new` 路由）+ `allChannelQueuesIdle()`；`test/support/harness-bot.ts` 的 `HarnessDingTalkBot` 用真实 `DingTalkBot`（真 `ChannelQueue`、真 `/steer` `/stop` `/new` 与忙路由），只把出站投递捕获、永不开 socket。`createDeterministicHarness` 重写：`sendUserMessage` / `sendUserMessageNoWait` / `waitForIdle` / `waitForDelivery` / `restart` / `mainTurnRequests` / `lastMainTurnRequest` / `busyMessageDefault`。`mock-provider/server.ts` 改为请求一到达就记录（held 请求也可观察），未匹配用 `__unmatched` 哨兵。det home `rerankWithModel: false`（recall 不依赖脚本化 reranker 也确定）。
+
+**已落地用例**（`test/e2e/deterministic/`，共 12 条，全部带反证注释，总耗时约 35s，断网通过）：
+
+| 文件 | 用例 |
+|---|---|
+| `commands.test.ts` | A1 `/help` 冷启动、A2 零-LLM 斜杠命令、A3 未知命令拒绝 + 已知 skill 进回合 |
+| `memory.test.ts` | A9 调过工具的回合仍写入 MEMORY.md（锁 0.9.1 P0）、A10 recall 仅在 query 相关时注入 |
+| `concurrency.test.ts` | A4 回合中到达的消息串行不交错且都被回答、A7 `/new` 原子边界 |
+| `stop.test.ts` | A5 `/stop` 中断回合并回到 idle |
+| `events-guard.test.ts` | immediate 事件被工具层拒绝且不落盘（原 events-guard 的确定性半） |
+| `system-prompt.test.ts` | 直接在请求体上断言 prompt 归属（不再依赖 `PIPICLAW_DEBUG`） |
+| `pilot.test.ts` | P1 形态验收（保留为快速 canary） |
+
+**目录与脚本**：`test/e2e/{deterministic,live,external}/`；`npm run test:e2e` → 确定性层，`npm run test:e2e:live` → 真实模型层（`test/e2e/live/`：tools B1、tasks-lifecycle B2、basic-conversation B4、tui B5，共 6 条，跟随本机 settings）。`builtin-command` / `memory-bootstrap` / `session-memory` 删除（被 A1-A3 / A10 取代）；`tool-read` + `tool-write` 合并为 live `tools.test.ts`。
+
+**文档**：`AGENTS.md` 新增「Test Layering」小节（三层判据 + e2e 六条硬规则含反证）与验证要求；`CLAUDE.md` 命令表更新（`test:e2e` 现为零成本确定性层，新增 `test:e2e:live`）。
+
+### 仍未做
+
+按「阶段独立可停」，以下用例未实现，均需额外 harness 深度（parked-task 状态机 / 完整 subagent 派发 / `security.json` + project-scope 装配），非本轮结构改造的阻塞项：
+
+- **A15**（伪造 `[SUBAGENT]` 唤醒不激活任务）：需要把任务 park 到 `waitingFor=external-signal` 才能观察「未激活」，且可信半需真实 run 记录。
+- **A19 / A20 / A21**（越界 read/write + 审计、`/project` 换根、子代理工具集门控）：需要 `security.json` 与 project-scope 装配。
+- **A6 / A8 / A11 / A12 / A13 / A14 / A16 / A17 / A18 / A22 / A23**：P1/P2 剩余批次（steer/followup、progress 风格、SESSION 刷新/HISTORY 折叠、重启续接、真实 driver 推进、verify 链、内部/外部 subagent 全链路、job 链路、fallback、压缩）。harness 的 `restart()` / `hold`/`failNext` 已就绪，属增量工作。
+- **live B3**（`event_manage` immediate 的提示词级守卫）。

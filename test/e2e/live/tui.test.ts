@@ -7,7 +7,7 @@ import {
 	createE2ETestHome,
 	type E2ETestHome,
 	getE2ESkipReason,
-} from "../support/setup.js";
+} from "../../support/setup.js";
 
 const describeE2E = canRunE2E() ? describe : describe.skip;
 
@@ -31,7 +31,7 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 	});
 
 	it("answers a one-shot prompt through the terminal channel and persists channel memory", async () => {
-		const { runTuiApp } = await import("../../src/tui/app.js");
+		const { runTuiApp } = await import("../../../src/tui/app.js");
 
 		const chunks: string[] = [];
 		const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
@@ -77,7 +77,7 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 	// Mutation check: make runOnce call beginTurn() directly again and this goes red
 	// with a model paraphrase of "/tasks" instead of the report headline.
 	it("resolves a built-in slash command under --print without invoking the model", async () => {
-		const { runTuiApp } = await import("../../src/tui/app.js");
+		const { runTuiApp } = await import("../../../src/tui/app.js");
 
 		const chunks: string[] = [];
 		const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
