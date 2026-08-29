@@ -1,5 +1,6 @@
+import { estimateTokens } from "../shared/token-estimate.js";
+
 export const PREVENTIVE_COMPACTION_THRESHOLD_RATIO = 0.75;
-const ESTIMATED_CHARS_PER_TOKEN = 3;
 
 export interface PreventiveCompactionDecision {
 	shouldCompact: boolean;
@@ -8,11 +9,19 @@ export interface PreventiveCompactionDecision {
 	ratio: number;
 }
 
+/**
+ * The incoming message's share of the projected context.
+ *
+ * Script-aware on purpose (shared with the prompt manifest): a flat characters-per-token ratio
+ * put a 12k-character Chinese message at ~4k tokens instead of ~12k, so the projection stayed
+ * under the threshold and the turn went in without compacting — the case preventive compaction
+ * exists to catch, on this product's most common input.
+ */
 export function estimateIncomingMessageTokens(text: string): number {
 	if (!text) {
 		return 0;
 	}
-	return Math.ceil(text.length / ESTIMATED_CHARS_PER_TOKEN);
+	return estimateTokens(text);
 }
 
 export function getPreventiveCompactionDecision(

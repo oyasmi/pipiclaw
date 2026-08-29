@@ -100,11 +100,37 @@ describe("log file sink", () => {
 		await flush(log);
 
 		const record = readRecords(runtimeLogPath)[0];
+		// Assert on the secret's absence, not on `[REDACTED]` being present somewhere: the
+		// scheme-swallowing bug produced "Authorization:[REDACTED] top-secret", which satisfies
+		// a `toContain("[REDACTED]")` assertion while leaving the token in the archive.
+		expect(record.message).not.toContain("top-secret");
 		expect(record.message).toContain("[REDACTED]");
 		expect(record.fields).toMatchObject({
 			token: "[REDACTED]",
 			nested: { cookie: "[REDACTED]", safe: "ok" },
 		});
 		expect(((record.fields as Record<string, unknown>).long as string).length).toBeLessThan(300);
+	});
+
+	// `details` carries verbatim tool output (bash/web results, `curl -v` headers, kubectl
+	// errors), so these shapes reach the archive in practice, not just in theory.
+	it.each([
+		["scheme after colon", "Authorization: Bearer sk-ant-api03-SECRETVALUE"],
+		["scheme after equals", "Authorization=Bearer sk-ant-api03-SECRETVALUE"],
+		["quoted json", '{"authorization":"Bearer sk-ant-api03-SECRETVALUE","safe":"ok"}'],
+		["bare scheme", "bearer sk-ant-api03-SECRETVALUE"],
+		["value containing a colon", "token=SECRETVALUE:SECRETVALUE"],
+		["header inside a command line", "curl -v -H 'Authorization: Bearer sk-ant-api03-SECRETVALUE' https://api"],
+	])("keeps the secret out of message and details: %s", async (_name, text) => {
+		const { log, runtimeLogPath } = await loadLog();
+		log.configureLogging({ level: "info", file: { enabled: true, maxSizeBytes: 5_000_000, maxFiles: 3 } });
+
+		log.logEvent("info", "agent.tool.finished", text, { details: text });
+		await flush(log);
+
+		const record = readRecords(runtimeLogPath)[0];
+		expect(record.message).not.toContain("SECRETVALUE");
+		expect(record.details).not.toContain("SECRETVALUE");
+		expect(record.details).toContain("[REDACTED]");
 	});
 });

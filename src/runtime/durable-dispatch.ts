@@ -127,9 +127,20 @@ export class DurableDispatchService {
 
 	start(): void {
 		if (this.timer) return;
-		void this.drainOnce();
-		this.timer = setInterval(() => void this.drainOnce(), this.options.intervalMs ?? DEFAULT_INTERVAL_MS);
+		this.drainSafely();
+		this.timer = setInterval(() => this.drainSafely(), this.options.intervalMs ?? DEFAULT_INTERVAL_MS);
 		this.timer.unref?.();
+	}
+
+	/**
+	 * The drain is timer-driven, so nothing above it can catch a rejection: a record write that
+	 * fails (ENOSPC, EACCES) would take the process down rather than skip one tick. The next
+	 * tick retries from the same persisted state, which is the whole point of the store.
+	 */
+	private drainSafely(): void {
+		this.drainOnce().catch((error) => {
+			log.logWarning("Durable dispatch drain failed", errorMessage(error));
+		});
 	}
 
 	stop(): void {

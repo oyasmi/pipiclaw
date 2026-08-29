@@ -309,6 +309,70 @@ function findRetiredSettingsKeys(parsed: unknown): string[] {
 }
 
 /**
+ * Every enum-valued key, with the values it accepts.
+ *
+ * `settings.json` is hand-edited and nothing type-checks it, so a typo used to travel straight
+ * into the runtime as a string the code never compares equal to anything. The failure modes were
+ * not uniform and none of them said anything: `logging.level: "verbos"` made *every* log record
+ * fail its threshold comparison (`LEVEL_ORDER[level] >= NaN`) and silenced the log entirely;
+ * `delegation.notices: "liv"` fell through both negative checks and behaved as `live`, the
+ * opposite of the "off" a nervous operator was reaching for. Validating here — once, on load —
+ * means an unrecognized value is dropped so the documented default applies, and the operator is
+ * told which key was ignored.
+ *
+ * The value lists are literal rather than imported: `ResponseMode` lives in the DingTalk
+ * transport, and a value import would tie settings loading to that module's import graph. The
+ * `satisfies` clauses keep them honest against the unions they mirror.
+ */
+const ENUM_SETTINGS: readonly { path: string; values: readonly string[] }[] = [
+	{ path: "logging.level", values: ["debug", "info", "warn", "error"] satisfies PipiclawLoggingSettings["level"][] },
+	{
+		path: "tui.responseMode",
+		values: [
+			"full_progress_then_plain_final",
+			"rolling_progress_then_plain_final",
+			"final_card_only",
+		] satisfies ResponseMode[],
+	},
+	{ path: "delegation.notices", values: ["off", "settled", "live"] satisfies PipiclawDelegationSettings["notices"][] },
+];
+
+function readNestedKey(
+	root: unknown,
+	dottedPath: string,
+): { parent: Record<string, unknown>; key: string } | undefined {
+	const segments = dottedPath.split(".");
+	const key = segments.pop();
+	if (!key) return undefined;
+	let node = root;
+	for (const segment of segments) {
+		if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+		node = (node as Record<string, unknown>)[segment];
+	}
+	if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+	const parent = node as Record<string, unknown>;
+	return Object.hasOwn(parent, key) ? { parent, key } : undefined;
+}
+
+/**
+ * Drop every enum key whose value is not one this build understands, and describe what was
+ * dropped. Deleting rather than coercing is deliberate: `??` then yields the same default a
+ * missing key would, so one bad value cannot produce a state the rest of the code never expects.
+ */
+function stripInvalidEnumValues(parsed: unknown): string[] {
+	const problems: string[] = [];
+	for (const { path, values } of ENUM_SETTINGS) {
+		const found = readNestedKey(parsed, path);
+		if (!found) continue;
+		const value = found.parent[found.key];
+		if (value === undefined || values.includes(value as string)) continue;
+		delete found.parent[found.key];
+		problems.push(`${path}: ${JSON.stringify(value)} is not one of ${values.join(" | ")}; using the default instead`);
+	}
+	return problems;
+}
+
+/**
  * Settings manager for pipiclaw.
  * Stores global settings in the pipiclaw root directory.
  */
@@ -317,6 +381,7 @@ export class PipiclawSettingsManager {
 	private settings: PipiclawSettings;
 	private loadErrors: SettingsError[] = [];
 	private retiredKeys: string[] = [];
+	private invalidEnumValues: string[] = [];
 	/** The file's change token as of the last actual parse; see `reload`. */
 	private loadedStamp = "";
 
@@ -328,6 +393,7 @@ export class PipiclawSettingsManager {
 	private load(): PipiclawSettings {
 		this.loadErrors = [];
 		this.retiredKeys = [];
+		this.invalidEnumValues = [];
 		this.loadedStamp = fileStamp(this.settingsPath);
 		if (!existsSync(this.settingsPath)) {
 			return {};
@@ -344,6 +410,7 @@ export class PipiclawSettingsManager {
 				return {};
 			}
 			this.retiredKeys = findRetiredSettingsKeys(parsed);
+			this.invalidEnumValues = stripInvalidEnumValues(parsed);
 			return parsed as PipiclawSettings;
 		} catch (error) {
 			this.loadErrors.push({
@@ -399,6 +466,9 @@ export class PipiclawSettingsManager {
 				severity: "warning",
 				message: `${this.retiredKeys.join(", ")}: no longer configurable; these are now built-in constants and the values here are ignored. Remove them from settings.json.`,
 			});
+		}
+		for (const message of this.invalidEnumValues) {
+			diagnostics.push({ source: "settings", path: this.settingsPath, severity: "warning", message });
 		}
 		return diagnostics;
 	}

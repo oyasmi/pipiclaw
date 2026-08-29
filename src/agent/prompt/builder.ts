@@ -14,6 +14,7 @@
 
 import { createHash } from "node:crypto";
 import { countPromptUnits } from "../../shared/prompt-units.js";
+import { estimateTokens } from "../../shared/token-estimate.js";
 import { FINAL_BOUNDARY_SECTION, MAIN_PROMPT_SECTIONS } from "./sections.js";
 import type {
 	PromptBuildContext,
@@ -48,21 +49,6 @@ export const RUNTIME_PROMPT_HARD_UNITS = 1_200;
 
 export function sha256(text: string): string {
 	return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-/**
- * Rough token estimate for reporting only. CJK runs about one token per
- * character, Latin text about four characters per token; the provider's real
- * tokenizer is the authority, and the usage ledger records what it billed.
- */
-const CJK_REGEX = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u;
-
-export function estimateTokens(text: string): number {
-	let cjk = 0;
-	for (const char of text) {
-		if (CJK_REGEX.test(char)) cjk++;
-	}
-	return Math.ceil(cjk + (text.length - cjk) / 4);
 }
 
 function truncateItems(content: string, maxChars: number): string {

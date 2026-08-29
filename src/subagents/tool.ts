@@ -6,6 +6,7 @@ import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { getChannelDir } from "../channel/channel-paths.js";
 import type { ExecOptions, ExecResult, Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
@@ -562,7 +563,7 @@ export function buildSubAgentTask(
 		`Runtime context:`,
 		`- Workspace root: ${runtimeContext.workspaceDir}`,
 		`- Channel id: ${runtimeContext.channelId}`,
-		`- Channel directory: ${runtimeContext.workspaceDir}/${runtimeContext.channelId}`,
+		`- Channel directory: ${getChannelDir(runtimeContext.workspaceDir, runtimeContext.channelId)}`,
 		`- Working directory: ${runContext.workingDirectory}`,
 		`- Artifact directory: ${runContext.artifactDir}`,
 		`- Your configured role: ${config.name}`,
@@ -577,7 +578,11 @@ export function buildSubAgentTask(
 
 	lines.push("", `Task:`, taskText);
 	if (runContext.purpose === "verify") {
-		const taskPath = join(runtimeContext.workspaceDir, runtimeContext.channelId, "tasks", `${runContext.taskId}.md`);
+		const taskPath = join(
+			getChannelDir(runtimeContext.workspaceDir, runtimeContext.channelId),
+			"tasks",
+			`${runContext.taskId}.md`,
+		);
 		lines.push("", buildVerificationProtocol(taskPath));
 	}
 	return lines.join("\n");

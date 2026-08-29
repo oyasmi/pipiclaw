@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFile
 import { dirname, join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
+import * as log from "../src/log.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import type { EventAction } from "../src/runtime/events.js";
@@ -554,6 +555,52 @@ describe("EventsWatcher", () => {
 			await service.drainOnce();
 			expect(delivered).toHaveLength(1);
 		});
+	});
+
+	it("logs a failed watch-triggered load instead of crashing the process", async () => {
+		// Watch callbacks are the top of their own stack: a rejection from the reload path —
+		// here a persisted dispatch that cannot write — reaches no caller, and Node exits the
+		// daemon on it.
+		const dir = createTempDir();
+		const filename = "missed.json";
+		const filePath = join(dir, filename);
+		writeFileSync(
+			filePath,
+			JSON.stringify({
+				type: "one-shot",
+				channelId: "dm_1",
+				text: "missed while down",
+				at: new Date(Date.now() - 60_000).toISOString(),
+			}),
+		);
+		const beforeStart = new Date(Date.now() - 60_000);
+		utimesSync(filePath, beforeStart, beforeStart);
+		const watcher = new EventsWatcher(dir, new FakeBot() as unknown as DingTalkBot, createMockExecutor(), undefined, {
+			dispatch: async () => {
+				throw new Error("ENOSPC: no space left on device");
+			},
+		});
+		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const rejections: unknown[] = [];
+		const onRejection = (reason: unknown): void => {
+			rejections.push(reason);
+		};
+		process.on("unhandledRejection", onRejection);
+		try {
+			(watcher as unknown as { handleFileChange(name: string): void }).handleFileChange(filename);
+			// The reload chain is driven by real file I/O, so wait for the guard to report
+			// rather than guessing how many ticks it needs.
+			await vi.waitFor(() => {
+				expect(warnSpy).toHaveBeenCalledWith(
+					`Failed to load event file: ${filename}`,
+					expect.stringContaining("ENOSPC"),
+				);
+			});
+			expect(rejections).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onRejection);
+			warnSpy.mockRestore();
+		}
 	});
 
 	it("survives a transient full queue without losing either event kind", async () => {

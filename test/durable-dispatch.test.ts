@@ -1,7 +1,8 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as log from "../src/log.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { type DurableDispatchRecord, DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import { claimVerifiedDelegationWake } from "../src/runtime/task-wake.js";
@@ -31,6 +32,50 @@ function event(): DingTalkEvent {
 }
 
 describe("DurableDispatchService", () => {
+	it("logs and keeps draining when a record write fails instead of crashing the process", async () => {
+		// The drain runs on an interval, so a write that throws (a full or read-only disk) has no
+		// caller to reject to: unguarded, one ENOSPC window takes the whole daemon down.
+		const stateDir = join(tempDir(), "state", "dispatch-readonly");
+		let accept = false;
+		const received: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent(next) {
+					if (!accept) return false;
+					received.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(event());
+
+		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const rejections: unknown[] = [];
+		const onRejection = (reason: unknown): void => {
+			rejections.push(reason);
+		};
+		process.on("unhandledRejection", onRejection);
+		try {
+			chmodSync(stateDir, 0o555); // every atomic write into this directory now fails
+			accept = true;
+			service.start();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(rejections).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledWith("Durable dispatch drain failed", expect.any(String));
+
+			// The record is untouched on disk, so recovery is just the next drain succeeding.
+			chmodSync(stateDir, 0o755);
+			await service.drainOnce();
+			expect(received).toHaveLength(1);
+		} finally {
+			service.stop();
+			chmodSync(stateDir, 0o755);
+			process.off("unhandledRejection", onRejection);
+			warnSpy.mockRestore();
+		}
+	});
+
 	it("persists a queue-rejected dispatch and later delivers it", async () => {
 		const stateDir = join(tempDir(), "state", "dispatch");
 		const received: DingTalkEvent[] = [];

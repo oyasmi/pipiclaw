@@ -338,7 +338,12 @@ export class ChannelJobManager {
 			return;
 		}
 		this.sweepTimer = setInterval(() => {
-			void this.sweep();
+			// A timer callback is the last frame that can hold this promise: an unhandled
+			// rejection here (a probe that cannot spawn — EAGAIN/EMFILE/ENOMEM) exits the
+			// whole daemon, since nothing installs a process-level rejection handler.
+			this.sweep().catch((error) => {
+				log.logWarning("Background job sweep failed", errorMessage(error));
+			});
 		}, this.sweepIntervalMs);
 		// Do not keep the process alive just for the sweeper.
 		this.sweepTimer.unref?.();

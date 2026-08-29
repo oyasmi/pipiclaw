@@ -13,6 +13,7 @@ import {
 import { readFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import type { ChannelEvent } from "../channel/channel-event.js";
+import { getChannelDir } from "../channel/channel-paths.js";
 import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
 import { guardCommand } from "../security/command-guard.js";
@@ -412,10 +413,22 @@ export class EventsWatcher {
 			this.handleDelete(filename);
 		} else if (this.knownFiles.has(filename)) {
 			this.cancelScheduled(filename);
-			this.handleFile(filename);
+			this.handleFileSafely(filename);
 		} else {
-			this.handleFile(filename);
+			this.handleFileSafely(filename);
 		}
+	}
+
+	/**
+	 * Watch callbacks are the top of their own stack, so a rejection here reaches nobody — and
+	 * `handleFile` can reject: reloading a due one-shot dispatches it inline, and dispatch
+	 * writes to disk. `scanExisting` already wraps its own calls; this is the same guard for
+	 * the live path. One bad file must not take the watcher, or the process, down with it.
+	 */
+	private handleFileSafely(filename: string): void {
+		void this.handleFile(filename).catch((err) => {
+			log.logWarning(`Failed to load event file: ${filename}`, errorMessage(err));
+		});
 	}
 
 	private handleDelete(filename: string): void {
@@ -659,7 +672,7 @@ export class EventsWatcher {
 		if (!parsed) return undefined;
 		const taskId = parsed.id;
 
-		const taskPath = join(dirname(this.eventsDir), event.channelId, "tasks", `${taskId}.md`);
+		const taskPath = join(getChannelDir(dirname(this.eventsDir), event.channelId), "tasks", `${taskId}.md`);
 		let content: string;
 		try {
 			content = await readFile(taskPath, "utf-8");

@@ -11,7 +11,8 @@
  */
 
 import { countPromptUnits } from "../../shared/prompt-units.js";
-import { estimateTokens, RUNTIME_PROMPT_TARGET_UNITS, sha256 } from "./builder.js";
+import { estimateTokens } from "../../shared/token-estimate.js";
+import { RUNTIME_PROMPT_TARGET_UNITS, sha256 } from "./builder.js";
 import type { LoadedPromptResource, PromptBuildResult, ResolvedPromptSection } from "./types.js";
 
 /** The design ceiling for everything Pipiclaw auto-appends to a turn (spec 026 §5.3). */

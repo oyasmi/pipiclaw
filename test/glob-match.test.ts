@@ -49,4 +49,39 @@ describe("compileGlobPattern", () => {
 		expect(matches("a.b.c", "a.b.c")).toBe(true);
 		expect(matches("a.b.c", "aXbXc")).toBe(false);
 	});
+
+	it("expands nested braces and honours commas inside them", () => {
+		expect(matches("**/*.{ts,{js,jsx}}", "src/foo.jsx")).toBe(true);
+		expect(matches("**/*.{ts,{js,jsx}}", "src/foo.ts")).toBe(true);
+		expect(matches("**/*.{ts,{js,jsx}}", "src/foo.css")).toBe(false);
+	});
+
+	it("keeps an unbalanced brace literal", () => {
+		expect(matches("no{close", "no{close")).toBe(true);
+	});
+
+	// The matcher runs synchronously, once per walked file, on a pattern the model controls. A
+	// regex-based implementation backtracked exponentially on these: 2s, 145ms and 32s
+	// respectively, for patterns of at most a few dozen characters. Timing is the only way to
+	// state the property, so the bar is set orders of magnitude above the honest cost (~0.1ms)
+	// to stay stable on a loaded CI box while still failing loudly on a return to backtracking.
+	it.each([
+		["repeated globstars", `${"**/".repeat(12)}zzz`],
+		["repeated brace alternatives", `${"{*,*}".repeat(5)}zzz`],
+		["stars separated by literals", `${"*a".repeat(16)}zzz`],
+	])("matches in linear time: %s", (_name, pattern) => {
+		const path = `${Array.from({ length: 20 }, (_, i) => `seg${i}`).join("/")}/${"a".repeat(60)}`;
+		const matcher = compileGlobPattern(pattern);
+
+		const startedAt = performance.now();
+		expect(matcher.test(path)).toBe(false);
+		expect(performance.now() - startedAt).toBeLessThan(50);
+	});
+
+	it("rejects patterns too long or too explosive to be worth matching", () => {
+		expect(() => compileGlobPattern("a".repeat(513))).toThrow(/longer than/);
+		expect(() => compileGlobPattern("{a,b}".repeat(10))).toThrow(/brace expansion/);
+		// The bound is on the expansion, not on merely using braces.
+		expect(() => compileGlobPattern("{a,b}".repeat(5))).not.toThrow();
+	});
 });

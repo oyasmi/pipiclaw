@@ -6,7 +6,8 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { compileGlobPattern } from "./glob-match.js";
+import { errorMessage } from "../shared/text-utils.js";
+import { compileGlobPattern, type GlobMatcher } from "./glob-match.js";
 import { IGNORED_DIR_SEGMENTS } from "./ignore-dirs.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
@@ -75,11 +76,13 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 				channelId: options.channelId,
 			});
 
-			let matcher: RegExp;
+			let matcher: GlobMatcher;
 			try {
 				matcher = compileGlobPattern(pattern);
-			} catch {
-				throw new RecoverableToolError(`Invalid glob pattern: ${pattern}`);
+			} catch (error) {
+				// The reason is part of the message: a pattern rejected for complexity is fixed by
+				// simplifying it, which "invalid pattern" alone does not tell the model.
+				throw new RecoverableToolError(`Invalid glob pattern: ${pattern} (${errorMessage(error)})`);
 			}
 
 			const walk = await fileStore.walkFiles(target, {

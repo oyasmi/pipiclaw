@@ -27,8 +27,20 @@ const MAX_VALUE_LENGTH = 240;
 const MAX_COLLECTION_ITEMS = 10;
 const SENSITIVE_KEY =
 	/(?:api[_-]?key|authorization|cookie|credential|password|secret|private[_-]?key|(?:^|[_-])token(?:$|[_-])|token$|^env(?:ironment)?$)/i;
+/**
+ * Free-text secret redaction. Group 1 is everything that must survive — the key and its
+ * separator, or a bare `bearer` scheme — and everything after it is the value, replaced whole.
+ *
+ * Two details are load-bearing. The value swallows an optional auth-scheme word, because
+ * `Authorization: Bearer <token>` otherwise ends the match at the space after "Bearer": the
+ * scheme got redacted, the token survived, and the `bearer` alternative could not re-match a
+ * region the first alternative had already consumed. And the surviving prefix comes from a
+ * capture group rather than being reconstructed by splitting the match on a guessed separator —
+ * a value containing `:` (`token=abc:def`) made that guess pick the wrong one and leave the
+ * first half of the secret in the log.
+ */
 const SENSITIVE_TEXT =
-	/\b(?:authorization|cookie|token|api[_-]?key|secret|password)\s*[:=]\s*[^\s,;]+|\bbearer\s+[^\s,;]+/gi;
+	/(\b(?:authorization|cookie|token|api[_-]?key|secret|password)"?\s*[:=]\s*|\bbearer\s+)"?(?:(?:bearer|basic|token|digest)\s+)?[^\s,;"']+"?/gi;
 
 function readEnvLevel(): LogLevel | undefined {
 	const raw = process.env.PIPICLAW_LOG_LEVEL?.trim().toLowerCase();
@@ -74,10 +86,7 @@ function isEnabled(level: LogLevel): boolean {
 }
 
 function summarizeString(value: string): string {
-	const redacted = value.replace(SENSITIVE_TEXT, (match) => {
-		const separator = match.includes(":") ? ":" : match.includes("=") ? "=" : " ";
-		return `${match.split(separator, 1)[0]}${separator}[REDACTED]`;
-	});
+	const redacted = value.replace(SENSITIVE_TEXT, (_match, keyAndSeparator: string) => `${keyAndSeparator}[REDACTED]`);
 	const normalized = redacted.replace(/\s+/g, " ").trim();
 	return normalized.length > MAX_VALUE_LENGTH
 		? `${normalized.slice(0, MAX_VALUE_LENGTH)}… (length=${normalized.length})`

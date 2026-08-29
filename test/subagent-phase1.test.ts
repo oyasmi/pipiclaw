@@ -22,7 +22,7 @@ import {
 	SUB_AGENT_EFFORT_PRESETS,
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
-import { createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
+import { buildSubAgentTask, createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
 import { readVerificationAttestation } from "../src/tasks/verification.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -267,6 +267,33 @@ ${"x".repeat(16001)}`,
 			"openai/does-not-exist",
 		);
 		expect(badDefault.error).toContain("was not found among available models");
+	});
+});
+
+describe("sub-agent runtime context", () => {
+	it("points a slash-bearing group channel at the escaped directory it actually lives in", () => {
+		// Both lines are consumed by a host process we do not control: the external agent reads
+		// the prompt and opens these paths itself. A raw id here sends it to a directory that
+		// has never existed.
+		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+		const escaped = "/workspace/root/group_cidYDhGqxhJOzS7VDv__eDInUw==";
+		const task = buildSubAgentTask(
+			"Check the work.",
+			{ name: "verifier" },
+			{ workspaceDir: "/workspace/root", channelId },
+			[],
+			{
+				runId: "run_abc123",
+				purpose: "verify",
+				taskId: "t-1",
+				workingDirectory: "/checkout",
+				artifactDir: "/checkout/.artifacts/run_abc123",
+			},
+		);
+
+		expect(task).toContain(`Channel directory: ${escaped}`);
+		expect(task).toContain(`${escaped}/tasks/t-1.md`);
+		expect(task).not.toContain(`${channelId}/tasks`);
 	});
 });
 

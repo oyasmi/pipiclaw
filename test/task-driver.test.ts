@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getChannelDir } from "../src/channel/channel-paths.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { createTaskDriverEvent, TaskDriver, taskGovernorReceipt } from "../src/runtime/task-driver.js";
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
@@ -55,7 +56,9 @@ describe("TaskDriver v2", () => {
 	});
 
 	async function writeTask(channelId: string, id: string, content: string): Promise<string> {
-		const dir = join(workspaceDir, channelId, "tasks");
+		// Escape exactly as production does: a DingTalk group id is base64 and routinely
+		// contains `/`, which only lives on disk as `__`.
+		const dir = join(getChannelDir(workspaceDir, channelId), "tasks");
 		await mkdir(dir, { recursive: true });
 		const path = join(dir, `${id}.md`);
 		await writeFile(path, content);
@@ -87,6 +90,19 @@ describe("TaskDriver v2", () => {
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledTimes(1);
 		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:active]");
+	});
+
+	it("finds tasks for a group channel whose id contains a slash", async () => {
+		// Regression: the driver used to join the raw id onto the workspace path, so a base64
+		// conversation id resolved to a nested directory that never exists. Every such channel
+		// read as "no active tasks" — no dispatch, no escalation, no log line.
+		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+		await writeTask(channelId, "active", taskDoc("active"));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		await driver(dispatch, { getKnownChannelIds: () => [channelId] }).runOnce(NOW);
+		expect(dispatch).toHaveBeenCalledTimes(1);
+		// The wake must carry the raw id, not the escaped directory name, or delivery misroutes.
+		expect(dispatch.mock.calls[0]?.[0].channelId).toBe(channelId);
 	});
 
 	it("honors enabled as an independent kill switch for every live stage", async () => {

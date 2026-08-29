@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getChannelDir } from "../src/channel/channel-paths.js";
 import { migrateLegacyTaskScheduleEvents, migrateLegacyTaskState } from "../src/runtime/task-migration.js";
 import { parseTaskFrontmatter } from "../src/tasks/ledger.js";
 
@@ -25,7 +26,7 @@ describe("migrateLegacyTaskScheduleEvents", () => {
 		front: string,
 		body = "# T\n\n## Current Cycle\n- x",
 	): Promise<string> {
-		const dir = join(workspaceDir, channelId, "tasks");
+		const dir = join(getChannelDir(workspaceDir, channelId), "tasks");
 		await mkdir(dir, { recursive: true });
 		const path = join(dir, `${id}.md`);
 		await writeFile(path, `---\n${front}\n---\n\n${body}`);
@@ -95,7 +96,7 @@ describe("migrateLegacyTaskState", () => {
 	});
 
 	async function writeTask(channelId: string, id: string, front: string): Promise<string> {
-		const dir = join(workspaceDir, channelId, "tasks");
+		const dir = join(getChannelDir(workspaceDir, channelId), "tasks");
 		await mkdir(dir, { recursive: true });
 		const path = join(dir, `${id}.md`);
 		await writeFile(path, `---\n${front}\n---\n\n# ${id}\n\n## Current Cycle\n- legacy note\n\n## History\n`);
@@ -157,5 +158,21 @@ describe("migrateLegacyTaskState", () => {
 		expect(content).toContain('"waitingFor":"external-signal"');
 		expect(content).toContain("Migration note:");
 		expect(content).toContain("status: waiting");
+	});
+
+	it("repairs a legacy task in a group channel whose id contains a slash", async () => {
+		// The index stores the raw id (`/` and all); the directory stores its escaped form. The
+		// migration used to join the raw id onto the workspace path, so a channel that had been
+		// spoken in — and therefore appears in CHANNELS.md — was skipped every startup.
+		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
+		await writeFile(
+			join(workspaceDir, "CHANNELS.md"),
+			`| 频道 ID | 名称 | 最近消息 | 主题 |\n| --- | --- | --- | --- |\n| \`${channelId}\` | 群 | | |\n`,
+		);
+		const path = await writeTask(channelId, "paused", `status: paused\ncontrol: ${legacyControl}`);
+
+		await migrateLegacyTaskState(workspaceDir);
+
+		expect(await readFile(path, "utf-8")).toContain('"version":3');
 	});
 });

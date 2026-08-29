@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { getChannelDir } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -52,7 +53,7 @@ export async function migrateLegacyTaskScheduleEvents(workspaceDir: string): Pro
 
 		try {
 			let folded = false;
-			const document = await updateStoredTask(join(workspaceDir, channelId), parsed.id, (task) => {
+			const document = await updateStoredTask(getChannelDir(workspaceDir, channelId), parsed.id, (task) => {
 				if (!task.fields.schedule) {
 					task.fields.schedule = cron;
 					folded = true;
@@ -143,7 +144,7 @@ function resolveMigratedControl(frontmatter: TaskFrontmatter): TaskControl | und
 export async function migrateLegacyTaskState(workspaceDir: string): Promise<void> {
 	const channels = await discoverTaskChannels(workspaceDir);
 	for (const channelId of channels) {
-		const channelDir = join(workspaceDir, channelId);
+		const channelDir = getChannelDir(workspaceDir, channelId);
 		const dir = join(channelDir, "tasks");
 		let filenames: string[];
 		try {

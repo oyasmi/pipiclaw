@@ -805,6 +805,16 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 `session_search` 工具本身恒开，与 `grep`、`memory_save`、`event_manage` 一致，没有开关。
 
+### 无效枚举值（Invalid Enum Values）
+
+`logging.level`、`tui.responseMode`、`delegation.notices` 三个枚举字段在加载时会做校验：写了取值范围之外的字符串（含拼写错误），该键**被忽略**，回落到上表的默认值，并在启动时打印一条 warning：
+
+```
+settings.json: logging.level: "verbos" is not one of debug | info | warn | error; using the default instead
+```
+
+同一段配置里的其他键不受影响（例如 `logging.file.enabled` 仍然生效）。此前这类拼写错误是静默的，且后果不一致：错误的 `logging.level` 会让**全部日志**不再落盘，而 `delegation.notices: "liv"` 会等效于 `live`——恰好与写它的人想要的 `off` 相反。
+
 ### 已退役的字段（Retired Fields）
 
 0.8.11 起，下列字段不再可配，其值已成为代码常量。**把它们留在 `settings.json` 里不会导致启动失败**——运行时按常量执行，并在启动时打印一条 warning 提示你删掉它们：

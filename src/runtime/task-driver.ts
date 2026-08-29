@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
 import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
-import { isChannelId } from "../channel/channel-paths.js";
+import { getChannelDir, getChannelDirName, isChannelId } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
 import type { PipiclawTaskDriverSettings } from "../settings.js";
@@ -67,18 +67,29 @@ const FUTILE_WAKE_LIMIT = 3;
  * without ever converging or hitting its deadline. */
 const MAX_WAKES_PER_CYCLE = 500;
 
+/**
+ * Channels this driver should scan, keyed by the directory they actually live in.
+ *
+ * A directory name is the escaped form of an id (`/` → `__`) and cannot be turned back into
+ * one, so workspace discovery reports an unindexed directory under its escaped name. When the
+ * same channel is also known by its raw id — from the runner cache, or from `CHANNELS.md` —
+ * both spellings would otherwise survive and every task in that directory would be dispatched
+ * twice, once under an id no transport can deliver to. Known ids win because they are the real
+ * identity; a discovered directory only stands in for a channel nothing else has named.
+ */
 export async function discoverTaskChannels(
 	workspaceDir: string,
 	knownChannelIds: Iterable<string> = [],
 ): Promise<string[]> {
-	const channels = new Set<string>();
+	const byDirectory = new Map<string, string>();
 	for (const channelId of knownChannelIds) {
-		if (isChannelId(channelId)) channels.add(channelId);
+		if (isChannelId(channelId)) byDirectory.set(getChannelDirName(channelId), channelId);
 	}
 	for (const channelId of await discoverWorkspaceChannelIds(workspaceDir)) {
-		channels.add(channelId);
+		const dirName = getChannelDirName(channelId);
+		if (!byDirectory.has(dirName)) byDirectory.set(dirName, channelId);
 	}
-	return Array.from(channels).sort();
+	return Array.from(byDirectory.values()).sort();
 }
 
 function attemptKey(channelId: string, taskId: string): string {
@@ -395,7 +406,9 @@ export class TaskDriver {
 			for (let offset = 0; offset < channels.length; offset++) {
 				const channelId = channels[(start + offset) % channels.length];
 				if (!channelId) continue;
-				const channelDir = join(this.options.workspaceDir, channelId);
+				// `channelId` is the raw id, which for a DingTalk group routinely contains `/`;
+				// only `getChannelDir` folds it into the escaped directory name that exists on disk.
+				const channelDir = getChannelDir(this.options.workspaceDir, channelId);
 				let entries = await readActiveTasks(join(channelDir, "tasks"), nowMs);
 				for (const entry of entries) seen.add(attemptKey(channelId, entry.id));
 				this.collectHorizons(entries, nowMs);

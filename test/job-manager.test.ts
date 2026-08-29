@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ChannelJobManager, FINISHED_JOB_RETENTION_MS, MAX_RUNNING_JOBS } from "../src/agent/job-manager.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
+import * as log from "../src/log.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -13,6 +14,8 @@ import { useTempDirs } from "./helpers/fixtures.js";
  */
 class FakeJobExecutor implements Executor {
 	public probeResult = "ALIVE";
+	/** Simulates a probe that cannot spawn at all (EAGAIN/EMFILE/ENOMEM under load). */
+	public probeThrows = false;
 	public output = "job output here";
 	public readonly commands: string[] = [];
 	private nextPid = 1000;
@@ -31,6 +34,7 @@ class FakeJobExecutor implements Executor {
 			return { code: 0, stdout: `${this.nextPid++}\n`, stderr: "" };
 		}
 		if (command.includes("kill -0")) {
+			if (this.probeThrows) throw new Error("spawn /bin/sh EAGAIN");
 			// Batched probe: one branch per job, each printing "<id> EXIT:<code>|ALIVE|GONE".
 			const ids = Array.from(command.matchAll(/printf '%s ALIVE\\n' '([^']*)'/g)).map((match) => match[1]);
 			return { code: 0, stdout: `${ids.map((id) => `${id} ${this.probeResult}`).join("\n")}\n`, stderr: "" };
@@ -64,6 +68,35 @@ describe("ChannelJobManager", () => {
 		// No list/poll/cancel call — rely purely on the internal sweeper to reconcile state.
 		await new Promise((resolve) => setTimeout(resolve, 40));
 		expect(manager.runningCount()).toBe(0);
+	});
+
+	it("survives a probe that cannot spawn instead of taking the process down", async () => {
+		// The sweeper is timer-driven, so nothing above it can catch: an unhandled rejection here
+		// exits the daemon, and one job's bad tick would take every channel with it.
+		const executor = new FakeJobExecutor();
+		const manager = new ChannelJobManager("dm_1", executor, 5);
+		await manager.start("sleep 100", "wait", 300);
+		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
+		const rejections: unknown[] = [];
+		const onRejection = (reason: unknown): void => {
+			rejections.push(reason);
+		};
+		process.on("unhandledRejection", onRejection);
+		try {
+			executor.probeThrows = true;
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			expect(rejections).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledWith("Background job sweep failed", expect.stringContaining("EAGAIN"));
+
+			// One failed tick must not wedge the sweeper: the next one still reconciles.
+			executor.probeThrows = false;
+			executor.probeResult = "EXIT:0";
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			expect(manager.runningCount()).toBe(0);
+		} finally {
+			process.off("unhandledRejection", onRejection);
+			warnSpy.mockRestore();
+		}
 	});
 
 	it("removes a finished job at retention expiry without another job starting", async () => {
