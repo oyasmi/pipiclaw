@@ -1,4 +1,5 @@
-import { join } from "path";
+import { mkdir, writeFile } from "fs/promises";
+import { join, relative } from "path";
 import { channelEffectCount, noteTaskEffects, taskEffectCount } from "../agent/effect-ledger.js";
 import { channelRunningJobLines, configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
@@ -7,7 +8,7 @@ import { renderStatus } from "../agent/status-render.js";
 import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
 import type { AgentRunner } from "../agent/types.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
-import type { ChannelEvent } from "../channel/channel-event.js";
+import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
 import { type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
 import { ensureChannelDir, getChannelDir } from "../channel/channel-paths.js";
 import { resolveProjectScope } from "../channel/project-scope-store.js";
@@ -31,6 +32,7 @@ import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import { PipiclawSettingsManager, TASK_DRIVER_SETTINGS } from "../settings.js";
 import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
 import { fileStamp } from "../shared/file-stamp.js";
+import { localStampForFilename } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { sleepUnref } from "../shared/with-timeout.js";
 import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
@@ -68,6 +70,7 @@ import {
 import { DurableDispatchService } from "./durable-dispatch.js";
 import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
 import { createEventsWatcher } from "./events.js";
+import { extensionForMimeType } from "./inbound-media.js";
 import { handleProjectCommand as runProjectCommand } from "./project-commands.js";
 import { installLlmProxy } from "./proxy.js";
 import { handleSkillsCommand as runSkillsCommand } from "./skill-commands.js";
@@ -157,6 +160,19 @@ async function evictIdleRunnersOverCap(channelRunners: Map<string, AgentRunner>)
 
 function isNoRunningTaskQueueError(err: unknown): boolean {
 	return err instanceof Error && err.message === "No task is currently running.";
+}
+
+/**
+ * Absolute `InboundImage.path`s → paths relative to the channel directory, for
+ * `LoggedMessage.images` (spec 049). `log.jsonl` already stores everything else channel-relative
+ * (it lives inside the channel directory itself); an absolute path there would be dead on any
+ * machine other than the one that wrote it, and `~/.pipiclaw` itself can move between backup and
+ * restore.
+ */
+function relativeImagePaths(workspaceDir: string, channelId: string, images: InboundImage[] | undefined): string[] {
+	if (!images || images.length === 0) return [];
+	const channelDir = getChannelDir(workspaceDir, channelId);
+	return images.map((image) => relative(channelDir, image.path));
 }
 
 /**
@@ -278,6 +294,7 @@ interface DingTalkHandlerDeps {
 			isBot: boolean;
 			deliveryMode?: "steer" | "followUp";
 			skipContextSync?: boolean;
+			images?: string[];
 		},
 		contextLabel: string,
 	) => Promise<void>;
@@ -423,6 +440,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 								userName: event.userName,
 								text: event.text,
 								isBot: false,
+								images: relativeImagePaths(options.paths.workspaceDir, event.channelId, event.images),
 							},
 							"/new command",
 						);
@@ -581,7 +599,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			}
 
 			try {
-				await runner.queueSteer(trimmedQueueText, event.userName);
+				await runner.queueSteer(trimmedQueueText, event.userName, event.images);
 
 				await archiveIncomingMessage(
 					event.channelId,
@@ -594,6 +612,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						isBot: false,
 						deliveryMode: mode,
 						skipContextSync: true,
+						images: relativeImagePaths(options.paths.workspaceDir, event.channelId, event.images),
 					},
 					`${mode} message`,
 				);
@@ -616,6 +635,37 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 				log.logWarning(`[${event.channelId}] Failed to queue ${mode}`, errMsg);
 				await bot.sendPlain(event.channelId, `无法排队这条消息：${errMsg}`);
 				return { kind: "handled" };
+			}
+		},
+
+		/**
+		 * Persist one downloaded inbound image under the channel's `inbox/` (spec 049). Bootstrap
+		 * owns this, not the transport, because it holds the workspace root; see the doc comment
+		 * on `DingTalkHandler.persistInboundImage` for the full contract (`mimeType: null` case
+		 * included).
+		 */
+		async persistInboundImage(
+			channelId: string,
+			image: { data: Buffer; mimeType: string | null },
+		): Promise<InboundImage | null> {
+			try {
+				const dir = join(getChannelDir(options.paths.workspaceDir, channelId), "inbox");
+				await mkdir(dir, { recursive: true });
+				const extension = extensionForMimeType(image.mimeType);
+				const path = join(
+					dir,
+					`image-${localStampForFilename()}-${Math.random().toString(36).slice(2, 8)}.${extension}`,
+				);
+				await writeFile(path, image.data, { mode: 0o600 });
+				return {
+					path,
+					mimeType: image.mimeType ?? "application/octet-stream",
+					byteSize: image.data.byteLength,
+					...(image.mimeType === null ? { unsupportedFormat: true } : {}),
+				};
+			} catch (err) {
+				log.logWarning(`[${channelId}] Failed to persist inbound image`, errorMessage(err));
+				return null;
 			}
 		},
 
@@ -650,6 +700,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 							text: event.text,
 							isBot: false,
 							skipContextSync: Boolean(builtInCommand),
+							images: relativeImagePaths(options.paths.workspaceDir, event.channelId, event.images),
 						},
 						"user message",
 					);
@@ -876,6 +927,7 @@ export async function createRuntimeContext(
 			isBot: boolean;
 			deliveryMode?: "steer" | "followUp";
 			skipContextSync?: boolean;
+			images?: string[];
 		},
 		contextLabel: string,
 	): Promise<void> => {

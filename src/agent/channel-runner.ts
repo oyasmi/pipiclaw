@@ -1,5 +1,5 @@
 import { Agent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Model } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
 import {
 	AgentSession,
@@ -20,6 +20,7 @@ import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import { commitActiveSessionRef, resolveActiveSessionFile } from "../channel/active-session-store.js";
 import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
+import { type InboundImage, MAX_INBOUND_IMAGE_BYTES } from "../channel/channel-event.js";
 import { resolveProjectScope } from "../channel/project-scope-store.js";
 import type { ChannelStore } from "../channel/store.js";
 import {
@@ -72,6 +73,7 @@ import { withTimeout } from "../shared/with-timeout.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
+import { formatSize } from "../tools/truncate.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { createCommandExtension } from "./command-extension.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
@@ -544,10 +546,22 @@ export class ChannelRunner implements AgentRunner {
 			});
 			promptText = assembled.text;
 
+			// Resolved before the compaction estimate below (which needs the image count) and
+			// refreshed inside `setModel` further down if a fallback switches models mid-turn
+			// (spec 049 D7) — a model's image support is looked up here explicitly because the
+			// SDK's own handling of an unsupported model is to silently replace each image block
+			// with a text placeholder.
+			let preparedImages = await this.prepareInboundImages(ctx.message.images);
+			for (const notice of preparedImages.notices) {
+				await ctx.respondInThread(notice);
+			}
+
 			// Estimated against the fully assembled prompt (recall + task digest + bootstrap all
 			// included above), not just the bare user message — those pieces can add thousands of
 			// characters and must count against the projected context usage this guard is checking.
-			await this.maybeRunPreventiveCompactionForIncomingText(promptText);
+			// Each image adds a fixed per-image estimate on top of the text: three attached photos
+			// can by themselves push a turn over the threshold that would trigger this guard.
+			await this.maybeRunPreventiveCompactionForIncomingText(promptText, preparedImages.images.length);
 
 			this.lastTurnContextStats = assembled.stats;
 
@@ -555,7 +569,10 @@ export class ChannelRunner implements AgentRunner {
 				prompt: async (text) => {
 					try {
 						await this.sessionResourceGate.runPrompt(async () => {
-							await this.session.prompt(text);
+							await this.session.prompt(
+								text,
+								preparedImages.images.length > 0 ? { images: preparedImages.images } : undefined,
+							);
 							promptSubmitted = true;
 							if (bootstrapPrepared) this.firstTurnMemoryBootstrapPending = false;
 						});
@@ -587,6 +604,13 @@ export class ChannelRunner implements AgentRunner {
 				resolveFallbackModel: () => this.resolveFallbackModel(),
 				setModel: async (model) => {
 					await this.setModelWithThinkingPreservation(model);
+					// The fallback model's vision support can differ from the one this turn started
+					// on; re-resolve against it rather than resend whatever was prepared for the
+					// model that just failed.
+					preparedImages = await this.prepareInboundImages(ctx.message.images);
+					for (const notice of preparedImages.notices) {
+						await ctx.respondInThread(notice);
+					}
 				},
 				notifySwitch: (from, to, errorSummary) => {
 					fallbackTargetRef = to;
@@ -885,8 +909,8 @@ export class ChannelRunner implements AgentRunner {
 		return this.session.promptTemplates.some((template) => template.name.toLowerCase() === name);
 	}
 
-	async queueSteer(text: string, userName?: string): Promise<void> {
-		await this.queueBusyMessage(this.requireQueuedMessage(text, "steer"), userName);
+	async queueSteer(text: string, userName?: string, images?: InboundImage[]): Promise<void> {
+		await this.queueBusyMessage(this.requireQueuedMessage(text, "steer"), userName, images);
 	}
 
 	async flushMemoryForShutdown(): Promise<void> {
@@ -1132,6 +1156,68 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	/**
+	 * Turn `InboundImage`s (already downloaded and persisted by the transport, spec 049) into the
+	 * `ImageContent[]` `AgentSession.prompt`/`steer` accept, plus any notices to surface to the
+	 * user about images that did not make it into this turn.
+	 *
+	 * Two gates apply, both fail *open* toward "still deliver the message" rather than dropping
+	 * the whole turn over one bad attachment:
+	 *
+	 * - The current model's `input` capability (spec 049 D7). A model that does not declare
+	 *   `"image"` support has its image blocks silently replaced with a text placeholder by the
+	 *   SDK's provider layer — exactly the failure this spec exists to fix, so it is checked
+	 *   explicitly here rather than trusted to fail loudly on its own. Re-checked on every call
+	 *   (including a mid-turn steer after a model fallback), since a fallback model's capability
+	 *   can differ from the one the turn started with.
+	 * - A defense-in-depth size re-check against `MAX_INBOUND_IMAGE_BYTES`. The transport already
+	 *   enforces this at download time, but the check is cheap and free of assumptions about how
+	 *   an `InboundImage` reached this method.
+	 *
+	 * An image already marked `unsupportedFormat` (sniffing failed at download time) is skipped
+	 * without its own notice — the `[图片N：格式不支持，已保存]` marker already in the message text
+	 * covers it.
+	 */
+	private async prepareInboundImages(
+		images: InboundImage[] | undefined,
+	): Promise<{ images: ImageContent[]; notices: string[] }> {
+		if (!images || images.length === 0) {
+			return { images: [], notices: [] };
+		}
+
+		const model = this.session.model ?? this.activeModel;
+		if (!model.input.includes("image")) {
+			const modelRef = formatModelReference(model);
+			return {
+				images: [],
+				notices: [
+					`⚠️ 当前模型 ${modelRef} 不支持图片输入，收到的图片已保存但未加入本轮上下文：\n` +
+						images.map((image) => `- \`${image.path}\``).join("\n") +
+						"\n可以切换到支持视觉的模型后让我 read 该文件。",
+				],
+			};
+		}
+
+		const contents: ImageContent[] = [];
+		const notices: string[] = [];
+		for (const image of images) {
+			if (image.unsupportedFormat) continue;
+			if (image.byteSize > MAX_INBOUND_IMAGE_BYTES) {
+				notices.push(
+					`⚠️ 图片 \`${image.path}\`（${formatSize(image.byteSize)}）超过 ${formatSize(MAX_INBOUND_IMAGE_BYTES)} 上限，未加入本轮上下文，可以让我 read 该文件查看。`,
+				);
+				continue;
+			}
+			try {
+				const data = await readFile(image.path);
+				contents.push({ type: "image", data: data.toString("base64"), mimeType: image.mimeType });
+			} catch (error) {
+				notices.push(`⚠️ 图片 \`${image.path}\` 读取失败：${errorMessage(error)}`);
+			}
+		}
+		return { images: contents, notices };
+	}
+
+	/**
 	 * Single source of truth for the busy-message window: steer is accepted while
 	 * the prompt is being assembled ("preparing") or while the agent loop is
 	 * actually streaming. Re-asserted after every await because the turn can end
@@ -1147,7 +1233,7 @@ export class ChannelRunner implements AgentRunner {
 		throw new Error("No task is currently running.");
 	}
 
-	private async queueBusyMessage(text: string, userName?: string): Promise<void> {
+	private async queueBusyMessage(text: string, userName?: string, images?: InboundImage[]): Promise<void> {
 		this.assertBusyWindowOpen();
 
 		await this.ensureSessionReady();
@@ -1159,13 +1245,17 @@ export class ChannelRunner implements AgentRunner {
 			log.logWarning(`[${this.channelId}] Queued message exceeded ${MAX_USER_MESSAGE_CHARS} chars and was clipped`);
 		}
 		const queuedMessage = this.formatUserMessage(clippedText, userName);
-		await this.maybeRunPreventiveCompactionForIncomingText(queuedMessage);
+		const preparedImages = await this.prepareInboundImages(images);
+		for (const notice of preparedImages.notices) {
+			await this.runState.ctx?.respondInThread(notice);
+		}
+		await this.maybeRunPreventiveCompactionForIncomingText(queuedMessage, preparedImages.images.length);
 
 		this.assertBusyWindowOpen();
 
 		const queueMessage = async () => {
 			this.assertBusyWindowOpen();
-			await this.session.steer(queuedMessage);
+			await this.session.steer(queuedMessage, preparedImages.images.length > 0 ? preparedImages.images : undefined);
 		};
 
 		await this.sessionResourceGate.runPrompt(queueMessage);
@@ -1356,11 +1446,14 @@ export class ChannelRunner implements AgentRunner {
 		await this.sessionReady;
 	}
 
-	private async maybeRunPreventiveCompactionForIncomingText(incomingText: string): Promise<void> {
+	private async maybeRunPreventiveCompactionForIncomingText(
+		incomingText: string,
+		imageCount: number = 0,
+	): Promise<void> {
 		const currentModel = this.session.model ?? this.activeModel;
 		const contextUsage = this.session.getContextUsage();
 		const contextTokens = contextUsage?.tokens;
-		const incomingTokens = estimateIncomingMessageTokens(incomingText);
+		const incomingTokens = estimateIncomingMessageTokens(incomingText, imageCount);
 		const decision = getPreventiveCompactionDecision(contextTokens, incomingTokens, currentModel.contextWindow);
 
 		if (!decision.shouldCompact) {

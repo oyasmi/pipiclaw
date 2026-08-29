@@ -21,7 +21,7 @@ import type {
 	OutboundMedia,
 	ProgressStyle,
 } from "../channel/channel-context.js";
-import type { ChannelEvent } from "../channel/channel-event.js";
+import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
 import type { ChannelObservation } from "../channel/channel-index.js";
 import { getChannelDir } from "../channel/channel-paths.js";
 import {
@@ -33,12 +33,22 @@ import {
 } from "../commands/catalog.js";
 import * as log from "../log.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
+import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { sleepUnref } from "../shared/with-timeout.js";
+import { formatSize } from "../tools/truncate.js";
 // Turn serialization is runtime policy; the queue lives in its own module and
 // this transport only consumes it.
 import { ChannelQueue } from "./channel-queue.js";
+import {
+	MAX_INBOUND_IMAGE_BYTES,
+	MAX_INBOUND_IMAGES_PER_MESSAGE,
+	MEDIA_DOWNLOAD_TIMEOUT_MS,
+	type ParsedInboundMessage,
+	parseInboundMessage,
+	sniffImageMimeType,
+} from "./inbound-media.js";
 
 // ============================================================================
 // Types
@@ -166,6 +176,18 @@ export interface DingTalkHandler {
 		mode: BusyMessageMode,
 		queueText: string,
 	): Promise<BusyMessageResult>;
+	/**
+	 * Persist one downloaded inbound image under the channel's `inbox/` (spec 049). Owned by
+	 * bootstrap — it holds the workspace root — not the transport, which only knows how to fetch
+	 * bytes over the DingTalk API. `mimeType` is `null` when magic-byte sniffing did not recognize
+	 * a supported image format; the file is still persisted (for the archive/record) but the
+	 * transport excludes it from the model-facing text marker. Returns `null` on a local I/O
+	 * failure, surfaced to the user as "保存失败" — the rest of the message is still delivered.
+	 */
+	persistInboundImage?(
+		channelId: string,
+		image: { data: Buffer; mimeType: string | null },
+	): Promise<InboundImage | null>;
 }
 
 // ============================================================================
@@ -210,6 +232,8 @@ interface DingTalkIncomingMessage {
 	};
 	content?: {
 		richText?: Array<Record<string, string>>;
+		/** Present on a `picture` message; see `inbound-media.ts`'s `parseInboundMessage`. */
+		downloadCode?: string;
 	};
 }
 
@@ -299,6 +323,13 @@ export class DingTalkBot implements MediaSender {
 
 	// Per-channel queues
 	private queues = new Map<string, ChannelQueue>();
+	// Serializes "resolve inbound image attachments → build event → route" per channel (spec 049
+	// D3): a message needing a download must not be overtaken, in delivery order, by a later
+	// download-free message on the same channel. `pendingInboundIngestCount` lets
+	// `allChannelQueuesIdle()` see this in-flight network work, which `ChannelQueue.isIdle()`
+	// alone cannot — the event has not been built yet, let alone enqueued.
+	private inboundIngestQueue = createSerialQueue<string>();
+	private pendingInboundIngestCount = 0;
 
 	// Connection stability
 	private client: DWClient | null = null;
@@ -1025,6 +1056,126 @@ export class DingTalkBot implements MediaSender {
 	}
 
 	/**
+	 * Two-step DingTalk inbound file download (spec 049): `messageFiles/download` exchanges the
+	 * message's `downloadCode` for a short-lived `downloadUrl`, then that URL is fetched for the
+	 * actual bytes. Both hops reuse `getAccessToken()` — the same app access token works across
+	 * DingTalk's hosts, as the comment on `DINGTALK_OAPI` above explains for the outbound side.
+	 *
+	 * This runs from `onStreamMessage`'s per-channel ingestion queue, never from inside a turn: a
+	 * busy channel can queue a message for minutes (`USER_MESSAGE_QUEUE_LIMIT`), and by the time a
+	 * queued turn actually ran, a `downloadCode`/`downloadUrl` fetched only then could easily have
+	 * already expired.
+	 *
+	 * `protected` so the deterministic e2e harness can override it and run this path with zero
+	 * network, the same pattern `HarnessDingTalkBot` already uses for outbound calls.
+	 */
+	protected async downloadMessageFile(downloadCode: string): Promise<{ data: Buffer } | null> {
+		const token = await this.getAccessToken();
+		if (!token) return null;
+
+		const robotCode = this.config.robotCode || this.config.clientId;
+
+		try {
+			const downloadUrlResp = await http.post(
+				`${DINGTALK_API}/v1.0/robot/messageFiles/download`,
+				{ robotCode, downloadCode },
+				{ headers: { "x-acs-dingtalk-access-token": token } },
+			);
+			const downloadUrl = isRecord(downloadUrlResp.data) ? downloadUrlResp.data.downloadUrl : undefined;
+			if (typeof downloadUrl !== "string" || !downloadUrl) {
+				log.logWarning(
+					"DingTalk: messageFiles/download returned no downloadUrl",
+					JSON.stringify(downloadUrlResp.data),
+				);
+				return null;
+			}
+
+			const fileResp = await http.get(downloadUrl, {
+				responseType: "arraybuffer",
+				// Reject an oversized body before it fully lands in memory rather than after.
+				maxContentLength: MAX_INBOUND_IMAGE_BYTES,
+				timeout: MEDIA_DOWNLOAD_TIMEOUT_MS,
+			});
+			return { data: Buffer.from(fileResp.data as ArrayBuffer) };
+		} catch (err) {
+			if (axios.isAxiosError(err) && err.response) {
+				log.logWarning(
+					`DingTalk: inbound file download failed (${err.response.status})`,
+					JSON.stringify(err.response.data),
+				);
+			} else {
+				log.logWarning("DingTalk: inbound file download failed", errorMessage(err));
+			}
+			return null;
+		}
+	}
+
+	/**
+	 * Resolve one parsed message's image credentials into persisted `InboundImage`s and a text
+	 * with every `[图片N]` marker either left as-is (success) or replaced with a reason (spec 049
+	 * D8): a download failure, an unrecognized format, an oversized file, or a message that
+	 * simply carried more images than `MAX_INBOUND_IMAGES_PER_MESSAGE` allows. A failure on one
+	 * image never drops the rest of the message — only that one marker changes.
+	 *
+	 * No-op (no network call at all) when the message carries no image credentials, so a plain
+	 * text message never pays for this method's existence.
+	 */
+	private async resolveInboundAttachments(
+		channelId: string,
+		parsed: ParsedInboundMessage,
+	): Promise<{ text: string; images: InboundImage[] }> {
+		if (parsed.downloadCodes.length === 0) {
+			return { text: parsed.text, images: [] };
+		}
+
+		let text = parsed.text;
+		const images: (InboundImage | undefined)[] = [];
+		const replaceMarker = (index: number, replacement: string) => {
+			text = text.replace(`[图片${index + 1}]`, replacement);
+		};
+
+		await Promise.all(
+			parsed.downloadCodes.map(async (downloadCode, index) => {
+				const marker = index + 1;
+				if (index >= MAX_INBOUND_IMAGES_PER_MESSAGE) {
+					replaceMarker(index, `[图片${marker}：超出单条消息图片数量上限，已丢弃]`);
+					return;
+				}
+
+				const downloaded = await this.downloadMessageFile(downloadCode);
+				if (!downloaded) {
+					replaceMarker(index, `[图片${marker}：接收失败]`);
+					return;
+				}
+
+				if (downloaded.data.byteLength > MAX_INBOUND_IMAGE_BYTES) {
+					replaceMarker(index, `[图片${marker}：文件过大（${formatSize(downloaded.data.byteLength)}），已丢弃]`);
+					return;
+				}
+
+				const mimeType = sniffImageMimeType(downloaded.data);
+				const persisted = await this.handler.persistInboundImage?.(channelId, {
+					data: downloaded.data,
+					mimeType,
+				});
+				if (!persisted) {
+					replaceMarker(index, `[图片${marker}：保存失败]`);
+					return;
+				}
+
+				if (!mimeType) {
+					// Persisted for the record, but never handed to a model — see the handler
+					// contract's doc comment on `persistInboundImage`.
+					replaceMarker(index, `[图片${marker}：格式不支持，已保存]`);
+				}
+				images[index] = persisted;
+			}),
+		);
+
+		return { text, images: images.filter((image): image is InboundImage => image !== undefined) };
+	}
+
+	/**
 	 * POST a robot message with an arbitrary msgKey/msgParam, routing DM vs group
 	 * to the correct endpoint. The single outbound path for every non-card message:
 	 * plain text/markdown, images, and files.
@@ -1273,36 +1424,18 @@ export class DingTalkBot implements MediaSender {
 	// Private - Message handling
 	// ==========================================================================
 
-	private extractContent(data: DingTalkIncomingMessage): string {
-		// 1. text 类型消息：从 text.content 提取
-		const textContent = (data.text?.content || "").trim();
-		if (textContent) return textContent;
-
-		// 2. richText 类型消息：从 content.richText 列表提取文本片段
-		if (data.content?.richText) {
-			const parts: string[] = [];
-			for (const item of data.content.richText) {
-				if (item.text) parts.push(item.text);
-			}
-			const joined = parts.join("").trim();
-			if (joined) return joined;
-		}
-
-		return "";
-	}
-
 	private async onStreamMessage(data: DingTalkIncomingMessage): Promise<void> {
 		if (this.isStopped) {
 			return;
 		}
 
-		const content = this.extractContent(data);
+		const parsed = parseInboundMessage(data);
 		const senderId = data.senderStaffId || data.senderId || "";
 		const senderName = data.senderNick || "Unknown";
 		const conversationId = data.conversationId || "";
 		const conversationType = data.conversationType || "1";
 
-		if (!content) {
+		if (!parsed.text && parsed.downloadCodes.length === 0) {
 			const msgtype = typeof data.msgtype === "string" ? data.msgtype : "unknown";
 			log.logWarning(`DingTalk: empty message (type=${msgtype})`);
 			return;
@@ -1318,41 +1451,56 @@ export class DingTalkBot implements MediaSender {
 		// Determine channel ID
 		const channelId = conversationType === "2" ? `group_${conversationId}` : `dm_${senderId}`;
 
-		log.logEvent("info", "runtime.dingtalk.message_received", "Accepted incoming message", {
-			ctx: { channelId, userName: senderName },
-			fields: { messageType: conversationType === "2" ? "group" : "dm", messageLength: content.length },
-		});
+		// Parsing above is free; resolving image attachments below is a real network round-trip.
+		// Serialize the whole "resolve attachments → build event → route" unit per channel (spec
+		// 049 D3): without this, a message needing a download can be overtaken, in delivery order,
+		// by a later download-free message on the same channel — nothing upstream of
+		// `enqueueStreamMessage` otherwise waits on anything asynchronous.
+		this.pendingInboundIngestCount++;
+		try {
+			await this.inboundIngestQueue.run(channelId, async () => {
+				const { text: content, images } = await this.resolveInboundAttachments(channelId, parsed);
 
-		// A group carries its title on every message; a DM has none, so the peer's nickname is
-		// the only human-readable handle that channel will ever have.
-		const conversationTitle = typeof data.conversationTitle === "string" ? data.conversationTitle.trim() : "";
-		const channelName = (conversationType === "2" ? conversationTitle : senderName) || undefined;
+				log.logEvent("info", "runtime.dingtalk.message_received", "Accepted incoming message", {
+					ctx: { channelId, userName: senderName },
+					fields: { messageType: conversationType === "2" ? "group" : "dm", messageLength: content.length },
+				});
 
-		// Cache conversation metadata for card creation
-		this.setConversationMeta(channelId, {
-			conversationId,
-			conversationType,
-			senderId,
-		});
+				// A group carries its title on every message; a DM has none, so the peer's nickname
+				// is the only human-readable handle that channel will ever have.
+				const conversationTitle = typeof data.conversationTitle === "string" ? data.conversationTitle.trim() : "";
+				const channelName = (conversationType === "2" ? conversationTitle : senderName) || undefined;
 
-		// The one place a real person's message is seen before command/busy routing splits the
-		// path, so the channel index counts every human message and no synthetic wake.
-		this.handler.noteChannelActivity?.({ channelId, name: channelName, at: Date.now() });
+				// Cache conversation metadata for card creation
+				this.setConversationMeta(channelId, {
+					conversationId,
+					conversationType,
+					senderId,
+				});
 
-		// Build event
-		const event: DingTalkEvent = {
-			type: conversationType === "2" ? "group" : "dm",
-			channelId,
-			ts: Date.now().toString(),
-			user: senderId,
-			userName: senderName,
-			text: content,
-			conversationId,
-			conversationType,
-			...(channelName ? { channelName } : {}),
-		};
+				// The one place a real person's message is seen before command/busy routing splits
+				// the path, so the channel index counts every human message and no synthetic wake.
+				this.handler.noteChannelActivity?.({ channelId, name: channelName, at: Date.now() });
 
-		await this.routeInboundEvent(event);
+				// Build event
+				const event: DingTalkEvent = {
+					type: conversationType === "2" ? "group" : "dm",
+					channelId,
+					ts: Date.now().toString(),
+					user: senderId,
+					userName: senderName,
+					text: content,
+					conversationId,
+					conversationType,
+					...(channelName ? { channelName } : {}),
+					...(images.length > 0 ? { images } : {}),
+				};
+
+				await this.routeInboundEvent(event);
+			});
+		} finally {
+			this.pendingInboundIngestCount--;
+		}
 	}
 
 	/**
@@ -1476,6 +1624,7 @@ export class DingTalkBot implements MediaSender {
 
 	/** Test seam (spec 048): true when no channel queue has pending or in-flight work. */
 	allChannelQueuesIdle(): boolean {
+		if (this.pendingInboundIngestCount > 0) return false;
 		for (const queue of this.queues.values()) {
 			if (!queue.isIdle()) return false;
 		}

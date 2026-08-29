@@ -19,6 +19,13 @@ export interface LoggedMessage {
 	isBot: boolean;
 	deliveryMode?: "steer" | "followUp";
 	skipContextSync?: boolean;
+	/**
+	 * Paths of any images the user sent alongside `text` (spec 049), relative to the channel
+	 * directory. Kept even for an image that never made it into the model's context (unsupported
+	 * format, oversized, model without vision support) — this is the only place that record
+	 * survives once the turn's `[图片N: ...]` marker has scrolled out of `HISTORY.md`.
+	 */
+	images?: string[];
 }
 
 export interface ChannelStoreConfig {

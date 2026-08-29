@@ -1,4 +1,5 @@
 import type { ChannelContext } from "../channel/channel-context.js";
+import type { InboundImage } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import type { RunnerBuiltInCommand } from "../commands/catalog.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
@@ -50,7 +51,7 @@ export interface AgentRunner {
 	handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void>;
 	/** True if `text` is a slash command the runtime or session layer can handle. */
 	isKnownSlashCommand(text: string): boolean;
-	queueSteer(text: string, userName?: string): Promise<void>;
+	queueSteer(text: string, userName?: string, images?: InboundImage[]): Promise<void>;
 	flushMemoryForShutdown(): Promise<void>;
 	getMemoryMaintenanceContext(): Promise<MemoryMaintenanceRuntimeContext>;
 	getStatusSnapshot(): RunnerStatusSnapshot;

@@ -17,6 +17,8 @@
  * of the DingTalk transport's directory to get it.
  */
 
+import type { InboundImage } from "./channel-event.js";
+
 /**
  * How progress is surfaced during a run. Derived from the transport's response
  * mode so callers never branch on the raw enum string.
@@ -70,6 +72,9 @@ export interface ChannelContext {
 		userName?: string;
 		channel: string;
 		ts: string;
+		/** Images the user sent alongside this message (spec 049). Empty on transports (TUI) that
+		 *  do not yet produce inbound attachments — the field stays optional for them. */
+		images?: InboundImage[];
 	};
 	channelName?: string;
 	respond: (text: string, shouldLog?: boolean) => Promise<void>;

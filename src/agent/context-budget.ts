@@ -2,6 +2,15 @@ import { estimateTokens } from "../shared/token-estimate.js";
 
 export const PREVENTIVE_COMPACTION_THRESHOLD_RATIO = 0.75;
 
+/**
+ * Rough per-image token cost (spec 049), used only to keep the preventive-compaction projection
+ * honest when a turn carries inbound images — providers vary (roughly 250–1600 tokens per image
+ * depending on resolution/provider), so this is a conservative single constant rather than a
+ * per-provider table: the guard only needs to be in the right ballpark to decide whether to
+ * compact before sending, not to predict the exact bill.
+ */
+export const ESTIMATED_TOKENS_PER_IMAGE = 1200;
+
 export interface PreventiveCompactionDecision {
 	shouldCompact: boolean;
 	projectedTokens: number | null;
@@ -17,11 +26,9 @@ export interface PreventiveCompactionDecision {
  * under the threshold and the turn went in without compacting — the case preventive compaction
  * exists to catch, on this product's most common input.
  */
-export function estimateIncomingMessageTokens(text: string): number {
-	if (!text) {
-		return 0;
-	}
-	return estimateTokens(text);
+export function estimateIncomingMessageTokens(text: string, imageCount: number = 0): number {
+	const textTokens = text ? estimateTokens(text) : 0;
+	return textTokens + Math.max(0, imageCount) * ESTIMATED_TOKENS_PER_IMAGE;
 }
 
 export function getPreventiveCompactionDecision(

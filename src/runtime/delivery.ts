@@ -65,6 +65,7 @@ class ChannelDeliveryController {
 				userName: this.event.userName,
 				channel: this.event.channelId,
 				ts: this.event.ts,
+				images: this.event.images,
 			},
 			// The group title when the transport supplied one; the raw id is the fallback so a
 			// synthetic event (which carries no conversation payload) still names its channel.

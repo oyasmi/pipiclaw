@@ -166,6 +166,12 @@ export function createDeterministicHome(opts: {
 	securityJson?: unknown;
 	/** Written to `tools.json`; omitted when not provided. */
 	toolsJson?: unknown;
+	/**
+	 * Adds `input: ["text", "image"]` to the named default models — both `mock-main` and
+	 * `mock-fallback` are text-only otherwise (no `input` field), which most suites want; spec
+	 * 049's inbound-image tests need at least one model that declares vision support.
+	 */
+	visionModels?: Array<"mock-main" | "mock-fallback">;
 }): E2ETestHome {
 	const homeDir = opts.homeDir ?? mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
 	mkdirSync(homeDir, { recursive: true });
@@ -180,6 +186,15 @@ export function createDeterministicHome(opts: {
 		writeJson(join(homeDir, "tools.json"), opts.toolsJson);
 	}
 	writeJson(join(homeDir, "auth.json"), {});
+	const defaultModels: Array<Record<string, unknown>> = [
+		{ id: "mock-main", name: "mock-main", contextWindow: 200000, maxTokens: 8192 },
+		{ id: "mock-fallback", name: "mock-fallback", contextWindow: 200000, maxTokens: 8192 },
+	];
+	for (const model of defaultModels) {
+		if (opts.visionModels?.includes(model.id as "mock-main" | "mock-fallback")) {
+			model.input = ["text", "image"];
+		}
+	}
 	writeJson(join(homeDir, "models.json"), {
 		providers: {
 			"e2e-mock": {
@@ -187,10 +202,7 @@ export function createDeterministicHome(opts: {
 				api: "openai-completions",
 				apiKey: "e2e-mock-key",
 				compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
-				models: [
-					{ id: "mock-main", name: "mock-main", contextWindow: 200000, maxTokens: 8192 },
-					{ id: "mock-fallback", name: "mock-fallback", contextWindow: 200000, maxTokens: 8192 },
-				],
+				models: defaultModels,
 			},
 		},
 	});

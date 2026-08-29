@@ -182,6 +182,9 @@ export async function createDeterministicHarness(options?: {
 	/** Shorten the sub-agent sync grace window so the detached-settlement + wake path is
 	 *  reachable without a multi-minute wait (A14/A15 trusted half/A16 notice). */
 	subagentSyncGraceMs?: number;
+	/** Gives the named default model(s) `input: ["text", "image"]` (spec 049's inbound-image
+	 *  tests need at least one model declaring vision support). */
+	visionModels?: Array<"mock-main" | "mock-fallback">;
 }): Promise<DeterministicHarness> {
 	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
 	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
@@ -210,7 +213,13 @@ export async function createDeterministicHarness(options?: {
 		};
 		toolsJson = { tools: { web: { enable: true } } };
 	}
-	const home = createDeterministicHome({ mockBaseUrl: model.baseUrl, homeDir: preHome, securityJson, toolsJson });
+	const home = createDeterministicHome({
+		mockBaseUrl: model.baseUrl,
+		homeDir: preHome,
+		securityJson,
+		toolsJson,
+		visionModels: options?.visionModels,
+	});
 	const channelId = options?.channelId ?? "dm_e2e_user";
 	const channelDir = join(home.workspaceDir, getChannelDirName(channelId));
 	const deliveries: CapturedDelivery[] = [];
