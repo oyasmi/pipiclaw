@@ -153,6 +153,53 @@ export function createE2ETestHome(overrides?: {
 	return { homeDir, workspaceDir, channelConfigPath };
 }
 
+/**
+ * A test home for the deterministic e2e layer (spec 048 D2.2): the model provider
+ * is the in-process mock, wired through `models.json` with an inline apiKey. No
+ * `auth.json` is copied — there is no credential concept in this layer, so it runs
+ * on any machine, offline. `mock-fallback` exists for the 429→fallback case (A22).
+ */
+export function createDeterministicHome(opts: { mockBaseUrl: string; homeDir?: string }): E2ETestHome {
+	const homeDir = opts.homeDir ?? mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
+	mkdirSync(homeDir, { recursive: true });
+	const workspaceDir = join(homeDir, "workspace");
+	const channelConfigPath = join(homeDir, "channel.json");
+	writeDefaultWorkspace(workspaceDir);
+
+	writeJson(join(homeDir, "auth.json"), {});
+	writeJson(join(homeDir, "models.json"), {
+		providers: {
+			"e2e-mock": {
+				baseUrl: opts.mockBaseUrl,
+				api: "openai-completions",
+				apiKey: "e2e-mock-key",
+				compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
+				models: [
+					{ id: "mock-main", name: "mock-main", contextWindow: 200000, maxTokens: 8192 },
+					{ id: "mock-fallback", name: "mock-fallback", contextWindow: 200000, maxTokens: 8192 },
+				],
+			},
+		},
+	});
+	writeJson(join(homeDir, "settings.json"), {
+		defaultProvider: "e2e-mock",
+		defaultModel: "mock-main",
+		memoryRecall: { enabled: true, rerankWithModel: true },
+		sessionMemory: { enabled: true },
+		memoryMaintenance: { enabled: true },
+	});
+	writeJson(channelConfigPath, {
+		clientId: "e2e-client-id",
+		clientSecret: "e2e-client-secret",
+		robotCode: "e2e-client-id",
+		cardTemplateId: "",
+		cardTemplateKey: "content",
+		allowFrom: [],
+	});
+
+	return { homeDir, workspaceDir, channelConfigPath };
+}
+
 export function cleanupE2ETestHome(homeDir: string): void {
 	rmSync(homeDir, { recursive: true, force: true });
 }

@@ -30,6 +30,7 @@
 		"deadcode": "knip",
 		"test": "vitest --run",
 		"test:e2e": "vitest --run --config vitest.config.e2e.ts",
+		"test:e2e:deterministic": "vitest --run --config vitest.config.e2e.ts test/e2e/deterministic",
 		"eval:build": "tsc -p tsconfig.evals.json && node -e \"const fs=require('node:fs'); fs.cpSync('src/playbooks','dist-evals/src/playbooks',{recursive:true})\"",
 		"eval:typecheck": "tsc --noEmit -p tsconfig.evals.json",
 		"eval": "npm run eval:build && node dist-evals/evals/harness/run.js",

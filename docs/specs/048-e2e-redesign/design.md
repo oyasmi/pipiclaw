@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | IN PROGRESS（P0 止血已完成；P1–P4 待做） |
+| 状态 | IN PROGRESS（P0 + P1 已完成；P2–P4 待做） |
 | 日期 | 2026-08-29 |
 | 触发 | 例行体检发现 e2e 套件已红 5 天无人察觉，且这个红掩盖了一个 2026-08-24 引入、至今线上生效的 `/help` 冷启动崩溃 |
 | 前置 | 004 e2e-test（本 spec 是它的重做）、028 behavior-eval（分工的另一半）、040/042 委派、043 会话身份与回合恢复、044 native-file-io、046/047 工具切分 |
@@ -444,6 +444,19 @@ A11 / A14 / A17 / A20 / A21 / A23；AGENTS.md 增加测试分层规则与 e2e �
 - **反证**：把 `handleBuiltinCommand` 的 `await this.ensureSessionReady()` 注释掉，A1 立即变红并打印 `Cannot read properties of undefined (reading 'promptTemplates')`，与 F2 一致。
 - **DoD**：`npm run check` 全绿；`npm run test:e2e`（本机 openai-codex）全绿；`/help` 冷启动不再崩。
 
-### P1–P4 待做
+### P1 脚本化 provider + pilot（2026-08-29 完成）
 
-脚本化 mock provider、26 条机制层用例、现有文件迁移、live 层收敛、AGENTS.md 分层规则——均未开始。
+- **`test/support/mock-provider/`**（4 个文件，均严格限定职责，不做状态/智能/回放）：
+  - `sse.ts` —— openai chat-completions SSE 编码，只覆盖 pi 实际解析的子集（`delta.content` / `delta.tool_calls[]` 按 index 聚合 / `finish_reason` / 尾部 `usage` / `[DONE]`）。
+  - `script.ts` —— `parseRequest()` 把请求体解析成 `RequestView`（`isMainTurn` 判据 = 「带 tools」）；`Script` 按 `when(req)` 内容匹配（非到达顺序），路由耗尽返回 null（→ 502）而非复用最后一条；`hold/release`、`failNext`；`reply.text/toolCall/json` 构造器。
+  - `defaults.ts` —— D2.7 sidecar 默认路由（extraction/consolidation 合一、rerank、session-memory、session-search），显式注册非兜底。
+  - `server.ts` —— `node:http` 监听 `127.0.0.1:0`，`POST /chat/completions`；未匹配 → 502 + 记进 `requests`；abort 安全收尾。
+- **`runtime-harness.ts`** 新增 `createDeterministicHarness()`：起 mock → 写确定性 home（`createDeterministicHome`，models.json 内联 apiKey，无 auth.json）→ 装 runtime。暴露 `model`（MockProvider）、`modelRequestCount()`、`assertNoUnmatchedRequests()`。
+- **`test/mock-provider.test.ts`**（进 `npm run check`）：SSE 编码正确、路由按内容命中（含顺序无关、耗尽→null）、未匹配请求 502 + 被记录、匹配请求以 event-stream 返回。
+- **pilot `test/e2e/deterministic/pilot.test.ts`**：A2（`/help`+`/tasks`+`/status` 各有回复且 `modelRequestCount()===0`）+ 一条经 mock 的正常回合（脚本化回复被投递、请求命中 `pilot-turn` 路由）。`afterEach` 断言无未匹配请求。
+- **`package.json`** 新增 `test:e2e:deterministic`（`test:e2e` 暂仍跑全量，待 P3 live 收敛后再拆）。
+- **DoD 达成**：pilot 在网络命名空间（仅 loopback）下整套通过；未匹配请求让 `afterEach` 以可读信息失败；`npm run check` 全绿（900 tests）。
+
+### P2–P4 待做
+
+P0 用例组（A1/A3/A4/A5/A7/A9/A10/A15/A19）、P1 用例组、现有文件迁移、live 层收敛到 5 条、AGENTS.md 分层规则、反证清单——均未开始。

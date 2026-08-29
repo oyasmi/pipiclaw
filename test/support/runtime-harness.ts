@@ -2,7 +2,11 @@ import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import type { DingTalkBot, DingTalkEvent } from "../../src/runtime/dingtalk.js";
 import { type CapturedDelivery, E2EFakeDingTalkBot } from "./fake-bot.js";
-import { cleanupE2ETestHome, createE2ETestHome, type E2ETestHome } from "./setup.js";
+import { startMockProvider } from "./mock-provider/server.js";
+import { cleanupE2ETestHome, createDeterministicHome, createE2ETestHome, type E2ETestHome } from "./setup.js";
+
+export { reply } from "./mock-provider/script.js";
+export type { MockProvider } from "./mock-provider/server.js";
 
 export interface E2ERuntimeHarness {
 	homeDir: string;
@@ -112,6 +116,51 @@ export async function createRuntimeHarness(options?: {
 		async shutdown(): Promise<void> {
 			await runtime.shutdown("manual");
 			cleanupE2ETestHome(home.homeDir);
+		},
+	};
+}
+
+export interface DeterministicHarness extends E2ERuntimeHarness {
+	/** The in-process mock provider. Register routes on `model.script` before sending. */
+	model: import("./mock-provider/server.js").MockProvider;
+	/** Count of chat-completions requests the provider has received so far. */
+	modelRequestCount(): number;
+	/** Throws if the provider saw a request no route matched. Call in `afterEach`. */
+	assertNoUnmatchedRequests(): void;
+}
+
+/**
+ * The deterministic e2e harness (spec 048 P1): full runtime, real memory, real
+ * delivery — but the model is the in-process mock provider. No network, no cost.
+ * Register routes on `harness.model.script` before `sendUserMessage`.
+ */
+export async function createDeterministicHarness(options?: {
+	channelId?: string;
+	registerSidecarDefaults?: boolean;
+}): Promise<DeterministicHarness> {
+	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
+	const home = createDeterministicHome({ mockBaseUrl: model.baseUrl });
+	const base = await createRuntimeHarness({ channelId: options?.channelId, home });
+
+	return {
+		...base,
+		model,
+		modelRequestCount: () => model.requests.length,
+		assertNoUnmatchedRequests(): void {
+			const bad = model.unmatched();
+			if (bad.length > 0) {
+				const lines = bad
+					.map(
+						(r) =>
+							`  - ${r.isMainTurn ? "main" : "sidecar"}: ${(r.lastUserText || r.systemPrompt).slice(0, 200)}`,
+					)
+					.join("\n");
+				throw new Error(`mock provider received ${bad.length} unmatched request(s):\n${lines}`);
+			}
+		},
+		async shutdown(): Promise<void> {
+			await base.shutdown();
+			await model.close();
 		},
 	};
 }
