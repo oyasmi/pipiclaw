@@ -325,7 +325,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
     ├── dispatch/                  # durable-dispatch 外发箱
     ├── events/history.jsonl       # 事件审计
     ├── jobs/<channelId>/          # 后台作业状态与输出索引
-    ├── subagent-runs/<channelId>/ # 委派权威状态、pid、argv、幂等标记
+    ├── subagent-runs/<channelId>/ # 委派权威状态、pid、argv、幂等标记（目录名 `/` → `__`）
     ├── memory/<channelId>.json    # 记忆维护打点状态
     ├── logs/runtime.jsonl         # 结构化运行日志
     └── usage/                     # 用量账本

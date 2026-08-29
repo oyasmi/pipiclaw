@@ -1,6 +1,7 @@
-import { mkdir, readdir, readFile, rmdir, stat, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, readFile, rename, rmdir, stat, unlink } from "node:fs/promises";
+import { dirname, join, relative, sep } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
+import { getChannelDir, isChannelId } from "../channel/channel-paths.js";
 import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
@@ -259,7 +260,10 @@ export interface RunNotice {
 export type RunNotifier = (channelId: string, notice: RunNotice) => void | Promise<void>;
 
 export interface RunManagerOptions {
-	/** Root of the per-channel record directories (`<stateDir>/<channelId>/`). Omit to skip persistence. */
+	/**
+	 * Root of the per-channel record directories (`<stateDir>/<escaped channelId>/`, escaped by
+	 * `getChannelDir`). Omit to skip persistence.
+	 */
 	stateDir?: string;
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	/** Best-effort out-of-band notice sink (see `RunNotice`). Never awaited by settlement or the
@@ -382,8 +386,16 @@ export class SubAgentRunManager {
 		private readonly options: RunManagerOptions,
 	) {}
 
+	private recordDir(): string | undefined {
+		// `getChannelDir`, not a raw join: a DingTalk group id routinely contains `/`, which used
+		// to nest the records one directory deeper than the startup scan ever looked — so a
+		// restart silently abandoned every delegation run of every such channel.
+		return this.options.stateDir ? getChannelDir(this.options.stateDir, this.channelId) : undefined;
+	}
+
 	private recordPath(runId: string): string | undefined {
-		return this.options.stateDir ? join(this.options.stateDir, this.channelId, `${runId}.json`) : undefined;
+		const dir = this.recordDir();
+		return dir ? join(dir, `${runId}.json`) : undefined;
 	}
 
 	private async persist(record: RunRecord, required = false): Promise<void> {
@@ -982,9 +994,8 @@ export class SubAgentRunManager {
 	 * without mutual exclusion.
 	 */
 	async restore(): Promise<number> {
-		const stateDir = this.options.stateDir;
-		if (!stateDir) return 0;
-		const dir = join(stateDir, this.channelId);
+		const dir = this.recordDir();
+		if (!dir) return 0;
 		let filenames: string[];
 		try {
 			filenames = (await readdir(dir)).filter((name) => name.endsWith(".json"));
@@ -1399,22 +1410,105 @@ export function channelDelegationTaskIds(channelId: string): Set<string> {
 }
 
 /**
+ * How deep the scan below looks for record files.
+ *
+ * Canonical records sit one level under the state root. Records written before the id was
+ * escaped sit one level deeper per `/` in the channel id, and a base64 conversation id carries
+ * very few; three is generous, and the bound keeps a corrupted or hand-made tree from turning
+ * startup into an unbounded walk.
+ */
+const MAX_RECORD_SCAN_DEPTH = 3;
+
+/** Every directory under `root` that directly holds run records, canonical or not. */
+async function findRecordDirectories(root: string, dir: string = root, depth = 0): Promise<string[]> {
+	const entries = await readdir(dir, { withFileTypes: true });
+	const found = entries.some((entry) => entry.isFile() && entry.name.endsWith(".json")) ? [dir] : [];
+	if (depth >= MAX_RECORD_SCAN_DEPTH) return found;
+	for (const entry of entries) {
+		if (!entry.isDirectory()) continue;
+		try {
+			found.push(...(await findRecordDirectories(root, join(dir, entry.name), depth + 1)));
+		} catch (error) {
+			// One unreadable subtree must not hide every other channel's runs.
+			log.logWarning(`Failed to scan sub-agent run directory ${entry.name}`, errorMessage(error));
+		}
+	}
+	return found;
+}
+
+/**
+ * The channel a directory of records belongs to, and the records that are not where they belong.
+ *
+ * The id is read out of the records themselves — the one lossless source, since a directory name
+ * is the *escaped* id and `__` cannot be turned back into `/`. Records written before escaping
+ * are moved to the canonical directory here, so a run started by an older build is adopted
+ * rather than abandoned; without the move it would stay invisible to `restore()` forever, and an
+ * external process would keep running with nothing supervising, settling or billing it.
+ */
+async function adoptRecordDirectory(stateDir: string, dir: string): Promise<string[]> {
+	const filenames = (await readdir(dir)).filter((name) => name.endsWith(".json"));
+	const channelIds = new Set<string>();
+	let moved = 0;
+	for (const filename of filenames) {
+		const path = join(dir, filename);
+		let channelId: string | undefined;
+		try {
+			channelId = parseRunRecord(await readFile(path, "utf-8"))?.channelId;
+		} catch {
+			channelId = undefined;
+		}
+		// A record is only trusted to name its own directory if it is a well-formed id; anything
+		// else keeps the path-derived fallback, which cannot escape the state root.
+		if (!channelId || !isChannelId(channelId)) {
+			channelIds.add(relative(stateDir, dir).split(sep).join("/"));
+			continue;
+		}
+		channelIds.add(channelId);
+		const canonicalDir = getChannelDir(stateDir, channelId);
+		if (canonicalDir === dir) continue;
+		try {
+			await mkdir(canonicalDir, { recursive: true });
+			await rename(path, join(canonicalDir, filename));
+			moved++;
+		} catch (error) {
+			log.logWarning(`Failed to relocate sub-agent run record ${filename}`, errorMessage(error));
+		}
+	}
+	if (moved > 0) {
+		log.logInfo(`Relocated ${moved} sub-agent run record(s) from ${relative(stateDir, dir)}`);
+		// Tidy the directory the unescaped id created. `rmdir` refuses a non-empty one, which is
+		// exactly the guard wanted: records that could not be moved keep their home.
+		await rmdir(dir).catch(() => undefined);
+		const parent = dirname(dir);
+		if (parent !== stateDir) await rmdir(parent).catch(() => undefined);
+	}
+	return Array.from(channelIds);
+}
+
+/**
  * Re-adopt every channel's persisted runs at startup, settling any internal run still marked
  * `running` as `lost` (D10.3). Channels are discovered from the state directory itself, exactly
- * like `restoreChannelJobs`.
+ * like `restoreChannelJobs` — but by reading the records rather than trusting directory names,
+ * so a channel is adopted under the id the rest of the runtime can act on.
  */
 export async function restoreAllSubAgentRuns(): Promise<number> {
 	const stateDir = runtimeConfig.stateDir;
 	if (!stateDir) return 0;
-	let channelIds: string[];
+	const channelIds = new Set<string>();
+	let recordDirs: string[];
 	try {
 		await mkdir(stateDir, { recursive: true });
-		channelIds = (await readdir(stateDir, { withFileTypes: true }))
-			.filter((entry) => entry.isDirectory())
-			.map((entry) => entry.name);
+		recordDirs = await findRecordDirectories(stateDir);
 	} catch (error) {
 		log.logWarning("Failed to scan persisted sub-agent runs", errorMessage(error));
 		return 0;
+	}
+	for (const dir of recordDirs) {
+		try {
+			for (const channelId of await adoptRecordDirectory(stateDir, dir)) channelIds.add(channelId);
+		} catch (error) {
+			log.logWarning(`Failed to adopt sub-agent run records in ${relative(stateDir, dir)}`, errorMessage(error));
+		}
 	}
 
 	let restored = 0;

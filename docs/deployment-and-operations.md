@@ -194,7 +194,7 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 | `<channel>/.memory/entries.json` | MEMORY 条目的来源、状态与召回统计（可重建） |
 | `<channel>/.memory/tombstones.jsonl` | 遗忘防复活 id/hash，不含原文 |
 
-委派的权威运行状态另存于 `${PIPICLAW_HOME:-~/.pipiclaw}/state/subagent-runs/<channelId>/<runId>.json`。频道内的 `subagent-runs.jsonl` 是便于检索的执行摘要，不能替代状态文件做取消或重启恢复。
+委派的权威运行状态另存于 `${PIPICLAW_HOME:-~/.pipiclaw}/state/subagent-runs/<channelId>/<runId>.json`（目录名与 workspace 一致，把 channelId 里的 `/` 折成 `__`）。频道内的 `subagent-runs.jsonl` 是便于检索的执行摘要，不能替代状态文件做取消或重启恢复。
 
 运行时记忆分层：
 

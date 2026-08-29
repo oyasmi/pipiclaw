@@ -7,6 +7,7 @@ import {
 	configureSubAgentRuntime,
 	getSubAgentRunManager,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
+	restoreAllSubAgentRuns,
 	type SettleInput,
 	SubAgentRunManager,
 } from "../src/subagents/runs.js";
@@ -622,5 +623,74 @@ describe("SubAgentRunManager daily GC", () => {
 		await manager.collectGarbage(settledAt + 7 * 24 * 60 * 60_000);
 		expect(manager.get("run-gc-retry")).toBeDefined();
 		expect(existsSync(join(stateDir, channelId, "run-gc-retry.json"))).toBe(true);
+	});
+});
+
+describe("sub-agent run persistence for group channels whose id contains a slash", () => {
+	it("keeps records in one escaped directory the startup scan can see", async () => {
+		const stateDir = createTempDir();
+		const channelId = `group_cid${Date.now()}/eDInUw==`;
+		const escaped = channelId.replace("/", "__");
+
+		const writer = new SubAgentRunManager(channelId, { stateDir });
+		await writer.register({
+			runId: "run-slash",
+			channelId,
+			runtime: "internal",
+			agent: "explorer",
+			label: "explore",
+			source: "predefined",
+			tools: [],
+			purpose: "work",
+			workingDirectory: "/tmp",
+			artifactDir: "/tmp/artifacts/run-slash",
+		});
+
+		// Written raw, this record landed a directory deeper than `restore()` ever looks.
+		expect(existsSync(join(stateDir, escaped, "run-slash.json"))).toBe(true);
+		const { dispatch, events } = makeDispatch();
+		expect(await new SubAgentRunManager(channelId, { stateDir, dispatch }).restore()).toBe(1);
+		expect(events[0]?.channelId).toBe(channelId);
+	});
+
+	it("adopts a record left at the pre-escaping path, under the id the record itself names", async () => {
+		// The whole point of persistence: an external process outlives the daemon, and only an
+		// adopted record can settle it, bill it and wake the channel. A record stranded at the
+		// old nested path was invisible to every later restart, so its run stayed unsupervised.
+		const stateDir = createTempDir();
+		const channelId = `group_legacy${Date.now()}/eDInUw==`;
+		const [head, tail] = channelId.split("/");
+		mkdirSync(join(stateDir, head, tail), { recursive: true });
+		writeFileSync(
+			join(stateDir, head, tail, "run-legacy.json"),
+			JSON.stringify({
+				runId: "run-legacy",
+				channelId,
+				runtime: "internal",
+				agent: "explorer",
+				label: "explore",
+				source: "predefined",
+				tools: [],
+				purpose: "work",
+				workingDirectory: "/tmp",
+				artifactDir: "/tmp/artifacts/run-legacy",
+				status: "running",
+				startedAt: Date.now(),
+			}),
+			"utf-8",
+		);
+		const { dispatch, events } = makeDispatch();
+		configureSubAgentRuntime({ stateDir, dispatch });
+
+		expect(await restoreAllSubAgentRuns()).toBe(1);
+
+		// Adopted under the real id — a wake addressed to the escaped spelling reaches nobody.
+		expect(events).toHaveLength(1);
+		expect(events[0]?.channelId).toBe(channelId);
+		expect(getSubAgentRunManager(channelId).get("run-legacy")?.status).toBe("lost");
+		// ...and the record now lives where this build writes, with no stale copy behind it.
+		expect(existsSync(join(stateDir, channelId.replace("/", "__"), "run-legacy.json"))).toBe(true);
+		expect(existsSync(join(stateDir, head))).toBe(false);
+		configureSubAgentRuntime({});
 	});
 });

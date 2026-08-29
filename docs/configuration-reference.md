@@ -1169,7 +1169,7 @@ web 工具的代理顺序是：
 - `HISTORY.md`：compaction、`/new`、shutdown 等边界上的旧阶段摘要；后台 durable consolidation 默认不写它。
 - `context.jsonl` / `log.jsonl` / `log.jsonl.1`：冷存储，只通过 `session_search` 显式检索，不进入普通 turn-time recall。
 - `${PIPICLAW_HOME}/state/memory/<channelId>.json`：内置 scheduler 的 hidden state，只记录 dirty、阈值计数、上次运行时间和 backoff，不作为 recall 来源。
-- `${PIPICLAW_HOME}/state/subagent-runs/<channelId>/<runId>.json`：委派权威状态、pid、argv 和结算/唤醒幂等标记；频道内 `subagent-runs.jsonl` 只是摘要。
+- `${PIPICLAW_HOME}/state/subagent-runs/<channelId>/<runId>.json`：委派权威状态、pid、argv 和结算/唤醒幂等标记；频道内 `subagent-runs.jsonl` 只是摘要。目录名按 workspace 的规则转义（`/` → `__`）；启动对账从记录内容读回真实 channelId，早期版本写在未转义路径下的记录会在下次启动时自动迁移到规范目录。
 
 ## 常见问题（Frequently Asked Questions）
 
