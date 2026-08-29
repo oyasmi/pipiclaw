@@ -16,8 +16,8 @@ describe("E2E deterministic: /stop", () => {
 		harness.model.script.route({
 			name: "turn",
 			when: (r) => r.isMainTurn && !r.lastUserText.includes("STILL_ALIVE"),
-			// Generous: an aborted request may be retried by the client before it gives up.
-			respond: Array.from({ length: 12 }, () => reply.text("held then stopped")),
+			respond: [reply.text("held then stopped")],
+			repeat: true, // an aborted request may be retried by the client
 		});
 		const gate = harness.model.script.hold({ when: (r) => r.isMainTurn });
 

@@ -31,20 +31,24 @@ export function registerSidecarDefaults(script: Script): void {
 		name: "sidecar:memory-extraction",
 		when: (req) => !req.isMainTurn && req.systemPrompt.includes("durable memory extraction worker"),
 		respond: [reply.json({ memoryOps: [], discarded: [], historyBlock: "" })],
+		repeat: true,
 	});
 	script.route({
 		name: "sidecar:recall-rerank",
 		when: (req) => !req.isMainTurn && req.systemPrompt.includes("which memory snippets are most relevant"),
 		respond: [reply.json({ selectedIds: [] })],
+		repeat: true,
 	});
 	script.route({
 		name: "sidecar:session-memory",
 		when: (req) => !req.isMainTurn && req.systemPrompt.includes("You maintain a Pipiclaw SESSION.md file"),
 		respond: [reply.json(DEFAULT_SESSION_JSON)],
+		repeat: true,
 	});
 	script.route({
 		name: "sidecar:session-search-summary",
 		when: (req) => !req.isMainTurn && req.systemPrompt.includes("summarize current-channel transcript search hits"),
 		respond: [reply.text("No relevant transcript hits.")],
+		repeat: true,
 	});
 }

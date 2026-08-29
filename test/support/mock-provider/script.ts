@@ -34,6 +34,16 @@ interface Route {
 	when: Matcher;
 	responses: ScriptedResponse[];
 	calls: number;
+	/** When true, the last response repeats instead of the route becoming exhausted. */
+	repeat: boolean;
+}
+
+interface RouteDef {
+	name: string;
+	when: Matcher;
+	respond: ScriptedResponse[];
+	/** Keep answering with the last response after the array is consumed (e.g. client retries). */
+	repeat?: boolean;
 }
 
 interface Hold {
@@ -93,13 +103,25 @@ export class Script {
 	private readonly holds: Hold[] = [];
 	private readonly failures: Array<{ status: number; code?: string }> = [];
 
-	route(def: { name: string; when: Matcher; respond: ScriptedResponse[] }): void {
-		this.routes.push({ name: def.name, when: def.when, responses: def.respond, calls: 0 });
+	route(def: RouteDef): void {
+		this.routes.push({
+			name: def.name,
+			when: def.when,
+			responses: def.respond,
+			calls: 0,
+			repeat: def.repeat ?? false,
+		});
 	}
 
 	/** Register a route at the front so a test-specific route overrides a default. */
-	prependRoute(def: { name: string; when: Matcher; respond: ScriptedResponse[] }): void {
-		this.routes.unshift({ name: def.name, when: def.when, responses: def.respond, calls: 0 });
+	prependRoute(def: RouteDef): void {
+		this.routes.unshift({
+			name: def.name,
+			when: def.when,
+			responses: def.respond,
+			calls: 0,
+			repeat: def.repeat ?? false,
+		});
 	}
 
 	hold(def: { when: Matcher }): HoldHandle {
@@ -141,9 +163,10 @@ export class Script {
 		for (const route of this.routes) {
 			if (!route.when(req)) continue;
 			const response = route.responses[Math.min(route.calls, route.responses.length - 1)];
-			if (route.calls >= route.responses.length) {
+			if (route.calls >= route.responses.length && !route.repeat) {
 				// A route matched more times than it has responses — treat as unmatched so the
 				// test author notices the extra request rather than silently reusing the last one.
+				// `repeat: true` opts out (e.g. tolerating client retries of a held/aborted request).
 				return null;
 			}
 			route.calls += 1;

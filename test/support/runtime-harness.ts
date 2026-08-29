@@ -135,6 +135,8 @@ export interface DeterministicHarness {
 	sendUserMessage(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
 	/** Enqueue a message but return immediately — for stacking messages during a `hold`. */
 	sendUserMessageNoWait(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
+	/** Deliver an internal wake (task driver / job / delegation), not a user message. */
+	sendWake(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
 	/** Wait until no channel queue has pending/in-flight work and the runner is idle. */
 	waitForIdle(): Promise<void>;
 	/** Wait for a captured delivery matching `predicate`. */
@@ -245,6 +247,12 @@ export async function createDeterministicHarness(options?: {
 		},
 		async sendUserMessageNoWait(text, overrides): Promise<void> {
 			await bot.routeInboundEvent(buildEvent(text, overrides));
+		},
+		async sendWake(text, overrides): Promise<void> {
+			// The durable-dispatch / task-driver path: an internal event, not a user
+			// message. `_isEvent = true` so background wakes get progressStyle "none".
+			await runtime.handler.handleEvent(buildEvent(text, overrides), bot as never, true);
+			await waitForIdle();
 		},
 		waitForIdle,
 		waitForDelivery: (predicate) =>

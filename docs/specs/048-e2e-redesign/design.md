@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | IN PROGRESS（P0–P1 完成；P2 8/10 + P3/P4 结构完成；部分用例待补，见实施记录） |
+| 状态 | IN PROGRESS（P0–P1 完成；确定性层 17 条 + P3/P4 结构完成；A14–A23 子集待补，见实施记录） |
 | 日期 | 2026-08-29 |
 | 触发 | 例行体检发现 e2e 套件已红 5 天无人察觉，且这个红掩盖了一个 2026-08-24 引入、至今线上生效的 `/help` 冷启动崩溃 |
 | 前置 | 004 e2e-test（本 spec 是它的重做）、028 behavior-eval（分工的另一半）、040/042 委派、043 会话身份与回合恢复、044 native-file-io、046/047 工具切分 |
@@ -477,11 +477,26 @@ A11 / A14 / A17 / A20 / A21 / A23；AGENTS.md 增加测试分层规则与 e2e �
 
 **文档**：`AGENTS.md` 新增「Test Layering」小节（三层判据 + e2e 六条硬规则含反证）与验证要求；`CLAUDE.md` 命令表更新（`test:e2e` 现为零成本确定性层，新增 `test:e2e:live`）。
 
+### P2 补批（2026-08-29 完成）
+
+用现有 harness（`hold`/`restart`/`sendWake`）补了 6 条，确定性层现共 **17 条 / ~44s**：
+
+| 用例 | 抓什么 |
+|---|---|
+| **A6** `interrupt.test.ts` | `/steer` 注入运行中的回合、`/followup` 排到独立的下一个回合 |
+| **A8** `progress.test.ts` | 正常回合 finalize、`[SILENT]` 回合零投递、后台唤醒不开卡片 |
+| **A11** `restart.test.ts` | 对话里的假密钥经 `redactSecrets` + `files.ts` 守卫，不进任何 durable 记忆文件（即便 extraction 主动想写） |
+| **A12** `restart.test.ts` | daemon 重启后续接同一个 session 文件（header id 不变、追加不重写、新回合 parentId 挂在重启前的 head 上） |
+| **A13** `tasks.test.ts` | create → **真实 `createTaskDriverEvent`** 唤醒 → `task_update` → `task_close`，控制块保持可解析（锁 F3 手抄漂移） |
+
+harness 增量：`sendWake()`（内部唤醒事件，`_isEvent=true`）、route `repeat: true`（容忍 held/aborted 请求的客户端重试）、sidecar 默认路由全部 `repeat: true`。
+
+A12 说明：断言收敛到 session 文件层的续接（header id / 追加 / parentId 链）。「重启后请求体是否重放完整历史」没断言——实测 pi 的 `SessionManager.open` 重开 `context.jsonl` 后，新回合的请求只带 `[system, user]`，历史是否该进请求体属 pi 会话内部语义、非本 spec 范围。
+
 ### 仍未做
 
-按「阶段独立可停」，以下用例未实现，均需额外 harness 深度（parked-task 状态机 / 完整 subagent 派发 / `security.json` + project-scope 装配），非本轮结构改造的阻塞项：
-
-- **A15**（伪造 `[SUBAGENT]` 唤醒不激活任务）：需要把任务 park 到 `waitingFor=external-signal` 才能观察「未激活」，且可信半需真实 run 记录。
+- **A14**（verify 链）：`task_verify` 需要 `verifierRunId`——真实的 `purpose=verify` subagent run + attestation artifact。属 subagent 派发基础设施。
+- **A15**（伪造 `[SUBAGENT]` 唤醒不激活任务）：需把任务 park 到 `waitingFor=external-signal` 才能观察「未激活」，可信半需真实 run 记录。
 - **A19 / A20 / A21**（越界 read/write + 审计、`/project` 换根、子代理工具集门控）：需要 `security.json` 与 project-scope 装配。
-- **A6 / A8 / A11 / A12 / A13 / A14 / A16 / A17 / A18 / A22 / A23**：P1/P2 剩余批次（steer/followup、progress 风格、SESSION 刷新/HISTORY 折叠、重启续接、真实 driver 推进、verify 链、内部/外部 subagent 全链路、job 链路、fallback、压缩）。harness 的 `restart()` / `hold`/`failNext` 已就绪，属增量工作。
+- **A16 / A17 / A18 / A22 / A23**：内部/外部 subagent 全链路、job 链路、fallback、压缩。`failNext` 已就绪；subagent/job 链路需角色 fixture + `SubAgentRunManager` 装配。
 - **live B3**（`event_manage` immediate 的提示词级守卫）。
