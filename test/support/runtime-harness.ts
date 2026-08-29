@@ -179,6 +179,9 @@ export async function createDeterministicHarness(options?: {
 	web?: boolean;
 	/** Start background services (durable dispatch, task driver, job sweep) — A16/A17. */
 	services?: boolean;
+	/** Shorten the sub-agent sync grace window so the detached-settlement + wake path is
+	 *  reachable without a multi-minute wait (A14/A15 trusted half/A16 notice). */
+	subagentSyncGraceMs?: number;
 }): Promise<DeterministicHarness> {
 	const model = await startMockProvider({ registerDefaults: options?.registerSidecarDefaults });
 	const preHome = mkdtempSync(join(tmpdir(), "pipiclaw-e2e-det-"));
@@ -236,6 +239,10 @@ export async function createDeterministicHarness(options?: {
 
 	let bot!: HarnessDingTalkBot;
 	let runtime!: Awaited<ReturnType<typeof createRuntimeContext>>;
+
+	if (options?.subagentSyncGraceMs) {
+		process.env.PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS = String(options.subagentSyncGraceMs);
+	}
 
 	async function boot(): Promise<void> {
 		process.env.PIPICLAW_HOME = home.homeDir;
@@ -331,6 +338,7 @@ export async function createDeterministicHarness(options?: {
 		async shutdown(): Promise<void> {
 			await runtime.shutdown("manual");
 			await model.close();
+			delete process.env.PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS;
 			cleanupE2ETestHome(home.homeDir);
 		},
 	};

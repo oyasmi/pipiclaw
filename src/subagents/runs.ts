@@ -42,6 +42,17 @@ export type RunMutates = "read" | "write";
  */
 export const SYNC_GRACE_MS = 120_000;
 
+/**
+ * Effective sync grace window. A test-only env override (`PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS`)
+ * lets the deterministic e2e layer exercise the detached-settlement + completion-wake path
+ * (spec 048 A14/A15/A16) without a multi-minute wait; production always uses `SYNC_GRACE_MS`.
+ */
+export function resolveSyncGraceMs(override?: number): number {
+	if (override !== undefined) return override;
+	const env = Number(process.env.PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS);
+	return Number.isFinite(env) && env > 0 ? env : SYNC_GRACE_MS;
+}
+
 /** D10.2: per-channel cap on concurrently running delegation runs. */
 export const MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL = 6;
 /** D10.2: host-wide cap across every channel. Bounds unbounded process/worker growth only —

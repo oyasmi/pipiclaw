@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | IN PROGRESS（P0–P1 完成；确定性层 27 条 + P3/P4 结构完成；A14/A15 可信半/A23 待补，见实施记录） |
+| 状态 | IN PROGRESS（P0–P1 完成；确定性层 29 条 + P3/P4 结构完成；仅 A16-通知/A23/A12 待补，见实施记录） |
 | 日期 | 2026-08-29 |
 | 触发 | 例行体检发现 e2e 套件已红 5 天无人察觉，且这个红掩盖了一个 2026-08-24 引入、至今线上生效的 `/help` 冷启动崩溃 |
 | 前置 | 004 e2e-test（本 spec 是它的重做）、028 behavior-eval（分工的另一半）、040/042 委派、043 会话身份与回合恢复、044 native-file-io、046/047 工具切分 |
@@ -525,10 +525,17 @@ harness 新增：`createDeterministicHarness({ services: true })`（起后台服
 | **A22** | `fallback.test.ts` | 主模型 429 → 切 `mock-fallback` → 回合仍完成（`__fail_429` on mock-main + mock-fallback 请求都在） |
 | **B3** | `live/event-guard.test.ts` | 真实模型被直接要求建 immediate 事件，最终没有 event 落盘 |
 
+### A14 / A15 可信半 补批（2026-08-29 完成，确定性层现 29 条）
+
+打通了 subagent 分离结算路径的关键测试缝：`resolveSyncGraceMs()` + 环境变量 `PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS`（`createDeterministicHarness({ subagentSyncGraceMs })`）把 D2 的 SYNC_GRACE_MS 从 120s 压到几十毫秒——于是 hold 住子回合后，父回合的 `subagent_inline` 工具调用降级为「still running」占位符、后台以 `announce: true` 结算，完成唤醒（带 `internalWake`）与带外通知都会发。
+
+| 用例 | 文件 | 抓什么 |
+|---|---|---|
+| **A15 可信半** | `wake-auth.test.ts` | 真实的 `[SUBAGENT:<runId>] … belongs to task <id>.` 完成唤醒（有 `internalWake` + 磁盘 run 记录）→ `claimVerifiedDelegationWake` → `activateWaitingTask` 把 `waiting` 任务翻回 `active`。与「伪造文本不激活」互为对照。 |
+| **A14** | `verify-chain.test.ts` | 全链路：`task_create verificationRequired` → 勾 DoD → `subagent_inline purpose=verify`（工作目录是临时 git repo）→ 验收者出 `VERDICT: PASS` → runtime 写 attestation（`verdict: pass`, `bodyHash`, `taskId`）→ `task_verify verifierRunId` 导入 → `task_close outcome=complete` → 归档（`outcome: completed` + `control.verification.status: passed` + `runId` 落档）。 |
+
 ### 仍未做
 
-- **A14**（verify 链）：`task_verify` 需要 `verifierRunId`——真实的 `purpose=verify` subagent run + attestation artifact。
-- **A15 可信半**：需 settled 的 `SubAgentRunManager` 记录 + `internalWake`。
-- **A16 带外 settled 通知 / 完成唤醒**：`subagent_inline` 阻塞式，通知在父回合还在等时被抑制；触发异步路径需要 hold 子回合超过 `DISPATCH_SETTLE_WAIT`（~40s），太慢。
+- **A16 带外 settled 通知 / 完成唤醒的断言**：机制已通（A15 可信半证明唤醒会发），单独把「✅ 通知投递」断出来是增量。
 - **A23**（压缩）：pi 的 auto-compaction 只在 `_lastAssistantMessage` 上触发；mock 立即 400 走的是「error 事件」而非「errored assistant message_end」，不进 `_checkCompaction`。要复现得让 mock 发一个「流中途 error」并产生 errored assistant 消息——需要逆向 pi agent-core 的流处理。
 - **A12 请求体重放历史**：pi `SessionManager.open` 重开后新回合请求只带 `[system, user]`，属 pi 会话内部语义。

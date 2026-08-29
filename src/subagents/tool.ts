@@ -47,7 +47,7 @@ import {
 	withSubAgentsDirWriteDeny,
 } from "./discovery.js";
 import { type ExternalLaunchResult, launchExternalRun } from "./external/run.js";
-import { getSubAgentRunManager, type SettleInput, SYNC_GRACE_MS } from "./runs.js";
+import { getSubAgentRunManager, resolveSyncGraceMs, type SettleInput } from "./runs.js";
 import { resolveVerificationOutcome } from "./verification-outcome.js";
 import {
 	acquireWorkspaceLease,
@@ -1336,7 +1336,7 @@ async function dispatchSubAgentRun(
 	// D2: the tool call waits at most SYNC_GRACE_MS (never longer than the run's own wall
 	// clock budget) before degrading to a "still running" placeholder. The run itself keeps
 	// executing either way — only the *return* differs.
-	const graceMs = Math.min(config.maxWallTimeSec * 1000, options.syncGraceMs ?? SYNC_GRACE_MS);
+	const graceMs = Math.min(config.maxWallTimeSec * 1000, resolveSyncGraceMs(options.syncGraceMs));
 	const outcomePromise = runToCompletion().then(
 		(value) => ({ ok: true as const, value }),
 		(error: unknown) => ({
