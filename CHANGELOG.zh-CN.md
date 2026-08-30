@@ -4,24 +4,36 @@
 
 ## [未发布]
 
-## [0.9.2-beta.6] - 2026-08-30
+## [0.9.2] - 2026-08-30
+
+0.9.2 是一个里程碑版本——它是一次有意为之的「做减法 + 加固」，而非堆功能。五份设计 spec 一起落地：正确性不再依赖子进程文本捕获的原生文件 I/O（044）、把工具 schema 分区到「非法字段组合根本无法表达」（046、047）、能把整个栈离线零 API 成本跑起来的确定性端到端套件（048），以及关闭一次静默数据丢失事故的入站图片支持（049）。围绕它们的是任务控制 v3、消除一处 P0 唤醒死锁的统一任务验收路径、一轮大范围的委派安全加固、基于 115 条真实 run 上调的子代理预算，以及一次保持结构等价的质量整理。贯穿始终的主线是：把运行时的契约缩小到「显然正确」，并让剩下的失败变响而非变静默。
 
 ### 新增
 
+- 新增 `glob` 工具（子代理可用），基于新的 `FileStore.walkFiles` 实现：不跟随 symlink，支持 basename/`**`/`{a,b}` 语义，按 mtime 排序并带 stat 成本上限，扫描条目数封顶并诚实提示「结果可能不完整」。bash 拦截器现在会把裸 `find`/`ls -R` 导向它。
+- 实现 spec 044 原生文件 I/O：以原生 Node 文件系统代码取代 shell 脚本式文件操作，文件工具不再依赖子进程文本捕获来保证正确性。新增 `FileStore` 端口（`src/file-store.ts`）作为 `Executor` 在文件系统侧的对应物；文件工具经 `guardPath` 一次性解析路径，且实际打开的正是那个解析结果。`edit` 改为字节级拼接（小文件走内存路径，大文件走两遍流式路径，带基于指纹的并发检查），正确性不再依赖文件解码；`write` 改用 `writeAtomic`（fsync、保留权限）取代 `cat > tmp && mv` 脚本；`read` 改用 stat/readBytes/listDirectory，新增 `line-index.ts` 提供 O(n) 顺序翻页，EOF 处诚实显示 `of >=N`；`grep` 把 exclude/include 直接下推给 grep 本身并配 grep 专属的捕获上限，不再用掩盖 grep 退出码的 `head` 管道；`send_media` 与 job-manager 改为经 FileStore 直接读取图片字节和 spill 文件尾部。executor 新增字节精确的 Buffer 捕获（关闭时一次性解码，修复分块边界处的 UTF-8 损坏）、`stdoutTruncated`/`stderrTruncated` 标记和完整落盘输出的 spill 能力；路径守卫现在总是填充 `resolvedPath`（即使守卫被禁用），且不再把多层缺失的目录路径折叠成 `<ancestor>/basename`。
+- 新增运行时命令 `/skills`（`/skills` 列表，`/skills show <name>` 查看正文），可在钉钉或 TUI 中直接浏览工作区 skill 目录，不占用一次 LLM 回合。与已移除的 `/help` skill 列表不同，它直接扫描磁盘，因此也能看到因内容/frontmatter 扫描未通过、被静默排除在 `<available_skills>` 之外的 skill 及其原因。
+- 委派 run 与后台 job 现在会发一条独立于完成唤醒的旁路播报（尽力而为）：run 结算后几秒内到达一句"✅/⚠️ 完成"确认，不再等唤醒回合自身的 LLM 延迟；长时间运行的外部 run 中途还会有稀疏的进度提示（从 harness 自身的流式输出里轮询到的当前步骤）。由新增的 `settings.json` 字段 `delegation.notices` 控制（`"off"` | `"settled"` | `"live"`，默认 `"live"`）。
 - 钉钉消息的入站图片支持（spec 049），关闭 2026-08-30 事故的两种失败形态：`richText` 图文混排消息此前会把图片静默丢弃（连一行日志都没有，于是模型如实回答"没有收到图片"）；纯 `picture` 消息则整条被丢弃，只留一行 `empty message` 警告。现在图片走完整链路：传输层用两步 `messageFiles/download` API 兑换每个 `downloadCode`，按魔数嗅探 MIME 类型，把文件落盘到 `<channelDir>/inbox/`；runner 将其 base64 编码后作为原生 SDK image part 送入回合（与 `read` 读取本地图片所用的 `prompt`/`steer` 通路相同），并以解析出的模型声明的能力为门禁——模型 fallback 切换后会重新检查，因此视觉回合回退到纯文本模型时会收到一条可见的"图片已排除"提示并附上落盘路径，而不是 provider 层静默替换成 `"(see attached image)"`。下载在回合外的每 channel 摄取队列上执行，慢下载不会被后到的纯文本消息在投递顺序上反超，忙碌中的 channel 会排队图片而不是当作空消息拒绝。文字在每张图片的原位保留 `[图片N]` 标记。任何失败都不静默：下载失败、无法识别的格式、或 5MB 上限（刻意与 `read` 对本地图片的内联上限同值）都会留下优雅的标记和已落盘的文件供事后查验。`inbox/` 有意不设清理任务——保留优先于清理；斜杠命令与图片同发于一条 richText 的组合仍在范围之外。
 
 ### 变更
 
-- 保持结构等价的质量整理（净 +839/−825，测试行为不变）。七族重复实现收敛为单一共享实现（子代理发现中的枚举解析、markdown 章节扫描、配置加载器、迁入 `src/shared` 的小工具、用量累加器）。拆分了两个最长的函数：`dispatchSubAgentRun`（628 行）拆为外置/内置两半并共享前置逻辑；`createRuntimeContext` 内 533 行的内联 `DingTalkHandler` 字面量拆为 `createDingTalkHandler(deps)`，晚声明的可变闭包以 getter 传入，不会捕获过期快照。删除伪配置层：`getTaskDigestSettings`/`getTaskDriverSettings` 由直接常量取代，去掉 `atomic-file` 的死参数，移除空封装，删除 `agent/index.ts` barrel。遗留任务迁移（#17）标记为 v0.9.3 退役——只加了头部说明和指引，暂不删代码。
-
-## [0.9.2-beta.5] - 2026-08-29
-
-### 变更
-
+- **工具 schema 分区（spec 046）。** 一个工具的参数集现在就是它唯一调用形态所需的字段，非法字段组合从「运行时拒绝」变为「根本无法表达」。`task_manage` 拆分为五个独立工具——`task_list`/`task_create`/`task_update`/`task_close`/`task_verify`（`progress` 与 `set` 并入 `task_update`，按是否携带 `note` 分支；每个带 id 的工具保持 dispatcher 此前集中施加的按任务串行化）。委派拆分为 `subagent`（配置好的角色，无覆盖字段）与 `subagent_inline`（一次性执行器，携带本应由角色文件提供的全部字段），由 `tools.subagentInline.enabled` 门控（默认开启）；移除 `paths`/`name`/`returns` 及 `ARTIFACT:` 标记协议。流程知识从 schema 描述移入本就覆盖它们的 playbook。旧名称的所有下游消费方同步更新：注册表/呈现/details、effect 台账、prompt 段落门控、task-commands 诊断、task-driver 唤醒文本、playbook、评测 harness 及用户文档。
+- `skill_manage` 变为只读的 `skill` 工具（`list`/`read`）；编写改走 `write`/`edit`。skill 读取现在经过 `checkPathGuard`（修复 symlink 逃逸缺口），路径守卫的 `skills/` 例外覆盖写入；`scanSkillContent` 从写入时移到目录加载时，因此损坏的 skill 不会进入 `<available_skills>` 或 skill 列表。全部 16 个工具 schema 中的 `label` 字段移除，改为运行时确定性推导（新增 `presentation.ts` 的 `describeToolCall`），供 session 事件与子代理进度使用；持久化的标签（bash 异步作业、子代理 run）改由命令/任务文本推导，不再由模型提供。
+- 机械化加固一轮：`settings.json`、`.channel-meta.json`、记忆脚手架文件与事件 invalid-marker 现在统一走 `writeFileAtomically`，写入中途崩溃不再可能把原文件截断。反复出现的重复辅助函数各自收敛为唯一实现（`formatDuration`、`clipText`、`isRecord` 与排除数组的 `isPlainObject` 拆分、`hasMeaningfulExchange`——此前两个版本可能对同一份短 transcript 得出相反结论、`recencyBoostByAge`、`formatBlockMessage`、`normalizeSafeId`/`resolveSafeIdPath`）。本地时间词汇表扩展覆盖 channel-runner 的 `eligibleAfter`、用量台账的按月分桶（UTC 改为本地日历月，与其自身 `formatLocalTime` 戳记的条目一致）及多处裸 `Date.parse` 调用点。
+- 将 pi 依赖组（`pi-ai`、`pi-agent-core`、`pi-coding-agent`、`pi-tui`）升级至 `0.84.3`。TUI 改用 `TuiMainScreen`，并显式关闭 LaTeX 渲染以保持旧显示语义；模型切换在 fallback 与会话重建场景下保持 pi 0.83 的 thinking 语义。
+- 一个人正在等待的唤醒（委派或后台 job 完成）现在会像普通消息一样渲染回合进度，不再套用自主巡检（task-driver 轮询、定时事件）专用的静默 `"none"` 样式。
+- 完成唤醒未能激活对应任务（不处于 `waiting`）时，现在除非该任务已经 `active`（由别的东西驱动，例如同一次并行派发里的另一条唤醒先到了）否则仍会进入一次正常回合——此前这种情况一律无条件丢弃，任务一旦已完成、被归档或被禁用，结果就永久丢失了。
+- 委派完成唤醒内联携带的回复正文上限从 2,000 字符提到 6,000，仍需截断时会明确说明；对 `mutates: "write"` 的 run，还会附一段 `git status --porcelain` 摘要说明改动了什么，读者不用再自己花一次工具调用去查。
+- `/subagents roles` 的列表和详情现在都会显示角色的 `model` 与 `thinkingLevel`。列表行的括号内固定按 `runtime`、`mutates`、`model`、`thinking` 四个无键位置显示原始值或自解释占位词（内置 `默认`/`默认 medium`，外部 `CLI 决定`/`未设置`）；详情视图的外部角色 `model` 行从仅在声明时显示改为始终显示，已声明时显示原值，未声明时显示 `CLI 决定` 以表明由 CLI 决定。内置角色未声明 `thinkingLevel` 时显示实际生效的 `medium`；外部 `work` 委派保持不设置，只有 `verify` 派发使用 `medium`。
 - 上调了子代理的执行预算——此前它们在真实运行中反复截断任务。115 条真实 run 记录里，墙钟超时几乎全部集中在 worker 角色（25 次运行里 4 次撞满 1800s，另有 1699/1360/1080s 三次贴着上限完成）；内置侧同样偏紧（git-committer 的一次成功运行用了 12 turns / 24 次工具调用，explorer 一次常规定位用掉 18 次调用）。触顶的代价是不对称的——内置只剩一个 60s 的收敛回合且没有可续的 transcript，外置直接 SIGKILL 进程组——而时间和 token 都已沉没，所以默认值改为宁足勿缺：内置 24 turns / 48 calls / 300s → 32 / 96 / 600s，外置墙钟 1800s → 3600s，`deep` 预设提至 64 / 160 / 1800s / 300 calls，内置角色模板按观测 p90 的三倍重设（worker/builder 5400s；planner/reviewer/documenter 3600s）。跑飞的运行靠进度播报和 `cancel` 兜底，而不是靠一个每次都在正常任务上误伤的上限。`maxToolCalls` 到此为止：内置路径没有上下文压缩，再往上会把「触顶仍能收敛」的软失败换成上下文溢出的硬失败。
+- 保持结构等价的质量整理（净 +839/−825，测试行为不变）。七族重复实现收敛为单一共享实现（子代理发现中的枚举解析、markdown 章节扫描、配置加载器、迁入 `src/shared` 的小工具、用量累加器）。拆分了两个最长的函数：`dispatchSubAgentRun`（628 行）拆为外置/内置两半并共享前置逻辑；`createRuntimeContext` 内 533 行的内联 `DingTalkHandler` 字面量拆为 `createDingTalkHandler(deps)`，晚声明的可变闭包以 getter 传入，不会捕获过期快照。删除伪配置层：`getTaskDigestSettings`/`getTaskDriverSettings` 由直接常量取代，去掉 `atomic-file` 的死参数，移除空封装，删除 `agent/index.ts` barrel。遗留任务迁移（#17）标记为 v0.9.3 退役——只加了头部说明和指引，暂不删代码。
 
 ### 修复
 
+- 任务专属事件 id 改为按最后一个点解析。`TASK_ID_PATTERN` 允许任务 id 含点，但孤儿检测 watcher 与 `cleanupTaskEvents` 都自行切分：对形如 `v1.2-release` 的任务 id，watcher 会把 id 误读为 `v1`、找不到对应任务文件，并在首次触发时静默删除仍被持有的周期事件；`cleanupTaskEvents` 存在镜像 bug——关闭任务 `v1` 会顺带删除任何 id 恰以 `v1.` 开头的兄弟任务的事件。
+- 结构化唤醒的 durable 派发重试现在有上限和退避。`markRetryable`（在 job/子代理完成唤醒的 claim 或 finish 步骤抛错时使用——例如磁盘满、权限问题）此前把记录直接打回 "pending" 且无退避，30 秒一次的 drain 循环会永远重试同一个确定性失败，而 `archiveIncomingMessage` 在每次重投时都让频道日志无限增长。现在记录按投递次数做指数退避（30s 起、封顶 10m），并与租约过期路径共享 `MAX_DELIVERIES` 毒丸上限：超过上限的记录标记为 "exhausted"、保留在磁盘供检查，并只通知频道一次，而不是继续重试。
+- grep 工具的 `glob` 参数现在会像 pattern 与 path 一样先做 shell 转义再传给 `grep --include`。executor 经 `sh -c` 执行命令，此前模型给出的 glob 若包含 shell 元字符（如 `*.ts; rm -rf x`），会被当作额外命令执行，而不是仅仅匹配不到任何结果。
 - **id 中含 `/` 的 channel（即所有 base64 钉钉群 id）凡是按路径落盘的状态都在静默丢失。** 子代理 run 记录写在原始 channel id 之下，比启动扫描所看的目录多嵌套了一层——重启会静默遗弃此类 channel 的每一个委派 run：无人监管、未结算、未计费，唤醒也永远到不了 channel。内存维护状态是镜像 bug（读写一致所以节奏没乱，但该 channel 对基于状态的发现不可见），task-driver/事件路由与 channel 发现也有同样的路径假设（一个同时以真实 id 和转义目录名可达的 channel，每个周期被维护——其任务被派发——两次）。现在所有状态路径都走转义后的 channel 目录，启动对账从记录本身读取无损的 channel id，旧文件在首次写入/启动时迁移。升级提示：升级后首次启动会重新收养此前被遗弃的 run 记录——内置 run 以 lost 结算并唤醒各自 channel，受影响的群可能收到一批迟到的「委派丢失」播报，这正是它们在当初那次重启时就应得的结算。
 - 修复代码评审发现的六处健壮性/安全缺口。日志脱敏改为整段替换值（连认证方案词一并吞掉），不再从匹配处猜测分隔符，因此含 `:` 的密钥（`token=abc:def`）不会再把前半段留在日志里，此前的 `Bearer` 直通问题一并解决。裸 timer promise（job-manager 扫描、durable-dispatch 排空、事件 watcher）现在会捕获自身的 rejection，另加守护进程级 `unhandledRejection` 兜底：记录日志、落盘后退出，而不是无声死掉。`settings.json` 中无法识别的枚举值在加载时丢弃并告警——此前 `logging.level` 里的一个拼写错误会让所有阈值比较变成 `NaN`，日志被整体静音。预防性压缩改用脚本感知的 token 估算器，取代对中文输入低估约 3 倍、使超大回合跳过压缩的固定 chars/3 比率。glob 匹配器的正则编译器（一个 19 字符模式如 `*a*a*a*a*a*a*a*azzz` 可回溯 32 秒）被结构化的分段匹配器取代，移除前经差分测试确认等价。
 - 内置命令现在对未就绪的会话做了防护。`/help` 与 `/context` 会从会话运行时读取提示模板，而它在 runner 构造并缓存之后才异步建立——因此新 channel 的第一条斜杠命令，或守护进程重启 / LRU 重建后的第一条，可能以 `Cannot read properties of undefined (reading 'promptTemplates')` 崩溃。`handleBuiltinCommand` 现在先等待会话就绪，派发主路径上的同步 `isKnownSlashCommand` 在运行时未初始化时退回到静态目录 + skills，而不是抛异常。
@@ -30,53 +42,6 @@
 
 - 围绕一个确定性层重建了端到端套件（spec 048）：进程内的脚本化 mock provider（按内容路由、与到达顺序无关、带 hold/release/fail 控制）让约 29 个全栈机制用例零网络、零 API 成本运行——斜杠命令、steer、重启后的会话续接、记忆脱敏、经真实 driver 唤醒的任务生命周期、委派 verify/结算链、job 与模型 fallback 链、命令/网络/路径守卫与审计日志、唤醒真实性（伪造的 `[SUBAGENT:]` 文本不能激活任务）。`npm run test:e2e` 即该确定性层；真模型冒烟用例移至 `npm run test:e2e:live`。重建立刻暴露（并由上一条修复关闭）了 `/help` 冷启动崩溃——它此前一直被红灯套件掩盖。
 - 新增 `docs/leverage/`——关于如何从 Pipiclaw 获得更高产出的实践笔记（触发/验收/上下文的所有权，以及让错误变得廉价而非罕见）。它们承载观点，不定义行为契约。
-
-## [0.9.2-beta.4] - 2026-08-28
-
-### 新增
-
-- 新增运行时命令 `/skills`（`/skills` 列表，`/skills show <name>` 查看正文），可在钉钉或 TUI 中直接浏览工作区 skill 目录，不占用一次 LLM 回合。与已移除的 `/help` skill 列表不同，它直接扫描磁盘，因此也能看到因内容/frontmatter 扫描未通过、被静默排除在 `<available_skills>` 之外的 skill 及其原因。
-
-## [0.9.2-beta.3] - 2026-08-28
-
-### 新增
-
-- 委派 run 与后台 job 现在会发一条独立于完成唤醒的旁路播报（尽力而为）：run 结算后几秒内到达一句"✅/⚠️ 完成"确认，不再等唤醒回合自身的 LLM 延迟；长时间运行的外部 run 中途还会有稀疏的进度提示（从 harness 自身的流式输出里轮询到的当前步骤）。由新增的 `settings.json` 字段 `delegation.notices` 控制（`"off"` | `"settled"` | `"live"`，默认 `"live"`）。
-
-### 变更
-
-- 一个人正在等待的唤醒（委派或后台 job 完成）现在会像普通消息一样渲染回合进度，不再套用自主巡检（task-driver 轮询、定时事件）专用的静默 `"none"` 样式。
-- 完成唤醒未能激活对应任务（不处于 `waiting`）时，现在除非该任务已经 `active`（由别的东西驱动，例如同一次并行派发里的另一条唤醒先到了）否则仍会进入一次正常回合——此前这种情况一律无条件丢弃，任务一旦已完成、被归档或被禁用，结果就永久丢失了。
-- 委派完成唤醒内联携带的回复正文上限从 2,000 字符提到 6,000，仍需截断时会明确说明；对 `mutates: "write"` 的 run，还会附一段 `git status --porcelain` 摘要说明改动了什么，读者不用再自己花一次工具调用去查。
-- `/subagents roles` 的列表和详情现在都会显示角色的 `model` 与 `thinkingLevel`。列表行的括号内固定按 `runtime`、`mutates`、`model`、`thinking` 四个无键位置显示原始值或自解释占位词（内置 `默认`/`默认 medium`，外部 `CLI 决定`/`未设置`）；详情视图的外部角色 `model` 行从仅在声明时显示改为始终显示，已声明时显示原值，未声明时显示 `CLI 决定` 以表明由 CLI 决定。内置角色未声明 `thinkingLevel` 时显示实际生效的 `medium`；外部 `work` 委派保持不设置，只有 `verify` 派发使用 `medium`。
-
-### 修复
-
-- grep 工具的 `glob` 参数现在会像 pattern 与 path 一样先做 shell 转义再传给 `grep --include`。executor 经 `sh -c` 执行命令，此前模型给出的 glob 若包含 shell 元字符（如 `*.ts; rm -rf x`），会被当作额外命令执行，而不是仅仅匹配不到任何结果。
-
-## [0.9.2-beta.2] - 2026-08-27
-
-### 变更
-
-- 将 pi 依赖组（`pi-ai`、`pi-agent-core`、`pi-coding-agent`、`pi-tui`）升级至 `0.84.3`。TUI 改用 `TuiMainScreen`，并显式关闭 LaTeX 渲染以保持旧显示语义；模型切换在 fallback 与会话重建场景下保持 pi 0.83 的 thinking 语义。
-
-## [0.9.2-beta.1] - 2026-08-27
-
-### 新增
-
-- 新增 `glob` 工具（子代理可用），基于新的 `FileStore.walkFiles` 实现：不跟随 symlink，支持 basename/`**`/`{a,b}` 语义，按 mtime 排序并带 stat 成本上限，扫描条目数封顶并诚实提示「结果可能不完整」。bash 拦截器现在会把裸 `find`/`ls -R` 导向它。
-- 实现 spec 044 原生文件 I/O：以原生 Node 文件系统代码取代 shell 脚本式文件操作，文件工具不再依赖子进程文本捕获来保证正确性。新增 `FileStore` 端口（`src/file-store.ts`）作为 `Executor` 在文件系统侧的对应物；文件工具经 `guardPath` 一次性解析路径，且实际打开的正是那个解析结果。`edit` 改为字节级拼接（小文件走内存路径，大文件走两遍流式路径，带基于指纹的并发检查），正确性不再依赖文件解码；`write` 改用 `writeAtomic`（fsync、保留权限）取代 `cat > tmp && mv` 脚本；`read` 改用 stat/readBytes/listDirectory，新增 `line-index.ts` 提供 O(n) 顺序翻页，EOF 处诚实显示 `of >=N`；`grep` 把 exclude/include 直接下推给 grep 本身并配 grep 专属的捕获上限，不再用掩盖 grep 退出码的 `head` 管道；`send_media` 与 job-manager 改为经 FileStore 直接读取图片字节和 spill 文件尾部。executor 新增字节精确的 Buffer 捕获（关闭时一次性解码，修复分块边界处的 UTF-8 损坏）、`stdoutTruncated`/`stderrTruncated` 标记和完整落盘输出的 spill 能力；路径守卫现在总是填充 `resolvedPath`（即使守卫被禁用），且不再把多层缺失的目录路径折叠成 `<ancestor>/basename`。
-
-### 变更
-
-- **工具 schema 分区（spec 046）。** 一个工具的参数集现在就是它唯一调用形态所需的字段，非法字段组合从「运行时拒绝」变为「根本无法表达」。`task_manage` 拆分为五个独立工具——`task_list`/`task_create`/`task_update`/`task_close`/`task_verify`（`progress` 与 `set` 并入 `task_update`，按是否携带 `note` 分支；每个带 id 的工具保持 dispatcher 此前集中施加的按任务串行化）。委派拆分为 `subagent`（配置好的角色，无覆盖字段）与 `subagent_inline`（一次性执行器，携带本应由角色文件提供的全部字段），由 `tools.subagentInline.enabled` 门控（默认开启）；移除 `paths`/`name`/`returns` 及 `ARTIFACT:` 标记协议。流程知识从 schema 描述移入本就覆盖它们的 playbook。旧名称的所有下游消费方同步更新：注册表/呈现/details、effect 台账、prompt 段落门控、task-commands 诊断、task-driver 唤醒文本、playbook、评测 harness 及用户文档。
-- `skill_manage` 变为只读的 `skill` 工具（`list`/`read`）；编写改走 `write`/`edit`。skill 读取现在经过 `checkPathGuard`（修复 symlink 逃逸缺口），路径守卫的 `skills/` 例外覆盖写入；`scanSkillContent` 从写入时移到目录加载时，因此损坏的 skill 不会进入 `<available_skills>` 或 skill 列表。全部 16 个工具 schema 中的 `label` 字段移除，改为运行时确定性推导（新增 `presentation.ts` 的 `describeToolCall`），供 session 事件与子代理进度使用；持久化的标签（bash 异步作业、子代理 run）改由命令/任务文本推导，不再由模型提供。
-- 机械化加固一轮：`settings.json`、`.channel-meta.json`、记忆脚手架文件与事件 invalid-marker 现在统一走 `writeFileAtomically`，写入中途崩溃不再可能把原文件截断。反复出现的重复辅助函数各自收敛为唯一实现（`formatDuration`、`clipText`、`isRecord` 与排除数组的 `isPlainObject` 拆分、`hasMeaningfulExchange`——此前两个版本可能对同一份短 transcript 得出相反结论、`recencyBoostByAge`、`formatBlockMessage`、`normalizeSafeId`/`resolveSafeIdPath`）。本地时间词汇表扩展覆盖 channel-runner 的 `eligibleAfter`、用量台账的按月分桶（UTC 改为本地日历月，与其自身 `formatLocalTime` 戳记的条目一致）及多处裸 `Date.parse` 调用点。
-
-### 修复
-
-- 任务专属事件 id 改为按最后一个点解析。`TASK_ID_PATTERN` 允许任务 id 含点，但孤儿检测 watcher 与 `cleanupTaskEvents` 都自行切分：对形如 `v1.2-release` 的任务 id，watcher 会把 id 误读为 `v1`、找不到对应任务文件，并在首次触发时静默删除仍被持有的周期事件；`cleanupTaskEvents` 存在镜像 bug——关闭任务 `v1` 会顺带删除任何 id 恰以 `v1.` 开头的兄弟任务的事件。
-- 结构化唤醒的 durable 派发重试现在有上限和退避。`markRetryable`（在 job/子代理完成唤醒的 claim 或 finish 步骤抛错时使用——例如磁盘满、权限问题）此前把记录直接打回 "pending" 且无退避，30 秒一次的 drain 循环会永远重试同一个确定性失败，而 `archiveIncomingMessage` 在每次重投时都让频道日志无限增长。现在记录按投递次数做指数退避（30s 起、封顶 10m），并与租约过期路径共享 `MAX_DELIVERIES` 毒丸上限：超过上限的记录标记为 "exhausted"、保留在磁盘供检查，并只通知频道一次，而不是继续重试。
 
 ## [0.9.1] - 2026-08-25
 
