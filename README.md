@@ -1,5 +1,7 @@
 # Pipiclaw
 
+**简体中文** | [English](./README.en.md)
+
 **把钉钉变成一个能持续工作的 AI 工程入口。**
 
 Pipiclaw 是一个面向个人和团队的 AI coding assistant runtime。它让 AI 助手不只回答一轮问题，而是能留在你的钉钉里理解上下文、操作工作区、记住长期约定、按计划继续任务，还能把重活委派给 Claude Code、Codex CLI 或你自己的执行器。
