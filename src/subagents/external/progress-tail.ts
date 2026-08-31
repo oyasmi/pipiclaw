@@ -87,7 +87,12 @@ export function startExternalProgressTail(input: ExternalProgressTailInput): Ext
 		input.onProgress(label);
 	};
 
-	const timer = setInterval(() => void tick(), POLL_MS);
+	// `tick` is async and its result is discarded: a rejection here (a throwing `onProgress`
+	// callback, say) would otherwise surface as an unhandled rejection and reach the process-level
+	// fatal handler. Swallow it — a failed tick just costs one skipped progress notice.
+	const timer = setInterval(() => {
+		tick().catch(() => undefined);
+	}, POLL_MS);
 	timer.unref?.();
 	return {
 		stop() {

@@ -97,8 +97,8 @@ describe("bash tool", () => {
 		);
 
 		const executor = new RecordingExecutor(async (command) => {
-			// The launch wrapper backgrounds the command and echoes the nohup PID.
-			if (command.includes("nohup")) {
+			// The launch wrapper backgrounds the command under `setsid` and echoes its PID.
+			if (command.includes("setsid")) {
 				return { code: 0, stdout: "4242\n", stderr: "" };
 			}
 			return { code: 0, stdout: "", stderr: "" };

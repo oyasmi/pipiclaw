@@ -194,8 +194,8 @@ async function createWake(
 		let jobId = "";
 		const executor: Executor = {
 			exec: async (command) => {
-				if (command.includes("nohup")) return { stdout: "12345\n", stderr: "", code: 0 };
-				if (command.includes("if [ -f")) return { stdout: `${jobId} EXIT:0\n`, stderr: "", code: 0 };
+				if (command.includes("setsid")) return { stdout: "12345\n", stderr: "", code: 0 };
+				if (command.includes("if [ -s")) return { stdout: `${jobId} EXIT:0\n`, stderr: "", code: 0 };
 				return { stdout: "", stderr: "", code: 0 };
 			},
 		};

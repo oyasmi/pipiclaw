@@ -136,6 +136,44 @@ describe("startExternalProgressTail", () => {
 		expect(() => tail.stop()).not.toThrow();
 	});
 
+	it("a throwing onProgress callback never surfaces as an unhandled rejection", async () => {
+		const artifactDir = tempDir();
+		const eventsPath = join(artifactDir, "events.jsonl");
+		writeFileSync(eventsPath, `${codexLine("npm run build")}\n`);
+		const rejections: unknown[] = [];
+		const onRejection = (reason: unknown): void => {
+			rejections.push(reason);
+		};
+		process.on("unhandledRejection", onRejection);
+		let explode = true;
+		const seen: string[] = [];
+		try {
+			const tail = startExternalProgressTail({
+				artifactDir,
+				harnessId: "codex-cli",
+				startedAt: Date.now(),
+				onProgress: (label) => {
+					if (explode) throw new Error("boom");
+					seen.push(label);
+				},
+			});
+			await advance(60_000); // cross the first-notice delay so a tick actually calls onProgress
+			await advance(1);
+			expect(rejections).toEqual([]);
+			expect(seen).toEqual([]); // the throwing tick delivered nothing
+
+			// The poller is not wedged: a later tick with a new label still fires.
+			explode = false;
+			writeFileSync(eventsPath, `${codexLine("npm run build")}\n${codexLine("npm test")}\n`);
+			await advance(200_000); // past the min-notice gap
+			expect(seen).toEqual(["npm test"]);
+			expect(rejections).toEqual([]);
+			tail.stop();
+		} finally {
+			process.off("unhandledRejection", onRejection);
+		}
+	});
+
 	it("tolerates a missing artifact file instead of throwing", async () => {
 		const tail = startExternalProgressTail({
 			artifactDir: join(tempDir(), "never-created"),

@@ -3,7 +3,7 @@ import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
-import type { Executor } from "../executor.js";
+import type { ExecResult, Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
@@ -18,11 +18,12 @@ import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
  * the channel's run queue for its whole duration, blocking `/steer`, `/followup`, and every other
  * message. A background job instead returns immediately and the model can end its turn.
  *
- * Jobs live on the host, managed through shell commands (`nohup` to launch, `kill -0` to probe,
- * `kill` to cancel) with no in-process child handles. Records are mirrored to
- * `state/jobs/<channelId>/<id>.json` so they survive a restart: a `nohup` process outlives the
- * daemon, and losing the record while the process kept running meant orphaned work, leaked slots,
- * and unreachable output (spec 031, D6).
+ * Jobs live on the host, managed through shell commands (`setsid` to launch as its own process
+ * group with a startup handshake, a three-state identity probe, a confirmed kill) with no
+ * in-process child handles. Records
+ * are mirrored to `state/jobs/<channelId>/<id>.json` so they survive a restart: a detached
+ * process outlives the daemon, and losing the record while the process kept running meant orphaned
+ * work, leaked slots, and unreachable output (spec 031, D6).
  *
  * A finished job wakes its channel by itself. Making the model predict a completion time and
  * arrange its own callback was a judgement call it could not make correctly, so completion is a
@@ -54,6 +55,14 @@ export interface JobWakeContract {
 
 interface JobRecord extends JobSnapshot {
 	pid: number;
+	/** Process-group id of the launched job, as `ps` reported it right after spawn. `setsid` makes
+	 *  the job its own session/group leader, so this normally equals `pid` — the precondition for a
+	 *  safe negative-PGID kill. Absent on records written before this was captured. */
+	pgid?: number;
+	/** `ps -o lstart=` for `pid` at launch: the only OS-verifiable way to tell the still-running
+	 *  job apart from an unrelated process that later reused its pid. Absent on older records and
+	 *  whenever `ps` was unavailable at launch — callers must then treat identity as unprovable. */
+	pidStartedAt?: string;
 	spillFile: string;
 	exitFile: string;
 	timeoutSeconds: number;
@@ -62,9 +71,133 @@ interface JobRecord extends JobSnapshot {
 	finishedAt?: number;
 	/** Set once the completion wake has been dispatched, so a restart cannot re-announce it. */
 	notified?: boolean;
+	/**
+	 * A cancel or timeout whose kill could not be *confirmed* yet: the job stays `running` and
+	 * manageable, and every sweep re-attempts the kill until the process is proven gone, at which
+	 * point this terminal status is applied. Internal only — never surfaced in a `JobSnapshot`.
+	 */
+	pendingKill?: "cancelled" | "failed";
 	wakeClaimDispatchId?: string;
 	wakeConsumedAt?: number;
 }
+
+/** Every scratch file a single job owns, all derived from its spill path. */
+interface JobArtifacts {
+	spillFile: string;
+	exitFile: string;
+	exitTmp: string;
+	readyFile: string;
+	readyTmp: string;
+	metaFile: string;
+	metaTmp: string;
+}
+
+function jobArtifacts(spillFile: string): JobArtifacts {
+	return {
+		spillFile,
+		exitFile: `${spillFile}.exit`,
+		exitTmp: `${spillFile}.exit.tmp`,
+		readyFile: `${spillFile}.ready`,
+		readyTmp: `${spillFile}.ready.tmp`,
+		metaFile: `${spillFile}.meta`,
+		metaTmp: `${spillFile}.meta.tmp`,
+	};
+}
+
+/** ~2s of readiness polling: 40 iterations of a 50ms sleep in the wrapper shell. */
+const LAUNCH_HANDSHAKE_MAX_POLLS = 40;
+
+/**
+ * Build the wrapper shell that launches a background job with a verifiable startup handshake.
+ *
+ * The inner shell writes an atomic `ready` marker as its very first action — *before* the user
+ * command — so the parent can distinguish "wrapper live, spill writable, command about to run"
+ * from "launch silently failed" (a read-only spill dir, a `setsid`/`sh` that could not exec). The
+ * parent also writes a metadata file (pid, and under `setsid` the pgid/start-time) *before* it
+ * waits on the handshake, so an abort that lands mid-handshake still leaves a recoverable pid.
+ *
+ * `setsid` (when present) makes the job its own session/process-group leader (pgid == pid), so a
+ * later cancel/timeout can terminate the whole group. A host without it falls back to `nohup` —
+ * still detached and restart-safe, but single-pid, so pgid/identity are deliberately not claimed.
+ *
+ * On handshake success the parent prints `MODE`/`PID`(/`PGID`/`LSTART`) and exits 0. On failure it
+ * kills whatever it spawned, echoes the inner error, removes the scratch files, and exits 1.
+ */
+function buildLaunchScript(command: string, art: JobArtifacts): string {
+	const spill = shellEscape(art.spillFile);
+	const exitFile = shellEscape(art.exitFile);
+	const exitTmp = shellEscape(art.exitTmp);
+	const ready = shellEscape(art.readyFile);
+	const readyTmp = shellEscape(art.readyTmp);
+	const meta = shellEscape(art.metaFile);
+	const metaTmp = shellEscape(art.metaTmp);
+
+	// Subshell around the user command so its own `exit N` only leaves the subshell and the
+	// exit-capture still runs; the exit code is written temp-then-renamed so a probe never reads a
+	// half-written `.exit`.
+	const inner =
+		`printf 'ready\\n' > ${readyTmp} && mv -f ${readyTmp} ${ready} || exit 127; ` +
+		`( ${command} )\n__pc_rc=$?; ` +
+		`printf '%s\\n' "$__pc_rc" > ${exitTmp} && mv -f ${exitTmp} ${exitFile}`;
+	const escInner = shellEscape(inner);
+
+	// `ps` can momentarily miss a just-forked process on a loaded host: one short retry.
+	const psField = (field: string) =>
+		`"$(ps -o ${field}= -p "$__pc_pid" 2>/dev/null || { sleep 0.1; ps -o ${field}= -p "$__pc_pid" 2>/dev/null; })"`;
+
+	const handshake = (killExpr: string) =>
+		`__pc_i=0; while [ ! -s ${ready} ] && [ "$__pc_i" -lt ${LAUNCH_HANDSHAKE_MAX_POLLS} ]; do ` +
+		`sleep 0.05; __pc_i=$((__pc_i+1)); done; ` +
+		`if [ ! -s ${ready} ]; then ${killExpr}printf 'HANDSHAKE failed\\n'; cat ${spill} 2>/dev/null; ` +
+		`rm -f ${ready} ${readyTmp} ${meta} ${metaTmp} ${exitFile} ${exitTmp} ${spill}; exit 1; fi`;
+
+	const setsidKill =
+		`kill -TERM "-$__pc_pid" 2>/dev/null; kill -TERM "$__pc_pid" 2>/dev/null; sleep 0.1; ` +
+		`kill -KILL "-$__pc_pid" 2>/dev/null; `;
+	const nohupKill = `kill -TERM "$__pc_pid" 2>/dev/null; sleep 0.1; kill -KILL "$__pc_pid" 2>/dev/null; `;
+
+	const setsidBranch =
+		`setsid sh -c ${escInner} > ${spill} 2>&1 & __pc_pid=$!; ` +
+		`__pc_pgid=$(printf '%s' ${psField("pgid")} | tr -d ' '); __pc_lstart=${psField("lstart")}; ` +
+		`printf 'MODE setsid\\nPID %s\\nPGID %s\\nLSTART %s\\n' "$__pc_pid" "$__pc_pgid" "$__pc_lstart" ` +
+		`> ${metaTmp} && mv -f ${metaTmp} ${meta}; ` +
+		`${handshake(setsidKill)}; ` +
+		`printf 'MODE setsid\\nPID %s\\nPGID %s\\nLSTART %s\\n' "$__pc_pid" "$__pc_pgid" "$__pc_lstart"`;
+
+	const nohupBranch =
+		`nohup sh -c ${escInner} > ${spill} 2>&1 & __pc_pid=$!; ` +
+		`printf 'MODE nohup\\nPID %s\\n' "$__pc_pid" > ${metaTmp} && mv -f ${metaTmp} ${meta}; ` +
+		`${handshake(nohupKill)}; ` +
+		`printf 'MODE nohup\\nPID %s\\n' "$__pc_pid"`;
+
+	// `umask 077`: the spill holds whatever the command printed (routinely credentials) in a
+	// world-readable /tmp; set the mask rather than chmod afterwards so there is no readable window.
+	return (
+		`umask 077; rm -f ${exitFile} ${exitTmp} ${ready} ${readyTmp} ${meta} ${metaTmp}; ` +
+		`if command -v setsid >/dev/null 2>&1; then ${setsidBranch}; else ${nohupBranch}; fi`
+	);
+}
+
+/**
+ * The outcome of one kill attempt, decided from the kill script's own printed token plus the
+ * executor result — never from "the shell exited 0", which a failed `kill` inside `2>/dev/null`
+ * would still do.
+ * - `terminated` — we signalled the target and then confirmed the pid is gone.
+ * - `gone` — the target was already gone before we signalled (or its pgid became unroutable).
+ * - `identity-mismatch` — the pid now belongs to an unrelated process, so *our* process is gone.
+ * - `unconfirmed` — the kill ran but the pid is still alive afterwards.
+ * - `not-submitted` — the executor could not even run the kill.
+ * - `no-target` — there is no pid we can safely signal (pid <= 1 / not finite).
+ */
+type KillOutcome = "terminated" | "gone" | "identity-mismatch" | "unconfirmed" | "not-submitted" | "no-target";
+
+/** Outcomes that prove the job's process is gone — safe to apply a terminal status. */
+const KILL_CONFIRMED_GONE: ReadonlySet<KillOutcome> = new Set<KillOutcome>([
+	"terminated",
+	"gone",
+	"identity-mismatch",
+	"no-target",
+]);
 
 export interface JobStartOptions {
 	signal?: AbortSignal;
@@ -132,6 +265,52 @@ function parseJobRecord(raw: string): JobRecord | undefined {
 	return value as unknown as JobRecord;
 }
 
+/**
+ * Read the launch command's stdout: an optional `MODE setsid|nohup` line followed by `PID <n>`
+ * and — only in `setsid` mode — `PGID <n>` / `LSTART <...>`. A bare number on its own line is also
+ * accepted as the pid so older/simpler executor fakes keep working. `pgid` and `pidStartedAt` are
+ * returned only when the job was launched under `setsid` *and* `ps` actually reported them; the
+ * `nohup` fallback never yields them, and the caller must then treat identity as unprovable.
+ */
+function parseLaunchOutput(stdout: string): {
+	pid?: number;
+	pgid?: number;
+	pidStartedAt?: string;
+	mode?: "setsid" | "nohup";
+	handshakeFailed?: boolean;
+} {
+	let pid: number | undefined;
+	let pgid: number | undefined;
+	let pidStartedAt: string | undefined;
+	let mode: "setsid" | "nohup" | undefined;
+	let handshakeFailed = false;
+	for (const raw of stdout.split("\n")) {
+		const line = raw.trim();
+		if (!line) continue;
+		if (line === "HANDSHAKE failed") {
+			handshakeFailed = true;
+			continue;
+		}
+		if (/^\d+$/.test(line)) {
+			pid ??= Number.parseInt(line, 10);
+			continue;
+		}
+		const match = line.match(/^(MODE|PID|PGID|LSTART)\s+(.*)$/);
+		if (!match) continue;
+		const [, key, value] = match;
+		if (key === "MODE" && (value === "setsid" || value === "nohup")) mode = value;
+		else if (key === "PID" && /^\d+$/.test(value)) pid = Number.parseInt(value, 10);
+		else if (key === "PGID" && /^\d+$/.test(value)) pgid = Number.parseInt(value, 10);
+		else if (key === "LSTART" && value) pidStartedAt = value;
+	}
+	// The nohup fallback cannot capture these reliably; drop them even if something printed them.
+	if (mode === "nohup") {
+		pgid = undefined;
+		pidStartedAt = undefined;
+	}
+	return { pid, pgid, pidStartedAt, mode, handshakeFailed };
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve) => {
 		const timer = setTimeout(resolve, ms);
@@ -162,6 +341,14 @@ function toSnapshot(record: JobRecord): JobSnapshot {
 export class ChannelJobManager {
 	private readonly jobs = new Map<string, JobRecord>();
 	private readonly wakeQueue = createSerialQueue<string>();
+	/**
+	 * Serializes every probe → decide → terminal-transition sequence for a single job. The sweeper,
+	 * `list`/`poll`/`restore` (via `refresh`), `cancel`, and the persist-failure rollback all pass
+	 * through it, so two callers can never race the same job to two terminal states (e.g. both see
+	 * `pendingKill`, both `finish`, the second reading a now-cleared `pendingKill` and writing a
+	 * bogus status). Inside the slot each op re-checks `record.status`.
+	 */
+	private readonly reconcileQueue = createSerialQueue<string>();
 	private sweepTimer?: ReturnType<typeof setInterval>;
 	private garbageCollectionTimer?: ReturnType<typeof setTimeout>;
 	private sweeping = false;
@@ -201,9 +388,24 @@ export class ChannelJobManager {
 
 	private async forget(record: JobRecord): Promise<void> {
 		this.jobs.delete(record.id);
-		const path = this.recordPath(record.id);
+		const art = jobArtifacts(record.spillFile);
+		await this.unlinkArtifacts(art, this.recordPath(record.id));
+	}
+
+	/** Remove a job's scratch files (and optionally its persisted record). Every unlink is best-effort. */
+	private async unlinkArtifacts(art: JobArtifacts, recordPath?: string): Promise<void> {
+		const targets = [
+			recordPath,
+			art.spillFile,
+			art.exitFile,
+			art.exitTmp,
+			art.readyFile,
+			art.readyTmp,
+			art.metaFile,
+			art.metaTmp,
+		];
 		await Promise.all(
-			[path, record.spillFile, record.exitFile]
+			targets
 				.filter((target): target is string => Boolean(target))
 				.map((target) => unlink(target).catch(() => undefined)),
 		);
@@ -276,9 +478,11 @@ export class ChannelJobManager {
 	}
 
 	/**
-	 * Launch a command in the background and return its job id. The wrapper writes merged
-	 * stdout/stderr to a spill file and the command's exit code to a sibling `.exit` file, then
-	 * `echo $!` hands back the nohup PID for later probing/cancellation.
+	 * Launch a command in the background and return its snapshot. The wrapper (`buildLaunchScript`)
+	 * runs a readiness handshake before the command executes: only after the inner shell proves it
+	 * started — spill writable, `setsid`/`sh` execed — does the parent print `MODE`/`PID` and exit
+	 * 0. A failed handshake, a non-zero launch, or an interrupted launch never creates a `running`
+	 * record; a persist failure right after a successful launch terminates the process (see below).
 	 */
 	async start(
 		command: string,
@@ -293,22 +497,46 @@ export class ChannelJobManager {
 		}
 		const id = randomBytes(6).toString("hex");
 		const spillFile = jobSpillPath(id);
-		const exitFile = `${spillFile}.exit`;
-		// Run the user command inside a subshell so its own `exit` only leaves the subshell and the
-		// exit-capture line still runs; otherwise a command ending in `exit N` would skip it and the
-		// job would look `lost` instead of finished.
-		const inner = `( ${command} )\n__pc_rc=$?; echo "$__pc_rc" > ${shellEscape(exitFile)}`;
-		// `umask 077` first: the spill file holds whatever the command printed, which routinely
-		// includes credentials, and it is created in a world-readable /tmp. Setting the mask rather
-		// than chmod-ing afterwards leaves no window where the file is readable by others.
-		const launch =
-			`umask 077; rm -f ${shellEscape(exitFile)}; ` +
-			`nohup sh -c ${shellEscape(inner)} > ${shellEscape(spillFile)} 2>&1 & echo $!`;
-		const result = await this.executor.exec(launch, { signal: options.signal });
-		const pid = Number.parseInt(result.stdout.trim(), 10);
-		if (!Number.isFinite(pid) || pid <= 0) {
-			throw new Error(`Failed to start background job: ${result.stderr.trim() || "no PID returned"}`);
+		const art = jobArtifacts(spillFile);
+		const launch = buildLaunchScript(command, art);
+
+		let result: ExecResult;
+		try {
+			result = await this.executor.exec(launch, { signal: options.signal });
+		} catch (error) {
+			// The launch was aborted (or the executor could not run it). A detached child may
+			// already be running — try to recover its pid and clean it up honestly.
+			throw await this.recoverInterruptedLaunch(command, art, error);
 		}
+
+		const launched = parseLaunchOutput(result.stdout);
+		if (result.code !== 0 || launched.handshakeFailed) {
+			// The wrapper's readiness handshake never completed: the inner shell could not start
+			// (spill unwritable, `setsid`/`sh` exec failure, …). It has already killed whatever it
+			// spawned; drop the scratch files and surface the inner error.
+			await this.unlinkArtifacts(art);
+			const detail =
+				result.stdout
+					.split("\n")
+					.filter(
+						(line) =>
+							line.trim() &&
+							!/^(MODE|PID|PGID|LSTART|HANDSHAKE) /.test(line) &&
+							line.trim() !== "HANDSHAKE failed",
+					)
+					.join(" ")
+					.trim() || result.stderr.trim();
+			throw new Error(
+				`Failed to start background job "${label}"${detail ? `: ${detail}` : " — launch handshake did not complete"}`,
+			);
+		}
+
+		const pid = launched.pid;
+		if (pid === undefined || !Number.isFinite(pid) || pid <= 0) {
+			await this.unlinkArtifacts(art);
+			throw new Error(`Failed to start background job "${label}": ${result.stderr.trim() || "no PID returned"}`);
+		}
+
 		const now = Date.now();
 		const record: JobRecord = {
 			id,
@@ -318,15 +546,101 @@ export class ChannelJobManager {
 			startedAt: now,
 			durationMs: 0,
 			pid,
+			...(launched.pgid !== undefined ? { pgid: launched.pgid } : {}),
+			...(launched.pidStartedAt ? { pidStartedAt: launched.pidStartedAt } : {}),
 			spillFile,
-			exitFile,
+			exitFile: art.exitFile,
 			timeoutSeconds,
 			contract: { notify: options.notify ?? true, ...(options.taskId ? { taskId: options.taskId } : {}) },
 		};
 		this.jobs.set(id, record);
-		await this.persist(record);
+		// The persisted record is the only thing that survives a restart — a detached process
+		// outlives the daemon, and losing its record means an orphan holding a slot with unreachable
+		// output. So the first persist is required: if it fails, terminate what we just launched and
+		// surface the failure instead of returning a job the caller can never recover (T1).
+		try {
+			await this.persist(record, true);
+		} catch (error) {
+			// The rollback kill + bookkeeping run inside the job's reconcile slot so a sweeper tick
+			// that has already adopted this record cannot transition it underneath us. Cleanup must
+			// not inherit the caller's AbortSignal (it may already be aborted).
+			const reason = `its record could not be persisted (${errorMessage(error)})`;
+			const failure = await this.reconcileQueue.run(id, async (): Promise<Error> => {
+				const outcome = await this.runKill(record);
+				if (!KILL_CONFIRMED_GONE.has(outcome)) {
+					// The process could not be confirmed gone (kill unconfirmed, or the executor could
+					// not run it). Deleting the only trace of a live process is exactly the orphan this
+					// path exists to prevent — keep the in-memory record manageable so the sweeper keeps
+					// trying, and say so plainly.
+					record.pendingKill = "cancelled";
+					this.ensureSweeper();
+					return new Error(
+						`Background job started but ${reason}; its process (pid ${pid}) could not be confirmed terminated. ` +
+							`The job is left tracked in memory (id ${id}) so the sweeper keeps retrying — cancel it once the executor recovers. No record was persisted.`,
+					);
+				}
+				this.jobs.delete(id);
+				await this.forget(record).catch(() => undefined);
+				const tail = outcome === "terminated" ? "its process was terminated" : "its process was already gone";
+				return new Error(`Background job started but ${reason}; ${tail}. No job was created.`);
+			});
+			throw failure;
+		}
 		this.ensureSweeper();
 		return toSnapshot(record);
+	}
+
+	/**
+	 * Recover from a launch that rejected (an abort landed after the wrapper had already spawned the
+	 * detached child, or the executor failed outright). The wrapper writes a metadata file *before*
+	 * its readiness handshake, so even an interrupted launch usually leaves a recoverable pid;
+	 * clean it up with no caller signal and return an error that is honest about what is known.
+	 */
+	private async recoverInterruptedLaunch(command: string, art: JobArtifacts, error: unknown): Promise<Error> {
+		const cause = errorMessage(error);
+		const partialStdout =
+			typeof (error as { stdout?: unknown }).stdout === "string" ? (error as { stdout: string }).stdout : "";
+		let launched = parseLaunchOutput(partialStdout);
+		for (const metaPath of [art.metaFile, art.metaTmp]) {
+			if (launched.pid !== undefined) break;
+			try {
+				launched = parseLaunchOutput(await readFile(metaPath, "utf-8"));
+			} catch {
+				// no metadata at this path
+			}
+		}
+
+		const pid = launched.pid;
+		if (pid === undefined || !Number.isFinite(pid) || pid <= 0) {
+			await this.unlinkArtifacts(art);
+			return new Error(
+				`Background job launch was interrupted (${cause}); no pid could be recovered, so whether the command actually started cannot be confirmed. No job was created.`,
+			);
+		}
+
+		const provisional: JobRecord = {
+			id: "(interrupted-launch)",
+			label: "(interrupted launch)",
+			command,
+			status: "running",
+			startedAt: Date.now(),
+			durationMs: 0,
+			pid,
+			...(launched.pgid !== undefined ? { pgid: launched.pgid } : {}),
+			...(launched.pidStartedAt ? { pidStartedAt: launched.pidStartedAt } : {}),
+			spillFile: art.spillFile,
+			exitFile: art.exitFile,
+			timeoutSeconds: 0,
+			contract: { notify: false },
+		};
+		const outcome = await this.runKill(provisional); // deliberately no signal
+		await this.unlinkArtifacts(art);
+		const tail = KILL_CONFIRMED_GONE.has(outcome)
+			? outcome === "terminated"
+				? `its process (pid ${pid}) was terminated`
+				: `its process (pid ${pid}) was already gone`
+			: `termination of its process (pid ${pid}) could not be confirmed — verify it manually`;
+		return new Error(`Background job launch was interrupted (${cause}); recovered and ${tail}. No job was created.`);
 	}
 
 	/**
@@ -367,9 +681,16 @@ export class ChannelJobManager {
 			// long as any job lives, so per-job spawns are the steady-state cost of backgrounding.
 			const probes = await this.probeAll(running);
 			for (const record of running) {
-				await this.applyProbe(record, probes.get(record.id) ?? "").catch((error) => {
-					log.logWarning(`Background job sweep failed to refresh job ${record.id}`, errorMessage(error));
-				});
+				// The batched probe is a read; the state transition it implies still goes through the
+				// per-job slot so it cannot race a concurrent list/poll/cancel.
+				await this.reconcileQueue
+					.run(record.id, async () => {
+						if (record.status !== "running") return;
+						await this.applyProbe(record, probes.get(record.id) ?? "");
+					})
+					.catch((error) => {
+						log.logWarning(`Background job sweep failed to refresh job ${record.id}`, errorMessage(error));
+					});
 			}
 			await this.collectGarbage();
 		} finally {
@@ -381,10 +702,11 @@ export class ChannelJobManager {
 	}
 
 	/**
-	 * Probe every given job in one shell invocation, returning `id → EXIT:<code>|ALIVE|GONE`.
+	 * Probe every given job in one shell invocation, returning
+	 * `id → EXIT:<code> | ALIVE | GONE | DIFFERENT | UNKNOWN`.
 	 *
 	 * Each job contributes one branch that reads its exit-code file if present and otherwise checks
-	 * PID liveness — exactly what the single-job probe did, just batched.
+	 * liveness (three-state when a start time was captured — see the inline comment).
 	 */
 	private async probeAll(records: JobRecord[], signal?: AbortSignal): Promise<Map<string, string>> {
 		const states = new Map<string, string>();
@@ -395,11 +717,27 @@ export class ChannelJobManager {
 			.map((record) => {
 				const id = shellEscape(record.id);
 				const exitFile = shellEscape(record.exitFile);
-				return (
-					`if [ -f ${exitFile} ]; then printf '%s EXIT:%s\\n' ${id} "$(cat ${exitFile})"; ` +
-					`elif kill -0 ${record.pid} 2>/dev/null; then printf '%s ALIVE\\n' ${id}; ` +
-					`else printf '%s GONE\\n' ${id}; fi`
-				);
+				// Liveness: when the job's start time was captured, require the pid to still report
+				// that exact `ps -o lstart=` — a recycled pid then reads as GONE, not ALIVE, so the
+				// manager never mistakes an unrelated process for the job. Older records without a
+				// captured start time fall back to a bare `kill -0`, the best they can do.
+				// `-s`, not `-f`: an existing-but-empty `.exit` file (a torn write) must not count as
+				// a finished job. The writer renames a fully-written temp file into place, so `-s`
+				// here only ever sees the settled value (T4).
+				//
+				// Identity liveness is three-state: with a captured start time, `ps` reporting the
+				// *same* lstart is ALIVE, a *different* one is DIFFERENT (pid recycled — our process
+				// is gone), and `ps` returning nothing while `kill -0` still says alive is UNKNOWN
+				// (do not conclude anything — a later probe retries). Legacy records have only
+				// `kill -0`: ALIVE / GONE.
+				const liveness = record.pidStartedAt
+					? `__pc_cur="$(ps -o lstart= -p ${record.pid} 2>/dev/null)"; ` +
+						`if [ -z "$__pc_cur" ]; then ` +
+						`if kill -0 ${record.pid} 2>/dev/null; then printf '%s UNKNOWN\\n' ${id}; else printf '%s GONE\\n' ${id}; fi; ` +
+						`elif [ "$__pc_cur" = ${shellEscape(record.pidStartedAt)} ]; then printf '%s ALIVE\\n' ${id}; ` +
+						`else printf '%s DIFFERENT\\n' ${id}; fi`
+					: `if kill -0 ${record.pid} 2>/dev/null; then printf '%s ALIVE\\n' ${id}; else printf '%s GONE\\n' ${id}; fi`;
+				return `if [ -s ${exitFile} ]; then printf '%s EXIT:%s\\n' ${id} "$(cat ${exitFile})"; else ${liveness}; fi`;
 			})
 			.join("\n");
 		const probe = await this.executor.exec(script, { signal });
@@ -419,6 +757,14 @@ export class ChannelJobManager {
 	 * to say nothing.
 	 */
 	private async refresh(record: JobRecord, signal?: AbortSignal, announce = true): Promise<void> {
+		await this.reconcileQueue.run(record.id, () => this.reconcileLocked(record, signal, announce));
+	}
+
+	/**
+	 * Probe one job and apply the result. The unlocked core of `refresh` — every caller must already
+	 * hold the job's `reconcileQueue` slot (`refresh`, or `cancel`'s combined critical section).
+	 */
+	private async reconcileLocked(record: JobRecord, signal?: AbortSignal, announce = true): Promise<void> {
 		if (record.status !== "running") {
 			return;
 		}
@@ -426,27 +772,79 @@ export class ChannelJobManager {
 		await this.applyProbe(record, probes.get(record.id) ?? "", signal, announce);
 	}
 
-	/** Turn one probe result into a status transition; an unrecognized result only ages the job. */
+	/**
+	 * The terminal status for a job a probe just showed as finished/gone. A cancel or timeout kill
+	 * already in flight (`pendingKill`) wins over the raw probe result — a job the model asked to
+	 * cancel lands `cancelled`, a timed-out one `failed`/124 — even if the process happened to exit
+	 * on its own first. Clears `pendingKill`; call only immediately before `finish`.
+	 */
+	private takePendingTerminal(
+		record: JobRecord,
+		fallbackStatus: JobStatus,
+		fallbackExitCode: number | undefined,
+	): { status: JobStatus; exitCode: number | undefined } {
+		const pending = record.pendingKill;
+		record.pendingKill = undefined;
+		if (pending === "cancelled") return { status: "cancelled", exitCode: undefined };
+		if (pending === "failed") return { status: "failed", exitCode: 124 };
+		return { status: fallbackStatus, exitCode: fallbackExitCode };
+	}
+
+	/** Turn one probe result into a status transition; an inconclusive result only ages the job. */
 	private async applyProbe(record: JobRecord, out: string, signal?: AbortSignal, announce = true): Promise<void> {
 		if (record.status !== "running") {
 			return;
 		}
 		if (out.startsWith("EXIT:")) {
-			const code = Number.parseInt(out.slice("EXIT:".length).trim(), 10);
-			record.exitCode = Number.isFinite(code) ? code : undefined;
-			await this.finish(record, code === 0 ? "completed" : "failed", signal, announce);
+			const rawCode = out.slice("EXIT:".length).trim();
+			// A present `.exit` file whose contents are not yet a whole integer means the writer is
+			// mid-write (or wrote garbage). Do not force a terminal status off it — leave the job
+			// running so a later probe can read the settled value; only the checks below still apply.
+			if (/^-?\d+$/.test(rawCode)) {
+				const code = Number.parseInt(rawCode, 10);
+				const t = this.takePendingTerminal(record, code === 0 ? "completed" : "failed", code);
+				record.exitCode = t.exitCode;
+				await this.finish(record, t.status, signal, announce);
+				return;
+			}
+		} else if (out === "GONE" || out === "DIFFERENT") {
+			// GONE: vanished without an exit code (killed externally, host rebooted). DIFFERENT: the
+			// pid now belongs to an unrelated process, so ours is definitively gone. Either way the
+			// job is over. (`UNKNOWN` deliberately does NOT land here — `ps` being briefly
+			// unavailable must not terminalize a live job; a later probe retries.)
+			const t = this.takePendingTerminal(record, "lost", undefined);
+			record.exitCode = t.exitCode;
+			await this.finish(record, t.status, signal, announce);
 			return;
 		}
-		if (out === "GONE") {
-			// Process vanished without writing an exit code (killed externally, or the host rebooted).
-			await this.finish(record, "lost", signal, announce);
+
+		// Still running (ALIVE / UNKNOWN / torn-EXIT). A cancel or timeout whose kill could not be
+		// confirmed earlier retries here every sweep until the process is proven gone.
+		if (record.pendingKill) {
+			const outcome = await this.runKill(record, signal);
+			if (record.status === "running" && KILL_CONFIRMED_GONE.has(outcome)) {
+				const t = this.takePendingTerminal(record, "lost", undefined);
+				record.exitCode = t.exitCode;
+				await this.finish(record, t.status, signal, announce);
+			}
 			return;
 		}
-		// Still alive: enforce the wall-clock budget from JS so we do not depend on a `timeout` binary.
+
+		// Wall-clock budget, enforced from JS so we do not depend on a `timeout` binary. Only fall
+		// to a terminal status once the kill is confirmed; otherwise mark it pending and keep
+		// managing it (the sweeper retries).
 		if (Date.now() - record.startedAt > record.timeoutSeconds * 1000) {
-			await this.kill(record, signal);
-			record.exitCode = 124;
-			await this.finish(record, "failed", signal, announce);
+			const outcome = await this.runKill(record, signal);
+			if (record.status !== "running") return;
+			if (KILL_CONFIRMED_GONE.has(outcome)) {
+				const t = this.takePendingTerminal(record, "failed", 124);
+				record.exitCode = t.exitCode;
+				await this.finish(record, t.status, signal, announce);
+			} else if (!record.pendingKill) {
+				// Kill unconfirmed: keep managing it. A cancel already in flight keeps its intent.
+				record.pendingKill = "failed";
+				await this.persist(record).catch(() => undefined);
+			}
 		}
 	}
 
@@ -520,10 +918,62 @@ export class ChannelJobManager {
 		await this.persist(record);
 	}
 
-	private async kill(record: JobRecord, signal?: AbortSignal): Promise<void> {
-		await this.executor
-			.exec(`kill ${record.pid} 2>/dev/null; sleep 0.2; kill -9 ${record.pid} 2>/dev/null; true`, { signal })
-			.catch(() => {});
+	/**
+	 * The shell command that terminates `record`'s process and prints one token describing what
+	 * happened (`TERMINATED` / `GONE` / `IDENTITY_MISMATCH` / `UNCONFIRMED`), or `undefined` when
+	 * there is no pid we can safely signal.
+	 *
+	 * A negative-PGID target is used only when `setsid` gave the job pgid == pid (spec: everything
+	 * the command spawned dies with it). When a start time was captured it is checked first: a
+	 * recycled pid reads as `IDENTITY_MISMATCH` and is never signalled; a pid `ps` cannot see but
+	 * that `kill -0` says is alive reads as `UNCONFIRMED` (do not signal what we cannot prove is
+	 * ours). Legacy / nohup records have only `kill -0` liveness and a plain pid kill.
+	 */
+	private killCommand(record: JobRecord): string | undefined {
+		const pid = record.pid;
+		if (!Number.isFinite(pid) || pid <= 1) return undefined;
+		const groupSafe = record.pgid !== undefined && record.pgid === pid;
+		const target = groupSafe ? `"-${pid}"` : `${pid}`;
+		const gate = record.pidStartedAt
+			? `__pc_cur="$(ps -o lstart= -p ${pid} 2>/dev/null)"; ` +
+				`if [ -z "$__pc_cur" ]; then ` +
+				`if kill -0 ${pid} 2>/dev/null; then printf 'UNCONFIRMED\\n'; exit 0; else printf 'GONE\\n'; exit 0; fi; fi; ` +
+				`if [ "$__pc_cur" != ${shellEscape(record.pidStartedAt)} ]; then printf 'IDENTITY_MISMATCH\\n'; exit 0; fi; `
+			: `if ! kill -0 ${pid} 2>/dev/null; then printf 'GONE\\n'; exit 0; fi; `;
+		return (
+			gate +
+			`kill -TERM ${target} 2>/dev/null; sleep 0.2; kill -KILL ${target} 2>/dev/null; sleep 0.05; ` +
+			`if kill -0 ${pid} 2>/dev/null; then printf 'UNCONFIRMED\\n'; else printf 'TERMINATED\\n'; fi`
+		);
+	}
+
+	/**
+	 * Run one kill attempt and classify it from the printed token plus the executor result — never
+	 * from "the shell exited 0". Used by cancel, timeout, the persist-failure rollback and the
+	 * interrupted-launch recovery; the last two pass no signal so an aborted caller cannot skip it.
+	 */
+	private async runKill(record: JobRecord, signal?: AbortSignal): Promise<KillOutcome> {
+		const command = this.killCommand(record);
+		if (!command) return "no-target";
+		let result: ExecResult;
+		try {
+			result = await this.executor.exec(command, signal ? { signal } : {});
+		} catch {
+			return "not-submitted";
+		}
+		const token = result.stdout.trim().split("\n").pop()?.trim() ?? "";
+		switch (token) {
+			case "TERMINATED":
+				return "terminated";
+			case "GONE":
+				return "gone";
+			case "IDENTITY_MISMATCH":
+				return "identity-mismatch";
+			case "UNCONFIRMED":
+				return "unconfirmed";
+			default:
+				return "not-submitted";
+		}
 	}
 
 	async list(signal?: AbortSignal): Promise<JobSnapshot[]> {
@@ -572,16 +1022,34 @@ export class ChannelJobManager {
 				results.push({ id, status: "not_found" });
 				continue;
 			}
-			await this.refresh(record, signal);
-			if (record.status !== "running") {
-				results.push({ id, status: record.status });
-				continue;
-			}
-			await this.kill(record, signal);
-			// An explicit cancel is the model's own decision, so it needs no wake to learn about it.
-			record.contract.notify = false;
-			await this.finish(record, "cancelled", signal);
-			results.push({ id, status: "cancelled" });
+			// Whole per-job critical section (refresh + kill + transition) under one slot, so the
+			// sweeper cannot land a different terminal state on this job while we decide.
+			const result = await this.reconcileQueue.run(id, async () => {
+				await this.reconcileLocked(record, signal);
+				if (record.status !== "running") {
+					return { id, status: record.status };
+				}
+				// An explicit cancel is the model's own decision, so it needs no wake to learn about it.
+				record.contract.notify = false;
+				const outcome = await this.runKill(record, signal);
+				if (KILL_CONFIRMED_GONE.has(outcome)) {
+					// A timeout kill already pending (`failed`/124) outranks this cancel — the job did
+					// overrun its budget. `takePendingTerminal` applies that precedence and only falls
+					// back to `cancelled` when nothing was pending.
+					const t = this.takePendingTerminal(record, "cancelled", undefined);
+					record.exitCode = t.exitCode;
+					await this.finish(record, t.status, signal);
+					return { id, status: t.status };
+				}
+				// The kill ran but the process is still alive, or the executor could not run it. Keep
+				// the job running and managed — the sweeper and a repeat `cancel` keep trying — and
+				// report the still-running status. Do not clobber an existing timeout intent.
+				record.pendingKill ??= "cancelled";
+				await this.persist(record).catch(() => undefined);
+				this.ensureSweeper();
+				return { id, status: record.status };
+			});
+			results.push(result);
 		}
 		return results;
 	}
