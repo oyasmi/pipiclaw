@@ -1584,7 +1584,13 @@ export class ChannelRunner implements AgentRunner {
 					refreshSessionResources: async () => {
 						await this.refreshSessionResources();
 					},
-					runMemoryCommand: async (args) => handleMemoryCommand({ channelDir: this.channelDir, args }),
+					runMemoryCommand: async (args) =>
+						handleMemoryCommand({
+							channelId: this.channelId,
+							channelDir: this.channelDir,
+							appHomeDir: this.appHomeDir,
+							args,
+						}),
 				}),
 			],
 			// Pipiclaw owns the base prompt: with a custom prompt present, pi emits no

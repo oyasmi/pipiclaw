@@ -6,7 +6,7 @@ import { parseProjectCommand } from "../src/runtime/project-commands.js";
 import { parseSkillsCommand } from "../src/runtime/skill-commands.js";
 import { parseSubagentsCommand } from "../src/runtime/subagent-commands.js";
 import { parseTasksCommand } from "../src/runtime/task-commands.js";
-import { setupChannelFiles, useTempDirs } from "./helpers/fixtures.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
  * Review 2026-08-24 §1.1/§3.1: `/help` advertised `/tasks stats` for months after the parser
@@ -53,8 +53,7 @@ describe("command subcommand examples round-trip through their parser", () => {
 				}
 				if (name === "memory") {
 					const channelDir = makeChannel();
-					setupChannelFiles(channelDir, { memory: "# Channel Memory\n" });
-					const result = await handleMemoryCommand({ channelDir, args });
+					const result = await handleMemoryCommand({ channelId: "dm_1", channelDir, args });
 					expect(result, example).not.toMatch(/未知的 memory 命令/);
 					continue;
 				}

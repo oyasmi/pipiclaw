@@ -1,189 +1,147 @@
 import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
-import { readOptionalTextFile } from "../shared/fs-utils.js";
-import { localDayKey, parseLocalTime } from "../shared/local-time.js";
-import { clipText } from "../shared/text-utils.js";
-import { getChannelMemoryPath, parseChannelMemoryEntries, readChannelMemory } from "./files.js";
-import { syncMemoryMetadata } from "./metadata.js";
-import { getMemoryReviewLogPath, type MemoryReviewReason } from "./review-log.js";
-import { readMemoryTombstones } from "./tombstones.js";
-
-interface MemoryCommandOptions {
-	channelDir: string;
-	args: string;
-}
-
-interface RecentMemoryAction {
-	timestamp?: string;
-	reason: MemoryReviewReason;
-	target?: string;
-	action?: string;
-	entries?: number;
-	droppedEntryIds?: string[];
-	entryId?: string;
-}
-
-async function reconcile(options: MemoryCommandOptions) {
-	const entries = parseChannelMemoryEntries(await readChannelMemory(options.channelDir));
-	const metadata = await syncMemoryMetadata(options.channelDir, entries);
-	return { entries, metadata };
-}
+import { localDayKey } from "../shared/local-time.js";
+import { getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
+import { buildChannelIndexForBootstrap, CHANNEL_INDEX_MAX_UNITS } from "./index-budget.js";
+import { listJournalDates, readJournalDay } from "./journal.js";
+import { readMemoryMaintenanceState } from "./maintenance-state.js";
+import { appendMemoryReviewLog } from "./review-log.js";
+import {
+	applyMemoryOps,
+	listMemoryEntries,
+	MEMORY_TYPE_ORDER,
+	type MemoryEntry,
+	type MemoryType,
+	readMemoryEntry,
+} from "./store.js";
+import { hashMemoryContent } from "./tombstones.js";
 
 /**
- * Flattens `memory-review.jsonl` action entries for `/memory recent` and the `status` summary —
- * the only consumers of the review log's write history. `user-forget` actions carry `entryId`
- * instead of `target`/`action`; both shapes are tolerated here.
+ * Spec 050, D10: `/memory` is the no-LLM control surface — it must work even when the model or
+ * the reflect pass is unavailable. `status` / `list` / `show` / `journal` are pure reads over
+ * `store.ts` / `journal.ts`; `forget` is the one write, going through the same channel memory
+ * queue as the tool and reflect so it never races them.
  */
-async function readRecentMemoryActions(channelDir: string, sinceMs: number): Promise<RecentMemoryAction[]> {
-	const raw = await readOptionalTextFile(getMemoryReviewLogPath(channelDir));
-	const actions: RecentMemoryAction[] = [];
-	for (const line of raw.split("\n")) {
-		if (!line.trim()) continue;
-		try {
-			const entry = JSON.parse(line) as {
-				timestamp?: string;
-				reason: MemoryReviewReason;
-				actions?: unknown[];
-			};
-			const entryMs = entry.timestamp ? (parseLocalTime(entry.timestamp) ?? 0) : 0;
-			if (entryMs < sinceMs) continue;
-			for (const value of entry.actions ?? []) {
-				if (value && typeof value === "object") {
-					actions.push({ timestamp: entry.timestamp, reason: entry.reason, ...(value as object) });
-				}
-			}
-		} catch {
-			// A torn audit line should not break the management surface.
-		}
-	}
-	return actions;
+
+interface MemoryCommandOptions {
+	channelId: string;
+	channelDir: string;
+	appHomeDir?: string;
+	args: string;
 }
 
 function renderUsage(): string {
 	return renderSubcommandUsage("memory");
 }
 
+function isMemoryType(value: string | undefined): value is MemoryType {
+	return value !== undefined && (MEMORY_TYPE_ORDER as readonly string[]).includes(value);
+}
+
+async function handleStatus(options: MemoryCommandOptions): Promise<string> {
+	const entries = await listMemoryEntries(options.channelDir);
+	const byType = new Map<MemoryType, number>(MEMORY_TYPE_ORDER.map((type) => [type, 0]));
+	for (const entry of entries) {
+		byType.set(entry.type, (byType.get(entry.type) ?? 0) + 1);
+	}
+	const probationary = entries
+		.filter((entry): entry is MemoryEntry & { expires: string } => Boolean(entry.expires))
+		.sort((a, b) => a.expires.localeCompare(b.expires));
+	const malformed = entries.filter((entry) => entry.malformed);
+	const tiered = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS);
+
+	const state = options.appHomeDir
+		? await readMemoryMaintenanceState(options.appHomeDir, options.channelId)
+		: undefined;
+
+	return [
+		"**记忆状态**",
+		"",
+		`- 频道条目：\`${entries.length}\`（${MEMORY_TYPE_ORDER.map((type) => `${type} ${byType.get(type) ?? 0}`).join(" / ")}）`,
+		`- 试用期条目：\`${probationary.length}\`${probationary.length > 0 ? `（最早到期 \`${probationary[0].expires}\`）` : ""}`,
+		`- frontmatter 解析异常的文件：\`${malformed.length}\`${malformed.length > 0 ? `（${malformed.map((e) => e.name).join(", ")}）` : ""}`,
+		`- 上次反思：\`${state?.lastReflectAt ?? "从未"}\`${state?.lastReflectedEntryId ? `（游标 \`${state.lastReflectedEntryId}\`）` : ""}`,
+		`- 索引预算：${tiered.overBudget ? `超出，注入时按 updated 降序分层；下次反思会尝试合并` : "未超出，整份注入"}`,
+	].join("\n");
+}
+
+async function handleList(options: MemoryCommandOptions, typeArg: string | undefined): Promise<string> {
+	if (typeArg && !isMemoryType(typeArg)) {
+		return `未知的记忆类型 \`${typeArg}\`。可用类型：${MEMORY_TYPE_ORDER.join(", ")}。`;
+	}
+	const entries = await listMemoryEntries(options.channelDir);
+	const filtered = typeArg ? entries.filter((entry) => entry.type === typeArg) : entries;
+	if (filtered.length === 0) {
+		return typeArg ? `**记忆条目（${typeArg}）**\n\n暂无该类型的记忆。` : "**记忆条目**\n\n暂无生效的频道记忆。";
+	}
+	const lines = filtered.map((entry) => {
+		const marker = entry.body.trim() ? " (+)" : "";
+		const probation = entry.expires ? `（观察期至 \`${entry.expires}\`）` : "";
+		return `- \`${entry.name}\` [${entry.type}]${probation} ${entry.description}${marker}`;
+	});
+	return capReply(`**记忆条目${typeArg ? `（${typeArg}）` : ""}**\n\n${lines.join("\n")}`, {
+		nextStepHint: "用 `/memory show <name>` 查看单条记忆全文",
+	}).text;
+}
+
+async function handleShow(options: MemoryCommandOptions, name: string | undefined): Promise<string> {
+	if (!name) return `缺少记忆名称。${renderUsage()}`;
+	const entry = await readMemoryEntry(options.channelDir, name);
+	if (!entry) return `未找到记忆 \`${name}\`。用 \`/memory list\` 查看可用名称。`;
+	const lines = [
+		`**记忆 ${name}**`,
+		"",
+		`- type: \`${entry.type}\``,
+		`- source: \`${entry.source}\``,
+		`- created: \`${entry.created}\` / updated: \`${entry.updated}\``,
+	];
+	if (entry.expires) lines.push(`- expires: \`${entry.expires}\``);
+	if (entry.malformed) lines.push("- ⚠️ frontmatter 解析异常，以第一段作为 description");
+	lines.push("", entry.description);
+	if (entry.body.trim()) lines.push("", entry.body.trim());
+	return lines.join("\n");
+}
+
+async function handleForget(options: MemoryCommandOptions, name: string | undefined): Promise<string> {
+	if (!name) return `缺少记忆名称。${renderUsage()}`;
+	const entry = await readMemoryEntry(options.channelDir, name);
+	if (!entry) return `未找到记忆 \`${name}\`；未做任何改动。`;
+	await getDefaultChannelMemoryQueue().run(options.channelId, () =>
+		applyMemoryOps(options.channelDir, [{ op: "delete", name, reason: "/memory forget" }]),
+	);
+	await appendMemoryReviewLog(options.channelDir, {
+		timestamp: new Date().toISOString(),
+		channelId: options.channelId,
+		reason: "memory-forget",
+		actions: [{ op: "forget", name, contentHash: hashMemoryContent(entry.description) }],
+	}).catch(() => {});
+	return `已删除 \`${name}\`。内容按哈希墓碑化，避免被反思重新写入；重新说出该事实仍可被学到。`;
+}
+
+async function handleJournal(options: MemoryCommandOptions, dateArg: string | undefined): Promise<string> {
+	const date = dateArg ?? localDayKey();
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+		return `日期格式应为 \`YYYY-MM-DD\`。${renderUsage()}`;
+	}
+	const content = await readJournalDay(options.channelDir, date);
+	if (!content.trim()) {
+		const dates = await listJournalDates(options.channelDir);
+		const hint = dates.length > 0 ? `\n\n有记录的日期：${dates.slice(-10).join(", ")}` : "";
+		return `**日志 ${date}**\n\n当天没有记录。${hint}`;
+	}
+	return capReply(`**日志 ${date}**\n\n${content.trim()}`, {
+		nextStepHint: "用 `/memory journal <YYYY-MM-DD>` 查看其他日期",
+	}).text;
+}
+
 export async function handleMemoryCommand(options: MemoryCommandOptions): Promise<string> {
 	const [action = "status", argument] = options.args.trim().split(/\s+/, 2);
-	const { entries, metadata } = await reconcile(options);
 
-	if (action === "status") {
-		const tombstones = await readMemoryTombstones(options.channelDir);
-		const records = Object.values(metadata.entries);
-		const active = records.filter((entry) => entry.status === "active");
-		const probationary = active
-			.filter((entry) => entry.probationUntil)
-			.sort((a, b) => (a.probationUntil ?? "").localeCompare(b.probationUntil ?? ""));
-		const since = new Date();
-		since.setDate(since.getDate() - 29);
-		const sinceDay = localDayKey(since);
-		const recalls30d = active.reduce(
-			(sum, entry) =>
-				sum +
-				Object.entries(entry.recallByDay ?? {}).reduce(
-					(entrySum, [day, count]) => entrySum + (day >= sinceDay ? count : 0),
-					0,
-				),
-			0,
-		);
-		const last7d = new Date();
-		last7d.setDate(last7d.getDate() - 7);
-		const recent = await readRecentMemoryActions(options.channelDir, last7d.getTime());
-		const written = recent
-			.filter((item) => item.target === "MEMORY.md" && item.action === "append")
-			.reduce((sum, item) => sum + (item.entries ?? 0), 0);
-		const dropped = recent.reduce((sum, item) => {
-			if (item.entryId) return sum + 1;
-			if (item.target === "MEMORY.md" && item.action === "rewrite") return sum + (item.droppedEntryIds?.length ?? 0);
-			return sum;
-		}, 0);
-		const expired = recent
-			.filter((item) => item.target === "MEMORY.md" && item.action === "expire")
-			.reduce((sum, item) => sum + (item.entries ?? 0), 0);
-		const lastFailure = (await readOptionalTextFile(getMemoryReviewLogPath(options.channelDir)))
-			.split("\n")
-			.reverse()
-			.find((line) => line.includes('"error"'));
-		return [
-			"**记忆状态**",
-			"",
-			`- 生效条目：\`${entries.length}\``,
-			`- 元数据记录：\`${records.length}\``,
-			`- 观察期：\`${probationary.length}\`${probationary.length > 0 ? `（最早到期 \`${probationary[0].probationUntil}\`）` : ""}`,
-			`- 最近 7 天：+${written} 写入 / -${dropped} 丢弃 / -${expired} 过期`,
-			`- 墓碑：\`${tombstones.length}\``,
-			`- 累计召回：\`${active.reduce((sum, entry) => sum + entry.recallCount, 0)}\``,
-			`- 召回（30 天）：\`${recalls30d}\``,
-			`- 查询多样性：\`${new Set(active.flatMap((entry) => entry.queryFingerprints)).size}\``,
-			`- 最近一次召回：\`${
-				active
-					.map((entry) => entry.lastRecalledAt)
-					.filter(Boolean)
-					.sort()
-					.at(-1) ?? "从未"
-			}\``,
-			`- 近期失败：${lastFailure ? "有，查看 memory-review.jsonl" : "无"}`,
-			`- 生效文件：\`${getChannelMemoryPath(options.channelDir)}\``,
-		].join("\n");
-	}
-
-	if (action === "list") {
-		if (entries.length === 0) return "**记忆条目**\n\n暂无生效的频道记忆条目。";
-		const visible = entries.slice(0, 50);
-		const lines = visible.map((entry) => {
-			const record = metadata.entries[entry.id];
-			const probation = record?.probationUntil ? `（观察期至 \`${record.probationUntil}\`）` : "";
-			return `- \`${entry.id}\` [${record?.kind ?? "fact"}]${probation} ${clipText(entry.content, 180, { headRatio: 1 })}`;
-		});
-		if (entries.length > visible.length) {
-			lines.push(
-				`- 另有 ${entries.length - visible.length} 条已省略；缩小范围后用 \`/memory show <entry-id>\` 查看。`,
-			);
-		}
-		return capReply(`**记忆条目**\n\n${lines.join("\n")}`, {
-			nextStepHint: "用 `/memory show <entry-id>` 查看单条记忆",
-		}).text;
-	}
-
-	if (action === "show") {
-		if (!argument) return `缺少 entry id。${renderUsage()}`;
-		const entry = entries.find((candidate) => candidate.id === argument);
-		const record = metadata.entries[argument];
-		if (!entry && !record) return `未找到记忆条目 \`${argument}\`。用 \`/memory list\` 查看 id。`;
-		return [
-			`**记忆 ${argument}**`,
-			"",
-			entry?.content ?? "（未在 MEMORY.md 中生效）",
-			"",
-			"```json",
-			JSON.stringify(record ?? { id: argument, status: "unknown" }, null, 2),
-			"```",
-		].join("\n");
-	}
-
-	if (action === "recent") {
-		const last7d = new Date();
-		last7d.setDate(last7d.getDate() - 7);
-		const recent = (await readRecentMemoryActions(options.channelDir, last7d.getTime())).slice(-30).reverse();
-		if (recent.length === 0) return "**近期记忆活动**\n\n最近 7 天没有记忆活动。";
-		return [
-			"**近期记忆活动**",
-			"",
-			...recent.map((item) => {
-				const when = item.timestamp ? `（${item.timestamp}）` : "";
-				if (item.entryId) return `- ${when}遗忘 \`${item.entryId}\`（${item.reason}）`;
-				const detail =
-					item.action === "append"
-						? `新增 ${item.entries ?? 0} 条`
-						: item.action === "rewrite"
-							? `重写${item.droppedEntryIds?.length ? `（丢弃 ${item.droppedEntryIds.join(", ")}）` : ""}`
-							: item.action === "expire"
-								? `过期 ${item.entries ?? 0} 条`
-								: (item.action ?? "unknown");
-				return `- ${when}${item.target ?? "?"}：${detail}（${item.reason}）`;
-			}),
-		].join("\n");
-	}
+	if (action === "status") return handleStatus(options);
+	if (action === "list") return handleList(options, argument);
+	if (action === "show") return handleShow(options, argument);
+	if (action === "forget") return handleForget(options, argument);
+	if (action === "journal") return handleJournal(options, argument);
 
 	return `未知的 memory 命令 \`${action}\`。${renderUsage()}`;
 }

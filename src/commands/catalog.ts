@@ -293,18 +293,33 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 export const SESSION_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "memory",
-		argumentHint: "[status|list|show <id>|recent]",
-		description: "查看生效记忆、元数据、召回统计、墓碑与近期写入/删除活动",
+		argumentHint: "[status|list [type]|show <name>|forget <name>|journal [date]]",
+		description: "查看频道记忆索引、试用期与反思状态；不经过模型的记忆管理入口",
 		subcommands: [
-			{ name: "status", description: "记忆状态概览", example: "/memory status" },
-			{ name: "list", description: "列出生效的记忆条目", example: "/memory list" },
+			{
+				name: "status",
+				description: "记忆状态概览：分类计数、试用期、上次反思、索引预算",
+				example: "/memory status",
+			},
+			{
+				name: "list",
+				args: "[type]",
+				description: "列出生效的记忆条目，可选按 user/feedback/project/reference 过滤",
+				example: "/memory list feedback",
+			},
 			{
 				name: "show",
-				args: "<entry-id>",
-				description: "查看单条记忆的内容与元数据",
-				example: "/memory show m-1234abcd",
+				args: "<name>",
+				description: "查看单条记忆的全文与 frontmatter",
+				example: "/memory show deploy-window-thursday",
 			},
-			{ name: "recent", description: "查看最近 7 天的记忆写入/删除活动", example: "/memory recent" },
+			{
+				name: "forget",
+				args: "<name>",
+				description: "不经过模型直接删除一条记忆（墓碑化，避免被反思重新写入）",
+				example: "/memory forget deploy-window-thursday",
+			},
+			{ name: "journal", args: "[YYYY-MM-DD]", description: "查看某天的日志，默认今天", example: "/memory journal" },
 		],
 	},
 	{
