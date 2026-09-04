@@ -111,6 +111,13 @@
 | `src/index.ts` | 不加导出；确认 `PipiclawSettings` 类型变更后的公共面仍是 035 的集合 |
 | `test/memory-manage.test.ts` / `test/subagent-*.test.ts` | 更新 |
 
+### 实施记录（2026-09-04）
+
+- P3 按上表落地，`npm run check`（124 files / 923 tests）+ `npm run test:e2e`（21 files / 36 tests）全绿（分支 `feat/memory-v2-p1`）。
+- **超出计划表字面范围，但按计划的必然结果**：`memory: relevant` 是 `src/memory/recall.ts` 的最后一个消费者，去掉它之后 `recall.ts`/`candidates.ts`/`metadata.ts`/`files.ts`（v1 relevance 打分与 v1 文件读写栈）整体归零引用，随之删除，连带清掉贯穿 `tools/index.ts`→`tools/registry.ts`→`tools/subagent-manage.ts`→`subagents/tool.ts`→`agent/channel-runner.ts` 的 `memoryCandidateStore`/`getMemoryRecallSettings` 传参链路（这条链路在 P1 把 memory-manage.ts 换掉之后其实已经名存实亡，只是没人去剪）。`tombstones.ts`（v1）只留 `hashMemoryContent`——`store.ts`/`migrate.ts`仍在用；`.tombstones.jsonl` 的 v1 读写函数随 files.ts 一起退役。daemon/TUI 启动时的 `ensureChannelMemoryFilesSync`（预建 v1 模板文件）同理移除。
+- `src/shared/markdown-sections.ts` 的 `splitH1Sections` 随 `buildSessionContextBlock`（SESSION.md 专用）一起变成死代码，直接删除该导出。
+- 迁移测试：`test/memory-files.test.ts`、`memory-files-concurrency.test.ts`、`memory-metadata.test.ts`、`memory-recall.test.ts`、`memory-write-ops.test.ts` 整体删除（早该在 P1 做，因为 files.ts/candidates.ts/metadata.ts/recall.ts 在 P1 结束时仍被 subagent 的 `memory: relevant` 引用而保留，直到 P3 才真正归零）。
+
 ## P4 质量证据与文档
 
 | 项 | 内容 |
