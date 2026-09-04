@@ -30,6 +30,8 @@ Spec 中的旧路径、绝对路径、已删除字段、当时尚未实现的计
 | `046` | 工具调用面切分（按 payload 形状拆分 `task_manage` 与 `subagent`，描述长文还给 playbook） |
 | `047` | 收尾三个 `*_manage`（`event_manage` 补 `list`、`memory_manage` 去 `kind` 并切分、`subagent_manage` 切成 list + run） |
 | `048` | e2e 重做（脚本化 provider 让机制层确定性可跑，模型质量归 evals；取代 `004` 的形态） |
+| `049` | 入站图片（图文混排与纯图片消息的接收与投递） |
+| `050` | 记忆 v2（一份生成的索引 + 按天日志 + 单一反思 pass；取代 `SESSION.md`/`HISTORY.md`/影子元数据/召回打分，条目改为一事一文件） |
 
 `041` 号被短 runId 与 `/subagents` 命令那轮工作占用（代码注释中引用为 "spec 041"），当时未留下 spec 目录，因此编号从 `040` 直接跳到 `042`。
 
