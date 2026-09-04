@@ -133,6 +133,14 @@
 | `docs/specs/README.md` | 050 一行 |
 | `CHANGELOG` | 升级说明：自动迁移、`.memory-v1/` 位置、回滚步骤、退役的 settings 键 |
 
+### 实施记录（2026-09-04）
+
+- P4 按上表落地，`npm run check`（124 files / 923 tests）+ `npx tsc --noEmit -p tsconfig.evals.json` + `npm run test:evals`（22/22）全绿（分支 `feat/memory-v2-p1`）。
+- **eval 目录结构偏离计划字面表述**：计划表写的是 `evals/memory-recall-quality/`（暗示一个新目录），实际按现有代码库约定做成了扁平文件 `evals/cases/memory-recall-quality.ts`（4 个 case：M-quality-recall-01~04），汇入既有的 `evals/cases/index.ts` 的 `allCases` 数组与单一 `evals/gates.json`（新 case 标 `report-only`）。选择与既有 harness/gates/baseline 机制保持一致，而不是照字面新建一套并行目录结构。
+- **超出计划表字面范围，但按计划的必然结果**：v1 时代残留的 9 个记忆相关 eval case 需要逐一处理，而非留着静默失效——4 个前提在 v2 下仍成立，未改（M-write-03、M-recall-03、M-recall-05、M-search-01）；2 个改写以匹配 v2（M-maint-01 把 `SESSION.md` 断言换成 journal 断言，并新增"未提炼进长期记忆"的反向断言；M-forget-01 改用 `applyMemoryOps` 而非手写 v1 markdown 播种）；2 个整体退役（M-recall-02、M-recall-04——它们的前提"藏在 bootstrap 之外的事实必须靠实时召回找到"在 v2 里不再成立，v2 没有逐轮召回，只有首轮索引注入 + `memory_search`），由新的 `memory-recall-quality` 套件取代；1 个无关 case（C-research-01）因 fixture 把 pipiclaw 自身架构当研究素材，需要同步更新其陈旧的 `SESSION.md`/`MEMORY.md` 断言与 rubric 文案。相应地 `evals/cases/helpers.ts` 的 `seedChannelMemory` 改用 `applyMemoryOps`，删除不再需要的 `seedChannelHistory`；`evals/fixtures/memory/{semantic,company-30d-memory,company-30d-history}.md` 三个孤儿 fixture 一并删除。
+- 顺带修复一处与本 spec 无关但阻塞 evals 编译的既有 bug：`evals/harness/worker.ts` 里 `MediaSendResult`/`OutboundMedia` 的 import 路径指向一个从未存在过的 `src/runtime/channel-context.js`（已确认 master 分支上就是错的），改为正确的 `src/channel/channel-context.js`。
+- 文档重写覆盖面比计划表列的略广：顺带修了 `docs/security.md`、`docs/design-philosophy.md`、`docs/runtime-mechanisms.md`、`docs/scaling-and-concurrency.md`、`docs/interaction-and-commands.md`、`docs/skills.md` 里散落的 `SESSION.md`/`HISTORY.md`/三 job 提法——这些文件不在计划表里，但全仓库 `rg` 扫描发现它们同样描述了已退役的架构。
+
 ## 实施纪律
 
 - 每个阶段一个 PR；PR 内按「新增 → 切换调用方 → 删除旧实现」三个 commit 排列，方便 review 与回退。
