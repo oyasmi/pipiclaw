@@ -11,7 +11,8 @@ export type MemoryReviewReason =
 	| "session-refresh-job"
 	| "memory-checkpoint-job"
 	| "structural-maintenance-job"
-	| "user-forget";
+	| "user-forget"
+	| "migration";
 
 export interface MemoryReviewLogEntry {
 	timestamp: string;

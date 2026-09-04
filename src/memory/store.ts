@@ -47,7 +47,8 @@ export interface MemoryEntry {
 }
 
 export interface MemoryTombstoneRecord {
-	name: string;
+	/** The entry name at deletion time; may be absent for records carried over from v1. */
+	name?: string;
 	contentHash: string;
 	deletedAt: string;
 	reason: string;
@@ -332,7 +333,7 @@ export async function readMemoryTombstoneRecords(channelDir: string): Promise<Me
 		}
 		try {
 			const value = JSON.parse(line) as MemoryTombstoneRecord;
-			if (value.name && value.contentHash) {
+			if (value.contentHash) {
 				records.push(value);
 			}
 		} catch {
