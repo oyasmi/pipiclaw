@@ -34,7 +34,12 @@ import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
 import { createMemoryCandidateStore, type MemoryCandidateStore } from "../memory/candidates.js";
 import { handleMemoryCommand } from "../memory/commands.js";
-import { buildChannelIndexForBootstrap, clipWorkspaceMemoryForBootstrap } from "../memory/index-budget.js";
+import {
+	buildChannelIndexForBootstrap,
+	clipJournalTailForBootstrap,
+	clipWorkspaceMemoryForBootstrap,
+} from "../memory/index-budget.js";
+import { readJournalDay } from "../memory/journal.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import {
 	createMemoryActivityRecorder,
@@ -62,7 +67,7 @@ import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import { type PipiclawSettingsManager, TASK_DIGEST_SETTINGS } from "../settings.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
-import { formatLocalTime, localStampForFilename, parseLocalTime } from "../shared/local-time.js";
+import { formatLocalTime, localDayKey, localStampForFilename, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
@@ -1797,15 +1802,19 @@ export class ChannelRunner implements AgentRunner {
 			}
 		};
 
-		const [entries, workspaceMemory] = await Promise.all([
+		const today = localDayKey();
+		const [entries, workspaceMemory, journalToday] = await Promise.all([
 			listMemoryEntries(this.channelDir).catch(() => []),
 			readOptionalFile(join(this.workspaceDir, "MEMORY.md")),
+			readJournalDay(this.channelDir, today).catch(() => ""),
 		]);
 
 		const index = buildChannelIndexForBootstrap(entries);
+		const journalTail = clipJournalTailForBootstrap(journalToday);
 		return renderMemoryBootstrap({
 			workspaceMemory: clipWorkspaceMemoryForBootstrap(workspaceMemory),
 			channelIndex: entries.length > 0 ? index.text : "",
+			journal: journalTail ? { date: today, text: journalTail } : undefined,
 		});
 	}
 }
