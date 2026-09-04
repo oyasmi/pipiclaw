@@ -6,13 +6,11 @@ import {
 	deliveryMatches,
 	fileContains,
 	fileNotContains,
-	lastDeliveryMatches,
-	recallQuiz,
 	taskFrontmatter,
 	tracePredicate,
 } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
-import { copyFixture, seedChannelHistory, seedChannelMemory, wakeBody, writeTask } from "./helpers.js";
+import { copyFixture, wakeBody, writeTask } from "./helpers.js";
 
 const definitionFile = "evals/cases/capability.ts";
 
@@ -98,24 +96,14 @@ export const capabilityCases: EvalCase[] = [
 			deliveryMatches("cold-recovery", /RECOVERY-CONFIRMED/),
 		],
 	},
-	{
-		id: "M-recall-02",
-		suite: "capability",
-		source: "P1-3 semantic recall probe",
-		description:
-			"A paraphrased query with no key lexical overlap retrieves an arbitrary saved codename that cannot be guessed from world knowledge (expected partial failure).",
-		definitionFile,
-		fixtures: ["memory/semantic.md"],
-		setup: async (ctx) =>
-			seedChannelMemory(ctx, readFileSync(join(process.cwd(), "evals/fixtures/memory/semantic.md"), "utf8")),
-		script: [
-			{
-				kind: "user",
-				text: "What internal codename did we save for the protocol where one stream's packet loss does not pause its siblings and traffic remains confidential? Answer only with the codename.",
-			},
-		],
-		graders: [lastDeliveryMatches("semantic-answer", /^\s*SKYBRIDGE-9[。.!]?\s*$/i)],
-	},
+	// M-recall-02 (semantic recall probe) and M-recall-04 (30-day corpus, HISTORY.md-hidden
+	// facts) retired 2026-09-04 (spec 050): both tested the v1 lexical/rerank recall pipeline's
+	// specific gap-filling behavior — "a fact not injected into the turn must still be found by
+	// real-time recall". That mechanism no longer exists (D1: the index is injected whole on the
+	// first turn, or tiered by D4's budget rules; nothing is fetched per-turn by relevance). The
+	// same intent — can the model find a fact the first-turn injection omitted? — is covered more
+	// rigorously by `evals/memory-recall-quality/` (30 seeded memories, 20 paraphrased questions,
+	// scored against a real budget-tiered index).
 	{
 		id: "C-research-01",
 		suite: "capability",
@@ -148,7 +136,7 @@ export const capabilityCases: EvalCase[] = [
 				},
 				"the brief must be based on all three declared research sources",
 			),
-			deliveryMatches("current-memory-layers", /SESSION\.md[\s\S]*MEMORY\.md|MEMORY\.md[\s\S]*SESSION\.md/i),
+			deliveryMatches("current-memory-layers", /journal[\s\S]*memory|memory[\s\S]*journal/i),
 			deliveryMatches(
 				"incident-stopped-before-model",
 				/RC-17[\s\S]{0,500}(?:pause|stop|must not|not be sent)[\s\S]{0,200}(?:model|模型)|(?:pause|stop)[\s\S]{0,200}RC-17/i,
@@ -158,7 +146,7 @@ export const capabilityCases: EvalCase[] = [
 				graderId: "research-faithfulness",
 				graderVersion: "2",
 				rubric:
-					"Pass only if the answer (1) identifies runtime.md as current and legacy.md as superseded, (2) says DingTalk is the current primary transport, (3) distinguishes SESSION.md working state from durable MEMORY.md, and (4) concludes that incident task RC-17 must be paused before model work because its attempt budget is exhausted (the expired deadline independently blocks it). Fail if Slack, flat transcript memory, or direct-to-model dispatch is presented as current, if current and legacy claims are blended without provenance, or if the task is said to run. Score from 0 to 1.",
+					"Pass only if the answer (1) identifies runtime.md as current and legacy.md as superseded, (2) says DingTalk is the current primary transport, (3) distinguishes the journal (day-by-day working record) from durable memory, and (4) concludes that incident task RC-17 must be paused before model work because its attempt budget is exhausted (the expired deadline independently blocks it). Fail if Slack, flat transcript memory, or direct-to-model dispatch is presented as current, if current and legacy claims are blended without provenance, or if the task is said to run. Score from 0 to 1.",
 				artifacts: (ctx) =>
 					ctx.deliveries
 						.map((delivery) => delivery.text)
@@ -268,67 +256,6 @@ export const capabilityCases: EvalCase[] = [
 				"detour-recorded",
 				"long-run",
 				(frontmatter, content) => frontmatter.readable && /ledger-a|RETIRED|redirect/i.test(content),
-			),
-		],
-	},
-	{
-		id: "M-recall-04",
-		suite: "capability",
-		source:
-			"2026-07-31 long-horizon-autonomy review, item 0.2; redesigned 2026-08-01 after the first real run scored " +
-			"0 tool calls and 10/10 on both trials — the fixture's current values lived in MEMORY.md, which " +
-			"`buildFirstTurnMemoryBootstrap` (src/memory/bootstrap.ts) injects into turn one whenever it fits under " +
-			"400 units/3000 chars, so the model answered from context instead of retrieving anything.",
-		description:
-			"After a real maintenance pass over a synthetic 30-day corpus of company operating knowledge (10 facts; " +
-			"neither a fact's current value nor its superseded predecessor is ever promoted to MEMORY.md — both live " +
-			"only in HISTORY.md, the current one in a recent Update block, the old one in the always-candidate " +
-			"Folded block, competing on the same keywords), 10 differently-worded questions are asked back to back. " +
-			"Because nothing here is bootstrap-visible, every answer has to come from a real turn-time recall. " +
-			"Scores recall (did the current value come back) and precision (did an honest miss avoid answering " +
-			"with the superseded value instead).",
-		definitionFile,
-		fixtures: ["memory/company-30d-memory.md", "memory/company-30d-history.md"],
-		budget: { maxWallMs: 400_000, maxTurns: 40 },
-		setup: async (ctx) => {
-			await seedChannelMemory(
-				ctx,
-				readFileSync(join(process.cwd(), "evals/fixtures/memory/company-30d-memory.md"), "utf8"),
-			);
-			await seedChannelHistory(
-				ctx,
-				readFileSync(join(process.cwd(), "evals/fixtures/memory/company-30d-history.md"), "utf8"),
-			);
-		},
-		script: [
-			{ kind: "runMemoryMaintenance" },
-			{ kind: "user", text: "报销单据现在应该找谁签字？只回答姓名和括号里的代号。" },
-			{ kind: "user", text: "我们新建微服务仓库时，仓库名前缀应该用什么？只回答前缀本身。" },
-			{ kind: "user", text: "Acme 客户那边现在对接的联系人是谁？只回答代号。" },
-			{ kind: "user", text: "现在团队的知识库工具用的是哪个？只回答产品名。" },
-			{ kind: "user", text: "值班时收到告警走的是什么渠道？只回答代号。" },
-			{ kind: "user", text: "数据库迁移一般安排在什么时候？只回答代号。" },
-			{ kind: "user", text: "现在用的财务系统内部代号是什么？只回答代号。" },
-			{ kind: "user", text: "新同事入职的带教负责人现在是谁？只回答代号。" },
-			{ kind: "user", text: "灰度发布现在的默认流量比例代号是什么？只回答代号。" },
-			{ kind: "user", text: "发现安全事件应该往哪上报？只回答代号。" },
-		],
-		graders: [
-			recallQuiz(
-				"company-knowledge-recall",
-				[
-					{ expected: /CHENHAO/i, distractor: /WANGFANG/i },
-					{ expected: /px-/i, distractor: /svc-/i },
-					{ expected: /ZHAOQIANG-ACME/i, distractor: /LINA-ACME/i },
-					{ expected: /Notion/i, distractor: /Confluence/i },
-					{ expected: /DINGTALK-SMS/i, distractor: /EMAIL-ONLY/i },
-					{ expected: /SATURDAY-10AM/i, distractor: /TUESDAY-2AM/i },
-					{ expected: /FIN-NOVA-7/i, distractor: /FIN-LEGACY-3/i },
-					{ expected: /SUNYUE/i, distractor: /LIUYANG/i },
-					{ expected: /CANARY-RATIO-20/i, distractor: /CANARY-RATIO-5/i },
-					{ expected: /SEC-TICKET-SYS/i, distractor: /SEC-MAILBOX/i },
-				],
-				{ minRecall: 0.7, minPrecision: 0.9 },
 			),
 		],
 	},

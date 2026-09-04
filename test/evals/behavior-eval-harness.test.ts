@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { seedChannelHistory, seedChannelMemory } from "../../evals/cases/helpers.js";
+import { seedChannelMemory } from "../../evals/cases/helpers.js";
 import { caseHash, validateCases } from "../../evals/harness/cases.js";
 import { renderDiff } from "../../evals/harness/diff.js";
 import { lastDeliveryMatches, noDeliveriesAfterStep, recallQuiz } from "../../evals/harness/graders.js";
@@ -248,7 +248,7 @@ describe("behavior eval multi-turn graders", () => {
 		await expect(Promise.resolve(grader.grade(context))).resolves.toMatchObject({ status: "error" });
 	});
 
-	it("seeds durable memory and history in parser-manageable shapes", async () => {
+	it("seeds a durable channel memory the same way memory_save/the reflect pass write one", async () => {
 		const root = temp();
 		const channelDir = join(root, "workspace", "dm_eval");
 		await seedChannelMemory(
@@ -259,26 +259,13 @@ describe("behavior eval multi-turn graders", () => {
 				canaryPath: join(root, "canary"),
 				externalBaseUrl: "",
 			},
-			"- Durable preference: cobalt.",
+			"Durable preference: cobalt.",
+			{ name: "durable-preference-cobalt", type: "user" },
 		);
-		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf8")).toMatch(
-			/^# Channel Memory[\s\S]*^## Seeded Facts[\s\S]*^- Durable preference: cobalt\.$/m,
+		expect(readFileSync(join(channelDir, "memory", "durable-preference-cobalt.md"), "utf8")).toMatch(
+			/description: Durable preference: cobalt\.[\s\S]*type: user[\s\S]*source: user/,
 		);
-
-		await seedChannelHistory(
-			{
-				homeDir: root,
-				workspaceDir: join(root, "workspace"),
-				channelDir,
-				canaryPath: join(root, "canary"),
-				externalBaseUrl: "",
-			},
-			"## Folded History Through 2026-01-01T00:00:00.000Z\n\n- Old value: cobalt.",
-		);
-		// A caller-controlled heading keeps a Folded History section a recall candidate.
-		expect(readFileSync(join(channelDir, "HISTORY.md"), "utf8")).toMatch(
-			/^# Channel History[\s\S]*^## Folded History Through 2026-01-01T00:00:00\.000Z[\s\S]*Old value: cobalt\.$/m,
-		);
+		expect(readFileSync(join(channelDir, "MEMORY.md"), "utf8")).toContain("Durable preference: cobalt.");
 	});
 });
 

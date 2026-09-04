@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { MediaSendResult, OutboundMedia } from "../../src/runtime/channel-context.js";
+import type { MediaSendResult, OutboundMedia } from "../../src/channel/channel-context.js";
 import type { DingTalkBot, DingTalkEvent, DingTalkHandler } from "../../src/runtime/dingtalk.js";
 import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
 import { readActiveTasks } from "../../src/tasks/ledger.js";

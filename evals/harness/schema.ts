@@ -136,7 +136,7 @@ export type Step =
 	| { kind: "user"; text: string }
 	| { kind: "syntheticTaskTurn"; taskId: string }
 	| { kind: "runTaskDriver"; at?: string }
-	/** Drives one real `MemoryMaintenanceScheduler.runOnce(at)` pass: session refresh, checkpoint, consolidation. */
+	/** Drives one real `MemoryMaintenanceScheduler.runOnce(at)` pass: the reflect job (spec 050). */
 	| { kind: "runMemoryMaintenance"; at?: string }
 	| { kind: "restart" }
 	| { kind: "crash"; mode: "atStepBoundary" | "midTurn"; delayMs?: number }

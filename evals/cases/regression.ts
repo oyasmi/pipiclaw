@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { localDayKey } from "../../src/shared/local-time.js";
 import {
 	codeGrader,
 	deliveryMatches,
@@ -247,9 +248,10 @@ export const regressionCases: EvalCase[] = [
 	{
 		id: "M-maint-01",
 		suite: "regression",
-		source: "2026-07-25 review: the memory maintenance pipeline had zero behavior coverage",
+		source:
+			"2026-07-25 review: the memory maintenance pipeline had zero behavior coverage; adapted 2026-09-04 (spec 050) — SESSION.md is retired, the reflect pass writes to the journal instead",
 		description:
-			"One production maintenance pass over a warm channel produces a SESSION.md that reflects the conversation. Drives the real scheduler, not a reimplementation of its job order.",
+			"One production reflect pass over a warm channel records what happened in today's journal, and — because the user explicitly said not to — does not promote it to durable memory. Drives the real scheduler, not a reimplementation of its job order.",
 		definitionFile,
 		budget: { maxWallMs: 300_000, maxTurns: 16 },
 		script: [
@@ -258,7 +260,25 @@ export const regressionCases: EvalCase[] = [
 			{ kind: "runMemoryMaintenance" },
 		],
 		graders: [
-			fileContains("session-written", "SESSION.md", /ROOTCAUSE-88/i),
+			codeGrader("journal-written", (ctx) => {
+				const today = localDayKey();
+				const relativePath = `journal/${today}.md`;
+				const path = join(ctx.channelDir, relativePath);
+				const ok = existsSync(path) && /ROOTCAUSE-88/i.test(readFileSync(path, "utf8"));
+				return {
+					schemaVersion: 1,
+					graderId: "journal-written",
+					graderVersion: "1",
+					graderKind: "code",
+					status: ok ? "pass" : "fail",
+					severity: "quality",
+					evidence: [{ kind: "file", ref: relativePath }],
+					rationale: ok
+						? `${relativePath} matched ROOTCAUSE-88`
+						: `${relativePath} was missing or did not record ROOTCAUSE-88`,
+				};
+			}),
+			fileNotContains("not-promoted-to-durable-memory", "MEMORY.md", /ROOTCAUSE-88/i),
 			noDeliveriesAfterStep("maintenance-is-silent", "runMemoryMaintenance"),
 		],
 	},
@@ -422,7 +442,7 @@ export const regressionCases: EvalCase[] = [
 		source: "028 correction/forget",
 		description: "A user correction removes the old durable value from subsequent recall.",
 		definitionFile,
-		setup: (ctx) => seedChannelMemory(ctx, "- [preference] Default deployment region: us-east-1."),
+		setup: (ctx) => seedChannelMemory(ctx, "Default deployment region: us-east-1.", { type: "user" }),
 		script: [
 			{
 				kind: "user",

@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { applyMemoryOps, type MemorySource, type MemoryType } from "../../src/memory/store.js";
 import { createDefaultTaskControl, type TaskControl } from "../../src/tasks/control.js";
 import { renderTaskDocument } from "../../src/tasks/ledger.js";
 import type { TaskStatus } from "../../src/tasks/transitions.js";
@@ -44,25 +45,26 @@ export async function writeTask(
 	);
 }
 
-export async function seedChannelMemory(ctx: TrialSetup, content: string): Promise<void> {
-	await mkdir(ctx.channelDir, { recursive: true });
-	// `parseChannelMemoryEntries` deliberately ignores H1-level bullets because the real template
-	// uses them as explanatory prose. Seed eval facts under an H2 so the memory tools, recall, and
-	// maintenance see the same durable-entry shape they encounter in production.
-	await writeFile(join(ctx.channelDir, "MEMORY.md"), `# Channel Memory\n\n## Seeded Facts\n\n${content.trim()}\n`);
-}
-
 /**
- * Seed HISTORY.md with pre-formed H2 sections (raw content, headings included by the caller).
- *
- * Unlike `seedChannelMemory`, callers need control over the heading shape itself: only sections
- * named `Folded History Through <ISO>` are always a recall candidate (`buildHistoryCandidates`
- * in `src/memory/candidates.ts`); everything else is subject to the most-recent-8 window. A case
- * that wants a large, always-visible corpus of superseded facts has to write that heading exactly.
+ * Seed one durable channel memory (spec 050): writes straight into `memory/<name>.md` and
+ * regenerates the index, the same primitive `memory_save`/the reflect pass use — so a seeded
+ * case sees the exact shape production writes, not a hand-rolled approximation.
  */
-export async function seedChannelHistory(ctx: TrialSetup, content: string): Promise<void> {
-	await mkdir(ctx.channelDir, { recursive: true });
-	await writeFile(join(ctx.channelDir, "HISTORY.md"), `# Channel History\n\n${content.trim()}\n`);
+export async function seedChannelMemory(
+	ctx: TrialSetup,
+	description: string,
+	options: { name?: string; type?: MemoryType; source?: MemorySource; details?: string } = {},
+): Promise<void> {
+	await applyMemoryOps(ctx.channelDir, [
+		{
+			op: "add",
+			name: options.name,
+			type: options.type ?? "project",
+			description: description.trim(),
+			details: options.details,
+			source: options.source ?? "user",
+		},
+	]);
 }
 
 export async function copyFixture(ctx: TrialSetup, fixture: string, target: string): Promise<void> {
