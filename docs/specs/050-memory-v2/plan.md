@@ -45,6 +45,14 @@
 
 `test/memory-store.test.ts`、`test/memory-index-budget.test.ts`、`test/memory-search.test.ts`、`test/memory-migrate.test.ts`（fixture：`test/fixtures/memory-v1/` 放一份脱敏的真实 v1 频道目录）、e2e M1 / M1b / M2 / M5 / M6 / M7。
 
+### 实施记录（2026-09-04）
+
+- P1 按上表落地，`npm run check` + `npm run test:e2e` 全绿（分支 `feat/memory-v2-p1`）。
+- **偏离**：原计划让反思 pass「仍用旧提炼 prompt 适配」。实测旧 `extraction.ts` 的 id 化 supersede 契约无法干净地映射到 name 化的 store，强行桥接是 P2 会丢弃的一次性胶水。改为：`extraction.ts` / `consolidation.ts` / `probation.ts` / `promotion.ts` / `session.ts` / `maintenance-jobs.ts` **保留在树上**，但对已迁移频道（`isChannelMigratedToV2` 门控）整体短路。调度器 / gate / state 机制保留，作为 P2 `reflect.ts` 的接入点。**后果：P1 与 P2 之间后台自动 capture 关闭**；`memory_save` 显式写入不受影响。
+- e2e：实装 M1（首轮注入 + 次轮不注入）与 M6（首次使用即迁移）；M1b/M2/M5/M7 顺延到 P2/P3 随 reflect 与 `/memory` 命令一起补。
+- 迁移的 type 映射对「Constraints 段里的机器事实/指针」额外走 `reference`（真实数据里 `claude CLI 已安装…` 这类条目）。
+- TS 字段名 `durableMemoryBootstrap` 未改名为 `memoryBootstrap`（纯 cosmetic，降低 diff 面）；渲染出的 XML 标签已是 `<memory_bootstrap>`。
+
 ### P1 验收
 
 - 本机 `~/.pipiclaw` 备份后升级：迁移日志显示条数与实际一致；`/memory list` 输出与 `MEMORY.md` 一致；`/new` 后第一条消息的 `last_prompt.json`（`PIPICLAW_DEBUG=1`）含 `<memory_bootstrap>`，第二条不含；`/compact` 后的第一条再次含。
