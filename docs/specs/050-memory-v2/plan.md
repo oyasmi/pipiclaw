@@ -89,6 +89,14 @@
 
 `test/memory-journal.test.ts`、`test/memory-reflect.test.ts`、`test/memory-reflect-job.test.ts`、e2e M3 / M4 / M8。`test/e2e/deterministic/memory.test.ts` 的 A9 改为断言 `memory/*.md` 出现而不是 `MEMORY.md` 含子串；A10 删除（召回不存在了），由 M1/M2 覆盖。
 
+### 实施记录（2026-09-04）
+
+- P2 按上表落地，`npm run check`（952 单测）+ `npm run test:e2e`（36）全绿（分支 `feat/memory-v2-p1`，P1/P2 未分开发布，见下）。
+- **偏离**：`test/session-memory.test.ts` 直接删除而非改名（其覆盖面已被新 `memory-lifecycle.test.ts` 的 boundary 用例取代，没有独立价值）。`test/memory-consolidation-ops.test.ts`/`memory-extraction.test.ts`/`memory-probation.test.ts`/`memory-promotion.test.ts`/`memory-maintenance-jobs.test.ts` 同样整体删除而不是部分迁移——它们测的是 id 化的 v1 写路径，v2 的等价覆盖已经在 `memory-reflect.test.ts`（13 例，覆盖 D6 分档/每次上限/user-source 保护/name 降级/condense/幂等前提）里以更贴合新不变量的形式重写。
+- `PipiclawSessionMemorySettings`/`getSessionMemorySettings` 随 SESSION.md 一起整体退役（不是留到 P3）：`session.ts` 一删，这两个类型/方法立刻变成 knip 死码，与其留到 P3 制造一次孤立的清理提交，不如随 P2 一起做掉。`sessionMemory.*` 全部加入 `RETIRED_SETTINGS_KEYS`。
+- e2e 的 mock provider 默认路由（`test/support/mock-provider/defaults.ts`）新增 `sidecar:memory-reflect`（匹配 "memory reflection worker"）替换退役的 `sidecar:memory-extraction`/`sidecar:session-memory`——`MemoryLifecycle` 的边界触发（compaction/`/new`/shutdown）现在**总是**在后台调后台调用 reflect，不管测试关不关心记忆，所以这条默认路由和旧版 extraction 默认路由地位相同：不加会让任何走到这些边界的测试意外收到 unmatched-request 失败。
+- 未做：`recall.ts`/`candidates.ts`/`metadata.ts`/`chinese-words.ts` 未删除——仍被 `subagents/tool.ts`（`memory: relevant`）与 `memoryRecall` settings 使用，属于 P3 的 `memory: none | index` 迁移范围，不在 P2 触碰面内。
+
 ### P2 验收
 
 - 本机跑一天：`journal/<today>.md` 有条目且无重复；`memory-review.jsonl` 新增行全部含 `actions` 或 `skipped` 或 `error`；`/usage` 的 sidecar 调用数 ≤ 每 20 分钟一次 + 边界。
