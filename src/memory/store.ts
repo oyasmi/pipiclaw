@@ -525,3 +525,22 @@ async function writeEntryFile(channelDir: string, entry: MemoryEntry): Promise<v
 	await mkdir(getChannelMemoryDir(channelDir), { recursive: true });
 	await writeFileAtomically(getMemoryEntryPath(channelDir, entry.name), serializeMemoryEntry(entry));
 }
+
+/**
+ * Spec 050, D6/D8: a probationary entry nobody touched before `expires` is removed —
+ * deterministically, before the reflect pass even runs, so a cleanup prompt never spends
+ * tokens on an entry about to disappear. No tombstone: probation lapsing means "not needed
+ * right now", not "must never be learned again" (037, D8's rationale, carried over unchanged).
+ */
+export async function expireProbationaryEntries(channelDir: string, today: string = localDayKey()): Promise<string[]> {
+	const entries = await listMemoryEntries(channelDir);
+	const expired = entries.filter((entry) => entry.expires && entry.expires < today);
+	if (expired.length === 0) {
+		return [];
+	}
+	for (const entry of expired) {
+		await rm(getMemoryEntryPath(channelDir, entry.name), { force: true });
+	}
+	await rebuildMemoryIndex(channelDir);
+	return expired.map((entry) => entry.name);
+}
