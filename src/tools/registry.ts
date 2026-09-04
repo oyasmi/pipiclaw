@@ -104,9 +104,6 @@ function memoryToolOptions(ctx: ToolBuildContext) {
 		channelId: ctx.channelId,
 		channelDir: ctx.channelDir,
 		workspaceDir: ctx.workspaceDir,
-		memoryCandidateStore: req(ctx.memoryCandidateStore, "memoryCandidateStore"),
-		getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
-		resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),
 	};
 }
 

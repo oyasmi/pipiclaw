@@ -12,6 +12,8 @@ export type MemoryReviewReason =
 	| "memory-checkpoint-job"
 	| "structural-maintenance-job"
 	| "user-forget"
+	| "memory-save"
+	| "memory-forget"
 	| "migration";
 
 export interface MemoryReviewLogEntry {

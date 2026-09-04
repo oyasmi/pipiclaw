@@ -32,22 +32,18 @@ import {
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
-import {
-	buildFirstTurnMemoryBootstrapResult,
-	FIRST_TURN_BOOTSTRAP_MAX_UNITS,
-	type FirstTurnMemoryBootstrapResult,
-} from "../memory/bootstrap.js";
 import { createMemoryCandidateStore, type MemoryCandidateStore } from "../memory/candidates.js";
 import { handleMemoryCommand } from "../memory/commands.js";
-import { getChannelMemoryPath } from "../memory/files.js";
+import { buildChannelIndexForBootstrap, clipWorkspaceMemoryForBootstrap } from "../memory/index-budget.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import {
 	createMemoryActivityRecorder,
 	type MemoryActivityEvent,
 	type MemoryActivityRecorder,
 } from "../memory/maintenance-state.js";
-import { findPreviousUserText, MEMORY_RECALL_MAX_UNITS, recallRelevantMemory } from "../memory/recall.js";
+import { renderMemoryBootstrap } from "../memory/render.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
+import { listMemoryEntries } from "../memory/store.js";
 import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "../memory/task-digest.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
 import {
@@ -103,7 +99,7 @@ import { SessionResourceGate } from "./session-resource-gate.js";
 import { assembleTurnPrompt } from "./turn-prompt.js";
 import { recoverInterruptedTurn } from "./turn-recovery.js";
 import { type TurnHandle, TurnStateMachine } from "./turn-state.js";
-import { getLastAssistantUsage } from "./type-guards.js";
+import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./type-guards.js";
 import {
 	type AgentRunner,
 	createEmptyRunState,
@@ -446,11 +442,9 @@ export class ChannelRunner implements AgentRunner {
 		let fallbackTargetRef: string | undefined;
 		// Hoisted so the debug dump in `finally` can report the turn as it was actually sent.
 		let promptText = "";
-		let recalledContextText = "";
 		let taskDigestText = "";
 		let durableMemoryBootstrapText = "";
 		let channelCapsuleText = "";
-		let bootstrapCandidateIds: string[] = [];
 		let bootstrapPrepared = false;
 
 		try {
@@ -480,52 +474,22 @@ export class ChannelRunner implements AgentRunner {
 				channelCapsuleText = this.renderChannelTurnContext();
 
 				// The task digest reads the whole tasks/ directory and depends on nothing the memory
-				// work below produces, so it runs alongside the bootstrap and recall rather than
-				// queuing behind them. Settled into a result object rather than left as a bare
-				// promise: if recall throws first we would otherwise leave a rejection unobserved,
-				// which Node's default policy turns into a process exit. Rethrown at the await, so a
-				// digest failure still fails the turn exactly as it did when this ran inline.
+				// bootstrap below produces, so it runs alongside it rather than queuing behind it.
+				// Settled into a result object rather than left as a bare promise: if the bootstrap
+				// throws first we would otherwise leave a rejection unobserved, which Node's default
+				// policy turns into a process exit. Rethrown at the await, so a digest failure still
+				// fails the turn exactly as it did when this ran inline.
 				const taskDigestPromise = (this.tasksEnabled ? this.buildTaskDigestForTurn() : Promise.resolve("")).then(
 					(text) => ({ text }) as { text: string; error?: never },
 					(error: unknown) => ({ error }) as { text?: never; error: unknown },
 				);
 
+				// Spec 050, D1: the memory index is injected in full on the first turn of a session
+				// (and the first turn after compaction — see `subscribeToSessionEvents`), never per
+				// turn. Mid-session, the model uses `memory_search` to look things up.
 				if (this.firstTurnMemoryBootstrapPending) {
-					const bootstrap = await this.buildFirstTurnMemoryBootstrap();
-					durableMemoryBootstrapText = bootstrap.renderedText;
-					bootstrapCandidateIds = bootstrap.includedCandidateIds;
+					durableMemoryBootstrapText = await this.buildFirstTurnMemoryBootstrap();
 					bootstrapPrepared = true;
-				}
-
-				const recallSettings = this.settingsManager.getMemoryRecallSettings();
-				if (recallSettings.enabled) {
-					const recall = await recallRelevantMemory({
-						query: clippedInput,
-						contextQuery: findPreviousUserText(this.session.messages),
-						channelId: this.channelId,
-						workspaceDir: this.workspaceDir,
-						channelDir: this.channelDir,
-						maxCandidates: recallSettings.maxCandidates,
-						maxInjected: recallSettings.maxInjected,
-						maxChars: recallSettings.maxChars,
-						// The configured char cap and the runtime unit cap both apply; first to bind clips.
-						maxUnits: MEMORY_RECALL_MAX_UNITS,
-						rerankWithModel: recallSettings.rerankWithModel,
-						excludedCandidateIds: bootstrapCandidateIds,
-						// `rerankWithModel` is passed through as configured; `shouldUseModelRerank`
-						// owns the decision. Under "auto" it reranks whenever the shortlist is
-						// over-full *and* the local ranking has no clear winner — script-independent,
-						// so a Chinese turn is treated exactly like an English one. That rerank is an
-						// LLM call on the critical path of the turn, capped at
-						// MEMORY_RECALL_RERANK_TIMEOUT_MS and failing open to the local ranking.
-						model: this.session.model ?? this.activeModel,
-						resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
-						candidateStore: this.memoryCandidateStore,
-					});
-
-					if (recall.renderedText) {
-						recalledContextText = recall.renderedText;
-					}
 				}
 
 				const taskDigestResult = await taskDigestPromise;
@@ -542,7 +506,6 @@ export class ChannelRunner implements AgentRunner {
 				channelCapsule: channelCapsuleText,
 				durableMemoryBootstrap: durableMemoryBootstrapText,
 				taskDigest: taskDigestText,
-				recalledMemory: recalledContextText,
 			});
 			promptText = assembled.text;
 
@@ -651,7 +614,6 @@ export class ChannelRunner implements AgentRunner {
 				promptText,
 				durableMemoryBootstrapText,
 				taskDigestText,
-				recalledContextText,
 			});
 		}
 
@@ -683,7 +645,6 @@ export class ChannelRunner implements AgentRunner {
 		promptText: string;
 		durableMemoryBootstrapText: string;
 		taskDigestText: string;
-		recalledContextText: string;
 	}): Promise<void> {
 		const { ctx, ownTurn, implicitTurn, promptSubmitted, runQueue, fallbackAttempted, fallbackTargetRef } = input;
 		this.turnState.setPhase(ownTurn, "finishing");
@@ -699,7 +660,6 @@ export class ChannelRunner implements AgentRunner {
 				messages: this.session.messages,
 				durableMemoryBootstrap: input.durableMemoryBootstrapText || undefined,
 				taskDigest: input.taskDigestText || undefined,
-				recalledContext: input.recalledContextText || undefined,
 				newUserMessage: input.promptText,
 			};
 			await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
@@ -1759,6 +1719,11 @@ export class ChannelRunner implements AgentRunner {
 			if (isRecord(event) && "reason" in event && event.reason === "new") {
 				this.firstTurnMemoryBootstrapPending = true;
 			}
+			// Spec 050, D1: compaction rewrites the first-turn bootstrap into a summary; re-inject
+			// the authoritative index on the next turn so memory does not decay with the transcript.
+			if (isAutoCompactionEndEvent(event) && !event.aborted && !event.errorMessage) {
+				this.firstTurnMemoryBootstrapPending = true;
+			}
 			if (!this.runState.ctx || !this.runState.logCtx || !this.runState.queue) return;
 			// The SDK listener signature is `(event) => void`, so the promise below is fire-and-forget.
 			// Without this catch, a rejection inside handleSessionEvent becomes an unhandled rejection
@@ -1796,7 +1761,12 @@ export class ChannelRunner implements AgentRunner {
 		});
 	}
 
-	private async buildFirstTurnMemoryBootstrap(): Promise<FirstTurnMemoryBootstrapResult> {
+	/**
+	 * Spec 050, D1: assemble `<memory_bootstrap>` for the first turn of a session — workspace
+	 * MEMORY.md (whole H2 sections, budgeted) + the channel index (full, or budget-tiered). The
+	 * journal subsection is added in P2.
+	 */
+	private async buildFirstTurnMemoryBootstrap(): Promise<string> {
 		const readOptionalFile = async (path: string): Promise<string> => {
 			try {
 				return await readFile(path, "utf-8");
@@ -1805,15 +1775,15 @@ export class ChannelRunner implements AgentRunner {
 			}
 		};
 
-		const [channelMemory, workspaceMemory] = await Promise.all([
-			readOptionalFile(getChannelMemoryPath(this.channelDir)),
+		const [entries, workspaceMemory] = await Promise.all([
+			listMemoryEntries(this.channelDir).catch(() => []),
 			readOptionalFile(join(this.workspaceDir, "MEMORY.md")),
 		]);
 
-		return buildFirstTurnMemoryBootstrapResult({
-			channelMemory,
-			workspaceMemory,
-			maxUnits: FIRST_TURN_BOOTSTRAP_MAX_UNITS,
+		const index = buildChannelIndexForBootstrap(entries);
+		return renderMemoryBootstrap({
+			workspaceMemory: clipWorkspaceMemoryForBootstrap(workspaceMemory),
+			channelIndex: entries.length > 0 ? index.text : "",
 		});
 	}
 }
