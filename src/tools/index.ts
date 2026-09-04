@@ -4,12 +4,11 @@ import { getChannelJobManager } from "../agent/job-manager.js";
 import type { MediaSender } from "../channel/channel-context.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
-import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { APP_HOME_DIR } from "../paths.js";
 import { loadSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import type { SecurityConfig } from "../security/types.js";
-import type { PipiclawMemoryRecallSettings, PipiclawSessionSearchSettings } from "../settings.js";
+import type { PipiclawSessionSearchSettings } from "../settings.js";
 import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "../subagents/tool.js";
 import type { PipiclawToolsConfig } from "./config.js";
@@ -31,10 +30,8 @@ export interface CreatePipiclawToolsOptions {
 	channelDir: string;
 	channelId: string;
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
-	getMemoryRecallSettings: () => PipiclawMemoryRecallSettings;
 	getSubAgentModelReference?: () => string | null;
 	getSessionSearchSettings: () => PipiclawSessionSearchSettings;
-	memoryCandidateStore: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
 	toolsConfig?: PipiclawToolsConfig;
 	/** Transport-provided attachment port; when present, enables the `send_media` tool. */
@@ -78,7 +75,6 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		getAvailableModels: options.getAvailableModels,
 		resolveApiKey: options.resolveApiKey,
 		getSessionSearchSettings: options.getSessionSearchSettings,
-		memoryCandidateStore: options.memoryCandidateStore,
 		mediaSender: options.mediaSender,
 	});
 	const subAgentToolOptions = {
@@ -94,9 +90,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		projectBoundary: options.projectScope.boundary,
 		channelDir: options.channelDir,
 		getSubAgentDiscovery: options.getSubAgentDiscovery,
-		getMemoryRecallSettings: options.getMemoryRecallSettings,
 		getSubAgentModelReference: options.getSubAgentModelReference,
-		memoryCandidateStore: options.memoryCandidateStore,
 		securityConfig,
 		webConfig: toolsConfig.tools.web,
 		rtkEnabled: toolsConfig.tools.rtk.enabled,
@@ -113,12 +107,6 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		workingDirectory: options.projectScope.projectRoot,
 		projectBoundary: options.projectScope.boundary,
 		securityConfig,
-		// Spec 042 D7: follow_up builds its envelope through the same buildContextualBlocks
-		// the initial dispatch uses, which needs these to resolve a memory: relevant recall.
-		getCurrentModel: options.getCurrentModel,
-		resolveApiKey: options.resolveApiKey,
-		getMemoryRecallSettings: options.getMemoryRecallSettings,
-		memoryCandidateStore: options.memoryCandidateStore,
 	};
 	return [
 		...leafTools,

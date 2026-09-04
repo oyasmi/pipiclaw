@@ -1,12 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import type { MemoryCandidateStore } from "../memory/candidates.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
-import type { PipiclawMemoryRecallSettings } from "../settings.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { externalRoleFingerprint, type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
 import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
@@ -60,12 +57,6 @@ export interface SubAgentManageToolOptions {
 	/** Needed only for `follow_up`: re-resolves the role's current config by name. */
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
 	securityConfig?: SecurityConfig;
-	/** Spec 042 D7: `follow_up` builds its envelope through the same `buildContextualBlocks` the
-	 *  initial dispatch uses — these three are what that function needs beyond `channelDir`/`workspaceDir`. */
-	getCurrentModel?: () => Model<Api>;
-	resolveApiKey?: (model: Model<Api>) => Promise<string>;
-	getMemoryRecallSettings?: () => PipiclawMemoryRecallSettings;
-	memoryCandidateStore?: MemoryCandidateStore;
 }
 
 interface SubAgentRunArgs {
@@ -320,31 +311,16 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			};
 
 			// Spec 042 D7: the same envelope construction the initial dispatch uses — runtime context
-			// (including this run's own artifact directory), paths/session/memory context blocks, and
-			// (for a verify run) the verification protocol — not a hand-rolled "task + maybe verify
-			// protocol" that left the external agent unaware of its own working/artifact directories.
-			// `getCurrentModel`/`resolveApiKey` are only needed for the `memory: relevant` recall path
-			// inside `buildContextualBlocks` — optional here so a caller that only ever exercises
-			// list/cancel is not forced to wire an LLM-backed dependency it will never use. Absent
-			// either, context blocks degrade to none rather than guessing at a model or key.
+			// (including this run's own artifact directory), paths/memory context blocks, and (for a
+			// verify run) the verification protocol — not a hand-rolled "task + maybe verify protocol"
+			// that left the external agent unaware of its own working/artifact directories.
 			let launchResult: ExternalLaunchResult;
 			try {
-				const contextualBlocks =
-					options.getCurrentModel && options.resolveApiKey
-						? await buildContextualBlocks(
-								task,
-								role,
-								{
-									channelDir: options.channelDir,
-									workspaceDir: options.workspaceDir,
-									runtimeContext: { workspaceDir: options.workspaceDir, channelId: options.channelId },
-									getMemoryRecallSettings: options.getMemoryRecallSettings,
-									resolveApiKey: options.resolveApiKey,
-									memoryCandidateStore: options.memoryCandidateStore,
-								},
-								options.getCurrentModel(),
-							)
-						: [];
+				const contextualBlocks = await buildContextualBlocks(role, {
+					channelDir: options.channelDir,
+					workspaceDir: options.workspaceDir,
+					runtimeContext: { workspaceDir: options.workspaceDir, channelId: options.channelId },
+				});
 				const envelopedTask = buildSubAgentTask(
 					task,
 					role,

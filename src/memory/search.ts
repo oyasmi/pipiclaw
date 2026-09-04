@@ -1,7 +1,29 @@
+import { parseLocalTime } from "../shared/local-time.js";
 import { splitH2Sections } from "../shared/markdown-sections.js";
 import { HAN_REGEX } from "../shared/text-utils.js";
 import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
 import type { MemoryEntry } from "./store.js";
+
+/**
+ * Age-bucketed recency boost (≤1 day / ≤7 days / ≤30 days / older), scaled by `weights`. Kept
+ * here (not `session-search.ts`) so both cold-storage callers share one scoring primitive; each
+ * caller supplies its own weights since the two scoring systems live on different magnitudes.
+ */
+export function recencyBoostByAge(
+	timestamp: string | undefined,
+	weights: { day: number; week: number; month: number },
+): number {
+	if (!timestamp) return 0;
+	const timestampMs = parseLocalTime(timestamp);
+	if (timestampMs === undefined) return 0;
+
+	const ageMs = Date.now() - timestampMs;
+	const dayMs = 24 * 60 * 60 * 1000;
+	if (ageMs <= dayMs) return weights.day;
+	if (ageMs <= 7 * dayMs) return weights.week;
+	if (ageMs <= 30 * dayMs) return weights.month;
+	return 0;
+}
 
 /**
  * Spec 050, D3/D4: the lexical tokenizer, moved here from the retired `recall.ts`. It now serves

@@ -5,7 +5,6 @@ import { handleSessionEvent, type SessionEventHandlerContext } from "../src/agen
 import { createEmptyRunState, type RunQueue, type RunState } from "../src/agent/types.js";
 import type { ChannelContext } from "../src/channel/channel-context.js";
 import { createFileStore } from "../src/file-store.js";
-import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { RecoverableToolError } from "../src/shared/recoverable-error.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
@@ -28,7 +27,6 @@ function registryContext(): ToolBuildContext {
 		getAvailableModels: () => [],
 		resolveApiKey: async () => "key",
 		getSessionSearchSettings: () => ({}) as never,
-		memoryCandidateStore: createMemoryCandidateStore(),
 	};
 }
 

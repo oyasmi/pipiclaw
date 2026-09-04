@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
@@ -10,23 +10,24 @@ import { getChannelDir } from "../channel/channel-paths.js";
 import type { ExecOptions, ExecResult, Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
-import type { MemoryCandidateStore } from "../memory/candidates.js";
 import {
-	getChannelHistoryPath,
-	getChannelMemoryPath,
-	getChannelSessionPath,
-	readChannelSession,
-} from "../memory/files.js";
-import { recallRelevantMemory } from "../memory/recall.js";
+	buildChannelIndexForBootstrap,
+	CHANNEL_INDEX_MAX_UNITS,
+	clipJournalTailForBootstrap,
+	clipWorkspaceMemoryForBootstrap,
+	JOURNAL_TAIL_MAX_UNITS,
+	WORKSPACE_MEMORY_MAX_UNITS,
+} from "../memory/index-budget.js";
+import { getJournalDir, readJournalDay } from "../memory/journal.js";
+import { renderMemoryBootstrap } from "../memory/render.js";
+import { getChannelMemoryDir, getChannelMemoryIndexPath, listMemoryEntries } from "../memory/store.js";
 import { formatModelReference } from "../models/utils.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
-import type { PipiclawMemoryRecallSettings } from "../settings.js";
-import { formatLocalTime } from "../shared/local-time.js";
-import { splitH1Sections } from "../shared/markdown-sections.js";
+import { formatLocalTime, localDayKey } from "../shared/local-time.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { clipText, errorMessage, extractAssistantText } from "../shared/text-utils.js";
+import { errorMessage, extractAssistantText } from "../shared/text-utils.js";
 import { addUsage, createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { sleepUnref } from "../shared/with-timeout.js";
 import { workspaceSubjectHash, workspaceSubjectSnapshot } from "../tasks/artifact-subject.js";
@@ -103,9 +104,9 @@ const subagentInlineSchema = Type.Object({
 		}),
 	),
 	context: Type.Optional(
-		Type.Union([Type.Literal("none"), Type.Literal("session"), Type.Literal("relevant")], {
+		Type.Union([Type.Literal("none"), Type.Literal("index")], {
 			description:
-				'What context to inject. "none" (default) runs fully isolated; "session" adds current session state; "relevant" adds session state plus recalled memory.',
+				'What context to inject. "none" (default) runs fully isolated; "index" adds the workspace background, the channel memory index, and today\'s journal tail.',
 		}),
 	),
 	thinkingLevel: Type.Optional(
@@ -183,10 +184,8 @@ export interface SubAgentToolOptions {
 	workspaceDir: string;
 	channelDir: string;
 	getSubAgentDiscovery?: () => SubAgentDiscoveryResult;
-	getMemoryRecallSettings?: () => PipiclawMemoryRecallSettings;
 	/** `settings.subagentModel` (spec 032 D5); null/undefined means unset. */
 	getSubAgentModelReference?: () => string | null;
-	memoryCandidateStore?: MemoryCandidateStore;
 	securityConfig?: SecurityConfig;
 	webConfig?: PipiclawWebToolsConfig;
 	rtkEnabled?: boolean;
@@ -217,17 +216,6 @@ interface SubAgentWorker {
 	waitForIdle(): Promise<void>;
 }
 
-const DEFAULT_SUBAGENT_MEMORY_RECALL_SETTINGS: PipiclawMemoryRecallSettings = {
-	enabled: true,
-	maxCandidates: 12,
-	maxInjected: 5,
-	maxChars: 5000,
-	rerankWithModel: true,
-};
-const SESSION_SECTION_ORDER = ["Current State", "User Intent", "Active Files", "Errors & Corrections", "Next Steps"];
-const MAX_SESSION_SECTION_CHARS = 280;
-const MAX_SESSION_CONTEXT_CHARS = 1800;
-const MAX_RECALL_CONTEXT_CHARS = 2200;
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 /**
  * Reply budget for what a sub-agent hands back to its parent (spec 032 D4), measured in the
@@ -406,12 +394,10 @@ function buildDispatchedText(runId: string, agentName: string, runtimeLabel: str
  * that would otherwise have run fine.
  */
 async function resolveContextualBlocks(
-	task: string,
 	config: ResolvedSubAgentConfig,
 	options: SubAgentToolOptions,
-	currentModel: Model<Api>,
 ): Promise<string[]> {
-	return buildContextualBlocks(task, config, options, currentModel).catch((error) => {
+	return buildContextualBlocks(config, options).catch((error) => {
 		log.logWarning(
 			`[${options.runtimeContext.channelId}] Sub-agent context injection failed; continuing without it`,
 			errorMessage(error),
@@ -471,12 +457,12 @@ function finalizeSubAgentOutput(runContext: SubAgentRunContext, finalText: strin
 
 /**
  * Sub-agents share the main agent's `write`/`edit` tools but only receive the runtime
- * context (task text), never the "don't touch MEMORY.md/HISTORY.md/SESSION.md, use
- * memory_save instead" rule the main agent gets in its system prompt (the memory tools
- * itself is withheld from sub-agents). Denying these paths at the path-guard level closes
- * that gap structurally instead of relying on a sub-agent to infer an instruction it never
- * received — a stray write/edit here would race the shared memory serial queue
- * (channel-maintenance-queue) and silently corrupt durable memory.
+ * context (task text), never the "the MEMORY.md index is generated, write memory only through
+ * memory_save" rule the main agent gets in its system prompt (the memory tools themselves are
+ * withheld from sub-agents). Denying these paths at the path-guard level closes that gap
+ * structurally instead of relying on a sub-agent to infer an instruction it never received — a
+ * stray write/edit here would race the shared memory serial queue (channel-maintenance-queue)
+ * and silently corrupt durable memory.
  */
 function withSubagentMemoryWriteDeny(
 	securityConfig: SecurityConfig,
@@ -484,9 +470,9 @@ function withSubagentMemoryWriteDeny(
 	workspaceDir: string,
 ): SecurityConfig {
 	const protectedPaths = [
-		getChannelMemoryPath(channelDir),
-		getChannelHistoryPath(channelDir),
-		getChannelSessionPath(channelDir),
+		getChannelMemoryDir(channelDir),
+		getJournalDir(channelDir),
+		getChannelMemoryIndexPath(channelDir),
 	];
 	// The role directory gets the same structural denial (spec 040, D8.1): a sub-agent's write/edit
 	// tools are exactly as capable of writing a self-authorizing `runtime: external` role file as
@@ -624,60 +610,21 @@ export function buildSubAgentTask(
 	return lines.join("\n");
 }
 
-function buildSessionContextBlock(sessionMarkdown: string): string {
-	const sections = splitH1Sections(sessionMarkdown);
-	if (sections.length === 0) {
-		return "";
-	}
-
-	const selectedSections = SESSION_SECTION_ORDER.flatMap((heading) =>
-		sections.filter((section) => section.heading.toLowerCase() === heading.toLowerCase()),
-	);
-
-	if (selectedSections.length === 0) {
-		return "";
-	}
-
-	const lines = ["Relevant session state:"];
-	let usedChars = lines[0].length;
-	for (const section of selectedSections) {
-		const clipped = clipText(section.content, MAX_SESSION_SECTION_CHARS, { headRatio: 1, omitHint: "..." });
-		const block = `- ${section.heading}: ${clipped}`;
-		if (usedChars + block.length > MAX_SESSION_CONTEXT_CHARS) {
-			break;
-		}
-		lines.push(block);
-		usedChars += block.length + 1;
-	}
-	return lines.length > 1 ? lines.join("\n") : "";
-}
-
-function stripRuntimeContextWrapper(renderedText: string): string {
-	return renderedText
-		.replace(/^<runtime_context>\s*/i, "")
-		.replace(/\s*<\/runtime_context>$/i, "")
-		.trim();
-}
-
 /** Exported for `subagent_run op=follow_up` (spec 042 D7) — same reason as `buildSubAgentTask`. */
 /** The slice of `SubAgentToolOptions` `buildContextualBlocks` actually reads — narrowed (spec 042
- *  D7) so `subagent_run op=follow_up` only needs to wire these six fields, not the full tool
+ *  D7) so `subagent_run op=follow_up` only needs to wire these three fields, not the full tool
  *  option surface (executor, discovery, web config, etc. that a context-block build never touches). */
-export type ContextualBlocksOptions = Pick<
-	SubAgentToolOptions,
-	| "channelDir"
-	| "getMemoryRecallSettings"
-	| "runtimeContext"
-	| "workspaceDir"
-	| "resolveApiKey"
-	| "memoryCandidateStore"
->;
+export type ContextualBlocksOptions = Pick<SubAgentToolOptions, "channelDir" | "runtimeContext" | "workspaceDir">;
 
+/**
+ * Spec 050, D12: `memory: index` injects the same three sections the main agent's first-turn
+ * bootstrap does — workspace MEMORY.md, the channel index, today's journal tail — at half the
+ * main agent's budget. No per-call LLM recall: a sub-agent task is short-lived, so there is no
+ * "first turn" to bootstrap once and reuse; it gets the same snapshot every dispatch.
+ */
 export async function buildContextualBlocks(
-	task: string,
-	config: Pick<SubAgentConfig, "contextMode" | "paths" | "memory" | "description">,
+	config: Pick<SubAgentConfig, "contextMode" | "paths" | "memory">,
 	options: ContextualBlocksOptions,
-	currentModel: Model<Api>,
 ): Promise<string[]> {
 	if (config.contextMode !== "contextual") {
 		return [];
@@ -692,42 +639,30 @@ export async function buildContextualBlocks(
 		return blocks;
 	}
 
-	const sessionMarkdown = await readChannelSession(options.channelDir);
-	const sessionBlock = buildSessionContextBlock(sessionMarkdown);
-	if (sessionBlock) {
-		blocks.push(sessionBlock);
-	}
-
-	if (config.memory !== "relevant") {
-		return blocks;
-	}
-
-	const recallSettings = {
-		...DEFAULT_SUBAGENT_MEMORY_RECALL_SETTINGS,
-		...options.getMemoryRecallSettings?.(),
+	const today = localDayKey();
+	const readOptionalFile = async (path: string): Promise<string> => {
+		try {
+			return await readFile(path, "utf-8");
+		} catch {
+			return "";
+		}
 	};
-	if (!recallSettings.enabled) {
-		return blocks;
-	}
-
-	const recallQuery = [task.trim(), config.description.trim(), ...config.paths].filter(Boolean).join("\n");
-	const recalled = await recallRelevantMemory({
-		query: recallQuery,
-		channelId: options.runtimeContext.channelId,
-		workspaceDir: options.workspaceDir,
-		channelDir: options.channelDir,
-		maxCandidates: recallSettings.maxCandidates,
-		maxInjected: recallSettings.maxInjected,
-		maxChars: Math.min(recallSettings.maxChars, MAX_RECALL_CONTEXT_CHARS),
-		rerankWithModel: recallSettings.rerankWithModel,
-		model: currentModel,
-		resolveApiKey: options.resolveApiKey,
-		allowedSources: ["workspace-memory", "channel-memory", "channel-history"],
-		candidateStore: options.memoryCandidateStore,
+	const [entries, workspaceMemory, journalToday] = await Promise.all([
+		listMemoryEntries(options.channelDir).catch(() => []),
+		readOptionalFile(join(options.workspaceDir, "MEMORY.md")),
+		readJournalDay(options.channelDir, today).catch(() => ""),
+	]);
+	const index = buildChannelIndexForBootstrap(entries, CHANNEL_INDEX_MAX_UNITS / 2);
+	const bootstrap = renderMemoryBootstrap({
+		workspaceMemory: clipWorkspaceMemoryForBootstrap(workspaceMemory, WORKSPACE_MEMORY_MAX_UNITS / 2),
+		channelIndex: entries.length > 0 ? index.text : "",
+		journal: (() => {
+			const text = clipJournalTailForBootstrap(journalToday, JOURNAL_TAIL_MAX_UNITS / 2);
+			return text ? { date: today, text } : undefined;
+		})(),
 	});
-	const recalledText = stripRuntimeContextWrapper(recalled.renderedText);
-	if (recalledText) {
-		blocks.push(recalledText);
+	if (bootstrap) {
+		blocks.push(bootstrap);
 	}
 
 	return blocks;
@@ -864,7 +799,7 @@ async function dispatchExternalRun(input: {
 	leaseKey: string | undefined;
 	params: { task: string; workingDirectory?: string; purpose?: "work" | "verify"; taskId?: string };
 }): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
-	const { options, currentModel, config, runLabel, runContext, leaseKey, params } = input;
+	const { options, config, runLabel, runContext, leaseKey, params } = input;
 	if (!config.harness) {
 		releaseWorkspaceLease(leaseKey, runContext.runId);
 		throw new Error(`Sub-agent "${config.name}" has runtime: external but no harness configured.`);
@@ -874,7 +809,7 @@ async function dispatchExternalRun(input: {
 		// D9/T5: external roles get the same task envelope internal workers do — runtime
 		// paths, injected context blocks, and (for purpose=verify) the verification
 		// protocol — rather than the raw task text (spec 040 gap closed post-review).
-		const contextualBlocks = await resolveContextualBlocks(params.task, config, options, currentModel);
+		const contextualBlocks = await resolveContextualBlocks(config, options);
 		const envelopedTask = buildSubAgentTask(
 			params.task,
 			config,
@@ -974,8 +909,7 @@ async function dispatchInternalRun(input: {
 	onUpdate?: (update: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }) => void;
 	runManager: SubAgentRunManager;
 }): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
-	const { options, currentModel, config, runLabel, mutatesNote, runContext, leaseKey, params, onUpdate, runManager } =
-		input;
+	const { options, config, runLabel, mutatesNote, runContext, leaseKey, params, onUpdate, runManager } = input;
 	const scopedExecutor = new DirectoryExecutor(options.executor, runContext.workingDirectory);
 	let apiKey: string;
 	try {
@@ -1178,7 +1112,7 @@ async function dispatchInternalRun(input: {
 		settleInput: SettleInput;
 	}> {
 		try {
-			const contextualBlocks = await resolveContextualBlocks(params.task, config, options, currentModel);
+			const contextualBlocks = await resolveContextualBlocks(config, options);
 			if (externallyCancelled) {
 				failureReason = failureReason || "Cancelled by request.";
 			} else {

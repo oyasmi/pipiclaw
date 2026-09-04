@@ -20,13 +20,6 @@ describe("PipiclawSettingsManager", () => {
 			maxRetries: 3,
 			baseDelayMs: 2000,
 		});
-		expect(manager.getMemoryRecallSettings()).toEqual({
-			enabled: true,
-			maxCandidates: 12,
-			maxInjected: 5,
-			maxChars: 5000,
-			rerankWithModel: "auto",
-		});
 		expect(manager.getMemoryMaintenanceSettings()).toEqual({
 			enabled: true,
 			minIdleMinutesBeforeLlmWork: 10,
@@ -89,7 +82,6 @@ describe("PipiclawSettingsManager", () => {
 			keepRecentTokens: 20000,
 		});
 		expect(manager.getRetrySettings()).toEqual({ enabled: false, maxRetries: 3, baseDelayMs: 2000 });
-		expect(manager.getMemoryRecallSettings()).toMatchObject({ rerankWithModel: false, maxInjected: 5 });
 		expect(manager.getMemoryMaintenanceSettings()).toMatchObject({
 			enabled: false,
 			reflectIntervalMinutes: 20,
@@ -139,7 +131,7 @@ describe("PipiclawSettingsManager", () => {
 
 		const manager = new PipiclawSettingsManager(baseDir);
 		expect(manager.getCompactionEnabled()).toBe(true);
-		expect(manager.getMemoryRecallSettings().enabled).toBe(true);
+		expect(manager.getMemoryMaintenanceSettings().enabled).toBe(true);
 		expect(manager.drainErrors()).toEqual([
 			expect.objectContaining({
 				scope: "global",

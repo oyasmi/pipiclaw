@@ -4,6 +4,7 @@ import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all
 import { describe, expect, it, vi } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
+import { applyMemoryOps } from "../src/memory/store.js";
 import type { SubAgentConfig } from "../src/subagents/discovery.js";
 import { configureSubAgentRuntime } from "../src/subagents/runs.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
@@ -108,24 +109,28 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 	// callers toward. `subagentSchema`/`subagentInlineSchema` have no `returns` field any more, so
 	// the rejection this test asserted is now a compile-time impossibility, not a runtime one.
 
-	function writeSession(channelDir: string): void {
-		writeFileSync(
-			join(channelDir, "SESSION.md"),
-			"# Session Title\n\n# Current State\n\nRefactoring the memory pipeline.\n",
-			"utf-8",
-		);
+	async function seedMemory(channelDir: string): Promise<void> {
+		await applyMemoryOps(channelDir, [
+			{
+				op: "add",
+				name: "refactoring-memory-pipeline",
+				type: "project",
+				description: "Refactoring the memory pipeline.",
+				source: "agent",
+			},
+		]);
 	}
 
 	// Spec 042, D4: external memory defaults to "none" — a role that only wants `paths` injected
-	// (contextMode: contextual, memory left unset) must not silently start sending channel session
-	// state to a third-party process.
-	it("does not inject session context when an external role's memory defaults to none", async () => {
+	// (contextMode: contextual, memory left unset) must not silently start sending the channel
+	// memory index to a third-party process.
+	it("does not inject memory context when an external role's memory defaults to none", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_ext_no_memory");
 		mkdirSync(channelDir, { recursive: true });
-		writeSession(channelDir);
+		await seedMemory(channelDir);
 
 		const role: SubAgentConfig = {
 			...baseRole,
@@ -151,22 +156,22 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		const input = launchExternalRunMock.mock.calls[0]?.[0] as { task: string };
 		expect(input.task).not.toContain("Refactoring the memory pipeline.");
-		expect(input.task).not.toContain("Relevant session state:");
+		expect(input.task).not.toContain("<memory_bootstrap>");
 	});
 
-	it("injects session context when an external role explicitly declares memory: session", async () => {
+	it("injects the memory index when an external role explicitly declares memory: index", async () => {
 		configureSubAgentRuntime({});
 		launchExternalRunMock.mockClear();
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_ext_with_memory");
 		mkdirSync(channelDir, { recursive: true });
-		writeSession(channelDir);
+		await seedMemory(channelDir);
 
 		const role: SubAgentConfig = {
 			...baseRole,
 			name: "scout",
 			contextMode: "contextual",
-			memory: "session", // an explicit, informed declaration — not the default
+			memory: "index", // an explicit, informed declaration — not the default
 			paths: [],
 		};
 
@@ -186,7 +191,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 
 		const input = launchExternalRunMock.mock.calls[0]?.[0] as { task: string };
 		expect(input.task).toContain("Refactoring the memory pipeline.");
-		expect(input.task).toContain("Relevant session state:");
+		expect(input.task).toContain("<memory_bootstrap>");
 	});
 
 	// Spec 046, D2.1: `subagent` (role-based) no longer has a `context` override at all — a
@@ -199,7 +204,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_ext_invocation_context");
 		mkdirSync(channelDir, { recursive: true });
-		writeSession(channelDir);
+		await seedMemory(channelDir);
 
 		const role: SubAgentConfig = {
 			...baseRole,

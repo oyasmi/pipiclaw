@@ -1,7 +1,6 @@
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
 import { createFileStore } from "../src/file-store.js";
-import { createMemoryCandidateStore } from "../src/memory/candidates.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { createPipiclawTools } from "../src/tools/index.js";
@@ -33,13 +32,6 @@ function makeOptions(subagentInlineEnabled: boolean) {
 		channelDir: "/repo/dm_1",
 		channelId: "dm_1",
 		getSubAgentDiscovery: () => ({ directory: "/repo/sub-agents", warnings: [], agents: [] }),
-		getMemoryRecallSettings: () => ({
-			enabled: true,
-			maxCandidates: 8,
-			maxInjected: 3,
-			maxChars: 3500,
-			rerankWithModel: false,
-		}),
 		getSessionSearchSettings: () => ({
 			enabled: true,
 			maxFiles: 12,
@@ -48,7 +40,6 @@ function makeOptions(subagentInlineEnabled: boolean) {
 			summarizeWithModel: false,
 			timeoutMs: 12000,
 		}),
-		memoryCandidateStore: createMemoryCandidateStore(),
 		securityConfig: DEFAULT_SECURITY_CONFIG,
 		toolsConfig: {
 			...DEFAULT_TOOLS_CONFIG,

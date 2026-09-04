@@ -15,6 +15,9 @@ import { join } from "path";
 import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
+import { appendJournalEntries } from "../src/memory/journal.js";
+import { applyMemoryOps } from "../src/memory/store.js";
+import { localDayKey } from "../src/shared/local-time.js";
 import {
 	discoverSubAgents,
 	getSubAgentsDir,
@@ -204,8 +207,7 @@ ${"x".repeat(16001)}`,
 	it("maps each context choice onto the frontmatter contextMode/memory pair (inline)", () => {
 		const cases = [
 			{ context: "none", contextMode: "isolated", memory: "none" },
-			{ context: "session", contextMode: "contextual", memory: "session" },
-			{ context: "relevant", contextMode: "contextual", memory: "relevant" },
+			{ context: "index", contextMode: "contextual", memory: "index" },
 		] as const;
 		for (const { context, contextMode, memory } of cases) {
 			const resolved = resolveInlineAgent([model], model, { systemPrompt: "Work", context });
@@ -397,61 +399,27 @@ describe("sub-agent tool", () => {
 		expect(delegatedTask).toContain("Inspect the current workspace and summarize the main risks.");
 	});
 
-	it("injects contextual session and recalled memory for contextual sub-agents", async () => {
+	it("injects the workspace background, channel memory index, and journal for contextual sub-agents (spec 050, D12)", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_123");
 		mkdirSync(channelDir, { recursive: true });
 		writeFileSync(
-			join(channelDir, "SESSION.md"),
-			`# Session Title
-
-# Current State
-
-Refactoring src/core.ts to stabilize the memory pipeline.
-
-# User Intent
-
-Find regressions before the changes ship.
-
-# Active Files
-
-src/core.ts
-test/core.test.ts
-
-# Errors & Corrections
-
-The last refactor broke fallback handling in src/core.ts.
-
-# Next Steps
-
-Review the new control flow and missing tests.
-`,
+			join(workspaceDir, "MEMORY.md"),
+			"# Workspace\n\n## Team\n\nThe fallback branch in src/core.ts must stay explicit.\n",
 			"utf-8",
 		);
-		writeFileSync(
-			join(channelDir, "MEMORY.md"),
-			`# Channel Memory
-
-## Decisions
-
-- Keep the fallback branch in src/core.ts explicit.
-
-## Constraints
-
-- Do not break the current session memory pipeline.
-`,
-			"utf-8",
-		);
-		writeFileSync(
-			join(channelDir, "HISTORY.md"),
-			`# Channel History
-
-## 2026-03-30T12:00:00.000Z
-
-Earlier review found missing regression coverage around src/core.ts fallback behavior.
-`,
-			"utf-8",
-		);
+		await applyMemoryOps(channelDir, [
+			{
+				op: "add",
+				name: "core-fallback-explicit",
+				type: "project",
+				description: "Keep the fallback branch in src/core.ts explicit.",
+				source: "agent",
+			},
+		]);
+		await appendJournalEntries(channelDir, localDayKey(), [
+			"09:00 earlier review found missing regression coverage around src/core.ts fallback behavior",
+		]);
 
 		let delegatedTask = "";
 		const tool = createSubAgentTool({
@@ -462,17 +430,10 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 			resolveApiKey: async () => "test-key",
 			workspaceDir,
 			channelDir,
-			getMemoryRecallSettings: () => ({
-				enabled: true,
-				maxCandidates: 6,
-				maxInjected: 2,
-				maxChars: 1200,
-				rerankWithModel: false,
-			}),
 			getSubAgentDiscovery: makeDiscovery(workspaceDir, [
 				makeSubAgentConfig({
 					contextMode: "contextual",
-					memory: "relevant",
+					memory: "index",
 					paths: ["src/core.ts", "test/core.test.ts"],
 				}),
 			]),
@@ -496,14 +457,10 @@ Earlier review found missing regression coverage around src/core.ts fallback beh
 
 		expect(delegatedTask).toContain("Preferred focus paths:");
 		expect(delegatedTask).toContain("- src/core.ts");
-		expect(delegatedTask).toContain("Relevant session state:");
-		expect(delegatedTask).toContain("Current State");
-		expect(delegatedTask).toContain("Find regressions before the changes ship.");
-		expect(delegatedTask).toContain("Relevant context for this turn:");
+		expect(delegatedTask).toContain("<memory_bootstrap>");
+		expect(delegatedTask).toContain("The fallback branch in src/core.ts must stay explicit.");
 		expect(delegatedTask).toContain("Keep the fallback branch in src/core.ts explicit.");
-		expect(delegatedTask).toContain(
-			"Earlier review found missing regression coverage around src/core.ts fallback behavior.",
-		);
+		expect(delegatedTask).toContain("earlier review found missing regression coverage");
 	});
 
 	it("uses settings.subagentModel when neither the invocation nor a predefined agent names a model (D5)", async () => {

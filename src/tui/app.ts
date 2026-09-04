@@ -14,7 +14,6 @@ import { ensureChannelDir } from "../channel/channel-paths.js";
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";
 import * as log from "../log.js";
-import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -136,7 +135,6 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	log.logStartup(paths.workspaceDir);
 
 	const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
-	ensureChannelMemoryFilesSync(channelDir);
 	const store = new ChannelStore({ workingDir: paths.workspaceDir });
 	const buildRunner = (): AgentRunner =>
 		createRunner(channelId, channelDir, {

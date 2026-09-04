@@ -51,14 +51,6 @@ export interface PipiclawRetrySettings {
 	baseDelayMs: number;
 }
 
-export interface PipiclawMemoryRecallSettings {
-	enabled: boolean;
-	maxCandidates: number;
-	maxInjected: number;
-	maxChars: number;
-	rerankWithModel: boolean | "auto";
-}
-
 // Whether the autonomous task mechanism runs at all is governed by the single
 // `tools.tasks.enabled` switch in tools.json (task_* tools + TaskDriver +
 // task digest together). Cadence and size are fixed constants — settings.json has no field for
@@ -135,11 +127,6 @@ export interface PipiclawSettings {
 	subagentModel?: string | null;
 	compaction?: { enabled?: boolean };
 	retry?: { enabled?: boolean };
-	memoryRecall?: {
-		enabled?: boolean;
-		/** Costs an extra LLM call, so it stays a user decision rather than a constant. */
-		rerankWithModel?: boolean | "auto";
-	};
 	memoryMaintenance?: { enabled?: boolean };
 	sessionSearch?: {
 		/** Costs an extra LLM call per search hit; same reasoning as `rerankWithModel`. */
@@ -179,14 +166,6 @@ const DEFAULT_RETRY: PipiclawRetrySettings = {
 	enabled: true,
 	maxRetries: 3,
 	baseDelayMs: 2000,
-};
-
-const DEFAULT_MEMORY_RECALL: PipiclawMemoryRecallSettings = {
-	enabled: true,
-	maxCandidates: 12,
-	maxInjected: 5,
-	maxChars: 5000,
-	rerankWithModel: "auto",
 };
 
 // Cheap and high-value: reading a handful of task frontmatters and always surfacing
@@ -240,6 +219,10 @@ const RETIRED_SETTINGS_KEYS: readonly string[] = [
 	"compaction.keepRecentTokens",
 	"retry.maxRetries",
 	"retry.baseDelayMs",
+	// Spec 050: per-turn recall is retired (D1) — the whole memoryRecall section is gone, not
+	// just its numeric params.
+	"memoryRecall.enabled",
+	"memoryRecall.rerankWithModel",
 	"memoryRecall.maxCandidates",
 	"memoryRecall.maxInjected",
 	"memoryRecall.maxChars",
@@ -486,14 +469,6 @@ export class PipiclawSettingsManager {
 		return {
 			...DEFAULT_RETRY,
 			enabled: this.settings.retry?.enabled ?? DEFAULT_RETRY.enabled,
-		};
-	}
-
-	getMemoryRecallSettings(): PipiclawMemoryRecallSettings {
-		return {
-			...DEFAULT_MEMORY_RECALL,
-			enabled: this.settings.memoryRecall?.enabled ?? DEFAULT_MEMORY_RECALL.enabled,
-			rerankWithModel: this.settings.memoryRecall?.rerankWithModel ?? DEFAULT_MEMORY_RECALL.rerankWithModel,
 		};
 	}
 

@@ -32,7 +32,6 @@ import {
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import * as log from "../log.js";
-import { createMemoryCandidateStore, type MemoryCandidateStore } from "../memory/candidates.js";
 import { handleMemoryCommand } from "../memory/commands.js";
 import {
 	buildChannelIndexForBootstrap,
@@ -244,7 +243,6 @@ export class ChannelRunner implements AgentRunner {
 	private modelRegistry!: ModelRegistry;
 	private readonly memoryLifecycle: MemoryLifecycle;
 	private readonly ledger = getUsageLedger();
-	private readonly memoryCandidateStore: MemoryCandidateStore;
 	private readonly memoryActivityRecorder: MemoryActivityRecorder;
 	private readonly sessionResourceGate: SessionResourceGate;
 	private readonly sessionReady: Promise<void>;
@@ -348,7 +346,6 @@ export class ChannelRunner implements AgentRunner {
 		}
 		this.settingsManager = paths.settingsManager;
 		this.reportSettingsDiagnostics();
-		this.memoryCandidateStore = createMemoryCandidateStore();
 		this.memoryActivityRecorder = createMemoryActivityRecorder({
 			appHomeDir: this.appHomeDir,
 			onError: (channelId, error) =>
@@ -1693,10 +1690,8 @@ export class ChannelRunner implements AgentRunner {
 			channelDir: this.channelDir,
 			channelId: this.channelId,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,
-			getMemoryRecallSettings: () => this.settingsManager.getMemoryRecallSettings(),
 			getSubAgentModelReference: () => this.settingsManager.getSubAgentModelReference(),
 			getSessionSearchSettings: () => this.settingsManager.getSessionSearchSettings(),
-			memoryCandidateStore: this.memoryCandidateStore,
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
 			mediaSender: this.mediaSender,
