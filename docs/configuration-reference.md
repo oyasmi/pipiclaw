@@ -284,9 +284,9 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 记忆管理工具（`memory_save` / `memory_search` / `memory_forget`，恒开）
 
-三个工具让主 agent 按需 `memory_save`（存一条持久事实）、`memory_search`（任务中途查已提炼的 MEMORY.md/HISTORY.md）、`memory_forget`（用户要求删除时，经共享串行队列从活动 MEMORY.md 移除，并写入不含原文的 tombstone 防止后台复活，不走裸 edit）。`forget` 不清理原始 session/log、retention backup 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台整理的竞态。核心能力，无开关、始终注册，只发给主 agent。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
+三个工具让主 agent 按需 `memory_save`（存一条持久事实，一条记忆一个 `memory/<name>.md` 文件，写入后自动重建索引）、`memory_search`（在频道记忆、journal、workspace `MEMORY.md` 里按需查找，索引已在首轮整份注入，中途怀疑"以前可能记过"才用它）、`memory_forget`（按 `name` 精确删除，写入不含原文的 tombstone 防止后台反思复活，不走裸 edit）。`forget` 不清理原始 session/log 或历史归档；工具返回会明确说明这个边界。写操作都走 channel-maintenance 串行队列，杜绝与后台反思的竞态。核心能力，无开关、始终注册，只发给主 agent；`memory_save` 撞到相似已有条目（Jaccard 相似度）会先拒绝并要求带 `replaces` 二次调用。`session_search`（冷存储检索）与 `skill`（workspace skills 只读列出/加载）同理恒开。
 
-用户可用 `/memory status` 查看条目数、近 7 天写入/删除/过期统计、tombstone、召回总数/近 30 天计数、query diversity 和最近失败；`/memory list` 按 entry id 列出活动记忆；`/memory show <entry-id>` 展示正文与 metadata；`/memory recent` 查看最近 7 天的 MEMORY.md 写入/删除/过期动作。metadata 写在频道的 `.memory/entries.json`，包含 kind、subject/owner、source entry ids、来源类型、trust、时间、状态、敏感等级、source correlation ids，以及 recall count、last recalled、每日计数和查询指纹（仅保存 hash，不保存查询原文）。correlation id 可与 usage ledger/review log 联结，统计维护 job 的成本、有效条目和后续召回。该文件是可重建 sidecar，不替代 `MEMORY.md` 事实源。
+用户可用 `/memory status` 查看记忆条数、按类型分布、试用期条目、上次反思时间、索引是否超预算；`/memory list` 按 `name` 列出频道记忆；`/memory show <name>` 展示某条记忆的正文与 frontmatter；`/memory journal [YYYY-MM-DD]` 查看某天的日志；`/memory forget <name>` 直接删除，不经过模型。元数据全部内联在 `memory/<name>.md` 的 frontmatter 里（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），没有独立的 sidecar metadata 文件——`MEMORY.md` 索引是从这些 frontmatter 生成的，本身就可重建。反思动作的成本与结果记在 `memory-review.jsonl`，用 correlation id 关联 usage ledger。
 
 ### 出站附件工具（`send_media`，随渠道自动启用）
 
@@ -353,7 +353,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 - **退出重进即自动续上次对话。** 每个 channel 的完整上下文持久化在 `workspace/<channel>/context.jsonl`。再次 `pipiclaw tui`（同一 channel）会原样还原上一轮的会话，无需任何命令。`Ctrl-C`/`Ctrl-D`/`/exit` 退出前会先把记忆落盘，所以直接关掉再开就是「继续上次」。
 - **`--channel <id>` = 挂到任意历史对话继续。** 传 `dm_<staffId>` 就接管该钉钉会话的上下文与记忆继续聊；传任意自定义 id 则是另一条独立对话线。想「换一个历史对话」就退出后用不同的 `--channel` 重进（注意上面的并发约束）。
-- **`/new` 开新会话，长期连续性由记忆层承担。** 跨会话要记住的事实 / 决定 / 偏好沉淀在 `SESSION.md` / `MEMORY.md` / `HISTORY.md`（见「记忆分层」），会在续接和 recall 时按需带回——这是 pipiclaw「每 channel 一条长会话 + 记忆层」模型对多会话历史的替代。
+- **`/new` 开新会话，长期连续性由记忆层承担。** 跨会话要记住的事实 / 决定 / 偏好沉淀在 `memory/*.md`（生成 `MEMORY.md` 索引）与 `journal/`（见「记忆分层」），会在下一次会话首轮整份带回——这是 pipiclaw「每 channel 一条长会话 + 记忆层」模型对多会话历史的替代。
 - **暂无同一 channel 内的会话选择器**，即不能在 TUI 里从多个历史会话之间挑一个切过去。要切换到别的对话，退出后用不同 `--channel` 重进即可。
 
 ### `tui` 设置（settings.json）
@@ -372,7 +372,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 ### 与钉钉常驻服务的并发约束（Concurrency Caveat）
 
-同一 channel 的记忆文件（`SESSION.md` / `context.jsonl` 等）在单进程内由内部串行队列保护，但**跨进程无锁**。因此：
+同一 channel 的记忆文件（`memory/*.md` / `context.jsonl` 等）在单进程内由内部串行队列保护，但**跨进程无锁**。因此：
 
 - 默认 `tui_local` 是 TUI 专属 channel，与任何钉钉会话零重叠——随用随开，无风险。
 - 当你用 `--channel dm_xxx` 接管某个钉钉会话的记忆时，**不要让钉钉常驻服务同时服务该会话**，否则两个进程可能交错写坏该 channel 的记忆。
@@ -793,10 +793,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 | `subagentModel` | unset | 子代理的默认模型引用，详见上文 |
 | `compaction.enabled` | `true` | 启用自动上下文压缩 |
 | `retry.enabled` | `true` | 启用自动重试 |
-| `memoryRecall.enabled` | `true` | 启用相关记忆召回 |
-| `memoryRecall.rerankWithModel` | `"auto"` | 是否用模型对召回结果再次排序。`true`/`false`/`"auto"`；`"auto"` 只在入围数超过注入上限且本地排序没有明显赢家时触发（3s 超时，失败则回退本地排序）。**会额外发起一次 LLM 调用**，所以它是你的成本决定而不是常量 |
-| `sessionMemory.enabled` | `true` | 启用 `SESSION.md` 刷新流程 |
-| `memoryMaintenance.enabled` | `true` | 启用内置后台 memory maintenance scheduler（session refresh / memory checkpoint / structural maintenance 三个 job） |
+| `memoryMaintenance.enabled` | `true` | 启用内置后台 memory maintenance scheduler（spec 050 起单一反思 job，取代此前的 session refresh / memory checkpoint / structural maintenance 三个 job） |
 | `sessionSearch.summarizeWithModel` | `false` | 是否用模型对 `session_search` 命中做 focused summary。同样**会额外发起 LLM 调用** |
 | `delegation.notices` | `"live"` | 委派 run（`subagents/`）与后台 job 的旁路播报量：`"off"` 不播报；`"settled"` 只播报结算回执（一句话，run 结束后几秒内到达，独立于唤醒回合的 LLM 延迟）；`"live"` 在此基础上为长时间运行的外部 run 追加稀疏的进度提示 |
 | `logging.level` | `"info"` | `debug` \| `info` \| `warn` \| `error`，详见上文可观测性一节 |
@@ -825,9 +822,9 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 
 - `compaction.reserveTokens`、`compaction.keepRecentTokens`
 - `retry.maxRetries`、`retry.baseDelayMs`
-- `memoryRecall.maxCandidates`、`memoryRecall.maxInjected`、`memoryRecall.maxChars`
-- `sessionMemory` 的 `minTurnsBetweenUpdate`、`minToolCallsBetweenUpdate`、`timeoutMs`、`failureBackoffTurns`、`forceRefreshBeforeCompact`、`forceRefreshBeforeNewSession`
-- `memoryMaintenance` 除 `enabled` 外的全部字段（各类间隔、`minMemoryAutoWriteConfidence`、`maxConcurrentChannels`、`failureBackoffMinutes`、两个 `cleanupShrinkGuard*`）
+- `memoryRecall` 整段（`enabled`、`rerankWithModel`、`maxCandidates`、`maxInjected`、`maxChars`）——spec 050 取消了每轮实时召回（D1），会话首轮改为整份注入索引，不再有排序/重排需要调
+- `sessionMemory` 整段——`SESSION.md` 刷新流程随 spec 050 一并取消，被 journal 取代
+- `memoryMaintenance` 除 `enabled` 外的全部字段（各类间隔、`minMemoryAutoWriteConfidence`、`maxConcurrentChannels`、`failureBackoffMinutes`、两个 `cleanupShrinkGuard*`）——单一反思 job 的节奏是代码常量（见 `memory/maintenance-tuning.ts`）
 - `sessionSearch` 除 `summarizeWithModel` 外的全部字段（含此前从未生效的 `enabled`）
 - `logging.file.maxSizeBytes`、`logging.file.maxFiles`
 - `taskDigest` 与 `taskDriver` 两段整体
@@ -893,15 +890,14 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 
 ```json
 {
-  "memoryRecall": { "rerankWithModel": false },
   "sessionSearch": { "summarizeWithModel": false },
   "memoryMaintenance": { "enabled": false }
 }
 ```
 
-这三项是 `settings.json` 里仅有的与 LLM 调用量直接相关的选项：前两项各砍掉一次可选的模型调用，第三项关掉全部后台记忆维护。
+这两项是 `settings.json` 里仅有的与 LLM 调用量直接相关的选项：前一项砍掉一次可选的模型调用，后一项关掉全部后台反思。
 
-代价要清楚：关掉 `memoryMaintenance` 后 `SESSION.md` 只在边界事件（compaction、`/new`、关闭）刷新，`MEMORY.md` 不再自动固化，长期使用会明显丢失连续性。想省钱但保留记忆，优先只关前两项。
+代价要清楚：关掉 `memoryMaintenance` 后 journal 不再自动追加，`MEMORY.md` 不再自动固化，长期使用会明显丢失连续性；仍可用 `memory_save` 当场写入。想省钱但保留记忆，优先只关前一项。
 
 #### 4. 关掉日志落盘（Console-Only Logging）
 
@@ -920,9 +916,9 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 
 - 普通用户 turn 结束后只记录 dirty/counter，不直接触发 memory LLM sidecar。
 - `memoryMaintenance` 是内置后台 scheduler，不依赖也不会写入 `workspace/events/`。
-- 三类后台任务（session refresh / memory checkpoint / structural maintenance）在调用 LLM 前都有本地 gate；无新内容、channel 仍活跃、未到阈值或未到间隔时不会调用 LLM。内置间隔为 session refresh 10 分钟、memory checkpoint 20 分钟、structural maintenance 6 小时，channel 静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个 channel。
-- durable 写入有一道固定的置信度闸门（`0.85`），**前台边界固化与后台 checkpoint 共用**同一条提炼路径和同一道闸门。被拒绝的候选会记进 `memory-review.jsonl` 的 `skipped`，素材本身仍保留在 `HISTORY.md` 和冷存储里。
-- `MEMORY.md` cleanup 有缩水保护：原文超过 2000 字符时，结果若缩到原文 40% 以下则拒绝写入，防止一次坏结果覆盖掉整份记忆。
+- spec 050 起只有一个后台任务——反思（reflect），取代此前的 session refresh / memory checkpoint / structural maintenance 三个 job。调用 LLM 前有本地 gate：无新内容、channel 仍活跃、未到间隔时不会调用 LLM。内置间隔为 20 分钟，channel 静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个 channel。
+- durable 写入有一道固定的置信度闸门（`necessity: high` 且 `confidence ≥ 0.85`），**当场写入（`memory_save`）与后台反思共用**同一套判定标准；`necessity: medium` 的 `add` 以 30 天试用期写入（`confidence ≥ 0.9`）。被拒绝的候选会记进 `memory-review.jsonl`，素材本身仍保留在冷存储里。
+- 记忆是一条一文件，没有整份 `MEMORY.md` 重写导致的缩水风险——每次写入只影响被 `add`/`update`/`delete` 点名的那个 `name`，索引文件只是从这些文件生成的只读投影。
 - `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
 - workspace skill 只能通过显式的 `write`/`edit` 调用创建/更新（`skill` 工具本身只读），后台记忆管线不会自动写 skill。
 
@@ -1149,26 +1145,25 @@ web 工具的代理顺序是：
 
 | 文件 | 用途 |
 |------|------|
-| `SESSION.md` | 当前工作态 |
-| `MEMORY.md` | 会话通道级持久记忆 |
-| `HISTORY.md` | 更早上下文的摘要 |
+| `memory/<name>.md` | 一条记忆一个文件（frontmatter：`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`） |
+| `memory/.tombstones.jsonl` | 遗忘防复活记录，只保存 name/content hash，不保存原文 |
+| `MEMORY.md` | 从 `memory/*.md` 生成的索引，勿手改 |
+| `journal/YYYY-MM-DD.md` | 按天追加的工作记录，只由后台反思写 |
 | `context.jsonl` | 会话事件冷存储 |
 | `log.jsonl` | 原始运行日志 |
 | `log.jsonl.1` | 原始运行日志的轮转备份，存在时可被 `session_search` 检索 |
-| `memory-review.jsonl` | 自动写回、suggestion、skipped 决策的审计文件 |
-| `.memory/entries.json` | entry metadata、来源、状态与召回统计；可从 `MEMORY.md` 重建 |
-| `.memory/tombstones.jsonl` | 遗忘防复活记录，只保存 entry id/content hash，不保存原文 |
+| `memory-review.jsonl` | 反思/工具写回的动作、suggestion、skipped 决策的审计文件 |
+| `.memory-v1/` | v1→v2 迁移时原样搬来的旧文件，不删除 |
+| `.migrated-v2` | 迁移完成标记 |
 | `subagent-runs.jsonl` | 子代理运行摘要 |
 | `subagent-artifacts/<runId>/` | 委派完整产出；外部 run 还含 prompt、协议事件与 stderr |
 
-记忆分层：
+记忆分层（spec 050）：
 
-- `SESSION.md`：当前工作态，由 runtime 在边界保存和后台 session refresh job 中维护。
-- `MEMORY.md`：durable channel facts、决策、偏好、约束和中期 open loops。
-- `.memory/entries.json`：`MEMORY.md` 条目的可观测性 sidecar；召回以 entry id 计数，并用查询 hash 统计 query diversity。
-- `HISTORY.md`：compaction、`/new`、shutdown 等边界上的旧阶段摘要；后台 durable consolidation 默认不写它。
-- `context.jsonl` / `log.jsonl` / `log.jsonl.1`：冷存储，只通过 `session_search` 显式检索，不进入普通 turn-time recall。
-- `${PIPICLAW_HOME}/state/memory/<channelId>.json`：内置 scheduler 的 hidden state，只记录 dirty、阈值计数、上次运行时间和 backoff，不作为 recall 来源。
+- `memory/*.md` + 生成的 `MEMORY.md`：durable channel facts、决策、偏好、约束。索引会话首轮整份注入，元数据内联在各自的 frontmatter 里，没有独立的 sidecar metadata 文件。
+- `journal/YYYY-MM-DD.md`：按天的工作记录，只由后台反思写；只有未来仍有用的事实会从 journal 提炼进 memory，一次性进度不会。
+- `context.jsonl` / `log.jsonl` / `log.jsonl.1`：冷存储，只通过 `session_search` 显式检索，不进入首轮注入。
+- `${PIPICLAW_HOME}/state/memory/<channelId>.json`：内置 scheduler 的 hidden state，只记录 dirty、上次运行时间和 backoff，不是记忆来源。
 - `${PIPICLAW_HOME}/state/subagent-runs/<channelId>/<runId>.json`：委派权威状态、pid、argv 和结算/唤醒幂等标记；频道内 `subagent-runs.jsonl` 只是摘要。目录名按 workspace 的规则转义（`/` → `__`）；启动对账从记录内容读回真实 channelId，早期版本写在未转义路径下的记录会在下次启动时自动迁移到规范目录。
 
 ## 常见问题（Frequently Asked Questions）

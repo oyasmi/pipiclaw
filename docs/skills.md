@@ -22,7 +22,7 @@ Pipiclaw 只支持工作区级 skills，不存在频道级 skill 目录。同一
 
 不适合写成 skill：
 
-- 单次任务的当前进度：写进任务台账或 `SESSION.md`
+- 单次任务的当前进度：写进任务台账或 journal
 - 永远适用的团队规则：写进 `AGENTS.md`
 - 稳定事实和偏好：写进 `MEMORY.md`
 - reviewer、builder 这类需要独立上下文或独立执行器的角色：写进 `sub-agents/`

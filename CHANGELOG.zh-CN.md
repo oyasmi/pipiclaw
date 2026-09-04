@@ -4,6 +4,10 @@
 
 ## [未发布]
 
+### 变更
+
+- **记忆 v2（spec 050）：核心记忆子系统从零重做。** 原有的 5 层、约 6900 行的设计（`SESSION.md`/`MEMORY.md`/`HISTORY.md`，每轮都做词法召回打分并可选 LLM 重排，三个独立调度的维护 job）被替换为三样东西：一条事实一个文件的频道记忆（`memory/<name>.md`，frontmatter 元数据，生成的 `MEMORY.md` 索引，永远不手改）、按天的日志（`journal/YYYY-MM-DD.md`，只由后台反思 pass 写）、以及只由人维护的共享 workspace `MEMORY.md`/`ENVIRONMENT.md`（不变——仍然没有任何工具能写它们）。每轮实时召回被彻底取消（D1）：channel 索引和当天 journal 尾部只在会话首轮注入一次（`/new` 之后、压缩之后同样重新注入一次），中途怀疑"这事以前可能记过"时用 `memory_search`。`memory_save` 新增 `type`（`user`/`feedback`/`project`/`reference`），并改为基于相似度的冲突检测（`replaces: <name>` 或 `"none"`），取代旧版自由文本的 `supersedes`；`memory_forget` 改为按精确 `name` 删除。三个旧后台 job 合并成一个**反思（reflect）**pass，一次调用同时产出 journal 新增行和 memory 的增/改/删/touch，30 天试用期写入机制保留，但转正信号从"被召回"改为"被反思 pass touch"（因为不再有每轮召回）。子代理的 `memory: session|relevant` 改为 `memory: none|index`（旧值仍可加载，会带一条退役警告，统一映射为 `index`）。**迁移是自动、确定性且可逆的**：升级后频道首次被使用时，旧文件会原样移入 `.memory-v1/`（不删除）并转换成新布局；回滚时把它们移回原位，删除 `memory/`、`journal/`、生成的 `MEMORY.md` 和 `.migrated-v2` 标记即可。已退役的 `settings.json` 字段：整段 `memoryRecall.*` 和整段 `sessionMemory.*`（均已列入 `RETIRED_SETTINGS_KEYS`，启动时会警告，留着不会导致启动失败，可以直接删掉）。
+
 ## [0.9.2] - 2026-08-30
 
 0.9.2 是一个里程碑版本——它是一次有意为之的「做减法 + 加固」，而非堆功能。五份设计 spec 一起落地：正确性不再依赖子进程文本捕获的原生文件 I/O（044）、把工具 schema 分区到「非法字段组合根本无法表达」（046、047）、能把整个栈离线零 API 成本跑起来的确定性端到端套件（048），以及关闭一次静默数据丢失事故的入站图片支持（049）。围绕它们的是任务控制 v3、消除一处 P0 唤醒死锁的统一任务验收路径、一轮大范围的委派安全加固、基于 115 条真实 run 上调的子代理预算，以及一次保持结构等价的质量整理。贯穿始终的主线是：把运行时的契约缩小到「显然正确」，并让剩下的失败变响而非变静默。

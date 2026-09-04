@@ -10,7 +10,7 @@ Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-wor
 - `src/channel/`: the transport-neutral channel domain — its two I/O contracts (`channel-context` outbound, `channel-event` inbound), identity (`channel-paths`, `channel-index`) and persisted state (`store`, `active-session-store`, `project-scope-store`). Depends on no transport; this is what `agent`, `memory`, `tools` and `tui` mean when they say "channel"
 - `src/agent/`: main agent orchestration and session event handling
 - `src/commands/`: the product-wide slash-command catalog (`catalog.ts`) and the shared reply length budget (`reply-limits.ts`). Imports nothing; handlers stay in the layer that owns their state
-- `src/memory/`: channel memory lifecycle, consolidation, recall, session memory, and file helpers
+- `src/memory/`: one-fact-per-file channel memory, daily journal, and the single background reflect pass (spec 050)
 - `src/subagents/`: role discovery, internal/external execution, run lifecycle, harnesses, workspace leases, and delegation tools
 - `src/tools/`: tool implementations exposed to the coding agent
 - `src/security/`: command, path, and network guard configuration and enforcement helpers
@@ -24,10 +24,9 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 
 - App-level files: `channel.json`, `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`
 - Workspace-level files: `SOUL.md`, `AGENTS.md`, `MEMORY.md`, `ENVIRONMENT.md`, `skills/`, `events/`, `sub-agents/`
-- Channel-level files: `SESSION.md`, `MEMORY.md`, `HISTORY.md`, tasks, delegation records/artifacts, `log.jsonl`, `context.jsonl`
-- `SESSION.md` is the current working state
-- `MEMORY.md` is durable channel memory
-- `HISTORY.md` is summarized older history
+- Channel-level files: `memory/<name>.md` + generated `MEMORY.md` index, `journal/YYYY-MM-DD.md`, tasks, delegation records/artifacts, `log.jsonl`, `context.jsonl`
+- `memory/<name>.md` is one durable fact per file (frontmatter metadata); `MEMORY.md` is generated from it — never hand-edited
+- `journal/YYYY-MM-DD.md` is the day-by-day working record, written only by the background reflect pass
 - `log.jsonl`, rotated logs, and `context.jsonl` are cold storage, not normal working memory; access them through `session_search` when needed
 
 ## Development Commands

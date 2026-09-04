@@ -33,7 +33,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-paths.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts`、`project-scope-store.ts` |
 | `src/agent/` | 单频道 agent 编排：组装 SDK 会话、跑一轮、流式回传 | `channel-runner.ts`（核心编排器）、`session-events.ts`、`prompt/`（system prompt 流水线）、`model-fallback.ts` |
 | `src/commands/` | 全产品斜杠命令目录与共享回复预算；零 import，命令处理器仍留在各自的状态所有者层 | `catalog.ts`、`reply-limits.ts` |
-| `src/memory/` | 分层记忆子系统：召回、固化、门控维护流水线 | `lifecycle.ts`、`recall.ts`、`extraction.ts`、`consolidation.ts`、`scheduler.ts`、`maintenance-{jobs,gates,state}.ts`、`sidecar-worker.ts` |
+| `src/memory/` | 一条事实一文件的频道记忆 + 日志 + 单一反思 pass（spec 050） | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`migrate.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts` |
 | `src/tools/` | 交给 agent 的工具集，单一声明式注册表 | `registry.ts`（唯一事实源）、各 `create*Tool` |
 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
 | `src/subagents/` | 子代理发现、run 生命周期（内置+外部统一）、workspace 写锁、外部 harness 适配器 | `discovery.ts`、`tool.ts`、`runs.ts`、`workspace-lease.ts`、`external/`（`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`exec.ts`） |
@@ -119,7 +119,7 @@ sequenceDiagram
     Q->>H: handleEvent（每频道严格串行）
     H->>H: 归档到 log.jsonl；内建命令(/status /tasks /events /usage…)直接短路
     H->>R: runner.run(ctx, store)
-    R->>R: 组装 prompt：<br/>① 首轮记忆引导(MEMORY.md×2)<br/>② 任务摘要 task digest<br/>③ 记忆召回 recall(+可选模型重排)<br/>④ 用户消息
+    R->>R: 组装 prompt：<br/>① 首轮才有：memory_bootstrap(workspace MEMORY.md+channel 索引+当天 journal)<br/>② 任务摘要 task digest<br/>③ 用户消息
     R->>R: 预防性压缩判断（投影 token 超阈值则先 compact）
     R->>S: session.prompt()（带模型 fallback 链）
     loop agent 循环
@@ -163,8 +163,7 @@ sequenceDiagram
 |---|---|---|---|
 | `ChannelQueue` | `runtime/channel-queue.ts`（由 dingtalk 传输消费） | **轮次**：一个频道同时只处理一条消息，后续消息排队（用户消息上限 20、事件上限 5） | 每频道 |
 | `RunQueue`（`createRunQueue`） | `agent/run-queue.ts` | **一轮之内的出站投递调用**：进度/通知按序发往钉钉 API，错误只记日志不打断轮次 | 每轮 |
-| `ChannelMemoryQueue` | `memory/channel-maintenance-queue.ts` | **同一频道的记忆写**：inline 固化（lifecycle）与后台维护（maintenance-jobs）共用**进程级单例**，绝不能各自内联，否则两条路径会争写同一批记忆文件 | 每频道（跨子系统共享） |
-| `sessionRefreshQueue` | `memory/lifecycle.ts` | SESSION.md 刷新 | 每频道 |
+| `ChannelMemoryQueue` | `memory/channel-maintenance-queue.ts` | **同一频道的记忆写**：边界反思（lifecycle）、后台反思（reflect-job）、`/memory` 命令共用**进程级单例**，绝不能各自内联，否则几条路径会争写同一批记忆文件 | 每频道（跨子系统共享） |
 | `ChannelStore.writeQueue` | `channel/store.ts` | `log.jsonl` 追加与轮转 | 每频道 |
 | `DurableDispatchService.queue` | `runtime/durable-dispatch.ts` | 外发箱记录的读写 | 每记录 id |
 | `SubAgentRunManager.queue` | `subagents/runs.ts` | 一个 run 的 register/settle/cancel：保证结算、记账、唤醒各只发生一次（三个幂等标记见下） | 每 runId（manager 本身每频道一个单例） |
@@ -176,67 +175,68 @@ sequenceDiagram
 
 **忙态的单一所有者是 Runner 的轮次状态机**（`agent/types.ts` 的 `TurnPhase`：`idle → dispatching → preparing → streaming → finishing`）。传输层在派发消息的同一 tick 内同步调用 `runner.beginTurn()`、结束后 `endTurn()`；钉钉的忙时路由、TUI 的轮次控制、调度器的 `isChannelActive`、`/status` 全部从 `runner.isBusy()/getTurnStatus()` 派生，不再各持一份 flag。steer 窗口判断也单点化在 runner 的 `assertBusyWindowOpen`。
 
-## 6. 记忆子系统（`src/memory/`）
+## 6. 记忆子系统（`src/memory/`，spec 050）
 
-分层结构，**不要摊平**——每层有独立职责与独立测试。
+三件东西，每件只有一个真相：频道记忆（一条事实一个文件）、按天的日志、以及只由人维护的 workspace 共享背景。规模定位是个人/小团队自托管的几十到几百条，所以不做检索打分——会话开始时把索引整份交给模型，之后靠 `memory_search` 按需补查。
 
 ### 6.1 每频道的记忆文件
 
 | 文件 | 内容 | 写入者 | 是否预载入上下文 |
 |---|---|---|---|
-| `SESSION.md` | 当前工作状态（标题/意图/活动文件/决策/约束/纠错/下一步/工作日志） | 运行时刷新（LLM sidecar） | 否，按需 read |
-| `MEMORY.md` | 持久事实、决策、偏好（条目带 `<!--id:m-xxxx-->`） | 固化流程追加；首轮引导注入 | 首轮引导注入一次 |
-| `HISTORY.md` | 折叠后的较旧历史摘要块 | 固化流程追加/折叠 | 否 |
+| `memory/<name>.md` | 一条记忆一个文件；frontmatter 是唯一元数据（`name`/`description`/`type`/`source`/`created`/`updated`/`expires?`），正文可选 | `memory_save` / 后台反思 pass / 人手编辑 | 否，`read` 单条打开 |
+| `MEMORY.md` | 从 `memory/*.md` **生成**的索引，人也能直接看 | `store.ts` 每次写入后重建；启动时若缺失也重建（按 mtime 缓存） | 会话首轮（含 `/new` 之后、压缩之后）整份注入，超预算按类型分层 |
+| `journal/YYYY-MM-DD.md` | 按天追加的工作记录（发生了什么、定了什么、卡在哪） | 只有后台反思 pass 写 | 首轮注入当天尾部 |
+| `memory/.tombstones.jsonl` | 已遗忘记忆的 name + 内容哈希（不含原文），防止反思把同一件事又写回来 | `memory_forget` / `/memory forget` / reflect | 否 |
 | `log.jsonl` / `context.jsonl` | 冷存储：完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 工具检索 |
-| `.memory/entries.json` | MEMORY 条目 metadata、来源 entry ids、状态与召回统计 | files/recall | 否，可从 `MEMORY.md` 重建 |
-| `.memory/tombstones.jsonl` | 已遗忘条目的 id/hash（不含原文），防止自动复活 | memory_forget/files | 否 |
-| `.memory-backups/` | 记忆文件最近 5 份备份 | files.ts | — |
+| `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（只记有动作的行，纯 gate 跳过降级为 debug 日志） | `review-log.ts` | 否，人工排查用 |
 
-工作区级还有管理员维护的 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。系统提示词明确禁止 agent 用文件工具直接编辑频道 SESSION/MEMORY/HISTORY——只能走运行时串行化的维护路径或 `memory_save` / `memory_forget` 工具。
+工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实），**只由人手工维护**——从任何频道出发都没有一条自动写入路径能改到它们（私聊学到的不会漏到群里，群成员也改不到所有频道共享的背景）。系统提示词明确禁止 agent 用文件工具直接编辑频道 `memory/*.md`——只能走 `memory_save` / `memory_forget`（`MEMORY.md` 是生成物，文件工具的直接写入会被下一次索引重建覆盖）；`journal/` 完全不接受工具写入。
 
 ### 6.2 记忆的进与出
 
 ```mermaid
 flowchart LR
-    subgraph turn [每轮同步路径]
-        RECALL["recall.ts<br/>证据加权词法打分(中英文分词+中文三元组)<br/>+ 歧义时 LLM 重排(3s 超时,失败放行)"]
-        BOOT["bootstrap.ts<br/>首轮注入频道+工作区 MEMORY.md"]
+    subgraph turn [首轮 / 压缩后首轮]
+        BOOT["channel-runner.ts<br/>store.listMemoryEntries + index-budget<br/>+ 当天 journal 尾部 → render.ts"]
     end
 
-    subgraph boundary [会话边界（inline 固化）]
+    subgraph tools [显式工具，当回合生效]
+        SAVE["memory_save / memory_forget<br/>tools/memory-manage.ts"]
+    end
+
+    subgraph boundary [会话边界]
         LC["lifecycle.ts<br/>SDK 扩展钩子"]
-        CONS["consolidation.ts<br/>extraction.ts 统一提炼 → MEMORY.md 追加<br/>+ HISTORY.md 摘要块"]
     end
 
-    subgraph sched [后台维护（60s tick，逐频道轮转）]
-        GATES["maintenance-gates.ts<br/>纯函数门控：空闲/间隔/阈值/活跃"]
-        JOBS["maintenance-jobs.ts<br/>① session-refresh<br/>② memory-checkpoint(durable 固化)<br/>③ structural-maintenance(清理/折叠)"]
-        STATE["maintenance-state.ts<br/>state/memory/&lt;channel&gt;.json 打点"]
+    subgraph sched [后台调度（60s tick，逐频道轮转）]
+        GATES["maintenance-gates.ts<br/>shouldRunReflect：dirty/空闲/间隔/素材"]
+        JOB["reflect-job.ts<br/>增量窗口 → reflect.ts"]
+        STATE["maintenance-state.ts<br/>state/memory/&lt;channel&gt;.json"]
     end
 
+    REFLECT["reflect.ts<br/>journal 行 + memory ops(add/update/delete/touch)<br/>档位/上限/user-source 保护/name 解析在这里做"]
+    STORE["store.ts<br/>applyMemoryOps → 写文件 → 重建索引"]
     SIDE["sidecar-worker.ts<br/>独立 LLM 调用：超时+重试+记账"]
 
-    BOOT -->|首轮 entry ids| DEDUPE[按候选/条目 id 去重]
-    RECALL --> DEDUPE --> PROMPT[本轮 prompt]
-    LC -->|compact 前 / new session 前 / shutdown| CONS
-    GATES --> JOBS --> CONS
-    JOBS --> SIDE
-    CONS --> SIDE
+    BOOT -->|注入 memory_bootstrap| PROMPT[本轮 prompt]
+    SAVE --> STORE
+    LC -->|compact 前 / new session 前 / shutdown| REFLECT
+    GATES --> JOB --> REFLECT
+    REFLECT --> STORE
+    REFLECT --> SIDE
     LC -->|活动事件| STATE --> GATES
 ```
 
-- **入口（读）**：channel `MEMORY.md` 按 bullet/entry id 构造候选；每轮把召回结果包在 `<memory>` 类前缀里注入 prompt。首轮 bootstrap 先声明已注入的 entry ids，recall 排除这些候选，避免重复上下文；bootstrap pending 只在 prompt 确认提交后清除。recall 只读一次 `.memory/entries.json` 做打分与 `recordMemoryRecall` 计数，不再对它做全量 reconcile——reconcile 是写路径（`applyChannelMemoryOps`/`rewriteChannelMemory`/`/memory` 命令）各自的职责，读路径用一份可能滞后的候选快照去 reconcile 正是 metadata 与 `MEMORY.md` 出现漂移的根源。`syncMemoryMetadata` 计算结果与磁盘已有内容字节相同时也跳过原子写，读多写少的召回热路径不再每轮都触发一次 `entries.json` 落盘。
-- **召回打分是"证据制"而非"覆盖率制"**：候选按匹配到的 query token 的**特异性质量**累加计分（token 越长、越罕见、越非停用词，权重越高；再按候选集内的文档频率轻度衰减），达到绝对阈值即入围。刻意**不按 query 长度归一**——早期实现用"命中 token 数 / query token 数"做门槛，导致用户消息越详细召回越少（一条 60 token 的提问即使点名了记忆主题也过不了 25% 覆盖率门槛）。中文额外发射三元组，让"包管理器"这类被贪心分词打散的复合词仍能整体匹配。
-- **召回宽、重排窄**：词法层负责不漏（宽入围），LLM 重排只负责裁剪。重排仅在入围数超过 `maxInjected` **且**本地排序不存在明显赢家时触发，3s 超时且失败即放行到本地排序——它在每轮的关键路径上，只能减少上下文，不能补救漏召回。重排选出空集合时不再直接返回空（那会把"重排过度谨慎"和"真的无关"混为一谈），而是保底返回本地排序第一名——shortlist 本身已经过了词法证据门槛，宁可多带一条可能无关的候选，也不要让本轮记忆整体清零。
-- **弱查询借用上一轮**（`findPreviousUserText` + `RecallRequest.contextQuery`）：纯指代型追问（"上次说的那个安排，代号是什么来着？"）自身的 token 打不到任何候选的证据门槛。只有当当前 query 自己一个候选都选不出来时，才会把上一轮用户消息（经 `stripInjectedMemoryContext` 剥离注入的 `<runtime_context>`/`<user_message>` 包装，避免召回自己召回过的内容）拼进去重新打分一次；只影响打分，不进 prompt 也不进召回指纹。当前 query 自己就能命中时这条路径完全不触发，零副作用。
-- **召回统计影响排序，但只是决胜局裁判**：`recallCount`/`queryFingerprints`（去重后的不同问法数，比原始次数更能代表"这事被反复问到"）、`necessity`（沿用提炼时打的 high/medium/low 标签，落盘进 `.memory/entries.json`）叠加成一个上限 +6 的小幅加成，agent 学到但超过 90 天没被召回过的条目再扣 2 分（用户明说要记的条目不受此惩罚）。整体只占结构分乘数的 10% 上限——词法证据仍然决定谁能入围，这只决定入围之后谁排前面。
-- **出口（写）**：固化只发生在明确边界——压缩前、`/new` 前（后台异步、快照先行）、关机 flush、以及后台维护 job。每次固化写 `review-log`（可审计）。
-- **`memory_save` 的冲突检测**：写入前复用 `memory_search` 同一条召回管道（`rerankWithModel: false`，确定性点查）查一遍频道已有记忆；命中一条分数达到高置信阈值的相似条目就不写入，转而报一个 `RecoverableToolError` 列出冲突条目 id，要求模型带上 `supersedes`（目标 id 或 `"none"`）重新调用。第二次调用必定执行，不会死循环。这把"改主意时先说'忘掉旧的'"从用户操作规程收窄成模型自己就能处理的纠正回路。
-- **只有一条提炼路径**（`extraction.ts`）：边界固化与空闲 checkpoint 共用同一个 prompt、同一份 JSON schema、同一套两档置信度闸门（`classifyMemoryWrite`，spec 037 D6）。此前多条路径各写各的 prompt，其中有的完全不设置信度门槛，于是 `MEMORY.md` 的质量由最不严谨的那条决定。调用方仍各自负责副作用：只有边界写 `HISTORY.md`。被闸门拒绝的候选不会静默消失——写进 `memory-review.jsonl` 的 `skipped`，且素材本身仍留在 `HISTORY.md` 与冷存储中。工具输出在 `sanitizeMessagesForMemory`（`transcript.ts`）就被剥离，是提炼输入的可信边界——`runMemoryExtraction` 看到的转写永远不含 `toolResult` 消息，因此不需要在窗口层再叠加一道"是否含工具输出"的过滤（2026-08-24 修复：曾经的窗口级过滤会连带封杀同窗口内 assistant 自己写下的可信内容，导致含工具调用的对话全部无法写入长期记忆）。
-- **提炼 prompt 里的现有条目列表按频道大小分流**：条目数 ≤40 时照旧全量渲染；超过 40 条时改成本地词法重叠打分（复用 `recall.ts` 的分词器，不拉起整条 recall 管道），只渲染与本次对话最相关的 top-20，加上全部 `sourceType: "user"` 的条目（用户明说要记的事实必须始终是 supersede 候选，不受相关性排序影响），并在 prompt 里注明"仅展示部分条目"。条目一多，供模型判断该 supersede 谁的输入本来就会被 8000 字符的裁剪吃掉尾部，相关性优先渲染让模型至少看到的是与本轮相关的那部分。
-- **两档写入 + 试用期**（spec 037）：`necessity: high` 且 `confidence ≥ 0.85` 永久写入（与此前一致）；`necessity: medium` 且 `confidence ≥ 0.9` 以 30 天试用期写入（`metadata.probationUntil`，每次固化最多 5 条），只对 `add` 生效——`supersede`/`invalidate` 永远要求永久档，避免覆盖/删除操作本身过期后复活旧内容。试用期条目在被召回一次（`recordMemoryRecall`）、被重复 add 命中（`applyChannelMemoryOps` 的 `skippedDuplicate` 分支）、或被永久 supersede 替换时转正；从未转正的条目由 `structural-maintenance` job 里的确定性前置步骤（`probation.ts`）用 `invalidate`（不是 `forget`）清理——不留墓碑，同一事实之后仍可被重新学到。
-- **调度器**（`scheduler.ts`）每 tick 轮转选取不活跃频道（`maxConcurrentChannels` 上限），三个 job 按优先级依次尝试，**先跑成一个就停**；每个 job 先过各自的确定性 gate（空闲时长、距上次运行间隔、素材是否有意义、夜间窗口等），gate 不放行则零 LLM 成本。频道上下文的取法：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的**磁盘冷上下文**（SessionManager 直读 context.jsonl + mtime/size 缓存），不会为历史频道复活完整 Runner。
-- **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、最多 2 次尝试、JSON 解析校验、用量记入账本（kind=`sidecar`）。记忆 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次维护结果；重复的纯 gate-skip 审计会合并降噪。
+- **入口（读）**只有一条：会话首轮（`firstTurnMemoryBootstrapPending`，压缩后重新置位）把 `store.listMemoryEntries` 的结果交给 `index-budget.ts` 分层，和 workspace `MEMORY.md`、当天 journal 尾部一起用 `render.ts` 包成 `<memory_bootstrap>`。之后整个会话都不再重复注入——同一份索引反复出现在历史里既浪费 token 也会干扰模型读历史。中途新增/更新的记忆要到下一次首轮才可见，这是刻意接受的延迟：模型怀疑"以前可能记过"时用 `memory_search`。
+- **索引超预算时的分层**（`index-budget.ts`，装不下才触发，约 70–100 条以后）：`user`/`feedback` 类型永远全给（它们决定行为，条数天然少），`project`/`reference` 按 `updated` 降序填充直到预算，末尾补一行"还有 N 条，用 memory_search"。**没有相关性排序**——首轮的用户消息往往只是一句问候，拿它给几十条记忆打分没有意义。
+- **`memory_save` 的冲突检测**：写入前用 `search.ts` 的 Jaccard 相似度（`descriptionSimilarity`，阈值 0.6）在内存里比一遍频道已有记忆的 description；命中就报 `RecoverableToolError` 列出候选 `name`，要求模型带上 `replaces`（目标 name 或 `"none"`）重新调用。第二次调用必定执行，不会死循环。`memory_forget` 按 `name` 精确删除，不再做模糊文本匹配。
+- **反思是唯一的后台 LLM pass**（`reflect.ts`），取代了 v1 的三个 job：读一段增量对话窗口 + 当前索引全文 + workspace 背景（裁剪）+ 当天 journal，产出 journal 新增行和 memory ops（`add`/`update`/`delete`/`touch`）。**运行时守不变量，模型负责判断**——写入档位（`necessity: high` 且 `confidence ≥ 0.85` 永久；`necessity: medium` 且仅 `add` 时 `confidence ≥ 0.9` 以 30 天试用期写入）、每次上限（add ≤ 8 含试用 ≤ 5、delete ≤ 3）、`source: user` 的条目不可被自动删除（update 需要 `confidence ≥ 0.95` 且窗口内有用户消息）、name 解析（`update` 认不出的名字降级为 `add`）全部是 `reflect.ts` 里的确定性代码，不依赖模型自律；`store.applyMemoryOps` 再做一层机械保证（墓碑、密钥扫描、原子写）。触发点与 v1 完全一致：压缩前、`/new` 前（后台异步）、关机 flush、以及频道空闲后的调度 tick——只是现在只有一个 job，`lifecycle.ts` 的边界钩子和 `reflect-job.ts` 的空闲触发调用的是同一个 `reflect.ts`。
+- **试用期转正信号从"被召回"改成"被 touch"**：v1 靠每轮召回记录使用次数；v2 索引首轮整份给出，"被注入"不再是有效信号。改为反思 pass 输出里的 `touch: [names]`——模型读窗口时判断"这段对话依赖或印证了哪些既有记忆"，被 touch 一次即转正（清除 `expires`）。30 天内没有任何一次 pass 认为它相关，`store.expireProbationaryEntries`（反思开始前的确定性前置步骤）直接删除——不留墓碑，之后仍可被重新学到。
+- **`condense` 模式**：索引超预算触发过分层时，反思 prompt 会附加合并指令，delete 上限放宽到 8，鼓励把重叠的条目合并成一条更好的。没有单独的 condense job，只是同一次调用的一个开关。
+- **迁移**（`migrate.ts`）：daemon/TUI 在频道首次被使用时（`ChannelRunner.run()` 开头，早于任何一次首轮注入）跑一次确定性、不调用模型的迁移，把旧版 `MEMORY.md`/`HISTORY.md`/`SESSION.md` 转成 `memory/*.md` + `journal/`；原文件整份移到 `.memory-v1/`，不删除，写一个 `.migrated-v2` 标记防止重复迁移。新频道（没有任何旧文件）也会立刻打上标记，直接是 v2 布局。
+- **调度器**（`scheduler.ts`）每 tick 轮转选取不活跃频道（`maxConcurrentChannels` 上限），单一 job（`reflect-job.ts`）先过确定性 gate（`shouldRunReflect`：`dirty`、空闲时长、距上次反思间隔、增量窗口是否有实质对话），gate 不放行则零 LLM 成本。频道上下文的取法不变：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的磁盘冷上下文。
+- **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、最多 2 次尝试、JSON 解析校验、用量记入账本（kind=`sidecar`）。反思的 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次结果。
+- **子代理的 `memory: index`**（spec 050 D12）注入与主 agent 首轮相同的三段（workspace 背景 + 频道索引 + 当天 journal），预算减半，不做每次调用的 LLM 召回；旧的 `memory: session|relevant` 仍可加载，discovery 时映射为 `index` 并给出警告。
 
 ## 7. 持久任务与定时事件
 
@@ -316,7 +316,13 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │   ├── CHANNELS.md                # runtime 维护的频道索引（ID / 名称 / 最近消息 / 主题）
 │   ├── skills/  sub-agents/  events/
 │   └── <channelId>/               # dm_* / group_*，每频道一目录
-│       ├── SESSION.md  MEMORY.md  HISTORY.md
+│       ├── memory/<name>.md       # 一条记忆一个文件（frontmatter 元数据）
+│       ├── memory/.tombstones.jsonl # 已遗忘记忆的 name + 内容哈希
+│       ├── MEMORY.md              # 生成的记忆索引（勿手改，写入后自动重建）
+│       ├── journal/YYYY-MM-DD.md  # 按天追加的工作记录，只由反思 pass 写
+│       ├── memory-review.jsonl    # 反思/工具写入的动作与拒绝原因审计
+│       ├── .memory-v1/            # v1→v2 迁移时原样搬来的旧文件（SESSION/MEMORY/HISTORY.md 等），不删除
+│       ├── .migrated-v2           # 迁移完成标记，防止重复迁移
 │       ├── log.jsonl  context.jsonl  .channel-meta.json
 │       ├── subagent-runs.jsonl     # 委派执行摘要
 │       ├── subagent-artifacts/<runId>/ # output.md；外部 run 另含 prompt/events/stderr
@@ -326,7 +332,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
     ├── events/history.jsonl       # 事件审计
     ├── jobs/<channelId>/          # 后台作业状态与输出索引
     ├── subagent-runs/<channelId>/ # 委派权威状态、pid、argv、幂等标记（目录名 `/` → `__`）
-    ├── memory/<channelId>.json    # 记忆维护打点状态
+    ├── memory/<channelId>.json    # 反思调度打点状态（单 job）
     ├── logs/runtime.jsonl         # 结构化运行日志
     └── usage/                     # 用量账本
 ```
@@ -352,7 +358,7 @@ runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(
 - **工具门控**：关闭 task_* 工具时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
 - **skills 完全交给 pi（spec 026 §9）**：`skillsOverride` 保留 ResourceLoader 中的 skills，`<available_skills>` 索引与 `/skill:name` 命令同源；Pipiclaw 只负责合并策略与诊断（workspace 覆盖同名 skill），不设 skills 预算、不产生超限 warning。`/context` 只观测 skills 体量（`estimateSkillsPromptChars` 现位于 `prompt/manifest.ts`）。
 - **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`runtime/events.ts`），普通对话不再长期携带。TASK_DRIVER 的准确 task 文件与 playbook 路径继续由 `runtime/task-driver.ts` 的 trigger 给出。
-- **自动 turn context 单位上限（spec 026 §5.3）**：recall（1,800 units）、task agenda（600 units）、first-turn bootstrap（400 units）各有独立 unit 上限，与 settings 的 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`memory/recall.ts`、`memory/task-digest.ts`、`memory/bootstrap.ts`）。
+- **自动 turn context 单位上限（spec 026 §5.3）**：task agenda（600 units）、workspace 共享背景（500 units）、channel 记忆索引（1,400 units）、当天 journal 尾部（400 units）各有独立 unit 上限，与 settings 的 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`memory/task-digest.ts`、`memory/index-budget.ts`、`memory/render.ts`）。
 - **可观测**：`/context`（及 `/context detail`，忙碌时也可用）零 LLM 成本地列出各 section 的 units/chars、runtime-authored 合计、SOUL/AGENTS 独立预算、skills 归属和上一轮自动上下文 units；`PIPICLAW_DEBUG=1` 时 `last_prompt.json` 记录**实际发出的** system prompt 与 manifest。注意 `fingerprint` 只覆盖 Pipiclaw 自有 section（日志据此去重），provider 真正缓存的是含 pi tail 的整串，即 `finalPromptSha256`——date 每日一变会让整块 system prompt 重算。缓存效果结合用量账本里的 cacheRead/cacheWrite 观察。
 
 playbook 正文不进提示词，agent 触发时用 `read` 按需加载。

@@ -15,7 +15,7 @@ Pipiclaw 按**会话通道（channel）**隔离状态，每个通道有独立的
 | 私聊 | `dm_{staffId}` | 按发送者隔离 |
 | 群聊 | `group_{conversationId}` | 按群隔离 |
 
-你和同事分别私聊同一个实例，各自是独立通道；同一个人在两个群里交互，也是两个通道。同一个群里的所有成员则共享一个群通道，而不是每人建立一条独立会话。通道之间的对话历史、`SESSION.md` 和 channel 级 `MEMORY.md` 互不可见；workspace 根目录的 `MEMORY.md` 是所有通道都可读取的共享知识，不属于私密的 channel 记忆。
+你和同事分别私聊同一个实例，各自是独立通道；同一个人在两个群里交互，也是两个通道。同一个群里的所有成员则共享一个群通道，而不是每人建立一条独立会话。通道之间的对话历史、`journal/` 和 channel 级 `memory/`/`MEMORY.md` 互不可见；workspace 根目录的 `MEMORY.md` 是所有通道都可读取的共享知识，不属于私密的 channel 记忆。
 
 ## 并发模型（Concurrency Model）
 
@@ -65,7 +65,7 @@ channel 隔离的是会话状态，不会自动复制或锁住项目 checkout。
 
 CPU、磁盘 I/O 在个人与小团队规模下通常不是主瓶颈；内存上每个通道常驻约几 MB 到几十 MB，随对话长度增长。重型外部角色会额外启动完整 coding-agent 进程，其 CPU、内存、子进程和网络占用由目标 CLI 决定。成本可用 `/usage` 查看，但 Codex CLI 不报告成本、`exec` 不报告 token 或成本，报告中的 unknown 不能当成 0。
 
-**通道 Runner 有空闲 LRU 驱逐。** 单个 daemon 的 Runner 缓存目标上限是 50；创建新 channel 的 Runner 并超过上限时，会优先释放最久未使用且当前空闲的 Runner，忙碌 Runner 不会被中途销毁。释放只清理内存中的 session、订阅和维护状态，持久化的会话、`MEMORY.md`、`HISTORY.md` 等不受影响。若同时忙碌的通道很多，缓存可暂时超过 50；它们空闲后，会在后续创建新 channel Runner 时再次参与回收。
+**通道 Runner 有空闲 LRU 驱逐。** 单个 daemon 的 Runner 缓存目标上限是 50；创建新 channel 的 Runner 并超过上限时，会优先释放最久未使用且当前空闲的 Runner，忙碌 Runner 不会被中途销毁。释放只清理内存中的 session、订阅和维护状态，持久化的会话、`memory/*.md`、`journal/` 等不受影响。若同时忙碌的通道很多，缓存可暂时超过 50；它们空闲后，会在后续创建新 channel Runner 时再次参与回收。
 
 **单 WebSocket 连接是单点。** 所有通道共享一条钉钉连接，断开时全部通道暂停收发直到重连完成。运行时自己接管重连：重连前清理旧 socket，对长时间无响应的连接强制终止后按退避重试，降低复杂网络下僵尸连接叠加的风险。日志里频繁出现 reconnect / forced termination 时优先排查网络或代理层。
 
