@@ -5,8 +5,8 @@ import { Type } from "typebox";
 import * as log from "../log.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory/channel-maintenance-queue.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
-import { containsSecret } from "../memory/secret-redaction.js";
 import { findNearDuplicateEntries, searchMemory } from "../memory/search.js";
+import { containsSecret } from "../memory/secret-redaction.js";
 import {
 	applyMemoryOps,
 	isValidMemoryName,
@@ -30,15 +30,22 @@ const memorySaveSchema = Type.Object({
 		description: "The durable fact as one self-contained line. Becomes the memory's description and index entry.",
 	}),
 	name: Type.Optional(
-		Type.String({ description: "Short kebab-case handle, e.g. `deploy-window-thursday`. Auto-generated if omitted." }),
-	),
-	type: Type.Optional(
-		Type.Union(MEMORY_TYPES.map((t) => Type.Literal(t)), {
-			description:
-				"user (who the user is), feedback (how to work / lessons), project (facts, decisions, constraints), reference (pointers). Default: project.",
+		Type.String({
+			description: "Short kebab-case handle, e.g. `deploy-window-thursday`. Auto-generated if omitted.",
 		}),
 	),
-	details: Type.Optional(Type.String({ description: "Optional long form, shown only when the file is opened with `read`." })),
+	type: Type.Optional(
+		Type.Union(
+			MEMORY_TYPES.map((t) => Type.Literal(t)),
+			{
+				description:
+					"user (who the user is), feedback (how to work / lessons), project (facts, decisions, constraints), reference (pointers). Default: project.",
+			},
+		),
+	),
+	details: Type.Optional(
+		Type.String({ description: "Optional long form, shown only when the file is opened with `read`." }),
+	),
 	replaces: Type.Optional(
 		Type.String({
 			description:
@@ -48,11 +55,15 @@ const memorySaveSchema = Type.Object({
 });
 
 const memorySearchSchema = Type.Object({
-	query: Type.String({ description: "What to look for across this channel's memory, journal, and workspace MEMORY.md." }),
+	query: Type.String({
+		description: "What to look for across this channel's memory, journal, and workspace MEMORY.md.",
+	}),
 });
 
 const memoryForgetSchema = Type.Object({
-	name: Type.String({ description: "The exact `name` of the memory to remove (see the memory index or memory_search)." }),
+	name: Type.String({
+		description: "The exact `name` of the memory to remove (see the memory index or memory_search).",
+	}),
 });
 
 export interface MemoryManageToolOptions {
@@ -75,7 +86,13 @@ async function readWorkspaceMemory(workspaceDir: string): Promise<string> {
 }
 
 interface MemoryToolClosures {
-	save: (args: { content: string; name?: string; type?: MemoryType; details?: string; replaces?: string }) => Promise<ReturnType<typeof textResult>>;
+	save: (args: {
+		content: string;
+		name?: string;
+		type?: MemoryType;
+		details?: string;
+		replaces?: string;
+	}) => Promise<ReturnType<typeof textResult>>;
 	search: (args: { query: string }) => Promise<ReturnType<typeof textResult>>;
 	forget: (args: { name: string }) => Promise<ReturnType<typeof textResult>>;
 }
@@ -83,7 +100,13 @@ interface MemoryToolClosures {
 function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosures {
 	const queue = options.channelMemoryQueue ?? getDefaultChannelMemoryQueue();
 
-	async function save(args: { content: string; name?: string; type?: MemoryType; details?: string; replaces?: string }) {
+	async function save(args: {
+		content: string;
+		name?: string;
+		type?: MemoryType;
+		details?: string;
+		replaces?: string;
+	}) {
 		const content = args.content.trim();
 		if (!content) {
 			throw new RecoverableToolError("memory_save requires a non-empty content; nothing was saved.");
@@ -116,7 +139,14 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		const result = await queue.run(options.channelId, () =>
 			applyMemoryOps(options.channelDir, [
 				replaces
-					? { op: "update", name: replaces, description: content, type: args.type, details: args.details, expires: null }
+					? {
+							op: "update",
+							name: replaces,
+							description: content,
+							type: args.type,
+							details: args.details,
+							expires: null,
+						}
 					: {
 							op: "add",
 							description: content,
@@ -157,9 +187,12 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		]);
 		const hits = searchMemory({ query: trimmed, entries, workspaceMemory });
 		if (hits.length === 0) {
-			return textResult(`No stored memory matched "${trimmed}". Try a broader query, or the fact may not be saved yet.`, {
-				resultCount: 0,
-			});
+			return textResult(
+				`No stored memory matched "${trimmed}". Try a broader query, or the fact may not be saved yet.`,
+				{
+					resultCount: 0,
+				},
+			);
 		}
 		const rendered = hits
 			.map((hit) => {

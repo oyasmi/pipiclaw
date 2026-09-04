@@ -51,7 +51,9 @@ describe("assembleTurnPrompt", () => {
 
 	describe("preserveRawInput", () => {
 		it("forwards the input byte-for-byte so the SDK's command table still matches", () => {
-			const { text } = assembleTurnPrompt(parts({ clippedInput: "/compact keep decisions", preserveRawInput: true }));
+			const { text } = assembleTurnPrompt(
+				parts({ clippedInput: "/compact keep decisions", preserveRawInput: true }),
+			);
 			expect(text).toBe("/compact keep decisions");
 		});
 

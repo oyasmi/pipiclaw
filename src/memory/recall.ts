@@ -1,11 +1,9 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Message, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import * as log from "../log.js";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { countPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage, HAN_REGEX } from "../shared/text-utils.js";
-import { buildStandardMessages } from "../shared/type-guards.js";
 import {
 	buildMemoryCandidates,
 	createMemoryCandidateStore,
@@ -15,7 +13,6 @@ import {
 import { COMMON_CHINESE_WORDS } from "./chinese-words.js";
 import { type MemoryEntryMetadata, readMemoryMetadata, recordMemoryRecall } from "./metadata.js";
 import { runSidecarTask } from "./sidecar-worker.js";
-import { stripInjectedMemoryContext } from "./transcript.js";
 
 export interface RecallRequest {
 	query: string;
@@ -90,8 +87,6 @@ Rules:
 
 const TOKEN_PART_REGEX = /[\p{Script=Han}]+|[\p{L}\p{N}_./-]+/gu;
 const ASCII_SPLIT_REGEX = /[._/-]+/g;
-/** Automatic-context share for relevant memory recall (spec 026 §5.3). */
-export const MEMORY_RECALL_MAX_UNITS = 1_800;
 // Rerank sits on the turn's critical path and can only ever narrow the shortlist, so it
 // gets a short leash and fails open to the local ranking.
 const MEMORY_RECALL_RERANK_TIMEOUT_MS = 3_000;
@@ -108,26 +103,6 @@ const CLOSE_SCORE_DELTA = 3;
  */
 const MIN_MATCH_EVIDENCE = 2.5;
 
-function extractUserMessageText(message: Message & { role: "user" }): string {
-	if (typeof message.content === "string") return message.content;
-	return message.content
-		.filter((part): part is { type: "text"; text: string } => part.type === "text")
-		.map((part) => part.text)
-		.join("\n");
-}
-
-/** The most recent user turn, with injected memory/context wrappers stripped (see `transcript.ts`). */
-export function findPreviousUserText(messages: AgentMessage[]): string | undefined {
-	const standard = buildStandardMessages(messages);
-	for (let index = standard.length - 1; index >= 0; index--) {
-		const message = standard[index];
-		if (message?.role === "user") {
-			const text = stripInjectedMemoryContext(extractUserMessageText(message));
-			return text.length > 0 ? text : undefined;
-		}
-	}
-	return undefined;
-}
 /** Field the strongest match for a token was found in; a token scores once, at its best field. */
 const FIELD_WEIGHTS = { title: 1.4, content: 1, path: 0.7 } as const;
 const MAX_HAN_WORD_LENGTH = Array.from(COMMON_CHINESE_WORDS).reduce((max, word) => Math.max(max, word.length), 2);

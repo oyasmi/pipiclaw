@@ -107,10 +107,7 @@ export function clipWorkspaceMemoryForBootstrap(
 }
 
 /** Tail of a journal day, clipped to the injection budget (head dropped, newest kept). */
-export function clipJournalTailForBootstrap(
-	journalText: string,
-	maxUnits: number = JOURNAL_TAIL_MAX_UNITS,
-): string {
+export function clipJournalTailForBootstrap(journalText: string, maxUnits: number = JOURNAL_TAIL_MAX_UNITS): string {
 	const text = stripCrAndTrim(journalText);
 	if (!text) {
 		return "";

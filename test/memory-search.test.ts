@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { searchMemory } from "../src/memory/search.js";
 import {
 	descriptionSimilarity,
 	findNearDuplicateEntries,
+	searchMemory,
 	tokenizeRecallText,
 } from "../src/memory/search.js";
 import type { MemoryEntry } from "../src/memory/store.js";

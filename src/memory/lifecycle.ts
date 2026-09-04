@@ -25,6 +25,7 @@ import {
 	readMemoryMaintenanceState,
 	updateMemoryMaintenanceState,
 } from "./maintenance-state.js";
+import { isChannelMigratedToV2 } from "./migrate.js";
 import { appendMemoryReviewLog } from "./review-log.js";
 import { updateChannelSessionMemory } from "./session.js";
 import {
@@ -213,6 +214,10 @@ export class MemoryLifecycle {
 	}
 
 	private async refreshSessionMemory(request: SessionMemoryRefreshRequest): Promise<boolean> {
+		// Spec 050: SESSION.md is retired; the journal (P2) replaces it. No-op for migrated channels.
+		if (isChannelMigratedToV2(this.options.channelDir)) {
+			return false;
+		}
 		const settings = this.options.getSessionMemorySettings();
 		if (!settings.enabled) {
 			return false;
@@ -363,6 +368,10 @@ export class MemoryLifecycle {
 		settings: PipiclawSessionMemorySettings = this.options.getSessionMemorySettings(),
 		firstKeptEntryId?: string,
 	): Promise<void> {
+		// Spec 050: the v1 consolidation pass is retired; the reflect pass (P2) replaces it.
+		if (isChannelMigratedToV2(this.options.channelDir)) {
+			return;
+		}
 		if (this.shouldForceRefreshFor(reason, settings)) {
 			await this.runSessionRefreshSerial({
 				reason,

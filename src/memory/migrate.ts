@@ -5,13 +5,13 @@ import { join } from "node:path";
 import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { localDayKey, parseLocalTime } from "../shared/local-time.js";
 import {
+	dedupeMemoryName,
 	getChannelMemoryDir,
 	getChannelMemoryIndexPath,
 	getMemoryEntryPath,
 	type MemoryEntry,
 	type MemorySource,
 	type MemoryType,
-	dedupeMemoryName,
 	rebuildMemoryIndex,
 	serializeMemoryEntry,
 	slugifyMemoryName,
@@ -130,7 +130,9 @@ async function loadV1Metadata(channelDir: string): Promise<V1Metadata> {
 		return { byId, byContentHash };
 	}
 	try {
-		const parsed = JSON.parse(raw) as { entries?: Record<string, V1EntryRecord & { id?: string; contentHash?: string }> };
+		const parsed = JSON.parse(raw) as {
+			entries?: Record<string, V1EntryRecord & { id?: string; contentHash?: string }>;
+		};
 		for (const [id, record] of Object.entries(parsed.entries ?? {})) {
 			byId.set(id, record);
 			if (record.contentHash) {
@@ -255,7 +257,11 @@ function parseSessionMigratedBullets(raw: string): string[] {
 	return out;
 }
 
-async function writeJournalFile(channelDir: string, date: string, sections: Array<{ heading?: string; bullets: string[] }>): Promise<void> {
+async function writeJournalFile(
+	channelDir: string,
+	date: string,
+	sections: Array<{ heading?: string; bullets: string[] }>,
+): Promise<void> {
 	const nonEmpty = sections.filter((s) => s.bullets.length > 0);
 	if (nonEmpty.length === 0) {
 		return;
@@ -302,6 +308,14 @@ export async function migrateChannelMemoryToV2(
 		return { ...empty, reason: "already-migrated" };
 	}
 	if (!hasV1Layout(channelDir)) {
+		// A fresh channel is already v2 — drop the marker so the retired v1 writers stay disabled
+		// here too, and the startup pass does not re-scan it every launch.
+		await mkdir(getChannelMemoryDir(channelDir), { recursive: true });
+		await writeFile(
+			getMigrationMarkerPath(channelDir),
+			`${JSON.stringify({ migratedAt: today, fresh: true })}\n`,
+			"utf-8",
+		);
 		return { ...empty, reason: "nothing-to-migrate" };
 	}
 
@@ -335,7 +349,10 @@ export async function migrateChannelMemoryToV2(
 			.filter((word) => word.length > 1)
 			.slice(0, 6);
 		// A one-word slug ("ai", "user") is too generic to be a handle; hash instead.
-		const base = asciiWords.length >= 2 ? slugifyMemoryName(asciiWords.join(" ")) : `m-${createHash("sha1").update(bullet.content).digest("hex").slice(0, 6)}`;
+		const base =
+			asciiWords.length >= 2
+				? slugifyMemoryName(asciiWords.join(" "))
+				: `m-${createHash("sha1").update(bullet.content).digest("hex").slice(0, 6)}`;
 		const name = dedupeMemoryName(base, usedNames);
 		usedNames.add(name);
 
@@ -369,7 +386,13 @@ export async function migrateChannelMemoryToV2(
 						return [];
 					}
 					tombstoneCount++;
-					return [JSON.stringify({ contentHash: v.contentHash, deletedAt: v.deletedAt ?? today, reason: v.reason ?? "migrated" })];
+					return [
+						JSON.stringify({
+							contentHash: v.contentHash,
+							deletedAt: v.deletedAt ?? today,
+							reason: v.reason ?? "migrated",
+						}),
+					];
 				} catch {
 					return [];
 				}
@@ -399,7 +422,16 @@ export async function migrateChannelMemoryToV2(
 	]);
 
 	// archive v1 originals (never deleted)
-	for (const rel of ["MEMORY.md", "HISTORY.md", "HISTORY.archive.md", "HISTORY.archive.md.1", "SESSION.md", "SESSION.invalid-response.txt", ".memory", ".memory-backups"]) {
+	for (const rel of [
+		"MEMORY.md",
+		"HISTORY.md",
+		"HISTORY.archive.md",
+		"HISTORY.archive.md.1",
+		"SESSION.md",
+		"SESSION.invalid-response.txt",
+		".memory",
+		".memory-backups",
+	]) {
 		await moveToV1Archive(channelDir, rel);
 	}
 

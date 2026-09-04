@@ -1,13 +1,9 @@
-import { cp, readdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { cp, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-	isChannelMigratedToV2,
-	migrateChannelMemoryToV2,
-	rollbackChannelMemoryV2,
-} from "../src/memory/migrate.js";
+import { isChannelMigratedToV2, migrateChannelMemoryToV2, rollbackChannelMemoryV2 } from "../src/memory/migrate.js";
 import { clearMemoryStoreCache, listMemoryEntries } from "../src/memory/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -51,9 +47,9 @@ describe("memory migration v1 → v2", () => {
 		const entries = await listMemoryEntries(channelDir);
 		const role = entries.find((e) => e.description.includes("project manager"));
 		expect(role?.body).toContain("capture/inspect regularly");
-		expect(entries.some((e) => e.description === "capture/inspect regularly to track progress; step in when stuck")).toBe(
-			false,
-		);
+		expect(
+			entries.some((e) => e.description === "capture/inspect regularly to track progress; step in when stuck"),
+		).toBe(false);
 	});
 
 	it("routes Ongoing Work into today's journal, not memory", async () => {
@@ -113,11 +109,14 @@ describe("memory migration v1 → v2", () => {
 		expect(existsSync(join(channelDir, ".memory", "entries.json"))).toBe(true);
 	});
 
-	it("does nothing for a channel with no v1 layout", async () => {
+	it("marks a channel with no v1 layout as already-v2 without creating memory files", async () => {
 		const channelDir = createTempDir();
 		const result = await migrateChannelMemoryToV2(channelDir);
 		expect(result.migrated).toBe(false);
 		expect(result.reason).toBe("nothing-to-migrate");
-		expect(isChannelMigratedToV2(channelDir)).toBe(false);
+		// The marker is written so the retired v1 writers stay disabled and startup skips it.
+		expect(isChannelMigratedToV2(channelDir)).toBe(true);
+		const second = await migrateChannelMemoryToV2(channelDir);
+		expect(second.reason).toBe("already-migrated");
 	});
 });

@@ -19,7 +19,8 @@ describe("E2E deterministic: restart & persistence", () => {
 
 		await harness.sendUserMessage("请记住暗号 MARKER_XYZ_4242");
 		const sessionFile = join(harness.channelDir, "context.jsonl");
-		expect(existsSync(join(harness.channelDir, "SESSION.md"))).toBe(true);
+		// Spec 050: the channel is on the v2 memory layout (SESSION.md is retired).
+		expect(existsSync(join(harness.channelDir, "memory", ".migrated-v2"))).toBe(true);
 		const before = readFileSync(sessionFile, "utf-8").trim().split("\n");
 		const sessionId = JSON.parse(before[0]).id as string;
 		const lastPreRestartId = JSON.parse(before.at(-1)!).id as string;

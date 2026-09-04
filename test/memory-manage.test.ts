@@ -11,11 +11,18 @@ function makeOptions(channelDir: string, overrides: Record<string, unknown> = {}
 	return { channelId: "dm_1", channelDir, workspaceDir: channelDir, ...overrides };
 }
 const makeSave = (dir: string, o: Record<string, unknown> = {}) => createMemorySaveTool(makeOptions(dir, o) as never);
-const makeSearch = (dir: string, o: Record<string, unknown> = {}) => createMemorySearchTool(makeOptions(dir, o) as never);
-const makeForget = (dir: string, o: Record<string, unknown> = {}) => createMemoryForgetTool(makeOptions(dir, o) as never);
+const makeSearch = (dir: string, o: Record<string, unknown> = {}) =>
+	createMemorySearchTool(makeOptions(dir, o) as never);
+const makeForget = (dir: string, o: Record<string, unknown> = {}) =>
+	createMemoryForgetTool(makeOptions(dir, o) as never);
 
 async function run(
-	tool: { execute: (id: string, args: never) => Promise<{ content: Array<{ type: string; text?: string }>; details: unknown }> },
+	tool: {
+		execute: (
+			id: string,
+			args: never,
+		) => Promise<{ content: Array<{ type: string; text?: string }>; details: unknown }>;
+	},
 	args: Record<string, unknown>,
 ) {
 	const result = await tool.execute("call", args as never);
@@ -33,12 +40,18 @@ describe("memory tools", () => {
 		expect(details).toMatchObject({ saved: true, name: "user-prefers-chinese" });
 		const entries = await listMemoryEntries(channelDir);
 		expect(entries).toHaveLength(1);
-		expect(entries[0]).toMatchObject({ description: "User prefers responses in Chinese", type: "user", source: "user" });
+		expect(entries[0]).toMatchObject({
+			description: "User prefers responses in Chinese",
+			type: "user",
+			source: "user",
+		});
 	});
 
 	it("rejects a save with only whitespace content, an invalid name, or a secret", async () => {
 		const channelDir = createTempChannel();
-		await expect(makeSave(channelDir).execute("call", { content: "   " } as never)).rejects.toThrow(/non-empty content/);
+		await expect(makeSave(channelDir).execute("call", { content: "   " } as never)).rejects.toThrow(
+			/non-empty content/,
+		);
 		await expect(
 			makeSave(channelDir).execute("call", { content: "fact", name: "Bad Name" } as never),
 		).rejects.toThrow(/not a valid memory name/);
@@ -110,7 +123,12 @@ describe("memory tools", () => {
 	it("flags a near-duplicate save and accepts it once replaces is supplied", async () => {
 		const channelDir = createTempChannel();
 		await applyMemoryOps(channelDir, [
-			{ op: "add", name: "pkg-manager", description: "The team default package manager for installs is npm", source: "agent" },
+			{
+				op: "add",
+				name: "pkg-manager",
+				description: "The team default package manager for installs is npm",
+				source: "agent",
+			},
 		]);
 		await expect(
 			makeSave(channelDir).execute("call", {
@@ -146,4 +164,3 @@ describe("memory tools", () => {
 		).rejects.toThrow(/No memory named "ghost"/);
 	});
 });
-

@@ -65,12 +65,20 @@ describe("memory store — frontmatter round trip", () => {
 	});
 
 	it("file name wins over a disagreeing frontmatter name", () => {
-		const parsed = parseMemoryFile("real-name", "---\nname: other\ndescription: x\ntype: user\nsource: user\ncreated: 2026-09-01\n---\n", "2026-01-01");
+		const parsed = parseMemoryFile(
+			"real-name",
+			"---\nname: other\ndescription: x\ntype: user\nsource: user\ncreated: 2026-09-01\n---\n",
+			"2026-01-01",
+		);
 		expect(parsed.name).toBe("real-name");
 	});
 
 	it("tolerates a file with no frontmatter: first paragraph becomes the description", () => {
-		const parsed = parseMemoryFile("legacy", "The CI runner moved to GitHub Actions.\n\nMore detail here.", "2026-02-02");
+		const parsed = parseMemoryFile(
+			"legacy",
+			"The CI runner moved to GitHub Actions.\n\nMore detail here.",
+			"2026-02-02",
+		);
 		expect(parsed.description).toBe("The CI runner moved to GitHub Actions.");
 		expect(parsed.type).toBe("project");
 		expect(parsed.source).toBe("migrated");
@@ -80,7 +88,11 @@ describe("memory store — frontmatter round trip", () => {
 	});
 
 	it("collapses a multi-line description to one line", () => {
-		const parsed = parseMemoryFile("x", "---\ndescription: line one\ntype: user\nsource: user\ncreated: 2026-09-01\n---\n", "2026-01-01");
+		const parsed = parseMemoryFile(
+			"x",
+			"---\ndescription: line one\ntype: user\nsource: user\ncreated: 2026-09-01\n---\n",
+			"2026-01-01",
+		);
 		expect(parsed.description).toBe("line one");
 	});
 });
@@ -88,8 +100,16 @@ describe("memory store — frontmatter round trip", () => {
 describe("memory store — index generation", () => {
 	it("groups by type in canonical order, sorts by name, marks bodies with (+)", async () => {
 		const channelDir = createTempDir();
-		await seed(channelDir, "b-pref", "---\ndescription: no auto emoji\ntype: feedback\nsource: user\ncreated: 2026-09-01\n---\n");
-		await seed(channelDir, "a-lang", "---\ndescription: speak Chinese\ntype: user\nsource: user\ncreated: 2026-09-01\n---\n");
+		await seed(
+			channelDir,
+			"b-pref",
+			"---\ndescription: no auto emoji\ntype: feedback\nsource: user\ncreated: 2026-09-01\n---\n",
+		);
+		await seed(
+			channelDir,
+			"a-lang",
+			"---\ndescription: speak Chinese\ntype: user\nsource: user\ncreated: 2026-09-01\n---\n",
+		);
 		await seed(
 			channelDir,
 			"deploy",
@@ -115,11 +135,19 @@ describe("memory store — mtime cache", () => {
 		const channelDir = createTempDir();
 		await mkdir(getChannelMemoryDir(channelDir), { recursive: true });
 		const path = getMemoryEntryPath(channelDir, "x");
-		await writeFile(path, "---\ndescription: first\ntype: project\nsource: agent\ncreated: 2026-09-01\n---\n", "utf-8");
+		await writeFile(
+			path,
+			"---\ndescription: first\ntype: project\nsource: agent\ncreated: 2026-09-01\n---\n",
+			"utf-8",
+		);
 		clearMemoryStoreCache();
 		expect((await listMemoryEntries(channelDir))[0].description).toBe("first");
 
-		await writeFile(path, "---\ndescription: second\ntype: project\nsource: agent\ncreated: 2026-09-01\n---\n", "utf-8");
+		await writeFile(
+			path,
+			"---\ndescription: second\ntype: project\nsource: agent\ncreated: 2026-09-01\n---\n",
+			"utf-8",
+		);
 		const future = new Date(Date.now() + 5_000);
 		await utimes(path, future, future);
 		expect((await listMemoryEntries(channelDir))[0].description).toBe("second");
@@ -160,7 +188,9 @@ describe("memory store — applyMemoryOps", () => {
 		await applyMemoryOps(channelDir, [
 			{ op: "add", name: "p", description: "probationary", source: "agent", expires: "2026-10-04" },
 		]);
-		const result = await applyMemoryOps(channelDir, [{ op: "touch", names: ["p", "ghost"] }], { today: "2026-09-15" });
+		const result = await applyMemoryOps(channelDir, [{ op: "touch", names: ["p", "ghost"] }], {
+			today: "2026-09-15",
+		});
 		expect(result.touched).toEqual(["p"]);
 		expect(result.missingTarget).toBe(1);
 		clearMemoryStoreCache();

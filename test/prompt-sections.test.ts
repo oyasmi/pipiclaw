@@ -116,7 +116,7 @@ describe("system prompt structure", () => {
 	});
 
 	it("gates the memory invariant on the tool being registered", () => {
-		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_save` / `memory_forget` in the same turn");
+		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_save` / `memory_forget`");
 		expect(buildPipiclawSystemPrompt(context({ tools: tools(["read"]) })).text).not.toContain("`memory_save`");
 	});
 

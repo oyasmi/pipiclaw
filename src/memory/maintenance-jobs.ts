@@ -21,6 +21,7 @@ import {
 } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "./maintenance-state.js";
 import { readMemoryMetadata } from "./metadata.js";
+import { isChannelMigratedToV2 } from "./migrate.js";
 import { collectExpiredEntryIds, expireMemoryEntries } from "./probation.js";
 import { appendMemoryReviewLog, type MemoryReviewReason } from "./review-log.js";
 import { updateChannelSessionMemory } from "./session.js";
@@ -137,6 +138,11 @@ async function runQueued<T>(input: BaseMaintenanceJobInput, job: () => Promise<T
 }
 
 export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promise<MaintenanceJobResult> {
+	// Spec 050: SESSION.md and the v1 consolidation/structural passes are retired; the reflect
+	// pass (P2) replaces them. Migrated channels short-circuit every legacy job here.
+	if (isChannelMigratedToV2(input.channelDir)) {
+		return skipped("session-refresh", "retired-in-v2");
+	}
 	return runQueued(input, async () => {
 		const now = input.now ?? new Date();
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
@@ -210,6 +216,9 @@ export async function runSessionRefreshJob(input: SessionRefreshJobInput): Promi
 }
 
 export async function runMemoryCheckpointJob(input: MemoryCheckpointJobInput): Promise<MaintenanceJobResult> {
+	if (isChannelMigratedToV2(input.channelDir)) {
+		return skipped("memory-checkpoint", "retired-in-v2");
+	}
 	return runQueued(input, async () => {
 		const now = input.now ?? new Date();
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
@@ -307,6 +316,9 @@ export async function runMemoryCheckpointJob(input: MemoryCheckpointJobInput): P
 }
 
 export async function runStructuralMaintenanceJob(input: StructuralMaintenanceJobInput): Promise<MaintenanceJobResult> {
+	if (isChannelMigratedToV2(input.channelDir)) {
+		return skipped("structural-maintenance", "retired-in-v2");
+	}
 	return runQueued(input, async () => {
 		const now = input.now ?? new Date();
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);

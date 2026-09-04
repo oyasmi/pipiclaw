@@ -288,9 +288,7 @@ export async function readMemoryEntry(channelDir: string, name: string): Promise
 export function renderMemoryIndex(entries: MemoryEntry[]): string {
 	const lines = ["# Channel Memory", ""];
 	for (const type of MEMORY_TYPE_ORDER) {
-		const group = entries
-			.filter((entry) => entry.type === type)
-			.sort((a, b) => a.name.localeCompare(b.name));
+		const group = entries.filter((entry) => entry.type === type).sort((a, b) => a.name.localeCompare(b.name));
 		if (group.length === 0) {
 			continue;
 		}
@@ -343,10 +341,7 @@ export async function readMemoryTombstoneRecords(channelDir: string): Promise<Me
 	return records;
 }
 
-export async function appendMemoryTombstoneRecord(
-	channelDir: string,
-	record: MemoryTombstoneRecord,
-): Promise<void> {
+export async function appendMemoryTombstoneRecord(channelDir: string, record: MemoryTombstoneRecord): Promise<void> {
 	const path = getTombstonesPath(channelDir);
 	await mkdir(getChannelMemoryDir(channelDir), { recursive: true });
 	await appendFile(path, `${JSON.stringify(record)}\n`, "utf-8");

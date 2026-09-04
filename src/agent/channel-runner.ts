@@ -41,6 +41,7 @@ import {
 	type MemoryActivityEvent,
 	type MemoryActivityRecorder,
 } from "../memory/maintenance-state.js";
+import { isChannelMigratedToV2, migrateChannelMemoryToV2 } from "../memory/migrate.js";
 import { renderMemoryBootstrap } from "../memory/render.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { listMemoryEntries } from "../memory/store.js";
@@ -449,6 +450,7 @@ export class ChannelRunner implements AgentRunner {
 
 		try {
 			await this.ensureSessionReady();
+			await this.ensureMemoryMigrated();
 			await this.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
 			const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
@@ -1033,7 +1035,7 @@ export class ChannelRunner implements AgentRunner {
 		return [
 			"<runtime_turn_context>",
 			`Channel directory: ${this.channelDir}`,
-			"SESSION.md, MEMORY.md, HISTORY.md and tasks/ live there and are runtime-maintained. Prefer the context supplied with this turn and the channel-bound tools; read those files directly only when you need detail they did not provide.",
+			"The channel `MEMORY.md` index, `memory/`, `journal/` and `tasks/` live there. Prefer the context supplied with this turn and the channel-bound tools; read those files directly only when you need detail they did not provide.",
 			"</runtime_turn_context>",
 		].join("\n");
 	}
@@ -1404,6 +1406,28 @@ export class ChannelRunner implements AgentRunner {
 
 	private async ensureSessionReady(): Promise<void> {
 		await this.sessionReady;
+	}
+
+	/** Spec 050 §5: migrate this channel's memory to v2 on first use, before any turn reads it. */
+	private memoryMigrationChecked = false;
+	private async ensureMemoryMigrated(): Promise<void> {
+		if (this.memoryMigrationChecked) {
+			return;
+		}
+		this.memoryMigrationChecked = true;
+		if (isChannelMigratedToV2(this.channelDir)) {
+			return;
+		}
+		try {
+			const result = await migrateChannelMemoryToV2(this.channelDir);
+			if (result.migrated) {
+				log.logInfo(
+					`[${this.channelId}] Migrated channel memory to v2 (${result.entries} entries, ${result.journalDays} journal days)`,
+				);
+			}
+		} catch (error) {
+			log.logWarning(`[${this.channelId}] Channel memory v2 migration failed`, errorMessage(error));
+		}
 	}
 
 	private async maybeRunPreventiveCompactionForIncomingText(
