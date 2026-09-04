@@ -17,19 +17,19 @@ describe("memory review log", () => {
 		await appendMemoryReviewLog(channelDir, {
 			timestamp: "2026-04-19T00:00:00.000Z",
 			channelId: "dm_123",
-			reason: "idle",
+			reason: "reflect",
 			skipped: [{ target: "HISTORY.md" }],
 		});
 		await appendMemoryReviewLog(channelDir, {
 			timestamp: "2026-04-19T00:01:00.000Z",
 			channelId: "dm_123",
-			reason: "memory-checkpoint-job",
+			reason: "reflect",
 			actions: [{ target: "MEMORY.md" }],
 		});
 
 		const lines = readFileSync(join(channelDir, "memory-review.jsonl"), "utf-8").trim().split("\n");
 		expect(lines).toHaveLength(2);
-		expect(JSON.parse(lines[0]!).reason).toBe("idle");
+		expect(JSON.parse(lines[0]!).reason).toBe("reflect");
 		expect(JSON.parse(lines[1]!).actions[0].target).toBe("MEMORY.md");
 	});
 
@@ -41,7 +41,7 @@ describe("memory review log", () => {
 				appendMemoryReviewLog(channelDir, {
 					timestamp: `2026-04-19T00:00:0${index}.000Z`,
 					channelId: "dm_123",
-					reason: "memory-checkpoint-job",
+					reason: "reflect",
 					actions: [{ index }],
 				}),
 			),
@@ -58,8 +58,8 @@ describe("memory review log", () => {
 		const channelDir = createChannelDir();
 		const base = {
 			channelId: "dm_123",
-			reason: "memory-checkpoint-job" as const,
-			skipped: [{ target: "consolidation", reason: "clean" }],
+			reason: "reflect" as const,
+			skipped: [{ target: "reflect", reason: "clean" }],
 		};
 		await appendMemoryReviewLog(channelDir, { ...base, timestamp: "2026-04-19T00:00:00.000Z" });
 		await appendMemoryReviewLog(channelDir, { ...base, timestamp: "2026-04-19T00:01:00.000Z" });

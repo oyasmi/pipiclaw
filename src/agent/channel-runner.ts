@@ -370,12 +370,12 @@ export class ChannelRunner implements AgentRunner {
 		this.memoryLifecycle = new MemoryLifecycle({
 			channelId: this.channelId,
 			channelDir: this.channelDir,
+			workspaceDir: this.workspaceDir,
 			appHomeDir: this.appHomeDir,
 			getMessages: () => this.session.messages,
 			getSessionEntries: () => this.sessionManager.getBranch(),
 			getModel: () => this.session.model ?? this.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
-			getSessionMemorySettings: () => this.settingsManager.getSessionMemorySettings(),
 			recordMemoryActivity: (event) => this.recordMemoryActivity(event),
 		});
 
@@ -906,16 +906,14 @@ export class ChannelRunner implements AgentRunner {
 		return {
 			channelId: this.channelId,
 			channelDir: this.channelDir,
+			workspaceDir: this.workspaceDir,
 			// Snapshot only when a maintenance job actually needs the transcript; most ticks
 			// stop at a schedule gate and never call these.
 			messages: () => [...this.session.messages],
 			sessionEntries: () => [...this.sessionManager.getBranch()],
 			model: this.session.model ?? this.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
-			settings: {
-				sessionMemory: this.settingsManager.getSessionMemorySettings(),
-				memoryMaintenance: this.settingsManager.getMemoryMaintenanceSettings(),
-			},
+			settings: { memoryMaintenance: this.settingsManager.getMemoryMaintenanceSettings() },
 		};
 	}
 

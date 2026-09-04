@@ -1109,10 +1109,7 @@ export async function createRuntimeContext(
 				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				getSettings: () => {
 					runtimeSettingsManager.reload();
-					return {
-						memoryMaintenance: runtimeSettingsManager.getMemoryMaintenanceSettings(),
-						sessionMemory: runtimeSettingsManager.getSessionMemorySettings(),
-					};
+					return { memoryMaintenance: runtimeSettingsManager.getMemoryMaintenanceSettings() };
 				},
 				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,
 			});

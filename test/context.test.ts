@@ -30,22 +30,9 @@ describe("PipiclawSettingsManager", () => {
 		expect(manager.getMemoryMaintenanceSettings()).toEqual({
 			enabled: true,
 			minIdleMinutesBeforeLlmWork: 10,
-			sessionRefreshIntervalMinutes: 10,
-			checkpointIntervalMinutes: 20,
-			minMemoryAutoWriteConfidence: 0.85,
-			structuralMaintenanceIntervalHours: 6,
+			reflectIntervalMinutes: 20,
 			maxConcurrentChannels: 1,
 			failureBackoffMinutes: 30,
-			cleanupShrinkGuardMinRatio: 0.4,
-			cleanupShrinkGuardMinChars: 2_000,
-		});
-		expect(manager.getSessionMemorySettings()).toEqual({
-			enabled: true,
-			minTurnsBetweenUpdate: 2,
-			minToolCallsBetweenUpdate: 4,
-			timeoutMs: 30000,
-			forceRefreshBeforeCompact: true,
-			forceRefreshBeforeNewSession: true,
 		});
 		expect(manager.getDefaultThinkingLevel()).toBeUndefined();
 	});
@@ -87,7 +74,6 @@ describe("PipiclawSettingsManager", () => {
 				compaction: { enabled: false, reserveTokens: 4096, keepRecentTokens: 8192 },
 				retry: { enabled: false, maxRetries: 99 },
 				memoryRecall: { rerankWithModel: false, maxInjected: 99 },
-				sessionMemory: { minTurnsBetweenUpdate: 99 },
 				memoryMaintenance: { enabled: false, checkpointIntervalMinutes: 45 },
 				sessionSearch: { summarizeWithModel: true, maxFiles: 99 },
 				logging: { level: "debug", file: { enabled: false, maxFiles: 99 } },
@@ -104,10 +90,9 @@ describe("PipiclawSettingsManager", () => {
 		});
 		expect(manager.getRetrySettings()).toEqual({ enabled: false, maxRetries: 3, baseDelayMs: 2000 });
 		expect(manager.getMemoryRecallSettings()).toMatchObject({ rerankWithModel: false, maxInjected: 5 });
-		expect(manager.getSessionMemorySettings().minTurnsBetweenUpdate).toBe(2);
 		expect(manager.getMemoryMaintenanceSettings()).toMatchObject({
 			enabled: false,
-			checkpointIntervalMinutes: 20,
+			reflectIntervalMinutes: 20,
 		});
 		expect(manager.getSessionSearchSettings()).toMatchObject({ summarizeWithModel: true, maxFiles: 12 });
 		expect(manager.getLoggingSettings()).toEqual({
@@ -155,7 +140,6 @@ describe("PipiclawSettingsManager", () => {
 		const manager = new PipiclawSettingsManager(baseDir);
 		expect(manager.getCompactionEnabled()).toBe(true);
 		expect(manager.getMemoryRecallSettings().enabled).toBe(true);
-		expect(manager.getSessionMemorySettings().enabled).toBe(true);
 		expect(manager.drainErrors()).toEqual([
 			expect.objectContaining({
 				scope: "global",

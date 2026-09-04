@@ -3,23 +3,17 @@ import { dirname, join } from "node:path";
 import { getChannelDirName } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
-import { parseLocalTime } from "../shared/local-time.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 
+/** Spec 050, D9: one job (reflect), one small state shape. */
 export interface MemoryMaintenanceState {
 	channelId: string;
 	dirty: boolean;
 	lastActivityAt?: string;
 	eligibleAfter?: string;
-	lastSessionRefreshAt?: string;
-	lastCheckpointAt?: string;
-	lastStructuralMaintenanceAt?: string;
-	turnsSinceSessionRefresh: number;
-	toolCallsSinceSessionRefresh: number;
-	lastSessionEntryId?: string;
-	lastSessionRefreshedEntryId?: string;
-	lastCheckpointEntryId?: string;
+	lastReflectAt?: string;
+	lastReflectedEntryId?: string;
 	failureBackoffUntil?: string | null;
 }
 
@@ -30,24 +24,16 @@ export interface MemoryActivityEvent {
 	channelId: string;
 	timestamp: string;
 	eligibleAfter?: string;
-	latestSessionEntryId?: string;
 }
 
 /**
- * A run of activity events collapsed into the delta they would have produced.
- *
- * Every field mirrors exactly what {@link applyMemoryActivityToState} does for a single event:
- * last-write-wins for the timestamps and the entry cursor, `+= 1` for the two counters, and a
- * sticky `dirty`. Because each of those is associative, an arbitrarily long burst folds into a
- * fixed-size delta — which is what lets the recorder below buffer a whole tool-heavy turn without
- * growing, and what makes the buffered result provably identical to writing each event in turn.
+ * A run of activity events collapsed into the delta they would have produced: last-write-wins
+ * for the timestamps, a sticky `dirty`. Associative, so an arbitrarily long burst folds into a
+ * fixed-size delta — what lets the recorder below buffer a whole tool-heavy turn without growing.
  */
 interface PendingMemoryActivity {
 	lastActivityAt: string;
 	eligibleAfter?: string;
-	latestSessionEntryId?: string;
-	toolCalls: number;
-	turns: number;
 	dirty: boolean;
 }
 
@@ -71,13 +57,11 @@ export function getMemoryMaintenanceStatePath(appHomeDir: string, channelId: str
 
 /**
  * Where a pre-escaping runtime put the same channel's state. Only differs for ids containing
- * `/`, and only matters until the next write moves the state to its canonical path — but the
- * state carries maintenance cadence and transcript cursors, so dropping it would silently
- * re-run structural maintenance and re-scan the transcript for every affected group.
+ * `/`, and only matters until the next write moves the state to its canonical path.
  *
- * RETIRE AT v0.9.3, same rationale as the header comment in `../runtime/task-migration.js`:
- * by the stable cut, every still-running group channel with a `/` in its id will have had its
- * state folded onto the canonical path at least once, so this fallback read finds nothing.
+ * RETIRE AT v0.9.3, same rationale as the header comment in `../runtime/task-migration.js`: by
+ * the stable cut, every still-running group channel with a `/` in its id will have had its state
+ * folded onto the canonical path at least once, so this fallback read finds nothing.
  */
 function legacyStatePath(appHomeDir: string, channelId: string): string | undefined {
 	return getChannelDirName(channelId) === channelId
@@ -86,13 +70,7 @@ function legacyStatePath(appHomeDir: string, channelId: string): string | undefi
 }
 
 function createDefaultState(channelId: string): MemoryMaintenanceState {
-	return {
-		channelId,
-		dirty: false,
-		turnsSinceSessionRefresh: 0,
-		toolCallsSinceSessionRefresh: 0,
-		failureBackoffUntil: null,
-	};
+	return { channelId, dirty: false, failureBackoffUntil: null };
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -106,16 +84,6 @@ function normalizeOptionalNullableString(value: unknown): string | null | undefi
 	return normalizeOptionalString(value);
 }
 
-function normalizeCounter(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-function laterTimestamp(a: string | undefined, b: string | undefined): string | undefined {
-	if (!a) return b;
-	if (!b) return a;
-	return (parseLocalTime(a) ?? -Infinity) >= (parseLocalTime(b) ?? -Infinity) ? a : b;
-}
-
 function normalizeState(channelId: string, value: unknown): MemoryMaintenanceState {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		return createDefaultState(channelId);
@@ -126,24 +94,12 @@ function normalizeState(channelId: string, value: unknown): MemoryMaintenanceSta
 		dirty: typeof record.dirty === "boolean" ? record.dirty : false,
 		lastActivityAt: normalizeOptionalString(record.lastActivityAt),
 		eligibleAfter: normalizeOptionalString(record.eligibleAfter),
-		lastSessionRefreshAt: normalizeOptionalString(record.lastSessionRefreshAt),
-		// Legacy states carried separate consolidation/growth-review fields; fold them
-		// into the merged checkpoint so cadence and cursor survive the migration.
-		lastCheckpointAt:
-			normalizeOptionalString(record.lastCheckpointAt) ??
-			laterTimestamp(
-				normalizeOptionalString(record.lastDurableConsolidationAt),
-				normalizeOptionalString(record.lastGrowthReviewAt),
-			),
-		lastStructuralMaintenanceAt: normalizeOptionalString(record.lastStructuralMaintenanceAt),
-		turnsSinceSessionRefresh: normalizeCounter(record.turnsSinceSessionRefresh),
-		toolCallsSinceSessionRefresh: normalizeCounter(record.toolCallsSinceSessionRefresh),
-		lastSessionEntryId: normalizeOptionalString(record.lastSessionEntryId),
-		lastSessionRefreshedEntryId: normalizeOptionalString(record.lastSessionRefreshedEntryId),
-		lastCheckpointEntryId:
-			normalizeOptionalString(record.lastCheckpointEntryId) ??
-			normalizeOptionalString(record.lastConsolidatedEntryId) ??
-			normalizeOptionalString(record.lastReviewedEntryId),
+		// v1 states carried the checkpoint job's fields under a different name; fold them into
+		// the reflect cadence/cursor so an upgrade does not re-run reflect on the channel's whole
+		// history nor lose its due time.
+		lastReflectAt: normalizeOptionalString(record.lastReflectAt) ?? normalizeOptionalString(record.lastCheckpointAt),
+		lastReflectedEntryId:
+			normalizeOptionalString(record.lastReflectedEntryId) ?? normalizeOptionalString(record.lastCheckpointEntryId),
 		failureBackoffUntil: normalizeOptionalNullableString(record.failureBackoffUntil) ?? null,
 	};
 }
@@ -205,24 +161,10 @@ function mergeMemoryActivity(
 	pending: PendingMemoryActivity | undefined,
 	event: MemoryActivityEvent,
 ): PendingMemoryActivity {
-	const next: PendingMemoryActivity = pending ?? {
-		lastActivityAt: event.timestamp,
-		toolCalls: 0,
-		turns: 0,
-		dirty: false,
-	};
+	const next: PendingMemoryActivity = pending ?? { lastActivityAt: event.timestamp, dirty: false };
 	next.lastActivityAt = event.timestamp;
 	next.eligibleAfter = event.eligibleAfter ?? next.eligibleAfter;
-	next.latestSessionEntryId = event.latestSessionEntryId ?? next.latestSessionEntryId;
-	if (event.kind === "tool-call") {
-		next.dirty = true;
-		next.toolCalls += 1;
-	}
-	if (event.kind === "assistant-turn-completed") {
-		next.dirty = true;
-		next.turns += 1;
-	}
-	if (event.kind === "boundary") {
+	if (event.kind === "tool-call" || event.kind === "assistant-turn-completed" || event.kind === "boundary") {
 		next.dirty = true;
 	}
 	return next;
@@ -238,10 +180,7 @@ function applyPendingActivityToState(
 		channelId,
 		lastActivityAt: pending.lastActivityAt,
 		eligibleAfter: pending.eligibleAfter ?? state.eligibleAfter,
-		lastSessionEntryId: pending.latestSessionEntryId ?? state.lastSessionEntryId,
 		dirty: state.dirty || pending.dirty,
-		toolCallsSinceSessionRefresh: state.toolCallsSinceSessionRefresh + pending.toolCalls,
-		turnsSinceSessionRefresh: state.turnsSinceSessionRefresh + pending.turns,
 	};
 }
 
@@ -260,13 +199,13 @@ export function applyMemoryActivityToState(
  * JSON file through `writeFileAtomically` — two fsyncs apiece. A thirty-step turn paid that thirty
  * times, on storage whose fsync latency the runtime does not control.
  *
- * Batching is safe because nothing consumes this state promptly: every gate in
- * `maintenance-gates.ts` denies outright while the channel is active, and `eligibleAfter` holds
- * maintenance off for `minIdleMinutesBeforeLlmWork` after that. The scheduler then polls once a
- * minute. So the state only has to be accurate by the time a channel goes *idle* — which is why
- * the runner also flushes explicitly at the end of every turn, on top of the debounce here. The
- * debounce bounds what a crash can lose to a few seconds of counters, never a checkpoint: those
- * are written directly, and the serial queue keeps a flush from reordering against them.
+ * Batching is safe because nothing consumes this state promptly: the reflect gate denies outright
+ * while the channel is active, and `eligibleAfter` holds it off for `minIdleMinutesBeforeLlmWork`
+ * after that. The scheduler then polls once a minute. So the state only has to be accurate by the
+ * time a channel goes *idle* — which is why the runner also flushes explicitly at the end of every
+ * turn, on top of the debounce here. The debounce bounds what a crash can lose to a few seconds of
+ * `dirty`/`lastActivityAt`, never a reflect checkpoint: those are written directly, and the serial
+ * queue keeps a flush from reordering against them.
  */
 export interface MemoryActivityRecorder {
 	record(event: MemoryActivityEvent): void;
@@ -357,9 +296,6 @@ function mergeBack(failed: PendingMemoryActivity, current: PendingMemoryActivity
 		// `current` is the newer batch, so it wins on every last-write-wins field.
 		lastActivityAt: current.lastActivityAt,
 		eligibleAfter: current.eligibleAfter ?? failed.eligibleAfter,
-		latestSessionEntryId: current.latestSessionEntryId ?? failed.latestSessionEntryId,
-		toolCalls: failed.toolCalls + current.toolCalls,
-		turns: failed.turns + current.turns,
 		dirty: failed.dirty || current.dirty,
 	};
 }

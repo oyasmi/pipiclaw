@@ -21,7 +21,7 @@ describe("review log rotation", () => {
 		const bigLine = JSON.stringify({
 			timestamp: "2026-01-01T00:00:00.000Z",
 			channelId: "dm_123",
-			reason: "idle",
+			reason: "reflect",
 			candidates: [{ content: "x".repeat(500) }],
 		});
 		const lines = Array.from({ length: Math.ceil(1_100_000 / (bigLine.length + 1)) }, () => bigLine);
@@ -34,7 +34,7 @@ describe("review log rotation", () => {
 		await appendMemoryReviewLog(channelDir, {
 			timestamp: "2026-04-19T00:00:00.000Z",
 			channelId: "dm_123",
-			reason: "memory-checkpoint-job",
+			reason: "reflect",
 			actions: [{ target: "MEMORY.md" }],
 		});
 

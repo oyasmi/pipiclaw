@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
@@ -81,13 +81,12 @@ export async function loadDetachedMaintenanceContext(
 	return {
 		channelId: options.channelId,
 		channelDir: options.channelDir,
+		// `channelDir` is always a direct child of the workspace dir (`getChannelDir`).
+		workspaceDir: dirname(options.channelDir),
 		messages: () => [...cachedTranscript.messages],
 		sessionEntries: () => [...cachedTranscript.sessionEntries],
 		model,
 		resolveApiKey: async (candidate) => getApiKeyForModel(modelRegistry, candidate),
-		settings: {
-			sessionMemory: options.settingsManager.getSessionMemorySettings(),
-			memoryMaintenance: options.settingsManager.getMemoryMaintenanceSettings(),
-		},
+		settings: { memoryMaintenance: options.settingsManager.getMemoryMaintenanceSettings() },
 	};
 }

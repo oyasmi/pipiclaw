@@ -12,25 +12,9 @@ function maintenanceSettings(enabled = true) {
 	return {
 		enabled,
 		minIdleMinutesBeforeLlmWork: 10,
-		sessionRefreshIntervalMinutes: 10,
-		checkpointIntervalMinutes: 20,
-		minMemoryAutoWriteConfidence: 0.85,
-		structuralMaintenanceIntervalHours: 6,
+		reflectIntervalMinutes: 20,
 		maxConcurrentChannels: 1,
 		failureBackoffMinutes: 30,
-		cleanupShrinkGuardMinRatio: 0.4,
-		cleanupShrinkGuardMinChars: 2_000,
-	};
-}
-
-function sessionMemorySettings() {
-	return {
-		enabled: true,
-		minTurnsBetweenUpdate: 2,
-		minToolCallsBetweenUpdate: 4,
-		timeoutMs: 30_000,
-		forceRefreshBeforeCompact: true,
-		forceRefreshBeforeNewSession: true,
 	};
 }
 
@@ -85,7 +69,7 @@ describe("memory maintenance scheduler", () => {
 			getKnownChannelIds: () => ["dm_1"],
 			getRuntimeContext,
 			isChannelActive: () => false,
-			getSettings: () => ({ memoryMaintenance: maintenanceSettings(false), sessionMemory: sessionMemorySettings() }),
+			getSettings: () => ({ memoryMaintenance: maintenanceSettings(false) }),
 		});
 
 		await scheduler.runOnce();
@@ -94,9 +78,12 @@ describe("memory maintenance scheduler", () => {
 
 	it("honors maxConcurrentChannels per tick", async () => {
 		const root = createTempDir();
+		const appHomeDir = join(root, "app");
+		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({ ...state, dirty: true }));
+		await updateMemoryMaintenanceState(appHomeDir, "dm_2", (state) => ({ ...state, dirty: true }));
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
-			appHomeDir: join(root, "app"),
+			appHomeDir,
 			workspaceDir: join(root, "workspace"),
 			getKnownChannelIds: () => ["dm_1", "dm_2"],
 			getRuntimeContext,
@@ -106,7 +93,6 @@ describe("memory maintenance scheduler", () => {
 					...maintenanceSettings(true),
 					maxConcurrentChannels: 1,
 				},
-				sessionMemory: sessionMemorySettings(),
 			}),
 		});
 
@@ -116,9 +102,13 @@ describe("memory maintenance scheduler", () => {
 
 	it("fills tick slots by skipping active channels in the ring", async () => {
 		const root = createTempDir();
+		const appHomeDir = join(root, "app");
+		for (const id of ["dm_1", "dm_2", "dm_3"]) {
+			await updateMemoryMaintenanceState(appHomeDir, id, (state) => ({ ...state, dirty: true }));
+		}
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
-			appHomeDir: join(root, "app"),
+			appHomeDir,
 			workspaceDir: join(root, "workspace"),
 			getKnownChannelIds: () => ["dm_1", "dm_2", "dm_3"],
 			getRuntimeContext,
@@ -128,7 +118,6 @@ describe("memory maintenance scheduler", () => {
 					...maintenanceSettings(true),
 					maxConcurrentChannels: 1,
 				},
-				sessionMemory: sessionMemorySettings(),
 			}),
 		});
 
@@ -142,16 +131,15 @@ describe("memory maintenance scheduler", () => {
 		const appHomeDir = join(root, "app");
 		const now = new Date("2026-04-19T12:00:00.000Z");
 
-		// dm_1 has already had every job run within its interval and is clean: no job could
-		// possibly be due, so the cheap pre-check should skip it without touching the runtime.
+		// dm_1 has already reflected within its interval and is clean: reflect could not possibly
+		// be due, so the cheap pre-check should skip it without touching the runtime.
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
 			...state,
 			dirty: false,
-			lastSessionRefreshAt: formatLocalTime(now),
-			lastCheckpointAt: formatLocalTime(now),
-			lastStructuralMaintenanceAt: formatLocalTime(now),
+			lastReflectAt: formatLocalTime(now),
 		}));
-		// dm_2 has no state on disk (never maintained), so it is always a candidate.
+		// dm_2 is dirty with no prior reflect, so it is a candidate.
+		await updateMemoryMaintenanceState(appHomeDir, "dm_2", (state) => ({ ...state, dirty: true }));
 
 		const getRuntimeContext = vi.fn(async () => null);
 		const scheduler = new MemoryMaintenanceScheduler({
@@ -162,7 +150,6 @@ describe("memory maintenance scheduler", () => {
 			isChannelActive: () => false,
 			getSettings: () => ({
 				memoryMaintenance: { ...maintenanceSettings(true), maxConcurrentChannels: 1 },
-				sessionMemory: sessionMemorySettings(),
 			}),
 		});
 
@@ -184,7 +171,6 @@ describe("memory maintenance scheduler", () => {
 			isChannelActive: () => false,
 			getSettings: () => ({
 				memoryMaintenance: maintenanceSettings(enabled),
-				sessionMemory: sessionMemorySettings(),
 			}),
 			intervalMs: 1000,
 		});

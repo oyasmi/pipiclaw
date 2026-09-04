@@ -1,8 +1,9 @@
-import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
+import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import type { MemoryMaintenanceState } from "./maintenance-state.js";
 
-export type MaintenanceJobKind = "session-refresh" | "memory-checkpoint" | "structural-maintenance";
+/** Spec 050, D9: the three v1 jobs collapse to one. */
+export type MaintenanceJobKind = "reflect";
 
 export interface MaintenanceGateDecision {
 	allowed: boolean;
@@ -10,69 +11,30 @@ export interface MaintenanceGateDecision {
 	jobKind: MaintenanceJobKind;
 }
 
-/**
- * Material checks are passed as thunks, never as values.
- *
- * Every gate below decides on cheap state (settings, timestamps, idle/backoff windows) before it
- * looks at any material, and the material is expensive to produce: scanning the whole transcript,
- * building the incremental source window, reading MEMORY.md/HISTORY.md. Evaluating it up front is
- * what made an idle daemon pay a real cost on every one-minute tick just to be denied.
- */
-export interface SessionRefreshGateInput {
-	now: Date;
-	state: MemoryMaintenanceState;
-	sessionMemory: PipiclawSessionMemorySettings;
-	maintenance: PipiclawMemoryMaintenanceSettings;
-	channelActive: boolean;
-	hasNewSessionEntry: () => boolean;
-	hasMeaningfulMaterial: () => boolean;
-}
-
-export interface MemoryCheckpointMaterial {
+export interface ReflectMaterial {
 	hasNewEntry: boolean;
 	hasMeaningfulExchange: boolean;
-	batchSize: number;
 }
 
-export interface MemoryCheckpointGateInput {
+/**
+ * Material checks are passed as a thunk, never as a value: every cheap check below (settings,
+ * timestamps, idle/backoff windows) runs before the material — which means building the
+ * incremental source window and scanning the transcript — is ever paid for. That is what keeps
+ * an idle daemon's steady-state tick to one state-file read plus timestamp arithmetic.
+ */
+export interface ReflectGateInput {
 	now: Date;
 	state: MemoryMaintenanceState;
 	maintenance: PipiclawMemoryMaintenanceSettings;
 	channelActive: boolean;
-	material: () => MemoryCheckpointMaterial;
-	minBatchSize?: number;
+	material: () => ReflectMaterial;
 }
 
-export interface StructuralMaintenanceMaterial {
-	memoryCleanupNeeded: boolean;
-	historyFoldingNeeded: boolean;
-	hasMemoryContent: boolean;
-	hasHistoryContent: boolean;
-	/** Active entries whose probation lapsed (spec 037, D8). */
-	expiredEntryCount: number;
+function deny(skipReason: string): MaintenanceGateDecision {
+	return { allowed: false, jobKind: "reflect", skipReason };
 }
 
-export interface StructuralMaintenanceGateInput {
-	now: Date;
-	state: MemoryMaintenanceState;
-	maintenance: PipiclawMemoryMaintenanceSettings;
-	channelActive: boolean;
-	material: () => Promise<StructuralMaintenanceMaterial>;
-}
-
-export interface StructuralMaintenanceGateDecision extends MaintenanceGateDecision {
-	runMemoryCleanup: boolean;
-	runHistoryFolding: boolean;
-	runProbationExpiry: boolean;
-}
-
-function deny(jobKind: MaintenanceJobKind, skipReason: string): MaintenanceGateDecision {
-	return { allowed: false, jobKind, skipReason };
-}
-
-function allow(jobKind: MaintenanceJobKind): MaintenanceGateDecision {
-	return { allowed: true, jobKind };
-}
+const allow: MaintenanceGateDecision = { allowed: true, jobKind: "reflect" };
 
 function parseTime(value: string | undefined): number | null {
 	if (!value) {
@@ -96,134 +58,30 @@ function minutesToMs(minutes: number): number {
 	return Math.max(0, minutes) * 60_000;
 }
 
-function hoursToMs(hours: number): number {
-	return Math.max(0, hours) * 3_600_000;
-}
-
-function sessionRefreshThresholdMet(state: MemoryMaintenanceState, settings: PipiclawSessionMemorySettings): boolean {
-	return (
-		state.turnsSinceSessionRefresh >= settings.minTurnsBetweenUpdate ||
-		state.toolCallsSinceSessionRefresh >= settings.minToolCallsBetweenUpdate
-	);
-}
-
-export function shouldRunSessionRefresh(input: SessionRefreshGateInput): MaintenanceGateDecision {
-	if (!input.sessionMemory.enabled) {
-		return deny("session-refresh", "disabled");
-	}
+export function shouldRunReflect(input: ReflectGateInput): MaintenanceGateDecision {
 	if (!input.state.dirty) {
-		return deny("session-refresh", "clean");
+		return deny("clean");
 	}
 	if (isBeforeOptional(input.now, input.state.eligibleAfter)) {
-		return deny("session-refresh", "not-idle-yet");
+		return deny("not-idle-yet");
 	}
 	if (input.channelActive) {
-		return deny("session-refresh", "channel-active");
+		return deny("channel-active");
 	}
 	if (isBeforeOptional(input.now, input.state.failureBackoffUntil)) {
-		return deny("session-refresh", "backoff-active");
+		return deny("backoff-active");
 	}
 	if (
-		!hasIntervalElapsed(
-			input.now,
-			input.state.lastSessionRefreshAt,
-			minutesToMs(input.maintenance.sessionRefreshIntervalMinutes),
-		)
+		!hasIntervalElapsed(input.now, input.state.lastReflectAt, minutesToMs(input.maintenance.reflectIntervalMinutes))
 	) {
-		return deny("session-refresh", "interval-not-elapsed");
-	}
-	if (!sessionRefreshThresholdMet(input.state, input.sessionMemory)) {
-		return deny("session-refresh", "threshold-not-met");
-	}
-	if (!input.hasNewSessionEntry()) {
-		return deny("session-refresh", "no-new-session-entry");
-	}
-	if (!input.hasMeaningfulMaterial()) {
-		return deny("session-refresh", "no-meaningful-material");
-	}
-	return allow("session-refresh");
-}
-
-export function shouldRunMemoryCheckpoint(input: MemoryCheckpointGateInput): MaintenanceGateDecision {
-	if (!input.state.dirty) {
-		return deny("memory-checkpoint", "clean");
-	}
-	if (isBeforeOptional(input.now, input.state.eligibleAfter)) {
-		return deny("memory-checkpoint", "not-idle-yet");
-	}
-	if (input.channelActive) {
-		return deny("memory-checkpoint", "channel-active");
-	}
-	if (
-		!hasIntervalElapsed(
-			input.now,
-			input.state.lastCheckpointAt,
-			minutesToMs(input.maintenance.checkpointIntervalMinutes),
-		)
-	) {
-		return deny("memory-checkpoint", "interval-not-elapsed");
-	}
-	if (isBeforeOptional(input.now, input.state.failureBackoffUntil)) {
-		return deny("memory-checkpoint", "backoff-active");
+		return deny("interval-not-elapsed");
 	}
 	const material = input.material();
 	if (!material.hasNewEntry) {
-		return deny("memory-checkpoint", "no-new-entry");
+		return deny("no-new-entry");
 	}
 	if (!material.hasMeaningfulExchange) {
-		return deny("memory-checkpoint", "no-meaningful-exchange");
+		return deny("no-meaningful-exchange");
 	}
-	if (material.batchSize < (input.minBatchSize ?? 2)) {
-		return deny("memory-checkpoint", "batch-threshold-not-met");
-	}
-	return allow("memory-checkpoint");
-}
-
-export async function shouldRunStructuralMaintenance(
-	input: StructuralMaintenanceGateInput,
-): Promise<StructuralMaintenanceGateDecision> {
-	const jobKind = "structural-maintenance";
-	const denyStructural = (skipReason: string): StructuralMaintenanceGateDecision => ({
-		allowed: false,
-		jobKind,
-		skipReason,
-		runMemoryCleanup: false,
-		runHistoryFolding: false,
-		runProbationExpiry: false,
-	});
-
-	if (input.channelActive) {
-		return denyStructural("channel-active");
-	}
-	if (
-		!hasIntervalElapsed(
-			input.now,
-			input.state.lastStructuralMaintenanceAt,
-			hoursToMs(input.maintenance.structuralMaintenanceIntervalHours),
-		)
-	) {
-		return denyStructural("interval-not-elapsed");
-	}
-	if (isBeforeOptional(input.now, input.state.failureBackoffUntil)) {
-		return denyStructural("backoff-active");
-	}
-	const material = await input.material();
-	const runProbationExpiry = material.expiredEntryCount > 0;
-	if (!material.hasMemoryContent && !material.hasHistoryContent && !runProbationExpiry) {
-		return denyStructural("empty-template-files");
-	}
-
-	const runMemoryCleanup = material.memoryCleanupNeeded;
-	const runHistoryFolding = material.historyFoldingNeeded;
-	if (!runMemoryCleanup && !runHistoryFolding && !runProbationExpiry) {
-		return denyStructural("nothing-to-maintain");
-	}
-
-	return {
-		allowed: true,
-		jobKind,
-		runMemoryCleanup,
-		runHistoryFolding,
-		runProbationExpiry,
-	};
+	return allow;
 }

@@ -11,11 +11,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import * as log from "./log.js";
-import {
-	getMemoryMaintenanceTuning,
-	getSessionRefreshCadence,
-	type MemoryMaintenanceTuning,
-} from "./memory/maintenance-tuning.js";
+import { getMemoryMaintenanceTuning, type MemoryMaintenanceTuning } from "./memory/maintenance-tuning.js";
 import type { ResponseMode } from "./runtime/dingtalk.js";
 import { writeFileAtomicallySync } from "./shared/atomic-file.js";
 import type { ConfigDiagnostic } from "./shared/config-diagnostic.js";
@@ -84,15 +80,6 @@ export interface PipiclawTaskDriverSettings {
 	maxSleepMinutes: number;
 }
 
-export interface PipiclawSessionMemorySettings {
-	enabled: boolean;
-	minTurnsBetweenUpdate: number;
-	minToolCallsBetweenUpdate: number;
-	timeoutMs: number;
-	forceRefreshBeforeCompact: boolean;
-	forceRefreshBeforeNewSession: boolean;
-}
-
 export type PipiclawMemoryMaintenanceSettings = MemoryMaintenanceTuning & {
 	enabled: boolean;
 };
@@ -153,7 +140,6 @@ export interface PipiclawSettings {
 		/** Costs an extra LLM call, so it stays a user decision rather than a constant. */
 		rerankWithModel?: boolean | "auto";
 	};
-	sessionMemory?: { enabled?: boolean };
 	memoryMaintenance?: { enabled?: boolean };
 	sessionSearch?: {
 		/** Costs an extra LLM call per search hit; same reasoning as `rerankWithModel`. */
@@ -220,15 +206,6 @@ export const TASK_DRIVER_SETTINGS: PipiclawTaskDriverSettings = {
 	maxSleepMinutes: 15,
 };
 
-const DEFAULT_SESSION_MEMORY: PipiclawSessionMemorySettings = {
-	enabled: true,
-	minTurnsBetweenUpdate: 2,
-	minToolCallsBetweenUpdate: 4,
-	timeoutMs: 30_000,
-	forceRefreshBeforeCompact: true,
-	forceRefreshBeforeNewSession: true,
-};
-
 const DEFAULT_SESSION_SEARCH: PipiclawSessionSearchSettings = {
 	maxFiles: 12,
 	maxChunks: 80,
@@ -266,6 +243,9 @@ const RETIRED_SETTINGS_KEYS: readonly string[] = [
 	"memoryRecall.maxCandidates",
 	"memoryRecall.maxInjected",
 	"memoryRecall.maxChars",
+	// Spec 050: SESSION.md is retired (the journal replaces it), so the whole sessionMemory
+	// section — including its own top-level enable switch — is gone, not just its params.
+	"sessionMemory.enabled",
 	"sessionMemory.minTurnsBetweenUpdate",
 	"sessionMemory.minToolCallsBetweenUpdate",
 	"sessionMemory.timeoutMs",
@@ -275,6 +255,7 @@ const RETIRED_SETTINGS_KEYS: readonly string[] = [
 	"memoryMaintenance.minIdleMinutesBeforeLlmWork",
 	"memoryMaintenance.sessionRefreshIntervalMinutes",
 	"memoryMaintenance.checkpointIntervalMinutes",
+	"memoryMaintenance.reflectIntervalMinutes",
 	"memoryMaintenance.minMemoryAutoWriteConfidence",
 	"memoryMaintenance.structuralMaintenanceIntervalHours",
 	"memoryMaintenance.maxConcurrentChannels",
@@ -513,14 +494,6 @@ export class PipiclawSettingsManager {
 			...DEFAULT_MEMORY_RECALL,
 			enabled: this.settings.memoryRecall?.enabled ?? DEFAULT_MEMORY_RECALL.enabled,
 			rerankWithModel: this.settings.memoryRecall?.rerankWithModel ?? DEFAULT_MEMORY_RECALL.rerankWithModel,
-		};
-	}
-
-	getSessionMemorySettings(): PipiclawSessionMemorySettings {
-		return {
-			...DEFAULT_SESSION_MEMORY,
-			...getSessionRefreshCadence(),
-			enabled: this.settings.sessionMemory?.enabled ?? DEFAULT_SESSION_MEMORY.enabled,
 		};
 	}
 
