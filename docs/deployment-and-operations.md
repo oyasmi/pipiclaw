@@ -187,35 +187,35 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 | `<channel>/context.jsonl` | 会话事件冷存储 |
 | `<channel>/subagent-runs.jsonl` | 子代理执行摘要 |
 | `<channel>/subagent-artifacts/<runId>/` | 每次委派的完整输出；外部 run 还包含 prompt、system prompt、协议事件和 stderr |
-| `<channel>/SESSION.md` | 当前工作态 |
-| `<channel>/MEMORY.md` | 会话通道级持久记忆 |
-| `<channel>/HISTORY.md` | 更早上下文摘要 |
-| `<channel>/memory-review.jsonl` | 自动记忆写回、suggestion 和 skipped 决策审计 |
-| `<channel>/.memory/entries.json` | MEMORY 条目的来源、状态与召回统计（可重建） |
-| `<channel>/.memory/tombstones.jsonl` | 遗忘防复活 id/hash，不含原文 |
+| `<channel>/memory/<name>.md` | 一条记忆一个文件（frontmatter 元数据） |
+| `<channel>/memory/.tombstones.jsonl` | 遗忘防复活的 name + 内容哈希，不含原文 |
+| `<channel>/MEMORY.md` | 从 `memory/*.md` 生成的索引，勿手改 |
+| `<channel>/journal/YYYY-MM-DD.md` | 按天追加的工作记录，只由后台反思 pass 写 |
+| `<channel>/memory-review.jsonl` | 反思/工具写回的动作、suggestion 和 skipped 决策审计 |
+| `<channel>/.memory-v1/` | v1→v2 迁移时原样搬来的旧文件（`SESSION.md`/`MEMORY.md`/`HISTORY.md` 等），不删除 |
+| `<channel>/.migrated-v2` | 迁移完成标记 |
 
 委派的权威运行状态另存于 `${PIPICLAW_HOME:-~/.pipiclaw}/state/subagent-runs/<channelId>/<runId>.json`（目录名与 workspace 一致，把 channelId 里的 `/` 折成 `__`）。频道内的 `subagent-runs.jsonl` 是便于检索的执行摘要，不能替代状态文件做取消或重启恢复。
 
-运行时记忆分层：
+运行时记忆分层（spec 050）：
 
-- `SESSION.md` 是 hot working memory，记录当前任务状态。
-- `MEMORY.md` 是 durable channel memory，记录稳定事实、决策、偏好、约束和中期 open loops。
-- `HISTORY.md` 是边界摘要，主要在 compaction、`/new`、shutdown 等阶段写入；后台 memory checkpoint 默认不写。
+- `memory/*.md` + 生成的 `MEMORY.md` 索引是 durable channel memory：稳定事实、决策、偏好、约束。索引在会话首轮（含 `/new`、压缩之后）整份注入，之后靠 `memory_search` 按需补查。
+- `journal/YYYY-MM-DD.md` 是按天的工作记录，只由后台反思写；一次性进度、临时计划不会被写成 durable 记忆。
 - `log.jsonl`、`log.jsonl.1`、`context.jsonl` 是冷存储，正常 turn 不会预加载，只能通过当前 channel 的 `session_search` 显式检索。
-- `memory-review.jsonl` 是诊断与审计文件，不进入普通 recall。
-- `/memory status|list|show|pending` 提供当前频道的只读管理面；sidecar usage 与 review outcome 通过 correlation id 关联，便于按 job 核算成本与有效写入。
+- `memory-review.jsonl` 是诊断与审计文件。
+- `/memory status|list|show|journal` 提供当前频道的只读管理面；`/memory forget <name>` 直接删除、不经过模型。sidecar usage 与 review outcome 通过 correlation id 关联，便于按次核算成本与有效写入。
+
+首次使用某个频道时会自动、确定性地把旧版布局迁移到上表结构，不调用模型；原文件整份移到 `.memory-v1/`。回滚：把 `.memory-v1/` 里的文件移回频道目录原位，删除 `memory/`、`journal/`、生成的 `MEMORY.md` 和 `.migrated-v2` 标记，换回旧版本运行。
 
 ### 内置记忆维护任务（Memory Maintenance Scheduler）
 
 Pipiclaw 会启动一个内置 memory maintenance scheduler。它不使用 `workspace/events/`，也不会创建用户可见的 event 文件；删除或清空 `workspace/events/` 不会影响记忆维护。
 
-后台任务与其内置间隔（常量，不可配）：
+spec 050 把 v1 的三个 job（session refresh / checkpoint / structural maintenance）合并成一个：**反思（reflect）**。它同时产出 journal 新增行和 memory 的增/改/删/touch。内置间隔（常量，不可配）：
 
 | 任务 | 最小间隔 | LLM 调用前的本地 gate |
 |------|----------|------------------------|
-| Session refresh | 10 分钟 | channel dirty、已空闲、turn/tool 阈值满足、有新 session entry、有 meaningful material |
-| Memory checkpoint | 20 分钟 | channel dirty、已空闲、有新 entry、有 meaningful exchange、达到批量阈值 |
-| Structural maintenance | 6 小时 | `MEMORY.md` 或 `HISTORY.md` 超过 cleanup/folding 阈值 |
+| Reflect | 20 分钟 | channel dirty、已空闲、增量窗口有实质对话 |
 
 另有两条固定约束：channel 静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个 channel。
 
@@ -227,19 +227,18 @@ Pipiclaw 会启动一个内置 memory maintenance scheduler。它不使用 `work
 ${PIPICLAW_HOME:-~/.pipiclaw}/state/memory/<channelId>.json
 ```
 
-这些文件只用于调度，记录 dirty、阈值计数、最近运行时间和失败 backoff。它们不是记忆来源，不会进入普通 recall，也不需要用户编辑。
+这些文件只用于调度，记录 dirty、阈值计数、最近运行时间和失败 backoff。它们不是记忆来源，不需要用户编辑。
 
-维护节奏是内置常量，不再通过 `settings.json` 调节（spec 035）。降低 token 消耗可用的选项只有三个：
+维护节奏是内置常量，不再通过 `settings.json` 调节（spec 035）。降低 token 消耗可用的选项只有两个：
 
 ```json
 {
-  "memoryRecall": { "rerankWithModel": false },
   "sessionSearch": { "summarizeWithModel": false },
   "memoryMaintenance": { "enabled": false }
 }
 ```
 
-前两项各砍掉一次可选的 LLM 调用，影响有限。第三项是关掉整个后台维护——`SESSION.md` 将只在边界事件（compaction、`/new`、shutdown）刷新，`MEMORY.md` 不再自动固化，长期使用会明显丢失连续性。**优先只关前两项**；确认后台维护是成本大头之后再考虑第三项。
+第一项砍掉一次可选的 LLM 调用，影响有限。第二项是关掉整个后台反思——journal 不再自动追加，`MEMORY.md` 不再自动固化，长期使用会明显丢失连续性；仍可用 `memory_save` 当场写入。**优先只关第一项**；确认后台维护是成本大头之后再考虑第二项。旧版的 `memoryRecall.*` 系列设置项已随 spec 050 一起退役（每轮实时召回被取消，D1），设置里仍留着会在启动日志里收到警告。
 
 ### 精确提示词排查（Prompt Inspection）
 

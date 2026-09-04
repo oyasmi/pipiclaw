@@ -10,30 +10,22 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 import * as log from "../log.js";
-import type { PipiclawSessionMemorySettings } from "../settings.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { clipTextByPromptUnits } from "../shared/prompt-units.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import {
-	type ConsolidationRunOptions,
-	type InlineConsolidationResult,
-	runInlineConsolidation,
-} from "./consolidation.js";
-import {
 	type MemoryActivityEvent,
 	readMemoryMaintenanceState,
 	updateMemoryMaintenanceState,
 } from "./maintenance-state.js";
-import { appendMemoryReviewLog } from "./review-log.js";
-import { updateChannelSessionMemory } from "./session.js";
-import {
-	buildCompactionMemorySourceWindow,
-	buildIncrementalMemorySourceWindow,
-	type MemorySourceWindow,
-} from "./source-window.js";
+import { type ReflectRunResult, runReflect } from "./reflect.js";
+import { reviewLogEntryFor } from "./reflect-job.js";
+import { appendMemoryReviewLog, type MemoryReviewReason } from "./review-log.js";
+import { buildCompactionMemorySourceWindow, buildIncrementalMemorySourceWindow } from "./source-window.js";
 
-export type ConsolidationReason = "compaction" | "new-session" | "idle" | "shutdown";
+/** Boundaries `MemoryLifecycle` reflects on directly, outside the scheduled idle job (spec 050, D7). */
+export type ConsolidationReason = "compaction" | "new-session" | "shutdown";
 
 const COMPACTION_INPUT_MAX_UNITS = 48_000;
 const COMPACTION_INPUT_MIN_UNITS = 4_000;
@@ -93,48 +85,26 @@ export function boundCompactionMessages(
 export interface MemoryLifecycleOptions {
 	channelId: string;
 	channelDir: string;
+	workspaceDir: string;
 	appHomeDir?: string;
 	getMessages: () => AgentMessage[];
 	getSessionEntries: () => SessionEntry[];
 	getModel: () => Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
-	getSessionMemorySettings: () => PipiclawSessionMemorySettings;
 	recordMemoryActivity?: (event: MemoryActivityEvent) => Promise<void> | void;
 	channelMemoryQueue?: ChannelMemoryQueue;
 }
 
-interface SessionMemoryRefreshRequest {
-	reason: Exclude<ConsolidationReason, "idle">;
-	messages?: AgentMessage[];
-}
-
 export class MemoryLifecycle {
-	private sessionRefreshQueue: Promise<void> = Promise.resolve();
 	private durableDirty = false;
 	private durableRevision = 0;
 	private lastDurableConsolidationRevision = 0;
 	private readonly channelMemoryQueue: ChannelMemoryQueue;
-	// Tracks the detached new-session consolidation so shutdown/tests can await it.
-	private backgroundNewSessionConsolidation: Promise<void> = Promise.resolve();
+	// Tracks the detached new-session reflect run so shutdown/tests can await it.
+	private backgroundNewSessionReflect: Promise<void> = Promise.resolve();
 
 	constructor(private options: MemoryLifecycleOptions) {
 		this.channelMemoryQueue = options.channelMemoryQueue ?? getDefaultChannelMemoryQueue();
-	}
-
-	private buildRunOptions(
-		messages?: AgentMessage[],
-		sessionEntries?: SessionEntry[],
-		sourceWindow?: MemorySourceWindow,
-	): ConsolidationRunOptions {
-		return {
-			channelId: this.options.channelId,
-			channelDir: this.options.channelDir,
-			model: this.options.getModel(),
-			resolveApiKey: this.options.resolveApiKey,
-			messages: messages ?? this.options.getMessages(),
-			sessionEntries: sessionEntries ?? this.options.getSessionEntries(),
-			sourceWindow,
-		};
 	}
 
 	createExtensionFactory(): ExtensionFactory {
@@ -171,88 +141,29 @@ export class MemoryLifecycle {
 	}
 
 	async flushForShutdown(): Promise<void> {
-		// Let any detached new-session consolidation finish (and update the durable
-		// checkpoint) before deciding whether a final flush is still needed.
-		await this.whenNewSessionConsolidationSettled();
+		// Let any detached new-session reflect run finish (and update the durable checkpoint)
+		// before deciding whether a final flush is still needed.
+		await this.whenNewSessionReflectSettled();
 		await this.runDurableMemoryJobSerial(async () => {
 			// Shutdown is the last chance to persist, so use a looser gate than the
-			// idle/compaction path: consolidate any unconsolidated durable activity,
-			// including a session that only produced tool output with no final
-			// assistant turn (which hasPendingAssistantSnapshot would skip).
+			// idle/compaction path: reflect on any unconsolidated durable activity, including a
+			// session that only produced tool output with no final assistant turn.
 			if (!this.hasPendingDurableSnapshot()) {
 				return;
 			}
 			const messageSnapshot = [...this.options.getMessages()];
 			const sessionEntrySnapshot = [...this.options.getSessionEntries()];
 			const revisionSnapshot = this.durableRevision;
-			const settings = this.options.getSessionMemorySettings();
-			await this.runPreflightConsolidationNow(
-				"shutdown",
-				messageSnapshot,
-				sessionEntrySnapshot,
-				revisionSnapshot,
-				settings,
-			);
+			await this.runBoundaryReflectNow("shutdown", messageSnapshot, sessionEntrySnapshot, revisionSnapshot);
 		});
-	}
-
-	private shouldForceRefreshFor(
-		reason: Exclude<ConsolidationReason, "idle">,
-		settings: PipiclawSessionMemorySettings,
-	): boolean {
-		if (!settings.enabled) {
-			return false;
-		}
-		if (reason === "compaction") {
-			return settings.forceRefreshBeforeCompact;
-		}
-		if (reason === "new-session") {
-			return settings.forceRefreshBeforeNewSession;
-		}
-		return false;
-	}
-
-	private async refreshSessionMemory(request: SessionMemoryRefreshRequest): Promise<boolean> {
-		const settings = this.options.getSessionMemorySettings();
-		if (!settings.enabled) {
-			return false;
-		}
-
-		const { reason } = request;
-		try {
-			await updateChannelSessionMemory({
-				channelId: this.options.channelId,
-				channelDir: this.options.channelDir,
-				messages: request.messages ?? this.options.getMessages(),
-				model: this.options.getModel(),
-				resolveApiKey: this.options.resolveApiKey,
-				timeoutMs: settings.timeoutMs,
-			});
-			log.logInfo(`[${this.options.channelId}] Session memory updated (${reason})`);
-			return true;
-		} catch (error) {
-			const message = errorMessage(error);
-			log.logWarning(`[${this.options.channelId}] Session memory update failed (${reason})`, message);
-			return false;
-		}
-	}
-
-	private runSessionRefreshSerial(request: SessionMemoryRefreshRequest): Promise<boolean> {
-		const run = async (): Promise<boolean> => this.refreshSessionMemory(request);
-		const resultPromise = this.sessionRefreshQueue.then(run, run);
-		this.sessionRefreshQueue = resultPromise.then(
-			() => undefined,
-			() => undefined,
-		);
-		return resultPromise;
 	}
 
 	private runDurableMemoryJobSerial<T>(job: () => Promise<T>): Promise<T> {
 		return this.channelMemoryQueue.run(this.options.channelId, job);
 	}
 
-	// Any unconsolidated durable activity since the last checkpoint, regardless of
-	// whether it ended on an assistant turn. Used only for the shutdown flush.
+	// Any unconsolidated durable activity since the last checkpoint, regardless of whether it
+	// ended on an assistant turn. Used only for the shutdown flush.
 	private hasPendingDurableSnapshot(): boolean {
 		return this.durableDirty && this.durableRevision > this.lastDurableConsolidationRevision;
 	}
@@ -262,25 +173,25 @@ export class MemoryLifecycle {
 		this.durableDirty = this.durableRevision > this.lastDurableConsolidationRevision;
 	}
 
-	private logConsolidationResult(reason: ConsolidationReason, result: InlineConsolidationResult): void {
+	private logReflectResult(reason: ConsolidationReason, result: ReflectRunResult): void {
 		if (result.skipped) {
-			log.logEvent("debug", "memory.consolidation.skipped", "No meaningful snapshot", {
+			log.logEvent("debug", "memory.reflect.skipped", "No meaningful snapshot", {
 				ctx: { channelId: this.options.channelId },
 				fields: { reason },
 			});
 			return;
 		}
-
 		log.logInfo(
-			`[${this.options.channelId}] Memory consolidation finished (${reason}): memory entries=${result.appendedMemoryEntries}, history=${result.appendedHistoryBlock ? "yes" : "no"}`,
+			`[${this.options.channelId}] Memory reflect finished (${reason}): added=${result.added.length} updated=${result.updated.length} deleted=${result.deleted.length} touched=${result.touched.length} journal+=${result.journalAppended}`,
 		);
 	}
 
 	private async appendReviewLog(entry: {
-		reason: ConsolidationReason;
+		reason: MemoryReviewReason;
 		actions?: unknown[];
 		skipped?: unknown[];
 		error?: string;
+		correlationId?: string;
 	}): Promise<void> {
 		try {
 			await appendMemoryReviewLog(this.options.channelDir, {
@@ -294,46 +205,8 @@ export class MemoryLifecycle {
 		}
 	}
 
-	private async recordConsolidationReview(
+	private async runBoundaryReflect(
 		reason: ConsolidationReason,
-		result: InlineConsolidationResult,
-	): Promise<void> {
-		if (result.skipped) {
-			await this.appendReviewLog({
-				reason,
-				skipped: [{ target: "consolidation", reason: "no meaningful snapshot" }],
-			});
-			return;
-		}
-
-		const actions: unknown[] = [];
-		const skipped: unknown[] = [];
-		const candidateCount = result.appendedDurableEntries + result.appendedProbationaryEntries;
-		if (candidateCount > 0 || result.appendedMemoryEntries > 0) {
-			actions.push({
-				target: "MEMORY.md",
-				action: "append",
-				entries: result.appendedMemoryEntries,
-				durableCandidates: result.appendedDurableEntries,
-				probationaryCandidates: result.appendedProbationaryEntries,
-			});
-		}
-		if (result.appendedHistoryBlock) {
-			actions.push({ target: "HISTORY.md", action: "append" });
-		} else if (reason === "idle") {
-			skipped.push({ target: "HISTORY.md", reason: "idle does not write HISTORY.md" });
-		}
-		// Defensive: review-log bookkeeping runs after the consolidation has already been
-		// applied and checkpointed, so a shape surprise here must not report success as failure.
-		for (const candidate of result.rejectedMemoryOps ?? []) {
-			skipped.push({ target: "MEMORY.md", candidate, reason: "below auto-write confidence" });
-		}
-
-		await this.appendReviewLog({ reason, actions, skipped });
-	}
-
-	private async runPreflightConsolidation(
-		reason: Exclude<ConsolidationReason, "idle">,
 		messages?: AgentMessage[],
 		sessionEntries?: SessionEntry[],
 		firstKeptEntryId?: string,
@@ -341,83 +214,82 @@ export class MemoryLifecycle {
 		const messageSnapshot = [...(messages ?? this.options.getMessages())];
 		const sessionEntrySnapshot = sessionEntries ? [...sessionEntries] : [...this.options.getSessionEntries()];
 		const revisionSnapshot = this.durableRevision;
-		const settings = this.options.getSessionMemorySettings();
 
 		await this.runDurableMemoryJobSerial(async () => {
-			await this.runPreflightConsolidationNow(
+			await this.runBoundaryReflectNow(
 				reason,
 				messageSnapshot,
 				sessionEntrySnapshot,
 				revisionSnapshot,
-				settings,
 				firstKeptEntryId,
 			);
 		});
 	}
 
-	private async runPreflightConsolidationNow(
-		reason: Exclude<ConsolidationReason, "idle">,
+	private async runBoundaryReflectNow(
+		reason: ConsolidationReason,
 		messageSnapshot: AgentMessage[],
-		sessionEntrySnapshot?: SessionEntry[],
+		sessionEntrySnapshot: SessionEntry[] = [],
 		revisionSnapshot: number = this.durableRevision,
-		settings: PipiclawSessionMemorySettings = this.options.getSessionMemorySettings(),
 		firstKeptEntryId?: string,
 	): Promise<void> {
-		if (this.shouldForceRefreshFor(reason, settings)) {
-			await this.runSessionRefreshSerial({
-				reason,
-				messages: messageSnapshot,
-			});
-		}
-
 		try {
 			const maintenanceState = this.options.appHomeDir
 				? await readMemoryMaintenanceState(this.options.appHomeDir, this.options.channelId)
 				: undefined;
-			const lastEntryId = maintenanceState?.lastCheckpointEntryId;
+			const lastEntryId = maintenanceState?.lastReflectedEntryId;
 			const sourceWindow =
 				reason === "compaction"
 					? buildCompactionMemorySourceWindow({
-							entries: sessionEntrySnapshot ?? [],
+							entries: sessionEntrySnapshot,
 							messagesToSummarize: messageSnapshot,
 							firstKeptEntryId,
 							lastEntryId,
 						})
 					: buildIncrementalMemorySourceWindow({
-							entries: sessionEntrySnapshot ?? [],
+							entries: sessionEntrySnapshot,
 							lastEntryId,
 							sourceKind: reason,
 							fallbackMessages: messageSnapshot,
 						});
-			log.logInfo(`[${this.options.channelId}] Memory consolidation starting (${reason})`);
-			const result = await runInlineConsolidation({
-				...this.buildRunOptions(messageSnapshot, sessionEntrySnapshot, sourceWindow),
-				mode: "boundary",
+			log.logInfo(`[${this.options.channelId}] Memory reflect starting (${reason})`);
+			const result = await runReflect({
+				channelId: this.options.channelId,
+				channelDir: this.options.channelDir,
+				workspaceDir: this.options.workspaceDir,
+				model: this.options.getModel(),
+				resolveApiKey: this.options.resolveApiKey,
+				messages: sourceWindow.messages,
+				usageContext: { channelId: this.options.channelId, correlationId: sourceWindow.windowId },
 			});
 			if (this.options.appHomeDir && sourceWindow.throughEntryId) {
 				await updateMemoryMaintenanceState(this.options.appHomeDir, this.options.channelId, (current) => ({
 					...current,
-					lastCheckpointEntryId: sourceWindow.throughEntryId,
-					lastCheckpointAt: formatLocalTime(),
+					lastReflectedEntryId: sourceWindow.throughEntryId,
+					lastReflectAt: formatLocalTime(),
 					failureBackoffUntil: null,
 				}));
 			}
 			this.markDurableConsolidationCheckpoint(revisionSnapshot);
-			this.logConsolidationResult(reason, result);
-			await this.recordConsolidationReview(reason, result);
+			this.logReflectResult(reason, result);
+			await this.appendReviewLog({
+				reason: "reflect-boundary",
+				correlationId: sourceWindow.windowId,
+				...reviewLogEntryFor(result),
+			});
 		} catch (error) {
 			const message = errorMessage(error);
-			log.logWarning(`[${this.options.channelId}] Memory consolidation failed (${reason})`, message);
+			log.logWarning(`[${this.options.channelId}] Memory reflect failed (${reason})`, message);
 			await this.appendReviewLog({
-				reason,
+				reason: "reflect-boundary",
 				error: message,
-				skipped: [{ target: "consolidation", reason: "failed" }],
+				skipped: [{ target: "reflect", reason: "failed" }],
 			});
 		}
 	}
 
 	private async handleSessionBeforeCompact(event: SessionBeforeCompactEvent): Promise<void> {
-		await this.runPreflightConsolidation(
+		await this.runBoundaryReflect(
 			"compaction",
 			event.preparation.messagesToSummarize,
 			this.options.getSessionEntries(),
@@ -453,31 +325,30 @@ export class MemoryLifecycle {
 
 	/** Snapshot the outgoing state for an out-of-band `/new` before its runner is retired. */
 	noteNewSessionBoundary(): void {
-		// Snapshot the outgoing session synchronously: the switch has not happened
-		// yet, so getMessages()/getSessionEntries() still reference the session that
-		// is about to be replaced. Once we yield, this.session is rebound to the new
-		// (empty) session and the snapshot would be lost.
+		// Snapshot the outgoing session synchronously: the switch has not happened yet, so
+		// getMessages()/getSessionEntries() still reference the session about to be replaced.
+		// Once we yield, this.session is rebound to the new (empty) session and the snapshot
+		// would be lost.
 		const messageSnapshot = [...this.options.getMessages()];
 		const sessionEntrySnapshot = [...this.options.getSessionEntries()];
 
-		// Run the LLM-backed consolidation in the background so /new returns
-		// immediately. Failures are tolerated: runPreflightConsolidationNow catches
-		// and logs its own errors, and the serial queue keeps this from racing with
-		// idle/maintenance work on the same channel.
-		this.backgroundNewSessionConsolidation = this.runPreflightConsolidation(
+		// Run the LLM-backed reflect pass in the background so /new returns immediately.
+		// Failures are tolerated: runBoundaryReflectNow catches and logs its own errors, and the
+		// serial queue keeps this from racing with idle/maintenance work on the same channel.
+		this.backgroundNewSessionReflect = this.runBoundaryReflect(
 			"new-session",
 			messageSnapshot,
 			sessionEntrySnapshot,
 		).catch((error) => {
 			const message = errorMessage(error);
-			log.logWarning(`[${this.options.channelId}] Background new-session consolidation rejected`, message);
+			log.logWarning(`[${this.options.channelId}] Background new-session reflect rejected`, message);
 		});
 		this.recordActivity("boundary");
 	}
 
-	/** Await any in-flight detached new-session consolidation (shutdown/tests). */
-	async whenNewSessionConsolidationSettled(): Promise<void> {
-		await this.backgroundNewSessionConsolidation;
+	/** Await any in-flight detached new-session reflect run (shutdown/tests). */
+	async whenNewSessionReflectSettled(): Promise<void> {
+		await this.backgroundNewSessionReflect;
 	}
 
 	private handleSessionStart(event: SessionStartEvent): void {
@@ -490,12 +361,10 @@ export class MemoryLifecycle {
 
 	private recordActivity(kind: MemoryActivityEvent["kind"]): void {
 		const now = new Date();
-		const latestSessionEntryId = this.options.getSessionEntries().at(-1)?.id;
 		const event: MemoryActivityEvent = {
 			kind,
 			channelId: this.options.channelId,
 			timestamp: formatLocalTime(now),
-			latestSessionEntryId,
 		};
 		try {
 			void this.options.recordMemoryActivity?.(event);

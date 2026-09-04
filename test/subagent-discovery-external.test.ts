@@ -349,7 +349,7 @@ Body.
 
 		const result = discover(workspaceDir);
 		expect(result.agents.find((a) => a.name === "external-contextual")?.memory).toBe("none");
-		expect(result.agents.find((a) => a.name === "internal-contextual")?.memory).toBe("relevant");
+		expect(result.agents.find((a) => a.name === "internal-contextual")?.memory).toBe("index");
 		expect(result.warnings).toEqual([]);
 
 		// An explicit opt-in is honored but warned about, since it sends channel state to a third party.
@@ -371,9 +371,13 @@ Body.
 		);
 		const optedIn = discover(workspaceDir);
 		const declared = optedIn.agents.find((a) => a.name === "memory-declared");
-		expect(declared?.memory).toBe("relevant");
+		// Spec 050, D12: "relevant" is a retired alias — it still loads, mapped onto "index".
+		expect(declared?.memory).toBe("index");
 		expect(optedIn.warnings).toEqual(
-			expect.arrayContaining([expect.stringContaining("sends channel session state")]),
+			expect.arrayContaining([
+				expect.stringContaining('memory: "relevant" is retired'),
+				expect.stringContaining("sends the channel memory index"),
+			]),
 		);
 	});
 

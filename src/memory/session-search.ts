@@ -2,7 +2,7 @@ import { relative } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { parseLocalTime } from "../shared/local-time.js";
 import { clipText } from "../shared/text-utils.js";
-import { recencyBoostByAge, tokenizeRecallText } from "./recall.js";
+import { recencyBoostByAge, tokenizeRecallText } from "./search.js";
 import { buildSessionCorpus, type SessionSearchDocument, type SessionSearchRole } from "./session-corpus.js";
 import { runSidecarTask } from "./sidecar-worker.js";
 

@@ -310,7 +310,7 @@ export PIPICLAW_NO_PROXY=internal.example.com,10.0.0.0/8
 | 先跑通第一条消息 | 只补 `channel.json` 的钉钉字段和一个可用模型凭据；AI Card 可先留空 |
 | 已有企业 LLM 网关 | 在 `models.json` 定义 provider，在 `settings.json` 固定默认模型 |
 | 本地 Ollama | `models.json` 定义本地 provider；如启用 `networkGuard`，把本地地址加入 allow |
-| 控制后台记忆成本 | 保留 `memoryMaintenance.enabled: true`，优先关闭 `memoryRecall.rerankWithModel` 与 `sessionSearch.summarizeWithModel` |
+| 控制后台记忆成本 | 保留 `memoryMaintenance.enabled: true`，优先关闭 `sessionSearch.summarizeWithModel`；`memoryRecall.*` 已随 spec 050 退役 |
 | 多用户灰度 | `channel.json.allowFrom` 填 staff ID 列表 |
 | 长期 daemon | 用 systemd/pm2/supervisor；日志和账本默认落在 `state/` |
 | 部署环境无法直连模型 API | 设环境变量 `PIPICLAW_PROXY`（只代理 LLM 请求，钉钉不受影响），见「LLM 请求走代理」 |

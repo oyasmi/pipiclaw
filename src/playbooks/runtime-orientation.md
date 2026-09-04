@@ -23,10 +23,9 @@ AI Agent 委派（内置 subagent 与外部 claude-code / codex-cli / exec）由
 
 - `<runtime_turn_context>`：当前 channel 目录的路径。
 - `<task_agenda>`：在办任务的 id、status、enabled、wake、nextAction、Plan 进度和最新一条记录。
-- `<runtime_context>`：与本轮相关的召回记忆。
-- `<durable_memory_snapshot>`：会话首轮的 channel 与 workspace `MEMORY.md` 快照。
+- `<memory_bootstrap>`：**只在会话首轮（含 `/new` 之后、上下文压缩之后）出现**，往后的回合都没有。三段：workspace `MEMORY.md` 全文、channel 记忆索引、当天日志尾部。中途怀疑"这事以前是不是记过"，用 `memory_search` 查，不要等下一次首轮。
 
-这些都是摘要。需要 Goal/DoD/Manual/Current Cycle 全文时才去打开对应文件。
+这些都是摘要。需要 Goal/DoD/Manual/Current Cycle 全文，或某条索引里 `(+)` 标记的记忆正文时，才去打开对应文件。
 
 ## 文件地图与入口
 
@@ -43,7 +42,7 @@ App home（默认 `~/.pipiclaw/`，可由 `PIPICLAW_HOME` 覆盖）——运维�
 Workspace 根目录——**靠专用工具或只读注入访问**，项目边界下通用文件工具够不到：
 
 - `SOUL.md`（身份与表达风格）、`AGENTS.md`（用户/团队工作原则）：每回合注入 system prompt。
-- `MEMORY.md`：管理员维护的共享背景，随首轮快照和召回进入上下文。
+- `MEMORY.md`：跨频道共享背景，**只由人维护**，没有工具能写它；会话首轮整份注入 `<memory_bootstrap>`。
 - `skills/`：workspace 级程序性知识；`skill` 工具只读列出/加载，创建或修改直接用 `write`/`edit`。读写都始终放行（项目边界的例外）。
 - `sub-agents/`：委派角色定义，目录呈现在 system prompt 里。
 - `events/`：全 workspace 的调度事件，用 `event_manage` 管理。
@@ -51,14 +50,16 @@ Workspace 根目录——**靠专用工具或只读注入访问**，项目边界
 
 当前 channel 目录（路径在 `<runtime_turn_context>` 里）——runtime 维护，项目边界下始终可读：
 
-- `SESSION.md`（当前工作状态）、`MEMORY.md`（稳定事实、偏好、决策与中期 open loop）、`HISTORY.md`（更旧的摘要历史）：可以 `read`，但**只用 `memory_save`/`memory_forget` 写**——它们由后台维护队列共同持有，文件工具的写入会和后台相撞（项目边界下 path guard 会直接拒绝）。
+- `memory/<name>.md`：一条记忆一个文件（frontmatter：`name`/`description`/`type`/`source`/`created`/`updated`/`expires`），可以 `read` 看正文，但**只用 `memory_save`/`memory_forget` 写**——`MEMORY.md` 是从 `memory/` 生成的索引，文件工具直接改会被下一次写入覆盖。
+- `MEMORY.md`：生成物，频道记忆索引，人也能看。
+- `journal/YYYY-MM-DD.md`：按天追加的工作记录（发生了什么、定了什么、卡在哪），只由后台反思 pass 写；今天的尾部已经在 `<memory_bootstrap>` 里，更早的日期用 `memory_search` 或 `read` 查。
 - `tasks/`：长程任务台账。状态和生命周期用 `task_create`/`task_update`/`task_close`/`task_verify`，正文（Goal/DoD/Manual/Verification）大改用 `edit`——不带 `note` 的 `task_update` 只重写 frontmatter，原样保留正文。
 - `log.jsonl` / `context.jsonl`：冷存储，用 `session_search` 检索。
 
 ## 读取顺序
 
-1. 本回合注入的四个块。
-2. 当前工作断点或既有决定：channel `SESSION.md` → channel `MEMORY.md` → `HISTORY.md`。
+1. 本回合注入的块（`<runtime_turn_context>`、`<task_agenda>`，首轮再加 `<memory_bootstrap>`）。
+2. 当前工作断点或既有决定：本会话上文 → 今天的 journal 尾部（已在首轮块里）→ 怀疑记过但没在索引里，`memory_search`。
 3. 用户明确引用旧对话而上述都不够：`session_search`。
 4. 环境安装、凭据来源或机器变更：`ENVIRONMENT.md`。
 5. runtime 机制：读对应 playbook，不从旧对话或 workspace 副本猜测。

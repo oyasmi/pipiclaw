@@ -13,9 +13,9 @@ export interface TurnPromptParts {
 	preserveRawInput: boolean;
 	/** `<runtime_turn_context>`: the channel facts kept out of the cached system prompt. */
 	channelCapsule: string;
+	/** `<memory_bootstrap>`: workspace memory + channel index + journal, first turn only (spec 050, D1). */
 	durableMemoryBootstrap: string;
 	taskDigest: string;
-	recalledMemory: string;
 }
 
 export interface AssembledTurnPrompt {
@@ -26,15 +26,15 @@ export interface AssembledTurnPrompt {
 /**
  * Compose one turn's prompt from the pieces `run()` gathered, and measure what each piece cost.
  *
- * The order is a contract, not a preference: durable memory bootstrap → task agenda → recalled
- * memory → channel capsule → the user's message. Everything the runtime supplies precedes the
- * message it is context *for*, and the blocks that change least between turns come first, so the
- * provider's prefix cache keeps as long a match as possible. An empty piece contributes no
- * separator, so a turn with nothing to recall reads exactly like one where recall is disabled.
+ * The order is a contract, not a preference: memory bootstrap → task agenda → channel capsule →
+ * the user's message. Everything the runtime supplies precedes the message it is context *for*,
+ * and the blocks that change least between turns come first, so the provider's prefix cache keeps
+ * as long a match as possible. An empty piece contributes no separator, so a turn after the
+ * bootstrap one reads exactly like one where memory is disabled.
  *
  * `stats` measures the inputs, never the rendered wrapper — it is what `/context` reports as the
  * previous turn's automatic context, and the per-piece unit caps are enforced upstream by the
- * builders themselves (`memory/recall.ts`, `memory/task-digest.ts`, `memory/bootstrap.ts`).
+ * builders themselves (`memory/index-budget.ts`, `memory/task-digest.ts`).
  */
 export function assembleTurnPrompt(parts: TurnPromptParts): AssembledTurnPrompt {
 	const stats: PromptTurnContextStats = {
@@ -42,8 +42,6 @@ export function assembleTurnPrompt(parts: TurnPromptParts): AssembledTurnPrompt 
 		durableMemoryUnits: countPromptUnits(parts.durableMemoryBootstrap),
 		taskDigestChars: parts.taskDigest.length,
 		taskDigestUnits: countPromptUnits(parts.taskDigest),
-		recalledMemoryChars: parts.recalledMemory.length,
-		recalledMemoryUnits: countPromptUnits(parts.recalledMemory),
 		channelCapsuleUnits: countPromptUnits(parts.channelCapsule),
 		userMessageChars: parts.clippedInput.length,
 	};
@@ -55,7 +53,6 @@ export function assembleTurnPrompt(parts: TurnPromptParts): AssembledTurnPrompt 
 	const blocks = [
 		parts.durableMemoryBootstrap,
 		parts.taskDigest,
-		parts.recalledMemory,
 		parts.channelCapsule,
 		`<user_message>\n${parts.userMessage}\n</user_message>`,
 	];

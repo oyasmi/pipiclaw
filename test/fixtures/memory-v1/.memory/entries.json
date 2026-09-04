@@ -1,0 +1,72 @@
+{
+	"schemaVersion": 3,
+	"updatedAt": "2026-09-04T04:25:00.000+08:00",
+	"entries": {
+		"m-72a97ee9": {
+			"id": "m-72a97ee9",
+			"kind": "preference",
+			"sourceType": "agent",
+			"createdAt": "2026-08-27T10:00:00.000+08:00",
+			"status": "active"
+		},
+		"m-7f252e91": {
+			"id": "m-7f252e91",
+			"kind": "decision",
+			"sourceType": "agent",
+			"createdAt": "2026-08-28T10:00:00.000+08:00",
+			"status": "active",
+			"probationUntil": "2026-09-27T14:42:47.715+08:00"
+		},
+		"m-ee8052dc": {
+			"id": "m-ee8052dc",
+			"kind": "constraint",
+			"sourceType": "agent",
+			"createdAt": "2026-07-18T10:00:00.000+08:00",
+			"status": "active"
+		},
+		"m-bcd19304": {
+			"id": "m-bcd19304",
+			"kind": "fact",
+			"sourceType": "user",
+			"createdAt": "2026-07-27T10:00:00.000+08:00",
+			"status": "active"
+		},
+		"m-4cfb7bba": {
+			"id": "m-4cfb7bba",
+			"kind": "fact",
+			"sourceType": "user",
+			"createdAt": "2026-07-28T10:00:00.000+08:00",
+			"status": "active"
+		},
+		"m-690272b3": {
+			"id": "m-690272b3",
+			"kind": "open-loop",
+			"sourceType": "agent",
+			"createdAt": "2026-08-28T10:00:00.000+08:00",
+			"status": "active"
+		},
+		"m-45ee7b84": {
+			"id": "m-45ee7b84",
+			"kind": "decision",
+			"sourceType": "agent",
+			"createdAt": "2026-08-30T10:00:00.000+08:00",
+			"status": "active"
+		},
+		"m-6630a14e": {
+			"id": "m-6630a14e",
+			"kind": "fact",
+			"sourceType": "legacy",
+			"createdAt": "2026-07-13T10:00:00.000+08:00",
+			"status": "active",
+			"contentHash": "e982968076a70e8d9d5ef4f20b30637eff8703482a986b0cb2eada906e27874d"
+		},
+		"m-024dd2c4": {
+			"id": "m-024dd2c4",
+			"kind": "preference",
+			"sourceType": "legacy",
+			"createdAt": "2026-07-13T10:00:00.000+08:00",
+			"status": "active",
+			"contentHash": "dca897317c5b46c25fa54ad881cf27d446aad6026efc9403042d35dc14d74490"
+		}
+	}
+}

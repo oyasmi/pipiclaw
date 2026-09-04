@@ -15,13 +15,8 @@ import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-maintenance-state-");
 
-function activity(kind: MemoryActivityEvent["kind"], index: number): MemoryActivityEvent {
-	return {
-		kind,
-		channelId: "dm_1",
-		timestamp: new Date(Date.UTC(2026, 3, 1, 0, 0, index)).toISOString(),
-		latestSessionEntryId: `entry-${index}`,
-	};
+function activity(kind: MemoryActivityEvent["kind"]): MemoryActivityEvent {
+	return { kind, channelId: "dm_1", timestamp: "2026-04-19T00:00:00.000Z" };
 }
 
 describe("channel maintenance queue", () => {
@@ -64,7 +59,6 @@ describe("memory maintenance state", () => {
 		await expect(readMemoryMaintenanceState(appHomeDir, "dm_1")).resolves.toMatchObject({
 			channelId: "dm_1",
 			dirty: false,
-			turnsSinceSessionRefresh: 0,
 		});
 
 		await mkdir(join(appHomeDir, "state", "memory"), { recursive: true });
@@ -80,17 +74,11 @@ describe("memory maintenance state", () => {
 				channelId: "dm_1",
 				timestamp: "2026-04-19T00:00:00.000Z",
 				eligibleAfter: "2026-04-19T00:10:00.000Z",
-				latestSessionEntryId: "entry-2",
 			}),
 		);
 
 		const raw = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
-		expect(raw).toMatchObject({
-			dirty: true,
-			turnsSinceSessionRefresh: 1,
-			lastSessionEntryId: "entry-2",
-			eligibleAfter: "2026-04-19T00:10:00.000Z",
-		});
+		expect(raw).toMatchObject({ dirty: true, eligibleAfter: "2026-04-19T00:10:00.000Z" });
 	});
 
 	it("serializes concurrent updates to the same channel state", async () => {
@@ -108,14 +96,10 @@ describe("memory maintenance state", () => {
 		);
 
 		const state = await readMemoryMaintenanceState(appHomeDir, "dm_1");
-		expect(state).toMatchObject({
-			dirty: true,
-			turnsSinceSessionRefresh: 6,
-			toolCallsSinceSessionRefresh: 6,
-		});
+		expect(state).toMatchObject({ dirty: true });
 	});
 
-	it("folds legacy consolidation/growth-review fields into the checkpoint", async () => {
+	it("folds the v1 checkpoint job's fields into the reflect cadence/cursor", async () => {
 		const appHomeDir = createTempDir();
 		const path = getMemoryMaintenanceStatePath(appHomeDir, "dm_1");
 		await mkdir(join(appHomeDir, "state", "memory"), { recursive: true });
@@ -124,17 +108,15 @@ describe("memory maintenance state", () => {
 			JSON.stringify({
 				channelId: "dm_1",
 				dirty: true,
-				lastDurableConsolidationAt: "2026-04-19T00:20:00.000Z",
-				lastGrowthReviewAt: "2026-04-19T00:40:00.000Z",
-				lastConsolidatedEntryId: "entry-7",
-				lastReviewedEntryId: "entry-5",
+				lastCheckpointAt: "2026-04-19T00:40:00.000Z",
+				lastCheckpointEntryId: "entry-7",
 			}),
 			"utf-8",
 		);
 
 		await expect(readMemoryMaintenanceState(appHomeDir, "dm_1")).resolves.toMatchObject({
-			lastCheckpointAt: "2026-04-19T00:40:00.000Z",
-			lastCheckpointEntryId: "entry-7",
+			lastReflectAt: "2026-04-19T00:40:00.000Z",
+			lastReflectedEntryId: "entry-7",
 		});
 	});
 
@@ -160,19 +142,13 @@ describe("memory maintenance state", () => {
 		await mkdir(join(legacyPath, ".."), { recursive: true });
 		await writeFile(
 			legacyPath,
-			JSON.stringify({
-				channelId,
-				dirty: true,
-				lastStructuralMaintenanceAt: "2026-04-19T00:40:00.000Z",
-				lastSessionRefreshedEntryId: "entry-9",
-			}),
+			JSON.stringify({ channelId, dirty: true, lastReflectAt: "2026-04-19T00:40:00.000Z" }),
 			"utf-8",
 		);
 
-		// Losing this would re-run the heaviest LLM maintenance and re-scan the transcript.
+		// Losing this would re-run the reflect pass on the channel's whole unreflected history.
 		await expect(readMemoryMaintenanceState(appHomeDir, channelId)).resolves.toMatchObject({
-			lastStructuralMaintenanceAt: "2026-04-19T00:40:00.000Z",
-			lastSessionRefreshedEntryId: "entry-9",
+			lastReflectAt: "2026-04-19T00:40:00.000Z",
 		});
 
 		await updateMemoryMaintenanceState(appHomeDir, channelId, (state) => ({ ...state, dirty: false }));
@@ -181,19 +157,13 @@ describe("memory maintenance state", () => {
 		expect(existsSync(legacyPath)).toBe(false); // migrated, not duplicated
 		expect(existsSync(join(legacyPath, ".."))).toBe(false); // and no stray channel-shaped dir
 		await expect(readMemoryMaintenanceState(appHomeDir, channelId)).resolves.toMatchObject({
-			lastStructuralMaintenanceAt: "2026-04-19T00:40:00.000Z",
+			lastReflectAt: "2026-04-19T00:40:00.000Z",
 		});
 	});
 
 	it("does not mark a user-turn-started event as dirty by itself", () => {
 		const next = applyMemoryActivityToState(
-			{
-				channelId: "dm_1",
-				dirty: false,
-				turnsSinceSessionRefresh: 0,
-				toolCallsSinceSessionRefresh: 0,
-				failureBackoffUntil: null,
-			},
+			{ channelId: "dm_1", dirty: false, failureBackoffUntil: null },
 			{
 				kind: "user-turn-started",
 				channelId: "dm_1",
@@ -202,12 +172,7 @@ describe("memory maintenance state", () => {
 			},
 		);
 
-		expect(next).toMatchObject({
-			dirty: false,
-			eligibleAfter: "2026-04-19T00:10:00.000Z",
-			turnsSinceSessionRefresh: 0,
-			toolCallsSinceSessionRefresh: 0,
-		});
+		expect(next).toMatchObject({ dirty: false, eligibleAfter: "2026-04-19T00:10:00.000Z" });
 	});
 });
 
@@ -215,12 +180,12 @@ describe("memory activity recorder", () => {
 	it("collapses a burst into one write that matches event-by-event application", async () => {
 		const appHomeDir = createTempDir();
 		const events: MemoryActivityEvent[] = [
-			activity("user-turn-started", 0),
-			activity("tool-call", 1),
-			activity("tool-call", 2),
-			activity("tool-call", 3),
-			activity("assistant-turn-completed", 4),
-			activity("boundary", 5),
+			activity("user-turn-started"),
+			activity("tool-call"),
+			activity("tool-call"),
+			activity("tool-call"),
+			activity("assistant-turn-completed"),
+			activity("boundary"),
 		];
 
 		const recorder = createMemoryActivityRecorder({
@@ -234,11 +199,7 @@ describe("memory activity recorder", () => {
 			recorder.record(event);
 		}
 		// Nothing has touched disk yet: the whole burst is still buffered.
-		expect(await readMemoryMaintenanceState(appHomeDir, "dm_1")).toMatchObject({
-			dirty: false,
-			toolCallsSinceSessionRefresh: 0,
-			turnsSinceSessionRefresh: 0,
-		});
+		expect(await readMemoryMaintenanceState(appHomeDir, "dm_1")).toMatchObject({ dirty: false });
 
 		await recorder.flush("dm_1");
 		const batched = await readMemoryMaintenanceState(appHomeDir, "dm_1");
@@ -251,44 +212,38 @@ describe("memory activity recorder", () => {
 		const perEvent = await readMemoryMaintenanceState(perEventDir, "dm_1");
 
 		expect(batched).toEqual(perEvent);
-		expect(batched).toMatchObject({
-			dirty: true,
-			toolCallsSinceSessionRefresh: 3,
-			turnsSinceSessionRefresh: 1,
-			lastSessionEntryId: "entry-5",
-		});
+		expect(batched).toMatchObject({ dirty: true });
 	});
 
 	it("flushes on the debounce and accumulates onto state written by other writers", async () => {
 		const appHomeDir = createTempDir();
 		const recorder = createMemoryActivityRecorder({ appHomeDir, debounceMs: 5 });
 
-		// A checkpoint written directly, as the consolidation path does.
+		// A checkpoint written directly, as the reflect job path does.
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({
 			...state,
-			lastCheckpointEntryId: "entry-99",
-			toolCallsSinceSessionRefresh: 2,
+			lastReflectedEntryId: "entry-99",
 		}));
 
-		recorder.record(activity("tool-call", 1));
+		recorder.record(activity("tool-call"));
 		await new Promise((resolve) => setTimeout(resolve, 30));
 
 		const state = await readMemoryMaintenanceState(appHomeDir, "dm_1");
-		// The debounced write must add to the existing counter, not replace the record.
-		expect(state.toolCallsSinceSessionRefresh).toBe(3);
-		expect(state.lastCheckpointEntryId).toBe("entry-99");
+		// The debounced write must not clobber a field a direct writer already set.
+		expect(state.dirty).toBe(true);
+		expect(state.lastReflectedEntryId).toBe("entry-99");
 	});
 
 	it("flush is idempotent and covers every buffered channel", async () => {
 		const appHomeDir = createTempDir();
 		const recorder = createMemoryActivityRecorder({ appHomeDir, debounceMs: 60_000 });
 
-		recorder.record({ ...activity("tool-call", 1), channelId: "dm_a" });
-		recorder.record({ ...activity("tool-call", 2), channelId: "dm_b" });
+		recorder.record({ ...activity("tool-call"), channelId: "dm_a" });
+		recorder.record({ ...activity("tool-call"), channelId: "dm_b" });
 		await recorder.flush();
 		await recorder.flush();
 
-		expect((await readMemoryMaintenanceState(appHomeDir, "dm_a")).toolCallsSinceSessionRefresh).toBe(1);
-		expect((await readMemoryMaintenanceState(appHomeDir, "dm_b")).toolCallsSinceSessionRefresh).toBe(1);
+		expect((await readMemoryMaintenanceState(appHomeDir, "dm_a")).dirty).toBe(true);
+		expect((await readMemoryMaintenanceState(appHomeDir, "dm_b")).dirty).toBe(true);
 	});
 });

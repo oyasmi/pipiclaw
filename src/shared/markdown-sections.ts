@@ -42,10 +42,6 @@ function splitSectionsByHeading(content: string, headingPrefix: "# " | "## "): M
 	return sections;
 }
 
-export function splitH1Sections(content: string): MarkdownSection[] {
-	return splitSectionsByHeading(content, "# ");
-}
-
 export function splitH2Sections(content: string): MarkdownSection[] {
 	return splitSectionsByHeading(content, "## ");
 }

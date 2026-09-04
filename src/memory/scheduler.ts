@@ -8,19 +8,16 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
 import { dedupeChannelIdsByDirectory, isChannelId } from "../channel/channel-paths.js";
 import * as log from "../log.js";
-import type { PipiclawMemoryMaintenanceSettings, PipiclawSessionMemorySettings } from "../settings.js";
+import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
-import {
-	shouldRunMemoryCheckpoint,
-	shouldRunSessionRefresh,
-	shouldRunStructuralMaintenance,
-} from "./maintenance-gates.js";
-import { runMemoryCheckpointJob, runSessionRefreshJob, runStructuralMaintenanceJob } from "./maintenance-jobs.js";
+import { shouldRunReflect } from "./maintenance-gates.js";
 import { getMemoryMaintenanceStateDir, readMemoryMaintenanceState } from "./maintenance-state.js";
+import { runReflectJob } from "./reflect-job.js";
 
 export interface MemoryMaintenanceRuntimeContext {
 	channelId: string;
 	channelDir: string;
+	workspaceDir: string;
 	/**
 	 * Transcript accessors, not arrays: the scheduler visits a channel every tick but almost
 	 * every tick is denied by a cheap schedule gate. Copying (and then scanning) the whole
@@ -30,10 +27,7 @@ export interface MemoryMaintenanceRuntimeContext {
 	sessionEntries: () => SessionEntry[];
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
-	settings: {
-		sessionMemory: PipiclawSessionMemorySettings;
-		memoryMaintenance: PipiclawMemoryMaintenanceSettings;
-	};
+	settings: { memoryMaintenance: PipiclawMemoryMaintenanceSettings };
 }
 
 export interface MemoryMaintenanceSchedulerOptions {
@@ -42,10 +36,7 @@ export interface MemoryMaintenanceSchedulerOptions {
 	getKnownChannelIds?: () => Iterable<string>;
 	getRuntimeContext: (channelId: string) => Promise<MemoryMaintenanceRuntimeContext | null>;
 	isChannelActive: (channelId: string) => boolean;
-	getSettings: () => {
-		memoryMaintenance: PipiclawMemoryMaintenanceSettings;
-		sessionMemory: PipiclawSessionMemorySettings;
-	};
+	getSettings: () => { memoryMaintenance: PipiclawMemoryMaintenanceSettings };
 	intervalMs?: number;
 }
 
@@ -55,57 +46,26 @@ const DEFAULT_TICK_INTERVAL_MS = 60_000;
  * Cheap due-time predicate, evaluated before `getRuntimeContext` (transcript access, model
  * resolution, settings reload) is paid for.
  *
- * Reuses the real gates with optimistic material (transcript-derived checks always pass), so the
- * only work here is one state-file read plus timestamp arithmetic. A gate's material checks are
- * purely additive restrictions on top of the cheap checks (interval/backoff/idle/dirty), so
+ * Reuses the real gate with optimistic material (transcript-derived checks always pass), so the
+ * only work here is one state-file read plus timestamp arithmetic. The gate's material check is a
+ * purely additive restriction on top of the cheap checks (interval/backoff/idle/dirty), so
  * optimistic material can only ever make this predicate *more* permissive than the real job would
- * be — it never wrongly skips a channel that a job would actually run for.
+ * be — it never wrongly skips a channel the job would actually run for.
  */
-async function mightAnyMaintenanceJobBeDue(input: {
+async function mightReflectBeDue(input: {
 	appHomeDir: string;
 	channelId: string;
-	settings: {
-		sessionMemory: PipiclawSessionMemorySettings;
-		memoryMaintenance: PipiclawMemoryMaintenanceSettings;
-	};
+	settings: { memoryMaintenance: PipiclawMemoryMaintenanceSettings };
 	now: Date;
 }): Promise<boolean> {
 	const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
-
-	const sessionRefresh = shouldRunSessionRefresh({
-		now: input.now,
-		state,
-		sessionMemory: input.settings.sessionMemory,
-		maintenance: input.settings.memoryMaintenance,
-		channelActive: false,
-		hasNewSessionEntry: () => true,
-		hasMeaningfulMaterial: () => true,
-	});
-	if (sessionRefresh.allowed) return true;
-
-	const checkpoint = shouldRunMemoryCheckpoint({
+	return shouldRunReflect({
 		now: input.now,
 		state,
 		maintenance: input.settings.memoryMaintenance,
 		channelActive: false,
-		material: () => ({ hasNewEntry: true, hasMeaningfulExchange: true, batchSize: Number.MAX_SAFE_INTEGER }),
-	});
-	if (checkpoint.allowed) return true;
-
-	const structural = await shouldRunStructuralMaintenance({
-		now: input.now,
-		state,
-		maintenance: input.settings.memoryMaintenance,
-		channelActive: false,
-		material: async () => ({
-			memoryCleanupNeeded: true,
-			historyFoldingNeeded: true,
-			hasMemoryContent: true,
-			hasHistoryContent: true,
-			expiredEntryCount: 1,
-		}),
-	});
-	return structural.allowed;
+		material: () => ({ hasNewEntry: true, hasMeaningfulExchange: true }),
+	}).allowed;
 }
 
 /**
@@ -202,7 +162,7 @@ export class MemoryMaintenanceScheduler {
 				if (
 					channelId &&
 					!this.options.isChannelActive(channelId) &&
-					(await mightAnyMaintenanceJobBeDue({
+					(await mightReflectBeDue({
 						appHomeDir: this.options.appHomeDir,
 						channelId,
 						settings,
@@ -229,10 +189,11 @@ export class MemoryMaintenanceScheduler {
 		if (!context) {
 			return;
 		}
-		const common = {
+		await runReflectJob({
 			appHomeDir: this.options.appHomeDir,
 			channelId,
 			channelDir: context.channelDir,
+			workspaceDir: context.workspaceDir,
 			channelActive: this.options.isChannelActive(channelId),
 			now,
 			settings: context.settings,
@@ -240,16 +201,6 @@ export class MemoryMaintenanceScheduler {
 			resolveApiKey: context.resolveApiKey,
 			messages: context.messages,
 			sessionEntries: context.sessionEntries,
-		};
-
-		const session = await runSessionRefreshJob(common);
-		if (session.ran) {
-			return;
-		}
-		const checkpoint = await runMemoryCheckpointJob(common);
-		if (checkpoint.ran) {
-			return;
-		}
-		await runStructuralMaintenanceJob(common);
+		});
 	}
 }

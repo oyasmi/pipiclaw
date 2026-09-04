@@ -101,7 +101,7 @@ name: reviewer
 description: 当需要只读审查代码改动、查找正确性问题、回归风险和缺失测试时使用；不要用于实现修复或最终验收。任务中应给出改动范围和验收背景。
 tools: read,bash
 contextMode: contextual
-memory: relevant
+memory: index
 thinkingLevel: medium
 paths:
   - src/
@@ -149,7 +149,7 @@ maxWallTimeSec: 5400
 | `tools` | 否 | `read,bash` | 允许的工具，支持 `read`、`grep`、`bash`、`edit`、`write`、`web_search`、`web_fetch` |
 | `model` | 否 | 当前主代理模型 | 精确模型引用，建议写成 `provider/modelId`，按 `models.json` 校验 |
 | `contextMode` | 否 | `isolated` | `isolated` 或 `contextual` |
-| `memory` | 否 | `isolated` 时为 `none`，`contextual` 时为 `relevant` | `none`、`session`、`relevant` |
+| `memory` | 否 | `isolated` 时为 `none`，`contextual` 时为 `index` | `none`、`index`（旧值 `session`/`relevant` 仍可加载，discovery 时映射为 `index` 并给出警告） |
 | `paths` | 否 | 空 | 建议优先关注的文件或目录 |
 | `thinkingLevel` | 否 | `medium`（与主代理默认推理档一致） | `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；内置路径会按模型能力 clamp 到最近的可用档 |
 | `maxTurns` | 否 | `32` | 最大 assistant 轮数 |
@@ -175,7 +175,7 @@ maxWallTimeSec: 5400
 | `env` | 否 | 空 | 追加或覆盖继承自 pipiclaw 进程的环境变量 |
 | `maxWallTimeSec` | 否 | `3600` | 外部角色只有这一个执行预算——没有轮数/工具调用次数上限，因为那些概念对外部 CLI 不适用 |
 | `contextMode` | 否 | `isolated` | 同内置词表，见下文"`contextMode` 与 `memory`" |
-| `memory` | 否 | **`none`，不跟随 `contextMode`** | 与内置不同：内置的 `contextual` 隐含 `relevant`，外部永远默认 `none`，必须显式声明才会把会话/记忆内容发给外部进程 |
+| `memory` | 否 | **`none`，不跟随 `contextMode`** | 与内置不同：内置的 `contextual` 隐含 `index`，外部永远默认 `none`，必须显式声明才会把会话/记忆内容发给外部进程 |
 | `paths` | 否 | 空 | 同内置 |
 | `tools` / `maxTurns` / `maxToolCalls` / `bashTimeoutSec` / `cwd` | 驳回 | - | 对外部进程无意义或工作目录不允许写死在角色里 |
 
@@ -233,7 +233,7 @@ maxWallTimeSec: 5400
 
 ### `context` 与 frontmatter 的关系
 
-`context` 是 `contextMode` + `memory` 的调用侧写法：`none` → `isolated`/`none`，`session` → `contextual`/`session`，`relevant` → `contextual`/`relevant`。只出现在 `subagent_inline` 上；配置角色（内置或外部）的上下文策略一律来自角色文件的 `contextMode`/`memory`，调用侧没有覆盖字段——包括 `contextual` + `memory: none`（只注入 `paths`）这种只有 frontmatter 能表达的组合。
+`context` 是 `contextMode` + `memory` 的调用侧写法，二选一：`none` → `isolated`/`none`，`index` → `contextual`/`index`。只出现在 `subagent_inline` 上；配置角色（内置或外部）的上下文策略一律来自角色文件的 `contextMode`/`memory`，调用侧没有覆盖字段——包括 `contextual` + `memory: none`（只注入 `paths`）这种只有 frontmatter 能表达的组合。
 
 ## 同步宽限窗口：一次调用，两种返回（Sync Grace Window）
 
@@ -310,16 +310,15 @@ maxWallTimeSec: 5400
 | `memory` | 含义 |
 |----|------|
 | `none` | 不注入额外记忆 |
-| `session` | 注入会话工作态摘要 |
-| `relevant` | 注入筛选后的相关记忆与上下文 |
+| `index` | 注入与主 agent 首轮相同的三段（workspace 共享背景 + channel 记忆索引 + 当天 journal 尾部），预算减半 |
 
-**默认值按 runtime 不同**：内置角色里 `contextMode: contextual` 隐含 `memory: relevant`；**外部角色的 `memory` 默认永远是 `none`，不跟随 `contextMode`**——一个只想要 `paths` 注入（`contextMode: contextual`，未写 `memory`）的外部角色不会因此意外开始把频道会话状态发给第三方进程。
+**默认值按 runtime 不同**：内置角色里 `contextMode: contextual` 隐含 `memory: index`；**外部角色的 `memory` 默认永远是 `none`，不跟随 `contextMode`**——一个只想要 `paths` 注入（`contextMode: contextual`，未写 `memory`）的外部角色不会因此意外开始把频道会话状态发给第三方进程。旧角色文件里写的 `session`/`relevant` 仍会被接受，discovery 时统一映射为 `index` 并给出一条退役提示，建议尽快改成 `index`。
 
-**这是一条真实的数据外发路径，如实说明**：显式声明 `memory: session` 或 `memory: relevant` 的外部角色，会把 `SESSION.md` 摘要（`session`）或召回的 `MEMORY.md`/`HISTORY.md` 片段（`relevant`）写进发给外部进程的 stdin，交给第三方 CLI 及其背后的 API。这是一次显式、知情的选择，声明后 discovery 会给出一条提示级 warning 提醒这件事，`/subagents roles <name>` 也会展示当前生效的 `contextMode`/`memory` 并在非 `none` 时标出这条提示。
+**这是一条真实的数据外发路径，如实说明**：显式声明 `memory: index` 的外部角色，会把 channel 记忆索引与当天 journal 片段写进发给外部进程的 stdin，交给第三方 CLI 及其背后的 API。这是一次显式、知情的选择，声明后 discovery 会给出一条提示级 warning 提醒这件事，`/subagents roles <name>` 也会展示当前生效的 `contextMode`/`memory` 并在非 `none` 时标出这条提示。
 
 推荐搭配：
 
-- 必须继承会话决策或团队背景的审查、研究任务：`contextMode: contextual` + `memory: relevant`（外部角色需显式声明 `memory`，不能只靠 `contextMode`）。
+- 必须继承会话决策或团队背景的审查、研究任务：`contextMode: contextual` + `memory: index`（外部角色需显式声明 `memory`，不能只靠 `contextMode`）。
 - 任务描述已经自包含、强调独立判断或无需会话背景的角色：`contextMode: isolated` + `memory: none`（外部角色的默认值本就如此）。
 
 外部角色自己也会读取目标仓库的 `CLAUDE.md` / `AGENTS.md` 建立上下文，这条路径不受 pipiclaw 的 `memory` 设置影响，见下文"明确不可控的部分"。
@@ -411,7 +410,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 每次外部派发都会写一条审计事件（runId、角色、harness、完整 argv、工作目录、`mutates`、model），不受"只记录被拦截的动作"这个开关影响。
 - 外部进程继承 pipiclaw 自身的环境变量，但默认剔除 pipiclaw 自己会用到的凭据变量——一份明确的变量名清单（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY` 等 LLM provider key，以及 `DINGTALK_*`），不是通配的后缀正则。目标仓库的 `CLAUDE.md`/prompt 能操纵外部 agent 的行为，不该顺带继承 pipiclaw 自己的模型 provider key 或钉钉凭据。**这是一层减少误继承的礼貌措施，不是安全边界**——真正的权限边界是角色的命令、CLI 自身的沙箱和宿主账号。需要 `gh`/`npm` 等工具的角色，它们所需的 `GITHUB_TOKEN`/`NPM_TOKEN` 等凭据不在这份清单里，会照常继承；如果确实被过滤掉了（清单之外的变量默认不受影响），用 `env:` 显式加回即可。本次派发实际丢弃的变量名会写进 `invocationWarnings`，`subagent_run op=show` 能看到。
 - 外部 agent 本身是完整 coding agent，能否 spawn 自己的子代理、递归到多深，pipiclaw 不保证也不限制。
-- 显式声明 `memory: session` 或 `memory: relevant` 的外部角色会把频道会话状态/召回的记忆片段写进发给外部进程的 stdin——这与继承环境变量属于同一类如实声明的暴露面，不是隐藏行为（默认值是 `none`，见上文"`contextMode` 与 `memory`"）。
+- 显式声明 `memory: index` 的外部角色会把 channel 记忆索引和当天 journal 片段写进发给外部进程的 stdin——这与继承环境变量属于同一类如实声明的暴露面，不是隐藏行为（默认值是 `none`，见上文"`contextMode` 与 `memory`"）。
 
 ## 并发与重启
 
@@ -498,7 +497,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 期待 `subagent`（角色优先）接受 `tools`/`model`/`mutates`/`returns` 之类的覆盖——这几个字段已经不在这个工具的 schema 里；需要覆盖就说明该用 `subagent_inline`，或者该改角色文件本身。
 - 把 `mutates: write` 的 verifier 当成结构性只读证据——它可以承担 `purpose=verify`，但会取写 lease 且 attestation 只有 `advisory` 强度；不得修改被验收实现或为了通过测试而修代码。
 - 以为 `mutates: read` 或工具白名单是安全边界——外部进程不受它们约束，真正的边界只有目标 CLI 自己的 sandbox flag。
-- 给外部角色写 `memory: relevant` 却没意识到这会把频道会话/记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
+- 给外部角色写 `memory: index` 却没意识到这会把频道记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
 - 改了外部角色的 `command`/`model`/`shell` 之后还指望 `follow_up` 能续接旧会话——指纹不匹配会被拒绝，需要改派新任务。
 
 ## 该看哪份文档

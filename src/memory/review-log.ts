@@ -3,15 +3,8 @@ import { dirname, join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
 
-export type MemoryReviewReason =
-	| "idle"
-	| "compaction"
-	| "new-session"
-	| "shutdown"
-	| "session-refresh-job"
-	| "memory-checkpoint-job"
-	| "structural-maintenance-job"
-	| "user-forget";
+/** Spec 050, D10: the idle reflect job, a boundary-triggered reflect run, or a tool/migration event. */
+export type MemoryReviewReason = "reflect" | "reflect-boundary" | "memory-save" | "memory-forget" | "migration";
 
 export interface MemoryReviewLogEntry {
 	timestamp: string;

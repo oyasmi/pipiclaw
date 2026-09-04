@@ -4,7 +4,6 @@ import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { MediaSender } from "../channel/channel-context.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
-import type { MemoryCandidateStore } from "../memory/candidates.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { PipiclawSessionSearchSettings } from "../settings.js";
 import { createBashTool } from "./bash.js";
@@ -66,7 +65,6 @@ export interface ToolBuildContext {
 	getAvailableModels?: () => Model<Api>[];
 	resolveApiKey?: (model: Model<Api>) => Promise<string>;
 	getSessionSearchSettings?: () => PipiclawSessionSearchSettings;
-	memoryCandidateStore?: MemoryCandidateStore;
 	/**
 	 * Present only on the main path, and only when the driving transport can deliver
 	 * files. Gates the `send_media` tool; sub-agents never receive it.
@@ -104,9 +102,6 @@ function memoryToolOptions(ctx: ToolBuildContext) {
 		channelId: ctx.channelId,
 		channelDir: ctx.channelDir,
 		workspaceDir: ctx.workspaceDir,
-		memoryCandidateStore: req(ctx.memoryCandidateStore, "memoryCandidateStore"),
-		getCurrentModel: req(ctx.getCurrentModel, "getCurrentModel"),
-		resolveApiKey: req(ctx.resolveApiKey, "resolveApiKey"),
 	};
 }
 

@@ -24,17 +24,15 @@
 
 ## 记忆维护
 
-记忆由频道文件分层：`SESSION.md` 是当前工作态，`MEMORY.md` 是稳定事实与偏好，`HISTORY.md` 是折叠后的旧摘要，`log.jsonl` / `context.jsonl` 是冷存储。频道之间隔离；工作区级 `workspace/MEMORY.md` 和 `ENVIRONMENT.md` 是管理员维护的共享背景。
+记忆由频道文件分层（spec 050）：`memory/<name>.md` 一条事实一个文件，生成的 `MEMORY.md` 是索引；`journal/YYYY-MM-DD.md` 是按天的工作记录；`log.jsonl` / `context.jsonl` 是冷存储。频道之间隔离；工作区级 `workspace/MEMORY.md` 和 `ENVIRONMENT.md` 是管理员维护的共享背景。
 
 后台 memory maintenance scheduler 不使用 `workspace/events/`。它只在本地 gate 通过后才发起 LLM sidecar：
 
 | 任务 | 内置间隔 | 作用 |
 |---|---:|---|
-| Session refresh | 10 分钟 | 刷新 `SESSION.md` |
-| Memory checkpoint | 20 分钟 | 从新对话中提炼 durable memory |
-| Structural maintenance | 6 小时 | 清理/折叠过大的 `MEMORY.md` / `HISTORY.md` |
+| Reflect | 20 分钟 | 从新对话中同时提炼 journal 新增行和 durable memory 增/改/删 |
 
-另有两条固定约束：频道静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个频道。`settings.json.memoryMaintenance.enabled: false` 会关闭整套后台维护；更常见的省 token 做法是只关闭 `memoryRecall.rerankWithModel` 和 `sessionSearch.summarizeWithModel`。
+另有两条固定约束：频道静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个频道。`settings.json.memoryMaintenance.enabled: false` 会关闭整套后台维护；更常见的省 token 做法是只关闭 `sessionSearch.summarizeWithModel`。
 
 ## 定时事件
 

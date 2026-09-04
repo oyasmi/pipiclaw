@@ -67,8 +67,6 @@ export interface PromptTurnContextStats {
 	durableMemoryUnits: number;
 	taskDigestChars: number;
 	taskDigestUnits: number;
-	recalledMemoryChars: number;
-	recalledMemoryUnits: number;
 	channelCapsuleUnits: number;
 	userMessageChars: number;
 }
@@ -206,21 +204,17 @@ export function renderContextReport(input: PromptContextReportInput): string {
 
 	if (input.lastTurn) {
 		const turn = input.lastTurn;
-		const automaticUnits =
-			turn.channelCapsuleUnits + turn.recalledMemoryUnits + turn.taskDigestUnits + turn.durableMemoryUnits;
+		const automaticUnits = turn.channelCapsuleUnits + turn.taskDigestUnits + turn.durableMemoryUnits;
 		lines.push("");
 		lines.push(
 			`Last automatic turn context: ${formatNumber(automaticUnits)} / ${formatNumber(AUTOMATIC_TURN_CONTEXT_BUDGET_UNITS)} units (per-turn, not cached):`,
 		);
 		lines.push(`- channel capsule: ${formatNumber(turn.channelCapsuleUnits)} units`);
 		lines.push(
-			`- recalled memory: ${formatNumber(turn.recalledMemoryUnits)} units / ${formatNumber(turn.recalledMemoryChars)} chars`,
-		);
-		lines.push(
 			`- task agenda: ${formatNumber(turn.taskDigestUnits)} units / ${formatNumber(turn.taskDigestChars)} chars`,
 		);
 		lines.push(
-			`- durable bootstrap: ${formatNumber(turn.durableMemoryUnits)} units / ${formatNumber(turn.durableMemoryChars)} chars`,
+			`- memory bootstrap: ${formatNumber(turn.durableMemoryUnits)} units / ${formatNumber(turn.durableMemoryChars)} chars (first turn only)`,
 		);
 		lines.push(`- user message: ${formatNumber(turn.userMessageChars)} chars (not automatic; not capped here)`);
 	}

@@ -30,7 +30,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | 钉钉群聊 | `group_<conversationId>` | 每个群有独立上下文和记忆 |
 | 默认 TUI | `tui_local` | 本机终端独立频道 |
 
-每个频道拥有自己的会话、`SESSION.md`、`MEMORY.md`、`HISTORY.md`、任务台账、委派记录和冷存储历史。`workspace/MEMORY.md`、`ENVIRONMENT.md`、`AGENTS.md`、skills 和角色目录是工作区级共享配置。
+每个频道拥有自己的会话、`memory/*.md`（生成 `MEMORY.md` 索引）、`journal/`、任务台账、委派记录和冷存储历史。`workspace/MEMORY.md`、`ENVIRONMENT.md`、`AGENTS.md`、skills 和角色目录是工作区级共享配置。
 
 同一个 daemon 可以并行推进多个频道：不同用户的私聊、不同群聊不会因为另一个频道正在等待模型而排成一条全局队列。同一频道内仍只有一个主回合；同一个群里的所有成员共享这条会话线。频道隔离也不等于项目文件隔离——多个频道指向同一个 checkout 时，主智能体的写操作仍可能冲突。部署和共享目录边界见[并发与容量](./scaling-and-concurrency.md)。
 

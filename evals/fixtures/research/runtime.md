@@ -2,6 +2,6 @@
 
 Status: current and authoritative. This document supersedes legacy.md.
 
-Pipiclaw uses DingTalk as its primary transport. `SESSION.md` holds current working state and handoff context; `MEMORY.md` holds durable channel facts and preferences. They are separate layers, not one flat transcript.
+Pipiclaw uses DingTalk as its primary transport. Each channel keeps a `journal/` of what happened day by day and a `memory/` of durable facts, generated into one `MEMORY.md` index; they are separate layers, not one flat transcript.
 
 Before scheduled task work reaches the model, deterministic governance checks the attempt budget and deadline. An exhausted budget or expired deadline pauses the task before model work.

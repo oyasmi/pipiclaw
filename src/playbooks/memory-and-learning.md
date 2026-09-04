@@ -1,6 +1,6 @@
 ---
 name: memory-and-learning
-description: 记住或忘记事实（memory）、在记忆文件之间取舍，或把经验沉淀成技能（skill）。
+description: 记住或忘记事实（memory）、在记忆与日志之间取舍，或把经验沉淀成技能（skill）。
 requires-tools: memory_save, memory_search, memory_forget, skill
 order: 20
 ---
@@ -11,34 +11,41 @@ order: 20
 
 | 信息 | 目标位置 | 入口 |
 |---|---|---|
-| 当前回合断点、眼下计划 | channel `SESSION.md` | runtime 自动维护，不手工编辑 |
-| 稳定事实、偏好、约束、决定 | channel `MEMORY.md` | `memory_save` / `memory_forget` |
+| 今天发生了什么、定了什么、卡在哪 | channel `journal/` | 后台反思 pass 自动写，不手工编辑 |
+| 用户是谁：称呼、语言、角色期待、长期偏好 | channel memory，`type: user` | `memory_save` |
+| 怎么工作的纠正、吃过亏的教训 | channel memory，`type: feedback` | `memory_save` |
+| 关于工作对象的稳定事实、决策、约束 | channel memory，`type: project` | `memory_save` |
+| 路径、URL、命令、联系人、id 等指针 | channel memory，`type: reference` | `memory_save` |
 | 单个长程工作的状态和证据 | `tasks/<id>.md` | `task_create`/`task_update`/`task_close`，正文大改才用 `edit` |
 | 机器依赖、安装、配置位置 | workspace `ENVIRONMENT.md` | `read` / `edit`，受项目边界约束 |
 | 跨任务可复用的操作流程 | workspace `skills/` | `write`/`edit` 创建或修改，`skill` 只读列出/加载 |
 | Pipiclaw 自身机制 | runtime playbook | 只读 |
 | 原始对话 | `log.jsonl` / `context.jsonl` | `session_search` |
 
-channel 的 `SESSION.md`、`MEMORY.md`、`HISTORY.md` 由 runtime 和后台维护队列共同持有：可以 `read`，但写入一律走 `memory_save`/`memory_forget`，用文件工具改会与后台写入相撞（项目边界下 path guard 会直接拒绝）。各文件的位置和访问入口见 `runtime-orientation.md`。
+没有"进行中的事"这一类记忆——未闭合的事项要么建 task（有 wake、有 DoD），要么就是今天的 journal，不写成 memory：memory 没有生命周期，写成"进行中"的记忆只会一直摆在那里过时。
+
+channel 的 `memory/*.md` 和生成的 `MEMORY.md` 索引由 runtime 和后台反思 pass 共同持有：可以 `read` 单条记忆的正文，但写入一律走 `memory_save`/`memory_forget`，用文件工具改会被下一次索引重建覆盖（项目边界下 path guard 也会直接拒绝）。`journal/` 只由后台写，不接受任何工具写入。各文件的位置和访问入口见 `runtime-orientation.md`。
 
 ## 什么时候立即写 durable memory
 
-用户明确说"记住、以后默认、偏好、不要再做、忘掉"时，当回合就调用 `memory_save`，不等后台 consolidation。这条路径写入的记忆立即永久，不受下面的试用期约束。
+用户明确说"记住、以后默认、偏好、不要再做、忘掉"时，当回合就调用 `memory_save`，不等后台反思。这条路径写入的记忆立即永久，不受下面的试用期约束。
 
-只保存未来仍有用的事实；一次性进度、猜测、临时计划放 task 或留在当前会话。
+`memory_save` 参数：`content`（必填，一行，成为这条记忆在索引里的 description）、`name`（可选，kebab-case 短句柄，不给就自动生成）、`type`（可选，四选一，默认 `project`）、`details`（可选，正文，只有打开这条记忆时才会读到）、`replaces`（发现相似条目后二次调用时带上要替换的 `name`，或 `"none"` 表示两条同时成立）。
 
-`save` 撞到相似的已有条目时，工具会先拒绝并列出它们，要一个决定：`supersedes: <entry id>` 替换旧条目，或 `supersedes: "none"` 保留两条。**同一条规则出了新版本就替换**——两个版本并存之后召回哪一条全看运气；只有两个事实同时成立才保留两条。整条规则不再成立时用 `forget`。
+只保存未来仍有用的事实；一次性进度、猜测、临时计划留给 journal 或 task。
 
-查找先用具体关键词（`memory_search`）。
+`save` 撞到相似的已有条目时，工具会先拒绝并把候选 `name` 列出来，要一个决定：带上 `replaces: <name>` 替换旧条目，或 `replaces: "none"` 保留两条。**同一条规则出了新版本就替换**——两个版本并存之后模型读到哪一条全看运气；只有两个事实同时成立才保留两条。整条规则不再成立时用 `memory_forget`（按 `name` 精确删除）。
+
+会话首轮已经看过索引（`<memory_bootstrap>`），中途怀疑"这事以前可能记过、但没在索引里"，用 `memory_search` 查——索引不会每轮刷新，反思 pass 中途新增的条目要到下一次首轮才会出现。
 
 ## 后台自动写入与试用期
 
-后台 consolidation 按两档写入 channel `MEMORY.md`：
+后台反思 pass 每次同时产出两样东西：今天 journal 的新增行，以及 memory 的增/改/删/touch。写入按两档：
 
 - **硬约束**（`necessity: high`，明确会导致未来回合出错的）直接永久写入。
-- **日常运作知识**（`necessity: medium`：谁负责哪块、术语默认含义、发布或命名惯例、流程签批人）以**试用期**条目写入，默认 30 天；期间被召回一次即转正为永久，从未被用到则到期自动失效。
+- **日常运作知识**（`necessity: medium`：谁负责哪块、术语默认含义、发布或命名惯例、流程签批人）以**试用期**条目写入，默认 30 天；这段时间内被反思 pass 判定"这次对话依赖或印证了它"（touch）即转正为永久，从未被 touch 则到期自动移除。
 
-失效不是遗忘：内容之后仍可被重新学到，只是这一次没被用上。这些阈值是代码常量，不在 `settings.json` 里。
+失效不是遗忘：内容之后仍可被重新学到，只是这一次没被用上，也不留墓碑。这些阈值是代码常量，不在 `settings.json` 里。
 
 ## ENVIRONMENT.md
 

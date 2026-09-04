@@ -23,7 +23,6 @@ import {
 } from "../commands/catalog.js";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
-import { ensureChannelMemoryFilesSync } from "../memory/files.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import { defaultModel } from "../models/utils.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
@@ -108,8 +107,8 @@ export interface RuntimeContext {
 	 * Production maintenance scheduler, exposed for the same reason as `taskDriver`.
 	 *
 	 * Evaluation workers run with `startServices: false`, so the background timer never fires and
-	 * no trial could otherwise reach `SESSION.md` refresh, the memory checkpoint, or consolidation
-	 * — the whole layered memory pipeline was structurally untestable from a behavior eval.
+	 * no trial could otherwise reach the reflect pass — the whole memory pipeline was structurally
+	 * untestable from a behavior eval.
 	 * Exposing the instance lets a case drive one real pass at a chosen time instead of faking a
 	 * clock or re-implementing the job order.
 	 */
@@ -398,7 +397,6 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 				.then(async () => {
 					try {
 						const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
-						ensureChannelMemoryFilesSync(channelDir);
 						const access = resolveProjectAccessPolicy(
 							loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config,
 							process.cwd(),
@@ -949,7 +947,6 @@ export async function createRuntimeContext(
 		}
 
 		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
-		ensureChannelMemoryFilesSync(channelDir);
 		const runner = createRunner(channelId, channelDir, {
 			appHomeDir: options.paths.appHomeDir,
 			authConfigPath: options.paths.authConfigPath,
@@ -1109,10 +1106,7 @@ export async function createRuntimeContext(
 				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				getSettings: () => {
 					runtimeSettingsManager.reload();
-					return {
-						memoryMaintenance: runtimeSettingsManager.getMemoryMaintenanceSettings(),
-						sessionMemory: runtimeSettingsManager.getSessionMemorySettings(),
-					};
+					return { memoryMaintenance: runtimeSettingsManager.getMemoryMaintenanceSettings() };
 				},
 				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,
 			});

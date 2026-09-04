@@ -10,39 +10,21 @@
 
 import { reply, type Script } from "./script.js";
 
-/** A minimal valid `# Current State` document the SESSION.md writer would accept. */
-const DEFAULT_SESSION_JSON = {
-	title: "E2E session",
-	currentState: ["deterministic e2e run"],
-	userIntent: [],
-	activeFiles: [],
-	decisions: [],
-	constraints: [],
-	errorsAndCorrections: [],
-	nextSteps: [],
-	worklog: [],
-	resolved: [],
-};
-
 export function registerSidecarDefaults(script: Script): void {
-	// Covers both turn-boundary extraction and inline consolidation — both go through
-	// buildMemoryExtractionSystemPrompt, so both carry this marker.
+	// Spec 050: the single reflect pass, fired both from the idle scheduler and from
+	// MemoryLifecycle's boundary triggers (compaction / `/new` / shutdown) — the latter run
+	// detached in the background, so any test that reaches one of those boundaries needs this
+	// covered even when it does not care about memory itself.
 	script.route({
-		name: "sidecar:memory-extraction",
-		when: (req) => !req.isMainTurn && req.systemPrompt.includes("durable memory extraction worker"),
-		respond: [reply.json({ memoryOps: [], discarded: [], historyBlock: "" })],
+		name: "sidecar:memory-reflect",
+		when: (req) => !req.isMainTurn && req.systemPrompt.includes("memory reflection worker"),
+		respond: [reply.json({ journal: [], ops: [], discarded: [] })],
 		repeat: true,
 	});
 	script.route({
 		name: "sidecar:recall-rerank",
 		when: (req) => !req.isMainTurn && req.systemPrompt.includes("which memory snippets are most relevant"),
 		respond: [reply.json({ selectedIds: [] })],
-		repeat: true,
-	});
-	script.route({
-		name: "sidecar:session-memory",
-		when: (req) => !req.isMainTurn && req.systemPrompt.includes("You maintain a Pipiclaw SESSION.md file"),
-		respond: [reply.json(DEFAULT_SESSION_JSON)],
 		repeat: true,
 	});
 	script.route({
