@@ -7,7 +7,6 @@ import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { type DurableDispatchRecord, DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import { claimVerifiedDelegationWake } from "../src/runtime/task-wake.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
-import { createDefaultTaskControl } from "../src/tasks/control.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -174,8 +173,9 @@ describe("DurableDispatchService", () => {
 			join(channelDir, "tasks", "T-redelivery.md"),
 			renderTaskDocument(
 				{
-					status: "waiting",
-					control: { ...createDefaultTaskControl(), waitingFor: "external-signal" },
+					state: "parked",
+					// Parked on the very run whose wake is being redelivered (spec 051, D2).
+					ticket: { kind: "run", id: "run-redelivery", by: "2099-01-01T00:00:00+08:00" },
 				},
 				"# Redelivery\n",
 			),
@@ -243,15 +243,15 @@ describe("DurableDispatchService", () => {
 		const claimed = await claimVerifiedDelegationWake(delivered[1]!, workspaceDir);
 		expect(claimed?.activated).toBe(true);
 		await claimed?.finish();
-		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.status).toBe("active");
+		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.state).toBe("open");
 
 		await service.drainOnce(Date.now() + 22);
 		expect(delivered[2]?.text).toContain("[REDELIVERY:3]");
-		// The task is already active, so a further claim on the same wake is a no-op — the run
+		// The task is already open, so a further claim on the same wake is a no-op — the run
 		// manager's dispatchId-scoped wake claim is what makes this idempotent, not any per-task
 		// attempt counter (that mechanism was retired).
 		await expect(claimVerifiedDelegationWake(delivered[2]!, workspaceDir)).resolves.toBeUndefined();
-		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.status).toBe("active");
+		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.state).toBe("open");
 	});
 
 	it("renews a running turn's lease — persisting only past the half-life — so it never redelivers itself (spec 031, D2)", async () => {

@@ -1,60 +1,47 @@
+import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { normalizeSafeId } from "../shared/safe-id.js";
-import { parseTaskControl, type TaskControl } from "./control.js";
-import { nextTaskWake } from "./task-schedule.js";
-import { normalizeStoredStatus } from "./transitions.js";
+import {
+	isTaskRunnable,
+	parseTaskFrontmatterV4,
+	renderTaskFrontmatter,
+	type TaskFrontmatterV4,
+} from "./frontmatter.js";
 
-export type TaskArchiveOutcome = "completed" | "cancelled";
+import { ticketDueMs, ticketExpired } from "./ticket.js";
 
 /**
  * Shared reader for the task ledger (`workspace/<channelId>/tasks/*.md`).
  *
  * This is the sole implementation of the frontmatter contract documented in
- * `docs/events-and-tasks.md` ("Frontmatter 契约（单一事实源）"). It used to be one of two
- * halves — a dependency-free `tasks-pending.mjs` sensor under workspace/skills was the
- * other — but the native TaskDriver (spec 022) replaced that sensor, so `actionable` now
- * has a single owner. The parsing stays deliberately literal (flat `key: value` fields,
- * live-vs-archived, wake gating, fail-open on unreadable frontmatter) because task files
- * are hand-editable and must degrade toward "wake me up so I can be fixed".
- * `/tasks`, the task digest, and `task_list` all read through here.
+ * `docs/tasks.md`. The parsing stays deliberately literal (flat `key: value` fields,
+ * live-vs-archived, fail-open on unreadable frontmatter) because task files are hand-editable
+ * and must degrade toward "wake me up so I can be fixed". `/tasks`, the task digest, and
+ * `task_list` all read through here.
+ *
+ * Spec 051 split the frontmatter contract itself into `frontmatter.ts` (fields) and `ticket.ts`
+ * (the waiting claim); what stays here is the *body*: sections, Plan, DoD, and the skeleton.
  */
-
-export interface TaskFrontmatter {
-	/** false => frontmatter could not be read (fail-open: the task is treated as actionable). */
-	readable: boolean;
-	status?: string;
-	/** The unnormalized on-disk status value; startup migration is its only consumer. */
-	rawStatus?: string;
-	/** True when a legacy terminal file in the active directory needs archiving. */
-	archiveOutcome?: TaskArchiveOutcome;
-	closedAt?: string;
-	enabled: boolean;
-	wake?: string;
-	/** Five-field cron cadence (host timezone). Present ⇒ this is a recurring task. */
-	schedule?: string;
-	control?: TaskControl;
-	/** false only when a control field exists but cannot be parsed/validated as v3. */
-	controlReadable?: boolean;
-	/** The unparsed `control:` value; startup migration re-parses this with the legacy reader. */
-	controlRaw?: string;
-}
 
 export interface TaskLedgerEntry {
 	/** Filename without `.md`; the task id. */
 	id: string;
 	/** First `# ` heading in the body, or the id when none. */
 	title: string;
-	frontmatter: TaskFrontmatter;
-	/** Non-terminal, not parked (`waiting` without a wake), and (no valid wake OR wake ≤ now). */
-	actionable: boolean;
-	/** Milliseconds since epoch parsed from `wake`, or undefined when unset/unparseable. */
-	wakeMs?: number;
-	/** First bullet/line under a "当前周期"/"current cycle" heading, if any (digest only). */
-	latestNote?: string;
+	fields: TaskFrontmatterV4;
+	/** false => frontmatter could not be read; the task is surfaced rather than skipped. */
+	readable: boolean;
+	/** True when this file still carries v3 `status`/`control` frontmatter. */
+	legacy: boolean;
+	/** The driver may schedule a step for this task right now. */
+	runnable: boolean;
+	/** When a driver-polled ticket (`time`/`schedule`) comes due, if it has not already. */
+	dueMs?: number;
+	/** True when a parked task's backstop has passed and the runtime owes it a reopen (D2). */
+	expired: boolean;
 	/** Parsed `## Plan` section, if the task has one (spec 037, D2). */
 	plan?: TaskPlanSummary;
 }
@@ -70,19 +57,16 @@ export interface TaskSkeletonInput {
 	plan?: string;
 }
 
-const FRONTMATTER_FIELDS = ["status", "enabled", "wake", "schedule", "outcome", "closedAt", "control"] as const;
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export const DEFAULT_TASK_MANUAL =
-	"- Follow the DoD, keep the current cycle log updated, and schedule check-ins when waiting.";
+	"- Follow the DoD, record evidence in every step note, and park on a ticket when waiting.";
 
 export const STANDARD_TASK_SECTIONS = [
 	{ label: "Goal", names: ["Goal", "目标"] },
 	{ label: "DoD", names: ["DoD"] },
 	{ label: "Manual", names: ["Manual", "手册"] },
 	{ label: "Verification", names: ["Verification", "验收"] },
-	{ label: "Current Cycle", names: ["Current Cycle", "当前周期"] },
-	{ label: "History", names: ["History", "历史"] },
 ] as const;
 
 /**
@@ -91,16 +75,11 @@ export const STANDARD_TASK_SECTIONS = [
  * task or any pre-existing task simply has no Plan.
  */
 const PLAN_SECTION_NAMES = ["Plan", "计划"] as const;
-const CURRENT_CYCLE_SECTION_NAMES = ["Current Cycle", "当前周期"] as const;
-
-/** Recurring task files are working context, not an unbounded audit log. */
-export const MAX_INLINE_TASK_HISTORY_ENTRIES = 8;
-export const MAX_INLINE_TASK_HISTORY_CHARS = 24 * 1024;
-const MAX_INLINE_TASK_HISTORY_ENTRY_CHARS = 4 * 1024;
-const HISTORY_OMISSION_NOTE =
-	"- Older cycle details omitted from working context; use session_search with the task id or cycle id to inspect cold history.";
-const HISTORY_TRUNCATION_NOTE =
-	"- Entry truncated in working context; use session_search with the task id or cycle id to inspect the complete cold history.";
+/**
+ * The single historical paragraph a v4 contract keeps (spec 051, D5). Declared here rather than
+ * in `cycle.ts` so `taskContractSegment` can end the contract at it without a circular import.
+ */
+export const LAST_RESULT_SECTION_NAMES = ["上次结果", "Last Result"] as const;
 
 /** Validate/normalize a task id (filename without `.md`), rejecting path traversal. */
 export function normalizeTaskId(id: string): string {
@@ -117,8 +96,8 @@ export function taskBody(content: string): string {
 }
 
 /**
- * The task's *contract* segment: the body up to (excluding) whichever of "Plan" or "Current
- * Cycle" appears first — i.e. the H1 title, Goal, DoD (with its checkbox state), Manual and
+ * The task's *contract* segment: the body up to (excluding) whichever of "Plan" or "上次结果"
+ * appears first — i.e. the H1 title, Goal, DoD (with its checkbox state), Manual and
  * Verification (spec 029, D4).
  *
  * Verification PASS binds to this segment, not the whole body, so routine `progress` notes
@@ -138,12 +117,22 @@ export function taskContractSegment(body: string): string {
 		if (
 			match &&
 			(matchesTaskSectionTitle(match[1] ?? "", PLAN_SECTION_NAMES) ||
-				matchesTaskSectionTitle(match[1] ?? "", CURRENT_CYCLE_SECTION_NAMES))
+				matchesTaskSectionTitle(match[1] ?? "", LAST_RESULT_SECTION_NAMES))
 		) {
 			return lines.slice(0, index).join("\n").replace(/\s+$/, "");
 		}
 	}
 	return body;
+}
+
+/**
+ * Hash the task's *contract* segment (Goal/DoD/Manual/Verification), not the whole body, so a
+ * verification PASS survives routine step logging and only breaks when the contract itself
+ * changes (spec 029, D4). Lives next to `taskContractSegment` because it is that function's
+ * only real consumer.
+ */
+export function taskBodyHash(body: string): string {
+	return createHash("sha256").update(taskContractSegment(body)).digest("hex");
 }
 
 export type TaskPlanStepStatus = "todo" | "done" | "blocked" | "dropped";
@@ -255,19 +244,21 @@ function renderPlanStepLine(id: string, status: TaskPlanStepStatus, text: string
 	return `- [${PLAN_STATUS_MARKER[status]}] ${id} ${text}${suffix}`;
 }
 
-/** Insert an empty "## Plan" heading immediately before "## Current Cycle" (spec 037, D3). */
+/**
+ * Insert an empty "## Plan" heading after the contract — immediately before "## 上次结果" when the
+ * task has one, otherwise at the end. Spec 051 removed "## Current Cycle", which used to be the
+ * anchor; a task with neither section simply gets its Plan appended rather than being rejected.
+ */
 function insertEmptyPlanSection(body: string): string {
 	const lines = body.split("\n");
 	for (let index = 0; index < lines.length; index++) {
 		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (match && matchesTaskSectionTitle(match[2] ?? "", CURRENT_CYCLE_SECTION_NAMES)) {
+		if (match && matchesTaskSectionTitle(match[2] ?? "", LAST_RESULT_SECTION_NAMES)) {
 			lines.splice(index, 0, "## Plan", "");
 			return lines.join("\n");
 		}
 	}
-	throw new RecoverableToolError(
-		'Task body has no "Current Cycle" section, so a Plan cannot be inserted; normalize the task skeleton with edit first.',
-	);
+	return `${body.replace(/\n+$/, "")}\n\n## Plan\n`;
 }
 
 /**
@@ -323,88 +314,6 @@ export function applyTaskPlanPatch(body: string, patches: readonly TaskPlanStepP
 	return { body: working, summary: deltas.length > 0 ? `plan: ${deltas.join("; ")}` : "" };
 }
 
-/** Parse the leading frontmatter block and normalize legacy v1 fields in memory. */
-export function parseTaskFrontmatter(content: string): TaskFrontmatter {
-	if (!content.startsWith("---")) return { readable: false, enabled: true };
-	const end = content.indexOf("\n---", 3);
-	if (end === -1) return { readable: false, enabled: true };
-
-	const block = content.slice(3, end);
-	const frontmatter: TaskFrontmatter = { readable: true, enabled: true };
-	for (const line of block.split("\n")) {
-		const idx = line.indexOf(":");
-		if (idx === -1) continue;
-		const key = line.slice(0, idx).trim();
-		if ((FRONTMATTER_FIELDS as readonly string[]).includes(key)) {
-			const value = line.slice(idx + 1).trim();
-			if (key === "control") {
-				if (!value) {
-					frontmatter.controlReadable = false;
-				} else {
-					frontmatter.controlRaw = value;
-					try {
-						frontmatter.control = parseTaskControl(value);
-						frontmatter.controlReadable = true;
-					} catch {
-						frontmatter.controlReadable = false;
-					}
-				}
-			} else if (key === "enabled") {
-				frontmatter.enabled = value !== "false";
-			} else if (key === "outcome") {
-				if (value === "completed" || value === "cancelled") frontmatter.archiveOutcome = value;
-			} else if (key === "closedAt") {
-				frontmatter.closedAt = value || undefined;
-			} else if (key === "status" || key === "wake" || key === "schedule") {
-				frontmatter[key] = value || undefined;
-			}
-		}
-	}
-	// Legacy status vocabulary is a startup-migration concern (`migrateLegacyTaskState`), not a
-	// read-time one: any value outside the current three fails open to "active" here, same as an
-	// unreadable control block fails open to "actionable" rather than being silently reinterpreted.
-	const rawStatus = frontmatter.status;
-	frontmatter.rawStatus = rawStatus;
-	if (frontmatter.readable) {
-		frontmatter.status = normalizeStoredStatus(rawStatus);
-	}
-	return frontmatter;
-}
-
-/**
- * The single shared judgement: is there work to do on this task right now?
- * Unreadable frontmatter is fail-open (actionable) so a corrupt ledger surfaces
- * rather than being silently skipped.
- *
- * `waiting` with no `wake` is the *parked* form (`src/tasks/transitions.ts`): the task is
- * blocked on an external signal — a background job finishing, the user answering, `/tasks run` —
- * and only that signal may resume it. Without this the runtime's own recommended shape for
- * delegating work (start a blocking wait as a `bash async` job, park the task, end the turn)
- * was re-dispatched the instant the turn ended, found the job still running, answered
- * `[SILENT]`, and after three such wakes was disabled by the governor. A `waiting` task that
- * *does* carry a wake is an ordinary timed re-check and stays gated on that wake; an
- * unparseable wake still fails open so a hand-edited file surfaces rather than parks forever.
- */
-/** `waiting` with no `wake`: the driver will not come back on its own. See `isTaskActionable`. */
-export function isTaskParked(frontmatter: TaskFrontmatter): boolean {
-	return frontmatter.readable && frontmatter.status === "waiting" && !frontmatter.wake;
-}
-
-export function isTaskActionable(frontmatter: TaskFrontmatter, now: number): boolean {
-	if (!frontmatter.readable) return true;
-	if (frontmatter.controlReadable === false) return true;
-	if (frontmatter.archiveOutcome || frontmatter.enabled === false) return false;
-	// status is already canonicalised by parseTaskFrontmatter.
-	if (frontmatter.status === "sleeping") {
-		const wakeAt = parseWakeMs(frontmatter);
-		return wakeAt !== undefined && wakeAt <= now;
-	}
-	if (isTaskParked(frontmatter)) return false;
-	const wakeAt = parseWakeMs(frontmatter);
-	if (wakeAt !== undefined && wakeAt > now) return false;
-	return true;
-}
-
 /** First `# ` heading after the frontmatter block, or the id when there is none. */
 export function extractTaskTitle(content: string, fallbackId: string): string {
 	for (const line of taskBody(content).split("\n")) {
@@ -414,7 +323,7 @@ export function extractTaskTitle(content: string, fallbackId: string): string {
 	return fallbackId;
 }
 
-function matchesTaskSectionTitle(title: string, names: readonly string[]): boolean {
+export function matchesTaskSectionTitle(title: string, names: readonly string[]): boolean {
 	const normalized = title.trim().toLowerCase();
 	return names.some((name) => {
 		const expected = name.toLowerCase();
@@ -427,7 +336,7 @@ function matchesTaskSectionTitle(title: string, names: readonly string[]): boole
 	});
 }
 
-interface TaskSectionBounds {
+export interface TaskSectionBounds {
 	/** Line index of the heading line itself. */
 	headingIndex: number;
 	/** Heading level, 1–6. */
@@ -442,7 +351,10 @@ interface TaskSectionBounds {
  * (Plan, Current Cycle, DoD, Verification) shares this exact rule; only what a caller does with
  * the bounds differs.
  */
-function findTaskSectionBounds(lines: readonly string[], names: readonly string[]): TaskSectionBounds | undefined {
+export function findTaskSectionBounds(
+	lines: readonly string[],
+	names: readonly string[],
+): TaskSectionBounds | undefined {
 	for (let index = 0; index < lines.length; index++) {
 		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
 		if (!match || !matchesTaskSectionTitle(match[2] ?? "", names)) continue;
@@ -562,6 +474,11 @@ function ensurePlanStepId(line: string, fallbackIndex: number): string {
 	return PLAN_STEP_ID_PREFIX.test(line) ? line : `P${fallbackIndex} ${line}`;
 }
 
+/**
+ * The v4 task skeleton: contract only (spec 051, D5). `## Current Cycle` and `## History` are
+ * gone — the per-step record lives in `<id>.jsonl`, and the one paragraph the contract keeps
+ * (`## 上次结果`) is written by the cycle-close path, not by the skeleton.
+ */
 export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 	const manual = input.manual?.trim() || DEFAULT_TASK_MANUAL;
 	const verificationPlan =
@@ -594,472 +511,74 @@ export function renderStandardTaskBody(input: TaskSkeletonInput): string {
 		...(planLines.length > 0
 			? ["## Plan", ...planLines.map((line, index) => `- [ ] ${ensurePlanStepId(line, index + 1)}`), ""]
 			: []),
-		"## Current Cycle",
-		"- Created; next step: start work and append progress here before ending each turn.",
-		"",
-		"## History",
-		"",
 	].join("\n");
 }
 
-export interface TaskDocumentFields {
-	status: string;
-	/** Raw v1 value retained only in memory for startup migration. */
-	legacyStatus?: string;
-	enabled?: boolean;
-	wake?: string;
-	schedule?: string;
-	control?: TaskControl;
-	outcome?: TaskArchiveOutcome;
-	closedAt?: string;
+/** Serialize a task document: v4 frontmatter block plus the body, unchanged. */
+export function renderTaskDocument(fields: TaskFrontmatterV4, rawBody: string): string {
+	return `${renderTaskFrontmatter(fields)}\n${rawBody}`;
 }
 
 /**
- * Enforce the v3 write-path invariants. Runtime due transitions are intentionally separate: a
- * waiting task is first written active, and a sleeping task is first opened into a cycle, before
- * the driver dispatches anything.
+ * Reset a recurring task's per-cycle checkboxes: DoD/Verification acceptance items and Plan
+ * steps both go back to unchecked, so cycle N+1 can never pass its acceptance gate on cycle N's
+ * evidence. `[~]` dropped plan steps are left alone — that step was deliberately abandoned, not
+ * merely finished, and a new cycle should not resurrect it.
  */
-export function normalizeTaskFields(fields: TaskDocumentFields, now: Date = new Date()): TaskDocumentFields {
-	const next: TaskDocumentFields = {
-		...fields,
-		status: normalizeStoredStatus(fields.status),
-		enabled: fields.enabled !== false,
-	};
-	if (next.outcome) {
-		// Archive documents are never driver inputs. Do not carry a live stop marker into them.
-		next.enabled = undefined;
-		return next;
-	}
-	if (next.enabled === true && next.control?.stop) {
-		next.control = { ...next.control, stop: undefined };
-	}
-	if (next.enabled === false) {
-		// Pausing is intentionally lossless: do not normalize status, wake, or schedule while disabled.
-		// A hand-written disabled task without a stop receipt is diagnosed rather than given a fabricated actor.
-		return next;
-	}
-
-	const nowMs = now.getTime();
-	const wakeMs = next.wake ? parseLocalTime(next.wake) : undefined;
-	if (next.status === "active") {
-		if (wakeMs !== undefined && wakeMs > nowMs) {
-			next.status = "waiting";
-			next.control = next.control ? { ...next.control, waitingFor: "time" } : undefined;
-		} else {
-			next.wake = undefined;
-			next.control = next.control ? { ...next.control, waitingFor: undefined } : undefined;
-		}
-	}
-	if (next.status === "waiting") {
-		if (next.wake && wakeMs !== undefined) {
-			const waitingFor = next.control?.waitingFor === "external-signal" ? "external-signal" : "time";
-			next.control = next.control ? { ...next.control, waitingFor } : undefined;
-		} else if (!next.wake && next.control) {
-			const waitingFor = next.control.waitingFor === "time" ? "external-signal" : next.control.waitingFor;
-			next.control = { ...next.control, waitingFor: waitingFor ?? "external-signal" };
-		}
-	}
-	if (next.status === "sleeping" && next.schedule) {
-		const occurrence = next.wake ? parseLocalTime(next.wake) : undefined;
-		const validOccurrence =
-			occurrence !== undefined && nextTaskWake(next.schedule, new Date(occurrence - 1))?.getTime() === occurrence;
-		if (!validOccurrence) {
-			const upcoming = nextTaskWake(next.schedule, now);
-			if (upcoming) next.wake = formatLocalTime(upcoming);
-		}
-		if (next.control?.waitingFor) {
-			next.control = { ...next.control, waitingFor: undefined };
-		}
-	}
-	return next;
-}
-
-/**
- * Whether an open recurring cycle has already crossed its next schedule occurrence.
- * The runtime must keep working on the old cycle rather than opening a concurrent one.
- * Cycle ids intentionally carry the local calendar date; the optional suffix handles a
- * same-day manual reopen deterministically.
- */
-export function recurringTaskMissedOccurrence(fields: TaskDocumentFields, now: Date = new Date()): boolean {
-	if (!fields.schedule || (fields.status !== "active" && fields.status !== "waiting") || !fields.control?.cycleId) {
-		return false;
-	}
-	const match = /^cycle-(\d{4})-(\d{2})-(\d{2})(?:-(\d+))?$/.exec(fields.control.cycleId);
-	if (!match) return false;
-	const start = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-	if (!Number.isFinite(start.getTime())) return false;
-	let occurrence = nextTaskWake(fields.schedule, new Date(start.getTime() - 1));
-	const count = match[4] ? Number.parseInt(match[4], 10) : 1;
-	for (let index = 1; occurrence && index < count; index++) {
-		occurrence = nextTaskWake(fields.schedule, occurrence);
-	}
-	const next = occurrence ? nextTaskWake(fields.schedule, occurrence) : undefined;
-	return next !== undefined && next.getTime() <= now.getTime();
-}
-
-export function renderTaskDocument(fields: TaskDocumentFields, rawBody: string): string {
-	const document = normalizeTaskFields(fields);
-	const lines = ["---"];
-	if (document.outcome) {
-		lines.push(`outcome: ${document.outcome}`);
-		if (document.closedAt) lines.push(`closedAt: ${document.closedAt}`);
-	} else {
-		lines.push(`status: ${document.status}`, `enabled: ${document.enabled !== false}`);
-	}
-	if (document.wake) lines.push(`wake: ${document.wake}`);
-	if (document.schedule) lines.push(`schedule: ${document.schedule}`);
-	if (document.control) lines.push(`control: ${JSON.stringify(document.control)}`);
-	lines.push("---");
-	return `${lines.join("\n")}\n${rawBody}`;
-}
-
-/** Append one progress bullet to the standard Current Cycle section. */
-export function appendCurrentCycleNote(content: string, note: string): string {
-	const trimmedNote = note.trim().replace(/\s+/g, " ");
-	if (!trimmedNote) {
-		throw new Error("Current Cycle note must not be empty.");
-	}
-
-	const lines = content.split("\n");
-	const bounds = findTaskSectionBounds(lines, CURRENT_CYCLE_SECTION_NAMES);
-	if (!bounds) {
-		throw new Error('Task body has no "Current Cycle" section; normalize the task skeleton first.');
-	}
-
-	let insertAt = bounds.end;
-	while (insertAt > bounds.headingIndex + 1 && (lines[insertAt - 1] ?? "").trim() === "") {
-		insertAt--;
-	}
-	lines.splice(insertAt, 0, `- ${trimmedNote}`);
-	return lines.join("\n");
-}
-
-/**
- * Upsert the completion evidence subsection inside Current Cycle.
- *
- * Evidence is part of the cycle log, not a new top-level section. This makes the next
- * `startTaskCycle` fold it into the matching History entry and prevents repeated completion
- * attempts from appending duplicate evidence blocks.
- */
-export function upsertCurrentCycleCompletionEvidence(content: string, evidenceLines: readonly string[]): string {
-	const lines = content.split("\n");
-	const currentBounds = findTaskSectionBounds(lines, CURRENT_CYCLE_SECTION_NAMES);
-	if (!currentBounds || currentBounds.level >= 6) {
-		// Legacy/non-standard one-shot tasks were historically completable without the
-		// canonical skeleton. Keep that compatibility, but upsert one bounded top-level
-		// block instead of returning to the old append-only behavior.
-		const stripped = stripLegacyCompletionEvidence(content).content.replace(/\n+$/, "");
-		return `${stripped}\n\n## Completion Evidence\n\n${evidenceLines.join("\n")}\n`;
-	}
-	const currentStart = currentBounds.headingIndex;
-	const currentLevel = currentBounds.level;
-	let currentEnd = currentBounds.end;
-
-	const evidenceLevel = currentLevel + 1;
-	let evidenceStart = -1;
-	let evidenceEnd = -1;
-	for (let index = currentStart + 1; index < currentEnd; index++) {
-		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (!match) continue;
-		const level = match[1]?.length ?? 7;
-		if (level === evidenceLevel && matchesTaskSectionTitle(match[2] ?? "", ["Completion Evidence"])) {
-			evidenceStart = index;
-			evidenceEnd = currentEnd;
-			for (let nested = index + 1; nested < currentEnd; nested++) {
-				const nestedHeading = /^(#{1,6})\s+/.exec(lines[nested] ?? "");
-				if (nestedHeading && (nestedHeading[1]?.length ?? 7) <= evidenceLevel) {
-					evidenceEnd = nested;
-					break;
-				}
-			}
-			break;
-		}
-	}
-	if (evidenceStart !== -1) {
-		lines.splice(evidenceStart, evidenceEnd - evidenceStart);
-		currentEnd -= evidenceEnd - evidenceStart;
-	}
-
-	while (currentEnd > currentStart + 1 && (lines[currentEnd - 1] ?? "").trim() === "") currentEnd--;
-	const block = [`${"#".repeat(evidenceLevel)} Completion Evidence`, "", ...evidenceLines, ""];
-	lines.splice(currentEnd, 0, ...block);
-	return lines.join("\n");
-}
-
-function stripLegacyCompletionEvidence(content: string): {
-	content: string;
-	blocks: string[];
-} {
-	const lines = content.split("\n");
-	const blocks: string[] = [];
-	for (let index = 0; index < lines.length; ) {
-		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (
-			!heading ||
-			(heading[1]?.length ?? 0) !== 2 ||
-			!matchesTaskSectionTitle(heading[2] ?? "", ["Completion Evidence"])
-		) {
-			index++;
-			continue;
-		}
-		let end = lines.length;
-		for (let nested = index + 1; nested < lines.length; nested++) {
-			const nextHeading = /^(#{1,6})\s+/.exec(lines[nested] ?? "");
-			if (nextHeading && (nextHeading[1]?.length ?? 7) <= 2) {
-				end = nested;
-				break;
-			}
-		}
-		blocks.push(lines.slice(index, end).join("\n").trim());
-		lines.splice(index, end - index);
-		while (
-			index > 0 &&
-			index < lines.length &&
-			(lines[index - 1] ?? "").trim() === "" &&
-			(lines[index] ?? "").trim() === ""
-		) {
-			lines.splice(index, 1);
-		}
-	}
-	return { content: lines.join("\n"), blocks };
-}
-
-function clipHistoryEntry(entry: string): string {
-	if (entry.length <= MAX_INLINE_TASK_HISTORY_ENTRY_CHARS) return entry.trim();
-	const suffix = `\n${HISTORY_TRUNCATION_NOTE}`;
-	const limit = Math.max(0, MAX_INLINE_TASK_HISTORY_ENTRY_CHARS - suffix.length);
-	let clipped = entry.slice(0, limit);
-	const lastNewline = clipped.lastIndexOf("\n");
-	if (lastNewline > 0) clipped = clipped.slice(0, lastNewline);
-	return `${clipped.trimEnd()}${suffix}`;
-}
-
-function compactTaskHistory(content: string, alreadyOmitted = false): string {
-	const lines = content.split("\n");
-	let historyStart = -1;
-	let historyLevel = 0;
-	for (let index = 0; index < lines.length; index++) {
-		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (heading && matchesTaskSectionTitle(heading[2] ?? "", ["History", "历史"])) {
-			historyStart = index;
-			historyLevel = heading[1]?.length ?? 0;
-			break;
-		}
-	}
-	if (historyStart === -1 || historyLevel >= 6) return content;
-
-	let historyEnd = lines.length;
-	for (let index = historyStart + 1; index < lines.length; index++) {
-		const heading = /^(#{1,6})\s+/.exec(lines[index] ?? "");
-		if (heading && (heading[1]?.length ?? 7) <= historyLevel) {
-			historyEnd = index;
-			break;
-		}
-	}
-
-	const entryStarts: number[] = [];
-	for (let index = historyStart + 1; index < historyEnd; index++) {
-		const heading = /^(#{1,6})\s+/.exec(lines[index] ?? "");
-		if ((heading?.[1]?.length ?? 0) === historyLevel + 1) entryStarts.push(index);
-	}
-	if (entryStarts.length === 0) return content;
-
-	const entries = entryStarts.map((start, index) =>
-		clipHistoryEntry(
-			lines
-				.slice(start, entryStarts[index + 1] ?? historyEnd)
-				.join("\n")
-				.trim(),
-		),
-	);
-	const kept: string[] = [];
-	let chars = 0;
-	for (const entry of entries) {
-		const nextChars = chars + entry.length + (kept.length > 0 ? 2 : 0);
-		if (kept.length >= MAX_INLINE_TASK_HISTORY_ENTRIES || nextChars > MAX_INLINE_TASK_HISTORY_CHARS) break;
-		kept.push(entry);
-		chars = nextChars;
-	}
-	const omitted = alreadyOmitted || kept.length < entries.length;
-	const replacement = [
-		"",
-		...kept.flatMap((entry, index) => (index === kept.length - 1 ? [entry] : [entry, ""])),
-		...(omitted ? ["", HISTORY_OMISSION_NOTE] : []),
-		"",
-	];
-	lines.splice(historyStart + 1, historyEnd - historyStart - 1, ...replacement);
-	return lines.join("\n");
-}
-
-/**
- * Close the visible current-cycle notes into History and open a fresh cycle.
- * Periodic task cycles deliberately use this small, deterministic transformation
- * instead of asking the model to hand-edit headings and risk appending future
- * checkpoints to the previous cycle.
- */
-export function startTaskCycle(content: string, cycleId: string, archivePrevious = true): string {
-	const normalizedCycleId = cycleId.trim();
-	if (!normalizedCycleId) throw new Error("Cycle id must not be empty.");
-	const legacy = stripLegacyCompletionEvidence(content);
-	const lines = legacy.content.split("\n");
-	let currentStart = -1;
-	let currentLevel = 0;
-	let historyStart = -1;
-	for (let index = 0; index < lines.length; index++) {
-		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(lines[index] ?? "");
-		if (!match) continue;
-		const level = match[1]?.length ?? 0;
-		if (matchesTaskSectionTitle(match[2] ?? "", CURRENT_CYCLE_SECTION_NAMES)) {
-			currentStart = index;
-			currentLevel = level;
-		}
-		if (matchesTaskSectionTitle(match[2] ?? "", ["History", "历史"])) {
-			historyStart = index;
-			break;
-		}
-	}
-	if (currentStart === -1 || historyStart === -1 || historyStart <= currentStart) {
-		throw new Error('Task body needs ordered "Current Cycle" and "History" sections before starting a new cycle.');
-	}
-
-	let currentEnd = historyStart;
-	for (let index = currentStart + 1; index < historyStart; index++) {
-		const match = /^(#{1,6})\s+/.exec(lines[index] ?? "");
-		if (match && (match[1]?.length ?? 7) <= currentLevel) {
-			currentEnd = index;
-			break;
-		}
-	}
-	let previous = lines
-		.slice(currentStart + 1, currentEnd)
-		.join("\n")
-		.trim();
-	const latestLegacyEvidence = legacy.blocks.at(-1);
-	if (latestLegacyEvidence && !/^(#{1,6})\s+Completion Evidence\b/im.test(previous)) {
-		previous = `${previous}\n\n${latestLegacyEvidence.replace(/^##\s+/, "### ")}`.trim();
-	}
-	// The archived cycle gets its own H3 entry under History. Demote subsections that
-	// were nested under the H2 Current Cycle so they remain children of that entry.
-	previous = previous
-		.split("\n")
-		.map((line) => {
-			const heading = /^(#{1,6})(\s+.*)$/.exec(line);
-			const level = heading?.[1]?.length ?? 0;
-			return heading && level > currentLevel && level < 6 ? `#${line}` : line;
-		})
-		.join("\n");
-	const previousHeading = (lines[currentStart] ?? "## Current Cycle").replace(/^#+\s*/, "").trim();
-	const replacement = [
-		`${"#".repeat(currentLevel)} Current Cycle (${normalizedCycleId})`,
-		"- Cycle started; next step: follow the Manual and checkpoint concrete progress.",
-	];
-	lines.splice(currentStart, currentEnd - currentStart, ...replacement);
-
-	const shiftedHistoryStart = historyStart + replacement.length - (currentEnd - currentStart);
-	if (archivePrevious && previous && !/^[-*]\s+Created; next step:/i.test(previous)) {
-		const historyEntry = [`### ${previousHeading} — closed`, previous, ""];
-		// A nested history heading would be unusual; inserting directly after the
-		// canonical History heading remains predictable and preserves all older notes.
-		lines.splice(shiftedHistoryStart + 1, 0, ...historyEntry);
-	}
-	const compacted = compactTaskHistory(lines.join("\n"), legacy.blocks.length > 1);
-	return resetPlanStepCheckboxes(resetTaskAcceptanceCheckboxes(compacted));
-}
-
-/**
- * Uncheck every "- [x]" under DoD/Verification.
- *
- * `startTaskCycle` archives the previous cycle's log but never touched these boxes, so a
- * periodic task that finished cycle 1 with a fully checked DoD would open cycle 2 with
- * `uncheckedTaskAcceptanceItems` reporting zero unchecked items — the acceptance gate would
- * silently pass on stale evidence from a cycle that no longer exists.
- */
-function resetTaskAcceptanceCheckboxes(content: string): string {
-	const lines = content.split("\n");
+export function resetTaskPlanForCycle(body: string): string {
+	const lines = body.split("\n");
 	const sectionOf = classifyTaskSectionLines(lines, DOD_VERIFICATION_SECTIONS);
 	for (let index = 0; index < lines.length; index++) {
 		if (!sectionOf[index]) continue;
 		const checkbox = /^(\s*[-*]\s+)\[[xX]\](\s*.*)$/.exec(lines[index] ?? "");
 		if (checkbox) lines[index] = `${checkbox[1]}[ ]${checkbox[2]}`;
 	}
+	const bounds = findTaskSectionBounds(lines, PLAN_SECTION_NAMES);
+	if (bounds) {
+		for (let index = bounds.headingIndex + 1; index < bounds.end; index++) {
+			const checkbox = /^(\s*[-*]\s+)\[[xX!]\](\s*.*)$/.exec(lines[index] ?? "");
+			if (checkbox) lines[index] = `${checkbox[1]}[ ]${checkbox[2]}`;
+		}
+	}
 	return lines.join("\n");
 }
 
 /**
- * Reset `## Plan` steps for a new cycle: `[x]` done and `[!]` blocked both go back to `[ ]`
- * todo, exactly like `resetTaskAcceptanceCheckboxes` — a stale "done" step from the previous
- * cycle must not silently pass as still true. `[~]` dropped is left alone: that step was
- * deliberately abandoned, not merely finished, and a new cycle should not resurrect it.
+ * Runnable first; then a parked task whose backstop already expired (the runtime owes it a
+ * reopen); then earliest due ticket; then id. Sorting expired parks ahead of ordinary parks is
+ * what keeps D2-INV's deadline honest when a channel has more ready work than one tick can carry.
  */
-function resetPlanStepCheckboxes(content: string): string {
-	const lines = content.split("\n");
-	const bounds = findTaskSectionBounds(lines, PLAN_SECTION_NAMES);
-	if (!bounds) return content;
-
-	for (let index = bounds.headingIndex + 1; index < bounds.end; index++) {
-		const checkbox = /^(\s*[-*]\s+)\[[xX!]\](\s*.*)$/.exec(lines[index] ?? "");
-		if (checkbox) lines[index] = `${checkbox[1]}[ ]${checkbox[2]}`;
-	}
-	return lines.join("\n");
-}
-
-/** Last non-empty bullet/line under a "当前周期"/"current cycle" heading. */
-function extractLatestNote(content: string): string | undefined {
-	const lines = content.split("\n");
-	let inSection = false;
-	let sectionLevel = 0;
-	let latest: string | undefined;
-	for (const line of lines) {
-		const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
-		if (heading) {
-			if (inSection && (heading[1]?.length ?? 7) <= sectionLevel) break;
-			if (!inSection && matchesTaskSectionTitle(heading[2] ?? "", CURRENT_CYCLE_SECTION_NAMES)) {
-				inSection = true;
-				sectionLevel = heading[1]?.length ?? 0;
-			}
-			continue;
-		}
-		if (!inSection) continue;
-		const trimmed = line.replace(/^\s*[-*]\s+/, "").trim();
-		if (trimmed) latest = trimmed;
-	}
-	return latest;
-}
-
-function parseWakeMs(frontmatter: TaskFrontmatter): number | undefined {
-	if (!frontmatter.wake) return undefined;
-	return parseLocalTime(frontmatter.wake);
-}
-
-/** Actionable first; then earliest deadline/wake first (unset sorts as "ready now"); then id. */
 export function compareTaskEntries(a: TaskLedgerEntry, b: TaskLedgerEntry): number {
-	if (a.actionable !== b.actionable) return a.actionable ? -1 : 1;
-	if (a.frontmatter.enabled !== b.frontmatter.enabled) return a.frontmatter.enabled ? -1 : 1;
-	if (a.actionable && b.actionable) {
-		const ad = a.frontmatter.control?.deadline
-			? (parseLocalTime(a.frontmatter.control.deadline) ?? Number.POSITIVE_INFINITY)
-			: Number.POSITIVE_INFINITY;
-		const bd = b.frontmatter.control?.deadline
-			? (parseLocalTime(b.frontmatter.control.deadline) ?? Number.POSITIVE_INFINITY)
-			: Number.POSITIVE_INFINITY;
-		if (ad !== bd) return ad - bd;
-	}
-	const aw = a.wakeMs ?? Number.NEGATIVE_INFINITY;
-	const bw = b.wakeMs ?? Number.NEGATIVE_INFINITY;
-	if (aw !== bw) return aw - bw;
+	if (a.runnable !== b.runnable) return a.runnable ? -1 : 1;
+	if (a.expired !== b.expired) return a.expired ? -1 : 1;
+	const paused = (entry: TaskLedgerEntry) => (entry.fields.paused ? 1 : 0);
+	if (paused(a) !== paused(b)) return paused(a) - paused(b);
+	const due = (entry: TaskLedgerEntry) => entry.dueMs ?? Number.POSITIVE_INFINITY;
+	if (due(a) !== due(b)) return due(a) - due(b);
 	return a.id.localeCompare(b.id);
 }
 
-function toEntry(id: string, content: string, now: number): TaskLedgerEntry {
-	const frontmatter = parseTaskFrontmatter(content);
+function toEntry(id: string, content: string): Omit<TaskLedgerEntry, "runnable" | "dueMs" | "expired"> {
+	const parsed = parseTaskFrontmatterV4(content);
 	return {
 		id,
 		title: extractTaskTitle(content, id),
-		frontmatter,
-		actionable: isTaskActionable(frontmatter, now),
-		wakeMs: parseWakeMs(frontmatter),
-		latestNote: extractLatestNote(content),
+		fields: parsed.fields,
+		readable: parsed.readable,
+		legacy: parsed.legacy,
 		plan: parseTaskPlan(content),
+	};
+}
+
+/** The clock-dependent half of an entry, recomputed on every read (never cached). */
+function withClock(entry: Omit<TaskLedgerEntry, "runnable" | "dueMs" | "expired">, now: number): TaskLedgerEntry {
+	const nowDate = new Date(now);
+	const ticket = entry.fields.ticket;
+	return {
+		...entry,
+		runnable: isTaskRunnable(entry.fields),
+		dueMs: ticket ? ticketDueMs(ticket) : undefined,
+		expired: ticket !== undefined && !entry.fields.paused && ticketExpired(ticket, nowDate),
 	};
 }
 
@@ -1068,9 +587,8 @@ function toEntry(id: string, content: string, now: number): TaskLedgerEntry {
  * fingerprint the memory candidate store uses.
  *
  * The task driver re-reads every channel's whole ledger on every tick *and* after every turn
- * (`nudge`), so an unchanged file was being read and re-parsed (frontmatter + control JSON +
- * body scan) many times per minute. Only `actionable` depends on the clock, so it is recomputed
- * from `now` on every call and never cached.
+ * (`nudge`), so an unchanged file was being read and re-parsed many times per minute. Only the
+ * clock-dependent fields are recomputed per call; the parse itself is cached.
  *
  * Cached entries are handed out by reference, which is safe because every consumer of
  * `readActiveTasks` only reads: the read-modify-write path goes through `readStoredTask`, which
@@ -1080,7 +598,7 @@ interface CachedTaskParse {
 	mtimeMs: number;
 	ctimeMs: number;
 	size: number;
-	entry: Omit<TaskLedgerEntry, "actionable">;
+	entry: Omit<TaskLedgerEntry, "runnable" | "dueMs" | "expired">;
 }
 
 const parseCache = new Map<string, CachedTaskParse>();
@@ -1091,18 +609,18 @@ async function readEntry(path: string, id: string, now: number): Promise<TaskLed
 	const stats = await stat(path);
 	const cached = parseCache.get(path);
 	if (cached && cached.mtimeMs === stats.mtimeMs && cached.ctimeMs === stats.ctimeMs && cached.size === stats.size) {
-		return { ...cached.entry, actionable: isTaskActionable(cached.entry.frontmatter, now) };
+		return withClock(cached.entry, now);
 	}
-	const entry = toEntry(id, await readFile(path, "utf-8"), now);
+	const entry = toEntry(id, await readFile(path, "utf-8"));
 	if (parseCache.size >= PARSE_CACHE_LIMIT) parseCache.clear();
 	parseCache.set(path, { mtimeMs: stats.mtimeMs, ctimeMs: stats.ctimeMs, size: stats.size, entry });
-	return entry;
+	return withClock(entry, now);
 }
 
 /**
  * Read every `.md` file in `tasks/` (root only — the `archive/` subdirectory is not
- * scanned), returning entries sorted actionable-first. A file that cannot be read is
- * still returned (fail-open: `readable: false`, `actionable: true`) so problems surface.
+ * scanned), returning entries sorted runnable-first. A file that cannot be read is still
+ * returned (fail-open: `readable: false`, `runnable: true`) so problems surface.
  * Missing directory → empty list.
  */
 export async function readActiveTasks(tasksDir: string, now: number = Date.now()): Promise<TaskLedgerEntry[]> {
@@ -1125,8 +643,11 @@ export async function readActiveTasks(tasksDir: string, now: number = Date.now()
 			entries.push({
 				id,
 				title: id,
-				frontmatter: { readable: false, enabled: true },
-				actionable: true,
+				fields: { state: "open" },
+				readable: false,
+				legacy: false,
+				runnable: true,
+				expired: false,
 			});
 		}
 	}

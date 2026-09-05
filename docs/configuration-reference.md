@@ -232,7 +232,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 自主长程任务总开关（`tools.tasks`）
 
-`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：全部 task_* 工具（agent 维护[任务台账](./events-and-tasks.md)：`task_list`/`task_create`/`task_update`/`task_close`/`task_verify`）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
+`tools.tasks.enabled` 是**整个自主长程任务机制的总开关**，同时门控三样东西：全部 task_* 工具（agent 维护[长程任务](./events-and-tasks.md)：`task_list`/`task_create`/`task_update`/`task_close`/`task_log`，以及任务会话里的 `task_step_end`）、内建 TaskDriver（后台扫描台账并唤醒任务），以及每回合注入的任务摘要（task digest）。默认开启；关掉即回到"纯对话助手"形态。
 
 ```jsonc
 {
@@ -243,7 +243,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 ```
 
 - 关掉后主 agent 仍可用 read/edit/write 直接维护 task 文件，只是没有工具保真、不会被后台唤醒、也不注入摘要。
-- 该工具只发给主 agent，不进子代理工具集。新任务默认不要求独立验收，attempt 上限 12；可设置 deadline、`verificationRequired`、waitingFor 和 nextAction。`progress` 只追加 Current Cycle 条目；Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
+- 这些工具只发给主 agent，不进子代理工具集。新任务默认不要求独立验收；`verificationRequired`、`schedule` 和每任务 `budget` 在 `task_create`/`task_update` 上设置。进度记录属于 `task_step_end` 的 `note`（进循环日志），Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
 - Task 创建即持续委托；外部动作由能力配置、任务 Goal、scope、真实状态查询和幂等 request id 约束，结果必须写入任务证据。
 
 ### 结构化搜索工具（`grep`，恒开）
@@ -307,11 +307,11 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。是否注入完全由总开关 `tools.tasks.enabled`（tools.json）决定，没有单独的配置项。
 
-摘要上限固定为 8 条任务 / 约 1000 字符，超出会截断并标注剩余数量。摘要包含活动目录中的 active/waiting/sleeping 任务，并显示 disabled、wake、waitingFor 与 cycle。
+摘要上限固定为 8 条任务 / 约 1000 字符，超出会截断并标注剩余数量。摘要包含活动目录中的所有未关闭任务，每行显示 state、暂停状态、等待票摘要与兜底时间、Plan 进度和本周期用量。
 
 ### 内建任务驱动器（Task Driver，恒随任务开关）
 
-DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务台账。扫描本身不调用模型；只有 enabled 且可恢复的 active task，或 due waiting/sleeping transition，才入队唤醒；waiting 无 wake、disabled 和归档任务零 dispatch。因此不再需要手工 heartbeat event、`tasks-pending.mjs` 或 task `.checkin` 事件。是否运行完全由总开关 `tools.tasks.enabled`（tools.json）决定；节奏是内置常量，不可配。
+DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务。扫描本身不调用模型：兑现到期的 `time`/`schedule` 票、给过期的票兜底、停下超预算或空转的任务，然后排一个可跑任务的下一步。`run`/`job`/`ask`/`signal` 票从不轮询——它们由各自的所有者推过来。暂停和已归档任务零 dispatch。是否运行完全由总开关 `tools.tasks.enabled`（tools.json）决定；预算与节奏是内置常量（每任务可在 frontmatter 的 `budget` 里覆盖）。
 
 行为（供理解，非配置项）：
 

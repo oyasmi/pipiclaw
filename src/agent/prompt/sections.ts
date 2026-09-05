@@ -205,7 +205,7 @@ function renderSubAgentDirectory(subAgents: SubAgentSummary[]): string {
 	}
 	lines.push(
 		"",
-		"Read agent-delegation.md before non-trivial delegation, and task-driving.md before independent verification.",
+		"Read agent-delegation.md before non-trivial delegation, and task-loop.md before independent verification.",
 	);
 	return lines.join("\n");
 }

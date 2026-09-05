@@ -1,7 +1,4 @@
 import { Type } from "typebox";
-import { SETTABLE_TASK_STATUSES } from "../../tasks/transitions.js";
-
-export const SETTABLE_STATUSES = SETTABLE_TASK_STATUSES;
 
 const idField = Type.String({ description: "Task id (filename without .md)." });
 
@@ -20,17 +17,49 @@ const planStepsField = Type.Optional(
 	),
 );
 
-const wakeField = Type.Optional(
-	Type.String({
-		description:
-			"Earliest-recheck time; empty string clears it. Local time e.g. 2026-07-27T07:30:00+08:00, or relative +2h/+45m/+3d.",
-	}),
-);
-
 const scheduleField = Type.Optional(
 	Type.String({
 		description: "Five-field cron cadence; makes this recurring. Empty string clears it. Min every 30 minutes.",
 	}),
+);
+
+const budgetField = Type.Optional(
+	Type.Object(
+		{
+			steps: Type.Optional(Type.Number({ description: "Max model steps in one cycle." })),
+			wallMin: Type.Optional(Type.Number({ description: "Max working minutes in one cycle." })),
+			usd: Type.Optional(Type.Number({ description: "Max attributable cost in one cycle." })),
+			rounds: Type.Optional(Type.Number({ description: "Max delegate→verify rework rounds in one cycle." })),
+			until: Type.Optional(Type.String({ description: "Hard local-time stop, e.g. 2026-09-06T18:00:00+08:00." })),
+		},
+		{ description: "Per-task budget; omitted keys fall back to the runtime defaults." },
+	),
+);
+
+/**
+ * The waiting ticket a park must carry (spec 051, D2). Every field the runtime cannot derive is
+ * here and nothing else: `by` is stamped by the runtime, never by the model, because a backstop
+ * the model can choose is a backstop it can choose not to have.
+ */
+const ticketField = Type.Object(
+	{
+		kind: Type.Union(
+			[
+				Type.Literal("time"),
+				Type.Literal("schedule"),
+				Type.Literal("run"),
+				Type.Literal("job"),
+				Type.Literal("ask"),
+				Type.Literal("signal"),
+			],
+			{ description: "What will wake this task." },
+		),
+		at: Type.Optional(Type.String({ description: 'kind=time: when, e.g. "+2h" or a local timestamp.' })),
+		id: Type.Optional(Type.String({ description: "kind=run/job: the run or job id this task is waiting on." })),
+		asked: Type.Optional(Type.String({ description: "kind=ask: the question the user must answer." })),
+		event: Type.Optional(Type.String({ description: "kind=signal: the task-owned periodic event name." })),
+	},
+	{ description: "Ticket describing what will resume this task." },
 );
 
 export const taskListSchema = Type.Object({});
@@ -50,53 +79,20 @@ export const taskCreateSchema = Type.Object({
 	manual: Type.Optional(Type.String({ description: "Initial operating steps or checklist." })),
 	verificationPlan: Type.Optional(Type.String({ description: "Deterministic checks the verifier must perform." })),
 	verificationRequired: Type.Optional(
-		Type.Boolean({ description: "Whether complete requires a verifier attestation. Default false." }),
+		Type.Boolean({ description: "Whether done requires an independent verifier PASS. Default false." }),
 	),
-	status: Type.Optional(
-		Type.Union(
-			SETTABLE_STATUSES.map((status) => Type.Literal(status)),
-			{ description: "Initial status; default active." },
-		),
-	),
-	wake: wakeField,
 	schedule: scheduleField,
-	deadline: Type.Optional(Type.String({ description: "Local time deadline, e.g. 2026-07-27T18:00:00+08:00." })),
-});
-
-const taskControlSchema = Type.Object({
-	deadline: Type.Optional(
-		Type.String({
-			description: "Local time deadline, e.g. 2026-07-27T18:00:00+08:00; empty string clears it.",
-		}),
-	),
-	nextAction: Type.Optional(Type.String({ description: "Concrete next executable step; empty string clears it." })),
-	waitingFor: Type.Optional(
-		Type.Union([Type.Literal("time"), Type.Literal("user"), Type.Literal("job"), Type.Literal("external-signal")], {
-			description: "Diagnostic recovery source; record-only.",
-		}),
-	),
-	verificationRequired: Type.Optional(
-		Type.Boolean({ description: "Whether complete requires a verifier attestation. Default false." }),
-	),
+	budget: budgetField,
 });
 
 export const taskUpdateSchema = Type.Object({
 	id: idField,
-	note: Type.Optional(
-		Type.String({
-			description: "Current Cycle checkpoint — what changed, evidence, next step.",
-		}),
-	),
 	planSteps: planStepsField,
-	status: Type.Optional(
-		Type.Union(
-			SETTABLE_STATUSES.map((status) => Type.Literal(status)),
-			{ description: "New status; use task_close for lifecycle close-out." },
-		),
-	),
-	wake: wakeField,
 	schedule: scheduleField,
-	control: Type.Optional(taskControlSchema),
+	budget: budgetField,
+	verificationRequired: Type.Optional(
+		Type.Boolean({ description: "Whether done requires an independent verifier PASS." }),
+	),
 });
 
 export const taskCloseSchema = Type.Object({
@@ -116,7 +112,26 @@ export const taskCloseSchema = Type.Object({
 	),
 });
 
-export const taskVerifySchema = Type.Object({
+export const taskLogSchema = Type.Object({
 	id: idField,
-	verifierRunId: Type.String({ description: "Run id returned by a purpose=verify sub-agent." }),
+	cycle: Type.Optional(Type.String({ description: "Only this cycle's records, e.g. c-2026-09-05." })),
+	limit: Type.Optional(Type.Number({ description: "Most recent N records; default 20." })),
+});
+
+export const taskStepEndSchema = Type.Object({
+	outcome: Type.Union(
+		[Type.Literal("continue"), Type.Literal("park"), Type.Literal("done"), Type.Literal("blocked")],
+		{
+			description:
+				"continue = more work now; park = wait on a ticket; done = close the cycle; blocked = ask the user.",
+		},
+	),
+	note: Type.String({ description: "What this step did, the evidence, and the next step. Goes to the loop log." }),
+	planSteps: planStepsField,
+	ticket: Type.Optional(ticketField),
+	notify: Type.Optional(Type.String({ description: "Message to send the user. Omit to stay silent." })),
+	summary: Type.Optional(Type.String({ description: "Required for outcome=done: what was achieved." })),
+	evidence: Type.Optional(Type.String({ description: "Required for outcome=done: concrete proof." })),
+	residualRisk: Type.Optional(Type.String({ description: "Remaining risk after outcome=done." })),
+	reason: Type.Optional(Type.String({ description: "Required for outcome=blocked: what is blocking." })),
 });

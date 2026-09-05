@@ -72,6 +72,7 @@ import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import { withTimeout } from "../shared/with-timeout.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { TASK_SESSIONS_DIRNAME, taskSessionPath } from "../tasks/session-path.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
 import { formatSize } from "../tools/truncate.js";
@@ -209,6 +210,11 @@ export function initializeThinkingLevelCompat(
 const MODEL_REGISTRY_REFRESH_TIMEOUT_MS = 15_000;
 const SESSION_RELOAD_TIMEOUT_MS = 30_000;
 
+/** Task sessions live under `<channelDir>/tasks/.sessions/`; nothing else may be mistaken for one. */
+function isTaskSessionPath(sessionFile: string | undefined): boolean {
+	return sessionFile?.replace(/\\/g, "/").includes(`/${TASK_SESSIONS_DIRNAME}/`) === true;
+}
+
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
 	private readonly executor: Executor;
@@ -271,6 +277,13 @@ export class ChannelRunner implements AgentRunner {
 	private firstTurnMemoryBootstrapPending = true;
 	/** Mirror of `tools.tasks.enabled` from the last tools-config load (see buildRuntimeTools). */
 	private tasksEnabled = true;
+	/**
+	 * Set while this runner is bound to a task's own session (spec 051, D3). Turns are serialized
+	 * per channel, so one runner can carry both surfaces by swapping which session file it is
+	 * bound to between turns — which keeps busy state, `/stop`, steering and turn recovery with
+	 * their existing single owner instead of splitting them across two runner instances.
+	 */
+	private taskLoop?: { taskId: string; cycleId: string };
 	/** Single owner of turn state; see TurnPhase in types.ts and TurnStateMachine in turn-state.ts. */
 	private readonly turnState = new TurnStateMachine((message, detail) =>
 		log.logWarning(`[${this.channelId}] ${message}`, detail),
@@ -1337,7 +1350,12 @@ export class ChannelRunner implements AgentRunner {
 				// the pointer before we rebuild and rebind to it, so a crash between "SDK created
 				// session" and "we finished rebinding" leaves the old ref (and old session)
 				// authoritative rather than an orphaned new file (spec 043, D1.3).
-				await commitActiveSessionRef(this.channelDir, sessionManager);
+				// A task session is not the channel's chat session: never repoint the active-session
+				// ref at it, or `/new` and restart recovery would adopt a task's transcript as the
+				// conversation (spec 051, D3).
+				if (!isTaskSessionPath(sessionManager.getSessionFile())) {
+					await commitActiveSessionRef(this.channelDir, sessionManager);
+				}
 				const next = this.createSessionRuntime(sessionManager, sessionStartEvent);
 				return {
 					session: next.session,
@@ -1673,6 +1691,39 @@ export class ChannelRunner implements AgentRunner {
 		return { agent, session, resourceLoader };
 	}
 
+	/**
+	 * Bind this runner to a task cycle's own session (spec 051, D3/INV-5).
+	 *
+	 * Task work must not accumulate in the channel's chat transcript: the one real channel on the
+	 * author's machine had grown to 7.4 MB and been compacted six times because chat and two daily
+	 * tasks shared it, so every compaction damaged all three at once. Swapping the bound session
+	 * per turn gives each cycle its own bounded context while leaving turn state, `/stop`, and
+	 * delivery exactly where they already are.
+	 */
+	async bindTaskSession(taskId: string, cycleId: string): Promise<void> {
+		await this.sessionReady;
+		const path = taskSessionPath(this.channelDir, taskId, cycleId);
+		await mkdir(dirname(path), { recursive: true });
+		this.taskLoop = { taskId, cycleId };
+		await this.sessionRuntime.switchSession(path);
+		// A fresh task session starts with no memory bootstrap injected yet; the chat session's
+		// own flag is per-binding, so reset it rather than inheriting the chat turn's state.
+		this.firstTurnMemoryBootstrapPending = true;
+	}
+
+	/** Return to the channel's chat session after a task step. Safe to call when already bound. */
+	async bindChatSession(): Promise<void> {
+		if (!this.taskLoop) return;
+		this.taskLoop = undefined;
+		await this.sessionRuntime.switchSession(join(this.channelDir, resolveActiveSessionFile(this.channelDir)));
+		this.firstTurnMemoryBootstrapPending = true;
+	}
+
+	/** Which task loop this runner is currently bound to, if any. */
+	getTaskLoop(): { taskId: string; cycleId: string } | undefined {
+		return this.taskLoop;
+	}
+
 	private buildRuntimeTools(): AgentTool<any>[] {
 		const securityLoad = this.loadSecurityConfig();
 		const toolsLoad = loadToolsConfigWithDiagnostics(this.appHomeDir);
@@ -1695,6 +1746,8 @@ export class ChannelRunner implements AgentRunner {
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
 			mediaSender: this.mediaSender,
+			taskLoop: this.taskLoop,
+			getToolsUsed: () => this.runState.toolsUsed,
 		});
 		this.currentTools = tools;
 		// Tool schemas are billed with the system prompt and, unlike it, nothing trims them.

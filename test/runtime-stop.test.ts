@@ -284,7 +284,7 @@ describe("runtime stop handling", () => {
 		bootstrapAppHome(paths);
 		const taskPath = join(paths.workspaceDir, "dm_tester", "tasks", "long-run.md");
 		mkdirSync(join(paths.workspaceDir, "dm_tester", "tasks"), { recursive: true });
-		writeFileSync(taskPath, "---\nstatus: in-progress\n---\n\n# Long running task\n", "utf-8");
+		writeFileSync(taskPath, "---\nstate: open\n---\n\n# Long running task\n", "utf-8");
 
 		const bot = new FakeTestBot();
 		const runtime = await createRuntimeContext({
@@ -320,8 +320,11 @@ describe("runtime stop handling", () => {
 		await task;
 
 		expect(runner.abort).toHaveBeenCalledTimes(1);
-		expect(readFileSync(taskPath, "utf-8")).toContain("status: active");
-		expect(readFileSync(taskPath, "utf-8")).toContain("enabled: false");
+		// Pausing is orthogonal to the stage (spec 051, D1): the task keeps whatever it was doing
+		// and only gains a `paused` marker, so /tasks resume can pick it up exactly where it was.
+		const stopped = readFileSync(taskPath, "utf-8");
+		expect(stopped).toContain("state: open");
+		expect(stopped).toContain('"by":"user"');
 		// The transport turns this into the user-facing "任务 X 已暂停，用 /tasks resume X 继续" notice.
 		expect(outcome).toEqual({ pausedTaskId: "long-run" });
 

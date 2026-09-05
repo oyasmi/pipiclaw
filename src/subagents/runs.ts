@@ -13,6 +13,10 @@ import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
+import { DEFAULT_TASK_BUDGET } from "../tasks/budget.js";
+import { recordTaskCost, recordVerificationRound } from "../tasks/rounds.js";
+import { readStoredTask } from "../tasks/store.js";
+import { attestationRejectionReason } from "../tasks/verification.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { startExternalProgressTail } from "./external/progress-tail.js";
 import { finalizeExternalRun } from "./external/settlement.js";
@@ -135,6 +139,9 @@ export interface RunRecord extends RunUsage {
 	settlementPending?: PendingSettlement;
 	/** Set once this run's usage has been written to the ledger; guards against double billing. */
 	usageRecorded?: boolean;
+	/** Set once this run's cost (and, for a verifier, its round) has been credited to its task.
+	 *  Separate from `usageRecorded` so a replayed settlement can never write a second round. */
+	taskAccounted?: boolean;
 	/** Set once the completion wake has been hallmarked for delivery; guards against a duplicate wake. */
 	wakeEnqueued?: boolean;
 	/** Durable one-time relationship between the internally produced wake and task activation (T9). */
@@ -204,6 +211,10 @@ export interface RegisterRunInput {
 	taskId?: string;
 	workingDirectory: string;
 	artifactDir: string;
+	/** This run's channel directory — where its owning task lives (spec 051, D7/D10). Set at
+	 *  registration for every runtime, so settlement can credit the task whether the run was
+	 *  internal or external; the external launch path re-persists it with the rest of its info. */
+	channelDir?: string;
 	/** Set only when the caller already holds a workspace write lease for this run (D10.1). */
 	leaseKey?: string;
 	mutates?: RunMutates;
@@ -828,6 +839,17 @@ export class SubAgentRunManager {
 				await this.persist(record);
 			}
 
+			// Spec 051, D7/D10: credit this run to its task's cycle — cost always, and for a
+			// purpose=verify run also one rework round. Guarded by its own idempotency marker
+			// inside the same settlement lock, so a replay adds nothing.
+			if (!record.taskAccounted && record.taskId && record.channelDir) {
+				record.taskAccounted = true;
+				await this.creditOwningTask(record, input).catch((error) => {
+					log.logWarning(`Failed to credit task ${record.taskId} for run ${record.runId}`, errorMessage(error));
+				});
+				await this.persist(record);
+			}
+
 			if (record.wakeEnqueued) return;
 			if (!options.announce) {
 				record.wakeEnqueued = true;
@@ -836,6 +858,66 @@ export class SubAgentRunManager {
 			}
 			await this.announce(record, input.outputText, outputSaved);
 		});
+	}
+
+	/**
+	 * Credit one settled run to the task that owns it: cost onto the cycle, and — for a verifier —
+	 * one round onto the rework ledger. Best-effort by design: a task whose file has since been
+	 * archived or hand-deleted must not block the completion wake.
+	 */
+	private async creditOwningTask(record: RunRecord, input: SettleInput): Promise<void> {
+		const channelDir = record.channelDir;
+		const taskId = record.taskId;
+		if (!channelDir || !taskId) return;
+		const usd = input.usage.cost.total;
+		const estimated = input.costKnown === false;
+		if (record.purpose === "verify" && record.verificationVerdict) {
+			// Fail closed: a PASS only counts once the on-disk attestation still binds to this task,
+			// this contract and this checkout — exactly the checks `task_verify` ran before it was
+			// retired. A rejected PASS is recorded as a fail *with its reason*, so the loop sees why
+			// instead of silently losing a round.
+			const task = await readStoredTask(channelDir, taskId).catch(() => undefined);
+			const rejection = task
+				? await attestationRejectionReason({
+						channelDir,
+						taskId,
+						runId: record.runId,
+						taskBody: task.body,
+						trustedWorkingDirectory: record.workingDirectory,
+					})
+				: "task file is missing";
+			await recordVerificationRound(
+				{
+					channelDir,
+					taskId,
+					verifyRunId: record.runId,
+					verdict: rejection ? "fail" : record.verificationVerdict,
+					strength: record.verificationStrength ?? "advisory",
+					workRunId: this.latestWorkRunFor(taskId, record.startedAt),
+					usd,
+					usdEstimated: estimated,
+					reason: rejection,
+				},
+				DEFAULT_TASK_BUDGET.rounds,
+			);
+			return;
+		}
+		await recordTaskCost(channelDir, taskId, usd, estimated);
+	}
+
+	/**
+	 * The `purpose=work` run this verdict most plausibly judged: the same task's latest work run
+	 * started before the verifier. Left `undefined` rather than guessed when there is none — an
+	 * unattributed round is honest, a wrong attribution is not.
+	 */
+	private latestWorkRunFor(taskId: string, before: number): string | undefined {
+		let best: RunRecord | undefined;
+		for (const candidate of this.runs.values()) {
+			if (candidate.taskId !== taskId || candidate.purpose !== "work") continue;
+			if (candidate.startedAt > before) continue;
+			if (!best || candidate.startedAt > best.startedAt) best = candidate;
+		}
+		return best?.runId;
 	}
 
 	/**
@@ -1413,11 +1495,6 @@ export function getSubAgentRunManager(channelId: string): SubAgentRunManager {
 		managers.set(channelId, manager);
 	}
 	return manager;
-}
-
-/** Read-only view for `/tasks doctor`, mirroring `channelJobTaskIds`. */
-export function channelDelegationTaskIds(channelId: string): Set<string> {
-	return managers.get(channelId)?.runningTaskIds() ?? new Set<string>();
 }
 
 /**

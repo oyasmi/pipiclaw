@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { localDayKey } from "../../../src/shared/local-time.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 import { waitForFileContent } from "../helpers/wait.js";
 
@@ -94,7 +95,9 @@ describe("E2E deterministic: memory (spec 050)", () => {
 			timeoutMs: 10_000,
 			intervalMs: 100,
 		});
-		const today = new Date().toISOString().slice(0, 10);
+		// The journal filename is the *local* calendar day (`localDayKey`), not the UTC one — deriving
+		// it from `toISOString()` made this case fail for every hour the two disagree (found 2026-09-06).
+		const today = localDayKey();
 		const journalPath = join(harness.channelDir, "journal", `${today}.md`);
 		const journal = await waitForFileContent(journalPath, (c) => c.includes("完成一次部署"), {
 			timeoutMs: 10_000,
@@ -173,8 +176,8 @@ describe("E2E deterministic: memory (spec 050)", () => {
 
 		const memoryDir = join(harness.channelDir, "memory");
 		mkdirSync(memoryDir, { recursive: true });
-		const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-		const farFuture = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+		const yesterday = localDayKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
+		const farFuture = localDayKey(new Date(Date.now() + 20 * 24 * 60 * 60 * 1000));
 		writeFileSync(
 			join(memoryDir, "still-probationary.md"),
 			`---\nname: still-probationary\ndescription: touched probationary fact\ntype: project\nsource: agent\ncreated: 2026-01-01\nupdated: 2026-01-01\nexpires: ${farFuture}\n---\n`,

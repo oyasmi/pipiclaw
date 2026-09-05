@@ -1,6 +1,8 @@
 import { join } from "node:path";
+import { parseLocalTime } from "../shared/local-time.js";
 import { countPromptUnits } from "../shared/prompt-units.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
+import { describeTicket } from "../tasks/ticket.js";
 
 /** Automatic-context share for the in-flight task agenda (spec 026 §5.3). */
 export const TASK_AGENDA_MAX_UNITS = 600;
@@ -25,50 +27,45 @@ export interface TaskDigestOptions {
 	now?: number;
 }
 
-function relativeWake(wakeMs: number | undefined, now: number): string {
-	if (wakeMs === undefined) return "wake —";
-	const diffMs = wakeMs - now;
-	if (diffMs <= 0) return "wake due";
+/** Relative time to a ticket's due/backstop moment, for a compact agenda line. */
+function relativeTime(atMs: number | undefined, now: number): string | undefined {
+	if (atMs === undefined || !Number.isFinite(atMs)) return undefined;
+	const diffMs = atMs - now;
+	if (diffMs <= 0) return "due";
 	const minutes = Math.round(diffMs / 60000);
-	if (minutes < 60) return `wake ${minutes}m`;
+	if (minutes < 60) return `${minutes}m`;
 	const hours = Math.round(minutes / 60);
-	if (hours < 24) return `wake ${hours}h`;
-	return `wake ${Math.round(hours / 24)}d`;
+	if (hours < 24) return `${hours}h`;
+	return `${Math.round(hours / 24)}d`;
 }
 
 function renderLine(entry: TaskLedgerEntry, now: number): string {
-	const status = entry.frontmatter.readable ? (entry.frontmatter.status ?? "active") : "⚠ unreadable frontmatter";
-	const parts = [
-		`${entry.id} — ${entry.title}`,
-		status,
-		entry.frontmatter.enabled === false ? "disabled" : "enabled",
-		relativeWake(entry.wakeMs, now),
-	];
-	const control = entry.frontmatter.control;
-	if (control) {
-		if (control.verification.required) parts.push(`verify required/${control.verification.status}`);
-		if (control.waitingFor) parts.push(`waiting for ${control.waitingFor}`);
-		if (control.stop) parts.push(`stop ${control.stop.by}: ${control.stop.reason}`);
-		if (control.deadline) parts.push(`deadline ${control.deadline}`);
-		if (control.nextAction) parts.push(`next ${control.nextAction}`);
+	const parts = [`${entry.id} — ${entry.title}`, entry.readable ? entry.fields.state : "⚠ unreadable frontmatter"];
+	if (entry.fields.paused) parts.push(`paused(${entry.fields.paused.by})`);
+	const ticket = entry.fields.ticket;
+	if (ticket) {
+		const due = relativeTime(entry.dueMs, now);
+		const by = relativeTime(parseLocalTime(ticket.by), now);
+		parts.push(`${describeTicket(ticket)}${due ? ` · due ${due}` : ""}${by ? ` · 兜底 ${by}` : ""}`);
+	}
+	const cycle = entry.fields.cycle;
+	if (cycle) {
+		const cost = cycle.usd > 0 ? ` · $${cycle.usd.toFixed(2)}${cycle.usdEstimated ? "≈" : ""}` : "";
+		parts.push(`${cycle.id} · ${cycle.steps} 步 · ${cycle.rounds} 轮${cost}`);
 	}
 	// spec 037, D4: the agenda shows Plan progress and the current step, not the full Plan — the
-	// complete section is only read from the task file at wake time (task-driver.ts's capsule),
-	// staying well inside the 600-unit budget this block competes for (spec 025/026).
+	// complete section is read from the task file by the loop itself, staying well inside the
+	// 600-unit budget this block competes for (spec 025/026).
 	if (entry.plan) {
 		parts.push(`plan ${entry.plan.done}/${entry.plan.total} · @${entry.plan.current?.id ?? "-"}`);
-	}
-	if (entry.latestNote) {
-		const note = entry.latestNote.length > 80 ? `${entry.latestNote.slice(0, 79)}…` : entry.latestNote;
-		parts.push(note);
 	}
 	return `- ${parts.join(" · ")}`;
 }
 
 /**
  * Render the in-flight task agenda, or `""` when there are no live tasks to show.
- * Sleeping and disabled tasks stay visible so the model can distinguish dormant work from lost
- * work and tell the user which recovery source is needed.
+ * Parked and paused tasks stay visible so the model can distinguish dormant work from lost work
+ * and tell the user what each one is waiting for.
  */
 export async function buildTaskDigest(options: TaskDigestOptions): Promise<string> {
 	const now = options.now ?? Date.now();
@@ -76,7 +73,7 @@ export async function buildTaskDigest(options: TaskDigestOptions): Promise<strin
 	const all = await readActiveTasks(tasksDir, now);
 	// A legacy terminal file may briefly remain in the active directory while startup migration
 	// is running. It is already non-actionable at the ledger layer and must not enter prompt context.
-	const agenda = all.filter((entry) => !entry.frontmatter.archiveOutcome);
+	const agenda = all.filter((entry) => !entry.fields.outcome);
 	if (agenda.length === 0) return "";
 
 	const shown = agenda.slice(0, Math.max(1, options.maxTasks));

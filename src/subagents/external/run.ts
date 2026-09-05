@@ -253,6 +253,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		taskId: input.taskId,
 		workingDirectory: input.workingDirectory,
 		artifactDir: input.artifactDir,
+		channelDir: input.channelDir,
 		leaseKey: input.leaseKey,
 		mutates: input.mutates,
 	});

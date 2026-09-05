@@ -36,6 +36,15 @@ export interface CreatePipiclawToolsOptions {
 	toolsConfig?: PipiclawToolsConfig;
 	/** Transport-provided attachment port; when present, enables the `send_media` tool. */
 	mediaSender?: MediaSender;
+	/**
+	 * Present only while this tool set belongs to a task loop step (spec 051, D3). It enables
+	 * `task_step_end` and removes the three tools a task must not use: `task_create` (a task does
+	 * not spawn tasks), `memory_save` (task state is not a channel fact — this was memory v2's
+	 * single biggest pollution source) and `event_manage`.
+	 */
+	taskLoop?: { taskId: string; cycleId: string };
+	/** Tools completed in the current turn; only `task_step_end` reads it. */
+	getToolsUsed?: () => string[];
 }
 
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {
@@ -59,6 +68,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 	// registry so this set, the sub-agent set, and the prompt hints share one source.
 	// The `subagent` tool is appended separately: it is never available to sub-agents
 	// and keeping it out of the registry avoids a registry ↔ subagents/tool import cycle.
+	const taskLoopExcluded = new Set(["task_create", "memory_save", "event_manage"]);
 	const leafTools = buildToolSet({
 		executor: options.executor,
 		fileStore: options.fileStore,
@@ -76,6 +86,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		resolveApiKey: options.resolveApiKey,
 		getSessionSearchSettings: options.getSessionSearchSettings,
 		mediaSender: options.mediaSender,
+		taskLoop: options.taskLoop,
+		getToolsUsed: options.getToolsUsed,
 	});
 	const subAgentToolOptions = {
 		executor: options.executor,
@@ -108,7 +120,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		projectBoundary: options.projectScope.boundary,
 		securityConfig,
 	};
-	return [
+	const all = [
 		...leafTools,
 		// Bound to the same `details` contract as the registry's tools; it is registered here
 		// rather than in TOOL_REGISTRY only to avoid a registry ↔ subagents/tool import cycle.
@@ -121,4 +133,5 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		withToolDetails(createSubAgentListTool(subAgentManageOptions), "subagent_list"),
 		withToolDetails(createSubAgentRunTool(subAgentManageOptions), "subagent_run"),
 	];
+	return options.taskLoop ? all.filter((tool) => !taskLoopExcluded.has(tool.name)) : all;
 }

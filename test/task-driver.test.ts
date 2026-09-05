@@ -1,57 +1,40 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getChannelDir } from "../src/channel/channel-paths.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
-import { createTaskDriverEvent, TaskDriver, taskGovernorReceipt } from "../src/runtime/task-driver.js";
+import { createTaskDriverEvent, TaskDriver, taskStopReceipt } from "../src/runtime/task-driver.js";
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
 import { formatLocalTime } from "../src/shared/local-time.js";
-import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { createCycle } from "../src/tasks/cycle.js";
+import type { TaskFrontmatterV4 } from "../src/tasks/frontmatter.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
-import { nextTaskWake } from "../src/tasks/task-schedule.js";
+import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { parkTask, readStoredTask } from "../src/tasks/store.js";
 
 const NOW = new Date("2026-08-04T12:00:00+08:00");
-const SETTINGS: PipiclawTaskDriverSettings = {
-	continuationDelayMinutes: 5,
-	stalledRetryMinutes: 60,
-	maxDispatchesPerTick: 4,
-	maxSleepMinutes: 15,
-};
+const PAST = "2026-08-03T12:00:00+08:00";
+const FUTURE = "2026-08-05T12:00:00+08:00";
+const SETTINGS: PipiclawTaskDriverSettings = { maxDispatchesPerTick: 4, maxSleepMinutes: 15 };
 
 function body(title = "Task"): string {
 	return renderStandardTaskBody({ title, goal: "Do the work.", dod: "- [ ] Result is ready" });
 }
 
-function taskDoc(
-	status: "active" | "waiting" | "sleeping",
-	options: {
-		wake?: string;
-		schedule?: string;
-		enabled?: boolean;
-		control?: ReturnType<typeof createDefaultTaskControl>;
-	} = {},
-): string {
-	return renderTaskDocument(
-		{
-			status,
-			wake: options.wake,
-			schedule: options.schedule,
-			enabled: options.enabled,
-			control: options.control,
-		},
-		body(),
-	);
+function taskDoc(fields: TaskFrontmatterV4): string {
+	return renderTaskDocument(fields, body());
 }
 
-describe("TaskDriver v2", () => {
+describe("TaskDriver (spec 051, D9)", () => {
 	let workspaceDir: string;
 
 	beforeEach(async () => {
-		workspaceDir = await mkdtemp(join(tmpdir(), "task-driver-v2-"));
+		workspaceDir = await mkdtemp(join(tmpdir(), "task-driver-v4-"));
 	});
 	afterEach(async () => {
 		vi.restoreAllMocks();
+		await resetTaskLogAppenders();
 		await rm(workspaceDir, { recursive: true, force: true });
 	});
 
@@ -78,207 +61,182 @@ describe("TaskDriver v2", () => {
 		});
 	}
 
-	it("dispatches active work but never polls parked waiting or future sleeping", async () => {
-		await writeTask("dm_a", "active", taskDoc("active"));
-		await writeTask("dm_a", "parked", taskDoc("waiting"));
+	it("dispatches open work and never polls a pushed or future ticket", async () => {
+		await writeTask("dm_a", "open", taskDoc({ state: "open" }));
+		// A `run` ticket is redeemed by settlement, not by the scan: polling it would be the
+		// unverified resumption path spec 051 removed.
 		await writeTask(
 			"dm_a",
-			"later",
-			taskDoc("sleeping", { schedule: "0 9 * * *", wake: "2026-08-05T09:00:00+08:00" }),
+			"awaiting-run",
+			taskDoc({ state: "parked", ticket: { kind: "run", id: "run_x", by: FUTURE } }),
 		);
+		await writeTask("dm_a", "later", taskDoc({ state: "parked", ticket: { kind: "time", at: FUTURE, by: FUTURE } }));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledTimes(1);
-		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:active]");
+		expect(dispatch.mock.calls[0]?.[0].text).toContain("[TASK_DRIVER:open]");
 	});
 
 	it("finds tasks for a group channel whose id contains a slash", async () => {
 		// Regression: the driver used to join the raw id onto the workspace path, so a base64
 		// conversation id resolved to a nested directory that never exists. Every such channel
-		// read as "no active tasks" — no dispatch, no escalation, no log line.
+		// read as "no active tasks" — no dispatch, no receipt, no log line.
 		const channelId = "group_cidYDhGqxhJOzS7VDv/eDInUw==";
-		await writeTask(channelId, "active", taskDoc("active"));
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		await driver(dispatch, { getKnownChannelIds: () => [channelId] }).runOnce(NOW);
-		expect(dispatch).toHaveBeenCalledTimes(1);
-		// The wake must carry the raw id, not the escaped directory name, or delivery misroutes.
-		expect(dispatch.mock.calls[0]?.[0].channelId).toBe(channelId);
-	});
-
-	it("honors enabled as an independent kill switch for every live stage", async () => {
-		await writeTask("dm_a", "active", taskDoc("active", { enabled: false }));
-		await writeTask("dm_a", "waiting", taskDoc("waiting", { enabled: false, wake: "2020-01-01T00:00:00+08:00" }));
-		await writeTask(
-			"dm_a",
-			"sleeping",
-			taskDoc("sleeping", { enabled: false, schedule: "0 9 * * *", wake: "2020-01-01T00:00:00+08:00" }),
-		);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		await driver(dispatch).runOnce(NOW);
-		expect(dispatch).not.toHaveBeenCalled();
-	});
-
-	it("atomically activates a due timed wait before dispatch", async () => {
-		const control = createDefaultTaskControl();
-		const path = await writeTask("dm_a", "timed", taskDoc("waiting", { wake: "2026-08-04T09:00:00+08:00", control }));
+		await writeTask(channelId, "open", taskDoc({ state: "open" }));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).toHaveBeenCalledOnce();
-		expect(dispatch.mock.calls[0]?.[0].text).toContain("status=active");
-		const after = await readFile(path, "utf-8");
-		expect(after).toContain("status: active");
-		expect(after).not.toContain("wake:");
 	});
 
-	it("self-heals a missing sleeping wake with zero dispatch", async () => {
-		const path = await writeTask("dm_a", "heal", taskDoc("sleeping", { schedule: "0 9 * * *" }));
-		const rendered = await readFile(path, "utf-8");
-		await writeFile(path, rendered.replace(/^wake: .*\n/m, ""));
+	it("never dispatches a paused task", async () => {
+		await writeTask("dm_a", "held", taskDoc({ state: "open", paused: { by: "user", reason: "hold", at: PAST } }));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
-		const after = await readFile(path, "utf-8");
-		expect(after).toContain("status: sleeping");
-		expect(after).toContain(`wake: ${formatLocalTime(nextTaskWake("0 9 * * *", NOW)!)}`);
 	});
 
-	it("stops a sleeping task with a bad schedule and sends a deterministic receipt", async () => {
-		const control = createDefaultTaskControl();
-		const path = await writeTask("dm_a", "bad-schedule", taskDoc("sleeping", { schedule: "not cron", control }));
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		const notify = vi.fn((_event: DingTalkEvent) => true);
-		await driver(dispatch, { notify }).runOnce(NOW);
-		expect(dispatch).not.toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledOnce();
-		expect(notify.mock.calls[0]?.[0].text).toContain("invalid schedule");
-		const after = await readFile(path, "utf-8");
-		expect(after).toContain("enabled: false");
-		expect(after).toContain('"by":"governor"');
-	});
-
-	it("repairs an invalid sleeping schedule even while the channel is busy", async () => {
-		const control = createDefaultTaskControl();
-		const path = await writeTask("dm_a", "busy-bad-schedule", taskDoc("sleeping", { schedule: "not cron", control }));
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		const notify = vi.fn((_event: DingTalkEvent) => true);
-		await driver(dispatch, { notify, isChannelActive: () => true }).runOnce(NOW);
-		expect(dispatch).not.toHaveBeenCalled();
-		expect(notify).toHaveBeenCalledOnce();
-		expect(await readFile(path, "utf-8")).toContain("enabled: false");
-	});
-
-	it("opens the first recurring cycle through the same runtime path and keeps placeholder history out", async () => {
+	it("redeems a due time ticket and dispatches the reopened task in the same tick", async () => {
 		const path = await writeTask(
 			"dm_a",
-			"weekly",
-			taskDoc("sleeping", {
+			"timed",
+			taskDoc({ state: "parked", ticket: { kind: "time", at: PAST, by: PAST } }),
+		);
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		await driver(dispatch).runOnce(NOW);
+		expect(dispatch).toHaveBeenCalledOnce();
+		expect((await readStoredTask(join(workspaceDir, "dm_a"), "timed"))?.fields.state).toBe("open");
+		expect(path).toContain("timed.md");
+	});
+
+	it("opens the next cycle for a due schedule ticket without spending a model turn on it", async () => {
+		await writeTask(
+			"dm_a",
+			"daily",
+			taskDoc({
+				state: "parked",
 				schedule: "0 9 * * *",
-				wake: "2026-08-04T09:00:00+08:00",
-				control: createDefaultTaskControl(),
+				ticket: { kind: "schedule", at: PAST, by: PAST },
+				cycle: { ...createCycle("c-2026-08-03"), steps: 7 },
 			}),
 		);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch).runOnce(NOW);
+		const fields = (await readStoredTask(join(workspaceDir, "dm_a"), "daily"))?.fields;
+		expect(fields?.state).toBe("open");
+		// Fresh counters: the new occurrence must not inherit the last one's spent budget.
+		expect(fields?.cycle).toMatchObject({ id: "c-2026-08-04", steps: 0 });
 		expect(dispatch).toHaveBeenCalledOnce();
-		const after = await readFile(path, "utf-8");
-		expect(after).toContain("status: active");
-		expect(after).toContain('"cycleId":"cycle-2026-08-04"');
-		expect(after).not.toContain("### Current Cycle — closed");
-		expect(dispatch.mock.calls[0]?.[0].dispatchId).toContain("cycle-2026-08-04");
 	});
 
-	it("does not open a concurrent recurring cycle when the current one missed the next occurrence", async () => {
-		const control = createDefaultTaskControl();
-		control.cycleId = "cycle-2026-08-03";
-		const path = await writeTask("dm_a", "missed", taskDoc("active", { schedule: "0 9 * * *", control }));
+	// D2-INV, the whole point of the ticket: a park that nothing redeems must not go silent.
+	it("reopens an expired ticket, then stops the task and notifies on the second expiry", async () => {
+		const channelDir = join(workspaceDir, "dm_a");
+		const parked = taskDoc({
+			state: "parked",
+			ticket: { kind: "run", id: "run_never", by: PAST },
+			cycle: createCycle("c-2026-08-04"),
+		});
+		await writeTask("dm_a", "stuck", parked);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		await driver(dispatch).runOnce(NOW);
-		expect(dispatch).toHaveBeenCalledOnce();
-		expect(await readFile(path, "utf-8")).toContain("status: active");
-		expect(await readFile(path, "utf-8")).not.toContain('"cycleId":"cycle-2026-08-04"');
+		const notify = vi.fn((_event: DingTalkEvent) => true);
+		const instance = driver(dispatch, { notify });
+
+		await instance.runOnce(NOW);
+		expect((await readStoredTask(channelDir, "stuck"))?.fields.state).toBe("open");
+		expect(notify).not.toHaveBeenCalled();
+
+		// Re-park on the same dead ticket, preserving the cycle's expiry count.
+		await parkTask(channelDir, "stuck", { kind: "run", id: "run_never", by: PAST });
+		await instance.runOnce(NOW);
+		const fields = (await readStoredTask(channelDir, "stuck"))?.fields;
+		expect(fields?.paused?.by).toBe("runtime");
+		expect(notify).toHaveBeenCalledOnce();
+		expect(notify.mock.calls[0]?.[0].text).toContain("/tasks resume stuck");
 	});
 
-	it("governs deadline exhaustion without changing active into a terminal state", async () => {
-		const control = createDefaultTaskControl();
-		control.deadline = "2026-08-03T00:00:00+08:00";
-		const path = await writeTask("dm_a", "overdue", taskDoc("active", { control }));
+	it("stops a task that is already over budget before spending a model call on it", async () => {
+		await writeTask(
+			"dm_a",
+			"spent",
+			taskDoc({ state: "open", budget: { steps: 2 }, cycle: { ...createCycle("c-2026-08-04"), steps: 2 } }),
+		);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		const notify = vi.fn((_event: DingTalkEvent) => true);
 		await driver(dispatch, { notify }).runOnce(NOW);
 		expect(dispatch).not.toHaveBeenCalled();
-		expect(notify.mock.calls[0]?.[0].text).toContain("deadline exceeded");
-		const after = await readFile(path, "utf-8");
-		expect(after).toContain("status: active");
-		expect(after).toContain("enabled: false");
+		expect(notify).toHaveBeenCalledOnce();
+		expect((await readStoredTask(join(workspaceDir, "dm_a"), "spent"))?.fields.paused?.by).toBe("runtime");
 	});
 
-	it("disables after three accepted active wakes with no visible effect", async () => {
-		const control = createDefaultTaskControl();
-		const path = await writeTask("dm_a", "spinning", taskDoc("active", { control }));
+	it("stops a loop whose last two steps called no tool at all", async () => {
+		const channelDir = join(workspaceDir, "dm_a");
+		await writeTask("dm_a", "idle", taskDoc({ state: "open", cycle: { ...createCycle("c-1"), steps: 2 } }));
+		for (const seq of [1, 2]) {
+			await appendTaskLog(channelDir, "idle", {
+				cycle: "c-1",
+				kind: "step",
+				seq,
+				outcome: "continue",
+				note: "thinking",
+				tools: [],
+			});
+		}
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		const notify = vi.fn((_event: DingTalkEvent) => true);
-		const taskDriver = driver(dispatch, { notify });
-		await taskDriver.runOnce(NOW);
-		await taskDriver.runOnce(new Date(NOW.getTime() + 60 * 60_000));
-		await taskDriver.runOnce(new Date(NOW.getTime() + 120 * 60_000));
-		await taskDriver.runOnce(new Date(NOW.getTime() + 180 * 60_000));
-		expect(dispatch).toHaveBeenCalledTimes(3);
-		expect(notify).toHaveBeenCalledOnce();
-		const after = await readFile(path, "utf-8");
-		expect(after).toContain("status: active");
-		expect(after).toContain("enabled: false");
-		expect(after).toContain('"by":"governor"');
+		await driver(dispatch, { notify }).runOnce(NOW);
+		expect(dispatch).not.toHaveBeenCalled();
+		expect((await readStoredTask(channelDir, "idle"))?.fields.paused?.reason).toContain("没有任何工具调用");
 	});
 
-	it("does not count model-written nextAction as progress", async () => {
-		const control = createDefaultTaskControl();
-		const path = await writeTask("dm_a", "model-churn", taskDoc("active", { control }));
-		let dispatchCount = 0;
-		const dispatch = vi.fn(async (_event: DingTalkEvent) => {
-			dispatchCount++;
-			const stored = await readFile(path, "utf-8");
-			const controlLine = stored.match(/^control: (.+)$/m);
-			if (!controlLine?.[1]) throw new Error("test task control missing");
-			const nextControl = JSON.parse(controlLine[1]) as ReturnType<typeof createDefaultTaskControl>;
-			nextControl.nextAction = `model note ${dispatchCount}`;
-			await writeFile(path, stored.replace(/^control: .+$/m, `control: ${JSON.stringify(nextControl)}`));
-			return true;
-		});
-		const notify = vi.fn((_event: DingTalkEvent) => true);
-		const taskDriver = driver(dispatch, { notify });
-		await taskDriver.runOnce(NOW);
-		await taskDriver.runOnce(new Date(NOW.getTime() + 60 * 60_000));
-		await taskDriver.runOnce(new Date(NOW.getTime() + 120 * 60_000));
-		await taskDriver.runOnce(new Date(NOW.getTime() + 180 * 60_000));
-		expect(dispatch).toHaveBeenCalledTimes(3);
-		expect(notify).toHaveBeenCalledOnce();
-		expect(await readFile(path, "utf-8")).toContain("enabled: false");
+	it("keeps driving a loop whose steps actually used tools", async () => {
+		const channelDir = join(workspaceDir, "dm_a");
+		await writeTask("dm_a", "busy", taskDoc({ state: "open", cycle: { ...createCycle("c-1"), steps: 2 } }));
+		for (const seq of [1, 2]) {
+			await appendTaskLog(channelDir, "busy", {
+				cycle: "c-1",
+				kind: "step",
+				seq,
+				outcome: "continue",
+				note: "worked",
+				tools: ["bash"],
+			});
+		}
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		await driver(dispatch).runOnce(NOW);
+		expect(dispatch).toHaveBeenCalledOnce();
 	});
-});
 
-describe("task driver events", () => {
-	it("renders dispatch, repair, and governor receipts on the v3 surface with no retired lifecycle status", () => {
+	it("does not queue a second step for a task it just dispatched", async () => {
+		await writeTask("dm_a", "open", taskDoc({ state: "open" }));
+		const dispatch = vi.fn((_event: DingTalkEvent) => true);
+		const instance = driver(dispatch);
+		await instance.runOnce(NOW);
+		await instance.runOnce(NOW);
+		expect(dispatch).toHaveBeenCalledOnce();
+	});
+
+	it("renders a step dispatch, a repair-only dispatch, and a stop receipt", async () => {
 		const entry = {
-			id: "task-1",
-			title: "Task",
-			frontmatter: { readable: true, enabled: true, status: "active", control: createDefaultTaskControl() },
-			actionable: true,
+			id: "T",
+			title: "Title",
+			fields: { state: "open" as const, cycle: createCycle("c-1") },
+			readable: true,
+			legacy: false,
+			runnable: true,
+			expired: false,
 		};
-		const event = createTaskDriverEvent("dm_1", entry, NOW.getTime());
-		expect(event.text).toContain("[TASK_DRIVER:task-1]");
-		expect(event.text).not.toMatch(/approval|verifying|sideEffects|externalApproval/i);
-		const repair = createTaskDriverEvent(
-			"dm_1",
-			{ id: "broken", title: "Broken", frontmatter: { readable: false, enabled: true }, actionable: true },
-			NOW.getTime(),
-		);
-		expect(repair.text).toContain("repair only");
+		const step = createTaskDriverEvent("dm_a", entry, NOW.getTime());
+		expect(step.text).toContain("[TASK_DRIVER:T]");
+		expect(step.text).toContain("task_step_end");
+
+		// A legacy or unreadable file must never be driven as ordinary work: a repair dispatch is
+		// explicitly forbidden from executing the goal.
+		const repair = createTaskDriverEvent("dm_a", { ...entry, legacy: true }, NOW.getTime());
 		expect(repair.text).toContain("Do not execute the task goal");
 
-		const disabledEntry = { ...entry, frontmatter: { ...entry.frontmatter, enabled: false }, actionable: false };
-		const first = taskGovernorReceipt("dm_1", disabledEntry, "attempt budget exhausted", NOW.getTime());
-		const second = taskGovernorReceipt("dm_1", disabledEntry, "attempt budget exhausted", NOW.getTime() + 1000);
-		expect(first.text).toContain("/tasks resume task-1");
-		expect(first.dispatchId).toBe(second.dispatchId);
+		const receipt = taskStopReceipt("dm_a", entry, "预算耗尽", NOW.getTime());
+		expect(receipt.text).toContain("预算耗尽");
+		expect(receipt.text).toContain("/tasks show T");
+		expect(formatLocalTime(new Date(Number(receipt.ts)))).toBeTruthy();
 	});
 });

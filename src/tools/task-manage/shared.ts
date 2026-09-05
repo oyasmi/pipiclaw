@@ -1,31 +1,20 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { getChannelJobManager } from "../../agent/job-manager.js";
+import { createExecutor } from "../../executor.js";
 import * as log from "../../log.js";
 import { parseScheduledEventContent } from "../../runtime/events.js";
-import { formatLocalTime, parseWakeInput } from "../../shared/local-time.js";
 import { errorMessage } from "../../shared/text-utils.js";
-import { applyTaskControlPatch, createDefaultTaskControl } from "../../tasks/control.js";
-import {
-	normalizeTaskFields,
-	parseTaskFrontmatter,
-	renderStandardTaskBody,
-	renderTaskDocument,
-	taskBody,
-	upsertCurrentCycleCompletionEvidence,
-} from "../../tasks/ledger.js";
+import { getSubAgentRunManager } from "../../subagents/runs.js";
+import { createCycle, nextCycleId } from "../../tasks/cycle.js";
+import type { TaskBudget, TaskFrontmatterV4 } from "../../tasks/frontmatter.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../../tasks/ledger.js";
 import { parseTaskEventName } from "../../tasks/task-events.js";
-import { nextTaskWake, validateTaskSchedule } from "../../tasks/task-schedule.js";
-import { isSettableTaskStatus } from "../../tasks/transitions.js";
+import { validateTaskSchedule } from "../../tasks/task-schedule.js";
+import { describeTicket, type TicketContext, type TicketEventRef } from "../../tasks/ticket.js";
 import { RecoverableToolError } from "../tool-details.js";
-import { SETTABLE_STATUSES } from "./schema.js";
-import type {
-	TaskCloseRequest,
-	TaskCreateRequest,
-	TaskFields,
-	TaskManageToolOptions,
-	TaskUpdateRequest,
-} from "./types.js";
+import type { TaskCloseRequest, TaskCreateRequest, TaskManageToolOptions, TaskUpdateRequest } from "./types.js";
 
 export function tasksDir(options: TaskManageToolOptions): string {
 	return join(options.channelDir, "tasks");
@@ -35,20 +24,14 @@ export function eventsDir(options: TaskManageToolOptions): string {
 	return join(options.workspaceDir, "events");
 }
 
-export function renderTaskFile(fields: TaskFields, body: string): string {
+export function renderTaskFile(fields: TaskFrontmatterV4, body: string): string {
 	return renderTaskDocument(fields, body);
 }
 
 export function requiredField(value: string | undefined, field: string, action: string): string {
 	const trimmed = value?.trim();
-	if (!trimmed) {
-		throw new RecoverableToolError(`${action} requires ${field}.`);
-	}
+	if (!trimmed) throw new RecoverableToolError(`${action} requires ${field}.`);
 	return trimmed;
-}
-
-export function requireNonEmpty(value: string | undefined, field: string): string {
-	return requiredField(value, field, "task_close outcome=complete");
 }
 
 export function markdownValue(value: string): string {
@@ -57,193 +40,143 @@ export function markdownValue(value: string): string {
 	return lines.map((line, index) => (index === 0 ? line : `  ${line}`)).join("\n");
 }
 
-export function appendCompletionEvidence(body: string, request: TaskCloseRequest): string {
-	const summary = requireNonEmpty(request.summary, "summary");
-	const evidence = requireNonEmpty(request.evidence, "evidence");
+/** The `## 上次结果` paragraph a close writes into the contract. */
+export function renderCloseEvidence(request: TaskCloseRequest): string {
+	const summary = requiredField(request.summary, "summary", "task_close outcome=complete");
+	const evidence = requiredField(request.evidence, "evidence", "task_close outcome=complete");
 	const lines = [`- Summary: ${markdownValue(summary)}`, `- Evidence: ${markdownValue(evidence)}`];
 	const residualRisk = request.residualRisk?.trim();
-	if (residualRisk) {
-		lines.push(`- Residual risk: ${markdownValue(residualRisk)}`);
+	if (residualRisk) lines.push(`- Residual risk: ${markdownValue(residualRisk)}`);
+	return lines.join("\n");
+}
+
+export function normalizeBudget(budget: TaskUpdateRequest["budget"]): Partial<TaskBudget> | undefined {
+	if (!budget) return undefined;
+	const next: Partial<TaskBudget> = {};
+	for (const key of ["steps", "wallMin", "usd", "rounds"] as const) {
+		const value = budget[key];
+		if (value === undefined) continue;
+		if (!Number.isFinite(value) || value <= 0) {
+			throw new RecoverableToolError(`budget.${key} must be a positive number.`);
+		}
+		next[key] = value;
 	}
-	return upsertCurrentCycleCompletionEvidence(body, lines);
+	if (budget.until !== undefined) next.until = budget.until.trim() || undefined;
+	return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function normalizeCreateStatus(status: string | undefined): (typeof SETTABLE_STATUSES)[number] {
-	if (status === undefined) return "active";
-	if (isSettableTaskStatus(status)) return status;
-	throw new RecoverableToolError(`Invalid status "${status}". Use one of ${SETTABLE_STATUSES.join(", ")}.`);
+export function normalizeSchedule(schedule: string | undefined): string | undefined | null {
+	if (schedule === undefined) return undefined;
+	const trimmed = schedule.trim();
+	if (!trimmed) return null; // explicit clear
+	validateTaskSchedule(trimmed);
+	return trimmed;
 }
 
-export function renderTaskSkeleton(request: TaskCreateRequest): {
-	fields: TaskFields;
+/**
+ * A newly created task starts `open` — even a recurring one. Creation opens its first cycle
+ * immediately rather than parking until the next cron occurrence, because "create it and it does
+ * nothing until tomorrow morning" was consistently surprising; the cadence still governs every
+ * *subsequent* cycle through the `schedule` ticket the loop parks on when it finishes.
+ */
+export function renderTaskSkeleton(
+	request: TaskCreateRequest,
+	now: Date = new Date(),
+): {
+	fields: TaskFrontmatterV4;
 	body: string;
 } {
-	// Independent verification is opt-in: it is a quality fact, not an external-action policy.
-	// `deadline`/`verificationRequired` are flattened onto task_create (spec 046, D3.1) — creation
-	// has no `nextAction`/`waitingFor` to set, so there is nothing a nested `control` would add.
-	const control = applyTaskControlPatch(createDefaultTaskControl(request.verificationRequired ?? false), {
-		deadline: request.deadline,
-		verificationRequired: request.verificationRequired,
-	});
-	const fields = applySet(
-		{ status: normalizeCreateStatus(request.status), enabled: true, control },
-		{ status: request.status, wake: request.wake, schedule: request.schedule },
-	);
-	if (!fields.schedule && fields.status === "sleeping") {
-		throw new RecoverableToolError('A one-shot task cannot use status "sleeping"; create it as active or waiting.');
-	}
-	// Recurring creation always starts asleep. The first occurrence and every later occurrence use
-	// the same runtime cycle-open operation; creation itself never dispatches work.
-	if (fields.schedule) {
-		fields.status = "sleeping";
-		fields.enabled = true;
-	}
-	if (fields.schedule && request.wake === undefined) {
-		const next = nextTaskWake(fields.schedule);
-		fields.wake = next ? formatLocalTime(next) : undefined;
-	}
+	const schedule = normalizeSchedule(request.schedule);
+	const fields: TaskFrontmatterV4 = {
+		state: "open",
+		schedule: schedule ?? undefined,
+		// The first cycle opens at creation: steps, rework rounds and cost all accumulate onto a
+		// cycle, so a task without one would have nowhere to record what it did.
+		cycle: createCycle(nextCycleId(undefined, now), now),
+		budget: normalizeBudget(request.budget),
+		verify: request.verificationRequired ? "required" : undefined,
+	};
 	const body = renderStandardTaskBody({
 		title: request.title,
 		goal: request.goal,
 		dod: request.dod,
 		manual: request.manual,
 		verificationPlan: request.verificationPlan,
-		verificationRequired: control.verification.required,
+		verificationRequired: request.verificationRequired ?? false,
 		plan: request.plan,
 	});
 	return { fields, body };
 }
 
+/** The scheduling half of a lifecycle notice: where the task stands and who will wake it. */
+export function describeTaskState(fields: TaskFrontmatterV4): string {
+	if (fields.paused) return `state: ${fields.state}（已暂停：${fields.paused.reason}）`;
+	if (fields.state === "parked" && fields.ticket) {
+		return `state: parked（${describeTicket(fields.ticket)}；兜底 ${fields.ticket.by}）`;
+	}
+	return `state: ${fields.state}`;
+}
+
 /**
- * Read a task file and split it into validated frontmatter and a verbatim body.
- * Fail-closed: an unreadable frontmatter block is rejected (fix it with edit first)
- * rather than guessed at, so these tools never silently mangle a body.
+ * Build the injected lookup a ticket resolver needs. The run/job/event registries are read here —
+ * once, at the call site — rather than imported inside `ticket.ts`, which is what keeps the whole
+ * validation matrix unit-testable against plain fakes.
  */
-export async function readTaskDocument(
-	taskPath: string,
-	id: string,
-	allowControlRepair = false,
-): Promise<{ fields: TaskFields; body: string }> {
-	if (!existsSync(taskPath)) {
-		throw new RecoverableToolError(`Task "${id}" does not exist; create it with task_create first.`);
-	}
-	const content = await readFile(taskPath, "utf-8");
-	const frontmatter = parseTaskFrontmatter(content);
-	if (!frontmatter.readable) {
-		throw new RecoverableToolError(
-			`Task "${id}" has no readable frontmatter; fix it with edit before using task_update.`,
-		);
-	}
-	if (frontmatter.controlReadable === false && !allowControlRepair) {
-		throw new RecoverableToolError(
-			`Task "${id}" has invalid control metadata; repair it with task_update (no note) and an explicit control patch first.`,
-		);
-	}
+export async function buildTicketContext(
+	options: TaskManageToolOptions,
+	taskId: string,
+	schedule: string | undefined,
+	now: Date = new Date(),
+): Promise<TicketContext> {
+	const runManager = getSubAgentRunManager(options.channelId);
+	const jobs = await getChannelJobManager(options.channelId, createExecutor())
+		.list()
+		.catch(() => []);
+	const events = await readChannelEvents(options);
 	return {
-		fields: {
-			status: frontmatter.status ?? "active",
-			enabled: frontmatter.enabled,
-			wake: frontmatter.wake,
-			schedule: frontmatter.schedule,
-			// A successful write upgrades a hand-written/v0 task to the v2 control contract
-			// instead of preserving an ungoverned task indefinitely.
-			control: frontmatter.control ?? createDefaultTaskControl(),
-			outcome: frontmatter.archiveOutcome,
-			closedAt: frontmatter.closedAt,
-		},
-		body: taskBody(content),
+		now,
+		taskId,
+		channelId: options.channelId,
+		schedule,
+		findRun: (id) => runManager.get(id),
+		findJob: (id) => jobs.find((job) => job.id === id),
+		findEvent: (name) => events.get(name),
 	};
 }
 
-/**
- * The scheduling half of a lifecycle notice: where the task stands and who will wake it.
- *
- * Parking (`waiting` with no wake) is the one state whose consequence is not obvious from the
- * status alone — the driver deliberately never returns to it — so the notice says so at the
- * moment the model chooses it, rather than leaving it to be rediscovered by a task that goes quiet.
- */
-export function describeTaskSchedule(fields: TaskFields): string {
-	if (fields.enabled === false) {
-		return `status: ${fields.status}（已停用${fields.control?.stop ? `：${fields.control.stop.reason}` : ""}）`;
-	}
-	if (fields.status === "waiting" && !fields.wake) {
-		return `status: waiting（已停泊：等待 ${fields.control?.waitingFor ?? "external-signal"}；driver 不会轮询）`;
-	}
-	return `status: ${fields.status}${fields.wake ? `, wake: ${fields.wake}` : ""}`;
-}
-
-/** Apply a metadata patch (status/wake/schedule/control) onto the existing frontmatter. */
-export function applySet(
-	fields: TaskFields,
-	request: Pick<TaskUpdateRequest, "status" | "wake" | "schedule" | "control">,
-): TaskFields {
-	const next: TaskFields = { ...fields };
-	if (request.status !== undefined) {
-		if (!isSettableTaskStatus(request.status)) {
-			throw new RecoverableToolError(
-				`Invalid status "${request.status}". Use one of ${SETTABLE_STATUSES.join(", ")}, or task_close.`,
-			);
-		}
-		next.status = request.status;
-	}
-	if (request.wake !== undefined) {
-		const trimmed = request.wake.trim();
-		if (trimmed === "") {
-			next.wake = undefined;
-		} else {
-			const ms = parseWakeInput(trimmed);
-			if (ms === undefined) {
-				throw new RecoverableToolError(
-					`wake "${request.wake}" is not a valid local time (e.g. 2026-07-27T07:30:00+08:00) or relative offset (e.g. +2h).`,
-				);
-			}
-			next.wake = formatLocalTime(new Date(ms));
+/** Every parseable event definition in the workspace, by name. Missing directory → empty. */
+async function readChannelEvents(options: TaskManageToolOptions): Promise<Map<string, TicketEventRef>> {
+	const dir = eventsDir(options);
+	const events = new Map<string, TicketEventRef>();
+	if (!existsSync(dir)) return events;
+	for (const filename of await readdir(dir)) {
+		if (!filename.endsWith(".json")) continue;
+		try {
+			const event = parseScheduledEventContent(await readFile(join(dir, filename), "utf-8"), filename);
+			events.set(filename.slice(0, -".json".length), {
+				type: event.type,
+				channelId: event.channelId,
+				schedule: event.type === "periodic" ? event.schedule : undefined,
+			});
+		} catch {
+			// An unparseable event cannot back a ticket; leave it for /events to clean up.
 		}
 	}
-	if (request.schedule !== undefined) {
-		const trimmed = request.schedule.trim();
-		if (trimmed === "") {
-			next.schedule = undefined;
-		} else {
-			validateTaskSchedule(trimmed);
-			next.schedule = trimmed;
-			// A cadence change without an explicit new wake in the same call means the old
-			// wake belongs to the old rhythm — recompute it against the new cron so a stale
-			// or hand-typed value can never silently point at an occurrence the new schedule
-			// doesn't have. A parked task (waiting, no wake) is left parked: it intentionally
-			// has no wake at all, and this must not be the thing that gives it one.
-			const parked = next.status === "waiting" && next.wake === undefined;
-			if (request.wake === undefined && !parked) {
-				const nextWake = nextTaskWake(trimmed);
-				if (nextWake) next.wake = formatLocalTime(nextWake);
-			}
-		}
-	}
-	if (request.control !== undefined) {
-		next.control = applyTaskControlPatch(next.control ?? createDefaultTaskControl(), request.control);
-	}
-	return normalizeTaskFields(next);
+	return events;
 }
 
 /**
  * On close-out (complete or cancel), delete every task-owned event.
  *
- * Recurrence cadence now lives solely in the task's `schedule` frontmatter (027/029), so a
- * recurring task needs no surviving `.schedule` event — the driver reopens each cycle from
- * frontmatter. Any remaining task-owned events are temporary sensors/check-ins that a closed
- * task should not keep alive. A file that cannot be parsed is left for `/events` to handle.
- *
- * Matching is done by parsing each candidate name and comparing the full task id, not by
- * prefix — a prefix match on `task.<channel>.<id>.` would also match a *different* task whose
- * id happens to start with this one plus a dot (e.g. closing "v1" must not delete events owned
- * by "v1.2-release").
+ * Matching is done by parsing each candidate name and comparing the full task id, not by prefix —
+ * a prefix match on `task.<channel>.<id>.` would also match a *different* task whose id happens to
+ * start with this one plus a dot (e.g. closing "v1" must not delete events owned by "v1.2-release").
  */
 export async function cleanupTaskEvents(options: TaskManageToolOptions, id: string): Promise<{ deleted: string[] }> {
 	const dir = eventsDir(options);
 	if (!existsSync(dir)) return { deleted: [] };
 
 	const deleted: string[] = [];
-
 	for (const filename of (await readdir(dir)).sort()) {
 		if (!filename.endsWith(".json")) continue;
 		const parsed = parseTaskEventName(filename.slice(0, -".json".length), options.channelId);

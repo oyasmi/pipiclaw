@@ -2,148 +2,26 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { formatLocalTime } from "../src/shared/local-time.js";
-import { createDefaultTaskControl, parseTaskControl } from "../src/tasks/control.js";
+import { openCycleBody, readLastResult, writeLastResult } from "../src/tasks/cycle.js";
 import {
-	appendCurrentCycleNote,
 	applyTaskPlanPatch,
 	countTaskDodItems,
-	isTaskActionable,
-	MAX_INLINE_TASK_HISTORY_ENTRIES,
 	missingStandardTaskSections,
-	normalizeTaskFields,
-	parseTaskFrontmatter,
 	parseTaskPlan,
 	readActiveTasks,
 	renderStandardTaskBody,
 	renderTaskDocument,
-	startTaskCycle,
 	taskContractSegment,
 	uncheckedTaskAcceptanceItems,
 } from "../src/tasks/ledger.js";
-import { nextTaskWake } from "../src/tasks/task-schedule.js";
+import type { Ticket } from "../src/tasks/ticket.js";
 
-const NOW = new Date("2026-08-04T12:00:00+08:00");
-const PAST = "2026-08-04T09:00:00+08:00";
-const FUTURE = "2026-08-04T18:00:00+08:00";
+const NOW = new Date("2026-09-05T10:00:00+08:00");
+const FUTURE: Ticket = { kind: "time", at: "2026-09-06T10:00:00+08:00", by: "2026-09-06T10:00:00+08:00" };
+const STALE: Ticket = { kind: "time", at: "2026-09-04T10:00:00+08:00", by: "2026-09-04T10:00:00+08:00" };
 
-function doc(front: string, body = "# Title\n\nbody"): string {
-	return `---\n${front}\n---\n\n${body}`;
-}
-
-describe("v3 frontmatter and actionable contract", () => {
-	it("carries only the v3 surface: retired v1/v2 statuses fail open and retired approval keys exist nowhere", () => {
-		expect(parseTaskFrontmatter(doc("status: in-progress"))).toMatchObject({
-			readable: true,
-			status: "active",
-			enabled: true,
-			rawStatus: "in-progress",
-		});
-		// Old v1 values that used to canonicalize to something meaningful (waiting, sleeping, a
-		// stop receipt) now just fail open to active — `migrateLegacyTaskState` is the only place
-		// that still understands the legacy vocabulary, and it rewrites the file durably.
-		expect(parseTaskFrontmatter(doc("status: awaiting-user"))).toMatchObject({ status: "active" });
-		expect(parseTaskFrontmatter(doc("status: done"))).toMatchObject({ status: "active" });
-		expect(parseTaskFrontmatter(doc("status: done\nschedule: 0 9 * * 1"))).toMatchObject({ status: "active" });
-
-		const paused = parseTaskFrontmatter(doc("status: paused"));
-		expect(paused).toMatchObject({ status: "active", enabled: true });
-		expect(paused.control).toBeUndefined();
-
-		// The same retirement discipline holds for the control block: v3 is the only version, and
-		// none of the v1/v2 approval/priority/budget keys survive — not in defaults, not on disk.
-		const control = createDefaultTaskControl();
-		for (const key of [
-			"priority",
-			"sideEffects",
-			"externalApproval",
-			"approvalBy",
-			"approvedAt",
-			"approvalBodyHash",
-			"provenance",
-			"budget",
-			"usage",
-			"attemptGeneration",
-			"lastOutcome",
-			"wakeHandoff",
-		]) {
-			expect(control).not.toHaveProperty(key);
-		}
-		expect(() => parseTaskControl(JSON.stringify({ ...control, version: 2 }))).toThrow(/version 3/);
-		const rendered = renderTaskDocument({ status: "active", control }, "# Title\n");
-		expect(rendered).toContain('"version":3');
-		expect(rendered).not.toMatch(/sideEffects|externalApproval|approvalBy|approvedAt|approvalBodyHash|provenance/);
-	});
-
-	it("fails open only for unreadable metadata and parks signal waits", () => {
-		expect(parseTaskFrontmatter("not a task")).toMatchObject({ readable: false, enabled: true });
-		expect(isTaskActionable({ readable: false, enabled: true }, NOW.getTime())).toBe(true);
-		expect(isTaskActionable({ readable: true, enabled: false, status: "active" }, NOW.getTime())).toBe(false);
-		expect(isTaskActionable({ readable: true, enabled: true, status: "active" }, NOW.getTime())).toBe(true);
-		expect(isTaskActionable({ readable: true, enabled: true, status: "waiting" }, NOW.getTime())).toBe(false);
-		expect(isTaskActionable({ readable: true, enabled: true, status: "waiting", wake: FUTURE }, NOW.getTime())).toBe(
-			false,
-		);
-		expect(isTaskActionable({ readable: true, enabled: true, status: "waiting", wake: PAST }, NOW.getTime())).toBe(
-			true,
-		);
-		expect(isTaskActionable({ readable: true, enabled: true, status: "sleeping", wake: FUTURE }, NOW.getTime())).toBe(
-			false,
-		);
-		expect(isTaskActionable({ readable: true, enabled: true, status: "sleeping", wake: PAST }, NOW.getTime())).toBe(
-			true,
-		);
-	});
-
-	it("normalizes write-path combinations while preserving disabled stage and wake", () => {
-		const timed = normalizeTaskFields({ status: "active", wake: FUTURE, control: createDefaultTaskControl() }, NOW);
-		expect(timed).toMatchObject({ status: "waiting", wake: FUTURE, control: { waitingFor: "time" } });
-
-		const due = normalizeTaskFields({ status: "active", wake: PAST, control: createDefaultTaskControl() }, NOW);
-		expect(due).toMatchObject({ status: "active" });
-		expect(due.wake).toBeUndefined();
-
-		const parked = normalizeTaskFields(
-			{ status: "waiting", control: { ...createDefaultTaskControl(), waitingFor: "time" } },
-			NOW,
-		);
-		expect(parked.control?.waitingFor).toBe("external-signal");
-
-		const disabled = normalizeTaskFields(
-			{
-				status: "sleeping",
-				enabled: false,
-				schedule: "0 9 * * 1",
-				wake: FUTURE,
-				control: { ...createDefaultTaskControl(), stop: { by: "user", reason: "maintenance", at: PAST } },
-			},
-			NOW,
-		);
-		expect(disabled).toMatchObject({ status: "sleeping", enabled: false, wake: FUTURE, schedule: "0 9 * * 1" });
-
-		const sleeping = normalizeTaskFields({ status: "sleeping", schedule: "0 9 * * 1" }, NOW);
-		expect(sleeping.wake).toBe(formatLocalTime(nextTaskWake("0 9 * * 1", NOW)!));
-	});
-
-	it("renders archive outcome without a live status", () => {
-		const rendered = renderTaskDocument(
-			{
-				status: "active",
-				outcome: "completed",
-				closedAt: "2026-08-04T12:00:00+08:00",
-				control: createDefaultTaskControl(),
-			},
-			"# Closed\n",
-		);
-		expect(rendered).toContain("outcome: completed");
-		expect(rendered).toContain("closedAt:");
-		expect(rendered).not.toContain("status:");
-		expect(rendered).not.toContain("enabled:");
-	});
-});
-
-describe("task body and cycle transformations", () => {
-	it("renders the standard contract and checks acceptance boxes", () => {
+describe("task contract body (spec 051, D5)", () => {
+	it("renders a contract with no cycle log or history section", () => {
 		const body = renderStandardTaskBody({
 			title: "Weekly Report",
 			goal: "Publish the report.",
@@ -152,46 +30,62 @@ describe("task body and cycle transformations", () => {
 		expect(missingStandardTaskSections(body)).toEqual([]);
 		expect(uncheckedTaskAcceptanceItems(body)).toEqual(["DoD: Draft reviewed", "DoD: Published"]);
 		expect(countTaskDodItems(body)).toBe(2);
-		expect(taskContractSegment(body)).toContain("## Verification");
+		// The per-step record lives in `<id>.jsonl` now; the contract carries none of it.
+		expect(body).not.toContain("## Current Cycle");
+		expect(body).not.toContain("## History");
 	});
 
-	it("starts the first recurring cycle without archiving the creation placeholder", () => {
-		const body = renderStandardTaskBody({ title: "Weekly", goal: "G", dod: "- [ ] Done" });
-		const first = startTaskCycle(body, "cycle-2026-08-04", false);
-		expect(first).toContain("## Current Cycle (cycle-2026-08-04)");
-		expect(first).toContain("- Cycle started;");
-		expect(first).not.toContain("### Current Cycle — closed");
-		expect(first).toContain("## History");
-
-		const progressed = appendCurrentCycleNote(first, "Built the draft.");
-		const second = startTaskCycle(progressed, "cycle-2026-08-11", true);
-		expect(second).toContain("## Current Cycle (cycle-2026-08-11)");
-		expect(second).toContain("### Current Cycle (cycle-2026-08-04) — closed");
+	it("ends the verification-bound contract segment before Plan and before 上次结果", () => {
+		const body = renderStandardTaskBody({
+			title: "T",
+			goal: "G",
+			dod: "- [ ] Done",
+			plan: "Build it",
+		});
+		const withResult = writeLastResult(body, "- c-1 完成：shipped");
+		const segment = taskContractSegment(withResult);
+		expect(segment).toContain("## Verification");
+		// Revising the means, or recording what happened last cycle, must not invalidate a PASS.
+		expect(segment).not.toContain("## Plan");
+		expect(segment).not.toContain("上次结果");
+		expect(taskContractSegment(withResult)).toBe(taskContractSegment(body));
 	});
 
-	it("resets DoD and Plan checkboxes at a new cycle", () => {
-		const body =
-			"# T\n\n## DoD\n- [x] Done\n\n## Plan\n- [x] P1 build → dod:1\n- [!] P2 verify → dod:1\n- [~] P3 dropped\n\n## Current Cycle\n- complete\n\n## History\n";
-		const next = startTaskCycle(body, "cycle-2", true);
+	it("overwrites 上次结果 rather than appending a second one", () => {
+		let body = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] Done" });
+		body = writeLastResult(body, "- first");
+		body = writeLastResult(body, "- second");
+		expect(body.match(/## 上次结果/g)?.length).toBe(1);
+		expect(readLastResult(body)).toBe("- second");
+	});
+
+	it("clips an over-long 上次结果 and points at the full record", () => {
+		const body = writeLastResult(
+			renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] D" }),
+			"x".repeat(5_000),
+		);
+		expect(readLastResult(body)?.length).toBeLessThan(1_400);
+		expect(readLastResult(body)).toContain("task_log");
+	});
+
+	it("resets DoD and Plan checkboxes for a recurring cycle but leaves dropped steps dropped", () => {
+		const body = "# T\n\n## DoD\n- [x] Done\n\n## Plan\n- [x] P1 build → dod:1\n- [!] P2 verify\n- [~] P3 dropped\n";
+		const next = openCycleBody(body, true);
 		expect(next).toContain("- [ ] Done");
 		expect(next).toContain("- [ ] P1 build");
 		expect(next).toContain("- [ ] P2 verify");
+		// A step that was deliberately abandoned must not be resurrected by the next occurrence.
 		expect(next).toContain("- [~] P3 dropped");
+		// A one-shot task's Plan is its only agenda; unchecking it would erase real progress.
+		expect(openCycleBody(body, false)).toBe(body);
 	});
 
-	it("updates Plan steps without mixing plan claims into acceptance", () => {
+	it("creates the Plan section on the first patch, without touching acceptance", () => {
 		const body = renderStandardTaskBody({ title: "T", goal: "G", dod: "- [ ] Done" });
 		const patched = applyTaskPlanPatch(body, [{ id: "P1", status: "done", text: "Build it" }]);
 		expect(patched.summary).toContain("+P1");
 		expect(parseTaskPlan(patched.body)).toMatchObject({ total: 1, done: 1 });
 		expect(uncheckedTaskAcceptanceItems(patched.body)).toEqual(["DoD: Done"]);
-	});
-
-	it("clips old History entries to the working-context bound", () => {
-		let body = "# T\n\n## Current Cycle\n- current\n\n## History\n";
-		for (let i = 0; i < MAX_INLINE_TASK_HISTORY_ENTRIES + 3; i++) body += `\n### Cycle ${i}\n- note ${i}\n`;
-		const next = startTaskCycle(body, "cycle-new", true);
-		expect(next).toContain("Older cycle details omitted");
 	});
 });
 
@@ -199,8 +93,10 @@ describe("readActiveTasks", () => {
 	let root: string;
 	let tasksDir: string;
 
+	const doc = (fields: Parameters<typeof renderTaskDocument>[0], body: string) => renderTaskDocument(fields, body);
+
 	beforeEach(async () => {
-		root = await mkdtemp(join(tmpdir(), "task-ledger-v2-"));
+		root = await mkdtemp(join(tmpdir(), "task-ledger-v4-"));
 		tasksDir = join(root, "tasks");
 		await mkdir(tasksDir, { recursive: true });
 	});
@@ -208,18 +104,36 @@ describe("readActiveTasks", () => {
 		await rm(root, { recursive: true, force: true });
 	});
 
-	it("sorts ready work before future waits and retains disabled tasks as visible", async () => {
-		await writeFile(join(tasksDir, "later.md"), doc(`status: waiting\nwake: ${FUTURE}`, "# Later"));
-		await writeFile(join(tasksDir, "now.md"), doc("status: active", "# Now"));
-		await writeFile(join(tasksDir, "stopped.md"), doc("status: active\nenabled: false", "# Stopped"));
+	it("sorts runnable work first, then expired parks, then paused tasks", async () => {
+		await writeFile(join(tasksDir, "later.md"), doc({ state: "parked", ticket: FUTURE }, "# Later"));
+		await writeFile(join(tasksDir, "now.md"), doc({ state: "open" }, "# Now"));
+		await writeFile(join(tasksDir, "overdue.md"), doc({ state: "parked", ticket: STALE }, "# Overdue"));
+		await writeFile(
+			join(tasksDir, "stopped.md"),
+			doc({ state: "open", paused: { by: "user", reason: "hold", at: "2026-01-01T00:00:00+08:00" } }, "# Stopped"),
+		);
+
 		const entries = await readActiveTasks(tasksDir, NOW.getTime());
-		expect(entries.map((entry) => entry.id)).toEqual(["now", "later", "stopped"]);
-		expect(entries.find((entry) => entry.id === "stopped")?.frontmatter.enabled).toBe(false);
+		expect(entries.map((entry) => entry.id)).toEqual(["now", "overdue", "later", "stopped"]);
+		// An expired park is work the runtime owes an answer for, so it must outrank an ordinary
+		// park even when a channel has more ready candidates than one tick can carry (D2-INV).
+		expect(entries.find((entry) => entry.id === "overdue")?.expired).toBe(true);
+		expect(entries.find((entry) => entry.id === "later")?.expired).toBe(false);
+		expect(entries.find((entry) => entry.id === "stopped")?.runnable).toBe(false);
 	});
 
-	it("returns an actionable repair entry for unreadable frontmatter", async () => {
+	it("returns a runnable repair entry for unreadable frontmatter", async () => {
 		await writeFile(join(tasksDir, "broken.md"), "no frontmatter");
 		const [entry] = await readActiveTasks(tasksDir, NOW.getTime());
-		expect(entry).toMatchObject({ id: "broken", actionable: true, frontmatter: { readable: false } });
+		expect(entry).toMatchObject({ id: "broken", runnable: true, readable: false });
+	});
+
+	it("flags a v3 file as legacy so the driver dispatches it repair-only", async () => {
+		await writeFile(
+			join(tasksDir, "old.md"),
+			'---\nstatus: active\nenabled: true\ncontrol: {"version":3}\n---\n# Old\n',
+		);
+		const [entry] = await readActiveTasks(tasksDir, NOW.getTime());
+		expect(entry).toMatchObject({ id: "old", legacy: true, runnable: true });
 	});
 });

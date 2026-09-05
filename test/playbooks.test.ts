@@ -22,8 +22,7 @@ const EXPECTED_PLAYBOOKS = [
 	"event-scheduling.md",
 	"background-jobs.md",
 	"agent-delegation.md",
-	"task-planning.md",
-	"task-driving.md",
+	"task-loop.md",
 ];
 
 // Derived from the registry (spec 046 D6's fix, generalized): a hand-maintained list drifts
@@ -31,7 +30,7 @@ const EXPECTED_PLAYBOOKS = [
 // `task_manage` — and a stale fixture here would make selectRuntimePlaybooks's gating "pass"
 // against tool names that no longer exist.
 const ALL_TOOLS = Array.from(TOOL_NAMES);
-const TASK_TOOLS = ["task_list", "task_create", "task_update", "task_close", "task_verify"];
+const TASK_TOOLS = ["task_list", "task_create", "task_update", "task_close", "task_log", "task_step_end"];
 
 const makeTempDir = useTempDirs("pipiclaw-playbooks-");
 
@@ -84,7 +83,7 @@ describe("path guard access to bundled playbooks", () => {
 
 	it("allows reading playbooks outside workspace/home/temp but never writing them", () => {
 		const ctx = createCtx();
-		const playbookPath = join(PLAYBOOKS_DIR, "task-driving.md");
+		const playbookPath = join(PLAYBOOKS_DIR, "task-loop.md");
 		expect(guardPath(playbookPath, "read", ctx)).toMatchObject({ allowed: true });
 		expect(guardPath(playbookPath, "write", ctx)).toMatchObject({ allowed: false });
 		expect(guardPath(join(PLAYBOOKS_DIR, "..", "main.ts"), "read", ctx)).toMatchObject({ allowed: false });

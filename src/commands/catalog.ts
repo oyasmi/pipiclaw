@@ -148,29 +148,36 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	},
 	{
 		name: "tasks",
-		argumentHint: "[show <id>|archive|pause <id>|resume <id>|run <id>|set <id> <字段> <值>|doctor]",
-		description: "查看、诊断并直接编辑本频道的任务台账；pause 只停用执行，保留阶段与 wake",
+		argumentHint:
+			"[show <id>|log <id>|steer <id> <内容>|reply <id> <内容>|pause <id>|resume <id> [+steps N]|run <id>|archive|doctor]",
+		description: "查看、指挥并诊断本频道的长程任务；pause 只停用执行，保留阶段与等待票",
 		availableWhileBusy: true,
 		subcommands: [
 			{ name: "list", description: "列出本频道进行中的任务（默认动作，可省略）", example: "/tasks" },
 			{
 				name: "show",
 				args: "<id>",
-				description: "查看单个任务文件（进行中或已归档）",
+				description: "查看契约、最近日志、返工轮次与成本",
 				example: "/tasks show weekly-report",
+			},
+			{
+				name: "log",
+				args: "<id> [cycle]",
+				description: "翻看该任务的循环日志",
+				example: "/tasks log weekly-report",
 			},
 			{ name: "archive", description: "列出已归档（已关闭）的任务", example: "/tasks archive" },
 			{
 				name: "pause",
 				args: "<id>",
-				description: "停止该任务的自动执行（保留当前阶段与 wake）",
+				description: "停止该任务的自动执行（保留当前阶段与等待票）",
 				example: "/tasks pause weekly-report",
 			},
 			{
 				name: "resume",
-				args: "<id>",
-				description: "重新启用该任务，按当前阶段继续",
-				example: "/tasks resume weekly-report",
+				args: "<id> [+steps N|+rounds N|+usd X]",
+				description: "重新启用该任务，可同时追加本周期预算",
+				example: "/tasks resume weekly-report +steps 20",
 			},
 			{
 				name: "run",
@@ -179,12 +186,18 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 				example: "/tasks run weekly-report",
 			},
 			{
-				name: "set",
-				args: "<id> <wake|next|deadline> <值>",
-				description: "直接改一个字段，不花一个 LLM 回合",
-				example: "/tasks set weekly-report wake 2026-07-28T09:00:00+08:00",
+				name: "steer",
+				args: "<id> <内容>",
+				description: "把一条指示排给该任务的下一步，不打断当前步骤",
+				example: "/tasks steer weekly-report 先跑一遍 npm run check",
 			},
-			{ name: "doctor", description: "只读检查任务/事件一致性", example: "/tasks doctor" },
+			{
+				name: "reply",
+				args: "<id> <内容>",
+				description: "回答该任务提出的问题，并让它继续",
+				example: "/tasks reply weekly-report 合并到 master",
+			},
+			{ name: "doctor", description: "只读检查手工编辑造成的任务问题", example: "/tasks doctor" },
 		],
 	},
 	{

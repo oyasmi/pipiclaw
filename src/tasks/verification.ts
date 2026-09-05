@@ -6,7 +6,9 @@ import { writeFileAtomically } from "../shared/atomic-file.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { WorkspaceSubjectHashOptions } from "./artifact-subject.js";
-import { readStoredTask, taskBodyHash } from "./store.js";
+import { workspaceSubjectHash } from "./artifact-subject.js";
+import { taskBodyHash } from "./ledger.js";
+import { readStoredTask } from "./store.js";
 
 export type VerificationVerdict = "pass" | "fail";
 export type VerificationSubjectMode = "legacy-head" | "base-relative";
@@ -280,4 +282,47 @@ export async function readVerificationAttestation(
 	};
 	const boundSubjectDir = bindSubjectDirectory(runId, attestation.subjectDir, options);
 	return boundSubjectDir === attestation.subjectDir ? attestation : { ...attestation, subjectDir: boundSubjectDir };
+}
+
+/**
+ * Everything `task_verify` used to check before it would import an attestation (spec 051, D7).
+ *
+ * The checks are unchanged; only the caller moved. Importing a verifier's verdict is bookkeeping
+ * the runtime already has the facts for at settlement, so it happens there — but it must still
+ * fail closed, because the task Markdown is agent-writable and proves nothing on its own (spec
+ * 040's threat model). Returns the reason it is not acceptable, or `undefined` when it is.
+ */
+export async function attestationRejectionReason(input: {
+	channelDir: string;
+	taskId: string;
+	runId: string;
+	taskBody: string;
+	trustedWorkingDirectory?: string;
+	fallbackWorkingDirectory?: string;
+}): Promise<string | undefined> {
+	let attestation: VerificationAttestation;
+	try {
+		attestation = await readVerificationAttestation(input.channelDir, input.runId, {
+			trustedWorkingDirectory: input.trustedWorkingDirectory,
+		});
+	} catch (error) {
+		return errorMessage(error);
+	}
+	if (attestation.taskId !== input.taskId) {
+		return `attestation belongs to task "${attestation.taskId}"`;
+	}
+	if (attestation.workspaceChanged) {
+		return "verifier changed protected workspace content";
+	}
+	if (attestation.bodyHash !== taskBodyHash(input.taskBody)) {
+		return "task contract changed after verification";
+	}
+	if (attestation.subjectHash) {
+		const subjectDir =
+			attestation.subjectDir ?? input.trustedWorkingDirectory ?? input.fallbackWorkingDirectory ?? process.cwd();
+		const currentSubject = await workspaceSubjectHash(subjectDir, getVerificationSubjectHashOptions(attestation));
+		if (!currentSubject) return "artifact subject checkout could not be read";
+		if (currentSubject !== attestation.subjectHash) return "artifact subject changed after verification";
+	}
+	return undefined;
 }

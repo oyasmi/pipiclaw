@@ -9,29 +9,19 @@ import type { ChannelEvent } from "../channel/channel-event.js";
 import { getChannelDir } from "../channel/channel-paths.js";
 import type { Executor } from "../executor.js";
 import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
-import {
-	activateWaitingTask,
-	readStoredTask,
-	rollbackWaitingTask,
-	type WakeTaskTransitionHooks,
-} from "../tasks/store.js";
-import { normalizeStoredStatus } from "../tasks/transitions.js";
+import { parkTask, readStoredTask, redeemTicket } from "../tasks/store.js";
 
 /**
- * True when `taskId` is currently `active` and enabled — i.e. the task driver already owns
- * advancing it. A completion wake that could not activate the task (because it was not
- * `waiting`) is safe to drop without spending an agent turn only in this case: some other wake in
- * the same fan-out already activated it, and the driver will pick up the result. Every other case
- * — `done`, archived, disabled, or the task missing entirely — has nobody left to look at the
- * wake's result if it is dropped here, so the caller must still route it to a normal turn.
+ * True when `taskId` is already `open` and not paused — i.e. the driver already owns advancing
+ * it. A completion wake that could not redeem a ticket (because the task was not parked on one)
+ * is safe to drop without spending an agent turn only in this case: some other wake in the same
+ * fan-out already reopened it, and the driver will pick up the result. Every other case — done,
+ * archived, paused, or the task missing entirely — has nobody left to look at the wake's result
+ * if it is dropped here, so the caller must still route it to a normal turn.
  */
 async function isTaskActivelyDriven(channelDir: string, taskId: string): Promise<boolean> {
-	const document = await readStoredTask(channelDir, taskId, false, true).catch(() => undefined);
-	return (
-		document !== undefined &&
-		normalizeStoredStatus(document.fields.status) === "active" &&
-		document.fields.enabled !== false
-	);
+	const document = await readStoredTask(channelDir, taskId).catch(() => undefined);
+	return document !== undefined && document.fields.state === "open" && !document.fields.paused;
 }
 
 /**
@@ -79,11 +69,16 @@ export function isTrustedInternalWake(
 export interface ClaimedDelegationWake {
 	taskId: string;
 	activated: boolean;
-	/** True when it is safe to drop this wake without a turn even though it did not activate the
-	 *  task itself — see `isTaskActivelyDriven`. Always true when `activated` is true. */
+	/** True when it is safe to drop this wake without a turn even though it did not redeem a
+	 *  ticket itself — see `isTaskActivelyDriven`. Always true when `activated` is true. */
 	taskStillDriven: boolean;
 	finish(): Promise<void>;
 	rollback(): Promise<void>;
+}
+
+/** Test-only fault seam, kept for the restart/interrupt cases that exercise a failed write. */
+export interface WakeTaskTransitionHooks {
+	beforeActivation?: () => void;
 }
 
 /** Claim and activate a producer-created delegation wake without consuming it yet. Keeping the
@@ -106,16 +101,28 @@ export async function claimVerifiedDelegationWake(
 		return undefined;
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
-	const activated = await activateWaitingTask(channelDir, wake.taskId, hooks);
-	const taskStillDriven = activated !== undefined || (await isTaskActivelyDriven(channelDir, wake.taskId));
+	hooks?.beforeActivation?.();
+	// Only a `run` ticket naming this very run may be redeemed: a task parked on something else
+	// (a job, a question to the user) is not waiting for this delegation, and reopening it here
+	// would be exactly the unverified resumption path spec 051 D2 exists to remove.
+	const redeemed = await redeemTicket(
+		channelDir,
+		wake.taskId,
+		(ticket) => ticket.kind === "run" && ticket.id === wake.resourceId,
+	);
+	const taskStillDriven = redeemed !== undefined || (await isTaskActivelyDriven(channelDir, wake.taskId));
 	return {
 		taskId: wake.taskId,
-		activated: activated !== undefined,
+		activated: redeemed !== undefined,
 		taskStillDriven,
 		finish: async () => {
 			await runManager.finishWakeConsumption(wake.resourceId, event.dispatchId);
 		},
-		rollback: () => rollbackWaitingTask(channelDir, wake.taskId, "external-signal"),
+		// Re-park on the same ticket when the transport could not accept the turn, so a rejected
+		// submit leaves the task exactly as it was rather than silently `open` with no step queued.
+		rollback: async () => {
+			if (redeemed) await parkTask(channelDir, wake.taskId, redeemed.ticket);
+		},
 	};
 }
 
@@ -148,11 +155,16 @@ export async function claimVerifiedJobWake(
 		return undefined;
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
-	const activated = await activateWaitingTask(channelDir, wake.taskId, hooks);
-	const taskStillDriven = activated !== undefined || (await isTaskActivelyDriven(channelDir, wake.taskId));
+	hooks?.beforeActivation?.();
+	const redeemed = await redeemTicket(
+		channelDir,
+		wake.taskId,
+		(ticket) => ticket.kind === "job" && ticket.id === wake.resourceId,
+	);
+	const taskStillDriven = redeemed !== undefined || (await isTaskActivelyDriven(channelDir, wake.taskId));
 	return {
 		taskId: wake.taskId,
-		activated: activated !== undefined,
+		activated: redeemed !== undefined,
 		taskStillDriven,
 		finish: async () => {
 			await jobManager.finishWakeConsumption(wake.resourceId, event.dispatchId);

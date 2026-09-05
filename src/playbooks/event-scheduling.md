@@ -7,7 +7,7 @@ order: 40
 
 # 事件与调度
 
-事件只负责"什么时候唤醒"，不承载长程工作的状态。可验收、需要积累步骤的工作用 task（见 `task-planning.md`）；纯提醒或外部条件探测才单独用 event。
+事件只负责"什么时候唤醒"，不承载长程工作的状态。可验收、需要积累步骤的工作用 task（见 `task-loop.md`）；纯提醒或外部条件探测才单独用 event。
 
 ## 选择类型
 
@@ -34,11 +34,15 @@ order: 40
 
 preAction 的 bash 命令退出 0 才唤醒 agent，非 0 静默跳过。它用来调用用户已经安装、稳定可执行的工具检测外部条件。Pipiclaw 只负责运行经过 command guard 的命令，不捆绑第三方工具的脚本或状态语义——那属于用户层的 skill / 可执行文件；来源不明的脚本也不要复制进 workspace。
 
-传感器必须用 periodic：one-shot 即使 gate 没通过也会被消费掉。每个传感器都要有退出条件和合理频率；task-owned 传感器还要保留任务 `wake` 兜底，避免永久静默或空转。
+传感器必须用 periodic：one-shot 即使 gate 没通过也会被消费掉。每个传感器都要有退出条件和合理频率。
+
+**task-owned 传感器（`task.<channelId>.<taskId>.<use>`）现在直接兑现任务的 `signal` 票**：任务用 `task_step_end` 停泊到 `{"kind":"signal","event":"<事件名>"}`，事件的 preAction 通过时运行时兑现这张票、唤起任务的下一步，而**不**向频道投递唤醒文本。任务没有持这张票时，事件照旧投递到聊天会话。票自带兜底时限（错过两次 occurrence 就报警），所以不再需要额外的 `wake` 兜底。
 
 ## 回访事件
 
 当前回合等不到结果、又没有 task 可以承载这次等待时，按预计完成时间建一条 one-shot 回访；只有需要按外部条件触发时才用 periodic + preAction。回访完成后删掉这条临时事件。
+
+任务自己的等待不用回访事件——用 `task_step_end` 的票（见 `task-loop.md`），它由运行时校验并兜底。
 
 **后台作业和 Agent 委派不需要回访事件**：它们结束时 runtime 会自己唤醒你，见 `background-jobs.md` 和 `agent-delegation.md`。
 
