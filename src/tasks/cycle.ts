@@ -64,6 +64,18 @@ export function writeLastResult(body: string, text: string): string {
 	return `${body.replace(/\n+$/, "")}\n\n${block.join("\n")}`;
 }
 
+/** Remove `## 上次结果` entirely. The full record is always still in the loop log. */
+export function stripLastResult(body: string): string {
+	const lines = body.split("\n");
+	const bounds = findTaskSectionBounds(lines, LAST_RESULT_SECTION_NAMES);
+	if (!bounds) return body;
+	lines.splice(bounds.headingIndex, bounds.end - bounds.headingIndex);
+	return lines
+		.join("\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.trimEnd();
+}
+
 /** The rendered `## 上次结果` text, if any — used by `/tasks show` and the step brief. */
 export function readLastResult(body: string): string | undefined {
 	const lines = body.split("\n");

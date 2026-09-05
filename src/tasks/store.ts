@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
+import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { formatLocalTime } from "../shared/local-time.js";
-import { createCycle, nextCycleId, openCycleBody } from "./cycle.js";
+import { createCycle, nextCycleId, openCycleBody, readLastResult, stripLastResult, writeLastResult } from "./cycle.js";
 import {
 	normalizeTaskFrontmatter,
 	parseTaskFrontmatterV4,
@@ -24,16 +25,26 @@ export interface StoredTaskDocument {
 }
 
 /**
- * The contract's hard size budget (INV-6).
+ * The contract's size budget (INV-6).
  *
- * v3 task files on the author's machine sat permanently at 30 KB, 79% of it closed-cycle
- * history, and every wake read all of it. The contract is injected whole into every step brief,
- * so it has to stay small by construction rather than by discipline: the only unbounded section
- * left (`## 上次结果`) is clipped at write time, and anything beyond this cap is truncated with a
- * pointer to `task_log`.
+ * v3 task files on the author's machine sat permanently at 30 KB, 79% of it closed-cycle history,
+ * and every wake read all of it. The contract is injected whole into every step brief, so what it
+ * must guarantee is that **runtime-written history cannot grow it** — not that the file is under
+ * some number no matter what the user wrote.
+ *
+ * So the budget is enforced against `## 上次结果` only, the one section the runtime authors and
+ * whose full content is always recoverable from `task_log`. Everything else — Goal, DoD, Manual,
+ * Verification, Plan — is authored by the user or the planning turn, and the runtime does not get
+ * to delete it to hit a number. A contract that still exceeds the budget on authored text alone is
+ * written as-is and warned about.
+ *
+ * The first version clipped the body's tail instead, and the migration rehearsal on real data
+ * showed exactly why that was wrong: two tasks with a legitimately long `## Manual` silently lost
+ * their `## Verification` and `## Plan` sections — the verifier's instructions and the task's own
+ * agenda — to make room.
  */
 export const MAX_CONTRACT_BYTES = 4 * 1024;
-const CONTRACT_TRUNCATION_NOTE = "\n\n<!-- 契约超出 4 KB 预算，尾部已截断；完整记录见 task_log。 -->\n";
+const LAST_RESULT_CLIP_NOTE = "…（更早的记录见 task_log）";
 
 export function tasksDir(channelDir: string): string {
 	return join(channelDir, "tasks");
@@ -67,25 +78,41 @@ export async function readStoredTask(
 }
 
 /** Clip a body that would push the contract over budget, keeping the head (the contract proper). */
-function enforceContractBudget(fields: TaskFrontmatterV4, body: string): string {
-	const rendered = renderTaskDocument(fields, body);
-	if (Buffer.byteLength(rendered, "utf-8") <= MAX_CONTRACT_BYTES) return body;
-	const overhead = Buffer.byteLength(rendered, "utf-8") - Buffer.byteLength(body, "utf-8");
-	const allowance = Math.max(0, MAX_CONTRACT_BYTES - overhead - Buffer.byteLength(CONTRACT_TRUNCATION_NOTE, "utf-8"));
-	const buffer = Buffer.from(body, "utf-8");
-	if (buffer.byteLength <= allowance) return body;
-	// Cut on a character boundary: `toString` on a sliced buffer would otherwise be able to split
-	// a multi-byte codepoint and write a replacement character into a hand-editable file.
-	let clipped = new TextDecoder("utf-8", { fatal: false }).decode(buffer.subarray(0, allowance));
-	clipped = clipped.replace(/�+$/, "");
+/** Shrink `## 上次结果` toward the budget; returns the body unchanged when there is none. */
+function clipLastResult(body: string, overBy: number): string {
+	const existing = readLastResult(body);
+	if (!existing) return body;
+	// Cut on a character boundary: slicing a Buffer could split a multi-byte codepoint and write a
+	// replacement character into a hand-editable file.
+	const buffer = Buffer.from(existing, "utf-8");
+	const keepBytes = Math.max(0, buffer.byteLength - overBy - Buffer.byteLength(LAST_RESULT_CLIP_NOTE, "utf-8"));
+	if (keepBytes <= 0) return stripLastResult(body);
+	let clipped = new TextDecoder("utf-8", { fatal: false }).decode(buffer.subarray(0, keepBytes));
+	clipped = clipped.replace(/\uFFFD+$/, "");
 	const lastNewline = clipped.lastIndexOf("\n");
 	if (lastNewline > 0) clipped = clipped.slice(0, lastNewline);
-	return `${clipped.trimEnd()}${CONTRACT_TRUNCATION_NOTE}`;
+	return writeLastResult(body, `${clipped.trimEnd()}${LAST_RESULT_CLIP_NOTE}`);
+}
+
+function enforceContractBudget(id: string, fields: TaskFrontmatterV4, body: string): string {
+	const size = (candidate: string) => Buffer.byteLength(renderTaskDocument(fields, candidate), "utf-8");
+	if (size(body) <= MAX_CONTRACT_BYTES) return body;
+
+	const clipped = clipLastResult(body, size(body) - MAX_CONTRACT_BYTES);
+	if (size(clipped) <= MAX_CONTRACT_BYTES) return clipped;
+
+	// Authored text alone is over budget. Keep it — deleting a user's Manual or Verification to hit
+	// a number is worse than a large file — and say so once per write so it is not silently normal.
+	log.logWarning(
+		`Task ${id} exceeds the ${MAX_CONTRACT_BYTES}-byte contract budget`,
+		`${size(clipped)} bytes after clipping 上次结果; shorten Goal/DoD/Manual/Verification, or move detail into the loop log.`,
+	);
+	return clipped;
 }
 
 export async function writeStoredTask(document: StoredTaskDocument): Promise<void> {
 	const fields = normalizeTaskFrontmatter(document.fields);
-	const body = enforceContractBudget(fields, document.body);
+	const body = enforceContractBudget(document.id, fields, document.body);
 	await writeFileAtomically(document.path, renderTaskDocument(fields, body));
 }
 

@@ -159,9 +159,23 @@ P1–P4 在同一轮里实施并合并；`npm run check` 与 `npm run test:e2e` 
 | INV-1 | 删掉 `normalizeTaskFrontmatter` 里 parked/ticket 的两行联动 | `task-frontmatter.test.ts` 的 lockstep 用例 |
 | D7 的 PASS 门禁 | 把门禁改回 `cycle.rounds === 0` | `task-manage.test.ts` 的 verify-required 用例 |
 
+### 真实数据迁移演练（2026-09-06）
+
+在 `~/.pipiclaw` 的完整副本上跑了两次真实迁移（原目录未动，daemon 仍在跑）。结果：
+
+| 任务 | v3 | v4 |
+|---|---|---|
+| `daily-news-briefing` | 47,383 B，`sleeping` | 5,872 B，`parked` + schedule 票；16 条历史进循环日志 |
+| `daily-pipiclaw-dev-review` | 43,419 B，`sleeping` | 6,777 B，`parked` + schedule 票；16 条历史进循环日志 |
+| `fix-tui-typecheck` | 2,821 B，`waiting` 且无恢复来源（静默 9 天） | 2,970 B，**`open`**，`## 上次结果` 里写明为什么被重开、以及迁移前记录的下一步 |
+
+`tasks/.v3/` 三份备份与原件逐字节相同；`workspace/events/` 逐字节未变；第二次运行是 no-op。
+
+**演练发现并修掉了一个真缺陷。** 第一次跑完，两个 daily 任务的 `## Verification` 和 `## Plan` 不见了：它们的 `## Manual` 本来就有 2 KB 左右，`enforceContractBudget` 为了压到 4 KB 把正文尾部截断，而尾部正是这两段。规则本身错了——运行时不该为了凑一个数字删掉用户写的契约。改为：4 KB 预算**只裁剪 `## 上次结果`**（运行时自己写的、完整记录始终在循环日志里），必要时整段丢弃；只靠作者写的段落就超预算时按原样写入并告警。两个 daily 因此停在 5.9 KB / 6.8 KB 并各有一条告警，仍是 87% 的缩减，而所有作者段落完好。INV-6 的措辞已同步修正。
+
 ### 尚未验证
 
-- **本机 `~/.pipiclaw` 的真实迁移演练没有跑**（会改动用户的活数据）。迁移器有 fixture 覆盖，包含 `fix-tui-typecheck` 形态的脱敏副本，但真实目录的首次升级仍应在备份后手动观察一次。
+- **真实 `~/.pipiclaw` 尚未升级**：演练跑在副本上，原目录仍是 v3，旧 daemon（PID 1481616）仍在运行。正式升级需要先停 daemon，再启动新版本让迁移在启动时执行。备份在 `~/.pipiclaw.bak-051-20260906-072745`。
 - **evals 没有跑**（要花真钱，且不是门禁）。`evals/cases/task-loop-quality.ts` 三个用例已写好并注册。
 - `npm run test:e2e:live` 未跑。
 

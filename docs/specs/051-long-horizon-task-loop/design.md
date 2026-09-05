@@ -26,7 +26,7 @@
 
 | 物件 | 是什么 | 谁写 | 谁读 |
 |---|---|---|---|
-| **契约** `tasks/<id>.md` | frontmatter + Goal / DoD / Manual / Verification / Plan / 上次结果。目标 ≤ 4 KB，人可直接编辑 | 用户、`task_create`、`task_update` | 每个 step 的 brief 全量注入 |
+| **契约** `tasks/<id>.md` | frontmatter + Goal / DoD / Manual / Verification / Plan / 上次结果。4 KB 预算约束的是运行时写的那一段，人可直接编辑 | 用户、`task_create`、`task_update` | 每个 step 的 brief 全量注入 |
 | **循环日志** `tasks/<id>.jsonl` | append-only：step / round / evidence / close，含成本 | 运行时 | brief 注入最近 K 条；其余走 `task_log` / `session_search` |
 | **等待票** frontmatter 的 `ticket` | 「什么会把我叫醒，以及最迟什么时候」——由运行时校验、由运行时兑现 | `task_step_end` 写入，运行时校验 | 驱动器 |
 | **任务会话** `tasks/.sessions/<id>-<cycle>.jsonl` | 一个 cycle 一份，与频道聊天会话完全分开，cycle 结束即封存 | 运行时 | 只有本任务的 step |
@@ -353,7 +353,7 @@ task_step_end({
 
 ### D5 契约与日志分离
 
-- `tasks/<id>.md` 只保留契约 + Plan + `## 上次结果`。写入路径保证它 ≤ 4 KB：`## 上次结果` 超长时截断并注明「完整记录见 task_log」。`## History` 及其 `MAX_INLINE_TASK_HISTORY_*` 折叠机制全部退役。
+- `tasks/<id>.md` 只保留契约 + Plan + `## 上次结果`。4 KB 预算**只对 `## 上次结果` 生效**——它是运行时写的、且完整记录始终在循环日志里；超预算时先裁剪它、必要时整段丢弃。作者写的段落永不被删：只靠 Goal/DoD/Manual/Verification/Plan 就超预算时按原样写入并告警（真实迁移演练发现的修正，见 plan.md）。`## History` 及其 `MAX_INLINE_TASK_HISTORY_*` 折叠机制全部退役。
 - `tasks/<id>.jsonl` 一行一条：
 
 ```jsonc
@@ -728,7 +728,7 @@ type StepOutcome = "continue" | "park" | "done" | "blocked";
 | INV-3 | 任何 `parked` 任务，要么在 `by` 前被兑现，要么在 `by` 后一个 tick 内被重开或通知用户 | **e2e E1**（D2-INV） |
 | INV-4 | 票据兑现幂等：同一 `dispatchId` 重放是 no-op | 单元 + e2e E4 |
 | INV-5 | 任务 step 的会话条目只进 `tasks/.sessions/`，频道会话条目数不变 | e2e E7 |
-| INV-6 | 契约文件 ≤ 4 KB（写入路径保证，超出即截断并留指针） | 单元 |
+| INV-6 | 运行时写的历史不会把契约撑大：`## 上次结果` 在写入时按 4 KB 预算裁剪，必要时整段丢弃（完整记录在循环日志里）。**作者写的段落（Goal/DoD/Manual/Verification/Plan）永不被删**——只靠它们就超预算时按原样写入并告警 | 单元 |
 | INV-7 | 只有 `signal` 票能被事件兑现，且只能被名字指向本任务的那个事件兑现 | e2e E6 |
 
 ### 12.6 保持不动的东西（越界即缺陷）

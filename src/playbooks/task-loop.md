@@ -26,7 +26,7 @@ order: 70
 
 有代码、配置或可复现产物时设 `verificationRequired: true`；纯提醒、沟通和主观写作保持默认。
 
-契约有 4 KB 预算，超出会被截断。**每一步的记录不写进契约**，写进 `task_step_end` 的 `note`；历史用 `task_log` 查。
+契约有 4 KB 预算，但它约束的是运行时写的 `## 上次结果`，不会删你写的段落。**每一步的记录不写进契约**，写进 `task_step_end` 的 `note`；历史用 `task_log` 查。
 
 `schedule`（五字段 cron，最小 30 分钟）让任务变成周期性的：每个 occurrence 一个 cycle，闭环后自动停到下一次。
 

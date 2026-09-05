@@ -1,7 +1,8 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { writeLastResult } from "../src/tasks/cycle.js";
 import {
 	normalizeTaskFrontmatter,
 	parseTaskFrontmatterV4,
@@ -88,20 +89,62 @@ describe("v4 frontmatter contract (spec 051, §12.2)", () => {
 });
 
 describe("contract size budget (INV-6)", () => {
-	it("truncates a body that would push the file past 4 KB and leaves a pointer", async () => {
+	async function taskDir(): Promise<string> {
 		const dir = await mkdtemp(join(tmpdir(), "task-frontmatter-"));
-		const { mkdir } = await import("node:fs/promises");
 		await mkdir(join(dir, "tasks"), { recursive: true });
+		return dir;
+	}
+
+	it("clips 上次结果 to fit, leaving a pointer to the full record", async () => {
+		const dir = await taskDir();
 		const path = join(dir, "tasks", "big.md");
-		await writeFile(path, renderTaskDocument({ state: "open" }, "# Big\n"));
+		await writeFile(path, renderTaskDocument({ state: "open" }, "# Big\n\n## Goal\nShip it.\n"));
 
 		const document = await readStoredTask(dir, "big");
-		expect(document).toBeDefined();
-		document!.body = `# Big\n\n## Goal\n${"x".repeat(20_000)}\n`;
+		document!.body = writeLastResult(document!.body, "x".repeat(20_000));
 		await writeStoredTask(document!);
 
 		const written = await readFile(path, "utf-8");
 		expect(Buffer.byteLength(written, "utf-8")).toBeLessThanOrEqual(MAX_CONTRACT_BYTES);
 		expect(written).toContain("task_log");
+		expect(written).toContain("## Goal");
+	});
+
+	// The migration rehearsal on real data (2026-09-06) found the first version of this rule
+	// destroying two tasks' `## Verification` and `## Plan` to make room for a long, legitimate
+	// `## Manual`. The runtime does not get to delete authored contract text to hit a number.
+	it("never deletes authored sections, even when they alone exceed the budget", async () => {
+		const dir = await taskDir();
+		const path = join(dir, "tasks", "verbose.md");
+		const body = [
+			"# Verbose",
+			"",
+			"## Goal",
+			"Ship it.",
+			"",
+			"## Manual",
+			"m".repeat(6_000),
+			"",
+			"## Verification",
+			"Run the deterministic checks.",
+			"",
+			"## Plan",
+			"- [ ] P1 Do the thing",
+			"",
+		].join("\n");
+		await writeFile(path, renderTaskDocument({ state: "open" }, body));
+
+		const document = await readStoredTask(dir, "verbose");
+		document!.body = writeLastResult(document!.body, "y".repeat(3_000));
+		await writeStoredTask(document!);
+
+		const written = await readFile(path, "utf-8");
+		// Over budget, and that is the correct outcome — but every authored section survives, and
+		// the one section the runtime owns was dropped first.
+		expect(Buffer.byteLength(written, "utf-8")).toBeGreaterThan(MAX_CONTRACT_BYTES);
+		for (const heading of ["## Goal", "## Manual", "## Verification", "## Plan"]) {
+			expect(written, heading).toContain(heading);
+		}
+		expect(written).not.toContain("yyy");
 	});
 });
