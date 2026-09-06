@@ -6,9 +6,7 @@ import {
 	AgentSessionRuntime,
 	type AgentSessionServices,
 	convertToLlm,
-	createExtensionRuntime,
 	DefaultResourceLoader,
-	type LoadExtensionsResult,
 	type ModelRegistry,
 	type ModelRuntime,
 	type ResourceLoader,
@@ -1356,10 +1354,10 @@ export class ChannelRunner implements AgentRunner {
 				if (!isTaskSessionPath(sessionManager.getSessionFile())) {
 					await commitActiveSessionRef(this.channelDir, sessionManager);
 				}
-				const next = this.createSessionRuntime(sessionManager, sessionStartEvent);
+				const next = await this.createSessionRuntime(sessionManager, sessionStartEvent);
 				return {
 					session: next.session,
-					extensionsResult: this.createEmptyExtensionsResult(),
+					extensionsResult: next.resourceLoader.getExtensions(),
 					services: this.createAgentSessionServices(next.resourceLoader),
 					diagnostics: [],
 				};
@@ -1641,12 +1639,24 @@ export class ChannelRunner implements AgentRunner {
 		};
 	}
 
-	private createEmptyExtensionsResult(): LoadExtensionsResult {
-		return {
-			extensions: [],
-			errors: [],
-			runtime: createExtensionRuntime(),
-		};
+	/**
+	 * Load a freshly constructed ResourceLoader before an `AgentSession` is built on top of it.
+	 *
+	 * `AgentSession` reads `resourceLoader.getExtensions()` in its constructor, and a loader that
+	 * has never been loaded answers with an *empty* set. Skipping this leaves a replacement session
+	 * with no extensions at all — no command extension (so `/model`, `/thinking`, `/session`,
+	 * `/compact` and `/memory` fall through to the model as plain text), no memory lifecycle, no
+	 * prompt-boundary footer, and no prompt templates. Tolerated on failure the same way
+	 * `reloadSessionResources` tolerates a stuck reload: a degraded session still answers chat.
+	 */
+	private async loadSessionResources(resourceLoader: ResourceLoader): Promise<void> {
+		try {
+			await withTimeout(`[${this.channelId}] session resource load`, SESSION_RELOAD_TIMEOUT_MS, () =>
+				resourceLoader.reload(),
+			);
+		} catch (error) {
+			log.logWarning(`[${this.channelId}] Session resources did not load`, errorMessage(error));
+		}
 	}
 
 	/**
@@ -1658,10 +1668,10 @@ export class ChannelRunner implements AgentRunner {
 		initializeThinkingLevelCompat(agent, model, sessionManager, this.settingsManager.getDefaultThinkingLevel());
 	}
 
-	private createSessionRuntime(
+	private async createSessionRuntime(
 		sessionManager: SessionManager,
 		sessionStartEvent?: SessionStartEvent,
-	): { agent: Agent; session: AgentSession; resourceLoader: ResourceLoader } {
+	): Promise<{ agent: Agent; session: AgentSession; resourceLoader: ResourceLoader }> {
 		const tools = this.buildRuntimeTools();
 		const agent = new Agent({
 			initialState: {
@@ -1676,6 +1686,9 @@ export class ChannelRunner implements AgentRunner {
 		});
 		this.initializeThinkingLevel(agent, this.activeModel, sessionManager);
 		const resourceLoader = this.createResourceLoader();
+		// Must precede `new AgentSession`: the session snapshots the loader's extensions in its
+		// constructor (see `loadSessionResources`).
+		await this.loadSessionResources(resourceLoader);
 		const sessionSettingsManager = asSdkSettingsManager(this.settingsManager);
 		const session = new AgentSession({
 			agent,

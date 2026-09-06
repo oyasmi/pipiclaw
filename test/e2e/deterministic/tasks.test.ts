@@ -71,4 +71,52 @@ describe("E2E deterministic: task lifecycle", () => {
 		expect(archived).toContain("outcome: completed");
 		expect(readFileSync(join(tasksDir(), "archive", `${taskId}.jsonl`), "utf-8")).toContain("42");
 	});
+
+	it("A14: a task step leaves the channel's session commands intact", async () => {
+		// A task cycle runs in its own session (D3), which replaces the bound AgentSession twice
+		// per step. The replacement session must come up with the command extension loaded, or
+		// every session command silently degrades into a plain LLM turn. Mutation check: drop the
+		// `loadSessionResources` call in `createSessionRuntime` and `/model` reaches the model.
+		harness = await createDeterministicHarness();
+
+		harness.model.script.route({
+			name: "create",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("建个任务"),
+			respond: [
+				reply.toolCall("task_create", {
+					id: taskId,
+					title: "记录一个数字",
+					goal: "把数字 42 记录到任务里",
+					dod: "- [x] 把 42 记录下来",
+				}),
+				reply.text("任务已创建。"),
+			],
+		});
+		harness.model.script.route({
+			name: "drive",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("Resume task"),
+			respond: [
+				reply.toolCall("task_step_end", {
+					outcome: "done",
+					note: "已记录数字 42。",
+					summary: "已记录 42",
+					evidence: "步骤日志含 42",
+				}),
+				reply.text("完成。"),
+			],
+			repeat: true,
+		});
+
+		await harness.sendUserMessage("帮我建个任务");
+		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId);
+		const driver = createTaskDriverEvent(harness.channelId, entry!, Date.now());
+		await harness.sendWake(driver.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
+
+		const requestsBefore = harness.modelRequestCount();
+		const deliveriesBefore = harness.deliveries.length;
+		await harness.sendUserMessage("/model");
+		expect(harness.modelRequestCount()).toBe(requestsBefore);
+		const replies = harness.deliveries.slice(deliveriesBefore).map((d) => d.text ?? "");
+		expect(replies.some((text) => text.includes("当前模型"))).toBe(true);
+	});
 });
