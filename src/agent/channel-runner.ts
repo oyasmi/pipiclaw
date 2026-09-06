@@ -44,7 +44,7 @@ import {
 	type MemoryActivityRecorder,
 } from "../memory/maintenance-state.js";
 import { isChannelMigratedToV2, migrateChannelMemoryToV2 } from "../memory/migrate.js";
-import { renderMemoryBootstrap } from "../memory/render.js";
+import { hasMemoryBootstrapBlock, renderMemoryBootstrap } from "../memory/render.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { listMemoryEntries } from "../memory/store.js";
 import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "../memory/task-digest.js";
@@ -207,6 +207,15 @@ export function initializeThinkingLevelCompat(
  */
 const MODEL_REGISTRY_REFRESH_TIMEOUT_MS = 15_000;
 const SESSION_RELOAD_TIMEOUT_MS = 30_000;
+
+/** The text of a message's `content`, whether it is a bare string or a multimodal part array. */
+function plainTextOf(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => (isRecord(part) && part.type === "text" && typeof part.text === "string" ? part.text : ""))
+		.join("\n");
+}
 
 /** Task sessions live under `<channelDir>/tasks/.sessions/`; nothing else may be mistaken for one. */
 function isTaskSessionPath(sessionFile: string | undefined): boolean {
@@ -1376,6 +1385,10 @@ export class ChannelRunner implements AgentRunner {
 
 		await this.reloadSessionResources();
 		await this.bindSessionExtensions();
+		// A restart resumes an existing transcript: if that session was already handed its
+		// bootstrap before the daemon went down, the first turn after recovery must not inject a
+		// second copy just because a process-local field starts out `true`.
+		this.syncMemoryBootstrapPendingFromSession();
 		this.sessionInitialized = true;
 	}
 
@@ -1404,14 +1417,18 @@ export class ChannelRunner implements AgentRunner {
 				},
 				fork: async (entryId, options) => {
 					const result = await this.sessionRuntime.fork(entryId, options);
+					this.syncMemoryBootstrapPendingFromSession();
 					return { cancelled: result.cancelled };
 				},
 				navigateTree: async (targetId, options) => {
 					const result = await this.session.navigateTree(targetId, options);
+					this.syncMemoryBootstrapPendingFromSession();
 					return { cancelled: result.cancelled };
 				},
 				switchSession: async (sessionPath, options) => {
-					return await this.sessionRuntime.switchSession(sessionPath, options);
+					const result = await this.sessionRuntime.switchSession(sessionPath, options);
+					this.syncMemoryBootstrapPendingFromSession();
+					return result;
 				},
 				reload: async () => {
 					await this.refreshSessionResources();
@@ -1719,9 +1736,7 @@ export class ChannelRunner implements AgentRunner {
 		await mkdir(dirname(path), { recursive: true });
 		this.taskLoop = { taskId, cycleId };
 		await this.sessionRuntime.switchSession(path);
-		// A fresh task session starts with no memory bootstrap injected yet; the chat session's
-		// own flag is per-binding, so reset it rather than inheriting the chat turn's state.
-		this.firstTurnMemoryBootstrapPending = true;
+		this.syncMemoryBootstrapPendingFromSession();
 	}
 
 	/** Return to the channel's chat session after a task step. Safe to call when already bound. */
@@ -1729,7 +1744,32 @@ export class ChannelRunner implements AgentRunner {
 		if (!this.taskLoop) return;
 		this.taskLoop = undefined;
 		await this.sessionRuntime.switchSession(join(this.channelDir, resolveActiveSessionFile(this.channelDir)));
-		this.firstTurnMemoryBootstrapPending = true;
+		this.syncMemoryBootstrapPendingFromSession();
+	}
+
+	/**
+	 * Re-derive "does this session still owe a memory bootstrap" from the session now bound.
+	 *
+	 * The pending flag used to be set to `true` on every bind, which is right for a fresh task
+	 * session and wrong for the return trip: a chat session that already carries the block would
+	 * be handed a second copy on its next turn, and one interleaved task step could therefore cost
+	 * the whole index again. It was also wrong across a restart, where the field simply starts
+	 * `true` and the resumed session's own history says otherwise.
+	 *
+	 * So the answer comes from the transcript that will actually be sent, not from a boolean that
+	 * has to be kept in step with every binding. The `/new` and post-compaction resets in
+	 * `subscribeToSessionEvents` stay as they are: those are the SDK telling us the context
+	 * generation changed, which is a fact about the session that its message list alone —
+	 * compaction having rewritten it into a summary — cannot be scanned for reliably.
+	 */
+	private syncMemoryBootstrapPendingFromSession(): void {
+		// `session.messages` is empty until the session actually runs a turn, so the answer comes
+		// from the persisted branch — which is also what makes this correct across a restart.
+		const injected = this.sessionManager.getBranch().some((entry) => {
+			if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) return false;
+			return entry.message.role === "user" && hasMemoryBootstrapBlock(plainTextOf(entry.message.content));
+		});
+		this.firstTurnMemoryBootstrapPending = !injected;
 	}
 
 	/** Which task loop this runner is currently bound to, if any. */

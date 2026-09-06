@@ -1,12 +1,15 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTaskDriverEvent } from "../../../src/runtime/task-driver.js";
 import { localDayKey } from "../../../src/shared/local-time.js";
+import { readActiveTasks } from "../../../src/tasks/ledger.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 import { waitForFileContent } from "../helpers/wait.js";
 
 describe("E2E deterministic: memory (spec 050)", () => {
 	let harness: DeterministicHarness;
+	const taskId = "e2e-det-memory-task";
 	afterEach(async () => {
 		harness.assertNoUnmatchedRequests();
 		await harness.shutdown();
@@ -53,6 +56,76 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		expect(lastUserContent()).toContain("生产数据库端口是 6432");
 
 		// Second turn of the same session: no bootstrap block.
+		await harness.sendUserMessage("再聊一句");
+		expect(lastUserContent()).not.toContain("<memory_bootstrap>");
+	});
+
+	it("M1b: a task step does not make the chat session re-inject its bootstrap", async () => {
+		// Regression: `bindTaskSession`/`bindChatSession` each set one runner-wide "first turn
+		// pending" boolean to true, so returning to a chat session that already carried the
+		// bootstrap paid for the whole index a second time — and handed the model a duplicate
+		// block. Mutation check: set `firstTurnMemoryBootstrapPending = true` in `bindChatSession`
+		// instead of re-deriving it from the bound session, and the last assertion fails.
+		harness = await createDeterministicHarness();
+		harness.model.script.route({
+			name: "ack",
+			when: (r) => r.isMainTurn,
+			respond: [reply.text("好的")],
+			repeat: true,
+		});
+		harness.model.script.prependRoute({
+			name: "save",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("记住"),
+			respond: [
+				reply.toolCall("memory_save", {
+					content: "构建命令是 npm run check",
+					name: "build-command",
+					type: "reference",
+				}),
+				reply.text("好的，已记住。"),
+			],
+		});
+		harness.model.script.prependRoute({
+			name: "create-task",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("建个任务"),
+			respond: [
+				reply.toolCall("task_create", {
+					id: taskId,
+					title: "记录一个数字",
+					goal: "把数字 42 记录到任务里",
+					dod: "- [x] 把 42 记录下来",
+				}),
+				reply.text("任务已创建。"),
+			],
+		});
+		harness.model.script.prependRoute({
+			name: "drive",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("Resume task"),
+			respond: [
+				reply.toolCall("task_step_end", { outcome: "continue", note: "看了一眼，继续。" }),
+				reply.text("继续。"),
+			],
+			repeat: true,
+		});
+
+		await harness.sendUserMessage("记住：构建命令是 npm run check。");
+		await harness.sendUserMessage("帮我建个任务");
+		await harness.sendUserMessage("/new");
+
+		// First turn of the fresh chat session: the bootstrap lands, as it should.
+		await harness.sendUserMessage("你好");
+		expect(lastUserContent()).toContain("<memory_bootstrap>");
+
+		// One task step in between. The task cycle gets its own session, so it gets its own
+		// bootstrap — that part is correct and stays.
+		const tasksDir = join(harness.channelDir, "tasks");
+		const entry = (await readActiveTasks(tasksDir)).find((e) => e.id === taskId);
+		expect(entry).toBeDefined();
+		const driver = createTaskDriverEvent(harness.channelId, entry!, Date.now());
+		await harness.sendWake(driver.text, { user: "TASK_DRIVER", userName: "TASK_DRIVER" });
+		expect(lastUserContent()).toContain("<memory_bootstrap>");
+
+		// Back on chat, which already has one: it must not be sent again.
 		await harness.sendUserMessage("再聊一句");
 		expect(lastUserContent()).not.toContain("<memory_bootstrap>");
 	});

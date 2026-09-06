@@ -4,9 +4,14 @@
  * the same spirit as the retired `<runtime_context>` / `<durable_memory_snapshot>` wrappers.
  */
 
-/** The wrapper tag. Exported so the memory-transcript scrubber keys off the same literal this
- *  renderer writes, instead of each side spelling it out again. */
+/** The wrapper tag. Exported so the memory-transcript scrubber and the runner's first-turn check
+ *  key off the same literal this renderer writes, instead of each spelling it out again. */
 export const MEMORY_BOOTSTRAP_TAG = "memory_bootstrap";
+
+/** Whether a piece of text already carries an injected bootstrap block. */
+export function hasMemoryBootstrapBlock(text: string): boolean {
+	return text.includes(`<${MEMORY_BOOTSTRAP_TAG}>`);
+}
 
 export interface MemoryBootstrapParts {
 	workspaceMemory?: string;
