@@ -2,10 +2,11 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
-## [未发布]
+## [0.9.3-beta.1] - 2026-09-06
 
 ### 变更
 
+- **长周期任务循环 v3（spec 051）：任务子系统重做，把此前挤在一个 30 KB 文件里的三样东西拆开**——有界契约、只追加的循环日志、以及运行时可校验并兜底的等待票据（ticket）。它修的是真实故障：作者机器上有两个任务分别静默死了 9 天和 13 天，`waiting` 在一个装饰性的 `waitingFor` 上、没有任何东西能唤醒它，同时运行时积压了 1243 条没人看的告警。现在「停泊」必须写明由什么来唤醒，并在写入时校验（`src/tasks/ticket.ts`——run 存在、未结算、指向本任务，并带运行时派生的 `by` 兜底）；停泊的任务要么被兑现，要么用户会收到通知。`tasks/<id>.md` 上限 4 KB 并整体注入；`tasks/<id>.jsonl` 记录每一步、每轮返工和过期（`## Current Cycle` / `## History` 取消，且契约预算只压缩运行时所写的 `## 上次结果`，绝不删用户写的段落）。一个周期的各步骤跑在自己的 `tasks/.sessions/` 会话里，除非主动要求发言否则静默（任务侧退役 `[SILENT]`）。四维预算（步数 / 墙钟 / 成本 / 返工轮数）取代指纹、effect ledger、futile 计数器和三级退避；`continue` 立即排入下一步，而非干等 5 分钟。验收轮由运行时在结算时记录，`done` 要求当前周期内有真实 PASS——`task_verify` 工具退役。`task_manage` 的 `verify` 拆出；工具集为 `task_list`/`task_create`/`task_update`/`task_close`/`task_log` 加 `task_step_end`（仅在任务会话内注册）。`events/` 不变（D8），唯一接触点是一个 `signal` ticket。迁移到 v4 是确定性的：无法重建来源的 `waiting` 任务会带说明被重新打开，而非留着不管；原件复制到 `tasks/.v3/`，`workspace/events/` 从不改动。
 - **记忆 v2（spec 050）：核心记忆子系统从零重做。** 原有的 5 层、约 6900 行的设计（`SESSION.md`/`MEMORY.md`/`HISTORY.md`，每轮都做词法召回打分并可选 LLM 重排，三个独立调度的维护 job）被替换为三样东西：一条事实一个文件的频道记忆（`memory/<name>.md`，frontmatter 元数据，生成的 `MEMORY.md` 索引，永远不手改）、按天的日志（`journal/YYYY-MM-DD.md`，只由后台反思 pass 写）、以及只由人维护的共享 workspace `MEMORY.md`/`ENVIRONMENT.md`（不变——仍然没有任何工具能写它们）。每轮实时召回被彻底取消（D1）：channel 索引和当天 journal 尾部只在会话首轮注入一次（`/new` 之后、压缩之后同样重新注入一次），中途怀疑"这事以前可能记过"时用 `memory_search`。`memory_save` 新增 `type`（`user`/`feedback`/`project`/`reference`），并改为基于相似度的冲突检测（`replaces: <name>` 或 `"none"`），取代旧版自由文本的 `supersedes`；`memory_forget` 改为按精确 `name` 删除。三个旧后台 job 合并成一个**反思（reflect）**pass，一次调用同时产出 journal 新增行和 memory 的增/改/删/touch，30 天试用期写入机制保留，但转正信号从"被召回"改为"被反思 pass touch"（因为不再有每轮召回）。子代理的 `memory: session|relevant` 改为 `memory: none|index`（旧值仍可加载，会带一条退役警告，统一映射为 `index`）。**迁移是自动、确定性且可逆的**：升级后频道首次被使用时，旧文件会原样移入 `.memory-v1/`（不删除）并转换成新布局；回滚时把它们移回原位，删除 `memory/`、`journal/`、生成的 `MEMORY.md` 和 `.migrated-v2` 标记即可。已退役的 `settings.json` 字段：整段 `memoryRecall.*` 和整段 `sessionMemory.*`（均已列入 `RETIRED_SETTINGS_KEYS`，启动时会警告，留着不会导致启动失败，可以直接删掉）。
 
 ## [0.9.2] - 2026-08-30
