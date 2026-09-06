@@ -35,7 +35,7 @@ Pipiclaw 只支持工作区级 skills，不存在频道级 skill 目录。同一
 | `AGENTS.md` | 我们做任何工作都要遵守什么？ | 安全边界、沟通习惯、团队通用规则 |
 | `MEMORY.md` | 哪些事实和决定以后仍然有用？ | 偏好、术语、长期决定 |
 | `skills/` | 遇到某类工作具体怎么做？ | 发布、巡检、报告、第三方工具 SOP |
-| `sub-agents/` | 这一步该由谁在独立上下文里完成？ | planner、builder、reviewer、scout |
+| `sub-agents/` | 这一步该由谁在独立上下文里完成？ | explorer、builder、reviewer、verifier |
 | runtime playbooks | 当前版本的 Pipiclaw 机制怎样工作？ | task、event、memory、delegation 的内置协议 |
 | task 文件 | 这一项工作现在做到哪里？ | Goal、DoD、Plan、证据、下一步、wake |
 

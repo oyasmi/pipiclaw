@@ -159,17 +159,15 @@ describe("sub-agent discovery", () => {
 		const planner = discovery.agents.find((agent) => agent.name === "planner");
 		expect(planner).toMatchObject({ runtime: "external", harness: "claude-code", mutates: "read" });
 		expect(planner?.command).toContain("--permission-mode plan");
-		for (const name of ["reviewer", "scout"]) {
-			const agent = discovery.agents.find((candidate) => candidate.name === name);
-			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "read" });
-			expect(agent?.command).toContain("--sandbox read-only");
-			expect(agent?.command).not.toContain("--ask-for-approval");
-		}
+		const reviewer = discovery.agents.find((candidate) => candidate.name === "reviewer");
+		expect(reviewer).toMatchObject({ harness: "codex-cli", mutates: "read" });
+		expect(reviewer?.command).toContain("--sandbox read-only");
+		expect(reviewer?.command).not.toContain("--ask-for-approval");
 		for (const name of ["builder", "builder-hard"]) {
 			const agent = discovery.agents.find((candidate) => candidate.name === name);
 			expect(agent).toMatchObject({ harness: "claude-code", mutates: "write" });
 		}
-		for (const name of ["worker", "documenter"]) {
+		for (const name of ["worker", "verifier"]) {
 			const agent = discovery.agents.find((candidate) => candidate.name === name);
 			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "write" });
 			expect(agent?.command).toContain("--sandbox workspace-write");

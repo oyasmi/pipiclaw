@@ -1105,7 +1105,7 @@ web 工具的代理顺序是：
 
 ## 子代理目录 `workspace/sub-agents/`（`workspace/sub-agents/`）
 
-放工作区智能体角色。适合把 explorer、planner、builder、reviewer 等执行者固化下来。运行时只加载这个目录中实际存在且有效的配置，不自动启用默认角色。仓库和 npm 包中的 [`examples/sub-agents/`](../examples/sub-agents/) 提供可复制模板：内置的 explorer、log-sifter、git-committer，以及外部的 planner、builder、builder-hard、reviewer、verifier、scout、worker、documenter。
+放工作区智能体角色。适合把 explorer、planner、builder、reviewer 等执行者固化下来。运行时只加载这个目录中实际存在且有效的配置，不自动启用默认角色。仓库和 npm 包中的 [`examples/sub-agents/`](../examples/sub-agents/) 提供可复制模板：常用的 explorer、builder、reviewer、verifier、git-committer，以及按需的 planner、builder-hard、worker。
 
 详细字段、示例和推荐写法见 [sub-agents.md](./sub-agents.md)。
 

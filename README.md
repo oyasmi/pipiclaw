@@ -18,7 +18,7 @@ Pipiclaw 是一个面向个人和团队的 AI coding assistant runtime。它让 
 
 Pipiclaw 同时支持两类委派：内置子智能体在进程内完成检索、日志筛查等轻量工作；外部智能体则启动真实的 Claude Code、Codex CLI 或任意脚本，处理需要长时间运行、跨多个文件和反复自测的重型任务。
 
-在钉钉常驻模式中，外部任务派发后在后台继续执行，完成时自动唤醒原频道。你可以随时用 `/subagents` 查看运行状态、实际命令和产出，用 `/subagents cancel` 直接终止，也可以让主智能体在已结束的 Claude Code / Codex 会话上继续追问。仓库附带 planner、builder、reviewer、verifier、documenter 等可直接改造的角色模板。
+在钉钉常驻模式中，外部任务派发后在后台继续执行，完成时自动唤醒原频道。你可以随时用 `/subagents` 查看运行状态、实际命令和产出，用 `/subagents cancel` 直接终止，也可以让主智能体在已结束的 Claude Code / Codex 会话上继续追问。仓库附带 explorer、builder、reviewer、verifier、git-committer 等可直接改造的角色模板。
 
 ### 工作不会随着一次对话结束
 

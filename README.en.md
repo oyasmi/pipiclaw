@@ -18,7 +18,7 @@ What you see is one assistant, but behind it can be a well-divided AI engineerin
 
 Pipiclaw supports two kinds of delegation at once: built-in sub-agents do lightweight work in-process such as retrieval and log triage; external agents launch real Claude Code, Codex CLI, or any script to handle heavy tasks that need long runs, many files, and repeated self-testing.
 
-In DingTalk daemon mode, external tasks keep running in the background after dispatch and automatically wake the originating channel on completion. You can use `/subagents` at any time to check run status, the actual command, and outputs, use `/subagents cancel` to terminate directly, and let the main agent keep asking follow-up questions on a finished Claude Code / Codex session. The repo ships planner, builder, reviewer, verifier, and documenter role templates that are ready to adapt.
+In DingTalk daemon mode, external tasks keep running in the background after dispatch and automatically wake the originating channel on completion. You can use `/subagents` at any time to check run status, the actual command, and outputs, use `/subagents cancel` to terminate directly, and let the main agent keep asking follow-up questions on a finished Claude Code / Codex session. The repo ships explorer, builder, reviewer, verifier, and git-committer role templates that are ready to adapt.
 
 ### Work does not end when a conversation ends
 

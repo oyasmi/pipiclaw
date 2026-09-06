@@ -56,14 +56,14 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
 仓库及 npm 包提供了可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)，既有内置角色也有外部角色。在源码 checkout 中可以直接使用：
 
 ```bash
-# 内置角色（无需额外安装）：
-cp examples/sub-agents/{explorer,log-sifter,git-committer}.md ~/.pipiclaw/workspace/sub-agents/
-# 外部角色（需要在宿主机安装对应 CLI 并完成登录）：
-cp examples/sub-agents/{planner,builder,builder-hard}.md ~/.pipiclaw/workspace/sub-agents/                # 需要 claude
-cp examples/sub-agents/{reviewer,verifier,scout,worker,documenter}.md ~/.pipiclaw/workspace/sub-agents/   # 需要 codex
+# 常用五角色（explorer / git-committer 内置；builder 需要 claude，reviewer / verifier 需要 codex）：
+cp examples/sub-agents/{explorer,git-committer,builder,reviewer,verifier}.md ~/.pipiclaw/workspace/sub-agents/
+# 按需补充：
+cp examples/sub-agents/{planner,builder-hard}.md ~/.pipiclaw/workspace/sub-agents/   # 需要 claude
+cp examples/sub-agents/worker.md ~/.pipiclaw/workspace/sub-agents/                   # 需要 codex
 ```
 
-八个外部角色构成一个可直接改造的开发闭环（planner → reviewer → builder → reviewer → verifier → documenter，闭环外由 worker 和 scout 承接），细节见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。模板中的模型、sandbox 和授权取舍不是普适默认值，使用前必须按本机账号和风险边界审阅。
+目录里是 5 个常用角色（explorer、builder、reviewer、verifier、git-committer）加 3 个按需角色（planner、builder-hard、worker）。它们**不构成固定流水线**：按这一轮要消除哪种不确定性来选，逐角色取舍与路由表见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。模板中的模型、sandbox 和授权取舍不是普适默认值，使用前必须按本机账号和风险边界审阅。
 
 不复制模板也完全可以使用 inline `systemPrompt` 委派——但 inline 委派永远是 `runtime: internal`，外部角色必须以配置文件的形式存在（需要 `harness`/`command`，无法通过调用参数临时拼出）。`purpose: verify` 的验收约束由 runtime 执行，不要求一定配置名为 `verifier` 的文件。
 
@@ -432,7 +432,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 | `model` | `model` | 原样 |
 | `effort` | `thinkingLevel` | **换了名字**：agentmux 的 `effort` 和 pipiclaw 内置委派已有的 `effort`（预算档位）撞名，外部角色统一用 `thinkingLevel` 表达推理强度 |
 | `system_prompt` | 正文 | - |
-| （新增） | `mutates` | agentmux 没有这个概念，按角色实际行为填：`planner`/`reviewer`/`scout` 类通常是 `read`，`builder`/`documenter` 类通常是 `write` |
+| （新增） | `mutates` | agentmux 没有这个概念，按角色实际行为填：`planner`/`reviewer` 类通常是 `read`，`builder`/`worker` 类通常是 `write` |
 | `cwd` | 不迁移 | 工作目录改为每次委派通过 `workingDirectory` 参数传入 |
 | `defaults.shell` | 仅 `exec` 可迁移为 `shell: true` | claude-code / codex-cli 请改用包装脚本作为 `command`，否则会绕过 harness 的协议参数 |
 | `defaults.env` | `env:` | - |
@@ -443,17 +443,12 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 [`examples/sub-agents/`](../examples/sub-agents/) 里的成品按下面的思路配置。内置角色的价值是**低延迟和上下文隔离**，外部角色的价值是**算力和跨会话续接**——按这条线分工，而不是按任务听起来重不重。
 
-**Explorer**（内置）—— 定位仓库实现、追踪调用链、梳理模块关系：
+**Explorer**（内置）—— 只读调查一个明确问题：定位实现、追踪调用链，以及在指定日志或命令输出里筛证据：
 
-- `tools: read,bash`
+- `tools: read,grep,bash`
 - `contextMode: isolated` + `memory: none`
 - `thinkingLevel: low`
-
-**Log sifter**（内置）—— 从大体量日志或命令输出中筛出证据，避免原文进入主会话上下文：
-
-- `tools: read,bash`
-- `contextMode: isolated` + `memory: none`
-- `thinkingLevel: low`
+- 预算按日志任务给足（`maxWallTimeSec: 900` / `bashTimeoutSec: 300`）
 - 输出契约明确要求「宁可少带并说明未覆盖范围」，否则它会把日志整段搬回来，失去存在意义
 
 **Git committer**（内置）—— 将用户明确指定的现有改动整理成 commit：
@@ -475,11 +470,11 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - `command` 用 `codex exec --sandbox read-only`，让 `mutates: read` 是被 CLI 强制的声明而不只是一句话
 - 只读角色不参与工作区写锁，可以与 builder 并行
 
-**Reviewer / Verifier / Worker / Documenter**（外部，codex-cli）—— 独立挑错、运行取证、通用分析、文档：
+**Reviewer / Verifier / Worker**（外部，codex-cli）—— 独立挑错、运行取证、独立产物（分析、报告、文档）：
 
 - reviewer 使用 `--sandbox read-only` + `mutates: read`；完整输出由 runtime 自动保存到 run 的 `output.md`，无需为评审报告授予写权限。它也可承担不需要写入工作区的外部 `purpose=verify`，但 attestation 强度仍是 `advisory`
-- verifier / worker / documenter 使用 `--sandbox workspace-write` + `mutates: write`，可以生成工作区产物，但模板不允许它们修改 Git 历史或外部系统
-- verifier 因运行测试可能写构建产物，承担 `purpose=verify` 时会取得目标工作区独占 lease，并以 `advisory` 强度验收；协议允许临时产物，但禁止修改被验收实现或既有 untracked 产品文件。需要静态只读终验时用 reviewer，并按风险补充主代理抽查
+- verifier / worker 使用 `--sandbox workspace-write` + `mutates: write`，可以生成工作区产物，但模板不允许它们修改 Git 历史或外部系统
+- verifier 因运行测试可能写构建产物，承担 `purpose=verify` 时会取得目标工作区独占 lease，并以 `advisory` 强度验收；协议允许 `.run/`、`coverage/`、`build/`、`dist/` 等临时产物，但禁止修改被验收实现或既有 untracked 产品文件——**在产品源码或仓库正式测试目录新建文件同样会改变 subject 并使 PASS 失效**。需要静态只读终验时用 reviewer，并按风险补充主代理抽查
 - 提交统一交给内置 git-committer；只有用户明确要求时才 push
 
 ## 常见错误（Common Mistakes）
