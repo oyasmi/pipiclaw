@@ -208,7 +208,7 @@ maxWallTimeSec: 5400
 | `tools` | `read,bash` | 工具白名单 |
 | `model` | 见[模型解析顺序](./configuration.md) | 精确模型引用 |
 | `effort` | `standard` | 执行预算档位：`quick`、`standard`、`deep`，整组替换四个数值预算（见下） |
-| `context` | `none` | 上下文注入：`none`、`session`、`relevant` |
+| `context` | `none` | 上下文注入：`none`、`index`（`index` 追加 workspace 背景、频道记忆索引和当天日志尾部） |
 | `thinkingLevel` | `medium` | 推理强度 |
 | `mutates` | 按 `tools` 是否含 `write`/`edit` 推定 | `read` 或 `write`；显式声明覆盖推定，`bash` 不参与推定 |
 | `workingDirectory` / `purpose` / `taskId` | 同上 | 同 `subagent` |
