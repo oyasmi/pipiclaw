@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import { renderMemoryBootstrap } from "../src/memory/render.js";
 import { sanitizeMessagesForMemory, stripInjectedMemoryContext } from "../src/memory/transcript.js";
 
 describe("stripInjectedMemoryContext", () => {
@@ -20,6 +21,25 @@ describe("stripInjectedMemoryContext", () => {
 
 			expect(stripInjectedMemoryContext(raw)).toBe("重启一下服务");
 		}
+	});
+
+	// Regression: the wrapper `memory/render.ts` actually emits was missing from the list, so an
+	// entire session's recalled memory reached the reflect pass dressed as fresh user input — and,
+	// because the leftover block sat in front of `<user_message>`, the anchored unwrap failed too
+	// and the runtime's own tags leaked with it.
+	it("strips the memory bootstrap the renderer really produces, and still unwraps the user message", () => {
+		const bootstrap = renderMemoryBootstrap({
+			workspaceMemory: "- 用户偏好：保持简单。",
+			channelIndex: "- [deploy-steps](deploy-steps.md) — 发布流程",
+			journal: { date: "2026-09-06", text: "定了先修验收关闭。" },
+		});
+		const raw = [bootstrap, "", "<user_message>", "重启一下服务", "</user_message>"].join("\n");
+
+		const stripped = stripInjectedMemoryContext(raw);
+		expect(stripped).toBe("重启一下服务");
+		expect(stripped).not.toContain("保持简单");
+		expect(stripped).not.toContain("deploy-steps");
+		expect(stripped).not.toContain("定了先修验收关闭");
 	});
 });
 

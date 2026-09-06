@@ -4,6 +4,10 @@
  * the same spirit as the retired `<runtime_context>` / `<durable_memory_snapshot>` wrappers.
  */
 
+/** The wrapper tag. Exported so the memory-transcript scrubber keys off the same literal this
+ *  renderer writes, instead of each side spelling it out again. */
+export const MEMORY_BOOTSTRAP_TAG = "memory_bootstrap";
+
 export interface MemoryBootstrapParts {
 	workspaceMemory?: string;
 	channelIndex?: string;
@@ -23,7 +27,7 @@ export function renderMemoryBootstrap(parts: MemoryBootstrapParts): string {
 		return "";
 	}
 
-	const lines = ["<memory_bootstrap>", HEADER];
+	const lines = [`<${MEMORY_BOOTSTRAP_TAG}>`, HEADER];
 	if (workspace) {
 		lines.push("<workspace_memory>", workspace, "</workspace_memory>");
 	}
@@ -33,6 +37,6 @@ export function renderMemoryBootstrap(parts: MemoryBootstrapParts): string {
 	if (journalText && parts.journal) {
 		lines.push(`<journal date="${parts.journal.date}">`, journalText, "</journal>");
 	}
-	lines.push("</memory_bootstrap>");
+	lines.push(`</${MEMORY_BOOTSTRAP_TAG}>`);
 	return lines.join("\n");
 }
