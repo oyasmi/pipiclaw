@@ -2,6 +2,18 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
+## [0.9.3-beta.2] - 2026-09-07
+
+### 修复
+
+- **任务可能凭一条已经失效的 PASS 被关闭。** 两个关闭入口（`task_step_end outcome=done` 与 `task_close outcome=complete`）判断的是"本周期是否曾有一轮通过"，这与"这次验收是否仍然绑定即将交付的东西"不是同一个问题。任务 Markdown 可以被 agent 自己的 `edit` 改写，工作区可以被它派出去的任何委派改写，所以验收通过之后再放宽 Goal、再改代码，仍然能干净地关闭；另外，后来的 FAIL 会被更早的 PASS 覆盖。现在两个入口共用一条规则：取本周期**最后一条** round，要求它是 PASS，并用原有的 attestation 校验（归属、契约 hash、产物 subject）对**关闭时刻**的契约与 checkout 重新核验。verify run 的 checkout 取自持久化的 run 记录，记录不在就失败关闭，而不是退回 daemon 自己的 cwd。`hasPassingRound` 退役。
+- **反思 pass 把自己注入的记忆当成了新的用户输入。** spec 050 把记忆包装块改名为 `<memory_bootstrap>`，但 transcript 清洗列表里仍然只有已退役的 `durable_memory_snapshot`，于是每个会话首轮注入的整份记忆索引都会被带回巩固环节——可能被重新总结进 `MEMORY.md`，也可能被当作"这次对话又印证了它"。残留的块还挡在 `<user_message>` 前面，使锚定的解包一并失效，运行时其余标签也跟着漏了进去。现在两侧共用渲染器导出的同一个标签常量。
+- **任务步骤结束回到聊天会话会重复注入记忆 bootstrap。** `bindTaskSession` / `bindChatSession` 各自把一个 runner 级的"首轮待注入"布尔置为 `true`，因此已经带过该块的聊天会话会再付一次 workspace 记忆 + 频道索引 + 当天日志的开销——每穿插一个任务步骤就一次；重启对已恢复的会话同样如此。该标记改为从所绑定会话的持久化 branch 重新推导；`/new` 与压缩后的重新注入保持不变，`fork`、`navigateTree` 和 `/session switch` 也一并接上（此前它们根本没有处理）。
+
+### 变更
+
+- 改写委派、任务循环与记忆三份 playbook，围绕逐轮上下文选择、反馈裁决与达标即停。委派 playbook 此前还与工具面不一致：它指导模型传 `context: session` / `relevant`，而这两个值都不存在（按角色的 `subagent` 根本没有 `context` 字段，`subagent_inline` 只接受 `none`/`index`）。`docs/sub-agents.md` 里有同一处陈旧表格行。方案依据与尚未开展的部分见 `docs/leverage/004-token-to-productivity.md`。
+
 ## [0.9.3-beta.1] - 2026-09-06
 
 ### 变更

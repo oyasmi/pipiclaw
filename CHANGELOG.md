@@ -2,6 +2,18 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [0.9.3-beta.2] - 2026-09-07
+
+### Fixed
+
+- **A task could be closed as done on a PASS that no longer held.** Both close entry points (`task_step_end outcome=done` and `task_close outcome=complete`) gated on "did any round in this cycle pass", which is not the same question as "does the verification still bind to what is about to ship". The task Markdown is writable by the agent's own `edit` tool and the workspace by anything it delegates, so widening the Goal or changing the code after acceptance still closed cleanly; separately, an earlier PASS unlocked `done` even after a later FAIL had superseded it. Both entry points now share one rule: take the cycle's *last* round, require it to be a PASS, and re-run the existing attestation check (ownership, contract hash, artifact subject) against the contract and checkout as they stand at close. The verify run's checkout comes from the persisted run record, so a run whose record is gone fails closed rather than falling back to the daemon's cwd. `hasPassingRound` is retired.
+- **The reflect pass saw its own injected memory as fresh user input.** Spec 050 renamed the memory wrapper to `<memory_bootstrap>` but the transcript scrubber's list still named the retired `durable_memory_snapshot`, so every session's first turn carried its whole recalled index back into consolidation — where it could be re-summarized into `MEMORY.md`, or read as this conversation confirming what it had merely been shown. The leftover block also sat in front of `<user_message>` and defeated the anchored unwrap, so the runtime's remaining tags rode along with it. Both sides now key off one tag constant exported by the renderer that writes it.
+- **Returning from a task step re-injected the chat session's memory bootstrap.** `bindTaskSession` / `bindChatSession` each set a single runner-wide "first turn pending" flag to `true`, so a chat session that already carried the block paid for the whole workspace memory, channel index and journal tail again — once per interleaved task step — and a restart did the same to a resumed transcript. The flag is now re-derived from the bound session's persisted branch; `/new` and post-compaction re-injection are unchanged, and `fork`, `navigateTree` and `/session switch` get the same treatment, which they previously did not.
+
+### Changed
+
+- Rewrote the delegation, task-loop and memory playbooks around per-round context selection, feedback adjudication and stopping at the agreed bar. The delegation playbook had also drifted from the tool surface: it instructed the model to pass `context: session` / `relevant`, neither of which exists (the role-based `subagent` has no `context` field at all; `subagent_inline` takes `none`/`index`). `docs/sub-agents.md` carried the same stale row. See `docs/leverage/004-token-to-productivity.md` for the reasoning and what has not been done.
+
 ## [0.9.3-beta.1] - 2026-09-06
 
 ### Changed
