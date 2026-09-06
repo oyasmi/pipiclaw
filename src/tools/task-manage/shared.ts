@@ -10,9 +10,11 @@ import { getSubAgentRunManager } from "../../subagents/runs.js";
 import { createCycle, nextCycleId } from "../../tasks/cycle.js";
 import type { TaskBudget, TaskFrontmatterV4 } from "../../tasks/frontmatter.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../../tasks/ledger.js";
+import type { StoredTaskDocument } from "../../tasks/store.js";
 import { parseTaskEventName } from "../../tasks/task-events.js";
 import { validateTaskSchedule } from "../../tasks/task-schedule.js";
 import { describeTicket, type TicketContext, type TicketEventRef } from "../../tasks/ticket.js";
+import { completionVerificationBlockReason } from "../../tasks/verification.js";
 import { RecoverableToolError } from "../tool-details.js";
 import type { TaskCloseRequest, TaskCreateRequest, TaskManageToolOptions, TaskUpdateRequest } from "./types.js";
 
@@ -201,4 +203,35 @@ export async function cleanupTaskEvents(options: TaskManageToolOptions, id: stri
 		deleted.push(filename.slice(0, -".json".length));
 	}
 	return { deleted };
+}
+
+/**
+ * The verification gate both close entry points share (`task_step_end outcome=done` and
+ * `task_close outcome=complete`).
+ *
+ * It exists as one function because the two used to ask the question separately and both asked
+ * the weaker one — "did a PASS ever land in this cycle" — which a contract edit or a further code
+ * change made *after* the PASS would still satisfy. The real check is re-run here, against the
+ * contract and the checkout as they stand at close time.
+ */
+export async function assertVerificationHoldsForClose(
+	options: TaskManageToolOptions,
+	document: StoredTaskDocument,
+	id: string,
+): Promise<void> {
+	if (document.fields.verify !== "required") return;
+	const runManager = getSubAgentRunManager(options.channelId);
+	const reason = await completionVerificationBlockReason({
+		channelDir: options.channelDir,
+		taskId: id,
+		taskBody: document.body,
+		cycleId: document.fields.cycle?.id,
+		findRunWorkingDirectory: (runId) => runManager.get(runId)?.workingDirectory,
+		fallbackWorkingDirectory: options.workingDirectory,
+	});
+	if (!reason) return;
+	throw new RecoverableToolError(
+		`Task "${id}" requires independent verification and it does not currently hold: ${reason}. ` +
+			`Dispatch a purpose=verify sub-agent with taskId=${id} against the artifact you are about to deliver, and let its PASS land before finishing.`,
+	);
 }

@@ -8,6 +8,7 @@ import { errorMessage } from "../shared/text-utils.js";
 import type { WorkspaceSubjectHashOptions } from "./artifact-subject.js";
 import { workspaceSubjectHash } from "./artifact-subject.js";
 import { taskBodyHash } from "./ledger.js";
+import { readCycleRounds } from "./rounds.js";
 import { readStoredTask } from "./store.js";
 
 export type VerificationVerdict = "pass" | "fail";
@@ -325,4 +326,55 @@ export async function attestationRejectionReason(input: {
 		if (currentSubject !== attestation.subjectHash) return "artifact subject changed after verification";
 	}
 	return undefined;
+}
+
+/**
+ * How a cycle's rework rounds are consumed when deciding whether a task may close (spec 051, D7).
+ *
+ * Recording a round at settlement proved the attestation *then*. It cannot prove it *now*: the
+ * task Markdown and the workspace are both agent-writable between the verifier's PASS and the
+ * close, so a contract edit or a further code change after the PASS would sail through a check
+ * that only asks "did a PASS ever land in this cycle". That was the shape of the hole — both
+ * close entry points asked exactly that.
+ *
+ * Two rules, deliberately simple:
+ *  - The candidate is the cycle's *last* round, not any PASS in it. A later FAIL is newer evidence
+ *    about the same artifact and must not be overridden by an earlier PASS.
+ *  - That candidate's attestation is re-checked against the contract and the checkout as they are
+ *    at close time, reusing `attestationRejectionReason` rather than a second proof model.
+ */
+export interface CompletionVerificationInput {
+	channelDir: string;
+	taskId: string;
+	taskBody: string;
+	cycleId: string | undefined;
+	/**
+	 * The checkout persisted for a verify run, from the sub-agent run registry. The attestation
+	 * file names its own `subjectDir`, but that file is evidence, not the authority for which
+	 * checkout was verified — so a run whose record is gone fails closed rather than falling back
+	 * to whatever directory the daemon happens to be in.
+	 */
+	findRunWorkingDirectory: (runId: string) => string | undefined;
+	fallbackWorkingDirectory?: string;
+}
+
+/** Why this task may not be closed as done, or `undefined` when its verification still holds. */
+export async function completionVerificationBlockReason(
+	input: CompletionVerificationInput,
+): Promise<string | undefined> {
+	const rounds = await readCycleRounds(input.channelDir, input.taskId, input.cycleId);
+	const latest = rounds.at(-1);
+	if (!latest) return "no verification round has landed in this cycle";
+	if (latest.verdict !== "pass") {
+		return `the latest verification round (#${latest.n}) is a FAIL${latest.reason ? `: ${latest.reason}` : ""}`;
+	}
+	const rejection = await attestationRejectionReason({
+		channelDir: input.channelDir,
+		taskId: input.taskId,
+		runId: latest.verifyRunId,
+		taskBody: input.taskBody,
+		trustedWorkingDirectory: input.findRunWorkingDirectory(latest.verifyRunId),
+		fallbackWorkingDirectory: input.fallbackWorkingDirectory,
+	});
+	return rejection ? `the PASS from round #${latest.n} no longer holds: ${rejection}` : undefined;
 }

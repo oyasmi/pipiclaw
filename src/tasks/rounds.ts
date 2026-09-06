@@ -94,8 +94,3 @@ export async function readCycleRounds(
 	const records = await readTaskLog(channelDir, taskId, { cycle, kinds: ["round"] });
 	return records.filter((record): record is TaskRoundRecord => record.kind === "round");
 }
-
-/** Whether this cycle already carries a real PASS — the only thing that may unlock `done`. */
-export async function hasPassingRound(channelDir: string, taskId: string, cycle: string | undefined): Promise<boolean> {
-	return (await readCycleRounds(channelDir, taskId, cycle)).some((record) => record.verdict === "pass");
-}

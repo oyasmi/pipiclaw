@@ -1,12 +1,11 @@
 import { renderCloseSummary, writeLastResult } from "../../tasks/cycle.js";
 import { applyTaskPlanPatch, normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../tasks/ledger.js";
 import { appendTaskLog } from "../../tasks/log.js";
-import { hasPassingRound } from "../../tasks/rounds.js";
 import { queueTaskNotice } from "../../tasks/steer.js";
 import { archiveTask, readStoredTask, writeStoredTask } from "../../tasks/store.js";
 import { describeTicket, resolveTicket } from "../../tasks/ticket.js";
 import { RecoverableToolError } from "../tool-details.js";
-import { buildTicketContext, cleanupTaskEvents, requiredField } from "./shared.js";
+import { assertVerificationHoldsForClose, buildTicketContext, cleanupTaskEvents, requiredField } from "./shared.js";
 import type { TaskManageResult, TaskManageToolOptions, TaskStepEndRequest } from "./types.js";
 
 /**
@@ -60,16 +59,11 @@ export async function endTaskStep(
 			);
 		}
 		// Verification is imported by the runtime when a purpose=verify run settles (D7), so what
-		// gates `done` here is whether a PASS actually landed in this cycle — not whether the model
-		// remembered to call an import tool.
-		if (
-			document.fields.verify === "required" &&
-			!(await hasPassingRound(options.channelDir, id, document.fields.cycle?.id))
-		) {
-			throw new RecoverableToolError(
-				`Task "${id}" requires independent verification; dispatch a purpose=verify sub-agent with taskId=${id} and let its PASS land before finishing.`,
-			);
-		}
+		// gates `done` here is the cycle's verification ledger — not whether the model remembered to
+		// call an import tool. The settled verdict is re-bound to the contract and the checkout as
+		// they are *now*: a PASS is evidence about the artifact the verifier saw, and the loop can
+		// edit both after it lands.
+		await assertVerificationHoldsForClose(options, document, id);
 		const cycle = document.fields.cycle;
 		document.body = writeLastResult(
 			document.body,

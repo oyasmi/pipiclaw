@@ -3,12 +3,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { formatLocalTime } from "../src/shared/local-time.js";
 import { createCycle } from "../src/tasks/cycle.js";
 import type { TaskFrontmatterV4 } from "../src/tasks/frontmatter.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
 import { recordVerificationRound } from "../src/tasks/rounds.js";
-import { readStoredTask } from "../src/tasks/store.js";
+import { readStoredTask, writeStoredTask } from "../src/tasks/store.js";
+import { writeVerificationAttestation } from "../src/tasks/verification.js";
 import { createTask } from "../src/tools/task-manage/create.js";
 import { closeTask, listTasks, updateTask } from "../src/tools/task-manage/lifecycle.js";
 import { endTaskStep } from "../src/tools/task-manage/step-end.js";
@@ -199,10 +201,21 @@ describe("task tool surface (spec 051, D4)", () => {
 			).rejects.toThrow(/unmet acceptance items/);
 		});
 
-		// D7: a cycle of FAIL rounds must not read as verified. The gate is a real PASS, not a count.
+		// D7: a cycle of FAIL rounds must not read as verified, and the PASS that unlocks `done`
+		// must still bind to the contract on disk at close time — not merely have happened once.
 		// Mutation check (2026-09-05): change the gate back to `cycle.rounds === 0` and this goes red.
 		it("refuses done on a verify-required task until a passing round has landed", async () => {
 			await writeTask("checked", { verify: "required" });
+			const attest = (runId: string) =>
+				writeVerificationAttestation(channelDir, {
+					runId,
+					taskId: "checked",
+					verdict: "pass",
+					checkedAt: formatLocalTime(),
+					evidence: "checked",
+					workspaceChanged: false,
+					verificationStrength: "enforced",
+				});
 			await expect(
 				endTaskStep(loop("checked"), { outcome: "done", note: "n", summary: "S", evidence: "E" }),
 			).rejects.toThrow(/requires independent verification/);
@@ -215,6 +228,7 @@ describe("task tool surface (spec 051, D4)", () => {
 				endTaskStep(loop("checked"), { outcome: "done", note: "n", summary: "S", evidence: "E" }),
 			).rejects.toThrow(/requires independent verification/);
 
+			await attest("run_v2");
 			await recordVerificationRound(
 				{ channelDir, taskId: "checked", verifyRunId: "run_v2", verdict: "pass", strength: "advisory" },
 				4,
@@ -222,6 +236,40 @@ describe("task tool surface (spec 051, D4)", () => {
 			await expect(
 				endTaskStep(loop("checked"), { outcome: "done", note: "n", summary: "S", evidence: "E" }),
 			).resolves.toMatchObject({ archived: true });
+		});
+
+		// Both close entry points share one gate, so both must refuse a PASS the loop invalidated
+		// after the fact. Mutation check: go back to "some round in this cycle passed" and both
+		// expectations below resolve instead of rejecting.
+		it("refuses both close entry points once the contract changes after the PASS", async () => {
+			for (const id of ["edited-step", "edited-close"]) {
+				await writeTask(id, { verify: "required" });
+				await writeVerificationAttestation(channelDir, {
+					runId: `run_${id}`,
+					taskId: id,
+					verdict: "pass",
+					checkedAt: formatLocalTime(),
+					evidence: "checked",
+					workspaceChanged: false,
+					verificationStrength: "enforced",
+				});
+				await recordVerificationRound(
+					{ channelDir, taskId: id, verifyRunId: `run_${id}`, verdict: "pass", strength: "enforced" },
+					4,
+				);
+				// The loop widens the goal after acceptance; the PASS no longer covers what ships.
+				const document = await readStoredTask(channelDir, id);
+				if (!document) throw new Error(`task ${id} missing`);
+				document.body = document.body.replace("Do the work.", "Do the work, and also deploy it.");
+				await writeStoredTask(document);
+			}
+
+			await expect(
+				endTaskStep(loop("edited-step"), { outcome: "done", note: "n", summary: "S", evidence: "E" }),
+			).rejects.toThrow(/task contract changed after verification/);
+			await expect(
+				closeTask(options, { id: "edited-close", outcome: "complete", summary: "S", evidence: "E" }),
+			).rejects.toThrow(/task contract changed after verification/);
 		});
 	});
 

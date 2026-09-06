@@ -418,7 +418,7 @@ Independent verification: required
 | `ticket` | `state: parked` 时必需，`open`/`done` 时必须不存在 |
 | `cycle` | 本周期的计数：步数、返工轮次、成本、票据过期次数 |
 | `budget` | 可选的每任务预算覆盖，见[预算](#预算与停止) |
-| `verify` | `required` 时 `done` 需要本周期一条真实 PASS |
+| `verify` | `required` 时关闭要求本周期最后一条 round 是 PASS，且其 attestation 在关闭时仍然成立 |
 
 **一条不变量**：`state: parked` ⟺ `ticket` 存在。读写两侧都强制，所以 v3 里那些"`enabled:false` 和 `stop` 对不上""`active` 藏着未来的 wake"的组合在 v4 里不可能被表达出来。
 
@@ -491,11 +491,13 @@ step 是频道队列里的普通条目：占用 turn slot、受 `/stop` 管辖�
 2. 用 `task_step_end` 停泊到那个 run 的票上。
 3. checker 只判断、不修复实现，结尾写 `VERDICT: PASS` / `FAIL` 并落 attestation。
 4. **结算时运行时自动记账**：校验 attestation（归属、契约 hash、artifact subject 新鲜度），把这一轮写进循环日志和 `cycle.rounds`，再兑现票。校验不通过的 PASS 会被记成 FAIL 并写明原因。
-5. `done` 要求**本周期存在一条真实 PASS**——不是"轮次大于零"，所以一串 FAIL 不会被当成通过。
+5. 关闭时（`task_step_end outcome=done` 和 `task_close outcome=complete` 两个入口共用一次校验）**重新核验**本周期**最后一条** round：它必须是 PASS，且它的 attestation 此刻仍绑定当前契约和当前产物。校验用的是同一个 `attestationRejectionReason`，不是第二套证明模型；verify run 的 checkout 取自持久化的 run 记录，记录不在就失败关闭。
+
+第 5 步的两条规则各自堵一个洞：**取最后一条**——后来的 FAIL 不会被更早的 PASS 覆盖；**重新核验**——结算时那次校验证明的是验收者当时看到的契约与产物，而这两样在 PASS 之后仍然可写，"先通过验收再改 Goal / 再改代码"必须被拒。
 
 `task_verify` 工具已退役：导入 attestation 是记账，不是判断。模型要做的判断没变——读 FAIL 的具体理由、决定哪几条真要返工。
 
-PASS 绑定 Goal/DoD/Manual/Verification 这段契约，不绑定 Plan 和 `## 上次结果`；改动契约或被验收产物后必须重新验收。
+PASS 绑定 Goal/DoD/Manual/Verification 这段契约，不绑定 Plan 和 `## 上次结果`；改动契约或被验收产物后必须重新验收——包括为了记录教训去改 Manual。
 
 ## 内建 task driver
 

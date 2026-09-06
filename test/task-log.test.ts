@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { appendTaskLog, readTaskLog, renderTaskLogLine, resetTaskLogAppenders, taskLogPath } from "../src/tasks/log.js";
-import { hasPassingRound, readCycleRounds, recordVerificationRound } from "../src/tasks/rounds.js";
+import { readCycleRounds, recordVerificationRound } from "../src/tasks/rounds.js";
 import { openCycle } from "../src/tasks/store.js";
 
 let dir: string;
@@ -95,21 +95,15 @@ describe("rework accounting (spec 051, D7)", () => {
 		expect(rounds.map((record) => record.verdict)).toEqual(["fail", "pass"]);
 	});
 
-	// The gate `done` actually consults: a cycle full of FAILs must not read as verified.
-	it("only reports a passing round when one really passed in this cycle", async () => {
+	// Rounds are scoped to a cycle: a verdict from an earlier cycle says nothing about this one.
+	it("reads back only the rounds recorded against the requested cycle", async () => {
 		const opened = await openCycle(dir, "T");
 		await recordVerificationRound(
-			{ channelDir: dir, taskId: "T", verifyRunId: "run_1", verdict: "fail", strength: "advisory" },
+			{ channelDir: dir, taskId: "T", verifyRunId: "run_1", verdict: "pass", strength: "advisory" },
 			4,
 		);
-		expect(await hasPassingRound(dir, "T", opened?.cycleId)).toBe(false);
-		await recordVerificationRound(
-			{ channelDir: dir, taskId: "T", verifyRunId: "run_2", verdict: "pass", strength: "advisory" },
-			4,
-		);
-		expect(await hasPassingRound(dir, "T", opened?.cycleId)).toBe(true);
-		// A PASS from an earlier cycle does not unlock this one.
-		expect(await hasPassingRound(dir, "T", "c-other")).toBe(false);
+		expect((await readCycleRounds(dir, "T", opened?.cycleId)).map((record) => record.verifyRunId)).toEqual(["run_1"]);
+		expect(await readCycleRounds(dir, "T", "c-other")).toEqual([]);
 	});
 
 	it("does nothing for a task with no open cycle", async () => {

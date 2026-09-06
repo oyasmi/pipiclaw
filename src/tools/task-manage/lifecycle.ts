@@ -7,11 +7,11 @@ import {
 	uncheckedTaskAcceptanceItems,
 } from "../../tasks/ledger.js";
 import { appendTaskLog } from "../../tasks/log.js";
-import { hasPassingRound } from "../../tasks/rounds.js";
 import { archiveTask, readStoredTask, writeStoredTask } from "../../tasks/store.js";
 import { describeTicket, resolveTicket } from "../../tasks/ticket.js";
 import { RecoverableToolError } from "../tool-details.js";
 import {
+	assertVerificationHoldsForClose,
 	buildTicketContext,
 	cleanupTaskEvents,
 	describeTaskState,
@@ -91,14 +91,7 @@ export async function closeTask(options: TaskManageToolOptions, request: TaskClo
 				`Task "${id}" still has unmet acceptance items: ${unchecked.slice(0, 3).join("; ")}. Check them off with edit once the evidence holds.`,
 			);
 		}
-		if (
-			document.fields.verify === "required" &&
-			!(await hasPassingRound(options.channelDir, id, document.fields.cycle?.id))
-		) {
-			throw new RecoverableToolError(
-				`Task "${id}" requires independent verification; dispatch a purpose=verify sub-agent with taskId=${id} and let its PASS land before completing.`,
-			);
-		}
+		await assertVerificationHoldsForClose(options, document, id);
 		const evidence = renderCloseEvidence(request);
 		document.body = writeLastResult(document.body, evidence);
 		await writeStoredTask(document);
