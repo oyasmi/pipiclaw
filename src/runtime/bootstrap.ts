@@ -1,6 +1,5 @@
 import { mkdir, writeFile } from "fs/promises";
 import { join, relative } from "path";
-import { channelEffectCount, noteTaskEffects, taskEffectCount } from "../agent/effect-ledger.js";
 import { channelRunningJobLines, configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { createRunner } from "../agent/runner-factory.js";
@@ -8,6 +7,7 @@ import { renderStatus } from "../agent/status-render.js";
 import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
 import type { AgentRunner } from "../agent/types.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
+import { type ChannelContext, muteChannelContext } from "../channel/channel-context.js";
 import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
 import { type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
 import { ensureChannelDir, getChannelDir } from "../channel/channel-paths.js";
@@ -41,8 +41,10 @@ import {
 	restoreAllSubAgentRuns,
 	stopSubAgentGarbageCollector,
 } from "../subagents/runs.js";
+import { buildTaskStepBrief } from "../tasks/brief.js";
 import { readActiveTasks } from "../tasks/ledger.js";
-import type { WakeTaskTransitionHooks } from "../tasks/store.js";
+import { consumeTaskNotice } from "../tasks/steer.js";
+import { readStoredTask } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
@@ -76,7 +78,8 @@ import { handleSkillsCommand as runSkillsCommand } from "./skill-commands.js";
 import { renderRunNotice, handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
 import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";
-import { migrateLegacyTaskScheduleEvents, migrateLegacyTaskState } from "./task-migration.js";
+import { migrateTasksToV4 } from "./task-migration.js";
+import type { WakeTaskTransitionHooks } from "./task-wake.js";
 import { claimVerifiedDelegationWake, claimVerifiedJobWake } from "./task-wake.js";
 
 export interface BootstrapOptions {
@@ -324,6 +327,48 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 		getExecutor,
 		getTaskDriver,
 	} = deps;
+
+	/**
+	 * Turn a `[TASK_DRIVER:<id>]` dispatch into a task loop step: bind the runner to the task
+	 * cycle's own session and replace the wake text with the step brief. Returns `undefined` for
+	 * every other event, which then follows the unchanged chat path.
+	 *
+	 * Binding failures fall back to the chat path rather than dropping the wake — a task that
+	 * cannot open its session should still be visible, not silently skipped.
+	 */
+	const prepareTaskStep = async (
+		event: ChannelEvent,
+		runner: AgentRunner,
+	): Promise<{ taskId: string; brief: string } | undefined> => {
+		const match = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text);
+		if (!match?.[1] || !runner.bindTaskSession) return undefined;
+		const taskId = match[1];
+		const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
+		try {
+			const document = await readStoredTask(channelDir, taskId);
+			if (!document) return undefined;
+			const brief = await buildTaskStepBrief({ channelDir, taskId });
+			if (!brief) return undefined;
+			await runner.bindTaskSession(taskId, document.fields.cycle?.id ?? "c-adhoc");
+			return { taskId, brief };
+		} catch (error) {
+			log.logWarning(`[${event.channelId}] Could not start task step for ${taskId}`, errorMessage(error));
+			return undefined;
+		}
+	};
+
+	/** Deliver whatever the step asked to say, then hand the runner back to the chat session. */
+	const finishTaskStep = async (channelId: string, taskId: string, ctx: ChannelContext): Promise<void> => {
+		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
+		try {
+			const notice = await consumeTaskNotice(channelDir, taskId);
+			if (notice) await ctx.respond(notice, true);
+		} catch (error) {
+			log.logWarning(`[${channelId}] Could not deliver task notice for ${taskId}`, errorMessage(error));
+		}
+		await getRunner(channelId).bindChatSession?.();
+	};
+
 	const handler: DingTalkHandler = {
 		isRunning(channelId: string): boolean {
 			return channelRunners.get(channelId)?.isBusy() ?? false;
@@ -673,7 +718,8 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			getRunner(event.channelId).beginTurn(event.text);
 		},
 
-		async handleEvent(event: ChannelEvent, bot: DingTalkBot, _isEvent?: boolean): Promise<void> {
+		async handleEvent(inboundEvent: ChannelEvent, bot: DingTalkBot, _isEvent?: boolean): Promise<void> {
+			let event = inboundEvent;
 			if (isShuttingDown()) {
 				log.logInfo(`[${event.channelId}] Ignoring event during shutdown`);
 				return;
@@ -708,7 +754,14 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					// wake (a delegation or job finishing) is the opposite — a human is actually waiting
 					// on it — so it renders progress the same way a normal message does (P0-2).
 					const backgroundOnly = Boolean(_isEvent) && event.presentation !== "awaited";
-					const ctx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
+					const baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
+					// Spec 051, D3: a task-driver dispatch runs as a *task step* — in the task cycle's
+					// own session, with a brief instead of the wake text, and silent unless the step
+					// asked for a notify. Everything below (busy state, /stop, delivery) is unchanged;
+					// only which session the turn is bound to, and what reaches the channel, differ.
+					const taskStep = await prepareTaskStep(event, runner);
+					const ctx = taskStep ? muteChannelContext(baseCtx) : baseCtx;
+					if (taskStep) event = { ...event, text: taskStep.brief };
 
 					if (builtInCommand) {
 						const commandStartedAt = Date.now();
@@ -771,10 +824,6 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					if (!backgroundOnly) {
 						ctx.primeCard(350);
 					}
-					// Effects are tallied per channel; the governor needs them per task, so one
-					// task-driver turn is measured as a delta (turns on a channel are serialized)
-					// and credited to the task it was dispatched for.
-					const effectsBefore = channelEffectCount(event.channelId);
 					// Both wake formats below carry an unauthenticated claim in plain text: anything
 					// that can put a message on this channel can *write* "[JOB:x] ... belongs to task
 					// y." or "[SUBAGENT:x] ... belongs to task y." — including another user, or an
@@ -789,7 +838,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						event.internalWake?.kind === "job"
 							? [event.text, event.internalWake.resourceId, event.internalWake.taskId]
 							: jobTextMatch;
-					let recoveredJobTaskId: string | undefined;
+
 					if (jobMatch) {
 						const [, jobId, jobTaskId] = jobMatch;
 						const claimed = await claimVerifiedJobWake(
@@ -799,7 +848,6 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 							options.wakeTransitionHooks?.job,
 						);
 						if (claimed) {
-							if (claimed.activated) recoveredJobTaskId = claimed.taskId;
 							await claimed.finish();
 							structuredWakeFinalized = true;
 							// Drop without a turn only when something else is still driving this task (a
@@ -827,7 +875,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						event.internalWake?.kind === "subagent"
 							? [event.text, event.internalWake.resourceId, event.internalWake.taskId]
 							: delegationTextMatch;
-					let recoveredDelegationTaskId: string | undefined;
+
 					if (delegationMatch) {
 						const [, runId, delegationTaskId] = delegationMatch;
 						const claimed = await claimVerifiedDelegationWake(
@@ -836,7 +884,6 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 							options.wakeTransitionHooks?.subagent,
 						);
 						if (claimed) {
-							if (claimed.activated) recoveredDelegationTaskId = claimed.taskId;
 							await claimed.finish();
 							structuredWakeFinalized = true;
 							// See the JOB branch above (P3-1): only skip the turn when the task is still
@@ -854,14 +901,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						}
 					}
 					const result = await runner.run(ctx, store);
-					const taskDriverMatch = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text);
-					const taskAttemptId = taskDriverMatch?.[1] ?? recoveredJobTaskId ?? recoveredDelegationTaskId;
-					// The three sources above are mutually exclusive (each regex is anchored at the
-					// start of a distinct prefix), so crediting effects to whichever one matched is
-					// equivalent to checking all three separately.
-					if (taskAttemptId) {
-						noteTaskEffects(event.channelId, taskAttemptId, channelEffectCount(event.channelId) - effectsBefore);
-					}
+					if (taskStep) await finishTaskStep(event.channelId, taskStep.taskId, baseCtx);
 
 					if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {
 						log.logInfo(`[${event.channelId}] Stopped`);
@@ -875,8 +915,8 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					if (structuredWakeFinalized) await getDurableDispatch()?.markCompleted(event.dispatchId);
 					else await getDurableDispatch()?.markRetryable(event.dispatchId);
 					runner.endTurn();
-					// A finished turn may have written task files (progress/complete/set); rescan
-					// now so a continuing task chain advances immediately instead of after a full sleep.
+					// A finished turn may have written task files; rescan now so `outcome: continue`
+					// queues the next step immediately instead of waiting out the current sleep.
 					getTaskDriver().nudge?.();
 				}
 			})();
@@ -1131,7 +1171,6 @@ export async function createRuntimeContext(
 				isChannelActive: (channelId) => channelRunners.get(channelId)?.isBusy() ?? false,
 				dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 				onDispatch: options.onTaskDriverDispatch,
-				getEffectCount: taskEffectCount,
 				notify: (receipt) => bot.sendPlain(receipt.channelId, receipt.text),
 				getSettings: () => {
 					runtimeSettingsManager.reload();
@@ -1240,15 +1279,9 @@ export async function createRuntimeContext(
 	}
 
 	if (startServices) {
-		// Close the 027/038 migration windows: fold any residual legacy `.schedule` events into task
-		// frontmatter, and upgrade any task still on the legacy control/status vocabulary, before the
-		// driver relies on the current contract alone. Version-gated, not marker-gated (spec 043,
-		// phase 5): each file is judged by what it actually contains, so this is safe and cheap to run
-		// on every startup — a hand-edited or freshly-restored legacy file self-heals on the next boot.
-		void Promise.all([
-			migrateLegacyTaskScheduleEvents(options.paths.workspaceDir),
-			migrateLegacyTaskState(options.paths.workspaceDir),
-		]);
+		// Upgrade every v3 task file to the v4 contract before the driver relies on it (spec 051, D14). Marker-gated: the pass rewrites
+		// bodies and imports history into the loop log, so it must run exactly once per install.
+		void migrateTasksToV4(options.paths.workspaceDir, join(options.paths.appHomeDir, "state"));
 		eventsWatcher.start();
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();

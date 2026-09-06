@@ -1179,18 +1179,6 @@ export function configureJobRuntime(config: JobRuntimeConfig): void {
 }
 
 /**
- * Which of this channel's tasks a running background job will wake, without needing an `Executor`.
- *
- * Read-only view for `/tasks doctor`: a parked task (`waiting`, no `wake`) is healthy exactly when
- * something is going to call it. Managers are created lazily by the tool layer *and* eagerly at
- * startup by `restoreChannelJobs`, so a channel with live jobs always has one; a channel with no
- * manager simply has no jobs, and the empty set is the right answer.
- */
-export function channelJobTaskIds(channelId: string): Set<string> {
-	return managers.get(channelId)?.runningTaskIds() ?? new Set<string>();
-}
-
-/**
  * Human-readable lines naming this channel's currently running background jobs, for the `/project
  * set|reset` blocker check (spec 043, D4.3) — mirrors `channelJobTaskIds`'s "no manager means no
  * jobs" reasoning, so it needs no `Executor` either.

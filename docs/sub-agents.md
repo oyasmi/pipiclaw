@@ -392,9 +392,9 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 - 子代理没有 `subagent` 工具，**不能继续创建下一级代理**——但这只约束内置子代理。外部 agent 本身是完整的 coding agent，它能不能 spawn 自己的子代理，pipiclaw 拦不住，见下文"明确不可控的部分"。
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。**外部角色完全没有这层工具白名单**——它能触及其自身权限所及的任何地方，`mutates`/`workingDirectory` 都不是隔离机制，只是审计与并发控制信息。
-- 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，`task_verify` / `task_close` 在同一目录复算 artifact subject。
+- 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，运行时在结算时于同一目录复算 artifact subject。
 - `purpose: verify` + `taskId`：进入独立验收协议。内置验证器结构性移除了 write/edit 工具，但默认工具集仍含 `bash`——它同样能写文件，所以 `verificationStrength` 只在角色声明 `mutates: read` 且 `tools` 里也不含 `bash` 时才是 `enforced`，否则如实标成 `advisory`；外部验证器永远做不到结构性移除，恒为 `advisory`。所有写能力的 verifier 都先持有目标工作区独占 lease。新 attestation 记录验证开始时的 `baseCommit`、既有 untracked 路径和范围外的 ignored 路径：之后正常提交已验收内容不会改变 subject；新建文件只有落在 checkout 根目录下明确的临时产物范围（如 `.run/`、`coverage/`、`build/`、`dist/`、缓存或测试报告目录；Cypress 仅 `cypress/screenshots/`、`cypress/videos/`）时才不计入 subject，开始前已存在的 untracked 文件、ignored 非临时产品文件始终受保护，其他新源文件仍会使验收失败。两者优先靠事后 workspace subject 比对判定是否被改动；没有可比较的 subject/status 前后证据时**直接判 FAIL**，不会把"测不出来"当成"没改动"。verifier 还必须在最后一行明确 `VERDICT: PASS|FAIL`。`advisory` 结论仍会被记录、展示，并要求主代理按风险抽查，不是自动失败。
-- verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`，主代理用返回的 runId 调 `task_verify` 导入；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
+- verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`；run 结算时运行时自动校验并把这一轮写进任务的返工账本（`tasks/<id>.jsonl`），主代理不需要导入。普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 - **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
 
 > `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合派发、停泊与 `complete`——见 [events-and-tasks.md](./events-and-tasks.md#verification)。

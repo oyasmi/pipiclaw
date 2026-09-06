@@ -14,7 +14,6 @@ import {
 	toolResultDetails,
 } from "../tools/tool-details.js";
 import type { UsageLedger } from "../usage/ledger.js";
-import { isEffectfulTool, noteChannelEffect } from "./effect-ledger.js";
 import { extractToolResultText, formatProgressEntry } from "./progress-formatter.js";
 import {
 	extractCustomCommandResultText,
@@ -173,10 +172,10 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 			log.logToolSuccess(logCtx, event.toolName, durationMs, resultStr);
 		}
 
-		// A tool that actually changed something outside the task ledger is the evidence the task
-		// governor judges progress by (spec 031, D7).
-		if (!treatAsError && !rejected && isEffectfulTool(event.toolName, details)) {
-			noteChannelEffect(logCtx.channelId);
+		// The task loop's idle-step detector reads this: a step that completed no tool other than
+		// its own `task_step_end` did nothing (spec 051, D6).
+		if (!treatAsError && !rejected && event.toolName !== "task_step_end") {
+			runState.toolsUsed.push(event.toolName);
 		}
 
 		if (treatAsError && showProgress) {
@@ -293,9 +292,6 @@ export async function handleSessionEvent(event: unknown, context: SessionEventHa
 				return;
 			}
 
-			// A real answer to the user is a visible result even when no file changed (D7);
-			// a [SILENT] turn above deliberately does not reach here.
-			noteChannelEffect(logCtx.channelId);
 			runState.finalOutcome = { kind: "final", text: finalText };
 			memoryLifecycle.noteCompletedAssistantTurn();
 			log.logResponse(logCtx, finalText);

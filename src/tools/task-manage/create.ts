@@ -32,7 +32,7 @@ export async function createTask(
 		action: "create",
 		id,
 		path: taskPath,
-		status: fields.status,
-		notice: `已创建任务 \`${id}\`（status: ${fields.status}${fields.wake ? `, 首次唤醒: ${fields.wake}` : ""}）。`,
+		state: fields.state,
+		notice: `已创建任务 \`${id}\`（state: ${fields.state}${fields.schedule ? `, schedule: ${fields.schedule}` : ""}）。`,
 	};
 }

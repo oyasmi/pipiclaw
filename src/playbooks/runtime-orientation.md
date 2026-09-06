@@ -25,7 +25,7 @@ AI Agent 委派（内置 subagent 与外部 claude-code / codex-cli / exec）由
 - `<task_agenda>`：在办任务的 id、status、enabled、wake、nextAction、Plan 进度和最新一条记录。
 - `<memory_bootstrap>`：**只在会话首轮（含 `/new` 之后、上下文压缩之后）出现**，往后的回合都没有。三段：workspace `MEMORY.md` 全文、channel 记忆索引、当天日志尾部。中途怀疑"这事以前是不是记过"，用 `memory_search` 查，不要等下一次首轮。
 
-这些都是摘要。需要 Goal/DoD/Manual/Current Cycle 全文，或某条索引里 `(+)` 标记的记忆正文时，才去打开对应文件。
+这些都是摘要。需要某条索引里 `(+)` 标记的记忆正文，或某个任务更早的循环日志时，才去打开对应文件（任务循环的每一步已经拿到完整契约）。
 
 ## 文件地图与入口
 
@@ -53,7 +53,7 @@ Workspace 根目录——**靠专用工具或只读注入访问**，项目边界
 - `memory/<name>.md`：一条记忆一个文件（frontmatter：`name`/`description`/`type`/`source`/`created`/`updated`/`expires`），可以 `read` 看正文，但**只用 `memory_save`/`memory_forget` 写**——`MEMORY.md` 是从 `memory/` 生成的索引，文件工具直接改会被下一次写入覆盖。
 - `MEMORY.md`：生成物，频道记忆索引，人也能看。
 - `journal/YYYY-MM-DD.md`：按天追加的工作记录（发生了什么、定了什么、卡在哪），只由后台反思 pass 写；今天的尾部已经在 `<memory_bootstrap>` 里，更早的日期用 `memory_search` 或 `read` 查。
-- `tasks/`：长程任务台账。状态和生命周期用 `task_create`/`task_update`/`task_close`/`task_verify`，正文（Goal/DoD/Manual/Verification）大改用 `edit`——不带 `note` 的 `task_update` 只重写 frontmatter，原样保留正文。
+- `tasks/`：长程任务。`<id>.md` 是契约（Goal/DoD/Manual/Verification/Plan），`<id>.jsonl` 是循环日志。建档用 `task_create`，改元数据和 Plan 用 `task_update`，查历史用 `task_log`；循环里推进用 `task_step_end`。正文大改用 `edit`——`task_update` 不动正文。
 - `log.jsonl` / `context.jsonl`：冷存储，用 `session_search` 检索。
 
 ## 读取顺序

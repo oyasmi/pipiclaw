@@ -66,9 +66,9 @@
 
 当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进任务正文或用 `wake` 错开；每个任务只按自己的 Goal、DoD、Manual、Verification 和 control 收口。旧任务里残留的 retired control keys 会被读取层忽略，并由 `/tasks doctor` 报告。
 
-TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的 `wake`、deadline、退避到期和回合结束 nudge 决定下一次扫描；单次最多派发 4 个 channel，同一 channel 每 tick 至多一个任务。连续 3 次 active wake 都没有可见进展时，治理器写 `enabled: false`、`status: active` 和 `control.stop.by: "governor"`，再直接通知用户。
+TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的票据到期时间、兜底时限和步骤结束 nudge 决定下一次扫描；单次最多派发 4 个 channel，同一 channel 每 tick 至多一个任务。`outcome: continue` 没有退避——下一步在同一次 nudge 里就排上。任务超出本周期预算（步数/墙钟/成本/返工轮次），或连续两步没有任何工具调用时，运行时写 `paused{by:"runtime"}` 并直接通知用户，不再花一个模型回合去诊断。
 
-周期任务只靠 task frontmatter 的 `schedule`。complete 后文件留在原地并进入 `sleeping`，到点后 runtime 确定性打开新周期，不需要 `.schedule` event，也没有单独的开周期工具动作。
+周期任务只靠 task frontmatter 的 `schedule`。本周期 `done` 后文件留在原地，停泊到一张 `schedule` 票上；到点后 runtime 确定性打开新周期（重置计数、复位 Plan 与 DoD checkbox），不需要 `.schedule` event，也没有单独的开周期工具动作。
 
 ## 智能体委派与验收
 
@@ -88,7 +88,7 @@ TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据�
 - 外部 verifier 只能依赖目标 CLI sandbox 和前后工作区 subject 哈希，验收强度为 `advisory`；`exec` harness 仍不能承担验收，因为它没有协议终态。
 - 新 subject 以验证开始时的 `baseCommit` 为基准，并保存当时已有的 untracked 路径以及范围外的 ignored 路径。正常提交已验收内容不会使它失效；新出现的 untracked 文件仅在 checkout 根目录下明确的临时产物目录/文件范围内排除（Cypress 仅 `cypress/screenshots/`、`cypress/videos/`），其他新源文件、既有 untracked 产品文件和 ignored 非临时文件的变化仍会使验收失败。旧的无 `baseCommit` attestation 继续使用 HEAD-sensitive 兼容算法。本节覆盖历史 `docs/specs/040` 中已过时的 verify 准入描述。
 
-`task_verify` 导入 attestation；`task_close`（outcome=complete）会重新校验任务契约 hash 和 Git artifact subject，防止验收之后需求或产物发生变化。
+验收结论由运行时在 `purpose=verify` run 结算时自动导入（校验归属、契约 hash 和 Git artifact subject 后写进任务的返工账本）；`done` / `task_close outcome=complete` 要求本周期存在一条真实 PASS，防止验收之后需求或产物发生变化。
 
 ## 日志与账本
 

@@ -41,7 +41,7 @@ export const capabilityCases: EvalCase[] = [
 					).length >= 10,
 				"all ten wakes must re-read the durable task; passive prompt carry-over is not recovery",
 			),
-			taskFrontmatter("release-still-open", "resume-ten", (frontmatter) => frontmatter.archiveOutcome === undefined),
+			taskFrontmatter("release-still-open", "resume-ten", (frontmatter) => frontmatter.fields.outcome === undefined),
 			{
 				kind: "model",
 				graderId: "ten-wake-loyalty",
@@ -72,7 +72,6 @@ export const capabilityCases: EvalCase[] = [
 		setup: (ctx) =>
 			writeTask(ctx, "crash-task", {
 				body: "# Task\n\n## Goal\nWrite crash-checkpoint.txt containing DURABLE-CHECKPOINT, then record progress but do not close the task.\n\n## DoD\n- [ ] User supplies CLOSE-CRASH\n",
-				wake: "2020-01-01T00:00:00.000Z",
 			}),
 		script: [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
@@ -245,12 +244,8 @@ export const capabilityCases: EvalCase[] = [
 			taskFrontmatter(
 				"not-misfired-by-governor",
 				"long-run",
-				(frontmatter) =>
-					!(
-						frontmatter.status === "active" &&
-						frontmatter.enabled === false &&
-						frontmatter.control?.stop?.by === "governor"
-					),
+				// Spec 051, D6: the governor is gone; a runtime stop now shows up as `paused.by`.
+				(frontmatter) => frontmatter.fields.paused?.by !== "runtime",
 			),
 			taskFrontmatter(
 				"detour-recorded",

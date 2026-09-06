@@ -3,11 +3,11 @@
 这份文档讲 Pipiclaw 的两层长程能力，它们合起来让 Pipiclaw 从"被动应答的聊天机器人"变成"能被时间和台账驱动、带着进度本干活"的助手：
 
 - **定时事件（events）** 回答**"什么时候唤醒 agent"**——一个无状态的时间原语。
-- **任务台账（tasks）** 回答**"有哪些在途工作、进展到哪、验收标准是什么"**——事件缺失的那块持久记忆。
+- **长程任务（tasks）** 回答**"有哪些在途工作、进展到哪、在等什么、验收标准是什么"**——事件缺失的那块持久记忆。
 
-两者由 runtime 协调，但各自独立：**内建 task driver** 依据任务的 `wake` 时间恢复工作、并按任务的 `schedule` cron 开启新周期；事件 watcher 负责与任务无关的提醒和外部传感器。任务不需要配套事件才能继续。
+两者由 runtime 协调，但各自独立：**内建 task driver** 按任务的**等待票**推进工作并开启新周期；事件 watcher 负责与任务无关的提醒和外部传感器。任务不需要配套事件才能继续。
 
-> 一句话记忆：**event 无记忆，只管定时；task 会积累手艺、自带节奏；driver 按 wake / schedule 驱动任务。**
+> 一句话记忆：**event 无记忆，只管定时；task 带着契约、循环日志和一张可兑现的等待票干活。**
 
 如果你还没完成钉钉和模型配置，请先看 [README](../README.md) 和 [configuration.md](./configuration.md)。子代理（sub-agents）是另一条正交的**委派**能力，见 [sub-agents.md](./sub-agents.md)。
 
@@ -20,8 +20,9 @@
 | 用 `/events`、`/tasks` 查看和管理已有的事件与任务 | [`/events` 命令](#events-命令人用只读--删除)、[任务可见性与命令](#可见性与命令) |
 | 手写一个事件 JSON，或看懂 agent 建的那个 | [支持的事件类型](#支持的事件类型supported-event-types)、[通用字段](#通用字段common-fields) |
 | 看懂任务文件的格式与 frontmatter 契约 | [任务模型](#任务模型)、[Frontmatter 契约](#frontmatter-契约) |
-| 排查“没有按时触发 / 任务没被推进” | [调度历史记录](#调度历史记录event-history)、[异常恢复](#异常恢复)、[部署排障](./deployment-and-operations.md#常见运维问题common-operational-issues) |
-| 理解 driver 的调度与治理机制 | [内建 task driver](#内建-task-driver-与-governor)、[Control 与恢复事实](#control-与恢复事实) |
+| 搞清楚一个任务在等什么、为什么没动 | [等待票](#等待票ticket)、[异常恢复](#异常恢复) |
+| 排查"没有按时触发 / 任务没被推进" | [调度历史记录](#调度历史记录event-history)、[异常恢复](#异常恢复)、[部署排障](./deployment-and-operations.md#常见运维问题common-operational-issues) |
+| 理解 driver 与预算 | [内建 task driver](#内建-task-driver)、[预算与停止](#预算与停止) |
 
 agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook 里，见 [runtime-playbooks.md](./runtime-playbooks.md)。
 
@@ -29,15 +30,15 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 
 | 层 | 载体 | 持有什么 | 谁维护 |
 |----|------|----------|--------|
-| **tasks** | `workspace/<channelId>/tasks/*.md` | 意图、DoD、手册、状态、周期日志、下一次 `wake`、周期 `schedule` | 主 agent 经 `task_create`/`task_update`/`task_close`/`task_verify` 维护 |
-| **task driver** | runtime 确定性扫描 | 找出已到点 / 可继续 / 该开新周期的任务并唤醒对应 channel | Pipiclaw runtime，扫描本身零 token |
+| **tasks** | `workspace/<channelId>/tasks/<id>.md` + `<id>.jsonl` | 契约（意图、DoD、手册、Plan）、循环日志、等待票、本周期用量 | 主 agent 经 `task_create`/`task_update`/`task_close` 建档，任务循环经 `task_step_end` 推进 |
+| **task driver** | runtime 确定性扫描 | 兑现到期的票、兜底过期的票、停下超预算的任务、排下一步 | Pipiclaw runtime，扫描本身零 token |
 | **events** | `workspace/events/*.json` | 非 task 的独立提醒、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`）维护 |
 
 三层文件都放在 app home 下的 `workspace/` 中。默认路径 `~/.pipiclaw/workspace/`；若设置了 `PIPICLAW_HOME`，则为 `${PIPICLAW_HOME}/workspace/`。
 
 **为什么需要两层。** 只有事件时，每次唤醒都是无状态的：agent 醒来只知道事件文本那一句话，不知道有哪些在途工作、上次做到哪、验收标准是什么——触发一次就归零。任务台账补上这块记忆，让工作变成：
 
-> 醒来 → 查看在途工作 → 推进最需要推进的一项 → 记下状态和下次检查点 → 睡去。
+> 醒来 → 读契约和最近几条日志 → 推进一个具体步骤 → 记下证据，并说清楚接下来在等什么 → 睡去。
 
 下面先讲底层的**事件**，再讲其上的**任务台账**，最后用一个完整周期演示两者如何协作。
 
@@ -337,11 +338,19 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 ---
 
-# 第二部分：任务台账（Tasks）
+# 第二部分：长程任务（Tasks）
 
-事件解决“什么时候唤醒”，任务台账保存“为什么做、做到哪、下一步是什么”。Task 创建即持续委托：只要任务仍在活动目录且 enabled=true，runtime 会按任务状态和 wake 继续推进。外部动作不产生额外的人工作业流；模型必须遵守任务 Goal、能力配置、真实状态查询和幂等约束。
+事件解决"什么时候唤醒"，任务解决"为什么做、做到哪、下一步是什么"。Task 创建即持续委托：只要任务在活动目录且没有被暂停，runtime 会按它的等待票继续推进。外部动作不产生额外的人工作业流；模型必须遵守任务 Goal、能力配置、真实状态查询和幂等约束。
 
-本节以 Task v3 为准。reader 只认当前契约——`control.version` 必须是 3，其他值一律 `controlReadable: false`（fail-open，交给 `/tasks doctor` 引导修复）。旧格式的兼容解析只存在于启动迁移里：daemon 每次启动都会扫描活动目录，把还停在旧 `control.version` 或旧 `status` 词表上的任务文件原地升级，不依赖一次性标记文件——所以即使是手改回旧格式的文件，也会在下一次启动时自愈。
+本节以 **Task v4（spec 051）** 为准。v4 把任务拆成三样东西，各自只做一件事：
+
+| 物件 | 路径 | 是什么 |
+|---|---|---|
+| **契约** | `tasks/<id>.md` | 目标、验收标准、手册、计划。人可直接编辑，每一步完整注入；4 KB 预算约束的是运行时写的 `## 上次结果`，不会删你写的段落 |
+| **循环日志** | `tasks/<id>.jsonl` | append-only：每一步做了什么、每一轮验收结论、每次票据过期、每个周期的收尾 |
+| **等待票** | 契约 frontmatter 的 `ticket` | "什么会叫醒我，最迟什么时候"——由 runtime 校验、由 runtime 兑现 |
+
+v3 的 `status`/`enabled`/`control`/`## Current Cycle`/`## History` 全部退役。升级时 daemon 会做一次确定性迁移（原件备份到 `tasks/.v3/`，历史导入循环日志），详见[从 v3 迁移](#从-v3-迁移)。
 
 ## 任务模型
 
@@ -349,23 +358,29 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 ```text
 workspace/<channelId>/tasks/
-├── weekly-report.md
-├── fix-ci.md
+├── weekly-report.md          契约
+├── weekly-report.jsonl       循环日志
+├── .sessions/               每个 cycle 一份任务会话
+├── .steer/                  待处理的用户指示与待发送的通知
+├── .verifications/          验收 attestation
+├── .v3/                     迁移前的原件（不会被删）
 └── archive/
-    └── released-note.md
+    ├── released-note.md
+    └── released-note.jsonl
 ```
 
-活动目录只包含 `active`、`waiting`、`sleeping` 三种 live status。一次性任务 complete/cancel 后移入 `archive/`，归档文件以 `outcome: completed|cancelled` 和 `closedAt` 记录结果，不再进入 driver 扫描。
+关闭的任务连同它的日志一起移入 `archive/`，不再进入 driver 扫描。
 
 ### 文件格式
 
 ```markdown
 ---
-status: waiting
-enabled: true
-wake: 2026-08-04T14:00:00+08:00
+state: parked
 schedule: 0 9 * * 1
-control: {"version":3,"waitingFor":"time","verification":{"required":true,"status":"pending"},"nextAction":"检查草稿反馈"}
+ticket: {"kind":"run","id":"run_zpy4mq","by":"2026-09-06T12:40:00+08:00"}
+cycle: {"id":"c-2026-09-05","startedAt":"2026-09-05T09:00:00+08:00","steps":7,"rounds":2,"usd":3.21,"usdEstimated":false,"expired":0}
+budget: {"rounds":3}
+verify: required
 ---
 
 # 周报编写与发布
@@ -376,178 +391,173 @@ control: {"version":3,"waitingFor":"time","verification":{"required":true,"statu
 ## DoD
 - [ ] 内容覆盖目标时间段的全部工作
 - [ ] 数据已由可复现命令核对
-- [ ] 草稿、目标频道和发布参数已准备
 
 ## Manual
 1. 收集素材并起草。
-2. 将需要的反馈写入任务等待条件。
-3. 发布后查询真实结果，并把稳定结果写入 Current Cycle。
+2. 发布前查询目标频道真实状态，使用稳定的幂等 id。
 
 ## Verification
 Independent verification: required
 
-## Current Cycle
-- 等待反馈；next step: 收到反馈后核对草稿
+## Plan
+- [x] P1 收集素材
+- [ ] P2 起草并自查
 
-## History
+## 上次结果
+- c-2026-08-29 完成：已发布，Sent id=68
+- 用量：9 步 / 1 轮 / $2.10
 ```
 
 ### Frontmatter 契约
 
-- `status` 必须是 `active`、`waiting` 或 `sleeping`；reader 对其他值一律 fail-open 为 `active`，不再像旧版本那样把 `blocked`/`awaiting-user`/`done` 等 v1 词汇当场翻译成对应状态——那套翻译表只存在于启动迁移里，负责把文件原地升级，读路径本身不再猜测。
-- `enabled` 缺省按 `true` 读取。false 时 driver 永不 dispatch；`control.stop` 保存 actor、reason、at。
-- `wake` 是本地时间或带偏移时间。active 写入 future wake 会规范成 waiting + `waitingFor: time`；waiting 无 wake 是 signal parked，driver 不轮询。
-- `schedule` 是按主机时区解释的五字段 cron，存在时任务是 recurring；sleeping 必须同时有合法 schedule 和作为下一 occurrence 的 wake。
-- `control` 是单行 JSON，`version` 必须是 `3`；其余字段只有 `deadline`、`nextAction`、`waitingFor`、`verification`、`cycleId`、`stop` 六个。
-- 归档 frontmatter 只需 `outcome: completed|cancelled` 与 `closedAt`；活动任务不写 archive outcome。
+| 字段 | 含义 |
+|---|---|
+| `state` | `open`（现在有活可干）/ `parked`（在等一张票）/ `done`（已关闭，仅归档文件） |
+| `paused` | `{by,reason,at}`。**出现即暂停**，与 `state` 正交；`by` 为 `user` 或 `runtime` |
+| `schedule` | 五字段 cron（主机时区），存在即周期任务，最小间隔 30 分钟 |
+| `ticket` | `state: parked` 时必需，`open`/`done` 时必须不存在 |
+| `cycle` | 本周期的计数：步数、返工轮次、成本、票据过期次数 |
+| `budget` | 可选的每任务预算覆盖，见[预算](#预算与停止) |
+| `verify` | `required` 时 `done` 需要本周期一条真实 PASS |
 
-### Control 与恢复事实
+**一条不变量**：`state: parked` ⟺ `ticket` 存在。读写两侧都强制，所以 v3 里那些"`enabled:false` 和 `stop` 对不上""`active` 藏着未来的 wake"的组合在 v4 里不可能被表达出来。
 
-v3 的 `control` 只剩 11 个叶子字段，且都是恢复要用的事实，没有旁路账目：
+### 等待票（Ticket）
 
-- `deadline` 是唯一的调度/治理硬约束，用户真实意图，不需要模型估算。
-- `nextAction` 是下一条可执行动作，也是等待时"等什么、条件、下一步"的记录位置——没有单独的 blockedReason 字段。
-- `verification` 是独立事实：`required`、`pending`/`passed`/`failed`、`runId`。`status` 只是展示缓存，从不作为门禁；真正的权威永远是按 `runId` 重新读盘的 attestation 文件（校验 `taskId`、verdict、contract body hash 新鲜度、artifact subject hash 新鲜度）。
-- `waitingFor` 只是记录性展示——`time`、`user`、`job` 或 `external-signal`，不改变生命周期，也不决定能否恢复（见下方[Waiting 与真实恢复源](#waiting-与真实恢复源)）。
-- `cycleId` 标记当前或最近一次闭环的 recurring occurrence。
-- `stop` 只在 disabled 时存在；enabled=true 时写路径会清除它。
+一次停泊必须说清楚**什么会叫醒它**，而且这句话要能被运行时当场验证：
 
-没有按任务计数的 attempt 预算、usage 账目或 generation 守卫——那类"模型自己也估不准的数字"已经从 control 里拿掉了。真实的成本可见性来自 `UsageLedger`（按 `taskId` 聚合，见 `/usage`），失控兜底来自 deadline 加上 driver 进程内存里的一次性唤醒计数与连续无 effect 唤醒计数，两者都不落盘、不进 control、模型也看不到。
-
-## 状态与生命周期
-
-| 动作 | 前置 | 结果 |
+| kind | 载荷 | 谁兑现 |
 |---|---|---|
-| create one-shot | none | active |
-| create recurring | none | sleeping + next wake |
-| progress | active/waiting | active 或 waiting |
-| verify | active/waiting | active，写入 verdict |
-| complete one-shot | active | archive/completed |
-| complete recurring | active | sleeping + next occurrence |
-| skip | active/waiting，recurring | sleeping + next occurrence |
-| cancel | active/waiting/sleeping | archive/cancelled |
-| pause | 任一 live status | status 不变，enabled=false |
-| resume | 任一 disabled live status | status/wake/schedule 不变，enabled=true |
-| run | active/waiting | active + immediate dispatch |
-| run | sleeping | 提前打开新 cycle + dispatch |
-| wait-due | waiting + due wake | 原子改 active、清 wake，再 dispatch |
-| cycle-due | sleeping + due wake | 原子打开 cycle、改 active，再 dispatch |
-| governor-stop | 任一 live status | status 不变，enabled=false |
+| `time` | `at` | driver 到点 |
+| `schedule` | `at`（本次 occurrence） | driver 到点，直接开下一个 cycle |
+| `run` | `id` | 该委派结算时 |
+| `job` | `id` | 该后台作业结算时 |
+| `ask` | `asked` | 用户 `/tasks reply` |
+| `signal` | `event` | 该 task-owned 周期事件的 preAction 通过时 |
 
-没有独立的 `request-verification` 动作：验收就是一次普通委派，见下方[Verification](#verification)。`verify` 不再要求任务必须处于 `waiting`——它认的是 attestation 文件里的 `taskId`，不是任务当时的生命周期状态，所以无论调用发生在完成唤醒之前还是之后都合法。
+写入时校验：run/job 必须存在、**还没结束**、而且 `taskId` 指向本任务；signal 的事件必须存在、是 periodic、属于本频道、名字指向本任务。不满足就直接拒绝，并告诉模型该改用什么。
 
-一次性任务不使用 sleeping。complete 原则上从 active 发生；等待中的任务先由真实恢复源转 active。cancel 可以从任一 live status 归档。
+**每张票都带 `by`（兜底时限），由运行时确定性推导，模型不写也改不了**：run 用它自己的墙钟 deadline + 10 分钟，job/ask 用 24 小时，schedule 用"错过一次 occurrence"，signal 用"错过两次"。
 
-## 周期任务
+到点还没兑现时：
 
-创建 recurring task 只写 sleeping 和下一 occurrence，不派发首轮工作。首轮和之后每一轮都调用同一个 runtime `openRecurringTaskCycle`：
+1. 第一次——运行时把任务改回 `open`，并在下一步的 brief 开头说明票过期了，让它先确认真实状态。
+2. 同一 cycle 第二次——任务保持 parked、置 `paused{by:"runtime"}`，并给用户一条零 LLM 的确定性回执。
 
-1. 确认 sleeping、enabled、合法 schedule 和 due wake。
-2. cycleId 绑定 schedule occurrence，例如 `cycle-2026-08-04`。
-3. 首轮只初始化 Current Cycle，不把创建占位写进 History；后续轮次才折叠上一轮 Current Cycle。
-4. 重置本周期 verification、DoD/Plan checkbox 和 stop。
-5. 清 wake，写 active，再派发普通 `[TASK_DRIVER]`。
+> **这就是 v4 存在的主要理由。** v3 允许一个任务停在 `waiting` 上而没有任何东西能叫醒它；两个真实任务因此分别静默了 9 天和 13 天，运行时每天往日志里写上百条无人查看的警告。v4 里这个状态无法被写出来，而且**任何停泊要么被兑现、要么在兜底时限内告诉用户**。
 
-complete 会写 summary/evidence、清理 task-owned events、计算下一 occurrence 并回到 sleeping。skip 只记录原因，不伪造 DoD 或 completion evidence。active/waiting 未闭环时，driver 不并发开启新 cycle；doctor 会报告错过 occurrence。
+## 循环：cycle 与 step
 
-## Waiting 与真实恢复源
+- **cycle** 是上下文的单位。一次性任务只有一个；周期任务每个 occurrence 一个。开 cycle 会重置计数，并对周期任务复位 Plan 和 DoD checkbox。
+- **step** 是 cycle 里的一次模型回合，跑在**任务自己的会话**（`tasks/.sessions/<id>-<cycle>.jsonl`）里，不进频道聊天会话。这样聊天记录不会被任务撑大，任务也不必每次重读整份历史。
+- **round** 是一次"委派 → 验收"往返，由运行时在 `purpose=verify` run 结算时自动记账。
 
-`waiting + wake` 是定时等待，`waiting + no wake` 是信号等待。driver 只处理前者到点恢复，绝不周期性唤醒后者。
+每一步必须以 `task_step_end` 收尾，四选一：
 
-恢复源只有真实信号，`waitingFor` 写了什么不参与判断：
+| outcome | 含义 | 运行时动作 |
+|---|---|---|
+| `continue` | 还能接着干 | **立刻**排下一步，没有 backoff |
+| `park` | 在等一个真实来源 | 校验票并补 `by`，转 parked |
+| `done` | 本周期完成 | 写 `## 上次结果`、记 close、一次性归档／周期停到下一次 |
+| `blocked` | 需要用户决定 | 停泊到 `ask` 票，并**一定**通知用户 |
 
-- wake 到点：runtime 先落盘 active + clear wake，再 dispatch。
-- background job / 委派（含 `purpose: verify` sub-agent）完成：runtime 校验这个已 settle 的 run/job 记录里的 `taskId` 确实指向本任务，再激活所属 task 并派发所属 channel 的回合——这个绑定来自 runtime 自己写的 run 记录，不是任务文件里 `waitingFor` 那个模型可写的字符串。
-- `/tasks run <id>`：明确的人工强制推进。
-- 相关用户消息：Agent 判断相关后用 progress 把任务恢复 active；普通闲聊不批量唤醒 waiting tasks。
+**任务步骤默认不向用户发言**：只有 `task_step_end` 给了 `notify`、或 cycle 关闭 / 提问 / 预算耗尽 / 运行时停止时才会说话。v3 的 `[SILENT]` 协议（要求模型主动说"我不说话"）在任务侧退役；事件唤醒仍然使用它，因为事件仍然投递到聊天会话。
 
-需要轮询的外部条件应设置合理 wake，或使用周期 event 作为零 token sensor。
+step 是频道队列里的普通条目：占用 turn slot、受 `/stop` 管辖、结束就把频道让回去。一个跑三小时的任务不会锁住聊天。
 
-## Verification
+## 预算与停止
 
-需要独立验收的任务显式设置 `control.verificationRequired: true`。验收不是一个独立的生命周期分支，而是一次普通委派：
+每个 cycle 有四维预算，缺省是代码常量，可以按任务在 `budget` 里覆盖：
 
-1. 完成 DoD checklist 后，像任何其他委派一样派发一个 `subagent purpose=verify`、带 `taskId` 的 sub-agent。
-2. 用带 `note` 的 `task_update` 把任务停泊为 `waiting`（不设 wake），和其他委派完全同一套停泊/唤醒机制——没有单独的 `request-verification` 动作，也没有 `waiting + waitingFor: verification` 这个特殊状态。
-3. checker 只判断、不修复被验收实现并写 attestation；需要运行会生成临时产物的测试/构建时，可使用声明 `mutates: write` 的 verifier，它会持有目标工作区独占 lease，结论为 `advisory`。完成后 runtime 通过完成唤醒恢复所属 task。
-4. Agent 调用 `task_verify` 导入 runId；PASS/FAIL 都恢复 active。`task_verify` 认的是 attestation 文件里的 `taskId`，不是任务当时的状态字符串。
-5. complete 重新检查 attestation、contract hash 和 artifact subject。新 subject 固定验证开始时的 `baseCommit`，所以提交同一份已验收内容不应破坏 PASS；Goal/DoD/Manual/Verification、tracked 内容、既有 untracked 产品文件或范围外新文件变更必须重验。
+| 键 | 默认 | 含义 |
+|---|---|---|
+| `steps` | 40 | 本周期的模型步数上限 |
+| `wallMin` | 180 | 本周期墙钟分钟（不含停泊时间） |
+| `usd` | 8 | 本周期可归因成本上限 |
+| `rounds` | 4 | 本周期返工轮次上限 |
+| `until` | — | 绝对期限（v3 `deadline` 的新家） |
 
-无 verification requirement 的任务不会产生额外 checker turn。
+任一项到顶，**在派发下一步之前**任务就被停下，并给用户一条带具体命令的回执（`/tasks resume <id> +steps 20`）。另外，同一周期内连续两步没有任何工具调用也会被停下——那说明循环在自言自语。
 
-## 内建 task driver 与 governor
+外部 run 拿不到真实用量时按角色模型 × 墙钟估算，并把 `usdEstimated` 置为真；任何显示成本的地方都会标注"含估算"。
 
-driver 是自适应 timer + nudge 的零 token 扫描，不固定轮询：
+> v3 用十字段台账指纹加一份进程内 effect 账本去*猜*一次唤醒有没有干活；那套机制在生产里四个月只触发过两次，而它的源码注释自己承认 `echo x` 就能骗过它。v4 用四个任务自己带着、用户看得见也能加码的数字取代了它。
 
-- enabled=false、archive outcome、waiting 无 wake 永不 dispatch。
-- waiting due 和 sleeping due 在 dispatch 前先完成原子状态转换；这个转换是幂等的——一旦任务不再是 `waiting`，重复或重放的唤醒都是安全的 no-op，不需要额外的 claim/handoff 簿记来判重。
-- sleeping 缺 wake 时按 schedule 零 token 自愈；schedule 缺失或非法则写 governor stop、保持 sleeping 并通知 doctor/用户。
-- channel 正在运行时不重复入队；按 deadline/wake 和 channel round-robin 选择任务。
-- 有真实 effect 的回合快速接续；只有台账变化使用普通延迟；无变化走 stalled retry。
-- 连续 3 次唤醒没有真实可见 effect：写 enabled=false + stop(by=governor)，status 保持 active，并由 runtime 直接发送 deterministic receipt，不开启额外诊断回合。这个计数只存在于 driver 的进程内存里，不落盘、不进 control，重启的代价至多是多一轮耐心。
-- deadline 是唯一持久化的硬性 stop-loss；同一 recurring cycle 内的单周期唤醒次数上限是另一层失控兜底，同样只在进程内存里。
+## 独立验收
 
-所有任务执行必须保持 at-least-once 可重放安全：外部动作前查询真实状态，使用稳定 request/message id，并把结果和证据写入 Current Cycle 或 completion evidence。
+需要独立验收的任务设 `verificationRequired: true`（frontmatter 里是 `verify: required`）。验收就是一次普通委派：
+
+1. 完成 DoD checklist 后派发 `purpose=verify`、带 `taskId` 的 sub-agent。
+2. 用 `task_step_end` 停泊到那个 run 的票上。
+3. checker 只判断、不修复实现，结尾写 `VERDICT: PASS` / `FAIL` 并落 attestation。
+4. **结算时运行时自动记账**：校验 attestation（归属、契约 hash、artifact subject 新鲜度），把这一轮写进循环日志和 `cycle.rounds`，再兑现票。校验不通过的 PASS 会被记成 FAIL 并写明原因。
+5. `done` 要求**本周期存在一条真实 PASS**——不是"轮次大于零"，所以一串 FAIL 不会被当成通过。
+
+`task_verify` 工具已退役：导入 attestation 是记账，不是判断。模型要做的判断没变——读 FAIL 的具体理由、决定哪几条真要返工。
+
+PASS 绑定 Goal/DoD/Manual/Verification 这段契约，不绑定 Plan 和 `## 上次结果`；改动契约或被验收产物后必须重新验收。
+
+## 内建 task driver
+
+driver 是自适应 timer + nudge 的零 token 扫描：
+
+1. **兑现**到期的 `time`/`schedule` 票（后者直接开下一个 cycle）。
+2. **兜底**过期的票（重开或通知）。
+3. **停下**已经超预算或在空转的任务。
+4. **排队**一个可跑的任务，按频道 round-robin 保证公平。
+
+`run`/`job`/`ask`/`signal` 从不轮询——它们由各自的所有者推过来：`SubAgentRunManager` 的结算、`JobManager` 的结算、`/tasks reply`、`EventsWatcher`。所有推送边都要经过同一个幂等的票据兑现，所以 at-least-once 的重放是安全的 no-op。
+
+## 与事件的边界
+
+events 子系统在 v4 中**保持原样**。两者只有一条边相连：一个 task-owned 周期事件（`task.<channelId>.<taskId>.<use>`）触发、且该任务正停在指向这个事件的 `signal` 票上时，运行时兑现这张票并唤起任务的下一步，**不**向频道投递唤醒文本；任务没持这张票时，事件照旧投递到聊天会话。
+
+纯提醒和与任务无关的传感器继续用 event；需要积累状态和验收的用 task。
 
 ## 可见性与命令
 
-`/tasks` 是 transport 层零 LLM 成本视图：
-
 ```text
-/tasks
-/tasks show <id>
-/tasks archive
-/tasks pause <id>
-/tasks resume <id>
-/tasks run <id>
-/tasks set <id> <wake|next|deadline> <value>
-/tasks doctor
+/tasks                                  列表：状态、等待票+兜底时间、Plan 进度、本周期用量
+/tasks show <id>                        契约 + 最近 8 条日志 + 返工轮次 + 成本
+/tasks log <id> [cycle]                 翻看循环日志
+/tasks steer <id> <内容>                 给下一步排一条指示（不打断当前步骤）
+/tasks reply <id> <内容>                 回答任务的提问，并让它继续
+/tasks pause <id> / resume <id> [+steps N|+rounds N|+usd X]
+/tasks run <id>                         立即开一个 cycle 并唤醒
+/tasks archive                          已归档任务
+/tasks doctor                           只检查手工编辑造成的问题
 ```
 
-展示至少包含 status、enabled/stop reason、wake、waitingFor、schedule/next occurrence、current/last cycle、verification、deadline 和 nextAction。pause/resume 不改变 status、wake 或 schedule。旧命令按 unknown action 返回 usage，不做隐式替代。成本可见性不再由任务文件承担——按 `taskId` 聚合的花费查 `/usage`。
+`resume` 的加码是在**已用量之上**的增量，所以恢复一个撞了上限的任务真的能跑起来，而不是下一轮再撞一次。
 
-长程任务由五个工具组成，按 payload 形状切分（spec 046），而不是一个按 action 分支的工具：
+doctor 比 v3 小得多：写入时的校验让 v3 那些病症不可能再产生，它只查手改文件留下的问题（frontmatter 不可读、仍是 v3 契约、停泊但没有票、票过期太久、有 schedule 却没有周期、超过 `budget.until`）。
+
+模型侧的工具面：
 
 ```text
-task_list
-task_create
-task_update
-task_close
-task_verify
+task_list      task_create    task_update    task_close    task_log
+task_step_end  （只在任务会话里注册）
 ```
 
-- `task_list`：返回活动任务和完整 control。
-- `task_create`：标准 Goal/DoD/Manual/Verification/Current Cycle/History；recurring 初始 sleeping。
-- `task_update`：带 `note` 时原子追加 Current Cycle 并更新状态/wake/control（checkpoint，仅 active/waiting）；不带 `note` 时是纯 metadata 修复，也是唯一能修复不可解析 control 行的路径，sleeping 也可用。
-- `task_close`：`outcome` 为 complete/skip/cancel，分别闭环、跳过 occurrence、归档放弃。
-- `task_verify`：导入独立验收 sub-agent 的 attestation。
+`task_update` 只改元数据（Plan 步骤、cadence、预算、是否需要验收），不再承载进度记录——进度属于 `task_step_end` 的 `note`。任务会话的工具集里**没有** `task_create`、`memory_save` 和 `event_manage`：任务不建任务、不写频道记忆、不管事件。
 
-每回合注入 `<task_agenda>`，包含活动目录中的 active/waiting/sleeping 任务，也显示 disabled、wake、waitingFor、cycle 和 verification；它是背景参考，不是新指令。
+每回合仍注入 `<task_agenda>`，每行含状态、等待票摘要与兜底时间、Plan 进度和本周期用量；它是背景参考，不是新指令。
 
-## 外部委派
+## 从 v3 迁移
 
-智能体工作使用 `subagent` 委派，并把 `taskId` 绑定到 run。内置角色超过同步宽限后会转为后台 run；外部 Claude Code / Codex / exec 角色从一开始就是异步 run。任务等待时写 `waitingFor: external-signal`、不设 wake；run 完成后，runtime 校验这个已 settle 的 run 记录里的 `taskId` 确实指向本任务，再激活所属 task，把结果和产物路径交还频道——独立验收的 `purpose: verify` sub-agent走的是同一条通道，没有特殊路径。
+daemon 首次以 v4 启动时执行一次确定性迁移（无 LLM，marker 位于 `state/task-migration-v4.done`）：
 
-普通长命令使用 `bash async` 并绑定 `taskId`，对应 `waitingFor: job`。不要为了等待智能体再在外层包一层 `bash async`、event 或轮询；那会失去统一的 run 状态、取消、完成唤醒、用量和重启对账。
-
-无论哪种异步工作，都应在任务正文或 Current Cycle 记录：使用的角色或工具、工作目录、runId/job id、预期产物、验收方法和幂等恢复方式。用户反馈使用 `waitingFor: user`。
-
-## 完整周报流程
-
-1. 创建 recurring task：它先 sleeping，不在创建回合执行发布。
-2. occurrence 到点，runtime open cycle 后派发普通 task wake。
-3. Agent 收集素材、起草、查询真实发布状态，使用 progress 写 evidence 和 nextAction。
-4. 需要反馈就 waiting/user 或 waiting + wake；不要轮询 parked task。
-5. 需要独立检查时派发 `purpose=verify` sub-agent 并停泊为 waiting，checker PASS 后调用 verify，再 active。
-6. 发布前再次查询真实目标，使用稳定幂等 id；成功结果写入 Current Cycle。
-7. complete 后任务 sleeping，等待下一 occurrence；不再需要则 cancel 归档。
+1. frontmatter 映射到 v4：`enabled:false`+`stop` → `paused`；`control.deadline` → `budget.until`；`control.verification.required` → `verify`。
+2. `waiting` 且能重建来源的（真实的未来 wake、或活的 schedule）转成对应的票；**重建不出来的直接改回 `open`**，并在 `## 上次结果` 留一句说明——那两个静默多日的任务在升级瞬间就活了。
+3. `## History` 的每条记录导入 `<id>.jsonl`；`## Current Cycle` 的内容成为 `## 上次结果`。
+4. 原件复制到 `tasks/.v3/`，**永不删除**。
+5. `workspace/events/` 一个字节都不动。
 
 ## 异常恢复
 
-- /tasks doctor 检查 unreadable frontmatter、不可解析的 control（旧版本会直接判为不可读）、future wake 藏在 active、waiting parked 是否有真实可恢复来源（有效 wake，或一条正在跑、`taskId` 指向本任务的 job/委派记录——不看 `waitingFor` 写了什么）、sleeping schedule/wake、enabled/stop 一致性、missed occurrence 和 attestation 漂移。
-- repair 只写 metadata/body，不自动执行外部动作。
-- daemon restart 不会补跑多个 occurrence；至多按当前 schedule 补一次，at-least-once 下仍须查询真实状态并幂等。
-- governor stop 之后用 /tasks resume 保留原阶段，或先调整 deadline；cancel 用于不再需要的任务。
+- daemon 重启不会补跑多个 occurrence；at-least-once 下外部动作仍须查询真实状态并保持幂等。
+- 运行时停止（预算、空转、票据二次过期）之后用 `/tasks resume` 保留原阶段继续，必要时加码；不再需要就让 agent cancel。
+- 循环日志是排查第一现场：`/tasks log <id>` 能看到每一步做了什么、每一轮验收的结论和理由。
 
 ## 相关文档
 
@@ -555,4 +565,4 @@ task_verify
 - [configuration.md](./configuration.md)：tasks、events、web 配置。
 - [deployment-and-operations.md](./deployment-and-operations.md)：长期运行与排障。
 - [sub-agents.md](./sub-agents.md)：委派与独立验收。
-- [spec 038](./specs/038-task-autonomy-state-v2/design.md)：当前状态模型。
+- [spec 051](./specs/051-long-horizon-task-loop/design.md)：当前任务模型的设计记录。

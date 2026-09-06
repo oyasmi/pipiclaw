@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseTaskFrontmatter } from "../../src/tasks/ledger.js";
+import { parseTaskFrontmatterV4 } from "../../src/tasks/frontmatter.js";
 import type { CodeGrader, GradeResult, Severity, TrialContext } from "./schema.js";
 
 function result(
@@ -187,10 +187,43 @@ export function fileNotContains(
 	return grader;
 }
 
+/**
+ * Assert something about a task's loop log (spec 051, D5), wherever it currently lives — a task
+ * that finished has moved both its contract and its log into `archive/`.
+ */
+export function taskLog(
+	graderId: string,
+	taskId: string,
+	predicate: (log: string) => boolean,
+	why: string,
+): CodeGrader {
+	const grader = codeGrader(graderId, (ctx) => {
+		const path = [
+			join(ctx.channelDir, "tasks", `${taskId}.jsonl`),
+			join(ctx.channelDir, "tasks", "archive", `${taskId}.jsonl`),
+		].find((candidate) => existsSync(candidate));
+		if (!path) return result(grader, "fail", `task ${taskId} wrote no loop log`, "file", `tasks/${taskId}.jsonl`);
+		const log = readFileSync(path, "utf8");
+		return result(grader, predicate(log) ? "pass" : "fail", why, "file", `tasks/${taskId}.jsonl`);
+	});
+	return grader;
+}
+
+/** The loop log's raw text, for a model grader's artifacts. */
+export function readTaskLoopLog(channelDir: string, taskId: string): string {
+	for (const path of [
+		join(channelDir, "tasks", `${taskId}.jsonl`),
+		join(channelDir, "tasks", "archive", `${taskId}.jsonl`),
+	]) {
+		if (existsSync(path)) return readFileSync(path, "utf8");
+	}
+	return "(no loop log)";
+}
+
 export function taskFrontmatter(
 	graderId: string,
 	taskId: string,
-	predicate: (frontmatter: ReturnType<typeof parseTaskFrontmatter>, content: string) => boolean,
+	predicate: (frontmatter: ReturnType<typeof parseTaskFrontmatterV4>, content: string) => boolean,
 ): CodeGrader {
 	const grader = codeGrader(graderId, (ctx) => {
 		const active = join(ctx.channelDir, "tasks", `${taskId}.md`);
@@ -199,7 +232,7 @@ export function taskFrontmatter(
 		if (!existsSync(path))
 			return result(grader, "fail", `task ${taskId} was not found`, "file", `tasks/${taskId}.md`);
 		const content = readFileSync(path, "utf8");
-		const frontmatter = parseTaskFrontmatter(content);
+		const frontmatter = parseTaskFrontmatterV4(content);
 		const ok = frontmatter.readable && predicate(frontmatter, content);
 		return result(
 			grader,

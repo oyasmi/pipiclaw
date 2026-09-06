@@ -6,7 +6,7 @@ async function sleep(ms: number): Promise<void> {
 
 export async function waitFor<T>(
 	label: string,
-	check: () => T | null | undefined | false,
+	check: () => T | null | undefined | false | Promise<T | null | undefined | false>,
 	options?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<T> {
 	const timeoutMs = options?.timeoutMs ?? 30_000;
@@ -14,7 +14,7 @@ export async function waitFor<T>(
 	const deadline = Date.now() + timeoutMs;
 
 	while (Date.now() < deadline) {
-		const value = check();
+		const value = await check();
 		if (value) {
 			return value;
 		}

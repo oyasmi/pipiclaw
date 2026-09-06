@@ -62,10 +62,6 @@ export interface PipiclawTaskDigestSettings {
 }
 
 export interface PipiclawTaskDriverSettings {
-	/** Earliest continuation after a task changed during its previous run. */
-	continuationDelayMinutes: number;
-	/** Retry delay when a dispatched task made no observable ledger progress. */
-	stalledRetryMinutes: number;
 	/** Global enqueue cap per scan, with round-robin fairness across channels. */
 	maxDispatchesPerTick: number;
 	/** Cap on idle sleep between scans; also the upper bound on how late a manual edit is noticed. */
@@ -175,12 +171,10 @@ export const TASK_DIGEST_SETTINGS: PipiclawTaskDigestSettings = {
 	maxChars: 1000,
 };
 
-// The driver makes `wake` an executable task property rather than a convention
-// that requires users to install a heartbeat event and sensor script. A changed
-// task can continue promptly; an unchanged task backs off to avoid token loops.
+// Only the two knobs the scan itself needs. The retry/backoff tiers are gone with the governor
+// (spec 051, D6): a task continues immediately or stops on a budget it can see, so there is no
+// longer a "how long to wait before guessing again" question to answer.
 export const TASK_DRIVER_SETTINGS: PipiclawTaskDriverSettings = {
-	continuationDelayMinutes: 5,
-	stalledRetryMinutes: 60,
 	maxDispatchesPerTick: 4,
 	maxSleepMinutes: 15,
 };

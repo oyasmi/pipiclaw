@@ -26,10 +26,10 @@ Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开�
 
 ```yaml
 ---
-name: task-driving
-description: 被 TASK_DRIVER 唤醒推进任务，或处理任务等待、验收（verify）、闭环、停滞、停用及元数据损坏时。
-requires-tools: task_create, task_update
-order: 80
+name: task-loop
+description: 判断该不该建长程任务（task）、怎么写任务契约，以及在任务循环里推进、等待、验收和闭环。
+requires-tools: task_create, task_step_end
+order: 70
 ---
 ```
 
@@ -60,10 +60,9 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 | `event-scheduling.md` | 40 | `event_manage` | 提醒、one-shot、periodic、preAction 传感器、跨回合回访 |
 | `background-jobs.md` | 50 | `job` | 长跑命令的启停、poll 纪律、并发上限、跨回合等待 |
 | `agent-delegation.md` | 60 | 恒在 | 选执行者（含 inline）、任务契约、并行隔离、等待、纠偏和验收强度 |
-| `task-planning.md` | 70 | `task_create`, `task_update` | 是否建 task、Goal/DoD/Manual/Verification、control、周期 `schedule` |
-| `task-driving.md` | 80 | `task_update`, `task_close`, `task_verify` | driver 恢复、checkpoint、等待、验收、闭环、治理器停用及坏元数据修复 |
+| `task-loop.md` | 70 | `task_create`, `task_step_end` | 是否建 task、契约怎么写、循环里怎么推进/等待/验收/闭环、预算与票据过期 |
 
-任务机制只占两份：`task-planning.md` 负责是否建档和任务契约，`task-driving.md` 负责建档后的推进、等待、验收、闭环与修复。Agent 委派不是 task 专属机制，因此独立为通用 playbook：当前回合的临时委派无需创建 task，需要跨回合恢复时才由 task 记录状态。
+任务机制只占一份 `task-loop.md`：每一步的 brief 已经带上契约、最近日志和预算，playbook 只留这些数字之外需要判断的部分。Agent 委派不是 task 专属机制，因此独立为通用 playbook：当前回合的临时委派无需创建 task，需要跨回合恢复时才由 task 记录状态。
 
 `runtime-orientation.md` 和 `agent-delegation.md` 不设 `requires-tools`：前者描述的分层与文件位置在任何工具组合下都成立，后者的委派能力也可能来自用户提供的 skill，门控掉反而会让它在最需要的实例上消失。
 
@@ -73,11 +72,11 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 2. **一个决策时刻一份文件**：宁可一份稍长，也不要让模型为了完成一件事读两份。反过来，两个不会同时发生的场景不要塞进一份。
 3. **默认模型已有通用能力**：只写 Pipiclaw 特有、容易出错或跨工具的知识。
 4. **按脆弱程度决定自由度**：hash/verification/幂等 request id 等窄桥给精确顺序；开放的规划问题给判断条件。
-5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。已经定好归属的几条：等待/停泊语义与幂等闭环在 `task-driving.md`，委派与验收强度在 `agent-delegation.md`，文件位置与访问入口在 `runtime-orientation.md`，"异步结束会自动唤醒你"这条跨机制纪律在 system prompt。别处只留一句路由。
+5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。已经定好归属的几条：等待票与幂等闭环在 `task-loop.md`，委派与验收强度在 `agent-delegation.md`，文件位置与访问入口在 `runtime-orientation.md`，"异步结束会自动唤醒你"这条跨机制纪律在 system prompt。别处只留一句路由。
 6. **错误可恢复**：解释门禁为什么拒绝，并给可以执行的下一步；引用真实报错时按原文抄，模型才能把 playbook 和它看到的报错对上。
 7. **写清谁是施动者**：playbook 是写给模型的。斜杠命令由 transport 拦截、不经过模型，凡是要人去敲的一律写成"用户命令：`/tasks resume <id>`"，不要混进模型的动作序列。
 8. **展示的数据形状必须能落盘**：代码块里的 frontmatter、JSON、control 片段会被当成可以照抄的样本。写之前对着序列化代码核一遍字段名、嵌套层级和必填项——一个少了必填字段的示例，会直接教出一份需要修复的坏文件。
-9. **控制长度**：正文（不含空行）以 60 行为软上限，多数应在 40 行以内。超出通常意味着混进了两个决策时刻，或抄了工具 schema 已有的内容——先检查这两条，再考虑是否真的需要更长。`task-driving.md` 与 `agent-delegation.md` 是刻意最长的两份：前者集中建档后的推进、等待、验收、闭环与修复，后者覆盖委派的完整生命周期。
+9. **控制长度**：正文（不含空行）以 60 行为软上限，多数应在 40 行以内。超出通常意味着混进了两个决策时刻，或抄了工具 schema 已有的内容——先检查这两条，再考虑是否真的需要更长。`task-loop.md` 与 `agent-delegation.md` 是刻意最长的两份：前者集中建档、推进、等待、验收与预算，后者覆盖委派的完整生命周期。
 10. **与代码共同验证**：metadata/catalog、prompt 不加载正文、path guard、本文目录表与实际文件的对账都有测试；构建产物（`dist/playbooks/` 只含 `.md`）按 build 脚本保证，发版前人工核对。数值上限、字段名和报错文案要回到代码里核对，不要沿用上一版的记忆。
 
 ## 第三方工具边界

@@ -1,240 +1,290 @@
-import { mkdir, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { copyFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getChannelDir } from "../channel/channel-paths.js";
 import * as log from "../log.js";
-import { formatLocalTime } from "../shared/local-time.js";
+import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
-import { createDefaultTaskControl, parseLegacyTaskControl, type TaskControl } from "../tasks/control.js";
-import { appendCurrentCycleNote, parseTaskFrontmatter, type TaskFrontmatter } from "../tasks/ledger.js";
+import { isPlainObject } from "../shared/type-guards.js";
+import { writeLastResult } from "../tasks/cycle.js";
+import type { TaskCycle, TaskFrontmatterV4 } from "../tasks/frontmatter.js";
+import { findTaskSectionBounds, normalizeTaskId, taskBody } from "../tasks/ledger.js";
+import { appendTaskLog } from "../tasks/log.js";
 import { withTaskMutation } from "../tasks/mutation-lock.js";
-import { readStoredTask, updateStoredTask, writeStoredTask } from "../tasks/store.js";
-import { parseTaskEventName, taskEventPrefix } from "../tasks/task-events.js";
-import { TASK_STATUSES, type TaskStatus } from "../tasks/transitions.js";
-import { parseScheduledEventContent } from "./events.js";
+import { writeStoredTask } from "../tasks/store.js";
+import { nextTaskWake } from "../tasks/task-schedule.js";
+import type { Ticket } from "../tasks/ticket.js";
 import { discoverTaskChannels } from "./task-driver.js";
 
 /**
- * RETIRE AT v0.9.3 (code review 2026-08-30): both migrations in this file are startup self-heal
- * passes for on-disk state written by pre-0.9 betas (the pre-spec-029 `.schedule` event format,
- * and pre-spec-043 v1/v2 task control blocks and status vocabulary). Every 0.9.2-beta install is
- * a small, actively-developed fleet; by the 0.9.3 stable cut every install will have booted at
- * least once on a version that already runs these passes, so there is no longer any on-disk
- * state left for them to find. At 0.9.3: delete both exported functions here, their call sites
- * in `bootstrap.ts`, `parseLegacyTaskControl` in `../tasks/control.js` (this file's only caller),
- * and the paired legacy-state fold in `../memory/maintenance-state.js` (same rationale, unrelated
- * subsystem). Confirm first that no currently-supported version predates the pass being removed.
- */
-
-/**
- * One-time migration closing the 027 window (spec 029, D6).
+ * One-time, deterministic, no-LLM migration from the v3 task contract to v4 (spec 051, D14).
  *
- * Recurrence cadence now lives solely in a task's `schedule` frontmatter; the driver no
- * longer reads legacy canonical `.schedule` periodic events. On daemon start we fold any
- * residual `task.<channelId>.<id>.schedule.json` cron into the owning task's frontmatter
- * (frontmatter wins if it already has a schedule) and delete the event, so there is never
- * "two sources of truth" for a cadence again. Missing/archived tasks simply have their
- * orphaned event removed. Failures are logged and skipped — this must never block startup.
+ * The single most valuable thing this pass does is the `waiting` conversion. A v3 task could be
+ * `waiting` with no `wake` and a purely decorative `waitingFor`, which meant *nothing would ever
+ * resume it* — on the author's own machine two tasks had been silently dead for 9 and 13 days.
+ * v4 has no such state: a park needs a ticket the runtime can redeem. So a `waiting` task whose
+ * resumption source can still be reconstructed (a real future `wake`, or a live schedule) is
+ * parked on the matching ticket, and **anything else is reopened** with a note explaining why.
+ * Upgrading is therefore also the repair.
+ *
+ * Originals are copied to `tasks/.v3/` and never deleted. `workspace/events/` is not touched at
+ * all — spec 051 D8 keeps the events subsystem exactly as it is.
  */
-export async function migrateLegacyTaskScheduleEvents(workspaceDir: string): Promise<void> {
-	const eventsDir = join(workspaceDir, "events");
-	let filenames: string[];
-	try {
-		filenames = (await readdir(eventsDir)).filter((name) => name.endsWith(".json"));
-	} catch {
-		return; // no events directory ⇒ nothing to migrate
-	}
-	if (filenames.length === 0) return;
-	const channels = await discoverTaskChannels(workspaceDir);
+const MIGRATION_MARKER = "task-migration-v4.done";
 
-	for (const filename of filenames) {
-		const name = filename.slice(0, -".json".length);
-		const channelId = channels.find((id) => name.startsWith(taskEventPrefix(id)));
-		if (!channelId) continue;
-		const parsed = parseTaskEventName(name, channelId);
-		if (!parsed || parsed.use !== "schedule") continue;
+interface LegacyControl {
+	deadline?: string;
+	nextAction?: string;
+	cycleId?: string;
+	verification?: { required?: boolean };
+	stop?: { by?: string; reason?: string; at?: string };
+}
 
-		const eventPath = join(eventsDir, filename);
-		let cron: string;
-		try {
-			const event = parseScheduledEventContent(await readFile(eventPath, "utf-8"), filename);
-			if (event.type !== "periodic") continue; // not a cadence event; leave it for /events
-			cron = event.schedule;
-		} catch {
-			continue; // unparseable ⇒ let /tasks doctor / the user handle it
-		}
+interface LegacyFields {
+	status?: string;
+	enabled: boolean;
+	wake?: string;
+	schedule?: string;
+	control?: LegacyControl;
+	outcome?: "completed" | "cancelled";
+	closedAt?: string;
+}
 
-		try {
-			let folded = false;
-			const document = await updateStoredTask(getChannelDir(workspaceDir, channelId), parsed.id, (task) => {
-				if (!task.fields.schedule) {
-					task.fields.schedule = cron;
-					folded = true;
+/** Minimal reader for the v3 frontmatter block; the only place that still understands it. */
+function parseLegacyFrontmatter(content: string): LegacyFields | undefined {
+	if (!content.startsWith("---")) return undefined;
+	const end = content.indexOf("\n---", 3);
+	if (end === -1) return undefined;
+	const fields: LegacyFields = { enabled: true };
+	let sawLegacy = false;
+	for (const line of content.slice(3, end).split("\n")) {
+		const idx = line.indexOf(":");
+		if (idx === -1) continue;
+		const key = line.slice(0, idx).trim();
+		const value = line.slice(idx + 1).trim();
+		switch (key) {
+			case "status":
+				fields.status = value;
+				sawLegacy = true;
+				break;
+			case "enabled":
+				fields.enabled = value !== "false";
+				sawLegacy = true;
+				break;
+			case "wake":
+				fields.wake = value || undefined;
+				break;
+			case "schedule":
+				fields.schedule = value || undefined;
+				break;
+			case "outcome":
+				if (value === "completed" || value === "cancelled") fields.outcome = value;
+				break;
+			case "closedAt":
+				fields.closedAt = value || undefined;
+				break;
+			case "control": {
+				sawLegacy = true;
+				try {
+					const parsed: unknown = JSON.parse(value);
+					if (isPlainObject(parsed)) fields.control = parsed as LegacyControl;
+				} catch {
+					// An unparseable control block is exactly why the task needs migrating; drop it.
 				}
-			});
-			await unlink(eventPath).catch(() => {});
-			if (folded) {
-				log.logInfo(`Migrated legacy schedule event ${name} into tasks/${parsed.id}.md`, cron);
-			} else {
-				log.logInfo(
-					`Removed legacy schedule event ${name}`,
-					document ? "task frontmatter already owns a schedule" : "no active task",
-				);
+				break;
 			}
-		} catch (error) {
-			log.logWarning(`Could not migrate legacy schedule event ${name}`, errorMessage(error));
+			default:
+				break;
 		}
 	}
+	// `state:` means this file is already v4.
+	if (/^state:/m.test(content.slice(3, end))) return undefined;
+	return sawLegacy || fields.outcome ? fields : undefined;
 }
 
-/** Legacy v1 status vocabulary, mapped to the current status/archive/stop model. Migration-only. */
-interface LegacyStatusMigration {
-	status: TaskStatus;
-	archiveOutcome?: "completed" | "cancelled";
-	stopActor?: "user" | "governor";
+function legacyCycle(control: LegacyControl | undefined): TaskCycle | undefined {
+	if (!control?.cycleId) return undefined;
+	return {
+		id: control.cycleId.replace(/^cycle-/, "c-"),
+		startedAt: formatLocalTime(),
+		steps: 0,
+		rounds: 0,
+		usd: 0,
+		usdEstimated: false,
+		expired: 0,
+	};
 }
 
-function legacyStatusMigration(rawStatus: string | undefined, recurring: boolean): LegacyStatusMigration {
-	switch (rawStatus) {
-		case "done":
-			return recurring ? { status: "sleeping" } : { status: "active", archiveOutcome: "completed" };
-		case "cancelled":
-			return { status: "active", archiveOutcome: "cancelled" };
-		case "paused":
-			return { status: "active", stopActor: "user" };
-		case "escalated":
-			return { status: "active", stopActor: "governor" };
-		case "awaiting-user":
-		case "blocked":
-			return { status: "waiting" };
-		default:
-			return {
-				status:
-					rawStatus !== undefined && (TASK_STATUSES as readonly string[]).includes(rawStatus)
-						? (rawStatus as TaskStatus)
-						: "active",
-			};
-	}
-}
-
-/** Whether the control block needs a durable upgrade: absent, or not strict-v3-parseable. */
-function needsControlMigration(frontmatter: TaskFrontmatter): boolean {
-	return frontmatter.controlReadable === false || !frontmatter.control;
-}
-
-/** Whether the raw on-disk status needs a durable rewrite into the current vocabulary. */
-function needsStatusMigration(frontmatter: TaskFrontmatter): boolean {
-	const raw = frontmatter.rawStatus;
-	return raw !== undefined && !(TASK_STATUSES as readonly string[]).includes(raw);
+export interface LegacyTaskConversion {
+	fields: TaskFrontmatterV4;
+	/** Set when the v3 park had no reconstructible source and the task was reopened instead. */
+	repairNote?: string;
 }
 
 /**
- * Reconstruct a v3 control block for a file the strict reader rejected. Returns `undefined` only
- * when the stored control is genuinely unparseable (neither v3, nor legacy v1/v2) — that file is
- * left untouched for `/tasks doctor` to report, exactly like before this migration ran.
+ * The v3 → v4 field mapping. Exported for the migration test, which pins the one branch that
+ * matters most: a `waiting` task with no wake and no schedule becomes `open`, not a dead park.
  */
-function resolveMigratedControl(frontmatter: TaskFrontmatter): TaskControl | undefined {
-	if (frontmatter.controlReadable === false) {
-		if (!frontmatter.controlRaw) return createDefaultTaskControl();
-		try {
-			return parseLegacyTaskControl(frontmatter.controlRaw);
-		} catch {
-			return undefined;
-		}
+export function convertLegacyTaskFields(legacy: LegacyFields, now: Date = new Date()): LegacyTaskConversion {
+	const control = legacy.control;
+	const fields: TaskFrontmatterV4 = {
+		state: "open",
+		schedule: legacy.schedule,
+		cycle: legacyCycle(control),
+		verify: control?.verification?.required ? "required" : undefined,
+	};
+	if (control?.deadline && parseLocalTime(control.deadline) !== undefined) {
+		fields.budget = { until: control.deadline };
 	}
-	return createDefaultTaskControl();
+	if (legacy.outcome) {
+		fields.outcome = legacy.outcome;
+		fields.closedAt = legacy.closedAt ?? formatLocalTime(now);
+		fields.state = "done";
+		return { fields };
+	}
+	if (!legacy.enabled) {
+		fields.paused = {
+			by: control?.stop?.by === "governor" ? "runtime" : "user",
+			reason: control?.stop?.reason ?? "迁移前该任务已被停用。",
+			at: control?.stop?.at ?? formatLocalTime(now),
+		};
+	}
+
+	const wakeMs = legacy.wake ? parseLocalTime(legacy.wake) : undefined;
+	const futureWake = wakeMs !== undefined && wakeMs > now.getTime();
+	if (legacy.status === "sleeping" && legacy.schedule && nextTaskWake(legacy.schedule, now)) {
+		const by = nextTaskWake(legacy.schedule, now);
+		const second = by ? nextTaskWake(legacy.schedule, by) : undefined;
+		fields.state = "parked";
+		fields.ticket = { kind: "schedule", at: formatLocalTime(by ?? now), by: formatLocalTime(second ?? by ?? now) };
+		return { fields };
+	}
+	if (legacy.status === "waiting" && futureWake && legacy.wake) {
+		const at = formatLocalTime(new Date(wakeMs));
+		fields.state = "parked";
+		fields.ticket = { kind: "time", at, by: at } satisfies Ticket;
+		return { fields };
+	}
+	if (legacy.status === "waiting") {
+		return {
+			fields,
+			repairNote:
+				"迁移提示：该任务此前处于 waiting，但没有任何可兑现的恢复来源（无有效 wake、无在跑的委派或作业）。" +
+				"已改为 open。先确认真实状态，再决定继续推进还是重新用 task_step_end 停泊到一张明确的等待票上。" +
+				(control?.nextAction ? `迁移前记录的下一步：${control.nextAction}` : ""),
+		};
+	}
+	return { fields };
 }
 
-/**
- * Deterministically upgrade every active task file to the current (v3) control contract and
- * status vocabulary (spec 043, phase 5). Unlike the earlier marker-gated pass, this scans and
- * self-heals on every startup: each file is judged independently by what it actually contains
- * (`control.version` and the raw `status` value), not by whether a one-time marker was written.
- * A hand-edited or freshly-restored legacy file is repaired the next time the daemon starts, no
- * matter how it got there. It never dispatches a task or performs an external action, and every
- * file is protected by the same per-task mutation lock as normal lifecycle writes.
- */
-export async function migrateLegacyTaskState(workspaceDir: string): Promise<void> {
-	const channels = await discoverTaskChannels(workspaceDir);
-	for (const channelId of channels) {
+/** Move the v3 `## History` entries into the loop log so nothing is lost when the section goes. */
+async function importLegacyHistory(channelDir: string, id: string, body: string, cycleId: string): Promise<number> {
+	const lines = body.split("\n");
+	const bounds = findTaskSectionBounds(lines, ["History", "历史"]);
+	if (!bounds) return 0;
+	const entries: string[] = [];
+	let current: string[] = [];
+	for (let index = bounds.headingIndex + 1; index < bounds.end; index++) {
+		const line = lines[index] ?? "";
+		if (/^#{3,6}\s+/.test(line)) {
+			if (current.length > 0) entries.push(current.join("\n").trim());
+			current = [line];
+			continue;
+		}
+		current.push(line);
+	}
+	if (current.length > 0) entries.push(current.join("\n").trim());
+	const kept = entries.filter(Boolean);
+	for (const [index, entry] of kept.entries()) {
+		await appendTaskLog(channelDir, id, {
+			cycle: cycleId,
+			kind: "step",
+			seq: index + 1,
+			outcome: "continue",
+			note: entry,
+			tools: [],
+		});
+	}
+	return kept.length;
+}
+
+/** Strip `## Current Cycle` and `## History` from a v3 body, returning the last cycle note. */
+function stripLegacySections(body: string): { body: string; lastNote?: string } {
+	let working = body;
+	let lastNote: string | undefined;
+	for (const names of [
+		["Current Cycle", "当前周期"],
+		["History", "历史"],
+	] as const) {
+		const lines = working.split("\n");
+		const bounds = findTaskSectionBounds(lines, names);
+		if (!bounds) continue;
+		if (names[0] === "Current Cycle") {
+			const text = lines
+				.slice(bounds.headingIndex + 1, bounds.end)
+				.join("\n")
+				.trim();
+			if (text) lastNote = text;
+		}
+		lines.splice(bounds.headingIndex, bounds.end - bounds.headingIndex);
+		working = lines.join("\n");
+	}
+	return { body: working.replace(/\n{3,}/g, "\n\n").trimEnd(), lastNote };
+}
+
+async function migrateOneTask(channelDir: string, id: string, now: Date): Promise<boolean> {
+	return withTaskMutation(channelDir, id, async () => {
+		const path = join(channelDir, "tasks", `${id}.md`);
+		const content = await readFile(path, "utf-8");
+		const legacy = parseLegacyFrontmatter(content);
+		if (!legacy) return false;
+
+		const backupDir = join(channelDir, "tasks", ".v3");
+		await mkdir(backupDir, { recursive: true });
+		await copyFile(path, join(backupDir, `${id}.md`));
+
+		const { fields, repairNote } = convertLegacyTaskFields(legacy, now);
+		const original = taskBody(content);
+		const stripped = stripLegacySections(original);
+		const imported = await importLegacyHistory(channelDir, id, original, fields.cycle?.id ?? "c-legacy");
+
+		let body = stripped.body;
+		const lastResult = [repairNote, stripped.lastNote].filter(Boolean).join("\n\n");
+		if (lastResult) body = writeLastResult(body, lastResult);
+
+		await writeStoredTask({ id, path, fields, body });
+		log.logInfo(
+			`Task ${id} migrated to v4`,
+			`state=${fields.state}${fields.ticket ? ` ticket=${fields.ticket.kind}` : ""} history=${imported}`,
+		);
+		return true;
+	});
+}
+
+/** Migrate every task file in every known channel. Failures are logged and skipped. */
+export async function migrateTasksToV4(workspaceDir: string, stateDir: string): Promise<void> {
+	const markerPath = join(stateDir, MIGRATION_MARKER);
+	if (existsSync(markerPath)) return;
+	const now = new Date();
+	let migrated = 0;
+	for (const channelId of await discoverTaskChannels(workspaceDir)) {
 		const channelDir = getChannelDir(workspaceDir, channelId);
-		const dir = join(channelDir, "tasks");
 		let filenames: string[];
 		try {
-			filenames = (await readdir(dir)).filter((name) => name.endsWith(".md")).sort();
+			filenames = (await readdir(join(channelDir, "tasks"))).filter((name) => name.endsWith(".md"));
 		} catch {
 			continue;
 		}
 		for (const filename of filenames) {
 			const id = filename.slice(0, -".md".length);
 			try {
-				await withTaskMutation(channelDir, id, async () => {
-					const activePath = join(dir, filename);
-					const raw = await readFile(activePath, "utf-8");
-					const frontmatter = parseTaskFrontmatter(raw);
-					if (!frontmatter.readable) return;
-
-					const controlNeedsMigration = needsControlMigration(frontmatter);
-					if (!controlNeedsMigration && !needsStatusMigration(frontmatter)) return; // already v3
-
-					let migratedControl = frontmatter.control;
-					if (controlNeedsMigration) {
-						migratedControl = resolveMigratedControl(frontmatter);
-						if (!migratedControl) return; // genuinely corrupt; leave for doctor
-					}
-
-					const document = await readStoredTask(channelDir, id, false, true);
-					if (!document) return;
-					document.fields.control = migratedControl;
-
-					const legacy = legacyStatusMigration(frontmatter.rawStatus, Boolean(frontmatter.schedule));
-					document.fields.status = legacy.status;
-					if (legacy.archiveOutcome) document.fields.outcome = legacy.archiveOutcome;
-					if (legacy.stopActor) {
-						document.fields.enabled = false;
-						if (document.fields.control && !document.fields.control.stop) {
-							document.fields.control.stop = {
-								by: legacy.stopActor,
-								reason: `Task stopped by ${legacy.stopActor}.`,
-								at: formatLocalTime(),
-							};
-						}
-					}
-
-					// Very old hand-written tasks may have parked without ever recording a wake. Give the
-					// waiting state an explicit note before any active driver wake can act on it silently.
-					if (
-						legacy.status === "waiting" &&
-						!document.fields.wake &&
-						document.fields.control &&
-						!document.fields.control.waitingFor
-					) {
-						document.fields.control.waitingFor = "external-signal";
-						document.body = appendCurrentCycleNote(
-							document.body,
-							"Migration note: this task remains waiting after the autonomy state upgrade; review its external condition before resuming.",
-						);
-					}
-
-					if (document.fields.outcome) {
-						const fileStat = await stat(activePath);
-						document.fields.closedAt ??= formatLocalTime(new Date(fileStat.mtimeMs));
-						await writeStoredTask(document);
-						const archiveDir = join(dir, "archive");
-						await mkdir(archiveDir, { recursive: true });
-						await rename(activePath, join(archiveDir, filename));
-						log.logInfo(`Migrated legacy terminal task ${id} to archive`, document.fields.outcome);
-						return;
-					}
-
-					await writeStoredTask(document);
-					log.logInfo(`Migrated task ${id} to TaskControl v3`, channelId);
-				});
+				if (await migrateOneTask(channelDir, normalizeTaskId(id), now)) migrated++;
 			} catch (error) {
-				log.logWarning(
-					`Could not migrate task ${channelId}/${id}`,
-					`${errorMessage(error)}. Use /tasks doctor to repair it.`,
-				);
+				log.logWarning(`Task ${id} could not be migrated to v4`, errorMessage(error));
 			}
 		}
 	}
+	await mkdir(stateDir, { recursive: true });
+	await writeFile(markerPath, `${formatLocalTime(now)}\n`, "utf-8");
+	if (migrated > 0) log.logInfo("Task migration to v4 complete", `${migrated} task(s)`);
 }

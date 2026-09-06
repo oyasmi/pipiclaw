@@ -3,7 +3,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseTaskFrontmatter } from "../../../src/tasks/ledger.js";
+import { parseTaskFrontmatterV4 } from "../../../src/tasks/frontmatter.js";
+import { readCycleRounds } from "../../../src/tasks/rounds.js";
+import { readStoredTask } from "../../../src/tasks/store.js";
 import { verificationAttestationPath } from "../../../src/tasks/verification.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 import { waitFor } from "../helpers/wait.js";
@@ -36,10 +38,11 @@ describe("E2E deterministic: verify chain", () => {
 			.find((r) => r.purpose === "verify").runId;
 	}
 
-	it("A14: purpose=verify run → attestation → task_verify imports PASS → task_close completes", async () => {
-		// 0.9.1 fixed a deadlock in this chain and it had no full-stack lock. Mutation check:
-		// drop the bodyHash comparison in verifyTask and task_verify still passes when the
-		// task body is edited after the attestation was written.
+	it("A14: purpose=verify run → attestation → runtime records the round → task_close completes", async () => {
+		// 0.9.1 fixed a deadlock in this chain and it had no full-stack lock. Spec 051 moved the
+		// import into settlement, so this now also locks that the round lands without any model
+		// decision. Mutation check (2026-09-05): make `creditOwningTask` skip `purpose === "verify"`
+		// and the round assertion times out.
 		harness = await createDeterministicHarness({ subagentSyncGraceMs: 60 });
 		const subjectDir = makeGitRepo();
 		const taskPath = join(harness.channelDir, "tasks", `${taskId}.md`);
@@ -81,6 +84,17 @@ describe("E2E deterministic: verify chain", () => {
 			repeat: true,
 		});
 
+		// Once the ticket is redeemed the driver queues ordinary task-loop steps, which carry a task
+		// brief rather than user text. This case is about the verification chain, not about what
+		// those steps decide, so they are answered silently — but the close turn below is real user
+		// work and must still reach its own route.
+		harness.model.script.route({
+			name: "task-steps",
+			when: (r) => r.isMainTurn && !r.lastUserText.includes("关闭任务"),
+			respond: [reply.text("[SILENT]")],
+			repeat: true,
+		});
+
 		await harness.sendUserMessage("帮我把特性上线并验收");
 		gate.release();
 
@@ -95,12 +109,25 @@ describe("E2E deterministic: verify chain", () => {
 		expect(attestation.taskId).toBe(taskId);
 		expect(attestation.verdict).toBe("pass");
 
-		// Import the PASS and close the task.
+		// Spec 051, D7: the runtime imports the verdict at settlement. There is no import tool and no
+		// model decision involved — the round lands on the cycle before the model looks again.
+		let rounds: Awaited<ReturnType<typeof readCycleRounds>> = [];
+		await waitFor(
+			"verification round recorded",
+			async () => {
+				const cycle = (await readStoredTask(harness.channelDir, taskId))?.fields.cycle?.id;
+				rounds = await readCycleRounds(harness.channelDir, taskId, cycle);
+				return rounds.length > 0;
+			},
+			{ timeoutMs: 15_000, intervalMs: 100 },
+		);
+		expect(rounds.map((round) => [round.verifyRunId, round.verdict])).toEqual([[runId, "pass"]]);
+
+		// Close the task. `complete` re-checks that a real PASS landed in this cycle.
 		harness.model.script.route({
-			name: "import-and-close",
-			when: (r) => r.isMainTurn && r.systemPrompt.includes("## Pipiclaw") && r.lastUserText.includes("导入验收"),
+			name: "close",
+			when: (r) => r.isMainTurn && r.systemPrompt.includes("## Pipiclaw") && r.lastUserText.includes("关闭任务"),
 			respond: [
-				reply.toolCall("task_verify", { id: taskId, verifierRunId: runId }),
 				reply.toolCall("task_close", {
 					id: taskId,
 					outcome: "complete",
@@ -111,15 +138,15 @@ describe("E2E deterministic: verify chain", () => {
 			],
 			repeat: true,
 		});
-		await harness.sendUserMessage("导入验收结果并关闭任务");
+		await harness.sendUserMessage("关闭任务");
 
 		// The task is completed: the active file is gone, the archived copy records
 		// the verification as passed against this exact verifier run.
 		expect(existsSync(join(harness.channelDir, "tasks", `${taskId}.md`))).toBe(false);
 		const archivedRaw = readFileSync(join(harness.channelDir, "tasks", "archive", `${taskId}.md`), "utf-8");
 		expect(archivedRaw).toContain("outcome: completed");
-		const done = parseTaskFrontmatter(archivedRaw);
-		expect(done.control?.verification.status).toBe("passed");
-		expect(done.control?.verification.runId).toBe(runId);
+		expect(parseTaskFrontmatterV4(archivedRaw).fields.outcome).toBe("completed");
+		// The rework trail travels with the archived contract.
+		expect(readFileSync(join(harness.channelDir, "tasks", "archive", `${taskId}.jsonl`), "utf-8")).toContain(runId);
 	});
 });

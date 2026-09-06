@@ -30,7 +30,8 @@
 | `task_create` | 创建长程任务 | 开 | `tools.tasks.enabled` | 否 |
 | `task_update` | checkpoint 进展（带 note）或元数据编辑（不带 note） | 开 | `tools.tasks.enabled` | 否 |
 | `task_close` | 完成/跳过/取消任务 | 开 | `tools.tasks.enabled` | 否 |
-| `task_verify` | 导入独立验收者的 attestation | 开 | `tools.tasks.enabled` | 否 |
+| `task_log` | 读任务的循环日志（步骤、验收轮次、票据过期、周期收尾） | 开 | `tools.tasks.enabled` | 否 |
+| `task_step_end` | 结束任务循环的一步：continue / park / done / blocked | 开 | `tools.tasks.enabled`，且只在任务会话里注册 | 否 |
 | `subagent` | 把工作委派给已配置的角色 | 开 | — | 否（不可嵌套） |
 | `subagent_inline` | 没有合适角色时定义一次性内联执行者 | 开 | `tools.subagentInline.enabled` | 否（不可嵌套） |
 | `subagent_list` / `subagent_run` | 查看委派 run；对单个 run show/cancel/follow_up | 开 | — | 否 |
@@ -89,7 +90,7 @@
 
 ## 调度与长程类
 
-`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`task_create`/`task_update`/`task_close`/`task_verify`/`task_list` 管长程任务台账（目标、DoD、手册、验收、周期）——按 payload 形状拆分的五个工具，而不是一个按 action 分支的工具（spec 046）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
+`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`task_create`/`task_update`/`task_close`/`task_list`/`task_log` 管长程任务的契约与查询，`task_step_end` 在任务会话里收尾每一步——按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
 
 `tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉全部 task_* 工具、内建 task driver 和每回合的任务摘要注入。
 

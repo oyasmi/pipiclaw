@@ -22,8 +22,9 @@ import {
 	createTaskCloseTool,
 	createTaskCreateTool,
 	createTaskListTool,
+	createTaskLogTool,
+	createTaskStepEndTool,
 	createTaskUpdateTool,
-	createTaskVerifyTool,
 } from "./task-manage.js";
 import { type ToolDetailsKind, withToolDetails } from "./tool-details.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -70,6 +71,14 @@ export interface ToolBuildContext {
 	 * files. Gates the `send_media` tool; sub-agents never receive it.
 	 */
 	mediaSender?: MediaSender;
+	/**
+	 * Present only inside a task loop step (spec 051, D3): which task this tool set belongs to,
+	 * and the cycle it is running in. `task_step_end` is registered only when this is set, so the
+	 * chat surface can never end a step that is not running.
+	 */
+	taskLoop?: { taskId: string; cycleId: string };
+	/** Tools completed in the current turn; only the task loop reads it. */
+	getToolsUsed?: () => string[];
 }
 
 export interface ToolRegistration {
@@ -289,15 +298,30 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 			}),
 	},
 	{
-		name: "task_verify",
+		name: "task_log",
 		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
 		create: (ctx) =>
-			createTaskVerifyTool({
+			createTaskLogTool({
+				workspaceDir: ctx.workspaceDir,
+				channelDir: ctx.channelDir,
+				channelId: ctx.channelId,
+			}),
+	},
+	{
+		name: "task_step_end",
+		availableToSubagents: false,
+		// Only inside a task session: it is the loop's closing move, not a chat action.
+		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false && ctx.taskLoop !== undefined,
+		create: (ctx) =>
+			createTaskStepEndTool({
 				workspaceDir: ctx.workspaceDir,
 				channelDir: ctx.channelDir,
 				channelId: ctx.channelId,
 				workingDirectory: ctx.securityContext.projectRoot,
+				taskId: ctx.taskLoop?.taskId,
+				cycleId: ctx.taskLoop?.cycleId,
+				getToolsUsed: ctx.getToolsUsed,
 			}),
 	},
 	{

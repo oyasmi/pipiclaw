@@ -21,7 +21,7 @@ import {
 import type { EvalCase } from "../harness/schema.js";
 import {
 	copyFixture,
-	hasStatus,
+	hasState,
 	longNonAsciiValue,
 	seedChannelMemory,
 	wakeBody,
@@ -63,7 +63,7 @@ export const regressionCases: EvalCase[] = [
 			taskFrontmatter(
 				"release-still-open",
 				"resume-three",
-				(frontmatter) => frontmatter.archiveOutcome === undefined,
+				(frontmatter) => frontmatter.fields.outcome === undefined,
 			),
 			{
 				kind: "model",
@@ -91,20 +91,20 @@ export const regressionCases: EvalCase[] = [
 		setup: (ctx) =>
 			writeTask(ctx, "expired-task", {
 				body: wakeBody("DEADLINE-LOCK"),
-				wake: "2020-01-01T00:00:00.000Z",
-				control: { deadline: "2020-01-02T00:00:00.000Z" },
+				budget: { until: "2020-01-02T00:00:00.000Z" },
+				cycle: true,
 			}),
 		script: [{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" }],
 		graders: [
-			driverDispatchCount("deadline-dispatch", 1),
-			// v2 keeps the live stage and records a structured governor stop orthogonally.
+			// Spec 051, D6: an expired `budget.until` is a budget breach, stopped before dispatch —
+			// so the driver spends no model turn on it at all.
+			driverDispatchCount("deadline-dispatch", 0),
 			taskFrontmatter(
-				"deadline-escalated",
+				"deadline-stopped",
 				"expired-task",
 				(frontmatter, content) =>
-					hasStatus(frontmatter, "active") &&
-					frontmatter.enabled === false &&
-					frontmatter.control?.stop?.by === "governor" &&
+					hasState(frontmatter.fields, "open") &&
+					frontmatter.fields.paused?.by === "runtime" &&
 					/DEADLINE-LOCK/.test(content),
 			),
 		],
@@ -121,10 +121,9 @@ export const regressionCases: EvalCase[] = [
 		budget: { maxWallMs: 300_000, maxTurns: 18 },
 		setup: (ctx) =>
 			writeTask(ctx, "daily-cycle", {
-				status: "sleeping",
-				wake: "2025-12-31T00:00:00.000Z",
+				ticket: { kind: "schedule", at: "2025-12-31T00:00:00.000+08:00", by: "2025-12-31T00:00:00.000+08:00" },
 				schedule: "0 0 * * *",
-				body: "# Task\n\n## Goal\nOn cycle start, record CYCLE-STARTED, then close this evidence-only cycle with task_close outcome=complete. The runtime opens the recurring cycle before dispatch; do not call a cycle-opening action.\n\n## DoD\n- [ ] CYCLE-STARTED recorded\n",
+				body: "# Task\n\n## Goal\nOn cycle start, record CYCLE-STARTED, then close this evidence-only cycle with task_step_end outcome=done. The runtime opens the recurring cycle before dispatch; do not call a cycle-opening action.\n\n## DoD\n- [ ] CYCLE-STARTED recorded\n",
 			}),
 		script: [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
@@ -133,10 +132,9 @@ export const regressionCases: EvalCase[] = [
 		graders: [
 			driverDispatchCount("single-occurrence", 1),
 			taskFrontmatter(
-				"next-occurrence-scheduled",
+				"cycle-opened",
 				"daily-cycle",
-				(frontmatter) =>
-					frontmatter.wake !== undefined && Date.parse(frontmatter.wake) > Date.parse("2026-01-01T00:00:01.000Z"),
+				(frontmatter) => frontmatter.fields.cycle !== undefined && frontmatter.fields.state === "open",
 			),
 		],
 	},

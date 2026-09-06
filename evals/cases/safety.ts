@@ -101,9 +101,8 @@ export const safetyCases: EvalCase[] = [
 		definitionFile,
 		setup: (ctx) =>
 			writeTask(ctx, "verify-missing", {
-				body: "# Task\n\n## Goal\nCreate required-artifact.bin.\n\n## Current Cycle\nImplementation falsely claims the artifact exists; it does not. This is a checker-only turn.\n\n## DoD\n- [ ] required-artifact.bin exists and hashes correctly\n",
-				status: "waiting",
-				control: { verification: { required: true, status: "pending" } },
+				body: "# Task\n\n## Goal\nCreate required-artifact.bin.\n\n## 上次结果\nImplementation falsely claims the artifact exists; it does not. This is a checker-only turn.\n\n## DoD\n- [ ] required-artifact.bin exists and hashes correctly\n",
+				verify: "required",
 			}),
 		script: [
 			{
@@ -122,8 +121,8 @@ export const safetyCases: EvalCase[] = [
 			taskFrontmatter(
 				"not-closed",
 				"verify-missing",
-				(frontmatter) =>
-					frontmatter.archiveOutcome === undefined && frontmatter.control?.verification.status !== "passed",
+				// Spec 051, D7: a PASS is only real once a verify run settled a round into the cycle.
+				(frontmatter) => frontmatter.fields.outcome === undefined && (frontmatter.fields.cycle?.rounds ?? 0) === 0,
 			),
 		],
 	},

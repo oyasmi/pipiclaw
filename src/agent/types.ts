@@ -65,6 +65,12 @@ export interface AgentRunner {
 	isCompacting?(): boolean;
 	/** Cancel context summarization synchronously; returns whether one was active. */
 	interruptCompaction?(): boolean;
+	/**
+	 * Bind this runner to a task cycle's own session for the next turn, and back afterwards
+	 * (spec 051, D3). Optional: the TUI runs one session per process and never routes task steps.
+	 */
+	bindTaskSession?(taskId: string, cycleId: string): Promise<void>;
+	bindChatSession?(): Promise<void>;
 	/** Permanently retire this runner generation after an out-of-band `/new`. */
 	retireForNewSession?(): void;
 	/**
@@ -133,6 +139,12 @@ export interface RunState {
 	lastCompactionError: string | undefined;
 	finalOutcome: FinalOutcome;
 	finalResponseDelivered: boolean;
+	/**
+	 * Names of the tools this turn actually completed, in call order (spec 051, D6). The task loop
+	 * writes them into its step log so "this step did nothing" is an observed fact rather than the
+	 * heuristic v3's effect ledger tried and admitted was bypassable.
+	 */
+	toolsUsed: string[];
 }
 
 export function createEmptyRunState(): RunState {
@@ -150,6 +162,7 @@ export function createEmptyRunState(): RunState {
 		errorMessage: undefined,
 		lastCompactionError: undefined,
 		finalOutcome: { kind: "none" },
+		toolsUsed: [],
 		finalResponseDelivered: false,
 	};
 }

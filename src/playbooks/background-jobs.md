@@ -23,7 +23,7 @@ order: 50
 
 只有一种情况要自己收尾：`notify: false` 的 fire-and-forget 作业结束时不会叫你，得自己 `job op=list`。
 
-作业属于某项长程任务时，启动就传 `taskId`，唤醒文本会点明归属；再用带 `note` 的 `task_update` 把任务停泊为 `waiting`（不设 wake，见 `task-driving.md`）。
+作业属于某项长程任务时，启动就传 `taskId`，然后用 `task_step_end` 停泊到 `{"kind":"job","id":"<jobId>"}` 这张票上（见 `task-loop.md`）。运行时会在作业结算时兑现它；票自带兜底时限，作业一直没结果也不会让任务永久静默。
 
 ## 硬约束
 

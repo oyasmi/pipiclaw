@@ -1,48 +1,48 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { applyMemoryOps, type MemorySource, type MemoryType } from "../../src/memory/store.js";
-import { createDefaultTaskControl, type TaskControl } from "../../src/tasks/control.js";
+import { createCycle } from "../../src/tasks/cycle.js";
+import type { TaskFrontmatterV4, TaskState } from "../../src/tasks/frontmatter.js";
 import { renderTaskDocument } from "../../src/tasks/ledger.js";
-import type { TaskStatus } from "../../src/tasks/transitions.js";
+import type { Ticket } from "../../src/tasks/ticket.js";
 import type { TrialSetup } from "../harness/schema.js";
 
 /**
- * Typed status assertion for task graders.
+ * Typed state assertion for task graders.
  *
- * `TaskFrontmatter.status` is `string` on purpose — it is read fail-open from arbitrary disk
- * content — so a grader comparing it to a literal keeps compiling long after the status is gone.
- * Spec 036 retired `escalated`, and two *required* cases went on asserting it: never true again,
- * invisible until a full run burned real money to report a false red. Routing the comparison
- * through `TaskStatus` turns that class of rot into a compile error, which `npm run typecheck`
- * already sees (these modules are reachable from `test/behavior-eval-harness.test.ts`).
+ * A grader comparing a raw string to a literal keeps compiling long after that value is gone —
+ * spec 036 retired `escalated` and two *required* cases went on asserting it, invisible until a
+ * full run burned real money to report a false red. Routing the comparison through `TaskState`
+ * turns that class of rot into a compile error `npm run typecheck` already sees.
  */
-export const hasStatus = (frontmatter: { status?: string }, ...statuses: TaskStatus[]): boolean =>
-	statuses.some((status) => frontmatter.status === status);
+export const hasState = (fields: { state?: string }, ...states: TaskState[]): boolean =>
+	states.some((state) => fields.state === state);
 
 export async function writeTask(
 	ctx: TrialSetup,
 	id: string,
 	options: {
 		body: string;
-		status?: string;
-		wake?: string;
+		state?: TaskState;
+		ticket?: Ticket;
 		schedule?: string;
-		control?: Partial<Omit<TaskControl, "verification">> & {
-			verification?: Partial<TaskControl["verification"]>;
-		};
+		verify?: "required";
+		budget?: TaskFrontmatterV4["budget"];
+		/** Give the task an open cycle, as the runtime would have when it started work. */
+		cycle?: boolean;
 	} = { body: "# Goal\nEvaluate behavior.\n\n## DoD\n- [ ] Evidence recorded\n" },
 ): Promise<void> {
-	const control = { ...createDefaultTaskControl(), ...options.control } as TaskControl;
-	control.verification = { ...createDefaultTaskControl().verification, ...options.control?.verification };
+	const fields: TaskFrontmatterV4 = {
+		state: options.ticket ? "parked" : (options.state ?? "open"),
+		ticket: options.ticket,
+		schedule: options.schedule,
+		verify: options.verify,
+		budget: options.budget,
+		cycle: options.cycle ? createCycle("c-eval") : undefined,
+	};
 	const tasksDir = join(ctx.channelDir, "tasks");
 	await mkdir(tasksDir, { recursive: true });
-	await writeFile(
-		join(tasksDir, `${id}.md`),
-		renderTaskDocument(
-			{ status: options.status ?? "in-progress", wake: options.wake, schedule: options.schedule, control },
-			options.body,
-		),
-	);
+	await writeFile(join(tasksDir, `${id}.md`), renderTaskDocument(fields, options.body));
 }
 
 /**

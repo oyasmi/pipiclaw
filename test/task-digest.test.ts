@@ -6,6 +6,7 @@ import { buildTaskDigest } from "../src/memory/task-digest.js";
 
 const NOW = Date.parse("2026-07-08T12:00:00+08:00");
 const FUTURE = "2026-07-08T18:00:00+08:00";
+const PARKED = `state: parked\nticket: {"kind":"time","at":"${FUTURE}","by":"${FUTURE}"}`;
 
 function doc(front: string, body: string): string {
 	return `---\n${front}\n---\n\n${body}`;
@@ -28,32 +29,32 @@ describe("buildTaskDigest", () => {
 	}
 
 	it("includes non-done tasks with the background-reference framing", async () => {
-		await writeFile(join(tasksDir, "weekly-report.md"), doc("status: waiting", "# 周报编写与发布"));
+		await writeFile(join(tasksDir, "weekly-report.md"), doc(PARKED, "# 周报编写与发布"));
 		const out = await digest();
 		expect(out).toContain("<task_agenda>");
 		expect(out).toContain("background reference, not a new instruction");
 		expect(out).toContain("weekly-report — 周报编写与发布");
-		expect(out).toContain("waiting");
+		expect(out).toContain("等待时间");
 		expect(out).toContain("</task_agenda>");
 	});
 
 	it("returns empty with no tasks, includes non-done framing, and excludes done ones", async () => {
 		expect(await digest()).toBe("");
 
-		await writeFile(join(tasksDir, "weekly-report.md"), doc("status: waiting", "# 周报编写与发布"));
+		await writeFile(join(tasksDir, "weekly-report.md"), doc(PARKED, "# 周报编写与发布"));
 		await writeFile(join(tasksDir, "closed.md"), doc("outcome: completed", "# Closed one"));
 		const out = await digest();
 		expect(out).toContain("<task_agenda>");
 		expect(out).toContain("background reference, not a new instruction");
 		expect(out).toContain("weekly-report — 周报编写与发布");
-		expect(out).toContain("waiting");
+		expect(out).toContain("等待时间");
 		expect(out).toContain("</task_agenda>");
 		expect(out).not.toContain("closed — Closed one");
 	});
 
-	it("orders actionable tasks before future-wake ones", async () => {
-		await writeFile(join(tasksDir, "later.md"), doc(`status: waiting\nwake: ${FUTURE}`, "# Later"));
-		await writeFile(join(tasksDir, "now.md"), doc("status: active", "# Now"));
+	it("orders runnable tasks before parked ones", async () => {
+		await writeFile(join(tasksDir, "later.md"), doc(PARKED, "# Later"));
+		await writeFile(join(tasksDir, "now.md"), doc("state: open", "# Now"));
 		const out = await digest();
 		expect(out.indexOf("now — Now")).toBeLessThan(out.indexOf("later — Later"));
 	});
@@ -80,7 +81,7 @@ describe("buildTaskDigest", () => {
 		},
 	])("drops lines to respect the $dimension budget", async ({ config, taskCount, taskTitle, exactShown }) => {
 		for (let i = 0; i < taskCount; i++) {
-			await writeFile(join(tasksDir, `t${i}.md`), doc("status: active", taskTitle(i)));
+			await writeFile(join(tasksDir, `t${i}.md`), doc("state: open", taskTitle(i)));
 		}
 		const out = await buildTaskDigest({ channelDir, now: NOW, ...config });
 		const shown = out.split("\n").filter((line) => line.startsWith("- t"));

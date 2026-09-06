@@ -1,512 +1,295 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync, symlinkSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { formatLocalTime } from "../src/shared/local-time.js";
-import { getSubAgentRunManager } from "../src/subagents/runs.js";
-import { workspaceSubjectHash, workspaceSubjectSnapshot } from "../src/tasks/artifact-subject.js";
-import { createDefaultTaskControl } from "../src/tasks/control.js";
-import { renderStandardTaskBody } from "../src/tasks/ledger.js";
-import { readStoredTask, taskBodyHash } from "../src/tasks/store.js";
-import { nextTaskWake } from "../src/tasks/task-schedule.js";
-import {
-	readVerificationAttestation,
-	verificationAttestationPath,
-	writeVerificationAttestation,
-} from "../src/tasks/verification.js";
+import { createCycle } from "../src/tasks/cycle.js";
+import type { TaskFrontmatterV4 } from "../src/tasks/frontmatter.js";
+import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
+import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { recordVerificationRound } from "../src/tasks/rounds.js";
+import { readStoredTask } from "../src/tasks/store.js";
 import { createTask } from "../src/tools/task-manage/create.js";
-import { closeTask, updateTask } from "../src/tools/task-manage/lifecycle.js";
+import { closeTask, listTasks, updateTask } from "../src/tools/task-manage/lifecycle.js";
+import { endTaskStep } from "../src/tools/task-manage/step-end.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
-import { verifyTask } from "../src/tools/task-manage/verification.js";
 
 const CHANNEL_ID = "dm_1";
-const STANDARD_BODY = renderStandardTaskBody({
+const SATISFIED_BODY = renderStandardTaskBody({
 	title: "Work",
 	goal: "Do the work.",
 	dod: "- [x] Result is ready",
 	manual: "Keep the task scoped.",
 });
 
-function doc(front: string, body = STANDARD_BODY): string {
-	return `---\n${front}\n---\n\n${body}`;
-}
-
-describe("task_create/task_update/task_close/task_verify (spec 046, D3)", () => {
+describe("task tool surface (spec 051, D4)", () => {
 	let workspaceDir: string;
 	let channelDir: string;
 	let tasksDir: string;
-	let subjectDir: string | undefined;
 	let options: TaskManageToolOptions;
 
 	beforeEach(async () => {
-		workspaceDir = await mkdtemp(join(tmpdir(), "task-manage-v2-"));
+		workspaceDir = await mkdtemp(join(tmpdir(), "task-manage-v4-"));
 		channelDir = join(workspaceDir, CHANNEL_ID);
 		tasksDir = join(channelDir, "tasks");
 		await mkdir(join(tasksDir, "archive"), { recursive: true });
 		options = { workspaceDir, channelDir, channelId: CHANNEL_ID };
 	});
+
 	afterEach(async () => {
+		await resetTaskLogAppenders();
 		await rm(workspaceDir, { recursive: true, force: true });
-		if (subjectDir) await rm(subjectDir, { recursive: true, force: true });
 	});
 
-	async function writeTask(id: string, front: string, body = STANDARD_BODY): Promise<void> {
-		await writeFile(join(tasksDir, `${id}.md`), doc(front, body));
-	}
-
-	async function createOneShot(id = "work", verificationRequired?: boolean): Promise<void> {
-		await createTask(options, {
-			id,
-			title: "Work",
-			goal: "Do the work.",
-			dod: "- [x] Result is ready",
-			verificationRequired,
-		});
-	}
-
-	async function registerSettledVerificationRun(
-		runId: string,
-		taskId: string,
-		workingDirectory: string,
-	): Promise<void> {
-		const artifactDir = join(channelDir, "subagent-artifacts", runId);
-		await mkdir(artifactDir, { recursive: true });
-		const manager = getSubAgentRunManager(CHANNEL_ID);
-		await manager.register({
-			runId,
-			channelId: CHANNEL_ID,
-			runtime: "internal",
-			agent: "verifier",
-			label: "verify",
-			source: "inline",
-			tools: ["bash"],
-			purpose: "verify",
-			taskId,
-			workingDirectory,
-			artifactDir,
-			mutates: "write",
-		});
-		await manager.settle(
-			runId,
-			{
-				status: "completed",
-				usage: {
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					total: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-				usageKnown: true,
-				costKnown: true,
-				turns: 0,
-				toolCalls: 0,
-				durationMs: 1,
-				outputText: "VERDICT: PASS",
-			},
-			{ announce: false },
-		);
-	}
-
-	it("creates recurring work sleeping with its first occurrence and no dispatch", async () => {
-		const result = await createTask(options, {
-			id: "weekly",
-			title: "Weekly",
-			goal: "Run weekly.",
-			dod: "- [ ] Result is ready",
-			schedule: "0 9 * * 1",
-		});
-		const stored = await readFile(join(tasksDir, "weekly.md"), "utf-8");
-		expect(result.status).toBe("sleeping");
-		expect(stored).toContain("status: sleeping");
-		expect(stored).toContain(`wake: ${formatLocalTime(nextTaskWake("0 9 * * 1")!)}`);
-		expect(stored).not.toContain('"cycleId"');
-	});
-
-	it("rejects sleeping for a one-shot task", async () => {
-		await expect(
-			createTask(options, { id: "bad", title: "Bad", goal: "G", dod: "- [ ] D", status: "sleeping" }),
-		).rejects.toThrow(/one-shot/);
-	});
-
-	it("checkpoints active work (task_update with note) and normalizes a future wake to waiting", async () => {
-		await createOneShot("progress");
-		const futureWake = formatLocalTime(new Date(Date.now() + 24 * 60 * 60 * 1000));
-		const result = await updateTask(options, {
-			id: "progress",
-			note: "Build complete; wait for the scheduled check.",
-			wake: futureWake,
-		});
-		expect(result.status).toBe("waiting");
-		const stored = await readStoredTask(channelDir, "progress");
-		expect(stored?.fields).toMatchObject({ status: "waiting", wake: futureWake });
-		expect(stored?.fields.control?.waitingFor).toBe("time");
-	});
-
-	it("imports a real verifier attestation and then completes without approval", async () => {
-		await createOneShot("verified", true);
-		// Parked the same way any other delegation parks — no special "verification" status.
-		await updateTask(options, {
-			id: "verified",
-			note: "Dispatched an independent purpose=verify sub-agent.",
-			status: "waiting",
-		});
-		const attestation = await writeVerificationAttestation(channelDir, {
-			runId: "run-1",
-			taskId: "verified",
-			verdict: "pass",
-			checkedAt: "2026-08-04T12:00:00+08:00",
-			evidence: "The checked result exists and the test command passed.",
-			workspaceChanged: false,
-			verificationStrength: "enforced",
-		});
-		const verified = await verifyTask(options, { id: "verified", verifierRunId: attestation.runId });
-		expect(verified.status).toBe("active");
-		const completed = await closeTask(options, {
-			id: "verified",
-			outcome: "complete",
-			summary: "Result is complete.",
-			evidence: "Independent verifier run-1 passed.",
-		});
-		expect(completed).toMatchObject({ action: "close", archived: true });
-		const archive = join(tasksDir, "archive", "verified.md");
-		expect(existsSync(archive)).toBe(true);
-		const archived = await readFile(archive, "utf-8");
-		expect(archived).toContain("outcome: completed");
-		expect(archived).not.toContain("status:");
-	});
-
-	it("reads a legacy fieldless subject attestation with explicit HEAD-sensitive compatibility", async () => {
-		const taskId = "legacy-attestation";
-		await createOneShot(taskId, true);
-		const task = await readStoredTask(channelDir, taskId);
-		expect(task).toBeDefined();
-		if (!task) return;
-		const runId = "legacy-run";
-		await mkdir(join(channelDir, "tasks", ".verifications"), { recursive: true });
+	async function writeTask(id: string, fields: Partial<TaskFrontmatterV4> = {}): Promise<void> {
 		await writeFile(
-			verificationAttestationPath(channelDir, runId),
-			`${JSON.stringify({
-				version: 1,
-				runId,
-				taskId,
-				verdict: "pass",
-				checkedAt: "2026-08-04T12:00:00+08:00",
-				bodyHash: taskBodyHash(task.body),
-				evidence: "Legacy verifier evidence.",
-				workspaceChanged: false,
-				subjectHash: "a".repeat(64),
-			})}\n`,
-			"utf-8",
+			join(tasksDir, `${id}.md`),
+			renderTaskDocument({ state: "open", cycle: createCycle("c-1"), ...fields }, SATISFIED_BODY),
 		);
+	}
 
-		const attestation = await readVerificationAttestation(channelDir, runId);
-		expect(attestation.subjectMode).toBe("legacy-head");
-		expect(attestation.subjectBaseCommit).toBeUndefined();
-		expect(attestation.verificationStrength).toBe("enforced");
+	describe("task_create", () => {
+		it("creates a one-shot task open, so it starts working instead of waiting for tomorrow", async () => {
+			const result = await createTask(options, { id: "work", title: "Work", goal: "G", dod: "- [ ] Done" });
+			expect(result).toMatchObject({ state: "open" });
+			expect((await readStoredTask(channelDir, "work"))?.fields.state).toBe("open");
+		});
+
+		it("records a cadence and a budget without parking the first cycle", async () => {
+			await createTask(options, {
+				id: "daily",
+				title: "Daily",
+				goal: "G",
+				dod: "- [ ] Done",
+				schedule: "0 9 * * *",
+				budget: { steps: 12, rounds: 2 },
+			});
+			const fields = (await readStoredTask(channelDir, "daily"))?.fields;
+			expect(fields).toMatchObject({ state: "open", schedule: "0 9 * * *" });
+			expect(fields?.budget).toEqual({ steps: 12, rounds: 2 });
+		});
+
+		it("keeps ids and DoD strict", async () => {
+			await expect(createTask(options, { id: "bad/id", title: "B", goal: "G", dod: "- [ ] D" })).rejects.toThrow(
+				/Invalid task id/,
+			);
+			await expect(createTask(options, { id: "no-dod", title: "N", goal: "G", dod: "prose" })).rejects.toThrow(
+				/no checklist items/,
+			);
+			await createTask(options, { id: "dup", title: "D", goal: "G", dod: "- [ ] D" });
+			await expect(createTask(options, { id: "dup", title: "D", goal: "G", dod: "- [ ] D" })).rejects.toThrow(
+				/already exists/,
+			);
+		});
+
+		it("rejects a cadence that would fire faster than the anti-nudge floor", async () => {
+			await expect(
+				createTask(options, { id: "spin", title: "S", goal: "G", dod: "- [ ] D", schedule: "* * * * *" }),
+			).rejects.toThrow(/no more often than/);
+		});
 	});
 
-	it("rejects an attestation subjectDir that does not match the persisted run checkout", async () => {
-		const trustedDir = join(workspaceDir, "trusted-checkout");
-		const otherDir = join(workspaceDir, "other-checkout");
-		await mkdir(trustedDir, { recursive: true });
-		await mkdir(otherDir, { recursive: true });
-		const taskId = "subject-binding";
-		await createOneShot(taskId, true);
-		await updateTask(
-			{ ...options, workingDirectory: trustedDir },
-			{ id: taskId, note: "Dispatched an independent purpose=verify sub-agent.", status: "waiting" },
-		);
-		await registerSettledVerificationRun("subject-binding-run", taskId, trustedDir);
-		const attestation = await writeVerificationAttestation(channelDir, {
-			runId: "subject-binding-run",
-			taskId,
-			verdict: "pass",
-			checkedAt: "2026-08-04T12:00:00+08:00",
-			evidence: "The checked result exists.",
-			workspaceChanged: false,
-			subjectHash: "a".repeat(64),
-			subjectDir: otherDir,
-			verificationStrength: "advisory",
+	describe("task_update", () => {
+		it("edits plan, cadence, budget and verification without touching task state", async () => {
+			await writeTask("edit", {
+				state: "parked",
+				ticket: { kind: "ask", asked: "?", by: "2099-01-01T00:00:00+08:00" },
+			});
+			await updateTask(options, {
+				id: "edit",
+				planSteps: [{ id: "P1", text: "Build it" }],
+				schedule: "0 9 * * *",
+				budget: { steps: 5 },
+				verificationRequired: true,
+			});
+			const document = await readStoredTask(channelDir, "edit");
+			expect(document?.body).toContain("P1 Build it");
+			expect(document?.fields).toMatchObject({ schedule: "0 9 * * *", verify: "required" });
+			expect(document?.fields.budget?.steps).toBe(5);
+			// Metadata edits are not lifecycle moves: the park survives untouched (D4).
+			expect(document?.fields.state).toBe("parked");
 		});
 
-		await expect(
-			verifyTask({ ...options, workingDirectory: trustedDir }, { id: taskId, verifierRunId: attestation.runId }),
-		).rejects.toThrow(/subjectDir does not match its persisted workingDirectory/);
+		it("clears a cadence with an empty string", async () => {
+			await writeTask("edit", { schedule: "0 9 * * *" });
+			await updateTask(options, { id: "edit", schedule: "" });
+			expect((await readStoredTask(channelDir, "edit"))?.fields.schedule).toBeUndefined();
+		});
 	});
 
-	it("fails closed for a subject-bearing attestation whose run record is unavailable", async () => {
-		const taskId = "subject-missing-run";
-		const checkout = join(workspaceDir, "checkout");
-		await mkdir(checkout, { recursive: true });
-		await createOneShot(taskId, true);
-		const attestation = await writeVerificationAttestation(channelDir, {
-			runId: "subject-missing-run-record",
-			taskId,
-			verdict: "pass",
-			checkedAt: "2026-08-04T12:00:00+08:00",
-			evidence: "The checked result exists.",
-			workspaceChanged: false,
-			subjectHash: "b".repeat(64),
-			subjectDir: checkout,
-			verificationStrength: "advisory",
+	describe("task_step_end", () => {
+		const loop = (taskId: string): TaskManageToolOptions => ({ ...options, taskId, cycleId: "c-1" });
+
+		it("is unavailable outside a task loop", async () => {
+			await writeTask("work");
+			await expect(endTaskStep(options, { outcome: "continue", note: "n" })).rejects.toThrow(
+				/only available inside/,
+			);
 		});
 
-		await expect(
-			readVerificationAttestation(channelDir, attestation.runId, { trustedWorkingDirectory: undefined }),
-		).rejects.toThrow(/no persisted workingDirectory is available/);
+		it("continue keeps the task open and logs the step with the tools it used", async () => {
+			await writeTask("work");
+			const result = await endTaskStep(
+				{ ...loop("work"), getToolsUsed: () => ["bash", "read", "bash"] },
+				{ outcome: "continue", note: "ran the check" },
+			);
+			expect(result.state).toBe("open");
+			const [record] = await readTaskLog(channelDir, "work", { kinds: ["step"] });
+			expect(record).toMatchObject({ kind: "step", seq: 1, outcome: "continue" });
+			// Deduplicated: the idle detector asks "did anything happen", not "how many times".
+			expect(record?.kind === "step" && record.tools).toEqual(["bash", "read"]);
+			expect((await readStoredTask(channelDir, "work"))?.fields.cycle?.steps).toBe(1);
+		});
+
+		it("park requires a ticket and refuses one that cannot be redeemed", async () => {
+			await writeTask("work");
+			await expect(endTaskStep(loop("work"), { outcome: "park", note: "n" })).rejects.toThrow(/requires a ticket/);
+			await expect(
+				endTaskStep(loop("work"), { outcome: "park", note: "n", ticket: { kind: "run", id: "run_ghost" } }),
+			).rejects.toThrow(/No run "run_ghost"/);
+
+			await endTaskStep(loop("work"), { outcome: "park", note: "n", ticket: { kind: "time", at: "+2h" } });
+			const fields = (await readStoredTask(channelDir, "work"))?.fields;
+			expect(fields?.state).toBe("parked");
+			expect(fields?.ticket?.by).toBeTruthy();
+		});
+
+		it("blocked parks on an ask ticket and always speaks to the user", async () => {
+			await writeTask("work");
+			await endTaskStep(loop("work"), { outcome: "blocked", note: "n", reason: "Merge to master?" });
+			const fields = (await readStoredTask(channelDir, "work"))?.fields;
+			expect(fields?.ticket).toMatchObject({ kind: "ask", asked: "Merge to master?" });
+			// A task waiting on a person that never says so is the silent dead end tickets exist
+			// to prevent, so `blocked` notifies even without an explicit `notify`.
+			expect(await readFile(join(tasksDir, ".steer", "work.out.md"), "utf-8")).toContain("Merge to master?");
+		});
+
+		it("stays silent unless the step asked to speak", async () => {
+			await writeTask("quiet");
+			await endTaskStep(loop("quiet"), { outcome: "continue", note: "n" });
+			expect(existsSync(join(tasksDir, ".steer", "quiet.out.md"))).toBe(false);
+			await endTaskStep(loop("quiet"), { outcome: "continue", note: "n", notify: "报告一下" });
+			expect(await readFile(join(tasksDir, ".steer", "quiet.out.md"), "utf-8")).toContain("报告一下");
+		});
+
+		it("done archives a one-shot task and parks a recurring one on its next occurrence", async () => {
+			await writeTask("once");
+			await endTaskStep(loop("once"), { outcome: "done", note: "n", summary: "S", evidence: "E" });
+			expect(existsSync(join(tasksDir, "once.md"))).toBe(false);
+			expect(await readFile(join(tasksDir, "archive", "once.md"), "utf-8")).toContain("outcome: completed");
+
+			await writeTask("daily", { schedule: "0 9 * * *" });
+			await endTaskStep(loop("daily"), { outcome: "done", note: "n", summary: "S", evidence: "E" });
+			const fields = (await readStoredTask(channelDir, "daily"))?.fields;
+			expect(fields?.state).toBe("parked");
+			expect(fields?.ticket?.kind).toBe("schedule");
+			expect((await readStoredTask(channelDir, "daily"))?.body).toContain("## 上次结果");
+		});
+
+		it("refuses done while acceptance items are unmet", async () => {
+			await writeFile(
+				join(tasksDir, "open-dod.md"),
+				renderTaskDocument(
+					{ state: "open", cycle: createCycle("c-1") },
+					renderStandardTaskBody({ title: "W", goal: "G", dod: "- [ ] Not yet" }),
+				),
+			);
+			await expect(
+				endTaskStep(loop("open-dod"), { outcome: "done", note: "n", summary: "S", evidence: "E" }),
+			).rejects.toThrow(/unmet acceptance items/);
+		});
+
+		// D7: a cycle of FAIL rounds must not read as verified. The gate is a real PASS, not a count.
+		// Mutation check (2026-09-05): change the gate back to `cycle.rounds === 0` and this goes red.
+		it("refuses done on a verify-required task until a passing round has landed", async () => {
+			await writeTask("checked", { verify: "required" });
+			await expect(
+				endTaskStep(loop("checked"), { outcome: "done", note: "n", summary: "S", evidence: "E" }),
+			).rejects.toThrow(/requires independent verification/);
+
+			await recordVerificationRound(
+				{ channelDir, taskId: "checked", verifyRunId: "run_v1", verdict: "fail", strength: "advisory" },
+				4,
+			);
+			await expect(
+				endTaskStep(loop("checked"), { outcome: "done", note: "n", summary: "S", evidence: "E" }),
+			).rejects.toThrow(/requires independent verification/);
+
+			await recordVerificationRound(
+				{ channelDir, taskId: "checked", verifyRunId: "run_v2", verdict: "pass", strength: "advisory" },
+				4,
+			);
+			await expect(
+				endTaskStep(loop("checked"), { outcome: "done", note: "n", summary: "S", evidence: "E" }),
+			).resolves.toMatchObject({ archived: true });
+		});
 	});
 
-	it("canonicalizes a valid subject alias against a settled run record", async () => {
-		const checkout = join(workspaceDir, "settled-checkout");
-		const alias = join(workspaceDir, "settled-alias");
-		await mkdir(checkout, { recursive: true });
-		symlinkSync(checkout, alias, "dir");
-		const taskId = "subject-alias";
-		await createOneShot(taskId, true);
-		await registerSettledVerificationRun("subject-alias-run", taskId, checkout);
-		const attestation = await writeVerificationAttestation(channelDir, {
-			runId: "subject-alias-run",
-			taskId,
-			verdict: "pass",
-			checkedAt: "2026-08-04T12:00:00+08:00",
-			evidence: "The checked result exists.",
-			workspaceChanged: false,
-			subjectHash: "c".repeat(64),
-			subjectDir: alias,
-			verificationStrength: "advisory",
-		});
-		const run = getSubAgentRunManager(CHANNEL_ID).get(attestation.runId);
-		const bound = await readVerificationAttestation(channelDir, attestation.runId, {
-			trustedWorkingDirectory: run?.workingDirectory,
-		});
-
-		expect(bound.subjectDir).toBe(realpathSync(checkout));
-	});
-
-	it("rechecks the attestation subject binding during task_close", async () => {
-		const trustedDir = join(workspaceDir, "close-trusted-checkout");
-		const otherDir = join(workspaceDir, "close-other-checkout");
-		await mkdir(trustedDir, { recursive: true });
-		await mkdir(otherDir, { recursive: true });
-		const taskId = "close-subject-binding";
-		await createOneShot(taskId, true);
-		const withSubject = { ...options, workingDirectory: trustedDir };
-		await updateTask(withSubject, {
-			id: taskId,
-			note: "Dispatched an independent purpose=verify sub-agent.",
-			status: "waiting",
-		});
-		await registerSettledVerificationRun("close-subject-binding-run", taskId, trustedDir);
-		const attestation = await writeVerificationAttestation(channelDir, {
-			runId: "close-subject-binding-run",
-			taskId,
-			verdict: "pass",
-			checkedAt: "2026-08-04T12:00:00+08:00",
-			evidence: "The checked result exists.",
-			workspaceChanged: false,
-			verificationStrength: "advisory",
-		});
-		await verifyTask(withSubject, { id: taskId, verifierRunId: attestation.runId });
-
-		const attestationPath = verificationAttestationPath(channelDir, attestation.runId);
-		const tampered = JSON.parse(await readFile(attestationPath, "utf-8")) as Record<string, unknown>;
-		tampered.subjectHash = "d".repeat(64);
-		tampered.subjectDir = otherDir;
-		await writeFile(attestationPath, `${JSON.stringify(tampered)}\n`, "utf-8");
-
-		await expect(
-			closeTask(withSubject, {
-				id: taskId,
+	describe("task_close", () => {
+		it("archives a completed one-shot task and records the close in the loop log", async () => {
+			await writeTask("done");
+			const result = await closeTask(options, {
+				id: "done",
 				outcome: "complete",
-				summary: "Result is complete.",
-				evidence: "Independent verifier passed.",
-			}),
-		).rejects.toThrow(/subjectDir does not match its persisted workingDirectory/);
+				summary: "Finished.",
+				evidence: "The checked DoD item is present.",
+			});
+			expect(result).toMatchObject({ archived: true });
+			expect(existsSync(join(tasksDir, "done.md"))).toBe(false);
+			// The loop log travels with its contract, so an archived task stays inspectable.
+			expect(existsSync(join(tasksDir, "done.jsonl"))).toBe(false);
+			const archivedLog = await readFile(join(tasksDir, "archive", "done.jsonl"), "utf-8");
+			expect(archivedLog).toContain('"kind":"close"');
+		});
+
+		it("skips one recurring occurrence onto the next, and refuses skip for one-shot work", async () => {
+			await writeTask("weekly", { schedule: "0 9 * * 1" });
+			const skipped = await closeTask(options, { id: "weekly", outcome: "skip", reason: "source missing" });
+			expect(skipped.state).toBe("parked");
+			const document = await readStoredTask(channelDir, "weekly");
+			expect(document?.fields.ticket?.kind).toBe("schedule");
+			// A skip must not fabricate completion evidence for an occurrence that did not run.
+			expect(document?.body).toContain("跳过");
+
+			await writeTask("once");
+			await expect(closeTask(options, { id: "once", outcome: "skip", reason: "x" })).rejects.toThrow(/one-shot/);
+		});
+
+		it("deletes only the closed task's own events, not a sibling whose id extends it by a dot", async () => {
+			// "v1" is a string prefix of "v1.2-release"; ids may contain dots, so cleanup must match
+			// the parsed id exactly rather than `startsWith("task.<channel>.v1.")`.
+			await writeTask("v1");
+			await writeTask("v1.2-release");
+			const eventsDir = join(workspaceDir, "events");
+			await mkdir(eventsDir, { recursive: true });
+			const own = join(eventsDir, "task.dm_1.v1.checkin.json");
+			const sibling = join(eventsDir, "task.dm_1.v1.2-release.checkin.json");
+			const body = JSON.stringify({ type: "periodic", channelId: CHANNEL_ID, text: "c", schedule: "0 * * * *" });
+			await writeFile(own, body);
+			await writeFile(sibling, body);
+
+			await closeTask(options, { id: "v1", outcome: "complete", summary: "S", evidence: "E" });
+			expect(existsSync(own)).toBe(false);
+			expect(existsSync(sibling)).toBe(true);
+		});
+
+		it("cancels into a cancelled archive", async () => {
+			await writeTask("gone", { schedule: "0 9 * * 1" });
+			await closeTask(options, { id: "gone", outcome: "cancel", reason: "No longer needed." });
+			expect(await readFile(join(tasksDir, "archive", "gone.md"), "utf-8")).toContain("outcome: cancelled");
+		});
 	});
 
-	it("anchors completion subject freshness to the attestation, with no mirrored field to drift", async () => {
-		subjectDir = await mkdtemp(join(tmpdir(), "task-manage-subject-"));
-		execFileSync("git", ["-C", subjectDir, "init", "-q"], { stdio: "pipe" });
-		execFileSync("git", ["-C", subjectDir, "config", "user.email", "test@example.com"], { stdio: "pipe" });
-		execFileSync("git", ["-C", subjectDir, "config", "user.name", "Test"], { stdio: "pipe" });
-		await writeFile(join(subjectDir, "artifact.txt"), "before\n");
-		execFileSync("git", ["-C", subjectDir, "add", "artifact.txt"], { stdio: "pipe" });
-		execFileSync("git", ["-C", subjectDir, "commit", "-q", "-m", "init"], { stdio: "pipe" });
-		const subjectAlias = join(workspaceDir, "subject-alias");
-		symlinkSync(subjectDir, subjectAlias, "dir");
-
-		await createOneShot("subject-drift", true);
-		const withSubject = { ...options, workingDirectory: subjectDir };
-		await updateTask(withSubject, {
-			id: "subject-drift",
-			note: "Dispatched an independent purpose=verify sub-agent.",
-			status: "waiting",
+	describe("task_list", () => {
+		it("summarises state, park and cycle spend for each live task", async () => {
+			await writeTask("open");
+			await writeTask("waiting", {
+				state: "parked",
+				ticket: { kind: "ask", asked: "merge?", by: "2099-01-01T00:00:00+08:00" },
+			});
+			const result = await listTasks(options);
+			expect(result.tasks?.map((task) => task.id).sort()).toEqual(["open", "waiting"]);
+			expect(result.tasks?.find((task) => task.id === "waiting")?.ticket).toContain("merge?");
 		});
-		await registerSettledVerificationRun("subject-run", "subject-drift", subjectDir);
-		const subjectHash = await workspaceSubjectHash(subjectDir);
-		expect(subjectHash).toBeDefined();
-		const attestation = await writeVerificationAttestation(channelDir, {
-			runId: "subject-run",
-			taskId: "subject-drift",
-			verdict: "pass",
-			checkedAt: "2026-08-04T12:00:00+08:00",
-			evidence: "The checked result exists.",
-			workspaceChanged: false,
-			subjectHash,
-			subjectDir: subjectAlias,
-			verificationStrength: "enforced",
-		});
-		await verifyTask(withSubject, { id: "subject-drift", verifierRunId: attestation.runId });
-
-		// The artifact drifts after verify. There is no mirrored subjectHash left in control to
-		// tamper with — freshness is checked straight off the attestation file every time.
-		await writeFile(join(subjectDir, "artifact.txt"), "after\n");
-		const taskPath = join(tasksDir, "subject-drift.md");
-
-		await expect(
-			closeTask(withSubject, {
-				id: "subject-drift",
-				outcome: "complete",
-				summary: "Result is complete.",
-				evidence: "Independent verifier passed before the subject drifted.",
-			}),
-		).rejects.toThrow(/artifacts changed/);
-		expect(existsSync(taskPath)).toBe(true);
-	});
-
-	it("lets task_close accept a normal commit of content already checked by a base-relative attestation", async () => {
-		subjectDir = await mkdtemp(join(tmpdir(), "task-manage-base-subject-"));
-		execFileSync("git", ["-C", subjectDir, "init", "-q"], { stdio: "pipe" });
-		execFileSync("git", ["-C", subjectDir, "config", "user.email", "test@example.com"], { stdio: "pipe" });
-		execFileSync("git", ["-C", subjectDir, "config", "user.name", "Test"], { stdio: "pipe" });
-		await writeFile(join(subjectDir, "artifact.txt"), "before\n");
-		execFileSync("git", ["-C", subjectDir, "add", "artifact.txt"], { stdio: "pipe" });
-		execFileSync("git", ["-C", subjectDir, "commit", "-q", "-m", "init"], { stdio: "pipe" });
-
-		await writeFile(join(subjectDir, "artifact.txt"), "verified\n");
-		const snapshot = await workspaceSubjectSnapshot(subjectDir);
-		expect(snapshot).toBeDefined();
-		if (!snapshot) return;
-
-		await createOneShot("subject-commit", true);
-		const withSubject = { ...options, workingDirectory: subjectDir };
-		await updateTask(withSubject, { id: "subject-commit", note: "Dispatched verifier.", status: "waiting" });
-		await registerSettledVerificationRun("subject-base-run", "subject-commit", subjectDir);
-		const attestation = await writeVerificationAttestation(channelDir, {
-			runId: "subject-base-run",
-			taskId: "subject-commit",
-			verdict: "pass",
-			checkedAt: "2026-08-04T12:00:00+08:00",
-			evidence: "The implementation and checks passed.",
-			workspaceChanged: false,
-			subjectHash: snapshot.hash,
-			subjectDir,
-			subjectMode: "base-relative",
-			subjectBaseCommit: snapshot.baseCommit,
-			subjectBaselineUntrackedPaths: snapshot.baselineUntrackedPaths,
-			verificationStrength: "advisory",
-		});
-		await verifyTask(withSubject, { id: "subject-commit", verifierRunId: attestation.runId });
-
-		execFileSync("git", ["-C", subjectDir, "add", "artifact.txt"], { stdio: "pipe" });
-		execFileSync("git", ["-C", subjectDir, "commit", "-q", "-m", "ship verified content"], { stdio: "pipe" });
-		await expect(
-			closeTask(withSubject, {
-				id: "subject-commit",
-				outcome: "complete",
-				summary: "Result is complete.",
-				evidence: "Independent verifier passed before the normal commit.",
-			}),
-		).resolves.toMatchObject({ action: "close", archived: true });
-	});
-
-	it("completes one-shot work directly into the archive", async () => {
-		await createOneShot("done");
-		const result = await closeTask(options, {
-			id: "done",
-			outcome: "complete",
-			summary: "Finished.",
-			evidence: "The checked DoD item is present.",
-		});
-		expect(result).toMatchObject({ archived: true, status: undefined });
-		expect(existsSync(join(tasksDir, "done.md"))).toBe(false);
-		expect(await readFile(join(tasksDir, "archive", "done.md"), "utf-8")).toContain("outcome: completed");
-	});
-
-	it("deletes only the closed task's own events, not a sibling task whose id is a dotted extension of it", async () => {
-		// "v1" is a string-prefix of "v1.2-release"; task ids may contain dots (TASK_ID_PATTERN),
-		// so cleanup must match the parsed id exactly, not `startsWith("task.<channel>.v1.")`.
-		await createOneShot("v1");
-		await writeTask("v1.2-release", "status: active");
-		const eventsDir = join(workspaceDir, "events");
-		await mkdir(eventsDir, { recursive: true });
-		const ownEvent = join(eventsDir, "task.dm_1.v1.checkin.json");
-		const siblingEvent = join(eventsDir, "task.dm_1.v1.2-release.checkin.json");
-		const eventBody = JSON.stringify({
-			type: "periodic",
-			channelId: CHANNEL_ID,
-			text: "check",
-			schedule: "0 * * * *",
-		});
-		await writeFile(ownEvent, eventBody);
-		await writeFile(siblingEvent, eventBody);
-
-		await closeTask(options, {
-			id: "v1",
-			outcome: "complete",
-			summary: "Finished.",
-			evidence: "The checked DoD item is present.",
-		});
-
-		expect(existsSync(ownEvent)).toBe(false);
-		expect(existsSync(siblingEvent)).toBe(true);
-	});
-
-	it("closes recurring complete and skip as sleeping, not as live terminal states", async () => {
-		await writeTask("complete-cycle", "status: active\nschedule: 0 9 * * 1");
-		const completed = await closeTask(options, {
-			id: "complete-cycle",
-			outcome: "complete",
-			summary: "Cycle complete.",
-			evidence: "All checks passed.",
-		});
-		expect(completed).toMatchObject({ status: "sleeping", archived: false });
-		const completedStored = await readStoredTask(channelDir, "complete-cycle");
-		expect(completedStored?.fields.status).toBe("sleeping");
-		expect(completedStored?.fields.wake).toBeDefined();
-
-		await writeTask(
-			"skip-cycle",
-			`status: active\nschedule: 0 9 * * 1\ncontrol: ${JSON.stringify(createDefaultTaskControl())}`,
-		);
-		const skipped = await closeTask(options, {
-			id: "skip-cycle",
-			outcome: "skip",
-			reason: "The source report was not produced.",
-		});
-		expect(skipped).toMatchObject({ status: "sleeping", archived: false });
-		const skippedStored = await readStoredTask(channelDir, "skip-cycle");
-		expect(skippedStored?.fields.status).toBe("sleeping");
-		expect(skippedStored?.fields.control?.verification.status).toBe("pending");
-	});
-
-	it("cancels a sleeping recurring task into a cancelled archive", async () => {
-		await writeTask("cancel-cycle", "status: sleeping\nschedule: 0 9 * * 1\nwake: 2026-08-10T09:00:00+08:00");
-		const result = await closeTask(options, { id: "cancel-cycle", outcome: "cancel", reason: "No longer needed." });
-		expect(result).toMatchObject({ archived: true });
-		expect(await readFile(join(tasksDir, "archive", "cancel-cycle.md"), "utf-8")).toContain("outcome: cancelled");
-	});
-
-	it("keeps task ids and document sections strict", async () => {
-		await expect(createTask(options, { id: "bad/id", title: "Bad", goal: "G", dod: "- [ ] D" })).rejects.toThrow(
-			/Invalid task id/,
-		);
-		await expect(createTask(options, { id: "no-dod", title: "No DoD", goal: "G", dod: "prose" })).rejects.toThrow(
-			/no checklist items/,
-		);
 	});
 });

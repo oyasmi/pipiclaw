@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "fs";
+import { mkdir } from "fs/promises";
 import { dirname, join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
@@ -7,6 +8,8 @@ import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import type { EventAction } from "../src/runtime/events.js";
 import { EventsWatcher } from "../src/runtime/events.js";
+import { parseTaskFrontmatterV4 } from "../src/tasks/frontmatter.js";
+import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-events-");
@@ -240,6 +243,51 @@ describe("EventsWatcher", () => {
 		});
 		expect(existsSync(pastPath)).toBe(false);
 		expect(bot.events).toHaveLength(1);
+	});
+
+	// Spec 051, D8/INV-7: the one and only touchpoint between events and the task loop.
+	// Mutation check (2026-09-05): drop `&& ticket.event === name` from the redemption matcher and
+	// the first half goes red — an unrelated task-owned event would swallow the channel's wake.
+	it("redeems a task's signal ticket instead of waking the channel, and only for the named event", async () => {
+		const dir = createTempDir();
+		const channelDir = join(dirname(dir), "dm_1");
+		await mkdir(join(channelDir, "tasks"), { recursive: true });
+		const taskPath = join(channelDir, "tasks", "sensor.md");
+		const eventName = "task.dm_1.sensor.checkin";
+		const parked = renderTaskDocument(
+			{
+				state: "parked",
+				ticket: { kind: "signal", event: eventName, by: "2099-01-01T00:00:00+08:00" },
+			},
+			"# Sensor task\n",
+		);
+
+		const bot = new FakeBot();
+		const watcher = createWatcher(dir, bot);
+		const privateApi = getEventsWatcherPrivateApi(watcher);
+		const event = {
+			type: "one-shot" as const,
+			channelId: "dm_1",
+			text: "sensor fired",
+			at: "2020-01-01T00:00:00.000Z",
+		};
+
+		// A different task-owned event must not redeem this ticket, and must still wake the channel.
+		writeFileSync(taskPath, parked);
+		writeFileSync(join(dir, "task.dm_1.sensor.other.json"), JSON.stringify(event));
+		await privateApi.execute("task.dm_1.sensor.other.json", event, false);
+		expect(bot.events).toHaveLength(1);
+		expect(parseTaskFrontmatterV4(readFileSync(taskPath, "utf-8")).fields.state).toBe("parked");
+
+		// The named event redeems the ticket and delivers no chat wake at all.
+		writeFileSync(join(dir, `${eventName}.json`), JSON.stringify(event));
+		await privateApi.execute(`${eventName}.json`, event, false);
+		expect(bot.events).toHaveLength(1);
+		expect(parseTaskFrontmatterV4(readFileSync(taskPath, "utf-8")).fields.state).toBe("open");
+
+		// With the ticket gone, the same event goes back to being an ordinary channel wake.
+		await privateApi.execute(`${eventName}.json`, event, false);
+		expect(bot.events).toHaveLength(2);
 	});
 
 	it("schedules future one-shot events and rejects delays beyond platform limits", async () => {

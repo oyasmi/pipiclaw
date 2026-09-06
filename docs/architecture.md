@@ -245,16 +245,18 @@ flowchart LR
 | | 定时事件 Events | 持久任务 Tasks |
 |---|---|---|
 | 事实源 | `workspace/events/<name>.json` | `workspace/<channelId>/tasks/<id>.md`（frontmatter 契约） |
-| 类型 | `one-shot`（ISO 时刻） / `periodic`（cron 按主机时区，croner 库） | `active / waiting / sleeping` 三态 + 独立 `enabled`；归档记录 `completed / cancelled` |
+| 类型 | `one-shot`（ISO 时刻） / `periodic`（cron 按主机时区，croner 库） | `open / parked / done` 三态 + 正交的 `paused`；`parked` 必带一张等待票；归档记录 `completed / cancelled` |
 | 驱动者 | `EventsWatcher`：fs.watch + 防抖，cron 到点触发 | `TaskDriver`：自适应 timer + nudge 扫描台账，每频道每 tick 至多唤醒 1 个可行动任务 |
 | 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | `wake` 时刻、fingerprint 未变化时按 stalled 间隔退避 |
 | 治理 | 事件历史 `state/events/history.jsonl` | 确定性 governor：active attempt budget / deadline 或连续无进展 → `enabled=false` + `stop(by=governor)`，直接通知 |
-| Agent 侧工具 | `event_manage` | `task_create`/`task_update`/`task_close`/`task_verify`/`task_list`，配合 `task-planning` / `task-driving` playbook |
+| Agent 侧工具 | `event_manage` | `task_create`/`task_update`/`task_close`/`task_list`/`task_log`，任务会话里另有 `task_step_end`；配合 `task-loop` playbook |
 | 用户命令 | `/events` | `/tasks`（pause/resume/run/set/doctor 等零 LLM 成本控制） |
 
 TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`（带任务胶囊摘要），走与用户消息完全相同的串行轮次管道；轮次结束后把 usage/耗时回写任务控制块（`finishTaskAttempt`）。整套任务机制（全部 task_* 工具、TaskDriver、任务摘要注入）由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
 
-任务正文可选携带一段 `## Plan`（spec 037）：介于 Goal/DoD 契约与只增的 Current Cycle 日志之间的手段层，四态 checkbox（`[ ]`/`[x]`/`[!]`/`[~]`），当前步骤由 runtime 从文档顺序推导、不由模型自报，唤醒胶囊与任务摘要都会显示进度和当前步骤。契约段哈希的边界因此改为「Plan 与 Current Cycle 中先出现的那个」，使 Plan 步骤状态变化永不影响已记录的验证 PASS。Plan 状态刻意不进入 TaskDriver 的停滞 fingerprint——勾一个复选框不能重置连续无进展计数、买到快速重试档。
+任务正文可选携带一段 `## Plan`（spec 037）：介于 Goal/DoD 契约与循环日志之间的手段层，四态 checkbox（`[ ]`/`[x]`/`[!]`/`[~]`），当前步骤由 runtime 从文档顺序推导、不由模型自报。契约段哈希的边界是「Plan 与 `## 上次结果` 中先出现的那个」，使 Plan 步骤状态变化永不影响已记录的验证 PASS。
+
+spec 051 把任务拆成三样东西：**契约**（`tasks/<id>.md`，每一步完整注入；4 KB 预算只裁剪运行时写的 `## 上次结果`，作者写的段落永不被删）、**循环日志**（`tasks/<id>.jsonl`，append-only）和**等待票**（frontmatter 的 `ticket`）。一次停泊必须说清楚什么会叫醒它，运行时在写入时校验（run/job 存在且未结算且归属本任务），并确定性地补上 `by` 兜底时限；到点未兑现就重开任务，同周期第二次就停下并通知用户。每个 cycle 在自己的会话（`tasks/.sessions/`）里跑，四维预算（步数/墙钟/成本/返工轮次）取代了原来的指纹 + effect 账本治理器。
 
 ## 8. 工具层与子代理
 
@@ -266,7 +268,7 @@ TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`�
 | `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；Brave 搜索 + Readability 正文提取，支持代理） |
 | `session_search` / `memory_save` / `memory_search` / `memory_forget` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
 | `send_media` | ❌ | 无配置开关；由传输能力决定——仅当驱动的 transport 提供了 `MediaSender`（钉钉机器人或终端）时才构建并进入工具索引 |
-| `task_list`/`task_create`/`task_update`/`task_close`/`task_verify` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要 |
+| `task_list`/`task_create`/`task_update`/`task_close`/`task_log`/`task_step_end` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要；`task_step_end` 另外只在任务会话里注册 |
 | `subagent` / `subagent_list` / `subagent_run` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
 
 工具的调用面按 payload 形状切分：**形状不同就拆，形状相同就合**（spec 046/047）。`op` 枚举的路由散文把每条分支各讲一遍，是真正的 token 成本——所以任务族是五个工具而非一个 `action` 分发工具，记忆是 `memory_save` / `memory_search` / `memory_forget`，委派控制是 `subagent_list` + `subagent_run`；而 `event_manage` 的 `create` / `update` 参数集完全相同，合在一个工具里。

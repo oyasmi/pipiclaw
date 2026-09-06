@@ -23,7 +23,8 @@ import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appende
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { clipText, errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
-import { parseTaskFrontmatter } from "../tasks/ledger.js";
+import { parseTaskFrontmatterV4 } from "../tasks/frontmatter.js";
+import { redeemTicket } from "../tasks/store.js";
 import { parseTaskEventName } from "../tasks/task-events.js";
 import type { DingTalkBot } from "./dingtalk.js";
 import { MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./event-validation.js";
@@ -679,10 +680,38 @@ export class EventsWatcher {
 		} catch {
 			return `owning task ${taskId} no longer exists`;
 		}
-		const frontmatter = parseTaskFrontmatter(content);
-		return frontmatter.archiveOutcome
-			? `owning task ${taskId} is archived (${frontmatter.archiveOutcome})`
+		const frontmatter = parseTaskFrontmatterV4(content);
+		return frontmatter.fields.outcome
+			? `owning task ${taskId} is archived (${frontmatter.fields.outcome})`
 			: undefined;
+	}
+
+	/**
+	 * Redeem the owning task's `signal` ticket, if this is a task-owned event and that task is
+	 * parked on a ticket naming exactly this event. Returns whether the ticket was redeemed.
+	 *
+	 * The name match is strict (INV-7): a ticket only accepts the event it names, so an unrelated
+	 * task-owned event can never resume a task, and a task parked on anything else still gets its
+	 * ordinary chat wake.
+	 */
+	private async redeemTaskSignal(filename: string, event: ScheduledEvent): Promise<boolean> {
+		const name = eventNameFromFilename(filename);
+		const parsed = parseTaskEventName(name, event.channelId);
+		if (!parsed) return false;
+		const channelDir = getChannelDir(dirname(this.eventsDir), event.channelId);
+		try {
+			const redeemed = await redeemTicket(
+				channelDir,
+				parsed.id,
+				(ticket) => ticket.kind === "signal" && ticket.event === name,
+			);
+			if (!redeemed) return false;
+			log.logInfo(`Event ${name} redeemed the signal ticket for task ${parsed.id}`);
+			return true;
+		} catch (error) {
+			log.logWarning(`Could not redeem signal ticket for task ${parsed.id}`, errorMessage(error));
+			return false;
+		}
 	}
 
 	private async execute(
@@ -744,6 +773,18 @@ export class EventsWatcher {
 				}
 				return;
 			}
+		}
+
+		// Spec 051, D8: the *only* touchpoint between the events subsystem and the task loop. When a
+		// task-owned sensor fires and the owning task is parked on a `signal` ticket naming this very
+		// event, redeem the ticket and stop — the task's own loop takes it from here, and delivering
+		// a chat wake as well would both duplicate the work and route it into the wrong session.
+		// Anything else (an ordinary event, or a task that is not waiting on this signal) falls
+		// through to the unchanged delivery path below.
+		if (await this.redeemTaskSignal(filename, event)) {
+			this.appendEventHistory(filename, event, "triggered", "ok", { reason: "redeemed task signal ticket" });
+			if (deleteAfter) this.deleteFile(filename);
+			return;
 		}
 
 		let scheduleInfo: string;

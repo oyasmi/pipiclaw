@@ -2,179 +2,211 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { handleTasksCommand } from "../src/runtime/task-commands.js";
-import { formatLocalTime } from "../src/shared/local-time.js";
-import { createDefaultTaskControl } from "../src/tasks/control.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { handleTasksCommand, parseTasksCommand } from "../src/runtime/task-commands.js";
+import { createCycle } from "../src/tasks/cycle.js";
+import type { TaskFrontmatterV4 } from "../src/tasks/frontmatter.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
-import { nextTaskWake } from "../src/tasks/task-schedule.js";
+import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
+import { parkTask, readStoredTask } from "../src/tasks/store.js";
 
-const CHANNEL_ID = "dm_1";
-const FUTURE = "2026-08-05T18:00:00+08:00";
-const BODY = renderStandardTaskBody({ title: "Task", goal: "Do it.", dod: "- [x] Done" });
+const FUTURE = "2099-01-01T00:00:00+08:00";
+const PAST = "2020-01-01T00:00:00+08:00";
+const BODY = renderStandardTaskBody({ title: "Weekly", goal: "Ship it.", dod: "- [ ] Shipped" });
 
-function doc(front: string, body = BODY): string {
-	return `---\n${front}\n---\n\n${body}`;
-}
-
-describe("/tasks v2 commands", () => {
+describe("/tasks (spec 051, D11)", () => {
 	let workspaceDir: string;
 	let channelDir: string;
 	let tasksDir: string;
 
 	beforeEach(async () => {
-		workspaceDir = await mkdtemp(join(tmpdir(), "task-commands-v2-"));
-		channelDir = join(workspaceDir, CHANNEL_ID);
+		workspaceDir = await mkdtemp(join(tmpdir(), "task-commands-v4-"));
+		channelDir = join(workspaceDir, "dm_1");
 		tasksDir = join(channelDir, "tasks");
 		await mkdir(join(tasksDir, "archive"), { recursive: true });
 	});
 	afterEach(async () => {
+		await resetTaskLogAppenders();
 		await rm(workspaceDir, { recursive: true, force: true });
 	});
 
-	function run(args: string, dispatchTask?: (id: string, generation?: number) => Promise<boolean>): Promise<string> {
-		return handleTasksCommand({ args, channelDir, workspaceDir, channelId: CHANNEL_ID, dispatchTask });
-	}
-
-	async function writeTask(id: string, front: string, body = BODY): Promise<void> {
-		await writeFile(join(tasksDir, `${id}.md`), doc(front, body));
-	}
-
-	it("pause/resume changes only enabled and stop, preserving stage and wake", async () => {
-		const control = createDefaultTaskControl();
+	async function writeTask(id: string, fields: Partial<TaskFrontmatterV4> = {}): Promise<void> {
 		await writeFile(
-			join(tasksDir, "waiting.md"),
-			renderTaskDocument(
-				{
-					status: "waiting",
-					wake: FUTURE,
-					schedule: "0 9 * * 1",
-					control,
-				},
-				BODY,
-			),
+			join(tasksDir, `${id}.md`),
+			renderTaskDocument({ state: "open", cycle: createCycle("c-1"), ...fields }, BODY),
 		);
-		await expect(run("pause waiting")).resolves.toContain("已停用任务 waiting");
-		const paused = await readFile(join(tasksDir, "waiting.md"), "utf-8");
-		expect(paused).toContain("status: waiting");
-		expect(paused).toContain("enabled: false");
-		expect(paused).toContain(`wake: ${FUTURE}`);
-		expect(paused).toContain("schedule: 0 9 * * 1");
-		expect(paused).toContain('"by":"user"');
+	}
 
-		await expect(run("resume waiting")).resolves.toContain("已重新启用任务 waiting");
-		const resumed = await readFile(join(tasksDir, "waiting.md"), "utf-8");
-		expect(resumed).toContain("status: waiting");
-		expect(resumed).toContain("enabled: true");
-		expect(resumed).toContain(`wake: ${FUTURE}`);
-		expect(resumed).not.toContain('"stop"');
-	});
+	const run = (args: string, dispatchTask?: (id: string) => Promise<boolean>) =>
+		handleTasksCommand({ args, channelDir, workspaceDir, channelId: "dm_1", dispatchTask });
 
-	it("run converts a waiting task to active and dispatches it", async () => {
-		const control = createDefaultTaskControl();
-		await writeTask("waiting", `status: waiting\nwake: ${FUTURE}\ncontrol: ${JSON.stringify(control)}`);
-		const dispatches: Array<{ id: string; generation?: number }> = [];
-		const result = await run("run waiting", async (id, generation) => {
-			dispatches.push({ id, generation });
-			return true;
+	it("pause/resume toggles only the paused marker, preserving the park", async () => {
+		await writeTask("weekly", {
+			state: "parked",
+			schedule: "0 9 * * 1",
+			ticket: { kind: "time", at: FUTURE, by: FUTURE },
 		});
-		expect(result).toContain("已把任务 waiting 排入一次立即执行");
-		expect(dispatches).toHaveLength(1);
-		expect(dispatches[0]?.id).toBe("waiting");
-		const stored = await readFile(join(tasksDir, "waiting.md"), "utf-8");
-		expect(stored).toContain("status: active");
-		expect(stored).not.toContain("wake:");
+
+		await expect(run("pause weekly")).resolves.toContain("已暂停任务");
+		let fields = (await readStoredTask(channelDir, "weekly"))?.fields;
+		expect(fields?.paused?.by).toBe("user");
+		// Pausing is orthogonal: the stage and the ticket must survive it untouched.
+		expect(fields?.state).toBe("parked");
+		expect(fields?.ticket?.kind).toBe("time");
+
+		await expect(run("resume weekly")).resolves.toContain("已恢复任务");
+		fields = (await readStoredTask(channelDir, "weekly"))?.fields;
+		expect(fields?.paused).toBeUndefined();
+		expect(fields?.state).toBe("parked");
 	});
 
-	it("run sleeping explicitly opens a recurring cycle", async () => {
-		await writeTask(
-			"weekly",
-			`status: sleeping\nschedule: 0 9 * * 1\nwake: ${formatLocalTime(nextTaskWake("0 9 * * 1")!)}\ncontrol: ${JSON.stringify(createDefaultTaskControl())}`,
-		);
-		const ids: string[] = [];
-		await run("run weekly", async (id) => {
-			ids.push(id);
-			return true;
+	// A budget grant must be headroom on top of what is already spent, or resuming a task that
+	// hit its ceiling would simply re-stop on the very next scan.
+	it("resume grants extra budget above what this cycle already used", async () => {
+		await writeTask("spent", {
+			budget: { steps: 5 },
+			cycle: { ...createCycle("c-1"), steps: 5 },
+			paused: { by: "runtime", reason: "budget", at: PAST },
 		});
-		expect(ids).toEqual(["weekly"]);
-		const stored = await readFile(join(tasksDir, "weekly.md"), "utf-8");
-		expect(stored).toContain("status: active");
-		expect(stored).not.toContain("wake:");
-		expect(stored).toContain('"cycleId":"cycle-');
+		await expect(run("resume spent +steps 10")).resolves.toContain("steps+10");
+		const fields = (await readStoredTask(channelDir, "spent"))?.fields;
+		expect(fields?.paused).toBeUndefined();
+		expect(fields?.budget?.steps).toBe(15);
 	});
 
-	it("lists state dimensions without effects or approval and rejects retired actions without writing", async () => {
-		const control = createDefaultTaskControl(true);
-		control.verification.status = "passed";
-		await writeFile(join(tasksDir, "measured.md"), renderTaskDocument({ status: "active", control }, BODY));
+	it("run opens a cycle for a parked task and dispatches it immediately", async () => {
+		await writeTask("weekly", { state: "parked", ticket: { kind: "time", at: FUTURE, by: FUTURE } });
+		const dispatchTask = vi.fn(async () => true);
+		await expect(run("run weekly", dispatchTask)).resolves.toContain("已立即唤醒任务");
+		expect(dispatchTask).toHaveBeenCalledWith("weekly");
+		const fields = (await readStoredTask(channelDir, "weekly"))?.fields;
+		expect(fields?.state).toBe("open");
+		expect(fields?.ticket).toBeUndefined();
+	});
+
+	it("run refuses a paused task and points at resume", async () => {
+		await writeTask("held", { paused: { by: "user", reason: "hold", at: PAST } });
+		const dispatchTask = vi.fn(async () => true);
+		await expect(run("run held", dispatchTask)).resolves.toContain("/tasks resume held");
+		expect(dispatchTask).not.toHaveBeenCalled();
+	});
+
+	it("steer queues guidance for the next step without changing task state", async () => {
+		await writeTask("weekly");
+		await expect(run("steer weekly 先跑一遍 npm run check")).resolves.toContain("下一步");
+		expect(await readFile(join(tasksDir, ".steer", "weekly.md"), "utf-8")).toContain("npm run check");
+		expect((await readStoredTask(channelDir, "weekly"))?.fields.state).toBe("open");
+	});
+
+	it("reply redeems an ask ticket, and still keeps the words when the task was not asking", async () => {
+		await writeTask("asked");
+		await parkTask(channelDir, "asked", { kind: "ask", asked: "merge?", by: FUTURE });
+		const dispatchTask = vi.fn(async () => true);
+		await expect(run("reply asked 合并吧", dispatchTask)).resolves.toContain("会继续推进");
+		expect((await readStoredTask(channelDir, "asked"))?.fields.state).toBe("open");
+		expect(dispatchTask).toHaveBeenCalledWith("asked");
+
+		await writeTask("busy");
+		await expect(run("reply busy 顺便看看这个")).resolves.toContain("并没有在等你的回答");
+		// The user's words are never dropped just because the timing was off.
+		expect(await readFile(join(tasksDir, ".steer", "busy.md"), "utf-8")).toContain("顺便看看这个");
+	});
+
+	it("list shows the park, its backstop and this cycle's spend", async () => {
+		await writeTask("weekly", {
+			state: "parked",
+			ticket: { kind: "ask", asked: "merge?", by: FUTURE },
+			cycle: { ...createCycle("c-1"), steps: 4, rounds: 2, usd: 1.5 },
+		});
 		const list = await run("");
-		expect(list).toContain("状态：进行中");
-		expect(list).toContain("验收：需要验收，已通过");
-		expect(list).not.toMatch(/approval|sideEffects|effects/i);
-
-		const before = await readFile(join(tasksDir, "measured.md"), "utf-8");
-		const unknown = await run("approve measured");
-		expect(unknown).toContain("未知的 /tasks 动作：approve");
-		expect(unknown).toContain("/tasks pause <id>");
-		expect(await readFile(join(tasksDir, "measured.md"), "utf-8")).toBe(before);
+		expect(list).toContain("等待中");
+		expect(list).toContain("merge?");
+		expect(list).toContain("4 步 / 2 轮");
 	});
 
-	it("doctor diagnoses invalid state combinations with direct next steps", async () => {
-		await writeTask(
-			"bad",
-			`status: active\nwake: 2099-01-01T00:00:00+08:00\ncontrol: ${JSON.stringify(createDefaultTaskControl())}`,
-		);
-		const out = await run("doctor");
-		expect(out).toContain("处于 active，但它的 wake 在未来");
-		expect(out).toContain("下一步：");
+	it("show renders contract, log and rework rounds instead of the whole file", async () => {
+		await writeTask("weekly", { verify: "required" });
+		await appendTaskLog(channelDir, "weekly", {
+			cycle: "c-1",
+			kind: "round",
+			n: 1,
+			verifyRunId: "run_v",
+			verdict: "fail",
+			strength: "advisory",
+		});
+		const shown = await run("show weekly");
+		expect(shown).toContain("需要独立验收");
+		expect(shown).toContain("返工：1 轮");
+		expect(shown).toContain("/tasks log weekly");
 	});
 
-	it("doctor does not gate resumability on waitingFor's cosmetic value", async () => {
-		// A future wake alone is a durable resumption source; waitingFor is display-only and
-		// no longer part of this check (spec 043).
-		await writeTask(
-			"future-wait",
-			`status: waiting\nwake: ${FUTURE}\ncontrol: ${JSON.stringify({ ...createDefaultTaskControl(), waitingFor: "job" })}`,
-		);
-		expect(await run("doctor")).toContain("未发现任务台账问题");
+	it("log reads the loop log, including per-cycle filtering", async () => {
+		await writeTask("weekly");
+		await appendTaskLog(channelDir, "weekly", {
+			cycle: "c-1",
+			kind: "step",
+			seq: 1,
+			outcome: "continue",
+			note: "第一步",
+			tools: [],
+		});
+		await appendTaskLog(channelDir, "weekly", {
+			cycle: "c-2",
+			kind: "step",
+			seq: 1,
+			outcome: "continue",
+			note: "第二周期",
+			tools: [],
+		});
+		expect(await run("log weekly")).toContain("第一步");
+		const scoped = await run("log weekly c-2");
+		expect(scoped).toContain("第二周期");
+		expect(scoped).not.toContain("第一步");
 	});
 
-	it("doctor recognizes a clean parked user wait and reports forgotten external waits", async () => {
-		await writeTask(
-			"parked",
-			`status: waiting\ncontrol: ${JSON.stringify({ ...createDefaultTaskControl(), waitingFor: "external-signal" })}`,
+	it("doctor only reports what a hand edit can still produce", async () => {
+		await writeFile(join(tasksDir, "broken.md"), "no frontmatter");
+		await writeFile(
+			join(tasksDir, "old.md"),
+			'---\nstatus: active\nenabled: true\ncontrol: {"version":3}\n---\n# Old\n',
 		);
-		const out = await run("doctor");
-		expect(out).toContain("没有可靠的恢复方式");
-		expect(out).toContain("/tasks run parked");
+		await writeTask("overdue", { state: "parked", ticket: { kind: "time", at: PAST, by: PAST } });
+		await writeTask("clean");
+
+		const report = await run("doctor");
+		expect(report).toContain("broken 的 frontmatter 不可读");
+		expect(report).toContain("old 仍是 v3 契约");
+		expect(report).toContain("overdue 的等待票已过兜底时限");
+		// A healthy task produces no line at all: doctor is a diagnosis, not an inventory.
+		expect(report).not.toContain("clean");
 	});
 
 	it("shows archive outcome and rejects path traversal", async () => {
 		await writeFile(
 			join(tasksDir, "archive", "old.md"),
-			doc("outcome: cancelled\nclosedAt: 2026-08-04T10:00:00+08:00", "# Old"),
+			renderTaskDocument({ state: "done", outcome: "completed", closedAt: PAST }, BODY),
 		);
-		expect(await run("archive")).toContain("old — Old");
-		expect(await run("show old")).toContain("outcome: cancelled");
-		expect(await run("show ../../secret")).toMatch(/Invalid task id/);
+		expect(await run("archive")).toContain("old");
+		await expect(run("show ../../secret")).resolves.toMatch(/Invalid task id|失败/);
+		expect(existsSync(join(tasksDir, "..", "..", "secret.md"))).toBe(false);
 	});
 
-	it("truncates a huge task file to a head snippet with a pointer to the real file", async () => {
-		// Review 2026-08-24 §2.4/§3.2: `/tasks show` used to dump the whole file with no cap.
-		const hugeBody = renderStandardTaskBody({ title: "Big", goal: "x".repeat(10_000), dod: "- [ ] todo" });
-		await writeTask("huge", "status: active", hugeBody);
-		const shown = await run("show huge");
-		expect(shown.length).toBeLessThan(hugeBody.length);
-		expect(shown).toContain("内容过长已截断");
-		expect(shown).toContain(join(tasksDir, "huge.md"));
+	it("rejects a retired action without writing anything", async () => {
+		await writeTask("weekly");
+		const before = await readFile(join(tasksDir, "weekly.md"), "utf-8");
+		const unknown = await run("approve weekly");
+		expect(unknown).toContain("未知的 /tasks 动作：approve");
+		expect(await readFile(join(tasksDir, "weekly.md"), "utf-8")).toBe(before);
 	});
 
-	it("keeps a valid recurring schedule without requiring a separate event", async () => {
-		await writeTask(
-			"weekly",
-			`status: sleeping\nschedule: 0 9 * * 1\nwake: ${formatLocalTime(nextTaskWake("0 9 * * 1")!)}`,
-		);
-		expect(await run("doctor")).toContain("未发现任务台账问题");
-		expect(existsSync(join(tasksDir, "weekly.md"))).toBe(true);
+	it("parses every documented argument shape", () => {
+		expect(parseTasksCommand("")).toEqual({ action: "list" });
+		expect(parseTasksCommand("resume x +steps 20 +usd 5")).toEqual({
+			action: "resume",
+			id: "x",
+			grants: { steps: 20, usd: 5 },
+		});
+		expect(parseTasksCommand("steer x 多行 内容 都要保留")).toMatchObject({ text: "多行 内容 都要保留" });
+		expect(() => parseTasksCommand("steer x")).toThrow(/用法/);
 	});
 });

@@ -17,7 +17,7 @@ order: 30
 
 ## 记录 receipt
 
-`send_media` 返回成功 receipt 才算送到。成功后把 receipt（附件名、类型、大小、已发送到当前 channel）和时间写进任务 Current Cycle 或 completion evidence；发送前先看这份记录里有没有同一附件的成功 receipt，避免重复投递。外部动作的通用幂等纪律见 `task-driving.md`。
+`send_media` 返回成功 receipt 才算送到。成功后把 receipt（附件名、类型、大小、已发送到当前 channel）和时间写进 `task_step_end` 的 `note`；发送前先用 `task_log` 看这份记录里有没有同一附件的成功 receipt，避免重复投递。外部动作的通用幂等纪律见 `task-loop.md`。
 
 失败时按同一份纪律 progress 为 active 或 waiting 并写恢复来源，不要把"调用返回了"当成"用户收到了"。
 

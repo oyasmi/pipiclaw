@@ -91,3 +91,25 @@ export interface ChannelContext {
 	progressStyle: ProgressStyle;
 	finalDelivery: FinalDelivery;
 }
+
+/**
+ * A context whose user-visible writes are dropped (spec 051, D3).
+ *
+ * Task loop steps are silent by default: a twelve-step cycle should not narrate twelve times into
+ * the channel. v3 asked the model to say `[SILENT]` and treated the request as advisory; muting
+ * the transport instead makes silence the structural default, and a step that genuinely has
+ * something to say routes it through `task_step_end`'s `notify` — which the runtime delivers on
+ * the real context after the step ends.
+ *
+ * Card/typing/lifecycle calls pass through: they affect no transcript and keep the transport's
+ * own state machine consistent.
+ */
+export function muteChannelContext(ctx: ChannelContext): ChannelContext {
+	return {
+		...ctx,
+		respond: async () => undefined,
+		respondPlain: async () => true,
+		replaceMessage: async () => undefined,
+		respondInThread: async () => undefined,
+	};
+}

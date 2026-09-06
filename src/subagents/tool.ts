@@ -946,6 +946,7 @@ async function dispatchInternalRun(input: {
 			taskId: runContext.taskId,
 			workingDirectory: runContext.workingDirectory,
 			artifactDir: runContext.artifactDir,
+			channelDir: options.channelDir,
 			leaseKey,
 			mutates: config.mutates,
 		});
