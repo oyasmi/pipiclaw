@@ -54,7 +54,7 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 		description:
 			"Inspect and control background bash jobs (started with bash async:true). op=list shows a snapshot; " +
 			"op=poll waits briefly for a running job to finish and returns its output; op=cancel stops jobs by id. " +
-			"A finished job wakes this channel by itself, so never schedule a check-in for one — end the turn instead.",
+			"Completion wakes this channel; finish independent work, then end the turn when only waiting remains.",
 		parameters: jobSchema,
 		execute: async (_toolCallId: string, { op, ids }: JobToolArgs, signal?: AbortSignal) => {
 			if (op === "cancel") {
@@ -99,7 +99,9 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 			}
 			if (running.length > 0) {
 				parts.push(`## Still running (${running.length})`, ...running.map(formatJobLine));
-				parts.push("Poll again to keep waiting, or just end your turn — you are woken when the job finishes.");
+				parts.push(
+					"Finish independent work, then end the turn; completion wakes this channel. Do not loop on poll.",
+				);
 			}
 			return {
 				content: [{ type: "text", text: parts.join("\n\n") }],

@@ -13,7 +13,7 @@ import { formatSize, MAX_INLINE_BINARY_BYTES } from "./truncate.js";
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
 
 const sendMediaSchema = Type.Object({
-	path: Type.String({ description: "Path to the local file to send (relative to the workspace, or absolute)" }),
+	path: Type.String({ description: "Local file path (relative to the current project root, or absolute)" }),
 	fileName: Type.Optional(
 		Type.String({ description: "Display name for the recipient; defaults to the file's own name" }),
 	),
@@ -64,7 +64,9 @@ export function createSendMediaTool(
 
 			const stat = await fileStore.stat(target);
 			if (!stat || !stat.isFile) {
-				throw new RecoverableToolError(`Cannot send ${path}: not a regular file (does it exist?).`);
+				throw new RecoverableToolError(
+					`Cannot send ${path}: not a regular file. Locate the generated file and retry with its path.`,
+				);
 			}
 			if (stat.size > MAX_INLINE_BINARY_BYTES) {
 				throw new RecoverableToolError(
@@ -73,7 +75,9 @@ export function createSendMediaTool(
 				);
 			}
 			if (stat.size === 0) {
-				throw new RecoverableToolError(`Cannot send ${path}: the file is empty.`);
+				throw new RecoverableToolError(
+					`Cannot send ${path}: the file is empty. Generate the content before sending it.`,
+				);
 			}
 
 			const { data } = await fileStore.readBytes(target, { signal });

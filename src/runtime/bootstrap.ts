@@ -754,14 +754,15 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					// wake (a delegation or job finishing) is the opposite — a human is actually waiting
 					// on it — so it renders progress the same way a normal message does (P0-2).
 					const backgroundOnly = Boolean(_isEvent) && event.presentation !== "awaited";
-					const baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
 					// Spec 051, D3: a task-driver dispatch runs as a *task step* — in the task cycle's
 					// own session, with a brief instead of the wake text, and silent unless the step
 					// asked for a notify. Everything below (busy state, /stop, delivery) is unchanged;
 					// only which session the turn is bound to, and what reaches the channel, differ.
 					const taskStep = await prepareTaskStep(event, runner);
-					const ctx = taskStep ? muteChannelContext(baseCtx) : baseCtx;
 					if (taskStep) event = { ...event, text: taskStep.brief };
+					// Context snapshots the inbound message; construct it only after installing the brief.
+					const baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
+					const ctx = taskStep ? muteChannelContext(baseCtx) : baseCtx;
 
 					if (builtInCommand) {
 						const commandStartedAt = Date.now();

@@ -156,6 +156,22 @@ describe("task tool surface (spec 051, D4)", () => {
 			expect(fields?.ticket?.by).toBeTruthy();
 		});
 
+		it("rejects a stale schedule park without advancing the cycle, logging completion, or sending a notice", async () => {
+			await writeTask("daily", { schedule: "0 9 * * *", verify: "required" });
+			const before = await readFile(join(tasksDir, "daily.md"), "utf-8");
+			await expect(
+				endTaskStep(loop("daily"), {
+					outcome: "park",
+					note: "pretend to finish",
+					ticket: { kind: "schedule" },
+					notify: "finished",
+				} as never), // Simulate an old caller bypassing the current schema.
+			).rejects.toThrow(/outcome=done/);
+			expect(await readFile(join(tasksDir, "daily.md"), "utf-8")).toBe(before);
+			expect(await readTaskLog(channelDir, "daily")).toEqual([]);
+			expect(existsSync(join(tasksDir, ".steer", "daily.out.md"))).toBe(false);
+		});
+
 		it("blocked parks on an ask ticket and always speaks to the user", async () => {
 			await writeTask("work");
 			await endTaskStep(loop("work"), { outcome: "blocked", note: "n", reason: "Merge to master?" });

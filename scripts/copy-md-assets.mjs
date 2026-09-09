@@ -4,10 +4,11 @@
 import { copyFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 
 const DIRS = ["playbooks"];
+const outputRoot = process.argv[2] ?? "dist";
 
 for (const dir of DIRS) {
 	const src = `src/${dir}`;
-	const dst = `dist/${dir}`;
+	const dst = `${outputRoot}/${dir}`;
 	mkdirSync(dst, { recursive: true });
 
 	const wanted = new Set(readdirSync(src).filter((file) => file.endsWith(".md")));

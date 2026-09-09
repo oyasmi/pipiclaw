@@ -138,7 +138,7 @@ export function createSubAgentListTool(options: SubAgentManageToolOptions): Agen
 		name: "subagent_list",
 		label: "subagent_list",
 		description:
-			"Snapshot of this channel's delegation runs. A finished run wakes this channel itself — never poll here, end the turn.",
+			"Snapshot of this channel's delegation runs. Completion wakes this channel; inspect when a decision needs current status, not in a polling loop.",
 		parameters: subagentListSchema,
 		execute: async () => {
 			// Spec 042 D9: this used to return every run on the channel, unbounded, in both the

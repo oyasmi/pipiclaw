@@ -25,7 +25,7 @@ import type {
 } from "./types.js";
 
 /** Bumped whenever the runtime-authored prompt text changes in a way worth attributing in telemetry. */
-export const RUNTIME_PROMPT_VERSION = 3;
+export const RUNTIME_PROMPT_VERSION = 4;
 
 /**
  * The sections Pipiclaw authors and must keep tight (spec 026 §10.3): identity,

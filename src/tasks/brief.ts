@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { PLAYBOOKS_DIR } from "../paths.js";
 import { effectiveBudget } from "./budget.js";
 import type { TaskFrontmatterV4 } from "./frontmatter.js";
 import { readTaskLog, renderTaskLogLine } from "./log.js";
@@ -18,7 +20,7 @@ export interface TaskBriefInput {
 /**
  * The turn input for one task loop step (spec 051, D3).
  *
- * The contract is injected whole because it is small by construction (INV-6, 4 KB); the history
+ * The authored contract is injected whole; authors must keep it short. The history
  * is the last few log lines rather than the 24 KB of closed cycles v3 pasted into every wake. Any
  * pending `/tasks steer` or `/tasks reply` is consumed here and put first — it is the one thing in
  * the brief that is genuinely new since the previous step.
@@ -35,7 +37,18 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<string 
 
 	const blocks: string[] = [`[TASK_STEP:${input.taskId}]`];
 	if (input.reason) blocks.push(input.reason);
+	// Reuse durable history instead of a new pending-wake flag. An expiry remains relevant until
+	// a later step records what recovery did; a verifier round in between does not consume it.
+	const lastTransition = [...log].reverse().find((record) => record.kind === "expired" || record.kind === "step");
+	if (lastTransition?.kind === "expired") {
+		blocks.push(
+			`<task_recovery kind="expired">\n等待票过期：${lastTransition.ticket}。先核对来源的真实状态，再决定继续、换票或请求用户决定。\n</task_recovery>`,
+		);
+	}
 	if (steer) blocks.push(`<user_guidance>\n${steer}\n</user_guidance>`);
+	blocks.push(
+		`契约文件：${document.path}\n首次执行前读取 ${join(PLAYBOOKS_DIR, "task-loop.md")}；已在当前上下文中完整读过则复用。`,
+	);
 	blocks.push(`<task_contract id="${input.taskId}">\n${document.body.trim()}\n</task_contract>`);
 	if (log.length > 0) {
 		blocks.push(`<task_log recent="${log.length}">\n${log.map(renderTaskLogLine).join("\n")}\n</task_log>`);

@@ -1,4 +1,13 @@
-import { deliveryMatches, readTaskLoopLog, taskFrontmatter, taskLog } from "../harness/graders.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+	deliveryMatches,
+	noFailedToolResult,
+	readTaskLoopLog,
+	taskFrontmatter,
+	taskLog,
+	toolCallCount,
+} from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
 import { writeTask } from "./helpers.js";
 
@@ -14,6 +23,45 @@ const definitionFile = "evals/cases/task-loop-quality.ts";
  */
 
 export const taskLoopQualityCases: EvalCase[] = [
+	{
+		id: "TL-signal-01",
+		suite: "capability",
+		source: "2026-09-10 playbook review: chat/task tool boundary and pre-created signal",
+		description:
+			"A task checks its condition and waits on an existing sensor without trying to create an event in the task session.",
+		definitionFile,
+		budget: { maxWallMs: 180_000, maxTurns: 12 },
+		setup: async (ctx) => {
+			const eventName = "task.dm_eval.await-signal.ready";
+			await mkdir(join(ctx.workspaceDir, "events"), { recursive: true });
+			await writeFile(
+				join(ctx.workspaceDir, "events", `${eventName}.json`),
+				JSON.stringify({
+					type: "periodic",
+					channelId: "dm_eval",
+					text: "检查 ready.flag",
+					schedule: "*/5 * * * *",
+					preAction: { type: "bash", command: `test -f ${join(ctx.channelDir, "ready.flag")}`, timeout: 10000 },
+				}),
+			);
+			await writeTask(ctx, "await-signal", {
+				cycle: true,
+				body: `# Task\n\n## Goal\n等待 ${join(ctx.channelDir, "ready.flag")} 出现，读取内容作为交付。\n\n## Manual\n聊天侧已预建传感器 ${eventName}；不要重复建事件。先核对条件；未成立时等待这个来源。\n\n## DoD\n- [ ] 已交付 ready.flag 的真实内容\n`,
+			});
+		},
+		script: [{ kind: "syntheticTaskTurn", taskId: "await-signal" }],
+		graders: [
+			toolCallCount("no-event-creation-in-task", "event_manage", 0),
+			noFailedToolResult("valid-step-end", "task_step_end"),
+			taskFrontmatter(
+				"waits-on-existing-sensor",
+				"await-signal",
+				(task) =>
+					task.fields.ticket?.kind === "signal" && task.fields.ticket.event === "task.dm_eval.await-signal.ready",
+			),
+		],
+	},
+
 	{
 		id: "TL-ticket-01",
 		suite: "capability",

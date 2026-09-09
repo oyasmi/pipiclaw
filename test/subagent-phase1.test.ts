@@ -323,6 +323,8 @@ describe("sub-agent tool", () => {
 		});
 
 		const result = await tool.execute("verify-call-1", {
+			// The attested subject must be this fixture, not the developer checkout changing beside it.
+			workingDirectory: workspaceDir,
 			systemPrompt: "Verify evidence independently.",
 			tools: ["read", "bash"],
 			task: "Run the acceptance plan.",

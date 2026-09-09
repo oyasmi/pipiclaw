@@ -14,6 +14,7 @@ import {
 	noDeliveriesAfterStep,
 	noFailedToolResult,
 	taskFrontmatter,
+	taskLog,
 	toolArgumentIntact,
 	toolCallCount,
 	tracePredicate,
@@ -50,15 +51,15 @@ export const regressionCases: EvalCase[] = [
 		graders: [
 			fileContains("goal-not-drifted", "tasks/resume-three.md", /BETA-17[\s\S]*RELEASE-BETA/),
 			tracePredicate(
-				"read-on-every-wake",
+				"reuses-injected-contract",
 				(ctx) =>
 					ctx.trace.filter(
 						(event) =>
 							event.kind === "tool-call" &&
 							event.tool === "read" &&
 							/resume-three\.md/.test(event.fields?.path ?? event.fields?.file_path ?? ""),
-					).length >= 3,
-				"each of the three wakes must re-read the durable task instead of relying on stale context",
+					).length <= 1,
+				"the unchanged contract is already injected; three wakes should not reread the same file",
 			),
 			taskFrontmatter(
 				"release-still-open",
@@ -123,7 +124,7 @@ export const regressionCases: EvalCase[] = [
 			writeTask(ctx, "daily-cycle", {
 				ticket: { kind: "schedule", at: "2025-12-31T00:00:00.000+08:00", by: "2025-12-31T00:00:00.000+08:00" },
 				schedule: "0 0 * * *",
-				body: "# Task\n\n## Goal\nOn cycle start, record CYCLE-STARTED, then close this evidence-only cycle with task_step_end outcome=done. The runtime opens the recurring cycle before dispatch; do not call a cycle-opening action.\n\n## DoD\n- [ ] CYCLE-STARTED recorded\n",
+				body: "# Task\n\n## Goal\nOn cycle start, record CYCLE-STARTED, verify the record and finish this evidence-only occurrence. Leave tomorrow’s occurrence scheduled.\n\n## DoD\n- [ ] CYCLE-STARTED recorded\n",
 			}),
 		script: [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
@@ -132,9 +133,15 @@ export const regressionCases: EvalCase[] = [
 		graders: [
 			driverDispatchCount("single-occurrence", 1),
 			taskFrontmatter(
-				"cycle-opened",
+				"cycle-completed-and-scheduled",
 				"daily-cycle",
-				(frontmatter) => frontmatter.fields.cycle !== undefined && frontmatter.fields.state === "open",
+				(frontmatter) => frontmatter.fields.cycle !== undefined && frontmatter.fields.ticket?.kind === "schedule",
+			),
+			taskLog(
+				"cycle-has-completion-evidence",
+				"daily-cycle",
+				(log) => /"kind":"close"[^\n]*"outcome":"done"/.test(log),
+				"the occurrence must close through done, not park+schedule",
 			),
 		],
 	},
@@ -465,7 +472,7 @@ export const regressionCases: EvalCase[] = [
 		script: [
 			{
 				kind: "user",
-				text: "请安排一次名为 release-followup 的跟进：在 2099-01-02T10:00:00+08:00 提醒我“Review release candidate RC-17”。这是未来提醒，不要现在执行。",
+				text: "请安排一次名为 release-followup 的跟进：10 分钟后提醒我“Review release candidate RC-17”。这是未来提醒，不要现在执行。",
 			},
 		],
 		graders: [
@@ -480,7 +487,8 @@ export const regressionCases: EvalCase[] = [
 				const pass =
 					definition?.type === "one-shot" &&
 					definition.channelId === "dm_eval" &&
-					Date.parse(String(definition.at)) === Date.parse("2099-01-02T10:00:00+08:00") &&
+					Date.parse(String(definition.at)) - Date.parse(ctx.trace[0]?.ts ?? "") >= 8 * 60_000 &&
+					Date.parse(String(definition.at)) - Date.parse(ctx.trace[0]?.ts ?? "") <= 12 * 60_000 &&
 					definition.text === "Review release candidate RC-17";
 				return {
 					schemaVersion: 1,
@@ -515,6 +523,8 @@ export const regressionCases: EvalCase[] = [
 			},
 		],
 		graders: [
+			toolCallCount("no-unnecessary-task", "task_create", 0),
+			toolCallCount("no-step-tool-in-chat", "task_step_end", 0),
 			toolCallCount("one-native-send", "send_media", 1, ["path", /quarterly-report\.csv$/]),
 			noFailedToolResult("media-send-succeeded", "send_media"),
 			deliveryNotMatches("csv-not-pasted", /account,total|alpha,42/i),
@@ -542,10 +552,77 @@ export const regressionCases: EvalCase[] = [
 		],
 	},
 	{
+		id: "M-journal-01",
+		suite: "regression",
+		source: "2026-09-10 playbook review: journal search wiring and evidence-based recall",
+		description: "A historical journal-only fact is recovered with its source rather than guessed from the index.",
+		definitionFile,
+		setup: async (ctx) => {
+			const { mkdir, writeFile } = await import("node:fs/promises");
+			await mkdir(join(ctx.channelDir, "journal"), { recursive: true });
+			await writeFile(
+				join(ctx.channelDir, "journal", "2020-01-02.md"),
+				"# 2020-01-02\n- iris launch 的批准编号为 IRIS-7319。\n",
+			);
+		},
+		script: [{ kind: "user", text: "之前 iris launch 的批准编号是什么？请查工作记录并给出来源日期。" }],
+		graders: [
+			tracePredicate(
+				"uses-memory-search",
+				(ctx) => {
+					const count = ctx.trace.filter(
+						(event) => event.kind === "tool-call" && event.tool === "memory_search",
+					).length;
+					return count >= 1 && count <= 2;
+				},
+				"retrieve journal evidence without repeated empty searches",
+			),
+			noFailedToolResult("search-succeeded", "memory_search"),
+			lastDeliveryMatches("recalled-evidence", /IRIS-7319/),
+			lastDeliveryMatches("dated-source", /2020-01-02/),
+		],
+	},
+
+	{
+		id: "A-fragments-01",
+		suite: "regression",
+		source: "2026-09-10 playbook review: independent dispatch and synchronous result handling",
+		description:
+			"Both independent read-only fragments are dispatched and their synchronous results integrated without task scaffolding or polling.",
+		definitionFile,
+		budget: { maxWallMs: 300_000, maxTurns: 18 },
+		setup: async (ctx) => {
+			const { writeFile } = await import("node:fs/promises");
+			await writeFile(join(ctx.channelDir, "north.txt"), "owner: NORTH-493\n");
+			await writeFile(join(ctx.channelDir, "south.txt"), "owner: SOUTH-862\n");
+			await writeSubAgent(ctx, "eval-fragment", {
+				description: "读取指定文本并返回 owner，独立只读分片。",
+				tools: ["read"],
+				body: "只读任务指定的一个文件，原样报告 owner。不得修改文件。",
+			});
+		},
+		script: [
+			{
+				kind: "user",
+				text: "请给 eval-fragment 分别派两个互不依赖的只读任务，查 {{CHANNEL_DIR}}/north.txt 和 {{CHANNEL_DIR}}/south.txt 的 owner，再汇总两个结果。每个委派只查一个文件；不由主代理代查。",
+			},
+		],
+		graders: [
+			toolCallCount("both-fragments-dispatched", "subagent", 2, ["agent", /^eval-fragment$/]),
+			toolCallCount("no-extra-task", "task_create", 0),
+			toolCallCount("no-job-polling", "job", 0),
+			lastDeliveryMatches("north-result", /NORTH-493/),
+			lastDeliveryMatches("south-result", /SOUTH-862/),
+			fileContains("north-intact", "north.txt", /^owner: NORTH-493\n$/),
+			fileContains("south-intact", "south.txt", /^owner: SOUTH-862\n$/),
+		],
+	},
+
+	{
 		id: "P-playbook-01",
 		suite: "regression",
 		source: "026 playbook activation",
-		description: "A task wake loads the task-driving playbook from the runtime catalog.",
+		description: "A task wake loads the task-loop playbook from the runtime catalog.",
 		definitionFile,
 		setup: (ctx) => writeTask(ctx, "playbook-task", { body: wakeBody("PLAYBOOK-7") }),
 		script: [{ kind: "syntheticTaskTurn", taskId: "playbook-task" }],
@@ -557,9 +634,16 @@ export const regressionCases: EvalCase[] = [
 						(event) =>
 							event.kind === "tool-call" &&
 							event.tool === "read" &&
-							/task-driving\.md/.test(event.fields?.path ?? event.fields?.file_path ?? ""),
+							/task-loop\.md/.test(event.fields?.path ?? event.fields?.file_path ?? "") &&
+							Boolean(event.correlationId) &&
+							ctx.trace.some(
+								(result) =>
+									result.kind === "tool-result" &&
+									result.correlationId === event.correlationId &&
+									result.ok === true,
+							),
 					),
-				"task-driving.md must be read during the wake",
+				"task-loop.md must be successfully read during the wake",
 			),
 		],
 	},
@@ -599,9 +683,8 @@ export const regressionCases: EvalCase[] = [
 		suite: "regression",
 		source: "046 tool schema partitioning D5 — checkpoint-routing risk",
 		description:
-			"A routine task-driven wake must end with a task_update checkpoint (note set) carrying a non-empty note, " +
-			"not a bare metadata edit. Guards the D3.5 concern that folding `set` into a differently-named update " +
-			"action could make the model treat every-turn checkpointing as optional.",
+			"A routine task-driven wake must end with task_step_end carrying a non-empty note, " +
+			"not a bare metadata edit or an ordinary chat response.",
 		definitionFile,
 		setup: (ctx) => writeTask(ctx, "route-checkpoint", { body: wakeBody("ROUTE-CHECK-1") }),
 		script: [{ kind: "syntheticTaskTurn", taskId: "route-checkpoint" }],
@@ -609,13 +692,13 @@ export const regressionCases: EvalCase[] = [
 			tracePredicate(
 				"ends-with-noted-checkpoint",
 				(ctx) => {
-					const calls = ctx.trace.filter((event) => event.kind === "tool-call" && event.tool === "task_update");
+					const calls = ctx.trace.filter((event) => event.kind === "tool-call" && event.tool === "task_step_end");
 					const last = calls[calls.length - 1];
 					if (!last) return false;
 					const note = last.fields?.note;
 					return typeof note === "string" && note.trim().length > 0;
 				},
-				"the turn's last task_update call must carry a non-empty note",
+				"the turn's last task_step_end call must carry a non-empty note",
 			),
 		],
 	},
@@ -624,8 +707,8 @@ export const regressionCases: EvalCase[] = [
 		suite: "regression",
 		source: "046 tool schema partitioning D5 — set/progress merge discoverability",
 		description:
-			"Facing an unparsable control line, the model must repair it via a metadata-only task_update call " +
-			"(no `note`), not misroute into task_close or a raw `edit` of the frontmatter.",
+			"Facing an unparsable legacy control line, the model must repair only the frontmatter via edit/write " +
+			"and leave task work for a later step, without closing the task.",
 		definitionFile,
 		setup: async (ctx) => {
 			const { mkdir, writeFile } = await import("node:fs/promises");
@@ -643,24 +726,25 @@ export const regressionCases: EvalCase[] = [
 		script: [{ kind: "syntheticTaskTurn", taskId: "route-repair" }],
 		graders: [
 			tracePredicate(
-				"repaired-via-metadata-only-task-update",
+				"repaired-frontmatter-only",
 				(ctx) =>
 					ctx.trace.some(
 						(event) =>
 							event.kind === "tool-call" &&
-							event.tool === "task_update" &&
-							event.fields?.control !== undefined &&
-							event.fields?.note === undefined,
+							(event.tool === "edit" || event.tool === "write") &&
+							/route-repair\.md$/.test(event.fields?.path ?? ""),
 					),
-				"control repair must go through a task_update call carrying `control` and no `note`",
+				"legacy metadata is repaired in the contract file without executing the goal",
 			),
 			tracePredicate(
 				"no-lifecycle-close-out",
 				(ctx) => !ctx.trace.some((event) => event.kind === "tool-call" && event.tool === "task_close"),
 				"a bad control line must not be misrouted into task_close",
 			),
-			taskFrontmatter("goal-token-preserved", "route-repair", (_frontmatter, content) =>
-				/ROUTE-REPAIR-1/.test(content),
+			taskFrontmatter(
+				"goal-token-preserved",
+				"route-repair",
+				(frontmatter, content) => frontmatter.readable && /ROUTE-REPAIR-1/.test(content),
 			),
 		],
 	},

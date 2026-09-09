@@ -1,7 +1,7 @@
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
-import { readOptionalTextFile } from "../shared/fs-utils.js";
+import { isNodeError, readOptionalTextFile } from "../shared/fs-utils.js";
 import { localDayKey } from "../shared/local-time.js";
 
 /**
@@ -29,9 +29,55 @@ export async function listJournalDates(channelDir: string): Promise<string[]> {
 			.filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
 			.map((f) => f.slice(0, -3))
 			.sort();
-	} catch {
-		return [];
+	} catch (error) {
+		if (isNodeError(error) && error.code === "ENOENT") return [];
+		throw error;
 	}
+}
+
+/** Search stays bounded even after years of journals, or one unusually busy day. */
+export const JOURNAL_SEARCH_MAX_DAYS = 30;
+export const JOURNAL_SEARCH_DAY_BYTES = 64 * 1024;
+
+export interface JournalSearchWindow {
+	days: Array<{ date: string; content: string }>;
+	omittedDays: number;
+	truncatedDates: string[];
+}
+
+/** Newest day files first; retain only whole lines when a day's older bytes are omitted. */
+export async function readJournalForSearch(channelDir: string): Promise<JournalSearchWindow> {
+	const dates = (await listJournalDates(channelDir)).reverse();
+	const window: JournalSearchWindow = {
+		days: [],
+		omittedDays: Math.max(0, dates.length - JOURNAL_SEARCH_MAX_DAYS),
+		truncatedDates: [],
+	};
+	for (const date of dates.slice(0, JOURNAL_SEARCH_MAX_DAYS)) {
+		try {
+			const file = await open(getJournalPath(channelDir, date), "r");
+			try {
+				const stat = await file.stat();
+				if (!stat.isFile()) continue;
+				const start = Math.max(0, stat.size - JOURNAL_SEARCH_DAY_BYTES);
+				const buffer = Buffer.alloc(Math.min(stat.size, JOURNAL_SEARCH_DAY_BYTES));
+				const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
+				let content = buffer.subarray(0, bytesRead).toString("utf-8");
+				if (start > 0) {
+					window.truncatedDates.push(date);
+					const newline = content.indexOf("\n");
+					content = newline < 0 ? "" : content.slice(newline + 1);
+				}
+				window.days.push({ date, content });
+			} finally {
+				await file.close();
+			}
+		} catch (error) {
+			// A day can disappear between listing and opening; real IO failures must stay visible.
+			if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+		}
+	}
+	return window;
 }
 
 function normalizeLine(line: string): string {

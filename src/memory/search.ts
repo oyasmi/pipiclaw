@@ -320,9 +320,9 @@ export function searchMemory(input: MemorySearchInput): MemorySearchHit[] {
 			if (!line || line.startsWith("#")) {
 				continue;
 			}
-			const { score } = scoreText(queryTokens, line);
+			const { score, line: snippet } = scoreText(queryTokens, line);
 			if (score > 0) {
-				hits.push({ kind: "journal", label: day.date, date: day.date, line, score });
+				hits.push({ kind: "journal", label: day.date, date: day.date, line: snippet, score });
 			}
 		}
 	}

@@ -4,6 +4,7 @@ import type { MediaSendResult, OutboundMedia } from "../../src/channel/channel-c
 import type { DingTalkBot, DingTalkEvent, DingTalkHandler } from "../../src/runtime/dingtalk.js";
 import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
 import { readActiveTasks } from "../../src/tasks/ledger.js";
+import { isRecoverableRejection } from "../../src/tools/tool-details.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
@@ -53,19 +54,19 @@ const TOOL_FIELDS: Record<string, string[]> = {
 	read: ["path", "file_path", "offset", "limit"],
 	write: ["path", "file_path", "content"],
 	edit: ["path", "file_path"],
-	bash: ["command", "cmd"],
+	bash: ["command", "timeout", "async", "notify", "taskId"],
 	web_fetch: ["url"],
 	web_search: ["query"],
 	send_media: ["path", "fileName"],
 	event_manage: ["action", "name", "definition"],
 	task_list: [],
-	task_create: ["id", "status", "wake", "schedule", "deadline", "verificationRequired"],
-	task_update: ["id", "note", "status", "wake", "schedule", "control"],
+	task_create: ["id", "schedule", "verificationRequired"],
+	task_update: ["id", "schedule", "verificationRequired"],
 	task_close: ["id", "outcome", "reason"],
-	task_verify: ["id", "verifierRunId"],
-	memory_save: ["content", "supersedes"],
+	task_step_end: ["outcome", "note", "summary", "evidence", "reason"],
+	memory_save: ["content", "replaces"],
 	memory_search: ["query"],
-	memory_forget: ["target"],
+	memory_forget: ["name"],
 	session_search: ["query", "offset", "limit"],
 	subagent: ["agent", "label", "purpose"],
 	subagent_inline: ["label", "purpose", "systemPrompt", "model", "mutates"],
@@ -116,14 +117,22 @@ function eventTrace(event: unknown): void {
 			fields[key] = clipField(value);
 			fields[`${key}Chars`] = String([...value].length);
 		}
-		trace({ kind: "tool-call", tool, fields, argsHash: hash(JSON.stringify(record.args)).slice(0, 16) });
+		trace({
+			kind: "tool-call",
+			tool,
+			fields,
+			correlationId: stringField(record.toolCallId),
+			argsHash: hash(JSON.stringify(record.args)).slice(0, 16),
+		});
 	} else if (type === "tool_execution_end") {
-		const failed = record.isError !== false;
+		// A recoverable rejection is quiet in chat, but still an unsuccessful call for evals.
+		const failed = record.isError !== false || isRecoverableRejection(record.result);
 		// A rejected call is the whole signal for the recoverable-error probes (a dropped argument
 		// surfaces as a rejection followed by a retry), so keep a readable excerpt of why.
 		const detail = failed ? JSON.stringify(record.result ?? record.error ?? null).slice(0, 300) : undefined;
 		trace({
 			kind: "tool-result",
+			correlationId: stringField(record.toolCallId),
 			tool: stringField(record.toolName),
 			ok: !failed,
 			...(detail ? { fields: { detail } } : {}),

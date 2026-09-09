@@ -1,9 +1,13 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
+import { PLAYBOOKS_DIR } from "../../../src/paths.js";
 import { createTaskDriverEvent } from "../../../src/runtime/task-driver.js";
 import { parseTaskFrontmatterV4 } from "../../../src/tasks/frontmatter.js";
 import { readActiveTasks } from "../../../src/tasks/ledger.js";
+import { readTaskLog } from "../../../src/tasks/log.js";
+import { expireTicket, parkTask, readStoredTask } from "../../../src/tasks/store.js";
+import { resolveTicket } from "../../../src/tasks/ticket.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 
 describe("E2E deterministic: task lifecycle", () => {
@@ -17,6 +21,77 @@ describe("E2E deterministic: task lifecycle", () => {
 	const tasksDir = () => join(harness.channelDir, "tasks");
 	const activePath = () => join(tasksDir(), `${taskId}.md`);
 	const archivedPath = () => join(tasksDir(), "archive", `${taskId}.md`);
+
+	it("A13b: an expired wait reaches the real task session with its tools, recovery source and completion record", async () => {
+		// Regression: bootstrap snapshotted the old wake before installing the brief; the provider
+		// missed the contract, guide path and recovery source. Mutation checks: moving context creation
+		// before brief installation, or removing task_recovery, makes the provider-input checks fail.
+		harness = await createDeterministicHarness({ projectAccess: true });
+		harness.model.script.route({
+			name: "create-cycle",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("seed-cycle"),
+			respond: [
+				reply.toolCall("task_create", {
+					id: taskId,
+					title: "Daily",
+					goal: "Record one checked result",
+					dod: "- [x] Result checked",
+					schedule: "0 9 * * *",
+				}),
+				reply.text("ok"),
+			],
+		});
+		harness.model.script.route({
+			name: "recovery-step",
+			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId}]`),
+			respond: [
+				reply.toolCall("task_step_end", {
+					outcome: "done",
+					note: "Observed result",
+					summary: "Checked result",
+					evidence: "Recovery evidence",
+				}),
+				reply.text("ok"),
+			],
+		});
+		await harness.sendUserMessage("seed-cycle");
+		const chatTools = harness.lastMainTurnRequest()?.tools ?? [];
+		expect(chatTools).toContain("task_create");
+		expect(chatTools).not.toContain("task_step_end");
+		const ticket = resolveTicket(
+			{ kind: "time", at: "+1m" },
+			{
+				now: new Date(Date.now() - 2 * 24 * 60 * 60_000),
+				taskId,
+				channelId: harness.channelId,
+				findRun: () => undefined,
+				findJob: () => undefined,
+				findEvent: () => undefined,
+			},
+		);
+		await parkTask(harness.channelDir, taskId, ticket);
+		await expireTicket(harness.channelDir, taskId);
+		const entry = (await readActiveTasks(tasksDir())).find((task) => task.id === taskId)!;
+		await harness.sendWake(createTaskDriverEvent(harness.channelId, entry, Date.now()).text, {
+			user: "TASK_DRIVER",
+			userName: "TASK_DRIVER",
+		});
+		const request = harness.lastMainTurnRequest();
+		expect(request?.tools).toContain("task_step_end");
+		for (const unavailable of ["task_create", "event_manage", "memory_save"]) {
+			expect(request?.tools).not.toContain(unavailable);
+		}
+		expect(request?.lastUserText).toContain(join(PLAYBOOKS_DIR, "task-loop.md"));
+		expect(request?.lastUserText).toContain(activePath());
+		expect(request?.lastUserText).toContain('<task_recovery kind="expired">');
+		const closed = await readStoredTask(harness.channelDir, taskId);
+		expect(closed?.fields.ticket?.kind).toBe("schedule");
+		expect(
+			(await readTaskLog(harness.channelDir, taskId, { kinds: ["close"] })).map(
+				(record) => record.kind === "close" && record.outcome,
+			),
+		).toEqual(["done"]);
+	});
 
 	it("A13: create → real driver step → task_step_end closes the cycle, contract stays parseable", async () => {
 		// Locks F3: the step prompt is built from the real createTaskDriverEvent, not a
@@ -39,7 +114,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		});
 		harness.model.script.route({
 			name: "drive",
-			when: (r) => r.isMainTurn && r.lastUserText.includes("Resume task"),
+			when: (r) => r.isMainTurn && r.lastUserText.includes("[TASK_STEP:"),
 			respond: [
 				reply.toolCall("task_step_end", {
 					outcome: "done",
@@ -94,7 +169,7 @@ describe("E2E deterministic: task lifecycle", () => {
 		});
 		harness.model.script.route({
 			name: "drive",
-			when: (r) => r.isMainTurn && r.lastUserText.includes("Resume task"),
+			when: (r) => r.isMainTurn && r.lastUserText.includes("[TASK_STEP:"),
 			respond: [
 				reply.toolCall("task_step_end", {
 					outcome: "done",

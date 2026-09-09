@@ -20,6 +20,30 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		return users.at(-1)?.content ?? "";
 	};
 
+	it("M2: memory_search delivers journal evidence to the provider across a project boundary", async () => {
+		// Regression: the tool advertised journal search but never passed journals to searchMemory.
+		// Mutation check: omit journal.days in memory-manage.ts; the tool-message assertion fails.
+		harness = await createDeterministicHarness({ projectAccess: true });
+		mkdirSync(join(harness.channelDir, "journal"), { recursive: true });
+		writeFileSync(
+			join(harness.channelDir, "journal", "2020-01-02.md"),
+			"- release checkpoint: JOURNAL-EVIDENCE-73\n",
+		);
+		harness.model.script.route({
+			name: "search-journal",
+			when: (r) => r.isMainTurn,
+			respond: [reply.toolCall("memory_search", { query: "release checkpoint" }), reply.text("ok")],
+		});
+		await harness.sendUserMessage("查询之前的 release checkpoint。");
+		const toolMessages = harness.lastMainTurnRequest()?.messages.filter((message) => message.role === "tool") ?? [];
+		expect(
+			toolMessages.some(
+				(message) =>
+					message.content.includes("JOURNAL-EVIDENCE-73") && message.content.includes("journal/2020-01-02.md"),
+			),
+		).toBe(true);
+	});
+
 	it("M1: memory_save writes a file; the index is injected on a new session's first turn only", async () => {
 		harness = await createDeterministicHarness();
 		harness.model.script.route({
@@ -100,7 +124,7 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		});
 		harness.model.script.prependRoute({
 			name: "drive",
-			when: (r) => r.isMainTurn && r.lastUserText.includes("Resume task"),
+			when: (r) => r.isMainTurn && r.lastUserText.includes("[TASK_STEP:"),
 			respond: [
 				reply.toolCall("task_step_end", { outcome: "continue", note: "看了一眼，继续。" }),
 				reply.text("继续。"),

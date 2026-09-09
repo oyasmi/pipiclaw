@@ -208,6 +208,11 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			// the run queue is not held for the command's duration. Gated by `tools.jobs.enabled`
 			// (the main path supplies a jobManager; the sub-agent path never does).
 			if (runAsync) {
+				if (taskId && notify === false) {
+					throw new RecoverableToolError(
+						"Task-owned jobs must notify their task when they finish. Keep notify=true (the default); only use notify=false for fire-and-forget work with no taskId.",
+					);
+				}
 				if (!options.jobManager) {
 					throw new RecoverableToolError(
 						"Background execution is not available here (enable tools.jobs.enabled, and note it is off for sub-agents). Run the command without async, or shorten it.",
@@ -227,8 +232,8 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 							text:
 								`Background job ${job.id} started: ${jobLabel}\n` +
 								(willNotify
-									? "It runs off-turn; end your turn now. You will be woken automatically when it finishes, " +
-										"with its exit code and output — do not schedule a check-in for it."
+									? "Complete any independent work, then end the turn when only waiting remains. Completion wakes this channel with the exit code and output; do not poll or schedule a check-in. " +
+										"Inside a task step, park with task_step_end on this job id."
 									: "It runs off-turn and will NOT wake you when it finishes; check it with the job tool (op:poll/list)."),
 						},
 					],

@@ -7,47 +7,42 @@ order: 40
 
 # 事件与调度
 
-事件只负责"什么时候唤醒"，不承载长程工作的状态。可验收、需要积累步骤的工作用 task（见 `task-loop.md`）；纯提醒或外部条件探测才单独用 event。
+event 负责何时唤醒，task 承载可验收工作的状态。当前能做就直接做；单次提醒或外部条件探测用 event，周期性产出用带 schedule 的 task。需要写任务契约时才读 `task-loop.md`。
 
-## 选择类型
+## 创建合法事件
 
-- **当前回合就能做**：直接做。`event_manage` 会拒绝 immediate 类型，防止自触发循环。
-- **将来某时提醒一次**：one-shot，至少提前 2 分钟、最多约 24.8 天；更远的时间用 periodic。
-- **固定节奏重复提醒或检查**：periodic，五段 cron，按主机时区解释（没有 timezone 字段）。
-- **周期性产出任务**：不是 event，是一个 task 文件，节奏写在 frontmatter 的 `schedule`。
+在**普通聊天侧**使用 `event_manage`；task 步骤没有该工具。它验证频道、时间、command guard 和总量，`definition` 是完整 JSON 字符串；省略 channelId 默认当前频道。更新时整体替换 definition。
 
-优先用 `event_manage`：它会校验 JSON、channel、时间间隔、preAction command guard 和总量。工具不可用时才直接维护 `events/*.json`，无效文件会被 scheduler 静默忽略。
-
-## 基本定义
+一次提醒用 one-shot，至少提前 2 分钟、最多约 24.8 天；下面的 at 是示意，调用时换成未来的真实时间：
 
 ```json
-{"type":"one-shot","channelId":"<当前channel>","text":"检查处理结果","at":"2026-07-12T10:00:00+08:00"}
+{"type":"one-shot","text":"检查处理结果","at":"2026-12-01T10:00:00+08:00"}
 ```
+
+periodic 使用主机时区的五段 cron，没有 timezone 字段。普通事件最小间隔 30 分钟，带 preAction 时 5 分钟，全 workspace 最多 50 份事件文件。
+
+## preAction：外部条件传感器
 
 ```json
-{"type":"periodic","channelId":"<当前channel>","text":"执行工作日巡检","schedule":"0 9 * * 1-5"}
+{"type":"periodic","text":"条件满足后检查并处理结果","schedule":"*/5 * * * *","preAction":{"type":"bash","command":"test -f /absolute/path/ready.flag","timeout":10000}}
 ```
 
-普通 periodic 最小间隔 30 分钟，带 preAction gate 时 5 分钟，事件总数上限 50。任务拥有的事件命名为 `task.<channelId>.<taskId>.<use>`，便于闭环时清理。
+把示例命令和路径换成真实条件。`preAction.type` 必须是 bash，`timeout` 单位是**毫秒**，与 bash 工具的秒不同。退出 0 才唤醒，非 0 静默跳过；不要用总是成功的命令假装门控。传感器用 periodic：one-shot 即使条件未满足也会被消费。
 
-## preAction 是传感器，不是工作流
+传感器只检查条件，不承载实施步骤。第三方工具的命令和状态语义来自已安装工具或对应 skill，不复制来源不明的脚本。频率、退出条件和退役时机要明确。
 
-preAction 的 bash 命令退出 0 才唤醒 agent，非 0 静默跳过。它用来调用用户已经安装、稳定可执行的工具检测外部条件。Pipiclaw 只负责运行经过 command guard 的命令，不捆绑第三方工具的脚本或状态语义——那属于用户层的 skill / 可执行文件；来源不明的脚本也不要复制进 workspace。
+## 与 task 组合
 
-传感器必须用 periodic：one-shot 即使 gate 没通过也会被消费掉。每个传感器都要有退出条件和合理频率。
+聊天侧先建 task，再创建命名为 `task.<channelId>.<taskId>.<use>` 的 periodic sensor，并把事件名与条件写进任务契约。任务步骤先查真实条件，未满足才 park 到 `{"kind":"signal","event":"<事件名>"}`。
 
-**task-owned 传感器（`task.<channelId>.<taskId>.<use>`）现在直接兑现任务的 `signal` 票**：任务用 `task_step_end` 停泊到 `{"kind":"signal","event":"<事件名>"}`，事件的 preAction 通过时运行时兑现这张票、唤起任务的下一步，而**不**向频道投递唤醒文本。任务没有持这张票时，事件照旧投递到聊天会话。票自带兜底时限（错过两次 occurrence 就报警），所以不再需要额外的 `wake` 兜底。
+门控通过后，runtime 兑现匹配的 signal 票并推进任务；没有匹配票时仍会投递聊天唤醒，因此唤醒文本不能自行扩大任务范围。票有 runtime 派生的兜底，不需另建回访事件。循环中缺少 sensor 时说明缺什么，不能用文件工具绕过被移除的 event_manage。
 
-## 回访事件
+后台 job 和委派已有完成唤醒，不建 event 等它们。没有 task、也没有内置完成通知的外部等待，才建一次性回访；需按条件触发则用 periodic + preAction。
 
-当前回合等不到结果、又没有 task 可以承载这次等待时，按预计完成时间建一条 one-shot 回访；只有需要按外部条件触发时才用 periodic + preAction。回访完成后删掉这条临时事件。
+## 维护
 
-任务自己的等待不用回访事件——用 `task_step_end` 的票（见 `task-loop.md`），它由运行时校验并兜底。
+事件名字不确定时先 list；已知名字直接操作。列表包含本频道可解析事件及无法解析的文件提示，后者归属未必可确认，不凭猜测删除。停用、闭环或改期时及时清理临时事件；task 完成/取消会清理归属事件，周期任务要保留仍需复用的 sensor。
 
-**后台作业和 Agent 委派不需要回访事件**：它们结束时 runtime 会自己唤醒你，见 `background-jobs.md` 和 `agent-delegation.md`。
+超出 one-shot 范围的一次提醒可用 periodic 表达未来日期，但首次成功后必须删除，不能默认为永久重复。工具不可用且没有合法文件访问入口时告知用户，不绕过守卫。
 
-## 维护纪律
-
-闭环或改期之前先 `event_manage action=list` 确认本频道事件的真实名字，不要凭 `task.<channelId>.<taskId>.<use>` 约定拼。`list` 只返回当前 channel 的事件，无法解析的文件也会列出并标记，便于清理。名字确定时直接 create / update / delete，不必每次先 list。
-
-更新事件时整体替换 definition，不再需要就及时删除。周期事件跑完没有新结果时按唤醒文本的要求回复 `[SILENT]`，不发空状态卡。排查触发与 gate 结果要看事件历史（用户命令：`/events history`）。
+periodic 无新结果按唤醒要求回复 `[SILENT]`。检查触发与 gate 结果由用户命令 `/events history` 查看。

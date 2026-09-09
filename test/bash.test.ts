@@ -115,6 +115,29 @@ describe("bash tool", () => {
 		expect(jobManager.runningCount()).toBe(1);
 	});
 
+	it("preserves timeout semantics in async mode and refuses task jobs without a completion wake", async () => {
+		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
+		const manager = new ChannelJobManager("dm_timeout", executor);
+		const start = vi.spyOn(manager, "start").mockResolvedValue({
+			id: "job_probe",
+			label: "check",
+			command: "npm test",
+			status: "running",
+			startedAt: 0,
+			durationMs: 0,
+		});
+		const tool = createBashTool(executor, { jobManager: manager });
+		await tool.execute("default", { command: "npm test", async: true });
+		expect(start.mock.calls[0]?.[2]).toBe(DEFAULT_BASH_TIMEOUT_SECONDS);
+		await tool.execute("long", { command: "npm test", async: true, timeout: 1800, taskId: "T" });
+		expect(start.mock.calls[1]?.[2]).toBe(1800);
+		expect(start.mock.calls[1]?.[3]).toMatchObject({ taskId: "T", notify: true });
+		await expect(
+			tool.execute("silent", { command: "npm test", async: true, taskId: "T", notify: false }),
+		).rejects.toThrow(/notify=true/);
+		expect(start).toHaveBeenCalledTimes(2);
+	});
+
 	it("runs the rtk-rewritten command when the optimizer is enabled", async () => {
 		const executor = new RecordingExecutor(async (command) => {
 			if (command === "command -v rtk") return { code: 0, stdout: "/usr/bin/rtk", stderr: "" };
@@ -122,6 +145,7 @@ describe("bash tool", () => {
 			if (command === "rtk rewrite 'git status'") return { code: 3, stdout: "rtk git status\n", stderr: "" };
 			return { code: 0, stdout: "clean", stderr: "" };
 		});
+
 		const tool = createBashTool(executor, { rtkEnabled: true });
 
 		const result = await tool.execute("call", { command: "git status" });

@@ -1,110 +1,90 @@
 ---
 name: task-loop
-description: 判断该不该建长程任务（task）、怎么写任务契约，以及在任务循环里推进、等待、验收和闭环。
+description: 判断是否建长程任务（task）、编写契约，或在 TASK_STEP 中推进、等待、验收、完成和恢复时。
 requires-tools: task_create, task_step_end
 order: 70
 ---
 
-# 长程任务：建档与循环
+# 长程任务：契约与循环
 
-任务是**跨回合恢复**的工作单元。运行时负责调度和兜底，你负责判断。每一步的 brief 已经给了契约全文、最近日志和当前预算；这里讲的是这些数字之外需要你判断的部分。
+只为需要跨回合恢复、等待外部结果或周期性产出的工作建 task；当前回合可完成的请求、一次临时委派不建。纯提醒或条件传感器用 event，需要创建时读 `event-scheduling.md`。
 
-## 什么时候建 task
+## 先识别入口
 
-只有工作需要跨回合恢复时才建：多步骤目标、要等人或外部系统、要委派、周期性产出。当前回合能做完的请求不建台账。纯提醒或外部条件探测用 event（见 `event-scheduling.md`）；只在当前回合委派一次也不需要 task。
+| 当前环境 | 可做什么 |
+|---|---|
+| 普通聊天 | task_create 建档，task_update 改 Plan/节奏/预算/验收要求，task_close 完成/跳过/取消；传感器在这里用 event_manage 预先创建 |
+| `[TASK_STEP:<id>]` / 有 task_step_end | 推进当前契约并用 task_step_end 收尾；没有 task_create、memory_save、event_manage，不绕过这些边界 |
 
-只把**可独立推进、可独立验收**的长期工作拆成多个 task。任务之间没有依赖字段：先后条件写进后继任务的 Goal/Manual。
+创建后由 runtime 在独立的 cycle 会话推进。带 taskId 的普通聊天仍是聊天，不因此获得 task_step_end。只拆分可独立推进和验收的长期任务；没有任务依赖字段，前置条件写进后继 Goal/Manual。
 
-## 写契约
+## 写短而自足的契约
 
-`task_create` 的四段是整个循环唯一的长期真相，每一步都会完整读到它，所以要短、要准：
+每一步都会得到完整契约，写得越长，每步成本越高。约 4 KB 是作者应控制的目标；代码只裁剪“上次结果”，不会替你压缩 Goal/Manual。
 
-- `goal`：最终要成立的**结果**，不写行动清单；范围和对外动作边界写在这里。
-- `dod`：客观验收标准，每项必须是 `- [ ]` checkbox。写不出 checkbox 说明目标还没想清楚。**用户的适用要求要在这里变成检查项**——"用户喜欢简单"不是 DoD，"不新增依赖和持久状态，除非说明本次为什么必要"才是。
-- `manual`：可复用的执行步骤、预检、幂等方法、返工教训。这是任务自己的记忆——学到什么就更新它。
-- `verificationPlan`：独立验收者能执行的确定性检查。功能之外，把适用要求和复杂度也写成可判真假的检查。
+- **goal**：要成立的结果、范围、允许的外部动作。创建即持续委托，Goal 与工具/security 共同限制授权边界，不存在逐次授权字段。
+- **dod**：客观验收标准，必须是 `- [ ]` checklist；将适用用户要求变成检查项。
+- **manual**：本任务可复用的步骤、预检、幂等办法和已验证的返工教训。
+- **verificationPlan**：可执行的检查及证据要求，执行者和验收者拿到同一标准。
 
-**同一条适用要求必须同时进入执行者和验收者的上下文**，不能等代码写完再补标准。
+用户明确要求、实质实现改动、高后果或难以自查的工作设 `verificationRequired:true`。稳定流程的低风险产物若已有充分确定性检查，可以保留默认；不能通过关闭既定验收要求来绕过失败。
 
-有代码、配置或可复现产物时设 `verificationRequired: true`；纯提醒、沟通和主观写作保持默认。
+`plan` / `planSteps` 表达手段与可验证产出，不复抄 DoD；四态 todo/done/blocked/dropped，可用 `→ dod:1,2` 指向验收项。改契约正文或勾选 checklist 用 `edit` 打开 brief 中的绝对文件路径；task_update 只改其暴露的字段和 Plan。
 
-契约有 4 KB 预算，但它约束的是运行时写的 `## 上次结果`，不会删你写的段落。**每一步的记录不写进契约**，写进 `task_step_end` 的 `note`；历史用 `task_log` 查。
+schedule 是主机时区的五段 cron，最小 30 分钟。首周期创建后立即就绪；若首次应等待约定时刻，在任务里明确并用 time 票等待。预算含 steps、wallMin、usd、rounds，可按需设 until；**wallMin 是 cycle 开始后的经过时间，包含 park 等待**，建档时计入等待跨度。
 
-`schedule`（五字段 cron，最小 30 分钟）让任务变成周期性的：每个 occurrence 一个 cycle，闭环后自动停到下一次。
+## 推进一步并收尾
 
-Task 创建即持续委托：能触达什么由可用工具、security 配置和 Goal 共同约束，没有逐次授权的字段。**Goal 的边界就是授权的边界，宁可写窄。**
+先看 `<task_contract>`、最近 `<task_log>` 和 `<task_state>`，用已有契约，不再重复打开。历史或证据不够才 task_log；round 摘要只有 verdict/runId/拒绝原因，失败细节在该 run 的 output.md，不能凭一行 FAIL 猜根因。
 
-## Plan：手段层
+| 判断 | task_step_end outcome |
+|---|---|
+| 完成这一阶段，还有可推进工作 | continue，note 留下证据和下一步 |
+| 必须等待真实来源 | park，附 run/job/time/signal 票 |
+| 本周期达标 | done，必须有 summary 和 evidence；周期任务由 runtime 自动停到下一次 |
+| 需要用户决定 | blocked，reason 写清问题；runtime 建 ask 票并通知用户 |
 
-预计需要多步时用 `plan` 创建步骤，或用 `task_update` 的 `planSteps` 更新。Plan 是手段，不是第二份 DoD；每步写可验证产出，可选 `→ dod:1,2` 引用。四态 `[ ]` todo、`[x]` done、`[!]` blocked、`[~]` dropped。周期任务每个新 cycle 会把 Plan 和 DoD 复位。
+**本周期完成一律 done，不用 park + schedule 代替。** 明确跳过一次用 task_close outcome=skip 并给 reason；放弃整个任务用 cancel。关闭/取消不会代替你取消仍在运行的委派或 job。
 
-## 在循环里推进
+任务步骤默认静默；确有交付或需告知的变化才用 notify。note 只写真实做过什么、证据和下一步；不把每步过程追加到契约。Plan 可在 task_step_end 中一并更新。
 
-每一步先看清 brief 里的 `<task_contract>`、`<task_log>` 和 `<task_state>`，再动手。派发是 at-least-once，**外部动作前先查真实状态**，别重复发送、发布或部署。
+## 等待与恢复
 
-`<task_log>` 给的是最近若干条记录，**不是全部结论**：round 记录只有 verdict、runId 和被拒原因，真正的失败现象在委派的 `output.md` 里。要判断"这次到底哪儿不对"，读那份实际产物和实际报错，别拿一行 verdict 当根因。更早的历史用 `task_log` 翻。
+run/job 派发时即带 taskId；先完成独立工作和必要的并行派发，只剩等待才 park。run 用 `{"kind":"run","id":"<runId>"}`，job 同形；定时复查用 `{"kind":"time","at":"+2h"}`；预置传感器用 `{"kind":"signal","event":"<事件名>"}`。
 
-只推进一个清晰的下一阶段，然后用 `task_step_end` 收尾：
+票只接受真实、未结束且属于本任务的来源。结果同步返回或 park 时已结算，就读结果继续，不等待第二次通知；id/归属错误按工具指引纠正，不能手改 ticket frontmatter。已有 job/run 完成通知，不另建回访事件。
 
-- 还能接着干 → `continue`。运行时立刻排下一步，没有等待。
-- 在等一个真实来源 → `park`，带上对应的票。委派用 `run`、后台作业用 `job`、单纯过一阵再看用 `time`、周期任务闭环用 `schedule`、task-owned 传感器事件用 `signal`。
-- 本周期做完了 → `done`，必须给 `summary` 和 `evidence`。
-- 需要用户决定 → `blocked`，写清在等什么。
+signal 事件必须在聊天侧预建为 task.<channelId>.<taskId>.<use> 的 periodic；循环先检查条件，未满足才等待。缺少事件且不能自主继续时 blocked 说明缺什么，不绕过工具限制。
 
-**票必须指向真实存在的东西**：运行时会当场校验，指不到就拒绝。这是设计——一次指不到的等待就是一次永久静默。
+票自带 runtime 兜底。过期后的 brief 会标明等待来源：先检查真实状态，再继续或换票；同 cycle 第二次过期停止并通知用户。预算任一项耗尽也会停止；这些回执由 runtime 发出，无需再花模型回合解释。用户命令 `/tasks resume <id>` 恢复、`/tasks reply <id> ...` 回答阻塞问题。
 
-**默认不向用户发言。** 确实要说才给 `notify`；`blocked` 一定会说。
+## 外部动作
 
-## 外部动作的幂等闭环
+派发是 at-least-once。发送、发布、部署或修改外部对象前，核对 Goal/DoD 与目标真实状态，排除此前已成功的同一动作；能用稳定 request/message/idempotency key 就使用。操作后记录真实结果、目标标识、时间和证据，达标才 done。结果未知先核查，不盲目重放。
 
-外部发送、发布、部署或修改前：
-
-1. 读 Goal 和 DoD 确认动作仍在范围内，并查询目标真实状态。
-2. 确认此前没有已成功的同一动作；用稳定的 request / message / idempotency key 执行。
-3. 查询并记录真实结果、目标标识、时间和证据到 `note`。
-4. 只有结果已满足 DoD 才 `done`；失败就 `continue` 或 `park` 并写清恢复来源。
-
-附件交付的 receipt 规则见 `outbound-media.md`。
+交付附件时读 `outbound-media.md`：send_media 成功回执可作证据，但接口没有消息 id 或二次状态查询，不能虚构。
 
 ## 独立验收
 
-1. 只有证据成立后才勾选 DoD / Verification checklist。
-2. 像任何委派一样派一个 `purpose: verify`、带 `taskId` 的 sub-agent，然后 `park` 到那个 run 的票上。
-3. checker 只判断、不修复被验收实现，结尾返回 `VERDICT: PASS` 或 `VERDICT: FAIL`。
-4. **结算时运行时自动记账**：校验 attestation（归属、契约 hash、产物 subject），把这一轮写进返工账本，然后兑现你的票。你不需要导入任何东西——醒来时结论已经在 `<task_log>` 里。
-5. attestation 校验不过的 PASS 会被记成 FAIL 并写明原因。标 `advisory` 的结论（带 `bash` 的内置验收者、`mutates: write` 的 verifier、所有外部验收者）只是参考，仍要按风险抽查；强度来源见 `agent-delegation.md`。
-6. `verify: required` 的任务，关闭时会**重新校验**本周期最后一条 round：它必须是 PASS，且 attestation 此刻仍绑定当前契约和当前产物。所以「先通过验收、再改 Goal 或再改代码」不会被放行；后来的 FAIL 也不会被更早的 PASS 覆盖。返工轮次有预算，到顶会停下来问用户。
+需要委派但还未准备好执行者、上下文或工作目录时，读 `agent-delegation.md` 对应部分。
 
-PASS 绑定 Goal/DoD/Manual/Verification 这段契约，不绑定 Plan 和历史。**改动契约或被验收产物后必须重新验收**——包括为了记录教训去改 Manual。产物从一棵 worktree 整合到另一处之后，要针对最终交付的位置重新确认覆盖，源 worktree 的证明不为目标产物背书。
+1. 实施、正式测试、文档和收尾改动全部完成，自查证据成立后勾选 DoD/Verification。
+2. 派 purpose=verify 且带 taskId 的角色，给同一契约、适用要求、最终交付位置与版本。验收者只判断，不修复实现；结尾输出 `VERDICT: PASS` 或 `VERDICT: FAIL`。
+3. 同步完成直接处理，异步才 park 到 run。结算自动校验归属、契约 hash 和产物 subject，并写入 round，无需手动导入。
+4. 关闭要求本周期最后一条 round 为 PASS，且证明仍绑定当前契约和产物；后来的 FAIL 不会被更早 PASS 覆盖。
 
-### 裁决反馈，再返工
+证明强度：内置 mutates=read 且无 bash 的 verifier 才是 enforced；带 bash、mutates=write 或任何外部 verifier 都是 advisory，按风险核对关键证据。write verifier 会持有写 lease，能跑生成临时文件的检查；exec 没有协议终态，不支持正式验收。mutates 不是 sandbox。
 
-验收和审查的输出是待裁决的材料，不是待执行的清单。先分类：
+验收不得修改被验收实现或为了通过而修代码。取证脚本可放 `.run/`、coverage/build/dist 或系统临时目录；往正式源码或测试目录新增文件也会改变 subject，要交回实现者处理并重验。
 
-| 反馈 | 处理 |
-|---|---|
-| 违反 DoD/明确约束，且有复现证据 | 返工，并写明哪些已通过的行为必须保持 |
-| 疑似缺陷，证据不足 | 先做一次窄范围调查或补验证，不直接大改 |
-| 缺前置条件 | 能解决的先解决；要等外部条件就 `park` 到对应来源 |
-| 风格建议、任务外增强 | 不作为本轮失败理由；有价值另记候选 |
-| 两条反馈互相冲突 | 回到契约和真实产物判断，必要时补一个有区分力的实验 |
+PASS 绑定 Goal/DoD/Manual/Verification 与实际产物，不绑定 Plan 或历史。修改这些契约段落、补代码/文档/测试、commit hook 改内容都会要求重验；base-relative subject 允许原样提交已验收内容。跨 worktree 整合后，要对最终交付位置重新确认覆盖。
 
-给执行者的返工文本按**现象 → 证据 → 违反了哪条标准 → 本轮修复边界 → 怎么重验**写，不要只说"审查者不满意，再改好一点"。
+## 先裁决反馈，再返工
 
-同一个问题连续两轮失败又没有新证据时，改变调查方式、缩小复现，或换一个执行者——重复同一次尝试只是在花钱。**过了约定标准、没有未解决的必修项就交付**；预算还有余额不会把可选优化变成任务目标。
+违反 DoD/明确约束且有复现证据的才返工；疑似问题先窄范围调查；任务外增强和风格建议不作为失败理由；冲突意见回到契约与实际产物，用有区分力的检查裁决。
 
-## 预算与停止
+返工指令写 **现象 → 证据 → 违反标准 → 修复边界与已通过项 → 重验办法**。同一问题连续两轮失败且无新证据时，缩小复现、换调查方法或执行者。达到约定标准、没有未解决必修项就交付，预算余额不代表需要继续润色。
 
-每个 cycle 有四维预算：步数、墙钟、成本、返工轮次（可在 `task_create`/`task_update` 的 `budget` 里按任务调整）。任一项到顶，运行时停掉任务并给用户一条确定性回执，附加预算的命令。连续两步没有任何工具调用也会被停下——那说明循环在自言自语。
+教训先写 note；影响后续实施的，在最终验收前更新 Manual。PASS 后新教训留日志，真正采纳再改契约并重验。多次验证有效且跨任务复用时，再按 `memory-and-learning.md` 的 skill 晋升规则处理。
 
-**只记录真实工作**：`note` 写做了什么、证据是什么、下一步是什么，不写愿望。失败的一轮也写一条：失败原因、哪些反馈采纳了、这一轮准备改变什么。
-
-学到的东西按三个落点分：任务内的执行经验先进 `note`；需要约束**后续实施**的，在最终验收前更新 `manual`；多次验证有效的跨任务流程才整理成 workspace skill（见 `memory-and-learning.md`）。**PASS 之后的新教训先留在循环日志里**——改 Manual 会改变契约、让这条 PASS 失效，下个周期真要采纳时再更新。
-
-## 等待票过期
-
-票有兜底时限。到点还没兑现，运行时会把任务重新打开，并在 brief 开头告诉你票过期了。这时**先确认真实状态**（那个 run 到底结束没有？那个条件到底成立没有？），再决定继续还是换一张票。同一 cycle 内第二次过期会停掉任务并通知用户。
-
-## 契约损坏
-
-frontmatter 不可读或仍是旧版契约时，唤醒会明确要求**只修元数据、不执行任务目标**。用 `edit` 修好首部后就停下，任务工作留给下一步。
+frontmatter 损坏或仍是旧契约时只修元数据，修好后停下，工作留给下一步；不要手造等待票或借修复扩大任务范围。

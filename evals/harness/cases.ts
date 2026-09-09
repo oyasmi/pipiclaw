@@ -4,7 +4,7 @@ import { allCases } from "../cases/index.js";
 import type { EvalCase, ModelGrader } from "./schema.js";
 import { hash, hashFile } from "./util.js";
 
-const ID = /^[A-Z]-[a-z0-9-]+-\d{2}$/;
+const ID = /^[A-Z]{1,2}-[a-z0-9-]+-\d{2}$/;
 
 export function validateCases(cases: EvalCase[]): void {
 	const ids = new Set<string>();

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { seedChannelMemory } from "../../evals/cases/helpers.js";
+import { allCases } from "../../evals/cases/index.js";
 import { caseHash, validateCases } from "../../evals/harness/cases.js";
 import { renderDiff } from "../../evals/harness/diff.js";
 import { lastDeliveryMatches, noDeliveriesAfterStep, recallQuiz } from "../../evals/harness/graders.js";
@@ -105,7 +106,8 @@ const manifest: RunManifest = {
 };
 
 describe("behavior eval registry and reproducibility", () => {
-	it("rejects duplicate ids and malformed mid-turn crash scripts", () => {
+	it("accepts the shipped catalog and rejects duplicate ids and malformed mid-turn crash scripts", () => {
+		expect(() => validateCases(allCases)).not.toThrow();
 		expect(() => validateCases([evalCase(), evalCase()])).toThrow(/Duplicate/);
 		expect(() =>
 			validateCases([evalCase({ script: [{ kind: "restart" }, { kind: "crash", mode: "midTurn" }] })]),

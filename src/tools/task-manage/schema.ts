@@ -27,7 +27,9 @@ const budgetField = Type.Optional(
 	Type.Object(
 		{
 			steps: Type.Optional(Type.Number({ description: "Max model steps in one cycle." })),
-			wallMin: Type.Optional(Type.Number({ description: "Max working minutes in one cycle." })),
+			wallMin: Type.Optional(
+				Type.Number({ description: "Max elapsed minutes in one cycle, including parked waits." }),
+			),
 			usd: Type.Optional(Type.Number({ description: "Max attributable cost in one cycle." })),
 			rounds: Type.Optional(Type.Number({ description: "Max delegate→verify rework rounds in one cycle." })),
 			until: Type.Optional(Type.String({ description: "Hard local-time stop, e.g. 2026-09-06T18:00:00+08:00." })),
@@ -44,14 +46,7 @@ const budgetField = Type.Optional(
 const ticketField = Type.Object(
 	{
 		kind: Type.Union(
-			[
-				Type.Literal("time"),
-				Type.Literal("schedule"),
-				Type.Literal("run"),
-				Type.Literal("job"),
-				Type.Literal("ask"),
-				Type.Literal("signal"),
-			],
+			[Type.Literal("time"), Type.Literal("run"), Type.Literal("job"), Type.Literal("ask"), Type.Literal("signal")],
 			{ description: "What will wake this task." },
 		),
 		at: Type.Optional(Type.String({ description: 'kind=time: when, e.g. "+2h" or a local timestamp.' })),

@@ -1,26 +1,24 @@
 ---
 name: outbound-media
-description: 把生成的文件、图片、报表或导出物作为附件（attachment / media）交付给用户时。
+description: 把生成的文件、图片、报表或导出物作为附件（attachment / media）交付给用户，或处理发送失败时。
 requires-tools: send_media
 order: 30
 ---
 
-# 附件交付（outbound media）
+# 附件交付
 
-产物真正通过当前 transport 发出才算交付。`send_media` 把一个本地文件作为原生附件发到**当前 channel**——目标不由你选，主机路径也不是附件。
+`send_media` 把本地文件发到当前 channel。产物通过 transport 成功发出才算交付，主机路径本身不是附件；普通聊天发送不需要创建 task。
 
-## 工具边界
+## 发送与恢复
 
-- 图片扩展名（`.jpg` `.jpeg` `.png` `.gif` `.webp` `.bmp`）内联展示，其余作为可下载文件发送。要改接收方看到的名字就传 `fileName`。
-- 上限 5MB，超出直接拒绝：先压缩，或者把路径告诉用户让他自己取。
-- 空文件、不是常规文件、被 path guard 挡住的路径都会拒绝并给出可执行的下一步。这些检查工具会做，不必自己预检。
+按发送文件名的扩展名选择展示：jpg/jpeg/png/gif/webp/bmp 内联，其余作为文件；`fileName` 改接收者看到的名字。传当前项目内或允许读取位置的文件路径。
 
-## 记录 receipt
+上限 5 MiB。空文件、非常规文件、超限和 path guard 拒绝都由工具检查，无需重复预检。超限先压缩或拆分；仍无法发送时说明未交付，并提供用户可访问的取件方式。
 
-`send_media` 返回成功 receipt 才算送到。成功后把 receipt（附件名、类型、大小、已发送到当前 channel）和时间写进 `task_step_end` 的 `note`；发送前先用 `task_log` 看这份记录里有没有同一附件的成功 receipt，避免重复投递。外部动作的通用幂等纪律见 `task-loop.md`。
+依据成功回执确认附件名、类型和大小。失败按原因修复后重试；如果结果不确定，先核对已有证据，不能把工具返回或主机文件存在当成送达。
 
-失败时按同一份纪律 progress 为 active 或 waiting 并写恢复来源，不要把"调用返回了"当成"用户收到了"。
+## task 中的交付证据
 
-## 证据边界
+**仅在 task 步骤中**，发送前用已有 `<task_log>` 或 `task_log` 查同一产物的成功回执；发送成功后将回执、产物标识和时间写入 `task_step_end.note`，避免重复投递。失败可自行修复用 continue，等待真实来源用 park，需要用户决定用 blocked。外部动作涉及多步恢复时再读 `task-loop.md` 的“外部动作”。
 
-当前接口不返回 message / request id，也不提供二次投递状态查询，不要虚构这些证据。任务要求更强的送达确认时，明确记录现有 receipt 的证据边界，并向用户确认。
+接口没有 message/request id，也不能二次查询投递状态。记录工具实际提供的证据；任务要求更强送达确认时，把这一缺口告知用户，不虚构标识。

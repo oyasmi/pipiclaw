@@ -4,6 +4,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import * as log from "../log.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "../memory/channel-maintenance-queue.js";
+import { readJournalForSearch } from "../memory/journal.js";
 import { appendMemoryReviewLog } from "../memory/review-log.js";
 import { findNearDuplicateEntries, searchMemory } from "../memory/search.js";
 import { containsSecret } from "../memory/secret-redaction.js";
@@ -56,7 +57,7 @@ const memorySaveSchema = Type.Object({
 
 const memorySearchSchema = Type.Object({
 	query: Type.String({
-		description: "What to look for across this channel's memory, journal, and workspace MEMORY.md.",
+		description: "What to look for across this channel's memory, recent journal files, and workspace MEMORY.md.",
 	}),
 });
 
@@ -181,14 +182,19 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 		if (!trimmed) {
 			throw new RecoverableToolError("memory_search requires a non-empty query.");
 		}
-		const [entries, workspaceMemory] = await Promise.all([
+		const [entries, workspaceMemory, journal] = await Promise.all([
 			listMemoryEntries(options.channelDir),
 			readWorkspaceMemory(options.workspaceDir),
+			readJournalForSearch(options.channelDir),
 		]);
-		const hits = searchMemory({ query: trimmed, entries, workspaceMemory });
+		const hits = searchMemory({ query: trimmed, entries, workspaceMemory, journal: journal.days });
+		const scopeHint =
+			journal.omittedDays > 0 || journal.truncatedDates.length > 0
+				? `\nJournal search omitted ${journal.omittedDays} older day files and older text in ${journal.truncatedDates.length} large files. Use grep in ${join(options.channelDir, "journal")} or read a dated file to search the omitted history.`
+				: "";
 		if (hits.length === 0) {
 			return textResult(
-				`No stored memory matched "${trimmed}". Try a broader query, or the fact may not be saved yet.`,
+				`No stored memory matched "${trimmed}". Try a broader query; no match does not prove the fact was never recorded.${scopeHint}`,
 				{
 					resultCount: 0,
 				},
@@ -198,16 +204,19 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 			.map((hit) => {
 				const where =
 					hit.kind === "memory"
-						? `memory/${hit.label}`
+						? `memory/${hit.label}.md`
 						: hit.kind === "journal"
-							? `journal ${hit.date}`
+							? `journal/${hit.date}.md`
 							: `workspace MEMORY.md › ${hit.label}`;
 				return `- [${where}] ${hit.line}`;
 			})
 			.join("\n");
-		return textResult(`Found ${hits.length} match${hits.length === 1 ? "" : "es"}:\n\n${rendered}`, {
-			resultCount: hits.length,
-		});
+		return textResult(
+			`Found ${hits.length} match${hits.length === 1 ? "" : "es"}:\n\n${rendered}${scopeHint}\nResults are excerpts. Read a cited file for full context; narrow the query for more specific matches.`,
+			{
+				resultCount: hits.length,
+			},
+		);
 	}
 
 	async function forget({ name }: { name: string }) {
@@ -260,7 +269,7 @@ export function createMemorySearchTool(options: MemoryManageToolOptions): AgentT
 		name: "memory_search",
 		label: "memory_search",
 		description:
-			"Search this channel's stored memory, journal, and the workspace MEMORY.md on demand. The memory index is only " +
+			"Search this channel's stored memory, recent journal, and the workspace MEMORY.md on demand. The memory index is only " +
 			"injected at the start of a session, so use this when you suspect something was recorded since.",
 		parameters: memorySearchSchema,
 		execute: async (_toolCallId: string, args) => search(args),

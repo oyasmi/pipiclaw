@@ -31,15 +31,15 @@ export const capabilityCases: EvalCase[] = [
 		graders: [
 			fileContains("goal-and-dod-retained", "tasks/resume-ten.md", /GAMMA-10[\s\S]*RELEASE-GAMMA/),
 			tracePredicate(
-				"read-on-every-wake",
+				"reuses-injected-contract",
 				(ctx) =>
 					ctx.trace.filter(
 						(event) =>
 							event.kind === "tool-call" &&
 							event.tool === "read" &&
 							/resume-ten\.md/.test(event.fields?.path ?? event.fields?.file_path ?? ""),
-					).length >= 10,
-				"all ten wakes must re-read the durable task; passive prompt carry-over is not recovery",
+					).length <= 1,
+				"the unchanged contract is supplied on every wake; redundant file reads waste context",
 			),
 			taskFrontmatter("release-still-open", "resume-ten", (frontmatter) => frontmatter.fields.outcome === undefined),
 			{

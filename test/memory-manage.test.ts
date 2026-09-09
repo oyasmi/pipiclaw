@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { JOURNAL_SEARCH_DAY_BYTES } from "../src/memory/journal.js";
 import { getMemoryReviewLogPath } from "../src/memory/review-log.js";
 import { applyMemoryOps, listMemoryEntries } from "../src/memory/store.js";
 import { createMemoryForgetTool, createMemorySaveTool, createMemorySearchTool } from "../src/tools/memory-manage.js";
@@ -30,6 +32,16 @@ async function run(
 }
 
 describe("memory tools", () => {
+	it("bounds a long journal hit and points to the full source", async () => {
+		const channelDir = createTempChannel();
+		mkdirSync(join(channelDir, "journal"), { recursive: true });
+		writeFileSync(join(channelDir, "journal", "2020-01-02.md"), `- archiveprobe ${"details ".repeat(2000)}\n`);
+		const { text } = await run(makeSearch(channelDir), { query: "archiveprobe" });
+		expect(text).toContain("journal/2020-01-02.md");
+		expect(text.length).toBeLessThan(1000);
+		expect(text).toMatch(/read.*file/i);
+	});
+
 	it("saves a durable entry as a channel memory file", async () => {
 		const channelDir = createTempChannel();
 		const { details } = await run(makeSave(channelDir), {
@@ -89,9 +101,31 @@ describe("memory tools", () => {
 		const hit = await run(makeSearch(channelDir), { query: "dark mode preference" });
 		expect(hit.text).toContain("dark mode");
 		expect(hit.details.resultCount).toBeGreaterThanOrEqual(1);
+		const source = hit.text.match(/\[(memory\/[^\]]+)\]/)?.[1];
+		expect(source).toBeDefined();
+		expect(readFileSync(join(channelDir, source!), "utf8")).toContain("dark mode");
 
 		const miss = await run(makeSearch(createTempChannel()), { query: "nonexistent topic xyz" });
 		expect(miss.text).toContain("No stored memory matched");
+	});
+
+	it("retrieves journal-only evidence with its source and discloses omitted history on hits and misses", async () => {
+		const dir = createTempChannel();
+		mkdirSync(join(dir, "journal"));
+		writeFileSync(
+			join(dir, "journal", "2026-09-09.md"),
+			`- omittedcanaryvalue\n${"x".repeat(JOURNAL_SEARCH_DAY_BYTES)}\n- journal-only-marker was confirmed\n`,
+		);
+		const hit = await run(makeSearch(dir), { query: "journal-only-marker" });
+		expect(hit.details.resultCount).toBe(1);
+		expect(hit.text).toContain("journal/2026-09-09.md");
+		expect(hit.text).toContain("journal-only-marker");
+		const miss = await run(makeSearch(dir), { query: "omittedcanaryvalue" });
+		expect(miss.details.resultCount).toBe(0);
+		for (const result of [hit, miss]) {
+			expect(result.text).toContain(join(dir, "journal"));
+			expect(result.text).toMatch(/grep|read/);
+		}
 	});
 
 	it("forgets an entry by exact name through the serial queue and tombstones by hash only", async () => {

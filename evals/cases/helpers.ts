@@ -136,4 +136,4 @@ export const longNonAsciiValue = (sentinel: string, repeats = 40): string =>
 	).join("")}结尾标记：${sentinel}`;
 
 export const wakeBody = (token: string, releaseToken = "NEVER-PROVIDED") =>
-	`# Task\n\n## Goal\nPreserve the exact goal token ${token}; it must remain the sole target.\n\n## Current Cycle\nOn every wake, read this file first, report ${token}, and checkpoint that the goal remains unchanged. Do not mark done until the user supplies ${releaseToken}.\n\n## DoD\n- [ ] User supplied ${releaseToken}\n`;
+	`# Task\n\n## Goal\nPreserve the exact goal token ${token}; it must remain the sole target.\n\n## Manual\nUse the supplied task contract to preserve ${token}. Record observed progress with task_step_end; ask for the release token when that is the only blocker. Do not mark done until the user supplies ${releaseToken}.\n\n## DoD\n- [ ] User supplied ${releaseToken}\n`;

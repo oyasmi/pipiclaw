@@ -29,6 +29,12 @@ export async function endTaskStep(
 	if (!document) throw new RecoverableToolError(`Task "${id}" no longer exists; nothing to end.`);
 	const cycleId = document.fields.cycle?.id ?? options.cycleId ?? "-";
 	const note = requiredField(request.note, "note", "task_step_end");
+	// Also reject stale callers that bypass the schema, which no longer exposes schedule tickets.
+	if (request.outcome === "park" && (request.ticket?.kind as string | undefined) === "schedule") {
+		throw new RecoverableToolError(
+			"To finish this cycle, use outcome=done with summary and evidence; the runtime schedules the next occurrence. To skip it, use task_close outcome=skip with a reason. Use a time ticket to wait within this cycle.",
+		);
+	}
 
 	if (request.planSteps?.length) {
 		document.body = applyTaskPlanPatch(document.body, request.planSteps).body;

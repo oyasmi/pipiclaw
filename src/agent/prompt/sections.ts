@@ -68,8 +68,8 @@ export const EXECUTION_SECTION: PromptSectionDefinition = {
 			"## Working Contract",
 			"- For actionable requests, continue until the requested outcome exists or you are genuinely blocked. Inspect before changing and verify material results.",
 			"- State what remains unverified. Tool definitions are the source of truth for available capabilities and parameters.",
-			"- Background jobs and delegations wake this channel when they finish: end the turn instead of polling, scheduling a check-in, or looping to wait.",
-			"- Before non-trivial use of a Pipiclaw mechanism or workspace procedure, read the matching runtime guide or skill.",
+			"- Jobs and delegations wake this channel on completion. Finish independent work and dispatches; when only waiting remains, end the turn without polling or check-in events.",
+			"- Before non-trivial use of a runtime mechanism or workspace procedure, read its guide or skill; reuse it while it remains in context.",
 		].join("\n"),
 };
 
@@ -107,7 +107,7 @@ export const TASK_CORE_SECTION: PromptSectionDefinition = {
 	render: () =>
 		[
 			"## Persistent Work",
-			"Use a task only when work must survive this turn. Follow the exact task file and runtime guide named by a task wake; use `task_update`/`task_close` for lifecycle state and never expand the task's stated scope or bypass its verification gate.",
+			"Use a task only when work must survive this turn. Chat creates or manages tasks; the runtime drives them in task sessions. Follow the task's contract and runtime guide without expanding its scope or bypassing verification.",
 		].join("\n"),
 };
 

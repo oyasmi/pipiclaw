@@ -383,7 +383,8 @@ function buildDispatchedText(runId: string, agentName: string, runtimeLabel: str
 	return (
 		`[Dispatched] runId=${runId}, agent ${agentName} (${runtimeLabel}), working directory ${workingDirectory}.\n` +
 		"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
-		"Do not dispatch it again or poll for it now -- end this turn. If it belongs to a task, mark it waiting with task_update."
+		"Finish independent work and dispatches, then end the turn when only waiting remains; do not re-dispatch or poll to wait. " +
+		"Inside a task step, use task_step_end outcome=park with this run id."
 	);
 }
 
