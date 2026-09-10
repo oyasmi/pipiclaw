@@ -2,7 +2,7 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
-## [Unreleased]
+## [0.9.3-beta.3] - 2026-09-10
 
 ### Fixed
 
