@@ -1,5 +1,35 @@
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream, existsSync, type WriteStream } from "node:fs";
+import { join as joinPath, delimiter as PATH_DELIMITER } from "node:path";
 import { spawn } from "child_process";
+import { logWarning } from "./log.js";
+
+/**
+ * The `bash` tool's schema says "Bash command" and models write bash-only syntax (`[[ ]]`, arrays,
+ * `set -o pipefail`, process substitution). `/bin/sh` is `dash` on many hosts, so those fail with a
+ * confusing error on the model's first try. Resolve a real `bash` once at load and run commands
+ * through it; only fall back to `/bin/sh` when no `bash` exists, and say so. POSIX `shellEscape`
+ * quoting is still correct for bash, and the command guard inspects the command text either way.
+ */
+function resolveShell(): { path: string; isBash: boolean } {
+	const candidates = ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"];
+	for (const dir of (process.env.PATH ?? "").split(PATH_DELIMITER)) {
+		if (dir) candidates.push(joinPath(dir, "bash"));
+	}
+	for (const candidate of candidates) {
+		if (existsSync(candidate)) {
+			return { path: candidate, isBash: true };
+		}
+	}
+	return { path: "/bin/sh", isBash: false };
+}
+
+const RESOLVED_SHELL = resolveShell();
+if (!RESOLVED_SHELL.isBash) {
+	logWarning("executor: no `bash` binary found on this host; the bash tool is running commands via POSIX /bin/sh");
+}
+
+/** True when the executor found a real `bash`; `bash.ts` uses this to keep its description honest. */
+export const EXECUTOR_SHELL_IS_BASH = RESOLVED_SHELL.isBash;
 
 /**
  * Default in-memory capture cap for a command's stdout/stderr, in bytes (spec 044, D6.1/D6.2).
@@ -28,14 +58,23 @@ export class CommandTerminatedError extends Error {
 	readonly stderr: string;
 	readonly reason: "timeout" | "aborted";
 	readonly timeoutSeconds?: number;
+	/** True when the in-memory `stdout`/`stderr` here is only the head of a larger stream (D6.2). */
+	readonly captureTruncated: boolean;
 
-	constructor(reason: "timeout" | "aborted", stdout: string, stderr: string, timeoutSeconds?: number) {
+	constructor(
+		reason: "timeout" | "aborted",
+		stdout: string,
+		stderr: string,
+		timeoutSeconds?: number,
+		captureTruncated = false,
+	) {
 		super(reason === "timeout" ? `Command timed out after ${timeoutSeconds} seconds` : "Command aborted");
 		this.name = "CommandTerminatedError";
 		this.reason = reason;
 		this.stdout = stdout;
 		this.stderr = stderr;
 		this.timeoutSeconds = timeoutSeconds;
+		this.captureTruncated = captureTruncated;
 	}
 }
 
@@ -116,7 +155,7 @@ class HostExecutor implements Executor {
 		return new Promise((resolve, reject) => {
 			const child = (() => {
 				try {
-					return spawn("sh", ["-c", command], {
+					return spawn(RESOLVED_SHELL.path, ["-c", command], {
 						detached: true,
 						stdio: ["pipe", "pipe", "pipe"],
 						...(options?.cwd ? { cwd: options.cwd } : {}),
@@ -232,13 +271,15 @@ class HostExecutor implements Executor {
 				const stdout = stdoutAcc.toText();
 				const stderr = stderrAcc.toText();
 
+				const captureTruncated = stdoutAcc.truncated || stderrAcc.truncated;
+
 				if (options?.signal?.aborted) {
-					rejectOnce(new CommandTerminatedError("aborted", stdout, stderr));
+					rejectOnce(new CommandTerminatedError("aborted", stdout, stderr, undefined, captureTruncated));
 					return;
 				}
 
 				if (timedOut) {
-					rejectOnce(new CommandTerminatedError("timeout", stdout, stderr, options?.timeout));
+					rejectOnce(new CommandTerminatedError("timeout", stdout, stderr, options?.timeout, captureTruncated));
 					return;
 				}
 

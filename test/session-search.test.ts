@@ -253,4 +253,57 @@ describe("session search", () => {
 		const lastDoc = docs[docs.length - 1];
 		expect(lastDoc?.text).toContain("message number 199");
 	});
+
+	// batch 2.5: a keyword deep inside a long message must stay findable — the old code clipped each
+	// message to the small display window at ingest, so widening the query could never recover it.
+	it("finds a keyword in the middle of a long message and centers the preview on it", async () => {
+		const workspaceDir = createWorkspace();
+		const channelDir = join(workspaceDir, "dm_mid");
+		mkdirSync(channelDir, { recursive: true });
+		const longMessage = `${"lorem ipsum ".repeat(400)} THE_BURIED_TOKEN decided to use pgbouncer ${"dolor sit ".repeat(400)}`;
+		writeJsonl(join(channelDir, "log.jsonl"), [
+			{ date: "2026-09-01T00:00:00.000Z", userName: "Alice", text: longMessage, isBot: false },
+		]);
+
+		const result = await searchChannelSessions({
+			channelDir,
+			query: "THE_BURIED_TOKEN",
+			limit: 3,
+			maxFiles: 6,
+			maxChunks: 20,
+			maxCharsPerChunk: 400,
+			summarizeWithModel: false,
+			timeoutMs: 1000,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+
+		expect(result.results).toHaveLength(1);
+		expect(result.results[0]?.summary).toContain("THE_BURIED_TOKEN");
+		expect(result.results[0]?.summary).toContain("pgbouncer");
+	});
+
+	it("does not return an unrelated recent message just because it is recent (batch 2.5)", async () => {
+		const workspaceDir = createWorkspace();
+		const channelDir = join(workspaceDir, "dm_recent");
+		mkdirSync(channelDir, { recursive: true });
+		writeJsonl(join(channelDir, "log.jsonl"), [
+			{ date: new Date().toISOString(), userName: "Alice", text: "what's for lunch today", isBot: false },
+		]);
+
+		const result = await searchChannelSessions({
+			channelDir,
+			query: "kubernetes ingress controller",
+			limit: 3,
+			maxFiles: 6,
+			maxChunks: 20,
+			maxCharsPerChunk: 400,
+			summarizeWithModel: false,
+			timeoutMs: 1000,
+			model: TEST_MODEL,
+			resolveApiKey: async () => "",
+		});
+
+		expect(result.results).toEqual([]);
+	});
 });

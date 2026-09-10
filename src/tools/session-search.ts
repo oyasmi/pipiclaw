@@ -68,9 +68,13 @@ export function createSessionSearchTool(options: SessionSearchToolOptions): Agen
 				resolveApiKey: options.resolveApiKey,
 			});
 
+			const partialNote =
+				response.partialDocuments > 0
+					? ` ${response.partialDocuments} scanned message(s) were themselves clipped at the scan cap, so a keyword past that point would not be found — this is not proof it was never said.`
+					: "";
 			const text =
 				response.results.length === 0
-					? `${JSON.stringify(response)}\n\nNo matches in cold transcript storage. Try a broader query, drop roleFilter, or read the distilled memory directly (MEMORY.md / HISTORY.md in this channel).`
+					? `${JSON.stringify(response)}\n\nNo matches in cold transcript storage. Try a broader query, drop roleFilter, or read the distilled memory directly (MEMORY.md / HISTORY.md in this channel).${partialNote}`
 					: JSON.stringify(response);
 
 			return {

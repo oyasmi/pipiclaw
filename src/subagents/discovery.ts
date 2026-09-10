@@ -11,8 +11,10 @@ import { SUB_AGENTS_DIR_NAME } from "../paths.js";
 import type { SecurityConfig } from "../security/types.js";
 import { splitShellWords } from "../shared/shell-words.js";
 import { errorMessage } from "../shared/text-utils.js";
+import { SUBAGENT_TOOL_NAMES, type SubAgentToolName } from "../tools/subagent-tool-names.js";
 
-const ALLOWED_SUB_AGENT_TOOLS = ["read", "grep", "bash", "edit", "write", "web_search", "web_fetch"] as const;
+/** Re-exported from the leaf source of truth so validation and the tool set never drift. */
+const ALLOWED_SUB_AGENT_TOOLS = SUBAGENT_TOOL_NAMES;
 const DEFAULT_SUB_AGENT_TOOLS = ["read", "bash"] as const;
 const DEFAULT_MAX_TURNS = 32;
 const DEFAULT_MAX_TOOL_CALLS = 96;
@@ -33,7 +35,7 @@ const ALLOWED_HARNESSES = ["claude-code", "codex-cli", "exec"] as const;
 const ALLOWED_WORKLOADS = ["light", "heavy"] as const;
 const ALLOWED_MUTATES = ["read", "write"] as const;
 
-export type SubAgentToolName = (typeof ALLOWED_SUB_AGENT_TOOLS)[number];
+export type { SubAgentToolName };
 export type SubAgentContextMode = (typeof ALLOWED_CONTEXT_MODES)[number];
 export type SubAgentMemoryMode = (typeof ALLOWED_MEMORY_MODES)[number];
 export type SubAgentThinkingLevel = (typeof ALLOWED_THINKING_LEVELS)[number];

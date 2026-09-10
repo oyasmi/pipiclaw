@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { unlink } from "node:fs/promises";
+import { mkdir, open, readdir, stat, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager } from "../agent/job-manager.js";
-import { CommandTerminatedError, type Executor } from "../executor.js";
+import { CommandTerminatedError, EXECUTOR_SHELL_IS_BASH, type Executor } from "../executor.js";
 import { formatBlockMessage } from "../security/block-message.js";
 import { guardCommand } from "../security/command-guard.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
@@ -22,14 +24,54 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
  */
 export const DEFAULT_BASH_TIMEOUT_SECONDS = 300;
 
+/** Subdirectory of the channel dir where full bash/job output spills live. */
+const BASH_LOG_DIR_NAME = "logs";
+/** Spill files kept per channel before the oldest are pruned on the next tool build. */
+const BASH_LOG_RETENTION = 40;
+/** Bytes read back from the spill file when the in-memory capture was truncated (D2.3). */
+const TAIL_FROM_SPILL_BYTES = DEFAULT_MAX_BYTES * 4;
+
 /**
- * Generate a unique spill file path for full bash output. It lives under `/tmp` so the
- * path we report back is reachable by the same `read`/`bash` tools the model uses to
- * open it.
+ * Where the "full output" spill file for a command goes. Under `<channelDir>/logs/` on the main
+ * path, which the model's `read` can open under both `boundary: "project"` and `unbounded` — a
+ * `/tmp/...` pointer is unreadable under `boundary: "project"` (fix plan §2.2). Sub-agents get no
+ * channel dir, so they fall back to the OS temp dir as before.
  */
-function getSpillFilePath(): string {
+function getSpillFilePath(channelDir: string | undefined): string {
 	const id = randomBytes(8).toString("hex");
-	return `/tmp/pipiclaw-bash-${id}.log`;
+	const dir = channelDir ? join(channelDir, BASH_LOG_DIR_NAME) : tmpdir();
+	return join(dir, `pipiclaw-bash-${id}.log`);
+}
+
+/** Best-effort: keep the channel's `logs/` dir from growing without bound. */
+async function pruneBashLogs(channelDir: string): Promise<void> {
+	const dir = join(channelDir, BASH_LOG_DIR_NAME);
+	let names: string[];
+	try {
+		names = (await readdir(dir)).filter((n) => n.startsWith("pipiclaw-bash-") && n.endsWith(".log"));
+	} catch {
+		return;
+	}
+	if (names.length <= BASH_LOG_RETENTION) return;
+	const withMtime = await Promise.all(
+		names.map(async (n) => ({ n, m: (await stat(join(dir, n)).catch(() => null))?.mtimeMs ?? 0 })),
+	);
+	withMtime.sort((a, b) => b.m - a.m);
+	await Promise.all(withMtime.slice(BASH_LOG_RETENTION).map(({ n }) => unlink(join(dir, n)).catch(() => undefined)));
+}
+
+/** Read the last `maxBytes` of a file as UTF-8 text (used when the in-memory capture is only a head). */
+async function readFileTail(path: string, maxBytes: number): Promise<string> {
+	const size = (await stat(path)).size;
+	const start = Math.max(0, size - maxBytes);
+	const fh = await open(path, "r");
+	try {
+		const buf = Buffer.alloc(size - start);
+		await fh.read(buf, 0, buf.length, start);
+		return buf.toString("utf-8");
+	} finally {
+		await fh.close();
+	}
 }
 
 const bashSchema = Type.Object({
@@ -59,6 +101,13 @@ const bashSchema = Type.Object({
 	),
 });
 
+/** Schema shown when background execution is unavailable (sub-agent path): the async trio is
+ * dropped so the model is never offered a parameter its context cannot honor (fix plan §3.2). */
+const bashSchemaNoJobs = Type.Omit(bashSchema, ["async", "notify", "taskId"]);
+/** Schema shown inside a task session: `taskId` is bound by the runtime, so the model never
+ * supplies (or misfills) it (fix plan §3.3). */
+const bashSchemaBoundTask = Type.Omit(bashSchema, ["taskId"]);
+
 interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
@@ -76,6 +125,12 @@ export interface BashToolOptions {
 	securityContext?: SecurityRuntimeContext;
 	channelId?: string;
 	/**
+	 * The channel directory. When set, the "full output" spill file lives under
+	 * `<channelDir>/logs/` so the pointer the tool hands back is one the model's `read` can open
+	 * under both path-guard boundaries. Absent on the sub-agent path (spill falls back to tmpdir).
+	 */
+	channelDir?: string;
+	/**
 	 * When true, route each command through the `rtk` command optimizer before executing
 	 * (best-effort; falls back to the raw command when rtk is unavailable or declines).
 	 * Gated by `tools.rtk.enabled` in tools.json.
@@ -86,6 +141,13 @@ export interface BashToolOptions {
 	 * background execution. Absent on the sub-agent path, so sub-agents cannot background jobs.
 	 */
 	jobManager?: ChannelJobManager;
+	/**
+	 * Set inside a task cycle's session. A background job started here belongs to this task, so the
+	 * runtime binds the id rather than asking the model to repeat it (and rejects a conflicting one
+	 * before the job launches — the old "relaunch with taskId=…" told the model to re-run a command
+	 * that may have side effects). Chat sessions leave this unset and keep the optional `taskId`.
+	 */
+	boundTaskId?: string;
 	/**
 	 * When true (`tools.bashInterceptor.enabled`), block a few bare shell patterns that have a
 	 * better dedicated tool and steer the model to it. Off by default; main path only.
@@ -112,7 +174,15 @@ const BASH_INTERCEPTOR_RULES: Array<{ test: RegExp; tool: string; why: string }>
 		tool: "grep",
 		why: "it groups, paginates, and bounds output instead of flooding the context",
 	},
-	{ test: /^\s*rg\b[^|&;]*$/, tool: "grep", why: "it groups, paginates, and bounds output" },
+	{
+		// Only a *pure content* `rg` (no output-shape flag) has a `grep`-tool equivalent. Let
+		// `rg --files`, `rg -l`/`--files-with-matches`, `rg -c`/`--count`, `rg --type*` through —
+		// forms the grep tool cannot express (fix plan §3.5). Erring toward passing a command
+		// through is the safe direction.
+		test: /^\s*rg\b(?![^|&;]*\s-{1,2}\S*[lct])[^|&;]*$/,
+		tool: "grep",
+		why: "it groups, paginates, and bounds output",
+	},
 	{
 		test: /^\s*find\s+[^|&;<>`$()]*-name\b[^|&;<>`$()]*$/,
 		tool: "glob",
@@ -124,7 +194,10 @@ const BASH_INTERCEPTOR_RULES: Array<{ test: RegExp; tool: string; why: string }>
 		why: "it discovers file paths without listing directories, and bounds/sorts the result",
 	},
 	{
-		test: /\b(?:sed|perl)\b[^|&;]*\s-i\b/,
+		// Only a *single-file* in-place `sed`/`perl` maps to what `edit` does: flags, `-i`, a script
+		// arg, then exactly one non-glob path. A multi-file batch replace (two paths, or a glob) is
+		// something `edit` cannot do, so let it through (fix plan §3.5).
+		test: /\b(?:sed|perl)\b(?:\s+-\S+)*\s+-i\S*\s+(?:'[^']*'|"[^"]*"|\S+)\s+[^\s|&;*?[\]]+\s*$/,
 		tool: "edit",
 		why: "it verifies a unique match and echoes a diff of the change",
 	},
@@ -152,12 +225,25 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 		agentWorkspaceDir: process.cwd(),
 		projectRoot: process.cwd(),
 	};
+	if (options.channelDir) {
+		void pruneBashLogs(options.channelDir);
+	}
 
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a bash command in the current working directory. Returns stdout, stderr, and the exit code (a non-zero exit code is reported in the output, not raised as an error). Output is truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, the full output is saved to a temp file whose path is included. Commands time out after ${DEFAULT_BASH_TIMEOUT_SECONDS}s unless you pass a larger \`timeout\`.`,
-		parameters: bashSchema,
+		// A bash command can write any file, so running it alongside a concurrent `edit`/`write` in
+		// the same batch reopens the lost-update window that `checkFingerprintUnchanged` cannot close
+		// (both calls pass the pre-write fingerprint check, then each rewrites the whole file). This
+		// is a process-local measure only: external sub-agents are separate host processes and are
+		// not serialized by it. The SDK serializes the whole batch if *any* tool in it is sequential.
+		executionMode: "sequential",
+		description: `Execute a ${EXECUTOR_SHELL_IS_BASH ? "bash" : "POSIX sh (no bash on this host)"} command in the current working directory. Returns stdout, stderr, and the exit code (a non-zero exit code is reported in the output, not raised as an error). Output is truncated to the last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, the full output is saved to a file whose path is included. Commands time out after ${options.defaultTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS}s unless you pass a larger \`timeout\`.`,
+		parameters: (options.jobManager
+			? options.boundTaskId
+				? bashSchemaBoundTask
+				: bashSchema
+			: bashSchemaNoJobs) as typeof bashSchema,
 		execute: async (
 			_toolCallId: string,
 			{
@@ -207,15 +293,24 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 			// Background execution: hand off to the channel's job manager and return immediately so
 			// the run queue is not held for the command's duration. Gated by `tools.jobs.enabled`
 			// (the main path supplies a jobManager; the sub-agent path never does).
+			// Inside a task session the runtime owns the task id; a conflicting one supplied through a
+			// non-schema path is rejected before anything launches (fix plan §3.3).
+			if (options.boundTaskId && taskId && taskId !== options.boundTaskId) {
+				throw new RecoverableToolError(
+					`This is task ${options.boundTaskId}'s session — drop taskId (it is bound automatically); "${taskId}" does not belong here.`,
+				);
+			}
+			const effectiveTaskId = options.boundTaskId ?? taskId;
+
 			if (runAsync) {
-				if (taskId && notify === false) {
+				if (effectiveTaskId && notify === false) {
 					throw new RecoverableToolError(
 						"Task-owned jobs must notify their task when they finish. Keep notify=true (the default); only use notify=false for fire-and-forget work with no taskId.",
 					);
 				}
 				if (!options.jobManager) {
 					throw new RecoverableToolError(
-						"Background execution is not available here (enable tools.jobs.enabled, and note it is off for sub-agents). Run the command without async, or shorten it.",
+						"This context does not support background execution (sub-agents never get it). Run the command without async, or split it into shorter steps.",
 					);
 				}
 				const willNotify = notify ?? true;
@@ -223,7 +318,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				const job = await options.jobManager.start(effectiveCommand, jobLabel, effectiveTimeout, {
 					signal,
 					notify: willNotify,
-					...(taskId ? { taskId } : {}),
+					...(effectiveTaskId ? { taskId: effectiveTaskId } : {}),
 				});
 				return {
 					content: [
@@ -255,12 +350,35 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				stdout: string,
 				stderr: string,
 				spillPath: string,
+				captureTruncated: boolean,
 			): Promise<{ text: string; details: BashToolDetails }> => {
 				let output = "";
 				if (stdout) output += stdout;
 				if (stderr) {
 					if (output) output += "\n";
 					output += stderr;
+				}
+
+				// When the executor's 10MB in-memory capture was itself truncated, `output` is only
+				// the *head* of the stream, so `truncateTail(output)` would return the middle of the
+				// command's output and label it the tail (fix plan §2.3). Read the real tail from the
+				// spill file — the one uncapped copy — and never quote a total line count we never saw.
+				if (captureTruncated) {
+					let tailSource = output;
+					try {
+						tailSource = await readFileTail(spillPath, TAIL_FROM_SPILL_BYTES);
+					} catch {
+						// Spill unreadable: fall back to the capped head's tail; still bounded.
+					}
+					const tailTrunc = truncateTail(tailSource);
+					const shownBytes = Buffer.byteLength(tailTrunc.content, "utf-8");
+					const text =
+						`${tailTrunc.content || "(no output)"}\n\n` +
+						`[Output capture was cut off at ${formatSize(DEFAULT_MAX_BYTES)}+; showing the last ${formatSize(shownBytes)} of the complete output. Full output: ${spillPath}]`;
+					return {
+						text,
+						details: { truncation: tailTrunc, fullOutputPath: spillPath, producedOutput: true },
+					};
 				}
 
 				const truncation = truncateTail(output);
@@ -285,21 +403,29 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				} else {
 					// No truncation happened after all -- the spill file was insurance against the
 					// in-memory capture cap, not a promised artifact; clean it up rather than leaving
-					// tmp clutter behind on every single bash call.
+					// clutter behind on every single bash call.
 					await unlink(spillPath).catch(() => undefined);
 				}
 
 				return { text, details: { ...details, producedOutput: output.trim().length > 0 } };
 			};
 
-			const spillPath = getSpillFilePath();
+			const spillPath = getSpillFilePath(options.channelDir);
+			if (options.channelDir) {
+				await mkdir(join(options.channelDir, BASH_LOG_DIR_NAME), { recursive: true }).catch(() => undefined);
+			}
 			try {
 				const result = await executor.exec(effectiveCommand, {
 					timeout: effectiveTimeout,
 					signal,
 					spillTo: spillPath,
 				});
-				const built = await buildOutputText(result.stdout, result.stderr, spillPath);
+				const built = await buildOutputText(
+					result.stdout,
+					result.stderr,
+					spillPath,
+					result.stdoutTruncated === true || result.stderrTruncated === true,
+				);
 				let outputText = built.text;
 
 				// A non-zero exit code is a normal result, not a tool failure: commands like
@@ -318,7 +444,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 				if (!(error instanceof CommandTerminatedError)) {
 					throw error;
 				}
-				const built = await buildOutputText(error.stdout, error.stderr, spillPath);
+				const built = await buildOutputText(error.stdout, error.stderr, spillPath, error.captureTruncated);
 				const nextStep =
 					error.reason === "timeout"
 						? `Retry with a larger \`timeout\` (currently ${error.timeoutSeconds}s), or pass \`async: true\` to run it in the background and be woken when it finishes.`

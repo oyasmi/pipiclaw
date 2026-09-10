@@ -6,7 +6,7 @@ import { resolveWebFetchRequest } from "../web/config.js";
 import { runWebFetch } from "../web/fetch.js";
 import { formatFetchedText, UNTRUSTED_WEB_CONTENT_BANNER } from "../web/format.js";
 import type { PipiclawWebToolsConfig } from "./config.js";
-import { readWebCache, webCacheKey, writeWebCache } from "./web-cache.js";
+import { clearWebCacheEntry, readWebCache, type WebCacheEntry, webCacheKey, writeWebCache } from "./web-cache.js";
 
 // Large cap used to fetch the full readable body for caching; the displayed window is bounded by the
 // configured/requested maxChars. Still smaller than maxResponseBytes so a hostile page can't OOM us.
@@ -24,7 +24,12 @@ const webFetchSchema = Type.Object({
 		Type.Integer({
 			minimum: 0,
 			description:
-				"Character offset into the page body to start from. Use the offset the previous call reported to page through a long page — it is served from cache with no refetch.",
+				"Character offset into the page body to start from. Use the offset the previous call reported to page through a long page — it is served from the cached snapshot with no refetch.",
+		}),
+	),
+	refresh: Type.Optional(
+		Type.Boolean({
+			description: "Bypass the cached snapshot and fetch the page again. Use when you need current content.",
 		}),
 	),
 });
@@ -46,24 +51,64 @@ function stripBanner(text: string): string {
 	return text;
 }
 
-function windowResult(body: string, offset: number, maxChars: number, url: string, fromCache: boolean) {
+function ageHint(fetchedAt: number): string {
+	const seconds = Math.max(0, Math.round((Date.now() - fetchedAt) / 1000));
+	if (seconds < 90) return "just now";
+	if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+	return `${Math.round(seconds / 3600)}h ago`;
+}
+
+function windowResult(
+	entry: WebCacheEntry,
+	requestedUrl: string,
+	offset: number,
+	maxChars: number,
+	fromCache: boolean,
+) {
+	const body = entry.body;
 	const start = Math.min(offset, body.length);
 	const end = Math.min(start + maxChars, body.length);
 	const slice = body.slice(start, end);
 	let text = formatFetchedText(slice);
-	if (end < body.length) {
-		const cacheNote = fromCache ? " (served from cache, no refetch)" : "";
-		text += `\n\n[Showing chars ${start}-${end} of ${body.length}. Re-call web_fetch with the same url and offset=${end} to continue${cacheNote}.]`;
-	} else if (offset >= body.length && body.length > 0) {
-		text += `\n\n[Reached end of page (${body.length} chars). No more content.]`;
+
+	const notes: string[] = [];
+	if (entry.finalUrl && entry.finalUrl !== requestedUrl) {
+		notes.push(`Final URL after redirects: ${entry.finalUrl}`);
 	}
+	if (fromCache) {
+		notes.push(`Snapshot fetched ${ageHint(entry.fetchedAt)}; pass refresh:true for current content.`);
+	}
+	// "This page has more to page through" and "the origin gave us a partial page" are different
+	// facts and must not be conflated (fix plan §2.7).
+	if (end < body.length) {
+		notes.push(
+			`Showing chars ${start}-${end} of ${body.length} in this snapshot. Re-call with the same url and offset=${end} to continue.`,
+		);
+	} else if (offset >= body.length && body.length > 0) {
+		notes.push(`End of the cached snapshot (${body.length} chars).`);
+	}
+	if (entry.sourceTruncated) {
+		notes.push(
+			`The origin returned more than the fetch limit — even at the end of this snapshot you have NOT seen the whole page.`,
+		);
+	}
+	if (notes.length > 0) {
+		text += `\n\n[${notes.join(" ")}]`;
+	}
+
 	return {
 		content: [{ type: "text" as const, text }],
 		details: {
-			url,
+			url: requestedUrl,
+			finalUrl: entry.finalUrl || requestedUrl,
+			status: entry.status,
+			extractor: entry.extractor,
+			contentType: entry.contentType,
 			offset: start,
 			shownChars: slice.length,
 			totalChars: body.length,
+			sourceTruncated: entry.sourceTruncated,
+			fetchedAt: entry.fetchedAt,
 			fromCache,
 			untrusted: true,
 		},
@@ -76,7 +121,8 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 		label: "web_fetch",
 		description:
 			"Fetch a public URL and extract readable content. Returns text for HTML/JSON/text pages and image content " +
-			"blocks for images. Long pages are cached per channel; page through them with offset (no refetch).",
+			"blocks for images (binary downloads like PDFs are refused — download then read). Long pages are cached " +
+			"per channel as a snapshot; page through with offset (no refetch), or pass refresh:true for current content.",
 		parameters: webFetchSchema,
 		execute: async (
 			_toolCallId: string,
@@ -85,7 +131,14 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 				extractMode,
 				maxChars,
 				offset,
-			}: { url: string; extractMode?: "markdown" | "text"; maxChars?: number; offset?: number },
+				refresh,
+			}: {
+				url: string;
+				extractMode?: "markdown" | "text";
+				maxChars?: number;
+				offset?: number;
+				refresh?: boolean;
+			},
 			signal?: AbortSignal,
 		) => {
 			const request = resolveWebFetchRequest(options.webConfig.fetch, url, extractMode, maxChars);
@@ -117,9 +170,23 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 			}
 
 			const key = webCacheKey(url, request.extractMode);
-			const cached = await readWebCache(options.channelDir, key);
-			if (cached) {
-				return windowResult(cached.body, startOffset, displayMaxChars, url, true);
+			if (refresh) {
+				await clearWebCacheEntry(options.channelDir, key);
+			} else {
+				const cached = await readWebCache(options.channelDir, key);
+				if (cached) {
+					return windowResult(cached, url, startOffset, displayMaxChars, true);
+				}
+			}
+
+			// Paging into a page whose snapshot has expired (or was never taken) must not silently
+			// stitch a window of a *fresh* snapshot onto offsets the model computed against an older
+			// one. Make it re-read from the top.
+			if (startOffset > 0) {
+				throw new RecoverableToolError(
+					`The cached snapshot for ${url} is no longer available, so offset=${startOffset} would point into a different version of the page. ` +
+						"Re-call web_fetch with offset=0 (optionally refresh:true) to take a fresh snapshot, then page from there.",
+				);
 			}
 
 			// Cache miss: fetch the full readable body once, cache it, then serve the window.
@@ -141,9 +208,17 @@ export function createWebFetchTool(options: WebFetchToolOptions): AgentTool<type
 				return result;
 			}
 
-			const body = stripBanner(textPart.text);
-			await writeWebCache(options.channelDir, key, body);
-			return windowResult(body, startOffset, displayMaxChars, url, false);
+			const entry: WebCacheEntry = {
+				body: stripBanner(textPart.text),
+				fetchedAt: Date.now(),
+				finalUrl: result.details.finalUrl,
+				status: result.details.status,
+				extractor: result.details.extractor,
+				contentType: result.details.contentType,
+				sourceTruncated: result.details.truncated === true,
+			};
+			await writeWebCache(options.channelDir, key, entry);
+			return windowResult(entry, url, startOffset, displayMaxChars, false);
 		},
 	};
 }

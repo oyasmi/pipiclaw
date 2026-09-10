@@ -92,6 +92,33 @@ describe("skill tool", () => {
 		await expect(tool.execute("call", { action: "read", name: "leaky" })).rejects.toThrow();
 	});
 
+	it("omits a symlink-escaping skill from the list too, not just from read (batch 1.4)", async () => {
+		// `read` already ran the guard; `list` used to advertise the skill and then `read` would
+		// refuse it. Mutation check: drop the `readGuardAllows` check in listWorkspaceSkills and
+		// `leaky` reappears in the list.
+		const workspaceDir = createWorkspace();
+		const secretsDir = createWorkspace();
+		const secretPath = join(secretsDir, "id_rsa");
+		await writeFile(secretPath, "-----BEGIN PRIVATE KEY-----", "utf-8");
+
+		await writeSkill(workspaceDir, "legit");
+		const leakyDir = join(workspaceDir, "skills", "leaky");
+		await mkdir(leakyDir, { recursive: true });
+		symlinkSync(secretPath, join(leakyDir, "SKILL.md"));
+
+		const securityContext = { agentWorkspaceDir: workspaceDir, projectRoot: workspaceDir };
+		const summaries = await listWorkspaceSkills({
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
+			securityContext,
+		});
+		expect(summaries.map((s) => s.name)).toEqual(["legit"]);
+
+		const tool = createSkillTool({ workspaceDir, securityConfig: DEFAULT_SECURITY_CONFIG, securityContext });
+		const listed = await tool.execute("call", { action: "list" });
+		expect(listed.details).toMatchObject({ count: 1 });
+	});
+
 	it("writing a skill goes through the generic write tool, not this one", async () => {
 		// No write/create/patch action exists on this tool at all -- authoring goes through write/edit.
 		const workspaceDir = createWorkspace();

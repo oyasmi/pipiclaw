@@ -247,3 +247,111 @@ describe("grep tool against a real shell (glob injection)", () => {
 		}
 	});
 });
+
+// batch 1.4: a recursive grep must not return the contents of a file the read guard would deny.
+describe("grep tool read-guard backstop (batch 1.4)", () => {
+	it("drops a readDeny'd descendant from a recursive search via the push-down exclude", async () => {
+		const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const dir = mkdtempSync(join(tmpdir(), "pipiclaw-grep-deny-"));
+		try {
+			mkdirSync(join(dir, "allowed"), { recursive: true });
+			mkdirSync(join(dir, "vault"), { recursive: true });
+			writeFileSync(join(dir, "allowed", "keep.txt"), "MATCHME in the open\n");
+			writeFileSync(join(dir, "vault", "creds.txt"), "MATCHME TOP_SECRET_TOKEN\n");
+
+			const tool = createGrepTool(createExecutor(), {
+				securityConfig: {
+					...DEFAULT_SECURITY_CONFIG,
+					enabled: true,
+					pathGuard: { ...DEFAULT_SECURITY_CONFIG.pathGuard, readDeny: [join(dir, "vault")] },
+				},
+				securityContext: { agentWorkspaceDir: dir, projectRoot: dir },
+			});
+
+			const result = await tool.execute("call", { label: "s", pattern: "MATCHME", path: dir } as never);
+			const text = result.content[0].type === "text" ? result.content[0].text : "";
+
+			expect(text).toContain("keep.txt");
+			expect(text).not.toContain("creds.txt");
+			expect(text).not.toContain("TOP_SECRET_TOKEN");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("drops a sensitive-key file the guard denies but the push-down cannot exclude, and reports the exclusion", async () => {
+		// `id_rsa` is denied by the sensitive-read rule, not by a `readDeny` prefix, so nothing is
+		// pushed into grep's flags — the post-parse `partitionByReadGuard` backstop is what keeps
+		// its bytes out of the result. Mutation check: delete the `partitionByReadGuard` call in
+		// grep.ts and `id_rsa`'s line appears in `text`.
+		const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const dir = mkdtempSync(join(tmpdir(), "pipiclaw-grep-deny-key-"));
+		try {
+			mkdirSync(join(dir, "keys"), { recursive: true });
+			writeFileSync(join(dir, "keep.txt"), "MATCHME in the open\n");
+			writeFileSync(join(dir, "keys", "id_rsa"), "MATCHME PRIVATE_KEY_BODY\n");
+
+			const tool = createGrepTool(createExecutor(), {
+				securityConfig: { ...DEFAULT_SECURITY_CONFIG, enabled: true },
+				securityContext: { agentWorkspaceDir: dir, projectRoot: dir },
+			});
+
+			const result = await tool.execute("call", { label: "s", pattern: "MATCHME", path: dir } as never);
+			const text = result.content[0].type === "text" ? result.content[0].text : "";
+
+			expect(text).toContain("keep.txt");
+			expect(text).not.toContain("id_rsa");
+			expect(text).not.toContain("PRIVATE_KEY_BODY");
+			expect(text).toContain("read policy");
+			expect(result.details).toMatchObject({ readDenyExcluded: 1 });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("grep tool literal / mode / glob dialect (batch 3.5)", () => {
+	it("passes -F for a literal search and -E otherwise", async () => {
+		const { tool, commands } = makeToolTrackingCalls("a.ts:1:foo.bar(x)");
+		await tool.execute("call", { label: "s", pattern: "foo.bar(", literal: true } as never);
+		expect(commands[0]).toContain(" -F ");
+		expect(commands[0]).not.toMatch(/\s-E\s/);
+
+		const { tool: t2, commands: c2 } = makeToolTrackingCalls("a.ts:1:hit");
+		await t2.execute("call", { label: "s", pattern: "fo+" } as never);
+		expect(c2[0]).toContain(" -E ");
+	});
+
+	it("mode:files returns only paths and mode:count returns per-file counts", async () => {
+		const filesOut = "src/a.ts\nsrc/b.ts\nnode_modules/x/c.ts";
+		const { tool } = makeTool(filesOut);
+		const files = await tool.execute("call", { label: "s", pattern: "x", mode: "files" } as never);
+		const filesText = files.content[0].type === "text" ? files.content[0].text : "";
+		expect(filesText).toContain("src/a.ts");
+		expect(filesText).toContain("src/b.ts");
+		expect(filesText).not.toContain("node_modules"); // ignored dir still filtered
+		expect(files.details).toMatchObject({ fileCount: 2, mode: "files" });
+
+		const countOut = "src/a.ts:3\nsrc/b.ts:1\nsrc/c.ts:0";
+		const { tool: t2 } = makeTool(countOut);
+		const counts = await t2.execute("call", { label: "s", pattern: "x", mode: "count" } as never);
+		const countText = counts.content[0].type === "text" ? counts.content[0].text : "";
+		expect(countText).toMatch(/3\s+src\/a\.ts/);
+		expect(countText).not.toContain("src/c.ts"); // zero-count files dropped
+		expect(counts.details).toMatchObject({ matchCount: 4, fileCount: 2 });
+	});
+
+	it("the JS glob backstop accepts a brace/class pattern that --include also matches", async () => {
+		// `*.{ts,tsx}` used to match nothing in the JS filter -> silent no-results. Now it agrees.
+		const out = ["a.ts:1:hit", "b.tsx:1:hit", "c.js:1:hit"].join("\n");
+		const { tool } = makeTool(out);
+		const text = await run(tool, { glob: "*.{ts,tsx}" });
+		expect(text).toContain("a.ts");
+		expect(text).toContain("b.tsx");
+		expect(text).not.toContain("c.js");
+	});
+});

@@ -2,6 +2,32 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
+## [Unreleased]
+
+### Fixed
+
+- **工具契约完整性修复（docs/toolset-review-2026-09-10）。**
+  - `edit` 现在会过**写入**守卫，不再只过读守卫——此前 `writeDeny`（以及经它接入的子代理记忆保护、角色目录保护）和 symlink-write 规则都能被"改写"绕过，即使普通 `write` 被拒。
+  - `edit` 流式 `replaceAll` 不再对跨流块边界的自重叠 needle 重复计数（此前重叠偏移会损坏文件；已用非重叠参考实现在 165 种边界组合上验证）。
+  - `edit` / `write` / `bash` 声明 `executionMode: "sequential"`：同批次内混用多个变更工具会进程内串行——此前两个并发整文件写各自通过写前 fingerprint 校验后互相覆盖。
+  - 递归遍历时，`grep`/`glob` 不再返回读守卫会拒绝的文件内容（`glob` 是路径名）；`skill list` 与 `skill read` 走同一守卫。
+  - 省略 `ids` 的 `job op=poll` 不再吞掉 poll 期间完成的作业——此前结果既不内联返回也无法再唤醒频道。
+  - `task_step_end` 在验收/验证校验之前不再排队"任务已完成"通知，被拒的 `outcome=done` 可以安全修正重试。
+  - `memory_save` 的回执如实反映落盘结果（此前对被跳过的写入会渲染 "Saved as `undefined`"）；tombstone 不再挡住用户自己的显式重新保存（只挡后台 reflect），成功重新保存会撤销它。
+  - `bash` 执行真正的 `bash`（宿主机无 bash 才回退 POSIX `/bin/sh`，并如实标注），截断输出尾部是从未设上限的 spill 文件读取的命令真实尾部，而非 10 MB 捕获窗口的中间；spill 落在 `<channelDir>/logs/`，两种 path-guard 边界下都可 `read`。
+  - `glob` 返回的路径可直接喂给 `read` 解析到同一文件，并区分"根不存在"/"根是文件"/"空结果"，不再一律报"无匹配"。
+  - `session_search` 匹配整条消息（此前中间的关键词在入库时就被裁掉、任何查询都找不回），预览以命中位置为中心，且要求真实文本命中——近期但不相关的消息不再因"新"被算成命中。`memory_search` 返回含查询词的那一行。`task_log` 在活动日志缺失时回退到归档副本。
+  - `web_fetch` 把最终 URL / 状态 / 源截断标记随快照缓存，新增 `refresh`，区分"本页还有内容可翻"与"源站只给了部分页面"，快照过期时拒绝 `offset>0` 而不是拼接新快照，并拒绝二进制下载（PDF、压缩包）并提示先下载再 `read`。
+  - 四个无界输出生产者加了上限：目录 `read`（被省略父目录的后代也一并跳过；整棵树字节上限；源头条数上限）、`edit` 回显的 diff（字节上限，不只是行数）、`job op=poll`（完成作业的总预算）、`subagent` 回复（在 unit 预算之外加 `maxChars`）。
+
+### Changed
+
+- `grep` 新增 `literal`（字面量搜索）与 `mode: "files" | "count"`（只定位、不付内容 token），`glob` 字段支持 `[abc]` / `{a,b}`；bash 拦截器不再拦截 `rg --files`/`-l`/`-c` 和多文件 `sed -i`——这些是专用工具无法等价表达的形式。
+- `event_manage` 的 `definition` 从转义 JSON 字符串改为**类型化对象**，频道由工具自己绑定，新增 `action: "show"` 以便更新前安全读回；缺字段/非法值现在是模型可自行修复的 recoverable 错误。
+- `task_step_end` 成功收尾不再多一次模型请求；`budget.until` 在写入时校验（此前解析失败会静默丢弃）；`budget.steps`/`budget.rounds`/`task_log.limit` 改为带真实上下界的整数。
+- `send_media` 按真实文件后缀路由，不再看显示名。`read` 的 description 与实现对齐（目录、PDF）。
+- 子代理工具可用性只有一个来源（`glob` 此前构建端可用但角色校验拒绝）；子代理 `bash` schema 不再暴露它无法兑现的 `async`/`notify`/`taskId`，任务会话内 `taskId` 由 runtime 绑定。
+
 ## [0.9.3-beta.2] - 2026-09-07
 
 ### 修复

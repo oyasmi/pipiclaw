@@ -2,6 +2,32 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Tool-contract integrity pass (docs/toolset-review-2026-09-10).**
+  - `edit` now clears the *write* guard, not only the read guard — `writeDeny` (and everything wired through it: sub-agent memory protection, role-dir protection) and the symlink-write rule were being bypassed by editing where a plain `write` was refused.
+  - `edit`'s streaming `replaceAll` no longer double-counts a self-overlapping needle that straddles a stream chunk boundary; the overlapping offsets corrupted the file (verified against a non-overlapping reference over 165 boundary combinations).
+  - `edit` / `write` / `bash` declare `executionMode: "sequential"` so a batch that mixes them with another mutating call is serialized in-process — two concurrent whole-file writes each passed the pre-write fingerprint check and then clobbered each other.
+  - `grep` and `glob` no longer return the contents (or, for `glob`, the path) of a file the read guard would refuse when reached through a recursive walk; `skill list` applies the same guard `skill read` already did.
+  - `job op=poll` with `ids` omitted no longer swallows a job that finishes mid-poll — the result was neither returned inline nor left able to wake the channel.
+  - `task_step_end` no longer queues the "task done" notice before its acceptance/verification checks run, so a rejected `outcome=done` can be corrected without a stray delivery.
+  - `memory_save` reports what actually landed on disk (it used to render "Saved as `undefined`" for a skipped write); a tombstone no longer blocks the user's own explicit re-save (only the background reflect pass), and a successful re-save revokes it.
+  - `bash` runs a real `bash` (falling back to POSIX `/bin/sh` only when none exists, and saying so), and the truncated-output tail is the command's true tail read from the uncapped spill file rather than the middle of the 10 MB capture window; the spill lives under `<channelDir>/logs/` so the "full output" pointer is readable under both path-guard boundaries.
+  - `glob` returns paths a subsequent `read` resolves to the same file, and distinguishes a missing root / a file root / an empty result instead of reporting all three as "no matches".
+  - `session_search` matches against whole messages (a mid-message keyword was previously clipped out of the corpus at ingest and no query could recover it), centres the preview on the hit, and requires real match evidence — a recent-but-unrelated message is no longer returned just for being recent. `memory_search` returns the line that contains the query. `task_log` falls back to the archived log for a completed task.
+  - `web_fetch` caches the fetch's final URL / status / source-truncation flag with the snapshot, adds `refresh`, distinguishes "more of this page to page through" from "the origin returned a partial page", refuses `offset>0` against an expired snapshot instead of stitching a fresh one, and rejects binary downloads (PDF, archives) with a download-then-`read` next step.
+  - Output bounds added to four unbounded producers: directory `read` (per-dir elision now also prunes descendants; whole-tree byte cap; source entry cap), `edit`'s echoed diff (byte cap, not just line cap), `job op=poll` (total budget across finished jobs), and `subagent` replies (`maxChars` alongside the unit budget).
+
+### Changed
+
+- `grep` gains `literal` (fixed-string search) and `mode: "files" | "count"` (locate without paying for content), and its `glob` field accepts `[abc]` / `{a,b}`; the bash interceptor stops steering `rg --files`/`-l`/`-c` and multi-file `sed -i` — forms the dedicated tools cannot express.
+- `event_manage` takes a typed `definition` object instead of an escaped JSON string, binds the channel itself, and gains `action: "show"` for a safe read-before-update; a missing/illegal field is now a recoverable error the model can fix.
+- `task_step_end` ends the step without an extra model round-trip on success; `budget.until` is validated at write time (was silently dropped on a parse failure); `budget.steps`/`budget.rounds`/`task_log.limit` are integers with real bounds.
+- `send_media` routes by the real file extension, not the display name. `read`'s description now matches what it does (directories, PDFs).
+- Sub-agent tool availability has one source of truth (`glob` was build-available but role validation rejected it); the sub-agent `bash` schema no longer offers `async`/`notify`/`taskId` it cannot honor, and inside a task session `taskId` is bound by the runtime.
+
 ## [0.9.3-beta.2] - 2026-09-07
 
 ### Fixed

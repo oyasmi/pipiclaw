@@ -1,5 +1,6 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { SecurityConfig } from "../security/types.js";
+import { RecoverableToolError } from "../shared/recoverable-error.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
 import { createWebHttpClient } from "./client.js";
 import { extractReadableContent } from "./extract.js";
@@ -25,6 +26,36 @@ function trimToMaxChars(text: string, maxChars: number): { text: string; truncat
 		text: text.slice(0, maxChars),
 		truncated: true,
 	};
+}
+
+/** Thrown when a URL serves a binary payload `web_fetch` should not try to render as text. */
+export class WebFetchBinaryError extends RecoverableToolError {
+	constructor(url: string, contentType: string) {
+		super(
+			`${url} is a binary download (${contentType.split(";")[0]}), not a readable page. ` +
+				"Download it with bash (curl -L -o <file>), then open it with the read tool.",
+		);
+		this.name = "WebFetchBinaryError";
+	}
+}
+
+const BINARY_CONTENT_TYPE_HINTS = [
+	"application/pdf",
+	"application/zip",
+	"application/gzip",
+	"application/x-tar",
+	"application/octet-stream",
+	"application/x-7z-compressed",
+	"application/vnd.openxmlformats-officedocument",
+	"application/msword",
+	"application/vnd.ms-excel",
+	"audio/",
+	"video/",
+	"font/",
+];
+
+function isBinaryContentType(contentType: string): boolean {
+	return BINARY_CONTENT_TYPE_HINTS.some((hint) => contentType.includes(hint));
 }
 
 function decodeUtf8(body: Buffer): string {
@@ -138,6 +169,14 @@ async function fetchDirect(
 		};
 	}
 
+	// Non-HTML/JSON binary payloads (PDF, archives, media) would be `decodeUtf8`'d into mojibake and
+	// passed off as page text. Refuse them with the right next step (fix plan §2.7). `octet-stream`
+	// is also the default when a server sends no content-type, so let a body that sniffs as HTML
+	// through rather than rejecting a headerless HTML page.
+	if (isBinaryContentType(contentType) && !isHtmlContent(contentType, response.body)) {
+		throw new WebFetchBinaryError(url, contentType);
+	}
+
 	let text = "";
 	let extractor = "raw";
 	if (contentType.includes("application/json")) {
@@ -207,7 +246,9 @@ export async function runWebFetch(
 			signal,
 		);
 	} catch (error) {
-		if (!request.enableJinaFallback) {
+		// A binary payload is a definitive answer, not a transient direct-fetch failure — jina would
+		// just return the same non-text content.
+		if (error instanceof WebFetchBinaryError || !request.enableJinaFallback) {
 			throw error;
 		}
 		const jinaResult = await tryFetchViaJina(

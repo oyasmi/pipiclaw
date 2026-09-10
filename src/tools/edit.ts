@@ -118,6 +118,8 @@ export interface EditToolOptions {
 
 /** Max diff lines echoed back to the model in the success result before eliding the rest. */
 const DIFF_ECHO_MAX_LINES = 40;
+/** Byte ceiling on the echoed diff — 40 lines of a minified single-line file can be hundreds of KB. */
+const DIFF_ECHO_MAX_BYTES = 8 * 1024;
 /** Consecutive byte-identical no-ops of the same payload before the soft error escalates to a hard stop. */
 const NOOP_HARD_LIMIT = 3;
 /** Above this, `edit` switches from "read whole file into memory" to the streaming two-pass path (D2.2). */
@@ -139,11 +141,20 @@ const MAX_DIFF_WINDOWS = 5;
 
 function clampDiffForEcho(diff: string): string {
 	const lines = diff.split("\n");
-	if (lines.length <= DIFF_ECHO_MAX_LINES) {
+	if (lines.length <= DIFF_ECHO_MAX_LINES && Buffer.byteLength(diff, "utf-8") <= DIFF_ECHO_MAX_BYTES) {
 		return diff;
 	}
-	const shown = lines.slice(0, DIFF_ECHO_MAX_LINES).join("\n");
-	return `${shown}\n[diff truncated, ${lines.length - DIFF_ECHO_MAX_LINES} more lines]`;
+	let kept = lines.slice(0, DIFF_ECHO_MAX_LINES);
+	while (kept.length > 1 && Buffer.byteLength(kept.join("\n"), "utf-8") > DIFF_ECHO_MAX_BYTES) {
+		kept = kept.slice(0, -1);
+	}
+	let shown = kept.join("\n");
+	if (Buffer.byteLength(shown, "utf-8") > DIFF_ECHO_MAX_BYTES) {
+		// A single line still over budget: hard-cut on a UTF-8 boundary.
+		shown = Buffer.from(shown, "utf-8").subarray(0, DIFF_ECHO_MAX_BYTES).toString("utf-8");
+	}
+	const omitted = lines.length - kept.length;
+	return `${shown}\n[diff truncated${omitted > 0 ? `, ${omitted} more line(s)` : ""}; the full diff is in the tool result details]`;
 }
 
 /** All non-overlapping byte offsets of `needle` in `haystack`, left to right (mirrors `String.split`). */
@@ -195,6 +206,12 @@ async function scanOccurrences(
 	let windowBaseOffset = 0;
 	let newlinesBeforeWindow = 0;
 	let count = 0;
+	// Absolute byte position just past the last accepted match. A window carries the last
+	// `overlapLen` bytes of its predecessor, so without this guard a match that ended inside the
+	// carry region would be re-found (from a fresh `from = 0`) and reported as a second, overlapping
+	// offset -- which `spliceBuffer` then turns into a corrupt file. Verified against a non-overlapping
+	// `Buffer.indexOf` reference over 165 boundary combinations.
+	let nextAllowed = 0;
 	let offsets: number[] | undefined = [];
 	const lineNumbers = new Map<number, number>();
 	let looksBinary = false;
@@ -210,13 +227,14 @@ async function scanOccurrences(
 		}
 
 		const window = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
-		let from = 0;
+		let from = Math.max(0, nextAllowed - windowBaseOffset);
 		while (true) {
 			const idx = window.indexOf(needle, from);
 			if (idx === -1) break;
+			const absoluteOffset = windowBaseOffset + idx;
 			count++;
+			nextAllowed = absoluteOffset + needle.length;
 			if (offsets && offsets.length < maxOffsets) {
-				const absoluteOffset = windowBaseOffset + idx;
 				offsets.push(absoluteOffset);
 				const lineNumber = newlinesBeforeWindow + countNewlines(window, 0, idx) + 1;
 				lineNumbers.set(absoluteOffset, lineNumber);
@@ -317,6 +335,10 @@ export function createEditTool(fileStore: FileStore, options: EditToolOptions = 
 	return {
 		name: "edit",
 		label: "edit",
+		// Serialize with other mutating tools in the same batch. `checkFingerprintUnchanged` runs
+		// before the write, so two concurrent edits can both pass it and then overwrite each other's
+		// result; running the batch one tool at a time closes that window (spec: batch 1.3).
+		executionMode: "sequential",
 		description:
 			"Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.",
 		parameters: editSchema,
@@ -335,6 +357,15 @@ export function createEditTool(fileStore: FileStore, options: EditToolOptions = 
 			}
 
 			const target = await checkPathGuard(path, "read", securityConfig, securityContext, {
+				tool: "edit",
+				channelId: options.channelId,
+			});
+			// `edit` rewrites the file in place, so it must clear the *write* guard too (spec 044,
+			// D1.1). Pass the original `path`, never the realpath'd `target`: the guard's
+			// symlink-write check lstats the pre-symlink-resolution path, and handing it a resolved
+			// value would blind it to "the path itself is a symlink". Both calls return the same
+			// `resolvedPath` for read and write, so `target` stays the one value we open.
+			await checkPathGuard(path, "write", securityConfig, securityContext, {
 				tool: "edit",
 				channelId: options.channelId,
 			});

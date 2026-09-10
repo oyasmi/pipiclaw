@@ -1,9 +1,10 @@
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { FileStore } from "../file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
+import { partitionByReadGuard } from "../security/path-guard-filter.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage } from "../shared/text-utils.js";
@@ -43,6 +44,19 @@ export interface GlobToolOptions {
 interface MatchedFile {
 	relativePath: string;
 	mtimeMs: number;
+}
+
+/** Turn a path relative to the search root into an address `read` accepts unchanged. */
+function toReadableAddress(target: string, rel: string, securityContext: SecurityRuntimeContext): string {
+	const abs = join(target, ...rel.split("/"));
+	const root = securityContext.projectRoot;
+	if (root) {
+		const fromRoot = relative(root, abs);
+		if (fromRoot && !fromRoot.startsWith("..") && !isAbsolute(fromRoot)) {
+			return fromRoot;
+		}
+	}
+	return abs;
 }
 
 export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = {}): AgentTool<typeof globSchema> {
@@ -85,15 +99,54 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 				throw new RecoverableToolError(`Invalid glob pattern: ${pattern} (${errorMessage(error)})`);
 			}
 
+			// `walkFiles` swallows a failed top-level readdir and returns an empty tree, so an
+			// illegal root would read as "no matches" and send the model looking for a broader
+			// pattern. Distinguish the three cases up front.
+			const rootStat = await fileStore.stat(target);
+			if (!rootStat) {
+				throw new RecoverableToolError(
+					`Search root not found: ${searchPath}. Pass an existing directory, or omit path to search the workspace root.`,
+				);
+			}
+			if (!rootStat.isDirectory) {
+				throw new RecoverableToolError(
+					`Search root is not a directory: ${searchPath}. glob searches a directory tree; to match one file, read it directly.`,
+				);
+			}
+
 			const walk = await fileStore.walkFiles(target, {
 				maxEntries: MAX_SCAN_ENTRIES,
 				prune: (name) => IGNORED_DIR_SEGMENTS.has(name),
 				signal,
 			});
 
-			const matched = walk.files.filter((relativePath) => matcher.test(relativePath));
+			const matchedRaw = walk.files.filter((relativePath) => matcher.test(relativePath));
+
+			// Backstop: `walkFiles` descends into `readDeny`/sensitive subtrees the per-path guard
+			// would refuse for a direct `read`. Drop those paths so `glob` never leaks them (a path
+			// name is less than `grep`'s content leak, but it is still a leak).
+			const { allowed: allowedAbs, deniedCount: readDenyExcluded } = partitionByReadGuard(
+				matchedRaw.map((rel) => join(target, ...rel.split("/"))),
+				securityConfig,
+				securityContext,
+			);
+			const allowedAbsSet = new Set(allowedAbs);
+			const matched = matchedRaw.filter((rel) => allowedAbsSet.has(join(target, ...rel.split("/"))));
 
 			if (matched.length === 0) {
+				if (readDenyExcluded > 0) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text:
+									`All ${readDenyExcluded} path(s) matching "${pattern}" are excluded by the read policy. ` +
+									"Search a path you are allowed to read.",
+							},
+						],
+						details: { matchCount: 0, readDenyExcluded },
+					};
+				}
 				const scope = path ? `${searchPath}` : "the workspace";
 				const text = walk.truncated
 					? `Scan of ${scope} hit the ${MAX_SCAN_ENTRIES.toLocaleString()}-file limit before any path matched "${pattern}". ` +
@@ -116,7 +169,11 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 				ordered = matched;
 			}
 
-			const page = ordered.slice(0, GLOB_MAX_RESULTS);
+			// Render each hit as an address `read` can take verbatim: a path relative to
+			// `target` alone is ambiguous (read resolves relative paths against projectRoot, not
+			// the search root), so emit a projectRoot-relative path when the hit is inside it and
+			// an absolute path otherwise.
+			const page = ordered.slice(0, GLOB_MAX_RESULTS).map((rel) => toReadableAddress(target, rel, securityContext));
 			const footerParts: string[] = [];
 			if (ordered.length > page.length) {
 				footerParts.push(
@@ -131,6 +188,9 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 					`Scan stopped after ${MAX_SCAN_ENTRIES.toLocaleString()} files; results may be incomplete. Narrow path to search a smaller subtree.`,
 				);
 			}
+			if (readDenyExcluded > 0) {
+				footerParts.push(`${readDenyExcluded} matching path(s) excluded by the read policy.`);
+			}
 
 			const body = page.join("\n");
 			const truncation = truncateHead(body);
@@ -144,7 +204,12 @@ export function createGlobTool(fileStore: FileStore, options: GlobToolOptions = 
 
 			return {
 				content: [{ type: "text" as const, text: outputText }],
-				details: { matchCount: ordered.length, shownCount: page.length, scanTruncated: walk.truncated },
+				details: {
+					matchCount: ordered.length,
+					shownCount: page.length,
+					scanTruncated: walk.truncated,
+					...(readDenyExcluded > 0 ? { readDenyExcluded } : {}),
+				},
 			};
 		},
 	};

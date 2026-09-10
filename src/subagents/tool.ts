@@ -224,6 +224,12 @@ const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
  * only caps what gets echoed into the parent's context.
  */
 export const MAX_SUBAGENT_RESULT_UNITS = 1_200;
+/**
+ * Character ceiling paired with the unit ceiling. `prompt-units.ts` notes that a long
+ * separator-free run of letters/digits counts as a single unit, so a units-only budget can still
+ * pass through an unbounded blob — every budget must bound units *and* chars (fix plan §2.4).
+ */
+export const MAX_SUBAGENT_RESULT_CHARS = 12_000;
 const RESULT_TRUNCATION_HEAD_RATIO = 1;
 /**
  * Spec 032 D6: when a turn/tool/wall-time budget is hit, the sub-agent gets one more,
@@ -445,12 +451,13 @@ interface FinalizedSubAgentOutput {
 function finalizeSubAgentOutput(runContext: SubAgentRunContext, finalText: string): FinalizedSubAgentOutput {
 	const outputPath = join(runContext.artifactDir, "output.md");
 
-	if (countPromptUnits(finalText) <= MAX_SUBAGENT_RESULT_UNITS) {
+	if (countPromptUnits(finalText) <= MAX_SUBAGENT_RESULT_UNITS && finalText.length <= MAX_SUBAGENT_RESULT_CHARS) {
 		return { replyText: finalText, truncated: false };
 	}
 
 	const clipped = clipTextByPromptUnits(finalText, MAX_SUBAGENT_RESULT_UNITS, {
 		headRatio: RESULT_TRUNCATION_HEAD_RATIO,
+		maxChars: MAX_SUBAGENT_RESULT_CHARS,
 		marker: `\n\n[... truncated; full output saved at ${outputPath} ...]\n\n`,
 	});
 	return { replyText: clipped.text, truncated: true };

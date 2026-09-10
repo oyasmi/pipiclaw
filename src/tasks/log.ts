@@ -78,6 +78,16 @@ export function taskLogPath(channelDir: string, id: string): string {
 	return join(channelDir, "tasks", `${normalizeTaskId(id)}.jsonl`);
 }
 
+/** Where `archiveTask` moves a closed task's `.jsonl`. */
+export function taskArchiveLogPath(channelDir: string, id: string): string {
+	return join(channelDir, "tasks", "archive", `${normalizeTaskId(id)}.jsonl`);
+}
+
+/** True when the loop log for `id` lives only in the archive (the task is closed). */
+export function taskLogIsArchived(channelDir: string, id: string): boolean {
+	return !existsSync(taskLogPath(channelDir, id)) && existsSync(taskArchiveLogPath(channelDir, id));
+}
+
 const appenders = new Map<string, JsonlAppender>();
 
 function appenderFor(path: string): JsonlAppender {
@@ -135,7 +145,11 @@ export async function readTaskLog(
 	id: string,
 	options: ReadTaskLogOptions = {},
 ): Promise<TaskLogRecord[]> {
-	const path = taskLogPath(channelDir, id);
+	// Fall back to the archived copy so `task_log` on a completed task returns its history rather
+	// than "暂无日志" — a task that finished still has a loop log worth reading.
+	const path = existsSync(taskLogPath(channelDir, id))
+		? taskLogPath(channelDir, id)
+		: taskArchiveLogPath(channelDir, id);
 	if (!existsSync(path)) return [];
 	let content: string;
 	try {

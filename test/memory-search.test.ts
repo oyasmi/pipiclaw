@@ -60,6 +60,15 @@ describe("memory search — searchMemory", () => {
 		expect(hits[0]).toMatchObject({ kind: "memory", label: "deploy-window-thursday" });
 	});
 
+	it("returns the line that contains the query, even when it is in the body (batch 2.5)", () => {
+		// The hit for "hotfix" is in the body, not the description. Mutation check: revert
+		// scoreText to always return the first non-empty line and this returns the description.
+		const hits = searchMemory({ query: "hotfix", entries });
+		const hit = hits.find((h) => h.kind === "memory" && h.label === "deploy-window-thursday");
+		expect(hit?.line).toContain("hotfix");
+		expect(hit?.line).not.toContain("Thursday 20:00");
+	});
+
 	it("matches journal lines and workspace sections", () => {
 		const hits = searchMemory({
 			query: "briefing weekday",

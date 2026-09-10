@@ -1,8 +1,9 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFileStore } from "../src/file-store.js";
+import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createEditTool } from "../src/tools/edit.js";
 
 const fileStore = createFileStore();
@@ -234,6 +235,27 @@ describe("edit tool", () => {
 			expect(content.includes("�")).toBe(false);
 		});
 
+		it("does not double-count a self-overlapping needle straddling a stream chunk boundary (batch 1.2)", async () => {
+			// Regression: scanOccurrences restarted every window's search at from=0 while the carry
+			// still held the previous window's tail, so a match ending inside the carry was re-found
+			// at an overlapping offset and spliceBuffer produced a corrupt file (e.g. "QQa" for what
+			// should be "Qaa"). Mutation check: revert `let from = Math.max(0, nextAllowed -
+			// windowBaseOffset)` to `let from = 0` in scanOccurrences and this assertion fails.
+			const dir = mkdtempSync(join(tmpdir(), "pipiclaw-edit-test-"));
+			dirs.push(dir);
+			const path = join(dir, "overlap.txt");
+			// "aaaaa" with its bytes at 65533..65537 so it straddles the 65536-byte stream read
+			// boundary; a second cluster after 9MB of filler keeps the file on the streaming path.
+			const original = `${"b".repeat(65533)}aaaaa${"c".repeat(9 * 1024 * 1024)}aaaaa-end`;
+			writeFileSync(path, original);
+
+			const tool = makeTool();
+			await tool.execute("call", { path, oldText: "aaa", newText: "Q", replaceAll: true });
+
+			// Reference: non-overlapping left-to-right replace (String.replaceAll string semantics).
+			expect(readFileSync(path, "utf-8")).toBe(original.replaceAll("aaa", "Q"));
+		});
+
 		it("replaces all occurrences on the streaming path", async () => {
 			const dir = mkdtempSync(join(tmpdir(), "pipiclaw-edit-test-"));
 			dirs.push(dir);
@@ -256,5 +278,61 @@ describe("edit tool", () => {
 			const text = result.content[0].type === "text" ? result.content[0].text : "";
 			expect(text).toContain("Replaced 2 occurrences in");
 		});
+	});
+
+	describe("write guard (batch 1.1)", () => {
+		function guardedTool(overrides: Partial<typeof DEFAULT_SECURITY_CONFIG.pathGuard>) {
+			const cfg = {
+				...DEFAULT_SECURITY_CONFIG,
+				pathGuard: { ...DEFAULT_SECURITY_CONFIG.pathGuard, ...overrides },
+			} as never;
+			return createEditTool(fileStore, { securityConfig: cfg });
+		}
+
+		it("refuses an edit that the write guard denies, leaving the file byte-identical", async () => {
+			// Regression: edit only ran the *read* guard, so `writeDeny` (and every protection
+			// wired through it — sub-agent memory, role dirs) was silently bypassed. Mutation
+			// check: drop the added `checkPathGuard(path, "write", ...)` call and this passes.
+			const path = tempFile("denied.txt", "before\n");
+			const tool = guardedTool({ writeDeny: [path] });
+			await expect(tool.execute("call", { path, oldText: "before", newText: "after" })).rejects.toThrow(/denied/i);
+			expect(readFileSync(path, "utf-8")).toBe("before\n");
+		});
+
+		it("will not rewrite a file through a symlink (a write-guard-only rule)", async () => {
+			const dir = mkdtempSync(join(tmpdir(), "pipiclaw-edit-test-"));
+			dirs.push(dir);
+			const realPath = join(dir, "real.txt");
+			writeFileSync(realPath, "real-before\n");
+			const linkPath = join(dir, "link.txt");
+			symlinkSync(realPath, linkPath);
+
+			const tool = guardedTool({});
+			await expect(
+				tool.execute("call", { path: linkPath, oldText: "real-before", newText: "real-after" }),
+			).rejects.toThrow(/symbolic link/i);
+			expect(readFileSync(realPath, "utf-8")).toBe("real-before\n");
+		});
+
+		it("still rejects at the read stage when readDeny matches", async () => {
+			const path = tempFile("no-read.txt", "data\n");
+			const tool = guardedTool({ readDeny: [path] });
+			await expect(tool.execute("call", { path, oldText: "data", newText: "x" })).rejects.toThrow(/denied/i);
+			expect(readFileSync(path, "utf-8")).toBe("data\n");
+		});
+	});
+
+	it("bounds the echoed diff by bytes on a long single line, but keeps the full diff in details (batch 2.4)", async () => {
+		const longLine = `{"data":"${"z".repeat(200_000)}"}`;
+		const path = tempFile("min.json", longLine);
+		const tool = makeTool();
+
+		const result = await tool.execute("call", { path, oldText: '"data"', newText: '"payload"' });
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+
+		expect(Buffer.byteLength(text, "utf-8")).toBeLessThan(20_000);
+		expect(text).toContain("diff truncated");
+		// The complete diff is still available to the runtime.
+		expect((result.details as { diff: string }).diff.length).toBeGreaterThan(100_000);
 	});
 });

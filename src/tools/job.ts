@@ -12,7 +12,9 @@ const jobSchema = Type.Object({
 	}),
 	ids: Type.Optional(
 		Type.Array(Type.String(), {
-			description: "Job ids for poll/cancel. For poll, omit to watch all running jobs.",
+			description:
+				"Job ids for poll/cancel. For poll, omit to watch every job running when the call starts " +
+				"(a job started later is not folded into that same poll).",
 		}),
 	),
 });
@@ -20,6 +22,9 @@ const jobSchema = Type.Object({
 export interface JobToolOptions {
 	jobManager: ChannelJobManager;
 }
+
+/** Total bytes of job output `op=poll` inlines across all finished jobs in one call. */
+const COMPLETED_DETAIL_TOTAL_BUDGET = 96 * 1024;
 
 interface JobToolArgs {
 	op: "list" | "poll" | "cancel";
@@ -36,14 +41,23 @@ export function createJobTool(options: JobToolOptions): AgentTool<typeof jobSche
 
 	async function completedDetail(jobs: JobSnapshot[]): Promise<string[]> {
 		const sections: string[] = [];
+		let spent = 0;
 		for (const job of jobs) {
+			const header = `### [${job.id}] ${job.label} — ${job.status}${job.exitCode !== undefined ? `, exit ${job.exitCode}` : ""}`;
 			const output = await jobManager.readOutput(job.id);
+			// Total budget across all finished jobs in one poll: 5 jobs × the 50KB per-job tail would
+			// otherwise be 250KB of context. Once spent, later jobs get a header + a pointer only.
+			if (spent >= COMPLETED_DETAIL_TOTAL_BUDGET) {
+				sections.push(
+					`${header}\n(output omitted to stay within budget — run \`job op=poll ids=["${job.id}"]\` for it)${output ? `\nFull output: ${output.spillFile}` : ""}`,
+				);
+				continue;
+			}
 			const tail = output ? truncateTail(output.text).content : "";
 			const body = tail.trim() ? tail : "(no output)";
 			const path = output ? `\nFull output: ${output.spillFile}` : "";
-			sections.push(
-				`### [${job.id}] ${job.label} — ${job.status}${job.exitCode !== undefined ? `, exit ${job.exitCode}` : ""}\n${body}${path}`,
-			);
+			spent += Buffer.byteLength(body, "utf-8");
+			sections.push(`${header}\n${body}${path}`);
 		}
 		return sections;
 	}

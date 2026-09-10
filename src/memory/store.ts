@@ -52,6 +52,13 @@ export interface MemoryTombstoneRecord {
 	contentHash: string;
 	deletedAt: string;
 	reason: string;
+	/**
+	 * A later append that cancels the tombstone for this `contentHash`: the user explicitly saved
+	 * the fact again, so the background reflect pass is no longer blocked from re-learning it. The
+	 * file stays append-only — `isDescriptionTombstoned` replays records in order and the last one
+	 * for a hash wins.
+	 */
+	revoked?: boolean;
 }
 
 export function getChannelMemoryDir(channelDir: string): string {
@@ -349,7 +356,27 @@ export async function appendMemoryTombstoneRecord(channelDir: string, record: Me
 
 export async function isDescriptionTombstoned(channelDir: string, description: string): Promise<boolean> {
 	const hash = hashMemoryContent(description);
-	return (await readMemoryTombstoneRecords(channelDir)).some((record) => record.contentHash === hash);
+	let tombstoned = false;
+	for (const record of await readMemoryTombstoneRecords(channelDir)) {
+		if (record.contentHash === hash) {
+			tombstoned = record.revoked !== true;
+		}
+	}
+	return tombstoned;
+}
+
+/** Cancel the tombstone for `description` (append-only): a user re-authorized the fact. */
+export async function revokeMemoryTombstone(
+	channelDir: string,
+	description: string,
+	today: string = localDayKey(),
+): Promise<void> {
+	await appendMemoryTombstoneRecord(channelDir, {
+		contentHash: hashMemoryContent(description),
+		deletedAt: today,
+		reason: "re-authorized by explicit user save",
+		revoked: true,
+	});
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -491,7 +518,12 @@ export async function applyMemoryOps(
 			result.skippedSecret++;
 			continue;
 		}
-		if (await isDescriptionTombstoned(channelDir, description)) {
+		// A tombstone exists to stop the *background* reflect pass from silently re-learning a fact
+		// the user deleted. It must not also block the user's own explicit `memory_save` (source
+		// "user") — that path is the user re-authorizing the fact, and a successful save here
+		// revokes the tombstone so the background pass stops fighting it too.
+		const tombstoned = await isDescriptionTombstoned(channelDir, description);
+		if (tombstoned && op.source !== "user") {
 			result.skippedTombstone++;
 			continue;
 		}
@@ -512,6 +544,9 @@ export async function applyMemoryOps(
 			malformed: false,
 		};
 		await writeEntryFile(channelDir, entry);
+		if (tombstoned && op.source === "user") {
+			await revokeMemoryTombstone(channelDir, description, today);
+		}
 		byName.set(name, entry);
 		liveNames.add(name);
 		result.added.push(name);

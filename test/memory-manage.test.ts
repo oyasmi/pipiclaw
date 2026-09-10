@@ -59,6 +59,26 @@ describe("memory tools", () => {
 		});
 	});
 
+	it("re-saving a forgotten fact reports honest success, not `undefined` (batch 1.7)", async () => {
+		// Regression: after save → forget → save, the store skipped the tombstoned add, `result.added`
+		// was empty, and the tool rendered "Saved ... as `undefined`." with details.saved=false — a
+		// success message for a write that never happened. Mutation check: revert the content builder
+		// to `savedName = replaces ?? result.added[0]` and details.name is undefined here.
+		const channelDir = createTempChannel();
+		await run(makeSave(channelDir), { content: "The staging deploy key rotated on Tuesday", name: "deploy-key" });
+		await run(makeForget(channelDir), { name: "deploy-key" });
+
+		const again = await run(makeSave(channelDir), {
+			content: "The staging deploy key rotated on Tuesday",
+			name: "deploy-key",
+		});
+		expect(again.details.saved).toBe(true);
+		expect(typeof again.details.name).toBe("string");
+		expect(again.text).not.toContain("undefined");
+		const entries = await listMemoryEntries(channelDir);
+		expect(entries.map((e) => e.description)).toContain("The staging deploy key rotated on Tuesday");
+	});
+
 	it("rejects a save with only whitespace content, an invalid name, or a secret", async () => {
 		const channelDir = createTempChannel();
 		await expect(makeSave(channelDir).execute("call", { content: "   " } as never)).rejects.toThrow(

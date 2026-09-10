@@ -1,7 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { isNodeError, readOptionalTextFile } from "../shared/fs-utils.js";
-import { clipText } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 
 export type SessionSearchSource = "context" | "session" | "log";
@@ -13,9 +12,21 @@ export interface SessionSearchDocument {
 	path: string;
 	timestamp?: string;
 	role: SessionSearchRole;
+	/** The full scannable message text (up to {@link SESSION_SCAN_MAX_CHARS}) — matching runs on
+	 * this, display windows are cut from it at query time (fix plan §2.5). */
 	text: string;
+	/** True when even the scan text was clipped: a keyword past this point cannot be found here. */
+	scanTruncated?: boolean;
 	sessionId?: string;
 }
+
+/**
+ * Ceiling on how much of one message is kept for *matching*. The old code clipped each message to
+ * the small display window at ingest, so a keyword in the middle of a long message was gone from
+ * the corpus entirely and widening the query could never bring it back. This is deliberately much
+ * larger than the display window; a single pathological message still cannot blow out memory.
+ */
+export const SESSION_SCAN_MAX_CHARS = 20_000;
 
 export interface BuildSessionCorpusOptions {
 	channelDir: string;
@@ -120,17 +131,22 @@ function createDocument(params: {
 	sessionId?: string;
 	maxChars: number;
 }): SessionSearchDocument | null {
-	const text = clipText(params.text, params.maxChars, { headRatio: 0.55, omitHint: "\n[...]\n" }).trim();
-	if (!text) {
+	// The ingest clip is a fixed, generous scan cap — not the caller's display window. Trimming for
+	// display happens later, at query time, centered on the match (fix plan §2.5). `params.maxChars`
+	// is kept in the signature for callers that still pass it but no longer drives the clip.
+	const raw = params.text.trim();
+	if (!raw) {
 		return null;
 	}
+	const scanTruncated = raw.length > SESSION_SCAN_MAX_CHARS;
 	return {
 		id: params.id,
 		source: params.source,
 		path: params.path,
 		timestamp: params.timestamp,
 		role: params.role,
-		text,
+		text: scanTruncated ? raw.slice(0, SESSION_SCAN_MAX_CHARS) : raw,
+		...(scanTruncated ? { scanTruncated: true } : {}),
 		sessionId: params.sessionId,
 	};
 }

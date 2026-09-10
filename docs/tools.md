@@ -44,7 +44,9 @@
 
 外部智能体是独立宿主机进程，不使用这套工具实现，也不经过这些守卫。它的真实边界来自角色 `command` 中目标 CLI 的 sandbox 参数、运行账号和宿主环境。
 
-`grep` 优于 `bash` 里的 `grep`：结果分组、分页、有 token 上限，不会因为一次宽泛匹配把上下文冲爆。
+`grep` 优于 `bash` 里的 `grep`：结果分组、分页、有 token 上限，不会因为一次宽泛匹配把上下文冲爆。`pattern` 默认按 ERE 正则，`literal: true` 走字面量；`mode: "files"` 只返回命中文件路径、`mode: "count"` 返回每文件命中数，只想定位时远比返回内容省 token。`glob` 字段匹配 basename，支持 `*` `?` `[abc]` `{a,b}`。落在 `readDeny` 或敏感路径下的命中文件会被排除并在 footer 说明。
+
+`bash` 执行的是真正的 `bash`（宿主机若无 bash 才回退 POSIX `/bin/sh`，工具描述会如实标注）。截断输出的完整副本写在 `<channelDir>/logs/`（主智能体两种 path-guard 边界下都可 `read`），是命令输出末尾的真实尾部而非捕获窗口的中间部分。
 
 `glob` 优于 `bash find`/`ls -R`：按 glob 模式做路径发现（不读文件内容，这是它和 `grep` 的分工），排除 VCS/构建目录，命中数在阈值内时按修改时间从新到旧排序，超出条数上限时给出下一步提示。裸 `find … -name …` 和 `ls -R` 会被 bash 拦截器引导到这个工具。模式支持 `*`、`?`、`**`（跨路径段）与 `{a,b}`（可嵌套）；匹配按路径段逐段进行、不编译成正则，所以任意模式的匹配代价都是线性的。模式长度上限 512 字符，花括号展开上限 64 种组合，超出即报错并提示收窄模式。
 
@@ -63,7 +65,7 @@
 
 ## 网页工具（`web_search` / `web_fetch`）
 
-默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（brave / tavily / jina / searxng / duckduckgo）。抓取有字符数、响应体积、超时等上限，长页面通过 offset 分页续读。完整字段见 [configuration-reference.md](./configuration-reference.md#内建工具配置文件-toolsjsontoolsjson)。
+默认关闭，需要在 `tools.json` 里设 `tools.web.enable: true` 并配置搜索提供方（brave / tavily / jina / searxng / duckduckgo）。抓取有字符数、响应体积、超时等上限。`web_fetch` 把一次抓取缓存为快照，`offset` 在同一快照内分页续读（快照过期后 `offset>0` 会要求从 0 重取而不是跨版本拼接），`refresh: true` 绕过缓存重抓；返回文本会分别标注"本页没显示完"和"源站没取全"，并给出重定向后的最终 URL。PDF 等二进制下载会被拒绝并提示先下载再 `read`。完整字段见 [configuration-reference.md](./configuration-reference.md#内建工具配置文件-toolsjsontoolsjson)。
 
 出站网络同样受 `security.json` 的网络守卫约束。首次初始化生成的 `security.json` 模板里 `networkGuard.enabled` 为 `false`；若删除该字段或自行从内置默认开始，则 network guard 默认开启。
 
@@ -86,11 +88,13 @@
 | `skill` (只读) + `write`/`edit` | `workspace/skills/` | 某个流程跨任务可复用时沉淀 |
 | `session_search` | 只读 `log.jsonl` / `context.jsonl` | 用户引用较早的对话、而工作记忆里没有时 |
 
+`session_search` 的匹配跑在整条消息上（展示窗口按命中位置开窗，不再只取头部），只有有真实文本命中的结果才返回——近期但完全不相关的消息不会因为"新"就被算成命中；被扫描上限截断的消息数会在响应里公开。`memory_save` 的回执如实反映落盘结果（成功/疑似凭据/此前被明确遗忘/未知），用户显式重新保存一条被 `memory_forget` 过的事实会放行并撤销 tombstone。
+
 分层原理和"什么该记、什么不该记"见 [memory.md](./memory.md)。
 
 ## 调度与长程类
 
-`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`task_create`/`task_update`/`task_close`/`task_list`/`task_log` 管长程任务的契约与查询，`task_step_end` 在任务会话里收尾每一步——按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
+`event_manage` 管定时事件（提醒、cron 节奏、preAction 传感器），`definition` 是**类型化对象**（不是转义 JSON 字符串），频道由 runtime 绑定；`action: "show"` 读回完整定义以便安全更新。`task_create`/`task_update`/`task_close`/`task_list`/`task_log` 管长程任务的契约与查询，`task_step_end` 在任务会话里收尾每一步——成功收尾直接结束本轮，不再多一次模型请求；`task_log` 会在活动日志缺失时回退到归档副本。按 payload 形状拆分，而不是一个按 action 分支的工具（spec 046/051）。两者的心智模型、文件格式和 `/events`、`/tasks` 控制面见 [events-and-tasks.md](./events-and-tasks.md)。
 
 `tools.tasks.enabled: false` 是整套自主长程能力的总开关：它同时关掉全部 task_* 工具、内建 task driver 和每回合的任务摘要注入。
 

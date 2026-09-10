@@ -86,4 +86,25 @@ describe("web fetch security", () => {
 			}),
 		).rejects.toThrow(/private network address|blocked host/i);
 	});
+
+	it("refuses a binary download (PDF) with a download-then-read next step (batch 2.7)", async () => {
+		lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+		requestMock.mockResolvedValueOnce({
+			status: 200,
+			headers: { "content-type": "application/pdf" },
+			data: Buffer.from("%PDF-1.7 binary bytes"),
+		});
+
+		await expect(
+			runWebFetch(context, {
+				url: "https://example.com/report.pdf",
+				extractMode: "text",
+				maxChars: 5000,
+				maxImageBytes: context.webConfig.fetch.maxImageBytes,
+				maxResponseBytes: context.webConfig.fetch.maxResponseBytes,
+				preferJina: false,
+				enableJinaFallback: false,
+			}),
+		).rejects.toThrow(/binary download.*read tool/is);
+	});
 });

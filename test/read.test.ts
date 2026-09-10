@@ -146,6 +146,25 @@ describe("read tool", () => {
 		expect(text).toContain("  b.ts");
 	});
 
+	it("does not render descendants of a directory whose own line was elided (batch 2.4)", async () => {
+		// A parent with more than the per-dir cap of children: entries past the cap are dropped,
+		// and any subdirectory among them must not still have its children printed. Mutation check:
+		// remove the `isUnderElidedParent` skip in renderDirectoryTree and `deep-child.ts` appears.
+		const dir = tempDir();
+		const big = join(dir, "big");
+		mkdirSync(big);
+		for (let i = 0; i < 20; i++) writeFileSync(join(big, `f${String(i).padStart(2, "0")}.ts`), "x");
+		// A late-sorting subdirectory, guaranteed to be past the per-dir cap.
+		mkdirSync(join(big, "zsub"));
+		writeFileSync(join(big, "zsub", "deep-child.ts"), "x");
+		const tool = makeTool();
+
+		const result = await tool.execute("call", { path: dir });
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		expect(text).toContain("[+"); // elision marker present
+		expect(text).not.toContain("deep-child.ts");
+	});
+
 	it("reports an empty directory", async () => {
 		const dir = tempDir();
 		const emptyDir = join(dir, "empty");

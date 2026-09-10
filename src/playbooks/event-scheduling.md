@@ -11,23 +11,23 @@ event 负责何时唤醒，task 承载可验收工作的状态。当前能做就
 
 ## 创建合法事件
 
-在**普通聊天侧**使用 `event_manage`；task 步骤没有该工具。它验证频道、时间、command guard 和总量，`definition` 是完整 JSON 字符串；省略 channelId 默认当前频道。更新时整体替换 definition。
+在**普通聊天侧**使用 `event_manage`；task 步骤没有该工具。它验证频道、时间、command guard 和总量。`definition` 是**类型化对象**（不是 JSON 字符串），频道由 runtime 绑定，不要写 channelId。改期前先 `action:"show"` 读回完整定义，`action:"update"` 整体替换。
 
-一次提醒用 one-shot，至少提前 2 分钟、最多约 24.8 天；下面的 at 是示意，调用时换成未来的真实时间：
+一次提醒用 `type:"one-shot"` + `at`，至少提前 2 分钟、最多约 24.8 天；下面的 at 是示意，调用时换成未来的真实时间。`definition` 传下面这个对象（`event_manage {action:"create", name:"check-result", definition:<对象>}`）：
 
 ```json
 {"type":"one-shot","text":"检查处理结果","at":"2026-12-01T10:00:00+08:00"}
 ```
 
-periodic 使用主机时区的五段 cron，没有 timezone 字段。普通事件最小间隔 30 分钟，带 preAction 时 5 分钟，全 workspace 最多 50 份事件文件。
+`type:"periodic"` + `schedule` 用主机时区的五段 cron。普通事件最小间隔 30 分钟，带 preAction 时 5 分钟，全 workspace 最多 50 份事件文件。
 
 ## preAction：外部条件传感器
 
 ```json
-{"type":"periodic","text":"条件满足后检查并处理结果","schedule":"*/5 * * * *","preAction":{"type":"bash","command":"test -f /absolute/path/ready.flag","timeout":10000}}
+{"type":"periodic","text":"条件满足后检查并处理结果","schedule":"*/5 * * * *","preAction":{"type":"bash","command":"test -f /absolute/path/ready.flag","timeoutMs":10000}}
 ```
 
-把示例命令和路径换成真实条件。`preAction.type` 必须是 bash，`timeout` 单位是**毫秒**，与 bash 工具的秒不同。退出 0 才唤醒，非 0 静默跳过；不要用总是成功的命令假装门控。传感器用 periodic：one-shot 即使条件未满足也会被消费。
+把示例命令和路径换成真实条件。`preAction.type` 必须是 bash，`timeoutMs` 单位是**毫秒**，与 bash 工具的秒不同。退出 0 才唤醒，非 0 静默跳过；不要用总是成功的命令假装门控。传感器用 periodic：one-shot 即使条件未满足也会被消费。
 
 传感器只检查条件，不承载实施步骤。第三方工具的命令和状态语义来自已安装工具或对应 skill，不复制来源不明的脚本。频率、退出条件和退役时机要明确。
 

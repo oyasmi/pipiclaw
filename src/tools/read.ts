@@ -41,6 +41,8 @@ function isImageFile(filePath: string): string | null {
 /** Directory tree caps, mirroring oh-my-pi's read: shallow and per-directory bounded. */
 const DIR_MAX_DEPTH = 2;
 const DIR_PER_DIR_LIMIT = 12;
+/** Source cap on entries `listDirectory` collects before we ever start rendering (fix plan §2.4). */
+const DIR_MAX_ENTRIES = 4_000;
 
 /**
  * Render a depth-2 directory tree from `FileStore.listDirectory` entries. Kept deliberately
@@ -57,22 +59,41 @@ function renderDirectoryTree(entries: DirectoryEntry[]): string {
 	const perParentCount = new Map<string, number>();
 	const lines: string[] = [];
 	const elided = new Map<string, number>();
+	// Parents whose own line was omitted (over the per-dir cap). Their descendants must be skipped
+	// too — otherwise the tree shows children of a directory it never listed.
+	const elidedParents = new Set<string>();
 	for (const entry of sorted) {
 		const segments = entry.relativePath.split("/");
 		const depth = segments.length - 1;
 		const parent = depth === 0 ? "" : segments.slice(0, -1).join("/");
+		if (isUnderElidedParent(parent, elidedParents)) {
+			continue;
+		}
 		const count = (perParentCount.get(parent) ?? 0) + 1;
 		perParentCount.set(parent, count);
 		if (count > DIR_PER_DIR_LIMIT) {
 			elided.set(parent, (elided.get(parent) ?? 0) + 1);
+			if (entry.isDirectory) {
+				elidedParents.add(entry.relativePath);
+			}
 			continue;
 		}
 		lines.push(`${"  ".repeat(depth)}${entry.name}${entry.isDirectory ? "/" : ""}`);
 	}
-	for (const [, count] of elided) {
-		lines.push(`  [+${count} more]`);
+	for (const [parent, count] of elided) {
+		const indent = parent === "" ? "" : "  ".repeat(parent.split("/").length);
+		lines.push(`${indent}  [+${count} more]`);
 	}
 	return lines.join("\n");
+}
+
+function isUnderElidedParent(parent: string, elidedParents: Set<string>): boolean {
+	for (const elided of elidedParents) {
+		if (parent === elided || parent.startsWith(`${elided}/`)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 const readSchema = Type.Object({
@@ -113,7 +134,7 @@ export function createReadTool(
 	return {
 		name: "read",
 		label: "read",
-		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files.`,
+		description: `Read a file, a PDF (converted to text), or a directory (rendered as a shallow tree). Also reads images (jpg, png, gif, webp), returned as attachments. Text/PDF output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first); use offset/limit to page a large file. A directory tree is depth-2, capped per directory, and points you to subdirectories for the rest.`,
 		parameters: readSchema,
 		execute: async (
 			_toolCallId: string,
@@ -172,6 +193,11 @@ export function createReadTool(
 					);
 				}
 				pdfText = converted.stdout;
+				if (converted.stdoutTruncated) {
+					// The 10MB capture cap hit mid-conversion — the rest of the PDF's text is gone.
+					// Say so rather than presenting a partial extraction as the whole document.
+					pdfText += `\n\n[pdftotext output exceeded the command capture limit and was cut off here; this is not the complete document. Ask the user for a text version to read the rest.]`;
+				}
 			}
 
 			const stat = isPdf ? undefined : await fileStore.stat(target);
@@ -181,9 +207,20 @@ export function createReadTool(
 				);
 			}
 			if (stat?.isDirectory) {
-				const entries = await fileStore.listDirectory(target, { maxDepth: DIR_MAX_DEPTH });
+				const entries = await fileStore.listDirectory(target, {
+					maxDepth: DIR_MAX_DEPTH,
+					maxEntries: DIR_MAX_ENTRIES,
+				});
+				const tree = renderDirectoryTree(entries);
+				const clamped = truncateHead(tree);
+				let text = `Directory: ${path}\n\n${clamped.content}`;
+				if (entries.length >= DIR_MAX_ENTRIES) {
+					text += `\n\n[Listing stopped at ${DIR_MAX_ENTRIES} entries; this directory is large. read a specific subdirectory to see the rest.]`;
+				} else if (clamped.truncated) {
+					text += `\n\n[Tree truncated at ${DEFAULT_MAX_BYTES / 1024}KB; read a specific subdirectory to see the rest.]`;
+				}
 				return {
-					content: [{ type: "text", text: `Directory: ${path}\n\n${renderDirectoryTree(entries)}` }],
+					content: [{ type: "text", text }],
 					details: undefined,
 				};
 			}

@@ -60,6 +60,28 @@ describe("loop log (spec 051, D5)", () => {
 		expect(await readTaskLog(dir, "missing")).toEqual([]);
 	});
 
+	it("falls back to the archived log when the active one is gone (batch 2.5)", async () => {
+		// archiveTask moves <id>.jsonl into tasks/archive/. task_log on a completed task should
+		// still return its history. Mutation check: remove the taskArchiveLogPath fallback in
+		// readTaskLog and this returns [].
+		await appendTaskLog(dir, "done-task", {
+			cycle: "c-1",
+			kind: "step",
+			seq: 1,
+			outcome: "continue",
+			note: "n",
+			tools: [],
+		});
+		await resetTaskLogAppenders();
+		await mkdir(join(dir, "tasks", "archive"), { recursive: true });
+		const { rename } = await import("node:fs/promises");
+		await rename(taskLogPath(dir, "done-task"), join(dir, "tasks", "archive", "done-task.jsonl"));
+
+		const records = await readTaskLog(dir, "done-task");
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({ kind: "step", note: "n" });
+	});
+
 	it("renders a rejected verdict with the reason it was rejected", () => {
 		const line = renderTaskLogLine({
 			ts: "t",

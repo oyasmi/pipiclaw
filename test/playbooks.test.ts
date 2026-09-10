@@ -112,9 +112,18 @@ describe("runtime playbook catalog", () => {
 		const examples = [...body.matchAll(/```json\n([\s\S]*?)\n```/g)];
 		expect(examples.length).toBeGreaterThan(0);
 		for (const example of examples) {
-			// event_manage supplies channelId; one-shot timestamps are examples relative to their
-			// stated date, not a reason for the test to expire with the wall clock.
-			const raw = { channelId: "dm_example", ...JSON.parse(example[1]!) };
+			// event_manage supplies channelId and maps the schema's `timeoutMs` onto the on-disk
+			// `preAction.timeout` (ms); one-shot timestamps are examples relative to their stated
+			// date, not a reason for the test to expire with the wall clock.
+			const parsed = JSON.parse(example[1]!) as Record<string, unknown>;
+			if (parsed.preAction && typeof parsed.preAction === "object") {
+				const pre = parsed.preAction as Record<string, unknown>;
+				if (pre.timeoutMs !== undefined) {
+					pre.timeout = pre.timeoutMs;
+					delete pre.timeoutMs;
+				}
+			}
+			const raw = { channelId: "dm_example", ...parsed };
 			const event = parseScheduledEventContent(JSON.stringify(raw), "example.json");
 			validateScheduledEvent(event, {
 				now: event.type === "one-shot" ? new Date(event.at).getTime() - 600_000 : Date.now(),

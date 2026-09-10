@@ -27,7 +27,7 @@ describe("E2E deterministic: event_manage guards", () => {
 				reply.toolCall("event_manage", {
 					action: "create",
 					name: "e2e-immediate",
-					definition: JSON.stringify({ type: "immediate", text: "loop me", channelId: harness.channelId }),
+					definition: { type: "immediate", text: "loop me" },
 				}),
 				reply.text("收到拒绝，不再尝试。"),
 			],

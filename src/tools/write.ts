@@ -19,6 +19,9 @@ export function createWriteTool(fileStore: FileStore, options: WriteToolOptions 
 	return {
 		name: "write",
 		label: "write",
+		// Serialize with other mutating tools in the same batch: two concurrent whole-file writes
+		// each pass the pre-write fingerprint check and then clobber each other (spec: batch 1.3).
+		executionMode: "sequential",
 		description:
 			"Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
 		parameters: writeSchema,

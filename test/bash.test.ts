@@ -1,6 +1,9 @@
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelJobManager } from "../src/agent/job-manager.js";
-import { CommandTerminatedError } from "../src/executor.js";
+import { CommandTerminatedError, createExecutor } from "../src/executor.js";
 import { createBashTool, DEFAULT_BASH_TIMEOUT_SECONDS } from "../src/tools/bash.js";
 import { DEFAULT_MAX_LINES } from "../src/tools/truncate.js";
 import { RecordingExecutor } from "./helpers/recording-executor.js";
@@ -74,11 +77,24 @@ describe("bash tool", () => {
 		await gated.execute("call", { command: "cat notes.txt | jq ." });
 		await gated.execute("call", { command: "grep foo file.txt" });
 		await gated.execute("call", { command: "grep -rn foo . | wc -l" });
+		// batch 3.5: forms the grep/edit tools cannot express are let through.
+		await gated.execute("call", { command: "rg --files -g '*.ts'" });
+		await gated.execute("call", { command: "rg -l TODO src" });
+		await gated.execute("call", { command: "rg -c TODO src" });
+		await gated.execute("call", { command: "sed -i 's/a/b/' f1 f2" });
+		await gated.execute("call", { command: "sed -i 's/a/b/' *.txt" });
 		expect(executor.calls.map((c) => c.command)).toEqual([
 			"cat notes.txt | jq .",
 			"grep foo file.txt",
 			"grep -rn foo . | wc -l",
+			"rg --files -g '*.ts'",
+			"rg -l TODO src",
+			"rg -c TODO src",
+			"sed -i 's/a/b/' f1 f2",
+			"sed -i 's/a/b/' *.txt",
 		]);
+		// A bare content `rg` still gets steered.
+		await expect(gated.execute("call", { command: "rg TODO src" })).rejects.toThrow(/use the grep tool/);
 	});
 
 	it("does not intercept when the interceptor is disabled (default)", async () => {
@@ -93,7 +109,7 @@ describe("bash tool", () => {
 		const bare = createBashTool(plainExecutor);
 
 		await expect(bare.execute("call", { command: "sleep 100", async: true })).rejects.toThrow(
-			/Background execution is not available/,
+			/does not support background execution/,
 		);
 
 		const executor = new RecordingExecutor(async (command) => {
@@ -247,4 +263,41 @@ describe("bash tool", () => {
 		expect(spilledDetails.timedOut).toBe(true);
 		expect(spilledDetails.fullOutputPath).toMatch(/^\/tmp\/pipiclaw-bash-[0-9a-f]+\.log$/);
 	});
+});
+
+describe("bash tool spill location and tail (batch 2.2 / 2.3, real executor)", () => {
+	it("writes the full-output spill under <channelDir>/logs/ so the model can read it back", async () => {
+		// Mutation check: revert getSpillFilePath to always use tmpdir() and fullOutputPath is /tmp/...
+		const channelDir = mkdtempSync(join(tmpdir(), "pipiclaw-bash-chan-"));
+		const tool = createBashTool(createExecutor(), { channelDir });
+
+		// >50KB across many lines -> tail truncation, but well under the 10MB capture cap.
+		const result = await tool.execute("call", {
+			command: `for i in $(seq 1 4000); do echo "row $i ${"y".repeat(40)}"; done`,
+		});
+		const details = result.details as { fullOutputPath?: string };
+
+		expect(details.fullOutputPath).toBeDefined();
+		expect(details.fullOutputPath?.startsWith(join(channelDir, "logs") + "/")).toBe(true);
+		expect(existsSync(details.fullOutputPath as string)).toBe(true);
+		expect(readFileSync(details.fullOutputPath as string, "utf-8")).toContain("row 4000");
+	});
+
+	it("shows the true tail of an over-capture command, not its middle", async () => {
+		// The executor's in-memory capture stops at 10MB; the naive path would tail *that head* and
+		// label it the end. Mutation check: drop the `captureTruncated` branch in buildOutputText
+		// and the assertion for "row 900000" fails (you get numbers near the 10MB mark instead).
+		const channelDir = mkdtempSync(join(tmpdir(), "pipiclaw-bash-chan-"));
+		const tool = createBashTool(createExecutor(), { channelDir });
+
+		const result = await tool.execute("call", {
+			// ~13MB, generated fast with awk so the test stays cheap.
+			command: `seq 1 300000 | awk '{print "row " $1 " padding-padding-padding-padding-padding-padding"}'`,
+		});
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+
+		expect(text).toContain("row 300000"); // the actual last line
+		expect(text).toContain("capture was cut off");
+		expect(text).not.toMatch(/Showing lines \d+-\d+ of \d+/); // no fabricated total line count
+	}, 30000);
 });

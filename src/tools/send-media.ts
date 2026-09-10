@@ -83,7 +83,9 @@ export function createSendMediaTool(
 			const { data } = await fileStore.readBytes(target, { signal });
 
 			const name = fileName?.trim() || basename(path);
-			const kind = IMAGE_EXTENSIONS.has(extname(name).toLowerCase()) ? "image" : "file";
+			// Route by the *real file's* extension, not the display name: `fileName` is only a label,
+			// so a PNG sent with fileName "报告" must still be delivered as an image (fix plan §4).
+			const kind = IMAGE_EXTENSIONS.has(extname(path).toLowerCase()) ? "image" : "file";
 
 			const result = await options.mediaSender.sendMedia(options.channelId, { data, fileName: name, kind });
 			if (!result.ok) {

@@ -124,21 +124,25 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 			);
 		}
 
-		const entries = await listMemoryEntries(options.channelDir);
-		if (!args.replaces) {
-			const similar = findNearDuplicateEntries(content, entries);
-			if (similar.length > 0) {
-				throw new RecoverableToolError(
-					`Nothing was saved yet. This channel already stores ${similar.length} similar entr${similar.length === 1 ? "y" : "ies"}:\n` +
-						similar.map((entry) => `- ${entry.name}: ${entry.description}`).join("\n") +
-						'\nRe-issue the save with "replaces" set to the name this replaces, or to "none" if both facts are true at once.',
-				);
-			}
-		}
-
 		const replaces = args.replaces && args.replaces !== "none" ? args.replaces : undefined;
-		const result = await queue.run(options.channelId, () =>
-			applyMemoryOps(options.channelDir, [
+
+		// The near-duplicate judgment ("read existing facts → decide → write") has to run inside the
+		// same per-channel critical section as the write, or two concurrent saves of the same fact
+		// each see "no duplicate" and both add it. A `null` return means "blocked by near-duplicates,
+		// nothing written".
+		let similar: Awaited<ReturnType<typeof findNearDuplicateEntries>> = [];
+		const result = await queue.run(options.channelId, async () => {
+			// `replaces: "none"` is an explicit "both facts are true, keep both" waiver, so it skips
+			// the near-duplicate gate just like naming a real target does.
+			if (!args.replaces) {
+				const existing = await listMemoryEntries(options.channelDir);
+				const near = findNearDuplicateEntries(content, existing);
+				if (near.length > 0) {
+					similar = near;
+					return null;
+				}
+			}
+			return applyMemoryOps(options.channelDir, [
 				replaces
 					? {
 							op: "update",
@@ -156,25 +160,62 @@ function buildMemoryClosures(options: MemoryManageToolOptions): MemoryToolClosur
 							type: args.type ?? "project",
 							details: args.details,
 						},
-			]),
-		);
+			]);
+		});
+
+		if (result === null) {
+			throw new RecoverableToolError(
+				`Nothing was saved yet. This channel already stores ${similar.length} similar entr${similar.length === 1 ? "y" : "ies"}:\n` +
+					similar.map((entry) => `- ${entry.name}: ${entry.description}`).join("\n") +
+					'\nRe-issue the save with "replaces" set to the name this replaces, or to "none" if both facts are true at once.',
+			);
+		}
 
 		if (replaces && result.updated.length === 0 && result.missingTarget > 0) {
 			throw new RecoverableToolError(
 				`No memory named "${replaces}" exists in this channel. Check the name, or omit "replaces" to save a new entry.`,
 			);
 		}
-		await appendMemoryReviewLog(options.channelDir, {
-			timestamp: new Date().toISOString(),
-			channelId: options.channelId,
-			reason: "memory-save",
-			actions: [{ op: replaces ? "update" : "add", name: replaces ?? result.added[0] }],
-		}).catch(() => {});
-		const savedName = replaces ?? result.added[0];
+
+		// Report what actually landed on disk — never a name for an entry that was not written.
+		// The old code read `replaces ?? result.added[0]` unconditionally, so a skipped add
+		// rendered "Saved ... as `undefined`." and told the user a lie the model could not see.
+		if (replaces) {
+			await logMemorySave(options, replaces, "update");
+			return textResult(`Replaced channel memory \`${replaces}\`.`, { saved: true, name: replaces });
+		}
+		const addedName = result.added[0];
+		if (addedName) {
+			await logMemorySave(options, addedName, "add");
+			return textResult(`Saved to channel memory as \`${addedName}\`.`, { saved: true, name: addedName });
+		}
+		if (result.skippedSecret > 0) {
+			return textResult(
+				"Not saved: the content still reads as a credential or secret after the first check. Store the secret itself in an approved secret manager and save only a pointer to it here.",
+				{ saved: false, blockedReason: "secret" },
+			);
+		}
+		if (result.skippedTombstone > 0) {
+			return textResult(
+				`Not saved: "${content}" was explicitly forgotten in this channel and is still tombstoned. ` +
+					"Confirm with the user that they want it back, then re-save (an explicit user save is allowed through), or reword it so it is not byte-for-byte the forgotten fact.",
+				{ saved: false, blockedReason: "tombstone" },
+			);
+		}
 		return textResult(
-			replaces ? `Replaced channel memory \`${savedName}\`.` : `Saved to channel memory as \`${savedName}\`.`,
-			{ saved: result.added.length > 0 || result.updated.length > 0, name: savedName },
+			"Not saved, and the store reported no specific reason (it may already be stored under another entry). " +
+				"Run memory_search for this fact before trying again.",
+			{ saved: false, blockedReason: "unknown" },
 		);
+	}
+
+	async function logMemorySave(opts: MemoryManageToolOptions, name: string, op: "add" | "update") {
+		await appendMemoryReviewLog(opts.channelDir, {
+			timestamp: new Date().toISOString(),
+			channelId: opts.channelId,
+			reason: "memory-save",
+			actions: [{ op, name }],
+		}).catch(() => {});
 	}
 
 	async function search({ query }: { query: string }) {
@@ -257,7 +298,7 @@ export function createMemorySaveTool(options: MemoryManageToolOptions): AgentToo
 		label: "memory_save",
 		description:
 			"Save a durable fact into this channel's memory when the user asks you to remember it. Not for transient task state — " +
-			"put in-progress work in the journal or a task instead.",
+			"keep in-progress work in a task (task_log) instead; the journal is written only by the background reflect pass.",
 		parameters: memorySaveSchema,
 		execute: async (_toolCallId: string, args) => save(args),
 	};

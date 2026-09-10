@@ -1,7 +1,6 @@
 import { relative } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { parseLocalTime } from "../shared/local-time.js";
-import { clipText } from "../shared/text-utils.js";
 import { recencyBoostByAge, tokenizeRecallText } from "./search.js";
 import { buildSessionCorpus, type SessionSearchDocument, type SessionSearchRole } from "./session-corpus.js";
 import { runSidecarTask } from "./sidecar-worker.js";
@@ -35,12 +34,17 @@ export interface SessionSearchResponse {
 	query: string;
 	results: SessionSearchResult[];
 	searchedDocuments: number;
+	/** Documents whose text was itself clipped at the scan cap — a keyword past that point is not
+	 * findable in this corpus, so "no match" there is not proof it was never said. */
+	partialDocuments: number;
 }
 
 interface ScoredDocument {
 	document: SessionSearchDocument;
 	score: number;
 	matches: string[];
+	/** Whole-query substring hit — real match evidence even when tokenization split the query. */
+	exactHit: boolean;
 }
 
 const SESSION_SEARCH_SUMMARY_SYSTEM_PROMPT = `You summarize current-channel transcript search hits for Pipiclaw.
@@ -111,13 +115,14 @@ function scoreDocument(document: SessionSearchDocument, lowerQuery: string, quer
 	// reported failure mode from this term. Changing it blind, without that guardrail, risks
 	// swapping one unverified scoring bias for another.
 	const coverage = queryTokens.length > 0 ? matchedTokens / queryTokens.length : 0;
-	const exactBoost = lowerQuery && lowerText.includes(lowerQuery) ? 1 : 0;
-	const score = matchedTokens * 1.4 + coverage * 2 + exactBoost + computeRecencyBoost(document.timestamp);
+	const exactHit = Boolean(lowerQuery) && lowerText.includes(lowerQuery);
+	const score = matchedTokens * 1.4 + coverage * 2 + (exactHit ? 1 : 0) + computeRecencyBoost(document.timestamp);
 
 	return {
 		document,
 		score,
 		matches: Array.from(new Set(matches)),
+		exactHit,
 	};
 }
 
@@ -127,12 +132,41 @@ function sortRecentDocuments(a: SessionSearchDocument, b: SessionSearchDocument)
 	return bTime - aTime;
 }
 
+/**
+ * Cut a display window from the (possibly large) scan text, centered on the first place the query
+ * or one of its tokens appears. The old code always took the head, so a hit deep in a long message
+ * came back as a preview that did not even contain the keyword (fix plan §2.5).
+ */
+function windowAroundMatch(text: string, query: string, queryTokens: string[], maxChars: number): string {
+	if (text.length <= maxChars) {
+		return text;
+	}
+	const lower = text.toLowerCase();
+	let at = query.trim() ? lower.indexOf(query.trim().toLowerCase()) : -1;
+	if (at < 0) {
+		for (const token of queryTokens) {
+			at = lower.indexOf(token);
+			if (at >= 0) break;
+		}
+	}
+	if (at < 0) {
+		return `${text.slice(0, maxChars)}\n[...]`;
+	}
+	const half = Math.floor(maxChars / 2);
+	const start = Math.max(0, at - half);
+	const end = Math.min(text.length, start + maxChars);
+	const prefix = start > 0 ? "[...]\n" : "";
+	const suffix = end < text.length ? "\n[...]" : "";
+	return `${prefix}${text.slice(start, end)}${suffix}`;
+}
+
 async function summarizeHit(
 	request: SearchChannelSessionsRequest,
 	document: SessionSearchDocument,
 	query: string,
+	queryTokens: string[],
 ): Promise<string> {
-	const fallback = clipText(document.text, request.maxCharsPerChunk, { headRatio: 0.65, omitHint: "\n[...]\n" });
+	const fallback = windowAroundMatch(document.text, query, queryTokens, request.maxCharsPerChunk);
 	if (!request.summarizeWithModel || !query.trim() || fallback.length < SESSION_SEARCH_SUMMARY_MIN_CHARS) {
 		return fallback;
 	}
@@ -236,17 +270,25 @@ export async function searchChannelSessions(request: SearchChannelSessionsReques
 	const selected = query
 		? documents
 				.map((document) => scoreDocument(document, lowerQuery, queryTokens))
-				.filter((entry) => entry.score > 0)
+				// Require actual match evidence: recency alone used to lift a completely unrelated
+				// recent message above 0 and return it with an empty `matches` array — wasted tokens
+				// and a misleading "hit". Recency now only ranks among documents that did match.
+				.filter((entry) => entry.matches.length > 0 || entry.exactHit)
 				.sort((a, b) => b.score - a.score)
 				.slice(0, limit)
 		: documents
 				.sort(sortRecentDocuments)
 				.slice(0, limit)
-				.map((document) => ({ document, score: computeRecencyBoost(document.timestamp), matches: [] }));
+				.map((document) => ({
+					document,
+					score: computeRecencyBoost(document.timestamp),
+					matches: [],
+					exactHit: false,
+				}));
 
 	const results: SessionSearchResult[] = [];
 	for (const hit of selected) {
-		const summary = await summarizeHit(request, hit.document, query);
+		const summary = await summarizeHit(request, hit.document, query, queryTokens);
 		results.push(toResult(request, hit.document, hit.score, hit.matches, summary));
 	}
 
@@ -254,5 +296,6 @@ export async function searchChannelSessions(request: SearchChannelSessionsReques
 		query,
 		results,
 		searchedDocuments: documents.length,
+		partialDocuments: documents.filter((document) => document.scanTruncated).length,
 	};
 }

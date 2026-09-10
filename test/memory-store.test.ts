@@ -208,6 +208,28 @@ describe("memory store — applyMemoryOps", () => {
 		expect(result.skippedTombstone).toBe(1);
 	});
 
+	it("lets an explicit user save through a tombstone and revokes it for the background pass too (batch 1.7)", async () => {
+		// A tombstone must only stop the *background* reflect pass from silently re-learning a
+		// forgotten fact — not the user's own explicit re-save. Mutation check: drop the
+		// `op.source !== "user"` guard on the tombstone check and `userAdd.added` is empty.
+		const channelDir = createTempDir();
+		await applyMemoryOps(channelDir, [{ op: "add", name: "gone", description: "obsolete fact", source: "agent" }]);
+		await applyMemoryOps(channelDir, [{ op: "delete", name: "gone", reason: "user said so" }]);
+
+		const userAdd = await applyMemoryOps(channelDir, [
+			{ op: "add", name: "back", description: "Obsolete   fact", source: "user" },
+		]);
+		expect(userAdd.added).toEqual(["back"]);
+		expect(userAdd.skippedTombstone).toBe(0);
+
+		// The tombstone is now revoked, so even a later background (agent-source) add is no longer blocked.
+		await applyMemoryOps(channelDir, [{ op: "delete", name: "back", reason: "cleanup" }]);
+		const agentReadd = await applyMemoryOps(channelDir, [
+			{ op: "add", name: "back2", description: "obsolete fact", source: "agent" },
+		]);
+		expect(agentReadd.skippedTombstone).toBe(1); // the fresh delete re-tombstoned it
+	});
+
 	it("rejects a description that looks like a secret", async () => {
 		const channelDir = createTempDir();
 		const result = await applyMemoryOps(channelDir, [

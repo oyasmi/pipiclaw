@@ -1,8 +1,10 @@
+import { basename } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { Executor } from "../executor.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
+import { partitionByReadGuard, readGuardAllows } from "../security/path-guard-filter.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { shellEscape } from "../shared/shell-escape.js";
@@ -35,11 +37,23 @@ const SEARCH_TIMEOUT_SECONDS = 30;
 const MAX_RAW_RESULT_BYTES = 768 * 1024;
 
 const grepSchema = Type.Object({
-	pattern: Type.String({ description: "Extended regular expression (ERE) to search for in file contents." }),
+	pattern: Type.String({
+		description: "Text to search for. An extended regular expression (ERE) unless `literal` is set.",
+	}),
 	path: Type.Optional(Type.String({ description: "File or directory to search. Defaults to the workspace root." })),
 	glob: Type.Optional(
 		Type.String({
-			description: 'Filename filter for directory searches, e.g. "*.ts". Matched against the basename.',
+			description:
+				'Filename filter for directory searches, matched against the basename. Supports `*`, `?`, `[abc]`, and `{a,b}` — e.g. "*.{ts,tsx}".',
+		}),
+	),
+	literal: Type.Optional(
+		Type.Boolean({ description: "Treat `pattern` as a literal string, not a regex (like `grep -F`)." }),
+	),
+	mode: Type.Optional(
+		Type.Union([Type.Literal("content"), Type.Literal("files"), Type.Literal("count")], {
+			description:
+				'"content" (default) = matching lines; "files" = matching paths only; "count" = per-file counts. files/count cost far fewer tokens when you only need to locate.',
 		}),
 	),
 	caseSensitive: Type.Optional(Type.Boolean({ description: "Case-sensitive match. Defaults to true." })),
@@ -60,13 +74,56 @@ interface MatchEntry {
 	isMatch: boolean;
 }
 
-/** Convert a simple `*`/`?` glob into an anchored regex matched against a basename. */
+/**
+ * Convert a basename glob into an anchored regex. Supports `*`, `?`, character classes `[...]`, and
+ * brace alternation `{a,b}` so the JS-side backstop filter is never *stricter* than the `--include`
+ * glob pushed to `grep` — a mismatch there produced silent "no results" (fix plan §3.5).
+ */
 function globToRegExp(glob: string): RegExp {
-	const escaped = glob
-		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
-		.replace(/\*/g, ".*")
-		.replace(/\?/g, ".");
-	return new RegExp(`^${escaped}$`);
+	let out = "";
+	for (let i = 0; i < glob.length; i++) {
+		const ch = glob[i];
+		if (ch === "*") {
+			out += ".*";
+		} else if (ch === "?") {
+			out += ".";
+		} else if (ch === "[") {
+			// Copy the class verbatim to the closing `]` (leading `!` -> `^` for negation).
+			let j = i + 1;
+			let cls = "";
+			if (glob[j] === "!" || glob[j] === "^") {
+				cls += "^";
+				j++;
+			}
+			while (j < glob.length && glob[j] !== "]") {
+				cls += glob[j];
+				j++;
+			}
+			if (j < glob.length) {
+				out += `[${cls}]`;
+				i = j;
+			} else {
+				out += "\\[";
+			}
+		} else if (ch === "{") {
+			const end = glob.indexOf("}", i);
+			if (end > i) {
+				const alts = glob
+					.slice(i + 1, end)
+					.split(",")
+					.map((alt) => alt.replace(/[.+^${}()|[\]\\]/g, "\\$&"));
+				out += `(?:${alts.join("|")})`;
+				i = end;
+			} else {
+				out += "\\{";
+			}
+		} else if (/[.+^$()|\\]/.test(ch)) {
+			out += `\\${ch}`;
+		} else {
+			out += ch;
+		}
+	}
+	return new RegExp(`^${out}$`);
 }
 
 function truncateLine(text: string): string {
@@ -174,9 +231,10 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 		name: "grep",
 		label: "grep",
 		description:
-			"Search file contents with an extended regular expression across a file or directory tree. Output is " +
-			"grouped by file, capped per file, paginated, and token-bounded — prefer this over `bash grep -rn`, which " +
-			"floods context. Match lines are marked with `*`, context lines with a space.",
+			"Search file contents across a file or directory tree — an ERE regex, or a literal string with `literal:true`. " +
+			"Output is grouped by file, capped per file, paginated, and token-bounded — prefer this over `bash grep -rn`, " +
+			'which floods context. `mode:"files"` returns just matching paths and `mode:"count"` per-file counts (both ' +
+			"much cheaper when you only need to locate). Match lines are marked with `*`, context lines with a space.",
 		parameters: grepSchema,
 		execute: async (
 			_toolCallId: string,
@@ -184,14 +242,25 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 				pattern,
 				path,
 				glob,
+				literal,
+				mode,
 				caseSensitive,
 				skip,
-			}: { pattern: string; path?: string; glob?: string; caseSensitive?: boolean; skip?: number },
+			}: {
+				pattern: string;
+				path?: string;
+				glob?: string;
+				literal?: boolean;
+				mode?: "content" | "files" | "count";
+				caseSensitive?: boolean;
+				skip?: number;
+			},
 			signal?: AbortSignal,
 		) => {
 			if (!pattern.trim()) {
 				throw new RecoverableToolError("Pattern must not be empty.");
 			}
+			const effectiveMode = mode ?? "content";
 
 			const searchPath = path?.trim() || ".";
 			// Resolved once, then used for both the guard's judgment and the actual `grep` target
@@ -203,7 +272,14 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 				channelId: options.channelId,
 			});
 
-			const flags = ["-rnH", "-E", `-B${CONTEXT_BEFORE}`, `-A${CONTEXT_AFTER}`];
+			// `-rnH` for content; `-rlH` (paths only) for `files`; `-rcH` (per-file counts) for `count`.
+			const flags =
+				effectiveMode === "files"
+					? ["-rlH"]
+					: effectiveMode === "count"
+						? ["-rcH"]
+						: ["-rnH", `-B${CONTEXT_BEFORE}`, `-A${CONTEXT_AFTER}`];
+			flags.push(literal ? "-F" : "-E");
 			if (caseSensitive === false) {
 				flags.push("-i");
 			}
@@ -214,6 +290,21 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			// `--exclude-dir` semantics differ.
 			for (const segment of IGNORED_DIR_SEGMENTS) {
 				flags.push(`--exclude-dir=${segment}`);
+			}
+			// Push `readDeny` down into `grep` so a denied subtree is never opened (D5.1). `grep`'s
+			// `--exclude`/`--exclude-dir` match a *basename* glob, so a plain (non-glob) deny entry
+			// becomes a basename exclude — coarser than the path guard (it also skips a same-named
+			// dir elsewhere), but only ever *more* restrictive, and the post-parse read-guard filter
+			// below is the actual guarantee that no denied content is returned.
+			const denyBasenames = new Set<string>();
+			for (const entry of securityConfig.pathGuard.readDeny) {
+				if (!/[*?[\]{}]/.test(entry)) {
+					const base = basename(entry.replace(/\/+$/, ""));
+					if (base && base !== "." && base !== "..") denyBasenames.add(base);
+				}
+			}
+			for (const base of denyBasenames) {
+				flags.push(`--exclude-dir=${shellEscape(base)}`, `--exclude=${shellEscape(base)}`);
 			}
 			if (glob) {
 				// Model-controlled, so it must be shell-escaped like the pattern and path below -- the
@@ -236,7 +327,11 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			if (result.code >= 2) {
 				const stderr = result.stderr.trim();
 				throw new RecoverableToolError(
-					`grep failed: ${stderr || `exit code ${result.code}`}. Check the regex (ERE syntax) and that the path exists.`,
+					`grep failed: ${stderr || `exit code ${result.code}`}. ${
+						literal
+							? "Check that the path exists."
+							: "Check the regex (ERE syntax) and that the path exists, or pass literal:true."
+					}`,
 				);
 			}
 
@@ -246,6 +341,67 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 			const boundedStdout = rawTruncated ? result.stdout.slice(0, result.stdout.lastIndexOf("\n")) : result.stdout;
 
 			const globRegExp = glob ? globToRegExp(glob) : undefined;
+			const keepFile = (file: string): boolean => {
+				const normalized = file.replace(/^\.\//, "");
+				if (isIgnoredPath(normalized)) return false;
+				if (globRegExp) {
+					const base = normalized.split("/").pop() ?? normalized;
+					if (!globRegExp.test(base)) return false;
+				}
+				return readGuardAllows(normalized, securityConfig, securityContext);
+			};
+			const truncationFooter = rawTruncated
+				? `\n\n[Search hit the ${formatSize(MAX_RAW_RESULT_BYTES)} raw result cap; narrow the path or pattern to see the rest.]`
+				: "";
+
+			// `mode: "files"` — just the paths that matched, one per line.
+			if (effectiveMode === "files") {
+				const paths = [
+					...new Set(
+						boundedStdout
+							.split("\n")
+							.map((l) => l.trim())
+							.filter(Boolean),
+					),
+				]
+					.filter(keepFile)
+					.sort((a, b) => a.localeCompare(b));
+				if (paths.length === 0) {
+					return {
+						content: [{ type: "text", text: `No files contain a match in ${searchPath}.${truncationFooter}` }],
+						details: { matchCount: 0, fileCount: 0 },
+					};
+				}
+				return {
+					content: [{ type: "text", text: truncateHead(paths.join("\n")).content + truncationFooter }],
+					details: { fileCount: paths.length, mode: "files" },
+				};
+			}
+
+			// `mode: "count"` — `path:N` per file that matched.
+			if (effectiveMode === "count") {
+				const rows: Array<[string, number]> = [];
+				for (const line of boundedStdout.split("\n")) {
+					const m = line.match(/^(.*):(\d+)$/);
+					if (!m) continue;
+					const count = Number.parseInt(m[2], 10);
+					if (count > 0 && keepFile(m[1])) rows.push([m[1].replace(/^\.\//, ""), count]);
+				}
+				rows.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+				if (rows.length === 0) {
+					return {
+						content: [{ type: "text", text: `No matches in ${searchPath}.${truncationFooter}` }],
+						details: { matchCount: 0, fileCount: 0 },
+					};
+				}
+				const total = rows.reduce((sum, [, n]) => sum + n, 0);
+				const body = rows.map(([f, n]) => `${n}\t${f}`).join("\n");
+				return {
+					content: [{ type: "text", text: truncateHead(body).content + truncationFooter }],
+					details: { matchCount: total, fileCount: rows.length, mode: "count" },
+				};
+			}
+
 			const parsed = parseGrepOutput(boundedStdout);
 
 			// Filter ignored dirs and (for directory scopes) the optional glob, on the basename.
@@ -264,7 +420,38 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 				files.push([normalized, entries]);
 			}
 
+			// Backstop: a recursive `grep` descends into `readDeny`/sensitive subtrees the per-path
+			// guard would refuse. Drop any hit file the read guard denies before it is rendered or
+			// counted (the residual risk — grep already read the bytes — is documented in
+			// path-guard-filter.ts).
+			let readDenyExcluded = 0;
+			if (files.length > 0) {
+				const { allowed } = partitionByReadGuard(
+					files.map(([file]) => file),
+					securityConfig,
+					securityContext,
+				);
+				const allowedSet = new Set(allowed);
+				const kept = files.filter(([file]) => allowedSet.has(file));
+				readDenyExcluded = files.length - kept.length;
+				files.length = 0;
+				files.push(...kept);
+			}
+
 			if (files.length === 0) {
+				if (readDenyExcluded > 0) {
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									`All ${readDenyExcluded} matching file(s) in ${searchPath} are excluded by the read policy. ` +
+									"Search a path you are allowed to read.",
+							},
+						],
+						details: { matchCount: 0, fileCount: 0, readDenyExcluded },
+					};
+				}
 				const scope = glob ? `${searchPath} (glob ${glob})` : searchPath;
 				// D5.3: a result set that hit the raw-line cap but still filtered down to nothing must
 				// not be reported as "no matches" -- that tells the model to try a *broader* search,
@@ -325,6 +512,11 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 					`[Search hit the ${formatSize(MAX_RAW_RESULT_BYTES)} raw result cap; there may be matches beyond what's shown above. Narrow the path or pattern to see them.]`,
 				);
 			}
+			if (readDenyExcluded > 0) {
+				footerLines.push(
+					`[${readDenyExcluded} matching file(s) were excluded by the read policy and are not shown.]`,
+				);
+			}
 
 			const body = blocks.join("\n\n");
 			const footer = footerLines.length > 0 ? `\n\n${footerLines.join("\n")}` : "";
@@ -340,6 +532,7 @@ export function createGrepTool(executor: Executor, options: GrepToolOptions = {}
 					matchCount: shownMatchCount,
 					fileCount: files.length,
 					shownFileCount: page.length,
+					...(readDenyExcluded > 0 ? { readDenyExcluded } : {}),
 				},
 			};
 		},

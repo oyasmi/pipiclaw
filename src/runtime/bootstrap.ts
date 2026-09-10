@@ -1059,6 +1059,7 @@ export async function createRuntimeContext(
 	// can start one, then re-adopt whatever survived the last shutdown (spec 031, D6).
 	configureJobRuntime({
 		jobsStateDir: join(options.paths.appHomeDir, "state", "jobs"),
+		workspaceDir: options.paths.workspaceDir,
 		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 		...(options.jobSweepIntervalMs ? { sweepIntervalMs: options.jobSweepIntervalMs } : {}),
 	});

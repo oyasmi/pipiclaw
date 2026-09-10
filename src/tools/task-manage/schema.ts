@@ -26,12 +26,14 @@ const scheduleField = Type.Optional(
 const budgetField = Type.Optional(
 	Type.Object(
 		{
-			steps: Type.Optional(Type.Number({ description: "Max model steps in one cycle." })),
+			steps: Type.Optional(Type.Integer({ minimum: 1, description: "Max model steps in one cycle." })),
 			wallMin: Type.Optional(
 				Type.Number({ description: "Max elapsed minutes in one cycle, including parked waits." }),
 			),
 			usd: Type.Optional(Type.Number({ description: "Max attributable cost in one cycle." })),
-			rounds: Type.Optional(Type.Number({ description: "Max delegate→verify rework rounds in one cycle." })),
+			rounds: Type.Optional(
+				Type.Integer({ minimum: 1, description: "Max delegate→verify rework rounds in one cycle." }),
+			),
 			until: Type.Optional(Type.String({ description: "Hard local-time stop, e.g. 2026-09-06T18:00:00+08:00." })),
 		},
 		{ description: "Per-task budget; omitted keys fall back to the runtime defaults." },
@@ -110,7 +112,7 @@ export const taskCloseSchema = Type.Object({
 export const taskLogSchema = Type.Object({
 	id: idField,
 	cycle: Type.Optional(Type.String({ description: "Only this cycle's records, e.g. c-2026-09-05." })),
-	limit: Type.Optional(Type.Number({ description: "Most recent N records; default 20." })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Most recent N records; default 20." })),
 });
 
 export const taskStepEndSchema = Type.Object({

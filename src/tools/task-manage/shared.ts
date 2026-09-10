@@ -5,6 +5,7 @@ import { getChannelJobManager } from "../../agent/job-manager.js";
 import { createExecutor } from "../../executor.js";
 import * as log from "../../log.js";
 import { parseScheduledEventContent } from "../../runtime/events.js";
+import { parseLocalTime } from "../../shared/local-time.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { getSubAgentRunManager } from "../../subagents/runs.js";
 import { createCycle, nextCycleId } from "../../tasks/cycle.js";
@@ -63,7 +64,22 @@ export function normalizeBudget(budget: TaskUpdateRequest["budget"]): Partial<Ta
 		}
 		next[key] = value;
 	}
-	if (budget.until !== undefined) next.until = budget.until.trim() || undefined;
+	if (budget.until !== undefined) {
+		const trimmed = budget.until.trim();
+		if (trimmed) {
+			// `budget.ts` runs `until` through `parseLocalTime` and silently drops the deadline on a
+			// parse failure, so validate it here with the same parser — a mistyped stop-time should
+			// be a recoverable error, not a task with no hard stop.
+			if (parseLocalTime(trimmed) === undefined) {
+				throw new RecoverableToolError(
+					`budget.until "${budget.until}" is not a parseable local time. Use e.g. 2026-09-06T18:00:00+08:00.`,
+				);
+			}
+			next.until = trimmed;
+		} else {
+			next.until = undefined;
+		}
+	}
 	return Object.keys(next).length > 0 ? next : undefined;
 }
 

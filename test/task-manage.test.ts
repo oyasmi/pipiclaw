@@ -15,6 +15,7 @@ import { createTask } from "../src/tools/task-manage/create.js";
 import { closeTask, listTasks, updateTask } from "../src/tools/task-manage/lifecycle.js";
 import { endTaskStep } from "../src/tools/task-manage/step-end.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
+import { createTaskStepEndTool } from "../src/tools/task-manage.js";
 
 const CHANNEL_ID = "dm_1";
 const SATISFIED_BODY = renderStandardTaskBody({
@@ -117,6 +118,18 @@ describe("task tool surface (spec 051, D4)", () => {
 			await updateTask(options, { id: "edit", schedule: "" });
 			expect((await readStoredTask(channelDir, "edit"))?.fields.schedule).toBeUndefined();
 		});
+
+		it("rejects an unparseable budget.until instead of silently dropping the deadline (batch 4)", async () => {
+			// budget.ts runs `until` through parseLocalTime and loses the constraint on a parse
+			// failure. Mutation check: remove the parseLocalTime check in normalizeBudget and this
+			// resolves instead of rejecting.
+			await writeTask("edit");
+			await expect(updateTask(options, { id: "edit", budget: { until: "next tuesdayish" } })).rejects.toThrow(
+				/parseable local time/,
+			);
+			await updateTask(options, { id: "edit", budget: { until: "2099-01-02T18:00:00+08:00" } });
+			expect((await readStoredTask(channelDir, "edit"))?.fields.budget?.until).toBe("2099-01-02T18:00:00+08:00");
+		});
 	});
 
 	describe("task_step_end", () => {
@@ -215,6 +228,62 @@ describe("task tool surface (spec 051, D4)", () => {
 			await expect(
 				endTaskStep(loop("open-dod"), { outcome: "done", note: "n", summary: "S", evidence: "E" }),
 			).rejects.toThrow(/unmet acceptance items/);
+		});
+
+		it("the tool wrapper sets terminate:true on success but not on a recoverable failure (batch 3.4)", async () => {
+			await writeFile(
+				join(tasksDir, "term.md"),
+				renderTaskDocument({ state: "open", cycle: createCycle("c-1") }, SATISFIED_BODY),
+			);
+			const tool = createTaskStepEndTool(loop("term"));
+			const ok = await tool.execute("c", { outcome: "continue", note: "n" } as never);
+			expect(ok.terminate).toBe(true);
+
+			await writeFile(
+				join(tasksDir, "term2.md"),
+				renderTaskDocument(
+					{ state: "open", cycle: createCycle("c-1") },
+					renderStandardTaskBody({ title: "W", goal: "G", dod: "- [ ] Not yet" }),
+				),
+			);
+			await expect(
+				createTaskStepEndTool(loop("term2")).execute("c", {
+					outcome: "done",
+					note: "n",
+					summary: "S",
+					evidence: "E",
+				} as never),
+			).rejects.toThrow();
+		});
+
+		it("a rejected done produces no notice, no state change, and no loop-log entry (batch 1.6)", async () => {
+			// Regression: queueTaskNotice fired before the acceptance/verification checks, so a
+			// rejected `outcome=done` still told the channel "task complete" and a corrected retry
+			// queued a second notice. Mutation check: move the `flushNotice()` calls back above the
+			// `outcome === "done"` block (or restore the eager `queueTaskNotice`) and the notice
+			// file below exists.
+			await writeFile(
+				join(tasksDir, "open-dod.md"),
+				renderTaskDocument(
+					{ state: "open", cycle: createCycle("c-1") },
+					renderStandardTaskBody({ title: "W", goal: "G", dod: "- [ ] Not yet" }),
+				),
+			);
+			const before = await readFile(join(tasksDir, "open-dod.md"), "utf-8");
+
+			await expect(
+				endTaskStep(loop("open-dod"), {
+					outcome: "done",
+					note: "n",
+					summary: "S",
+					evidence: "E",
+					notify: "全部搞定了",
+				}),
+			).rejects.toThrow(/unmet acceptance items/);
+
+			expect(existsSync(join(tasksDir, ".steer", "open-dod.out.md"))).toBe(false);
+			expect(await readFile(join(tasksDir, "open-dod.md"), "utf-8")).toBe(before);
+			expect(await readTaskLog(channelDir, "open-dod")).toEqual([]);
 		});
 
 		// D7: a cycle of FAIL rounds must not read as verified, and the PASS that unlocks `done`

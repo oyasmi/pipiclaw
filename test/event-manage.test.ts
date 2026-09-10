@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseScheduledEventContent } from "../src/runtime/events.js";
 import type { SecurityConfig } from "../src/security/types.js";
-import { type EventManageToolOptions, manageEvent } from "../src/tools/event-manage.js";
+import { type EventDefinitionInput, type EventManageToolOptions, manageEvent } from "../src/tools/event-manage.js";
 
 function guard(overrides: Partial<SecurityConfig["commandGuard"]> = {}): SecurityConfig["commandGuard"] {
 	return { enabled: true, additionalDenyPatterns: [], allowPatterns: [], blockObfuscation: true, ...overrides };
@@ -41,15 +41,14 @@ afterEach(async () => {
 	await rm(workspaceDir, { recursive: true, force: true });
 });
 
-const validPeriodic = JSON.stringify({
+const validPeriodic: EventDefinitionInput = {
 	type: "periodic",
-	channelId: "dm_1",
 	text: "推进任务 weekly-report",
 	schedule: "0 10 * * 1",
-});
+};
 
 describe("manageEvent create", () => {
-	it("writes valid periodic and one-shot events that the watcher parser can load back", async () => {
+	it("writes valid periodic and one-shot events that the watcher parser can load back, binding the channel itself", async () => {
 		const result = await manageEvent(opts(), {
 			action: "create",
 			name: "task.dm_1.weekly-report.schedule",
@@ -58,15 +57,15 @@ describe("manageEvent create", () => {
 		expect(result.eventType).toBe("periodic");
 		expect(await listEventFiles()).toEqual(["task.dm_1.weekly-report.schedule.json"]);
 		const onDisk = await readFile(join(eventsDir, "task.dm_1.weekly-report.schedule.json"), "utf-8");
-		expect(onDisk).not.toContain("timezone"); // cron is host-timezone; no timezone field is written
+		expect(onDisk).not.toContain("timezone");
 		const parsed = parseScheduledEventContent(onDisk, "x.json");
 		expect(parsed.type).toBe("periodic");
-		expect(parsed.channelId).toBe("dm_1");
+		expect(parsed.channelId).toBe("dm_1"); // bound by the tool, not supplied by the model
 
 		const oneShot = await manageEvent(opts(), {
 			action: "create",
 			name: "task.dm_1.weekly-report.checkin",
-			definition: JSON.stringify({ type: "one-shot", text: "回访", at: futureIso(30) }),
+			definition: { type: "one-shot", text: "回访", at: futureIso(30) },
 		});
 		expect(oneShot.eventType).toBe("one-shot");
 		expect(oneShot.channelId).toBe("dm_1");
@@ -76,39 +75,30 @@ describe("manageEvent create", () => {
 		await manageEvent(opts(), {
 			action: "create",
 			name: "foo",
-			definition: JSON.stringify({ type: "one-shot", text: "x", at: futureIso(30) }),
+			definition: { type: "one-shot", text: "x", at: futureIso(30) },
 		});
 		await expect(
 			manageEvent(opts(), {
 				action: "create",
 				name: "foo.json",
-				definition: JSON.stringify({ type: "one-shot", text: "y", at: futureIso(30) }),
+				definition: { type: "one-shot", text: "y", at: futureIso(30) },
 			}),
 		).rejects.toThrow(/already exists/);
 	});
 
-	it("rejects malformed definitions without writing a file", async () => {
-		await expect(manageEvent(opts(), { action: "create", name: "bad", definition: "{ not json" })).rejects.toThrow(
-			/not valid JSON/,
-		);
+	it("turns a missing discriminated field into a recoverable error without writing a file (batch 3.6)", async () => {
 		await expect(
-			manageEvent(opts(), { action: "create", name: "bad", definition: JSON.stringify({ type: "periodic" }) }),
-		).rejects.toThrow();
+			manageEvent(opts(), { action: "create", name: "bad", definition: { type: "one-shot", text: "x" } }),
+		).rejects.toThrow(/needs "at"/);
+		await expect(
+			manageEvent(opts(), { action: "create", name: "bad", definition: { type: "periodic", text: "x" } }),
+		).rejects.toThrow(/needs "schedule"/);
 		expect(await listEventFiles()).toEqual([]);
 	});
 
-	// These boundaries (immediate, 2-min one-shot lead, 24.8-day ceiling, 30-min periodic floor,
-	// invalid cron) are already exercised exhaustively against the shared `validateScheduledEvent`
-	// at the watcher layer in events.test.ts. Here we only need one representative case per
-	// boundary to prove the tool delegates to that validator and never writes a file on rejection.
-	it("delegates create-time rejection of every validator boundary to the shared validator", async () => {
-		const boundaries = [
-			["immediate events", { type: "immediate", text: "go" }, /immediate/],
-			[
-				"a one-shot scheduled sooner than 2 minutes out",
-				{ type: "one-shot", text: "x", at: futureIso(1) },
-				/2 minutes/,
-			],
+	it("delegates create-time rejection of each validator boundary to the shared validator", async () => {
+		const boundaries: Array<[string, EventDefinitionInput, RegExp]> = [
+			["a one-shot sooner than 2 minutes out", { type: "one-shot", text: "x", at: futureIso(1) }, /2 minutes/],
 			[
 				"a one-shot beyond the Node timer limit",
 				{ type: "one-shot", text: "x", at: futureIso(36_000) },
@@ -116,20 +106,15 @@ describe("manageEvent create", () => {
 			],
 			[
 				"a periodic cron firing more often than every 30 minutes",
-				{ type: "periodic", text: "x", schedule: "* * * * *", timezone: "Asia/Shanghai" },
+				{ type: "periodic", text: "x", schedule: "* * * * *" },
 				/30 minutes/,
 			],
-			[
-				"an invalid cron schedule",
-				{ type: "periodic", text: "x", schedule: "not a cron", timezone: "Asia/Shanghai" },
-				/cron/i,
-			],
-		] as const;
+			["an invalid cron schedule", { type: "periodic", text: "x", schedule: "not a cron" }, /cron/i],
+		];
 		for (const [label, definition, expectedError] of boundaries) {
-			await expect(
-				manageEvent(opts(), { action: "create", name: "rejected", definition: JSON.stringify(definition) }),
-				label,
-			).rejects.toThrow(expectedError);
+			await expect(manageEvent(opts(), { action: "create", name: "rejected", definition }), label).rejects.toThrow(
+				expectedError,
+			);
 			expect(await listEventFiles()).toEqual([]);
 		}
 	});
@@ -138,16 +123,30 @@ describe("manageEvent create", () => {
 		const result = await manageEvent(opts(), {
 			action: "create",
 			name: "task.dm_1.demo.sensor",
-			definition: JSON.stringify({
+			definition: {
 				type: "periodic",
 				text: "x",
 				schedule: "*/10 * * * *",
-				timezone: "Asia/Shanghai",
 				preAction: { type: "bash", command: "echo hi" },
-			}),
+			},
 		});
 		expect(result.eventType).toBe("periodic");
 		expect(await listEventFiles()).toEqual(["task.dm_1.demo.sensor.json"]);
+	});
+
+	it("maps the schema's timeoutMs onto the on-disk preAction.timeout (ms)", async () => {
+		await manageEvent(opts(), {
+			action: "create",
+			name: "task.dm_1.demo.gated",
+			definition: {
+				type: "one-shot",
+				text: "x",
+				at: futureIso(30),
+				preAction: { type: "bash", command: "echo hi", timeoutMs: 4000 },
+			},
+		});
+		const onDisk = JSON.parse(await readFile(join(eventsDir, "task.dm_1.demo.gated.json"), "utf-8"));
+		expect(onDisk.preAction).toMatchObject({ type: "bash", command: "echo hi", timeout: 4000 });
 	});
 
 	it("rejects a preAction-gated periodic below the 5-minute hard sub-floor", async () => {
@@ -155,13 +154,12 @@ describe("manageEvent create", () => {
 			manageEvent(opts(), {
 				action: "create",
 				name: "toofast-gated",
-				definition: JSON.stringify({
+				definition: {
 					type: "periodic",
 					text: "x",
 					schedule: "*/4 * * * *",
-					timezone: "Asia/Shanghai",
 					preAction: { type: "bash", command: "echo hi" },
-				}),
+				},
 			}),
 		).rejects.toThrow(/5 minutes/);
 	});
@@ -171,12 +169,12 @@ describe("manageEvent create", () => {
 			manageEvent(opts({ commandGuardConfig: guard({ additionalDenyPatterns: ["blockme"] }) }), {
 				action: "create",
 				name: "guarded",
-				definition: JSON.stringify({
+				definition: {
 					type: "one-shot",
 					text: "x",
 					at: futureIso(30),
 					preAction: { type: "bash", command: "echo blockme" },
-				}),
+				},
 			}),
 		).rejects.toThrow(/guard/i);
 		expect(await listEventFiles()).toEqual([]);
@@ -186,16 +184,6 @@ describe("manageEvent create", () => {
 		await expect(
 			manageEvent(opts(), { action: "create", name: "../../escape", definition: validPeriodic }),
 		).rejects.toThrow(/Invalid event name/);
-	});
-
-	it("rejects a definition whose channelId is a different channel", async () => {
-		await expect(
-			manageEvent(opts(), {
-				action: "create",
-				name: "cross",
-				definition: JSON.stringify({ type: "one-shot", channelId: "dm_other", text: "x", at: futureIso(30) }),
-			}),
-		).rejects.toThrow(/does not match/);
 	});
 
 	it("rejects create when >= 50 event files already exist", async () => {
@@ -210,22 +198,29 @@ describe("manageEvent create", () => {
 	});
 });
 
-describe("manageEvent update", () => {
-	async function seed(name: string, definition: string): Promise<void> {
+describe("manageEvent show / update", () => {
+	async function seed(name: string, definition: EventDefinitionInput): Promise<void> {
 		await manageEvent(opts(), { action: "create", name, definition });
 	}
+
+	it("show returns the full stored definition for a safe update (batch 3.6)", async () => {
+		await seed("upd", validPeriodic);
+		const shown = await manageEvent(opts(), { action: "show", name: "upd" });
+		expect(shown.action).toBe("show");
+		const parsed = JSON.parse(shown.notice);
+		expect(parsed).toMatchObject({ type: "periodic", channelId: "dm_1", schedule: "0 10 * * 1" });
+	});
+
+	it("show throws recoverably for a missing event", async () => {
+		await expect(manageEvent(opts(), { action: "show", name: "ghost" })).rejects.toThrow(/does not exist/);
+	});
 
 	it("replaces an existing event and re-validates", async () => {
 		await seed("upd", validPeriodic);
 		const result = await manageEvent(opts(), {
 			action: "update",
 			name: "upd",
-			definition: JSON.stringify({
-				type: "periodic",
-				text: "changed",
-				schedule: "0 9 * * 1",
-				timezone: "Asia/Shanghai",
-			}),
+			definition: { type: "periodic", text: "changed", schedule: "0 9 * * 1" },
 		});
 		expect(result.action).toBe("update");
 		const onDisk = parseScheduledEventContent(await readFile(join(eventsDir, "upd.json"), "utf-8"), "x.json");
@@ -246,10 +241,8 @@ describe("manageEvent update", () => {
 			manageEvent(opts(), {
 				action: "update",
 				name: "imm",
-				definition: JSON.stringify({ type: "one-shot", text: "x", at: futureIso(30) }),
+				definition: { type: "one-shot", text: "x", at: futureIso(30) },
 			}),
-			// A legacy immediate file no longer parses at all, so it is reported as unparseable
-			// rather than re-armed through the tool (spec 031, D4).
 		).rejects.toThrow(/could not be parsed/);
 	});
 
@@ -258,13 +251,7 @@ describe("manageEvent update", () => {
 		await mkdir(eventsDir, { recursive: true });
 		await writeFile(
 			join(eventsDir, "other.json"),
-			JSON.stringify({
-				type: "periodic",
-				channelId: "dm_other",
-				text: "x",
-				schedule: "0 10 * * 1",
-				timezone: "Asia/Shanghai",
-			}),
+			JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
 		);
 		await expect(manageEvent(opts(), { action: "update", name: "other", definition: validPeriodic })).rejects.toThrow(
 			/another channel/,
@@ -286,19 +273,12 @@ describe("manageEvent delete", () => {
 		await mkdir(eventsDir, { recursive: true });
 		await writeFile(
 			join(eventsDir, "foreign.json"),
-			JSON.stringify({
-				type: "periodic",
-				channelId: "dm_other",
-				text: "x",
-				schedule: "0 10 * * 1",
-				timezone: "Asia/Shanghai",
-			}),
+			JSON.stringify({ type: "periodic", channelId: "dm_other", text: "x", schedule: "0 10 * * 1" }),
 		);
 		await expect(manageEvent(opts(), { action: "delete", name: "foreign" })).rejects.toThrow(/another channel/);
 		expect(await listEventFiles()).toEqual(["foreign.json"]);
 	});
 
-	// Spec 047, P1/D1.
 	describe("action: list", () => {
 		it("returns an empty notice when the channel has no events", async () => {
 			const result = await manageEvent(opts(), { action: "list" });
@@ -311,7 +291,7 @@ describe("manageEvent delete", () => {
 			await manageEvent(opts(), {
 				action: "create",
 				name: "mine-oneshot",
-				definition: JSON.stringify({ type: "one-shot", channelId: "dm_1", text: "回访", at: futureIso(60) }),
+				definition: { type: "one-shot", text: "回访", at: futureIso(60) },
 			});
 			const { mkdir } = await import("node:fs/promises");
 			await mkdir(eventsDir, { recursive: true });

@@ -58,6 +58,12 @@ export interface ToolBuildContext {
 	/** Gates the bash tool's rtk command optimizer (`tools.rtk.enabled`). Threaded to both sets. */
 	rtkEnabled?: boolean;
 	/**
+	 * Set by `buildToolSet` from `BuildToolSetOptions.forSubagent`. A sub-agent's `securityContext`
+	 * has no `channelDir` and may be project-bounded, so tools that would otherwise write into the
+	 * channel directory (bash/job output spill) must fall back to a neutral location for it.
+	 */
+	forSubagent?: boolean;
+	/**
 	 * Present only on the main path. Enables bash `async` and the `job` tool.
 	 * The sub-agent set never supplies it, so sub-agents get neither.
 	 */
@@ -138,6 +144,9 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				...fileToolOptions(ctx),
 				rtkEnabled: ctx.rtkEnabled === true,
 				interceptorEnabled: ctx.toolsConfig?.tools.bashInterceptor.enabled === true,
+				// Sub-agents get no channel dir (their guard context has none); their spill stays in tmpdir.
+				...(ctx.forSubagent ? {} : { channelDir: ctx.channelDir }),
+				...(ctx.taskLoop ? { boundTaskId: ctx.taskLoop.taskId } : {}),
 				...(ctx.jobManager ? { jobManager: ctx.jobManager } : {}),
 				...(ctx.bashDefaultTimeoutSeconds !== undefined
 					? { defaultTimeoutSeconds: ctx.bashDefaultTimeoutSeconds }
@@ -375,7 +384,9 @@ export function buildToolSet(ctx: ToolBuildContext, options: BuildToolSetOptions
 		if (registration.enabledBy && !registration.enabledBy(ctx)) {
 			continue;
 		}
-		result.push(withToolDetails(registration.create(ctx), registration.name));
+		result.push(
+			withToolDetails(registration.create({ ...ctx, forSubagent: options.forSubagent }), registration.name),
+		);
 	}
 	return result;
 }

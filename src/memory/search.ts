@@ -292,12 +292,18 @@ function scoreText(queryTokens: Set<string>, text: string): { score: number; lin
 			score += 0.5;
 		}
 	}
-	const firstLine =
-		text
-			.split("\n")
-			.find((l) => l.trim().length > 0)
-			?.trim() ?? text.trim();
-	return { score, line: firstLine.length > 200 ? `${firstLine.slice(0, 197)}…` : firstLine };
+	// Prefer the line that actually contains a query token (the hit may be in the body, not the
+	// description); fall back to the first non-empty line only when nothing matches on a line.
+	const nonEmptyLines = text
+		.split("\n")
+		.map((l) => l.trim())
+		.filter((l) => l.length > 0);
+	const matchingLine = nonEmptyLines.find((l) => {
+		const low = l.toLowerCase();
+		return [...queryTokens].some((token) => token.length >= 2 && low.includes(token));
+	});
+	const chosen = matchingLine ?? nonEmptyLines[0] ?? text.trim();
+	return { score, line: chosen.length > 200 ? `${chosen.slice(0, 197)}…` : chosen };
 }
 
 export function searchMemory(input: MemorySearchInput): MemorySearchHit[] {

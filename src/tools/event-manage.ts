@@ -10,27 +10,64 @@ import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText, errorMessage } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
+
+const eventDefinitionSchema = Type.Object(
+	{
+		type: Type.Union([Type.Literal("one-shot"), Type.Literal("periodic"), Type.Literal("immediate")], {
+			description: '"one-shot" (needs `at`), "periodic" (needs cron `schedule`). "immediate" is always rejected.',
+		}),
+		text: Type.String({ description: "Message delivered to the channel when the event fires." }),
+		at: Type.Optional(
+			Type.String({ description: "one-shot local time, e.g. 2026-07-27T07:30:00+08:00 (2 min to ~24.8 days out)." }),
+		),
+		schedule: Type.Optional(Type.String({ description: "periodic 5-field cron, in the host timezone." })),
+		preAction: Type.Optional(
+			Type.Object(
+				{
+					type: Type.Literal("bash"),
+					command: Type.String({
+						description: "Command run just before delivery; exit 0 = fire, non-zero = skip.",
+					}),
+					timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout in milliseconds (not s)." })),
+				},
+				{ description: "Optional gate/sensor command." },
+			),
+		),
+	},
+	{ description: "The event to create/update. Channel is bound automatically — do not pass channelId." },
+);
 
 const eventManageSchema = Type.Object({
-	action: Type.Union([Type.Literal("list"), Type.Literal("create"), Type.Literal("update"), Type.Literal("delete")], {
-		description: '"list" this channel\'s events, or "create" / "update" / "delete" one by name.',
-	}),
+	action: Type.Union(
+		[
+			Type.Literal("list"),
+			Type.Literal("show"),
+			Type.Literal("create"),
+			Type.Literal("update"),
+			Type.Literal("delete"),
+		],
+		{
+			description:
+				'"list" this channel\'s events, "show" one event\'s full definition (for a safe update), or "create" / "update" / "delete" one by name.',
+		},
+	),
 	name: Type.Optional(
 		Type.String({
 			description:
-				"Event name (filename without .json); required for create/update/delete, ignored for list. Task-owned events: `task.<channelId>.<taskId>.<use>`.",
+				"Event name (filename without .json); required for show/create/update/delete, ignored for list. Task-owned events: `task.<channelId>.<taskId>.<use>`.",
 		}),
 	),
-	definition: Type.Optional(
-		Type.String({
-			description:
-				"Full event JSON (required for create/update). one-shot / periodic only; one-shots 2 minutes to about 24.8 days out. channelId defaults to the current channel.",
-		}),
-	),
+	definition: Type.Optional(eventDefinitionSchema),
 });
 
-export type EventManageAction = "list" | "create" | "update" | "delete";
+export type EventManageAction = "list" | "show" | "create" | "update" | "delete";
+export type EventDefinitionInput = {
+	type: "one-shot" | "periodic" | "immediate";
+	text: string;
+	at?: string;
+	schedule?: string;
+	preAction?: { type: "bash"; command: string; timeoutMs?: number };
+};
 
 export interface EventManageListEntry {
 	name: string;
@@ -54,7 +91,7 @@ export interface EventManageResult {
 export interface EventManageRequest {
 	action: EventManageAction;
 	name?: string;
-	definition?: string;
+	definition?: EventDefinitionInput;
 }
 
 export interface EventManageToolOptions {
@@ -64,10 +101,10 @@ export interface EventManageToolOptions {
 }
 
 function parseAction(action: string): EventManageAction {
-	if (action === "list" || action === "create" || action === "update" || action === "delete") {
+	if (action === "list" || action === "show" || action === "create" || action === "update" || action === "delete") {
 		return action;
 	}
-	throw new RecoverableToolError('Unsupported event action. Use "list", "create", "update", or "delete".');
+	throw new RecoverableToolError('Unsupported event action. Use "list", "show", "create", "update", or "delete".');
 }
 
 /** One line per event; unparseable files are listed and flagged so the model can still clean them up. */
@@ -104,35 +141,52 @@ async function listOwnedEvents(options: EventManageToolOptions): Promise<EventMa
  * the watcher (spec 031, D4); this layer only adds tool-specific framing (channel ownership,
  * and turning validation failures into recoverable tool errors the model can retry).
  */
-function validateDefinition(rawDefinition: string, name: string, options: EventManageToolOptions): ScheduledEvent {
-	let data: unknown;
-	try {
-		data = JSON.parse(rawDefinition);
-	} catch (error) {
-		const message = errorMessage(error);
-		throw new RecoverableToolError(`definition is not valid JSON: ${message}`);
-	}
-	if (!isRecord(data)) {
-		throw new RecoverableToolError("definition must be a JSON object.");
-	}
-
-	const providedChannelId = data.channelId;
-	if (providedChannelId === undefined || providedChannelId === null || providedChannelId === "") {
-		data.channelId = options.channelId;
-	} else if (providedChannelId !== options.channelId) {
-		throw new RecoverableToolError(
-			`definition channelId "${String(providedChannelId)}" does not match the current channel "${options.channelId}".`,
-		);
-	}
-
-	if (data.type === "immediate") {
+function validateDefinition(
+	definition: EventDefinitionInput,
+	name: string,
+	options: EventManageToolOptions,
+): ScheduledEvent {
+	if (definition.type === "immediate") {
 		throw new RecoverableToolError(
 			"event_manage cannot create or update immediate events (self-triggering loop guard); " +
 				"do the work in the current turn instead.",
 		);
 	}
+	if (definition.type === "one-shot" && !definition.at?.trim()) {
+		throw new RecoverableToolError('A one-shot event needs "at" (a local time 2 minutes to ~24.8 days out).');
+	}
+	if (definition.type === "periodic" && !definition.schedule?.trim()) {
+		throw new RecoverableToolError('A periodic event needs "schedule" (a 5-field cron expression).');
+	}
 
-	const event = parseScheduledEventContent(JSON.stringify(data), `${name}.json`);
+	// Assemble the on-disk shape. `channelId` is bound here, never taken from the model; the
+	// preAction timeout field is `timeout` (ms) on disk but `timeoutMs` in the schema so the unit
+	// is unambiguous (fix plan §3.6).
+	const onDisk: Record<string, unknown> = {
+		type: definition.type,
+		channelId: options.channelId,
+		text: definition.text,
+		...(definition.type === "one-shot" ? { at: definition.at } : { schedule: definition.schedule }),
+		...(definition.preAction
+			? {
+					preAction: {
+						type: "bash",
+						command: definition.preAction.command,
+						...(definition.preAction.timeoutMs !== undefined ? { timeout: definition.preAction.timeoutMs } : {}),
+					},
+				}
+			: {}),
+	};
+
+	// Both the parse and the schedule validation become recoverable: a missing/malformed field is
+	// something the model can fix itself, and `parseScheduledEventContent` used to throw a plain
+	// Error that bypassed the recoverable wrapper (fix plan §3.6).
+	let event: ScheduledEvent;
+	try {
+		event = parseScheduledEventContent(JSON.stringify(onDisk), `${name}.json`);
+	} catch (error) {
+		throw new RecoverableToolError(`Invalid event definition: ${errorMessage(error)}`);
+	}
 	try {
 		validateScheduledEvent(event, { commandGuardConfig: options.commandGuardConfig });
 	} catch (error) {
@@ -189,6 +243,21 @@ export async function manageEvent(
 	const { eventName, eventPath } = resolveEventPath(options.workspaceDir, request.name);
 	const eventsDir = join(options.workspaceDir, "events");
 
+	if (request.action === "show") {
+		if (!existsSync(eventPath)) {
+			throw new RecoverableToolError(`Event "${eventName}" does not exist. Use action "list" to see what's here.`);
+		}
+		const existing = await readOwnedEvent(eventPath, eventName, options);
+		return {
+			action: "show",
+			name: eventName,
+			path: eventPath,
+			eventType: existing.type,
+			channelId: existing.channelId,
+			notice: JSON.stringify(existing, null, 2),
+		};
+	}
+
 	if (request.action === "delete") {
 		if (!existsSync(eventPath)) {
 			return {
@@ -210,8 +279,8 @@ export async function manageEvent(
 		};
 	}
 
-	if (!request.definition || request.definition.trim().length === 0) {
-		throw new RecoverableToolError(`${request.action} requires a non-empty definition.`);
+	if (!request.definition || !request.definition.type || !request.definition.text?.trim()) {
+		throw new RecoverableToolError(`${request.action} requires a definition with at least "type" and "text".`);
 	}
 
 	if (request.action === "create") {
@@ -260,15 +329,16 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 		name: "event_manage",
 		label: "event_manage",
 		description:
-			"List, create, update, or delete scheduled events that wake this channel later (one-shot check-ins and periodic " +
-			"cadences). List to recover real event names before a reschedule or close-out. immediate events are rejected.",
+			"List, show, create, update, or delete scheduled events that wake this channel later (one-shot check-ins and " +
+			"periodic cadences). Use list to recover event names, and show to read an event's full definition before an " +
+			"update. immediate events are rejected.",
 		parameters: eventManageSchema,
 		execute: async (
 			_toolCallId: string,
 			args: {
 				action: string;
 				name?: string;
-				definition?: string;
+				definition?: EventDefinitionInput;
 			},
 		) => {
 			const result = await manageEvent(options, {
@@ -276,7 +346,8 @@ export function createEventManageTool(options: EventManageToolOptions): AgentToo
 				name: args.name,
 				definition: args.definition,
 			});
-			const text = result.action === "list" ? result.notice : JSON.stringify(result, null, 2);
+			const text =
+				result.action === "list" || result.action === "show" ? result.notice : JSON.stringify(result, null, 2);
 			return {
 				content: [{ type: "text", text }],
 				details: { ...result },

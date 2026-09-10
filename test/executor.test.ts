@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CommandTerminatedError, createExecutor } from "../src/executor.js";
+import { CommandTerminatedError, createExecutor, EXECUTOR_SHELL_IS_BASH } from "../src/executor.js";
 
 describe("executor", () => {
 	it("runs commands on the host and streams stdin", async () => {
@@ -99,5 +99,20 @@ describe("executor", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	// batch 2.6: the tool is called `bash` and models write bash-only syntax; `sh -c` (dash on many
+	// hosts) makes `[[ ]]`, arrays and `pipefail` fail on the first try. Mutation check: revert the
+	// spawn target to the literal "sh" and this fails wherever /bin/sh is not bash.
+	it("runs bash-only syntax when a bash binary is available", async () => {
+		if (!EXECUTOR_SHELL_IS_BASH) {
+			return; // host genuinely has no bash — the fallback path, tested by the warning at load
+		}
+		const executor = createExecutor();
+		await expect(executor.exec("[[ 1 == 1 ]] && echo yes")).resolves.toMatchObject({ stdout: "yes\n", code: 0 });
+		await expect(executor.exec("set -o pipefail; false | true; echo $?")).resolves.toMatchObject({
+			stdout: "1\n",
+			code: 0,
+		});
 	});
 });

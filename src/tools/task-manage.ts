@@ -122,7 +122,15 @@ export function createTaskStepEndTool(options: TaskManageToolOptions): AgentTool
 		parameters: taskStepEndSchema,
 		execute: async (_toolCallId, args: TaskStepEndRequest) => {
 			const result = await withLock(options, options.taskId ?? "", () => endTaskStep(options, args));
-			return { content: [{ type: "text", text: JSON.stringify(result) }], details: { ...result } };
+			// A successful step_end is the last move of the step — signal the SDK to end the batch
+			// without another model round-trip. Recoverable failures throw before reaching here, so
+			// the model stays in the loop to fix them. The SDK ends early only if *every* finalized
+			// result in the batch sets this, so a mixed batch is still safe.
+			return {
+				content: [{ type: "text", text: JSON.stringify(result) }],
+				details: { ...result },
+				terminate: true,
+			};
 		},
 	};
 }

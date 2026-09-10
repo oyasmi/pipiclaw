@@ -3,6 +3,7 @@ import { chmod, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
+import { getChannelDir } from "../channel/channel-paths.js";
 import type { ExecResult, Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
 import * as log from "../log.js";
@@ -213,6 +214,9 @@ export interface JobManagerOptions {
 	sweepIntervalMs?: number;
 	/** File-content port for reading a job's spill file (spec 044, D8). Defaults to `createFileStore()`. */
 	fileStore?: FileStore;
+	/** Directory the full-output spill (and its `.exit`/`.ready`/`.meta` siblings) is written to.
+	 * Defaults to the OS temp dir; the runtime passes `<channelDir>/logs` so the model can read it. */
+	spillDir?: string;
 }
 
 /** Cap on concurrently running jobs per channel, so a runaway model can't spawn unbounded processes. */
@@ -239,8 +243,8 @@ const WAKE_OUTPUT_TAIL_BYTES = 2_000;
 /** Upper bound on how much of a spill file's tail `readOutput` reads (spec 044, D8). */
 const JOB_OUTPUT_READ_MAX_BYTES = 512 * 1024;
 
-function jobSpillPath(id: string): string {
-	return join(tmpdir(), `pipiclaw-job-${id}.log`);
+function jobSpillPath(id: string, spillDir?: string): string {
+	return join(spillDir ?? tmpdir(), `pipiclaw-job-${id}.log`);
 }
 
 function isTerminal(status: JobStatus): boolean {
@@ -496,7 +500,10 @@ export class ChannelJobManager {
 			);
 		}
 		const id = randomBytes(6).toString("hex");
-		const spillFile = jobSpillPath(id);
+		if (this.options.spillDir) {
+			await mkdir(this.options.spillDir, { recursive: true }).catch(() => undefined);
+		}
+		const spillFile = jobSpillPath(id, this.options.spillDir);
 		const art = jobArtifacts(spillFile);
 		const launch = buildLaunchScript(command, art);
 
@@ -1061,7 +1068,14 @@ export class ChannelJobManager {
 	 */
 	async poll(ids: string[] | undefined, signal?: AbortSignal): Promise<JobSnapshot[]> {
 		const deadline = Date.now() + POLL_WAIT_MS;
-		const watchIds = () =>
+		// Freeze the observation set once, up front. `refresh(..., announce=false)` marks a job's
+		// completion wake as consumed (the result is being returned inline), so if we re-derived the
+		// watch list each iteration a job that finished mid-poll would drop out of "running", never
+		// make it into the returned snapshot, and never wake the channel either — the closure lost
+		// entirely. With `ids` omitted this is a snapshot of the jobs running *now*; a job started
+		// after poll begins is not folded into this call (poll is snapshot semantics — see the tool
+		// description).
+		const watchedIds =
 			ids && ids.length > 0
 				? ids.filter((id) => this.jobs.has(id))
 				: Array.from(this.jobs.values())
@@ -1069,7 +1083,7 @@ export class ChannelJobManager {
 						.map((job) => job.id);
 
 		while (true) {
-			for (const id of watchIds()) {
+			for (const id of watchedIds) {
 				const record = this.jobs.get(id);
 				if (record) {
 					// poll returns the finished job's output to the model inline, so it must not
@@ -1077,7 +1091,7 @@ export class ChannelJobManager {
 					await this.refresh(record, signal, false);
 				}
 			}
-			const watched = watchIds()
+			const watched = watchedIds
 				.map((id) => this.jobs.get(id))
 				.filter((record): record is JobRecord => record !== undefined);
 			const anyDone = watched.some((record) => record.status !== "running");
@@ -1163,6 +1177,12 @@ const managers = new Map<string, ChannelJobManager>();
 interface JobRuntimeConfig {
 	/** Root of the per-channel record directories (`<jobsStateDir>/<channelId>/`). */
 	jobsStateDir?: string;
+	/**
+	 * The agent workspace root. A job's full-output spill goes to `<workspaceDir>/<channelId>/logs/`
+	 * so the "Full output: …" pointer resolves under both path-guard boundaries (fix plan §2.2). The
+	 * path is stable across restarts, so a re-adopted job's spill is still found.
+	 */
+	workspaceDir?: string;
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 	/** Sweep cadence override for the lazily-built channel managers (tests). */
 	sweepIntervalMs?: number;
@@ -1194,6 +1214,9 @@ export function getChannelJobManager(channelId: string, executor: Executor): Cha
 	if (!manager) {
 		manager = new ChannelJobManager(channelId, executor, {
 			...(runtimeConfig.jobsStateDir ? { stateDir: join(runtimeConfig.jobsStateDir, channelId) } : {}),
+			...(runtimeConfig.workspaceDir
+				? { spillDir: join(getChannelDir(runtimeConfig.workspaceDir, channelId), "logs") }
+				: {}),
 			...(runtimeConfig.dispatch ? { dispatch: runtimeConfig.dispatch } : {}),
 			...(runtimeConfig.sweepIntervalMs ? { sweepIntervalMs: runtimeConfig.sweepIntervalMs } : {}),
 		});

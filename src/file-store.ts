@@ -104,8 +104,10 @@ export interface FileStore {
 	/** Streaming atomic replace: `produce` writes to a temp file; on success it is renamed over `path`. */
 	replaceViaTemp(path: string, produce: (out: Writable) => Promise<void>, opts?: ReplaceViaTempOptions): Promise<void>;
 
-	/** Depth-bounded directory listing, replacing the `find -maxdepth` shell-out. */
-	listDirectory(path: string, opts: { maxDepth: number }): Promise<DirectoryEntry[]>;
+	/** Depth-bounded directory listing, replacing the `find -maxdepth` shell-out. `maxEntries` caps
+	 * the total collected so a directory with tens of thousands of children cannot be materialized
+	 * whole before the caller truncates it. */
+	listDirectory(path: string, opts: { maxDepth: number; maxEntries?: number }): Promise<DirectoryEntry[]>;
 
 	/**
 	 * Unbounded-depth file discovery for `glob`, replacing the `find` shell-out. Directories are
@@ -254,11 +256,14 @@ class HostFileStore implements FileStore {
 		}
 	}
 
-	async listDirectory(path: string, opts: { maxDepth: number }): Promise<DirectoryEntry[]> {
+	async listDirectory(path: string, opts: { maxDepth: number; maxEntries?: number }): Promise<DirectoryEntry[]> {
 		const results: DirectoryEntry[] = [];
+		const cap = opts.maxEntries ?? Number.POSITIVE_INFINITY;
 		const walk = async (currentDir: string, relPrefix: string, depth: number): Promise<void> => {
+			if (results.length >= cap) return;
 			const entries = await readdir(currentDir, { withFileTypes: true });
 			for (const entry of entries) {
+				if (results.length >= cap) return;
 				const relativePath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
 				const isDirectory = entry.isDirectory();
 				results.push({ name: entry.name, relativePath, isDirectory });

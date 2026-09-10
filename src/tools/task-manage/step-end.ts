@@ -50,10 +50,20 @@ export async function endTaskStep(
 	// Steps are silent by default (D3); `notify` is the explicit opt-in the runtime delivers once
 	// the step ends. `blocked` always speaks — a task waiting on the user that says nothing is the
 	// same silent dead end tickets exist to prevent.
-	if (request.notify?.trim()) await queueTaskNotice(options.channelDir, id, request.notify);
-	else if (request.outcome === "blocked") {
-		await queueTaskNotice(options.channelDir, id, `任务 ${id} 需要你的决定：${request.reason ?? note}`);
-	}
+	//
+	// The notice is an *outbound side effect*: it must not land before every recoverable check
+	// (required fields, unmet acceptance items, verification hold, ticket resolution) has passed,
+	// or a rejected `outcome=done` still tells the channel "task complete" and a corrected retry
+	// queues a second notice. So compute it here and only flush it past a successful
+	// `writeStoredTask` + `logStep`, right before each return.
+	const pendingNotice = request.notify?.trim()
+		? request.notify.trim()
+		: request.outcome === "blocked"
+			? `任务 ${id} 需要你的决定：${request.reason ?? note}`
+			: undefined;
+	const flushNotice = async () => {
+		if (pendingNotice) await queueTaskNotice(options.channelDir, id, pendingNotice);
+	};
 
 	if (request.outcome === "done") {
 		const summary = requiredField(request.summary, "summary", "task_step_end outcome=done");
@@ -106,6 +116,7 @@ export async function endTaskStep(
 			document.fields.ticket = ticket;
 			await writeStoredTask(document);
 			await logStep("done");
+			await flushNotice();
 			return {
 				action: "step_end",
 				id,
@@ -115,6 +126,7 @@ export async function endTaskStep(
 		}
 		await writeStoredTask(document);
 		await logStep("done");
+		await flushNotice();
 		const { deleted } = await cleanupTaskEvents(options, id);
 		await archiveTask(options.channelDir, id, "completed");
 		return {
@@ -152,5 +164,6 @@ export async function endTaskStep(
 
 	await writeStoredTask(document);
 	await logStep(request.outcome);
+	await flushNotice();
 	return { action: "step_end", id, state: document.fields.state, notice };
 }

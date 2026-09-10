@@ -5,6 +5,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
+import { readGuardAllows } from "../security/path-guard-filter.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import { isNodeError } from "../shared/fs-utils.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
@@ -53,8 +54,20 @@ function extractDescription(content: string): string {
 	return "";
 }
 
-export async function listWorkspaceSkills(options: { workspaceDir: string }): Promise<WorkspaceSkillSummary[]> {
+export async function listWorkspaceSkills(options: {
+	workspaceDir: string;
+	securityConfig?: SecurityConfig;
+	securityContext?: SecurityRuntimeContext;
+}): Promise<WorkspaceSkillSummary[]> {
 	const skillsDir = join(options.workspaceDir, "skills");
+	// `skill read` runs each SKILL.md through the path guard (`loadWorkspaceSkillFile`); `list`
+	// must apply the same guard so a skill whose SKILL.md is a symlink out of `workspace/skills/`
+	// is silently omitted here too, rather than being advertised and then refused on read.
+	const guardConfig = options.securityConfig ?? DEFAULT_SECURITY_CONFIG;
+	const guardContext = options.securityContext ?? {
+		agentWorkspaceDir: options.workspaceDir,
+		projectRoot: options.workspaceDir,
+	};
 	let names: string[];
 	try {
 		names = await readdir(skillsDir);
@@ -77,6 +90,9 @@ export async function listWorkspaceSkills(options: { workspaceDir: string }): Pr
 			continue;
 		}
 		const skillPath = join(skillDir, "SKILL.md");
+		if (!readGuardAllows(skillPath, guardConfig, guardContext)) {
+			continue;
+		}
 		let content: string;
 		try {
 			const skillFileStats = await stat(skillPath);

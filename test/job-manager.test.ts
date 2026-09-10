@@ -542,6 +542,34 @@ describe("ChannelJobManager persistence and completion wakes (spec 031, D6)", ()
 		expect(events).toHaveLength(0);
 	});
 
+	it("poll returns the terminal snapshot of a job that finishes mid-poll, and marks its wake consumed (batch 1.5)", async () => {
+		// Regression: poll re-derived its watch list every loop iteration, so once `refresh(...,
+		// announce=false)` flipped a job out of "running" it dropped from the set — the result was
+		// never returned AND the completion wake was already marked consumed, losing the closure
+		// entirely. Mutation check: revert `watchedIds` back to the `watchIds()` closure and the
+		// snapshot below comes back empty.
+		for (const ids of [undefined, "explicit"] as const) {
+			const { events, dispatch } = collectingDispatch();
+			const executor = new FakeJobExecutor();
+			executor.output = "poll result body";
+			const manager = new ChannelJobManager("dm_1", executor, { stateDir: tempDir(), dispatch });
+			const job = await manager.start("make", "build", 300);
+			executor.probeResult = "EXIT:0"; // finishes on the first refresh inside poll
+
+			const snapshot = await manager.poll(ids === "explicit" ? [job.id] : undefined);
+
+			expect(snapshot.map((s) => s.id)).toEqual([job.id]);
+			expect(snapshot[0]?.status).toBe("completed");
+			expect(snapshot[0]?.exitCode).toBe(0);
+			expect((await manager.readOutput(job.id))?.text).toContain("poll result body");
+			// The result was returned inline, so the completion wake is marked spent: a later
+			// reconcile must not dispatch it.
+			expect(events).toHaveLength(0);
+			await manager.list();
+			expect(events).toHaveLength(0);
+		}
+	});
+
 	it("discards an unreadable record instead of failing the whole restore", async () => {
 		const stateDir = tempDir();
 		writeFileSync(join(stateDir, "broken.json"), "{not json");

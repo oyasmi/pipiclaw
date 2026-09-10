@@ -7,7 +7,9 @@ import { writeFileAtomically } from "../shared/atomic-file.js";
 /**
  * Small per-channel cache of fetched web page bodies so a long page can be paged over with `offset`
  * without re-issuing the (slow, non-deterministic) HTTP request. Bodies are the clean extracted text
- * — the banner and windowing are re-applied by the tool on each read.
+ * — the banner and windowing are re-applied by the tool on each read. The entry also carries the
+ * fetch-time facts the model needs to judge the content (final URL after redirects, HTTP status,
+ * whether the *source* was itself truncated) — the old cache dropped all of that (fix plan §2.7).
  */
 
 const WEB_CACHE_DIR = "web-cache";
@@ -17,6 +19,12 @@ const WEB_CACHE_MAX_FILES = 20;
 export interface WebCacheEntry {
 	body: string;
 	fetchedAt: number;
+	finalUrl: string;
+	status: number;
+	extractor: string;
+	contentType: string;
+	/** True when the origin returned more than the fetch cap and the body is not the whole page. */
+	sourceTruncated: boolean;
 }
 
 function cacheDir(channelDir: string): string {
@@ -29,10 +37,10 @@ export function webCacheKey(url: string, extractMode: string): string {
 }
 
 function bodyPath(channelDir: string, key: string): string {
-	return join(cacheDir(channelDir), `${key}.txt`);
+	return join(cacheDir(channelDir), `${key}.json`);
 }
 
-/** Return the cached body if present and within the TTL, else null. */
+/** Return the cached entry if present and within the TTL, else null. */
 export async function readWebCache(
 	channelDir: string,
 	key: string,
@@ -45,28 +53,45 @@ export async function readWebCache(
 		if (Date.now() - stats.mtimeMs >= ttlMs) {
 			return null;
 		}
-		return { body: await readFile(path, "utf-8"), fetchedAt: stats.mtimeMs };
+		const raw = JSON.parse(await readFile(path, "utf-8")) as Partial<WebCacheEntry>;
+		if (typeof raw.body !== "string") {
+			return null;
+		}
+		return {
+			body: raw.body,
+			fetchedAt: raw.fetchedAt ?? stats.mtimeMs,
+			finalUrl: raw.finalUrl ?? "",
+			status: raw.status ?? 0,
+			extractor: raw.extractor ?? "",
+			contentType: raw.contentType ?? "",
+			sourceTruncated: raw.sourceTruncated === true,
+		};
 	} catch {
 		return null;
 	}
 }
 
-/** Persist a body and evict the oldest entries beyond the cap. Best-effort; never throws. */
-export async function writeWebCache(channelDir: string, key: string, body: string): Promise<void> {
+/** Persist an entry and evict the oldest beyond the cap. Best-effort; never throws. */
+export async function writeWebCache(channelDir: string, key: string, entry: WebCacheEntry): Promise<void> {
 	try {
 		const dir = cacheDir(channelDir);
 		if (!existsSync(dir)) {
 			await mkdir(dir, { recursive: true });
 		}
-		await writeFileAtomically(bodyPath(channelDir, key), body);
+		await writeFileAtomically(bodyPath(channelDir, key), JSON.stringify(entry));
 		await pruneWebCache(dir);
 	} catch {
 		// Caching is an optimization; a failure just means the next read refetches.
 	}
 }
 
+/** Remove one cached entry (used by `refresh: true` before a forced refetch). */
+export async function clearWebCacheEntry(channelDir: string, key: string): Promise<void> {
+	await rm(bodyPath(channelDir, key), { force: true }).catch(() => undefined);
+}
+
 async function pruneWebCache(dir: string): Promise<void> {
-	const files = (await readdir(dir)).filter((name) => name.endsWith(".txt"));
+	const files = (await readdir(dir)).filter((name) => name.endsWith(".json"));
 	if (files.length <= WEB_CACHE_MAX_FILES) {
 		return;
 	}
