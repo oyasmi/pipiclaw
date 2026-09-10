@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
 	codeGrader,
 	deliveryMatches,
+	driverDispatchCount,
 	fileContains,
 	fileNotContains,
 	taskFrontmatter,
@@ -91,6 +92,7 @@ export const capabilityCases: EvalCase[] = [
 			},
 		],
 		graders: [
+			driverDispatchCount("crash-initial-dispatch", 1),
 			fileContains("checkpoint-survived", "crash-checkpoint.txt", /DURABLE-CHECKPOINT/),
 			deliveryMatches("cold-recovery", /RECOVERY-CONFIRMED/),
 		],
@@ -214,13 +216,8 @@ export const capabilityCases: EvalCase[] = [
 		},
 		script: Array.from({ length: 16 }, (_, index) => ({ kind: "runTaskDriver", at: driverTick(index) }) as const),
 		graders: [
-			// `runWorkerSegment` already appends a `production-driver-dispatch` grade whenever the
-			// script contains a `runTaskDriver` step (evals/harness/run.ts), so "driven by the real
-			// driver, at least once" needs no grader of its own here. This one is deliberately
-			// always-pass: how many of the 16 scheduled ticks the driver actually accepted before the
-			// task finished, stalled, or was paused is exactly the "how many wakes did this take"
-			// datum the 0.1 review item asks the eval to surface — it should show up in every report,
-			// not gate the trial on a specific count that a fast, correct completion would undercut.
+			// At least one real dispatch is part of this case's explicit contract. More than
+			// one is allowed: the exact number diagnoses recovery efficiency, not correctness.
 			codeGrader("accepted-dispatch-count", (ctx) => {
 				const accepted = ctx.trace.filter((event) => event.fields?.driverDispatch === "true" && event.ok).length;
 				return {
@@ -228,7 +225,7 @@ export const capabilityCases: EvalCase[] = [
 					graderId: "accepted-dispatch-count",
 					graderVersion: "1",
 					graderKind: "code",
-					status: "pass",
+					status: accepted > 0 ? "pass" : "fail",
 					severity: "quality",
 					evidence: [{ kind: "trace", ref: "trace.jsonl" }],
 					rationale: `${accepted}/16 scheduled TaskDriver ticks were accepted and dispatched before the trial ended`,

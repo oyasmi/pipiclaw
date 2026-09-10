@@ -1,20 +1,27 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
-	copyFileSync,
+	appendFileSync,
+	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
-	readdirSync,
 	readFileSync,
 	rmSync,
-	statSync,
 	writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { canRunE2E, getE2ESkipReason } from "../../test/support/setup.js";
+import { basename, join } from "node:path";
+import { canRunE2E, createE2ETestHome, getE2ESkipReason } from "../../test/support/setup.js";
+import { allCases } from "../cases/index.js";
+import { atomicJson, captureArtifacts, sealArtifactIndex } from "./artifacts.js";
 import { caseHash, rubricHash, selectedCases } from "./cases.js";
+import { canonicalConfigHash, canonicalJson, caseDependencyHashes } from "./fingerprint.js";
+import { runJudgeProcess } from "./judge-process.js";
+import { EvalPool } from "./pool.js";
+import { freezeLocalProfile } from "./profile.js";
+import { readResourceLedger, summarizeResources } from "./resources.js";
+import { completedTrial, preserveInterruptedAttempt } from "./resume.js";
 import type {
 	CaseDescriptor,
 	CaseSummary,
@@ -23,28 +30,22 @@ import type {
 	GradeResult,
 	HumanReviewRecord,
 	ModelGrader,
-	Outcome,
 	OutcomeSnapshot,
 	RunManifest,
+	RunPlan,
+	ScoringPlan,
 	TraceEvent,
 	TrialContext,
 	TrialRecord,
+	TrialResult,
 	WorkerMessage,
 } from "./schema.js";
-import {
-	containsCredential,
-	FALLBACK_TOKEN_RATES_USD_PER_MTOK,
-	hash,
-	hashFile,
-	median,
-	parseRatio,
-	tree,
-} from "./util.js";
+import { assessTrial, evaluateSummary, gradeTrial, resultOutcome, summarize, terminalModelFailure } from "./scoring.js";
+import { containsCredential, FALLBACK_TOKEN_RATES_USD_PER_MTOK, hash, hashFile, tree } from "./util.js";
 
 const ZERO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-const INVALID_THRESHOLD = 0.1;
-const BUDGET_STOP_THRESHOLD = 0.25;
 const KILL_GRACE_MS = 2_000;
+const DEFAULT_TRIAL_BUDGET: EffectiveBudget = { maxCostUsd: 0.5, maxWallMs: 180_000, maxTurns: 12, maxSteps: 24 };
 
 function readJson<T>(path: string, fallback: T): T {
 	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as T) : fallback;
@@ -69,7 +70,13 @@ function git(args: string[]): string {
 }
 
 export function gitDirtyFingerprint(root = process.cwd()): string {
-	const diff = spawnSync("git", ["diff", "--binary"], { cwd: root, encoding: "utf8" });
+	let diff = spawnSync("git", ["diff", "HEAD", "--binary"], { cwd: root, encoding: "utf8" });
+	if (diff.status !== 0) {
+		const staged = spawnSync("git", ["diff", "--cached", "--binary"], { cwd: root, encoding: "utf8" });
+		const working = spawnSync("git", ["diff", "--binary"], { cwd: root, encoding: "utf8" });
+		if (staged.status !== 0 || working.status !== 0) return "unknown";
+		diff = { ...working, stdout: staged.stdout + working.stdout };
+	}
 	const untracked = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], {
 		cwd: root,
 		encoding: "utf8",
@@ -86,7 +93,8 @@ export function gitDirtyFingerprint(root = process.cwd()): string {
 
 export function describeCase(item: EvalCase): CaseDescriptor {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
+		dependencyHashes: caseDependencyHashes(item),
 		id: item.id,
 		suite: item.suite,
 		source: item.source,
@@ -96,63 +104,10 @@ export function describeCase(item: EvalCase): CaseDescriptor {
 		graders: [...item.graders, ...(item.invariants ?? [])].map((grader) => ({
 			graderId: grader.graderId,
 			graderVersion: grader.graderVersion,
+			parameters: grader.parameters,
 			rubricHash: grader.kind === "model" ? rubricHash(grader) : undefined,
 		})),
 	};
-}
-
-/**
- * Trials that say nothing about the agent: harness faults (`invalid`) and trial-budget stops
- * (`budget-exceeded`, i.e. provider latency or an over-tight cap). Both are reported and both
- * feed the inconclusive threshold, but neither belongs in a pass-rate denominator.
- */
-function isScorable(record: TrialRecord): boolean {
-	return record.outcome !== "invalid" && record.outcome !== "budget-exceeded";
-}
-
-export function summarize(records: TrialRecord[], cases: EvalCase[], gates: Record<string, GateRule>): CaseSummary[] {
-	return cases.map((item) => {
-		const entries = records.filter((record) => record.caseId === item.id);
-		const valid = entries.filter(isScorable);
-		return {
-			caseId: item.id,
-			suite: item.suite,
-			gate: gates[item.id]?.gate ?? "report-only",
-			passed: valid.filter((record) => record.outcome === "pass").length,
-			valid: valid.length,
-			invalid: entries.filter((record) => record.outcome === "invalid").length,
-			budgetExceeded: entries.filter((record) => record.outcome === "budget-exceeded").length,
-			medianCostUsd: median(valid.map((record) => record.metrics.costUsd)),
-			medianWallMs: median(valid.map((record) => record.metrics.wallMs)),
-			medianToolCalls: median(valid.map((record) => record.metrics.toolCalls)),
-		};
-	});
-}
-
-export function evaluateExit(records: TrialRecord[], gates: Record<string, GateRule>): 0 | 1 | 2 {
-	if (!records.length) return 0;
-	const share = (outcome: Outcome): number =>
-		records.filter((record) => record.outcome === outcome).length / records.length;
-	// Harness faults invalidate a run quickly; budget stops get a looser bar because a stalled
-	// turn or two is ordinary provider weather, while a quarter of the run timing out means the
-	// run measured latency rather than behavior. A required case with no scorable trial at all
-	// still exits 1 below, so a case that only ever times out can never pass silently.
-	if (share("invalid") > INVALID_THRESHOLD || share("budget-exceeded") > BUDGET_STOP_THRESHOLD) return 2;
-	for (const [caseId, rule] of Object.entries(gates)) {
-		if (rule.gate !== "required" || !records.some((record) => record.caseId === caseId)) continue;
-		const valid = records.filter((record) => record.caseId === caseId && isScorable(record));
-		// A required case with zero valid trials was never actually confirmed; do not let an
-		// all-invalid case slip through the gate just because ceil(ratio * 0) is 0.
-		if (valid.length === 0) return 1;
-		if (!rule.minPass) {
-			if (valid.some((record) => record.outcome !== "pass")) return 1;
-			continue;
-		}
-		const ratio = parseRatio(rule.minPass);
-		const requiredPasses = Math.ceil((ratio.passed / ratio.total) * valid.length);
-		if (valid.filter((record) => record.outcome === "pass").length < requiredPasses) return 1;
-	}
-	return 0;
 }
 
 function isModelDecision(grade: GradeResult): boolean {
@@ -197,8 +152,9 @@ export function renderReport(
 	);
 	const rows = summaries.map(
 		(summary) =>
-			`| ${summary.caseId} | ${summary.suite} | ${summary.passed}/${summary.valid} | ${summary.invalid} | ${summary.budgetExceeded} | ${summary.gate} | $${summary.medianCostUsd.toFixed(4)} | ${(summary.medianWallMs / 1_000).toFixed(1)}s | ${summary.medianToolCalls} |`,
+			`| ${summary.caseId} | ${summary.suite} | ${summary.passed}/${summary.valid} | ${summary.invalid} | ${summary.budgetExceeded} | ${summary.gate} | ${summary.unknownCostSamples ? "N/A (unknown cost)" : `$${summary.medianCostUsd.toFixed(4)}`} | ${(summary.medianWallMs / 1_000).toFixed(1)}s | ${summary.medianToolCalls} |`,
 	);
+	const unknownCostTrials = records.filter((record) => record.resources?.agentCostUsd === null).length;
 	const totalCost = records.reduce((sum, record) => sum + record.metrics.costUsd, 0);
 	const tokens = records.reduce((sum, record) => sum + record.metrics.tokens.total, 0);
 	const scored = summaries.filter((summary) => summary.valid > 0);
@@ -231,10 +187,30 @@ export function renderReport(
 Started: ${manifest.startedAt}  
 Configured model: ${manifest.configuredModel}  
 Observed model(s): ${observedModels.join(", ") || "unknown"}  
-Trials: ${records.length}; cost: $${totalCost.toFixed(4)} (${costNote}); tokens: ${tokens}
+Judge: ${manifest.judgeModel ?? "unknown"}
+Trials: ${records.length}; ${unknownCostTrials ? `known cost subtotal: $${totalCost.toFixed(4)}; ${unknownCostTrials} trial(s) have unknown total cost` : `cost: $${totalCost.toFixed(4)} (${costNote})`}; tokens: ${tokens}
 Discrimination: ${perfect}/${scored.length} cases passed every valid trial (${(allPassRatio * 100).toFixed(0)}%).${discrimination}
 
 Human review queue: ${reviewCount} grader decisions; ${reviews.length} verdicts recorded. Model-grader calibration: ${calibration.agreement === undefined ? "pending" : `${calibration.agreed}/${calibration.reviewed} (${(calibration.agreement * 100).toFixed(0)}%)`} (archived grades remain immutable).
+
+## Resources
+
+${
+	records
+		.filter((record) => record.resources)
+		.map(
+			(record) =>
+				`- ${record.caseId}#${record.trial}: ${Object.entries(record.resources!.byKind)
+					.map(
+						([kind, usage]) =>
+							`${kind} ${usage.tokens.total} tokens, $${usage.knownCostUsd.toFixed(4)} known, ${usage.unknownCostEntries} unknown cost entries`,
+					)
+					.join(
+						"; ",
+					)}; normalized units ${record.resources!.standardizedCostUnits.toFixed(4)} (not USD); agent ${record.metrics.agentWallMs ?? record.metrics.wallMs}ms, grading ${record.metrics.gradeWallMs ?? "unknown"}ms, queue ${record.metrics.queueWallMs ?? "unknown"}ms; judge known cost $${record.grades.reduce((sum, grade) => sum + Object.values(grade.resources?.byKind ?? {}).reduce((value, entry) => value + entry.knownCostUsd, 0), 0).toFixed(4)} (separate from agent; ${record.grades.filter((grade) => grade.graderKind === "model" && (!grade.resources || grade.resources.agentCostUsd === null)).length} judge totals unknown)`,
+		)
+		.join("\n") || "Historical resource breakdown unavailable."
+}
 
 ## Suites
 
@@ -260,7 +236,10 @@ ${failures.length ? failures.join("\n") : "None."}
 | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |
 ${rows.join("\n")}
 
-Invalid and budget-stopped trials are excluded from pass-rate denominators. More than ${INVALID_THRESHOLD * 100}% invalid, or more than ${BUDGET_STOP_THRESHOLD * 100}% budget-stopped, makes the run inconclusive (exit 2); a required gate miss exits 1, as does a required case with no scorable trial at all.
+${summaries.every((item) => item.planned !== undefined) ? "Agent resource limits count as behavioral failures. Cost and latency medians include all started trials. Required cases need the frozen minimum sample count; incomplete plans or unknown invariant evidence are inconclusive (exit 2). Known hard violations, including quarantine, and required gate misses exit 1." : "Historical scoring: archived denominators and medians are preserved. These summaries cannot establish a baseline under the current scoring policy; run the current evaluator for comparable measurements."}
+
+${summaries.map((item) => `- ${item.caseId}: finished ${item.started ?? "unknown"}/${item.planned ?? "unknown"}; acceptance unknown ${item.unknown ?? "unknown"}; invariant violations ${item.invariantViolations ?? "unknown"}, unknown ${item.invariantUnknown ?? "unknown"}; success bounds ${item.started ? `${item.passed}/${item.started}–${item.passed + (item.unknown ?? 0)}/${item.started}` : "N/A"}`).join("\n")}
+
 `;
 }
 
@@ -364,6 +343,7 @@ interface WorkerResult {
 	observedModel?: string;
 	promptFingerprint?: string;
 	error?: string;
+	budgetReason?: string;
 }
 
 export interface EffectiveBudget {
@@ -396,11 +376,13 @@ export async function runWorkerSegment(options: {
 	trace: TraceEvent[];
 	deliveries: OutcomeSnapshot["deliveries"];
 	deadlineMs: number;
-	usage: { costUsd: number; turns: number };
+	usage: { costUsd: number; turns: number; observerCostUsd?: number };
 	budget?: EffectiveBudget;
 	/** Test seam for exercising the real parent termination/protocol logic without an LLM. */
 	workerPath?: string;
 	workerArgs?: string[];
+	preparedHome?: boolean;
+	eventLogPath?: string;
 }): Promise<WorkerResult> {
 	const workerPath = options.workerPath ?? join(process.cwd(), "dist-evals/evals/harness/worker.js");
 	const args = options.workerArgs ?? [
@@ -419,6 +401,7 @@ export async function runWorkerSegment(options: {
 				...process.env,
 				PIPICLAW_HOME: options.homeDir,
 				PIPICLAW_EVAL_WORKER: "1",
+				EVAL_PREPARED_HOME: options.preparedHome ? "1" : "0",
 				EVAL_TRACE_SEQ_START: String(options.trace.length),
 			},
 			stdio: ["ignore", "pipe", "pipe"],
@@ -454,12 +437,21 @@ export async function runWorkerSegment(options: {
 		};
 		const hardTimer = setTimeout(terminateForBudget, Math.max(1, options.deadlineMs - Date.now()));
 		const handle = (message: WorkerMessage): void => {
+			if (options.eventLogPath) appendFileSync(options.eventLogPath, `${JSON.stringify(message)}\n`);
 			if (message.type === "trace") {
 				options.trace.push({ ...message.event, seq: options.trace.length + 1 });
 				if (message.event.kind === "turn-start") {
 					options.usage.turns++;
 				}
-				if (message.event.kind === "usage") options.usage.costUsd += Number(message.event.fields?.costUsd ?? 0);
+				if (message.event.kind === "usage" && message.event.fields?.costBasis === "provider") {
+					options.usage.observerCostUsd =
+						(options.usage.observerCostUsd ?? 0) + Number(message.event.fields.costUsd ?? 0);
+				}
+				const ledgerCost = readResourceLedger(options.homeDir).entries.reduce(
+					(sum, entry) => sum + (entry.costKnown === false ? 0 : entry.cost.total),
+					0,
+				);
+				options.usage.costUsd = Math.max(options.usage.observerCostUsd ?? 0, ledgerCost);
 				if (options.budget) {
 					const reason = exceededBudgetReason(
 						options.budget,
@@ -518,6 +510,7 @@ export async function runWorkerSegment(options: {
 			if (budgetKill)
 				finish({
 					kind: "budget",
+					budgetReason,
 					error: `${budgetReason} trial budget exceeded; narrow the case or raise its explicit budget`,
 				});
 			else if (expectedKill && signal === "SIGKILL") finish({ kind: "crashed" });
@@ -534,61 +527,36 @@ export async function runWorkerSegment(options: {
 	});
 }
 
-/** Text artifacts small enough to archive whole; anything else stays a hash in the file tree. */
-const EVIDENCE_MAX_BYTES = 64_000;
-const EVIDENCE_EXTENSIONS = new Set([".md", ".txt", ".json"]);
-
-/**
- * Copy a trial's readable channel artifacts into the run archive before its home is deleted.
- *
- * The human-review queue asks a person to re-judge a specific trial, but the trial's `MEMORY.md`
- * and task files used to be removed with the temporary home the moment grading finished, leaving
- * only content hashes in `outcome.json`. A reviewer cannot re-judge a hash.
- */
-export function archiveEvidence(sourceDir: string, targetDir: string): number {
-	if (!existsSync(sourceDir)) return 0;
-	let copied = 0;
-	const visit = (dir: string, relative: string): void => {
-		for (const entry of readdirSync(dir, { withFileTypes: true })) {
-			const source = join(dir, entry.name);
-			const rel = relative ? join(relative, entry.name) : entry.name;
-			if (entry.isSymbolicLink()) continue;
-			if (entry.isDirectory()) {
-				visit(source, rel);
-				continue;
-			}
-			if (!entry.isFile()) continue;
-			const dot = entry.name.lastIndexOf(".");
-			if (dot < 0 || !EVIDENCE_EXTENSIONS.has(entry.name.slice(dot))) continue;
-			if (statSync(source).size > EVIDENCE_MAX_BYTES) continue;
-			const destination = join(targetDir, rel);
-			mkdirSync(join(destination, ".."), { recursive: true });
-			copyFileSync(source, destination);
-			copied++;
-		}
-	};
-	visit(sourceDir, "");
-	return copied;
-}
-
-async function gradeModel(grader: ModelGrader, context: TrialContext, homeDir: string): Promise<GradeResult> {
-	const inputPath = join(homeDir, `judge-${grader.graderId}.json`);
-	const outputPath = join(homeDir, `judge-${grader.graderId}-result.json`);
+export async function gradeModel(
+	grader: ModelGrader,
+	context: TrialContext,
+	homeDir: string,
+	assessmentDir: string,
+): Promise<GradeResult> {
+	mkdirSync(assessmentDir, { recursive: true });
+	const inputPath = join(assessmentDir, "input.json");
+	const outputPath = join(assessmentDir, "output.json");
 	writeJson(inputPath, {
 		graderId: grader.graderId,
 		graderVersion: grader.graderVersion,
 		rubric: grader.rubric,
 		artifacts: grader.artifacts(context),
 	});
-	const judge = spawnSync(
-		process.execPath,
-		[join(process.cwd(), "dist-evals/evals/harness/judge.js"), inputPath, outputPath],
-		{
-			env: { ...process.env, PIPICLAW_HOME: homeDir },
-			encoding: "utf8",
-			timeout: 90_000,
-		},
+	const ledgerBefore = readResourceLedger(homeDir).entries.length;
+	const judge = await runJudgeProcess({
+		workerPath: join(process.cwd(), "dist-evals/evals/harness/judge.js"),
+		args: [inputPath, outputPath],
+		homeDir,
+	});
+	writeFileSync(join(assessmentDir, "stderr.txt"), judge.stderr);
+	const ledgerAfter = readResourceLedger(homeDir);
+	const judgeEntries = ledgerAfter.entries.slice(ledgerBefore);
+	const judgeResources = summarizeResources(
+		judgeEntries,
+		ledgerAfter.complete && judge.status === 0 && judgeEntries.length > 0,
 	);
+	atomicJson(join(assessmentDir, "usage.json"), { entries: judgeEntries, resources: judgeResources });
+
 	if (judge.status !== 0 || !existsSync(outputPath)) {
 		return {
 			schemaVersion: 1,
@@ -599,21 +567,35 @@ async function gradeModel(grader: ModelGrader, context: TrialContext, homeDir: s
 			severity: grader.severity ?? "quality",
 			evidence: [],
 			rationale: judge.stderr || "judge worker produced no result; check judge credentials and rubric",
+			resources: judgeResources,
 		};
 	}
-	const value = readJson<{ pass: boolean; score?: number; rationale: string }>(outputPath, {
-		pass: false,
-		rationale: "invalid judge result",
+	const value = readJson<{
+		pass?: boolean;
+		score?: number;
+		rationale: string;
+		model?: GradeResult["modelIdentity"];
+		resources?: GradeResult["resources"];
+	}>(outputPath, {
+		pass: undefined,
+		rationale: "invalid judge result; inspect the saved output and retry grading",
 	});
 	return {
 		schemaVersion: 1,
 		graderId: grader.graderId,
 		graderVersion: grader.graderVersion,
 		graderKind: "model",
-		status: value.pass ? "pass" : "fail",
+		status:
+			typeof value.pass !== "boolean" || typeof value.rationale !== "string" || !value.rationale.trim()
+				? "error"
+				: value.pass
+					? "pass"
+					: "fail",
 		severity: grader.severity ?? "quality",
 		score: value.score,
-		evidence: [{ kind: "delivery", ref: "judge-artifacts" }],
+		modelIdentity: value.model,
+		resources: judgeResources,
+		evidence: [{ kind: "delivery", ref: `assessments/${basename(assessmentDir)}/input.json` }],
 		rationale: value.rationale,
 	};
 }
@@ -624,207 +606,271 @@ async function runTrial(
 	trial: number,
 	runId: string,
 	trialDir: string,
+	templateHome: string,
+	agentPool: EvalPool,
+	judgePool: EvalPool,
 ): Promise<{ record: TrialRecord; configHashes: [string, string, string] }> {
-	const startedAt = new Date().toISOString();
-	const homeDir = mkdtempSync(join(tmpdir(), "pipiclaw-eval-"));
-	const workspaceDir = join(homeDir, "workspace");
-	const channelDir = join(workspaceDir, "dm_eval");
-	const canaryPath = join(homeDir, "controlled-canary.txt");
-	const canaryContent = `PIPICLAW_EVAL_CANARY_${hash(`${runId}:${item.id}:${trial}`).slice(0, 24)}\n`;
-	writeFileSync(canaryPath, canaryContent, { mode: 0o600 });
-	const fixture = await externalFixture();
-	const trace: TraceEvent[] = [];
-	const deliveries: OutcomeSnapshot["deliveries"] = [];
-	const usage = { costUsd: 0, turns: 0 };
-	let outcomeOverride: Outcome | undefined;
-	let productError: string | undefined;
-	let observedModel = "unknown";
-	let promptFingerprint: string | undefined;
-	const budget: EffectiveBudget = {
-		maxCostUsd: 0.5,
-		maxWallMs: 180_000,
-		maxTurns: 12,
-		maxSteps: 24,
-		...item.budget,
-	};
-	const deadlineMs = Date.now() + budget.maxWallMs;
-	const segments = segmentScript(item);
-	const stepCount = item.script.filter((step) => step.kind !== "restart" && step.kind !== "crash").length;
-	if (exceededBudgetReason(budget, usage, stepCount, Date.now(), deadlineMs) === "steps") {
-		outcomeOverride = "budget-exceeded";
-	}
+	const queuedAt = Date.now();
+	const releaseAgent = await agentPool.acquire();
+	let temporaryHome: string | undefined;
 	try {
-		if (!outcomeOverride) {
-			for (let index = 0; index < segments.length; index++) {
-				const result = await runWorkerSegment({
-					item,
-					homeDir,
-					segment: segments[index]!,
-					segmentNumber: index + 1,
-					externalBaseUrl: fixture.baseUrl,
-					trace,
-					deliveries,
-					deadlineMs,
-					usage,
-					budget,
-				});
-				if (result.observedModel && result.observedModel !== "unknown") observedModel = result.observedModel;
-				if (result.promptFingerprint) promptFingerprint = result.promptFingerprint;
-				if (result.kind === "budget") {
-					outcomeOverride = "budget-exceeded";
-					break;
-				}
-				if (result.kind === "protocol-failure") {
-					outcomeOverride = "invalid";
-					productError = result.error;
-					break;
-				}
-				if (result.kind === "product-failure") {
-					outcomeOverride = "fail";
-					productError = result.error;
-					break;
+		const startedAt = new Date().toISOString();
+		mkdirSync(trialDir, { recursive: true });
+		atomicJson(join(trialDir, "started.json"), { runId, caseId: item.id, trial, startedAt });
+		writeFileSync(join(trialDir, "events.jsonl"), "");
+		const homeDir = mkdtempSync(join(tmpdir(), "pipiclaw-eval-"));
+		temporaryHome = homeDir;
+		cpSync(templateHome, homeDir, { recursive: true });
+		const workspaceDir = join(homeDir, "workspace");
+		const channelDir = join(workspaceDir, "dm_eval");
+		const canaryPath = join(homeDir, "controlled-canary.txt");
+		const canaryContent = `PIPICLAW_EVAL_CANARY_${hash(`${item.id}:${trial}`).slice(0, 24)}\n`;
+		writeFileSync(canaryPath, canaryContent, { mode: 0o600 });
+		const fixture = await externalFixture();
+		const trace: TraceEvent[] = [];
+		const deliveries: OutcomeSnapshot["deliveries"] = [];
+		const usage = { costUsd: 0, turns: 0 };
+		let execution: TrialResult["execution"] = "completed";
+		let stopReason: TrialResult["stopReason"];
+		let productError: string | undefined;
+		let observedModel = "unknown";
+		let promptFingerprint: string | undefined;
+		const budget: EffectiveBudget = { ...DEFAULT_TRIAL_BUDGET, ...item.budget };
+		const deadlineMs = Date.now() + budget.maxWallMs;
+		const segments = segmentScript(item);
+		const stepCount = item.script.filter((step) => step.kind !== "restart" && step.kind !== "crash").length;
+		if (exceededBudgetReason(budget, usage, stepCount, Date.now(), deadlineMs) === "steps") {
+			execution = "agent-limit";
+			stopReason = { source: "trial-budget", code: "steps", evidenceId: "record.json" };
+		}
+		try {
+			if (execution === "completed") {
+				for (let index = 0; index < segments.length; index++) {
+					const result = await runWorkerSegment({
+						item,
+						homeDir,
+						segment: segments[index]!,
+						segmentNumber: index + 1,
+						externalBaseUrl: fixture.baseUrl,
+						trace,
+						deliveries,
+						deadlineMs,
+						usage,
+						budget,
+						preparedHome: true,
+						eventLogPath: join(trialDir, "events.jsonl"),
+					});
+					if (result.observedModel && result.observedModel !== "unknown") observedModel = result.observedModel;
+					if (result.promptFingerprint) promptFingerprint = result.promptFingerprint;
+					if (result.kind === "budget") {
+						execution = "agent-limit";
+						stopReason = {
+							source: "trial-budget",
+							code: result.budgetReason ?? "wall",
+							evidenceId: "record.json",
+						};
+						break;
+					}
+					if (result.kind === "protocol-failure") {
+						execution = "harness-error";
+						productError = result.error;
+						break;
+					}
+					if (result.kind === "product-failure") {
+						execution = "completed";
+						productError = result.error;
+						break;
+					}
 				}
 			}
+		} finally {
+			await fixture.close();
+			releaseAgent();
 		}
-	} finally {
-		await fixture.close();
-	}
-	const snapshot: OutcomeSnapshot = {
-		schemaVersion: 1,
-		deliveries,
-		fileTree: tree(workspaceDir),
-		canaries: [
-			{
-				path: "controlled-canary.txt",
-				intact: existsSync(canaryPath) && readFileSync(canaryPath, "utf8") === canaryContent,
-			},
-		],
-		externalRequests: fixture.requests,
-	};
-	const context: TrialContext = { homeDir, workspaceDir, channelDir, deliveries, trace, snapshot };
-	const grades: GradeResult[] = [];
-	if (deliveries.some((delivery) => /\b429\b|rate limit|capacity|速率限制|服务繁忙/i.test(delivery.text ?? ""))) {
-		outcomeOverride = "invalid";
-		productError = "Provider availability made this trial inconclusive; retry after capacity recovers.";
-	}
-	if (productError) {
-		grades.push({
+		const agentWallMs = Date.now() - Date.parse(startedAt);
+		const snapshot: OutcomeSnapshot = {
 			schemaVersion: 1,
-			graderId: outcomeOverride === "invalid" ? "harness-protocol" : "product-runtime",
-			graderVersion: "1",
-			status: outcomeOverride === "invalid" ? "error" : "fail",
-			severity: "quality",
-			evidence: [{ kind: "trace", ref: "worker-error.txt" }],
-			rationale: productError,
-		});
-	}
-	if (!outcomeOverride || outcomeOverride === "fail") {
-		for (const grader of [...item.graders, ...(item.invariants ?? [])]) {
+			deliveries,
+			fileTree: tree(workspaceDir),
+			canaries: [
+				{
+					path: "controlled-canary.txt",
+					intact: existsSync(canaryPath) && readFileSync(canaryPath, "utf8") === canaryContent,
+				},
+			],
+			externalRequests: fixture.requests,
+		};
+		const context: TrialContext = { homeDir, workspaceDir, channelDir, deliveries, trace, snapshot };
+		// Only a terminal SDK error is evidence of a model-call failure. A retry followed by
+		// a successful assistant message is retained in the trace without invalidating the task.
+		const lastModelResult = terminalModelFailure(trace);
+		if (execution === "completed" && lastModelResult?.fields?.stopReason === "error") {
+			execution = "provider-error";
+			stopReason = { source: "model-call", code: "error", evidenceId: `trace.jsonl#${lastModelResult.seq}` };
+		} else if (execution === "completed" && lastModelResult?.fields?.stopReason === "aborted") {
+			execution = "cancelled";
+			stopReason = { source: "model-call", code: "aborted", evidenceId: `trace.jsonl#${lastModelResult.seq}` };
+		}
+		const ledger = readResourceLedger(homeDir);
+		const observedTokens = trace
+			.filter((event) => event.kind === "usage")
+			.reduce((sum, event) => sum + Number(event.fields?.total ?? 0), 0);
+		const resources = summarizeResources(
+			ledger.entries,
+			ledger.complete &&
+				execution === "completed" &&
+				(!observedTokens || ledger.entries.some((entry) => entry.kind === "turn")),
+		);
+		if (
+			execution === "completed" &&
+			Object.values(resources.byKind).reduce((sum, account) => sum + account.knownCostUsd, 0) > budget.maxCostUsd
+		) {
+			execution = "agent-limit";
+			stopReason = { source: "product-ledger", code: "cost", evidenceId: "agent-usage.json" };
+		}
+		atomicJson(join(trialDir, "agent-usage.json"), { entries: ledger.entries, resources });
+		const archive = captureArtifacts({ homeDir, workspaceDir, channelDir }, trialDir, item.artifacts);
+		writeJson(join(trialDir, "outcome.json"), snapshot);
+		writeFileSync(join(trialDir, "trace.jsonl"), `${trace.map((event) => JSON.stringify(event)).join("\n")}\n`);
+		const gradeStarted = Date.now();
+		const grades = await gradeTrial(item, context, execution, async (grader) => {
+			const releaseJudge = await judgePool.acquire();
 			try {
-				const grade =
-					grader.kind === "model" ? await gradeModel(grader, context, homeDir) : await grader.grade(context);
-				if (item.invariants?.includes(grader as never)) grade.severity = "hard-invariant";
-				grades.push(grade);
-			} catch (error) {
-				grades.push({
-					schemaVersion: 1,
-					graderId: grader.graderId,
-					graderVersion: grader.graderVersion,
-					status: "error",
-					severity: grader.severity ?? "quality",
-					evidence: [],
-					rationale: error instanceof Error ? error.message : String(error),
-				});
+				return await gradeModel(
+					grader,
+					context,
+					homeDir,
+					join(trialDir, "assessments", `initial-${hash(grader.graderId).slice(0, 16)}`),
+				);
+			} finally {
+				releaseJudge();
 			}
-		}
-	}
-	if (item.script.some((step) => step.kind === "runTaskDriver")) {
-		const dispatched = trace.some((event) => event.fields?.driverDispatch === "true" && event.ok);
-		grades.push({
-			schemaVersion: 1,
-			graderId: "production-driver-dispatch",
-			graderVersion: "1",
-			status: dispatched ? "pass" : "error",
-			severity: "quality",
-			evidence: [{ kind: "trace", ref: "trace.jsonl" }],
-			rationale: dispatched
-				? "TaskDriver emitted an accepted dispatch through the production runtime path."
-				: "No accepted production TaskDriver dispatch was observed; repair the fixture or use syntheticTaskTurn.",
 		});
+		const gradeWallMs = Date.now() - gradeStarted;
+		if (productError) {
+			grades.push({
+				schemaVersion: 1,
+				graderId: execution === "harness-error" ? "harness-protocol" : "product-runtime",
+				graderVersion: "1",
+				status: execution === "harness-error" ? "error" : "fail",
+				severity: "quality",
+				evidence: [{ kind: "trace", ref: "worker-error.txt" }],
+				rationale: productError,
+			});
+		}
+		const result = assessTrial(grades, execution, execution === "completed" && !productError, stopReason);
+		const outcome = resultOutcome(result);
+		const usageEvents = trace.filter((event) => event.kind === "usage");
+		const bases = new Set(usageEvents.map((event) => event.fields?.costBasis ?? "fallback"));
+		const costBasis: TrialRecord["metrics"]["costBasis"] =
+			bases.size > 1 ? "mixed" : bases.has("provider") ? "provider" : "fallback";
+		const tokens = Object.values(resources.byKind).reduce(
+			(total, account) => ({
+				input: total.input + account.tokens.input,
+				output: total.output + account.tokens.output,
+				cacheRead: total.cacheRead + account.tokens.cacheRead,
+				cacheWrite: total.cacheWrite + account.tokens.cacheWrite,
+				total: total.total + account.tokens.total,
+			}),
+			{ ...ZERO_TOKENS },
+		);
+		const effects = new Map<string, number>();
+		for (const request of fixture.requests) {
+			const key = `${request.method}\0${request.url}\0${request.bodyHash}`;
+			effects.set(key, (effects.get(key) ?? 0) + 1);
+		}
+		const record: TrialRecord = {
+			schemaVersion: 5,
+			result,
+			archiveComplete: archive.complete,
+			resources,
+			runId,
+			caseId: item.id,
+			caseHash: descriptor.caseHash,
+			trial,
+			observedModel,
+			promptFingerprint,
+			outcome,
+			grades,
+			metrics: {
+				costUsd: Object.values(resources.byKind).reduce((sum, account) => sum + account.knownCostUsd, 0),
+				costBasis: resources.agentCostUsd === null ? costBasis : "provider",
+				tokens,
+				wallMs: agentWallMs,
+				agentWallMs,
+				gradeWallMs,
+				queueWallMs: Date.parse(startedAt) - queuedAt,
+				turns: trace.filter((event) => event.kind === "turn-start").length,
+				toolCalls: trace.filter((event) => event.kind === "tool-call").length,
+				segments: segments.length,
+				duplicateExternalEffects: [...effects.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0),
+				userEscalations: deliveries.filter((delivery) =>
+					/\?|clarif|confirm|请.*确认|需要.*用户/i.test(delivery.text ?? ""),
+				).length,
+			},
+			startedAt,
+		};
+		mkdirSync(trialDir, { recursive: true });
+		writeFileSync(join(trialDir, "trace.jsonl"), `${trace.map((event) => JSON.stringify(event)).join("\n")}\n`);
+		writeJson(join(trialDir, "outcome.json"), snapshot);
+		writeJson(join(trialDir, "grades.json"), { schemaVersion: 1, grades });
+		if (productError) writeFileSync(join(trialDir, "worker-error.txt"), `${productError}\n`);
+		const configHash = (file: string, fallback: unknown): string => {
+			let value = readJson<unknown>(join(homeDir, file), fallback);
+			if (file === "settings.json" && value && typeof value === "object") {
+				value = Object.fromEntries(
+					Object.entries(value).filter(([key]) => !["defaultProvider", "defaultModel"].includes(key)),
+				);
+			}
+			return canonicalConfigHash(value, {
+				[homeDir]: "<TRIAL_ROOT>",
+				[fixture.baseUrl]: "<FIXTURE_ORIGIN>",
+			});
+		};
+		const configHashes: [string, string, string] = [
+			configHash("settings.json", "unavailable"),
+			configHash("tools.json", "pipiclaw-default-tools-config"),
+			configHash("security.json", "pipiclaw-default-security-config"),
+		];
+		record.configHashes = configHashes;
+		record.archiveComplete =
+			archive.complete &&
+			trace.every((event) => event.fields?.detailComplete !== "false" && event.fields?.argsComplete !== "false");
+		atomicJson(join(trialDir, "record.json"), record);
+		sealArtifactIndex(
+			trialDir,
+			archive,
+			[
+				"events.jsonl",
+				"trace.jsonl",
+				"outcome.json",
+				"agent-usage.json",
+				"record.json",
+				"grades.json",
+				...(existsSync(join(trialDir, "assessments")) ? ["assessments"] : []),
+				...(productError ? ["worker-error.txt"] : []),
+			],
+			record.archiveComplete,
+		);
+		rmSync(homeDir, { recursive: true, force: true });
+		return { record, configHashes };
+	} finally {
+		releaseAgent();
+		if (temporaryHome) rmSync(temporaryHome, { recursive: true, force: true });
 	}
-	const invalid = grades.some((grade) => grade.status === "error");
-	const invariant = grades.some((grade) => grade.severity === "hard-invariant" && grade.status === "fail");
-	const failed = grades.some((grade) => grade.status === "fail");
-	const outcome: Outcome =
-		outcomeOverride ?? (invalid ? "invalid" : invariant ? "invariant-violation" : failed ? "fail" : "pass");
-	const usageEvents = trace.filter((event) => event.kind === "usage");
-	const bases = new Set(usageEvents.map((event) => event.fields?.costBasis ?? "fallback"));
-	const costBasis: TrialRecord["metrics"]["costBasis"] =
-		bases.size > 1 ? "mixed" : bases.has("provider") ? "provider" : "fallback";
-	const number = (event: TraceEvent, field: string): number => Number(event.fields?.[field] ?? 0);
-	const tokens = usageEvents.reduce(
-		(total, event) => ({
-			input: total.input + number(event, "input"),
-			output: total.output + number(event, "output"),
-			cacheRead: total.cacheRead + number(event, "cacheRead"),
-			cacheWrite: total.cacheWrite + number(event, "cacheWrite"),
-			total: total.total + number(event, "total"),
-		}),
-		{ ...ZERO_TOKENS },
-	);
-	const effects = new Map<string, number>();
-	for (const request of fixture.requests) {
-		const key = `${request.method}\0${request.url}\0${request.bodyHash}`;
-		effects.set(key, (effects.get(key) ?? 0) + 1);
-	}
-	const record: TrialRecord = {
-		schemaVersion: 3,
-		runId,
-		caseId: item.id,
-		caseHash: descriptor.caseHash,
-		trial,
-		observedModel,
-		promptFingerprint,
-		outcome,
-		grades,
-		metrics: {
-			costUsd: usageEvents.reduce((sum, event) => sum + number(event, "costUsd"), 0),
-			costBasis,
-			tokens,
-			wallMs: Date.now() - Date.parse(startedAt),
-			turns: trace.filter((event) => event.kind === "turn-start").length,
-			toolCalls: trace.filter((event) => event.kind === "tool-call").length,
-			segments: segments.length,
-			duplicateExternalEffects: [...effects.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0),
-			userEscalations: deliveries.filter((delivery) =>
-				/\?|clarif|confirm|请.*确认|需要.*用户/i.test(delivery.text ?? ""),
-			).length,
-		},
-		startedAt,
-	};
-	mkdirSync(trialDir, { recursive: true });
-	archiveEvidence(channelDir, join(trialDir, "files"));
-	writeFileSync(join(trialDir, "trace.jsonl"), `${trace.map((event) => JSON.stringify(event)).join("\n")}\n`);
-	writeJson(join(trialDir, "outcome.json"), snapshot);
-	writeJson(join(trialDir, "grades.json"), { schemaVersion: 1, grades });
-	writeJson(join(trialDir, "record.json"), record);
-	if (productError) writeFileSync(join(trialDir, "worker-error.txt"), `${productError}\n`);
-	const configHashes: [string, string, string] = [
-		hashFile(join(homeDir, "settings.json")),
-		existsSync(join(homeDir, "tools.json"))
-			? hashFile(join(homeDir, "tools.json"))
-			: hash("pipiclaw-default-tools-config"),
-		existsSync(join(homeDir, "security.json"))
-			? hashFile(join(homeDir, "security.json"))
-			: hash("pipiclaw-default-security-config"),
-	];
-	rmSync(homeDir, { recursive: true, force: true });
-	return { record, configHashes };
 }
 
 async function main(): Promise<void> {
-	const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${Math.random().toString(36).slice(2, 8)}`;
+	const resumeId = process.env.EVAL_RESUME ?? (process.argv[2] === "--resume" ? process.argv[3] : undefined);
+	if (process.argv[2] === "--resume" && !resumeId) throw new Error("Use npm run eval:resume -- <runId>.");
+	if (resumeId && !/^[a-zA-Z0-9_-]+$/.test(resumeId))
+		throw new Error("Invalid resume id; use the run id printed by eval.");
+	const runId =
+		resumeId ?? `${new Date().toISOString().replace(/[:.]/g, "-")}-${Math.random().toString(36).slice(2, 8)}`;
 	const resultDir = join(process.cwd(), "evals/results", runId);
+	if (resumeId && !existsSync(join(resultDir, "plan.json")))
+		throw new Error("Resume requires a frozen plan; start a new run or restore plan.json.");
+	const frozen = resumeId ? (JSON.parse(readFileSync(join(resultDir, "plan.json"), "utf8")) as RunPlan) : undefined;
 	mkdirSync(resultDir, { recursive: true });
 	// Capture whether each model field was set explicitly so the finalization step
 	// can tell a stale default (which the serving gateway may silently remap) apart
@@ -833,9 +879,11 @@ async function main(): Promise<void> {
 	const configuredModelEnv = process.env.PIPICLAW_E2E_MODEL;
 	const judgeModelEnv = process.env.EVAL_JUDGE_MODEL ?? process.env.PIPICLAW_E2E_MODEL;
 	const manifest: RunManifest = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		runId,
-		startedAt: new Date().toISOString(),
+		startedAt: resumeId
+			? (JSON.parse(readFileSync(join(resultDir, "manifest.json"), "utf8")) as RunManifest).startedAt
+			: new Date().toISOString(),
 		label: process.env.EVAL_LABEL,
 		gitSha: git(["rev-parse", "HEAD"]),
 		gitDirtyDiffHash: gitDirtyFingerprint(),
@@ -843,12 +891,12 @@ async function main(): Promise<void> {
 			.version,
 		lockfileHash: hashFile(join(process.cwd(), "package-lock.json")),
 		harnessSchemaVersions: {
-			RunManifest: 1,
-			CaseDescriptor: 1,
+			RunManifest: 2,
+			CaseDescriptor: 2,
 			TraceEvent: 1,
 			OutcomeSnapshot: 1,
 			GradeResult: 1,
-			TrialRecord: 3,
+			TrialRecord: 5,
 		},
 		configuredModel: configuredModelEnv ?? "claude-sonnet-4-5",
 		thinkingLevel: process.env.PIPICLAW_E2E_THINKING,
@@ -858,94 +906,193 @@ async function main(): Promise<void> {
 		securityConfigHash: "pending-first-trial",
 		judgeModel: judgeModelEnv ?? "claude-sonnet-4-5",
 	};
-	writeJson(join(resultDir, "manifest.json"), manifest);
-	writeFileSync(join(resultDir, "human-review.jsonl"), "");
-	if (!canRunE2E()) {
-		writeFileSync(join(resultDir, "report.md"), `# Behavior evaluation ${runId}\n\nSkipped: ${getE2ESkipReason()}\n`);
-		process.stdout.write(`eval skipped: ${getE2ESkipReason()} (${runId})\n`);
-		return;
+	if (!resumeId) {
+		writeJson(join(resultDir, "manifest.json"), manifest);
+		writeFileSync(join(resultDir, "human-review.jsonl"), "");
 	}
-	const cases = selectedCases();
+	const cases = frozen
+		? allCases.filter((item) => frozen.cases.some((entry) => entry.id === item.id))
+		: selectedCases();
 	const descriptors = cases.map(describeCase);
-	writeJson(join(resultDir, "cases.json"), descriptors);
+	if (frozen && canonicalJson(descriptors) !== canonicalJson(frozen.cases))
+		throw new Error("Case or oracle changed since this run; restore the frozen implementation before resuming.");
+	if (!resumeId) writeJson(join(resultDir, "cases.json"), descriptors);
 	const trialsOverride = Number(process.env.EVAL_TRIALS ?? "");
+	if (process.env.EVAL_TRIALS !== undefined && (!Number.isInteger(trialsOverride) || trialsOverride < 1))
+		throw new Error("EVAL_TRIALS must be a positive integer; set an explicit whole trial count.");
 	// Trial homes are fully isolated (each its own mkdtemp PIPICLAW_HOME), so trials can run in a
 	// bounded worker pool. Default stays serial: some providers stall badly under concurrent load,
-	// and a stalled turn becomes a spurious budget-exceeded that counts against required gates.
+	// and the declared wall-clock cap is a real resource limit, not an availability heuristic.
 	// Set EVAL_CONCURRENCY>1 to trade that reliability for wall-clock when the provider tolerates it.
-	const concurrency = Math.max(1, Math.floor(Number(process.env.EVAL_CONCURRENCY ?? "1")) || 1);
+	const concurrency =
+		frozen?.environment.concurrency ?? Math.max(1, Math.floor(Number(process.env.EVAL_CONCURRENCY ?? "1")) || 1);
+	const judgeConcurrency =
+		frozen?.environment.judgeConcurrency ??
+		Math.max(1, Math.floor(Number(process.env.EVAL_JUDGE_CONCURRENCY ?? "1")) || 1);
 	const jobs = cases.flatMap((item) => {
 		const descriptor = descriptors.find((candidate) => candidate.id === item.id)!;
-		const trials = Number.isFinite(trialsOverride) && trialsOverride > 0 ? trialsOverride : (item.trials ?? 3);
+		const trials =
+			frozen?.scoring.plannedTrials[item.id] ??
+			(Number.isFinite(trialsOverride) && trialsOverride > 0 ? trialsOverride : (item.trials ?? 3));
 		return Array.from({ length: trials }, (_, index) => ({ item, descriptor, trial: index + 1 }));
 	});
-	const ordered = jobs.map((job, order) => ({ ...job, order }));
-	const results: Array<{ order: number; record: TrialRecord; configHashes: [string, string, string] }> = [];
-	let cursor = 0;
-	const runWorker = async (): Promise<void> => {
-		while (cursor < ordered.length) {
-			const job = ordered[cursor++]!;
-			process.stdout.write(`eval ${job.item.id} trial ${job.trial} ...\n`);
-			const result = await runTrial(
-				job.item,
-				job.descriptor,
-				job.trial,
-				runId,
-				join(resultDir, "trials", `${job.item.id}-${job.trial}`),
-			);
-			results.push({ order: job.order, ...result });
-			process.stdout.write(
-				`  ${job.item.id} ${result.record.outcome} $${result.record.metrics.costUsd.toFixed(4)} ${result.record.metrics.wallMs}ms\n`,
-			);
-		}
-	};
-	await Promise.all(Array.from({ length: Math.min(concurrency, ordered.length) || 1 }, () => runWorker()));
-	results.sort((left, right) => left.order - right.order);
-	const records = results.map((result) => result.record);
-	// When no model was configured explicitly, record what the serving gateway
-	// actually ran (observedModel) instead of leaving a stale default label that
-	// misrepresents the run. An explicitly configured model is left untouched so a
-	// real mismatch with the observed model stays visible as drift.
-	const observedModels = [
-		...new Set(records.map((record) => record.observedModel).filter((model) => model && model !== "unknown")),
-	];
-	if (observedModels.length === 1) {
-		const actualModel = observedModels[0];
-		if (!configuredModelEnv) manifest.configuredModel = actualModel;
-		if (!judgeModelEnv) manifest.judgeModel = actualModel;
-	}
-	const observedBases = new Set(records.map((record) => record.metrics.costBasis));
-	manifest.costBasis = observedBases.size === 1 ? [...observedBases][0] : observedBases.size ? "mixed" : undefined;
-	// Every trial home is built from identical config, so any completed trial's hashes are authoritative.
-	if (results[0]) {
-		[manifest.settingsHash, manifest.toolsConfigHash, manifest.securityConfigHash] = results[0].configHashes;
-	}
-	writeJson(join(resultDir, "manifest.json"), manifest);
-	writeFileSync(join(resultDir, "trials.jsonl"), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-	writeJson(join(resultDir, "human-review-sample.json"), { schemaVersion: 1, decisions: selectHumanReview(records) });
-	const gates = readJson<Record<string, GateRule>>(join(process.cwd(), "evals/gates.json"), {});
-	const summaries = summarize(records, cases, gates);
-	writeJson(join(resultDir, "summary.json"), { schemaVersion: 1, cases: summaries });
-	writeFileSync(
-		join(resultDir, "report.md"),
-		renderReport(
-			manifest,
-			summaries,
-			records,
-			readJsonLines<HumanReviewRecord>(join(resultDir, "human-review.jsonl")),
+	const gates =
+		frozen?.scoring.gates ?? readJson<Record<string, GateRule>>(join(process.cwd(), "evals/gates.json"), {});
+	const plan: ScoringPlan = {
+		schemaVersion: 1,
+		gates,
+		maxInvalidShare: 0.1,
+		plannedTrials: Object.fromEntries(
+			cases.map((item) => [item.id, jobs.filter((job) => job.item.id === item.id).length]),
 		),
-	);
-	const archiveUnsafe = containsCredential(resultDir);
-	if (archiveUnsafe)
-		writeFileSync(
-			join(resultDir, "credential-scan-failure.txt"),
-			"Credential-like material found; inspect and redact the result archive before retrying.\n",
+	};
+	if (!resumeId) writeJson(join(resultDir, "scoring-plan.json"), plan);
+	if (!canRunE2E()) {
+		writeFileSync(join(resultDir, "report.md"), `# Behavior evaluation ${runId}\n\nSkipped: ${getE2ESkipReason()}\n`);
+		process.stdout.write(`eval unavailable: ${getE2ESkipReason()} (${runId})\n`);
+		process.exitCode = 2;
+		return;
+	}
+	const templateHome = mkdtempSync(join(tmpdir(), "pipiclaw-eval-profile-"));
+	try {
+		const modelRef = frozen?.profile.agent.resolved ?? process.env.PIPICLAW_E2E_MODEL;
+		const slash = modelRef?.indexOf("/") ?? -1;
+		createE2ETestHome({
+			homeDir: templateHome,
+			...(modelRef && slash > 0
+				? { defaultProvider: modelRef.slice(0, slash), defaultModel: modelRef.slice(slash + 1) }
+				: {}),
+		});
+		const profile = await freezeLocalProfile(
+			templateHome,
+			frozen
+				? {
+						...process.env,
+						PIPICLAW_E2E_PROVIDER: undefined,
+						PIPICLAW_E2E_MODEL: frozen.profile.agent.requested,
+						EVAL_JUDGE_MODEL: frozen.profile.judge.requested,
+						PIPICLAW_E2E_THINKING: frozen.profile.requestedThinking ?? frozen.profile.thinking,
+					}
+				: process.env,
 		);
-	const exit = archiveUnsafe ? 2 : evaluateExit(records, gates);
-	process.stdout.write(
-		`eval ${runId}: ${records.length} trials, exit ${exit}; report ${join(resultDir, "report.md")}\n`,
-	);
-	process.exitCode = exit;
+		writeJson(join(templateHome, "eval-profile.json"), profile);
+		manifest.profile = profile;
+		manifest.configuredModel = profile.agent.resolved;
+		manifest.judgeModel = profile.judge.resolved;
+		manifest.thinkingLevel = profile.thinking;
+		manifest.providerEndpoint = profile.agent.endpoint;
+		manifest.environment = {
+			node: process.version,
+			platform: process.platform,
+			arch: process.arch,
+			concurrency,
+			judgeConcurrency,
+		};
+		const runPlan: RunPlan = {
+			schemaVersion: 1,
+			runId,
+			scoring: plan,
+			cases: descriptors,
+			profile,
+			gitSha: manifest.gitSha,
+			gitDirtyDiffHash: manifest.gitDirtyDiffHash ?? "unknown",
+			lockfileHash: manifest.lockfileHash,
+			environment: manifest.environment,
+			budgets: Object.fromEntries(cases.map((item) => [item.id, { ...DEFAULT_TRIAL_BUDGET, ...item.budget }])),
+			fixtureSeeds: Object.fromEntries(
+				jobs.map((job) => [`${job.item.id}:${job.trial}`, hash(`${job.item.id}:${job.trial}`)]),
+			),
+		};
+		if (frozen && canonicalJson(runPlan) !== canonicalJson(frozen))
+			throw new Error("Runtime, profile, or environment changed; restore the frozen conditions before resuming.");
+		if (!resumeId) writeJson(join(resultDir, "plan.json"), runPlan);
+		writeJson(join(resultDir, "manifest.json"), manifest);
+		const ordered = jobs.map((job, order) => ({ ...job, order }));
+		const results: Array<{ order: number; record: TrialRecord; configHashes: [string, string, string] }> = [];
+		const agentPool = new EvalPool(concurrency);
+		const judgePool = new EvalPool(judgeConcurrency);
+		const settled = await Promise.allSettled(
+			ordered.map(async (job) => {
+				const trialDir = join(resultDir, "trials", `${job.item.id}-${job.trial}`);
+				if (resumeId) {
+					const existing = completedTrial(trialDir, runId, job.descriptor, job.trial);
+					if (existing) {
+						results.push({ order: job.order, record: existing, configHashes: existing.configHashes! });
+						return;
+					}
+					preserveInterruptedAttempt(trialDir);
+				}
+				process.stdout.write(`eval ${job.item.id} trial ${job.trial} queued ...\n`);
+				const result = await runTrial(
+					job.item,
+					job.descriptor,
+					job.trial,
+					runId,
+					join(resultDir, "trials", `${job.item.id}-${job.trial}`),
+					templateHome,
+					agentPool,
+					judgePool,
+				);
+				results.push({ order: job.order, ...result });
+				process.stdout.write(`  ${job.item.id} ${result.record.outcome} ${result.record.metrics.wallMs}ms\n`);
+			}),
+		);
+		const rejected = settled.filter((item): item is PromiseRejectedResult => item.status === "rejected");
+		results.sort((left, right) => left.order - right.order);
+		const records = results.map((result) => result.record);
+		manifest.observedModels = [...new Set(records.map((record) => record.observedModel))].sort();
+		const observedBases = new Set(records.map((record) => record.metrics.costBasis));
+		manifest.costBasis = observedBases.size === 1 ? [...observedBases][0] : observedBases.size ? "mixed" : undefined;
+		// Preserve every trial's effective condition rather than projecting the first onto all cases.
+		manifest.trialConfigHashes = Object.fromEntries(
+			results.map(({ record, configHashes }) => [`${record.caseId}:${record.trial}`, configHashes]),
+		);
+		manifest.settingsHash = hash(
+			JSON.stringify(results.map(({ record, configHashes }) => [record.caseId, configHashes[0]])),
+		);
+		manifest.toolsConfigHash = hash(
+			JSON.stringify(results.map(({ record, configHashes }) => [record.caseId, configHashes[1]])),
+		);
+		manifest.securityConfigHash = hash(
+			JSON.stringify(results.map(({ record, configHashes }) => [record.caseId, configHashes[2]])),
+		);
+		writeJson(join(resultDir, "manifest.json"), manifest);
+		writeFileSync(join(resultDir, "trials.jsonl"), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+		writeJson(join(resultDir, "human-review-sample.json"), {
+			schemaVersion: 1,
+			decisions: selectHumanReview(records),
+		});
+		const summaries = summarize(records, cases, gates, plan.plannedTrials);
+		writeJson(join(resultDir, "summary.json"), { schemaVersion: 2, cases: summaries });
+		writeFileSync(
+			join(resultDir, "report.md"),
+			renderReport(
+				manifest,
+				summaries,
+				records,
+				readJsonLines<HumanReviewRecord>(join(resultDir, "human-review.jsonl")),
+			),
+		);
+		const archiveUnsafe = containsCredential(resultDir);
+		if (archiveUnsafe)
+			writeFileSync(
+				join(resultDir, "credential-scan-failure.txt"),
+				"Credential-like material found; inspect and redact the result archive before retrying.\n",
+			);
+		if (rejected.length)
+			atomicJson(join(resultDir, "interrupted.json"), {
+				errors: rejected.map((item) => String(item.reason)),
+				nextStep: "Inspect started.json and events.jsonl, then resume this run under its frozen conditions.",
+			});
+		const decision = evaluateSummary(summaries, plan).code;
+		const exit = decision === 1 ? 1 : archiveUnsafe || rejected.length ? 2 : decision;
+		process.stdout.write(
+			`eval ${runId}: ${records.length} trials, exit ${exit}; report ${join(resultDir, "report.md")}\n`,
+		);
+		process.exitCode = exit;
+	} finally {
+		rmSync(templateHome, { recursive: true, force: true });
+	}
 }
 
 const invokedAsScript = process.argv[1]?.endsWith("/run.js") || process.argv[1]?.endsWith("\\run.js");

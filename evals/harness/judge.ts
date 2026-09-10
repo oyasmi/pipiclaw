@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runRetriedSidecarTask, SidecarParseError } from "../../src/memory/sidecar-worker.js";
 import { getApiKeyForModel } from "../../src/models/api-keys.js";
@@ -9,6 +9,9 @@ import {
 	wrapModelRegistry,
 } from "../../src/models/utils.js";
 import { parseJsonObject } from "../../src/shared/llm-json.js";
+import { getUsageLedger } from "../../src/usage/ledger.js";
+import type { FrozenProfile } from "./profile.js";
+import { readResourceLedger, summarizeResources } from "./resources.js";
 
 interface JudgeInput {
 	graderId: string;
@@ -39,7 +42,12 @@ async function main(): Promise<void> {
 		modelsConfigPath: join(homeDir, "models.json"),
 	});
 	const registry = wrapModelRegistry(runtime);
-	const requested = process.env.EVAL_JUDGE_MODEL ?? process.env.PIPICLAW_E2E_MODEL ?? "claude-sonnet-4-5";
+	const profilePath = join(homeDir, "eval-profile.json");
+	const profile = existsSync(profilePath)
+		? (JSON.parse(readFileSync(profilePath, "utf8")) as FrozenProfile)
+		: undefined;
+	const requested = profile?.judge.resolved ?? process.env.EVAL_JUDGE_MODEL ?? process.env.PIPICLAW_E2E_MODEL;
+	if (!requested) throw new Error("No frozen judge identity; prepare an eval profile before grading.");
 	const available = registry.getAvailable();
 	// No silent fallback. Picking `available[0]` when the requested judge is unavailable made the
 	// judge's identity a function of registry ordering — usually the model under test, grading its
@@ -52,6 +60,7 @@ async function main(): Promise<void> {
 				"Set EVAL_JUDGE_MODEL to an available reference; the harness will not substitute another model.",
 		);
 	}
+	const ledgerBefore = readResourceLedger(homeDir).entries.length;
 	const result = await runRetriedSidecarTask({
 		name: `eval-judge-${input.graderId}`,
 		model,
@@ -64,7 +73,25 @@ async function main(): Promise<void> {
 		repair: (error) =>
 			`Your previous output could not be parsed as the required JSON shape. It was: ${error.rawText.slice(0, 200)} Return ONLY one JSON object with exactly these keys: {"pass": boolean, "score": number, "rationale": string}. The explanation key is "rationale" — spelled exactly that way. No markdown, no extra text.`,
 	});
-	writeFileSync(outputPath, `${JSON.stringify(result.output, null, 2)}\n`);
+	await getUsageLedger().flush?.();
+	const ledger = readResourceLedger(homeDir);
+	const resources = summarizeResources(ledger.entries.slice(ledgerBefore), ledger.complete);
+	writeFileSync(
+		outputPath,
+		`${JSON.stringify(
+			{
+				...result.output,
+				resources,
+				model: {
+					requested: profile?.judge.requested ?? requested,
+					resolved: formatModelReference(model),
+					reported: "unknown",
+				},
+			},
+			null,
+			2,
+		)}\n`,
+	);
 }
 
 main().catch((error) => {

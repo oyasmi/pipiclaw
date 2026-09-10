@@ -22,3 +22,8 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build
+      - name: Validate evaluation tooling (offline)
+        run: |
+          npm run eval:typecheck
+          npm run eval:build
+          npm run test:evals

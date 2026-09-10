@@ -8,6 +8,7 @@ import { isRecoverableRejection } from "../../src/tools/tool-details.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
+import { modelResultFields } from "./scoring.js";
 import { fallbackCostUsd, hash, tree } from "./util.js";
 
 const [caseId, homeDir, segmentRaw, startRaw, endRaw, mode, externalBaseUrl] = process.argv.slice(2);
@@ -17,13 +18,21 @@ if (!caseId || !homeDir || !segmentRaw || !startRaw || !endRaw || !mode || exter
 
 const segment = Number(segmentRaw);
 let seq = Number(process.env.EVAL_TRACE_SEQ_START ?? "0");
+let stepIndex = Number(startRaw) - 1;
 
 function send(message: WorkerMessage): void {
 	process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
 function trace(event: Omit<TraceEvent, "schemaVersion" | "seq" | "ts" | "segment">): void {
-	const full = { schemaVersion: 1, seq: ++seq, ts: new Date().toISOString(), segment, ...event } satisfies TraceEvent;
+	const full = {
+		schemaVersion: 1,
+		seq: ++seq,
+		ts: new Date().toISOString(),
+		segment,
+		stepIndex,
+		...event,
+	} satisfies TraceEvent;
 	localTrace.push(full);
 	send({
 		protocol: 1,
@@ -43,7 +52,7 @@ function stringField(value: unknown): string | undefined {
 }
 
 /**
- * Grader-visible arguments per tool, in cleartext. Everything else is only hashed.
+ * Legacy grader field projections. Complete arguments are separately archived in argsJson.
  *
  * These names must track the real tool schemas: a stale entry degrades silently into "the field
  * was absent", which is indistinguishable from "the model never passed it". The old `memory_manage`
@@ -98,6 +107,8 @@ const localDeliveries: CapturedDelivery[] = [];
 let midTurnArmed = false;
 
 function eventTrace(event: unknown): void {
+	const modelFields = modelResultFields(event);
+	if (modelFields) trace({ kind: "model-result", fields: modelFields });
 	const record = isRecord(event) ? event : {};
 	const type = typeof record.type === "string" ? record.type : "runtime";
 	if (type === "turn_start") {
@@ -110,7 +121,11 @@ function eventTrace(event: unknown): void {
 	else if (type === "tool_execution_start") {
 		const tool = stringField(record.toolName);
 		const args = isRecord(record.args) ? record.args : {};
-		const fields: Record<string, string> = {};
+		const argsJson = JSON.stringify(record.args ?? {});
+		const fields: Record<string, string> = {
+			argsJson: argsJson.slice(0, 1000000),
+			argsComplete: String(argsJson.length <= 1000000),
+		};
 		for (const key of TOOL_FIELDS[tool ?? ""] ?? []) {
 			const value = stringField(args[key]);
 			if (value === undefined) continue;
@@ -129,13 +144,14 @@ function eventTrace(event: unknown): void {
 		const failed = record.isError !== false || isRecoverableRejection(record.result);
 		// A rejected call is the whole signal for the recoverable-error probes (a dropped argument
 		// surfaces as a rejection followed by a retry), so keep a readable excerpt of why.
-		const detail = failed ? JSON.stringify(record.result ?? record.error ?? null).slice(0, 300) : undefined;
+		const serialized = JSON.stringify(record.result ?? record.error ?? null);
+		const detail = serialized.slice(0, 1000000);
 		trace({
 			kind: "tool-result",
 			correlationId: stringField(record.toolCallId),
 			tool: stringField(record.toolName),
 			ok: !failed,
-			...(detail ? { fields: { detail } } : {}),
+			fields: { detail, detailComplete: String(serialized.length <= 1000000) },
 		});
 	}
 
@@ -260,9 +276,10 @@ async function main(): Promise<void> {
 	if (!item) throw new Error(`Unknown eval case ${caseId}.`);
 	process.env.PIPICLAW_HOME = homeDir;
 	const firstSegment = segment === 1;
-	const home = firstSegment
-		? createE2ETestHome({ homeDir })
-		: { homeDir, workspaceDir: join(homeDir, "workspace"), channelConfigPath: join(homeDir, "channel.json") };
+	const home =
+		firstSegment && process.env.EVAL_PREPARED_HOME !== "1"
+			? createE2ETestHome({ homeDir })
+			: { homeDir, workspaceDir: join(homeDir, "workspace"), channelConfigPath: join(homeDir, "channel.json") };
 	const workspaceDir = home.workspaceDir;
 	const channelId = "dm_eval";
 	const channelDir = join(workspaceDir, channelId);
@@ -321,6 +338,7 @@ async function main(): Promise<void> {
 		await runtime.handler.handleEvent(event, bot as unknown as DingTalkBot);
 	};
 	const execute = async (step: Step): Promise<void> => {
+		stepIndex++;
 		trace({ kind: "step", fields: { kind: step.kind } });
 		if (step.kind === "user") {
 			await sendEvent({

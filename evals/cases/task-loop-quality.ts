@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	deliveryMatches,
+	driverDispatchCount,
 	noFailedToolResult,
 	readTaskLoopLog,
 	taskFrontmatter,
@@ -78,6 +79,7 @@ export const taskLoopQualityCases: EvalCase[] = [
 			}),
 		script: [{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" }],
 		graders: [
+			driverDispatchCount("tl-ticket-01-dispatch", 1),
 			// The point of the ticket model: name the thing you are actually waiting for. A `time`
 			// ticket here is a guess that happens to work; a `job` ticket is a fact the runtime can
 			// redeem the moment the job settles.
@@ -110,6 +112,7 @@ export const taskLoopQualityCases: EvalCase[] = [
 			}),
 		script: [{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" }],
 		graders: [
+			driverDispatchCount("tl-note-01-dispatch", 1),
 			taskLog(
 				"note-carries-evidence",
 				"evidence-note",
@@ -146,6 +149,7 @@ export const taskLoopQualityCases: EvalCase[] = [
 			{ kind: "runTaskDriver", at: "2026-01-01T00:05:00.000Z" },
 		],
 		graders: [
+			driverDispatchCount("tl-budget-01-dispatch", 1),
 			taskFrontmatter(
 				"stopped-by-runtime",
 				"tiny-budget",

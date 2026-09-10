@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { allCases } from "../cases/index.js";
+import { canonicalJson, caseDependencyHashes } from "./fingerprint.js";
 import type { EvalCase, ModelGrader } from "./schema.js";
 import { hash, hashFile } from "./util.js";
 
@@ -49,24 +50,17 @@ export function selectedCases(): EvalCase[] {
 	return cases;
 }
 
-/**
- * Reproducibility hash of one case definition.
- *
- * Deliberately built from the case's *own* projection (steps, grader implementations, setup,
- * budget, declared fixtures) rather than the containing module's file hash. Hashing the whole
- * `definitionFile` meant that editing any one case re-hashed every sibling case in that file,
- * so "this case's definition changed" — the signal `eval:diff` relies on to say a comparison is
- * unsound — fired constantly and told you nothing.
- */
+/** Hash explicit parameters and evaluator dependencies; closure-backed fixtures use conservative module hashes. */
 export function caseHash(item: EvalCase, root = process.cwd()): string {
 	const sourcePath = join(root, item.definitionFile);
 	if (!existsSync(sourcePath)) throw new Error(`${item.id} definitionFile does not exist: ${item.definitionFile}`);
-	const serialized = JSON.stringify({
+	const serialized = canonicalJson({
+		dependencies: caseDependencyHashes(item, root),
 		id: item.id,
 		suite: item.suite,
 		source: item.source,
-		description: item.description,
 		budget: item.budget,
+		artifacts: item.artifacts,
 		steps: item.script.map((step) =>
 			step.kind === "waitFor" ? { ...step, predicate: String(step.predicate) } : step,
 		),
@@ -74,6 +68,8 @@ export function caseHash(item: EvalCase, root = process.cwd()): string {
 			id: grader.graderId,
 			version: grader.graderVersion,
 			severity: grader.severity,
+			parameters: grader.parameters,
+			role: item.invariants?.some((invariant) => invariant === grader) ? "invariant" : "acceptance",
 			rubric: grader.kind === "model" ? grader.rubric : undefined,
 			implementation: grader.kind === "model" ? String(grader.artifacts) : String(grader.grade),
 		})),

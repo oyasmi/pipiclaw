@@ -38,6 +38,7 @@
 | [架构](./architecture.md) | 当前实现的源码地图、运行时拓扑、消息生命周期、并发表和磁盘布局 |
 | [设计哲学](./design-philosophy.md) | 长期运行、状态、边界、记忆与可验证性的设计原则 |
 | [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
+| [评测体系评审与翻新设计](./eval-review-2026-09-10.md) | 现有评测的可信度问题、机制改造方案、30 个场景家族与 43 个旧 case 的迁移设计（提案） |
 | [历史设计记录](./specs/README.md) | specs 的阅读方法、主题分组和当前行为的判断顺序 |
 | [../AGENTS.md](../AGENTS.md) | 代码域边界、工程规则和验证要求 |
 

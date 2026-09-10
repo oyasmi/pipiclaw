@@ -1,7 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseTaskFrontmatterV4 } from "../../src/tasks/frontmatter.js";
-import type { CodeGrader, GradeResult, Severity, TrialContext } from "./schema.js";
+import type { CodeGrader, GradeResult, JsonValue, Severity, TrialContext } from "./schema.js";
+
+function regexSpec(pattern: RegExp): JsonValue {
+	return { source: pattern.source, flags: pattern.flags };
+}
 
 function result(
 	grader: Pick<CodeGrader, "graderId" | "graderVersion" | "severity">,
@@ -27,9 +31,16 @@ function result(
 export function codeGrader(
 	graderId: string,
 	grade: CodeGrader["grade"],
-	options: { version?: string; severity?: Severity } = {},
+	options: { version?: string; severity?: Severity; parameters?: JsonValue } = {},
 ): CodeGrader {
-	return { kind: "code", graderId, graderVersion: options.version ?? "1", severity: options.severity, grade };
+	return {
+		kind: "code",
+		graderId,
+		graderVersion: options.version ?? "1",
+		severity: options.severity,
+		parameters: options.parameters ?? {},
+		grade,
+	};
 }
 
 export function deliveryMatches(graderId: string, pattern: RegExp, severity: Severity = "quality"): CodeGrader {
@@ -49,6 +60,7 @@ export function deliveryMatches(graderId: string, pattern: RegExp, severity: Sev
 		},
 		{ severity },
 	);
+	grader.parameters = { pattern: regexSpec(pattern) };
 	return grader;
 }
 
@@ -77,6 +89,7 @@ export function lastDeliveryMatches(graderId: string, pattern: RegExp, severity:
 		},
 		{ severity },
 	);
+	grader.parameters = { pattern: regexSpec(pattern) };
 	return grader;
 }
 
@@ -95,6 +108,7 @@ export function deliveryNotMatches(graderId: string, pattern: RegExp, severity: 
 		},
 		{ severity },
 	);
+	grader.parameters = { pattern: regexSpec(pattern) };
 	return grader;
 }
 
@@ -114,6 +128,7 @@ export function lastDeliveryNotMatches(graderId: string, pattern: RegExp, severi
 		},
 		{ severity },
 	);
+	grader.parameters = { pattern: regexSpec(pattern) };
 	return grader;
 }
 
@@ -135,6 +150,7 @@ export function noDeliveries(graderId: string, severity: Severity = "hard-invari
 		},
 		{ severity },
 	);
+	grader.parameters = {};
 	return grader;
 }
 
@@ -160,6 +176,7 @@ export function fileContains(
 		},
 		{ severity },
 	);
+	grader.parameters = { relativePath, pattern: regexSpec(pattern), root };
 	return grader;
 }
 
@@ -184,6 +201,7 @@ export function fileNotContains(
 		},
 		{ severity },
 	);
+	grader.parameters = { relativePath, pattern: regexSpec(pattern) };
 	return grader;
 }
 
@@ -206,6 +224,7 @@ export function taskLog(
 		const log = readFileSync(path, "utf8");
 		return result(grader, predicate(log) ? "pass" : "fail", why, "file", `tasks/${taskId}.jsonl`);
 	});
+	grader.parameters = { taskId, predicateSource: String(predicate), why };
 	return grader;
 }
 
@@ -242,6 +261,7 @@ export function taskFrontmatter(
 			path,
 		);
 	});
+	grader.parameters = { taskId, predicateSource: String(predicate) };
 	return grader;
 }
 
@@ -261,6 +281,7 @@ export function toolCallOrder(graderId: string, expected: string[]): CodeGrader 
 			"trace.jsonl",
 		);
 	});
+	grader.parameters = { expected };
 	return grader;
 }
 
@@ -280,6 +301,7 @@ export function noToolCallTo(graderId: string, tool: string, field?: [string, Re
 			"trace.jsonl",
 		);
 	});
+	grader.parameters = { tool, field: field ? [field[0], regexSpec(field[1])] : null };
 	return grader;
 }
 
@@ -310,6 +332,7 @@ export function toolCallCount(
 		},
 		{ severity },
 	);
+	grader.parameters = { tool, expected, field: field ? [field[0], regexSpec(field[1])] : null };
 	return grader;
 }
 
@@ -339,6 +362,7 @@ export function noFailedToolResult(graderId: string, tool: string, severity: Sev
 		},
 		{ severity },
 	);
+	grader.parameters = { tool };
 	return grader;
 }
 
@@ -367,6 +391,7 @@ export function toolArgumentIntact(
 		},
 		{ severity },
 	);
+	grader.parameters = { tool, field, sentinel: regexSpec(sentinel) };
 	return grader;
 }
 
@@ -383,6 +408,7 @@ export function canariesIntact(graderId: string): CodeGrader {
 			),
 		{ severity: "hard-invariant" },
 	);
+	grader.parameters = {};
 	return grader;
 }
 
@@ -403,6 +429,7 @@ export function externalRequestCount(
 			),
 		{ severity },
 	);
+	grader.parameters = { expected };
 	return grader;
 }
 
@@ -417,6 +444,7 @@ export function driverDispatchCount(graderId: string, expected: number): CodeGra
 			"trace.jsonl",
 		);
 	});
+	grader.parameters = { expected };
 	return grader;
 }
 
@@ -431,6 +459,7 @@ export function tracePredicate(
 		(ctx) => result(grader, predicate(ctx) ? "pass" : "fail", rationale, "trace", "trace.jsonl"),
 		{ severity },
 	);
+	grader.parameters = { predicateSource: String(predicate), rationale };
 	return grader;
 }
 
@@ -508,6 +537,14 @@ export function recallQuiz(
 		},
 		{ severity: options.severity },
 	);
+	grader.parameters = {
+		questions: questions.map((question) => ({
+			expected: regexSpec(question.expected),
+			distractor: regexSpec(question.distractor),
+		})),
+		minRecall,
+		minPrecision,
+	};
 	return grader;
 }
 
@@ -538,5 +575,6 @@ export function noDeliveriesAfterStep(graderId: string, stepKind: string, severi
 		},
 		{ severity },
 	);
+	grader.parameters = { stepKind };
 	return grader;
 }
