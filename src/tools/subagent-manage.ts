@@ -8,7 +8,7 @@ import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { externalRoleFingerprint, type SubAgentDiscoveryResult, validateSubAgentTask } from "../subagents/discovery.js";
 import { type ExternalLaunchResult, launchExternalRun } from "../subagents/external/run.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
-import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
+import type { RunRecord, SubAgentRunManager } from "../subagents/runs.js";
 import {
 	assertVerifyAdmissible,
 	assertWithinProjectBoundary,
@@ -36,6 +36,7 @@ const subagentRunSchema = Type.Object({
 });
 
 export interface SubAgentManageToolOptions {
+	runManager: SubAgentRunManager;
 	channelId: string;
 	/**
 	 * Spec 042 D7: required, not defaulted. `follow_up` dispatches a new external process through
@@ -133,7 +134,7 @@ function resumableHarnessOf(record: RunRecord): "codex-cli" | "claude-code" | un
 }
 
 export function createSubAgentListTool(options: SubAgentManageToolOptions): AgentTool<typeof subagentListSchema> {
-	const manager = () => getSubAgentRunManager(options.channelId);
+	const manager = options.runManager;
 	return {
 		name: "subagent_list",
 		label: "subagent_list",
@@ -145,7 +146,7 @@ export function createSubAgentListTool(options: SubAgentManageToolOptions): Agen
 			// text and `details.runs` — a long-lived channel could dump thousands of historical
 			// records into a single tool result. Running runs (the ones a decision might depend
 			// on) are never dropped; only the terminal tail is capped, newest first.
-			const allRuns = manager().list();
+			const allRuns = manager.list();
 			const running = allRuns.filter((record) => record.status === "running");
 			const terminal = allRuns
 				.filter((record) => record.status !== "running")
@@ -167,7 +168,7 @@ export function createSubAgentListTool(options: SubAgentManageToolOptions): Agen
 }
 
 export function createSubAgentRunTool(options: SubAgentManageToolOptions): AgentTool<typeof subagentRunSchema> {
-	const manager = () => getSubAgentRunManager(options.channelId);
+	const manager = options.runManager;
 
 	return {
 		name: "subagent_run",
@@ -177,7 +178,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			"(no wake — your decision, not a failure). follow_up: continue a resumable run with a new instruction (new runId).",
 		parameters: subagentRunSchema,
 		execute: async (_toolCallId: string, { op, runId, task }: SubAgentRunArgs) => {
-			const resolution = manager().resolveRef(runId);
+			const resolution = manager.resolveRef(runId);
 			if (resolution.kind === "ambiguous") {
 				throw new RecoverableToolError(
 					`"${runId}" matches multiple runs on this channel: ${resolution.candidates.map((candidate) => candidate.runId).join(", ")}. Use the full runId.`,
@@ -197,7 +198,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 			}
 
 			if (op === "cancel") {
-				const status = await manager().cancel(resolvedRunId);
+				const status = await manager.cancel(resolvedRunId);
 				return {
 					content: [{ type: "text", text: `Cancel requested for run ${resolvedRunId}: ${status}` }],
 					details: { op, runId: resolvedRunId, status },
@@ -283,7 +284,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 
 			// A short, human-typeable id (spec 041) — the follow-up gets a fresh identity, not the
 			// dispatching tool call's own id.
-			const newRunId = manager().mintRunId();
+			const newRunId = manager.mintRunId();
 
 			let leaseKey: string | undefined;
 			if (role.mutates === "write") {
@@ -329,6 +330,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 					runContext,
 				);
 				launchResult = await launchExternalRun({
+					runManager: manager,
 					runId: newRunId,
 					channelId: options.channelId,
 					channelDir: options.channelDir,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { expandPlaceholders, formatDroppedPlaceholderWarnings } from "../src/subagents/external/harness.js";
+import { expandPlaceholders } from "../src/subagents/external/harness.js";
 
 /**
  * Spec 042, D10: a token that still references a placeholder after substitution (its value was
@@ -40,11 +40,5 @@ describe("expandPlaceholders (spec 042, D10)", () => {
 		});
 		expect(argv).toEqual(["--model", "--effort", "high"]);
 		expect(dropped).toEqual(["$MODEL"]);
-	});
-
-	it("formatDroppedPlaceholderWarnings names the dropped token", () => {
-		const warnings = formatDroppedPlaceholderWarnings(["$MODEL"]);
-		expect(warnings).toHaveLength(1);
-		expect(warnings[0]).toContain("$MODEL");
 	});
 });

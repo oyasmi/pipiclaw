@@ -2,12 +2,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import {
-	findExactModelReferenceMatch,
-	findModelReferenceMatch,
-	formatModelReference,
-	resolveInitialModel,
-} from "../src/models/utils.js";
+import { findExactModelReferenceMatch, findModelReferenceMatch, resolveInitialModel } from "../src/models/utils.js";
 import type { PipiclawSettingsManager } from "../src/settings.js";
 
 const anthropicModel = getModel("anthropic", "claude-sonnet-4-5");
@@ -32,8 +27,7 @@ function makeSettings(defaultProvider?: string, defaultModel?: string): Pipiclaw
 }
 
 describe("model-utils", () => {
-	it("formats model references and exact matches", () => {
-		expect(formatModelReference(anthropicModel)).toBe("anthropic/claude-sonnet-4-5");
+	it("matches exact model references", () => {
 		expect(findExactModelReferenceMatch("anthropic/claude-sonnet-4-5", [anthropicModel, openaiModel])).toEqual({
 			match: anthropicModel,
 			ambiguous: false,

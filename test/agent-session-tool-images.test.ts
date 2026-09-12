@@ -18,7 +18,7 @@ import {
 	initializeThinkingLevelCompat,
 	setModelWithThinkingPreservation,
 	setThinkingLevelWithConditionalPersist,
-} from "../src/agent/channel-runner.js";
+} from "../src/agent/session-adapter.js";
 
 async function createSession(
 	modelId: "gpt-4o-mini" | "gpt-5-mini" = "gpt-4o-mini",

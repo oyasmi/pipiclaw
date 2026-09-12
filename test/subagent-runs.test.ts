@@ -4,15 +4,18 @@ import { describe, expect, it } from "vitest";
 import type { LoggedSubAgentRun } from "../src/channel/store.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import {
-	configureSubAgentRuntime,
-	getSubAgentRunManager,
+	createSubAgentRuntime,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
-	restoreAllSubAgentRuns,
 	type SettleInput,
 	SubAgentRunManager,
 } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import type { UsageLedgerEntry } from "../src/usage/ledger.js";
+import {
+	configureSubAgentRuntime,
+	getSubAgentRunManager,
+	restoreAllSubAgentRuns,
+} from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-subagent-runs-");
@@ -106,6 +109,25 @@ function register(manager: SubAgentRunManager, overrides: Partial<Parameters<Sub
 }
 
 describe("SubAgentRunManager (spec 040, D1/D7)", () => {
+	it("keeps identical channel/run ids isolated between application instances and their wake sinks", async () => {
+		const firstWake = makeDispatch();
+		const secondWake = makeDispatch();
+		const first = createSubAgentRuntime({ dispatch: firstWake.dispatch });
+		const second = createSubAgentRuntime({ dispatch: secondWake.dispatch });
+		try {
+			await register(first.get("dm_123"), { artifactDir: createTempDir() });
+			await register(second.get("dm_123"), { artifactDir: createTempDir() });
+			await first.get("dm_123").settle("run-1", baseSettleInput(), { announce: true });
+			expect(first.get("dm_123").get("run-1")?.status).toBe("completed");
+			expect(second.get("dm_123").get("run-1")?.status).toBe("running");
+			expect(firstWake.events).toHaveLength(1);
+			expect(secondWake.events).toHaveLength(0);
+		} finally {
+			first.stop();
+			second.stop();
+		}
+	});
+
 	it("admits at most one cross-channel registration at the host cap boundary", async () => {
 		configureSubAgentRuntime({});
 		const prefix = `host-cap-${Date.now()}`;

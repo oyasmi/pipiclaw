@@ -1,13 +1,10 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { getChannelJobManager } from "../../agent/job-manager.js";
-import { createExecutor } from "../../executor.js";
 import * as log from "../../log.js";
 import { parseScheduledEventContent } from "../../runtime/events.js";
 import { parseLocalTime } from "../../shared/local-time.js";
 import { errorMessage } from "../../shared/text-utils.js";
-import { getSubAgentRunManager } from "../../subagents/runs.js";
 import { createCycle, nextCycleId } from "../../tasks/cycle.js";
 import type { TaskBudget, TaskFrontmatterV4 } from "../../tasks/frontmatter.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../../tasks/ledger.js";
@@ -146,10 +143,8 @@ export async function buildTicketContext(
 	schedule: string | undefined,
 	now: Date = new Date(),
 ): Promise<TicketContext> {
-	const runManager = getSubAgentRunManager(options.channelId);
-	const jobs = await getChannelJobManager(options.channelId, createExecutor())
-		.list()
-		.catch(() => []);
+	const runManager = options.runManager;
+	const jobs = await options.jobManager.list().catch(() => []);
 	const events = await readChannelEvents(options);
 	return {
 		now,
@@ -236,7 +231,7 @@ export async function assertVerificationHoldsForClose(
 	id: string,
 ): Promise<void> {
 	if (document.fields.verify !== "required") return;
-	const runManager = getSubAgentRunManager(options.channelId);
+	const runManager = options.runManager;
 	const reason = await completionVerificationBlockReason({
 		channelDir: options.channelDir,
 		taskId: id,

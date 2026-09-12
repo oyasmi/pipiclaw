@@ -1,6 +1,6 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { getChannelJobManager } from "../agent/job-manager.js";
+import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { MediaSender } from "../channel/channel-context.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
@@ -10,6 +10,7 @@ import type { ProjectScope } from "../security/project-scope.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawSessionSearchSettings } from "../settings.js";
 import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../subagents/discovery.js";
+import type { SubAgentRunManager } from "../subagents/runs.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "../subagents/tool.js";
 import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
@@ -18,6 +19,8 @@ import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage
 import { withToolDetails } from "./tool-details.js";
 
 export interface CreatePipiclawToolsOptions {
+	jobManager: ChannelJobManager;
+	runManager: SubAgentRunManager;
 	executor: Executor;
 	/** File-content port for the generic file tools (spec 044, D1); `Executor` stays command-only. */
 	fileStore: FileStore;
@@ -80,7 +83,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		webConfig: toolsConfig.tools.web,
 		toolsConfig,
 		rtkEnabled: toolsConfig.tools.rtk.enabled,
-		jobManager: getChannelJobManager(options.channelId, options.executor),
+		jobManager: options.jobManager,
+		runManager: options.runManager,
 		getCurrentModel: options.getCurrentModel,
 		getAvailableModels: options.getAvailableModels,
 		resolveApiKey: options.resolveApiKey,
@@ -90,6 +94,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		getToolsUsed: options.getToolsUsed,
 	});
 	const subAgentToolOptions = {
+		getRunManager: () => options.runManager,
 		executor: options.executor,
 		fileStore: options.fileStore,
 		getCurrentModel: options.getCurrentModel,
@@ -112,6 +117,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		},
 	};
 	const subAgentManageOptions = {
+		runManager: options.runManager,
 		channelId: options.channelId,
 		channelDir: options.channelDir,
 		getSubAgentDiscovery: options.getSubAgentDiscovery,

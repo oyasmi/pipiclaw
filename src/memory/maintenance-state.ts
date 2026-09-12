@@ -1,5 +1,5 @@
-import { readFile, rmdir, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getChannelDirName } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
@@ -55,20 +55,6 @@ export function getMemoryMaintenanceStatePath(appHomeDir: string, channelId: str
 	return join(getMemoryMaintenanceStateDir(appHomeDir), `${getChannelDirName(channelId)}.json`);
 }
 
-/**
- * Where a pre-escaping runtime put the same channel's state. Only differs for ids containing
- * `/`, and only matters until the next write moves the state to its canonical path.
- *
- * RETIRE AT v0.9.3, same rationale as the header comment in `../runtime/task-migration.js`: by
- * the stable cut, every still-running group channel with a `/` in its id will have had its state
- * folded onto the canonical path at least once, so this fallback read finds nothing.
- */
-function legacyStatePath(appHomeDir: string, channelId: string): string | undefined {
-	return getChannelDirName(channelId) === channelId
-		? undefined
-		: join(getMemoryMaintenanceStateDir(appHomeDir), `${channelId}.json`);
-}
-
 function createDefaultState(channelId: string): MemoryMaintenanceState {
 	return { channelId, dirty: false, failureBackoffUntil: null };
 }
@@ -94,12 +80,8 @@ function normalizeState(channelId: string, value: unknown): MemoryMaintenanceSta
 		dirty: typeof record.dirty === "boolean" ? record.dirty : false,
 		lastActivityAt: normalizeOptionalString(record.lastActivityAt),
 		eligibleAfter: normalizeOptionalString(record.eligibleAfter),
-		// v1 states carried the checkpoint job's fields under a different name; fold them into
-		// the reflect cadence/cursor so an upgrade does not re-run reflect on the channel's whole
-		// history nor lose its due time.
-		lastReflectAt: normalizeOptionalString(record.lastReflectAt) ?? normalizeOptionalString(record.lastCheckpointAt),
-		lastReflectedEntryId:
-			normalizeOptionalString(record.lastReflectedEntryId) ?? normalizeOptionalString(record.lastCheckpointEntryId),
+		lastReflectAt: normalizeOptionalString(record.lastReflectAt),
+		lastReflectedEntryId: normalizeOptionalString(record.lastReflectedEntryId),
 		failureBackoffUntil: normalizeOptionalNullableString(record.failureBackoffUntil) ?? null,
 	};
 }
@@ -114,22 +96,11 @@ export async function readMemoryMaintenanceState(
 		return normalizeState(channelId, JSON.parse(raw) as unknown);
 	} catch (error) {
 		if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-			const legacy = await readLegacyState(appHomeDir, channelId);
-			return legacy ?? createDefaultState(channelId);
+			return createDefaultState(channelId);
 		}
 		const message = errorMessage(error);
 		log.logWarning(`[${channelId}] Failed to read memory maintenance state; rebuilding defaults`, message);
 		return createDefaultState(channelId);
-	}
-}
-
-async function readLegacyState(appHomeDir: string, channelId: string): Promise<MemoryMaintenanceState | undefined> {
-	const path = legacyStatePath(appHomeDir, channelId);
-	if (!path) return undefined;
-	try {
-		return normalizeState(channelId, JSON.parse(await readFile(path, "utf-8")) as unknown);
-	} catch {
-		return undefined; // absent or unreadable ⇒ the caller falls back to defaults, as before
 	}
 }
 
@@ -143,16 +114,6 @@ export async function updateMemoryMaintenanceState(
 		const current = await readMemoryMaintenanceState(appHomeDir, channelId);
 		const next = normalizeState(channelId, update(current));
 		await writeFileAtomically(path, `${JSON.stringify(next, null, 2)}\n`);
-		// The canonical file now holds everything the legacy one did; leaving it would keep a
-		// stale copy around forever, since reads only fall back when the canonical file is gone.
-		const legacy = legacyStatePath(appHomeDir, channelId);
-		if (legacy) {
-			await unlink(legacy).catch(() => {});
-			// ...along with the directory the raw id created, which `rmdir` leaves alone if
-			// another channel's state still lives there. Tidying only; failure changes nothing.
-			const strayDir = dirname(legacy);
-			if (strayDir !== getMemoryMaintenanceStateDir(appHomeDir)) await rmdir(strayDir).catch(() => {});
-		}
 		return next;
 	});
 }

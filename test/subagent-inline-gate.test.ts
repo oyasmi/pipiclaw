@@ -4,6 +4,7 @@ import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { createPipiclawTools } from "../src/tools/index.js";
+import { testManagers } from "./helpers/background-runtime.js";
 
 /**
  * Spec 046, D2.3: `tools.subagentInline.enabled` gates `subagent_inline` the same way
@@ -50,13 +51,15 @@ function makeOptions(subagentInlineEnabled: boolean) {
 
 describe("subagent_inline tool gate (spec 046, D2.3)", () => {
 	it("registers subagent_inline alongside subagent when the gate defaults/opts in", () => {
-		const names = createPipiclawTools(makeOptions(true)).map((tool) => tool.name);
+		const names = createPipiclawTools({ ...testManagers(), ...makeOptions(true) }).map((tool) => tool.name);
 		expect(names).toContain("subagent");
 		expect(names).toContain("subagent_inline");
 	});
 
 	it("describes inline as an advanced fallback with a complete independent control surface", () => {
-		const inline = createPipiclawTools(makeOptions(true)).find((tool) => tool.name === "subagent_inline");
+		const inline = createPipiclawTools({ ...testManagers(), ...makeOptions(true) }).find(
+			(tool) => tool.name === "subagent_inline",
+		);
 		if (!inline) throw new Error("subagent_inline not registered");
 
 		expect(inline.description).toContain("Advanced fallback only, not the default");
@@ -82,7 +85,7 @@ describe("subagent_inline tool gate (spec 046, D2.3)", () => {
 	});
 
 	it("omits subagent_inline entirely when the gate is off, while subagent stays available", () => {
-		const names = createPipiclawTools(makeOptions(false)).map((tool) => tool.name);
+		const names = createPipiclawTools({ ...testManagers(), ...makeOptions(false) }).map((tool) => tool.name);
 		expect(names).toContain("subagent");
 		expect(names).not.toContain("subagent_inline");
 	});

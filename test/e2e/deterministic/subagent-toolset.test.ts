@@ -9,10 +9,10 @@ describe("E2E deterministic: sub-agent tool set", () => {
 	});
 
 	it("A21: an internal sub-agent is not handed send_media / job / subagent tools", async () => {
-		// `availableToSubagents: false` in the registry (send_media, job) + `subagent`/
+		// the sub-agent whitelist exclusions (send_media, job) + `subagent`/
 		// `subagent_inline` never in the child set. Asserted on the tools the mock actually
-		// received for the child's turn. Mutation check: flip send_media's
-		// availableToSubagents to true and it appears in the child request below.
+		// received for the child's turn. The registry and role parser share one whitelist;
+		// unit tests cover its membership, this case covers the actual provider request.
 		harness = await createDeterministicHarness();
 
 		harness.model.script.route({

@@ -7,14 +7,13 @@ import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import {
-	configureSubAgentRuntime,
-	getSubAgentRunManager,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
 	SubAgentRunManager,
 } from "../src/subagents/runs.js";
 import { assertVerifyAdmissible, createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
+import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spec 040, D10.1: internal write runs now take the same workspace lease external runs will. */
@@ -67,6 +66,7 @@ function createAssistantMessage(text: string): AssistantMessage {
 
 function makeTool(workspaceDir: string, channelDir: string, channelId = "dm_lease") {
 	return createSubAgentInlineTool({
+		...testManagers(channelId),
 		executor: fakeExecutor,
 		fileStore: createFileStore(),
 		getCurrentModel: () => model,
@@ -107,6 +107,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		mkdirSync(channelDir, { recursive: true });
 		const manager = new SubAgentRunManager(channelId, {});
 		const tool = createSubAgentInlineTool({
+			...testManagers(channelId),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -146,6 +147,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 			});
 		}
 		const rejectingTool = createSubAgentInlineTool({
+			...testManagers(channelId),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -205,6 +207,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		writeFileSync(blockedStateDir, "not a directory");
 		const manager = new SubAgentRunManager(channelId, { stateDir: blockedStateDir });
 		const tool = createSubAgentInlineTool({
+			...testManagers(channelId),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -304,6 +307,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		const manager = new SubAgentRunManager(channelId, {});
 		let releasePrompt: (() => void) | undefined;
 		const tool = createSubAgentInlineTool({
+			...testManagers(channelId),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -374,6 +378,7 @@ describe("subagent tool: purpose=verify admission (D9)", () => {
 
 		const { discoverSubAgents } = await import("../src/subagents/discovery.js");
 		return createSubAgentTool({
+			...testManagers("dm_lease"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,

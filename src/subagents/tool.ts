@@ -38,8 +38,10 @@ import { describeToolCall } from "../tools/presentation.js";
 import { buildToolSet } from "../tools/registry.js";
 import {
 	DEFAULT_THINKING_LEVEL,
+	type ExternalSubAgentConfig,
 	externalRoleFingerprint,
 	formatSubAgentList,
+	type ResolvedInternalSubAgentConfig,
 	type ResolvedSubAgentConfig,
 	resolveConfiguredRole,
 	resolveInlineAgent,
@@ -49,7 +51,7 @@ import {
 	withSubAgentsDirWriteDeny,
 } from "./discovery.js";
 import { type ExternalLaunchResult, launchExternalRun } from "./external/run.js";
-import { getSubAgentRunManager, resolveSyncGraceMs, type SettleInput, type SubAgentRunManager } from "./runs.js";
+import { resolveSyncGraceMs, type SettleInput, type SubAgentRunManager } from "./runs.js";
 import { resolveVerificationOutcome } from "./verification-outcome.js";
 import {
 	acquireWorkspaceLease,
@@ -194,7 +196,7 @@ export interface SubAgentToolOptions {
 		channelId: string;
 	};
 	createWorker?: (config: {
-		subAgent: ResolvedSubAgentConfig;
+		subAgent: ResolvedInternalSubAgentConfig;
 		apiKey: string;
 		tools: AgentTool<any>[];
 	}) => SubAgentWorker;
@@ -204,8 +206,8 @@ export interface SubAgentToolOptions {
 	convergenceWallClockMs?: number;
 	/** Test-only override for the D2 sync grace window; defaults to SYNC_GRACE_MS. */
 	syncGraceMs?: number;
-	/** Test seam for setup/admission failures. Production uses the process-wide channel manager. */
-	getRunManager?: typeof getSubAgentRunManager;
+	/** Channel manager owned by the application; also a seam for admission failures. */
+	getRunManager: (channelId: string) => SubAgentRunManager;
 }
 
 interface SubAgentWorker {
@@ -498,8 +500,8 @@ function withSubagentMemoryWriteDeny(
 }
 
 /**
- * Build a sub-agent's tool set from the shared tool registry, filtered to tools flagged
- * available to sub-agents (files + web). Sub-agents run with their own security context
+ * Build a sub-agent's tool set from the shared tool registry, filtered by the shared
+ * sub-agent whitelist (files + web). Sub-agents run with their own security context
  * (rooted at the sub-agent workspace) and their own per-invocation bash timeout.
  */
 function buildSubagentTools(
@@ -701,7 +703,11 @@ function createDetails(input: {
 	return {
 		agent: input.config.name,
 		source: input.config.source,
-		model: input.modelOverride ?? formatModelReference(input.config.model),
+		model:
+			input.modelOverride ??
+			(input.config.runtime === "external"
+				? (input.config.externalModelRef ?? "default")
+				: formatModelReference(input.config.model)),
 		tools: input.toolsOverride ?? [...input.config.tools],
 		turns: input.turns,
 		toolCalls: input.toolCalls,
@@ -749,7 +755,7 @@ async function dispatchSubAgentRun(
 	// Only ever set for an inline (internal) delegation with `bash` in `tools` and no explicit
 	// `mutates` — surfaced to the model, not just a log, since it has no role file to fix.
 	const mutatesNote = warning ? `Note: ${warning}\n\n` : "";
-	const runManager = (options.getRunManager ?? getSubAgentRunManager)(options.runtimeContext.channelId);
+	const runManager = options.getRunManager(options.runtimeContext.channelId);
 	// A short, human-typeable id (spec 041) — never the dispatching tool call's own id, which
 	// on some providers is a long `call_<id>|fc_<id>` composite unreadable in a chat UI.
 	const runContext = await prepareRunContext(runManager.mintRunId(), params, options);
@@ -776,7 +782,7 @@ async function dispatchSubAgentRun(
 	}
 
 	if (config.runtime === "external") {
-		return dispatchExternalRun({ options, currentModel, config, runLabel, runContext, leaseKey, params });
+		return dispatchExternalRun({ options, currentModel, config, runLabel, runContext, leaseKey, params, runManager });
 	}
 
 	return dispatchInternalRun({
@@ -799,19 +805,16 @@ async function dispatchSubAgentRun(
  * always 0, so there is no inline-wait branch to share with the internal path.
  */
 async function dispatchExternalRun(input: {
+	runManager: SubAgentRunManager;
 	options: SubAgentToolOptions;
 	currentModel: Model<Api>;
-	config: ResolvedSubAgentConfig;
+	config: ExternalSubAgentConfig;
 	runLabel: string;
 	runContext: SubAgentRunContext;
 	leaseKey: string | undefined;
 	params: { task: string; workingDirectory?: string; purpose?: "work" | "verify"; taskId?: string };
 }): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
 	const { options, config, runLabel, runContext, leaseKey, params } = input;
-	if (!config.harness) {
-		releaseWorkspaceLease(leaseKey, runContext.runId);
-		throw new Error(`Sub-agent "${config.name}" has runtime: external but no harness configured.`);
-	}
 	let launchResult: ExternalLaunchResult;
 	try {
 		// D9/T5: external roles get the same task envelope internal workers do — runtime
@@ -826,6 +829,7 @@ async function dispatchExternalRun(input: {
 			runContext,
 		);
 		launchResult = await launchExternalRun({
+			runManager: input.runManager,
 			runId: runContext.runId,
 			channelId: options.runtimeContext.channelId,
 			channelDir: options.channelDir,
@@ -833,7 +837,7 @@ async function dispatchExternalRun(input: {
 			agent: config.name,
 			source: config.source,
 			harness: config.harness,
-			command: config.command ?? "",
+			command: config.command,
 			shell: config.shell,
 			env: config.env,
 			externalModelRef: config.externalModelRef,
@@ -908,7 +912,7 @@ async function dispatchExternalRun(input: {
 async function dispatchInternalRun(input: {
 	options: SubAgentToolOptions;
 	currentModel: Model<Api>;
-	config: ResolvedSubAgentConfig;
+	config: ResolvedInternalSubAgentConfig;
 	runLabel: string;
 	mutatesNote: string;
 	runContext: SubAgentRunContext;

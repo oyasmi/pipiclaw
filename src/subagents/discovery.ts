@@ -76,7 +76,7 @@ const ALLOWED_CONTEXT_CHOICES = ["none", "index"] as const;
 
 export type SubAgentContextChoice = (typeof ALLOWED_CONTEXT_CHOICES)[number];
 
-export interface SubAgentConfig {
+interface SubAgentConfigFields {
 	name: string;
 	description: string;
 	systemPrompt: string;
@@ -117,10 +117,27 @@ export interface SubAgentConfig {
 	unavailable?: string;
 }
 
-export interface ResolvedSubAgentConfig extends Omit<SubAgentConfig, "model" | "modelRef"> {
+export interface InternalSubAgentConfig extends SubAgentConfigFields {
+	runtime: "internal";
+}
+
+export interface ExternalSubAgentConfig extends SubAgentConfigFields {
+	runtime: "external";
+	harness: SubAgentHarness;
+	command: string;
+	mutates: SubAgentMutates;
+	model?: never;
+	modelRef?: never;
+}
+
+export type SubAgentConfig = InternalSubAgentConfig | ExternalSubAgentConfig;
+
+export interface ResolvedInternalSubAgentConfig extends InternalSubAgentConfig {
 	model: Model<Api>;
 	modelRef: string;
 }
+
+export type ResolvedSubAgentConfig = ResolvedInternalSubAgentConfig | ExternalSubAgentConfig;
 
 export interface SubAgentDiscoveryResult {
 	directory: string;
@@ -857,6 +874,16 @@ export function resolveConfiguredRole(
 		return { error: `Sub-agent "${baseConfig.name}" is currently unavailable: ${baseConfig.unavailable}` };
 	}
 
+	if (baseConfig.runtime === "external") {
+		return {
+			config: {
+				...baseConfig,
+				thinkingLevel:
+					baseConfig.thinkingLevel ?? (overrides.purpose === "verify" ? DEFAULT_THINKING_LEVEL : undefined),
+			},
+		};
+	}
+
 	let model = baseConfig.model;
 	let modelRef = baseConfig.modelRef;
 	if (!model && subagentDefaultModelRef) {
@@ -868,14 +895,7 @@ export function resolveConfiguredRole(
 		modelRef = formatModelReference(resolved.model);
 	}
 
-	const purpose = overrides.purpose === "verify" ? "verify" : "work";
-	// External work is not defaulted: pipiclaw has no standing to pick a reasoning effort for
-	// another CLI's own configuration. External verify still defaults — it is the last unattended
-	// gate before an attestation is trusted, and "whatever that machine happens to have configured"
-	// is not an acceptable substitute for real reasoning.
-	const thinkingLevel =
-		baseConfig.thinkingLevel ??
-		(baseConfig.runtime === "external" && purpose !== "verify" ? undefined : DEFAULT_THINKING_LEVEL);
+	const thinkingLevel = baseConfig.thinkingLevel ?? DEFAULT_THINKING_LEVEL;
 	const mutates = baseConfig.mutates ?? inferMutatesFromTools(baseConfig.tools);
 
 	return {
@@ -903,7 +923,7 @@ export function resolveInlineAgent(
 	overrides: InlineAgentOverrides,
 	/** `settings.subagentModel` (spec 032 D5): used only when this call does not name a model. */
 	subagentDefaultModelRef?: string,
-): { config?: ResolvedSubAgentConfig; error?: string; warning?: string } {
+): { config?: ResolvedInternalSubAgentConfig; error?: string; warning?: string } {
 	const systemPrompt = overrides.systemPrompt.trim();
 	if (!systemPrompt) {
 		return { error: "Sub-agent system prompt cannot be empty." };

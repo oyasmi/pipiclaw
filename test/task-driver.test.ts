@@ -6,7 +6,6 @@ import { getChannelDir } from "../src/channel/channel-paths.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { createTaskDriverEvent, TaskDriver, taskStopReceipt } from "../src/runtime/task-driver.js";
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
-import { formatLocalTime } from "../src/shared/local-time.js";
 import { createCycle } from "../src/tasks/cycle.js";
 import type { TaskFrontmatterV4 } from "../src/tasks/frontmatter.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
@@ -237,6 +236,6 @@ describe("TaskDriver (spec 051, D9)", () => {
 		const receipt = taskStopReceipt("dm_a", entry, "预算耗尽", NOW.getTime());
 		expect(receipt.text).toContain("预算耗尽");
 		expect(receipt.text).toContain("/tasks show T");
-		expect(formatLocalTime(new Date(Number(receipt.ts)))).toBeTruthy();
+		expect(Number(receipt.ts)).toBe(NOW.getTime());
 	});
 });

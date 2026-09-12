@@ -6,6 +6,7 @@ import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
 import type { PipiclawSessionSearchSettings } from "../settings.js";
+import type { SubAgentRunManager } from "../subagents/runs.js";
 import { createBashTool } from "./bash.js";
 import type { PipiclawToolsConfig, PipiclawWebToolsConfig } from "./config.js";
 import { createEditTool } from "./edit.js";
@@ -18,6 +19,7 @@ import { createReadTool } from "./read.js";
 import { createSendMediaTool } from "./send-media.js";
 import { createSessionSearchTool } from "./session-search.js";
 import { createSkillTool } from "./skill.js";
+import { SUBAGENT_TOOL_NAMES } from "./subagent-tool-names.js";
 import {
 	createTaskCloseTool,
 	createTaskCreateTool,
@@ -68,6 +70,7 @@ export interface ToolBuildContext {
 	 * The sub-agent set never supplies it, so sub-agents get neither.
 	 */
 	jobManager?: ChannelJobManager;
+	runManager?: SubAgentRunManager;
 	getCurrentModel?: () => Model<Api>;
 	getAvailableModels?: () => Model<Api>[];
 	resolveApiKey?: (model: Model<Api>) => Promise<string>;
@@ -90,8 +93,6 @@ export interface ToolBuildContext {
 export interface ToolRegistration {
 	/** Also the tool's `details.kind`: the name is the authoritative discriminator. */
 	name: ToolDetailsKind;
-	/** Whether this tool is included in a sub-agent's tool set. */
-	availableToSubagents: boolean;
 	/** Config gate; when omitted the tool is always enabled. */
 	enabledBy?: (ctx: ToolBuildContext) => boolean;
 	create: (ctx: ToolBuildContext) => AgentTool<any>;
@@ -120,6 +121,17 @@ function memoryToolOptions(ctx: ToolBuildContext) {
 	};
 }
 
+function taskToolOptions(ctx: ToolBuildContext) {
+	return {
+		jobManager: req(ctx.jobManager, "jobManager"),
+		runManager: req(ctx.runManager, "runManager"),
+		workspaceDir: ctx.workspaceDir,
+		channelDir: ctx.channelDir,
+		channelId: ctx.channelId,
+		workingDirectory: ctx.securityContext.projectRoot,
+	};
+}
+
 function webEnabled(ctx: ToolBuildContext): boolean {
 	return ctx.webConfig != null && ctx.webConfig.enable !== false;
 }
@@ -133,12 +145,10 @@ function webEnabled(ctx: ToolBuildContext): boolean {
 export const TOOL_REGISTRY: ToolRegistration[] = [
 	{
 		name: "read",
-		availableToSubagents: true,
 		create: (ctx) => createReadTool(ctx.executor, ctx.fileStore, fileToolOptions(ctx)),
 	},
 	{
 		name: "bash",
-		availableToSubagents: true,
 		create: (ctx) =>
 			createBashTool(ctx.executor, {
 				...fileToolOptions(ctx),
@@ -155,27 +165,22 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "edit",
-		availableToSubagents: true,
 		create: (ctx) => createEditTool(ctx.fileStore, fileToolOptions(ctx)),
 	},
 	{
 		name: "grep",
-		availableToSubagents: true,
 		create: (ctx) => createGrepTool(ctx.executor, fileToolOptions(ctx)),
 	},
 	{
 		name: "glob",
-		availableToSubagents: true,
 		create: (ctx) => createGlobTool(ctx.fileStore, fileToolOptions(ctx)),
 	},
 	{
 		name: "write",
-		availableToSubagents: true,
 		create: (ctx) => createWriteTool(ctx.fileStore, fileToolOptions(ctx)),
 	},
 	{
 		name: "web_search",
-		availableToSubagents: true,
 		enabledBy: webEnabled,
 		create: (ctx) =>
 			createWebSearchTool({
@@ -187,7 +192,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "web_fetch",
-		availableToSubagents: true,
 		enabledBy: webEnabled,
 		create: (ctx) =>
 			createWebFetchTool({
@@ -200,7 +204,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "send_media",
-		availableToSubagents: false,
 		// Enabled only when the driving transport supplied a media sender (the DingTalk
 		// bot, or the terminal). Absent it, the tool is not built or advertised.
 		enabledBy: (ctx) => ctx.mediaSender != null,
@@ -214,7 +217,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "session_search",
-		availableToSubagents: false,
 		create: (ctx) =>
 			createSessionSearchTool({
 				channelId: ctx.channelId,
@@ -227,27 +229,22 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	// Spec 047, P4: one tool per payload shape. All three share the same build options.
 	{
 		name: "memory_save",
-		availableToSubagents: false,
 		create: (ctx) => createMemorySaveTool(memoryToolOptions(ctx)),
 	},
 	{
 		name: "memory_search",
-		availableToSubagents: false,
 		create: (ctx) => createMemorySearchTool(memoryToolOptions(ctx)),
 	},
 	{
 		name: "memory_forget",
-		availableToSubagents: false,
 		create: (ctx) => createMemoryForgetTool(memoryToolOptions(ctx)),
 	},
 	{
 		name: "skill",
-		availableToSubagents: false,
 		create: (ctx) => createSkillTool({ workspaceDir: ctx.workspaceDir, ...fileToolOptions(ctx) }),
 	},
 	{
 		name: "event_manage",
-		availableToSubagents: false,
 		create: (ctx) =>
 			createEventManageTool({
 				workspaceDir: ctx.workspaceDir,
@@ -260,74 +257,36 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	// shape (spec 046, D3.1) — all share it, since none is meaningful without the others.
 	{
 		name: "task_list",
-		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
-		create: (ctx) =>
-			createTaskListTool({
-				workspaceDir: ctx.workspaceDir,
-				channelDir: ctx.channelDir,
-				channelId: ctx.channelId,
-				workingDirectory: ctx.securityContext.projectRoot,
-			}),
+		create: (ctx) => createTaskListTool(taskToolOptions(ctx)),
 	},
 	{
 		name: "task_create",
-		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
-		create: (ctx) =>
-			createTaskCreateTool({
-				workspaceDir: ctx.workspaceDir,
-				channelDir: ctx.channelDir,
-				channelId: ctx.channelId,
-				workingDirectory: ctx.securityContext.projectRoot,
-			}),
+		create: (ctx) => createTaskCreateTool(taskToolOptions(ctx)),
 	},
 	{
 		name: "task_update",
-		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
-		create: (ctx) =>
-			createTaskUpdateTool({
-				workspaceDir: ctx.workspaceDir,
-				channelDir: ctx.channelDir,
-				channelId: ctx.channelId,
-				workingDirectory: ctx.securityContext.projectRoot,
-			}),
+		create: (ctx) => createTaskUpdateTool(taskToolOptions(ctx)),
 	},
 	{
 		name: "task_close",
-		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
-		create: (ctx) =>
-			createTaskCloseTool({
-				workspaceDir: ctx.workspaceDir,
-				channelDir: ctx.channelDir,
-				channelId: ctx.channelId,
-				workingDirectory: ctx.securityContext.projectRoot,
-			}),
+		create: (ctx) => createTaskCloseTool(taskToolOptions(ctx)),
 	},
 	{
 		name: "task_log",
-		availableToSubagents: false,
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false,
-		create: (ctx) =>
-			createTaskLogTool({
-				workspaceDir: ctx.workspaceDir,
-				channelDir: ctx.channelDir,
-				channelId: ctx.channelId,
-			}),
+		create: (ctx) => createTaskLogTool(taskToolOptions(ctx)),
 	},
 	{
 		name: "task_step_end",
-		availableToSubagents: false,
 		// Only inside a task session: it is the loop's closing move, not a chat action.
 		enabledBy: (ctx) => ctx.toolsConfig?.tools.tasks.enabled !== false && ctx.taskLoop !== undefined,
 		create: (ctx) =>
 			createTaskStepEndTool({
-				workspaceDir: ctx.workspaceDir,
-				channelDir: ctx.channelDir,
-				channelId: ctx.channelId,
-				workingDirectory: ctx.securityContext.projectRoot,
+				...taskToolOptions(ctx),
 				taskId: ctx.taskLoop?.taskId,
 				cycleId: ctx.taskLoop?.cycleId,
 				getToolsUsed: ctx.getToolsUsed,
@@ -335,7 +294,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 	},
 	{
 		name: "job",
-		availableToSubagents: false,
 		// Present only when a job manager was supplied (always on the main path,
 		// never for sub-agents).
 		enabledBy: (ctx) => ctx.jobManager !== undefined,
@@ -363,7 +321,7 @@ export const TOOL_NAMES: ReadonlySet<string> = new Set<string>([
 ]);
 
 export interface BuildToolSetOptions {
-	/** When true, include only tools flagged `availableToSubagents`. */
+	/** When true, include only tools in the sub-agent whitelist. */
 	forSubagent?: boolean;
 }
 
@@ -378,7 +336,7 @@ export interface BuildToolSetOptions {
 export function buildToolSet(ctx: ToolBuildContext, options: BuildToolSetOptions = {}): AgentTool<any>[] {
 	const result: AgentTool<any>[] = [];
 	for (const registration of TOOL_REGISTRY) {
-		if (options.forSubagent && !registration.availableToSubagents) {
+		if (options.forSubagent && !SUBAGENT_TOOL_NAMES.some((name) => name === registration.name)) {
 			continue;
 		}
 		if (registration.enabledBy && !registration.enabledBy(ctx)) {

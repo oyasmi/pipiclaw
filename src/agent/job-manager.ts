@@ -356,6 +356,7 @@ export class ChannelJobManager {
 	private sweepTimer?: ReturnType<typeof setInterval>;
 	private garbageCollectionTimer?: ReturnType<typeof setTimeout>;
 	private sweeping = false;
+	private stopped = false;
 
 	private readonly options: JobManagerOptions;
 	private readonly sweepIntervalMs: number;
@@ -433,6 +434,7 @@ export class ChannelJobManager {
 	 * to enforce the retention promise without keeping an idle channel awake every few seconds.
 	 */
 	private scheduleGarbageCollection(): void {
+		if (this.stopped) return;
 		if (this.garbageCollectionTimer) {
 			clearTimeout(this.garbageCollectionTimer);
 			this.garbageCollectionTimer = undefined;
@@ -655,7 +657,7 @@ export class ChannelJobManager {
 	 * so their slots free up even when the model never polls, and stops itself once nothing is running.
 	 */
 	private ensureSweeper(): void {
-		if (this.sweepTimer || this.runningCount() === 0) {
+		if (this.stopped || this.sweepTimer || this.runningCount() === 0) {
 			return;
 		}
 		this.sweepTimer = setInterval(() => {
@@ -670,6 +672,14 @@ export class ChannelJobManager {
 		this.sweepTimer.unref?.();
 	}
 
+	/** Stop observation at application shutdown; detached jobs keep running. */
+	stop(): void {
+		this.stopped = true;
+		this.stopSweeper();
+		if (this.garbageCollectionTimer) clearTimeout(this.garbageCollectionTimer);
+		this.garbageCollectionTimer = undefined;
+	}
+
 	private stopSweeper(): void {
 		if (this.sweepTimer) {
 			clearInterval(this.sweepTimer);
@@ -678,7 +688,7 @@ export class ChannelJobManager {
 	}
 
 	private async sweep(): Promise<void> {
-		if (this.sweeping) {
+		if (this.stopped || this.sweeping) {
 			return; // A prior sweep is still awaiting the executor; skip this tick.
 		}
 		this.sweeping = true;
@@ -692,7 +702,7 @@ export class ChannelJobManager {
 				// per-job slot so it cannot race a concurrent list/poll/cancel.
 				await this.reconcileQueue
 					.run(record.id, async () => {
-						if (record.status !== "running") return;
+						if (this.stopped || record.status !== "running") return;
 						await this.applyProbe(record, probes.get(record.id) ?? "");
 					})
 					.catch((error) => {
@@ -1170,10 +1180,6 @@ export class ChannelJobManager {
 	}
 }
 
-// One manager per channel, shared across tool rebuilds so job records survive a resource reload —
-// mirrors the shared singletons used elsewhere in the runtime (e.g. the channel memory queue).
-const managers = new Map<string, ChannelJobManager>();
-
 interface JobRuntimeConfig {
 	/** Root of the per-channel record directories (`<jobsStateDir>/<channelId>/`). */
 	jobsStateDir?: string;
@@ -1188,67 +1194,69 @@ interface JobRuntimeConfig {
 	sweepIntervalMs?: number;
 }
 
-let runtimeConfig: JobRuntimeConfig = {};
-
-/**
- * Give background jobs their persistence root and their way to wake a channel. Called once from
- * bootstrap, before any turn runs; the tool layer builds managers lazily and picks this up.
- */
-export function configureJobRuntime(config: JobRuntimeConfig): void {
-	runtimeConfig = config;
-}
-
-/**
- * Human-readable lines naming this channel's currently running background jobs, for the `/project
- * set|reset` blocker check (spec 043, D4.3) — mirrors `channelJobTaskIds`'s "no manager means no
- * jobs" reasoning, so it needs no `Executor` either.
- */
-export function channelRunningJobLines(channelId: string): string[] {
-	const manager = managers.get(channelId);
-	if (!manager) return [];
-	return manager.listRunning().map((job) => `job \`${job.id}\`: ${job.command.slice(0, 80)}`);
-}
-
-export function getChannelJobManager(channelId: string, executor: Executor): ChannelJobManager {
-	let manager = managers.get(channelId);
-	if (!manager) {
-		manager = new ChannelJobManager(channelId, executor, {
-			...(runtimeConfig.jobsStateDir ? { stateDir: join(runtimeConfig.jobsStateDir, channelId) } : {}),
-			...(runtimeConfig.workspaceDir
-				? { spillDir: join(getChannelDir(runtimeConfig.workspaceDir, channelId), "logs") }
-				: {}),
-			...(runtimeConfig.dispatch ? { dispatch: runtimeConfig.dispatch } : {}),
-			...(runtimeConfig.sweepIntervalMs ? { sweepIntervalMs: runtimeConfig.sweepIntervalMs } : {}),
-		});
-		managers.set(channelId, manager);
-	}
-	return manager;
-}
-
-/**
- * Re-adopt every channel's persisted jobs at startup. Channels are discovered from the state
- * directory itself, so a job survives even when its channel has had no traffic since the restart.
- */
-export async function restoreChannelJobs(executor: Executor): Promise<number> {
-	const jobsStateDir = runtimeConfig.jobsStateDir;
-	if (!jobsStateDir) return 0;
-	let channelIds: string[];
-	try {
-		await mkdir(jobsStateDir, { recursive: true });
-		channelIds = (await readdir(jobsStateDir, { withFileTypes: true }))
-			.filter((entry) => entry.isDirectory())
-			.map((entry) => entry.name);
-	} catch (error) {
-		log.logWarning("Failed to scan persisted background jobs", errorMessage(error));
-		return 0;
+/** One application's jobs; the executor and configuration cannot change after construction. */
+export function createJobRuntime(executor: Executor, options: JobRuntimeConfig = {}) {
+	const config = { ...options };
+	const managers = new Map<string, ChannelJobManager>();
+	let stopped = false;
+	function runningLines(channelId: string): string[] {
+		const manager = managers.get(channelId);
+		if (!manager) return [];
+		return manager.listRunning().map((job) => `job \`${job.id}\`: ${job.command.slice(0, 80)}`);
 	}
 
-	let restored = 0;
-	for (const channelId of channelIds) {
-		restored += await getChannelJobManager(channelId, executor).restore();
+	function get(channelId: string): ChannelJobManager {
+		let manager = managers.get(channelId);
+		if (!manager) {
+			manager = new ChannelJobManager(channelId, executor, {
+				...(config.jobsStateDir ? { stateDir: join(config.jobsStateDir, channelId) } : {}),
+				...(config.workspaceDir ? { spillDir: join(getChannelDir(config.workspaceDir, channelId), "logs") } : {}),
+				...(config.dispatch ? { dispatch: config.dispatch } : {}),
+				...(config.sweepIntervalMs ? { sweepIntervalMs: config.sweepIntervalMs } : {}),
+			});
+			managers.set(channelId, manager);
+			if (stopped) manager.stop();
+		}
+		return manager;
 	}
-	if (restored > 0) {
-		log.logInfo(`Restored ${restored} background job record(s)`);
+
+	/**
+	 * Re-adopt every channel's persisted jobs at startup. Channels are discovered from the state
+	 * directory itself, so a job survives even when its channel has had no traffic since the restart.
+	 */
+	async function restore(): Promise<number> {
+		const jobsStateDir = config.jobsStateDir;
+		if (!jobsStateDir) return 0;
+		let channelIds: string[];
+		try {
+			await mkdir(jobsStateDir, { recursive: true });
+			channelIds = (await readdir(jobsStateDir, { withFileTypes: true }))
+				.filter((entry) => entry.isDirectory())
+				.map((entry) => entry.name);
+		} catch (error) {
+			log.logWarning("Failed to scan persisted background jobs", errorMessage(error));
+			return 0;
+		}
+
+		let restored = 0;
+		for (const channelId of channelIds) {
+			restored += await get(channelId).restore();
+		}
+		if (restored > 0) {
+			log.logInfo(`Restored ${restored} background job record(s)`);
+		}
+		return restored;
 	}
-	return restored;
+
+	return {
+		get,
+		runningLines,
+		restore,
+		stop: () => {
+			stopped = true;
+			for (const manager of managers.values()) manager.stop();
+		},
+	};
 }
+
+export type JobRuntime = ReturnType<typeof createJobRuntime>;

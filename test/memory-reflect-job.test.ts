@@ -62,7 +62,7 @@ afterEach(() => {
 describe("runReflectJob", () => {
 	it("skips without calling the model when the channel is not dirty", async () => {
 		const { appHomeDir, channelDir, workspaceDir } = await harness();
-		const result = await runReflectJob({
+		await runReflectJob({
 			appHomeDir,
 			channelId: "dm_1",
 			channelDir,
@@ -74,10 +74,12 @@ describe("runReflectJob", () => {
 			messages: () => messages,
 			sessionEntries: () => sessionEntries,
 		});
-		expect(result).toMatchObject({ ran: false, skipped: true, skipReason: "clean" });
 		expect(runReflect).not.toHaveBeenCalled();
 		const log = readFileSync(getMemoryReviewLogPath(channelDir), "utf-8").trim();
-		expect(JSON.parse(log.split("\n").at(-1) as string)).toMatchObject({ reason: "reflect" });
+		expect(JSON.parse(log.split("\n").at(-1) as string)).toMatchObject({
+			reason: "reflect",
+			skipped: [{ target: "reflect", reason: "clean" }],
+		});
 	});
 
 	it("runs reflect when dirty, then advances the cursor and clears backoff", async () => {
@@ -89,7 +91,7 @@ describe("runReflectJob", () => {
 		}));
 		vi.mocked(runReflect).mockResolvedValue(reflectResult() as never);
 
-		const result = await runReflectJob({
+		await runReflectJob({
 			appHomeDir,
 			channelId: "dm_1",
 			channelDir,
@@ -102,8 +104,6 @@ describe("runReflectJob", () => {
 			messages: () => messages,
 			sessionEntries: () => sessionEntries,
 		});
-
-		expect(result).toMatchObject({ ran: true, skipped: false });
 		expect(runReflect).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(runReflect).mock.calls[0][0]).toMatchObject({ channelId: "dm_1", channelDir, workspaceDir });
 
@@ -139,9 +139,8 @@ describe("runReflectJob", () => {
 		await runReflectJob(input);
 		// The cursor now sits at entry-2; a second run against the same, unchanged session
 		// entries has nothing after it and must not call the model again.
-		const second = await runReflectJob({ ...input, channelActive: false });
+		await runReflectJob({ ...input, channelActive: false });
 		expect(runReflect).toHaveBeenCalledTimes(1);
-		expect(second.skipped).toBe(true);
 	});
 
 	it("sets a failure backoff and logs the error when reflect throws", async () => {
@@ -149,7 +148,7 @@ describe("runReflectJob", () => {
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({ ...state, dirty: true }));
 		vi.mocked(runReflect).mockRejectedValue(new Error("sidecar timeout"));
 
-		const result = await runReflectJob({
+		await runReflectJob({
 			appHomeDir,
 			channelId: "dm_1",
 			channelDir,
@@ -162,8 +161,6 @@ describe("runReflectJob", () => {
 			messages: () => messages,
 			sessionEntries: () => sessionEntries,
 		});
-
-		expect(result).toMatchObject({ ran: false, skipped: false, error: expect.stringContaining("sidecar timeout") });
 		const state = await readMemoryMaintenanceState(appHomeDir, "dm_1");
 		expect(state.failureBackoffUntil).toBeTruthy();
 		expect(new Date(state.failureBackoffUntil as string).getTime()).toBeGreaterThan(

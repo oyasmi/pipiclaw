@@ -2,13 +2,11 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
-import { getChannelJobManager } from "../src/agent/job-manager.js";
 import type { AgentRunner } from "../src/agent/types.js";
 import type { Executor } from "../src/executor.js";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/runtime/app-home.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
-import { getSubAgentRunManager } from "../src/subagents/runs.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { createFakeTurnState } from "./helpers/fake-turn-state.js";
@@ -142,7 +140,16 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 	const fakeRunner = runner();
 	createRunnerMock.mockReturnValue(fakeRunner);
 	const bot = new WakeBot();
+	const jobProbe = { id: "" };
+	const executor: Executor = {
+		exec: async (command) => {
+			if (command.includes("setsid")) return { stdout: "12345\n", stderr: "", code: 0 };
+			if (command.includes("if [ -s")) return { stdout: `${jobProbe.id} EXIT:0\n`, stderr: "", code: 0 };
+			return { stdout: "", stderr: "", code: 0 };
+		},
+	};
 	const runtime = await createRuntimeContext({
+		executor,
 		paths: runtimePaths,
 		dingtalkConfig: { clientId: "id", clientSecret: "secret", stateDir: runtimePaths.workspaceDir },
 		registerSignalHandlers: false,
@@ -151,7 +158,7 @@ async function createHarness(name: string, hooks?: Parameters<typeof createRunti
 		createEventsWatcher: () => ({ start() {}, stop() {} }),
 		wakeTransitionHooks: hooks,
 	});
-	return { runtimePaths, channelId, fakeRunner, bot, runtime };
+	return { runtimePaths, channelId, fakeRunner, bot, runtime, jobProbe };
 }
 
 async function createWake(
@@ -161,7 +168,7 @@ async function createWake(
 	channelDir?: string,
 ): Promise<DingTalkEvent> {
 	if (kind === "subagent") {
-		const manager = getSubAgentRunManager(harness.channelId);
+		const manager = harness.runtime.runs.get(harness.channelId);
 		const runId = `run-${taskId}`;
 		await manager.register({
 			runId,
@@ -198,16 +205,8 @@ async function createWake(
 			{ announce: true },
 		);
 	} else {
-		let jobId = "";
-		const executor: Executor = {
-			exec: async (command) => {
-				if (command.includes("setsid")) return { stdout: "12345\n", stderr: "", code: 0 };
-				if (command.includes("if [ -s")) return { stdout: `${jobId} EXIT:0\n`, stderr: "", code: 0 };
-				return { stdout: "", stderr: "", code: 0 };
-			},
-		};
-		const manager = getChannelJobManager(harness.channelId, executor);
-		jobId = (await manager.start("true", "job", 60, { taskId })).id;
+		const manager = harness.runtime.jobs.get(harness.channelId);
+		harness.jobProbe.id = (await manager.start("true", "job", 60, { taskId })).id;
 		await manager.list();
 	}
 	const wake = harness.bot.events.at(-1);

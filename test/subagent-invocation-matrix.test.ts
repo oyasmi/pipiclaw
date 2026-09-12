@@ -103,10 +103,12 @@ const externalRole: SubAgentConfig = {
  * moved from a unit test to the type checker.
  */
 describe("resolveConfiguredRole (spec 046, D2.1)", () => {
-	it("resolves an external role with no overrides cleanly", () => {
-		const result = resolveConfiguredRole([], model, [externalRole], { agent: "reviewer" });
+	it("resolves an external role independently of the internal model default", () => {
+		const result = resolveConfiguredRole([], model, [externalRole], { agent: "reviewer" }, "missing/internal-model");
 		expect(result.error).toBeUndefined();
 		expect(result.config?.runtime).toBe("external");
+		expect(result.config?.model).toBeUndefined();
+		expect(result.config?.modelRef).toBeUndefined();
 	});
 
 	it("resolves an internal role cleanly, falling back to the parent's current model", () => {

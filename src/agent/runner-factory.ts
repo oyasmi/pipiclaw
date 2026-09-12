@@ -3,10 +3,14 @@ import { createExecutor, type Executor } from "../executor.js";
 import { createFileStore, type FileStore } from "../file-store.js";
 import { type LoadedSecurityConfig, loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import type { PipiclawSettingsManager } from "../settings.js";
+import type { SubAgentRunManager } from "../subagents/runs.js";
 import { ChannelRunner } from "./channel-runner.js";
+import type { ChannelJobManager } from "./job-manager.js";
 import type { AgentRunner } from "./types.js";
 
 export interface RunnerFactoryPaths {
+	jobManager?: ChannelJobManager;
+	runManager?: SubAgentRunManager;
 	appHomeDir: string;
 	authConfigPath: string;
 	modelsConfigPath: string;

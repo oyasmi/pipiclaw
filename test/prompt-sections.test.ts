@@ -39,9 +39,6 @@ function resource(path: string, content: string): LoadedPromptResource {
 function context(overrides: Partial<PromptBuildContext> = {}): PromptBuildContext {
 	const toolList = overrides.tools ?? tools(FULL_TOOL_NAMES);
 	return {
-		mode: "normal",
-		cwd: "/work",
-		workspaceDir: "/workspace/root",
 		tools: toolList,
 		playbooks: selectRuntimePlaybooks(
 			loadRuntimePlaybookCatalog(),
@@ -58,10 +55,8 @@ describe("system prompt structure", () => {
 	it("uses unique, deterministically ordered section ids (no standalone tools section)", () => {
 		const build = buildPipiclawSystemPrompt(context());
 		const ids = build.sections.map((section) => section.id);
-		const orders = build.sections.map((section) => section.order);
 
 		expect(new Set(ids).size).toBe(ids.length);
-		expect(orders).toEqual([...orders].sort((a, b) => a - b));
 		expect(ids).toEqual([
 			"runtime.identity",
 			"runtime.execution",
@@ -84,7 +79,7 @@ describe("system prompt structure", () => {
 		expect(first.text).not.toMatch(/\d{4}-\d{2}-\d{2}/);
 	});
 
-	it("keeps runtime-authored sections inside their unit and char budgets, with no error diagnostics even over catalogs it does not own", () => {
+	it("keeps runtime-authored sections inside their unit and char budgets, without error diagnostics", () => {
 		const build = buildPipiclawSystemPrompt(context());
 
 		expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(800);
@@ -94,15 +89,6 @@ describe("system prompt structure", () => {
 			const resolved = build.sections.find((section) => section.id === definition.id);
 			if (resolved) expect(resolved.injectedChars).toBeLessThanOrEqual(definition.maxChars);
 		}
-
-		// Skills are pi's to render (spec 026 §9): no Pipiclaw budget warning, no error.
-		const skills = Array.from({ length: 100 }, (_, index) => ({
-			name: `skill-${index}`,
-			description: "d".repeat(200),
-		}));
-		const overCatalog = buildPipiclawSystemPrompt(context({ skills }));
-		expect(overCatalog.diagnostics.filter((diagnostic) => diagnostic.sectionId === "skills")).toEqual([]);
-		expect(overCatalog.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toEqual([]);
 	});
 
 	it("drops a mechanism's whole surface when its tool is off", () => {
@@ -160,8 +146,6 @@ describe("configured sub-agents section", () => {
 		expect(empty.text).not.toContain("## Configured Sub-Agents");
 		expect(empty.text).toContain("## Sub-Agents");
 		expect(empty.text).toContain("subagent_inline");
-		expect(empty.text).toContain("only as the fallback");
-		expect(empty.text).toContain("complete valid payload");
 		expect(empty.sections.find((section) => section.id === "subagents")).toBeDefined();
 
 		const populated = buildPipiclawSystemPrompt(

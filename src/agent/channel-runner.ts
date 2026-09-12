@@ -1,6 +1,6 @@
 import { Agent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model } from "@earendil-works/pi-ai";
-import { clampThinkingLevel, streamSimple } from "@earendil-works/pi-ai/compat";
+import { streamSimple } from "@earendil-works/pi-ai/compat";
 import {
 	AgentSession,
 	AgentSessionRuntime,
@@ -10,7 +10,7 @@ import {
 	type ModelRegistry,
 	type ModelRuntime,
 	type ResourceLoader,
-	SettingsManager as SDKSettingsManager,
+	type SettingsManager as SDKSettingsManager,
 	SessionManager,
 	type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
@@ -70,6 +70,7 @@ import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import { withTimeout } from "../shared/with-timeout.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import { SubAgentRunManager } from "../subagents/runs.js";
 import { TASK_SESSIONS_DIRNAME, taskSessionPath } from "../tasks/session-path.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
@@ -77,6 +78,7 @@ import { formatSize } from "../tools/truncate.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { createCommandExtension } from "./command-extension.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
+import { ChannelJobManager } from "./job-manager.js";
 import {
 	type FallbackRunDeps,
 	PRIMARY_COOLDOWN_MS,
@@ -98,6 +100,15 @@ import { loadWorkspacePromptResources, type WorkspacePromptResources } from "./p
 import type { PromptBuildResult } from "./prompt/types.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunnerDeps, RunnerFactoryPaths } from "./runner-factory.js";
+import {
+	asSdkSettingsManager,
+	cycleThinkingLevelWithConditionalPersist,
+	DEFAULT_MAIN_THINKING_LEVEL,
+	initializeThinkingLevelCompat,
+	setModelWithThinkingPreservation,
+	setSessionBaseToolsOverride,
+	setThinkingLevelWithConditionalPersist,
+} from "./session-adapter.js";
 import { handleSessionEvent } from "./session-events.js";
 import { SessionResourceGate } from "./session-resource-gate.js";
 import { assembleTurnPrompt } from "./turn-prompt.js";
@@ -127,77 +138,6 @@ function getFinalOutcomeText(outcome: FinalOutcome): string | null {
 	return isFinalOutcome(outcome) ? outcome.text : null;
 }
 
-function asSdkSettingsManager(manager: PipiclawSettingsManager): SDKSettingsManager {
-	// The upstream session needs its broad interactive SettingsManager surface, while
-	// Pipiclaw deliberately owns a small runtime-specific settings contract. Build a
-	// real upstream manager from that contract instead of making PipiclawSettingsManager
-	// pretend to implement dozens of unrelated no-op UI preferences.
-	return SDKSettingsManager.inMemory({
-		defaultProvider: manager.getDefaultProvider(),
-		defaultModel: manager.getDefaultModel(),
-		defaultThinkingLevel: manager.getDefaultThinkingLevel() ?? DEFAULT_MAIN_THINKING_LEVEL,
-		compaction: manager.getCompactionSettings(),
-		retry: manager.getRetrySettings(),
-	});
-}
-
-const DEFAULT_MAIN_THINKING_LEVEL: ThinkingLevel = "medium";
-
-/** Apply the pi 0.83 source-model thinking compatibility branch to one real AgentSession. */
-export async function setModelWithThinkingPreservation(
-	session: AgentSession,
-	manager: SDKSettingsManager,
-	model: Model<Api>,
-): Promise<void> {
-	const source = session.model;
-	if (!source?.reasoning) {
-		await session.setModel(model);
-		return;
-	}
-	const previousDefault = manager.getDefaultThinkingLevel();
-	manager.setDefaultThinkingLevel(session.thinkingLevel);
-	try {
-		await session.setModel(model);
-	} finally {
-		manager.setDefaultThinkingLevel(previousDefault ?? DEFAULT_MAIN_THINKING_LEVEL);
-	}
-}
-
-export function setThinkingLevelWithConditionalPersist(session: AgentSession, level: ThinkingLevel): void {
-	const before = session.thinkingLevel;
-	session.setThinkingLevel(level);
-	const effective = session.thinkingLevel;
-	if (effective === before) return;
-	if (!session.model?.reasoning && effective === "off") return;
-	session.setThinkingLevel(effective, { persist: true });
-}
-
-export function cycleThinkingLevelWithConditionalPersist(session: AgentSession): ThinkingLevel | undefined {
-	const before = session.thinkingLevel;
-	const next = session.cycleThinkingLevel();
-	const effective = session.thinkingLevel;
-	if (next && effective !== before && (session.model?.reasoning || effective !== "off")) {
-		session.setThinkingLevel(effective, { persist: true });
-	}
-	return next;
-}
-
-export function initializeThinkingLevelCompat(
-	agent: Agent,
-	model: Model<Api>,
-	sessionManager: SessionManager,
-	configuredDefault: ThinkingLevel | undefined,
-): ThinkingLevel {
-	const branch = sessionManager.getBranch();
-	const hasThinkingEntry = branch.some((entry) => entry.type === "thinking_level_change");
-	const historical = sessionManager.buildSessionContext().thinkingLevel as ThinkingLevel;
-	const requested = hasThinkingEntry ? historical : (configuredDefault ?? DEFAULT_MAIN_THINKING_LEVEL);
-	const effective = clampThinkingLevel(model, requested);
-	agent.state.thinkingLevel = effective;
-	if (!hasThinkingEntry) sessionManager.appendThinkingLevelChange(effective);
-	return effective;
-}
-
 /**
  * Ceilings for the two awaited steps of a session-resource reload. Both reach
  * the network (model/auth re-resolution; the SDK session's own reload) and
@@ -225,6 +165,8 @@ function isTaskSessionPath(sessionFile: string | undefined): boolean {
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
 	private readonly executor: Executor;
+	private readonly jobManager: ChannelJobManager;
+	private readonly runManager: SubAgentRunManager;
 	private readonly fileStore: FileStore;
 	private readonly channelId: string;
 	private readonly channelDir: string;
@@ -246,8 +188,12 @@ export class ChannelRunner implements AgentRunner {
 	private session!: AgentSession;
 	/** Settings manager owned by the currently bound AgentSession. */
 	private sessionSettingsManager!: SDKSettingsManager;
-	private agent: Agent;
-	private sessionManager: SessionManager;
+	private get agent(): Agent {
+		return this.session.agent;
+	}
+	private get sessionManager(): SessionManager {
+		return this.session.sessionManager;
+	}
 	private readonly settingsManager: PipiclawSettingsManager;
 	// modelRuntime is the canonical async model/auth facade (pi 0.80.8+); modelRegistry
 	// is the synchronous read shell wrapped over it. Both are assigned in initializeSession
@@ -313,6 +259,8 @@ export class ChannelRunner implements AgentRunner {
 		this.mediaSender = paths.mediaSender;
 
 		this.executor = deps.executor;
+		this.jobManager = paths.jobManager ?? new ChannelJobManager(channelId, deps.executor);
+		this.runManager = paths.runManager ?? new SubAgentRunManager(channelId, {});
 		this.fileStore = deps.fileStore;
 		this.loadSecurityConfig = deps.loadSecurityConfig;
 		this.workspaceDir = resolve(dirname(channelDir));
@@ -339,7 +287,7 @@ export class ChannelRunner implements AgentRunner {
 		// (or the context.jsonl default, for a channel that has never run a topology op) names
 		// (spec 043, D1).
 		const activeSessionFile = resolveActiveSessionFile(channelDir);
-		this.sessionManager = SessionManager.open(join(channelDir, activeSessionFile), channelDir);
+		const sessionManager = SessionManager.open(join(channelDir, activeSessionFile), channelDir);
 
 		// Per-runner recovery barrier (spec 043, D10 point 2): repairs must run against this exact
 		// SessionManager instance, before anything else touches it — a second `open()` of the same
@@ -347,7 +295,7 @@ export class ChannelRunner implements AgentRunner {
 		// daemon's own startup scan (bootstrap.ts) covers channels with no live runner yet; this
 		// covers lazy channels, the TUI, and a channel whose file was fixed by hand after the scan
 		// already ran and reported it blocked.
-		const recoveryOutcome = recoverInterruptedTurn(this.sessionManager, {
+		const recoveryOutcome = recoverInterruptedTurn(sessionManager, {
 			api: defaultModel.api,
 			provider: defaultModel.provider,
 			model: defaultModel.id,
@@ -372,22 +320,7 @@ export class ChannelRunner implements AgentRunner {
 				log.logWarning(`[${channelId}] Failed to record memory maintenance state`, errorMessage(error)),
 		});
 
-		// The real model/auth runtime is built asynchronously in initializeSession
-		// (ModelRuntime.create is async). Until then the agent runs on a placeholder
-		// model; initializeSession corrects it before any turn (via sessionReady).
 		this.activeModel = defaultModel;
-		const initialTools = this.buildRuntimeTools();
-		this.agent = new Agent({
-			initialState: {
-				systemPrompt: "",
-				model: this.activeModel,
-				thinkingLevel: DEFAULT_MAIN_THINKING_LEVEL,
-				tools: initialTools,
-			},
-			convertToLlm,
-			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.activeModel),
-			streamFn: streamSimple,
-		});
 
 		this.memoryLifecycle = new MemoryLifecycle({
 			channelId: this.channelId,
@@ -405,7 +338,7 @@ export class ChannelRunner implements AgentRunner {
 			await this.reloadSessionResources();
 		});
 
-		this.sessionReady = this.initializeSession();
+		this.sessionReady = this.initializeSession(sessionManager);
 	}
 
 	// === Public API ===
@@ -1005,8 +938,8 @@ export class ChannelRunner implements AgentRunner {
 		const build = this.lastPromptBuild ?? this.buildSystemPrompt();
 		return renderContextReport({
 			build,
-			finalPrompt: this.lastFinalPrompt,
 			skills: this.currentSkills.skills.map((skill) => ({ name: skill.name, description: skill.description })),
+			finalPrompt: this.lastFinalPrompt,
 			toolNames: this.currentTools.map((tool) => tool.name),
 			toolSchemas: measureToolSchemas(this.currentTools),
 			soul: this.lastWorkspaceResources?.soul,
@@ -1321,7 +1254,7 @@ export class ChannelRunner implements AgentRunner {
 		return match;
 	}
 
-	private async initializeSession(): Promise<void> {
+	private async initializeSession(sessionManager: SessionManager): Promise<void> {
 		// Build the canonical async model/auth runtime and its synchronous read shell.
 		this.modelRuntime = await createModelRuntime({
 			authConfigPath: this.authConfigPath,
@@ -1331,26 +1264,14 @@ export class ChannelRunner implements AgentRunner {
 
 		// Resolve model: prefer saved global default, fall back to first available model.
 		this.activeModel = resolveInitialModel(this.modelRegistry, this.settingsManager);
-		this.agent.state.model = this.activeModel; // correct the placeholder default
-		this.initializeThinkingLevel(this.agent, this.activeModel, this.sessionManager);
 		log.logInfo(`Using model: ${this.activeModel.provider}/${this.activeModel.id} (${this.activeModel.name})`);
 		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
 
-		const initialResourceLoader = this.createResourceLoader();
-		const baseToolsOverride = Object.fromEntries(this.currentTools.map((tool) => [tool.name, tool]));
-		this.sessionSettingsManager = asSdkSettingsManager(this.settingsManager);
-		this.session = new AgentSession({
-			agent: this.agent,
-			sessionManager: this.sessionManager,
-			settingsManager: this.sessionSettingsManager,
-			cwd: this.projectScope.projectRoot,
-			modelRuntime: this.modelRuntime,
-			resourceLoader: initialResourceLoader,
-			baseToolsOverride,
-		});
+		const initial = await this.createSessionRuntime(sessionManager);
+		this.session = initial.session;
 		this.sessionRuntime = new AgentSessionRuntime(
 			this.session,
-			this.createAgentSessionServices(initialResourceLoader),
+			this.createAgentSessionServices(initial.resourceLoader),
 			async ({ sessionManager, sessionStartEvent }) => {
 				// `/new`, fork, and switch already wrote the target session's durable header by
 				// this point (the SDK does it synchronously before invoking this callback); commit
@@ -1374,8 +1295,6 @@ export class ChannelRunner implements AgentRunner {
 		);
 		this.sessionRuntime.setRebindSession(async (session) => {
 			this.session = session;
-			this.agent = session.agent;
-			this.sessionManager = session.sessionManager;
 			await this.bindSessionExtensions();
 			this.subscribeToSessionEvents();
 		});
@@ -1383,7 +1302,6 @@ export class ChannelRunner implements AgentRunner {
 		// Subscribe to session events
 		this.subscribeToSessionEvents();
 
-		await this.reloadSessionResources();
 		await this.bindSessionExtensions();
 		// A restart resumes an existing transcript: if that session was already handed its
 		// bootstrap before the daemon went down, the first turn after recovery must not inject a
@@ -1544,9 +1462,6 @@ export class ChannelRunner implements AgentRunner {
 		const resources = loadWorkspacePromptResources(this.workspaceDir);
 		this.lastWorkspaceResources = resources;
 		const build = buildPipiclawSystemPrompt({
-			mode: "normal",
-			cwd: this.projectScope.projectRoot,
-			workspaceDir: this.workspaceDir,
 			tools: this.currentTools.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
@@ -1563,7 +1478,6 @@ export class ChannelRunner implements AgentRunner {
 				mutates: agent.mutates,
 				unavailable: agent.unavailable,
 			})),
-			skills: this.currentSkills.skills.map((skill) => ({ name: skill.name, description: skill.description })),
 		});
 
 		for (const diagnostic of [...resources.diagnostics, ...build.diagnostics]) {
@@ -1688,7 +1602,7 @@ export class ChannelRunner implements AgentRunner {
 	private async createSessionRuntime(
 		sessionManager: SessionManager,
 		sessionStartEvent?: SessionStartEvent,
-	): Promise<{ agent: Agent; session: AgentSession; resourceLoader: ResourceLoader }> {
+	): Promise<{ session: AgentSession; resourceLoader: ResourceLoader }> {
 		const tools = this.buildRuntimeTools();
 		const agent = new Agent({
 			initialState: {
@@ -1718,7 +1632,7 @@ export class ChannelRunner implements AgentRunner {
 			sessionStartEvent,
 		});
 		this.sessionSettingsManager = sessionSettingsManager;
-		return { agent, session, resourceLoader };
+		return { session, resourceLoader };
 	}
 
 	/**
@@ -1784,6 +1698,8 @@ export class ChannelRunner implements AgentRunner {
 		this.tasksEnabled = toolsLoad.config.tools.tasks.enabled;
 
 		const tools = createPipiclawTools({
+			jobManager: this.jobManager,
+			runManager: this.runManager,
 			executor: this.executor,
 			fileStore: this.fileStore,
 			getCurrentModel: () => this.activeModel,
@@ -1814,26 +1730,9 @@ export class ChannelRunner implements AgentRunner {
 
 	private rebuildSessionTools(): void {
 		const tools = this.buildRuntimeTools();
-		this.setSessionBaseToolsOverride(tools);
+		setSessionBaseToolsOverride(this.session, tools, this.channelId);
 		this.agent.state.tools = tools;
 		this.session.setActiveToolsByName(tools.map((tool) => tool.name));
-	}
-
-	/**
-	 * Overwrite the SDK session's `baseToolsOverride` map so a resource reload swaps in
-	 * freshly-built tools. The SDK exposes no public setter for this, so we reach into the
-	 * private `_baseToolsOverride` field. This is the single, isolated point of that coupling:
-	 * if a future SDK renames or removes the field, the guard below warns loudly instead of
-	 * silently leaving stale tools in place. Replace with a public setter once upstream adds one.
-	 */
-	private setSessionBaseToolsOverride(tools: AgentTool<any>[]): void {
-		const target = this.session as unknown as { _baseToolsOverride?: Record<string, AgentTool<any>> };
-		if (!("_baseToolsOverride" in target)) {
-			log.logWarning(
-				`[${this.channelId}] AgentSession no longer exposes _baseToolsOverride; tool reloads may use stale tools (SDK change?)`,
-			);
-		}
-		target._baseToolsOverride = Object.fromEntries(tools.map((tool) => [tool.name, tool]));
 	}
 
 	// === Session event subscription ===

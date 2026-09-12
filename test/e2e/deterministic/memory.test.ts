@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { getDefaultChannelMemoryQueue } from "../../../src/memory/channel-maintenance-queue.js";
 import { createTaskDriverEvent } from "../../../src/runtime/task-driver.js";
 import { localDayKey } from "../../../src/shared/local-time.js";
 import { readActiveTasks } from "../../../src/tasks/ledger.js";
@@ -155,6 +156,8 @@ describe("E2E deterministic: memory (spec 050)", () => {
 	});
 
 	it("M3: the boundary reflect pass writes memory + journal and does not reprocess an empty window", async () => {
+		// Regression: reflecting an empty session wastes a model call and can duplicate durable facts.
+		// Mutation verified: bypass runReflect's hasMeaningfulExchange guard; the final count is 2, not 1.
 		harness = await createDeterministicHarness();
 		harness.model.script.route({
 			name: "ack",
@@ -204,8 +207,11 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		expect(readdirSync(join(harness.channelDir, "memory")).filter((f) => f.endsWith(".md"))).toHaveLength(1);
 
 		// A second /new with nothing said in between reflects on an empty window — no new call.
+		// Instantiate the empty session: /new alone can take the runner-free runtime path.
+		await harness.sendUserMessage("/session");
 		await harness.sendUserMessage("/new");
-		await new Promise((resolve) => setTimeout(resolve, 500));
+		// Drain the queue used by the detached boundary reflect; no observation-time guess.
+		await getDefaultChannelMemoryQueue().run(harness.channelId, async () => {});
 		expect(harness.model.requests.filter((r) => r.matchedRoute === "reflect-once")).toHaveLength(1);
 	});
 

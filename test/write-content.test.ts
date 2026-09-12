@@ -1,23 +1,14 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createFileStore } from "../src/file-store.js";
 import { writeContent } from "../src/tools/write-content.js";
+import { useTempDirs } from "./helpers/fixtures.js";
 
 const fileStore = createFileStore();
 const disabledSecurity = { enabled: false } as never;
 
-const dirs: string[] = [];
-afterEach(() => {
-	dirs.length = 0;
-});
-
-function tempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pipiclaw-write-test-"));
-	dirs.push(dir);
-	return dir;
-}
+const tempDir = useTempDirs("pipiclaw-write-test-");
 
 describe("write-content", () => {
 	it("writes content and can create parent directories", async () => {

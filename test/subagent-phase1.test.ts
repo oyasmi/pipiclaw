@@ -21,12 +21,14 @@ import { localDayKey } from "../src/shared/local-time.js";
 import {
 	discoverSubAgents,
 	getSubAgentsDir,
+	type InternalSubAgentConfig,
 	resolveInlineAgent,
 	SUB_AGENT_EFFORT_PRESETS,
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
 import { buildSubAgentTask, createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
 import { readVerificationAttestation } from "../src/tasks/verification.js";
+import { testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const model = getModel("openai", "gpt-4o-mini")!;
@@ -97,7 +99,7 @@ function createAssistantMessage(
 const createTempWorkspace = useTempDirs("pipiclaw-subagent-");
 
 /** A predefined agent carrying the stock defaults; override only what a test is about. */
-function makeSubAgentConfig(overrides: Partial<SubAgentConfig> = {}): SubAgentConfig {
+function makeSubAgentConfig(overrides: Partial<InternalSubAgentConfig> = {}): SubAgentConfig {
 	return {
 		name: "reviewer",
 		description: "review code",
@@ -305,6 +307,7 @@ describe("sub-agent tool", () => {
 		writeFileSync(join(channelDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -355,6 +358,7 @@ describe("sub-agent tool", () => {
 		const workerFailure = "simulated worker failure";
 
 		const tool = createSubAgentTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -423,6 +427,7 @@ describe("sub-agent tool", () => {
 
 		let delegatedTask = "";
 		const tool = createSubAgentTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -469,6 +474,7 @@ describe("sub-agent tool", () => {
 		mkdirSync(channelDir, { recursive: true });
 		let usedModel: Model<Api> | undefined;
 		const tool = createSubAgentInlineTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -504,6 +510,7 @@ describe("sub-agent artifact contract (D4)", () => {
 		respond: (input: string, worker: FakeWorker) => Promise<void> | void,
 	) {
 		return createSubAgentInlineTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -586,6 +593,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		let callCount = 0;
 		const seenInputs: string[] = [];
 		const tool = createSubAgentTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -635,6 +643,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		mkdirSync(channelDir, { recursive: true });
 		let callCount = 0;
 		const tool = createSubAgentTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -685,6 +694,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		let callCount = 0;
 		const controller = new AbortController();
 		const tool = createSubAgentTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -741,6 +751,7 @@ describe("sub-agent convergence turn (D6)", () => {
 		controller.abort();
 		let started = false;
 		const tool = createSubAgentTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -774,6 +785,7 @@ describe("sub-agent convergence turn (D6)", () => {
 describe("sub-agent working directory", () => {
 	function makeTool(workspaceDir: string, channelDir: string, executor: Executor) {
 		return createSubAgentInlineTool({
+			...testManagers("dm_123"),
 			executor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -806,6 +818,7 @@ describe("sub-agent working directory", () => {
 		};
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
+			...testManagers("dm_123"),
 			executor: recording,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -860,6 +873,7 @@ describe("sub-agent working directory", () => {
 		};
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
+			...testManagers("dm_123"),
 			executor: recording,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -921,6 +935,7 @@ describe("sub-agent working directory", () => {
 		mkdirSync(join(projectRoot, "nested"), { recursive: true });
 		mkdirSync(outsideDir, { recursive: true });
 		const tool = createSubAgentInlineTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,

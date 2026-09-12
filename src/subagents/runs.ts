@@ -293,6 +293,8 @@ export interface RunManagerOptions {
 	notify?: RunNotifier;
 	ledger?: UsageLedger;
 	store?: ChannelStore;
+	/** Application-wide admission count, supplied by the owning runtime. */
+	runningCount?: () => number;
 }
 
 /** Registration is serialized across channel managers so the host-wide count and insertion are
@@ -400,6 +402,7 @@ export class SubAgentRunManager {
 	/** Live external runs' tail-the-artifact-file progress pollers (P1a). Never persisted or
 	 *  reconstructed on restore — an adopted run has no fresher information to poll for than
 	 *  restart reconciliation already reads once from the finished process's own output. */
+	private stopped = false;
 	private readonly externalProgressTails = new Map<string, { stop(): void }>();
 	private readonly queue = createSerialQueue<string>();
 
@@ -407,6 +410,13 @@ export class SubAgentRunManager {
 		private readonly channelId: string,
 		private readonly options: RunManagerOptions,
 	) {}
+
+	/** Release observation timers without cancelling dispatched work or its settlement. */
+	stop(): void {
+		this.stopped = true;
+		for (const runId of this.externalRecoveryTimers.keys()) this.clearExternalRecoveryTimer(runId);
+		for (const runId of this.externalProgressTails.keys()) this.stopExternalProgressTail(runId);
+	}
 
 	private recordDir(): string | undefined {
 		// `getChannelDir`, not a raw join: a DingTalk group id routinely contains `/`, which used
@@ -461,6 +471,7 @@ export class SubAgentRunManager {
 	/** Start tailing a just-launched external run's artifact file for a human-readable step label
 	 *  (P1a). Best-effort only — see `progress-tail.ts` for the polling/pacing contract. */
 	private startExternalProgressTail(record: RunRecord): void {
+		if (this.stopped) return;
 		if (!record.harness) return;
 		this.stopExternalProgressTail(record.runId);
 		const tail = startExternalProgressTail({
@@ -567,7 +578,7 @@ export class SubAgentRunManager {
 							"Wait for one to finish, or cancel one with subagent_run op=cancel first.",
 					);
 				}
-				if (totalRunningSubAgentRuns() >= MAX_RUNNING_SUBAGENT_RUNS_PER_HOST) {
+				if ((this.options.runningCount?.() ?? this.runningCount()) >= MAX_RUNNING_SUBAGENT_RUNS_PER_HOST) {
 					throw new RecoverableToolError(
 						`Too many delegation runs already running host-wide (>= ${MAX_RUNNING_SUBAGENT_RUNS_PER_HOST}). ` +
 							"Wait for one to finish before dispatching another.",
@@ -1397,6 +1408,7 @@ export class SubAgentRunManager {
 	}
 
 	private scheduleExternalRecovery(record: RunRecord): void {
+		if (this.stopped) return;
 		if (!record.deadlineAt) return;
 		this.clearExternalRecoveryTimer(record.runId);
 		const timer = setTimeout(
@@ -1434,67 +1446,6 @@ export class SubAgentRunManager {
 			});
 		}
 	}
-}
-
-const managers = new Map<string, SubAgentRunManager>();
-
-/** Host-wide running count for the D10.2 admission check, summed across every known channel. */
-function totalRunningSubAgentRuns(): number {
-	let total = 0;
-	for (const manager of managers.values()) {
-		total += manager.runningCount();
-	}
-	return total;
-}
-
-let runtimeConfig: RunManagerOptions = {};
-
-const GARBAGE_COLLECTION_INTERVAL_MS = 24 * 60 * 60_000;
-let garbageCollectionTimer: ReturnType<typeof setInterval> | undefined;
-let collectingGarbage = false;
-
-async function collectGarbageAllChannels(): Promise<void> {
-	if (collectingGarbage) return;
-	collectingGarbage = true;
-	try {
-		for (const manager of managers.values()) {
-			await manager
-				.collectGarbage()
-				.catch((error) => log.logWarning("Sub-agent garbage collection failed", errorMessage(error)));
-		}
-	} finally {
-		collectingGarbage = false;
-	}
-}
-
-function startSubAgentGarbageCollector(): void {
-	if (garbageCollectionTimer) clearInterval(garbageCollectionTimer);
-	garbageCollectionTimer = setInterval(() => void collectGarbageAllChannels(), GARBAGE_COLLECTION_INTERVAL_MS);
-	garbageCollectionTimer.unref?.();
-}
-
-/** Stop the host-wide daily garbage collector during shutdown or test teardown. */
-export function stopSubAgentGarbageCollector(): void {
-	if (garbageCollectionTimer) {
-		clearInterval(garbageCollectionTimer);
-		garbageCollectionTimer = undefined;
-	}
-}
-
-/** Give runs their persistence root, wake delivery, ledger, and archive. Called once from bootstrap. */
-export function configureSubAgentRuntime(config: RunManagerOptions): void {
-	runtimeConfig = config;
-	stopSubAgentGarbageCollector();
-	startSubAgentGarbageCollector();
-}
-
-export function getSubAgentRunManager(channelId: string): SubAgentRunManager {
-	let manager = managers.get(channelId);
-	if (!manager) {
-		manager = new SubAgentRunManager(channelId, runtimeConfig);
-		managers.set(channelId, manager);
-	}
-	return manager;
 }
 
 /**
@@ -1573,40 +1524,105 @@ async function adoptRecordDirectory(stateDir: string, dir: string): Promise<stri
 	return Array.from(channelIds);
 }
 
-/**
- * Re-adopt every channel's persisted runs at startup, settling any internal run still marked
- * `running` as `lost` (D10.3). Channels are discovered from the state directory itself, exactly
- * like `restoreChannelJobs` — but by reading the records rather than trusting directory names,
- * so a channel is adopted under the id the rest of the runtime can act on.
- */
-export async function restoreAllSubAgentRuns(): Promise<number> {
-	const stateDir = runtimeConfig.stateDir;
-	if (!stateDir) return 0;
-	const channelIds = new Set<string>();
-	let recordDirs: string[];
-	try {
-		await mkdir(stateDir, { recursive: true });
-		recordDirs = await findRecordDirectories(stateDir);
-	} catch (error) {
-		log.logWarning("Failed to scan persisted sub-agent runs", errorMessage(error));
-		return 0;
+/** Owns this application's channel managers and their maintenance timer. */
+export function createSubAgentRuntime(options: RunManagerOptions = {}) {
+	const config = { ...options };
+	const managers = new Map<string, SubAgentRunManager>();
+	let stopped = false;
+
+	/** Host-wide running count for the D10.2 admission check, summed across every known channel. */
+	function totalRunningSubAgentRuns(): number {
+		let total = 0;
+		for (const manager of managers.values()) {
+			total += manager.runningCount();
+		}
+		return total;
 	}
-	for (const dir of recordDirs) {
+
+	const GARBAGE_COLLECTION_INTERVAL_MS = 24 * 60 * 60_000;
+	let garbageCollectionTimer: ReturnType<typeof setInterval> | undefined;
+	let collectingGarbage = false;
+
+	async function collectGarbageAllChannels(): Promise<void> {
+		if (collectingGarbage) return;
+		collectingGarbage = true;
 		try {
-			for (const channelId of await adoptRecordDirectory(stateDir, dir)) channelIds.add(channelId);
-		} catch (error) {
-			log.logWarning(`Failed to adopt sub-agent run records in ${relative(stateDir, dir)}`, errorMessage(error));
+			for (const manager of managers.values()) {
+				await manager
+					.collectGarbage()
+					.catch((error) => log.logWarning("Sub-agent garbage collection failed", errorMessage(error)));
+			}
+		} finally {
+			collectingGarbage = false;
 		}
 	}
 
-	let restored = 0;
-	for (const channelId of channelIds) {
-		restored += await getSubAgentRunManager(channelId).restore();
+	function startSubAgentGarbageCollector(): void {
+		if (stopped) return;
+		if (garbageCollectionTimer) clearInterval(garbageCollectionTimer);
+		garbageCollectionTimer = setInterval(() => void collectGarbageAllChannels(), GARBAGE_COLLECTION_INTERVAL_MS);
+		garbageCollectionTimer.unref?.();
 	}
-	// Reclaim stale runs once as a host-wide startup batch; subsequent batches run daily.
-	await collectGarbageAllChannels();
-	if (restored > 0) {
-		log.logInfo(`Restored ${restored} sub-agent run record(s)`);
+
+	/** Stop the host-wide daily garbage collector during shutdown or test teardown. */
+	function stop(): void {
+		stopped = true;
+		for (const manager of managers.values()) manager.stop();
+		if (garbageCollectionTimer) {
+			clearInterval(garbageCollectionTimer);
+			garbageCollectionTimer = undefined;
+		}
 	}
-	return restored;
+
+	function get(channelId: string): SubAgentRunManager {
+		let manager = managers.get(channelId);
+		if (!manager) {
+			manager = new SubAgentRunManager(channelId, { ...config, runningCount: totalRunningSubAgentRuns });
+			managers.set(channelId, manager);
+			if (stopped) manager.stop();
+		}
+		return manager;
+	}
+
+	/**
+	 * Re-adopt every channel's persisted runs at startup, settling any internal run still marked
+	 * `running` as `lost` (D10.3). Channels are discovered from the state directory itself, exactly
+	 * like `restoreChannelJobs` — but by reading the records rather than trusting directory names,
+	 * so a channel is adopted under the id the rest of the runtime can act on.
+	 */
+	async function restore(): Promise<number> {
+		const stateDir = config.stateDir;
+		if (!stateDir) return 0;
+		const channelIds = new Set<string>();
+		let recordDirs: string[];
+		try {
+			await mkdir(stateDir, { recursive: true });
+			recordDirs = await findRecordDirectories(stateDir);
+		} catch (error) {
+			log.logWarning("Failed to scan persisted sub-agent runs", errorMessage(error));
+			return 0;
+		}
+		for (const dir of recordDirs) {
+			try {
+				for (const channelId of await adoptRecordDirectory(stateDir, dir)) channelIds.add(channelId);
+			} catch (error) {
+				log.logWarning(`Failed to adopt sub-agent run records in ${relative(stateDir, dir)}`, errorMessage(error));
+			}
+		}
+
+		let restored = 0;
+		for (const channelId of channelIds) {
+			restored += await get(channelId).restore();
+		}
+		// Reclaim stale runs once as a host-wide startup batch; subsequent batches run daily.
+		await collectGarbageAllChannels();
+		if (restored > 0) {
+			log.logInfo(`Restored ${restored} sub-agent run record(s)`);
+		}
+		return restored;
+	}
+
+	return { get, restore, start: startSubAgentGarbageCollector, stop };
 }
+
+export type SubAgentRuntime = ReturnType<typeof createSubAgentRuntime>;

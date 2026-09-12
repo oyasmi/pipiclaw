@@ -11,6 +11,7 @@ import { createSubAgentTool } from "../src/subagents/tool.js";
 import { DEFAULT_TOOLS_CONFIG } from "../src/tools/config.js";
 import { buildToolSet, type ToolBuildContext } from "../src/tools/registry.js";
 import { isRecoverableRejection, toolResultDetails, withToolDetails } from "../src/tools/tool-details.js";
+import { testManagers } from "./helpers/background-runtime.js";
 
 function registryContext(): ToolBuildContext {
 	return {
@@ -192,7 +193,7 @@ describe("registry wiring", () => {
 	it("delivers a real task_create validation failure as a rejection, not a thrown error", async () => {
 		// End-to-end through buildToolSet: the same call used to reach the user as a red
 		// error bubble mid-turn; it must now come back as data the model can act on.
-		const tools = buildToolSet(registryContext());
+		const tools = buildToolSet({ ...testManagers(), ...registryContext() });
 		const taskCreate = tools.find((entry) => entry.name === "task_create");
 		if (!taskCreate) throw new Error("task_create not registered");
 
@@ -209,7 +210,7 @@ describe("registry wiring", () => {
 	});
 
 	it("stamps every registry tool's results with its registered name", async () => {
-		const tools = buildToolSet(registryContext());
+		const tools = buildToolSet({ ...testManagers(), ...registryContext() });
 		const grep = tools.find((entry) => entry.name === "grep");
 		if (!grep) throw new Error("grep not registered");
 
@@ -223,6 +224,7 @@ describe("registry wiring", () => {
 		// buildToolSet to avoid an import cycle — wire it identically here.
 		const tool = withToolDetails(
 			createSubAgentTool({
+				...testManagers("dm_1"),
 				executor: { exec: async () => ({ stdout: "", stderr: "", code: 0 }) },
 				fileStore: createFileStore(),
 				getCurrentModel: () => ({}) as never,

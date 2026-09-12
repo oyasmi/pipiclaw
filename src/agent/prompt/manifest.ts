@@ -87,7 +87,6 @@ export interface PromptContextReportInput {
 
 export interface PromptSectionManifestEntry {
 	id: string;
-	order: number;
 	source: string;
 	authority: string;
 	cacheClass: string;
@@ -235,7 +234,7 @@ export function renderContextReport(input: PromptContextReportInput): string {
 		lines.push("Detail:");
 		for (const section of build.sections) {
 			lines.push(
-				`- ${section.id} (order ${section.order}, ${section.authority}) ← ${section.source} · sha256:${section.sha256.slice(0, 12)}`,
+				`- ${section.id} (${section.authority}) ← ${section.source} · sha256:${section.sha256.slice(0, 12)}`,
 			);
 		}
 		if (input.toolNames.length > 0) {

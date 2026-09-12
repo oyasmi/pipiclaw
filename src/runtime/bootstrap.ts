@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "fs/promises";
 import { join, relative } from "path";
-import { channelRunningJobLines, configureJobRuntime, restoreChannelJobs } from "../agent/job-manager.js";
+import { createJobRuntime, type JobRuntime } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { createRunner } from "../agent/runner-factory.js";
 import { renderStatus } from "../agent/status-render.js";
@@ -23,6 +23,7 @@ import {
 } from "../commands/catalog.js";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
+import { migrateMemoryMaintenanceStates } from "../memory/maintenance-migration.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import { defaultModel } from "../models/utils.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
@@ -35,12 +36,7 @@ import { localStampForFilename } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { sleepUnref } from "../shared/with-timeout.js";
 import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
-import {
-	configureSubAgentRuntime,
-	getSubAgentRunManager,
-	restoreAllSubAgentRuns,
-	stopSubAgentGarbageCollector,
-} from "../subagents/runs.js";
+import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/runs.js";
 import { buildTaskStepBrief } from "../tasks/brief.js";
 import { readActiveTasks } from "../tasks/ledger.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
@@ -102,6 +98,8 @@ const SHUTDOWN_ABORT_WAIT_MS = 5000;
 const SHUTDOWN_LOG_FLUSH_WAIT_MS = 10_000;
 
 export interface RuntimeContext {
+	jobs: JobRuntime;
+	runs: SubAgentRuntime;
 	handler: DingTalkHandler;
 	store: ChannelStore;
 	/** Production driver instance, exposed so evals can invoke the real scan path. */
@@ -235,6 +233,7 @@ export async function forceEndStuckTurnAfterStop(input: {
 type TaskDriverLike = TaskDriver | { start(): void; stop(): void; nudge?(): void };
 
 interface RuntimeContextOptions {
+	executor?: Executor;
 	paths: BootstrapPaths;
 	dingtalkConfig: DingTalkConfig;
 	createBot?: (handler: DingTalkHandler, config: DingTalkConfig) => DingTalkBot;
@@ -305,7 +304,8 @@ interface DingTalkHandlerDeps {
 	startedAt: number;
 	isShuttingDown: () => boolean;
 	getDurableDispatch: () => DurableDispatchService | undefined;
-	getExecutor: () => Executor;
+	getJobs: () => JobRuntime;
+	getRuns: () => SubAgentRuntime;
 	getTaskDriver: () => TaskDriverLike;
 }
 
@@ -324,7 +324,8 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 		startedAt,
 		isShuttingDown,
 		getDurableDispatch,
-		getExecutor,
+		getJobs,
+		getRuns,
 		getTaskDriver,
 	} = deps;
 
@@ -563,6 +564,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 				case "subagents":
 					return runSubagentsCommand({
 						args,
+						runManager: getRuns().get(event.channelId),
 						channelId: event.channelId,
 						discovery: channelRunners.get(event.channelId)?.getSubAgentDiscoverySnapshot(),
 						// `roles` needs a role directory even for a channel that has never spoken this boot —
@@ -583,11 +585,12 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						actor: "dingtalk-command",
 						isBusy: () => channelRunners.get(event.channelId)?.isBusy() ?? false,
 						listActiveBlockers: () => [
-							...getSubAgentRunManager(event.channelId)
+							...getRuns()
+								.get(event.channelId)
 								.list()
 								.filter((record) => record.status === "running")
 								.map((record) => `subagent run \`${record.runId}\` (${record.agent})`),
-							...channelRunningJobLines(event.channelId),
+							...getJobs().runningLines(event.channelId),
 						],
 						// D4.2: dispose the cached runner so the next access rebuilds it under the new scope.
 						// The active-session ref is untouched — same session, new project root.
@@ -849,7 +852,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						const claimed = await claimVerifiedJobWake(
 							event,
 							options.paths.workspaceDir,
-							getExecutor(),
+							getJobs().get(event.channelId),
 							options.wakeTransitionHooks?.job,
 						);
 						if (claimed) {
@@ -886,6 +889,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						const claimed = await claimVerifiedDelegationWake(
 							event,
 							options.paths.workspaceDir,
+							getRuns().get(event.channelId),
 							options.wakeTransitionHooks?.subagent,
 						);
 						if (claimed) {
@@ -948,6 +952,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 export async function createRuntimeContext(
 	options: RuntimeContextOptions,
 ): Promise<RuntimeContext & { bot: DingTalkBot }> {
+	await migrateMemoryMaintenanceStates(options.paths.appHomeDir);
 	const startServices = options.startServices ?? true;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
@@ -1001,6 +1006,8 @@ export async function createRuntimeContext(
 
 		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
 		const runner = createRunner(channelId, channelDir, {
+			jobManager: jobs.get(channelId),
+			runManager: runs.get(channelId),
 			appHomeDir: options.paths.appHomeDir,
 			authConfigPath: options.paths.authConfigPath,
 			modelsConfigPath: options.paths.modelsConfigPath,
@@ -1022,7 +1029,8 @@ export async function createRuntimeContext(
 	// task driver's own `notify` needs) — these two closures resolve them lazily, the same way
 	// `getRunner` above already resolves `bot` before its own declaration: nothing here calls
 	// through them until long after the whole function has finished setting up.
-	const getExecutor = (): Executor => executor;
+	const getJobs = (): JobRuntime => jobs;
+	const getRuns = (): SubAgentRuntime => runs;
 	const getTaskDriver = (): TaskDriverLike => taskDriver;
 
 	const handler = createDingTalkHandler({
@@ -1039,7 +1047,8 @@ export async function createRuntimeContext(
 		startedAt,
 		isShuttingDown,
 		getDurableDispatch,
-		getExecutor,
+		getJobs,
+		getRuns,
 		getTaskDriver,
 	});
 
@@ -1066,10 +1075,10 @@ export async function createRuntimeContext(
 			);
 		},
 	});
-	const executor = createExecutor();
+	const executor = options.executor ?? createExecutor();
 	// Background jobs get their persistence root and their way to wake a channel before any turn
 	// can start one, then re-adopt whatever survived the last shutdown (spec 031, D6).
-	configureJobRuntime({
+	const jobs = createJobRuntime(executor, {
 		jobsStateDir: join(options.paths.appHomeDir, "state", "jobs"),
 		workspaceDir: options.paths.workspaceDir,
 		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
@@ -1077,7 +1086,7 @@ export async function createRuntimeContext(
 	});
 	// Delegation runs get the same treatment (spec 040, D1/D7): persistence root, wake delivery,
 	// and the usage/archive authority, wired before any turn can start a run.
-	configureSubAgentRuntime({
+	const runs = createSubAgentRuntime({
 		stateDir: join(options.paths.appHomeDir, "state", "subagent-runs"),
 		dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 		// P0-1/P1a: a best-effort out-of-band notice, independent of the completion wake — it reaches
@@ -1099,8 +1108,9 @@ export async function createRuntimeContext(
 	// Spec 042 D11: `restoreChannelJobs` used to be a bare `void` while `restoreAllSubAgentRuns`
 	// was already awaited — the same admission race P0-1 closed for delegation runs was still open
 	// for background jobs.
-	await restoreChannelJobs(executor);
-	await restoreAllSubAgentRuns();
+	await jobs.restore();
+	await runs.restore();
+	runs.start();
 	// Spec 043, D10 point 1: repair any turn interrupted by the last shutdown/crash before opening
 	// admission — a message routed to a still-dangling session would 400 against the provider on
 	// every attempt (F3) until a human ran /new. Runs before bot.start() for the same reason as
@@ -1206,7 +1216,8 @@ export async function createRuntimeContext(
 			durableDispatch?.stop();
 			memoryMaintenanceScheduler.stop();
 			eventsWatcher.stop();
-			stopSubAgentGarbageCollector();
+			runs.stop();
+			jobs.stop();
 			await bot.stop();
 
 			const runningTasks = Array.from(activeTasks);
@@ -1305,6 +1316,8 @@ export async function createRuntimeContext(
 
 	return {
 		handler,
+		jobs,
+		runs,
 		store,
 		bot,
 		taskDriver,

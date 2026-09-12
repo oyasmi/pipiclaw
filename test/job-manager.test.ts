@@ -1,7 +1,12 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ChannelJobManager, FINISHED_JOB_RETENTION_MS, MAX_RUNNING_JOBS } from "../src/agent/job-manager.js";
+import {
+	ChannelJobManager,
+	createJobRuntime,
+	FINISHED_JOB_RETENTION_MS,
+	MAX_RUNNING_JOBS,
+} from "../src/agent/job-manager.js";
 import { createExecutor, type ExecOptions, type ExecResult, type Executor } from "../src/executor.js";
 import * as log from "../src/log.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
@@ -76,6 +81,33 @@ class FakeJobExecutor implements Executor {
 }
 
 describe("ChannelJobManager", () => {
+	it("binds jobs to their application's executor and stops polling without cancelling them", async () => {
+		vi.useFakeTimers();
+		const firstExecutor = new FakeJobExecutor();
+		const secondExecutor = new FakeJobExecutor();
+		const first = createJobRuntime(firstExecutor, { sweepIntervalMs: 10 });
+		const second = createJobRuntime(secondExecutor, { sweepIntervalMs: 10 });
+		try {
+			const job = await first.get("dm_1").start("sleep 100", "first", 300);
+			expect(second.get("dm_1").listRunning()).toEqual([]);
+			expect(secondExecutor.commands).toEqual([]);
+			first.stop();
+			const commands = firstExecutor.commands.length;
+			await vi.advanceTimersByTimeAsync(100);
+			expect(firstExecutor.commands).toHaveLength(commands);
+			expect(
+				first
+					.get("dm_1")
+					.listRunning()
+					.map((record) => record.id),
+			).toEqual([job.id]);
+		} finally {
+			first.stop();
+			second.stop();
+			vi.useRealTimers();
+		}
+	});
+
 	it("starts a job and reports it as running", async () => {
 		const executor = new FakeJobExecutor();
 		const manager = new ChannelJobManager("dm_1", executor);

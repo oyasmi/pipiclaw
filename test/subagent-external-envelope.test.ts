@@ -6,8 +6,8 @@ import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import { applyMemoryOps } from "../src/memory/store.js";
 import type { SubAgentConfig } from "../src/subagents/discovery.js";
-import { configureSubAgentRuntime } from "../src/subagents/runs.js";
 import { createSubAgentTool } from "../src/subagents/tool.js";
+import { configureSubAgentRuntime, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
@@ -62,6 +62,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
+			...testManagers("dm_ext_envelope"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -141,6 +142,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
+			...testManagers("dm_ext_no_memory"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -176,6 +178,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
+			...testManagers("dm_ext_with_memory"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -215,6 +218,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
+			...testManagers("dm_ext_invocation_context"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,
@@ -249,6 +253,7 @@ describe("createSubAgentTool external dispatch envelope (spec 040, P0-3)", () =>
 		};
 
 		const tool = createSubAgentTool({
+			...testManagers("dm_ext_envelope_verify"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,

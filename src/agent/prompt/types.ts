@@ -3,16 +3,13 @@
  *
  * The prompt is a list of sections with metadata — not an ad-hoc string array.
  * Every section declares where it comes from, how authoritative it is, how
- * stable it is across turns (cache class), which modes/tools it applies to, and
+ * stable it is across turns (cache class), which tools it requires, and
  * what happens when it exceeds its budget. The builder turns definitions into a
  * final text plus a manifest that can be inspected (`/context`), tested and
  * fingerprinted.
  */
 
 import type { RuntimePlaybookMetadata } from "../../playbooks/catalog.js";
-
-/** Which agent loop the prompt is being built for. Phase 1–3 only build "normal". */
-export type PromptMode = "normal" | "task-driver" | "event" | "subagent" | "maintenance";
 
 /**
  * How much authority a section's content carries.
@@ -31,7 +28,7 @@ export type PromptCacheClass = "runtime-stable" | "workspace-versioned" | "sessi
  * What to do when a section exceeds `maxChars`.
  * `error` is for runtime-authored text: overflowing it is a development error, not a user problem.
  */
-export type PromptOverflowPolicy = "error" | "truncate-head-tail" | "truncate-items" | "omit";
+export type PromptOverflowPolicy = "error" | "truncate-head-tail" | "truncate-items";
 
 /**
  * A registered tool, as the prompt builder sees it. There is no per-tool prose here and no
@@ -76,29 +73,19 @@ export interface LoadedPromptResource {
 }
 
 export interface PromptBuildContext {
-	mode: PromptMode;
-	/** Bash working directory. Not the channel directory: channel facts are turn-dynamic and never enter the system prompt. */
-	cwd: string;
-	workspaceDir: string;
 	tools: ToolDescriptor[];
 	soul?: LoadedPromptResource;
 	agents?: LoadedPromptResource;
 	playbooks: RuntimePlaybookMetadata[];
 	subAgents: SubAgentSummary[];
-	/** Skills are rendered by pi (they drive `/skill:name` too); recorded here for the manifest only. */
-	skills?: Array<{ name: string; description: string }>;
 }
 
 export interface PromptSectionDefinition {
 	id: string;
-	/** Sort key. Unique across sections; see the reserved ranges in sections.ts. */
-	order: number;
 	/** Code identifier or real file path. */
 	source: string;
 	authority: PromptAuthority;
 	cacheClass: PromptCacheClass;
-	/** Modes this section applies to. Omitted = all modes. */
-	modes?: PromptMode[];
 	/**
 	 * Section is dropped unless *every* listed tool is registered — all-of. A section
 	 * describes one mechanism, so a missing tool means the mechanism is unreachable.
@@ -112,7 +99,6 @@ export interface PromptSectionDefinition {
 
 export interface ResolvedPromptSection {
 	id: string;
-	order: number;
 	source: string;
 	authority: PromptAuthority;
 	cacheClass: PromptCacheClass;

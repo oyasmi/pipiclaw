@@ -4,11 +4,10 @@
  * over an explicit `event`/`workspaceDir`/`executor`, with no dependency on
  * `createRuntimeContext`'s closures.
  */
-import { getChannelJobManager, type JobSnapshot } from "../agent/job-manager.js";
+import type { ChannelJobManager, JobSnapshot } from "../agent/job-manager.js";
 import type { ChannelEvent } from "../channel/channel-event.js";
 import { getChannelDir } from "../channel/channel-paths.js";
-import type { Executor } from "../executor.js";
-import { getSubAgentRunManager, type RunRecord } from "../subagents/runs.js";
+import type { RunRecord, SubAgentRunManager } from "../subagents/runs.js";
 import { parkTask, readStoredTask, redeemTicket } from "../tasks/store.js";
 
 /**
@@ -87,11 +86,11 @@ export interface WakeTaskTransitionHooks {
 export async function claimVerifiedDelegationWake(
 	event: ChannelEvent,
 	workspaceDir: string,
+	runManager: SubAgentRunManager,
 	hooks?: WakeTaskTransitionHooks,
 ): Promise<ClaimedDelegationWake | undefined> {
 	const wake = event.internalWake;
 	if (wake?.kind !== "subagent") return undefined;
-	const runManager = getSubAgentRunManager(event.channelId);
 	const record = runManager.get(wake.resourceId);
 	if (
 		!isTrustedInternalWake(event, "subagent", wake.resourceId, wake.taskId) ||
@@ -140,12 +139,11 @@ export interface ClaimedJobWake {
 export async function claimVerifiedJobWake(
 	event: ChannelEvent,
 	workspaceDir: string,
-	executor: Executor,
+	jobManager: ChannelJobManager,
 	hooks?: WakeTaskTransitionHooks,
 ): Promise<ClaimedJobWake | undefined> {
 	const wake = event.internalWake;
 	if (wake?.kind !== "job") return undefined;
-	const jobManager = getChannelJobManager(event.channelId, executor);
 	const jobs = await jobManager.list();
 	if (
 		!isTrustedInternalWake(event, "job", wake.resourceId, wake.taskId) ||

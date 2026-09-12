@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatLocalTime, parseLocalTime } from "../src/shared/local-time.js";
 import { RecoverableToolError } from "../src/shared/recoverable-error.js";
-import { describeTicket, parseTicket, resolveTicket, type TicketContext, ticketExpired } from "../src/tasks/ticket.js";
+import { parseTicket, resolveTicket, type TicketContext, ticketExpired } from "../src/tasks/ticket.js";
 
 const NOW = new Date("2026-09-05T10:00:00+08:00");
 
@@ -130,10 +130,5 @@ describe("ticket expiry and round-trip", () => {
 		expect(parseTicket('{"kind":"ask","asked":"x"}')).toBeUndefined();
 		expect(parseTicket('{"kind":"ask","asked":"x","by":"nope"}')).toBeUndefined();
 		expect(parseTicket("not json")).toBeUndefined();
-	});
-
-	it("describes each kind well enough for a receipt to name what is being waited on", () => {
-		expect(describeTicket({ kind: "run", id: "run_9", by: "x" })).toContain("run_9");
-		expect(describeTicket({ kind: "ask", asked: "merge?", by: "x" })).toContain("merge?");
 	});
 });

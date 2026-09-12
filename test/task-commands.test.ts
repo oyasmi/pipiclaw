@@ -47,14 +47,14 @@ describe("/tasks (spec 051, D11)", () => {
 			ticket: { kind: "time", at: FUTURE, by: FUTURE },
 		});
 
-		await expect(run("pause weekly")).resolves.toContain("已暂停任务");
+		await run("pause weekly");
 		let fields = (await readStoredTask(channelDir, "weekly"))?.fields;
 		expect(fields?.paused?.by).toBe("user");
 		// Pausing is orthogonal: the stage and the ticket must survive it untouched.
 		expect(fields?.state).toBe("parked");
 		expect(fields?.ticket?.kind).toBe("time");
 
-		await expect(run("resume weekly")).resolves.toContain("已恢复任务");
+		await run("resume weekly");
 		fields = (await readStoredTask(channelDir, "weekly"))?.fields;
 		expect(fields?.paused).toBeUndefined();
 		expect(fields?.state).toBe("parked");

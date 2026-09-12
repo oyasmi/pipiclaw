@@ -87,13 +87,6 @@ function applyOverflow(
 	}
 
 	switch (definition.overflow) {
-		case "omit":
-			diagnostics.push({
-				level: "warning",
-				sectionId: definition.id,
-				message: `${content.length} chars exceeds the ${definition.maxChars} char budget; section omitted.`,
-			});
-			return { content: "", truncated: true };
 		case "truncate-items":
 			diagnostics.push({
 				level: "warning",
@@ -132,9 +125,6 @@ function resolve(
 	context: PromptBuildContext,
 	diagnostics: PromptDiagnostic[],
 ): ResolvedPromptSection | undefined {
-	if (definition.modes && !definition.modes.includes(context.mode)) {
-		return undefined;
-	}
 	if (definition.requiresAllTools?.some((name) => !context.tools.some((tool) => tool.name === name))) {
 		return undefined;
 	}
@@ -151,7 +141,6 @@ function resolve(
 
 	return {
 		id: definition.id,
-		order: definition.order,
 		source: definition.source,
 		authority: definition.authority,
 		cacheClass: definition.cacheClass,
@@ -172,16 +161,12 @@ export function buildPipiclawSystemPrompt(
 	const diagnostics: PromptDiagnostic[] = [];
 
 	const ids = new Set<string>();
-	const orders = new Set<number>();
 	for (const definition of [...definitions, FINAL_BOUNDARY_SECTION]) {
 		if (ids.has(definition.id)) throw new Error(`Duplicate prompt section id: ${definition.id}`);
-		if (orders.has(definition.order)) throw new Error(`Duplicate prompt section order: ${definition.order}`);
 		ids.add(definition.id);
-		orders.add(definition.order);
 	}
 
 	const sections = [...definitions]
-		.sort((a, b) => a.order - b.order)
 		.map((definition) => resolve(definition, context, diagnostics))
 		.filter((section): section is ResolvedPromptSection => section !== undefined);
 

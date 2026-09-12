@@ -42,7 +42,6 @@ function sealContent(content: string, tag: string): string {
 
 export const IDENTITY_SECTION: PromptSectionDefinition = {
 	id: "runtime.identity",
-	order: 100,
 	source: "runtime/identity",
 	authority: "runtime-fact",
 	cacheClass: "runtime-stable",
@@ -57,7 +56,6 @@ export const IDENTITY_SECTION: PromptSectionDefinition = {
 
 export const EXECUTION_SECTION: PromptSectionDefinition = {
 	id: "runtime.execution",
-	order: 200,
 	source: "runtime/execution",
 	authority: "runtime-fact",
 	cacheClass: "runtime-stable",
@@ -75,7 +73,6 @@ export const EXECUTION_SECTION: PromptSectionDefinition = {
 
 export const INVARIANTS_SECTION: PromptSectionDefinition = {
 	id: "runtime.invariants",
-	order: 300,
 	source: "runtime/invariants",
 	authority: "runtime-hard",
 	cacheClass: "runtime-stable",
@@ -97,7 +94,6 @@ export const INVARIANTS_SECTION: PromptSectionDefinition = {
 
 export const TASK_CORE_SECTION: PromptSectionDefinition = {
 	id: "runtime.tasks",
-	order: 310,
 	source: "runtime/tasks",
 	authority: "runtime-hard",
 	cacheClass: "runtime-stable",
@@ -113,7 +109,6 @@ export const TASK_CORE_SECTION: PromptSectionDefinition = {
 
 export const PLAYBOOKS_SECTION: PromptSectionDefinition = {
 	id: "playbooks",
-	order: 500,
 	source: "runtime/playbooks",
 	authority: "catalog",
 	cacheClass: "session-stable",
@@ -129,7 +124,6 @@ export const PLAYBOOKS_SECTION: PromptSectionDefinition = {
 
 export const SUBAGENTS_SECTION: PromptSectionDefinition = {
 	id: "subagents",
-	order: 510,
 	source: "workspace/sub-agents",
 	authority: "catalog",
 	cacheClass: "workspace-versioned",
@@ -215,7 +209,6 @@ const WORKSPACE_PREAMBLE =
 
 export const SOUL_SECTION: PromptSectionDefinition = {
 	id: "workspace.soul",
-	order: 600,
 	source: "workspace/SOUL.md",
 	authority: "workspace-instruction",
 	cacheClass: "workspace-versioned",
@@ -240,7 +233,6 @@ export const SOUL_SECTION: PromptSectionDefinition = {
 
 export const AGENTS_SECTION: PromptSectionDefinition = {
 	id: "workspace.agents",
-	order: 610,
 	source: "workspace/AGENTS.md",
 	authority: "workspace-instruction",
 	cacheClass: "workspace-versioned",
@@ -270,7 +262,6 @@ export const AGENTS_SECTION: PromptSectionDefinition = {
  */
 export const FINAL_BOUNDARY_SECTION: PromptSectionDefinition = {
 	id: "runtime.boundary",
-	order: 800,
 	source: "runtime/final-boundary",
 	authority: "runtime-hard",
 	cacheClass: "runtime-stable",

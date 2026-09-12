@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getSubAgentRunManager } from "../../../src/subagents/runs.js";
 import { parseTaskFrontmatterV4 } from "../../../src/tasks/frontmatter.js";
 import { parkTask } from "../../../src/tasks/store.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
@@ -136,7 +135,7 @@ describe("E2E deterministic: wake authenticity", () => {
 		await harness.sendUserMessage("派子代理");
 
 		// Park on the run that was actually dispatched, then release it so it settles and wakes.
-		const runId = await waitForRunId(harness.channelId, taskId);
+		const runId = await waitForRunId(harness, taskId);
 		await parkTask(harness.channelDir, taskId, { kind: "run", id: runId, by: "2099-01-01T00:00:00+08:00" });
 		expect(taskState()).toBe("parked");
 		const requestsBeforeWake = harness.modelRequestCount();
@@ -161,12 +160,13 @@ describe("E2E deterministic: wake authenticity", () => {
 });
 
 /** The id of the (single) run this task dispatched, once the manager has registered it. */
-async function waitForRunId(channelId: string, taskId: string): Promise<string> {
+async function waitForRunId(harness: DeterministicHarness, taskId: string): Promise<string> {
 	let runId: string | undefined;
 	await waitFor(
 		"delegation registered",
 		() => {
-			runId = getSubAgentRunManager(channelId)
+			runId = harness.runtime.runs
+				.get(harness.channelId)
 				.list()
 				.find((record) => record.taskId === taskId)?.runId;
 			return runId !== undefined;

@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
-import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/subagents/tool.js";
+import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
@@ -45,6 +45,7 @@ describe("subagent tool: async dispatch past the sync grace window (spec 040, D2
 
 		let releasePrompt: (() => void) | undefined;
 		const tool = createSubAgentInlineTool({
+			...testManagers("dm_123"),
 			executor: fakeExecutor,
 			fileStore: createFileStore(),
 			getCurrentModel: () => model,

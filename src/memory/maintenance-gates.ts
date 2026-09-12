@@ -2,13 +2,9 @@ import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import type { MemoryMaintenanceState } from "./maintenance-state.js";
 
-/** Spec 050, D9: the three v1 jobs collapse to one. */
-export type MaintenanceJobKind = "reflect";
-
 export interface MaintenanceGateDecision {
 	allowed: boolean;
 	skipReason?: string;
-	jobKind: MaintenanceJobKind;
 }
 
 export interface ReflectMaterial {
@@ -31,10 +27,10 @@ export interface ReflectGateInput {
 }
 
 function deny(skipReason: string): MaintenanceGateDecision {
-	return { allowed: false, jobKind: "reflect", skipReason };
+	return { allowed: false, skipReason };
 }
 
-const allow: MaintenanceGateDecision = { allowed: true, jobKind: "reflect" };
+const allow: MaintenanceGateDecision = { allowed: true };
 
 function parseTime(value: string | undefined): number | null {
 	if (!value) {

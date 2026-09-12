@@ -38,9 +38,6 @@ function createWorkspace(): { workspaceDir: string; channelDir: string } {
 function buildPrompt(workspaceDir: string): ReturnType<typeof buildPipiclawSystemPrompt> {
 	const tools = [{ name: "read", description: "Read files", hint: "Read files" }];
 	const context: PromptBuildContext = {
-		mode: "normal",
-		cwd: workspaceDir,
-		workspaceDir,
 		tools,
 		playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(), ["read"]),
 		subAgents: [],

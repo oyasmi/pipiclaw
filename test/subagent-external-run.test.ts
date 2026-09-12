@@ -7,9 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { launchExternalRun } from "../src/subagents/external/run.js";
-import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { readVerificationAttestation } from "../src/tasks/verification.js";
+import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spec 040, D1/D3/D4: the external-run orchestrator, driven with a fake `spawn` so the test
@@ -61,6 +61,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		await expect(
 			launchExternalRun({
+				...testManagers("dm_shell_structured"),
 				runId: "run-shell-structured",
 				channelId: "dm_shell_structured",
 				label: "invalid shell run",
@@ -100,6 +101,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const { spawnFn, spawnFnForInput, child } = makeFakeSpawn({ pid: 5150 });
 
 		await launchExternalRun({
+			...testManagers("dm_ext"),
 			runId: "run-ext-1",
 			channelId: "dm_ext",
 			label: "build the feature",
@@ -196,6 +198,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		});
 		const { spawnFnForInput, child } = makeFakeSpawn({ pid: 73737 });
 		const launchPromise = launchExternalRun({
+			...testManagers(channelId),
 			runId: "run-ext-handshake",
 			channelId,
 			label: "persist before probe",
@@ -259,6 +262,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const { spawnFnForInput, child } = makeFakeSpawn({ pid: 8181 });
 		configureSubAgentRuntime({ dispatch: () => true });
 		await launchExternalRun({
+			...testManagers(channelId),
 			runId,
 			channelId,
 			channelDir,
@@ -322,6 +326,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		process.env.GITHUB_TOKEN = "gh-should-be-kept";
 		try {
 			await launchExternalRun({
+				...testManagers("dm_ext"),
 				runId: "run-ext-env",
 				channelId: "dm_ext",
 				label: "build",
@@ -380,6 +385,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		const { spawnFn: _spawnFn2, spawnFnForInput, child } = makeFakeSpawn({ pid: 6161 });
 		await launchExternalRun({
+			...testManagers("dm_ext2"),
 			runId: "run-ext-2",
 			channelId: "dm_ext2",
 			label: "quiet run",
@@ -431,6 +437,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			failToSpawn: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
 		});
 		const result = await launchExternalRun({
+			...testManagers("dm_ext3"),
 			runId: "run-ext-3",
 			channelId: "dm_ext3",
 			label: "broken command",
@@ -471,6 +478,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		});
 
 		await launchExternalRun({
+			...testManagers("dm_short"),
 			runId: "run-short",
 			channelId: "dm_short",
 			label: "short",
@@ -544,6 +552,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 			configureSubAgentRuntime({ dispatch: () => true });
 
 			await launchExternalRun({
+				...testManagers(channelId),
 				runId,
 				channelId,
 				label: mode,
@@ -602,6 +611,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 			const { spawnFnForInput, child } = makeFakeSpawn({ pid: mode === "cancel" ? 7171 : 7172 });
 			await launchExternalRun({
+				...testManagers(channelId),
 				runId,
 				channelId,
 				label: mode,
@@ -676,6 +686,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		const { spawnFn, spawnFnForInput } = makeFakeSpawn();
 
 		const result = await launchExternalRun({
+			...testManagers("dm_audit_fail"),
 			runId: "run-audit-fail",
 			channelId: "dm_audit_fail",
 			label: "must be audited",
@@ -717,6 +728,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		await expect(
 			launchExternalRun({
+				...testManagers("dm_ext4"),
 				runId: "run-ext-4",
 				channelId: "dm_ext4",
 				label: "bad harness",
@@ -754,6 +766,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 
 		const { spawnFn, spawnFnForInput, child } = makeFakeSpawn({ pid: 7171 });
 		await launchExternalRun({
+			...testManagers("dm_ext5"),
 			runId: "run-ext-5",
 			channelId: "dm_ext5",
 			label: "review the diff",

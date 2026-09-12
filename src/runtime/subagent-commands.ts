@@ -5,7 +5,7 @@ import { formatDuration } from "../shared/duration.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentConfig, SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";
-import { getSubAgentRunManager, type RunNotice, type RunRecord, type RunResolution } from "../subagents/runs.js";
+import type { RunNotice, RunRecord, RunResolution, SubAgentRunManager } from "../subagents/runs.js";
 
 /**
  * `/subagents` — the human control path that does not depend on the model (spec 040 D6, polished
@@ -14,6 +14,7 @@ import { getSubAgentRunManager, type RunNotice, type RunRecord, type RunResoluti
  */
 
 export interface HandleSubagentsCommandOptions {
+	runManager: SubAgentRunManager;
 	args: string;
 	channelId: string;
 	/** Best-effort role-directory snapshot for `roles` / the overview tail; omitted when no runner
@@ -137,7 +138,7 @@ function capListForDisplay<T>(records: T[]): { shown: T[]; truncatedNote?: strin
 }
 
 async function listRuns(options: HandleSubagentsCommandOptions, filter: ListFilter): Promise<string> {
-	const records = getSubAgentRunManager(options.channelId).list();
+	const records = options.runManager.list();
 	if (records.length === 0) return "**委派 Run**\n\n没有委派记录。";
 
 	const running = records.filter((record) => record.status === "running").sort((a, b) => b.startedAt - a.startedAt);
@@ -197,8 +198,8 @@ function formatRunResolution(resolution: RunResolution, ref: string): string | u
 	return undefined;
 }
 
-async function showRun(channelId: string, ref: string): Promise<string> {
-	const resolution = getSubAgentRunManager(channelId).resolveRef(ref);
+async function showRun(manager: SubAgentRunManager, ref: string): Promise<string> {
+	const resolution = manager.resolveRef(ref);
 	const error = formatRunResolution(resolution, ref);
 	if (error || resolution.kind !== "found") return error ?? `未找到 run：\`${ref}\``;
 	const record = resolution.record;
@@ -254,8 +255,8 @@ async function showRun(channelId: string, ref: string): Promise<string> {
 	return lines.join("\n");
 }
 
-async function showOutput(channelId: string, ref: string): Promise<string> {
-	const resolution = getSubAgentRunManager(channelId).resolveRef(ref);
+async function showOutput(manager: SubAgentRunManager, ref: string): Promise<string> {
+	const resolution = manager.resolveRef(ref);
 	const error = formatRunResolution(resolution, ref);
 	if (error || resolution.kind !== "found") return error ?? `未找到 run：\`${ref}\``;
 	const record = resolution.record;
@@ -271,8 +272,7 @@ async function showOutput(channelId: string, ref: string): Promise<string> {
 	return `**Run \`${record.runId}\` 的产出**\n\n${truncatedNote}\`\`\`\n${tail}\n\`\`\``;
 }
 
-async function cancelRun(channelId: string, ref: string): Promise<string> {
-	const manager = getSubAgentRunManager(channelId);
+async function cancelRun(manager: SubAgentRunManager, ref: string): Promise<string> {
 	if (ref === "all") {
 		const running = manager.list().filter((record) => record.status === "running");
 		if (running.length === 0) return "没有正在运行的 run。";
@@ -393,11 +393,11 @@ export async function handleSubagentsCommand(options: HandleSubagentsCommandOpti
 			case "list":
 				return await listRuns(options, command.filter);
 			case "show":
-				return await showRun(options.channelId, command.ref);
+				return await showRun(options.runManager, command.ref);
 			case "output":
-				return await showOutput(options.channelId, command.ref);
+				return await showOutput(options.runManager, command.ref);
 			case "cancel":
-				return await cancelRun(options.channelId, command.ref);
+				return await cancelRun(options.runManager, command.ref);
 			case "roles":
 				return await showRoles(options, command.name);
 		}

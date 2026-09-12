@@ -84,9 +84,7 @@ describe("command-extension", () => {
 			customType: COMMAND_RESULT_CUSTOM_TYPE,
 			display: true,
 		});
-		expect(getLastCommandResult(api).content).toContain("Session ID");
 		expect(getLastCommandResult(api).content).toContain("gpt-4o-mini");
-		expect(getLastCommandResult(api).content).toContain("Tokens");
 	});
 
 	it("shows current and available models when /model has no args", async () => {

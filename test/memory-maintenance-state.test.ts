@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rmdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createChannelMemoryQueue } from "../src/memory/channel-maintenance-queue.js";
+import { migrateMemoryMaintenanceStates } from "../src/memory/maintenance-migration.js";
 import {
 	applyMemoryActivityToState,
 	createMemoryActivityRecorder,
@@ -52,6 +53,43 @@ describe("channel maintenance queue", () => {
 });
 
 describe("memory maintenance state", () => {
+	it("migration keeps the canonical cursor when an obsolete nested copy also exists", async () => {
+		const appHomeDir = createTempDir();
+		const channelId = "group_a/b";
+		const canonical = getMemoryMaintenanceStatePath(appHomeDir, channelId);
+		const legacy = join(appHomeDir, "state", "memory", `${channelId}.json`);
+		await mkdir(join(legacy, ".."), { recursive: true });
+		await writeFile(legacy, JSON.stringify({ channelId, lastCheckpointEntryId: "stale" }));
+		await writeFile(
+			canonical,
+			JSON.stringify({ channelId, lastReflectedEntryId: "current", lastCheckpointEntryId: "old" }),
+		);
+		await migrateMemoryMaintenanceStates(appHomeDir);
+		await migrateMemoryMaintenanceStates(appHomeDir);
+		expect(JSON.parse(await readFile(canonical, "utf8"))).toMatchObject({ lastReflectedEntryId: "current" });
+		expect(JSON.parse(await readFile(canonical, "utf8"))).not.toHaveProperty("lastCheckpointEntryId");
+		expect(existsSync(legacy)).toBe(false);
+	});
+
+	it("leaves the legacy cursor intact when its canonical destination cannot be read or written", async () => {
+		const appHomeDir = createTempDir();
+		const channelId = "group_a/b";
+		const legacy = join(appHomeDir, "state", "memory", `${channelId}.json`);
+		await mkdir(join(legacy, ".."), { recursive: true });
+		const original = JSON.stringify({ channelId, lastCheckpointEntryId: "keep-me" });
+		await writeFile(legacy, original);
+		await mkdir(getMemoryMaintenanceStatePath(appHomeDir, channelId));
+		await expect(migrateMemoryMaintenanceStates(appHomeDir)).rejects.toThrow();
+		expect(await readFile(legacy, "utf8")).toBe(original);
+		const canonical = getMemoryMaintenanceStatePath(appHomeDir, channelId);
+		await rmdir(canonical);
+		for (const corrupt of ["{bad json", "null", JSON.stringify({ channelId: "dm_other" })]) {
+			await writeFile(canonical, corrupt);
+			await expect(migrateMemoryMaintenanceStates(appHomeDir)).rejects.toThrow();
+			expect(await readFile(legacy, "utf8")).toBe(original);
+		}
+	});
+
 	it("returns defaults, rebuilds corrupt state, and updates atomically", async () => {
 		const appHomeDir = createTempDir();
 		const path = getMemoryMaintenanceStatePath(appHomeDir, "dm_1");
@@ -114,6 +152,7 @@ describe("memory maintenance state", () => {
 			"utf-8",
 		);
 
+		await migrateMemoryMaintenanceStates(appHomeDir);
 		await expect(readMemoryMaintenanceState(appHomeDir, "dm_1")).resolves.toMatchObject({
 			lastReflectAt: "2026-04-19T00:40:00.000Z",
 			lastReflectedEntryId: "entry-7",
@@ -147,6 +186,8 @@ describe("memory maintenance state", () => {
 		);
 
 		// Losing this would re-run the reflect pass on the channel's whole unreflected history.
+		await migrateMemoryMaintenanceStates(appHomeDir);
+		await migrateMemoryMaintenanceStates(appHomeDir); // migration is restart-idempotent
 		await expect(readMemoryMaintenanceState(appHomeDir, channelId)).resolves.toMatchObject({
 			lastReflectAt: "2026-04-19T00:40:00.000Z",
 		});

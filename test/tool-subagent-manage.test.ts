@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { externalRoleFingerprint } from "../src/subagents/discovery.js";
-import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import {
 	createSubAgentListTool,
 	createSubAgentRunTool,
 	type SubAgentManageToolOptions,
 } from "../src/tools/subagent-manage.js";
+import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 
 /**
  * Spec 047 P3 split `subagent_manage` into `subagent_list` + `subagent_run`. This helper
@@ -14,9 +14,9 @@ import {
  * two-tool routing itself is covered by `subagent_list` returning the snapshot and
  * `subagent_run` requiring `runId` at the schema layer.
  */
-function createSubAgentManageTool(options: SubAgentManageToolOptions) {
-	const list = createSubAgentListTool(options);
-	const run = createSubAgentRunTool(options);
+function createSubAgentManageTool(options: Omit<SubAgentManageToolOptions, "runManager">) {
+	const list = createSubAgentListTool({ ...testManagers(options.channelId), ...options });
+	const run = createSubAgentRunTool({ ...testManagers(options.channelId), ...options });
 	return {
 		...run,
 		execute: (id: string, args: { op: string; runId?: string; task?: string }) =>

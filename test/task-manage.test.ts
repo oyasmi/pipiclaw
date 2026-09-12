@@ -16,6 +16,7 @@ import { closeTask, listTasks, updateTask } from "../src/tools/task-manage/lifec
 import { endTaskStep } from "../src/tools/task-manage/step-end.js";
 import type { TaskManageToolOptions } from "../src/tools/task-manage/types.js";
 import { createTaskStepEndTool } from "../src/tools/task-manage.js";
+import { testManagers } from "./helpers/background-runtime.js";
 
 const CHANNEL_ID = "dm_1";
 const SATISFIED_BODY = renderStandardTaskBody({
@@ -36,7 +37,7 @@ describe("task tool surface (spec 051, D4)", () => {
 		channelDir = join(workspaceDir, CHANNEL_ID);
 		tasksDir = join(channelDir, "tasks");
 		await mkdir(join(tasksDir, "archive"), { recursive: true });
-		options = { workspaceDir, channelDir, channelId: CHANNEL_ID };
+		options = { ...testManagers(CHANNEL_ID), workspaceDir, channelDir, channelId: CHANNEL_ID };
 	});
 
 	afterEach(async () => {
@@ -235,7 +236,7 @@ describe("task tool surface (spec 051, D4)", () => {
 				join(tasksDir, "term.md"),
 				renderTaskDocument({ state: "open", cycle: createCycle("c-1") }, SATISFIED_BODY),
 			);
-			const tool = createTaskStepEndTool(loop("term"));
+			const tool = createTaskStepEndTool({ ...testManagers(), ...loop("term") });
 			const ok = await tool.execute("c", { outcome: "continue", note: "n" } as never);
 			expect(ok.terminate).toBe(true);
 
@@ -247,7 +248,7 @@ describe("task tool surface (spec 051, D4)", () => {
 				),
 			);
 			await expect(
-				createTaskStepEndTool(loop("term2")).execute("c", {
+				createTaskStepEndTool({ ...testManagers(), ...loop("term2") }).execute("c", {
 					outcome: "done",
 					note: "n",
 					summary: "S",

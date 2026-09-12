@@ -1,4 +1,6 @@
 import type { Static } from "typebox";
+import type { ChannelJobManager } from "../../agent/job-manager.js";
+import type { SubAgentRunManager } from "../../subagents/runs.js";
 import type {
 	taskCloseSchema,
 	taskCreateSchema,
@@ -40,6 +42,8 @@ export type TaskLogRequest = Static<typeof taskLogSchema>;
 export type TaskStepEndRequest = Static<typeof taskStepEndSchema>;
 
 export interface TaskManageToolOptions {
+	jobManager: ChannelJobManager;
+	runManager: SubAgentRunManager;
 	workspaceDir: string;
 	channelDir: string;
 	channelId: string;

@@ -7,13 +7,15 @@
  * preparation shares `prepareAppServices` with the DingTalk path.
  */
 import { userInfo } from "node:os";
-import { channelRunningJobLines } from "../agent/job-manager.js";
+import { createJobRuntime } from "../agent/job-manager.js";
 import { createRunner } from "../agent/runner-factory.js";
 import type { AgentRunner } from "../agent/types.js";
 import { ensureChannelDir } from "../channel/channel-paths.js";
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";
+import { createExecutor } from "../executor.js";
 import * as log from "../log.js";
+import { migrateMemoryMaintenanceStates } from "../memory/maintenance-migration.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -31,7 +33,7 @@ import { handleSkillsCommand } from "../runtime/skill-commands.js";
 import { handleSubagentsCommand } from "../runtime/subagent-commands.js";
 import { handleTasksCommand } from "../runtime/task-commands.js";
 import { flushSecurityLogs } from "../security/logger.js";
-import { getSubAgentRunManager } from "../subagents/runs.js";
+import { createSubAgentRuntime } from "../subagents/runs.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import { TUI_SLASH_COMMANDS } from "./commands.js";
@@ -134,10 +136,15 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	log.configureLogging(settingsManager.getLoggingSettings());
 	log.logStartup(paths.workspaceDir);
 
+	await migrateMemoryMaintenanceStates(paths.appHomeDir);
 	const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
 	const store = new ChannelStore({ workingDir: paths.workspaceDir });
+	const jobs = createJobRuntime(createExecutor());
+	const runs = createSubAgentRuntime();
 	const buildRunner = (): AgentRunner =>
 		createRunner(channelId, channelDir, {
+			jobManager: jobs.get(channelId),
+			runManager: runs.get(channelId),
 			appHomeDir: paths.appHomeDir,
 			authConfigPath: paths.authConfigPath,
 			modelsConfigPath: paths.modelsConfigPath,
@@ -181,7 +188,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 				channelId,
 			}),
 		runSubagents: (args) =>
-			handleSubagentsCommand({ args, channelId, discovery: runner.getSubAgentDiscoverySnapshot() }),
+			handleSubagentsCommand({
+				runManager: runs.get(channelId),
+				args,
+				channelId,
+				discovery: runner.getSubAgentDiscoverySnapshot(),
+			}),
 		runSkills: (args) =>
 			handleSkillsCommand({ args, workspaceDir: paths.workspaceDir, appHomeDir: paths.appHomeDir, channelId }),
 		runProject: (args) =>
@@ -193,11 +205,12 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 				actor: "tui-command",
 				isBusy: () => runner.isBusy(),
 				listActiveBlockers: () => [
-					...getSubAgentRunManager(channelId)
+					...runs
+						.get(channelId)
 						.list()
 						.filter((record) => record.status === "running")
 						.map((record) => `subagent run \`${record.runId}\` (${record.agent})`),
-					...channelRunningJobLines(channelId),
+					...jobs.runningLines(channelId),
 				],
 				onScopeChanged: async () => {
 					await runner.dispose();
@@ -215,6 +228,8 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		}
 	} finally {
 		await runner.dispose();
+		runs.stop();
+		jobs.stop();
 		await waitForStorageFlush(
 			Promise.allSettled([store.close(), getUsageLedger().flush?.() ?? Promise.resolve(), flushSecurityLogs()]),
 		);

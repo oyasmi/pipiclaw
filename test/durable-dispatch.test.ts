@@ -6,9 +6,9 @@ import * as log from "../src/log.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { type DurableDispatchRecord, DurableDispatchService } from "../src/runtime/durable-dispatch.js";
 import { claimVerifiedDelegationWake } from "../src/runtime/task-wake.js";
-import { configureSubAgentRuntime, getSubAgentRunManager } from "../src/subagents/runs.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { readStoredTask } from "../src/tasks/store.js";
+import { configureSubAgentRuntime, getSubAgentRunManager } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const tempDir = useTempDirs("pipiclaw-dispatch-");
@@ -240,7 +240,7 @@ describe("DurableDispatchService", () => {
 		await service.drainOnce(Date.now() + 11);
 		expect(delivered[1]?.text).toContain("[REDELIVERY:2]");
 
-		const claimed = await claimVerifiedDelegationWake(delivered[1]!, workspaceDir);
+		const claimed = await claimVerifiedDelegationWake(delivered[1]!, workspaceDir, manager);
 		expect(claimed?.activated).toBe(true);
 		await claimed?.finish();
 		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.state).toBe("open");
@@ -250,7 +250,7 @@ describe("DurableDispatchService", () => {
 		// The task is already open, so a further claim on the same wake is a no-op — the run
 		// manager's dispatchId-scoped wake claim is what makes this idempotent, not any per-task
 		// attempt counter (that mechanism was retired).
-		await expect(claimVerifiedDelegationWake(delivered[2]!, workspaceDir)).resolves.toBeUndefined();
+		await expect(claimVerifiedDelegationWake(delivered[2]!, workspaceDir, manager)).resolves.toBeUndefined();
 		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.state).toBe("open");
 	});
 

@@ -125,6 +125,7 @@ export async function createRuntimeHarness(options?: {
 }
 
 export interface DeterministicHarness {
+	readonly runtime: import("../../src/runtime/bootstrap.js").RuntimeContext;
 	homeDir: string;
 	workspaceDir: string;
 	channelId: string;
@@ -297,6 +298,9 @@ export async function createDeterministicHarness(options?: {
 		channelId,
 		channelDir,
 		deliveries,
+		get runtime() {
+			return runtime;
+		},
 		model,
 		async sendUserMessage(text, overrides): Promise<void> {
 			await bot.routeInboundEvent(buildEvent(text, overrides));

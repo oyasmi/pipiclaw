@@ -16,7 +16,7 @@ import { errorMessage } from "../../shared/text-utils.js";
 import { createEmptyUsageTotals } from "../../shared/types.js";
 import { workspaceSubjectSnapshot } from "../../tasks/artifact-subject.js";
 import type { SubAgentThinkingLevel } from "../discovery.js";
-import { getSubAgentRunManager, type RunMutates, type SettleInput } from "../runs.js";
+import type { RunMutates, SettleInput, SubAgentRunManager } from "../runs.js";
 import { getExternalHarness } from "./registry.js";
 import { finalizeExternalRun } from "./settlement.js";
 
@@ -115,6 +115,7 @@ function closeFd(fd: number | undefined): void {
  */
 
 export interface LaunchExternalRunInput {
+	runManager: SubAgentRunManager;
 	runId: string;
 	channelId: string;
 	/** Needed only for `purpose=verify`: where the attestation gets written. */
@@ -238,7 +239,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	// or host-wide cap still left behind an `external-agent` audit record claiming a process that
 	// never existed. `external-agent` records what was *executed* (D8.1), so the record must not
 	// precede the point where this run is actually admitted to run.
-	const runManager = getSubAgentRunManager(input.channelId);
+	const runManager = input.runManager;
 	await runManager.register({
 		runId: input.runId,
 		channelId: input.channelId,

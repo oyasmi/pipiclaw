@@ -5,7 +5,7 @@ import type { PipiclawMemoryMaintenanceSettings } from "../settings.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
-import { type MaintenanceJobKind, shouldRunReflect } from "./maintenance-gates.js";
+import { shouldRunReflect } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "./maintenance-state.js";
 import { runReflect } from "./reflect.js";
 import { appendMemoryReviewLog } from "./review-log.js";
@@ -34,19 +34,11 @@ export interface ReflectJobInput {
 	queue?: ChannelMemoryQueue;
 }
 
-export interface ReflectJobResult {
-	jobKind: MaintenanceJobKind;
-	ran: boolean;
-	skipped: boolean;
-	skipReason?: string;
-	error?: string;
-}
-
 function backoffUntil(now: Date, settings: PipiclawMemoryMaintenanceSettings): string {
 	return formatLocalTime(new Date(now.getTime() + Math.max(0, settings.failureBackoffMinutes) * 60_000));
 }
 
-export async function runReflectJob(input: ReflectJobInput): Promise<ReflectJobResult> {
+export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 	const queue = input.queue ?? getDefaultChannelMemoryQueue();
 	return queue.run(input.channelId, async () => {
 		const now = input.now ?? new Date();
@@ -82,7 +74,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<ReflectJobR
 				reason: "reflect",
 				skipped: [{ target: "reflect", reason: decision.skipReason }],
 			});
-			return { jobKind: decision.jobKind, ran: false, skipped: true, skipReason: decision.skipReason };
+			return;
 		}
 
 		const sourceWindow = loadSourceWindow();
@@ -109,7 +101,6 @@ export async function runReflectJob(input: ReflectJobInput): Promise<ReflectJobR
 				correlationId: sourceWindow.windowId,
 				...reviewLogEntryFor(result),
 			});
-			return { jobKind: "reflect", ran: !result.skipped, skipped: result.skipped };
 		} catch (error) {
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
@@ -122,7 +113,6 @@ export async function runReflectJob(input: ReflectJobInput): Promise<ReflectJobR
 				reason: "reflect",
 				error: message,
 			});
-			return { jobKind: "reflect", ran: false, skipped: false, error: message };
 		}
 	});
 }
