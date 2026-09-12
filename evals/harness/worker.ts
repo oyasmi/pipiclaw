@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { MediaSendResult, OutboundMedia } from "../../src/channel/channel-context.js";
 import type { DingTalkBot, DingTalkEvent, DingTalkHandler } from "../../src/runtime/dingtalk.js";
 import { createTaskDriverEvent } from "../../src/runtime/task-driver.js";
 import { readActiveTasks } from "../../src/tasks/ledger.js";
-import { isRecoverableRejection } from "../../src/tools/tool-details.js";
 import { createE2ETestHome } from "../../test/support/setup.js";
 import { allCases } from "../cases/index.js";
+import { traceIdentity, traceToolResultFailed } from "./identity.js";
 import type { CapturedDelivery, Step, TraceEvent, TrialContext, WorkerMessage } from "./schema.js";
 import { modelResultFields } from "./scoring.js";
 import { fallbackCostUsd, hash, tree } from "./util.js";
@@ -19,6 +19,13 @@ if (!caseId || !homeDir || !segmentRaw || !startRaw || !endRaw || !mode || exter
 const segment = Number(segmentRaw);
 let seq = Number(process.env.EVAL_TRACE_SEQ_START ?? "0");
 let stepIndex = Number(startRaw) - 1;
+let currentPhase: "fixture" | "scheduler" | "runtime" = "runtime";
+let currentCallId: string | undefined;
+let callSequence = 0;
+const channelId = "dm_eval";
+let sessionGeneration = 1;
+let currentSessionId = `${caseId}:${channelId}:segment-${segment}:session-${sessionGeneration}`;
+let currentActorId = "main-agent";
 
 function send(message: WorkerMessage): void {
 	process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -31,6 +38,14 @@ function trace(event: Omit<TraceEvent, "schemaVersion" | "seq" | "ts" | "segment
 		ts: new Date().toISOString(),
 		segment,
 		stepIndex,
+		...traceIdentity({
+			caseId,
+			channelId,
+			segment,
+			stepIndex,
+			sessionId: currentSessionId,
+			actorId: currentActorId,
+		}),
 		...event,
 	} satisfies TraceEvent;
 	localTrace.push(full);
@@ -108,16 +123,17 @@ let midTurnArmed = false;
 
 function eventTrace(event: unknown): void {
 	const modelFields = modelResultFields(event);
-	if (modelFields) trace({ kind: "model-result", fields: modelFields });
+	if (modelFields) trace({ kind: "model-result", fields: modelFields, callId: currentCallId, purpose: "agent-turn" });
 	const record = isRecord(event) ? event : {};
 	const type = typeof record.type === "string" ? record.type : "runtime";
 	if (type === "turn_start") {
-		trace({ kind: "turn-start" });
+		currentCallId = `${currentSessionId}:call-${++callSequence}`;
+		trace({ kind: "turn-start", callId: currentCallId, purpose: "agent-turn" });
 		if (midTurnArmed) {
 			midTurnArmed = false;
 			send({ protocol: 1, type: "ready", reason: "mid-turn-started" });
 		}
-	} else if (type === "turn_end") trace({ kind: "turn-end" });
+	} else if (type === "turn_end") trace({ kind: "turn-end", callId: currentCallId, purpose: "agent-turn" });
 	else if (type === "tool_execution_start") {
 		const tool = stringField(record.toolName);
 		const args = isRecord(record.args) ? record.args : {};
@@ -134,6 +150,9 @@ function eventTrace(event: unknown): void {
 		}
 		trace({
 			kind: "tool-call",
+			callId: stringField(record.toolCallId),
+			parentCallId: currentCallId,
+			purpose: "tool",
 			tool,
 			fields,
 			correlationId: stringField(record.toolCallId),
@@ -141,13 +160,16 @@ function eventTrace(event: unknown): void {
 		});
 	} else if (type === "tool_execution_end") {
 		// A recoverable rejection is quiet in chat, but still an unsuccessful call for evals.
-		const failed = record.isError !== false || isRecoverableRejection(record.result);
+		const failed = traceToolResultFailed(record.toolName, record.isError, record.result);
 		// A rejected call is the whole signal for the recoverable-error probes (a dropped argument
 		// surfaces as a rejection followed by a retry), so keep a readable excerpt of why.
 		const serialized = JSON.stringify(record.result ?? record.error ?? null);
 		const detail = serialized.slice(0, 1000000);
 		trace({
 			kind: "tool-result",
+			callId: stringField(record.toolCallId),
+			parentCallId: currentCallId,
+			purpose: "tool",
 			correlationId: stringField(record.toolCallId),
 			tool: stringField(record.toolName),
 			ok: !failed,
@@ -175,6 +197,8 @@ function eventTrace(event: unknown): void {
 			const provider = Number.isFinite(reported) && reported > 0;
 			trace({
 				kind: "usage",
+				callId: currentCallId,
+				purpose: "agent-turn",
 				fields: {
 					model: model ?? observedModel,
 					input: String(counted.input),
@@ -252,14 +276,25 @@ class EvalBot {
 	}
 	enqueueEvent(event: DingTalkEvent): boolean {
 		if (!this.handler) return false;
+		const taskId = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text)?.[1] ?? event.internalWake?.taskId;
+		const priorActor = currentActorId;
+		const priorSession = currentSessionId;
+		if (taskId) {
+			currentActorId = `task:${taskId}`;
+			currentSessionId = `${caseId}:${channelId}:task:${taskId}`;
+		}
 		const pending = this.handler
 			.handleEvent(event, this as unknown as DingTalkBot, true)
+			.finally(() => {
+				currentActorId = priorActor;
+				currentSessionId = priorSession;
+			})
 			.finally(() => this.pending.delete(pending));
 		this.pending.add(pending);
 		return true;
 	}
 	async drain(): Promise<void> {
-		await Promise.all([...this.pending]);
+		while (this.pending.size > 0) await Promise.all([...this.pending]);
 	}
 }
 
@@ -281,18 +316,26 @@ async function main(): Promise<void> {
 			? createE2ETestHome({ homeDir })
 			: { homeDir, workspaceDir: join(homeDir, "workspace"), channelConfigPath: join(homeDir, "channel.json") };
 	const workspaceDir = home.workspaceDir;
-	const channelId = "dm_eval";
 	const channelDir = join(workspaceDir, channelId);
 	const canaryPath = join(homeDir, "controlled-canary.txt");
 	if (firstSegment) {
 		writeFileSync(
 			join(homeDir, "security.json"),
-			`${JSON.stringify({ pathGuard: { writeDeny: [canaryPath] } }, null, 2)}\n`,
+			`${JSON.stringify(
+				{
+					pathGuard: { writeDeny: [canaryPath] },
+					projectAccess: { defaultRoot: workspaceDir, allowedRoots: [workspaceDir] },
+				},
+				null,
+				2,
+			)}\n`,
 		);
 	}
 	if (firstSegment && item.setup) {
+		currentPhase = "fixture";
 		mkdirSync(channelDir, { recursive: true });
 		await item.setup({ homeDir, workspaceDir, channelDir, canaryPath, externalBaseUrl });
+		currentPhase = "runtime";
 	}
 
 	const { createRuntimeContext } = await import("../../src/runtime/bootstrap.js");
@@ -351,24 +394,62 @@ async function main(): Promise<void> {
 				conversationId: "eval",
 				conversationType: "1",
 			});
+			await bot.drain();
+		} else if (step.kind === "newSession" || step.kind === "compact") {
+			await sendEvent({
+				type: "dm",
+				channelId,
+				ts: Date.now().toString(),
+				user: "eval",
+				userName: "Evaluator",
+				text: step.kind === "newSession" ? "/new" : "/compact",
+				conversationId: "eval",
+				conversationType: "1",
+			});
+			await bot.drain();
+			if (step.kind === "newSession") {
+				sessionGeneration++;
+				currentSessionId = `${caseId}:${channelId}:segment-${segment}:session-${sessionGeneration}`;
+			}
+		} else if (step.kind === "checkpoint") {
+			trace({
+				kind: "runtime-log",
+				fields: { checkpoint: step.id, fileCount: String(tree(workspaceDir).length) },
+				ok: true,
+			});
+		} else if (step.kind === "environment") {
+			const target = resolve(workspaceDir, step.path);
+			const rel = relative(workspaceDir, target);
+			if (isAbsolute(rel) || rel.startsWith(".."))
+				throw new Error(`Environment path '${step.path}' escapes the fixture workspace.`);
+			currentPhase = "fixture";
+			mkdirSync(join(target, ".."), { recursive: true });
+			writeFileSync(target, interpolate(step.content, canaryPath, workspaceDir, channelDir));
+			trace({ kind: "runtime-log", fields: { environment: step.action, path: rel }, ok: true });
+			currentPhase = "runtime";
 		} else if (step.kind === "syntheticTaskTurn") {
 			const entries = await readActiveTasks(join(channelDir, "tasks"), Date.now());
 			const entry = entries.find((candidate) => candidate.id === step.taskId);
 			if (!entry) throw new Error(`Synthetic task ${step.taskId} is missing; repair the case fixture.`);
 			await sendEvent(createTaskDriverEvent(channelId, entry, Date.now()));
 		} else if (step.kind === "runTaskDriver") {
+			currentPhase = "scheduler";
 			if (!runtime.taskDriver.runOnce) {
 				throw new Error("Runtime did not expose TaskDriver.runOnce; use the production runtime driver.");
 			}
 			await runtime.taskDriver.runOnce(step.at ? new Date(step.at) : new Date());
 			await bot.drain();
+			currentPhase = "runtime";
 		} else if (step.kind === "runMemoryMaintenance") {
+			currentPhase = "scheduler";
 			if (!runtime.memoryMaintenance.runOnce) {
 				throw new Error("Runtime did not expose the memory maintenance scheduler; use the production instance.");
 			}
 			await runtime.memoryMaintenance.runOnce(step.at ? new Date(step.at) : new Date());
 			await bot.drain();
+			currentPhase = "runtime";
 		} else if (step.kind === "waitFor") {
+			currentPhase = step.failureCategory ?? "fixture";
 			const deadline = Date.now() + step.timeoutMs;
 			while (true) {
 				const context: TrialContext = {
@@ -385,11 +466,15 @@ async function main(): Promise<void> {
 						externalRequests: [],
 					},
 				};
-				if (step.predicate(context)) break;
+				if (step.predicate(context)) {
+					await bot.drain();
+					break;
+				}
 				if (Date.now() >= deadline)
 					throw new Error(`waitFor timed out after ${step.timeoutMs}ms; fix the predicate or case.`);
 				await new Promise((resolve) => setTimeout(resolve, 50));
 			}
+			currentPhase = "runtime";
 		}
 	};
 
@@ -420,6 +505,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-	process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+	const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+	send({ protocol: 1, type: "failure", category: currentPhase, error: detail.slice(0, 16000) });
+	process.stderr.write(`${detail}\n`);
 	process.exitCode = 70;
 });

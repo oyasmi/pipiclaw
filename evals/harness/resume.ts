@@ -34,3 +34,9 @@ export function preserveInterruptedAttempt(trialDir: string): string | undefined
 	renameSync(trialDir, archived);
 	return archived;
 }
+
+export function nextAttemptNumber(trialDir: string): number {
+	let interrupted = 0;
+	while (existsSync(`${trialDir}.interrupted-${interrupted + 1}`)) interrupted++;
+	return interrupted + 1;
+}

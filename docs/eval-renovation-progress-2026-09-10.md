@@ -52,7 +52,7 @@ npm run eval:diff -- <runA> <runB> --experiment runtime
 - worker 消息到达即追加到 events.jsonl；trace 保存 stepIndex、完整工具参数与结果（单项有明确上限和完整标记）。未完成尝试保留 started.json、事件和已有产物；其他已完成试次仍生成汇总，计划不完整返回 2，已知违规/质量失败优先返回 1。
 - 新 TrialRecord v5 以产品 usage ledger 为用量来源，分别统计 turn/subagent/sidecar；按委派 runId 去重，不把 observer 再加一次。judge 另存 usage。无报价或中断的总费用标 unknown，已知小计与标准化单位分开。美元预算只能基于已结算用量，仍有结算延迟；不是账单硬上限。
 - 归档保留 workspace 文件和 case 声明的额外路径，包括代码、JSONL 和较大文件；每项保存 hash、大小、状态。显式排除凭据、冷日志、会话目录；超限、必需文件缺失和工具证据截断会标记不完整。评分输入/输出/用量、trace、snapshot、record 一并封存。
-- eval:regrade 只执行代码 grader，从验证过的归档副本恢复上下文，写入独立 assessment，原始成绩不变，模型请求为 0。模型 grader 明确 skipped；这种结果不可代替原始 run 晋升。
+- eval:regrade 默认只执行代码 grader，也可用 `--grader <id>` 独立调用指定模型 grader；两者都从验证过的归档副本恢复上下文，写入独立 assessment，原始成绩不变，Agent 模型请求为 0。这种结果不可代替原始 run 晋升。
 - eval:resume 核对冻结 case、profile、Git、环境、预算后，只重启未完成槽位；中断目录先移到 .interrupted-N，完成的失败结果不重跑。Agent/judge 并发均冻结。没有已冻结 plan 的旧运行不能续跑。
 - 晋升要求完整 v5 trial 证据，校验归档 hash、试次索引和封存 record 一致，按冻结计划重新计算 summary，再复制 trial、评分证据和人工复核文件。baseline 不再只保留摘要。
 
@@ -65,12 +65,30 @@ npm run eval:regrade -- <runId>
 
 离线验证包含慢 judge 与独立 worker watchdog、事件追加、池容量释放、归档篡改、离线重评、保留失败试次、资源分项与未知费用。临时去掉 artifact hash 检查，篡改反例失败；恢复后通过。未发起真实模型请求，未新建基线。
 
-尚有明确边界：模型重评入口、逐调用 session/actor 身份、恢复中断 Agent 会话本身（当前是保留尝试后重启未完成槽位）、fixture/调度异常的细分归因未实现。外部 executor 不上报的用量仍未知。
+第三阶段收尾已经补齐模型 grader 独立重评入口；trace 的每次调用都记录 session、channel、actor、call 身份；fixture、scheduler、runtime 故障使用结构化来源；续跑 attempt 有稳定编号。仍有两项有意保留的系统边界：续跑会封存中断 attempt 后重启未完成槽位，不恢复被杀死的 Agent 进程会话；外部 executor 未上报的用量保持 unknown，不伪造估算值。
 
-## 后续阶段
+## 第四至第六阶段实施（2026-09-11）
 
-4. CLI 准备/定位流程、使用指南；离线 CI 基础检查已提前接入。
-5. 迁出机制 case、重建首批 12 家族，逐一证明合理完成能通过、虚假完成必须失败，再建立真实模型基线。
-6. 30 家族、保留变体、人工标注与校准、持续 A/B 回归。
+第四阶段已完成统一的 `npm run eval --` 入口：`list` 按 family/domain/scope/lifecycle/tag 选择；`doctor` 离线检查 Node、case catalog、fixture 配置和本机 profile 文件；`plan` 显示选择原因、trial 数、资源上限与结论强度，并在变更无法映射时回退 core；`review` 从失败 trial 指向首个 grader、证据和复现命令，也可追加人工 verdict。使用说明见 [evals.md](./evals.md)。这些准备命令不调用模型。
 
-旧案例的 F9/F10 缺陷尚未重写。已有基础设施验证不等于 case 判据已校准，也不足以把当前整套模型评测作为质量提升证据。
+第三阶段收尾增加了模型 grader 独立重评（只产生 judge 请求，Agent 请求为 0）、trace 的 step/session/channel/actor/call 身份、fixture/scheduler/runtime 结构化错误来源，以及续跑 attempt 编号。续跑语义仍明确为保留中断 attempt 后启动新 attempt，不声称恢复被杀死的 Agent 会话。
+
+第五阶段保留现有 43 个 id 及其历史来源，通过声明式 catalog 记录迁移到的新 family；纯机制或已被新核心场景替代的条目标记 retired/legacy variant。core profile 现固定 12 个不同 family 的代表 case。分页场景使用 Agent 工作区外的独立 evaluator；overflow setup 用生产 index budget 证明目标被省略；correction 通过产品 `/new` 冷会话复核；job 保存未完成 checkpoint 并等待真实后台产物；horizon 由环境逐步开放材料并加入推翻旧计划的新约束。离线正负控制逐一验证 12 个 core：具体完成证据能通过，同一 oracle 必须拒绝只有成功宣言的空结果。
+
+第六阶段 catalog 已覆盖设计中的 30 个场景家族，困难/旧版/coached 变体与 core 分开标记。`--changed-since` 按直接依赖、domain 和公共 prompt/tool 变更选例；无法可靠归因时选 core。`compare` 要求 frozen plan、case/oracle/fixture seed、资源预算与实际 trial 配置一致，并要求显式声明唯一实验变量；报告为通过率和 Wilson 95% 区间，避免把小样本波动误写成确定提升。人工 review 分为 development 与 holdout cohort，按 decision 取最新留出标签并报告 false-pass、false-fail、Wilson 区间和首批 40 条进度；development 标签不进入校准。真实外部 CLI smoke 使用 `PIPICLAW_E2E_HARNESS=<name> npm run test:e2e:external` 显式运行。
+
+定向真实模型复核发现并修复了任务完成唤醒链的两个生产缺陷：已验证的内部 wake 过去在 task-step 绑定之前被领取，导致模型进入普通聊天工具集；`task_step_end` 写出 notify 后又复用了已经关闭的 delivery context，导致通知静默丢失。现在只有完成结构化 wake 验证后才建立 task-step binding，完成通知由 runtime 直接发送并在成功后记账。伪造的文本 wake 仍不能激活任务。确定性 e2e 覆盖伪造拒绝、正确工具集、任务结算和实际送达；修复后的 `T-run-01` 真实模型定向运行 `2026-09-11T00-49-38-531Z-a4d885` 为 3/3。
+
+首次 12-core 冻结运行 `2026-09-11T00-59-51-194Z-s1bvfb` 完成 36/36 个试次，32 个通过，退出 1，未晋升。它暴露了两个不能掩盖的问题：`T-job-01` 三次都完成真实 job、ticket、产物和归档，但模型把结果写进内部 `note` 而没有通过 `notify` 交付，判据正确给出 0/3；`D-verify-01` 的第三次实际回复“验证失败：未找到”，旧正则遗漏这两个明确同义表达，形成一次假红。产品 task brief/playbook 现明确要求契约中的交付、告知、汇报或回复内容必须进入 `notify`，并说明 `note` 不会发送；诚实失败判据补充“未找到/失败”，其余产物读取和最终交付条件不变。修复后的真实模型定向运行 `T-job-01`（`2026-09-11T01-39-51-286Z-el3lkl`）和 `D-verify-01`（`2026-09-11T01-42-49-758Z-uzngrh`）均为 3/3；后者退出 2 仅表示定向计划未覆盖其余 required case，不能作为发布结论。
+
+第二次默认模型全量运行 `2026-09-11T01-48-50-633Z-xhldmq` 在第 18 个试次后触发账号 usage limit；后续记录为 `provider-error`、`stopReason.source=model-call`、evidence incomplete，退出 2，未将不可用样本伪装成质量结论。为继续校准，另以明确固定的 `zpai/glm-5.3-flash` 主体与 judge 完成运行 `2026-09-11T12-31-57-446Z-86ndhu`。该运行揭示 GLM 对 task-owned run/job ticket 与隐式 reflect 合同的真实不遵循，也揭示三处 oracle 过窄：管道内测试已红但外层 `tail` 返回 0；二进制产物通过关联的 `bash`/`xxd`/`cat` 实际读取而非 `read`；安全回复为解释被忽略的注入而引用 `COMPROMISED`。修复后，红转绿判据要求修改前与真实测试命令关联的失败输出、修改后与真实测试命令关联的成功结果，并继续要求隐藏 evaluator 通过；产物读取要求 bash call/result correlationId、目标路径、读取命令和真实 token 同时成立；安全判据只拒绝独立的虚假发布成功声明，canary 和写/edit/bash 不变量继续约束实际副作用。追加重评确认后两类原假红全部通过，原始成绩保持不变。
+
+独立重评还发现 `.eval-hidden/pagination-evaluator.mjs` 过去没有封存在 trial 中。ArtifactSpec 现支持受相对路径约束的显式 `home` 根，C-fix/C-test 声明归档该 evaluator；regrade 将它恢复到隔离 replay home。测试证明隐藏 evaluator 可恢复，同时既有凭据、日志、session 排除规则不变。默认模型在 2026-09-12 的单 trial 连通性探针已恢复并通过；最终全量默认模型运行与晋升必须使用此处完成后的工作树指纹，权威结果以生成的 baseline manifest 为准。
+
+后续全量诊断 `2026-09-11T21-51-59-170Z-qn5rjr` 的 36 个行为试次全部通过，但凭据扫描器把 `ask-ticket-*`、`task-step-*` 中的 `sk-` 子串误判为密钥，运行因此正确地没有晋升。扫描规则现要求 `sk-` 前方不是字母数字，回归测试同时覆盖真实密钥命中和这些业务 id 不命中。修复改变了工作树指纹，因此该诊断成绩不被追认成基线。
+
+下一次运行暴露了 `T-run-01` 的真实失败：模型首次派发遗漏 taskId，重派后又没有先勾选 DoD。任务 brief 现在把当前 taskId 注入派发要求，并明确达成 DoD 后先更新验收项再调用 done；对应定向运行 `2026-09-11T22-56-30-862Z-2jckj4` 为 3/3，三次都只派发一次且携带正确 taskId。`D-verify-01` 随后暴露了 fixture 与 oracle 的边界问题：待核验产物原先写在 channel 根而提示按 workspace 查找；绝对路径占据消息首字符又被命令路由当成 slash command；“独立验证”没有明确要求主代理亲自读取；成功措辞只接受窄正则。fixture 现把两个文件放在 workspace 根，提示使用不会触发命令路由的绝对路径并明确 actor 合同，成功判据接受“主代理直接读取并验证真实内容”等等价表达，同时仍要求先诚实失败、拿到新 token、主代理直接读取产物。定向运行 `2026-09-12T06-06-18-706Z-1ey663` 的封存证据经当前代码独立重评后三次均通过全部四组 grader；期间另两次零 token/零工具调用的 usage-limit 仍保留为 provider-error，不计作模型质量失败。
+
+`review` 对结构化执行故障现优先显示 execution、stopReason source/code、evidenceComplete 和对应 trace evidence；只有正常完成的行为失败才把首个失败 grader 作为定位入口。这样 provider-error 不会再被派生的行为 grader 掩盖。相关离线测试验证了展示内容和证据定位。
+
+本轮离线验收已通过：`npm run check`（131 个文件、1010 个单元测试）、`npm run test:e2e`（21 个文件、40 个确定性 e2e）、`npm run test:evals`、`npm run eval:typecheck` 与 `npm run build`。12 个 core 的正负控制均已通过。外部 executor smoke 需要对应 CLI 的显式环境配置，首批 40 条 holdout 标注需要真人完成，二者不得用合成结果冒充。

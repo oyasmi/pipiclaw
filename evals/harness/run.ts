@@ -13,6 +13,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { canRunE2E, createE2ETestHome, getE2ESkipReason } from "../../test/support/setup.js";
+import { metadataForCase } from "../cases/catalog.js";
 import { allCases } from "../cases/index.js";
 import { atomicJson, captureArtifacts, sealArtifactIndex } from "./artifacts.js";
 import { caseHash, rubricHash, selectedCases } from "./cases.js";
@@ -21,7 +22,7 @@ import { runJudgeProcess } from "./judge-process.js";
 import { EvalPool } from "./pool.js";
 import { freezeLocalProfile } from "./profile.js";
 import { readResourceLedger, summarizeResources } from "./resources.js";
-import { completedTrial, preserveInterruptedAttempt } from "./resume.js";
+import { completedTrial, nextAttemptNumber, preserveInterruptedAttempt } from "./resume.js";
 import type {
 	CaseDescriptor,
 	CaseSummary,
@@ -41,6 +42,7 @@ import type {
 	WorkerMessage,
 } from "./schema.js";
 import { assessTrial, evaluateSummary, gradeTrial, resultOutcome, summarize, terminalModelFailure } from "./scoring.js";
+import { formatWilson } from "./statistics.js";
 import { containsCredential, FALLBACK_TOKEN_RATES_USD_PER_MTOK, hash, hashFile, tree } from "./util.js";
 
 const ZERO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
@@ -107,6 +109,7 @@ export function describeCase(item: EvalCase): CaseDescriptor {
 			parameters: grader.parameters,
 			rubricHash: grader.kind === "model" ? rubricHash(grader) : undefined,
 		})),
+		metadata: metadataForCase(item.id, item.source, item.description),
 	};
 }
 
@@ -121,19 +124,32 @@ function isModelDecision(grade: GradeResult): boolean {
 export function humanReviewCalibration(
 	records: TrialRecord[],
 	reviews: HumanReviewRecord[],
-): { reviewed: number; agreed: number; agreement?: number } {
-	const modelGrades = new Set(
+): { reviewed: number; agreed: number; falsePass: number; falseFail: number; agreement?: number } {
+	const modelGrades = new Map<string, GradeResult["status"]>(
 		records.flatMap((record) =>
-			record.grades.filter(isModelDecision).map((grade) => `${record.caseId}\0${record.trial}\0${grade.graderId}`),
+			record.grades
+				.filter(isModelDecision)
+				.map((grade) => [`${record.caseId}\0${record.trial}\0${grade.graderId}`, grade.status] as const),
 		),
 	);
-	const relevant = reviews.filter((review) =>
-		modelGrades.has(`${review.caseId}\0${review.trial}\0${review.graderId}`),
-	);
-	const agreed = relevant.filter((review) => review.verdict === "agree").length;
+	const latest = new Map<string, HumanReviewRecord>();
+	for (const review of reviews) {
+		const key = `${review.caseId}\0${review.trial}\0${review.graderId}`;
+		if (modelGrades.has(key) && review.cohort !== "development") latest.set(key, review);
+	}
+	const relevant = [...latest.entries()];
+	const agreed = relevant.filter(([, review]) => review.verdict === "agree").length;
+	const falsePass = relevant.filter(
+		([key, review]) => modelGrades.get(key) === "pass" && review.verdict === "overturn-to-fail",
+	).length;
+	const falseFail = relevant.filter(
+		([key, review]) => modelGrades.get(key) === "fail" && review.verdict === "overturn-to-pass",
+	).length;
 	return {
 		reviewed: relevant.length,
 		agreed,
+		falsePass,
+		falseFail,
 		agreement: relevant.length ? agreed / relevant.length : undefined,
 	};
 }
@@ -152,7 +168,7 @@ export function renderReport(
 	);
 	const rows = summaries.map(
 		(summary) =>
-			`| ${summary.caseId} | ${summary.suite} | ${summary.passed}/${summary.valid} | ${summary.invalid} | ${summary.budgetExceeded} | ${summary.gate} | ${summary.unknownCostSamples ? "N/A (unknown cost)" : `$${summary.medianCostUsd.toFixed(4)}`} | ${(summary.medianWallMs / 1_000).toFixed(1)}s | ${summary.medianToolCalls} |`,
+			`| ${summary.caseId} | ${summary.suite} | ${summary.passed}/${summary.valid} | ${formatWilson(summary.passed, summary.valid)} | ${summary.invalid} | ${summary.budgetExceeded} | ${summary.gate} | ${summary.unknownCostSamples ? "N/A (unknown cost)" : `$${summary.medianCostUsd.toFixed(4)}`} | ${(summary.medianWallMs / 1_000).toFixed(1)}s | ${summary.medianToolCalls} |`,
 	);
 	const unknownCostTrials = records.filter((record) => record.resources?.agentCostUsd === null).length;
 	const totalCost = records.reduce((sum, record) => sum + record.metrics.costUsd, 0);
@@ -191,7 +207,7 @@ Judge: ${manifest.judgeModel ?? "unknown"}
 Trials: ${records.length}; ${unknownCostTrials ? `known cost subtotal: $${totalCost.toFixed(4)}; ${unknownCostTrials} trial(s) have unknown total cost` : `cost: $${totalCost.toFixed(4)} (${costNote})`}; tokens: ${tokens}
 Discrimination: ${perfect}/${scored.length} cases passed every valid trial (${(allPassRatio * 100).toFixed(0)}%).${discrimination}
 
-Human review queue: ${reviewCount} grader decisions; ${reviews.length} verdicts recorded. Model-grader calibration: ${calibration.agreement === undefined ? "pending" : `${calibration.agreed}/${calibration.reviewed} (${(calibration.agreement * 100).toFixed(0)}%)`} (archived grades remain immutable).
+Human review queue: ${reviewCount} grader decisions; ${reviews.length} verdicts recorded. Held-out model-grader calibration: ${calibration.agreement === undefined ? "pending (0/40 starting labels)" : `${calibration.agreed}/${calibration.reviewed} (${(calibration.agreement * 100).toFixed(0)}%); Wilson 95% CI ${formatWilson(calibration.agreed, calibration.reviewed)}; false-pass ${calibration.falsePass}, false-fail ${calibration.falseFail}; starting labels ${calibration.reviewed}/40`} (latest held-out human assessment per decision; development labels and archived grades do not contribute).
 
 ## Resources
 
@@ -232,8 +248,8 @@ ${failures.length ? failures.join("\n") : "None."}
 
 ## Results
 
-| Case | Suite | Pass | Invalid | Budget | Gate | Median cost | Median wall | Median tools |
-| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |
+| Case | Suite | Pass | Wilson 95% CI | Invalid | Budget | Gate | Median cost | Median wall | Median tools |
+| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
 ${rows.join("\n")}
 
 ${summaries.every((item) => item.planned !== undefined) ? "Agent resource limits count as behavioral failures. Cost and latency medians include all started trials. Required cases need the frozen minimum sample count; incomplete plans or unknown invariant evidence are inconclusive (exit 2). Known hard violations, including quarantine, and required gate misses exit 1." : "Historical scoring: archived denominators and medians are preserved. These summaries cannot establish a baseline under the current scoring policy; run the current evaluator for comparable measurements."}
@@ -243,10 +259,19 @@ ${summaries.map((item) => `- ${item.caseId}: finished ${item.started ?? "unknown
 `;
 }
 
-export function selectHumanReview(records: TrialRecord[]): Array<{ caseId: string; trial: number; graderId: string }> {
-	const selected = new Map<string, { caseId: string; trial: number; graderId: string }>();
+export function selectHumanReview(
+	records: TrialRecord[],
+): Array<{ caseId: string; trial: number; graderId: string; cohort: "development" | "holdout" }> {
+	const selected = new Map<
+		string,
+		{ caseId: string; trial: number; graderId: string; cohort: "development" | "holdout" }
+	>();
 	const add = (record: TrialRecord, grade: GradeResult): void => {
-		const value = { caseId: record.caseId, trial: record.trial, graderId: grade.graderId };
+		const cohort =
+			Number.parseInt(hash(`cohort:${record.caseId}:${record.trial}:${grade.graderId}`).slice(0, 8), 16) % 4 === 0
+				? ("holdout" as const)
+				: ("development" as const);
+		const value = { caseId: record.caseId, trial: record.trial, graderId: grade.graderId, cohort };
 		selected.set(`${value.caseId}\0${value.trial}\0${value.graderId}`, value);
 	};
 	for (const record of records) {
@@ -339,7 +364,14 @@ async function externalFixture(): Promise<ExternalFixture> {
 }
 
 interface WorkerResult {
-	kind: "complete" | "crashed" | "budget" | "product-failure" | "protocol-failure";
+	kind:
+		| "complete"
+		| "crashed"
+		| "budget"
+		| "product-failure"
+		| "fixture-failure"
+		| "scheduler-failure"
+		| "protocol-failure";
 	observedModel?: string;
 	promptFingerprint?: string;
 	error?: string;
@@ -413,6 +445,7 @@ export async function runWorkerSegment(options: {
 		let budgetKill = false;
 		let budgetReason = "wall";
 		let complete: Extract<WorkerMessage, { type: "complete" }> | undefined;
+		let reportedFailure: Extract<WorkerMessage, { type: "failure" }> | undefined;
 		const killWorkerTree = (signal: NodeJS.Signals): void => {
 			if (process.platform !== "win32" && child.pid) {
 				try {
@@ -485,6 +518,8 @@ export async function runWorkerSegment(options: {
 				});
 				killWorkerTree("SIGTERM");
 				setTimeout(() => killWorkerTree("SIGKILL"), KILL_GRACE_MS).unref();
+			} else if (message.type === "failure") {
+				reportedFailure = message;
 			}
 		};
 		child.stdout.setEncoding("utf8");
@@ -514,7 +549,21 @@ export async function runWorkerSegment(options: {
 					error: `${budgetReason} trial budget exceeded; narrow the case or raise its explicit budget`,
 				});
 			else if (expectedKill && signal === "SIGKILL") finish({ kind: "crashed" });
-			else if (code !== 0) finish({ kind: "product-failure", error: stderr.trim() || `worker exited ${code}` });
+			else if (code !== 0 && reportedFailure)
+				finish({
+					kind:
+						reportedFailure.category === "fixture"
+							? "fixture-failure"
+							: reportedFailure.category === "scheduler"
+								? "scheduler-failure"
+								: "product-failure",
+					error: reportedFailure.error,
+				});
+			else if (code !== 0)
+				finish({
+					kind: "protocol-failure",
+					error: stderr.trim() || `worker exited ${code} without a structured failure`,
+				});
 			else if (!complete)
 				finish({ kind: "protocol-failure", error: "worker exited without a complete protocol message" });
 			else
@@ -609,6 +658,7 @@ async function runTrial(
 	templateHome: string,
 	agentPool: EvalPool,
 	judgePool: EvalPool,
+	attempt = 1,
 ): Promise<{ record: TrialRecord; configHashes: [string, string, string] }> {
 	const queuedAt = Date.now();
 	const releaseAgent = await agentPool.acquire();
@@ -616,7 +666,7 @@ async function runTrial(
 	try {
 		const startedAt = new Date().toISOString();
 		mkdirSync(trialDir, { recursive: true });
-		atomicJson(join(trialDir, "started.json"), { runId, caseId: item.id, trial, startedAt });
+		atomicJson(join(trialDir, "started.json"), { runId, caseId: item.id, trial, attempt, startedAt });
 		writeFileSync(join(trialDir, "events.jsonl"), "");
 		const homeDir = mkdtempSync(join(tmpdir(), "pipiclaw-eval-"));
 		temporaryHome = homeDir;
@@ -673,6 +723,18 @@ async function runTrial(
 					}
 					if (result.kind === "protocol-failure") {
 						execution = "harness-error";
+						productError = result.error;
+						break;
+					}
+					if (result.kind === "fixture-failure") {
+						execution = "fixture-error";
+						stopReason = { source: "fixture", code: "setup-or-observable", evidenceId: "worker-error.txt" };
+						productError = result.error;
+						break;
+					}
+					if (result.kind === "scheduler-failure") {
+						execution = "harness-error";
+						stopReason = { source: "scheduler", code: "driver-or-maintenance", evidenceId: "worker-error.txt" };
 						productError = result.error;
 						break;
 					}
@@ -788,6 +850,7 @@ async function runTrial(
 			caseId: item.id,
 			caseHash: descriptor.caseHash,
 			trial,
+			attempt,
 			observedModel,
 			promptFingerprint,
 			outcome,
@@ -860,9 +923,9 @@ async function runTrial(
 	}
 }
 
-async function main(): Promise<void> {
-	const resumeId = process.env.EVAL_RESUME ?? (process.argv[2] === "--resume" ? process.argv[3] : undefined);
-	if (process.argv[2] === "--resume" && !resumeId) throw new Error("Use npm run eval:resume -- <runId>.");
+export async function runMain(argv: string[] = process.argv.slice(2)): Promise<void> {
+	const resumeId = process.env.EVAL_RESUME ?? (argv[0] === "--resume" ? argv[1] : undefined);
+	if (argv[0] === "--resume" && !resumeId) throw new Error("Use npm run eval -- resume <runId>.");
 	if (resumeId && !/^[a-zA-Z0-9_-]+$/.test(resumeId))
 		throw new Error("Invalid resume id; use the run id printed by eval.");
 	const runId =
@@ -1032,6 +1095,7 @@ async function main(): Promise<void> {
 					templateHome,
 					agentPool,
 					judgePool,
+					nextAttemptNumber(trialDir),
 				);
 				results.push({ order: job.order, ...result });
 				process.stdout.write(`  ${job.item.id} ${result.record.outcome} ${result.record.metrics.wallMs}ms\n`);
@@ -1097,7 +1161,7 @@ async function main(): Promise<void> {
 
 const invokedAsScript = process.argv[1]?.endsWith("/run.js") || process.argv[1]?.endsWith("\\run.js");
 if (invokedAsScript) {
-	main().catch((error) => {
+	runMain().catch((error) => {
 		process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
 		process.exitCode = 2;
 	});

@@ -57,7 +57,8 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<string 
 	blocks.push(
 		"推进这个任务的下一个具体步骤，然后必须调用 task_step_end 收尾：" +
 			"continue（还能继续）/ park（等一个真实来源）/ done（本周期完成）/ blocked（需要用户决定）。" +
-			"默认不向用户发言；确实需要告诉用户时用 notify。",
+			`派发 run/job 时，首个调用就必须带 taskId=${input.taskId}；达成 DoD 后先用 edit 勾选对应验收项，再调用 done。` +
+			"默认不向用户发言；契约要求交付、告知、汇报或回复时，必须把实际内容放进 notify，note 不会发送给用户。",
 	);
 	return blocks.join("\n\n");
 }

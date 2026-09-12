@@ -8,6 +8,7 @@ coverage/
 .nyc_output/
 *.tsbuildinfo
 evals/results/
+evals/baselines/*/trials/
 
 # package manager / publish artifacts
 *.tgz

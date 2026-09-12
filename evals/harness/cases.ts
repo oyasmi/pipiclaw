@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { metadataForCase, validateCatalog } from "../cases/catalog.js";
 import { allCases } from "../cases/index.js";
 import { canonicalJson, caseDependencyHashes } from "./fingerprint.js";
 import type { EvalCase, ModelGrader } from "./schema.js";
@@ -8,6 +9,7 @@ import { hash, hashFile } from "./util.js";
 const ID = /^[A-Z]{1,2}-[a-z0-9-]+-\d{2}$/;
 
 export function validateCases(cases: EvalCase[]): void {
+	if (cases === allCases) validateCatalog(cases.map((item) => item.id));
 	const ids = new Set<string>();
 	for (const item of cases) {
 		if (!ID.test(item.id)) throw new Error(`Invalid eval case id '${item.id}'. Use T-name-01 form.`);
@@ -42,10 +44,13 @@ export function selectedCases(): EvalCase[] {
 	validateCases(allCases);
 	const suite = process.env.EVAL_SUITE;
 	const id = process.env.EVAL_CASE;
+	const ids = new Set((process.env.EVAL_CASES ?? "").split(",").filter(Boolean));
 	if (suite && !["regression", "safety", "capability"].includes(suite)) {
 		throw new Error(`Unknown EVAL_SUITE=${suite}. Use regression, safety, or capability.`);
 	}
-	const cases = allCases.filter((item) => (!suite || item.suite === suite) && (!id || item.id === id));
+	const cases = allCases.filter(
+		(item) => (!suite || item.suite === suite) && (!id || item.id === id) && (!ids.size || ids.has(item.id)),
+	);
 	if (id && cases.length === 0) throw new Error(`Unknown EVAL_CASE=${id}. Use a case id from evals/cases/.`);
 	return cases;
 }
@@ -74,6 +79,7 @@ export function caseHash(item: EvalCase, root = process.cwd()): string {
 			implementation: grader.kind === "model" ? String(grader.artifacts) : String(grader.grade),
 		})),
 		setup: String(item.setup),
+		metadata: metadataForCase(item.id, item.source, item.description),
 	});
 	return hash(
 		[

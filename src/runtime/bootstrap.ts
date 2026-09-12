@@ -7,7 +7,7 @@ import { renderStatus } from "../agent/status-render.js";
 import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
 import type { AgentRunner } from "../agent/types.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
-import { type ChannelContext, muteChannelContext } from "../channel/channel-context.js";
+import { muteChannelContext } from "../channel/channel-context.js";
 import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
 import { type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
 import { ensureChannelDir, getChannelDir } from "../channel/channel-paths.js";
@@ -341,8 +341,8 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 		runner: AgentRunner,
 	): Promise<{ taskId: string; brief: string } | undefined> => {
 		const match = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text);
-		if (!match?.[1] || !runner.bindTaskSession) return undefined;
-		const taskId = match[1];
+		const taskId = match?.[1] ?? event.internalWake?.taskId;
+		if (!taskId || !runner.bindTaskSession) return undefined;
 		const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
 		try {
 			const document = await readStoredTask(channelDir, taskId);
@@ -358,11 +358,17 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 	};
 
 	/** Deliver whatever the step asked to say, then hand the runner back to the chat session. */
-	const finishTaskStep = async (channelId: string, taskId: string, ctx: ChannelContext): Promise<void> => {
+	const finishTaskStep = async (channelId: string, taskId: string, bot: DingTalkBot): Promise<void> => {
 		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
 		try {
 			const notice = await consumeTaskNotice(channelDir, taskId);
-			if (notice) await ctx.respond(notice, true);
+			if (notice) {
+				// runner.run closes its per-turn delivery context before returning. Sending through that
+				// closed context silently dropped successful task_step_end notifications (T-run-01).
+				const delivered = await bot.sendPlain(channelId, notice);
+				if (delivered) await store.logBotResponse(channelId, notice, Date.now().toString());
+				else log.logWarning(`[${channelId}] Failed to deliver task notice for ${taskId}`);
+			}
 		} catch (error) {
 			log.logWarning(`[${channelId}] Could not deliver task notice for ${taskId}`, errorMessage(error));
 		}
@@ -758,11 +764,9 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					// own session, with a brief instead of the wake text, and silent unless the step
 					// asked for a notify. Everything below (busy state, /stop, delivery) is unchanged;
 					// only which session the turn is bound to, and what reaches the channel, differ.
-					const taskStep = await prepareTaskStep(event, runner);
-					if (taskStep) event = { ...event, text: taskStep.brief };
-					// Context snapshots the inbound message; construct it only after installing the brief.
-					const baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
-					const ctx = taskStep ? muteChannelContext(baseCtx) : baseCtx;
+					let taskStep: { taskId: string; brief: string } | undefined;
+					let baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
+					let ctx = baseCtx;
 
 					if (builtInCommand) {
 						const commandStartedAt = Date.now();
@@ -901,8 +905,16 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 							}
 						}
 					}
+					// Verified job/run wakes that activate a task are task steps too. Verification must happen
+					// first: routing directly from user-controlled wake text would grant task-only tools.
+					taskStep = await prepareTaskStep(event, runner);
+					if (taskStep) {
+						event = { ...event, text: taskStep.brief };
+						baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
+						ctx = muteChannelContext(baseCtx);
+					}
 					const result = await runner.run(ctx, store);
-					if (taskStep) await finishTaskStep(event.channelId, taskStep.taskId, baseCtx);
+					if (taskStep) await finishTaskStep(event.channelId, taskStep.taskId, bot);
 
 					if (result.stopReason === "aborted" && runner.getTurnStatus().stopRequested) {
 						log.logInfo(`[${event.channelId}] Stopped`);

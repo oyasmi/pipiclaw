@@ -681,6 +681,7 @@ describe("behavior eval artifacts", () => {
 	it("finds credential material but deliberately skips auth.json", () => {
 		const root = temp();
 		writeFileSync(join(root, "auth.json"), '{"key":"sk-THIS_IS_IGNORED_123"}');
+		writeFileSync(join(root, "ordinary.json"), '{"graderId":"ask-ticket-recorded","stepId":"task-step-finished"}');
 		writeFileSync(join(root, "trace.jsonl"), "api_key=abcdefghijklmnop");
 		expect(containsCredential(root)).toBe(true);
 		expect(credentialMatches(root)).toEqual(["trace.jsonl"]);
@@ -786,8 +787,30 @@ describe("behavior eval artifacts", () => {
 			reviewer: "test",
 			ts: "2026-01-01T00:00:00.000Z",
 		};
-		expect(humanReviewCalibration([judged], [review])).toEqual({ reviewed: 1, agreed: 1, agreement: 1 });
-		expect(renderReport(manifest, [], [judged], [review])).toMatch(
+		const developmentReview: HumanReviewRecord = {
+			...review,
+			cohort: "development",
+			verdict: "overturn-to-fail",
+			note: "rubric development feedback",
+			ts: "2026-01-02T00:00:00.000Z",
+		};
+		// A later development verdict must not replace a held-out verdict for the same
+		// decision; otherwise tuning feedback can make calibration move retroactively.
+		expect(humanReviewCalibration([judged], [developmentReview])).toEqual({
+			reviewed: 0,
+			agreed: 0,
+			falsePass: 0,
+			falseFail: 0,
+			agreement: undefined,
+		});
+		expect(humanReviewCalibration([judged], [review, developmentReview])).toEqual({
+			reviewed: 1,
+			agreed: 1,
+			falsePass: 0,
+			falseFail: 0,
+			agreement: 1,
+		});
+		expect(renderReport(manifest, [], [judged], [review, developmentReview])).toMatch(
 			/Observed model\(s\): provider\/observed[\s\S]*1\/1 \(100%\)/,
 		);
 	});

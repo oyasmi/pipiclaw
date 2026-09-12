@@ -6,6 +6,9 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 
 export type Suite = "regression" | "safety" | "capability";
 export type Gate = "required" | "report-only" | "quarantine";
+export type EvalDomain = "coding" | "memory" | "tasks" | "delegation" | "tools" | "safety" | "interaction";
+export type EvalScope = "component" | "journey";
+export type EvalLifecycle = "draft" | "candidate" | "regression" | "quarantine" | "retired";
 export type Outcome = "pass" | "fail" | "invariant-violation" | "budget-exceeded" | "invalid";
 export type Severity = "quality" | "hard-invariant";
 
@@ -48,6 +51,20 @@ export interface CaseDescriptor {
 	caseHash: string;
 	stepKinds: string[];
 	graders: Array<{ graderId: string; graderVersion: string; rubricHash?: string; parameters?: JsonValue }>;
+	metadata?: EvalCaseMetadata;
+}
+
+export interface EvalCaseMetadata {
+	version: number;
+	family: string;
+	domain: EvalDomain;
+	scope: EvalScope;
+	tags: string[];
+	owner: string;
+	lifecycle: EvalLifecycle;
+	source: { kind: "incident" | "product-contract" | "capability"; ref: string };
+	contract: { objective: string; acceptance: string[]; forbiddenEffects: string[] };
+	dependencies: string[];
 }
 
 export interface TraceEvent {
@@ -56,6 +73,13 @@ export interface TraceEvent {
 	ts: string;
 	segment: number;
 	stepIndex?: number;
+	stepId?: string;
+	sessionId?: string;
+	channelId?: string;
+	actorId?: string;
+	callId?: string;
+	parentCallId?: string;
+	purpose?: string;
 	correlationId?: string;
 	kind: "turn-start" | "turn-end" | "tool-call" | "tool-result" | "step" | "usage" | "runtime-log" | "model-result";
 	tool?: string;
@@ -152,6 +176,7 @@ export interface TrialRecord {
 	caseId: string;
 	caseHash: string;
 	trial: number;
+	attempt?: number;
 	observedModel: string;
 	promptFingerprint?: string;
 	outcome: Outcome;
@@ -185,13 +210,23 @@ export interface TrialContext {
 
 export type Step =
 	| { kind: "user"; text: string }
+	| { kind: "newSession" }
+	| { kind: "compact" }
+	| { kind: "checkpoint"; id: string }
+	| { kind: "environment"; action: "writeFile"; path: string; content: string }
 	| { kind: "syntheticTaskTurn"; taskId: string }
 	| { kind: "runTaskDriver"; at?: string }
 	/** Drives one real `MemoryMaintenanceScheduler.runOnce(at)` pass: the reflect job (spec 050). */
 	| { kind: "runMemoryMaintenance"; at?: string }
 	| { kind: "restart" }
 	| { kind: "crash"; mode: "atStepBoundary" | "midTurn"; delayMs?: number }
-	| { kind: "waitFor"; predicate: (ctx: TrialContext) => boolean; timeoutMs: number };
+	| {
+			kind: "waitFor";
+			predicate: (ctx: TrialContext) => boolean;
+			timeoutMs: number;
+			/** `fixture` for a broken precondition, `runtime` when timeout is the behavior under evaluation. */
+			failureCategory?: "fixture" | "runtime";
+	  };
 
 export interface CodeGrader {
 	parameters?: JsonValue;
@@ -223,7 +258,7 @@ export interface TrialSetup {
 }
 
 export interface ArtifactSpec {
-	root: "workspace" | "channel";
+	root: "home" | "workspace" | "channel";
 	path: string;
 	optional?: boolean;
 	maxBytes?: number;
@@ -252,6 +287,8 @@ export interface HumanReviewRecord {
 	schemaVersion: 1;
 	caseId: string;
 	trial: number;
+	/** Rubric development labels never contribute to held-out judge calibration. Missing means holdout for v1 compatibility. */
+	cohort?: "development" | "holdout";
 	verdict: "agree" | "overturn-to-pass" | "overturn-to-fail";
 	graderId: string;
 	note: string;
@@ -289,4 +326,5 @@ export type WorkerMessage =
 	| { protocol: 1; type: "trace"; event: TraceEvent }
 	| { protocol: 1; type: "delivery"; delivery: CapturedDelivery }
 	| { protocol: 1; type: "ready"; reason: "crash-boundary" | "mid-turn-started" }
+	| { protocol: 1; type: "failure"; category: "fixture" | "scheduler" | "runtime"; error: string }
 	| { protocol: 1; type: "complete"; observedModel: string; promptFingerprint?: string };

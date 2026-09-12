@@ -52,7 +52,8 @@ export function captureArtifacts(
 	let bytes = 0;
 	const seen = new Set<string>();
 	for (const spec of specs) {
-		const root = spec.root === "workspace" ? context.workspaceDir : context.channelDir;
+		const root =
+			spec.root === "home" ? context.homeDir : spec.root === "workspace" ? context.workspaceDir : context.channelDir;
 		const visit = (path: string): void => {
 			const rel = relative(root, path);
 			if (isAbsolute(rel) || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))
@@ -107,7 +108,7 @@ export function captureArtifacts(
 		};
 		if (isAbsolute(spec.path))
 			throw new Error(
-				"Absolute artifact declarations are unsupported; use a path relative to workspace or channel.",
+				"Absolute artifact declarations are unsupported; use a path relative to home, workspace, or channel.",
 			);
 		visit(resolve(root, spec.path));
 	}

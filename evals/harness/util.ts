@@ -85,7 +85,7 @@ export function median(values: number[]): number {
 }
 
 const CREDENTIAL =
-	/(sk-[A-Za-z0-9_-]{12,}|api[_-]?key\s*[:=]\s*["']?\S{12,}|"key"\s*:\s*"\S{12,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)/i;
+	/(?<![A-Za-z0-9])(sk-[A-Za-z0-9_-]{12,}|api[_-]?key\s*[:=]\s*["']?\S{12,}|"key"\s*:\s*"\S{12,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)/i;
 
 export function credentialMatches(root: string): string[] {
 	const matches: string[] = [];

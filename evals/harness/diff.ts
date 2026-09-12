@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalJson } from "./fingerprint.js";
 import type { CaseDescriptor, CaseSummary, RunManifest, RunPlan } from "./schema.js";
+import { formatWilson } from "./statistics.js";
 
 export type Experiment = "none" | "runtime" | "model";
 export interface ComparisonEvidence {
@@ -12,8 +13,7 @@ export interface ComparisonEvidence {
 	experiment?: Experiment;
 }
 
-function runDir(run: string): string {
-	const root = process.cwd();
+function runDir(run: string, root = process.cwd()): string {
 	if (run === "baseline" || run === "latest") {
 		const latest = JSON.parse(readFileSync(join(root, "evals/baselines/latest.json"), "utf8")) as { runId: string };
 		return join(root, "evals/baselines", latest.runId);
@@ -23,6 +23,31 @@ function runDir(run: string): string {
 		if (existsSync(candidate)) return candidate;
 	}
 	throw new Error(`Run ${run} not found; run eval or promote a baseline first.`);
+}
+
+export function compareRuns(
+	root: string,
+	leftName: string,
+	rightName: string,
+	experiment: Experiment = "none",
+): string {
+	const leftDir = runDir(leftName, root);
+	const rightDir = runDir(rightName, root);
+	return renderDiff(
+		leftName,
+		rightName,
+		read<RunManifest>(leftDir, "manifest.json"),
+		read<RunManifest>(rightDir, "manifest.json"),
+		read<{ cases: CaseSummary[] }>(leftDir, "summary.json").cases,
+		read<{ cases: CaseSummary[] }>(rightDir, "summary.json").cases,
+		{
+			leftCases: read<CaseDescriptor[]>(leftDir, "cases.json"),
+			rightCases: read<CaseDescriptor[]>(rightDir, "cases.json"),
+			leftPlan: existsSync(join(leftDir, "plan.json")) ? read<RunPlan>(leftDir, "plan.json") : undefined,
+			rightPlan: existsSync(join(rightDir, "plan.json")) ? read<RunPlan>(rightDir, "plan.json") : undefined,
+			experiment,
+		},
+	);
 }
 
 function read<T>(dir: string, file: string): T {
@@ -150,7 +175,8 @@ export function renderDiff(
 			y?.started !== planB.plannedTrials[id]
 		)
 			reasons.push("scoring policy / incomplete or unpaired plan");
-		const rate = (value: CaseSummary | undefined) => (value ? `${value.passed}/${value.valid}` : "—");
+		const rate = (value: CaseSummary | undefined) =>
+			value ? `${value.passed}/${value.valid} (${formatWilson(value.passed, value.valid)})` : "—";
 		if (reasons.length || !x || !y)
 			return `| ${id} | ${rate(x)} | ${rate(y)} | N/A | N/A | N/A | ${[...new Set(reasons)].join("; ")} |`;
 		const delta = (y.passed / y.valid - x.passed / x.valid) * 100;
@@ -185,23 +211,5 @@ if (invokedAsScript) {
 		(flag && !variable)
 	)
 		throw new Error("Use npm run eval:diff -- <runA> <runB|baseline> [--experiment none|runtime|model].");
-	const leftDir = runDir(leftName);
-	const rightDir = runDir(rightName);
-	process.stdout.write(
-		renderDiff(
-			leftName,
-			rightName,
-			read<RunManifest>(leftDir, "manifest.json"),
-			read<RunManifest>(rightDir, "manifest.json"),
-			read<{ cases: CaseSummary[] }>(leftDir, "summary.json").cases,
-			read<{ cases: CaseSummary[] }>(rightDir, "summary.json").cases,
-			{
-				leftCases: read<CaseDescriptor[]>(leftDir, "cases.json"),
-				rightCases: read<CaseDescriptor[]>(rightDir, "cases.json"),
-				leftPlan: existsSync(join(leftDir, "plan.json")) ? read<RunPlan>(leftDir, "plan.json") : undefined,
-				rightPlan: existsSync(join(rightDir, "plan.json")) ? read<RunPlan>(rightDir, "plan.json") : undefined,
-				experiment: variable as Experiment | undefined,
-			},
-		),
-	);
+	process.stdout.write(compareRuns(process.cwd(), leftName, rightName, variable as Experiment | undefined));
 }

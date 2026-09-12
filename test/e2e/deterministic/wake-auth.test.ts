@@ -65,12 +65,13 @@ describe("E2E deterministic: wake authenticity", () => {
 		expect(taskState()).toBe("parked");
 	});
 
-	it("A15: a verified delegation completion wake DOES reactivate the waiting task", async () => {
+	it("A15: a verified delegation completion wake resumes inside the task session", async () => {
 		// The positive control for the check above. A real `[SUBAGENT:<runId>] … belongs to
 		// task <id>.` wake carries `internalWake` + a run record on disk, so
 		// claimVerifiedDelegationWake redeems the matching `run` ticket and the task reopens.
-		// Mutation check: skip the internalWake block in SubAgentRunManager.announce and the
-		// task stays parked until its backstop expires.
+		// Mutation checks: skip the internalWake block in SubAgentRunManager.announce and the task
+		// stays parked; prepare the task step before verifying the wake and this request instead gets
+		// chat tools, reproducing the lost task_step_end settlement path caught by T-run-01.
 		harness = await createDeterministicHarness({ services: true, subagentSyncGraceMs: 60 });
 
 		harness.model.script.route({
@@ -110,9 +111,20 @@ describe("E2E deterministic: wake authenticity", () => {
 			respond: [reply.text("CHILD RESULT")],
 			repeat: true,
 		});
-		// Registered last, so it only sees what the two routes above did not claim: the completion
-		// wake and any task-loop steps the driver queues once the ticket is redeemed. Those steps
-		// carry a task brief rather than user text, so matching them by content would be brittle.
+		harness.model.script.route({
+			name: "completion-task-step",
+			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId}]`),
+			respond: [
+				reply.toolCall("task_step_end", {
+					outcome: "blocked",
+					note: "已读取 CHILD RESULT，等待用户复核。",
+					reason: "等待用户复核 CHILD RESULT",
+				}),
+				reply.text("不会直接显示"),
+			],
+			repeat: true,
+		});
+		// Registered last, so it only sees ordinary unmatched wakes.
 		harness.model.script.route({
 			name: "silent-wakes",
 			when: (r) => r.isMainTurn,
@@ -127,9 +139,24 @@ describe("E2E deterministic: wake authenticity", () => {
 		const runId = await waitForRunId(harness.channelId, taskId);
 		await parkTask(harness.channelDir, taskId, { kind: "run", id: runId, by: "2099-01-01T00:00:00+08:00" });
 		expect(taskState()).toBe("parked");
+		const requestsBeforeWake = harness.modelRequestCount();
+		const deliveriesBeforeWake = harness.deliveries.length;
 		childGate.release();
 
-		await waitFor("ticket redeemed", () => taskState() === "open", { timeoutMs: 15_000, intervalMs: 100 });
+		await waitFor(
+			"completion handled by task step",
+			() =>
+				harness.modelRequestCount() > requestsBeforeWake &&
+				(harness.lastMainTurnRequest()?.lastUserText.includes(`[TASK_STEP:${taskId}]`) ?? false),
+			{ timeoutMs: 15_000, intervalMs: 100 },
+		);
+		const request = harness.lastMainTurnRequest();
+		expect(request?.lastUserText).toContain(`[TASK_STEP:${taskId}]`);
+		expect(request?.tools).toContain("task_step_end");
+		await waitFor("task step settled", () => taskState() === "parked", { timeoutMs: 5_000, intervalMs: 50 });
+		expect(
+			harness.deliveries.slice(deliveriesBeforeWake).some((delivery) => delivery.text?.includes("CHILD RESULT")),
+		).toBe(true);
 	});
 });
 

@@ -29,7 +29,25 @@ const item: EvalCase = {
 	description: "test",
 	definitionFile: "evals/cases/regression.ts",
 	script: [{ kind: "user", text: "fix it" }],
-	graders: [fileContains("fixed", "result.txt", /fixed/)],
+	graders: [
+		fileContains("fixed", "result.txt", /fixed/),
+		{
+			kind: "code",
+			graderId: "hidden-evaluator-restored",
+			graderVersion: "1",
+			grade: async (ctx) => ({
+				schemaVersion: 1,
+				graderId: "hidden-evaluator-restored",
+				graderVersion: "1",
+				graderKind: "code",
+				status:
+					readFileSync(join(ctx.homeDir, ".eval-hidden/evaluator.mjs"), "utf8") === "hidden\n" ? "pass" : "fail",
+				severity: "quality",
+				evidence: [{ kind: "file", ref: ".eval-hidden/evaluator.mjs" }],
+				rationale: "hidden evaluator must be restored under the replay home",
+			}),
+		},
+	],
 };
 const descriptor: CaseDescriptor = {
 	schemaVersion: 2,
@@ -163,9 +181,15 @@ describe("eval supervision and evidence", () => {
 		mkdirSync(channelDir, { recursive: true });
 		writeFileSync(join(channelDir, "result.txt"), "broken; claimed complete");
 		writeFileSync(join(workspaceDir, "code.ts"), "x".repeat(70000));
+		mkdirSync(join(homeDir, ".eval-hidden"));
+		writeFileSync(join(homeDir, ".eval-hidden/evaluator.mjs"), "hidden\n");
 		const trialDir = join(root, "trial");
-		const index = captureArtifacts({ homeDir, workspaceDir, channelDir }, trialDir);
+		const index = captureArtifacts({ homeDir, workspaceDir, channelDir }, trialDir, [
+			{ root: "workspace", path: "." },
+			{ root: "home", path: ".eval-hidden/evaluator.mjs" },
+		]);
 		expect(index.entries.some((entry) => entry.id === "workspace/code.ts" && entry.status === "complete")).toBe(true);
+		expect(index.entries.some((entry) => entry.id === "home/.eval-hidden/evaluator.mjs")).toBe(true);
 		atomicJson(join(trialDir, "record.json"), record);
 		atomicJson(join(trialDir, "outcome.json"), {
 			schemaVersion: 1,
@@ -179,7 +203,11 @@ describe("eval supervision and evidence", () => {
 		const original = readFileSync(join(trialDir, "record.json"), "utf8");
 		rmSync(homeDir, { recursive: true });
 		const assessment = await regradeTrial(trialDir, item, join(root, "assessment"));
-		expect(JSON.parse(readFileSync(assessment, "utf8")).outcome).toBe("fail");
+		const reassessment = JSON.parse(readFileSync(assessment, "utf8"));
+		expect(reassessment.outcome).toBe("fail");
+		expect(reassessment.grades).toContainEqual(
+			expect.objectContaining({ graderId: "hidden-evaluator-restored", status: "pass" }),
+		);
 		expect(readFileSync(join(trialDir, "record.json"), "utf8")).toBe(original);
 		expect(readFileSync(join(trialDir, "artifacts/workspace/dm_eval/result.txt"), "utf8")).toBe(
 			"broken; claimed complete",

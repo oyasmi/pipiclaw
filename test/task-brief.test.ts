@@ -35,6 +35,8 @@ describe("task step context", () => {
 		const brief = await buildTaskStepBrief({ channelDir, taskId: "work" });
 		expect(brief).toContain(path);
 		expect(brief).toContain(join(PLAYBOOKS_DIR, "task-loop.md"));
+		expect(brief).toContain("taskId=work");
+		expect(brief).toMatch(/DoD[\s\S]*edit[\s\S]*done/);
 		expect(brief).toMatch(/<task_recovery kind="expired">[\s\S]*run_lost[\s\S]*<\/task_recovery>/);
 		await appendTaskLog(channelDir, "work", {
 			cycle: "c-1",
