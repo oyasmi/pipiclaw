@@ -66,40 +66,8 @@ describeE2E("E2E: terminal TUI (--print)", () => {
 		expect(readFileSync(logPath, "utf-8")).toContain("PONG");
 	});
 
-	// Regression: `runOnce()` (the --print path) used to call beginTurn() directly,
-	// skipping dispatch() entirely, so a built-in slash command like /tasks was sent
-	// to the model as plain text instead of resolving zero-LLM through the same
-	// transport-layer handler the DingTalk runtime and interactive TUI use.
-	// The output is asserted by report *shape* (bold headline, empty-state phrasing),
-	// not by a verbatim renderer string — pinning the literal string is what let an
-	// intentional copy edit turn this suite red for 5 days (spec 048 F1). The proper
-	// zero-LLM proof (model request count == 0) arrives with the mock provider (048 P1).
-	// Mutation check: make runOnce call beginTurn() directly again and this goes red
-	// with a model paraphrase of "/tasks" instead of the report headline.
-	it("resolves a built-in slash command under --print without invoking the model", async () => {
-		const { runTuiApp } = await import("../../../src/tui/app.js");
-
-		const chunks: string[] = [];
-		const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-			chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8"));
-			return true;
-		});
-
-		try {
-			await runTuiApp({
-				channel: "tui_e2e_builtin",
-				print: true,
-				plain: true,
-				quiet: true,
-				initialPrompt: "/tasks",
-				io: { log: () => {}, error: () => {} },
-			});
-		} finally {
-			stdoutSpy.mockRestore();
-		}
-
-		const out = chunks.join("").trim();
-		expect(out, getE2ESkipReason() ?? undefined).toMatch(/^\*\*任务\*\*/);
-		expect(out).toContain("暂无");
-	});
+	// The zero-LLM built-in-command regression (spec 048 F1: runOnce() used to call
+	// beginTurn() directly, skipping dispatch()) is now covered deterministically in
+	// test/e2e/deterministic/tui-command.test.ts, where it needs no real model and
+	// isn't gated behind local credentials.
 });

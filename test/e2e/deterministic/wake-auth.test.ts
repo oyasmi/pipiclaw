@@ -156,6 +156,20 @@ describe("E2E deterministic: wake authenticity", () => {
 		expect(
 			harness.deliveries.slice(deliveriesBeforeWake).some((delivery) => delivery.text?.includes("CHILD RESULT")),
 		).toBe(true);
+		// The out-of-band "settled" notice (P0-1/P1a) fires independently of the completion
+		// wake above — a plain `sendPlain`, not part of the wake turn's own reply. This is the
+		// detached-settlement path (`announce: true`, the run degraded to "still running" and
+		// settled later), the one case where the notice actually exists (048 "仍未做": the inline
+		// synchronous path in subagent-chain.test.ts's A16 never emits one — `announce: false`).
+		// Mutation check: comment out `this.emitNotice(...)` at the top of
+		// `SubAgentRunManager.announce` (src/subagents/runs.ts) and this assertion goes red
+		// while the CHILD RESULT wake assertion above stays green — proving the notice is a
+		// genuinely separate signal, not the same delivery counted twice.
+		expect(
+			harness.deliveries
+				.slice(deliveriesBeforeWake)
+				.some((d) => d.method === "sendPlain" && /^✅ .+ 完成 ·/.test(d.text ?? "")),
+		).toBe(true);
 	});
 });
 
