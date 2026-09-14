@@ -6,8 +6,9 @@ Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-wor
 
 ## Core Structure
 
-- `src/runtime/`: DingTalk transport, background services, and the composition root (`bootstrap`, `dingtalk`, `delivery`, `events`, `task-driver`)
+- `src/runtime/`: DingTalk transport, background services, and the composition root (`bootstrap`, `dingtalk`, `delivery`, `task-driver`)
 - `src/channel/`: the transport-neutral channel domain — its two I/O contracts (`channel-context` outbound, `channel-event` inbound), identity (`channel-paths`, `channel-index`) and persisted state (`store`, `active-session-store`, `project-scope-store`). Depends on no transport; this is what `agent`, `memory`, `tools` and `tui` mean when they say "channel"
+- `src/events/`: scheduled/sensor events — definitions, cron/one-shot validation, the filesystem watcher, and admin-command parsing (`events`, `event-validation`, `event-commands`). A separate subsystem from tasks (spec 051, D8); its only touchpoint with tasks is the `signal` ticket redeemed in `EventsWatcher.execute`
 - `src/agent/`: main agent orchestration and session event handling
 - `src/commands/`: the product-wide slash-command catalog (`catalog.ts`) and the shared reply length budget (`reply-limits.ts`). Imports nothing; handlers stay in the layer that owns their state
 - `src/memory/`: one-fact-per-file channel memory, daily journal, and the single background reflect pass (spec 050)

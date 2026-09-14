@@ -1,8 +1,8 @@
 import { mkdir, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
-import { isNodeError, readOptionalTextFile } from "../shared/fs-utils.js";
 import { localDayKey } from "../shared/local-time.js";
+import { isNodeError, readOptionalTextFile } from "../shared/os.js";
 
 /**
  * Spec 050, D5: `journal/YYYY-MM-DD.md`, append-only, one file per local day. Replaces

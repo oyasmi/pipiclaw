@@ -7,7 +7,7 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import { readGuardAllows } from "../security/path-guard-filter.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
-import { isNodeError } from "../shared/fs-utils.js";
+import { isNodeError } from "../shared/os.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { resolveSkillPath, scanSkillContent, validateSkillFrontmatter, validateSkillName } from "./skill-security.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";

@@ -75,4 +75,14 @@ npm run eval -- compare <runA> <runB> --experiment runtime
 npm run eval -- baseline promote <runId>
 ```
 
-新增 case 时先写用户目标、初始状态、允许动作、环境变化、验收、副作用和伪完成反例。离线测试必须证明至少一种合理完成通过，以及“未执行但声称成功”失败；修改 case、grader 参数、fixture 或依赖 helper 后，case fingerprint 必须变化。
+新增 case 时先写用户目标、初始状态、允许动作、环境变化、验收、副作用和伪完成反例。离线测试必须证明至少一种合理完成通过，以及”未执行但声称成功”失败；修改 case、grader 参数、fixture 或依赖 helper 后，case fingerprint 必须变化。
+
+## 清理本地历史
+
+`evals/results/` 与 `evals/baselines/` 都是 gitignored 的本地产物，每次 run 各占一个带时间戳的目录，没有自带的保留策略，个人机器上会无限增长。`npm run eval:prune`（默认 dry-run，只打印会删什么）保留最近 10 次 `results` 和最近 3 次 `baseline`，并且永远不会删掉 `evals/baselines/latest.json` 指向的那个 baseline。确认无误后加 `--yes` 执行：
+
+```bash
+npm run eval:prune                 # dry run
+npm run eval:prune -- --yes        # 实际删除
+npm run eval:prune -- --keep=20 --yes
+```

@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { isNodeError, readOptionalTextFile } from "../shared/fs-utils.js";
+import { isNodeError, readOptionalTextFile } from "../shared/os.js";
 import { isRecord } from "../shared/type-guards.js";
 
 export type SessionSearchSource = "context" | "session" | "log";

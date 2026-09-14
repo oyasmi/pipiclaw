@@ -1,9 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { serializeConversation } from "@earendil-works/pi-coding-agent";
-import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { parseJsonObject } from "../shared/llm-json.js";
 import { localDayKey } from "../shared/local-time.js";
+import { readOptionalTextFile } from "../shared/os.js";
 import { clipText } from "../shared/text-utils.js";
 import { buildChannelIndexForBootstrap, CHANNEL_INDEX_MAX_UNITS } from "./index-budget.js";
 import { appendJournalEntries } from "./journal.js";

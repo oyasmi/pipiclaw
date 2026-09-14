@@ -8,6 +8,7 @@
 import { createInterface } from "node:readline/promises";
 import type { AuthType } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { prepareAppServices } from "../app-services.js";
 import * as log from "../log.js";
 import {
 	BootstrapExitError,
@@ -18,7 +19,6 @@ import {
 	printBootstrapSummary,
 	readCliVersion,
 } from "../runtime/app-home.js";
-import { prepareAppServices } from "../runtime/bootstrap.js";
 import { ReadlineLoginUi } from "./login-ui.js";
 import {
 	LoginCancelledError,

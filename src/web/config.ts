@@ -1,4 +1,4 @@
-import { clampInteger } from "../shared/numeric.js";
+import { clampInteger } from "../shared/format.js";
 import type { PipiclawWebFetchConfig, PipiclawWebSearchConfig } from "../tools/config.js";
 
 export interface ResolvedWebSearchRequest {

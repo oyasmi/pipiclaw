@@ -5,7 +5,7 @@ import { getChannelDir, isChannelId } from "../channel/channel-paths.js";
 import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
-import { formatDuration } from "../shared/duration.js";
+import { formatDuration } from "../shared/format.js";
 import { isProcessAlive, killProcessGroup, readProcessStartTime } from "../shared/host-process.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { createSerialQueue } from "../shared/serial-queue.js";

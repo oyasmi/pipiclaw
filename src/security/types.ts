@@ -1,3 +1,5 @@
+import type { AssertNoMissingKeys } from "../shared/exact-keys.js";
+
 export interface SecurityConfig {
 	enabled: boolean;
 	commandGuard: {
@@ -36,6 +38,23 @@ export interface SecurityConfig {
 		allowedRoots?: string[];
 	};
 }
+
+/**
+ * Every top-level `security.json` key, read by `test/config-reference-coverage.test.ts` to check
+ * that `docs/security.md` still mentions each one. Kept in sync with `SecurityConfig` by
+ * `satisfies` (rejects an extra/misspelled entry) and `AssertNoMissingKeys` (rejects a field with
+ * no entry here) — both at `npm run typecheck`.
+ */
+export const SECURITY_CONFIG_TOP_LEVEL_KEYS = [
+	"enabled",
+	"commandGuard",
+	"pathGuard",
+	"networkGuard",
+	"audit",
+	"projectAccess",
+] as const satisfies readonly (keyof SecurityConfig)[];
+const _securityConfigKeysComplete: AssertNoMissingKeys<SecurityConfig, typeof SECURITY_CONFIG_TOP_LEVEL_KEYS> = true;
+void _securityConfigKeysComplete;
 
 export interface SecurityRuntimeContext {
 	agentWorkspaceDir: string;

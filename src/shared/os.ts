@@ -1,5 +1,7 @@
 import { readFile } from "fs/promises";
 
+/** Small, dependency-free helpers for talking to the host filesystem and shell. */
+
 export function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 	return error instanceof Error && "code" in error;
 }
@@ -19,4 +21,12 @@ export async function readOptionalTextFile(path: string): Promise<string> {
 		}
 		throw error;
 	}
+}
+
+/**
+ * Shell-escape a string for safe use in sh -c commands.
+ * Wraps in single quotes and escapes internal single quotes.
+ */
+export function shellEscape(s: string): string {
+	return `'${s.replace(/'/g, "'\\''")}'`;
 }

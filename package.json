@@ -41,6 +41,7 @@
 		"eval:regrade": "npm run eval:build && node dist-evals/evals/harness/regrade.js",
 		"eval:report": "npm run eval:build && node dist-evals/evals/harness/report.js",
 		"eval:promote": "npm run eval:build && node dist-evals/evals/harness/promote.js",
+		"eval:prune": "node scripts/prune-eval-results.mjs",
 		"test:coverage": "vitest --run --coverage",
 		"check": "npm run lint && npm run typecheck && npm run deadcode && npm run test",
 		"prepublishOnly": "npm run clean && npm run build && npm run check",

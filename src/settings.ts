@@ -15,7 +15,8 @@ import { getMemoryMaintenanceTuning, type MemoryMaintenanceTuning } from "./memo
 import type { ResponseMode } from "./runtime/dingtalk.js";
 import { writeFileAtomicallySync } from "./shared/atomic-file.js";
 import type { ConfigDiagnostic } from "./shared/config-diagnostic.js";
-import { fileStamp } from "./shared/file-stamp.js";
+import type { AssertNoMissingKeys } from "./shared/exact-keys.js";
+import { fileStamp } from "./shared/format.js";
 
 type SettingsError = {
 	scope: "global" | "project";
@@ -132,6 +133,30 @@ export interface PipiclawSettings {
 	tui?: Partial<PipiclawTuiSettings>;
 	delegation?: Partial<PipiclawDelegationSettings>;
 }
+
+/**
+ * Every top-level `settings.json` key, read by `test/config-reference-coverage.test.ts` to check
+ * that `docs/configuration-reference.md` still mentions each one. The two lines below keep this
+ * list from drifting out of sync with `PipiclawSettings` itself: `satisfies` rejects an extra or
+ * misspelled entry, and the `AssertNoMissingKeys` check rejects an interface field with no entry
+ * here — both at `npm run typecheck`, not by trusting a human to update two places together.
+ */
+export const SETTINGS_TOP_LEVEL_KEYS = [
+	"defaultProvider",
+	"defaultModel",
+	"defaultThinkingLevel",
+	"fallbackModel",
+	"subagentModel",
+	"compaction",
+	"retry",
+	"memoryMaintenance",
+	"sessionSearch",
+	"logging",
+	"tui",
+	"delegation",
+] as const satisfies readonly (keyof PipiclawSettings)[];
+const _settingsKeysComplete: AssertNoMissingKeys<PipiclawSettings, typeof SETTINGS_TOP_LEVEL_KEYS> = true;
+void _settingsKeysComplete;
 
 export interface PipiclawTuiSettings {
 	/**

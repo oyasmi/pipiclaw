@@ -1,5 +1,5 @@
 import type { Executor } from "../executor.js";
-import { shellEscape } from "../shared/shell-escape.js";
+import { shellEscape } from "../shared/os.js";
 
 /**
  * Optional "outbound command transform" for the bash tool. When enabled, a command is

@@ -1,4 +1,4 @@
-import { estimateTokens } from "../shared/token-estimate.js";
+import { estimateTokens } from "../shared/format.js";
 
 export const PREVENTIVE_COMPACTION_THRESHOLD_RATIO = 0.75;
 

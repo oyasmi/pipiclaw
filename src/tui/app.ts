@@ -10,9 +10,11 @@ import { userInfo } from "node:os";
 import { createJobRuntime } from "../agent/job-manager.js";
 import { createRunner } from "../agent/runner-factory.js";
 import type { AgentRunner } from "../agent/types.js";
+import { prepareAppServices } from "../app-services.js";
 import { ensureChannelDir } from "../channel/channel-paths.js";
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";
+import { handleEventsCommand } from "../events/event-commands.js";
 import { createExecutor } from "../executor.js";
 import * as log from "../log.js";
 import { migrateMemoryMaintenanceStates } from "../memory/maintenance-migration.js";
@@ -25,9 +27,7 @@ import {
 	printBootstrapSummary,
 	readCliVersion,
 } from "../runtime/app-home.js";
-import { prepareAppServices } from "../runtime/bootstrap.js";
 import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
-import { handleEventsCommand } from "../runtime/event-commands.js";
 import { handleProjectCommand } from "../runtime/project-commands.js";
 import { handleSkillsCommand } from "../runtime/skill-commands.js";
 import { handleSubagentsCommand } from "../runtime/subagent-commands.js";

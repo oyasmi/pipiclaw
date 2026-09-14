@@ -13,8 +13,8 @@
  */
 
 import { createHash } from "node:crypto";
+import { estimateTokens } from "../../shared/format.js";
 import { countPromptUnits } from "../../shared/prompt-units.js";
-import { estimateTokens } from "../../shared/token-estimate.js";
 import { FINAL_BOUNDARY_SECTION, MAIN_PROMPT_SECTIONS } from "./sections.js";
 import type {
 	PromptBuildContext,

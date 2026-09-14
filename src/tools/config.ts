@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { APP_HOME_DIR } from "../paths.js";
 import { type ConfigDiagnostic, loadJsonConfig, pushConfigWarning } from "../shared/config-diagnostic.js";
-import { clampInteger } from "../shared/numeric.js";
+import type { AssertNoMissingKeys } from "../shared/exact-keys.js";
+import { clampInteger } from "../shared/format.js";
 import { isRecord } from "../shared/type-guards.js";
 
 export type WebSearchProvider = "brave" | "tavily" | "jina" | "searxng" | "duckduckgo";
@@ -61,6 +62,23 @@ export interface LoadedToolsConfig {
 	config: PipiclawToolsConfig;
 	diagnostics: ConfigDiagnostic[];
 }
+
+/**
+ * Every `tools.<key>` section in `tools.json`, read by `test/config-reference-coverage.test.ts`
+ * to check that `docs/configuration-reference.md` still mentions each one. Kept in sync with
+ * `PipiclawToolsConfig["tools"]` by `satisfies` (rejects an extra/misspelled entry) and
+ * `AssertNoMissingKeys` (rejects a section with no entry here) — both at `npm run typecheck`.
+ */
+export const TOOLS_CONFIG_SECTION_KEYS = [
+	"web",
+	"tasks",
+	"bashInterceptor",
+	"rtk",
+	"subagentInline",
+] as const satisfies readonly (keyof PipiclawToolsConfig["tools"])[];
+const _toolsConfigKeysComplete: AssertNoMissingKeys<PipiclawToolsConfig["tools"], typeof TOOLS_CONFIG_SECTION_KEYS> =
+	true;
+void _toolsConfigKeysComplete;
 
 const WEB_SEARCH_PROVIDERS: readonly WebSearchProvider[] = ["brave", "tavily", "jina", "searxng", "duckduckgo"];
 

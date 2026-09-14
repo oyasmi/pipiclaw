@@ -6,6 +6,7 @@ import { createRunner } from "../agent/runner-factory.js";
 import { renderStatus } from "../agent/status-render.js";
 import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
 import type { AgentRunner } from "../agent/types.js";
+import { prepareAppServices } from "../app-services.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
 import { muteChannelContext } from "../channel/channel-context.js";
 import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
@@ -21,6 +22,8 @@ import {
 	type RuntimeCommandName,
 	slashCommandName,
 } from "../commands/catalog.js";
+import { handleEventsCommand as runEventsCommand } from "../events/event-commands.js";
+import { createEventsWatcher } from "../events/events.js";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
 import { migrateMemoryMaintenanceStates } from "../memory/maintenance-migration.js";
@@ -30,8 +33,7 @@ import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import { PipiclawSettingsManager, TASK_DRIVER_SETTINGS } from "../settings.js";
-import { formatConfigDiagnostic } from "../shared/config-diagnostic.js";
-import { fileStamp } from "../shared/file-stamp.js";
+import { fileStamp } from "../shared/format.js";
 import { localStampForFilename } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { sleepUnref } from "../shared/with-timeout.js";
@@ -41,7 +43,7 @@ import { buildTaskStepBrief } from "../tasks/brief.js";
 import { readActiveTasks } from "../tasks/ledger.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
 import { readStoredTask } from "../tasks/store.js";
-import { getToolsConfigPath, loadToolsConfig, loadToolsConfigWithDiagnostics } from "../tools/config.js";
+import { getToolsConfigPath, loadToolsConfig } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import {
@@ -65,11 +67,8 @@ import {
 	type StopOutcome,
 } from "./dingtalk.js";
 import { DurableDispatchService } from "./durable-dispatch.js";
-import { handleEventsCommand as runEventsCommand } from "./event-commands.js";
-import { createEventsWatcher } from "./events.js";
 import { extensionForMimeType } from "./inbound-media.js";
 import { handleProjectCommand as runProjectCommand } from "./project-commands.js";
-import { installLlmProxy } from "./proxy.js";
 import { handleSkillsCommand as runSkillsCommand } from "./skill-commands.js";
 import { renderRunNotice, handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
@@ -1324,45 +1323,6 @@ export async function createRuntimeContext(
 		memoryMaintenance: memoryMaintenanceScheduler,
 		shutdown: shutdownWithReason,
 	};
-}
-
-/**
- * Transport-neutral app services shared by the DingTalk runtime and the terminal
- * TUI: loads settings (surfacing load errors) and reports tool/security config
- * diagnostics. Does NOT touch DingTalk config, so the TUI can call it without any
- * DingTalk credentials.
- *
- * Extracted verbatim from `bootstrap()`; the DingTalk path calls it in the same
- * position (after `loadConfig`, before `logStartup`) so its behavior is
- * unchanged. Logging configuration is intentionally left to each caller
- * (DingTalk: `createRuntimeContext`; TUI: right after this) to preserve the
- * existing "diagnostics logged with default logging config" ordering.
- */
-export function prepareAppServices(paths: BootstrapPaths = DEFAULT_BOOTSTRAP_PATHS): {
-	settingsManager: PipiclawSettingsManager;
-} {
-	// Shared by the DingTalk daemon and the TUI (both call prepareAppServices), so this
-	// covers every entrypoint that talks to an LLM provider.
-	installLlmProxy();
-
-	const settingsManager = new PipiclawSettingsManager(paths.appHomeDir);
-	for (const { scope, error } of settingsManager.drainErrors()) {
-		log.logWarning(`Failed to load ${scope} settings`, `${error.message}\n${paths.settingsConfigPath}`);
-	}
-	// Errors already went out above with a richer message; this pass exists for the
-	// warnings, chiefly retired settings keys (spec 035 D3).
-	for (const diagnostic of settingsManager.getDiagnostics()) {
-		if (diagnostic.severity === "error") continue;
-		log.logWarning(formatConfigDiagnostic(diagnostic), diagnostic.path);
-	}
-	for (const diagnostic of loadToolsConfigWithDiagnostics(paths.appHomeDir).diagnostics) {
-		log.logWarning(formatConfigDiagnostic(diagnostic), diagnostic.path);
-	}
-	for (const diagnostic of loadSecurityConfigWithDiagnostics(paths.appHomeDir).diagnostics) {
-		log.logWarning(formatConfigDiagnostic(diagnostic), diagnostic.path);
-	}
-
-	return { settingsManager };
 }
 
 export async function bootstrap(argv: string[], options: BootstrapOptions = {}): Promise<AppContext> {

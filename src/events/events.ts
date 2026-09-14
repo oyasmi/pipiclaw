@@ -16,6 +16,7 @@ import type { ChannelEvent } from "../channel/channel-event.js";
 import { getChannelDir } from "../channel/channel-paths.js";
 import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
+import type { DingTalkBot } from "../runtime/dingtalk.js";
 import { guardCommand } from "../security/command-guard.js";
 import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
@@ -26,7 +27,6 @@ import { isPlainObject } from "../shared/type-guards.js";
 import { parseTaskFrontmatterV4 } from "../tasks/frontmatter.js";
 import { redeemTicket } from "../tasks/store.js";
 import { parseTaskEventName } from "../tasks/task-events.js";
-import type { DingTalkBot } from "./dingtalk.js";
 import { MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./event-validation.js";
 
 // ============================================================================

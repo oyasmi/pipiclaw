@@ -7,8 +7,8 @@ import type { DirectoryEntry, FileStore } from "../file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { shellEscape } from "../shared/os.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { shellEscape } from "../shared/shell-escape.js";
 import { resolveLineOffset } from "./line-index.js";
 import {
 	DEFAULT_MAX_BYTES,

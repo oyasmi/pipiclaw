@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { renderSubcommandUsage } from "../commands/catalog.js";
-import { formatDuration } from "../shared/duration.js";
+import { formatDuration } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import type { SubAgentConfig, SubAgentDiscoveryResult } from "../subagents/discovery.js";
 import { formatCost, formatRunDuration, harnessLabel } from "../subagents/format.js";

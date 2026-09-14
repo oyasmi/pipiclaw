@@ -1,7 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { ChannelJobManager, JobSnapshot } from "../agent/job-manager.js";
-import { formatDuration } from "../shared/duration.js";
+import { formatDuration } from "../shared/format.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { truncateTail } from "./truncate.js";
 

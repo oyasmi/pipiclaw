@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { parseScheduledEventContent } from "../../events/events.js";
 import * as log from "../../log.js";
-import { parseScheduledEventContent } from "../../runtime/events.js";
 import { parseLocalTime } from "../../shared/local-time.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { createCycle, nextCycleId } from "../../tasks/cycle.js";

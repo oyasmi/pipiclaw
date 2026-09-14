@@ -10,8 +10,8 @@
  * next to the report — not in the builder's budget path (spec 026 §9, §10.9).
  */
 
+import { estimateTokens } from "../../shared/format.js";
 import { countPromptUnits } from "../../shared/prompt-units.js";
-import { estimateTokens } from "../../shared/token-estimate.js";
 import { RUNTIME_PROMPT_TARGET_UNITS, sha256 } from "./builder.js";
 import type { LoadedPromptResource, PromptBuildResult, ResolvedPromptSection } from "./types.js";
 

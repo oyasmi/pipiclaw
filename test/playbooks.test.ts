@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { validateScheduledEvent } from "../src/events/event-validation.js";
+import { parseScheduledEventContent } from "../src/events/events.js";
 import { PLAYBOOKS_DIR } from "../src/paths.js";
 import {
 	loadRuntimePlaybookCatalog,
@@ -9,8 +11,6 @@ import {
 	renderPlaybookCatalog,
 	selectRuntimePlaybooks,
 } from "../src/playbooks/catalog.js";
-import { validateScheduledEvent } from "../src/runtime/event-validation.js";
-import { parseScheduledEventContent } from "../src/runtime/events.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { guardPath } from "../src/security/path-guard.js";
 import { TOOL_NAMES } from "../src/tools/registry.js";

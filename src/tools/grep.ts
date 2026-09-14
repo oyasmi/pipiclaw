@@ -6,8 +6,8 @@ import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import { checkPathGuard } from "../security/path-guard-check.js";
 import { partitionByReadGuard, readGuardAllows } from "../security/path-guard-filter.js";
 import type { SecurityConfig, SecurityRuntimeContext } from "../security/types.js";
+import { shellEscape } from "../shared/os.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
-import { shellEscape } from "../shared/shell-escape.js";
 import { IGNORED_DIR_SEGMENTS } from "./ignore-dirs.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 

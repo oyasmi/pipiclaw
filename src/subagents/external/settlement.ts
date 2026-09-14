@@ -176,9 +176,13 @@ export async function finalizeExternalRun(
 		finalText: outcome.finalText,
 		runFailed: false, // shouldVerify already gates on settleInput.status === "completed".
 	});
-	const legacySubjectAvailable = input.verifyBaseCommit === undefined && input.verifySubjectBefore !== undefined;
-	const subjectAvailable =
-		!verification.workspaceChanged && subjectAfter !== undefined && (baseSubjectAvailable || legacySubjectAvailable);
+	// `verifySubjectBefore` and `verifyBaseCommit` are always set together at launch (both come
+	// from the one all-or-nothing `workspaceSubjectSnapshot()` call in `external/run.ts`), so a
+	// freshly launched run can never carry a subject hash without a base commit — there is no
+	// live path left that produces a "legacy-head" attestation. `verification.ts` still reads and
+	// compares `legacy-head` attestations written before base-relative subjects existed; this is
+	// only the write side, for a run happening now.
+	const subjectAvailable = !verification.workspaceChanged && subjectAfter !== undefined && baseSubjectAvailable;
 	await writeVerificationAttestation(input.channelDir as string, {
 		runId: input.runId,
 		taskId: input.taskId as string,
@@ -188,10 +192,9 @@ export async function finalizeExternalRun(
 		workspaceChanged: verification.workspaceChanged,
 		subjectHash: subjectAvailable ? subjectAfter : undefined,
 		subjectDir: subjectAvailable ? input.workingDirectory : undefined,
-		subjectMode: subjectAvailable ? (baseSubjectAvailable ? "base-relative" : "legacy-head") : undefined,
-		subjectBaseCommit: subjectAvailable && baseSubjectAvailable ? input.verifyBaseCommit : undefined,
-		subjectBaselineUntrackedPaths:
-			subjectAvailable && baseSubjectAvailable ? input.verifyBaselineUntrackedPaths : undefined,
+		subjectMode: subjectAvailable ? "base-relative" : undefined,
+		subjectBaseCommit: subjectAvailable ? input.verifyBaseCommit : undefined,
+		subjectBaselineUntrackedPaths: subjectAvailable ? input.verifyBaselineUntrackedPaths : undefined,
 		// External verifiers cannot have their tools structurally removed the way an internal
 		// verifier's are — advisory, not enforced (D9).
 		verificationStrength: "advisory",

@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseScheduledEventContent } from "../src/runtime/events.js";
+import { parseScheduledEventContent } from "../src/events/events.js";
 import type { SecurityConfig } from "../src/security/types.js";
 import { type EventDefinitionInput, type EventManageToolOptions, manageEvent } from "../src/tools/event-manage.js";
 

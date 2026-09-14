@@ -2,12 +2,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFile
 import { mkdir } from "fs/promises";
 import { dirname, join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EventAction } from "../src/events/events.js";
+import { EventsWatcher } from "../src/events/events.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import * as log from "../src/log.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
-import type { EventAction } from "../src/runtime/events.js";
-import { EventsWatcher } from "../src/runtime/events.js";
 import { parseTaskFrontmatterV4 } from "../src/tasks/frontmatter.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { useTempDirs } from "./helpers/fixtures.js";

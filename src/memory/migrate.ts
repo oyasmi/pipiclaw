@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { localDayKey, parseLocalTime } from "../shared/local-time.js";
+import { readOptionalTextFile } from "../shared/os.js";
 import {
 	dedupeMemoryName,
 	getChannelMemoryDir,

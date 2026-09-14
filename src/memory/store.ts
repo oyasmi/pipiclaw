@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { appendFile, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomically } from "../shared/atomic-file.js";
-import { readOptionalTextFile } from "../shared/fs-utils.js";
 import { localDayKey } from "../shared/local-time.js";
+import { readOptionalTextFile } from "../shared/os.js";
 import { containsSecret } from "./secret-redaction.js";
 import { hashMemoryContent } from "./tombstones.js";
 

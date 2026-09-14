@@ -1,4 +1,4 @@
-import { formatDuration } from "../shared/duration.js";
+import { formatDuration } from "../shared/format.js";
 import type { RunRecord } from "./runs.js";
 
 /**
