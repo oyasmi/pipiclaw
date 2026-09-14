@@ -2,6 +2,20 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [0.9.3-beta.4] - 2026-09-14
+
+### Fixed
+
+- Issues the eval renovation surfaced in the runtime itself: task completion wake binding, task notice delivery, `taskId` dispatch guidance, credential-scan false positives, and D-verify fixture/oracle gaps.
+
+### Changed
+
+- **Eval harness renovated for measurement fidelity and comparability** (design: the archived `docs/eval-renovation-*.md`). `TrialRecord` v4 separates execution / acceptance / invariants / grading / evidenceComplete dimensions and carries the SDK's `stopReason` (replacing fault inference from delivery text); resource exhaustion now counts into the failure denominator. Score aggregation and gate evaluation are shared by run and promote behind a `scoring-plan.json` frozen before the run; exit codes distinguish hard violations from insufficient plan/samples/evidence. Comparability: grader parameters are recorded and folded into the case hash, the git fingerprint covers HEAD..worktree plus untracked content, providers and judges resolve to exact model matches once per run, and each trial gets a private home template.
+- **Unified eval CLI and a new baseline.** One CLI now covers list / doctor / plan / run / resume / regrade / review / compare / baseline-promote (documented in `docs/evals.md`); the catalog is 63 cases across 30 scenario families with a pinned core profile of 12. A reviewable baseline was promoted (2026-09-12, 36/36 passed, evidence complete, no invalid/budget/invariant violations); baseline trial raw evidence stays out of git, matching the existing summary-only convention. New `npm run eval:prune` bounds the local growth of `evals/results/` (dry-run by default, never deletes what `latest.json` points to).
+- **Tool whitelist, session creation, and startup migration unified** (quality pass removing duplicated paths and dead surface): one source of truth for the tool allowlist; the session-creation paths merge behind a dedicated SDK adapter (`src/agent/session-adapter.ts`); background managers are held by the app instance with explicit dependencies and exit cleanup; legacy maintenance-state compatibility moves to a startup migration that keeps old data when the canonical write fails.
+- **Structure slimming (codebase review P3/P5/P6).** The events subsystem moves to `src/events/` — it was always a separate subsystem (spec 051, D8) but lived under `runtime/`, creating a tools↔runtime cycle; `prepareAppServices()` is extracted from `bootstrap.ts` into `src/app-services.ts` to break the models↔runtime cycle. Six one-function shared micro-files merge into `src/shared/format.ts` and `src/shared/os.ts`; the dated 2026-09-10 review/proposal docs are archived under `docs/archive/`. Config doc coverage is now structural: `SETTINGS_TOP_LEVEL_KEYS` / `TOOLS_CONFIG_SECTION_KEYS` / `SECURITY_CONFIG_TOP_LEVEL_KEYS` are exported next to their interfaces with a compile-time exact-keys check, and a test asserts every key appears in its reference doc.
+- The TUI zero-LLM built-in-command regression moved from the live e2e layer (gated behind local model credentials) to the deterministic layer, so it runs in CI; the delegation "settled" out-of-band notice (spec 048 A16) is now explicitly asserted. `smol-toml` bumped to 1.8.0 (npm audit fix).
+
 ## [0.9.3-beta.3] - 2026-09-10
 
 ### Fixed

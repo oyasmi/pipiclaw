@@ -2,6 +2,20 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
+## [0.9.3-beta.4] - 2026-09-14
+
+### Fixed
+
+- eval 改造在 runtime 自身暴露出的问题：任务完成唤醒绑定、任务通知投递、`taskId` 分发指引、凭据扫描误报，以及 D-verify 的 fixture/oracle 缺口。
+
+### Changed
+
+- **eval 评测框架按测量保真度与可比性翻修**（设计：已归档的 `docs/eval-renovation-*.md`）。`TrialRecord` v4 将执行 / 验收 / 不变量 / 评分 / 证据完备性分维度记录，并携带 SDK 的 `stopReason`（取代从投递文本推断故障）；资源耗尽计入失败分母。评分聚合与门禁判定由 run 和 promote 共享，运行前冻结为 `scoring-plan.json`；退出码区分硬违规与计划/样本/证据不足。可比性：评分器参数被记录并折入 caseHash，git 指纹覆盖 HEAD..worktree 加未跟踪内容，provider 与 judge 每次运行只解析一次到精确模型，每个 trial 使用独立的 home 模板。
+- **统一 eval CLI 与新基线。** 一个 CLI 覆盖 list / doctor / plan / run / resume / regrade / review / compare / baseline-promote（见 `docs/evals.md`）；用例目录扩至 30 个场景族 63 条，核心 profile 固定 12 个族。已晋升一份可评审的新基线（2026-09-12，36/36 通过，证据完备，无 invalid/budget/invariant 违规）；基线 trial 的原始证据不入 git，沿用只提交汇总文件的惯例。新增 `npm run eval:prune` 以约束 `evals/results/` 的本地增长（默认 dry-run，绝不删除 `latest.json` 指向的文件）。
+- **统一工具白名单、会话创建与启动迁移**（去掉重复实现路径与死面的质量清理）：工具白名单只有一处来源；会话创建路径合并到专用 SDK 适配器（`src/agent/session-adapter.ts`）之后；后台管理器由 app 实例持有，依赖显式化并在退出时清理；旧的维护状态兼容逻辑改为启动迁移，规范写失败时保留旧数据。
+- **结构瘦身（代码评审 P3/P5/P6）。** events 子系统移入 `src/events/`——它本来就是独立子系统（spec 051 D8），却一直放在 `runtime/` 下，形成 tools↔runtime 环；`prepareAppServices()` 从 `bootstrap.ts` 抽出为 `src/app-services.ts`，打断 models↔runtime 环。六个单函数共享微文件合并为 `src/shared/format.ts` 与 `src/shared/os.ts`；2026-09-10 的评审/提案文档归档至 `docs/archive/`。配置文档覆盖改为结构性保障：`SETTINGS_TOP_LEVEL_KEYS` / `TOOLS_CONFIG_SECTION_KEYS` / `SECURITY_CONFIG_TOP_LEVEL_KEYS` 随接口导出并带编译期 exact-keys 校验，另有一条测试断言每个键都出现在其参考文档中。
+- TUI 零 LLM 内置命令回归测试从 live e2e 层（依赖本地模型凭据）移入 deterministic 层，CI 即可运行；委派 "settled" 带外通知（spec 048 A16）现有显式断言。`smol-toml` 升至 1.8.0（npm audit fix）。
+
 ## [0.9.3-beta.3] - 2026-09-10
 
 ### Fixed
