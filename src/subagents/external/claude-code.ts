@@ -75,7 +75,9 @@ export const claudeCodeHarness: ExternalHarness = {
 		if (!existing.effort && effort && !used.has("$EFFORT")) {
 			args.push("--effort", effort);
 		}
-		if (!used.has("$SYSTEM_PROMPT_FILE")) {
+		// A role with an empty body has no system-prompt file on disk, so the flag is omitted
+		// entirely rather than pointed at a path that was never written.
+		if (!used.has("$SYSTEM_PROMPT_FILE") && input.systemPromptFile) {
 			args.push("--append-system-prompt-file", input.systemPromptFile);
 		}
 

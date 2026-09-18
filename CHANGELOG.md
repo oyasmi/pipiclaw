@@ -2,6 +2,17 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [Unreleased]
+
+### Changed
+
+- **Sub-agent templates reorganized from job roles to capability entries.** `examples/sub-agents/` now holds two alternative sets: `agents/` (recommended — `claude-high` / `claude-main` / `codex-high` / `codex-main` / `codex-flash` / `glm-high` / `glm-flash`, each binding one agent, model and reasoning tier, with no persona in the body) and `roles/` (the earlier eight job roles, kept for reference and for the cases that still need a real read-only execution boundary). A role file's persona was a task frame written before the task was known: it made routing "guess someone else's job title" and narrowed what a general coding agent could be asked to do. Routing is now "what capability does this round need, at what cost", which the main agent can actually judge. Discovery is unchanged and still flat — the subdirectories are an organization of the examples, not a load path.
+- `agent-delegation.md` rewritten around tier selection (flash / main / high), the "do not default upward" rule, and the two things the removed personas used to provide: independence for review and verification must now be written into `task`, and every capability entry runs with approvals off and `mutates: write`, so one working directory holds one external delegation at a time and `purpose=verify` attestations are always `advisory`.
+
+### Added
+
+- An external role may now declare an empty body. `system-prompt.txt` is then not written, claude-code does not receive `--append-system-prompt-file`, and codex's stdin is the task itself with no `---` fence above it. Internal roles still require a body — they have no other prompt source.
+
 ## [0.9.3-beta.4] - 2026-09-14
 
 ### Fixed

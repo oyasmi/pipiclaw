@@ -401,4 +401,43 @@ Body.
 		expect(result.agents.map((agent) => agent.name)).toEqual(["reader"]);
 		expect(result.warnings).toEqual([]);
 	});
+
+	/** A capability entry ("this agent, this model, this reasoning level") deliberately carries no
+	 *  standing instruction: the only party that knows what a delegation is for is the main agent
+	 *  writing `task`. Internal roles still need a body — they have no other prompt source. */
+	it("accepts an external role with no body, but still rejects an internal one", () => {
+		const workspaceDir = createTempWorkspace();
+		writeRole(
+			workspaceDir,
+			"claude-main.md",
+			`---
+name: claude-main
+description: main-tier executor
+runtime: external
+harness: claude-code
+command: totally-nonexistent-binary-xyz123 --dangerously-skip-permissions
+model: sonnet
+thinkingLevel: medium
+mutates: write
+---
+`,
+		);
+		writeRole(
+			workspaceDir,
+			"bodyless-internal.md",
+			`---
+name: bodyless-internal
+description: internal role with no body
+tools: read
+---
+`,
+		);
+
+		const result = discover(workspaceDir, []);
+		const capability = result.agents.find((agent) => agent.name === "claude-main");
+		expect(capability).toBeDefined();
+		expect(capability?.systemPrompt).toBe("");
+		expect(result.agents.map((agent) => agent.name)).not.toContain("bodyless-internal");
+		expect(result.warnings).toContain("bodyless-internal.md: empty system prompt body");
+	});
 });

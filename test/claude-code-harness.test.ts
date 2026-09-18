@@ -30,6 +30,16 @@ describe("claude-code harness: buildInvocation", () => {
 		expect(result.resumable).toBe(true);
 	});
 
+	/** A capability entry with an empty body has no system-prompt file on disk, so the flag must be
+	 *  dropped rather than pointed at a path that was never written (claude-code exits on a missing
+	 *  --append-system-prompt-file target, which would fail every such delegation). */
+	it("omits --append-system-prompt-file when the role declares no system prompt", () => {
+		const result = claudeCodeHarness.buildInvocation({ ...baseInvocation, systemPromptFile: undefined });
+		expect(result.args).not.toContain("--append-system-prompt-file");
+		expect(result.args).not.toContain(baseInvocation.systemPromptFile);
+		expect(result.args).toEqual(expect.arrayContaining(["-p", "--output-format", "stream-json"]));
+	});
+
 	it("uses --resume <session_id> instead of --session-id when resuming, and does not mint a new session id", () => {
 		const result = claudeCodeHarness.buildInvocation({ ...baseInvocation, resumeSessionId: "session-abc" });
 		expect(result.args).toContain("--resume");

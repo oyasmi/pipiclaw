@@ -1,116 +1,100 @@
-# 工作区智能体角色示例
+# 工作区智能体配置示例
 
-这里的文件既是配置示例，也是按生产使用标准维护的推荐模板。Pipiclaw 不会自动加载它们；请只复制实际需要的角色到工作区，并根据账号、sandbox 和团队规则逐项审查。
+这里的文件是配置示例，Pipiclaw **不会自动加载**。只有复制到 `~/.pipiclaw/workspace/sub-agents/` 才会生效，而且加载是**平铺**的——只读该目录下的 `*.md`，不会递归子目录。所以本目录的两个子目录只是分类方式，复制时要把文件放到 `sub-agents/` 下，不要连目录一起复制。
 
-目录里是 **5 个常用角色 + 3 个按需角色**：常用的是 `explorer`、`builder`、`reviewer`、`verifier`、`git-committer`；按需的是 `planner`、`builder-hard`、`worker`。5 不是"每个任务要调用 5 次"，也不是角色数量的最优常数，而是一个够用的起点——普通工作区先装常用 5 个，确实遇到对应场景再补按需角色。
+- [`agents/`](./agents/) — **推荐**。按能力与成本组织：把 agent、模型和推理档直接交给 Pipiclaw，由它按需选择。
+- [`roles/`](./roles/) — 早期的岗位角色（planner / builder / reviewer / verifier …），保留作参考和迁移对照。
 
-下面的命令适用于源码 checkout：
+两套**不要同时装**：同一件事有两种选法，只会让主代理多做一次无意义的判断，还会一起占用系统提示词里子代理目录的预算。
+
+## 为什么从「角色」改成「能力条目」
+
+一个角色文件过去同时承担三件事：能力与成本绑定（harness / command / model / thinkingLevel）、权限姿态（sandbox + `mutates`）、以及一段岗位说明书式的正文。前两件属于部署者，第三件不属于——它是在不知道本轮任务的情况下提前写死的任务框架，而真正掌握上下文的是发起委派的主代理。
+
+结果就是路由变成「任务 → 猜别人起的职位名」，而且正文会反过来限制场景：让 codex 读一张图，`worker` 的正文开头是"你负责交付独立的数据分析、批处理、报告或文档产物"；想让实现者顺带提交，`builder` 的正文写死"不 commit、push"。
+
+`agents/` 把岗位说明书去掉，只留能力声明和一段与任务无关的交付约定。路由变成「任务 → 需要什么能力、能付多少代价」，这是主代理做得了的判断，因为它知道任务是什么。
+
+## 安装 `agents/`
 
 ```bash
-# 常用五角色（内置的 explorer / git-committer 无需额外安装；builder 需要 claude，reviewer / verifier 需要 codex）：
-cp examples/sub-agents/{explorer,git-committer,builder,reviewer,verifier}.md ~/.pipiclaw/workspace/sub-agents/
+# 源码 checkout：
+cp examples/sub-agents/agents/*.md ~/.pipiclaw/workspace/sub-agents/
 
-# 按需补充：
-cp examples/sub-agents/{planner,builder-hard}.md ~/.pipiclaw/workspace/sub-agents/   # 需要 claude
-cp examples/sub-agents/worker.md ~/.pipiclaw/workspace/sub-agents/                   # 需要 codex
-```
-
-通过 npm 全局安装时，模板位于包目录：
-
-```bash
+# npm 全局安装：
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
-  ~/.pipiclaw/workspace/sub-agents/
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/*.md ~/.pipiclaw/workspace/sub-agents/
 ```
 
-## 内置角色（`runtime: internal`）
+只装你真的有账号的那几个：条目里的 CLI 不在 PATH 上时不会被丢弃，而是标成 `unavailable` 并在调用时才报错。
 
-内置角色在 pipiclaw 进程内运行，使用 pipiclaw 自己的工具集和安全守卫，轻量、便宜、通常在同一回合内同步返回。它们的价值是**低延迟**和**上下文隔离**，不是算力。
+| 条目 | harness | `model` | `thinkingLevel` | 多模态 | 定位 |
+|---|---|---|---|---|---|
+| `claude-high` | claude-code | `opus` | high | 否 | 代码与推理最强，成本最高：设计、取舍分析、根因不明的疑难 |
+| `claude-main` | claude-code | `sonnet` | medium | 否 | 代码能力最强的主力档：实现、修改、文档、排查 |
+| `codex-high` | codex-cli | `gpt-6-astra` | high | 是 | 高智能档，可读图片：设计、方案权衡、复杂分析 |
+| `codex-main` | codex-cli | `gpt-6-astra` | medium | 是 | 主力档，可读图片：常规实现、排查、文档 |
+| `codex-flash` | codex-cli | `gpt-5.6-luna` | medium | 是 | 最快最便宜，可读图片：明确、简单、重复的工作 |
+| `glm-high` | claude-code | `glm-5.3` | high | 否 | 高智能档，额度宽松：高频使用不挤占 claude/codex 配额 |
+| `glm-flash` | claude-code | `glm-5.3-flash` | medium | 是 | 最便宜，可读图片：大批量简单重复工作的首选 |
 
-- **explorer**：只读调查一个明确问题——代码在哪、调用链怎么连、指定日志里发生了什么，返回结论与 `path:line` 或命令证据，不让几十万行原文进入主会话。
-- **git-committer**：把用户明确指定的现有改动整理成本地 commit；默认不 push。
+三档的分工是这套配置的主要内容：**flash** 用于「做什么和怎么做都已清楚，只差有人去做」，可以大量派发；**main** 是主力，绝大多数实现、排查、文档都在这里，也包括 token 消耗很大的长任务；**high** 只留给这一轮真正需要新判断或取舍的工作。对已经定好的活派 high，只是更贵，不会更对。
 
-## 外部角色（`runtime: external`）
+额度是真实约束：claude 和 codex 的订阅有周/月上限，GLM 只有 5 小时滚动限额、没有周月上限。所以简单重复的批量工作优先走 `glm-flash`，把受限额度留给难题。
 
-外部角色一次委派启动一个真实 coding agent CLI 进程，异步执行：派发后立刻返回 `runId`，完成时唤醒频道。适合几十分钟量级的重活，详见 [../../docs/sub-agents.md](../../docs/sub-agents.md)。
+### GLM 条目需要一个包装脚本
 
-| 角色 | 常用性 | harness | `model` | `mutates` | `thinkingLevel` | 用途 |
-|---|---|---|---|---|---|---|
-| `builder` | 常用 | claude-code | `sonnet` | `write` | medium | 边界明确的产品改动：代码、必要测试、相关文档和仓库必跑检查一起交付 |
-| `reviewer` | 常用 | codex-cli | `gpt-5.6-sol` | `read` | high | 与产出者分离的方案 / 代码 / 文档挑错，也可承担只读 `purpose=verify` |
-| `verifier` | 常用 | codex-cli | `gpt-5.6-luna` | `write` | xhigh | 对最终产物逐项核验完成标准，运行必要检查并取证 |
-| `planner` | 按需 | claude-code | `opus` | `read` | high | 调查一个会显著影响方案或返工成本的未决问题 |
-| `builder-hard` | 按需 | claude-code | `opus` | `write` | xhigh | 高不确定性、跨契约耦合的实现与修复；代价显著更高 |
-| `worker` | 按需 | codex-cli | `gpt-5.6-sol` | `write` | medium | 独立的数据分析、批处理、报告和文档产物 |
+`glm-high` / `glm-flash` 走 claude-code harness，但要用独立的配置目录指向 Z.ai 的 Anthropic 兼容端点，因此 `command` 是一个包装脚本而不是 `claude` 本身。把它放到 PATH 上：
 
-## 按任务选角色，不按固定流水线
+```bash
+#!/bin/bash
+# ~/bin/claude-zai.sh
+export CLAUDE_CONFIG_DIR="$HOME/.claude-zai"
+exec claude --dangerously-skip-permissions "$@"
+```
 
-不存在 `planner → reviewer → builder → reviewer → verifier → documenter` 这样的必经链条。按这一轮要消除哪种不确定性来选：
+首次使用前在 `CLAUDE_CONFIG_DIR` 里完成一次登录/配置。用其他供应商同理：换配置目录和脚本名，`harness` 仍是 `claude-code`。
 
-| 工作 | 推荐形状 | 什么时候再加一次委派 |
-|---|---|---|
-| 一个路径、默认值或状态问题 | 主代理直接查 | 需要多次检索、会挤占主会话时用 `explorer` |
-| 明确的小改动 | 主代理自己完成并检查，或一个 `builder` | 契约或风险需要独立证据时再加验收 |
-| 普通非平凡功能或修复 | `builder` 完成代码、测试、相关文档，再做一次独立验收 | 设计、并发、权限、迁移等风险值得单独判断时加 `reviewer` |
-| 高代价设计取舍 | 一次问题边界清楚的 `planner` 调查，再实施与验收 | 只有当调查结论确实会改变后续选择时才调用 |
-| 根因不明的回归 | 带着失败证据交给实现者，必要时直接用 `builder-hard` | 只缺一条可查的事实时先做窄调查，不自动升级模型 |
-| 整本手册或数据报告 | `worker` 完成独立产物并自查 | 需要独立事实核验或完整 task 验收时再加检查者 |
-| 用户要求提交已有改动 | `git-committer` 按准确范围提交 | 混合暂存、混合 hunk、hook 失败时返回具体阻塞 |
+## 正文：一段与任务无关的交付约定
 
-**顺序上有一条硬约束：文档要在正式验收之前完成。** 验收针对的是最终产物；PASS 之后再补文档、改测试或让 hook 改文件，都会改变被验收的内容，使那份证明过期（runtime 会据此判 FAIL）。推荐顺序是：完成实现、相关测试和文档 → 必要的审查与返工 → 对最终交付位置做正式验收 → 提交收尾。
+每个条目的正文是同一段 9 条约束，逐字相同。它**不描述这个条目做什么工作**——那是每次 `task` 的事——只约束怎么取证和怎么交付：不做未授权的动作、不动任务外的既有改动、结论不超过证据、不编造检查结果、不靠削弱断言制造通过、先结论后证据位置、用中文并保留原文。
 
-reviewer 发现的问题回流给产出角色；verifier 失败也回流给实现者，不在验证环节就地修复。
+留着它是因为这几条跨每一个任务都成立，漏掉的代价又很高（尤其是伪造绿色检查结果和把未验证写成已验证），而让主代理每次委派重打一遍既费 token 又会漂移。
 
-## 权限与验收边界
+要改就 7 个文件一起改。也可以整段删掉：runtime 允许外部条目的正文为空，此时不会生成 `system-prompt.txt`，claude-code 不追加 `--append-system-prompt-file`，codex 的 stdin 就是 task 本身。
 
-`planner` 用 Claude 的 `--permission-mode plan`，`reviewer` 用 Codex 的 `--sandbox read-only`；两者的 `mutates: read` 都有目标 CLI 的权限模式支撑，而不只是提示词声明。它们不占工作区写锁，但评审仍应针对稳定的 diff / commit，不要一边让 builder 改同一工作树、一边评审移动中的目标。内置的 `explorer` 声明 `mutates: read`，但它拥有 `bash`——那是工具白名单加提示词约束，不是强只读沙箱。
+## 这套配置的代价，别忽略
 
-`reviewer` 的完整输出由 runtime 自动保存在 run 的 `output.md`，无需为了"落盘报告"给它工作区写权限。它可以承担不产生工作区写入的 `purpose=verify` 检查；runtime 会追加验收协议并检查工作区 subject 未变化。需要运行会生成产物的测试或构建时，应另派 `verifier`；外部 attestation 仍是 `advisory`，主代理需要按风险补充抽查。
+- **全部是放开权限的写条目。** 7 个条目都用 yolo 参数（`claude --dangerously-skip-permissions` / `codex exec --dangerously-bypass-approvals-and-sandbox`）并声明 `mutates: write`，没有 sandbox 兜底。实际边界只剩宿主账号和 `task` 里写明的范围，**必须在可信 checkout 和最小权限账号下使用**。需要真只读时，自己加一个 `--permission-mode plan` 或 `--sandbox read-only` 的条目。
+- **同一工作目录同时只容得下一个外部委派。** `mutates: write` 会取目标工作区的排他 lease（含父子目录冲突），并行必须各自 `git worktree`。这是把只读条目去掉换来的。
+- **`purpose=verify` 的 attestation 一律是 `advisory`。** `enforced` 只在 `mutates: read` 且工具集不含 `bash` 时才成立，这套条目里没有这样的。PASS 不能直接采信，要自己核对真实产物、diff 和检查输出。
+- **独立性不再由角色提示词提供。** 要评审或验收时，必须在 `task` 里写明"你是检查者，不修实现，不把实现者的总结当作预期行为的来源"，并给出同一份验收口径和待检版本。换一个条目不会自动带来独立性。
 
-`verifier` / `worker` 使用 `--sandbox workspace-write`：足以在 checkout 和系统临时目录中生成测试或文档产物，同时不授予任意宿主文件访问。`verifier` 用于 `purpose=verify` 时会持有目标工作区排他写锁，且 attestation 明确是 `advisory`。它可以在仓库根目录的 `.run/`、`coverage/`、`build/`、`dist/` 或系统临时目录里新建取证产物，**但不能在产品源码或仓库正式测试目录里新建文件**——那些位置属于被验收的 subject，新增文件会让这次验收失效。需要新增正式回归用例时，交回实现者补齐再重新验收。模板不让这些角色操作 Git 历史或外部系统；如任务确实需要网络、额外可写目录或更高权限，请复制角色后按目标 CLI 的能力最小化放宽，而不是把通用模板整体改成无沙箱。
+## `roles/` 里的岗位角色
 
-`builder` / `builder-hard` 仍用 Claude 的 `--dangerously-skip-permissions`，因为它们需要非交互地完成实现；这是本目录权限最高的默认配置。务必在可信 checkout、最小权限宿主账号中使用。角色文件只声明 `model` 和 `thinkingLevel`，具体的 `--model` / `--effort` 参数由 claude-code harness 自动拼接，不应重复写进 `command`。
+[`roles/`](./roles/) 保留了早期的 8 个角色：`explorer`、`git-committer`（内置）和 `planner`、`builder`、`builder-hard`、`reviewer`、`verifier`、`worker`（外部）。它们仍然可用，在两种情况下仍有价值：
 
-**每个角色都应显式写 `thinkingLevel`**（本目录 8 个模板均已如此，见上表），不要依赖隐藏默认值——内置委派未声明时默认 `medium`，但外部 work 角色未声明时**不追加任何推理参数**，沿用该 CLI 自己的配置（`~/.claude/settings.json` / `~/.codex/config.toml` 等）；只有 `purpose=verify` 的外部角色仍会兜底 `medium`。可复用的角色请显式写，让行为不随宿主机的本地配置漂移。
+- 需要**真正的只读执行边界**：`planner` 的 `--permission-mode plan`、`reviewer` 的 `--sandbox read-only` 是目标 CLI 提供的真实限制，不只是提示词声明；`reviewer` 承担 `purpose=verify` 时也不占工作区写锁。
+- 需要**固定的、反复出现的作业纪律**：`git-committer` 的暂存区隔离规则就是一例——它约束的是一类操作的正确做法，不是一个岗位。
 
-## 使用原则
-
-- `description` 会进入主代理的子代理目录，是路由的**主要依据**——正文不在那个目录里，所以改正文修不了选错角色。每条 description 回答三件事：本轮能得到什么结果、什么时候值得调用、最关键的边界。`runtime` / `workload` / `mutates` 已由目录分组展示，不必在文字里重复。
-- 正文补充跨任务稳定的角色职责、权限边界、证据原则和交接需要；调查顺序、工具选择、实现步骤与报告结构由具体任务和执行者判断。内置执行者直接使用角色 `systemPrompt`，claude-code harness 通过 `--append-system-prompt-file` 追加，codex-cli 则把正文和 task 一起写进 stdin。调 prompt 时请核对 run 里实际的 `system-prompt.txt` / `prompt.txt` 和 argv，不要只审模板 Markdown。
-- 子代理默认看不到主会话。委派时的 `task` 应提供目标、范围、关键上下文、约束和完成标准，不能只写「按上文处理」。指定检查方法或输出格式仅在本轮确有需要时补充；给足结果要求，让执行者选择实现路径。
-- **工作目录每次委派现场决定**。角色文件里不能写 `cwd`（会被驳回），只能在调用时传 `workingDirectory`。两个 `mutates: write` 的委派不能指向同一棵工作树——runtime 的排他写锁会拒绝第二个，并点名持有者；并行实现请先 `git worktree add` 再分别指向。
-- 内置角色的 `tools`、上下文模式和四个数值预算在模板中显式配置，方便审查和按成本调整。**调用 `subagent` 指定已配置角色时没有任何覆盖字段**：工具、模型、预算、上下文和推理档位全部来自角色文件，要改就改 frontmatter。`effort` 只属于 `subagent_inline`（内联委派恒为内置），传了就整组替换四个数值预算。
-- `tools` 只是工具白名单，不等同于只读沙箱。拥有 `bash` 的内置角色仍须遵守正文和应用级 `security.json` 的限制。
-- 外部角色**没有** `tools` 字段（写了会被驳回）。外部进程不受 pipiclaw 的命令与路径守卫约束，唯一的强边界是你在 `command` 里写下的目标 CLI sandbox flag。
-- 所有 Git 提交统一交给 `git-committer`；它只有在任务明确转述用户要求 push 时才可推送。创建 commit 不会自动获得 push 授权。
-- 委派运行和完成时，频道会收到一条独立于唤醒的状态提醒（`⏳ 进度` / `✅ 完成`，见 `settings.json` 的 `delegation.notices`）；这只是"活着/结束了"的信号，不含内容——角色最终消息的结论仍要由主代理读到并转述给用户，不能假设用户已经看到了。
-
-Pipiclaw 只加载工作区 `sub-agents/` 中实际存在且有效的 Markdown 文件。空目录是合法配置；没有合适的预定义角色时仍可使用 inline `systemPrompt`。`purpose: verify` 的验收约束由 runtime 执行，不要求配置文件必须名为 `verifier`。
-
-## 维护角色提示词
-
-每条常驻指示都应回答：它是否在不知道具体任务时仍然成立？工作方法用判断原则表达，例如「围绕会影响答案的线索调查」，不固定搜索轮次、命令顺序或调试手段。任务专属的验收矩阵、性能指标、日志时间窗和交付格式放进本轮 `task`，不要为一次失败不断扩大所有任务的 system prompt。
-
-职责与权限边界需要保留具体性。例如完整暂存区的提交范围、验收临时产物的位置和不能将静态判断当成运行通过，都影响实际正确性。`purpose=verify` 的完整验收与最终 `VERDICT` 协议由 runtime 追加，角色正文只说明如何与它配合，避免维护第二套协议。报告默认传递结论、证据与未完成项，结构随任务调整。
-
-这一方向参考 OpenAI 的 [结果导向提示词建议](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.5) 和 [推理模型提示词指南](https://developers.openai.com/api/docs/guides/reasoning-best-practices)：保留目标与必要约束，减少不必要的步骤指导。具体到这些角色的取舍仍需用本项目任务验证，不代表短 prompt 对所有模型和任务必然更好。
-
-后续调优应在相同任务、模型和权限下比较新旧 prompt，观察完成质量、越界操作、证据充分性、无效停顿和工具成本。优先复用能暴露角色特有失误的任务，如探索误把未命中当不存在、评审误报、验收在证据不足时通过、提交混入既有暂存内容。行为质量放在 evals；模板加载和权限协议用现有机制测试覆盖，不断言 prompt 原文。模型、推理档位与预算单独评估，避免同时改变多个变量后无法判断收益来源。
+反过来，`builder` / `builder-hard` / `worker` 和 `agents/` 里的对应档位重叠严重，正文里的岗位设定是净损失，不建议再装。
 
 ## 从早期模板迁移
 
-早期版本还提供 `scout`、`log-sifter`、`documenter` 三个模板，现已退出推荐目录：
+已经复制到工作区的旧角色文件不会被自动删除，需要手动处理：
 
-- `scout`（外部单点事实查询）和 `log-sifter`（日志筛证据）的能力并入 `explorer`——它支持代码与日志调查，保留证据、统计范围和不确定性原则，具体方法随任务选择；预算为 900 秒 / 300 秒 bash 超时。一个单点事实查询不值得默认启动另一个外部异步进程。
-- `documenter` 的工作被拆开：随实现一起变的文档属于 `builder` 的交付（省掉一次接口背景的重建），独立手册、迁移指南和报告交给 `worker`（它的正文带上了文档事实纪律）。
+```bash
+cd ~/.pipiclaw/workspace/sub-agents
+rm -f builder.md builder-hard.md worker.md planner.md reviewer.md verifier.md
+cp /path/to/pipiclaw/examples/sub-agents/agents/*.md .
+```
 
-已经复制到工作区的角色不会随示例更新或自动删除。迁移时保留本地模型、权限和业务约束，核对接收角色的能力与边界，跑过代表任务后再清理旧文件；有在途或待续接的 run 时先让它们结束。个人部署已经证明某个专门角色有效的，可以继续保留。
+迁移期间历史 task 的委派记录里仍会出现旧角色名；`subagent_run op=follow_up` 只能续接条目仍然存在且 `command`/`model`/`shell` 未变的 run，删掉旧文件后这些 run 需要重新委派。
 
-## 需要按本机调整的地方
+## 自己写条目
 
-- **`command` 用的是裸命令**（`claude` / `codex`），它们必须在 pipiclaw 进程的 `PATH` 上。如果你本机用的是包装脚本（换 base URL、换额度账号、注入环境变量），把 `command` 换成那个脚本即可——pipiclaw 只做 shell 词法分词，不解释命令内容。找不到可执行文件时角色不会消失，而是标为 `unavailable` 并在调用时给出安装提示。
-- **`model` 原样透传给目标 CLI，pipiclaw 不校验**。Claude 角色使用 `opus` / `sonnet`；Codex 角色使用 `gpt-5.6-sol` 或 `gpt-5.6-luna`。如果本机账号不可用，请按目标 CLI 支持的模型替换。未写 `model` 的内置角色（`explorer` / `git-committer`）先取角色配置，再取 `settings.subagentModel`，最后回退主代理当前模型——`runtime: internal` 本身不保证便宜。
-- **目标 CLI 参数会变化**。模板按当前 Claude Code / Codex CLI 维护；升级 CLI 后先用 `claude --help`、`codex exec --help` 核对命令。Pipiclaw 只分词和追加协议参数，不会替你校验 flag 是否仍受支持。
-- **`--dangerously-skip-permissions`** 是 Claude Code 自身的权限跳过标记，Pipiclaw 原样传入。若不接受这个边界，只使用只读角色，或为写角色换成你已验证可在非交互模式工作的更严格权限配置。
-- **`maxWallTimeSec` 是墙钟上限**，超时会杀进程组但仍解析并回传已产生的输出。它是故障上限，不是鼓励角色用满的配额；按仓库规模和任务量级调整，不要为了"省钱"随意压缩到检查跑不完。
-- 第三种 harness `exec`（任意脚本，无协议终态）本目录不提供示例：它没有完成事件，`usageKnown` / `costKnown` 恒为 false，且不能承担 `purpose=verify`。需要接入其他 CLI 时再参考 [../../docs/sub-agents.md](../../docs/sub-agents.md)。
+- **`description` 是唯一的路由依据。** 它进入主代理的系统提示词（子代理目录，预算 2400 字符），正文不在那里——改正文修不了选错条目。每条写清：能力特征、相对成本、适用场景，以及会改变选择的边界（能不能读图片、额度是否受限）。`runtime` / `workload` / `mutates` 已由目录分组展示，不要在文字里重复。
+- **描述必须属实且可核查。** 写错一句"支持图片输入"，代价是一次几十分钟后才失败的委派，比不写更糟。
+- **不要扩到十几个条目。** agent × 档位 × 权限很容易组合爆炸。每加一个都先问：主代理会因为它做出不同的路由决定吗？答不上来就不该存在。
+- **调 prompt 时看实际发出的内容。** 正文对 claude-code 经 `--append-system-prompt-file` 追加，对 codex-cli 与 task 一起写进 stdin；核对 run 目录里真实的 `system-prompt.txt` / `prompt.txt` 和 argv，不要只审模板 Markdown。
+- 委派的写法、并行隔离、等待与续接见 [../../docs/sub-agents.md](../../docs/sub-agents.md) 与运行时的 `agent-delegation.md` playbook。

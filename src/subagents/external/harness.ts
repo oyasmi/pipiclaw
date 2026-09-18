@@ -18,8 +18,10 @@ export interface ExternalInvocationInput {
 	/** Path to the stdin prompt file (D1 layout: `<artifactDir>/prompt.txt`). */
 	promptFile: string;
 	/** Path to the role's system-prompt file (`<artifactDir>/system-prompt.txt`), for harnesses
-	 *  that reference it by flag (e.g. claude-code's `--append-system-prompt-file`). */
-	systemPromptFile: string;
+	 *  that reference it by flag (e.g. claude-code's `--append-system-prompt-file`). Undefined
+	 *  when the role declares no system prompt at all (a capability entry with an empty body):
+	 *  the file is then not written, so no harness may reference a path that does not exist. */
+	systemPromptFile?: string;
 	/** Set when this invocation continues an earlier run (`subagent_run op=follow_up`, D6). */
 	resumeSessionId?: string;
 }

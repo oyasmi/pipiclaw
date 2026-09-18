@@ -2,6 +2,17 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
+## [Unreleased]
+
+### Changed
+
+- **子代理模板从「岗位角色」改为「能力条目」。** `examples/sub-agents/` 现在有两套可选组织：`agents/`（推荐 —— `claude-high` / `claude-main` / `codex-high` / `codex-main` / `codex-flash` / `glm-high` / `glm-flash`，每个条目只绑定一个 agent、模型和推理档，正文不含岗位设定）与 `roles/`（早期的 8 个岗位角色，保留作参考，以及仍然需要真正只读执行边界的场景）。角色正文是在不知道本轮任务时写死的任务框架：它让路由变成「猜别人起的职位名」，也限制了通用 coding agent 能被要求做的事。现在路由变成「这轮需要什么能力、能付多少代价」，这是主代理判断得了的。发现机制未变，仍然平铺加载——子目录只是示例的组织方式，不是加载路径。
+- `agent-delegation.md` 按档位选择（flash / main / high）、「不要默认往上选」，以及被删掉的岗位设定原本提供的两件事重写：评审与验收的独立性现在必须写进 `task`；能力条目全部放开权限并声明 `mutates: write`，因此同一工作目录同时只容得下一个外部委派，`purpose=verify` 的 attestation 一律是 `advisory`。
+
+### Added
+
+- 外部角色的正文现在可以为空。此时不生成 `system-prompt.txt`，claude-code 不追加 `--append-system-prompt-file`，codex 的 stdin 就是 task 本身，上面没有多余的 `---` 分隔。内置角色仍要求正文——它没有别的提示词来源。
+
 ## [0.9.3-beta.4] - 2026-09-14
 
 ### Fixed

@@ -84,6 +84,50 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		expect(spawnFn).not.toHaveBeenCalled();
 	});
 
+	/** A capability entry declares no standing instruction at all. Nothing must then reference a
+	 *  system-prompt file that was never written, and codex's stdin must start with the task rather
+	 *  than an empty section above a `---` fence. */
+	it("writes no system-prompt.txt and no prompt fence when the role declares an empty system prompt", async () => {
+		const workspaceDir = createTempWorkspace();
+		const artifactDir = join(workspaceDir, "dm_bodyless", "subagent-artifacts", "run-bodyless");
+		mkdirSync(artifactDir, { recursive: true });
+
+		const { spawnFnForInput, child } = makeFakeSpawn({ pid: 5151 });
+		let stdinText = "";
+		child.stdin.on("data", (chunk: Buffer) => {
+			stdinText += chunk.toString("utf-8");
+		});
+
+		await launchExternalRun({
+			...testManagers("dm_bodyless"),
+			runId: "run-bodyless",
+			channelId: "dm_bodyless",
+			label: "capability entry run",
+			agent: "codex-main",
+			source: "predefined",
+			harness: "codex-cli",
+			command: "codex exec",
+			maxWallTimeSec: 60,
+			systemPrompt: "",
+			task: "Implement the thing.",
+			workingDirectory: workspaceDir,
+			artifactDir,
+			purpose: "work",
+			mutates: "write",
+			workspaceDir,
+			securityConfig: DEFAULT_SECURITY_CONFIG,
+			spawnFn: spawnFnForInput,
+		});
+
+		await waitFor(() => stdinText.length > 0);
+		expect(stdinText).toBe("Implement the thing.\n");
+		expect(existsSync(join(artifactDir, "system-prompt.txt"))).toBe(false);
+		expect(readFileSync(join(artifactDir, "prompt.txt"), "utf-8")).toBe("Implement the thing.\n");
+
+		child.emit("close", 0, null);
+		await waitFor(() => getSubAgentRunManager("dm_bodyless").get("run-bodyless")?.status !== "running");
+	});
+
 	it("spawns codex-cli, persists the pid, and settles completed once turn.completed arrives", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_ext");

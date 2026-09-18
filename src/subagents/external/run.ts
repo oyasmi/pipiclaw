@@ -183,7 +183,11 @@ function buildStdinContent(harnessId: string, systemPrompt: string, task: string
 	// harness has no such channel, so the role's system prompt has nowhere to go but the prompt
 	// itself, folded ahead of the task.
 	if (harnessId === "claude-code") return task;
-	return `${systemPrompt.trim()}\n\n---\n\n${task.trim()}\n`;
+	const trimmedPrompt = systemPrompt.trim();
+	// A capability entry declares no system prompt at all: the task must then start the prompt,
+	// with no leading blank section and no `---` fence separating it from nothing.
+	if (!trimmedPrompt) return `${task.trim()}\n`;
+	return `${trimmedPrompt}\n\n---\n\n${task.trim()}\n`;
 }
 
 /** Launches an external run. Resolves once the process is confirmed spawned (or fails fast if it
@@ -205,10 +209,13 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	// either way.
 	await mkdir(input.artifactDir, { recursive: true });
 	const promptFile = join(input.artifactDir, "prompt.txt");
-	const systemPromptFile = join(input.artifactDir, "system-prompt.txt");
+	const trimmedSystemPrompt = input.systemPrompt.trim();
+	// Only written when the role actually declares one, so `system-prompt.txt`'s presence in a run's
+	// artifacts stays a truthful record of what was sent (D1 layout) instead of an empty decoy.
+	const systemPromptFile = trimmedSystemPrompt ? join(input.artifactDir, "system-prompt.txt") : undefined;
 	const stdinContent = buildStdinContent(harness.id, input.systemPrompt, input.task);
 	await writeFile(promptFile, `${input.task.trim()}\n`, "utf-8");
-	await writeFile(systemPromptFile, `${input.systemPrompt.trim()}\n`, "utf-8");
+	if (systemPromptFile) await writeFile(systemPromptFile, `${trimmedSystemPrompt}\n`, "utf-8");
 
 	// D9: an external verifier's advisory attestation needs a before/after subject snapshot the
 	// same way the internal path does — taken here, before the process starts, since this is the

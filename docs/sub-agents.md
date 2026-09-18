@@ -21,29 +21,31 @@
 
 外部角色的前提是：目标 CLI 已经安装在**运行 Pipiclaw 的同一账号**下，能从该进程的 `PATH` 找到，并已完成登录。先在 shell 中自行验证 `claude` 或 `codex` 能运行。
 
-全局 npm 安装会把推荐角色一起安装。以下示例复制一个 Claude Code builder 和一个 Codex reviewer：
+全局 npm 安装会把推荐配置一起安装。以下示例复制两个 Claude Code 条目：
 
 ```bash
 mkdir -p ~/.pipiclaw/workspace/sub-agents
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,claude-high}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 
-如果你正在源码 checkout 中开发，也可以从仓库的 `examples/sub-agents/` 复制。设置了 `PIPICLAW_HOME` 时，把目标目录改成 `$PIPICLAW_HOME/workspace/sub-agents/`。
+如果你正在源码 checkout 中开发，也可以从仓库的 `examples/sub-agents/agents/` 复制。设置了 `PIPICLAW_HOME` 时，把目标目录改成 `$PIPICLAW_HOME/workspace/sub-agents/`。注意加载是**平铺**的：只读 `sub-agents/*.md`，不递归子目录，所以要复制文件而不是目录。
 
 不必重启 daemon；角色目录会在资源刷新时重新发现。先发送：
 
 ```text
 /subagents roles
-/subagents roles builder
+/subagents roles claude-main
 ```
 
-确认角色显示为可用后，直接给主智能体目标、范围和验收方法：
+确认条目显示为可用后，直接给主智能体目标、范围和验收方法：
 
 ```text
-请把这次跨模块实现交给 builder，工作目录是 /srv/project；完成后让 reviewer 检查当前 diff，并把结论和剩余风险交付给我。
+请把这次跨模块实现交给一个合适的执行器，工作目录是 /srv/project；完成后独立检查当前 diff，并把结论和剩余风险交付给我。
 ```
+
+由主智能体按 description 里的能力与成本挑执行器，通常不需要你点名条目；要指定时直接说条目名即可。
 
 外部委派会立刻返回 `runId`，完成时自动唤醒原频道。过程中可用 `/subagents` 查看，用 `/subagents cancel <runId>` 终止。不要为了等结果反复轮询或重复派发。
 
@@ -53,17 +55,16 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
 
 工作区配置子代理是放在 `~/.pipiclaw/workspace/sub-agents/*.md` 中的 Markdown 文件。Pipiclaw 只加载这个目录中实际存在且有效的文件；不会自动注入任何默认角色。主代理在合适的时候可以调用它们，把某类任务交给更聚焦的角色处理。
 
-仓库及 npm 包提供了可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)，既有内置角色也有外部角色。在源码 checkout 中可以直接使用：
+仓库及 npm 包提供了可复制、可修改的建议模板：[`examples/sub-agents/`](../examples/sub-agents/)，分两套组织方式，**不要同时装**：
+
+- `agents/` — **推荐**。按能力与成本组织的 7 个条目（`claude-high` / `claude-main` / `codex-high` / `codex-main` / `codex-flash` / `glm-high` / `glm-flash`），把 agent、模型和推理档直接交给主智能体按需选择。文件正文只有一段与任务无关的交付约定，不含岗位设定。
+- `roles/` — 早期的 8 个岗位角色（explorer、git-committer、planner、builder、builder-hard、reviewer、verifier、worker），保留作参考、迁移对照，以及仍然需要真只读执行边界（`--permission-mode plan` / `--sandbox read-only`）的场景。
 
 ```bash
-# 常用五角色（explorer / git-committer 内置；builder 需要 claude，reviewer / verifier 需要 codex）：
-cp examples/sub-agents/{explorer,git-committer,builder,reviewer,verifier}.md ~/.pipiclaw/workspace/sub-agents/
-# 按需补充：
-cp examples/sub-agents/{planner,builder-hard}.md ~/.pipiclaw/workspace/sub-agents/   # 需要 claude
-cp examples/sub-agents/worker.md ~/.pipiclaw/workspace/sub-agents/                   # 需要 codex
+cp examples/sub-agents/agents/*.md ~/.pipiclaw/workspace/sub-agents/
 ```
 
-目录里是 5 个常用角色（explorer、builder、reviewer、verifier、git-committer）加 3 个按需角色（planner、builder-hard、worker）。它们**不构成固定流水线**：按这一轮要消除哪种不确定性来选，逐角色取舍与路由表见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。模板中的模型、sandbox 和授权取舍不是普适默认值，使用前必须按本机账号和风险边界审阅。
+`agents/` 的三档分工是：**flash** 做已经清楚怎么做的简单重复工作、**main** 承担绝大多数实现与排查、**high** 只留给真正需要新判断或取舍的一轮。逐条目取舍、GLM 包装脚本和这套配置的代价见 [`examples/sub-agents/README.md`](../examples/sub-agents/README.md)。模板中的模型、sandbox 和授权取舍不是普适默认值——`agents/` 全部使用放开权限的参数且声明 `mutates: write`，使用前必须按本机账号和风险边界审阅。
 
 不复制模板也完全可以使用 inline `systemPrompt` 委派——但 inline 委派永远是 `runtime: internal`，外部角色必须以配置文件的形式存在（需要 `harness`/`command`，无法通过调用参数临时拼出）。`purpose: verify` 的验收约束由 runtime 执行，不要求一定配置名为 `verifier` 的文件。
 
@@ -279,7 +280,7 @@ maxWallTimeSec: 5400
 `/subagents roles` 的列表行中，括号内固定按 `runtime`、`mutates`、`model`、`thinking` 四个位置显示值，不带键名。未声明时，内置角色的 `model` 使用 `默认`、`thinking` 使用 `默认 medium`；外部角色的 `model` 使用 `CLI 决定`、`thinking` 使用 `未设置`。例如：
 
 ```text
-- `builder` (外部/codex-cli, write, gpt-5.5, high) — 高强度疑难实现…
+- `codex-high` (外部/codex-cli, write, gpt-6-astra, high) — 高智能档，可读图片…
 - `explorer` (内置, read, openai-codex/gpt-5.4, 默认 medium) — 轻量只读探索
 ```
 
@@ -441,41 +442,26 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 ## 推荐写法（Recommended Presets）
 
-[`examples/sub-agents/`](../examples/sub-agents/) 里的成品按下面的思路配置。内置角色的价值是**低延迟和上下文隔离**，外部角色的价值是**算力和跨会话续接**——按这条线分工，而不是按任务听起来重不重。
+[`examples/sub-agents/`](../examples/sub-agents/) 里的成品按下面的思路配置。内置条目的价值是**低延迟和上下文隔离**，外部条目的价值是**算力和跨会话续接**——按这条线分工，而不是按任务听起来重不重。
 
-**Explorer**（内置）—— 只读调查一个明确问题：定位实现、追踪调用链，以及在指定日志或命令输出里筛证据：
+### 按能力与成本配置（`agents/`，推荐）
 
-- `tools: read,grep,bash`
-- `contextMode: isolated` + `memory: none`
-- `thinkingLevel: low`
-- 预算按日志任务给足（`maxWallTimeSec: 900` / `bashTimeoutSec: 300`）
-- 输出契约明确要求「宁可少带并说明未覆盖范围」，否则它会把日志整段搬回来，失去存在意义
+条目文件只声明「哪个 agent、哪个模型、哪个推理档、多少墙钟预算」，不声明岗位。每次委派做什么、边界在哪、怎么算完成，由主智能体写进 `task`。这样路由的问题从「这轮该找哪个岗位」变成「这轮需要什么能力、能付多少代价」，后者主智能体判断得了，因为它知道任务是什么。
 
-**Git committer**（内置）—— 将用户明确指定的现有改动整理成 commit：
+- 三档分工：**flash**（已经清楚怎么做的简单重复工作，最便宜，可大量派发）、**main**（主力，绝大多数实现、排查、文档，含 token 消耗大的长任务）、**high**（真正需要新判断或取舍的一轮，明显更贵）。
+- 同档位按实际能力差异选：代码密集偏向 claude，要读图片选多模态条目（codex 全系与 `glm-flash`），简单重复优先额度宽松的 GLM——它只有 5 小时滚动限额、无周/月上限。
+- `model` 原样透传（`opus` / `sonnet` / `gpt-6-astra` / `glm-5.3` …）；claude-code 与 codex-cli harness 自动把 `model` 和 `thinkingLevel` 翻译为各自的 `--model` / `--effort` 或 `-m` / `-c model_reasoning_effort=`，不要在 `command` 里重复写。
+- 换供应商不必换 harness：走 Anthropic 兼容端点的 GLM 仍用 `harness: claude-code`，只把 `command` 指向一个设置了 `CLAUDE_CONFIG_DIR` 的包装脚本。
+- **代价要接受**：这套条目全部使用放开权限的参数并声明 `mutates: write`，因此同一工作目录同时只容得下一个外部委派（并行必须各自 worktree），`purpose=verify` 的 attestation 一律是 `advisory`，且独立评审的独立性必须由 `task` 提供而不是条目提供。
 
-- `tools: read,bash`
-- `contextMode: isolated` + `memory: none`
-- `thinkingLevel: medium`
-- 默认只创建本地 commit；只有用户明确要求时才 push
+外部条目的正文可以完全为空——runtime 允许，此时不生成 `system-prompt.txt`，claude-code 不追加 `--append-system-prompt-file`，codex 的 stdin 就是 task 本身。`agents/` 的模板保留了一段 9 条、逐字相同的交付约定（不做未授权动作、不动任务外改动、结论不超过证据、不伪造检查结果、先结论后证据位置），因为这几条跨每个任务都成立，漏掉的代价又高。
 
-**Planner / Builder / Builder-hard**（外部，claude-code）—— 方案收敛与跨多文件的重型实现：
+### 仍然值得做成角色的两类条目（`roles/`）
 
-- 三者均为 `workload: heavy`。planner 使用 `--permission-mode plan` + `mutates: read`；builder / builder-hard 才使用 `--dangerously-skip-permissions` + `mutates: write`
-- `model` 原样透传（`opus` / `sonnet`）；claude-code harness 自动把 `model` 和 `thinkingLevel` 翻译为 `--model` 与 `--effort`
-- `maxWallTimeSec` 按职责给足（3600～5400）——它们是重活，不指望在同步宽限窗口内返回
-- 两个写角色并行派发时必须使用不同的 `workingDirectory`，否则第二个会被工作区写锁拒绝
+- **需要真正的只读执行边界**：`planner` 的 `--permission-mode plan`、`reviewer` 的 `--sandbox read-only` 是目标 CLI 强制的限制，不只是提示词声明。只读条目不参与工作区写锁，可以与写条目并行；`mutates: read` 且工具集不含 `bash` 的内置条目还能拿到 `enforced` 级验收强度，这是放开权限的条目做不到的。
+- **有固定且反复出现的作业纪律**：内置 `git-committer`（`tools: read,bash`、`isolated` + `memory: none`、默认只创建本地 commit，只有用户明确要求才 push）约束的是一类操作的正确做法，不是一个岗位；内置 `explorer`（`tools: read,grep,bash`、`thinkingLevel: low`、输出契约要求「宁可少带并说明未覆盖范围」）则是把会挤占主会话的检索隔离出去。这类窄活也可以直接用 `subagent_inline`，按次给 systemPrompt。
 
-**Scout**（外部，codex-cli，只读）—— 单点事实查询：
-
-- `command` 用 `codex exec --sandbox read-only`，让 `mutates: read` 是被 CLI 强制的声明而不只是一句话
-- 只读角色不参与工作区写锁，可以与 builder 并行
-
-**Reviewer / Verifier / Worker**（外部，codex-cli）—— 独立挑错、运行取证、独立产物（分析、报告、文档）：
-
-- reviewer 使用 `--sandbox read-only` + `mutates: read`；完整输出由 runtime 自动保存到 run 的 `output.md`，无需为评审报告授予写权限。它也可承担不需要写入工作区的外部 `purpose=verify`，但 attestation 强度仍是 `advisory`
-- verifier / worker 使用 `--sandbox workspace-write` + `mutates: write`，可以生成工作区产物，但模板不允许它们修改 Git 历史或外部系统
-- verifier 因运行测试可能写构建产物，承担 `purpose=verify` 时会取得目标工作区独占 lease，并以 `advisory` 强度验收；协议允许 `.run/`、`coverage/`、`build/`、`dist/` 等临时产物，但禁止修改被验收实现或既有 untracked 产品文件——**在产品源码或仓库正式测试目录新建文件同样会改变 subject 并使 PASS 失效**。需要静态只读终验时用 reviewer，并按风险补充主代理抽查
-- 提交统一交给内置 git-committer；只有用户明确要求时才 push
+反过来，`builder` / `builder-hard` / `worker` 这类"岗位说明书"角色与 `agents/` 的档位重叠严重：正文里的任务框架是在不知道本轮任务时写死的，只会限制场景，不建议再装。
 
 ## 常见错误（Common Mistakes）
 
@@ -483,9 +469,9 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - 同一个目录里定义了重复的 `name`。
 - `tools` 写了不支持的工具名（仅内置）。
 - `contextMode` 或 `memory` 写了不支持的值。
-- 正文为空，只有 frontmatter。
+- 内置条目正文为空，只有 frontmatter（内置没有别的提示词来源，会被驳回；外部条目正文允许为空）。
 - `model` 只写了模糊名字，结果无法精确匹配（内置角色；外部角色的 `model` 不做校验）。
-- 只在正文描述使用时机，导致主代理无法从目录中的 `description` 正确选择角色。
+- 只在正文描述使用时机，导致主代理无法从目录中的 `description` 正确选择条目——正文不进子代理目录，改正文修不了选错。
 - 把 `read,bash` 误认为 runtime 强制只读，未约束 bash 的写命令；含 `bash` 却没声明 `mutates` 时 discovery 会提示，别忽略它。
 - 在任务 Goal 未覆盖目标仓库或 ref 时让 Git 子代理自动 push。
 - 给外部角色写 `cwd`、`tools`、`maxTurns` 等只对内置有意义的字段，或给内置角色写 `harness`、`command`、`shell`、`env`——都会被直接驳回，不是被忽略。

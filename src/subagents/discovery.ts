@@ -700,8 +700,11 @@ function parseExternalAgent(
 
 	const maxWallTimeSec = parsePositiveInteger(frontmatter.maxWallTimeSec, DEFAULT_EXTERNAL_MAX_WALL_TIME_SEC);
 
+	// An empty body is a legitimate declaration for an external role, not a defect: a capability
+	// entry ("this agent, this model, this reasoning level") deliberately carries no standing
+	// instruction, because the only party that knows what this delegation is for is the main
+	// agent writing `task`. Internal roles still require a body — they have no other prompt.
 	const trimmedBody = body.trim();
-	if (!trimmedBody) return { warning: `${entryName}: empty system prompt body` };
 	const promptLengthError = validateSubAgentSystemPrompt(trimmedBody, "Sub-agent system prompt");
 	if (promptLengthError) return { warning: `${entryName}: ${promptLengthError}` };
 

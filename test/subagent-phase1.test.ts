@@ -127,12 +127,14 @@ function makeDiscovery(workspaceDir: string, agents: SubAgentConfig[]) {
 describe("sub-agent discovery", () => {
 	// Keep this as a loadability and routing check for the shipped examples. Their prompt text,
 	// thinking level, and numeric budgets are deployment knobs and must not become test contracts.
-	it("loads every shipped role template with routing and permission metadata", () => {
+	// `examples/sub-agents/` holds two alternative sets in subdirectories; discovery itself is flat,
+	// so each set is loaded on its own, the way a deployer is told to install it.
+	function loadExampleSet(subdir: string) {
 		const workspaceDir = createTempWorkspace();
 		const subAgentsDir = getSubAgentsDir(workspaceDir);
 		mkdirSync(subAgentsDir, { recursive: true });
 
-		const examplesDir = join(process.cwd(), "examples", "sub-agents");
+		const examplesDir = join(process.cwd(), "examples", "sub-agents", subdir);
 		const files = readdirSync(examplesDir).filter(
 			(name) => name.endsWith(".md") && name.toLowerCase() !== "readme.md",
 		);
@@ -144,6 +146,44 @@ describe("sub-agent discovery", () => {
 		const discovery = discoverSubAgents(workspaceDir, [model]);
 		expect(discovery.warnings).toEqual([]);
 		expect(discovery.agents).toHaveLength(files.length);
+		// An uninstalled entry stays listed, marked unavailable with an install hint, never dropped.
+		for (const agent of discovery.agents.filter((candidate) => candidate.runtime === "external")) {
+			if (agent.unavailable !== undefined) {
+				expect(agent.unavailable).toMatch(/was not found on PATH/);
+			}
+		}
+		return discovery;
+	}
+
+	it("loads every shipped capability entry with routing and permission metadata", () => {
+		const discovery = loadExampleSet("agents");
+
+		// A capability entry is an executor binding, not a persona: every one of them must declare
+		// the harness, the pass-through model and the reasoning level the deployer picked, because
+		// after the persona is gone that declaration is the only thing the file carries.
+		for (const agent of discovery.agents) {
+			expect(agent).toMatchObject({ runtime: "external", workload: "heavy", mutates: "write" });
+			expect(["claude-code", "codex-cli"]).toContain(agent.harness);
+			expect(agent.externalModelRef).toBeTruthy();
+			expect(agent.thinkingLevel).toBeTruthy();
+		}
+		// The three tiers are the routing signal the delegation playbook teaches, so each must exist
+		// and the high tier must actually be configured to reason harder than the flash tier.
+		const tierOf = (name: string) => discovery.agents.find((agent) => agent.name === name);
+		expect(tierOf("claude-high")?.thinkingLevel).toBe("high");
+		expect(tierOf("claude-main")?.thinkingLevel).toBe("medium");
+		expect(tierOf("glm-flash")?.thinkingLevel).toBe("medium");
+		// Every entry runs with approvals/sandbox off — that is what makes the `mutates: write`
+		// declaration above load-bearing rather than cosmetic (there is no sandbox behind it).
+		for (const agent of discovery.agents) {
+			if (agent.harness === "codex-cli") {
+				expect(agent.command).toContain("--dangerously-bypass-approvals-and-sandbox");
+			}
+		}
+	});
+
+	it("loads every shipped role template with routing and permission metadata", () => {
+		const discovery = loadExampleSet("roles");
 
 		// Internal routing and write-lease declarations are behavioral/safety metadata. The
 		// role-specific wording and resource tuning are intentionally not asserted here.
@@ -155,9 +195,8 @@ describe("sub-agent discovery", () => {
 		});
 
 		// External routing/sandbox spot checks (D5): claude-code planner stays read-only via its permission
-		// mode; codex roles carry the sandbox flag matching their mutates declaration. Neither
-		// binary must exist on PATH here — an uninstalled role stays listed, marked unavailable
-		// with an install hint, never silently dropped.
+		// mode; codex roles carry the sandbox flag matching their mutates declaration. These real
+		// read-only execution boundaries are the reason this set is kept at all.
 		const planner = discovery.agents.find((agent) => agent.name === "planner");
 		expect(planner).toMatchObject({ runtime: "external", harness: "claude-code", mutates: "read" });
 		expect(planner?.command).toContain("--permission-mode plan");
@@ -173,11 +212,6 @@ describe("sub-agent discovery", () => {
 			const agent = discovery.agents.find((candidate) => candidate.name === name);
 			expect(agent).toMatchObject({ harness: "codex-cli", mutates: "write" });
 			expect(agent?.command).toContain("--sandbox workspace-write");
-		}
-		for (const agent of discovery.agents.filter((candidate) => candidate.runtime === "external")) {
-			if (agent.unavailable !== undefined) {
-				expect(agent.unavailable).toMatch(/executable "(claude|codex)" was not found on PATH/);
-			}
 		}
 	});
 	it("ignores predefined prompts that exceed the length limit", () => {
