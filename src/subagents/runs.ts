@@ -1002,8 +1002,7 @@ export class SubAgentRunManager {
 			ts: String(Date.now()),
 			conversationType: record.channelId.startsWith("group_") ? "2" : "1",
 			dispatchId: `subagent:${record.channelId}:${record.runId}:done`,
-			// P0-2: a user is genuinely waiting on this result — render the resulting turn's progress
-			// instead of the "none" style autonomous check-ins get (delivery.ts's `progressStyleOverride`).
+			// The result is awaited; the wake itself still runs without a progress card.
 			presentation: "awaited",
 			...(record.taskId
 				? {

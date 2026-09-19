@@ -27,6 +27,8 @@ function createBootstrapPaths(): BootstrapPaths {
 }
 
 class FakeTestBot {
+	getCardGeneration = () => Symbol("test-card-turn");
+	isCardGenerationCurrent = () => true;
 	deliveries: Array<{ method: string; args: unknown[] }> = [];
 	start = vi.fn(async () => {});
 	stop = vi.fn(async () => {});

@@ -40,6 +40,8 @@ function createBootstrapPaths(): BootstrapPaths {
 }
 
 class FakeTestBot {
+	getCardGeneration = () => Symbol("test-card-turn");
+	isCardGenerationCurrent = () => true;
 	deliveries: Array<{ method: string; args: unknown[] }> = [];
 	start = vi.fn(async () => {});
 	stop = vi.fn(async () => {});
@@ -235,7 +237,6 @@ describe("runtime stop handling", () => {
 		await task;
 
 		expect(runner.abort).toHaveBeenCalledTimes(1);
-		expect(bot.discardCard).toHaveBeenCalledTimes(1);
 		expect(bot.discardCard).toHaveBeenCalledWith("dm_tester");
 		expect(bot.clearPendingMessages).toHaveBeenCalledWith("dm_tester");
 

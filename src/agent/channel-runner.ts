@@ -669,7 +669,7 @@ export class ChannelRunner implements AgentRunner {
 			} else if (isSilentOutcome(finalOutcome)) {
 				try {
 					await ctx.deleteMessage();
-					log.logInfo("Silent response - deleted message");
+					log.logInfo("Silent response - ended progress delivery");
 				} catch (err) {
 					const errMsg = errorMessage(err);
 					log.logWarning("Failed to delete message for silent response", errMsg);

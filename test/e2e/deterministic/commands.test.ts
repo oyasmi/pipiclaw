@@ -48,7 +48,8 @@ describe("E2E deterministic: command plane", () => {
 		// first assertion flips — the typo becomes a full model turn.
 		const beforeUnknown = harness.deliveries.length;
 		await harness.sendUserMessage("/modle");
-		const rejection = harness.deliveries.slice(beforeUnknown);
+		// discardCard is the turn-close bookkeeping every turn now emits, not a reply.
+		const rejection = harness.deliveries.slice(beforeUnknown).filter((d) => d.method !== "discardCard");
 		expect(rejection).toHaveLength(1);
 		expect(harness.modelRequestCount()).toBe(0);
 

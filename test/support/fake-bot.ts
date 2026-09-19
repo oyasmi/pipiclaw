@@ -17,6 +17,8 @@ export interface CapturedDelivery {
 }
 
 export class E2EFakeDingTalkBot {
+	getCardGeneration = () => Symbol("test-card-turn");
+	isCardGenerationCurrent = () => true;
 	deliveries: CapturedDelivery[] = [];
 	responseMode: ResponseMode = "full_progress_then_plain_final";
 

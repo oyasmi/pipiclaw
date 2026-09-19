@@ -203,6 +203,7 @@ interface AICard {
 	lastUpdated: number;
 	content: string;
 	finished: boolean;
+	pendingWrite?: Promise<boolean>;
 }
 
 interface CardStreamOptions {
@@ -273,7 +274,7 @@ const SUPPORTED_FILE_TYPES = new Set(["xlsx", "pdf", "zip", "rar", "doc", "docx"
 // hung connection, and a stalled card-streaming request would wedge the delivery
 // sync loop (never resolving flush()), leaving the whole channel permanently busy.
 // A timeout turns "hang" into a normal failure that the existing fallback paths
-// (discardCard / replay / sendPlain) already handle.
+// (bounded snapshot replay / sendPlain) already handle.
 const DINGTALK_HTTP_TIMEOUT_MS = 15_000;
 const http = axios.create({ timeout: DINGTALK_HTTP_TIMEOUT_MS });
 // Bounds enqueueStreamMessage (user messages + busy-message requeues), mirroring the
@@ -312,10 +313,10 @@ export class DingTalkBot implements MediaSender {
 
 	// Active AI cards: channelId → AICard
 	private activeCards = new Map<string, AICard>();
-	// Singleflight for card creation: warmup and the first progress update can
-	// race before activeCards is populated, which would create two cards. Sharing
-	// the in-flight promise per channel guarantees at most one create call.
-	private cardCreationInFlight = new Map<string, Promise<AICard | null>>();
+	private cardGenerations = new Map<string, symbol>();
+	private cardCreationAttempted = new Set<symbol>();
+	// Share creation within a turn, but never let a late old turn own a new turn's card.
+	private cardCreationInFlight = new Map<string, { generation: symbol; promise: Promise<AICard | null> }>();
 
 	// Conversation metadata cache: channelId → metadata
 	private convMeta = new Map<string, ConversationMeta>();
@@ -851,14 +852,26 @@ export class DingTalkBot implements MediaSender {
 	// AI Card operations
 	// ==========================================================================
 
-	/**
-	 * Get or create an AI Card for a channel.
-	 */
-	async ensureCard(channelId: string): Promise<void> {
-		if (!this.config.cardTemplateId) return;
+	/** Capture the current turn's identity; close, /stop and /new invalidate it. */
+	getCardGeneration(channelId: string): symbol {
+		let generation = this.cardGenerations.get(channelId);
+		if (!generation) {
+			generation = Symbol(channelId);
+			this.cardGenerations.set(channelId, generation);
+		}
+		return generation;
+	}
+
+	isCardGenerationCurrent(channelId: string, generation: symbol): boolean {
+		return this.cardGenerations.get(channelId) === generation;
+	}
+
+	/** Get or create an AI card without joining an earlier turn's in-flight creation. */
+	async ensureCard(channelId: string, generation = this.getCardGeneration(channelId)): Promise<void> {
+		if (!this.config.cardTemplateId || !this.isCardGenerationCurrent(channelId, generation)) return;
 		const existing = this.activeCards.get(channelId);
 		if (existing && !existing.finished) return;
-		await this.createCard(channelId);
+		await this.createCard(channelId, generation);
 	}
 
 	/**
@@ -869,8 +882,9 @@ export class DingTalkBot implements MediaSender {
 		content: string,
 		finalize: boolean = false,
 		failed: boolean = false,
+		generation = this.getCardGeneration(channelId),
 	): Promise<boolean> {
-		return this.writeCard(channelId, content, { append: false, finalize, failed });
+		return this.writeCard(channelId, content, { append: false, finalize, failed }, generation);
 	}
 
 	/**
@@ -881,8 +895,9 @@ export class DingTalkBot implements MediaSender {
 		content: string,
 		finalize: boolean = false,
 		failed: boolean = false,
+		generation = this.getCardGeneration(channelId),
 	): Promise<boolean> {
-		return this.writeCard(channelId, content, { append: true, finalize, failed });
+		return this.writeCard(channelId, content, { append: true, finalize, failed }, generation);
 	}
 
 	/**
@@ -896,7 +911,9 @@ export class DingTalkBot implements MediaSender {
 		channelId: string,
 		content: string,
 		options: { append: boolean; finalize: boolean; failed: boolean },
+		generation: symbol,
 	): Promise<boolean> {
+		if (!this.isCardGenerationCurrent(channelId, generation)) return false;
 		const { append, finalize, failed } = options;
 		if (append && !content && !finalize && !failed) {
 			return true;
@@ -907,18 +924,18 @@ export class DingTalkBot implements MediaSender {
 			? !finalize && !failed && content.trim().length > 0
 			: content.trim().length > 0 || !finalize || failed;
 		if ((!card || card.finished) && this.config.cardTemplateId && shouldEnsure) {
-			await this.ensureCard(channelId);
+			await this.ensureCard(channelId, generation);
+			if (!this.isCardGenerationCurrent(channelId, generation)) return false;
 			card = this.activeCards.get(channelId);
 		}
 		if (!card || card.finished) {
-			if (finalize && content.trim()) {
-				return this.sendPlain(channelId, content);
-			}
 			return false;
 		}
 
-		const streamed = await this.streamCard(card, content, { append, finalize, failed });
-		if (!streamed || finalize || failed) {
+		// Never erase a visible card, including callers finishing with no new text.
+		const snapshot = !append && !content.trim() ? card.content || "处理已结束。" : content;
+		const streamed = await this.streamCard(card, snapshot, { append, finalize, failed });
+		if (streamed && (finalize || failed) && this.activeCards.get(channelId) === card) {
 			this.activeCards.delete(channelId);
 		}
 		return streamed;
@@ -927,16 +944,44 @@ export class DingTalkBot implements MediaSender {
 	/**
 	 * Finalize and remove the active card for a channel.
 	 */
-	async finalizeCard(channelId: string, content: string): Promise<boolean> {
-		const finalized = await this.replaceCard(channelId, content, true, false);
-		if (!finalized) {
+	async finalizeCard(
+		channelId: string,
+		content: string,
+		generation = this.getCardGeneration(channelId),
+	): Promise<boolean> {
+		if (!content.trim() || !this.isCardGenerationCurrent(channelId, generation)) return false;
+		const finalized = await this.replaceCard(channelId, content, true, false, generation);
+		if (!finalized && this.isCardGenerationCurrent(channelId, generation)) {
 			return this.sendPlain(channelId, content);
 		}
-		return true;
+		return finalized;
 	}
 
-	discardCard(channelId: string): void {
+	/** Finish progress only: never create a card or send a fallback chat message. */
+	async finalizeExistingCard(
+		channelId: string,
+		content: string,
+		generation = this.getCardGeneration(channelId),
+	): Promise<boolean> {
+		if (!this.isCardGenerationCurrent(channelId, generation) || !this.activeCards.has(channelId)) return false;
+		return this.replaceCard(channelId, content, true, false, generation);
+	}
+
+	/** Invalidate this turn's local state. This is not a remote message deletion. */
+	discardCard(channelId: string, generation = this.cardGenerations.get(channelId)): void {
+		if (!generation || !this.isCardGenerationCurrent(channelId, generation)) return;
+		this.cardGenerations.delete(channelId);
+		this.cardCreationAttempted.delete(generation);
+		const card = this.activeCards.get(channelId);
 		this.activeCards.delete(channelId);
+		// /stop and /new may invalidate a turn before its controller gets to finish.
+		if (card && !card.finished) {
+			void this.streamCard(card, `${card.content || "正在处理…"}\n\n处理已结束。`, {
+				append: false,
+				finalize: true,
+				failed: false,
+			});
+		}
 	}
 
 	/**
@@ -1222,7 +1267,7 @@ export class DingTalkBot implements MediaSender {
 	// Private - AI Card implementation
 	// ==========================================================================
 
-	private async createCard(channelId: string): Promise<AICard | null> {
+	private async createCard(channelId: string, generation: symbol): Promise<AICard | null> {
 		// Re-check under the singleflight: a concurrent caller may have already
 		// created the card while we awaited, so avoid a duplicate create.
 		const existing = this.activeCards.get(channelId);
@@ -1230,19 +1275,24 @@ export class DingTalkBot implements MediaSender {
 			return existing;
 		}
 		const inFlight = this.cardCreationInFlight.get(channelId);
-		if (inFlight) {
-			return inFlight;
+		if (inFlight?.generation === generation) {
+			return inFlight.promise;
 		}
-		const creation = this.createCardUncached(channelId).finally(() => {
-			this.cardCreationInFlight.delete(channelId);
+		// A failed create may already have reached DingTalk. Never mint another ID in this turn.
+		if (this.cardCreationAttempted.has(generation)) return null;
+		this.cardCreationAttempted.add(generation);
+		const creation = this.createCardUncached(channelId, generation).finally(() => {
+			if (this.cardCreationInFlight.get(channelId)?.generation === generation) {
+				this.cardCreationInFlight.delete(channelId);
+			}
 		});
-		this.cardCreationInFlight.set(channelId, creation);
+		this.cardCreationInFlight.set(channelId, { generation, promise: creation });
 		return creation;
 	}
 
-	private async createCardUncached(channelId: string): Promise<AICard | null> {
+	private async createCardUncached(channelId: string, generation: symbol): Promise<AICard | null> {
 		const token = await this.getAccessToken();
-		if (!token) return null;
+		if (!token || !this.isCardGenerationCurrent(channelId, generation)) return null;
 
 		const meta = this.getConversationMeta(channelId);
 		if (!meta) {
@@ -1266,6 +1316,7 @@ export class DingTalkBot implements MediaSender {
 			outTrackId: instanceId,
 			cardData: {
 				cardParamMap: {
+					[this.config.cardTemplateKey || "content"]: "正在处理…",
 					sys_full_json_obj: JSON.stringify({
 						config: {
 							autoLayout: this.config.cardAutoLayout ?? true,
@@ -1309,14 +1360,34 @@ export class DingTalkBot implements MediaSender {
 			templateKey: this.config.cardTemplateKey || "content",
 			createdAt: Date.now() / 1000,
 			lastUpdated: Date.now() / 1000,
-			content: "",
+			content: "正在处理…",
 			finished: false,
 		};
+		if (!this.isCardGenerationCurrent(channelId, generation)) {
+			await this.streamCard(card, "处理已结束。", { append: false, finalize: true, failed: false });
+			return null;
+		}
 		this.activeCards.set(channelId, card);
 		return card;
 	}
 
 	private async streamCard(card: AICard, content: string, options: CardStreamOptions): Promise<boolean> {
+		// A stop/new-session close can arrive while the prior HTTP write is in flight.
+		// Order writes by instance so that close remains the last update to the old card.
+		const pending = (card.pendingWrite ?? Promise.resolve(true))
+			.then(async () => {
+				if (card.finished) return false;
+				return this.streamCardRequest(card, content, options);
+			})
+			.catch((error: unknown) => {
+				log.logWarning("DingTalk Card: streaming failed", errorMessage(error));
+				return false;
+			});
+		card.pendingWrite = pending;
+		return pending;
+	}
+
+	private async streamCardRequest(card: AICard, content: string, options: CardStreamOptions): Promise<boolean> {
 		// Refresh token if needed
 		const ageSecs = Date.now() / 1000 - card.createdAt;
 		if (ageSecs > TOKEN_REFRESH_SECS) {
@@ -1704,6 +1775,9 @@ export class DingTalkBot implements MediaSender {
 			const card = this.activeCards.get(channelId);
 			if (card && card.lastUpdated * 1000 > cutoff) continue;
 			this.activeCards.delete(channelId);
+			const generation = this.cardGenerations.get(channelId);
+			if (generation) this.cardCreationAttempted.delete(generation);
+			this.cardGenerations.delete(channelId);
 			this.convMeta.delete(channelId);
 			this.queues.delete(channelId);
 			this.channelLastActiveAt.delete(channelId);

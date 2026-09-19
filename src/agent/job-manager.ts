@@ -911,8 +911,7 @@ export class ChannelJobManager {
 			ts: String(Date.now()),
 			conversationType: this.channelId.startsWith("group_") ? "2" : "1",
 			dispatchId: `job:${this.channelId}:${record.id}:done`,
-			// P0-2: a user is waiting on this job's result — render the resulting turn's progress
-			// instead of the "none" style autonomous check-ins get.
+			// The result is awaited; the wake itself still runs without a progress card.
 			presentation: "awaited",
 			...(record.contract.taskId
 				? {

@@ -849,6 +849,7 @@ describe("dingtalk", () => {
 			expect.objectContaining({
 				cardData: {
 					cardParamMap: {
+						content: expect.stringMatching(/\S/),
 						sys_full_json_obj: JSON.stringify({
 							config: {
 								autoLayout: true,

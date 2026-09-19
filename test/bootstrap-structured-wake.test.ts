@@ -22,6 +22,8 @@ vi.mock("../src/agent/runner-factory.js", async () => {
 const tempDir = useTempDirs("pipiclaw-bootstrap-wake-");
 
 class WakeBot {
+	getCardGeneration = () => Symbol("test-card-turn");
+	isCardGenerationCurrent = () => true;
 	readonly events: DingTalkEvent[] = [];
 	start = vi.fn(async () => {});
 	stop = vi.fn(async () => {});
@@ -321,7 +323,7 @@ describe("runtime structured wake delivery", () => {
 		}
 	});
 
-	it("renders progress for an 'awaited' synthetic wake, and stays silent for an ordinary background one (P0-2)", async () => {
+	it("keeps both awaited completions and background checks free of progress cards", async () => {
 		const harness = await createHarness("presentation");
 		const awaited: DingTalkEvent = {
 			type: "dm",
@@ -337,7 +339,7 @@ describe("runtime structured wake delivery", () => {
 		await harness.runtime.handler.handleEvent(awaited, harness.bot as unknown as DingTalkBot, true);
 		expect(harness.fakeRunner.run).toHaveBeenCalledOnce();
 		const runMock = harness.fakeRunner.run as unknown as Mock;
-		expect(runMock.mock.calls[0]?.[0]?.progressStyle).not.toBe("none");
+		expect(runMock.mock.calls[0]?.[0]?.progressStyle).toBe("none");
 
 		const background: DingTalkEvent = {
 			...awaited,

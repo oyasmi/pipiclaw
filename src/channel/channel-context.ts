@@ -84,6 +84,7 @@ export interface ChannelContext {
 	respondInThread: (text: string) => Promise<void>;
 	setTyping: (isTyping: boolean) => Promise<void>;
 	setWorking: (working: boolean) => Promise<void>;
+	/** End without a final answer. Transports may preserve already-visible progress. */
 	deleteMessage: () => Promise<void>;
 	primeCard: (delayMs: number) => void;
 	flush: () => Promise<void>;
@@ -101,8 +102,7 @@ export interface ChannelContext {
  * something to say routes it through `task_step_end`'s `notify` — which the runtime delivers on
  * the real context after the step ends.
  *
- * Card/typing/lifecycle calls pass through: they affect no transcript and keep the transport's
- * own state machine consistent.
+ * Lifecycle calls pass through for cleanup; card priming is a visible write and is muted too.
  */
 export function muteChannelContext(ctx: ChannelContext): ChannelContext {
 	return {
@@ -111,5 +111,6 @@ export function muteChannelContext(ctx: ChannelContext): ChannelContext {
 		respondPlain: async () => true,
 		replaceMessage: async () => undefined,
 		respondInThread: async () => undefined,
+		primeCard: () => undefined,
 	};
 }

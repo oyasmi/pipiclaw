@@ -76,9 +76,9 @@ export interface ChannelEvent {
 	/**
 	 * Purely a display hint: `"awaited"` marks a synthetic wake a human is actually waiting on (a
 	 * delegation or background job finishing), as opposed to an autonomous check-in (task-driver
-	 * polling, a scheduled event) that normally has nothing to say. The runtime uses it to decide
-	 * whether the resulting turn renders progress or stays silent until a final answer — it must
-	 * never gate task activation or any other trust decision; that stays on `internalWake` alone.
+	 * polling, a scheduled event) that normally has nothing to say. All synthetic wakes now
+	 * deliver only their result; this metadata does not enable progress cards or gate task
+	 * activation. Trust decisions stay on `internalWake` alone.
 	 */
 	presentation?: "awaited";
 }

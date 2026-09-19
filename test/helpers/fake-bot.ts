@@ -2,6 +2,8 @@ import type { FinalDelivery, ProgressStyle } from "../../src/channel/channel-con
 import { type DingTalkEvent, finalDeliveryOf, progressStyleOf, type ResponseMode } from "../../src/runtime/dingtalk.js";
 
 export class FakeDingTalkBot {
+	getCardGeneration = () => Symbol("test-card-turn");
+	isCardGenerationCurrent = () => true;
 	calls: Array<{ method: string; args: unknown[] }> = [];
 	responseMode: ResponseMode = "full_progress_then_plain_final";
 	private readonly returnValues = new Map<string, unknown>();

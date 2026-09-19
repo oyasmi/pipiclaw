@@ -8,7 +8,7 @@ import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
 import type { AgentRunner } from "../agent/types.js";
 import { prepareAppServices } from "../app-services.js";
 import { createFreshActiveSession } from "../channel/active-session-store.js";
-import { muteChannelContext } from "../channel/channel-context.js";
+import { type ChannelContext, muteChannelContext } from "../channel/channel-context.js";
 import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
 import { type ChannelIndex, createChannelIndex } from "../channel/channel-index.js";
 import { ensureChannelDir, getChannelDir } from "../channel/channel-paths.js";
@@ -737,6 +737,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			await getDurableDispatch()?.markStarted(event.dispatchId);
 			let structuredWakeFinalized = event.internalWake === undefined;
 			const task = (async () => {
+				let baseCtx: ChannelContext | undefined;
 				try {
 					// Computed before archiving so a command's own text can be excluded from
 					// memory-extraction input (review 2026-08-24 §1.2): it is control-plane
@@ -758,16 +759,15 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					);
 
 					// Background wakes deliver their result, not their process: no progress card, no
-					// thinking stream, nothing to delete when the check-in ends `[SILENT]`. An "awaited"
-					// wake (a delegation or job finishing) is the opposite — a human is actually waiting
-					// on it — so it renders progress the same way a normal message does (P0-2).
-					const backgroundOnly = Boolean(_isEvent) && event.presentation !== "awaited";
+					// thinking stream, nothing to clean up when a check-in ends `[SILENT]`.
+					// Awaited completions deliver their result too, without opening another progress card.
+					const backgroundOnly = Boolean(_isEvent);
 					// Spec 051, D3: a task-driver dispatch runs as a *task step* — in the task cycle's
 					// own session, with a brief instead of the wake text, and silent unless the step
 					// asked for a notify. Everything below (busy state, /stop, delivery) is unchanged;
 					// only which session the turn is bound to, and what reaches the channel, differ.
 					let taskStep: { taskId: string; brief: string } | undefined;
-					let baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
+					baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
 					let ctx = baseCtx;
 
 					if (builtInCommand) {
@@ -828,9 +828,6 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						ctx: { channelId: event.channelId, userName: event.userName },
 						fields: { messageLength: event.text.length, source: _isEvent ? "event" : "message" },
 					});
-					if (!backgroundOnly) {
-						ctx.primeCard(350);
-					}
 					// Both wake formats below carry an unauthenticated claim in plain text: anything
 					// that can put a message on this channel can *write* "[JOB:x] ... belongs to task
 					// y." or "[SUBAGENT:x] ... belongs to task y." — including another user, or an
@@ -912,10 +909,12 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					// first: routing directly from user-controlled wake text would grant task-only tools.
 					taskStep = await prepareTaskStep(event, runner);
 					if (taskStep) {
+						await baseCtx.close();
 						event = { ...event, text: taskStep.brief };
-						baseCtx = createDingTalkContext(event, bot, store, backgroundOnly ? "none" : undefined);
+						baseCtx = createDingTalkContext(event, bot, store, "none");
 						ctx = muteChannelContext(baseCtx);
 					}
+					if (!backgroundOnly && !taskStep) ctx.primeCard(1500);
 					const result = await runner.run(ctx, store);
 					if (taskStep) await finishTaskStep(event.channelId, taskStep.taskId, bot);
 
@@ -928,6 +927,9 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						fields: { error: errorMessage(err) },
 					});
 				} finally {
+					await baseCtx?.close().catch((error: unknown) => {
+						log.logWarning(`[${event.channelId}] Failed to close delivery`, errorMessage(error));
+					});
 					if (structuredWakeFinalized) await getDurableDispatch()?.markCompleted(event.dispatchId);
 					else await getDurableDispatch()?.markRetryable(event.dispatchId);
 					runner.endTurn();

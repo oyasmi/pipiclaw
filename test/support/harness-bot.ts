@@ -50,7 +50,13 @@ export class HarnessDingTalkBot extends DingTalkBot {
 		return true;
 	}
 
-	override discardCard(channelId: string): void {
+	override async finalizeExistingCard(channelId: string, content: string): Promise<boolean> {
+		this.capture("finalizeExistingCard", channelId, content);
+		return true;
+	}
+
+	override discardCard(channelId: string, generation?: symbol): void {
 		this.capture("discardCard", channelId);
+		super.discardCard(channelId, generation);
 	}
 }

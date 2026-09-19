@@ -7,7 +7,8 @@ import type { DingTalkBot } from "./dingtalk.js";
 
 const MIN_UPDATE_INTERVAL_MS = 800;
 const ROLLING_WINDOW_SIZE = 3;
-const NO_CONTENT = "";
+const WAITING_TEXT = "正在处理…";
+const MAX_PROGRESS_FAILURES = 2;
 // DingTalk's card renderer swallows a bare "\n" between plain lines (and a blank-line
 // paragraph break leaves too much vertical gap), but it does reliably break a markdown
 // list onto separate lines. Render each progress entry as a list item instead.
@@ -30,6 +31,9 @@ class ChannelDeliveryController {
 	private running = false;
 	private closed = false;
 	private finalResponseDelivered = false;
+	private ending = false;
+	private progressFailures = 0;
+	private readonly cardGeneration: symbol;
 	private cardWarmupScheduled = false;
 	private cardWarmupTriggered = false;
 	private progressStartedAt = 0;
@@ -49,7 +53,13 @@ class ChannelDeliveryController {
 		private store: ChannelStore,
 		/** Per-turn override of the channel's configured progress style; see `createDingTalkContext`. */
 		private readonly progressStyleOverride?: ProgressStyle,
-	) {}
+	) {
+		this.cardGeneration = bot.getCardGeneration(event.channelId);
+	}
+
+	private get isCurrent(): boolean {
+		return this.bot.isCardGenerationCurrent(this.event.channelId, this.cardGeneration);
+	}
 
 	/** The style this turn actually delivers with: the override when present, else the channel's. */
 	private get progressStyle(): ProgressStyle {
@@ -74,7 +84,7 @@ class ChannelDeliveryController {
 			respondPlain: async (text: string, shouldLog = true, title?: string) => this.sendFinal(text, shouldLog, title),
 			replaceMessage: async (text: string) => this.replaceWithFinal(text),
 			respondInThread: async (text: string) => {
-				if (this.closed || !text.trim()) {
+				if (this.closed || !this.isCurrent || !text.trim()) {
 					return;
 				}
 				const delivered = await this.bot.sendPlain(this.event.channelId, text);
@@ -94,7 +104,13 @@ class ChannelDeliveryController {
 	}
 
 	private primeCard(delayMs: number): void {
-		if (this.closed || this.finalResponseDelivered || this.cardWarmupScheduled || this.cardWarmupTriggered) {
+		if (
+			this.closed ||
+			this.ending ||
+			this.progressStyle === "none" ||
+			this.cardWarmupScheduled ||
+			this.cardWarmupTriggered
+		) {
 			return;
 		}
 
@@ -103,24 +119,13 @@ class ChannelDeliveryController {
 			() => {
 				this.cardWarmupScheduled = false;
 				this.cardWarmupTimer = null;
-				void this.triggerCardWarmup();
+				if (this.closed || this.ending || !this.isCurrent || this.desiredRevision > 0) return;
+				this.cardWarmupTriggered = true;
+				// Use the same serialized loop as progress and completion; no detached create request.
+				this.bumpRevision(true);
 			},
 			Math.max(0, delayMs),
 		);
-	}
-
-	private async triggerCardWarmup(): Promise<void> {
-		if (this.closed || this.finalResponseDelivered || this.desiredRevision > 0) {
-			return;
-		}
-
-		this.cardWarmupTriggered = true;
-		try {
-			await this.bot.ensureCard(this.event.channelId);
-		} catch (err) {
-			log.logWarning(`[${this.event.channelId}] Failed to warm AI card`, errorMessage(err));
-			this.bot.discardCard(this.event.channelId);
-		}
 	}
 
 	private clearCardWarmup(): void {
@@ -138,7 +143,7 @@ class ChannelDeliveryController {
 	}
 
 	private async appendProgress(text: string, shouldLog: boolean): Promise<void> {
-		if (this.closed || this.finalResponseDelivered || !text.trim()) return;
+		if (this.closed || this.ending || !this.isCurrent || !text.trim()) return;
 		// Final-card-only mode shows no progress; ignore any stray progress writes
 		// so we never create or flicker a card before the final replacement.
 		if (this.progressStyle === "none") return;
@@ -174,9 +179,12 @@ class ChannelDeliveryController {
 	}
 
 	private async sendFinal(text: string, shouldLog: boolean, title?: string): Promise<boolean> {
-		if (this.closed || this.finalResponseDelivered) return this.finalResponseDelivered;
+		if (this.closed || this.ending || !this.isCurrent || !text.trim()) return this.finalResponseDelivered;
 
+		this.ending = true;
 		this.clearCardWarmup();
+		if (this.timer) clearTimeout(this.timer);
+		this.timer = null;
 
 		const delivered = await this.bot.sendPlain(
 			this.event.channelId,
@@ -200,19 +208,24 @@ class ChannelDeliveryController {
 	}
 
 	private async replaceWithFinal(text: string): Promise<void> {
-		if (this.closed || this.finalResponseDelivered) return;
+		if (this.closed || this.finalResponseDelivered || !this.isCurrent || !text.trim()) return;
 
+		this.ending = true;
 		this.clearCardWarmup();
 		this.finalReplacementText = text;
 		this.mode = "finalize-with-fallback";
 		this.bumpRevision(true);
+		await this.flush();
+		if (!this.finalResponseDelivered && this.isCurrent) {
+			throw new Error("最终答复发送失败，请稍后重试。");
+		}
 	}
 
 	private async silence(): Promise<void> {
-		if (this.closed) return;
+		if (this.closed || this.finalResponseDelivered) return;
 
+		this.ending = true;
 		this.clearCardWarmup();
-		this.finalResponseDelivered = true;
 		this.mode = "silent";
 		this.bumpRevision(true);
 	}
@@ -261,7 +274,7 @@ class ChannelDeliveryController {
 				const progressText =
 					mode === "progress" && this.progressStyle === "rolling" && body
 						? `${this.buildRollingHeader()}\n\n${body}`
-						: body;
+						: body || (this.cardWarmupTriggered ? WAITING_TEXT : "");
 				const throttleBaseAt = this.lastDeliveredAt > 0 ? this.lastDeliveredAt : this.progressWindowStartedAt;
 				if (mode === "progress" && throttleBaseAt > 0) {
 					const remaining = MIN_UPDATE_INTERVAL_MS - (Date.now() - throttleBaseAt);
@@ -281,62 +294,64 @@ class ChannelDeliveryController {
 
 				try {
 					if (mode === "progress") {
-						if (content) {
+						if (content && this.isCurrent && this.progressFailures < MAX_PROGRESS_FAILURES) {
 							const nextSentChars = progressText.length;
-							if (this.replayRequired) {
-								touchedRemote = await this.bot.replaceCard(this.event.channelId, progressText);
+							if (this.replayRequired || this.sentProgressChars === 0) {
+								touchedRemote = await this.bot.replaceCard(
+									this.event.channelId,
+									progressText,
+									false,
+									false,
+									this.cardGeneration,
+								);
 							} else {
 								const delta = progressText.slice(this.sentProgressChars);
-								touchedRemote = delta ? await this.bot.appendToCard(this.event.channelId, delta) : true;
+								touchedRemote = delta
+									? await this.bot.appendToCard(this.event.channelId, delta, false, false, this.cardGeneration)
+									: true;
 							}
 							if (!touchedRemote) {
-								this.bot.discardCard(this.event.channelId);
+								this.progressFailures++;
 								this.replayRequired = true;
 							} else {
-								this.sentProgressChars = nextSentChars;
+								this.sentProgressChars = body ? nextSentChars : 0;
 								this.replayRequired = false;
 							}
 						}
 					} else if (mode === "finalize-existing") {
 						if (content || this.cardWarmupTriggered) {
-							const isRolling = this.progressStyle === "rolling";
-							const finalProgressText = isRolling ? this.buildSummaryText() : progressText;
-							// A warmed-but-empty card in full mode has nothing to show, so it finalizes
-							// blank; rolling mode always has its closing summary to put there.
-							// (`||` binds tighter than `?:` — this used to read as one condition and
-							// was a standing invitation to misparse it.)
-							const finalCardText = content || isRolling ? finalProgressText : NO_CONTENT;
-							touchedRemote = await this.bot.replaceCard(this.event.channelId, finalCardText, true);
-							if (!touchedRemote) {
-								this.bot.discardCard(this.event.channelId);
-							} else {
-								this.sentProgressChars = finalProgressText.length;
-								this.replayRequired = false;
-							}
-						} else {
-							this.bot.discardCard(this.event.channelId);
+							const finalProgressText =
+								this.progressStyle === "rolling"
+									? this.buildSummaryText()
+									: [body, "答复已发送。"].filter(Boolean).join("\n\n");
+							touchedRemote = await this.bot.finalizeExistingCard(
+								this.event.channelId,
+								finalProgressText,
+								this.cardGeneration,
+							);
 						}
 					} else if (mode === "finalize-with-fallback") {
 						if (replacementText.trim()) {
-							touchedRemote = await this.bot.finalizeCard(this.event.channelId, replacementText);
-							if (!touchedRemote) {
-								this.bot.discardCard(this.event.channelId);
-							}
-						} else {
-							this.bot.discardCard(this.event.channelId);
+							touchedRemote = await this.bot.finalizeCard(
+								this.event.channelId,
+								replacementText,
+								this.cardGeneration,
+							);
+							this.finalResponseDelivered = touchedRemote;
 						}
 					} else if (mode === "silent") {
-						if (this.cardWarmupTriggered) {
-							touchedRemote = await this.bot.replaceCard(this.event.channelId, NO_CONTENT, true);
-						}
-						if (!touchedRemote) {
-							this.bot.discardCard(this.event.channelId);
+						if (content) {
+							touchedRemote = await this.bot.finalizeExistingCard(
+								this.event.channelId,
+								[body, "处理已结束。"].filter(Boolean).join("\n\n"),
+								this.cardGeneration,
+							);
 						}
 					}
 				} catch (err) {
 					log.logWarning(`[${this.event.channelId}] Delivery sync failed`, errorMessage(err));
-					this.bot.discardCard(this.event.channelId);
 					if (mode === "progress") {
+						this.progressFailures++;
 						this.replayRequired = true;
 					}
 				}
@@ -402,7 +417,12 @@ class ChannelDeliveryController {
 
 		this.closed = true;
 		this.clearCardWarmup();
+		if (this.mode === "progress") {
+			this.mode = "silent";
+			this.bumpRevision(true);
+		}
 		await this.flush();
+		this.bot.discardCard(this.event.channelId, this.cardGeneration);
 	}
 
 	private getProgressText(): string {
@@ -475,8 +495,7 @@ class ChannelDeliveryController {
  *
  * `progressStyleOverride` lets the caller quiet a turn the user did not ask for. Background wakes
  * (task driver, finished jobs, scheduled events) pass `"none"`: without it every autonomous step
- * created an AI card in the human's conversation, streamed the model's thinking into it, and — for
- * the `[SILENT]` turns that are the *normal* outcome of a check-in — deleted the card again. The
+ * created an AI card in the human's conversation even when the check-in ended `[SILENT]`. The
  * final answer is unaffected; it is delivered by `respondPlain`/`replaceMessage` either way, so a
  * background turn that has something to say still says it.
  */
