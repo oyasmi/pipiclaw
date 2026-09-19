@@ -56,7 +56,7 @@ run/job 派发时即带 taskId；先完成独立工作和必要的并行派发�
 
 signal 事件必须在聊天侧预建为 task.<channelId>.<taskId>.<use> 的 periodic；循环先检查条件，未满足才等待。缺少事件且不能自主继续时 blocked 说明缺什么，不绕过工具限制。
 
-票自带 runtime 兜底。过期后的 brief 会标明等待来源：先检查真实状态，再继续或换票；同 cycle 第二次过期停止并通知用户。预算任一项耗尽也会停止；这些回执由 runtime 发出，无需再花模型回合解释。用户命令 `/tasks resume <id>` 恢复、`/tasks reply <id> ...` 回答阻塞问题。
+票自带 runtime 兜底。过期后的 brief 会标明等待来源：先检查真实状态，再继续或换票；同 cycle 第二次过期停止并通知用户。预算任一项耗尽也会停止；回执由 runtime 发出。用户用 `/tasks reply <id> ...` 回答阻塞问题；手工暂停或票过期可直接 `/tasks resume <id>`，`steps`/`rounds`/`usd` 耗尽要同时 `+...` 加码，`wallMin`/`until` 耗尽则先让 Agent 用 `task_update` 调整预算再恢复。
 
 ## 外部动作
 

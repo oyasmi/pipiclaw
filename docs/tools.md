@@ -28,7 +28,7 @@
 | `event_manage` | 创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
 | `task_list` | 列出台账里的活跃任务 | 开 | `tools.tasks.enabled` | 否 |
 | `task_create` | 创建长程任务 | 开 | `tools.tasks.enabled` | 否 |
-| `task_update` | checkpoint 进展（带 note）或元数据编辑（不带 note） | 开 | `tools.tasks.enabled` | 否 |
+| `task_update` | 记录进展（带 note）或编辑元数据（不带 note） | 开 | `tools.tasks.enabled` | 否 |
 | `task_close` | 完成/跳过/取消任务 | 开 | `tools.tasks.enabled` | 否 |
 | `task_log` | 读任务的循环日志（步骤、验收轮次、票据过期、周期收尾） | 开 | `tools.tasks.enabled` | 否 |
 | `task_step_end` | 结束任务循环的一步：continue / park / done / blocked | 开 | `tools.tasks.enabled`，且只在任务会话里注册 | 否 |
@@ -61,7 +61,7 @@
 
 `bash` 传 `async: true` 立即返回 job id，命令在后台继续跑；`job` 负责之后的 `list` / `poll` / `cancel`。
 
-关键约束：每个 channel 最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<channelId>/`，daemon 重启后会认领仍在运行的作业；runtime sweeper 约每 30 秒检查一次，作业完成后自动唤醒对应 channel 并带上输出尾部。已结束作业保留 24 小时供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
+关键约束：每个 channel 最多 **5 个**同时运行的作业；`poll` 单次最多等约 **30 秒**。在 DingTalk daemon 中，作业记录持久化在 `${PIPICLAW_HOME:-~/.pipiclaw}/state/jobs/<channelId>/`，重启后会认领仍在运行的作业；runtime sweeper 约每 30 秒检查一次，完成后自动唤醒对应 channel 并带上输出尾部。TUI 不提供这套常驻恢复与完成投递，退出前应取回所需结果。已结束作业保留 24 小时供 `list` / `poll` 查看，重要产物仍应由命令自己写进文件。
 
 ## 网页工具（`web_search` / `web_fetch`）
 
@@ -84,7 +84,7 @@
 
 | 工具 | 写到哪 | 什么时候用 |
 |---|---|---|
-| `memory_save` / `memory_forget` | 频道 `MEMORY.md` | 用户说"记住/以后默认/别再这样/忘掉"时立即写 |
+| `memory_save` / `memory_forget` | 频道 `memory/<name>.md`，并重建 `MEMORY.md` 索引 | 用户说"记住/以后默认/别再这样/忘掉"时立即写 |
 | `skill` (只读) + `write`/`edit` | `workspace/skills/` | 某个流程跨任务可复用时沉淀 |
 | `session_search` | 只读 `log.jsonl` / `context.jsonl` | 用户引用较早的对话、而工作记忆里没有时 |
 

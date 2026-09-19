@@ -15,7 +15,7 @@
 
 两者共用一个角色目录（`workspace/sub-agents/`）、一套 run 生命周期和控制面（`subagent_list` / `subagent_run` 工具 / `/subagents` 命令）。调用面按形状分两个工具：`subagent` 选一个已配置角色（内置或外部都走它），`subagent_inline` 是没有合适角色时的一次性内置执行者。角色目录会同时展示 runtime、工作量和是否写入，主智能体据此选择最合适的执行者。
 
-在独立验收（verifier）场景里，子代理会和任务台账咬合（`purpose: verify` + `taskId`）；这些接缝会在下面点明，并链接回 [events-and-tasks.md](./events-and-tasks.md)。
+在独立验收（verifier）场景里，子代理会和任务台账咬合（`purpose: verify` + `taskId`）；这些接缝会在下面点明，并链接回 [events-and-tasks.md](./events-and-tasks.md#独立验收)。
 
 ## 五分钟启用一个外部角色
 
@@ -251,7 +251,7 @@ maxWallTimeSec: 5400
 
 ## 控制面：`subagent_list` / `subagent_run` 与 `/subagents`
 
-`subagent` 工具的调用 schema 完全不变；内外差异全部封装在角色配置和 runtime 内部。查看/控制在途或历史 run 用另一个工具/命令：
+`subagent` 只接收命名角色的路由字段；`subagent_inline` 才承载一次性内置执行者的覆盖字段。查看或控制在途与历史 run 使用下面的工具和命令：
 
 **模型侧**——`subagent_list`（零参数快照）与 `subagent_run`（`op` = show / cancel / follow_up，均按 `runId`）：
 
@@ -260,7 +260,7 @@ maxWallTimeSec: 5400
 | `subagent_list` | 本频道 run 快照：runId、角色、状态、已运行时长、taskId、产物目录、锁持有情况（零参数） |
 | `subagent_run op=show` | 单个 run 的完整机器可读细节：实际 argv、派发时的警告（如 `$MODEL` 占位符被丢弃）、适配器/CLI 版本、外部 run 的 stderr 尾部。一个失败的外部 run 想自诊断而不是凭空重派时用这个 |
 | `subagent_run op=cancel` | 按 runId 终止。外部杀进程组，内置调用 abort；不触发完成唤醒——这是模型自己的决定 |
-| `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落。`op=follow_up` 成功派发会计入 effect ledger（spec 047），治理器据此判断进度 |
+| `subagent_run op=follow_up` | 在一个已结束、且 harness 支持续接（`claude-code`/`codex-cli`）的外部 run 上追加一轮，产生**新的 runId**。内置 run 没有可续接的会话，会得到明确拒绝而不是回落 |
 
 `follow_up` 派发时走的是与首次派发**同一套信封构造**：运行时上下文（含这次续接自己新分配的产物目录）、`paths`/会话/记忆上下文块、以及 `purpose=verify` 时的验收协议，而不是一段只把原始指令转发过去的手写文本。verify 的准入检查（`exec` 不能验收）也在 `follow_up` 上重新核对一遍；当前角色若声明 `mutates: write`，续接会像首次派发一样先取得目标工作区独占 lease，并以 `advisory` 强度运行。
 
@@ -346,7 +346,8 @@ my-gateway/gpt-4.1
 | 内置（含 inline） | `medium`——与主代理自己的默认推理档对齐；不支持推理的模型会被 clamp 到 `off`，不支持该档位的模型会被 clamp 到最接近的可用档 |
 | 外部 · `purpose=work` | **不兜底**，保持未指定——runtime 无权替另一个 CLI 决定推理档位，不追加任何 effort 参数，沿用目标 CLI 自己的配置（如 `~/.claude/settings.json` / `~/.codex/config.toml`） |
 | 外部 · `purpose=verify` | `medium`——独立验收是产物被信任前最后一道无人值守的闸门，宁可显式要求推理 |
-| 任意场景 · 显式指定 | 该值（调用参数 > 角色 frontmatter），内置路径同样会按模型能力 clamp |
+| 命名角色 · frontmatter 显式指定 | 使用角色值；内置路径仍按模型能力 clamp |
+| inline · 调用时显式指定 | 使用调用值；内置路径仍按模型能力 clamp |
 
 可复用的生产配置建议显式填写，避免角色行为依赖隐藏默认值：
 
@@ -398,7 +399,7 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 - verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`；run 结算时运行时自动校验并把这一轮写进任务的返工账本（`tasks/<id>.jsonl`），主代理不需要导入。普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 - **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
 
-> `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合派发、停泊与 `complete`——见 [events-and-tasks.md](./events-and-tasks.md#verification)。
+> `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合派发、停泊与 `complete`——见 [events-and-tasks.md](./events-and-tasks.md#独立验收)。
 
 ## 授权与安全边界（外部角色）
 

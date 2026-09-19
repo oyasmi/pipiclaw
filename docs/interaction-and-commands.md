@@ -26,7 +26,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 | 场景 | 频道 ID | 隔离效果 |
 |---|---|---|
-| 钉钉私聊 | `dm_<staffId>` | 不同人的私聊互不可见 |
+| 钉钉私聊 | `dm_<staffId>` | 每个人有独立会话和记忆 |
 | 钉钉群聊 | `group_<conversationId>` | 每个群有独立上下文和记忆 |
 | 默认 TUI | `tui_local` | 本机终端独立频道 |
 
@@ -74,6 +74,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 | `/usage [7d\|month]` | 查看频道与全局用量、成本和未知用量条目 |
 | `/context [detail]` | 查看 system prompt 分段、工具 schema 和动态上下文体量 |
 | `/subagents ...` | 查看、控制委派 run 和角色目录 |
+| `/project [set <绝对路径>\|reset]` | 查看或切换本频道的项目目录；切换需频道空闲 |
 | `/skills [list\|show <name>]` | 列出工作区 skills（含未通过内容扫描而未加载的，附原因），或查看单个 skill 的完整正文 |
 
 常用任务命令：
@@ -82,9 +83,11 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 /tasks
 /tasks show <id>
 /tasks pause <id>
-/tasks resume <id>
+/tasks resume <id> [+steps N|+rounds N|+usd X]
 /tasks run <id>
-/tasks set <id> <wake|next|deadline> <值>
+/tasks steer <id> <内容>
+/tasks reply <id> <内容>
+/tasks log <id> [cycle]
 /tasks doctor
 ```
 
@@ -105,7 +108,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 
 | 命令 | 作用 |
 |---|---|
-| `/memory [status\|list\|show <id>\|recent]` | 查看生效记忆、元数据、召回统计、墓碑和近期写入/删除活动 |
+| `/memory [status\|list [type]\|show <name>\|journal [date]\|forget <name>]` | 查看或删除频道记忆，并查看 journal |
 | `/session` | 查看当前会话、消息、token 和模型状态 |
 | `/thinking [level\|cycle]` | 查看或切换当前模型的推理强度 |
 | `/model [provider/modelId]` | 查看或切换模型；唯一子串也可匹配 |
@@ -117,6 +120,8 @@ Workspace skill 用 `/skills` 查看目录、用 `/skills show <name>` 查看正
 ## 附件交付
 
 `send_media` 可以把本地图片和文件直接交付到当前会话。钉钉中图片以内联图片发送，其他文件作为可下载附件；TUI 会复制到终端下载目录并显示实际路径。目标频道由运行时绑定，模型不能自行指定另一个接收者。
+
+钉钉也支持接收单张图片和富文本中的图片：每条消息最多 9 张、每张最多 5 MiB，识别 JPEG、PNG、GIF 和 WebP。图片会按原顺序进入本轮上下文；实际理解能力仍取决于当前模型是否支持图片。下载失败、格式不识别或超限时，回复会说明该图片未加入上下文。
 
 ## 常见问题
 

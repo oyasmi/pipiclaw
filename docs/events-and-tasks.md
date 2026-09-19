@@ -289,7 +289,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 }
 ```
 
-任务的继续、等待、异常恢复**以及周期节奏**都由内建 task driver 根据任务文件驱动（`wake` + `schedule` frontmatter），**不要**再为任务创建配套事件；旧的任务事件与 `.schedule` 命名约定已经退役。event 层只负责与 task 无关的提醒和外部传感器，任务模型见下方[任务台账](#第二部分任务台账tasks)。
+任务的继续、等待、异常恢复和周期节奏由 task driver 根据等待票与 `schedule` 驱动，不要为普通 task 轮询另建事件。只有需要外部条件传感器时，才创建 task-owned periodic event，并让任务停在对应 `signal` 票上；旧的 `.schedule` 任务事件已退役。任务模型见下方[任务台账](#第二部分长程任务tasks)。
 
 ## 推荐场景（Recommended Patterns）
 
@@ -299,7 +299,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 {
   "type": "periodic",
   "channelId": "dm_your-staff-id",
-  "text": "检查当前 workspace 和 channel 的 MEMORY.md，删除过时项、合并重复项，并补充长期有效的事实。",
+  "text": "检查本频道的长期记忆，报告过时或冲突条目；修改时使用记忆工具，不直接编辑生成的 MEMORY.md。",
   "schedule": "0 10 * * 1"
 }
 ```

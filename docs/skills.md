@@ -37,7 +37,7 @@ Pipiclaw 只支持工作区级 skills，不存在频道级 skill 目录。同一
 | `skills/` | 遇到某类工作具体怎么做？ | 发布、巡检、报告、第三方工具 SOP |
 | `sub-agents/` | 这一步该由谁在独立上下文里完成？ | claude-main、codex-high、glm-flash、explorer |
 | runtime playbooks | 当前版本的 Pipiclaw 机制怎样工作？ | task、event、memory、delegation 的内置协议 |
-| task 文件 | 这一项工作现在做到哪里？ | Goal、DoD、Plan、证据、下一步、wake |
+| task 文件 | 这一项工作现在做到哪里？ | Goal、DoD、Plan、证据、预算、等待票 |
 
 ## 创建和维护
 

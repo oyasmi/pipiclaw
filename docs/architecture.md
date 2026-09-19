@@ -37,8 +37,8 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | `src/tools/` | 交给 agent 的工具集，单一声明式注册表 | `registry.ts`（唯一事实源）、各 `create*Tool` |
 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
 | `src/subagents/` | 子代理发现、run 生命周期（内置+外部统一）、workspace 写锁、外部 harness 适配器 | `discovery.ts`、`tool.ts`、`runs.ts`、`workspace-lease.ts`、`external/`（`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`exec.ts`） |
-| `src/tasks/` + `src/shared/task-ledger.ts` | 持久任务的控制块、验证、存储 | `control.ts`、`store.ts`、`verification.ts` |
-| `src/events/events.ts` + `src/tools/event-manage.ts` | 定时/传感器事件 | — |
+| `src/tasks/` | 持久任务的契约、等待票、预算、循环日志与验证 | `frontmatter.ts`、`ticket.ts`、`budget.ts`、`store.ts`、`verification.ts` |
+| `src/events/` | 定时/传感器事件定义、校验和命令 | `events.ts`、`event-validation.ts`、`event-commands.ts` |
 | `src/tui/` | 终端前端（第二个 `ChannelContext` 实现） | `cli.ts`、`app.ts`、`turn-controller.ts` |
 | `src/web/` | web_search / web_fetch 的搜索供应商、抓取、正文提取、代理 | `search.ts`、`fetch.ts`、`extract.ts` |
 | `src/usage/` | 用量/成本账本（JSONL） | `ledger.ts`、`render.ts` |
@@ -177,7 +177,7 @@ sequenceDiagram
 
 ## 6. 记忆子系统（`src/memory/`，spec 050）
 
-三件东西，每件只有一个真相：频道记忆（一条事实一个文件）、按天的日志、以及只由人维护的 workspace 共享背景。规模定位是个人/小团队自托管的几十到几百条，所以不做检索打分——会话开始时把索引整份交给模型，之后靠 `memory_search` 按需补查。
+三件东西，每件只有一个真相：频道记忆（一条事实一个文件）、按天的日志、以及由管理员拥有的 workspace 共享背景。规模定位是个人/小团队自托管的几十到几百条，所以不做检索打分——会话开始时把索引整份交给模型，之后靠 `memory_search` 按需补查。
 
 ### 6.1 每频道的记忆文件
 
@@ -190,7 +190,7 @@ sequenceDiagram
 | `log.jsonl` / `context.jsonl` | 冷存储：完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 工具检索 |
 | `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（只记有动作的行，纯 gate 跳过降级为 debug 日志） | `review-log.ts` | 否，人工排查用 |
 
-工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实），**只由人手工维护**——从任何频道出发都没有一条自动写入路径能改到它们（私聊学到的不会漏到群里，群成员也改不到所有频道共享的背景）。系统提示词明确禁止 agent 用文件工具直接编辑频道 `memory/*.md`——只能走 `memory_save` / `memory_forget`（`MEMORY.md` 是生成物，文件工具的直接写入会被下一次索引重建覆盖）；`journal/` 完全不接受工具写入。
+工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。后台记忆不会自动写它们；通用文件工具能否写入取决于项目边界和 path guard，因此“管理员拥有”不是 OS 级只读保证。频道 `memory/*.md` 只能通过 `memory_save` / `memory_forget` 维护，生成的 `MEMORY.md` 和 `journal/` 不接受通用文件工具写入。
 
 ### 6.2 记忆的进与出
 
@@ -247,16 +247,16 @@ flowchart LR
 | 事实源 | `workspace/events/<name>.json` | `workspace/<channelId>/tasks/<id>.md`（frontmatter 契约） |
 | 类型 | `one-shot`（ISO 时刻） / `periodic`（cron 按主机时区，croner 库） | `open / parked / done` 三态 + 正交的 `paused`；`parked` 必带一张等待票；归档记录 `completed / cancelled` |
 | 驱动者 | `EventsWatcher`：fs.watch + 防抖，cron 到点触发 | `TaskDriver`：自适应 timer + nudge 扫描台账，每频道每 tick 至多唤醒 1 个可行动任务 |
-| 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | `wake` 时刻、fingerprint 未变化时按 stalled 间隔退避 |
-| 治理 | 事件历史 `state/events/history.jsonl` | 确定性 governor：active attempt budget / deadline 或连续无进展 → `enabled=false` + `stop(by=governor)`，直接通知 |
+| 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | `time / schedule / run / job / ask / signal` 等待票 |
+| 治理 | 事件历史 `state/events/history.jsonl` | 四维 cycle 预算、`until`、空转检测和等待票兜底；触发边界后写 `paused` 并直接通知 |
 | Agent 侧工具 | `event_manage` | `task_create`/`task_update`/`task_close`/`task_list`/`task_log`，任务会话里另有 `task_step_end`；配合 `task-loop` playbook |
-| 用户命令 | `/events` | `/tasks`（pause/resume/run/set/doctor 等零 LLM 成本控制） |
+| 用户命令 | `/events` | `/tasks`（pause/resume/run/steer/reply/doctor 等零 LLM 成本控制） |
 
-TaskDriver 派发的是一条合成消息 `[TASK_DRIVER:<id>] Resume task …`（带任务胶囊摘要），走与用户消息完全相同的串行轮次管道；轮次结束后把 usage/耗时回写任务控制块（`finishTaskAttempt`）。整套任务机制（全部 task_* 工具、TaskDriver、任务摘要注入）由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
+TaskDriver 派发 `[TASK_DRIVER:<id>]` 合成消息（带任务胶囊摘要），走与用户消息相同的串行轮次管道；任务步骤在独立 cycle 会话中运行，并必须以 `task_step_end` 收尾。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
 
 任务正文可选携带一段 `## Plan`（spec 037）：介于 Goal/DoD 契约与循环日志之间的手段层，四态 checkbox（`[ ]`/`[x]`/`[!]`/`[~]`），当前步骤由 runtime 从文档顺序推导、不由模型自报。契约段哈希的边界是「Plan 与 `## 上次结果` 中先出现的那个」，使 Plan 步骤状态变化永不影响已记录的验证 PASS。
 
-spec 051 把任务拆成三样东西：**契约**（`tasks/<id>.md`，每一步完整注入；4 KB 预算只裁剪运行时写的 `## 上次结果`，作者写的段落永不被删）、**循环日志**（`tasks/<id>.jsonl`，append-only）和**等待票**（frontmatter 的 `ticket`）。一次停泊必须说清楚什么会叫醒它，运行时在写入时校验（run/job 存在且未结算且归属本任务），并确定性地补上 `by` 兜底时限；到点未兑现就重开任务，同周期第二次就停下并通知用户。每个 cycle 在自己的会话（`tasks/.sessions/`）里跑，四维预算（步数/墙钟/成本/返工轮次）取代了原来的指纹 + effect 账本治理器。
+spec 051 把任务拆成三样东西：**契约**（`tasks/<id>.md`，每一步完整注入；4 KB 预算只裁剪运行时写的 `## 上次结果`，作者写的段落永不被删）、**循环日志**（`tasks/<id>.jsonl`，append-only）和**等待票**（frontmatter 的 `ticket`）。一次停泊必须说清楚什么会叫醒它，运行时在写入时校验（run/job 存在且未结算且归属本任务），并确定性地补上 `by` 兜底时限；到点未兑现就重开任务，同周期第二次就停下并通知用户。每个 cycle 在自己的会话（`tasks/.sessions/`）里跑，四维预算（步数/墙钟/成本/返工轮次）取代了旧版启发式治理。
 
 ## 8. 工具层与子代理
 
@@ -279,7 +279,7 @@ spec 051 把任务拆成三样东西：**契约**（`tasks/<id>.md`，每一步�
 
 **`FileStore`（`src/file-store.ts`，spec 044）与 `Executor` 并列**：文件内容工具（`read`/`edit`/`write`/`send_media`）走 `FileStore`，直接在 `node:fs` 流上读写；`Executor` 只服务真正的命令工具（`bash`/`grep`/`pdftotext`）。两者共享同一条 `guardPath` 解出的 `resolvedPath`——路径只解析一次，守卫判定的和实际打开的必然是同一个值。`edit` 在这条路径上做字节级 splice（不解码整份文件，大文件走两趟流式扫描+应用），从根本上避免了文件内容穿过 shell 捕获缓冲导致的截断/编码损坏。
 
-**子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 字段区分 `internal`（默认，进程内隔离上下文子代理）与 `external`（一次性调用 claude-code / codex-cli / exec，argv 直连、不经过 shell），也支持调用时内联定义一个 internal 角色；Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置硬约束：工具白名单仅 `read/grep/bash/edit/write/web_search/web_fetch`（默认 `read+bash`），默认限额 32 turns / 96 tool calls / 600s 墙钟；外部角色没有轮数/工具调用概念，只有 `maxWallTimeSec`（默认 3600s）。调用面（`subagent` 工具）内外共用同一 schema。
+**子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 区分 `internal` 与 `external`，也可通过 `subagent_inline` 按次定义 internal 执行者；命名角色统一走 `subagent` 的路由字段，inline 才接受模型、工具和预算覆盖。Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置默认限额为 32 turns / 96 tool calls / 600s；外部角色只有 `maxWallTimeSec`（默认 3600s）。
 
 `subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器仍结构性移除 write/edit；声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease，且 `verificationStrength: advisory`。新 attestation 的 subject 固定验证开始时的 `baseCommit`，并保留既有 untracked 路径；只对 checkout 根目录下明确临时产物范围内新出现的 untracked 文件放行，其他新源文件和既有 untracked 产品文件的修改仍由 subject 比对发现。旧 attestation 继续使用 HEAD-sensitive `workspaceSubjectHash` 兼容算法。
 
@@ -388,6 +388,6 @@ Pipiclaw 的产品是 CLI/runtime，不是 SDK。`src/index.ts` 因此只支持*
 
 ## 13. 测试与质量门
 
-- `npm run check` = Biome lint + `tsc --noEmit` + knip 死代码 + Vitest 单测；`npm run test:e2e` 单独跑真实 bootstrap 的端到端套件。
+- `npm run check` = Biome lint + `tsc --noEmit` + knip 死代码 + Vitest 单测；`npm run test:e2e` 用脚本化 mock provider 跑经过真实 bootstrap 的确定性端到端套件。
 - 记忆流水线的每个单元（lifecycle/gates/jobs/state/recall/consolidation）都有独立测试文件，这是"分层不摊平"原则的另一面。
 - 领域边界与工程规则的权威描述在 `AGENTS.md`；每个子系统的设计脉络在 `docs/specs/NNN-*`。

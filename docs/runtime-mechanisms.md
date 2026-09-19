@@ -24,7 +24,7 @@
 
 ## 记忆维护
 
-记忆由频道文件分层（spec 050）：`memory/<name>.md` 一条事实一个文件，生成的 `MEMORY.md` 是索引；`journal/YYYY-MM-DD.md` 是按天的工作记录；`log.jsonl` / `context.jsonl` 是冷存储。频道之间隔离；工作区级 `workspace/MEMORY.md` 和 `ENVIRONMENT.md` 是管理员维护的共享背景。
+记忆由频道文件分层（spec 050）：`memory/<name>.md` 一条事实一个文件，生成的 `MEMORY.md` 是索引；`journal/YYYY-MM-DD.md` 是按天的工作记录；`log.jsonl` / `context.jsonl` 是冷存储。各频道使用独立的状态目录；工作区级 `workspace/MEMORY.md` 和 `ENVIRONMENT.md` 是管理员维护的共享背景。这里的隔离是应用状态隔离，不是 OS 文件权限边界。
 
 后台 memory maintenance scheduler 不使用 `workspace/events/`。它只在本地 gate 通过后才发起 LLM sidecar：
 
@@ -64,7 +64,7 @@
 
 任务文件位于 `workspace/<channelId>/tasks/<id>.md`。`tools.tasks.enabled` 同时门控三件事：全部 task_* 工具、内建 TaskDriver、每回合任务摘要注入。
 
-当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进任务正文或用 `wake` 错开；每个任务只按自己的 Goal、DoD、Manual、Verification 和 control 收口。旧任务里残留的 retired control keys 会被读取层忽略，并由 `/tasks doctor` 报告。
+当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进任务的 Goal/Manual/Plan，等待用 runtime 校验的票表达；每个任务按自己的 Goal、DoD、Manual、Verification、Plan 和预算收口。旧任务里残留的 retired control keys 会被读取层忽略，并由 `/tasks doctor` 报告。
 
 TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的票据到期时间、兜底时限和步骤结束 nudge 决定下一次扫描；单次最多派发 4 个 channel，同一 channel 每 tick 至多一个任务。`outcome: continue` 没有退避——下一步在同一次 nudge 里就排上。任务超出本周期预算（步数/墙钟/成本/返工轮次），或连续两步没有任何工具调用时，运行时写 `paused{by:"runtime"}` 并直接通知用户，不再花一个模型回合去诊断。
 

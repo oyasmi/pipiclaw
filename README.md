@@ -18,11 +18,11 @@ Pipiclaw 是一个面向个人和团队的 AI coding assistant runtime。它让 
 
 Pipiclaw 同时支持两类委派：内置子智能体在进程内完成检索、日志筛查等轻量工作；外部智能体则启动真实的 Claude Code、Codex CLI 或任意脚本，处理需要长时间运行、跨多个文件和反复自测的重型任务。
 
-在钉钉常驻模式中，外部任务派发后在后台继续执行，完成时自动唤醒原频道。你可以随时用 `/subagents` 查看运行状态、实际命令和产出，用 `/subagents cancel` 直接终止，也可以让主智能体在已结束的 Claude Code / Codex 会话上继续追问。仓库附带 explorer、builder、reviewer、verifier、git-committer 等可直接改造的角色模板。
+在钉钉常驻模式中，外部任务派发后在后台继续执行，完成时自动唤醒原频道。你可以随时用 `/subagents` 查看运行状态、实际命令和产出，用 `/subagents cancel` 直接终止，也可以让主智能体在已结束的 Claude Code / Codex 会话上继续追问。仓库附带按能力与成本组织的推荐条目，以及可参考的早期岗位角色模板。
 
 ### 工作不会随着一次对话结束
 
-每个会话都有独立的当前状态、长期记忆和历史摘要。任务台账把目标、完成标准、进度、下一步和验收记录持久化到 Markdown 文件；内建 task driver 会在合适的时间恢复工作，有进展就继续，停滞则退避，超过边界就停止并告诉你。
+每个会话都有独立的当前状态、长期记忆和历史摘要。任务台账把目标、完成标准、进度、下一步和验收记录持久化到 Markdown 文件；内建 task driver 根据等待票和周期调度恢复工作，预算耗尽、空转或连续无法兑现等待时会停止并告诉你。
 
 ### 原生工作在钉钉里
 
@@ -50,7 +50,7 @@ Pipiclaw 当前定位是个人与小团队、自托管、单实例运行。它�
 
 ## 快速开始
 
-下面提供三条递进路径：先在终端验证模型，再接入钉钉，最后启用外部智能体。已经有明确目标时可以直接跳到对应部分。
+下面按顺序完成本地验证、钉钉接入和外部智能体配置；已经有明确目标时可以直接跳到对应部分。
 
 ### 1. 安装并确认 CLI
 
@@ -95,10 +95,10 @@ pipiclaw tui
 也可以用于脚本化的一次性请求：
 
 ```bash
-pipiclaw tui --print "检查当前项目并给出三个最高优先级风险"
+pipiclaw tui --print "只回复：Pipiclaw 模型调用成功"
 ```
 
-如需接入企业网关、本地模型或指定默认模型，请看[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
+看到模型实际回复才表示调用链路已经跑通；`pipiclaw tui --help` 或 `/model` 只能证明 CLI 或模型目录可见。正式工作前可用 `/project` 确认当前项目目录。如需接入企业网关、本地模型或指定默认模型，请看[配置速查](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md)。
 
 ### 3. 接入钉钉
 
@@ -134,7 +134,7 @@ pipiclaw tui --print "检查当前项目并给出三个最高优先级风险"
 pipiclaw
 ```
 
-先在钉钉里发送 `/model`，确认模型可用，再发送：
+先在钉钉里发送 `/model` 检查模型引用，再发送一条普通消息验证真实调用：
 
 ```text
 请介绍一下你自己，并说明你现在能做什么
@@ -144,12 +144,12 @@ pipiclaw
 
 ### 4. 启用外部智能体委派
 
-先在运行 Pipiclaw 的同一账号下安装并登录目标 CLI，然后复制需要的角色。下面的示例同时启用 Claude Code builder 和 Codex reviewer：
+先在运行 Pipiclaw 的同一账号下安装并登录目标 CLI，然后复制需要的能力条目。下面启用 Claude Code 与 Codex 的两个主力条目：
 
 ```bash
 mkdir -p ~/.pipiclaw/workspace/sub-agents
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 
@@ -159,10 +159,10 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
 /subagents roles
 ```
 
-确认角色显示为可用后，可以直接描述目标并指定角色：
+确认条目显示为可用后，直接描述目标和验收要求，由主智能体选择执行器：
 
 ```text
-请把这个跨模块实现交给 builder 完成，完成后再让 reviewer 独立检查。
+请把这个跨模块实现交给合适的执行器，完成后独立检查最终改动。
 ```
 
 常用控制入口：
@@ -175,7 +175,7 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
 /subagents roles [name]            # 查看角色目录和单个角色配置
 ```
 
-外部智能体不会经过 Pipiclaw 的命令和路径守卫。使用示例角色前，请阅读[智能体委派指南](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md)中的授权、安全边界和 sandbox 说明。
+外部智能体不会经过 Pipiclaw 的命令和路径守卫。上述推荐条目使用放开权限的 CLI 参数；使用前必须阅读[智能体委派指南](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md)中的授权、安全边界和 sandbox 说明。
 
 长时间外部委派应运行在钉钉 daemon 中；TUI 当前不提供外部 run 的完成通知和退出后的重新认领。
 
@@ -243,7 +243,7 @@ npm run build
 npm run check    # lint + typecheck + deadcode + test
 ```
 
-最小验证：`npm run typecheck` 和 `npm run test`。真实模型 E2E 使用 `npm run test:e2e`，不包含在日常单元测试中。
+最小验证：`npm run typecheck` 和 `npm run test`。`npm run test:e2e` 是离线、无凭据的确定性全栈测试；少量真实模型 smoke 使用 `npm run test:e2e:live`。
 
 ## 许可证
 

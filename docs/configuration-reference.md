@@ -156,7 +156,7 @@ pi-mono 里的项目级 `.pi/settings.json` 覆盖机制，Pipiclaw 目前没有
 
 - 不配置或填空串时不指定默认值。
 - 值是 `provider/model` 引用，须能在 `auth.json` / `models.json` 中解析；解析失败会返回明确错误，不会静默回退。
-- 优先级从高到低：`subagent` 调用的 `model` 参数 > 内置角色 frontmatter 的 `model` > `subagentModel` > 主智能体当前模型。
+- 命名角色使用角色 frontmatter 的 `model`；未填写时依次使用 `subagentModel`、主智能体当前模型。只有 `subagent_inline` 调用可以按次传 `model` 覆盖。
 - 外部角色的 `model` 是目标 harness 自己的模型字符串，只能写在角色文件中，由 Pipiclaw 原样透传；不经过这里，也不由 `models.json` 校验。
 
 ## 可观测性：结构化日志与成本账本（Observability: Structured Logging & Cost Ledger）
@@ -225,7 +225,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 事件自调度工具（`event_manage`，恒开）
 
-`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据 `wake` 和 task frontmatter 里的 `schedule` 驱动；event 主要用于与任务无关的独立提醒和外部传感器。核心能力，无开关、始终注册。
+`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据等待票和 task frontmatter 里的 `schedule` 驱动；event 主要用于独立提醒，以及由 `signal` 票引用的外部传感器。核心能力，无开关、始终注册。
 
 - 该工具只发给主 agent，不进子代理工具集。
 - 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、**带 `preAction` 门控时放宽到 5 分钟**、事件文件总数上限 50）。细节见 [events-and-tasks.md](./events-and-tasks.md)。
@@ -242,7 +242,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 }
 ```
 
-- 关掉后主 agent 仍可用 read/edit/write 直接维护 task 文件，只是没有工具保真、不会被后台唤醒、也不注入摘要。
+- 关掉后 task 文件仍保留在磁盘，但没有受控的 task 工具、后台唤醒或摘要注入；需要继续托管时应重新开启。
 - 这些工具只发给主 agent，不进子代理工具集。新任务默认不要求独立验收；`verificationRequired`、`schedule` 和每任务 `budget` 在 `task_create`/`task_update` 上设置。进度记录属于 `task_step_end` 的 `note`（进循环日志），Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
 - Task 创建即持续委托；外部动作由能力配置、任务 Goal、scope、真实状态查询和幂等 request id 约束，结果必须写入任务证据。
 
@@ -315,10 +315,10 @@ DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务。扫描本身�
 
 行为（供理解，非配置项）：
 
-- driver 不固定每分钟轮询：它睡到下一个已知的感兴趣时刻（最近的 `wake`、退避到期、deadline），封顶 15 分钟。上一轮产生真实 effect 时可在回合结束 nudge 后快速接续；只有台账变化但没有 effect 时使用 5 分钟档。
-- 入队后台账没有任何变化时退避 60 分钟，防止坏任务形成 token 热循环。
-- 单次扫描全局最多派发 4 个。driver 按 channel 轮转，避免排序靠后的 channel 饥饿；同一 channel 每 tick 最多唤醒一个任务，运行中的 channel 会跳过。回合结束会立即 nudge 重扫，15 分钟的睡眠上限也是绕过 runtime 的手工编辑被接起的延迟上界。
-- daemon 重启会清空内存退避，使遗留 actionable task 在下一次扫描重新进入恢复路径。`tui_local` 之类纯 TUI channel 会保留台账和摘要，但关闭的 TUI 没有常驻 transport，不能自行唤醒。
+- driver 睡到最近的票据时刻或内置 15 分钟上限；步骤 `continue` 后会立即 nudge，连续两步没有工具调用则暂停任务并通知用户。
+- 单次扫描全局最多派发 4 个 channel；同一 channel 每 tick 最多唤醒一个任务，并按 channel 和任务轮转保证公平。
+- `run`、`job`、`ask`、`signal` 票由各自所有者推送兑现；过了 runtime 派生的兜底时限会重开一次，同周期第二次过期则暂停并通知用户。
+- TUI 会保留任务台账和摘要，但没有常驻 TaskDriver；需要自动恢复的长期任务应运行在 DingTalk daemon。
 
 ## 终端 TUI（Terminal TUI）
 
@@ -343,7 +343,7 @@ pipiclaw tui --print "总结今天的进展"  # 一次性，prompt 走命令行�
 | `--plain` | 即使在 TTY 下也强制使用纯文本前端（不进入全屏 UI）。 |
 | `--version` / `--help` | 打印版本 / 帮助。 |
 
-**命令**：交互模式支持 `/help` `/stop` `/steer` `/followup` `/status` `/usage` `/events` 与会话命令 `/model` `/new` `/compact` `/session` `/memory`，以及 TUI 专属的 `/exit`。`/memory status|list|show <entry-id>|pending` 用于检查当前频道的记忆状态、条目元数据和待处理建议。运行中直接输入普通消息会作为 `/steer` 注入当前轮次；`Ctrl-C` 在运行中中止本轮，空闲时连按两次退出；`Ctrl-D` 退出。退出时会把本 channel 的记忆落盘。
+**命令**：交互模式支持运行时命令 `/help` `/stop` `/status` `/usage` `/events` `/tasks` `/subagents` `/project` `/skills`，会话命令 `/model` `/new` `/compact` `/session` `/memory`，以及 TUI 专属的 `/exit`。`/memory status|list|show|journal|forget` 管理当前频道记忆。运行中普通消息作为 `/steer`；`Ctrl-C` 中止本轮，空闲时连按两次退出，`Ctrl-D` 退出。退出时会执行必要的存储 flush 和边界反思。
 
 非 TTY（管道 / 重定向）或 `--print` 会自动使用纯文本前端；真实终端下使用带滚动记录、状态行、斜杠命令补全的富界面。
 
@@ -768,7 +768,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 `settings.json` 只接受**你有依据做判断**的选项：用哪个模型、某个子系统跑不跑、某次可选的 LLM 调用值不值这些 token、输出长什么样。
 
-维护周期、并发数、置信阈值、退避时长、token 预算这类**算法参数一律是代码常量**，不在这里出现。原因很简单：没有人能凭手头信息判断 checkpoint 间隔应该是 20 分钟还是 25 分钟，把这种决定摆进配置文件只是把调参责任转嫁给不掌握依据的人，同时让每个数字都变成一份兼容性承诺。
+维护周期、调度并发、置信阈值、退避时长这类 **app 级算法参数是代码常量**，不在这里出现；单项 task 的 cycle 预算属于任务契约。原因很简单：没有人能凭手头信息判断反思间隔应该是 20 分钟还是 25 分钟，把这种决定摆进配置文件只是把调参责任转嫁给不掌握依据的人，同时让每个数字都变成一份兼容性承诺。
 
 因此下表很短，而且**每一行都是布尔、枚举或模型引用**。
 
@@ -897,9 +897,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 }
 ```
 
-这两项是 `settings.json` 里仅有的与 LLM 调用量直接相关的选项：前一项砍掉一次可选的模型调用，后一项关掉全部后台反思。
-
-代价要清楚：关掉 `memoryMaintenance` 后 journal 不再自动追加，`MEMORY.md` 不再自动固化，长期使用会明显丢失连续性；仍可用 `memory_save` 当场写入。想省钱但保留记忆，优先只关前一项。
+这两项是 `settings.json` 里仅有的与 LLM 调用量直接相关的选项。`sessionSearch.summarizeWithModel` 默认已经是 `false`；`memoryMaintenance.enabled: false` 关闭空闲定时反思，但压缩、`/new` 和正常退出等边界仍可能反思，显式 `memory_save` 也不受影响。
 
 #### 4. 关掉日志落盘（Console-Only Logging）
 
@@ -918,6 +916,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 
 - 普通用户 turn 结束后只记录 dirty/counter，不直接触发 memory LLM sidecar。
 - `memoryMaintenance` 是内置后台 scheduler，不依赖也不会写入 `workspace/events/`。
+- `memoryMaintenance.enabled` 只门控这条空闲 scheduler；会话边界反思由同一个 reflect 实现处理，但不受该开关控制。
 - spec 050 起只有一个后台任务——反思（reflect），取代此前的 session refresh / memory checkpoint / structural maintenance 三个 job。调用 LLM 前有本地 gate：无新内容、channel 仍活跃、未到间隔时不会调用 LLM。内置间隔为 20 分钟，channel 静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个 channel。
 - durable 写入有一道固定的置信度闸门（`necessity: high` 且 `confidence ≥ 0.85`），**当场写入（`memory_save`）与后台反思共用**同一套判定标准；`necessity: medium` 的 `add` 以 30 天试用期写入（`confidence ≥ 0.9`）。被拒绝的候选会记进 `memory-review.jsonl`，素材本身仍保留在冷存储里。
 - 记忆是一条一文件，没有整份 `MEMORY.md` 重写导致的缩水风险——每次写入只影响被 `add`/`update`/`delete` 点名的那个 `name`，索引文件只是从这些文件生成的只读投影。
@@ -1107,7 +1106,7 @@ web 工具的代理顺序是：
 
 ## 子代理目录 `workspace/sub-agents/`（`workspace/sub-agents/`）
 
-放工作区智能体角色。适合把 explorer、planner、builder、reviewer 等执行者固化下来。运行时只加载这个目录中实际存在且有效的配置，不自动启用默认角色。仓库和 npm 包中的 [`examples/sub-agents/`](../examples/sub-agents/) 提供可复制模板：常用的 explorer、builder、reviewer、verifier、git-committer，以及按需的 planner、builder-hard、worker。
+放工作区智能体角色。运行时只加载这个目录中实际存在且有效的配置，不自动启用默认角色。仓库和 npm 包中的 [`examples/sub-agents/`](../examples/sub-agents/) 分为两组：`agents/` 是按能力与成本组织的推荐入口，`roles/` 是 explorer、builder、reviewer 等按职责拆分的参考模板。
 
 详细字段、示例和推荐写法见 [sub-agents.md](./sub-agents.md)。
 

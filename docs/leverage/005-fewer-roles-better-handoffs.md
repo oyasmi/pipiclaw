@@ -38,12 +38,12 @@ Anthropic 的上下文工程文章强调，职责重叠的工具会制造模糊�
 | 位置 | 当前问题 | 建议修正 |
 |---|---|---|
 | [示例 README](../../examples/sub-agents/README.md) | 用 planner → 两轮 reviewer → builder → verifier → documenter 描述开发闭环，形成固定阶段的暗示 | 改为按条件选择角色；实现、测试、相关文档一起形成待验收产物 |
-| [builder](../../examples/sub-agents/builder.md)、[verifier](../../examples/sub-agents/verifier.md) | 默认不跑全量套件，但未明确仓库必跑检查优先；在 Pipiclaw 中可能漏掉 AGENTS.md 明确要求的 unit/e2e | 仓库和本次契约的 required checks 必须完成；仅对额外检查按风险裁剪 |
+| [builder](../../examples/sub-agents/roles/builder.md)、[verifier](../../examples/sub-agents/roles/verifier.md) | 默认不跑全量套件，但未明确仓库必跑检查优先；在 Pipiclaw 中可能漏掉 AGENTS.md 明确要求的 unit/e2e | 仓库和本次契约的 required checks 必须完成；仅对额外检查按风险裁剪 |
 | verifier | 按“与本次变更无关”允许将验收项判不适用 | `purpose=verify` 覆盖完整 DoD/Verification；改动没碰到不等于任务要求不适用 |
 | verifier | 允许把新增验证脚本放进“仓库既有测试位置” | 正式验收只在 runtime 认可的临时位置新建取证脚本；需要成为产品测试的新用例交回实现者 |
 | README 的验收后 documenter 阶段 | 验收后继续改交付文档，会改变被验收产物 | 文档纳入最终验收之前；PASS 后修改产品内容须重新验收 |
 | README 和 [委派 playbook](../../src/playbooks/agent-delegation.md) | README 仍说调用内置角色时可传 `effort`；playbook 仍有外部角色通过 `effort` 放宽墙钟时间的解释 | 当前命名角色调用不接受这些覆盖；`effort` 只属于 inline 内置路径，命名角色改 frontmatter |
-| [git-committer](../../examples/sub-agents/git-committer.md) | 说范围外 staged 内容“不要动”，又指导正常 commit；已有暂存内容仍可能被一并提交 | 范围外 staged 内容存在时先解决提交隔离，不能以“本轮只 add 精确路径”当作隔离证明 |
+| [git-committer](../../examples/sub-agents/roles/git-committer.md) | 说范围外 staged 内容“不要动”，又指导正常 commit；已有暂存内容仍可能被一并提交 | 范围外 staged 内容存在时先解决提交隔离，不能以“本轮只 add 精确路径”当作隔离证明 |
 
 这里的前两项是提示文字缺少优先关系，不等于模型必定漏跑检查；不能从静态阅读推断生产发生率。后面的验收产物冲突则可以直接用源码复现。
 

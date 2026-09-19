@@ -49,7 +49,11 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env pipiclaw
+User=pipiclaw
+Group=pipiclaw
+Environment=HOME=/home/pipiclaw
+Environment=PIPICLAW_HOME=/home/pipiclaw/.pipiclaw
+ExecStart=/usr/local/bin/pipiclaw
 Restart=always
 RestartSec=5
 EnvironmentFile=-/home/pipiclaw/.config/pipiclaw/runtime.env
@@ -62,7 +66,7 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-把模型凭据和代理变量写进仅服务账号可读的 `runtime.env`，不要把真实 key 直接提交到 unit 文件。外部智能体还依赖服务进程的 `PATH`、HOME 和自身认证文件；在交互 shell 可用不代表 systemd 环境也能找到，部署后应使用相同账号和环境执行一次 `command -v claude` / `command -v codex`。
+把 `ExecStart` 改成 `command -v pipiclaw` 得到的绝对路径；模型凭据和代理变量写进仅服务账号可读的 `runtime.env`，不要把真实 key 直接提交到 unit 文件。外部智能体还依赖服务进程的 `PATH`、HOME 和自身认证文件；部署前应以 `pipiclaw` 账号执行 `command -v claude` / `command -v codex` 并验证登录。
 
 常用命令：
 
@@ -113,7 +117,8 @@ pm2 save
 
 ```ini
 [program:pipiclaw]
-command=/usr/bin/env pipiclaw
+user=pipiclaw
+command=/usr/local/bin/pipiclaw
 directory=/home/pipiclaw
 autostart=true
 autorestart=true
@@ -149,8 +154,8 @@ supervisorctl tail -f pipiclaw
 
 - `/status` —— 执行状态、当前模型、上下文用量、运行时长、版本
 - `/usage [7d|month]` —— 本通道与全局的 LLM 成本与 token，按类型和 Top 模型拆分（本地模型成本为 0，但 token 仍然记账）；账本里每条记录还带 `taskId`，任务本身不再记账目
-- `/tasks doctor` —— 任务台账与事件一致性的只读体检，每条问题附下一步建议
-- `/tasks set <id> <字段> <值>` —— 直接改 wake / next / deadline，不花一个 LLM 回合
+- `/tasks doctor` —— 任务契约与等待票的只读体检，每条问题附下一步建议
+- `/tasks pause|resume|run|steer|reply ...` —— 暂停、恢复、立即唤醒、纠偏或回答阻塞问题
 - `/subagents` —— 运行中的委派、最近结果和角色可用性摘要
 - `/subagents show <runId>` / `output <runId>` —— 实际 argv、工作目录、stderr 与文本产出
 - `/subagents cancel <runId|all>` —— 不经过模型，直接终止委派
@@ -205,7 +210,7 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 - `memory-review.jsonl` 是诊断与审计文件。
 - `/memory status|list|show|journal` 提供当前频道的只读管理面；`/memory forget <name>` 直接删除、不经过模型。sidecar usage 与 review outcome 通过 correlation id 关联，便于按次核算成本与有效写入。
 
-首次使用某个频道时会自动、确定性地把旧版布局迁移到上表结构，不调用模型；原文件整份移到 `.memory-v1/`。回滚：把 `.memory-v1/` 里的文件移回频道目录原位，删除 `memory/`、`journal/`、生成的 `MEMORY.md` 和 `.migrated-v2` 标记，换回旧版本运行。
+首次使用某个频道时会自动、确定性地把旧版布局迁移到上表结构，不调用模型；原文件整份移到 `.memory-v1/`。回滚前停止进程并备份频道目录：先删除新版 `memory/`、`journal/`、生成的 `MEMORY.md` 和 `.migrated-v2`，再把 `.memory-v1/` 内的原件移回频道目录并换回旧版本。迁移后新增的数据需另行保存。
 
 ### 内置记忆维护任务（Memory Maintenance Scheduler）
 
@@ -238,7 +243,7 @@ ${PIPICLAW_HOME:-~/.pipiclaw}/state/memory/<channelId>.json
 }
 ```
 
-第一项砍掉一次可选的 LLM 调用，影响有限。第二项是关掉整个后台反思——journal 不再自动追加，`MEMORY.md` 不再自动固化，长期使用会明显丢失连续性；仍可用 `memory_save` 当场写入。**优先只关第一项**；确认后台维护是成本大头之后再考虑第二项。旧版的 `memoryRecall.*` 系列设置项已随 spec 050 一起退役（每轮实时召回被取消，D1），设置里仍留着会在启动日志里收到警告。
+`sessionSearch.summarizeWithModel` 当前默认已关闭，只有曾主动开启的部署才需要改。`memoryMaintenance.enabled: false` 关闭的是空闲定时反思；压缩、`/new` 和正常退出等会话边界仍可能运行反思，显式 `memory_save` 也不受影响。旧版 `memoryRecall.*` 已退役，继续配置会在启动日志中收到警告。
 
 ### 精确提示词排查（Prompt Inspection）
 
@@ -342,10 +347,10 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 
 通常先检查：
 
-- `/tasks` 中该任务的 `status`、`enabled` 与 `wake`：disabled、waiting 无 wake 和归档任务不会被 driver 继续；future wake 属于正常等待。被治理器停止的任务显示为 `status: active` + `enabled: false` + `control.stop.by: "governor"`
-- `/tasks doctor` 是否报出坏 frontmatter、超预算、缺失依赖等问题
-- 上一轮是否没有留下任何台账变化——driver 会对无变化的任务退避（默认 60 分钟）再重试，重启进程会清空退避、下一次扫描重新接起
-- `tools.json` 的 `tools.tasks.enabled`（自主长程任务总开关）是否被关闭
+- `/tasks show <id>` 中是否已暂停、正在等 `ticket`，或本周期预算已经耗尽；等待票尚未到期属于正常等待
+- `/tasks log <id>` 是否记录了连续空转、等待票过期或验收失败；`/tasks doctor` 是否发现手工编辑造成的坏 frontmatter
+- 预算停止后按回执处理：`steps`、`rounds`、`usd` 可用 `/tasks resume <id> +...` 加码；`wallMin`、`until` 需让 Agent 更新预算后再恢复
+- `tools.json` 的 `tools.tasks.enabled` 是否关闭；TUI 没有常驻 TaskDriver，长期任务应交给 DingTalk daemon
 
 ### 智能体角色没有被正常使用
 
@@ -353,7 +358,7 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 
 - 文件是否放在 `workspace/sub-agents/`
 - frontmatter 是否缺少 `name` 或 `description`
-- 正文是否为空
+- 内置角色正文是否为空；外部角色正文允许为空
 - `/subagents roles [name]` 是否显示 discovery warning 或 `unavailable`
 - 内置角色的 `model` 是否能在 Pipiclaw 模型目录中精确解析
 - 外部角色是否错误填写了 `tools`、`cwd`、`maxTurns` 等只适用于内置角色的字段

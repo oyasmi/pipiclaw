@@ -18,11 +18,11 @@ What you see is one assistant, but behind it can be a well-divided AI engineerin
 
 Pipiclaw supports two kinds of delegation at once: built-in sub-agents do lightweight work in-process such as retrieval and log triage; external agents launch real Claude Code, Codex CLI, or any script to handle heavy tasks that need long runs, many files, and repeated self-testing.
 
-In DingTalk daemon mode, external tasks keep running in the background after dispatch and automatically wake the originating channel on completion. You can use `/subagents` at any time to check run status, the actual command, and outputs, use `/subagents cancel` to terminate directly, and let the main agent keep asking follow-up questions on a finished Claude Code / Codex session. The repo ships explorer, builder, reviewer, verifier, and git-committer role templates that are ready to adapt.
+In DingTalk daemon mode, external tasks keep running in the background after dispatch and automatically wake the originating channel on completion. You can use `/subagents` at any time to check run status, the actual command, and outputs, use `/subagents cancel` to terminate directly, and let the main agent keep asking follow-up questions on a finished Claude Code / Codex session. The repo ships recommended capability-and-cost entries plus earlier job-style role templates for reference.
 
 ### Work does not end when a conversation ends
 
-Every session has its own current state, long-term memory, and history summary. The task ledger persists goals, done criteria, progress, next steps, and verification records to Markdown files; the built-in task driver resumes work at the right time — continuing when there is progress, backing off when stalled, and stopping and telling you when a boundary is crossed.
+Every session has its own current state, long-term memory, and history summary. The task ledger persists goals, done criteria, progress, next steps, and verification records to Markdown files; the built-in task driver resumes work from waiting tickets and schedules, and stops with a notice when a budget, idle-loop, or repeated-expiry boundary is reached.
 
 ### Natively at home in DingTalk
 
@@ -50,7 +50,7 @@ Pipiclaw today targets individuals and small teams, self-hosted, single-instance
 
 ## Quick start
 
-Below are three progressive paths: verify a model in the terminal first, then connect DingTalk, then enable external agents. If you already have a clear goal, jump straight to the relevant part.
+The steps below cover local verification, DingTalk setup, and external-agent configuration in order. If you already have a clear goal, jump straight to the relevant part.
 
 ### 1. Install and confirm the CLI
 
@@ -95,10 +95,10 @@ pipiclaw tui
 It can also be used for scripted one-shot requests:
 
 ```bash
-pipiclaw tui --print "Review the current project and give me the three highest-priority risks"
+pipiclaw tui --print "Reply with only: Pipiclaw model call succeeded"
 ```
 
-To connect an enterprise gateway, a local model, or set a default model, see [Configuration reference](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md).
+Only an actual model reply proves that the request path works; `pipiclaw tui --help` and `/model` only prove that the CLI or model catalog is visible. Before real work, use `/project` to confirm the current project directory. To connect an enterprise gateway, a local model, or set a default model, see [Configuration reference](https://github.com/oyasmi/pipiclaw/blob/main/docs/configuration.md).
 
 ### 3. Connect DingTalk
 
@@ -134,7 +134,7 @@ Start the daemon:
 pipiclaw
 ```
 
-In DingTalk, send `/model` first to confirm the model is available, then send:
+In DingTalk, send `/model` to inspect the model reference, then send a normal message to verify a real call:
 
 ```text
 Please introduce yourself and explain what you can do right now
@@ -144,12 +144,12 @@ If the first message does not succeed, start from [Deployment and operations](ht
 
 ### 4. Enable external agent delegation
 
-First install and log in to the target CLI under the same account that runs Pipiclaw, then copy the roles you need. The example below enables both a Claude Code builder and a Codex reviewer:
+First install and log in to the target CLI under the same account that runs Pipiclaw, then copy the capability entries you need. This enables the main Claude Code and Codex entries:
 
 ```bash
 mkdir -p ~/.pipiclaw/workspace/sub-agents
 PIPICLAW_PACKAGE_DIR="$(npm root -g)/@oyasmi/pipiclaw"
-cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/{builder,reviewer}.md \
+cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/{claude-main,codex-main}.md \
   ~/.pipiclaw/workspace/sub-agents/
 ```
 
@@ -159,10 +159,10 @@ Role file changes are rediscovered at runtime. Send:
 /subagents roles
 ```
 
-Once the roles show as available, you can describe a goal and name a role directly:
+Once the entries show as available, describe the goal and acceptance criteria and let the main agent select an executor:
 
 ```text
-Please hand this cross-module implementation to the builder, and once it's done have the reviewer check it independently.
+Please hand this cross-module implementation to a suitable executor, then independently check the final changes.
 ```
 
 Common control entry points:
@@ -175,7 +175,7 @@ Common control entry points:
 /subagents roles [name]            # view the role directory and a single role's config
 ```
 
-External agents do not go through Pipiclaw's command and path guards. Before using the example roles, read the authorization, security boundary, and sandbox notes in the [Agent delegation guide](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md).
+External agents do not go through Pipiclaw's command and path guards. The recommended entries above use permissive CLI flags; before using them, read the authorization, security boundary, and sandbox notes in the [Agent delegation guide](https://github.com/oyasmi/pipiclaw/blob/main/docs/sub-agents.md).
 
 Long-running external delegations should run in the DingTalk daemon; the TUI currently does not provide completion notifications for external runs or re-adoption after exit.
 
@@ -243,7 +243,7 @@ npm run build
 npm run check    # lint + typecheck + deadcode + test
 ```
 
-Minimal verification: `npm run typecheck` and `npm run test`. Real-model E2E uses `npm run test:e2e` and is not part of the daily unit tests.
+Minimal verification: `npm run typecheck` and `npm run test`. `npm run test:e2e` is deterministic, offline, and credential-free; the small real-model smoke suite uses `npm run test:e2e:live`.
 
 ## License
 
