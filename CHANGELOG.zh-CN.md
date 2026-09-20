@@ -2,12 +2,14 @@
 
 说明：请与 `CHANGELOG.md` 保持同步更新。
 
-## [Unreleased]
+## [0.9.3-beta.5] - 2026-09-20
 
 ### Changed
 
 - **子代理模板从「岗位角色」改为「能力条目」。** `examples/sub-agents/` 现在有两套可选组织：`agents/`（推荐 —— `claude-high` / `claude-main` / `codex-high` / `codex-main` / `codex-flash` / `glm-high` / `glm-flash`，每个条目只绑定一个 agent、模型和推理档，正文不含岗位设定）与 `roles/`（早期的 8 个岗位角色，保留作参考，以及仍然需要真正只读执行边界的场景）。角色正文是在不知道本轮任务时写死的任务框架：它让路由变成「猜别人起的职位名」，也限制了通用 coding agent 能被要求做的事。现在路由变成「这轮需要什么能力、能付多少代价」，这是主代理判断得了的。发现机制未变，仍然平铺加载——子目录只是示例的组织方式，不是加载路径。
 - `agent-delegation.md` 按档位选择（flash / main / high）、「不要默认往上选」，以及被删掉的岗位设定原本提供的两件事重写：评审与验收的独立性现在必须写进 `task`；能力条目全部放开权限并声明 `mutates: write`，因此同一工作目录同时只容得下一个外部委派，`purpose=verify` 的 attestation 一律是 `advisory`。
+- **AI Card 投递按轮次 generation 隔离。** 一轮对话不再可能覆盖另一轮的卡片或留下悬空卡片：卡片创建时即带非空「正在处理…」内容，并按频道内的 generation 符号跟踪；关闭、`/stop` 与 `/new` 使旧 generation 失效，已完成轮次的迟到写入被丢弃而不是与下一轮卡片竞争；单实例内卡片写入串行化，保证 stop 是最终更新。用户轮次约 1.5s 后（原 350ms）才亮出等待卡片；静默与被停止的收尾保留可见进度（打上结束标记而非清空卡片）；进度更新在连续两次远端失败后放弃，而最终回答仍独立投递。被等待的 job/subagent 唤醒不再打开进度卡片——与其他后台唤醒一样只投递结果。`replaceMessage` 只在真正投递完成后才 resolve，失败即抛错，调用方不再把「已入队」当作「已成功」。
+- 指南与 playbook 对齐当前 runtime 行为：修正 README 的安装校验、外部 agent 示例路径与 E2E 说明；任务文档对齐 v4 wait-ticket/budget/resume 机制与 TUI/daemon 边界；修正记忆迁移回滚顺序、维护开关语义与共享文件注入规则；刷新 systemd/Supervisor 示例（运行账户、HOME、可执行路径）。playbook 去掉固定角色目录与旧治理假设（总单元数 8206 → 8107）。
 
 ### Added
 
