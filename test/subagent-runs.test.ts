@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { LoggedSubAgentRun } from "../src/channel/store.js";
@@ -380,6 +380,62 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 
 		expect(events).toHaveLength(0);
 		expect(restored.get("run-done")?.status).toBe("completed");
+	});
+
+	// R7b: a record that is only temporarily unreadable (a permissions slip, a filesystem hiccup)
+	// must not be treated as the same failure as one that is genuinely corrupt. The old code
+	// unlinked either way, permanently destroying the only trace of an external run's completion
+	// over a transient I/O error that a later restart could otherwise have retried past.
+	it.skipIf(process.getuid?.() === 0)(
+		"restore skips (and keeps) a run record that is unreadable rather than corrupt",
+		async () => {
+			const stateDir = createTempDir();
+			mkdirSync(join(stateDir, "dm_123"), { recursive: true });
+			const writer = new SubAgentRunManager("dm_123", { stateDir });
+			await writer.register({
+				runId: "run-locked",
+				channelId: "dm_123",
+				runtime: "internal",
+				agent: "explorer",
+				label: "explore",
+				source: "predefined",
+				tools: [],
+				purpose: "work",
+				workingDirectory: "/tmp",
+				artifactDir: "/tmp/artifacts/run-locked",
+			});
+			const path = join(stateDir, "dm_123", "run-locked.json");
+			chmodSync(path, 0o000);
+			try {
+				const { dispatch, events } = makeDispatch();
+				const restored = new SubAgentRunManager("dm_123", { stateDir, dispatch });
+				expect(await restored.restore()).toBe(0);
+				expect(events).toHaveLength(0);
+				expect(restored.get("run-locked")).toBeUndefined();
+				// Left on disk, unlike the old unconditional unlink — a later restart, once
+				// permissions are fixed, can still recover it.
+				expect(existsSync(path)).toBe(true);
+			} finally {
+				chmodSync(path, 0o600);
+			}
+		},
+	);
+
+	it("restore quarantines (never deletes) a genuinely corrupt run record", async () => {
+		const stateDir = createTempDir();
+		mkdirSync(join(stateDir, "dm_123"), { recursive: true });
+		const path = join(stateDir, "dm_123", "run-corrupt.json");
+		writeFileSync(path, "{not valid json");
+
+		const { dispatch, events } = makeDispatch();
+		const restored = new SubAgentRunManager("dm_123", { stateDir, dispatch });
+		expect(await restored.restore()).toBe(0);
+		expect(events).toHaveLength(0);
+		// The evidence survives — quarantined next to where it was, not deleted — and a
+		// `.corrupt` file never matches the `.json` filter, so a later restore cannot loop on it.
+		expect(existsSync(path)).toBe(false);
+		expect(existsSync(`${path}.corrupt`)).toBe(true);
+		expect(await restored.restore()).toBe(0);
 	});
 
 	it("finishes a persisted settlement intent after restart without releasing another writer's lease", async () => {

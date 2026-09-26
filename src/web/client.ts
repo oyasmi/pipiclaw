@@ -159,6 +159,13 @@ export class WebHttpClient {
 		let currentUrl = buildUrlWithParams(options.url, options.params);
 		let method = options.method ?? "GET";
 		let data = options.data;
+		// `options.headers` is whatever the caller intended for the *original* origin — a
+		// provider's Authorization/X-Subscription-Token key, in the common case (R5). This manual
+		// redirect loop (maxRedirects: 0 below, precisely so the decision is ours to make) must not
+		// carry those headers across an origin change: unlike a browser's automatic redirect
+		// handling, axios does nothing here to strip them, so a redirect to a different origin
+		// would otherwise receive the same credentials the first hop got.
+		const credentialedOrigin = new URL(currentUrl).origin;
 
 		for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
 			let validatedAddress: string | undefined;
@@ -191,6 +198,7 @@ export class WebHttpClient {
 					httpAgent = pinned;
 				}
 			}
+			const sameOrigin = new URL(currentUrl).origin === credentialedOrigin;
 			let response: Awaited<ReturnType<typeof axios.request<ArrayBuffer>>>;
 			try {
 				response = await axios.request<ArrayBuffer>({
@@ -200,7 +208,7 @@ export class WebHttpClient {
 					headers: {
 						"User-Agent": WEB_USER_AGENT,
 						Accept: "*/*",
-						...options.headers,
+						...(sameOrigin ? options.headers : undefined),
 					},
 					responseType: "arraybuffer",
 					validateStatus: () => true,

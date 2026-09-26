@@ -165,8 +165,52 @@ function matchesAllowedHost(hostname: string, allowedHosts: string[]): boolean {
 	return allowedHosts.some((candidate) => normalizeHost(candidate) === normalized);
 }
 
+/**
+ * An IPv4-mapped IPv6 address (`::ffff:a.b.c.d`, the `::ffff:0:0/96` range) is the same host as
+ * the embedded IPv4 address — a dual-stack socket connecting to `::ffff:127.0.0.1` reaches
+ * loopback exactly as `127.0.0.1` would. `isPrivateAddress`/`matchesAllowedCidr` used to check
+ * such an address only against the IPv6 private ranges, which do not cover this mapped range, so
+ * a mapped private/loopback address (R4) sailed through as "not private". Returns the dotted-quad
+ * form when `address` is a mapped IPv4 address, else `null`.
+ */
+function ipv4MappedEmbeddedAddress(address: string): string | null {
+	if (isIP(address) !== 6) {
+		return null;
+	}
+	const value = parseIpv6(address);
+	if (value === null) {
+		return null;
+	}
+	if (value >> 32n !== 0xffffn) {
+		return null;
+	}
+	const low32 = value & 0xffffffffn;
+	return [24n, 16n, 8n, 0n].map((shift) => Number((low32 >> shift) & 0xffn)).join(".");
+}
+
+/** Every address form a guard check must consider for `address`: itself, plus (when it is an
+ * IPv4-mapped IPv6 address) the IPv4 address it actually maps to. */
+function expandForGuardCheck(address: string): Array<{ address: string; version: 4 | 6 }> {
+	const version = isIP(address);
+	if (version === 4) {
+		return [{ address, version: 4 }];
+	}
+	if (version === 6) {
+		const mapped = ipv4MappedEmbeddedAddress(address);
+		return mapped
+			? [
+					{ address, version: 6 },
+					{ address: mapped, version: 4 },
+				]
+			: [{ address, version: 6 }];
+	}
+	return [];
+}
+
 function matchesAllowedCidr(address: string, allowedCidrs: string[]): boolean {
-	return allowedCidrs.some((cidr) => ipInCidr(address, cidr.trim()));
+	return expandForGuardCheck(address).some(({ address: candidate }) =>
+		allowedCidrs.some((cidr) => ipInCidr(candidate, cidr.trim())),
+	);
 }
 
 function isBlockedHost(hostname: string): boolean {
@@ -175,14 +219,11 @@ function isBlockedHost(hostname: string): boolean {
 }
 
 function isPrivateAddress(address: string): boolean {
-	const version = isIP(address);
-	if (version === 4) {
-		return PRIVATE_IPV4_CIDRS.some((cidr) => ipInCidr(address, cidr));
-	}
-	if (version === 6) {
-		return PRIVATE_IPV6_CIDRS.some((cidr) => ipInCidr(address, cidr));
-	}
-	return false;
+	return expandForGuardCheck(address).some(({ address: candidate, version }) =>
+		version === 4
+			? PRIVATE_IPV4_CIDRS.some((cidr) => ipInCidr(candidate, cidr))
+			: PRIVATE_IPV6_CIDRS.some((cidr) => ipInCidr(candidate, cidr)),
+	);
 }
 
 async function validateUrlTarget(

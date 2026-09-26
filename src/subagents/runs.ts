@@ -1109,15 +1109,30 @@ export class SubAgentRunManager {
 		let restored = 0;
 		for (const filename of filenames) {
 			const path = join(dir, filename);
+			// A transient I/O error (EACCES, EIO) reading the file is not the same failure as the
+			// file actually being corrupt (R7b): the old code unlinked either way, so a run record
+			// that only became briefly unreadable (a permissions slip, a filesystem hiccup) was
+			// permanently destroyed instead of retried on the next restart. Only a read that
+			// actually succeeds gets to judge the content.
+			let raw: string;
+			try {
+				raw = await readFile(path, "utf-8");
+			} catch (error) {
+				log.logWarning(`Skipping unreadable sub-agent run record ${filename} (left on disk)`, errorMessage(error));
+				continue;
+			}
 			let record: RunRecord | undefined;
 			try {
-				record = parseRunRecord(await readFile(path, "utf-8"));
+				record = parseRunRecord(raw);
 			} catch {
 				record = undefined;
 			}
 			if (!record) {
-				log.logWarning(`Discarding unreadable sub-agent run record: ${filename}`);
-				await unlink(path).catch(() => undefined);
+				// Genuinely corrupt content (bad JSON or shape) — quarantine rather than delete, so
+				// the evidence survives for a manual look; `.corrupt` files never match the `.json`
+				// filter above, so this cannot loop.
+				log.logWarning(`Quarantining corrupt sub-agent run record: ${filename}`);
+				await rename(path, `${path}.corrupt`).catch(() => undefined);
 				continue;
 			}
 			this.runs.set(record.runId, record);

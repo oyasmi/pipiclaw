@@ -452,4 +452,103 @@ describe("DurableDispatchService", () => {
 		expect(delivered).toHaveLength(deliveredCount);
 		expect(exhausted).toHaveLength(1);
 	});
+
+	it("keeps a dispatch id containing a channel-id slash on one flat file, so a fresh instance can still find it (R1)", async () => {
+		// DingTalk group ids are base64 and routinely contain `/` (channel-paths.ts); a business id
+		// derived from one used to become the filename verbatim, silently turning into a nested
+		// path a flat readdir (what drainOnce/cancelChannel actually do) can never see again.
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const delivered: DingTalkEvent[] = [];
+		const dispatchId = "subagent:group_a/b=:run-1:done";
+		const service = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch({ ...event(), dispatchId });
+		expect(delivered).toHaveLength(1);
+
+		const entries = readdirSync(stateDir, { withFileTypes: true });
+		expect(entries).toHaveLength(1);
+		expect(entries[0]?.isFile()).toBe(true);
+
+		// A "restart" is just a new instance over the same directory; it must still see the record.
+		const restarted = new DurableDispatchService({ stateDir, bot: { enqueueEvent: () => true } });
+		expect(await restarted.cancelChannel(event().channelId)).toBe(1);
+	});
+
+	it("migrates a pre-fix nested dispatch record so a new instance can drain it (R1)", async () => {
+		// Simulates the actual pre-fix bug: an old process wrote a dispatch id containing `/`
+		// verbatim as a path, which created a real subdirectory instead of a file.
+		const stateDir = join(tempDir(), "state", "dispatch");
+		const legacyId = "subagent:group_legacy/child:run-1:done";
+		await mkdir(join(stateDir, "subagent:group_legacy"), { recursive: true });
+		await writeFile(
+			join(stateDir, "subagent:group_legacy", "child:run-1:done.json"),
+			`${JSON.stringify({
+				version: 1,
+				id: legacyId,
+				createdAt: new Date().toISOString(),
+				status: "pending",
+				deliveries: 0,
+				event: { ...event(), channelId: "group_legacy", dispatchId: legacyId },
+			})}\n`,
+		);
+
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent(next) {
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.drainOnce();
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]?.dispatchId).toBe(legacyId);
+		// The legacy nested file is gone — migrated to its flat, encoded home.
+		expect(existsSync(join(stateDir, "subagent:group_legacy", "child:run-1:done.json"))).toBe(false);
+	});
+
+	it("does not burn a delivery attempt on admission rejection, only on real failures (R2)", async () => {
+		// A full ChannelQueue or a stopped bot rejects `enqueueEvent` immediately — the handler
+		// never ran and never got a chance to fail. Counting that against MAX_DELIVERIES meant a
+		// few minutes of congestion could permanently exhaust a record that was never actually
+		// tried, discarding the message it carried for good.
+		const stateDir = join(tempDir(), "state", "dispatch");
+		let accept = false;
+		const delivered: DingTalkEvent[] = [];
+		const service = new DurableDispatchService({
+			stateDir,
+			bot: {
+				enqueueEvent(next) {
+					if (!accept) return false;
+					delivered.push(next);
+					return true;
+				},
+			},
+		});
+		await service.dispatch(event());
+		const id = readdirSync(stateDir)[0]?.replace(/\.json$/, "");
+		expect(id).toBeTruthy();
+
+		// Far past MAX_DELIVERIES (8) worth of congestion — none of it a real delivery attempt.
+		for (let i = 0; i < 20; i++) {
+			await service.drainOnce();
+		}
+		const stored = JSON.parse(readFileSync(join(stateDir, `${id}.json`), "utf-8"));
+		expect(stored.status).toBe("pending");
+		expect(stored.deliveries).toBe(0);
+
+		// Capacity returns: the record is still eligible, not exhausted.
+		accept = true;
+		await service.drainOnce();
+		expect(delivered).toHaveLength(1);
+	});
 });

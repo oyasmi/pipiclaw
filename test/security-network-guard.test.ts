@@ -58,6 +58,43 @@ describe("validateNetworkTarget", () => {
 		}
 	});
 
+	// R4: `::ffff:a.b.c.d` (the `::ffff:0:0/96` range) is the same host as the embedded IPv4
+	// address — a dual-stack socket connecting to it reaches exactly what the IPv4 address names.
+	// The guard used to check such a literal only against the IPv6 private ranges, which do not
+	// cover this mapped range, so a mapped loopback/RFC1918/link-local address sailed through as
+	// "not private" while an equivalent bare IPv4 literal was correctly blocked.
+	it("blocks IPv4-mapped IPv6 literals for the address they actually map to", async () => {
+		for (const [mapped, plainEquivalent] of [
+			["::ffff:127.0.0.1", "127.0.0.1"],
+			["::ffff:7f00:1", "127.0.0.1"],
+			["::ffff:10.0.0.1", "10.0.0.1"],
+			["::ffff:169.254.1.1", "169.254.1.1"],
+		]) {
+			await expect(validateNetworkTarget(`http://${plainEquivalent}/`, context())).rejects.toMatchObject({
+				category: "private-address",
+			});
+			await expect(validateNetworkTarget(`http://[${mapped}]/`, context())).rejects.toMatchObject({
+				category: "private-address",
+			});
+		}
+	});
+
+	it("still allows an IPv4-mapped IPv6 literal that maps to a public address", async () => {
+		// WHATWG URL always serializes an IPv6 literal in compressed hex form, so the guard sees
+		// "::ffff:5db8:d822" here even though the request text spelled the embedded IPv4 part out —
+		// that hex form is exactly what `isPrivateAddress`/`matchesAllowedCidr` must unwrap correctly.
+		const result = await validateNetworkTarget("http://[::ffff:93.184.216.34]/", context());
+		expect(result.resolvedAddress).toBe("::ffff:5db8:d822");
+	});
+
+	it("an allowedCidrs entry for the embedded IPv4 range also covers its mapped IPv6 form", async () => {
+		const result = await validateNetworkTarget(
+			"http://[::ffff:10.1.2.3]/",
+			context({ allowedCidrs: ["10.0.0.0/8"] }),
+		);
+		expect(result.resolvedAddress).toBe("::ffff:a01:203");
+	});
+
 	it("blocks named cloud-metadata and localhost hosts by exact match, ahead of any DNS branch", async () => {
 		for (const host of ["localhost", "sub.localhost", "metadata.google.internal", "metadata", "169.254.169.254"]) {
 			await expect(validateNetworkTarget(`http://${host}/`, context())).rejects.toMatchObject({

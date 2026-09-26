@@ -1,11 +1,19 @@
+import { existsSync } from "node:fs";
 import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
-import { appendTaskLog, readTaskLog, renderTaskLogLine, resetTaskLogAppenders, taskLogPath } from "../src/tasks/log.js";
+import {
+	appendTaskLog,
+	readTaskLog,
+	renderTaskLogLine,
+	resetTaskLogAppenders,
+	taskArchiveLogPath,
+	taskLogPath,
+} from "../src/tasks/log.js";
 import { readCycleRounds, recordVerificationRound } from "../src/tasks/rounds.js";
-import { openCycle } from "../src/tasks/store.js";
+import { archiveTask, openCycle } from "../src/tasks/store.js";
 
 let dir: string;
 
@@ -80,6 +88,66 @@ describe("loop log (spec 051, D5)", () => {
 		const records = await readTaskLog(dir, "done-task");
 		expect(records).toHaveLength(1);
 		expect(records[0]).toMatchObject({ kind: "step", note: "n" });
+	});
+
+	// R9: `MAX_LOG_BYTES` rotation moves older records into `.1`/`.2` behind the caller's back.
+	// A read that only looked at the current file made rotated-out history invisible to
+	// `task_log`, step briefs, and round accounting alike even though it was still on disk.
+	it("reads records from rotated shards (.1/.2), oldest first, alongside the current file", async () => {
+		await appendFile(
+			`${taskLogPath(dir, "T")}.2`,
+			`${JSON.stringify({ ts: "t1", cycle: "c-1", kind: "step", seq: 1, outcome: "continue", note: "oldest", tools: [] })}\n`,
+		);
+		await appendFile(
+			`${taskLogPath(dir, "T")}.1`,
+			`${JSON.stringify({ ts: "t2", cycle: "c-1", kind: "step", seq: 2, outcome: "continue", note: "middle", tools: [] })}\n`,
+		);
+		await appendTaskLog(dir, "T", {
+			cycle: "c-1",
+			kind: "step",
+			seq: 3,
+			outcome: "continue",
+			note: "newest",
+			tools: [],
+		});
+
+		const records = await readTaskLog(dir, "T");
+		expect(records.map((r) => (r.kind === "step" ? r.note : undefined))).toEqual(["oldest", "middle", "newest"]);
+
+		// limit/cycle/kinds filters apply across the combined, chronologically-ordered history.
+		expect((await readTaskLog(dir, "T", { limit: 1 }))[0]).toMatchObject({ kind: "step", seq: 3 });
+	});
+
+	it("archiveTask moves rotated shards along with the current file, and readTaskLog still sees all of them", async () => {
+		await appendFile(
+			`${taskLogPath(dir, "T")}.2`,
+			`${JSON.stringify({ ts: "t1", cycle: "c-1", kind: "step", seq: 1, outcome: "continue", note: "oldest", tools: [] })}\n`,
+		);
+		await appendFile(
+			`${taskLogPath(dir, "T")}.1`,
+			`${JSON.stringify({ ts: "t2", cycle: "c-1", kind: "step", seq: 2, outcome: "continue", note: "middle", tools: [] })}\n`,
+		);
+		await appendTaskLog(dir, "T", {
+			cycle: "c-1",
+			kind: "step",
+			seq: 3,
+			outcome: "continue",
+			note: "newest",
+			tools: [],
+		});
+		await resetTaskLogAppenders();
+
+		await archiveTask(dir, "T", "completed");
+
+		expect(existsSync(taskLogPath(dir, "T"))).toBe(false);
+		expect(existsSync(`${taskLogPath(dir, "T")}.1`)).toBe(false);
+		expect(existsSync(`${taskLogPath(dir, "T")}.2`)).toBe(false);
+		expect(existsSync(taskArchiveLogPath(dir, "T"))).toBe(true);
+		expect(existsSync(`${taskArchiveLogPath(dir, "T")}.1`)).toBe(true);
+		expect(existsSync(`${taskArchiveLogPath(dir, "T")}.2`)).toBe(true);
+
+		const records = await readTaskLog(dir, "T");
+		expect(records.map((r) => (r.kind === "step" ? r.note : undefined))).toEqual(["oldest", "middle", "newest"]);
 	});
 
 	it("renders a rejected verdict with the reason it was rejected", () => {

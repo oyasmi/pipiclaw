@@ -470,13 +470,21 @@ export async function applyMemoryOps(
 				result.missingTarget++;
 				continue;
 			}
-			await rm(getMemoryEntryPath(channelDir, op.name), { force: true });
+			// Tombstone first, delete second (R8): the tombstone is what stops the background
+			// reflect pass from silently re-learning a fact the user just deleted. Deleting the file
+			// first meant a failure between the two steps (disk full, permissions) left the fact
+			// gone with no tombstone recorded — by the time the caller retried, the source file no
+			// longer existed to recompute the hash from, so the fact could quietly come back.
+			// Recording the tombstone before the delete means the worst case after a failure here is
+			// the reverse — file still present, already tombstoned — which is recoverable: the file
+			// is still there to retry deleting, and it is already protected from re-learning either way.
 			await appendMemoryTombstoneRecord(channelDir, {
 				name: op.name,
 				contentHash: hashMemoryContent(entry.description),
 				deletedAt: today,
 				reason: op.reason?.trim() || "deleted",
 			});
+			await rm(getMemoryEntryPath(channelDir, op.name), { force: true });
 			byName.delete(op.name);
 			liveNames.delete(op.name);
 			result.deleted.push(op.name);

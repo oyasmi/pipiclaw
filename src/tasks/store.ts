@@ -268,9 +268,15 @@ export async function archiveTask(channelDir: string, id: string, outcome: TaskA
 	document.fields.closedAt = formatLocalTime();
 	await writeStoredTask({ ...document, path: archivedTaskPath(channelDir, normalized) });
 	await rm(taskPath(channelDir, normalized), { force: true });
-	// The loop log travels with its contract so an archived task stays inspectable.
+	// The loop log travels with its contract so an archived task stays inspectable — including
+	// whatever has already rotated into `.1`/`.2` (R9). Moving only the current file stranded
+	// those shards in the now-empty active `tasks/` dir, permanently split from the record they
+	// belong to and outside anywhere `readTaskLog` looks for an archived task.
 	const logFrom = taskLogPath(channelDir, normalized);
-	if (existsSync(logFrom)) {
-		await rename(logFrom, join(archiveDir, `${normalized}.jsonl`)).catch(() => undefined);
+	for (const suffix of ["", ".1", ".2"]) {
+		const from = `${logFrom}${suffix}`;
+		if (existsSync(from)) {
+			await rename(from, join(archiveDir, `${normalized}.jsonl${suffix}`)).catch(() => undefined);
+		}
 	}
 }

@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	commitProjectSelection,
 	getProjectSelectionPath,
+	readProjectSelection,
 	resolveProjectScope,
 } from "../src/channel/project-scope-store.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -84,6 +85,39 @@ describe("resolveProjectScope", () => {
 		const outcome = resolveProjectScope(channelDir, policyFor(link));
 
 		expect(outcome.kind).toBe("blocked");
+	});
+
+	// R7a: a corrupt selection file must never be treated the same as "never selected" — that
+	// collapse used to make resolveProjectScope silently overwrite it with the app default,
+	// moving a channel to a different project root the user never chose.
+	it("blocks (never silently re-defaults) when the selection file exists but is not valid JSON", async () => {
+		const channelDir = makeTempDir();
+		const defaultRoot = makeTempDir();
+		const chosenRoot = makeTempDir();
+		await commitProjectSelection(channelDir, chosenRoot, "dingtalk-command");
+		writeFileSync(getProjectSelectionPath(channelDir), "{not json");
+
+		const outcome = resolveProjectScope(channelDir, policyFor(defaultRoot));
+
+		expect(outcome.kind).toBe("blocked");
+		// The corrupt file is left in place as evidence, not silently replaced.
+		expect(readFileSync(getProjectSelectionPath(channelDir), "utf-8")).toBe("{not json");
+	});
+
+	it("blocks when the selection file is valid JSON but missing required fields", async () => {
+		const channelDir = makeTempDir();
+		const defaultRoot = makeTempDir();
+		writeFileSync(getProjectSelectionPath(channelDir), JSON.stringify({ version: 1 }));
+
+		const outcome = resolveProjectScope(channelDir, policyFor(defaultRoot));
+
+		expect(outcome.kind).toBe("blocked");
+	});
+
+	it("readProjectSelection (display-only) still returns undefined for a corrupt file, distinct from blocking", () => {
+		const channelDir = makeTempDir();
+		writeFileSync(getProjectSelectionPath(channelDir), "{not json");
+		expect(readProjectSelection(channelDir)).toBeUndefined();
 	});
 
 	it("blocks when the persisted root has fallen outside the configured allowed roots", async () => {

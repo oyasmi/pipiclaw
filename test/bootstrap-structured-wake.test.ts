@@ -274,7 +274,14 @@ describe("runtime structured wake delivery", () => {
 			const taskId = `T-retry-${kind}`;
 			const channelDir = await waitingTask(harness.runtimePaths.workspaceDir, harness.channelId, taskId);
 			const wake = await createWake(harness, kind, taskId, channelDir);
-			const dispatchPath = join(harness.runtimePaths.appHomeDir, "state", "dispatch", `${wake.dispatchId}.json`);
+			// The on-disk filename is percent-encoded (R1: a raw dispatch id can contain `/`, which
+			// would otherwise turn into a real subdirectory a flat scan can never see again).
+			const dispatchPath = join(
+				harness.runtimePaths.appHomeDir,
+				"state",
+				"dispatch",
+				`${encodeURIComponent(wake.dispatchId ?? "")}.json`,
+			);
 
 			await harness.runtime.handler.handleEvent(wake, harness.bot as unknown as DingTalkBot, true);
 			expect(harness.fakeRunner.run, kind).not.toHaveBeenCalled();

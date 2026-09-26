@@ -23,16 +23,28 @@ export function getProjectSelectionPath(channelDir: string): string {
 	return join(channelDir, SELECTION_FILENAME);
 }
 
-export function readProjectSelection(channelDir: string): PersistedProjectSelectionV1 | undefined {
+/**
+ * `missing` (never selected — a plain default) and `corrupt` (a selection existed but the file
+ * cannot be read back) must not collapse into the same "nothing here" signal (R7a):
+ * `resolveProjectScope` used to treat both as "never selected" and silently overwrite a corrupt
+ * file with the app default, which moved a channel to a different project root without the user
+ * ever choosing that.
+ */
+export type ReadProjectSelectionResult =
+	| { kind: "missing" }
+	| { kind: "corrupt" }
+	| { kind: "valid"; selection: PersistedProjectSelectionV1 };
+
+export function readProjectSelectionResult(channelDir: string): ReadProjectSelectionResult {
 	const path = getProjectSelectionPath(channelDir);
 	if (!existsSync(path)) {
-		return undefined;
+		return { kind: "missing" };
 	}
 	let raw: unknown;
 	try {
 		raw = JSON.parse(readFileSync(path, "utf-8"));
 	} catch {
-		return undefined;
+		return { kind: "corrupt" };
 	}
 	if (
 		!raw ||
@@ -42,9 +54,18 @@ export function readProjectSelection(channelDir: string): PersistedProjectSelect
 		typeof (raw as { updatedAt?: unknown }).updatedAt !== "string" ||
 		typeof (raw as { updatedBy?: unknown }).updatedBy !== "string"
 	) {
-		return undefined;
+		return { kind: "corrupt" };
 	}
-	return raw as PersistedProjectSelectionV1;
+	return { kind: "valid", selection: raw as PersistedProjectSelectionV1 };
+}
+
+/** Collapses `corrupt` into `undefined` alongside `missing`, for display-only callers (`/project
+ * show`) that already have their own "not chosen yet" wording and do not make a resolution
+ * decision. `resolveProjectScope` uses {@link readProjectSelectionResult} directly instead,
+ * because it must not conflate the two. */
+export function readProjectSelection(channelDir: string): PersistedProjectSelectionV1 | undefined {
+	const result = readProjectSelectionResult(channelDir);
+	return result.kind === "valid" ? result.selection : undefined;
 }
 
 /** Used only for the one-time, in-constructor migration write (D3.3); every explicit mutation
@@ -86,9 +107,16 @@ export function resolveProjectScope(
 ): ProjectScopeOutcome {
 	const sandbox = currentProjectSandboxStatus();
 	const boundary: ProjectScope["boundary"] = resolution.configured ? "project" : "unbounded";
-	const existing = readProjectSelection(channelDir);
+	const result = readProjectSelectionResult(channelDir);
 
-	if (!existing) {
+	if (result.kind === "corrupt") {
+		return {
+			kind: "blocked",
+			reason: `项目选择文件已损坏：${getProjectSelectionPath(channelDir)}。请检查该文件，或在频道空闲时执行 /project set <path> 或 /project reset 重新选择——不会自动回退到默认项目。`,
+		};
+	}
+
+	if (result.kind === "missing") {
 		const selection: PersistedProjectSelectionV1 = {
 			version: 1,
 			projectRoot: resolution.policy.defaultRoot,
@@ -99,6 +127,7 @@ export function resolveProjectScope(
 		return { kind: "ready", scope: { projectRoot: resolution.policy.defaultRoot, boundary, sandbox }, selection };
 	}
 
+	const existing = result.selection;
 	if (!existsSync(existing.projectRoot)) {
 		return {
 			kind: "blocked",

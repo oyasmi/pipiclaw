@@ -13,8 +13,11 @@ import { normalizeTaskId } from "./ledger.js";
  * v3 kept this history inline in the task file under `## History`, capped at 24 KB / 8 entries.
  * Both long-lived tasks on the author's machine sat permanently *at* that cap: 79% of a 30 KB
  * task file was closed cycles the model re-read on every single wake and never acted on. Moving
- * it here keeps the contract small enough to inject whole (INV-6) while making the history
- * *longer*, not shorter — nothing is folded away any more.
+ * it here keeps the contract small enough to inject whole (INV-6) while making the history much
+ * longer before anything is folded away: the log rotates at `MAX_LOG_BYTES` and keeps two rotated
+ * backups (`.1`, `.2`) alongside the current file — bounded retention, not an accidental cap.
+ * `readTaskLog`/`archiveTask` must enumerate all three; reading or archiving only the current
+ * file silently drops whatever had already rotated out of it (R9).
  *
  * The log is append-only and is never rewritten; the contract's `## 上次结果` is a projection of
  * its latest `close`, not a replacement for it.
@@ -136,28 +139,13 @@ export interface ReadTaskLogOptions {
 	kinds?: readonly TaskLogRecord["kind"][];
 }
 
-/**
- * Read the log back, newest-last. Unparseable lines are skipped rather than failing the read: a
- * hand-edited or half-written line must not make a task's whole history unreadable.
- */
-export async function readTaskLog(
-	channelDir: string,
-	id: string,
-	options: ReadTaskLogOptions = {},
-): Promise<TaskLogRecord[]> {
-	// Fall back to the archived copy so `task_log` on a completed task returns its history rather
-	// than "暂无日志" — a task that finished still has a loop log worth reading.
-	const path = existsSync(taskLogPath(channelDir, id))
-		? taskLogPath(channelDir, id)
-		: taskArchiveLogPath(channelDir, id);
-	if (!existsSync(path)) return [];
-	let content: string;
-	try {
-		content = await readFile(path, "utf-8");
-	} catch {
-		return [];
-	}
-	const records: TaskLogRecord[] = [];
+/** Rotated-shard paths for `basePath`, oldest first, then the current file — the chronological
+ * order records were actually written in. Only shards that exist are returned. */
+function shardPaths(basePath: string): string[] {
+	return [`${basePath}.2`, `${basePath}.1`, basePath].filter((path) => existsSync(path));
+}
+
+function parseLogLines(content: string, options: ReadTaskLogOptions, into: TaskLogRecord[]): void {
 	for (const line of content.split("\n")) {
 		if (!line.trim()) continue;
 		let parsed: unknown;
@@ -170,7 +158,40 @@ export async function readTaskLog(
 		if (!record) continue;
 		if (options.cycle && record.cycle !== options.cycle) continue;
 		if (options.kinds && !options.kinds.includes(record.kind)) continue;
-		records.push(record);
+		into.push(record);
+	}
+}
+
+/**
+ * Read the log back, newest-last. Unparseable lines are skipped rather than failing the read: a
+ * hand-edited or half-written line must not make a task's whole history unreadable.
+ *
+ * Reads every existing rotated shard (R9), not just the current file — `MAX_LOG_BYTES` rotation
+ * moves older records into `.1`/`.2` behind the caller's back, and a read that only looked at the
+ * current file made rotated-out history invisible to `task_log`, briefs, and round accounting
+ * alike even though it was still on disk.
+ */
+export async function readTaskLog(
+	channelDir: string,
+	id: string,
+	options: ReadTaskLogOptions = {},
+): Promise<TaskLogRecord[]> {
+	// Fall back to the archived copy so `task_log` on a completed task returns its history rather
+	// than "暂无日志" — a task that finished still has a loop log worth reading.
+	const basePath = existsSync(taskLogPath(channelDir, id))
+		? taskLogPath(channelDir, id)
+		: taskArchiveLogPath(channelDir, id);
+	const paths = shardPaths(basePath);
+	if (paths.length === 0) return [];
+	const records: TaskLogRecord[] = [];
+	for (const path of paths) {
+		let content: string;
+		try {
+			content = await readFile(path, "utf-8");
+		} catch {
+			continue;
+		}
+		parseLogLines(content, options, records);
 	}
 	return options.limit !== undefined && records.length > options.limit ? records.slice(-options.limit) : records;
 }

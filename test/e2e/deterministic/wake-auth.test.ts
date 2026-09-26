@@ -153,9 +153,18 @@ describe("E2E deterministic: wake authenticity", () => {
 		expect(request?.lastUserText).toContain(`[TASK_STEP:${taskId}]`);
 		expect(request?.tools).toContain("task_step_end");
 		await waitFor("task step settled", () => taskState() === "parked", { timeoutMs: 5_000, intervalMs: 50 });
-		expect(
-			harness.deliveries.slice(deliveriesBeforeWake).some((delivery) => delivery.text?.includes("CHILD RESULT")),
-		).toBe(true);
+		// `taskState() === "parked"` only proves `writeStoredTask` ran — the *first* of several
+		// steps `task_step_end` performs (log append, then the notice queue/dispatch) before the
+		// completion wake's own deliveries land. Asserting immediately after raced those later
+		// steps: R10, caught by the review's `wake-auth.test.ts:158` failure (task parked, notice
+		// not yet delivered). Waiting for the delivery itself, rather than for a state flip that
+		// merely precedes it, is the actual completion barrier.
+		await waitFor(
+			"CHILD RESULT delivered",
+			() =>
+				harness.deliveries.slice(deliveriesBeforeWake).some((delivery) => delivery.text?.includes("CHILD RESULT")),
+			{ timeoutMs: 5_000, intervalMs: 50 },
+		);
 		// The out-of-band "settled" notice (P0-1/P1a) fires independently of the completion
 		// wake above — a plain `sendPlain`, not part of the wake turn's own reply. This is the
 		// detached-settlement path (`announce: true`, the run degraded to "still running" and
@@ -165,11 +174,14 @@ describe("E2E deterministic: wake authenticity", () => {
 		// `SubAgentRunManager.announce` (src/subagents/runs.ts) and this assertion goes red
 		// while the CHILD RESULT wake assertion above stays green — proving the notice is a
 		// genuinely separate signal, not the same delivery counted twice.
-		expect(
-			harness.deliveries
-				.slice(deliveriesBeforeWake)
-				.some((d) => d.method === "sendPlain" && /^✅ .+ 完成 ·/.test(d.text ?? "")),
-		).toBe(true);
+		await waitFor(
+			"settled notice delivered",
+			() =>
+				harness.deliveries
+					.slice(deliveriesBeforeWake)
+					.some((d) => d.method === "sendPlain" && /^✅ .+ 完成 ·/.test(d.text ?? "")),
+			{ timeoutMs: 5_000, intervalMs: 50 },
+		);
 	});
 });
 
