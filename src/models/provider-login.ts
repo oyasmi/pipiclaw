@@ -2,7 +2,7 @@
  * Transport-neutral provider login/logout/status orchestration. Imports no
  * terminal code — the human-machine interface is the injected `LoginUi`, so a
  * future TUI `/login` can supply a different implementation without touching
- * this file (see docs/specs/039-provider-login-cli/design.md §10).
+ * this file (see docs/archive/specs/039-provider-login-cli/design.md §10).
  */
 import {
 	type Api,

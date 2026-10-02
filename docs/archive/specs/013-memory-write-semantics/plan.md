@@ -5,7 +5,7 @@
 | 分支 | `master` |
 | 状态 | DONE |
 | 日期 | 2026-07-04 |
-| 设计文档 | [design.md](/Users/oyasmi/projects/pipiclaw/docs/specs/013-memory-write-semantics/design.md) |
+| 设计文档 | [design.md](design.md) |
 
 ---
 

@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | 已实施（2026-09-05）；实施期的偏离记录在 [plan.md](./plan.md) 的「实施记录」 |
+| 状态 | 已实施（2026-09-05）；关键实施取舍见本文末尾「实施取舍」 |
 | 日期 | 2026-09-05 |
 | 触发 | 用户对任务管理的直接反馈：「勉强可用，不够好，不满意」；本 spec 是对 `tasks` / `events` / `sub-agents` 三者**及其协作面**的整体重设计，不是又一次局部治理调参 |
 | 前置 | 019 任务台账、020 可见性与 driver、022 原生 driver、023/024 治理循环、027 原生周期、029 生命周期收敛、031 唤醒层加固、036 治理瘦身、037 Plan 与载体、038 自治状态 v2、040/042 异步委派、043 会话身份、046/047 工具切分、048 e2e、050 记忆 v2 |
@@ -310,7 +310,7 @@ step 的 brief（系统提示 + 首轮消息）：
 |---|---|---|
 | 系统提示 | 任务循环专用的精简提示（身份、循环协议、可用工具、安全边界），**不是**频道聊天那份 | 目标 ≤ 1.2 K units |
 
-> **实施偏离**：这一行**未落地**。任务 step 复用频道系统提示，循环协议由 brief（`src/tasks/brief.ts`）的收尾段承载。上下文隔离由任务会话本身拿到；再拆一套系统提示会牵动 `/context`、预算清单与 manifest，收益不抵风险。见 plan.md 的实施记录。
+> **实施偏离**：这一行**未落地**。任务 step 复用频道系统提示，循环协议由 brief（`src/tasks/brief.ts`）的收尾段承载。上下文隔离由任务会话本身拿到；再拆一套系统提示会牵动 `/context`、预算清单与 manifest，收益不抵风险。见本文末尾「实施取舍」。
 | `<task_contract>` | `tasks/<id>.md` 正文全文（≤ 4 KB，D5 保证） | ≤ 1.5 K |
 | `<task_log>` | `<id>.jsonl` 最近 K 条（默认 8）渲染成行 | ≤ 1.0 K |
 | `<memory_bootstrap>` | 050 的工作区 `MEMORY.md` + 频道记忆索引；**不含**当天 journal 尾部（那是聊天的上下文） | 按 050 预算 |
@@ -353,7 +353,7 @@ task_step_end({
 
 ### D5 契约与日志分离
 
-- `tasks/<id>.md` 只保留契约 + Plan + `## 上次结果`。4 KB 预算**只对 `## 上次结果` 生效**——它是运行时写的、且完整记录始终在循环日志里；超预算时先裁剪它、必要时整段丢弃。作者写的段落永不被删：只靠 Goal/DoD/Manual/Verification/Plan 就超预算时按原样写入并告警（真实迁移演练发现的修正，见 plan.md）。`## History` 及其 `MAX_INLINE_TASK_HISTORY_*` 折叠机制全部退役。
+- `tasks/<id>.md` 只保留契约 + Plan + `## 上次结果`。4 KB 预算**只对 `## 上次结果` 生效**——它是运行时写的、且完整记录始终在循环日志里；超预算时先裁剪它、必要时整段丢弃。作者写的段落永不被删：只靠 Goal/DoD/Manual/Verification/Plan 就超预算时按原样写入并告警（真实迁移演练发现的修正，见本文末尾「实施取舍」）。`## History` 及其 `MAX_INLINE_TASK_HISTORY_*` 折叠机制全部退役。
 - `tasks/<id>.jsonl` 一行一条：
 
 ```jsonc
@@ -740,3 +740,17 @@ type StepOutcome = "continue" | "park" | "done" | "blocked";
 - `src/tasks/verification.ts`、`artifact-subject.ts` 的算法不动，只换调用点（从工具换到结算路径）。
 - `settings.json` 不新增任何数值键。
 - 迁移永不删除原件（`tasks/.v3/`）。
+
+
+## 实施取舍（2026-09-05）
+
+实施清单已完成，保存在[历史归档](../../archive/specs/051-long-horizon-task-loop/plan.md)；以下保留解释设计与实现差异所需的决策；当前行为以代码、测试与顶层指南为准。
+
+- 契约迁移和循环日志同批落地：移走旧 `History` 时必须立即有日志承接，不能先发布契约迁移、后补日志。
+- `schedule` 票保存固定的 `at`。读取时重新计算 cron 的下次 occurrence 会让到期点不断前移，任务永远醒不过来。
+- 创建任务立即打开首个 cycle，避免步骤、成本和验收无处记账；周期任务首轮也立即就绪。
+- 同一个 `ChannelRunner` 用 `bindTaskSession` / `bindChatSession` 切换会话，保留单一忙态与 `/stop` 所有者。任务会话不更新聊天的 active-session 指针。
+- 任务复用频道系统提示，独立 brief 提供完整契约、最近日志、预算和 steer；未实现第二套任务系统提示。静音 `ChannelContext` 与通知 outbox 承载默认静默和显式 `notify`。
+- 验收校验在 run 结算路径完成，拒绝的 PASS 记成带原因的 FAIL；轮次数不能充当 PASS 证明。后续加固进一步要求关闭时本周期最后一条 round 为 PASS，且 attestation 仍成立，详见[现行独立验收](../../events-and-tasks.md#独立验收)。
+- 空转检测使用日志里真实的工具名，排除 `task_step_end` 自身。`resume` 加码以已用量为起点，避免恢复后立刻再撞同一上限。
+- events 退役按用户决定取消；保留事件子系统，只添加 `signal` 票桥接。任务迁移不改 `workspace/events/`。

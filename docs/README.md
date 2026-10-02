@@ -39,7 +39,8 @@
 | [设计哲学](./design-philosophy.md) | 长期运行、状态、边界、记忆与可验证性的设计原则 |
 | [Runtime Playbooks](./runtime-playbooks.md) | 产品机制知识如何按需提供给 agent，以及如何避免与 workspace 规则重复 |
 | [行为评测使用指南](./evals.md) | `npm run eval` 系列命令：case/family 目录、profile、计划与执行 |
-| [历史设计记录](./specs/README.md) | specs 的阅读方法、主题分组和当前行为的判断顺序 |
+| [历史设计记录](./specs/README.md) | 保留的 spec 050、051 及当前行为的判断顺序 |
+| [历史文档归档](./archive/README.md) | 编号 050 之前的完整 spec，以及已完成的实施清单、review 和快照 |
 | [../AGENTS.md](../AGENTS.md) | 代码域边界、工程规则和验证要求 |
 
 ## 文档的责任边界
@@ -54,3 +55,9 @@
 - `security.md` 是权限、隔离与授权边界的用户级权威文档。
 
 `docs/` 面向人，允许跳读、示例和完整参考；`src/playbooks/` 面向 agent，只有小型目录常驻系统提示，正文按需读取。不要把 runtime playbook 复制进 workspace 的 `AGENTS.md` 或 skill：升级会更新内置机制，副本不会同步。
+
+## 维护方式
+
+更新行为说明时先对照实现与测试，再同步用户指南、字段参考和运行时 playbook。工具参数以当前 schema 为准；示例区分工具对象与磁盘格式，涉及日期须说明需要替换为未来时刻。
+
+历史设计保留问题、约束、方案取舍和关键实现偏离；过时的 spec 文档移到 `docs/archive/specs/`，不删除。spec 的实施清单、review 和旧 prompt 快照也按此归档；其他已失去价值的一次性 review 可删除。Changelog 是发布记录；测试/eval fixture 与评测 baseline 是验证数据，不按过期手册清理。

@@ -126,6 +126,8 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
 
 ### 单次事件（One-Shot）
 
+以下 `at` 仅示意带时区偏移的格式；使用时替换为实际未来时刻。手写事件也受 Node.js timer 上限约束，最多约 24.8 天；更远的提醒应临近时创建。
+
 最适合未来某个时间点的一次性提醒。额外字段 `at`（本地时间，必填；建议带偏移如 `+08:00`，省略则按主机时区解释）：
 
 ```json
@@ -133,7 +135,7 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
   "type": "one-shot",
   "channelId": "dm_your-staff-id",
   "text": "提醒我检查今天的发布结果。",
-  "at": "2026-04-03T18:00:00+08:00"
+  "at": "2026-10-03T18:00:00+08:00"
 }
 ```
 
@@ -159,7 +161,7 @@ Pipiclaw 只定义 preAction 的退出码门控，不捆绑第三方工具的检
 - 如果 cron 表达式不合法，文件会被删除。
 - 旧文件里残留的 `timezone` 字段会被忽略（不视为解析错误、不删文件）；若它与主机时区不一致，会在 `history.jsonl` 记一条 warning 提示触发时刻可能偏移。
 
-**常见 cron 示例**——建议统一使用五段 cron（分钟 小时 日 月 星期）。底层解析器对部分六段格式也能处理，但为降低歧义，不建议在团队里混用。
+**常见 cron 示例**——建议统一使用五段 cron（分钟 小时 日 月 星期）。底层解析器也能处理部分六段格式，但仍需满足触发间隔限制；不要在团队里混用。
 
 | 表达式 | 含义 |
 |--------|------|
@@ -226,7 +228,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 |------|------|----------|
 | 手工编辑 `*.json` | 人 | 任意增改；最终仍由 watcher 装载校验 |
 | `/events` 命令 | 人（钉钉侧） | list / show / delete / history —— 只读 + 删除 |
-| `event_manage` 工具 | 主 agent | list / create / update / delete —— 带写入时校验和防自激励闸门 |
+| `event_manage` 工具 | 主 agent（聊天会话） | list / show / create / update / delete —— 带写入时校验和防自激励闸门 |
 
 ### `/events` 命令（人用，只读 + 删除）
 
@@ -249,16 +251,17 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `label` | 是 | 一句话说明这次调度改动（展示给用户） |
-| `action` | 是 | `list` / `create` / `update` / `delete` |
-| `name` | create/update/delete 必填 | 事件名（不含 `.json`），`list` 忽略。只允许字母、数字、`.`、`_`、`-`；任务不再创建配套事件 |
-| `definition` | create/update 必填 | 完整事件 JSON（字符串）。`channelId` 可省略，默认填当前 channel |
+| `action` | 是 | `list` / `show` / `create` / `update` / `delete` |
+| `name` | show/create/update/delete 必填 | 事件名（不含 `.json`），`list` 忽略。只允许字母、数字、`.`、`_`、`-`；task-owned 传感器用 `task.<channelId>.<taskId>.<use>` |
+| `definition` | create/update 必填 | 类型化对象，含 `type`、`text`、`at` 或 `schedule`，以及可选的 `preAction`；不传 `channelId`，由 runtime 绑定 |
+
+工具调用的 `preAction.timeoutMs` 单位为毫秒；运行时将它转换为事件文件中的 `preAction.timeout`。更新前先用 `action: "show"` 读回完整定义。`label` 已不属于工具参数。
 
 **写入时校验（工具的核心价值）。** 裸用 `write` 写事件 JSON 有个隐患：格式错误的文件会被 watcher **静默删除**，agent 以为安排好了回访，实际什么都没留下。`event_manage` 在**落盘前**就把问题拦下并大声报错：
 
 1. **结构校验**：`definition` 必须能通过与 watcher 相同的 `parseScheduledEventContent`——工具写出的文件必然可被装载。
 2. **路径安全**：`name` 经 traversal 拦截（拒绝 `../` 等越界），字符集限定 `[A-Za-z0-9._-]`。
-3. **channel 所有权**：`definition.channelId` 必须等于当前 channel；update/delete 前会读取目标文件校验归属，一个 channel 不能操纵或打扰其他 channel 的事件。
+3. **channel 所有权**：新定义的 `channelId` 由 runtime 绑定；show/update/delete 前会读取目标文件校验归属，一个 channel 不能操纵或打扰其他 channel 的事件。
 4. **`preAction` 安全**：命令写入时即过 `command-guard`，被拦截则整个操作失败（触发时的检查仍保留）。
 5. **防自激励闸门**（防止 agent 把自己拖入烧 token 的自唤醒循环）：
    - 禁止 `immediate` 类型（create 与 update 双侧）——当下能做的事就在当前回合做完；
@@ -266,7 +269,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
    - `periodic` 的 cron 最密每 **30 分钟**一次；**带 `preAction` 门控时放宽到最密每 5 分钟**——传感器条件不成立时静默、零 token，适合调用用户已安装的稳定检测命令；硬下限仍是 5 分钟；
    - `workspace/events/` 内事件文件数达到 50 时拒绝再 create。
 
-> 手工编辑会绕过 `event_manage` 的 channel 所有权、提前量等即时错误提示，但 watcher 仍是最终信任边界：`immediate`、过密 cron、过多事件和被 command guard 拒绝的 `preAction` 仍会被拒绝。`one-shot` 的 2 分钟提前量只用于约束 agent 写入；手工文件若是在当前进程启动前遗留且已经错过，会按可靠恢复语义补投递一次。
+> 手工编辑会绕过 `event_manage` 的 channel 所有权、提前量等即时错误提示，但 watcher 仍是最终信任边界：`immediate`、过密 cron、过多事件和被 command guard 拒绝的 `preAction` 仍会被拒绝。`one-shot` 的 2 分钟提前量也用于 watcher 校验进程运行期间新写入的文件；启动前遗留且已经错过的文件按可靠恢复语义补投递一次。
 > 注意：第 4 条的两道 guard 检查都以 `security.json` 里 `commandGuard.enabled` 为前提；全局关闭 command guard 时，写入时与触发时的检查都不生效（这是既有安全语义）。
 
 **典型用法。** 安排一个与 task 无关的独立提醒：
@@ -275,7 +278,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 {
   "type": "one-shot",
   "text": "提醒我检查季度预算。",
-  "at": "2026-07-08T14:00:00+08:00"
+  "at": "2026-10-03T14:00:00+08:00"
 }
 ```
 
@@ -311,7 +314,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
   "type": "one-shot",
   "channelId": "dm_your-staff-id",
   "text": "检查今天发布后的错误反馈和回滚风险。",
-  "at": "2026-04-03T21:30:00+08:00"
+  "at": "2026-10-03T21:30:00+08:00"
 }
 ```
 
@@ -448,7 +451,7 @@ Independent verification: required
 
 ## 循环：cycle 与 step
 
-- **cycle** 是上下文的单位。一次性任务只有一个；周期任务每个 occurrence 一个。开 cycle 会重置计数，并对周期任务复位 Plan 和 DoD checkbox。
+- **cycle** 是上下文的单位。创建任务会立即打开首个 cycle，周期任务也一样；首次应在未来时刻执行时，用 time 票等待。后续周期在 schedule occurrence 到点时打开，重置计数并复位 Plan 和 DoD checkbox。
 - **step** 是 cycle 里的一次模型回合，跑在**任务自己的会话**（`tasks/.sessions/<id>-<cycle>.jsonl`）里，不进频道聊天会话。这样聊天记录不会被任务撑大，任务也不必每次重读整份历史。
 - **round** 是一次"委派 → 验收"往返，由运行时在 `purpose=verify` run 结算时自动记账。
 
@@ -461,7 +464,7 @@ Independent verification: required
 | `done` | 本周期完成 | 写 `## 上次结果`、记 close、一次性归档／周期停到下一次 |
 | `blocked` | 需要用户决定 | 停泊到 `ask` 票，并**一定**通知用户 |
 
-**任务步骤默认不向用户发言**：只有 `task_step_end` 给了 `notify`、或 cycle 关闭 / 提问 / 预算耗尽 / 运行时停止时才会说话。v3 的 `[SILENT]` 协议（要求模型主动说"我不说话"）在任务侧退役；事件唤醒仍然使用它，因为事件仍然投递到聊天会话。
+**任务步骤默认不向用户发言**：只有 `task_step_end` 给了 `notify`，或发生提问、预算耗尽、运行时停止等确定性回执时才会说话。完成任务不会自动把 `note` 或普通文本交给用户；Goal/DoD 要求交付结果时，必须在 `notify` 中提供实际内容。v3 的 `[SILENT]` 协议（要求模型主动说"我不说话"）在任务侧退役；事件唤醒仍然使用它，因为事件仍然投递到聊天会话。
 
 step 是频道队列里的普通条目：占用 turn slot、受 `/stop` 管辖、结束就把频道让回去。一个跑三小时的任务不会锁住聊天。
 
@@ -472,7 +475,7 @@ step 是频道队列里的普通条目：占用 turn slot、受 `/stop` 管辖�
 | 键 | 默认 | 含义 |
 |---|---|---|
 | `steps` | 40 | 本周期的模型步数上限 |
-| `wallMin` | 180 | 本周期墙钟分钟（不含停泊时间） |
+| `wallMin` | 180 | 从 cycle 开始计的经过分钟，包含停泊等待 |
 | `usd` | 8 | 本周期可归因成本上限 |
 | `rounds` | 4 | 本周期返工轮次上限 |
 | `until` | — | 绝对期限（v3 `deadline` 的新家） |

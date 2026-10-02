@@ -20,11 +20,11 @@
 | `rolling_progress_then_plain_final` | 只保留最近进度，最后另发纯文本结论 |
 | `final_card_only` | 隐藏过程，只投递最终结果 |
 
-后台唤醒（任务 driver、后台作业、定时事件）默认不展示过程；没有新结果时可返回 `[SILENT]`。
+后台唤醒默认不展示过程。后台作业、委派完成和定时事件投递到聊天会话，没有新结果时可返回 `[SILENT]`；任务步骤运行在独立 cycle 会话，必须以 `task_step_end` 收尾，面向用户的内容通过 `notify` 交付。
 
 ## 记忆维护
 
-记忆由频道文件分层（spec 050）：`memory/<name>.md` 一条事实一个文件，生成的 `MEMORY.md` 是索引；`journal/YYYY-MM-DD.md` 是按天的工作记录；`log.jsonl` / `context.jsonl` 是冷存储。各频道使用独立的状态目录；工作区级 `workspace/MEMORY.md` 和 `ENVIRONMENT.md` 是管理员维护的共享背景。这里的隔离是应用状态隔离，不是 OS 文件权限边界。
+记忆由频道文件分层（spec 050）：`memory/<name>.md` 一条事实一个文件，生成的 `MEMORY.md` 是索引；`journal/YYYY-MM-DD.md` 是按天的工作记录；`log.jsonl` / `context.jsonl` 是冷存储；`active-session.json` 存在时指定当前聊天 session JSONL，缺失则使用 `context.jsonl`。各频道使用独立的状态目录；工作区级 `workspace/MEMORY.md` 和 `ENVIRONMENT.md` 是管理员维护的共享背景。这里的隔离是应用状态隔离，不是 OS 文件权限边界。
 
 后台 memory maintenance scheduler 不使用 `workspace/events/`。它只在本地 gate 通过后才发起 LLM sidecar：
 
@@ -32,7 +32,7 @@
 |---|---:|---|
 | Reflect | 20 分钟 | 从新对话中同时提炼 journal 新增行和 durable memory 增/改/删 |
 
-另有两条固定约束：频道静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个频道。`settings.json.memoryMaintenance.enabled: false` 会关闭整套后台维护；更常见的省 token 做法是只关闭 `sessionSearch.summarizeWithModel`。
+另有两条固定约束：频道静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个频道。`settings.json.memoryMaintenance.enabled: false` 只关闭空闲定时反思；压缩、`/new` 和正常退出等边界仍可能触发同一个反思 pass，显式记忆工具也不受影响。`sessionSearch.summarizeWithModel` 默认已关闭，曾主动开启时可关闭以节省额外总结调用。
 
 ## 定时事件
 
@@ -62,9 +62,11 @@
 
 ## 长程任务
 
+当前采用 Task v4（spec 051）：契约、循环日志和等待票分离。
+
 任务文件位于 `workspace/<channelId>/tasks/<id>.md`。`tools.tasks.enabled` 同时门控三件事：全部 task_* 工具、内建 TaskDriver、每回合任务摘要注入。
 
-当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进任务的 Goal/Manual/Plan，等待用 runtime 校验的票表达；每个任务按自己的 Goal、DoD、Manual、Verification、Plan 和预算收口。旧任务里残留的 retired control keys 会被读取层忽略，并由 `/tasks doctor` 报告。
+当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进任务的 Goal/Manual/Plan，等待用 runtime 校验的票表达；每个任务按自己的 Goal、DoD、Manual、Verification、Plan 和预算收口。旧版任务由 daemon 启动迁移到 v4；手工编辑造成的旧契约或损坏元数据用 `/tasks doctor` 检查，迁移与恢复规则见[事件与任务](./events-and-tasks.md#从-v3-迁移)。
 
 TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的票据到期时间、兜底时限和步骤结束 nudge 决定下一次扫描；单次最多派发 4 个 channel，同一 channel 每 tick 至多一个任务。`outcome: continue` 没有退避——下一步在同一次 nudge 里就排上。任务超出本周期预算（步数/墙钟/成本/返工轮次），或连续两步没有任何工具调用时，运行时写 `paused{by:"runtime"}` 并直接通知用户，不再花一个模型回合去诊断。
 
@@ -86,9 +88,9 @@ TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据�
 - 内置 verifier 会被结构性移除 write/edit；只有同时声明 `mutates: read` 且工具集中不含 `bash` 时，验收强度才是 `enforced`。默认含 `bash` 的内置 verifier 仍可能写宿主机，因此标为 `advisory`。
 - 声明 `mutates: write` 的 verifier 可以运行测试和构建，但验证期间会取得目标工作区（含父子目录冲突）的独占 lease，验收强度为 `advisory`；lease 只负责委派间互斥，不是证明完全只读的沙箱。
 - 外部 verifier 只能依赖目标 CLI sandbox 和前后工作区 subject 哈希，验收强度为 `advisory`；`exec` harness 仍不能承担验收，因为它没有协议终态。
-- 新 subject 以验证开始时的 `baseCommit` 为基准，并保存当时已有的 untracked 路径以及范围外的 ignored 路径。正常提交已验收内容不会使它失效；新出现的 untracked 文件仅在 checkout 根目录下明确的临时产物目录/文件范围内排除（Cypress 仅 `cypress/screenshots/`、`cypress/videos/`），其他新源文件、既有 untracked 产品文件和 ignored 非临时文件的变化仍会使验收失败。旧的无 `baseCommit` attestation 继续使用 HEAD-sensitive 兼容算法。本节覆盖历史 `docs/specs/040` 中已过时的 verify 准入描述。
+- 新 subject 以验证开始时的 `baseCommit` 为基准，并保存当时已有的 untracked 路径以及范围外的 ignored 路径。正常提交已验收内容不会使它失效；新出现的 untracked 文件仅在 checkout 根目录下明确的临时产物目录/文件范围内排除（Cypress 仅 `cypress/screenshots/`、`cypress/videos/`），其他新源文件、既有 untracked 产品文件和 ignored 非临时文件的变化仍会使验收失败。旧的无 `baseCommit` attestation 继续使用 HEAD-sensitive 兼容算法。本节覆盖历史 `docs/archive/specs/040-async-delegation-and-external-agents/` 中已过时的 verify 准入描述。
 
-验收结论由运行时在 `purpose=verify` run 结算时自动导入（校验归属、契约 hash 和 Git artifact subject 后写进任务的返工账本）；`done` / `task_close outcome=complete` 要求本周期存在一条真实 PASS，防止验收之后需求或产物发生变化。
+验收结论由运行时在 `purpose=verify` run 结算时自动导入（校验归属、契约 hash 和 Git artifact subject 后写进任务的返工账本）；`done` / `task_close outcome=complete` 在要求独立验收时，核验本周期最后一条 round 为 PASS，且 attestation 此刻仍绑定当前契约和产物；更早的 PASS 不能覆盖后来的 FAIL。
 
 ## 日志与账本
 

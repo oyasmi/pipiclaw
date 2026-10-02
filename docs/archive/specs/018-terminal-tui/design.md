@@ -5,9 +5,9 @@
 | 分支 | `terminal-tui`（建议） |
 | 状态 | IMPLEMENTED |
 | 日期 | 2026-07-05 |
+| 历史实施计划 | [plan.md](plan.md) |
 | 关联实现 | 新增 `src/tui/**`, `src/runtime/channel-context.ts`；改动 `src/runtime/dingtalk.ts`, `src/runtime/delivery.ts`, `src/agent/{channel-runner,session-events,run-queue,types}.ts`, `src/main.ts`, `src/index.ts` |
 | 前置 | 无。复用 spec 015（tool registry）、016（usage ledger）、017（fallback）既有产物 |
-| 实施计划 | [plan.md](./plan.md) |
 
 > 目标是给 pipiclaw 加一个**在终端里直接对话**的界面，复用同一套配置目录、同一套 memory / session / 工具 / 安全策略，可选择挂到某个既有钉钉会话身份（`--channel dm_xxx`）上继续对话。做**打磨版**：pi-tui 富终端界面、流式进度、斜杠命令补全、输入历史、优雅退出与记忆落盘——不是一次性 readline demo。
 

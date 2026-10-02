@@ -566,4 +566,4 @@ interface MemoryMaintenanceState {
 - `src/playbooks/memory-and-learning.md` / `runtime-orientation.md`：表格改为 channel memory / journal / task / workspace MEMORY（只读，用户维护）/ ENVIRONMENT / skills；`memory_save` 的 `type`/`replaces` 用法；「索引只在会话开始时给，中途怀疑记过就 `memory_search`」；「可以直接编辑频道记忆文件」。
 - `docs/specs/README.md` 加 050 一行。
 
-实施顺序与文件级清单见 [plan.md](./plan.md)。
+实施清单已完成，保存在[历史归档](../../archive/specs/050-memory-v2/plan.md)。现行存储、反思、迁移与工具入口见[记忆指南](../../memory.md)和[架构](../../architecture.md)。

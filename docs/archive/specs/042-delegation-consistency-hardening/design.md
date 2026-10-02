@@ -20,7 +20,7 @@ spec 040 把外部智能体吸收进 sub-agents，两轮审查后生命周期已
 
 单看每一条都很小、都能忍。但这类问题会稳定地互相拉开距离：今天三份结算实现的差距是"用量和验收结论"，再放一轮就会变成没人敢动的三条独立路径。本 spec 的目标不是加能力，是**在差距还小的时候把缝合上**。
 
-设计过程中另外确认了一条审查时漏掉的、同源的缺陷：外部 run 在超时或取消时，在读取 `events.jsonl` **之前**就结算（[external/run.ts:284](../../../src/subagents/external/run.ts#L284)），因此 `outputText` 为空、usage 全零、`sessionId` 丢失。一个跑满 40 分钟才超时的 run 记账为 $0，一个被取消的 codex 会话再也无法 `follow_up`。这与 040 D10.3 明写的"预算耗尽不丢弃已有产出"直接矛盾，成因和上面第一条完全一样。
+设计过程中另外确认了一条审查时漏掉的、同源的缺陷：外部 run 在超时或取消时，在读取 `events.jsonl` **之前**就结算（[external/run.ts:284](../../../../src/subagents/external/run.ts#L284)），因此 `outputText` 为空、usage 全零、`sessionId` 丢失。一个跑满 40 分钟才超时的 run 记账为 $0，一个被取消的 codex 会话再也无法 `follow_up`。这与 040 D10.3 明写的"预算耗尽不丢弃已有产出"直接矛盾，成因和上面第一条完全一样。
 
 ## 五条修复原则
 
@@ -179,7 +179,7 @@ export const INVOCATION_FIELD_MATRIX: Record<string, Record<SubAgentRuntime, Fie
 
 `releaseWorkspaceLease(leaseKey, runId)` 校验 `leases.get(key)?.runId === runId` 才删除。今天按 key 无条件 `delete` 有两个后果：
 
-- restore 时 lease 重建失败只记 warning 就继续（[runs.ts:740](../../../src/subagents/runs.ts#L740)），而该 run 结算时照样释放同一个 key —— **把真正持有者的锁删掉**；
+- restore 时 lease 重建失败只记 warning 就继续（[runs.ts:740](../../../../src/subagents/runs.ts#L740)），而该 run 结算时照样释放同一个 key —— **把真正持有者的锁删掉**；
 - 重建成功时不回写 `rebuilt.leaseKey`，`realpath` 一旦漂移，锁就泄漏到进程生命周期结束，此后该目录上所有写委派永久被拒。
 
 配套两条：

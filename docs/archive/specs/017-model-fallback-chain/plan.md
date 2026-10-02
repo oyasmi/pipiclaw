@@ -5,7 +5,7 @@
 | 分支 | `model-fallback` |
 | 状态 | DRAFT |
 | 日期 | 2026-07-04 |
-| 设计文档 | [design.md](./design.md) |
+| 设计文档 | [design.md](design.md) |
 
 ---
 

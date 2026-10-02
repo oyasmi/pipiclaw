@@ -147,8 +147,8 @@ maxWallTimeSec: 5400
 |------|------|--------|------|
 | `name` | 是 | - | 子代理名称，必须唯一 |
 | `description` | 是 | - | 给主代理看的简短用途描述 |
-| `tools` | 否 | `read,bash` | 允许的工具，支持 `read`、`grep`、`bash`、`edit`、`write`、`web_search`、`web_fetch` |
-| `model` | 否 | 当前主代理模型 | 精确模型引用，建议写成 `provider/modelId`，按 `models.json` 校验 |
+| `tools` | 否 | `read,bash` | 允许的工具，支持 `read`、`grep`、`glob`、`bash`、`edit`、`write`、`web_search`、`web_fetch` |
+| `model` | 否 | `settings.subagentModel`，未设时为当前主代理模型 | 精确模型引用，建议写成 `provider/modelId`，按 `models.json` 校验 |
 | `contextMode` | 否 | `isolated` | `isolated` 或 `contextual` |
 | `memory` | 否 | `isolated` 时为 `none`，`contextual` 时为 `index` | `none`、`index`（旧值 `session`/`relevant` 仍可加载，discovery 时映射为 `index` 并给出警告） |
 | `paths` | 否 | 空 | 建议优先关注的文件或目录 |
@@ -218,7 +218,7 @@ maxWallTimeSec: 5400
 
 ### `effort` 与 frontmatter 数值的关系
 
-`effort` 是执行预算的命名组合，内置和外部各有一套换算，都以**整组替换**（不传则沿用角色 frontmatter 里的精确数值，没有配置角色时用默认）而不是逐字段合并。
+`effort` 只用于 `subagent_inline` 的内置执行预算，以命名档位整组选择四个数值。命名角色不接收 `effort` 覆盖，使用自己的 frontmatter 数值；外部角色只在文件中配置 `maxWallTimeSec`。
 
 内置（四个数值预算都受影响）：
 
@@ -240,7 +240,7 @@ maxWallTimeSec: 5400
 
 无论内置还是外部，`subagent`/`subagent_inline` 的调用只是**可选地等待**结果：
 
-- 在 `min(角色的 maxWallTimeSec, 120s)` 内结算完成 → 直接把结果内联返回，和今天完全一样。内置角色的 `quick`/`standard` 档基本总是落在这个窗口内。
+- 在 `min(角色的 maxWallTimeSec, 120s)` 内结算完成 → 直接把结果内联返回，和今天完全一样。同步返回与否取决于实际完成时间；`standard` 的总墙钟预算是 600 秒，并不保证在 120 秒内结束。
 - 超过这个窗口仍未结算 → 返回 `{ runId, status: "running" }` 和一句"完成时会唤醒你"，委派本身继续在后台跑。这不是失败，是降级。**外部角色的宽限窗口恒为 0**——它们是重型工作，一律走异步。
 
 收到 "still running" 占位结果后：**不要轮询、不要重复派发，结束当前回合**；委派完成时 runtime 会自己唤醒本频道，带回结果与产物路径。想主动看进度用 `subagent_list` 或 `/subagents list`，不要用委派工具本身当轮询手段。
@@ -306,7 +306,7 @@ maxWallTimeSec: 5400
 | `contextMode` | 含义 |
 |----|------|
 | `isolated` | 默认值，不自动带入主会话上下文 |
-| `contextual` | 自动注入一小部分相关会话 / 记忆上下文 |
+| `contextual` | 允许注入 `paths` 等背景；记忆是否注入由 `memory` 单独决定，不复制主会话 transcript |
 
 | `memory` | 含义 |
 |----|------|

@@ -79,7 +79,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `~/.pipiclaw/workspace/AGENTS.md` | 工作区 | 工作规则与行为约束 | 是 |
 | `~/.pipiclaw/workspace/MEMORY.md` | 工作区 | 持久化共享记忆 | 是 |
 | `~/.pipiclaw/workspace/ENVIRONMENT.md` | 工作区 | 环境事实与重要环境变更记录 | 是 |
-| `~/.pipiclaw/workspace/CHANNELS.md` | 工作区 | 频道索引：ID / 名称 / 最近消息 / 主题。前三列 runtime 自动维护，「主题」列可手工编辑并会被保留 | 仅「主题」列 |
+| `~/.pipiclaw/workspace/CHANNELS.md` | 工作区 | 频道索引：ID / 名称 / 最近消息 / 主题。前三列 runtime 自动维护，「主题」列可手工编辑并会被保留 | 首次维护频道索引时 |
 | `~/.pipiclaw/workspace/events/` | 工作区 | 定时事件目录 | 是 |
 | `~/.pipiclaw/workspace/sub-agents/` | 工作区 | 工作区配置子代理目录 | 是 |
 | `~/.pipiclaw/workspace/skills/` | 工作区 | 工作区级技能目录 | 是 |
@@ -97,7 +97,7 @@ export PIPICLAW_HOME=/your/custom/pipiclaw-home
 | `PIPICLAW_NO_PROXY` | `PIPICLAW_PROXY` 的例外目标列表（逗号分隔）；未设置时回落到标准 `NO_PROXY` |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 标准代理环境变量。DingTalk runtime 和 web 工具通过 `proxy-from-env`，额外识别 `ALL_PROXY`；LLM 请求路径（undici）**不识别 `ALL_PROXY`**，只认 `HTTP_PROXY`/`HTTPS_PROXY`（大小写皆可），且只在未设置 `PIPICLAW_PROXY` 时对 LLM 请求生效 |
 
-> Pipiclaw 的工具执行层按 POSIX shell 语义工作（`bash`、`read`、`write`、`edit` 等工具内部都会调用 `sh` 风格命令），面向 Linux / macOS 运行，不支持 Windows。
+> Pipiclaw 面向 Linux / macOS；Windows 请使用 WSL2。`bash`、`grep` 等命令工具依赖 POSIX 环境；文件内容工具通过 `FileStore` 直接使用 `node:fs`，PDF 文本提取另需 `pdftotext`。
 
 ## 配置优先级（Configuration Precedence）
 
@@ -263,7 +263,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 智能体委派（`subagent` + `subagent_list` + `subagent_run`，恒开）
 
-两项工具只发给主智能体，没有 `tools.json` 开关。`subagent` 调用内置或外部角色；`subagent_list` 查看 run，`subagent_run` 对单个 run 执行 show/cancel/follow_up（续接已结束的 Claude Code / Codex CLI run）。角色由 `workspace/sub-agents/*.md` 配置，空目录不会关闭 inline 内置委派。
+这三个工具只发给主智能体，没有 `tools.json` 开关。`subagent` 调用内置或外部角色；`subagent_list` 查看 run，`subagent_run` 对单个 run 执行 show/cancel/follow_up（续接已结束的 Claude Code / Codex CLI run）。角色由 `workspace/sub-agents/*.md` 配置，空目录不会关闭 inline 内置委派。
 
 外部角色不是 `bash async` 的别名：它有统一 run 状态、产物、工作区写锁、并发准入、完成唤醒、用量标记和重启对账。角色字段、调用参数与授权边界统一见 [sub-agents.md](./sub-agents.md)，不在本字段参考中维护第二份副本。
 
@@ -351,7 +351,7 @@ pipiclaw tui --print "总结今天的进展"  # 一次性，prompt 走命令行�
 
 TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 channel 而不是靠挑选历史会话：
 
-- **退出重进即自动续上次对话。** 每个 channel 的完整上下文持久化在 `workspace/<channel>/context.jsonl`。再次 `pipiclaw tui`（同一 channel）会原样还原上一轮的会话，无需任何命令。`Ctrl-C`/`Ctrl-D`/`/exit` 退出前会先把记忆落盘，所以直接关掉再开就是「继续上次」。
+- **退出重进即自动续上次对话。** 当前聊天上下文由 `workspace/<channel>/active-session.json` 指向的 session JSONL 持久化；没有指针时使用 `context.jsonl`。`/new` 会创建新文件并更新指针，旧会话仍保留。再次 `pipiclaw tui`（同一 channel）会原样还原上一轮的会话，无需任何命令。`Ctrl-C`/`Ctrl-D`/`/exit` 退出前会先把记忆落盘，所以直接关掉再开就是「继续上次」。
 - **`--channel <id>` = 挂到任意历史对话继续。** 传 `dm_<staffId>` 就接管该钉钉会话的上下文与记忆继续聊；传任意自定义 id 则是另一条独立对话线。想「换一个历史对话」就退出后用不同的 `--channel` 重进（注意上面的并发约束）。
 - **`/new` 开新会话，长期连续性由记忆层承担。** 跨会话要记住的事实 / 决定 / 偏好沉淀在 `memory/*.md`（生成 `MEMORY.md` 索引）与 `journal/`（见「记忆分层」），会在下一次会话首轮整份带回——这是 pipiclaw「每 channel 一条长会话 + 记忆层」模型对多会话历史的替代。
 - **暂无同一 channel 内的会话选择器**，即不能在 TUI 里从多个历史会话之间挑一个切过去。要切换到别的对话，退出后用不同 `--channel` 重进即可。
@@ -918,7 +918,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 - `memoryMaintenance` 是内置后台 scheduler，不依赖也不会写入 `workspace/events/`。
 - `memoryMaintenance.enabled` 只门控这条空闲 scheduler；会话边界反思由同一个 reflect 实现处理，但不受该开关控制。
 - spec 050 起只有一个后台任务——反思（reflect），取代此前的 session refresh / memory checkpoint / structural maintenance 三个 job。调用 LLM 前有本地 gate：无新内容、channel 仍活跃、未到间隔时不会调用 LLM。内置间隔为 20 分钟，channel 静默满 10 分钟才允许后台 LLM work，每个 tick 只处理 1 个 channel。
-- durable 写入有一道固定的置信度闸门（`necessity: high` 且 `confidence ≥ 0.85`），**当场写入（`memory_save`）与后台反思共用**同一套判定标准；`necessity: medium` 的 `add` 以 30 天试用期写入（`confidence ≥ 0.9`）。被拒绝的候选会记进 `memory-review.jsonl`，素材本身仍保留在冷存储里。
+- 后台反思的 durable 写入有固定置信度闸门（`necessity: high` 且 `confidence ≥ 0.85`）；`necessity: medium` 的 `add` 以 30 天试用期写入（`confidence ≥ 0.9`），更新用户保存的条目还要求 `confidence ≥ 0.95`。显式 `memory_save` 不要求这两个判断字段，会检查凭据、名称与相似条目，并走相同的存储队列和落盘机制。被拒绝的反思候选记进 `memory-review.jsonl`，素材仍留在冷存储。
 - 记忆是一条一文件，没有整份 `MEMORY.md` 重写导致的缩水风险——每次写入只影响被 `add`/`update`/`delete` 点名的那个 `name`，索引文件只是从这些文件生成的只读投影。
 - `session_search` 只搜索当前 channel 的 `context.jsonl`、session JSONL、`log.jsonl` 和存在时的 `log.jsonl.1`。
 - workspace skill 只能通过显式的 `write`/`edit` 调用创建/更新（`skill` 工具本身只读），后台记忆管线不会自动写 skill。

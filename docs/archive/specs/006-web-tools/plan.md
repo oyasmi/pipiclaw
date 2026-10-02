@@ -6,7 +6,7 @@ Draft
 
 ## Goal
 
-基于 [design.md](./design.md) 为 Pipiclaw 落地一套可发布的 `web_search` / `web_fetch` 实现，并同步完成：
+基于 [design.md](design.md) 为 Pipiclaw 落地一套可发布的 `web_search` / `web_fetch` 实现，并同步完成：
 
 1. 新的 `tools.json` 配置入口
 2. 统一且可预期的代理行为

@@ -17,7 +17,7 @@
 | Node.js | `>= 22.19.0` |
 | 钉钉应用 | 已开启机器人能力和 Stream Mode |
 | AI Card | 建议配置完成，便于观察执行过程 |
-| 模型 | 已通过 `/model` 验证可见模型和默认模型，必要时可用唯一片段切换模型 |
+| 模型 | `/model` 确认可见模型与默认值，再用普通消息验证真实调用成功；模型目录可见不证明凭据或请求链路有效 |
 | Web 工具 | 如需 `web_search` / `web_fetch`，已检查 `tools.json` 与代理设置 |
 | 外部智能体 | 目标 CLI 已安装并登录；从服务账号的 `PATH` 可找到；角色的 sandbox 与 `mutates` 已审查 |
 | 灰度范围 | 初期建议先配 `allowFrom` 控制测试人群 |
@@ -153,7 +153,7 @@ supervisorctl tail -f pipiclaw
 排障不必先"问 agent"。下面这些命令由传输层直接读文件渲染，不触发 LLM 回合，忙碌时也可用：
 
 - `/status` —— 执行状态、当前模型、上下文用量、运行时长、版本
-- `/usage [7d|month]` —— 本通道与全局的 LLM 成本与 token，按类型和 Top 模型拆分（本地模型成本为 0，但 token 仍然记账）；账本里每条记录还带 `taskId`，任务本身不再记账目
+- `/usage [7d|month]` —— 本通道与全局的 LLM 成本与 token，按类型和 Top 模型拆分（本地模型成本为 0，但 token 仍然记账）；任务相关条目带 `taskId`；任务的 `cycle.usd` 另外汇总本周期成本用于预算，无法实报的外部成本可能含估算
 - `/tasks doctor` —— 任务契约与等待票的只读体检，每条问题附下一步建议
 - `/tasks pause|resume|run|steer|reply ...` —— 暂停、恢复、立即唤醒、纠偏或回答阻塞问题
 - `/subagents` —— 运行中的委派、最近结果和角色可用性摘要
@@ -162,7 +162,7 @@ supervisorctl tail -f pipiclaw
 
 ### 结构化日志与成本账本（Structured Logs and Cost Ledger）
 
-除 console 输出外，守护进程默认把结构化日志写到 `${PIPICLAW_HOME:-~/.pipiclaw}/state/logs/runtime.jsonl`（每行一条 JSON，按大小轮转），把 LLM 成本按月写到 `state/usage/usage-YYYY-MM.jsonl`。适合 `grep` 特定 channel 或 event 做事后排查。日志级别与落盘开关见[配置手册](./configuration.md)的 `logging` 一节。
+除 console 输出外，守护进程默认把结构化日志写到 `${PIPICLAW_HOME:-~/.pipiclaw}/state/logs/runtime.jsonl`（每行一条 JSON，按大小轮转），把 LLM 成本按月写到 `state/usage/usage-YYYY-MM.jsonl`。适合 `grep` 特定 channel 或 event 做事后排查。日志级别与落盘开关见[配置字段参考的可观测性一节](./configuration-reference.md#可观测性结构化日志与成本账本observability-structured-logging--cost-ledger)。
 
 ### 进程日志（Process Logs）
 
@@ -189,7 +189,11 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 | 文件 | 用途 |
 |------|------|
 | `<channel>/log.jsonl` | 原始运行日志 |
-| `<channel>/context.jsonl` | 会话事件冷存储 |
+| `<channel>/context.jsonl` 与 session JSONL | 聊天会话冷存储；当前文件由 `active-session.json` 指定，无指针时用 `context.jsonl` |
+| `<channel>/active-session.json` | 当前聊天会话指针，`/new` 后更新 |
+| `<channel>/project.json` | 本频道持久化的项目目录选择 |
+| `<channel>/tasks/<id>.md` 与 `<id>.jsonl` | 任务契约、循环日志；关闭后移入 `tasks/archive/` |
+| `<channel>/tasks/.sessions/` | 独立任务 cycle 会话 |
 | `<channel>/subagent-runs.jsonl` | 子代理执行摘要 |
 | `<channel>/subagent-artifacts/<runId>/` | 每次委派的完整输出；外部 run 还包含 prompt、system prompt、协议事件和 stderr |
 | `<channel>/memory/<name>.md` | 一条记忆一个文件（frontmatter 元数据） |
@@ -287,6 +291,8 @@ npm install -g @oyasmi/pipiclaw@latest
 - `state/events/history.jsonl`（可选，事件调度审计记录）
 - `state/dispatch/`（待处理的 synthetic event / task-driver wake；运行完成后删除，崩溃恢复时会重放 lease 已过期的记录）
 - `state/subagent-runs/`（委派 run 的状态、pid、实际 argv、结算与唤醒幂等标记；外部 run 重启对账需要）
+- `state/jobs/`（后台作业的持久状态与输出；重启恢复需要）
+- `state/memory/` 与 `state/task-migration-v4.done`（反思游标、调度状态与任务迁移标记）
 - `state/usage/`（可选，LLM 成本账本）与 `state/logs/`（可选，结构化日志）
 
 其中 `workspace/` 最关键，因为它包含：

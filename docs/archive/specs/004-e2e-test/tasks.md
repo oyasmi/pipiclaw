@@ -2,7 +2,7 @@
 
 ## 目标
 
-基于 [design.md](./design.md) 落地一套“除钉钉渠道外的完整 E2E”测试方案：
+基于 [design.md](design.md) 落地一套“除钉钉渠道外的完整 E2E”测试方案：
 
 - 只 mock 钉钉传输层
 - 从 runtime 入口驱动
@@ -29,7 +29,7 @@
 产出：
 
 - 本文档
-- 已更新的 [design.md](/home/oyasmi/projects/pipiclaw/docs/specs/004-e2e-test/design.md)
+- 已更新的 [design.md](design.md)
 
 验收标准：
 

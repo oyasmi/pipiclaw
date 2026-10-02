@@ -5,7 +5,7 @@
 | 分支 | `terminal-tui` |
 | 状态 | IMPLEMENTED |
 | 日期 | 2026-07-05 |
-| 设计文档 | [design.md](./design.md) |
+| 设计文档 | [design.md](design.md) |
 
 ---
 

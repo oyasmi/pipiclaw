@@ -22,7 +22,7 @@ In DingTalk daemon mode, external tasks keep running in the background after dis
 
 ### Work does not end when a conversation ends
 
-Every session has its own current state, long-term memory, and history summary. The task ledger persists goals, done criteria, progress, next steps, and verification records to Markdown files; the built-in task driver resumes work from waiting tickets and schedules, and stops with a notice when a budget, idle-loop, or repeated-expiry boundary is reached.
+Every channel has its own persistent conversation, long-term memory index, and daily journal. The task ledger stores goals, done criteria, and plans in Markdown contracts, with steps and verification records in JSONL loop logs; the built-in task driver resumes work from waiting tickets and schedules, and stops with a notice when a budget, idle-loop, or repeated-expiry boundary is reached.
 
 ### Natively at home in DingTalk
 

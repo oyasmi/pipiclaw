@@ -44,7 +44,7 @@ runtime 从 metadata 自动生成系统提示中的目录。四个字段各有�
 
 description 同时说明内容和触发场景；完整正文留在包内，只有匹配当前任务时才通过 read 加载。这与 workspace skill 的"metadata 触发、正文按需加载"原则一致。
 
-**description 用中文书写，并在关键概念上附英文术语**（如「任务（task）」「子代理（subagent）」「验收（verification）」）。用户的请求是中文的，触发匹配发生在中文语境里；英文术语则保证 `TASK_DRIVER`、`preAction`、`schedule` 这类在提示词和报错里以英文出现的记号也能命中。
+**description 用中文书写，并在关键概念上附英文术语**（如「任务（task）」「子代理（subagent）」「验收（verification）」）。用户的请求是中文的，触发匹配发生在中文语境里；英文术语则保证 `TASK_STEP`、`preAction`、`schedule` 这类在提示词和报错里以英文出现的记号也能命中。
 
 构建后文件位于 `dist/playbooks/`。path guard 为该目录提供读取例外，不授予写入权限；npm 升级会整体更新。源码 checkout 优先读取 `src/playbooks/`，便于开发时立即验证文档。
 

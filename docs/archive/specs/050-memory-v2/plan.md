@@ -1,6 +1,6 @@
 # 050 实施计划
 
-设计见 [design.md](./design.md)。四个阶段，每个阶段结束时 `npm run check` 与 `npm run test:e2e` 必须绿，且每个阶段都能独立发布——P1 结束后系统已经可用，P2–P4 是收尾。
+设计见 [design.md](../../../specs/050-memory-v2/design.md)。四个阶段，每个阶段结束时 `npm run check` 与 `npm run test:e2e` 必须绿，且每个阶段都能独立发布——P1 结束后系统已经可用，P2–P4 是收尾。
 
 ## 阶段总览
 

@@ -91,7 +91,7 @@ $PIPICLAW_HOME/security.json
 - 密钥、凭据、认证配置、浏览器资料、keychain 等敏感位置
 - 高风险系统目录和系统敏感文件
 
-`security.json` 里配置了 `projectAccess` 之后，上面这份默认允许清单会被**收窄成当前项目目录**：文件工具的相对路径以项目目录为准，workspace、主目录和临时目录都在界外，`readAllow` / `writeAllow` 只能在项目目录内部再收窄，不能反过来放宽。人可以用 `/project` 查看或切换当前项目目录。
+`security.json` 里配置了 `projectAccess` 之后，上面这份默认允许清单会被**收窄成当前项目目录**：文件工具的相对路径以项目目录为准，workspace、主目录和临时目录都在界外，`readAllow` / `writeAllow` 不能放宽到项目目录之外，也不会把项目内部变成白名单；内部需要限制的位置应使用 `readDeny` / `writeDeny`。人可以用 `/project` 查看或切换当前项目目录。
 
 项目边界之外只保留三个运行时例外。它们由 runtime 授予，不需要也不能通过 `readAllow` 配置；`readDeny` / `writeDeny` 和上面的敏感路径拒绝仍然优先于它们：
 
@@ -233,6 +233,7 @@ $PIPICLAW_HOME/security.json
 | `pathGuard` | `object` | 文件工具的路径防护 |
 | `networkGuard` | `object` | web 工具的出站网络防护 |
 | `audit` | `object` | 阻断事件审计日志 |
+| `projectAccess` | `object` | 可选项目目录策略；存在时启用文件工具的项目边界 |
 
 ### `commandGuard`
 
@@ -267,6 +268,26 @@ $PIPICLAW_HOME/security.json
 - 相对路径会相对 Pipiclaw workspace 根解析
 - 这是“前缀型路径规则”，不是任意 glob 匹配
 - 基础敏感路径 deny 仍然保留；配置不是“完全绕过所有底线”的总开关
+
+### `projectAccess`
+
+```json
+{
+  "projectAccess": {
+    "defaultRoot": "/srv/projects/app",
+    "allowedRoots": ["/srv/projects"]
+  }
+}
+```
+
+| 字段 | 默认值 / 行为 |
+|---|---|
+| `defaultRoot` | 省略时为启动 cwd；必须是绝对、已存在的目录（支持 `~/`），按 realpath 解析 |
+| `allowedRoots` | 省略或为空时使用 defaultRoot；允许选择列出的目录及子目录，defaultRoot 始终纳入 |
+
+未配置整个 `projectAccess` 时保持原有 workspace/home/temp 范围，`/project set` 不可用。配置后各频道可在空闲时用 `/project set <绝对路径>` 选择允许范围内的目录，或用 `/project reset` 回到默认值，选择保存在频道的 `project.json` 中。无效默认目录会产生诊断并禁用切换；无效 allowedRoots 条目被警告并忽略。
+
+项目边界约束启用 path guard 的通用文件工具。shell 只设置 cwd，仍可通过 `cd`、绝对路径或子进程访问其他目录；外部 CLI 也依赖自己的 sandbox。`/project` 不提供 OS 级隔离。
 
 ### `networkGuard`
 
@@ -570,12 +591,9 @@ Pipiclaw 的安全层是工具层硬约束，不是内核级隔离。
 
 ### 3. 写入场景仍有 TOCTOU 边界
 
-由于当前 `write` 实现仍保持 `mkdir -p ... && cat > path` 这种 shell 驱动方式，路径防护虽然会做 `realpath` 与符号链接检查，但不能提供最强的原子级防护。
+`read` / `write` / `edit` / `send_media` 已通过 `FileStore` 直接使用 `node:fs`，不再把文件内容交给 shell 管道。path guard 返回的 `resolvedPath` 同时用于实际 I/O，已有目标是符号链接时拒绝写入。
 
-这意味着：
-
-- 常见越权写入与符号链接绕过已经能拦住大部分
-- 但理论上的极端竞态条件仍不是 100% 消除
+但路径检查和打开文件仍是两个步骤，父目录可能在两者之间被其他进程替换；这不是内核级、基于目录句柄的原子路径隔离。需要抵御并发恶意进程时，仍应依靠独立账号或容器。
 
 ## 推荐做法（Recommendations）
 

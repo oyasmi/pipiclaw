@@ -70,7 +70,7 @@ turn 以 `stopReason: "error"` 结束即触发 fallback，**仅排除两类**：
 
 429、overloaded、5xx、quota/billing、401、网络错误——全部触发。连 400 invalid-request 也触发：备用模型上大概率同样失败，代价是多烧一次尝试，然后走正常错误路径——**为了规则可被一句话说清，这个代价可以接受**。相比早先草案的三分类白名单（transient-exhausted / provider-limit / auth），这里不需要维护任何错误模式表，也没有"未知错误算什么"的边界问题。
 
-实现为一个小函数（与状态手术、补跑编排一起放 `src/agent/model-fallback.ts`——见 plan.md，为可测试性把这三样纯函数化集中在一个小文件）：
+实现为一个小函数（与状态手术、补跑编排一起放 `src/agent/model-fallback.ts`；为可测试性把这三样纯函数化集中在一个小文件）：
 
 ```ts
 function shouldFallback(msg: AssistantMessage): boolean; // 非 overflow 即 true

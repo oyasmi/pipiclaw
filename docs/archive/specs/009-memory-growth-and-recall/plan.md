@@ -5,7 +5,7 @@
 | 分支 | `master` |
 | 状态 | DRAFT |
 | 日期 | 2026-04-19 |
-| 设计文档 | [design.md](/Users/oyasmi/projects/pipiclaw/docs/specs/009-memory-growth-and-recall/design.md) |
+| 设计文档 | [design.md](design.md) |
 
 ---
 

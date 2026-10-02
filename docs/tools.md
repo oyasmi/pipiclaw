@@ -25,10 +25,10 @@
 | `session_search` | 检索本频道的冷存储历史对话 | 恒开 | — | 否 |
 | `memory_save` / `memory_search` / `memory_forget` | 保存、检索、遗忘长期记忆 | 恒开 | — | 否 |
 | `skill` | 只读列出/加载 `workspace/skills/` 下的可复用流程 | 恒开 | — | 否 |
-| `event_manage` | 创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
+| `event_manage` | 列出/查看/创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
 | `task_list` | 列出台账里的活跃任务 | 开 | `tools.tasks.enabled` | 否 |
 | `task_create` | 创建长程任务 | 开 | `tools.tasks.enabled` | 否 |
-| `task_update` | 记录进展（带 note）或编辑元数据（不带 note） | 开 | `tools.tasks.enabled` | 否 |
+| `task_update` | 更新 Plan、周期、预算和验收要求；步骤进度由 `task_step_end` 记录 | 开 | `tools.tasks.enabled` | 否 |
 | `task_close` | 完成/跳过/取消任务 | 开 | `tools.tasks.enabled` | 否 |
 | `task_log` | 读任务的循环日志（步骤、验收轮次、票据过期、周期收尾） | 开 | `tools.tasks.enabled` | 否 |
 | `task_step_end` | 结束任务循环的一步：continue / park / done / blocked | 开 | `tools.tasks.enabled`，且只在任务会话里注册 | 否 |

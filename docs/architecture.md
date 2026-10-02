@@ -4,7 +4,7 @@
 > **前置**：能跑起来项目；域边界与工程规则见 [../AGENTS.md](../AGENTS.md)。
 > **读完你能**：定位任一子系统的代码位置，并说清一条消息从收到到回复经过了什么。
 >
-> 本文基于 v0.9.0 beta 当前实现整理，描述“代码现在是什么样”，而非设计愿景。各子系统的历史取舍见 `docs/specs/NNN-*`；配置细节见 [configuration.md](./configuration.md)。版本行为变化后应同步更新本文，不能把历史 spec 当作当前架构说明。
+> 本文按当前源码整理（本次核对：0.9.3-beta.5），描述“代码现在是什么样”，而非设计愿景。各子系统的历史取舍见 `docs/specs/NNN-*` 与 `docs/archive/specs/NNN-*`；配置细节见 [configuration.md](./configuration.md)。版本行为变化后应同步更新本文，不能把历史 spec 当作当前架构说明。
 
 ## 1. 定位与总体形态
 
@@ -60,7 +60,7 @@ flowchart TB
         BOT["DingTalkBot<br/>(runtime/dingtalk.ts)<br/>连接/重连/去重/allowFrom"]
         CQ["ChannelQueue ×N<br/>每频道消息串行队列"]
         HANDLER["DingTalkHandler<br/>(bootstrap.ts 内)<br/>命令分发 / 频道状态"]
-        RUNNER["ChannelRunner ×N<br/>(agent/channel-runner.ts)<br/>每频道一个，runner-factory 缓存"]
+        RUNNER["ChannelRunner ×N<br/>(agent/channel-runner.ts)<br/>每频道一个，bootstrap 缓存"]
         SESSION["SDK AgentSession + Agent<br/>(pi-coding-agent)"]
         TOOLS["工具集<br/>(tools/registry.ts)"]
         SEC["security/ 护栏<br/>command / path / network"]
@@ -129,7 +129,7 @@ sequenceDiagram
         D-->>U: AI Card 流式更新（≥800ms 节流）
     end
     S-->>R: 结束
-    R->>D: 最终文本 replaceMessage / [SILENT] 则删卡
+    R->>D: 最终文本 replaceMessage / [SILENT] 静默收尾
     D-->>U: finalize 卡片或 plain 消息
     R->>R: 记账（usage ledger）、记忆活动打点
 ```
@@ -151,7 +151,7 @@ sequenceDiagram
 | `rolling_progress_then_plain_final` | 卡片滚动窗口（常驻首行 `⏱ 用时 · N 步` + 最近 3 段） | 同上 |
 | `final_card_only` | 无进度 | 仅最终卡片 |
 
-后台唤醒（TASK_DRIVER / JOB / EVENT 三类合成事件）不受上表约束：`handleEvent` 给它们的 `ChannelContext` 传 `progressStyle: "none"`，因此不建卡、不推思考流、`[SILENT]` 收尾也没有卡片要删；最终答案仍按 `finalDelivery` 正常投递。用户消息不受影响。
+聊天侧后台唤醒（JOB / SUBAGENT / EVENT）不受上表约束；TASK_STEP 默认静音，只投递显式通知和运行时回执。对聊天侧后台唤醒，`handleEvent` 给它们的 `ChannelContext` 传 `progressStyle: "none"`，因此不建卡、不推思考流、`[SILENT]` 收尾也没有卡片要删；最终答案仍按 `finalDelivery` 正常投递。用户消息不受影响。
 
 `ChannelDeliveryController` 维护 revision 计数的同步循环：进度更新合并、≥800ms 节流、卡片预热（`primeCard`）、失败时降级 plain、`flush()` 有 60s 兜底死线保证 `run()` 的 finally 不会永久挂起频道。
 
@@ -188,7 +188,7 @@ sequenceDiagram
 | `journal/YYYY-MM-DD.md` | 按天追加的工作记录（发生了什么、定了什么、卡在哪） | 只有后台反思 pass 写 | 首轮注入当天尾部 |
 | `memory/.tombstones.jsonl` | 已遗忘记忆的 name + 内容哈希（不含原文），防止反思把同一件事又写回来 | `memory_forget` / `/memory forget` / reflect | 否 |
 | `log.jsonl` / `context.jsonl` | 冷存储：完整消息日志 / SDK 会话树 | ChannelStore / SessionManager | 否，`session_search` 工具检索 |
-| `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（只记有动作的行，纯 gate 跳过降级为 debug 日志） | `review-log.ts` | 否，人工排查用 |
+| `memory-review.jsonl` | 反思/工具写入的动作、拒绝原因、错误（含 actions/skipped/error；重复的相同跳过原因去重） | `review-log.ts` | 否，人工排查用 |
 
 工作区级还有 `workspace/MEMORY.md`（跨频道共享背景）与 `ENVIRONMENT.md`（机器事实）。后台记忆不会自动写它们；通用文件工具能否写入取决于项目边界和 path guard，因此“管理员拥有”不是 OS 级只读保证。频道 `memory/*.md` 只能通过 `memory_save` / `memory_forget` 维护，生成的 `MEMORY.md` 和 `journal/` 不接受通用文件工具写入。
 
@@ -229,7 +229,7 @@ flowchart LR
 
 - **入口（读）**只有一条：会话首轮（`firstTurnMemoryBootstrapPending`，压缩后重新置位）把 `store.listMemoryEntries` 的结果交给 `index-budget.ts` 分层，和 workspace `MEMORY.md`、当天 journal 尾部一起用 `render.ts` 包成 `<memory_bootstrap>`。之后整个会话都不再重复注入——同一份索引反复出现在历史里既浪费 token 也会干扰模型读历史。中途新增/更新的记忆要到下一次首轮才可见，这是刻意接受的延迟：模型怀疑"以前可能记过"时用 `memory_search`。
 - **索引超预算时的分层**（`index-budget.ts`，装不下才触发，约 70–100 条以后）：`user`/`feedback` 类型永远全给（它们决定行为，条数天然少），`project`/`reference` 按 `updated` 降序填充直到预算，末尾补一行"还有 N 条，用 memory_search"。**没有相关性排序**——首轮的用户消息往往只是一句问候，拿它给几十条记忆打分没有意义。
-- **`memory_save` 的冲突检测**：写入前用 `search.ts` 的 Jaccard 相似度（`descriptionSimilarity`，阈值 0.6）在内存里比一遍频道已有记忆的 description；命中就报 `RecoverableToolError` 列出候选 `name`，要求模型带上 `replaces`（目标 name 或 `"none"`）重新调用。第二次调用必定执行，不会死循环。`memory_forget` 按 `name` 精确删除，不再做模糊文本匹配。
+- **`memory_save` 的冲突检测**：写入前用 `search.ts` 的 Jaccard 相似度（`descriptionSimilarity`，阈值 0.6）在内存里比一遍频道已有记忆的 description；命中就报 `RecoverableToolError` 列出候选 `name`，要求模型带上 `replaces`（目标 name 或 `"none"`）重新调用。带 `replaces` 可越过相似性提示；目标不存在、疑似凭据等其他校验仍可能拒绝写入。`memory_forget` 按 `name` 精确删除，不再做模糊文本匹配。
 - **反思是唯一的后台 LLM pass**（`reflect.ts`），取代了 v1 的三个 job：读一段增量对话窗口 + 当前索引全文 + workspace 背景（裁剪）+ 当天 journal，产出 journal 新增行和 memory ops（`add`/`update`/`delete`/`touch`）。**运行时守不变量，模型负责判断**——写入档位（`necessity: high` 且 `confidence ≥ 0.85` 永久；`necessity: medium` 且仅 `add` 时 `confidence ≥ 0.9` 以 30 天试用期写入）、每次上限（add ≤ 8 含试用 ≤ 5、delete ≤ 3）、`source: user` 的条目不可被自动删除（update 需要 `confidence ≥ 0.95` 且窗口内有用户消息）、name 解析（`update` 认不出的名字降级为 `add`）全部是 `reflect.ts` 里的确定性代码，不依赖模型自律；`store.applyMemoryOps` 再做一层机械保证（墓碑、密钥扫描、原子写）。触发点与 v1 完全一致：压缩前、`/new` 前（后台异步）、关机 flush、以及频道空闲后的调度 tick——只是现在只有一个 job，`lifecycle.ts` 的边界钩子和 `reflect-job.ts` 的空闲触发调用的是同一个 `reflect.ts`。
 - **试用期转正信号从"被召回"改成"被 touch"**：v1 靠每轮召回记录使用次数；v2 索引首轮整份给出，"被注入"不再是有效信号。改为反思 pass 输出里的 `touch: [names]`——模型读窗口时判断"这段对话依赖或印证了哪些既有记忆"，被 touch 一次即转正（清除 `expires`）。30 天内没有任何一次 pass 认为它相关，`store.expireProbationaryEntries`（反思开始前的确定性前置步骤）直接删除——不留墓碑，之后仍可被重新学到。
 - **`condense` 模式**：索引超预算触发过分层时，反思 prompt 会附加合并指令，delete 上限放宽到 8，鼓励把重叠的条目合并成一条更好的。没有单独的 condense job，只是同一次调用的一个开关。
@@ -252,7 +252,7 @@ flowchart LR
 | Agent 侧工具 | `event_manage` | `task_create`/`task_update`/`task_close`/`task_list`/`task_log`，任务会话里另有 `task_step_end`；配合 `task-loop` playbook |
 | 用户命令 | `/events` | `/tasks`（pause/resume/run/steer/reply/doctor 等零 LLM 成本控制） |
 
-TaskDriver 派发 `[TASK_DRIVER:<id>]` 合成消息（带任务胶囊摘要），走与用户消息相同的串行轮次管道；任务步骤在独立 cycle 会话中运行，并必须以 `task_step_end` 收尾。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
+TaskDriver 派发 `[TASK_STEP:<id>]` 合成消息（带任务 brief），走与用户消息相同的串行轮次管道；任务步骤在独立 cycle 会话中运行，并必须以 `task_step_end` 收尾。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
 
 任务正文可选携带一段 `## Plan`（spec 037）：介于 Goal/DoD 契约与循环日志之间的手段层，四态 checkbox（`[ ]`/`[x]`/`[!]`/`[~]`），当前步骤由 runtime 从文档顺序推导、不由模型自报。契约段哈希的边界是「Plan 与 `## 上次结果` 中先出现的那个」，使 Plan 步骤状态变化永不影响已记录的验证 PASS。
 
@@ -265,11 +265,12 @@ spec 051 把任务拆成三样东西：**契约**（`tasks/<id>.md`，每一步�
 | 工具 | 子代理可用 | 配置门 (`tools.json`) |
 |---|---|---|
 | `read` / `bash` / `edit` / `write` / `grep` / `glob` | ✅ | 恒开，无开关 |
-| `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；Brave 搜索 + Readability 正文提取，支持代理） |
+| `web_search` / `web_fetch` | ✅ | `tools.web.enable`（默认关；支持五种搜索 provider 与 Readability/Jina 抓取，支持代理） |
 | `session_search` / `memory_save` / `memory_search` / `memory_forget` / `skill` / `event_manage` / `job` | ❌ | 恒开，无开关（核心能力） |
 | `send_media` | ❌ | 无配置开关；由传输能力决定——仅当驱动的 transport 提供了 `MediaSender`（钉钉机器人或终端）时才构建并进入工具索引 |
 | `task_list`/`task_create`/`task_update`/`task_close`/`task_log`/`task_step_end` | ❌ | `tools.tasks.enabled`——**自主长程任务总开关**，同时门控 TaskDriver 与每回合任务摘要；`task_step_end` 另外只在任务会话里注册 |
 | `subagent` / `subagent_list` / `subagent_run` | ❌（防递归） | 注册表之外单独追加（避免 registry↔subagents 循环依赖） |
+| `subagent_inline` | ❌（防递归） | 注册表之外追加，`tools.subagentInline.enabled`（默认开） |
 
 工具的调用面按 payload 形状切分：**形状不同就拆，形状相同就合**（spec 046/047）。`op` 枚举的路由散文把每条分支各讲一遍，是真正的 token 成本——所以任务族是五个工具而非一个 `action` 分发工具，记忆是 `memory_save` / `memory_search` / `memory_forget`，委派控制是 `subagent_list` + `subagent_run`；而 `event_manage` 的 `create` / `update` 参数集完全相同，合在一个工具里。
 
@@ -291,7 +292,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 |---|---|---|
 | `command-guard` | 开 | 规范化（去 null、NFKC、去注释）、按 shell 链拆分、分类规则匹配（危险命令、提权、防绕过） |
 | `path-guard` | 开 | 拒绝敏感路径：私钥/凭据文件、`~/.ssh` `~/.aws` 等目录、系统目录写入、shell rc 文件写入、`/proc/*/mem` |
-| `network-guard` | 关 | web 工具的 SSRF 防护：DNS 解析后校验，拦截 localhost/链路本地/私网 CIDR/云 metadata，重定向逐跳复查 |
+| `network-guard` | 初始化模板关闭；内置默认开启 | web 工具的 SSRF 防护：DNS 解析后校验，拦截 localhost/链路本地/私网 CIDR/云 metadata，重定向逐跳复查 |
 
 其它硬化：六个可能含密钥的配置文件（`channel/auth/models/settings/tools/security.json`）创建即 0600，启动时对已存在的宽权限文件收紧；系统提示词层面还有"任务 scope 内的外部动作须遵守能力配置、幂等与审计"等常驻不变量（`agent/prompt/sections.ts`）。
 
@@ -301,7 +302,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 
 - **模型解析**：`models.json`（供应商/模型定义）+ `auth.json`（密钥）→ SDK `ModelRegistry`；启动时取 `settings.json` 保存的默认模型，否则第一个可用模型。`/model` 切换会重定义"主模型"并清空 fallback 状态。
 - **用量账本**（`usage/ledger.ts`）：JSONL 落在 `state/usage/`，条目分 `turn`（主轮，只记 assistant 用量）/ `subagent`（内置外部委派 run，由 `subagents/runs.ts` 统一写入，只在结算时写一次）/ `sidecar` 三类，保证 Σ(条目) = 真实开销、无重复计数。条目带 `usageKnown`/`costKnown` 标记——`codex-cli` 不报成本、`exec` 连 token 都不报，`/usage` 展示"未知"而不是 0。`/usage` 命令渲染汇总。
-- **上下文预算**（`agent/context-budget.ts`）：对"已组装完成的完整 prompt"（含召回/摘要/引导）估算 token，投影超过阈值先做预防性 compact，而不是等 SDK 撞墙。
+- **上下文预算**（`agent/context-budget.ts`）：对"已组装完成的完整 prompt"（含记忆索引/任务摘要/引导）估算 token，投影超过阈值先做预防性 compact，而不是等 SDK 撞墙。
 
 ## 11. 磁盘布局（`src/paths.ts` 集中定义）
 
@@ -326,9 +327,17 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │       ├── .memory-v1/            # v1→v2 迁移时原样搬来的旧文件（SESSION/MEMORY/HISTORY.md 等），不删除
 │       ├── .migrated-v2           # 迁移完成标记，防止重复迁移
 │       ├── log.jsonl  context.jsonl  .channel-meta.json
+│       ├── active-session.json     # 当前聊天 session 指针；无指针时用 context.jsonl
+│       ├── <session>.jsonl         # /new 等操作创建的聊天会话
+│       ├── project.json           # 当前频道的项目目录选择
 │       ├── subagent-runs.jsonl     # 委派执行摘要
 │       ├── subagent-artifacts/<runId>/ # output.md；外部 run 另含 prompt/events/stderr
-│       └── tasks/<id>.md
+│       └── tasks/
+│           ├── <id>.md / <id>.jsonl # 契约 / 循环日志
+│           ├── .sessions/          # 每个 task cycle 独立会话
+│           ├── .steer/ / .verifications/ # 用户指示、通知与验收
+│           ├── .v3/                # 迁移原件
+│           └── archive/            # 已关闭契约与日志
 └── state/
     ├── dispatch/                  # durable-dispatch 外发箱
     ├── events/history.jsonl       # 事件审计
@@ -353,14 +362,14 @@ runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(
 ```
 
 - **section 化**：每段声明 `order`/`authority`/`cacheClass`/`requiresTools`/预算/溢出策略（`prompt/types.ts`、`prompt/sections.ts`），builder 负责过滤、排序、预算和 fingerprint（`prompt/builder.ts`）。runtime 段超字符预算会产出 error 诊断（测试直接失败）。
-- **瘦身与内容责任（spec 026）**：Pipiclaw 只为自己写下的固定段负责，且严格克制——不再重复 tool 目录（tool schema 已是权威），identity/contract/boundary 文案压缩，playbook 目录只保留 filename + 一句 trigger 并在头部打印一次绝对 `PLAYBOOKS_DIR`，无配置 sub-agent 时整段消失。当前 full-tools 下 runtime-authored ≈ 390 prompt units（旧基线 ~1047）。
+- **瘦身与内容责任（spec 026）**：Pipiclaw 只为自己写下的固定段负责，且严格克制——不再重复 tool 目录（tool schema 已是权威），identity/contract/boundary 文案压缩，playbook 目录只保留 filename + 一句 trigger 并在头部打印一次绝对 `PLAYBOOKS_DIR`，无配置 sub-agent 时整段消失。当前体量由 `/context` 和 `npm run playbooks:measure` 检查，不把旧版本一次测量的数字当作现行基线。
 - **prompt units 预算**：预算以 `countPromptUnits`（`shared/prompt-units.ts`：CJK 每字 1、非 CJK 单词 1、标点空白 0）度量。runtime-authored 段合计目标 ≤ 700 units、硬上限 1,200 units（`builder.ts`），超标分别 warning/error。已删除旧的 32k 全局字符池与「依次收缩 subagents/playbooks/AGENTS/SOUL」策略，用户文件不再因总量竞争被裁。`HARD_TOTAL_BUDGET_CHARS`/`SOFT_TOTAL_BUDGET_CHARS` 公共导出随之移除（beta API 变更）。
 - **SOUL / AGENTS 独立预算**：两者互不挤压，各有 units + chars 双上限（SOUL 3,000 units / 24,000 chars，AGENTS 6,000 units / 48,000 chars，见 `prompt/resources.ts`）。只有真正超大的文件才 head/tail 截断；正文裁剪发生在 resources 层，section 层只保证 wrapper 完整。
 - **缓存稳定**：system prompt 里没有 channelId、channel 路径、时间戳。同一 workspace 下不同频道、连续多轮的 prompt 字节一致，provider 前缀缓存才能命中。频道事实改由每回合的 `<runtime_turn_context>` 胶囊携带（`channel-runner.ts`）。
 - **工具门控**：关闭 task_* 工具时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
 - **skills 完全交给 pi（spec 026 §9）**：`skillsOverride` 保留 ResourceLoader 中的 skills，`<available_skills>` 索引与 `/skill:name` 命令同源；Pipiclaw 只负责合并策略与诊断（workspace 覆盖同名 skill），不设 skills 预算、不产生超限 warning。`/context` 只观测 skills 体量（`estimateSkillsPromptChars` 现位于 `prompt/manifest.ts`）。
-- **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`events/events.ts`），普通对话不再长期携带。TASK_DRIVER 的准确 task 文件与 playbook 路径继续由 `runtime/task-driver.ts` 的 trigger 给出。
-- **自动 turn context 单位上限（spec 026 §5.3）**：task agenda（600 units）、workspace 共享背景（500 units）、channel 记忆索引（1,400 units）、当天 journal 尾部（400 units）各有独立 unit 上限，与 settings 的 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`memory/task-digest.ts`、`memory/index-budget.ts`、`memory/render.ts`）。
+- **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`events/events.ts`），普通对话不再长期携带。TASK_STEP 的准确 task 文件与 playbook 路径继续由 `runtime/task-driver.ts` 的 trigger 给出。
+- **自动 turn context 单位上限（spec 026 §5.3）**：task agenda（600 units）、workspace 共享背景（500 units）、channel 记忆索引（1,400 units）、当天 journal 尾部（400 units）各有独立 unit 上限，与内置 char 上限「先到先裁」，按完整 item/section 丢弃并给出下一步（`memory/task-digest.ts`、`memory/index-budget.ts`、`memory/render.ts`）。
 - **可观测**：`/context`（及 `/context detail`，忙碌时也可用）零 LLM 成本地列出各 section 的 units/chars、runtime-authored 合计、SOUL/AGENTS 独立预算、skills 归属和上一轮自动上下文 units；`PIPICLAW_DEBUG=1` 时 `last_prompt.json` 记录**实际发出的** system prompt 与 manifest。注意 `fingerprint` 只覆盖 Pipiclaw 自有 section（日志据此去重），provider 真正缓存的是含 pi tail 的整串，即 `finalPromptSha256`——date 每日一变会让整块 system prompt 重算。缓存效果结合用量账本里的 cacheRead/cacheWrite 观察。
 
 playbook 正文不进提示词，agent 触发时用 `read` 按需加载。
@@ -378,7 +387,7 @@ flowchart LR
 
 关机 flush 用比平时更宽松的 gate：只要有未固化的持久活动（哪怕没有完整 assistant 轮）就做最后一次固化——这是最后的持久化机会。
 
-**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/models/auth-cli.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器或频道目录——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端不提供登录入口，TUI 当前也不内嵌登录流程，详见 `docs/specs/039-provider-login-cli/design.md`。
+**第三个入口——`pipiclaw auth`（spec 039）**：`daemon`/`tui` 都会走上面这套 `bootstrap`/`runtime` 装配，`auth` 不会。`pipiclaw auth status|login|logout`（`src/models/auth-cli.ts`）只做 `bootstrapAppHome` + `prepareAppServices` + `createModelRuntime`，不构造 runner、session、记忆调度器或频道目录——它是一个短进程、一次性的凭据运维操作，登录成功后需要重启正在跑的 daemon/TUI 才能看到新凭据（`AuthStorage` 把 auth.json 读进内存快照，只有 `modify`/`delete` 才重新读盘）。钉钉端不提供登录入口，TUI 当前也不内嵌登录流程，详见 `docs/archive/specs/039-provider-login-cli/design.md`。
 
 ## 12.1 公共 API 面（`src/index.ts`，spec 035）
 
@@ -389,5 +398,5 @@ Pipiclaw 的产品是 CLI/runtime，不是 SDK。`src/index.ts` 因此只支持*
 ## 13. 测试与质量门
 
 - `npm run check` = Biome lint + `tsc --noEmit` + knip 死代码 + Vitest 单测；`npm run test:e2e` 用脚本化 mock provider 跑经过真实 bootstrap 的确定性端到端套件。
-- 记忆流水线的每个单元（lifecycle/gates/jobs/state/recall/consolidation）都有独立测试文件，这是"分层不摊平"原则的另一面。
-- 领域边界与工程规则的权威描述在 `AGENTS.md`；每个子系统的设计脉络在 `docs/specs/NNN-*`。
+- 记忆流水线的每个单元（lifecycle/gates/reflect/reflect-job/state/store/migrate）都有独立测试文件，这是"分层不摊平"原则的另一面。
+- 领域边界与工程规则的权威描述在 `AGENTS.md`；每个子系统的设计脉络在 `docs/specs/NNN-*` 与 `docs/archive/specs/NNN-*`。

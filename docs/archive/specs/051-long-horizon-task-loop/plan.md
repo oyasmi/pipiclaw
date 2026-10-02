@@ -1,6 +1,6 @@
 # 051 实施计划
 
-设计见 [design.md](./design.md)。**四个阶段**，每个阶段结束时 `npm run check` 与 `npm run test:e2e` 必须绿，且每个阶段都能独立发布。
+设计见 [design.md](../../../specs/051-long-horizon-task-loop/design.md)。**四个阶段**，每个阶段结束时 `npm run check` 与 `npm run test:e2e` 必须绿，且每个阶段都能独立发布。
 
 顺序的原则是**先修真实故障、再降成本、最后收文档**：P1 结束时 F1（停泊即失踪）已经修好，P2/P3 是让它更便宜、更可见。
 

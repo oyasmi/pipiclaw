@@ -24,7 +24,7 @@ Pipiclaw 只支持工作区级 skills，不存在频道级 skill 目录。同一
 
 - 单次任务的当前进度：写进任务台账或 journal
 - 永远适用的团队规则：写进 `AGENTS.md`
-- 稳定事实和偏好：写进 `MEMORY.md`
+- 稳定事实和偏好：频道内容走 `memory_save`；共享团队背景由管理员维护 `workspace/MEMORY.md`
 - 需要独立上下文或独立执行器（外部 coding agent）的能力条目：写进 `sub-agents/`
 - Pipiclaw 本身的 task、event、memory、delegation 机制：由随包发布的 runtime playbook 维护
 

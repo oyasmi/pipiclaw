@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run typecheck` — `tsc --noEmit` against `tsconfig.json` (the config with `noUnusedLocals`/`noUnusedParameters`; `tsconfig.build.json` is emit-only).
 - `npm run lint` — Biome (format + lint); autofix with `npx biome check --write .`.
 - `npm run deadcode` — knip. Configured with `ignoreExportsUsedInFile`, so an `export` used only inside its own file is not flagged; a *genuinely* unused export must be deleted or its `export` dropped, not suppressed.
-- `npm run build` — `tsc -p tsconfig.build.json`, then chmods `dist/main.js` (the `pipiclaw` bin).
+- `npm run build` — `tsc -p tsconfig.build.json`, copies Markdown assets with `scripts/copy-md-assets.mjs`, then chmods `dist/main.js` (the `pipiclaw` bin).
 
 Node `>= 22.19.0`.
 
@@ -36,7 +36,7 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 **Transport → agent → delivery flow**
 1. `src/runtime/bootstrap.ts` loads config and wires the bot, durable dispatch, task/event/memory services, background jobs, and sub-agent run persistence. `src/main.ts` is intentionally a thin entrypoint that just calls `bootstrap`.
 2. `src/runtime/dingtalk.ts` receives Stream-mode events; `src/runtime/delivery.ts` builds the `ChannelContext` (the transport-neutral delivery contract in `src/channel/channel-context.ts`: `respond`, `respondInThread`, AI Card streaming). The terminal TUI (`src/tui/`) is a second implementation of the same contract.
-3. Each channel gets one `ChannelRunner` (`src/agent/channel-runner.ts`), cached by `src/agent/runner-factory.ts`. It assembles the SDK session, tools, memory, roles, and prompt, then streams the turn through the transport-neutral `ChannelContext`.
+3. Each channel gets one `ChannelRunner` (`src/agent/channel-runner.ts`), created by `src/agent/runner-factory.ts` and cached in `src/runtime/bootstrap.ts`. It assembles the SDK session, tools, memory, roles, and prompt, then streams the turn through the transport-neutral `ChannelContext`.
 4. `src/agent/session-events.ts` translates SDK session events into progress/AI-Card updates.
 
 **Concurrency model (important, spans several files)**
@@ -45,7 +45,7 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 - Config/state files are written via `src/shared/atomic-file.ts` (write-temp-then-rename).
 
 **Long-horizon tasks (`src/tasks/`, spec 051)** — three things, do not flatten back into one:
-- The **contract** `tasks/<id>.md` (goal/DoD/manual/plan, hard 4 KB budget, injected whole into every step), the **loop log** `tasks/<id>.jsonl` (append-only step/round/expiry/close records), and the **ticket** in frontmatter (what will wake this task, and by when).
+- The **contract** `tasks/<id>.md` (goal/DoD/manual/plan, a 4 KB target that trims only the runtime-written last-result section and preserves author-written contract text, injected whole into every step), the **loop log** `tasks/<id>.jsonl` (append-only step/round/expiry/close records), and the **ticket** in frontmatter (what will wake this task, and by when).
 - `ticket.ts` is the only place a `Ticket` comes into existence: `resolveTicket` validates the claim (the run exists, is unsettled, names this task) and stamps the `by` backstop. Anything writing `ticket` directly is a defect — it would recreate the "parked with nothing to redeem it" failure the whole mechanism exists to remove.
 - `store.ts` owns the idempotent transitions (`redeemTicket`, `expireTicket`, `openCycle`, `pauseTask`); `budget.ts` is the four-dimension stop that replaced the fingerprint/effect-ledger governor; `rounds.ts` records verification rounds at settlement (there is no import tool).
 - A task step runs in the task cycle's own session (`tasks/.sessions/`), bound via `ChannelRunner.bindTaskSession`. It is still an ordinary channel-queue item, so busy state, `/stop` and delivery are unchanged — only which session file the turn is bound to differs.
@@ -67,4 +67,4 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 
 ## Docs
 
-`docs/README.md` is the user-documentation map. Top-level guides and `docs/architecture.md` describe current behavior; `docs/specs/NNN-*` are historical design records that explain earlier decisions but may contain retired paths or contracts. For behavior changes, verify code and tests first, update the relevant top-level guide, and preserve specs as history unless writing a new design record.
+`docs/README.md` is the user-documentation map. Top-level guides and `docs/architecture.md` describe current behavior; `docs/specs/NNN-*` and `docs/archive/specs/NNN-*` are historical design records that explain earlier decisions but may contain retired paths or contracts. For behavior changes, verify code and tests first, update the relevant top-level guide, and preserve specs as history unless writing a new design record.

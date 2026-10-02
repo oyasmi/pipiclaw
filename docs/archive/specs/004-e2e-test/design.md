@@ -66,7 +66,7 @@ E2E 测试不依赖内部 mock 计数，不断言某个私有方法是否被调�
 
 ### 1.1 路径配置化
 
-当前 [src/paths.ts](../../../src/paths.ts) 将 app home 固定在 `~/.pi/pipiclaw`。这不适合 E2E 测试，因为测试需要隔离目录，不能污染真实用户数据。
+当前 [src/paths.ts](../../../../src/paths.ts) 将 app home 固定在 `~/.pi/pipiclaw`。这不适合 E2E 测试，因为测试需要隔离目录，不能污染真实用户数据。
 
 建议增加环境变量覆盖：
 
@@ -270,7 +270,7 @@ workspace/
 
 ### 3.4 模块加载时序
 
-由于 [src/paths.ts](../../../src/paths.ts) 的常量在 import 时求值，`PIPICLAW_HOME` 必须在导入依赖它的模块之前设置。
+由于 [src/paths.ts](../../../../src/paths.ts) 的常量在 import 时求值，`PIPICLAW_HOME` 必须在导入依赖它的模块之前设置。
 
 建议：
 
