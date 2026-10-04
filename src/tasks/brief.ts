@@ -1,28 +1,76 @@
+import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
+import { clipText } from "../shared/text-utils.js";
+import { buildTaskBoard, renderTaskBoard } from "./board.js";
 import { effectiveBudget } from "./budget.js";
-import type { TaskFrontmatterV4 } from "./frontmatter.js";
+import type { TaskFrontmatter } from "./frontmatter.js";
 import { readTaskLog, renderTaskLogLine } from "./log.js";
 import { consumeTaskSteer } from "./steer.js";
-import { readStoredTask } from "./store.js";
+import { readStoredTask, tasksDir } from "./store.js";
 import { describeTicket } from "./ticket.js";
 
 /** How many loop-log lines a step brief carries. Older records stay addressable via `task_log`. */
 export const BRIEF_LOG_LINES = 8;
+/** Cap on the previous occurrence's close note carried into a spawned instance's first step. */
+export const PREVIOUS_OCCURRENCE_MAX_CHARS = 1_200;
 
 export interface TaskBriefInput {
 	channelDir: string;
 	taskId: string;
-	/** Why this step is running: new cycle, ticket redeemed, ticket expired, previous step continued. */
+	/** Why this step is running, when the caller knows. */
 	reason?: string;
 }
 
+interface PreviousOccurrence {
+	id: string;
+	outcome: string;
+	closedAt?: string;
+	note: string;
+}
+
 /**
- * The turn input for one task loop step (spec 051, D3).
+ * The most recent archived instance spawned by the same event (spec 052, D5). Instance ids are
+ * `<origin>-<YYYYMMDD>-<HHmm>`, so candidates are found by name and compared lexicographically —
+ * no scan of every archived contract. A candidate is accepted only if its own `origin` says so,
+ * since one event name can be a prefix of another's.
+ */
+async function findPreviousOccurrence(
+	channelDir: string,
+	origin: string,
+	currentId: string,
+): Promise<PreviousOccurrence | undefined> {
+	const archiveDir = join(tasksDir(channelDir), "archive");
+	if (!existsSync(archiveDir)) return undefined;
+	const candidates = (await readdir(archiveDir))
+		.filter((name) => name.endsWith(".md") && name.startsWith(`${origin}-`))
+		.map((name) => name.slice(0, -".md".length))
+		.filter((id) => id < currentId)
+		.sort()
+		.reverse();
+	for (const id of candidates) {
+		const document = await readStoredTask(channelDir, id, true).catch(() => undefined);
+		if (!document || document.fields.origin !== origin) continue;
+		const close = (await readTaskLog(channelDir, id, { kinds: ["close"] })).at(-1);
+		return {
+			id,
+			outcome: document.fields.outcome ?? "completed",
+			closedAt: document.fields.closedAt,
+			note: close?.kind === "close" ? close.note : "（无收尾记录）",
+		};
+	}
+	return undefined;
+}
+
+/**
+ * The turn input for one task loop step (spec 051, D3; spec 052, D5).
  *
- * The authored contract is injected whole; authors must keep it short. The history
- * is the last few log lines rather than the 24 KB of closed cycles v3 pasted into every wake. Any
- * pending `/tasks steer` or `/tasks reply` is consumed here and put first — it is the one thing in
+ * The authored contract is injected whole; authors must keep it short. What changes from step to
+ * step is carried by the `<task_board>` (what each delegation is doing and what just came back)
+ * and the last few log lines. The wake text of a settled delegation is *not* shown to a task step
+ * — the brief replaces it — so the board is what tells the leader which results are new. Any
+ * pending `/tasks steer` or `/tasks reply` is consumed here and put first: it is the one thing in
  * the brief that is genuinely new since the previous step.
  */
 export async function buildTaskStepBrief(input: TaskBriefInput): Promise<string | undefined> {
@@ -30,15 +78,14 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<string 
 	if (!document) return undefined;
 
 	const steer = await consumeTaskSteer(input.channelDir, input.taskId);
-	const log = await readTaskLog(input.channelDir, input.taskId, {
-		cycle: document.fields.cycle?.id,
-		limit: BRIEF_LOG_LINES,
-	});
+	const log = await readTaskLog(input.channelDir, input.taskId, { kinds: ["step", "expired", "close", "note"] });
+	const recent = log.slice(-BRIEF_LOG_LINES);
+	const board = await buildTaskBoard(input.channelDir, input.taskId, document.body);
 
 	const blocks: string[] = [`[TASK_STEP:${input.taskId}]`];
 	if (input.reason) blocks.push(input.reason);
 	// Reuse durable history instead of a new pending-wake flag. An expiry remains relevant until
-	// a later step records what recovery did; a verifier round in between does not consume it.
+	// a later step records what recovery did.
 	const lastTransition = [...log].reverse().find((record) => record.kind === "expired" || record.kind === "step");
 	if (lastTransition?.kind === "expired") {
 		blocks.push(
@@ -46,36 +93,45 @@ export async function buildTaskStepBrief(input: TaskBriefInput): Promise<string 
 		);
 	}
 	if (steer) blocks.push(`<user_guidance>\n${steer}\n</user_guidance>`);
+
+	const isFirstStep = !log.some((record) => record.kind === "step");
+	if (isFirstStep && document.fields.origin) {
+		const previous = await findPreviousOccurrence(input.channelDir, document.fields.origin, input.taskId);
+		if (previous) {
+			blocks.push(
+				`<previous_occurrence id="${previous.id}" outcome="${previous.outcome}"${previous.closedAt ? ` closedAt="${previous.closedAt}"` : ""}>\n${clipText(previous.note, PREVIOUS_OCCURRENCE_MAX_CHARS)}\n</previous_occurrence>`,
+			);
+		}
+	}
+
 	blocks.push(
-		`契约文件：${document.path}\n首次执行前读取 ${join(PLAYBOOKS_DIR, "task-loop.md")}；已在当前上下文中完整读过则复用。`,
+		`契约文件：${document.path}\n首次执行前读取 ${join(PLAYBOOKS_DIR, "task-lead.md")}；已在当前上下文中完整读过则复用。`,
 	);
 	blocks.push(`<task_contract id="${input.taskId}">\n${document.body.trim()}\n</task_contract>`);
-	if (log.length > 0) {
-		blocks.push(`<task_log recent="${log.length}">\n${log.map(renderTaskLogLine).join("\n")}\n</task_log>`);
+	if (board) blocks.push(`<task_board>\n${renderTaskBoard(board)}\n</task_board>`);
+	if (recent.length > 0) {
+		blocks.push(`<task_log recent="${recent.length}">\n${recent.map(renderTaskLogLine).join("\n")}\n</task_log>`);
 	}
 	blocks.push(`<task_state>\n${renderState(document.fields)}\n</task_state>`);
 	blocks.push(
 		"推进这个任务的下一个具体步骤，然后必须调用 task_step_end 收尾：" +
-			"continue（还能继续）/ park（等一个真实来源）/ done（本周期完成）/ blocked（需要用户决定）。" +
-			`派发 run/job 时，首个调用就必须带 taskId=${input.taskId}；达成 DoD 后先用 edit 勾选对应验收项，再调用 done。` +
-			"默认不向用户发言；契约要求交付、告知、汇报或回复时，必须把实际内容放进 notify，note 不会发送给用户。",
+			"continue（还能继续）/ park（等一个真实来源）/ done（项目完成）。" +
+			"派发的委派和作业会自动绑定到本任务；给每个委派带上它对应的工作项 item。达成 DoD 后先用 edit 勾选对应验收项，再调用 done。" +
+			"默认不向用户发言；契约要求交付、告知、汇报或回复时，必须把实际内容放进 report，note 不会发送给用户。",
 	);
 	return blocks.join("\n\n");
 }
 
-function renderState(fields: TaskFrontmatterV4): string {
+function renderState(fields: TaskFrontmatter): string {
 	const budget = effectiveBudget(fields);
-	const cycle = fields.cycle;
+	const usage = fields.usage;
 	const lines = [`state: ${fields.state}`];
-	if (fields.schedule) lines.push(`schedule: ${fields.schedule}`);
-	if (fields.verify === "required") lines.push("verify: required（完成前需要一次独立验收 PASS）");
+	if (fields.origin) lines.push(`origin: ${fields.origin}`);
 	if (fields.ticket) lines.push(`ticket: ${describeTicket(fields.ticket)}（兜底 ${fields.ticket.by}）`);
-	if (cycle) {
+	if (usage) {
 		lines.push(
-			`cycle ${cycle.id}: ${cycle.steps}/${budget.steps} 步 · ${cycle.rounds}/${budget.rounds} 轮 · ` +
-				`$${cycle.usd.toFixed(2)}/$${budget.usd}${cycle.usdEstimated ? "（含估算）" : ""}`,
+			`usage: ${usage.steps}/${budget.steps} 步 · $${usage.usd.toFixed(2)}/$${budget.usd}${usage.usdEstimated ? "（含估算）" : ""}`,
 		);
 	}
-	if (budget.until) lines.push(`deadline: ${budget.until}`);
 	return lines.join("\n");
 }

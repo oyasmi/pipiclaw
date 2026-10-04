@@ -10,6 +10,7 @@ function snapshot(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
 		status: "running",
 		startedAt: Date.now(),
 		durationMs: 5000,
+		timeoutSeconds: 300,
 		...overrides,
 	};
 }

@@ -24,15 +24,14 @@ import { getChannelMemoryDir, getChannelMemoryIndexPath, listMemoryEntries } fro
 import { formatModelReference } from "../models/utils.js";
 import { DEFAULT_SECURITY_CONFIG } from "../security/config.js";
 import type { SecurityConfig } from "../security/types.js";
-import { formatLocalTime, localDayKey } from "../shared/local-time.js";
+import { localDayKey } from "../shared/local-time.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { errorMessage, extractAssistantText } from "../shared/text-utils.js";
 import { addUsage, createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { sleepUnref } from "../shared/with-timeout.js";
-import { workspaceSubjectHash, workspaceSubjectSnapshot } from "../tasks/artifact-subject.js";
+import { findTaskItem, parseTaskItems } from "../tasks/ledger.js";
 import { readStoredTask } from "../tasks/store.js";
-import { writeVerificationAttestation } from "../tasks/verification.js";
 import type { PipiclawWebToolsConfig } from "../tools/config.js";
 import { describeToolCall } from "../tools/presentation.js";
 import { buildToolSet } from "../tools/registry.js";
@@ -52,7 +51,7 @@ import {
 } from "./discovery.js";
 import { type ExternalLaunchResult, launchExternalRun } from "./external/run.js";
 import { resolveSyncGraceMs, type SettleInput, type SubAgentRunManager } from "./runs.js";
-import { resolveVerificationOutcome } from "./verification-outcome.js";
+import { resolveVerificationVerdict } from "./verification-outcome.js";
 import {
 	acquireWorkspaceLease,
 	findWorkspaceLeaseHolder,
@@ -70,10 +69,21 @@ const workingDirectoryField = Type.Optional(
 const purposeField = Type.Optional(
 	Type.Union([Type.Literal("work"), Type.Literal("verify")], {
 		description:
-			'Use "verify" for an independent task acceptance check. A write-capable verifier may run tests/builds; its attestation is advisory.',
+			'Use "verify" for an independent check: the sub-agent is given the checker protocol and ends with VERDICT: PASS|FAIL. The verdict is information for you to weigh, not a gate.',
 	}),
 );
-const taskIdField = Type.Optional(Type.String({ description: "Persistent task id, required when purpose=verify." }));
+const taskIdField = Type.Optional(
+	Type.String({
+		description:
+			"Persistent task this work belongs to. Inside a task session it is bound automatically — omit it. In chat, pass it to have the result recorded on that task's board.",
+	}),
+);
+const itemField = Type.Optional(
+	Type.String({
+		description:
+			'The task\'s Work Item this delegation is for, e.g. "W2". Requires a task (bound automatically in a task session).',
+	}),
+);
 
 /**
  * Role-based delegation (spec 046, D2.1): the common path. No override fields beyond routing
@@ -86,6 +96,7 @@ const subagentSchema = Type.Object({
 	workingDirectory: workingDirectoryField,
 	purpose: purposeField,
 	taskId: taskIdField,
+	item: itemField,
 });
 
 /**
@@ -137,6 +148,7 @@ const subagentInlineSchema = Type.Object({
 	workingDirectory: workingDirectoryField,
 	purpose: purposeField,
 	taskId: taskIdField,
+	item: itemField,
 });
 
 /**
@@ -208,6 +220,17 @@ export interface SubAgentToolOptions {
 	syncGraceMs?: number;
 	/** Channel manager owned by the application; also a seam for admission failures. */
 	getRunManager: (channelId: string) => SubAgentRunManager;
+	/** Present only inside a task session: every delegation is bound to this task automatically (spec 052, D4). */
+	boundTaskId?: string;
+}
+
+/** The delegation parameters both invocation surfaces share (`task` plus routing). */
+export interface DelegationParams {
+	task: string;
+	workingDirectory?: string;
+	purpose?: "work" | "verify";
+	taskId?: string;
+	item?: string;
 }
 
 interface SubAgentWorker {
@@ -248,6 +271,7 @@ export interface SubAgentRunContext {
 	runId: string;
 	purpose: "work" | "verify";
 	taskId?: string;
+	item?: string;
 	workingDirectory: string;
 	artifactDir: string;
 }
@@ -341,26 +365,43 @@ function resolveRunWorkingDirectory(requested: string | undefined, options: SubA
 
 async function prepareRunContext(
 	runId: string,
-	params: { purpose?: "work" | "verify"; taskId?: string; workingDirectory?: string },
+	params: Pick<DelegationParams, "purpose" | "taskId" | "item" | "workingDirectory">,
 	options: SubAgentToolOptions,
 ): Promise<SubAgentRunContext> {
 	const purpose = params.purpose ?? "work";
-	const taskId = params.taskId?.trim() || undefined;
-	if (purpose === "verify" && !taskId) throw new RecoverableToolError("purpose=verify requires taskId.");
+	let taskId = params.taskId?.trim() || undefined;
+	// Inside a task session the binding is automatic, like `bash`'s: a delegation from a task step
+	// belongs to that task, so the leader never has to remember to pass it (spec 052, D4).
+	if (options.boundTaskId) {
+		if (taskId && taskId !== options.boundTaskId) {
+			throw new RecoverableToolError(
+				`This is task ${options.boundTaskId}'s session — drop taskId (it is bound automatically); "${taskId}" does not belong here.`,
+			);
+		}
+		taskId = options.boundTaskId;
+	}
+	const item = params.item?.trim() || undefined;
+	if (item && !taskId) throw new RecoverableToolError("item names a Work Item of a task; pass taskId too.");
 	if (taskId && !TASK_ID_PATTERN.test(taskId)) throw new RecoverableToolError(`Invalid taskId: ${taskId}`);
-	if (taskId && !(await readStoredTask(options.channelDir, taskId))) {
-		throw new RecoverableToolError(
-			`Task ${taskId} does not exist. Create it with task_create before delegating task-owned work.`,
-		);
+	if (taskId) {
+		const task = await readStoredTask(options.channelDir, taskId);
+		if (!task) {
+			throw new RecoverableToolError(
+				`Task ${taskId} does not exist. Create it with task_create before delegating task-owned work.`,
+			);
+		}
+		if (item && !findTaskItem(task.body, item)) {
+			const known = parseTaskItems(task.body)
+				?.items.map((entry) => entry.id)
+				.join(", ");
+			throw new RecoverableToolError(
+				`Task ${taskId} has no Work Item "${item}"${known ? ` (known: ${known})` : " (it has no Work Items yet — add one with task_update first)"}.`,
+			);
+		}
 	}
 	const artifactDir = await prepareArtifactDir(options.channelDir, runId);
 	const workingDirectory = resolveRunWorkingDirectory(params.workingDirectory, options);
-	return { runId, purpose, taskId, workingDirectory, artifactDir };
-}
-
-async function gitWorkspaceState(executor: Executor): Promise<string | undefined> {
-	const result = await executor.exec("git status --porcelain=v1 --untracked-files=all", { timeout: 30 });
-	return result.code === 0 ? result.stdout : undefined;
+	return { runId, purpose, taskId, item, workingDirectory, artifactDir };
 }
 
 function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
@@ -540,13 +581,14 @@ function buildSubagentTools(
 }
 
 /** Shared by both runtimes' task envelopes and `subagent_run`'s verify follow-up (spec 040, D9). */
-export function buildVerificationProtocol(taskPath: string): string {
+export function buildVerificationProtocol(taskPath: string | undefined): string {
 	return [
 		"Verification protocol:",
-		`- Independently inspect ${taskPath} and verify every DoD/Verification item against concrete evidence.`,
+		taskPath
+			? `- Independently inspect ${taskPath} and verify every DoD item against concrete evidence.`
+			: "- Independently inspect the work described in the task above and verify it against concrete evidence.",
 		"- You are the checker, not the maker. Do not modify the implementation or fix failures to make a check pass; report them.",
-		"- You may run npm tests/builds and other deterministic checks. Newly created outputs under recognized transient artifact paths (for example .run/, coverage/, build/, dist/ or caches) are allowed, but do not change tracked files or pre-existing untracked product files.",
-		"- This verification is advisory when the verifier can write or use bash: runtime cannot structurally prove that every write was harmless. Review the diff and evidence before trusting PASS.",
+		"- You may run npm tests/builds and other deterministic checks; keep any generated output out of tracked files and product directories.",
 		"- Run deterministic checks when available and distinguish observed evidence from assumptions.",
 		"- End the response with exactly one final line: VERDICT: PASS or VERDICT: FAIL.",
 	].join("\n");
@@ -555,7 +597,7 @@ export function buildVerificationProtocol(taskPath: string): string {
 /**
  * D9 verify admission — `exec` has no protocol terminal to prove it even ran to completion, and a
  * target with an active write lease is refused up front. A write-capable verifier is allowed: it
- * takes the same exclusive lease as a work writer and receives an advisory attestation.
+ * takes the same exclusive lease as a work writer.
  * Spec 042 D7: exported so `subagent_run op=follow_up` runs the exact same checks the initial
  * dispatch does, including the remaining `exec` restriction.
  */
@@ -610,11 +652,13 @@ export function buildSubAgentTask(
 
 	lines.push("", `Task:`, taskText);
 	if (runContext.purpose === "verify") {
-		const taskPath = join(
-			getChannelDir(runtimeContext.workspaceDir, runtimeContext.channelId),
-			"tasks",
-			`${runContext.taskId}.md`,
-		);
+		const taskPath = runContext.taskId
+			? join(
+					getChannelDir(runtimeContext.workspaceDir, runtimeContext.channelId),
+					"tasks",
+					`${runContext.taskId}.md`,
+				)
+			: undefined;
 		lines.push("", buildVerificationProtocol(taskPath));
 	}
 	return lines.join("\n");
@@ -737,7 +781,7 @@ function createDetails(input: {
 /**
  * Shared dispatch path for both `subagent` and `subagent_inline` (spec 046, D2.5): everything
  * after a role has been resolved into a `ResolvedSubAgentConfig` — workspace lease admission,
- * the internal/external fork, budget/turn/tool-call enforcement, verification attestation, and
+ * the internal/external fork, budget/turn/tool-call enforcement, the verification verdict, and
  * the sync-grace/detached-placeholder split — is identical regardless of which schema the model
  * called through.
  */
@@ -746,7 +790,7 @@ async function dispatchSubAgentRun(
 	currentModel: Model<Api>,
 	config: ResolvedSubAgentConfig,
 	warning: string | undefined,
-	params: { task: string; workingDirectory?: string; purpose?: "work" | "verify"; taskId?: string },
+	params: DelegationParams,
 	onUpdate?: (update: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }) => void,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
 	// Derived rather than model-supplied (spec 045): `${agent}: ${task's first line}`, the
@@ -812,7 +856,7 @@ async function dispatchExternalRun(input: {
 	runLabel: string;
 	runContext: SubAgentRunContext;
 	leaseKey: string | undefined;
-	params: { task: string; workingDirectory?: string; purpose?: "work" | "verify"; taskId?: string };
+	params: DelegationParams;
 }): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
 	const { options, config, runLabel, runContext, leaseKey, params } = input;
 	let launchResult: ExternalLaunchResult;
@@ -849,6 +893,7 @@ async function dispatchExternalRun(input: {
 			artifactDir: runContext.artifactDir,
 			purpose: runContext.purpose,
 			taskId: runContext.taskId,
+			item: runContext.item,
 			leaseKey,
 			mutates: config.mutates,
 			roleFingerprint: externalRoleFingerprint(config),
@@ -917,7 +962,7 @@ async function dispatchInternalRun(input: {
 	mutatesNote: string;
 	runContext: SubAgentRunContext;
 	leaseKey: string | undefined;
-	params: { task: string; workingDirectory?: string; purpose?: "work" | "verify"; taskId?: string };
+	params: DelegationParams;
 	onUpdate?: (update: { content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }) => void;
 	runManager: SubAgentRunManager;
 }): Promise<{ content: Array<{ type: "text"; text: string }>; details: SubAgentToolFields }> {
@@ -956,6 +1001,7 @@ async function dispatchInternalRun(input: {
 			model: formatModelReference(config.model),
 			purpose: runContext.purpose,
 			taskId: runContext.taskId,
+			item: runContext.item,
 			workingDirectory: runContext.workingDirectory,
 			artifactDir: runContext.artifactDir,
 			channelDir: options.channelDir,
@@ -1003,10 +1049,6 @@ async function dispatchInternalRun(input: {
 
 	let wallClockTimer: ReturnType<typeof setTimeout> | undefined;
 	let unsubscribe: (() => void) | undefined;
-	let verifierGitStateBefore: string | undefined;
-	let verifierSubjectBefore: string | undefined;
-	let verifierSubjectBaseCommit: string | undefined;
-	let verifierSubjectBaselineUntrackedPaths: string[] | undefined;
 	try {
 		const availableTools = (options.buildTools ?? buildSubagentTools)(
 			scopedExecutor,
@@ -1014,13 +1056,6 @@ async function dispatchInternalRun(input: {
 			options,
 			runContext,
 		);
-		verifierGitStateBefore = runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
-		if (runContext.purpose === "verify") {
-			const subjectSnapshot = await workspaceSubjectSnapshot(runContext.workingDirectory);
-			verifierSubjectBefore = subjectSnapshot?.hash;
-			verifierSubjectBaseCommit = subjectSnapshot?.baseCommit;
-			verifierSubjectBaselineUntrackedPaths = subjectSnapshot?.baselineUntrackedPaths;
-		}
 
 		worker =
 			options.createWorker?.({
@@ -1181,65 +1216,13 @@ async function dispatchInternalRun(input: {
 			(lastAssistantMessage.stopReason === "error" || lastAssistantMessage.stopReason === "aborted"
 				? lastAssistantMessage.errorMessage || `Sub-agent stopped with ${lastAssistantMessage.stopReason}`
 				: undefined);
-		const verifierGitStateAfter =
-			runContext.purpose === "verify" ? await gitWorkspaceState(scopedExecutor) : undefined;
-		const verifierSubjectAfter =
+		// The pass/fail rule is shared with the external verify path (spec 042 D1): one place
+		// deciding what a verify run's own output proves. Spec 052, D6: it is the checker's declared
+		// verdict, recorded for the leader to weigh — not a runtime-enforced gate.
+		const verificationVerdict =
 			runContext.purpose === "verify"
-				? await workspaceSubjectHash(
-						runContext.workingDirectory,
-						verifierSubjectBaseCommit
-							? {
-									baseCommit: verifierSubjectBaseCommit,
-									baselineUntrackedPaths: verifierSubjectBaselineUntrackedPaths,
-								}
-							: {},
-					)
+				? resolveVerificationVerdict({ finalText, runFailed: Boolean(effectiveFailureReason) })
 				: undefined;
-		// Spec 042 D1: the pass/fail judgment rule is shared with the external verify path
-		// (`resolveVerificationOutcome`) so there is exactly one place deciding what a verify
-		// run's own output does and does not prove. Only the attestation write and the
-		// strength label stay here, since only the internal path can structurally remove
-		// write/edit from the verifier's tool set.
-		const verification =
-			runContext.purpose === "verify"
-				? resolveVerificationOutcome({
-						subjectBefore: verifierSubjectBefore,
-						subjectAfter: verifierSubjectAfter,
-						gitStateBefore: verifierGitStateBefore,
-						gitStateAfter: verifierGitStateAfter,
-						finalText,
-						runFailed: Boolean(effectiveFailureReason),
-					})
-				: undefined;
-		const verificationVerdict = verification?.verdict;
-		// Internal verify always keeps write/edit structurally removed from the verifier's
-		// tool set (buildSubagentTools above), but `bash` stays available by default and can
-		// write files just as well. A role that declares mutates: write is advisory even when
-		// its effective tool list happens not to contain bash: the declaration says this run is
-		// not structurally read-only. Computed once so the attestation and run record — the
-		// latter is what the completion wake and `subagent_list` display — cannot disagree.
-		const internalVerificationStrength =
-			config.mutates === "write" || config.tools.includes("bash") ? ("advisory" as const) : ("enforced" as const);
-		if (runContext.purpose === "verify" && runContext.taskId && verification) {
-			const baseSubjectAvailable =
-				verifierSubjectBaseCommit !== undefined && verifierSubjectBaselineUntrackedPaths !== undefined;
-			const subjectAvailable =
-				!verification.workspaceChanged && verifierSubjectAfter !== undefined && baseSubjectAvailable;
-			await writeVerificationAttestation(options.channelDir, {
-				runId: runContext.runId,
-				taskId: runContext.taskId,
-				verdict: verification.verdict,
-				checkedAt: formatLocalTime(),
-				evidence: verification.evidence,
-				workspaceChanged: verification.workspaceChanged,
-				subjectHash: subjectAvailable ? verifierSubjectAfter : undefined,
-				subjectDir: subjectAvailable ? runContext.workingDirectory : undefined,
-				subjectMode: subjectAvailable ? "base-relative" : undefined,
-				subjectBaseCommit: subjectAvailable ? verifierSubjectBaseCommit : undefined,
-				subjectBaselineUntrackedPaths: subjectAvailable ? verifierSubjectBaselineUntrackedPaths : undefined,
-				verificationStrength: internalVerificationStrength,
-			});
-		}
 
 		// Internal runs always report full usage; cost is "unknown" only for the shape a
 		// free/local model produces (tokens spent, nothing billed) — external harnesses
@@ -1253,7 +1236,6 @@ async function dispatchInternalRun(input: {
 			toolCalls,
 			durationMs,
 			verificationVerdict,
-			verificationStrength: runContext.purpose === "verify" ? internalVerificationStrength : undefined,
 		};
 
 		if (effectiveFailureReason) {

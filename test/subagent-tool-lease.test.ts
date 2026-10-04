@@ -353,7 +353,7 @@ describe("subagent tool: workspace write lease (spec 040, D10.1)", () => {
 		releasePrompt?.();
 
 		const result = await resultPromise;
-		expect(manager.get(result.details.runId)?.verificationStrength).toBe("advisory");
+		expect(manager.get(result.details.runId)?.verificationVerdict).toBeDefined();
 		const nextLease = acquireWorkspaceLease({
 			runId: "next-verify",
 			channelId,

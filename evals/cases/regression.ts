@@ -6,7 +6,6 @@ import {
 	codeGrader,
 	deliveryMatches,
 	deliveryNotMatches,
-	driverDispatchCount,
 	fileContains,
 	fileNotContains,
 	lastDeliveryMatches,
@@ -14,7 +13,6 @@ import {
 	noDeliveriesAfterStep,
 	noFailedToolResult,
 	taskFrontmatter,
-	taskLog,
 	toolArgumentIntact,
 	toolCallCount,
 	tracePredicate,
@@ -22,7 +20,6 @@ import {
 import type { EvalCase } from "../harness/schema.js";
 import {
 	copyFixture,
-	hasState,
 	longNonAsciiValue,
 	seedChannelMemory,
 	wakeBody,
@@ -81,68 +78,6 @@ export const regressionCases: EvalCase[] = [
 						.join("\n")}`;
 				},
 			},
-		],
-	},
-	{
-		id: "T-deadline-01",
-		suite: "regression",
-		source: "028 production driver governance",
-		description: "The real TaskDriver governance pass escalates an expired task before model implementation.",
-		definitionFile,
-		setup: (ctx) =>
-			writeTask(ctx, "expired-task", {
-				body: wakeBody("DEADLINE-LOCK"),
-				budget: { until: "2020-01-02T00:00:00.000Z" },
-				cycle: true,
-			}),
-		script: [{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" }],
-		graders: [
-			// Spec 051, D6: an expired `budget.until` is a budget breach, stopped before dispatch —
-			// so the driver spends no model turn on it at all.
-			driverDispatchCount("deadline-dispatch", 0),
-			taskFrontmatter(
-				"deadline-stopped",
-				"expired-task",
-				(frontmatter, content) =>
-					hasState(frontmatter.fields, "open") &&
-					frontmatter.fields.paused?.by === "runtime" &&
-					/DEADLINE-LOCK/.test(content),
-			),
-		],
-	},
-	{
-		id: "T-recur-01",
-		suite: "regression",
-		source: "027 recurring task semantics",
-		description: "Two scans of one due occurrence use the real driver and do not dispatch that occurrence twice.",
-		definitionFile,
-		// A cycle-start turn exercises the full task playbook and can legitimately spend longer
-		// than the generic three-minute trial cap. Keep a hard cap, but leave enough room for
-		// the intended recurrence assertions to run instead of mostly measuring timeout variance.
-		budget: { maxWallMs: 300_000, maxTurns: 18 },
-		setup: (ctx) =>
-			writeTask(ctx, "daily-cycle", {
-				ticket: { kind: "schedule", at: "2025-12-31T00:00:00.000+08:00", by: "2025-12-31T00:00:00.000+08:00" },
-				schedule: "0 0 * * *",
-				body: "# Task\n\n## Goal\nOn cycle start, record CYCLE-STARTED, verify the record and finish this evidence-only occurrence. Leave tomorrow’s occurrence scheduled.\n\n## DoD\n- [ ] CYCLE-STARTED recorded\n",
-			}),
-		script: [
-			{ kind: "runTaskDriver", at: "2026-01-01T00:00:00.000Z" },
-			{ kind: "runTaskDriver", at: "2026-01-01T00:00:01.000Z" },
-		],
-		graders: [
-			driverDispatchCount("single-occurrence", 1),
-			taskFrontmatter(
-				"cycle-completed-and-scheduled",
-				"daily-cycle",
-				(frontmatter) => frontmatter.fields.cycle !== undefined && frontmatter.fields.ticket?.kind === "schedule",
-			),
-			taskLog(
-				"cycle-has-completion-evidence",
-				"daily-cycle",
-				(log) => /"kind":"close"[^\n]*"outcome":"done"/.test(log),
-				"the occurrence must close through done, not park+schedule",
-			),
 		],
 	},
 	{
@@ -622,7 +557,7 @@ export const regressionCases: EvalCase[] = [
 		id: "P-playbook-01",
 		suite: "regression",
 		source: "026 playbook activation",
-		description: "A task wake loads the task-loop playbook from the runtime catalog.",
+		description: "A task wake loads the task-lead playbook from the runtime catalog.",
 		definitionFile,
 		setup: (ctx) => writeTask(ctx, "playbook-task", { body: wakeBody("PLAYBOOK-7") }),
 		script: [{ kind: "syntheticTaskTurn", taskId: "playbook-task" }],
@@ -634,7 +569,7 @@ export const regressionCases: EvalCase[] = [
 						(event) =>
 							event.kind === "tool-call" &&
 							event.tool === "read" &&
-							/task-loop\.md/.test(event.fields?.path ?? event.fields?.file_path ?? "") &&
+							/task-lead\.md/.test(event.fields?.path ?? event.fields?.file_path ?? "") &&
 							Boolean(event.correlationId) &&
 							ctx.trace.some(
 								(result) =>
@@ -643,7 +578,7 @@ export const regressionCases: EvalCase[] = [
 									result.ok === true,
 							),
 					),
-				"task-loop.md must be successfully read during the wake",
+				"task-lead.md must be successfully read during the wake",
 			),
 		],
 	},

@@ -1,4 +1,14 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -11,6 +21,9 @@ import { createExecutor, type ExecOptions, type ExecResult, type Executor } from
 import * as log from "../src/log.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { isProcessAlive } from "../src/shared/host-process.js";
+import { createUsage } from "../src/tasks/budget.js";
+import { renderTaskDocument } from "../src/tasks/ledger.js";
+import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
@@ -177,6 +190,38 @@ describe("ChannelJobManager", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("logs a task-bound job's dispatch and settlement onto the task, once, before the completion wake (spec 052, D4)", async () => {
+		const channelDir = mkdtempSync(join(tmpdir(), "job-task-"));
+		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		writeFileSync(
+			join(channelDir, "tasks", "T.md"),
+			renderTaskDocument({ state: "open", usage: createUsage() }, "# T\n"),
+		);
+		const wakeSawSettle: boolean[] = [];
+		const executor = new FakeJobExecutor();
+		const manager = new ChannelJobManager("dm_1", executor, {
+			channelDir,
+			dispatch: async () => {
+				wakeSawSettle.push((await readTaskLog(channelDir, "T", { kinds: ["settle"] })).length === 1);
+				return true;
+			},
+		});
+		const job = await manager.start("make", "build", 300, { taskId: "T" });
+		expect(job.timeoutSeconds).toBe(300);
+
+		executor.probeResult = "EXIT:0";
+		await manager.list();
+		await manager.list();
+
+		const records = await readTaskLog(channelDir, "T", { kinds: ["dispatch", "settle"] });
+		expect(records.map((record) => record.kind)).toEqual(["dispatch", "settle"]);
+		expect(records[1]).toMatchObject({ ref: job.id, status: "completed", exitCode: 0 });
+		// The step the wake starts must already find the result on its board.
+		expect(wakeSawSettle).toEqual([true]);
+		await resetTaskLogAppenders();
+		manager.stop();
 	});
 
 	it("caps the number of concurrent running jobs", async () => {

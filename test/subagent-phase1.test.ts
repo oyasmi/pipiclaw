@@ -27,7 +27,7 @@ import {
 	type SubAgentConfig,
 } from "../src/subagents/discovery.js";
 import { buildSubAgentTask, createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
-import { readVerificationAttestation } from "../src/tasks/verification.js";
+import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
 import { testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -334,11 +334,14 @@ describe("sub-agent runtime context", () => {
 });
 
 describe("sub-agent tool", () => {
-	it("creates a durable read-only verifier attestation", async () => {
+	it("records a verifier's declared verdict on the run and on the task's log, with no attestation", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelDir = join(workspaceDir, "dm_123");
 		mkdirSync(join(channelDir, "tasks"), { recursive: true });
-		writeFileSync(join(channelDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
+		writeFileSync(
+			join(channelDir, "tasks", "ship.md"),
+			"---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n\n## Work Items\n- [ ] W1 check it\n",
+		);
 		let delegatedTask = "";
 		const tool = createSubAgentInlineTool({
 			...testManagers("dm_123"),
@@ -367,6 +370,7 @@ describe("sub-agent tool", () => {
 			task: "Run the acceptance plan.",
 			purpose: "verify",
 			taskId: "ship",
+			item: "W1",
 		});
 		// spec 041: the run's own id, minted by the manager — never the dispatching tool call's id.
 		expect(result.details.runId).toMatch(/^run_[a-z0-9]{6}$/);
@@ -377,11 +381,49 @@ describe("sub-agent tool", () => {
 		});
 		expect(delegatedTask).toContain(join(channelDir, "tasks", "ship.md"));
 		expect(delegatedTask).toContain("VERDICT: PASS or VERDICT: FAIL");
-		await expect(readVerificationAttestation(channelDir, result.details.runId)).resolves.toMatchObject({
-			taskId: "ship",
-			verdict: "pass",
-			workspaceChanged: false,
+		// Spec 052, D4/D6: the checker's verdict lands on the task's board source, bound to the item.
+		const records = await readTaskLog(channelDir, "ship", { kinds: ["dispatch", "settle"] });
+		expect(records.map((record) => record.kind)).toEqual(["dispatch", "settle"]);
+		expect(records[0]).toMatchObject({ ref: result.details.runId, item: "W1", purpose: "verify" });
+		expect(records[1]).toMatchObject({ ref: result.details.runId, item: "W1", status: "completed", verdict: "pass" });
+		expect(existsSync(join(channelDir, ".verifications"))).toBe(false);
+		await resetTaskLogAppenders();
+	});
+
+	it("binds a delegation made inside a task session to that task, and rejects a foreign task or an unknown item", async () => {
+		const workspaceDir = createTempWorkspace();
+		const channelDir = join(workspaceDir, "dm_123");
+		mkdirSync(join(channelDir, "tasks"), { recursive: true });
+		writeFileSync(
+			join(channelDir, "tasks", "lead.md"),
+			"---\nstate: open\n---\n# Lead\n\n## DoD\n- [ ] ok\n\n## Work Items\n- [ ] W1 build\n",
+		);
+		const tool = createSubAgentInlineTool({
+			...testManagers("dm_123"),
+			executor: fakeExecutor,
+			fileStore: createFileStore(),
+			getCurrentModel: () => model,
+			getAvailableModels: () => [model],
+			resolveApiKey: async () => "test-key",
+			workspaceDir,
+			channelDir,
+			runtimeContext: { workspaceDir, channelId: "dm_123" },
+			boundTaskId: "lead",
+			createWorker: () =>
+				new FakeWorker((_input, worker) => {
+					const message = createAssistantMessage("built");
+					worker.state.messages = [message];
+					worker.emit({ type: "message_end", message });
+				}),
 		});
+		const base = { workingDirectory: workspaceDir, systemPrompt: "Build.", task: "Build it." };
+
+		// No taskId passed: the session's own task is bound automatically.
+		const bound = await tool.execute("c1", { ...base, item: "W1" });
+		expect(bound.details).toMatchObject({ taskId: "lead" });
+		await expect(tool.execute("c2", { ...base, taskId: "other" })).rejects.toThrow(/drop taskId/);
+		await expect(tool.execute("c3", { ...base, item: "W9" })).rejects.toThrow(/no Work Item "W9".*W1/);
+		await resetTaskLogAppenders();
 	});
 
 	it("preserves partial output and injects minimal runtime context", async () => {

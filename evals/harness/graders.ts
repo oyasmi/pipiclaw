@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseTaskFrontmatterV4 } from "../../src/tasks/frontmatter.js";
+import { parseTaskFrontmatter } from "../../src/tasks/frontmatter.js";
 import type { CodeGrader, GradeResult, JsonValue, Severity, TrialContext } from "./schema.js";
 
 function regexSpec(pattern: RegExp): JsonValue {
@@ -242,7 +242,7 @@ export function readTaskLoopLog(channelDir: string, taskId: string): string {
 export function taskFrontmatter(
 	graderId: string,
 	taskId: string,
-	predicate: (frontmatter: ReturnType<typeof parseTaskFrontmatterV4>, content: string) => boolean,
+	predicate: (frontmatter: ReturnType<typeof parseTaskFrontmatter>, content: string) => boolean,
 ): CodeGrader {
 	const grader = codeGrader(graderId, (ctx) => {
 		const active = join(ctx.channelDir, "tasks", `${taskId}.md`);
@@ -251,7 +251,7 @@ export function taskFrontmatter(
 		if (!existsSync(path))
 			return result(grader, "fail", `task ${taskId} was not found`, "file", `tasks/${taskId}.md`);
 		const content = readFileSync(path, "utf8");
-		const frontmatter = parseTaskFrontmatterV4(content);
+		const frontmatter = parseTaskFrontmatter(content);
 		const ok = frontmatter.readable && predicate(frontmatter, content);
 		return result(
 			grader,

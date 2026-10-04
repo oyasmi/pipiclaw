@@ -5,7 +5,12 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { normalizeSafeId, resolveSafeIdPath } from "../shared/safe-id.js";
 import { errorMessage, eventNameFromFilename, clipText as sharedClipText } from "../shared/text-utils.js";
-import { type EventHistoryRecord, parseScheduledEventContent, type ScheduledEvent } from "./events.js";
+import {
+	describeEventPayload,
+	type EventHistoryRecord,
+	parseScheduledEventContent,
+	type ScheduledEvent,
+} from "./events.js";
 
 const EVENT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 const DEFAULT_HISTORY_LIMIT = 20;
@@ -85,7 +90,7 @@ function formatEventSummary(name: string, event: ScheduledEvent): string {
 	if (event.type === "periodic") {
 		lines.push(`- schedule：${event.schedule}`);
 	}
-	lines.push(`- 内容：${clipText(event.text)}`);
+	lines.push(`- 内容：${clipText(describeEventPayload(event))}`);
 	return lines.join("\n");
 }
 

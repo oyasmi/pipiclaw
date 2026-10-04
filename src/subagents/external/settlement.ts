@@ -1,23 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import * as log from "../../log.js";
-import { formatLocalTime } from "../../shared/local-time.js";
-import { errorMessage } from "../../shared/text-utils.js";
-import { changedPathsSummary, workspaceSubjectHash } from "../../tasks/artifact-subject.js";
-import { writeVerificationAttestation } from "../../tasks/verification.js";
 import type { RunHarness, RunMutates, SettleInput } from "../runs.js";
-import { resolveVerificationOutcome } from "../verification-outcome.js";
+import { resolveVerificationVerdict } from "../verification-outcome.js";
+import { changedPathsSummary } from "../workspace-summary.js";
 import { classifyExternalOutcome, type ExternalOutcome } from "./harness.js";
 import { getExternalHarness } from "./registry.js";
 
 /**
  * Spec 042 D1: the one place an external run's parsed outcome becomes a `SettleInput`, and the
- * one place its verify verdict gets decided and attested. Before this module existed, that logic
- * was written three times — the live post-exit path (`external/run.ts`), and restart
- * reconciliation (`runs.ts`) — and the third copy was the thinnest: it never read `events.jsonl`
- * at all on a cancelled/timed-out run, and never attempted a verify attestation, because the
- * inputs it would have needed (`verifySubjectBefore`, `channelDir`) were never persisted. Both
- * defects are closed by making this the only path either caller can take.
+ * one place its verify verdict gets decided. Before this module existed, that logic was written
+ * three times — the live post-exit path (`external/run.ts`), and restart reconciliation
+ * (`runs.ts`) — and the third copy was the thinnest: it never read `events.jsonl` at all on a
+ * cancelled/timed-out run. Making this the only path either caller can take closes that defect.
  */
 
 const STDERR_TAIL_CHARS = 2_000;
@@ -70,14 +64,8 @@ export function buildExternalSettleInput(input: BuildExternalSettleInputInput): 
 }
 
 export interface FinalizeExternalRunInput {
-	runId: string;
-	channelId: string;
-	/** Needed only for `purpose=verify`: where the attestation gets written. Absent on an older
-	 *  record (predating spec 042) — verify processing degrades to "skip" rather than guessing. */
-	channelDir?: string;
 	harnessId: RunHarness;
 	purpose: "work" | "verify";
-	taskId?: string;
 	workingDirectory: string;
 	artifactDir: string;
 	/** `undefined` when the process was killed by a signal, or when this is a restart
@@ -87,22 +75,16 @@ export interface FinalizeExternalRunInput {
 	durationEstimated?: boolean;
 	terminationReason?: "timeout" | "cancelled";
 	maxWallTimeSec?: number;
-	/** The workspace subject hash taken just before this run started (D9's before/after pair for
-	 *  external verify) — persisted at launch so restart reconciliation has it too. */
-	verifySubjectBefore?: string;
-	/** Fixed verification base and initial untracked manifest, persisted for restart reconciliation. */
-	verifyBaseCommit?: string;
-	verifyBaselineUntrackedPaths?: string[];
 	/** P2-2: only a `write` run's completion pays for a `git status` summary — a `read` run cannot
 	 *  have changed anything, and this must never become a hidden cost on the common read-only path. */
 	mutates?: RunMutates;
 }
 
 /**
- * Read this run's artifact files, parse them through its harness, decide its verdict (including a
- * verify attestation when applicable), and hand the result to `settle`. Both the live post-exit
- * path and restart reconciliation call this and only this — there is no second implementation to
- * drift out of sync with the first (spec 042 F1).
+ * Read this run's artifact files, parse them through its harness, decide its verdict (for a
+ * `purpose=verify` run), and hand the result to `settle`. Both the live post-exit path and
+ * restart reconciliation call this and only this — there is no second implementation to drift out
+ * of sync with the first (spec 042 F1).
  */
 export async function finalizeExternalRun(
 	input: FinalizeExternalRunInput,
@@ -142,68 +124,12 @@ export async function finalizeExternalRun(
 		if (workspaceSummary) settleInput = { ...settleInput, workspaceSummary };
 	}
 
-	const shouldVerify =
-		input.purpose === "verify" &&
-		input.taskId !== undefined &&
-		input.channelDir !== undefined &&
-		settleInput.status === "completed";
-
-	if (!shouldVerify) {
-		await settle(settleInput, options);
+	if (input.purpose === "verify" && settleInput.status === "completed") {
+		// A verifier that did not finish cleanly gets no verdict at all; one that did is judged on
+		// what it printed, so `runFailed` is false by construction here.
+		const verificationVerdict = resolveVerificationVerdict({ finalText: outcome.finalText, runFailed: false });
+		await settle({ ...settleInput, verificationVerdict }, options);
 		return;
 	}
-
-	// D9: an external verifier's tools cannot be structurally removed, so a before/after subject
-	// hash is the only after-the-fact check available. The base and untracked baseline came from the
-	// launch-time snapshot (persisted so restart reconciliation has it too).
-	const baseSubjectAvailable =
-		input.verifyBaseCommit !== undefined && input.verifyBaselineUntrackedPaths !== undefined;
-	const partialBaseSubject = input.verifyBaseCommit !== undefined && input.verifyBaselineUntrackedPaths === undefined;
-	const subjectAfter = partialBaseSubject
-		? undefined
-		: await workspaceSubjectHash(
-				input.workingDirectory,
-				baseSubjectAvailable
-					? {
-							baseCommit: input.verifyBaseCommit,
-							baselineUntrackedPaths: input.verifyBaselineUntrackedPaths,
-						}
-					: {},
-			);
-	const verification = resolveVerificationOutcome({
-		subjectBefore: input.verifySubjectBefore,
-		subjectAfter,
-		finalText: outcome.finalText,
-		runFailed: false, // shouldVerify already gates on settleInput.status === "completed".
-	});
-	// `verifySubjectBefore` and `verifyBaseCommit` are always set together at launch (both come
-	// from the one all-or-nothing `workspaceSubjectSnapshot()` call in `external/run.ts`), so a
-	// freshly launched run can never carry a subject hash without a base commit — there is no
-	// live path left that produces a "legacy-head" attestation. `verification.ts` still reads and
-	// compares `legacy-head` attestations written before base-relative subjects existed; this is
-	// only the write side, for a run happening now.
-	const subjectAvailable = !verification.workspaceChanged && subjectAfter !== undefined && baseSubjectAvailable;
-	await writeVerificationAttestation(input.channelDir as string, {
-		runId: input.runId,
-		taskId: input.taskId as string,
-		verdict: verification.verdict,
-		checkedAt: formatLocalTime(),
-		evidence: verification.evidence,
-		workspaceChanged: verification.workspaceChanged,
-		subjectHash: subjectAvailable ? subjectAfter : undefined,
-		subjectDir: subjectAvailable ? input.workingDirectory : undefined,
-		subjectMode: subjectAvailable ? "base-relative" : undefined,
-		subjectBaseCommit: subjectAvailable ? input.verifyBaseCommit : undefined,
-		subjectBaselineUntrackedPaths: subjectAvailable ? input.verifyBaselineUntrackedPaths : undefined,
-		// External verifiers cannot have their tools structurally removed the way an internal
-		// verifier's are — advisory, not enforced (D9).
-		verificationStrength: "advisory",
-	}).catch((error) => {
-		log.logWarning(`Failed to write verification attestation for run ${input.runId}`, errorMessage(error));
-	});
-
-	await settle(
-		{ ...settleInput, verificationVerdict: verification.verdict, verificationStrength: "advisory" },
-		options,
-	);
+	await settle(settleInput, options);
 }

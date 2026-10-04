@@ -13,10 +13,7 @@ import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../shared/types.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
-import { DEFAULT_TASK_BUDGET } from "../tasks/budget.js";
-import { recordTaskCost, recordVerificationRound } from "../tasks/rounds.js";
-import { readStoredTask } from "../tasks/store.js";
-import { attestationRejectionReason } from "../tasks/verification.js";
+import { logTaskDispatch, logTaskSettlement } from "../tasks/work-log.js";
 import type { UsageLedger } from "../usage/ledger.js";
 import { startExternalProgressTail } from "./external/progress-tail.js";
 import { finalizeExternalRun } from "./external/settlement.js";
@@ -114,6 +111,8 @@ export interface RunRecord extends RunUsage {
 	model?: string;
 	purpose: "work" | "verify";
 	taskId?: string;
+	/** The task's Work Items id this run was dispatched for (spec 052, D4). */
+	item?: string;
 	workingDirectory: string;
 	artifactDir: string;
 	status: RunStatus;
@@ -123,9 +122,8 @@ export interface RunRecord extends RunUsage {
 	failureReason?: string;
 	turns?: number;
 	toolCalls?: number;
+	/** The checker's declared `VERDICT:` for a `purpose=verify` run (spec 052, D6): information for the leader, not a gate. */
 	verificationVerdict?: "pass" | "fail";
-	/** `enforced` only for a structurally read-only verifier; write-capable/external runs are advisory. */
-	verificationStrength?: "enforced" | "advisory";
 	/** P2-2: `git status --porcelain` taken right after a `mutates: "write"` run finished, so the
 	 *  wake's reader does not have to spend its own first tool call finding out what changed. */
 	workspaceSummary?: string;
@@ -164,19 +162,14 @@ export interface RunRecord extends RunUsage {
 	sessionId?: string;
 	leaseKey?: string;
 	mutates?: RunMutates;
-	/** Persisted at launch so restart reconciliation has the same inputs as a live verifier. */
-	verifySubjectBefore?: string;
-	/** Fixed commit and initial untracked manifest for the base-relative verification subject. */
-	verifyBaseCommit?: string;
-	verifyBaselineUntrackedPaths?: string[];
 	/** Spec 042 D1: the role's wall-time budget, persisted so restart reconciliation can report an
 	 *  accurate "budget exceeded (Ns)" reason instead of reverse-engineering it from `deadlineAt`. */
 	maxWallTimeSec?: number;
 	/** Spec 042 D1: the real process start time (`setLaunched` time), as opposed to `startedAt`
 	 *  (registration time) — restart reconciliation's duration estimate is measured from here. */
 	processStartedAt?: number;
-	/** Spec 042 D1: needed only to write a verify attestation from restart reconciliation, which
-	 *  has no other way to reach the channel directory. */
+	/** This run's channel directory, so settlement (including restart reconciliation) can reach the
+	 *  owning task's log (spec 052, D4). */
 	channelDir?: string;
 	/** True when `durationMs` is a restart-reconciliation estimate rather than a measured process
 	 *  lifetime (spec 042 D1) — display surfaces prefix it with "≈". */
@@ -209,11 +202,12 @@ export interface RegisterRunInput {
 	model?: string;
 	purpose: "work" | "verify";
 	taskId?: string;
+	item?: string;
 	workingDirectory: string;
 	artifactDir: string;
-	/** This run's channel directory — where its owning task lives (spec 051, D7/D10). Set at
-	 *  registration for every runtime, so settlement can credit the task whether the run was
-	 *  internal or external; the external launch path re-persists it with the rest of its info. */
+	/** This run's channel directory — where its owning task lives. Set at registration for every
+	 *  runtime, so settlement can credit the task whether the run was internal or external; the
+	 *  external launch path re-persists it with the rest of its info. */
 	channelDir?: string;
 	/** Set only when the caller already holds a workspace write lease for this run (D10.1). */
 	leaseKey?: string;
@@ -231,7 +225,6 @@ interface PendingSettlement {
 	durationMs: number;
 	durationEstimated?: boolean;
 	verificationVerdict?: "pass" | "fail";
-	verificationStrength?: "enforced" | "advisory";
 	workspaceSummary?: string;
 	sessionId?: string;
 	finishedAt: number;
@@ -255,7 +248,6 @@ export interface SettleInput {
 	/** Full reply text. Settlement saves it to `output.md`; only its tail goes in the wake. */
 	outputText: string;
 	verificationVerdict?: "pass" | "fail";
-	verificationStrength?: "enforced" | "advisory";
 	/** P2-2: see `RunRecord.workspaceSummary`. */
 	workspaceSummary?: string;
 	/** The harness's own session/thread id, captured even on failure so a later resume can still use it. */
@@ -336,7 +328,6 @@ function createPendingSettlement(input: SettleInput, finishedAt: number, announc
 		durationMs: input.durationMs,
 		durationEstimated: input.durationEstimated,
 		verificationVerdict: input.verificationVerdict,
-		verificationStrength: input.verificationStrength,
 		workspaceSummary: input.workspaceSummary,
 		sessionId: input.sessionId,
 		finishedAt,
@@ -355,7 +346,6 @@ function applyPendingSettlement(record: RunRecord, pending: PendingSettlement): 
 	record.durationMs = pending.durationMs;
 	record.durationEstimated = pending.durationEstimated;
 	record.verificationVerdict = pending.verificationVerdict;
-	record.verificationStrength = pending.verificationStrength;
 	record.workspaceSummary = pending.workspaceSummary;
 	if (pending.sessionId) record.sessionId = pending.sessionId;
 	record.finishedAt = pending.finishedAt;
@@ -604,6 +594,20 @@ export class SubAgentRunManager {
 					this.externalLaunches.delete(record.runId);
 					throw error;
 				}
+				if (record.taskId && record.channelDir) {
+					await logTaskDispatch(record.channelDir, record.taskId, {
+						ref: record.runId,
+						item: record.item,
+						agent: record.agent,
+						purpose: record.purpose,
+						label: record.label,
+					}).catch((error) => {
+						log.logWarning(
+							`Failed to log dispatch of ${record.runId} to task ${record.taskId}`,
+							errorMessage(error),
+						);
+					});
+				}
 				return record;
 			}),
 		);
@@ -643,9 +647,6 @@ export class SubAgentRunManager {
 			/** Spec 042 D1: everything a restart reconciliation might need if this daemon disappears
 			 *  before the process exits — restore/deadline recovery must have the same inputs a live watcher
 			 *  would, not a thinner subset. */
-			verifySubjectBefore?: string;
-			verifyBaseCommit?: string;
-			verifyBaselineUntrackedPaths?: string[];
 			maxWallTimeSec?: number;
 			processStartedAt?: number;
 			channelDir?: string;
@@ -671,9 +672,6 @@ export class SubAgentRunManager {
 			// claude-code pre-assigns its session id before running (D4); persisting it here, not just
 			// at settle(), means a run that crashes before any output is still resumable.
 			if (info.sessionId) record.sessionId = info.sessionId;
-			record.verifySubjectBefore = info.verifySubjectBefore;
-			record.verifyBaseCommit = info.verifyBaseCommit;
-			record.verifyBaselineUntrackedPaths = info.verifyBaselineUntrackedPaths;
 			record.maxWallTimeSec = info.maxWallTimeSec;
 			record.processStartedAt = info.processStartedAt;
 			record.channelDir = info.channelDir;
@@ -850,12 +848,13 @@ export class SubAgentRunManager {
 				await this.persist(record);
 			}
 
-			// Spec 051, D7/D10: credit this run to its task's cycle — cost always, and for a
-			// purpose=verify run also one rework round. Guarded by its own idempotency marker
-			// inside the same settlement lock, so a replay adds nothing.
+			// Spec 052, D4: tell the owning task this work settled — its cost goes onto the task's
+			// budget and the outcome onto its log (the board's source), whether or not the run record
+			// is still around by the time the leader looks. Guarded by its own idempotency marker
+			// inside the same settlement lock, so a replay writes nothing twice.
 			if (!record.taskAccounted && record.taskId && record.channelDir) {
 				record.taskAccounted = true;
-				await this.creditOwningTask(record, input).catch((error) => {
+				await this.creditOwningTask(record, input, outputSaved).catch((error) => {
 					log.logWarning(`Failed to credit task ${record.taskId} for run ${record.runId}`, errorMessage(error));
 				});
 				await this.persist(record);
@@ -872,63 +871,27 @@ export class SubAgentRunManager {
 	}
 
 	/**
-	 * Credit one settled run to the task that owns it: cost onto the cycle, and — for a verifier —
-	 * one round onto the rework ledger. Best-effort by design: a task whose file has since been
-	 * archived or hand-deleted must not block the completion wake.
+	 * Credit one settled run to the task that owns it: cost onto its usage, outcome onto its log.
+	 * Best-effort by design: a task whose file has since been archived or hand-deleted must not
+	 * block the completion wake.
 	 */
-	private async creditOwningTask(record: RunRecord, input: SettleInput): Promise<void> {
+	private async creditOwningTask(record: RunRecord, input: SettleInput, outputSaved: boolean): Promise<void> {
 		const channelDir = record.channelDir;
 		const taskId = record.taskId;
 		if (!channelDir || !taskId) return;
-		const usd = input.usage.cost.total;
-		const estimated = input.costKnown === false;
-		if (record.purpose === "verify" && record.verificationVerdict) {
-			// Fail closed: a PASS only counts once the on-disk attestation still binds to this task,
-			// this contract and this checkout — exactly the checks `task_verify` ran before it was
-			// retired. A rejected PASS is recorded as a fail *with its reason*, so the loop sees why
-			// instead of silently losing a round.
-			const task = await readStoredTask(channelDir, taskId).catch(() => undefined);
-			const rejection = task
-				? await attestationRejectionReason({
-						channelDir,
-						taskId,
-						runId: record.runId,
-						taskBody: task.body,
-						trustedWorkingDirectory: record.workingDirectory,
-					})
-				: "task file is missing";
-			await recordVerificationRound(
-				{
-					channelDir,
-					taskId,
-					verifyRunId: record.runId,
-					verdict: rejection ? "fail" : record.verificationVerdict,
-					strength: record.verificationStrength ?? "advisory",
-					workRunId: this.latestWorkRunFor(taskId, record.startedAt),
-					usd,
-					usdEstimated: estimated,
-					reason: rejection,
-				},
-				DEFAULT_TASK_BUDGET.rounds,
-			);
-			return;
-		}
-		await recordTaskCost(channelDir, taskId, usd, estimated);
-	}
-
-	/**
-	 * The `purpose=work` run this verdict most plausibly judged: the same task's latest work run
-	 * started before the verifier. Left `undefined` rather than guessed when there is none — an
-	 * unattributed round is honest, a wrong attribution is not.
-	 */
-	private latestWorkRunFor(taskId: string, before: number): string | undefined {
-		let best: RunRecord | undefined;
-		for (const candidate of this.runs.values()) {
-			if (candidate.taskId !== taskId || candidate.purpose !== "work") continue;
-			if (candidate.startedAt > before) continue;
-			if (!best || candidate.startedAt > best.startedAt) best = candidate;
-		}
-		return best?.runId;
+		await logTaskSettlement(
+			channelDir,
+			taskId,
+			{
+				ref: record.runId,
+				item: record.item,
+				status: record.status,
+				verdict: record.purpose === "verify" ? record.verificationVerdict : undefined,
+				output: outputSaved ? join(record.artifactDir, "output.md") : undefined,
+				durationMs: input.durationMs,
+			},
+			{ usd: input.usage.cost.total, estimated: input.costKnown === false },
+		);
 	}
 
 	/**
@@ -975,7 +938,7 @@ export class SubAgentRunManager {
 			: "";
 		const verdictLine =
 			record.verificationVerdict !== undefined
-				? `\nVerdict: ${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}${record.verificationStrength === "advisory" ? " (advisory)" : ""}`
+				? `\nVerdict: ${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}`
 				: "";
 		const event: ChannelEvent = {
 			type: record.channelId.startsWith("group_") ? "group" : "dm",
@@ -1159,7 +1122,6 @@ export class SubAgentRunManager {
 						durationEstimated: pending.durationEstimated,
 						outputText,
 						verificationVerdict: pending.verificationVerdict,
-						verificationStrength: pending.verificationStrength,
 						workspaceSummary: pending.workspaceSummary,
 						sessionId: pending.sessionId,
 					},
@@ -1373,12 +1335,8 @@ export class SubAgentRunManager {
 
 		await finalizeExternalRun(
 			{
-				runId: record.runId,
-				channelId: record.channelId,
-				channelDir: record.channelDir,
 				harnessId: record.harness,
 				purpose: record.purpose,
-				taskId: record.taskId,
 				workingDirectory: record.workingDirectory,
 				artifactDir: record.artifactDir,
 				exitCode: undefined,
@@ -1386,9 +1344,6 @@ export class SubAgentRunManager {
 				durationEstimated: true,
 				terminationReason: record.terminationReason,
 				maxWallTimeSec,
-				verifySubjectBefore: record.verifySubjectBefore,
-				verifyBaseCommit: record.verifyBaseCommit,
-				verifyBaselineUntrackedPaths: record.verifyBaselineUntrackedPaths,
 				mutates: record.mutates,
 			},
 			(settleInput, options) => this.settle(record.runId, settleInput, options),

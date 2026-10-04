@@ -1,118 +1,66 @@
 import { describe, expect, it } from "vitest";
 import { formatLocalTime, parseLocalTime } from "../src/shared/local-time.js";
 import { RecoverableToolError } from "../src/shared/recoverable-error.js";
-import { parseTicket, resolveTicket, type TicketContext, ticketExpired } from "../src/tasks/ticket.js";
+import {
+	type PendingWorkRef,
+	parseTicket,
+	resolveTicket,
+	type TicketContext,
+	ticketExpired,
+} from "../src/tasks/ticket.js";
 
 const NOW = new Date("2026-09-05T10:00:00+08:00");
 
-function context(overrides: Partial<TicketContext> = {}): TicketContext {
-	return {
-		now: NOW,
-		taskId: "T",
-		channelId: "dm_1",
-		findRun: () => undefined,
-		findJob: () => undefined,
-		findEvent: () => undefined,
-		...overrides,
-	};
+function context(pending: PendingWorkRef[] = []): TicketContext {
+	return { now: NOW, pendingWork: () => pending };
 }
 
-const liveRun = { taskId: "T", startedAt: NOW.getTime(), deadlineAt: NOW.getTime() + 600_000 };
-const liveJob = { taskId: "T", status: "running", startedAt: NOW.getTime() };
-
-describe("resolveTicket validation matrix (spec 051, D2)", () => {
-	// The whole point of the ticket is that a park names something the runtime can check. These
-	// are the four rejections that would otherwise reproduce F1: a park that nothing can redeem.
-	it("rejects a run ticket whose run does not exist, already settled, or belongs to another task", () => {
-		expect(() => resolveTicket({ kind: "run", id: "run_x" }, context())).toThrow(/No run "run_x"/);
-
-		expect(() =>
-			resolveTicket({ kind: "run", id: "run_x" }, context({ findRun: () => ({ ...liveRun, settledAt: 1 }) })),
-		).toThrow(/already settled/);
-
-		expect(() =>
-			resolveTicket({ kind: "run", id: "run_x" }, context({ findRun: () => ({ ...liveRun, taskId: "OTHER" }) })),
-		).toThrow(/belongs to task OTHER/);
+describe("resolveTicket validation (spec 052, D3)", () => {
+	// A park has to name something the runtime can check, or it reproduces the 13-day silence.
+	it("refuses a work ticket when nothing bound to the task is in flight", () => {
+		expect(() => resolveTicket({ kind: "work" }, context())).toThrow(
+			/nothing to wait for|no delegation or background job/,
+		);
 	});
 
-	it("rejects a job ticket that is already finished or owned by another task", () => {
-		expect(() =>
-			resolveTicket({ kind: "job", id: "job_1" }, context({ findJob: () => ({ ...liveJob, status: "completed" }) })),
-		).toThrow(/is completed/);
-		expect(() =>
-			resolveTicket({ kind: "job", id: "job_1" }, context({ findJob: () => ({ ...liveJob, taskId: "OTHER" }) })),
-		).toThrow(/belongs to task OTHER/);
-	});
-
-	it("rejects a signal ticket unless the event is periodic, in this channel, and names this task", () => {
-		const periodic = { type: "periodic" as const, channelId: "dm_1", schedule: "*/30 * * * *" };
-		expect(() => resolveTicket({ kind: "signal", event: "task.dm_1.T.checkin" }, context())).toThrow(/No event/);
-		expect(() =>
-			resolveTicket(
-				{ kind: "signal", event: "task.dm_1.T.checkin" },
-				context({ findEvent: () => ({ type: "one-shot", channelId: "dm_1" }) }),
-			),
-		).toThrow(/one-shot/);
-		expect(() =>
-			resolveTicket(
-				{ kind: "signal", event: "task.dm_1.T.checkin" },
-				context({ findEvent: () => ({ ...periodic, channelId: "dm_2" }) }),
-			),
-		).toThrow(/another channel/);
-		// INV-7's write side: an event that does not name this task could never redeem its ticket.
-		expect(() =>
-			resolveTicket({ kind: "signal", event: "task.dm_1.OTHER.checkin" }, context({ findEvent: () => periodic })),
-		).toThrow(/does not belong to this task/);
-	});
-
-	it("rejects a time ticket in the past and a schedule ticket on a task with no cadence", () => {
+	it("rejects a time ticket in the past and an unknown kind (including the retired ones)", () => {
 		expect(() => resolveTicket({ kind: "time", at: "2020-01-01T00:00:00+08:00" }, context())).toThrow(
 			/not in the future/,
 		);
-		expect(() => resolveTicket({ kind: "schedule" }, context())).toThrow(/needs the task to have a `schedule`/);
-	});
-
-	it("reports every rejection as recoverable, so the model can fix the call itself", () => {
-		expect(() => resolveTicket({ kind: "run", id: "run_x" }, context())).toThrow(RecoverableToolError);
-		expect(() => resolveTicket({ kind: "nope" }, context())).toThrow(RecoverableToolError);
-	});
-});
-
-describe("backstop derivation (spec 051, D2)", () => {
-	// INV-2: every persisted ticket carries a `by`, and the model never supplies it. A ticket the
-	// model could leave open-ended is exactly the 13-day silence this mechanism replaced.
-	it("stamps a backstop on every ticket kind", () => {
-		const tickets = [
-			resolveTicket({ kind: "time", at: "+2h" }, context()),
-			resolveTicket({ kind: "schedule" }, context({ schedule: "0 3 * * *" })),
-			resolveTicket({ kind: "run", id: "r" }, context({ findRun: () => liveRun })),
-			resolveTicket({ kind: "job", id: "j" }, context({ findJob: () => liveJob })),
-			resolveTicket({ kind: "ask", asked: "merge?" }, context()),
-			resolveTicket(
-				{ kind: "signal", event: "task.dm_1.T.checkin" },
-				context({ findEvent: () => ({ type: "periodic", channelId: "dm_1", schedule: "*/30 * * * *" }) }),
-			),
-		];
-		for (const ticket of tickets) {
-			const by = parseLocalTime(ticket.by);
-			expect(by, ticket.kind).toBeDefined();
-			expect(by!, ticket.kind).toBeGreaterThan(NOW.getTime());
+		for (const retired of ["run", "job", "signal", "schedule", "nope"]) {
+			expect(() => resolveTicket({ kind: retired }, context()), retired).toThrow(/Unknown ticket kind/);
 		}
 	});
 
-	it("gives a run ten minutes past its own deadline, not an arbitrary constant", () => {
-		const ticket = resolveTicket({ kind: "run", id: "r" }, context({ findRun: () => liveRun }));
-		expect(parseLocalTime(ticket.by)).toBe(liveRun.deadlineAt + 10 * 60_000);
+	it("reports every rejection as recoverable, so the model can fix the call itself", () => {
+		expect(() => resolveTicket({ kind: "work" }, context())).toThrow(RecoverableToolError);
+		expect(() => resolveTicket({ kind: "ask" }, context())).toThrow(RecoverableToolError);
+	});
+});
+
+describe("backstop derivation", () => {
+	// Every persisted ticket carries a `by`, and the model never supplies it.
+	it("stamps a future backstop on every ticket kind", () => {
+		const tickets = [
+			resolveTicket({ kind: "time", at: "+2h" }, context()),
+			resolveTicket({ kind: "work" }, context([{ ref: "run_a", deadlineMs: NOW.getTime() + 60_000 }])),
+			resolveTicket({ kind: "ask", asked: "merge?" }, context()),
+		];
+		for (const ticket of tickets) {
+			expect(parseLocalTime(ticket.by), ticket.kind).toBeGreaterThan(NOW.getTime());
+		}
 	});
 
-	it("gives a schedule ticket one missed occurrence and a signal ticket two", () => {
-		const every30 = { type: "periodic" as const, channelId: "dm_1", schedule: "*/30 * * * *" };
-		const schedule = resolveTicket({ kind: "schedule" }, context({ schedule: "*/30 * * * *" }));
-		const signal = resolveTicket(
-			{ kind: "signal", event: "task.dm_1.T.checkin" },
-			context({ findEvent: () => every30 }),
+	it("waits for the latest of the in-flight work, plus ten minutes of slack", () => {
+		const ticket = resolveTicket(
+			{ kind: "work" },
+			context([
+				{ ref: "run_a", deadlineMs: NOW.getTime() + 60_000 },
+				{ ref: "job_b", deadlineMs: NOW.getTime() + 3_600_000 },
+			]),
 		);
-		expect(parseLocalTime(signal.by)! - parseLocalTime(schedule.by)!).toBe(30 * 60_000);
+		expect(ticket).toMatchObject({ kind: "work", refs: ["run_a", "job_b"] });
+		expect(parseLocalTime(ticket.by)).toBe(NOW.getTime() + 3_600_000 + 10 * 60_000);
 	});
 });
 
@@ -125,10 +73,12 @@ describe("ticket expiry and round-trip", () => {
 	});
 
 	it("round-trips through JSON and rejects anything without a valid backstop", () => {
-		const ticket = resolveTicket({ kind: "ask", asked: "merge?" }, context());
+		const ticket = resolveTicket({ kind: "work" }, context([{ ref: "run_a", deadlineMs: NOW.getTime() + 1000 }]));
 		expect(parseTicket(JSON.stringify(ticket))).toEqual(ticket);
 		expect(parseTicket('{"kind":"ask","asked":"x"}')).toBeUndefined();
 		expect(parseTicket('{"kind":"ask","asked":"x","by":"nope"}')).toBeUndefined();
+		// v4 kinds no longer parse: a park on one falls back to `open` via INV-1 instead of dangling.
+		expect(parseTicket('{"kind":"run","id":"r","by":"2099-01-01T00:00:00+08:00"}')).toBeUndefined();
 		expect(parseTicket("not json")).toBeUndefined();
 	});
 });

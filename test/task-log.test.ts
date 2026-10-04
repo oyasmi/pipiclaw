@@ -12,8 +12,8 @@ import {
 	taskArchiveLogPath,
 	taskLogPath,
 } from "../src/tasks/log.js";
-import { readCycleRounds, recordVerificationRound } from "../src/tasks/rounds.js";
-import { archiveTask, openCycle } from "../src/tasks/store.js";
+import { archiveTask } from "../src/tasks/store.js";
+import { logTaskDispatch, logTaskSettlement } from "../src/tasks/work-log.js";
 
 let dir: string;
 
@@ -28,10 +28,9 @@ afterEach(async () => {
 });
 
 describe("loop log (spec 051, D5)", () => {
-	it("filters by cycle and kind, and keeps the most recent when limited", async () => {
-		for (const [index, cycle] of ["c-1", "c-1", "c-2"].entries()) {
+	it("filters by kind, and keeps the most recent when limited", async () => {
+		for (const index of [0, 1, 2]) {
 			await appendTaskLog(dir, "T", {
-				cycle,
 				kind: "step",
 				seq: index + 1,
 				outcome: "continue",
@@ -39,25 +38,18 @@ describe("loop log (spec 051, D5)", () => {
 				tools: [],
 			});
 		}
-		await appendTaskLog(dir, "T", {
-			cycle: "c-2",
-			kind: "round",
-			n: 1,
-			verifyRunId: "run_v",
-			verdict: "pass",
-			strength: "advisory",
-		});
+		await appendTaskLog(dir, "T", { kind: "dispatch", ref: "run_v" });
 
-		expect((await readTaskLog(dir, "T", { cycle: "c-1" })).length).toBe(2);
-		expect((await readTaskLog(dir, "T", { kinds: ["round"] })).length).toBe(1);
+		expect((await readTaskLog(dir, "T", { kinds: ["step"] })).length).toBe(3);
+		expect((await readTaskLog(dir, "T", { kinds: ["dispatch"] })).length).toBe(1);
 		const last = await readTaskLog(dir, "T", { limit: 1 });
-		expect(last[0]?.kind).toBe("round");
+		expect(last[0]?.kind).toBe("dispatch");
 	});
 
 	// A hand-edited or half-written line must not make a whole task's history unreadable — the
 	// log is the only durable trace of what each step did.
 	it("skips unparseable lines instead of failing the read", async () => {
-		await appendTaskLog(dir, "T", { cycle: "c-1", kind: "step", seq: 1, outcome: "continue", note: "ok", tools: [] });
+		await appendTaskLog(dir, "T", { kind: "step", seq: 1, outcome: "continue", note: "ok", tools: [] });
 		await appendFile(taskLogPath(dir, "T"), '{not json\n{"ts":"x"}\n');
 		const records = await readTaskLog(dir, "T");
 		expect(records.length).toBe(1);
@@ -73,7 +65,6 @@ describe("loop log (spec 051, D5)", () => {
 		// still return its history. Mutation check: remove the taskArchiveLogPath fallback in
 		// readTaskLog and this returns [].
 		await appendTaskLog(dir, "done-task", {
-			cycle: "c-1",
 			kind: "step",
 			seq: 1,
 			outcome: "continue",
@@ -96,14 +87,13 @@ describe("loop log (spec 051, D5)", () => {
 	it("reads records from rotated shards (.1/.2), oldest first, alongside the current file", async () => {
 		await appendFile(
 			`${taskLogPath(dir, "T")}.2`,
-			`${JSON.stringify({ ts: "t1", cycle: "c-1", kind: "step", seq: 1, outcome: "continue", note: "oldest", tools: [] })}\n`,
+			`${JSON.stringify({ ts: "t1", kind: "step", seq: 1, outcome: "continue", note: "oldest", tools: [] })}\n`,
 		);
 		await appendFile(
 			`${taskLogPath(dir, "T")}.1`,
-			`${JSON.stringify({ ts: "t2", cycle: "c-1", kind: "step", seq: 2, outcome: "continue", note: "middle", tools: [] })}\n`,
+			`${JSON.stringify({ ts: "t2", kind: "step", seq: 2, outcome: "continue", note: "middle", tools: [] })}\n`,
 		);
 		await appendTaskLog(dir, "T", {
-			cycle: "c-1",
 			kind: "step",
 			seq: 3,
 			outcome: "continue",
@@ -121,14 +111,13 @@ describe("loop log (spec 051, D5)", () => {
 	it("archiveTask moves rotated shards along with the current file, and readTaskLog still sees all of them", async () => {
 		await appendFile(
 			`${taskLogPath(dir, "T")}.2`,
-			`${JSON.stringify({ ts: "t1", cycle: "c-1", kind: "step", seq: 1, outcome: "continue", note: "oldest", tools: [] })}\n`,
+			`${JSON.stringify({ ts: "t1", kind: "step", seq: 1, outcome: "continue", note: "oldest", tools: [] })}\n`,
 		);
 		await appendFile(
 			`${taskLogPath(dir, "T")}.1`,
-			`${JSON.stringify({ ts: "t2", cycle: "c-1", kind: "step", seq: 2, outcome: "continue", note: "middle", tools: [] })}\n`,
+			`${JSON.stringify({ ts: "t2", kind: "step", seq: 2, outcome: "continue", note: "middle", tools: [] })}\n`,
 		);
 		await appendTaskLog(dir, "T", {
-			cycle: "c-1",
 			kind: "step",
 			seq: 3,
 			outcome: "continue",
@@ -149,59 +138,59 @@ describe("loop log (spec 051, D5)", () => {
 		const records = await readTaskLog(dir, "T");
 		expect(records.map((r) => (r.kind === "step" ? r.note : undefined))).toEqual(["oldest", "middle", "newest"]);
 	});
+});
 
-	it("renders a rejected verdict with the reason it was rejected", () => {
-		const line = renderTaskLogLine({
-			ts: "t",
-			cycle: "c-1",
-			kind: "round",
-			n: 2,
-			verifyRunId: "run_v",
-			verdict: "fail",
-			strength: "advisory",
-			reason: "task contract changed after verification",
-		});
-		expect(line).toContain("FAIL");
-		expect(line).toContain("contract changed");
+describe("work log (spec 052, D4)", () => {
+	it("records a dispatch and its settlement, and puts the cost on the task's usage", async () => {
+		await writeFile(
+			join(dir, "tasks", "U.md"),
+			renderTaskDocument(
+				{
+					state: "open",
+					usage: { startedAt: "2026-09-05T09:00:00+08:00", steps: 0, usd: 1, usdEstimated: false, expired: 0 },
+				},
+				"# U\n",
+			),
+		);
+		await logTaskDispatch(dir, "U", { ref: "run_1", item: "W2", agent: "builder", purpose: "work" });
+		await logTaskSettlement(
+			dir,
+			"U",
+			{ ref: "run_1", item: "W2", status: "completed", output: "/o/output.md" },
+			{ usd: 2.5, estimated: true },
+		);
+
+		const records = await readTaskLog(dir, "U");
+		expect(records.map((record) => record.kind)).toEqual(["dispatch", "settle"]);
+		expect(records[1]).toMatchObject({ ref: "run_1", status: "completed", usd: 2.5, usdEstimated: true });
+		const { readStoredTask } = await import("../src/tasks/store.js");
+		expect((await readStoredTask(dir, "U"))?.fields.usage).toMatchObject({ usd: 3.5, usdEstimated: true });
+	});
+
+	it("writes nothing for a task that no longer exists", async () => {
+		await logTaskDispatch(dir, "gone", { ref: "run_1" });
+		await logTaskSettlement(dir, "gone", { ref: "run_1", status: "completed" });
+		expect(await readTaskLog(dir, "gone")).toEqual([]);
 	});
 });
 
-describe("rework accounting (spec 051, D7)", () => {
-	it("counts rounds onto the cycle and reports when the ceiling is reached", async () => {
-		await openCycle(dir, "T");
-		const first = await recordVerificationRound(
-			{ channelDir: dir, taskId: "T", verifyRunId: "run_1", verdict: "fail", strength: "advisory", usd: 1 },
-			2,
+describe("v4 compatibility", () => {
+	it("reads a v4 close record into a note, and renders a legacy verification round", async () => {
+		await appendFile(
+			taskLogPath(dir, "T"),
+			`${JSON.stringify({ ts: "t1", cycle: "c-1", kind: "close", outcome: "done", summary: "shipped", evidence: "npm test", steps: 3, rounds: 1, usd: 2 })}\n`,
 		);
-		expect(first).toMatchObject({ round: 1, overBudget: false });
-
-		const second = await recordVerificationRound(
-			{ channelDir: dir, taskId: "T", verifyRunId: "run_2", verdict: "pass", strength: "advisory" },
-			2,
-		);
-		expect(second).toMatchObject({ round: 2, overBudget: true });
-
-		const rounds = await readCycleRounds(dir, "T", first?.cycleId);
-		expect(rounds.map((record) => record.verdict)).toEqual(["fail", "pass"]);
-	});
-
-	// Rounds are scoped to a cycle: a verdict from an earlier cycle says nothing about this one.
-	it("reads back only the rounds recorded against the requested cycle", async () => {
-		const opened = await openCycle(dir, "T");
-		await recordVerificationRound(
-			{ channelDir: dir, taskId: "T", verifyRunId: "run_1", verdict: "pass", strength: "advisory" },
-			4,
-		);
-		expect((await readCycleRounds(dir, "T", opened?.cycleId)).map((record) => record.verifyRunId)).toEqual(["run_1"]);
-		expect(await readCycleRounds(dir, "T", "c-other")).toEqual([]);
-	});
-
-	it("does nothing for a task with no open cycle", async () => {
+		const [close] = await readTaskLog(dir, "T");
+		expect(close).toMatchObject({ kind: "close", note: "shipped · npm test" });
 		expect(
-			await recordVerificationRound(
-				{ channelDir: dir, taskId: "T", verifyRunId: "run_1", verdict: "pass", strength: "advisory" },
-				4,
-			),
-		).toBeUndefined();
+			renderTaskLogLine({
+				ts: "t",
+				kind: "round",
+				n: 2,
+				verifyRunId: "run_v",
+				verdict: "fail",
+				reason: "contract changed",
+			}),
+		).toContain("FAIL");
 	});
 });

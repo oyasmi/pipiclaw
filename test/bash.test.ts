@@ -138,6 +138,7 @@ describe("bash tool", () => {
 			id: "job_probe",
 			label: "check",
 			command: "npm test",
+			timeoutSeconds: 300,
 			status: "running",
 			startedAt: 0,
 			durationMs: 0,

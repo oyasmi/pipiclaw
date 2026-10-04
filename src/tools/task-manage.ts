@@ -64,7 +64,7 @@ export function createTaskCreateTool(options: TaskManageToolOptions): AgentTool<
 		name: "task_create",
 		label: "task_create",
 		description:
-			"Create a persistent task: goal, DoD, and optional plan, manual, verification plan, schedule, budget.",
+			"Create a persistent project you lead: goal, DoD checklist, optional Work Items and budget. The runtime then drives it in its own session; delegate pieces with subagent (bound to the task automatically in that session).",
 		parameters: taskCreateSchema,
 		execute: async (_toolCallId, args: TaskCreateRequest) => {
 			const result = await withLock(options, args.id, () => createTask(options, args));
@@ -77,8 +77,7 @@ export function createTaskUpdateTool(options: TaskManageToolOptions): AgentTool<
 	return {
 		name: "task_update",
 		label: "task_update",
-		description:
-			"Edit a task's plan steps, cadence, budget, or verification requirement. Progress goes to task_step_end.",
+		description: "Edit a task's Work Items or budget. Progress goes to task_step_end.",
 		parameters: taskUpdateSchema,
 		execute: async (_toolCallId, args: TaskUpdateRequest) => {
 			const result = await withLock(options, args.id, () => updateTask(options, args));
@@ -91,7 +90,7 @@ export function createTaskCloseTool(options: TaskManageToolOptions): AgentTool<t
 	return {
 		name: "task_close",
 		label: "task_close",
-		description: "Close a task: outcome complete, skip (one recurring occurrence), or cancel.",
+		description: "Close a task: complete (DoD all checked, nothing in flight) or cancel.",
 		parameters: taskCloseSchema,
 		execute: async (_toolCallId, args: TaskCloseRequest) => {
 			const result = await withLock(options, args.id, () => closeTask(options, args));
@@ -104,7 +103,7 @@ export function createTaskLogTool(options: TaskManageToolOptions): AgentTool<typ
 	return {
 		name: "task_log",
 		label: "task_log",
-		description: "Read a task's loop log: steps, verification rounds, expiries and cycle closes.",
+		description: "Read a task's loop log: steps, dispatches, settlements, expiries and the close.",
 		parameters: taskLogSchema,
 		execute: async (_toolCallId, args: TaskLogRequest) => {
 			const result = await readTaskLogTool(options, args);
@@ -118,7 +117,7 @@ export function createTaskStepEndTool(options: TaskManageToolOptions): AgentTool
 		name: "task_step_end",
 		label: "task_step_end",
 		description:
-			"End this task step: continue (more work now), park (wait on a ticket), done (close the cycle), or blocked (ask the user).",
+			"End this task step: continue (more work now), park (wait on a time/work/ask ticket), or done (the project is finished).",
 		parameters: taskStepEndSchema,
 		execute: async (_toolCallId, args: TaskStepEndRequest) => {
 			const result = await withLock(options, options.taskId ?? "", () => endTaskStep(options, args));

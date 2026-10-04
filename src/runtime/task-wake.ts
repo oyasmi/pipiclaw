@@ -101,14 +101,11 @@ export async function claimVerifiedDelegationWake(
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
 	hooks?.beforeActivation?.();
-	// Only a `run` ticket naming this very run may be redeemed: a task parked on something else
-	// (a job, a question to the user) is not waiting for this delegation, and reopening it here
-	// would be exactly the unverified resumption path spec 051 D2 exists to remove.
-	const redeemed = await redeemTicket(
-		channelDir,
-		wake.taskId,
-		(ticket) => ticket.kind === "run" && ticket.id === wake.resourceId,
-	);
+	// Only a `work` ticket may be redeemed by a settling delegation (any bound run or job
+	// settling wakes the leader, spec 052, D3): a task parked on a clock or a question to the user
+	// is not waiting for this delegation, and reopening it here would be exactly the unverified
+	// resumption path spec 051 D2 exists to remove. The wake itself was verified above.
+	const redeemed = await redeemTicket(channelDir, wake.taskId, (ticket) => ticket.kind === "work");
 	const taskStillDriven = redeemed !== undefined || (await isTaskActivelyDriven(channelDir, wake.taskId));
 	return {
 		taskId: wake.taskId,
@@ -154,11 +151,7 @@ export async function claimVerifiedJobWake(
 	}
 	const channelDir = getChannelDir(workspaceDir, event.channelId);
 	hooks?.beforeActivation?.();
-	const redeemed = await redeemTicket(
-		channelDir,
-		wake.taskId,
-		(ticket) => ticket.kind === "job" && ticket.id === wake.resourceId,
-	);
+	const redeemed = await redeemTicket(channelDir, wake.taskId, (ticket) => ticket.kind === "work");
 	const taskStillDriven = redeemed !== undefined || (await isTaskActivelyDriven(channelDir, wake.taskId));
 	return {
 		taskId: wake.taskId,

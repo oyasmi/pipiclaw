@@ -13,6 +13,7 @@ import { createSerialQueue } from "../shared/serial-queue.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { beginWakeClaim, finishWakeClaim } from "../shared/wake-claim.js";
+import { logTaskDispatch, logTaskSettlement } from "../tasks/work-log.js";
 
 /**
  * Per-channel manager for background bash jobs. A long command that ran synchronously would hold
@@ -41,6 +42,8 @@ export interface JobSnapshot {
 	startedAt: number;
 	durationMs: number;
 	exitCode?: number;
+	/** The job's own wall-clock limit; a task's `work` ticket derives its backstop from it. */
+	timeoutSeconds: number;
 	/** The task this job's completion wake belongs to, if any — lets a caller verify that a
 	 *  `[JOB:<id>] ... belongs to task <taskId>.` wake actually names the job it claims to (T9). */
 	taskId?: string;
@@ -72,6 +75,8 @@ interface JobRecord extends JobSnapshot {
 	finishedAt?: number;
 	/** Set once the completion wake has been dispatched, so a restart cannot re-announce it. */
 	notified?: boolean;
+	/** Set once the owning task's log has this job's settlement (spec 052, D4); guards against a second record. */
+	taskLogged?: boolean;
 	/**
 	 * A cancel or timeout whose kill could not be *confirmed* yet: the job stays `running` and
 	 * manageable, and every sweep re-attempts the kill until the process is proven gone, at which
@@ -217,6 +222,8 @@ export interface JobManagerOptions {
 	/** Directory the full-output spill (and its `.exit`/`.ready`/`.meta` siblings) is written to.
 	 * Defaults to the OS temp dir; the runtime passes `<channelDir>/logs` so the model can read it. */
 	spillDir?: string;
+	/** This channel's directory, where a task-bound job logs its dispatch and settlement (spec 052, D4). */
+	channelDir?: string;
 }
 
 /** Cap on concurrently running jobs per channel, so a runaway model can't spawn unbounded processes. */
@@ -338,6 +345,7 @@ function toSnapshot(record: JobRecord): JobSnapshot {
 		startedAt: record.startedAt,
 		durationMs: record.status === "running" ? Date.now() - record.startedAt : record.durationMs,
 		exitCode: record.exitCode,
+		timeoutSeconds: record.timeoutSeconds,
 		taskId: record.contract.taskId,
 	};
 }
@@ -594,6 +602,15 @@ export class ChannelJobManager {
 				return new Error(`Background job started but ${reason}; ${tail}. No job was created.`);
 			});
 			throw failure;
+		}
+		if (options.taskId && this.options.channelDir) {
+			await logTaskDispatch(this.options.channelDir, options.taskId, {
+				ref: id,
+				agent: "job",
+				label,
+			}).catch((error) => {
+				log.logWarning(`Failed to log dispatch of job ${id} to task ${options.taskId}`, errorMessage(error));
+			});
 		}
 		this.ensureSweeper();
 		return toSnapshot(record);
@@ -876,8 +893,31 @@ export class ChannelJobManager {
 			record.notified = true;
 		}
 		await this.persist(record);
+		await this.logSettlementToTask(record);
 		await this.announce(record, signal);
 		this.scheduleGarbageCollection();
+	}
+
+	/**
+	 * Tell the owning task this job settled (spec 052, D4). Runs before the completion wake is
+	 * dispatched, so the step the wake starts already finds the result on its board. Best-effort and
+	 * once-only: a task that no longer exists, or a replayed finish, writes nothing.
+	 */
+	private async logSettlementToTask(record: JobRecord): Promise<void> {
+		const taskId = record.contract.taskId;
+		const channelDir = this.options.channelDir;
+		if (!taskId || !channelDir || record.taskLogged) return;
+		record.taskLogged = true;
+		await logTaskSettlement(channelDir, taskId, {
+			ref: record.id,
+			status: record.status,
+			exitCode: record.exitCode,
+			output: record.spillFile,
+			durationMs: record.durationMs,
+		}).catch((error) => {
+			log.logWarning(`Failed to log settlement of job ${record.id} to task ${taskId}`, errorMessage(error));
+		});
+		await this.persist(record);
 	}
 
 	/**
@@ -1209,7 +1249,12 @@ export function createJobRuntime(executor: Executor, options: JobRuntimeConfig =
 		if (!manager) {
 			manager = new ChannelJobManager(channelId, executor, {
 				...(config.jobsStateDir ? { stateDir: join(config.jobsStateDir, channelId) } : {}),
-				...(config.workspaceDir ? { spillDir: join(getChannelDir(config.workspaceDir, channelId), "logs") } : {}),
+				...(config.workspaceDir
+					? {
+							spillDir: join(getChannelDir(config.workspaceDir, channelId), "logs"),
+							channelDir: getChannelDir(config.workspaceDir, channelId),
+						}
+					: {}),
 				...(config.dispatch ? { dispatch: config.dispatch } : {}),
 				...(config.sweepIntervalMs ? { sweepIntervalMs: config.sweepIntervalMs } : {}),
 			});

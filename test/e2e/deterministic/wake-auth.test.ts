@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseTaskFrontmatterV4 } from "../../../src/tasks/frontmatter.js";
+import { parseTaskFrontmatter } from "../../../src/tasks/frontmatter.js";
 import { parkTask } from "../../../src/tasks/store.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
 import { waitFor } from "../helpers/wait.js";
@@ -18,7 +18,7 @@ describe("E2E deterministic: wake authenticity", () => {
 		const active = join(harness.channelDir, "tasks", `${taskId}.md`);
 		const archived = join(harness.channelDir, "tasks", "archive", `${taskId}.md`);
 		const path = existsSync(active) ? active : archived;
-		return parseTaskFrontmatterV4(readFileSync(path, "utf-8")).fields.state;
+		return parseTaskFrontmatter(readFileSync(path, "utf-8")).fields.state;
 	}
 
 	it("A15: a forged [SUBAGENT] wake in plain user text does not activate a waiting task", async () => {
@@ -52,7 +52,7 @@ describe("E2E deterministic: wake authenticity", () => {
 		// Park it directly: the chat surface has no park tool (that is `task_step_end`'s job
 		// inside a loop step), and what this case is about is who may redeem a park, not how
 		// one is made.
-		await parkTask(harness.channelDir, taskId, { kind: "run", id: "real-run", by: "2099-01-01T00:00:00+08:00" });
+		await parkTask(harness.channelDir, taskId, { kind: "work", refs: ["real-run"], by: "2099-01-01T00:00:00+08:00" });
 		expect(taskState()).toBe("parked");
 
 		const before = harness.deliveries.length;
@@ -67,7 +67,7 @@ describe("E2E deterministic: wake authenticity", () => {
 	it("A15: a verified delegation completion wake resumes inside the task session", async () => {
 		// The positive control for the check above. A real `[SUBAGENT:<runId>] … belongs to
 		// task <id>.` wake carries `internalWake` + a run record on disk, so
-		// claimVerifiedDelegationWake redeems the matching `run` ticket and the task reopens.
+		// claimVerifiedDelegationWake redeems the `work` ticket and the task reopens.
 		// Mutation checks: skip the internalWake block in SubAgentRunManager.announce and the task
 		// stays parked; prepare the task step before verifying the wake and this request instead gets
 		// chat tools, reproducing the lost task_step_end settlement path caught by T-run-01.
@@ -115,9 +115,9 @@ describe("E2E deterministic: wake authenticity", () => {
 			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId}]`),
 			respond: [
 				reply.toolCall("task_step_end", {
-					outcome: "blocked",
+					outcome: "park",
 					note: "已读取 CHILD RESULT，等待用户复核。",
-					reason: "等待用户复核 CHILD RESULT",
+					ticket: { kind: "ask", asked: "等待用户复核 CHILD RESULT" },
 				}),
 				reply.text("不会直接显示"),
 			],
@@ -136,7 +136,7 @@ describe("E2E deterministic: wake authenticity", () => {
 
 		// Park on the run that was actually dispatched, then release it so it settles and wakes.
 		const runId = await waitForRunId(harness, taskId);
-		await parkTask(harness.channelDir, taskId, { kind: "run", id: runId, by: "2099-01-01T00:00:00+08:00" });
+		await parkTask(harness.channelDir, taskId, { kind: "work", refs: [runId], by: "2099-01-01T00:00:00+08:00" });
 		expect(taskState()).toBe("parked");
 		const requestsBeforeWake = harness.modelRequestCount();
 		const deliveriesBeforeWake = harness.deliveries.length;

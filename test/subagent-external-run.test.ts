@@ -8,7 +8,6 @@ import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { launchExternalRun } from "../src/subagents/external/run.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
-import { readVerificationAttestation } from "../src/tasks/verification.js";
 import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
@@ -281,7 +280,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		await waitFor(() => getSubAgentRunManager(channelId).get("run-ext-handshake")?.status !== "running");
 	});
 
-	it("runs a write-capable purpose=verify under the lease and records a commit-stable advisory subject", async () => {
+	it("runs a write-capable purpose=verify under the lease and records the declared verdict", async () => {
 		const workspaceDir = createTempWorkspace();
 		const projectDir = join(workspaceDir, "project");
 		const channelId = "dm_ext_verify_write";
@@ -292,7 +291,7 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		mkdirSync(join(channelDir, "tasks"), { recursive: true });
 		writeFileSync(
 			join(channelDir, "tasks", "ship.md"),
-			"---\nstatus: active\n---\n# Ship\n\n## DoD\n- checks pass\n",
+			"---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n",
 		);
 		execFileSync("git", ["-C", projectDir, "init", "-q"], { stdio: "pipe" });
 		execFileSync("git", ["-C", projectDir, "config", "user.email", "test@example.com"], { stdio: "pipe" });
@@ -342,14 +341,10 @@ describe("launchExternalRun (spec 040, D1/D3/D4)", () => {
 		// lease must already be free at the first point a completed run is externally visible.
 		await waitFor(() => manager.get(runId)?.status !== "running");
 
-		const attestation = await readVerificationAttestation(channelDir, runId);
-		expect(attestation).toMatchObject({
-			verdict: "pass",
-			verificationStrength: "advisory",
-			subjectMode: "base-relative",
-		});
-		expect(attestation.subjectBaseCommit).toMatch(/^[a-f0-9]{40,64}$/);
-		expect(attestation.subjectBaselineUntrackedPaths).toEqual([]);
+		// Spec 052, D6: the verdict is the checker's declared line, recorded as information; no
+		// attestation or subject snapshot is written.
+		expect(manager.get(runId)?.verificationVerdict).toBe("pass");
+		expect(existsSync(join(channelDir, ".verifications"))).toBe(false);
 		const nextLease = acquireWorkspaceLease({ runId: "next", channelId, workingDirectory: projectDir });
 		expect(nextLease.ok).toBe(true);
 		if (nextLease.ok) releaseWorkspaceLease(nextLease.leaseKey, "next");

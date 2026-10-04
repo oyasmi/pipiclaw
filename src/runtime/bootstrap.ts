@@ -42,7 +42,6 @@ import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/runs.j
 import { buildTaskStepBrief } from "../tasks/brief.js";
 import { readActiveTasks } from "../tasks/ledger.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
-import { readStoredTask } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { parseUsageMode, renderUsageReport } from "../usage/render.js";
@@ -73,7 +72,8 @@ import { handleSkillsCommand as runSkillsCommand } from "./skill-commands.js";
 import { renderRunNotice, handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
 import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
 import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";
-import { migrateTasksToV4 } from "./task-migration.js";
+import { migrateTasksToV5 } from "./task-migration.js";
+import { createTaskSpawner } from "./task-spawn.js";
 import type { WakeTaskTransitionHooks } from "./task-wake.js";
 import { claimVerifiedDelegationWake, claimVerifiedJobWake } from "./task-wake.js";
 
@@ -345,11 +345,9 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 		if (!taskId || !runner.bindTaskSession) return undefined;
 		const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
 		try {
-			const document = await readStoredTask(channelDir, taskId);
-			if (!document) return undefined;
 			const brief = await buildTaskStepBrief({ channelDir, taskId });
 			if (!brief) return undefined;
-			await runner.bindTaskSession(taskId, document.fields.cycle?.id ?? "c-adhoc");
+			await runner.bindTaskSession(taskId);
 			return { taskId, brief };
 		} catch (error) {
 			log.logWarning(`[${event.channelId}] Could not start task step for ${taskId}`, errorMessage(error));
@@ -526,8 +524,6 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 					return runTasksCommand({
 						args,
 						channelDir: getChannelDir(options.paths.workspaceDir, event.channelId),
-						workspaceDir: options.paths.workspaceDir,
-						channelId: event.channelId,
 						dispatchTask: async (id) => {
 							const channelDir = getChannelDir(options.paths.workspaceDir, event.channelId);
 							const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
@@ -1144,6 +1140,11 @@ export async function createRuntimeContext(
 				loadSecurityConfigWithDiagnostics(options.paths.appHomeDir).config.commandGuard,
 				options.paths.eventHistoryPath,
 				(event) => durableDispatch?.dispatch(event) ?? false,
+				createTaskSpawner({
+					getChannelDir: (channelId) => getChannelDir(options.paths.workspaceDir, channelId),
+					nudge: () => getTaskDriver().nudge?.(),
+					notify: (channelId, text) => bot.sendPlain(channelId, text),
+				}),
 			);
 	const memoryMaintenanceScheduler = options.createMemoryMaintenanceScheduler
 		? options.createMemoryMaintenanceScheduler()
@@ -1305,9 +1306,12 @@ export async function createRuntimeContext(
 	}
 
 	if (startServices) {
-		// Upgrade every v3 task file to the v4 contract before the driver relies on it (spec 051, D14). Marker-gated: the pass rewrites
-		// bodies and imports history into the loop log, so it must run exactly once per install.
-		void migrateTasksToV4(options.paths.workspaceDir, join(options.paths.appHomeDir, "state"));
+		// Convert v4 task files and their recurring schedules before the watcher or the driver rely
+		// on the v5 layout (spec 052, D12). Marker-gated and awaited: the pass writes event
+		// templates the watcher is about to load, so the services must not start underneath it.
+		await migrateTasksToV5(options.paths.workspaceDir, join(options.paths.appHomeDir, "state")).catch((error) => {
+			log.logWarning("Task conversion to v5 failed; tasks may need /tasks doctor", errorMessage(error));
+		});
 		eventsWatcher.start();
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();

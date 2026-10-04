@@ -13,7 +13,7 @@ const rows = readdirSync(directory)
 console.table(rows);
 for (const [label, subset] of [
 	["all guides", rows],
-	["task + delegation", rows.filter((row) => ["task-loop.md", "agent-delegation.md"].includes(row.file))],
+	["task + delegation", rows.filter((row) => ["task-lead.md", "agent-delegation.md"].includes(row.file))],
 ]) {
 	console.log(`${label}: ${subset.reduce((sum, row) => sum + row.units, 0)} units`);
 }

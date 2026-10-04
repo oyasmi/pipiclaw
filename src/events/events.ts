@@ -13,7 +13,6 @@ import {
 import { readFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import type { ChannelEvent } from "../channel/channel-event.js";
-import { getChannelDir } from "../channel/channel-paths.js";
 import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
 import type { DingTalkBot } from "../runtime/dingtalk.js";
@@ -24,9 +23,7 @@ import { createJsonlAppender, type JsonlAppender } from "../shared/jsonl-appende
 import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { clipText, errorMessage, eventNameFromFilename } from "../shared/text-utils.js";
 import { isPlainObject } from "../shared/type-guards.js";
-import { parseTaskFrontmatterV4 } from "../tasks/frontmatter.js";
-import { redeemTicket } from "../tasks/store.js";
-import { parseTaskEventName } from "../tasks/task-events.js";
+import { type TaskCreateInput, validateTaskContractInput } from "../tasks/contract-input.js";
 import { MAX_EVENT_FILES, MAX_ONE_SHOT_DELAY_MS, validateScheduledEvent } from "./event-validation.js";
 
 // ============================================================================
@@ -39,18 +36,25 @@ export interface EventAction {
 	timeout?: number; // event definition uses milliseconds; converted to Executor seconds
 }
 
-export interface OneShotEvent {
+/**
+ * What an event delivers when it fires: a chat `text`, or a `task` template that spawns a fresh
+ * task instance (spec 052, D2). Exactly one is present — `parseScheduledEventContent` enforces it.
+ */
+interface EventPayload {
+	text?: string;
+	task?: TaskCreateInput;
+}
+
+export interface OneShotEvent extends EventPayload {
 	type: "one-shot";
 	channelId: string;
-	text: string;
 	at: string; // local time (host timezone if no offset given), e.g. 2026-07-27T07:30:00+08:00
 	preAction?: EventAction;
 }
 
-export interface PeriodicEvent {
+export interface PeriodicEvent extends EventPayload {
 	type: "periodic";
 	channelId: string;
-	text: string;
 	schedule: string; // cron syntax, always interpreted in the host timezone
 	/**
 	 * Legacy field only. Pre-027 events carried an IANA `timezone`; it is no longer part of
@@ -105,8 +109,31 @@ export interface EventHistoryRecord {
 	};
 }
 
+/** One occurrence of a template event asking for a task instance (spec 052, D2). */
+export interface SpawnTaskRequest {
+	/** The event's name (filename without `.json`); becomes the instance's `origin`. */
+	eventName: string;
+	channelId: string;
+	template: TaskCreateInput;
+	/** The moment this occurrence was due — deterministic per occurrence, so a replay maps to the same instance. */
+	occurrence: Date;
+}
+
+export type SpawnTaskResult =
+	/** A new instance was created. */
+	| { outcome: "spawned"; id: string }
+	/** This occurrence's instance already exists: an idempotent replay. */
+	| { outcome: "exists"; id: string }
+	/** Another instance of the same event is still running; the user was told. */
+	| { outcome: "skipped"; id: string };
+
 export interface EventsWatcherOptions {
 	historyPath?: string;
+	/**
+	 * Creates the task instance a template event asks for. Injected by the runtime so the events
+	 * subsystem never reads or writes task files (spec 052, INV-8).
+	 */
+	spawnTask?: (request: SpawnTaskRequest) => Promise<SpawnTaskResult>;
 	/** Persist synthetic work before it enters the in-memory channel queue. */
 	dispatch?: (event: ChannelEvent) => boolean | Promise<boolean>;
 }
@@ -122,6 +149,11 @@ const SCAN_CONCURRENCY = 4;
 const DEFAULT_PRE_ACTION_TIMEOUT_MS = 10_000;
 const TEXT_PREVIEW_MAX_CHARS = 160;
 
+/** The one-line description of what an event delivers, for history records and listings. */
+export function describeEventPayload(event: Pick<ScheduledEvent, "text" | "task">): string {
+	return event.task ? `任务模板：${event.task.title}` : (event.text ?? "");
+}
+
 function truncateTextPreview(text: string): string {
 	return clipText(text, TEXT_PREVIEW_MAX_CHARS, { headRatio: 1, omitHint: "…", collapseWhitespace: true });
 }
@@ -129,9 +161,26 @@ function truncateTextPreview(text: string): string {
 function readRequiredString(data: Record<string, unknown>, field: string, filename: string): string {
 	const value = data[field];
 	if (typeof value !== "string" || value.trim().length === 0) {
-		throw new Error(`Missing required fields (type, channelId, text) in ${filename}`);
+		throw new Error(`Missing required fields (type, channelId, and text or task) in ${filename}`);
 	}
 	return value;
+}
+
+/** `text` xor `task`: a chat message, or a template for a task instance (spec 052, D2). */
+function parsePayload(data: Record<string, unknown>, filename: string): EventPayload {
+	const hasText = typeof data.text === "string" && data.text.trim().length > 0;
+	const hasTask = data.task !== undefined;
+	if (hasText === hasTask) {
+		throw new Error(
+			`An event needs exactly one of 'text' (a chat message) or 'task' (a task template) in ${filename}`,
+		);
+	}
+	if (hasText) return { text: data.text as string };
+	try {
+		return { task: validateTaskContractInput(data.task) };
+	} catch (error) {
+		throw new Error(`Invalid 'task' template in ${filename}: ${errorMessage(error)}`);
+	}
 }
 
 function parsePreAction(data: Record<string, unknown>, filename: string): EventAction | undefined {
@@ -163,12 +212,12 @@ function parsePreAction(data: Record<string, unknown>, filename: string): EventA
 export function parseScheduledEventContent(content: string, filename: string): ScheduledEvent {
 	const data = JSON.parse(content);
 	if (!isPlainObject(data)) {
-		throw new Error(`Missing required fields (type, channelId, text) in ${filename}`);
+		throw new Error(`Missing required fields (type, channelId, and text or task) in ${filename}`);
 	}
 
 	const type = readRequiredString(data, "type", filename);
 	const channelId = readRequiredString(data, "channelId", filename);
-	const text = readRequiredString(data, "text", filename);
+	const payload = parsePayload(data, filename);
 	const preAction = parsePreAction(data, filename);
 
 	switch (type) {
@@ -186,7 +235,7 @@ export function parseScheduledEventContent(content: string, filename: string): S
 			if (typeof data.at !== "string" || data.at.trim().length === 0) {
 				throw new Error(`Missing 'at' field for one-shot event in ${filename}`);
 			}
-			return { type, channelId, text, at: data.at, ...(preAction ? { preAction } : {}) };
+			return { type, channelId, ...payload, at: data.at, ...(preAction ? { preAction } : {}) };
 		}
 
 		case "periodic": {
@@ -200,7 +249,7 @@ export function parseScheduledEventContent(content: string, filename: string): S
 			return {
 				type,
 				channelId,
-				text,
+				...payload,
 				schedule: data.schedule,
 				...(legacyTimezone ? { legacyTimezone } : {}),
 				...(preAction ? { preAction } : {}),
@@ -364,7 +413,7 @@ export class EventsWatcher {
 			channelId: event.channelId,
 			action,
 			result,
-			textPreview: truncateTextPreview(event.text),
+			textPreview: truncateTextPreview(describeEventPayload(event)),
 			...(event.type === "one-shot" ? { at: event.at } : {}),
 			...(event.type === "periodic" ? { schedule: event.schedule } : {}),
 			...extra,
@@ -658,77 +707,12 @@ export class EventsWatcher {
 		}
 	}
 
-	/**
-	 * A task-owned event outlives its task whenever close-out fails or the task file is deleted
-	 * by hand, and then wakes the channel forever about work that no longer exists. Checking the
-	 * owner at trigger time turns that permanent noise into self-healing (spec 031, D5).
-	 *
-	 * The name alone is ambiguous (a channelId may contain dots, and so may a task id), so the
-	 * owning channel is taken from the event definition and the id is parsed with the same
-	 * last-dot rule the rest of the task-event code uses (`parseTaskEventName`), not a hand-rolled
-	 * split that would cut a dotted task id short.
-	 */
-	private async orphanedOwnerReason(filename: string, event: ScheduledEvent): Promise<string | undefined> {
-		const parsed = parseTaskEventName(eventNameFromFilename(filename), event.channelId);
-		if (!parsed) return undefined;
-		const taskId = parsed.id;
-
-		const taskPath = join(getChannelDir(dirname(this.eventsDir), event.channelId), "tasks", `${taskId}.md`);
-		let content: string;
-		try {
-			content = await readFile(taskPath, "utf-8");
-		} catch {
-			return `owning task ${taskId} no longer exists`;
-		}
-		const frontmatter = parseTaskFrontmatterV4(content);
-		return frontmatter.fields.outcome
-			? `owning task ${taskId} is archived (${frontmatter.fields.outcome})`
-			: undefined;
-	}
-
-	/**
-	 * Redeem the owning task's `signal` ticket, if this is a task-owned event and that task is
-	 * parked on a ticket naming exactly this event. Returns whether the ticket was redeemed.
-	 *
-	 * The name match is strict (INV-7): a ticket only accepts the event it names, so an unrelated
-	 * task-owned event can never resume a task, and a task parked on anything else still gets its
-	 * ordinary chat wake.
-	 */
-	private async redeemTaskSignal(filename: string, event: ScheduledEvent): Promise<boolean> {
-		const name = eventNameFromFilename(filename);
-		const parsed = parseTaskEventName(name, event.channelId);
-		if (!parsed) return false;
-		const channelDir = getChannelDir(dirname(this.eventsDir), event.channelId);
-		try {
-			const redeemed = await redeemTicket(
-				channelDir,
-				parsed.id,
-				(ticket) => ticket.kind === "signal" && ticket.event === name,
-			);
-			if (!redeemed) return false;
-			log.logInfo(`Event ${name} redeemed the signal ticket for task ${parsed.id}`);
-			return true;
-		} catch (error) {
-			log.logWarning(`Could not redeem signal ticket for task ${parsed.id}`, errorMessage(error));
-			return false;
-		}
-	}
-
 	private async execute(
 		filename: string,
 		event: ScheduledEvent,
 		deleteAfter: boolean = true,
 		occurrence: Date = new Date(),
 	): Promise<void> {
-		const orphaned = await this.orphanedOwnerReason(filename, event);
-		if (orphaned) {
-			log.logInfo(`Retiring orphaned task event: ${filename} (${orphaned})`);
-			this.appendEventHistory(filename, event, "skipped", "skipped", { reason: orphaned });
-			this.cancelScheduled(filename);
-			this.deleteFile(filename);
-			return;
-		}
-
 		if (event.preAction) {
 			try {
 				this.appendEventHistory(filename, event, "pre_action_started", "ok", {
@@ -775,15 +759,8 @@ export class EventsWatcher {
 			}
 		}
 
-		// Spec 051, D8: the *only* touchpoint between the events subsystem and the task loop. When a
-		// task-owned sensor fires and the owning task is parked on a `signal` ticket naming this very
-		// event, redeem the ticket and stop — the task's own loop takes it from here, and delivering
-		// a chat wake as well would both duplicate the work and route it into the wrong session.
-		// Anything else (an ordinary event, or a task that is not waiting on this signal) falls
-		// through to the unchanged delivery path below.
-		if (await this.redeemTaskSignal(filename, event)) {
-			this.appendEventHistory(filename, event, "triggered", "ok", { reason: "redeemed task signal ticket" });
-			if (deleteAfter) this.deleteFile(filename);
+		if (event.task) {
+			await this.spawnTaskInstance(filename, event, event.task, deleteAfter, occurrence);
 			return;
 		}
 
@@ -803,7 +780,7 @@ export class EventsWatcher {
 			event.type === "periodic"
 				? " This is a periodic runtime wake. If it produces no user-visible change or result, reply with exactly [SILENT]."
 				: "";
-		const message = `[EVENT:${filename}:${event.type}:${scheduleInfo}] ${event.text}${periodicContract}`;
+		const message = `[EVENT:${filename}:${event.type}:${scheduleInfo}] ${event.text ?? ""}${periodicContract}`;
 
 		// Create synthetic ChannelEvent
 		const syntheticEvent: ChannelEvent = {
@@ -843,6 +820,49 @@ export class EventsWatcher {
 				filename,
 				`Event queue was full at ${new Date().toISOString()}; this occurrence was not delivered.`,
 			);
+		}
+	}
+
+	/**
+	 * Deliver a template event: ask the runtime for a fresh task instance (spec 052, D2). The
+	 * occurrence is the one this trigger was *due* for — a one-shot's `at`, a periodic's cron tick —
+	 * so a post-restart replay of the same occurrence lands on the same instance instead of making a
+	 * second one.
+	 */
+	private async spawnTaskInstance(
+		filename: string,
+		event: ScheduledEvent,
+		template: TaskCreateInput,
+		deleteAfter: boolean,
+		occurrence: Date,
+	): Promise<void> {
+		const spawn = this.options.spawnTask;
+		const due = event.type === "one-shot" ? new Date(parseLocalTime(event.at) ?? occurrence.getTime()) : occurrence;
+		try {
+			if (!spawn) throw new Error("this runtime cannot create task instances");
+			const result = await spawn({
+				eventName: eventNameFromFilename(filename),
+				channelId: event.channelId,
+				template,
+				occurrence: due,
+			});
+			const delivered = result.outcome === "spawned";
+			this.appendEventHistory(filename, event, delivered ? "enqueued" : "skipped", "ok", {
+				reason:
+					result.outcome === "spawned"
+						? `spawned task ${result.id}`
+						: result.outcome === "exists"
+							? `task ${result.id} already exists for this occurrence`
+							: `previous instance ${result.id} is still running`,
+			});
+			if (deleteAfter) this.deleteFile(filename);
+		} catch (err) {
+			const reason = errorMessage(err);
+			log.logWarning(`Could not spawn a task for event: ${filename}`, reason);
+			this.appendEventHistory(filename, event, "skipped", "error", { reason });
+			if (deleteAfter) {
+				this.markInvalid(filename, `Could not create the task instance at ${new Date().toISOString()}: ${reason}`);
+			}
 		}
 	}
 
@@ -941,7 +961,8 @@ export function createEventsWatcher(
 	commandGuardConfig?: SecurityConfig["commandGuard"],
 	historyPath?: string,
 	dispatch?: EventsWatcherOptions["dispatch"],
+	spawnTask?: EventsWatcherOptions["spawnTask"],
 ): EventsWatcher {
 	const eventsDir = join(workspaceDir, "events");
-	return new EventsWatcher(eventsDir, bot, executor, commandGuardConfig, { historyPath, dispatch });
+	return new EventsWatcher(eventsDir, bot, executor, commandGuardConfig, { historyPath, dispatch, spawnTask });
 }

@@ -184,8 +184,6 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 			handleTasksCommand({
 				args,
 				channelDir,
-				workspaceDir: paths.workspaceDir,
-				channelId,
 			}),
 		runSubagents: (args) =>
 			handleSubagentsCommand({

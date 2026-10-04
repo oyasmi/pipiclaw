@@ -3,13 +3,12 @@ import { isPlainObject } from "../shared/type-guards.js";
 import { parseTicket, type Ticket } from "./ticket.js";
 
 /**
- * The v4 task frontmatter (spec 051, §12.2).
+ * The task frontmatter (spec 052, §3.3).
  *
- * v3 spread one question across pairs of fields that had to agree — `enabled: false` had to match
- * `control.stop`, `status: active` had to not carry a future `wake` — and `/tasks doctor` existed
- * largely to find the pairs that had drifted. v4 removes the pairs instead of diagnosing them:
- * `paused` present *is* paused, and `state: "parked"` ⟺ `ticket` present (INV-1), enforced on
- * every read and every write rather than checked after the fact.
+ * A task is a one-off project: it opens, is worked until `done` or cancelled, and is archived.
+ * Recurring work is an event that spawns a fresh instance each time (spec 052, D2), so there is
+ * no cadence, no cycle and no verification flag here. `state: "parked"` ⟺ `ticket` present
+ * (INV-1) is enforced on every read and every write rather than checked after the fact.
  */
 export type TaskState = "open" | "parked" | "done";
 
@@ -19,55 +18,51 @@ export interface TaskPaused {
 	at: string;
 }
 
-/** Live counters for the cycle in flight. Reset by `openCycle`, read by the budget and `/tasks`. */
-export interface TaskCycle {
-	id: string;
+/** Live counters for the whole task. Read by the budget and `/tasks`. */
+export interface TaskUsage {
 	startedAt: string;
 	steps: number;
-	rounds: number;
 	usd: number;
-	/** True once any cost in this cycle came from an estimate rather than reported usage (D10). */
+	/** True once any cost came from an estimate rather than reported usage. */
 	usdEstimated: boolean;
-	/** Ticket backstops that expired in this cycle; the second one notifies the user (D2). */
+	/** Consecutive ticket backstops that expired; the second one stops the task (D3). */
 	expired: number;
 }
 
 export interface TaskBudget {
 	steps: number;
-	wallMin: number;
 	usd: number;
-	rounds: number;
-	/** Absolute local-time stop, the v4 home of v3's `control.deadline`. */
-	until?: string;
 }
 
 export type TaskArchiveOutcome = "completed" | "cancelled";
 
-export interface TaskFrontmatterV4 {
+export interface TaskFrontmatter {
 	state: TaskState;
 	paused?: TaskPaused;
-	schedule?: string;
 	/** Present iff `state === "parked"` (INV-1). */
 	ticket?: Ticket;
-	cycle?: TaskCycle;
+	usage?: TaskUsage;
 	budget?: Partial<TaskBudget>;
-	verify?: "required";
+	/** Name of the event whose template spawned this instance (spec 052, D2). */
+	origin?: string;
 	/** Archive-only. */
 	outcome?: TaskArchiveOutcome;
 	closedAt?: string;
 }
 
 export interface ParsedTaskFrontmatter {
-	fields: TaskFrontmatterV4;
+	fields: TaskFrontmatter;
 	/** false => the block could not be read at all; the task is surfaced rather than skipped. */
 	readable: boolean;
-	/** True when a v3 `control:`/`status:` line is present — the migrator's only trigger. */
+	/** True when a v3/v4 line (`status`, `control`, `cycle`, `schedule`, `verify`…) is present — `/tasks doctor`'s only trigger. */
 	legacy: boolean;
 }
 
 const STATES: readonly TaskState[] = ["open", "parked", "done"];
 /** Fixed render order, so a diff of a task file reads the same way every time. */
-const FIELD_ORDER = ["state", "paused", "schedule", "ticket", "cycle", "budget", "verify"] as const;
+const FIELD_ORDER = ["state", "paused", "origin", "ticket", "usage", "budget"] as const;
+/** Frontmatter keys older versions wrote; their presence means the one-time conversion has not run on this file. */
+const LEGACY_KEYS = new Set(["status", "enabled", "control", "wake", "cycle", "schedule", "verify"]);
 
 function parseJsonObject(raw: string): Record<string, unknown> | undefined {
 	try {
@@ -92,14 +87,12 @@ function nonNegativeNumber(value: unknown, fallback: number): number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
-function parseCycle(raw: string): TaskCycle | undefined {
+function parseUsage(raw: string): TaskUsage | undefined {
 	const value = parseJsonObject(raw);
-	if (!value || typeof value.id !== "string" || !value.id.trim()) return undefined;
+	if (!value) return undefined;
 	return {
-		id: value.id.trim(),
 		startedAt: typeof value.startedAt === "string" && value.startedAt ? value.startedAt : formatLocalTime(),
 		steps: nonNegativeNumber(value.steps, 0),
-		rounds: nonNegativeNumber(value.rounds, 0),
 		usd: nonNegativeNumber(value.usd, 0),
 		usdEstimated: value.usdEstimated === true,
 		expired: nonNegativeNumber(value.expired, 0),
@@ -111,24 +104,21 @@ function parseBudget(raw: string): Partial<TaskBudget> | undefined {
 	if (!value) return undefined;
 	const budget: Partial<TaskBudget> = {};
 	if (typeof value.steps === "number" && value.steps > 0) budget.steps = value.steps;
-	if (typeof value.wallMin === "number" && value.wallMin > 0) budget.wallMin = value.wallMin;
 	if (typeof value.usd === "number" && value.usd > 0) budget.usd = value.usd;
-	if (typeof value.rounds === "number" && value.rounds > 0) budget.rounds = value.rounds;
-	if (typeof value.until === "string" && value.until.trim()) budget.until = value.until.trim();
 	return Object.keys(budget).length > 0 ? budget : undefined;
 }
 
 /**
  * Read the leading frontmatter block. Unreadable input fails **open** to a live `open` task: a
  * corrupt file has to surface as work the runtime tries to touch, not silently disappear from the
- * ledger — the same fail-open stance v3 took, for the same reason.
+ * ledger.
  */
-export function parseTaskFrontmatterV4(content: string): ParsedTaskFrontmatter {
+export function parseTaskFrontmatter(content: string): ParsedTaskFrontmatter {
 	if (!content.startsWith("---")) return { fields: { state: "open" }, readable: false, legacy: false };
 	const end = content.indexOf("\n---", 3);
 	if (end === -1) return { fields: { state: "open" }, readable: false, legacy: false };
 
-	const fields: TaskFrontmatterV4 = { state: "open" };
+	const fields: TaskFrontmatter = { state: "open" };
 	let legacy = false;
 	let sawState = false;
 	for (const line of content.slice(3, end).split("\n")) {
@@ -146,20 +136,17 @@ export function parseTaskFrontmatterV4(content: string): ParsedTaskFrontmatter {
 			case "paused":
 				fields.paused = parsePaused(value);
 				break;
-			case "schedule":
-				fields.schedule = value || undefined;
-				break;
 			case "ticket":
 				fields.ticket = parseTicket(value);
 				break;
-			case "cycle":
-				fields.cycle = parseCycle(value);
+			case "usage":
+				fields.usage = parseUsage(value);
 				break;
 			case "budget":
 				fields.budget = parseBudget(value);
 				break;
-			case "verify":
-				if (value === "required") fields.verify = "required";
+			case "origin":
+				fields.origin = value || undefined;
 				break;
 			case "outcome":
 				if (value === "completed" || value === "cancelled") fields.outcome = value;
@@ -167,19 +154,13 @@ export function parseTaskFrontmatterV4(content: string): ParsedTaskFrontmatter {
 			case "closedAt":
 				fields.closedAt = value || undefined;
 				break;
-			// v3 leftovers: their presence is the migrator's trigger, their values are its input.
-			case "status":
-			case "enabled":
-			case "control":
-			case "wake":
-				legacy = true;
-				break;
 			default:
+				if (LEGACY_KEYS.has(key)) legacy = true;
 				break;
 		}
 	}
 	if (fields.outcome) fields.state = "done";
-	// A file with no recognizable v4 or v3 marker is not frontmatter we understand.
+	// A file with no recognizable marker is not frontmatter we understand.
 	const readable = sawState || fields.outcome !== undefined || legacy;
 	return { fields: normalizeTaskFrontmatter(fields), readable, legacy };
 }
@@ -190,8 +171,8 @@ export function parseTaskFrontmatterV4(content: string): ParsedTaskFrontmatter {
  * always has a redeemable, backstopped source" a property of the file format instead of a rule
  * every writer has to remember.
  */
-export function normalizeTaskFrontmatter(fields: TaskFrontmatterV4): TaskFrontmatterV4 {
-	const next: TaskFrontmatterV4 = { ...fields };
+export function normalizeTaskFrontmatter(fields: TaskFrontmatter): TaskFrontmatter {
+	const next: TaskFrontmatter = { ...fields };
 	if (next.outcome) {
 		next.state = "done";
 		next.ticket = undefined;
@@ -203,13 +184,14 @@ export function normalizeTaskFrontmatter(fields: TaskFrontmatterV4): TaskFrontma
 	return next;
 }
 
-export function renderTaskFrontmatter(fields: TaskFrontmatterV4): string {
+export function renderTaskFrontmatter(fields: TaskFrontmatter): string {
 	const document = normalizeTaskFrontmatter(fields);
 	const lines: string[] = ["---"];
 	if (document.outcome) {
 		lines.push(`outcome: ${document.outcome}`);
 		if (document.closedAt) lines.push(`closedAt: ${document.closedAt}`);
-		if (document.cycle) lines.push(`cycle: ${JSON.stringify(document.cycle)}`);
+		if (document.origin) lines.push(`origin: ${document.origin}`);
+		if (document.usage) lines.push(`usage: ${JSON.stringify(document.usage)}`);
 		lines.push("---");
 		return lines.join("\n");
 	}
@@ -223,6 +205,6 @@ export function renderTaskFrontmatter(fields: TaskFrontmatterV4): string {
 }
 
 /** Whether the driver may schedule a step for this task right now. */
-export function isTaskRunnable(fields: TaskFrontmatterV4): boolean {
+export function isTaskRunnable(fields: TaskFrontmatter): boolean {
 	return fields.state === "open" && !fields.paused && !fields.outcome;
 }

@@ -10,7 +10,7 @@ import { errorMessage } from "../shared/text-utils.js";
 import { checkBudget, IDLE_STEP_LIMIT } from "../tasks/budget.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
 import { readTaskLog } from "../tasks/log.js";
-import { expireTicket, openCycle, pauseTask, redeemTicket } from "../tasks/store.js";
+import { expireTicket, pauseTask, redeemTicket } from "../tasks/store.js";
 
 export interface TaskDriverOptions {
 	workspaceDir: string;
@@ -61,24 +61,24 @@ function channelType(channelId: string): { type: ChannelEvent["type"]; conversat
 
 /**
  * Stable, provenance-derived dispatch id for a task step (spec 031, D1; spec 051 keeps the shape).
- * A step inside a cycle is genuinely new work each time, so the dispatch moment disambiguates it;
- * collapsing two steps onto one durable record would silently drop the later one.
+ * Each step is genuinely new work, so the dispatch moment disambiguates it; collapsing two steps
+ * onto one durable record would silently drop the later one.
  */
 function stepDispatchId(channelId: string, entry: TaskLedgerEntry, nowMs: number): string {
-	return `task:${channelId}:${entry.id}:${entry.fields.cycle?.id ?? "-"}:${nowMs}`;
+	return `task:${channelId}:${entry.id}:${nowMs}`;
 }
 
 export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): ChannelEvent {
-	const repairOnly = !entry.readable || entry.legacy;
+	const repairOnly = !entry.readable;
 	const repair = repairOnly
 		? ` Task metadata is not readable; repair only the frontmatter in tasks/${entry.id}.md, then stop. ` +
-			`Do not execute the task goal or any external action. Read ${join(PLAYBOOKS_DIR, "task-loop.md")} for the repair path.`
+			`Do not execute the task goal or any external action. Read ${join(PLAYBOOKS_DIR, "task-lead.md")} for the repair path.`
 		: "";
 	const capsule = [
 		`Task capsule: title=${entry.title}; state=${entry.fields.state};`,
-		entry.fields.cycle ? `cycle=${entry.fields.cycle.id} (${entry.fields.cycle.steps} steps);` : "",
-		entry.plan
-			? `plan=${entry.plan.done}/${entry.plan.total} done, current=${entry.plan.current?.id ?? "none"};`
+		entry.fields.usage ? `${entry.fields.usage.steps} steps so far;` : "",
+		entry.items
+			? `items=${entry.items.done}/${entry.items.total} done, current=${entry.items.current?.id ?? "none"};`
 			: "",
 	]
 		.filter(Boolean)
@@ -90,11 +90,11 @@ export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry,
 		userName: "TASK_DRIVER",
 		text:
 			`[TASK_DRIVER:${entry.id}] Resume task ${entry.id}. ${capsule}${repair} ` +
-			`Open tasks/${entry.id}.md and read ${join(PLAYBOOKS_DIR, "task-loop.md")} before acting. ` +
+			`Open tasks/${entry.id}.md and read ${join(PLAYBOOKS_DIR, "task-lead.md")} before acting. ` +
 			(repairOnly
 				? "After the metadata is repaired, leave task work for a later step. "
-				: "Advance the next concrete step under the task's current goal, plan and acceptance state. ") +
-			"End the step with task_step_end (continue / park / done / blocked).",
+				: "Advance the next concrete step under the task's current goal, work items and acceptance state. ") +
+			"End the step with task_step_end (continue / park / done).",
 		ts: String(nowMs),
 		dispatchId: stepDispatchId(channelId, entry, nowMs),
 	};
@@ -118,7 +118,7 @@ export function taskStopReceipt(
 		userName: "TASK_DRIVER",
 		text:
 			`任务 ${entry.id}（${entry.title}）已停止自动执行：${reason}\n` +
-			`当前阶段：${entry.fields.state}${entry.fields.cycle ? `；周期：${entry.fields.cycle.id}` : ""}\n` +
+			`当前阶段：${entry.fields.state}${entry.fields.usage ? `；已用 ${entry.fields.usage.steps} 步` : ""}\n` +
 			`查看：/tasks show ${entry.id}\n继续：/tasks resume ${entry.id}\n不再需要：让 Agent cancel 该任务。`,
 		ts: String(nowMs),
 		// Keyed on the cause, not the moment: re-detecting the same stop before the user has acted
@@ -128,12 +128,13 @@ export function taskStopReceipt(
 }
 
 /**
- * Native, ticket-driven scheduler for the persistent task ledger (spec 051, D9).
+ * Native, ticket-driven scheduler for the persistent task ledger (spec 051, D9; spec 052).
  *
- * Four jobs, in this order per channel: redeem due `time`/`schedule` tickets, apply the backstop
- * to expired ones, open cycles for recurring tasks, and queue one step for a runnable task.
- * `run`/`job`/`ask`/`signal` tickets are never polled — their owners push them — so the scan
- * stays a cheap read of a handful of frontmatters.
+ * Three jobs, in this order per channel: redeem due `time` tickets, apply the backstop to expired
+ * ones, and queue one step for a runnable task. `work` and `ask` tickets are never polled — their
+ * owners push them (a settling delegation or job, `/tasks reply`) — so the scan stays a cheap read
+ * of a handful of frontmatters. Recurring work is not the driver's business: an event spawns a
+ * fresh task instance each time (spec 052, D2).
  *
  * What is deliberately *not* here any more: the ten-field ledger fingerprint, the process-local
  * effect ledger, the futile-wake and wake-per-cycle counters, and the three-tier backoff table.
@@ -247,8 +248,8 @@ export class TaskDriver {
 	}
 
 	/**
-	 * Deterministic, zero-token maintenance for one channel: redeem due tickets, apply expiry
-	 * backstops, open recurring cycles. Runs whether or not the channel is busy — only model
+	 * Deterministic, zero-token maintenance for one channel: redeem due tickets and apply expiry
+	 * backstops. Runs whether or not the channel is busy — only model
 	 * dispatch is gated on an idle channel.
 	 */
 	private async maintain(
@@ -264,20 +265,9 @@ export class TaskDriver {
 			const ticket = entry.fields.ticket;
 			if (!ticket) continue;
 
-			// A due timer redeems into an open task; a due schedule opens the next cycle outright.
+			// A due timer redeems into an open task.
 			if (entry.dueMs !== undefined && entry.dueMs <= nowMs) {
-				if (ticket.kind === "schedule") {
-					const opened = await openCycle(channelDir, entry.id, now).catch((error: unknown) => {
-						log.logWarning(`[${channelId}] Could not open next cycle for ${entry.id}`, errorMessage(error));
-						return undefined;
-					});
-					if (opened) {
-						changed = true;
-						log.logInfo(`[${channelId}] Task driver opened cycle ${opened.cycleId} for ${entry.id}`);
-					}
-				} else if (await redeemTicket(channelDir, entry.id, (current) => current.kind === ticket.kind)) {
-					changed = true;
-				}
+				if (await redeemTicket(channelDir, entry.id, (current) => current.kind === ticket.kind)) changed = true;
 				continue;
 			}
 
@@ -314,11 +304,9 @@ export class TaskDriver {
 	): Promise<boolean> {
 		let paused = false;
 		for (const entry of entries) {
-			const cycle = entry.fields.cycle;
-			if (!cycle || cycle.steps < IDLE_STEP_LIMIT) continue;
-			const steps = (await readTaskLog(channelDir, entry.id, { cycle: cycle.id, kinds: ["step"] })).slice(
-				-IDLE_STEP_LIMIT,
-			);
+			const usage = entry.fields.usage;
+			if (!usage || usage.steps < IDLE_STEP_LIMIT) continue;
+			const steps = (await readTaskLog(channelDir, entry.id, { kinds: ["step"] })).slice(-IDLE_STEP_LIMIT);
 			if (steps.length < IDLE_STEP_LIMIT) continue;
 			const idle = steps.every((record) => record.kind === "step" && record.tools.length === 0);
 			if (!idle) continue;
@@ -371,7 +359,7 @@ export class TaskDriver {
 				const budgeted: TaskLedgerEntry[] = [];
 				for (const entry of entries) {
 					if (!entry.runnable) continue;
-					const status = checkBudget(entry.fields, now);
+					const status = checkBudget(entry.fields);
 					if (!status.breach || !status.reason) {
 						budgeted.push(entry);
 						continue;

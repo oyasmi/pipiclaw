@@ -1,21 +1,20 @@
-import { renderCloseSummary, writeLastResult } from "../../tasks/cycle.js";
-import { applyTaskPlanPatch, normalizeTaskId, uncheckedTaskAcceptanceItems } from "../../tasks/ledger.js";
+import { applyTaskItemsPatch, normalizeTaskId } from "../../tasks/ledger.js";
 import { appendTaskLog } from "../../tasks/log.js";
 import { queueTaskNotice } from "../../tasks/steer.js";
-import { archiveTask, readStoredTask, writeStoredTask } from "../../tasks/store.js";
+import { readStoredTask, writeStoredTask } from "../../tasks/store.js";
 import { describeTicket, resolveTicket } from "../../tasks/ticket.js";
 import { RecoverableToolError } from "../tool-details.js";
-import { assertVerificationHoldsForClose, buildTicketContext, cleanupTaskEvents, requiredField } from "./shared.js";
+import { buildTicketContext, closeTaskDocument, requiredField } from "./shared.js";
 import type { TaskManageResult, TaskManageToolOptions, TaskStepEndRequest } from "./types.js";
 
 /**
- * `task_step_end` — the loop's only closing move (spec 051, D4/§12.4).
+ * `task_step_end` — the loop's only closing move (spec 051, D4/§12.4; narrowed by spec 052, D7).
  *
- * One tool with four outcomes replaces v3's `task_update(note)` + `task_close` + the
- * status/wake/waitingFor triple the model had to keep mutually consistent. The model states an
- * *intent* ("keep going", "wait for this", "we're done", "I'm stuck") and the runtime derives the
- * state, so an illegal combination — parked with nothing to wait for, active with a future wake —
- * is not expressible rather than merely diagnosed afterwards by `/tasks doctor`.
+ * One tool with three outcomes: the model states an *intent* ("keep going", "wait for this",
+ * "we're done") and the runtime derives the state, so an illegal combination — parked with
+ * nothing to wait for, active with a future wake — is not expressible rather than merely
+ * diagnosed afterwards. Asking the user is not a fourth outcome but a park on an `ask` ticket,
+ * which the runtime also announces.
  */
 export async function endTaskStep(
 	options: TaskManageToolOptions,
@@ -27,113 +26,47 @@ export async function endTaskStep(
 	const id = normalizeTaskId(options.taskId);
 	const document = await readStoredTask(options.channelDir, id);
 	if (!document) throw new RecoverableToolError(`Task "${id}" no longer exists; nothing to end.`);
-	const cycleId = document.fields.cycle?.id ?? options.cycleId ?? "-";
 	const note = requiredField(request.note, "note", "task_step_end");
-	// Also reject stale callers that bypass the schema, which no longer exposes schedule tickets.
-	if (request.outcome === "park" && (request.ticket?.kind as string | undefined) === "schedule") {
-		throw new RecoverableToolError(
-			"To finish this cycle, use outcome=done with summary and evidence; the runtime schedules the next occurrence. To skip it, use task_close outcome=skip with a reason. Use a time ticket to wait within this cycle.",
-		);
+
+	if (request.items?.length) {
+		document.body = applyTaskItemsPatch(document.body, request.items).body;
 	}
 
-	if (request.planSteps?.length) {
-		document.body = applyTaskPlanPatch(document.body, request.planSteps).body;
-	}
-
-	const seq = (document.fields.cycle?.steps ?? 0) + 1;
-	if (document.fields.cycle) document.fields.cycle = { ...document.fields.cycle, steps: seq };
+	const seq = (document.fields.usage?.steps ?? 0) + 1;
+	if (document.fields.usage) document.fields.usage = { ...document.fields.usage, steps: seq };
 
 	const tools = [...new Set(options.getToolsUsed?.() ?? [])];
 	const logStep = async (outcome: TaskStepEndRequest["outcome"]) => {
-		await appendTaskLog(options.channelDir, id, { cycle: cycleId, kind: "step", seq, outcome, note, tools });
+		await appendTaskLog(options.channelDir, id, { kind: "step", seq, outcome, note, tools });
 	};
-	// Steps are silent by default (D3); `notify` is the explicit opt-in the runtime delivers once
-	// the step ends. `blocked` always speaks — a task waiting on the user that says nothing is the
-	// same silent dead end tickets exist to prevent.
-	//
-	// The notice is an *outbound side effect*: it must not land before every recoverable check
-	// (required fields, unmet acceptance items, verification hold, ticket resolution) has passed,
-	// or a rejected `outcome=done` still tells the channel "task complete" and a corrected retry
-	// queues a second notice. So compute it here and only flush it past a successful
-	// `writeStoredTask` + `logStep`, right before each return.
-	const pendingNotice = request.notify?.trim()
-		? request.notify.trim()
-		: request.outcome === "blocked"
-			? `任务 ${id} 需要你的决定：${request.reason ?? note}`
-			: undefined;
+
+	// Steps are silent by default (D9); `report` is the explicit opt-in the runtime delivers once
+	// the step ends. The notice is an *outbound side effect*: it must not land before every
+	// recoverable check (required fields, unmet acceptance items, work in flight, ticket
+	// resolution) has passed, or a rejected `outcome=done` still tells the channel "task complete"
+	// and a corrected retry queues a second notice. So it is computed here and only flushed past a
+	// successful write, right before each return.
+	const report = request.report?.trim();
+	let pendingNotice = report || undefined;
 	const flushNotice = async () => {
 		if (pendingNotice) await queueTaskNotice(options.channelDir, id, pendingNotice);
 	};
 
 	if (request.outcome === "done") {
-		const summary = requiredField(request.summary, "summary", "task_step_end outcome=done");
-		const evidence = requiredField(request.evidence, "evidence", "task_step_end outcome=done");
-		const unchecked = uncheckedTaskAcceptanceItems(document.body);
-		if (unchecked.length > 0) {
-			throw new RecoverableToolError(
-				`Task "${id}" still has unmet acceptance items: ${unchecked.slice(0, 3).join("; ")}. Check them off with edit once the evidence holds.`,
-			);
-		}
-		// Verification is imported by the runtime when a purpose=verify run settles (D7), so what
-		// gates `done` here is the cycle's verification ledger — not whether the model remembered to
-		// call an import tool. The settled verdict is re-bound to the contract and the checkout as
-		// they are *now*: a PASS is evidence about the artifact the verifier saw, and the loop can
-		// edit both after it lands.
-		await assertVerificationHoldsForClose(options, document, id);
-		const cycle = document.fields.cycle;
-		document.body = writeLastResult(
-			document.body,
-			renderCloseSummary({
-				cycleId,
-				outcome: "done",
-				summary,
-				evidence,
-				residualRisk: request.residualRisk,
-				steps: cycle?.steps ?? seq,
-				rounds: cycle?.rounds ?? 0,
-				usd: cycle?.usd ?? 0,
-				usdEstimated: cycle?.usdEstimated ?? false,
-			}),
-		);
-		await appendTaskLog(options.channelDir, id, {
-			cycle: cycleId,
-			kind: "close",
-			outcome: "done",
-			summary,
-			evidence,
-			residualRisk: request.residualRisk,
-			steps: cycle?.steps ?? seq,
-			rounds: cycle?.rounds ?? 0,
-			usd: cycle?.usd ?? 0,
+		await closeTaskDocument({
+			options,
+			document,
+			id,
+			outcome: "complete",
+			note,
+			steps: seq,
+			afterChecks: () => logStep("done"),
 		});
-
-		if (document.fields.schedule) {
-			// Recurring: park on the next occurrence rather than archiving. The contract, the Plan
-			// and the loop log all survive into the next cycle; only the counters reset.
-			const context = await buildTicketContext(options, id, document.fields.schedule);
-			const ticket = resolveTicket({ kind: "schedule" }, context);
-			document.fields.state = "parked";
-			document.fields.ticket = ticket;
-			await writeStoredTask(document);
-			await logStep("done");
-			await flushNotice();
-			return {
-				action: "step_end",
-				id,
-				state: "parked",
-				notice: `任务 \`${id}\` 本周期完成，${describeTicket(ticket)}。`,
-			};
-		}
-		await writeStoredTask(document);
-		await logStep("done");
 		await flushNotice();
-		const { deleted } = await cleanupTaskEvents(options, id);
-		await archiveTask(options.channelDir, id, "completed");
 		return {
 			action: "step_end",
 			id,
 			archived: true,
-			deletedEvents: deleted,
 			notice: `任务 \`${id}\` 已完成并归档。`,
 		};
 	}
@@ -144,21 +77,22 @@ export async function endTaskStep(
 		document.fields.ticket = undefined;
 		notice = `步骤已记录，任务 \`${id}\` 继续。`;
 	} else {
-		// `blocked` is `park` on an `ask` ticket: a task that needs the user is still a task with a
-		// verifiable, backstopped wait, not a special state that could go quiet.
-		const input =
-			request.outcome === "blocked"
-				? { kind: "ask", asked: requiredField(request.reason, "reason", "task_step_end outcome=blocked") }
-				: request.ticket;
-		if (!input) {
+		if (!request.ticket) {
 			throw new RecoverableToolError(
 				"task_step_end outcome=park requires a ticket describing what will wake this task.",
 			);
 		}
-		const context = await buildTicketContext(options, id, document.fields.schedule);
-		const ticket = resolveTicket(input, context);
+		const context = await buildTicketContext(options, id);
+		const ticket = resolveTicket(request.ticket, context);
 		document.fields.state = "parked";
 		document.fields.ticket = ticket;
+		// A task waiting on the user that says nothing is the same silent dead end tickets exist to
+		// prevent, so an `ask` park always speaks.
+		if (ticket.kind === "ask") {
+			pendingNotice = [report, `任务 ${id} 需要你的决定：${ticket.asked}\n用 /tasks reply ${id} <内容> 回答。`]
+				.filter(Boolean)
+				.join("\n\n");
+		}
 		notice = `任务 \`${id}\` 已停泊：${describeTicket(ticket)}（兜底 ${ticket.by}）。`;
 	}
 

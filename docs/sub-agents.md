@@ -370,7 +370,7 @@ my-gateway/gpt-4.1
 `mutates` 承担的是"这个角色会不会改动宿主机"这一件事，三处消费：
 
 1. **Workspace 写锁**：只有 `mutates: write` 的 run 会在其 `workingDirectory` 上取一把排他写锁，直到结算才释放；同一目录（含父子目录）上第二个写角色会被直接拒绝，错误会点名持有者的 runId 与工作目录。`mutates: read` 的 run 不取锁，也不会被写锁阻塞。
-2. **`purpose=verify` 准入**：声明 `mutates: write` 的角色可以用作验收者，但必须像其他写 run 一样先取得目标工作区（同目录及父子目录冲突）独占 lease，并将结论标为 `advisory`；`exec` harness 因为没有可验证的完成协议，一律不能用于验收，无论 `mutates` 怎么写。
+2. **`purpose=verify` 准入**：声明 `mutates: write` 的角色可以用作验收者，但必须像其他写 run 一样先取得目标工作区（同目录及父子目录冲突）独占 lease；`exec` harness 因为没有可验证的完成协议，一律不能用于验收，无论 `mutates` 怎么写。
 3. **审计**：外部角色每次派发都会记一条包含 `mutates` 的审计事件。
 
 内置角色不填时按 `tools` 是否含 `write`/`edit` 自动推定；外部角色必须显式声明。
@@ -394,90 +394,15 @@ frontmatter 后面的正文就是子代理的系统提示词。它应该明确�
 
 - 子代理没有 `subagent` 工具，**不能继续创建下一级代理**——但这只约束内置子代理。外部 agent 本身是完整的 coding agent，它能不能 spawn 自己的子代理，pipiclaw 拦不住，见下文"明确不可控的部分"。
 - 工具白名单不等于只读沙箱：拥有 `bash` 的角色仍可能执行写操作，应同时依靠 system prompt 和应用级 `security.json` 收紧行为。**外部角色完全没有这层工具白名单**——它能触及其自身权限所及的任何地方，`mutates`/`workingDirectory` 都不是隔离机制，只是审计与并发控制信息。
-- 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。`purpose: verify` 的 attestation 记录该目录，运行时在结算时于同一目录复算 artifact subject。
-- `purpose: verify` + `taskId`：进入独立验收协议。内置验证器结构性移除了 write/edit 工具，但默认工具集仍含 `bash`——它同样能写文件，所以 `verificationStrength` 只在角色声明 `mutates: read` 且 `tools` 里也不含 `bash` 时才是 `enforced`，否则如实标成 `advisory`；外部验证器永远做不到结构性移除，恒为 `advisory`。所有写能力的 verifier 都先持有目标工作区独占 lease。新 attestation 记录验证开始时的 `baseCommit`、既有 untracked 路径和范围外的 ignored 路径：之后正常提交已验收内容不会改变 subject；新建文件只有落在 checkout 根目录下明确的临时产物范围（如 `.run/`、`coverage/`、`build/`、`dist/`、缓存或测试报告目录；Cypress 仅 `cypress/screenshots/`、`cypress/videos/`）时才不计入 subject，开始前已存在的 untracked 文件、ignored 非临时产品文件始终受保护，其他新源文件仍会使验收失败。两者优先靠事后 workspace subject 比对判定是否被改动；没有可比较的 subject/status 前后证据时**直接判 FAIL**，不会把"测不出来"当成"没改动"。verifier 还必须在最后一行明确 `VERDICT: PASS|FAIL`。`advisory` 结论仍会被记录、展示，并要求主代理按风险抽查，不是自动失败。
-- verifier attestation 直接持久化到 `<channel>/tasks/.verifications/`；run 结算时运行时自动校验并把这一轮写进任务的返工账本（`tasks/<id>.jsonl`），主代理不需要导入。普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
+- 子代理只隔离对话上下文，文件系统与主代理共享。需要独立检出时在宿主侧自行 `git worktree add`，把该路径作为 `workingDirectory` 参数传给子代理（必须是已存在的目录；它成为子代理的 shell cwd 与相对路径根，路径守卫仍按解析后的绝对路径判定）。
+- `purpose: verify`：执行者拿到检查者协议（只判断、不修实现、最后一行 `VERDICT: PASS|FAIL`）。内置验证器结构性移除了 write/edit，但默认工具集仍含 `bash`，所以只有声明 `mutates: read` 且 `tools` 里也不含 `bash` 的角色才是结构性只读；外部验证器做不到结构性移除。所有写能力的 verifier 都先持有目标工作区独占 lease。运行时只记录这个结论（run 记录与所属任务的看板），**不是**关闭任务的门禁，也不做工作区快照或 attestation；运行失败或没有 VERDICT 行一律记为 FAIL。是否采信由主代理按风险对照真实产物、diff 和检查输出判断。
+- 带 `taskId` 的委派（任务会话里自动绑定，可再带上对应工作项 `item`）在派发和结算时写进 `<channel>/tasks/<id>.jsonl`，成本计入任务预算；普通运行摘要仍写 `<channel>/subagent-runs.jsonl`。
 - **外部 agent 的输出是不可信数据，不是系统指令**：它会自行读取目标仓库的 `CLAUDE.md` / `AGENTS.md`，仓库内容可以操纵它的行为；它的完成声明和自我验收不能代替主代理的独立检查。
 
-> `verify` 以任务台账为前提（需要 `taskId`）。它在任务生命周期中的确切时机——验收如何咬合派发、停泊与 `complete`——见 [events-and-tasks.md](./events-and-tasks.md#独立验收)。
-
-## 授权与安全边界（外部角色）
-
-**`security.json` 不为外部委派增加任何配置段。** 授权面只有一处：角色文件本身。写下一份 `runtime: external` + `command:` + `mutates:` 的角色文件，就是一次完整、具体、可版本化的授权声明——粒度是角色，而不是整个 runtime。配置了角色即持续可用，不存在第二道确认闸门；这是有意的权衡（个人项目场景下不为绝对安全引入额外的安装步骤或运行时复杂度），并非疏漏。
-
-必须如实知道的边界：
-
-- **pipiclaw 不沙箱化外部智能体。** 唯一的强边界是你在 `command` 里写下的目标 CLI 自身的 sandbox flag（如 `codex exec --sandbox read-only`）。`workingDirectory` 决定进程从哪里开始，不构成隔离。
-- **`workspace/sub-agents/` 目录本身对模型的 `write`/`edit` 工具关闭**（主代理和子代理都一样）——防的是模型自己写一份外部角色文件、再调用它，从而绕过命令守卫执行任意宿主命令。这条防线拦不住 `bash` 直接改这个目录（与既有的记忆文件写入拒绝同一个已知缺口），角色目录建议纳入版本控制作为兜底：任何变更都可见、可回滚。
-- 每次外部派发都会写一条审计事件（runId、角色、harness、完整 argv、工作目录、`mutates`、model），不受"只记录被拦截的动作"这个开关影响。
-- 外部进程继承 pipiclaw 自身的环境变量，但默认剔除 pipiclaw 自己会用到的凭据变量——一份明确的变量名清单（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY` 等 LLM provider key，以及 `DINGTALK_*`），不是通配的后缀正则。目标仓库的 `CLAUDE.md`/prompt 能操纵外部 agent 的行为，不该顺带继承 pipiclaw 自己的模型 provider key 或钉钉凭据。**这是一层减少误继承的礼貌措施，不是安全边界**——真正的权限边界是角色的命令、CLI 自身的沙箱和宿主账号。需要 `gh`/`npm` 等工具的角色，它们所需的 `GITHUB_TOKEN`/`NPM_TOKEN` 等凭据不在这份清单里，会照常继承；如果确实被过滤掉了（清单之外的变量默认不受影响），用 `env:` 显式加回即可。本次派发实际丢弃的变量名会写进 `invocationWarnings`，`subagent_run op=show` 能看到。
-- 外部 agent 本身是完整 coding agent，能否 spawn 自己的子代理、递归到多深，pipiclaw 不保证也不限制。
-- 显式声明 `memory: index` 的外部角色会把 channel 记忆索引和当天 journal 片段写进发给外部进程的 stdin——这与继承环境变量属于同一类如实声明的暴露面，不是隐藏行为（默认值是 `none`，见上文"`contextMode` 与 `memory`"）。
-
-## 并发与重启
-
-- **Workspace 写锁**（纯排他，无读写区分）：见上文"`mutates`"一节。
-- **并发上限**：每个频道最多 6 个、单个 Pipiclaw 实例最多 20 个在途 run，防止失控派发；触发时错误会给出可执行的下一步（等待，或取消一个在跑的 run）。
-- **daemon 重启**：外部 run 是 `detached` 进程，重启后依然存活，runtime 会按持久化的 pid 做存活探针，进程已退出则解析产物目录里的 `events.jsonl` 补判终态、补发迟到的完成唤醒。内置 run 随 daemon 一起消失，重启后会被判定为结局未知（`lost`）并唤醒频道说明情况，不会留下一条永远"running"的孤儿记录。
-
-## 从 agentmux 迁移
-
-如果之前用 `agentmux` CLI + skill 驱动外部 Agent，迁移是把 `~/.config/agentmux/config.yaml` 里的模板逐个翻译成角色文件——一次性工作，模板数量通常是个位数：
-
-| agentmux | 角色文件字段 | 备注 |
-|---|---|---|
-| `templates.<name>` | 文件名 + `name` | - |
-| `description` | `description` | 建议补充量级（workload）与是否改动宿主（mutates）的措辞 |
-| `command` | `command` | 原样搬过来，runtime 会分词后直接 argv 调用，不再拼进 shell 字符串 |
-| `harness_type: claude-code-ndjson` | `harness: claude-code` | - |
-| `harness_type: codex-cli-execjson` | `harness: codex-cli` | - |
-| `model` | `model` | 原样 |
-| `effort` | `thinkingLevel` | **换了名字**：agentmux 的 `effort` 和 pipiclaw 内置委派已有的 `effort`（预算档位）撞名，外部角色统一用 `thinkingLevel` 表达推理强度 |
-| `system_prompt` | 正文 | - |
-| （新增） | `mutates` | agentmux 没有这个概念，按角色实际行为填：`planner`/`reviewer` 类通常是 `read`，`builder`/`worker` 类通常是 `write` |
-| `cwd` | 不迁移 | 工作目录改为每次委派通过 `workingDirectory` 参数传入 |
-| `defaults.shell` | 仅 `exec` 可迁移为 `shell: true` | claude-code / codex-cli 请改用包装脚本作为 `command`，否则会绕过 harness 的协议参数 |
-| `defaults.env` | `env:` | - |
-
-`harness_type: pi-rpc` 或基于 tmux 的 claude-code 配置不在迁移范围内——discovery 会产生 warning 并在 `/subagents list` 尾部列出，不会静默丢失。tmux/人工 attach 场景仍可以继续用独立的 `agentmux`，两者不冲突；pipiclaw 只是不再依赖它作为默认路径。
-
-## 推荐写法（Recommended Presets）
-
-[`examples/sub-agents/`](../examples/sub-agents/) 里的成品按下面的思路配置。内置条目的价值是**低延迟和上下文隔离**，外部条目的价值是**算力和跨会话续接**——按这条线分工，而不是按任务听起来重不重。
-
-### 按能力与成本配置（`agents/`，推荐）
-
-条目文件只声明「哪个 agent、哪个模型、哪个推理档、多少墙钟预算」，不声明岗位。每次委派做什么、边界在哪、怎么算完成，由主智能体写进 `task`。这样路由的问题从「这轮该找哪个岗位」变成「这轮需要什么能力、能付多少代价」，后者主智能体判断得了，因为它知道任务是什么。
-
-- 三档分工：**flash**（已经清楚怎么做的简单重复工作，最便宜，可大量派发）、**main**（主力，绝大多数实现、排查、文档，含 token 消耗大的长任务）、**high**（真正需要新判断或取舍的一轮，明显更贵）。
-- 同档位按实际能力差异选：代码密集偏向 claude，要读图片选多模态条目（codex 全系与 `glm-flash`），简单重复优先额度宽松的 GLM——它只有 5 小时滚动限额、无周/月上限。
-- `model` 原样透传（`opus` / `sonnet` / `gpt-6-astra` / `glm-5.3` …）；claude-code 与 codex-cli harness 自动把 `model` 和 `thinkingLevel` 翻译为各自的 `--model` / `--effort` 或 `-m` / `-c model_reasoning_effort=`，不要在 `command` 里重复写。
-- 换供应商不必换 harness：走 Anthropic 兼容端点的 GLM 仍用 `harness: claude-code`，只把 `command` 指向一个设置了 `CLAUDE_CONFIG_DIR` 的包装脚本。
-- **代价要接受**：这套条目全部使用放开权限的参数并声明 `mutates: write`，因此同一工作目录同时只容得下一个外部委派（并行必须各自 worktree），`purpose=verify` 的 attestation 一律是 `advisory`，且独立评审的独立性必须由 `task` 提供而不是条目提供。
-
-外部条目的正文可以完全为空——runtime 允许，此时不生成 `system-prompt.txt`，claude-code 不追加 `--append-system-prompt-file`，codex 的 stdin 就是 task 本身。`agents/` 的模板保留了一段 9 条、逐字相同的交付约定（不做未授权动作、不动任务外改动、结论不超过证据、不伪造检查结果、先结论后证据位置），因为这几条跨每个任务都成立，漏掉的代价又高。
-
-### 仍然值得做成角色的两类条目（`roles/`）
-
-- **需要真正的只读执行边界**：`planner` 的 `--permission-mode plan`、`reviewer` 的 `--sandbox read-only` 是目标 CLI 强制的限制，不只是提示词声明。只读条目不参与工作区写锁，可以与写条目并行；`mutates: read` 且工具集不含 `bash` 的内置条目还能拿到 `enforced` 级验收强度，这是放开权限的条目做不到的。
-- **有固定且反复出现的作业纪律**：内置 `git-committer`（`tools: read,bash`、`isolated` + `memory: none`、默认只创建本地 commit，只有用户明确要求才 push）约束的是一类操作的正确做法，不是一个岗位；内置 `explorer`（`tools: read,grep,bash`、`thinkingLevel: low`、输出契约要求「宁可少带并说明未覆盖范围」）则是把会挤占主会话的检索隔离出去。这类窄活也可以直接用 `subagent_inline`，按次给 systemPrompt。
-
-反过来，`builder` / `builder-hard` / `worker` 这类"岗位说明书"角色与 `agents/` 的档位重叠严重：正文里的任务框架是在不知道本轮任务时写死的，只会限制场景，不建议再装。
-
-## 常见错误（Common Mistakes）
-
-- 缺少 `name` 或 `description`。
-- 同一个目录里定义了重复的 `name`。
-- `tools` 写了不支持的工具名（仅内置）。
-- `contextMode` 或 `memory` 写了不支持的值。
-- 内置条目正文为空，只有 frontmatter（内置没有别的提示词来源，会被驳回；外部条目正文允许为空）。
-- `model` 只写了模糊名字，结果无法精确匹配（内置角色；外部角色的 `model` 不做校验）。
-- 只在正文描述使用时机，导致主代理无法从目录中的 `description` 正确选择条目——正文不进子代理目录，改正文修不了选错。
-- 把 `read,bash` 误认为 runtime 强制只读，未约束 bash 的写命令；含 `bash` 却没声明 `mutates` 时 discovery 会提示，别忽略它。
-- 在任务 Goal 未覆盖目标仓库或 ref 时让 Git 子代理自动 push。
+> `verify` 不再以任务台账为前提；在任务里使用时的方法（看板、检查与返工裁决）见 [events-and-tasks.md](./events-and-tasks.md#团队看板与工作项) 和 `task-lead.md` playbook。
 - 给外部角色写 `cwd`、`tools`、`maxTurns` 等只对内置有意义的字段，或给内置角色写 `harness`、`command`、`shell`、`env`——都会被直接驳回，不是被忽略。
 - 期待 `subagent`（角色优先）接受 `tools`/`model`/`mutates`/`returns` 之类的覆盖——这几个字段已经不在这个工具的 schema 里；需要覆盖就说明该用 `subagent_inline`，或者该改角色文件本身。
-- 把 `mutates: write` 的 verifier 当成结构性只读证据——它可以承担 `purpose=verify`，但会取写 lease 且 attestation 只有 `advisory` 强度；不得修改被验收实现或为了通过测试而修代码。
+- 把 `mutates: write` 的 verifier 当成结构性只读证据——它可以承担 `purpose=verify`，但它会取写 lease 且无法保证没动过产物；不得修改被检查的实现或为了通过测试而修代码，PASS 也不能代替你核对真实产物。
 - 以为 `mutates: read` 或工具白名单是安全边界——外部进程不受它们约束，真正的边界只有目标 CLI 自己的 sandbox flag。
 - 给外部角色写 `memory: index` 却没意识到这会把频道记忆内容发给第三方进程——这是一次真实的数据外发，不是无副作用的开关。
 - 改了外部角色的 `command`/`model`/`shell` 之后还指望 `follow_up` 能续接旧会话——指纹不匹配会被拒绝，需要改派新任务。

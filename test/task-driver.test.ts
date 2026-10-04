@@ -6,8 +6,8 @@ import { getChannelDir } from "../src/channel/channel-paths.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { createTaskDriverEvent, TaskDriver, taskStopReceipt } from "../src/runtime/task-driver.js";
 import type { PipiclawTaskDriverSettings } from "../src/settings.js";
-import { createCycle } from "../src/tasks/cycle.js";
-import type { TaskFrontmatterV4 } from "../src/tasks/frontmatter.js";
+import { createUsage } from "../src/tasks/budget.js";
+import type { TaskFrontmatter } from "../src/tasks/frontmatter.js";
 import { renderStandardTaskBody, renderTaskDocument } from "../src/tasks/ledger.js";
 import { appendTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
 import { parkTask, readStoredTask } from "../src/tasks/store.js";
@@ -21,11 +21,11 @@ function body(title = "Task"): string {
 	return renderStandardTaskBody({ title, goal: "Do the work.", dod: "- [ ] Result is ready" });
 }
 
-function taskDoc(fields: TaskFrontmatterV4): string {
+function taskDoc(fields: TaskFrontmatter): string {
 	return renderTaskDocument(fields, body());
 }
 
-describe("TaskDriver (spec 051, D9)", () => {
+describe("TaskDriver (spec 051, D9; spec 052)", () => {
 	let workspaceDir: string;
 
 	beforeEach(async () => {
@@ -62,12 +62,12 @@ describe("TaskDriver (spec 051, D9)", () => {
 
 	it("dispatches open work and never polls a pushed or future ticket", async () => {
 		await writeTask("dm_a", "open", taskDoc({ state: "open" }));
-		// A `run` ticket is redeemed by settlement, not by the scan: polling it would be the
+		// A `work` ticket is redeemed by settlement, not by the scan: polling it would be the
 		// unverified resumption path spec 051 removed.
 		await writeTask(
 			"dm_a",
-			"awaiting-run",
-			taskDoc({ state: "parked", ticket: { kind: "run", id: "run_x", by: FUTURE } }),
+			"awaiting-work",
+			taskDoc({ state: "parked", ticket: { kind: "work", refs: ["run_x"], by: FUTURE } }),
 		);
 		await writeTask("dm_a", "later", taskDoc({ state: "parked", ticket: { kind: "time", at: FUTURE, by: FUTURE } }));
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
@@ -107,33 +107,13 @@ describe("TaskDriver (spec 051, D9)", () => {
 		expect(path).toContain("timed.md");
 	});
 
-	it("opens the next cycle for a due schedule ticket without spending a model turn on it", async () => {
-		await writeTask(
-			"dm_a",
-			"daily",
-			taskDoc({
-				state: "parked",
-				schedule: "0 9 * * *",
-				ticket: { kind: "schedule", at: PAST, by: PAST },
-				cycle: { ...createCycle("c-2026-08-03"), steps: 7 },
-			}),
-		);
-		const dispatch = vi.fn((_event: DingTalkEvent) => true);
-		await driver(dispatch).runOnce(NOW);
-		const fields = (await readStoredTask(join(workspaceDir, "dm_a"), "daily"))?.fields;
-		expect(fields?.state).toBe("open");
-		// Fresh counters: the new occurrence must not inherit the last one's spent budget.
-		expect(fields?.cycle).toMatchObject({ id: "c-2026-08-04", steps: 0 });
-		expect(dispatch).toHaveBeenCalledOnce();
-	});
-
 	// D2-INV, the whole point of the ticket: a park that nothing redeems must not go silent.
 	it("reopens an expired ticket, then stops the task and notifies on the second expiry", async () => {
 		const channelDir = join(workspaceDir, "dm_a");
 		const parked = taskDoc({
 			state: "parked",
-			ticket: { kind: "run", id: "run_never", by: PAST },
-			cycle: createCycle("c-2026-08-04"),
+			ticket: { kind: "work", refs: ["run_never"], by: PAST },
+			usage: createUsage(NOW),
 		});
 		await writeTask("dm_a", "stuck", parked);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
@@ -144,8 +124,8 @@ describe("TaskDriver (spec 051, D9)", () => {
 		expect((await readStoredTask(channelDir, "stuck"))?.fields.state).toBe("open");
 		expect(notify).not.toHaveBeenCalled();
 
-		// Re-park on the same dead ticket, preserving the cycle's expiry count.
-		await parkTask(channelDir, "stuck", { kind: "run", id: "run_never", by: PAST });
+		// Re-park on the same dead ticket, preserving the consecutive-expiry count.
+		await parkTask(channelDir, "stuck", { kind: "work", refs: ["run_never"], by: PAST });
 		await instance.runOnce(NOW);
 		const fields = (await readStoredTask(channelDir, "stuck"))?.fields;
 		expect(fields?.paused?.by).toBe("runtime");
@@ -157,7 +137,7 @@ describe("TaskDriver (spec 051, D9)", () => {
 		await writeTask(
 			"dm_a",
 			"spent",
-			taskDoc({ state: "open", budget: { steps: 2 }, cycle: { ...createCycle("c-2026-08-04"), steps: 2 } }),
+			taskDoc({ state: "open", budget: { steps: 2 }, usage: { ...createUsage(NOW), steps: 2 } }),
 		);
 		const dispatch = vi.fn((_event: DingTalkEvent) => true);
 		const notify = vi.fn((_event: DingTalkEvent) => true);
@@ -169,10 +149,9 @@ describe("TaskDriver (spec 051, D9)", () => {
 
 	it("stops a loop whose last two steps called no tool at all", async () => {
 		const channelDir = join(workspaceDir, "dm_a");
-		await writeTask("dm_a", "idle", taskDoc({ state: "open", cycle: { ...createCycle("c-1"), steps: 2 } }));
+		await writeTask("dm_a", "idle", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
 		for (const seq of [1, 2]) {
 			await appendTaskLog(channelDir, "idle", {
-				cycle: "c-1",
 				kind: "step",
 				seq,
 				outcome: "continue",
@@ -189,10 +168,9 @@ describe("TaskDriver (spec 051, D9)", () => {
 
 	it("keeps driving a loop whose steps actually used tools", async () => {
 		const channelDir = join(workspaceDir, "dm_a");
-		await writeTask("dm_a", "busy", taskDoc({ state: "open", cycle: { ...createCycle("c-1"), steps: 2 } }));
+		await writeTask("dm_a", "busy", taskDoc({ state: "open", usage: { ...createUsage(NOW), steps: 2 } }));
 		for (const seq of [1, 2]) {
 			await appendTaskLog(channelDir, "busy", {
-				cycle: "c-1",
 				kind: "step",
 				seq,
 				outcome: "continue",
@@ -218,7 +196,7 @@ describe("TaskDriver (spec 051, D9)", () => {
 		const entry = {
 			id: "T",
 			title: "Title",
-			fields: { state: "open" as const, cycle: createCycle("c-1") },
+			fields: { state: "open" as const, usage: createUsage(NOW) },
 			readable: true,
 			legacy: false,
 			runnable: true,
@@ -228,9 +206,9 @@ describe("TaskDriver (spec 051, D9)", () => {
 		expect(step.text).toContain("[TASK_DRIVER:T]");
 		expect(step.text).toContain("task_step_end");
 
-		// A legacy or unreadable file must never be driven as ordinary work: a repair dispatch is
+		// An unreadable file must never be driven as ordinary work: a repair dispatch is
 		// explicitly forbidden from executing the goal.
-		const repair = createTaskDriverEvent("dm_a", { ...entry, legacy: true }, NOW.getTime());
+		const repair = createTaskDriverEvent("dm_a", { ...entry, readable: false }, NOW.getTime());
 		expect(repair.text).toContain("Do not execute the task goal");
 
 		const receipt = taskStopReceipt("dm_a", entry, "预算耗尽", NOW.getTime());

@@ -97,11 +97,9 @@ async function formatRunShow(record: RunRecord): Promise<string> {
 	];
 	if (record.failureReason) lines.push(`failureReason: ${record.failureReason}`);
 	if (record.verificationVerdict) {
-		lines.push(
-			`verification: ${record.verificationVerdict.toUpperCase()}${record.verificationStrength === "advisory" ? " (advisory)" : ""}`,
-		);
+		lines.push(`verification: ${record.verificationVerdict.toUpperCase()}`);
 	}
-	if (record.taskId) lines.push(`taskId: ${record.taskId}`);
+	if (record.taskId) lines.push(`taskId: ${record.taskId}${record.item ? ` item: ${record.item}` : ""}`);
 	if (record.leaseKey) lines.push("holds write lease: yes");
 	if (record.model) lines.push(`model: ${record.model}`);
 	const cost = formatCost(record);
@@ -307,6 +305,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 				runId: newRunId,
 				purpose: record.purpose,
 				taskId: record.taskId,
+				item: record.item,
 				workingDirectory: record.workingDirectory,
 				artifactDir,
 			};
@@ -350,6 +349,7 @@ export function createSubAgentRunTool(options: SubAgentManageToolOptions): Agent
 					artifactDir,
 					purpose: record.purpose,
 					taskId: record.taskId,
+					item: record.item,
 					leaseKey,
 					resumeSessionId: record.sessionId,
 					mutates: role.mutates,

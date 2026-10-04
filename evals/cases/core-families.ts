@@ -130,7 +130,7 @@ export const coreFamilyCases: EvalCase[] = [
 				"setTimeout(async()=>{await import('node:fs/promises').then(fs=>fs.writeFile(new URL('./job-report.txt',import.meta.url),'JOB-REPORT-734\\n'));},15000);\nsetTimeout(()=>{},15200);\n",
 			);
 			await writeTask(ctx, "job-report", {
-				cycle: true,
+				started: true,
 				body: `# Task\n\n## Goal\nRun \`node ${join(ctx.channelDir, "report-job.mjs")}\` as a background job. Wait on that exact job. After it settles, read job-report.txt and deliver its content.\n\n## DoD\n- [ ] job-report.txt content delivered\n`,
 			});
 		},
@@ -180,7 +180,7 @@ export const coreFamilyCases: EvalCase[] = [
 		setup: async (ctx) => {
 			await writeFile(join(ctx.channelDir, "stage-a.txt"), "A-RESULT-19\nold target: blue\n");
 			await writeTask(ctx, "migration-horizon", {
-				cycle: true,
+				started: true,
 				body: `# Task\n\n## Goal\nComplete a three-stage migration report. Only stage-a.txt exists initially. Read each available stage, never invent future evidence, and ask the user when the next stage is unavailable. A later stage may supersede an earlier target. Write ${join(ctx.channelDir, "migration-report.md")} only after A, B, and C are all verified.\n\n## DoD\n- [ ] report contains actual A/B/C evidence and the latest target\n`,
 			});
 		},

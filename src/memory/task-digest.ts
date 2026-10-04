@@ -48,16 +48,16 @@ function renderLine(entry: TaskLedgerEntry, now: number): string {
 		const by = relativeTime(parseLocalTime(ticket.by), now);
 		parts.push(`${describeTicket(ticket)}${due ? ` · due ${due}` : ""}${by ? ` · 兜底 ${by}` : ""}`);
 	}
-	const cycle = entry.fields.cycle;
-	if (cycle) {
-		const cost = cycle.usd > 0 ? ` · $${cycle.usd.toFixed(2)}${cycle.usdEstimated ? "≈" : ""}` : "";
-		parts.push(`${cycle.id} · ${cycle.steps} 步 · ${cycle.rounds} 轮${cost}`);
+	// The agenda shows Work Items progress and the current item, not the full list — the complete
+	// section is read from the task file by the loop itself, staying well inside the 600-unit
+	// budget this block competes for (spec 025/026).
+	if (entry.items) {
+		parts.push(`items ${entry.items.done}/${entry.items.total} · @${entry.items.current?.id ?? "-"}`);
 	}
-	// spec 037, D4: the agenda shows Plan progress and the current step, not the full Plan — the
-	// complete section is read from the task file by the loop itself, staying well inside the
-	// 600-unit budget this block competes for (spec 025/026).
-	if (entry.plan) {
-		parts.push(`plan ${entry.plan.done}/${entry.plan.total} · @${entry.plan.current?.id ?? "-"}`);
+	const usage = entry.fields.usage;
+	if (usage) {
+		const cost = usage.usd > 0 ? ` · $${usage.usd.toFixed(2)}${usage.usdEstimated ? "≈" : ""}` : "";
+		parts.push(`${usage.steps} 步${cost}`);
 	}
 	return `- ${parts.join(" · ")}`;
 }

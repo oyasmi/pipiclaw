@@ -5,18 +5,50 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { resolveEventPath } from "../events/event-commands.js";
 import { EventValidationError, MAX_EVENT_FILES, validateScheduledEvent } from "../events/event-validation.js";
-import { parseScheduledEventContent, type ScheduledEvent } from "../events/events.js";
+import { describeEventPayload, parseScheduledEventContent, type ScheduledEvent } from "../events/events.js";
 import type { SecurityConfig } from "../security/types.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { RecoverableToolError } from "../shared/recoverable-error.js";
 import { clipText, errorMessage } from "../shared/text-utils.js";
+import type { TaskCreateInput } from "../tasks/contract-input.js";
 
 const eventDefinitionSchema = Type.Object(
 	{
 		type: Type.Union([Type.Literal("one-shot"), Type.Literal("periodic"), Type.Literal("immediate")], {
 			description: '"one-shot" (needs `at`), "periodic" (needs cron `schedule`). "immediate" is always rejected.',
 		}),
-		text: Type.String({ description: "Message delivered to the channel when the event fires." }),
+		text: Type.Optional(
+			Type.String({
+				description:
+					"Chat message delivered to the channel when the event fires. Give either `text` or `task`, never both.",
+			}),
+		),
+		task: Type.Optional(
+			Type.Object(
+				{
+					title: Type.String({ description: "Task title." }),
+					goal: Type.String({
+						description: "Goal of each spawned task: result, scope, allowed external actions, key constraints.",
+					}),
+					dod: Type.String({ description: 'Checklist items, e.g. "- [ ] <criterion>"; plain prose is rejected.' }),
+					items: Type.Optional(
+						Type.Array(Type.Object({ text: Type.String({ description: "Work item text." }) }), {
+							description: "Initial Work Items, numbered W1…Wn in order.",
+						}),
+					),
+					budget: Type.Optional(
+						Type.Object({
+							steps: Type.Optional(Type.Integer({ minimum: 1 })),
+							usd: Type.Optional(Type.Number({ description: "Max cost for one spawned task." })),
+						}),
+					),
+				},
+				{
+					description:
+						"Template for a task instance. Each time the event fires, a fresh task is created from it and the runtime drives it in its own session — use it for recurring or scheduled work that needs state, delegation or checking. If the previous instance is still running, the occurrence is skipped and the user is told.",
+				},
+			),
+		),
 		at: Type.Optional(
 			Type.String({ description: "one-shot local time, e.g. 2026-07-27T07:30:00+08:00 (2 min to ~24.8 days out)." }),
 		),
@@ -53,8 +85,7 @@ const eventManageSchema = Type.Object({
 	),
 	name: Type.Optional(
 		Type.String({
-			description:
-				"Event name (filename without .json); required for show/create/update/delete, ignored for list. Task-owned events: `task.<channelId>.<taskId>.<use>`.",
+			description: "Event name (filename without .json); required for show/create/update/delete, ignored for list.",
 		}),
 	),
 	definition: Type.Optional(eventDefinitionSchema),
@@ -63,7 +94,8 @@ const eventManageSchema = Type.Object({
 export type EventManageAction = "list" | "show" | "create" | "update" | "delete";
 export type EventDefinitionInput = {
 	type: "one-shot" | "periodic" | "immediate";
-	text: string;
+	text?: string;
+	task?: TaskCreateInput;
 	at?: string;
 	schedule?: string;
 	preAction?: { type: "bash"; command: string; timeoutMs?: number };
@@ -125,7 +157,7 @@ async function listOwnedEvents(options: EventManageToolOptions): Promise<EventMa
 		if (event.channelId !== options.channelId) continue;
 		const when = event.type === "one-shot" ? `at ${event.at}` : event.schedule;
 		const pre = event.preAction ? " (preAction)" : "";
-		const text = clipText(event.text, 80, { collapseWhitespace: true });
+		const text = clipText(describeEventPayload(event), 80, { collapseWhitespace: true });
 		entries.push({ name, parsed: true, line: `- ${name} [${event.type}] ${when}${pre} — ${text}` });
 	}
 	return entries;
@@ -165,7 +197,10 @@ function validateDefinition(
 	const onDisk: Record<string, unknown> = {
 		type: definition.type,
 		channelId: options.channelId,
-		text: definition.text,
+		// Both are passed through when both are given: the parser rejects "text and task" with a
+		// message that says why, which a silent preference for one of them would hide.
+		...(definition.text !== undefined ? { text: definition.text } : {}),
+		...(definition.task ? { task: definition.task } : {}),
 		...(definition.type === "one-shot" ? { at: definition.at } : { schedule: definition.schedule }),
 		...(definition.preAction
 			? {
@@ -279,8 +314,14 @@ export async function manageEvent(
 		};
 	}
 
-	if (!request.definition || !request.definition.type || !request.definition.text?.trim()) {
-		throw new RecoverableToolError(`${request.action} requires a definition with at least "type" and "text".`);
+	if (
+		!request.definition ||
+		!request.definition.type ||
+		(!request.definition.text?.trim() && !request.definition.task)
+	) {
+		throw new RecoverableToolError(
+			`${request.action} requires a definition with "type" and either "text" or "task".`,
+		);
 	}
 
 	if (request.action === "create") {

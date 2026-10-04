@@ -19,6 +19,6 @@ order: 30
 
 ## task 中的交付证据
 
-**仅在 task 步骤中**，发送前用已有 `<task_log>` 或 `task_log` 查同一产物的成功回执；发送成功后将回执、产物标识和时间写入 `task_step_end.note`，避免重复投递。失败可自行修复用 continue，等待真实来源用 park，需要用户决定用 blocked。外部动作涉及多步恢复时再读 `task-loop.md` 的“外部动作”。
+**仅在 task 步骤中**，发送前用已有 `<task_log>` 或 `task_log` 查同一产物的成功回执；发送成功后将回执、产物标识和时间写入 `task_step_end.note`，避免重复投递。失败可自行修复用 continue，等待真实来源用 park，需要用户决定用 park 到 `ask` 票。外部动作涉及多步恢复时再读 `task-lead.md` 的“外部动作”。
 
 接口没有 message/request id，也不能二次查询投递状态。记录工具实际提供的证据；任务要求更强送达确认时，把这一缺口告知用户，不虚构标识。

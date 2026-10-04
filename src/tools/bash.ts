@@ -142,7 +142,7 @@ export interface BashToolOptions {
 	 */
 	jobManager?: ChannelJobManager;
 	/**
-	 * Set inside a task cycle's session. A background job started here belongs to this task, so the
+	 * Set inside a task's session. A background job started here belongs to this task, so the
 	 * runtime binds the id rather than asking the model to repeat it (and rejects a conflicting one
 	 * before the job launches — the old "relaunch with taskId=…" told the model to re-run a command
 	 * that may have side effects). Chat sessions leave this unset and keep the optional `taskId`.

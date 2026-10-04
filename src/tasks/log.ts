@@ -19,14 +19,15 @@ import { normalizeTaskId } from "./ledger.js";
  * `readTaskLog`/`archiveTask` must enumerate all three; reading or archiving only the current
  * file silently drops whatever had already rotated out of it (R9).
  *
- * The log is append-only and is never rewritten; the contract's `## 上次结果` is a projection of
- * its latest `close`, not a replacement for it.
+ * Spec 052 adds `dispatch` / `settle` records: the run and job managers write them when work is
+ * bound to the task and when it settles, so the task keeps the outcome of every delegation long
+ * after the run record itself has been garbage-collected (INV-5). The step brief renders them as
+ * the `<task_board>`. The log is append-only and is never rewritten.
  */
-export type TaskStepOutcome = "continue" | "park" | "done" | "blocked";
+export type TaskStepOutcome = "continue" | "park" | "done";
 
 export interface TaskStepRecord {
 	ts: string;
-	cycle: string;
 	kind: "step";
 	seq: number;
 	outcome: TaskStepOutcome;
@@ -37,22 +38,41 @@ export interface TaskStepRecord {
 	units?: number;
 }
 
-export interface TaskRoundRecord {
+/** A delegation or background job was bound to this task (spec 052, D4). `ref` is a run or job id. */
+export interface TaskDispatchRecord {
 	ts: string;
-	cycle: string;
-	kind: "round";
-	n: number;
-	workRunId?: string;
-	verifyRunId: string;
-	verdict: "pass" | "fail";
-	strength: "enforced" | "advisory";
-	/** Why an attested PASS was downgraded to a fail; absent when the attestation held. */
-	reason?: string;
+	kind: "dispatch";
+	ref: string;
+	/** The Work Items id this dispatch was for, when the leader named one. */
+	item?: string;
+	/** The role (delegation) or the command (job), for the board. */
+	agent?: string;
+	purpose?: "work" | "verify";
+	label?: string;
+}
+
+/**
+ * The bound delegation or job settled. Written by the run/job manager at settlement, so the
+ * task keeps the outcome after the run record itself has been garbage-collected (INV-5).
+ */
+export interface TaskSettleRecord {
+	ts: string;
+	kind: "settle";
+	ref: string;
+	item?: string;
+	status: string;
+	/** `purpose=verify` runs only: the checker's declared verdict. */
+	verdict?: "pass" | "fail";
+	usd?: number;
+	usdEstimated?: boolean;
+	/** Where the full output lives (a run's `output.md`, a job's output file). */
+	output?: string;
+	exitCode?: number;
+	durationMs?: number;
 }
 
 export interface TaskExpiredRecord {
 	ts: string;
-	cycle: string;
 	kind: "expired";
 	ticket: string;
 	action: "reopened" | "paused";
@@ -60,18 +80,41 @@ export interface TaskExpiredRecord {
 
 export interface TaskCloseRecord {
 	ts: string;
-	cycle: string;
 	kind: "close";
 	outcome: "done" | "cancelled";
-	summary: string;
-	evidence?: string;
-	residualRisk?: string;
+	note: string;
 	steps: number;
-	rounds: number;
 	usd: number;
 }
 
-export type TaskLogRecord = TaskStepRecord | TaskRoundRecord | TaskExpiredRecord | TaskCloseRecord;
+/** Written only by the v4 → v5 conversion, to explain a decision it made about this task. */
+export interface TaskNoteRecord {
+	ts: string;
+	kind: "note";
+	note: string;
+}
+
+/**
+ * v4 verification round. No longer written (spec 052, D6); still read so a converted task's
+ * history stays visible.
+ */
+export interface TaskLegacyRoundRecord {
+	ts: string;
+	kind: "round";
+	n: number;
+	verifyRunId: string;
+	verdict: "pass" | "fail";
+	reason?: string;
+}
+
+export type TaskLogRecord =
+	| TaskStepRecord
+	| TaskDispatchRecord
+	| TaskSettleRecord
+	| TaskExpiredRecord
+	| TaskCloseRecord
+	| TaskNoteRecord
+	| TaskLegacyRoundRecord;
 
 /** Same rotation shape as the channel archive: the log is working history, not an audit trail. */
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
@@ -109,31 +152,53 @@ export async function resetTaskLogAppenders(): Promise<void> {
 }
 
 export type TaskLogInput =
-	| (Omit<TaskStepRecord, "ts"> & { ts?: string })
-	| (Omit<TaskRoundRecord, "ts"> & { ts?: string })
-	| (Omit<TaskExpiredRecord, "ts"> & { ts?: string })
-	| (Omit<TaskCloseRecord, "ts"> & { ts?: string });
+	| Omit<TaskStepRecord, "ts">
+	| Omit<TaskDispatchRecord, "ts">
+	| Omit<TaskSettleRecord, "ts">
+	| Omit<TaskExpiredRecord, "ts">
+	| Omit<TaskCloseRecord, "ts">
+	| Omit<TaskNoteRecord, "ts">;
 
 /**
  * Append one record. `appendStrict` rather than `append`: the loop log is the only durable trace
  * of what a step did, so a dropped record would make the next brief lie about the task's history.
  */
-export async function appendTaskLog(channelDir: string, id: string, record: TaskLogInput): Promise<void> {
+export async function appendTaskLog(
+	channelDir: string,
+	id: string,
+	record: TaskLogInput & { ts?: string },
+): Promise<void> {
 	const withTs = { ts: record.ts ?? formatLocalTime(), ...record };
 	if (withTs.kind === "step") withTs.note = clipText(withTs.note, NOTE_MAX_CHARS);
 	await appenderFor(taskLogPath(channelDir, id)).appendStrict(withTs);
 }
 
+const RECORD_KINDS: readonly TaskLogRecord["kind"][] = [
+	"step",
+	"dispatch",
+	"settle",
+	"expired",
+	"close",
+	"note",
+	"round",
+];
+
+/**
+ * Accepts v4 records too: they carried a `cycle` field this version ignores, and a v4 `close`
+ * spread its text across `summary` / `evidence` / `residualRisk`, which are folded into `note`.
+ */
 function toRecord(value: unknown): TaskLogRecord | undefined {
-	if (!isPlainObject(value) || typeof value.ts !== "string" || typeof value.cycle !== "string") return undefined;
+	if (!isPlainObject(value) || typeof value.ts !== "string") return undefined;
 	const kind = value.kind;
-	if (kind !== "step" && kind !== "round" && kind !== "expired" && kind !== "close") return undefined;
+	if (typeof kind !== "string" || !(RECORD_KINDS as readonly string[]).includes(kind)) return undefined;
+	if (kind === "close" && typeof value.note !== "string") {
+		const parts = [value.summary, value.evidence].filter((part): part is string => typeof part === "string");
+		return { ...value, note: parts.join(" · ") } as unknown as TaskLogRecord;
+	}
 	return value as unknown as TaskLogRecord;
 }
 
 export interface ReadTaskLogOptions {
-	/** Only records from this cycle. */
-	cycle?: string;
 	/** Keep at most this many, counted from the end (the most recent). */
 	limit?: number;
 	kinds?: readonly TaskLogRecord["kind"][];
@@ -156,7 +221,6 @@ function parseLogLines(content: string, options: ReadTaskLogOptions, into: TaskL
 		}
 		const record = toRecord(parsed);
 		if (!record) continue;
-		if (options.cycle && record.cycle !== options.cycle) continue;
 		if (options.kinds && !options.kinds.includes(record.kind)) continue;
 		into.push(record);
 	}
@@ -168,7 +232,7 @@ function parseLogLines(content: string, options: ReadTaskLogOptions, into: TaskL
  *
  * Reads every existing rotated shard (R9), not just the current file — `MAX_LOG_BYTES` rotation
  * moves older records into `.1`/`.2` behind the caller's back, and a read that only looked at the
- * current file made rotated-out history invisible to `task_log`, briefs, and round accounting
+ * current file made rotated-out history invisible to `task_log`, briefs, and and the board
  * alike even though it was still on disk.
  */
 export async function readTaskLog(
@@ -201,11 +265,17 @@ export function renderTaskLogLine(record: TaskLogRecord): string {
 	switch (record.kind) {
 		case "step":
 			return `- [${record.ts}] step ${record.seq} → ${record.outcome}: ${record.note}`;
-		case "round":
-			return `- [${record.ts}] round ${record.n} ${record.verdict.toUpperCase()} (${record.strength}) verify=${record.verifyRunId}${record.workRunId ? ` work=${record.workRunId}` : ""}${record.reason ? ` — ${record.reason}` : ""}`;
+		case "dispatch":
+			return `- [${record.ts}] 派发 ${record.ref}${record.item ? ` → ${record.item}` : ""}${record.agent ? ` (${record.agent}${record.purpose === "verify" ? ", verify" : ""})` : ""}`;
+		case "settle":
+			return `- [${record.ts}] 结算 ${record.ref}: ${record.status}${record.verdict ? ` VERDICT ${record.verdict.toUpperCase()}` : ""}${record.exitCode !== undefined ? ` exit ${record.exitCode}` : ""}${record.output ? ` · ${record.output}` : ""}`;
 		case "expired":
 			return `- [${record.ts}] 等待票过期（${record.ticket}）→ ${record.action}`;
 		case "close":
-			return `- [${record.ts}] cycle ${record.cycle} ${record.outcome}: ${record.summary}`;
+			return `- [${record.ts}] ${record.outcome === "done" ? "完成" : "取消"}：${record.note}`;
+		case "note":
+			return `- [${record.ts}] ${record.note}`;
+		case "round":
+			return `- [${record.ts}] round ${record.n} ${record.verdict.toUpperCase()} verify=${record.verifyRunId}${record.reason ? ` — ${record.reason}` : ""}`;
 	}
 }

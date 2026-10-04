@@ -14,7 +14,6 @@ import {
 import { splitShellWords } from "../../shared/shell-words.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { createEmptyUsageTotals } from "../../shared/types.js";
-import { workspaceSubjectSnapshot } from "../../tasks/artifact-subject.js";
 import type { SubAgentThinkingLevel } from "../discovery.js";
 import type { RunMutates, SettleInput, SubAgentRunManager } from "../runs.js";
 import { getExternalHarness } from "./registry.js";
@@ -118,7 +117,7 @@ export interface LaunchExternalRunInput {
 	runManager: SubAgentRunManager;
 	runId: string;
 	channelId: string;
-	/** Needed only for `purpose=verify`: where the attestation gets written. */
+	/** Where a task-bound run logs its dispatch and settlement (spec 052, D4). */
 	channelDir?: string;
 	label: string;
 	agent: string;
@@ -138,6 +137,8 @@ export interface LaunchExternalRunInput {
 	artifactDir: string;
 	purpose: "work" | "verify";
 	taskId?: string;
+	/** The Work Items id this run was dispatched for (spec 052, D4). */
+	item?: string;
 	leaseKey?: string;
 	resumeSessionId?: string;
 	/** The role's own `mutates` declaration, carried through to the dispatch audit event (D8.1). */
@@ -217,16 +218,6 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 	await writeFile(promptFile, `${input.task.trim()}\n`, "utf-8");
 	if (systemPromptFile) await writeFile(systemPromptFile, `${trimmedSystemPrompt}\n`, "utf-8");
 
-	// D9: an external verifier's advisory attestation needs a before/after subject snapshot the
-	// same way the internal path does — taken here, before the process starts, since this is the
-	// earliest point at which the run is committed to running against this workingDirectory. The
-	// fixed base and initial untracked manifest survive a later normal Git commit.
-	const verifySubjectSnapshot =
-		input.purpose === "verify" ? await workspaceSubjectSnapshot(input.workingDirectory) : undefined;
-	const verifySubjectBefore = verifySubjectSnapshot?.hash;
-	const verifyBaseCommit = verifySubjectSnapshot?.baseCommit;
-	const verifyBaselineUntrackedPaths = verifySubjectSnapshot?.baselineUntrackedPaths;
-
 	const argv = input.shell ? [] : splitShellWords(input.command);
 	const invocation = input.shell
 		? { executable: "/bin/sh", args: ["-lc", input.command], resumable: false }
@@ -259,6 +250,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		model: input.externalModelRef,
 		purpose: input.purpose,
 		taskId: input.taskId,
+		item: input.item,
 		workingDirectory: input.workingDirectory,
 		artifactDir: input.artifactDir,
 		channelDir: input.channelDir,
@@ -385,10 +377,7 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 			sessionId: invocation.presetSessionId,
 			// Spec 042 D1: persisted so a restart reconciliation has the same inputs the live watcher
 			// below would — without these, a run that finishes after the daemon disappears would settle
-			// with an inaccurate timeout message, no verify attestation, and an unestimatable duration.
-			verifySubjectBefore,
-			verifyBaseCommit,
-			verifyBaselineUntrackedPaths,
+			// with an inaccurate timeout message and an unestimatable duration.
 			maxWallTimeSec: input.maxWallTimeSec,
 			processStartedAt,
 			channelDir: input.channelDir,
@@ -485,21 +474,14 @@ export async function launchExternalRun(input: LaunchExternalRunInput): Promise<
 		// by `terminationReason` (P1-1).
 		await finalizeExternalRun(
 			{
-				runId: input.runId,
-				channelId: input.channelId,
-				channelDir: input.channelDir,
 				harnessId: harness.id,
 				purpose: input.purpose,
-				taskId: input.taskId,
 				workingDirectory: input.workingDirectory,
 				artifactDir: input.artifactDir,
 				exitCode,
 				durationMs,
 				terminationReason,
 				maxWallTimeSec: input.maxWallTimeSec,
-				verifySubjectBefore,
-				verifyBaseCommit,
-				verifyBaselineUntrackedPaths,
 				mutates: input.mutates,
 			},
 			(settleInput, options) => runManager.settle(input.runId, settleInput, options),

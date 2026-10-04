@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { applyMemoryOps, type MemorySource, type MemoryType } from "../../src/memory/store.js";
-import { createCycle } from "../../src/tasks/cycle.js";
-import type { TaskFrontmatterV4, TaskState } from "../../src/tasks/frontmatter.js";
+import { createUsage } from "../../src/tasks/budget.js";
+import type { TaskFrontmatter, TaskState } from "../../src/tasks/frontmatter.js";
 import { renderTaskDocument } from "../../src/tasks/ledger.js";
 import type { Ticket } from "../../src/tasks/ticket.js";
 import type { TrialSetup } from "../harness/schema.js";
@@ -25,20 +25,16 @@ export async function writeTask(
 		body: string;
 		state?: TaskState;
 		ticket?: Ticket;
-		schedule?: string;
-		verify?: "required";
-		budget?: TaskFrontmatterV4["budget"];
-		/** Give the task an open cycle, as the runtime would have when it started work. */
-		cycle?: boolean;
+		budget?: TaskFrontmatter["budget"];
+		/** Start the task's usage clock, as the runtime would have when it created the task. */
+		started?: boolean;
 	} = { body: "# Goal\nEvaluate behavior.\n\n## DoD\n- [ ] Evidence recorded\n" },
 ): Promise<void> {
-	const fields: TaskFrontmatterV4 = {
+	const fields: TaskFrontmatter = {
 		state: options.ticket ? "parked" : (options.state ?? "open"),
 		ticket: options.ticket,
-		schedule: options.schedule,
-		verify: options.verify,
 		budget: options.budget,
-		cycle: options.cycle ? createCycle("c-eval") : undefined,
+		usage: options.started ? createUsage() : undefined,
 	};
 	const tasksDir = join(ctx.channelDir, "tasks");
 	await mkdir(tasksDir, { recursive: true });

@@ -27,11 +27,11 @@
 | `skill` | 只读列出/加载 `workspace/skills/` 下的可复用流程 | 恒开 | — | 否 |
 | `event_manage` | 列出/查看/创建/更新/删除定时事件与 preAction 传感器 | 恒开 | — | 否 |
 | `task_list` | 列出台账里的活跃任务 | 开 | `tools.tasks.enabled` | 否 |
-| `task_create` | 创建长程任务 | 开 | `tools.tasks.enabled` | 否 |
-| `task_update` | 更新 Plan、周期、预算和验收要求；步骤进度由 `task_step_end` 记录 | 开 | `tools.tasks.enabled` | 否 |
-| `task_close` | 完成/跳过/取消任务 | 开 | `tools.tasks.enabled` | 否 |
-| `task_log` | 读任务的循环日志（步骤、验收轮次、票据过期、周期收尾） | 开 | `tools.tasks.enabled` | 否 |
-| `task_step_end` | 结束任务循环的一步：continue / park / done / blocked | 开 | `tools.tasks.enabled`，且只在任务会话里注册 | 否 |
+| `task_create` | 创建你负责的一次性项目（目标、DoD、工作项、预算） | 开 | `tools.tasks.enabled` | 否 |
+| `task_update` | 更新工作项与预算；步骤进度由 `task_step_end` 记录 | 开 | `tools.tasks.enabled` | 否 |
+| `task_close` | 完成（DoD 全勾选且没有在途委派/作业）或取消任务 | 开 | `tools.tasks.enabled` | 否 |
+| `task_log` | 读任务的循环日志（步骤、派发与结算、票据过期、收尾） | 开 | `tools.tasks.enabled` | 否 |
+| `task_step_end` | 结束任务循环的一步：continue / park（time / work / ask 票）/ done；`report` 是发给用户的唯一文本 | 开 | `tools.tasks.enabled`，且只在任务会话里注册 | 否 |
 | `subagent` | 把工作委派给已配置的角色 | 开 | — | 否（不可嵌套） |
 | `subagent_inline` | 没有合适角色时定义一次性内联执行者 | 开 | `tools.subagentInline.enabled` | 否（不可嵌套） |
 | `subagent_list` / `subagent_run` | 查看委派 run；对单个 run show/cancel/follow_up | 开 | — | 否 |

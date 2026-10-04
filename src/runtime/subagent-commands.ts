@@ -212,9 +212,7 @@ async function showRun(manager: SubAgentRunManager, ref: string): Promise<string
 	];
 	if (record.failureReason) lines.push(`- 失败原因：${record.failureReason}`);
 	if (record.verificationVerdict) {
-		lines.push(
-			`- 验收结论：${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}${record.verificationStrength === "advisory" ? "（advisory）" : ""}`,
-		);
+		lines.push(`- 检查结论：${record.verificationVerdict === "pass" ? "PASS" : "FAIL"}`);
 	}
 	lines.push(`- 开始：${new Date(record.startedAt).toLocaleString()}`);
 	if (record.finishedAt) lines.push(`- 结束：${new Date(record.finishedAt).toLocaleString()}`);

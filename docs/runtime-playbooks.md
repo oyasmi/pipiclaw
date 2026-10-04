@@ -9,7 +9,7 @@ Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开�
 | System prompt | 每回合不能忘的安全边界、资源所有权、最小恢复纪律 | Pipiclaw | 每回合常驻 |
 | Runtime playbooks | 当前版本的 memory/event/task/subagent 机制、跨工具流程、故障恢复 | Pipiclaw 包 | metadata 常驻，正文按需 read |
 | Workspace `AGENTS.md` / `skills/` | 用户偏好、团队策略、环境专属 SOP、第三方工具用法 | 用户与 agent | 指令注入或按 skill 触发 |
-| Task 契约与日志 | Goal、DoD、Manual、Plan；cycle、等待票和循环日志 | agent 写契约；runtime 管状态与日志 | 每步注入契约、状态与最近日志 |
+| Task 契约与日志 | Goal、DoD、Work Items；等待票、委派看板和循环日志 | agent 写契约；runtime 管状态与日志 | 每步注入契约、看板、状态与最近日志 |
 
 边界原则：
 
@@ -26,8 +26,8 @@ Pipiclaw 把“产品机制知识”和“用户自己的工作方式”分开�
 
 ```yaml
 ---
-name: task-loop
-description: 判断是否建长程任务（task）、编写契约，或在 TASK_STEP 中推进、等待、验收、完成和恢复时。
+name: task-lead
+description: 当负责人（leader）：立项（task）、拆工作项、派发委派、等待、检查结果、返工与汇报，或处理事件生成的任务实例。
 requires-tools: task_create, task_step_end
 order: 70
 ---
@@ -57,14 +57,14 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 | `runtime-orientation.md` | 10 | 恒在 | 识别聊天/task/委派环境、上下文时效、文件位置和可用入口 |
 | `memory-and-learning.md` | 20 | `memory_save` / `memory_search` / `memory_forget` / `skill` | 记住/纠正/忘记、查找 memory/journal、应用要求与沉淀 skill |
 | `outbound-media.md` | 30 | `send_media` | 把报表、截图、导出文件作为附件交付给用户，以及 receipt 的证据边界 |
-| `event-scheduling.md` | 40 | `event_manage` | 提醒、one-shot、periodic、preAction 传感器、跨回合回访 |
+| `event-scheduling.md` | 40 | `event_manage` | 提醒、one-shot、periodic、任务模板事件、preAction 传感器、跨回合回访 |
 | `background-jobs.md` | 50 | `job` | 同步/async、超时与通知、结果恢复及任务等待 |
 | `agent-delegation.md` | 60 | 恒在 | 委派成本判断、选角色、上下文、隔离、等待与续接 |
-| `task-loop.md` | 70 | `task_create`, `task_step_end` | 聊天建档、循环推进、正确完成、等待恢复、验收与预算 |
+| `task-lead.md` | 70 | `task_create`, `task_step_end` | 立项、拆工作项、派发与富化上下文、等待、检查结果、返工、汇报与周期实例 |
 
-普通聊天负责建档和管理，task 步骤使用独立 cycle 会话，且不提供 `task_create`、`memory_save`、`event_manage`。工具缺失是执行边界，不能通过文件写入绕过。每份手册先说明适用环境，再给合法操作和恢复分支。
+普通聊天负责建档和管理，task 步骤使用任务自己的独立会话，且不提供 `task_create`、`memory_save`、`event_manage`。工具缺失是执行边界，不能通过文件写入绕过。每份手册先说明适用环境，再给合法操作和恢复分支。
 
-任务机制只占一份 `task-loop.md`：每一步的 brief 已经带上契约、最近日志和预算，playbook 只留这些数字之外需要判断的部分。Agent 委派不是 task 专属机制，因此独立为通用 playbook：当前回合的临时委派无需创建 task，需要跨回合恢复时才由 task 记录状态。
+任务机制只占一份 `task-lead.md`，写的是负责人的工作法：每一步的 brief 已经带上契约、团队看板、最近日志和预算，playbook 只留这些数字之外需要判断的部分。这些是开发时沉淀、随包发布的知识，运行时不能改写；模型在运行中自己学到的流程仍按 `memory-and-learning.md` 沉淀为 workspace skill。Agent 委派不是 task 专属机制，因此独立为通用 playbook：当前回合的临时委派无需创建 task，需要跨回合恢复时才由 task 记录状态。
 
 `runtime-orientation.md` 和 `agent-delegation.md` 不设 `requires-tools`：前者描述的分层与文件位置在任何工具组合下都成立，后者的委派能力也可能来自用户提供的 skill，门控掉反而会让它在最需要的实例上消失。
 
@@ -74,7 +74,7 @@ description 同时说明内容和触发场景；完整正文留在包内，只�
 2. **一个决策时刻一份文件**：宁可一份稍长，也不要让模型为了完成一件事读两份。反过来，两个不会同时发生的场景不要塞进一份。
 3. **默认模型已有通用能力**：只写 Pipiclaw 特有、容易出错或跨工具的知识。
 4. **按脆弱程度决定自由度**：hash/verification/幂等 request id 等窄桥给精确顺序；开放的规划问题给判断条件。
-5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。已经定好归属的几条：等待、幂等、正式验收与证明强度在 `task-loop.md`；委派上下文、角色、隔离和续接在 `agent-delegation.md`；文件入口在 `runtime-orientation.md`。自动唤醒的跨机制纪律留 system prompt：完成独立工作，只剩等待时结束回合。操作点可留一句提醒，详细解释不复制。
+5. **不重复**：硬不变量留 prompt，工具参数留 schema，详细流程只在一个 playbook 中定义；其他文件用明确链接路由。已经定好归属的几条：等待、幂等、检查与返工裁决、汇报在 `task-lead.md`；委派上下文、角色、隔离和续接在 `agent-delegation.md`；文件入口在 `runtime-orientation.md`。自动唤醒的跨机制纪律留 system prompt：完成独立工作，只剩等待时结束回合。操作点可留一句提醒，详细解释不复制。
 6. **错误可恢复**：解释门禁为什么拒绝，并给可以执行的下一步；引用真实报错时按原文抄，模型才能把 playbook 和它看到的报错对上。
 7. **写清谁是施动者**：playbook 是写给模型的。斜杠命令由 transport 拦截、不经过模型，凡是要人去敲的一律写成"用户命令：`/tasks resume <id>`"，不要混进模型的动作序列。
 8. **展示的数据形状必须能落盘**：代码块里的 frontmatter、JSON、control 片段会被当成可以照抄的样本。写之前对着序列化代码核一遍字段名、嵌套层级和必填项——一个少了必填字段的示例，会直接教出一份需要修复的坏文件。

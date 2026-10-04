@@ -81,11 +81,11 @@ export interface ToolBuildContext {
 	 */
 	mediaSender?: MediaSender;
 	/**
-	 * Present only inside a task loop step (spec 051, D3): which task this tool set belongs to,
-	 * and the cycle it is running in. `task_step_end` is registered only when this is set, so the
-	 * chat surface can never end a step that is not running.
+	 * Present only inside a task loop step (spec 051, D3): which task this tool set belongs to.
+	 * `task_step_end` is registered only when this is set, so the chat surface can never end a
+	 * step that is not running.
 	 */
-	taskLoop?: { taskId: string; cycleId: string };
+	taskLoop?: { taskId: string };
 	/** Tools completed in the current turn; only the task loop reads it. */
 	getToolsUsed?: () => string[];
 }
@@ -125,10 +125,7 @@ function taskToolOptions(ctx: ToolBuildContext) {
 	return {
 		jobManager: req(ctx.jobManager, "jobManager"),
 		runManager: req(ctx.runManager, "runManager"),
-		workspaceDir: ctx.workspaceDir,
 		channelDir: ctx.channelDir,
-		channelId: ctx.channelId,
-		workingDirectory: ctx.securityContext.projectRoot,
 	};
 }
 
@@ -288,7 +285,6 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 			createTaskStepEndTool({
 				...taskToolOptions(ctx),
 				taskId: ctx.taskLoop?.taskId,
-				cycleId: ctx.taskLoop?.cycleId,
 				getToolsUsed: ctx.getToolsUsed,
 			}),
 	},

@@ -103,7 +103,7 @@ export const TASK_CORE_SECTION: PromptSectionDefinition = {
 	render: () =>
 		[
 			"## Persistent Work",
-			"Use a task only when work must survive this turn. Chat creates or manages tasks; the runtime drives them in task sessions. Follow the task's contract and runtime guide without expanding its scope or bypassing verification.",
+			"Use a task when work must survive this turn, has several pieces to delegate, or needs to wait on results; you lead it — split, delegate, check, report. Recurring or scheduled work is an event with a task template. Chat creates or manages tasks; the runtime drives them in task sessions. Follow the task's contract and runtime guide without expanding its scope.",
 		].join("\n"),
 };
 
@@ -199,7 +199,7 @@ function renderSubAgentDirectory(subAgents: SubAgentSummary[]): string {
 	}
 	lines.push(
 		"",
-		"Read agent-delegation.md before non-trivial delegation, and task-loop.md before independent verification.",
+		"Read agent-delegation.md before non-trivial delegation, and task-lead.md before leading a multi-item task.",
 	);
 	return lines.join("\n");
 }

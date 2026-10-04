@@ -1,46 +1,45 @@
 # 事件与任务（Events and Tasks）
 
-这份文档讲 Pipiclaw 的两层长程能力，它们合起来让 Pipiclaw 从"被动应答的聊天机器人"变成"能被时间和台账驱动、带着进度本干活"的助手：
+这份文档讲 Pipiclaw 的两层长程能力，它们合起来让 Pipiclaw 从"被动应答的聊天机器人"变成"能被时间驱动、带着团队把项目做完的负责人"：
 
-- **定时事件（events）** 回答**"什么时候唤醒 agent"**——一个无状态的时间原语。
-- **长程任务（tasks）** 回答**"有哪些在途工作、进展到哪、在等什么、验收标准是什么"**——事件缺失的那块持久记忆。
+- **事件（events）** 回答**"什么时候"**——唯一的时间源：提醒、周期与定时工作、外部条件传感器。
+- **任务（tasks）** 回答**"做什么、做到哪、在等谁"**——一个一次性项目：目标、验收清单、工作项，以及每次派发和结算的记录。
 
-两者由 runtime 协调，但各自独立：**内建 task driver** 按任务的**等待票**推进工作并开启新周期；事件 watcher 负责与任务无关的提醒和外部传感器。任务不需要配套事件才能继续。
+两者由 runtime 协调，但职责不重叠：事件决定何时唤醒，周期或定时的工作由事件**按模板生成一个任务实例**；任务只管一个项目从开始到交付；委派与后台作业决定谁来做。
 
-> 一句话记忆：**event 无记忆，只管定时；task 带着契约、循环日志和一张可兑现的等待票干活。**
+> 一句话记忆：**event 管时间，task 带着契约、看板和一张可兑现的等待票把一个项目做完。**
 
-如果你还没完成钉钉和模型配置，请先看 [README](../README.md) 和 [configuration.md](./configuration.md)。子代理（sub-agents）是另一条正交的**委派**能力，见 [sub-agents.md](./sub-agents.md)。
+如果你还没完成钉钉和模型配置，请先看 [README](../README.md) 和 [configuration.md](./configuration.md)。子代理（sub-agents）的角色配置见 [sub-agents.md](./sub-agents.md)。
 
 ## 怎么读这份文档（Reading Guide）
 
-本文覆盖三类读者，按需跳读，不必从头到尾：
-
 | 你想做什么 | 从哪读起 |
 |---|---|
-| 用 `/events`、`/tasks` 查看和管理已有的事件与任务 | [`/events` 命令](#events-命令人用只读--删除)、[任务可见性与命令](#可见性与命令) |
+| 用 `/events`、`/tasks` 查看和管理已有的事件与任务 | [`/events` 命令](#events-命令人用只读--删除)、[可见性与命令](#可见性与命令) |
+| 安排周报、巡检这类周期工作 | [任务模板事件](#任务模板事件周期与定时工作)、[周期与定时工作](#周期与定时工作) |
 | 手写一个事件 JSON，或看懂 agent 建的那个 | [支持的事件类型](#支持的事件类型supported-event-types)、[通用字段](#通用字段common-fields) |
 | 看懂任务文件的格式与 frontmatter 契约 | [任务模型](#任务模型)、[Frontmatter 契约](#frontmatter-契约) |
 | 搞清楚一个任务在等什么、为什么没动 | [等待票](#等待票ticket)、[异常恢复](#异常恢复) |
 | 排查"没有按时触发 / 任务没被推进" | [调度历史记录](#调度历史记录event-history)、[异常恢复](#异常恢复)、[部署排障](./deployment-and-operations.md#常见运维问题common-operational-issues) |
-| 理解 driver 与预算 | [内建 task driver](#内建-task-driver)、[预算与停止](#预算与停止) |
+| 理解 driver、预算与委派看板 | [内建 task driver](#内建-task-driver)、[预算与停止](#预算与停止)、[团队看板](#团队看板与工作项) |
 
-agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook 里，见 [runtime-playbooks.md](./runtime-playbooks.md)。
+agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook 里（负责人的工作法见 `task-lead.md`），见 [runtime-playbooks.md](./runtime-playbooks.md)。
 
 ## 心智模型（Mental Model）
 
 | 层 | 载体 | 持有什么 | 谁维护 |
 |----|------|----------|--------|
-| **tasks** | `workspace/<channelId>/tasks/<id>.md` + `<id>.jsonl` | 契约（意图、DoD、手册、Plan）、循环日志、等待票、本周期用量 | 主 agent 经 `task_create`/`task_update`/`task_close` 建档，任务循环经 `task_step_end` 推进 |
+| **events** | `workspace/events/*.json` | 何时唤醒：提醒、周期与定时工作的模板、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`） |
+| **tasks** | `workspace/<channelId>/tasks/<id>.md` + `<id>.jsonl` | 契约（目标、验收清单、工作项）、等待票、用量；循环日志记着每一步、每次派发与结算 | 主 agent 经 `task_create`/`task_update`/`task_close` 建档，任务循环经 `task_step_end` 推进 |
 | **task driver** | runtime 确定性扫描 | 兑现到期的票、兜底过期的票、停下超预算的任务、排下一步 | Pipiclaw runtime，扫描本身零 token |
-| **events** | `workspace/events/*.json` | 非 task 的独立提醒、外部传感器 | 人（手工 / `/events`）或主 agent（`event_manage`）维护 |
 
 三层文件都放在 app home 下的 `workspace/` 中。默认路径 `~/.pipiclaw/workspace/`；若设置了 `PIPICLAW_HOME`，则为 `${PIPICLAW_HOME}/workspace/`。
 
-**为什么需要两层。** 只有事件时，每次唤醒都是无状态的：agent 醒来只知道事件文本那一句话，不知道有哪些在途工作、上次做到哪、验收标准是什么——触发一次就归零。任务台账补上这块记忆，让工作变成：
+**为什么需要两层。**只有事件时，每次唤醒都是无状态的：agent 醒来只知道事件文本那一句话，不知道有哪些在途工作、上次做到哪、验收标准是什么。任务补上这块记忆，让工作变成：
 
-> 醒来 → 读契约和最近几条日志 → 推进一个具体步骤 → 记下证据，并说清楚接下来在等什么 → 睡去。
+> 醒来 → 读契约、团队看板和最近几条日志 → 推进一个具体步骤（拆分、派发、检查、汇报）→ 记下证据，并说清楚接下来在等什么 → 睡去。
 
-下面先讲底层的**事件**，再讲其上的**任务台账**，最后用一个完整周期演示两者如何协作。
+下面先讲底层的**事件**，再讲其上的**任务**。
 
 ---
 
@@ -72,10 +71,38 @@ agent 侧的操作纪律不在本文，而在随包发布的 runtime playbook �
 |------|------|------|
 | `type` | 是 | `one-shot` 或 `periodic` |
 | `channelId` | 是 | 目标会话通道 ID，例如 `dm_<staffId>` 或 `group_<conversationId>` |
-| `text` | 是 | 事件触发后发送给 Pipiclaw 的文本内容 |
+| `text` | 与 `task` 二选一 | 事件触发后发送给 Pipiclaw 的聊天文本 |
+| `task` | 与 `text` 二选一 | **任务模板**：触发时按它生成一个任务实例，见[任务模板事件](#任务模板事件周期与定时工作) |
 | `preAction` | 否 | 触发前执行的动作门控，见下方说明 |
 
-各类型的专属字段（`at`、`schedule`）在下面对应小节列出。cron 一律按主机时区解释，没有 `timezone` 字段。
+各类型的专属字段（`at`、`schedule`）在下面对应小节列出。cron 一律按主机时区解释，没有 `timezone` 字段。`text` 与 `task` 必须且只能出现一个。
+
+## 任务模板事件：周期与定时工作
+
+需要拆工作项、委派、检查、汇报的周期或定时工作（周报、巡检、定期整理），不要把一段文字投进聊天让模型在聊天会话里做完——那会把任务过程塞满聊天上下文。改用 `task` 模板：
+
+```json
+{
+  "type": "periodic",
+  "channelId": "dm_your-staff-id",
+  "schedule": "0 9 * * 1",
+  "task": {
+    "title": "周报编写",
+    "goal": "汇总上周 pipiclaw 仓库的合并、发布与未决问题，生成周报并发给我。只读仓库与 issue，不做任何写操作。",
+    "dod": "- [ ] 覆盖上周全部合并的 PR\n- [ ] 列出未决问题及其负责人\n- [ ] 周报正文已在 report 中交付",
+    "items": [{ "text": "收集上周合并与发布记录" }, { "text": "整理未决问题" }],
+    "budget": { "usd": 5 }
+  }
+}
+```
+
+`task` 的形状与 `task_create` 完全一致（只是没有 `id`），用同一个校验器：DoD 必须是 `- [ ]` 清单，预算只有 `steps` / `usd`。每次触发（`preAction` 通过后）运行时会：
+
+1. 以触发时刻生成实例 id：`<事件名>-<YYYYMMDD>-<HHmm>`。同一次触发重放（比如重启后补投递）得到同一个 id，已存在就什么也不做，**不会**重复生成。
+2. 如果同一个事件上一次的实例还没结束，**本次不生成**，并直接给频道发一条不经过模型的回执（上一实例的 id、状态与 `/tasks show` 用法）。两个实例并行做同一类工作几乎总是重复劳动，而卡住的实例本身受预算、空转检测和等待票兜底约束，最终一定会结束或停下来告诉你。
+3. 否则按模板写出任务文件（`origin` 记录事件名），由 task driver 在任务自己的会话里推进。
+
+模板里写的是每次都要遵守的要求；每个实例独立，不继承上一次的状态，只在首步看到上一实例的收尾记录（`<previous_occurrence>`）作为衔接。想改进模板，由 agent 在 `report` 里提出，你确认后用 `event_manage update` 更新。
 
 ## 事件动作门控（Action Gate）
 
@@ -252,14 +279,14 @@ Pipiclaw 会把事件调度层的审计记录写入：
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `action` | 是 | `list` / `show` / `create` / `update` / `delete` |
-| `name` | show/create/update/delete 必填 | 事件名（不含 `.json`），`list` 忽略。只允许字母、数字、`.`、`_`、`-`；task-owned 传感器用 `task.<channelId>.<taskId>.<use>` |
-| `definition` | create/update 必填 | 类型化对象，含 `type`、`text`、`at` 或 `schedule`，以及可选的 `preAction`；不传 `channelId`，由 runtime 绑定 |
+| `name` | show/create/update/delete 必填 | 事件名（不含 `.json`），`list` 忽略。只允许字母、数字、`.`、`_`、`-` |
+| `definition` | create/update 必填 | 类型化对象，含 `type`、`text` 或 `task`（二选一）、`at` 或 `schedule`，以及可选的 `preAction`；不传 `channelId`，由 runtime 绑定 |
 
 工具调用的 `preAction.timeoutMs` 单位为毫秒；运行时将它转换为事件文件中的 `preAction.timeout`。更新前先用 `action: "show"` 读回完整定义。`label` 已不属于工具参数。
 
 **写入时校验（工具的核心价值）。** 裸用 `write` 写事件 JSON 有个隐患：格式错误的文件会被 watcher **静默删除**，agent 以为安排好了回访，实际什么都没留下。`event_manage` 在**落盘前**就把问题拦下并大声报错：
 
-1. **结构校验**：`definition` 必须能通过与 watcher 相同的 `parseScheduledEventContent`——工具写出的文件必然可被装载。
+1. **结构校验**：`definition` 必须能通过与 watcher 相同的 `parseScheduledEventContent`——工具写出的文件必然可被装载；`task` 模板还要通过与 `task_create` 相同的契约校验。
 2. **路径安全**：`name` 经 traversal 拦截（拒绝 `../` 等越界），字符集限定 `[A-Za-z0-9._-]`。
 3. **channel 所有权**：新定义的 `channelId` 由 runtime 绑定；show/update/delete 前会读取目标文件校验归属，一个 channel 不能操纵或打扰其他 channel 的事件。
 4. **`preAction` 安全**：命令写入时即过 `command-guard`，被拦截则整个操作失败（触发时的检查仍保留）。
@@ -292,7 +319,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 }
 ```
 
-任务的继续、等待、异常恢复和周期节奏由 task driver 根据等待票与 `schedule` 驱动，不要为普通 task 轮询另建事件。只有需要外部条件传感器时，才创建 task-owned periodic event，并让任务停在对应 `signal` 票上；旧的 `.schedule` 任务事件已退役。任务模型见下方[任务台账](#第二部分长程任务tasks)。
+任务的继续、等待和异常恢复由 task driver 根据等待票驱动，不要为普通 task 轮询另建事件；任务内部等外部条件，用带超时的后台作业当传感器（见下方[等待票](#等待票ticket)）。周期与定时的**工作**用上面的任务模板事件。任务模型见下方[第二部分](#第二部分长程任务tasks)。
 
 ## 推荐场景（Recommended Patterns）
 
@@ -343,17 +370,17 @@ Pipiclaw 会把事件调度层的审计记录写入：
 
 # 第二部分：长程任务（Tasks）
 
-事件解决"什么时候唤醒"，任务解决"为什么做、做到哪、下一步是什么"。Task 创建即持续委托：只要任务在活动目录且没有被暂停，runtime 会按它的等待票继续推进。外部动作不产生额外的人工作业流；模型必须遵守任务 Goal、能力配置、真实状态查询和幂等约束。
+事件解决"什么时候"，任务解决"做什么、做到哪、在等谁"。**一个任务就是一个你交给 Pipiclaw 负责的项目**：它自己拆工作项、给执行者交代清楚上下文、派发给子代理或外部 Agent、等结果、对照验收标准检查、需要时返工，最后向你汇报成果。Task 创建即持续委托：只要任务在活动目录且没有被暂停，runtime 会按它的等待票继续推进。外部动作不产生额外的人工作业流；模型必须遵守任务 Goal、能力配置、真实状态查询和幂等约束。
 
-本节以 **Task v4（spec 051）** 为准。v4 把任务拆成三样东西，各自只做一件事：
+本节以 **Task v5（spec 052）** 为准。任务只有一次性项目这一种形态：周期与定时的工作由[事件模板](#任务模板事件周期与定时工作)按期生成实例。任务拆成三样东西，各自只做一件事：
 
 | 物件 | 路径 | 是什么 |
 |---|---|---|
-| **契约** | `tasks/<id>.md` | 目标、验收标准、手册、计划。人可直接编辑，每一步完整注入；4 KB 预算约束的是运行时写的 `## 上次结果`，不会删你写的段落 |
-| **循环日志** | `tasks/<id>.jsonl` | append-only：每一步做了什么、每一轮验收结论、每次票据过期、每个周期的收尾 |
+| **契约** | `tasks/<id>.md` | 目标、验收清单、工作项。人可直接编辑，每一步完整注入；运行时从不改写正文 |
+| **循环日志** | `tasks/<id>.jsonl` | append-only：每一步做了什么、每次派发与结算、票据过期、收尾 |
 | **等待票** | 契约 frontmatter 的 `ticket` | "什么会叫醒我，最迟什么时候"——由 runtime 校验、由 runtime 兑现 |
 
-v3 的 `status`/`enabled`/`control`/`## Current Cycle`/`## History` 全部退役。升级时 daemon 会做一次确定性迁移（原件备份到 `tasks/.v3/`，历史导入循环日志），详见[从 v3 迁移](#从-v3-迁移)。
+v4 的 `cycle`、`schedule`、`verify`、`Manual`、`Verification`、`## 上次结果` 以及 `run`/`job`/`signal`/`schedule` 票全部退役。升级时 daemon 会做一次确定性转换（原件备份到 `tasks/.v4/`），详见[从 v4 转换](#从-v4-转换)。
 
 ## 任务模型
 
@@ -361,12 +388,12 @@ v3 的 `status`/`enabled`/`control`/`## Current Cycle`/`## History` 全部退役
 
 ```text
 workspace/<channelId>/tasks/
-├── weekly-report.md          契约
-├── weekly-report.jsonl       循环日志
-├── .sessions/               每个 cycle 一份任务会话
+├── export-api.md             契约
+├── export-api.jsonl          循环日志
+├── weekly-report-20261005-0900.md    事件模板生成的实例
+├── .sessions/               每个任务一份任务会话
 ├── .steer/                  待处理的用户指示与待发送的通知
-├── .verifications/          验收 attestation
-├── .v3/                     迁移前的原件（不会被删）
+├── .v4/                     转换前的原件（不会被删）
 └── archive/
     ├── released-note.md
     └── released-note.jsonl
@@ -379,36 +406,25 @@ workspace/<channelId>/tasks/
 ```markdown
 ---
 state: parked
-schedule: 0 9 * * 1
-ticket: {"kind":"run","id":"run_zpy4mq","by":"2026-09-06T12:40:00+08:00"}
-cycle: {"id":"c-2026-09-05","startedAt":"2026-09-05T09:00:00+08:00","steps":7,"rounds":2,"usd":3.21,"usdEstimated":false,"expired":0}
-budget: {"rounds":3}
-verify: required
+ticket: {"kind":"work","refs":["run_k2x9","run_p7q1"],"by":"2026-10-04T18:40:00+08:00"}
+usage: {"startedAt":"2026-10-04T14:02:11+08:00","steps":6,"usd":3.4,"usdEstimated":true,"expired":0}
+budget: {"usd":30}
 ---
 
-# 周报编写与发布
+# 导出接口改造
 
 ## Goal
-每周一完成周报草稿，收到反馈后发布到指定频道。
+为订单服务新增 CSV 导出接口……（目标、范围、允许的外部动作、关键约束）
 
 ## DoD
-- [ ] 内容覆盖目标时间段的全部工作
-- [ ] 数据已由可复现命令核对
+- [ ] /export 接口返回符合字段规范的 CSV
+- [ ] 新增单测覆盖空结果与超大结果
+- [ ] npm run check 通过
 
-## Manual
-1. 收集素材并起草。
-2. 发布前查询目标频道真实状态，使用稳定的幂等 id。
-
-## Verification
-Independent verification: required
-
-## Plan
-- [x] P1 收集素材
-- [ ] P2 起草并自查
-
-## 上次结果
-- c-2026-08-29 完成：已发布，Sent id=68
-- 用量：9 步 / 1 轮 / $2.10
+## Work Items
+- [x] W1 调研现有序列化与分页实现
+- [ ] W2 实现导出接口与单测
+- [ ] W3 独立审查 W2 的实现
 ```
 
 ### Frontmatter 契约
@@ -417,13 +433,22 @@ Independent verification: required
 |---|---|
 | `state` | `open`（现在有活可干）/ `parked`（在等一张票）/ `done`（已关闭，仅归档文件） |
 | `paused` | `{by,reason,at}`。**出现即暂停**，与 `state` 正交；`by` 为 `user` 或 `runtime` |
-| `schedule` | 五字段 cron（主机时区），存在即周期任务，最小间隔 30 分钟 |
 | `ticket` | `state: parked` 时必需，`open`/`done` 时必须不存在 |
-| `cycle` | 本周期的计数：步数、返工轮次、成本、票据过期次数 |
-| `budget` | 可选的每任务预算覆盖，见[预算](#预算与停止) |
-| `verify` | `required` 时关闭要求本周期最后一条 round 是 PASS，且其 attestation 在关闭时仍然成立 |
+| `usage` | 整个任务的用量：步数、成本、连续过期次数 |
+| `budget` | 可选的每任务预算覆盖，只有 `steps` 与 `usd`，见[预算](#预算与停止) |
+| `origin` | 仅事件模板生成的实例才有：生成它的事件名 |
 
-**一条不变量**：`state: parked` ⟺ `ticket` 存在。读写两侧都强制，所以 v3 里那些"`enabled:false` 和 `stop` 对不上""`active` 藏着未来的 wake"的组合在 v4 里不可能被表达出来。
+**一条不变量**：`state: parked` ⟺ `ticket` 存在。读写两侧都强制，所以"停泊却没有任何东西能叫醒它"在文件格式里不可能被表达出来。
+
+### 正文
+
+| 段 | 内容 |
+|---|---|
+| `## Goal` | 要成立的结果、范围、允许的外部动作、关键约束 |
+| `## DoD` | 客观验收标准，必须是 `- [ ]` 清单。关闭任务要求全部勾选——这是负责人的显式确认 |
+| `## Work Items` | 工作项：每项可独立派发、独立检查。四态 `[ ]` todo / `[x]` done / `[!]` blocked / `[~]` dropped；**只有负责人**把项标成 done，运行时从不替它打勾 |
+
+契约控制在约 4 KB 以内；运行时从不改写它，超过时写入照常并告警。
 
 ### 等待票（Ticket）
 
@@ -432,110 +457,98 @@ Independent verification: required
 | kind | 载荷 | 谁兑现 |
 |---|---|---|
 | `time` | `at` | driver 到点 |
-| `schedule` | `at`（本次 occurrence） | driver 到点，直接开下一个 cycle |
-| `run` | `id` | 该委派结算时 |
-| `job` | `id` | 该后台作业结算时 |
+| `work` | 无（运行时记录 `refs` 仅作展示） | 本任务绑定的**任一**委派或后台作业结算时 |
 | `ask` | `asked` | 用户 `/tasks reply` |
-| `signal` | `event` | 该 task-owned 周期事件的 preAction 通过时 |
 
-写入时校验：run/job 必须存在、**还没结束**、而且 `taskId` 指向本任务；signal 的事件必须存在、是 periodic、属于本频道、名字指向本任务。不满足就直接拒绝，并告诉模型该改用什么。
+写入时校验：`work` 票要求本任务当前**至少有一个**未结算的委派或运行中的作业，否则拒绝并提示"结果已在看板上，读完继续"。
 
-**每张票都带 `by`（兜底时限），由运行时确定性推导，模型不写也改不了**：run 用它自己的墙钟 deadline + 10 分钟，job/ask 用 24 小时，schedule 用"错过一次 occurrence"，signal 用"错过两次"。
+**每张票都带 `by`（兜底时限），由运行时确定性推导，模型不写也改不了**：`work` 取所有在途项各自截止时刻中最晚的一个再加 10 分钟（委派用自己的墙钟 deadline，作业用自己的 timeout），`ask` 用 24 小时，`time` 就是它自己的时刻。
 
 到点还没兑现时：
 
 1. 第一次——运行时把任务改回 `open`，并在下一步的 brief 开头说明票过期了，让它先确认真实状态。
-2. 同一 cycle 第二次——任务保持 parked、置 `paused{by:"runtime"}`，并给用户一条零 LLM 的确定性回执。
+2. **连续**第二次——任务保持 parked、置 `paused{by:"runtime"}`，并给用户一条零 LLM 的确定性回执。一次正常兑现会把连续计数清零。
 
-> **这就是 v4 存在的主要理由。** v3 允许一个任务停在 `waiting` 上而没有任何东西能叫醒它；两个真实任务因此分别静默了 9 天和 13 天，运行时每天往日志里写上百条无人查看的警告。v4 里这个状态无法被写出来，而且**任何停泊要么被兑现、要么在兜底时限内告诉用户**。
+> **这是 v4 引入、v5 保留的核心不变量。** 任务曾经停泊后没有任何东西再叫醒它，静默了 9 天和 13 天。现在**任何停泊要么被兑现、要么在兜底时限内告诉用户**。
 
-## 循环：cycle 与 step
+**等外部条件**（CI 跑完、某个文件出现）：启动一个带足够超时的后台作业当传感器（任务会话里 `bash async:true` 自动绑定到本任务），然后停泊到 `work` 票。条件成立或超时都会让作业结算、叫醒任务，等待期间零 token，也能挺过重启。
 
-- **cycle** 是上下文的单位。创建任务会立即打开首个 cycle，周期任务也一样；首次应在未来时刻执行时，用 time 票等待。后续周期在 schedule occurrence 到点时打开，重置计数并复位 Plan 和 DoD checkbox。
-- **step** 是 cycle 里的一次模型回合，跑在**任务自己的会话**（`tasks/.sessions/<id>-<cycle>.jsonl`）里，不进频道聊天会话。这样聊天记录不会被任务撑大，任务也不必每次重读整份历史。
-- **round** 是一次"委派 → 验收"往返，由运行时在 `purpose=verify` run 结算时自动记账。
+## 步骤（step）
 
-每一步必须以 `task_step_end` 收尾，四选一：
+一个 step 是任务会话里的一次模型回合，跑在**任务自己的会话**（`tasks/.sessions/<id>.jsonl`）里，不进频道聊天会话。聊天记录不会被任务撑大，任务也不必每次重读整份历史——每一步的 brief 都重新带上契约、团队看板、最近日志和用量。
+
+每一步必须以 `task_step_end` 收尾，三选一：
 
 | outcome | 含义 | 运行时动作 |
 |---|---|---|
 | `continue` | 还能接着干 | **立刻**排下一步，没有 backoff |
-| `park` | 在等一个真实来源 | 校验票并补 `by`，转 parked |
-| `done` | 本周期完成 | 写 `## 上次结果`、记 close、一次性归档／周期停到下一次 |
-| `blocked` | 需要用户决定 | 停泊到 `ask` 票，并**一定**通知用户 |
+| `park` | 在等一个真实来源 | 校验票并补 `by`，转 parked；`ask` 票会自动把问题发给用户 |
+| `done` | 项目完成 | 要求 DoD 全部勾选、且没有在途的委派/作业；写 close 记录并归档 |
 
-**任务步骤默认不向用户发言**：只有 `task_step_end` 给了 `notify`，或发生提问、预算耗尽、运行时停止等确定性回执时才会说话。完成任务不会自动把 `note` 或普通文本交给用户；Goal/DoD 要求交付结果时，必须在 `notify` 中提供实际内容。v3 的 `[SILENT]` 协议（要求模型主动说"我不说话"）在任务侧退役；事件唤醒仍然使用它，因为事件仍然投递到聊天会话。
+**任务步骤默认不向用户发言**：只有 `report` 参数、`ask` 提问、或预算耗尽、运行时停止等确定性回执时才会说话。完成任务不会自动把 `note` 交给用户；Goal/DoD 要求交付结果时，必须在 `report` 里提供实际内容（成果、谁检查了什么且结论如何、未决风险、成本）。事件唤醒仍然使用 `[SILENT]`，因为文本事件仍然投递到聊天会话。
 
 step 是频道队列里的普通条目：占用 turn slot、受 `/stop` 管辖、结束就把频道让回去。一个跑三小时的任务不会锁住聊天。
 
+## 团队看板与工作项
+
+负责人最需要的状态是"我的团队现在在做什么、刚刚回来了什么"。在任务会话里：
+
+- **委派和后台作业自动绑定到本任务**；委派带上它对应的工作项 `item`（`subagent {agent, task, item:"W2"}`），运行时校验这个项存在。
+- 绑定的委派/作业派发和结算时，运行时在任务的循环日志里写 `dispatch` / `settle` 记录（含状态、耗时、成本、`VERDICT`、输出文件路径），成本计入任务预算。日志与契约一起归档，所以委派记录一周后被回收，任务里的结果仍在。
+- 每一步的 brief 里有一块 `<task_board>`：每个工作项对应的委派/作业、状态与输出路径，`★新` 标出上一步结束之后才回来的结果。被唤醒时那个委派的结果正文**不**在 brief 里，看板只给状态和路径，负责人自己 `read` 需要的输出。
+
+`purpose: verify` 的委派让执行者按"检查者协议"工作并以 `VERDICT: PASS|FAIL` 收尾，结论显示在看板上。**它是供负责人权衡的信息，不是闸门**：运行时不再校验"检查者有没有改过产物"，也不再把验收通过作为关闭任务的条件。检查与返工的裁决在 `task-lead.md`；需要结构性只读，用 `mutates: read` 且不含 `bash` 的角色配置。
+
 ## 预算与停止
 
-每个 cycle 有四维预算，缺省是代码常量，可以按任务在 `budget` 里覆盖：
+每个任务有两维预算，缺省是代码常量，可以按任务在 `budget` 里覆盖，计的是**整个项目**，并且**包含绑定委派的成本**：
 
 | 键 | 默认 | 含义 |
 |---|---|---|
-| `steps` | 40 | 本周期的模型步数上限 |
-| `wallMin` | 180 | 从 cycle 开始计的经过分钟，包含停泊等待 |
-| `usd` | 8 | 本周期可归因成本上限 |
-| `rounds` | 4 | 本周期返工轮次上限 |
-| `until` | — | 绝对期限（v3 `deadline` 的新家） |
+| `steps` | 60 | 任务的模型步数上限 |
+| `usd` | 20 | 可归因成本上限 |
 
-任一项到顶，**在派发下一步之前**任务就被停下，并给用户一条带具体命令的回执（`/tasks resume <id> +steps 20`）。另外，同一周期内连续两步没有任何工具调用也会被停下——那说明循环在自言自语。
+任一项到顶，**在派发下一步之前**任务就被停下，并给用户一条带具体命令的回执（`/tasks resume <id> +steps 20`）。另外，连续两步没有任何工具调用也会被停下——那说明循环在自言自语。截止时间属于项目目标，写进 Goal，由负责人掌握。
 
 外部 run 拿不到真实用量时按角色模型 × 墙钟估算，并把 `usdEstimated` 置为真；任何显示成本的地方都会标注"含估算"。
 
-> v3 用十字段台账指纹加一份进程内 effect 账本去*猜*一次唤醒有没有干活；那套机制在生产里四个月只触发过两次，而它的源码注释自己承认 `echo x` 就能骗过它。v4 用四个任务自己带着、用户看得见也能加码的数字取代了它。
+## 周期与定时工作
 
-## 独立验收
-
-需要独立验收的任务设 `verificationRequired: true`（frontmatter 里是 `verify: required`）。验收就是一次普通委派：
-
-1. 完成 DoD checklist 后派发 `purpose=verify`、带 `taskId` 的 sub-agent。
-2. 用 `task_step_end` 停泊到那个 run 的票上。
-3. checker 只判断、不修复实现，结尾写 `VERDICT: PASS` / `FAIL` 并落 attestation。
-4. **结算时运行时自动记账**：校验 attestation（归属、契约 hash、artifact subject 新鲜度），把这一轮写进循环日志和 `cycle.rounds`，再兑现票。校验不通过的 PASS 会被记成 FAIL 并写明原因。
-5. 关闭时（`task_step_end outcome=done` 和 `task_close outcome=complete` 两个入口共用一次校验）**重新核验**本周期**最后一条** round：它必须是 PASS，且它的 attestation 此刻仍绑定当前契约和当前产物。校验用的是同一个 `attestationRejectionReason`，不是第二套证明模型；verify run 的 checkout 取自持久化的 run 记录，记录不在就失败关闭。
-
-第 5 步的两条规则各自堵一个洞：**取最后一条**——后来的 FAIL 不会被更早的 PASS 覆盖；**重新核验**——结算时那次校验证明的是验收者当时看到的契约与产物，而这两样在 PASS 之后仍然可写，"先通过验收再改 Goal / 再改代码"必须被拒。
-
-`task_verify` 工具已退役：导入 attestation 是记账，不是判断。模型要做的判断没变——读 FAIL 的具体理由、决定哪几条真要返工。
-
-PASS 绑定 Goal/DoD/Manual/Verification 这段契约，不绑定 Plan 和 `## 上次结果`；改动契约或被验收产物后必须重新验收——包括为了记录教训去改 Manual。
+任务本身没有 `schedule`。周期与定时的工作写成[任务模板事件](#任务模板事件周期与定时工作)：事件按 cron 或 `at` 触发，每次生成一个独立的任务实例。"立刻再跑一次"就让 agent 用同一份内容 `task_create` 一个项目。
 
 ## 内建 task driver
 
 driver 是自适应 timer + nudge 的零 token 扫描：
 
-1. **兑现**到期的 `time`/`schedule` 票（后者直接开下一个 cycle）。
+1. **兑现**到期的 `time` 票。
 2. **兜底**过期的票（重开或通知）。
 3. **停下**已经超预算或在空转的任务。
 4. **排队**一个可跑的任务，按频道 round-robin 保证公平。
 
-`run`/`job`/`ask`/`signal` 从不轮询——它们由各自的所有者推过来：`SubAgentRunManager` 的结算、`JobManager` 的结算、`/tasks reply`、`EventsWatcher`。所有推送边都要经过同一个幂等的票据兑现，所以 at-least-once 的重放是安全的 no-op。
+`work`/`ask` 从不轮询——它们由各自的所有者推过来：`SubAgentRunManager` 与 `JobManager` 的结算、`/tasks reply`。所有推送边都要经过同一个幂等的票据兑现，所以 at-least-once 的重放是安全的 no-op。任务处于 `open`（已有步骤在驱动）时到达的结算唤醒不会再开一个模型回合，结果已经写进日志，下一步的看板会带上。
 
 ## 与事件的边界
 
-events 子系统在 v4 中**保持原样**。两者只有一条边相连：一个 task-owned 周期事件（`task.<channelId>.<taskId>.<use>`）触发、且该任务正停在指向这个事件的 `signal` 票上时，运行时兑现这张票并唤起任务的下一步，**不**向频道投递唤醒文本；任务没持这张票时，事件照旧投递到聊天会话。
+events 与 tasks 之间只有一条边：**事件按模板生成任务实例**，由 runtime 注入的回调完成；events 子系统不读取、不写入任何任务文件，tasks 也不读取 events 目录。任务内部不再有 `signal` 票和任务专属事件命名；任务会话里没有 `event_manage`。
 
-纯提醒和与任务无关的传感器继续用 event；需要积累状态和验收的用 task。
+纯提醒用文本事件；需要积累状态、委派和检查的用任务。
 
 ## 可见性与命令
 
 ```text
-/tasks                                  列表：状态、等待票+兜底时间、Plan 进度、本周期用量
-/tasks show <id>                        契约 + 最近 8 条日志 + 返工轮次 + 成本
-/tasks log <id> [cycle]                 翻看循环日志
+/tasks                                  列表：状态、等待票+兜底时间、工作项进度、用量；实例显示来自哪个事件
+/tasks show <id>                        契约 + 团队看板 + 最近日志 + 用量
+/tasks log <id>                         翻看循环日志（含派发与结算）
 /tasks steer <id> <内容>                 给下一步排一条指示（不打断当前步骤）
 /tasks reply <id> <内容>                 回答任务的提问，并让它继续
-/tasks pause <id> / resume <id> [+steps N|+rounds N|+usd X]
-/tasks run <id>                         立即开一个 cycle 并唤醒
+/tasks pause <id> / resume <id> [+steps N|+usd X]
 /tasks archive                          已归档任务
-/tasks doctor                           只检查手工编辑造成的问题
+/tasks doctor                           只检查手工编辑或转换未完成造成的问题
 ```
 
-`resume` 的加码是在**已用量之上**的增量，所以恢复一个撞了上限的任务真的能跑起来，而不是下一轮再撞一次。
+`resume` 的加码是在**已用量之上**的增量，所以恢复一个撞了上限的任务真的能跑起来；如果任务是在一张已过兜底时限的票上被停下的，`resume` 会把它重开并清掉过期计数，而不是让它在同一张死票上再次暂停。
 
-doctor 比 v3 小得多：写入时的校验让 v3 那些病症不可能再产生，它只查手改文件留下的问题（frontmatter 不可读、仍是 v3 契约、停泊但没有票、票过期太久、有 schedule 却没有周期、超过 `budget.until`）。
+doctor 只查三类问题：frontmatter 不可读、仍含旧版本字段（转换未执行）、停泊的兜底时限已过去超过 1 小时（driver 可能没有运行）。
 
 模型侧的工具面：
 
@@ -544,30 +557,32 @@ task_list      task_create    task_update    task_close    task_log
 task_step_end  （只在任务会话里注册）
 ```
 
-`task_update` 只改元数据（Plan 步骤、cadence、预算、是否需要验收），不再承载进度记录——进度属于 `task_step_end` 的 `note`。任务会话的工具集里**没有** `task_create`、`memory_save` 和 `event_manage`：任务不建任务、不写频道记忆、不管事件。
+`task_update` 只改工作项和预算，不再承载进度记录——进度属于 `task_step_end` 的 `note`。`task_close` 只有 `complete`（DoD 全部勾选且没有在途项）和 `cancel`；关闭任务**不会**取消仍在运行的委派或作业，回执会列出来。任务会话的工具集里**没有** `task_create`、`memory_save` 和 `event_manage`：任务不建任务、不写频道记忆、不管事件。
 
-每回合仍注入 `<task_agenda>`，每行含状态、等待票摘要与兜底时间、Plan 进度和本周期用量；它是背景参考，不是新指令。
+每回合仍注入 `<task_agenda>`，每行含状态、等待票摘要与兜底时间、工作项进度和用量；它是背景参考，不是新指令。
 
-## 从 v3 迁移
+## 从 v4 转换
 
-daemon 首次以 v4 启动时执行一次确定性迁移（无 LLM，marker 位于 `state/task-migration-v4.done`）：
+daemon 首次以 v5 启动时（服务启动之前）执行一次确定性转换（无 LLM，marker 位于 `state/task-migration-v5.done`）：
 
-1. frontmatter 映射到 v4：`enabled:false`+`stop` → `paused`；`control.deadline` → `budget.until`；`control.verification.required` → `verify`。
-2. `waiting` 且能重建来源的（真实的未来 wake、或活的 schedule）转成对应的票；**重建不出来的直接改回 `open`**，并在 `## 上次结果` 留一句说明——那两个静默多日的任务在升级瞬间就活了。
-3. `## History` 的每条记录导入 `<id>.jsonl`；`## Current Cycle` 的内容成为 `## 上次结果`。
-4. 原件复制到 `tasks/.v3/`，**永不删除**。
-5. `workspace/events/` 一个字节都不动。
+1. `cycle` → `usage`；预算只保留 `steps`/`usd`；`verify` 删除；`## Plan` 改名 `## Work Items`；`## 上次结果` 删除。每一项被取消的约束都会在循环日志里留一条说明。
+2. **周期任务变成事件模板**：为带 `schedule` 的任务写出 `workspace/events/<id>.json`（同一个 cron，模板由契约生成，原 Manual/Verification 并入 Goal，勾选全部复位）。两次执行之间停泊的任务随即以 `cancelled` 归档；正在执行的那一轮不打断，就地成为该事件的一个实例，下一次由事件生成。无法表达为模板的周期任务会被置 `paused`，等人工处理。
+3. `time`/`ask` 票原样保留；`run`/`job` 票只有在对应委派/作业仍在途时才转成 `work`；**重建不出来的一律改回 `open`**并留说明。`signal` 票改回 `open`。
+4. 任务专属的 `task.<channelId>.<taskId>.*` 传感器事件移到 `tasks/.v4/events/`。
+5. 原件复制到 `tasks/.v4/`，**永不删除**。v3 契约不转换，请先升级到 0.9.x。
+
+旧的 `tasks/.sessions/<id>-<cycle>.jsonl` 会话不再使用；转换后的任务第一步从全新的任务会话开始，brief 带齐了契约与日志。转换代码会在下一个 minor 版本删除。
 
 ## 异常恢复
 
 - daemon 重启不会补跑多个 occurrence；at-least-once 下外部动作仍须查询真实状态并保持幂等。
-- 运行时停止（预算、空转、票据二次过期）之后用 `/tasks resume` 保留原阶段继续，必要时加码；不再需要就让 agent cancel。
-- 循环日志是排查第一现场：`/tasks log <id>` 能看到每一步做了什么、每一轮验收的结论和理由。
+- 运行时停止（预算、空转、票据连续两次过期）之后用 `/tasks resume` 继续，必要时加码；不再需要就让 agent cancel。
+- 循环日志是排查第一现场：`/tasks log <id>` 能看到每一步做了什么、每次派发与结算的结论。
 
 ## 相关文档
 
-- [runtime-playbooks.md](./runtime-playbooks.md)：随包 playbook 目录。
+- [runtime-playbooks.md](./runtime-playbooks.md)：随包 playbook 目录（含负责人工作法 `task-lead.md`）。
 - [configuration.md](./configuration.md)：tasks、events、web 配置。
 - [deployment-and-operations.md](./deployment-and-operations.md)：长期运行与排障。
-- [sub-agents.md](./sub-agents.md)：委派与独立验收。
-- [spec 051](./specs/051-long-horizon-task-loop/design.md)：当前任务模型的设计记录。
+- [sub-agents.md](./sub-agents.md)：委派角色与检查者协议。
+- [spec 052](./specs/052-task-lead/design.md)：当前任务模型的设计记录；[spec 051](./specs/051-long-horizon-task-loop/design.md)：等待票与任务会话的来源。

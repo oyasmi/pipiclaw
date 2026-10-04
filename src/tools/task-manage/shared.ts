@@ -1,31 +1,14 @@
-import { existsSync } from "node:fs";
-import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { parseScheduledEventContent } from "../../events/events.js";
-import * as log from "../../log.js";
-import { parseLocalTime } from "../../shared/local-time.js";
-import { errorMessage } from "../../shared/text-utils.js";
-import { createCycle, nextCycleId } from "../../tasks/cycle.js";
-import type { TaskBudget, TaskFrontmatterV4 } from "../../tasks/frontmatter.js";
-import { renderStandardTaskBody, renderTaskDocument } from "../../tasks/ledger.js";
-import type { StoredTaskDocument } from "../../tasks/store.js";
-import { parseTaskEventName } from "../../tasks/task-events.js";
-import { validateTaskSchedule } from "../../tasks/task-schedule.js";
-import { describeTicket, type TicketContext, type TicketEventRef } from "../../tasks/ticket.js";
-import { completionVerificationBlockReason } from "../../tasks/verification.js";
+import type { TaskFrontmatter } from "../../tasks/frontmatter.js";
+import { uncheckedTaskAcceptanceItems } from "../../tasks/ledger.js";
+import { appendTaskLog } from "../../tasks/log.js";
+import { archiveTask, type StoredTaskDocument, writeStoredTask } from "../../tasks/store.js";
+import { describeTicket, type PendingWorkRef, type TicketContext } from "../../tasks/ticket.js";
 import { RecoverableToolError } from "../tool-details.js";
-import type { TaskCloseRequest, TaskCreateRequest, TaskManageToolOptions, TaskUpdateRequest } from "./types.js";
+import type { TaskManageToolOptions } from "./types.js";
 
 export function tasksDir(options: TaskManageToolOptions): string {
 	return join(options.channelDir, "tasks");
-}
-
-export function eventsDir(options: TaskManageToolOptions): string {
-	return join(options.workspaceDir, "events");
-}
-
-export function renderTaskFile(fields: TaskFrontmatterV4, body: string): string {
-	return renderTaskDocument(fields, body);
 }
 
 export function requiredField(value: string | undefined, field: string, action: string): string {
@@ -34,97 +17,8 @@ export function requiredField(value: string | undefined, field: string, action: 
 	return trimmed;
 }
 
-export function markdownValue(value: string): string {
-	const lines = value.trim().split(/\r?\n/);
-	if (lines.length === 1) return lines[0];
-	return lines.map((line, index) => (index === 0 ? line : `  ${line}`)).join("\n");
-}
-
-/** The `## 上次结果` paragraph a close writes into the contract. */
-export function renderCloseEvidence(request: TaskCloseRequest): string {
-	const summary = requiredField(request.summary, "summary", "task_close outcome=complete");
-	const evidence = requiredField(request.evidence, "evidence", "task_close outcome=complete");
-	const lines = [`- Summary: ${markdownValue(summary)}`, `- Evidence: ${markdownValue(evidence)}`];
-	const residualRisk = request.residualRisk?.trim();
-	if (residualRisk) lines.push(`- Residual risk: ${markdownValue(residualRisk)}`);
-	return lines.join("\n");
-}
-
-export function normalizeBudget(budget: TaskUpdateRequest["budget"]): Partial<TaskBudget> | undefined {
-	if (!budget) return undefined;
-	const next: Partial<TaskBudget> = {};
-	for (const key of ["steps", "wallMin", "usd", "rounds"] as const) {
-		const value = budget[key];
-		if (value === undefined) continue;
-		if (!Number.isFinite(value) || value <= 0) {
-			throw new RecoverableToolError(`budget.${key} must be a positive number.`);
-		}
-		next[key] = value;
-	}
-	if (budget.until !== undefined) {
-		const trimmed = budget.until.trim();
-		if (trimmed) {
-			// `budget.ts` runs `until` through `parseLocalTime` and silently drops the deadline on a
-			// parse failure, so validate it here with the same parser — a mistyped stop-time should
-			// be a recoverable error, not a task with no hard stop.
-			if (parseLocalTime(trimmed) === undefined) {
-				throw new RecoverableToolError(
-					`budget.until "${budget.until}" is not a parseable local time. Use e.g. 2026-09-06T18:00:00+08:00.`,
-				);
-			}
-			next.until = trimmed;
-		} else {
-			next.until = undefined;
-		}
-	}
-	return Object.keys(next).length > 0 ? next : undefined;
-}
-
-export function normalizeSchedule(schedule: string | undefined): string | undefined | null {
-	if (schedule === undefined) return undefined;
-	const trimmed = schedule.trim();
-	if (!trimmed) return null; // explicit clear
-	validateTaskSchedule(trimmed);
-	return trimmed;
-}
-
-/**
- * A newly created task starts `open` — even a recurring one. Creation opens its first cycle
- * immediately rather than parking until the next cron occurrence, because "create it and it does
- * nothing until tomorrow morning" was consistently surprising; the cadence still governs every
- * *subsequent* cycle through the `schedule` ticket the loop parks on when it finishes.
- */
-export function renderTaskSkeleton(
-	request: TaskCreateRequest,
-	now: Date = new Date(),
-): {
-	fields: TaskFrontmatterV4;
-	body: string;
-} {
-	const schedule = normalizeSchedule(request.schedule);
-	const fields: TaskFrontmatterV4 = {
-		state: "open",
-		schedule: schedule ?? undefined,
-		// The first cycle opens at creation: steps, rework rounds and cost all accumulate onto a
-		// cycle, so a task without one would have nowhere to record what it did.
-		cycle: createCycle(nextCycleId(undefined, now), now),
-		budget: normalizeBudget(request.budget),
-		verify: request.verificationRequired ? "required" : undefined,
-	};
-	const body = renderStandardTaskBody({
-		title: request.title,
-		goal: request.goal,
-		dod: request.dod,
-		manual: request.manual,
-		verificationPlan: request.verificationPlan,
-		verificationRequired: request.verificationRequired ?? false,
-		plan: request.plan,
-	});
-	return { fields, body };
-}
-
 /** The scheduling half of a lifecycle notice: where the task stands and who will wake it. */
-export function describeTaskState(fields: TaskFrontmatterV4): string {
+export function describeTaskState(fields: TaskFrontmatter): string {
 	if (fields.paused) return `state: ${fields.state}（已暂停：${fields.paused.reason}）`;
 	if (fields.state === "parked" && fields.ticket) {
 		return `state: parked（${describeTicket(fields.ticket)}；兜底 ${fields.ticket.by}）`;
@@ -132,117 +26,93 @@ export function describeTaskState(fields: TaskFrontmatterV4): string {
 	return `state: ${fields.state}`;
 }
 
+/** A run with no wall-clock limit of its own is given up on after a day, like v4's default backstop. */
+const DEFAULT_RUN_DEADLINE_MS = 24 * 60 * 60 * 1000;
+
 /**
- * Build the injected lookup a ticket resolver needs. The run/job/event registries are read here —
- * once, at the call site — rather than imported inside `ticket.ts`, which is what keeps the whole
- * validation matrix unit-testable against plain fakes.
+ * Delegations and background jobs bound to `taskId` that have not settled yet, each with the
+ * instant its owner gives up on it. The registries are read here — once, at the call site —
+ * rather than imported inside `ticket.ts`, which is what keeps the whole validation matrix
+ * unit-testable against plain fakes.
  */
+export async function listPendingWork(options: TaskManageToolOptions, taskId: string): Promise<PendingWorkRef[]> {
+	const pending: PendingWorkRef[] = [];
+	for (const run of options.runManager.list()) {
+		if (run.taskId !== taskId || run.settledAt !== undefined) continue;
+		const deadline =
+			run.deadlineAt ??
+			(run.maxWallTimeSec ? run.startedAt + run.maxWallTimeSec * 1000 : run.startedAt + DEFAULT_RUN_DEADLINE_MS);
+		pending.push({ ref: run.runId, deadlineMs: deadline });
+	}
+	const jobs = await options.jobManager.list().catch(() => []);
+	for (const job of jobs) {
+		if (job.taskId !== taskId || job.status !== "running") continue;
+		pending.push({ ref: job.id, deadlineMs: job.startedAt + job.timeoutSeconds * 1000 });
+	}
+	return pending;
+}
+
 export async function buildTicketContext(
 	options: TaskManageToolOptions,
 	taskId: string,
-	schedule: string | undefined,
 	now: Date = new Date(),
 ): Promise<TicketContext> {
-	const runManager = options.runManager;
-	const jobs = await options.jobManager.list().catch(() => []);
-	const events = await readChannelEvents(options);
-	return {
-		now,
-		taskId,
-		channelId: options.channelId,
-		schedule,
-		findRun: (id) => runManager.get(id),
-		findJob: (id) => jobs.find((job) => job.id === id),
-		findEvent: (name) => events.get(name),
-	};
+	const pending = await listPendingWork(options, taskId);
+	return { now, pendingWork: () => pending };
 }
 
-/** Every parseable event definition in the workspace, by name. Missing directory → empty. */
-async function readChannelEvents(options: TaskManageToolOptions): Promise<Map<string, TicketEventRef>> {
-	const dir = eventsDir(options);
-	const events = new Map<string, TicketEventRef>();
-	if (!existsSync(dir)) return events;
-	for (const filename of await readdir(dir)) {
-		if (!filename.endsWith(".json")) continue;
-		try {
-			const event = parseScheduledEventContent(await readFile(join(dir, filename), "utf-8"), filename);
-			events.set(filename.slice(0, -".json".length), {
-				type: event.type,
-				channelId: event.channelId,
-				schedule: event.type === "periodic" ? event.schedule : undefined,
-			});
-		} catch {
-			// An unparseable event cannot back a ticket; leave it for /events to clean up.
-		}
-	}
-	return events;
+export interface CloseTaskInput {
+	options: TaskManageToolOptions;
+	document: StoredTaskDocument;
+	id: string;
+	outcome: "complete" | "cancel";
+	note: string;
+	/** Steps the loop log should record; defaults to the task's own counter. */
+	steps?: number;
+	/**
+	 * Runs after every check has passed and before the close record is written. `task_step_end`
+	 * records its own step here: it has to land in the active log (archiving moves the log away) and
+	 * must not land at all if a check rejects the close, or a corrected retry would log it twice.
+	 */
+	afterChecks?: () => Promise<void>;
 }
 
 /**
- * On close-out (complete or cancel), delete every task-owned event.
+ * Close a task: the one close-out both `task_step_end outcome=done` and `task_close` share
+ * (spec 052, D6/D7).
  *
- * Matching is done by parsing each candidate name and comparing the full task id, not by prefix —
- * a prefix match on `task.<channel>.<id>.` would also match a *different* task whose id happens to
- * start with this one plus a dot (e.g. closing "v1" must not delete events owned by "v1.2-release").
+ * `complete` has two gates, both cheap and both about the *leader's* own state rather than any
+ * runtime proof: every DoD item is checked off (the leader's explicit confirmation), and nothing
+ * bound to the task is still in flight (otherwise the project would be archived and the late
+ * result would fall back into the chat). `cancel` has neither gate — abandoning work must always
+ * be possible — but reports what was left running, because closing a task never cancels it.
  */
-export async function cleanupTaskEvents(options: TaskManageToolOptions, id: string): Promise<{ deleted: string[] }> {
-	const dir = eventsDir(options);
-	if (!existsSync(dir)) return { deleted: [] };
-
-	const deleted: string[] = [];
-	for (const filename of (await readdir(dir)).sort()) {
-		if (!filename.endsWith(".json")) continue;
-		const parsed = parseTaskEventName(filename.slice(0, -".json".length), options.channelId);
-		if (parsed?.id !== id) continue;
-		const eventPath = join(dir, filename);
-		let content: string;
-		try {
-			content = await readFile(eventPath, "utf-8");
-		} catch (error) {
-			log.logWarning(
-				`Could not read task-owned event ${filename} during cleanup`,
-				`${errorMessage(error)}. Fix filesystem access, then use /events show ${filename.slice(0, -".json".length)} and retry cleanup.`,
+export async function closeTaskDocument(input: CloseTaskInput): Promise<{ stillRunning: string[] }> {
+	const { options, document, id, outcome, note } = input;
+	const pending = (await listPendingWork(options, id)).map((item) => item.ref);
+	if (outcome === "complete") {
+		const unchecked = uncheckedTaskAcceptanceItems(document.body);
+		if (unchecked.length > 0) {
+			throw new RecoverableToolError(
+				`Task "${id}" still has unmet acceptance items: ${unchecked.slice(0, 3).join("; ")}. Check them off with edit once the evidence holds.`,
 			);
-			continue;
 		}
-		try {
-			parseScheduledEventContent(content, filename);
-		} catch {
-			continue; // can't classify → leave it for /events to handle
+		if (pending.length > 0) {
+			throw new RecoverableToolError(
+				`Task "${id}" still has work in flight (${pending.join(", ")}). Wait for it (park on a work ticket), or cancel it with subagent_run / job before finishing.`,
+			);
 		}
-		await unlink(eventPath);
-		deleted.push(filename.slice(0, -".json".length));
 	}
-	return { deleted };
-}
-
-/**
- * The verification gate both close entry points share (`task_step_end outcome=done` and
- * `task_close outcome=complete`).
- *
- * It exists as one function because the two used to ask the question separately and both asked
- * the weaker one — "did a PASS ever land in this cycle" — which a contract edit or a further code
- * change made *after* the PASS would still satisfy. The real check is re-run here, against the
- * contract and the checkout as they stand at close time.
- */
-export async function assertVerificationHoldsForClose(
-	options: TaskManageToolOptions,
-	document: StoredTaskDocument,
-	id: string,
-): Promise<void> {
-	if (document.fields.verify !== "required") return;
-	const runManager = options.runManager;
-	const reason = await completionVerificationBlockReason({
-		channelDir: options.channelDir,
-		taskId: id,
-		taskBody: document.body,
-		cycleId: document.fields.cycle?.id,
-		findRunWorkingDirectory: (runId) => runManager.get(runId)?.workingDirectory,
-		fallbackWorkingDirectory: options.workingDirectory,
+	await input.afterChecks?.();
+	const usage = document.fields.usage;
+	await appendTaskLog(options.channelDir, id, {
+		kind: "close",
+		outcome: outcome === "complete" ? "done" : "cancelled",
+		note,
+		steps: input.steps ?? usage?.steps ?? 0,
+		usd: usage?.usd ?? 0,
 	});
-	if (!reason) return;
-	throw new RecoverableToolError(
-		`Task "${id}" requires independent verification and it does not currently hold: ${reason}. ` +
-			`Dispatch a purpose=verify sub-agent with taskId=${id} against the artifact you are about to deliver, and let its PASS land before finishing.`,
-	);
+	await writeStoredTask(document);
+	await archiveTask(options.channelDir, id, outcome === "complete" ? "completed" : "cancelled");
+	return { stillRunning: outcome === "cancel" ? pending : [] };
 }

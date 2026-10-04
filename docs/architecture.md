@@ -245,18 +245,18 @@ flowchart LR
 | | 定时事件 Events | 持久任务 Tasks |
 |---|---|---|
 | 事实源 | `workspace/events/<name>.json` | `workspace/<channelId>/tasks/<id>.md`（frontmatter 契约） |
-| 类型 | `one-shot`（ISO 时刻） / `periodic`（cron 按主机时区，croner 库） | `open / parked / done` 三态 + 正交的 `paused`；`parked` 必带一张等待票；归档记录 `completed / cancelled` |
+| 类型 | `one-shot`（ISO 时刻） / `periodic`（cron 按主机时区，croner 库）；交付一段聊天 `text`，或一份**任务模板** `task` | 一次性项目：`open / parked / done` 三态 + 正交的 `paused`；`parked` 必带一张等待票；归档记录 `completed / cancelled` |
 | 驱动者 | `EventsWatcher`：fs.watch + 防抖，cron 到点触发 | `TaskDriver`：自适应 timer + nudge 扫描台账，每频道每 tick 至多唤醒 1 个可行动任务 |
-| 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | `time / schedule / run / job / ask / signal` 等待票 |
-| 治理 | 事件历史 `state/events/history.jsonl` | 四维 cycle 预算、`until`、空转检测和等待票兜底；触发边界后写 `paused` 并直接通知 |
-| Agent 侧工具 | `event_manage` | `task_create`/`task_update`/`task_close`/`task_list`/`task_log`，任务会话里另有 `task_step_end`；配合 `task-loop` playbook |
-| 用户命令 | `/events` | `/tasks`（pause/resume/run/steer/reply/doctor 等零 LLM 成本控制） |
+| 前置条件 | `preAction`（bash，经 command-guard 审查，退出码非 0 则跳过本次触发——"传感器"模式） | `time / work / ask` 等待票 |
+| 治理 | 事件历史 `state/events/history.jsonl`；模板事件上一实例未结束时跳过并回执 | 两维预算（steps/usd，含绑定委派成本）、空转检测和等待票兜底；触发边界后写 `paused` 并直接通知 |
+| Agent 侧工具 | `event_manage` | `task_create`/`task_update`/`task_close`/`task_list`/`task_log`，任务会话里另有 `task_step_end`；配合 `task-lead` playbook |
+| 用户命令 | `/events` | `/tasks`（pause/resume/steer/reply/doctor 等零 LLM 成本控制） |
 
-TaskDriver 派发 `[TASK_STEP:<id>]` 合成消息（带任务 brief），走与用户消息相同的串行轮次管道；任务步骤在独立 cycle 会话中运行，并必须以 `task_step_end` 收尾。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
+TaskDriver 派发 `[TASK_STEP:<id>]` 合成消息（带任务 brief），走与用户消息相同的串行轮次管道；任务步骤在这个任务自己的会话中运行，并必须以 `task_step_end` 收尾。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
 
-任务正文可选携带一段 `## Plan`（spec 037）：介于 Goal/DoD 契约与循环日志之间的手段层，四态 checkbox（`[ ]`/`[x]`/`[!]`/`[~]`），当前步骤由 runtime 从文档顺序推导、不由模型自报。契约段哈希的边界是「Plan 与 `## 上次结果` 中先出现的那个」，使 Plan 步骤状态变化永不影响已记录的验证 PASS。
+spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性项目，正文是 Goal / DoD / Work Items 三段，运行时从不改写它；周期与定时的工作由事件**按模板生成任务实例**（实例 id `<事件名>-<YYYYMMDD>-<HHmm>` 由触发时刻确定，重放幂等；上一实例未结束就跳过并回执），events 子系统因此不再读写任务文件。委派和后台作业在任务会话里自动绑定到任务，派发与结算由 `SubAgentRunManager` / `ChannelJobManager` 写进任务的循环日志，每一步的 brief 渲染成 `<task_board>`。
 
-spec 051 把任务拆成三样东西：**契约**（`tasks/<id>.md`，每一步完整注入；4 KB 预算只裁剪运行时写的 `## 上次结果`，作者写的段落永不被删）、**循环日志**（`tasks/<id>.jsonl`，append-only）和**等待票**（frontmatter 的 `ticket`）。一次停泊必须说清楚什么会叫醒它，运行时在写入时校验（run/job 存在且未结算且归属本任务），并确定性地补上 `by` 兜底时限；到点未兑现就重开任务，同周期第二次就停下并通知用户。每个 cycle 在自己的会话（`tasks/.sessions/`）里跑，四维预算（步数/墙钟/成本/返工轮次）取代了旧版启发式治理。
+spec 051 留下的三样东西保持不变：**契约**（`tasks/<id>.md`，每一步完整注入）、**循环日志**（`tasks/<id>.jsonl`，append-only）和**等待票**（frontmatter 的 `ticket`）。一次停泊必须说清楚什么会叫醒它，运行时在写入时校验（`work` 票要求本任务当前有在途的委派或作业），并确定性地补上 `by` 兜底时限；到点未兑现就重开任务，连续第二次就停下并通知用户。验收不再是运行时门禁：`purpose: verify` 的结论（`VERDICT`）记录在看板上供负责人权衡，关闭任务只要求 DoD 全部勾选且没有在途的委派/作业。
 
 ## 8. 工具层与子代理
 
@@ -282,7 +282,7 @@ spec 051 把任务拆成三样东西：**契约**（`tasks/<id>.md`，每一步�
 
 **子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 区分 `internal` 与 `external`，也可通过 `subagent_inline` 按次定义 internal 执行者；命名角色统一走 `subagent` 的路由字段，inline 才接受模型、工具和预算覆盖。Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置默认限额为 32 turns / 96 tool calls / 600s；外部角色只有 `maxWallTimeSec`（默认 3600s）。
 
-`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器仍结构性移除 write/edit；声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease，且 `verificationStrength: advisory`。新 attestation 的 subject 固定验证开始时的 `baseCommit`，并保留既有 untracked 路径；只对 checkout 根目录下明确临时产物范围内新出现的 untracked 文件放行，其他新源文件和既有 untracked 产品文件的修改仍由 subject 比对发现。旧 attestation 继续使用 HEAD-sensitive `workspaceSubjectHash` 兼容算法。
+`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器仍结构性移除 write/edit；声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease。运行时只读取检查者最后一行 `VERDICT: PASS|FAIL`，记录在 run 与所属任务的看板上，不写 attestation、不做工作区快照。带 `taskId` 的 run 在注册与结算时由 `SubAgentRunManager` 写入任务日志并把成本计入任务预算（`taskAccounted` 保证只写一次）。
 
 ## 9. 安全层（`src/security/`）
 
@@ -334,9 +334,9 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │       ├── subagent-artifacts/<runId>/ # output.md；外部 run 另含 prompt/events/stderr
 │       └── tasks/
 │           ├── <id>.md / <id>.jsonl # 契约 / 循环日志
-│           ├── .sessions/          # 每个 task cycle 独立会话
-│           ├── .steer/ / .verifications/ # 用户指示、通知与验收
-│           ├── .v3/                # 迁移原件
+│           ├── .sessions/          # 每个任务独立会话
+│           ├── .steer/             # 用户指示与待发送的通知
+│           ├── .v4/                # 转换前的原件（含移走的任务专属事件）
 │           └── archive/            # 已关闭契约与日志
 └── state/
     ├── dispatch/                  # durable-dispatch 外发箱

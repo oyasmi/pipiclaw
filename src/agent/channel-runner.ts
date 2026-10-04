@@ -236,7 +236,7 @@ export class ChannelRunner implements AgentRunner {
 	 * bound to between turns — which keeps busy state, `/stop`, steering and turn recovery with
 	 * their existing single owner instead of splitting them across two runner instances.
 	 */
-	private taskLoop?: { taskId: string; cycleId: string };
+	private taskLoop?: { taskId: string };
 	/** Single owner of turn state; see TurnPhase in types.ts and TurnStateMachine in turn-state.ts. */
 	private readonly turnState = new TurnStateMachine((message, detail) =>
 		log.logWarning(`[${this.channelId}] ${message}`, detail),
@@ -1641,14 +1641,14 @@ export class ChannelRunner implements AgentRunner {
 	 * Task work must not accumulate in the channel's chat transcript: the one real channel on the
 	 * author's machine had grown to 7.4 MB and been compacted six times because chat and two daily
 	 * tasks shared it, so every compaction damaged all three at once. Swapping the bound session
-	 * per turn gives each cycle its own bounded context while leaving turn state, `/stop`, and
+	 * per turn gives each task its own bounded context while leaving turn state, `/stop`, and
 	 * delivery exactly where they already are.
 	 */
-	async bindTaskSession(taskId: string, cycleId: string): Promise<void> {
+	async bindTaskSession(taskId: string): Promise<void> {
 		await this.sessionReady;
-		const path = taskSessionPath(this.channelDir, taskId, cycleId);
+		const path = taskSessionPath(this.channelDir, taskId);
 		await mkdir(dirname(path), { recursive: true });
-		this.taskLoop = { taskId, cycleId };
+		this.taskLoop = { taskId };
 		await this.sessionRuntime.switchSession(path);
 		this.syncMemoryBootstrapPendingFromSession();
 	}
@@ -1687,7 +1687,7 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	/** Which task loop this runner is currently bound to, if any. */
-	getTaskLoop(): { taskId: string; cycleId: string } | undefined {
+	getTaskLoop(): { taskId: string } | undefined {
 		return this.taskLoop;
 	}
 

@@ -7,7 +7,7 @@ order: 20
 
 # 记忆与学习
 
-遇到需要跨回合保留或找回的信息时，先按生命周期选落点；文件位置不清楚才读 `runtime-orientation.md` 的“文件地图”。任务步骤没有 `memory_save`，经验先记本任务的 `note` / Manual。
+遇到需要跨回合保留或找回的信息时，先按生命周期选落点；文件位置不清楚才读 `runtime-orientation.md` 的“文件地图”。任务步骤没有 `memory_save`，经验先记本任务的 `note`。
 
 ## 选落点
 
@@ -44,7 +44,7 @@ order: 20
 
 后台反思同时维护 journal 与 memory：明确的高必要性约束直接永久保留；日常运作知识默认试用 30 天，后续对话依赖或印证后转正，否则到期移除，之后仍可重新学到。用户明确保存的记忆立即永久。模型不需要手动维护这些期限。
 
-任务内教训先写 `note`；确实约束后续实施的，再改 Manual。正式 PASS 后修改 Manual 会使证明失效，时机不清楚才读 `task-loop.md` 的“独立验收”。
+任务内教训先写 `note`；确实约束后续实施的，写进契约的 Goal 或对应 DoD 项。周期工作的持久改进（要求、检查项）在 `report` 里提给用户，由聊天侧在用户确认后更新事件模板，不写进 memory。
 
 流程多次验证有效且能跨任务复用，才写为 skill。使用 **workspace 绝对路径**下的 `skills/<name>/SKILL.md`；已有技能用 `edit`。frontmatter 必须有与目录一致的 kebab-case `name` 和说明触发条件的 `description`。
 

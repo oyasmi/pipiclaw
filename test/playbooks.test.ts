@@ -54,7 +54,7 @@ describe("runtime playbook catalog", () => {
 		expect(selectRuntimePlaybooks(catalog, ALL_TOOLS)).toHaveLength(catalog.length);
 		// Chat and task steps expose different halves of this any-of gate.
 		for (const taskTool of ["task_create", "task_step_end"]) {
-			expect(selectRuntimePlaybooks(catalog, [taskTool]).map((item) => item.name)).toContain("task-loop");
+			expect(selectRuntimePlaybooks(catalog, [taskTool]).map((item) => item.name)).toContain("task-lead");
 		}
 	});
 
@@ -159,7 +159,7 @@ describe("path guard access to bundled playbooks", () => {
 
 	it("allows reading playbooks outside workspace/home/temp but never writing them", () => {
 		const ctx = createCtx();
-		const playbookPath = join(PLAYBOOKS_DIR, "task-loop.md");
+		const playbookPath = join(PLAYBOOKS_DIR, "task-lead.md");
 		expect(guardPath(playbookPath, "read", ctx)).toMatchObject({ allowed: true });
 		expect(guardPath(playbookPath, "write", ctx)).toMatchObject({ allowed: false });
 		expect(guardPath(join(PLAYBOOKS_DIR, "..", "main.ts"), "read", ctx)).toMatchObject({ allowed: false });

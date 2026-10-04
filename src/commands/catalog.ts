@@ -149,7 +149,7 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 	{
 		name: "tasks",
 		argumentHint:
-			"[show <id>|log <id>|steer <id> <内容>|reply <id> <内容>|pause <id>|resume <id> [+steps N]|run <id>|archive|doctor]",
+			"[show <id>|log <id>|steer <id> <内容>|reply <id> <内容>|pause <id>|resume <id> [+steps N|+usd X]|archive|doctor]",
 		description: "查看、指挥并诊断本频道的长程任务；pause 只停用执行，保留阶段与等待票",
 		availableWhileBusy: true,
 		subcommands: [
@@ -157,13 +157,13 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 			{
 				name: "show",
 				args: "<id>",
-				description: "查看契约、最近日志、返工轮次与成本",
+				description: "查看契约、团队看板、最近日志与用量",
 				example: "/tasks show weekly-report",
 			},
 			{
 				name: "log",
-				args: "<id> [cycle]",
-				description: "翻看该任务的循环日志",
+				args: "<id>",
+				description: "翻看该任务的循环日志（含派发与结算记录）",
 				example: "/tasks log weekly-report",
 			},
 			{ name: "archive", description: "列出已归档（已关闭）的任务", example: "/tasks archive" },
@@ -175,15 +175,9 @@ export const BUILT_IN_COMMANDS: readonly CommandSpec[] = [
 			},
 			{
 				name: "resume",
-				args: "<id> [+steps N|+rounds N|+usd X]",
-				description: "重新启用该任务，可同时追加本周期预算",
+				args: "<id> [+steps N|+usd X]",
+				description: "重新启用该任务，可同时追加预算",
 				example: "/tasks resume weekly-report +steps 20",
-			},
-			{
-				name: "run",
-				args: "<id>",
-				description: "恢复并立即排入一次执行（需要运行时可用）",
-				example: "/tasks run weekly-report",
 			},
 			{
 				name: "steer",

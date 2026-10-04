@@ -165,7 +165,7 @@ export const coreRenovatedCases: EvalCase[] = [
 		budget: { maxWallMs: 240_000, maxTurns: 16 },
 		setup: (ctx) =>
 			writeTask(ctx, "release-plan", {
-				cycle: true,
+				started: true,
 				body: `# Task\n\n## Goal\nCreate ${join(ctx.channelDir, "release-plan.txt")} only after the user supplies the environment and release window. These values cannot be guessed.\n\n## DoD\n- [ ] release-plan.txt records the user's latest environment and window\n`,
 			}),
 		script: [
@@ -235,7 +235,7 @@ export const coreRenovatedCases: EvalCase[] = [
 				`---\nname: run-reader\ndescription: 读取受控输入并返回 stdout。\nruntime: external\nharness: exec\ncommand: node ${join(ctx.workspaceDir, "external-reader.mjs")}\nmutates: read\nmaxWallTimeSec: 30\n---\n\n执行命令并返回真实 stdout。\n`,
 			);
 			await writeTask(ctx, "delegated-read", {
-				cycle: true,
+				started: true,
 				body: `# Task\n\n## Goal\nDelegate reading ${join(ctx.channelDir, "run-input.txt")} to external role run-reader. Park on the exact run ticket. After its completion wake, inspect the run result and deliver the actual value through task_step_end notify. Never guess it.\n\n## DoD\n- [ ] settled run output delivered\n`,
 			});
 		},

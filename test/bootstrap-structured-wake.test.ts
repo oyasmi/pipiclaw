@@ -95,23 +95,17 @@ async function waitingTask(workspaceDir: string, channelId: string, taskId: stri
 }
 
 /**
- * Spec 051, D2: a park names the exact resource whose settlement may redeem it, so the ticket can
- * only be written once that resource's id exists. Written directly rather than through
- * `resolveTicket` because these cases park on a run/job that has *already* settled — which
- * `resolveTicket` rightly refuses — in order to exercise the redemption path itself.
+ * Spec 052, D3: a `work` ticket is redeemed by any bound run/job settling. Written directly rather
+ * than through `resolveTicket` because these cases park on a run/job that has *already* settled —
+ * which `resolveTicket` rightly refuses — in order to exercise the redemption path itself.
  */
-async function parkOnResource(
-	channelDir: string,
-	taskId: string,
-	kind: "job" | "subagent",
-	resourceId: string,
-): Promise<void> {
+async function parkOnResource(channelDir: string, taskId: string, resourceId: string): Promise<void> {
 	await writeFile(
 		join(channelDir, "tasks", `${taskId}.md`),
 		renderTaskDocument(
 			{
 				state: "parked",
-				ticket: { kind: kind === "job" ? "job" : "run", id: resourceId, by: "2099-01-01T00:00:00+08:00" },
+				ticket: { kind: "work", refs: [resourceId], by: "2099-01-01T00:00:00+08:00" },
 			},
 			`# ${taskId}\n`,
 		),
@@ -213,7 +207,7 @@ async function createWake(
 	}
 	const wake = harness.bot.events.at(-1);
 	if (!wake?.internalWake || wake.internalWake.kind !== kind) throw new Error(`missing ${kind} wake`);
-	if (channelDir) await parkOnResource(channelDir, taskId, kind, wake.internalWake.resourceId);
+	if (channelDir) await parkOnResource(channelDir, taskId, wake.internalWake.resourceId);
 	return wake;
 }
 

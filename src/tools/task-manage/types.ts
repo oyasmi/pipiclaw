@@ -15,16 +15,14 @@ export interface TaskManageResult {
 	path?: string;
 	state?: string;
 	archived?: boolean;
-	deletedEvents?: string[];
 	tasks?: Array<{
 		id: string;
 		title: string;
 		state: string;
 		paused: boolean;
 		ticket?: string;
-		cycle?: string;
 		steps?: number;
-		rounds?: number;
+		items?: string;
 	}>;
 	/** Rendered log lines, for `task_log`. */
 	entries?: string[];
@@ -44,15 +42,9 @@ export type TaskStepEndRequest = Static<typeof taskStepEndSchema>;
 export interface TaskManageToolOptions {
 	jobManager: ChannelJobManager;
 	runManager: SubAgentRunManager;
-	workspaceDir: string;
 	channelDir: string;
-	channelId: string;
-	/** Project checkout whose artifact state an independent verifier binds to. */
-	workingDirectory?: string;
 	/** Present only inside a task session: which task's loop this tool set belongs to. */
 	taskId?: string;
-	/** Present only inside a task session: the cycle the current step belongs to. */
-	cycleId?: string;
 	/** Tools this step has completed so far; feeds the loop log's idle-step evidence (D6). */
 	getToolsUsed?: () => string[];
 }

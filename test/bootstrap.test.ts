@@ -250,6 +250,7 @@ describe("isVerifiedJobWake", () => {
 			status: "completed",
 			startedAt: 0,
 			durationMs: 0,
+			timeoutSeconds: 300,
 			taskId: "T-1",
 			...overrides,
 		};

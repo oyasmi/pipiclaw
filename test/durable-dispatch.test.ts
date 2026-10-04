@@ -174,8 +174,8 @@ describe("DurableDispatchService", () => {
 			renderTaskDocument(
 				{
 					state: "parked",
-					// Parked on the very run whose wake is being redelivered (spec 051, D2).
-					ticket: { kind: "run", id: "run-redelivery", by: "2099-01-01T00:00:00+08:00" },
+					// Parked on the work whose wake is being redelivered (spec 052, D3).
+					ticket: { kind: "work", refs: ["run-redelivery"], by: "2099-01-01T00:00:00+08:00" },
 				},
 				"# Redelivery\n",
 			),

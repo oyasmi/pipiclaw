@@ -1,14 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import {
-	deliveryMatches,
-	driverDispatchCount,
-	noFailedToolResult,
-	readTaskLoopLog,
-	taskFrontmatter,
-	taskLog,
-	toolCallCount,
-} from "../harness/graders.js";
+import { deliveryMatches, driverDispatchCount, readTaskLoopLog, taskFrontmatter, taskLog } from "../harness/graders.js";
 import type { EvalCase } from "../harness/schema.js";
 import { writeTask } from "./helpers.js";
 
@@ -25,54 +15,15 @@ const definitionFile = "evals/cases/task-loop-quality.ts";
 
 export const taskLoopQualityCases: EvalCase[] = [
 	{
-		id: "TL-signal-01",
-		suite: "capability",
-		source: "2026-09-10 playbook review: chat/task tool boundary and pre-created signal",
-		description:
-			"A task checks its condition and waits on an existing sensor without trying to create an event in the task session.",
-		definitionFile,
-		budget: { maxWallMs: 180_000, maxTurns: 12 },
-		setup: async (ctx) => {
-			const eventName = "task.dm_eval.await-signal.ready";
-			await mkdir(join(ctx.workspaceDir, "events"), { recursive: true });
-			await writeFile(
-				join(ctx.workspaceDir, "events", `${eventName}.json`),
-				JSON.stringify({
-					type: "periodic",
-					channelId: "dm_eval",
-					text: "检查 ready.flag",
-					schedule: "*/5 * * * *",
-					preAction: { type: "bash", command: `test -f ${join(ctx.channelDir, "ready.flag")}`, timeout: 10000 },
-				}),
-			);
-			await writeTask(ctx, "await-signal", {
-				cycle: true,
-				body: `# Task\n\n## Goal\n等待 ${join(ctx.channelDir, "ready.flag")} 出现，读取内容作为交付。\n\n## Manual\n聊天侧已预建传感器 ${eventName}；不要重复建事件。先核对条件；未成立时等待这个来源。\n\n## DoD\n- [ ] 已交付 ready.flag 的真实内容\n`,
-			});
-		},
-		script: [{ kind: "syntheticTaskTurn", taskId: "await-signal" }],
-		graders: [
-			toolCallCount("no-event-creation-in-task", "event_manage", 0),
-			noFailedToolResult("valid-step-end", "task_step_end"),
-			taskFrontmatter(
-				"waits-on-existing-sensor",
-				"await-signal",
-				(task) =>
-					task.fields.ticket?.kind === "signal" && task.fields.ticket.event === "task.dm_eval.await-signal.ready",
-			),
-		],
-	},
-
-	{
 		id: "TL-ticket-01",
 		suite: "capability",
 		source: "051 D2 waiting tickets",
-		description: "A task that starts a background job parks on that job, not on a guessed timer.",
+		description: "A task that starts a background job parks on its work, not on a guessed timer.",
 		definitionFile,
 		budget: { maxWallMs: 240_000, maxTurns: 12 },
 		setup: (ctx) =>
 			writeTask(ctx, "await-job", {
-				cycle: true,
+				started: true,
 				body:
 					"# Task\n\n## Goal\nRun `sleep 45 && echo TICKET-DONE > ticket-done.txt` as a background job, then report the file's content.\n\n" +
 					"## DoD\n- [ ] ticket-done.txt contains TICKET-DONE\n",
@@ -86,13 +37,13 @@ export const taskLoopQualityCases: EvalCase[] = [
 			taskFrontmatter(
 				"parks-on-the-job",
 				"await-job",
-				(frontmatter) => frontmatter.fields.ticket?.kind === "job" || frontmatter.fields.state === "open",
+				(frontmatter) => frontmatter.fields.ticket?.kind === "work" || frontmatter.fields.state === "open",
 			),
 			taskLog(
 				"no-guessed-timer",
 				"await-job",
 				(log) => !/"kind":"step"[^\n]*"outcome":"park"/.test(log) || !/等一会|稍后再看|过几分钟/.test(log),
-				"a park should name the job, not describe a wait the model invented",
+				"a park should wait on the bound job, not describe a wait the model invented",
 			),
 		],
 	},
@@ -105,7 +56,7 @@ export const taskLoopQualityCases: EvalCase[] = [
 		budget: { maxWallMs: 240_000, maxTurns: 12 },
 		setup: (ctx) =>
 			writeTask(ctx, "evidence-note", {
-				cycle: true,
+				started: true,
 				body:
 					"# Task\n\n## Goal\nWrite the string EVIDENCE-42 into evidence.txt, then verify it by reading the file back.\n\n" +
 					"## DoD\n- [ ] evidence.txt contains EVIDENCE-42\n",
@@ -138,7 +89,7 @@ export const taskLoopQualityCases: EvalCase[] = [
 		budget: { maxWallMs: 240_000, maxTurns: 10 },
 		setup: (ctx) =>
 			writeTask(ctx, "tiny-budget", {
-				cycle: true,
+				started: true,
 				budget: { steps: 1 },
 				body:
 					"# Task\n\n## Goal\nKeep investigating the repository and report findings; this task is deliberately open-ended.\n\n" +

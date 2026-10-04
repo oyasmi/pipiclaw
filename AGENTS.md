@@ -8,11 +8,11 @@ Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-wor
 
 - `src/runtime/`: DingTalk transport, background services, and the composition root (`bootstrap`, `dingtalk`, `delivery`, `task-driver`)
 - `src/channel/`: the transport-neutral channel domain — its two I/O contracts (`channel-context` outbound, `channel-event` inbound), identity (`channel-paths`, `channel-index`) and persisted state (`store`, `active-session-store`, `project-scope-store`). Depends on no transport; this is what `agent`, `memory`, `tools` and `tui` mean when they say "channel"
-- `src/events/`: scheduled/sensor events — definitions, cron/one-shot validation, the filesystem watcher, and admin-command parsing (`events`, `event-validation`, `event-commands`). A separate subsystem from tasks (spec 051, D8); its only touchpoint with tasks is the `signal` ticket redeemed in `EventsWatcher.execute`
+- `src/events/`: scheduled/sensor events — definitions, cron/one-shot validation, the filesystem watcher, and admin-command parsing (`events`, `event-validation`, `event-commands`). A separate subsystem from tasks: the only edge between them is a template event asking the runtime (via the injected `spawnTask` callback) for a task instance — events never read or write task files (spec 052, INV-8)
 - `src/agent/`: main agent orchestration and session event handling
 - `src/commands/`: the product-wide slash-command catalog (`catalog.ts`) and the shared reply length budget (`reply-limits.ts`). Imports nothing; handlers stay in the layer that owns their state
 - `src/memory/`: one-fact-per-file channel memory, daily journal, and the single background reflect pass (spec 050)
-- `src/tasks/`: the long-horizon task contract, waiting tickets, loop log, cycle boundaries and budget (spec 051)
+- `src/tasks/`: the one-off task project: contract (Goal/DoD/Work Items), waiting tickets, loop log with dispatch/settle records, the team board and budget (specs 051, 052)
 - `src/subagents/`: role discovery, internal/external execution, run lifecycle, harnesses, workspace leases, and delegation tools
 - `src/tools/`: tool implementations exposed to the coding agent
 - `src/security/`: command, path, and network guard configuration and enforcement helpers
@@ -26,7 +26,7 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 
 - App-level files: `channel.json`, `auth.json`, `models.json`, `settings.json`, `tools.json`, `security.json`
 - Workspace-level files: `SOUL.md`, `AGENTS.md`, `MEMORY.md`, `ENVIRONMENT.md`, `skills/`, `events/`, `sub-agents/`
-- Channel-level files: `memory/<name>.md` + generated `MEMORY.md` index, `journal/YYYY-MM-DD.md`, `tasks/<id>.md` (contract) + `tasks/<id>.jsonl` (loop log) + `tasks/.sessions/` (one agent session per cycle), delegation records/artifacts, `log.jsonl`, `context.jsonl`
+- Channel-level files: `memory/<name>.md` + generated `MEMORY.md` index, `journal/YYYY-MM-DD.md`, `tasks/<id>.md` (contract) + `tasks/<id>.jsonl` (loop log) + `tasks/.sessions/` (one agent session per task), delegation records/artifacts, `log.jsonl`, `context.jsonl`
 - `memory/<name>.md` is one durable fact per file (frontmatter metadata); `MEMORY.md` is generated from it — never hand-edited
 - `journal/YYYY-MM-DD.md` is the day-by-day working record, written only by the background reflect pass
 - `log.jsonl`, rotated logs, and `context.jsonl` are cold storage, not normal working memory; access them through `session_search` when needed
@@ -76,7 +76,9 @@ e2e hard rules:
 - A tool result's `details` is the runtime's channel (the model reads `content`). `buildToolSet` stamps `kind` from the registration name and that stamp is authoritative — a `kind` written inside a tool is redundant and cannot override it, so the discriminator can never drift from the tool it names. New tools need only return their own fields
 - Keep `SubAgentRunManager` the sole owner of settlement, usage, leases, and completion wake; preserve its idempotency markers
 - A task parks only on a ticket produced by `resolveTicket`, and every ticket carries a runtime-derived backstop. Never write `ticket` frontmatter directly, and never add a resumption path that bypasses `redeemTicket` — "parked with nothing that can wake it" is the one failure spec 051 exists to make unrepresentable
-- Task steps run in the task cycle's own session and are silent by default; only `task_step_end`'s `notify` (and the deterministic runtime receipts) reach the channel
+- Task steps run in the task's own session and are silent by default; only `task_step_end`'s `report` (and the deterministic runtime receipts) reach the channel
+- A task is a one-off project the model leads; recurring or scheduled work is an event with a `task` template that spawns an instance per occurrence (spec 052). Verification is the leader's judgement: a `VERDICT` is recorded information, never a runtime gate
+- Runtime playbooks are developer-curated and read-only at runtime; put mechanism knowledge there, not in a new runtime-writable carrier
 - External agents bypass Pipiclaw's guards. Their role command, CLI sandbox, host account, and environment are the permission boundary; `mutates` is not a sandbox
 
 ## Command Reply Conventions

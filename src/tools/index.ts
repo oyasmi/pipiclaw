@@ -45,7 +45,7 @@ export interface CreatePipiclawToolsOptions {
 	 * not spawn tasks), `memory_save` (task state is not a channel fact — this was memory v2's
 	 * single biggest pollution source) and `event_manage`.
 	 */
-	taskLoop?: { taskId: string; cycleId: string };
+	taskLoop?: { taskId: string };
 	/** Tools completed in the current turn; only `task_step_end` reads it. */
 	getToolsUsed?: () => string[];
 }
@@ -115,6 +115,8 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 			workspaceDir: options.workspaceDir,
 			channelId: options.channelId,
 		},
+		// Inside a task session every delegation binds to that task automatically (spec 052, D4).
+		boundTaskId: options.taskLoop?.taskId,
 	};
 	const subAgentManageOptions = {
 		runManager: options.runManager,

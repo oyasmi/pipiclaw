@@ -1,15 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "fs";
-import { mkdir } from "fs/promises";
-import { dirname, join } from "path";
+import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "fs";
+import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EventAction } from "../src/events/events.js";
-import { EventsWatcher } from "../src/events/events.js";
+import type { EventAction, EventsWatcherOptions } from "../src/events/events.js";
+import { EventsWatcher, parseScheduledEventContent } from "../src/events/events.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import * as log from "../src/log.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { DurableDispatchService } from "../src/runtime/durable-dispatch.js";
-import { parseTaskFrontmatterV4 } from "../src/tasks/frontmatter.js";
-import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const createTempDir = useTempDirs("pipiclaw-events-");
@@ -34,7 +31,8 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 		event: {
 			type: "one-shot" | "periodic";
 			channelId: string;
-			text: string;
+			text?: string;
+			task?: unknown;
 			at?: string;
 			schedule?: string;
 			preAction?: EventAction;
@@ -64,7 +62,8 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 			event: {
 				type: "one-shot" | "periodic";
 				channelId: string;
-				text: string;
+				text?: string;
+				task?: unknown;
 				at?: string;
 				schedule?: string;
 				preAction?: EventAction;
@@ -121,8 +120,9 @@ function createWatcher(
 		blockObfuscation: boolean;
 	},
 	historyPath?: string,
+	spawnTask?: EventsWatcherOptions["spawnTask"],
 ): EventsWatcher {
-	return new EventsWatcher(dir, bot as unknown as DingTalkBot, executor, guardConfig, { historyPath });
+	return new EventsWatcher(dir, bot as unknown as DingTalkBot, executor, guardConfig, { historyPath, spawnTask });
 }
 
 function readHistory(historyPath: string): Array<Record<string, unknown>> {
@@ -245,49 +245,95 @@ describe("EventsWatcher", () => {
 		expect(bot.events).toHaveLength(1);
 	});
 
-	// Spec 051, D8/INV-7: the one and only touchpoint between events and the task loop.
-	// Mutation check (2026-09-05): drop `&& ticket.event === name` from the redemption matcher and
-	// the first half goes red — an unrelated task-owned event would swallow the channel's wake.
-	it("redeems a task's signal ticket instead of waking the channel, and only for the named event", async () => {
-		const dir = createTempDir();
-		const channelDir = join(dirname(dir), "dm_1");
-		await mkdir(join(channelDir, "tasks"), { recursive: true });
-		const taskPath = join(channelDir, "tasks", "sensor.md");
-		const eventName = "task.dm_1.sensor.checkin";
-		const parked = renderTaskDocument(
-			{
-				state: "parked",
-				ticket: { kind: "signal", event: eventName, by: "2099-01-01T00:00:00+08:00" },
-			},
-			"# Sensor task\n",
-		);
-
-		const bot = new FakeBot();
-		const watcher = createWatcher(dir, bot);
-		const privateApi = getEventsWatcherPrivateApi(watcher);
-		const event = {
-			type: "one-shot" as const,
+	describe("task templates (spec 052, D2)", () => {
+		const template = {
+			title: "Weekly report",
+			goal: "Write it.",
+			dod: "- [ ] Delivered",
+			items: [{ text: "collect" }],
+		};
+		const templateEvent = {
+			type: "periodic" as const,
 			channelId: "dm_1",
-			text: "sensor fired",
-			at: "2020-01-01T00:00:00.000Z",
+			schedule: "0 9 * * 1",
+			task: template,
 		};
 
-		// A different task-owned event must not redeem this ticket, and must still wake the channel.
-		writeFileSync(taskPath, parked);
-		writeFileSync(join(dir, "task.dm_1.sensor.other.json"), JSON.stringify(event));
-		await privateApi.execute("task.dm_1.sensor.other.json", event, false);
-		expect(bot.events).toHaveLength(1);
-		expect(parseTaskFrontmatterV4(readFileSync(taskPath, "utf-8")).fields.state).toBe("parked");
+		it("accepts `text` xor `task`, and validates the template with the same rules as task_create", () => {
+			const parse = (value: unknown) => parseScheduledEventContent(JSON.stringify(value), "e.json");
+			expect(parse(templateEvent).task?.title).toBe("Weekly report");
+			expect(() => parse({ ...templateEvent, text: "also text" })).toThrow(/exactly one of/);
+			expect(() => parse({ type: "periodic", channelId: "dm_1", schedule: "0 9 * * 1" })).toThrow(/exactly one of/);
+			expect(() => parse({ ...templateEvent, task: { ...template, dod: "prose" } })).toThrow(/no checklist items/);
+		});
 
-		// The named event redeems the ticket and delivers no chat wake at all.
-		writeFileSync(join(dir, `${eventName}.json`), JSON.stringify(event));
-		await privateApi.execute(`${eventName}.json`, event, false);
-		expect(bot.events).toHaveLength(1);
-		expect(parseTaskFrontmatterV4(readFileSync(taskPath, "utf-8")).fields.state).toBe("open");
+		it("asks the runtime for an instance of the occurrence instead of waking the chat", async () => {
+			const dir = createTempDir();
+			const bot = new FakeBot();
+			const spawnTask = vi.fn(async () => ({ outcome: "spawned" as const, id: "weekly-20260105-0900" }));
+			const watcher = createWatcher(dir, bot, createMockExecutor(), undefined, undefined, spawnTask);
+			const occurrence = new Date("2026-01-05T09:00:00+08:00");
 
-		// With the ticket gone, the same event goes back to being an ordinary channel wake.
-		await privateApi.execute(`${eventName}.json`, event, false);
-		expect(bot.events).toHaveLength(2);
+			await getEventsWatcherPrivateApi(watcher).execute("weekly.json", templateEvent, false, occurrence);
+
+			expect(bot.events).toHaveLength(0);
+			expect(spawnTask).toHaveBeenCalledWith({
+				eventName: "weekly",
+				channelId: "dm_1",
+				template: expect.objectContaining({ title: "Weekly report" }),
+				occurrence,
+			});
+		});
+
+		it("keys a one-shot template on its own `at`, so a post-restart replay maps to the same instance", async () => {
+			const dir = createTempDir();
+			const spawnTask = vi.fn(async () => ({ outcome: "exists" as const, id: "x" }));
+			const watcher = createWatcher(dir, new FakeBot(), createMockExecutor(), undefined, undefined, spawnTask);
+			const filePath = join(dir, "once.json");
+			writeFileSync(filePath, "{}");
+
+			await getEventsWatcherPrivateApi(watcher).execute(
+				"once.json",
+				{ type: "one-shot", channelId: "dm_1", at: "2026-02-01T10:00:00+08:00", task: template },
+				true,
+				new Date("2030-01-01T00:00:00Z"),
+			);
+
+			const request = spawnTask.mock.calls[0] as unknown as [{ occurrence: Date }];
+			expect(request[0].occurrence.toISOString()).toBe(new Date("2026-02-01T10:00:00+08:00").toISOString());
+			// Handled (even as a replay): a one-shot is consumed.
+			expect(existsSync(filePath)).toBe(false);
+		});
+
+		it("keeps a one-shot file with an error marker when the instance could not be created", async () => {
+			const dir = createTempDir();
+			const spawnTask = vi.fn(async () => {
+				throw new Error("disk full");
+			});
+			const watcher = createWatcher(dir, new FakeBot(), createMockExecutor(), undefined, undefined, spawnTask);
+			const filePath = join(dir, "once.json");
+			writeFileSync(filePath, "{}");
+
+			await getEventsWatcherPrivateApi(watcher).execute(
+				"once.json",
+				{ type: "one-shot", channelId: "dm_1", at: "2026-02-01T10:00:00+08:00", task: template },
+				true,
+			);
+
+			expect(readFileSync(`${filePath}.error.txt`, "utf-8")).toContain("disk full");
+		});
+
+		it("does not spawn when the preAction gate blocks the occurrence", async () => {
+			const dir = createTempDir();
+			const spawnTask = vi.fn(async () => ({ outcome: "spawned" as const, id: "x" }));
+			const watcher = createWatcher(dir, new FakeBot(), createMockExecutor(), undefined, undefined, spawnTask);
+			await getEventsWatcherPrivateApi(watcher).execute(
+				"gated.json",
+				{ ...templateEvent, preAction: { type: "bash", command: "false" } },
+				false,
+			);
+			expect(spawnTask).not.toHaveBeenCalled();
+		});
 	});
 
 	it("schedules future one-shot events and rejects delays beyond platform limits", async () => {
@@ -463,67 +509,6 @@ describe("EventsWatcher", () => {
 
 			expect(bot.events).toHaveLength(0);
 			expect(readFileSync(`${filePath}.error.txt`, "utf-8")).toContain("no more often than every 30 minutes");
-		});
-	});
-
-	describe("orphaned task-owned events (spec 031, D5)", () => {
-		/** The watcher resolves `<workspace>/<channelId>/tasks/<id>.md` relative to its events dir. */
-		function writeOwningTask(eventsDir: string, channelId: string, taskId: string, status: string): void {
-			const tasksDir = join(dirname(eventsDir), channelId, "tasks");
-			mkdirSync(tasksDir, { recursive: true });
-			writeFileSync(join(tasksDir, `${taskId}.md`), `---\nstatus: ${status}\n---\n# Task\n`);
-		}
-
-		function taskEventFixture(channelId: string) {
-			return { type: "periodic" as const, channelId, text: "check the task", schedule: "0 * * * *" };
-		}
-
-		it("fires while the owning task is still live, parsing dotted channel ids too", async () => {
-			for (const channelId of ["dm_1", "dm_a.b.c"]) {
-				const dir = join(createTempDir(), `events-${channelId.replace(/\./g, "-")}`);
-				mkdirSync(dir, { recursive: true });
-				writeOwningTask(dir, channelId, "report", "active");
-				const filename = `task.${channelId}.report.checkin.json`;
-				writeFileSync(join(dir, filename), "{}");
-				const bot = new FakeBot(true);
-				const privateApi = getEventsWatcherPrivateApi(createWatcher(dir, bot, createMockExecutor()));
-
-				await privateApi.execute(filename, taskEventFixture(channelId), false);
-
-				expect(bot.events).toHaveLength(1);
-				expect(existsSync(join(dir, filename))).toBe(true);
-			}
-		});
-
-		it("retires itself when the owning task is gone or has reached a terminal status", async () => {
-			for (const variant of [
-				{ label: "gone", taskBody: undefined as string | undefined },
-				{ label: "terminal", taskBody: "---\noutcome: cancelled\n---\n# Task\n" },
-			]) {
-				const dir = join(createTempDir(), `events-${variant.label}`);
-				mkdirSync(dir, { recursive: true });
-				if (variant.taskBody) {
-					const tasksDir = join(dirname(dir), "dm_1", "tasks");
-					mkdirSync(tasksDir, { recursive: true });
-					writeFileSync(join(tasksDir, "report.md"), variant.taskBody);
-				}
-				const filename = "task.dm_1.report.checkin.json";
-				writeFileSync(join(dir, filename), "{}");
-				const historyPath = join(createTempDir(), `history-${variant.label}.jsonl`);
-				const bot = new FakeBot(true);
-				const watcher = createWatcher(dir, bot, createMockExecutor(), undefined, historyPath);
-
-				await getEventsWatcherPrivateApi(watcher).execute(filename, taskEventFixture("dm_1"), false);
-				await watcher.flush();
-
-				expect(bot.events).toHaveLength(0);
-				expect(existsSync(join(dir, filename))).toBe(false);
-				if (!variant.taskBody) {
-					expect(readHistory(historyPath)).toContainEqual(
-						expect.objectContaining({ action: "skipped", reason: "owning task report no longer exists" }),
-					);
-				}
-			}
 		});
 	});
 

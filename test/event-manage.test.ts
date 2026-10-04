@@ -47,6 +47,54 @@ const validPeriodic: EventDefinitionInput = {
 	schedule: "0 10 * * 1",
 };
 
+describe("manageEvent task templates (spec 052, D2)", () => {
+	const task = { title: "周报", goal: "写周报并发给我", dod: "- [ ] 已发送", items: [{ text: "收集素材" }] };
+
+	it("writes a template event that the watcher parser loads back, with no chat text", async () => {
+		await manageEvent(opts(), {
+			action: "create",
+			name: "weekly-report",
+			definition: { type: "periodic", schedule: "0 9 * * 1", task },
+		});
+		const parsed = parseScheduledEventContent(
+			await readFile(join(eventsDir, "weekly-report.json"), "utf-8"),
+			"w.json",
+		);
+		expect(parsed.task?.title).toBe("周报");
+		expect(parsed.text).toBeUndefined();
+		expect(parsed.channelId).toBe("dm_1");
+	});
+
+	it("refuses a definition that carries both `text` and `task`, or neither, without writing a file", async () => {
+		await expect(
+			manageEvent(opts(), {
+				action: "create",
+				name: "both",
+				definition: { type: "periodic", schedule: "0 9 * * 1", text: "hi", task },
+			}),
+		).rejects.toThrow(/exactly one of/);
+		await expect(
+			manageEvent(opts(), {
+				action: "create",
+				name: "neither",
+				definition: { type: "periodic", schedule: "0 9 * * 1" },
+			}),
+		).rejects.toThrow(/"text" or "task"/);
+		expect(await listEventFiles()).toEqual([]);
+	});
+
+	it("applies task_create's contract rules to the template", async () => {
+		await expect(
+			manageEvent(opts(), {
+				action: "create",
+				name: "prose-dod",
+				definition: { type: "periodic", schedule: "0 9 * * 1", task: { ...task, dod: "just do it" } },
+			}),
+		).rejects.toThrow(/no checklist items/);
+		expect(await listEventFiles()).toEqual([]);
+	});
+});
+
 describe("manageEvent create", () => {
 	it("writes valid periodic and one-shot events that the watcher parser can load back, binding the channel itself", async () => {
 		const result = await manageEvent(opts(), {

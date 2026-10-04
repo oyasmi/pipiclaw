@@ -1,12 +1,11 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
-import { workspaceSubjectSnapshot } from "../src/tasks/artifact-subject.js";
-import { readVerificationAttestation, verificationAttestationPath } from "../src/tasks/verification.js";
+import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /** Spawns a process that exits immediately and resolves its pid once it has been reaped, so a
@@ -362,11 +361,10 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		expect(dispatched).toHaveLength(1);
 	});
 
-	// Spec 042, D1: the same defect as above, for `purpose=verify` — before this fix, restart
-	// reconciliation never wrote a verify attestation at all (it had no path to `writeVerificationAttestation`
-	// and no persisted `verifySubjectBefore`/`channelDir` to call it with), so a verify run that
-	// completed after a restart silently lost its verdict.
-	it("writes a verify attestation for a purpose=verify run that completes across a restart", async () => {
+	// Spec 042, D1: the same defect as above, for `purpose=verify` — a verify run that completed
+	// after a restart used to lose its verdict. Spec 052: the verdict is now plain recorded
+	// information, so what must survive the restart is the verdict itself and the task's log.
+	it("keeps a purpose=verify run's declared verdict and logs its settlement when it completes across a restart", async () => {
 		const workspaceDir = createTempWorkspace();
 		const channelId = "dm_verify_restart";
 		const channelDir = join(workspaceDir, channelId);
@@ -374,26 +372,12 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const artifactDir = join(channelDir, "subagent-artifacts", "run-verify");
 		mkdirSync(artifactDir, { recursive: true });
 		mkdirSync(join(channelDir, "tasks"), { recursive: true });
-		writeFileSync(join(channelDir, "tasks", "ship.md"), "---\nstatus: open\n---\n# Ship\n\n## DoD\n- checks pass\n");
-
-		// The verified checkout is a separate directory from the daemon's own state/artifacts
-		// (channelDir/stateDir live under workspaceDir) — otherwise the daemon's own bookkeeping
-		// writes would themselves register as "workspace changed" against the checkout being judged.
-		// A real Git repo with a committed baseline, unchanged before the "after" hash is taken below:
-		// `resolveVerificationOutcome` now fails closed when it cannot compare a before/after subject
-		// at all (review 2026-08-23 §2.2), so a real comparable pair is required to exercise the pass
-		// path end-to-end rather than relying on the old "can't tell, so assume unchanged" gap.
+		writeFileSync(
+			join(channelDir, "tasks", "ship.md"),
+			"---\nstate: open\n---\n# Ship\n\n## DoD\n- [ ] checks pass\n",
+		);
 		const projectDir = join(workspaceDir, "project");
 		mkdirSync(projectDir, { recursive: true });
-		execFileSync("git", ["init"], { cwd: projectDir });
-		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: projectDir });
-		execFileSync("git", ["config", "user.name", "Test"], { cwd: projectDir });
-		writeFileSync(join(projectDir, "README.md"), "checkout\n");
-		execFileSync("git", ["add", "."], { cwd: projectDir });
-		execFileSync("git", ["commit", "-m", "baseline"], { cwd: projectDir });
-		const verifySubjectSnapshot = await workspaceSubjectSnapshot(projectDir);
-		expect(verifySubjectSnapshot).toBeDefined();
-		if (!verifySubjectSnapshot) return;
 
 		const pid = await spawnAndWaitExit();
 		writeFileSync(
@@ -423,6 +407,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			taskId: "ship",
 			workingDirectory: projectDir,
 			artifactDir,
+			channelDir,
 			leaseKey: lease.ok ? lease.leaseKey : undefined,
 			mutates: "write",
 		});
@@ -433,9 +418,6 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			maxWallTimeSec: 60,
 			processStartedAt: Date.now(),
 			channelDir,
-			verifySubjectBefore: verifySubjectSnapshot.hash,
-			verifyBaseCommit: verifySubjectSnapshot.baseCommit,
-			verifyBaselineUntrackedPaths: verifySubjectSnapshot.baselineUntrackedPaths,
 		});
 
 		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined, "run-verify");
@@ -445,15 +427,8 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const record = secondDaemon.get("run-verify");
 		expect(record?.status).toBe("completed");
 		expect(record?.verificationVerdict).toBe("pass");
-		expect(record?.verificationStrength).toBe("advisory");
-
-		const attestation = JSON.parse(readFileSync(verificationAttestationPath(channelDir, "run-verify"), "utf-8"));
-		expect(attestation.verdict).toBe("pass");
-		expect(attestation.verificationStrength).toBe("advisory");
-		await expect(
-			readVerificationAttestation(channelDir, "run-verify", {
-				trustedWorkingDirectory: record?.workingDirectory,
-			}),
-		).resolves.toMatchObject({ subjectDir: projectDir });
+		const settled = (await readTaskLog(channelDir, "ship", { kinds: ["settle"] }))[0];
+		expect(settled).toMatchObject({ ref: "run-verify", status: "completed", verdict: "pass" });
+		await resetTaskLogAppenders();
 	});
 });

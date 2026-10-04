@@ -20,7 +20,7 @@
 | `rolling_progress_then_plain_final` | 只保留最近进度，最后另发纯文本结论 |
 | `final_card_only` | 隐藏过程，只投递最终结果 |
 
-后台唤醒默认不展示过程。后台作业、委派完成和定时事件投递到聊天会话，没有新结果时可返回 `[SILENT]`；任务步骤运行在独立 cycle 会话，必须以 `task_step_end` 收尾，面向用户的内容通过 `notify` 交付。
+后台唤醒默认不展示过程。后台作业、委派完成和定时事件投递到聊天会话，没有新结果时可返回 `[SILENT]`；任务步骤运行在任务自己的会话，必须以 `task_step_end` 收尾，面向用户的内容通过 `report` 交付。
 
 ## 记忆维护
 
@@ -62,15 +62,15 @@
 
 ## 长程任务
 
-当前采用 Task v4（spec 051）：契约、循环日志和等待票分离。
+当前采用 Task v5（spec 052）：任务是一个由 Pipiclaw 作为负责人推进的一次性项目，契约、循环日志和等待票分离。
 
 任务文件位于 `workspace/<channelId>/tasks/<id>.md`。`tools.tasks.enabled` 同时门控三件事：全部 task_* 工具、内建 TaskDriver、每回合任务摘要注入。
 
-当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进任务的 Goal/Manual/Plan，等待用 runtime 校验的票表达；每个任务按自己的 Goal、DoD、Manual、Verification、Plan 和预算收口。旧版任务由 daemon 启动迁移到 v4；手工编辑造成的旧契约或损坏元数据用 `/tasks doctor` 检查，迁移与恢复规则见[事件与任务](./events-and-tasks.md#从-v3-迁移)。
+当前任务模型没有 `parent`、`dependsOn`、`child` 或 worktree 隔离字段。先后关系写进后继工作项的文字，等待用 runtime 校验的票表达；每个任务按自己的 Goal、DoD、Work Items 和预算收口。旧版任务由 daemon 启动转换到 v5；手工编辑造成的旧契约或损坏元数据用 `/tasks doctor` 检查，转换与恢复规则见[事件与任务](./events-and-tasks.md#从-v4-转换)。
 
-TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的票据到期时间、兜底时限和步骤结束 nudge 决定下一次扫描；单次最多派发 4 个 channel，同一 channel 每 tick 至多一个任务。`outcome: continue` 没有退避——下一步在同一次 nudge 里就排上。任务超出本周期预算（步数/墙钟/成本/返工轮次），或连续两步没有任何工具调用时，运行时写 `paused{by:"runtime"}` 并直接通知用户，不再花一个模型回合去诊断。
+TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据最近的票据到期时间、兜底时限和步骤结束 nudge 决定下一次扫描；单次最多派发 4 个 channel，同一 channel 每 tick 至多一个任务。`outcome: continue` 没有退避——下一步在同一次 nudge 里就排上。任务超出预算（步数/成本，成本含绑定委派），或连续两步没有任何工具调用时，运行时写 `paused{by:"runtime"}` 并直接通知用户，不再花一个模型回合去诊断。
 
-周期任务只靠 task frontmatter 的 `schedule`。本周期 `done` 后文件留在原地，停泊到一张 `schedule` 票上；到点后 runtime 确定性打开新周期（重置计数、复位 Plan 与 DoD checkbox），不需要 `.schedule` event，也没有单独的开周期工具动作。
+周期与定时的工作不在任务里：事件带 `task` 模板，每次触发由 runtime 生成一个独立的任务实例，上一实例没结束就跳过并通知。任务本身没有 `schedule`，也没有单独的开周期动作。
 
 ## 智能体委派与验收
 
@@ -83,14 +83,13 @@ TaskDriver 是自适应 timer + nudge，不固定每分钟轮询。它会根据�
 
 `/stop` 只停止主回合，不影响独立 run。模型使用 `subagent_list` 查看、`subagent_run` 取消或续接，用户使用 `/subagents` 直接控制。DingTalk daemon 会持久化 run 并投递完成唤醒；外部 detached 进程在 daemon 重启时通过 pid 和产物协议重新对账，内置 run 无法跨进程存活，重启后标为 `lost` 并通知频道。TUI 当前不装配这套持久化与 wake delivery，不能作为长时间外部 run 的可靠宿主。
 
-独立验收使用 `purpose: verify` + `taskId`，并要求最后一行是 `VERDICT: PASS` 或 `VERDICT: FAIL`：
+检查使用 `purpose: verify`，要求最后一行是 `VERDICT: PASS` 或 `VERDICT: FAIL`。运行时只记录这个结论（run 记录与所属任务的看板），**不**把它当作关闭任务的门禁，也不做工作区快照或 attestation：
 
-- 内置 verifier 会被结构性移除 write/edit；只有同时声明 `mutates: read` 且工具集中不含 `bash` 时，验收强度才是 `enforced`。默认含 `bash` 的内置 verifier 仍可能写宿主机，因此标为 `advisory`。
-- 声明 `mutates: write` 的 verifier 可以运行测试和构建，但验证期间会取得目标工作区（含父子目录冲突）的独占 lease，验收强度为 `advisory`；lease 只负责委派间互斥，不是证明完全只读的沙箱。
-- 外部 verifier 只能依赖目标 CLI sandbox 和前后工作区 subject 哈希，验收强度为 `advisory`；`exec` harness 仍不能承担验收，因为它没有协议终态。
-- 新 subject 以验证开始时的 `baseCommit` 为基准，并保存当时已有的 untracked 路径以及范围外的 ignored 路径。正常提交已验收内容不会使它失效；新出现的 untracked 文件仅在 checkout 根目录下明确的临时产物目录/文件范围内排除（Cypress 仅 `cypress/screenshots/`、`cypress/videos/`），其他新源文件、既有 untracked 产品文件和 ignored 非临时文件的变化仍会使验收失败。旧的无 `baseCommit` attestation 继续使用 HEAD-sensitive 兼容算法。本节覆盖历史 `docs/archive/specs/040-async-delegation-and-external-agents/` 中已过时的 verify 准入描述。
+- 内置 verifier 会被结构性移除 write/edit，但默认工具集仍含 `bash`，仍可能写宿主机；只有声明 `mutates: read` 且不含 `bash` 的角色配置才是结构性只读。
+- 声明 `mutates: write` 的 verifier 可以运行测试和构建，但验证期间会取得目标工作区（含父子目录冲突）的独占 lease；lease 只负责委派间互斥，不是只读沙箱。
+- `exec` harness 仍不能承担检查，因为它没有协议终态；运行失败或没有 VERDICT 行一律记为 FAIL。
 
-验收结论由运行时在 `purpose=verify` run 结算时自动导入（校验归属、契约 hash 和 Git artifact subject 后写进任务的返工账本）；`done` / `task_close outcome=complete` 在要求独立验收时，核验本周期最后一条 round 为 PASS，且 attestation 此刻仍绑定当前契约和产物；更早的 PASS 不能覆盖后来的 FAIL。
+是否采信检查者的结论由负责人判断：对照真实产物、diff 和检查输出，并在汇报里写明谁检查了什么、结论如何；方法见 `task-lead.md`。带 `taskId` 的委派（任务会话里自动绑定）在派发和结算时写进任务日志。
 
 ## 日志与账本
 

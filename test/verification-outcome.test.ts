@@ -1,47 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { resolveVerificationOutcome } from "../src/subagents/verification-outcome.js";
+import { parseVerificationVerdict, resolveVerificationVerdict } from "../src/subagents/verification-outcome.js";
 
-describe("resolveVerificationOutcome (review 2026-08-23 §2.2)", () => {
-	it("fails closed when neither a subject hash nor a git-state pair can be compared", () => {
-		const outcome = resolveVerificationOutcome({
-			finalText: "Checked everything.\nVERDICT: PASS",
-			runFailed: false,
-		});
-		expect(outcome.verdict).toBe("fail");
-		expect(outcome.workspaceChanged).toBe(false);
-		expect(outcome.evidence).toMatch(/could not determine whether the workspace changed/i);
+describe("verification verdict (spec 052, D6)", () => {
+	it("takes the checker's declared verdict from the final line only", () => {
+		expect(parseVerificationVerdict("looked fine\nVERDICT: PASS")).toBe("pass");
+		expect(parseVerificationVerdict("VERDICT: FAIL")).toBe("fail");
+		// A verdict that is not the last line is part of the discussion, not the verdict.
+		expect(parseVerificationVerdict("VERDICT: PASS\nbut then I noticed a problem")).toBeUndefined();
 	});
 
-	it("passes when a comparable subject hash pair shows no change and the verdict is PASS", () => {
-		const outcome = resolveVerificationOutcome({
-			subjectBefore: "same-hash",
-			subjectAfter: "same-hash",
-			finalText: "Checked everything.\nVERDICT: PASS",
-			runFailed: false,
-		});
-		expect(outcome.verdict).toBe("pass");
-		expect(outcome.workspaceChanged).toBe(false);
+	it("never believes a PASS from a run that did not finish cleanly", () => {
+		expect(resolveVerificationVerdict({ finalText: "VERDICT: PASS", runFailed: false })).toBe("pass");
+		expect(resolveVerificationVerdict({ finalText: "VERDICT: PASS", runFailed: true })).toBe("fail");
 	});
 
-	it("fails when the subject hash changed even though the verifier declared PASS", () => {
-		const outcome = resolveVerificationOutcome({
-			subjectBefore: "before-hash",
-			subjectAfter: "after-hash",
-			finalText: "Checked everything.\nVERDICT: PASS",
-			runFailed: false,
-		});
-		expect(outcome.verdict).toBe("fail");
-		expect(outcome.workspaceChanged).toBe(true);
-	});
-
-	it("falls back to a comparable git-state pair when no subject hash is available", () => {
-		const outcome = resolveVerificationOutcome({
-			gitStateBefore: "clean",
-			gitStateAfter: "clean",
-			finalText: "Checked everything.\nVERDICT: PASS",
-			runFailed: false,
-		});
-		expect(outcome.verdict).toBe("pass");
-		expect(outcome.workspaceChanged).toBe(false);
+	it("treats a missing verdict line as a failure", () => {
+		expect(resolveVerificationVerdict({ finalText: "all good, ship it", runFailed: false })).toBe("fail");
 	});
 });

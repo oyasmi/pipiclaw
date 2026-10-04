@@ -66,10 +66,10 @@ export interface AgentRunner {
 	/** Cancel context summarization synchronously; returns whether one was active. */
 	interruptCompaction?(): boolean;
 	/**
-	 * Bind this runner to a task cycle's own session for the next turn, and back afterwards
+	 * Bind this runner to a task's own session for the next turn, and back afterwards
 	 * (spec 051, D3). Optional: the TUI runs one session per process and never routes task steps.
 	 */
-	bindTaskSession?(taskId: string, cycleId: string): Promise<void>;
+	bindTaskSession?(taskId: string): Promise<void>;
 	bindChatSession?(): Promise<void>;
 	/** Permanently retire this runner generation after an out-of-band `/new`. */
 	retireForNewSession?(): void;

@@ -1,166 +1,235 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { convertLegacyTaskFields, migrateTasksToV4 } from "../src/runtime/task-migration.js";
+import { parseScheduledEventContent } from "../src/events/events.js";
+import { buildTemplate, convertBody, migrateTasksToV5, parseV4Frontmatter } from "../src/runtime/task-migration.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/log.js";
 import { readStoredTask } from "../src/tasks/store.js";
 
-const NOW = new Date("2026-09-05T10:00:00+08:00");
+const FUTURE = "2099-01-01T00:00:00+08:00";
+const BODY = [
+	"# 日报",
+	"",
+	"## Goal",
+	"每天整理一份日报。",
+	"",
+	"## DoD",
+	"- [x] 内容完整",
+	"- [x] 已发布",
+	"",
+	"## Manual",
+	"发布前查询频道真实状态。",
+	"",
+	"## Verification",
+	"Independent verification: required",
+	"- Check every DoD item.",
+	"",
+	"## Plan",
+	"- [x] P1 收集素材",
+	"- [ ] P2 起草",
+	"",
+	"## 上次结果",
+	"- c-1 完成：已发布",
+	"",
+].join("\n");
 
-let workspaceDir: string;
-let stateDir: string;
+function v4(front: Record<string, string>, body = BODY): string {
+	return `---\n${Object.entries(front)
+		.map(([key, value]) => `${key}: ${value}`)
+		.join("\n")}\n---\n${body}`;
+}
+const CYCLE =
+	'{"id":"c-1","startedAt":"2026-09-05T09:00:00+08:00","steps":7,"rounds":2,"usd":3.2,"usdEstimated":true,"expired":1}';
 
-beforeEach(async () => {
-	const root = await mkdtemp(join(tmpdir(), "task-migration-v4-"));
-	workspaceDir = join(root, "workspace");
-	stateDir = join(root, "state");
-	await mkdir(join(workspaceDir, "dm_a", "tasks"), { recursive: true });
-});
+describe("v4 → v5 conversion (spec 052, D12)", () => {
+	let root: string;
+	let workspaceDir: string;
+	let stateDir: string;
+	let channelDir: string;
 
-afterEach(async () => {
-	await resetTaskLogAppenders();
-});
-
-describe("v3 → v4 field mapping (spec 051, D14)", () => {
-	// The headline repair. On the author's machine `fix-tui-typecheck` sat `waiting` with a purely
-	// decorative `waitingFor: external-signal`, no wake and no live run — nothing could ever
-	// resume it, and it had been silent for nine days. v4 has no such state, so upgrading is also
-	// the fix: it reopens, carrying an explanation of why.
-	it("reopens a waiting task whose resumption source cannot be reconstructed", () => {
-		const { fields, repairNote } = convertLegacyTaskFields(
-			{
-				status: "waiting",
-				enabled: true,
-				control: { nextAction: "在稳定环境重跑 npm run check", cycleId: "cycle-2026-08-27" },
-			},
-			NOW,
-		);
-		expect(fields.state).toBe("open");
-		expect(fields.ticket).toBeUndefined();
-		expect(repairNote).toContain("没有任何可兑现的恢复来源");
-		// The model's own record of what it meant to do next is preserved, not thrown away.
-		expect(repairNote).toContain("npm run check");
+	beforeEach(async () => {
+		root = await mkdtemp(join(tmpdir(), "task-migration-"));
+		workspaceDir = join(root, "workspace");
+		stateDir = join(root, "state");
+		channelDir = join(workspaceDir, "dm_1");
+		await mkdir(join(channelDir, "tasks"), { recursive: true });
+	});
+	afterEach(async () => {
+		await resetTaskLogAppenders();
+		await rm(root, { recursive: true, force: true });
 	});
 
-	it("keeps a waiting task parked when its wake is still a real future moment", () => {
-		const { fields, repairNote } = convertLegacyTaskFields(
-			{ status: "waiting", enabled: true, wake: "2026-09-06T09:00:00+08:00" },
-			NOW,
+	const write = (id: string, content: string) => writeFile(join(channelDir, "tasks", `${id}.md`), content);
+	const eventPath = (name: string) => join(workspaceDir, "events", `${name}.json`);
+
+	it("turns a recurring task waiting for its next occurrence into an event template and retires it", async () => {
+		await write(
+			"daily",
+			v4({
+				state: "parked",
+				schedule: "0 9 * * *",
+				ticket: `{"kind":"schedule","at":"${FUTURE}","by":"${FUTURE}"}`,
+				cycle: CYCLE,
+				budget: '{"steps":30,"rounds":3,"wallMin":90,"usd":4}',
+				verify: "required",
+			}),
 		);
-		expect(fields.state).toBe("parked");
-		expect(fields.ticket).toMatchObject({ kind: "time" });
-		expect(repairNote).toBeUndefined();
+
+		await migrateTasksToV5(workspaceDir, stateDir);
+
+		const event = parseScheduledEventContent(await readFile(eventPath("daily"), "utf-8"), "daily.json");
+		expect(event).toMatchObject({ type: "periodic", channelId: "dm_1", schedule: "0 9 * * *" });
+		// The template carries what each occurrence needs: Manual and Verification fold into the Goal,
+		// checkboxes are reset, Plan items become Work Items, and only steps/usd survive in the budget.
+		expect(event.task?.goal).toContain("每天整理一份日报。");
+		expect(event.task?.goal).toContain("发布前查询频道真实状态。");
+		expect(event.task?.goal).toContain("Check every DoD item.");
+		expect(event.task?.goal).not.toContain("Independent verification:");
+		expect(event.task?.dod).not.toContain("[x]");
+		expect(event.task?.items?.map((item) => item.text)).toEqual(["收集素材", "起草"]);
+		expect(event.task?.budget).toEqual({ steps: 30, usd: 4 });
+
+		// Waiting between occurrences: nothing left to run, so the task is archived, not duplicated.
+		expect(existsSync(join(channelDir, "tasks", "daily.md"))).toBe(false);
+		expect(await readFile(join(channelDir, "tasks", "archive", "daily.md"), "utf-8")).toContain("outcome: cancelled");
+		expect(existsSync(join(channelDir, "tasks", ".v4", "daily.md"))).toBe(true);
+		expect(
+			(await readTaskLog(channelDir, "daily")).map((record) => record.kind === "note" && record.note).join("\n"),
+		).toContain("事件模板 daily");
 	});
 
-	it("parks a sleeping recurring task on its schedule ticket", () => {
-		const { fields } = convertLegacyTaskFields(
-			{ status: "sleeping", enabled: true, schedule: "0 3 * * *", wake: "2026-09-06T03:00:00+08:00" },
-			NOW,
-		);
-		expect(fields.state).toBe("parked");
-		expect(fields.ticket?.kind).toBe("schedule");
-		expect(fields.schedule).toBe("0 3 * * *");
+	it("lets the occurrence in flight finish as an instance of the new event", async () => {
+		await write("daily", v4({ state: "open", schedule: "0 9 * * *", cycle: CYCLE }));
+		await migrateTasksToV5(workspaceDir, stateDir);
+
+		const task = await readStoredTask(channelDir, "daily");
+		expect(task?.fields).toMatchObject({ state: "open", origin: "daily" });
+		expect(task?.fields.usage).toMatchObject({ steps: 7, usd: 3.2, usdEstimated: true, expired: 1 });
+		expect(existsSync(eventPath("daily"))).toBe(true);
 	});
 
-	it("maps the retired pairs: disabled → paused, deadline → budget.until, verification → verify", () => {
-		const { fields } = convertLegacyTaskFields(
-			{
-				status: "active",
-				enabled: false,
-				control: {
-					deadline: "2026-09-09T18:00:00+08:00",
-					verification: { required: true },
-					stop: { by: "governor", reason: "no progress", at: "2026-09-01T00:00:00+08:00" },
+	it("converts the body: Plan becomes Work Items, 上次结果 goes, authored sections stay", () => {
+		const converted = convertBody(BODY);
+		expect(converted).toContain("## Work Items");
+		expect(converted).not.toContain("## Plan");
+		expect(converted).not.toContain("上次结果");
+		expect(converted).toContain("- [x] P1 收集素材");
+		for (const kept of ["## Goal", "## DoD", "## Manual", "## Verification"]) expect(converted).toContain(kept);
+	});
+
+	it("never leaves a park on a source that no longer exists", async () => {
+		await write(
+			"lost-run",
+			v4({ state: "parked", ticket: `{"kind":"run","id":"run_gone","by":"${FUTURE}"}`, cycle: CYCLE }, "# T\n"),
+		);
+		await write(
+			"sensor",
+			v4(
+				{
+					state: "parked",
+					ticket: `{"kind":"signal","event":"task.dm_1.sensor.check","by":"${FUTURE}"}`,
+					cycle: CYCLE,
 				},
-			},
-			NOW,
+				"# S\n",
+			),
 		);
-		expect(fields.paused).toMatchObject({ by: "runtime", reason: "no progress" });
-		expect(fields.budget?.until).toBe("2026-09-09T18:00:00+08:00");
-		expect(fields.verify).toBe("required");
-	});
-
-	it("carries an archived task straight through as done", () => {
-		const { fields } = convertLegacyTaskFields(
-			{ enabled: true, outcome: "completed", closedAt: "2026-08-01T00:00:00+08:00" },
-			NOW,
+		await write(
+			"asking",
+			v4({ state: "parked", ticket: `{"kind":"ask","asked":"merge?","by":"${FUTURE}"}`, cycle: CYCLE }, "# A\n"),
 		);
-		expect(fields).toMatchObject({ state: "done", outcome: "completed", closedAt: "2026-08-01T00:00:00+08:00" });
-	});
-});
 
-describe("migrateTasksToV4", () => {
-	const v3 = [
-		"---",
-		"status: waiting",
-		"enabled: true",
-		'control: {"version":3,"waitingFor":"external-signal","verification":{"required":false,"status":"pending"}}',
-		"---",
-		"# Fix TUI typecheck",
-		"",
-		"## Goal",
-		"Make npm run check pass.",
-		"",
-		"## DoD",
-		"- [ ] check passes",
-		"",
-		"## Current Cycle",
-		"- 已派发 worker run_zpy4mq。",
-		"",
-		"## History",
-		"",
-		"### Current Cycle (cycle-2026-08-20) — closed",
-		"- 上一轮的记录。",
-		"",
-	].join("\n");
+		await migrateTasksToV5(workspaceDir, stateDir);
 
-	it("rewrites the contract, imports History into the loop log, and backs the original up", async () => {
-		const channelDir = join(workspaceDir, "dm_a");
-		await writeFile(join(channelDir, "tasks", "fix-tui.md"), v3);
-
-		await migrateTasksToV4(workspaceDir, stateDir);
-
-		const document = await readStoredTask(channelDir, "fix-tui");
-		expect(document?.fields.state).toBe("open");
-		// The two sections the contract no longer carries are gone from the body…
-		expect(document?.body).not.toContain("## Current Cycle");
-		expect(document?.body).not.toContain("## History");
-		// …but nothing is lost: the closed cycle is in the loop log, and the open one became the
-		// single 上次结果 paragraph alongside the repair explanation.
-		expect(document?.body).toContain("## 上次结果");
-		expect(document?.body).toContain("run_zpy4mq");
-		const log = await readTaskLog(channelDir, "fix-tui");
-		expect(log.some((record) => record.kind === "step" && record.note.includes("上一轮的记录"))).toBe(true);
-
-		expect(existsSync(join(channelDir, "tasks", ".v3", "fix-tui.md"))).toBe(true);
-		expect(await readFile(join(channelDir, "tasks", ".v3", "fix-tui.md"), "utf-8")).toBe(v3);
+		for (const id of ["lost-run", "sensor"]) {
+			const task = await readStoredTask(channelDir, id);
+			expect(task?.fields.state, id).toBe("open");
+			expect(
+				(await readTaskLog(channelDir, id)).some((record) => record.kind === "note"),
+				id,
+			).toBe(true);
+		}
+		expect((await readStoredTask(channelDir, "asking"))?.fields.ticket).toMatchObject({
+			kind: "ask",
+			asked: "merge?",
+		});
 	});
 
-	it("runs once and leaves an already-migrated file alone", async () => {
-		const channelDir = join(workspaceDir, "dm_a");
-		const path = join(channelDir, "tasks", "fix-tui.md");
-		await writeFile(path, v3);
-		await migrateTasksToV4(workspaceDir, stateDir);
-		const first = await readFile(path, "utf-8");
+	it("keeps a wait on a run that is still in flight, as a work ticket", async () => {
+		const runsDir = join(stateDir, "subagent-runs", "dm_1");
+		await mkdir(runsDir, { recursive: true });
+		await writeFile(
+			join(runsDir, "run_live.json"),
+			JSON.stringify({ runId: "run_live", taskId: "waiting", status: "running", startedAt: Date.now() }),
+		);
+		await writeFile(
+			join(runsDir, "run_other.json"),
+			JSON.stringify({ runId: "run_other", taskId: "someone-else", status: "running", startedAt: Date.now() }),
+		);
+		await write(
+			"waiting",
+			v4({ state: "parked", ticket: `{"kind":"run","id":"run_live","by":"${FUTURE}"}`, cycle: CYCLE }, "# W\n"),
+		);
 
-		// The marker gates it; a second boot must not re-import the history it already moved.
-		await migrateTasksToV4(workspaceDir, stateDir);
-		expect(await readFile(path, "utf-8")).toBe(first);
-		expect((await readTaskLog(channelDir, "fix-tui")).length).toBe(1);
+		await migrateTasksToV5(workspaceDir, stateDir);
+
+		const ticket = (await readStoredTask(channelDir, "waiting"))?.fields.ticket;
+		expect(ticket).toMatchObject({ kind: "work", refs: ["run_live"] });
 	});
 
-	// Spec 051, D8 keeps the events subsystem untouched; a migration that "helpfully" rewrote an
-	// event file would be exactly the kind of scope creep the decision was made to avoid.
-	it("does not touch workspace/events", async () => {
+	it("moves task-owned sensor events away and says so on the owning task", async () => {
+		await write("sensor", v4({ state: "open", cycle: CYCLE }, "# S\n"));
 		await mkdir(join(workspaceDir, "events"), { recursive: true });
-		const eventPath = join(workspaceDir, "events", "daily.json");
-		const definition = '{"type":"periodic","channelId":"dm_a","text":"x","schedule":"10 1 * * *"}';
-		await writeFile(eventPath, definition);
-		await writeFile(join(workspaceDir, "dm_a", "tasks", "fix-tui.md"), v3);
+		await writeFile(eventPath("task.dm_1.sensor.check"), "{}");
+		await writeFile(eventPath("unrelated"), "{}");
 
-		await migrateTasksToV4(workspaceDir, stateDir);
-		expect(await readFile(eventPath, "utf-8")).toBe(definition);
+		await migrateTasksToV5(workspaceDir, stateDir);
+
+		expect(existsSync(eventPath("task.dm_1.sensor.check"))).toBe(false);
+		expect(existsSync(join(channelDir, "tasks", ".v4", "events", "task.dm_1.sensor.check.json"))).toBe(true);
+		expect(existsSync(eventPath("unrelated"))).toBe(true);
+		expect(
+			(await readTaskLog(channelDir, "sensor")).some(
+				(record) => record.kind === "note" && record.note.includes("signal"),
+			),
+		).toBe(true);
+	});
+
+	it("runs once, leaves v3 files and already-converted files alone, and never deletes an original", async () => {
+		await write("old", '---\nstatus: active\nenabled: true\ncontrol: {"version":3}\n---\n# Old\n');
+		await write(
+			"fresh",
+			`---\nstate: open\nusage: {"startedAt":"2026-09-05T09:00:00+08:00","steps":0,"usd":0,"usdEstimated":false,"expired":0}\n---\n# Fresh\n`,
+		);
+		await write("v4only", v4({ state: "open", cycle: CYCLE }, "# V\n"));
+		const oldContent = await readFile(join(channelDir, "tasks", "old.md"), "utf-8");
+
+		await migrateTasksToV5(workspaceDir, stateDir);
+
+		expect(await readFile(join(channelDir, "tasks", "old.md"), "utf-8")).toBe(oldContent);
+		expect(existsSync(join(channelDir, "tasks", ".v4", "fresh.md"))).toBe(false);
+		expect((await readdir(join(channelDir, "tasks", ".v4"))).sort()).toEqual(["v4only.md"]);
+		expect(existsSync(join(stateDir, "task-migration-v5.done"))).toBe(true);
+
+		// Marker-gated: a file that regresses to v4 afterwards is not touched a second time.
+		await write("late", v4({ state: "open", cycle: CYCLE }, "# L\n"));
+		await migrateTasksToV5(workspaceDir, stateDir);
+		expect(await readFile(join(channelDir, "tasks", "late.md"), "utf-8")).toContain("cycle:");
+	});
+
+	it("falls back to a runtime pause when a recurring task cannot be expressed as a template", async () => {
+		// A Goal-less, DoD-less body cannot become a valid template, and the schedule must not be lost silently.
+		await write("odd", v4({ state: "open", schedule: "0 9 * * *", cycle: CYCLE }, "# Odd\n\n## DoD\nprose only\n"));
+		await migrateTasksToV5(workspaceDir, stateDir);
+		const task = await readStoredTask(channelDir, "odd");
+		expect(task?.fields.paused?.by).toBe("runtime");
+		expect(existsSync(eventPath("odd"))).toBe(false);
+	});
+
+	it("parses a template's DoD fallback and reads v4 frontmatter faithfully", () => {
+		const parsed = parseV4Frontmatter(v4({ state: "parked", schedule: "0 9 * * *", cycle: CYCLE }));
+		expect(parsed).toMatchObject({ state: "parked", schedule: "0 9 * * *", v4Keys: true, v3: false });
+		expect(buildTemplate("x", "# X\n\n## Goal\nG\n", parsed!).template?.dod).toBe("- [ ] 完成上述目标");
 	});
 });

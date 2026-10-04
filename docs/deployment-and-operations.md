@@ -153,7 +153,7 @@ supervisorctl tail -f pipiclaw
 排障不必先"问 agent"。下面这些命令由传输层直接读文件渲染，不触发 LLM 回合，忙碌时也可用：
 
 - `/status` —— 执行状态、当前模型、上下文用量、运行时长、版本
-- `/usage [7d|month]` —— 本通道与全局的 LLM 成本与 token，按类型和 Top 模型拆分（本地模型成本为 0，但 token 仍然记账）；任务相关条目带 `taskId`；任务的 `cycle.usd` 另外汇总本周期成本用于预算，无法实报的外部成本可能含估算
+- `/usage [7d|month]` —— 本通道与全局的 LLM 成本与 token，按类型和 Top 模型拆分（本地模型成本为 0，但 token 仍然记账）；任务相关条目带 `taskId`；任务的 `usage.usd` 另外汇总任务成本（含绑定委派）用于预算，无法实报的外部成本可能含估算
 - `/tasks doctor` —— 任务契约与等待票的只读体检，每条问题附下一步建议
 - `/tasks pause|resume|run|steer|reply ...` —— 暂停、恢复、立即唤醒、纠偏或回答阻塞问题
 - `/subagents` —— 运行中的委派、最近结果和角色可用性摘要
@@ -193,7 +193,7 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 | `<channel>/active-session.json` | 当前聊天会话指针，`/new` 后更新 |
 | `<channel>/project.json` | 本频道持久化的项目目录选择 |
 | `<channel>/tasks/<id>.md` 与 `<id>.jsonl` | 任务契约、循环日志；关闭后移入 `tasks/archive/` |
-| `<channel>/tasks/.sessions/` | 独立任务 cycle 会话 |
+| `<channel>/tasks/.sessions/` | 独立任务会话（每任务一份） |
 | `<channel>/subagent-runs.jsonl` | 子代理执行摘要 |
 | `<channel>/subagent-artifacts/<runId>/` | 每次委派的完整输出；外部 run 还包含 prompt、system prompt、协议事件和 stderr |
 | `<channel>/memory/<name>.md` | 一条记忆一个文件（frontmatter 元数据） |
@@ -292,7 +292,7 @@ npm install -g @oyasmi/pipiclaw@latest
 - `state/dispatch/`（待处理的 synthetic event / task-driver wake；运行完成后删除，崩溃恢复时会重放 lease 已过期的记录）
 - `state/subagent-runs/`（委派 run 的状态、pid、实际 argv、结算与唤醒幂等标记；外部 run 重启对账需要）
 - `state/jobs/`（后台作业的持久状态与输出；重启恢复需要）
-- `state/memory/` 与 `state/task-migration-v4.done`（反思游标、调度状态与任务迁移标记）
+- `state/memory/` 与 `state/task-migration-v5.done`（反思游标、调度状态与任务转换标记）
 - `state/usage/`（可选，LLM 成本账本）与 `state/logs/`（可选，结构化日志）
 
 其中 `workspace/` 最关键，因为它包含：
@@ -353,9 +353,9 @@ workspace `skills/` 是 procedural memory。workspace skill 只会由显式的 `
 
 通常先检查：
 
-- `/tasks show <id>` 中是否已暂停、正在等 `ticket`，或本周期预算已经耗尽；等待票尚未到期属于正常等待
-- `/tasks log <id>` 是否记录了连续空转、等待票过期或验收失败；`/tasks doctor` 是否发现手工编辑造成的坏 frontmatter
-- 预算停止后按回执处理：`steps`、`rounds`、`usd` 可用 `/tasks resume <id> +...` 加码；`wallMin`、`until` 需让 Agent 更新预算后再恢复
+- `/tasks show <id>` 中是否已暂停、正在等 `ticket`，或预算已经耗尽；等待票尚未到期属于正常等待
+- `/tasks log <id>` 是否记录了连续空转、等待票过期或委派失败；`/tasks doctor` 是否发现手工编辑造成的坏 frontmatter
+- 预算停止后按回执处理：`steps`、`usd` 可用 `/tasks resume <id> +...` 加码
 - `tools.json` 的 `tools.tasks.enabled` 是否关闭；TUI 没有常驻 TaskDriver，长期任务应交给 DingTalk daemon
 
 ### 智能体角色没有被正常使用

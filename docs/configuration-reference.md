@@ -225,7 +225,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 ### 事件自调度工具（`event_manage`，恒开）
 
-`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据等待票和 task frontmatter 里的 `schedule` 驱动；event 主要用于独立提醒，以及由 `signal` 票引用的外部传感器。核心能力，无开关、始终注册。
+`event_manage` 工具让主 agent 能自己创建、修改、删除定时事件。任务的普通继续/等待由内建 task driver 根据等待票驱动；event 用于独立提醒、外部条件传感器，以及带 `task` 模板的周期/定时工作（每次触发生成一个任务实例）。核心能力，无开关、始终注册。
 
 - 该工具只发给主 agent，不进子代理工具集。
 - 写入时会做完整校验（复用与 watcher 相同的 `parseScheduledEventContent`）、路径 traversal 拦截、`command-guard` 检查 `preAction`，以及一组防自激励闸门（禁 `immediate`、one-shot 至少提前 2 分钟、periodic 最密每 30 分钟、**带 `preAction` 门控时放宽到 5 分钟**、事件文件总数上限 50）。细节见 [events-and-tasks.md](./events-and-tasks.md)。
@@ -243,7 +243,7 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 ```
 
 - 关掉后 task 文件仍保留在磁盘，但没有受控的 task 工具、后台唤醒或摘要注入；需要继续托管时应重新开启。
-- 这些工具只发给主 agent，不进子代理工具集。新任务默认不要求独立验收；`verificationRequired`、`schedule` 和每任务 `budget` 在 `task_create`/`task_update` 上设置。进度记录属于 `task_step_end` 的 `note`（进循环日志），Goal/DoD/Manual/Verification 等大段正文仍用 write/edit。
+- 这些工具只发给主 agent，不进子代理工具集。每任务 `budget`（`steps`/`usd`）在 `task_create`/`task_update` 上设置。进度记录属于 `task_step_end` 的 `note`（进循环日志），Goal/DoD 等大段正文仍用 write/edit。
 - Task 创建即持续委托；外部动作由能力配置、任务 Goal、scope、真实状态查询和幂等 request id 约束，结果必须写入任务证据。
 
 ### 结构化搜索工具（`grep`，恒开）
@@ -307,17 +307,17 @@ Pipiclaw 当前把内建工具的实例级配置放在 app home 下的 `tools.js
 
 每个主 agent 回合，运行时会把一份紧凑的 active 任务摘要（`<task_agenda>`）注入进 prompt，让 agent 恒定知道在途工作，无需依赖 `ls tasks/` 的纪律。是否注入完全由总开关 `tools.tasks.enabled`（tools.json）决定，没有单独的配置项。
 
-摘要上限固定为 8 条任务 / 约 1000 字符，超出会截断并标注剩余数量。摘要包含活动目录中的所有未关闭任务，每行显示 state、暂停状态、等待票摘要与兜底时间、Plan 进度和本周期用量。
+摘要上限固定为 8 条任务 / 约 1000 字符，超出会截断并标注剩余数量。摘要包含活动目录中的所有未关闭任务，每行显示 state、暂停状态、等待票摘要与兜底时间、工作项进度和用量。
 
 ### 内建任务驱动器（Task Driver，恒随任务开关）
 
-DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务。扫描本身不调用模型：兑现到期的 `time`/`schedule` 票、给过期的票兜底、停下超预算或空转的任务，然后排一个可跑任务的下一步。`run`/`job`/`ask`/`signal` 票从不轮询——它们由各自的所有者推过来。暂停和已归档任务零 dispatch。是否运行完全由总开关 `tools.tasks.enabled`（tools.json）决定；预算与节奏是内置常量（每任务可在 frontmatter 的 `budget` 里覆盖）。
+DingTalk daemon 原生扫描各 `dm_*/group_*` channel 的任务。扫描本身不调用模型：兑现到期的 `time` 票、给过期的票兜底、停下超预算或空转的任务，然后排一个可跑任务的下一步。`work`/`ask` 票从不轮询——它们由各自的所有者推过来。暂停和已归档任务零 dispatch。是否运行完全由总开关 `tools.tasks.enabled`（tools.json）决定；预算与节奏是内置常量（每任务可在 frontmatter 的 `budget` 里覆盖）。
 
 行为（供理解，非配置项）：
 
 - driver 睡到最近的票据时刻或内置 15 分钟上限；步骤 `continue` 后会立即 nudge，连续两步没有工具调用则暂停任务并通知用户。
 - 单次扫描全局最多派发 4 个 channel；同一 channel 每 tick 最多唤醒一个任务，并按 channel 和任务轮转保证公平。
-- `run`、`job`、`ask`、`signal` 票由各自所有者推送兑现；过了 runtime 派生的兜底时限会重开一次，同周期第二次过期则暂停并通知用户。
+- `work`、`ask` 票由各自所有者推送兑现（任一绑定委派/作业结算即兑现 `work`）；过了 runtime 派生的兜底时限会重开一次，连续第二次过期则暂停并通知用户。
 - TUI 会保留任务台账和摘要，但没有常驻 TaskDriver；需要自动恢复的长期任务应运行在 DingTalk daemon。
 
 ## 终端 TUI（Terminal TUI）
@@ -768,7 +768,7 @@ TUI **没有** `/resume` 命令，也不需要——续接是隐式的，靠 cha
 
 `settings.json` 只接受**你有依据做判断**的选项：用哪个模型、某个子系统跑不跑、某次可选的 LLM 调用值不值这些 token、输出长什么样。
 
-维护周期、调度并发、置信阈值、退避时长这类 **app 级算法参数是代码常量**，不在这里出现；单项 task 的 cycle 预算属于任务契约。原因很简单：没有人能凭手头信息判断反思间隔应该是 20 分钟还是 25 分钟，把这种决定摆进配置文件只是把调参责任转嫁给不掌握依据的人，同时让每个数字都变成一份兼容性承诺。
+维护周期、调度并发、置信阈值、退避时长这类 **app 级算法参数是代码常量**，不在这里出现；单项 task 的预算属于任务契约。原因很简单：没有人能凭手头信息判断反思间隔应该是 20 分钟还是 25 分钟，把这种决定摆进配置文件只是把调参责任转嫁给不掌握依据的人，同时让每个数字都变成一份兼容性承诺。
 
 因此下表很短，而且**每一行都是布尔、枚举或模型引用**。
 
