@@ -19,7 +19,7 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 	): Promise<void>;
 	handlePeriodic(
 		filename: string,
-		event: { type: "periodic"; channelId: string; text: string; schedule: string; timezone: string },
+		event: { type: "periodic"; channelId: string; text: string; schedule: string },
 	): void;
 	scanExisting(): Promise<void>;
 	started: boolean;
@@ -50,7 +50,7 @@ function getEventsWatcherPrivateApi(watcher: EventsWatcher): {
 		): Promise<void>;
 		handlePeriodic(
 			filename: string,
-			event: { type: "periodic"; channelId: string; text: string; schedule: string; timezone: string },
+			event: { type: "periodic"; channelId: string; text: string; schedule: string },
 		): void;
 		scanExisting(): Promise<void>;
 		started: boolean;
@@ -384,7 +384,6 @@ describe("EventsWatcher", () => {
 			channelId: "dm_1",
 			text: "hello",
 			schedule: "not a cron",
-			timezone: "Asia/Shanghai",
 		});
 		expect(existsSync(invalidCronPath)).toBe(true);
 		expect(existsSync(join(dir, "invalid-cron.json.error.txt"))).toBe(true);

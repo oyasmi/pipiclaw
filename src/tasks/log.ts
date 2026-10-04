@@ -93,24 +93,11 @@ export interface TaskCloseRecord {
 	usd: number;
 }
 
-/** Written only by the v4 → v5 conversion, to explain a decision it made about this task. */
+/** Written only by the v3 → v5 conversion, to explain a decision it made about this task. */
 export interface TaskNoteRecord {
 	ts: string;
 	kind: "note";
 	note: string;
-}
-
-/**
- * v4 verification round. No longer written (spec 052, D6); still read so a converted task's
- * history stays visible.
- */
-export interface TaskLegacyRoundRecord {
-	ts: string;
-	kind: "round";
-	n: number;
-	verifyRunId: string;
-	verdict: "pass" | "fail";
-	reason?: string;
 }
 
 export type TaskLogRecord =
@@ -119,8 +106,7 @@ export type TaskLogRecord =
 	| TaskSettleRecord
 	| TaskExpiredRecord
 	| TaskCloseRecord
-	| TaskNoteRecord
-	| TaskLegacyRoundRecord;
+	| TaskNoteRecord;
 
 /** Same rotation shape as the channel archive: the log is working history, not an audit trail. */
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
@@ -182,28 +168,12 @@ export async function appendTaskLog(
 	await appenderFor(taskLogPath(channelDir, id)).appendStrict(withTs);
 }
 
-const RECORD_KINDS: readonly TaskLogRecord["kind"][] = [
-	"step",
-	"dispatch",
-	"settle",
-	"expired",
-	"close",
-	"note",
-	"round",
-];
+const RECORD_KINDS: readonly TaskLogRecord["kind"][] = ["step", "dispatch", "settle", "expired", "close", "note"];
 
-/**
- * Accepts v4 records too: they carried a `cycle` field this version ignores, and a v4 `close`
- * spread its text across `summary` / `evidence` / `residualRisk`, which are folded into `note`.
- */
 function toRecord(value: unknown): TaskLogRecord | undefined {
 	if (!isPlainObject(value) || typeof value.ts !== "string") return undefined;
 	const kind = value.kind;
 	if (typeof kind !== "string" || !(RECORD_KINDS as readonly string[]).includes(kind)) return undefined;
-	if (kind === "close" && typeof value.note !== "string") {
-		const parts = [value.summary, value.evidence].filter((part): part is string => typeof part === "string");
-		return { ...value, note: parts.join(" · ") } as unknown as TaskLogRecord;
-	}
 	return value as unknown as TaskLogRecord;
 }
 
@@ -284,7 +254,5 @@ export function renderTaskLogLine(record: TaskLogRecord): string {
 			return `- [${record.ts}] ${record.outcome === "done" ? "完成" : "取消"}：${record.note}`;
 		case "note":
 			return `- [${record.ts}] ${record.note}`;
-		case "round":
-			return `- [${record.ts}] round ${record.n} ${record.verdict.toUpperCase()} verify=${record.verifyRunId}${record.reason ? ` — ${record.reason}` : ""}`;
 	}
 }

@@ -24,7 +24,6 @@ describe("PipiclawSettingsManager", () => {
 			enabled: true,
 			minIdleMinutesBeforeLlmWork: 10,
 			reflectIntervalMinutes: 20,
-			maxConcurrentChannels: 1,
 			failureBackoffMinutes: 30,
 		});
 		expect(manager.getDefaultThinkingLevel()).toBeUndefined();

@@ -33,7 +33,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-paths.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts`、`project-scope-store.ts` |
 | `src/agent/` | 单频道 agent 编排：组装 SDK 会话、跑一轮、流式回传 | `channel-runner.ts`（核心编排器）、`session-events.ts`、`prompt/`（system prompt 流水线）、`model-fallback.ts` |
 | `src/commands/` | 全产品斜杠命令目录与共享回复预算；零 import，命令处理器仍留在各自的状态所有者层 | `catalog.ts`、`reply-limits.ts` |
-| `src/memory/` | 一条事实一文件的频道记忆 + 日志 + 单一反思 pass（spec 050） | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`migrate.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts` |
+| `src/memory/` | 一条事实一文件的频道记忆 + 日志 + 单一反思 pass（spec 050） | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts` |
 | `src/tools/` | 交给 agent 的工具集，单一声明式注册表 | `registry.ts`（唯一事实源）、各 `create*Tool` |
 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
 | `src/subagents/` | 子代理发现、run 生命周期（内置+外部统一）、workspace 写锁、外部 harness 适配器 | `discovery.ts`、`tool.ts`、`runs.ts`、`workspace-lease.ts`、`external/`（`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`exec.ts`） |
@@ -233,8 +233,7 @@ flowchart LR
 - **反思是唯一的后台 LLM pass**（`reflect.ts`），取代了 v1 的三个 job：读一段增量对话窗口 + 当前索引全文 + workspace 背景（裁剪）+ 当天 journal，产出 journal 新增行和 memory ops（`add`/`update`/`delete`/`touch`）。**运行时守不变量，模型负责判断**——写入档位（`necessity: high` 且 `confidence ≥ 0.85` 永久；`necessity: medium` 且仅 `add` 时 `confidence ≥ 0.9` 以 30 天试用期写入）、每次上限（add ≤ 8 含试用 ≤ 5、delete ≤ 3）、`source: user` 的条目不可被自动删除（update 需要 `confidence ≥ 0.95` 且窗口内有用户消息）、name 解析（`update` 认不出的名字降级为 `add`）全部是 `reflect.ts` 里的确定性代码，不依赖模型自律；`store.applyMemoryOps` 再做一层机械保证（墓碑、密钥扫描、原子写）。触发点与 v1 完全一致：压缩前、`/new` 前（后台异步）、关机 flush、以及频道空闲后的调度 tick——只是现在只有一个 job，`lifecycle.ts` 的边界钩子和 `reflect-job.ts` 的空闲触发调用的是同一个 `reflect.ts`。
 - **试用期转正信号从"被召回"改成"被 touch"**：v1 靠每轮召回记录使用次数；v2 索引首轮整份给出，"被注入"不再是有效信号。改为反思 pass 输出里的 `touch: [names]`——模型读窗口时判断"这段对话依赖或印证了哪些既有记忆"，被 touch 一次即转正（清除 `expires`）。30 天内没有任何一次 pass 认为它相关，`store.expireProbationaryEntries`（反思开始前的确定性前置步骤）直接删除——不留墓碑，之后仍可被重新学到。
 - **`condense` 模式**：索引超预算触发过分层时，反思 prompt 会附加合并指令，delete 上限放宽到 8，鼓励把重叠的条目合并成一条更好的。没有单独的 condense job，只是同一次调用的一个开关。
-- **迁移**（`migrate.ts`）：daemon/TUI 在频道首次被使用时（`ChannelRunner.run()` 开头，早于任何一次首轮注入）跑一次确定性、不调用模型的迁移，把旧版 `MEMORY.md`/`HISTORY.md`/`SESSION.md` 转成 `memory/*.md` + `journal/`；原文件整份移到 `.memory-v1/`，不删除，写一个 `.migrated-v2` 标记防止重复迁移。新频道（没有任何旧文件）也会立刻打上标记，直接是 v2 布局。
-- **调度器**（`scheduler.ts`）每 tick 轮转选取不活跃频道（`maxConcurrentChannels` 上限），单一 job（`reflect-job.ts`）先过确定性 gate（`shouldRunReflect`：`dirty`、空闲时长、距上次反思间隔、增量窗口是否有实质对话），gate 不放行则零 LLM 成本。频道上下文的取法不变：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的磁盘冷上下文。
+- **调度器**（`scheduler.ts`）每 tick 轮转选取一个不活跃且到期的频道，单一 job（`reflect-job.ts`）先过确定性 gate（`shouldRunReflect`：`dirty`、空闲时长、距上次反思间隔、增量窗口是否有实质对话），gate 不放行则零 LLM 成本。频道上下文的取法不变：本次启动说过话的频道复用其 Runner 内存态；其余频道走 `agent/maintenance-context.ts` 的磁盘冷上下文。
 - **sidecar**（`sidecar-worker.ts`）是所有记忆 LLM 工作的统一出口：独立的 `Agent` 实例、超时、最多 2 次尝试、JSON 解析校验、用量记入账本（kind=`sidecar`）。反思的 source window、usage ledger 与 review log 共用 correlation id，可把成本关联到本次结果。
 - **子代理的 `memory: index`**（spec 050 D12）注入与主 agent 首轮相同的三段（workspace 背景 + 频道索引 + 当天 journal），预算减半，不做每次调用的 LLM 召回；旧的 `memory: session|relevant` 仍可加载，discovery 时映射为 `index` 并给出警告。
 
@@ -324,8 +323,6 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │       ├── MEMORY.md              # 生成的记忆索引（勿手改，写入后自动重建）
 │       ├── journal/YYYY-MM-DD.md  # 按天追加的工作记录，只由反思 pass 写
 │       ├── memory-review.jsonl    # 反思/工具写入的动作与拒绝原因审计
-│       ├── .memory-v1/            # v1→v2 迁移时原样搬来的旧文件（SESSION/MEMORY/HISTORY.md 等），不删除
-│       ├── .migrated-v2           # 迁移完成标记，防止重复迁移
 │       ├── log.jsonl  context.jsonl  .channel-meta.json
 │       ├── active-session.json     # 当前聊天 session 指针；无指针时用 context.jsonl
 │       ├── <session>.jsonl         # /new 等操作创建的聊天会话
@@ -336,7 +333,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 │           ├── <id>.md / <id>.jsonl # 契约 / 循环日志
 │           ├── .sessions/          # 每个任务独立会话
 │           ├── .steer/             # 用户指示与待发送的通知
-│           ├── .v4/                # 转换前的原件（含移走的任务专属事件）
+│           ├── .v3/                # 转换前的原件（含移走的任务专属事件）
 │           └── archive/            # 已关闭契约与日志
 └── state/
     ├── dispatch/                  # durable-dispatch 外发箱

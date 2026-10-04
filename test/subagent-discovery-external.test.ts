@@ -363,7 +363,7 @@ runtime: external
 harness: exec
 command: echo hi
 mutates: read
-memory: relevant
+memory: index
 ---
 
 Body.
@@ -371,13 +371,9 @@ Body.
 		);
 		const optedIn = discover(workspaceDir);
 		const declared = optedIn.agents.find((a) => a.name === "memory-declared");
-		// Spec 050, D12: "relevant" is a retired alias — it still loads, mapped onto "index".
 		expect(declared?.memory).toBe("index");
 		expect(optedIn.warnings).toEqual(
-			expect.arrayContaining([
-				expect.stringContaining('memory: "relevant" is retired'),
-				expect.stringContaining("sends the channel memory index"),
-			]),
+			expect.arrayContaining([expect.stringContaining("sends the channel memory index")]),
 		);
 	});
 

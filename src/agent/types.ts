@@ -62,19 +62,19 @@ export interface AgentRunner {
 	getSubAgentDiscoverySnapshot(): SubAgentDiscoveryResult;
 	abort(): Promise<void>;
 	/** True when the SDK is currently summarizing context. */
-	isCompacting?(): boolean;
+	isCompacting(): boolean;
 	/** Cancel context summarization synchronously; returns whether one was active. */
-	interruptCompaction?(): boolean;
+	interruptCompaction(): boolean;
 	/**
 	 * Bind this runner to a task's own session for the next turn, and back afterwards
-	 * (spec 051, D3). Optional: the TUI runs one session per process and never routes task steps.
+	 * (spec 051, D3).
 	 */
-	bindTaskSession?(taskId: string): Promise<void>;
-	bindChatSession?(): Promise<void>;
+	bindTaskSession(taskId: string): Promise<void>;
+	bindChatSession(): Promise<void>;
 	/** The task whose session this runner is bound to right now, if a task step is running. */
-	getTaskLoop?(): { taskId: string } | undefined;
+	getTaskLoop(): { taskId: string } | undefined;
 	/** Permanently retire this runner generation after an out-of-band `/new`. */
-	retireForNewSession?(): void;
+	retireForNewSession(): void;
 	/**
 	 * Synchronously reserve the turn for a message. Transports MUST call this in
 	 * the same tick they dequeue the message, before any await, so a concurrent

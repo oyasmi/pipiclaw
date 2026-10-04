@@ -1,11 +1,4 @@
-/**
- * Settings management for pipiclaw.
- *
- * `log.jsonl` and `context.jsonl` are treated as raw cold storage.
- * They are not proactively scanned or loaded as part of the memory model.
- *
- * This module currently provides only PipiclawSettingsManager.
- */
+/** Settings management for pipiclaw: `settings.json` (product intent only) and the code constants that replaced the retired knobs. */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { existsSync, mkdirSync, readFileSync } from "fs";
@@ -31,7 +24,7 @@ type SettingsError = {
 //
 // - The `Pipiclaw*Settings` interfaces below are the *runtime* contract. They
 //   carry every value the consuming module needs and are passed around whole
-//   (`maintenance-gates.ts`, `scheduler.ts`, `recall.ts`, `session-search.ts`
+//   (`maintenance-gates.ts`, `scheduler.ts`, `session-search.ts`
 //   all destructure them), so they are the channel through which the constants
 //   reach their consumers.
 // - `PipiclawSettings` is the *user input* contract — what may appear in

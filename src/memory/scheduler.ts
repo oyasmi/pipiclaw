@@ -103,10 +103,6 @@ export async function discoverMemoryMaintenanceChannels(input: {
 	]);
 }
 
-function normalizeMaxConcurrentChannels(value: number): number {
-	return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
-}
-
 export class MemoryMaintenanceScheduler {
 	private timer: ReturnType<typeof setInterval> | null = null;
 	private running = false;
@@ -150,32 +146,26 @@ export class MemoryMaintenanceScheduler {
 				workspaceDir: this.options.workspaceDir,
 				knownChannelIds: this.options.getKnownChannelIds?.(),
 			});
-			const maxConcurrent = normalizeMaxConcurrentChannels(settings.memoryMaintenance.maxConcurrentChannels);
 			if (channelIds.length === 0) {
 				return;
 			}
-			const selected: string[] = [];
-			let scanned = 0;
+			// One channel per tick, round-robin: a reflect pass is an LLM call, and the first due
+			// channel is as good a place to spend it as any.
+			let selected: string | undefined;
 			let index = this.nextChannelIndex % channelIds.length;
-			while (scanned < channelIds.length && selected.length < maxConcurrent) {
+			for (let scanned = 0; scanned < channelIds.length && !selected; scanned++) {
 				const channelId = channelIds[index];
 				if (
 					channelId &&
 					!this.options.isChannelActive(channelId) &&
-					(await mightReflectBeDue({
-						appHomeDir: this.options.appHomeDir,
-						channelId,
-						settings,
-						now,
-					}))
+					(await mightReflectBeDue({ appHomeDir: this.options.appHomeDir, channelId, settings, now }))
 				) {
-					selected.push(channelId);
+					selected = channelId;
 				}
 				index = (index + 1) % channelIds.length;
-				scanned++;
 			}
 			this.nextChannelIndex = index;
-			await Promise.all(selected.map((channelId) => this.runChannelOnce(channelId, now)));
+			if (selected) await this.runChannelOnce(selected, now);
 		} finally {
 			this.running = false;
 		}

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as log from "../src/log.js";
 import type { DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { type DurableDispatchRecord, DurableDispatchService } from "../src/runtime/durable-dispatch.js";
-import { claimVerifiedDelegationWake } from "../src/runtime/task-wake.js";
+import { claimVerifiedWake } from "../src/runtime/task-wake.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { readStoredTask } from "../src/tasks/store.js";
 import { configureSubAgentRuntime, getSubAgentRunManager } from "./helpers/background-runtime.js";
@@ -240,7 +240,7 @@ describe("DurableDispatchService", () => {
 		await service.drainOnce(Date.now() + 11);
 		expect(delivered[1]?.text).toContain("[REDELIVERY:2]");
 
-		const claimed = await claimVerifiedDelegationWake(delivered[1]!, workspaceDir, manager);
+		const claimed = await claimVerifiedWake(delivered[1]!, workspaceDir, manager);
 		expect(claimed?.activated).toBe(true);
 		await claimed?.finish();
 		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.state).toBe("open");
@@ -250,7 +250,7 @@ describe("DurableDispatchService", () => {
 		// The task is already open, so a further claim on the same wake is a no-op — the run
 		// manager's dispatchId-scoped wake claim is what makes this idempotent, not any per-task
 		// attempt counter (that mechanism was retired).
-		await expect(claimVerifiedDelegationWake(delivered[2]!, workspaceDir, manager)).resolves.toBeUndefined();
+		await expect(claimVerifiedWake(delivered[2]!, workspaceDir, manager)).resolves.toBeUndefined();
 		expect((await readStoredTask(channelDir, "T-redelivery"))?.fields.state).toBe("open");
 	});
 
@@ -479,41 +479,6 @@ describe("DurableDispatchService", () => {
 		// A "restart" is just a new instance over the same directory; it must still see the record.
 		const restarted = new DurableDispatchService({ stateDir, bot: { enqueueEvent: () => true } });
 		expect(await restarted.cancelChannel(event().channelId)).toBe(1);
-	});
-
-	it("migrates a pre-fix nested dispatch record so a new instance can drain it (R1)", async () => {
-		// Simulates the actual pre-fix bug: an old process wrote a dispatch id containing `/`
-		// verbatim as a path, which created a real subdirectory instead of a file.
-		const stateDir = join(tempDir(), "state", "dispatch");
-		const legacyId = "subagent:group_legacy/child:run-1:done";
-		await mkdir(join(stateDir, "subagent:group_legacy"), { recursive: true });
-		await writeFile(
-			join(stateDir, "subagent:group_legacy", "child:run-1:done.json"),
-			`${JSON.stringify({
-				version: 1,
-				id: legacyId,
-				createdAt: new Date().toISOString(),
-				status: "pending",
-				deliveries: 0,
-				event: { ...event(), channelId: "group_legacy", dispatchId: legacyId },
-			})}\n`,
-		);
-
-		const delivered: DingTalkEvent[] = [];
-		const service = new DurableDispatchService({
-			stateDir,
-			bot: {
-				enqueueEvent(next) {
-					delivered.push(next);
-					return true;
-				},
-			},
-		});
-		await service.drainOnce();
-		expect(delivered).toHaveLength(1);
-		expect(delivered[0]?.dispatchId).toBe(legacyId);
-		// The legacy nested file is gone — migrated to its flat, encoded home.
-		expect(existsSync(join(stateDir, "subagent:group_legacy", "child:run-1:done.json"))).toBe(false);
 	});
 
 	it("does not burn a delivery attempt on admission rejection, only on real failures (R2)", async () => {

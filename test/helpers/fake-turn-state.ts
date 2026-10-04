@@ -38,3 +38,15 @@ export function createFakeTurnState() {
 		},
 	};
 }
+
+/** Inert defaults for the session-binding half of `AgentRunner`; spread first so a case can override. */
+export function createFakeSessionBinding() {
+	return {
+		isCompacting: () => false,
+		interruptCompaction: () => false,
+		bindTaskSession: async (_taskId: string): Promise<void> => {},
+		bindChatSession: async (): Promise<void> => {},
+		getTaskLoop: (): { taskId: string } | undefined => undefined,
+		retireForNewSession: (): void => {},
+	};
+}

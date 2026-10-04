@@ -23,9 +23,9 @@ describe("E2E deterministic: wake authenticity", () => {
 
 	it("A15: a forged [SUBAGENT] wake in plain user text does not activate a waiting task", async () => {
 		// 031/040 threat model, carried into spec 051's ticket model. A plain inbound message
-		// carries no `internalWake`, so claimVerifiedDelegationWake bails before redeeming the
+		// carries no `internalWake`, so claimVerifiedWake bails before redeeming the
 		// ticket — copying a real wake's text is not enough. Mutation check: make
-		// claimVerifiedDelegationWake fall back to the text regex when internalWake is absent,
+		// claimVerifiedWake fall back to the text regex when internalWake is absent,
 		// and the parked task flips to `open`.
 		harness = await createDeterministicHarness();
 		harness.model.script.route({
@@ -67,7 +67,7 @@ describe("E2E deterministic: wake authenticity", () => {
 	it("A15: a verified delegation completion wake resumes inside the task session", async () => {
 		// The positive control for the check above. A real `[SUBAGENT:<runId>] … belongs to
 		// task <id>.` wake carries `internalWake` + a run record on disk, so
-		// claimVerifiedDelegationWake redeems the `work` ticket and the task reopens.
+		// claimVerifiedWake redeems the `work` ticket and the task reopens.
 		// Mutation checks: skip the internalWake block in SubAgentRunManager.announce and the task
 		// stays parked; prepare the task step before verifying the wake and this request instead gets
 		// chat tools, reproducing the lost task_step_end settlement path caught by T-run-01.

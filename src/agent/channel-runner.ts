@@ -43,7 +43,6 @@ import {
 	type MemoryActivityEvent,
 	type MemoryActivityRecorder,
 } from "../memory/maintenance-state.js";
-import { isChannelMigratedToV2, migrateChannelMemoryToV2 } from "../memory/migrate.js";
 import { hasMemoryBootstrapBlock, renderMemoryBootstrap } from "../memory/render.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { listMemoryEntries } from "../memory/store.js";
@@ -70,7 +69,7 @@ import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../shared/types.js";
 import { withTimeout } from "../shared/with-timeout.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/discovery.js";
-import { SubAgentRunManager } from "../subagents/runs.js";
+import type { SubAgentRunManager } from "../subagents/runs.js";
 import { TASK_SESSIONS_DIRNAME, taskSessionPath } from "../tasks/session-path.js";
 import { loadToolsConfigWithDiagnostics } from "../tools/config.js";
 import { createPipiclawTools } from "../tools/index.js";
@@ -78,7 +77,7 @@ import { formatSize } from "../tools/truncate.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { createCommandExtension } from "./command-extension.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./context-budget.js";
-import { ChannelJobManager } from "./job-manager.js";
+import type { ChannelJobManager } from "./job-manager.js";
 import {
 	type FallbackRunDeps,
 	PRIMARY_COOLDOWN_MS,
@@ -259,8 +258,8 @@ export class ChannelRunner implements AgentRunner {
 		this.mediaSender = paths.mediaSender;
 
 		this.executor = deps.executor;
-		this.jobManager = paths.jobManager ?? new ChannelJobManager(channelId, deps.executor);
-		this.runManager = paths.runManager ?? new SubAgentRunManager(channelId, {});
+		this.jobManager = paths.jobManager;
+		this.runManager = paths.runManager;
 		this.fileStore = deps.fileStore;
 		this.loadSecurityConfig = deps.loadSecurityConfig;
 		this.workspaceDir = resolve(dirname(channelDir));
@@ -405,7 +404,6 @@ export class ChannelRunner implements AgentRunner {
 
 		try {
 			await this.ensureSessionReady();
-			await this.ensureMemoryMigrated();
 			await this.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
 			const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
@@ -1362,28 +1360,6 @@ export class ChannelRunner implements AgentRunner {
 		await this.sessionReady;
 	}
 
-	/** Spec 050 §5: migrate this channel's memory to v2 on first use, before any turn reads it. */
-	private memoryMigrationChecked = false;
-	private async ensureMemoryMigrated(): Promise<void> {
-		if (this.memoryMigrationChecked) {
-			return;
-		}
-		this.memoryMigrationChecked = true;
-		if (isChannelMigratedToV2(this.channelDir)) {
-			return;
-		}
-		try {
-			const result = await migrateChannelMemoryToV2(this.channelDir);
-			if (result.migrated) {
-				log.logInfo(
-					`[${this.channelId}] Migrated channel memory to v2 (${result.entries} entries, ${result.journalDays} journal days)`,
-				);
-			}
-		} catch (error) {
-			log.logWarning(`[${this.channelId}] Channel memory v2 migration failed`, errorMessage(error));
-		}
-	}
-
 	private async maybeRunPreventiveCompactionForIncomingText(
 		incomingText: string,
 		imageCount: number = 0,
@@ -1802,8 +1778,8 @@ export class ChannelRunner implements AgentRunner {
 
 	/**
 	 * Spec 050, D1: assemble `<memory_bootstrap>` for the first turn of a session — workspace
-	 * MEMORY.md (whole H2 sections, budgeted) + the channel index (full, or budget-tiered). The
-	 * journal subsection is added in P2.
+	 * MEMORY.md (whole H2 sections, budgeted) + the channel index (full, or budget-tiered) +
+	 * today's journal tail.
 	 */
 	private async buildFirstTurnMemoryBootstrap(): Promise<string> {
 		const readOptionalFile = async (path: string): Promise<string> => {

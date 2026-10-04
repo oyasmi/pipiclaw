@@ -12,14 +12,12 @@ export interface MemoryMaintenanceTuning {
 	minIdleMinutesBeforeLlmWork: number;
 	/** Idle cadence of the reflect pass. */
 	reflectIntervalMinutes: number;
-	maxConcurrentChannels: number;
 	failureBackoffMinutes: number;
 }
 
 const PRODUCTION_TUNING: MemoryMaintenanceTuning = {
 	minIdleMinutesBeforeLlmWork: 10,
 	reflectIntervalMinutes: 20,
-	maxConcurrentChannels: 1,
 	failureBackoffMinutes: 30,
 };
 

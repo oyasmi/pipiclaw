@@ -71,8 +71,7 @@ export async function buildTaskDigest(options: TaskDigestOptions): Promise<strin
 	const now = options.now ?? Date.now();
 	const tasksDir = join(options.channelDir, "tasks");
 	const all = await readActiveTasks(tasksDir, now);
-	// A legacy terminal file may briefly remain in the active directory while startup migration
-	// is running. It is already non-actionable at the ledger layer and must not enter prompt context.
+	// A closed task that has not been archived yet is non-actionable and must not enter prompt context.
 	const agenda = all.filter((entry) => !entry.fields.outcome);
 	if (agenda.length === 0) return "";
 

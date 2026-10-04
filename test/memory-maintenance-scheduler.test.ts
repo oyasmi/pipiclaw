@@ -13,7 +13,6 @@ function maintenanceSettings(enabled = true) {
 		enabled,
 		minIdleMinutesBeforeLlmWork: 10,
 		reflectIntervalMinutes: 20,
-		maxConcurrentChannels: 1,
 		failureBackoffMinutes: 30,
 	};
 }
@@ -76,7 +75,7 @@ describe("memory maintenance scheduler", () => {
 		expect(getRuntimeContext).not.toHaveBeenCalled();
 	});
 
-	it("honors maxConcurrentChannels per tick", async () => {
+	it("reflects one channel per tick", async () => {
 		const root = createTempDir();
 		const appHomeDir = join(root, "app");
 		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({ ...state, dirty: true }));
@@ -91,7 +90,6 @@ describe("memory maintenance scheduler", () => {
 			getSettings: () => ({
 				memoryMaintenance: {
 					...maintenanceSettings(true),
-					maxConcurrentChannels: 1,
 				},
 			}),
 		});
@@ -100,7 +98,7 @@ describe("memory maintenance scheduler", () => {
 		expect(getRuntimeContext).toHaveBeenCalledTimes(1);
 	});
 
-	it("fills tick slots by skipping active channels in the ring", async () => {
+	it("skips active channels in the ring", async () => {
 		const root = createTempDir();
 		const appHomeDir = join(root, "app");
 		for (const id of ["dm_1", "dm_2", "dm_3"]) {
@@ -116,7 +114,6 @@ describe("memory maintenance scheduler", () => {
 			getSettings: () => ({
 				memoryMaintenance: {
 					...maintenanceSettings(true),
-					maxConcurrentChannels: 1,
 				},
 			}),
 		});
@@ -149,7 +146,7 @@ describe("memory maintenance scheduler", () => {
 			getRuntimeContext,
 			isChannelActive: () => false,
 			getSettings: () => ({
-				memoryMaintenance: { ...maintenanceSettings(true), maxConcurrentChannels: 1 },
+				memoryMaintenance: { ...maintenanceSettings(true) },
 			}),
 		});
 

@@ -26,7 +26,6 @@ function maintenanceSettings(overrides: Partial<Record<string, unknown>> = {}) {
 		enabled: true,
 		minIdleMinutesBeforeLlmWork: 10,
 		reflectIntervalMinutes: 20,
-		maxConcurrentChannels: 1,
 		failureBackoffMinutes: 30,
 		...overrides,
 	};

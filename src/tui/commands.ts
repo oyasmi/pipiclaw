@@ -13,7 +13,13 @@
  * depend on whether a turn is running, which only the app knows — so those come
  * back as intents rather than being applied here.
  */
-import { BUILT_IN_COMMANDS, type CommandSpec, parseBuiltInCommand, SESSION_COMMANDS } from "../commands/catalog.js";
+import {
+	BUILT_IN_COMMANDS,
+	type CommandSpec,
+	parseBuiltInCommand,
+	type RuntimeCommandName,
+	SESSION_COMMANDS,
+} from "../commands/catalog.js";
 
 export type DispatchOutcome =
 	/** Text to show the user immediately (help/status/usage/events output, or a hint). */
@@ -33,14 +39,8 @@ export type DispatchOutcome =
 
 export interface DispatchDeps {
 	renderHelp(args?: string): string;
-	renderStatus(): string;
-	renderContext(args: string): string;
-	renderUsage(args: string): Promise<string>;
-	runEvents(args: string): Promise<string>;
-	runTasks(args: string): Promise<string>;
-	runSubagents(args: string): Promise<string>;
-	runProject(args: string): Promise<string>;
-	runSkills(args: string): Promise<string>;
+	/** The stateless report commands (`/status /context /usage /events /tasks /subagents /project /skills`). */
+	runReport(name: RuntimeCommandName, args: string): Promise<string>;
 }
 
 export async function dispatch(input: string, deps: DispatchDeps): Promise<DispatchOutcome> {
@@ -60,21 +60,14 @@ export async function dispatch(input: string, deps: DispatchDeps): Promise<Dispa
 		case "help":
 			return { kind: "reply", text: deps.renderHelp(command.args) };
 		case "status":
-			return { kind: "reply", text: deps.renderStatus() };
 		case "context":
-			return { kind: "reply", text: deps.renderContext(command.args) };
 		case "usage":
-			return { kind: "reply", text: await deps.renderUsage(command.args) };
 		case "events":
-			return { kind: "reply", text: await deps.runEvents(command.args) };
 		case "tasks":
-			return { kind: "reply", text: await deps.runTasks(command.args) };
 		case "subagents":
-			return { kind: "reply", text: await deps.runSubagents(command.args) };
 		case "project":
-			return { kind: "reply", text: await deps.runProject(command.args) };
 		case "skills":
-			return { kind: "reply", text: await deps.runSkills(command.args) };
+			return { kind: "reply", text: await deps.runReport(command.name, command.args) };
 		case "stop":
 			return { kind: "stop" };
 		case "steer":

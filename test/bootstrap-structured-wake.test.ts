@@ -9,7 +9,7 @@ import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
 import { renderTaskDocument } from "../src/tasks/ledger.js";
 import { readStoredTask } from "../src/tasks/store.js";
-import { createFakeTurnState } from "./helpers/fake-turn-state.js";
+import { createFakeSessionBinding, createFakeTurnState } from "./helpers/fake-turn-state.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const { createRunnerMock } = vi.hoisted(() => ({ createRunnerMock: vi.fn() }));
@@ -54,6 +54,7 @@ function paths(): BootstrapPaths {
 
 function runner(): AgentRunner {
 	return {
+		...createFakeSessionBinding(),
 		run: vi.fn(async () => ({
 			stopReason: "stop",
 			usage: {
@@ -281,7 +282,7 @@ describe("runtime structured wake delivery", () => {
 			expect(harness.fakeRunner.run, kind).not.toHaveBeenCalled();
 			expect(existsSync(dispatchPath)).toBe(true);
 			expect(JSON.parse(readFileSync(dispatchPath, "utf-8")), kind).toMatchObject({ status: "pending" });
-			// The transport refused the turn, so the rollback must have re-parked it on the same ticket.
+			// The activation failed before the ticket was redeemed, so the task is still parked.
 			expect((await readStoredTask(channelDir, taskId))?.fields.state).toBe("parked");
 
 			fail = false;

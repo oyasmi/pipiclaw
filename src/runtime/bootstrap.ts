@@ -3,7 +3,6 @@ import { join, relative } from "path";
 import { createJobRuntime, type JobRuntime } from "../agent/job-manager.js";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { createRunner } from "../agent/runner-factory.js";
-import { renderStatus } from "../agent/status-render.js";
 import { scanWorkspaceForInterruptedTurns } from "../agent/turn-recovery.js";
 import type { AgentRunner } from "../agent/types.js";
 import { prepareAppServices } from "../app-services.js";
@@ -22,29 +21,26 @@ import {
 	type RuntimeCommandName,
 	slashCommandName,
 } from "../commands/catalog.js";
-import { handleEventsCommand as runEventsCommand } from "../events/event-commands.js";
 import { createEventsWatcher } from "../events/events.js";
 import { createExecutor, type Executor } from "../executor.js";
 import * as log from "../log.js";
-import { migrateMemoryMaintenanceStates } from "../memory/maintenance-migration.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
 import { defaultModel } from "../models/utils.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
-import { PipiclawSettingsManager, TASK_DRIVER_SETTINGS } from "../settings.js";
+import { PipiclawSettingsManager } from "../settings.js";
 import { fileStamp } from "../shared/format.js";
 import { localStampForFilename } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { sleepUnref } from "../shared/with-timeout.js";
-import { loadDetachedSubAgentDiscovery } from "../subagents/detached-discovery.js";
 import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/runs.js";
 import { buildTaskStepBrief } from "../tasks/brief.js";
 import { readActiveTasks } from "../tasks/ledger.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
+import { pauseTask as pauseStoredTask } from "../tasks/store.js";
 import { getToolsConfigPath, loadToolsConfig } from "../tools/config.js";
 import { getUsageLedger } from "../usage/ledger.js";
-import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -67,15 +63,13 @@ import {
 } from "./dingtalk.js";
 import { DurableDispatchService } from "./durable-dispatch.js";
 import { extensionForMimeType } from "./inbound-media.js";
-import { handleProjectCommand as runProjectCommand } from "./project-commands.js";
-import { handleSkillsCommand as runSkillsCommand } from "./skill-commands.js";
-import { renderRunNotice, handleSubagentsCommand as runSubagentsCommand } from "./subagent-commands.js";
-import { pauseTask, handleTasksCommand as runTasksCommand } from "./task-commands.js";
-import { createTaskDriverEvent, TaskDriver } from "./task-driver.js";
+import { runReportCommand } from "./report-commands.js";
+import { renderRunNotice } from "./subagent-commands.js";
+import { createTaskDriverEvent, parseDriverTaskId, TaskDriver } from "./task-driver.js";
 import { migrateTasksToV5 } from "./task-migration.js";
 import { createTaskSpawner } from "./task-spawn.js";
 import type { WakeTaskTransitionHooks } from "./task-wake.js";
-import { claimVerifiedDelegationWake, claimVerifiedJobWake } from "./task-wake.js";
+import { claimVerifiedWake } from "./task-wake.js";
 
 export interface BootstrapOptions {
 	env?: NodeJS.ProcessEnv;
@@ -340,9 +334,8 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 		event: ChannelEvent,
 		runner: AgentRunner,
 	): Promise<{ taskId: string; brief: string } | undefined> => {
-		const match = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(event.text);
-		const taskId = match?.[1] ?? event.internalWake?.taskId;
-		if (!taskId || !runner.bindTaskSession) return undefined;
+		const taskId = parseDriverTaskId(event.text) ?? event.internalWake?.taskId;
+		if (!taskId) return undefined;
 		const channelDir = ensureChannelDir(options.paths.workspaceDir, event.channelId);
 		try {
 			const brief = await buildTaskStepBrief({ channelDir, taskId });
@@ -370,7 +363,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 		} catch (error) {
 			log.logWarning(`[${channelId}] Could not deliver task notice for ${taskId}`, errorMessage(error));
 		}
-		await getRunner(channelId).bindChatSession?.();
+		await getRunner(channelId).bindChatSession();
 	};
 
 	const handler: DingTalkHandler = {
@@ -388,17 +381,16 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			let pausedTaskId: string | undefined;
 			if (runner?.isBusy()) {
 				runner.requestStop();
-				const taskId = /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(runner.getTurnStatus().taskText ?? "")?.[1];
+				// Stopping a task step stops the task: otherwise the driver would queue the next step
+				// straight away. The step may not be bound to its session yet, so fall back to the text.
+				const taskId = runner.getTaskLoop()?.taskId ?? parseDriverTaskId(runner.getTurnStatus().taskText);
 				if (taskId) {
-					const pauseResult = await pauseTask(
-						{
-							args: "",
-							channelDir: getChannelDir(options.paths.workspaceDir, channelId),
-						},
-						taskId,
-					);
+					await pauseStoredTask(getChannelDir(options.paths.workspaceDir, channelId), taskId, {
+						by: "user",
+						reason: "用户 /stop 中止了该任务的当前步骤。",
+					});
 					pausedTaskId = taskId;
-					log.logInfo(`[${channelId}] ${pauseResult}`);
+					log.logInfo(`[${channelId}] Paused task ${taskId} on /stop`);
 				}
 				_bot.discardCard(channelId);
 				// Drop queued-but-not-started messages so a burst does not keep
@@ -463,7 +455,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						if (oldRunner) {
 							channelRunners.delete(event.channelId);
 							try {
-								oldRunner.retireForNewSession?.();
+								oldRunner.retireForNewSession();
 							} catch (error) {
 								// The active pointer already names the new session. Retirement is
 								// best-effort cleanup and must not misreport the committed reset as failed.
@@ -513,101 +505,47 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 		},
 
 		async runRuntimeCommand(event: ChannelEvent, name: RuntimeCommandName, args: string): Promise<string> {
-			switch (name) {
-				case "events":
-					return runEventsCommand({
-						args,
-						workspaceDir: options.paths.workspaceDir,
-						historyPath: options.paths.eventHistoryPath,
-					});
-				case "tasks":
-					return runTasksCommand({
-						args,
-						channelDir: getChannelDir(options.paths.workspaceDir, event.channelId),
-						dispatchTask: async (id) => {
-							const channelDir = getChannelDir(options.paths.workspaceDir, event.channelId);
-							const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
-								(candidate) => candidate.id === id,
-							);
-							if (!entry) return false;
-							// A human asking to run a task twice means twice, so this key is deliberately
-							// unique per invocation rather than sharing the driver's occurrence key (D1).
-							const now = Date.now();
-							const driverEvent = createTaskDriverEvent(event.channelId, entry, now);
-							return (
-								(await getDurableDispatch()?.dispatch({
-									...driverEvent,
-									dispatchId: `task:${event.channelId}:${entry.id}:manual:${new Date(now).toISOString()}`,
-								})) ?? false
-							);
-						},
-					});
-				case "status":
-					return renderStatus({
-						runner: channelRunners.get(event.channelId),
-						version: cliVersion,
-						uptimeMs: Date.now() - startedAt,
-					});
-				case "usage":
-					return renderUsageReport(getUsageLedger(), event.channelId, parseUsageMode(args), new Date());
-				// Read-only prompt accounting; safe mid-turn, so the busy path answers it through
-				// this stateless report rather than the runner's ChannelContext-aware idle path.
-				case "context":
-					return getRunner(event.channelId).renderContextReport(args);
-				// A human control path independent of the model (spec 040, D6): `/stop` no longer kills a
-				// dispatched delegation, so cancel must work whether or not a runner is currently active.
-				case "subagents":
-					return runSubagentsCommand({
-						args,
-						runManager: getRuns().get(event.channelId),
-						channelId: event.channelId,
-						discovery: channelRunners.get(event.channelId)?.getSubAgentDiscoverySnapshot(),
-						// `roles` needs a role directory even for a channel that has never spoken this boot —
-						// resolved from disk, without spinning up a full ChannelRunner (spec 041).
-						getDetachedDiscovery: () =>
-							loadDetachedSubAgentDiscovery({
-								workspaceDir: options.paths.workspaceDir,
-								authConfigPath: options.paths.authConfigPath,
-								modelsConfigPath: options.paths.modelsConfigPath,
-							}),
-					});
-				case "project":
-					return runProjectCommand({
-						args,
-						channelId: event.channelId,
-						channelDir: getChannelDir(options.paths.workspaceDir, event.channelId),
-						appHomeDir: options.paths.appHomeDir,
-						actor: "dingtalk-command",
-						isBusy: () => channelRunners.get(event.channelId)?.isBusy() ?? false,
-						listActiveBlockers: () => [
-							...getRuns()
-								.get(event.channelId)
-								.list()
-								.filter((record) => record.status === "running")
-								.map((record) => `subagent run \`${record.runId}\` (${record.agent})`),
-							...getJobs().runningLines(event.channelId),
-						],
-						// D4.2: dispose the cached runner so the next access rebuilds it under the new scope.
-						// The active-session ref is untouched — same session, new project root.
-						onScopeChanged: async () => {
-							const runner = channelRunners.get(event.channelId);
-							channelRunners.delete(event.channelId);
-							await runner?.dispose().catch((err) => {
-								log.logWarning(
-									`[${event.channelId}] Failed to dispose runner after /project`,
-									errorMessage(err),
-								);
-							});
-						},
-					});
-				case "skills":
-					return runSkillsCommand({
-						args,
-						workspaceDir: options.paths.workspaceDir,
-						appHomeDir: options.paths.appHomeDir,
-						channelId: event.channelId,
-					});
-			}
+			const { channelId } = event;
+			return runReportCommand(
+				{
+					channelId,
+					paths: options.paths,
+					actor: "dingtalk-command",
+					version: cliVersion,
+					startedAt,
+					peekRunner: () => channelRunners.get(channelId),
+					getRunner: () => getRunner(channelId),
+					runManager: getRuns().get(channelId),
+					runningJobLines: () => getJobs().runningLines(channelId),
+					// D4.2: dispose the cached runner so the next access rebuilds it under the new scope.
+					// The active-session ref is untouched — same session, new project root.
+					onScopeChanged: async () => {
+						const runner = channelRunners.get(channelId);
+						channelRunners.delete(channelId);
+						await runner?.dispose().catch((err) => {
+							log.logWarning(`[${channelId}] Failed to dispose runner after /project`, errorMessage(err));
+						});
+					},
+					dispatchTask: async (id) => {
+						const channelDir = getChannelDir(options.paths.workspaceDir, channelId);
+						const entry = (await readActiveTasks(join(channelDir, "tasks"))).find(
+							(candidate) => candidate.id === id,
+						);
+						if (!entry) return false;
+						// A human asking to run a task twice means twice, so this key is deliberately
+						// unique per invocation rather than sharing the driver's occurrence key (D1).
+						const now = Date.now();
+						return (
+							(await getDurableDispatch()?.dispatch({
+								...createTaskDriverEvent(channelId, entry, now),
+								dispatchId: `task:${channelId}:${entry.id}:manual:${new Date(now).toISOString()}`,
+							})) ?? false
+						);
+					},
+				},
+				name,
+				args,
+			);
 		},
 
 		async handleBusyMessage(
@@ -632,7 +570,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			// Compaction is maintenance, not user work. A new message cancels it and is
 			// kept as a normal queued turn instead of trying to steer an agent loop that
 			// is currently disconnected for summarization.
-			if (runner.interruptCompaction?.()) {
+			if (runner.interruptCompaction()) {
 				log.logInfo(`[${event.channelId}] Interrupted compaction for a new user message`);
 				return { kind: "requeue", text: trimmedQueueText };
 			}
@@ -640,7 +578,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			// A task step runs in the task's own session and is muted: a steer here would land in
 			// the background task's context and its answer would never reach the user, while the
 			// message itself is kept out of the chat session. Run it as the next chat turn instead.
-			const taskLoop = runner.getTaskLoop?.();
+			const taskLoop = runner.getTaskLoop();
 			if (taskLoop) {
 				await bot.sendPlain(
 					event.channelId,
@@ -840,82 +778,30 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 						ctx: { channelId: event.channelId, userName: event.userName },
 						fields: { messageLength: event.text.length, source: _isEvent ? "event" : "message" },
 					});
-					// Both wake formats below carry an unauthenticated claim in plain text: anything
-					// that can put a message on this channel can *write* "[JOB:x] ... belongs to task
-					// y." or "[SUBAGENT:x] ... belongs to task y." — including another user, or an
-					// external agent's own untrusted stdout (spec 040, D8's threat model explicitly
-					// treats external output as untrusted). Activating a waiting task on text pattern
-					// alone lets that forged claim wake an unrelated task early. The
-					// pattern match only extracts a *candidate* id pair now; both paths verify the
-					// named run/job actually exists, is done, and really is the one that names this
-					// taskId before ever calling `activateWaitingTask` (T9).
-					const jobTextMatch = /^\[JOB:([^\]]+)\][\s\S]*?belongs to task ([A-Za-z0-9._-]+)\./.exec(event.text);
-					const jobMatch =
-						event.internalWake?.kind === "job"
-							? [event.text, event.internalWake.resourceId, event.internalWake.taskId]
-							: jobTextMatch;
-
-					if (jobMatch) {
-						const [, jobId, jobTaskId] = jobMatch;
-						const claimed = await claimVerifiedJobWake(
+					// A completion wake for a task's job or delegation: verified against the resource's own
+					// record before it may reopen the task (see `claimVerifiedWake`). Plain "belongs to task"
+					// text in a message never counts — only the producer-created `internalWake` envelope.
+					if (event.internalWake) {
+						const { kind, resourceId, taskId: wakeTaskId } = event.internalWake;
+						const claimed = await claimVerifiedWake(
 							event,
 							options.paths.workspaceDir,
-							getJobs().get(event.channelId),
-							options.wakeTransitionHooks?.job,
+							kind === "job" ? getJobs().get(event.channelId) : getRuns().get(event.channelId),
+							options.wakeTransitionHooks?.[kind],
 						);
-						if (claimed) {
-							await claimed.finish();
-							structuredWakeFinalized = true;
-							// Drop without a turn only when something else is still driving this task (a
-							// sibling wake in the same fan-out already activated it); every other case —
-							// the task is done, archived, disabled, or gone — has nobody left to see this
-							// result if it is dropped here, so it must still reach a normal turn (P3-1).
-							if (event.internalWake?.kind === "job" && !claimed.activated && claimed.taskStillDriven) return;
-						} else {
+						if (!claimed) {
 							log.logWarning(
-								`[${event.channelId}] Ignored an unverifiable [JOB:${jobId}] wake claiming task ${jobTaskId}`,
+								`[${event.channelId}] Ignored an unverifiable ${kind} wake for ${resourceId} claiming task ${wakeTaskId}`,
 							);
-							if (event.internalWake?.kind === "job") {
-								structuredWakeFinalized = true;
-								return;
-							}
-						}
-					}
-					// Spec 040, D7: a delegation run's completion wake carries the same "belongs to
-					// task" contract as a background job's, and reactivates a task parked with
-					// waitingFor="external-signal" the same way — verified the same way (T9).
-					const delegationTextMatch = /^\[SUBAGENT:([^\]]+)\][\s\S]*?belongs to task ([A-Za-z0-9._-]+)\./.exec(
-						event.text,
-					);
-					const delegationMatch =
-						event.internalWake?.kind === "subagent"
-							? [event.text, event.internalWake.resourceId, event.internalWake.taskId]
-							: delegationTextMatch;
-
-					if (delegationMatch) {
-						const [, runId, delegationTaskId] = delegationMatch;
-						const claimed = await claimVerifiedDelegationWake(
-							event,
-							options.paths.workspaceDir,
-							getRuns().get(event.channelId),
-							options.wakeTransitionHooks?.subagent,
-						);
-						if (claimed) {
-							await claimed.finish();
 							structuredWakeFinalized = true;
-							// See the JOB branch above (P3-1): only skip the turn when the task is still
-							// driven by something else.
-							if (event.internalWake?.kind === "subagent" && !claimed.activated && claimed.taskStillDriven)
-								return;
-						} else {
-							log.logWarning(
-								`[${event.channelId}] Ignored an unverifiable [SUBAGENT:${runId}] wake claiming task ${delegationTaskId}`,
-							);
-							if (event.internalWake?.kind === "subagent") {
-								structuredWakeFinalized = true;
-								return;
-							}
+							return;
 						}
+						await claimed.finish();
+						structuredWakeFinalized = true;
+						// Drop without a turn only when something else is still driving this task (a sibling
+						// wake in the same fan-out already reopened it); in every other case nobody else will
+						// look at this result, so it still reaches a normal turn.
+						if (!claimed.activated && claimed.taskStillDriven) return;
 					}
 					// Verified job/run wakes that activate a task are task steps too. Verification must happen
 					// first: routing directly from user-controlled wake text would grant task-only tools.
@@ -965,7 +851,6 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 export async function createRuntimeContext(
 	options: RuntimeContextOptions,
 ): Promise<RuntimeContext & { bot: DingTalkBot }> {
-	await migrateMemoryMaintenanceStates(options.paths.appHomeDir);
 	const startServices = options.startServices ?? true;
 	const registerSignalHandlers = options.registerSignalHandlers ?? true;
 	const store = new ChannelStore({ workingDir: options.paths.workspaceDir });
@@ -1193,8 +1078,7 @@ export async function createRuntimeContext(
 				intervalMs: options.memoryMaintenanceSchedulerIntervalMs,
 			});
 	// `tools.json` is re-read on every driver tick — and a tick follows every turn — so cache the
-	// parse behind the file's change token. `settings.json` gets the same treatment inside
-	// `PipiclawSettingsManager.reload()`, which is why the getSettings closure below stays as-is.
+	// parse behind the file's change token.
 	let cachedToolsStamp: string | undefined;
 	let cachedTasksEnabled = true;
 	const tasksToolEnabled = (): boolean => {
@@ -1214,10 +1098,6 @@ export async function createRuntimeContext(
 				dispatch: (event) => durableDispatch?.dispatch(event) ?? false,
 				onDispatch: options.onTaskDriverDispatch,
 				notify: (receipt) => bot.sendPlain(receipt.channelId, receipt.text),
-				getSettings: () => {
-					runtimeSettingsManager.reload();
-					return TASK_DRIVER_SETTINGS;
-				},
 				isEnabled: tasksToolEnabled,
 			});
 

@@ -5,7 +5,7 @@ import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
 import { dedupeChannelIdsByDirectory, getChannelDir, isChannelId } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
-import type { PipiclawTaskDriverSettings } from "../settings.js";
+import { type PipiclawTaskDriverSettings, TASK_DRIVER_SETTINGS } from "../settings.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { checkBudget, IDLE_STEP_LIMIT } from "../tasks/budget.js";
 import { readActiveTasks, type TaskLedgerEntry } from "../tasks/ledger.js";
@@ -19,7 +19,8 @@ export interface TaskDriverOptions {
 	dispatch: (event: ChannelEvent) => boolean | Promise<boolean>;
 	/** Optional observability hook. It runs after every production dispatch attempt. */
 	onDispatch?: (event: ChannelEvent, accepted: boolean) => void;
-	getSettings: () => PipiclawTaskDriverSettings;
+	/** Test-only override; production uses `TASK_DRIVER_SETTINGS`. */
+	settings?: PipiclawTaskDriverSettings;
 	/** Master autonomy switch (`tools.tasks.enabled`); re-read every tick. Defaults to on. */
 	isEnabled?: () => boolean;
 	/** Test-only override for the idle-sleep cap; production uses `settings.maxSleepMinutes`. */
@@ -66,6 +67,11 @@ function channelType(channelId: string): { type: ChannelEvent["type"]; conversat
  */
 function stepDispatchId(channelId: string, entry: TaskLedgerEntry, nowMs: number): string {
 	return `task:${channelId}:${entry.id}:${nowMs}`;
+}
+
+/** The task a `[TASK_DRIVER:<id>]` dispatch text names, if it is one. */
+export function parseDriverTaskId(text: string | undefined): string | undefined {
+	return /^\[TASK_DRIVER:([A-Za-z0-9._-]+)\]/.exec(text ?? "")?.[1];
 }
 
 export function createTaskDriverEvent(channelId: string, entry: TaskLedgerEntry, nowMs: number): ChannelEvent {
@@ -221,7 +227,7 @@ export class TaskDriver {
 
 	private scheduleNext(): void {
 		if (!this.loopActive || this.timer || this.nudgeTimer) return;
-		const settings = this.options.getSettings();
+		const settings = this.options.settings ?? TASK_DRIVER_SETTINGS;
 		const capMs = this.options.intervalMs ?? settings.maxSleepMinutes * 60_000;
 		const untilNext = this.nextWakeMs !== undefined ? this.nextWakeMs - Date.now() : Number.POSITIVE_INFINITY;
 		const sleepMs = Math.max(MIN_SLEEP_MS, Math.min(capMs, untilNext));
@@ -322,7 +328,7 @@ export class TaskDriver {
 
 	async runOnce(now = new Date()): Promise<void> {
 		if (this.options.isEnabled?.() === false || this.running) return;
-		const settings = this.options.getSettings();
+		const settings = this.options.settings ?? TASK_DRIVER_SETTINGS;
 		const nowMs = now.getTime();
 
 		this.running = true;

@@ -207,7 +207,7 @@ async function showTaskLog(channelDir: string, idInput: string): Promise<string>
 	return [`**任务 ${id} 日志（${records.length} 条）**`, ...records.map(renderTaskLogLine)].join("\n");
 }
 
-export async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
+async function pauseTask(options: HandleTasksCommandOptions, idInput: string): Promise<string> {
 	const id = normalizeTaskId(idInput);
 	const document = await pauseTaskDocument(options.channelDir, id, {
 		by: "user",

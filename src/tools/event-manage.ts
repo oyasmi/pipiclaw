@@ -343,11 +343,6 @@ export async function manageEvent(
 	}
 
 	const event = validateDefinition(request.definition, eventName, options);
-	// Persist the canonical form: a tolerated legacy `timezone` is dropped so freshly written
-	// events never carry the deprecated field (cron is always host-timezone now).
-	if (event.type === "periodic" && event.legacyTimezone !== undefined) {
-		delete event.legacyTimezone;
-	}
 	const content = `${JSON.stringify(event, null, 2)}\n`;
 	await writeFileAtomically(eventPath, content);
 

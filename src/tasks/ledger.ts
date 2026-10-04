@@ -26,7 +26,7 @@ export interface TaskLedgerEntry {
 	fields: TaskFrontmatter;
 	/** false => frontmatter could not be read; the task is surfaced rather than skipped. */
 	readable: boolean;
-	/** True when this file still carries v3/v4 frontmatter lines the conversion should have removed. */
+	/** True when this file still carries v3 frontmatter the conversion should have removed; it is never run. */
 	legacy: boolean;
 	/** The driver may schedule a step for this task right now. */
 	runnable: boolean;
@@ -48,11 +48,8 @@ export interface TaskContractInput {
 
 const TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
-/**
- * `## Work Items` is deliberately optional: a two-step task or an item-less template simply has
- * none. v4's `## Plan` / `## 计划` stay accepted so a hand-kept file still parses.
- */
-const ITEMS_SECTION_NAMES = ["Work Items", "工作项", "Plan", "计划"] as const;
+/** `## Work Items` is deliberately optional: a two-step task or an item-less template simply has none. */
+const ITEMS_SECTION_NAMES = ["Work Items", "工作项"] as const;
 const ITEMS_HEADING = "## Work Items";
 
 /** Validate/normalize a task id (filename without `.md`), rejecting path traversal. */
@@ -72,7 +69,7 @@ export function taskBody(content: string): string {
 export type TaskItemStatus = "todo" | "done" | "blocked" | "dropped";
 
 export interface TaskItem {
-	/** `W<n>` (a converted v4 task may still carry `P<n>`). */
+	/** `W<n>` (a task converted from v3 may still carry `P<n>`). */
 	id: string;
 	status: TaskItemStatus;
 	text: string;
@@ -413,7 +410,7 @@ function withClock(entry: Omit<TaskLedgerEntry, "runnable" | "dueMs" | "expired"
 	const ticket = entry.fields.ticket;
 	return {
 		...entry,
-		runnable: isTaskRunnable(entry.fields),
+		runnable: isTaskRunnable(entry.fields) && !entry.legacy,
 		dueMs: ticket ? ticketDueMs(ticket) : undefined,
 		expired: ticket !== undefined && !entry.fields.paused && ticketExpired(ticket, nowDate),
 	};

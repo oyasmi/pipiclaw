@@ -52,10 +52,10 @@ describe("task frontmatter contract (spec 052, §3.3)", () => {
 		expect(fields).toMatchObject({ state: "done", ticket: undefined, paused: undefined });
 	});
 
-	it("reads a v4 file as legacy (not unreadable), and a park on a retired ticket falls back to open", () => {
-		const v4 =
-			'---\nstate: parked\nticket: {"kind":"run","id":"r","by":"2099-01-01T00:00:00+08:00"}\ncycle: {"id":"c-1"}\n---\n# T\n';
-		const parsed = parseTaskFrontmatter(v4);
+	it("reads a v3 file as legacy (not unreadable), and a park on a retired ticket falls back to open", () => {
+		const v3 =
+			'---\nstatus: waiting\nstate: parked\nticket: {"kind":"run","id":"r","by":"2099-01-01T00:00:00+08:00"}\n---\n# T\n';
+		const parsed = parseTaskFrontmatter(v3);
 		expect(parsed).toMatchObject({ legacy: true, readable: true });
 		expect(parsed.fields.state).toBe("open");
 	});

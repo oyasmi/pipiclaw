@@ -311,22 +311,4 @@ describe("E2E deterministic: memory (spec 050)", () => {
 		const touchedRaw = readFileSync(join(memoryDir, "still-probationary.md"), "utf-8");
 		expect(touchedRaw).not.toContain("expires:");
 	});
-
-	it("M6: a v1-layout channel is migrated to v2 on first use", async () => {
-		harness = await createDeterministicHarness();
-		mkdirSync(harness.channelDir, { recursive: true });
-		writeFileSync(
-			join(harness.channelDir, "MEMORY.md"),
-			"# Channel Memory\n\n## Preferences\n\n- User speaks Chinese, calls me Ki <!--id:m-aaaa1111-->\n",
-			"utf-8",
-		);
-		harness.model.script.route({ name: "ack", when: (r) => r.isMainTurn, respond: [reply.text("好的")] });
-
-		await harness.sendUserMessage("你好");
-
-		expect(existsSync(join(harness.channelDir, "memory", ".migrated-v2"))).toBe(true);
-		expect(existsSync(join(harness.channelDir, ".memory-v1", "MEMORY.md"))).toBe(true);
-		const files = readdirSync(join(harness.channelDir, "memory")).filter((f) => f.endsWith(".md"));
-		expect(files.length).toBe(1);
-	});
 });

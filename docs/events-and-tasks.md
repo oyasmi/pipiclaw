@@ -380,7 +380,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 | **循环日志** | `tasks/<id>.jsonl` | append-only：每一步做了什么、每次派发与结算、票据过期、收尾 |
 | **等待票** | 契约 frontmatter 的 `ticket` | "什么会叫醒我，最迟什么时候"——由 runtime 校验、由 runtime 兑现 |
 
-v4 的 `cycle`、`schedule`、`verify`、`Manual`、`Verification`、`## 上次结果` 以及 `run`/`job`/`signal`/`schedule` 票全部退役。升级时 daemon 会做一次确定性转换（原件备份到 `tasks/.v4/`），详见[从 v4 转换](#从-v4-转换)。
+v3（0.9.2）的 `status`、`wake`、`control`、`schedule`、`Manual`、`Verification`、`Current Cycle`/`History` 以及 `run`/`job`/`signal`/`schedule` 票全部退役。升级时 daemon 会做一次确定性转换（原件备份到 `tasks/.v3/`），详见[从 v3 转换](#从-v3-转换)。
 
 ## 任务模型
 
@@ -393,7 +393,7 @@ workspace/<channelId>/tasks/
 ├── weekly-report-20261005-0900.md    事件模板生成的实例
 ├── .sessions/               每个任务一份任务会话
 ├── .steer/                  待处理的用户指示与待发送的通知
-├── .v4/                     转换前的原件（不会被删）
+├── .v3/                     转换前的原件（不会被删）
 └── archive/
     ├── released-note.md
     └── released-note.jsonl
@@ -561,17 +561,19 @@ task_step_end  （只在任务会话里注册）
 
 每回合仍注入 `<task_agenda>`，每行含状态、等待票摘要与兜底时间、工作项进度和用量；它是背景参考，不是新指令。
 
-## 从 v4 转换
+## 从 v3 转换
 
-daemon 首次以 v5 启动时（服务启动之前）执行一次确定性转换（无 LLM，marker 位于 `state/task-migration-v5.done`）：
+daemon 首次以 v5 启动时（服务启动之前）执行一次确定性转换（无 LLM，marker 位于 `state/task-migration-v5.done`）。只转换带 v3 frontmatter（`status:`）的文件，已经是 v5 的文件不动；0.9.3 beta 期间写出的 v4 文件不在转换范围内。
 
-1. `cycle` → `usage`；预算只保留 `steps`/`usd`；`verify` 删除；`## Plan` 改名 `## Work Items`；`## 上次结果` 删除。每一项被取消的约束都会在循环日志里留一条说明。
-2. **周期任务变成事件模板**：为带 `schedule` 的任务写出 `workspace/events/<id>.json`（同一个 cron，模板由契约生成，原 Manual/Verification 并入 Goal，勾选全部复位）。两次执行之间停泊的任务随即以 `cancelled` 归档；正在执行的那一轮不打断，就地成为该事件的一个实例，下一次由事件生成。无法表达为模板的周期任务会被置 `paused`，等人工处理。
-3. `time`/`ask` 票原样保留；`run`/`job` 票只有在对应委派/作业仍在途时才转成 `work`；**重建不出来的一律改回 `open`**并留说明。`signal` 票改回 `open`。
-4. 任务专属的 `task.<channelId>.<taskId>.*` 传感器事件移到 `tasks/.v4/events/`。
-5. 原件复制到 `tasks/.v4/`，**永不删除**。v3 契约不转换，请先升级到 0.9.x。
+1. v3 的所有等待（`wake`、`waitingFor`）都没有对应的 v5 来源，任务一律改回 `open` 并在循环日志留一条说明。`enabled: false` 或 `control.stop` 转成 `paused`，所以升级不会让已停用的任务重新跑起来。
+2. `## Plan` 改名 `## Work Items`；`## Current Cycle`、`## History` 删除（这些逐轮记录现在属于循环日志）；`Manual`、`Verification` 保留在正文里。
+3. **周期任务变成事件模板**：为带 `schedule` 的任务写出 `workspace/events/<id>.json`（同一个 cron，模板由契约生成，原 Manual/Verification 并入 Goal，勾选全部复位）。两次执行之间休眠（`sleeping`）的任务随即以 `cancelled` 归档；正在执行的那一轮不打断，就地成为该事件的一个实例，下一次由事件生成。无法表达为模板的周期任务会被置 `paused`，等人工处理。
+4. 任务专属的 `task.<channelId>.<taskId>.*` 传感器事件移到 `tasks/.v3/events/`。
+5. 原件复制到 `tasks/.v3/`，**永不删除**。
 
-旧的 `tasks/.sessions/<id>-<cycle>.jsonl` 会话不再使用；转换后的任务第一步从全新的任务会话开始，brief 带齐了契约与日志。转换代码会在下一个 minor 版本删除。
+转换没有成功、仍带 v3 frontmatter 的文件不会被执行，`/tasks doctor` 会列出它们。
+
+转换代码会在下一个 minor 版本删除。
 
 ## 异常恢复
 

@@ -1,5 +1,5 @@
 import { mkdir, readdir, readFile, rename, rmdir, stat, unlink } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
+import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
 import { getChannelDir, isChannelId } from "../channel/channel-paths.js";
 import type { ChannelStore } from "../channel/store.js";
@@ -137,16 +137,15 @@ export interface RunRecord extends RunUsage {
 	settlementPending?: PendingSettlement;
 	/** Set once this run's usage has been written to the ledger; guards against double billing. */
 	usageRecorded?: boolean;
-	/** Set once this run's cost (and, for a verifier, its round) has been credited to its task.
-	 *  Separate from `usageRecorded` so a replayed settlement can never write a second round. */
+	/** Set once this run's cost has been credited to its task. Separate from `usageRecorded` so a
+	 *  replayed settlement can never credit it twice. */
 	taskAccounted?: boolean;
 	/** Set once the completion wake has been hallmarked for delivery; guards against a duplicate wake. */
 	wakeEnqueued?: boolean;
 	/** Durable one-time relationship between the internally produced wake and task activation (T9). */
 	wakeClaimDispatchId?: string;
 	wakeConsumedAt?: number;
-	// External-runtime fields (spec 040 phase 2+). Present only once the external harness lands;
-	// kept optional here so the record shape does not need another migration when it does.
+	// External-runtime fields; absent on internal runs.
 	pid?: number;
 	/** `ps`'s `lstart` for `pid` at launch — the OS-verifiable identity check that tells this
 	 *  process apart from an unrelated one that later reuses the same pid (D10.3). */
@@ -1420,79 +1419,28 @@ export class SubAgentRunManager {
 }
 
 /**
- * How deep the scan below looks for record files.
- *
- * Canonical records sit one level under the state root. Records written before the id was
- * escaped sit one level deeper per `/` in the channel id, and a base64 conversation id carries
- * very few; three is generous, and the bound keeps a corrupted or hand-made tree from turning
- * startup into an unbounded walk.
+ * The channel each record directory belongs to. The id is read out of a record itself — the one
+ * lossless source, since a directory name is the *escaped* id and `__` cannot be turned back
+ * into `/` — with the directory name as the fallback for a directory without a readable record.
  */
-const MAX_RECORD_SCAN_DEPTH = 3;
-
-/** Every directory under `root` that directly holds run records, canonical or not. */
-async function findRecordDirectories(root: string, dir: string = root, depth = 0): Promise<string[]> {
-	const entries = await readdir(dir, { withFileTypes: true });
-	const found = entries.some((entry) => entry.isFile() && entry.name.endsWith(".json")) ? [dir] : [];
-	if (depth >= MAX_RECORD_SCAN_DEPTH) return found;
-	for (const entry of entries) {
+async function listRecordChannelIds(stateDir: string): Promise<string[]> {
+	const channelIds: string[] = [];
+	for (const entry of await readdir(stateDir, { withFileTypes: true })) {
 		if (!entry.isDirectory()) continue;
-		try {
-			found.push(...(await findRecordDirectories(root, join(dir, entry.name), depth + 1)));
-		} catch (error) {
-			// One unreadable subtree must not hide every other channel's runs.
-			log.logWarning(`Failed to scan sub-agent run directory ${entry.name}`, errorMessage(error));
-		}
-	}
-	return found;
-}
-
-/**
- * The channel a directory of records belongs to, and the records that are not where they belong.
- *
- * The id is read out of the records themselves — the one lossless source, since a directory name
- * is the *escaped* id and `__` cannot be turned back into `/`. Records written before escaping
- * are moved to the canonical directory here, so a run started by an older build is adopted
- * rather than abandoned; without the move it would stay invisible to `restore()` forever, and an
- * external process would keep running with nothing supervising, settling or billing it.
- */
-async function adoptRecordDirectory(stateDir: string, dir: string): Promise<string[]> {
-	const filenames = (await readdir(dir)).filter((name) => name.endsWith(".json"));
-	const channelIds = new Set<string>();
-	let moved = 0;
-	for (const filename of filenames) {
-		const path = join(dir, filename);
+		const dir = join(stateDir, entry.name);
 		let channelId: string | undefined;
 		try {
-			channelId = parseRunRecord(await readFile(path, "utf-8"))?.channelId;
+			for (const filename of (await readdir(dir)).filter((name) => name.endsWith(".json"))) {
+				channelId = parseRunRecord(await readFile(join(dir, filename), "utf-8"))?.channelId;
+				if (channelId) break;
+			}
 		} catch {
 			channelId = undefined;
 		}
-		// A record is only trusted to name its own directory if it is a well-formed id; anything
-		// else keeps the path-derived fallback, which cannot escape the state root.
-		if (!channelId || !isChannelId(channelId)) {
-			channelIds.add(relative(stateDir, dir).split(sep).join("/"));
-			continue;
-		}
-		channelIds.add(channelId);
-		const canonicalDir = getChannelDir(stateDir, channelId);
-		if (canonicalDir === dir) continue;
-		try {
-			await mkdir(canonicalDir, { recursive: true });
-			await rename(path, join(canonicalDir, filename));
-			moved++;
-		} catch (error) {
-			log.logWarning(`Failed to relocate sub-agent run record ${filename}`, errorMessage(error));
-		}
+		const resolved = channelId && isChannelId(channelId) ? channelId : entry.name;
+		if (isChannelId(resolved)) channelIds.push(resolved);
 	}
-	if (moved > 0) {
-		log.logInfo(`Relocated ${moved} sub-agent run record(s) from ${relative(stateDir, dir)}`);
-		// Tidy the directory the unescaped id created. `rmdir` refuses a non-empty one, which is
-		// exactly the guard wanted: records that could not be moved keep their home.
-		await rmdir(dir).catch(() => undefined);
-		const parent = dirname(dir);
-		if (parent !== stateDir) await rmdir(parent).catch(() => undefined);
-	}
-	return Array.from(channelIds);
+	return channelIds;
 }
 
 /** Owns this application's channel managers and their maintenance timer. */
@@ -1564,21 +1512,13 @@ export function createSubAgentRuntime(options: RunManagerOptions = {}) {
 	async function restore(): Promise<number> {
 		const stateDir = config.stateDir;
 		if (!stateDir) return 0;
-		const channelIds = new Set<string>();
-		let recordDirs: string[];
+		let channelIds: string[];
 		try {
 			await mkdir(stateDir, { recursive: true });
-			recordDirs = await findRecordDirectories(stateDir);
+			channelIds = await listRecordChannelIds(stateDir);
 		} catch (error) {
 			log.logWarning("Failed to scan persisted sub-agent runs", errorMessage(error));
 			return 0;
-		}
-		for (const dir of recordDirs) {
-			try {
-				for (const channelId of await adoptRecordDirectory(stateDir, dir)) channelIds.add(channelId);
-			} catch (error) {
-				log.logWarning(`Failed to adopt sub-agent run records in ${relative(stateDir, dir)}`, errorMessage(error));
-			}
 		}
 
 		let restored = 0;

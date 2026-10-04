@@ -826,7 +826,7 @@ settings.json: memoryMaintenance.checkpointIntervalMinutes, taskDriver.maxDispat
 - `retry.maxRetries`、`retry.baseDelayMs`
 - `memoryRecall` 整段（`enabled`、`rerankWithModel`、`maxCandidates`、`maxInjected`、`maxChars`）——spec 050 取消了每轮实时召回（D1），会话首轮改为整份注入索引，不再有排序/重排需要调
 - `sessionMemory` 整段——`SESSION.md` 刷新流程随 spec 050 一并取消，被 journal 取代
-- `memoryMaintenance` 除 `enabled` 外的全部字段（各类间隔、`minMemoryAutoWriteConfidence`、`maxConcurrentChannels`、`failureBackoffMinutes`、两个 `cleanupShrinkGuard*`）——单一反思 job 的节奏是代码常量（见 `memory/maintenance-tuning.ts`）
+- `memoryMaintenance` 除 `enabled` 外的全部字段（各类间隔、`minMemoryAutoWriteConfidence`、`failureBackoffMinutes`、两个 `cleanupShrinkGuard*`）——单一反思 job 的节奏是代码常量（见 `memory/maintenance-tuning.ts`）
 - `sessionSearch` 除 `summarizeWithModel` 外的全部字段（含此前从未生效的 `enabled`）
 - `logging.file.maxSizeBytes`、`logging.file.maxFiles`
 - `taskDigest` 与 `taskDriver` 两段整体
@@ -1154,8 +1154,6 @@ web 工具的代理顺序是：
 | `log.jsonl` | 原始运行日志 |
 | `log.jsonl.1` | 原始运行日志的轮转备份，存在时可被 `session_search` 检索 |
 | `memory-review.jsonl` | 反思/工具写回的动作、suggestion、skipped 决策的审计文件 |
-| `.memory-v1/` | v1→v2 迁移时原样搬来的旧文件，不删除 |
-| `.migrated-v2` | 迁移完成标记 |
 | `subagent-runs.jsonl` | 子代理运行摘要 |
 | `subagent-artifacts/<runId>/` | 委派完整产出；外部 run 还含 prompt、协议事件与 stderr |
 

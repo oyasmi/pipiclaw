@@ -14,10 +14,8 @@ import { prepareAppServices } from "../app-services.js";
 import { ensureChannelDir } from "../channel/channel-paths.js";
 import { ChannelStore } from "../channel/store.js";
 import { renderBuiltInHelp } from "../commands/catalog.js";
-import { handleEventsCommand } from "../events/event-commands.js";
 import { createExecutor } from "../executor.js";
 import * as log from "../log.js";
-import { migrateMemoryMaintenanceStates } from "../memory/maintenance-migration.js";
 import {
 	BootstrapExitError,
 	type BootstrapIO,
@@ -28,14 +26,10 @@ import {
 	readCliVersion,
 } from "../runtime/app-home.js";
 import { finalDeliveryOf, progressStyleOf } from "../runtime/dingtalk.js";
-import { handleProjectCommand } from "../runtime/project-commands.js";
-import { handleSkillsCommand } from "../runtime/skill-commands.js";
-import { handleSubagentsCommand } from "../runtime/subagent-commands.js";
-import { handleTasksCommand } from "../runtime/task-commands.js";
+import { runReportCommand } from "../runtime/report-commands.js";
 import { flushSecurityLogs } from "../security/logger.js";
 import { createSubAgentRuntime } from "../subagents/runs.js";
 import { getUsageLedger } from "../usage/ledger.js";
-import { parseUsageMode, renderUsageReport } from "../usage/render.js";
 import { TUI_SLASH_COMMANDS } from "./commands.js";
 import { createFrontend } from "./renderer.js";
 import type { DeliveryTraits } from "./terminal-context.js";
@@ -136,7 +130,6 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 	log.configureLogging(settingsManager.getLoggingSettings());
 	log.logStartup(paths.workspaceDir);
 
-	await migrateMemoryMaintenanceStates(paths.appHomeDir);
 	const channelDir = ensureChannelDir(paths.workspaceDir, channelId);
 	const store = new ChannelStore({ workingDir: paths.workspaceDir });
 	const jobs = createJobRuntime(createExecutor());
@@ -169,6 +162,7 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		basePath: paths.workspaceDir,
 	});
 
+	const startedAt = Date.now();
 	const controller = new TurnController({
 		runner,
 		frontend,
@@ -177,45 +171,26 @@ export async function runTuiApp(options: TuiAppOptions): Promise<void> {
 		channelId,
 		userName: safeUserName(),
 		renderHelp: (args) => renderBuiltInHelp(args),
-		renderUsage: async (args) => renderUsageReport(getUsageLedger(), channelId, parseUsageMode(args), new Date()),
-		runEvents: (args) =>
-			handleEventsCommand({ args, workspaceDir: paths.workspaceDir, historyPath: paths.eventHistoryPath }),
-		runTasks: (args) =>
-			handleTasksCommand({
-				args,
-				channelDir,
-			}),
-		runSubagents: (args) =>
-			handleSubagentsCommand({
-				runManager: runs.get(channelId),
-				args,
-				channelId,
-				discovery: runner.getSubAgentDiscoverySnapshot(),
-			}),
-		runSkills: (args) =>
-			handleSkillsCommand({ args, workspaceDir: paths.workspaceDir, appHomeDir: paths.appHomeDir, channelId }),
-		runProject: (args) =>
-			handleProjectCommand({
-				args,
-				channelId,
-				channelDir,
-				appHomeDir: paths.appHomeDir,
-				actor: "tui-command",
-				isBusy: () => runner.isBusy(),
-				listActiveBlockers: () => [
-					...runs
-						.get(channelId)
-						.list()
-						.filter((record) => record.status === "running")
-						.map((record) => `subagent run \`${record.runId}\` (${record.agent})`),
-					...jobs.runningLines(channelId),
-				],
-				onScopeChanged: async () => {
-					await runner.dispose();
-					runnerSlot.replace(buildRunner());
+		runReport: (name, args) =>
+			runReportCommand(
+				{
+					channelId,
+					paths,
+					actor: "tui-command",
+					version: readCliVersion(),
+					startedAt,
+					peekRunner: () => runner,
+					getRunner: () => runner,
+					runManager: runs.get(channelId),
+					runningJobLines: () => jobs.runningLines(channelId),
+					onScopeChanged: async () => {
+						await runner.dispose();
+						runnerSlot.replace(buildRunner());
+					},
 				},
-			}),
-		statusInfo: { version: readCliVersion(), startedAt: Date.now() },
+				name,
+				args,
+			),
 	});
 
 	try {

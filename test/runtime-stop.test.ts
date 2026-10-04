@@ -5,7 +5,7 @@ import type { AgentRunner } from "../src/agent/types.js";
 import { type BootstrapPaths, bootstrapAppHome } from "../src/runtime/app-home.js";
 import { createRuntimeContext } from "../src/runtime/bootstrap.js";
 import type { DingTalkBot, DingTalkConfig } from "../src/runtime/dingtalk.js";
-import { createFakeTurnState } from "./helpers/fake-turn-state.js";
+import { createFakeSessionBinding, createFakeTurnState } from "./helpers/fake-turn-state.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const { createRunnerMock } = vi.hoisted(() => ({
@@ -95,6 +95,7 @@ describe("runtime stop handling", () => {
 		const retireForNewSession = vi.fn();
 		const interruptCompaction = vi.fn(() => true);
 		const runner: AgentRunner = {
+			...createFakeSessionBinding(),
 			renderContextReport: () => "CONTEXT",
 			getSubAgentDiscoverySnapshot: () => ({ directory: "", agents: [], warnings: [] }),
 			run: vi.fn(async () => ({ stopReason: "stop" })),
@@ -172,6 +173,7 @@ describe("runtime stop handling", () => {
 			signalRunStarted = resolve;
 		});
 		const runner: AgentRunner = {
+			...createFakeSessionBinding(),
 			renderContextReport: () => "CONTEXT",
 			getSubAgentDiscoverySnapshot: () => ({ directory: "", agents: [], warnings: [] }),
 			run: vi.fn(async () => {
@@ -253,6 +255,7 @@ describe("runtime stop handling", () => {
 			signalRunStarted = resolve;
 		});
 		const runner: AgentRunner = {
+			...createFakeSessionBinding(),
 			renderContextReport: () => "CONTEXT",
 			getSubAgentDiscoverySnapshot: () => ({ directory: "", agents: [], warnings: [] }),
 			run: vi.fn(async () => {
@@ -344,6 +347,7 @@ describe("runtime stop handling", () => {
 			releaseRun = resolve;
 		});
 		const runner: AgentRunner = {
+			...createFakeSessionBinding(),
 			renderContextReport: () => "CONTEXT",
 			getSubAgentDiscoverySnapshot: () => ({ directory: "", agents: [], warnings: [] }),
 			run: vi.fn(async () => {

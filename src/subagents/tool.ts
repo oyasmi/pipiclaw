@@ -671,7 +671,6 @@ export function buildSubAgentTask(
 	return lines.join("\n");
 }
 
-/** Exported for `subagent_run op=follow_up` (spec 042 D7) — same reason as `buildSubAgentTask`. */
 /** The slice of `SubAgentToolOptions` `buildContextualBlocks` actually reads — narrowed (spec 042
  *  D7) so `subagent_run op=follow_up` only needs to wire these three fields, not the full tool
  *  option surface (executor, discovery, web config, etc. that a context-block build never touches). */

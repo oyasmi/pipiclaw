@@ -54,15 +54,15 @@ export interface ParsedTaskFrontmatter {
 	fields: TaskFrontmatter;
 	/** false => the block could not be read at all; the task is surfaced rather than skipped. */
 	readable: boolean;
-	/** True when a v3/v4 line (`status`, `control`, `cycle`, `schedule`, `verify`…) is present — `/tasks doctor`'s only trigger. */
+	/** True when a v3 line (`status`, `control`, `schedule`…) is present — the file is not converted, so it never runs. */
 	legacy: boolean;
 }
 
 const STATES: readonly TaskState[] = ["open", "parked", "done"];
 /** Fixed render order, so a diff of a task file reads the same way every time. */
 const FIELD_ORDER = ["state", "paused", "origin", "ticket", "usage", "budget"] as const;
-/** Frontmatter keys older versions wrote; their presence means the one-time conversion has not run on this file. */
-const LEGACY_KEYS = new Set(["status", "enabled", "control", "wake", "cycle", "schedule", "verify"]);
+/** v3 frontmatter keys; their presence means the one-time conversion has not run on this file. */
+const LEGACY_KEYS = new Set(["status", "enabled", "control", "wake", "schedule"]);
 
 function parseJsonObject(raw: string): Record<string, unknown> | undefined {
 	try {

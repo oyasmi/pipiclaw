@@ -55,7 +55,7 @@ describe("TaskDriver (spec 051, D9; spec 052)", () => {
 			workspaceDir,
 			isChannelActive: () => false,
 			dispatch,
-			getSettings: () => SETTINGS,
+			settings: SETTINGS,
 			...extra,
 		});
 	}

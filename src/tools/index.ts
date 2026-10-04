@@ -4,8 +4,6 @@ import type { ChannelJobManager } from "../agent/job-manager.js";
 import type { MediaSender } from "../channel/channel-context.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
-import { APP_HOME_DIR } from "../paths.js";
-import { loadSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import type { SecurityConfig } from "../security/types.js";
 import type { PipiclawSessionSearchSettings } from "../settings.js";
@@ -13,7 +11,6 @@ import { type SubAgentDiscoveryResult, withSubAgentsDirWriteDeny } from "../suba
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "../subagents/tool.js";
 import type { PipiclawToolsConfig } from "./config.js";
-import { loadToolsConfig } from "./config.js";
 import { buildToolSet } from "./registry.js";
 import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage.js";
 import type { TaskStepCost } from "./task-manage/types.js";
@@ -36,8 +33,8 @@ export interface CreatePipiclawToolsOptions {
 	getSubAgentDiscovery: () => SubAgentDiscoveryResult;
 	getSubAgentModelReference?: () => string | null;
 	getSessionSearchSettings: () => PipiclawSessionSearchSettings;
-	securityConfig?: SecurityConfig;
-	toolsConfig?: PipiclawToolsConfig;
+	securityConfig: SecurityConfig;
+	toolsConfig: PipiclawToolsConfig;
 	/** Transport-provided attachment port; when present, enables the `send_media` tool. */
 	mediaSender?: MediaSender;
 	/**
@@ -56,11 +53,8 @@ export interface CreatePipiclawToolsOptions {
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {
 	// Spec 040, D8.1: the main agent's own write/edit tools can write a self-authorizing
 	// `runtime: external` role file just as readily as a sub-agent's can; deny it here too.
-	const securityConfig = withSubAgentsDirWriteDeny(
-		options.securityConfig ?? loadSecurityConfig(APP_HOME_DIR),
-		options.workspaceDir,
-	);
-	const toolsConfig = options.toolsConfig ?? loadToolsConfig(APP_HOME_DIR);
+	const securityConfig = withSubAgentsDirWriteDeny(options.securityConfig, options.workspaceDir);
+	const { toolsConfig } = options;
 	const securityContext = {
 		agentWorkspaceDir: options.workspaceDir,
 		projectRoot: options.projectScope.projectRoot,

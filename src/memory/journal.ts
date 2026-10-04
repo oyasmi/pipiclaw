@@ -5,9 +5,8 @@ import { localDayKey } from "../shared/local-time.js";
 import { isNodeError, readOptionalTextFile } from "../shared/os.js";
 
 /**
- * Spec 050, D5: `journal/YYYY-MM-DD.md`, append-only, one file per local day. Replaces
- * `SESSION.md` (current state) and `HISTORY.md` (folded older history) — a day is never
- * folded or rewritten, only appended to, so it stays a plain, growing record.
+ * Spec 050, D5: `journal/YYYY-MM-DD.md`, append-only, one file per local day — never folded or
+ * rewritten, so it stays a plain, growing record.
  */
 
 export function getJournalDir(channelDir: string): string {

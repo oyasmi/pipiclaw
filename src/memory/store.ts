@@ -47,7 +47,7 @@ export interface MemoryEntry {
 }
 
 export interface MemoryTombstoneRecord {
-	/** The entry name at deletion time; may be absent for records carried over from v1. */
+	/** The entry name at deletion time; may be absent. */
 	name?: string;
 	contentHash: string;
 	deletedAt: string;

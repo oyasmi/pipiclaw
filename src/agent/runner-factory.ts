@@ -9,8 +9,8 @@ import type { ChannelJobManager } from "./job-manager.js";
 import type { AgentRunner } from "./types.js";
 
 export interface RunnerFactoryPaths {
-	jobManager?: ChannelJobManager;
-	runManager?: SubAgentRunManager;
+	jobManager: ChannelJobManager;
+	runManager: SubAgentRunManager;
 	appHomeDir: string;
 	authConfigPath: string;
 	modelsConfigPath: string;

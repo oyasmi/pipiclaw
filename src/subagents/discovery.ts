@@ -26,8 +26,6 @@ const MAX_SUB_AGENT_TASK_CHARS = 12000;
 const MAX_SUB_AGENT_SYSTEM_PROMPT_CHARS = 16000;
 const ALLOWED_CONTEXT_MODES = ["isolated", "contextual"] as const;
 const ALLOWED_MEMORY_MODES = ["none", "index"] as const;
-/** Spec 050, D12: `session`/`relevant` are retired — both collapse to `index`. */
-const LEGACY_MEMORY_MODE_ALIASES: Record<string, SubAgentMemoryMode> = { session: "index", relevant: "index" };
 // "max" is a real SDK ThinkingLevel; pipiclaw's own whitelist previously omitted it (spec 040, D4).
 const ALLOWED_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const ALLOWED_RUNTIMES = ["internal", "external"] as const;
@@ -353,28 +351,20 @@ function parseContextChoice(raw: unknown): {
 
 /**
  * `defaultValue` is computed per call site rather than derived from `contextMode` inside this
- * function (spec 042 D4): internal keeps following `contextMode` (`contextual` → `relevant`),
- * but an external role's default is always `none` regardless of `contextMode` — a role that
+ * function (spec 042 D4): internal keeps following `contextMode` (`contextual` → `index`), but an external role's default is always `none` regardless of `contextMode` — a role that
  * merely wants `paths` injected (via `contextMode: contextual`) should not also silently start
  * sending session/memory content to a third-party process.
  */
 function parseMemoryMode(
 	raw: unknown,
 	defaultValue: SubAgentMemoryMode,
-): { value: SubAgentMemoryMode; error?: string; warning?: string } {
+): { value: SubAgentMemoryMode; error?: string } {
 	const normalized = readOptionalTrimmedString(raw);
 	if (!normalized) {
 		return { value: defaultValue };
 	}
 	if (ALLOWED_MEMORY_MODES.includes(normalized as SubAgentMemoryMode)) {
 		return { value: normalized as SubAgentMemoryMode };
-	}
-	// Frontmatter lives in the user's workspace, not under this codebase's control, so a role
-	// written against the retired `session`/`relevant` values keeps loading — with a warning —
-	// instead of being dropped (spec 050, D12).
-	const legacy = LEGACY_MEMORY_MODE_ALIASES[normalized];
-	if (legacy) {
-		return { value: legacy, warning: `memory: "${normalized}" is retired; treating it as "${legacy}"` };
 	}
 	return {
 		value: defaultValue,
@@ -610,9 +600,7 @@ function parseInternalAgent(
 		toolParse.tools.includes("bash") && mutates.value === undefined
 			? 'tools include bash but "mutates" is not declared; if this role writes to the workspace, declare mutates: write so it participates in the workspace write lease'
 			: undefined;
-	const combinedWarningBody = [numericWarning, memoryMode.warning, bashWithoutMutatesWarning]
-		.filter(Boolean)
-		.join("; ");
+	const combinedWarningBody = [numericWarning, bashWithoutMutatesWarning].filter(Boolean).join("; ");
 
 	return {
 		warning: combinedWarningBody ? `${entryName}: ${combinedWarningBody}` : undefined,
@@ -731,8 +719,7 @@ function parseExternalAgent(
 
 	// All non-fatal (the role still loads); joined rather than picking one so an unlucky
 	// combination never silently loses one of them.
-	const combinedWarning =
-		[memoryMode.warning, memoryDisclosureWarning, modelPlaceholderWarning].filter(Boolean).join("; ") || undefined;
+	const combinedWarning = [memoryDisclosureWarning, modelPlaceholderWarning].filter(Boolean).join("; ") || undefined;
 
 	return {
 		warning: combinedWarning,

@@ -201,8 +201,6 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 | `<channel>/MEMORY.md` | 从 `memory/*.md` 生成的索引，勿手改 |
 | `<channel>/journal/YYYY-MM-DD.md` | 按天追加的工作记录，只由后台反思 pass 写 |
 | `<channel>/memory-review.jsonl` | 反思/工具写回的动作、suggestion 和 skipped 决策审计 |
-| `<channel>/.memory-v1/` | v1→v2 迁移时原样搬来的旧文件（`SESSION.md`/`MEMORY.md`/`HISTORY.md` 等），不删除 |
-| `<channel>/.migrated-v2` | 迁移完成标记 |
 
 委派的权威运行状态另存于 `${PIPICLAW_HOME:-~/.pipiclaw}/state/subagent-runs/<channelId>/<runId>.json`（目录名与 workspace 一致，把 channelId 里的 `/` 折成 `__`）。频道内的 `subagent-runs.jsonl` 是便于检索的执行摘要，不能替代状态文件做取消或重启恢复。
 
@@ -213,8 +211,6 @@ Pipiclaw 还会在 app home 下的 `workspace/` 中写入运行数据。默认�
 - `log.jsonl`、`log.jsonl.1`、`context.jsonl` 是冷存储，正常 turn 不会预加载，只能通过当前 channel 的 `session_search` 显式检索。
 - `memory-review.jsonl` 是诊断与审计文件。
 - `/memory status|list|show|journal` 提供当前频道的只读管理面；`/memory forget <name>` 直接删除、不经过模型。sidecar usage 与 review outcome 通过 correlation id 关联，便于按次核算成本与有效写入。
-
-首次使用某个频道时会自动、确定性地把旧版布局迁移到上表结构，不调用模型；原文件整份移到 `.memory-v1/`。回滚前停止进程并备份频道目录：先删除新版 `memory/`、`journal/`、生成的 `MEMORY.md` 和 `.migrated-v2`，再把 `.memory-v1/` 内的原件移回频道目录并换回旧版本。迁移后新增的数据需另行保存。
 
 ### 内置记忆维护任务（Memory Maintenance Scheduler）
 

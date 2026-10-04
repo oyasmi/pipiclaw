@@ -26,9 +26,8 @@ export function recencyBoostByAge(
 }
 
 /**
- * Spec 050, D3/D4: the lexical tokenizer, moved here from the retired `recall.ts`. It now serves
- * exactly two callers — `memory_search` and `memory_save`'s deterministic near-duplicate guard.
- * Per-turn recall scoring, intent seeding, and the usage-count boost are gone.
+ * Spec 050, D3/D4: the lexical tokenizer. It serves exactly two callers — `memory_search` and
+ * `memory_save`'s deterministic near-duplicate guard.
  */
 
 const TOKEN_PART_REGEX = /[\p{Script=Han}]+|[\p{L}\p{N}_./-]+/gu;

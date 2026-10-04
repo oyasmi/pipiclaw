@@ -7,7 +7,6 @@
  * unit-tested with fakes and a fake clock. `app.ts` builds the real ones.
  */
 
-import { renderStatus } from "../agent/status-render.js";
 import type { AgentRunner } from "../agent/types.js";
 import type { ChannelStore } from "../channel/store.js";
 import {
@@ -38,21 +37,11 @@ export interface TurnControllerDeps {
 	userName: string;
 	/** Info commands that do not depend on run state. */
 	renderHelp: (args?: string) => string;
-	renderUsage: (args: string) => Promise<string>;
-	runEvents: (args: string) => Promise<string>;
-	runTasks: (args: string) => Promise<string>;
-	runSubagents: (args: string) => Promise<string>;
-	runProject: (args: string) => Promise<string>;
-	runSkills: (args: string) => Promise<string>;
-	/** Static bits the status renderer needs alongside the live run state. */
-	statusInfo: { version: string; startedAt: number };
-	/** Injectable clock for deterministic Ctrl-C timing in tests. */
-	now?: () => number;
+	runReport: DispatchDeps["runReport"];
 }
 
 export class TurnController {
 	private readonly deps: TurnControllerDeps;
-	private readonly now: () => number;
 	private readonly dispatchDeps: DispatchDeps;
 
 	private currentTurn: Promise<void> = Promise.resolve();
@@ -67,23 +56,7 @@ export class TurnController {
 
 	constructor(deps: TurnControllerDeps) {
 		this.deps = deps;
-		this.now = deps.now ?? Date.now;
-		this.dispatchDeps = {
-			renderHelp: deps.renderHelp,
-			renderUsage: deps.renderUsage,
-			runEvents: deps.runEvents,
-			runTasks: deps.runTasks,
-			runSubagents: deps.runSubagents,
-			runProject: deps.runProject,
-			runSkills: deps.runSkills,
-			renderContext: (args) => this.deps.runner.renderContextReport(args),
-			renderStatus: () =>
-				renderStatus({
-					runner: this.deps.runner,
-					version: deps.statusInfo.version,
-					uptimeMs: this.now() - deps.statusInfo.startedAt,
-				}),
-		};
+		this.dispatchDeps = { renderHelp: deps.renderHelp, runReport: deps.runReport };
 	}
 
 	/** Interactive mode: wire input, run an optional first prompt, resolve on exit. */

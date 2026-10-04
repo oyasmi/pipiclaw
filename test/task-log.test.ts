@@ -7,7 +7,6 @@ import { renderTaskDocument } from "../src/tasks/ledger.js";
 import {
 	appendTaskLog,
 	readTaskLog,
-	renderTaskLogLine,
 	resetTaskLogAppenders,
 	taskArchiveLogPath,
 	taskLogPath,
@@ -171,26 +170,5 @@ describe("work log (spec 052, D4)", () => {
 		await logTaskDispatch(dir, "gone", { ref: "run_1" });
 		await logTaskSettlement(dir, "gone", { ref: "run_1", status: "completed" });
 		expect(await readTaskLog(dir, "gone")).toEqual([]);
-	});
-});
-
-describe("v4 compatibility", () => {
-	it("reads a v4 close record into a note, and renders a legacy verification round", async () => {
-		await appendFile(
-			taskLogPath(dir, "T"),
-			`${JSON.stringify({ ts: "t1", cycle: "c-1", kind: "close", outcome: "done", summary: "shipped", evidence: "npm test", steps: 3, rounds: 1, usd: 2 })}\n`,
-		);
-		const [close] = await readTaskLog(dir, "T");
-		expect(close).toMatchObject({ kind: "close", note: "shipped · npm test" });
-		expect(
-			renderTaskLogLine({
-				ts: "t",
-				kind: "round",
-				n: 2,
-				verifyRunId: "run_v",
-				verdict: "fail",
-				reason: "contract changed",
-			}),
-		).toContain("FAIL");
 	});
 });

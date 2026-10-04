@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
@@ -57,9 +56,7 @@ function encodeDispatchId(id: string): string {
 	return encodeURIComponent(id);
 }
 
-/** Inverse of {@link encodeDispatchId}. A no-op on ids written before this fix (they contain no
- * `%`, so `decodeURIComponent` returns them unchanged) — only ids that actually collided with a
- * path separator need the one-time migration below. */
+/** Inverse of {@link encodeDispatchId}. */
 function decodeDispatchId(encoded: string): string {
 	try {
 		return decodeURIComponent(encoded);
@@ -70,55 +67,6 @@ function decodeDispatchId(encoded: string): string {
 
 function recordPath(stateDir: string, id: string): string {
 	return join(stateDir, `${encodeDispatchId(id)}.json`);
-}
-
-/** Recursively lists every `.json` file under `dir`, however deep — old nested records (see
- * above) can be more than one level down when a dispatch id contained more than one `/`. */
-async function collectJsonFiles(dir: string): Promise<string[]> {
-	let entries: Dirent[];
-	try {
-		entries = await readdir(dir, { withFileTypes: true });
-	} catch {
-		return [];
-	}
-	const files: string[] = [];
-	for (const entry of entries) {
-		const path = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			files.push(...(await collectJsonFiles(path)));
-		} else if (entry.name.endsWith(".json")) {
-			files.push(path);
-		}
-	}
-	return files;
-}
-
-/**
- * One-time migration (R1): re-home every dispatch record already on disk under the new encoded
- * filename, keyed off the record's own `id` field — never off whatever path it happens to live
- * at, since that path is exactly what was wrong for a nested legacy record. A record already at
- * its correct new path is left untouched. Best-effort: a record that fails to move is left where
- * it was and retried on the next call rather than lost.
- */
-async function migrateLegacyDispatchRecords(stateDir: string): Promise<void> {
-	for (const path of await collectJsonFiles(stateDir)) {
-		let raw: string;
-		try {
-			raw = await readFile(path, "utf-8");
-		} catch {
-			continue;
-		}
-		const record = parseRecord(raw);
-		if (!record) continue;
-		const target = recordPath(stateDir, record.id);
-		if (path === target) continue;
-		try {
-			await writeFileAtomically(target, raw);
-			await unlink(path).catch(() => undefined);
-		} catch (err) {
-			log.logWarning(`Failed to migrate legacy dispatch record at ${path}`, errorMessage(err));
-		}
-	}
 }
 
 /**
@@ -193,20 +141,8 @@ export class DurableDispatchService {
 	 * lease lapses.
 	 */
 	private readonly running = new Set<string>();
-	/** Guards the one-time legacy-record migration (R1) so it runs exactly once per process,
-	 * regardless of which entry point (dispatch/drainOnce/cancelChannel) reaches it first. */
-	private migrated = false;
-
 	constructor(private readonly options: DurableDispatchOptions) {
 		this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
-	}
-
-	private async ensureMigrated(): Promise<void> {
-		if (this.migrated) return;
-		this.migrated = true;
-		await migrateLegacyDispatchRecords(this.options.stateDir).catch((error) => {
-			log.logWarning("Legacy dispatch record migration failed", errorMessage(error));
-		});
 	}
 
 	start(): void {
@@ -234,7 +170,6 @@ export class DurableDispatchService {
 	}
 
 	async dispatch(event: ChannelEvent): Promise<boolean> {
-		await this.ensureMigrated();
 		const id = event.dispatchId ?? dispatchId(event);
 		await this.queue.run(id, async () => {
 			const existing = await this.read(id);
@@ -263,7 +198,6 @@ export class DurableDispatchService {
 
 	/** Reset any in-flight records for a channel so a stop/abort can redeliver on the next tick, not after the lease expires. */
 	async cancelChannel(channelId: string): Promise<number> {
-		await this.ensureMigrated();
 		let filenames: string[];
 		try {
 			filenames = (await readdir(this.options.stateDir)).filter((name) => name.endsWith(".json"));
@@ -335,7 +269,6 @@ export class DurableDispatchService {
 	}
 
 	async drainOnce(now = Date.now()): Promise<void> {
-		await this.ensureMigrated();
 		let filenames: string[];
 		try {
 			filenames = (await readdir(this.options.stateDir)).filter((name) => name.endsWith(".json")).sort();

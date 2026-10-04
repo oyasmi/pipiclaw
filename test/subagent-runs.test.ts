@@ -288,6 +288,19 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		await expect(manager.beginWakeConsumption("run-1", "T-once", dispatchId)).resolves.toBe(false);
 	});
 
+	it("refuses a wake claim that does not match the run's own record", async () => {
+		const manager = new SubAgentRunManager("dm_123", {});
+		await register(manager, { taskId: "T-1" });
+		const dispatchId = "subagent:dm_123:run-1:done";
+		// Not settled yet: it cannot have produced a completion wake.
+		await expect(manager.beginWakeConsumption("run-1", "T-1", dispatchId)).resolves.toBe(false);
+		await manager.settle("run-1", baseSettleInput(), { announce: false });
+		await expect(manager.beginWakeConsumption("run-missing", "T-1", dispatchId)).resolves.toBe(false);
+		await expect(manager.beginWakeConsumption("run-1", "T-other", dispatchId)).resolves.toBe(false);
+		await expect(manager.beginWakeConsumption("run-1", "T-1", `${dispatchId}:replay`)).resolves.toBe(false);
+		await expect(manager.beginWakeConsumption("run-1", "T-1", dispatchId)).resolves.toBe(true);
+	});
+
 	it("cancel invokes the registered handle and does not itself dispatch a wake", async () => {
 		const { dispatch, events } = makeDispatch();
 		const manager = new SubAgentRunManager("dm_123", { dispatch });
@@ -726,49 +739,11 @@ describe("sub-agent run persistence for group channels whose id contains a slash
 
 		// Written raw, this record landed a directory deeper than `restore()` ever looks.
 		expect(existsSync(join(stateDir, escaped, "run-slash.json"))).toBe(true);
-		const { dispatch, events } = makeDispatch();
-		expect(await new SubAgentRunManager(channelId, { stateDir, dispatch }).restore()).toBe(1);
-		expect(events[0]?.channelId).toBe(channelId);
-	});
-
-	it("adopts a record left at the pre-escaping path, under the id the record itself names", async () => {
-		// The whole point of persistence: an external process outlives the daemon, and only an
-		// adopted record can settle it, bill it and wake the channel. A record stranded at the
-		// old nested path was invisible to every later restart, so its run stayed unsupervised.
-		const stateDir = createTempDir();
-		const channelId = `group_legacy${Date.now()}/eDInUw==`;
-		const [head, tail] = channelId.split("/");
-		mkdirSync(join(stateDir, head, tail), { recursive: true });
-		writeFileSync(
-			join(stateDir, head, tail, "run-legacy.json"),
-			JSON.stringify({
-				runId: "run-legacy",
-				channelId,
-				runtime: "internal",
-				agent: "explorer",
-				label: "explore",
-				source: "predefined",
-				tools: [],
-				purpose: "work",
-				workingDirectory: "/tmp",
-				artifactDir: "/tmp/artifacts/run-legacy",
-				status: "running",
-				startedAt: Date.now(),
-			}),
-			"utf-8",
-		);
+		// The startup scan recovers the real id from the record, not from the escaped directory name.
 		const { dispatch, events } = makeDispatch();
 		configureSubAgentRuntime({ stateDir, dispatch });
-
 		expect(await restoreAllSubAgentRuns()).toBe(1);
-
-		// Adopted under the real id — a wake addressed to the escaped spelling reaches nobody.
-		expect(events).toHaveLength(1);
 		expect(events[0]?.channelId).toBe(channelId);
-		expect(getSubAgentRunManager(channelId).get("run-legacy")?.status).toBe("lost");
-		// ...and the record now lives where this build writes, with no stale copy behind it.
-		expect(existsSync(join(stateDir, channelId.replace("/", "__"), "run-legacy.json"))).toBe(true);
-		expect(existsSync(join(stateDir, head))).toBe(false);
 		configureSubAgentRuntime({});
 	});
 });

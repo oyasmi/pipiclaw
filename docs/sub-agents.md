@@ -150,7 +150,7 @@ maxWallTimeSec: 5400
 | `tools` | 否 | `read,bash` | 允许的工具，支持 `read`、`grep`、`glob`、`bash`、`edit`、`write`、`web_search`、`web_fetch` |
 | `model` | 否 | `settings.subagentModel`，未设时为当前主代理模型 | 精确模型引用，建议写成 `provider/modelId`，按 `models.json` 校验 |
 | `contextMode` | 否 | `isolated` | `isolated` 或 `contextual` |
-| `memory` | 否 | `isolated` 时为 `none`，`contextual` 时为 `index` | `none`、`index`（旧值 `session`/`relevant` 仍可加载，discovery 时映射为 `index` 并给出警告） |
+| `memory` | 否 | `isolated` 时为 `none`，`contextual` 时为 `index` | `none`、`index` |
 | `paths` | 否 | 空 | 建议优先关注的文件或目录 |
 | `thinkingLevel` | 否 | `medium`（与主代理默认推理档一致） | `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`；内置路径会按模型能力 clamp 到最近的可用档 |
 | `maxTurns` | 否 | `32` | 最大 assistant 轮数 |

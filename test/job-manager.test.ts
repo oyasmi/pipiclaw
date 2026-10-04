@@ -574,6 +574,9 @@ describe("ChannelJobManager persistence and completion wakes (spec 031, D6)", ()
 			dispatchId: `job:dm_1:${job.id}:done`,
 		});
 		const dispatchId = events[0]?.dispatchId ?? "";
+		await expect(manager.beginWakeConsumption(job.id, "other-task", dispatchId)).resolves.toBe(false);
+		await expect(manager.beginWakeConsumption(job.id, "release", `${dispatchId}:replay`)).resolves.toBe(false);
+		await expect(manager.beginWakeConsumption("job-missing", "release", dispatchId)).resolves.toBe(false);
 		await expect(manager.beginWakeConsumption(job.id, "release", dispatchId)).resolves.toBe(true);
 		await manager.finishWakeConsumption(job.id, dispatchId);
 		await expect(manager.beginWakeConsumption(job.id, "release", dispatchId)).resolves.toBe(false);
