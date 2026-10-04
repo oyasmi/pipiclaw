@@ -20,6 +20,7 @@ import { createSendMediaTool } from "./send-media.js";
 import { createSessionSearchTool } from "./session-search.js";
 import { createSkillTool } from "./skill.js";
 import { SUBAGENT_TOOL_NAMES } from "./subagent-tool-names.js";
+import type { TaskStepCost } from "./task-manage/types.js";
 import {
 	createTaskCloseTool,
 	createTaskCreateTool,
@@ -88,6 +89,8 @@ export interface ToolBuildContext {
 	taskLoop?: { taskId: string };
 	/** Tools completed in the current turn; only the task loop reads it. */
 	getToolsUsed?: () => string[];
+	/** The current turn's own model cost so far; only the task loop reads it. */
+	getStepCost?: () => TaskStepCost;
 }
 
 export interface ToolRegistration {
@@ -286,6 +289,7 @@ export const TOOL_REGISTRY: ToolRegistration[] = [
 				...taskToolOptions(ctx),
 				taskId: ctx.taskLoop?.taskId,
 				getToolsUsed: ctx.getToolsUsed,
+				getStepCost: ctx.getStepCost,
 			}),
 	},
 	{

@@ -50,6 +50,14 @@ describe("task step brief", () => {
 		const channelDir = tempDir();
 		await writeTask(channelDir, "weekly-20260928-0900", "# W\n", { origin: "weekly" });
 		await appendTaskLog(channelDir, "weekly-20260928-0900", {
+			kind: "step",
+			seq: 3,
+			outcome: "done",
+			note: "published",
+			tools: ["bash"],
+			report: "本周周报：合并 12 个 PR",
+		});
+		await appendTaskLog(channelDir, "weekly-20260928-0900", {
 			kind: "close",
 			outcome: "done",
 			note: "published, id=68",
@@ -64,6 +72,8 @@ describe("task step brief", () => {
 
 		const first = await buildTaskStepBrief({ channelDir, taskId: "weekly-20261005-0900" });
 		expect(first).toMatch(/<previous_occurrence id="weekly-20260928-0900"[\s\S]*published, id=68/);
+		// What the previous occurrence actually delivered, not only how it closed.
+		expect(first).toMatch(/<previous_occurrence[\s\S]*本周周报：合并 12 个 PR[\s\S]*<\/previous_occurrence>/);
 		expect(first).not.toContain("weekly-extra");
 
 		await appendTaskLog(channelDir, "weekly-20261005-0900", step("collected"));
@@ -119,6 +129,39 @@ describe("team board (spec 052, D5)", () => {
 		expect(lines.find((line) => line.includes("job_x"))).toContain("未关联工作项");
 		// The board carries paths, never the output text.
 		expect(rendered).toContain("/o/b.md");
+	});
+
+	it("carries the tail and changed paths of results settled since the last step, and only those", async () => {
+		// A task step's brief replaces the completion wake, so the wake's result tail must reach it here.
+		const channelDir = tempDir();
+		await writeTask(channelDir, "T", body);
+		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_old", item: "W1", agent: "a" });
+		await appendTaskLog(channelDir, "T", {
+			kind: "settle",
+			ref: "run_old",
+			item: "W1",
+			status: "completed",
+			tail: "OLD_TAIL",
+		});
+		await appendTaskLog(channelDir, "T", step("read the old one"));
+		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_new", item: "W2", agent: "b" });
+		await appendTaskLog(channelDir, "T", {
+			kind: "settle",
+			ref: "run_new",
+			item: "W2",
+			status: "completed",
+			tail: "NEW_TAIL",
+			changed: "M src/export.ts",
+		});
+
+		const brief = await buildTaskStepBrief({ channelDir, taskId: "T" });
+		const results = /<task_results>([\s\S]*)<\/task_results>/.exec(brief ?? "")?.[1] ?? "";
+		expect(results).toContain("NEW_TAIL");
+		expect(results).toContain("M src/export.ts");
+		expect(results).not.toContain("OLD_TAIL");
+
+		await appendTaskLog(channelDir, "T", step("read the new one", 2));
+		expect(await buildTaskStepBrief({ channelDir, taskId: "T" })).not.toContain("<task_results>");
 	});
 
 	it("is built from the log alone, so it survives the run record being garbage-collected", async () => {

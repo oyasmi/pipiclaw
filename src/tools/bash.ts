@@ -328,7 +328,7 @@ export function createBashTool(executor: Executor, options: BashToolOptions = {}
 								`Background job ${job.id} started: ${jobLabel}\n` +
 								(willNotify
 									? "Complete any independent work, then end the turn when only waiting remains. Completion wakes this channel with the exit code and output; do not poll or schedule a check-in. " +
-										"Inside a task step, park with task_step_end on this job id."
+										'Inside a task step, park with task_step_end on ticket {"kind":"work"}.'
 									: "It runs off-turn and will NOT wake you when it finishes; check it with the job tool (op:poll/list)."),
 						},
 					],

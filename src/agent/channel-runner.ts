@@ -435,8 +435,11 @@ export class ChannelRunner implements AgentRunner {
 				// Settled into a result object rather than left as a bare promise: if the bootstrap
 				// throws first we would otherwise leave a rejection unobserved, which Node's default
 				// policy turns into a process exit. Rethrown at the await, so a digest failure still
-				// fails the turn exactly as it did when this ran inline.
-				const taskDigestPromise = (this.tasksEnabled ? this.buildTaskDigestForTurn() : Promise.resolve("")).then(
+				// fails the turn exactly as it did when this ran inline. A task step gets none: its brief
+				// already carries its own task, and the channel's other tasks are noise there.
+				const taskDigestPromise = (
+					this.tasksEnabled && !this.taskLoop ? this.buildTaskDigestForTurn() : Promise.resolve("")
+				).then(
 					(text) => ({ text }) as { text: string; error?: never },
 					(error: unknown) => ({ error }) as { text?: never; error: unknown },
 				);
@@ -1717,6 +1720,9 @@ export class ChannelRunner implements AgentRunner {
 			mediaSender: this.mediaSender,
 			taskLoop: this.taskLoop,
 			getToolsUsed: () => this.runState.toolsUsed,
+			// Assistant usage only: an internal sub-agent's cost is also in `totalUsage`, and a bound
+			// one is already credited to the task when it settles.
+			getStepCost: () => ({ usd: this.runState.assistantUsage.cost.total, estimated: !this.runState.costKnown }),
 		});
 		this.currentTools = tools;
 		// Tool schemas are billed with the system prompt and, unlike it, nothing trims them.

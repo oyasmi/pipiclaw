@@ -211,13 +211,15 @@ describe("ChannelJobManager", () => {
 		const job = await manager.start("make", "build", 300, { taskId: "T" });
 		expect(job.timeoutSeconds).toBe(300);
 
+		writeFileSync((await manager.readOutput(job.id))!.spillFile, "compiling\nBUILD_OK\n");
 		executor.probeResult = "EXIT:0";
 		await manager.list();
 		await manager.list();
 
 		const records = await readTaskLog(channelDir, "T", { kinds: ["dispatch", "settle"] });
 		expect(records.map((record) => record.kind)).toEqual(["dispatch", "settle"]);
-		expect(records[1]).toMatchObject({ ref: job.id, status: "completed", exitCode: 0 });
+		// The output tail travels with the settlement: a task step's brief replaces the wake that carried it.
+		expect(records[1]).toMatchObject({ ref: job.id, status: "completed", exitCode: 0, tail: "compiling\nBUILD_OK" });
 		// The step the wake starts must already find the result on its board.
 		expect(wakeSawSettle).toEqual([true]);
 		await resetTaskLogAppenders();

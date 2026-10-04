@@ -908,11 +908,13 @@ export class ChannelJobManager {
 		const channelDir = this.options.channelDir;
 		if (!taskId || !channelDir || record.taskLogged) return;
 		record.taskLogged = true;
+		const output = await this.readOutput(record.id).catch(() => undefined);
 		await logTaskSettlement(channelDir, taskId, {
 			ref: record.id,
 			status: record.status,
 			exitCode: record.exitCode,
 			output: record.spillFile,
+			tail: output?.text.slice(-WAKE_OUTPUT_TAIL_BYTES).trim() || undefined,
 			durationMs: record.durationMs,
 		}).catch((error) => {
 			log.logWarning(`Failed to log settlement of job ${record.id} to task ${taskId}`, errorMessage(error));

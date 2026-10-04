@@ -37,8 +37,11 @@ cp "$PIPICLAW_PACKAGE_DIR"/examples/sub-agents/agents/*.md ~/.pipiclaw/workspace
 | `codex-flash` | codex-cli | `gpt-5.6-luna` | medium | 是 | 最快最便宜，可读图片：明确、简单、重复的工作 |
 | `glm-high` | claude-code | `glm-5.3` | high | 否 | 高智能档，额度宽松：高频使用不挤占 claude/codex 配额 |
 | `glm-flash` | claude-code | `glm-5.3-flash` | medium | 是 | 最便宜，可读图片：大批量简单重复工作的首选 |
+| `codex-review` | codex-cli | `gpt-6-astra` | high | 是 | 只读检查档：独立审查与 `purpose=verify`，在 CLI 的 read-only sandbox 中运行 |
 
 三档的分工是这套配置的主要内容：**flash** 用于「做什么和怎么做都已清楚，只差有人去做」，可以大量派发；**main** 是主力，绝大多数实现、排查、文档都在这里，也包括 token 消耗很大的长任务；**high** 只留给这一轮真正需要新判断或取舍的工作。对已经定好的活派 high，只是更贵，不会更对。
+
+`codex-review` 不属于这三档，它只做检查：read-only sandbox 是 codex 自己强制的边界，所以它改不了被检查的产物，也不占写锁，可以和其他工作并行。检查者尽量和实现者不是同一家模型——它检查 claude/glm 的产物最有价值；检查 codex 自己的产物时，可以另配一个 `claude --permission-mode plan` 的只读条目。它跑不了会写文件的测试或构建，这类检查要么先由实现者或主代理跑好、把输出交给它，要么换可写条目。
 
 额度是真实约束：claude 和 codex 的订阅有周/月上限，GLM 只有 5 小时滚动限额、没有周月上限。所以简单重复的批量工作优先走 `glm-flash`，把受限额度留给难题。
 
@@ -61,13 +64,13 @@ exec claude --dangerously-skip-permissions "$@"
 
 留着它是因为这几条跨每一个任务都成立，漏掉的代价又很高（尤其是伪造绿色检查结果和把未验证写成已验证），而让主代理每次委派重打一遍既费 token 又会漂移。
 
-要改就 7 个文件一起改。也可以整段删掉：runtime 允许外部条目的正文为空，此时不会生成 `system-prompt.txt`，claude-code 不追加 `--append-system-prompt-file`，codex 的 stdin 就是 task 本身。
+要改就 8 个文件一起改。也可以整段删掉：runtime 允许外部条目的正文为空，此时不会生成 `system-prompt.txt`，claude-code 不追加 `--append-system-prompt-file`，codex 的 stdin 就是 task 本身。
 
 ## 这套配置的代价，别忽略
 
-- **全部是放开权限的写条目。** 7 个条目都用 yolo 参数（`claude --dangerously-skip-permissions` / `codex exec --dangerously-bypass-approvals-and-sandbox`）并声明 `mutates: write`，没有 sandbox 兜底。实际边界只剩宿主账号和 `task` 里写明的范围，**必须在可信 checkout 和最小权限账号下使用**。需要真只读时，自己加一个 `--permission-mode plan` 或 `--sandbox read-only` 的条目。
-- **同一工作目录同时只容得下一个外部委派。** `mutates: write` 会取目标工作区的排他 lease（含父子目录冲突），并行必须各自 `git worktree`。这是把只读条目去掉换来的。
-- **`purpose=verify` 的 attestation 一律是 `advisory`。** `enforced` 只在 `mutates: read` 且工具集不含 `bash` 时才成立，这套条目里没有这样的。PASS 不能直接采信，要自己核对真实产物、diff 和检查输出。
+- **除 `codex-review` 外全部是放开权限的写条目。** 这 7 个条目都用 yolo 参数（`claude --dangerously-skip-permissions` / `codex exec --dangerously-bypass-approvals-and-sandbox`）并声明 `mutates: write`，没有 sandbox 兜底。实际边界只剩宿主账号和 `task` 里写明的范围，**必须在可信 checkout 和最小权限账号下使用**。
+- **同一工作目录同时只容得下一个写委派。** `mutates: write` 会取目标工作区的排他 lease（含父子目录冲突），并行写必须各自 `git worktree`；`codex-review` 不取 lease。
+- **`VERDICT` 是供参考的结论，不是门禁。** runtime 只把检查者的 PASS/FAIL 记到 run 和任务看板上。只有 `codex-review` 在结构上改不了产物；用可写条目做检查时，它可能动过产物。无论哪种，都要自己对照真实产物、diff 和检查输出再采信。
 - **独立性不再由角色提示词提供。** 要评审或验收时，必须在 `task` 里写明"你是检查者，不修实现，不把实现者的总结当作预期行为的来源"，并给出同一份验收口径和待检版本。换一个条目不会自动带来独立性。
 
 ## `roles/` 里的岗位角色

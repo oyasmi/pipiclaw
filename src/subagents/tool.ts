@@ -433,7 +433,7 @@ function buildDispatchedText(runId: string, agentName: string, runtimeLabel: str
 		`[Dispatched] runId=${runId}, agent ${agentName} (${runtimeLabel}), working directory ${workingDirectory}.\n` +
 		"Status: running. This channel will be woken with the result and artifact path once it finishes.\n" +
 		"Finish independent work and dispatches, then end the turn when only waiting remains; do not re-dispatch or poll to wait. " +
-		"Inside a task step, use task_step_end outcome=park with this run id."
+		'Inside a task step, use task_step_end outcome=park with ticket {"kind":"work"}.'
 	);
 }
 
@@ -580,13 +580,20 @@ function buildSubagentTools(
 	).filter((tool) => runContext.purpose !== "verify" || (tool.name !== "write" && tool.name !== "edit"));
 }
 
-/** Shared by both runtimes' task envelopes and `subagent_run`'s verify follow-up (spec 040, D9). */
-export function buildVerificationProtocol(taskPath: string | undefined): string {
+/**
+ * Shared by both runtimes' task envelopes and `subagent_run`'s verify follow-up (spec 040, D9).
+ * A check bound to a Work Item covers that item only: holding it to the whole DoD would fail it
+ * for the items still in progress.
+ */
+export function buildVerificationProtocol(taskPath: string | undefined, item?: string): string {
+	const scope = !taskPath
+		? "- Independently inspect the work described in the task above and verify it against concrete evidence."
+		: item
+			? `- Independently inspect Work Item ${item} in ${taskPath} — its text and the DoD items it references (\`→ dod:N\`) — and verify it against concrete evidence. Other Work Items are out of scope; do not fail this check because they are unfinished.`
+			: `- Independently inspect ${taskPath} and verify every DoD item against concrete evidence.`;
 	return [
 		"Verification protocol:",
-		taskPath
-			? `- Independently inspect ${taskPath} and verify every DoD item against concrete evidence.`
-			: "- Independently inspect the work described in the task above and verify it against concrete evidence.",
+		scope,
 		"- You are the checker, not the maker. Do not modify the implementation or fix failures to make a check pass; report them.",
 		"- You may run npm tests/builds and other deterministic checks; keep any generated output out of tracked files and product directories.",
 		"- Run deterministic checks when available and distinguish observed evidence from assumptions.",
@@ -659,7 +666,7 @@ export function buildSubAgentTask(
 					`${runContext.taskId}.md`,
 				)
 			: undefined;
-		lines.push("", buildVerificationProtocol(taskPath));
+		lines.push("", buildVerificationProtocol(taskPath, runContext.item));
 	}
 	return lines.join("\n");
 }

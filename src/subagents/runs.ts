@@ -888,6 +888,8 @@ export class SubAgentRunManager {
 				status: record.status,
 				verdict: record.purpose === "verify" ? record.verificationVerdict : undefined,
 				output: outputSaved ? join(record.artifactDir, "output.md") : undefined,
+				tail: input.outputText.slice(-WAKE_OUTPUT_TAIL_CHARS).trim() || undefined,
+				changed: record.workspaceSummary,
 				durationMs: input.durationMs,
 			},
 			{ usd: input.usage.cost.total, estimated: input.costKnown === false },

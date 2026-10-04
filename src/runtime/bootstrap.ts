@@ -637,6 +637,22 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 				return { kind: "requeue", text: trimmedQueueText };
 			}
 
+			// A task step runs in the task's own session and is muted: a steer here would land in
+			// the background task's context and its answer would never reach the user, while the
+			// message itself is kept out of the chat session. Run it as the next chat turn instead.
+			const taskLoop = runner.getTaskLoop?.();
+			if (taskLoop) {
+				await bot.sendPlain(
+					event.channelId,
+					`后台任务 \`${taskLoop.taskId}\` 正在执行一步，你的消息会在这一步结束后处理；要给该任务补充指示，用 \`/tasks steer ${taskLoop.taskId} <内容>\`。`,
+				);
+				log.logEvent("info", "agent.turn.followup_queued", "Message deferred past a task step", {
+					ctx: { channelId: event.channelId, userName: event.userName },
+					fields: { messageLength: trimmedQueueText.length, taskId: taskLoop.taskId },
+				});
+				return { kind: "requeue", text: trimmedQueueText };
+			}
+
 			if (mode === "followUp") {
 				log.logEvent("info", "agent.turn.followup_queued", "Follow-up queued", {
 					ctx: { channelId: event.channelId, userName: event.userName },

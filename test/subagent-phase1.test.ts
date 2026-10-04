@@ -162,7 +162,7 @@ describe("sub-agent discovery", () => {
 		// the harness, the pass-through model and the reasoning level the deployer picked, because
 		// after the persona is gone that declaration is the only thing the file carries.
 		for (const agent of discovery.agents) {
-			expect(agent).toMatchObject({ runtime: "external", workload: "heavy", mutates: "write" });
+			expect(agent).toMatchObject({ runtime: "external", workload: "heavy" });
 			expect(["claude-code", "codex-cli"]).toContain(agent.harness);
 			expect(agent.externalModelRef).toBeTruthy();
 			expect(agent.thinkingLevel).toBeTruthy();
@@ -173,13 +173,20 @@ describe("sub-agent discovery", () => {
 		expect(tierOf("claude-high")?.thinkingLevel).toBe("high");
 		expect(tierOf("claude-main")?.thinkingLevel).toBe("medium");
 		expect(tierOf("glm-flash")?.thinkingLevel).toBe("medium");
-		// Every entry runs with approvals/sandbox off — that is what makes the `mutates: write`
-		// declaration above load-bearing rather than cosmetic (there is no sandbox behind it).
+		// A write entry runs with approvals/sandbox off, so its `mutates: write` lease is the only
+		// guard there is. A read entry must be backed by the CLI's own read-only sandbox, because
+		// `mutates: read` by itself is a declaration, not a boundary. At least one checker exists.
 		for (const agent of discovery.agents) {
-			if (agent.harness === "codex-cli") {
-				expect(agent.command).toContain("--dangerously-bypass-approvals-and-sandbox");
+			if (agent.mutates === "read") {
+				expect(agent.command).toContain("--sandbox read-only");
+			} else {
+				expect(agent.mutates).toBe("write");
+				if (agent.harness === "codex-cli") {
+					expect(agent.command).toContain("--dangerously-bypass-approvals-and-sandbox");
+				}
 			}
 		}
+		expect(discovery.agents.some((agent) => agent.mutates === "read")).toBe(true);
 	});
 
 	it("loads every shipped role template with routing and permission metadata", () => {
@@ -330,6 +337,22 @@ describe("sub-agent runtime context", () => {
 		expect(task).toContain(`Channel directory: ${escaped}`);
 		expect(task).toContain(`${escaped}/tasks/t-1.md`);
 		expect(task).not.toContain(`${channelId}/tasks`);
+	});
+
+	it("scopes a verify bound to a Work Item to that item, not the whole DoD", () => {
+		// Holding a W2 check to every DoD item fails it for the items still in progress.
+		const envelope = (item?: string) =>
+			buildSubAgentTask("Check it.", { name: "checker" }, { workspaceDir: "/ws", channelId: "dm_1" }, [], {
+				runId: "run_v",
+				purpose: "verify",
+				taskId: "t-1",
+				item,
+				workingDirectory: "/checkout",
+				artifactDir: "/checkout/.artifacts/run_v",
+			});
+		expect(envelope("W2")).toContain("Work Item W2 in /ws/dm_1/tasks/t-1.md");
+		expect(envelope("W2")).not.toContain("every DoD item");
+		expect(envelope()).toContain("verify every DoD item");
 	});
 });
 

@@ -10,6 +10,7 @@ import { readTaskLog } from "../../../src/tasks/log.js";
 import { expireTicket, parkTask } from "../../../src/tasks/store.js";
 import { resolveTicket } from "../../../src/tasks/ticket.js";
 import { createDeterministicHarness, type DeterministicHarness, reply } from "../../support/runtime-harness.js";
+import { waitFor } from "../helpers/wait.js";
 
 describe("E2E deterministic: task lifecycle", () => {
 	let harness: DeterministicHarness;
@@ -72,6 +73,9 @@ describe("E2E deterministic: task lifecycle", () => {
 		expect(request?.lastUserText).toContain(join(PLAYBOOKS_DIR, "task-lead.md"));
 		expect(request?.lastUserText).toContain(activePath());
 		expect(request?.lastUserText).toContain('<task_recovery kind="expired">');
+		// The step's brief carries its own task; the channel agenda is chat-side context only.
+		// Mutation check: drop the `!this.taskLoop` gate on the digest in ChannelRunner and this fails.
+		expect(request?.lastUserText).not.toContain("<task_agenda>");
 		expect(existsSync(activePath())).toBe(false);
 		expect(
 			(await readTaskLog(harness.channelDir, taskId, { kinds: ["close"] })).map(
@@ -233,7 +237,8 @@ describe("E2E deterministic: task lifecycle", () => {
 		const log = await readTaskLog(harness.channelDir, taskId, { kinds: ["dispatch", "settle", "close"] });
 		expect(log.map((record) => record.kind)).toEqual(["dispatch", "settle", "close"]);
 		expect(log[0]).toMatchObject({ kind: "dispatch", item: "W1" });
-		expect(log[1]).toMatchObject({ kind: "settle", item: "W1", status: "completed" });
+		// The result tail is recorded at settlement, so a later step's <task_results> can show it.
+		expect(log[1]).toMatchObject({ kind: "settle", item: "W1", status: "completed", tail: "child built it" });
 		expect(readFileSync(archivedPath(), "utf-8")).toContain("- [x] W1 助手实现");
 	});
 
@@ -283,5 +288,57 @@ describe("E2E deterministic: task lifecycle", () => {
 		expect(existsSync(join(tasksDir(), "archive", "weekly-20261005-0900.md"))).toBe(true);
 		// Finished, so the following occurrence is free to run.
 		expect((await spawn(request("2026-10-19T09:00:00+08:00"))).outcome).toBe("spawned");
+	});
+
+	it("A19: a chat message sent during a task step runs as its own chat turn, not as a steer into the task session", async () => {
+		// Regression: the busy path steered every plain message into whatever session the runner was
+		// bound to, so a message sent while a muted task step ran landed in the task's context and
+		// its answer was never delivered. Mutation check: remove the `getTaskLoop` branch in
+		// `handleBusyMessage` and no chat-session request carries CHAT_MARKER.
+		harness = await createDeterministicHarness({ busyMessageDefault: "steer" });
+		harness.model.script.route({
+			name: "create",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("seed-task"),
+			respond: [
+				reply.toolCall("task_create", {
+					id: taskId,
+					title: "Bg",
+					goal: "Run in the background",
+					dod: "- [x] Done",
+				}),
+				reply.text("ok"),
+			],
+		});
+		harness.model.script.route({
+			name: "step",
+			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId}]`),
+			respond: [reply.toolCall("task_step_end", { outcome: "done", note: "done" }), reply.text("ok")],
+		});
+		harness.model.script.route({
+			name: "chat",
+			when: (r) => r.isMainTurn && r.lastUserText.includes("CHAT_MARKER"),
+			respond: [reply.text("chat answered")],
+			repeat: true,
+		});
+		await harness.sendUserMessage("seed-task");
+		const gate = harness.model.script.hold({
+			when: (r) => r.isMainTurn && r.lastUserText.includes(`[TASK_STEP:${taskId}]`),
+		});
+		const entry = (await readActiveTasks(tasksDir())).find((e) => e.id === taskId)!;
+		harness.enqueueWake(createTaskDriverEvent(harness.channelId, entry, Date.now()).text, {
+			user: "TASK_DRIVER",
+			userName: "TASK_DRIVER",
+		});
+		await waitFor("task step running", () =>
+			harness.mainTurnRequests().some((r) => r.lastUserText.includes(`[TASK_STEP:${taskId}]`)),
+		);
+		await harness.sendUserMessageNoWait("顺便问个别的 CHAT_MARKER");
+		gate.release();
+		await harness.waitForIdle();
+
+		const chatRequests = harness.mainTurnRequests().filter((r) => r.lastUserText.includes("CHAT_MARKER"));
+		expect(chatRequests.length).toBeGreaterThan(0);
+		for (const request of chatRequests) expect(request.tools).not.toContain("task_step_end");
+		expect(harness.deliveries.some((d) => (d.text ?? "").includes("chat answered"))).toBe(true);
 	});
 });

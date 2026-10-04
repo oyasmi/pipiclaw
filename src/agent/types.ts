@@ -71,6 +71,8 @@ export interface AgentRunner {
 	 */
 	bindTaskSession?(taskId: string): Promise<void>;
 	bindChatSession?(): Promise<void>;
+	/** The task whose session this runner is bound to right now, if a task step is running. */
+	getTaskLoop?(): { taskId: string } | undefined;
 	/** Permanently retire this runner generation after an out-of-band `/new`. */
 	retireForNewSession?(): void;
 	/**

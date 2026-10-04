@@ -8,8 +8,8 @@ import { readTaskLog, type TaskDispatchRecord, type TaskSettleRecord } from "./l
  * It is derived from the loop log, never from the run registry — settled runs are garbage
  * collected after a week, while a project can outlive that (INV-5). Every row is one `ref`
  * (a run or job id) with its latest state; rows are grouped under the Work Item they were
- * dispatched for. The board carries status and output *paths*, never output bodies: the leader
- * reads what it needs, and the fixed cost of a step stays small.
+ * dispatched for. The board itself carries status and output *paths*; only results that came back
+ * since the previous step also carry their tail, in `renderNewResults`.
  */
 export interface BoardRef {
 	ref: string;
@@ -132,4 +132,27 @@ export function renderTaskBoard(board: TaskBoard, nowMs: number = Date.now()): s
 	for (const entry of board.unlinked) lines.push(`- （未关联工作项）${renderRef(entry, nowMs)}`);
 	if (board.hiddenSettled > 0) lines.push(`- （另有 ${board.hiddenSettled} 项已结算且已看过，见 task_log）`);
 	return lines.join("\n");
+}
+
+/**
+ * The `<task_results>` block body: what came back since the previous step, as the completion wake
+ * showed it — the output's tail and, for a run, what it left changed. A task step's brief replaces
+ * the wake text, so without this block a task step would see less of a result than a chat turn.
+ * Returns `undefined` when nothing new settled.
+ */
+export function renderNewResults(board: TaskBoard): string | undefined {
+	const fresh = [...board.items.flatMap((entry) => entry.refs), ...board.unlinked].filter(
+		(entry) => entry.isNew && entry.settled,
+	);
+	if (fresh.length === 0) return undefined;
+	return fresh
+		.map((entry) => {
+			const settle = entry.settled as TaskSettleRecord;
+			const head = [entry.ref, entry.item, entry.agent, settle.status].filter(Boolean).join(" · ");
+			const lines = [`[${head}]`];
+			if (settle.changed) lines.push(`改动（git status）：${settle.changed}`);
+			lines.push(`<untrusted_agent_output>\n${settle.tail ?? "（无输出）"}\n</untrusted_agent_output>`);
+			return lines.join("\n");
+		})
+		.join("\n\n");
 }

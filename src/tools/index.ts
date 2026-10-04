@@ -16,6 +16,7 @@ import type { PipiclawToolsConfig } from "./config.js";
 import { loadToolsConfig } from "./config.js";
 import { buildToolSet } from "./registry.js";
 import { createSubAgentListTool, createSubAgentRunTool } from "./subagent-manage.js";
+import type { TaskStepCost } from "./task-manage/types.js";
 import { withToolDetails } from "./tool-details.js";
 
 export interface CreatePipiclawToolsOptions {
@@ -48,6 +49,8 @@ export interface CreatePipiclawToolsOptions {
 	taskLoop?: { taskId: string };
 	/** Tools completed in the current turn; only `task_step_end` reads it. */
 	getToolsUsed?: () => string[];
+	/** The current turn's own model cost so far; only `task_step_end` reads it. */
+	getStepCost?: () => TaskStepCost;
 }
 
 export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentTool<any>[] {
@@ -92,6 +95,7 @@ export function createPipiclawTools(options: CreatePipiclawToolsOptions): AgentT
 		mediaSender: options.mediaSender,
 		taskLoop: options.taskLoop,
 		getToolsUsed: options.getToolsUsed,
+		getStepCost: options.getStepCost,
 	});
 	const subAgentToolOptions = {
 		getRunManager: () => options.runManager,

@@ -54,7 +54,7 @@ Pipiclaw 把一次私聊或群聊称为一个**频道（channel）**：
 - `/followup <消息>`：把新请求排到当前回合之后。
 - `/stop`：停止当前回合；如果它由任务 driver 唤醒，还会暂停对应任务。
 
-忙碌时发送普通消息，默认按 `channel.json.busyMessageDefault: "steer"` 处理；设置成 `"followUp"` 或 `"followup"` 后改为排队。
+忙碌时发送普通消息，默认按 `channel.json.busyMessageDefault: "steer"` 处理；设置成 `"followUp"` 或 `"followup"` 后改为排队。正在跑的是后台任务的一步时，普通消息和 `/steer` 都不会进入任务会话，而是排到这一步之后作为普通聊天处理；要给任务补充指示，用 `/tasks steer <id> <内容>`。
 
 `/stop` 只停止主回合，不会杀掉已经派发并独立运行的委派 run。查看和终止委派请使用 `/subagents` 与 `/subagents cancel`。
 

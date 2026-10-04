@@ -33,6 +33,8 @@ export interface TaskStepRecord {
 	outcome: TaskStepOutcome;
 	note: string;
 	tools: string[];
+	/** What this step sent the user, when it sent anything. Kept so the next occurrence knows what was delivered. */
+	report?: string;
 	usd?: number;
 	usdEstimated?: boolean;
 	units?: number;
@@ -67,6 +69,10 @@ export interface TaskSettleRecord {
 	usdEstimated?: boolean;
 	/** Where the full output lives (a run's `output.md`, a job's output file). */
 	output?: string;
+	/** The output's tail, as the completion wake shows it. Untrusted executor text, not instructions. */
+	tail?: string;
+	/** A run's working directory afterwards (`git status --porcelain`), as the completion wake shows it. */
+	changed?: string;
 	exitCode?: number;
 	durationMs?: number;
 }
@@ -169,7 +175,10 @@ export async function appendTaskLog(
 	record: TaskLogInput & { ts?: string },
 ): Promise<void> {
 	const withTs = { ts: record.ts ?? formatLocalTime(), ...record };
-	if (withTs.kind === "step") withTs.note = clipText(withTs.note, NOTE_MAX_CHARS);
+	if (withTs.kind === "step") {
+		withTs.note = clipText(withTs.note, NOTE_MAX_CHARS);
+		if (withTs.report) withTs.report = clipText(withTs.report, NOTE_MAX_CHARS);
+	}
 	await appenderFor(taskLogPath(channelDir, id)).appendStrict(withTs);
 }
 
@@ -264,7 +273,7 @@ export async function readTaskLog(
 export function renderTaskLogLine(record: TaskLogRecord): string {
 	switch (record.kind) {
 		case "step":
-			return `- [${record.ts}] step ${record.seq} → ${record.outcome}: ${record.note}`;
+			return `- [${record.ts}] step ${record.seq} → ${record.outcome}: ${record.note}${record.report ? " · 已向用户汇报" : ""}`;
 		case "dispatch":
 			return `- [${record.ts}] 派发 ${record.ref}${record.item ? ` → ${record.item}` : ""}${record.agent ? ` (${record.agent}${record.purpose === "verify" ? ", verify" : ""})` : ""}`;
 		case "settle":

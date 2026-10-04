@@ -148,6 +148,25 @@ describe("task tool surface (spec 052, D7)", () => {
 			expect((await readStoredTask(channelDir, "work"))?.fields.usage?.steps).toBe(1);
 		});
 
+		it("adds the step's own model cost to the task's usage, before a done writes its close record", async () => {
+			await writeTask("costly");
+			const priced = (usd: number, estimated = false) => ({
+				...loop("costly"),
+				getStepCost: () => ({ usd, estimated }),
+			});
+			await endTaskStep(priced(0.4), { outcome: "continue", note: "n" });
+			expect((await readStoredTask(channelDir, "costly"))?.fields.usage).toMatchObject({
+				usd: 0.4,
+				usdEstimated: false,
+			});
+
+			// The leader's last step is spent by the time it ends the project, so the close record counts it.
+			await endTaskStep(priced(0.1, true), { outcome: "done", note: "n" });
+			const close = (await readTaskLog(channelDir, "costly", { kinds: ["close"] }))[0];
+			expect(close?.kind === "close" && close.usd).toBeCloseTo(0.5);
+			expect((await readStoredTask(channelDir, "costly", true))?.fields.usage?.usdEstimated).toBe(true);
+		});
+
 		it("can mark a Work Item done in the same call", async () => {
 			await writeTask("work");
 			await endTaskStep(loop("work"), { outcome: "continue", note: "n", items: [{ id: "W1", status: "done" }] });
@@ -215,6 +234,9 @@ describe("task tool surface (spec 052, D7)", () => {
 			expect(archivedLog).toContain('"kind":"step"');
 			expect(archivedLog).toContain('"kind":"close"');
 			expect(await readFile(join(tasksDir, ".steer", "once.out.md"), "utf-8")).toContain("成果在这里");
+			// What was delivered is kept with the task, so the next occurrence can see it.
+			const steps = await readTaskLog(channelDir, "once", { kinds: ["step"] });
+			expect(steps[0]).toMatchObject({ kind: "step", report: "成果在这里" });
 		});
 
 		it("refuses done while acceptance items are unmet, or while bound work is still in flight", async () => {

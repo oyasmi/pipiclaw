@@ -33,11 +33,34 @@ export async function endTaskStep(
 	}
 
 	const seq = (document.fields.usage?.steps ?? 0) + 1;
-	if (document.fields.usage) document.fields.usage = { ...document.fields.usage, steps: seq };
+	// The step's own model cost joins the task's usage here, before a `done` writes its close
+	// record; bound delegations add theirs when they settle. A rough figure by design.
+	const cost = options.getStepCost?.();
+	const usd = cost && cost.usd > 0 ? cost.usd : 0;
+	const usdEstimated = cost?.estimated === true;
+	const usage = document.fields.usage;
+	if (usage) {
+		document.fields.usage = {
+			...usage,
+			steps: seq,
+			usd: usage.usd + usd,
+			usdEstimated: usage.usdEstimated || usdEstimated,
+		};
+	}
 
 	const tools = [...new Set(options.getToolsUsed?.() ?? [])];
+	const report = request.report?.trim();
 	const logStep = async (outcome: TaskStepEndRequest["outcome"]) => {
-		await appendTaskLog(options.channelDir, id, { kind: "step", seq, outcome, note, tools });
+		await appendTaskLog(options.channelDir, id, {
+			kind: "step",
+			seq,
+			outcome,
+			note,
+			tools,
+			...(report ? { report } : {}),
+			...(usd > 0 ? { usd } : {}),
+			...(usdEstimated ? { usdEstimated: true } : {}),
+		});
 	};
 
 	// Steps are silent by default (D9); `report` is the explicit opt-in the runtime delivers once
@@ -46,7 +69,6 @@ export async function endTaskStep(
 	// resolution) has passed, or a rejected `outcome=done` still tells the channel "task complete"
 	// and a corrected retry queues a second notice. So it is computed here and only flushed past a
 	// successful write, right before each return.
-	const report = request.report?.trim();
 	let pendingNotice = report || undefined;
 	const flushNotice = async () => {
 		if (pendingNotice) await queueTaskNotice(options.channelDir, id, pendingNotice);

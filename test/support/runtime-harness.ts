@@ -139,6 +139,8 @@ export interface DeterministicHarness {
 	sendUserMessageNoWait(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
 	/** Deliver an internal wake (task driver / job / delegation), not a user message. */
 	sendWake(text: string, overrides?: Partial<DingTalkEvent>): Promise<void>;
+	/** Queue an internal wake on the real channel queue, as production dispatch does, and return. */
+	enqueueWake(text: string, overrides?: Partial<DingTalkEvent>): boolean;
 	/** Run an idle runtime command directly (`/project`, `/tasks` …), the TUI/busy path. */
 	runCommand(name: string, args?: string): Promise<string>;
 	/** Wait until no channel queue has pending/in-flight work and the runner is idle. */
@@ -314,6 +316,9 @@ export async function createDeterministicHarness(options?: {
 			// message. `_isEvent = true` so background wakes get progressStyle "none".
 			await runtime.handler.handleEvent(buildEvent(text, overrides), bot as never, true);
 			await waitForIdle();
+		},
+		enqueueWake(text, overrides): boolean {
+			return bot.enqueueEvent(buildEvent(text, overrides));
 		},
 		async runCommand(name, args = ""): Promise<string> {
 			// The direct idle-runtime-command path the TUI and the busy DingTalk switch use

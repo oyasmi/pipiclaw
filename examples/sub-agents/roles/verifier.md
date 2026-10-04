@@ -1,7 +1,7 @@
 ---
 name: verifier
 description: >-
-  对最终产物逐项核验完成标准，运行必要检查并报告通过、失败或阻塞的证据。允许临时取证产物，禁止修改被验收产品；完整任务验收使用 purpose=verify，attestation 为 advisory。
+  对最终产物逐项核验完成标准，运行必要检查并报告通过、失败或阻塞的证据。允许临时取证产物，禁止修改被验收产品；完整任务验收使用 purpose=verify。
 runtime: external
 harness: codex-cli
 command: codex exec --sandbox workspace-write --skip-git-repo-check

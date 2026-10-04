@@ -47,4 +47,12 @@ export interface TaskManageToolOptions {
 	taskId?: string;
 	/** Tools this step has completed so far; feeds the loop log's idle-step evidence (D6). */
 	getToolsUsed?: () => string[];
+	/** This step's own model cost so far (bound delegations are credited at their settlement). */
+	getStepCost?: () => TaskStepCost;
+}
+
+/** A rough figure: `estimated` when some model in the step has no pricing metadata. */
+export interface TaskStepCost {
+	usd: number;
+	estimated: boolean;
 }

@@ -254,7 +254,7 @@ flowchart LR
 
 TaskDriver 派发 `[TASK_STEP:<id>]` 合成消息（带任务 brief），走与用户消息相同的串行轮次管道；任务步骤在这个任务自己的会话中运行，并必须以 `task_step_end` 收尾。整套任务机制由 `tools.json` 的 `tools.tasks.enabled` 一个总开关门控。
 
-spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性项目，正文是 Goal / DoD / Work Items 三段，运行时从不改写它；周期与定时的工作由事件**按模板生成任务实例**（实例 id `<事件名>-<YYYYMMDD>-<HHmm>` 由触发时刻确定，重放幂等；上一实例未结束就跳过并回执），events 子系统因此不再读写任务文件。委派和后台作业在任务会话里自动绑定到任务，派发与结算由 `SubAgentRunManager` / `ChannelJobManager` 写进任务的循环日志，每一步的 brief 渲染成 `<task_board>`。
+spec 052 把"Pipiclaw 作为负责人"落成数据模型：任务只有一次性项目，正文是 Goal / DoD / Work Items 三段，运行时从不改写它；周期与定时的工作由事件**按模板生成任务实例**（实例 id `<事件名>-<YYYYMMDD>-<HHmm>` 由触发时刻确定，重放幂等；上一实例未结束就跳过并回执），events 子系统因此不再读写任务文件。委派和后台作业在任务会话里自动绑定到任务，派发与结算由 `SubAgentRunManager` / `ChannelJobManager` 写进任务的循环日志（结算记录带上与完成唤醒相同的输出尾部），每一步的 brief 渲染成 `<task_board>`，上一步之后回来的结果另渲染成 `<task_results>`——brief 替换了唤醒文本，所以由它补上唤醒原本携带的内容。
 
 spec 051 留下的三样东西保持不变：**契约**（`tasks/<id>.md`，每一步完整注入）、**循环日志**（`tasks/<id>.jsonl`，append-only）和**等待票**（frontmatter 的 `ticket`）。一次停泊必须说清楚什么会叫醒它，运行时在写入时校验（`work` 票要求本任务当前有在途的委派或作业），并确定性地补上 `by` 兜底时限；到点未兑现就重开任务，连续第二次就停下并通知用户。验收不再是运行时门禁：`purpose: verify` 的结论（`VERDICT`）记录在看板上供负责人权衡，关闭任务只要求 DoD 全部勾选且没有在途的委派/作业。
 
