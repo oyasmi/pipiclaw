@@ -5,7 +5,7 @@ description: >-
 runtime: external
 harness: codex-cli
 command: codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
-model: gpt-6-astra
+model: gpt-6.1-sol
 thinkingLevel: medium
 workload: heavy
 mutates: write

@@ -5,7 +5,7 @@ description: >-
 runtime: external
 harness: codex-cli
 command: codex exec --sandbox read-only --skip-git-repo-check
-model: gpt-6-astra
+model: gpt-6.1-sol
 thinkingLevel: high
 workload: heavy
 mutates: read

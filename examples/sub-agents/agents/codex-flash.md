@@ -5,8 +5,8 @@ description: >-
 runtime: external
 harness: codex-cli
 command: codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check
-model: gpt-5.6-luna
-thinkingLevel: medium
+model: gpt-6-luna
+thinkingLevel: high
 workload: heavy
 mutates: write
 maxWallTimeSec: 3600
