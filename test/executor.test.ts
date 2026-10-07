@@ -40,7 +40,7 @@ describe("executor", () => {
 		const hostExecutor = createExecutor();
 		let caught: unknown;
 		try {
-			await hostExecutor.exec("yes | head -c 200000; sleep 1", { timeout: 0.05 });
+			await hostExecutor.exec("yes | head -c 200000; sleep 1", { timeout: 0.5 });
 		} catch (error) {
 			caught = error;
 		}

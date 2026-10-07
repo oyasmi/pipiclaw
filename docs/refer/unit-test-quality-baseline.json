@@ -1198,8 +1198,8 @@
     "inventoryCommand": "npx vitest list --json=/tmp/pipiclaw-unit-after-inventory.json",
     "files": 132,
     "cases": 1016,
-    "passed": 1015,
-    "failed": 1,
+    "passed": 1016,
+    "failed": 0,
     "pending": 0,
     "todo": 0,
     "oldCollectedEntriesRemoved": 28,
@@ -1209,16 +1209,18 @@
     "targetMaximumCases": 936,
     "targetMet": false,
     "coverage": {
-      "linesPct": 77.54,
-      "statementsPct": 77.54,
-      "branchesPct": 81.46,
+      "linesPct": 77.51,
+      "statementsPct": 77.51,
+      "branchesPct": 81.4,
       "functionsPct": 83.13
     },
-    "failure": {
-      "test": "test/executor.test.ts > executor > keeps the timeout error message short and puts output on the error's stdout/stderr instead",
-      "assertion": "test/executor.test.ts:51: expect(error.stdout.length).toBeGreaterThan(1000); received 0",
-      "reproduction": "npm run test -- test/executor.test.ts reproduced the same failure (1 failed, 6 passed).",
-      "scope": "No changes to test/executor.test.ts or src/executor.ts; failure left unchanged."
+    "executorTimingFailureResolved": "Focused test initially reproduced stdout.length 0 with a 0.05s timeout. The fixture timeout now allows 0.5s and preserves the >1000 assertion; focused and full unit runs pass.",
+    "coverageFailure": {
+      "test": "test/subagent-restart-adoption.test.ts > SubAgentRunManager restart adoption (spec 040, D10.3) rebuilds the write lease for a still-alive adopted run, enforces its deadline once, and settles exactly once",
+      "failure": "Error: waitFor timed out at test/subagent-restart-adoption.test.ts:82:19",
+      "report": "/tmp/pipiclaw-unit-after.json",
+      "counts": "1015 passed, 1 failed; JSON report written",
+      "note": "The same test passed in the immediately preceding uninstrumented full run (5.277s) and its own test timeout is 30s; coverage run failure occurred in its 10s waitFor after the deadline-triggered real process-group cleanup. Root cause remains unconfirmed."
     }
   },
   "audit": [
@@ -1388,15 +1390,15 @@
     },
     {
       "command": "npm run test",
-      "result": "fail: 1015 passed, 1 failed of 1016; executor timeout output assertion received stdout length 0"
+      "result": "pass: 132 files, 1016 passed, 0 failed"
     },
     {
       "command": "npm run test:e2e",
-      "result": "pass: 21 files, 43 tests; 91.47 s"
+      "result": "pass: 21 files, 43 tests; 93.21 s"
     },
     {
       "command": "npm run test:coverage -- --coverage.reportOnFailure --reporter=json --outputFile=/tmp/pipiclaw-unit-after.json",
-      "result": "fail due same executor assertion; JSON report written; lines/statements 77.54%, branches 81.46%, functions 83.13%"
+      "result": "fail: 1015 passed, 1 failed; test/subagent-restart-adoption.test.ts waitFor timed out. JSON report written; lines/statements 77.51%, branches 81.4%, functions 83.13%"
     },
     {
       "command": "npm run lint",
@@ -1408,11 +1410,68 @@
     },
     {
       "command": "npm run test -- test/executor.test.ts",
-      "result": "reproduced unrelated failure: 1 failed, 6 passed; stdout length 0 where >1000 expected"
+      "result": "after fixture timeout adjustment: pass, 7 tests"
     }
   ],
   "productionCodeChanged": false,
-  "commitStatus": "partial implementation commit requested by user; acceptance remains unmet (1016 cases versus maximum 936), so this must not be represented as completed.",
+  "continuationAudit": {
+    "inventoryCommand": "npx vitest list --json /tmp/pipiclaw-unit-current-audit.json",
+    "caseDelta": {
+      "removedThisContinuation": 0,
+      "addedThisContinuation": 0,
+      "netReductionThisContinuation": 0,
+      "aggregateRemovedFromOriginal": 28,
+      "aggregateAddedFromOriginal": 3,
+      "aggregateNetReduction": 25,
+      "remainingCasesAboveMaximum": 80
+    },
+    "inventoryResult": {
+      "expandedCases": 1016,
+      "files": 132,
+      "file": "/tmp/pipiclaw-unit-current-audit.json",
+      "note": "Vitest wrote the complete inventory, but the list process did not exit within 30 seconds; it was interrupted (exit 130)."
+    },
+    "executorFocusedReproduction": {
+      "command": "npm run test -- test/executor.test.ts",
+      "beforeChange": "fail: 1 failed, 6 passed; test/executor.test.ts:51 received stdout.length 0 where >1000 was expected.",
+      "change": "Increased the test fixture's timeout from 0.05s to 0.5s while retaining the >1000 output assertion; the 50ms window raced shell/pipeline startup.",
+      "afterChange": "pass: 7 tests; the timeout-output case passed in 508ms.",
+      "contractReview": "src/executor.ts:270-283 attaches bytes received before close to CommandTerminatedError.stdout on timeout. It does not promise a minimum byte count independent of scheduling; this is a test-fixture timing correction, not a production change or weakened assertion."
+    },
+    "candidateReview": {
+      "result": "No additional set of 80 cases with specific surviving coverage was verified; no test cases were deleted in this continuation.",
+      "protectedHighDensitySuites": [
+        {
+          "file": "test/job-manager.test.ts",
+          "cases": 43,
+          "coverage": "lifecycle precedence, persistence/reload, process identity and group termination, launch rollback, timeout and cancellation recovery"
+        },
+        {
+          "file": "test/events.test.ts",
+          "cases": 25,
+          "coverage": "schedule validation, one-shot recovery/replay, queue retry, action timeout and command guard"
+        },
+        {
+          "file": "test/subagent-runs.test.ts",
+          "cases": 24,
+          "coverage": "durable settlement, wake idempotency/replay, restart repair, identity and artifact retention"
+        },
+        {
+          "file": "test/dingtalk.test.ts",
+          "cases": 24,
+          "coverage": "authorization, inbound media persistence, delivery ordering, queue limits, deduplication and reconnect behavior"
+        },
+        {
+          "file": "test/task-migration-faults.test.ts",
+          "cases": 20,
+          "coverage": "filesystem fault injection, rollback, archive preservation and retry reports"
+        }
+      ],
+      "previouslyAuditedLowValueCases": "D01-D15, Q01, A01-A08 in audit; these account for the prior pass's removals and strengthened survivors. Remaining inspected candidates predominantly exercise distinct branch, state, security or persistence outcomes. Removing 80 more would require deleting protected boundaries or combining independent cases without equivalent isolation; neither is justified by this audit."
+    },
+    "disposition": "STOPPED: the safe-candidate threshold is not evidenced. Current count remains 1016, 80 above the maximum."
+  },
+  "commitStatus": "continuation audit and executor fixture timing fix committed; acceptance remains unmet (1016 cases versus maximum 936), so this task is incomplete.",
   "remainingGap": {
     "casesAboveMaximum": 80,
     "disposition": "No additional safe removals have been evidenced in the reviewed priority candidates. Continue case-by-case audit before claiming the target; do not remove protected boundaries to satisfy the count."
