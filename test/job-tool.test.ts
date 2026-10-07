@@ -35,11 +35,6 @@ describe("job tool", () => {
 		expect(text).toContain("[j1] build — running");
 	});
 
-	it("reports an empty job list", async () => {
-		const tool = createJobTool({ jobManager: stubManager({ list: async () => [] }) });
-		expect(await runText(tool, { op: "list" })).toContain("No background jobs");
-	});
-
 	it("shows finished job output and still-running jobs on poll", async () => {
 		const tool = createJobTool({
 			jobManager: stubManager({
@@ -70,10 +65,5 @@ describe("job tool", () => {
 	it("requires ids for cancel", async () => {
 		const tool = createJobTool({ jobManager: stubManager({}) });
 		await expect(runText(tool, { op: "cancel" })).rejects.toThrow(/requires at least one job id/);
-	});
-
-	it("reports when there are no jobs to poll", async () => {
-		const tool = createJobTool({ jobManager: stubManager({ poll: async () => [] }) });
-		expect(await runText(tool, { op: "poll" })).toContain("No matching running jobs");
 	});
 });

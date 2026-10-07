@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { readProcessStartTime } from "../src/shared/host-process.js";
 import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
@@ -34,14 +34,54 @@ function spawnAndWaitExit(): Promise<number> {
  */
 
 const createTempWorkspace = useTempDirs("pipiclaw-subagent-restart-adoption-");
+const managers = new Set<SubAgentRunManager>();
+const childGroups = new Set<number>();
+const leases: Array<{ leaseKey?: string; runId: string }> = [];
+
+function createManager(
+	channelId: string,
+	options: ConstructorParameters<typeof SubAgentRunManager>[1],
+): SubAgentRunManager {
+	const manager = new SubAgentRunManager(channelId, options);
+	managers.add(manager);
+	return manager;
+}
+
+function claimWorkspaceLease(options: Parameters<typeof acquireWorkspaceLease>[0]) {
+	const result = acquireWorkspaceLease(options);
+	if (result.ok) leases.push({ leaseKey: result.leaseKey, runId: options.runId });
+	return result;
+}
+
+afterEach(async () => {
+	for (const manager of managers) manager.stop();
+	managers.clear();
+	for (const { leaseKey, runId } of leases.splice(0)) releaseWorkspaceLease(leaseKey, runId);
+	for (const pid of childGroups) {
+		try {
+			process.kill(-pid, "SIGKILL");
+		} catch {
+			// The child group may already have exited or been killed by the tested timeout.
+		}
+	}
+	childGroups.clear();
+	await resetTaskLogAppenders();
+});
 
 function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5000): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const start = Date.now();
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		const tick = async () => {
-			if (await predicate()) return resolve();
-			if (Date.now() - start > timeoutMs) return reject(new Error("waitFor timed out"));
-			setTimeout(tick, 20);
+			if (await predicate()) {
+				if (timer) clearTimeout(timer);
+				return resolve();
+			}
+			if (Date.now() - start > timeoutMs) {
+				if (timer) clearTimeout(timer);
+				return reject(new Error("waitFor timed out"));
+			}
+			timer = setTimeout(tick, 20);
 		};
 		void tick();
 	});
@@ -57,21 +97,23 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 
 		// A long-lived detached process that writes a marker file after 1s if left alone.
 		const marker = join(workspaceDir, "late-write.txt");
+		const ready = join(workspaceDir, "ready.txt");
 		const script = join(workspaceDir, "leader.cjs");
 		writeFileSync(
 			script,
-			`setTimeout(()=>require("node:fs").writeFileSync(${JSON.stringify(marker)},"late"),1000);setInterval(()=>{},1000);`,
+			`require("node:fs").writeFileSync(${JSON.stringify(ready)},"ready");setTimeout(()=>require("node:fs").writeFileSync(${JSON.stringify(marker)},"late"),1000);setInterval(()=>{},1000);`,
 		);
 		const child = spawn(process.execPath, [script], { detached: true, stdio: "ignore" });
 		child.unref();
-		await waitFor(() => child.pid !== undefined);
+		await waitFor(() => child.pid !== undefined && existsSync(ready));
 		const pid = child.pid!;
+		childGroups.add(pid);
 		const pidStartedAt = await readProcessStartTime(pid);
 
 		// "First daemon": registers the run, takes its write lease, records the launch — then
 		// vanishes without ever calling settle(), exactly like a daemon that dies mid-run.
-		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
-		const lease = acquireWorkspaceLease({ runId: "run-adopt", channelId, workingDirectory: workspaceDir });
+		const firstDaemon = createManager(channelId, { stateDir });
+		const lease = claimWorkspaceLease({ runId: "run-adopt", channelId, workingDirectory: workspaceDir });
 		expect(lease.ok).toBe(true);
 		await firstDaemon.register({
 			runId: "run-adopt",
@@ -97,28 +139,30 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		// Simulate the restart: the lease map is process-local (workspace-lease.ts persists
 		// nothing), so a fresh process starts holding none — this is exactly what restore() must
 		// rebuild from the persisted record alone.
+		firstDaemon.stop();
 		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined, "run-adopt");
 
-		const secondDaemon = new SubAgentRunManager(channelId, { stateDir });
+		const secondDaemon = createManager(channelId, { stateDir });
 		const restoredCount = await secondDaemon.restore();
 		expect(restoredCount).toBe(1);
 		expect(secondDaemon.get("run-adopt")?.status).toBe("running"); // still genuinely alive — left alone
 
 		// The lease is rebuilt: a competing write dispatch to the same workspace is refused.
-		const competing = acquireWorkspaceLease({ runId: "competing", channelId, workingDirectory: workspaceDir });
+		const competing = claimWorkspaceLease({ runId: "competing", channelId, workingDirectory: workspaceDir });
 		expect(competing.ok).toBe(false);
 
 		// A third "daemon" adopts the run shortly before its persisted deadline. It must install one
 		// deadline check, kill the real process, and settle it as a timeout failure without a periodic
 		// poller or falling back to the "no protocol terminal" guess. Simulated the same way as the
 		// first→second transition: release the second daemon's process-local lease first.
+		secondDaemon.stop();
 		releaseWorkspaceLease(secondDaemon.get("run-adopt")?.leaseKey, "run-adopt");
 		const recordPath = join(stateDir, channelId, "run-adopt.json");
 		const persisted = JSON.parse(readFileSync(recordPath, "utf-8"));
 		persisted.deadlineAt = Date.now() + 100;
 		writeFileSync(recordPath, `${JSON.stringify(persisted)}\n`, "utf-8");
 		const dispatched: unknown[] = [];
-		const swept = new SubAgentRunManager(channelId, {
+		const swept = createManager(channelId, {
 			stateDir,
 			dispatch: (event) => {
 				dispatched.push(event);
@@ -141,7 +185,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		expect(dispatched).toHaveLength(1);
 
 		// Another restart must not double-kill or re-announce the already-settled run.
-		const repeated = new SubAgentRunManager(channelId, {
+		const repeated = createManager(channelId, {
 			stateDir,
 			dispatch: (event) => {
 				dispatched.push(event);
@@ -152,7 +196,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		expect(dispatched).toHaveLength(1);
 
 		// The lease was released once the run went terminal.
-		const afterLease = acquireWorkspaceLease({ runId: "after", channelId, workingDirectory: workspaceDir });
+		const afterLease = claimWorkspaceLease({ runId: "after", channelId, workingDirectory: workspaceDir });
 		expect(afterLease.ok).toBe(true);
 		if (afterLease.ok) releaseWorkspaceLease(afterLease.leaseKey, "after");
 		// killProcessGroup's spec-042-D8 flush grace (5s) dominates this test's wall time; the
@@ -166,8 +210,8 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-conflict");
 		mkdirSync(artifactDir, { recursive: true });
 
-		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
-		const originalLease = acquireWorkspaceLease({ runId: "run-conflict", channelId, workingDirectory: workspaceDir });
+		const firstDaemon = createManager(channelId, { stateDir });
+		const originalLease = claimWorkspaceLease({ runId: "run-conflict", channelId, workingDirectory: workspaceDir });
 		expect(originalLease.ok).toBe(true);
 		await firstDaemon.register({
 			runId: "run-conflict",
@@ -191,13 +235,13 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		});
 		releaseWorkspaceLease(originalLease.ok ? originalLease.leaseKey : undefined, "run-conflict");
 
-		const otherLease = acquireWorkspaceLease({
+		const otherLease = claimWorkspaceLease({
 			runId: "other-writer",
 			channelId: "other",
 			workingDirectory: workspaceDir,
 		});
 		expect(otherLease.ok).toBe(true);
-		const secondDaemon = new SubAgentRunManager(channelId, { stateDir });
+		const secondDaemon = createManager(channelId, { stateDir });
 		await secondDaemon.restore();
 
 		expect(secondDaemon.get("run-conflict")?.status).toBe("lost");
@@ -215,16 +259,23 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 		const stateDir = join(workspaceDir, "state");
 		const artifactDir = join(workspaceDir, channelId, "subagent-artifacts", "run-pid-mismatch");
 		mkdirSync(artifactDir, { recursive: true });
-		const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+		const readyPath = join(workspaceDir, "pid-mismatch-ready.txt");
+		const childScript = join(workspaceDir, "pid-mismatch.cjs");
+		writeFileSync(
+			childScript,
+			`require("node:fs").writeFileSync(${JSON.stringify(readyPath)},"ready");setInterval(()=>{},1000);`,
+		);
+		const child = spawn(process.execPath, [childScript], {
 			detached: true,
 			stdio: "ignore",
 		});
 		child.unref();
-		await waitFor(() => child.pid !== undefined);
+		await waitFor(() => child.pid !== undefined && existsSync(readyPath));
 		const pid = child.pid!;
+		childGroups.add(pid);
 
-		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
-		const originalLease = acquireWorkspaceLease({
+		const firstDaemon = createManager(channelId, { stateDir });
+		const originalLease = claimWorkspaceLease({
 			runId: "run-pid-mismatch",
 			channelId,
 			workingDirectory: workspaceDir,
@@ -253,15 +304,16 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 				deadlineAt: Date.now() + 60_000,
 			});
 			releaseWorkspaceLease(originalLease.ok ? originalLease.leaseKey : undefined, "run-pid-mismatch");
+			firstDaemon.stop();
 
-			const otherLease = acquireWorkspaceLease({
+			const otherLease = claimWorkspaceLease({
 				runId: "other-writer-mismatch",
 				channelId: "other-mismatch",
 				workingDirectory: workspaceDir,
 			});
 			expect(otherLease.ok).toBe(true);
 			try {
-				const secondDaemon = new SubAgentRunManager(channelId, { stateDir });
+				const secondDaemon = createManager(channelId, { stateDir });
 				await secondDaemon.restore();
 
 				const record = secondDaemon.get("run-pid-mismatch");
@@ -271,7 +323,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 				// restore must not signal the live replacement while resolving the lease conflict.
 				expect(() => process.kill(pid, 0)).not.toThrow();
 				expect(
-					acquireWorkspaceLease({
+					claimWorkspaceLease({
 						runId: "third-writer-mismatch",
 						channelId: "third-mismatch",
 						workingDirectory: workspaceDir,
@@ -317,7 +369,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			].join("\n")}\n`,
 		);
 
-		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
+		const firstDaemon = createManager(channelId, { stateDir });
 		await firstDaemon.register({
 			runId: "run-usage",
 			channelId,
@@ -338,9 +390,10 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			maxWallTimeSec: 60,
 			processStartedAt: Date.now(),
 		});
+		firstDaemon.stop();
 
 		const dispatched: unknown[] = [];
-		const secondDaemon = new SubAgentRunManager(channelId, {
+		const secondDaemon = createManager(channelId, {
 			stateDir,
 			dispatch: (event) => {
 				dispatched.push(event);
@@ -391,8 +444,8 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			].join("\n")}\n`,
 		);
 
-		const firstDaemon = new SubAgentRunManager(channelId, { stateDir });
-		const lease = acquireWorkspaceLease({ runId: "run-verify", channelId, workingDirectory: projectDir });
+		const firstDaemon = createManager(channelId, { stateDir });
+		const lease = claimWorkspaceLease({ runId: "run-verify", channelId, workingDirectory: projectDir });
 		expect(lease.ok).toBe(true);
 		await firstDaemon.register({
 			runId: "run-verify",
@@ -420,8 +473,9 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			channelDir,
 		});
 
+		firstDaemon.stop();
 		releaseWorkspaceLease(lease.ok ? lease.leaseKey : undefined, "run-verify");
-		const secondDaemon = new SubAgentRunManager(channelId, { stateDir });
+		const secondDaemon = createManager(channelId, { stateDir });
 		await secondDaemon.restore();
 
 		const record = secondDaemon.get("run-verify");

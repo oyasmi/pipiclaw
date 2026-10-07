@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileStore } from "../src/file-store.js";
 import { DEFAULT_SECURITY_CONFIG } from "../src/security/config.js";
 import { createEditTool } from "../src/tools/edit.js";
@@ -250,33 +250,15 @@ describe("edit tool", () => {
 			writeFileSync(path, original);
 
 			const tool = makeTool();
+			const streamReplace = vi.spyOn(fileStore, "replaceViaTemp");
 			await tool.execute("call", { path, oldText: "aaa", newText: "Q", replaceAll: true });
 
 			// Reference: non-overlapping left-to-right replace (String.replaceAll string semantics).
-			expect(readFileSync(path, "utf-8")).toBe(original.replaceAll("aaa", "Q"));
-		});
-
-		it("replaces all occurrences on the streaming path", async () => {
-			const dir = mkdtempSync(join(tmpdir(), "pipiclaw-edit-test-"));
-			dirs.push(dir);
-			const path = join(dir, "big-repeat.txt");
-			const filler = "y".repeat(1024 * 1024);
-			const parts = [filler, "NEEDLE\n", filler, "NEEDLE\n", filler];
-			writeFileSync(path, parts.join(""));
-
-			const tool = makeTool();
-			const result = await tool.execute("call", {
-				path,
-				oldText: "NEEDLE",
-				newText: "FOUND",
-				replaceAll: true,
-			});
-
-			const content = readFileSync(path, "utf-8");
-			expect(content.match(/NEEDLE/g)).toBeNull();
-			expect(content.match(/FOUND/g)?.length).toBe(2);
-			const text = result.content[0].type === "text" ? result.content[0].text : "";
-			expect(text).toContain("Replaced 2 occurrences in");
+			const replaced = readFileSync(path, "utf-8");
+			expect(replaced).toBe(original.replaceAll("aaa", "Q"));
+			expect(replaced.match(/Q/g)).toHaveLength(2);
+			expect(streamReplace).toHaveBeenCalledOnce();
+			streamReplace.mockRestore();
 		});
 	});
 

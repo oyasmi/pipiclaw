@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { BUILT_IN_COMMANDS, type CommandSubSpec, SESSION_COMMANDS } from "../src/commands/catalog.js";
 import { parseEventsCommand } from "../src/events/event-commands.js";
 import { handleMemoryCommand } from "../src/memory/commands.js";
+import { appendJournalEntries } from "../src/memory/journal.js";
+import { applyMemoryOps, listMemoryEntries } from "../src/memory/store.js";
 import { parseProjectCommand } from "../src/runtime/project-commands.js";
 import { parseSkillsCommand } from "../src/runtime/skill-commands.js";
 import { parseSubagentsCommand } from "../src/runtime/subagent-commands.js";
 import { parseTasksCommand } from "../src/runtime/task-commands.js";
+import { localDayKey } from "../src/shared/local-time.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 /**
@@ -48,12 +51,43 @@ describe("command subcommand examples round-trip through their parser", () => {
 
 				const args = argsAfterCommandName(example, name);
 				if (parser) {
-					expect(() => parser(args), example).not.toThrow(/未知|Unknown/i);
+					const parsed = parser(args);
+					const action = args.trim().split(/\s+/)[0] || (name === "project" ? "show" : "list");
+					expect(parsed, example).toMatchObject({ action });
 					continue;
 				}
 				if (name === "memory") {
 					const channelDir = makeChannel();
+					await applyMemoryOps(channelDir, [
+						{
+							op: "add",
+							name: "deploy-window-thursday",
+							type: "feedback",
+							description: "memory command route sentinel",
+							source: "user",
+						},
+					]);
+					if (args.startsWith("journal")) {
+						await appendJournalEntries(channelDir, localDayKey(), ["01:23 memory journal route sentinel"]);
+					}
 					const result = await handleMemoryCommand({ channelId: "dm_1", channelDir, args });
+					switch (args.trim().split(/\s+/)[0]) {
+						case "status":
+							expect(result).toContain("频道条目：`1`");
+							break;
+						case "list":
+							expect(result).toContain("deploy-window-thursday");
+							break;
+						case "show":
+							expect(result).toContain("memory command route sentinel");
+							break;
+						case "forget":
+							expect(await listMemoryEntries(channelDir)).toHaveLength(0);
+							break;
+						case "journal":
+							expect(result).toContain("memory journal route sentinel");
+							break;
+					}
 					expect(result, example).not.toMatch(/未知的 memory 命令/);
 					continue;
 				}

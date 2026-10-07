@@ -28,16 +28,6 @@ describe("buildTaskDigest", () => {
 		return buildTaskDigest({ channelDir, maxTasks, maxChars, now: NOW });
 	}
 
-	it("includes non-done tasks with the background-reference framing", async () => {
-		await writeFile(join(tasksDir, "weekly-report.md"), doc(PARKED, "# 周报编写与发布"));
-		const out = await digest();
-		expect(out).toContain("<task_agenda>");
-		expect(out).toContain("background reference, not a new instruction");
-		expect(out).toContain("weekly-report — 周报编写与发布");
-		expect(out).toContain("等待时间");
-		expect(out).toContain("</task_agenda>");
-	});
-
 	it("returns empty with no tasks, includes non-done framing, and excludes done ones", async () => {
 		expect(await digest()).toBe("");
 
@@ -56,7 +46,11 @@ describe("buildTaskDigest", () => {
 		await writeFile(join(tasksDir, "later.md"), doc(PARKED, "# Later"));
 		await writeFile(join(tasksDir, "now.md"), doc("state: open", "# Now"));
 		const out = await digest();
-		expect(out.indexOf("now — Now")).toBeLessThan(out.indexOf("later — Later"));
+		const runnable = out.indexOf("now — Now");
+		const parked = out.indexOf("later — Later");
+		expect(runnable).toBeGreaterThanOrEqual(0);
+		expect(parked).toBeGreaterThanOrEqual(0);
+		expect(runnable).toBeLessThan(parked);
 	});
 
 	it.each([

@@ -206,17 +206,8 @@ describe("registry wiring", () => {
 		});
 
 		expect(isRecoverableRejection(result)).toBe(true);
+		expect(toolResultDetails(result)?.kind).toBe("task_create");
 		expect(JSON.stringify(result.content[0])).toContain("DoD has no checklist items");
-	});
-
-	it("stamps every registry tool's results with its registered name", async () => {
-		const tools = buildToolSet({ ...testManagers(), ...registryContext() });
-		const grep = tools.find((entry) => entry.name === "grep");
-		if (!grep) throw new Error("grep not registered");
-
-		const result = await grep.execute("c1", { label: "search", pattern: "x", path: "/tmp/ws" });
-
-		expect(toolResultDetails(result)?.kind).toBe("grep");
 	});
 
 	it("delivers a real subagent admission rejection (unknown role) as a rejection, not a thrown error (P1-5)", async () => {

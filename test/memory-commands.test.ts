@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { handleMemoryCommand } from "../src/memory/commands.js";
 import { appendJournalEntries } from "../src/memory/journal.js";
 import { updateMemoryMaintenanceState } from "../src/memory/maintenance-state.js";
@@ -12,13 +14,6 @@ async function run(channelDir: string, args: string, appHomeDir?: string) {
 }
 
 describe("/memory status", () => {
-	it("reports empty state on a fresh channel", async () => {
-		const channelDir = createTempDir();
-		const text = await run(channelDir, "status");
-		expect(text).toContain("频道条目：`0`");
-		expect(text).toContain("试用期条目：`0`");
-	});
-
 	it("counts by type, probation, malformed files, and last reflect", async () => {
 		const channelDir = createTempDir();
 		const appHomeDir = createTempDir();
@@ -47,6 +42,19 @@ describe("/memory status", () => {
 		expect(text).toContain("试用期条目：`1`（最早到期 `2026-10-04`）");
 		expect(text).toContain("2026-09-04T00:00:00.000+08:00");
 		expect(text).toContain("entry-7");
+	});
+
+	it("counts malformed files while keeping valid entries available", async () => {
+		const channelDir = createTempDir();
+		await applyMemoryOps(channelDir, [{ op: "add", name: "valid", description: "usable fact", source: "user" }]);
+		await mkdir(join(channelDir, "memory"), { recursive: true });
+		await writeFile(join(channelDir, "memory", "broken.md"), "not frontmatter\n", "utf-8");
+
+		const status = await run(channelDir, "status");
+		const list = await run(channelDir, "list");
+		expect(status).toContain("frontmatter 解析异常的文件：`1`");
+		expect(status).toContain("broken");
+		expect(list).toContain("`valid`");
 	});
 });
 
@@ -113,18 +121,26 @@ describe("/memory forget", () => {
 		const channelDir = createTempDir();
 		const result = await run(channelDir, "forget ghost");
 		expect(result).toContain("未找到记忆");
+		expect(await listMemoryEntries(channelDir)).toEqual([]);
 	});
 });
 
 describe("/memory journal", () => {
 	it("shows today by default and an explicit date, with a hint when empty", async () => {
 		const channelDir = createTempDir();
-		await appendJournalEntries(channelDir, "2026-09-04", ["01:00 did a thing"]);
-		const today = await run(channelDir, "journal");
-		// Whichever day "today" resolves to in this environment, an explicit date must work.
-		const explicit = await run(channelDir, "journal 2026-09-04");
-		expect(explicit).toContain("did a thing");
-		expect(typeof today).toBe("string");
+		const todayKey = "2026-09-04";
+		await appendJournalEntries(channelDir, todayKey, ["01:00 today sentinel"]);
+		await appendJournalEntries(channelDir, "2026-09-03", ["22:00 other-day sentinel"]);
+		vi.useFakeTimers({ now: new Date("2026-09-04T12:00:00+08:00") });
+		try {
+			const today = await run(channelDir, "journal");
+			const explicit = await run(channelDir, "journal 2026-09-03");
+			expect(today).toContain("today sentinel");
+			expect(today).not.toContain("other-day sentinel");
+			expect(explicit).toContain("other-day sentinel");
+		} finally {
+			vi.useRealTimers();
+		}
 
 		const empty = await run(channelDir, "journal 2020-01-01");
 		expect(empty).toContain("没有记录");

@@ -98,6 +98,7 @@ describe("commitActiveSessionRef", () => {
 
 		const ref = readRef(channelDir);
 		expect(ref).toMatchObject({ version: 1, file: "next.jsonl", sessionId: manager.getSessionId() });
+		expect(resolveActiveSessionFile(channelDir)).toBe("next.jsonl");
 		expect(typeof ref.updatedAt).toBe("string");
 	});
 
@@ -112,14 +113,6 @@ describe("commitActiveSessionRef", () => {
 		await expect(commitActiveSessionRef(channelDir, handle)).rejects.toThrow(/no backing file/);
 
 		expect(existsSync(getActiveSessionRefPath(channelDir))).toBe(false);
-	});
-
-	it("round-trips through resolveActiveSessionFile after commit", async () => {
-		const channelDir = makeTempDir();
-		const manager = SessionManager.open(join(channelDir, "next.jsonl"), channelDir);
-		await commitActiveSessionRef(channelDir, manager);
-
-		expect(resolveActiveSessionFile(channelDir)).toBe("next.jsonl");
 	});
 });
 

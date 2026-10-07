@@ -84,15 +84,6 @@ describe("FileStore", () => {
 		expect(statSync(path).mode & 0o777).toBe(0o755);
 	});
 
-	it("writeAtomic without preserveMode does not force a specific mode", async () => {
-		const dir = tempDir();
-		const path = join(dir, "fresh.txt");
-
-		await fileStore.writeAtomic(path, "content");
-
-		expect(readFileSync(path, "utf-8")).toBe("content");
-	});
-
 	it("replaceViaTemp renames the produced content over the target atomically", async () => {
 		const dir = tempDir();
 		const path = join(dir, "target.txt");

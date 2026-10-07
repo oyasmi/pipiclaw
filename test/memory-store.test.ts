@@ -10,7 +10,6 @@ import {
 	isValidMemoryName,
 	listMemoryEntries,
 	parseMemoryFile,
-	rebuildMemoryIndex,
 	renderMemoryIndex,
 	serializeMemoryEntry,
 	slugifyMemoryName,
@@ -86,15 +85,6 @@ describe("memory store — frontmatter round trip", () => {
 		expect(parsed.created).toBe("2026-02-02");
 		expect(parsed.body).toBe("More detail here.");
 	});
-
-	it("collapses a multi-line description to one line", () => {
-		const parsed = parseMemoryFile(
-			"x",
-			"---\ndescription: line one\ntype: user\nsource: user\ncreated: 2026-09-01\n---\n",
-			"2026-01-01",
-		);
-		expect(parsed.description).toBe("line one");
-	});
 });
 
 describe("memory store — index generation", () => {
@@ -116,17 +106,16 @@ describe("memory store — index generation", () => {
 			"---\ndescription: Thursday window\ntype: project\nsource: agent\ncreated: 2026-09-01\n---\n\nlong body\n",
 		);
 		const index = renderMemoryIndex(await listMemoryEntries(channelDir));
-		expect(index.indexOf("## user")).toBeLessThan(index.indexOf("## feedback"));
-		expect(index.indexOf("## feedback")).toBeLessThan(index.indexOf("## project"));
+		const userHeading = index.indexOf("## user");
+		const feedbackHeading = index.indexOf("## feedback");
+		const projectHeading = index.indexOf("## project");
+		expect(userHeading).toBeGreaterThanOrEqual(0);
+		expect(feedbackHeading).toBeGreaterThanOrEqual(0);
+		expect(projectHeading).toBeGreaterThanOrEqual(0);
+		expect(userHeading).toBeLessThan(feedbackHeading);
+		expect(feedbackHeading).toBeLessThan(projectHeading);
 		expect(index).toContain("- deploy — Thursday window (+)");
 		expect(index).toContain("- a-lang — speak Chinese");
-	});
-
-	it("rebuilds MEMORY.md from the files", async () => {
-		const channelDir = createTempDir();
-		await seed(channelDir, "x", "---\ndescription: fact x\ntype: project\nsource: agent\ncreated: 2026-09-01\n---\n");
-		await rebuildMemoryIndex(channelDir);
-		expect(await readFile(getChannelMemoryIndexPath(channelDir), "utf-8")).toContain("- x — fact x");
 	});
 });
 
@@ -222,12 +211,9 @@ describe("memory store — applyMemoryOps", () => {
 		expect(userAdd.added).toEqual(["back"]);
 		expect(userAdd.skippedTombstone).toBe(0);
 
-		// The tombstone is now revoked, so even a later background (agent-source) add is no longer blocked.
-		await applyMemoryOps(channelDir, [{ op: "delete", name: "back", reason: "cleanup" }]);
-		const agentReadd = await applyMemoryOps(channelDir, [
-			{ op: "add", name: "back2", description: "obsolete fact", source: "agent" },
-		]);
-		expect(agentReadd.skippedTombstone).toBe(1); // the fresh delete re-tombstoned it
+		// The explicit save revokes the tombstone for later background reflection too.
+		const { isDescriptionTombstoned } = await import("../src/memory/store.js");
+		expect(await isDescriptionTombstoned(channelDir, "obsolete fact")).toBe(false);
 	});
 
 	it("rejects a description that looks like a secret", async () => {

@@ -11,28 +11,6 @@ function createChannelDir(): string {
 }
 
 describe("memory review log", () => {
-	it("appends JSONL entries and creates the channel directory", async () => {
-		const channelDir = createChannelDir();
-
-		await appendMemoryReviewLog(channelDir, {
-			timestamp: "2026-04-19T00:00:00.000Z",
-			channelId: "dm_123",
-			reason: "reflect",
-			skipped: [{ target: "HISTORY.md" }],
-		});
-		await appendMemoryReviewLog(channelDir, {
-			timestamp: "2026-04-19T00:01:00.000Z",
-			channelId: "dm_123",
-			reason: "reflect",
-			actions: [{ target: "MEMORY.md" }],
-		});
-
-		const lines = readFileSync(join(channelDir, "memory-review.jsonl"), "utf-8").trim().split("\n");
-		expect(lines).toHaveLength(2);
-		expect(JSON.parse(lines[0]!).reason).toBe("reflect");
-		expect(JSON.parse(lines[1]!).actions[0].target).toBe("MEMORY.md");
-	});
-
 	it("serializes concurrent appends without corrupting JSONL", async () => {
 		const channelDir = createChannelDir();
 
@@ -49,9 +27,9 @@ describe("memory review log", () => {
 
 		const lines = readFileSync(join(channelDir, "memory-review.jsonl"), "utf-8").trim().split("\n");
 		expect(lines).toHaveLength(8);
-		for (const line of lines) {
-			expect(() => JSON.parse(line)).not.toThrow();
-		}
+		const entries = lines.map((line) => JSON.parse(line) as { timestamp: string; actions: Array<{ index: number }> });
+		expect(entries.map((entry) => entry.actions[0]?.index).sort()).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+		expect(new Set(entries.map((entry) => entry.timestamp)).size).toBe(8);
 	});
 
 	it("deduplicates consecutive identical gate skips", async () => {

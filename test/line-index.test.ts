@@ -95,14 +95,4 @@ describe("resolveLineOffset", () => {
 		expect(result.offset).toBeDefined();
 		expect(result.knownLines).toBe(5);
 	});
-
-	it("reports zero known lines for an empty file, with no resolvable line 1", async () => {
-		// `read.ts` special-cases size === 0 itself and never calls this for an empty file; this
-		// just pins the index's own behavior so it never invents a line out of nothing.
-		const path = tempFile("");
-		const stat = (await fileStore.stat(path))!;
-
-		const line1 = await resolveLineOffset(fileStore, path, stat, 1);
-		expect(line1).toEqual({ offset: undefined, eof: true, knownLines: 0 });
-	});
 });

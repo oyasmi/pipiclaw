@@ -328,12 +328,6 @@ describe("manageEvent delete", () => {
 	});
 
 	describe("action: list", () => {
-		it("returns an empty notice when the channel has no events", async () => {
-			const result = await manageEvent(opts(), { action: "list" });
-			expect(result).toMatchObject({ action: "list", count: 0, names: [] });
-			expect(result.notice).toContain("暂无");
-		});
-
 		it("lists only this channel's events, one line each", async () => {
 			await manageEvent(opts(), { action: "create", name: "mine-periodic", definition: validPeriodic });
 			await manageEvent(opts(), {

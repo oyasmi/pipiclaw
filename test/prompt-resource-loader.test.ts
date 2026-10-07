@@ -14,6 +14,7 @@ import { loadWorkspacePromptResources } from "../src/agent/prompt/resources.js";
 import type { PromptBuildContext } from "../src/agent/prompt/types.js";
 import { loadPipiclawSkills, resolvePipiclawSkills } from "../src/agent/workspace-resources.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
+import { countPromptUnits } from "../src/shared/prompt-units.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-loader-");
@@ -103,7 +104,9 @@ describe("pi resource-loader seam", () => {
 		const { build: first, loader } = await loadResources(workspaceDir, channelDir);
 
 		await loader.reload();
-		expect(buildPrompt(workspaceDir).fingerprint).toBe(first.fingerprint);
+		const unchanged = buildPrompt(workspaceDir);
+		expect(unchanged.text).toBe(first.text);
+		expect(unchanged.fingerprint).toBe(first.fingerprint);
 
 		writeFileSync(join(workspaceDir, "SOUL.md"), "Answer in English.");
 		const changed = buildPrompt(workspaceDir);
@@ -134,6 +137,9 @@ describe("pi resource-loader seam", () => {
 		expect(first?.systemPrompt).toBe(second?.systemPrompt);
 		expect(first?.systemPrompt).toContain("<available_skills>");
 		expect(first?.systemPrompt.trimEnd().endsWith(build.footer.trimEnd())).toBe(true);
+		expect(build.footer).toContain("## Runtime Boundary");
+		expect(build.text).not.toContain("## Runtime Boundary");
+		expect(countPromptUnits(build.footer)).toBeLessThanOrEqual(60);
 		expect(seen).toHaveLength(2);
 	});
 });

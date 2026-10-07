@@ -63,11 +63,10 @@ describe("clipTextByPromptUnits", () => {
 	it("never splits a surrogate pair at the cut point", () => {
 		const supplementary = "𠀀"; // one Han ideograph, two UTF-16 code units, one unit
 		const text = supplementary.repeat(300); // 300 units
-		const result = clipTextByPromptUnits(text, 60, { marker: "|" });
+		const result = clipTextByPromptUnits(text, 62, { marker: "|", maxChars: 126 });
 		expect(result.truncated).toBe(true);
-		// A split surrogate would leave a lone \uD840/\uDC00; the string must round-trip cleanly.
-		expect(result.text).toBe(Array.from(result.text).join(""));
-		expect(result.text).not.toContain("�");
+		expect((result.text as string & { isWellFormed(): boolean }).isWellFormed()).toBe(true);
+		expect(result.text.length).toBeLessThanOrEqual(126);
 	});
 
 	it("keeps both ceilings even when the marker alone would exceed them", () => {

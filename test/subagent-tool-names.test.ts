@@ -9,9 +9,9 @@ describe("sub-agent tool names — single source of truth (batch 3.1)", () => {
 		for (const name of SUBAGENT_TOOL_NAMES) expect(registered.has(name)).toBe(true);
 	});
 
-	it("validateToolNames now accepts `glob`", () => {
-		expect(validateToolNames(["read", "glob"]).error).toBeUndefined();
-		expect(validateToolNames(["read", "glob"]).tools).toEqual(["read", "glob"]);
+	it("validateToolNames accepts the registered allowlist", () => {
+		expect(validateToolNames([...SUBAGENT_TOOL_NAMES]).error).toBeUndefined();
+		expect(validateToolNames([...SUBAGENT_TOOL_NAMES]).tools).toEqual(SUBAGENT_TOOL_NAMES);
 	});
 
 	it("validateToolNames still rejects an unknown tool", () => {

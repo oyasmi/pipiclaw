@@ -104,7 +104,11 @@ describe("startExternalProgressTail", () => {
 			await advance(200_000); // Past both the first-notice delay and the gap, every iteration.
 		}
 
-		expect(labels.length).toBeLessThanOrEqual(6);
+		expect(labels).toHaveLength(6);
+		expect(labels).toEqual(["step 0", "step 1", "step 2", "step 3", "step 4", "step 5"]);
+		writeFileSync(eventsPath, `${codexLine("step 10")}\n`);
+		await advance(200_000);
+		expect(labels).toHaveLength(6);
 		tail.stop();
 	});
 

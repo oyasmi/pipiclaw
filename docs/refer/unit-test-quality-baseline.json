@@ -1,0 +1,1420 @@
+{
+  "schemaVersion": 1,
+  "description": "Exploration baseline plus implementation audit for unit-test-quality-plan.md; target reduction not achieved in this pass.",
+  "date": "2026-10-07",
+  "commit": "699f6543bb42b313cd1cc9095f36f0b13c0aeabb",
+  "packageVersion": "0.9.3",
+  "environment": {
+    "platform": "linux",
+    "node": "v22.21.0",
+    "vitest": "3.2.4",
+    "testTimezone": "Asia/Shanghai"
+  },
+  "command": "npm run test:coverage -- --coverage.reportOnFailure --reporter=json --outputFile=/tmp/pipiclaw-unit-baseline-final.json",
+  "scope": {
+    "config": "vitest.config.ts",
+    "include": [
+      "test/**/*.test.ts"
+    ],
+    "exclude": [
+      "test/e2e/**/*.test.ts",
+      "test/evals/**/*.test.ts"
+    ],
+    "counting": "Vitest expanded collected test cases; not it() declarations or suite count"
+  },
+  "summary": {
+    "files": 132,
+    "cases": 1041,
+    "passed": 1041,
+    "failed": 0,
+    "pending": 0,
+    "todo": 0,
+    "testLines": 25832,
+    "reportSpanMs": 82050.43,
+    "sumCaseDurationMs": 37360.24
+  },
+  "target": {
+    "strictReductionPercent": 10,
+    "minimumNetRemoved": 105,
+    "maximumFinalCases": 936,
+    "preferredFinalCasesApproximately": 920
+  },
+  "coverage": {
+    "lines": {
+      "total": 30155,
+      "covered": 23391,
+      "skipped": 0,
+      "pct": 77.56
+    },
+    "statements": {
+      "total": 30155,
+      "covered": 23391,
+      "skipped": 0,
+      "pct": 77.56
+    },
+    "functions": {
+      "total": 1785,
+      "covered": 1484,
+      "skipped": 0,
+      "pct": 83.13
+    },
+    "branches": {
+      "total": 8365,
+      "covered": 6815,
+      "skipped": 0,
+      "pct": 81.47
+    }
+  },
+  "earlierAttempt": {
+    "inventoryConcurrentWithCoverage": true,
+    "passed": 1040,
+    "failed": 1,
+    "failureFile": "test/subagent-restart-adoption.test.ts",
+    "failureCase": "rebuilds the write lease for a still-alive adopted run, enforces its deadline once, and settles exactly once",
+    "failure": "waitFor timed out",
+    "isolatedRerun": {
+      "cases": 5,
+      "passed": 5,
+      "failed": 0
+    },
+    "rootCauseConfirmed": false
+  },
+  "limitations": [
+    "Timing is one coverage run, not a benchmark. reportSpanMs excludes report generation after the final file.",
+    "Coverage is default unit scope only. No deterministic e2e, typecheck, lint, deadcode, or mutation was run during exploration.",
+    "Deletion candidates are static review findings; no deletion experiment has been performed."
+  ],
+  "slowestCases": [
+    {
+      "file": "test/subagent-restart-adoption.test.ts",
+      "fullName": "SubAgentRunManager restart adoption (spec 040, D10.3) rebuilds the write lease for a still-alive adopted run, enforces its deadline once, and settles exactly once",
+      "durationMs": 5219.08
+    },
+    {
+      "file": "test/memory-reflect.test.ts",
+      "fullName": "reflect — per-run caps relaxes the delete cap to 8 in condense mode",
+      "durationMs": 3263.16
+    },
+    {
+      "file": "test/job-manager.test.ts",
+      "fullName": "ChannelJobManager process identity and group termination (T2-T4) with a real executor rejects a real launch whose spill file cannot be created (read-only tmp)",
+      "durationMs": 2457.44
+    },
+    {
+      "file": "test/models-auth-path.test.ts",
+      "fullName": "auth.json path guardrails (spec 039 §4.2) createModelRuntime rejects a missing authConfigPath",
+      "durationMs": 1617.63
+    },
+    {
+      "file": "test/subagent-external-run.test.ts",
+      "fullName": "launchExternalRun (spec 040, D1/D3/D4) reaps the owned descendant group and releases the write lease on complete",
+      "durationMs": 778.83
+    },
+    {
+      "file": "test/subagent-progress-tail.test.ts",
+      "fullName": "startExternalProgressTail caps at MAX_NOTICES even across a long run with constantly changing labels",
+      "durationMs": 524.63
+    },
+    {
+      "file": "test/subagent-external-run.test.ts",
+      "fullName": "launchExternalRun (spec 040, D1/D3/D4) reaps the owned descendant group and releases the write lease on timeout",
+      "durationMs": 467.43
+    },
+    {
+      "file": "test/subagent-external-run.test.ts",
+      "fullName": "launchExternalRun (spec 040, D1/D3/D4) reaps the owned descendant group and releases the write lease on cancel",
+      "durationMs": 448.99
+    },
+    {
+      "file": "test/edit.test.ts",
+      "fullName": "edit tool streaming path (files over the inline threshold) edits a >8MB file correctly, preserving the tail and file size delta",
+      "durationMs": 440.84
+    },
+    {
+      "file": "test/agent-session-tool-images.test.ts",
+      "fullName": "AgentSession tool-result image normalization preserves mixed multi-image order while normalizing only oversized images",
+      "durationMs": 436.57
+    }
+  ],
+  "testFiles": [
+    {
+      "file": "test/active-session-store.test.ts",
+      "cases": 9,
+      "lines": 143,
+      "passed": 9,
+      "caseDurationMs": 84.89,
+      "sha256": "cdfa72f158330e9f43c3acb77ff15bbf1e1036ecd177b2a37245f5e9c687a632"
+    },
+    {
+      "file": "test/agent-session-tool-images.test.ts",
+      "cases": 7,
+      "lines": 328,
+      "passed": 7,
+      "caseDurationMs": 972.54,
+      "sha256": "a97362cb8ea47b2542f63020352d29ea5cbdf78144c76c99b78f03ca8847cf6d"
+    },
+    {
+      "file": "test/bash.test.ts",
+      "cases": 14,
+      "lines": 304,
+      "passed": 14,
+      "caseDurationMs": 499.13,
+      "sha256": "d6c8f63e07d880dc164529bfb46fbbc4938995a22f3d82aa45bbbae39822d474"
+    },
+    {
+      "file": "test/bootstrap-structured-wake.test.ts",
+      "cases": 6,
+      "lines": 357,
+      "passed": 6,
+      "caseDurationMs": 584.99,
+      "sha256": "7dce8db8ea064734ba5f2e0fcab8668e1f20e888569c44511102d5c80a4c23f2"
+    },
+    {
+      "file": "test/bootstrap.test.ts",
+      "cases": 9,
+      "lines": 273,
+      "passed": 9,
+      "caseDurationMs": 124.81,
+      "sha256": "d95a56e217258149cbb0caa1905bf83a5011437bdfad3f719e13f88b73ead823"
+    },
+    {
+      "file": "test/card-delivery.test.ts",
+      "cases": 10,
+      "lines": 238,
+      "passed": 10,
+      "caseDurationMs": 169.61,
+      "sha256": "f2e7df972dc40d024e9779f7836c0202bf3c28ce814b78716be3b4a4512e8106"
+    },
+    {
+      "file": "test/channel-index.test.ts",
+      "cases": 5,
+      "lines": 102,
+      "passed": 5,
+      "caseDurationMs": 171.52,
+      "sha256": "e52bdb0c92b52b289f174e776354d12146523b5c67def829d8665d7261ea80b1"
+    },
+    {
+      "file": "test/channel-paths.test.ts",
+      "cases": 3,
+      "lines": 29,
+      "passed": 3,
+      "caseDurationMs": 26.77,
+      "sha256": "d736838aa479320e69b15d2932aa6dc2c552d96a116ef046d1178d92279e0973"
+    },
+    {
+      "file": "test/claude-code-harness.test.ts",
+      "cases": 11,
+      "lines": 229,
+      "passed": 11,
+      "caseDurationMs": 72.17,
+      "sha256": "56eb5cacb5be0cf4129251a6ce390c5844a5112eb9e6b92c64dcaf86b56b009a"
+    },
+    {
+      "file": "test/codex-cli-harness.test.ts",
+      "cases": 11,
+      "lines": 198,
+      "passed": 11,
+      "caseDurationMs": 34.77,
+      "sha256": "d1d8dff858e0f46ae6b6af7672fb69bb65e7b01f0e16b042a3638e79deb3d3de"
+    },
+    {
+      "file": "test/command-extension.test.ts",
+      "cases": 8,
+      "lines": 184,
+      "passed": 8,
+      "caseDurationMs": 110.25,
+      "sha256": "569d2f68e326445f9536069f0c267962b183b92590930b22e81472ecfb097e7e"
+    },
+    {
+      "file": "test/commands-subcommands.test.ts",
+      "cases": 6,
+      "lines": 64,
+      "passed": 6,
+      "caseDurationMs": 53.99,
+      "sha256": "c8c2c3637337f0c937df7420e6bf52eb10f582aca6a94a04b545818497657b04"
+    },
+    {
+      "file": "test/config-loader.test.ts",
+      "cases": 3,
+      "lines": 122,
+      "passed": 3,
+      "caseDurationMs": 64.89,
+      "sha256": "e1fc9c3f2ca1f081b17bbf6975ff350cd76dab25d6cd8d7d397e228182096066"
+    },
+    {
+      "file": "test/config-reference-coverage.test.ts",
+      "cases": 3,
+      "lines": 41,
+      "passed": 3,
+      "caseDurationMs": 21.16,
+      "sha256": "6c2e397c322d2e5c23376194b39737a6ef6789bc05e5410cd6472e803899c3d0"
+    },
+    {
+      "file": "test/context-budget.test.ts",
+      "cases": 3,
+      "lines": 31,
+      "passed": 3,
+      "caseDurationMs": 35.52,
+      "sha256": "20917f77731ca9993212434b82d6c6a3773a05b27c6d469c799dea58a8df710e"
+    },
+    {
+      "file": "test/context.test.ts",
+      "cases": 5,
+      "lines": 151,
+      "passed": 5,
+      "caseDurationMs": 54.21,
+      "sha256": "1686ca0cd1d96c7e7c8b5c9c0821498acfdaefd0b721ae90eb0e0e238408b436"
+    },
+    {
+      "file": "test/delivery.test.ts",
+      "cases": 13,
+      "lines": 204,
+      "passed": 13,
+      "caseDurationMs": 103.6,
+      "sha256": "8ce960883f76c4a27b538e5ed1a5d894d90586bfedbda49cf9f70bde053a9cfa"
+    },
+    {
+      "file": "test/dingtalk.test.ts",
+      "cases": 24,
+      "lines": 1153,
+      "passed": 24,
+      "caseDurationMs": 250.65,
+      "sha256": "140d8f868dc28e90ad512de112ee0b602832c84061591f054b47003e718ca9a0"
+    },
+    {
+      "file": "test/durable-dispatch.test.ts",
+      "cases": 12,
+      "lines": 519,
+      "passed": 12,
+      "caseDurationMs": 594.01,
+      "sha256": "7099e680b0fa425339f6a737239b484f71c15ed7768627b6db130258fb9d91e4"
+    },
+    {
+      "file": "test/edit.test.ts",
+      "cases": 17,
+      "lines": 338,
+      "passed": 17,
+      "caseDurationMs": 1298.5,
+      "sha256": "cc6c0379cf73ff32568ff9898e60b654b6e447a681509273181d296044abe552"
+    },
+    {
+      "file": "test/event-manage.test.ts",
+      "cases": 24,
+      "lines": 372,
+      "passed": 24,
+      "caseDurationMs": 317.56,
+      "sha256": "c50587b0cb089ca848a56e452e163de3d294cbc03609edfe20f52b8ca00e300d"
+    },
+    {
+      "file": "test/events.test.ts",
+      "cases": 25,
+      "lines": 803,
+      "passed": 25,
+      "caseDurationMs": 498.54,
+      "sha256": "a4f80d4218fb0f2bf9e28f5751cac9409130548ce936b8d54678a3811ca651c9"
+    },
+    {
+      "file": "test/exec-harness.test.ts",
+      "cases": 4,
+      "lines": 48,
+      "passed": 4,
+      "caseDurationMs": 27.99,
+      "sha256": "becfa46b9d65cbf17f11754b7ea1bcf8640dd1fb24cd8c6b238b9946016ce013"
+    },
+    {
+      "file": "test/executor.test.ts",
+      "cases": 7,
+      "lines": 118,
+      "passed": 7,
+      "caseDurationMs": 533.62,
+      "sha256": "f1f76c3f6759cdab5980b236b1e34729378d517428735fff2a9f4fc70b0c8216"
+    },
+    {
+      "file": "test/external-harness-contract.test.ts",
+      "cases": 6,
+      "lines": 43,
+      "passed": 6,
+      "caseDurationMs": 35.67,
+      "sha256": "b55940563c60fafa5de9b2035fb306e8ccda785cea0bf4b3efb44b5c72ccc7b2"
+    },
+    {
+      "file": "test/file-store.test.ts",
+      "cases": 11,
+      "lines": 161,
+      "passed": 11,
+      "caseDurationMs": 106.96,
+      "sha256": "bf80bc8b9ad252806aa5959cf79f9715f335be12f3be6a9036b5c1a813e96752"
+    },
+    {
+      "file": "test/glob-match.test.ts",
+      "cases": 14,
+      "lines": 87,
+      "passed": 14,
+      "caseDurationMs": 48.68,
+      "sha256": "c1a6727276565d51a6b3e5d832a59e0f311a43a42d9388e2eb8e9057d6252055"
+    },
+    {
+      "file": "test/glob-tool.test.ts",
+      "cases": 6,
+      "lines": 107,
+      "passed": 6,
+      "caseDurationMs": 69.63,
+      "sha256": "0dba96e6369fc086af6067f7dfd584d958598ff2038ecd9c74442deb4b82936c"
+    },
+    {
+      "file": "test/grep-tool.test.ts",
+      "cases": 17,
+      "lines": 357,
+      "passed": 17,
+      "caseDurationMs": 255.55,
+      "sha256": "62b140aec0cc7c975d3ded36658c06c542fddc5cdd5a8f8c4e894a5d0a916396"
+    },
+    {
+      "file": "test/host-process.test.ts",
+      "cases": 4,
+      "lines": 61,
+      "passed": 4,
+      "caseDurationMs": 558.48,
+      "sha256": "c39d9b0b67b25bde5891b3f145812137bf5335ff3fe14c7ac862025b63c19e74"
+    },
+    {
+      "file": "test/inbound-media.test.ts",
+      "cases": 11,
+      "lines": 110,
+      "passed": 11,
+      "caseDurationMs": 20.97,
+      "sha256": "e1b756ed480e48f38477206d90315f9b01626be298c3176226ded578fc24ac8a"
+    },
+    {
+      "file": "test/job-manager.test.ts",
+      "cases": 46,
+      "lines": 957,
+      "passed": 46,
+      "caseDurationMs": 3628.77,
+      "sha256": "0125eab2fb32c52c173df7ec29d00b2575fd1dfcbfc9e19f2a1d927ed319cf18"
+    },
+    {
+      "file": "test/job-tool.test.ts",
+      "cases": 6,
+      "lines": 79,
+      "passed": 6,
+      "caseDurationMs": 17.42,
+      "sha256": "a9d30b991c6e099082f349527dbe82f8877a49e72409f49ec53fc7d0f4c12c8f"
+    },
+    {
+      "file": "test/jsonl-appender.test.ts",
+      "cases": 3,
+      "lines": 90,
+      "passed": 3,
+      "caseDurationMs": 173.31,
+      "sha256": "65c4cfad9abf6ce56ba2d602f1fc06a5febcea1c42f8f7fe385b7e897c723785"
+    },
+    {
+      "file": "test/line-index.test.ts",
+      "cases": 5,
+      "lines": 108,
+      "passed": 5,
+      "caseDurationMs": 292.19,
+      "sha256": "a6adcf32262cd8a3dc7e0a93ca542fa5bcd8c1e5b92dd2b8a6958c0e93f2605f"
+    },
+    {
+      "file": "test/llm-json.test.ts",
+      "cases": 3,
+      "lines": 23,
+      "passed": 3,
+      "caseDurationMs": 13.23,
+      "sha256": "d7e0c519380c260a3a84283a80c9113287325e6ef94288954be405891bd24990"
+    },
+    {
+      "file": "test/local-time.test.ts",
+      "cases": 6,
+      "lines": 64,
+      "passed": 6,
+      "caseDurationMs": 21.16,
+      "sha256": "affca714c8a3d285b71e00e04fc27b392d29ef065329247cc34c6b2744fe9933"
+    },
+    {
+      "file": "test/log-file-sink.test.ts",
+      "cases": 9,
+      "lines": 136,
+      "passed": 9,
+      "caseDurationMs": 278.47,
+      "sha256": "934ee96ed1dc64db1170e4e34bde8ee29732f5a629056b2da6a072ca384a91d8"
+    },
+    {
+      "file": "test/maintenance-context.test.ts",
+      "cases": 3,
+      "lines": 89,
+      "passed": 3,
+      "caseDurationMs": 156.62,
+      "sha256": "ae6fcbd8b98d4753d9487fee03b26ed53154bf77eb8df691f5e5602a9a24c978"
+    },
+    {
+      "file": "test/memory-commands.test.ts",
+      "cases": 10,
+      "lines": 146,
+      "passed": 10,
+      "caseDurationMs": 160.95,
+      "sha256": "bb77982a823527d83d0b2d39f7818150df23b0cfcfed3431a88482d83f838ca8"
+    },
+    {
+      "file": "test/memory-index-budget.test.ts",
+      "cases": 4,
+      "lines": 70,
+      "passed": 4,
+      "caseDurationMs": 109.99,
+      "sha256": "93be8091da47fcda90a894213917cc0b3df74d1f0e67a83fa359e67a64bd48fe"
+    },
+    {
+      "file": "test/memory-journal.test.ts",
+      "cases": 7,
+      "lines": 84,
+      "passed": 7,
+      "caseDurationMs": 164.87,
+      "sha256": "ede9912e9ae2e31372bb2ff4c10c4f40474c08b6a90dd8741051a06ae709c11b"
+    },
+    {
+      "file": "test/memory-lifecycle.test.ts",
+      "cases": 8,
+      "lines": 246,
+      "passed": 8,
+      "caseDurationMs": 122.07,
+      "sha256": "7d40acd3226650269c10b0db861c30c697ed43d7e4f48f8d05f95d04bfe7ca0c"
+    },
+    {
+      "file": "test/memory-maintenance-gates.test.ts",
+      "cases": 3,
+      "lines": 88,
+      "passed": 3,
+      "caseDurationMs": 19.76,
+      "sha256": "7b59ff00911b36c141938e00c9b28b1918c4bfce568d17536e281a16ca149f54"
+    },
+    {
+      "file": "test/memory-maintenance-scheduler.test.ts",
+      "cases": 7,
+      "lines": 192,
+      "passed": 7,
+      "caseDurationMs": 90.2,
+      "sha256": "db07a5a164ce7586b3fcf3c35df34fc2a43087d42305b147efaca5f16b03677f"
+    },
+    {
+      "file": "test/memory-maintenance-state.test.ts",
+      "cases": 8,
+      "lines": 201,
+      "passed": 8,
+      "caseDurationMs": 211.55,
+      "sha256": "6226fc04fbf8b36143f2749d9d9ad47abf984a81020797a5d5a8e8a87665e457"
+    },
+    {
+      "file": "test/memory-manage.test.ts",
+      "cases": 11,
+      "lines": 220,
+      "passed": 11,
+      "caseDurationMs": 316.74,
+      "sha256": "dcd7dee2dd54a2d8fd5bccf05d1b9212de8b474ade833f9d30632a3820c31a28"
+    },
+    {
+      "file": "test/memory-reflect-job.test.ts",
+      "cases": 4,
+      "lines": 173,
+      "passed": 4,
+      "caseDurationMs": 107.5,
+      "sha256": "69200baa0d3c8ef1ec273ce4dd76d071c8d02e48bab8a26119befaad1d4a83f9"
+    },
+    {
+      "file": "test/memory-reflect.test.ts",
+      "cases": 13,
+      "lines": 298,
+      "passed": 13,
+      "caseDurationMs": 3409.75,
+      "sha256": "000dd72ce9062ffc4abce43d5982030be8d6ca61d14569dd1567792b6b898f42"
+    },
+    {
+      "file": "test/memory-review-log.test.ts",
+      "cases": 3,
+      "lines": 69,
+      "passed": 3,
+      "caseDurationMs": 105.21,
+      "sha256": "d543fb1d7f88d855de731eba07a8adce0749e34f6029eafe8c51b05dcc141787"
+    },
+    {
+      "file": "test/memory-search.test.ts",
+      "cases": 8,
+      "lines": 86,
+      "passed": 8,
+      "caseDurationMs": 74.33,
+      "sha256": "b68f63bc1163d7d6a63be436f82e795f766e3606c25a42fb64617b2fcf2b7b02"
+    },
+    {
+      "file": "test/memory-store-delete-order.test.ts",
+      "cases": 1,
+      "lines": 35,
+      "passed": 1,
+      "caseDurationMs": 67.25,
+      "sha256": "a53c226e5ec5fb06e12365a4f96827912bb1ebb351ed90c758b82538ec33e544"
+    },
+    {
+      "file": "test/memory-store.test.ts",
+      "cases": 16,
+      "lines": 241,
+      "passed": 16,
+      "caseDurationMs": 157.26,
+      "sha256": "974b29f1566477666dcb16f241e449505ef58adcd00c30cd94c2c1de90c36c5f"
+    },
+    {
+      "file": "test/memory-transcript.test.ts",
+      "cases": 4,
+      "lines": 83,
+      "passed": 4,
+      "caseDurationMs": 29.07,
+      "sha256": "c8d5f30024a89098dc75523ceac2d943b0b32aa0062f26f70ccde38f2e476d22"
+    },
+    {
+      "file": "test/mock-provider.test.ts",
+      "cases": 7,
+      "lines": 141,
+      "passed": 7,
+      "caseDurationMs": 173.22,
+      "sha256": "ccc7b0e9b5af8046f676d989eafde1cf3b451a36939254f2a6aaf3ae872ee2de"
+    },
+    {
+      "file": "test/model-fallback.test.ts",
+      "cases": 12,
+      "lines": 228,
+      "passed": 12,
+      "caseDurationMs": 54.69,
+      "sha256": "1d914d9d850416d16edcfa564edfb67d6101c3cb9dbc0b7df8dc494458d7195d"
+    },
+    {
+      "file": "test/model-utils.test.ts",
+      "cases": 4,
+      "lines": 90,
+      "passed": 4,
+      "caseDurationMs": 67.73,
+      "sha256": "84d88c3d82734048aadb6600ac2c023e2d036b672b74b4863e92be037442e9ac"
+    },
+    {
+      "file": "test/models-auth-path.test.ts",
+      "cases": 5,
+      "lines": 84,
+      "passed": 5,
+      "caseDurationMs": 1968.94,
+      "sha256": "a361a622377b54e440403ad12ef0805a44ded1e46b1680b06c8fc83f2eba0ec6"
+    },
+    {
+      "file": "test/mutating-tools-sequential.test.ts",
+      "cases": 3,
+      "lines": 33,
+      "passed": 3,
+      "caseDurationMs": 14.98,
+      "sha256": "2e30fbe7a573eb966cafc8308fa612a220f1435cff44dfe7227e9b48378f995b"
+    },
+    {
+      "file": "test/playbooks.test.ts",
+      "cases": 10,
+      "lines": 167,
+      "passed": 10,
+      "caseDurationMs": 243.8,
+      "sha256": "91379fd31a7d1ea746ad5f95275c7543a77c064f8ced4690bfeb443a379b4cb9"
+    },
+    {
+      "file": "test/project-commands.test.ts",
+      "cases": 6,
+      "lines": 108,
+      "passed": 6,
+      "caseDurationMs": 113.61,
+      "sha256": "f9fd0c054b15450082805eaa0214e1bdfac1371fc11639e27f6a5b2bd9df5cf9"
+    },
+    {
+      "file": "test/prompt-resource-loader.test.ts",
+      "cases": 5,
+      "lines": 139,
+      "passed": 5,
+      "caseDurationMs": 131.89,
+      "sha256": "5771ae3ba76a04d9dca080a38a9f450b0a906c0ecbdeb76382c212fbcb62917b"
+    },
+    {
+      "file": "test/prompt-sections.test.ts",
+      "cases": 12,
+      "lines": 301,
+      "passed": 12,
+      "caseDurationMs": 170.53,
+      "sha256": "70bbc817337337572aaebe02c9228b65be47f70f04adf7e371ff95625caa8c20"
+    },
+    {
+      "file": "test/prompt-units.test.ts",
+      "cases": 6,
+      "lines": 88,
+      "passed": 6,
+      "caseDurationMs": 41.88,
+      "sha256": "ea2a761ba1e3847888dd9b334698ff7b8523790710494c41c33068ec553f41d3"
+    },
+    {
+      "file": "test/proxy.test.ts",
+      "cases": 2,
+      "lines": 83,
+      "passed": 2,
+      "caseDurationMs": 211.55,
+      "sha256": "fe60430ff2509f0da1870191162f01885fdf7dc9fb194c3b20c32206a1739001"
+    },
+    {
+      "file": "test/read.test.ts",
+      "cases": 12,
+      "lines": 232,
+      "passed": 12,
+      "caseDurationMs": 130.84,
+      "sha256": "4b7863093e47aa75815989eab71c6a0e6ac9acba4c8f902311a4966522183171"
+    },
+    {
+      "file": "test/reply-limits.test.ts",
+      "cases": 1,
+      "lines": 16,
+      "passed": 1,
+      "caseDurationMs": 13.06,
+      "sha256": "09c351ba32671a2358b232de5a1e4eb081e899c864b949770851d88370695589"
+    },
+    {
+      "file": "test/review-log-rotation.test.ts",
+      "cases": 1,
+      "lines": 52,
+      "passed": 1,
+      "caseDurationMs": 129.79,
+      "sha256": "b23dae52e5d1c732ae1002708c21856dd6d89ad2af803324d69d4c636188ead2"
+    },
+    {
+      "file": "test/run-queue.test.ts",
+      "cases": 2,
+      "lines": 38,
+      "passed": 2,
+      "caseDurationMs": 65.16,
+      "sha256": "cbe29bb4a3a4a074860e8d18af65e6f2a75ea7a1af39e64039cec57994596f01"
+    },
+    {
+      "file": "test/runtime-context.test.ts",
+      "cases": 5,
+      "lines": 259,
+      "passed": 5,
+      "caseDurationMs": 653.88,
+      "sha256": "509fec20df401569d8a1afbf9798e4c614bd4e75ba6525d91eac450e2c9324db"
+    },
+    {
+      "file": "test/runtime-project-scope-store.test.ts",
+      "cases": 9,
+      "lines": 136,
+      "passed": 9,
+      "caseDurationMs": 152.42,
+      "sha256": "69ae69be3d9f478dda9fd901b39b5c2712d6ce138239848f5480a9ec3c4806e5"
+    },
+    {
+      "file": "test/runtime-stop.test.ts",
+      "cases": 4,
+      "lines": 431,
+      "passed": 4,
+      "caseDurationMs": 226.82,
+      "sha256": "db1128fe7aa92b0e028346ffb2a13a03ab8b7d476f72a8981d0a4a2aa85404c4"
+    },
+    {
+      "file": "test/security-command-guard.test.ts",
+      "cases": 5,
+      "lines": 72,
+      "passed": 5,
+      "caseDurationMs": 63.85,
+      "sha256": "78e16c7f9fc0762019442ba7723e5e420c30a34f3893f9924971b36384383ba6"
+    },
+    {
+      "file": "test/security-config.test.ts",
+      "cases": 3,
+      "lines": 75,
+      "passed": 3,
+      "caseDurationMs": 48.72,
+      "sha256": "15988de7a51bd45e7d8342119e9776b97bfbf99b52ccdc66a8968409745cac73"
+    },
+    {
+      "file": "test/security-logger.test.ts",
+      "cases": 4,
+      "lines": 74,
+      "passed": 4,
+      "caseDurationMs": 68.53,
+      "sha256": "3b9f2163871e8c0c78427213bcff278ddfbe9f88b6f54720185e4d2f1bae1d5d"
+    },
+    {
+      "file": "test/security-network-guard.test.ts",
+      "cases": 14,
+      "lines": 190,
+      "passed": 14,
+      "caseDurationMs": 95.98,
+      "sha256": "5b4cf4ecfd0907b66fb3eb43aade7bee3ed20956fdbcbf3e4e5b36bdf2d3db9c"
+    },
+    {
+      "file": "test/security-path-guard.test.ts",
+      "cases": 5,
+      "lines": 162,
+      "passed": 5,
+      "caseDurationMs": 125.27,
+      "sha256": "1e02c61e9131408a20db4777cd6bbc770fe30aff30fff77fc2be1b7b78f51cd5"
+    },
+    {
+      "file": "test/security-project-scope.test.ts",
+      "cases": 6,
+      "lines": 89,
+      "passed": 6,
+      "caseDurationMs": 30.42,
+      "sha256": "97ab5cd92ed35f34ecaba8fe18efe7552c7a7d9273aed09c22f8072abe7e0a56"
+    },
+    {
+      "file": "test/serial-queue.test.ts",
+      "cases": 3,
+      "lines": 50,
+      "passed": 3,
+      "caseDurationMs": 62.31,
+      "sha256": "8fe1029965895fc640c4b18077398005107fe872063dd7eb71499522785be430"
+    },
+    {
+      "file": "test/session-events.test.ts",
+      "cases": 6,
+      "lines": 274,
+      "passed": 6,
+      "caseDurationMs": 45.77,
+      "sha256": "d1da75c66083ac3d1601ebc109c2b1658663b2a1487b023303382dc73a88e97a"
+    },
+    {
+      "file": "test/session-resource-gate.test.ts",
+      "cases": 3,
+      "lines": 60,
+      "passed": 3,
+      "caseDurationMs": 19.69,
+      "sha256": "b61708ac2cfd418de669b3f9441d5cc66643e7707074c5905295f95b86291cde"
+    },
+    {
+      "file": "test/session-search.test.ts",
+      "cases": 9,
+      "lines": 309,
+      "passed": 9,
+      "caseDurationMs": 169.47,
+      "sha256": "e97a819d7d24c54784fbb5cd89fec6b342d8fa2a4fc5e544d6f01247a5c6eaf2"
+    },
+    {
+      "file": "test/settings.test.ts",
+      "cases": 3,
+      "lines": 84,
+      "passed": 3,
+      "caseDurationMs": 24.65,
+      "sha256": "704f88cc3912f5405ae9e5972e63f5aa195abec00ebce4b8702e0c0c4243745b"
+    },
+    {
+      "file": "test/shell-escape.test.ts",
+      "cases": 1,
+      "lines": 10,
+      "passed": 1,
+      "caseDurationMs": 6.31,
+      "sha256": "d0affca3842b12329aa329e8e8ca9f5cebd8bd2c5ff111a4bf9031ab07a29dbb"
+    },
+    {
+      "file": "test/sidecar-worker.test.ts",
+      "cases": 7,
+      "lines": 322,
+      "passed": 7,
+      "caseDurationMs": 71.66,
+      "sha256": "b47fb1afa75f547051e909168866a7b006c79ac31801b3dc46ad9147785b8cde"
+    },
+    {
+      "file": "test/skill.test.ts",
+      "cases": 8,
+      "lines": 141,
+      "passed": 8,
+      "caseDurationMs": 120.04,
+      "sha256": "cc3a8b48b2fe68945c834b7eed75a070ae13aa6f1ce35dfb3ecccbfb10407af8"
+    },
+    {
+      "file": "test/store.test.ts",
+      "cases": 4,
+      "lines": 182,
+      "passed": 4,
+      "caseDurationMs": 125.23,
+      "sha256": "7da8d875a66d41f6797f98988e4c9b910b81c8c77f177df2cca6a7432b0b8efe"
+    },
+    {
+      "file": "test/subagent-async-dispatch.test.ts",
+      "cases": 1,
+      "lines": 131,
+      "passed": 1,
+      "caseDurationMs": 88.99,
+      "sha256": "0a6f18e329e4e3654d96ff32ed3a1b1ae5af1d2d29190e5680f87ce2637ac0c2"
+    },
+    {
+      "file": "test/subagent-discovery-external.test.ts",
+      "cases": 10,
+      "lines": 439,
+      "passed": 10,
+      "caseDurationMs": 121.74,
+      "sha256": "3284e02bc7c12200a4f76c9e6c17cf2db75983c008e50563ac15c210d470bf6d"
+    },
+    {
+      "file": "test/subagent-external-envelope.test.ts",
+      "cases": 5,
+      "lines": 280,
+      "passed": 5,
+      "caseDurationMs": 137.9,
+      "sha256": "40bd43608c7da6a6bd272914936c4d7e6432f56979118cbf89b9fb15cd17ba22"
+    },
+    {
+      "file": "test/subagent-external-run.test.ts",
+      "cases": 18,
+      "lines": 858,
+      "passed": 18,
+      "caseDurationMs": 2181.29,
+      "sha256": "a0a915ea609e2248a9dca0f1fb8e7cdf44570052011dacc4a62b6a08f6c1e8cd"
+    },
+    {
+      "file": "test/subagent-harness-placeholders.test.ts",
+      "cases": 4,
+      "lines": 44,
+      "passed": 4,
+      "caseDurationMs": 52.23,
+      "sha256": "8cb9b0291595f60301a5682030fbb57fe7e0212d934b5a5de3a40715bd996826"
+    },
+    {
+      "file": "test/subagent-inline-gate.test.ts",
+      "cases": 3,
+      "lines": 92,
+      "passed": 3,
+      "caseDurationMs": 22.02,
+      "sha256": "361e65ad07d19633c5748d35a782208f965a2896971135a2895f7b8200bd4ae3"
+    },
+    {
+      "file": "test/subagent-invocation-matrix.test.ts",
+      "cases": 10,
+      "lines": 198,
+      "passed": 10,
+      "caseDurationMs": 92.14,
+      "sha256": "bc1a759281c2e42f766609210e73add5fbc81ad892fdf5a4f7fac7559afaba39"
+    },
+    {
+      "file": "test/subagent-phase1.test.ts",
+      "cases": 23,
+      "lines": 1073,
+      "passed": 23,
+      "caseDurationMs": 510.52,
+      "sha256": "1be83ed847aacd65356e47e5bb29a68df9c80fe37d9cefff37b6c448722c633e"
+    },
+    {
+      "file": "test/subagent-progress-tail.test.ts",
+      "cases": 6,
+      "lines": 189,
+      "passed": 6,
+      "caseDurationMs": 1029.98,
+      "sha256": "f0d70323f9099d338dfc2c435ed700abb1b34afe59eb0c43244407c8214f2018"
+    },
+    {
+      "file": "test/subagent-restart-adoption.test.ts",
+      "cases": 5,
+      "lines": 434,
+      "passed": 5,
+      "caseDurationMs": 5510.38,
+      "sha256": "6d1b1a32e26dc806f427fe57205ca3c2ee0a72ae0447074f01122ea68a8625e0"
+    },
+    {
+      "file": "test/subagent-runs.test.ts",
+      "cases": 24,
+      "lines": 749,
+      "passed": 24,
+      "caseDurationMs": 260.17,
+      "sha256": "3d64129f6a1494b551eb0f043d19dd8bb205344ade09ea9aaf0c5a14cdc5546b"
+    },
+    {
+      "file": "test/subagent-tool-lease.test.ts",
+      "cases": 10,
+      "lines": 426,
+      "passed": 10,
+      "caseDurationMs": 181.29,
+      "sha256": "439f4f116b996331e4da99cddb5aff6af27b23810a2f09c6686efe77df2e7164"
+    },
+    {
+      "file": "test/subagent-tool-names.test.ts",
+      "cases": 3,
+      "lines": 20,
+      "passed": 3,
+      "caseDurationMs": 5.54,
+      "sha256": "731d30d0ca49abfcc1db5093e89fdc342f52c0130de6923d93822e2bd45b1aa9"
+    },
+    {
+      "file": "test/subagents-dir-write-deny.test.ts",
+      "cases": 1,
+      "lines": 38,
+      "passed": 1,
+      "caseDurationMs": 25.26,
+      "sha256": "79cf016fd498358b93c1c0480aa6c95be80391b6a0fcd3d788a747d59854d97e"
+    },
+    {
+      "file": "test/task-brief.test.ts",
+      "cases": 7,
+      "lines": 196,
+      "passed": 7,
+      "caseDurationMs": 245.13,
+      "sha256": "524a01ca882f24eab9f02efe65ef60ebb26f476198a42319748236061d278073"
+    },
+    {
+      "file": "test/task-budget.test.ts",
+      "cases": 4,
+      "lines": 34,
+      "passed": 4,
+      "caseDurationMs": 18.15,
+      "sha256": "f874ce1545471667a934b74df19d1b0755aad05d1af2b4444abf1a528f2ee43f"
+    },
+    {
+      "file": "test/task-commands.test.ts",
+      "cases": 11,
+      "lines": 184,
+      "passed": 11,
+      "caseDurationMs": 320.59,
+      "sha256": "117de4d7fc8a3c9683ef96d7c03a3e56818e26bf7314e791e4f05b87585298e3"
+    },
+    {
+      "file": "test/task-digest.test.ts",
+      "cases": 7,
+      "lines": 103,
+      "passed": 7,
+      "caseDurationMs": 208.66,
+      "sha256": "4cf84dfcb6dac8bf788eb7a2ef4f01042fcb6c10c18f52b21eb6f947d7df7d80"
+    },
+    {
+      "file": "test/task-driver.test.ts",
+      "cases": 10,
+      "lines": 219,
+      "passed": 10,
+      "caseDurationMs": 235.62,
+      "sha256": "6b91976dc8ca77f0e7db20401cadf8d60ec50283b1811b7503a436c3d32390b0"
+    },
+    {
+      "file": "test/task-frontmatter.test.ts",
+      "cases": 7,
+      "lines": 100,
+      "passed": 7,
+      "caseDurationMs": 69.96,
+      "sha256": "bfa1ce85967724709e5e235927ca6a3a156c7da21f2859f88c0fd5a56301c757"
+    },
+    {
+      "file": "test/task-ledger.test.ts",
+      "cases": 8,
+      "lines": 112,
+      "passed": 8,
+      "caseDurationMs": 71.11,
+      "sha256": "a480c6178da3ba14ef4a3bc00171658b66d4d917b314d3b15458d2d3773c7018"
+    },
+    {
+      "file": "test/task-log.test.ts",
+      "cases": 8,
+      "lines": 174,
+      "passed": 8,
+      "caseDurationMs": 148.92,
+      "sha256": "d0eaa8a9ced0b4b5c8b5023c5aa93da7a4746b1078b9380bfe3a72aa39fc6018"
+    },
+    {
+      "file": "test/task-manage.test.ts",
+      "cases": 18,
+      "lines": 320,
+      "passed": 18,
+      "caseDurationMs": 386.8,
+      "sha256": "a380ddbbf868058992233faf63ce21a0748fb22ff3097601aa1bef23f3fd35d2"
+    },
+    {
+      "file": "test/task-migration-faults.test.ts",
+      "cases": 20,
+      "lines": 286,
+      "passed": 20,
+      "caseDurationMs": 395.49,
+      "sha256": "2a55371dae1a1ba534775a5f3dd52664a4001aa7550c15786f2d5fff2cfb36c5"
+    },
+    {
+      "file": "test/task-migration.test.ts",
+      "cases": 18,
+      "lines": 334,
+      "passed": 18,
+      "caseDurationMs": 567.86,
+      "sha256": "a840c0fcc7f9bb2ef099df324e5bc94716b863e760ef5109f8d25d15c7b57949"
+    },
+    {
+      "file": "test/task-store.test.ts",
+      "cases": 7,
+      "lines": 122,
+      "passed": 7,
+      "caseDurationMs": 160.84,
+      "sha256": "61336cb037353a4989ea4b1902a1158a5d1a3497415b9abc6e8a230e04a3aba8"
+    },
+    {
+      "file": "test/task-ticket.test.ts",
+      "cases": 7,
+      "lines": 84,
+      "passed": 7,
+      "caseDurationMs": 30.73,
+      "sha256": "fc4455410fd5c75e4233fe2ff6abe04d08570f831ba13913c875f942d49127dc"
+    },
+    {
+      "file": "test/tool-details.test.ts",
+      "cases": 9,
+      "lines": 245,
+      "passed": 9,
+      "caseDurationMs": 72.28,
+      "sha256": "d61fcb864bed3d8ada3eb18332f36c6abf2c0dbcdb886ced91515707e8127110"
+    },
+    {
+      "file": "test/tool-error-contract.test.ts",
+      "cases": 6,
+      "lines": 98,
+      "passed": 6,
+      "caseDurationMs": 43.9,
+      "sha256": "1f6028877652b4df5766c32abf4ba69d996927ebcadf523fbae477e7976c3a7d"
+    },
+    {
+      "file": "test/tool-security.test.ts",
+      "cases": 3,
+      "lines": 66,
+      "passed": 3,
+      "caseDurationMs": 47.31,
+      "sha256": "1e1157f42b6ed373e99280be5f8c5e668bc2c2ee25785f0680187e3241e912f5"
+    },
+    {
+      "file": "test/tool-subagent-manage.test.ts",
+      "cases": 12,
+      "lines": 792,
+      "passed": 12,
+      "caseDurationMs": 124.89,
+      "sha256": "1c58db89cf1d7b0d0e00f1da1a594f2d982469ff01be3bca407df060c309c31c"
+    },
+    {
+      "file": "test/tool-validation-downgrade.test.ts",
+      "cases": 2,
+      "lines": 52,
+      "passed": 2,
+      "caseDurationMs": 26.43,
+      "sha256": "1367f62a8bc08340c5e0a382a73d9ddef514088c08de45cef46121de7400bb42"
+    },
+    {
+      "file": "test/tools-config.test.ts",
+      "cases": 2,
+      "lines": 93,
+      "passed": 2,
+      "caseDurationMs": 19.19,
+      "sha256": "d83911f8c46272759558084f87cff97e6282cf1cda263bf99c638f3e8329f10f"
+    },
+    {
+      "file": "test/truncate.test.ts",
+      "cases": 2,
+      "lines": 50,
+      "passed": 2,
+      "caseDurationMs": 25,
+      "sha256": "a723fa7e8ec491d3b2d25d6a05dff4cb111d6f5f81496638113a9510a200113a"
+    },
+    {
+      "file": "test/turn-prompt.test.ts",
+      "cases": 9,
+      "lines": 101,
+      "passed": 9,
+      "caseDurationMs": 24.69,
+      "sha256": "68a2107dfe41e41e5659ff4dce570839ecb24d93abec3b4eb2ce1bd854caf569"
+    },
+    {
+      "file": "test/turn-recovery.test.ts",
+      "cases": 10,
+      "lines": 244,
+      "passed": 10,
+      "caseDurationMs": 88.92,
+      "sha256": "89f64f71394039d6644204ffda5c32456ce48fb70749a6c58682ee031ef8bc36"
+    },
+    {
+      "file": "test/turn-state.test.ts",
+      "cases": 14,
+      "lines": 179,
+      "passed": 14,
+      "caseDurationMs": 38.61,
+      "sha256": "64daa140db3530a178f229de55ca2b398297980e126ae7350fcde2a07a4b1ff4"
+    },
+    {
+      "file": "test/turn-teardown.test.ts",
+      "cases": 6,
+      "lines": 170,
+      "passed": 6,
+      "caseDurationMs": 176.84,
+      "sha256": "5ab35ca5a64b3d170e9731e1f866cf7f658cd5c3da0a97bb9173e0248ad09345"
+    },
+    {
+      "file": "test/usage-ledger.test.ts",
+      "cases": 5,
+      "lines": 240,
+      "passed": 5,
+      "caseDurationMs": 138.98,
+      "sha256": "a6fe4837cc298d506d83da26b0f4f73123c7d67fcda8012bf97c255e90ae0fc5"
+    },
+    {
+      "file": "test/verification-outcome.test.ts",
+      "cases": 3,
+      "lines": 20,
+      "passed": 3,
+      "caseDurationMs": 16.24,
+      "sha256": "bb9ddeaa1e0bab3f6230b2c6b0c7781901680ca87198e2868bc7df2d394ef283"
+    },
+    {
+      "file": "test/web-client-redirect-headers.test.ts",
+      "cases": 3,
+      "lines": 99,
+      "passed": 3,
+      "caseDurationMs": 25.26,
+      "sha256": "844a202775e0656cbff37143e89c6dade10218144d71e9695c14913fe2877307"
+    },
+    {
+      "file": "test/web-fetch-security.test.ts",
+      "cases": 4,
+      "lines": 110,
+      "passed": 4,
+      "caseDurationMs": 46.25,
+      "sha256": "1fa8ffc761d9df607643d3a48c0a18bb1eaa76c90ce9f58460d8638e3a399556"
+    },
+    {
+      "file": "test/web-fetch-tool.test.ts",
+      "cases": 5,
+      "lines": 114,
+      "passed": 5,
+      "caseDurationMs": 115.59,
+      "sha256": "e1dcab1f3c6fa97510d53f49955682ef96e50d8e572180c1694b53854be7b470"
+    },
+    {
+      "file": "test/workspace-lease.test.ts",
+      "cases": 6,
+      "lines": 110,
+      "passed": 6,
+      "caseDurationMs": 19.17,
+      "sha256": "167a79ccea1cf9c7f406795e0f531c9c1a4d64e95a432ab41c6f0cced4e254ae"
+    },
+    {
+      "file": "test/write-content.test.ts",
+      "cases": 2,
+      "lines": 37,
+      "passed": 2,
+      "caseDurationMs": 59.4,
+      "sha256": "8f1173738203d8fc59478870b7aa63272b4409e9353d24b556453275ccaa9d31"
+    }
+  ],
+  "after": {
+    "inventoryCommand": "npx vitest list --json=/tmp/pipiclaw-unit-after-inventory.json",
+    "files": 132,
+    "cases": 1016,
+    "passed": 1015,
+    "failed": 1,
+    "pending": 0,
+    "todo": 0,
+    "oldCollectedEntriesRemoved": 28,
+    "newCollectedEntries": 3,
+    "netReduction": 25,
+    "reductionPercent": 2.4015,
+    "targetMaximumCases": 936,
+    "targetMet": false,
+    "coverage": {
+      "linesPct": 77.54,
+      "statementsPct": 77.54,
+      "branchesPct": 81.46,
+      "functionsPct": 83.13
+    },
+    "failure": {
+      "test": "test/executor.test.ts > executor > keeps the timeout error message short and puts output on the error's stdout/stderr instead",
+      "assertion": "test/executor.test.ts:51: expect(error.stdout.length).toBeGreaterThan(1000); received 0",
+      "reproduction": "npm run test -- test/executor.test.ts reproduced the same failure (1 failed, 6 passed).",
+      "scope": "No changes to test/executor.test.ts or src/executor.ts; failure left unchanged."
+    }
+  },
+  "audit": [
+    {
+      "id": "D01",
+      "removed": "test/skill.test.ts > writing a skill goes through the generic write tool, not this one",
+      "reason": "Only wrote a fixture with a test-local helper; no production tool path was called.",
+      "survivor": "test/write-content.test.ts real write contract plus skill.test.ts list/read coverage."
+    },
+    {
+      "id": "D02",
+      "removed": "test/memory-store.test.ts > collapses a multi-line description to one line",
+      "reason": "The fixture contained only the single-line value line one, so it did not exercise the title claim.",
+      "survivor": "memory-store round-trip and applyMemoryOps persistence cases; parse/serialize collapse is also reached through the real store operations."
+    },
+    {
+      "id": "D03",
+      "removed": "test/file-store.test.ts > writeAtomic without preserveMode does not force a specific mode",
+      "reason": "Only reasserted content; made no assertion about mode behavior.",
+      "survivor": "creates-parent/full-content and preserveMode cases; replaceViaTemp success and failure cases."
+    },
+    {
+      "id": "D04",
+      "removed": "test/turn-prompt.test.ts > emits no separator for an omitted block; joins every present block with exactly one blank line",
+      "reason": "Both cases pinned whitespace formatting without a distinct runtime invariant.",
+      "survivor": "orders runtime context before the user message and wraps the user envelope."
+    },
+    {
+      "id": "D05",
+      "removed": "test/turn-prompt.test.ts > forwards the input byte-for-byte so the SDK's command table still matches",
+      "reason": "Duplicate raw-input path; retained the stronger context-dropping case and changed it to parameterized /compact input with memory and task blocks present.",
+      "survivor": "assembleTurnPrompt > preserveRawInput > forwards a parameterized command byte-for-byte and drops runtime context."
+    },
+    {
+      "id": "D06",
+      "removed": "test/turn-prompt.test.ts > reports units separately from chars, since only units are budgeted",
+      "reason": "Four CJK characters made chars and units both equal four.",
+      "survivor": "stats case now uses 记忆 abc and asserts six UTF-16 chars versus three prompt units."
+    },
+    {
+      "id": "D07",
+      "removed": "test/task-digest.test.ts > includes non-done tasks with the background-reference framing",
+      "reason": "Repeated the same parked-task inclusion assertions.",
+      "survivor": "returns empty, includes non-done framing, and excludes done ones; ordering assertions now prove both tasks exist."
+    },
+    {
+      "id": "D08",
+      "removed": "test/subagent-inline-gate.test.ts > describes inline as an advanced fallback with a complete independent control surface",
+      "reason": "Only pinned descriptive prose and a field-name list.",
+      "survivor": "gate-on/gate-off registration cases and invocation behavior."
+    },
+    {
+      "id": "D09",
+      "removed": "test/job-manager.test.ts > no-pending EXIT:n still maps to completed / failed(n) (regression)",
+      "reason": "Repeated EXIT:0 and nonzero mapping already checked by the lifecycle matrix.",
+      "survivor": "marks a job completed, failed, or lost according to probe output; pending cancel/timeout precedence cases remain."
+    },
+    {
+      "id": "D10",
+      "removed": "test/job-manager.test.ts > starts a job and reports it as running",
+      "reason": "Ordinary start status was repeated in persistence/adoption setup.",
+      "survivor": "persists a record and reloads it into a fresh manager; now asserts restored running status and label."
+    },
+    {
+      "id": "D11",
+      "removed": "test/job-manager.test.ts > reads captured output for a job",
+      "reason": "Completion wake path calls readOutput and already asserts the delivered spill content.",
+      "survivor": "wakes the channel once when a job finishes, carrying exit code and output; output cap/loss cases retained."
+    },
+    {
+      "id": "D12",
+      "removed": "test/external-harness-contract.test.ts > implements toProgressLabel and degrades to undefined on garbage input (Claude and Codex expansions)",
+      "reason": "Repeated the same garbage-input assertion for each harness in a shared contract.",
+      "survivor": "claude-code-harness.test.ts and codex-cli-harness.test.ts each retain positive and negative label parsing cases; shared protocol terminal contract remains."
+    },
+    {
+      "id": "D13",
+      "removed": "test/prompt-sections.test.ts > is byte-identical across rebuilds and across channels of one workspace",
+      "reason": "Used the exact same context twice, so it did not test cross-channel isolation.",
+      "survivor": "prompt-resource-loader.test.ts rebuild case now asserts text and fingerprint stability before a workspace change and fingerprint change after it."
+    },
+    {
+      "id": "D14",
+      "removed": "test/prompt-sections.test.ts > restates the runtime boundary in a short footer appended after pi's tail",
+      "reason": "Footer ordering is a loader seam responsibility, while the former isolated case mostly pinned a heading.",
+      "survivor": "prompt-resource-loader.test.ts footer seam asserts final position, separation from build.text, identity, and 60-unit budget."
+    },
+    {
+      "id": "D15",
+      "removed": "test/active-session-store.test.ts > round-trips through resolveActiveSessionFile after commit",
+      "reason": "Repeated identical SessionManager setup and commit.",
+      "survivor": "writes a ref pointing at the session file now also resolves that ref; fresh header and cross-instance persistence cases remain."
+    },
+    {
+      "id": "Q01",
+      "removed": "test/edit.test.ts > replaces all occurrences on the streaming path",
+      "reason": "Its 3 MiB fixture was below the 8 MiB streaming threshold and duplicated a stronger streamed replacement scenario.",
+      "survivor": "overlapping-needle case uses a >9 MiB file, asserts exact replaceAll output, replacement count, and FileStore.replaceViaTemp invocation."
+    },
+    {
+      "id": "A01",
+      "removed": "test/tool-details.test.ts > stamps every registry tool's results with its registered name",
+      "reason": "The case only executed grep and asserted one registry stamp.",
+      "survivor": "existing real task_create registry invocation now asserts details.kind is task_create."
+    },
+    {
+      "id": "A02",
+      "removed": "test/subagent-tool-names.test.ts > validateToolNames now accepts glob",
+      "reason": "One accepted-tool sample was narrower than the source-of-truth allowlist contract.",
+      "survivor": "same case now validates the complete SUBAGENT_TOOL_NAMES allowlist; unknown tool rejection remains."
+    },
+    {
+      "id": "A03",
+      "removed": "test/memory-store.test.ts > rebuilds MEMORY.md from the files",
+      "reason": "Directly exercised rebuildMemoryIndex without an additional invariant; production callers invoke it through applyMemoryOps.",
+      "survivor": "applyMemoryOps add case asserts the resulting MEMORY.md contains the persisted new fact."
+    },
+    {
+      "id": "A04",
+      "removed": "test/memory-commands.test.ts > /memory status > reports empty state on a fresh channel",
+      "reason": "Pinned only empty-state copy.",
+      "survivor": "status populated/malformed cases exercise type counts, probation, maintenance state, malformed count, and valid-entry availability."
+    },
+    {
+      "id": "A05",
+      "removed": "test/memory-review-log.test.ts > appends JSONL entries and creates the channel directory",
+      "reason": "Ordinary sequential append duplicated the stronger queued append path.",
+      "survivor": "concurrent append case now checks all eight distinct action indices and timestamps after parsing the full JSONL."
+    },
+    {
+      "id": "A06",
+      "removed": "test/line-index.test.ts > reports zero known lines for an empty file, with no resolvable line 1",
+      "reason": "The read tool special-cases empty files and does not call resolveLineOffset for them.",
+      "survivor": "read.test.ts > reads empty files without inventing a line; line-index EOF, cache, and invalidation cases remain."
+    },
+    {
+      "id": "A07",
+      "removed": "test/job-tool.test.ts > reports an empty job list; reports when there are no jobs to poll",
+      "reason": "Only asserted fixed empty-state strings.",
+      "survivor": "nonempty list and poll adapter cases plus ChannelJobManager lifecycle/poll tests."
+    },
+    {
+      "id": "A08",
+      "removed": "test/event-manage.test.ts > returns an empty notice when the channel has no events",
+      "reason": "Only asserted the empty notice copy.",
+      "survivor": "channel-scoped listing and malformed-file listing cases verify list results from actual event files."
+    }
+  ],
+  "qStatus": {
+    "Q01": "done: actual >8 MiB replacement path asserted via replaceViaTemp spy and full output comparison",
+    "Q02": "done: isWellFormed assertion; UTF-16 String.slice mutation made this case fail, restored implementation passes",
+    "Q03": "done: asserts all ordered headings/tasks exist before comparing their positions",
+    "Q04": "done: fake clock and distinct today/other-day journal sentinels",
+    "Q05": "done: real malformed file counted while valid memory remains listable",
+    "Q06": "done: all-duplicate batch count and unchanged disk content asserted; whitespace-only no-op retained",
+    "Q07": "done: parser cases require exact action object; memory command examples seed valid data and assert route-specific results/effects",
+    "Q08": "done: SessionManager.open call count proves cache hit and file-change invalidation",
+    "Q09": "done: nonempty body and exact caller-provided next-step hint asserted; no total maxChars promise added",
+    "Q10": "done: explicit user save asserts isDescriptionTombstoned is false before a new delete",
+    "Q11": "done: asserts all six allowed notices, last valid notice, and no growth after limit",
+    "Q12": "done: managers stopped at simulated restart boundaries; afterEach stops observers, releases leases, kills test process groups; child ready files prove startup"
+  },
+  "validation": [
+    {
+      "command": "npm run typecheck",
+      "result": "pass on rerun; first run exposed and then fixed test typing issues (ES target lacks String.isWellFormed typings; readonly allowlist argument)"
+    },
+    {
+      "command": "npm run test",
+      "result": "fail: 1015 passed, 1 failed of 1016; executor timeout output assertion received stdout length 0"
+    },
+    {
+      "command": "npm run test:e2e",
+      "result": "pass: 21 files, 43 tests; 91.47 s"
+    },
+    {
+      "command": "npm run test:coverage -- --coverage.reportOnFailure --reporter=json --outputFile=/tmp/pipiclaw-unit-after.json",
+      "result": "fail due same executor assertion; JSON report written; lines/statements 77.54%, branches 81.46%, functions 83.13%"
+    },
+    {
+      "command": "npm run lint",
+      "result": "pass after formatting changed files; two informational useTemplate suggestions remain in untouched test/bash.test.ts and test/web-fetch-tool.test.ts"
+    },
+    {
+      "command": "npm run deadcode",
+      "result": "pass; no diagnostics"
+    },
+    {
+      "command": "npm run test -- test/executor.test.ts",
+      "result": "reproduced unrelated failure: 1 failed, 6 passed; stdout length 0 where >1000 expected"
+    }
+  ],
+  "productionCodeChanged": false,
+  "commitStatus": "partial implementation commit requested by user; acceptance remains unmet (1016 cases versus maximum 936), so this must not be represented as completed.",
+  "remainingGap": {
+    "casesAboveMaximum": 80,
+    "disposition": "No additional safe removals have been evidenced in the reviewed priority candidates. Continue case-by-case audit before claiming the target; do not remove protected boundaries to satisfy the count."
+  }
+}

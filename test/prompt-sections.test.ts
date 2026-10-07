@@ -68,17 +68,6 @@ describe("system prompt structure", () => {
 		]);
 	});
 
-	it("is byte-identical across rebuilds and across channels of one workspace", () => {
-		const first = buildPipiclawSystemPrompt(context());
-		const second = buildPipiclawSystemPrompt(context());
-
-		expect(second.text).toBe(first.text);
-		expect(second.fingerprint).toBe(first.fingerprint);
-		// No channel id, no channel dir, no timestamp: that is what makes the prefix cacheable.
-		expect(first.text).not.toMatch(/dm_|group_/);
-		expect(first.text).not.toMatch(/\d{4}-\d{2}-\d{2}/);
-	});
-
 	it("keeps runtime-authored sections inside their unit and char budgets, without error diagnostics", () => {
 		const build = buildPipiclawSystemPrompt(context());
 
@@ -104,14 +93,6 @@ describe("system prompt structure", () => {
 	it("gates the memory invariant on the tool being registered", () => {
 		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_save` / `memory_forget`");
 		expect(buildPipiclawSystemPrompt(context({ tools: tools(["read"]) })).text).not.toContain("`memory_save`");
-	});
-
-	it("restates the runtime boundary in a short footer appended after pi's tail", () => {
-		const build = buildPipiclawSystemPrompt(context());
-
-		expect(build.footer).toContain("## Runtime Boundary");
-		expect(build.text).not.toContain("## Runtime Boundary");
-		expect(countPromptUnits(build.footer)).toBeLessThanOrEqual(60);
 	});
 });
 

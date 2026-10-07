@@ -121,16 +121,6 @@ describe("ChannelJobManager", () => {
 		}
 	});
 
-	it("starts a job and reports it as running", async () => {
-		const executor = new FakeJobExecutor();
-		const manager = new ChannelJobManager("dm_1", executor);
-
-		const job = await manager.start("sleep 100", "wait", 300);
-		expect(job.status).toBe("running");
-		expect(job.label).toBe("wait");
-		expect(manager.runningCount()).toBe(1);
-	});
-
 	it("sweeps and reaps a finished job even when nobody polls it", async () => {
 		const executor = new FakeJobExecutor();
 		// Tiny sweep interval so the background sweeper fires within the test window.
@@ -415,21 +405,6 @@ describe("ChannelJobManager", () => {
 		}
 	});
 
-	it("no-pending EXIT:n still maps to completed / failed(n) (regression)", async () => {
-		for (const { exit, status, code } of [
-			{ exit: "EXIT:0", status: "completed", code: 0 },
-			{ exit: "EXIT:1", status: "failed", code: 1 },
-		]) {
-			const executor = new FakeJobExecutor();
-			const manager = new ChannelJobManager("dm_1", executor);
-			await manager.start("cmd", "job", 300);
-			executor.probeResult = exit;
-			const [snapshot] = await manager.list();
-			expect(snapshot.status, exit).toBe(status);
-			expect(snapshot.exitCode, exit).toBe(code);
-		}
-	});
-
 	it("serializes reconcile: concurrent list/sweep of one job produce exactly one legal terminal", async () => {
 		// (a) delayed confirming kill overlaps several reconcile paths.
 		{
@@ -497,16 +472,6 @@ describe("ChannelJobManager", () => {
 		const snapshots = await manager.poll([running.id], AbortSignal.abort());
 		expect(snapshots[0].status).toBe("running");
 	});
-
-	it("reads captured output for a job", async () => {
-		const executor = new FakeJobExecutor();
-		executor.output = "hello from job";
-		const manager = new ChannelJobManager("dm_1", executor);
-		const job = await manager.start("echo hi", "echo", 300);
-
-		const output = await manager.readOutput(job.id);
-		expect(output?.text).toContain("hello from job");
-	});
 });
 
 describe("ChannelJobManager persistence and completion wakes (spec 031, D6)", () => {
@@ -547,6 +512,10 @@ describe("ChannelJobManager persistence and completion wakes (spec 031, D6)", ()
 		executor.probeResult = "ALIVE";
 		expect(await restarted.restore()).toBe(1);
 		expect(restarted.runningCount()).toBe(1);
+		expect((await restarted.list()).find((snapshot) => snapshot.id === job.id)).toMatchObject({
+			status: "running",
+			label: "long build",
+		});
 	});
 
 	it("wakes the channel once when a job finishes, carrying its exit code and output", async () => {

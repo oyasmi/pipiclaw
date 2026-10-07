@@ -1,12 +1,14 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDetachedMaintenanceCache, loadDetachedMaintenanceContext } from "../src/agent/maintenance-context.js";
 import { PipiclawSettingsManager } from "../src/settings.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-maintenance-context-");
+
+afterEach(() => vi.restoreAllMocks());
 
 function writeTranscript(channelDir: string): void {
 	const manager = SessionManager.open(join(channelDir, "context.jsonl"), channelDir);
@@ -72,18 +74,20 @@ describe("loadDetachedMaintenanceContext", () => {
 		const channelDir = makeTempDir();
 		writeTranscript(channelDir);
 
+		const openSpy = vi.spyOn(SessionManager, "open");
 		const first = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, channelDir));
-		// Corrupt the file without changing mtime/size semantics is fragile; instead
-		// prove the cache path by checking a second load still succeeds and returns
-		// equal data, then that an on-disk change is picked up.
+		const opensAfterInitialRead = openSpy.mock.calls.length;
 		const second = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, channelDir));
+		expect(openSpy).toHaveBeenCalledTimes(opensAfterInitialRead);
 		expect(second?.sessionEntries().map((entry) => entry.id)).toEqual(
 			first?.sessionEntries().map((entry) => entry.id),
 		);
 
 		const manager = SessionManager.open(join(channelDir, "context.jsonl"), channelDir);
+		const opensBeforeInvalidationRead = openSpy.mock.calls.length;
 		manager.appendMessage({ role: "user", content: "再补一句", timestamp: Date.now() } as never);
 		const third = await loadDetachedMaintenanceContext(makeOptions(appHomeDir, channelDir));
+		expect(openSpy).toHaveBeenCalledTimes(opensBeforeInvalidationRead + 1);
 		expect(third?.sessionEntries().length).toBeGreaterThan(first?.sessionEntries().length ?? 0);
 	});
 });

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, symlinkSync } from "node:fs";
+import { symlinkSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -117,14 +117,6 @@ describe("skill tool", () => {
 		const tool = createSkillTool({ workspaceDir, securityConfig: DEFAULT_SECURITY_CONFIG, securityContext });
 		const listed = await tool.execute("call", { action: "list" });
 		expect(listed.details).toMatchObject({ count: 1 });
-	});
-
-	it("writing a skill goes through the generic write tool, not this one", async () => {
-		// No write/create/patch action exists on this tool at all -- authoring goes through write/edit.
-		const workspaceDir = createWorkspace();
-		const path = await writeSkill(workspaceDir, "release-checklist");
-		expect(existsSync(path)).toBe(true);
-		expect(readFileSync(path, "utf-8")).toContain("Follow the workflow.");
 	});
 });
 

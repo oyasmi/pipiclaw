@@ -76,9 +76,17 @@ describe("journal", () => {
 
 	it("no-ops on an empty or all-duplicate batch", async () => {
 		const channelDir = createTempDir();
+		await appendJournalEntries(channelDir, "2026-09-04", ["01:12 completed review"]);
+		const path = getJournalPath(channelDir, "2026-09-04");
+		const before = await readFile(path, "utf-8");
 		expect(await appendJournalEntries(channelDir, "2026-09-04", ["  ", ""])).toEqual({
 			appended: 0,
 			skippedDuplicate: 0,
 		});
+		expect(await appendJournalEntries(channelDir, "2026-09-04", ["01:12   completed review"])).toEqual({
+			appended: 0,
+			skippedDuplicate: 1,
+		});
+		expect(await readFile(path, "utf-8")).toBe(before);
 	});
 });
