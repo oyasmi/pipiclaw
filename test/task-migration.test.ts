@@ -131,6 +131,27 @@ describe("v3 → v5 conversion (spec 052)", () => {
 		expect((await readTaskLog(channelDir, "waiting")).some((record) => record.kind === "note")).toBe(true);
 	});
 
+	it("never turns a stopped recurring task into a runnable event template", async () => {
+		const stop = '{"version":3,"stop":{"by":"governor","reason":"预算用尽","at":"2026-09-01T09:00:00+08:00"}}';
+		await write("off", v3({ status: "active", enabled: "false", schedule: "0 9 * * *", control: CONTROL }));
+		await write("halted", v3({ status: "active", schedule: "0 9 * * *", control: stop }));
+		await write("napping", v3({ status: "sleeping", enabled: "false", schedule: "0 9 * * *", control: CONTROL }));
+
+		await migrateTasksToV5(workspaceDir, stateDir);
+
+		for (const id of ["off", "halted", "napping"]) {
+			const task = await readStoredTask(channelDir, id);
+			expect(task?.fields.paused?.by).toBe("user");
+			expect(task?.fields.origin).toBeUndefined();
+			expect(existsSync(eventPath(id))).toBe(false);
+			expect(existsSync(join(channelDir, "tasks", ".v3", `${id}.md`))).toBe(true);
+			const notes = (await readTaskLog(channelDir, id)).filter((record) => record.kind === "note");
+			expect(JSON.stringify(notes)).toContain("0 9 * * *");
+		}
+		expect((await readStoredTask(channelDir, "halted"))?.fields.paused?.reason).toBe("预算用尽");
+		expect(existsSync(join(workspaceDir, "events"))).toBe(false);
+	});
+
 	it("moves task-owned sensor events away and says so on the owning task", async () => {
 		await write("sensor", v3({ status: "active", control: CONTROL }, "# S\n"));
 		await mkdir(join(workspaceDir, "events"), { recursive: true });
@@ -163,6 +184,22 @@ describe("v3 → v5 conversion (spec 052)", () => {
 		expect(await readFile(join(channelDir, "tasks", "late.md"), "utf-8")).toContain("status:");
 	});
 
+	it("preserves unsupported v4 files byte-for-byte, including mixed state/status input", async () => {
+		// Regression: a state-based beta task must not be mistaken for v3 and rewritten, losing its wait/usage.
+		const original = v3({
+			state: "parked",
+			status: "waiting",
+			cycle: '{"steps":7,"usd":2}',
+			ticket: '{"kind":"run","by":"2099-01-01T00:00:00+08:00"}',
+			schedule: "0 9 * * *",
+		});
+		await write("beta", original);
+		await migrateTasksToV5(workspaceDir, stateDir);
+		expect(await readFile(join(channelDir, "tasks", "beta.md"), "utf-8")).toBe(original);
+		expect(existsSync(join(channelDir, "tasks", ".v3", "beta.md"))).toBe(false);
+		expect(existsSync(eventPath("beta"))).toBe(false);
+	});
+
 	it("falls back to a runtime pause when a recurring task cannot be expressed as a template", async () => {
 		// A DoD without checklist items cannot become a valid template, and the schedule must not be lost silently.
 		await write(
@@ -173,6 +210,118 @@ describe("v3 → v5 conversion (spec 052)", () => {
 		const task = await readStoredTask(channelDir, "odd");
 		expect(task?.fields.paused?.by).toBe("runtime");
 		expect(existsSync(eventPath("odd"))).toBe(false);
+	});
+
+	it("pauses a stopped task whose stop reason is missing or blank instead of reopening it", async () => {
+		await write("nostop", v3({ status: "active", control: '{"version":3,"stop":{"by":"governor"}}' }, "# N\n"));
+		await write("blank", v3({ status: "active", control: '{"version":3,"stop":{"reason":"   "}}' }, "# B\n"));
+		await write("empty", v3({ status: "active", control: '{"version":3,"stop":{"reason":""}}' }, "# E\n"));
+
+		await migrateTasksToV5(workspaceDir, stateDir);
+
+		for (const id of ["nostop", "blank", "empty"]) {
+			const task = await readStoredTask(channelDir, id);
+			expect(task?.fields.paused?.by).toBe("user");
+			expect(task?.fields.paused?.reason).toBeTruthy();
+		}
+	});
+
+	it("never overwrites an existing backup and keeps both copies", async () => {
+		await mkdir(join(channelDir, "tasks", ".v3"), { recursive: true });
+		await writeFile(join(channelDir, "tasks", ".v3", "old.md"), "earlier backup");
+		await write("old", v3({ status: "active", control: CONTROL }, "# Old\n"));
+
+		await migrateTasksToV5(workspaceDir, stateDir);
+
+		expect(await readFile(join(channelDir, "tasks", ".v3", "old.md"), "utf-8")).toBe("earlier backup");
+		expect(await readFile(join(channelDir, "tasks", ".v3", "old.backup-1.md"), "utf-8")).toContain("status: active");
+	});
+
+	it("never overwrites a same-named task-owned event backup and keeps both copies", async () => {
+		await mkdir(join(channelDir, "tasks", ".v3", "events"), { recursive: true });
+		await writeFile(join(channelDir, "tasks", ".v3", "events", "task.dm_1.old.sensor.json"), "earlier backup");
+		await mkdir(join(workspaceDir, "events"), { recursive: true });
+		await writeFile(eventPath("task.dm_1.old.sensor"), '{"new":true}');
+
+		await migrateTasksToV5(workspaceDir, stateDir);
+
+		const backups = join(channelDir, "tasks", ".v3", "events");
+		expect(await readFile(join(backups, "task.dm_1.old.sensor.json"), "utf-8")).toBe("earlier backup");
+		expect(await readFile(join(backups, "task.dm_1.old.sensor.backup-1.json"), "utf-8")).toBe('{"new":true}');
+		expect(existsSync(eventPath("task.dm_1.old.sensor"))).toBe(false);
+	});
+
+	describe("failures", () => {
+		const SLEEPING = v3({ status: "sleeping", schedule: "0 9 * * *", control: CONTROL });
+		const reportPath = () => join(stateDir, "task-migration-v5.failed.json");
+		const markerPath = () => join(stateDir, "task-migration-v5.done");
+		const report = async () => JSON.parse(await readFile(reportPath(), "utf-8")).failures;
+
+		it("rolls back a template already written when the archive step fails, and blocks the marker", async () => {
+			await write("daily", SLEEPING);
+			// `archive` being a file makes the final archive step fail after the template and task were written.
+			await writeFile(join(channelDir, "tasks", "archive"), "not a directory");
+
+			await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow(/failed for 1 item/);
+
+			expect(existsSync(eventPath("daily"))).toBe(false);
+			expect(await readFile(join(channelDir, "tasks", "daily.md"), "utf-8")).toBe(SLEEPING);
+			expect(existsSync(join(channelDir, "tasks", "daily.jsonl"))).toBe(false);
+			expect(existsSync(markerPath())).toBe(false);
+			expect(await report()).toMatchObject([{ channelId: "dm_1", task: "daily", stage: "archive", rollback: "ok" }]);
+		});
+
+		it("reports the template stage and leaves the v3 original untouched", async () => {
+			await write("daily", SLEEPING);
+			await mkdir(workspaceDir, { recursive: true });
+			await writeFile(join(workspaceDir, "events"), "not a directory");
+
+			await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow();
+
+			expect(await readFile(join(channelDir, "tasks", "daily.md"), "utf-8")).toBe(SLEEPING);
+			expect(await report()).toMatchObject([{ task: "daily", stage: "template", rollback: "ok" }]);
+			expect(existsSync(markerPath())).toBe(false);
+		});
+
+		it("reports the backup stage and does not touch the task", async () => {
+			await write("old", v3({ status: "active", control: CONTROL }, "# Old\n"));
+			await mkdir(join(channelDir, "tasks", ".v3", "old.md"), { recursive: true });
+
+			await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow();
+
+			expect(await readFile(join(channelDir, "tasks", "old.md"), "utf-8")).toContain("status: active");
+			expect(await report()).toMatchObject([{ task: "old", stage: "backup" }]);
+		});
+
+		it("keeps converted siblings, retries failed tasks on the next start, and clears the report", async () => {
+			await write("good", v3({ status: "active", control: CONTROL }, "# Good\n"));
+			await write("daily", SLEEPING);
+			await writeFile(join(channelDir, "tasks", "archive"), "not a directory");
+			await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow();
+			expect((await readStoredTask(channelDir, "good"))?.fields.state).toBe("open");
+
+			await rm(join(channelDir, "tasks", "archive"));
+			await migrateTasksToV5(workspaceDir, stateDir);
+
+			expect(existsSync(join(channelDir, "tasks", "archive", "daily.md"))).toBe(true);
+			expect(existsSync(eventPath("daily"))).toBe(true);
+			expect(existsSync(reportPath())).toBe(false);
+			expect(existsSync(markerPath())).toBe(true);
+		});
+
+		it("keeps blocking while a report records a failed rollback", async () => {
+			await mkdir(stateDir, { recursive: true });
+			await writeFile(
+				reportPath(),
+				JSON.stringify({
+					failures: [
+						{ channelId: "dm_1", task: "x", stage: "task", error: "e", rollback: "restore original: EACCES" },
+					],
+				}),
+			);
+			await expect(migrateTasksToV5(workspaceDir, stateDir)).rejects.toThrow(/blocked/);
+			expect(existsSync(markerPath())).toBe(false);
+		});
 	});
 
 	it("reads v3 frontmatter faithfully and falls back to a default DoD in templates", () => {

@@ -1202,12 +1202,11 @@ export async function createRuntimeContext(
 	}
 
 	if (startServices) {
-		// Convert v4 task files and their recurring schedules before the watcher or the driver rely
+		// Convert supported v3 task files and their schedules (v4 beta files are skipped) before services rely
 		// on the v5 layout (spec 052, D12). Marker-gated and awaited: the pass writes event
 		// templates the watcher is about to load, so the services must not start underneath it.
-		await migrateTasksToV5(options.paths.workspaceDir, join(options.paths.appHomeDir, "state")).catch((error) => {
-			log.logWarning("Task conversion to v5 failed; tasks may need /tasks doctor", errorMessage(error));
-		});
+		// A failed or partial conversion throws and aborts startup: nothing may run on half-migrated state.
+		await migrateTasksToV5(options.paths.workspaceDir, join(options.paths.appHomeDir, "state"));
 		eventsWatcher.start();
 		memoryMaintenanceScheduler.start();
 		taskDriver.start();

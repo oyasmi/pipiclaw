@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { ChannelEvent } from "../channel/channel-event.js";
-import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
+import { type DiscoverOptions, discoverWorkspaceChannelIds } from "../channel/channel-index.js";
 import { dedupeChannelIdsByDirectory, getChannelDir, isChannelId } from "../channel/channel-paths.js";
 import * as log from "../log.js";
 import { PLAYBOOKS_DIR } from "../paths.js";
@@ -43,10 +43,11 @@ const REDISPATCH_GUARD_MS = 30_000;
 export async function discoverTaskChannels(
 	workspaceDir: string,
 	knownChannelIds: Iterable<string> = [],
+	options: DiscoverOptions = {},
 ): Promise<string[]> {
 	return dedupeChannelIdsByDirectory([
 		...[...knownChannelIds].filter(isChannelId),
-		...(await discoverWorkspaceChannelIds(workspaceDir)),
+		...(await discoverWorkspaceChannelIds(workspaceDir, options)),
 	]);
 }
 

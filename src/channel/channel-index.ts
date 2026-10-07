@@ -181,15 +181,29 @@ export function parseChannelIndex(content: string): ChannelIndexEntry[] {
 // === Discovery ===
 
 /** Channel ids recorded in the index, i.e. every channel that has ever received a message. */
-export async function readChannelIndexIds(workspaceDir: string): Promise<string[]> {
+export async function readChannelIndexIds(workspaceDir: string, options: DiscoverOptions = {}): Promise<string[]> {
 	try {
 		const content = await readFile(join(workspaceDir, CHANNELS_INDEX_FILENAME), "utf-8");
 		return parseChannelIndex(content)
 			.map((entry) => entry.channelId)
 			.filter(isChannelId);
-	} catch {
+	} catch (error) {
+		if (options.strict && !isMissing(error)) throw error;
 		return [];
 	}
+}
+
+export interface DiscoverOptions {
+	/**
+	 * Throw on anything other than "does not exist" instead of reporting no channels. For the one-shot
+	 * migration, where an unreadable workspace must not look like an empty one.
+	 */
+	strict?: boolean;
+}
+
+function isMissing(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException).code;
+	return code === "ENOENT" || code === "ENOTDIR";
 }
 
 /**
@@ -207,17 +221,36 @@ export async function readChannelIndexIds(workspaceDir: string): Promise<string[
  * name is the escaped form of an already-indexed id are skipped, so a channel is never visited
  * twice under two spellings.
  */
-export async function discoverWorkspaceChannelIds(workspaceDir: string): Promise<string[]> {
-	const channelIds = new Set(await readChannelIndexIds(workspaceDir));
+export async function discoverWorkspaceChannelIds(
+	workspaceDir: string,
+	options: DiscoverOptions = {},
+): Promise<string[]> {
+	const channelIds = new Set(await readChannelIndexIds(workspaceDir, options));
 	const indexedDirNames = new Set([...channelIds].map(getChannelDirName));
 	try {
 		const dirents = await readdir(workspaceDir, { withFileTypes: true });
 		for (const entry of dirents) {
+			// A directory id containing `__` may be an escaped group id (`/` → `__`). The
+			// workspace scan cannot recover the original id, which is required in task event
+			// templates. Background discovery keeps its historical best-effort behavior; a
+			// one-shot migration must stop instead of writing events to a fake channel id.
+			if (
+				options.strict &&
+				entry.isDirectory() &&
+				/^(dm|group)_/.test(entry.name) &&
+				entry.name.includes("__") &&
+				!indexedDirNames.has(entry.name)
+			) {
+				throw new Error(
+					`Cannot recover the real channel id for escaped workspace directory ${entry.name}; restore ${CHANNELS_INDEX_FILENAME} from backup before migration.`,
+				);
+			}
 			if (!entry.isDirectory() || indexedDirNames.has(entry.name) || !isChannelId(entry.name)) continue;
 			channelIds.add(entry.name);
 		}
-	} catch {
-		// A missing or unreadable workspace simply has no channels to report.
+	} catch (error) {
+		// Outside strict mode a missing or unreadable workspace simply has no channels to report.
+		if (options.strict && !isMissing(error)) throw error;
 	}
 	return [...channelIds].sort();
 }

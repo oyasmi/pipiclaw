@@ -380,7 +380,7 @@ Pipiclaw 会把事件调度层的审计记录写入：
 | **循环日志** | `tasks/<id>.jsonl` | append-only：每一步做了什么、每次派发与结算、票据过期、收尾 |
 | **等待票** | 契约 frontmatter 的 `ticket` | "什么会叫醒我，最迟什么时候"——由 runtime 校验、由 runtime 兑现 |
 
-v3（0.9.2）的 `status`、`wake`、`control`、`schedule`、`Manual`、`Verification`、`Current Cycle`/`History` 以及 `run`/`job`/`signal`/`schedule` 票全部退役。升级时 daemon 会做一次确定性转换（原件备份到 `tasks/.v3/`），详见[从 v3 转换](#从-v3-转换)。
+v3（0.9.2）的 `status`、`wake`、`control`、`schedule`、`Manual`、`Verification`、`Current Cycle`/`History` 全部退役；v4 的 `run`/`job`/`signal`/`schedule` 票也不再支持。升级时 daemon 会做一次确定性转换（原件备份到 `tasks/.v3/`），详见[从 v3 转换](#从-v3-转换)。
 
 ## 任务模型
 
@@ -548,7 +548,7 @@ events 与 tasks 之间只有一条边：**事件按模板生成任务实例**�
 
 `resume` 的加码是在**已用量之上**的增量，所以恢复一个撞了上限的任务真的能跑起来；如果任务是在一张已过兜底时限的票上被停下的，`resume` 会把它重开并清掉过期计数，而不是让它在同一张死票上再次暂停。
 
-doctor 只查三类问题：frontmatter 不可读、仍含旧版本字段（转换未执行）、停泊的兜底时限已过去超过 1 小时（driver 可能没有运行）。
+doctor 只查三类问题：frontmatter 不可读、仍含已识别的旧字段（不代表能识别全部 v4）、停泊的兜底时限已过去超过 1 小时（driver 可能没有运行）。
 
 模型侧的工具面：
 
@@ -563,17 +563,31 @@ task_step_end  （只在任务会话里注册）
 
 ## 从 v3 转换
 
-daemon 首次以 v5 启动时（服务启动之前）执行一次确定性转换（无 LLM，marker 位于 `state/task-migration-v5.done`）。只转换带 v3 frontmatter（`status:`）的文件，已经是 v5 的文件不动；0.9.3 beta 期间写出的 v4 文件不在转换范围内。
+daemon 首次以 v5 启动时（服务启动之前）执行一次确定性转换（无 LLM，marker 位于 `state/task-migration-v5.done`）。只转换带 v3 frontmatter（`status:`）的文件，任何带 `state:` 的文件不动（即使同时有 `status:`）；0.9.3 beta 期间写出的 v4 文件不在转换范围内，见下方人工重建步骤。
 
-1. v3 的所有等待（`wake`、`waitingFor`）都没有对应的 v5 来源，任务一律改回 `open` 并在循环日志留一条说明。`enabled: false` 或 `control.stop` 转成 `paused`，所以升级不会让已停用的任务重新跑起来。
+1. v3 的等待字段（`wake`、`waitingFor`）没有对应的 v5 来源，不会保留；任务改回 `open`，其中原 `status: waiting` 的任务在循环日志留说明。`enabled: false` 或 `control.stop` 转成 `paused`；其中带 `schedule` 的停用任务**不会**生成事件模板（事件没有停用状态，生成即会运行），只在循环日志留 note 记录原周期，原件在 `tasks/.v3/`，要恢复周期需人工用 `event_manage` 新建。因此升级不会让已停用的任务重新跑起来。
 2. `## Plan` 改名 `## Work Items`；`## Current Cycle`、`## History` 删除（这些逐轮记录现在属于循环日志）；`Manual`、`Verification` 保留在正文里。
-3. **周期任务变成事件模板**：为带 `schedule` 的任务写出 `workspace/events/<id>.json`（同一个 cron，模板由契约生成，原 Manual/Verification 并入 Goal，勾选全部复位）。两次执行之间休眠（`sleeping`）的任务随即以 `cancelled` 归档；正在执行的那一轮不打断，就地成为该事件的一个实例，下一次由事件生成。无法表达为模板的周期任务会被置 `paused`，等人工处理。
+3. **周期任务变成事件模板**：为带 `schedule` 的任务写出 `workspace/events/<id>.json`（同一个 cron，模板由契约生成，原 Manual/Verification 并入 Goal，勾选全部复位）。两次执行之间休眠（`sleeping`）的任务随即以 `cancelled` 归档；正在执行的那一轮不打断，就地成为该事件的一个实例，下一次由事件生成。无法表达为模板的周期任务会被置 `paused`，等人工处理；已停用的周期任务同样保持 `paused` 且不生成模板（即使原为 `sleeping` 也不归档）。
 4. 任务专属的 `task.<channelId>.<taskId>.*` 传感器事件移到 `tasks/.v3/events/`。
-5. 原件复制到 `tasks/.v3/`，**永不删除**。
+5. 原件复制到 `tasks/.v3/`，**永不删除、不覆盖**：已有同名备份时保留原备份，新副本另存为 `<id>.backup-<n>.md`；`tasks/.v3/events/` 中的事件备份同样不覆盖（`<name>.backup-<n>.json`）。
 
-转换没有成功、仍带 v3 frontmatter 的文件不会被执行，`/tasks doctor` 会列出它们。
+**失败处置。** 单个任务转换抛错时，会先回滚：恢复 v3 原文件、删除本次写出的事件模板和新建的循环日志；归档步骤本身拒绝覆盖既有 `archive/` 条目，并在中途失败时撤销已移动的日志分片与归档契约（回滚本身也可能失败，见下）。任务目录或事件目录读取失败（EACCES/EIO 等，目录不存在除外）不会被当成“没有任务”：它们按 `scan`/`events` 失败处理，不写 marker。若严格发现模式遇到无法映射回真实 ID 的转义频道目录（名称中的 `__` 可能来自原 ID 的 `/`），迁移会按 `discover` 失败；从备份恢复含真实频道 ID 的 `CHANNELS.md` 后再重试，不能把目录名当作频道 ID。只要有任一任务、事件移动或频道发现失败：不写 marker，写 `state/task-migration-v5.failed.json`（频道、任务、失败阶段 `backup`/`template`/`task`/`log`/`archive`/`events`/`scan`/`discover`、错误、回滚结果），并让启动**直接报错退出**——事件 watcher、task driver、钉钉连接都不会启动。已成功转换的其他任务保持已转换。排除原因后重启即重试失败项（已转换的带 `state:`，会被跳过）。若报告里有回滚失败（`rollback` 不是 `ok`），之后每次启动都继续拒绝，直到你按报告核对并恢复 `tasks/.v3/` 或完整备份中的原件、再手工删除该报告。注意：回滚只清理本次尝试产物；转换前就存在的文件（含既有归档、`.v3/` 备份）不动。若归档撤销本身失败，错误信息会带 `undo of partial archive failed`，须按报告人工核对 `tasks/` 与 `tasks/archive/`。doctor 不检查所有 v4 专属字段，不能用“未发现问题”证明升级完成。
 
 转换代码会在下一个 minor 版本删除。
+
+## beta 用户升级与不可转换任务
+
+**任务格式决定支持范围，不是 beta 版本号。** v3 用 `status:`；v4 已有 `state:`，常见 `cycle`、`verify` 或旧票种；v5 使用 `usage`，等待票只支持 `time` / `work` / `ask`。不要把 v4 的“转换器跳过”理解为兼容：普通读取可能忽略旧字段或把无法解析的 parked 票归一化为 open，既有用量、预算与等待语义不能保证保留。
+
+1. **先控制在途动作。** 在旧版本里用 `/subagents list running` 核对外部 run，等待完成或经明确授权取消；单独停止 daemon 不会停止 detached 外部进程。核对外部系统真实状态，列出已发生的发送、写入、部署等动作与尚未完成的工作。不要自动重派。
+2. **停 daemon，备份完整 app home**（默认 `~/.pipiclaw/`，自定义时为 `PIPICLAW_HOME`），包含 workspace、state、任务 Markdown/JSONL、`.sessions/`、事件、委派记录和产物。备份放在 app home 之外；核对可读性。原有 `.v3/`、`.verifications/` 与归档也保留。不要只备份契约。
+3. **逐份检查原始文件，再启动新版。** 为每个 v4、无法判定或无法转换的任务建立清单（频道、旧 id、路径、阻塞原因、旧预算/用量、等待来源、周期、待核对的外部动作）。停止服务期间，将其契约、同名日志与会话文件移入 app home 外的人工恢复目录，记录原路径；将对应周期/传感器事件也移出 `workspace/events/`。移动前核对备份，不删除、不改写原件。这样隔离未支持数据，避免新版读写丢字段或事件自动执行。
+4. **隔离副本演练 v3 转换。** 用仓库自带脚本：`npm run build` 后执行 `node scripts/rehearse-task-migration.mjs [appHome]`（默认 `$PIPICLAW_HOME` 或 `~/.pipiclaw`）。它只只读复制 `workspace/events/` 与各频道 `tasks/`（不含 `.sessions/`）到临时目录，直接调用迁移函数；不经过 bootstrap，因此不会启动钉钉、事件 watcher、task driver 或外部执行器，也不写源目录。脚本打印将生成的事件模板与各任务转换结果，失败时打印失败报告并以非零退出；在临时目录里检查 `.v3/` 原件与循环日志 note，用完删除。注意：真实启动时迁移先于事件 watcher 完成，随后 watcher 立即启动，**没有“生成模板之后、watcher 之前”可人工介入的时点**，所以不能在生产首次启动后再隔离模板。仍会生成的模板是启用的 v3 周期任务（含 `active`/`waiting` 的在途一轮与 `sleeping`）对应的 `events/<id>.json`（或 `<id>-task.json`）。安全流程：(a) 在演练副本中盘点 `workspace/events/` 新增文件，列出每个将生成的模板及 cron；(b) 对不希望在升级后自动运行的 v3 周期任务，**在停 daemon 状态下于生产原文件里设 `enabled: false`（先备份）**，使其按停用路径迁移、不生成模板，之后再按第 5 步手工重建；(c) 同名事件 `<id>.json` 已存在时迁移会改用 `<id>-task.json`，首次启动前把不应执行的既存同名/关联事件移出 `workspace/events/`；(d) 若无法对某个任务确定处置，停在备份与检查阶段，不启动新版。
+5. **人工重建 v4 或失败项。** 通过聊天侧 `task_create` 用新 id 创建 v5 契约，复制经核对的 Goal、DoD 与剩余 Work Items，明确授权边界和禁止重复动作；保留旧路径作为证据。经用户确认设置 `steps` / `usd` 剩余预算，旧 `cycle` 用量作为历史记录留存，不假装已转入新计数。周期工作通过 `event_manage` 重建 `task` 模板，检查 cron、频道、DoD 及每次执行的权限；只在确认应启用时放回事件目录。创建任务后可能立即推进，必须先确认允许继续。
+6. **重建等待来源，不手写 ticket。** 先核对已有 run/job 的结算与产物；不要假定旧绑定会转给新 id。要继续等外部条件时，在新任务会话中创建带超时的只读后台作业，再由 `task_step_end` + `resolveTicket` 生成 `work` 票；需要用户判断用 `ask`，定时复查用 `time`。未知外部状态继续隔离，交回用户确认。
+7. **验收后恢复。** 逐项对照备份与清单，检查 `/tasks show`、`/tasks log`、`/events show` 和事件历史，确保无重复模板或未授权动作。模板不可表达、名字冲突（`<id>` 和 `<id>-task` 都存在）时，保留暂停任务，用日志里的原因修复新模板，不靠删文件避冲突。不要删除 `task-migration-v5.done` 全量重跑；启动因转换失败而中止时，按上文“失败处置”处理，必要时对该 v3 任务改为人工重建。未解决项留在恢复清单中，不能隐式丢弃。
+
+回滚须先停止新版并处理其在途外部 run，再恢复**完整**备份与匹配的旧程序；不要将旧任务覆盖进已运行的新版。备份恢复不能撤销已经发生的外部动作，须另行核对。
 
 ## 异常恢复
 

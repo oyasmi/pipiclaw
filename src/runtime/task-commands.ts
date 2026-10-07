@@ -295,8 +295,8 @@ async function doctor(options: HandleTasksCommandOptions): Promise<string> {
 		if (entry.legacy) {
 			problems.push(
 				issue(
-					`${entry.id} 仍含旧版本的字段（cycle / schedule / verify 等）`,
-					"重启一次让转换器升级它，或用 edit 手动改写 frontmatter",
+					`${entry.id} 仍含旧版本的字段（status / enabled / control / wake / schedule）`,
+					"保留原件，按 docs/events-and-tasks.md 的升级步骤处理；不要仅删旧字段",
 				),
 			);
 		}

@@ -91,7 +91,7 @@
 
 ### F5 v3 迁移残留
 
-`runtime/task-migration.ts`（290 行）、frontmatter 的 `legacy` 判定、driver 的 repair-only 分支、doctor 的"仍是 v3 契约"。v4 迁移已在生产跑过一个月。
+`runtime/task-migration.ts`（290 行）、frontmatter 的 `legacy` 判定、driver 的 repair-only 分支、doctor 的"仍是 v3 契约"。这是原设计的背景判断，不构成升级覆盖证据；0.9.3 的实际支持范围见 D12。
 
 ### 约束：不能回退 051 F3
 
@@ -126,11 +126,11 @@ workspace/
     ├── weekly-report-20261005-0900.jsonl
     ├── .sessions/<id>.jsonl      每个任务一份会话（不再按 cycle 分）
     ├── .steer/                   待处理的用户指示与待发送的通知（不变）
-    ├── .v4/                      v4 → v5 转换前的原件（D12）
+    ├── .v3/                      v3 → v5 转换前的原件（D12）
     └── archive/
 ```
 
-`.verifications/` 不再写入；`.v3/` 与 `.verifications/` 的存量文件保持原样，不删除。
+`.verifications/` 不再写入；`.verifications/` 的存量文件保持原样。`.v3/` 的既有备份不删除、不覆盖：同名备份已存在且内容不同时保留旧备份，新副本另存为 `<id>.backup-<n>.md`；`tasks/.v3/events/` 里的事件备份同理（`<name>.backup-<n>.json`，先复制、再删除 `workspace/events/` 里的现役文件，不使用会覆盖的 rename）。
 
 ### 3.2 契约文件
 
@@ -414,32 +414,29 @@ done 时检查在途委派是新增的门禁：它能防止项目已归档、结
 ```
 
 - 删除 `/tasks run`（它的作用是"立即开一个周期"）。立即跑一次周期工作的替代：让 Agent 用同一模板 `task_create` 一个项目。
-- doctor 只保留 3 项：frontmatter 不可读；仍含 v4 字段（转换没有执行）；停泊的兜底时限已过去 1 小时以上（driver 可能没有运行）。
+- doctor 只保留 3 项：frontmatter 不可读；仍含已识别的旧字段（不代表能识别所有 v4 文件）；停泊的兜底时限已过去 1 小时以上（driver 可能没有运行）。
 - `<task_agenda>` 每行：`id — 标题 · state · 票据摘要 · 兜底 · items 2/3 · 6 步 · $3.40`。
 
-### D12 一次性转换 v4 → v5；退役 v3 迁移
+### D12 一次性转换 v3 → v5；v4 需人工重建
 
-daemon 首次以 v5 启动时执行一次确定性转换，不调用 LLM，完成后写入标记 `state/task-migration-v5.done`。原件复制到 `tasks/.v4/`，永不删除。
+**0.9.3 实施范围（以 `src/runtime/task-migration.ts` 为准）：**daemon 首次启动 v5 时执行一次确定性转换，不调用 LLM，完成扫描后写入 `state/task-migration-v5.done`。仅转换有 `status:` 且没有 `state:` 的 v3 文件；任何带 `state:` 的文件均跳过，因此 **beta 的 v4 不会自动转换**。不能从安装版本推断任务格式，也不能假定所有用户已经完成 v4 迁移。
 
 | 输入 | 处理 |
 |---|---|
-| `cycle` | 转为 `usage`（保留 `startedAt` / `steps` / `usd` / `usdEstimated` / `expired`） |
-| `budget` | 只保留 `steps` / `usd`；丢弃的维度写进一条日志说明 |
-| `verify` | 删除；如果原来是 required，写一条日志说明 |
-| `## Plan` / `## 计划` | 标题改为 `## Work Items`，条目原样保留 |
-| `## 上次结果` | 删除 |
-| 票：`time` / `ask` | 不变 |
-| 票：`run` / `job` | 如果仍有在途的绑定项，改为 `work`，重新盖章 `by`；否则改为 `open`，并写一条日志说明 |
-| 票：`signal` | 改为 `open`，并写一条日志说明 |
-| **周期任务**（有 `schedule`） | 生成 `workspace/events/<id>.json`：`periodic`，同一个 `schedule`，`task` 模板由契约生成（Goal + 原 Manual / Verification 正文附在 Goal 后面，DoD 全部取消勾选，Plan 条目转为 `items`，`budget` 只保留 steps/usd）。名字冲突时加 `-task` 后缀。原任务：如果停泊在 `schedule` 票上（两次执行之间），以 `cancelled` 归档，close note 写"已转换为事件模板 `<name>`"；如果正在执行中，就地变成一个实例（删除 `schedule`，`origin` 设为新事件名），本次执行跑完，下一次由事件生成 |
-| task-owned 事件 `task.<ch>.<id>.*` | 移到所属频道的 `tasks/.v4/events/`；在仍活动的所属任务日志中写一条说明 |
-| 归档区 | 不动；读取时容忍旧字段 |
+| v3 `status` / `enabled` / `control.stop` | 改为 `open`；原先停用或停止的任务转为 `paused` |
+| v3 等待 | 不保留 `wake` / `waitingFor`；`waiting` 改为 `open` 并留 note，升级前须核对外部动作，避免重复执行 |
+| `## Plan` / `## 计划` | 改名为 `## Work Items`；条目原样保留 |
+| `## Current Cycle` / `## History`（含中文名） | 从新契约删除；原文仍在备份中；Manual / Verification 保留 |
+| v3 周期任务（有 `schedule`） | 生成同 cron 的 `periodic` 任务模板事件；Manual / Verification 并入 Goal，DoD 取消勾选，Plan 生成 items。事件名冲突加 `-task`，再次冲突或模板不可表达则暂停并留 note。`sleeping` 原任务以 `cancelled` 归档，其余作为 `origin` 指向该事件的实例继续；已停用（`enabled: false` / `control.stop`）的周期任务仍暂停，**不生成事件模板**（事件没有停用标志，生成即会运行），只留 note 记录原周期；仍会生成的模板无法在 watcher 启动前人工拦截，升级前须在隔离副本盘点，并在停 daemon 时对不应运行的 v3 任务先设 `enabled: false` |
+| task-owned 事件 `task.<ch>.<id>.*` | 移到频道 `tasks/.v3/events/`，活动所属任务记 note |
+| 原件 / 归档区 | 原件复制到 `tasks/.v3/`；不扫描归档区，不删除存量原件 |
+| v4（有 `state:`，常见 `cycle` / `verify` / 旧票种） | 原样跳过，不转换预算、用量、等待票或正文；不能视为兼容 v5，必须先隔离，再人工重建 |
 
-**v3：**删除 `task-migration.ts` 中的 v3 迁移和 frontmatter 中的 `legacy` 判定。v3 文件由 doctor 报告为"不可读"，不再自动迁移。所有运行过 0.9.x 的安装都已经执行过 v4 迁移。
+**失败与恢复：**单任务转换抛错先回滚（恢复 v3 原文件，删除本次写出的模板事件/新建日志；`archiveTask` 自身拒绝覆盖既有归档条目，并在中途失败时撤销已移动的日志分片与归档契约，因此转换前就存在的归档不会被改动，回滚报告的 `ok` 仅指这些步骤）。任务目录或事件目录无法读取（除“不存在”外的任何 `readdir` 错误，如 EACCES/EIO）按 `scan`/`events` 失败处理，不当作“没有任务”；归档日志 rename 失败同样使该任务失败。任一任务或事件移动失败则不写 marker，写 `state/task-migration-v5.failed.json`（含阶段与回滚结果），迁移函数抛错，bootstrap 不捕获，因此 watcher / driver / 钉钉均不启动；修复后重启重试失败项，已转换项带 `state:` 被跳过。报告含回滚失败时持续拒绝启动，直至人工核对恢复并删除报告。不要删除标记来全量重跑，也不要只删旧字段或直接改写 ticket。保留任务、日志、会话、事件与委派记录，按[升级及人工重建步骤](../../events-and-tasks.md#beta-用户升级与不可转换任务)处理；doctor 不能证明 v4 已全部识别。
 
-**转换代码的寿命：**在下一个 minor 版本删除，并在 CHANGELOG 中注明"需要从 ≤0.9 升级的安装，先升级到 0.10"。这避免了转换代码永久残留。
+**上线前演练：**停止服务前先结算或显式取消外部 run，再停 daemon、备份整个 app home。用 `scripts/rehearse-task-migration.mjs`（需先 build）在临时只读副本上直接调用迁移函数，不经 bootstrap，不启动任何服务；检查每个周期模板、等待的真实来源及授权。不要拿生产数据直接试启动。
 
-**上线前演练：**沿用 051 的做法，复制生产机器的 `~/.pipiclaw`，跑一次转换，人工核对每个周期任务生成的模板和每张票的去向（051 的演练曾发现真实数据上的截断缺陷）。
+**转换代码寿命：**计划在下一个 minor 删除；删除前须公布可用的中间升级版本与支持范围，目前不承诺尚未验证的升级跳板。
 
 ### D13 知识放置：playbook、system prompt、文档
 
@@ -496,12 +493,12 @@ System prompt：
 | `ticket.ts`（schedule / run / job / signal 四个分支） | 改为 `work` 一个分支 | −60 |
 | `events.ts`（signal、孤儿清理） | 删除 | −90 |
 | `task-driver.ts`（schedule 兑现、开周期、repair-only） | 简化 | −40 |
-| `task-migration.ts`（v3） | 删除 | −290 |
+| `task-migration.ts`（v3） | 保留临时转换器（D12） | 以实施为准 |
 | `task-commands.ts`（run、doctor） | 简化 | −60 |
 | 新增：模板生成、契约输入校验 | 新增 | +130 |
 | 新增：`dispatch` / `settle` 写入点、看板渲染 | 新增 | +150 |
 | 新增：`work` 票、自动绑定、`item` 校验 | 新增 | +70 |
-| 新增：v4 → v5 转换（下一个 minor 删除） | 临时 | +180 |
+| 临时：v3 → v5 转换（v4 人工重建） | 临时 | +180 |
 
 删除约 2,160 行，永久新增约 350 行，永久性净变化约 **−1,800 行**；算上下一个 minor 才删除的转换代码，本版本净变化约 −1,630 行。测试：`task-completion-verification.test.ts`、`verification-outcome.test.ts` 的大部分、`e2e/deterministic/verify-chain.test.ts`、`task-migration.test.ts` 删除或重写；新增的测试见第 7 节。
 
@@ -518,7 +515,7 @@ System prompt：
 - 看板：`dispatch` / `settle` 的关联；run 记录被回收（`forget`）后看板不变；`★新` 只标记上一条 step 之后的结算；超过 12 行时折叠。
 - 关闭：DoD 有未勾选项时拒绝；有在途绑定项时拒绝 `done`；`cancel` 不受此限制。
 - 绑定：任务会话中 `subagent` 自动绑定 taskId；传入其他任务的 id 被拒绝；不存在的 `item` 被拒绝。
-- 转换：停泊中的周期任务 → 生成事件并归档；执行中的周期任务 → 变成实例；`signal` → `open`；task-owned 事件被移走；标记文件存在时不重复执行；原件有备份。
+- 转换：停泊中的周期任务 → 生成事件并归档；执行中的周期任务 → 变成实例；v3 `waiting` → `open`；task-owned 事件被移走；标记文件存在时不重复执行；原件有备份。
 
 **确定性 e2e（`test/e2e/deterministic/`）：**
 
@@ -535,10 +532,10 @@ System prompt：
 
 在一个分支上分四个阶段完成，**合并为一个版本发布**（转换代码只针对最终格式编写一次）。每个阶段结束时 `npm run check` 和 `npm run test:e2e` 都要通过。
 
-1. **验收降级（D6）+ 删除 v3 迁移（D12 后半）。**纯删除，与其他阶段无交叉。
+1. **验收降级（D6）。**保留 D12 的临时 v3 转换器与旧字段判定。
 2. **周期性移到事件（D1、D2、D10）。**cycle 退役、模板事件与生成实例、events ↔ tasks 解耦、删除 `/tasks run` 和 `skip`。
 3. **负责人能力（D3、D4、D5、D7、D8、D9）。**`work` 票、自动绑定、`item`、`dispatch` / `settle`、看板、工具面收敛、预算、`report`。
-4. **转换与知识（D12 前半、D13）。**v4 → v5 转换并用生产数据副本演练；重写 playbook；更新 system prompt、文档与 eval。
+4. **转换与知识（D12 前半、D13）。**v3 → v5 转换并在隔离数据副本演练；v4 按 D12 人工重建；重写 playbook；更新 system prompt、文档与 eval。
 
 ---
 
@@ -547,7 +544,7 @@ System prompt：
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 失去结构性验收证明 | verifier 改了代码或 PASS 之后产物又变化时，运行时不再察觉 | 用户已接受；`mutates: read` 角色；playbook 要求对照 diff 采信结论，并在 report 中写明检查过程 |
-| 生产中周期任务的转换出错 | 日常产出中断（重演 051 F1） | 备份；生产数据副本演练；执行中的周期任务就地变成实例，不打断本次执行；doctor 检查"仍含 v4 字段" |
+| 生产中周期任务的转换出错 | 日常产出中断（重演 051 F1） | 备份；生产数据副本演练；执行中的周期任务就地变成实例，不打断本次执行；人工清单核对 v4；doctor 只检查已识别的旧字段 |
 | 预算按项目计后默认值不合适 | 常规项目撞线，或失控项目花费过多 | 默认值有依据（D8），可按任务覆盖、可加码；回执中带命令 |
 | 跳过回执过于频繁 | 卡住的周期实例每次触发都回执一次 | 这是有意为之的可见性——卡住本身就是需要用户处理的问题；上一实例的预算与兜底保证它最终结束 |
 | 负责人仍然全部自己做 | 委派能力用不上 | playbook 给出立项与派发的判断条件；eval 覆盖 |
@@ -571,11 +568,11 @@ System prompt：
 - **`ask` 的通知**：`park` 到 `ask` 票时，运行时自动发送「任务 X 需要你的决定：… 用 /tasks reply X <内容> 回答」，并拼在 `report`（如有）之后。
 - **`done` 的写入顺序**：`task_step_end done` 在所有检查通过之后、写 close 记录之前追加自己的 step 记录（`closeTaskDocument` 的 `afterChecks` 钩子）——归档会把日志移走，step 记录必须落在随任务归档的那份里，而被拒绝的 `done` 不能留下任何记录。
 - **`/tasks resume` 与死票**：恢复一个因"连续第二次过期"被暂停、且票的兜底时限已过的任务时，`resume` 把它重开并清零过期计数；否则恢复后会立刻在同一张死票上再次过期并再次暂停。
-- **转换器的范围**：v4 → v5 转换在服务启动之前 `await`（它写出的事件模板要被 watcher 装载）；v3 契约不转换，doctor 与 `/tasks` 把它们报告为含旧字段。`run`/`job` 票是否仍在途，直接读 `state/subagent-runs/` 与 `state/jobs/` 的持久化记录判断。无法表达为模板的周期任务（如 DoD 不是清单）转换为 `paused{by:"runtime"}` 并留说明，不会静默丢掉周期。
+- **转换器的范围**：v3 → v5 转换在服务启动之前 `await`，支持范围与失败处理见 D12。v4 带 `state:` 的文件原样跳过，不读取持久化 run/job 来转换旧票。无法表达为模板的 v3 周期任务转换为 `paused{by:"runtime"}` 并留说明；beta/v4 用户须先隔离原件再人工重建。
 - **作业的 `timeoutSeconds`**：为让 `work` 票的兜底时限取作业自己的 timeout，`JobSnapshot` 新增 `timeoutSeconds`；作业记录新增持久化的 `taskLogged` 标记，作用同 run 的 `taskAccounted`。作业只在带 `channelDir` 的 manager 上写任务日志（生产路径经 `createJobRuntime` 传入）。
 - **看板的"新"**：以日志里最后一条 `step` 记录为界。同步返回的委派在步骤中途结算，早于该步的 step 记录，所以不会被标为"新"——负责人当场已经读到了结果。
 - **预算文案**：`budget.ts` 的 `createUsage` 取代 `accrueStep`；步数由 `task_step_end` 自增，成本由结算时的 `logTaskSettlement` 累加。
 
 ## 12. 验证
 
-单元与 e2e 覆盖：票据校验矩阵与兜底、重开/连续过期/resume、看板（分组、新标记、run 记录回收后仍在、折叠）、关闭门禁（DoD、在途项、cancel 不受限）、任务会话中的自动绑定与 `item` 校验、模板事件（`text` xor `task`、重放幂等、跳过回执、一次性模板的 `at` 键、失败保留标记）、v4 → v5 转换的各分支、作业的 `dispatch`/`settle` 先于唤醒；确定性 e2e：A13/A13b（任务步骤）、A15（唤醒真伪与 `work` 票）、A17（任务内委派绑定工作项）、A18（模板生成实例并在任务会话里执行、第二次触发被跳过）。上线前仍需在生产数据副本上演练一次转换（D12）。
+单元与 e2e 覆盖：票据校验矩阵与兜底、重开/连续过期/resume、看板（分组、新标记、run 记录回收后仍在、折叠）、关闭门禁（DoD、在途项、cancel 不受限）、任务会话中的自动绑定与 `item` 校验、模板事件（`text` xor `task`、重放幂等、跳过回执、一次性模板的 `at` 键、失败保留标记）、v3 → v5 转换的各分支及 v4 原样跳过、作业的 `dispatch`/`settle` 先于唤醒；确定性 e2e：A13/A13b（任务步骤）、A15（唤醒真伪与 `work` 票）、A17（任务内委派绑定工作项）、A18（模板生成实例并在任务会话里执行、第二次触发被跳过）。上线前仍需在生产数据副本上演练一次转换（D12）。

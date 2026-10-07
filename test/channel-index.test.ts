@@ -59,6 +59,20 @@ describe("channel index", () => {
 			await rm(workspaceDir, { recursive: true, force: true });
 		}
 	});
+
+	it("strict discovery refuses an escaped group directory without its real id", async () => {
+		const workspaceDir = await mkdtemp(join(tmpdir(), "pipiclaw-channel-discovery-"));
+		try {
+			// Regression: a migration must not write templates for `group_...__...` as if that were the real id.
+			await mkdir(join(workspaceDir, getChannelDirName(GROUP_ID)), { recursive: true });
+
+			await expect(discoverWorkspaceChannelIds(workspaceDir, { strict: true })).rejects.toThrow(
+				/restore CHANNELS\.md from backup/,
+			);
+		} finally {
+			await rm(workspaceDir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("channel index maintenance", () => {
