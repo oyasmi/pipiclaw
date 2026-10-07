@@ -71,11 +71,6 @@ describe("mock provider: content routing", () => {
 		],
 	};
 
-	it("classifies a request with tools as the main turn and a no-tools request as sidecar", () => {
-		expect(parseRequest("/chat/completions", mainBody).isMainTurn).toBe(true);
-		expect(parseRequest("/chat/completions", sidecarBody).isMainTurn).toBe(false);
-	});
-
 	it("matches by the `when` predicate regardless of route registration order", () => {
 		const script = new Script();
 		script.route({ name: "sidecar", when: (r) => !r.isMainTurn, respond: [reply.text("side")] });

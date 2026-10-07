@@ -101,16 +101,6 @@ describe("grep tool", () => {
 		expect(secondPage).not.toContain("== f19.txt ==");
 	});
 
-	it("filters files by glob on the basename", async () => {
-		const stdout = ["a.ts:1:hit", "b.js:1:hit", "sub/c.ts:1:hit"].join("\n");
-		const { tool } = makeTool(stdout);
-		const text = await run(tool, { pattern: "hit", glob: "*.ts" });
-
-		expect(text).toContain("== a.ts ==");
-		expect(text).toContain("== sub/c.ts ==");
-		expect(text).not.toContain("== b.js ==");
-	});
-
 	it("drops matches inside ignored directories", async () => {
 		const stdout = ["node_modules/x/index.js:1:hit", "src/real.ts:1:hit"].join("\n");
 		const { tool } = makeTool(stdout);
@@ -345,13 +335,14 @@ describe("grep tool literal / mode / glob dialect (batch 3.5)", () => {
 		expect(counts.details).toMatchObject({ matchCount: 4, fileCount: 2 });
 	});
 
-	it("the JS glob backstop accepts a brace/class pattern that --include also matches", async () => {
+	it("the JS glob backstop filters on the basename at any depth, brace patterns included", async () => {
 		// `*.{ts,tsx}` used to match nothing in the JS filter -> silent no-results. Now it agrees.
-		const out = ["a.ts:1:hit", "b.tsx:1:hit", "c.js:1:hit"].join("\n");
+		const out = ["a.ts:1:hit", "b.tsx:1:hit", "c.js:1:hit", "sub/d.ts:1:hit"].join("\n");
 		const { tool } = makeTool(out);
 		const text = await run(tool, { glob: "*.{ts,tsx}" });
-		expect(text).toContain("a.ts");
-		expect(text).toContain("b.tsx");
+		expect(text).toContain("== a.ts ==");
+		expect(text).toContain("== b.tsx ==");
+		expect(text).toContain("== sub/d.ts ==");
 		expect(text).not.toContain("c.js");
 	});
 });

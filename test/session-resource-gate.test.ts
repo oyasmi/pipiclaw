@@ -13,13 +13,13 @@ function createDeferred(): {
 }
 
 describe("SessionResourceGate", () => {
-	it("defers refresh requests until the active prompt completes", async () => {
+	it("defers refresh requests until the active prompt completes, coalescing them into one reload", async () => {
 		const reloadSessionResources = vi.fn(async () => {});
 		const gate = new SessionResourceGate(reloadSessionResources);
 		const promptDone = createDeferred();
 
 		const promptPromise = gate.runPrompt(async () => {
-			await gate.requestRefresh();
+			await Promise.all([gate.requestRefresh(), gate.requestRefresh(), gate.requestRefresh()]);
 			expect(reloadSessionResources).not.toHaveBeenCalled();
 			await promptDone.promise;
 		});
@@ -31,30 +31,8 @@ describe("SessionResourceGate", () => {
 		await promptPromise;
 
 		expect(reloadSessionResources).toHaveBeenCalledTimes(1);
-	});
-
-	it("coalesces multiple refresh requests into one reload after the turn", async () => {
-		const reloadSessionResources = vi.fn(async () => {});
-		const gate = new SessionResourceGate(reloadSessionResources);
-		const promptDone = createDeferred();
-
-		const promptPromise = gate.runPrompt(async () => {
-			await Promise.all([gate.requestRefresh(), gate.requestRefresh(), gate.requestRefresh()]);
-			await promptDone.promise;
-		});
-
-		promptDone.resolve();
-		await promptPromise;
-
-		expect(reloadSessionResources).toHaveBeenCalledTimes(1);
-	});
-
-	it("runs refresh immediately when no prompt is active", async () => {
-		const reloadSessionResources = vi.fn(async () => {});
-		const gate = new SessionResourceGate(reloadSessionResources);
-
+		await gate.whenSettled();
 		await gate.requestRefresh();
-
-		expect(reloadSessionResources).toHaveBeenCalledTimes(1);
+		expect(reloadSessionResources).toHaveBeenCalledTimes(2);
 	});
 });

@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DingTalkEvent, DingTalkHandler } from "../src/runtime/dingtalk.js";
-import { parseInboundMessage } from "../src/runtime/inbound-media.js";
 
 const { axiosMock, fakeClientState } = vi.hoisted(() => {
 	const post = vi.fn();
@@ -189,20 +188,7 @@ afterEach(() => {
 
 describe("dingtalk", () => {
 	// `parseInboundMessage` itself (text/picture/richText shapes, marker placement) is covered by
-	// its own unit tests in test/inbound-media.test.ts (spec 049) — this only checks the transport
-	// still wires plain text and richText-without-images through unchanged.
-	it("extracts plain text and richText content", () => {
-		expect(parseInboundMessage({ text: { content: " hello " } })).toEqual({ text: "hello", downloadCodes: [] });
-		expect(
-			parseInboundMessage({
-				content: {
-					richText: [{ text: "Hello" }, { text: " " }, { text: "World" }],
-				},
-			}),
-		).toEqual({ text: "Hello World", downloadCodes: [] });
-		expect(parseInboundMessage({ msgtype: "empty" })).toEqual({ text: "", downloadCodes: [] });
-	});
-
+	// its own unit tests in test/inbound-media.test.ts (spec 049); these cases drive the transport.
 	it("routes authorized messages to DM and group channels and persists metadata", async () => {
 		const { bot, handler, stateDir } = createBot();
 		const privateApi = getPrivateApi(bot);

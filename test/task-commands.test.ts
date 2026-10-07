@@ -56,7 +56,9 @@ describe("/tasks (spec 051, D11; spec 052, D11)", () => {
 		await run("resume weekly");
 		fields = (await readStoredTask(channelDir, "weekly"))?.fields;
 		expect(fields?.paused).toBeUndefined();
+		// Resuming a user pause keeps the live ticket: the task goes back to waiting, not to open.
 		expect(fields?.state).toBe("parked");
+		expect(fields?.ticket).toEqual({ kind: "time", at: FUTURE, by: FUTURE });
 	});
 
 	// A budget grant must be headroom on top of what is already spent, or resuming a task that

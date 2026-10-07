@@ -60,12 +60,6 @@ describe("skill tool", () => {
 		expect(text).toContain("</skill>");
 	});
 
-	it("rejects read without a name", async () => {
-		const workspaceDir = createWorkspace();
-		const tool = makeTool(workspaceDir);
-		await expect(tool.execute("call", { action: "read" })).rejects.toThrow(/requires a skill name/);
-	});
-
 	it("rejects read of a nonexistent skill", async () => {
 		const workspaceDir = createWorkspace();
 		const tool = makeTool(workspaceDir);

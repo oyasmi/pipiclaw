@@ -1,16 +1,13 @@
 {
-  "schemaVersion": 1,
-  "description": "Exploration baseline plus implementation audit for unit-test-quality-plan.md; target reduction not achieved in this pass.",
+  "schemaVersion": 2,
   "date": "2026-10-07",
-  "commit": "699f6543bb42b313cd1cc9095f36f0b13c0aeabb",
-  "packageVersion": "0.9.3",
+  "description": "W1：当前默认 Vitest 单测瘦身与 Q01–Q12 证据；历史数据单独保存，不作为本轮通过结论。",
+  "baseCommit": "408f1893248e55b6bc1e3e57f787efeb0ed34fb0",
   "environment": {
-    "platform": "linux",
     "node": "v22.21.0",
-    "vitest": "3.2.4",
-    "testTimezone": "Asia/Shanghai"
+    "vitest": "3.2.7",
+    "coverageV8": "3.2.7"
   },
-  "command": "npm run test:coverage -- --coverage.reportOnFailure --reporter=json --outputFile=/tmp/pipiclaw-unit-baseline-final.json",
   "scope": {
     "config": "vitest.config.ts",
     "include": [
@@ -20,1460 +17,1662 @@
       "test/e2e/**/*.test.ts",
       "test/evals/**/*.test.ts"
     ],
-    "counting": "Vitest expanded collected test cases; not it() declarations or suite count"
+    "configurationChanged": false,
+    "counting": "Vitest 实际展开 case；名称对比包含合并时的重命名，不是 it() 声明数量。"
+  },
+  "reference": {
+    "cases": 1016,
+    "files": 132,
+    "command": "node /home/oyasmi/projects/pipiclaw/node_modules/vitest/vitest.mjs list --json /tmp/pipiclaw-w1/head-clean-inventory.json",
+    "cwd": "/tmp/pipiclaw-w1/head-tree",
+    "exitCode": 0,
+    "inventorySha256": "c2838698f308b9b36efb843e55283b5a0080df2612032b37b375956bf926a46f",
+    "artifact": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/head-clean-inventory.json",
+    "snapshotStateAtCollection": "采集时为 git archive baseCommit 的干净副本；采集成功后才 apply inherited.patch 供继承审计。"
+  },
+  "inheritedAudit": {
+    "head": 1016,
+    "affectedFiles": 38,
+    "originalAffectedCases": 406,
+    "inheritedAffectedCases": 363,
+    "total": 973,
+    "modifiedFiles": 38,
+    "patchSha256": "fcf8b30989b12d834e3c82ff75689b51ec8339e78778739f24b4c964ee44e9e7",
+    "patchArtifact": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/inherited.patch",
+    "inventoryCommandArgv": [
+      "node",
+      "/home/oyasmi/projects/pipiclaw/node_modules/vitest/vitest.mjs",
+      "list",
+      "test/agent-session-tool-images.test.ts",
+      "test/bash.test.ts",
+      "test/codex-cli-harness.test.ts",
+      "test/command-extension.test.ts",
+      "test/dingtalk.test.ts",
+      "test/events.test.ts",
+      "test/exec-harness.test.ts",
+      "test/file-store.test.ts",
+      "test/glob-match.test.ts",
+      "test/grep-tool.test.ts",
+      "test/host-process.test.ts",
+      "test/inbound-media.test.ts",
+      "test/job-manager.test.ts",
+      "test/job-tool.test.ts",
+      "test/maintenance-context.test.ts",
+      "test/memory-commands.test.ts",
+      "test/memory-journal.test.ts",
+      "test/memory-maintenance-gates.test.ts",
+      "test/memory-store.test.ts",
+      "test/mock-provider.test.ts",
+      "test/model-fallback.test.ts",
+      "test/models-auth-path.test.ts",
+      "test/prompt-sections.test.ts",
+      "test/session-resource-gate.test.ts",
+      "test/skill.test.ts",
+      "test/subagent-harness-placeholders.test.ts",
+      "test/subagent-invocation-matrix.test.ts",
+      "test/subagent-restart-adoption.test.ts",
+      "test/subagent-runs.test.ts",
+      "test/subagent-tool-lease.test.ts",
+      "test/task-commands.test.ts",
+      "test/task-ledger.test.ts",
+      "test/task-log.test.ts",
+      "test/task-migration-faults.test.ts",
+      "test/task-store.test.ts",
+      "test/turn-recovery.test.ts",
+      "test/turn-teardown.test.ts",
+      "test/workspace-lease.test.ts",
+      "--json",
+      "/tmp/pipiclaw-w1/inherited-replay-inventory.json"
+    ],
+    "exitCode": 0,
+    "inventoryArtifact": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/inherited-replay-inventory.json",
+    "note": "最初工作树 inventory 与编辑重叠，已弃用；这里在干净 HEAD 快照重放继承 patch，并单独收集 38 个修改文件，未修改文件的计数来自干净 HEAD。",
+    "corrections": [
+      "恢复 host-wide admission lease-release、leading **、短 image magic buffer、journal absent-day 与独立 auth path 拒绝用例。",
+      "撤销 models-auth-path 与 maintenance-gates 的新增隐藏循环；maintenance-gates 用原来的显式拒绝调用共享 spy。",
+      "images-only richText、lead-3 dedupe、clean recovery replay 的精确断言补到相同生命周期。",
+      "保留 restart wait headroom；旧 timing root cause 没有过度宣称。"
+    ]
+  },
+  "target": {
+    "minimumNetRemoved": 80,
+    "maximumFinalCases": 936
   },
   "summary": {
     "files": 132,
-    "cases": 1041,
-    "passed": 1041,
+    "cases": 935,
+    "passed": 935,
     "failed": 0,
     "pending": 0,
     "todo": 0,
-    "testLines": 25832,
-    "reportSpanMs": 82050.43,
-    "sumCaseDurationMs": 37360.24
+    "success": true,
+    "failedSuiteNodes": 0
   },
-  "target": {
-    "strictReductionPercent": 10,
-    "minimumNetRemoved": 105,
-    "maximumFinalCases": 936,
-    "preferredFinalCasesApproximately": 920
+  "caseDelta": {
+    "removedCollectedNames": 91,
+    "addedCollectedNames": 10,
+    "netRemoved": 81,
+    "reductionPercent": 7.9724,
+    "targetMet": true,
+    "newIndependentCases": 0,
+    "note": "91 个旧展开名称消失、10 个合并后的名称出现，净减 81；没有将 it.each 改成隐藏循环、skip/todo、include/exclude 或迁移测试层。"
   },
-  "coverage": {
-    "lines": {
-      "total": 30155,
-      "covered": 23391,
-      "skipped": 0,
-      "pct": 77.56
-    },
-    "statements": {
-      "total": 30155,
-      "covered": 23391,
-      "skipped": 0,
-      "pct": 77.56
-    },
-    "functions": {
-      "total": 1785,
-      "covered": 1484,
-      "skipped": 0,
-      "pct": 83.13
-    },
-    "branches": {
-      "total": 8365,
-      "covered": 6815,
-      "skipped": 0,
-      "pct": 81.47
-    }
-  },
-  "earlierAttempt": {
-    "inventoryConcurrentWithCoverage": true,
-    "passed": 1040,
-    "failed": 1,
-    "failureFile": "test/subagent-restart-adoption.test.ts",
-    "failureCase": "rebuilds the write lease for a still-alive adopted run, enforces its deadline once, and settles exactly once",
-    "failure": "waitFor timed out",
-    "isolatedRerun": {
-      "cases": 5,
-      "passed": 5,
-      "failed": 0
-    },
-    "rootCauseConfirmed": false
-  },
-  "limitations": [
-    "Timing is one coverage run, not a benchmark. reportSpanMs excludes report generation after the final file.",
-    "Coverage is default unit scope only. No deterministic e2e, typecheck, lint, deadcode, or mutation was run during exploration.",
-    "Deletion candidates are static review findings; no deletion experiment has been performed."
-  ],
-  "slowestCases": [
+  "removedCases": [
     {
-      "file": "test/subagent-restart-adoption.test.ts",
-      "fullName": "SubAgentRunManager restart adoption (spec 040, D10.3) rebuilds the write lease for a still-alive adopted run, enforces its deadline once, and settles exactly once",
-      "durationMs": 5219.08
-    },
-    {
-      "file": "test/memory-reflect.test.ts",
-      "fullName": "reflect — per-run caps relaxes the delete cap to 8 in condense mode",
-      "durationMs": 3263.16
+      "file": "test/job-manager.test.ts",
+      "name": "ChannelJobManager process identity and group termination (T2-T4) > parses a nohup-fallback launch (PID only) and records no pgid or start time"
     },
     {
       "file": "test/job-manager.test.ts",
-      "fullName": "ChannelJobManager process identity and group termination (T2-T4) with a real executor rejects a real launch whose spill file cannot be created (read-only tmp)",
-      "durationMs": 2457.44
-    },
-    {
-      "file": "test/models-auth-path.test.ts",
-      "fullName": "auth.json path guardrails (spec 039 §4.2) createModelRuntime rejects a missing authConfigPath",
-      "durationMs": 1617.63
-    },
-    {
-      "file": "test/subagent-external-run.test.ts",
-      "fullName": "launchExternalRun (spec 040, D1/D3/D4) reaps the owned descendant group and releases the write lease on complete",
-      "durationMs": 778.83
-    },
-    {
-      "file": "test/subagent-progress-tail.test.ts",
-      "fullName": "startExternalProgressTail caps at MAX_NOTICES even across a long run with constantly changing labels",
-      "durationMs": 524.63
-    },
-    {
-      "file": "test/subagent-external-run.test.ts",
-      "fullName": "launchExternalRun (spec 040, D1/D3/D4) reaps the owned descendant group and releases the write lease on timeout",
-      "durationMs": 467.43
-    },
-    {
-      "file": "test/subagent-external-run.test.ts",
-      "fullName": "launchExternalRun (spec 040, D1/D3/D4) reaps the owned descendant group and releases the write lease on cancel",
-      "durationMs": 448.99
-    },
-    {
-      "file": "test/edit.test.ts",
-      "fullName": "edit tool streaming path (files over the inline threshold) edits a >8MB file correctly, preserving the tail and file size delta",
-      "durationMs": 440.84
+      "name": "ChannelJobManager process identity and group termination (T2-T4) > even if a stray PGID/LSTART is printed, MODE nohup drops them"
     },
     {
       "file": "test/agent-session-tool-images.test.ts",
-      "fullName": "AgentSession tool-result image normalization preserves mixed multi-image order while normalizing only oversized images",
-      "durationMs": 436.57
-    }
-  ],
-  "testFiles": [
-    {
-      "file": "test/active-session-store.test.ts",
-      "cases": 9,
-      "lines": 143,
-      "passed": 9,
-      "caseDurationMs": 84.89,
-      "sha256": "cdfa72f158330e9f43c3acb77ff15bbf1e1036ecd177b2a37245f5e9c687a632"
+      "name": "AgentSession tool-result image normalization > keeps ordinary images and text/image ordering through the real hook"
     },
     {
       "file": "test/agent-session-tool-images.test.ts",
-      "cases": 7,
-      "lines": 328,
-      "passed": 7,
-      "caseDurationMs": 972.54,
-      "sha256": "a97362cb8ea47b2542f63020352d29ea5cbdf78144c76c99b78f03ca8847cf6d"
+      "name": "AgentSession tool-result image normalization > resizes an oversized valid PNG and appends a dimension hint after the image"
     },
     {
       "file": "test/bash.test.ts",
-      "cases": 14,
-      "lines": 304,
-      "passed": 14,
-      "caseDurationMs": 499.13,
-      "sha256": "d6c8f63e07d880dc164529bfb46fbbc4938995a22f3d82aa45bbbae39822d474"
+      "name": "bash tool > falls back to the built-in default timeout when none is supplied"
     },
     {
-      "file": "test/bootstrap-structured-wake.test.ts",
-      "cases": 6,
-      "lines": 357,
-      "passed": 6,
-      "caseDurationMs": 584.99,
-      "sha256": "7dce8db8ea064734ba5f2e0fcab8668e1f20e888569c44511102d5c80a4c23f2"
+      "file": "test/bash.test.ts",
+      "name": "bash tool > does not consult rtk when the optimizer is disabled (default)"
     },
     {
-      "file": "test/bootstrap.test.ts",
-      "cases": 9,
-      "lines": 273,
-      "passed": 9,
-      "caseDurationMs": 124.81,
-      "sha256": "d95a56e217258149cbb0caa1905bf83a5011437bdfad3f719e13f88b73ead823"
-    },
-    {
-      "file": "test/card-delivery.test.ts",
-      "cases": 10,
-      "lines": 238,
-      "passed": 10,
-      "caseDurationMs": 169.61,
-      "sha256": "f2e7df972dc40d024e9779f7836c0202bf3c28ce814b78716be3b4a4512e8106"
-    },
-    {
-      "file": "test/channel-index.test.ts",
-      "cases": 5,
-      "lines": 102,
-      "passed": 5,
-      "caseDurationMs": 171.52,
-      "sha256": "e52bdb0c92b52b289f174e776354d12146523b5c67def829d8665d7261ea80b1"
-    },
-    {
-      "file": "test/channel-paths.test.ts",
-      "cases": 3,
-      "lines": 29,
-      "passed": 3,
-      "caseDurationMs": 26.77,
-      "sha256": "d736838aa479320e69b15d2932aa6dc2c552d96a116ef046d1178d92279e0973"
-    },
-    {
-      "file": "test/claude-code-harness.test.ts",
-      "cases": 11,
-      "lines": 229,
-      "passed": 11,
-      "caseDurationMs": 72.17,
-      "sha256": "56eb5cacb5be0cf4129251a6ce390c5844a5112eb9e6b92c64dcaf86b56b009a"
-    },
-    {
-      "file": "test/codex-cli-harness.test.ts",
-      "cases": 11,
-      "lines": 198,
-      "passed": 11,
-      "caseDurationMs": 34.77,
-      "sha256": "d1d8dff858e0f46ae6b6af7672fb69bb65e7b01f0e16b042a3638e79deb3d3de"
-    },
-    {
-      "file": "test/command-extension.test.ts",
-      "cases": 8,
-      "lines": 184,
-      "passed": 8,
-      "caseDurationMs": 110.25,
-      "sha256": "569d2f68e326445f9536069f0c267962b183b92590930b22e81472ecfb097e7e"
-    },
-    {
-      "file": "test/commands-subcommands.test.ts",
-      "cases": 6,
-      "lines": 64,
-      "passed": 6,
-      "caseDurationMs": 53.99,
-      "sha256": "c8c2c3637337f0c937df7420e6bf52eb10f582aca6a94a04b545818497657b04"
-    },
-    {
-      "file": "test/config-loader.test.ts",
-      "cases": 3,
-      "lines": 122,
-      "passed": 3,
-      "caseDurationMs": 64.89,
-      "sha256": "e1fc9c3f2ca1f081b17bbf6975ff350cd76dab25d6cd8d7d397e228182096066"
-    },
-    {
-      "file": "test/config-reference-coverage.test.ts",
-      "cases": 3,
-      "lines": 41,
-      "passed": 3,
-      "caseDurationMs": 21.16,
-      "sha256": "6c2e397c322d2e5c23376194b39737a6ef6789bc05e5410cd6472e803899c3d0"
-    },
-    {
-      "file": "test/context-budget.test.ts",
-      "cases": 3,
-      "lines": 31,
-      "passed": 3,
-      "caseDurationMs": 35.52,
-      "sha256": "20917f77731ca9993212434b82d6c6a3773a05b27c6d469c799dea58a8df710e"
-    },
-    {
-      "file": "test/context.test.ts",
-      "cases": 5,
-      "lines": 151,
-      "passed": 5,
-      "caseDurationMs": 54.21,
-      "sha256": "1686ca0cd1d96c7e7c8b5c9c0821498acfdaefd0b721ae90eb0e0e238408b436"
-    },
-    {
-      "file": "test/delivery.test.ts",
-      "cases": 13,
-      "lines": 204,
-      "passed": 13,
-      "caseDurationMs": 103.6,
-      "sha256": "8ce960883f76c4a27b538e5ed1a5d894d90586bfedbda49cf9f70bde053a9cfa"
+      "file": "test/bash.test.ts",
+      "name": "bash tool > does not intercept when the interceptor is disabled (default)"
     },
     {
       "file": "test/dingtalk.test.ts",
-      "cases": 24,
-      "lines": 1153,
-      "passed": 24,
-      "caseDurationMs": 250.65,
-      "sha256": "140d8f868dc28e90ad512de112ee0b602832c84061591f054b47003e718ca9a0"
-    },
-    {
-      "file": "test/durable-dispatch.test.ts",
-      "cases": 12,
-      "lines": 519,
-      "passed": 12,
-      "caseDurationMs": 594.01,
-      "sha256": "7099e680b0fa425339f6a737239b484f71c15ed7768627b6db130258fb9d91e4"
-    },
-    {
-      "file": "test/edit.test.ts",
-      "cases": 17,
-      "lines": 338,
-      "passed": 17,
-      "caseDurationMs": 1298.5,
-      "sha256": "cc6c0379cf73ff32568ff9898e60b654b6e447a681509273181d296044abe552"
-    },
-    {
-      "file": "test/event-manage.test.ts",
-      "cases": 24,
-      "lines": 372,
-      "passed": 24,
-      "caseDurationMs": 317.56,
-      "sha256": "c50587b0cb089ca848a56e452e163de3d294cbc03609edfe20f52b8ca00e300d"
-    },
-    {
-      "file": "test/events.test.ts",
-      "cases": 25,
-      "lines": 803,
-      "passed": 25,
-      "caseDurationMs": 498.54,
-      "sha256": "a4f80d4218fb0f2bf9e28f5751cac9409130548ce936b8d54678a3811ca651c9"
-    },
-    {
-      "file": "test/exec-harness.test.ts",
-      "cases": 4,
-      "lines": 48,
-      "passed": 4,
-      "caseDurationMs": 27.99,
-      "sha256": "becfa46b9d65cbf17f11754b7ea1bcf8640dd1fb24cd8c6b238b9946016ce013"
-    },
-    {
-      "file": "test/executor.test.ts",
-      "cases": 7,
-      "lines": 118,
-      "passed": 7,
-      "caseDurationMs": 533.62,
-      "sha256": "f1f76c3f6759cdab5980b236b1e34729378d517428735fff2a9f4fc70b0c8216"
-    },
-    {
-      "file": "test/external-harness-contract.test.ts",
-      "cases": 6,
-      "lines": 43,
-      "passed": 6,
-      "caseDurationMs": 35.67,
-      "sha256": "b55940563c60fafa5de9b2035fb306e8ccda785cea0bf4b3efb44b5c72ccc7b2"
-    },
-    {
-      "file": "test/file-store.test.ts",
-      "cases": 11,
-      "lines": 161,
-      "passed": 11,
-      "caseDurationMs": 106.96,
-      "sha256": "bf80bc8b9ad252806aa5959cf79f9715f335be12f3be6a9036b5c1a813e96752"
-    },
-    {
-      "file": "test/glob-match.test.ts",
-      "cases": 14,
-      "lines": 87,
-      "passed": 14,
-      "caseDurationMs": 48.68,
-      "sha256": "c1a6727276565d51a6b3e5d832a59e0f311a43a42d9388e2eb8e9057d6252055"
-    },
-    {
-      "file": "test/glob-tool.test.ts",
-      "cases": 6,
-      "lines": 107,
-      "passed": 6,
-      "caseDurationMs": 69.63,
-      "sha256": "0dba96e6369fc086af6067f7dfd584d958598ff2038ecd9c74442deb4b82936c"
-    },
-    {
-      "file": "test/grep-tool.test.ts",
-      "cases": 17,
-      "lines": 357,
-      "passed": 17,
-      "caseDurationMs": 255.55,
-      "sha256": "62b140aec0cc7c975d3ded36658c06c542fddc5cdd5a8f8c4e894a5d0a916396"
-    },
-    {
-      "file": "test/host-process.test.ts",
-      "cases": 4,
-      "lines": 61,
-      "passed": 4,
-      "caseDurationMs": 558.48,
-      "sha256": "c39d9b0b67b25bde5891b3f145812137bf5335ff3fe14c7ac862025b63c19e74"
-    },
-    {
-      "file": "test/inbound-media.test.ts",
-      "cases": 11,
-      "lines": 110,
-      "passed": 11,
-      "caseDurationMs": 20.97,
-      "sha256": "e1b756ed480e48f38477206d90315f9b01626be298c3176226ded578fc24ac8a"
-    },
-    {
-      "file": "test/job-manager.test.ts",
-      "cases": 46,
-      "lines": 957,
-      "passed": 46,
-      "caseDurationMs": 3628.77,
-      "sha256": "0125eab2fb32c52c173df7ec29d00b2575fd1dfcbfc9e19f2a1d927ed319cf18"
-    },
-    {
-      "file": "test/job-tool.test.ts",
-      "cases": 6,
-      "lines": 79,
-      "passed": 6,
-      "caseDurationMs": 17.42,
-      "sha256": "a9d30b991c6e099082f349527dbe82f8877a49e72409f49ec53fc7d0f4c12c8f"
-    },
-    {
-      "file": "test/jsonl-appender.test.ts",
-      "cases": 3,
-      "lines": 90,
-      "passed": 3,
-      "caseDurationMs": 173.31,
-      "sha256": "65c4cfad9abf6ce56ba2d602f1fc06a5febcea1c42f8f7fe385b7e897c723785"
-    },
-    {
-      "file": "test/line-index.test.ts",
-      "cases": 5,
-      "lines": 108,
-      "passed": 5,
-      "caseDurationMs": 292.19,
-      "sha256": "a6adcf32262cd8a3dc7e0a93ca542fa5bcd8c1e5b92dd2b8a6958c0e93f2605f"
-    },
-    {
-      "file": "test/llm-json.test.ts",
-      "cases": 3,
-      "lines": 23,
-      "passed": 3,
-      "caseDurationMs": 13.23,
-      "sha256": "d7e0c519380c260a3a84283a80c9113287325e6ef94288954be405891bd24990"
-    },
-    {
-      "file": "test/local-time.test.ts",
-      "cases": 6,
-      "lines": 64,
-      "passed": 6,
-      "caseDurationMs": 21.16,
-      "sha256": "affca714c8a3d285b71e00e04fc27b392d29ef065329247cc34c6b2744fe9933"
-    },
-    {
-      "file": "test/log-file-sink.test.ts",
-      "cases": 9,
-      "lines": 136,
-      "passed": 9,
-      "caseDurationMs": 278.47,
-      "sha256": "934ee96ed1dc64db1170e4e34bde8ee29732f5a629056b2da6a072ca384a91d8"
-    },
-    {
-      "file": "test/maintenance-context.test.ts",
-      "cases": 3,
-      "lines": 89,
-      "passed": 3,
-      "caseDurationMs": 156.62,
-      "sha256": "ae6fcbd8b98d4753d9487fee03b26ed53154bf77eb8df691f5e5602a9a24c978"
-    },
-    {
-      "file": "test/memory-commands.test.ts",
-      "cases": 10,
-      "lines": 146,
-      "passed": 10,
-      "caseDurationMs": 160.95,
-      "sha256": "bb77982a823527d83d0b2d39f7818150df23b0cfcfed3431a88482d83f838ca8"
-    },
-    {
-      "file": "test/memory-index-budget.test.ts",
-      "cases": 4,
-      "lines": 70,
-      "passed": 4,
-      "caseDurationMs": 109.99,
-      "sha256": "93be8091da47fcda90a894213917cc0b3df74d1f0e67a83fa359e67a64bd48fe"
-    },
-    {
-      "file": "test/memory-journal.test.ts",
-      "cases": 7,
-      "lines": 84,
-      "passed": 7,
-      "caseDurationMs": 164.87,
-      "sha256": "ede9912e9ae2e31372bb2ff4c10c4f40474c08b6a90dd8741051a06ae709c11b"
-    },
-    {
-      "file": "test/memory-lifecycle.test.ts",
-      "cases": 8,
-      "lines": 246,
-      "passed": 8,
-      "caseDurationMs": 122.07,
-      "sha256": "7d40acd3226650269c10b0db861c30c697ed43d7e4f48f8d05f95d04bfe7ca0c"
-    },
-    {
-      "file": "test/memory-maintenance-gates.test.ts",
-      "cases": 3,
-      "lines": 88,
-      "passed": 3,
-      "caseDurationMs": 19.76,
-      "sha256": "7b59ff00911b36c141938e00c9b28b1918c4bfce568d17536e281a16ca149f54"
-    },
-    {
-      "file": "test/memory-maintenance-scheduler.test.ts",
-      "cases": 7,
-      "lines": 192,
-      "passed": 7,
-      "caseDurationMs": 90.2,
-      "sha256": "db07a5a164ce7586b3fcf3c35df34fc2a43087d42305b147efaca5f16b03677f"
-    },
-    {
-      "file": "test/memory-maintenance-state.test.ts",
-      "cases": 8,
-      "lines": 201,
-      "passed": 8,
-      "caseDurationMs": 211.55,
-      "sha256": "6226fc04fbf8b36143f2749d9d9ad47abf984a81020797a5d5a8e8a87665e457"
-    },
-    {
-      "file": "test/memory-manage.test.ts",
-      "cases": 11,
-      "lines": 220,
-      "passed": 11,
-      "caseDurationMs": 316.74,
-      "sha256": "dcd7dee2dd54a2d8fd5bccf05d1b9212de8b474ade833f9d30632a3820c31a28"
-    },
-    {
-      "file": "test/memory-reflect-job.test.ts",
-      "cases": 4,
-      "lines": 173,
-      "passed": 4,
-      "caseDurationMs": 107.5,
-      "sha256": "69200baa0d3c8ef1ec273ce4dd76d071c8d02e48bab8a26119befaad1d4a83f9"
-    },
-    {
-      "file": "test/memory-reflect.test.ts",
-      "cases": 13,
-      "lines": 298,
-      "passed": 13,
-      "caseDurationMs": 3409.75,
-      "sha256": "000dd72ce9062ffc4abce43d5982030be8d6ca61d14569dd1567792b6b898f42"
-    },
-    {
-      "file": "test/memory-review-log.test.ts",
-      "cases": 3,
-      "lines": 69,
-      "passed": 3,
-      "caseDurationMs": 105.21,
-      "sha256": "d543fb1d7f88d855de731eba07a8adce0749e34f6029eafe8c51b05dcc141787"
-    },
-    {
-      "file": "test/memory-search.test.ts",
-      "cases": 8,
-      "lines": 86,
-      "passed": 8,
-      "caseDurationMs": 74.33,
-      "sha256": "b68f63bc1163d7d6a63be436f82e795f766e3606c25a42fb64617b2fcf2b7b02"
-    },
-    {
-      "file": "test/memory-store-delete-order.test.ts",
-      "cases": 1,
-      "lines": 35,
-      "passed": 1,
-      "caseDurationMs": 67.25,
-      "sha256": "a53c226e5ec5fb06e12365a4f96827912bb1ebb351ed90c758b82538ec33e544"
-    },
-    {
-      "file": "test/memory-store.test.ts",
-      "cases": 16,
-      "lines": 241,
-      "passed": 16,
-      "caseDurationMs": 157.26,
-      "sha256": "974b29f1566477666dcb16f241e449505ef58adcd00c30cd94c2c1de90c36c5f"
-    },
-    {
-      "file": "test/memory-transcript.test.ts",
-      "cases": 4,
-      "lines": 83,
-      "passed": 4,
-      "caseDurationMs": 29.07,
-      "sha256": "c8d5f30024a89098dc75523ceac2d943b0b32aa0062f26f70ccde38f2e476d22"
-    },
-    {
-      "file": "test/mock-provider.test.ts",
-      "cases": 7,
-      "lines": 141,
-      "passed": 7,
-      "caseDurationMs": 173.22,
-      "sha256": "ccc7b0e9b5af8046f676d989eafde1cf3b451a36939254f2a6aaf3ae872ee2de"
-    },
-    {
-      "file": "test/model-fallback.test.ts",
-      "cases": 12,
-      "lines": 228,
-      "passed": 12,
-      "caseDurationMs": 54.69,
-      "sha256": "1d914d9d850416d16edcfa564edfb67d6101c3cb9dbc0b7df8dc494458d7195d"
-    },
-    {
-      "file": "test/model-utils.test.ts",
-      "cases": 4,
-      "lines": 90,
-      "passed": 4,
-      "caseDurationMs": 67.73,
-      "sha256": "84d88c3d82734048aadb6600ac2c023e2d036b672b74b4863e92be037442e9ac"
-    },
-    {
-      "file": "test/models-auth-path.test.ts",
-      "cases": 5,
-      "lines": 84,
-      "passed": 5,
-      "caseDurationMs": 1968.94,
-      "sha256": "a361a622377b54e440403ad12ef0805a44ded1e46b1680b06c8fc83f2eba0ec6"
-    },
-    {
-      "file": "test/mutating-tools-sequential.test.ts",
-      "cases": 3,
-      "lines": 33,
-      "passed": 3,
-      "caseDurationMs": 14.98,
-      "sha256": "2e30fbe7a573eb966cafc8308fa612a220f1435cff44dfe7227e9b48378f995b"
-    },
-    {
-      "file": "test/playbooks.test.ts",
-      "cases": 10,
-      "lines": 167,
-      "passed": 10,
-      "caseDurationMs": 243.8,
-      "sha256": "91379fd31a7d1ea746ad5f95275c7543a77c064f8ced4690bfeb443a379b4cb9"
-    },
-    {
-      "file": "test/project-commands.test.ts",
-      "cases": 6,
-      "lines": 108,
-      "passed": 6,
-      "caseDurationMs": 113.61,
-      "sha256": "f9fd0c054b15450082805eaa0214e1bdfac1371fc11639e27f6a5b2bd9df5cf9"
-    },
-    {
-      "file": "test/prompt-resource-loader.test.ts",
-      "cases": 5,
-      "lines": 139,
-      "passed": 5,
-      "caseDurationMs": 131.89,
-      "sha256": "5771ae3ba76a04d9dca080a38a9f450b0a906c0ecbdeb76382c212fbcb62917b"
-    },
-    {
-      "file": "test/prompt-sections.test.ts",
-      "cases": 12,
-      "lines": 301,
-      "passed": 12,
-      "caseDurationMs": 170.53,
-      "sha256": "70bbc817337337572aaebe02c9228b65be47f70f04adf7e371ff95625caa8c20"
-    },
-    {
-      "file": "test/prompt-units.test.ts",
-      "cases": 6,
-      "lines": 88,
-      "passed": 6,
-      "caseDurationMs": 41.88,
-      "sha256": "ea2a761ba1e3847888dd9b334698ff7b8523790710494c41c33068ec553f41d3"
-    },
-    {
-      "file": "test/proxy.test.ts",
-      "cases": 2,
-      "lines": 83,
-      "passed": 2,
-      "caseDurationMs": 211.55,
-      "sha256": "fe60430ff2509f0da1870191162f01885fdf7dc9fb194c3b20c32206a1739001"
-    },
-    {
-      "file": "test/read.test.ts",
-      "cases": 12,
-      "lines": 232,
-      "passed": 12,
-      "caseDurationMs": 130.84,
-      "sha256": "4b7863093e47aa75815989eab71c6a0e6ac9acba4c8f902311a4966522183171"
-    },
-    {
-      "file": "test/reply-limits.test.ts",
-      "cases": 1,
-      "lines": 16,
-      "passed": 1,
-      "caseDurationMs": 13.06,
-      "sha256": "09c351ba32671a2358b232de5a1e4eb081e899c864b949770851d88370695589"
-    },
-    {
-      "file": "test/review-log-rotation.test.ts",
-      "cases": 1,
-      "lines": 52,
-      "passed": 1,
-      "caseDurationMs": 129.79,
-      "sha256": "b23dae52e5d1c732ae1002708c21856dd6d89ad2af803324d69d4c636188ead2"
-    },
-    {
-      "file": "test/run-queue.test.ts",
-      "cases": 2,
-      "lines": 38,
-      "passed": 2,
-      "caseDurationMs": 65.16,
-      "sha256": "cbe29bb4a3a4a074860e8d18af65e6f2a75ea7a1af39e64039cec57994596f01"
-    },
-    {
-      "file": "test/runtime-context.test.ts",
-      "cases": 5,
-      "lines": 259,
-      "passed": 5,
-      "caseDurationMs": 653.88,
-      "sha256": "509fec20df401569d8a1afbf9798e4c614bd4e75ba6525d91eac450e2c9324db"
-    },
-    {
-      "file": "test/runtime-project-scope-store.test.ts",
-      "cases": 9,
-      "lines": 136,
-      "passed": 9,
-      "caseDurationMs": 152.42,
-      "sha256": "69ae69be3d9f478dda9fd901b39b5c2712d6ce138239848f5480a9ec3c4806e5"
-    },
-    {
-      "file": "test/runtime-stop.test.ts",
-      "cases": 4,
-      "lines": 431,
-      "passed": 4,
-      "caseDurationMs": 226.82,
-      "sha256": "db1128fe7aa92b0e028346ffb2a13a03ab8b7d476f72a8981d0a4a2aa85404c4"
-    },
-    {
-      "file": "test/security-command-guard.test.ts",
-      "cases": 5,
-      "lines": 72,
-      "passed": 5,
-      "caseDurationMs": 63.85,
-      "sha256": "78e16c7f9fc0762019442ba7723e5e420c30a34f3893f9924971b36384383ba6"
-    },
-    {
-      "file": "test/security-config.test.ts",
-      "cases": 3,
-      "lines": 75,
-      "passed": 3,
-      "caseDurationMs": 48.72,
-      "sha256": "15988de7a51bd45e7d8342119e9776b97bfbf99b52ccdc66a8968409745cac73"
-    },
-    {
-      "file": "test/security-logger.test.ts",
-      "cases": 4,
-      "lines": 74,
-      "passed": 4,
-      "caseDurationMs": 68.53,
-      "sha256": "3b9f2163871e8c0c78427213bcff278ddfbe9f88b6f54720185e4d2f1bae1d5d"
-    },
-    {
-      "file": "test/security-network-guard.test.ts",
-      "cases": 14,
-      "lines": 190,
-      "passed": 14,
-      "caseDurationMs": 95.98,
-      "sha256": "5b4cf4ecfd0907b66fb3eb43aade7bee3ed20956fdbcbf3e4e5b36bdf2d3db9c"
-    },
-    {
-      "file": "test/security-path-guard.test.ts",
-      "cases": 5,
-      "lines": 162,
-      "passed": 5,
-      "caseDurationMs": 125.27,
-      "sha256": "1e02c61e9131408a20db4777cd6bbc770fe30aff30fff77fc2be1b7b78f51cd5"
-    },
-    {
-      "file": "test/security-project-scope.test.ts",
-      "cases": 6,
-      "lines": 89,
-      "passed": 6,
-      "caseDurationMs": 30.42,
-      "sha256": "97ab5cd92ed35f34ecaba8fe18efe7552c7a7d9273aed09c22f8072abe7e0a56"
-    },
-    {
-      "file": "test/serial-queue.test.ts",
-      "cases": 3,
-      "lines": 50,
-      "passed": 3,
-      "caseDurationMs": 62.31,
-      "sha256": "8fe1029965895fc640c4b18077398005107fe872063dd7eb71499522785be430"
-    },
-    {
-      "file": "test/session-events.test.ts",
-      "cases": 6,
-      "lines": 274,
-      "passed": 6,
-      "caseDurationMs": 45.77,
-      "sha256": "d1da75c66083ac3d1601ebc109c2b1658663b2a1487b023303382dc73a88e97a"
-    },
-    {
-      "file": "test/session-resource-gate.test.ts",
-      "cases": 3,
-      "lines": 60,
-      "passed": 3,
-      "caseDurationMs": 19.69,
-      "sha256": "b61708ac2cfd418de669b3f9441d5cc66643e7707074c5905295f95b86291cde"
-    },
-    {
-      "file": "test/session-search.test.ts",
-      "cases": 9,
-      "lines": 309,
-      "passed": 9,
-      "caseDurationMs": 169.47,
-      "sha256": "e97a819d7d24c54784fbb5cd89fec6b342d8fa2a4fc5e544d6f01247a5c6eaf2"
-    },
-    {
-      "file": "test/settings.test.ts",
-      "cases": 3,
-      "lines": 84,
-      "passed": 3,
-      "caseDurationMs": 24.65,
-      "sha256": "704f88cc3912f5405ae9e5972e63f5aa195abec00ebce4b8702e0c0c4243745b"
-    },
-    {
-      "file": "test/shell-escape.test.ts",
-      "cases": 1,
-      "lines": 10,
-      "passed": 1,
-      "caseDurationMs": 6.31,
-      "sha256": "d0affca3842b12329aa329e8e8ca9f5cebd8bd2c5ff111a4bf9031ab07a29dbb"
-    },
-    {
-      "file": "test/sidecar-worker.test.ts",
-      "cases": 7,
-      "lines": 322,
-      "passed": 7,
-      "caseDurationMs": 71.66,
-      "sha256": "b47fb1afa75f547051e909168866a7b006c79ac31801b3dc46ad9147785b8cde"
-    },
-    {
-      "file": "test/skill.test.ts",
-      "cases": 8,
-      "lines": 141,
-      "passed": 8,
-      "caseDurationMs": 120.04,
-      "sha256": "cc3a8b48b2fe68945c834b7eed75a070ae13aa6f1ce35dfb3ecccbfb10407af8"
-    },
-    {
-      "file": "test/store.test.ts",
-      "cases": 4,
-      "lines": 182,
-      "passed": 4,
-      "caseDurationMs": 125.23,
-      "sha256": "7da8d875a66d41f6797f98988e4c9b910b81c8c77f177df2cca6a7432b0b8efe"
-    },
-    {
-      "file": "test/subagent-async-dispatch.test.ts",
-      "cases": 1,
-      "lines": 131,
-      "passed": 1,
-      "caseDurationMs": 88.99,
-      "sha256": "0a6f18e329e4e3654d96ff32ed3a1b1ae5af1d2d29190e5680f87ce2637ac0c2"
-    },
-    {
-      "file": "test/subagent-discovery-external.test.ts",
-      "cases": 10,
-      "lines": 439,
-      "passed": 10,
-      "caseDurationMs": 121.74,
-      "sha256": "3284e02bc7c12200a4f76c9e6c17cf2db75983c008e50563ac15c210d470bf6d"
-    },
-    {
-      "file": "test/subagent-external-envelope.test.ts",
-      "cases": 5,
-      "lines": 280,
-      "passed": 5,
-      "caseDurationMs": 137.9,
-      "sha256": "40bd43608c7da6a6bd272914936c4d7e6432f56979118cbf89b9fb15cd17ba22"
-    },
-    {
-      "file": "test/subagent-external-run.test.ts",
-      "cases": 18,
-      "lines": 858,
-      "passed": 18,
-      "caseDurationMs": 2181.29,
-      "sha256": "a0a915ea609e2248a9dca0f1fb8e7cdf44570052011dacc4a62b6a08f6c1e8cd"
-    },
-    {
-      "file": "test/subagent-harness-placeholders.test.ts",
-      "cases": 4,
-      "lines": 44,
-      "passed": 4,
-      "caseDurationMs": 52.23,
-      "sha256": "8cb9b0291595f60301a5682030fbb57fe7e0212d934b5a5de3a40715bd996826"
-    },
-    {
-      "file": "test/subagent-inline-gate.test.ts",
-      "cases": 3,
-      "lines": 92,
-      "passed": 3,
-      "caseDurationMs": 22.02,
-      "sha256": "361e65ad07d19633c5748d35a782208f965a2896971135a2895f7b8200bd4ae3"
-    },
-    {
-      "file": "test/subagent-invocation-matrix.test.ts",
-      "cases": 10,
-      "lines": 198,
-      "passed": 10,
-      "caseDurationMs": 92.14,
-      "sha256": "bc1a759281c2e42f766609210e73add5fbc81ad892fdf5a4f7fac7559afaba39"
-    },
-    {
-      "file": "test/subagent-phase1.test.ts",
-      "cases": 23,
-      "lines": 1073,
-      "passed": 23,
-      "caseDurationMs": 510.52,
-      "sha256": "1be83ed847aacd65356e47e5bb29a68df9c80fe37d9cefff37b6c448722c633e"
-    },
-    {
-      "file": "test/subagent-progress-tail.test.ts",
-      "cases": 6,
-      "lines": 189,
-      "passed": 6,
-      "caseDurationMs": 1029.98,
-      "sha256": "f0d70323f9099d338dfc2c435ed700abb1b34afe59eb0c43244407c8214f2018"
-    },
-    {
-      "file": "test/subagent-restart-adoption.test.ts",
-      "cases": 5,
-      "lines": 434,
-      "passed": 5,
-      "caseDurationMs": 5510.38,
-      "sha256": "6d1b1a32e26dc806f427fe57205ca3c2ee0a72ae0447074f01122ea68a8625e0"
+      "name": "dingtalk > extracts plain text and richText content"
     },
     {
       "file": "test/subagent-runs.test.ts",
-      "cases": 24,
-      "lines": 749,
-      "passed": 24,
-      "caseDurationMs": 260.17,
-      "sha256": "3d64129f6a1494b551eb0f043d19dd8bb205344ade09ea9aaf0c5a14cdc5546b"
-    },
-    {
-      "file": "test/subagent-tool-lease.test.ts",
-      "cases": 10,
-      "lines": 426,
-      "passed": 10,
-      "caseDurationMs": 181.29,
-      "sha256": "439f4f116b996331e4da99cddb5aff6af27b23810a2f09c6686efe77df2e7164"
-    },
-    {
-      "file": "test/subagent-tool-names.test.ts",
-      "cases": 3,
-      "lines": 20,
-      "passed": 3,
-      "caseDurationMs": 5.54,
-      "sha256": "731d30d0ca49abfcc1db5093e89fdc342f52c0130de6923d93822e2bd45b1aa9"
-    },
-    {
-      "file": "test/subagents-dir-write-deny.test.ts",
-      "cases": 1,
-      "lines": 38,
-      "passed": 1,
-      "caseDurationMs": 25.26,
-      "sha256": "79cf016fd498358b93c1c0480aa6c95be80391b6a0fcd3d788a747d59854d97e"
-    },
-    {
-      "file": "test/task-brief.test.ts",
-      "cases": 7,
-      "lines": 196,
-      "passed": 7,
-      "caseDurationMs": 245.13,
-      "sha256": "524a01ca882f24eab9f02efe65ef60ebb26f476198a42319748236061d278073"
-    },
-    {
-      "file": "test/task-budget.test.ts",
-      "cases": 4,
-      "lines": 34,
-      "passed": 4,
-      "caseDurationMs": 18.15,
-      "sha256": "f874ce1545471667a934b74df19d1b0755aad05d1af2b4444abf1a528f2ee43f"
-    },
-    {
-      "file": "test/task-commands.test.ts",
-      "cases": 11,
-      "lines": 184,
-      "passed": 11,
-      "caseDurationMs": 320.59,
-      "sha256": "117de4d7fc8a3c9683ef96d7c03a3e56818e26bf7314e791e4f05b87585298e3"
-    },
-    {
-      "file": "test/task-digest.test.ts",
-      "cases": 7,
-      "lines": 103,
-      "passed": 7,
-      "caseDurationMs": 208.66,
-      "sha256": "4cf84dfcb6dac8bf788eb7a2ef4f01042fcb6c10c18f52b21eb6f947d7df7d80"
-    },
-    {
-      "file": "test/task-driver.test.ts",
-      "cases": 10,
-      "lines": 219,
-      "passed": 10,
-      "caseDurationMs": 235.62,
-      "sha256": "6b91976dc8ca77f0e7db20401cadf8d60ec50283b1811b7503a436c3d32390b0"
-    },
-    {
-      "file": "test/task-frontmatter.test.ts",
-      "cases": 7,
-      "lines": 100,
-      "passed": 7,
-      "caseDurationMs": 69.96,
-      "sha256": "bfa1ce85967724709e5e235927ca6a3a156c7da21f2859f88c0fd5a56301c757"
-    },
-    {
-      "file": "test/task-ledger.test.ts",
-      "cases": 8,
-      "lines": 112,
-      "passed": 8,
-      "caseDurationMs": 71.11,
-      "sha256": "a480c6178da3ba14ef4a3bc00171658b66d4d917b314d3b15458d2d3773c7018"
-    },
-    {
-      "file": "test/task-log.test.ts",
-      "cases": 8,
-      "lines": 174,
-      "passed": 8,
-      "caseDurationMs": 148.92,
-      "sha256": "d0eaa8a9ced0b4b5c8b5023c5aa93da7a4746b1078b9380bfe3a72aa39fc6018"
-    },
-    {
-      "file": "test/task-manage.test.ts",
-      "cases": 18,
-      "lines": 320,
-      "passed": 18,
-      "caseDurationMs": 386.8,
-      "sha256": "a380ddbbf868058992233faf63ce21a0748fb22ff3097601aa1bef23f3fd35d2"
+      "name": "SubAgentRunManager (spec 040, D1/D7) > consumes an exact durable task wake once and rejects its replay"
     },
     {
       "file": "test/task-migration-faults.test.ts",
-      "cases": 20,
-      "lines": 286,
-      "passed": 20,
-      "caseDurationMs": 395.49,
-      "sha256": "2a55371dae1a1ba534775a5f3dd52664a4001aa7550c15786f2d5fff2cfb36c5"
+      "name": "v3 → v5 conversion under injected filesystem faults > an existing failure report that cannot be trusted > blocks and keeps the report: entry with non-string rollback"
     },
     {
-      "file": "test/task-migration.test.ts",
-      "cases": 18,
-      "lines": 334,
-      "passed": 18,
-      "caseDurationMs": 567.86,
-      "sha256": "a840c0fcc7f9bb2ef099df324e5bc94716b863e760ef5109f8d25d15c7b57949"
+      "file": "test/line-index.test.ts",
+      "name": "resolveLineOffset > does not count a phantom line for content ending exactly on a newline"
+    },
+    {
+      "file": "test/events.test.ts",
+      "name": "EventsWatcher > task templates (spec 052, D2) > accepts `text` xor `task`, and validates the template with the same rules as task_create"
+    },
+    {
+      "file": "test/task-manage.test.ts",
+      "name": "task tool surface (spec 052, D7) > task_step_end > can mark a Work Item done in the same call"
+    },
+    {
+      "file": "test/grep-tool.test.ts",
+      "name": "grep tool > filters files by glob on the basename"
+    },
+    {
+      "file": "test/grep-tool.test.ts",
+      "name": "grep tool literal / mode / glob dialect (batch 3.5) > the JS glob backstop accepts a brace/class pattern that --include also matches"
+    },
+    {
+      "file": "test/prompt-sections.test.ts",
+      "name": "system prompt structure > uses unique, deterministically ordered section ids (no standalone tools section)"
+    },
+    {
+      "file": "test/prompt-sections.test.ts",
+      "name": "system prompt structure > gates the memory invariant on the tool being registered"
+    },
+    {
+      "file": "test/memory-commands.test.ts",
+      "name": "/memory status > counts malformed files while keeping valid entries available"
+    },
+    {
+      "file": "test/memory-commands.test.ts",
+      "name": "/memory forget > reports a missing name without touching anything"
+    },
+    {
+      "file": "test/memory-commands.test.ts",
+      "name": "/memory journal > rejects a malformed date"
+    },
+    {
+      "file": "test/memory-commands.test.ts",
+      "name": "/memory unknown > reports an unknown subcommand"
+    },
+    {
+      "file": "test/memory-journal.test.ts",
+      "name": "journal > creates the day file with a header on first append"
+    },
+    {
+      "file": "test/mock-provider.test.ts",
+      "name": "mock provider: content routing > classifies a request with tools as the main turn and a no-tools request as sidecar"
+    },
+    {
+      "file": "test/host-process.test.ts",
+      "name": "host-process (Linux process-group kill) > kills a descendant that outlives its process-group leader (the leader-only liveness check regression)"
+    },
+    {
+      "file": "test/subagent-tool-lease.test.ts",
+      "name": "subagent tool: purpose=verify admission (D9) > admits purpose=verify for a role that declares mutates: write"
+    },
+    {
+      "file": "test/maintenance-context.test.ts",
+      "name": "loadDetachedMaintenanceContext > builds a full maintenance context from disk without a runner"
+    },
+    {
+      "file": "test/task-brief.test.ts",
+      "name": "team board (spec 052, D5) > is built from the log alone, so it survives the run record being garbage-collected"
+    },
+    {
+      "file": "test/task-brief.test.ts",
+      "name": "team board (spec 052, D5) > is absent from the brief when nothing was ever dispatched"
     },
     {
       "file": "test/task-store.test.ts",
-      "cases": 7,
-      "lines": 122,
-      "passed": 7,
-      "caseDurationMs": 160.84,
-      "sha256": "61336cb037353a4989ea4b1902a1158a5d1a3497415b9abc6e8a230e04a3aba8"
+      "name": "redeemTicket (INV-1) > clears the consecutive-expiry count when a wait ends normally"
     },
     {
-      "file": "test/task-ticket.test.ts",
-      "cases": 7,
-      "lines": 84,
-      "passed": 7,
-      "caseDurationMs": 30.73,
-      "sha256": "fc4455410fd5c75e4233fe2ff6abe04d08570f831ba13913c875f942d49127dc"
+      "file": "test/task-store.test.ts",
+      "name": "resumeTask > keeps a live ticket when resuming a user pause"
     },
     {
-      "file": "test/tool-details.test.ts",
-      "cases": 9,
-      "lines": 245,
-      "passed": 9,
-      "caseDurationMs": 72.28,
-      "sha256": "d61fcb864bed3d8ada3eb18332f36c6abf2c0dbcdb886ced91515707e8127110"
+      "file": "test/memory-index-budget.test.ts",
+      "name": "index-budget — channel index tiering > returns the full index when it fits"
     },
     {
-      "file": "test/tool-error-contract.test.ts",
-      "cases": 6,
-      "lines": 98,
-      "passed": 6,
-      "caseDurationMs": 43.9,
-      "sha256": "1f6028877652b4df5766c32abf4ba69d996927ebcadf523fbae477e7976c3a7d"
+      "file": "test/memory-store.test.ts",
+      "name": "memory store — names > dedupes against taken names"
     },
     {
-      "file": "test/tool-security.test.ts",
-      "cases": 3,
-      "lines": 66,
-      "passed": 3,
-      "caseDurationMs": 47.31,
-      "sha256": "1e1157f42b6ed373e99280be5f8c5e668bc2c2ee25785f0680187e3241e912f5"
+      "file": "test/memory-store.test.ts",
+      "name": "memory store — applyMemoryOps > delete writes a tombstone that blocks a later re-add of the same description"
     },
     {
-      "file": "test/tool-subagent-manage.test.ts",
-      "cases": 12,
-      "lines": 792,
-      "passed": 12,
-      "caseDurationMs": 124.89,
-      "sha256": "1c58db89cf1d7b0d0e00f1da1a594f2d982469ff01be3bca407df060c309c31c"
+      "file": "test/memory-search.test.ts",
+      "name": "memory search — searchMemory > matches memory descriptions and bodies"
     },
     {
-      "file": "test/tool-validation-downgrade.test.ts",
-      "cases": 2,
-      "lines": 52,
-      "passed": 2,
-      "caseDurationMs": 26.43,
-      "sha256": "1367f62a8bc08340c5e0a382a73d9ddef514088c08de45cef46121de7400bb42"
+      "file": "test/memory-search.test.ts",
+      "name": "memory search — searchMemory > returns nothing for a blank query"
     },
     {
-      "file": "test/tools-config.test.ts",
-      "cases": 2,
-      "lines": 93,
-      "passed": 2,
-      "caseDurationMs": 19.19,
-      "sha256": "d83911f8c46272759558084f87cff97e6282cf1cda263bf99c638f3e8329f10f"
+      "file": "test/command-extension.test.ts",
+      "name": "command-extension > registers memory/session/thinking/model/new/compact commands"
     },
     {
-      "file": "test/truncate.test.ts",
-      "cases": 2,
-      "lines": 50,
-      "passed": 2,
-      "caseDurationMs": 25,
-      "sha256": "a723fa7e8ec491d3b2d25d6a05dff4cb111d6f5f81496638113a9510a200113a"
+      "file": "test/command-extension.test.ts",
+      "name": "command-extension > shows current and available models when /model has no args"
     },
     {
-      "file": "test/turn-prompt.test.ts",
-      "cases": 9,
-      "lines": 101,
-      "passed": 9,
-      "caseDurationMs": 24.69,
-      "sha256": "68a2107dfe41e41e5659ff4dce570839ecb24d93abec3b4eb2ce1bd854caf569"
+      "file": "test/read.test.ts",
+      "name": "read tool > reports an empty directory"
     },
     {
-      "file": "test/turn-recovery.test.ts",
-      "cases": 10,
-      "lines": 244,
-      "passed": 10,
-      "caseDurationMs": 88.92,
-      "sha256": "89f64f71394039d6644204ffda5c32456ce48fb70749a6c58682ee031ef8bc36"
+      "file": "test/task-ledger.test.ts",
+      "name": "task contract body (spec 052, §3.4) > flags a DoD written as prose, which would otherwise read as 'nothing left to check'"
     },
     {
-      "file": "test/turn-state.test.ts",
-      "cases": 14,
-      "lines": 179,
-      "passed": 14,
-      "caseDurationMs": 38.61,
-      "sha256": "64daa140db3530a178f229de55ca2b398297980e126ae7350fcde2a07a4b1ff4"
+      "file": "test/subagent-invocation-matrix.test.ts",
+      "name": "resolveConfiguredRole (spec 046, D2.1) > resolves an external role independently of the internal model default"
+    },
+    {
+      "file": "test/subagent-invocation-matrix.test.ts",
+      "name": "mutates invocation parameter (spec 046, D2.1: inline-only) > an inline delegation can declare mutates: write via the invocation"
+    },
+    {
+      "file": "test/subagent-invocation-matrix.test.ts",
+      "name": "mutates invocation parameter (spec 046, D2.1: inline-only) > without an explicit mutates, inline still infers from tools (write/edit only)"
+    },
+    {
+      "file": "test/subagent-invocation-matrix.test.ts",
+      "name": "mutates invocation parameter (spec 046, D2.1: inline-only) > an inline delegation with bash and no explicit mutates gets a warning back for the model"
+    },
+    {
+      "file": "test/subagent-invocation-matrix.test.ts",
+      "name": "mutates invocation parameter (spec 046, D2.1: inline-only) > an inline delegation that declares mutates explicitly gets no warning"
+    },
+    {
+      "file": "test/task-log.test.ts",
+      "name": "loop log (spec 051, D5) > returns nothing for a task that has never logged"
+    },
+    {
+      "file": "test/task-log.test.ts",
+      "name": "loop log (spec 051, D5) > falls back to the archived log when the active one is gone (batch 2.5)"
+    },
+    {
+      "file": "test/task-log.test.ts",
+      "name": "loop log (spec 051, D5) > reads records from rotated shards (.1/.2), oldest first, alongside the current file"
+    },
+    {
+      "file": "test/project-commands.test.ts",
+      "name": "handleProjectCommand > rejects an unknown subcommand with usage text"
+    },
+    {
+      "file": "test/file-store.test.ts",
+      "name": "FileStore > writeAtomic creates parent directories on request and writes the full content"
+    },
+    {
+      "file": "test/file-store.test.ts",
+      "name": "FileStore > writeAtomic preserveMode keeps the existing file's permission bits"
+    },
+    {
+      "file": "test/file-store.test.ts",
+      "name": "FileStore > replaceViaTemp renames the produced content over the target atomically"
+    },
+    {
+      "file": "test/file-store.test.ts",
+      "name": "FileStore > replaceViaTemp preserves the existing file's permission bits"
+    },
+    {
+      "file": "test/memory-reflect-job.test.ts",
+      "name": "runReflectJob > does not call the model twice for the same window (idempotent cursor)"
+    },
+    {
+      "file": "test/skill.test.ts",
+      "name": "skill tool > rejects read without a name"
     },
     {
       "file": "test/turn-teardown.test.ts",
-      "cases": 6,
-      "lines": 170,
-      "passed": 6,
-      "caseDurationMs": 176.84,
-      "sha256": "5ab35ca5a64b3d170e9731e1f866cf7f658cd5c3da0a97bb9173e0248ad09345"
+      "name": "SessionResourceGate refresh detachment > does not hold the prompt open while the deferred reload runs"
     },
     {
-      "file": "test/usage-ledger.test.ts",
-      "cases": 5,
-      "lines": 240,
-      "passed": 5,
-      "caseDurationMs": 138.98,
-      "sha256": "a6fe4837cc298d506d83da26b0f4f73123c7d67fcda8012bf97c255e90ae0fc5"
+      "file": "test/model-utils.test.ts",
+      "name": "model-utils > matches exact model references"
     },
     {
-      "file": "test/verification-outcome.test.ts",
-      "cases": 3,
-      "lines": 20,
-      "passed": 3,
-      "caseDurationMs": 16.24,
-      "sha256": "bb9ddeaa1e0bab3f6230b2c6b0c7781901680ca87198e2868bc7df2d394ef283"
+      "file": "test/glob-match.test.ts",
+      "name": "compileGlobPattern > expands brace alternation"
     },
     {
-      "file": "test/web-client-redirect-headers.test.ts",
-      "cases": 3,
-      "lines": 99,
-      "passed": 3,
-      "caseDurationMs": 25.26,
-      "sha256": "844a202775e0656cbff37143e89c6dade10218144d71e9695c14913fe2877307"
+      "file": "test/run-queue.test.ts",
+      "name": "createRunQueue > runs enqueued work in submission order"
     },
     {
-      "file": "test/web-fetch-security.test.ts",
-      "cases": 4,
-      "lines": 110,
-      "passed": 4,
-      "caseDurationMs": 46.25,
-      "sha256": "1fa8ffc761d9df607643d3a48c0a18bb1eaa76c90ce9f58460d8638e3a399556"
+      "file": "test/codex-cli-harness.test.ts",
+      "name": "classifyExternalOutcome (D4 status table) > requires terminalSeen for structured harnesses, but exec's protocolStatus alone decides"
     },
     {
-      "file": "test/web-fetch-tool.test.ts",
-      "cases": 5,
-      "lines": 114,
-      "passed": 5,
-      "caseDurationMs": 115.59,
-      "sha256": "e1dcab1f3c6fa97510d53f49955682ef96e50d8e572180c1694b53854be7b470"
+      "file": "test/turn-recovery.test.ts",
+      "name": "recoverInterruptedTurn > clean branch: no messages appended"
+    },
+    {
+      "file": "test/model-fallback.test.ts",
+      "name": "takeFailedTurn > removes [user, assistant(error)] tail"
     },
     {
       "file": "test/workspace-lease.test.ts",
-      "cases": 6,
-      "lines": 110,
-      "passed": 6,
-      "caseDurationMs": 19.17,
-      "sha256": "167a79ccea1cf9c7f406795e0f531c9c1a4d64e95a432ab41c6f0cced4e254ae"
+      "name": "workspace lease (spec 040, D10.1) > release frees the directory for the next writer"
     },
     {
-      "file": "test/write-content.test.ts",
-      "cases": 2,
-      "lines": 37,
-      "passed": 2,
-      "caseDurationMs": 59.4,
-      "sha256": "8f1173738203d8fc59478870b7aa63272b4409e9353d24b556453275ccaa9d31"
+      "file": "test/mutating-tools-sequential.test.ts",
+      "name": "mutating tools declare sequential execution > edit is sequential"
+    },
+    {
+      "file": "test/mutating-tools-sequential.test.ts",
+      "name": "mutating tools declare sequential execution > write is sequential"
+    },
+    {
+      "file": "test/mutating-tools-sequential.test.ts",
+      "name": "mutating tools declare sequential execution > bash is sequential"
+    },
+    {
+      "file": "test/exec-harness.test.ts",
+      "name": "exec harness: buildInvocation > passes the command through unchanged, appending nothing"
+    },
+    {
+      "file": "test/context-budget.test.ts",
+      "name": "preventive compaction budget > estimates CJK input at roughly one token per character, not one per three"
+    },
+    {
+      "file": "test/context-budget.test.ts",
+      "name": "preventive compaction budget > leaves a small message alone"
+    },
+    {
+      "file": "test/turn-prompt.test.ts",
+      "name": "assembleTurnPrompt > wraps the prefixed user message, not the raw input"
+    },
+    {
+      "file": "test/turn-prompt.test.ts",
+      "name": "assembleTurnPrompt > stats > still measures the pieces it was given when raw input is preserved"
+    },
+    {
+      "file": "test/subagent-harness-placeholders.test.ts",
+      "name": "expandPlaceholders (spec 042, D10) > substitutes a placeholder when its value is provided"
+    },
+    {
+      "file": "test/subagent-harness-placeholders.test.ts",
+      "name": "expandPlaceholders (spec 042, D10) > drops only the token containing an unresolved placeholder, leaving a sibling flag orphaned"
+    },
+    {
+      "file": "test/subagent-harness-placeholders.test.ts",
+      "name": "expandPlaceholders (spec 042, D10) > only drops the token that actually references the missing placeholder"
+    },
+    {
+      "file": "test/channel-paths.test.ts",
+      "name": "channel-paths > maps slashes in channel ids to double underscores"
+    },
+    {
+      "file": "test/session-resource-gate.test.ts",
+      "name": "SessionResourceGate > defers refresh requests until the active prompt completes"
+    },
+    {
+      "file": "test/session-resource-gate.test.ts",
+      "name": "SessionResourceGate > coalesces multiple refresh requests into one reload after the turn"
+    },
+    {
+      "file": "test/session-resource-gate.test.ts",
+      "name": "SessionResourceGate > runs refresh immediately when no prompt is active"
+    },
+    {
+      "file": "test/task-budget.test.ts",
+      "name": "task budget (spec 052, D8) > tells the user a stop was driven by an estimate rather than a measured cost"
+    },
+    {
+      "file": "test/task-budget.test.ts",
+      "name": "task budget (spec 052, D8) > ignores a task whose usage clock has not started"
+    },
+    {
+      "file": "test/memory-maintenance-gates.test.ts",
+      "name": "shouldRunReflect > never evaluates material when a cheap schedule gate denies"
+    },
+    {
+      "file": "test/llm-json.test.ts",
+      "name": "llm-json > extracts JSON objects from fenced blocks"
+    },
+    {
+      "file": "test/verification-outcome.test.ts",
+      "name": "verification verdict (spec 052, D6) > treats a missing verdict line as a failure"
+    },
+    {
+      "file": "test/job-tool.test.ts",
+      "name": "job tool > requires ids for cancel"
+    },
+    {
+      "file": "test/turn-state.test.ts",
+      "name": "TurnStateMachine > force-release > swallows the wedged turn's late end() instead of clearing the turn that replaced it"
+    },
+    {
+      "file": "test/task-ticket.test.ts",
+      "name": "resolveTicket validation (spec 052, D3) > reports every rejection as recoverable, so the model can fix the call itself"
+    },
+    {
+      "file": "test/tool-validation-downgrade.test.ts",
+      "name": "argument-validation failure downgrade (spec 047 D4.2) > recognizes the SDK's own validation failure"
+    },
+    {
+      "file": "test/tool-validation-downgrade.test.ts",
+      "name": "argument-validation failure downgrade (spec 047 D4.2) > does not match a real tool error or a normal result"
+    },
+    {
+      "file": "test/subagent-tool-names.test.ts",
+      "name": "sub-agent tool names — single source of truth (batch 3.1) > every allowed sub-agent tool has a registered implementation"
+    },
+    {
+      "file": "test/inbound-media.test.ts",
+      "name": "parseInboundMessage > drops a picture message with no downloadCode, same as any other empty message"
+    },
+    {
+      "file": "test/inbound-media.test.ts",
+      "name": "parseInboundMessage > handles a richText message that is only images, no text at all"
+    },
+    {
+      "file": "test/inbound-media.test.ts",
+      "name": "sniffImageMimeType > does not misidentify a short buffer as a match"
     }
   ],
-  "after": {
-    "inventoryCommand": "npx vitest list --json=/tmp/pipiclaw-unit-after-inventory.json",
-    "files": 132,
-    "cases": 1016,
-    "passed": 1016,
-    "failed": 0,
-    "pending": 0,
-    "todo": 0,
-    "oldCollectedEntriesRemoved": 28,
-    "newCollectedEntries": 3,
-    "netReduction": 25,
-    "reductionPercent": 2.4015,
-    "targetMaximumCases": 936,
-    "targetMet": false,
-    "coverage": {
+  "addedCases": [
+    {
+      "file": "test/bash.test.ts",
+      "name": "bash tool > defaults to the built-in timeout, no rtk probe, and no interceptor when no options are supplied"
+    },
+    {
+      "file": "test/file-store.test.ts",
+      "name": "FileStore > replaceViaTemp renames the produced content over the target, preserving its permission bits"
+    },
+    {
+      "file": "test/grep-tool.test.ts",
+      "name": "grep tool literal / mode / glob dialect (batch 3.5) > the JS glob backstop filters on the basename at any depth, brace patterns included"
+    },
+    {
+      "file": "test/inbound-media.test.ts",
+      "name": "extensionForMimeType > does not misidentify a short buffer as a match"
+    },
+    {
+      "file": "test/job-manager.test.ts",
+      "name": "ChannelJobManager process identity and group termination (T2-T4) > parses a nohup-fallback launch by its PID alone, dropping even a stray PGID/LSTART"
+    },
+    {
+      "file": "test/mutating-tools-sequential.test.ts",
+      "name": "mutating tools declare sequential execution > every mutating tool declares sequential execution"
+    },
+    {
+      "file": "test/session-resource-gate.test.ts",
+      "name": "SessionResourceGate > defers refresh requests until the active prompt completes, coalescing them into one reload"
+    },
+    {
+      "file": "test/subagent-harness-placeholders.test.ts",
+      "name": "expandPlaceholders (spec 042, D10) > substitutes provided placeholders and drops only the token referencing a missing one"
+    },
+    {
+      "file": "test/subagent-invocation-matrix.test.ts",
+      "name": "mutates invocation parameter (spec 046, D2.1: inline-only) > an inline delegation can declare mutates: write via the invocation, overriding inference without a warning"
+    },
+    {
+      "file": "test/tool-validation-downgrade.test.ts",
+      "name": "argument-validation failure downgrade (spec 047 D4.2) > recognizes SDK validation while preserving real tool errors and normal results"
+    }
+  ],
+  "qStatus": {
+    "Q01": {
+      "status": "verified",
+      "disposition": "复核通过：9 MiB fixture、精确 replaceAll 输出、替换次数和 replaceViaTemp 调用共同证明真实 streaming 路径。",
+      "evidence": [
+        "test/edit.test.ts:249",
+        "test/edit.test.ts:260"
+      ]
+    },
+    "Q02": {
+      "status": "verified",
+      "disposition": "复核通过：保留 isWellFormed，防止 UTF-16 surrogate 被截断；本轮未重跑历史 Q02 变异实验。",
+      "evidence": [
+        "test/prompt-units.test.ts:68"
+      ]
+    },
+    "Q03": {
+      "status": "verified",
+      "disposition": "复核通过：比较排序前先断言各 heading/task/runtime block 存在，避免 indexOf=-1 假通过。",
+      "evidence": [
+        "test/memory-store.test.ts:106",
+        "test/task-digest.test.ts:51",
+        "test/turn-prompt.test.ts:32"
+      ]
+    },
+    "Q04": {
+      "status": "verified",
+      "disposition": "复核通过：fake clock 固定今天，今天/另一天用不同 sentinel，显式检查默认日期不会返回另一天。",
+      "evidence": [
+        "test/memory-commands.test.ts:124"
+      ]
+    },
+    "Q05": {
+      "status": "verified",
+      "disposition": "本轮加强：真实 malformed 文件与合法文件共存；分别检查写入前 3/project 2 和写入后 4/project 3、异常数 1 与合法条目可列出。",
+      "evidence": [
+        "test/memory-commands.test.ts:38",
+        "test/memory-commands.test.ts:41"
+      ]
+    },
+    "Q06": {
+      "status": "verified",
+      "disposition": "复核通过：all-duplicate batch 返回 skippedDuplicate=1 且磁盘内容不变；空白 batch 的 no-op 保留。",
+      "evidence": [
+        "test/memory-journal.test.ts:75"
+      ]
+    },
+    "Q07": {
+      "status": "verified",
+      "disposition": "本轮修复：action-only toMatchObject 改为完整对象 toEqual，覆盖 id/name/ref/path/grants/text；memory 示例有真实种子和路由副作用。隔离副本中将 task id 改错后，6 cases 中 1 failed，真实树聚焦检查通过。",
+      "evidence": [
+        "test/commands-subcommands.test.ts:30",
+        "test/commands-subcommands.test.ts:86"
+      ]
+    },
+    "Q08": {
+      "status": "verified",
+      "disposition": "本轮加强：首次 open 次数 >0，未变文件不再 open，追加后 open 恰好增加 1；完整 detached context 检查并入同一生命周期。",
+      "evidence": [
+        "test/maintenance-context.test.ts:71",
+        "test/maintenance-context.test.ts:82"
+      ]
+    },
+    "Q09": {
+      "status": "verified",
+      "disposition": "本轮加强：截断 body 非空、长度 <=100、等于原文完整前缀行，并包含调用方 next-step hint；没有把 hint 算入 maxChars 的新承诺。",
+      "evidence": [
+        "test/reply-limits.test.ts:15",
+        "test/reply-limits.test.ts:16"
+      ]
+    },
+    "Q10": {
+      "status": "verified",
+      "disposition": "复核通过：显式用户重存后 tombstone 为 false，再次删除后背景重加被阻止，防止描述去重掩盖 tombstone 未撤销。",
+      "evidence": [
+        "test/memory-store.test.ts:203"
+      ]
+    },
+    "Q11": {
+      "status": "verified",
+      "disposition": "复核通过：精确六个 notice 及最后一个合法 notice，再改变 label 后仍不增加。",
+      "evidence": [
+        "test/subagent-progress-tail.test.ts:108"
+      ]
+    },
+    "Q12": {
+      "status": "verified",
+      "disposition": "复核通过：restart 边界 stop manager；afterEach 停止 observer、释放 lease、清理本测试子进程组；ready 文件证明启动。保留 settlement/wake 单次性和 reused-pid 拒绝；等待预算给 5s kill grace 留出余量，旧 coverage 超时根因不宣称已证明。",
+      "evidence": [
+        "test/subagent-restart-adoption.test.ts:56",
+        "test/subagent-restart-adoption.test.ts:142",
+        "test/subagent-restart-adoption.test.ts:108",
+        "test/subagent-restart-adoption.test.ts:183"
+      ]
+    }
+  },
+  "qualityAdditional": {
+    "executor": {
+      "evidence": "test/executor.test.ts:50",
+      "disposition": "完整单测重现 500ms 启动竞态 stdout=0。保留 >1000、message<200、reason=timeout；实际子进程输出进 spill 后再推进 fake timer 500ms，新增 timeoutSeconds=0.5，finally abort/close watcher/恢复 real timers。真实 wall-clock timeout 的相邻用例保留。"
+    },
+    "reflectCursor": {
+      "evidence": "test/memory-reflect-job.test.ts:120",
+      "disposition": "旧 idempotence 用例可能只命中 interval gate；现推进 now 30 分钟并重新 dirty，断言 no-new-entry 与 model call count=1，真正检查持久化 cursor。"
+    }
+  },
+  "fileAudit": [
+    {
+      "file": "test/agent-session-tool-images.test.ts",
+      "beforeCases": 7,
+      "afterCases": 5,
+      "sha256": "3b6736cc87179b9d82ceef412bfba04341bd15f56a79c34e7cd1617cfc41736c",
+      "inheritedReview": "多图 real hook 用例覆盖普通图保持原样、oversized 图变换、顺序与尺寸 hint。",
+      "refinements": [
+        {
+          "file": "test/agent-session-tool-images.test.ts",
+          "removed": "keeps ordinary images and text/image ordering through the real hook",
+          "reason": "Mixed multi-image case includes an unchanged ordinary image and exact content order.",
+          "survivor": "preserves mixed multi-image order while normalizing only oversized images"
+        }
+      ]
+    },
+    {
+      "file": "test/bash.test.ts",
+      "beforeCases": 14,
+      "afterCases": 12,
+      "sha256": "a45053b0d1d29ba736d1361ab0c69492ddc1be008f98f2d713d3d31b937b61f0",
+      "inheritedReview": "默认 timeout、rtk 关闭和 interceptor 关闭使用同一 bare tool fixture；显式断言均保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/channel-paths.test.ts",
+      "beforeCases": 3,
+      "afterCases": 2,
+      "sha256": "757258ab8f7be538c082dd3c0428f692a61103c1bb2c0df6faa3362ff5af7363",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/channel-paths.test.ts",
+          "removed": "maps slashes in channel ids to double underscores",
+          "reason": "Branchless string replacement; real path consumers assert physical escaped directories.",
+          "survivor": "store stores channel logs under a single directory for channel ids with slashes; channel-index recovery; guards unchanged"
+        }
+      ]
+    },
+    {
+      "file": "test/codex-cli-harness.test.ts",
+      "beforeCases": 11,
+      "afterCases": 10,
+      "sha256": "e1332a291493fd5a65e474793fc47f5641c0182ea99c03175ac41570fd0b61e1",
+      "inheritedReview": "classifyExternalOutcome 的共享 terminal 缺失合同、exec 成败和 external run settlement 覆盖原分类分支；exit-code failureReason 加到 exec 用例。",
+      "refinements": []
+    },
+    {
+      "file": "test/command-extension.test.ts",
+      "beforeCases": 8,
+      "afterCases": 6,
+      "sha256": "efb82713e60e647513c46e42feeee8469f4ed6a1934116990dfd23ced025c247",
+      "inheritedReview": "每个注册命令均由实际 handler 用例调用；注册名称表属于重复常量检查。",
+      "refinements": [
+        {
+          "file": "test/command-extension.test.ts",
+          "removed": "shows current and available models when /model has no args",
+          "reason": "Ordinary model listing duplicated the same extension fixture in model-switch lifecycle.",
+          "survivor": "switches model on exact or unique substring match and reports ambiguity / missing models"
+        }
+      ]
+    },
+    {
+      "file": "test/commands-subcommands.test.ts",
+      "beforeCases": 6,
+      "afterCases": 6,
+      "sha256": "5e3d40e8305620da5d7745856602eb1a21851ed96e924115a1c788e23651aacd",
+      "inheritedReview": null,
+      "refinements": []
+    },
+    {
+      "file": "test/context-budget.test.ts",
+      "beforeCases": 3,
+      "afterCases": 1,
+      "sha256": "b54e7991f5cf81137d84171b3809256c3d407bcad8557c2de59e544009b4955e",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/context-budget.test.ts",
+          "removed": "estimates CJK input at roughly one token per character, not one per three",
+          "reason": "Same 12k Chinese input in compaction decision; assert both estimates there.",
+          "survivor": "compacts before a large Chinese message pushes the context over the threshold"
+        },
+        {
+          "file": "test/context-budget.test.ts",
+          "removed": "leaves a small message alone",
+          "reason": "Same compaction threshold API; compare a small input alongside the crossing input.",
+          "survivor": "compacts before a large Chinese message pushes the context over the threshold"
+        }
+      ]
+    },
+    {
+      "file": "test/dingtalk.test.ts",
+      "beforeCases": 24,
+      "afterCases": 23,
+      "sha256": "5f709b31fb559c73d04ab727634ceb37e9ff0163ca387ca48e4ee664fc80d51e",
+      "inheritedReview": "parser 直接调用不证明 transport wiring；inbound-media 负责 parser，实际 transport 路由/持久化/权限用例保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/events.test.ts",
+      "beforeCases": 25,
+      "afterCases": 24,
+      "sha256": "8c235d157f06286e5ea295995450475de2818e94da24d367a60b51792ffee37d",
+      "inheritedReview": "text/task xor 和 template DoD 拒绝由 event-manage 经真实 parser 检查，watcher spawn/retry/replay/guard 用例保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/exec-harness.test.ts",
+      "beforeCases": 4,
+      "afterCases": 3,
+      "sha256": "3d629895d1afc1997b75c3e3987cfab30f464f0789f05c0344b339de9cf6b12b",
+      "inheritedReview": "buildInvocation 是 branchless command pass-through；删除重复 fixture echo。移除留下的空 suite，保留 parseOutcome、失败分类和截断指引。",
+      "refinements": [
+        {
+          "file": "test/exec-harness.test.ts",
+          "removed": "passes the command through unchanged, appending nothing",
+          "reason": "Branchless argv pass-through repeats the command fixture.",
+          "survivor": "external run spawn tests; parseOutcome contracts remain"
+        }
+      ]
+    },
+    {
+      "file": "test/executor.test.ts",
+      "beforeCases": 7,
+      "afterCases": 7,
+      "sha256": "aad6e54a13a2239b6a4c06b73766714331a4ccee0b310d45e305026a2e72d48a",
+      "inheritedReview": null,
+      "refinements": []
+    },
+    {
+      "file": "test/file-store.test.ts",
+      "beforeCases": 10,
+      "afterCases": 7,
+      "sha256": "3b898056871d7b26c81b1c6a70aacd20d1d24669404115f398ad1f77e60baf33",
+      "inheritedReview": "writeAtomic 的真实 write tool caller 保留 createParentDir 与 permission assertions；replaceViaTemp 的内容与权限在同一写入上检查，失败清理独立保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/glob-match.test.ts",
+      "beforeCases": 14,
+      "afterCases": 13,
+      "sha256": "634794b1e7b19cc5fd2ad97b9f110ba1b51023fd88487905ab87e6382e8c5542",
+      "inheritedReview": "nested brace 用例包含 leading ** 与 brace expansion；leading ** 零层/多层独立回归已恢复；复杂度/拒绝边界保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/grep-tool.test.ts",
+      "beforeCases": 17,
+      "afterCases": 16,
+      "sha256": "09923bd284d40c3d435232fb66018474efb3dfd30046f3cc8ac337c59d3f3b76",
+      "inheritedReview": "brace glob 同时验证根层与子目录 basename 过滤及排除 js，重复普通 basename fixture 删除；shell/path guard 保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/host-process.test.ts",
+      "beforeCases": 4,
+      "afterCases": 3,
+      "sha256": "0df445159e42e9a238e86d4d8f79a96e51c64d6139224fdb758e79511a730e35",
+      "inheritedReview": "reapProcessGroup 的 lingering descendant 实际调用 killProcessGroup 并断言 group 消失；不再重复相同 leader 已退出 fixture。",
+      "refinements": []
+    },
+    {
+      "file": "test/inbound-media.test.ts",
+      "beforeCases": 11,
+      "afterCases": 9,
+      "sha256": "604f4ebfc96fc75458792977970b8c2dadf20b596bea9020cd6e7aa0a99fad1b",
+      "inheritedReview": "empty picture 合到无 credentials；images-only 的精确结果补到 richText；短 magic buffer 的边界用例恢复。",
+      "refinements": []
+    },
+    {
+      "file": "test/job-manager.test.ts",
+      "beforeCases": 43,
+      "afterCases": 42,
+      "sha256": "0ad7496237e7d374decee1738bb9ba777441c63e351f8827a66db2b246362119",
+      "inheritedReview": "nohup fixture 同时给出 PID 和应被丢弃的 PGID/LSTART，断言 running、PID 与持久化；进程 identity/取消/timeout/回滚保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/job-tool.test.ts",
+      "beforeCases": 4,
+      "afterCases": 3,
+      "sha256": "0a834fb36731a5efe3b5eef357fe3491cfbad614af4b761ba181b6f4bac05e78",
+      "inheritedReview": "cancel missing ids 由 tool-error-contract 经真实工具检查 RecoverableToolError；list/poll/cancel 适配保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/line-index.test.ts",
+      "beforeCases": 4,
+      "afterCases": 3,
+      "sha256": "3c2a31cf5aacc4a01461f24241544cee82e456d24492ad90752cdbaa5f92f573",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/line-index.test.ts",
+          "removed": "does not count a phantom line for content ending exactly on a newline",
+          "reason": "Small-file offset test already asserts no fourth line for a trailing-newline file; keep the missing-final-newline control there.",
+          "survivor": "resolves line offsets for a small file, including EOF-exact totals"
+        }
+      ]
+    },
+    {
+      "file": "test/llm-json.test.ts",
+      "beforeCases": 3,
+      "afterCases": 2,
+      "sha256": "e02125ef7f47ce07f112f6e9185b700a3c0d958e211b0488da3f5e3195597d92",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/llm-json.test.ts",
+          "removed": "extracts JSON objects from fenced blocks",
+          "reason": "Fences are ordinary preface/suffix for the same balanced-object scanner, with no fence branch.",
+          "survivor": "extracts the first balanced JSON object even when braces appear inside strings"
+        }
+      ]
+    },
+    {
+      "file": "test/maintenance-context.test.ts",
+      "beforeCases": 3,
+      "afterCases": 2,
+      "sha256": "827ce0edf43ecfc76782a11be5c72c688a3e2d362879978f548c34f0c80cc3e9",
+      "inheritedReview": null,
+      "refinements": []
+    },
+    {
+      "file": "test/memory-commands.test.ts",
+      "beforeCases": 10,
+      "afterCases": 6,
+      "sha256": "e4ce6ea363388629dcddabd31e2cd0170aa0518ff42bbee1c10ddf6ebec8bd6c",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/memory-commands.test.ts",
+          "removed": "reports an unknown subcommand",
+          "reason": "Only pins fixed error copy.",
+          "survivor": "documented command parser and route tests; invalid date/type tests remain"
+        },
+        {
+          "file": "test/memory-commands.test.ts",
+          "removed": "counts malformed files while keeping valid entries available",
+          "reason": "Reuses the status command fixture, now actually malformed rather than duplicated setup.",
+          "survivor": "counts by type, probation, malformed files, and last reflect"
+        },
+        {
+          "file": "test/memory-commands.test.ts",
+          "removed": "reports a missing name without touching anything",
+          "reason": "Same empty store reached after successful forget; assert missing repeat has no effect there.",
+          "survivor": "deletes without calling the model, tombstones it, and blocks a later identical add"
+        },
+        {
+          "file": "test/memory-commands.test.ts",
+          "removed": "rejects a malformed date",
+          "reason": "Same journal fixture: compare empty/malformed requests with legitimate date selection.",
+          "survivor": "shows today by default and an explicit date, with a hint when empty"
+        }
+      ]
+    },
+    {
+      "file": "test/memory-index-budget.test.ts",
+      "beforeCases": 4,
+      "afterCases": 3,
+      "sha256": "813cdcd29a654c185ece1e8f8862ea9fbb88a24109bf2670beaf8c15b8a6d566",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/memory-index-budget.test.ts",
+          "removed": "returns the full index when it fits",
+          "reason": "Check the same tiering fixture at a full budget before clipping; stronger full included-name comparison.",
+          "survivor": "keeps all user/feedback, drops oldest project/reference, adds an omitted line"
+        }
+      ]
+    },
+    {
+      "file": "test/memory-journal.test.ts",
+      "beforeCases": 7,
+      "afterCases": 6,
+      "sha256": "0939eebe89e788743678a9f2908a1a7ec8575f7880edad73f5590a417f253e2b",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/memory-journal.test.ts",
+          "removed": "creates the day file with a header on first append",
+          "reason": "The normalized append lifecycle already does the same first append.",
+          "survivor": "appends without duplicating a normalized-equal existing line"
+        }
+      ]
+    },
+    {
+      "file": "test/memory-maintenance-gates.test.ts",
+      "beforeCases": 3,
+      "afterCases": 2,
+      "sha256": "d6aee99099df26f077a298ea44a7df63960e1f28eb5ba0b9ec7307de708b7134",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/memory-maintenance-gates.test.ts",
+          "removed": "never evaluates material when a cheap schedule gate denies",
+          "reason": "Repeated channel-active gate; use a thunk spy for every explicit local denial instead.",
+          "survivor": "denies locally before material is ever evaluated"
+        }
+      ]
+    },
+    {
+      "file": "test/memory-reflect-job.test.ts",
+      "beforeCases": 4,
+      "afterCases": 3,
+      "sha256": "1edf546bb0090ad231fd37be52fe07d8cd04d2204d0764fc0c6797e9300d1a72",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/memory-reflect-job.test.ts",
+          "removed": "does not call the model twice for the same window (idempotent cursor)",
+          "reason": "Identical dirty transcript window; retry the successful reflect job after its cursor persisted.",
+          "survivor": "runs reflect when dirty, then advances the cursor and clears backoff"
+        }
+      ]
+    },
+    {
+      "file": "test/memory-search.test.ts",
+      "beforeCases": 8,
+      "afterCases": 6,
+      "sha256": "37d06cbcf909d2d0b75106ca55418af2bc454172ef345ad085e7b2d6edb15b66",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/memory-search.test.ts",
+          "removed": "matches memory descriptions and bodies",
+          "reason": "Title promises body but only queries description; body path has a stronger line-location regression.",
+          "survivor": "returns the line that contains the query, even when it is in the body (batch 2.5)"
+        },
+        {
+          "file": "test/memory-search.test.ts",
+          "removed": "returns nothing for a blank query",
+          "reason": "Tool rejects blank queries before this search helper; no usable search path exercises it.",
+          "survivor": "memory-manage rejects search without a query"
+        }
+      ]
+    },
+    {
+      "file": "test/memory-store.test.ts",
+      "beforeCases": 14,
+      "afterCases": 12,
+      "sha256": "330557206089175b887523404397e55e37355c69d4042870fe3a9659225afc82",
+      "inheritedReview": "dedupe 的 lead-2/lead-3 经真实 applyMemoryOps 验证；normalized tombstone 阻止重学经真实 memory forget 检查。",
+      "refinements": []
+    },
+    {
+      "file": "test/mock-provider.test.ts",
+      "beforeCases": 7,
+      "afterCases": 6,
+      "sha256": "9d1e64d1b50b02cdf63dd6ea33c7682c1569889ac75eacd2ce5911631d9aa595",
+      "inheritedReview": "when routing 同时检查 main 与 sidecar 分类，独立分类 fixture 重复；exhaustion/502/stream 保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/model-fallback.test.ts",
+      "beforeCases": 12,
+      "afterCases": 11,
+      "sha256": "4637e77ac947f0293609c26bf583123b5af76d82bb0a43ec30ac998e2d4d0c2a",
+      "inheritedReview": "runPromptWithFallback 验证真实 takeFailedTurn 手术后的完整消息数组；异常 tail 拒绝与 cooldown 保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/model-utils.test.ts",
+      "beforeCases": 4,
+      "afterCases": 3,
+      "sha256": "ccf05f0efcbf16e66d06d7ee86044ac522b049a1e2bf90273e71dafbd0c4c878",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/model-utils.test.ts",
+          "removed": "matches exact model references",
+          "reason": "Same exact matcher and model set as ambiguity/missing contract; keep successful references on that contract.",
+          "survivor": "reports ambiguous and missing bare model references"
+        }
+      ]
+    },
+    {
+      "file": "test/mutating-tools-sequential.test.ts",
+      "beforeCases": 3,
+      "afterCases": 1,
+      "sha256": "f681905fb09fdb11710290f57850341513494b7e1edccf0b2e43950aa1216a18",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/mutating-tools-sequential.test.ts",
+          "removed": "write is sequential",
+          "reason": "Identical declarative execution-mode assertion; retained in the complete mutating-tool contract.",
+          "survivor": "every mutating tool declares sequential execution"
+        },
+        {
+          "file": "test/mutating-tools-sequential.test.ts",
+          "removed": "bash is sequential",
+          "reason": "Identical declarative execution-mode assertion; retained in the complete mutating-tool contract.",
+          "survivor": "every mutating tool declares sequential execution"
+        }
+      ]
+    },
+    {
+      "file": "test/project-commands.test.ts",
+      "beforeCases": 6,
+      "afterCases": 5,
+      "sha256": "ef1c76538cea3e3be66a710bf7c5216805b12fddf51d62d1192f7c5bcf2b51ba",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/project-commands.test.ts",
+          "removed": "rejects an unknown subcommand with usage text",
+          "reason": "Only pins fixed error/usage copy.",
+          "survivor": "project selection persistence and permission refusals remain"
+        }
+      ]
+    },
+    {
+      "file": "test/prompt-sections.test.ts",
+      "beforeCases": 10,
+      "afterCases": 8,
+      "sha256": "568f096a5939fa1279a7e7df81619f35b851fb99528f65acf4151e29ebb04a28",
+      "inheritedReview": "tool-off fixture 同时验证 memory invariant 的开关；权限表面和 resource budget 保留。",
+      "refinements": [
+        {
+          "file": "test/prompt-sections.test.ts",
+          "removed": "uses unique, deterministically ordered section ids (no standalone tools section)",
+          "reason": "Same default prompt built in budget case; check identity and budgets on that single build.",
+          "survivor": "keeps runtime-authored sections inside their unit and char budgets, without error diagnostics"
+        }
+      ]
+    },
+    {
+      "file": "test/read.test.ts",
+      "beforeCases": 12,
+      "afterCases": 11,
+      "sha256": "f9a1a1f9005defed8a06051c15f784cb2300e505174b43d65ad20316cb9b381b",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/read.test.ts",
+          "removed": "reports an empty directory",
+          "reason": "Only pins an empty-state literal.",
+          "survivor": "renders a directory as a shallow tree; glob-tool distinguishes empty roots"
+        }
+      ]
+    },
+    {
+      "file": "test/reply-limits.test.ts",
+      "beforeCases": 1,
+      "afterCases": 1,
+      "sha256": "f616bf27bcf56eec9988ff23ffe7721fe7bcc82d011d6557ba599d6ed214cfef",
+      "inheritedReview": null,
+      "refinements": []
+    },
+    {
+      "file": "test/run-queue.test.ts",
+      "beforeCases": 2,
+      "afterCases": 1,
+      "sha256": "33aa985d4e01c1ee54bf3b17246994e67f526043519914660ffeaf4a8b769378",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/run-queue.test.ts",
+          "removed": "runs enqueued work in submission order",
+          "reason": "Same queue/drain setup as failure recovery; assert order across a held first job, failed second job and subsequent job.",
+          "survivor": "logs a warning and keeps draining when an enqueued job throws"
+        }
+      ]
+    },
+    {
+      "file": "test/session-resource-gate.test.ts",
+      "beforeCases": 3,
+      "afterCases": 1,
+      "sha256": "a0ae5c1c2d47bb3197fa283143affd54de5cddcf2516c763fa8cf31ab06f5c02",
+      "inheritedReview": "同一 active prompt 验证延后、coalesce 与结束后 idle refresh；detached reload 的 next-prompt 排序保留。",
+      "refinements": [
+        {
+          "file": "test/session-resource-gate.test.ts",
+          "removed": "runs refresh immediately when no prompt is active",
+          "reason": "Use the same gate after a deferred refresh has settled, proving it re-enters the idle path.",
+          "survivor": "defers refresh requests until the active prompt completes, coalescing them into one reload"
+        }
+      ]
+    },
+    {
+      "file": "test/skill.test.ts",
+      "beforeCases": 7,
+      "afterCases": 6,
+      "sha256": "ab4486a85ed744739a4a4ae6087201b5c866df091dce14e2ccb4e484f1ad96e8",
+      "inheritedReview": "missing name 由 tool-error-contract 检查；读取、发现、symlink 和内容安全用例保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/subagent-harness-placeholders.test.ts",
+      "beforeCases": 4,
+      "afterCases": 2,
+      "sha256": "3f9e6fefa0963230d2b9bf8c198ab8888dcffb9709f66bd4eec79f43419d174a",
+      "inheritedReview": "同一 argv 同时验证 resolved replacement、used、dropped 和 orphan flag，独立 unresolved compound token 保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/subagent-invocation-matrix.test.ts",
+      "beforeCases": 10,
+      "afterCases": 6,
+      "sha256": "45b23723fe39bb2e4efe5fa723cb2c249c646faec85daf86b342f30cc03b675b",
+      "inheritedReview": "相同 inline fixture 比较推断与显式 mutates；external 角色独立于 internal default；internal model 弱断言改为 model identity。",
+      "refinements": [
+        {
+          "file": "test/subagent-invocation-matrix.test.ts",
+          "removed": "without an explicit mutates, inline still infers from tools (write/edit only)",
+          "reason": "Discovery covers edit/read inference; assert the inline inference beside its explicit override.",
+          "survivor": "an inline delegation can declare mutates: write via the invocation, overriding inference without a warning"
+        },
+        {
+          "file": "test/subagent-invocation-matrix.test.ts",
+          "removed": "an inline delegation with bash and no explicit mutates gets a warning back for the model",
+          "reason": "Same bash+read role as explicit override case; compare inferred and explicit results in place.",
+          "survivor": "an inline delegation can declare mutates: write via the invocation, overriding inference without a warning"
+        },
+        {
+          "file": "test/subagent-invocation-matrix.test.ts",
+          "removed": "resolves an external role independently of the internal model default",
+          "reason": "Same external work-role default resolution as the runtime/purpose matrix.",
+          "survivor": "configured roles default by runtime x purpose from the role file alone"
+        }
+      ]
+    },
+    {
+      "file": "test/subagent-restart-adoption.test.ts",
+      "beforeCases": 5,
+      "afterCases": 5,
+      "sha256": "52e8b20c60b95e977034d12f784c2554959b65eb4fddc14346de8f67817495ca",
+      "inheritedReview": null,
+      "refinements": []
+    },
+    {
+      "file": "test/subagent-runs.test.ts",
+      "beforeCases": 24,
+      "afterCases": 23,
+      "sha256": "6b3979c8b8eb88112a847964336fa8f11583634280e5da9c3ec750c33010d132",
+      "inheritedReview": "wrong wake claim fixture 已有 exact claim 成功；接着 finish 并拒绝 replay，保留全部单次性断言。",
+      "refinements": []
+    },
+    {
+      "file": "test/subagent-tool-lease.test.ts",
+      "beforeCases": 10,
+      "afterCases": 9,
+      "sha256": "225537abc4ba8354621ec472cf18a6349448e65a4e5564b7f1c72164d5f102ad",
+      "inheritedReview": "host-wide admission lease-release 原用例恢复；真实 write verifier lease 生命周期覆盖单纯 admission 成功。",
+      "refinements": [
+        {
+          "file": "test/subagent-tool-lease.test.ts",
+          "removed": "admits purpose=verify for a role that declares mutates: write",
+          "reason": "Pure admission success repeated by the stronger real verifier lease lifecycle.",
+          "survivor": "allows a write-capable verifier, holds its lease during execution, and releases it on settlement"
+        }
+      ]
+    },
+    {
+      "file": "test/subagent-tool-names.test.ts",
+      "beforeCases": 3,
+      "afterCases": 2,
+      "sha256": "ca35383e3c3fecd18e3da7054a219f18f1f3bcb1e87fdf50f366ae5a8379e2b1",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/subagent-tool-names.test.ts",
+          "removed": "every allowed sub-agent tool has a registered implementation",
+          "reason": "Same allowlist tested by validator; keep registry subset check with it.",
+          "survivor": "validateToolNames accepts the registered allowlist"
+        }
+      ]
+    },
+    {
+      "file": "test/task-brief.test.ts",
+      "beforeCases": 7,
+      "afterCases": 5,
+      "sha256": "dd7adaaa20b1413fd4309cccd5ddb7f035b25d512983b736b5aeb06377b80cf4",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/task-brief.test.ts",
+          "removed": "is built from the log alone, so it survives the run record being garbage-collected",
+          "reason": "Never created or garbage-collected a run record; repeats log-only board assembly in grouped board case.",
+          "survivor": "groups dispatches under their item and marks only what settled since the last step as new"
+        },
+        {
+          "file": "test/task-brief.test.ts",
+          "removed": "is absent from the brief when nothing was ever dispatched",
+          "reason": "Same contract before the grouped-board lifecycle dispatches its first run.",
+          "survivor": "groups dispatches under their item and marks only what settled since the last step as new"
+        }
+      ]
+    },
+    {
+      "file": "test/task-budget.test.ts",
+      "beforeCases": 4,
+      "afterCases": 2,
+      "sha256": "a5f5269f27a56f2ac60f9d2647c0a03ef7b1b8be52a790b7ba9d48944b6b5e56",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/task-budget.test.ts",
+          "removed": "tells the user a stop was driven by an estimate rather than a measured cost",
+          "reason": "Same USD breach branch: assert estimated receipt on USD sample in budget matrix.",
+          "survivor": "breaches on each dimension independently"
+        },
+        {
+          "file": "test/task-budget.test.ts",
+          "removed": "ignores a task whose usage clock has not started",
+          "reason": "Same fresh-budget contract; compare initialized and uninitialized usage directly.",
+          "survivor": "passes a fresh task and merges per-task overrides onto the defaults"
+        }
+      ]
+    },
+    {
+      "file": "test/task-commands.test.ts",
+      "beforeCases": 11,
+      "afterCases": 11,
+      "sha256": "0ea8d3dbcb07b2ce35cdb030e935a1e551ac2bdb94626ae6d28df4ff46eef13f",
+      "inheritedReview": null,
+      "refinements": []
+    },
+    {
+      "file": "test/task-ledger.test.ts",
+      "beforeCases": 8,
+      "afterCases": 7,
+      "sha256": "e78a26bd29002b0dc4acd94788c05f3966fe7eabcde4c5ff2066327364159886",
+      "inheritedReview": "DoD prose 经 task_create 的真实边界拒绝；渲染/解析、legacy 和读取修复覆盖保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/task-log.test.ts",
+      "beforeCases": 8,
+      "afterCases": 5,
+      "sha256": "7c4edd5fa11a91ced89eb7fe8bf3c37c84bc7cfd8914cee3ff9084636c4372e0",
+      "inheritedReview": "missing log 经 nonexistent task 的 work-log no-op 覆盖；真实 archiveTask 检查 current/rotated shard 迁移与完整回读。",
+      "refinements": [
+        {
+          "file": "test/task-log.test.ts",
+          "removed": "reads records from rotated shards (.1/.2), oldest first, alongside the current file",
+          "reason": "Archive test repeats all three shard records; assert active read and limit on those same records before archiving.",
+          "survivor": "archiveTask moves rotated shards along with the current file, and readTaskLog still sees all of them"
+        }
+      ]
+    },
+    {
+      "file": "test/task-manage.test.ts",
+      "beforeCases": 18,
+      "afterCases": 17,
+      "sha256": "13cee9b595f6e8470b434ac9289c60b964cfd31b41b1f20ba856806aeef2b368",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/task-manage.test.ts",
+          "removed": "can mark a Work Item done in the same call",
+          "reason": "Same continue step against the same work contract as the step/log test.",
+          "survivor": "continue keeps the task open, counts the step, and logs the tools it used once each"
+        }
+      ]
+    },
+    {
+      "file": "test/task-migration-faults.test.ts",
+      "beforeCases": 20,
+      "afterCases": 19,
+      "sha256": "383d66501b96485ad2dfd60058ae1323a7e9a10ec090d2839a75a8ac3feea159",
+      "inheritedReview": "missing rollback 与 boolean rollback 命中同一个 typeof !== string 拒绝条件；保留 malformed report、EACCES、failed rollback、retry 和 archive 边界。",
+      "refinements": []
+    },
+    {
+      "file": "test/task-store.test.ts",
+      "beforeCases": 7,
+      "afterCases": 5,
+      "sha256": "1fede45a6a86d53db5e682f21c85e111374b7ebfec227bfd9f79ad41dadf360b",
+      "inheritedReview": "用户 pause/resume 保持 live ticket 经 task-commands 真实生命周期精确检查；redeem/expiry 单次性与 backstop 保留。",
+      "refinements": [
+        {
+          "file": "test/task-store.test.ts",
+          "removed": "clears the consecutive-expiry count when a wait ends normally",
+          "reason": "Same park/redeem operation; begin matching/replay lifecycle with one preceding expiry.",
+          "survivor": "only redeems a matching ticket, and only once"
+        }
+      ]
+    },
+    {
+      "file": "test/task-ticket.test.ts",
+      "beforeCases": 7,
+      "afterCases": 6,
+      "sha256": "35bc6e848d2f5327fabbf984369e47a93f5a66a167cbf03a01fd7e883c6aca0d",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/task-ticket.test.ts",
+          "removed": "reports every rejection as recoverable, so the model can fix the call itself",
+          "reason": "Repeats work refusal; preserve type checks beside work refusal plus invalid ask.",
+          "survivor": "refuses a work ticket when nothing bound to the task is in flight"
+        }
+      ]
+    },
+    {
+      "file": "test/tool-validation-downgrade.test.ts",
+      "beforeCases": 2,
+      "afterCases": 1,
+      "sha256": "261971cabed5b7390d8b6dae2970f2d5bf649d0f80b9b1bea0dd6327438e6e52",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/tool-validation-downgrade.test.ts",
+          "removed": "recognizes the SDK's own validation failure",
+          "reason": "Positive and negative classifications use the same predicate; keep genuine SDK fixture with misleading result comparisons.",
+          "survivor": "recognizes SDK validation while preserving real tool errors and normal results"
+        }
+      ]
+    },
+    {
+      "file": "test/turn-prompt.test.ts",
+      "beforeCases": 5,
+      "afterCases": 3,
+      "sha256": "cd4872b917896bb34e0a3b1e6c9b70e1eb6d325b9a5c7d864866098ad8fffed9",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/turn-prompt.test.ts",
+          "removed": "wraps the prefixed user message, not the raw input",
+          "reason": "Same ordinary prompt setup as order case.",
+          "survivor": "orders runtime context ahead of the user message, least turn-specific block first"
+        },
+        {
+          "file": "test/turn-prompt.test.ts",
+          "removed": "still measures the pieces it was given when raw input is preserved",
+          "reason": "Same raw-command setup; keep stats on the existing raw-command case.",
+          "survivor": "forwards a parameterized command byte-for-byte and drops runtime context"
+        }
+      ]
+    },
+    {
+      "file": "test/turn-recovery.test.ts",
+      "beforeCases": 10,
+      "afterCases": 9,
+      "sha256": "2f8b67979874c574f658d032f2b69aae29e3d3fc5e71157d4a4c6025c25fe449",
+      "inheritedReview": "repair 后 clean replay 保留 outcome，并补消息长度不变；blocked/no-op、scan isolation 与恢复分支保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/turn-state.test.ts",
+      "beforeCases": 14,
+      "afterCases": 13,
+      "sha256": "6df815e461562cf782437b10713974df67e1f6a54429e6d3fc59c0e3f5c6b20c",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/turn-state.test.ts",
+          "removed": "swallows the wedged turn's late end() instead of clearing the turn that replaced it",
+          "reason": "Single force-release repeated by the stronger two-force-release and late-end sequence.",
+          "survivor": "absorbs one late end() per force-release, not just the first"
+        }
+      ]
+    },
+    {
+      "file": "test/turn-teardown.test.ts",
+      "beforeCases": 6,
+      "afterCases": 5,
+      "sha256": "f4c2185ffb583df07d6bd5317c2265ea4fc7250e0835842fd28e553c58873bb9",
+      "inheritedReview": "next-prompt ordering 必须先让原 prompt 在 reload 未完成时返回，已覆盖 detachment；reload failure 与 stop takeover 保留。",
+      "refinements": []
+    },
+    {
+      "file": "test/verification-outcome.test.ts",
+      "beforeCases": 3,
+      "afterCases": 2,
+      "sha256": "d2ca5e32bc095b54d6ab163c7cf5e547d8114adcd5312516ff7e696bb18953f4",
+      "inheritedReview": null,
+      "refinements": [
+        {
+          "file": "test/verification-outcome.test.ts",
+          "removed": "treats a missing verdict line as a failure",
+          "reason": "Same resolver contract as failed/clean result classification.",
+          "survivor": "never believes a PASS from a run that did not finish cleanly"
+        }
+      ]
+    },
+    {
+      "file": "test/workspace-lease.test.ts",
+      "beforeCases": 6,
+      "afterCases": 5,
+      "sha256": "ac96c8ddf214b7645a3a9659e882b5da322353f2c614e02b4963dd9b927f3c46",
+      "inheritedReview": "错误 holder 拒绝后由真实 holder release，再取得 next writer lease；目录/父子/symlink 冲突保留。",
+      "refinements": []
+    }
+  ],
+  "coverage": {
+    "lines": {
+      "total": 30155,
+      "covered": 23374,
+      "skipped": 0,
+      "pct": 77.51
+    },
+    "statements": {
+      "total": 30155,
+      "covered": 23374,
+      "skipped": 0,
+      "pct": 77.51
+    },
+    "functions": {
+      "total": 1785,
+      "covered": 1483,
+      "skipped": 0,
+      "pct": 83.08
+    },
+    "branches": {
+      "total": 8351,
+      "covered": 6795,
+      "skipped": 0,
+      "pct": 81.36
+    },
+    "branchesTrue": {
+      "total": 0,
+      "covered": 0,
+      "skipped": 0,
+      "pct": 100
+    }
+  },
+  "coverageReportArtifact": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/coverage-summary.json",
+  "validation": [
+    {
+      "name": "typecheck-final",
+      "command": "npm run typecheck",
+      "exitCode": 0,
+      "log": "/tmp/pipiclaw-w1/typecheck-post-executor.log",
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/typecheck-post-executor.log"
+    },
+    {
+      "name": "unit-rerun",
+      "command": "npm run test -- --reporter=json --outputFile=/tmp/pipiclaw-w1/unit-rerun.json",
+      "exitCode": 1,
+      "elapsedSeconds": 123.327,
+      "log": "/tmp/pipiclaw-w1/unit-rerun.log",
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/unit-rerun.log"
+    },
+    {
+      "name": "e2e",
+      "command": "npm run test:e2e -- --reporter=json --outputFile=/tmp/pipiclaw-w1/e2e.json",
+      "exitCode": 0,
+      "elapsedSeconds": 112.156,
+      "log": "/tmp/pipiclaw-w1/e2e.log",
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/e2e.log"
+    },
+    {
+      "name": "coverage",
+      "command": "npm run test:coverage -- --coverage.reportOnFailure --reporter=json --outputFile=/tmp/pipiclaw-w1/coverage-tests.json",
+      "exitCode": 1,
+      "elapsedSeconds": 131.364,
+      "log": "/tmp/pipiclaw-w1/coverage.log",
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/coverage.log"
+    },
+    {
+      "name": "lint",
+      "command": "npm run lint",
+      "exitCode": 0,
+      "elapsedSeconds": 2.566,
+      "log": "/tmp/pipiclaw-w1/lint.log",
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/lint.log"
+    },
+    {
+      "name": "deadcode",
+      "command": "npm run deadcode",
+      "exitCode": 0,
+      "elapsedSeconds": 3.103,
+      "log": "/tmp/pipiclaw-w1/deadcode.log",
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/deadcode.log"
+    },
+    {
+      "name": "unit-complete",
+      "command": "npm run test -- --reporter=default --reporter=json --outputFile=/tmp/pipiclaw-w1/unit-complete.json",
+      "exitCode": 0,
+      "elapsedSeconds": 95.85,
+      "log": "/tmp/pipiclaw-w1/unit-complete.log",
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/unit-complete.log"
+    },
+    {
+      "name": "coverage-complete",
+      "command": "npm run test:coverage -- --coverage.reportOnFailure --reporter=default --reporter=json --outputFile=/tmp/pipiclaw-w1/coverage-complete.json",
+      "exitCode": 0,
+      "elapsedSeconds": 130.984,
+      "log": "/tmp/pipiclaw-w1/coverage-complete.log",
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/coverage-complete.log"
+    },
+    {
+      "name": "lint-after-baseline",
+      "command": "npm run lint",
+      "exitCode": 0,
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/lint-final.log"
+    }
+  ],
+  "earlierFailures": {
+    "typecheck": {
+      "exitCode": 2,
+      "log": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/typecheck.log",
+      "cause": "test/subagent-tool-lease.test.ts(10,10): error TS6133: 'assertVerifyAdmissible' is declared but its value is never read.",
+      "disposition": "移除未使用 import，最终 typecheck 退出 0。"
+    },
+    "firstFullRun": {
+      "exitCode": 1,
+      "summary": {
+        "files": 132,
+        "cases": 935,
+        "passed": 932,
+        "failed": 3,
+        "pending": 0,
+        "todo": 0,
+        "success": false,
+        "failedSuiteNodes": 8
+      },
+      "failures": [
+        {
+          "file": "memory-commands.test.ts",
+          "name": "/memory status counts by type, probation, malformed files, and last reflect",
+          "durationMs": 642.371995,
+          "failureMessages": [
+            "AssertionError: expected '**记忆状态**\\n\\n- 频道条目：`4`（user 1 / feedb…' to contain '频道条目：`3`'\n    at /home/oyasmi/projects/pipiclaw/test/memory-commands.test.ts:43:16\n    at file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:752:20"
+          ]
+        },
+        {
+          "file": "memory-reflect.test.ts",
+          "name": "reflect — per-run caps relaxes the delete cap to 8 in condense mode",
+          "durationMs": 30146.241273999993,
+          "failureMessages": [
+            "Error: STACK_TRACE_ERROR\n    at task (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:638:27)\n    at Object.<anonymous> (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:662:16)\n    at Object.<anonymous> (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:458:28)\n    at chain (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:369:14)\n    at /home/oyasmi/projects/pipiclaw/test/memory-reflect.test.ts:162:2\n    at file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:734:40\n    at runWithSuite (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:1849:8)\n    at Object.collect (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:734:10)\n    at Object.collect (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:738:54)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at collectTests (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:1179:25)\n    at startTests (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:1817:17)\n    at file:///home/oyasmi/projects/pipiclaw/node_modules/vitest/dist/chunks/runBaseTests.9Ij9_de-.js:117:26\n    at withEnv (file:///home/oyasmi/projects/pipiclaw/node_modules/vitest/dist/chunks/runBaseTests.9Ij9_de-.js:84:3)\n    at run (file:///home/oyasmi/projects/pipiclaw/node_modules/vitest/dist/chunks/runBaseTests.9Ij9_de-.js:109:2)"
+          ]
+        },
+        {
+          "file": "models-auth-path.test.ts",
+          "name": "auth.json path guardrails (spec 039 §4.2) createModelRuntime rejects a missing authConfigPath",
+          "durationMs": 32357.413885999995,
+          "failureMessages": [
+            "Error: STACK_TRACE_ERROR\n    at task (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:638:27)\n    at Object.<anonymous> (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:662:16)\n    at Object.<anonymous> (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:458:28)\n    at chain (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:369:14)\n    at /home/oyasmi/projects/pipiclaw/test/models-auth-path.test.ts:45:2\n    at file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:734:40\n    at runWithSuite (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:1849:8)\n    at Object.collect (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:734:10)\n    at Object.collect (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:738:54)\n    at processTicksAndRejections (node:internal/process/task_queues:105:5)\n    at collectTests (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:1179:25)\n    at startTests (file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:1817:17)\n    at file:///home/oyasmi/projects/pipiclaw/node_modules/vitest/dist/chunks/runBaseTests.9Ij9_de-.js:117:26\n    at withEnv (file:///home/oyasmi/projects/pipiclaw/node_modules/vitest/dist/chunks/runBaseTests.9Ij9_de-.js:84:3)\n    at run (file:///home/oyasmi/projects/pipiclaw/node_modules/vitest/dist/chunks/runBaseTests.9Ij9_de-.js:109:2)"
+          ]
+        }
+      ],
+      "artifact": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/unit-final.json",
+      "disposition": "status fixture 的旧计数已修复；另两项约 30s 的 STACK_TRACE_ERROR 根因未严格复现，后续完整运行通过，不宣称证明根因。"
+    },
+    "secondFullRun": {
+      "exitCode": 1,
+      "summary": {
+        "files": 132,
+        "cases": 935,
+        "passed": 934,
+        "failed": 1,
+        "pending": 0,
+        "todo": 0,
+        "success": false,
+        "failedSuiteNodes": 4
+      },
+      "failures": [
+        {
+          "file": "executor.test.ts",
+          "name": "executor keeps the timeout error message short and puts output on the error's stdout/stderr instead",
+          "durationMs": 548.6712769999999,
+          "failureMessages": [
+            "AssertionError: expected 0 to be greater than 1000\n    at /home/oyasmi/projects/pipiclaw/test/executor.test.ts:51:31\n    at file:///home/oyasmi/projects/pipiclaw/node_modules/@vitest/runner/dist/chunk-hooks.js:752:20"
+          ]
+        }
+      ],
+      "artifact": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/unit-rerun.json",
+      "disposition": "executor stdout=0 启动竞态改为由真实输出 readiness 驱动测试时钟。"
+    },
+    "firstCoverage": {
+      "exitCode": 1,
+      "summary": {
+        "files": 132,
+        "cases": 935,
+        "passed": 935,
+        "failed": 0,
+        "pending": 0,
+        "todo": 0,
+        "success": false,
+        "failedSuiteNodes": 2
+      },
+      "artifact": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/coverage-tests.json",
+      "cause": "exec-harness 删除单一低价值用例后留下空 buildInvocation suite；3 个用例通过但 suite 失败。默认 reporter 聚焦复现 No test found in suite exec harness: buildInvocation。",
+      "reproductionLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/exec-empty-suite-reproduction.log",
+      "disposition": "删除空 suite，最终完整单测和 coverage 重新验证。"
+    },
+    "interruptedPreliminaryTypechecks": {
+      "exitCode": 130,
+      "logs": [
+        "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/typecheck2.log",
+        "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/typecheck3.log",
+        "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/typecheck4.log",
+        "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/typecheck-final.log"
+      ],
+      "disposition": "终止本轮重复启动的检查进程；不作为通过证据。"
+    }
+  },
+  "mutation": {
+    "Q07": {
+      "scope": "隔离副本 /tmp/pipiclaw-w1/mutation-tree，真实工作树 src 未改变。",
+      "change": "parseTasksCommand 的 id 加 wrong- 前缀，action 保持正确。",
+      "command": "node /home/oyasmi/projects/pipiclaw/node_modules/vitest/vitest.mjs --run test/commands-subcommands.test.ts --root /tmp/pipiclaw-w1/mutation-tree --reporter=json --outputFile=/tmp/pipiclaw-w1/q07-mutation.json",
+      "exitCode": 1,
+      "summary": {
+        "files": 1,
+        "cases": 6,
+        "passed": 5,
+        "failed": 1,
+        "pending": 0,
+        "todo": 0,
+        "success": false,
+        "failedSuiteNodes": 2
+      },
+      "artifact": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/q07-mutation.json",
+      "restoredValidation": "真实工作树 commands-subcommands 聚焦 6 cases 和最终完整检查通过。"
+    }
+  },
+  "documentationCleanup": {
+    "planAbsent": true,
+    "readmeLinkAbsent": true,
+    "note": "接管时两项已在 HEAD 完成，本轮未伪造再次删除或改动 README。"
+  },
+  "productionCodeChanged": false,
+  "protectedScope": "主链路、权限/安全、恢复、并发与持久化用例保留；未改 src、测试 scope、package 文件；提交仅包含本轮 test 文件与 baseline。",
+  "history": {
+    "explorationCommit": "699f6543bb42b313cd1cc9095f36f0b13c0aeabb",
+    "explorationCases": 1041,
+    "precedingCases": 1016,
+    "precedingCoverage": {
       "linesPct": 77.51,
       "statementsPct": 77.51,
       "branchesPct": 81.4,
       "functionsPct": 83.13
     },
-    "executorTimingFailureResolved": "Focused test initially reproduced stdout.length 0 with a 0.05s timeout. The fixture timeout now allows 0.5s and preserves the >1000 assertion; focused and full unit runs pass.",
-    "coverageFailure": {
-      "test": "test/subagent-restart-adoption.test.ts > SubAgentRunManager restart adoption (spec 040, D10.3) rebuilds the write lease for a still-alive adopted run, enforces its deadline once, and settles exactly once",
-      "failure": "Error: waitFor timed out at test/subagent-restart-adoption.test.ts:82:19",
-      "report": "/tmp/pipiclaw-unit-after.json",
-      "counts": "1015 passed, 1 failed; JSON report written",
-      "note": "The same test passed in the immediately preceding uninstrumented full run (5.277s) and its own test timeout is 30s; coverage run failure occurred in its 10s waitFor after the deadline-triggered real process-group cleanup. Root cause remains unconfirmed."
-    }
+    "note": "前轮 coverage 曾失败，Vitest 版本也不同；仅作历史参考，本轮未宣称重新运行干净 HEAD 的 coverage。"
   },
-  "audit": [
-    {
-      "id": "D01",
-      "removed": "test/skill.test.ts > writing a skill goes through the generic write tool, not this one",
-      "reason": "Only wrote a fixture with a test-local helper; no production tool path was called.",
-      "survivor": "test/write-content.test.ts real write contract plus skill.test.ts list/read coverage."
-    },
-    {
-      "id": "D02",
-      "removed": "test/memory-store.test.ts > collapses a multi-line description to one line",
-      "reason": "The fixture contained only the single-line value line one, so it did not exercise the title claim.",
-      "survivor": "memory-store round-trip and applyMemoryOps persistence cases; parse/serialize collapse is also reached through the real store operations."
-    },
-    {
-      "id": "D03",
-      "removed": "test/file-store.test.ts > writeAtomic without preserveMode does not force a specific mode",
-      "reason": "Only reasserted content; made no assertion about mode behavior.",
-      "survivor": "creates-parent/full-content and preserveMode cases; replaceViaTemp success and failure cases."
-    },
-    {
-      "id": "D04",
-      "removed": "test/turn-prompt.test.ts > emits no separator for an omitted block; joins every present block with exactly one blank line",
-      "reason": "Both cases pinned whitespace formatting without a distinct runtime invariant.",
-      "survivor": "orders runtime context before the user message and wraps the user envelope."
-    },
-    {
-      "id": "D05",
-      "removed": "test/turn-prompt.test.ts > forwards the input byte-for-byte so the SDK's command table still matches",
-      "reason": "Duplicate raw-input path; retained the stronger context-dropping case and changed it to parameterized /compact input with memory and task blocks present.",
-      "survivor": "assembleTurnPrompt > preserveRawInput > forwards a parameterized command byte-for-byte and drops runtime context."
-    },
-    {
-      "id": "D06",
-      "removed": "test/turn-prompt.test.ts > reports units separately from chars, since only units are budgeted",
-      "reason": "Four CJK characters made chars and units both equal four.",
-      "survivor": "stats case now uses 记忆 abc and asserts six UTF-16 chars versus three prompt units."
-    },
-    {
-      "id": "D07",
-      "removed": "test/task-digest.test.ts > includes non-done tasks with the background-reference framing",
-      "reason": "Repeated the same parked-task inclusion assertions.",
-      "survivor": "returns empty, includes non-done framing, and excludes done ones; ordering assertions now prove both tasks exist."
-    },
-    {
-      "id": "D08",
-      "removed": "test/subagent-inline-gate.test.ts > describes inline as an advanced fallback with a complete independent control surface",
-      "reason": "Only pinned descriptive prose and a field-name list.",
-      "survivor": "gate-on/gate-off registration cases and invocation behavior."
-    },
-    {
-      "id": "D09",
-      "removed": "test/job-manager.test.ts > no-pending EXIT:n still maps to completed / failed(n) (regression)",
-      "reason": "Repeated EXIT:0 and nonzero mapping already checked by the lifecycle matrix.",
-      "survivor": "marks a job completed, failed, or lost according to probe output; pending cancel/timeout precedence cases remain."
-    },
-    {
-      "id": "D10",
-      "removed": "test/job-manager.test.ts > starts a job and reports it as running",
-      "reason": "Ordinary start status was repeated in persistence/adoption setup.",
-      "survivor": "persists a record and reloads it into a fresh manager; now asserts restored running status and label."
-    },
-    {
-      "id": "D11",
-      "removed": "test/job-manager.test.ts > reads captured output for a job",
-      "reason": "Completion wake path calls readOutput and already asserts the delivered spill content.",
-      "survivor": "wakes the channel once when a job finishes, carrying exit code and output; output cap/loss cases retained."
-    },
-    {
-      "id": "D12",
-      "removed": "test/external-harness-contract.test.ts > implements toProgressLabel and degrades to undefined on garbage input (Claude and Codex expansions)",
-      "reason": "Repeated the same garbage-input assertion for each harness in a shared contract.",
-      "survivor": "claude-code-harness.test.ts and codex-cli-harness.test.ts each retain positive and negative label parsing cases; shared protocol terminal contract remains."
-    },
-    {
-      "id": "D13",
-      "removed": "test/prompt-sections.test.ts > is byte-identical across rebuilds and across channels of one workspace",
-      "reason": "Used the exact same context twice, so it did not test cross-channel isolation.",
-      "survivor": "prompt-resource-loader.test.ts rebuild case now asserts text and fingerprint stability before a workspace change and fingerprint change after it."
-    },
-    {
-      "id": "D14",
-      "removed": "test/prompt-sections.test.ts > restates the runtime boundary in a short footer appended after pi's tail",
-      "reason": "Footer ordering is a loader seam responsibility, while the former isolated case mostly pinned a heading.",
-      "survivor": "prompt-resource-loader.test.ts footer seam asserts final position, separation from build.text, identity, and 60-unit budget."
-    },
-    {
-      "id": "D15",
-      "removed": "test/active-session-store.test.ts > round-trips through resolveActiveSessionFile after commit",
-      "reason": "Repeated identical SessionManager setup and commit.",
-      "survivor": "writes a ref pointing at the session file now also resolves that ref; fresh header and cross-instance persistence cases remain."
-    },
-    {
-      "id": "Q01",
-      "removed": "test/edit.test.ts > replaces all occurrences on the streaming path",
-      "reason": "Its 3 MiB fixture was below the 8 MiB streaming threshold and duplicated a stronger streamed replacement scenario.",
-      "survivor": "overlapping-needle case uses a >9 MiB file, asserts exact replaceAll output, replacement count, and FileStore.replaceViaTemp invocation."
-    },
-    {
-      "id": "A01",
-      "removed": "test/tool-details.test.ts > stamps every registry tool's results with its registered name",
-      "reason": "The case only executed grep and asserted one registry stamp.",
-      "survivor": "existing real task_create registry invocation now asserts details.kind is task_create."
-    },
-    {
-      "id": "A02",
-      "removed": "test/subagent-tool-names.test.ts > validateToolNames now accepts glob",
-      "reason": "One accepted-tool sample was narrower than the source-of-truth allowlist contract.",
-      "survivor": "same case now validates the complete SUBAGENT_TOOL_NAMES allowlist; unknown tool rejection remains."
-    },
-    {
-      "id": "A03",
-      "removed": "test/memory-store.test.ts > rebuilds MEMORY.md from the files",
-      "reason": "Directly exercised rebuildMemoryIndex without an additional invariant; production callers invoke it through applyMemoryOps.",
-      "survivor": "applyMemoryOps add case asserts the resulting MEMORY.md contains the persisted new fact."
-    },
-    {
-      "id": "A04",
-      "removed": "test/memory-commands.test.ts > /memory status > reports empty state on a fresh channel",
-      "reason": "Pinned only empty-state copy.",
-      "survivor": "status populated/malformed cases exercise type counts, probation, maintenance state, malformed count, and valid-entry availability."
-    },
-    {
-      "id": "A05",
-      "removed": "test/memory-review-log.test.ts > appends JSONL entries and creates the channel directory",
-      "reason": "Ordinary sequential append duplicated the stronger queued append path.",
-      "survivor": "concurrent append case now checks all eight distinct action indices and timestamps after parsing the full JSONL."
-    },
-    {
-      "id": "A06",
-      "removed": "test/line-index.test.ts > reports zero known lines for an empty file, with no resolvable line 1",
-      "reason": "The read tool special-cases empty files and does not call resolveLineOffset for them.",
-      "survivor": "read.test.ts > reads empty files without inventing a line; line-index EOF, cache, and invalidation cases remain."
-    },
-    {
-      "id": "A07",
-      "removed": "test/job-tool.test.ts > reports an empty job list; reports when there are no jobs to poll",
-      "reason": "Only asserted fixed empty-state strings.",
-      "survivor": "nonempty list and poll adapter cases plus ChannelJobManager lifecycle/poll tests."
-    },
-    {
-      "id": "A08",
-      "removed": "test/event-manage.test.ts > returns an empty notice when the channel has no events",
-      "reason": "Only asserted the empty notice copy.",
-      "survivor": "channel-scoped listing and malformed-file listing cases verify list results from actual event files."
-    }
+  "limitations": [
+    "本轮全量测试不是性能 benchmark。",
+    "首次约 30s 的两项失败根因未严格复现；保留原始失败报告与最终重跑结果。",
+    "coverage 相对历史有微小差异；历史来自不同 Vitest 版本且含失败运行，不能仅凭百分比宣称所有分支相同。"
   ],
-  "qStatus": {
-    "Q01": "done: actual >8 MiB replacement path asserted via replaceViaTemp spy and full output comparison",
-    "Q02": "done: isWellFormed assertion; UTF-16 String.slice mutation made this case fail, restored implementation passes",
-    "Q03": "done: asserts all ordered headings/tasks exist before comparing their positions",
-    "Q04": "done: fake clock and distinct today/other-day journal sentinels",
-    "Q05": "done: real malformed file counted while valid memory remains listable",
-    "Q06": "done: all-duplicate batch count and unchanged disk content asserted; whitespace-only no-op retained",
-    "Q07": "done: parser cases require exact action object; memory command examples seed valid data and assert route-specific results/effects",
-    "Q08": "done: SessionManager.open call count proves cache hit and file-change invalidation",
-    "Q09": "done: nonempty body and exact caller-provided next-step hint asserted; no total maxChars promise added",
-    "Q10": "done: explicit user save asserts isDescriptionTombstoned is false before a new delete",
-    "Q11": "done: asserts all six allowed notices, last valid notice, and no growth after limit",
-    "Q12": "done: managers stopped at simulated restart boundaries; afterEach stops observers, releases leases, kills test process groups; child ready files prove startup"
-  },
-  "validation": [
+  "nonGateChecks": [
     {
-      "command": "npm run typecheck",
-      "result": "pass on rerun; first run exposed and then fixed test typing issues (ES target lacks String.isWellFormed typings; readonly allowlist argument)"
-    },
-    {
-      "command": "npm run test",
-      "result": "pass: 132 files, 1016 passed, 0 failed"
-    },
-    {
-      "command": "npm run test:e2e",
-      "result": "pass: 21 files, 43 tests; 93.21 s"
-    },
-    {
-      "command": "npm run test:coverage -- --coverage.reportOnFailure --reporter=json --outputFile=/tmp/pipiclaw-unit-after.json",
-      "result": "fail: 1015 passed, 1 failed; test/subagent-restart-adoption.test.ts waitFor timed out. JSON report written; lines/statements 77.51%, branches 81.4%, functions 83.13%"
-    },
-    {
-      "command": "npm run lint",
-      "result": "pass after formatting changed files; two informational useTemplate suggestions remain in untouched test/bash.test.ts and test/web-fetch-tool.test.ts"
-    },
-    {
-      "command": "npm run deadcode",
-      "result": "pass; no diagnostics"
-    },
-    {
-      "command": "npm run test -- test/executor.test.ts",
-      "result": "after fixture timeout adjustment: pass, 7 tests"
+      "command": "npx biome check --write docs/refer/unit-test-quality-baseline.json",
+      "exitCode": 1,
+      "cause": "biome.json:29 的 files.includes 不包含 docs；No files were processed in the specified paths. 未扩大或更改配置，baseline 用 JSON parser 成功解析。",
+      "artifactLog": "/home/oyasmi/.pipiclaw/workspace/dm_015262473638858016/subagent-artifacts/run_kcg8rd/w1-evidence/format-baseline-confirmed.log"
     }
-  ],
-  "productionCodeChanged": false,
-  "continuationAudit": {
-    "inventoryCommand": "npx vitest list --json /tmp/pipiclaw-unit-current-audit.json",
-    "caseDelta": {
-      "removedThisContinuation": 0,
-      "addedThisContinuation": 0,
-      "netReductionThisContinuation": 0,
-      "aggregateRemovedFromOriginal": 28,
-      "aggregateAddedFromOriginal": 3,
-      "aggregateNetReduction": 25,
-      "remainingCasesAboveMaximum": 80
-    },
-    "inventoryResult": {
-      "expandedCases": 1016,
-      "files": 132,
-      "file": "/tmp/pipiclaw-unit-current-audit.json",
-      "note": "Vitest wrote the complete inventory, but the list process did not exit within 30 seconds; it was interrupted (exit 130)."
-    },
-    "executorFocusedReproduction": {
-      "command": "npm run test -- test/executor.test.ts",
-      "beforeChange": "fail: 1 failed, 6 passed; test/executor.test.ts:51 received stdout.length 0 where >1000 was expected.",
-      "change": "Increased the test fixture's timeout from 0.05s to 0.5s while retaining the >1000 output assertion; the 50ms window raced shell/pipeline startup.",
-      "afterChange": "pass: 7 tests; the timeout-output case passed in 508ms.",
-      "contractReview": "src/executor.ts:270-283 attaches bytes received before close to CommandTerminatedError.stdout on timeout. It does not promise a minimum byte count independent of scheduling; this is a test-fixture timing correction, not a production change or weakened assertion."
-    },
-    "candidateReview": {
-      "result": "No additional set of 80 cases with specific surviving coverage was verified; no test cases were deleted in this continuation.",
-      "protectedHighDensitySuites": [
-        {
-          "file": "test/job-manager.test.ts",
-          "cases": 43,
-          "coverage": "lifecycle precedence, persistence/reload, process identity and group termination, launch rollback, timeout and cancellation recovery"
-        },
-        {
-          "file": "test/events.test.ts",
-          "cases": 25,
-          "coverage": "schedule validation, one-shot recovery/replay, queue retry, action timeout and command guard"
-        },
-        {
-          "file": "test/subagent-runs.test.ts",
-          "cases": 24,
-          "coverage": "durable settlement, wake idempotency/replay, restart repair, identity and artifact retention"
-        },
-        {
-          "file": "test/dingtalk.test.ts",
-          "cases": 24,
-          "coverage": "authorization, inbound media persistence, delivery ordering, queue limits, deduplication and reconnect behavior"
-        },
-        {
-          "file": "test/task-migration-faults.test.ts",
-          "cases": 20,
-          "coverage": "filesystem fault injection, rollback, archive preservation and retry reports"
-        }
-      ],
-      "previouslyAuditedLowValueCases": "D01-D15, Q01, A01-A08 in audit; these account for the prior pass's removals and strengthened survivors. Remaining inspected candidates predominantly exercise distinct branch, state, security or persistence outcomes. Removing 80 more would require deleting protected boundaries or combining independent cases without equivalent isolation; neither is justified by this audit."
-    },
-    "disposition": "STOPPED: the safe-candidate threshold is not evidenced. Current count remains 1016, 80 above the maximum."
-  },
-  "commitStatus": "continuation audit and executor fixture timing fix committed; acceptance remains unmet (1016 cases versus maximum 936), so this task is incomplete.",
-  "remainingGap": {
-    "casesAboveMaximum": 80,
-    "disposition": "No additional safe removals have been evidenced in the reviewed priority candidates. Continue case-by-case audit before claiming the target; do not remove protected boundaries to satisfy the count."
-  }
+  ]
 }

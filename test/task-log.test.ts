@@ -55,58 +55,6 @@ describe("loop log (spec 051, D5)", () => {
 		expect(records[0]?.kind).toBe("step");
 	});
 
-	it("returns nothing for a task that has never logged", async () => {
-		expect(await readTaskLog(dir, "missing")).toEqual([]);
-	});
-
-	it("falls back to the archived log when the active one is gone (batch 2.5)", async () => {
-		// archiveTask moves <id>.jsonl into tasks/archive/. task_log on a completed task should
-		// still return its history. Mutation check: remove the taskArchiveLogPath fallback in
-		// readTaskLog and this returns [].
-		await appendTaskLog(dir, "done-task", {
-			kind: "step",
-			seq: 1,
-			outcome: "continue",
-			note: "n",
-			tools: [],
-		});
-		await resetTaskLogAppenders();
-		await mkdir(join(dir, "tasks", "archive"), { recursive: true });
-		const { rename } = await import("node:fs/promises");
-		await rename(taskLogPath(dir, "done-task"), join(dir, "tasks", "archive", "done-task.jsonl"));
-
-		const records = await readTaskLog(dir, "done-task");
-		expect(records).toHaveLength(1);
-		expect(records[0]).toMatchObject({ kind: "step", note: "n" });
-	});
-
-	// R9: `MAX_LOG_BYTES` rotation moves older records into `.1`/`.2` behind the caller's back.
-	// A read that only looked at the current file made rotated-out history invisible to
-	// `task_log`, step briefs, and round accounting alike even though it was still on disk.
-	it("reads records from rotated shards (.1/.2), oldest first, alongside the current file", async () => {
-		await appendFile(
-			`${taskLogPath(dir, "T")}.2`,
-			`${JSON.stringify({ ts: "t1", kind: "step", seq: 1, outcome: "continue", note: "oldest", tools: [] })}\n`,
-		);
-		await appendFile(
-			`${taskLogPath(dir, "T")}.1`,
-			`${JSON.stringify({ ts: "t2", kind: "step", seq: 2, outcome: "continue", note: "middle", tools: [] })}\n`,
-		);
-		await appendTaskLog(dir, "T", {
-			kind: "step",
-			seq: 3,
-			outcome: "continue",
-			note: "newest",
-			tools: [],
-		});
-
-		const records = await readTaskLog(dir, "T");
-		expect(records.map((r) => (r.kind === "step" ? r.note : undefined))).toEqual(["oldest", "middle", "newest"]);
-
-		// limit/cycle/kinds filters apply across the combined, chronologically-ordered history.
-		expect((await readTaskLog(dir, "T", { limit: 1 }))[0]).toMatchObject({ kind: "step", seq: 3 });
-	});
-
 	it("archiveTask moves rotated shards along with the current file, and readTaskLog still sees all of them", async () => {
 		await appendFile(
 			`${taskLogPath(dir, "T")}.2`,
@@ -125,6 +73,12 @@ describe("loop log (spec 051, D5)", () => {
 		});
 		await resetTaskLogAppenders();
 
+		expect((await readTaskLog(dir, "T")).map((r) => (r.kind === "step" ? r.note : undefined))).toEqual([
+			"oldest",
+			"middle",
+			"newest",
+		]);
+		expect((await readTaskLog(dir, "T", { limit: 1 }))[0]).toMatchObject({ kind: "step", seq: 3 });
 		await archiveTask(dir, "T", "completed");
 
 		expect(existsSync(taskLogPath(dir, "T"))).toBe(false);

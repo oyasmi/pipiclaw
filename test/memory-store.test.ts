@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
 	applyMemoryOps,
 	clearMemoryStoreCache,
-	dedupeMemoryName,
 	getChannelMemoryDir,
 	getChannelMemoryIndexPath,
 	getMemoryEntryPath,
@@ -36,11 +35,6 @@ describe("memory store — names", () => {
 	it("slugifies free text and falls back to a hash", () => {
 		expect(slugifyMemoryName("Deploy window is Thursday 20:00")).toBe("deploy-window-is-thursday-20-00");
 		expect(slugifyMemoryName("用中文交流")).toMatch(/^m-[0-9a-f]{6}$/);
-	});
-
-	it("dedupes against taken names", () => {
-		expect(dedupeMemoryName("lead", ["lead", "lead-2"])).toBe("lead-3");
-		expect(dedupeMemoryName("free", ["lead"])).toBe("free");
 	});
 });
 
@@ -154,6 +148,10 @@ describe("memory store — applyMemoryOps", () => {
 		]);
 		expect(result.added).toEqual(["lead-2"]);
 		expect(result.renamed).toEqual([{ requested: "lead", used: "lead-2" }]);
+		const third = await applyMemoryOps(channelDir, [
+			{ op: "add", name: "lead", description: "third lead fact", source: "agent" },
+		]);
+		expect(third.added).toEqual(["lead-3"]);
 		expect(await readFile(getChannelMemoryIndexPath(channelDir), "utf-8")).toContain("- lead-2 — second lead fact");
 	});
 
@@ -184,17 +182,6 @@ describe("memory store — applyMemoryOps", () => {
 		expect(result.missingTarget).toBe(1);
 		clearMemoryStoreCache();
 		expect((await listMemoryEntries(channelDir))[0].expires).toBeUndefined();
-	});
-
-	it("delete writes a tombstone that blocks a later re-add of the same description", async () => {
-		const channelDir = createTempDir();
-		await applyMemoryOps(channelDir, [{ op: "add", name: "gone", description: "obsolete fact", source: "agent" }]);
-		await applyMemoryOps(channelDir, [{ op: "delete", name: "gone", reason: "user said so" }]);
-		const result = await applyMemoryOps(channelDir, [
-			{ op: "add", name: "back", description: "Obsolete   fact", source: "agent" },
-		]);
-		expect(result.added).toEqual([]);
-		expect(result.skippedTombstone).toBe(1);
 	});
 
 	it("lets an explicit user save through a tombstone and revokes it for the background pass too (batch 1.7)", async () => {

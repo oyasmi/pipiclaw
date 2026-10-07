@@ -27,7 +27,7 @@ function makeSettings(defaultProvider?: string, defaultModel?: string): Pipiclaw
 }
 
 describe("model-utils", () => {
-	it("matches exact model references", () => {
+	it("reports ambiguous and missing bare model references", () => {
 		expect(findExactModelReferenceMatch("anthropic/claude-sonnet-4-5", [anthropicModel, openaiModel])).toEqual({
 			match: anthropicModel,
 			ambiguous: false,
@@ -36,9 +36,6 @@ describe("model-utils", () => {
 			match: openaiModel,
 			ambiguous: false,
 		});
-	});
-
-	it("reports ambiguous and missing bare model references", () => {
 		const duplicateOpenAi = { ...openaiModel, provider: "openrouter" as Api } as Model<Api>;
 		expect(findExactModelReferenceMatch("gpt-4o-mini", [openaiModel, duplicateOpenAi])).toEqual({
 			ambiguous: true,

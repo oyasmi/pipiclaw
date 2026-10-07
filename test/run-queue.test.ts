@@ -3,34 +3,34 @@ import { createRunQueue } from "../src/agent/run-queue.js";
 import * as log from "../src/log.js";
 
 describe("createRunQueue", () => {
-	it("runs enqueued work in submission order", async () => {
-		const { queue, drain } = createRunQueue();
-		const order: number[] = [];
-		queue.enqueue(async () => {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-			order.push(1);
-		}, "first");
-		queue.enqueue(async () => {
-			order.push(2);
-		}, "second");
-
-		await drain();
-		expect(order).toEqual([1, 2]);
-	});
-
 	it("logs a warning and keeps draining when an enqueued job throws", async () => {
 		const { queue, drain } = createRunQueue();
 		const warnSpy = vi.spyOn(log, "logWarning").mockImplementation(() => undefined);
 		let ranAfterFailure = false;
+		const order: number[] = [];
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		queue.enqueue(async () => {
+			await held;
+			order.push(1);
+		}, "first");
 
 		queue.enqueue(async () => {
+			order.push(2);
 			throw new Error("boom");
 		}, "failing step");
 		queue.enqueue(async () => {
 			ranAfterFailure = true;
+			order.push(3);
 		}, "next step");
 
+		await Promise.resolve();
+		expect(order).toEqual([]);
+		release();
 		await drain();
+		expect(order).toEqual([1, 2, 3]);
 		expect(ranAfterFailure).toBe(true);
 		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("failing step"), "boom");
 		warnSpy.mockRestore();

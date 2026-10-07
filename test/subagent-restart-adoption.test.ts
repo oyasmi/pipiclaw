@@ -170,6 +170,9 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			},
 		});
 		await swept.restore();
+		// The deadline kill is killProcessGroup's TERM, then an unconditional 5s grace before KILL
+		// (host-process.ts KILL_GRACE_MS) — only then does settlement start. Allow headroom for
+		// instrumented runs; the earlier coverage timeout's root cause was not conclusively reproduced.
 		await waitFor(() => {
 			if (swept.get("run-adopt")?.status === "running" || dispatched.length !== 1) return false;
 			try {
@@ -177,7 +180,7 @@ describe("SubAgentRunManager restart adoption (spec 040, D10.3)", () => {
 			} catch {
 				return false;
 			}
-		}, 10_000);
+		}, 20_000);
 
 		expect(swept.get("run-adopt")?.status).toBe("failed");
 		expect(swept.get("run-adopt")?.failureReason).toContain("Wall time budget exceeded");

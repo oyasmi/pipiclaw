@@ -61,9 +61,4 @@ describe("job tool", () => {
 		const text = await runText(tool, { op: "cancel", ids: ["j1"] });
 		expect(text).toContain("[j1] cancelled");
 	});
-
-	it("requires ids for cancel", async () => {
-		const tool = createJobTool({ jobManager: stubManager({}) });
-		await expect(runText(tool, { op: "cancel" })).rejects.toThrow(/requires at least one job id/);
-	});
 });

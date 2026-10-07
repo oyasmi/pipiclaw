@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { codexCliHarness } from "../src/subagents/external/codex-cli.js";
-import { classifyExternalOutcome } from "../src/subagents/external/harness.js";
 
 /** Spec 040, D4: argv assembly and NDJSON parsing for the first structured harness. */
 
@@ -118,39 +117,6 @@ describe("codex-cli harness: parseOutcome", () => {
 		expect(outcome.terminalSeen).toBe(true);
 		expect(outcome.protocolStatus).toBe("failed");
 		expect(outcome.errorMessage).toBe("model overloaded");
-	});
-});
-
-describe("classifyExternalOutcome (D4 status table)", () => {
-	it("requires terminalSeen for structured harnesses, but exec's protocolStatus alone decides", () => {
-		expect(
-			classifyExternalOutcome("codex-cli", {
-				finalText: "x",
-				terminalSeen: true,
-				protocolStatus: "completed",
-				usageKnown: true,
-				costKnown: false,
-			}).status,
-		).toBe("completed");
-
-		for (const [outcome, expected] of [
-			[
-				{
-					finalText: "stdout text",
-					terminalSeen: false,
-					protocolStatus: "completed",
-					usageKnown: false,
-					costKnown: false,
-				},
-				"completed",
-			],
-			[
-				{ finalText: "", terminalSeen: false, protocolStatus: "failed", usageKnown: false, costKnown: false },
-				"failed",
-			],
-		] as const) {
-			expect(classifyExternalOutcome("exec", { ...outcome }).status).toBe(expected);
-		}
 	});
 });
 

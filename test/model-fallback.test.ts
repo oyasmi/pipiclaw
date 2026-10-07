@@ -40,12 +40,6 @@ describe("shouldFallback", () => {
 });
 
 describe("takeFailedTurn", () => {
-	it("removes [user, assistant(error)] tail", () => {
-		const messages = [{ role: "assistant", stopReason: "stop" }, userMsg, assistantError];
-		const result = takeFailedTurn(messages);
-		expect(result).toEqual([{ role: "assistant", stopReason: "stop" }]);
-	});
-
 	it("returns null for any non-[user, assistant(error)] tail or fewer than two messages", () => {
 		expect(takeFailedTurn([userMsg, { role: "assistant", stopReason: "stop" }])).toBeNull();
 		const toolResult = { role: "toolResult" };

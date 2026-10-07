@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync, watch } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { CommandTerminatedError, createExecutor, EXECUTOR_SHELL_IS_BASH } from "../src/executor.js";
+import { useTempDirs } from "./helpers/fixtures.js";
+
+const tempDir = useTempDirs("pipiclaw-executor-timeout-");
 
 describe("executor", () => {
 	it("runs commands on the host and streams stdin", async () => {
@@ -38,16 +43,52 @@ describe("executor", () => {
 	// context. Full output belongs on `CommandTerminatedError.stdout`/`.stderr`, not in the message.
 	it("keeps the timeout error message short and puts output on the error's stdout/stderr instead", async () => {
 		const hostExecutor = createExecutor();
+		const dir = tempDir();
+		const spillTo = join(dir, "output.log");
+		const controller = new AbortController();
+		let watcher: ReturnType<typeof watch> | undefined;
+		const outputReady = new Promise<void>((resolve, reject) => {
+			watcher = watch(dir, () => {
+				try {
+					// Spill bytes have already passed through the executor's capture accumulator.
+					if (readFileSync(spillTo).length > 1000) resolve();
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") reject(error);
+				}
+			});
+		});
+		// The old 50ms/500ms wall-clock window raced shell startup (full suite reproduced stdout=0).
+		// Keep real process/output I/O, but expire the timeout only after capture is observable.
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		let caught: unknown;
 		try {
-			await hostExecutor.exec("yes | head -c 200000; sleep 1", { timeout: 0.5 });
-		} catch (error) {
-			caught = error;
+			const execution = hostExecutor
+				.exec("yes | head -c 200000; sleep 30", {
+					timeout: 0.5,
+					spillTo,
+					signal: controller.signal,
+				})
+				.catch((error: unknown) => {
+					caught = error;
+				});
+			await Promise.race([
+				outputReady,
+				execution.then(() => {
+					throw caught ?? new Error("command exited before output readiness");
+				}),
+			]);
+			await vi.advanceTimersByTimeAsync(500);
+			await execution;
+		} finally {
+			controller.abort();
+			watcher?.close();
+			vi.useRealTimers();
 		}
 		expect(caught).toBeInstanceOf(CommandTerminatedError);
 		const error = caught as CommandTerminatedError;
 		expect(error.message.length).toBeLessThan(200);
 		expect(error.reason).toBe("timeout");
+		expect(error.timeoutSeconds).toBe(0.5);
 		expect(error.stdout.length).toBeGreaterThan(1000);
 	});
 

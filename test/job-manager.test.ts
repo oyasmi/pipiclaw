@@ -748,25 +748,7 @@ describe("ChannelJobManager process identity and group termination (T2-T4)", () 
 
 	// The launch shell picks `setsid` vs `nohup` via `command -v setsid`; a host without it must
 	// still start the job, just without a reliable pgid / identity.
-	it("parses a nohup-fallback launch (PID only) and records no pgid or start time", async () => {
-		const stateDir = tempDir();
-		const executor: Executor = {
-			exec: async (command) => {
-				if (command.includes("setsid")) return { code: 0, stdout: "MODE nohup\nPID 5150\n", stderr: "" };
-				return { code: 0, stdout: "", stderr: "" };
-			},
-		};
-		const manager = new ChannelJobManager("dm_1", executor, { stateDir });
-		const job = await manager.start("sleep 100", "no-setsid", 300);
-
-		expect(job.status).toBe("running");
-		const record = JSON.parse(readFileSync(join(stateDir, `${job.id}.json`), "utf-8"));
-		expect(record.pid).toBe(5150);
-		expect(record.pgid).toBeUndefined();
-		expect(record.pidStartedAt).toBeUndefined();
-	});
-
-	it("even if a stray PGID/LSTART is printed, MODE nohup drops them", async () => {
+	it("parses a nohup-fallback launch by its PID alone, dropping even a stray PGID/LSTART", async () => {
 		const stateDir = tempDir();
 		const executor: Executor = {
 			exec: async (command) => {
@@ -777,7 +759,9 @@ describe("ChannelJobManager process identity and group termination (T2-T4)", () 
 			},
 		};
 		const job = await new ChannelJobManager("dm_1", executor, { stateDir }).start("x", "x", 300);
+		expect(job.status).toBe("running");
 		const record = JSON.parse(readFileSync(join(stateDir, `${job.id}.json`), "utf-8"));
+		expect(record.pid).toBe(42);
 		expect(record.pgid).toBeUndefined();
 		expect(record.pidStartedAt).toBeUndefined();
 	});

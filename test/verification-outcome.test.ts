@@ -12,9 +12,6 @@ describe("verification verdict (spec 052, D6)", () => {
 	it("never believes a PASS from a run that did not finish cleanly", () => {
 		expect(resolveVerificationVerdict({ finalText: "VERDICT: PASS", runFailed: false })).toBe("pass");
 		expect(resolveVerificationVerdict({ finalText: "VERDICT: PASS", runFailed: true })).toBe("fail");
-	});
-
-	it("treats a missing verdict line as a failure", () => {
 		expect(resolveVerificationVerdict({ finalText: "all good, ship it", runFailed: false })).toBe("fail");
 	});
 });

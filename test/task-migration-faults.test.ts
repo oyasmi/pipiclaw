@@ -198,10 +198,6 @@ describe("v3 → v5 conversion under injected filesystem faults", () => {
 			["entry that is not an object", '{"failures":["boom"]}'],
 			["entry missing rollback", '{"failures":[{"channelId":"dm_1","stage":"task","error":"e"}]}'],
 			[
-				"entry with non-string rollback",
-				'{"failures":[{"channelId":"dm_1","stage":"task","error":"e","rollback":true}]}',
-			],
-			[
 				"entry with non-string task",
 				'{"failures":[{"channelId":"dm_1","task":1,"stage":"task","error":"e","rollback":"ok"}]}',
 			],

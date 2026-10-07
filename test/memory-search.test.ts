@@ -55,14 +55,13 @@ describe("memory search — searchMemory", () => {
 		entry("user-prefers-chinese", "speak Chinese, call the user 淇澳"),
 	];
 
-	it("matches memory descriptions and bodies", () => {
-		const hits = searchMemory({ query: "deploy window", entries });
-		expect(hits[0]).toMatchObject({ kind: "memory", label: "deploy-window-thursday" });
-	});
-
 	it("returns the line that contains the query, even when it is in the body (batch 2.5)", () => {
 		// The hit for "hotfix" is in the body, not the description. Mutation check: revert
 		// scoreText to always return the first non-empty line and this returns the description.
+		expect(searchMemory({ query: "deploy window", entries })[0]).toMatchObject({
+			kind: "memory",
+			label: "deploy-window-thursday",
+		});
 		const hits = searchMemory({ query: "hotfix", entries });
 		const hit = hits.find((h) => h.kind === "memory" && h.label === "deploy-window-thursday");
 		expect(hit?.line).toContain("hotfix");
@@ -78,9 +77,5 @@ describe("memory search — searchMemory", () => {
 		});
 		expect(hits.some((h) => h.kind === "journal" && h.date === "2026-09-04")).toBe(true);
 		expect(hits.some((h) => h.kind === "workspace" && h.label === "Briefing")).toBe(true);
-	});
-
-	it("returns nothing for a blank query", () => {
-		expect(searchMemory({ query: "   ", entries })).toEqual([]);
 	});
 });

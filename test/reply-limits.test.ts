@@ -12,7 +12,8 @@ describe("capReply", () => {
 		// The truncated body (everything before the appended note) must be exactly whole lines.
 		const [body] = result.text.split("\n\n（内容过长已截断");
 		expect(body).toBeTruthy();
-		expect(lines.join("\n")).toContain(body);
+		expect(body.length).toBeLessThanOrEqual(100);
+		expect(body).toBe(lines.slice(0, body.split("\n").length).join("\n"));
 		expect(result.text).toContain("\n\n（内容过长已截断；see more）");
 	});
 });

@@ -55,17 +55,6 @@ describe("workspace lease (spec 040, D10.1)", () => {
 		releaseWorkspaceLease(innerFirst.ok ? innerFirst.leaseKey : undefined, "run-child-2");
 	});
 
-	it("release frees the directory for the next writer", () => {
-		const dir = createTempDir();
-		const first = acquireWorkspaceLease({ runId: "run-1", channelId: "dm_1", workingDirectory: dir });
-		expect(first.ok).toBe(true);
-		releaseWorkspaceLease(first.ok ? first.leaseKey : undefined, "run-1");
-
-		const second = acquireWorkspaceLease({ runId: "run-2", channelId: "dm_1", workingDirectory: dir });
-		expect(second.ok).toBe(true);
-		releaseWorkspaceLease(second.ok ? second.leaseKey : undefined, "run-2");
-	});
-
 	it("resolves symlinked working directories to the same realpath, so a symlink cannot dodge a conflict", () => {
 		const dir = createTempDir();
 		const resolved = realpathSync(dir);
@@ -103,8 +92,11 @@ describe("workspace lease (spec 040, D10.1)", () => {
 		releaseWorkspaceLease(holder.ok ? holder.leaseKey : undefined, "not-the-holder");
 		expect(findWorkspaceLeaseHolder(dir)?.runId).toBe("real-holder");
 
-		// The real holder can still release it.
+		// The real holder can still release it, which frees the directory for the next writer.
 		releaseWorkspaceLease(holder.ok ? holder.leaseKey : undefined, "real-holder");
 		expect(findWorkspaceLeaseHolder(dir)).toBeUndefined();
+		const next = acquireWorkspaceLease({ runId: "next-writer", channelId: "dm_1", workingDirectory: dir });
+		expect(next.ok).toBe(true);
+		releaseWorkspaceLease(next.ok ? next.leaseKey : undefined, "next-writer");
 	});
 });

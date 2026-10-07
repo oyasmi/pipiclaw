@@ -25,11 +25,10 @@ describe("parseInboundMessage", () => {
 		});
 	});
 
-	it("drops a picture message with no downloadCode, same as any other empty message", () => {
-		expect(parseInboundMessage({ msgtype: "picture", content: {} })).toEqual({ text: "", downloadCodes: [] });
-	});
-
 	it("interleaves text and image markers in richText payload order", () => {
+		expect(
+			parseInboundMessage({ content: { richText: [{ downloadCode: "code-1" }, { downloadCode: "code-2" }] } }),
+		).toEqual({ text: "[图片1][图片2]", downloadCodes: ["code-1", "code-2"] });
 		// Mutation check: append every marker after the joined text instead of interleaving, and
 		// this collapses to "before after[图片1][图片2]" — the marker no longer sits where the
 		// image the user is referring to ("this picture") was actually placed in the message.
@@ -50,18 +49,12 @@ describe("parseInboundMessage", () => {
 		});
 	});
 
-	it("handles a richText message that is only images, no text at all", () => {
-		expect(
-			parseInboundMessage({
-				content: { richText: [{ downloadCode: "code-1" }, { downloadCode: "code-2" }] },
-			}),
-		).toEqual({ text: "[图片1][图片2]", downloadCodes: ["code-1", "code-2"] });
-	});
-
 	it("drops a message with neither text nor image credentials", () => {
 		// This is the one case the transport must still warn-and-discard — it must not regress
 		// into a synthetic marker the way `picture`/`richText`-with-images legitimately do.
 		expect(parseInboundMessage({ msgtype: "unknown" })).toEqual({ text: "", downloadCodes: [] });
+		// A picture without its download credential is no exception.
+		expect(parseInboundMessage({ msgtype: "picture", content: {} })).toEqual({ text: "", downloadCodes: [] });
 		expect(parseInboundMessage({ content: { richText: [{ text: "" }] } })).toEqual({ text: "", downloadCodes: [] });
 	});
 
@@ -91,14 +84,13 @@ describe("sniffImageMimeType", () => {
 		expect(sniffImageMimeType(Buffer.from("<html><body>not an image</body></html>"))).toBeNull();
 		expect(sniffImageMimeType(Buffer.from([]))).toBeNull();
 	});
+});
 
+describe("extensionForMimeType", () => {
 	it("does not misidentify a short buffer as a match", () => {
 		expect(sniffImageMimeType(Buffer.from([0xff, 0xd8]))).toBeNull();
 		expect(sniffImageMimeType(Buffer.from("GIF8"))).toBeNull();
 	});
-});
-
-describe("extensionForMimeType", () => {
 	it("maps recognized types to their extension and falls back to .bin", () => {
 		expect(extensionForMimeType("image/jpeg")).toBe("jpg");
 		expect(extensionForMimeType("image/png")).toBe("png");

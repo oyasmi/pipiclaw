@@ -103,14 +103,6 @@ const externalRole: SubAgentConfig = {
  * moved from a unit test to the type checker.
  */
 describe("resolveConfiguredRole (spec 046, D2.1)", () => {
-	it("resolves an external role independently of the internal model default", () => {
-		const result = resolveConfiguredRole([], model, [externalRole], { agent: "reviewer" }, "missing/internal-model");
-		expect(result.error).toBeUndefined();
-		expect(result.config?.runtime).toBe("external");
-		expect(result.config?.model).toBeUndefined();
-		expect(result.config?.modelRef).toBeUndefined();
-	});
-
 	it("resolves an internal role cleanly, falling back to the parent's current model", () => {
 		const internalRole: SubAgentConfig = {
 			...externalRole,
@@ -121,7 +113,7 @@ describe("resolveConfiguredRole (spec 046, D2.1)", () => {
 		};
 		const result = resolveConfiguredRole([model], model, [internalRole], { agent: "reviewer" });
 		expect(result.error).toBeUndefined();
-		expect(result.config).toBeDefined();
+		expect(result.config?.model).toBe(model);
 	});
 
 	it("reports unknown agent names with the available list", () => {
@@ -150,7 +142,17 @@ const externalWorkRole: SubAgentConfig = {
 describe("thinkingLevel resolution matrix", () => {
 	it("configured roles default by runtime x purpose from the role file alone", () => {
 		// External work: stays undefined — no effort flag added by the caller.
-		const externalWork = resolveConfiguredRole([model], model, [externalWorkRole], { agent: "external-worker" });
+		const externalWork = resolveConfiguredRole(
+			[],
+			model,
+			[externalWorkRole],
+			{ agent: "external-worker" },
+			"missing/internal-model",
+		);
+		expect(externalWork.error).toBeUndefined();
+		expect(externalWork.config?.runtime).toBe("external");
+		expect(externalWork.config?.model).toBeUndefined();
+		expect(externalWork.config?.modelRef).toBeUndefined();
 		expect(externalWork.config?.thinkingLevel).toBeUndefined();
 
 		// External verify: defaults to medium.
@@ -171,28 +173,19 @@ describe("thinkingLevel resolution matrix", () => {
 });
 
 describe("mutates invocation parameter (spec 046, D2.1: inline-only)", () => {
-	it("an inline delegation can declare mutates: write via the invocation", () => {
-		const result = resolveInlineAgent([model], model, { systemPrompt: "Do it", tools: ["read"], mutates: "write" });
-		expect(result.config?.mutates).toBe("write");
-	});
-
-	it("without an explicit mutates, inline still infers from tools (write/edit only)", () => {
-		const result = resolveInlineAgent([model], model, { systemPrompt: "Do it", tools: ["read", "edit"] });
-		expect(result.config?.mutates).toBe("write");
-	});
-
-	it("an inline delegation with bash and no explicit mutates gets a warning back for the model", () => {
-		const result = resolveInlineAgent([model], model, { systemPrompt: "Do it", tools: ["read", "bash"] });
-		expect(result.config?.mutates).toBe("read");
-		expect(result.warning).toContain("mutates");
-	});
-
-	it("an inline delegation that declares mutates explicitly gets no warning", () => {
+	it("an inline delegation can declare mutates: write via the invocation, overriding inference without a warning", () => {
 		const result = resolveInlineAgent([model], model, {
 			systemPrompt: "Do it",
 			tools: ["read", "bash"],
 			mutates: "write",
 		});
+		expect(
+			resolveInlineAgent([model], model, { systemPrompt: "Do it", tools: ["read", "edit"] }).config?.mutates,
+		).toBe("write");
+		const inferred = resolveInlineAgent([model], model, { systemPrompt: "Do it", tools: ["read", "bash"] });
+		expect(inferred.config?.mutates).toBe("read");
+		expect(inferred.warning).toContain("mutates");
+		expect(result.config?.mutates).toBe("write");
 		expect(result.warning).toBeUndefined();
 	});
 });

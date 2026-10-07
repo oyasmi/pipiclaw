@@ -16,21 +16,6 @@ describe("TurnStateMachine", () => {
 	});
 
 	describe("force-release", () => {
-		it("swallows the wedged turn's late end() instead of clearing the turn that replaced it", () => {
-			const machine = new TurnStateMachine();
-			machine.begin("wedged turn");
-			expect(machine.forceEnd("stop watchdog")).toBe(true);
-			expect(machine.isBusy()).toBe(false);
-
-			// The channel is handed to the next message while the wedged epilogue still runs.
-			machine.begin("next turn");
-			// ...which now finishes and releases a turn it no longer owns.
-			machine.end();
-
-			expect(machine.isBusy()).toBe(true);
-			expect(machine.status().taskText).toBe("next turn");
-		});
-
 		it("absorbs one late end() per force-release, not just the first", () => {
 			const machine = new TurnStateMachine();
 			machine.begin("first");
@@ -40,6 +25,8 @@ describe("TurnStateMachine", () => {
 
 			machine.begin("third");
 			machine.end(); // first wedged turn
+			expect(machine.isBusy()).toBe(true);
+			expect(machine.status().taskText).toBe("third");
 			machine.end(); // second wedged turn
 			expect(machine.status().taskText).toBe("third");
 

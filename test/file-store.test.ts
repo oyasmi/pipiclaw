@@ -64,55 +64,23 @@ describe("FileStore", () => {
 		expect(Buffer.concat(chunks).toString()).toBe("cdef");
 	});
 
-	it("writeAtomic creates parent directories on request and writes the full content", async () => {
-		const dir = tempDir();
-		const path = join(dir, "nested", "deep", "out.txt");
-
-		await fileStore.writeAtomic(path, "hello world", { createParentDir: true });
-
-		expect(readFileSync(path, "utf-8")).toBe("hello world");
-	});
-
-	it("writeAtomic preserveMode keeps the existing file's permission bits", async () => {
+	it("replaceViaTemp renames the produced content over the target, preserving its permission bits", async () => {
 		const dir = tempDir();
 		const path = join(dir, "script.sh");
-		writeFileSync(path, "#!/bin/sh\necho old\n");
-		chmodSync(path, 0o755);
-
-		await fileStore.writeAtomic(path, "#!/bin/sh\necho new\n", { preserveMode: true });
-
-		expect(statSync(path).mode & 0o777).toBe(0o755);
-	});
-
-	it("replaceViaTemp renames the produced content over the target atomically", async () => {
-		const dir = tempDir();
-		const path = join(dir, "target.txt");
 		writeFileSync(path, "old content");
-
-		await fileStore.replaceViaTemp(path, async (out) => {
-			out.write("new ");
-			out.write("content");
-		});
-
-		expect(readFileSync(path, "utf-8")).toBe("new content");
-	});
-
-	it("replaceViaTemp preserves the existing file's permission bits", async () => {
-		const dir = tempDir();
-		const path = join(dir, "script.sh");
-		writeFileSync(path, "old");
 		chmodSync(path, 0o750);
 
 		await fileStore.replaceViaTemp(
 			path,
 			async (out) => {
-				out.write("new");
+				out.write("new ");
+				out.write("content");
 			},
 			{ preserveMode: true },
 		);
 
 		expect(statSync(path).mode & 0o777).toBe(0o750);
-		expect(readFileSync(path, "utf-8")).toBe("new");
+		expect(readFileSync(path, "utf-8")).toBe("new content");
 	});
 
 	it("replaceViaTemp cleans up the temp file and leaves the target untouched when `produce` throws", async () => {

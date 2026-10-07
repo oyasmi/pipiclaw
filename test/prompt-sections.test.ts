@@ -52,10 +52,10 @@ function context(overrides: Partial<PromptBuildContext> = {}): PromptBuildContex
 }
 
 describe("system prompt structure", () => {
-	it("uses unique, deterministically ordered section ids (no standalone tools section)", () => {
+	it("keeps runtime-authored sections inside their unit and char budgets, without error diagnostics", () => {
 		const build = buildPipiclawSystemPrompt(context());
-		const ids = build.sections.map((section) => section.id);
 
+		const ids = build.sections.map((section) => section.id);
 		expect(new Set(ids).size).toBe(ids.length);
 		expect(ids).toEqual([
 			"runtime.identity",
@@ -66,11 +66,6 @@ describe("system prompt structure", () => {
 			"subagents",
 			"runtime.boundary",
 		]);
-	});
-
-	it("keeps runtime-authored sections inside their unit and char budgets, without error diagnostics", () => {
-		const build = buildPipiclawSystemPrompt(context());
-
 		expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(800);
 		expect(build.runtimeAuthoredUnits).toBeLessThanOrEqual(RUNTIME_PROMPT_HARD_UNITS);
 		expect(build.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toEqual([]);
@@ -81,18 +76,17 @@ describe("system prompt structure", () => {
 	});
 
 	it("drops a mechanism's whole surface when its tool is off", () => {
+		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_save` / `memory_forget`");
+
 		const build = buildPipiclawSystemPrompt(context({ tools: tools(["read", "bash", "grep"]) }));
 
 		expect(build.text).not.toContain("## Persistent Work");
 		expect(build.text).not.toContain("## Configured Sub-Agents");
 		expect(build.text).not.toContain("task-driving.md");
 		expect(build.text).not.toContain("memory-and-learning.md");
+		// The memory invariant is gated on the tool being registered, like the rest.
+		expect(build.text).not.toContain("`memory_save`");
 		expect(build.text).toContain("runtime-orientation.md");
-	});
-
-	it("gates the memory invariant on the tool being registered", () => {
-		expect(buildPipiclawSystemPrompt(context()).text).toContain("`memory_save` / `memory_forget`");
-		expect(buildPipiclawSystemPrompt(context({ tools: tools(["read"]) })).text).not.toContain("`memory_save`");
 	});
 });
 

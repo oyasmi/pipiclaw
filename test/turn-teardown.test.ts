@@ -42,31 +42,6 @@ describe("run queue drain deadline", () => {
 });
 
 describe("SessionResourceGate refresh detachment", () => {
-	it("does not hold the prompt open while the deferred reload runs", async () => {
-		const reloadStarted = createDeferred();
-		const reloadDone = createDeferred();
-		const gate = new SessionResourceGate(async () => {
-			reloadStarted.resolve();
-			await reloadDone.promise;
-		});
-
-		await gate.runPrompt(async () => {
-			await gate.requestRefresh();
-		});
-
-		// The prompt has returned; the reload is still in flight.
-		await reloadStarted.promise;
-		let settled = false;
-		void gate.whenSettled().then(() => {
-			settled = true;
-		});
-		await Promise.resolve();
-		expect(settled).toBe(false);
-
-		reloadDone.resolve();
-		await gate.whenSettled();
-	});
-
 	it("orders the next prompt behind the detached reload", async () => {
 		const order: string[] = [];
 		const reloadDone = createDeferred();

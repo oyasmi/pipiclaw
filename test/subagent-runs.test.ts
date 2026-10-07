@@ -278,16 +278,6 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		expect(archived).toHaveLength(1);
 	});
 
-	it("consumes an exact durable task wake once and rejects its replay", async () => {
-		const manager = new SubAgentRunManager("dm_123", {});
-		await register(manager, { taskId: "T-once" });
-		await manager.settle("run-1", baseSettleInput(), { announce: false });
-		const dispatchId = "subagent:dm_123:run-1:done";
-		await expect(manager.beginWakeConsumption("run-1", "T-once", dispatchId)).resolves.toBe(true);
-		await manager.finishWakeConsumption("run-1", dispatchId);
-		await expect(manager.beginWakeConsumption("run-1", "T-once", dispatchId)).resolves.toBe(false);
-	});
-
 	it("refuses a wake claim that does not match the run's own record", async () => {
 		const manager = new SubAgentRunManager("dm_123", {});
 		await register(manager, { taskId: "T-1" });
@@ -299,6 +289,9 @@ describe("SubAgentRunManager (spec 040, D1/D7)", () => {
 		await expect(manager.beginWakeConsumption("run-1", "T-other", dispatchId)).resolves.toBe(false);
 		await expect(manager.beginWakeConsumption("run-1", "T-1", `${dispatchId}:replay`)).resolves.toBe(false);
 		await expect(manager.beginWakeConsumption("run-1", "T-1", dispatchId)).resolves.toBe(true);
+		// The exact wake is consumed once: after it finishes, a replay of it is refused.
+		await manager.finishWakeConsumption("run-1", dispatchId);
+		await expect(manager.beginWakeConsumption("run-1", "T-1", dispatchId)).resolves.toBe(false);
 	});
 
 	it("cancel invokes the registered handle and does not itself dispatch a wake", async () => {

@@ -57,13 +57,6 @@ function getLastCommandResult(api: FakeExtensionAPI): { customType: string; cont
 }
 
 describe("command-extension", () => {
-	it("registers memory/session/thinking/model/new/compact commands", () => {
-		const api = new FakeExtensionAPI();
-		createCommandExtension(createOptions().options)(api as never);
-
-		expect([...api.registeredCommands.keys()]).toEqual(["memory", "session", "thinking", "model", "new", "compact"]);
-	});
-
 	it("renders /memory through the domain command handler", async () => {
 		const api = new FakeExtensionAPI();
 		const { options } = createOptions();
@@ -85,18 +78,6 @@ describe("command-extension", () => {
 			display: true,
 		});
 		expect(getLastCommandResult(api).content).toContain("gpt-4o-mini");
-	});
-
-	it("shows current and available models when /model has no args", async () => {
-		const api = new FakeExtensionAPI();
-		const { options } = createOptions();
-		createCommandExtension(options)(api as never);
-
-		await api.registeredCommands.get("model")?.handler("", createCommandContext());
-
-		expect(getLastCommandResult(api).content).toContain("当前模型");
-		expect(getLastCommandResult(api).content).toContain("可用模型");
-		expect(getLastCommandResult(api).content).toContain("claude-sonnet-4-5");
 	});
 
 	it("shows, sets, cycles, and validates thinking levels", async () => {
@@ -131,6 +112,9 @@ describe("command-extension", () => {
 		]);
 		createCommandExtension(options)(api as never);
 
+		await api.registeredCommands.get("model")?.handler("", createCommandContext());
+		expect(options.getAvailableModels).toHaveBeenCalled();
+		expect(getLastCommandResult(api).content).toContain("claude-sonnet-4-5");
 		await api.registeredCommands.get("model")?.handler("anthropic/claude-sonnet-4-5", createCommandContext());
 		expect(options.switchModel).toHaveBeenCalledTimes(1);
 		expect(getLastCommandResult(api).content).toContain("已切换模型");

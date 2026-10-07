@@ -12,23 +12,18 @@ function task(overrides: Partial<TaskFrontmatter> = {}): TaskFrontmatter {
 
 describe("task budget (spec 052, D8)", () => {
 	it("passes a fresh task and merges per-task overrides onto the defaults", () => {
+		expect(checkBudget({ state: "open" })).toEqual({});
 		expect(checkBudget(task())).toEqual({});
 		expect(effectiveBudget(task({ budget: { steps: 3 } }))).toEqual({ ...DEFAULT_TASK_BUDGET, steps: 3 });
 	});
 
 	it("breaches on each dimension independently", () => {
 		expect(checkBudget(task({ usage: usage({ steps: DEFAULT_TASK_BUDGET.steps }) })).breach).toBe("steps");
+		const estimated = checkBudget(task({ usage: usage({ usd: 25, usdEstimated: true }) }));
+		expect(estimated.breach).toBe("usd");
+		expect(estimated.reason).toContain("$25.00");
+		expect(estimated.reason).toContain("估算");
 		expect(checkBudget(task({ usage: usage({ usd: DEFAULT_TASK_BUDGET.usd }) })).breach).toBe("usd");
 		expect(checkBudget(task({ budget: { steps: 2 }, usage: usage({ steps: 2 }) })).breach).toBe("steps");
-	});
-
-	it("tells the user a stop was driven by an estimate rather than a measured cost", () => {
-		const status = checkBudget(task({ usage: usage({ usd: 25, usdEstimated: true }) }));
-		expect(status.reason).toContain("$25.00");
-		expect(status.reason).toContain("估算");
-	});
-
-	it("ignores a task whose usage clock has not started", () => {
-		expect(checkBudget({ state: "open" })).toEqual({});
 	});
 });

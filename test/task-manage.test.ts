@@ -138,9 +138,10 @@ describe("task tool surface (spec 052, D7)", () => {
 			await writeTask("work");
 			const result = await endTaskStep(
 				{ ...loop("work"), getToolsUsed: () => ["bash", "read", "bash"] },
-				{ outcome: "continue", note: "ran the check" },
+				{ outcome: "continue", note: "ran the check", items: [{ id: "W1", status: "done" }] },
 			);
 			expect(result.state).toBe("open");
+			expect((await readStoredTask(channelDir, "work"))?.body).toContain("- [x] W1 Build it");
 			const [record] = await readTaskLog(channelDir, "work", { kinds: ["step"] });
 			expect(record).toMatchObject({ kind: "step", seq: 1, outcome: "continue" });
 			// Deduplicated: the idle detector asks "did anything happen", not "how many times".
@@ -165,12 +166,6 @@ describe("task tool surface (spec 052, D7)", () => {
 			const close = (await readTaskLog(channelDir, "costly", { kinds: ["close"] }))[0];
 			expect(close?.kind === "close" && close.usd).toBeCloseTo(0.5);
 			expect((await readStoredTask(channelDir, "costly", true))?.fields.usage?.usdEstimated).toBe(true);
-		});
-
-		it("can mark a Work Item done in the same call", async () => {
-			await writeTask("work");
-			await endTaskStep(loop("work"), { outcome: "continue", note: "n", items: [{ id: "W1", status: "done" }] });
-			expect((await readStoredTask(channelDir, "work"))?.body).toContain("- [x] W1 Build it");
 		});
 
 		it("park requires a ticket, and refuses a work ticket when nothing is in flight", async () => {

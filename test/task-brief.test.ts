@@ -94,6 +94,7 @@ describe("team board (spec 052, D5)", () => {
 	it("groups dispatches under their item and marks only what settled since the last step as new", async () => {
 		const channelDir = tempDir();
 		await writeTask(channelDir, "T", body);
+		expect(await buildTaskStepBrief({ channelDir, taskId: "T" })).not.toContain("<task_board>");
 		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_a", item: "W1", agent: "explorer" });
 		await appendTaskLog(channelDir, "T", {
 			kind: "settle",
@@ -164,14 +165,6 @@ describe("team board (spec 052, D5)", () => {
 		expect(await buildTaskStepBrief({ channelDir, taskId: "T" })).not.toContain("<task_results>");
 	});
 
-	it("is built from the log alone, so it survives the run record being garbage-collected", async () => {
-		const channelDir = tempDir();
-		await writeTask(channelDir, "T", body);
-		await appendTaskLog(channelDir, "T", { kind: "dispatch", ref: "run_old", item: "W1", agent: "explorer" });
-		await appendTaskLog(channelDir, "T", { kind: "settle", ref: "run_old", item: "W1", status: "completed" });
-		expect(renderTaskBoard((await buildTaskBoard(channelDir, "T", body))!)).toContain("run_old");
-	});
-
 	it("folds already-seen settled refs beyond the line budget but never running or new ones", async () => {
 		const channelDir = tempDir();
 		await writeTask(channelDir, "T", body);
@@ -186,11 +179,5 @@ describe("team board (spec 052, D5)", () => {
 		const board = await buildTaskBoard(channelDir, "T", body);
 		expect(board?.hiddenSettled).toBe(total + 1 - BOARD_REF_LINE_BUDGET);
 		expect(renderTaskBoard(board!)).toContain("run_live");
-	});
-
-	it("is absent from the brief when nothing was ever dispatched", async () => {
-		const channelDir = tempDir();
-		await writeTask(channelDir, "T", body);
-		expect(await buildTaskStepBrief({ channelDir, taskId: "T" })).not.toContain("<task_board>");
 	});
 });

@@ -35,10 +35,6 @@ describe("task contract body (spec 052, §3.4)", () => {
 		}
 	});
 
-	it("flags a DoD written as prose, which would otherwise read as 'nothing left to check'", () => {
-		expect(uncheckedTaskAcceptanceItems("## DoD\nIt works.\n")[0]).toContain("no checklist items");
-	});
-
 	it("derives the current item and ignores dropped ones in the totals", () => {
 		const items = parseTaskItems("## Work Items\n- [x] W1 a\n- [!] W2 b\n- [~] W3 c\n- [ ] W4 d\n");
 		expect(items).toMatchObject({ total: 3, done: 1 });

@@ -46,22 +46,16 @@ describe("bash tool", () => {
 		expect(unlinkMock).toHaveBeenCalledWith(expect.stringMatching(SPILL_PATH_PATTERN));
 	});
 
-	it("falls back to the built-in default timeout when none is supplied", async () => {
-		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "", stderr: "" }));
-		const tool = createBashTool(executor);
-
-		await tool.execute("call", { command: "true" });
-
-		expect(executor.calls[0].options?.timeout).toBe(DEFAULT_BASH_TIMEOUT_SECONDS);
-	});
-
-	it("does not consult rtk when the optimizer is disabled (default)", async () => {
+	it("defaults to the built-in timeout, no rtk probe, and no interceptor when no options are supplied", async () => {
 		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
 		const tool = createBashTool(executor);
 
 		await tool.execute("call", { command: "git status" });
+		await tool.execute("call", { command: "cat notes.txt" });
 
-		expect(executor.calls.map((c) => c.command)).toEqual(["git status"]);
+		expect(executor.calls[0].options?.timeout).toBe(DEFAULT_BASH_TIMEOUT_SECONDS);
+		// Neither `command -v rtk` nor a rewrite, and a bare tool-better command is not steered away.
+		expect(executor.calls.map((c) => c.command)).toEqual(["git status", "cat notes.txt"]);
 	});
 
 	it("intercepts bare tool-better commands only when the interceptor is enabled", async () => {
@@ -95,13 +89,6 @@ describe("bash tool", () => {
 		]);
 		// A bare content `rg` still gets steered.
 		await expect(gated.execute("call", { command: "rg TODO src" })).rejects.toThrow(/use the grep tool/);
-	});
-
-	it("does not intercept when the interceptor is disabled (default)", async () => {
-		const executor = new RecordingExecutor(async () => ({ code: 0, stdout: "ok", stderr: "" }));
-		const tool = createBashTool(executor);
-		await tool.execute("call", { command: "cat notes.txt" });
-		expect(executor.calls.map((c) => c.command)).toEqual(["cat notes.txt"]);
 	});
 
 	it("requires a job manager for async runs, and starts a background job when one is available", async () => {

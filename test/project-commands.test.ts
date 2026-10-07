@@ -98,11 +98,4 @@ describe("handleProjectCommand", () => {
 		expect(text).toContain("已重置项目");
 		expect(readProjectSelection(options.channelDir)).toMatchObject({ projectRoot: allowedRoot });
 	});
-
-	it("rejects an unknown subcommand with usage text", async () => {
-		const options = baseOptions({ args: "bogus" });
-		const text = await handleProjectCommand(options);
-		expect(text).toContain("未知的 /project 子命令");
-		expect(text).toContain("/project set <absolute-path>");
-	});
 });

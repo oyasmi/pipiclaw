@@ -37,18 +37,13 @@ describe("resolveLineOffset", () => {
 		expect(line4.offset).toBeUndefined();
 		expect(line4.eof).toBe(true);
 		expect(line4.knownLines).toBe(3);
-	});
-
-	it("does not count a phantom line for content ending exactly on a newline", async () => {
-		const withTrailingNewline = tempFile("a\nb\n");
-		const stat1 = (await fileStore.stat(withTrailingNewline))!;
-		const result1 = await resolveLineOffset(fileStore, withTrailingNewline, stat1, 100);
-		expect(result1.knownLines).toBe(2);
-
-		const withoutTrailingNewline = tempFile("a\nb");
-		const stat2 = (await fileStore.stat(withoutTrailingNewline))!;
-		const result2 = await resolveLineOffset(fileStore, withoutTrailingNewline, stat2, 100);
-		expect(result2.knownLines).toBe(2);
+		const noTrailingNewline = tempFile("aa\nbb\ncc");
+		const statWithoutNewline = (await fileStore.stat(noTrailingNewline))!;
+		expect(await resolveLineOffset(fileStore, noTrailingNewline, statWithoutNewline, 100)).toMatchObject({
+			knownLines: 3,
+			eof: true,
+			offset: undefined,
+		});
 	});
 
 	it("does not rescan bytes already indexed on a later, further request", async () => {

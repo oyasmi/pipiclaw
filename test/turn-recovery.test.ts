@@ -105,16 +105,6 @@ describe("planTurnRecovery", () => {
 });
 
 describe("recoverInterruptedTurn", () => {
-	it("clean branch: no messages appended", () => {
-		const m = openSession();
-		appendUser(m);
-		appendAssistant(m, [{ type: "text", text: "done" }]);
-		const before = m.getBranch().length;
-		const outcome = recoverInterruptedTurn(m, fallbackModel);
-		expect(outcome).toEqual({ kind: "clean" });
-		expect(m.getBranch().length).toBe(before);
-	});
-
 	it("appends a synthetic error tool result for a dangling call, marked isError", () => {
 		const m = openSession();
 		appendUser(m);
@@ -130,8 +120,10 @@ describe("recoverInterruptedTurn", () => {
 		expect(result.message.usage).toBeUndefined();
 
 		// Running it again is a no-op: idempotent.
+		const beforeReplay = m.getBranch().length;
 		const second = recoverInterruptedTurn(m, fallbackModel);
 		expect(second).toEqual({ kind: "clean" });
+		expect(m.getBranch().length).toBe(beforeReplay);
 	});
 
 	// Spec 047, D3.3: the recovery guidance must name the post-split tools, not `subagent_manage`.

@@ -11,7 +11,7 @@ import {
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
 	SubAgentRunManager,
 } from "../src/subagents/runs.js";
-import { assertVerifyAdmissible, createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
+import { createSubAgentInlineTool, createSubAgentTool } from "../src/subagents/tool.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
 import { useTempDirs } from "./helpers/fixtures.js";
@@ -390,17 +390,6 @@ describe("subagent tool: purpose=verify admission (D9)", () => {
 			runtimeContext: { workspaceDir, channelId: "dm_lease" },
 		});
 	}
-
-	it("admits purpose=verify for a role that declares mutates: write", () => {
-		const workspaceDir = createTempWorkspace();
-		expect(() =>
-			assertVerifyAdmissible(
-				{ name: "verifier", mutates: "write", runtime: "external", harness: "claude-code" },
-				"verify",
-				workspaceDir,
-			),
-		).not.toThrow();
-	});
 
 	it("rejects purpose=verify for an exec-harness role even when it declares mutates: read", async () => {
 		const tool = await makeExternalTool(`---

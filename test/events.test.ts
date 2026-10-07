@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventAction, EventsWatcherOptions } from "../src/events/events.js";
-import { EventsWatcher, parseScheduledEventContent } from "../src/events/events.js";
+import { EventsWatcher } from "../src/events/events.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";
 import * as log from "../src/log.js";
 import type { DingTalkBot, DingTalkEvent } from "../src/runtime/dingtalk.js";
@@ -258,14 +258,6 @@ describe("EventsWatcher", () => {
 			schedule: "0 9 * * 1",
 			task: template,
 		};
-
-		it("accepts `text` xor `task`, and validates the template with the same rules as task_create", () => {
-			const parse = (value: unknown) => parseScheduledEventContent(JSON.stringify(value), "e.json");
-			expect(parse(templateEvent).task?.title).toBe("Weekly report");
-			expect(() => parse({ ...templateEvent, text: "also text" })).toThrow(/exactly one of/);
-			expect(() => parse({ type: "periodic", channelId: "dm_1", schedule: "0 9 * * 1" })).toThrow(/exactly one of/);
-			expect(() => parse({ ...templateEvent, task: { ...template, dod: "prose" } })).toThrow(/no checklist items/);
-		});
 
 		it("asks the runtime for an instance of the occurrence instead of waking the chat", async () => {
 			const dir = createTempDir();

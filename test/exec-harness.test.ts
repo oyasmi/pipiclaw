@@ -6,20 +6,6 @@ import { classifyExternalOutcome } from "../src/subagents/external/harness.js";
  *  code is the only completion evidence. Explicitly barred from `purpose=verify` (tested at the
  *  tool level, not here). */
 
-describe("exec harness: buildInvocation", () => {
-	it("passes the command through unchanged, appending nothing", () => {
-		const result = execHarness.buildInvocation({
-			argv: ["my-script.sh", "--flag", "value"],
-			artifactDir: "/tmp/artifacts/run-1",
-			promptFile: "/tmp/artifacts/run-1/prompt.txt",
-			systemPromptFile: "/tmp/artifacts/run-1/system-prompt.txt",
-		});
-		expect(result.executable).toBe("my-script.sh");
-		expect(result.args).toEqual(["--flag", "value"]);
-		expect(result.resumable).toBe(false);
-	});
-});
-
 describe("exec harness: parseOutcome", () => {
 	it("reports completed on exit 0, with terminalSeen always false", () => {
 		const outcome = execHarness.parseOutcome({ eventsText: "plain stdout output\n", exitCode: 0 });
@@ -36,6 +22,10 @@ describe("exec harness: parseOutcome", () => {
 		expect(outcome.protocolStatus).toBe("failed");
 		expect(classifyExternalOutcome("exec", outcome).status).toBe("failed");
 		expect(outcome.errorMessage).toContain("exit");
+		// Without a message of its own, the classifier still names the exit code.
+		expect(classifyExternalOutcome("exec", { ...outcome, errorMessage: undefined, exitCode: 1 }).failureReason).toBe(
+			"exec exited with code 1",
+		);
 	});
 
 	it("truncates very long stdout and points the reply at events.jsonl for the full capture (P1-3)", () => {

@@ -20,13 +20,6 @@ function entry(name: string, type: MemoryEntry["type"], updated: string): Memory
 }
 
 describe("index-budget — channel index tiering", () => {
-	it("returns the full index when it fits", () => {
-		const result = buildChannelIndexForBootstrap([entry("a", "project", "2026-09-01")], 1_400);
-		expect(result.overBudget).toBe(false);
-		expect(result.omittedCount).toBe(0);
-		expect(result.text).toContain("- a —");
-	});
-
 	it("keeps all user/feedback, drops oldest project/reference, adds an omitted line", () => {
 		const entries = [
 			entry("u1", "user", "2026-01-01"),
@@ -35,6 +28,10 @@ describe("index-budget — channel index tiering", () => {
 				entry(`p${String(i).padStart(2, "0")}`, "project", `2026-${String((i % 12) + 1).padStart(2, "0")}-01`),
 			),
 		];
+		const full = buildChannelIndexForBootstrap(entries, 10_000);
+		expect(full.overBudget).toBe(false);
+		expect(full.omittedCount).toBe(0);
+		expect(full.includedNames.slice().sort()).toEqual(entries.map((e) => e.name).sort());
 		const result = buildChannelIndexForBootstrap(entries, 300);
 		expect(result.overBudget).toBe(true);
 		expect(result.includedNames).toContain("u1");

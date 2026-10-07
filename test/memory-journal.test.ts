@@ -14,17 +14,15 @@ import { useTempDirs } from "./helpers/fixtures.js";
 const createTempDir = useTempDirs("pipiclaw-memory-journal-");
 
 describe("journal", () => {
-	it("creates the day file with a header on first append", async () => {
-		const channelDir = createTempDir();
-		const result = await appendJournalEntries(channelDir, "2026-09-04", ["01:12 完成审查并发邮件"]);
-		expect(result).toEqual({ appended: 1, skippedDuplicate: 0 });
-		const content = await readFile(getJournalPath(channelDir, "2026-09-04"), "utf-8");
-		expect(content).toBe("# 2026-09-04\n- 01:12 完成审查并发邮件\n");
-	});
-
 	it("appends without duplicating a normalized-equal existing line", async () => {
 		const channelDir = createTempDir();
-		await appendJournalEntries(channelDir, "2026-09-04", ["01:12 完成审查并发邮件"]);
+		expect(await appendJournalEntries(channelDir, "2026-09-04", ["01:12 完成审查并发邮件"])).toEqual({
+			appended: 1,
+			skippedDuplicate: 0,
+		});
+		expect(await readFile(getJournalPath(channelDir, "2026-09-04"), "utf-8")).toBe(
+			"# 2026-09-04\n- 01:12 完成审查并发邮件\n",
+		);
 		const result = await appendJournalEntries(channelDir, "2026-09-04", [
 			"01:12   完成审查并发邮件", // same text, extra whitespace
 			"04:20 简报改为工作日发送",

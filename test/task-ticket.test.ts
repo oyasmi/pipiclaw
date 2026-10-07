@@ -18,6 +18,8 @@ function context(pending: PendingWorkRef[] = []): TicketContext {
 describe("resolveTicket validation (spec 052, D3)", () => {
 	// A park has to name something the runtime can check, or it reproduces the 13-day silence.
 	it("refuses a work ticket when nothing bound to the task is in flight", () => {
+		expect(() => resolveTicket({ kind: "work" }, context())).toThrow(RecoverableToolError);
+		expect(() => resolveTicket({ kind: "ask" }, context())).toThrow(RecoverableToolError);
 		expect(() => resolveTicket({ kind: "work" }, context())).toThrow(
 			/nothing to wait for|no delegation or background job/,
 		);
@@ -30,11 +32,6 @@ describe("resolveTicket validation (spec 052, D3)", () => {
 		for (const retired of ["run", "job", "signal", "schedule", "nope"]) {
 			expect(() => resolveTicket({ kind: retired }, context()), retired).toThrow(/Unknown ticket kind/);
 		}
-	});
-
-	it("reports every rejection as recoverable, so the model can fix the call itself", () => {
-		expect(() => resolveTicket({ kind: "work" }, context())).toThrow(RecoverableToolError);
-		expect(() => resolveTicket({ kind: "ask" }, context())).toThrow(RecoverableToolError);
 	});
 });
 

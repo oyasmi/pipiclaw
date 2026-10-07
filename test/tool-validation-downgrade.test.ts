@@ -32,12 +32,9 @@ function sdkValidationResult(): { result: unknown; isError: boolean } {
 }
 
 describe("argument-validation failure downgrade (spec 047 D4.2)", () => {
-	it("recognizes the SDK's own validation failure", () => {
+	it("recognizes SDK validation while preserving real tool errors and normal results", () => {
 		const { result, isError } = sdkValidationResult();
 		expect(isArgumentValidationFailure(result, isError)).toBe(true);
-	});
-
-	it("does not match a real tool error or a normal result", () => {
 		expect(isArgumentValidationFailure({ content: [{ type: "text", text: "boom" }], details: {} }, true)).toBe(false);
 		// A result that carries details.kind went through withToolDetails — not this path.
 		expect(

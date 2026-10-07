@@ -35,6 +35,9 @@ afterEach(async () => {
 
 describe("redeemTicket (INV-1)", () => {
 	it("only redeems a matching ticket, and only once", async () => {
+		await parkTask(dir, "T", STALE_TICKET);
+		await expireTicket(dir, "T");
+		expect((await readStoredTask(dir, "T"))?.fields.usage?.expired).toBe(1);
 		await parkTask(dir, "T", WORK_TICKET);
 
 		// A wake for a task parked on a different kind of ticket must not reopen it.
@@ -43,6 +46,7 @@ describe("redeemTicket (INV-1)", () => {
 
 		const first = await redeemTicket(dir, "T", (ticket) => ticket.kind === "work");
 		expect(first?.ticket).toEqual(WORK_TICKET);
+		expect((await readStoredTask(dir, "T"))?.fields.usage?.expired).toBe(0);
 		expect((await readStoredTask(dir, "T"))?.fields.state).toBe("open");
 
 		// At-least-once delivery: replaying the same settlement is a no-op, not a second reopen.
@@ -55,16 +59,6 @@ describe("redeemTicket (INV-1)", () => {
 		document!.fields.paused = { by: "user", reason: "hold", at: "2026-01-01T00:00:00+08:00" };
 		await writeStoredTask(document!);
 		expect(await redeemTicket(dir, "T", () => true)).toBeUndefined();
-	});
-
-	it("clears the consecutive-expiry count when a wait ends normally", async () => {
-		await parkTask(dir, "T", STALE_TICKET);
-		await expireTicket(dir, "T");
-		expect((await readStoredTask(dir, "T"))?.fields.usage?.expired).toBe(1);
-
-		await parkTask(dir, "T", WORK_TICKET);
-		await redeemTicket(dir, "T", () => true);
-		expect((await readStoredTask(dir, "T"))?.fields.usage?.expired).toBe(0);
 	});
 });
 
@@ -109,14 +103,5 @@ describe("resumeTask", () => {
 		expect(resumed?.fields.paused).toBeUndefined();
 		expect(resumed?.fields.ticket).toBeUndefined();
 		expect(resumed?.fields.usage?.expired).toBe(0);
-	});
-
-	it("keeps a live ticket when resuming a user pause", async () => {
-		await parkTask(dir, "T", WORK_TICKET);
-		const document = await readStoredTask(dir, "T");
-		document!.fields.paused = { by: "user", reason: "hold", at: "2026-01-01T00:00:00+08:00" };
-		await writeStoredTask(document!);
-		await resumeTask(dir, "T");
-		expect((await readStoredTask(dir, "T"))?.fields).toMatchObject({ state: "parked", ticket: WORK_TICKET });
 	});
 });

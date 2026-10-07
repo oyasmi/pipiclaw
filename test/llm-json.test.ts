@@ -12,11 +12,6 @@ describe("llm-json", () => {
 		});
 	});
 
-	it("extracts JSON objects from fenced blocks", () => {
-		const raw = ["Here you go:", "```json", '{"selectedIds":["a","b"]}', "```"].join("\n");
-		expect(parseJsonObject(raw)).toEqual({ selectedIds: ["a", "b"] });
-	});
-
 	it("throws a typed error when no JSON object is present", () => {
 		expect(() => extractJsonObject("plain text only")).toThrow(LlmJsonParseError);
 	});

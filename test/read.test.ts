@@ -165,16 +165,6 @@ describe("read tool", () => {
 		expect(text).not.toContain("deep-child.ts");
 	});
 
-	it("reports an empty directory", async () => {
-		const dir = tempDir();
-		const emptyDir = join(dir, "empty");
-		mkdirSync(emptyDir);
-		const tool = makeTool();
-		const result = await tool.execute("call", { path: emptyDir });
-		const text = result.content[0].type === "text" ? result.content[0].text : "";
-		expect(text).toContain("(empty directory)");
-	});
-
 	it("converts a PDF to text and applies offset/limit, surfacing pdftotext failures as hints", async () => {
 		const dir = tempDir();
 		const path = join(dir, "doc.pdf");

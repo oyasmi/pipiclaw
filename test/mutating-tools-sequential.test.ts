@@ -18,16 +18,12 @@ const disabledSecurity = { enabled: false } as never;
 describe("mutating tools declare sequential execution", () => {
 	const fileStore = createFileStore();
 
-	it("edit is sequential", () => {
-		expect(createEditTool(fileStore, { securityConfig: disabledSecurity }).executionMode).toBe("sequential");
-	});
-
-	it("write is sequential", () => {
-		expect(createWriteTool(fileStore, { securityConfig: disabledSecurity }).executionMode).toBe("sequential");
-	});
-
-	it("bash is sequential", () => {
+	it("every mutating tool declares sequential execution", () => {
 		const executor = { exec: async () => ({ stdout: "", stderr: "", code: 0 }) };
-		expect(createBashTool(executor, { securityConfig: disabledSecurity }).executionMode).toBe("sequential");
+		expect({
+			edit: createEditTool(fileStore, { securityConfig: disabledSecurity }).executionMode,
+			write: createWriteTool(fileStore, { securityConfig: disabledSecurity }).executionMode,
+			bash: createBashTool(executor, { securityConfig: disabledSecurity }).executionMode,
+		}).toEqual({ edit: "sequential", write: "sequential", bash: "sequential" });
 	});
 });

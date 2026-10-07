@@ -27,6 +27,36 @@ const PARSERS: Partial<Record<string, (args: string) => unknown>> = {
 	skills: parseSkillsCommand,
 };
 
+const EXPECTED_EXAMPLES: Record<string, unknown> = {
+	"/events list": { action: "list" },
+	"/events show weekly-review": { action: "show", name: "weekly-review" },
+	"/events delete weekly-review": { action: "delete", name: "weekly-review" },
+	"/events history weekly-review": { action: "history", name: "weekly-review" },
+	"/tasks": { action: "list" },
+	"/tasks show weekly-report": { action: "show", id: "weekly-report" },
+	"/tasks log weekly-report": { action: "log", id: "weekly-report" },
+	"/tasks archive": { action: "archive" },
+	"/tasks pause weekly-report": { action: "pause", id: "weekly-report" },
+	"/tasks resume weekly-report +steps 20": { action: "resume", id: "weekly-report", grants: { steps: 20 } },
+	"/tasks steer weekly-report 先跑一遍 npm run check": {
+		action: "steer",
+		id: "weekly-report",
+		text: "先跑一遍 npm run check",
+	},
+	"/tasks reply weekly-report 合并到 master": { action: "reply", id: "weekly-report", text: "合并到 master" },
+	"/tasks doctor": { action: "doctor" },
+	"/subagents list failed": { action: "list", filter: "failed" },
+	"/subagents show run_a1b2c3": { action: "show", ref: "run_a1b2c3" },
+	"/subagents output run_a1b2c3": { action: "output", ref: "run_a1b2c3" },
+	"/subagents cancel run_a1b2c3": { action: "cancel", ref: "run_a1b2c3" },
+	"/subagents roles builder-hard": { action: "roles", name: "builder-hard" },
+	"/project": { action: "show" },
+	"/project set /home/me/projects/foo": { action: "set", path: "/home/me/projects/foo" },
+	"/project reset": { action: "reset" },
+	"/skills": { action: "list" },
+	"/skills show release-checklist": { action: "show", name: "release-checklist" },
+};
+
 function argsAfterCommandName(example: string, commandName: string): string {
 	return example.replace(new RegExp(`^/${commandName}\\s*`), "");
 }
@@ -52,8 +82,8 @@ describe("command subcommand examples round-trip through their parser", () => {
 				const args = argsAfterCommandName(example, name);
 				if (parser) {
 					const parsed = parser(args);
-					const action = args.trim().split(/\s+/)[0] || (name === "project" ? "show" : "list");
-					expect(parsed, example).toMatchObject({ action });
+					expect(EXPECTED_EXAMPLES[example], `Add the expected parsed object for ${example}`).toBeDefined();
+					expect(parsed, example).toEqual(EXPECTED_EXAMPLES[example]);
 					continue;
 				}
 				if (name === "memory") {

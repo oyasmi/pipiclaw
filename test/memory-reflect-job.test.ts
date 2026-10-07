@@ -90,7 +90,7 @@ describe("runReflectJob", () => {
 		}));
 		vi.mocked(runReflect).mockResolvedValue(reflectResult() as never);
 
-		await runReflectJob({
+		const input = {
 			appHomeDir,
 			channelId: "dm_1",
 			channelDir,
@@ -102,7 +102,8 @@ describe("runReflectJob", () => {
 			resolveApiKey: async () => "",
 			messages: () => messages,
 			sessionEntries: () => sessionEntries,
-		});
+		};
+		await runReflectJob(input);
 		expect(runReflect).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(runReflect).mock.calls[0][0]).toMatchObject({ channelId: "dm_1", channelDir, workspaceDir });
 
@@ -116,30 +117,12 @@ describe("runReflectJob", () => {
 		expect(entry.actions).toEqual(
 			expect.arrayContaining([expect.objectContaining({ target: "memory", action: "reflect" })]),
 		);
-	});
-
-	it("does not call the model twice for the same window (idempotent cursor)", async () => {
-		const { appHomeDir, channelDir, workspaceDir } = await harness();
-		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (state) => ({ ...state, dirty: true }));
-		vi.mocked(runReflect).mockResolvedValue(reflectResult() as never);
-
-		const input = {
-			appHomeDir,
-			channelId: "dm_1",
-			channelDir,
-			workspaceDir,
-			channelActive: false,
-			settings: { memoryMaintenance: maintenanceSettings({ minIdleMinutesBeforeLlmWork: 0 }) },
-			model: TEST_MODEL,
-			resolveApiKey: async () => "",
-			messages: () => messages,
-			sessionEntries: () => sessionEntries,
-		};
-		await runReflectJob(input);
-		// The cursor now sits at entry-2; a second run against the same, unchanged session
-		// entries has nothing after it and must not call the model again.
-		await runReflectJob({ ...input, channelActive: false });
+		// Let the cheap schedule gates pass again; only the persisted cursor can suppress this window.
+		await updateMemoryMaintenanceState(appHomeDir, "dm_1", (current) => ({ ...current, dirty: true }));
+		await runReflectJob({ ...input, now: new Date("2026-04-19T12:30:00.000Z") });
 		expect(runReflect).toHaveBeenCalledTimes(1);
+		const lastSkip = JSON.parse(readFileSync(getMemoryReviewLogPath(channelDir), "utf-8").trim().split("\n").at(-1)!);
+		expect(lastSkip.skipped).toEqual([{ target: "reflect", reason: "no-new-entry" }]);
 	});
 
 	it("sets a failure backoff and logs the error when reflect throws", async () => {
