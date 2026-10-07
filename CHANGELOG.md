@@ -2,6 +2,20 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [0.9.3] - 2026-10-07
+
+### Changed
+
+- Tasks are now one-off projects led through Goal / DoD / Work Items, per-task sessions, a team board, and durable dispatch/settle logs (spec 052). Recurring and scheduled work uses event task templates, creating one instance per occurrence; verification verdicts inform the leader rather than gate completion.
+- Wait tickets are `time` / `work` / `ask`; budgets cover the whole project (`steps` / `usd`), including attributable delegation costs. Task steps receive the context and returned results needed to continue; results reach chat through explicit reports and runtime receipts.
+- Recommended external agent examples use capability/cost tiers; task guidance, delivery reliability, and review fixes accumulated through beta.6 are included. See earlier beta entries for memory, tool, and eval changes.
+
+### Upgrade
+
+- Automatic migration supports v3 (`status:` without `state:`), with originals in `tasks/.v3/`. v4 beta files with `state:` are skipped and **require isolation and manual rebuilding**; this is not v4 compatibility. Unsupported waits, previous usage/budgets, and external effects must be reconciled before resuming.
+- Failed recurring templates pause with a note; a failed conversion is rolled back per task (existing archives and backups are never overwritten; unreadable task/event directories count as failures), no marker is written, `state/task-migration-v5.failed.json` records the stage, and startup aborts (no watcher/driver/DingTalk) until the cause is fixed and the daemon is restarted; `node scripts/rehearse-task-migration.mjs` rehearses conversion on a read-only temp copy after `npm run build`. Back up the whole app home, preserve unresolved tasks/events and records, and follow [the upgrade procedure](docs/events-and-tasks.md#beta-用户升级与不可转换任务). Disabled v3 recurring tasks stay paused and get no event template; templates generated for the remaining recurring tasks are picked up by the watcher right after migration, so handle the original tasks while the daemon is stopped.
+- Local checks and CI status are recorded in [the release review](docs/releases/0.9.3-review.md).
+
 ## [0.9.3-beta.5] - 2026-09-20
 
 ### Changed
