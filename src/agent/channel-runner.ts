@@ -100,7 +100,6 @@ import {
 import { loadPlaybooks, loadWorkspacePromptResources, type WorkspacePromptResources } from "./prompt/resources.js";
 import type { PromptBuildResult } from "./prompt/types.js";
 import { createRunQueue } from "./run-queue.js";
-import type { RunnerDeps, RunnerFactoryPaths } from "./runner-factory.js";
 import {
 	asSdkSettingsManager,
 	cycleThinkingLevelWithConditionalPersist,
@@ -118,6 +117,7 @@ import { assembleTurnPrompt } from "./turn-prompt.js";
 import { recoverInterruptedTurn } from "./turn-recovery.js";
 import { type TurnHandle, TurnStateMachine } from "./turn-state.js";
 import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./type-guards.js";
+import type { RunnerDeps, RunnerFactoryPaths } from "./types.js";
 import {
 	type AgentRunner,
 	createEmptyRunState,

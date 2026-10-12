@@ -1,9 +1,15 @@
-import type { ChannelContext } from "../channel/channel-context.js";
+import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
 import type { InboundImage } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";
 import type { RunnerBuiltInCommand } from "../commands/catalog.js";
+import type { PipiclawSettingsManager } from "../config/settings.js";
+import type { Executor } from "../executor.js";
+import type { FileStore } from "../file-store.js";
+import type { ChannelJobManager } from "../jobs/manager.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
+import type { LoadedSecurityConfig } from "../security/config.js";
 import type { SubAgentDiscoveryResult } from "../subagents/discovery.js";
+import type { SubAgentRunManager } from "../subagents/runs.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../usage/totals.js";
 
 export interface RunnerStatusSnapshot {
@@ -233,3 +239,40 @@ export type AutoRetryStartEvent = Extract<SessionEvent, { type: "auto_retry_star
 export type ProgressEntryKind = "tool" | "thinking" | "error" | "assistant";
 
 export const MAX_USER_MESSAGE_CHARS = 12_000;
+
+export interface RunnerFactoryPaths {
+	jobManager: ChannelJobManager;
+	runManager: SubAgentRunManager;
+	appHomeDir: string;
+	authConfigPath: string;
+	modelsConfigPath: string;
+	/**
+	 * The single app-level settings manager (from `prepareAppServices`), shared across every
+	 * channel's runner rather than each constructing its own. Keeps `drainErrors()`/diagnostics
+	 * ordering and `reload()`'s file-stamp guard meaningful instead of racing N independent copies.
+	 */
+	settingsManager: PipiclawSettingsManager;
+	/** Optional, side-effect-free observer used by the behavior-eval harness. */
+	onSessionEvent?: (event: unknown, channelId: string) => void;
+	/**
+	 * Transport that can deliver file attachments (the DingTalk bot, or the terminal).
+	 * Present enables the `send_media` tool; absent, the tool is not built.
+	 */
+	mediaSender?: MediaSender;
+}
+
+/**
+ * The collaborators a runner uses but does not build. Composing them here rather than inside
+ * `ChannelRunner`'s constructor keeps the "which implementation" decision at the one place that
+ * already owns wiring, and is what makes `Executor`/`FileStore` real ports (a remote executor is
+ * a different value passed in, not a different branch inside the runner).
+ */
+export interface RunnerDeps {
+	executor: Executor;
+	fileStore: FileStore;
+	/**
+	 * Called per use, not resolved once: the runner re-reads security policy on every tool rebuild
+	 * so an edited `security.json` takes effect without restarting the daemon.
+	 */
+	loadSecurityConfig: () => LoadedSecurityConfig;
+}

@@ -2,10 +2,6 @@
 	"r1": [],
 	"r2": [
 		[
-			"src/agent/channel-runner.ts",
-			"src/agent/runner-factory.ts"
-		],
-		[
 			"src/tui/pitui-frontend.ts",
 			"src/tui/plain-frontend.ts",
 			"src/tui/renderer.ts"
