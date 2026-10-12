@@ -1,3 +1,8 @@
+/**
+ * The daemon's composition root: loads config and builds the bot, durable dispatch, jobs, delegation
+ * runs, the events, memory and task services, then wires the per-channel handler (`turn-handler.ts`)
+ * and the ordered shutdown (`shutdown.ts`).
+ */
 import { join } from "path";
 import { loadDetachedMaintenanceContext } from "../agent/maintenance-context.js";
 import { createRunner } from "../agent/runner-factory.js";

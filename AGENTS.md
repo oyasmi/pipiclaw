@@ -6,19 +6,37 @@ Pipiclaw is a DingTalk-first AI coding assistant runtime built on `@earendil-wor
 
 ## Core Structure
 
-- `src/runtime/`: DingTalk transport, background services, and the composition root (`bootstrap`, `dingtalk`, `delivery`, `task-driver`)
-- `src/channel/`: the transport-neutral channel domain — its two I/O contracts (`channel-context` outbound, `channel-event` inbound), identity (`channel-paths`, `channel-index`) and persisted state (`store`, `active-session-store`, `project-scope-store`). Depends on no transport; this is what `agent`, `memory`, `tools` and `tui` mean when they say "channel"
-- `src/events/`: scheduled/sensor events — definitions, cron/one-shot validation, the filesystem watcher, and admin-command parsing (`events`, `validation`, `commands`). A separate subsystem from tasks: the only edge between them is a template event asking the runtime (via the injected `spawnTask` callback) for a task instance — events never read or write task files (spec 052, INV-8)
-- `src/agent/`: main agent orchestration and session event handling
-- `src/commands/`: the product-wide slash-command catalog (`catalog.ts`) and the shared reply length budget (`reply-limits.ts`). Imports nothing; handlers stay in the layer that owns their state
-- `src/memory/`: one-fact-per-file channel memory, daily journal, and the single background reflect pass (spec 050)
-- `src/tasks/`: the one-off task project: contract (Goal/DoD/Work Items), waiting tickets, loop log with dispatch/settle records, the team board and budget (specs 051, 052)
-- `src/subagents/`: role discovery, internal/external execution, run lifecycle, harnesses, workspace leases, and delegation tools
-- `src/tools/`: tool implementations exposed to the coding agent
-- `src/security/`: command, path, and network guard configuration and enforcement helpers
-- `src/web/`: web search/fetch client, extraction, formatting, and provider implementations
-- `src/models/`: model reference formatting, matching, default resolution, and API key lookup helpers
-- `src/shared/`: small cross-cutting helpers that are truly shared across domains
+A module is a path under `src/`. Dependencies run strictly downward through the layers below: a module may import only what its "May import" column names (same-layer modules never import each other, and `import type` counts). `scripts/check-architecture.mjs` (`npm run arch`, part of `npm run check`) enforces this table together with file-level cycles, a 800-line file budget, dangling relative paths and file references in this document, `CLAUDE.md` and `docs/architecture.md`. If this table and the script disagree, the script wins — fix this table in the same commit.
+
+| Layer | Module | Path | Owns | May import | Typical files |
+|---|---|---|---|---|---|
+| 0 | `shared` | `src/shared/` | small helpers with no domain knowledge | — | `serial-queue.ts`, `atomic-file.ts`, `text-utils.ts` |
+| 0 | `commands` | `src/commands/catalog.ts`, `reply-limits.ts` | the slash-command catalog and the reply length budget | — | `catalog.ts`, `reply-limits.ts` |
+| 1 | `foundation` | `src/log.ts`, `paths.ts`, `executor.ts`, `file-store.ts` | process-wide logging and paths, plus the host I/O ports (`Executor` for commands, `FileStore` for file contents, spec 044) | shared | the four files named |
+| 2 | `security` | `src/security/` | command, path and network guards, project scope, audit log | layers 0–1 | `command-guard.ts`, `path-guard.ts`, `network.ts`, `logger.ts` |
+| 2 | `usage` | `src/usage/` | usage ledger, usage rendering, `UsageTotals` | layers 0–1 | `ledger.ts`, `render.ts`, `totals.ts` |
+| 2 | `tasks` | `src/tasks/` | the one-off task project: contract, waiting tickets, loop log, budget, `/tasks`. Scheduling and wake wiring live in `runtime/task-*.ts` so this module stays a leaf | layers 0–1 | `contract.ts`, `ticket.ts`, `loop-log.ts`, `bound-work.ts`, `commands.ts` |
+| 2 | `playbooks` | `src/playbooks/` | read-only runtime playbooks shipped with the package | layers 0–1 | `catalog.ts`, `*.md` |
+| 3 | `channel` | `src/channel/` | the transport-neutral channel domain: the delivery and event contracts, identity, persisted state, `/project` | layers 0–1, security | `channel-context.ts`, `channel-event.ts`, `channel-index.ts`, `store.ts`, `commands.ts` |
+| 3 | `tools-contract` | `src/tools/contract/` | tool-result `details` contract, how a tool call is shown, the tool-name lists | layers 0–1, security | `details.ts`, `presentation.ts`, `names.ts` |
+| 4 | `config` | `src/config/` | `settings.json` and `tools.json` loading and validation | layers 0–1, channel (types only) | `settings.ts`, `tools.ts` |
+| 5 | `models` | `src/models/` | model references, the model runtime, API keys, backup-model fallback | layers 0–1, config | `reference.ts`, `runtime.ts`, `fallback.ts` |
+| 5 | `web` | `src/web/` | search and fetch clients, extraction | layers 0–1, security, config | `client.ts`, `search.ts`, `fetch.ts` |
+| 5 | `skills` | `src/skills/` | workspace skill loading, validation, reading, `/skills` | layers 0–1, security | `loader.ts`, `workspace.ts`, `validation.ts`, `commands.ts` |
+| 6 | `memory` | `src/memory/` | channel memory, daily journal, the reflect pass, session search, `/memory` | layers 0–1, channel, config, models, usage | `store.ts`, `reflect.ts`, `scheduler.ts`, `commands.ts` |
+| 6 | `events` | `src/events/` | scheduled and sensor events: definitions, validation, the file watcher, `/events`. Never touches task files (spec 052, INV-8) | layers 0–1, channel, security, tasks | `types.ts`, `parse.ts`, `watcher.ts`, `validation.ts`, `commands.ts` |
+| 7 | `jobs` | `src/jobs/` | background shell jobs | layers 0–1, channel, tasks | `manager.ts`, `launch.ts`, `record.ts` |
+| 7 | `subagents` | `src/subagents/` | role discovery, delegation dispatch, internal and external execution, run lifecycle, leases, `/subagents`. `discovery.ts` is a registered over-long exception: do not grow it | layers 0–1, security, usage, tasks, channel, config, models, memory, tools-contract | `dispatch.ts`, `runs.ts`, `internal/run.ts`, `external/dispatch.ts`, `discovery.ts` |
+| 8 | `tools` | `src/tools/` (not `contract/`) | the tools handed to the model: schemas, validation, calls into domain code, `content`/`details` | layers 0–7 | `registry.ts`, `subagent.ts`, `job.ts`, `memory-manage.ts` |
+| 9 | `agent` | `src/agent/` | per-channel orchestration: the SDK session, one turn, prompts, session commands | layers 0–8 | `channel-runner.ts`, `session/session-host.ts`, `turn/turn-pipeline.ts`, `prompt/` |
+| 10 | `commands-router` | `src/commands/router.ts` | the one dispatch point for stateless report commands, shared by both transports | layers 0–9 | `router.ts` |
+| 10 | `app` | `src/app/` | the process shell: app-home scaffolding, CLI args, shared services, LLM proxy, `pipiclaw auth` | layers 0–9 | `home.ts`, `services.ts`, `proxy.ts`, `auth-command.ts` |
+| 11 | `dingtalk` | `src/dingtalk/` | the DingTalk Stream transport: connection, AI cards, media, inbound routing, `channel.json` | layers 0–10 | `bot.ts`, `handler.ts`, `cards.ts`, `connection.ts`, `delivery.ts`, `config.ts` |
+| 11 | `tui` | `src/tui/` | the terminal front end: the second `ChannelContext` implementation | layers 0–10 | `app.ts`, `frontend.ts` |
+| 12 | `runtime` | `src/runtime/` | the daemon: composition root and the services that join several subsystems | everything except `tui` | `bootstrap.ts`, `turn-handler.ts`, `shutdown.ts`, `durable-dispatch.ts`, `task-driver.ts` |
+| — | `entry` | `src/main.ts`, `src/index.ts` | the executable entry and the public library surface (spec 035) | any | `main.ts`, `index.ts` |
+
+`src/index.ts` is a compatibility promise: its exported names stay stable. Everything else under `src/` is internal and its import paths may change.
 
 The intended direction is domain-first organization. Avoid adding new generic root-level utilities when a file clearly belongs to an existing domain.
 
@@ -34,6 +52,7 @@ The intended direction is domain-first organization. Avoid adding new generic ro
 ## Development Commands
 
 - `npm run typecheck`
+- `npm run arch` — module dependency, cycle, file-size and path-reference checks (see Core Structure)
 - `npm run test`
 - `npm run test:coverage`
 - `npm run test:e2e` — deterministic full-stack layer (scripted mock provider, no network, no API cost; runs in well under 90s)
@@ -64,8 +83,10 @@ e2e hard rules:
 
 ## Engineering Rules
 
-- Preserve the domain boundaries above; prefer moving code into the right module over adding compatibility aliases
-- Keep `src/main.ts` thin; startup assembly belongs in runtime bootstrap code
+- Preserve the domain boundaries above; prefer moving code into the right module over adding compatibility aliases. `npm run arch` enforces them: when it fails, fix the dependency (move the code, or define an interface in the lower layer and inject the implementation). The baseline in `scripts/architecture-baseline.json` may only shrink — never add an exception, and never use `--init` again. A new top-level directory needs an entry in both `scripts/check-architecture.mjs` and the table above
+- Where new code goes: first the module table (the lowest layer that can own the state or behaviour), then the naming conventions — kebab-case files that do not repeat their directory (`events/commands.ts`, not an `event-commands` file inside `events/`); `<domain>/commands.ts` for a domain's slash-command handlers; `tools/<name>.ts` for model-facing tool adapters; a domain type that its own implementation files import goes in `types.ts` to avoid a cycle; never a catch-all `utils` or `helpers` file — name the file for its content; no re-exports or compatibility aliases when a file moves
+- `tools/<name>.ts` is an adapter: parameter schema, validation (throwing `RecoverableToolError` where the model can fix it), a call into domain code, and the `content`/`details` it returns. Persistence, state machines, scheduling and policy live in the domain directory, which imports only `tools/contract/`, never `tools/`. The delegation tools follow the same rule: `tools/subagent.ts` adapts, `subagents/` dispatches and executes
+- Keep `src/main.ts` thin; startup assembly belongs in `runtime/bootstrap.ts`
 - Keep runtime behavior reliable: queueing, reconnection, persistence, memory maintenance, and delegation settlement are higher priority than cosmetic refactors
 - Prefer explicit types over `as any`
 - Do not treat tests as optional; runtime, memory, and DingTalk behavior should be covered when changed
@@ -106,8 +127,8 @@ Shape rules:
 ## Practical Notes
 
 - Node.js target is `>= 22.19.0`
-- DingTalk transport commands are handled in the runtime layer; session commands are handled inside the agent session layer
-- Event administration commands (`/events list|show|delete|history`) are runtime-layer commands and must stay path-confined to `workspace/events/` and event history
+- A slash command has three parts, each in a fixed place: the catalog entry in `commands/catalog.ts`, the handler in the domain that owns the state (`<domain>/commands.ts`), and — for a stateless report — one case in `commands/router.ts`, which both transports share. Session commands (`/model`, `/compact`, …) live in `agent/session/command-extension.ts`. Adding a `/foo` report means touching exactly those three files
+- Event administration commands (`/events list|show|delete|history`, `events/commands.ts`) must stay path-confined to `workspace/events/` and event history
 - The package version lives in `package.json` and the top-level package entry in `package-lock.json`
 - Web tools are configured through app-level `tools.json`; security policy is configured through app-level `security.json`
 - Workspace skills live only under `workspace/skills/`; do not add channel-scoped skill directories

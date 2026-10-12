@@ -1,3 +1,6 @@
+/**
+ * `UsageTotals` and the accumulators over it.
+ */
 export interface UsageTotals {
 	input: number;
 	output: number;

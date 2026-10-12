@@ -1,3 +1,7 @@
+/**
+ * `tools.json`: the web, rtk, task and inline-delegation tool settings — their types, defaults, the
+ * loader with diagnostics, and the path of the file.
+ */
 import { join } from "node:path";
 import { APP_HOME_DIR } from "../paths.js";
 import { type ConfigDiagnostic, loadJsonConfig, pushConfigWarning } from "../shared/config-diagnostic.js";

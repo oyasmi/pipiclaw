@@ -1,3 +1,7 @@
+/**
+ * Per-channel message archive (`log.jsonl`): inbound messages, bot responses and delegation records,
+ * with de-duplication, size rotation and a debounced flush.
+ */
 import { existsSync, mkdirSync } from "fs";
 import { writeFile } from "fs/promises";
 import { basename, dirname, join } from "path";

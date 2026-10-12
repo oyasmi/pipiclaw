@@ -28,6 +28,8 @@
   - 转为异步的内置 run 也会推送进度。claude-code 的进度会显示工具调用作用的命令或文件。外部 run 连续 10 分钟没有任何输出时，会提示一次“可能卡住了”（`delegation.notices: "settled"` 也会发）；`/subagents show` 会显示它最近一次输出距今多久。
   - `follow_up` 只发送新指令和它自己的产物目录，不再重发首次派发的整套上下文。外部派发不再等待 `ps` / `--version` 探测，CLI 版本缓存 10 分钟。
 
+- **内部重构：源码按可强制检查的分层重新组织（spec 054）。** 无行为变化——用户可见文案、`settings.json` 键、持久化格式和日志事件名都没有改动。`src/` 现在遵循 `AGENTS.md` 里的模块表，并由 `npm run arch` 在每次 `npm run check` 时检查：钉钉传输移到 `src/dingtalk/`，进程外壳移到 `src/app/`，斜杠命令处理器归位到拥有对应状态的领域目录，最大的几个文件（`ChannelRunner`、钉钉 bot、委派派发、`bootstrap`）拆成职责单一的模块。**深层 import 路径已变化**；只有 `src/index.ts` 是兼容承诺，它导出的名称没有变化。
+
 ## [0.9.3] - 2026-10-07
 
 ### 变更

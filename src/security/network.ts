@@ -1,3 +1,7 @@
+/**
+ * The network guard for the web tools: URL and redirect validation, and rejection of private,
+ * loopback and link-local targets (including IPv4-mapped IPv6).
+ */
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { errorMessage } from "../shared/text-utils.js";

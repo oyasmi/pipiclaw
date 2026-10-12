@@ -1,3 +1,7 @@
+/**
+ * Translates SDK session events into progress and AI-Card updates, usage accounting and memory
+ * activity for the current turn.
+ */
 import type { ChannelContext } from "../../channel/channel-context.js";
 import type { ChannelStore } from "../../channel/store.js";
 import * as log from "../../log.js";

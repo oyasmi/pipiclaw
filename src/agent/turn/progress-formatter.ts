@@ -1,3 +1,6 @@
+/**
+ * Formatting helpers for turn progress entries and for clipping over-length user input.
+ */
 import type { ProgressEntryKind } from "../types.js";
 
 function sanitizeProgressText(text: string): string {

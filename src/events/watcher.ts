@@ -1,3 +1,7 @@
+/**
+ * Watches `workspace/events/`, validates each definition, schedules one-shot and periodic events
+ * (cron, optional pre-action gate) and enqueues every occurrence through the injected event sink.
+ */
 import { Cron } from "croner";
 import {
 	chmodSync,

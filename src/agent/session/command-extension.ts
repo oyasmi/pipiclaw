@@ -1,3 +1,7 @@
+/**
+ * The SDK extension that serves the session slash commands (`/model`, `/thinking`, `/session`,
+ * `/compact`, `/memory`, `/new`) inside the agent session, backed by callbacks from the session host.
+ */
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type {

@@ -1,3 +1,7 @@
+/**
+ * Assembles one turn's prompt from the pieces gathered for it (memory bootstrap, task agenda, channel
+ * capsule, the user's message) and measures what each piece cost.
+ */
 import { countPromptUnits } from "../../shared/prompt-units.js";
 import type { PromptTurnContextStats } from "../prompt/manifest.js";
 

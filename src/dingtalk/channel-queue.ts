@@ -1,3 +1,6 @@
+/**
+ * The per-channel serial work queue for inbound turns (user message and event limits live in the bot).
+ */
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 

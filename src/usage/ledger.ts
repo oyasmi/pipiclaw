@@ -1,3 +1,7 @@
+/**
+ * The usage ledger: an append-only JSONL record of every model spend (turns, sub-agent runs, sidecar
+ * work) so the totals add up to real cost without double counting.
+ */
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import * as log from "../log.js";

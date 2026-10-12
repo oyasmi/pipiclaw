@@ -1,3 +1,7 @@
+/**
+ * The command guard: decides whether a shell command may run, against the configured allow/deny
+ * rules and a wrapper-aware scan of every place a command can start.
+ */
 import { basename } from "node:path";
 import { stripNullAndNormalize } from "../shared/text-utils.js";
 import type { CommandGuardResult, SecurityConfig } from "./types.js";

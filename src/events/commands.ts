@@ -1,3 +1,7 @@
+/**
+ * `/events`: list, show, delete and history of scheduled events, confined to `workspace/events/` and
+ * the event history.
+ */
 import { existsSync } from "fs";
 import { readdir, readFile, unlink } from "fs/promises";
 import { join } from "path";

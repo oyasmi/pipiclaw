@@ -1,3 +1,7 @@
+/**
+ * Preventive-compaction budget: estimate the tokens an incoming message adds and decide whether to
+ * compact before sending, instead of waiting for the provider to reject the request.
+ */
 import { estimateTokens } from "../../shared/format.js";
 
 export const PREVENTIVE_COMPACTION_THRESHOLD_RATIO = 0.75;

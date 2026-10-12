@@ -1,3 +1,7 @@
+/**
+ * The shared HTTP client behind the web tools: request/response shapes, DNS pinning for
+ * validated targets, and proxy agent selection.
+ */
 import { Buffer } from "node:buffer";
 import { Agent as HttpAgent } from "node:http";
 import { Agent as HttpsAgent } from "node:https";

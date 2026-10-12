@@ -1,3 +1,8 @@
+/**
+ * The per-channel agent runner: the public API the transports drive (turn lifecycle, steering, status,
+ * retire/dispose), delegating the SDK session to `session/session-host.ts` and the steps of a turn to
+ * `turn/`. Owns the turn state machine.
+ */
 import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { mkdir } from "fs/promises";
 import { dirname, join, resolve } from "path";

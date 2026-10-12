@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-- `npm run check` — full gate: `lint` + `typecheck` + `deadcode` (knip) + `test`. Run this before considering a change done.
+- `npm run check` — full gate: `lint` + `typecheck` + `arch` + `deadcode` (knip) + `test`. Run this before considering a change done.
+- `npm run arch` — `scripts/check-architecture.mjs`: module dependency direction, file-level cycles, the 800-line file budget, dangling relative paths (including `vi.mock` strings, which `tsc` does not check) and file references in the docs. Its baseline (`scripts/architecture-baseline.json`) may only shrink. `scripts/move-modules.mjs` moves files and rewrites every import for you.
 - `npm run test` — unit/integration tests (Vitest). Excludes `test/e2e/**`.
 - Single test file: `npx vitest run test/memory-lifecycle.test.ts`
 - Single test by name: `npx vitest run -t "creates a distinct session id"`
@@ -31,14 +32,14 @@ Node `>= 22.19.0`.
 
 ## Architecture
 
-Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent` SDK (a fork of `@mariozechner/pi-coding-agent`) and drives it from DingTalk. The layers below are traversed on every message.
+Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent` SDK (a fork of `@mariozechner/pi-coding-agent`) and drives it from DingTalk. The module layering — what each directory owns and what it may import — is the table in `AGENTS.md` (enforced by `npm run arch`); this section covers the flows that cross those modules.
 
 **Transport → agent → delivery flow**
-1. `src/runtime/bootstrap.ts` loads config and wires the bot, durable dispatch, task/event/memory services, background jobs, and sub-agent run persistence. `src/main.ts` is intentionally a thin entrypoint that just calls `bootstrap`.
-2. `src/dingtalk/bot.ts` receives Stream-mode events; `src/dingtalk/delivery.ts` builds the `ChannelContext` (the transport-neutral delivery contract in `src/channel/channel-context.ts`: `respond`, `respondInThread`, AI Card streaming). The terminal TUI (`src/tui/`) is a second implementation of the same contract.
-3. Each channel gets one `ChannelRunner` (`src/agent/channel-runner.ts`), created by `src/agent/runner-factory.ts` and cached in `src/runtime/bootstrap.ts`. It assembles the SDK session, tools, memory, roles, and prompt, then streams the turn through the transport-neutral `ChannelContext`.
+1. `src/runtime/bootstrap.ts` loads config and wires the bot, durable dispatch, task/event/memory services, background jobs, and sub-agent run persistence; `src/runtime/turn-handler.ts` is the per-channel handler it hands the bot (stop, `/new`, busy messages, runtime commands; each turn runs through `src/runtime/turn-run.ts`) and `src/runtime/shutdown.ts` the ordered teardown. `src/main.ts` is intentionally a thin entrypoint that just calls `bootstrap`.
+2. `src/dingtalk/bot.ts` (a facade over `connection.ts`, `inbound.ts`, `cards.ts`, `media.ts`, `access-token.ts`) receives Stream-mode events; `src/dingtalk/delivery.ts` builds the `ChannelContext` (the transport-neutral delivery contract in `src/channel/channel-context.ts`: `respond`, `respondInThread`, AI Card streaming). The terminal TUI (`src/tui/`) is a second implementation of the same contract.
+3. Each channel gets one `ChannelRunner` (`src/agent/channel-runner.ts`), created by `src/agent/runner-factory.ts` and cached in `src/runtime/bootstrap.ts`. `ChannelRunner` is the turn facade: it owns `TurnStateMachine` and the run pipeline (`agent/turn/turn-pipeline.ts`, `turn-finish.ts`), while `agent/session/session-host.ts` owns the SDK session, tools, system prompt and extensions. It streams the turn through the transport-neutral `ChannelContext`.
 4. `src/agent/session/session-events.ts` translates SDK session events into progress/AI-Card updates.
-5. The stateless report commands (`/events /tasks /status /usage /context /subagents /project /skills`) are one handler, `src/commands/router.ts`, shared by the DingTalk runtime and the TUI — add a command there, not in a transport.
+5. The stateless report commands (`/events /tasks /status /usage /context /subagents /project /skills`) are one handler, `src/commands/router.ts`, shared by the DingTalk runtime and the TUI — add a command there, not in a transport. Each delegates to the owning domain's `commands.ts`.
 
 **Concurrency model (important, spans several files)**
 - Per channel, turns are serialized by the **`ChannelQueue`** (`src/dingtalk/channel-queue.ts`, consumed by the DingTalk transport): a channel processes one message at a time while still accepting `/steer`, `/followup`, `/stop` mid-turn. Busy state itself has a single owner: the runner's turn state machine (`TurnPhase` in `src/agent/types.ts`; transports call `beginTurn`/`endTurn`, everything else derives from `isBusy()`/`getTurnStatus()`). `src/agent/turn/run-queue.ts` is a different, per-run queue that serializes *outbound delivery calls* (progress updates to the DingTalk API) within a single turn.
@@ -52,7 +53,7 @@ Pipiclaw is a long-lived runtime that wraps the `@earendil-works/pi-coding-agent
 - A task step runs in the task's own session (`tasks/.sessions/<id>.jsonl`), bound via `ChannelRunner.bindTaskSession`; delegations and jobs started there bind to the task automatically. It is still an ordinary channel-queue item, so busy state, `/stop` and delivery are unchanged — only which session file the turn is bound to differs.
 - `events/` is a separate subsystem and the only time source. An event carries either chat `text` or a `task` template; `runtime/task-spawn.ts` (injected into the watcher) creates one instance per occurrence (`<event>-<YYYYMMDD>-<HHmm>`, idempotent) and skips with a receipt while the previous instance runs. Events never read or write task files.
 
-**Delegation (`src/subagents/`)** — workspace roles select internal execution or an external `claude-code` / `codex-cli` / `exec` harness. `SubAgentRunManager` alone owns settlement, usage, leases, persistence, and completion wake; preserve its idempotency flags. External runs are async/detached and daemon-reconciled; TUI has no durable wake/re-adoption. `mutates: write` leases overlapping working directories, and `/stop` does not cancel runs.
+**Delegation (`src/subagents/`)** — workspace roles select internal execution (`internal/run.ts`) or an external `claude-code` / `codex-cli` / `exec` harness (`external/dispatch.ts`); `dispatch.ts` is the shared admission path and `tools/subagent.ts` the model-facing adapter. `SubAgentRunManager` alone owns settlement, usage, leases, persistence, and completion wake; preserve its idempotency flags. External runs are async/detached and daemon-reconciled; TUI has no durable wake/re-adoption. `mutates: write` leases overlapping working directories, and `/stop` does not cancel runs.
 
 **Memory subsystem (`src/memory/`, spec 050)** — three things, do not flatten back into one:
 - Channel memory: one fact per file in `memory/<name>.md` (frontmatter metadata), generated index `MEMORY.md` (never hand-written — rebuilt by `store.ts` on every write). A daily `journal/YYYY-MM-DD.md`, written only by the background reflect pass. `log.jsonl`/`context.jsonl` are cold storage.

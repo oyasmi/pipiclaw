@@ -1,3 +1,7 @@
+/**
+ * The task tool factories (`task_list`, `task_create`, `task_update`, `task_close`, `task_log`,
+ * `task_step_end`): each wires only its own schema and the per-task serial lock.
+ */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { normalizeTaskId } from "../../tasks/contract.js";
 import { withTaskMutation } from "../../tasks/mutation-lock.js";

@@ -1,3 +1,7 @@
+/**
+ * Type guards for the SDK's loosely typed session and message events, so event handlers can narrow
+ * them without casts.
+ */
 import { isRecord } from "../../shared/type-guards.js";
 import type { SubAgentToolDetails } from "../../tools/subagent.js";
 import type {

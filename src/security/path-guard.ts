@@ -1,3 +1,7 @@
+/**
+ * The path guard: resolves a requested path once against the project scope and the read/write allow and
+ * deny lists, and returns the resolved path that file tools must then use.
+ */
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";

@@ -28,6 +28,8 @@ Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
   - Progress notices also cover internal runs that went async. claude-code progress shows the command or file a tool call acts on. An external run that has written nothing for 10 minutes gets one "may be stuck" notice (also sent at `delegation.notices: "settled"`), and `/subagents show` reports how long ago it last produced output.
   - `follow_up` sends only the new instruction and its artifact directory, not a second copy of the first dispatch's context. External dispatch no longer waits for the `ps` / `--version` probes, and the CLI version is cached for 10 minutes.
 
+- **Internal refactor: source reorganized into enforced layers (spec 054).** No behavior change — no user-visible copy, `settings.json` keys, persisted formats or log event names changed. `src/` now follows a module table (see `AGENTS.md`) that `npm run arch` checks on every `npm run check`: DingTalk transport moved to `src/dingtalk/`, the process shell to `src/app/`, slash-command handlers into the domains that own their state, and the largest files (`ChannelRunner`, the DingTalk bot, delegation dispatch, `bootstrap`) were split into focused modules. **Deep import paths changed**; only `src/index.ts` is a compatibility promise, and its exported names are unchanged.
+
 ## [0.9.3] - 2026-10-07
 
 ### Changed

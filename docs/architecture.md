@@ -27,28 +27,35 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 
 ## 2. 源码地图
 
-| 目录 | 职责 | 关键文件 |
-|---|---|---|
-| `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`task-driver.ts`、`durable-dispatch.ts` |
-| `src/dingtalk/` | 钉钉 Stream 传输：连接、投递控制器、入站队列 | `bot.ts`（传输）、`delivery.ts`（投递控制器）、`channel-queue.ts`、`inbound-media.ts` |
-| `src/app/` | 进程外壳：应用主目录脚手架、共享服务、LLM 代理、`pipiclaw auth` | `home.ts`、`services.ts`、`proxy.ts`、`auth-command.ts` |
-| `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-paths.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts`、`project-scope-store.ts` |
-| `src/agent/` | 单频道 agent 编排：组装 SDK 会话、跑一轮、流式回传 | `channel-runner.ts`（核心编排器）、`session-events.ts`、`prompt/`（system prompt 流水线） |
-| `src/commands/` | 全产品斜杠命令目录、共享回复预算与无状态报告命令的分发 | `catalog.ts`、`reply-limits.ts`、`router.ts` |
-| `src/memory/` | 一条事实一文件的频道记忆 + 日志 + 单一反思 pass（spec 050） | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts` |
-| `src/tools/` | 交给 agent 的工具集，单一声明式注册表 | `registry.ts`（唯一事实源）、各 `create*Tool` |
-| `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
-| `src/subagents/` | 子代理发现、run 生命周期（内置+外部统一）、workspace 写锁、外部 harness 适配器 | `discovery.ts`、`dispatch.ts`、`runs.ts`、`workspace-lease.ts`、`external/`（`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`exec.ts`） |
-| `src/tasks/` | 持久任务的契约、等待票、预算与循环日志 | `frontmatter.ts`、`ticket.ts`、`budget.ts`、`store.ts` |
-| `src/events/` | 定时/传感器事件定义、校验和命令 | `types.ts`、`parse.ts`、`watcher.ts`、`validation.ts`、`commands.ts` |
-| `src/tui/` | 终端前端（第二个 `ChannelContext` 实现） | `cli.ts`、`app.ts`、`turn-controller.ts` |
-| `src/web/` | web_search / web_fetch 的搜索供应商、抓取、正文提取、代理 | `search.ts`、`fetch.ts`、`extract.ts` |
-| `src/usage/` | 用量/成本账本（JSONL） | `ledger.ts`、`render.ts` |
-| `src/playbooks/` | 随包发布的只读运行时手册（agent 按需 read） | `catalog.ts` + `*.md` |
-| `src/shared/` | 串行队列、原子写、JSONL appender 等基础件 | `serial-queue.ts`、`atomic-file.ts` |
-| `src/paths.ts` | 所有磁盘路径的集中定义 | — |
-| `src/main.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理 | — |
-| `src/models/` | 模型/凭据运行时封装 | `runtime.ts`（`createModelRuntime`）、`reference.ts`（模型引用）、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
+目录按依赖层级从低到高排列：下层不会 import 上层，同层之间互不 import。完整的规则表（每个模块可以 import 什么）在 [../AGENTS.md](../AGENTS.md)，由 `npm run arch`（`scripts/check-architecture.mjs`）在 `npm run check` 里强制检查。
+
+| 层 | 目录 | 职责 | 关键文件 |
+|---|---|---|---|
+| 0 | `src/shared/` | 串行队列、原子写、JSONL appender 等不含领域知识的基础件 | `serial-queue.ts`、`atomic-file.ts`、`jsonl-appender.ts` |
+| 0 | `src/commands/`（`catalog.ts`、`reply-limits.ts`） | 全产品斜杠命令目录与共享回复预算；零 import | `catalog.ts`、`reply-limits.ts` |
+| 1 | `src/`（根目录 7 个文件） | 进程级基础设施：日志、路径，以及 `Executor`/`FileStore` 两个宿主 I/O 端口（spec 044） | `log.ts`、`paths.ts`、`executor.ts`、`file-store.ts` |
+| 2 | `src/security/` | 所有工具共用的三道护栏 + 审计日志 | `command-guard.ts`、`path-guard.ts`、`network.ts`、`logger.ts` |
+| 2 | `src/usage/` | 用量/成本账本（JSONL）与渲染 | `ledger.ts`、`render.ts`、`totals.ts` |
+| 2 | `src/tasks/` | 持久任务：任务说明、等待票、循环日志、预算、`/tasks`。调度与唤醒的衔接代码在 `runtime/task-*.ts`，这样本目录保持叶子 | `contract.ts`、`ticket.ts`、`loop-log.ts`、`bound-work.ts`、`budget.ts`、`store.ts`、`commands.ts` |
+| 2 | `src/playbooks/` | 随包发布的只读运行时手册（agent 按需 read） | `catalog.ts` + `*.md` |
+| 3 | `src/channel/` | 传输中立的「频道」域：两个 I/O 契约、身份与持久状态、`/project`。不依赖任何传输 | `channel-context.ts`（出站投递端口）、`channel-event.ts`（入站事件形状）、`channel-paths.ts`、`channel-index.ts`、`store.ts`、`active-session-store.ts`、`project-scope-store.ts`、`commands.ts` |
+| 3 | `src/tools/contract/` | 工具结果 `details` 契约、工具调用的展示文本、工具名单 | `details.ts`、`presentation.ts`、`names.ts` |
+| 4 | `src/config/` | `settings.json`、`tools.json` 的加载与校验 | `settings.ts`、`tools.ts` |
+| 5 | `src/models/` | 模型引用、模型运行时、API key、备用模型回退判断 | `runtime.ts`（`createModelRuntime`）、`reference.ts`、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
+| 5 | `src/web/` | web_search / web_fetch 的搜索供应商、抓取、正文提取、代理 | `search.ts`、`fetch.ts`、`extract.ts`、`client.ts` |
+| 5 | `src/skills/` | 工作区 skill 的加载、校验、读取，以及 `/skills` | `loader.ts`、`validation.ts`、`workspace.ts`、`commands.ts` |
+| 6 | `src/memory/` | 一条事实一文件的频道记忆 + 日志 + 单一反思 pass（spec 050），以及 `/memory` | `store.ts`、`search.ts`、`index-budget.ts`、`render.ts`、`journal.ts`、`reflect.ts`、`reflect-job.ts`、`scheduler.ts`、`maintenance-{gates,state,tuning}.ts`、`sidecar-worker.ts`、`commands.ts` |
+| 6 | `src/events/` | 定时/传感器事件：定义、校验、文件监视器、`/events` | `types.ts`、`parse.ts`、`watcher.ts`、`validation.ts`、`commands.ts` |
+| 7 | `src/jobs/` | 后台 shell job 的生命周期 | `manager.ts`、`launch.ts`、`record.ts` |
+| 7 | `src/subagents/` | 角色发现、委派派发、内置/外部执行、run 生命周期、workspace 写锁、外部 harness 适配器，以及 `/subagents` | `discovery.ts`、`dispatch.ts`、`task-envelope.ts`、`runs.ts`、`run-record.ts`、`run-registry.ts`、`workspace-lease.ts`、`internal/`（`run.ts`、`worker.ts`、`provider-retry.ts`、`outcome.ts`）、`external/`（`dispatch.ts`、`harness.ts`、`run.ts`、`codex-cli.ts`、`claude-code.ts`、`exec.ts`） |
+| 8 | `src/tools/` | 交给 agent 的工具集（适配层），单一声明式注册表 | `registry.ts`（唯一事实源）、`subagent.ts`、`job.ts`、`memory-manage.ts`、各 `create*Tool` |
+| 9 | `src/agent/` | 单频道 agent 编排：SDK 会话、一轮对话、提示词、内置会话命令 | `channel-runner.ts`（门面）、`session/`（`session-host.ts`、`model-selection.ts`、`session-events.ts`、`command-extension.ts`）、`turn/`（`turn-pipeline.ts`、`turn-finish.ts`、`turn-state.ts`、`run-queue.ts`）、`prompt/`（system prompt 流水线）、`builtin-commands.ts` |
+| 10 | `src/commands/router.ts` | 无状态报告命令的唯一分发点，由两个传输共用 | `router.ts` |
+| 10 | `src/app/` | 进程外壳：应用主目录脚手架、共享服务、LLM 代理、`pipiclaw auth` | `home.ts`、`services.ts`、`proxy.ts`、`auth-command.ts` |
+| 11 | `src/dingtalk/` | 钉钉 Stream 传输：连接、AI 卡片、媒体、入站路由、`channel.json` 加载 | `bot.ts`（门面）、`handler.ts`（运行时契约）、`connection.ts`、`cards.ts`、`media.ts`、`inbound.ts`、`access-token.ts`、`config.ts`、`delivery.ts`（投递控制器）、`channel-queue.ts` |
+| 11 | `src/tui/` | 终端前端（第二个 `ChannelContext` 实现） | `cli.ts`、`app.ts`、`frontend.ts`、`turn-controller.ts` |
+| 12 | `src/runtime/` | 守护进程装配根与跨子系统服务 | `bootstrap.ts`（装配根）、`turn-handler.ts`、`turn-run.ts`、`shutdown.ts`、`durable-dispatch.ts`、`task-driver.ts` |
+| — | `src/main.ts`、`src/index.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理；公共库出口（spec 035） | — |
 
 ## 3. 运行时拓扑
 
@@ -61,7 +68,7 @@ flowchart TB
     subgraph daemon [pipiclaw daemon 进程]
         BOT["DingTalkBot<br/>(dingtalk/bot.ts)<br/>连接/重连/去重/allowFrom"]
         CQ["ChannelQueue ×N<br/>每频道消息串行队列"]
-        HANDLER["DingTalkHandler<br/>(bootstrap.ts 内)<br/>命令分发 / 频道状态"]
+        HANDLER["DingTalkHandler<br/>(runtime/turn-handler.ts)<br/>命令分发 / 频道状态"]
         RUNNER["ChannelRunner ×N<br/>(agent/channel-runner.ts)<br/>每频道一个，bootstrap 缓存"]
         SESSION["SDK AgentSession + Agent<br/>(pi-coding-agent)"]
         TOOLS["工具集<br/>(tools/registry.ts)"]
@@ -93,7 +100,7 @@ flowchart TB
 
 要点：
 
-- **`DingTalkBot`** 负责连接稳定性（心跳 ping/pong、90s 超时强制重连、指数退避、双层消息去重、`allowFrom` 白名单）和 AI Card 的 HTTP 调用（创建、流式更新、finalize，均带 15s 超时）。
+- **`DingTalkBot`**（`dingtalk/bot.ts` 只是门面，下面这些职责由 `connection.ts`、`inbound.ts`、`cards.ts`、`media.ts`、`access-token.ts` 各自承担）负责连接稳定性（心跳 ping/pong、90s 超时强制重连、指数退避、双层消息去重、`allowFrom` 白名单）和 AI Card 的 HTTP 调用（创建、流式更新、finalize，均带 15s 超时）。
 - **合成事件不直接进内存队列**：EventsWatcher 和 TaskDriver 产生的事件先写入 `DurableDispatchService`（`state/dispatch/*.json` 文件外发箱，15 分钟租约，30s 重扫），保证进程崩溃后 at-least-once 重放，然后才 `bot.enqueueEvent`。
 - **`runner-factory.ts` 是无状态的**：每次 `createRunner()` 都构造一个新 `ChannelRunner`。缓存由各自唯一的调用方持有——daemon（`runtime/bootstrap.ts`）的带 LRU 淘汰的运行时频道 Map，TUI（`tui/app.ts`）的单进程一频道 `const`——一个频道全程复用同一个 SDK 会话，但缓存本身不在 runner-factory 里。
 - **委派 run 不属于 ChannelQueue 中的一轮**：内置 run 超过同步宽限后、以及所有外部 run，都会由 `SubAgentRunManager` 跨回合管理。外部 harness 启动 detached 进程，产物落到频道目录；完成后同样先经过 durable dispatch 再唤醒频道。
@@ -199,7 +206,7 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     subgraph turn [首轮 / 压缩后首轮]
-        BOOT["channel-runner.ts<br/>store.listMemoryEntries + index-budget<br/>+ 当天 journal 尾部 → render.ts"]
+        BOOT["agent/turn/turn-context.ts<br/>store.listMemoryEntries + index-budget<br/>+ 当天 journal 尾部 → render.ts"]
     end
 
     subgraph tools [显式工具，当回合生效]
@@ -283,7 +290,7 @@ spec 051 留下的三样东西保持不变：**契约**（`tasks/<id>.md`，每�
 
 **子代理 / 委派 run**（`subagents/`，spec 040 起内外统一）：角色定义在 `workspace/sub-agents/*.md`，`runtime` 区分 `internal` 与 `external`，也可通过 `subagent_inline` 按次定义 internal 执行者；命名角色统一走 `subagent` 的路由字段，inline 才接受模型、工具和预算覆盖。Pipiclaw 不自动注入默认角色，二进制缺失的外部角色仍会列出并标 `unavailable`。内置默认限额为 32 turns / 96 tool calls / 600s；外部角色只有 `maxWallTimeSec`（默认 3600s）。
 
-`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器仍结构性移除 write/edit；声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease。运行时只读取检查者最后一行 `VERDICT: PASS|FAIL`，记录在 run 与所属任务的看板上，不写 attestation、不做工作区快照。带 `taskId` 的 run 在注册与结算时由 `SubAgentRunManager` 写入任务日志并把成本计入任务预算（`taskAccounted` 保证只写一次）。
+`subagents/runs.ts` 的 `SubAgentRunManager` 是每个 run 结算、记账、完成唤醒的唯一权威（内置外部都一样）：`register()` 持久化启动意图 → 结算一次（`settledAt`）→ 记一次账（`usageRecorded`）→ 唤醒一次（`wakeEnqueued`），三个幂等标记各守一个不可重放的副作用。工具调用只是**可选地**等一等——`min(角色 maxWallTimeSec, 120s)` 内结算完直接内联返回（`agent/session/session-events.ts` 只把它折进当轮用量展示，不再自己记账/归档）；超过就转成"稍后唤醒"的异步返回，外部角色的这个宽限窗口恒为 0，一律异步。`subagent_list` / `subagent_run`（模型侧）与 `/subagents`（人侧，不经过模型）负责 `list`/`show`/`cancel`/`follow_up`。`purpose: verify` 时内置验证器仍结构性移除 write/edit；声明 `mutates: write` 的 verifier 也可运行，但必须持有独占 workspace lease。运行时只读取检查者最后一行 `VERDICT: PASS|FAIL`，记录在 run 与所属任务的看板上，不写 attestation、不做工作区快照。带 `taskId` 的 run 在注册与结算时由 `SubAgentRunManager` 写入任务日志并把成本计入任务预算（`taskAccounted` 保证只写一次）。
 
 ## 9. 安全层（`src/security/`）
 
@@ -349,7 +356,7 @@ Pipiclaw 自己的文件、命令和网络工具在执行前都过守卫；拦�
 
 ## 11.1 System prompt 流水线（spec 025 + 026 瘦身）
 
-system prompt 由 Pipiclaw 自己拥有：`channel-runner.ts` 通过 pi 的 `systemPromptOverride` 注入 `src/agent/prompt/` 构建的结果，pi 的默认基础提示词（身份段、文档索引、失真的工具列表）不再发送。
+system prompt 由 Pipiclaw 自己拥有：`agent/session/session-host.ts` 通过 pi 的 `systemPromptOverride` 注入 `src/agent/prompt/` 构建的结果，pi 的默认基础提示词（身份段、文档索引、失真的工具列表）不再发送。
 
 组装顺序：
 
@@ -364,7 +371,7 @@ runtime.identity → runtime.execution → runtime.invariants → runtime.tasks(
 - **瘦身与内容责任（spec 026）**：Pipiclaw 只为自己写下的固定段负责，且严格克制——不再重复 tool 目录（tool schema 已是权威），identity/contract/boundary 文案压缩，playbook 目录只保留 filename + 一句 trigger 并在头部打印一次绝对 `PLAYBOOKS_DIR`，无配置 sub-agent 时整段消失。当前体量由 `/context` 和 `npm run playbooks:measure` 检查，不把旧版本一次测量的数字当作现行基线。
 - **prompt units 预算**：预算以 `countPromptUnits`（`shared/prompt-units.ts`：CJK 每字 1、非 CJK 单词 1、标点空白 0）度量。runtime-authored 段合计目标 ≤ 700 units、硬上限 1,200 units（`builder.ts`），超标分别 warning/error。已删除旧的 32k 全局字符池与「依次收缩 subagents/playbooks/AGENTS/SOUL」策略，用户文件不再因总量竞争被裁。`HARD_TOTAL_BUDGET_CHARS`/`SOFT_TOTAL_BUDGET_CHARS` 公共导出随之移除（beta API 变更）。
 - **SOUL / AGENTS 独立预算**：两者互不挤压，各有 units + chars 双上限（SOUL 3,000 units / 24,000 chars，AGENTS 6,000 units / 48,000 chars，见 `prompt/resources.ts`）。只有真正超大的文件才 head/tail 截断；正文裁剪发生在 resources 层，section 层只保证 wrapper 完整。
-- **缓存稳定**：system prompt 里没有 channelId、channel 路径、时间戳。同一 workspace 下不同频道、连续多轮的 prompt 字节一致，provider 前缀缓存才能命中。频道事实改由每回合的 `<runtime_turn_context>` 胶囊携带（`channel-runner.ts`）。
+- **缓存稳定**：system prompt 里没有 channelId、channel 路径、时间戳。同一 workspace 下不同频道、连续多轮的 prompt 字节一致，provider 前缀缓存才能命中。频道事实改由每回合的 `<runtime_turn_context>` 胶囊携带（`agent/turn/turn-context.ts`）。
 - **工具门控**：关闭 task_* 工具时，任务段、任务 playbook 一并消失；不包含 `subagent` 工具的执行上下文（例如被委派的内置子智能体）不会看到角色目录。注意两侧门控语义相反：section 的 `requiresAllTools` 是 all-of（`prompt/types.ts`），playbook 的 `requires-tools`/`requiresAnyTool` 是 any-of（`playbooks/catalog.ts`）。
 - **skills 完全交给 pi（spec 026 §9）**：`skillsOverride` 保留 ResourceLoader 中的 skills，`<available_skills>` 索引与 `/skill:name` 命令同源；Pipiclaw 只负责合并策略与诊断（workspace 覆盖同名 skill），不设 skills 预算、不产生超限 warning。`/context` 只观测 skills 体量（`estimateSkillsPromptChars` 现位于 `prompt/manifest.ts`）。
 - **场景化规则**：periodic wake 的 `[SILENT]` 协议只随 periodic 事件的 synthetic trigger 下发（`events/parse.ts`/`events/watcher.ts`），普通对话不再长期携带。TASK_STEP 的准确 task 文件与 playbook 路径继续由 `runtime/task-driver.ts` 的 trigger 给出。

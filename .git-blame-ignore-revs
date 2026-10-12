@@ -1,2 +1,7 @@
 # Commits listed here are skipped by `git blame` (pure file moves / import rewrites).
 # Enable once with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# spec 054 P1a, P1b, P1c and the agent/ session+turn grouping
+8020889bb6ef4adfc22f78410577018db1fff451
+4b457b96cbe9b9c854a56a2788613851d8321554
+6cb676697d0f7eb62dbab035c5f81e7afb16d16c
+9de92dfb32550157b8f4309eaa282eff280d725e

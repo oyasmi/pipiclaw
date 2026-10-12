@@ -1,3 +1,7 @@
+/**
+ * Validation of workspace skills: names, frontmatter, content scanning, and confinement of a skill's
+ * path to `workspace/skills/`.
+ */
 import { resolve } from "node:path";
 
 export interface SkillValidationResult {

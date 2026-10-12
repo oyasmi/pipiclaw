@@ -1,3 +1,7 @@
+/**
+ * `/tasks`: the user's control path for the channel's long-horizon tasks (list, show, log, pause,
+ * resume, run, reply, steer, archive, doctor).
+ */
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";

@@ -1,3 +1,7 @@
+/**
+ * The DingTalk implementation of the delivery contract (`ChannelContext`): per-turn progress, AI-Card
+ * streaming or plain messages, and final-answer delivery for one turn.
+ */
 import type { ChannelContext, ProgressStyle } from "../channel/channel-context.js";
 import type { ChannelEvent } from "../channel/channel-event.js";
 import type { ChannelStore } from "../channel/store.js";

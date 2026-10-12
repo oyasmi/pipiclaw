@@ -1,3 +1,7 @@
+/**
+ * Adapters over the SDK session where Pipiclaw needs compatibility behaviour: the settings-manager
+ * shim and thinking-level preservation when a model changes.
+ */
 import type { Agent, AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";

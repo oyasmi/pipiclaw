@@ -1,3 +1,8 @@
+/**
+ * The durable outbox for synthetic events (job and delegation completions, task wakes, scheduled events):
+ * records are written to disk before they enter the in-memory channel queue, leased, retried and
+ * redelivered after a crash — at-least-once.
+ */
 import { createHash } from "node:crypto";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";

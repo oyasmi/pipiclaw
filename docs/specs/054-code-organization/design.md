@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |------|------|
-| 状态 | 待实施（[实施计划](./plan.md)） |
+| 状态 | 已实施（[实施计划](./plan.md)；偏差见末尾「实施记录」） |
 | 日期 | 2026-10-12 |
 | 触发 | 用户要求评估项目架构与代码组织，并产出一份整体重构方案，交给后续的实施 Agent 完成 |
 | 前置 | 035 公共 API 面（`src/index.ts` 导出名稳定）、044 `FileStore`/`Executor` 端口、046 工具参数形状、048 e2e 分层 |
@@ -430,3 +430,50 @@ src/
 - 后台 job 与委派 run 有相似的记录、持久化、唤醒认领和垃圾回收（`shared/wake-claim.ts` 已经抽出了一部分），可以评估是否合并为一个后台工作框架。
 - `subagents/discovery.ts` 的角色文件解析可以独立成 `subagents/roles/`。
 - 把 `tui/app.ts` 和 `runtime/bootstrap.ts` 共同的装配（job、run、runner）抽成共享函数。
+
+## 实施记录
+
+实施于 2026-10-12 至 2026-10-13，分支 `refactor/054-code-organization`。最终闸门全部通过：`npm run check`（lint、typecheck、arch、deadcode、980 个单元/集成测试）、`npm run test:e2e`（44 个确定性用例）、`npm run eval:typecheck`、`npm run build && node dist/main.js --version`。`src/` 现为 256 个 `.ts` 文件、48.4k 行；基线为 R1 0 条、R2 0 个循环、R3 3 个登记文件（`subagents/runs.ts` 1173、`jobs/manager.ts` 1095、`subagents/discovery.ts` 1040）。P0 用 `--init` 生成的基线与预期完全一致（R1 9、R2 4、R3 8）。
+
+以下是与 plan 不一致的地方，以及理由。
+
+**P0**
+- 解析 import 的代码抽成了 `scripts/lib/imports.mjs`，`check-architecture.mjs` 和 `move-modules.mjs` 共用。
+- R5 对含 `/` 的引用除了按仓库根、`src/` 解析，还接受"某个真实文件路径的后缀"（如 `prompt/types.ts`）：`docs/architecture.md` 大量使用相对于小节目录的写法。
+- `--prune` 除了删掉已消失的条目，也会把 R3 上限调低到当前行数。
+
+**P2**
+- 第 4 步：`getMemoryMaintenanceSettings()` 只返回 `{ enabled }`；`memory/maintenance-tuning.ts` 新增 `resolveMemoryMaintenanceSettings`，由 `reflect-job.ts` 和 `scheduler.ts` 在内部合并节奏常量，调用方显式给出的值仍然优先，所以调度测试原样通过。`test/context.test.ts` 里对 `getMemoryMaintenanceSettings()` 的两处断言必须改成只含 `enabled`（它们断言的正是被删掉的合并结果）。
+- 第 5 步：`app/home.ts` 的 `CHANNEL_CONFIG_TEMPLATE` 失去了 `satisfies DingTalkConfig`（`app` 不能 import `dingtalk`）。
+- 第 7 步：`loadWorkspaceSkillFile` 返回完整文件，截断由 `tools/skill.ts` 自己做（`skills` 不能 import `tools/truncate.ts`）。`/skills show` 因此不再先经过这道截断，而它的回复本来就被 `capReply` 限在 1500 字符内，只有"第一行就超过 50 KB"的畸形文件会有差别。
+- 第 8 步：为了不让 `ChannelRunner` 多一行 import（它的 R3 上限不能增长），`agent/prompt/resources.ts` 新增 `loadPlaybooks(toolNames)`，由它传入 `TOOL_NAMES`。
+- 第 9 步：`WorkerToolRequest`/`BuildWorkerTools` 最终放在 `subagents/types.ts`；测试里由 `testManagers()` 助手注入 `buildWorkerTools`。这一步的提交当时让 `subagents/tool.ts` 超出 R3 上限一行，下一个提交修正（中间有一个提交 `npm run arch` 是红的）。
+- 第 10 步：`tui/frontend.ts` 同时承载 `TranscriptRenderer`（`Frontend` 继承它）。
+
+**P3a**
+- `handler.ts` 里的 `DingTalkHandler` 引用 `DingTalkBot` 会和 `bot.ts` 形成类型循环，所以改用结构化的 `DingTalkBotPort`（运行时处理器和 `delivery.ts` 用到的那部分公有方法），`DingTalkBot` 实现它。`src/index.ts` 的导出名不变。
+- 额外文件：`api.ts`（共用的 axios 实例、两个域名、`sendRobotMessage`）、`conversation-meta.ts`（会话元数据的内存缓存与落盘）。
+- `delivery.ts` 按计划"原样搬入"，仍是 526 行，超过 D4 的 500 行目标；其余 `dingtalk/` 文件都在 500 行以内。
+- 测试里访问私有字段的地方改到了协作者上：`bot.tokens`、`bot.conversations`、`bot.inbound`、`bot.connection`；断言不变。
+
+**P3b**
+- 额外文件：`stop-watchdog.ts`（`forceEndStuckTurnAfterStop`）、`turn-run.ts`（`handleEvent` 的步骤函数：`admitTurn`、`runBuiltinCommand`、`verifyInternalWake`、`executeTurn`、`finishTurn`）、`inbound-images.ts`。这样 `turn-handler.ts` 为 432 行、`bootstrap.ts` 500 行、`handleEvent` 约 30 行。`structuredWakeFinalized` 仍取自合并前的入站事件。
+
+**P4**
+- plan/D10 把 `SubAgentToolFields`/`createDetails` 放进 `tools/subagent.ts`，但派发代码（在 `subagents/`）要产出它们，而 `subagents/` 不能 import `tools/`，二者矛盾。落地为：`SubAgentToolFields` 在 `subagents/types.ts`，`createDetails` 在 `subagents/result.ts`；`tools/subagent.ts` 导出打了 `kind` 的 `SubAgentToolDetails`，`agent/` 从它 import。
+- `SubAgentToolOptions` 放在 `subagents/types.ts` 而不是 `dispatch.ts`：它的 `buildTools?` 字段引用 `buildSubagentTools`，放进 `dispatch.ts` 会产生类型循环（D12 第 4 条）。
+- 额外文件：`result.ts`、`types.ts`、`internal/state.ts`（`InternalRunState` 和进度发射器）。`dispatchInternalRun` 为 146 行。
+
+**P5**
+- `ChannelRunner` 还额外拆出了 `turn/turn-pipeline.ts`（输入准备、回合上下文、图片、预防性压缩、fallback 接缝、steer 入队）和 `agent/builtin-commands.ts`；`run()` 为 99 行，`channel-runner.ts` 为 593 行，`agent/` 根目录 6 个文件。构造顺序（解析项目范围 → 恢复会话 → models → memoryLifecycle → host → 异步初始化）不变。
+- `subagents/runs.ts` 没有达到 ≤ 1100 行：D11 规定恢复和对账逻辑留在类内，纯数据部分抽完（`run-record.ts` 的 id/待结算/解析助手、`completion-wake.ts`、`run-registry.ts`，`resolveSyncGraceMs` 挪到 `grace.ts`）后是 1173 行。`jobs/manager.ts`（`launch.ts`、`record.ts`）同理，1095 行，目标 900 未达到。两者都在基线里以这两个数字为上限。
+- `events/pre-action.ts` 是可选项，没有拆。
+
+**其他**
+- `evals/baselines/*/cases.json` 记录的是历史文件路径的哈希，是历史数据，没有改动。
+- 纯搬迁提交已登记到 `.git-blame-ignore-revs`。
+
+**自检（P6 完成标准里的三个问题）**
+1. 新增一个 `/foo` 报告命令：`commands/catalog.ts`（目录项）、拥有该状态的领域目录下的 `commands.ts`（处理器）、`commands/router.ts`（分发）。
+2. 给记忆加一个工具：领域逻辑在 `memory/`（例如 `store.ts`、`search.ts`），模型侧适配层在 `tools/memory-manage.ts`，并在 `tools/registry.ts` 登记。
+3. 钉钉卡片流式更新的 bug：`dingtalk/cards.ts`（卡片创建、流式写入、代际）；一轮内的投递顺序在 `dingtalk/delivery.ts`。
