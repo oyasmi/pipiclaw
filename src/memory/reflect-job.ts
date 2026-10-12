@@ -1,12 +1,16 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { PipiclawMemoryMaintenanceSettings } from "../config/settings.js";
 import { formatLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { type ChannelMemoryQueue, getDefaultChannelMemoryQueue } from "./channel-maintenance-queue.js";
 import { shouldRunReflect } from "./maintenance-gates.js";
 import { readMemoryMaintenanceState, updateMemoryMaintenanceState } from "./maintenance-state.js";
+import {
+	type MemoryMaintenanceInput,
+	type MemoryMaintenanceSettings,
+	resolveMemoryMaintenanceSettings,
+} from "./maintenance-tuning.js";
 import { runReflect } from "./reflect.js";
 import { appendMemoryReviewLog } from "./review-log.js";
 import { buildIncrementalMemorySourceWindow } from "./source-window.js";
@@ -25,7 +29,7 @@ export interface ReflectJobInput {
 	workspaceDir: string;
 	channelActive: boolean;
 	now?: Date;
-	settings: { memoryMaintenance: PipiclawMemoryMaintenanceSettings };
+	settings: { memoryMaintenance: MemoryMaintenanceInput };
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
 	/** Transcript accessors: only called once the gate has decided the job may actually run. */
@@ -34,7 +38,7 @@ export interface ReflectJobInput {
 	queue?: ChannelMemoryQueue;
 }
 
-function backoffUntil(now: Date, settings: PipiclawMemoryMaintenanceSettings): string {
+function backoffUntil(now: Date, settings: MemoryMaintenanceSettings): string {
 	return formatLocalTime(new Date(now.getTime() + Math.max(0, settings.failureBackoffMinutes) * 60_000));
 }
 
@@ -42,6 +46,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 	const queue = input.queue ?? getDefaultChannelMemoryQueue();
 	return queue.run(input.channelId, async () => {
 		const now = input.now ?? new Date();
+		const maintenance = resolveMemoryMaintenanceSettings(input.settings.memoryMaintenance);
 		const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
 		let cachedWindow: ReturnType<typeof buildIncrementalMemorySourceWindow> | undefined;
 		const loadSourceWindow = () => {
@@ -57,7 +62,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 		const decision = shouldRunReflect({
 			now,
 			state,
-			maintenance: input.settings.memoryMaintenance,
+			maintenance,
 			channelActive: input.channelActive,
 			material: () => {
 				const window = loadSourceWindow();
@@ -104,7 +109,7 @@ export async function runReflectJob(input: ReflectJobInput): Promise<void> {
 		} catch (error) {
 			await updateMemoryMaintenanceState(input.appHomeDir, input.channelId, (current) => ({
 				...current,
-				failureBackoffUntil: backoffUntil(now, input.settings.memoryMaintenance),
+				failureBackoffUntil: backoffUntil(now, maintenance),
 			}));
 			const message = errorMessage(error);
 			await appendMemoryReviewLog(input.channelDir, {

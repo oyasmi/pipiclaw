@@ -9,10 +9,6 @@
 			"to": "src/app/home.ts"
 		},
 		{
-			"from": "src/config/settings.ts",
-			"to": "src/memory/maintenance-tuning.ts"
-		},
-		{
 			"from": "src/playbooks/catalog.ts",
 			"to": "src/tools/registry.ts"
 		},

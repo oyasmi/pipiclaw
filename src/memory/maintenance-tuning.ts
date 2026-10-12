@@ -34,6 +34,27 @@ const FAST_MAINTENANCE_TUNING: MemoryMaintenanceTuning = {
 	failureBackoffMinutes: 1,
 };
 
+/**
+ * What the gates and the scheduler consume: the user's one decision (`enabled`, from
+ * `settings.json`) plus the code-owned cadence constants.
+ */
+export type MemoryMaintenanceSettings = MemoryMaintenanceTuning & {
+	enabled: boolean;
+};
+
+/**
+ * What callers hand to the memory pipeline: the `settings.json` switch, optionally with explicit
+ * tuning values (tests pin them); anything omitted falls back to the code constants.
+ */
+export type MemoryMaintenanceInput = { enabled: boolean } & Partial<MemoryMaintenanceTuning>;
+
+export function resolveMemoryMaintenanceSettings(
+	input: MemoryMaintenanceInput,
+	env: NodeJS.ProcessEnv = process.env,
+): MemoryMaintenanceSettings {
+	return { ...getMemoryMaintenanceTuning(env), ...input };
+}
+
 export function getMemoryMaintenanceTuning(env: NodeJS.ProcessEnv = process.env): MemoryMaintenanceTuning {
 	return env.PIPICLAW_TEST_FAST_MAINTENANCE === "1" ? FAST_MAINTENANCE_TUNING : PRODUCTION_TUNING;
 }

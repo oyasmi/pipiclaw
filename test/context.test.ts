@@ -20,12 +20,7 @@ describe("PipiclawSettingsManager", () => {
 			maxRetries: 3,
 			baseDelayMs: 2000,
 		});
-		expect(manager.getMemoryMaintenanceSettings()).toEqual({
-			enabled: true,
-			minIdleMinutesBeforeLlmWork: 10,
-			reflectIntervalMinutes: 20,
-			failureBackoffMinutes: 30,
-		});
+		expect(manager.getMemoryMaintenanceSettings()).toEqual({ enabled: true });
 		expect(manager.getDefaultThinkingLevel()).toBeUndefined();
 	});
 
@@ -81,10 +76,7 @@ describe("PipiclawSettingsManager", () => {
 			keepRecentTokens: 20000,
 		});
 		expect(manager.getRetrySettings()).toEqual({ enabled: false, maxRetries: 3, baseDelayMs: 2000 });
-		expect(manager.getMemoryMaintenanceSettings()).toMatchObject({
-			enabled: false,
-			reflectIntervalMinutes: 20,
-		});
+		expect(manager.getMemoryMaintenanceSettings()).toEqual({ enabled: false });
 		expect(manager.getSessionSearchSettings()).toMatchObject({ summarizeWithModel: true, maxFiles: 12 });
 		expect(manager.getLoggingSettings()).toEqual({
 			level: "debug",

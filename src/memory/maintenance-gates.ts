@@ -1,6 +1,6 @@
-import type { PipiclawMemoryMaintenanceSettings } from "../config/settings.js";
 import { parseLocalTime } from "../shared/local-time.js";
 import type { MemoryMaintenanceState } from "./maintenance-state.js";
+import type { MemoryMaintenanceSettings } from "./maintenance-tuning.js";
 
 export interface MaintenanceGateDecision {
 	allowed: boolean;
@@ -21,7 +21,7 @@ export interface ReflectMaterial {
 export interface ReflectGateInput {
 	now: Date;
 	state: MemoryMaintenanceState;
-	maintenance: PipiclawMemoryMaintenanceSettings;
+	maintenance: MemoryMaintenanceSettings;
 	channelActive: boolean;
 	material: () => ReflectMaterial;
 }

@@ -5,7 +5,6 @@ import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import type { ResponseMode } from "../channel/channel-context.js";
 import * as log from "../log.js";
-import { getMemoryMaintenanceTuning, type MemoryMaintenanceTuning } from "../memory/maintenance-tuning.js";
 import { writeFileAtomicallySync } from "../shared/atomic-file.js";
 import type { ConfigDiagnostic } from "../shared/config-diagnostic.js";
 import type { AssertNoMissingKeys } from "../shared/exact-keys.js";
@@ -62,9 +61,10 @@ export interface PipiclawTaskDriverSettings {
 	maxSleepMinutes: number;
 }
 
-export type PipiclawMemoryMaintenanceSettings = MemoryMaintenanceTuning & {
+/** Only the on/off switch is a setting; cadence constants live in `memory/maintenance-tuning.ts`. */
+export interface PipiclawMemoryMaintenanceSettings {
 	enabled: boolean;
-};
+}
 
 export interface PipiclawLoggingSettings {
 	level: "debug" | "info" | "warn" | "error";
@@ -490,7 +490,6 @@ export class PipiclawSettingsManager {
 
 	getMemoryMaintenanceSettings(): PipiclawMemoryMaintenanceSettings {
 		return {
-			...getMemoryMaintenanceTuning(),
 			enabled: this.settings.memoryMaintenance?.enabled ?? DEFAULT_MEMORY_MAINTENANCE_ENABLED,
 		};
 	}

@@ -48,6 +48,7 @@ import {
 	type MemoryActivityEvent,
 	type MemoryActivityRecorder,
 } from "../memory/maintenance-state.js";
+import { getMemoryMaintenanceTuning } from "../memory/maintenance-tuning.js";
 import { hasMemoryBootstrapBlock, renderMemoryBootstrap } from "../memory/render.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { listMemoryEntries } from "../memory/store.js";
@@ -1026,12 +1027,11 @@ export class ChannelRunner implements AgentRunner {
 	 * point the maintenance gates actually start looking at this state.
 	 */
 	private recordMemoryActivity(event: MemoryActivityEvent): void {
-		const maintenanceSettings = this.settingsManager.getMemoryMaintenanceSettings();
 		const eventTime = parseLocalTime(event.timestamp);
 		const eligibleAfter =
 			eventTime !== undefined
 				? formatLocalTime(
-						new Date(eventTime + Math.max(0, maintenanceSettings.minIdleMinutesBeforeLlmWork) * 60_000),
+						new Date(eventTime + Math.max(0, getMemoryMaintenanceTuning().minIdleMinutesBeforeLlmWork) * 60_000),
 					)
 				: undefined;
 		this.memoryActivityRecorder.record({ ...event, eligibleAfter });

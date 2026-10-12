@@ -7,11 +7,11 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 // read-only consumers (see `discoverWorkspaceChannelIds`).
 import { discoverWorkspaceChannelIds } from "../channel/channel-index.js";
 import { dedupeChannelIdsByDirectory, isChannelId } from "../channel/channel-paths.js";
-import type { PipiclawMemoryMaintenanceSettings } from "../config/settings.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { shouldRunReflect } from "./maintenance-gates.js";
 import { getMemoryMaintenanceStateDir, readMemoryMaintenanceState } from "./maintenance-state.js";
+import { type MemoryMaintenanceInput, resolveMemoryMaintenanceSettings } from "./maintenance-tuning.js";
 import { runReflectJob } from "./reflect-job.js";
 
 export interface MemoryMaintenanceRuntimeContext {
@@ -27,7 +27,7 @@ export interface MemoryMaintenanceRuntimeContext {
 	sessionEntries: () => SessionEntry[];
 	model: Model<Api>;
 	resolveApiKey: (model: Model<Api>) => Promise<string>;
-	settings: { memoryMaintenance: PipiclawMemoryMaintenanceSettings };
+	settings: { memoryMaintenance: MemoryMaintenanceInput };
 }
 
 export interface MemoryMaintenanceSchedulerOptions {
@@ -36,7 +36,7 @@ export interface MemoryMaintenanceSchedulerOptions {
 	getKnownChannelIds?: () => Iterable<string>;
 	getRuntimeContext: (channelId: string) => Promise<MemoryMaintenanceRuntimeContext | null>;
 	isChannelActive: (channelId: string) => boolean;
-	getSettings: () => { memoryMaintenance: PipiclawMemoryMaintenanceSettings };
+	getSettings: () => { memoryMaintenance: MemoryMaintenanceInput };
 	intervalMs?: number;
 }
 
@@ -55,14 +55,14 @@ const DEFAULT_TICK_INTERVAL_MS = 60_000;
 async function mightReflectBeDue(input: {
 	appHomeDir: string;
 	channelId: string;
-	settings: { memoryMaintenance: PipiclawMemoryMaintenanceSettings };
+	settings: { memoryMaintenance: MemoryMaintenanceInput };
 	now: Date;
 }): Promise<boolean> {
 	const state = await readMemoryMaintenanceState(input.appHomeDir, input.channelId);
 	return shouldRunReflect({
 		now: input.now,
 		state,
-		maintenance: input.settings.memoryMaintenance,
+		maintenance: resolveMemoryMaintenanceSettings(input.settings.memoryMaintenance),
 		channelActive: false,
 		material: () => ({ hasNewEntry: true, hasMeaningfulExchange: true }),
 	}).allowed;
