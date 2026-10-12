@@ -1,6 +1,5 @@
-import type { Agent } from "@earendil-works/pi-agent-core";
 import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import { resolveActiveSessionFile } from "../channel/active-session-store.js";
 import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
@@ -22,7 +21,7 @@ import {
 import { getMemoryMaintenanceTuning } from "../memory/maintenance-tuning.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
-import { type FallbackRunDeps, runPromptWithFallback } from "../models/fallback.js";
+import { runPromptWithFallback } from "../models/fallback.js";
 import { formatModelReference } from "../models/reference.js";
 import { defaultModel } from "../models/runtime.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
@@ -36,55 +35,23 @@ import type { SubAgentRunManager } from "../subagents/runs.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import type { UsageTotals } from "../usage/totals.js";
 import { handleBuiltinCommand, requireQueuedMessage } from "./builtin-commands.js";
-import {
-	buildPromptManifest,
-	measureToolSchemas,
-	type PromptTurnContextStats,
-	renderContextReport,
-} from "./prompt/manifest.js";
-import { getLastAssistantUsage } from "./session/event-guards.js";
+import { measureToolSchemas, type PromptTurnContextStats, renderContextReport } from "./prompt/manifest.js";
 import { ModelSelection } from "./session/model-selection.js";
 import { reportSettingsDiagnostics, SessionHost } from "./session/session-host.js";
-import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./turn/context-budget.js";
-import { clipUserInput, formatProgressEntry } from "./turn/progress-formatter.js";
 import { createRunQueue } from "./turn/run-queue.js";
-import {
-	buildFirstTurnMemoryBootstrap,
-	buildTaskDigestForTurn,
-	renderChannelTurnContext,
-} from "./turn/turn-context.js";
-import { renderFallbackSwitch, renderTurnErrorReply } from "./turn/turn-error.js";
-import {
-	formatUserMessage,
-	persistOversizedInput,
-	prepareInboundImages,
-	shouldPreserveRawInput,
-} from "./turn/turn-input.js";
+import { TurnFinisher } from "./turn/turn-finish.js";
+import { createTurnProgress, TurnPipeline } from "./turn/turn-pipeline.js";
 import { assembleTurnPrompt } from "./turn/turn-prompt.js";
 import { recoverInterruptedTurn } from "./turn/turn-recovery.js";
-import { type TurnHandle, TurnStateMachine } from "./turn/turn-state.js";
+import { TurnStateMachine } from "./turn/turn-state.js";
 import type { RunnerDeps, RunnerFactoryPaths } from "./types.js";
 import {
 	type AgentRunner,
 	createEmptyRunState,
-	type FinalOutcome,
-	MAX_USER_MESSAGE_CHARS,
 	type RunnerStatusSnapshot,
 	type RunState,
 	type TurnStatus,
 } from "./types.js";
-
-function isSilentOutcome(outcome: FinalOutcome): outcome is { kind: "silent" } {
-	return outcome.kind === "silent";
-}
-
-function isFinalOutcome(outcome: FinalOutcome): outcome is { kind: "final"; text: string } {
-	return outcome.kind === "final";
-}
-
-function getFinalOutcomeText(outcome: FinalOutcome): string | null {
-	return isFinalOutcome(outcome) ? outcome.text : null;
-}
 
 export class ChannelRunner implements AgentRunner {
 	// --- Constructed once ---
@@ -111,6 +78,8 @@ export class ChannelRunner implements AgentRunner {
 	private readonly loadSecurityConfig: () => LoadedSecurityConfig;
 	private readonly settingsManager: PipiclawSettingsManager;
 	private readonly host: SessionHost;
+	private readonly turnFinisher: TurnFinisher;
+	private readonly pipeline: TurnPipeline;
 	private readonly memoryLifecycle: MemoryLifecycle;
 	private readonly ledger = getUsageLedger();
 	private readonly memoryActivityRecorder: MemoryActivityRecorder;
@@ -246,15 +215,31 @@ export class ChannelRunner implements AgentRunner {
 			getRunState: () => this.runState,
 			markStreaming: () => this.turnState.markStreaming(),
 		});
+		this.pipeline = new TurnPipeline({
+			channelId,
+			channelDir,
+			workspaceDir: this.workspaceDir,
+			host: this.host,
+			models: this.models,
+			turnState: this.turnState,
+			getRunState: () => this.runState,
+		});
+		this.turnFinisher = new TurnFinisher({
+			channelId,
+			channelDir,
+			host: this.host,
+			models: this.models,
+			ledger: this.ledger,
+			turnState: this.turnState,
+			getRunState: () => this.runState,
+			flushMemoryActivity: () => this.flushMemoryActivity(),
+			endTurn: () => this.endTurn(),
+		});
 		this.host.start(sessionManager);
 	}
 
 	private get session(): AgentSession {
 		return this.host.session;
-	}
-
-	private get agent(): Agent {
-		return this.host.agent;
 	}
 
 	private get sessionManager(): SessionManager {
@@ -313,175 +298,48 @@ export class ChannelRunner implements AgentRunner {
 
 		const runQueue = createRunQueue();
 		this.runState.queue = runQueue.queue;
-		let promptSubmitted = false;
-		let fallbackAttempted = false;
-		let fallbackTargetRef: string | undefined;
-		// Hoisted so the debug dump in `finally` can report the turn as it was actually sent.
-		let promptText = "";
-		let taskDigestText = "";
-		let durableMemoryBootstrapText = "";
-		let channelCapsuleText = "";
-		let bootstrapPrepared = false;
+		const turn = createTurnProgress();
 
 		try {
 			await this.host.ensureSessionReady();
 			await this.models.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
-			const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
-			let oversizedInputPath: string | undefined;
-			if (normalizedInputLength > MAX_USER_MESSAGE_CHARS) {
-				oversizedInputPath = await persistOversizedInput(this.channelDir, this.channelId, ctx.message.text);
-				await ctx.respondInThread(
-					oversizedInputPath
-						? `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理；完整内容已存到 \`${oversizedInputPath}\`，需要时让我读取这个文件查看被省略的部分。`
-						: `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理。`,
-				);
-			}
-			const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS, oversizedInputPath);
-			const userMessage = formatUserMessage(clippedInput, ctx.message.userName);
-			const preserveRawInput = shouldPreserveRawInput(ctx.message.text);
+			const input = await this.pipeline.prepareUserInput(ctx);
 
 			// Ensure channel directory exists
 			await mkdir(this.channelDir, { recursive: true });
 
-			if (!preserveRawInput) {
-				// Channel facts are turn-dynamic by design (spec 025 §7.3): keeping them out of the
-				// system prompt is what lets every channel in a workspace share one cached prefix.
-				channelCapsuleText = renderChannelTurnContext(this.channelDir);
-
-				// The task digest reads the whole tasks/ directory and depends on nothing the memory
-				// bootstrap below produces, so it runs alongside it rather than queuing behind it.
-				// Settled into a result object rather than left as a bare promise: if the bootstrap
-				// throws first we would otherwise leave a rejection unobserved, which Node's default
-				// policy turns into a process exit. Rethrown at the await, so a digest failure still
-				// fails the turn exactly as it did when this ran inline. A task step gets none: its brief
-				// already carries its own task, and the channel's other tasks are noise there.
-				const taskDigestPromise = (
-					this.host.tasksEnabled && !this.host.taskLoop
-						? buildTaskDigestForTurn(this.channelDir)
-						: Promise.resolve("")
-				).then(
-					(text) => ({ text }) as { text: string; error?: never },
-					(error: unknown) => ({ error }) as { text?: never; error: unknown },
-				);
-
-				// Spec 050, D1: the memory index is injected in full on the first turn of a session
-				// (and the first turn after compaction — see `subscribeToSessionEvents`), never per
-				// turn. Mid-session, the model uses `memory_search` to look things up.
-				if (this.host.firstTurnMemoryBootstrapPending) {
-					durableMemoryBootstrapText = await buildFirstTurnMemoryBootstrap(this.channelDir, this.workspaceDir);
-					bootstrapPrepared = true;
-				}
-
-				const taskDigestResult = await taskDigestPromise;
-				if (taskDigestResult.error !== undefined) {
-					throw taskDigestResult.error;
-				}
-				taskDigestText = taskDigestResult.text ?? "";
-			}
-
+			const channelCapsule = await this.pipeline.gatherTurnContext(input.preserveRawInput, turn);
 			const assembled = assembleTurnPrompt({
-				clippedInput,
-				userMessage,
-				preserveRawInput,
-				channelCapsule: channelCapsuleText,
-				durableMemoryBootstrap: durableMemoryBootstrapText,
-				taskDigest: taskDigestText,
+				clippedInput: input.clippedInput,
+				userMessage: input.userMessage,
+				preserveRawInput: input.preserveRawInput,
+				channelCapsule,
+				durableMemoryBootstrap: turn.durableMemoryBootstrapText,
+				taskDigest: turn.taskDigestText,
 			});
-			promptText = assembled.text;
+			turn.promptText = assembled.text;
 
 			// Resolved before the compaction estimate below (which needs the image count) and
 			// refreshed inside `setModel` further down if a fallback switches models mid-turn
 			// (spec 049 D7) — a model's image support is looked up here explicitly because the
 			// SDK's own handling of an unsupported model is to silently replace each image block
 			// with a text placeholder.
-			let preparedImages = await prepareInboundImages(
-				ctx.message.images,
-				this.session.model ?? this.models.activeModel,
-			);
-			for (const notice of preparedImages.notices) {
-				await ctx.respondInThread(notice);
-			}
+			turn.images = await this.pipeline.prepareTurnImages(ctx);
 
 			// Estimated against the fully assembled prompt (recall + task digest + bootstrap all
 			// included above), not just the bare user message — those pieces can add thousands of
 			// characters and must count against the projected context usage this guard is checking.
 			// Each image adds a fixed per-image estimate on top of the text: three attached photos
 			// can by themselves push a turn over the threshold that would trigger this guard.
-			await this.maybeRunPreventiveCompactionForIncomingText(promptText, preparedImages.images.length);
+			await this.pipeline.maybeRunPreventiveCompactionForIncomingText(turn.promptText, turn.images.images.length);
 
 			this.lastTurnContextStats = assembled.stats;
 
-			const fallbackDeps: FallbackRunDeps = {
-				prompt: async (text) => {
-					try {
-						await this.host.runPrompt(async () => {
-							await this.session.prompt(
-								text,
-								preparedImages.images.length > 0 ? { images: preparedImages.images } : undefined,
-							);
-							promptSubmitted = true;
-							if (bootstrapPrepared) this.host.firstTurnMemoryBootstrapPending = false;
-						});
-					} catch (err) {
-						this.runState.stopReason = "error";
-						this.runState.errorMessage = errorMessage(err);
-						log.logEvent("error", "agent.turn.failed", "Runner failed", {
-							ctx: this.runState.logCtx ?? { channelId: this.channelId },
-							fields: { error: this.runState.errorMessage },
-						});
-					}
-				},
-				getRunError: () => ({
-					stopReason: this.runState.stopReason,
-					errorMessage: this.runState.errorMessage,
-				}),
-				resetRunError: () => {
-					this.runState.stopReason = "stop";
-					this.runState.errorMessage = undefined;
-					this.runState.finalOutcome = { kind: "none" };
-					this.runState.lastCompactionError = undefined;
-				},
-				getMessages: () => this.agent.state.messages,
-				setMessages: (messages) => {
-					this.agent.state.messages = messages as typeof this.agent.state.messages;
-				},
-				promptWasSubmitted: () => promptSubmitted,
-				getCurrentModelRef: () => formatModelReference(this.session.model ?? this.models.activeModel),
-				resolveFallbackModel: () => this.models.resolveFallbackModel(),
-				setModel: async (model) => {
-					await this.models.setModelWithThinkingPreservation(model);
-					// The fallback model's vision support can differ from the one this turn started
-					// on; re-resolve against it rather than resend whatever was prepared for the
-					// model that just failed.
-					preparedImages = await prepareInboundImages(
-						ctx.message.images,
-						this.session.model ?? this.models.activeModel,
-					);
-					for (const notice of preparedImages.notices) {
-						await ctx.respondInThread(notice);
-					}
-				},
-				notifySwitch: (from, to, errorSummary) => {
-					fallbackTargetRef = to;
-					if (this.runState.logCtx) {
-						log.logModelFallback(this.runState.logCtx, from, to, errorSummary);
-					}
-					const text = renderFallbackSwitch(from, to, errorSummary);
-					if (ctx.progressStyle !== "none") {
-						runQueue.queue.enqueue(
-							() => ctx.respond(formatProgressEntry("error", text), false),
-							"fallback switch",
-						);
-					} else {
-						runQueue.queue.enqueue(() => ctx.respondInThread(`⚠️ ${text}`), "fallback switch");
-					}
-				},
-				markPrimaryFailed: () => {
-					this.models.markPrimaryFailed();
-				},
-			};
-			fallbackAttempted = await runPromptWithFallback(promptText, fallbackDeps);
+			turn.fallbackAttempted = await runPromptWithFallback(
+				turn.promptText,
+				this.pipeline.buildFallbackDeps(ctx, runQueue, turn),
+			);
 		} catch (err) {
 			this.runState.stopReason = "error";
 			this.runState.errorMessage = errorMessage(err);
@@ -490,17 +348,17 @@ export class ChannelRunner implements AgentRunner {
 				fields: { error: this.runState.errorMessage },
 			});
 		} finally {
-			await this.finishTurn({
+			await this.turnFinisher.finish({
 				ctx,
 				ownTurn,
 				implicitTurn,
-				promptSubmitted,
+				promptSubmitted: turn.promptSubmitted,
 				runQueue,
-				fallbackAttempted,
-				fallbackTargetRef,
-				promptText,
-				durableMemoryBootstrapText,
-				taskDigestText,
+				fallbackAttempted: turn.fallbackAttempted,
+				fallbackTargetRef: turn.fallbackTargetRef,
+				promptText: turn.promptText,
+				durableMemoryBootstrapText: turn.durableMemoryBootstrapText,
+				taskDigestText: turn.taskDigestText,
 			});
 		}
 
@@ -512,181 +370,6 @@ export class ChannelRunner implements AgentRunner {
 			durationMs: Date.now() - startedAt,
 			silent: this.runState.finalOutcome.kind === "silent",
 		};
-	}
-
-	/**
-	 * The epilogue shared by every exit path out of `run()`'s try/catch: debug dump, delivery of
-	 * whatever final message the turn settled on, usage/ledger accounting, the end-of-turn memory
-	 * flush, and clearing run state. Pulled out of `run()` itself only to keep that method's main
-	 * line (prepare → prompt with fallback) readable; every input here is `run()`-local, not
-	 * instance state, so it is threaded through explicitly rather than promoted to a field.
-	 */
-	private async finishTurn(input: {
-		ctx: ChannelContext;
-		ownTurn: TurnHandle;
-		implicitTurn: boolean;
-		promptSubmitted: boolean;
-		runQueue: ReturnType<typeof createRunQueue>;
-		fallbackAttempted: boolean;
-		fallbackTargetRef: string | undefined;
-		promptText: string;
-		durableMemoryBootstrapText: string;
-		taskDigestText: string;
-	}): Promise<void> {
-		const { ctx, ownTurn, implicitTurn, promptSubmitted, runQueue, fallbackAttempted, fallbackTargetRef } = input;
-		this.turnState.setPhase(ownTurn, "finishing");
-		// Debug dump (PIPICLAW_DEBUG=1). Written after the run so `systemPrompt` is the
-		// string the provider actually received — base sections, pi's tail, and the boundary
-		// footer the prompt extension appends at before_agent_start.
-		if (process.env.PIPICLAW_DEBUG) {
-			const debugContext = {
-				systemPrompt: this.host.lastFinalPrompt ?? this.agent.state.systemPrompt,
-				promptManifest: this.host.lastPromptBuild
-					? buildPromptManifest(this.host.lastPromptBuild, this.host.lastFinalPrompt)
-					: undefined,
-				messages: this.session.messages,
-				durableMemoryBootstrap: input.durableMemoryBootstrapText || undefined,
-				taskDigest: input.taskDigestText || undefined,
-				newUserMessage: input.promptText,
-			};
-			await writeFile(join(this.channelDir, "last_prompt.json"), JSON.stringify(debugContext, null, 2)).catch(
-				(error: unknown) =>
-					log.logWarn("agent.debug.dump_failed", "last_prompt.json write failed", {
-						channelId: this.channelId,
-						reason: errorMessage(error),
-					}),
-			);
-		}
-		if (!promptSubmitted) {
-			const discarded = this.session.clearQueue();
-			const discardedCount = discarded.steering.length + discarded.followUp.length;
-			if (discardedCount > 0) {
-				log.logWarn("agent.turn.queue_discarded", "Queued busy messages discarded after run setup failed", {
-					channelId: this.channelId,
-					fields: { count: discardedCount },
-				});
-			}
-		}
-		await runQueue.drain();
-		const finalOutcome = this.runState.finalOutcome;
-		const finalOutcomeText = getFinalOutcomeText(finalOutcome);
-
-		try {
-			if (
-				this.runState.stopReason === "error" &&
-				this.runState.errorMessage &&
-				!this.runState.finalResponseDelivered
-			) {
-				try {
-					const compactionError = this.runState.lastCompactionError;
-					await ctx.replaceMessage(
-						renderTurnErrorReply({
-							errorMessage: this.runState.errorMessage,
-							compactionError:
-								compactionError && compactionError !== this.runState.errorMessage ? compactionError : undefined,
-							fallbackRef: fallbackAttempted ? fallbackTargetRef : undefined,
-						}),
-					);
-				} catch (err) {
-					const errMsg = errorMessage(err);
-					log.logWarn("delivery.error_reply.failed", "Error reply failed", {
-						channelId: this.channelId,
-						reason: errMsg,
-					});
-				}
-			} else if (isSilentOutcome(finalOutcome)) {
-				try {
-					await ctx.deleteMessage();
-					log.logInfo(`[${this.channelId}] Silent response ended progress delivery`);
-				} catch (err) {
-					const errMsg = errorMessage(err);
-					log.logWarn("delivery.silent_cleanup.failed", "Silent-response cleanup failed", {
-						channelId: this.channelId,
-						reason: errMsg,
-					});
-				}
-			} else if (this.runState.stopReason === "aborted" && !this.runState.finalResponseDelivered) {
-				try {
-					await ctx.deleteMessage();
-					log.logInfo(`[${this.channelId}] Aborted response discarded active delivery state`);
-				} catch (err) {
-					const errMsg = errorMessage(err);
-					log.logWarn("delivery.abort_cleanup.failed", "Aborted-response cleanup failed", {
-						channelId: this.channelId,
-						reason: errMsg,
-					});
-				}
-			} else if (finalOutcomeText && !this.runState.finalResponseDelivered) {
-				try {
-					await ctx.replaceMessage(finalOutcomeText);
-				} catch (err) {
-					const errMsg = errorMessage(err);
-					log.logWarn("delivery.final_reply.failed", "Final reply replacement failed", {
-						channelId: this.channelId,
-						reason: errMsg,
-					});
-				}
-			}
-
-			await ctx.flush();
-		} finally {
-			await ctx.close();
-		}
-
-		// Log usage summary. Gated on tokens as well as cost: a local (or pricing-less) model
-		// bills nothing, and skipping it here left both the log and the ledger empty.
-		if (this.runState.totalUsage.cost.total > 0 || this.runState.totalUsage.total > 0) {
-			const lastAssistantMessage = getLastAssistantUsage(this.session.messages);
-
-			const contextTokens = lastAssistantMessage
-				? lastAssistantMessage.usage.input +
-					lastAssistantMessage.usage.output +
-					lastAssistantMessage.usage.cacheRead +
-					lastAssistantMessage.usage.cacheWrite
-				: 0;
-			const currentRunModel = this.session.model ?? this.models.activeModel;
-			const contextWindow = currentRunModel.contextWindow || 200000;
-
-			log.logUsageSummary(this.runState.logCtx!, this.runState.totalUsage, contextTokens, contextWindow);
-			const responseModel = lastAssistantMessage?.responseModel;
-			// Ledger turn entry: assistant-only usage (sub-agents recorded separately),
-			// keeping Σ(entries) == real spend with no double counting.
-			this.ledger.record({
-				channelId: this.channelId,
-				kind: "turn",
-				model: responseModel ?? formatModelReference(currentRunModel),
-				usage: {
-					input: this.runState.assistantUsage.input,
-					output: this.runState.assistantUsage.output,
-					cacheRead: this.runState.assistantUsage.cacheRead,
-					cacheWrite: this.runState.assistantUsage.cacheWrite,
-					total: this.runState.assistantUsage.total,
-				},
-				cost: { ...this.runState.assistantUsage.cost },
-			});
-			if (
-				responseModel &&
-				responseModel !== formatModelReference(currentRunModel) &&
-				responseModel !== currentRunModel.id
-			) {
-				log.logInfo(
-					`[${this.channelId}] Actual model: ${responseModel} (configured: ${formatModelReference(currentRunModel)})`,
-				);
-			}
-		}
-
-		// The turn is over, so the channel is about to look idle to the maintenance gates —
-		// which is exactly when this state has to be on disk. Everything buffered during the
-		// turn lands here in one write.
-		await this.flushMemoryActivity();
-
-		// Clear run state
-		this.runState.ctx = null;
-		this.runState.logCtx = null;
-		this.runState.queue = null;
-		if (implicitTurn) {
-			this.endTurn();
-		}
 	}
 
 	async handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void> {
@@ -733,7 +416,7 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	async queueSteer(text: string, userName?: string, images?: InboundImage[]): Promise<void> {
-		await this.queueBusyMessage(requireQueuedMessage(text, "steer"), userName, images);
+		await this.pipeline.queueBusyMessage(requireQueuedMessage(text, "steer"), userName, images);
 	}
 
 	async flushMemoryForShutdown(): Promise<void> {
@@ -892,53 +575,6 @@ export class ChannelRunner implements AgentRunner {
 		}
 	}
 
-	/**
-	 * Single source of truth for the busy-message window: steer is accepted while
-	 * the prompt is being assembled ("preparing") or while the agent loop is
-	 * actually streaming. Re-asserted after every await because the turn can end
-	 * while this call was suspended.
-	 */
-	private assertBusyWindowOpen(): void {
-		if (this.turnState.phase() === "preparing") {
-			return;
-		}
-		if (this.turnState.phase() === "streaming" && this.session.isStreaming) {
-			return;
-		}
-		throw new Error("No task is currently running.");
-	}
-
-	private async queueBusyMessage(text: string, userName?: string, images?: InboundImage[]): Promise<void> {
-		this.assertBusyWindowOpen();
-
-		await this.host.ensureSessionReady();
-
-		const oversized = text.replace(/\r/g, "").trim().length > MAX_USER_MESSAGE_CHARS;
-		const oversizedPath = oversized ? await persistOversizedInput(this.channelDir, this.channelId, text) : undefined;
-		const clippedText = clipUserInput(text, MAX_USER_MESSAGE_CHARS, oversizedPath);
-		if (oversized) {
-			log.logWarn("agent.input.clipped", "Queued message clipped", {
-				channelId: this.channelId,
-				fields: { limitChars: MAX_USER_MESSAGE_CHARS },
-			});
-		}
-		const queuedMessage = formatUserMessage(clippedText, userName);
-		const preparedImages = await prepareInboundImages(images, this.session.model ?? this.models.activeModel);
-		for (const notice of preparedImages.notices) {
-			await this.runState.ctx?.respondInThread(notice);
-		}
-		await this.maybeRunPreventiveCompactionForIncomingText(queuedMessage, preparedImages.images.length);
-
-		this.assertBusyWindowOpen();
-
-		const queueMessage = async () => {
-			this.assertBusyWindowOpen();
-			await this.session.steer(queuedMessage, preparedImages.images.length > 0 ? preparedImages.images : undefined);
-		};
-
-		await this.host.runPrompt(queueMessage);
-	}
-
 	private resetRunState(ctx: ChannelContext, store: ChannelStore): void {
 		this.runState = createEmptyRunState();
 		this.runState.ctx = ctx;
@@ -948,37 +584,5 @@ export class ChannelRunner implements AgentRunner {
 			channelName: ctx.channelName,
 		};
 		this.runState.store = store;
-	}
-
-	private async maybeRunPreventiveCompactionForIncomingText(
-		incomingText: string,
-		imageCount: number = 0,
-	): Promise<void> {
-		const currentModel = this.session.model ?? this.models.activeModel;
-		const contextUsage = this.session.getContextUsage();
-		const contextTokens = contextUsage?.tokens;
-		const incomingTokens = estimateIncomingMessageTokens(incomingText, imageCount);
-		const decision = getPreventiveCompactionDecision(contextTokens, incomingTokens, currentModel.contextWindow);
-
-		if (!decision.shouldCompact) {
-			return;
-		}
-
-		const currentTokens = contextTokens ?? 0;
-		const startedAt = Date.now();
-		log.logInfo(
-			`[${this.channelId}] Preventive compaction triggered: projected ${decision.projectedTokens}/${currentModel.contextWindow} tokens (current=${currentTokens}, incoming≈${incomingTokens}), threshold=${decision.thresholdTokens}`,
-		);
-
-		try {
-			await this.session.compact();
-			log.logInfo(`[${this.channelId}] Preventive compaction complete in ${Date.now() - startedAt}ms`);
-		} catch (error) {
-			const message = errorMessage(error);
-			log.logWarn("agent.compaction.preventive_failed", "Preventive compaction failed", {
-				channelId: this.channelId,
-				reason: message,
-			});
-		}
 	}
 }

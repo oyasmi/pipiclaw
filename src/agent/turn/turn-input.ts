@@ -70,10 +70,15 @@ export function formatUserMessage(text: string, userName?: string, now: Date = n
  * without its own notice — the `[图片N：格式不支持，已保存]` marker already in the message text
  * covers it.
  */
+export interface PreparedInboundImages {
+	images: ImageContent[];
+	notices: string[];
+}
+
 export async function prepareInboundImages(
 	images: InboundImage[] | undefined,
 	model: Model<Api>,
-): Promise<{ images: ImageContent[]; notices: string[] }> {
+): Promise<PreparedInboundImages> {
 	if (!images || images.length === 0) {
 		return { images: [], notices: [] };
 	}
