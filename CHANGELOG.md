@@ -2,6 +2,23 @@
 
 Note: keep this file in sync with `CHANGELOG.zh-CN.md`.
 
+## [Unreleased]
+
+### Fixed
+
+- **User-facing copy overhaul, part 1 — leaks and defects (spec 053).**
+  - Group-chat logging no longer drops the channel field: base64-encoded channel ids are decoded before the log entry is written.
+  - A background wake whose delivery keeps failing no longer forwards the prompt and `TASK_DRIVER` text to the user; the notice now names the task / delegation / event that woke the channel, gives the next step, and points at the record file's absolute path.
+  - Task status labels and busy notices come from a single source instead of per-callsite copies; the progress stream is localized; documentation references point to GitHub links.
+
+### Changed
+
+- **User-facing copy overhaul, parts 2–4 (spec 053).** What the model sees and what the user sees are now split, and the DingTalk runtime and the TUI share one copy source.
+  - Task logs and work items get user-facing renderers; the model's step brief is unchanged. Guard blocks render as one localized line on the card while the model still receives the full English message. Turn failures are classified into credential / rate-limit / context-full / network / other, each leading with the next step before the raw error. Delegation notices carry the runId and drop tool names from user copy; `/usage` no longer shows raw "subagent"/"sidecar" terms.
+  - The glossary is applied throughout; `/help` groups commands by always-available vs idle-only, and `/context` is localized. All reports go through `capReply`; `/compact` replies with just the token counts and the summary's first line.
+  - First run prints next-step guidance and exits 0; a placeholder `channel.json` still exits 1. `--quiet` now implies `--plain` (the full-screen UI used to ignore it). `/events list` runs the watcher's admission rules, so e.g. an over-frequent cron shows as invalid.
+  - Logging: 199 warn sites migrated to `log.logWarn(event, …)` with `<domain>.<object>.<verb>` event names — the generic `system.warning` / `system.info` events are gone and `logWarning` is removed; per-step `taskdriver.step.enqueued` is demoted to debug; legacy log calls drop from 247 to 25.
+
 ## [0.9.3] - 2026-10-07
 
 ### Changed
