@@ -14,9 +14,9 @@ import { formatModelReference } from "../../models/reference.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { sleepUnref } from "../../shared/with-timeout.js";
 import type { ResolvedInternalSubAgentConfig } from "../discovery.js";
-import { graceDeadlineFor, watchAbort } from "../grace.js";
+import { graceDeadlineFor, resolveSyncGraceMs, watchAbort } from "../grace.js";
 import { buildDispatchedText, createDetails, formatStatus } from "../result.js";
-import { resolveSyncGraceMs, type SubAgentRunManager } from "../runs.js";
+import type { SubAgentRunManager } from "../runs.js";
 import { buildSubAgentTask, resolveContextualBlocks } from "../task-envelope.js";
 import type {
 	DelegationParams,

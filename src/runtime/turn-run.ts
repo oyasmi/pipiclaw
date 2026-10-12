@@ -22,7 +22,7 @@ import type { DingTalkBotPort } from "../dingtalk/handler.js";
 import type { JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { errorMessage } from "../shared/text-utils.js";
-import type { SubAgentRuntime } from "../subagents/runs.js";
+import type { SubAgentRuntime } from "../subagents/run-registry.js";
 import { buildTaskStepBrief } from "../tasks/brief.js";
 import { consumeTaskNotice } from "../tasks/steer.js";
 import type { DurableDispatchService } from "./durable-dispatch.js";

@@ -28,7 +28,7 @@ import { createExecutor } from "../executor.js";
 import { createJobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { flushSecurityLogs } from "../security/logger.js";
-import { createSubAgentRuntime } from "../subagents/runs.js";
+import { createSubAgentRuntime } from "../subagents/run-registry.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { TUI_SLASH_COMMANDS } from "./commands.js";
 import { createFrontend } from "./renderer.js";

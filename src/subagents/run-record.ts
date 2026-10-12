@@ -1,8 +1,9 @@
 /**
- * Run vocabulary: the record, registration and settlement shapes shared by the run manager and
- * the external-run helpers. Types only, so nothing here can form an import cycle with the
- * implementation (spec 054 D9/D12).
+ * Run vocabulary and its pure helpers: the record, registration and settlement shapes, run-id
+ * minting and matching, the pending-settlement transform and the record parser. No state and no I/O,
+ * so the run manager and the external-run helpers can share it without an import cycle (spec 054 D9/D12).
  */
+import { isRecord } from "../shared/type-guards.js";
 import type { UsageTotals } from "../usage/totals.js";
 import type { WorkspaceBaseline } from "./workspace-summary.js";
 
@@ -205,3 +206,107 @@ export interface RunNotice {
 }
 
 export type RunNotifier = (channelId: string, notice: RunNotice) => void | Promise<void>;
+
+/** D10.2: per-channel cap on concurrently running delegation runs. */
+export const MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL = 6;
+/** D10.2: host-wide cap across every channel. Bounds unbounded process/worker growth only —
+ *  not the full cross-subsystem (task/job/sidecar) admission scheme the design doc leaves open. */
+export const MAX_RUNNING_SUBAGENT_RUNS_PER_HOST = 20;
+
+/**
+ * Human-typeable run ids (spec 041). Runs used to be identified by the dispatching tool call's
+ * own id, which on some providers is a `call_<24 chars>|fc_<50 chars>` composite — useless in a
+ * chat UI where a human has to read it back to cancel or inspect a run. `mintRunId()` on
+ * `SubAgentRunManager` produces `run_` + 6 chars instead; the alphabet excludes 0/1/i/l/o/u
+ * because those are the characters people misread on a phone screen or misspeak out loud.
+ */
+export const RUN_ID_PREFIX = "run_";
+const RUN_ID_ALPHABET = "23456789abcdefghjkmnpqrstvwxyz";
+const RUN_ID_SUFFIX_LEN = 6;
+
+export function randomRunIdSuffix(): string {
+	let suffix = "";
+	for (let i = 0; i < RUN_ID_SUFFIX_LEN; i++) {
+		suffix += RUN_ID_ALPHABET[Math.floor(Math.random() * RUN_ID_ALPHABET.length)];
+	}
+	return suffix;
+}
+
+/** Strips a leading `run_` (case-insensitive) so `show a1b2c3` and `show run_a1b2c3` resolve
+ *  the same way — nobody should have to remember whether the prefix is required. */
+export function normalizeRunIdQuery(query: string): string {
+	const lower = query.trim().toLowerCase();
+	return lower.startsWith(RUN_ID_PREFIX) ? lower.slice(RUN_ID_PREFIX.length) : lower;
+}
+
+/** Settled runs and every runtime-managed artifact are retained together for one week. GC runs
+ *  daily, so an item can remain for up to one additional sweep interval after this age. */
+export const RUN_RETENTION_MS = 7 * 24 * 60 * 60_000;
+export const RUN_ARTIFACT_FILENAMES = [
+	"prompt.txt",
+	"system-prompt.txt",
+	"events.jsonl",
+	"stderr.log",
+	"output.md",
+] as const;
+
+export function isTerminal(status: RunStatus): boolean {
+	return status !== "running";
+}
+
+export function createPendingSettlement(input: SettleInput, finishedAt: number, announce: boolean): PendingSettlement {
+	return {
+		status: input.status,
+		failureReason: input.failureReason,
+		usage: input.usage,
+		usageKnown: input.usageKnown,
+		costKnown: input.costKnown,
+		turns: input.turns,
+		toolCalls: input.toolCalls,
+		durationMs: input.durationMs,
+		durationEstimated: input.durationEstimated,
+		verificationVerdict: input.verificationVerdict,
+		workspaceSummary: input.workspaceSummary,
+		sessionId: input.sessionId,
+		model: input.model,
+		finishedAt,
+		announce,
+	};
+}
+
+export function applyPendingSettlement(record: RunRecord, pending: PendingSettlement): void {
+	record.status = pending.status;
+	record.failureReason = pending.failureReason;
+	record.usage = pending.usage;
+	record.usageKnown = pending.usageKnown;
+	record.costKnown = pending.costKnown;
+	record.turns = pending.turns;
+	record.toolCalls = pending.toolCalls;
+	record.durationMs = pending.durationMs;
+	record.durationEstimated = pending.durationEstimated;
+	record.verificationVerdict = pending.verificationVerdict;
+	record.workspaceSummary = pending.workspaceSummary;
+	if (pending.sessionId) record.sessionId = pending.sessionId;
+	if (pending.model) record.model = pending.model;
+	record.finishedAt = pending.finishedAt;
+	record.settledAt = pending.finishedAt;
+	record.settlementPending = undefined;
+}
+
+export function parseRunRecord(raw: string): RunRecord | undefined {
+	const value: unknown = JSON.parse(raw);
+	if (
+		!isRecord(value) ||
+		typeof value.runId !== "string" ||
+		typeof value.channelId !== "string" ||
+		(value.runtime !== "internal" && value.runtime !== "external") ||
+		typeof value.agent !== "string" ||
+		typeof value.workingDirectory !== "string" ||
+		typeof value.artifactDir !== "string" ||
+		typeof value.status !== "string" ||
+		typeof value.startedAt !== "number"
+	) {
+		return undefined;
+	}
+	return value as unknown as RunRecord;
+}

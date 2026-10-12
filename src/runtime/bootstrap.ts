@@ -34,7 +34,7 @@ import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { fileStamp } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { renderRunNotice } from "../subagents/commands.js";
-import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/runs.js";
+import { createSubAgentRuntime, type SubAgentRuntime } from "../subagents/run-registry.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import { DurableDispatchService, renderDispatchExhaustedNotice } from "./durable-dispatch.js";
 import { createShutdown } from "./shutdown.js";

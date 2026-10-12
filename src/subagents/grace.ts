@@ -39,3 +39,21 @@ export function watchAbort(signal: AbortSignal | undefined): { aborted: Promise<
 	});
 	return { aborted, dispose };
 }
+
+/**
+ * Longest a dispatching tool call waits for its run to settle before returning a "still running"
+ * placeholder instead of the result (D2). A code constant, not a settings key, per CLAUDE.md's
+ * rule for numeric thresholds.
+ */
+export const SYNC_GRACE_MS = 120_000;
+
+/**
+ * Effective sync grace window. A test-only env override (`PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS`)
+ * lets the deterministic e2e layer exercise the detached-settlement + completion-wake path
+ * (spec 048 A14/A15/A16) without a multi-minute wait; production always uses `SYNC_GRACE_MS`.
+ */
+export function resolveSyncGraceMs(override?: number): number {
+	if (override !== undefined) return override;
+	const env = Number(process.env.PIPICLAW_TEST_SUBAGENT_SYNC_GRACE_MS);
+	return Number.isFinite(env) && env > 0 ? env : SYNC_GRACE_MS;
+}

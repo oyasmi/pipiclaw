@@ -9,8 +9,8 @@ import { createFileStore } from "../src/file-store.js";
 import {
 	MAX_RUNNING_SUBAGENT_RUNS_PER_CHANNEL,
 	MAX_RUNNING_SUBAGENT_RUNS_PER_HOST,
-	SubAgentRunManager,
-} from "../src/subagents/runs.js";
+} from "../src/subagents/run-record.js";
+import { SubAgentRunManager } from "../src/subagents/runs.js";
 import { acquireWorkspaceLease, releaseWorkspaceLease } from "../src/subagents/workspace-lease.js";
 import { createSubAgentInlineTool, createSubAgentTool } from "../src/tools/subagent.js";
 import { configureSubAgentRuntime, getSubAgentRunManager, testManagers } from "./helpers/background-runtime.js";
