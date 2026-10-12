@@ -348,7 +348,7 @@ describe("user-facing copy shape (spec 053, D13)", () => {
 		const tools = toolNames.map((name) => ({ name, description: `${name} description` }));
 		const build = buildPipiclawSystemPrompt({
 			tools,
-			playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(), toolNames),
+			playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(TOOL_NAMES), toolNames),
 			subAgents: [],
 		});
 		const skills = Array.from({ length: 60 }, (_, index) => ({ name: `skill-${index}`, description: "d" }));

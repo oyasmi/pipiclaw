@@ -27,7 +27,7 @@ const makeTempDir = useTempDirs("pipiclaw-playbooks-");
 
 describe("runtime playbook catalog", () => {
 	it("loads every playbook from its name/description metadata", () => {
-		const catalog = loadRuntimePlaybookCatalog();
+		const catalog = loadRuntimePlaybookCatalog(TOOL_NAMES);
 		expect(catalog.map((item) => item.filename).sort()).toEqual(
 			readdirSync(PLAYBOOKS_DIR)
 				.filter((filename) => filename.endsWith(".md"))
@@ -42,7 +42,7 @@ describe("runtime playbook catalog", () => {
 	});
 
 	it("offers a playbook only when a tool can reach the mechanism it documents", () => {
-		const catalog = loadRuntimePlaybookCatalog();
+		const catalog = loadRuntimePlaybookCatalog(TOOL_NAMES);
 
 		const withoutTasks = selectRuntimePlaybooks(
 			catalog,
@@ -62,14 +62,14 @@ describe("runtime playbook catalog", () => {
 		const directory = makeTempDir();
 		const body = "UNIQUE_BODY_SENTINEL that must stay on disk";
 		writeFileSync(join(directory, "probe.md"), `---\nname: probe\ndescription: a trigger\norder: 10\n---\n${body}`);
-		const index = renderPlaybookCatalog(loadRuntimePlaybookCatalog(directory));
+		const index = renderPlaybookCatalog(loadRuntimePlaybookCatalog(TOOL_NAMES, directory));
 		expect(index).toContain("probe.md");
 		expect(index).toContain("a trigger");
 		expect(index).not.toContain(body);
 	});
 
 	it("keeps the documented catalog and runtime-guide references reachable", () => {
-		const catalog = loadRuntimePlaybookCatalog();
+		const catalog = loadRuntimePlaybookCatalog(TOOL_NAMES);
 		const docs = readFileSync(new URL("../docs/runtime-playbooks.md", import.meta.url), "utf-8");
 		const rows = [...docs.matchAll(/^\| `([^`]+\.md)` \| (\d+) \| ([^|]+) \|/gm)].map((match) => ({
 			filename: match[1],
@@ -139,7 +139,7 @@ describe("runtime playbook catalog", () => {
 	])("rejects invalid authored metadata: %s", (fields, error) => {
 		const directory = makeTempDir();
 		writeFileSync(join(directory, "probe.md"), `---\n${fields}\n---\nbody`);
-		expect(() => loadRuntimePlaybookCatalog(directory)).toThrow(error);
+		expect(() => loadRuntimePlaybookCatalog(TOOL_NAMES, directory)).toThrow(error);
 	});
 });
 

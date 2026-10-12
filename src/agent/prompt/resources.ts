@@ -15,7 +15,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as log from "../../log.js";
+import {
+	loadRuntimePlaybookCatalog,
+	type RuntimePlaybookMetadata,
+	selectRuntimePlaybooks,
+} from "../../playbooks/catalog.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../../shared/prompt-units.js";
+import { TOOL_NAMES } from "../../tools/registry.js";
 import type { LoadedPromptResource, PromptDiagnostic } from "./types.js";
 import { DEFAULT_AGENTS, DEFAULT_SOUL, isDefaultWorkspaceTemplate } from "./workspace-templates.js";
 
@@ -30,6 +36,11 @@ export interface WorkspacePromptResources {
 	soul?: LoadedPromptResource;
 	agents?: LoadedPromptResource;
 	diagnostics: PromptDiagnostic[];
+}
+
+/** The bundled runtime playbooks that apply to the tools this runner actually has. */
+export function loadPlaybooks(toolNames: readonly string[]): RuntimePlaybookMetadata[] {
+	return selectRuntimePlaybooks(loadRuntimePlaybookCatalog(TOOL_NAMES), toolNames);
 }
 
 function readWorkspaceFile(path: string): string {

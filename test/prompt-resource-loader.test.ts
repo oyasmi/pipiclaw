@@ -15,6 +15,7 @@ import type { PromptBuildContext } from "../src/agent/prompt/types.js";
 import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../src/playbooks/catalog.js";
 import { countPromptUnits } from "../src/shared/prompt-units.js";
 import { loadPipiclawSkills, resolvePipiclawSkills } from "../src/skills/loader.js";
+import { TOOL_NAMES } from "../src/tools/registry.js";
 import { useTempDirs } from "./helpers/fixtures.js";
 
 const makeTempDir = useTempDirs("pipiclaw-loader-");
@@ -40,7 +41,7 @@ function buildPrompt(workspaceDir: string): ReturnType<typeof buildPipiclawSyste
 	const tools = [{ name: "read", description: "Read files", hint: "Read files" }];
 	const context: PromptBuildContext = {
 		tools,
-		playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(), ["read"]),
+		playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(TOOL_NAMES), ["read"]),
 		subAgents: [],
 		...loadWorkspacePromptResources(workspaceDir),
 	};

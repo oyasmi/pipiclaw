@@ -1,7 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { PLAYBOOKS_DIR } from "../paths.js";
-import { TOOL_NAMES } from "../tools/registry.js";
 
 const DEFAULT_ORDER = 100;
 /** A catalog entry is a single trigger, not a summary; longer descriptions are clipped in the prompt (spec 026 §10.5). */
@@ -30,7 +29,11 @@ function parseList(value: string | undefined): string[] {
 		.filter(Boolean);
 }
 
-function parseFrontmatter(content: string, filename: string): Omit<RuntimePlaybookMetadata, "filename" | "path"> {
+function parseFrontmatter(
+	content: string,
+	filename: string,
+	knownToolNames: ReadonlySet<string>,
+): Omit<RuntimePlaybookMetadata, "filename" | "path"> {
 	const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
 	if (!match) throw new Error(`Runtime playbook ${filename} has no YAML frontmatter.`);
 
@@ -59,7 +62,7 @@ function parseFrontmatter(content: string, filename: string): Omit<RuntimePlaybo
 	// otherwise drop the playbook from the catalog with no signal anywhere.
 	const requiresAnyTool = parseList(fields.get("requires-tools"));
 	for (const tool of requiresAnyTool) {
-		if (!TOOL_NAMES.has(tool)) {
+		if (!knownToolNames.has(tool)) {
 			throw new Error(`Runtime playbook ${filename} requires unknown tool "${tool}".`);
 		}
 	}
@@ -78,14 +81,21 @@ function parseFrontmatter(content: string, filename: string): Omit<RuntimePlaybo
 	return { name, description, requiresAnyTool, order };
 }
 
-/** Load the small always-on catalog; playbook bodies remain on disk until the agent reads one. */
-export function loadRuntimePlaybookCatalog(directory = PLAYBOOKS_DIR): RuntimePlaybookMetadata[] {
+/**
+ * Load the small always-on catalog; playbook bodies remain on disk until the agent reads one.
+ * `knownToolNames` is the caller's tool registry: a `requires-tools` entry outside it is a typo
+ * and throws (the registry lives above this module, so it is passed in).
+ */
+export function loadRuntimePlaybookCatalog(
+	knownToolNames: ReadonlySet<string>,
+	directory = PLAYBOOKS_DIR,
+): RuntimePlaybookMetadata[] {
 	const catalog = readdirSync(directory)
 		.filter((filename) => filename.endsWith(".md"))
 		.sort()
 		.map((filename) => {
 			const path = join(directory, filename);
-			return { ...parseFrontmatter(readFileSync(path, "utf-8"), filename), filename, path };
+			return { ...parseFrontmatter(readFileSync(path, "utf-8"), filename, knownToolNames), filename, path };
 		});
 
 	const orderOwners = new Map<number, string>();

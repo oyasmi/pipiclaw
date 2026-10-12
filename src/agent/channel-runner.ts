@@ -68,7 +68,6 @@ import {
 	resolveInitialModel,
 	wrapModelRegistry,
 } from "../models/utils.js";
-import { loadRuntimePlaybookCatalog, selectRuntimePlaybooks } from "../playbooks/catalog.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
@@ -98,7 +97,7 @@ import {
 	TOOL_SCHEMA_TARGET_UNITS,
 	toolSchemaBudgetWarning,
 } from "./prompt/manifest.js";
-import { loadWorkspacePromptResources, type WorkspacePromptResources } from "./prompt/resources.js";
+import { loadPlaybooks, loadWorkspacePromptResources, type WorkspacePromptResources } from "./prompt/resources.js";
 import type { PromptBuildResult } from "./prompt/types.js";
 import { createRunQueue } from "./run-queue.js";
 import type { RunnerDeps, RunnerFactoryPaths } from "./runner-factory.js";
@@ -1492,7 +1491,7 @@ export class ChannelRunner implements AgentRunner {
 			})),
 			soul: resources.soul,
 			agents: resources.agents,
-			playbooks: selectRuntimePlaybooks(loadRuntimePlaybookCatalog(), toolNames),
+			playbooks: loadPlaybooks(toolNames),
 			subAgents: this.subAgentDiscovery.agents.map((agent) => ({
 				name: agent.name,
 				description: agent.description,

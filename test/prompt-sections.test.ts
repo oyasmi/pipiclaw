@@ -41,7 +41,7 @@ function context(overrides: Partial<PromptBuildContext> = {}): PromptBuildContex
 	return {
 		tools: toolList,
 		playbooks: selectRuntimePlaybooks(
-			loadRuntimePlaybookCatalog(),
+			loadRuntimePlaybookCatalog(TOOL_NAMES),
 			toolList.map((tool) => tool.name),
 		),
 		subAgents: [
