@@ -17,10 +17,6 @@
 			"to": "src/memory/maintenance-tuning.ts"
 		},
 		{
-			"from": "src/events/events.ts",
-			"to": "src/dingtalk/bot.ts"
-		},
-		{
 			"from": "src/playbooks/catalog.ts",
 			"to": "src/tools/registry.ts"
 		},
@@ -60,7 +56,7 @@
 	"r3": {
 		"src/agent/channel-runner.ts": 1871,
 		"src/dingtalk/bot.ts": 1820,
-		"src/events/events.ts": 1009,
+		"src/events/events.ts": 1003,
 		"src/jobs/manager.ts": 1328,
 		"src/runtime/bootstrap.ts": 1383,
 		"src/subagents/discovery.ts": 1040,

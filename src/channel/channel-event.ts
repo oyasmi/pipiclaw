@@ -82,3 +82,12 @@ export interface ChannelEvent {
 	 */
 	presentation?: "awaited";
 }
+
+/**
+ * The one thing in-process producers (scheduled events, durable dispatch) need from a transport:
+ * hand it a synthetic event for its per-channel queue. `false` means the queue rejected it (full
+ * or stopped), so the caller keeps ownership and may retry. Implemented by `DingTalkBot`.
+ */
+export interface ChannelEventSink {
+	enqueueEvent(event: ChannelEvent): boolean;
+}

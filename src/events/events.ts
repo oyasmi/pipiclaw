@@ -12,8 +12,7 @@ import {
 } from "fs";
 import { readFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
-import type { ChannelEvent } from "../channel/channel-event.js";
-import type { DingTalkBot } from "../dingtalk/bot.js";
+import type { ChannelEvent, ChannelEventSink } from "../channel/channel-event.js";
 import type { ExecResult, Executor } from "../executor.js";
 import * as log from "../log.js";
 import { guardCommand } from "../security/command-guard.js";
@@ -313,7 +312,7 @@ export class EventsWatcher {
 
 	constructor(
 		private eventsDir: string,
-		private bot: DingTalkBot,
+		private bot: ChannelEventSink,
 		private executor: Executor,
 		private commandGuardConfig?: SecurityConfig["commandGuard"],
 		private options: EventsWatcherOptions = {},
@@ -992,7 +991,7 @@ export class EventsWatcher {
  */
 export function createEventsWatcher(
 	workspaceDir: string,
-	bot: DingTalkBot,
+	bot: ChannelEventSink,
 	executor: Executor,
 	commandGuardConfig?: SecurityConfig["commandGuard"],
 	historyPath?: string,

@@ -28,8 +28,6 @@ const MODULES = [
 	["src/commands/reply-limits.ts", "commands"],
 	["src/commands/router.ts", "commands-router"],
 	["src/tools/contract/", "tools-contract"],
-	// Legacy entries: files that have not been moved yet are registered under their target
-	// module so a move never changes module membership. Delete the line when the file moves.
 ];
 
 // --- D1: allowed dependencies (a DAG; same-module imports are always fine) --------------

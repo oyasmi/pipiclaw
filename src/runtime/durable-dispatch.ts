@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChannelEvent } from "../channel/channel-event.js";
-import type { DingTalkBot } from "../dingtalk/bot.js";
+import type { ChannelEvent, ChannelEventSink } from "../channel/channel-event.js";
 import * as log from "../log.js";
 import { writeFileAtomically } from "../shared/atomic-file.js";
 import { createSerialQueue } from "../shared/serial-queue.js";
@@ -26,7 +25,7 @@ export interface DurableDispatchRecord {
 
 export interface DurableDispatchOptions {
 	stateDir: string;
-	bot: Pick<DingTalkBot, "enqueueEvent">;
+	bot: ChannelEventSink;
 	leaseMs?: number;
 	intervalMs?: number;
 	/** Called once, at most, when a dispatch id hits `MAX_DELIVERIES` without ever completing —

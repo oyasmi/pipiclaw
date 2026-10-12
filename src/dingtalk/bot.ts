@@ -21,7 +21,7 @@ import type {
 	OutboundMedia,
 	ProgressStyle,
 } from "../channel/channel-context.js";
-import type { ChannelEvent, InboundImage } from "../channel/channel-event.js";
+import type { ChannelEvent, ChannelEventSink, InboundImage } from "../channel/channel-event.js";
 import type { ChannelObservation } from "../channel/channel-index.js";
 import { getChannelDir } from "../channel/channel-paths.js";
 import {
@@ -302,7 +302,7 @@ const SOCKET_STATE_CLOSED = 3;
 // DingTalkBot
 // ============================================================================
 
-export class DingTalkBot implements MediaSender {
+export class DingTalkBot implements MediaSender, ChannelEventSink {
 	private handler: DingTalkHandler;
 	private config: DingTalkConfig;
 
