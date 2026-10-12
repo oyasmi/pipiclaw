@@ -1,5 +1,5 @@
-import { Agent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Api, ImageContent, Model } from "@earendil-works/pi-ai";
+import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import {
 	AgentSession,
@@ -14,34 +14,21 @@ import {
 	SessionManager,
 	type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir, writeFile } from "fs/promises";
 import { dirname, join, resolve } from "path";
 import { commitActiveSessionRef, resolveActiveSessionFile } from "../channel/active-session-store.js";
 import type { ChannelContext, MediaSender } from "../channel/channel-context.js";
-import { type InboundImage, MAX_INBOUND_IMAGE_BYTES } from "../channel/channel-event.js";
+import type { InboundImage } from "../channel/channel-event.js";
 import { resolveProjectScope } from "../channel/project-scope-store.js";
 import type { ChannelStore } from "../channel/store.js";
-import {
-	formatMissingQueueMessage,
-	formatNoRunningTurn,
-	isKnownCommandName,
-	type RunnerBuiltInCommand,
-	renderBuiltInHelp,
-	slashCommandName,
-} from "../commands/catalog.js";
-import { type PipiclawSettingsManager, TASK_DIGEST_SETTINGS } from "../config/settings.js";
+import { isKnownCommandName, type RunnerBuiltInCommand, slashCommandName } from "../commands/catalog.js";
+import type { PipiclawSettingsManager } from "../config/settings.js";
 import { loadToolsConfigWithDiagnostics } from "../config/tools.js";
 import type { Executor } from "../executor.js";
 import type { FileStore } from "../file-store.js";
 import type { ChannelJobManager } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { handleMemoryCommand } from "../memory/commands.js";
-import {
-	buildChannelIndexForBootstrap,
-	clipJournalTailForBootstrap,
-	clipWorkspaceMemoryForBootstrap,
-} from "../memory/index-budget.js";
-import { readJournalDay } from "../memory/journal.js";
 import { MemoryLifecycle } from "../memory/lifecycle.js";
 import {
 	createMemoryActivityRecorder,
@@ -49,23 +36,17 @@ import {
 	type MemoryActivityRecorder,
 } from "../memory/maintenance-state.js";
 import { getMemoryMaintenanceTuning } from "../memory/maintenance-tuning.js";
-import { hasMemoryBootstrapBlock, renderMemoryBootstrap } from "../memory/render.js";
+import { hasMemoryBootstrapBlock } from "../memory/render.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
-import { listMemoryEntries } from "../memory/store.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
-import {
-	type FallbackRunDeps,
-	PRIMARY_COOLDOWN_MS,
-	runPromptWithFallback,
-	shouldRestorePrimary,
-} from "../models/fallback.js";
+import { type FallbackRunDeps, runPromptWithFallback } from "../models/fallback.js";
 import { findExactModelReferenceMatch, formatModelReference, hasKnownModelPricing } from "../models/reference.js";
 import { createModelRuntime, defaultModel, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";
 import { type ConfigDiagnostic, formatConfigDiagnostic } from "../shared/config-diagnostic.js";
-import { formatLocalTime, localDayKey, localStampForFilename, parseLocalTime } from "../shared/local-time.js";
+import { formatLocalTime, parseLocalTime } from "../shared/local-time.js";
 import { errorMessage } from "../shared/text-utils.js";
 import { isRecord } from "../shared/type-guards.js";
 import { withTimeout } from "../shared/with-timeout.js";
@@ -74,9 +55,9 @@ import { discoverSubAgents, type SubAgentDiscoveryResult } from "../subagents/di
 import type { SubAgentRunManager } from "../subagents/runs.js";
 import { TASK_SESSIONS_DIRNAME, taskSessionPath } from "../tasks/session-path.js";
 import { createPipiclawTools } from "../tools/index.js";
-import { formatSize } from "../tools/truncate.js";
 import { getUsageLedger } from "../usage/ledger.js";
 import type { UsageTotals } from "../usage/totals.js";
+import { handleBuiltinCommand, requireQueuedMessage } from "./builtin-commands.js";
 import { buildPipiclawSystemPrompt } from "./prompt/builder.js";
 import { createPromptBoundaryExtension } from "./prompt/extension.js";
 import {
@@ -91,22 +72,30 @@ import { loadPlaybooks, loadWorkspacePromptResources, type WorkspacePromptResour
 import type { PromptBuildResult } from "./prompt/types.js";
 import { createCommandExtension } from "./session/command-extension.js";
 import { getLastAssistantUsage, isAutoCompactionEndEvent } from "./session/event-guards.js";
+import { ModelSelection } from "./session/model-selection.js";
 import {
 	asSdkSettingsManager,
-	cycleThinkingLevelWithConditionalPersist,
 	DEFAULT_MAIN_THINKING_LEVEL,
 	initializeThinkingLevelCompat,
-	setModelWithThinkingPreservation,
 	setSessionBaseToolsOverride,
-	setThinkingLevelWithConditionalPersist,
 } from "./session/session-adapter.js";
 import { handleSessionEvent } from "./session/session-events.js";
 import { SessionResourceGate } from "./session/session-resource-gate.js";
 import { estimateIncomingMessageTokens, getPreventiveCompactionDecision } from "./turn/context-budget.js";
 import { clipUserInput, formatProgressEntry } from "./turn/progress-formatter.js";
 import { createRunQueue } from "./turn/run-queue.js";
-import { buildTaskDigest, TASK_AGENDA_MAX_UNITS } from "./turn/task-digest.js";
+import {
+	buildFirstTurnMemoryBootstrap,
+	buildTaskDigestForTurn,
+	renderChannelTurnContext,
+} from "./turn/turn-context.js";
 import { renderFallbackSwitch, renderTurnErrorReply } from "./turn/turn-error.js";
+import {
+	formatUserMessage,
+	persistOversizedInput,
+	prepareInboundImages,
+	shouldPreserveRawInput,
+} from "./turn/turn-input.js";
 import { assembleTurnPrompt } from "./turn/turn-prompt.js";
 import { recoverInterruptedTurn } from "./turn/turn-recovery.js";
 import { type TurnHandle, TurnStateMachine } from "./turn/turn-state.js";
@@ -212,7 +201,7 @@ export class ChannelRunner implements AgentRunner {
 	private subAgentDiscovery!: SubAgentDiscoveryResult;
 
 	// --- Mutable across runs ---
-	private activeModel: Model<Api>;
+	private readonly models: ModelSelection;
 	private currentSkills: PipiclawSkillsResult;
 	/** Last built system prompt (spec 025): feeds the boundary footer, /context and the debug manifest. */
 	private lastPromptBuild?: PromptBuildResult;
@@ -238,8 +227,6 @@ export class ChannelRunner implements AgentRunner {
 	);
 	/** Set once transport-level `/new` replaces this generation. A retired runner is never reused. */
 	private retired = false;
-	/** When the primary model last failed and we switched to the backup. null = on primary. */
-	private primaryFailedAt: number | null = null;
 
 	// --- Per run ---
 	private runState: RunState = createEmptyRunState();
@@ -321,7 +308,13 @@ export class ChannelRunner implements AgentRunner {
 				}),
 		});
 
-		this.activeModel = defaultModel;
+		this.models = new ModelSelection({
+			channelId: this.channelId,
+			settingsManager: this.settingsManager,
+			getSession: () => this.session,
+			getSessionSettingsManager: () => this.sessionSettingsManager,
+			getModelRegistry: () => this.modelRegistry,
+		});
 
 		this.memoryLifecycle = new MemoryLifecycle({
 			channelId: this.channelId,
@@ -330,7 +323,7 @@ export class ChannelRunner implements AgentRunner {
 			appHomeDir: this.appHomeDir,
 			getMessages: () => this.session.messages,
 			getSessionEntries: () => this.sessionManager.getBranch(),
-			getModel: () => this.session.model ?? this.activeModel,
+			getModel: () => this.session.model ?? this.models.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			recordMemoryActivity: (event) => this.recordMemoryActivity(event),
 		});
@@ -406,12 +399,12 @@ export class ChannelRunner implements AgentRunner {
 
 		try {
 			await this.ensureSessionReady();
-			await this.maybeRestorePrimaryModel();
+			await this.models.maybeRestorePrimaryModel();
 			this.memoryLifecycle.noteUserTurnStarted();
 			const normalizedInputLength = ctx.message.text.replace(/\r/g, "").trim().length;
 			let oversizedInputPath: string | undefined;
 			if (normalizedInputLength > MAX_USER_MESSAGE_CHARS) {
-				oversizedInputPath = await this.persistOversizedInput(ctx.message.text);
+				oversizedInputPath = await persistOversizedInput(this.channelDir, this.channelId, ctx.message.text);
 				await ctx.respondInThread(
 					oversizedInputPath
 						? `⚠️ 消息过长（${normalizedInputLength} 字符），已截断至约 ${MAX_USER_MESSAGE_CHARS} 字符后处理；完整内容已存到 \`${oversizedInputPath}\`，需要时让我读取这个文件查看被省略的部分。`
@@ -419,8 +412,8 @@ export class ChannelRunner implements AgentRunner {
 				);
 			}
 			const clippedInput = clipUserInput(ctx.message.text, MAX_USER_MESSAGE_CHARS, oversizedInputPath);
-			const userMessage = this.formatUserMessage(clippedInput, ctx.message.userName);
-			const preserveRawInput = this.shouldPreserveRawInput(ctx.message.text);
+			const userMessage = formatUserMessage(clippedInput, ctx.message.userName);
+			const preserveRawInput = shouldPreserveRawInput(ctx.message.text);
 
 			// Ensure channel directory exists
 			await mkdir(this.channelDir, { recursive: true });
@@ -428,7 +421,7 @@ export class ChannelRunner implements AgentRunner {
 			if (!preserveRawInput) {
 				// Channel facts are turn-dynamic by design (spec 025 §7.3): keeping them out of the
 				// system prompt is what lets every channel in a workspace share one cached prefix.
-				channelCapsuleText = this.renderChannelTurnContext();
+				channelCapsuleText = renderChannelTurnContext(this.channelDir);
 
 				// The task digest reads the whole tasks/ directory and depends on nothing the memory
 				// bootstrap below produces, so it runs alongside it rather than queuing behind it.
@@ -438,7 +431,7 @@ export class ChannelRunner implements AgentRunner {
 				// fails the turn exactly as it did when this ran inline. A task step gets none: its brief
 				// already carries its own task, and the channel's other tasks are noise there.
 				const taskDigestPromise = (
-					this.tasksEnabled && !this.taskLoop ? this.buildTaskDigestForTurn() : Promise.resolve("")
+					this.tasksEnabled && !this.taskLoop ? buildTaskDigestForTurn(this.channelDir) : Promise.resolve("")
 				).then(
 					(text) => ({ text }) as { text: string; error?: never },
 					(error: unknown) => ({ error }) as { text?: never; error: unknown },
@@ -448,7 +441,7 @@ export class ChannelRunner implements AgentRunner {
 				// (and the first turn after compaction — see `subscribeToSessionEvents`), never per
 				// turn. Mid-session, the model uses `memory_search` to look things up.
 				if (this.firstTurnMemoryBootstrapPending) {
-					durableMemoryBootstrapText = await this.buildFirstTurnMemoryBootstrap();
+					durableMemoryBootstrapText = await buildFirstTurnMemoryBootstrap(this.channelDir, this.workspaceDir);
 					bootstrapPrepared = true;
 				}
 
@@ -474,7 +467,10 @@ export class ChannelRunner implements AgentRunner {
 			// (spec 049 D7) — a model's image support is looked up here explicitly because the
 			// SDK's own handling of an unsupported model is to silently replace each image block
 			// with a text placeholder.
-			let preparedImages = await this.prepareInboundImages(ctx.message.images);
+			let preparedImages = await prepareInboundImages(
+				ctx.message.images,
+				this.session.model ?? this.models.activeModel,
+			);
 			for (const notice of preparedImages.notices) {
 				await ctx.respondInThread(notice);
 			}
@@ -523,14 +519,17 @@ export class ChannelRunner implements AgentRunner {
 					this.agent.state.messages = messages as typeof this.agent.state.messages;
 				},
 				promptWasSubmitted: () => promptSubmitted,
-				getCurrentModelRef: () => formatModelReference(this.session.model ?? this.activeModel),
-				resolveFallbackModel: () => this.resolveFallbackModel(),
+				getCurrentModelRef: () => formatModelReference(this.session.model ?? this.models.activeModel),
+				resolveFallbackModel: () => this.models.resolveFallbackModel(),
 				setModel: async (model) => {
-					await this.setModelWithThinkingPreservation(model);
+					await this.models.setModelWithThinkingPreservation(model);
 					// The fallback model's vision support can differ from the one this turn started
 					// on; re-resolve against it rather than resend whatever was prepared for the
 					// model that just failed.
-					preparedImages = await this.prepareInboundImages(ctx.message.images);
+					preparedImages = await prepareInboundImages(
+						ctx.message.images,
+						this.session.model ?? this.models.activeModel,
+					);
 					for (const notice of preparedImages.notices) {
 						await ctx.respondInThread(notice);
 					}
@@ -551,7 +550,7 @@ export class ChannelRunner implements AgentRunner {
 					}
 				},
 				markPrimaryFailed: () => {
-					this.primaryFailedAt = Date.now();
+					this.models.markPrimaryFailed();
 				},
 			};
 			fallbackAttempted = await runPromptWithFallback(promptText, fallbackDeps);
@@ -717,7 +716,7 @@ export class ChannelRunner implements AgentRunner {
 					lastAssistantMessage.usage.cacheRead +
 					lastAssistantMessage.usage.cacheWrite
 				: 0;
-			const currentRunModel = this.session.model ?? this.activeModel;
+			const currentRunModel = this.session.model ?? this.models.activeModel;
 			const contextWindow = currentRunModel.contextWindow || 200000;
 
 			log.logUsageSummary(this.runState.logCtx!, this.runState.totalUsage, contextTokens, contextWindow);
@@ -763,43 +762,16 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	async handleBuiltinCommand(ctx: ChannelContext, command: RunnerBuiltInCommand): Promise<void> {
-		try {
-			// `/help` and `/context` read `this.session` (prompt templates, active model).
-			// The session runtime is built asynchronously after construction, so a command
-			// that lands before it is ready would otherwise hit a TypeError (spec 048 F2).
-			await this.ensureSessionReady();
-			switch (command.name) {
-				case "help":
-					await this.sendCommandReply(ctx, this.renderHelpWithDiscovery(command.args), "help");
-					return;
-				case "context":
-					await this.sendCommandReply(ctx, this.renderContextReport(command.args), "context");
-					return;
-				case "stop":
-					await this.sendCommandReply(ctx, formatNoRunningTurn("stop"), "stop");
-					return;
-				case "steer":
-					this.requireQueuedMessage(command.args, "steer");
-					await this.sendCommandReply(ctx, formatNoRunningTurn("steer"), "steer");
-					return;
-				case "followup":
-					this.requireQueuedMessage(command.args, "followup");
-					await this.sendCommandReply(ctx, formatNoRunningTurn("followup"), "followup");
-					return;
-				default: {
-					// The stateless report commands (events/tasks/status/usage/subagents/project — see
-					// `BUILT_IN_COMMANDS`'s `runnerHandled: false` entries) are routed to their own
-					// handlers upstream and never reach here; the narrowed parameter type makes that a
-					// compile-time guarantee.
-					const _exhaustive: never = command.name;
-					throw new Error(`Unhandled built-in command: ${String(_exhaustive)}`);
-				}
-			}
-		} catch (err) {
-			const errMsg = errorMessage(err);
-			log.logWarn("agent.command.failed", "Built-in command failed", { channelId: this.channelId, reason: errMsg });
-			await this.sendCommandReply(ctx, `命令执行失败：${errMsg}`, command.name);
-		}
+		await handleBuiltinCommand(
+			{
+				channelId: this.channelId,
+				ensureSessionReady: () => this.ensureSessionReady(),
+				promptTemplates: () => this.session.promptTemplates,
+				renderContextReport: (args) => this.renderContextReport(args),
+			},
+			ctx,
+			command,
+		);
 	}
 
 	/**
@@ -833,7 +805,7 @@ export class ChannelRunner implements AgentRunner {
 	}
 
 	async queueSteer(text: string, userName?: string, images?: InboundImage[]): Promise<void> {
-		await this.queueBusyMessage(this.requireQueuedMessage(text, "steer"), userName, images);
+		await this.queueBusyMessage(requireQueuedMessage(text, "steer"), userName, images);
 	}
 
 	async flushMemoryForShutdown(): Promise<void> {
@@ -877,27 +849,21 @@ export class ChannelRunner implements AgentRunner {
 			// stop at a schedule gate and never call these.
 			messages: () => [...this.session.messages],
 			sessionEntries: () => [...this.sessionManager.getBranch()],
-			model: this.session.model ?? this.activeModel,
+			model: this.session.model ?? this.models.activeModel,
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			settings: { memoryMaintenance: this.settingsManager.getMemoryMaintenanceSettings() },
 		};
 	}
 
 	getStatusSnapshot(): RunnerStatusSnapshot {
-		const model = this.session.model ?? this.activeModel;
+		const model = this.session.model ?? this.models.activeModel;
 		const contextTokens = this.session.getContextUsage()?.tokens;
-		const fallbackActive = formatModelReference(model) !== formatModelReference(this.activeModel);
 		return {
 			model: formatModelReference(model),
 			contextTokens: typeof contextTokens === "number" ? contextTokens : undefined,
 			contextWindow: model.contextWindow || 200000,
 			thinkingLevel: this.session.thinkingLevel,
-			fallback: fallbackActive
-				? {
-						primary: formatModelReference(this.activeModel),
-						cooldownUntilMs: (this.primaryFailedAt ?? Date.now()) + PRIMARY_COOLDOWN_MS,
-					}
-				: undefined,
+			fallback: this.models.fallbackStatus(model),
 		};
 	}
 
@@ -960,58 +926,12 @@ export class ChannelRunner implements AgentRunner {
 		});
 	}
 
-	/**
-	 * `/help` — the static per-command listing from `commands.ts`, plus (top-level only) the
-	 * prompt templates this session can actually invoke via `/<template-name>`. Workspace skills
-	 * have their own dedicated command (`/skills`) and are deliberately not duplicated here.
-	 * Prompt templates aren't knowable to `renderBuiltInHelp` itself (it is a pure function with
-	 * no session state), so the runner appends them here (review 2026-08-24 §1.9).
-	 */
-	private renderHelpWithDiscovery(args: string): string {
-		const help = renderBuiltInHelp(args);
-		if (args.trim()) {
-			return help;
-		}
-		const sections: string[] = [help];
-		if (this.session.promptTemplates.length > 0) {
-			sections.push(
-				`**提示模板**\n\n${this.session.promptTemplates.map((template) => `- \`/${template.name}\``).join("\n")}`,
-			);
-		}
-		return sections.join("\n\n");
-	}
-
 	/** `/subagents list`'s role-directory health tail — whatever this runner already discovered. */
 	getSubAgentDiscoverySnapshot(): SubAgentDiscoveryResult {
 		return this.subAgentDiscovery;
 	}
 
 	// === Private helpers ===
-
-	/**
-	 * The per-turn channel capsule. It replaces the channel paths that used to sit in
-	 * the system prompt: memory/task/event tools are already bound to this channel, so
-	 * the model only needs the directory when it wants to read a file directly.
-	 */
-	private renderChannelTurnContext(): string {
-		return [
-			"<runtime_turn_context>",
-			`Channel directory: ${this.channelDir}`,
-			"The channel `MEMORY.md` index, `memory/`, `journal/` and `tasks/` live there. Prefer the context supplied with this turn and the channel-bound tools; read those files directly only when you need detail they did not provide.",
-			"</runtime_turn_context>",
-		].join("\n");
-	}
-
-	private async sendCommandReply(ctx: ChannelContext, text: string, commandName?: string): Promise<void> {
-		// Command echoes are ephemeral control-plane traffic, not conversation: keep them out of
-		// log.jsonl so they are never re-consumed as memory-extraction input (review 2026-08-24 §1.2).
-		const title = commandName ? `/${commandName}` : undefined;
-		const delivered = await ctx.respondPlain(text, false, title);
-		if (!delivered) {
-			await ctx.replaceMessage(text);
-			await ctx.flush();
-		}
-	}
 
 	/**
 	 * Buffer one activity event. The write itself is batched by the recorder (see
@@ -1041,111 +961,6 @@ export class ChannelRunner implements AgentRunner {
 		}
 	}
 
-	private requireQueuedMessage(text: string, commandName: "steer" | "followup"): string {
-		const trimmedText = text.trim();
-		if (!trimmedText) {
-			throw new Error(formatMissingQueueMessage(commandName));
-		}
-		return trimmedText;
-	}
-
-	private shouldPreserveRawInput(text: string): boolean {
-		return text.trim().startsWith("/");
-	}
-
-	/**
-	 * Save a message that exceeds the per-turn input budget so its clipped middle stays reachable.
-	 *
-	 * Pasting a long build log or diff is a normal way to start driving work here, and the clip
-	 * keeps head and tail — which is where the failing frames usually are *not*. Landing the
-	 * original under the channel directory puts it inside the paths `read` already allows, so
-	 * recovery is the ordinary paging path rather than a special case.
-	 *
-	 * Best-effort: if the write fails the turn still runs on the clipped text, just without a
-	 * pointer.
-	 */
-	private async persistOversizedInput(text: string): Promise<string | undefined> {
-		try {
-			const dir = join(this.channelDir, "inbox");
-			await mkdir(dir, { recursive: true });
-			const path = join(dir, `message-${localStampForFilename()}.txt`);
-			await writeFile(path, text.replace(/\r/g, ""), { mode: 0o600 });
-			return path;
-		} catch (error) {
-			log.logWarn("agent.input.persist_failed", "Oversized user message could not be saved", {
-				channelId: this.channelId,
-				reason: errorMessage(error),
-			});
-			return undefined;
-		}
-	}
-
-	private formatUserMessage(text: string, userName?: string, now: Date = new Date()): string {
-		return `[${formatLocalTime(now)}] [${userName || "unknown"}]: ${text}`;
-	}
-
-	/**
-	 * Turn `InboundImage`s (already downloaded and persisted by the transport, spec 049) into the
-	 * `ImageContent[]` `AgentSession.prompt`/`steer` accept, plus any notices to surface to the
-	 * user about images that did not make it into this turn.
-	 *
-	 * Two gates apply, both fail *open* toward "still deliver the message" rather than dropping
-	 * the whole turn over one bad attachment:
-	 *
-	 * - The current model's `input` capability (spec 049 D7). A model that does not declare
-	 *   `"image"` support has its image blocks silently replaced with a text placeholder by the
-	 *   SDK's provider layer — exactly the failure this spec exists to fix, so it is checked
-	 *   explicitly here rather than trusted to fail loudly on its own. Re-checked on every call
-	 *   (including a mid-turn steer after a model fallback), since a fallback model's capability
-	 *   can differ from the one the turn started with.
-	 * - A defense-in-depth size re-check against `MAX_INBOUND_IMAGE_BYTES`. The transport already
-	 *   enforces this at download time, but the check is cheap and free of assumptions about how
-	 *   an `InboundImage` reached this method.
-	 *
-	 * An image already marked `unsupportedFormat` (sniffing failed at download time) is skipped
-	 * without its own notice — the `[图片N：格式不支持，已保存]` marker already in the message text
-	 * covers it.
-	 */
-	private async prepareInboundImages(
-		images: InboundImage[] | undefined,
-	): Promise<{ images: ImageContent[]; notices: string[] }> {
-		if (!images || images.length === 0) {
-			return { images: [], notices: [] };
-		}
-
-		const model = this.session.model ?? this.activeModel;
-		if (!model.input.includes("image")) {
-			const modelRef = formatModelReference(model);
-			return {
-				images: [],
-				notices: [
-					`⚠️ 当前模型 ${modelRef} 不支持图片输入，收到的图片已保存但未加入本轮上下文：\n` +
-						images.map((image) => `- \`${image.path}\``).join("\n") +
-						"\n用 `/model` 切换到支持图片的模型后，再让我读取这些图片。",
-				],
-			};
-		}
-
-		const contents: ImageContent[] = [];
-		const notices: string[] = [];
-		for (const image of images) {
-			if (image.unsupportedFormat) continue;
-			if (image.byteSize > MAX_INBOUND_IMAGE_BYTES) {
-				notices.push(
-					`⚠️ 图片 \`${image.path}\`（${formatSize(image.byteSize)}）超过 ${formatSize(MAX_INBOUND_IMAGE_BYTES)} 上限，未加入本轮上下文；需要时让我读取这个文件。`,
-				);
-				continue;
-			}
-			try {
-				const data = await readFile(image.path);
-				contents.push({ type: "image", data: data.toString("base64"), mimeType: image.mimeType });
-			} catch (error) {
-				notices.push(`⚠️ 图片 \`${image.path}\` 读取失败：${errorMessage(error)}`);
-			}
-		}
-		return { images: contents, notices };
-	}
-
 	/**
 	 * Single source of truth for the busy-message window: steer is accepted while
 	 * the prompt is being assembled ("preparing") or while the agent loop is
@@ -1168,7 +983,7 @@ export class ChannelRunner implements AgentRunner {
 		await this.ensureSessionReady();
 
 		const oversized = text.replace(/\r/g, "").trim().length > MAX_USER_MESSAGE_CHARS;
-		const oversizedPath = oversized ? await this.persistOversizedInput(text) : undefined;
+		const oversizedPath = oversized ? await persistOversizedInput(this.channelDir, this.channelId, text) : undefined;
 		const clippedText = clipUserInput(text, MAX_USER_MESSAGE_CHARS, oversizedPath);
 		if (oversized) {
 			log.logWarn("agent.input.clipped", "Queued message clipped", {
@@ -1176,8 +991,8 @@ export class ChannelRunner implements AgentRunner {
 				fields: { limitChars: MAX_USER_MESSAGE_CHARS },
 			});
 		}
-		const queuedMessage = this.formatUserMessage(clippedText, userName);
-		const preparedImages = await this.prepareInboundImages(images);
+		const queuedMessage = formatUserMessage(clippedText, userName);
+		const preparedImages = await prepareInboundImages(images, this.session.model ?? this.models.activeModel);
 		for (const notice of preparedImages.notices) {
 			await this.runState.ctx?.respondInThread(notice);
 		}
@@ -1209,75 +1024,6 @@ export class ChannelRunner implements AgentRunner {
 		await this.sessionResourceGate.requestRefresh();
 	}
 
-	/**
-	 * At turn start, if a fallback is active and the primary's cooldown has elapsed,
-	 * switch back to the preferred model. Silent — no user notice on recovery.
-	 */
-	private async maybeRestorePrimaryModel(): Promise<void> {
-		const current = this.session.model;
-		if (!current || formatModelReference(current) === formatModelReference(this.activeModel)) {
-			this.primaryFailedAt = null;
-			return;
-		}
-		if (!shouldRestorePrimary(this.primaryFailedAt, Date.now())) {
-			return;
-		}
-		try {
-			await this.setModelWithThinkingPreservation(this.activeModel);
-			this.primaryFailedAt = null;
-			log.logInfo(`[${this.channelId}] Restored primary model ${formatModelReference(this.activeModel)}`);
-		} catch (err) {
-			log.logWarn("agent.model.restore_failed", "Primary model restore failed", {
-				channelId: this.channelId,
-				reason: errorMessage(err),
-			});
-		}
-	}
-
-	private async setModelWithThinkingPreservation(model: Model<Api>): Promise<void> {
-		await setModelWithThinkingPreservation(this.session, this.sessionSettingsManager, model);
-	}
-
-	private setThinkingLevelCompat(level: ThinkingLevel): void {
-		setThinkingLevelWithConditionalPersist(this.session, level);
-	}
-
-	private cycleThinkingLevelCompat(): ThinkingLevel | undefined {
-		return cycleThinkingLevelWithConditionalPersist(this.session);
-	}
-
-	/**
-	 * Resolve the configured backup model reference against available models.
-	 * Returns null when unset, unresolvable/ambiguous, or missing an API key —
-	 * each case logs a warning and disables fallback for this turn.
-	 */
-	private async resolveFallbackModel(): Promise<Model<Api> | null> {
-		const reference = this.settingsManager.getFallbackModelReference();
-		if (!reference) {
-			return null;
-		}
-		await this.modelRegistry.refresh();
-		const available = this.modelRegistry.getAvailable();
-		const { match, ambiguous } = findExactModelReferenceMatch(reference, available);
-		if (!match) {
-			log.logWarn("agent.model.fallback_unresolved", "Fallback model skipped", {
-				channelId: this.channelId,
-				fields: { reference, problem: ambiguous ? "ambiguous" : "not found" },
-			});
-			return null;
-		}
-		try {
-			await getApiKeyForModel(this.modelRegistry, match);
-		} catch {
-			log.logWarn("agent.model.fallback_unresolved", "Fallback model skipped", {
-				channelId: this.channelId,
-				fields: { reference, problem: "no API key" },
-			});
-			return null;
-		}
-		return match;
-	}
-
 	private async initializeSession(sessionManager: SessionManager): Promise<void> {
 		// Build the canonical async model/auth runtime and its synchronous read shell.
 		this.modelRuntime = await createModelRuntime({
@@ -1287,8 +1033,10 @@ export class ChannelRunner implements AgentRunner {
 		this.modelRegistry = wrapModelRegistry(this.modelRuntime);
 
 		// Resolve model: prefer saved global default, fall back to first available model.
-		this.activeModel = resolveInitialModel(this.modelRegistry, this.settingsManager);
-		log.logInfo(`Using model: ${this.activeModel.provider}/${this.activeModel.id} (${this.activeModel.name})`);
+		this.models.activeModel = resolveInitialModel(this.modelRegistry, this.settingsManager);
+		log.logInfo(
+			`Using model: ${this.models.activeModel.provider}/${this.models.activeModel.id} (${this.models.activeModel.name})`,
+		);
 		this.subAgentDiscovery = await this.refreshSubAgentDiscovery();
 
 		const initial = await this.createSessionRuntime(sessionManager);
@@ -1390,7 +1138,7 @@ export class ChannelRunner implements AgentRunner {
 		incomingText: string,
 		imageCount: number = 0,
 	): Promise<void> {
-		const currentModel = this.session.model ?? this.activeModel;
+		const currentModel = this.session.model ?? this.models.activeModel;
 		const contextUsage = this.session.getContextUsage();
 		const contextTokens = contextUsage?.tokens;
 		const incomingTokens = estimateIncomingMessageTokens(incomingText, imageCount);
@@ -1528,7 +1276,7 @@ export class ChannelRunner implements AgentRunner {
 					},
 				}),
 				createCommandExtension({
-					getCurrentModel: () => this.session.model ?? this.activeModel,
+					getCurrentModel: () => this.session.model ?? this.models.activeModel,
 					getAvailableModels: async () => {
 						await this.modelRegistry.refresh();
 						return this.modelRegistry.getAvailable();
@@ -1536,14 +1284,14 @@ export class ChannelRunner implements AgentRunner {
 					getSessionStats: () => this.session.getSessionStats(),
 					getThinkingLevel: () => this.session.thinkingLevel,
 					getAvailableThinkingLevels: () => this.session.getAvailableThinkingLevels(),
-					setThinkingLevel: (level) => this.setThinkingLevelCompat(level),
-					cycleThinkingLevel: () => this.cycleThinkingLevelCompat(),
+					setThinkingLevel: (level) => this.models.setThinkingLevelCompat(level),
+					cycleThinkingLevel: () => this.models.cycleThinkingLevelCompat(),
 					getLastResponseModel: () => getLastAssistantUsage(this.session.messages)?.responseModel,
 					switchModel: async (model) => {
-						await this.setModelWithThinkingPreservation(model);
-						this.activeModel = model;
+						await this.models.setModelWithThinkingPreservation(model);
+						this.models.activeModel = model;
 						// Manual /model switch redefines the preferred model and clears fallback state.
-						this.primaryFailedAt = null;
+						this.models.clearFallbackState();
 					},
 					refreshSessionResources: async () => {
 						await this.refreshSessionResources();
@@ -1631,15 +1379,15 @@ export class ChannelRunner implements AgentRunner {
 		const agent = new Agent({
 			initialState: {
 				systemPrompt: "",
-				model: this.activeModel,
+				model: this.models.activeModel,
 				thinkingLevel: DEFAULT_MAIN_THINKING_LEVEL,
 				tools,
 			},
 			convertToLlm,
-			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.activeModel),
+			getApiKey: async () => getApiKeyForModel(this.modelRegistry, this.models.activeModel),
 			streamFn: streamSimple,
 		});
-		this.initializeThinkingLevel(agent, this.activeModel, sessionManager);
+		this.initializeThinkingLevel(agent, this.models.activeModel, sessionManager);
 		const resourceLoader = this.createResourceLoader();
 		// Must precede `new AgentSession`: the session snapshots the loader's extensions in its
 		// constructor (see `loadSessionResources`).
@@ -1726,7 +1474,7 @@ export class ChannelRunner implements AgentRunner {
 			runManager: this.runManager,
 			executor: this.executor,
 			fileStore: this.fileStore,
-			getCurrentModel: () => this.activeModel,
+			getCurrentModel: () => this.models.activeModel,
 			getAvailableModels: () => this.modelRegistry.getAvailable(),
 			resolveApiKey: async (model) => getApiKeyForModel(this.modelRegistry, model),
 			workspaceDir: this.workspaceDir,
@@ -1735,7 +1483,7 @@ export class ChannelRunner implements AgentRunner {
 			channelId: this.channelId,
 			getSubAgentDiscovery: () => this.subAgentDiscovery,
 			getSubAgentModelReference: () => this.settingsManager.getSubAgentModelReference(),
-			resolveFallbackModel: () => this.resolveFallbackModel(),
+			resolveFallbackModel: () => this.models.resolveFallbackModel(),
 			getSessionSearchSettings: () => this.settingsManager.getSessionSearchSettings(),
 			securityConfig: securityLoad.config,
 			toolsConfig: toolsLoad.config,
@@ -1818,46 +1566,6 @@ export class ChannelRunner implements AgentRunner {
 					reason: errorMessage(err),
 				});
 			});
-		});
-	}
-
-	/** Gated by the same master autonomy switch as the task_* tools and the TaskDriver. */
-	private buildTaskDigestForTurn(): Promise<string> {
-		return buildTaskDigest({
-			channelDir: this.channelDir,
-			maxTasks: TASK_DIGEST_SETTINGS.maxTasks,
-			maxChars: TASK_DIGEST_SETTINGS.maxChars,
-			maxUnits: TASK_AGENDA_MAX_UNITS,
-		});
-	}
-
-	/**
-	 * Spec 050, D1: assemble `<memory_bootstrap>` for the first turn of a session — workspace
-	 * MEMORY.md (whole H2 sections, budgeted) + the channel index (full, or budget-tiered) +
-	 * today's journal tail.
-	 */
-	private async buildFirstTurnMemoryBootstrap(): Promise<string> {
-		const readOptionalFile = async (path: string): Promise<string> => {
-			try {
-				return await readFile(path, "utf-8");
-			} catch {
-				return "";
-			}
-		};
-
-		const today = localDayKey();
-		const [entries, workspaceMemory, journalToday] = await Promise.all([
-			listMemoryEntries(this.channelDir).catch(() => []),
-			readOptionalFile(join(this.workspaceDir, "MEMORY.md")),
-			readJournalDay(this.channelDir, today).catch(() => ""),
-		]);
-
-		const index = buildChannelIndexForBootstrap(entries);
-		const journalTail = clipJournalTailForBootstrap(journalToday);
-		return renderMemoryBootstrap({
-			workspaceMemory: clipWorkspaceMemoryForBootstrap(workspaceMemory),
-			channelIndex: entries.length > 0 ? index.text : "",
-			journal: journalTail ? { date: today, text: journalTail } : undefined,
 		});
 	}
 }
