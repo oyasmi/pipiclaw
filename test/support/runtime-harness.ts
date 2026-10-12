@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
-import type { DingTalkBot, DingTalkEvent } from "../../src/dingtalk/bot.js";
+import type { DingTalkBot } from "../../src/dingtalk/bot.js";
+import type { DingTalkEvent } from "../../src/dingtalk/handler.js";
 import { waitFor } from "../e2e/helpers/wait.js";
 import { type CapturedDelivery, E2EFakeDingTalkBot } from "./fake-bot.js";
 import { HarnessDingTalkBot } from "./harness-bot.js";

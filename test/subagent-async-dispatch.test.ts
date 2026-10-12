@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import { describe, expect, it } from "vitest";
-import type { DingTalkEvent } from "../src/dingtalk/bot.js";
+import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import type { Executor } from "../src/executor.js";
 import { createFileStore } from "../src/file-store.js";
 import { createSubAgentInlineTool, type SubAgentToolDetails } from "../src/subagents/tool.js";

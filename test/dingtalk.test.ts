@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkEvent, DingTalkHandler } from "../src/dingtalk/bot.js";
+import type { DingTalkEvent, DingTalkHandler } from "../src/dingtalk/handler.js";
 
 const { axiosMock, fakeClientState } = vi.hoisted(() => {
 	const post = vi.fn();
@@ -127,22 +127,25 @@ function createBot(
 	return { bot, handler, stateDir };
 }
 
+/** The bot's collaborators, reached through their private fields (the bot keeps no state of its own for them). */
 type PrivateBotApi = {
-	onStreamMessage(data: Record<string, unknown>): Promise<void>;
-	downloadMessageFile(downloadCode: string): Promise<{ data: Buffer } | null>;
-	getAccessToken(): Promise<string | null>;
-	setConversationMeta(
-		channelId: string,
-		meta: { conversationId: string; conversationType: string; senderId: string },
-	): void;
-	getConversationMeta(
-		channelId: string,
-	): { conversationId: string; conversationType: string; senderId: string } | null;
-	cleanupIdleChannelCaches(now?: number): void;
-	handleRawMessage(message: { headers?: { messageId?: string }; data: unknown }): {
-		status: "SUCCESS";
-		message: string;
+	tokens: { accessToken: string | null; tokenExpiry: number; get(): Promise<string | null> };
+	conversations: {
+		convMeta: Map<string, unknown>;
+		get(channelId: string): { conversationId: string; conversationType: string; senderId: string } | null;
+		set(channelId: string, meta: { conversationId: string; conversationType: string; senderId: string }): void;
 	};
+	inbound: {
+		onStreamMessage(data: Record<string, unknown>): Promise<void>;
+		handleRawMessage(message: { headers?: { messageId?: string }; data: unknown }): {
+			status: "SUCCESS";
+			message: string;
+		};
+	};
+	connection: { client: unknown; isReconnecting: boolean; doReconnect(immediate?: boolean): Promise<boolean> };
+	queues: Map<string, unknown>;
+	getQueue(channelId: string): unknown;
+	cleanupIdleChannelCaches(now?: number): void;
 };
 
 function getPrivateApi(bot: DingTalkBot): PrivateBotApi {
@@ -193,7 +196,7 @@ describe("dingtalk", () => {
 		const { bot, handler, stateDir } = createBot();
 		const privateApi = getPrivateApi(bot);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "check dm" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -211,7 +214,7 @@ describe("dingtalk", () => {
 			bot,
 		);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "check group" },
 			senderStaffId: "staff_2",
 			senderNick: "Bob",
@@ -243,7 +246,7 @@ describe("dingtalk", () => {
 		const { bot, handler } = createBot({ noteChannelActivity });
 		const privateApi = getPrivateApi(bot);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "hi" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -262,7 +265,7 @@ describe("dingtalk", () => {
 		);
 
 		// A DM carries no title, so the peer's nickname is the only handle it will ever have.
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "hi" },
 			senderStaffId: "staff_2",
 			senderNick: "Bob",
@@ -285,7 +288,7 @@ describe("dingtalk", () => {
 		guarded.bot.sendPlain = vi.fn(async () => true);
 		const guardedApi = getPrivateApi(guarded.bot);
 
-		await guardedApi.onStreamMessage({
+		await guardedApi.inbound.onStreamMessage({
 			text: { content: "blocked" },
 			senderStaffId: "staff_nope",
 			senderNick: "Mallory",
@@ -297,7 +300,7 @@ describe("dingtalk", () => {
 		expect(guardedActivity).not.toHaveBeenCalled();
 		expect(guarded.handler.handleEvent).not.toHaveBeenCalled();
 
-		await guardedApi.onStreamMessage({
+		await guardedApi.inbound.onStreamMessage({
 			text: { content: "keep going" },
 			senderStaffId: "staff_ok",
 			senderNick: "Alice",
@@ -318,7 +321,7 @@ describe("dingtalk", () => {
 		bot.sendPlain = vi.fn(async () => true);
 		const privateApi = getPrivateApi(bot);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "/stop" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -328,7 +331,7 @@ describe("dingtalk", () => {
 		expect(handler.handleStop).toHaveBeenCalledWith("dm_staff_1", bot);
 		expect(bot.sendPlain).toHaveBeenCalledWith("dm_staff_1", "已停止当前回合。", { title: "/stop", markdown: true });
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "/steer focus src" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -342,7 +345,7 @@ describe("dingtalk", () => {
 			"focus src",
 		);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "/followup next task" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -356,7 +359,7 @@ describe("dingtalk", () => {
 			"next task",
 		);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "/events list" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -369,7 +372,7 @@ describe("dingtalk", () => {
 			"list",
 		);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "/status" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -382,7 +385,7 @@ describe("dingtalk", () => {
 			"",
 		);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "plain busy text" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -398,7 +401,7 @@ describe("dingtalk", () => {
 
 		// Read-only runtime commands like /context answer while a turn is streaming too —
 		// no reason to make the user wait for the turn to finish.
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "/context detail" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -419,7 +422,7 @@ describe("dingtalk", () => {
 		bot.sendPlain = vi.fn(async () => true);
 		const privateApi = getPrivateApi(bot);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "/model anthropic/x" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -442,7 +445,7 @@ describe("dingtalk", () => {
 		});
 		const privateApi = getPrivateApi(bot);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "/new" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -466,7 +469,7 @@ describe("dingtalk", () => {
 		bot.sendPlain = vi.fn(async () => true);
 		const privateApi = getPrivateApi(bot);
 
-		await privateApi.onStreamMessage({
+		await privateApi.inbound.onStreamMessage({
 			text: { content: "second message" },
 			senderStaffId: "staff_1",
 			senderNick: "Alice",
@@ -496,24 +499,12 @@ describe("dingtalk", () => {
 			data: { accessToken: "token-1", expireIn: 7200 },
 		});
 
-		await expect(privateApi.getAccessToken()).resolves.toBe("token-1");
-		await expect(privateApi.getAccessToken()).resolves.toBe("token-1");
+		await expect(privateApi.tokens.get()).resolves.toBe("token-1");
+		await expect(privateApi.tokens.get()).resolves.toBe("token-1");
 		expect(axiosMock.post).toHaveBeenCalledTimes(1);
 
-		(
-			bot as unknown as {
-				accessToken: string | null;
-				tokenExpiry: number;
-				tokenRefreshPromise: Promise<string | null> | null;
-			}
-		).accessToken = null;
-		(
-			bot as unknown as {
-				accessToken: string | null;
-				tokenExpiry: number;
-				tokenRefreshPromise: Promise<string | null> | null;
-			}
-		).tokenExpiry = 0;
+		privateApi.tokens.accessToken = null;
+		privateApi.tokens.tokenExpiry = 0;
 
 		let resolveToken: ((value: { data: { accessToken: string; expireIn: number } }) => void) | null = null;
 		axiosMock.post.mockImplementationOnce(
@@ -523,8 +514,8 @@ describe("dingtalk", () => {
 				}),
 		);
 
-		const first = privateApi.getAccessToken();
-		const second = privateApi.getAccessToken();
+		const first = privateApi.tokens.get();
+		const second = privateApi.tokens.get();
 		expect(axiosMock.post).toHaveBeenCalledTimes(2);
 
 		expect(resolveToken).not.toBeNull();
@@ -541,8 +532,8 @@ describe("dingtalk", () => {
 		const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 
 		function setCachedToken(bot: DingTalkBot): void {
-			(bot as unknown as { accessToken: string | null; tokenExpiry: number }).accessToken = "cached-token";
-			(bot as unknown as { accessToken: string | null; tokenExpiry: number }).tokenExpiry = Date.now() / 1000 + 3600;
+			getPrivateApi(bot).tokens.accessToken = "cached-token";
+			getPrivateApi(bot).tokens.tokenExpiry = Date.now() / 1000 + 3600;
 		}
 
 		function mockDownload(fileBytes: Buffer): void {
@@ -563,7 +554,7 @@ describe("dingtalk", () => {
 			mockDownload(JPEG_BYTES);
 			const privateApi = getPrivateApi(bot);
 
-			await privateApi.onStreamMessage({
+			await privateApi.inbound.onStreamMessage({
 				msgtype: "picture",
 				senderStaffId: "staff_1",
 				senderNick: "Alice",
@@ -599,7 +590,7 @@ describe("dingtalk", () => {
 			axiosMock.get.mockRejectedValueOnce(new Error("network down"));
 			const privateApi = getPrivateApi(bot);
 
-			await privateApi.onStreamMessage({
+			await privateApi.inbound.onStreamMessage({
 				msgtype: "picture",
 				senderStaffId: "staff_1",
 				senderNick: "Alice",
@@ -628,7 +619,7 @@ describe("dingtalk", () => {
 			mockDownload(Buffer.from("this is not an image"));
 			const privateApi = getPrivateApi(bot);
 
-			await privateApi.onStreamMessage({
+			await privateApi.inbound.onStreamMessage({
 				msgtype: "picture",
 				senderStaffId: "staff_1",
 				senderNick: "Alice",
@@ -671,7 +662,7 @@ describe("dingtalk", () => {
 			);
 			axiosMock.get.mockResolvedValueOnce({ data: JPEG_BYTES });
 
-			const firstMessage = privateApi.onStreamMessage({
+			const firstMessage = privateApi.inbound.onStreamMessage({
 				msgtype: "picture",
 				senderStaffId: "staff_1",
 				senderNick: "Alice",
@@ -686,7 +677,7 @@ describe("dingtalk", () => {
 			// never awaits `onStreamMessage`) — the second message's own ingestion job is chained
 			// behind the first's on the same channel, so awaiting it here would itself hang until
 			// the first message's download is released below.
-			const secondMessage = privateApi.onStreamMessage({
+			const secondMessage = privateApi.inbound.onStreamMessage({
 				text: { content: "second, no image" },
 				senderStaffId: "staff_1",
 				senderNick: "Alice",
@@ -726,7 +717,7 @@ describe("dingtalk", () => {
 			);
 			axiosMock.get.mockResolvedValueOnce({ data: JPEG_BYTES });
 
-			const pending = privateApi.onStreamMessage({
+			const pending = privateApi.inbound.onStreamMessage({
 				msgtype: "picture",
 				senderStaffId: "staff_1",
 				senderNick: "Alice",
@@ -750,41 +741,41 @@ describe("dingtalk", () => {
 		const { bot } = createBot();
 		const privateApi = getPrivateApi(bot);
 
-		privateApi.setConversationMeta("dm_staff_1", {
+		privateApi.conversations.set("dm_staff_1", {
 			conversationId: "conv_1",
 			conversationType: "1",
 			senderId: "staff_1",
 		});
 
-		(bot as unknown as { convMeta: Map<string, unknown> }).convMeta.clear();
+		privateApi.conversations.convMeta.clear();
 
-		expect(privateApi.getConversationMeta("dm_staff_1")).toEqual({
+		expect(privateApi.conversations.get("dm_staff_1")).toEqual({
 			conversationId: "conv_1",
 			conversationType: "1",
 			senderId: "staff_1",
 		});
 
-		privateApi.setConversationMeta("dm_staff_1", {
+		privateApi.conversations.set("dm_staff_1", {
 			conversationId: "conv_1",
 			conversationType: "1",
 			senderId: "staff_1",
 		});
-		(bot as unknown as { getQueue(channelId: string): unknown }).getQueue("dm_staff_1");
+		privateApi.getQueue("dm_staff_1");
 
 		privateApi.cleanupIdleChannelCaches(Date.now() + 2 * 60 * 60 * 1000);
 
-		expect((bot as unknown as { convMeta: Map<string, unknown> }).convMeta.has("dm_staff_1")).toBe(false);
-		expect((bot as unknown as { queues: Map<string, unknown> }).queues.has("dm_staff_1")).toBe(false);
+		expect(privateApi.conversations.convMeta.has("dm_staff_1")).toBe(false);
+		expect(privateApi.queues.has("dm_staff_1")).toBe(false);
 	});
 
 	it("sends plain DM and group messages using cached metadata", async () => {
 		const { bot } = createBot();
 		const privateApi = getPrivateApi(bot);
-		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).accessToken = "cached-token";
-		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).tokenExpiry = Date.now() / 1000 + 3600;
+		getPrivateApi(bot).tokens.accessToken = "cached-token";
+		getPrivateApi(bot).tokens.tokenExpiry = Date.now() / 1000 + 3600;
 		axiosMock.post.mockResolvedValue({ data: {} });
 
-		privateApi.setConversationMeta("dm_staff_1", {
+		privateApi.conversations.set("dm_staff_1", {
 			conversationId: "conv_1",
 			conversationType: "1",
 			senderId: "staff_1",
@@ -799,7 +790,7 @@ describe("dingtalk", () => {
 			expect.any(Object),
 		);
 
-		privateApi.setConversationMeta("group_conv_2", {
+		privateApi.conversations.set("group_conv_2", {
 			conversationId: "conv_2",
 			conversationType: "2",
 			senderId: "staff_2",
@@ -818,12 +809,12 @@ describe("dingtalk", () => {
 	it("supports append and replace card streaming payloads", async () => {
 		const { bot } = createBot();
 		const privateApi = getPrivateApi(bot);
-		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).accessToken = "cached-token";
-		(bot as unknown as { accessToken: string | null; tokenExpiry: number }).tokenExpiry = Date.now() / 1000 + 3600;
+		getPrivateApi(bot).tokens.accessToken = "cached-token";
+		getPrivateApi(bot).tokens.tokenExpiry = Date.now() / 1000 + 3600;
 		axiosMock.post.mockResolvedValue({ data: {} });
 		axiosMock.put.mockResolvedValue({ data: {} });
 
-		privateApi.setConversationMeta("dm_staff_1", {
+		privateApi.conversations.set("dm_staff_1", {
 			conversationId: "conv_1",
 			conversationType: "1",
 			senderId: "staff_1",
@@ -903,7 +894,7 @@ describe("dingtalk", () => {
 		expect(handler.handleEvent).toHaveBeenCalledTimes(1);
 
 		const socket = createSocketMock(1);
-		(bot as unknown as { client: { socket: typeof socket } }).client = { socket };
+		getPrivateApi(bot).connection.client = { socket };
 
 		await bot.stop();
 		expect(socket.removeAllListeners).toHaveBeenCalledTimes(1);
@@ -939,13 +930,12 @@ describe("dingtalk", () => {
 	it("acks downstream messages and deduplicates repeated deliveries", async () => {
 		const { bot } = createBot();
 		const client = { socketCallBackResponse: vi.fn() };
-		(bot as unknown as { client: { socketCallBackResponse: (id: string, payload: unknown) => void } }).client =
-			client;
 		const privateApi = getPrivateApi(bot);
-		const onStreamMessage = vi.spyOn(privateApi, "onStreamMessage").mockResolvedValue(undefined as never);
+		privateApi.connection.client = client;
+		const onStreamMessage = vi.spyOn(privateApi.inbound, "onStreamMessage").mockResolvedValue(undefined as never);
 
 		expect(
-			privateApi.handleRawMessage({
+			privateApi.inbound.handleRawMessage({
 				headers: { messageId: "mid-1" },
 				data: JSON.stringify({ msgId: "biz-1", text: { content: "hello" } }),
 			}),
@@ -953,7 +943,7 @@ describe("dingtalk", () => {
 		expect(client.socketCallBackResponse).toHaveBeenCalledWith("mid-1", { status: "SUCCESS", message: "OK" });
 		expect(onStreamMessage).toHaveBeenCalledTimes(1);
 
-		privateApi.handleRawMessage({
+		privateApi.inbound.handleRawMessage({
 			headers: { messageId: "mid-1" },
 			data: JSON.stringify({ msgId: "biz-1", text: { content: "hello" } }),
 		});
@@ -998,9 +988,7 @@ describe("dingtalk", () => {
 			// Simulate a half-open socket that ignores normal close.
 		});
 
-		const reconnectPromise = (
-			bot as unknown as { doReconnect: (immediate?: boolean) => Promise<boolean> }
-		).doReconnect(true);
+		const reconnectPromise = getPrivateApi(bot).connection.doReconnect(true);
 		await vi.advanceTimersByTimeAsync(1000);
 		await reconnectPromise;
 
@@ -1102,7 +1090,7 @@ describe("dingtalk", () => {
 			return Promise.resolve();
 		};
 
-		const reconnecting = () => (bot as unknown as { isReconnecting: boolean }).isReconnecting;
+		const reconnecting = () => getPrivateApi(bot).connection.isReconnecting;
 
 		// Socket drops -> immediate reconnect after 1s, which fails.
 		closeHandler!(1006, "drop");

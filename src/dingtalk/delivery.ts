@@ -4,7 +4,7 @@ import type { ChannelStore } from "../channel/store.js";
 import * as log from "../log.js";
 import { formatElapsedZh } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";
-import type { DingTalkBot } from "./bot.js";
+import type { DingTalkBotPort } from "./handler.js";
 
 const MIN_UPDATE_INTERVAL_MS = 800;
 const ROLLING_WINDOW_SIZE = 3;
@@ -50,7 +50,7 @@ class ChannelDeliveryController {
 
 	constructor(
 		private event: ChannelEvent,
-		private bot: DingTalkBot,
+		private bot: DingTalkBotPort,
 		private store: ChannelStore,
 		/** Per-turn override of the channel's configured progress style; see `createDingTalkContext`. */
 		private readonly progressStyleOverride?: ProgressStyle,
@@ -514,7 +514,7 @@ class ChannelDeliveryController {
  */
 export function createDingTalkContext(
 	event: ChannelEvent,
-	bot: DingTalkBot,
+	bot: DingTalkBotPort,
 	store: ChannelStore,
 	progressStyleOverride?: ProgressStyle,
 ): ChannelContext {

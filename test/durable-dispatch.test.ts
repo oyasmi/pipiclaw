@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkEvent } from "../src/dingtalk/bot.js";
+import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import * as log from "../src/log.js";
 import {
 	type DurableDispatchRecord,

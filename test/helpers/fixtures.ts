@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach } from "vitest";
-import type { DingTalkEvent } from "../../src/dingtalk/bot.js";
+import type { DingTalkEvent } from "../../src/dingtalk/handler.js";
 
 export function createFakeEvent(overrides: Partial<DingTalkEvent> = {}): DingTalkEvent {
 	return {

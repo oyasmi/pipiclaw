@@ -1,7 +1,8 @@
 import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DingTalkBot, DingTalkEvent } from "../src/dingtalk/bot.js";
+import type { DingTalkBot } from "../src/dingtalk/bot.js";
+import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import { EventsWatcher } from "../src/events/events.js";
 import type { EventAction, EventsWatcherOptions } from "../src/events/types.js";
 import type { ExecOptions, ExecResult, Executor } from "../src/executor.js";

@@ -3,8 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const http = vi.hoisted(() => ({ post: vi.fn(), put: vi.fn(), defaults: {} }));
 vi.mock("axios", () => ({ default: { ...http, create: () => http, isAxiosError: () => false } }));
 
-import { DingTalkBot, type DingTalkHandler } from "../src/dingtalk/bot.js";
+import { DingTalkBot } from "../src/dingtalk/bot.js";
 import { createDingTalkContext } from "../src/dingtalk/delivery.js";
+import type { DingTalkHandler } from "../src/dingtalk/handler.js";
 import { FakeChannelStore } from "./helpers/fake-store.js";
 import { createFakeEvent, useTempDirs } from "./helpers/fixtures.js";
 
@@ -75,16 +76,14 @@ function setup(template = "template") {
 		stateDir: temp(),
 	});
 	const privateApi = bot as unknown as {
-		accessToken: string;
-		tokenExpiry: number;
-		setConversationMeta(
-			channel: string,
-			meta: { conversationId: string; conversationType: string; senderId: string },
-		): void;
+		tokens: { accessToken: string; tokenExpiry: number };
+		conversations: {
+			set(channel: string, meta: { conversationId: string; conversationType: string; senderId: string }): void;
+		};
 	};
-	privateApi.accessToken = "test-token";
-	privateApi.tokenExpiry = Date.now() / 1000 + 3600;
-	privateApi.setConversationMeta("dm_123", { conversationId: "test", conversationType: "1", senderId: "123" });
+	privateApi.tokens.accessToken = "test-token";
+	privateApi.tokens.tokenExpiry = Date.now() / 1000 + 3600;
+	privateApi.conversations.set("dm_123", { conversationId: "test", conversationType: "1", senderId: "123" });
 	const store = new FakeChannelStore();
 	const context = () => createDingTalkContext(createFakeEvent(), bot, store as never);
 	return { bot, context, ctx: context() };

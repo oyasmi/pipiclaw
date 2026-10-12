@@ -37,9 +37,10 @@ import {
 import { runReportCommand } from "../commands/router.js";
 import { PipiclawSettingsManager } from "../config/settings.js";
 import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
-import { type BusyMessageResult, DingTalkBot, type DingTalkHandler, type StopOutcome } from "../dingtalk/bot.js";
+import { DingTalkBot } from "../dingtalk/bot.js";
 import { type BusyMessageMode, type DingTalkConfig, loadConfig } from "../dingtalk/config.js";
 import { createDingTalkContext } from "../dingtalk/delivery.js";
+import type { BusyMessageResult, DingTalkBotPort, DingTalkHandler, StopOutcome } from "../dingtalk/handler.js";
 import { extensionForMimeType } from "../dingtalk/inbound-media.js";
 import { createEventsWatcher } from "../events/events.js";
 import { createExecutor, type Executor } from "../executor.js";
@@ -354,7 +355,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 	};
 
 	/** Deliver whatever the step asked to say, then hand the runner back to the chat session. */
-	const finishTaskStep = async (channelId: string, taskId: string, bot: DingTalkBot): Promise<void> => {
+	const finishTaskStep = async (channelId: string, taskId: string, bot: DingTalkBotPort): Promise<void> => {
 		const channelDir = ensureChannelDir(options.paths.workspaceDir, channelId);
 		try {
 			const notice = await consumeTaskNotice(channelDir, taskId);
@@ -389,7 +390,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			channelIndex.note(observation);
 		},
 
-		async handleStop(channelId: string, _bot: DingTalkBot): Promise<StopOutcome> {
+		async handleStop(channelId: string, _bot: DingTalkBotPort): Promise<StopOutcome> {
 			const runner = channelRunners.get(channelId);
 			let pausedTaskId: string | undefined;
 			if (runner?.isBusy()) {
@@ -462,7 +463,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 			return { pausedTaskId };
 		},
 
-		async handleNewSession(event: ChannelEvent, _bot: DingTalkBot): Promise<void> {
+		async handleNewSession(event: ChannelEvent, _bot: DingTalkBotPort): Promise<void> {
 			if (isShuttingDown()) return;
 			const previous = sessionResetChains.get(event.channelId) ?? Promise.resolve();
 			const reset = previous
@@ -591,7 +592,7 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 
 		async handleBusyMessage(
 			event: ChannelEvent,
-			bot: DingTalkBot,
+			bot: DingTalkBotPort,
 			mode: BusyMessageMode,
 			queueText: string,
 		): Promise<BusyMessageResult> {
@@ -723,12 +724,11 @@ function createDingTalkHandler(deps: DingTalkHandlerDeps): DingTalkHandler {
 		},
 
 		reserveEvent(event: ChannelEvent): void {
-			// This must remain synchronous. DingTalkBot calls it before awaiting the queued
-			// handler, making the busy state observable to another message in the same tick.
+			// Must stay synchronous: runs before the queued handler is awaited, so busy state shows up at once.
 			getRunner(event.channelId).beginTurn(event.text);
 		},
 
-		async handleEvent(inboundEvent: ChannelEvent, bot: DingTalkBot, _isEvent?: boolean): Promise<void> {
+		async handleEvent(inboundEvent: ChannelEvent, bot: DingTalkBotPort, _isEvent?: boolean): Promise<void> {
 			let event = inboundEvent;
 			if (isShuttingDown()) {
 				log.logInfoEvent("runtime.shutdown.event_ignored", "Event ignored during shutdown", {

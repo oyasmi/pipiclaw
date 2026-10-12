@@ -1,18 +1,9 @@
 /**
- * DingTalk communication layer using dingtalk-stream SDK with AI Card streaming.
- *
- * Handles:
- * - Receiving messages via DingTalk Stream Mode (DWClient)
- * - Responding via AI Card (streaming) or plain markdown (fallback)
- * - Access token management
- * - Per-channel message queuing
+ * DingTalk transport facade: owns the per-channel queues and the public surface the runtime and the
+ * delivery controller call. The Stream socket, access token, AI cards, media and inbound parsing
+ * are separate collaborators (`connection.ts`, `access-token.ts`, `cards.ts`, `media.ts`,
+ * `inbound.ts`) that this class wires together and forwards to.
  */
-import axios from "axios";
-import { DWClient, type DWClientDownStream, TOPIC_ROBOT } from "dingtalk-stream";
-import { existsSync, mkdirSync, readFileSync } from "fs";
-import { dirname, join } from "path";
-// The delivery contract (`ChannelContext`), its traits and the `ResponseMode` vocabulary are
-// transport-neutral and live in channel-context.ts.
 import {
 	type FinalDelivery,
 	finalDeliveryOf,
@@ -24,197 +15,22 @@ import {
 	progressStyleOf,
 	type ResponseMode,
 } from "../channel/channel-context.js";
-import type { ChannelEvent, ChannelEventSink, InboundImage } from "../channel/channel-event.js";
-import type { ChannelObservation } from "../channel/channel-index.js";
-import { getChannelDir } from "../channel/channel-paths.js";
-import {
-	formatBusyHint,
-	parseBuiltInCommand,
-	type RuntimeCommandName,
-	renderBuiltInHelp,
-	slashCommandName,
-} from "../commands/catalog.js";
+import type { ChannelEventSink } from "../channel/channel-event.js";
+import { formatBusyHint, parseBuiltInCommand, renderBuiltInHelp, slashCommandName } from "../commands/catalog.js";
 import * as log from "../log.js";
-import { writeFileAtomicallySync } from "../shared/atomic-file.js";
-import { createSerialQueue } from "../shared/serial-queue.js";
-import { errorMessage } from "../shared/text-utils.js";
-import { isRecord } from "../shared/type-guards.js";
-import { sleepUnref } from "../shared/with-timeout.js";
-import { formatSize } from "../tools/truncate.js";
+import { AccessTokenProvider } from "./access-token.js";
+import { type ConversationMeta, sendRobotMessage } from "./api.js";
+import { CardController } from "./cards.js";
 // Turn serialization is runtime policy; the queue lives in its own module and
 // this transport only consumes it.
 import { ChannelQueue } from "./channel-queue.js";
 import { type BusyMessageMode, type DingTalkConfig, normalizeBusyMessageDefault } from "./config.js";
-import {
-	MAX_INBOUND_IMAGE_BYTES,
-	MAX_INBOUND_IMAGES_PER_MESSAGE,
-	MEDIA_DOWNLOAD_TIMEOUT_MS,
-	type ParsedInboundMessage,
-	parseInboundMessage,
-	sniffImageMimeType,
-} from "./inbound-media.js";
+import { StreamConnection } from "./connection.js";
+import { ConversationMetaStore } from "./conversation-meta.js";
+import type { DingTalkBotPort, DingTalkEvent, DingTalkHandler } from "./handler.js";
+import { InboundMessages } from "./inbound.js";
+import { DingTalkMedia } from "./media.js";
 
-// ============================================================================
-// Types
-// ============================================================================
-
-/** Lowercased extension without the dot ("Report.PDF" → "pdf"); "" when none. */
-function extractFileExtension(fileName: string): string {
-	const dot = fileName.lastIndexOf(".");
-	if (dot < 0 || dot === fileName.length - 1) return "";
-	return fileName.slice(dot + 1).toLowerCase();
-}
-
-/**
- * `DingTalkEvent` is kept as the public name (spec 035 D4: `src/index.ts`'s barrel is a
- * compatibility promise, so exported names there stay stable). Internally the type now lives in
- * `channel-event.ts` as `ChannelEvent`: most producers of this shape are not DingTalk at all
- * (jobs/manager, task-driver, events, subagents/runs all synthesize wakes), so `ChannelEvent` is
- * what the rest of the runtime imports.
- */
-export type DingTalkEvent = ChannelEvent;
-
-export type BusyMessageResult = { kind: "handled" } | { kind: "requeue"; text: string };
-
-/**
- * What `/stop` actually did. Stopping a task-driven turn also pauses that task, which the user
- * has to be told: a disabled task is never picked up again until `/tasks resume <id>`, so silence
- * here reads as "the turn was interrupted" while the whole task has in fact gone quiet.
- */
-export interface StopOutcome {
-	pausedTaskId?: string;
-}
-
-export interface DingTalkHandler {
-	isRunning(channelId: string): boolean;
-	/**
-	 * Note that a real person just wrote in this channel. Called once per accepted inbound
-	 * message, before any busy/command routing, and never for synthetic wakes — see the
-	 * maintenance contract in `channel-index.ts`. Must stay synchronous and cheap.
-	 */
-	noteChannelActivity?(observation: ChannelObservation): void;
-	/**
-	 * Synchronously reserve an inbound turn before the queued async body yields.
-	 * The transport calls this hook, when provided, immediately before `handleEvent`.
-	 */
-	reserveEvent?(event: DingTalkEvent): void;
-	handleEvent(event: DingTalkEvent, bot: DingTalkBot, isEvent?: boolean): Promise<void>;
-	handleStop(channelId: string, bot: DingTalkBot): Promise<StopOutcome>;
-	/** `/new` bypasses the old per-channel queue and live SDK session. */
-	handleNewSession(event: DingTalkEvent, bot: DingTalkBot): Promise<void>;
-	/**
-	 * Render one of the stateless report commands (events/tasks/status/usage/context/subagents) to
-	 * text. Single dispatch point shared by the busy-turn switch below and bootstrap's idle-turn
-	 * switch — both used to hand-copy the same six-case table.
-	 */
-	runRuntimeCommand(event: DingTalkEvent, name: RuntimeCommandName, args: string): Promise<string>;
-	handleBusyMessage(
-		event: DingTalkEvent,
-		bot: DingTalkBot,
-		mode: BusyMessageMode,
-		queueText: string,
-	): Promise<BusyMessageResult>;
-	/**
-	 * Persist one downloaded inbound image under the channel's `inbox/` (spec 049). Owned by
-	 * bootstrap — it holds the workspace root — not the transport, which only knows how to fetch
-	 * bytes over the DingTalk API. `mimeType` is `null` when magic-byte sniffing did not recognize
-	 * a supported image format; the file is still persisted (for the archive/record) but the
-	 * transport excludes it from the model-facing text marker. Returns `null` on a local I/O
-	 * failure, surfaced to the user as "保存失败" — the rest of the message is still delivered.
-	 */
-	persistInboundImage?(
-		channelId: string,
-		image: { data: Buffer; mimeType: string | null },
-	): Promise<InboundImage | null>;
-}
-
-// ============================================================================
-// AI Card State
-// ============================================================================
-
-interface AICard {
-	instanceId: string;
-	conversationId: string;
-	accessToken: string;
-	templateKey: string;
-	createdAt: number;
-	lastUpdated: number;
-	content: string;
-	finished: boolean;
-	pendingWrite?: Promise<boolean>;
-}
-
-interface CardStreamOptions {
-	append: boolean;
-	finalize: boolean;
-	failed: boolean;
-}
-
-interface ConversationMeta {
-	conversationId: string;
-	conversationType: string;
-	senderId: string;
-}
-
-interface DingTalkIncomingMessage {
-	msgId?: string;
-	senderStaffId?: string;
-	senderId?: string;
-	senderNick?: string;
-	conversationId?: string;
-	conversationType?: string;
-	/** Group title. Present on group messages only; DingTalk omits it for DMs. */
-	conversationTitle?: string;
-	msgtype?: string;
-	text?: {
-		content?: string;
-	};
-	content?: {
-		richText?: Array<Record<string, string>>;
-		/** Present on a `picture` message; see `inbound-media.ts`'s `parseInboundMessage`. */
-		downloadCode?: string;
-	};
-}
-
-interface DingTalkSocketLike {
-	readyState?: number;
-	ping?: () => void;
-	close?: () => void;
-	terminate?: () => void;
-	removeAllListeners?: () => void;
-	removeListener?: (event: "error", listener: (error: Error) => void) => void;
-	on(event: "error", listener: (error: Error) => void): void;
-	on(event: "pong", listener: () => void): void;
-	on(event: "close", listener: (code: number, reason: string) => void): void;
-	on(event: "message", listener: (raw: string) => void): void;
-}
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-const DINGTALK_API = "https://api.dingtalk.com";
-// Media upload lives on the legacy oapi host, not the v1.0 api host. It returns a
-// reusable `media_id` that the v1.0 robot send endpoints reference (photoURL /
-// mediaId). The `access_token` query param is the same app access token minted by
-// `/v1.0/oauth2/accessToken` — DingTalk unified the internal-app token across both
-// hosts — so `getAccessToken()` is reused rather than fetching a second token.
-const DINGTALK_OAPI = "https://oapi.dingtalk.com";
-// DingTalk caps robot image messages at 1MB and file messages at 20MB. We reject
-// oversized files before spending an upload round-trip on a request the API rejects.
-const MAX_IMAGE_BYTES = 1024 * 1024;
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
-// Uploads can move up to 20MB; the 15s default HTTP timeout is too tight for that.
-const MEDIA_UPLOAD_TIMEOUT_MS = 60_000;
-// File extensions the `sampleFile` message type accepts (per DingTalk docs).
-const SUPPORTED_FILE_TYPES = new Set(["xlsx", "pdf", "zip", "rar", "doc", "docx", "ppt", "pptx", "csv", "txt"]);
-// Bound every outbound DingTalk HTTP call. Without this, axios waits forever on a
-// hung connection, and a stalled card-streaming request would wedge the delivery
-// sync loop (never resolving flush()), leaving the whole channel permanently busy.
-// A timeout turns "hang" into a normal failure that the existing fallback paths
-// (bounded snapshot replay / sendPlain) already handle.
-const DINGTALK_HTTP_TIMEOUT_MS = 15_000;
-const http = axios.create({ timeout: DINGTALK_HTTP_TIMEOUT_MS });
 // Bounds enqueueStreamMessage (user messages + busy-message requeues), mirroring the
 // existing cap on enqueueEvent. Without a limit, a busy channel getting flooded with
 // messages (or repeated followUp requeues) grows this queue without bound — each item
@@ -227,70 +43,25 @@ const EVENT_QUEUE_LIMIT = 5;
 // on the next update rather than retaining one channel forever.
 const CHANNEL_CACHE_TTL_MS = 60 * 60 * 1000;
 const CHANNEL_CACHE_SWEEP_MS = 10 * 60 * 1000;
-const TOKEN_REFRESH_SECS = 90 * 60; // 1.5 hours (tokens expire after 2 hours)
-const CONNECT_ATTEMPT_TIMEOUT_MS = 10_000;
-const SOCKET_CLOSE_GRACE_MS = 1_000;
-const SOCKET_TERMINATE_GRACE_MS = 250;
-const SOCKET_STATE_CONNECTING = 0;
-const SOCKET_STATE_OPEN = 1;
-const SOCKET_STATE_CLOSING = 2;
-const SOCKET_STATE_CLOSED = 3;
 
-// ============================================================================
-// DingTalkBot
-// ============================================================================
-
-export class DingTalkBot implements MediaSender, ChannelEventSink {
+export class DingTalkBot implements MediaSender, ChannelEventSink, DingTalkBotPort {
 	private handler: DingTalkHandler;
 	private config: DingTalkConfig;
 
-	// Access token cache
-	private accessToken: string | null = null;
-	private tokenExpiry = 0;
-	private tokenRefreshPromise: Promise<string | null> | null = null;
+	private tokens: AccessTokenProvider;
+	private conversations: ConversationMetaStore;
+	private cards: CardController;
+	private media: DingTalkMedia;
+	private inbound: InboundMessages;
+	private connection: StreamConnection;
 
-	// Active AI cards: channelId → AICard
-	private activeCards = new Map<string, AICard>();
-	private cardGenerations = new Map<string, symbol>();
-	private cardCreationAttempted = new Set<symbol>();
-	// Share creation within a turn, but never let a late old turn own a new turn's card.
-	private cardCreationInFlight = new Map<string, { generation: symbol; promise: Promise<AICard | null> }>();
-
-	// Conversation metadata cache: channelId → metadata
-	private convMeta = new Map<string, ConversationMeta>();
 	private channelLastActiveAt = new Map<string, number>();
 
 	// Per-channel queues
 	private queues = new Map<string, ChannelQueue>();
-	// Serializes "resolve inbound image attachments → build event → route" per channel (spec 049
-	// D3): a message needing a download must not be overtaken, in delivery order, by a later
-	// download-free message on the same channel. `pendingInboundIngestCount` lets
-	// `allChannelQueuesIdle()` see this in-flight network work, which `ChannelQueue.isIdle()`
-	// alone cannot — the event has not been built yet, let alone enqueued.
-	private inboundIngestQueue = createSerialQueue<string>();
-	private pendingInboundIngestCount = 0;
 
-	// Connection stability
-	private client: DWClient | null = null;
-	private lastSocketAvailableTime = Date.now();
-	private activeMessageProcessing = false;
-	private keepAliveTimer: NodeJS.Timeout | null = null;
-	private reconnectTimer: NodeJS.Timeout | null = null;
-	// Dedicated timer for the in-flight backoff sleep inside doReconnect, kept
-	// separate from reconnectTimer so an external scheduleReconnect() (e.g. a
-	// WebSocket close event) can never clear the sleep out from under an active
-	// attempt and leave isReconnecting stuck true forever.
-	private reconnectDelayTimer: NodeJS.Timeout | null = null;
-	private reconnectDelayResolve: (() => void) | null = null;
 	private channelCacheSweepTimer: NodeJS.Timeout | null = null;
-	private isReconnecting = false;
 	private isStopped = false;
-	private reconnectAttempts = 0;
-	private hasReportedReady = false;
-
-	// Deduplication cache (Set for O(1) lookup, order array for FIFO eviction)
-	private processedIds = new Set<string>();
-	private processedIdsOrder: string[] = [];
 
 	constructor(handler: DingTalkHandler, config: DingTalkConfig) {
 		this.handler = handler;
@@ -302,6 +73,41 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 		};
 		this.channelCacheSweepTimer = setInterval(() => this.cleanupIdleChannelCaches(), CHANNEL_CACHE_SWEEP_MS);
 		this.channelCacheSweepTimer.unref?.();
+
+		this.tokens = new AccessTokenProvider(this.config);
+		this.conversations = new ConversationMetaStore(this.config, (channelId) => this.touchChannel(channelId));
+		const getAccessToken = () => this.tokens.get();
+		const sendRobot = (meta: ConversationMeta, msgKey: string, msgParam: string) =>
+			sendRobotMessage({ config: this.config, getAccessToken }, meta, msgKey, msgParam);
+		this.cards = new CardController({
+			config: this.config,
+			getAccessToken,
+			getConversationMeta: (channelId) => this.conversations.get(channelId),
+			sendPlain: (channelId, text) => this.sendPlain(channelId, text),
+		});
+		this.media = new DingTalkMedia({
+			config: this.config,
+			handler: this.handler,
+			getAccessToken,
+			getConversationMeta: (channelId) => this.conversations.get(channelId),
+			sendRobotMessage: sendRobot,
+			downloadMessageFile: (downloadCode) => this.downloadMessageFile(downloadCode),
+		});
+		this.connection = new StreamConnection({
+			clientId: this.config.clientId,
+			clientSecret: this.config.clientSecret,
+			isStopped: () => this.isStopped,
+			onRawMessage: (msg) => this.inbound.handleRawMessage(msg),
+		});
+		this.inbound = new InboundMessages({
+			config: this.config,
+			handler: this.handler,
+			conversations: this.conversations,
+			isStopped: () => this.isStopped,
+			ack: (messageId) => this.connection.ack(messageId),
+			resolveInboundAttachments: (channelId, parsed) => this.media.resolveInboundAttachments(channelId, parsed),
+			routeInboundEvent: (event) => this.routeInboundEvent(event),
+		});
 	}
 
 	get busyMessageDefault(): BusyMessageMode {
@@ -318,215 +124,6 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 
 	get finalDelivery(): FinalDelivery {
 		return finalDeliveryOf(this.responseMode);
-	}
-
-	/**
-	 * Mark an ID as processed. Returns true if this is a new ID, false if already seen.
-	 * Maintains a FIFO buffer of at most 200 entries.
-	 */
-	private markProcessed(id: string): boolean {
-		if (this.processedIds.has(id)) return false;
-		this.processedIds.add(id);
-		this.processedIdsOrder.push(id);
-		while (this.processedIdsOrder.length > 200) {
-			this.processedIds.delete(this.processedIdsOrder.shift()!);
-		}
-		return true;
-	}
-
-	private getSocket(): DingTalkSocketLike | null {
-		if (!this.client) {
-			return null;
-		}
-		const socket = Reflect.get(this.client as object, "socket");
-		return this.isSocketLike(socket) ? socket : null;
-	}
-
-	private isSocketLike(value: unknown): value is DingTalkSocketLike {
-		if (!isRecord(value)) {
-			return false;
-		}
-		return typeof value.on === "function";
-	}
-
-	private setTrackedTimeout(callback: () => void, delayMs: number): NodeJS.Timeout {
-		const timer = setTimeout(() => {
-			callback();
-		}, delayMs);
-		timer.unref?.();
-		return timer;
-	}
-
-	private setTrackedInterval(callback: () => void, intervalMs: number): NodeJS.Timeout {
-		const timer = setInterval(callback, intervalMs);
-		timer.unref?.();
-		return timer;
-	}
-
-	private clearKeepAliveTimer(): void {
-		if (this.keepAliveTimer) {
-			clearInterval(this.keepAliveTimer);
-			this.keepAliveTimer = null;
-		}
-	}
-
-	private clearReconnectTimer(): void {
-		if (this.reconnectTimer) {
-			clearTimeout(this.reconnectTimer);
-			this.reconnectTimer = null;
-		}
-	}
-
-	// Cancel the backoff sleep and resolve its pending promise so the awaiting
-	// doReconnect unblocks (and then bails on the isStopped/!client re-check)
-	// instead of hanging forever.
-	private clearReconnectDelay(): void {
-		if (this.reconnectDelayTimer) {
-			clearTimeout(this.reconnectDelayTimer);
-			this.reconnectDelayTimer = null;
-		}
-		if (this.reconnectDelayResolve) {
-			const resolve = this.reconnectDelayResolve;
-			this.reconnectDelayResolve = null;
-			resolve();
-		}
-	}
-
-	private clearAllTimers(): void {
-		this.clearKeepAliveTimer();
-		this.clearReconnectTimer();
-		this.clearReconnectDelay();
-	}
-
-	private async waitForDelay(delayMs: number): Promise<void> {
-		await new Promise<void>((resolve) => {
-			this.reconnectDelayResolve = resolve;
-			this.reconnectDelayTimer = this.setTrackedTimeout(() => {
-				this.reconnectDelayTimer = null;
-				this.reconnectDelayResolve = null;
-				resolve();
-			}, delayMs);
-		});
-	}
-
-	private async waitForSocketState(
-		socket: DingTalkSocketLike,
-		expectedState: number,
-		timeoutMs: number,
-	): Promise<boolean> {
-		const deadline = Date.now() + timeoutMs;
-		while ((socket.readyState ?? SOCKET_STATE_CLOSED) !== expectedState && Date.now() < deadline) {
-			await sleepUnref(25);
-		}
-		return (socket.readyState ?? SOCKET_STATE_CLOSED) === expectedState;
-	}
-
-	private markClientDisconnected(): void {
-		if (!this.client) {
-			return;
-		}
-		Reflect.set(this.client as object, "connected", false);
-		Reflect.set(this.client as object, "registered", false);
-		Reflect.set(this.client as object, "reconnecting", false);
-	}
-
-	private clearClientSocketReference(): void {
-		if (!this.client) {
-			return;
-		}
-		Reflect.set(this.client as object, "socket", undefined);
-	}
-
-	private async cleanupSocket(reason: string): Promise<void> {
-		const socket = this.getSocket();
-		this.markClientDisconnected();
-		if (!socket) {
-			this.clearClientSocketReference();
-			return;
-		}
-
-		socket.removeAllListeners?.();
-		// ws emits an asynchronous error when close() aborts a CONNECTING socket.
-		const ignoreCleanupError = (): void => {};
-		socket.on("error", ignoreCleanupError);
-
-		if ((socket.readyState ?? SOCKET_STATE_CLOSED) !== SOCKET_STATE_CLOSED) {
-			try {
-				socket.close?.();
-			} catch (err) {
-				log.logWarn("dingtalk.socket.close_failed", "Socket close failed", {
-					reason: errorMessage(err),
-					fields: { during: reason },
-				});
-			}
-
-			const closed = await this.waitForSocketState(socket, SOCKET_STATE_CLOSED, SOCKET_CLOSE_GRACE_MS);
-			if (!closed) {
-				log.logWarn("dingtalk.socket.terminating", "Forcing socket termination", { fields: { during: reason } });
-				try {
-					socket.terminate?.();
-				} catch (err) {
-					log.logWarn("dingtalk.socket.terminate_failed", "Socket terminate failed", {
-						reason: errorMessage(err),
-						fields: { during: reason },
-					});
-				}
-				await this.waitForSocketState(socket, SOCKET_STATE_CLOSED, SOCKET_TERMINATE_GRACE_MS);
-			}
-		}
-
-		if ((socket.readyState ?? SOCKET_STATE_CLOSED) === SOCKET_STATE_CLOSED) {
-			socket.removeListener?.("error", ignoreCleanupError);
-		}
-		this.clearClientSocketReference();
-	}
-
-	private async connectWithTimeout(): Promise<void> {
-		if (!this.client) {
-			throw new Error("DingTalk client is not initialized");
-		}
-
-		const connectPromise = Promise.resolve(this.client.connect());
-		let timeoutHandle: NodeJS.Timeout | null = null;
-		const timeoutPromise = new Promise<never>((_, reject) => {
-			timeoutHandle = setTimeout(() => {
-				reject(new Error(`connect timed out after ${CONNECT_ATTEMPT_TIMEOUT_MS}ms`));
-			}, CONNECT_ATTEMPT_TIMEOUT_MS);
-			timeoutHandle.unref?.();
-		});
-
-		try {
-			await Promise.race([connectPromise, timeoutPromise]);
-		} finally {
-			if (timeoutHandle) {
-				clearTimeout(timeoutHandle);
-			}
-		}
-
-		const socket = this.getSocket();
-		if (!socket || socket.readyState !== SOCKET_STATE_OPEN) {
-			throw new Error("stream socket did not reach open state");
-		}
-	}
-
-	private scheduleReconnect(delayMs: number, immediate: boolean): void {
-		if (this.isStopped) {
-			return;
-		}
-		// An attempt is already in flight; it owns the retry loop and will
-		// reschedule itself on failure. Scheduling here would be redundant and,
-		// worse, tear down a just-established socket if the attempt has already
-		// succeeded by the time this fires.
-		if (this.isReconnecting) {
-			return;
-		}
-		this.clearReconnectTimer();
-		this.reconnectTimer = this.setTrackedTimeout(() => {
-			this.reconnectTimer = null;
-			this.doReconnect(immediate).catch((err) => {
-				log.logWarn("dingtalk.reconnect.failed", "Reconnect failed", { reason: errorMessage(err) });
-			});
-		}, delayMs);
 	}
 
 	// ==========================================================================
@@ -550,175 +147,13 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 			fields: { clientIdPrefix: this.config.clientId.substring(0, 8) },
 		});
 
-		this.clearAllTimers();
-
-		const clientOptions = {
-			clientId: this.config.clientId,
-			clientSecret: this.config.clientSecret,
-			autoReconnect: false,
-			keepAlive: false,
-		} as ConstructorParameters<typeof DWClient>[0] & { autoReconnect: boolean };
-
-		this.client = new DWClient(clientOptions);
-
-		this.client.registerCallbackListener(TOPIC_ROBOT, (msg: DWClientDownStream) => {
-			return this.handleRawMessage(msg);
-		});
-
-		const connected = await this.doReconnect(true); // Initial connection
-		if (!connected) {
-			log.logWarn("dingtalk.connect.pending", "Initial stream connection not ready; retrying in background");
-		}
-	}
-
-	private handleRawMessage(msg: DWClientDownStream): { status: "SUCCESS"; message: string } {
-		// 1. Immediate ACK
-		if (msg.headers?.messageId && this.client) {
-			this.client.socketCallBackResponse(msg.headers.messageId, { status: "SUCCESS", message: "OK" });
-		}
-
-		// 2. Protocol deduplication
-		const messageId = msg.headers?.messageId;
-		if (messageId && !this.markProcessed(messageId)) {
-			return { status: "SUCCESS", message: "OK" };
-		}
-
-		try {
-			const parsedData = typeof msg.data === "string" ? JSON.parse(msg.data) : msg.data;
-			const data: DingTalkIncomingMessage = isRecord(parsedData) ? parsedData : {};
-
-			// 3. Business logic deduplication
-			const msgId = data.msgId;
-			if (msgId && !this.markProcessed(msgId)) {
-				return { status: "SUCCESS", message: "OK" };
-			}
-
-			// Fire-and-forget processing
-			this.onStreamMessage(data).catch((err: unknown) => {
-				log.logWarn("dingtalk.handler.failed", "Message handler failed", { reason: errorMessage(err) });
-			});
-		} catch (err) {
-			log.logWarn("dingtalk.message.parse_failed", "Message parse failed", { reason: errorMessage(err) });
-		}
-
-		return { status: "SUCCESS", message: "OK" };
-	}
-
-	private async doReconnect(immediate = false): Promise<boolean> {
-		if (this.isReconnecting || this.isStopped || !this.client) return false;
-		this.isReconnecting = true;
-		let connectionFailed = false;
-		let connected = false;
-		this.clearReconnectTimer();
-		this.clearKeepAliveTimer();
-
-		if (!immediate && this.reconnectAttempts > 0) {
-			const delay = Math.min(1000 * 2 ** this.reconnectAttempts + Math.random() * 1000, 30000);
-			log.logEvent("info", "runtime.dingtalk.reconnect_scheduled", "Reconnect scheduled", {
-				fields: { delayMs: delay },
-			});
-			await this.waitForDelay(delay);
-			if (this.isStopped || !this.client) {
-				this.isReconnecting = false;
-				return false;
-			}
-		}
-
-		try {
-			const socket = this.getSocket();
-			const readyState = socket?.readyState;
-			if (
-				readyState === SOCKET_STATE_CONNECTING ||
-				readyState === SOCKET_STATE_OPEN ||
-				readyState === SOCKET_STATE_CLOSING ||
-				readyState === SOCKET_STATE_CLOSED
-			) {
-				await this.cleanupSocket("reconnect");
-			}
-
-			await this.connectWithTimeout();
-
-			this.lastSocketAvailableTime = Date.now();
-			this.reconnectAttempts = 0; // Success, reset backoff
-			log.logEvent("info", "runtime.dingtalk.stream_connected", "Connected to stream");
-			if (!this.hasReportedReady) {
-				log.logConnected();
-				this.hasReportedReady = true;
-			}
-			connected = true;
-
-			// Setup keep alive
-			this.clearKeepAliveTimer();
-			this.keepAliveTimer = this.setTrackedInterval(() => {
-				if (this.isStopped) return;
-
-				const elapsed = Date.now() - this.lastSocketAvailableTime;
-				if (elapsed > 90 * 1000 && !this.activeMessageProcessing) {
-					// No pong / activity for >90s: the socket is (half-)dead and may
-					// never emit a close event. Proactively force a reconnect instead
-					// of waiting indefinitely. scheduleReconnect no-ops if an attempt
-					// is already in flight or the bot has stopped.
-					log.logWarn("dingtalk.connection.timeout", "Connection timeout (>90s); forcing reconnect");
-					this.scheduleReconnect(1000, true);
-					return;
-				}
-
-				try {
-					const s = this.getSocket();
-					if (s?.readyState === 1) {
-						s.ping?.();
-					}
-				} catch (_err) {
-					// Ignore
-				}
-			}, 30 * 1000);
-
-			// Setup native socket events
-			const s = this.getSocket();
-
-			s?.on("pong", () => {
-				this.lastSocketAvailableTime = Date.now();
-			});
-
-			s?.on("close", (code: number, reason: string) => {
-				log.logWarn("dingtalk.socket.closed", "WebSocket closed", { fields: { code, reason } });
-				if (this.isStopped) return;
-				this.scheduleReconnect(1000, true);
-			});
-
-			s?.on("message", (raw: string) => {
-				try {
-					const msg = JSON.parse(raw);
-					if (msg.type === "SYSTEM" && msg.headers?.topic === "disconnect") {
-						log.logWarn("dingtalk.connection.disconnected", "Server sent a disconnect event");
-						if (!this.isStopped) {
-							this.doReconnect(true).catch(() => {});
-						}
-					}
-				} catch (_e) {
-					// skip
-				}
-			});
-		} catch (err) {
-			await this.cleanupSocket("reconnect failure");
-			this.reconnectAttempts++;
-			connectionFailed = true;
-			log.logWarn("dingtalk.connect.failed", "Connection failed", { reason: errorMessage(err) });
-		} finally {
-			this.isReconnecting = false;
-		}
-
-		// Auto-retry on failure with exponential backoff
-		if (connectionFailed && !this.isStopped) {
-			this.scheduleReconnect(0, false);
-		}
-		return connected;
+		await this.connection.start();
 	}
 
 	async stop(): Promise<void> {
 		log.logInfoEvent("dingtalk.bot.stopping", "Stopping bot");
 		this.isStopped = true;
-		this.clearAllTimers();
+		this.connection.clearAllTimers();
 		if (this.channelCacheSweepTimer) {
 			clearInterval(this.channelCacheSweepTimer);
 			this.channelCacheSweepTimer = null;
@@ -726,15 +161,7 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 		for (const queue of this.queues.values()) {
 			queue.stop();
 		}
-		if (this.client) {
-			try {
-				await this.cleanupSocket("stop");
-			} catch (err) {
-				log.logWarn("dingtalk.disconnect.failed", "Clean disconnect failed", { reason: errorMessage(err) });
-			} finally {
-				this.client = null;
-			}
-		}
+		await this.connection.disconnect();
 	}
 
 	/**
@@ -758,13 +185,12 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 			fields: { messageLength: event.text.length },
 		});
 		queue.enqueue(async () => {
-			this.activeMessageProcessing = true;
+			this.connection.beginMessageProcessing();
 			try {
 				this.handler.reserveEvent?.(event);
 				await this.handler.handleEvent(event, this, true);
 			} finally {
-				this.activeMessageProcessing = false;
-				this.lastSocketAvailableTime = Date.now();
+				this.connection.endMessageProcessing();
 			}
 		});
 		return true;
@@ -785,151 +211,69 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 			return;
 		}
 		queue.enqueue(async () => {
-			this.activeMessageProcessing = true;
+			this.connection.beginMessageProcessing();
 			try {
 				this.handler.reserveEvent?.(queuedEvent);
 				await this.handler.handleEvent(queuedEvent, this);
 			} finally {
-				this.activeMessageProcessing = false;
-				this.lastSocketAvailableTime = Date.now();
+				this.connection.endMessageProcessing();
 			}
 		});
 	}
 
 	// ==========================================================================
-	// AI Card operations
+	// AI Card operations (see cards.ts)
 	// ==========================================================================
 
 	/** Capture the current turn's identity; close, /stop and /new invalidate it. */
 	getCardGeneration(channelId: string): symbol {
-		let generation = this.cardGenerations.get(channelId);
-		if (!generation) {
-			generation = Symbol(channelId);
-			this.cardGenerations.set(channelId, generation);
-		}
-		return generation;
+		return this.cards.getCardGeneration(channelId);
 	}
 
 	isCardGenerationCurrent(channelId: string, generation: symbol): boolean {
-		return this.cardGenerations.get(channelId) === generation;
+		return this.cards.isCardGenerationCurrent(channelId, generation);
 	}
 
 	/** Get or create an AI card without joining an earlier turn's in-flight creation. */
-	async ensureCard(channelId: string, generation = this.getCardGeneration(channelId)): Promise<void> {
-		if (!this.config.cardTemplateId || !this.isCardGenerationCurrent(channelId, generation)) return;
-		const existing = this.activeCards.get(channelId);
-		if (existing && !existing.finished) return;
-		await this.createCard(channelId, generation);
+	async ensureCard(channelId: string, generation?: symbol): Promise<void> {
+		return this.cards.ensureCard(channelId, generation);
 	}
 
-	/**
-	 * Replace the active card content with a full snapshot.
-	 */
+	/** Replace the active card content with a full snapshot. */
 	async replaceCard(
 		channelId: string,
 		content: string,
 		finalize: boolean = false,
 		failed: boolean = false,
-		generation = this.getCardGeneration(channelId),
+		generation?: symbol,
 	): Promise<boolean> {
-		return this.writeCard(channelId, content, { append: false, finalize, failed }, generation);
+		return this.cards.replaceCard(channelId, content, finalize, failed, generation);
 	}
 
-	/**
-	 * Append a delta to the active card transcript.
-	 */
+	/** Append a delta to the active card transcript. */
 	async appendToCard(
 		channelId: string,
 		content: string,
 		finalize: boolean = false,
 		failed: boolean = false,
-		generation = this.getCardGeneration(channelId),
+		generation?: symbol,
 	): Promise<boolean> {
-		return this.writeCard(channelId, content, { append: true, finalize, failed }, generation);
+		return this.cards.appendToCard(channelId, content, finalize, failed, generation);
 	}
 
-	/**
-	 * Shared body of `replaceCard`/`appendToCard`: whether to open a fresh card differs between the
-	 * two (a full-snapshot replace opens one for a finalize/failed close too; a delta append only
-	 * opens one for genuinely new content), so that predicate stays keyed on `append` rather than
-	 * being collapsed away — everything after it (stream, then drop the card on finalize/failed/a
-	 * failed stream) is identical either way.
-	 */
-	private async writeCard(
-		channelId: string,
-		content: string,
-		options: { append: boolean; finalize: boolean; failed: boolean },
-		generation: symbol,
-	): Promise<boolean> {
-		if (!this.isCardGenerationCurrent(channelId, generation)) return false;
-		const { append, finalize, failed } = options;
-		if (append && !content && !finalize && !failed) {
-			return true;
-		}
-
-		let card = this.activeCards.get(channelId);
-		const shouldEnsure = append
-			? !finalize && !failed && content.trim().length > 0
-			: content.trim().length > 0 || !finalize || failed;
-		if ((!card || card.finished) && this.config.cardTemplateId && shouldEnsure) {
-			await this.ensureCard(channelId, generation);
-			if (!this.isCardGenerationCurrent(channelId, generation)) return false;
-			card = this.activeCards.get(channelId);
-		}
-		if (!card || card.finished) {
-			return false;
-		}
-
-		// Never erase a visible card, including callers finishing with no new text.
-		const snapshot = !append && !content.trim() ? card.content || "处理已结束。" : content;
-		const streamed = await this.streamCard(card, snapshot, { append, finalize, failed });
-		if (streamed && (finalize || failed) && this.activeCards.get(channelId) === card) {
-			this.activeCards.delete(channelId);
-		}
-		return streamed;
-	}
-
-	/**
-	 * Finalize and remove the active card for a channel.
-	 */
-	async finalizeCard(
-		channelId: string,
-		content: string,
-		generation = this.getCardGeneration(channelId),
-	): Promise<boolean> {
-		if (!content.trim() || !this.isCardGenerationCurrent(channelId, generation)) return false;
-		const finalized = await this.replaceCard(channelId, content, true, false, generation);
-		if (!finalized && this.isCardGenerationCurrent(channelId, generation)) {
-			return this.sendPlain(channelId, content);
-		}
-		return finalized;
+	/** Finalize and remove the active card for a channel. */
+	async finalizeCard(channelId: string, content: string, generation?: symbol): Promise<boolean> {
+		return this.cards.finalizeCard(channelId, content, generation);
 	}
 
 	/** Finish progress only: never create a card or send a fallback chat message. */
-	async finalizeExistingCard(
-		channelId: string,
-		content: string,
-		generation = this.getCardGeneration(channelId),
-	): Promise<boolean> {
-		if (!this.isCardGenerationCurrent(channelId, generation) || !this.activeCards.has(channelId)) return false;
-		return this.replaceCard(channelId, content, true, false, generation);
+	async finalizeExistingCard(channelId: string, content: string, generation?: symbol): Promise<boolean> {
+		return this.cards.finalizeExistingCard(channelId, content, generation);
 	}
 
 	/** Invalidate this turn's local state. This is not a remote message deletion. */
-	discardCard(channelId: string, generation = this.cardGenerations.get(channelId)): void {
-		if (!generation || !this.isCardGenerationCurrent(channelId, generation)) return;
-		this.cardGenerations.delete(channelId);
-		this.cardCreationAttempted.delete(generation);
-		const card = this.activeCards.get(channelId);
-		this.activeCards.delete(channelId);
-		// /stop and /new may invalidate a turn before its controller gets to finish.
-		if (card && !card.finished) {
-			void this.streamCard(card, `${card.content || "正在处理…"}\n\n处理已结束。`, {
-				append: false,
-				finalize: true,
-				failed: false,
-			});
-		}
+	discardCard(channelId: string, generation?: symbol): void {
+		this.cards.discardCard(channelId, generation);
 	}
 
 	/**
@@ -944,7 +288,7 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 	 * 2026-08-24 §1.3c).
 	 */
 	async sendPlain(channelId: string, text: string, opts?: { title?: string; markdown?: boolean }): Promise<boolean> {
-		const meta = this.getConversationMeta(channelId);
+		const meta = this.conversations.get(channelId);
 		if (!meta) {
 			log.logWarn("dingtalk.send.no_metadata", "Plain message not sent: no conversation metadata", {
 				channelId: channelId,
@@ -957,590 +301,24 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 		const msgKey = hasMarkdown ? "sampleMarkdown" : "sampleText";
 		const msgParam = hasMarkdown ? JSON.stringify({ text, title }) : JSON.stringify({ content: text });
 
-		return this.sendRobotMessage(meta, msgKey, msgParam);
+		return sendRobotMessage({ config: this.config, getAccessToken: () => this.tokens.get() }, meta, msgKey, msgParam);
 	}
 
 	// ==========================================================================
-	// Media (image / file) delivery — MediaSender contract
+	// Media (image / file) delivery — MediaSender contract (see media.ts)
 	// ==========================================================================
 
-	/**
-	 * Deliver a local file to a channel as a native attachment. Uploads the bytes
-	 * to get a `media_id`, then sends a `sampleImageMsg` (inline image) or
-	 * `sampleFile` (downloadable file) robot message. `channelId` is supplied by
-	 * the runtime (the tool is bound to its channel at build time), never by the
-	 * model, so an agent cannot target a channel other than its own.
-	 */
-	async sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult> {
-		const isImage = media.kind === "image";
-		const limit = isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
-		if (media.data.length > limit) {
-			return {
-				ok: false,
-				error: `File is ${(media.data.length / 1024 / 1024).toFixed(1)}MB, exceeds the ${limit / 1024 / 1024}MB DingTalk limit for ${media.kind} messages.`,
-			};
-		}
-
-		const fileType = extractFileExtension(media.fileName);
-		if (!isImage && !SUPPORTED_FILE_TYPES.has(fileType)) {
-			return {
-				ok: false,
-				error: `DingTalk file messages do not support the "${fileType || "(none)"}" type. Supported: ${[...SUPPORTED_FILE_TYPES].join(", ")}.`,
-			};
-		}
-
-		const meta = this.getConversationMeta(channelId);
-		if (!meta) {
-			return { ok: false, error: "No conversation is known for this channel yet; cannot deliver a file." };
-		}
-
-		const mediaId = await this.uploadMedia(isImage ? "image" : "file", media.data, media.fileName);
-		if (!mediaId) {
-			return { ok: false, error: "Failed to upload the file to DingTalk (see server logs)." };
-		}
-
-		const { msgKey, msgParam } = isImage
-			? { msgKey: "sampleImageMsg", msgParam: JSON.stringify({ photoURL: mediaId }) }
-			: {
-					msgKey: "sampleFile",
-					msgParam: JSON.stringify({ mediaId, fileName: media.fileName, fileType }),
-				};
-
-		const sent = await this.sendRobotMessage(meta, msgKey, msgParam);
-		return sent ? { ok: true } : { ok: false, error: "DingTalk rejected the file message (see server logs)." };
+	sendMedia(channelId: string, media: OutboundMedia): Promise<MediaSendResult> {
+		return this.media.sendMedia(channelId, media);
 	}
 
 	/**
-	 * Upload raw bytes to DingTalk and return the reusable `media_id`, or null on
-	 * failure. The upload endpoint lives on the legacy oapi host and answers 200
-	 * with a non-zero `errcode` on failure, so the body is inspected explicitly.
+	 * Inbound file fetch used while resolving attachments (`media.ts`). `protected` so the
+	 * deterministic e2e harness can override it and run the inbound path with zero network, the
+	 * same pattern `HarnessDingTalkBot` already uses for outbound calls.
 	 */
-	private async uploadMedia(type: "image" | "file", data: Buffer, fileName: string): Promise<string | null> {
-		const token = await this.getAccessToken();
-		if (!token) return null;
-
-		const form = new FormData();
-		form.append("media", new Blob([new Uint8Array(data)]), fileName);
-
-		try {
-			const resp = await http.post(
-				`${DINGTALK_OAPI}/media/upload?access_token=${encodeURIComponent(token)}&type=${type}`,
-				form,
-				// Override the 15s default: a multi-MB upload over a slow link can take
-				// longer, and unlike card streaming this call is not on the delivery loop.
-				{ timeout: MEDIA_UPLOAD_TIMEOUT_MS },
-			);
-			const body = isRecord(resp.data) ? resp.data : {};
-			if (body.errcode && body.errcode !== 0) {
-				log.logWarn("dingtalk.media.upload_failed", "Media upload failed", {
-					reason: String(body.errmsg ?? ""),
-					fields: { errcode: body.errcode },
-				});
-				return null;
-			}
-			const mediaId = typeof body.media_id === "string" ? body.media_id : null;
-			if (!mediaId) {
-				log.logWarn("dingtalk.media.upload_failed", "Media upload returned no media_id", {
-					reason: JSON.stringify(body),
-				});
-			}
-			return mediaId;
-		} catch (err) {
-			if (axios.isAxiosError(err) && err.response) {
-				log.logWarn("dingtalk.media.upload_failed", "Media upload failed", {
-					reason: JSON.stringify(err.response.data),
-					fields: { status: err.response.status },
-				});
-			} else {
-				log.logWarn("dingtalk.media.upload_failed", "Media upload failed", { reason: errorMessage(err) });
-			}
-			return null;
-		}
-	}
-
-	/**
-	 * Two-step DingTalk inbound file download (spec 049): `messageFiles/download` exchanges the
-	 * message's `downloadCode` for a short-lived `downloadUrl`, then that URL is fetched for the
-	 * actual bytes. Both hops reuse `getAccessToken()` — the same app access token works across
-	 * DingTalk's hosts, as the comment on `DINGTALK_OAPI` above explains for the outbound side.
-	 *
-	 * This runs from `onStreamMessage`'s per-channel ingestion queue, never from inside a turn: a
-	 * busy channel can queue a message for minutes (`USER_MESSAGE_QUEUE_LIMIT`), and by the time a
-	 * queued turn actually ran, a `downloadCode`/`downloadUrl` fetched only then could easily have
-	 * already expired.
-	 *
-	 * `protected` so the deterministic e2e harness can override it and run this path with zero
-	 * network, the same pattern `HarnessDingTalkBot` already uses for outbound calls.
-	 */
-	protected async downloadMessageFile(downloadCode: string): Promise<{ data: Buffer } | null> {
-		const token = await this.getAccessToken();
-		if (!token) return null;
-
-		const robotCode = this.config.robotCode || this.config.clientId;
-
-		try {
-			const downloadUrlResp = await http.post(
-				`${DINGTALK_API}/v1.0/robot/messageFiles/download`,
-				{ robotCode, downloadCode },
-				{ headers: { "x-acs-dingtalk-access-token": token } },
-			);
-			const downloadUrl = isRecord(downloadUrlResp.data) ? downloadUrlResp.data.downloadUrl : undefined;
-			if (typeof downloadUrl !== "string" || !downloadUrl) {
-				log.logWarn("dingtalk.file.download_failed", "Inbound file download returned no downloadUrl", {
-					reason: JSON.stringify(downloadUrlResp.data),
-				});
-				return null;
-			}
-
-			const fileResp = await http.get(downloadUrl, {
-				responseType: "arraybuffer",
-				// Reject an oversized body before it fully lands in memory rather than after.
-				maxContentLength: MAX_INBOUND_IMAGE_BYTES,
-				timeout: MEDIA_DOWNLOAD_TIMEOUT_MS,
-			});
-			return { data: Buffer.from(fileResp.data as ArrayBuffer) };
-		} catch (err) {
-			if (axios.isAxiosError(err) && err.response) {
-				log.logWarn("dingtalk.file.download_failed", "Inbound file download failed", {
-					reason: JSON.stringify(err.response.data),
-					fields: { status: err.response.status },
-				});
-			} else {
-				log.logWarn("dingtalk.file.download_failed", "Inbound file download failed", { reason: errorMessage(err) });
-			}
-			return null;
-		}
-	}
-
-	/**
-	 * Resolve one parsed message's image credentials into persisted `InboundImage`s and a text
-	 * with every `[图片N]` marker either left as-is (success) or replaced with a reason (spec 049
-	 * D8): a download failure, an unrecognized format, an oversized file, or a message that
-	 * simply carried more images than `MAX_INBOUND_IMAGES_PER_MESSAGE` allows. A failure on one
-	 * image never drops the rest of the message — only that one marker changes.
-	 *
-	 * No-op (no network call at all) when the message carries no image credentials, so a plain
-	 * text message never pays for this method's existence.
-	 */
-	private async resolveInboundAttachments(
-		channelId: string,
-		parsed: ParsedInboundMessage,
-	): Promise<{ text: string; images: InboundImage[] }> {
-		if (parsed.downloadCodes.length === 0) {
-			return { text: parsed.text, images: [] };
-		}
-
-		let text = parsed.text;
-		const images: (InboundImage | undefined)[] = [];
-		const replaceMarker = (index: number, replacement: string) => {
-			text = text.replace(`[图片${index + 1}]`, replacement);
-		};
-
-		await Promise.all(
-			parsed.downloadCodes.map(async (downloadCode, index) => {
-				const marker = index + 1;
-				if (index >= MAX_INBOUND_IMAGES_PER_MESSAGE) {
-					replaceMarker(index, `[图片${marker}：超出单条消息图片数量上限，已丢弃]`);
-					return;
-				}
-
-				const downloaded = await this.downloadMessageFile(downloadCode);
-				if (!downloaded) {
-					replaceMarker(index, `[图片${marker}：接收失败]`);
-					return;
-				}
-
-				if (downloaded.data.byteLength > MAX_INBOUND_IMAGE_BYTES) {
-					replaceMarker(index, `[图片${marker}：文件过大（${formatSize(downloaded.data.byteLength)}），已丢弃]`);
-					return;
-				}
-
-				const mimeType = sniffImageMimeType(downloaded.data);
-				const persisted = await this.handler.persistInboundImage?.(channelId, {
-					data: downloaded.data,
-					mimeType,
-				});
-				if (!persisted) {
-					replaceMarker(index, `[图片${marker}：保存失败]`);
-					return;
-				}
-
-				if (!mimeType) {
-					// Persisted for the record, but never handed to a model — see the handler
-					// contract's doc comment on `persistInboundImage`.
-					replaceMarker(index, `[图片${marker}：格式不支持，已保存]`);
-				}
-				images[index] = persisted;
-			}),
-		);
-
-		return { text, images: images.filter((image): image is InboundImage => image !== undefined) };
-	}
-
-	/**
-	 * POST a robot message with an arbitrary msgKey/msgParam, routing DM vs group
-	 * to the correct endpoint. The single outbound path for every non-card message:
-	 * plain text/markdown, images, and files.
-	 */
-	private async sendRobotMessage(meta: ConversationMeta, msgKey: string, msgParam: string): Promise<boolean> {
-		const token = await this.getAccessToken();
-		if (!token) return false;
-
-		const robotCode = this.config.robotCode || this.config.clientId;
-		const isGroup = meta.conversationType === "2";
-		const url = isGroup
-			? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
-			: `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
-
-		const body: Record<string, unknown> = { robotCode, msgKey, msgParam };
-		if (isGroup) {
-			body.openConversationId = meta.conversationId;
-		} else {
-			body.userIds = [meta.senderId];
-		}
-
-		try {
-			await http.post(url, body, {
-				headers: {
-					"x-acs-dingtalk-access-token": token,
-					"Content-Type": "application/json",
-				},
-			});
-			return true;
-		} catch (err) {
-			if (axios.isAxiosError(err) && err.response) {
-				log.logWarn("dingtalk.send.failed", "Message send failed", {
-					reason: JSON.stringify(err.response.data),
-					fields: { msgKey, status: err.response.status },
-				});
-			} else {
-				log.logWarn("dingtalk.send.failed", "Message send failed", {
-					reason: errorMessage(err),
-					fields: { msgKey },
-				});
-			}
-			return false;
-		}
-	}
-
-	// ==========================================================================
-	// Private - AI Card implementation
-	// ==========================================================================
-
-	private async createCard(channelId: string, generation: symbol): Promise<AICard | null> {
-		// Re-check under the singleflight: a concurrent caller may have already
-		// created the card while we awaited, so avoid a duplicate create.
-		const existing = this.activeCards.get(channelId);
-		if (existing && !existing.finished) {
-			return existing;
-		}
-		const inFlight = this.cardCreationInFlight.get(channelId);
-		if (inFlight?.generation === generation) {
-			return inFlight.promise;
-		}
-		// A failed create may already have reached DingTalk. Never mint another ID in this turn.
-		if (this.cardCreationAttempted.has(generation)) return null;
-		this.cardCreationAttempted.add(generation);
-		const creation = this.createCardUncached(channelId, generation).finally(() => {
-			if (this.cardCreationInFlight.get(channelId)?.generation === generation) {
-				this.cardCreationInFlight.delete(channelId);
-			}
-		});
-		this.cardCreationInFlight.set(channelId, { generation, promise: creation });
-		return creation;
-	}
-
-	private async createCardUncached(channelId: string, generation: symbol): Promise<AICard | null> {
-		const token = await this.getAccessToken();
-		if (!token || !this.isCardGenerationCurrent(channelId, generation)) return null;
-
-		const meta = this.getConversationMeta(channelId);
-		if (!meta) {
-			log.logWarn("dingtalk.card.no_metadata", "Card not created: no conversation metadata", {
-				channelId: channelId,
-			});
-			return null;
-		}
-
-		const isGroup = meta.conversationType === "2";
-		const instanceId = `card_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-		const robotCode = this.config.robotCode || this.config.clientId;
-
-		// openSpaceId format:
-		//   群聊: dtv1.card//IM_GROUP.{openConversationId}
-		//   单聊: dtv1.card//IM_ROBOT.{userId}
-		const openSpaceId = isGroup
-			? `dtv1.card//IM_GROUP.${meta.conversationId}`
-			: `dtv1.card//IM_ROBOT.${meta.senderId}`;
-
-		const body: Record<string, unknown> = {
-			cardTemplateId: this.config.cardTemplateId,
-			outTrackId: instanceId,
-			cardData: {
-				cardParamMap: {
-					[this.config.cardTemplateKey || "content"]: "正在处理…",
-					sys_full_json_obj: JSON.stringify({
-						config: {
-							autoLayout: this.config.cardAutoLayout ?? true,
-						},
-					}),
-				},
-			},
-			callbackType: "STREAM",
-			imGroupOpenSpaceModel: { supportForward: true },
-			imRobotOpenSpaceModel: { supportForward: true },
-			openSpaceId,
-			userIdType: 1,
-		};
-
-		if (isGroup) {
-			body.imGroupOpenDeliverModel = { robotCode };
-		} else {
-			body.imRobotOpenDeliverModel = { spaceType: "IM_ROBOT" };
-		}
-
-		try {
-			await http.post(`${DINGTALK_API}/v1.0/card/instances/createAndDeliver`, body, {
-				headers: {
-					"x-acs-dingtalk-access-token": token,
-					"Content-Type": "application/json",
-				},
-			});
-		} catch (err) {
-			if (axios.isAxiosError(err) && err.response) {
-				log.logWarn("dingtalk.card.create_failed", "Card create failed", {
-					reason: JSON.stringify(err.response.data),
-					fields: { status: err.response.status },
-				});
-			} else {
-				log.logWarn("dingtalk.card.create_failed", "Card create failed", { reason: errorMessage(err) });
-			}
-			return null;
-		}
-
-		const card: AICard = {
-			instanceId,
-			conversationId: meta.conversationId,
-			accessToken: token,
-			templateKey: this.config.cardTemplateKey || "content",
-			createdAt: Date.now() / 1000,
-			lastUpdated: Date.now() / 1000,
-			content: "正在处理…",
-			finished: false,
-		};
-		if (!this.isCardGenerationCurrent(channelId, generation)) {
-			await this.streamCard(card, "处理已结束。", { append: false, finalize: true, failed: false });
-			return null;
-		}
-		this.activeCards.set(channelId, card);
-		return card;
-	}
-
-	private async streamCard(card: AICard, content: string, options: CardStreamOptions): Promise<boolean> {
-		// A stop/new-session close can arrive while the prior HTTP write is in flight.
-		// Order writes by instance so that close remains the last update to the old card.
-		const pending = (card.pendingWrite ?? Promise.resolve(true))
-			.then(async () => {
-				if (card.finished) return false;
-				return this.streamCardRequest(card, content, options);
-			})
-			.catch((error: unknown) => {
-				log.logWarn("dingtalk.card.stream_failed", "Card streaming failed", { reason: errorMessage(error) });
-				return false;
-			});
-		card.pendingWrite = pending;
-		return pending;
-	}
-
-	private async streamCardRequest(card: AICard, content: string, options: CardStreamOptions): Promise<boolean> {
-		// Refresh token if needed
-		const ageSecs = Date.now() / 1000 - card.createdAt;
-		if (ageSecs > TOKEN_REFRESH_SECS) {
-			const token = await this.getAccessToken();
-			if (token) {
-				card.accessToken = token;
-			}
-		}
-
-		const body = {
-			outTrackId: card.instanceId,
-			guid: `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-			key: card.templateKey,
-			content,
-			append: options.append,
-			finished: options.finalize,
-			failed: options.failed,
-			isFull: !options.append,
-			isFinalize: options.finalize,
-			isError: options.failed,
-		};
-
-		const start = Date.now();
-		try {
-			await http.put(`${DINGTALK_API}/v1.0/card/streaming`, body, {
-				headers: {
-					"x-acs-dingtalk-access-token": card.accessToken,
-					"Content-Type": "application/json",
-				},
-			});
-
-			const duration = Date.now() - start;
-			if (duration > 1000) {
-				log.logWarn("dingtalk.card.stream_slow", "Card streaming request slow", {
-					fields: { durationMs: duration },
-				});
-			}
-
-			card.lastUpdated = Date.now() / 1000;
-			card.content = options.append ? `${card.content}${content}` : content;
-			if (options.finalize || options.failed) {
-				card.finished = true;
-			}
-			return true;
-		} catch (err) {
-			if (axios.isAxiosError(err) && err.response) {
-				log.logWarn("dingtalk.card.stream_failed", "Card streaming failed", {
-					reason: JSON.stringify(err.response.data),
-					fields: { status: err.response.status },
-				});
-			} else {
-				log.logWarn("dingtalk.card.stream_failed", "Card streaming failed", { reason: errorMessage(err) });
-			}
-			return false;
-		}
-	}
-
-	// ==========================================================================
-	// Private - Access Token
-	// ==========================================================================
-
-	private async getAccessToken(): Promise<string | null> {
-		if (this.accessToken && Date.now() / 1000 < this.tokenExpiry) {
-			return this.accessToken;
-		}
-
-		// Coalesce concurrent refresh requests into a single HTTP call
-		if (!this.tokenRefreshPromise) {
-			this.tokenRefreshPromise = this.refreshAccessToken().finally(() => {
-				this.tokenRefreshPromise = null;
-			});
-		}
-		return this.tokenRefreshPromise;
-	}
-
-	private async refreshAccessToken(): Promise<string | null> {
-		try {
-			const resp = await http.post(
-				`${DINGTALK_API}/v1.0/oauth2/accessToken`,
-				{
-					appKey: this.config.clientId,
-					appSecret: this.config.clientSecret,
-				},
-				{
-					headers: { "Content-Type": "application/json" },
-				},
-			);
-
-			const data = resp.data as { accessToken?: string; expireIn?: number };
-			this.accessToken = data.accessToken || null;
-			this.tokenExpiry = Date.now() / 1000 + (data.expireIn || 7200) - 60;
-			return this.accessToken;
-		} catch (err) {
-			if (axios.isAxiosError(err) && err.response) {
-				log.logWarn("dingtalk.token.failed", "Access token request failed", {
-					reason: JSON.stringify(err.response.data),
-					fields: { status: err.response.status },
-				});
-			} else {
-				log.logWarn("dingtalk.token.failed", "Access token request failed", { reason: errorMessage(err) });
-			}
-			return null;
-		}
-	}
-
-	// ==========================================================================
-	// Private - Message handling
-	// ==========================================================================
-
-	private async onStreamMessage(data: DingTalkIncomingMessage): Promise<void> {
-		if (this.isStopped) {
-			return;
-		}
-
-		const parsed = parseInboundMessage(data);
-		const senderId = data.senderStaffId || data.senderId || "";
-		const senderName = data.senderNick || "Unknown";
-		const conversationId = data.conversationId || "";
-		const conversationType = data.conversationType || "1";
-
-		if (!parsed.text && parsed.downloadCodes.length === 0) {
-			const msgtype = typeof data.msgtype === "string" ? data.msgtype : "unknown";
-			log.logWarn("dingtalk.message.empty", "Empty message ignored", { fields: { msgtype } });
-			return;
-		}
-
-		if (this.config.allowFrom && this.config.allowFrom.length > 0) {
-			if (!this.config.allowFrom.includes(senderId)) {
-				log.logWarn("dingtalk.message.unauthorized", "Message from unauthorized user ignored", {
-					fields: { senderName, senderId },
-				});
-				return;
-			}
-		}
-
-		// Determine channel ID
-		const channelId = conversationType === "2" ? `group_${conversationId}` : `dm_${senderId}`;
-
-		// Parsing above is free; resolving image attachments below is a real network round-trip.
-		// Serialize the whole "resolve attachments → build event → route" unit per channel (spec
-		// 049 D3): without this, a message needing a download can be overtaken, in delivery order,
-		// by a later download-free message on the same channel — nothing upstream of
-		// `enqueueStreamMessage` otherwise waits on anything asynchronous.
-		this.pendingInboundIngestCount++;
-		try {
-			await this.inboundIngestQueue.run(channelId, async () => {
-				const { text: content, images } = await this.resolveInboundAttachments(channelId, parsed);
-
-				log.logEvent("info", "runtime.dingtalk.message_received", "Accepted incoming message", {
-					ctx: { channelId, userName: senderName },
-					fields: { messageType: conversationType === "2" ? "group" : "dm", messageLength: content.length },
-				});
-
-				// A group carries its title on every message; a DM has none, so the peer's nickname
-				// is the only human-readable handle that channel will ever have.
-				const conversationTitle = typeof data.conversationTitle === "string" ? data.conversationTitle.trim() : "";
-				const channelName = (conversationType === "2" ? conversationTitle : senderName) || undefined;
-
-				// Cache conversation metadata for card creation
-				this.setConversationMeta(channelId, {
-					conversationId,
-					conversationType,
-					senderId,
-				});
-
-				// The one place a real person's message is seen before command/busy routing splits
-				// the path, so the channel index counts every human message and no synthetic wake.
-				this.handler.noteChannelActivity?.({ channelId, name: channelName, at: Date.now() });
-
-				// Build event
-				const event: DingTalkEvent = {
-					type: conversationType === "2" ? "group" : "dm",
-					channelId,
-					ts: Date.now().toString(),
-					user: senderId,
-					userName: senderName,
-					text: content,
-					conversationId,
-					conversationType,
-					...(channelName ? { channelName } : {}),
-					...(images.length > 0 ? { images } : {}),
-				};
-
-				await this.routeInboundEvent(event);
-			});
-		} finally {
-			this.pendingInboundIngestCount--;
-		}
+	protected downloadMessageFile(downloadCode: string): Promise<{ data: Buffer } | null> {
+		return this.media.downloadMessageFile(downloadCode);
 	}
 
 	/**
@@ -1661,7 +439,7 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 
 	/** Test seam (spec 048): true when no channel queue has pending or in-flight work. */
 	allChannelQueuesIdle(): boolean {
-		if (this.pendingInboundIngestCount > 0) return false;
+		if (this.inbound.hasPendingIngest()) return false;
 		for (const queue of this.queues.values()) {
 			if (!queue.isIdle()) return false;
 		}
@@ -1678,61 +456,6 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 		return queue;
 	}
 
-	private getConversationMeta(channelId: string): ConversationMeta | null {
-		this.touchChannel(channelId);
-		const cached = this.convMeta.get(channelId);
-		if (cached) return cached;
-
-		const metaPath = this.getConversationMetaPath(channelId);
-		if (!metaPath || !existsSync(metaPath)) {
-			return null;
-		}
-
-		try {
-			const parsed = JSON.parse(readFileSync(metaPath, "utf-8")) as Partial<ConversationMeta>;
-			if (!parsed.conversationId || !parsed.conversationType || !parsed.senderId) {
-				return null;
-			}
-
-			const meta: ConversationMeta = {
-				conversationId: parsed.conversationId,
-				conversationType: parsed.conversationType,
-				senderId: parsed.senderId,
-			};
-			this.convMeta.set(channelId, meta);
-			return meta;
-		} catch (err) {
-			log.logWarn("dingtalk.metadata.load_failed", "Conversation metadata load failed", {
-				channelId: channelId,
-				reason: errorMessage(err),
-			});
-			return null;
-		}
-	}
-
-	private setConversationMeta(channelId: string, meta: ConversationMeta): void {
-		this.touchChannel(channelId);
-		this.convMeta.set(channelId, meta);
-
-		const metaPath = this.getConversationMetaPath(channelId);
-		if (!metaPath) return;
-
-		try {
-			mkdirSync(dirname(metaPath), { recursive: true });
-			writeFileAtomicallySync(metaPath, JSON.stringify(meta, null, 2));
-		} catch (err) {
-			log.logWarn("dingtalk.metadata.persist_failed", "Conversation metadata persist failed", {
-				channelId: channelId,
-				reason: errorMessage(err),
-			});
-		}
-	}
-
-	private getConversationMetaPath(channelId: string): string | null {
-		if (!this.config.stateDir) return null;
-		return join(getChannelDir(this.config.stateDir, channelId), ".channel-meta.json");
-	}
-
 	private touchChannel(channelId: string): void {
 		this.channelLastActiveAt.set(channelId, Date.now());
 	}
@@ -1742,15 +465,11 @@ export class DingTalkBot implements MediaSender, ChannelEventSink {
 		for (const [channelId, lastActiveAt] of this.channelLastActiveAt) {
 			if (lastActiveAt > cutoff) continue;
 			const queue = this.queues.get(channelId);
-			if (!queue?.isIdle() || this.cardCreationInFlight.has(channelId)) continue;
+			if (!queue?.isIdle() || this.cards.hasCreationInFlight(channelId)) continue;
 
-			const card = this.activeCards.get(channelId);
-			if (card && card.lastUpdated * 1000 > cutoff) continue;
-			this.activeCards.delete(channelId);
-			const generation = this.cardGenerations.get(channelId);
-			if (generation) this.cardCreationAttempted.delete(generation);
-			this.cardGenerations.delete(channelId);
-			this.convMeta.delete(channelId);
+			if (this.cards.hasCardUpdatedSince(channelId, cutoff)) continue;
+			this.cards.dropChannel(channelId);
+			this.conversations.evict(channelId);
 			this.queues.delete(channelId);
 			this.channelLastActiveAt.delete(channelId);
 		}

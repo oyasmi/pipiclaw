@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { DingTalkEvent } from "../src/dingtalk/bot.js";
+import type { DingTalkEvent } from "../src/dingtalk/handler.js";
 import { createExecutor, type ExecOptions, type ExecResult, type Executor } from "../src/executor.js";
 import {
 	ChannelJobManager,
