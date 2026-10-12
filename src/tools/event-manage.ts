@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { resolveEventPath } from "../events/commands.js";
-import { describeEventPayload, parseScheduledEventContent } from "../events/events.js";
+import { describeEventPayload, parseScheduledEventContent } from "../events/parse.js";
 import type { ScheduledEvent } from "../events/types.js";
 import { EventValidationError, MAX_EVENT_FILES, validateScheduledEvent } from "../events/validation.js";
 import type { SecurityConfig } from "../security/types.js";

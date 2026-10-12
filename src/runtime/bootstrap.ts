@@ -24,7 +24,7 @@ import { getToolsConfigPath, loadToolsConfig } from "../config/tools.js";
 import { DingTalkBot } from "../dingtalk/bot.js";
 import { type DingTalkConfig, loadConfig } from "../dingtalk/config.js";
 import type { DingTalkHandler } from "../dingtalk/handler.js";
-import { createEventsWatcher } from "../events/events.js";
+import { createEventsWatcher } from "../events/watcher.js";
 import { createExecutor, type Executor } from "../executor.js";
 import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";

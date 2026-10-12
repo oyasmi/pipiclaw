@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseScheduledEventContent } from "../src/events/events.js";
+import { parseScheduledEventContent } from "../src/events/parse.js";
 import { validateScheduledEvent } from "../src/events/validation.js";
 import { PLAYBOOKS_DIR } from "../src/paths.js";
 import {

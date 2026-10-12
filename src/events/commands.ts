@@ -5,7 +5,7 @@ import { renderSubcommandUsage } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
 import { normalizeSafeId, resolveSafeIdPath } from "../shared/safe-id.js";
 import { errorMessage, eventNameFromFilename, clipText as sharedClipText } from "../shared/text-utils.js";
-import { describeEventPayload, parseScheduledEventContent } from "./events.js";
+import { describeEventPayload, parseScheduledEventContent } from "./parse.js";
 import type { EventHistoryRecord, ScheduledEvent } from "./types.js";
 import { EventDefinitionError, type EventProblemKind, validateScheduledEvent } from "./validation.js";
 

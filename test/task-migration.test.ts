@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseScheduledEventContent } from "../src/events/events.js";
+import { parseScheduledEventContent } from "../src/events/parse.js";
 import { buildTemplate, convertBody, migrateTasksToV5, parseV3Frontmatter } from "../src/runtime/task-migration.js";
 import { readTaskLog, resetTaskLogAppenders } from "../src/tasks/loop-log.js";
 import { readStoredTask } from "../src/tasks/store.js";
