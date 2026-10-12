@@ -1,4 +1,4 @@
-import { createModelRuntime, wrapModelRegistry } from "../models/utils.js";
+import { createModelRuntime, wrapModelRegistry } from "../models/runtime.js";
 import { discoverSubAgents, type SubAgentDiscoveryResult } from "./discovery.js";
 
 /**

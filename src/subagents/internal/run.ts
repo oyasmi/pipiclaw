@@ -10,7 +10,7 @@
  */
 import type { Api, Model } from "@earendil-works/pi-ai";
 import * as log from "../../log.js";
-import { formatModelReference } from "../../models/utils.js";
+import { formatModelReference } from "../../models/reference.js";
 import { errorMessage } from "../../shared/text-utils.js";
 import { sleepUnref } from "../../shared/with-timeout.js";
 import type { ResolvedInternalSubAgentConfig } from "../discovery.js";

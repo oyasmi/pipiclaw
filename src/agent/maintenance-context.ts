@@ -5,7 +5,7 @@ import { type SessionEntry, SessionManager } from "@earendil-works/pi-coding-age
 import type { PipiclawSettingsManager } from "../config/settings.js";
 import type { MemoryMaintenanceRuntimeContext } from "../memory/scheduler.js";
 import { getApiKeyForModel } from "../models/api-keys.js";
-import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/utils.js";
+import { createModelRuntime, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
 
 export interface DetachedMaintenanceContextOptions {
 	channelId: string;

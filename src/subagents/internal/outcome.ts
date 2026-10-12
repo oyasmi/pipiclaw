@@ -3,7 +3,7 @@
  * and the `SettleInput` for the run manager — covering success, a failure with output, a failure
  * without any (which rejects), and the best-effort settle input for that rejecting path.
  */
-import { formatModelReference } from "../../models/utils.js";
+import { formatModelReference } from "../../models/reference.js";
 import { RecoverableToolError } from "../../shared/recoverable-error.js";
 import { extractAssistantText } from "../../shared/text-utils.js";
 import type { ResolvedInternalSubAgentConfig } from "../discovery.js";

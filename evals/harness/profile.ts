@@ -3,12 +3,8 @@ import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
-import {
-	createModelRuntime,
-	findExactModelReferenceMatch,
-	formatModelReference,
-	wrapModelRegistry,
-} from "../../src/models/utils.js";
+import { findExactModelReferenceMatch, formatModelReference } from "../../src/models/reference.js";
+import { createModelRuntime, wrapModelRegistry } from "../../src/models/runtime.js";
 import { canonicalConfigHash } from "./fingerprint.js";
 
 export interface FrozenProfile {

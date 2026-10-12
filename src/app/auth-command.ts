@@ -19,7 +19,8 @@ import {
 	type ProviderLoginOption,
 	renderAuthStatus,
 } from "../models/provider-login.js";
-import { createModelRuntime, formatModelReference } from "../models/utils.js";
+import { formatModelReference } from "../models/reference.js";
+import { createModelRuntime } from "../models/runtime.js";
 import { docsUrl } from "../paths.js";
 import {
 	BootstrapExitError,

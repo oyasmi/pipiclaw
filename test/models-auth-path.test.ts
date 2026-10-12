@@ -43,14 +43,14 @@ describe("auth.json path guardrails (spec 039 §4.2)", () => {
 	});
 
 	it("createModelRuntime rejects a missing authConfigPath", async () => {
-		const { createModelRuntime } = await import("../src/models/utils.js");
+		const { createModelRuntime } = await import("../src/models/runtime.js");
 		await expect(
 			createModelRuntime({ authConfigPath: "", modelsConfigPath: join(home, "models.json") }),
 		).rejects.toThrow(/absolute path/);
 	}, 20_000);
 
 	it("createModelRuntime rejects a relative authConfigPath", async () => {
-		const { createModelRuntime } = await import("../src/models/utils.js");
+		const { createModelRuntime } = await import("../src/models/runtime.js");
 		await expect(
 			createModelRuntime({ authConfigPath: "auth.json", modelsConfigPath: join(home, "models.json") }),
 		).rejects.toThrow(/absolute path/);
@@ -62,7 +62,7 @@ describe("auth.json path guardrails (spec 039 §4.2)", () => {
 		// force offline so this test's outcome depends on file writes, not live network latency.
 		process.env.PI_OFFLINE = "1";
 		const paths = await loadPaths();
-		const { createModelRuntime } = await import("../src/models/utils.js");
+		const { createModelRuntime } = await import("../src/models/runtime.js");
 		const { loginProvider } = await import("../src/models/provider-login.js");
 
 		const runtime = await createModelRuntime({

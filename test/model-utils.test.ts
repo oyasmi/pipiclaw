@@ -3,7 +3,8 @@ import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { PipiclawSettingsManager } from "../src/config/settings.js";
-import { findExactModelReferenceMatch, findModelReferenceMatch, resolveInitialModel } from "../src/models/utils.js";
+import { findExactModelReferenceMatch, findModelReferenceMatch } from "../src/models/reference.js";
+import { resolveInitialModel } from "../src/models/runtime.js";
 
 const anthropicModel = getModel("anthropic", "claude-sonnet-4-5");
 const openaiModel = getModel("openai", "gpt-4o-mini");

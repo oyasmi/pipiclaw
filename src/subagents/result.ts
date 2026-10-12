@@ -3,7 +3,7 @@
  * stopped text, the reply-size budget, and the structured `details` payload.
  */
 import { join } from "node:path";
-import { formatModelReference } from "../models/utils.js";
+import { formatModelReference } from "../models/reference.js";
 import { clipTextByPromptUnits, countPromptUnits } from "../shared/prompt-units.js";
 import type { UsageTotals } from "../usage/totals.js";
 import type { ResolvedSubAgentConfig, SubAgentConfig } from "./discovery.js";

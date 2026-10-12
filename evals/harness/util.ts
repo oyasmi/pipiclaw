@@ -34,7 +34,7 @@ export function tree(
  * Unit of account for providers that omit pricing metadata.
  *
  * Most self-hosted and Chinese-gateway models return usage without a price (the product side
- * already models this: `hasKnownModelPricing` in `src/models/utils.ts`, `usage.costKnown` in
+ * already models this: `hasKnownModelPricing` in `src/models/reference.ts`, `usage.costKnown` in
  * `src/tasks/control.ts`). The harness used to copy that missing price through as `0`, so every
  * report printed `$0.0000` — which reads as "free" rather than "unknown", left `maxCostUsd`
  * unenforceable, and made the cost column of `eval:diff` a constant zero.

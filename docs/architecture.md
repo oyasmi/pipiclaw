@@ -48,7 +48,7 @@ pipiclaw tui [提示] # 终端聊天，同一 agent 内核，无需钉钉凭据
 | `src/shared/` | 串行队列、原子写、JSONL appender 等基础件 | `serial-queue.ts`、`atomic-file.ts` |
 | `src/paths.ts` | 所有磁盘路径的集中定义 | — |
 | `src/main.ts` | 薄入口：`run`→daemon，`tui`→终端，`auth`→凭据管理 | — |
-| `src/models/` | 模型/凭据运行时封装 | `utils.ts`（`createModelRuntime`）、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
+| `src/models/` | 模型/凭据运行时封装 | `runtime.ts`（`createModelRuntime`）、`reference.ts`（模型引用）、`fallback.ts`、`provider-login.ts`（传输中立编排）、`login-ui.ts`（readline 界面） |
 
 ## 3. 运行时拓扑
 

@@ -4,7 +4,7 @@
  * its own file while still observing the same live values.
  */
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { formatModelReference } from "../../models/utils.js";
+import { formatModelReference } from "../../models/reference.js";
 import { createEmptyUsageTotals, type UsageTotals } from "../../usage/totals.js";
 import type { ResolvedInternalSubAgentConfig } from "../discovery.js";
 import { createDetails } from "../result.js";

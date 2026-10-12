@@ -5,7 +5,7 @@
  */
 import { clampThinkingLevel, isRetryableAssistantError } from "@earendil-works/pi-ai/compat";
 import { shouldFallback } from "../../models/fallback.js";
-import { formatModelReference } from "../../models/utils.js";
+import { formatModelReference } from "../../models/reference.js";
 import { sleepUnref } from "../../shared/with-timeout.js";
 import { DEFAULT_THINKING_LEVEL, type ResolvedInternalSubAgentConfig } from "../discovery.js";
 import { formatStatus } from "../result.js";

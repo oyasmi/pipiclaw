@@ -2,12 +2,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runRetriedSidecarTask, SidecarParseError } from "../../src/memory/sidecar-worker.js";
 import { getApiKeyForModel } from "../../src/models/api-keys.js";
-import {
-	createModelRuntime,
-	findModelReferenceMatch,
-	formatModelReference,
-	wrapModelRegistry,
-} from "../../src/models/utils.js";
+import { findModelReferenceMatch, formatModelReference } from "../../src/models/reference.js";
+import { createModelRuntime, wrapModelRegistry } from "../../src/models/runtime.js";
 import { parseJsonObject } from "../../src/shared/llm-json.js";
 import { getUsageLedger } from "../../src/usage/ledger.js";
 import type { FrozenProfile } from "./profile.js";

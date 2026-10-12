@@ -6,7 +6,7 @@ import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { Dirent } from "fs";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
-import { findExactModelReferenceMatch, formatModelReference } from "../models/utils.js";
+import { findExactModelReferenceMatch, formatModelReference } from "../models/reference.js";
 import { SUB_AGENTS_DIR_NAME } from "../paths.js";
 import type { SecurityConfig } from "../security/types.js";
 import { splitShellWords } from "../shared/shell-words.js";

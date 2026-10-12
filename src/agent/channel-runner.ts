@@ -59,15 +59,8 @@ import {
 	runPromptWithFallback,
 	shouldRestorePrimary,
 } from "../models/fallback.js";
-import {
-	createModelRuntime,
-	defaultModel,
-	findExactModelReferenceMatch,
-	formatModelReference,
-	hasKnownModelPricing,
-	resolveInitialModel,
-	wrapModelRegistry,
-} from "../models/utils.js";
+import { findExactModelReferenceMatch, formatModelReference, hasKnownModelPricing } from "../models/reference.js";
+import { createModelRuntime, defaultModel, resolveInitialModel, wrapModelRegistry } from "../models/runtime.js";
 import type { LoadedSecurityConfig } from "../security/config.js";
 import type { ProjectScope } from "../security/project-scope.js";
 import { resolveProjectAccessPolicy } from "../security/project-scope.js";

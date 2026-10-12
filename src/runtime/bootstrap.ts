@@ -29,7 +29,7 @@ import { createExecutor, type Executor } from "../executor.js";
 import { createJobRuntime, type JobRuntime } from "../jobs/manager.js";
 import * as log from "../log.js";
 import { MemoryMaintenanceScheduler } from "../memory/scheduler.js";
-import { defaultModel } from "../models/utils.js";
+import { defaultModel } from "../models/runtime.js";
 import { loadSecurityConfigWithDiagnostics } from "../security/config.js";
 import { fileStamp } from "../shared/format.js";
 import { errorMessage } from "../shared/text-utils.js";

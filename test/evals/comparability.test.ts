@@ -10,7 +10,7 @@ import { fileContains, recallQuiz } from "../../evals/harness/graders.js";
 import { freezeLocalProfile, publicModelConfig, resolveProfileModels } from "../../evals/harness/profile.js";
 import { gitDirtyFingerprint } from "../../evals/harness/run.js";
 import type { CaseDescriptor, CaseSummary, EvalCase, RunManifest, RunPlan } from "../../evals/harness/schema.js";
-import { defaultModel } from "../../src/models/utils.js";
+import { defaultModel } from "../../src/models/runtime.js";
 import { createDeterministicHome } from "../support/setup.js";
 
 const roots: string[] = [];

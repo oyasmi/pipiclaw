@@ -10,7 +10,7 @@ import type {
 import { basename } from "path";
 import { formatNewSessionReply, sessionCommandDescription } from "../commands/catalog.js";
 import { capReply } from "../commands/reply-limits.js";
-import { findModelReferenceMatch, formatModelList, formatModelReference } from "../models/utils.js";
+import { findModelReferenceMatch, formatModelList, formatModelReference } from "../models/reference.js";
 import { estimateTokens } from "../shared/format.js";
 import { truncate } from "../shared/text-utils.js";
 
